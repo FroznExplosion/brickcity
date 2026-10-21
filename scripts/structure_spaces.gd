@@ -33,6 +33,10 @@ const MAX_COLUMNS := 38400
 ## How thick a wall may be for a hole to count as going through it, in studs.
 ## A hole that ends inside the wall is a niche, not an opening.
 const MAX_WALL := 4
+## The widest a doorway's lintel runs, in studs. A longer run of wall that is
+## air from the floor up and solid over it, with room beyond it, is a beam under
+## the ceiling, and the room goes on under it (_beams).
+const MAX_DOORWAY := 6
 
 const _DIRS := [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]
 enum { _INSIDE, _WALL, _OUTSIDE }
@@ -41,10 +45,16 @@ enum { _INSIDE, _WALL, _OUTSIDE }
 ## The room whose floor is under `seed` -- an air cell just above the floor
 ## clicked. `cell_kind(cell: Vector3i) -> int` answers Cell for any cell; `lo`
 ## and `hi` bound the grid (hi exclusive). Returns
-##   {ok, why, floor_y, ceil_y, columns: Array[Vector2i], openings: Array}
+##   {ok, why, floor_y, ceil_y, open_top, columns: Array[Vector2i], openings: Array}
 ## with each opening {kind, cells: Array[Vector3i]}. Docs/Structures.md 3.2.
+##
+## With no ceiling over the click -- a courtyard, a wall walk, a tower open at
+## the top -- the room is `open_top`: bounded by its walls alone, each wall's
+## openings asked up to its own top, and `ceil_y` one over the highest of them.
+## One open at a side as well is no room: a click on a yard or a roof.
 static func find_space(start: Vector3i, cell_kind: Callable, lo: Vector3i, hi: Vector3i) -> Dictionary:
-	var out := {"ok": false, "why": "", "floor_y": 0, "ceil_y": 0, "columns": [], "openings": []}
+	var out := {"ok": false, "why": "", "floor_y": 0, "ceil_y": 0, "open_top": false,
+			"columns": [], "openings": []}
 	if not _in(start, lo, hi) or int(cell_kind.call(start)) != Cell.AIR:
 		out.why = "not in the air of a room"
 		return out
@@ -60,18 +70,19 @@ static func find_space(start: Vector3i, cell_kind: Callable, lo: Vector3i, hi: V
 	if floor_y < lo.y or start.y - floor_y > MAX_REACH:
 		out.why = "no floor under it"
 		return out
-	if ceil_y >= hi.y or ceil_y - start.y > MAX_REACH:
-		out.why = "no ceiling over it"
-		return out
+	var open_top := ceil_y >= hi.y or ceil_y - start.y > MAX_REACH
+	if open_top:
+		ceil_y = mini(hi.y, start.y + MAX_REACH + 1)
 	out.floor_y = floor_y
 	out.ceil_y = ceil_y
+	out.open_top = open_top
 
 	# 2. The footprint: inside columns, four ways from the seed's.
 	var what := {}   # Vector2i -> _INSIDE / _WALL / _OUTSIDE, as asked
 	var col := func(c: Vector2i) -> int:
 		if what.has(c):
 			return int(what[c])
-		var k := _column(c, floor_y, ceil_y, cell_kind, lo, hi)
+		var k := _column(c, floor_y, ceil_y, cell_kind, lo, hi, open_top)
 		what[c] = k
 		return k
 	var first := Vector2i(start.x, start.z)
@@ -82,24 +93,45 @@ static func find_space(start: Vector3i, cell_kind: Callable, lo: Vector3i, hi: V
 	var seen := {first: true}
 	var edge := {}   # boundary column -> [the room columns beside it, as directions]
 	var head := 0
-	while head < columns.size():
-		var c: Vector2i = columns[head]
-		head += 1
-		for d: Vector2i in _DIRS:
-			var n: Vector2i = c + d
-			if seen.has(n):
-				if int(what.get(n, _INSIDE)) != _INSIDE:
-					(edge[n] as Array).append(d)
-				continue
-			seen[n] = true
-			if int(col.call(n)) == _INSIDE:
-				columns.append(n)
-				if columns.size() > MAX_COLUMNS:
-					out.why = "too big: no walls round it (clicked outside, or a wall is missing)"
-					return out
-			else:
-				edge[n] = [d]
+	while true:
+		while head < columns.size():
+			var c: Vector2i = columns[head]
+			head += 1
+			for d: Vector2i in _DIRS:
+				var n: Vector2i = c + d
+				if seen.has(n):
+					if int(what.get(n, _INSIDE)) != _INSIDE:
+						(edge[n] as Array).append(d)
+					continue
+				seen[n] = true
+				if int(col.call(n)) == _INSIDE:
+					columns.append(n)
+					if columns.size() > MAX_COLUMNS:
+						out.why = "too big: no walls round it (clicked outside, or a wall is missing)"
+						return out
+				else:
+					edge[n] = [d]
+		# Under a beam the room goes on: what was taken for wall is let in, and
+		# the fill carries on from it.
+		var beams: Array[Vector2i] = []
+		if not open_top:
+			beams = _beams(edge, what, col, floor_y, ceil_y, cell_kind)
+		if beams.is_empty():
+			break
+		for c in beams:
+			what[c] = _INSIDE
+			edge.erase(c)
+			seen[c] = true
+			columns.append(c)
 	out.columns = columns
+	if open_top:
+		var top := floor_y + 1
+		for n: Vector2i in edge:
+			if int(what[n]) == _OUTSIDE:
+				out.why = "no ceiling over it, and open at the side"
+				return out
+			top = maxi(top, _top_of(n, floor_y, ceil_y, cell_kind) + 1)
+		out.ceil_y = top
 
 	# 3. The openings: in each wall column beside the room, the cells between
 	# floor and ceiling that are a hole through it, glass or a door; an
@@ -107,7 +139,9 @@ static func find_space(start: Vector3i, cell_kind: Callable, lo: Vector3i, hi: V
 	var kind_of := {}   # Vector3i -> opening kind
 	for n: Vector2i in edge:
 		var k := int(what[n])
-		for y in range(floor_y + 1, ceil_y):
+		# Open at the top, a wall's openings are in it, not in the sky over it.
+		var to := _top_of(n, floor_y, ceil_y, cell_kind) + 1 if open_top else ceil_y
+		for y in range(floor_y + 1, to):
 			var cell := Vector3i(n.x, y, n.y)
 			if k == _OUTSIDE:
 				kind_of[cell] = "open"
@@ -128,18 +162,86 @@ static func find_space(start: Vector3i, cell_kind: Callable, lo: Vector3i, hi: V
 
 
 ## Inside: floor under it, ceiling over it, air between. Wall: anything solid
-## between. Outside: air between, and no floor or no ceiling.
+## between. Outside: air between, and no floor or no ceiling. `open_top`: no
+## ceiling is asked for (find_space).
 static func _column(c: Vector2i, floor_y: int, ceil_y: int, cell_kind: Callable,
-		lo: Vector3i, hi: Vector3i) -> int:
+		lo: Vector3i, hi: Vector3i, open_top := false) -> int:
 	if c.x < lo.x or c.y < lo.z or c.x >= hi.x or c.y >= hi.z:
 		return _OUTSIDE
 	for y in range(floor_y + 1, ceil_y):
 		if int(cell_kind.call(Vector3i(c.x, y, c.y))) != Cell.AIR:
 			return _WALL
 	if int(cell_kind.call(Vector3i(c.x, floor_y, c.y))) == Cell.AIR \
-			or int(cell_kind.call(Vector3i(c.x, ceil_y, c.y))) == Cell.AIR:
+			or (not open_top and int(cell_kind.call(Vector3i(c.x, ceil_y, c.y))) == Cell.AIR):
 		return _OUTSIDE
 	return _INSIDE
+
+
+## The highest cell of column `c` between floor and ceiling that is not air:
+## the top of a wall round a room open at the top.
+static func _top_of(c: Vector2i, floor_y: int, ceil_y: int, cell_kind: Callable) -> int:
+	for y in range(ceil_y - 1, floor_y, -1):
+		if int(cell_kind.call(Vector3i(c.x, y, c.y))) != Cell.AIR:
+			return y
+	return floor_y
+
+
+## A header: a column with its floor, air from the floor up for half the room's
+## height or more, and solid from there to the ceiling -- under a beam, or under
+## a doorway's lintel. Which of the two, _beams says.
+static func _header(c: Vector2i, floor_y: int, ceil_y: int, cell_kind: Callable) -> bool:
+	if int(cell_kind.call(Vector3i(c.x, floor_y, c.y))) == Cell.AIR:
+		return false
+	var y := floor_y + 1
+	while y < ceil_y and int(cell_kind.call(Vector3i(c.x, y, c.y))) == Cell.AIR:
+		y += 1
+	@warning_ignore("integer_division")
+	var half := (ceil_y - floor_y - 1) / 2
+	if y >= ceil_y or y - floor_y - 1 < half:
+		return false
+	while y < ceil_y:
+		if int(cell_kind.call(Vector3i(c.x, y, c.y))) == Cell.AIR:
+			return false
+		y += 1
+	return true
+
+
+## The headers beside the room that are beams: each run of them joined side by
+## side, longer than MAX_DOORWAY across, and with no outside beyond it. A
+## shorter run is a lintel over a doorway; one with outside beyond it is an
+## opening in a facade, a shop front. A run longer than a doorway between two
+## rooms -- a wide arch -- makes them one, as an open plan is.
+static func _beams(edge: Dictionary, what: Dictionary, col: Callable, floor_y: int, ceil_y: int,
+		cell_kind: Callable) -> Array[Vector2i]:
+	var out: Array[Vector2i] = []
+	var done := {}
+	for e: Vector2i in edge:
+		if done.has(e) or int(what[e]) != _WALL or not _header(e, floor_y, ceil_y, cell_kind):
+			continue
+		var run: Array[Vector2i] = [e]
+		done[e] = true
+		var outside := false
+		var lo := e
+		var hi := e
+		var i := 0
+		while i < run.size():
+			var c: Vector2i = run[i]
+			i += 1
+			lo = Vector2i(mini(lo.x, c.x), mini(lo.y, c.y))
+			hi = Vector2i(maxi(hi.x, c.x), maxi(hi.y, c.y))
+			for d: Vector2i in _DIRS:
+				var n: Vector2i = c + d
+				if done.has(n):
+					continue
+				var k := int(col.call(n))
+				if k == _OUTSIDE:
+					outside = true
+				elif k == _WALL and _header(n, floor_y, ceil_y, cell_kind):
+					done[n] = true
+					run.append(n)
+		if not outside and maxi(hi.x - lo.x, hi.y - lo.y) + 1 > MAX_DOORWAY:
+			out.append_array(run)
+	return out
 
 
 ## Does the air at `cell` -- in a wall, beside the room -- go on through it,
@@ -191,6 +293,53 @@ static func _group(kind_of: Dictionary, floor_y: int) -> Array:
 
 static func _in(c: Vector3i, lo: Vector3i, hi: Vector3i) -> bool:
 	return c.x >= lo.x and c.y >= lo.y and c.z >= lo.z and c.x < hi.x and c.y < hi.y and c.z < hi.z
+
+
+## Where a cell of the upright frame (`frames[0]`) is asked of every frame's
+## bricks: a wall built in a sideways frame stands in upright cells too
+## (Docs/Structures.md 3.2, "a wall built sideways is not seen"). Returns
+## `func(c: Vector3i) -> Vector2i`: (frame index, block id), or (-1, -1) where no
+## frame has a brick. A turned frame's cells are not the upright grid's -- a
+## wall one plate thick, turned, is thinner than a stud -- so an upright cell is
+## asked at its middle and a third of the way to each of its faces.
+static func frames_reader(world: BrickWorld, frames: Array) -> Callable:
+	var f0: int = frames[0]
+	var cs := BrickWorld.get_cell_size()
+	var xf0 := world.get_chunk_transform(f0)
+	var inv0 := xf0.affine_inverse()
+	var o0 := world.get_chunk_origin(f0)
+	# Each other frame: [chunk, world -> its space, its origin, its box in upright cells].
+	var others := []
+	for k in range(1, frames.size()):
+		var fk: int = frames[k]
+		var xf := world.get_chunk_transform(fk)
+		var ok := world.get_chunk_origin(fk)
+		var dims := world.get_chunk_dims(fk)
+		var box := AABB()
+		for i in 8:
+			var corner := Vector3(dims.x if i & 1 else 0, dims.y if i & 2 else 0, dims.z if i & 4 else 0)
+			var at: Vector3 = (inv0 * (xf * (corner * cs))) / cs + Vector3(o0)
+			box = AABB(at, Vector3.ZERO) if i == 0 else box.expand(at)
+		others.append([fk, xf.affine_inverse(), ok, box.grow(1.0)])
+	var points: Array[Vector3] = [Vector3(0.5, 0.5, 0.5)]
+	for axis in 3:
+		for t in [1.0 / 6.0, 5.0 / 6.0]:
+			var q := Vector3(0.5, 0.5, 0.5)
+			q[axis] = t
+			points.append(q)
+	return func(c: Vector3i) -> Vector2i:
+		if world.is_solid(f0, c):
+			return Vector2i(0, world.block_at(f0, c))
+		for k in others.size():
+			var o: Array = others[k]
+			if not (o[3] as AABB).has_point(Vector3(c) + Vector3(0.5, 0.5, 0.5)):
+				continue
+			for q in points:
+				var at: Vector3 = (o[1] as Transform3D) * (xf0 * ((Vector3(c - o0) + q) * cs))
+				var cell := Vector3i((at / cs).floor()) + (o[2] as Vector3i)
+				if world.is_solid(int(o[0]), cell):
+					return Vector2i(k + 1, world.block_at(int(o[0]), cell))
+		return Vector2i(-1, -1)
 
 
 # ---------------------------------------------------------------------------

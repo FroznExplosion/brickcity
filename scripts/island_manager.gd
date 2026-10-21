@@ -2112,7 +2112,26 @@ func _lay_crumb(cr: Crumbs, i: int, size: Vector3, dt: float) -> void:
 	# On the floor it came down on, or on what already lies there (a pile).
 	p.y = heap.base_for(size, flat[0] as Basis, p, cr.floor_y[i]) + size[int(flat[1])] * 0.5
 	heap.lay(size, Transform3D(flat[0] as Basis, p), cr.colour[i], cr.floor_y[i],
-			cr.on_ground[i] != 0)
+			cr.on_ground[i] != 0, _laid_on(p, cr.floor_y[i], size[int(flat[1])] * 0.5) if BrickHeap.track else "")
+
+
+## What a brick laid at `p` came down on, said for BrickHeap.track: the body
+## under it -- a piece, the ground, a body with no node (a building's bricks or
+## its shell) -- and the floor it was laid for.
+func _laid_on(p: Vector3, floor_y: float, half: float) -> String:
+	var q := PhysicsRayQueryParameters3D.create(p, p + Vector3.DOWN * 300.0, CRUMB_FLOOR_MASK)
+	var hit := get_world_3d().direct_space_state.intersect_ray(q)
+	var under := "nothing"
+	if not hit.is_empty():
+		var isl := find_by_body(hit.collider) if hit.collider is Node else null
+		if isl != null:
+			under = "piece of chunk %d (%s)" % [isl.chunk, "settled" if isl.settled else "moving"]
+		elif hit.collider is CollisionObject3D:
+			under = "%s, layer %d" % [(hit.collider as Node).name, (hit.collider as CollisionObject3D).collision_layer]
+		else:
+			under = "a body with no node"
+		under += " %.2f m under its foot" % (p.y - half - (hit.position as Vector3).y)
+	return "on %s; its floor %.2f m under it" % [under, p.y - half - floor_y]
 
 
 ## `b` turned to lie on a face: the axis it comes down on made vertical, the

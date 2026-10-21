@@ -261,8 +261,21 @@ it. Furniture and detail (the I layer) are air to the finder: a room is not wall
 Only the upright grid is looked at yet. The asset workshop has its own O, K and P and never sees
 this tool.
 
-Limits as built: a beam below the ceiling is a wall to the finder, so it splits a room (with a
-doorway between the halves); a room needs a ceiling; a wall built sideways is not seen.
+~~Limits as built: a beam below the ceiling is a wall to the finder, so it splits a room (with a
+doorway between the halves); a room needs a ceiling; a wall built sideways is not seen.~~ Lifted
+2026-10-21:
+* **A beam.** A column with air from the floor up for half the room's height or more and solid
+  from there to the ceiling is a *header* -- under a beam, or under a doorway's lintel. A run of
+  headers longer than `MAX_DOORWAY` (6 studs) with no outside beyond it is a beam, and the room
+  goes on under it; a shorter run is a lintel, and one with the street beyond it a shop front, an
+  opening. A wide arch between two rooms (over 6 studs) makes them one, as an open plan is.
+* **No ceiling.** A click with no ceiling over it finds a room `open_top`: bounded by its walls
+  alone, each wall's openings asked only up to that wall's top (not the sky over it), `ceil_y` one
+  over the highest wall. One open at a side as well is no room -- a click on a yard or a roof.
+* **A wall built sideways.** `StructureSpaces.frames_reader(world, frames)` asks an upright cell of
+  every frame's bricks, at its middle and a third of the way to each face (a turned wall one
+  plate thick is thinner than a stud); the workshop's tool reads cells through it.
+`spaces_probe` 20.
 
 `tools/spaces_probe.gd` (9: the finder, and a generated building) and
 `tools/workshop_spaces_probe.gd` (8: the tool in the workshop, an edit, a save and load).

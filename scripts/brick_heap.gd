@@ -38,6 +38,10 @@ const PILE_MAX := 1.3
 const MAX_MAX := 8000
 ## The setting, "Bricks Left Lying (Developer)": 0 lays none, as before.
 static var max_bricks := DEFAULT_MAX
+## A pass that wants to know why a brick lies where it does (--lodbreak's "no
+## brick lying in mid-air") sets this: each brick laid keeps what it came down
+## on and when (`why`). Nothing pays for it otherwise.
+static var track := false
 
 ## One brick size in one square: a ring of CELL_CAP slots.
 class Heap:
@@ -50,6 +54,7 @@ class Heap:
 	var ground := PackedFloat32Array()   ## the floor it came down on, under any pile
 	var fixed := PackedByteArray()       ## lies on the ground itself: nothing under it goes
 	var used := PackedByteArray()
+	var why := PackedStringArray()     ## with `track`: what it came down on, and when
 	var filled := 0     ## slots handed out, up to CELL_CAP
 	var next := 0       ## once full, the oldest slot: the next to go
 	var count := 0      ## bricks lying in it now
@@ -99,6 +104,8 @@ func _heap_for(size: Vector3, cell: Vector2i) -> Heap:
 	h.ground.resize(CELL_CAP)
 	h.fixed.resize(CELL_CAP)
 	h.used.resize(CELL_CAP)
+	if track:
+		h.why.resize(CELL_CAP)
 	var mm := MultiMesh.new()
 	mm.transform_format = MultiMesh.TRANSFORM_3D
 	mm.use_colors = true
@@ -178,7 +185,7 @@ func _top(h: Heap, slot: int, add: bool) -> void:
 ## that floor is the ground itself (Layers.WORLD), which nothing takes away --
 ## take_in passes it by.
 func lay(size: Vector3, at: Transform3D, colour: Color, ground := NAN,
-		on_ground := false) -> void:
+		on_ground := false, why := "") -> void:
 	if not enabled():
 		return
 	var h := _heap_for(size, _cell_of(at.origin))
@@ -202,6 +209,8 @@ func lay(size: Vector3, at: Transform3D, colour: Color, ground := NAN,
 	h.ground[slot] = ground if not is_nan(ground) else at.origin.y
 	h.fixed[slot] = 1 if on_ground else 0
 	h.used[slot] = 1
+	if not h.why.is_empty():
+		h.why[slot] = "%s, tick %d" % [why, Engine.get_physics_frames()]
 	_top(h, slot, true)
 	h.count += 1
 	count += 1
