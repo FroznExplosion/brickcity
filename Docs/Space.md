@@ -1,0 +1,270 @@
+# Space: asteroids, ships, stations, and bricks only where it broke
+
+Status (2026-10-21): **design, not scheduled.** Written at the user's request with
+[Planets.md](Planets.md) (real sphere planets). It answers four questions: how small a smooth
+asteroid can be; whether ships and stations the size of the city's buildings can be destructible;
+whether a section can stay whole until it breaks and only then become bricks without a hitch; and
+whether only the storeys or rooms that were hit can become bricks while the rest stays intact.
+
+Numbers marked *measured* come from this repo's docs (where cited); the rest are **estimates**
+scaled from them, to be replaced by a gate on a quiet machine.
+
+Prior art read for it: STA (`C:\Users\lbaun\Documents\sta`) and zylanntest
+(`C:\Users\lbaun\Documents\zylanntest`) -- §6.
+
+---
+
+## 1. Asteroids: how small can smooth ground be?
+
+**No lower limit.** The ~8-10 km in Planets.md §10a is not a limit on smooth ground; it is the
+size above which the game can run its fights in a **flat bubble** (gravity straight down, `AINav`'s
+flat columns, every `Vector3.UP` as it is) and nobody notices the curve. Below it the ground works
+exactly the same; what changes is that the code walking on it must know it is on a ball:
+
+| body | what the player walks with | AI on foot | buildings on it |
+|---|---|---|---|
+| **≥ 8-10 km radius** | today's controllers in a flat bubble (Planets §10a) | today's `AINav` in the bubble | rigid, on pads |
+| **~300 m - 8 km** | STA's radial gravity controller (STA doc 05: rebuild the whole basis from radial up each frame; `up_direction` set every frame) | needs per-chunk charts (Planets §7) or no ground AI | rigid with a gravity zone (Planets §4.1) |
+| **~20-300 m** (a moon-let, a big rock) | radial controller; the curve is strong (walk 30 m on a 200 m radius: 8.6° of turn) | flyers, turrets, crawlers that stick to the surface -- not `AINav` | small ones, each with its own gravity zone |
+| **under ~20 m** | not walked on as a world: a brick build or a rigid prop | -- | -- |
+
+How the smooth ground is made, by size:
+
+| | indestructible | carvable |
+|---|---|---|
+| **large, near-round** | cubed-sphere heightmap chunks, baked (Planets §3.2) | the same with scorch decals; no digging |
+| **potato / any shape** | a mesh baked once from a distance field (our `SdfForm` meshes surfaces already; STA doc 25: potatoes and ovals cost nothing extra) | Zylann's voxel terrain as STA uses it (its most expensive system: re-meshing, edit storage) |
+
+Gravity is a game choice, not physics: a real 200 m rock has almost none. Pick per body.
+
+### 1.1 Bricks or smooth, by size (estimates)
+
+A solid sphere of bricks grows with volume (a 2x4 brick is ~0.41 m³); a hollow shell two bricks
+thick grows with surface:
+
+| diameter | solid bricks | shell of bricks | verdict |
+|---|---|---|---|
+| 5 m | ~160 | -- | bricks: a shootable rock, cover |
+| 10 m | ~1,300 | -- | bricks (a small building's worth) |
+| 20 m | ~10,000 | ~2,500 | bricks only as a shell; or smooth |
+| 30 m | ~34,000 | ~10,000 | smooth, with brick patches |
+| 100 m | ~1.3 M | ~100,000 | smooth only |
+
+**Recommendation:** under ~15-20 m, all bricks (made in the asset workshop: sculpt the SDF,
+Convert); 20-80 m, smooth with **brick patches** -- ore veins, wrecks, outposts on their own little
+grids, as Planets §3.1 puts patches on planets; landable rocks and moons, smooth ground. Rings and
+belts use STA's three tiers (STA doc 15 §3.2): a shader disc far, instanced rocks approaching,
+only the nearest few dozen promoted to real bodies inside.
+
+---
+
+## 2. What a building costs now -- the starting point
+
+*Measured* (sources in brackets):
+
+| a building that is ... | costs | |
+|---|---|---|
+| registered, out of sight | no `BrickWorld` memory; 5000 registered in 19 ms | Status.md |
+| far, 260 m - 3 km | one instance of one MultiMesh, ~12 triangles; the whole far city one draw call | Impostors.md stage 1 |
+| 110-260 m | a box (~10 triangles) + 5 collision boxes | Impostors.md |
+| under 110 m, intact or hit | banded shell: ~3.7k triangles, 2 draw calls | Impostors.md §7.1 |
+| **in bricks** | 756 blocks: 4.8 ms to build, ~4 MB; a 16,600-block tower: 10 MB of blocks, 111 MB of baked mesh | Status.md |
+| dormant wreckage | 17 bytes a block (3,461 blocks: 7.7 MB -> 57.5 KB) | Status.md |
+
+Two figures say where the money goes once bricks exist (CollapseNext.md, DestructionLod §5.4): a
+merged collision rebuild of a 15,099-brick piece took 22.5 ms; one landing's re-solve of 12,315
+bricks 38.4 ms; 200 buildings under fire peaked at 457.5 MB with 183 resident.
+
+**So intact really is cheap -- by three to four orders of magnitude.** The cost is bricks, and
+today the unit that becomes bricks is the **whole building**: the first hit runs
+`BuildingRegistry.materialise`, which lays every brick of it and replays its damage record
+(drawing and collision are already per band; the bricks are not). That is Next.md 2.5, "sections,
+not buildings, as the unit of materialisation", not built.
+
+---
+
+## 3. Ships and stations
+
+### 3.1 Size against bricks (estimates)
+
+Hulls are hollow with decks, like buildings, so bricks grow with surface. From the 150 m tower
+(16,600 blocks) and ~6 µs a brick to build, ~7 KB of baked mesh a brick:
+
+| thing | size | bricks | all of it in bricks at once |
+|---|---|---|---|
+| fighter | 15-40 m | 1-5k | 5-30 ms, 5-35 MB: fine |
+| station, building-sized | 30-150 m | 3-25k | as today's buildings |
+| frigate | 60-100 m | 5-15k | 40-100 ms, 35-100 MB |
+| capital ship | 300-500 m | 70-200k | 0.4-1.2 s, 0.5-1.3 GB: **never all at once** |
+| huge station | 1 km+ | 700k+ | a district of building-sized sections |
+
+### 3.2 A ship is sections; a section is whole until it breaks
+
+The user's model (2026-10-21): a large ship or station is **a few sections**, each about the size
+of an ordinary city building (not the big-city towers) -- ~5-15k bricks. Nothing is brick by
+brick until the **final break** of a section; then that section becomes bricks and fractures.
+
+| state of a section | drawn by | collision | cost |
+|---|---|---|---|
+| **whole** (hit or not) | its shell; hits show as scorch and holes in the shell (`damage_profile`, as recipe buildings show band damage) | a few boxes on the ship's one rigid body | a building's shell |
+| **broken off** (its joints to the ship are gone) | the same shell, now its own rigid body, drifting with the ship's momentum | its boxes | the same |
+| **final break** (its hit points gone, or it struck something hard) | bricks, near the player; big rigid shell pieces far away | merged boxes per band | bricks, under the budget of §5 |
+
+- **Hit points** per section and per **joint** (the spars and frames between sections). A joint
+  at zero lets its section go: the section leaves as a rigid shell body -- no bricks. This is the
+  Fortnite-style cascade STA doc 17 §5 describes: a ship's support anchors to its **root set**
+  (the bridge, a core module), and what is cut off from the root leaves.
+- **Space makes the bricks cheaper than on the ground.** With no gravity there is no weight: no
+  stress solve, no landing breaks, no settling. A brick falls only when nothing connects it (the
+  attachment rule, unchanged) -- connectivity only. Inside a ship with artificial gravity the
+  solve runs as on the ground, within that ship's gravity zone.
+- **Fighters** are one unit: their baked shell (from the converter, as the guns are) and hit
+  points until they die; then bricks, or straight to the fragment caps of §4 far away.
+- **Moving** is new work buildings never needed: the ship is one rigid body carrying its sections'
+  boxes (zylanntest `game/ship`: a `RigidBody3D` with per-chunk shapes; Jolt takes the compound
+  body); the player inside rides the ship's frame (STA doc 17 §4, doc 12's frame handoff); bricks
+  of a ship live in the ship's own frame, as a building's live in `b.xform`.
+
+### 3.3 The final break without a hitch
+
+The risk is the moment a whole section turns into bricks: built in one tick, 10k bricks is
+~60 ms -- a visible stall. Four things make it free to the eye, three of which exist:
+
+1. **Templates** (exist: `BrickWorld.save_template` / `load_template`): a section's blocks copied
+   in, ids and joints and all, instead of laid one by one ("building the biggest block by block
+   was 26 ms of every promotion"). Per section kind, saved once.
+2. **The shell keeps drawing until the bands are baked** (exists: a promotion keeps the far box or
+   shell as a placeholder and `_bands_done` frees it). Bands bake on a worker (`bake_chunk_async`).
+3. **Pre-warm** (new): when a section's hit points fall under ~30%, lay its bricks hidden, a band
+   or two a tick; at the break it is a swap of what is shown.
+4. **Do not make the whole section bricks at all** (new, and the better one): the final break
+   splits the shell along its **storeys and rooms** (§5) into a handful of big rigid shell chunks.
+   Only the chunks in the near ring, or hit again, become bricks. Far away, the chunks never do.
+
+The flash, the dust and the debris of the explosion cover a frame or two either way.
+
+---
+
+## 4. Fragments: caps by size
+
+The rule the city already runs (Scale.md §4.8, CollapseTier): small pieces are texture and are
+deleted, large ones are landmarks and are kept as records. In space:
+
+| piece | near (< 60 m) | mid (60-150 m) | far |
+|---|---|---|---|
+| a crumb, a single brick | particles, deleted quickly (as in a collapse today) | deleted where it comes loose | never made |
+| small (under ~200 bricks) | flies, deleted after a few seconds or when the cap is full, oldest first | deleted | never made |
+| large (a room, a deck, a section) | flies, collides, can be shot again | rigid, never fractures on contact | **a drift record** (below) |
+
+**A drifting piece in space is analytic.** With nothing near and no gravity, where it is is
+`p0 + v t` and how it is turned is `q0` spun by `ω t`. So a large piece far from everyone is the
+dormant record the city already has (17 bytes a block) plus six numbers -- no body, no physics --
+and comes back as a body when someone comes near, or is deleted when it leaves the play space. The
+debris cap's eviction (small deleted first, large slept) needs no change; "slept" becomes "drift".
+
+---
+
+## 5. Bricks only where it was hit: storeys and rooms
+
+The user (2026-10-21): cap the buildings in real bricks by a **budget**, not by distance alone,
+and make the unit **rooms or floors**, not whole buildings: a damaged building or ship turns the
+storeys or rooms that were hit into bricks; everywhere else stays intact.
+
+**Yes, and most of it is parts that already exist.**
+
+### 5.1 The unit: a storey band, then a room
+
+- **Storey** first: the horizontal band between two floor slabs. The slabs are known -- the
+  generator lays them (`TowerRecipe._lay_slab`), the floor finder finds them in a build
+  (Structures §2.4). A storey is six brick courses and a slab (`TowerRecipe.STOREY_PLATES`), so
+  the 22k-brick 80 x 60 tower (204 courses) has ~32 storeys of ~700 bricks; the 200 x 80 wide
+  building ~2.2k a storey. On a ship, a storey is a **deck**.
+- **Room** second, for wide buildings and long decks: the room record (`StructureSpaces`) gives
+  each room's footprint. DestructionLod §5.4 found every tower room against an outer wall, which
+  made rooms useless as a unit of *drawing interiors*; as a unit of *bricks* that does not matter.
+- A hit makes bricks of the units its blast reaches -- usually one storey, the one above if a
+  slab is cut. Everything else stays the shell.
+
+### 5.2 How a part of a building stands as bricks while the rest is whole
+
+| boundary | how the solver sees it | exists? |
+|---|---|---|
+| intact storeys **below** | the ground: cells at or below the band's bottom anchor it | `BrickWorld.set_foundation_level` -- yes |
+| intact storeys **above** | their weight, resting on the band's top bricks (columns, walls) | `BrickWorld.set_load` -- yes (it carries settled wreckage today) |
+| an intact **room beside** | an anchor: the wall cells it shares | new: anchor cells by list (a foundation by cells, not a level) |
+
+The bricks of the band are laid from the recipe **for that band only**, with block ids that stay
+the same whichever bands are laid (the damage record keys on them). The shell stops drawing that
+band (shells are already drawn by band) and the band's bricks draw it instead.
+
+When the band gives way -- the attachment rule: nothing connects what is above to what is below
+-- the intact part **above** becomes **one rigid piece drawn by its own shell bands**, with its
+boxes: a section breaking off, no bricks. It falls (or drifts). When it lands hard, or is hit
+again, *its* lowest storey becomes bricks the same way, and fractures by the same rules. So a
+tower comes down a storey of bricks at a time, and the parts nobody is near never become bricks.
+
+What is new, in order:
+
+1. **Recipes laid by band** with ids stable per band (`TowerRecipe` lays storeys already; a
+   `BuildRecipe` is sliced by the floor finder's slabs).
+2. **A shell piece**: a rigid body drawn by a run of a building's shell bands (today a piece is
+   always bricks).
+3. **Anchor cells** beside a materialised room (only for rooms; storeys need nothing new).
+4. **Templates per band**, so a band is copied, not built.
+
+### 5.3 The budget
+
+Replace "materialised while near, given back after quiet" with **a budget of bricks in play**
+(a setting, as Teardown ships its debris cap), counted in units:
+
+- A unit becomes bricks when hit (or pre-warmed, §3.3). Over budget, the **quietest units
+  furthest from every player** are given back first: their bricks dropped, their damage kept as
+  the record (exists: `_demesh`, the damage record replays on the next materialise). A unit a
+  player stands in, or that is moving, is never given back.
+- Starting figure to measure against: the 200-building pass peaked at 457.5 MB with 183
+  buildings resident. A budget of **~150k bricks** -- some 100-200 storeys -- is the first
+  guess; the gate sets it.
+- The city's distance rings (DestructionLod §2) stay as they are for *what pieces do*; the budget
+  decides *how many bricks exist*.
+
+### 5.4 What it should buy (estimates)
+
+| | today | storey units |
+|---|---|---|
+| first hit on a 22k-brick tower | the whole tower laid (~140 ms raw, templates help) | one or two storeys, ~700-1,400 bricks (~5-9 ms raw; less from a template) |
+| memory, one hit tower | ~120 MB+ | ~5-10 MB |
+| a 500 m ship hit amidships | impossible | one deck of one section |
+
+---
+
+## 6. What to take from STA and zylanntest
+
+| need | where | what it is |
+|---|---|---|
+| walking round a small body | STA doc 05 | radial gravity controller: full basis rebuilt from radial up every frame (the strafe-drift fix), `up_direction` every frame |
+| a ship as a frame you stand in | STA doc 17 §4, doc 12 | space -> planet -> ship frames; boarding is a frame handoff that carries velocity |
+| ship damage anchored to a root | STA doc 17 §5 | what is cut off from the bridge / core leaves as debris |
+| tiny floating ground deleted | STA doc 09 | islands under ~2 m³ break off, fall, are deleted on impact |
+| belts and rings | STA doc 15 §3 | far disc, near instanced band, inside: nearest N promoted |
+| odd-shaped bodies | STA doc 25 | potatoes and ovals cost nothing extra; more polyhedron sides is worse |
+| flying a ship | zylanntest `game/ship/scripts/ship_controller.gd` | 6DOF pilot and maneuver modes; speed cap falls near a planet (~2000 -> 300 m/s) |
+| a ship's gravity | zylanntest `ship_controller.gd` (`is_gravity_field`), `game/ship/docs/plan.md` | gravity-generator blocks pull players toward ship-down inside the ship's box |
+| a ship as a sparse grid | zylanntest `ship_voxel_grid.gd` | 16³ chunks in a dictionary, each its own mesh and column boxes on one body; an edit rebuilds one chunk |
+| floating origin, orbits | zylanntest `systems/core/solar_system_manager.gd` (also STA) | rebase the universe past a distance; orbits on rails, time only in free space |
+| space <-> ground | zylanntest `planet_transition_manager.gd`, `Docs/voxel_planet_game_design.md` §6 | approach, reframe, enter the surface, exit; four phases with clouds hiding the swap |
+| a city seen from orbit | zylanntest design doc §6 | the planet's far texture re-baked where it changed (dirty cells, throttled): big builds show from space |
+
+---
+
+## 7. If it is taken up: order
+
+1. **Storey units in the flat game** (§5, Next.md 2.5): worth doing now -- it is the first-hit
+   lag the user has reported (CollapseNext.md), and every ship and station needs it.
+2. **The brick budget** (§5.3) replacing distance-only trimming.
+3. **Shell pieces** (§5.2): a broken-off upper part as a rigid shell.
+4. Sections, joints and hit points for ships and stations (§3.2); pre-warm (§3.3).
+5. Space: zero-g pieces, drift records (§4), a ship frame, flight (zylanntest), a belt (STA).
+6. Small bodies: STA's radial controller on one smooth asteroid (§1).
+
+Gate for 1-3: a 22k-brick tower shot at mid-height -- first-hit time, memory, and the upper part
+falling as one shell piece -- on a quiet machine (editor closed), against today.

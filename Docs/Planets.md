@@ -15,6 +15,7 @@ engine, radial gravity, floating origin, orbits, simple Gerstner water; its cube
 (`Docs/Reference/zylanntest.md`).
 
 §9 lists what can be changed NOW, in the flat game, so the move costs less later.
+Asteroids, ships, stations and bricks only where a building was hit: [Space.md](Space.md).
 
 ---
 
