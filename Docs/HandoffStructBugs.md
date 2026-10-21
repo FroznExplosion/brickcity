@@ -101,15 +101,8 @@ areas' tests).
 
 ## Open on this branch (the detail; the order is the merged plan's)
 
-1. **`collapse_probe` flickers** (3 runs of 4, with or without 5.7): "an untouched tower of 6
-   storeys to test on -- 20 of 22 buildings used already". It takes 20 of the city's 22 towers;
-   collateral damage on the last two leaves its last section none. Passed reliably before 5.5.
-   - Confirm the cause: in the worktree `git revert --no-commit <5.5 commit>` (log message "Hits
-     on falling pieces"), rebuild, run the probe 4x, then `git revert --abort` and rebuild. Run
-     one probe at a time (the last attempt was killed for low memory).
-   - If 5.5 (more blasts landing on time = more collateral): fix the probe's picker
-     (`collapse_probe.gd` `_tower`, ~line 212), e.g. reserve towers far from earlier sections or
-     move a section to its own probe as `OWN_PROBE` does. The check is wanted: fix, don't prune.
+1. ~~**`collapse_probe` flickers**~~ -- fixed 2026-10-20 ("shellhit" in a city of its own). Not
+   5.5: the A/B with it reverted hit the same neighbour as often (DestructionLod 5.7).
 2. **Frames in `--big --shot` are ~20 ms against ~17.7** since 5.5 -- because every blast now
    lands (4,436 against 3,028), ~40% more pieces moving. The physics step on moving pieces is
    what a collapse costs now (DestructionLod §5.4-5.5). Box count is set by layers, not width
