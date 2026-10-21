@@ -8256,28 +8256,16 @@ func _floating_report(what: String, found: Array) -> void:
 			found.is_empty(), "%d parts: %s;%s" % [found.size(), str(kinds), some])
 
 
-## Every part of an interior drawing within its range of the camera with
-## nothing under its foot for FLOAT_REACH -- no brick of a building or a piece
-## in the grid, and no ground. [kind, foot in world space].
+## Every part of an interior drawing within its range of the camera, and every
+## brick lying in the heap within its own, with nothing drawn under its foot for
+## FLOAT_REACH (_float_held). [kind, foot in world space].
 const FLOAT_REACH := 1.5
 var _float_seen := 0   ## parts asked, the last time
 func _floating_furniture() -> Array:
 	var out: Array = []
 	_float_seen = 0
 	var here := camera.global_position
-	var cs := BrickWorld.get_cell_size()
-	# Every chunk that could hold something up: buildings in bricks near, and
-	# pieces. [chunk, world -> chunk space, origin]
-	var chunks: Array = []
-	for id in _near_buildings(here, InteriorGroups.INTERIOR_RANGE + 60.0):
-		var b := registry.get_building(id)
-		if b != null and b.is_materialised() and b.chunk >= 0:
-			chunks.append([b.chunk, world.get_chunk_transform(b.chunk).affine_inverse(),
-					world.get_chunk_origin(b.chunk)])
-	for isl in islands.islands:
-		if isl.is_valid() and isl.chunk >= 0:
-			chunks.append([isl.chunk, world.get_chunk_transform(isl.chunk).affine_inverse(),
-					world.get_chunk_origin(isl.chunk)])
+	var under := _float_supports(here)
 	var riders := {}
 	for r in _group_riders:
 		riders[r[1]] = true
@@ -8308,22 +8296,7 @@ func _floating_furniture() -> Array:
 			_float_seen += 1
 			var hy := 0.5 * (absf(xf.basis.x.y) + absf(xf.basis.y.y) + absf(xf.basis.z.y))
 			var foot := xf.origin - Vector3(0.0, hy, 0.0)
-			var q := PhysicsRayQueryParameters3D.create(foot + Vector3(0.0, 0.05, 0.0),
-					foot - Vector3(0.0, FLOAT_REACH, 0.0))
-			q.collision_mask = Layers.WORLD
-			if not space.intersect_ray(q).is_empty():
-				continue
-			var held := false
-			var s := 0.02
-			while s < FLOAT_REACH and not held:
-				var p := foot - Vector3(0.0, s, 0.0)
-				for c in chunks:
-					var local: Vector3 = (c[1] as Transform3D) * p
-					if world.is_solid(int(c[0]), Vector3i((local / cs).floor()) + (c[2] as Vector3i)):
-						held = true
-						break
-				s += cs.y * 0.5
-			if not held:
+			if not _float_held(foot, space, under):
 				out.append([kind, foot])
 	# And bricks lying in the heap (BrickHeap): a broken piece of furniture's
 	# parts are its bricks, in its colours.
@@ -8340,25 +8313,88 @@ func _floating_furniture() -> Array:
 				var size: Vector3 = h.size
 				var hy := 0.5 * (absf(xf.basis.x.y) * size.x + absf(xf.basis.y.y) * size.y
 						+ absf(xf.basis.z.y) * size.z)
-				var foot := xf.origin - Vector3(0.0, hy, 0.0)
-				var q := PhysicsRayQueryParameters3D.create(foot + Vector3(0.0, 0.05, 0.0),
-						foot - Vector3(0.0, FLOAT_REACH, 0.0))
-				q.collision_mask = Layers.WORLD
-				if not space.intersect_ray(q).is_empty():
-					continue
-				var held := false
-				var s := 0.02
-				while s < FLOAT_REACH and not held:
-					var p := foot - Vector3(0.0, s, 0.0)
-					for c in chunks:
-						var local: Vector3 = (c[1] as Transform3D) * p
-						if world.is_solid(int(c[0]), Vector3i((local / cs).floor()) + (c[2] as Vector3i)):
-							held = true
-							break
-					s += cs.y * 0.5
-				if not held:
-					out.append(["heap", foot])
+				if not _float_held(xf.origin - Vector3(0.0, hy, 0.0), space, under):
+					out.append(["heap", xf.origin - Vector3(0.0, hy, 0.0)])
 	return out
+
+
+## What can hold something up near `here`, as it is drawn there: buildings in
+## bricks and pieces by their grids; a building drawn by its shell by the floors
+## the shell draws (BuildingShell caps every slab band left standing across the
+## whole footprint, where its collision has only walls, the ground plate and a
+## roof); an asleep piece by its box, while its stand-in is drawn. Heap bricks
+## are drawn out to BrickHeap.DRAW_RANGE, past the interiors' range: a building
+## given back or a piece put to sleep out there is not in the grid, and a brick
+## lying on one read as floating (--floating, 2026-10-20: three on a shell's
+## first floor at 135 m; the odd heap brick of --lodbreak, CollapseNext 28).
+func _float_supports(here: Vector3) -> Dictionary:
+	# [chunk, world -> chunk space, origin]
+	var chunks: Array = []
+	# [world -> building space, width, depth, the tops of its floors drawn]
+	var shells: Array = []
+	for id in _near_buildings(here, maxf(InteriorGroups.INTERIOR_RANGE, BrickHeap.DRAW_RANGE) + 60.0):
+		var b := registry.get_building(id)
+		if b == null:
+			continue
+		if b.is_materialised() and b.chunk >= 0:
+			chunks.append([b.chunk, world.get_chunk_transform(b.chunk).affine_inverse(),
+					world.get_chunk_origin(b.chunk)])
+		elif not b.is_build() and _shells.has(id):
+			var tops := PackedFloat32Array()
+			if bool(_shell_coarse.get(id, false)):
+				# The far-far tier: one solid band and a cap.
+				tops.append(TowerRecipe.total_plates(b.recipe.courses) * PLATE)
+			else:
+				var bi := 0
+				for band in TowerRecipe.layout(b.recipe.courses):
+					var masks: PackedInt32Array = b.damage_profile.get(bi, PackedInt32Array())
+					bi += 1
+					if (band.kind == "base" or band.kind == "slab") and not BuildingShell._band_is_gone(masks):
+						tops.append(float(int(band.y) + int(band.plates)) * PLATE)
+			shells.append([b.xform.affine_inverse(), b.recipe.footprint_x * STUD,
+					b.recipe.footprint_z * STUD, tops])
+	for isl in islands.islands:
+		if isl.is_valid() and isl.chunk >= 0:
+			chunks.append([isl.chunk, world.get_chunk_transform(isl.chunk).affine_inverse(),
+					world.get_chunk_origin(isl.chunk)])
+	var sleepers: Array = []
+	for dm in islands.dormant:
+		if dm.stand_in != null and is_instance_valid(dm.stand_in):
+			sleepers.append(dm.record.box)
+	return {"chunks": chunks, "shells": shells, "sleepers": sleepers}
+
+
+## Something under `foot` within FLOAT_REACH: the ground, or one of `under`
+## (_float_supports).
+func _float_held(foot: Vector3, space: PhysicsDirectSpaceState3D, under: Dictionary) -> bool:
+	var q := PhysicsRayQueryParameters3D.create(foot + Vector3(0.0, 0.05, 0.0),
+			foot - Vector3(0.0, FLOAT_REACH, 0.0))
+	q.collision_mask = Layers.WORLD
+	if not space.intersect_ray(q).is_empty():
+		return true
+	for s in under.shells:
+		var local: Vector3 = (s[0] as Transform3D) * foot
+		if local.x < 0.0 or local.z < 0.0 or local.x > float(s[1]) or local.z > float(s[2]):
+			continue
+		for top in (s[3] as PackedFloat32Array):
+			if top <= local.y + 0.05 and top >= local.y - FLOAT_REACH:
+				return true
+	for box in under.sleepers:
+		var bx: AABB = box
+		if foot.x >= bx.position.x and foot.x <= bx.end.x and foot.z >= bx.position.z \
+				and foot.z <= bx.end.z and bx.position.y <= foot.y + 0.05 \
+				and bx.end.y >= foot.y - FLOAT_REACH:
+			return true
+	var cs := BrickWorld.get_cell_size()
+	var s := 0.02
+	while s < FLOAT_REACH:
+		var p := foot - Vector3(0.0, s, 0.0)
+		for c in under.chunks:
+			var local: Vector3 = (c[1] as Transform3D) * p
+			if world.is_solid(int(c[0]), Vector3i((local / cs).floor()) + (c[2] as Vector3i)):
+				return true
+		s += cs.y * 0.5
+	return false
 
 
 ## The storey groups' gate (Docs/Interiors.md 8.2 and 8.7, stage 1).
