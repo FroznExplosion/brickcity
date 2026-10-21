@@ -1011,7 +1011,7 @@ func _unhandled_input(e: InputEvent) -> void:
 	if e is InputEventMouseButton and _over_rail():
 		get_viewport().set_input_as_handled()
 		return
-	if _shape_brush_input(e) or _photo_input(e) or _zoom_input(e) or _sketch_input(e) or _stud_input(e) \
+	if _gizmo_input(e) or _shape_brush_input(e) or _photo_input(e) or _zoom_input(e) or _sketch_input(e) or _stud_input(e) \
 			or _move_input(e):
 		get_viewport().set_input_as_handled()
 		return
@@ -1442,7 +1442,7 @@ func _store_asset_meta() -> void:
 	for g in guides:
 		var o: Vector3 = g.offset
 		gds.append({"path": g.path, "real_mm": g.real_mm, "offset": [o.x, o.y, o.z],
-				"turn": g.turn, "opacity": g.opacity})
+				"turn": g.turn, "opacity": g.opacity, "adjust": _xf_list(g.get("adjust", Transform3D()))})
 	recipe.meta["asset"] = {"photos": list, "mirror": {"on": mirror_on, "z": mirror_z},
 			"parts": {"names": Array(part_names), "of": Array(part_of)}, "points": pts, "guides": gds,
 			"smooth": Array(smooth_parts), "muzzle": muzzle_end, "part_width": part_width.duplicate(),
@@ -1509,6 +1509,8 @@ func _restore_asset_meta() -> void:
 			guides[i].offset = Vector3(float(g.offset[0]), float(g.offset[1]), float(g.offset[2]))
 			guides[i].turn = int(g.get("turn", 0))
 			guides[i].opacity = float(g.get("opacity", 0.35))
+			if g.get("adjust") is Array and (g.adjust as Array).size() == 12:
+				guides[i].adjust = _list_xf(g.adjust)
 			_fit_guide(guides[i])
 	_restore_models(a.get("models", []))
 	var m: Dictionary = a.get("mirror", {})
@@ -2115,7 +2117,7 @@ func shape_cells(kind: String, a: Vector3i, b: Vector3i, plates: int) -> Diction
 
 
 func set_tool(t: String) -> void:
-	lay_model()
+	_set_down()
 	tool = t
 	_dragging = false
 	_shape_box.visible = t == "shape"
@@ -2259,7 +2261,7 @@ func load_guide(path: String, real_mm: float) -> int:
 	add_child(holder)
 	var box := mesh.get_aabb()
 	var g := {"path": path, "real_mm": real_mm, "offset": Vector3.ZERO, "turn": 0, "opacity": 0.35,
-			"node": holder, "box": box}
+			"node": holder, "box": box, "adjust": Transform3D()}
 	guides.append(g)
 	_fit_guide(g)
 	_store_asset_meta()
@@ -2268,21 +2270,41 @@ func load_guide(path: String, real_mm: float) -> int:
 
 
 ## Size, turn, place and shade a guide: its longest side to `real_mm` at quarter scale,
-## standing on the plate, centred on the mirror plane, then `offset` in studs.
+## standing on the plate, centred on the mirror plane, then `offset` in studs, then the
+## gizmo's `adjust` (Docs/AssetWorkshop.md, "Pick and move").
 func _fit_guide(g: Dictionary) -> void:
 	var holder: Node3D = g.node
 	var box: AABB = g.box
-	var longest := maxf(box.size.x, maxf(box.size.y, box.size.z))
-	if longest <= 0.0:
+	if maxf(box.size.x, maxf(box.size.y, box.size.z)) <= 0.0:
 		return
+	holder.transform = (g.get("adjust", Transform3D()) as Transform3D) * _guide_fit_xf(g)
+	_shade_guide(holder, float(g.opacity))
+	if is_same(_placed.get("guide"), g):
+		_placed.xf = holder.transform
+		_gizmo.position = _placed_centre()
+
+
+## Where the panel's fit puts a guide, before the gizmo's adjust.
+func _guide_fit_xf(g: Dictionary) -> Transform3D:
+	var box: AABB = g.box
+	var longest := maxf(box.size.x, maxf(box.size.y, box.size.z))
 	var k := float(g.real_mm) / (PRINT_MM_PER_STUD * REAL_PER_PRINT) * BrickPalette.STUD_M / longest
 	var turn := Basis(Vector3.UP, int(g.turn) * PI * 0.5)
 	var centre := box.get_center() * k
 	var bottom := box.position.y * k
 	var mid := plate_studs * BrickPalette.STUD_M * 0.5
 	var at := Vector3(mid, BrickPalette.PLATE_M - bottom, mirror_z * BrickPalette.STUD_M) - turn * Vector3(centre.x, 0.0, centre.z)
-	holder.transform = Transform3D(turn.scaled(Vector3.ONE * k), at + (g.offset as Vector3) * BrickPalette.STUD_M)
-	_shade_guide(holder, float(g.opacity))
+	return Transform3D(turn.scaled(Vector3.ONE * k), at + (g.offset as Vector3) * BrickPalette.STUD_M)
+
+
+static func _xf_list(x: Transform3D) -> Array:
+	return [x.basis.x.x, x.basis.x.y, x.basis.x.z, x.basis.y.x, x.basis.y.y, x.basis.y.z,
+			x.basis.z.x, x.basis.z.y, x.basis.z.z, x.origin.x, x.origin.y, x.origin.z]
+
+
+static func _list_xf(f: Array) -> Transform3D:
+	return Transform3D(Basis(Vector3(f[0], f[1], f[2]), Vector3(f[3], f[4], f[5]), Vector3(f[6], f[7], f[8])),
+			Vector3(f[9], f[10], f[11]))
 
 
 func _shade_guide(n: Node, opacity: float) -> void:
@@ -2668,6 +2690,7 @@ func _build_phase3(layer: CanvasLayer) -> void:
 	load_btn.pressed.connect(func() -> void: _guide_dialog.popup_centered_ratio(0.6))
 	g.add_child(load_btn)
 	_guide_list = OptionButton.new()
+	_guide_list.item_selected.connect(func(i: int) -> void: select_guide(i))
 	g.add_child(_guide_list)
 	var grid := GridContainer.new()
 	grid.columns = 4
@@ -2720,6 +2743,8 @@ func _guide_action(what: String) -> void:
 		"fainter":
 			g.opacity = 0.6 if float(g.opacity) < 0.2 else float(g.opacity) * 0.6
 		"remove":
+			if is_same(_placed.get("guide"), g):
+				select_model(null)
 			(g.node as Node).queue_free()
 			guides.remove_at(i)
 			_store_asset_meta()
@@ -2777,7 +2802,7 @@ func _last_brick() -> Variant:
 func _undo() -> bool:
 	# The selected model is let go while the undo runs and picked again after.
 	var pick := _pick_id()
-	lay_model()
+	_set_down()
 	var n := 1
 	var sketch = null
 	if not _edit_groups.is_empty() and int(_edit_groups.back().end) == _edits.size():
@@ -2832,10 +2857,12 @@ func _undo() -> bool:
 ## Shift Z: do the last undone group again -- each brick back in its own part, each
 ## delete taken up again, a sketch back to what it was.
 func redo() -> int:
-	if _redo.is_empty():
-		return 0
+	# Set down first: a lifted part put down where it was moved is a new edit, and clears redo.
 	var pick := _pick_id()
-	lay_model()
+	_set_down()
+	if _redo.is_empty():
+		_repick(pick)
+		return 0
 	var entry: Dictionary = _redo.pop_back()
 	var items: Array = (entry.items as Array).duplicate()
 	items.reverse()
@@ -3641,7 +3668,7 @@ func _sculpt_input(e: InputEvent) -> bool:
 	if e is InputEventMouseButton and e.button_index in [MOUSE_BUTTON_LEFT, MOUSE_BUTTON_RIGHT]:
 		if e.pressed:
 			# Sculpting on: a placed model is laid first (its stamp is one undo before this).
-			lay_model()
+			_set_down()
 			var right: bool = e.button_index == MOUSE_BUTTON_RIGHT
 			if stamping and sculpt_shape == "lathe" and not _lathe_axis.is_empty():
 				# The axis is down: LMB adds a point of the outline, RMB lays it.
@@ -4331,7 +4358,7 @@ func sculpt_to_sdf() -> void:
 ## game and the print leave out except where it meets bricks (the join, with studs).
 ## Bricks laid in the meantime go into the field first. One undo.
 func sculpt_convert() -> void:
-	lay_model()
+	_set_down()
 	if sculpt_state == "bricks":
 		return
 	_begin_gather()
@@ -4567,9 +4594,7 @@ func centre_on_mirror() -> void:
 		var before := models_state()
 		var xf: Transform3D = _placed.xf
 		_placed.xf = Transform3D(xf.basis, xf.origin + Vector3(0, 0, plane - bb.get_center().z))
-		_stamp_placed()
-		_model_record(before)
-		_gizmo.position = _placed_centre()
+		_held_moved(before)
 		return
 	if sculpt_state == "bricks" or sculpt.form.block_count() == 0:
 		return
@@ -5823,7 +5848,7 @@ var _draw_2d := "outline"
 const SCULPT_MODES := [["shape", "add (LMB) / carve (RMB)"], ["stamp", "stamp a shape (drag)"],
 		["flatten", "flatten"], ["grow", "grow (LMB) / shrink (RMB)"], ["smooth", "smooth"],
 		["paint", "paint this part"], ["zone", "mark smooth (LMB) / back to bricks (RMB)"],
-		["models", "models: pick and move"]]
+		["models", "pick and move (models, parts, guides)"]]
 ## Stamp shapes (Docs/AssetWorkshop.md, "SDF tools, round 2").
 const SCULPT_SHAPES := [["box", "box: corner to corner"], ["cylinder", "cylinder: end to end"],
 		["cone", "cone: base to tip"], ["ball", "ball: centre to edge"], ["line", "line: end to end"],
@@ -8953,6 +8978,9 @@ func _colour_model(m: Dictionary) -> void:
 			col = sculpt.palette[part + 1]
 		if int(m.op) == SdfForm.REMOVE:
 			col = col.lerp(Color(1.0, 0.25, 0.2), 0.6)
+		# The piece picked with the mouse shows lighter.
+		if k == int(m.get("piece", -1)):
+			col = col.lerp(Color.WHITE, 0.5)
 		pal.append(col)
 	node.palette = pal
 	node.remesh_all()
@@ -9018,7 +9046,7 @@ func _model_record(before: Array) -> void:
 ## The models made as `state` says (an undo, a redo, a load): missing ones from the cache,
 ## gone ones taken away, the rest moved, recoloured and stamped where they changed.
 func _set_models(state: Array) -> void:
-	lay_model()
+	_set_down()
 	var want := {}
 	for s in state:
 		want[int(s.id)] = s
@@ -9082,8 +9110,18 @@ func _restore_models(list: Array) -> void:
 	_refresh_model_list()
 
 
+## Pick `m` (a model, a lifted part or a guide: Docs/AssetWorkshop.md, "Pick and move"), or
+## null for nothing. A lifted part picked away from is put down (one undo).
 func select_model(m: Variant) -> void:
-	_placed = m if m is Dictionary else {}
+	var was := _placed
+	var now: Dictionary = m if m is Dictionary else {}
+	if not was.is_empty() and not is_same(was, now):
+		if was.get("kind") == "part":
+			_put_part_back(was)
+		elif int(was.get("piece", -1)) >= 0:
+			was.piece = -1
+			_colour_model(was)
+	_placed = now
 	if _placed.is_empty():
 		_hide_gizmo()
 		_show_sculpt_note()
@@ -9096,7 +9134,8 @@ func select_model(m: Variant) -> void:
 ## The added (ADD) or carving (REMOVE) model; with none selected, the guide picked in the
 ## guide panel goes in or out of the block-out.
 func model_op(op: int) -> void:
-	if _placed.is_empty():
+	if _held_kind() != "model":
+		_set_down()
 		sculpt_model_into(_picked_guide(), op)
 		return
 	var before := models_state()
@@ -9107,9 +9146,106 @@ func model_op(op: int) -> void:
 	_show_gizmo()
 
 
-## The selected model's id, -1 for none.
+## The selected model's id, -1 for none (or a part or guide picked).
 func _pick_id() -> int:
-	return -1 if _placed.is_empty() else int(_placed.id)
+	return int(_placed.id) if _held_kind() == "model" else -1
+
+
+## What is picked: "model", "part" (lifted out of the block-out), "guide", or "".
+func _held_kind() -> String:
+	return "" if _placed.is_empty() else String(_placed.get("kind", "model"))
+
+
+## Before an edit: a model is let go and a lifted part put down (one undo before the
+## edit's); a picked guide stays picked (guides are not in the undo).
+func _set_down() -> void:
+	if _held_kind() in ["model", "part"]:
+		lay_model()
+
+
+## LMB on the block-out in pick and move: part `label` lifted out of it into a field of its
+## own, drawn apart, the gizmo on it (Docs/AssetWorkshop.md, "Pick and move"). While it is
+## held only its drawing moves; it is resampled and joined back when let go. False if the
+## part has nothing there.
+func lift_part(label: int) -> bool:
+	if label <= 0 or sculpt_state != "sdf":
+		return false
+	_set_down()
+	sculpt.form.begin_edit()
+	var taken: SdfForm = sculpt.form.take_part(label)
+	var rec := sculpt.form.end_edit()
+	var bb := taken.bounds()
+	if bb.size == Vector3.ZERO:
+		sculpt.form.swap_blocks(rec)
+		sculpt.remesh()
+		return false
+	sculpt.remesh()
+	var node := AssetSculpt.new()
+	add_child(node)
+	node.form = taken
+	node.palette = sculpt.palette
+	node.transform = sculpt.transform
+	node.remesh_all()
+	select_model({"kind": "part", "id": -1, "label": label, "node": node, "rec": rec, "xf": Transform3D(),
+			"box": sculpt.transform * bb, "pieces": [], "op": SdfForm.ADD,
+			"path": part_names[clampi(label - 1, 0, part_names.size() - 1)]})
+	return true
+
+
+## A lifted part put down: where the gizmo left it, resampled and joined back (the lift and
+## its moves one undo); not moved (or Escape), the block-out exactly as before the lift.
+func _put_part_back(p: Dictionary) -> void:
+	var node: AssetSculpt = p.node
+	var xf: Transform3D = p.xf
+	# Back to before the lift first: the record then starts from the block-out as it was.
+	sculpt.form.swap_blocks(p.rec)
+	if not xf.is_equal_approx(Transform3D()):
+		sculpt.form.begin_edit()
+		var taken: SdfForm = sculpt.form.take_part(int(p.label))
+		taken.transform(sculpt.transform.affine_inverse() * xf * sculpt.transform)
+		sculpt.form.combine(taken, SdfForm.ADD, PackedInt32Array())
+		_sculpt_record(sculpt.form.end_edit())
+	sculpt.remesh()
+	node.queue_free()
+
+
+## Pick guide `i` (the guide panel's list, or LMB on it in pick and move): the gizmo on it.
+func select_guide(i: int) -> void:
+	if i < 0 or i >= guides.size():
+		return
+	var g: Dictionary = guides[i]
+	if _guide_list != null and _guide_list.selected != i:
+		_guide_list.select(i)
+	select_model({"kind": "guide", "id": -1, "guide": g, "node": g.node, "xf": (g.node as Node3D).transform,
+			"box": g.box, "pieces": [], "op": SdfForm.ADD, "path": g.path})
+
+
+## The picked thing where a drag, a nudge or a snap put it: a model stamped again (one
+## undo), a lifted part's drawing moved (its undo comes when it is put down), a guide's
+## adjust kept.
+func _held_moved(before: Array) -> void:
+	_held_follow()
+	match _held_kind():
+		"model":
+			_stamp_placed()
+			_model_record(before)
+		"guide":
+			var g: Dictionary = _placed.guide
+			g.adjust = (_placed.xf as Transform3D) * _guide_fit_xf(g).affine_inverse()
+			_store_asset_meta()
+			_show_placed_note()
+		_:
+			_show_placed_note()
+	_gizmo.position = _placed_centre()
+
+
+## A lifted part's or a guide's drawing where `_placed.xf` says (a model shows its ghost).
+func _held_follow() -> void:
+	match _held_kind():
+		"part":
+			(_placed.node as Node3D).transform = (_placed.xf as Transform3D) * sculpt.transform
+		"guide":
+			((_placed.guide as Dictionary).node as Node3D).transform = _placed.xf
 
 
 ## Pick model `id` again after an undo or redo, if it is still there and the block-out
@@ -9131,7 +9267,7 @@ func lay_model() -> void:
 
 ## Take the selected model away. One undo.
 func drop_model() -> void:
-	if _placed.is_empty():
+	if _held_kind() != "model":
 		return
 	var before := models_state()
 	var m := _placed
@@ -9144,7 +9280,7 @@ func drop_model() -> void:
 ## The selected model joined into the block-out for good (then the brushes carve and smooth
 ## it); it is no longer an object. One undo.
 func bake_model() -> void:
-	if _placed.is_empty():
+	if _held_kind() != "model":
 		_show_sculpt_note(true, "Pick a model first (models: pick and move).")
 		return
 	var before := models_state()
@@ -9167,7 +9303,7 @@ func bake_model() -> void:
 
 ## Give the selected model's piece `k` a part (-1: the model's own). One undo.
 func set_piece_part(k: int, part: int) -> void:
-	if _placed.is_empty() or k < 0 or k >= (_placed.parts as Array).size():
+	if _held_kind() != "model" or k < 0 or k >= (_placed.parts as Array).size():
 		return
 	var before := models_state()
 	_placed.parts[k] = part
@@ -9192,6 +9328,16 @@ func _show_placed_note() -> void:
 	if _placed.is_empty():
 		return
 	var s := placed_size()
+	if _held_kind() == "part":
+		_show_sculpt_note(false, ("%s lifted: %.1f studs long, %.1f up, %.1f across. Arrows move it, rings turn it, the "
+				+ "cube resizes it (Shift: no snap). Enter or LMB on nothing puts it down (one undo); Esc puts it back "
+				+ "as it was.") % [String(_placed.path), s.x, s.y, s.z])
+		return
+	if _held_kind() == "guide":
+		_show_sculpt_note(false, ("guide %s: %.1f studs long, %.1f up, %.1f across. Arrows move it, rings turn it, the "
+				+ "cube resizes it (Shift: no snap); the guide panel's buttons still fit it. Enter or Esc lets it go.")
+				% [String(_placed.path).get_file(), s.x, s.y, s.z])
+		return
 	_show_sculpt_note(false, ("%s %s: %.1f studs long (%.0f mm real, %.0f mm print), %.1f up, %.1f across. "
 			+ "Arrows move it, rings turn it, the cube resizes it (Shift: no snap). Enter or Esc lets it go; "
 			+ "pick it again with \"models: pick and move\".") % [String(_placed.path).get_file(),
@@ -9269,15 +9415,17 @@ func _gizmo_input(e: InputEvent) -> bool:
 		_gizmo.end()
 		_placed_ghost.visible = false
 		if not (_placed.xf as Transform3D).is_equal_approx(_gizmo_xf0):
-			_stamp_placed()
-			_model_record(_gizmo_before)
+			_held_moved(_gizmo_before)
 		_gizmo.position = _placed_centre()
 		return true
 	if e is InputEventMouseMotion:
 		if _gizmo.dragging() != "":
 			_placed.xf = dragged_xf(_gizmo.drag_delta(ray[0], ray[1], e.position), e.shift_pressed)
-			_placed_ghost.transform = _placed.xf
-			_placed_ghost.visible = true
+			if _held_kind() == "model":
+				_placed_ghost.transform = _placed.xf
+				_placed_ghost.visible = true
+			else:
+				_held_follow()
 			_show_placed_note()
 			return true
 		_gizmo.set_hover(_gizmo.pick(ray[0], ray[1]))
@@ -9290,18 +9438,107 @@ func _stamp_placed() -> void:
 	_show_placed_note()
 
 
-## The sculpt mode "models: pick and move": LMB on a model selects it, on nothing lets the
-## selected one go. True when the click was the mode's.
+## The sculpt mode "pick and move": LMB picks what the mouse is on (a model and its piece,
+## a part of the block-out, a guide), on nothing lets go. True when the click was the mode's.
 func _model_pick_input(e: InputEvent) -> bool:
 	if sculpt_mode != "models":
 		return false
 	if not (e is InputEventMouseButton and e.pressed and e.button_index == MOUSE_BUTTON_LEFT):
 		return e is InputEventMouseButton
 	var at: Vector2 = (e as InputEventMouse).position
-	var from := _camera.project_ray_origin(at)
-	var dir := _camera.project_ray_normal(at)
-	select_model(pick_model(from, dir))
+	pick_at(_camera.project_ray_origin(at), _camera.project_ray_normal(at))
 	return true
+
+
+## Pick what a ray (workshop space) meets first (Docs/AssetWorkshop.md, "Pick and move"): a
+## model, with the piece there; a part of the block-out, lifted; a guide; the lifted part
+## itself (kept). Nothing: let go.
+func pick_at(from: Vector3, dir: Vector3) -> void:
+	var gf := global_transform * from
+	var gd := global_transform.basis * dir
+	var best := INF
+	var what := ""
+	var thing = null
+	var label := 0
+	for m in models:
+		var node: AssetSculpt = m.node
+		if not node.visible:
+			continue
+		var h = node.hit(gf, gd)
+		if h != null and (node.to_world(h) - gf).length() < best:
+			best = (node.to_world(h) - gf).length()
+			what = "model"
+			thing = m
+			# The piece: its label just inside the surface.
+			label = node.form.part_near(h + (node.ray_to_samples(gf, gd)[1] as Vector3) * 0.7)
+	if _held_kind() == "part":
+		var held: AssetSculpt = _placed.node
+		var h = held.hit(gf, gd)
+		if h != null and (held.to_world(h) - gf).length() < best:
+			best = (held.to_world(h) - gf).length()
+			what = "held"
+	if sculpt.visible and sculpt_state == "sdf" and sculpt.form.block_count() > 0:
+		var h = sculpt.hit(gf, gd)
+		if h != null and (sculpt.to_world(h) - gf).length() < best:
+			best = (sculpt.to_world(h) - gf).length()
+			what = "part"
+			label = sculpt.form.part_near(h + (sculpt.ray_to_samples(gf, gd)[1] as Vector3) * 0.7)
+	for i in guides.size():
+		var d := _guide_hit(guides[i], gf, gd)
+		if d < best:
+			best = d
+			what = "guide"
+			thing = i
+	match what:
+		"model":
+			select_model(thing)
+			pick_piece(label - 1)
+		"part":
+			if not lift_part(label):
+				select_model(null)
+		"guide":
+			select_guide(thing)
+		"held":
+			pass
+		_:
+			select_model(null)
+
+
+## How far along a ray (global) it meets a shown guide's triangles, INF if it misses.
+func _guide_hit(g: Dictionary, from: Vector3, dir: Vector3) -> float:
+	var best := INF
+	if not (g.node as Node3D).visible:
+		return best
+	for mi in (g.node as Node).find_children("*", "MeshInstance3D", true, false):
+		var xf := (mi as Node3D).global_transform
+		var inv := xf.affine_inverse()
+		var a := inv * from
+		var b := inv * (from + dir)
+		var faces := (mi as MeshInstance3D).mesh.get_faces()
+		for t in range(0, faces.size() - 2, 3):
+			var h = Geometry3D.ray_intersects_triangle(a, b - a, faces[t], faces[t + 1], faces[t + 2])
+			if h != null:
+				best = minf(best, (xf * (h as Vector3) - from).length())
+	return best
+
+
+## Piece `k` of the picked model picked: shown lighter, marked in the pieces list (-1: none).
+func pick_piece(k: int) -> void:
+	if _held_kind() != "model":
+		return
+	_placed.piece = k if k >= 0 and k < (_placed.pieces as Array).size() else -1
+	_colour_model(_placed)
+	_refresh_model_list()
+	_show_placed_note()
+
+
+## The picked piece given the current part (one undo).
+func give_piece_part() -> void:
+	var k := int(_placed.get("piece", -1)) if _held_kind() == "model" else -1
+	if k < 0:
+		_show_sculpt_note(true, "Pick a piece first: LMB on a model in \"pick and move\".")
+		return
+	set_piece_part(k, part_sel)
 
 
 ## The model a ray (workshop space) meets first, or null.
@@ -9333,7 +9570,8 @@ func _build_models_box(box: Container) -> void:
 	box.add_child(_model_list)
 	var row := HFlowContainer.new()
 	box.add_child(row)
-	for b in [["remove", func() -> void: drop_model()], ["bake into SDF", func() -> void: bake_model()]]:
+	for b in [["remove", func() -> void: drop_model()], ["bake into SDF", func() -> void: bake_model()],
+			["give the piece this part", func() -> void: give_piece_part()]]:
 		var btn := Button.new()
 		btn.text = b[0]
 		btn.focus_mode = Control.FOCUS_NONE
@@ -9367,7 +9605,7 @@ func _refresh_model_list() -> void:
 		swatch.color = (_placed.node as AssetSculpt).palette[k + 1]
 		row.add_child(swatch)
 		var name := Label.new()
-		name.text = String(pieces[k].name).left(18)
+		name.text = ("> " if k == int(_placed.get("piece", -1)) else "") + String(pieces[k].name).left(18)
 		name.custom_minimum_size.x = 110
 		row.add_child(name)
 		var pick := OptionButton.new()
@@ -9419,6 +9657,9 @@ func _placed_key(e: InputEvent) -> bool:
 		KEY_ENTER, KEY_KP_ENTER:
 			lay_model()
 		KEY_ESCAPE:
+			# A lifted part goes back exactly as it was, no undo.
+			if _held_kind() == "part":
+				_placed.xf = Transform3D()
 			lay_model()
 		_:
 			return false
@@ -9460,9 +9701,7 @@ func nudge(dir: Vector3i) -> void:
 		var before := models_state()
 		var xf: Transform3D = _placed.xf
 		_placed.xf = Transform3D(xf.basis, xf.origin + by)
-		_stamp_placed()
-		_model_record(before)
-		_gizmo.position = _placed_centre()
+		_held_moved(before)
 		return
 	move_field(Vector3(dir.x * step * BrickWorld.ticks_per_stud(), dir.y * plates * BrickWorld.ticks_per_plate(), dir.z * step * BrickWorld.ticks_per_stud()))
 
@@ -9492,9 +9731,7 @@ func snap_to_studs() -> void:
 		var before := models_state()
 		var xf: Transform3D = _placed.xf
 		_placed.xf = Transform3D(xf.basis, xf.origin + by)
-		_stamp_placed()
-		_model_record(before)
-		_gizmo.position = _placed_centre()
+		_held_moved(before)
 		return
 	if sculpt_state == "bricks" or sculpt.form.block_count() == 0:
 		return
@@ -9590,6 +9827,9 @@ func size_box() -> AABB:
 				boxes.append(global_transform.affine_inverse() * sculpt.global_transform * bb)
 		for m in models:
 			boxes.append((m.xf as Transform3D) * (m.box as AABB))
+		# A lifted part is out of the field while it is held.
+		if _held_kind() == "part":
+			boxes.append((_placed.xf as Transform3D) * (_placed.box as AABB))
 	if not boxes.is_empty():
 		var out: AABB = boxes[0]
 		for bx in boxes:
@@ -9620,7 +9860,7 @@ func _size_marks_process() -> void:
 	# Models are drawn while the block-out is (not once converted).
 	for m in models:
 		(m.node as Node3D).visible = sculpt.visible and sculpt_state == "sdf"
-	if sculpt_state != "sdf" and not _placed.is_empty():
+	if sculpt_state != "sdf" and _held_kind() in ["model", "part"]:
 		lay_model()
 	if Time.get_ticks_msec() < _size_at:
 		return

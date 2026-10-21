@@ -91,8 +91,9 @@ private:
             float (*sdf)(const Vector3 &, const void *), const void *ctx);
     void cell_box(const Vector3i &c, int op, int part);
     void grow(const Vector3 &a, const Vector3 &b, float radius, float amount, int part);
-    // Every sample from where it came: scaled by `factor` about `pivot`, then moved `by`.
-    void remap(float factor, const Vector3 &pivot, const Vector3 &by);
+    // Every sample from where it came through `xf` (samples to samples, affine): distances
+    // scaled by its size, labels and flags from the nearest sample.
+    void remap(const Transform3D &xf);
 
 public:
     /// A capsule from `a` to `b` (samples), `radius` round it: a sphere when a == b.
@@ -136,6 +137,13 @@ public:
     /// The whole form moved `by` samples: exact for whole samples, resampled (trilinear,
     /// labels from the nearest) for a part of one -- half a stud is 2.5.
     void move(const Vector3 &by);
+    /// The whole form resampled through `xform` (samples to samples; a turn, a size and a
+    /// move): a lifted part let go (Docs/AssetWorkshop.md, "Pick and move").
+    void transform(const Transform3D &xform);
+    /// Part `label` taken out into a form of its own (same grid): there its samples as
+    /// they are, every other part's solid just outside; here its solid just outside. So
+    /// `combine(ADD)` of the two gives the part back.
+    Ref<SdfForm> take_part(int label);
     /// Another form joined into this one, sample for sample (both on the same grid): ADD a
     /// union -- where it is inside, its label through `labels` (labels[its label], kept
     /// when out of range) and its flag -- or REMOVE a carve. A model object into the
