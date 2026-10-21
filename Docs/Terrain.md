@@ -1950,6 +1950,46 @@ across brick). F10 has the threshold, the curve quad size and the brick share.
 `terrain_probe` checks the triangle saving, one top surface a cell with the merge, and that bricks
 appear; the §18.5 collision check runs at a quad a stud, the curve it rebuilds.
 
+### 18.8 Nearly all curve: brick only on purposeful flats, and the staircase that stood through it
+
+The user, after 18.7: the curves came with bricks scattered over them, "but the smooth terrain
+still has smooth tiles everywhere on slopes"; wanted instead "all smooth terrain except some
+purposefully flat areas like hill tops and low points that have the bricks and terrain with studs
+on top -- the world should be like 90% smooth terrain without bricks", the bricks flush, part of
+the ground.
+
+* **The "smooth tiles everywhere" were the voxel staircase under every curve.** `mask_faces` drew
+  every exposed face of the columns, including the tops and side steps of CURVED columns -- and
+  the curve runs through the middle of each step (raw height + half a plate), so the top half of
+  every step's wall and its top stood through it: ledges and tile-like rectangles across every
+  curved hill, since 18.5. A fully curved tile had 1,196 wall-facing vertices. A curved column's
+  top and sides are now the curve's alone (its exposed faces only ever face lower ground, which
+  the curve or its skirt already closes). 9 probe tiles: 18,430 triangles → **1,270**.
+* **Brick only where it is flat across a place.** The slope rule reads `broad_slope`: the steepest
+  of the 3 x 3 blocks round a block, blended between block middles -- so a brick area is never
+  smaller than ~24 studs, and its edge is still a smooth contour.
+* **Shelves, so there ARE flat places.** Noise has almost none (2% of the test field is flat
+  across 24 studs). On slopes ground every 4 bricks of height the first 30% of the rise is held
+  flat and the rest climbs on a smoothstep (`set_shelves(4, 0.3)`). Gentle ground -- tops and
+  bottoms -- gets wide shelves that the broad rule lays in brick; on a hillside a shelf is a ledge
+  too narrow for it, and the hill stays a curve. **~10% brick** (9.7% at threshold 0.15; it barely
+  moves with the threshold, because shelves are clean flats).
+* **The cliff rule moved to 3.0 plates a stud.** Shelves gather each level's rise into ramps up to
+  twice as steep, and at 1.5 every steep stretch of hillside came out as stacked brick courses.
+* **Bricks poking out are off by default** (`set_curve_bricks`, still on F10): the bricks belong
+  flush, in the flat places.
+
+Measured (`--slopeshot --curve=0.15`, four views):
+
+| | detail tris | far tris | frame tris |
+|---|---|---|---|
+| laid brick | 381k–409k | 468k | 790k–993k |
+| slopes ground, 18.8 | **44k** | 369k | **612k–760k** |
+
+The ground near the camera is now a tenth of what laid brick costs, and the far tier is most of
+what is left. Still to do: the lighting shows where a 4-stud block meets 1x1 cells (normals are
+per corner from the moved corners, and the two kinds of cell weight them differently).
+
 ---
 
 ## 19. View distance, and what it actually costs

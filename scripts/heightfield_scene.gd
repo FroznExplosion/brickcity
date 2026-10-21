@@ -1343,8 +1343,13 @@ func _run_slope_shots() -> void:
 		["mid", at + Vector3(9.0, 5.0, 9.0), at],
 		["across", at + Vector3(0.0, 4.0, 0.0), at + Vector3(-60.0, -2.0, -60.0)],
 		["wide", at + Vector3(-30.0, 22.0, -30.0), at],
+		["down", at + Vector3(-12.0, 14.0, -12.01), at + Vector3(-12.0, 0.0, -12.0)],
 	]
 	var curve := 0.25
+	if "--nobevel" in OS.get_cmdline_user_args():
+		TerrainTile.bevel_enabled = false
+	if "--lodview" in OS.get_cmdline_user_args():
+		set_lod_view(true)
 	for arg in OS.get_cmdline_user_args():
 		if arg.begins_with("--curve="):
 			curve = float(arg.split("=")[1])

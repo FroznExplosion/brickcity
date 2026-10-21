@@ -821,7 +821,10 @@ func _check_smooth_slopes() -> void:
 	var share := float(curved) / maxf(float(n), 1.0)
 	var mc := slope_curved / maxf(float(curved), 1.0)
 	var mb := slope_brick / maxf(float(n - curved), 1.0)
-	_ok("some ground curves and some is brick", share > 0.05 and share < 0.9,
+	# Since 18.8 slopes ground is meant to be ~90% curve, with laid brick on
+	# the flat shelves: the bound is "mostly curve, and some brick", not the
+	# 5-90% of 18.6.
+	_ok("mostly curve, and some brick", share > 0.6 and share < 0.98,
 		"%.0f%% curved" % (share * 100.0))
 	_ok("and it is the sloping ground that curves", mc > mb * 1.5,
 		"mean fall %.3f m over 2 studs curved, %.3f brick" % [mc, mb])
@@ -901,11 +904,17 @@ func _check_smooth_slopes() -> void:
 		"%d a quad a stud, %d at 4 studs (%.0f%%)" % [tris[0], tris[1],
 			100.0 * float(tris[1]) / maxf(float(tris[0]), 1.0)])
 	_ok("and every cell still has one top surface", covered[1])
+	# Off by default since 18.8 (bricks belong flush, in the flat places);
+	# still there to turn on, and it still has to work when it is.
+	var share_was := BrickTerrain.get_curve_bricks()
+	BrickTerrain.set_curve_bricks(1.0 / 110.0)
 	var bricks := 0
 	for tz in range(-1, 2):
 		for tx in range(-1, 2):
 			bricks += int(BrickTerrain.build_tile(tx, tz).get("brick_count", 0))
-	_ok("bricks poke out of the curved ground (§18.7)", bricks > 0, "%d on 9 tiles" % bricks)
+	BrickTerrain.set_curve_bricks(share_was)
+	_ok("bricks poke out of the curved ground when asked (§18.7)", bricks > 0,
+		"%d on 9 tiles" % bricks)
 
 	# A pad is somewhere a thing stands: brick, however its skirt slopes.
 	BrickTerrain.add_pad(cx, cz, 4, 6, BrickTerrain.surface_raw(cx, cz))
