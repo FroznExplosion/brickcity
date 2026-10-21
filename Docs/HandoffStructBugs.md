@@ -17,6 +17,12 @@ For the next chat picking this up. The plan and everything measured is in
 
 ## The merged plan (2026-10-20) -- start here
 
+**State 2026-10-21 (the second chat):** worktree `C:\Users\lbaun\bc-struct`, everything merged into
+`main` and pushed, the worktree's DLL built from main's C++. Done: 0 (baseline), 1, 11, 12, and the
+floating check's blind spots (2's first half). Open, in order: 2 (one real heap brick in mid-air,
+flaky -- the next `--lodbreak` failure says what it lay on), 3-5, 7-8, 9 (user: stagger the seams;
+see 9 below), 10, 13-16. 6 waits for the user to look in play.
+
 Two chats worked on destruction: this branch (`struct-bugs`, DestructionLod.md) and `lod-collapse`
 (worktree `C:\Users\lbaun\Documents\brickcity\.claude\worktrees\lod-collapse`; CollapseNext.md items
 19-30, Structures.md). Both are merged into `main`. From here **one chat and one worktree** carries
@@ -78,7 +84,14 @@ both lists, in this order; the detail of each item is where it points.
    ms ticks are the display asleep -- not this.) May be the same as 7.
 
 **4. How buildings break**
-9. CollapseNext 30: buildings still come apart in vertical slices along the floor-panel seams
+9. **User, 2026-10-21: stagger the seams.** Worked out, not built: two offset layers make a cut
+   equally cheap on every 5-stud line, the same lines every storey, so swapping the layers (a
+   5-stud shift) changes nothing. A real stagger shifts the pair by a non-multiple of 5 on
+   alternate storeys (lower 2, upper 6: real LEGO plates 2x10, 4x10, 6x10, 2x8, 8x8, 6x6, 4x6, new
+   palette parts), about 1-4 parts a cell instead of 1, and a recipe-version bump. A jog
+   between storeys costs only a few wall studs, so the gain is uncertain: build it as an A/B and
+   measure `big_city.tscn -- --breakshape` (pieces, slices, layers) and the part count before
+   merging. Was: CollapseNext 30: buildings still come apart in vertical slices along the floor-panel seams
    (13 pieces against 21 since two-layer floors). Decide with the user: accepted as what a shot
    face does physically, or the generator staggers the panel seams storey to storey so vertical
    cuts stop lining up.
