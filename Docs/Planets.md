@@ -540,6 +540,38 @@ they are pieces; far, asleep and hidden. The storey record of Space.md §5 is wh
 Rigid buildings on tangent pads are the default; at 10-20 km a 100 m building sags 0.14-0.9 m.
 Bending (§4.2) stays possible and visual only -- the AI keeps the flat building -- for long things.
 
+### Feasibility tests (2026-10-21)
+
+Before any planet work: does anything break the route above? Prototype measurements only -- probes
+and passes under `tools/`, nothing that changes how the game plays. Each ends **passed**, **problem
+found** (with the size of the fix) or **plan-breaking**. Windowed runs one at a time, the heat log
+read after each; timings only with the editor closed.
+
+The scene passes run inside the city scene (it has the buildings, pieces, pawn, gun and AI wired
+up) through one hook, `-- --planet=<test>`, that hands the scene to `tools/planet_passes.gd`; the
+city scene gains those lines and nothing else.
+
+**Tier 1 -- could break the plan**
+
+| # | test | how | passes if |
+|---|---|---|---|
+| 1 | jitter at distance | a small brick scene -- one building, a stack of loose bricks, settled pieces, the pawn with arms and gun -- moved to 2, 8 and 15 km from the origin (along the diagonal, the worst case per axis) and left there. The camera strafes 1 mm a frame. Pictures of the viewmodel and of a brick 2 m away at each distance; per frame, the gun's transform relative to the camera (float32, as the GPU gets it) against its value at the origin; the stack's drift, its sleep state and Jolt's contacts over 20 s | at 2 km nothing a player could see; the doc's ~2 km shift distance stands |
+| 2 | origin shift cost | the terrain city, debris settled, soldiers out; ONE frame moves everything by ~2 km in whole 32-stud tiles, through a reusable shift function. Measured: the frame's time, the sleeping bodies before and after, pictures before/after with the camera moved by the same offset (pixel difference per shader), and a list of every place that holds an absolute position | under the user's guess of 5-30 ms; no wake storm; no visible change, or a known fix; every holder listed with its fix |
+| 3 | tilted building, point gravity | a tower on a pad tilted 7°, its frame square to the pad; an `Area3D` with point gravity toward a centre 10 km below the pad. Shoot it, blast it, collapse it, let it settle | the solve, hang check, pieces, sleep and collision work in the building's frame; every remaining "AABB / world grid" assumption listed with its size |
+| 4 | debris and gravity reads | grep: every read of fixed gravity or +Y-as-down for loose bodies and VFX outside `gravity.gd`; then pieces dropped on a curved ground (a small sphere with point gravity, the curvature exaggerated) | pieces come to rest on the curve and sleep; the list sized |
+
+**Tier 2 -- needed for the route, with fallbacks**
+
+| # | test | how | passes if |
+|---|---|---|---|
+| 5 | walking round a sphere | a plain-mesh sphere planet, `Gravity` pointed at its centre (a test hook, off by default), the pawn and the mech on local down after STA doc 05's radial controller | strafing with no drift, jumping, slopes, mantling and the camera behave; a full great-circle loop ends where it began |
+| 6 | cubed-sphere ground | our terrain tiles' meshes mapped onto a cube face edge and a corner by STA doc 23's mapping, with trimesh colliders | no visible seam, no collision gap, walking over the edge smooth |
+| 7 | two physics spaces | two `World3D`s (the second in a viewport that draws nothing), bodies in both, stepped together | no interaction; the second space's cost measured |
+| 8 | two nav regions | two flat nav regions 1-2° apart, each in its own frame, joined at a border; a path across | the joined path is continuous across the border and the AI's flat assumptions hold inside each |
+| 9 | moving sun | frame cost of terrain casting real-time shadows against re-baking nearby tiles every few degrees (§10a "The sun": baked saves 1.6 ms; a tile bakes in 2.9 ms on a worker) | one of them affordable |
+
+Results below, as each test is run.
+
 ## 10. If it is taken up: order of work
 
 1. **Prototype, outside the game:** one planet of our low-poly tiles on a cubed sphere, baked;
