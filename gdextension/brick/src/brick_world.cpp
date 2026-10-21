@@ -100,6 +100,7 @@ bool BrickWorld::valid_archetype(int archetype_id) const {
 // --- archetype library -----------------------------------------------------
 
 int BrickWorld::bake_archetype(const String &name, Vector3i size, float mass) {
+    palette_changed();
     if (size.x < 1 || size.y < 1 || size.z < 1) {
         UtilityFunctions::push_error("BrickWorld: archetype '", name, "' has a non-positive size");
         return -1;
@@ -120,6 +121,7 @@ int BrickWorld::bake_shaped_archetype(const String &name, Vector3i size, float m
     if (id < 0) {
         return -1;
     }
+    palette_changed();
     Archetype &a = archetypes[id];
 
     const int64_t box = (int64_t)size.x * size.y * size.z;
@@ -246,6 +248,7 @@ struct Orient {
 } // namespace
 
 int BrickWorld::bake_variant(int base_archetype, const String &name, int yaw, bool flip) {
+    palette_changed();
     if (!valid_archetype(base_archetype)) {
         return -1;
     }
@@ -378,6 +381,7 @@ int BrickWorld::bake_faced_archetype(const String &name, Vector3i size, float ma
     if (id < 0) {
         return -1;
     }
+    palette_changed();
     Archetype &a = archetypes[id];
     const int64_t box = (int64_t)size.x * size.y * size.z;
     const int64_t cols = (int64_t)size.x * size.z;
@@ -1978,6 +1982,13 @@ void BrickWorld::drop_chunk_bake(int chunk_id) {
     stats[chunk_id].baked_faces = 0;
 }
 
+std::shared_ptr<const std::vector<Archetype>> BrickWorld::palette_snapshot() {
+    if (!parts_snapshot) {
+        parts_snapshot = std::make_shared<const std::vector<Archetype>>(archetypes);
+    }
+    return parts_snapshot;
+}
+
 void BrickWorld::bake_chunk_async(int chunk_id) {
     if (!valid_chunk(chunk_id) || chunks[chunk_id].bake.valid || bake_pending(chunk_id)) {
         return;
@@ -1986,11 +1997,11 @@ void BrickWorld::bake_chunk_async(int chunk_id) {
     job->chunk_id = chunk_id;
     // The palette is copied rather than shared: baking a new archetype on the
     // main thread would otherwise reallocate underneath the worker.
-    job->parts = archetypes;
+    job->parts = palette_snapshot();
     BakeJob *raw = job.get();
     const Chunk *cp = &chunks[chunk_id]; // stable: chunks is a deque
     raw->worker = std::thread([raw, cp]() {
-        bake_faces_into(*cp, raw->parts, raw->bake);
+        bake_faces_into(*cp, *raw->parts, raw->bake);
         raw->done.store(true, std::memory_order_release);
     });
     bake_jobs.push_back(std::move(job));
@@ -4464,11 +4475,11 @@ void BrickWorld::coarse_chunk_async(int chunk_id) {
     }
     auto job = std::make_unique<CoarseJob>();
     job->chunk_id = chunk_id;
-    job->parts = archetypes; // copied, as a bake's: the palette can grow under a worker
+    job->parts = palette_snapshot(); // as a bake's: the palette can grow under a worker
     CoarseJob *raw = job.get();
     const Chunk *cp = &chunks[chunk_id]; // stable: chunks is a deque
     raw->worker = std::thread([raw, cp]() {
-        coarse_faces_into(*cp, raw->parts, raw->out);
+        coarse_faces_into(*cp, *raw->parts, raw->out);
         raw->done.store(true, std::memory_order_release);
     });
     coarse_jobs.push_back(std::move(job));
@@ -9056,6 +9067,7 @@ void BrickWorld::free_hull_shapes(int archetype_id) {
 }
 
 void BrickWorld::set_archetype_hulls(int archetype_id, const Array &hulls) {
+    palette_changed();
     if (!valid_archetype(archetype_id)) {
         return;
     }
@@ -9086,6 +9098,7 @@ void BrickWorld::set_archetype_mesh(int archetype_id, const PackedVector3Array &
         UtilityFunctions::push_error("BrickWorld: a mesh needs three positions and three normals a triangle");
         return;
     }
+    palette_changed();
     Archetype &a = archetypes[archetype_id];
     a.mesh.clear();
     for (int i = 0; i < positions.size(); i += 3) {
@@ -9466,6 +9479,7 @@ int BrickWorld::get_archetype_mesh_triangles(int archetype_id) const {
 }
 
 void BrickWorld::set_side_studs(int archetype_id, const PackedInt32Array &studs) {
+    palette_changed();
     if (!valid_archetype(archetype_id)) {
         return;
     }
