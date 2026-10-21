@@ -94,6 +94,22 @@ enum Kind {
 	## whoever has to know what changed (navigation). Ids, because what burns
 	## out is decided by heat only the host keeps.
 	BURN,
+	## Storey units (Docs/Space.md 5.3a): building `target` has storeys `blocks`
+	## laid as bricks -- materialised a storey at a time if it was not. Which
+	## storeys are laid changes how a solve comes out (each run is anchored and
+	## carries the weight over it), so it is a command, not each machine's own.
+	LAY,
+	## Building `target`, laid a storey at a time, gave its bricks back. Laid
+	## again it lays what the next LAY says, not what it had.
+	UNLAY,
+	## Building `target`: storey `limit` up gave way and left it as one shell
+	## piece (its laid storeys up there left first, as a DETACH).
+	GIVE_WAY,
+	## Building `target`'s shell piece, storeys `blocks`[0]..`blocks`[1] less
+	## the rest of `blocks` (laid storeys that left as bricks before), became one
+	## brick piece at the transform in `points` (PIECE_REST's form). Its id is
+	## piece_id(seq), as a DETACH's piece's is.
+	SHELL_BRICKS,
 }
 
 ## SHEAR / PIECE_SHEAR: sever only the underside of the struck region.
@@ -223,7 +239,7 @@ class Entry extends RefCounted:
 
 	func is_piece() -> bool:
 		if kind == Kind.CHIP or kind == Kind.LOAD or kind == Kind.UNLOAD or kind == Kind.SCORCH \
-				or kind == Kind.BURN:
+				or kind == Kind.BURN or kind >= Kind.LAY:
 			return false
 		return kind >= Kind.PIECE_BLAST or (kind == Kind.DETACH and flags & FLAG_FROM_PIECE)
 

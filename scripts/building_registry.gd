@@ -119,6 +119,9 @@ class Building:
 	## shell piece: storeys from here up are not this building's any more. -1
 	## while it has them all.
 	var cut_storey := -1
+	## The damage record of the storeys that left, taken from the chunk as they
+	## went -- they were absent, so it is only there (shell_piece_chunk).
+	var cut_record := {}
 
 	func is_build() -> bool:
 		return build != null
@@ -841,9 +844,10 @@ func materialise(id: int, storeys: PackedInt32Array = PackedInt32Array()) -> int
 		return -1
 	if b.is_materialised():
 		b.materialised_at = Time.get_ticks_msec()
-		if b.banded:
-			# Empty asks for the whole building, here as anywhere.
-			_lay_storeys(b, storeys if not storeys.is_empty() else all_storeys(b))
+		# Idempotent asked for nothing: a replay resolving a building's chunk
+		# comes through here. Laying the rest is the caller's (lay_storeys).
+		if b.banded and not storeys.is_empty():
+			_lay_storeys(b, storeys)
 		return b.chunk
 	if b.toppled:
 		return -1  # its bricks are an island now; building them again would double it
@@ -1139,6 +1143,11 @@ func cut_storeys(id: int, s: int) -> void:
 	var b := get_building(id)
 	if b == null:
 		return
+	if b.is_materialised():
+		b.cut_record = {"dead": world.get_dead_blocks(b.chunk),
+				"gone": world.get_detached_blocks(b.chunk),
+				"worn": world.get_worn_blocks(b.chunk),
+				"scorched": world.get_scorched_blocks(b.chunk)}
 	b.cut_storey = s if b.cut_storey < 0 else mini(b.cut_storey, s)
 	var keep := PackedInt32Array()
 	for k in b.storeys_laid:
@@ -1162,6 +1171,32 @@ func cut_storeys(id: int, s: int) -> void:
 			for i in room.items.size():
 				if not room.laid.has(i):
 					room.gone[i] = true
+
+
+## A chunk holding storeys [lo, hi) of a building that left it as a shell
+## piece -- all but `holes`, the storeys that left as bricks -- laid from its
+## template with the record they went with, at `xform`. What a shell piece
+## becomes when it is made bricks (CityScene._piece_to_bricks); a replay makes
+## the same one (StructureReplayer, SHELL_BRICKS). The caller cuts the piece
+## out of it (`get_blocks_in_band`) and releases it.
+func shell_piece_chunk(id: int, lo: int, hi: int, holes: PackedInt32Array,
+		xform: Transform3D) -> int:
+	var b := get_building(id)
+	if b == null or b.is_build():
+		return -1
+	var lines := storey_lines(b)
+	var tid := _template_of(b)
+	var chunk := world.create_band_chunk(tid)
+	if not b.cut_record.is_empty():
+		world.kill_blocks(chunk, b.cut_record.dead)
+		world.kill_blocks(chunk, b.cut_record.gone)
+		world.set_worn_blocks(chunk, b.cut_record.worn)
+		world.set_scorched_blocks(chunk, b.cut_record.scorched)
+	for s in range(lo, hi):
+		if not holes.has(s):
+			world.lay_band(chunk, tid, lines[s], lines[s + 1])
+	world.set_chunk_transform(chunk, xform)
+	return chunk
 
 
 ## The bands of the shell (TowerRecipe.layout, as the damage profile counts

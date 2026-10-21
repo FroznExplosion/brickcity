@@ -3030,6 +3030,8 @@ func _promote(id: int, solve: bool = true,
 	_promote_part("bricks")
 	if chunk < 0:
 		return -1  # already toppled: its bricks are an island, not a building
+	if b.banded:
+		_commit_lay(id, PackedInt32Array())
 	world.set_tension_per_stud(chunk, BrickStrength.tension())
 	_dress(id, chunk, solve)
 	var ms := (Time.get_ticks_usec() - t0) / 1000.0
@@ -3104,6 +3106,7 @@ func _lay_more(id: int, storeys: PackedInt32Array) -> void:
 	var before := b.storeys_laid.duplicate()
 	if registry.lay_storeys(id, storeys) == 0:
 		return
+	_commit_lay(id, before)
 	storeys_laid_later += 1
 	var fresh := PackedInt32Array()
 	for s in b.storeys_laid:
@@ -3121,6 +3124,54 @@ func _lay_more(id: int, storeys: PackedInt32Array) -> void:
 	var ms := float(Time.get_ticks_usec() - t0) / 1000.0
 	_lay_more_ms += ms
 	_lay_more_worst = maxf(_lay_more_worst, ms)
+
+
+## The storey commands (DamageLog LAY, UNLAY, GIVE_WAY, SHELL_BRICKS) applied
+## to a registry's buildings by a replay: a twin's (_check_log_replays), or this
+## city's own when a checkpoint loads. `map` turns a logged building id into
+## that registry's, -1 for one not there; `laid` is told each building laid.
+func _storey_hooks(rep: StructureReplayer, reg: BuildingRegistry, map: Callable,
+		laid := Callable()) -> void:
+	rep.on_lay = func(id: int, storeys: PackedInt32Array) -> void:
+		var t: int = map.call(id)
+		if t < 0:
+			return
+		reg.materialise(t, storeys)
+		if laid.is_valid():
+			laid.call(t)
+	rep.on_unlay = func(id: int) -> void:
+		var t: int = map.call(id)
+		if t >= 0:
+			reg.dematerialise(t)
+	rep.on_give_way = func(id: int, s: int) -> void:
+		var t: int = map.call(id)
+		if t >= 0:
+			reg.cut_storeys(t, s)
+	rep.on_shell_bricks = func(e: DamageLog.Entry) -> int:
+		var t: int = map.call(e.target)
+		if t < 0 or e.blocks.size() < 2:
+			return -1
+		return reg.shell_piece_chunk(t, e.blocks[0], e.blocks[1], e.blocks.slice(2),
+				DamageLog.rest_transform(e))
+
+
+## Storeys laid are a command (DamageLog LAY): which are laid changes how the
+## building's solves come out, so every machine lays the same ones, in the same
+## place in the log. The ones laid now that were not in `before`.
+func _commit_lay(id: int, before: PackedInt32Array) -> void:
+	var b := registry.get_building(id)
+	var fresh := PackedInt32Array()
+	for s in b.storeys_laid:
+		if not before.has(s):
+			fresh.append(s)
+	if fresh.is_empty():
+		return
+	var e := DamageLog.Entry.new()
+	e.tick = Engine.get_physics_frames()
+	e.kind = DamageLog.Kind.LAY
+	e.target = id
+	e.blocks = fresh
+	authority.commit_entry(e)
 
 
 ## Build again the collision of the sections that hold these storeys.
@@ -3291,11 +3342,6 @@ func _give_way(id: int, s: int) -> void:
 	var top: int = lines.size() - 1 if b.cut_storey < 0 else b.cut_storey
 	if s >= top:
 		return
-	# Captured before the cut: their record is in this chunk while absent.
-	var record := {"dead": world.get_dead_blocks(b.chunk),
-			"gone": world.get_detached_blocks(b.chunk),
-			"worn": world.get_worn_blocks(b.chunk),
-			"scorched": world.get_scorched_blocks(b.chunk)}
 	var holes := PackedInt32Array()
 	for k in b.storeys_laid:
 		if k >= s:
@@ -3314,6 +3360,9 @@ func _give_way(id: int, s: int) -> void:
 	# left, it rides them; anywhere else it is out of the drawing.
 	_groups_floor_went(b, AABB(Vector3(-1.0, lines[s] * PLATE, -1.0),
 			Vector3(1e4, (lines[top] - lines[s]) * PLATE, 1e4)), came)
+	# A command: from here every machine solves the building without them.
+	authority.commit(Engine.get_physics_frames(), DamageLog.Kind.GIVE_WAY, id, Vector3.ZERO,
+			0.0, Vector3.ZERO, s)
 	registry.cut_storeys(id, s)
 	_refresh_furniture(id)
 	_queue_remesh(id)
@@ -3322,7 +3371,6 @@ func _give_way(id: int, s: int) -> void:
 	p.lo = s
 	p.hi = top
 	p.holes = holes
-	p.record = record
 	p.transform = b.xform
 	add_child(p)
 	if not p.shape(registry, brick_material):
@@ -3348,24 +3396,30 @@ func _piece_to_bricks(p: ShellPiece) -> BrickIsland:
 		p.queue_free()
 		return null
 	var lines := registry.storey_lines(b)
-	var tid: int = b.band_template
-	var chunk := world.create_band_chunk(tid)
-	world.kill_blocks(chunk, p.record.dead)
-	world.kill_blocks(chunk, p.record.gone)
-	world.set_worn_blocks(chunk, p.record.worn)
-	world.set_scorched_blocks(chunk, p.record.scorched)
-	# Storey by storey: one that left as bricks already (a hole) is not laid.
-	for s in range(p.lo, p.hi):
-		if not p.holes.has(s):
-			world.lay_band(chunk, tid, lines[s], lines[s + 1])
-	world.set_chunk_transform(chunk, p.global_transform)
-	var ids := world.get_blocks_in_band(chunk, lines[p.lo], lines[p.hi])
+	var xf := p.global_transform
+	var chunk := registry.shell_piece_chunk(p.building, p.lo, p.hi, p.holes, xf)
+	var ids := world.get_blocks_in_band(chunk, lines[p.lo], lines[p.hi]) if chunk >= 0 \
+			else PackedInt32Array()
 	var isl: BrickIsland = null
 	if not ids.is_empty():
-		isl = islands.spawn(chunk, ids, p.linear_velocity, p.angular_velocity, -1, -1)
+		# A command, and the piece's id is its place in the log, as a DETACH's
+		# piece's is: every machine makes the same piece where the host's is.
+		var e := DamageLog.Entry.new()
+		e.tick = Engine.get_physics_frames()
+		e.kind = DamageLog.Kind.SHELL_BRICKS
+		e.target = p.building
+		e.limit = lines[p.lo]
+		e.radius = float(lines[p.hi])
+		e.blocks = PackedInt32Array([p.lo, p.hi])
+		e.blocks.append_array(p.holes)
+		e.points = DamageLog.rest_points(xf)
+		var done := authority.commit_entry(e)
+		var piece := DamageLog.piece_id(done.seq) if done != null else -1
+		isl = islands.spawn(chunk, ids, p.linear_velocity, p.angular_velocity, piece, p.building)
 		if isl != null and isl.is_valid():
 			world.heal_joints(isl.chunk)
-	world.release_chunk(chunk)
+	if chunk >= 0:
+		world.release_chunk(chunk)
 	shell_pieces_bricked += 1
 	p.queue_free()
 	return isl
@@ -3928,7 +3982,8 @@ func _with_stairs(b: BuildingRegistry.Building, group: PackedInt32Array) -> Pack
 			continue
 		for bid in f.blocks:
 			stairs[bid] = true
-			if leaving.has(bid) or gone.has(bid):
+			# Not laid (Docs/Space.md 5.3a): its storey is the rest shell's.
+			if leaving.has(bid) or gone.has(bid) or world.is_block_absent(b.chunk, bid):
 				continue
 			# Any stair block reaching up into the section: one left standing
 			# with its top in the section's shaft is a rod through it. (Only
@@ -7656,6 +7711,10 @@ func _run_storeys_pass() -> void:
 			same = false
 	_gate_ok("given back and laid again, its record replays", same,
 			"%d dead before, %d after" % [dead.size(), again.size()])
+	# Co-op and saves: the host's log, replayed into fresh twins, has to lay the
+	# same storeys, cut the same top off and make the same brick piece of it
+	# (DamageLog LAY, UNLAY, GIVE_WAY, SHELL_BRICKS).
+	_check_log_replays()
 	print("[storeys] laid later %d times, %.1f ms all told, worst %.1f; rest shells made %d; shell pieces made bricks %d" % [
 			storeys_laid_later, _lay_more_ms, _lay_more_worst, rest_shells_made, shell_pieces_bricked])
 	print("[storeys] %d ok, %d FAIL" % [_gate_pass, _gate_fail])
@@ -7809,7 +7868,9 @@ func _orphan_stairs(b: BuildingRegistry.Building) -> Array:
 		for k in f.blocks.size():
 			var bid: int = f.blocks[k]
 			all_stairs.append(bid)
-			if not dead.has(bid):
+			# Not laid (Docs/Space.md 5.3a): not here to be swept. Its storey is
+			# the rest shell's, and the shell holds it.
+			if not dead.has(bid) and not world.is_block_absent(b.chunk, bid):
 				live.append([fi, k, bid])
 	if live.is_empty():
 		return out
@@ -12781,6 +12842,11 @@ func _demote(id: int, _dist: float) -> void:
 	# Before dematerialising, which is what takes the chunk id away: the
 	# furniture node is keyed on the chunk, not on the building.
 	var gone := registry.get_building(id)
+	if gone != null and gone.banded:
+		# Laid again, it lays what it is asked then, not what it had: every
+		# machine has to drop what it had too (DamageLog UNLAY).
+		authority.commit(Engine.get_physics_frames(), DamageLog.Kind.UNLAY, id,
+				Vector3.ZERO, 0.0)
 	_free_rest(id)
 	FurnitureMesh.drop(gone.chunk if gone != null else -1, _furniture)
 	_drop_groups(id)
@@ -13995,7 +14061,17 @@ func _restore_checkpoint(path: String) -> Dictionary:
 		_free_shell(id)
 		_drop_groups(id)
 		registry.hand_over(id)
-	var report := snap.restore(world, resolve, islands, on_toppled)
+	# Laid a storey at a time on the host, laid the same here (Docs/Space.md 5.3a).
+	var on_laid := func(id: int) -> void:
+		var lb := registry.get_building(id)
+		if lb != null and lb.is_materialised():
+			world.set_tension_per_stud(lb.chunk, BrickStrength.tension())
+			if not toppling.has(id) and not shown.has(id):
+				shown.append(id)
+	var same := func(id: int) -> int: return id
+	var hooks := func(rep: StructureReplayer) -> void:
+		_storey_hooks(rep, registry, same, on_laid)
+	var report := snap.restore(world, resolve, islands, on_toppled, hooks)
 	# New commands follow the loaded ones.
 	authority.commands = DamageLog.from_data(snap.commands)
 	# Dressed AFTER the replay, so the bake and the collision start from the
@@ -14213,6 +14289,7 @@ func _check_log_replays() -> void:
 	rep.on_toppled = func(id: int) -> void:
 		toppled[id] = true
 		twin.hand_over(int(twin_of[id]))
+	_storey_hooks(rep, twin, func(id: int) -> int: return int(twin_of.get(id, -1)))
 	rep.apply_all(entries)
 
 	var b_ok := 0

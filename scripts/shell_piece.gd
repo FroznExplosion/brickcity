@@ -23,10 +23,6 @@ var hi := 0
 ## Storeys inside [lo, hi) that are not in it: laid as bricks when it broke off,
 ## they left as brick pieces of their own.
 var holes := PackedInt32Array()
-## The building's damage record when it broke off, for laying a storey of it
-## later: the blocks of its storeys were absent then, and their record was in
-## the building's chunk (BrickWorld.create_band_chunk).
-var record := {}
 ## A hard landing seen, waiting for CityScene to act on, and the speed it lost
 ## -- a brick piece's landing rule (IslandManager: IMPACT_DELTA after a fall of
 ## IMPACT_FALL_TICKS at IMPACT_MIN_SPEED or more).
