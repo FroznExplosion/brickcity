@@ -32,9 +32,9 @@ both lists, in this order; the detail of each item is where it points.
   windowed sequence per command, never two at once.
 
 **1. Test health**
-1. `collapse_probe` flickers about 3 runs in 4 -- item 1 under "Open" below (it passed both runs on
-   2026-10-20, which proves nothing). Confirm 5.5 is why, then fix the tower picker; the check is
-   wanted.
+1. ~~`collapse_probe` flickers about 3 runs in 4~~ -- fixed 2026-10-20: "inside"'s toppling tower
+   hits the one beside it, the first-fit picker shifts, the last six-storey tower goes to a
+   four-storey ask. "shellhit" has a city of its own (`shellhit_probe`); DestructionLod 5.7.
 2. `--lodbreak`: the odd heap brick in mid-air (CollapseNext 28; "Open" 3 below).
 
 **2. What the user sees in play**
@@ -124,7 +124,7 @@ areas' tests).
 
 ## How to check
 
-- Probes (headless): `float` 50, `debris` 29, `hang` 10, `collapse` 63, `heap` 11, `crack` 9,
+- Probes (headless): `float` 50, `debris` 29, `hang` 10, `collapse` 61, `shellhit` 2, `heap` 11, `crack` 9,
   `seam` 23, `spaces` 11, `interior_group` 33, `interior` 87, `fixture` 47, `shell` 38,
   `section` 32, `barrage` 8 (keeps the index and components checks on).
 - Also (lod-collapse's, headless): `barrage` 7-8, `push` 16, `blast_ring` 19, `storey` 4,

@@ -68,7 +68,11 @@ func _drain(limit := 30 * 30) -> void:
 ## (tools/storey_probe.gd): this probe takes some twenty untouched towers of the
 ## city's twenty-two, and "storeys", last in line, was left none -- it threw
 ## and three of its four checks never ran, with the probe still passing.
-const OWN_PROBE := ["storeys", "farrules"]
+## "shellhit" (tools/shellhit_probe.gd) the same way, 2026-10-20: the one
+## section that needs six storeys, and the last, it found none about one run in
+## two -- "inside"'s tower hits the one beside it, and each section after takes
+## the next tower along (_tower is first fit), the last tall one with them.
+const OWN_PROBE := ["storeys", "farrules", "shellhit"]
 
 
 func _only(name: String) -> bool:
@@ -208,17 +212,43 @@ func _check_crush() -> void:
 			"inside at first %s, after 2 s %s; %d push tick(s)" % [was_inside, still, city.crush.pushes])
 
 
+## Buildings no section used that something has damaged, said once each: which
+## section's wreckage reached a neighbour, when a later one finds no tower.
+var _collateral: Array = []
+
+
+func _storeys(b) -> int:
+	@warning_ignore("integer_division")
+	return int(b.recipe.courses) / TowerRecipe.COURSES_PER_FLOOR
+
+
 ## A generated building, not a player build, not toppled, of at least `storeys`.
 func _tower(storeys := 4, skip: Array = []) -> int:
 	for b in city.registry.buildings:
+		if not b.is_build() and not _touched.has(b.id) and not _collateral.has(b.id) \
+				and (b.toppled or b.is_damaged()):
+			_collateral.append(b.id)
+			print("  --   building %d (%d storeys) hit by an earlier section's wreckage" % [b.id,
+					_storeys(b)])
+	for b in city.registry.buildings:
 		if b.is_build() or b.toppled or skip.has(b.id) or _touched.has(b.id) or b.is_damaged():
 			continue
-		if int(b.recipe.courses) / TowerRecipe.COURSES_PER_FLOOR >= storeys:
+		if _storeys(b) >= storeys:
 			_touched.append(b.id)
+			print("  --   tower %d, %d storeys (asked %d)" % [b.id, _storeys(b), storeys])
 			return b.id
 	# Said, not passed over: a section with no tower to test on tests nothing.
+	# Why each tall enough one was passed over, too: used by a section, or hit by
+	# another's wreckage.
+	var why := PackedStringArray()
+	for b in city.registry.buildings:
+		if b.is_build() or _storeys(b) < storeys:
+			continue
+		why.append("%d:%s" % [b.id, "used" if _touched.has(b.id) else "toppled" if b.toppled
+				else "damaged" if b.is_damaged() else "skipped"])
 	_ok("an untouched tower of %d storeys to test on" % storeys, false,
-			"%d of %d buildings used already" % [_touched.size(), city.registry.buildings.size()])
+			"%d of %d buildings used already; tall enough: %s" % [_touched.size(),
+			city.registry.buildings.size(), " ".join(why)])
 	return -1
 
 
