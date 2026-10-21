@@ -169,6 +169,8 @@ func _run() -> void:
 	_generated()
 	_generated_with_stairs()
 	_floors()
+	_beam_and_open_top()
+	_sideways_wall()
 
 
 ## A generated building, two storeys of 30 x 30 studs, as the city lays one.
@@ -314,3 +316,126 @@ func _floors() -> void:
 	var id := reg.register_build(r, Transform3D())
 	_ok("and the registry gives the build those as its floor lines, in its chunk's grid",
 			str(reg.floor_lines(id)) == str(PackedInt32Array([0, 5, 10])), str(reg.floor_lines(id)))
+
+
+## The finder's limits, lifted (Docs/Structures.md 3.2): a beam under the
+## ceiling does not split a room, and a room open at the top is a room.
+func _beam_and_open_top() -> void:
+	var w := BrickWorld.new()
+	var pal := TowerRecipe.bake_palette(w)
+	var c := w.create_chunk(Vector3i.ZERO, Vector3i(30, 20, 30))
+	var put := func(x: int, y: int, z: int) -> void:
+		w.place_block(c, Vector3i(x, y, z), int(pal.plate_1x1), 0)
+	var clear := func(x: int, y: int, z: int) -> void:
+		var id := w.block_at(c, Vector3i(x, y, z))
+		if id >= 0:
+			w.remove_block(c, id)
+	var kind := func(cell: Vector3i) -> int:
+		return StructureSpaces.Cell.SOLID if w.is_solid(c, cell) else StructureSpaces.Cell.AIR
+	var find := func(start: Vector3i) -> Dictionary:
+		return StructureSpaces.find_space(start, kind, Vector3i.ZERO, Vector3i(30, 20, 30))
+	# A room inside x 2-20, z 2-11, floor y 0, ceiling y 10, walls one stud
+	# thick; a beam across it under the ceiling (x 11, plates 8-9, wall to
+	# wall); and in the front wall a shop front seven studs wide, from the floor
+	# up six plates, with the street (no floor) beyond it.
+	for x in range(1, 22):
+		for z in range(1, 13):
+			put.call(x, 0, z)
+			put.call(x, 10, z)
+			if x == 1 or x == 21 or z == 1 or z == 12:
+				for y in range(1, 10):
+					put.call(x, y, z)
+	for z in range(2, 12):
+		for y in [8, 9]:
+			put.call(11, y, z)
+	for x in range(14, 21):
+		for y in range(1, 7):
+			clear.call(x, y, 1)
+	var a: Dictionary = find.call(Vector3i(5, 1, 5))
+	var kinds := {}
+	var cells := 0
+	for o in a.openings:
+		kinds[o.kind] = int(kinds.get(o.kind, 0)) + 1
+		cells += (o.cells as Array).size()
+	_ok("a beam under the ceiling does not split the room: all of it is found, both sides",
+			a.ok and (a.columns as Array).size() == 190, "%s, %d columns" % [a.why if not a.ok else "found",
+			(a.columns as Array).size()])
+	_ok("and a shop front as wide, with the street beyond it, is an opening, not a beam",
+			kinds.size() == 1 and int(kinds.get("doorway", 0)) == 1 and cells == 42,
+			"%s, %d cells" % [str(kinds), cells])
+	# Open at the top: inside x 2-9, z 16-23, walls six plates high, no ceiling;
+	# a doorway in its west wall, z 19-20, four plates high under a lintel.
+	for x in range(1, 11):
+		for z in range(15, 25):
+			put.call(x, 0, z)
+			if x == 1 or x == 10 or z == 15 or z == 24:
+				for y in range(1, 7):
+					put.call(x, y, z)
+	for z in [19, 20]:
+		for y in range(1, 5):
+			clear.call(1, y, z)
+	var e: Dictionary = find.call(Vector3i(5, 1, 19))
+	var ek := {}
+	var ec := 0
+	for o in e.openings:
+		ek[o.kind] = int(ek.get(o.kind, 0)) + 1
+		ec += (o.cells as Array).size()
+	_ok("a room open at the top is found: its walls bound it, its top is theirs",
+			e.ok and bool(e.open_top) and (e.columns as Array).size() == 64 and int(e.ceil_y) == 7,
+			"%s, %d columns, ceiling %d, open at the top %s" % [e.why if not e.ok else "found",
+			(e.columns as Array).size(), e.ceil_y, e.open_top])
+	_ok("with its doorway, and nothing of the sky over its walls taken for an opening",
+			ek.size() == 1 and int(ek.get("doorway", 0)) == 1 and ec == 8, "%s, %d cells" % [str(ek), ec])
+	# A gap right through its east wall: open at the top AND the side is a yard.
+	for y in range(1, 7):
+		clear.call(10, y, 18)
+	var yard: Dictionary = find.call(Vector3i(5, 1, 19))
+	_ok("open at a side as well, it is no room", not yard.ok, yard.why)
+
+
+## A wall built sideways walls a room (StructureSpaces.frames_reader; Docs/
+## Structures.md 3.2): an upright room, inside x 1-10, z 1-8, with three walls
+## and its fourth (the z 9 side) a slab of plates in a frame of its own, turned
+## to stand on edge, one plate thick.
+func _sideways_wall() -> void:
+	var w := BrickWorld.new()
+	var pal := TowerRecipe.bake_palette(w)
+	var cs := BrickWorld.get_cell_size()
+	var up := w.create_chunk(Vector3i.ZERO, Vector3i(14, 14, 14))
+	for x in range(0, 12):
+		for z in range(0, 10):
+			w.place_block(up, Vector3i(x, 0, z), int(pal.plate_1x1), 0)
+			w.place_block(up, Vector3i(x, 10, z), int(pal.plate_1x1), 0)
+			if x == 0 or x == 11 or z == 0:
+				for y in range(1, 10):
+					w.place_block(up, Vector3i(x, y, z), int(pal.plate_1x1), 0)
+	# Turned so its plates' thickness runs along z and its rows up: local
+	# (x, y, z) is world (x, z, -y). One plate thick, through the middle of the
+	# upright z 9 cells, from a plate up to past the ceiling.
+	var tall := ceili(10.0 * cs.y / cs.z) + 1
+	var side := w.create_chunk(Vector3i.ZERO, Vector3i(12, 1, tall + 1))
+	for x in range(0, 11):
+		for z in tall:
+			w.place_block(side, Vector3i(x, 0, z), int(pal.plate_1x1), 0)
+	w.set_chunk_transform(side, Transform3D(Basis(Vector3(1, 0, 0), Vector3(0, 0, -1), Vector3(0, 1, 0)),
+			Vector3(0.0, cs.y, 9.5 * cs.z + 0.5 * cs.y)))
+	var hi := Vector3i(14, 14, 14)
+	var read_up := StructureSpaces.frames_reader(w, [up])
+	var read_both := StructureSpaces.frames_reader(w, [up, side])
+	var kind_of := func(read: Callable) -> Callable:
+		return func(c: Vector3i) -> int:
+			return StructureSpaces.Cell.AIR if (read.call(c) as Vector2i).y < 0 else StructureSpaces.Cell.SOLID
+	var open := func(found: Dictionary) -> int:
+		var n := 0
+		for o in found.openings:
+			if o.kind == "open":
+				n += 1
+		return n
+	var alone := StructureSpaces.find_space(Vector3i(5, 1, 4), kind_of.call(read_up), Vector3i.ZERO, hi)
+	var walled := StructureSpaces.find_space(Vector3i(5, 1, 4), kind_of.call(read_both), Vector3i.ZERO, hi)
+	_ok("a wall built sideways walls the room: sealed, where the upright bricks alone leave it open",
+			alone.ok and int(open.call(alone)) > 0 and walled.ok and int(open.call(walled)) == 0
+			and (walled.columns as Array).size() == 80,
+			"upright alone: %d column(s), %d open; with the sideways wall: %d column(s), %d open" % [
+			(alone.columns as Array).size(), open.call(alone), (walled.columns as Array).size(),
+			open.call(walled)])

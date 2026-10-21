@@ -88,7 +88,7 @@ both lists, in this order; the detail of each item is where it points.
     for landing snaps and mega-collapse chunks as generated buildings do.
 
 **5. Tools and content**
-12. The spaces tool's limits (Structures 3.2): a beam under the ceiling splits a room, a room
+12. ~~The spaces tool's limits (Structures 3.2)~~ -- all three lifted 2026-10-21 (user: "all three"): a beam under the ceiling splits a room, a room
     needs a ceiling, a wall built sideways is not seen.
 13. Stair kinds (Structures 3.4).
 14. "Generate office": a room's furniture from its kind (Structures 4.3).
@@ -134,7 +134,7 @@ areas' tests).
 ## How to check
 
 - Probes (headless): `float` 50, `debris` 29, `hang` 10, `collapse` 61, `shellhit` 2, `heap` 11, `crack` 9,
-  `seam` 23, `spaces` 14, `interior_group` 33, `interior` 87, `fixture` 47, `shell` 38,
+  `seam` 23, `spaces` 20, `interior_group` 33, `interior` 87, `fixture` 47, `shell` 38,
   `section` 32, `barrage` 8 (keeps the index and components checks on).
 - Also (lod-collapse's, headless): `barrage` 7-8, `push` 16, `blast_ring` 19, `storey` 4,
   `far_rules` 9, `replay` 13, `loopback` 32, `snapshot` 48, `dormant` 33, `span` 6,

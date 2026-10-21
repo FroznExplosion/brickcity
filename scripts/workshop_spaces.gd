@@ -40,7 +40,10 @@ var _dirty := false
 var _edited_ms := 0
 var _mesh: MeshInstance3D
 var _labels: Array[Label3D] = []
-var _decor := {}             ## upright-grid block ids that are furniture or detail
+var _decor := {}             ## Vector2i(frame, block id) of furniture and detail
+## Which frame's brick fills an upright cell (StructureSpaces.frames_reader),
+## made again with _decor.
+var _reader := Callable()
 
 
 func setup(workshop) -> void:
@@ -247,16 +250,18 @@ func _find(start: Vector3i) -> Dictionary:
 	return StructureSpaces.find_space(start, _cell_kind, lo, hi)
 
 
-## What the finder sees in a cell of the upright grid: furniture and detail
+## What the finder sees in a cell of the upright grid -- from the bricks of
+## every frame, so a wall built sideways walls a room too: furniture and detail
 ## are air (a room is not walled by its desks); see-through bricks are glass;
 ## a door part is a door.
 func _cell_kind(c: Vector3i) -> int:
-	var f: int = ws.asm.frames[0]
-	if not ws.world.is_solid(f, c):
+	if not _reader.is_valid():
+		_collect_decor()
+	var at: Vector2i = _reader.call(c)
+	if at.y < 0 or _decor.has(at):
 		return StructureSpaces.Cell.AIR
-	var id: int = ws.world.block_at(f, c)
-	if _decor.has(id):
-		return StructureSpaces.Cell.AIR
+	var f: int = ws.asm.frames[at.x]
+	var id := at.y
 	if BrickWorld.is_material_translucent(ws.world.get_block_material(f, id)):
 		return StructureSpaces.Cell.GLASS
 	if String(ws.world.get_archetype_name(ws.world.get_block_archetype(f, id))).contains("door"):
@@ -266,13 +271,13 @@ func _cell_kind(c: Vector3i) -> int:
 
 func _collect_decor() -> void:
 	_decor.clear()
+	_reader = StructureSpaces.frames_reader(ws.world, ws.asm.frames)
 	var r = ws.recipe
 	for i in r.size():
 		if r.role_of(i) == BuildRecipe.Role.STRUCTURE or i >= ws._placed_at.size():
 			continue
 		var at: Array = ws._placed_at[i]
-		if int(at[0]) == 0:
-			_decor[int(at[1])] = true
+		_decor[Vector2i(int(at[0]), int(at[1]))] = true
 
 
 ## Along the ray in the upright grid: [the last air cell, the first cell that is
