@@ -749,6 +749,63 @@ from when a placed model was stamped into the block-out and "laid" there); now t
 pick and give it back after, only while the block-out is showing (an undo back to bricks lets
 it go). asset_workshop_probe 288 (2 new).
 
+### Pick and move: sculpted parts, pieces, guides (2026-10-21)
+
+The user (2026-10-21): do all three of the handoff's next items -- move / grab for sculpted
+parts, selecting a piece, the gizmo on the F3 guide models. Written here first.
+
+The sculpt mode "models: pick and move" becomes **pick and move** (models, parts, pieces,
+guides): LMB picks whatever the mouse's ray meets first -- a model, a part of the block-out,
+or a guide -- and the same gizmo (arrows move, rings turn, cube resizes; quarter stud, 15
+degrees, 1%; Shift free) goes on it. LMB on nothing lets go. The nudges, "snap to studs" and
+"centre on mirror" act on whatever is picked.
+
+**1. A sculpted part moved (grab).** LMB on the block-out picks the part under the mouse (its
+label there) and **lifts** it: the part's samples are taken out of the block-out into a field
+of their own (`SdfForm.take_part`), drawn on its own, and the gizmo goes on it. While it is
+dragged only its drawing moves (no resampling, so a drag is free). When it is let go (Enter,
+LMB on nothing, another pick, a brush stroke, Convert, a tool change, Z) it is resampled where
+it now stands (`SdfForm.transform`, any turn and size) and joined back (`combine`): the lift
+and every move of it are **one undo**. **Escape** puts it back exactly as it was (no undo).
+Where the part touched another, the other keeps its own samples (that side is open until
+something fills it, as when a part is moved by hand in clay); the lifted part's samples that
+were inside are its own. Its colour, smooth marks and label go with it.
+
+Engine (`SdfForm`):
+
+| Call | What |
+|---|---|
+| `take_part(label)` | a new form holding that part: its samples as they are, every other part's solid counted just outside (as `part_field` does); in this form that part's solid becomes just outside. Recorded by `begin_edit` like any edit |
+| `transform(xform)` | the whole form resampled through any affine `xform` (samples to samples): distances trilinear, scaled by the transform's size, labels and flags from the nearest sample. `scale` and `move` become this |
+
+**2. Selecting a piece.** LMB on a model also picks the **piece** under the mouse (the label
+its own field has there). The piece shows lighter, its row in the pieces list is marked, and
+**give the piece this part** (a button under the list) gives it the current part (one undo,
+as its picker does). Picking the model in the models list picks no piece.
+
+**3. The gizmo on guides (F3).** A guide picked in the guide panel's list, or by LMB in pick
+and move (its triangles under the ray), gets the gizmo. A guide keeps its fit (real length,
+quarter turns, stud offset: the panel's buttons, as before) and gains a free **adjust**: the
+gizmo's move / turn / size on top of the fit, saved with it (`meta.asset.guides[].adjust`, 12
+numbers). Guides are not in the undo (as before). The panel's buttons still work and keep the
+adjust.
+
+Checks: `sdf_form_probe` -- take_part splits a two-part form and combine puts it back to the
+same cells; transform by whole samples matches move, a quarter turn swaps a box's sides.
+`asset_workshop_probe` -- a part picked by a ray lifts (the block-out without it, gizmo on),
+moved two studs and let go is one undo with its cells two studs along, Escape leaves the field
+as before; a piece picked by a ray, given a part; a guide picked, moved, its adjust kept
+through "turn 90" and saved.
+
+**Built 2026-10-21** as planned. A lifted part keeps the record of its lift; putting it down
+first puts the block-out back as it was before the lift and then takes the part out again,
+moved, so the one undo starts from before the lift (and Escape is that first step alone).
+Edits that need the block-out whole (a brush stroke, Convert, Z, a tool change, "model into
+this part") put a lifted part down first; a picked guide stays picked through them. Shift Z
+with a moved part lifted puts it down, which is a new edit: nothing is left to redo. The
+gizmo now answers in any tool (a guide picked from the F3 panel), not only in Sculpt.
+sdf_form_probe 43 (5 new), asset_workshop_probe 296 (8 new). No picture pass yet.
+
 ### Planned: the form, sliders and shells (2026-10-17, not built)
 
 **How the block-out is used** (the user, 2026-10-17): a quick start. Draw the asset's

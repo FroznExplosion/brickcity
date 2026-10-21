@@ -96,6 +96,8 @@ void SdfForm::_bind_methods() {
     ClassDB::bind_method(D_METHOD("fit_pieces", "cells", "pieces", "min_gain"), &SdfForm::fit_pieces);
     ClassDB::bind_method(D_METHOD("scale", "factor", "pivot"), &SdfForm::scale);
     ClassDB::bind_method(D_METHOD("move", "by"), &SdfForm::move);
+    ClassDB::bind_method(D_METHOD("transform", "xform"), &SdfForm::transform);
+    ClassDB::bind_method(D_METHOD("take_part", "label"), &SdfForm::take_part);
     ClassDB::bind_method(D_METHOD("combine", "other", "op", "labels"), &SdfForm::combine);
     ClassDB::bind_method(D_METHOD("blur", "passes"), &SdfForm::blur);
     ClassDB::bind_method(D_METHOD("clear"), &SdfForm::clear);
@@ -637,11 +639,49 @@ PackedInt32Array SdfForm::fit_pieces(const PackedInt32Array &cells, const Array 
 }
 
 void SdfForm::scale(float factor, const Vector3 &pivot) {
-    remap(factor, pivot, Vector3());
+    if (factor <= 0.0f) {
+        return;
+    }
+    remap(Transform3D(Basis().scaled(Vector3(factor, factor, factor)), pivot - pivot * factor));
 }
 
 void SdfForm::move(const Vector3 &by) {
-    remap(1.0f, Vector3(), by);
+    remap(Transform3D(Basis(), by));
+}
+
+void SdfForm::transform(const Transform3D &xform) {
+    remap(xform);
+}
+
+Ref<SdfForm> SdfForm::take_part(int label) {
+    Ref<SdfForm> out;
+    out.instantiate();
+    const uint8_t l = (uint8_t)std::clamp(label, 0, 255);
+    std::vector<int64_t> keys;
+    for (const auto &kv : blocks) {
+        const Block *b = kv.second.get();
+        for (int i = 0; i < B3; ++i) {
+            if (b->part[i] == l && b->d[i] < BAND) {
+                keys.push_back(kv.first);
+                break;
+            }
+        }
+    }
+    for (const int64_t k : keys) {
+        Block *b = touch(k, false);
+        auto nb = std::make_unique<Block>();
+        std::memcpy(nb.get(), b, sizeof(Block));
+        for (int i = 0; i < B3; ++i) {
+            if (b->part[i] == l) {
+                b->d[i] = std::max(b->d[i], 0.5f);
+            } else {
+                nb->d[i] = std::max(nb->d[i], 0.5f);
+            }
+        }
+        out->dirty[k] = true;
+        out->blocks[k] = std::move(nb);
+    }
+    return out;
 }
 
 void SdfForm::combine(const Ref<SdfForm> &other, int op, const PackedInt32Array &labels) {
@@ -672,10 +712,15 @@ void SdfForm::combine(const Ref<SdfForm> &other, int op, const PackedInt32Array 
     }
 }
 
-void SdfForm::remap(float factor, const Vector3 &pivot, const Vector3 &by) {
-    if (factor <= 0.0f || blocks.empty()) {
+void SdfForm::remap(const Transform3D &xf) {
+    const float det = xf.basis.determinant();
+    if (std::abs(det) < 1e-12f || blocks.empty()) {
         return;
     }
+    // Distances grow with the transform's size (its volume's cube root: the gizmo resizes
+    // evenly).
+    const float factor = std::cbrt(std::abs(det));
+    const Transform3D inv = xf.affine_inverse();
     // Only the blocks a stored block lands on (not the whole box round them: a stroke
     // far off made that box hundreds of thousands of blocks, minutes of work), and a
     // sample is kept near only where its source is within the band -- empty space has
@@ -683,8 +728,14 @@ void SdfForm::remap(float factor, const Vector3 &pivot, const Vector3 &by) {
     std::unordered_map<int64_t, bool> want;
     for (const auto &kv : blocks) {
         const Vector3 o = Vector3(unkey(kv.first)) * (float)B;
-        const Vector3i lo = floor3(pivot + (o - pivot) * factor + by) - Vector3i(1, 1, 1);
-        const Vector3i hi = ceil3(pivot + (o + Vector3(B, B, B) - pivot) * factor + by) + Vector3i(1, 1, 1);
+        Vector3 mn = xf.xform(o), mx = mn;
+        for (int c = 1; c < 8; ++c) {
+            const Vector3 q = xf.xform(o + Vector3(c & 1 ? B : 0, c & 2 ? B : 0, c & 4 ? B : 0));
+            mn = mn.min(q);
+            mx = mx.max(q);
+        }
+        const Vector3i lo = floor3(mn) - Vector3i(1, 1, 1);
+        const Vector3i hi = ceil3(mx) + Vector3i(1, 1, 1);
         for (int bz = fdiv(lo.z, B); bz <= fdiv(hi.z, B); ++bz)
             for (int by = fdiv(lo.y, B); by <= fdiv(hi.y, B); ++by)
                 for (int bx = fdiv(lo.x, B); bx <= fdiv(hi.x, B); ++bx)
@@ -699,7 +750,7 @@ void SdfForm::remap(float factor, const Vector3 &pivot, const Vector3 &by) {
             for (int y = 0; y < B; ++y)
                 for (int x = 0; x < B; ++x) {
                     const Vector3 p((float)(bc.x * B + x) + 0.5f, (float)(bc.y * B + y) + 0.5f, (float)(bc.z * B + z) + 0.5f);
-                    const Vector3 src = pivot + (p - by - pivot) / factor;
+                    const Vector3 src = inv.xform(p);
                     const float ds = trilinear(src);
                     const float d = ds < BAND ? clampb(ds * factor) : BAND;
                     const Vector3i s = floor3(src);

@@ -115,6 +115,44 @@ func _fit_names(f: SdfForm, kit: Dictionary) -> Array:
 
 
 ## A lathe of a straight outline is the cylinder or cone a stamp makes.
+## A part lifted out and put back, and the form moved, turned and resized through one
+## transform (Docs/AssetWorkshop.md, "Pick and move").
+func _part_move_checks() -> void:
+	var f := SdfForm.new()
+	f.box(SdfForm.ADD, Vector3(20, 10, 10), Vector3(10, 4, 5), 0.0, 1)
+	f.box(SdfForm.ADD, Vector3(40, 10, 10), Vector3(10, 4, 5), 0.0, 2)
+	var before := _cell_map(f.cells())
+	var ones := 0
+	for v in before.values():
+		ones += 1 if v == 1 else 0
+	var taken := f.take_part(2)
+	var left := _cell_map(f.cells())
+	var out := _cell_map(taken.cells())
+	var only := func(m: Dictionary, p: int) -> bool: return m.values().all(func(v: int) -> bool: return v == p)
+	_ok("take_part lifts a part out whole, the other stays", only.call(out, 2) and only.call(left, 1)
+			and left.size() == ones and out.size() == before.size() - ones, "%d + %d of %d" % [left.size(), out.size(), before.size()])
+	f.combine(taken, SdfForm.ADD, PackedInt32Array())
+	_ok("and combine puts it back to the same cells", _cell_map(f.cells()) == before)
+	var c := Vector3(30, 10, 30)
+	var a := SdfForm.new()
+	a.box(SdfForm.ADD, c, Vector3(10, 4, 5), 0.0, 1)
+	var b := SdfForm.new()
+	b.box(SdfForm.ADD, c, Vector3(10, 4, 5), 0.0, 1)
+	a.move(Vector3(5, 2, 0))
+	b.transform(Transform3D(Basis(), Vector3(5, 2, 0)))
+	_ok("a transform by whole samples is a move", a.cells() == b.cells() and a.cells().size() > 0)
+	var r := Basis(Vector3.UP, PI / 2)
+	b.transform(Transform3D(r, (c + Vector3(5, 2, 0)) - r * (c + Vector3(5, 2, 0))))
+	var m := c + Vector3(5, 2, 0)
+	_ok("a quarter turn swaps the box's sides", b.sample(m + Vector3(0, 0, 8)) < 0.0 and b.sample(m + Vector3(8, 0, 0)) > 0.0,
+			"%.2f %.2f" % [b.sample(m + Vector3(0, 0, 8)), b.sample(m + Vector3(8, 0, 0))])
+	var big := SdfForm.new()
+	big.box(SdfForm.ADD, c, Vector3(10, 4, 5), 0.0, 1)
+	big.transform(Transform3D(Basis().scaled(Vector3.ONE * 2.0), c - c * 2.0))
+	_ok("twice the size: the distances twice too", big.sample(c + Vector3(19, 0, 0)) < 0.0 and big.sample(c + Vector3(22, 0, 0)) > 0.0
+			and absf(big.sample(c + Vector3(0, 6, 0)) + 2.0) < 0.5, "%.2f" % big.sample(c + Vector3(0, 6, 0)))
+
+
 func _lathe_checks() -> void:
 	var at := Transform3D(Basis(), Vector3(60, 60, 60))
 	var a := SdfForm.new()
@@ -298,5 +336,6 @@ func _init() -> void:
 
 	_fit_checks()
 	_lathe_checks()
+	_part_move_checks()
 	print("sdf_form_probe: %d passed, %d failed" % [_passed, _failed])
 	quit(1 if _failed > 0 else 0)

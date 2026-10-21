@@ -25,7 +25,7 @@ marked smooth; **Edit as SDF** goes back 1:1. One sample a tick: a stud is 5, a 
 | `scripts/model_mesh.gd` | `ModelMesh`: reads glTF/GLB/FBX (skinned meshes posed by hand), OBJ, STL; `read_pieces` |
 | `scripts/model_gizmo.gd` | `ModelGizmo`: arrows move, rings turn, cube resizes (2x per 200 px) |
 | `scripts/fit_kit.gd` | `FitKit`: slopes/wedges/curves sampled for `SdfForm.fit_pieces`; `mirror_name` |
-| `tools/asset_workshop_probe.gd` | 288 checks; `tools/sdf_form_probe.gd` 38 |
+| `tools/asset_workshop_probe.gd` | 296 checks; `tools/sdf_form_probe.gd` 43 |
 
 ## Built, newest first
 
@@ -52,8 +52,9 @@ marked smooth; **Edit as SDF** goes back 1:1. One sample a tick: a stud is 5, a 
 - Mirror plane is across z only (a model symmetric left-right seen from the front must be
   turned a quarter first).
 - Corner slopes impossible until shapes other than prisms (ShapedSampler, print profiles).
-- Planned next in the doc: move/grab of sculpted parts, selecting a piece; maybe the gizmo
-  on F3 guides.
+- (Built 2026-10-21: "pick and move" lifts a sculpted part (`SdfForm.take_part`,
+  `transform`), picks a model's piece by the mouse, and puts the gizmo on F3 guides
+  (`adjust`). See "Pick and move" in the doc.)
 - Building-sized models: not built; what it would take is in the doc (C++ chunked Convert,
   chunked stamping, distance levels).
 - The 2x-studs cost table is in the doc ("Symmetric Convert, and what a bigger gun costs");
