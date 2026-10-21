@@ -14,8 +14,12 @@ extends RefCounted
 ## fighting in costs nothing. This is the one sanctioned door from "the AI wants
 ## to be here" to bricks.
 
-## Buildings brought in per tick. Promotion is ~2 ms each (Docs/Status.md).
-const PER_TICK := 2
+## Milliseconds of promotion a tick, one building at least. It was two a tick
+## whatever they cost: a promotion is ~3 ms on the firefight's ring (up to 7.5
+## for a 42-course tower: the bake started 2-5, collision 1-2, the bricks ~1),
+## and the fight's opening ticks were 9-15 ms of AI (2026-10-21, `[ai-prof]
+## promotions`).
+const BUDGET_MS := 3.0
 
 var zone := AABB()
 ## The buildings this encounter holds materialised.
@@ -37,12 +41,14 @@ func setup(registry: BuildingRegistry, p_zone: AABB, world_box: Callable) -> voi
 				_queue.append(b.id)
 
 
-## Bring the next few in; `promote(id)` materialises one. True once all are.
+## Bring the next few in, inside BUDGET_MS; `promote(id)` materialises one.
+## True once all are.
 func step(promote: Callable) -> bool:
-	var n := 0
-	while not _queue.is_empty() and n < PER_TICK:
+	var t0 := Time.get_ticks_usec()
+	while not _queue.is_empty():
 		promote.call(_queue.pop_front())
-		n += 1
+		if Time.get_ticks_usec() - t0 >= int(BUDGET_MS * 1000.0):
+			break
 	return _queue.is_empty()
 
 

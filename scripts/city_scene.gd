@@ -903,6 +903,15 @@ var _stress_collapse := 8
 var _city_size := 22
 var _promotions := 0
 var _promote_ms := 0.0
+## The slowest promotion and where its time went (_promote_part), for the exit
+## report's "[ai-prof] promotions" line: an encounter brings buildings in a
+## couple a tick, and that is what its first ticks cost.
+var _promote_worst := [0.0, -1, {}]
+var _promote_parts := {}
+## Every promotion over PROMOTE_SLOW_MS: [ms, building, nth promotion, parts].
+var _promote_slow: Array = []
+const PROMOTE_SLOW_MS := 4.0
+var _promote_part_at := 0
 var _frame_worst := 0.0
 var _frame_sum := 0.0
 var _frame_samples := 0
@@ -2980,6 +2989,8 @@ func _promote(id: int, solve: bool = true) -> int:
 		return b.chunk
 
 	var t0 := Time.get_ticks_usec()
+	_promote_parts = {}
+	_promote_part_at = t0
 	# Past SHELL_RANGE a recipe building has no shell, only its far box, and a
 	# promotion hid that box at once: the building was then drawn by however
 	# many bands had been built, and anything cut off it fell while bands built
@@ -2990,13 +3001,27 @@ func _promote(id: int, solve: bool = true) -> int:
 	# Before materialise: the far box draws a building that is not bricks yet.
 	if not b.is_build() and not b.toppled and not _shells.has(id):
 		_make_shell(id, true, true)
+	_promote_part("shell")
 	var chunk := registry.materialise(id)
+	_promote_part("bricks")
 	if chunk < 0:
 		return -1  # already toppled: its bricks are an island, not a building
 	world.set_tension_per_stud(chunk, BrickStrength.tension())
 	_dress(id, chunk, solve)
-	_promote_ms += (Time.get_ticks_usec() - t0) / 1000.0
+	var ms := (Time.get_ticks_usec() - t0) / 1000.0
+	_promote_ms += ms
+	if ms > float(_promote_worst[0]):
+		_promote_worst = [ms, id, _promote_parts.duplicate()]
+	if ms > PROMOTE_SLOW_MS and _promote_slow.size() < 64:
+		_promote_slow.append([ms, id, _promotions, _promote_parts.duplicate()])
 	return chunk
+
+
+## Time since the last part of this promotion, put down to `part`.
+func _promote_part(part: String) -> void:
+	var now := Time.get_ticks_usec()
+	_promote_parts[part] = float(_promote_parts.get(part, 0.0)) + (now - _promote_part_at) / 1000.0
+	_promote_part_at = now
 
 
 ## Everything a materialised building needs to be seen and stood on: its bands,
@@ -3007,6 +3032,7 @@ func _dress(id: int, chunk: int, solve: bool) -> void:
 	# Bricks now: the AI asks them, not the shell.
 	_drop_proxies(id)
 	_nav_touch(id)
+	_promote_part("tension, proxies, nav")
 	# BEFORE the bake is started. Changing the band height invalidates the
 	# bake and cancels one in flight, so doing it afterwards cancels the very
 	# bake this promotion is waiting on -- the shell never comes down and the
@@ -3019,6 +3045,7 @@ func _dress(id: int, chunk: int, solve: bool) -> void:
 	# -- and a building that drops its shell before it has a mesh is a building
 	# that vanishes for a frame. See _finish_promotions.
 	world.bake_chunk_async(chunk)
+	_promote_part("sections, bake start")
 
 	# The CHUNK's transform, not the building's. They are the same thing for a
 	# generated tower, and they are not for a build: a multi-frame placement
@@ -3029,12 +3056,14 @@ func _dress(id: int, chunk: int, solve: bool) -> void:
 	# the band it lands in, not the building (BuildingCollision).
 	_brick_cols[id] = BuildingCollision.new(world, chunk, get_world_3d().space, root_x,
 			MERGE_SHAPES)
+	_promote_part("collision")
 	# And the shell's boxes go now -- its MESH stays until the bands are drawn
 	# (_advance_bands). Both in the space was a solid box where the building's
 	# insides are, for as long as its bands took to draw: a figure dropped down
 	# the stairwell of a building still drawing its bands stood on the shell's
 	# roof, and fell to the stairs when the shell went.
 	_free_shell_body(id)
+	_promote_part("shell body freed")
 
 	var mi := MeshInstance3D.new()
 	mi.material_override = brick_material
@@ -3047,12 +3076,15 @@ func _dress(id: int, chunk: int, solve: bool) -> void:
 	_pending_bricks.append(id)
 
 	_materialised.append(id)
+	_promote_part("mesh node")
 	_promote_frames(id)
+	_promote_part("frames")
 	if solve:
 		_mark_dirty(id)
 		# Made bricks is not hit: a hit marks it after this (_interior_unsure).
 		_touched_ms.erase(id)
 	_promotions += 1
+	_promote_part("solve queued")
 
 
 ## Bodies and meshes for the frames beyond the root of a multi-frame build.
@@ -6209,6 +6241,20 @@ func _report_ai_profile() -> void:
 	if _ai_worst_steps.is_empty():
 		return
 	print("[ai-prof] worst AI tick %.1f ms: %s" % [_ai_worst_ms, _ai_top(_ai_worst_steps, 6)])
+	if _promotions > 0:
+		var pw: Dictionary = _promote_worst[2]
+		var wb := registry.get_building(int(_promote_worst[1])) if registry != null else null
+		print("[ai-prof] promotions %d, %.1f ms each; the worst %.1f ms (building %d, %s, %d bricks): %s" % [
+				_promotions, _promote_ms / _promotions, float(_promote_worst[0]),
+				int(_promote_worst[1]),
+				"" if wb == null else ("build" if wb.is_build() else "%dx%d, %d courses" % [
+					int(wb.recipe.footprint_x), int(wb.recipe.footprint_z), int(wb.recipe.courses)]),
+				0 if wb == null else wb.blocks, _ai_top(pw, 9)])
+		if wb != null and wb.is_build():
+			print("[ai-prof]   that build: %d frame(s), '%s'" % [maxi(wb.frames.size(), 1), wb.build.name])
+		for sl in _promote_slow.slice(0, 8):
+			print("[ai-prof]   slow: %.1f ms, building %d, promotion #%d: %s" % [
+					float(sl[0]), int(sl[1]), int(sl[2]), _ai_top(sl[3], 3)])
 	var spikes := _ai_spikes.duplicate()
 	spikes.sort_custom(func(a: Array, c: Array) -> bool: return a[0] > c[0])
 	print("[ai-prof] %d AI tick(s) over %.0f ms; the worst:" % [_ai_spikes.size(), AI_SPIKE_MS])
