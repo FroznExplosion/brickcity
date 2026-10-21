@@ -1009,6 +1009,8 @@ func _ready() -> void:
 	_view_mode = "--view" in args
 	DebugView.reset()
 	_breaklag_mode = "--breaklag" in args
+	_storeys_mode = "--storeys" in args
+	_whole_mode = "--whole" in args
 	_squad_mode = "--squad" in args
 	_mechfall_mode = "--mechfall" in args
 	if _build_mode:
@@ -1042,6 +1044,9 @@ func _ready() -> void:
 	_build_scenery()
 	palette = TowerRecipe.bake_palette(world)
 	registry = BuildingRegistry.new(world, palette)
+	# Storey units (Docs/Space.md 5.3a); --whole lays every building whole, as
+	# it always was -- the storeys gate's "today".
+	registry.storey_units = not _whole_mode
 
 	islands = IslandManager.new()
 	islands.small_live_max = debris_small_max
@@ -1253,6 +1258,8 @@ func _ready() -> void:
 		_run_soldier_pass()
 	elif _breaklag_mode:
 		_run_breaklag_pass()
+	elif _storeys_mode:
+		_run_storeys_pass()
 	elif _wreck_mode:
 		_run_wreck_pass()
 	elif _jam_mode:
@@ -1351,6 +1358,9 @@ func _exit_tree() -> void:
 			PhysicsServer3D.free_rid(rid)
 	for rid in _shell_bodies.values():
 		PhysicsServer3D.free_rid(rid)
+	for r in _rest_shells.values():
+		PhysicsServer3D.free_rid((r as Array)[1])
+	_rest_shells.clear()
 	for col in _brick_cols.values():
 		(col as BuildingCollision).free_bodies()
 	for rid in _shape_cache.values():
@@ -2630,7 +2640,7 @@ func _make_shell(id: int, coarse: bool = false, far: bool = false) -> void:
 	var nothing_left := false
 	if b.is_materialised() and not b.is_build():
 		damage = registry.live_damage_profile(id)
-		nothing_left = world.get_alive_block_count(b.chunk) == 0
+		nothing_left = world.get_alive_block_count(b.chunk) == 0 and not registry.is_partial(b)
 	var mi := MeshInstance3D.new()
 	# G1b: a damaged building that has given its bricks back must still LOOK
 	# damaged. A tower takes that as a per-band segment mask, because its shell
@@ -2665,7 +2675,7 @@ func _make_shell(id: int, coarse: bool = false, far: bool = false) -> void:
 	# Damaged and still in bricks (_demesh): drawn from its bricks as they are
 	# once a coarse mesh of them is made (_far_real); the shell meanwhile.
 	var real := b.is_materialised() and not b.is_build() and not nothing_left and not boxed \
-			and not damage.is_empty() and not _toppling.has(id)
+			and not damage.is_empty() and not _toppling.has(id) and not registry.is_partial(b)
 	if real:
 		_far_real(id, mi)
 	# Its windows, with a room painted behind each: a shell has no openings, so
@@ -2743,7 +2753,8 @@ func _build_owed_glass() -> void:
 		WorkerThreadPool.wait_for_task_completion(int(job[0]))
 		_glass_jobs.remove_at(i)
 		var arrays: Array = job[1][0]
-		if arrays.is_empty() or not is_instance_valid(job[2]) or _shells.get(int(job[3])) != job[2]:
+		if arrays.is_empty() or not is_instance_valid(job[2]) \
+				or not _is_shell_node(int(job[3]), job[2]):
 			continue
 		var t_hang := Time.get_ticks_usec()
 		_hang_glass(job[2], BuildingShell.window_mesh_of(arrays), job[4])
@@ -2759,7 +2770,7 @@ func _build_owed_glass() -> void:
 		var mi = owed[0]
 		var id: int = owed[1]
 		# Replaced or freed since -- its successor owes its own.
-		if not is_instance_valid(mi) or _shells.get(id) != mi:
+		if not is_instance_valid(mi) or not _is_shell_node(id, mi):
 			continue
 		var b := registry.get_building(id)
 		if b == null:
@@ -2981,11 +2992,16 @@ func _shape_rid(size: Vector3) -> RID:
 ## (BuildingCollision): what a hit takes out is merged again without it at the
 ## end of the tick. One box a brick was 9-15 ms of shapes and 8-10 ms putting
 ## them in the space for the biggest tower, at every promotion.
-func _promote(id: int, solve: bool = true) -> int:
+func _promote(id: int, solve: bool = true,
+		storeys: PackedInt32Array = PackedInt32Array()) -> int:
 	var b := registry.get_building(id)
 	if b == null:
 		return -1
 	if b.is_materialised():
+		# Laid a storey at a time: the ones asked for that it lacks come in
+		# now (Docs/Space.md 5.3a).
+		if b.banded and not storeys.is_empty():
+			_lay_more(id, storeys)
 		return b.chunk
 
 	var t0 := Time.get_ticks_usec()
@@ -3002,7 +3018,7 @@ func _promote(id: int, solve: bool = true) -> int:
 	if not b.is_build() and not b.toppled and not _shells.has(id):
 		_make_shell(id, true, true)
 	_promote_part("shell")
-	var chunk := registry.materialise(id)
+	var chunk := registry.materialise(id, storeys)
 	_promote_part("bricks")
 	if chunk < 0:
 		return -1  # already toppled: its bricks are an island, not a building
@@ -3022,6 +3038,339 @@ func _promote_part(part: String) -> void:
 	var now := Time.get_ticks_usec()
 	_promote_parts[part] = float(_promote_parts.get(part, 0.0)) + (now - _promote_part_at) / 1000.0
 	_promote_part_at = now
+
+
+# ---------------------------------------------------------------------------
+# Storey units (Docs/Space.md 5.3a)
+# ---------------------------------------------------------------------------
+
+## The storeys `what` reaches of building `id` when storey units are on, and
+## none (the whole building) when they are off or it is a build.
+func _storeys_for(id: int, point: Vector3, radius: float) -> PackedInt32Array:
+	var b := registry.get_building(id)
+	if b == null or b.is_build() or not registry.storey_units:
+		return PackedInt32Array()
+	return registry.storeys_in(id, point, radius)
+
+
+var storeys_laid_later := 0
+var _lay_more_ms := 0.0
+var _lay_more_worst := 0.0
+
+
+## More storeys of a building laid a storey at a time: laid into its chunk,
+## baked again, its bands rebuilt -- each old one drawn until its replacement
+## is up -- and the collision of the sections they are in built again. The rest
+## shell goes on drawing them until the bands are up (_rest_sync waits).
+func _lay_more(id: int, storeys: PackedInt32Array) -> void:
+	var b := registry.get_building(id)
+	if b == null or not b.is_materialised() or not b.banded:
+		return
+	var t0 := Time.get_ticks_usec()
+	var before := b.storeys_laid.duplicate()
+	if registry.lay_storeys(id, storeys) == 0:
+		return
+	storeys_laid_later += 1
+	var fresh := PackedInt32Array()
+	for s in b.storeys_laid:
+		if not before.has(s):
+			fresh.append(s)
+	world.bake_chunk_async(b.chunk)
+	if not _pending_bricks.has(id) and _brick_nodes.has(id):
+		# A promotion still waiting for its bake builds every band anyway.
+		_rebuild_bands(id, b.chunk)
+		_band_first[id] = true
+	_reshape_storeys(id, fresh)
+	_refresh_furniture(id)
+	_nav_touch(id)
+	_mark_dirty(id)
+	var ms := float(Time.get_ticks_usec() - t0) / 1000.0
+	_lay_more_ms += ms
+	_lay_more_worst = maxf(_lay_more_worst, ms)
+
+
+## Build again the collision of the sections that hold these storeys.
+func _reshape_storeys(id: int, storeys: PackedInt32Array) -> void:
+	var b := registry.get_building(id)
+	if b == null or not _brick_cols.has(id) or storeys.is_empty():
+		return
+	var col: BuildingCollision = _brick_cols[id]
+	var lines := registry.storey_lines(b)
+	var sp := _section_plates(b.chunk)
+	var dims_y: int = world.get_chunk_dims(b.chunk).y
+	@warning_ignore("integer_division")
+	var layers := maxi((dims_y + sp - 1) / sp, 1)
+	var n := col.bodies.size()
+	@warning_ignore("integer_division")
+	var per_layer := maxi(n / layers, 1)
+	var done := {}
+	for s in storeys:
+		@warning_ignore("integer_division")
+		var l0: int = clampi(lines[s] / sp, 0, layers - 1)
+		@warning_ignore("integer_division")
+		var l1: int = clampi((lines[s + 1] - 1) / sp, 0, layers - 1)
+		for layer in range(l0, l1 + 1):
+			for k in per_layer:
+				var si: int = layer * per_layer + k
+				if si < n and not done.has(si):
+					done[si] = true
+					col.reshape(si, col.merged[si], true)
+
+
+## The rest shell of a building laid a storey at a time: its storeys still
+## whole, drawn and collided with as its shell would, beside the bricks of the
+## laid ones. building id -> [MeshInstance3D, body RID, key, proxy count].
+var _rest_shells := {}
+var rest_shells_made := 0
+
+
+## A rest shell belongs on a building partly in bricks whose bricks are drawn
+## -- not one still behind its stand-in shell (promoting, or its mesh given up
+## at range: that shell draws all of it).
+func _rest_wanted(b: BuildingRegistry.Building) -> bool:
+	return b != null and registry.is_partial(b) and _brick_nodes.has(b.id) \
+			and not _shells.has(b.id) and not _toppling.has(b.id)
+
+
+func _rest_sync(id: int) -> void:
+	var b := registry.get_building(id)
+	if not _rest_wanted(b):
+		if _rest_shells.has(id):
+			_free_rest(id)
+		return
+	var key := [b.storeys_laid.duplicate(), b.cut_storey]
+	if _rest_shells.has(id):
+		# Storeys just laid are drawn by it until their bands are up.
+		if _rest_shells[id][2] == key or _bands_building(id):
+			return
+		_free_rest(id)
+	_make_rest(id, key)
+
+
+func _make_rest(id: int, key: Array) -> void:
+	var b := registry.get_building(id)
+	var profile := registry.rest_profile(id)
+	var fx: int = b.recipe.footprint_x
+	var fz: int = b.recipe.footprint_z
+	var courses: int = b.recipe.courses
+	var mi := MeshInstance3D.new()
+	mi.mesh = BuildingShell.build_mesh(fx, fz, courses, profile)
+	mi.material_override = brick_material
+	mi.transform = b.xform
+	mi.physics_interpolation_mode = Node.PHYSICS_INTERPOLATION_MODE_OFF
+	add_child(mi)
+	var body := PhysicsServer3D.body_create()
+	PhysicsServer3D.body_set_mode(body, PhysicsServer3D.BODY_MODE_STATIC)
+	PhysicsServer3D.body_set_collision_layer(body, Layers.STRUCTURE)
+	PhysicsServer3D.body_set_collision_mask(body, Layers.STRUCTURE_MASK)
+	var boxes: Array = BuildingShell.collision_boxes(fx, fz, courses, false, profile)
+	var proxies := 0
+	for box in boxes:
+		# The shell's ground plate is the bricks' when storey 0 is laid.
+		if b.storeys_laid.has(0) and float(box.pos.y) < PLATE:
+			continue
+		PhysicsServer3D.body_add_shape(body, _shape_rid(box.size), Transform3D(Basis(), box.pos))
+		# The AI asks the shell where there are no bricks (Docs/AI.md 3.2).
+		if proxies < 64:
+			ai_world.set_proxy(_rest_proxy_id(id, proxies),
+					b.xform * Transform3D(Basis(), box.pos), box.size, 1.0 / STUD)
+			proxies += 1
+	PhysicsServer3D.body_set_state(body, PhysicsServer3D.BODY_STATE_TRANSFORM, b.xform)
+	PhysicsServer3D.body_set_space(body, get_world_3d().space)
+	_rest_shells[id] = [mi, body, key, proxies]
+	rest_shells_made += 1
+	_nav_touch(id)
+	# Its windows, as any shell's (_build_owed_glass).
+	_glass_owed.append([mi, id, profile, false, false])
+
+
+func _free_rest(id: int) -> void:
+	if not _rest_shells.has(id):
+		return
+	var r: Array = _rest_shells[id]
+	if is_instance_valid(r[0]):
+		(r[0] as MeshInstance3D).queue_free()
+	PhysicsServer3D.free_rid(r[1])
+	for k in int(r[3]):
+		ai_world.remove_proxy(_rest_proxy_id(id, k))
+	_rest_shells.erase(id)
+	_nav_touch(id)
+
+
+## Rest shell proxies have ids of their own: a building's shell's are
+## id * 64 + k (_proxy_id), and the two may be up in the same tick.
+func _rest_proxy_id(id: int, k: int) -> int:
+	return -(id * 64 + k) - 1
+
+
+## Is this mesh node a shell of building `id` -- its own or its rest shell?
+func _is_shell_node(id: int, mi) -> bool:
+	if _shells.get(id) == mi:
+		return true
+	return _rest_shells.has(id) and _rest_shells[id][0] == mi
+
+
+## Every building in bricks gets its rest shell made, rebuilt or freed as its
+## state says, once a tick: cheap, and it keeps the one rule (_rest_wanted) in
+## one place rather than at every door a building goes through.
+func _tend_rest_shells() -> void:
+	for id in _materialised:
+		var b := registry.get_building(id)
+		if b != null and (b.banded or _rest_shells.has(id)):
+			_rest_sync(id)
+	for id in _rest_shells.keys():
+		var b := registry.get_building(id)
+		if b == null or not b.is_materialised():
+			_free_rest(id)
+
+
+# --- a storey gives way: the rest leaves as a shell piece ---------------------
+
+var _shell_pieces: Array[ShellPiece] = []
+var shell_pieces_made := 0
+var shell_pieces_bricked := 0   ## storeys of shell pieces made bricks
+
+
+## Everything from storey `s` up has nothing under it: the laid storeys up
+## there leave as brick pieces, the rest as ONE shell piece, and the building
+## is what is left under it.
+func _give_way(id: int, s: int) -> void:
+	var b := registry.get_building(id)
+	if b == null or not b.banded:
+		return
+	var lines := registry.storey_lines(b)
+	var top: int = lines.size() - 1 if b.cut_storey < 0 else b.cut_storey
+	if s >= top:
+		return
+	# Captured before the cut: their record is in this chunk while absent.
+	var record := {"dead": world.get_dead_blocks(b.chunk),
+			"gone": world.get_detached_blocks(b.chunk),
+			"worn": world.get_worn_blocks(b.chunk),
+			"scorched": world.get_scorched_blocks(b.chunk)}
+	var holes := PackedInt32Array()
+	for k in b.storeys_laid:
+		if k >= s:
+			holes.append(k)
+	# The bricks up there go as pieces, as any group that lost its hold does.
+	var up := world.get_blocks_in_band(b.chunk, lines[s], lines[top])
+	registry.cut_storeys(id, s)
+	if not up.is_empty():
+		_disable(id, up)
+		var piece := islands.record_detach(id, null, b.chunk, up, DamageLog.FLAG_CHUNK)
+		var came := islands.spawn(b.chunk, up, Vector3.ZERO, Vector3.ZERO, piece, id)
+		if came != null:
+			_note_handover(id, came)
+	# What its rooms drew up there is not there any more.
+	_groups_rooms_moved(b, lines[s] * PLATE, lines[top] * PLATE)
+	_refresh_furniture(id)
+	_queue_remesh(id)
+	var p := ShellPiece.new()
+	p.building = id
+	p.lo = s
+	p.hi = top
+	p.holes = holes
+	p.record = record
+	p.transform = b.xform
+	add_child(p)
+	if not p.shape(registry, brick_material):
+		p.queue_free()
+	else:
+		_shell_pieces.append(p)
+		shell_pieces_made += 1
+		print("[storeys] building %d: storey %d gave way; storeys %d-%d leave as one shell piece (%d laid up there went as bricks)" % [
+				id, s - 1, s, top - 1, holes.size()])
+	_nav_touch(id)
+	_rest_sync(id)
+
+
+## Storeys `which` of a shell piece become bricks: laid from the template into
+## a chunk of their own, placed where the piece is, and let go as a brick piece
+## moving as it moves. What is left of the shell piece below them stays this
+## piece; what is above, a new one.
+func _piece_to_bricks(p: ShellPiece, which: PackedInt32Array) -> BrickIsland:
+	var b := registry.get_building(p.building)
+	if b == null or which.is_empty():
+		return null
+	var lines := registry.storey_lines(b)
+	var s0: int = which[0]
+	var s1: int = which[which.size() - 1] + 1
+	var tid: int = b.band_template
+	var chunk := world.create_band_chunk(tid)
+	world.kill_blocks(chunk, p.record.dead)
+	world.kill_blocks(chunk, p.record.gone)
+	world.set_worn_blocks(chunk, p.record.worn)
+	world.set_scorched_blocks(chunk, p.record.scorched)
+	# Storey by storey: one that left as bricks already (a hole) is not laid.
+	for s in which:
+		if not p.holes.has(s):
+			world.lay_band(chunk, tid, lines[s], lines[s + 1])
+	world.set_chunk_transform(chunk, p.global_transform)
+	var ids := world.get_blocks_in_band(chunk, lines[s0], lines[s1])
+	var isl: BrickIsland = null
+	if not ids.is_empty():
+		isl = islands.spawn(chunk, ids, p.linear_velocity, p.angular_velocity, -1, -1)
+	world.release_chunk(chunk)
+	shell_pieces_bricked += s1 - s0
+	# Above them: a piece of its own, moving as this one was.
+	if s1 < p.hi:
+		var q := ShellPiece.new()
+		q.building = p.building
+		q.lo = s1
+		q.hi = p.hi
+		q.holes = p.holes
+		q.record = p.record
+		q.transform = p.global_transform
+		q.linear_velocity = p.linear_velocity
+		q.angular_velocity = p.angular_velocity
+		add_child(q)
+		if q.shape(registry, brick_material):
+			_shell_pieces.append(q)
+		else:
+			q.queue_free()
+	p.hi = s0
+	if p.hi <= p.lo or not p.shape(registry, brick_material):
+		_shell_pieces.erase(p)
+		p.queue_free()
+	return isl
+
+
+## Once a tick: a shell piece that landed hard has its lowest storey made
+## bricks; one that fell out of the world goes.
+func _tend_shell_pieces() -> void:
+	for i in range(_shell_pieces.size() - 1, -1, -1):
+		var p := _shell_pieces[i]
+		if not is_instance_valid(p):
+			_shell_pieces.remove_at(i)
+			continue
+		if p.global_position.y < -200.0:
+			_shell_pieces.remove_at(i)
+			p.queue_free()
+			continue
+		if p.landed_hard:
+			p.landed_hard = false
+			var lowest: int = p.lo
+			while p.holes.has(lowest) and lowest < p.hi:
+				lowest += 1
+			if lowest < p.hi:
+				_piece_to_bricks(p, PackedInt32Array([lowest]))
+
+
+## A blast reaching a shell piece: the storeys it reaches become bricks first,
+## and then it lands on them like on any piece.
+func _blast_shell_pieces(point: Vector3, radius: float) -> void:
+	for p in _shell_pieces.duplicate():
+		if not is_instance_valid(p) or not p.reaches(registry, point, radius):
+			continue
+		var which: PackedInt32Array = p.storeys_at(registry, point, radius)
+		if which.is_empty():
+			continue
+		var isl := _piece_to_bricks(p, which)
+		if isl != null:
+			islands.damage(isl, point, radius)
+
+
+func _shell_piece_of(collider: Object) -> ShellPiece:
+	return collider as ShellPiece if collider is ShellPiece else null
 
 
 ## Everything a materialised building needs to be seen and stood on: its bands,
@@ -3238,6 +3587,7 @@ func _topple(id: int) -> void:
 	# Recorded first: whatever happens to these bricks next happens to a piece,
 	# and the piece's id is this command's (DamageLog.piece_id).
 	var piece := islands.record_topple(id)
+	_free_rest(id)
 	var chunk := b.chunk
 	var mi: MeshInstance3D = _brick_nodes.get(id)
 	# Captured before hand_over, which drops the building's claim on them.
@@ -4351,6 +4701,9 @@ func _building_for_body(body: RID) -> int:
 			return id
 	for id in _shell_bodies:
 		if _shell_bodies[id] == body:
+			return id
+	for id in _rest_shells:
+		if _rest_shells[id][1] == body:
 			return id
 	return -1
 
@@ -7087,6 +7440,14 @@ func _start_firefight(gate: bool) -> void:
 ## bricks it lies on -- a LOAD command, applied and solved on the host, replayed
 ## by the twin buildings of the log check like everything else.
 var _breaklag_mode := false
+var _storeys_mode := false   ## -- --storeys: the storey-units gate (Docs/Space.md 5.3a)
+var _whole_mode := false     ## -- --whole: every building laid whole, as before storey units
+
+
+## The storey-units gate: not written yet (handover note). Quits so a run ends.
+func _run_storeys_pass() -> void:
+	print("[storeys] gate not written yet")
+	get_tree().quit(0)
 
 
 ## How long a break takes to show. Reported: a break, then pieces that do
@@ -10263,7 +10624,7 @@ func _apply_blast(point: Vector3, radius: float, chip_hp := 0) -> void:
 		if not box.has_point(local):
 			continue
 		var t_part := Time.get_ticks_usec()
-		var chunk := _promote(b.id)
+		var chunk := _promote(b.id, true, _storeys_for(b.id, point, reach))
 		t_part = _part("dmg_promote", t_part)
 		if chunk < 0:
 			continue
@@ -10369,6 +10730,8 @@ func _apply_blast(point: Vector3, radius: float, chip_hp := 0) -> void:
 	# rest stays at rest until something is taken from under it (CollapseNext
 	# 1.10); a piece's own bricks say the same for themselves in damage().
 	var t_pieces := Time.get_ticks_usec()
+	if not _shell_pieces.is_empty():
+		_blast_shell_pieces(point, reach)
 	islands.damage_near(point, radius, chip_hp)
 	if took_bricks:
 		islands.support_gone(AABB(point - Vector3.ONE * reach, Vector3.ONE * reach * 2.0))
@@ -10473,6 +10836,8 @@ func _physics_process(_delta: float) -> void:
 		for k in mini(decide_limit, _dirty.size()):
 			var ab := registry.get_building(_dirty[k])
 			if ab != null and ab.is_materialised():
+				if ab.banded:
+					registry.set_storey_bounds(ab)
 				ids.append(_dirty[k])
 				chunks.append(ab.chunk)
 		if ids.size() > 1:
@@ -10512,6 +10877,8 @@ func _physics_process(_delta: float) -> void:
 			solve = ahead[id]
 			ahead.erase(id)
 		else:
+			if b.banded:
+				registry.set_storey_bounds(b)
 			var _ts := Time.get_ticks_usec()
 			solve = world.solve_structure(b.chunk, CASCADE_ROUNDS, CASCADE_BUDGET_MS)
 			var _solve_ms := float(Time.get_ticks_usec() - _ts) / 1000.0
@@ -10550,8 +10917,11 @@ func _physics_process(_delta: float) -> void:
 		var stability: Dictionary = solve.stability
 		if not bool(stability.get("stable", true)):
 			quiet = false
+		# Not one laid a storey at a time: its bricks are a storey or two of
+		# it, and what those balance on says nothing of the building. A storey
+		# of it that gives way is _give_way's (below).
 		if not bool(stability.get("stable", true)) and not _toppling.has(b.id) \
-				and spawned < SPAWNS_PER_TICK \
+				and not b.banded and spawned < SPAWNS_PER_TICK \
 				and (spawned == 0 or Time.get_ticks_usec() < spawn_until):
 			_toppling[b.id] = true
 			var whole: PackedInt32Array = stability.blocks
@@ -10689,6 +11059,17 @@ func _physics_process(_delta: float) -> void:
 		if not _dirty.has(id):
 			_dirty.append(id)
 	_resolves_put_off += again.size()
+	# A storey with nothing left under the storey on it (Docs/Space.md 5.3a):
+	# asked once the groups it shed have left, so what is left is what holds.
+	for id in solved_now:
+		var gb := registry.get_building(id)
+		if gb == null or not gb.banded or not gb.is_materialised():
+			continue
+		if _shells.has(id) and _bands_building(id):
+			continue   # its groups wait for its bands; so does this
+		var gave := registry.storey_gave_way(id)
+		if gave >= 0:
+			_give_way(id, gave)
 	t = _mark("after_spawn", t)
 	for sid in _stairs_due.keys():
 		if spawned >= SPAWNS_PER_TICK or (spawned > 0 and Time.get_ticks_usec() >= spawn_until):
@@ -10720,6 +11101,8 @@ func _physics_process(_delta: float) -> void:
 	_retirer.drain()
 	t = _mark("retire", t)
 	_advance_bands()
+	_tend_rest_shells()
+	_tend_shell_pieces()
 	t = _mark("bands", t)
 	_finish_promotions()
 	t = _mark("promote_finish", t)
@@ -12094,6 +12477,7 @@ func _demote(id: int, _dist: float) -> void:
 	# Before dematerialising, which is what takes the chunk id away: the
 	# furniture node is keyed on the chunk, not on the building.
 	var gone := registry.get_building(id)
+	_free_rest(id)
 	FurnitureMesh.drop(gone.chunk if gone != null else -1, _furniture)
 	_drop_groups(id)
 	_free_room_body(id)
