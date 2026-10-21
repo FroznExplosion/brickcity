@@ -72,7 +72,11 @@ func _drain(limit := 30 * 30) -> void:
 ## section that needs six storeys, and the last, it found none about one run in
 ## two -- "inside"'s tower hits the one beside it, and each section after takes
 ## the next tower along (_tower is first fit), the last tall one with them.
-const OWN_PROBE := ["storeys", "farrules", "shellhit"]
+## "farcut" (tools/farcut_probe.gd) too, 2026-10-21: it takes two towers, the
+## second late, and with buildings laid a storey at a time (Docs/Space.md
+## 5.3a) a top leaving as a shell piece can land on a neighbour -- one run in
+## three it found none.
+const OWN_PROBE := ["storeys", "farrules", "shellhit", "farcut"]
 
 
 func _only(name: String) -> bool:
