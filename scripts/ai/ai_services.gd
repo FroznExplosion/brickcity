@@ -56,6 +56,10 @@ var on_structure_hit := Callable()
 ## A breaching charge (mouse-holing, AI.md 6.2): (point, radius) -> void. The
 ## city commits a BLAST through the authority; an arena blasts its bricks.
 var on_breach := Callable()
+## (point: Vector3, radius: float, kind: String) -> Array[Vector3]: the spots
+## authors marked in builds near a point, nearest first (BuildingMarks; the city
+## binds its registry on). Unset, nothing is marked anywhere.
+var marks := Callable()
 ## Combat's seeded RNG (D9). Agents draw their own streams from it.
 var rng := RandomNumberGenerator.new()
 ## The engage decision, shared by every soldier (CombatPolicy.create).

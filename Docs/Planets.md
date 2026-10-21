@@ -334,6 +334,94 @@ are planet-only work with no payoff in the flat game: they wait for the decision
 
 ---
 
+## 10a. Decision notes (2026-10-20): size, the sun, the story
+
+### Size: past which nothing needs to know it is on a sphere
+
+**Buildings never need bending at our sizes.** Rigid is invisible while the sag `w² / 8R` is under
+a plate (0.14 m) and the tilt at the edge `w / 2R` under half a degree:
+
+| R | widest rigid building | our towers (10–14 m) | a 300-stud build (105 m) |
+|---|---|---|---|
+| 1.5 km | ~25 m (tilt) | 0.016 m, 0.27° | 0.9 m sag: terrace or gravity zone |
+| 6 km | ~80 m | nothing | 0.23 m |
+| 10 km | ~105 m | nothing | 0.14 m |
+
+Bent bricks (§4.2) are only for LONG things: a street grid, a wall, a ring city (a 1 km city sags
+12.5 m at 10 km). Cities become districts on their own tangent frames, with the slopes ground
+between them.
+
+**The AI, physics and controllers need nothing special if the simulation runs in a flat
+bubble.** Instead of radial gravity everywhere, keep ONE flat frame for the active area -- the
+floating origin plus a floating ROTATION, so the bubble's centre is at the origin with its up
+along +Y -- and simulate everything in it exactly as today (every `Vector3.UP`, the `.y` logic,
+`AINav`'s columns, the stress solver). The ground and buildings are drawn where they really are
+on the sphere; the curve inside the bubble is just a gentle hill to the nav map (300 m out on
+10 km is 4.5 m down). The only error is gravity: constant over the bubble where it should tilt
+`d / R` at distance `d`:
+
+| bubble radius | under 1° | under 2° |
+|---|---|---|
+| 150 m | R ≥ 8.6 km | R ≥ 4.3 km |
+| 300 m (a mech's sight) | R ≥ 17 km | R ≥ 8.6 km |
+
+So **~10–20 km planets** (moons ~5 km for set pieces) let the gameplay code stay flat. Re-anchor
+the bubble when the FIGHT moves, not the player -- at a mech drop, a landing, between encounters
+-- because a re-anchor moves every physics body (a hitch) and drops `AINav`'s columns and the
+hierarchy's caches in the area (a cold search was 214 ms against 87 ms warm, §4.3 of AI.md).
+Radial gravity is then only for the ship's flight, orbits, and things far from any bubble (frozen
+or impostors).
+
+What the bubble does not solve: **co-op players far apart.** Two bubbles 2 km apart on 10 km are
+11° apart and cannot share one flat frame. Either missions keep the squad together (a leash of
+~1 km), or each bubble gets its own physics space (Godot can run several) -- the second is real
+work.
+
+Horizon at 10–20 km: 180–260 m on foot, 450–630 m from a mech; the curve shows from the air (1 km up on
+10 km the horizon is 4.5 km off and visibly round). Surface 1,250–5,000 km², procedural.
+
+### The sun as the solar system's light
+
+Never a real point light: an `OmniLight3D` at planet-to-sun distance has no usable shadows (six
+cube faces, range and precision). The sun is **one `DirectionalLight3D` whose direction is set
+from the sun's position relative to the bubble** -- what the game has now, so the ground's frame
+cost does not change. What it changes:
+
+* **The sun's height depends on where you stand**: 1 km on a 6 km body is 9.5° of sun. On a
+  NON-rotating planet every place keeps its own time of day forever, and the baked terrain
+  shadows (Terrain.md 19.9) stay free: each tile is baked with its own local sun direction.
+* **A day/night cycle costs the bake.** Baking saved 1.6 ms a frame (4.9 → 3.3 ms, 19.9). A moving
+  sun either re-bakes tiles near the player every few degrees (a tile is 2.9 ms on a worker) or
+  has the terrain cast into the shadow map again (+~1.6 ms). The sky's radiance re-render on sun
+  moves is extra (not measured; update every few degrees).
+* **Night side** needs lights of its own; clustered omni lights are cheap, shadowed ones are not.
+* **From the air and orbit**: an atmosphere shader on the planet's shell, about a full-screen pass
+  (estimate ~0.5–1.5 ms at 720p on the Z1 Extreme, not measured), only while flying. Planets and
+  satellites seen from space are impostors lit by the sun direction: nothing. An eclipse by the
+  moon is an analytic sphere test in the shader: a few ALU.
+
+Rough total: a fight on the ground costs what it does now; flight adds the atmosphere; a day cycle
+adds ~1.6 ms or a re-bake schedule.
+
+### What the story gets from real orbits
+
+The story (enemy satellites change the weather and cause disasters; destroy them, then the moon
+base) fits a **bounded system**: one planet, its moon, satellites on rails -- not free planet
+hopping, which can come later on the same tech.
+
+* **Satellites are real objects overhead.** A storm comes where a satellite's ground track passes:
+  the player sees it rise, can time strikes, and a destroyed one falls as a burning streak.
+  Satellites are brick builds -- destructible, with interiors, room graphs and marks, gravity
+  off inside.
+* **The mech drop is literal:** the player's ship is overhead and the drop is a fall from orbit
+  into the bubble (the natural moment to re-anchor it). **Enemy reinforcements need their carrier
+  overhead**, so killing the carrier cuts them off -- an objective the systems make, not a script.
+* **The moon base is in the sky the whole game**, and can eclipse the sun.
+* **Cost:** a ship flight mode (new code either way), orbits on rails (no n-body), the bubble and
+  re-anchor, the cubed-sphere ground, districts on tangent frames. The flat game can fake most of
+  the look -- an impostor ship overhead, drop pods from the sky, space as separate scenes -- but not
+  the continuity or the satellite tracks.
+
 ## 10. If it is taken up: order of work
 
 1. **Prototype, outside the game:** one planet of our low-poly tiles on a cubed sphere, baked,

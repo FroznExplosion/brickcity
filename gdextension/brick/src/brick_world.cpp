@@ -3311,6 +3311,61 @@ void BrickWorld::chamfer_faces_into(const ChamferIn &in, ChamferOut &out) {
         }
     };
 
+    // CORNER POSTS (Docs/BrickBevel.md 2.6). Where four bricks' corners
+    // meet along an edge, or two meet across a diagonal, their bevels leave a
+    // diamond channel with nothing in it: daylight straight through a wall
+    // wherever a vertical seam lines up with a course's groove, and between
+    // two bricks that touch only at a corner. A post fills it: a square bar
+    // turned 45 degrees, a little inside the bevels so it never fights them,
+    // shaded as the bottom of a groove. It stops a bevel short of each end,
+    // where the corner triangles close the pit in front of it.
+    const auto emit_posts = [&](int p0, int p1) {
+        const Color base = col;
+        col = Color(base.r * 0.7f, base.g * 0.7f, base.b * 0.7f, base.a);
+        const Vector2 fu(0.5f, 1.0f);
+        for (int k = p0; k < p1; ++k) {
+            const float *q = in.posts + (size_t)k * POST_FLOATS;
+            const int ax = (int)q[0];
+            const int au = (ax + 1) % 3, av = (ax + 2) % 3;
+            const float a0 = q[1], a1 = q[2], eu = q[3], ev = q[4];
+            // r < 0: a channel closed all round by the four bricks' facets,
+            // so its two end caps are enough to stop the light.
+            const bool caps_only = q[5] < 0.0f;
+            const float r = std::fabs(q[5]);
+            const auto pt = [&](float a, float du, float dv) {
+                Vector3 p;
+                p[ax] = a;
+                p[au] = eu + du;
+                p[av] = ev + dv;
+                return p;
+            };
+            const float DU[4] = { r, 0.0f, -r, 0.0f };
+            const float DV[4] = { 0.0f, r, 0.0f, -r };
+            u2 = -Vector2(a1 - a0, r);
+            for (int s2 = 0; s2 < (caps_only ? 0 : 4); ++s2) {
+                const int t = (s2 + 1) % 4;
+                Vector3 nn;
+                nn[ax] = 0.0f;
+                nn[au] = DU[s2] + DU[t];
+                nn[av] = DV[s2] + DV[t];
+                n = nn.normalized();
+                quad(pt(a0, DU[s2], DV[s2]), pt(a1, DU[s2], DV[s2]),
+                        pt(a1, DU[t], DV[t]), pt(a0, DU[t], DV[t]), fu, fu, fu, fu);
+                ++quads;
+            }
+            for (int e = 0; e < 2; ++e) {
+                const float a = e ? a1 : a0;
+                Vector3 nn;
+                nn[ax] = e ? 1.0f : -1.0f;
+                n = nn;
+                quad(pt(a, DU[0], DV[0]), pt(a, DU[1], DV[1]),
+                        pt(a, DU[2], DV[2]), pt(a, DU[3], DV[3]), fu, fu, fu, fu);
+                ++quads;
+            }
+        }
+        col = base;
+    };
+
     for (int i = 0; i < in.faces; ++i) {
         out.quad_first[(size_t)i] = quads;
         if (in.box != nullptr && in.box[i] != 0 && c > 0.0f) {
@@ -3324,6 +3379,9 @@ void BrickWorld::chamfer_faces_into(const ChamferIn &in, ChamferOut &out) {
                     }
                     col = in.colours[(size_t)i * 4];
                     emit_box(i, i1);
+                    if (in.posts != nullptr) {
+                        emit_posts(in.post_at[i], in.post_at[i + 1]);
+                    }
                 }
             }
             continue;
@@ -3621,6 +3679,157 @@ void BrickWorld::chamfer_box_flags(const Chunk &c, int first, int faces,
     }
 }
 
+void BrickWorld::chamfer_posts(const Chunk &c, int first, int faces, float bevel,
+        const std::vector<uint8_t> &box, std::vector<float> &posts,
+        std::vector<int32_t> &post_at) const {
+    posts.clear();
+    post_at.assign((size_t)faces + 1, 0);
+    if (bevel <= 0.0f) {
+        return;
+    }
+    const Vector3 cs = cell_size();
+    // The block standing in a cell, or -1: only what meshes as matter. As
+    // BUILT, whatever has been shot since: a band is patched after a hit, not
+    // rebuilt, and a post must not depend on what a patch cannot change. (A
+    // post beside a brick shot away is a bevel's sliver of groove; one whose
+    // own brick is shot away goes with it.)
+    const auto solid = [&](const Vector3i &l) -> int32_t {
+        if (!c.in_bounds(l)) {
+            return -1;
+        }
+        const int32_t id = c.occupancy[c.index_of(l)];
+        if (id < 0) {
+            return -1;
+        }
+        const Block &b = c.blocks[(size_t)id];
+        if (b.removed || b.decorative) {
+            return -1;
+        }
+        return id;
+    };
+    const auto is_box = [&](int32_t id) {
+        const Block &b = c.blocks[(size_t)id];
+        return valid_archetype(b.archetype) && archetypes[b.archetype].is_full_box();
+    };
+    const float r = 0.9f * bevel;
+    // Round the edge line along `ax` at (bu, bv), cell `a` along it: the four
+    // blocks in its quadrants (bit 0 high on u, bit 1 high on v), and what the
+    // bevels leave there -- 0 nothing, 1 a closed channel (four PLAIN BOXES,
+    // at least one with a corner on the line), 2 anything else open: a gap
+    // across a diagonal, or a channel with a shaped part round it, whose
+    // faces are not closed boxes (it is drawn by the old rules).
+    // `closed` is four blocks and no corner: their faces close a channel's end.
+    struct Round {
+        int32_t q[4];
+        int kind;
+        int corner_k;   // the first plain box with a corner here, or -1
+        bool closed;
+    };
+    const auto round_at = [&](int ax, int bu, int bv, int a) {
+        const int au = (ax + 1) % 3, av = (ax + 2) % 3;
+        Round o;
+        for (int k = 0; k < 4; ++k) {
+            Vector3i l;
+            l[ax] = a;
+            l[au] = (k & 1) ? bu : bu - 1;
+            l[av] = (k & 2) ? bv : bv - 1;
+            o.q[k] = solid(l);
+        }
+        const int32_t *q = o.q;
+        const bool all = q[0] >= 0 && q[1] >= 0 && q[2] >= 0 && q[3] >= 0;
+        const bool diag = (q[0] >= 0 && q[3] >= 0 && q[1] < 0 && q[2] < 0)
+                || (q[1] >= 0 && q[2] >= 0 && q[0] < 0 && q[3] < 0);
+        bool corner = false;
+        o.corner_k = -1;
+        for (int k = 0; k < 4; ++k) {
+            // A CORNER on the line: its neighbours round it on both axes are
+            // other blocks. (At a T, a seam over a brick's middle, the brick
+            // below fills two quadrants and has no edge.)
+            if (q[k] >= 0 && q[k ^ 1] != q[k] && q[k ^ 2] != q[k]) {
+                corner = true;
+                if (o.corner_k < 0 && is_box(q[k])) {
+                    o.corner_k = k;
+                }
+            }
+        }
+        const bool boxes = all && is_box(q[0]) && is_box(q[1]) && is_box(q[2]) && is_box(q[3]);
+        o.kind = diag ? 2 : (all && corner ? (boxes ? 1 : 2) : 0);
+        o.closed = all && !corner;
+        return o;
+    };
+    for (int f = 0; f < faces; ++f) {
+        post_at[(size_t)f] = (int32_t)(posts.size() / POST_FLOATS);
+        const int32_t owner = c.bake.owner[(size_t)(first + f)];
+        if (box[(size_t)f] == 0 || (f > 0 && c.bake.owner[(size_t)(first + f - 1)] == owner)) {
+            continue;   // not its block's carrier
+        }
+        const Block &b = c.blocks[(size_t)owner];
+        const Vector3i lo = b.cell - c.origin;
+        const Vector3i hi = lo + archetypes[b.archetype].size;
+        // The box's twelve edges: along axis ax, at one side of it on each of
+        // the other two axes.
+        for (int ax = 0; ax < 3; ++ax) {
+            const int au = (ax + 1) % 3, av = (ax + 2) % 3;
+            const int len = ax == 0 ? c.dims.x : (ax == 1 ? c.dims.y : c.dims.z);
+            for (int su = 0; su < 2; ++su) {
+                for (int sv = 0; sv < 2; ++sv) {
+                    const int bu = su ? hi[au] : lo[au];
+                    const int bv = sv ? hi[av] : lo[av];
+                    // This box's quadrant round the line (it is high where
+                    // the edge is its LOW side).
+                    const int mine = (su ? 0 : 1) | (sv ? 0 : 2);
+                    int run_from = -1, run_kind = 0;
+                    for (int a = lo[ax]; a <= hi[ax]; ++a) {
+                        int kind = 0;
+                        if (a < hi[ax]) {
+                            const Round o = round_at(ax, bu, bv, a);
+                            // Drawn once, by the first plain box with a corner.
+                            if (o.kind != 0 && o.corner_k == mine) {
+                                kind = o.kind;
+                            }
+                        }
+                        if (run_from >= 0 && kind != run_kind) {
+                            // A closed channel needs a post only if it is open
+                            // at BOTH ends -- seen through. Deep in a thick
+                            // wall its ends are faces, and nothing shows.
+                            bool through = true;
+                            if (run_kind == 1) {
+                                for (int dir = -1; dir <= 1 && through; dir += 2) {
+                                    int e = dir < 0 ? run_from - 1 : a;
+                                    while (e >= 0 && e < len && round_at(ax, bu, bv, e).kind == 1) {
+                                        e += dir;
+                                    }
+                                    if (e >= 0 && e < len && round_at(ax, bu, bv, e).closed) {
+                                        through = false;
+                                    }
+                                }
+                            }
+                            const float a0 = (float)run_from * cs[ax] + bevel;
+                            const float a1 = (float)a * cs[ax] - bevel;
+                            if (through && a1 > a0) {
+                                posts.push_back((float)ax);
+                                posts.push_back(a0);
+                                posts.push_back(a1);
+                                posts.push_back((float)bu * cs[au]);
+                                posts.push_back((float)bv * cs[av]);
+                                // Negative: a closed channel, which its two
+                                // end caps alone stop every sight line through.
+                                posts.push_back(run_kind == 1 ? -r : r);
+                            }
+                            run_from = -1;
+                        }
+                        if (kind != 0 && run_from < 0) {
+                            run_from = a;
+                            run_kind = kind;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    post_at[(size_t)faces] = (int32_t)(posts.size() / POST_FLOATS);
+}
+
 void BrickWorld::chamfer_indices(const Chunk &c, int section,
         const std::vector<int32_t> &quad_first, PackedInt32Array &out,
         const std::vector<uint8_t> &carrier) {
@@ -3676,10 +3885,15 @@ Array BrickWorld::build_chunk_chamfer_mesh(int chunk_id, double bevel) {
         drawn[(size_t)f] = c.blocks[owner].alive
                 && (box[(size_t)f] != 0 || other < 0 || !c.blocks[other].alive);
     }
+    std::vector<float> posts;
+    std::vector<int32_t> post_at;
+    chamfer_posts(c, 0, faces, (float)std::max(0.0, bevel), box, posts, post_at);
     ChamferIn in;
     in.owner = c.bake.owner.data();
     in.other = c.bake.other.data();
     in.box = box.data();
+    in.posts = posts.data();
+    in.post_at = post_at.data();
     in.verts = c.bake.verts.ptr();
     in.normals = c.bake.normals.ptr();
     in.colours = c.bake.colours.ptr();
@@ -3774,6 +3988,10 @@ void BrickWorld::chamfer_section_async(int chunk_id, int section, double bevel) 
     job->in.owner = job->owner.data();
     job->in.other = job->other.data();
     job->in.box = job->box.data();
+    chamfer_posts(c, first, faces, (float)std::max(0.0, bevel), job->box, job->posts,
+            job->post_at);
+    job->in.posts = job->posts.data();
+    job->in.post_at = job->post_at.data();
     {
         const auto before = [](const brick::FaceBake::Floor &l, int face) {
             return l.face < face;

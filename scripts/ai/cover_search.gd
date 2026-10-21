@@ -9,7 +9,8 @@ extends RefCounted
 ## soldier, against the actual threat, in a destructible city where a baked arc
 ## would be wrong the moment the wall was shot. The search itself is C++
 ## (AINav.find_cover): written here first, it was 2.9 ms of GDScript a search,
-## more than the whole AI budget.
+## more than the whole AI budget. Spots an author marked as cover in a build
+## (BuildingMarks) are rated the same way first, and taken when they are good.
 ##
 ##   LOW cover hides a crouched body and not a standing one: peek by standing.
 ##   HIGH cover hides a standing body: peek by stepping out to its side.
@@ -30,7 +31,44 @@ const IDEAL_RANGE := 18.0
 ## {"cover": Vector3, "kind": "low"|"high", "peek": Vector3, "life": float,
 ## "hug": float} or {}.
 static func find(s: AIServices, from: Vector3, threat_eye: Vector3) -> Dictionary:
+	var mark := marked(s, from, threat_eye)
+	if not mark.is_empty():
+		return mark
 	return s.ai_nav.find_cover(from, threat_eye, THREAT_HP, THREAT_RATE, IDEAL_RANGE)
+
+
+## The best spot marked as cover (BuildingMarks) within BuildingMarks.REACH of
+## `from` that hides a body from this threat, or {}. Any that does is taken over
+## the ring search -- the author's say -- and of several, the best by the ring's
+## own score (ai_nav.cpp, _cover_spot). Docs/AI.md 3.3.1: a mark is rated against
+## the bricks as they are now, like any other spot; it is never cover because
+## somebody said so.
+static func marked(s: AIServices, from: Vector3, threat_eye: Vector3) -> Dictionary:
+	if not s.marks.is_valid():
+		return {}
+	var best := {}
+	var best_score := -INF
+	var rated := 0
+	for p: Vector3 in s.marks.call(from, BuildingMarks.REACH, "cover"):
+		# The ring's own rule: cover on the floor the soldier is on.
+		if absf(p.y - from.y) > 1.0:
+			continue
+		if rated >= BuildingMarks.MAX_RATED:
+			break
+		rated += 1
+		var spot := rate(s, p, threat_eye)
+		if spot.is_empty():
+			continue
+		var score := minf(float(spot.life), 10.0) - from.distance_to(p) * 0.5 \
+				- absf(p.distance_to(threat_eye) - IDEAL_RANGE) * 0.1 \
+				- maxf(float(spot.hug) - 1.0, 0.0) * 1.5
+		# Marked or not, nobody is sent into a danger volume.
+		if s.ai_world.danger_distance(p) < 2.0:
+			continue
+		if score > best_score:
+			best_score = score
+			best = spot
+	return best
 
 
 ## find(), for one soldier: cover it has lately given up on (Soldier.bad_cover)
@@ -62,6 +100,10 @@ static func find_queued(so: Soldier, slot: StringName, from: Vector3, threat_eye
 		nav.release_cover(int(job.id))
 		job = {}
 	if job.is_empty():
+		# A marked spot is a few rays: no queue for it.
+		var mark := marked(so.services, from, threat_eye)
+		if not mark.is_empty() and not (skip_bad and so.is_bad_cover(mark.cover)):
+			return mark
 		job = {"from": from, "threat": threat_eye,
 				"id": nav.request_cover(from, threat_eye, THREAT_HP, THREAT_RATE, IDEAL_RANGE, so.importance)}
 		so.cover_jobs[slot] = job

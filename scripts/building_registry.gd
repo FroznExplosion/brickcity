@@ -447,7 +447,7 @@ func floor_lines(building_id: int) -> PackedInt32Array:
 	var floors: Array = []
 	var down := 0   # the build's own grid to its chunk's (_rebase_of)
 	if b.is_build():
-		# The record is the build's (BuildRecipe.meta), not b.recipe's.
+		# The build's own recipe: `b.recipe` of a build is only its box.
 		floors = (b.build.meta.get("structure", {}) as Dictionary).get("floors", [])
 		if floors.is_empty():
 			floors = StructureSpaces.floors_of_build(b.build)

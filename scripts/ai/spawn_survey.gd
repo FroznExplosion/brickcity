@@ -116,6 +116,14 @@ func floors_of(id: int) -> Array[Vector3]:
 		_refuse(fit.why)
 		return out
 	var b: BuildingRegistry.Building = _city.registry.get_building(id)
+	# Where the author said a garrison starts (BuildingMarks, Docs/AI.md
+	# 3.3.1), while the floor under a mark is still there; then the floors read
+	# from the bricks, as for any building.
+	for feet in BuildingMarks.spots(b, "spawn"):
+		if _floor_cell_solid(id, feet):
+			out.append(feet)
+	if not out.is_empty():
+		return out
 	var world: BrickWorld = _city.world
 	var chunk := b.chunk
 	var origin: Vector3i = world.get_chunk_origin(chunk)

@@ -182,6 +182,32 @@ building:
 - **The room neighbour graph** ([Next.md §2.3](Next.md#23-a-room-neighbour-graph-replacing-the-radius)),
   shared with the interiors.
 
+### 3.3.1 Points an author marks in a build (built, 2026-10-20)
+
+What was built instead of baked cover points (`CoverSearch`, §3.7) is a live search, because a
+baked arc is wrong the moment the wall is shot. What an author can still say is *where*: the
+spaces tool's points (Structures.md 3.1, key P in the workshop: `spawn`, `loot`, `cover`), saved
+in the build's structure record and read by `BuildingMarks` (`scripts/ai/building_marks.gd`) in
+building space -- rebased and turned with the bricks, so a mark is where it was put on any frame
+(and on a planet, Planets.md 7).
+
+* **Cover marks are hints, rated like any spot.** `CoverSearch.marked` rates the marks within 8 m
+  of the soldier (`BuildingMarks.REACH`, at most 8, nearest first) against the actual threat with
+  `rate_cover` -- the bricks as they are now, the same floor, no danger volume. One that hides a
+  body is taken over the 144-spot ring search, the best of several by the ring's own score; none,
+  and the ring search answers as before. A wall blown away in front of a mark makes it no cover.
+  Both `find` and the queued search (`find_queued`: no queue entry at all for a marked answer)
+  look at marks first. `building_marks_probe` B: a marked spot behind a wall answered in ~0.16 ms
+  where the ring took ~1.5 ms (headless, editor open: rough).
+* **Spawn marks are where a garrison starts.** `SpawnSurvey.floors_of` gives a build's spawn marks
+  while the floor under each is still a brick, and the floors read from the bricks only when it
+  has none left. Every spot still goes through `check` at the moment of spawning.
+* **Generated towers have no marks** (no author); their tactical points are the room graph's
+  (§3.6.1). Everything is unchanged for a city of towers.
+* **Next, if wanted:** more kinds for defenders -- `post` (a defender's place, §6.2 "hold
+  angles"), `overwatch` (a window or roof edge to fire from), `vault` (a way in the author
+  means) -- read by step 4's plays the same way.
+
 ### 3.4 Invalidate by event, never by polling
 
 Structural changes arrive as `DamageLog` entries and as the wreckage lifecycle events of §3.5.

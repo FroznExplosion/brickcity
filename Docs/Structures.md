@@ -203,7 +203,7 @@ what hangs off the side, far meshes.
 | **Roles**: structure / interior / detail | build mode (`BuildRecipe.Role`, key I) -- built | what holds it up, what is furniture, what is an item |
 | **Spaces**: rooms, halls, corridors, stairwells, with a kind | build mode (spaces tool) or the generator | interiors, visibility, AI, the procedural fill (4.3) |
 | **Openings**: doorway, door, window, glass, arch, open side | found, then set by hand where wrong | the faked room behind glass, what is seen into, AI routes |
-| **Points** (optional): spawn, loot, cover | build mode | play |
+| **Points** (optional): spawn, loot, cover | build mode | play: cover and spawn are the AI's (`BuildingMarks`, AI.md 3.3.1) |
 | **Materials** | per brick -- built (`set_block_material`) | strength, the span rule, glass |
 
 ### 3.1 The record — built 2026-10-16
