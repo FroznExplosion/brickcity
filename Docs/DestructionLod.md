@@ -249,3 +249,10 @@ is no floor). `storey` 4, `far_rules` 9, `float` 50, `debris` 29.
 this. The probe takes twenty of the city's twenty-two towers and any collateral damage to the
 last two leaves its last section none. Suspect: §5.5's hits landing on time (more of each blast's
 work done, more collateral); the A/B without it was stopped for low memory, not finished.
+**Fixed 2026-10-20 (second chat):** the probe now says which building a section's wreckage
+reached and, when a section finds no tower, why each tall enough one was passed over. 4 runs of 7:
+"inside" topples the 13-storey tower 17 and its wreckage hits tower 16, 3 m beside it (4 storeys);
+`_tower` is first fit, so every section after it took the next tower along, and "farcut" (asking
+four) got tower 21, the last of six storeys or more -- "shellhit", last in line, had none.
+"shellhit" now runs in a city of its own (`tools/shellhit_probe.gd`, 2), as "storeys" and
+"farrules" do: `collapse_probe` 61, 3 runs of 3 (one with tower 16 hit).

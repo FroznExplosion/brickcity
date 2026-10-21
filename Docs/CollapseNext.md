@@ -23,7 +23,7 @@ at); `tools/collapse_probe.gd`,
 `barrage_probe.gd`, `stud_strength_probe.gd`, `blast_ring_probe.gd`, `seam_probe.gd`, `push_probe.gd`,
 `heap_probe.gd`, `crack_probe.gd`,
 `storey_probe.gd`,
-`far_rules_probe.gd` (the last two are sections of collapse_probe run in a city of their own). Timing passes (`--shot`,
+`far_rules_probe.gd`, `shellhit_probe.gd` (the last three are sections of collapse_probe run in a city of their own). Timing passes (`--shot`,
 `--stress`, `--big --shot`) only with the editor closed and no other chat running Godot.
 
 ---
