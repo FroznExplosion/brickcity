@@ -890,6 +890,9 @@ var _ring_mode := false
 var _groups_mode := false
 var _squad_mode := false
 var _mechfall_mode := false
+## `--planet=<test>`: the sphere-planet feasibility tests (Docs/Planets.md 10b),
+## run by tools/planet_passes.gd on this scene.
+var _planet_test := ""
 const GUN_CLASSES: Array[StringName] = [&"pistol", &"smg", &"rifle", &"shotgun", &"sniper",
 		&"rocket_launcher"]
 ## `--build[=res://or/user://path.json]`: drop a saved workshop build into the
@@ -1011,6 +1014,9 @@ func _ready() -> void:
 	_breaklag_mode = "--breaklag" in args
 	_squad_mode = "--squad" in args
 	_mechfall_mode = "--mechfall" in args
+	for a: String in args:
+		if a.begins_with("--planet="):
+			_planet_test = a.trim_prefix("--planet=")
 	if _build_mode:
 		_build_path = BuildRecipe.QUICK_SAVE
 	for a in args:
@@ -1279,6 +1285,10 @@ func _ready() -> void:
 		_run_squad_pass()
 	elif _mechfall_mode:
 		_run_mechfall_pass()
+	elif _planet_test != "":
+		var planet_pass: Node = (load("res://tools/planet_passes.gd") as GDScript).new(self)
+		add_child(planet_pass)
+		planet_pass.run(_planet_test)
 	elif _firefight_mode:
 		_start_firefight("--gate" in args)
 	elif _arena_mode:
