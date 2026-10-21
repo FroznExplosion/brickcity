@@ -352,6 +352,8 @@ Bent bricks (§4.2) are only for LONG things: a street grid, a wall, a ring city
 12.5 m at 10 km). Cities become districts on their own tangent frames, with the slopes ground
 between them.
 
+*2026-10-21: the bubble below is now the **alternative**; the chosen route is local down, §10b.*
+
 **The AI, physics and controllers need nothing special if the simulation runs in a flat
 bubble.** Instead of radial gravity everywhere, keep ONE flat frame for the active area -- the
 floating origin plus a floating ROTATION, so the bubble's centre is at the origin with its up
@@ -423,13 +425,130 @@ hopping, which can come later on the same tech.
   the look -- an impostor ship overhead, drop pods from the sky, space as separate scenes -- but not
   the continuity or the satellite tracks.
 
+## 10b. Decision (2026-10-21): local down, translation-only origin, single precision
+
+The user: planets are spheres, curved everywhere with few flat areas; everything should have its
+own down from where it is, bullets inheriting it, so on a big planet the downs barely differ and
+nothing has to be re-centred the way the bubble is. Chosen over the bubble of §10a, which stays
+the alternative.
+
+### Local down: everything takes its down from where it is
+
+| what | its down | work |
+|---|---|---|
+| debris, falling bricks, pieces, loot | toward the planet's centre: Godot point gravity on an `Area3D` | none: Jolt applies it per body |
+| buildings (and their stress solve, hangs, collapse) | their own frame, square to the ground at their site (`grid_frame_at`, §9.2) | the solver already runs in building space; tangent placement is new |
+| bullets, rockets, grenades | the shooter's down when fired, then straight | trivial. Over a 300 m shot on 10 km gravity's direction is 1.7° off: the drop is wrong by ~3% of itself, centimetres |
+| players, soldiers, mechs, vehicles, the camera | `Gravity.up_at(p)` (built, §9.1) | ~6 controllers rebuild their whole basis from up every frame (STA doc 05: the strafe-drift fix); their `.y` logic becomes "along up" |
+| the AI | the down of the **nav region** or building it is in | the big item, below |
+
+**The AI through local frames.** The AI's code assumes +Y is up about 580 times (~280 `.y` and
+~150 `Vector3.UP/DOWN` in `scripts/ai`, ~150 `.y` in the AI C++), and `AINav` is columns of studs
+along world Y. Rather than change those, give each **nav region** its own flat frame and let the AI
+see the world through the frame of the region it is in -- then nearly all of that stays true:
+
+- A terrain tile is 32 studs (11.2 m): on a 10 km planet it sags 1.6 mm and tilts 0.06° across.
+  A region of 8 x 8 tiles (90 m) sags 0.1 m (under a plate) and tilts 0.26°: flat to anything the
+  AI measures. Regions are `AINav`'s HPA* clusters (`ai_nav_hpa.cpp` is already clusters joined
+  at borders), each with its own transform; a path crossing a border crosses frames there.
+- Inside buildings the AI routes by the room graph in building space (`BuildingLayout`, §9.3) --
+  no curvature ever reaches it.
+- `AIWorld`'s queries (line of sight, DDA through bricks) already go into a building through its
+  own transform (§9.2); between buildings a ray is a ray.
+
+Every region is in effect a small flat bubble that **never moves** -- so nothing is re-anchored and
+no cache goes cold when the fight moves.
+
+| | bubble (§10a, the alternative) | local down (chosen) |
+|---|---|---|
+| controllers | unchanged | ~6 rebuild their basis from up |
+| AI | unchanged | nav regions with their own frames (large); most AI code unchanged |
+| re-centring | rotate + move the whole area: a hitch, `AINav` caches dropped (214 vs 87 ms) | translation only, rare, nothing recomputed |
+| co-op players apart | leash ~1 km or a second physics world | anywhere (precision aside, below) |
+| gravity error | 1-2° at the bubble's edge | none |
+| long shots | straight in the bubble | straight, with the shooter's down |
+
+### Precision: one origin, moved by translation only
+
+The direction of down no longer needs re-centring; **precision** still does. With the origin at the
+planet's centre the surface is 10-20 km out, where a 32-bit float steps 1-2 mm. Godot's guidance
+(Large world coordinates) is about 2 km from the origin for a first-person game, ~8 km for a whole
+open world on foot: past that, the gun and hands jitter and stacked bricks wobble in physics.
+
+So: **one origin per planet, moved by translation only** -- STA's floating origin
+(`solar_system.gd`, every 500 m) or zylanntest's `solar_system_manager.gd` (`shift_world`) --
+when the player is ~2 km from it, at a quiet moment if possible. Nothing turns, so building
+frames, nav regions and their caches are untouched; the cost is moving every body and node once.
+What must follow the shift is whatever holds an absolute position: `BrickWorld` chunk transforms,
+`AIWorld`'s spatial hash, the registry's boxes, `AINav` region origins (§6, §9.6).
+
+**Orbits do not move the ground.** While anyone is on a planet, the planet is the fixed frame and
+the sun and sky move round it (STA doc 12's two frames); the solar system's coordinates are only for
+flight and the sky.
+
+### Double precision: checked, not worth it (2026-10-21)
+
+| | |
+|---|---|
+| builds | no official double builds: the editor and export templates compiled with `precision=double`, then `--dump-extension-api` and godot-cpp and our extension rebuilt against it (`custom_api_file`, as Terrain3D documents) -- again at every Godot upgrade, and for every chat's worktree and the test binary |
+| physics | Godot's Jolt module defines `JPH_DOUBLE_PRECISION` in a double build (`modules/jolt_physics/SCsub`): positions double, velocities, rotations and the broad phase still float; Jolt's docs: **5-10% slower** |
+| rendering | camera and object translations are emulated as two floats (a small cost); **shaders stay single** -- our 8 shaders that use world positions (terrain, water, studs, impostors) would still jitter far out unless rewritten camera-relative |
+| our C++ | `Vector3` / `Transform3D` become double: mesh arrays double on the CPU (the GPU stays float); ~1,000 explicit `float`s in the extension to check for places that drop the precision again |
+| co-op | server and clients must run the same build |
+
+It pays only for co-op spread across a whole planet with no other answer, or seamless space without
+any shifting. Translation-only shifting does the job for 10-20 km planets.
+
+### How other games do it
+
+- **Minecraft Java** keeps entity positions in 64-bit doubles and draws relative to the camera; its
+  own simple physics is all doubles, so it never shifts an origin. Jitter still showed from
+  ~40,000 blocks in older versions. **Bedrock** uses 32-bit floats and jitters from ~131,000
+  blocks. We cannot copy Java's way directly: our physics is Jolt, in floats.
+- **Unreal's** ordinary origin rebasing does not work in multiplayer (server and clients cannot
+  have different origins); its multiplayer rebasing sends positions in an absolute frame.
+- **Networking SDKs** (coherence for Unity): the server holds absolute 64-bit positions, each client
+  has its **own** floating origin and works in 32-bit near it. The catch they all name: the
+  server's own physics cannot run in 64-bit with a stock engine, so far-apart players need the
+  world split into simulators, each near its own origin.
+
+### Co-op players far apart: two origins
+
+Yes, by the last pattern. **Each group of players gets its own region: its own origin and its own
+physics space** (in Godot a `World3D` holds a physics space; a second one lives in a viewport that
+draws nothing), and the host simulates both. Positions on the wire and in saves are planet-local
+(`WorldFrame`, §9.6 -- built), so each client places what it receives near its own origin.
+
+- What sits in a region -- buildings, pieces, enemies -- belongs to it; something crossing between
+  regions is handed over (the frame handoff STA uses for ships).
+- When the groups come within ~2 km of each other, the regions merge into one.
+- Local down makes it simple: buildings and nav regions are stored in their own frames, so a
+  region's origin is only which point is at zero.
+- Not yet checked: that Godot's Jolt runs two spaces independently (`PhysicsServer3D.space_create`).
+  First test before relying on it. Until then, missions keep the squad within ~2 km.
+
+### The far tier shows what still stands
+
+Each far building is one instance of one MultiMesh (Impostors.md); it gains one number, its
+**standing height**: the top of the highest storey still joined to the ground. Its top half gone,
+the box ends at the break; a storey damaged in the middle with the top still standing, the whole
+height (the scars in the facade data). Pieces that broke off are never in the far tier -- near,
+they are pieces; far, asleep and hidden. The storey record of Space.md §5 is what gives the height.
+
+### Bending
+
+Rigid buildings on tangent pads are the default; at 10-20 km a 100 m building sags 0.14-0.9 m.
+Bending (§4.2) stays possible and visual only -- the AI keeps the flat building -- for long things.
+
 ## 10. If it is taken up: order of work
 
-1. **Prototype, outside the game:** one planet of our low-poly tiles on a cubed sphere, baked,
-   STA's radial controller and floating origin, one rigid building on a pad with a gravity zone.
-   Gate: seams invisible, walking over a face edge seamless, the building's roof level.
+1. **Prototype, outside the game:** one planet of our low-poly tiles on a cubed sphere, baked;
+   STA's radial controller; translation-only floating origin; one rigid building on a tangent
+   pad. Gate: seams invisible, walking over a face edge seamless, the building's roof level, no
+   jitter 15 km from the planet's centre after a shift.
 2. Streaming and LOD per face; STA's impostor from orbit.
 3. Buildings: tangent placement through §9.2; destruction under point gravity.
-4. AI: room graphs (already done by then, §9.3), outdoor charts per chunk.
-5. Water shell; co-op and saving in planet-local positions.
-6. Bent buildings, if wide buildings on small bodies are wanted.
+4. AI: room graphs (§9.3), nav regions with their own frames (§10b).
+5. Controllers on local down; water shell; co-op in planet-local positions, two regions if needed
+   (test Jolt with two spaces first).
+6. Bent buildings, if long things want them.
