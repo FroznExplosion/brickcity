@@ -7,6 +7,10 @@ extends SceneTree
 ## on a course below. Pictures, not checks.
 ##
 ##     godot --path . --script res://tools/bevel_corner_shot.gd -- --out=<dir> [--bevel=0.06]
+##             [--layout=wall|checker]
+##
+## `wall` is a wall one brick thick in stack bond, `checker` 1x1 bricks on
+## edge touching only at their corners: where the corner posts go (2.6).
 ##
 ## Not headless. Writes <dir>/bevel_corner_<view>.png.
 
@@ -19,6 +23,7 @@ const VIEWS := [
 
 var _out := "user://"
 var _bevel := 0.06
+var _layout := ""
 var _cam: Camera3D
 var _frame := 0
 
@@ -29,6 +34,8 @@ func _init() -> void:
 			_out = a.substr(6)
 		elif a.begins_with("--bevel="):
 			_bevel = float(a.substr(8))
+		elif a.begins_with("--layout="):
+			_layout = a.substr(9)
 	var root3 := Node3D.new()
 	get_root().add_child(root3)
 	var env := Environment.new()
@@ -50,14 +57,29 @@ func _init() -> void:
 	var w := BrickWorld.new()
 	var pal := BrickPalette.bake(w)
 	var c := w.create_chunk(Vector3i.ZERO, Vector3i(16, 12, 16))
-	# A course on the ground, and on it a course in running bond that reaches
-	# out over its edge (a ledge) on +Z: 2x4s along X.
-	for k in 3:
-		w.place_block(c, Vector3i(k * 4, 0, 0), pal["brick_2x4_x"], [0, 2, 4][k])
-		w.place_block(c, Vector3i(k * 4, 0, 2), pal["brick_2x4_x"], [6, 8, 0][k])
-	for k in 3:
-		w.place_block(c, Vector3i(k * 4 + 2, 3, 2), pal["brick_2x4_x"], [2, 4, 6][k])
-		w.place_block(c, Vector3i(k * 4, 3, 4), pal["brick_2x4_x"], [8, 0, 2][k])
+	if _layout == "wall":
+		var run_x := -1
+		for name in pal:
+			if String(name).begins_with("brick_1x4") \
+					and w.get_archetype_size(int(pal[name])) == Vector3i(4, 3, 1):
+				run_x = int(pal[name])
+		for course in 4:
+			for k in 3:
+				w.place_block(c, Vector3i(k * 4, course * 3, 2), run_x, (course + k) % 4 * 2)
+	elif _layout == "checker":
+		for a in 6:
+			for b in 4:
+				if (a + b) % 2 == 0:
+					w.place_block(c, Vector3i(a + 1, b * 3, 2), pal["brick_1x1"], (a + b) % 4 * 2)
+	else:
+		# A course on the ground, and on it a course in running bond that
+		# reaches out over its edge (a ledge) on +Z: 2x4s along X.
+		for k in 3:
+			w.place_block(c, Vector3i(k * 4, 0, 0), pal["brick_2x4_x"], [0, 2, 4][k])
+			w.place_block(c, Vector3i(k * 4, 0, 2), pal["brick_2x4_x"], [6, 8, 0][k])
+		for k in 3:
+			w.place_block(c, Vector3i(k * 4 + 2, 3, 2), pal["brick_2x4_x"], [2, 4, 6][k])
+			w.place_block(c, Vector3i(k * 4, 3, 4), pal["brick_2x4_x"], [8, 0, 2][k])
 	var mat := ShaderMaterial.new()
 	mat.shader = load("res://shaders/brick.gdshader")
 	mat.set_shader_parameter("tier_debug", true)
@@ -74,20 +96,29 @@ func _init() -> void:
 	_cam.current = true
 
 
+## Wall and checker: square on, and from the side, at the junction at
+## (4 studs, 6 plates) on the wall's front (z = 3 studs).
+const FRONT_VIEWS := [
+	["front", Vector3(1.4, 0.84, 3.2), Vector3(1.4, 0.84, 1.05)],
+	["front_angle", Vector3(2.3, 1.3, 2.4), Vector3(1.4, 0.84, 1.05)],
+]
+
+
 func _process(_d: float) -> bool:
 	var i := _frame / 6
 	var phase := _frame % 6
 	_frame += 1
-	if i >= VIEWS.size():
+	var views: Array = FRONT_VIEWS if _layout != "" else VIEWS
+	if i >= views.size():
 		quit()
 		return false
-	var v: Array = VIEWS[i]
+	var v: Array = views[i]
 	if phase == 0:
 		var up := Vector3.FORWARD if absf((v[2] - v[1]).normalized().y) > 0.99 else Vector3.UP
 		_cam.look_at_from_position(v[1], v[2], up)
 		_cam.fov = 30.0
 	elif phase == 5:
-		var path := "%s/bevel_corner_%s.png" % [_out, v[0]]
+		var path := "%s/bevel_corner_%s%s.png" % [_out, (_layout + "_") if _layout != "" else "", v[0]]
 		get_root().get_texture().get_image().save_png(path)
 		print("saved ", path)
 	return false
