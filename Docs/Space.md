@@ -312,17 +312,18 @@ running, display awake; heat under 80 C throughout:
 
 | first hit | `--whole` | storey units |
 |---|---|---|
-| promotion (laying, collision, bake start) | 30.4 ms | 5.7 ms |
+| promotion (laying, collision, bake start) | 30.4 ms; 9.7 ms after main's cheaper promotions (1b717e6) | 5.7 ms; 2.0 ms after |
 | bricks laid | 24,522 | 1,443 (storeys 16-17) |
 | occupancy grid | 12.6 MB | 0.77 MB |
 | BrickWorld memory | +93 MB | +8.4 MB |
 | process static memory | +103 MB | +11 MB |
 | video memory | +35 MB | +4.3 MB |
-| the shot shown (bands drawn) at tick | 29 | 7-9 |
+| the shot shown (bands drawn) at tick | 28-29 | 7-9; 4 after |
 
-Both have one 0.5-0.76 s frame some ticks after the shot, all of it in `_process` (725 ms), none
-in the physics tick: not the promotion, and not storey units (it is there with `--whole` too). Not
-found yet; it looks like a first-use cost (a pipeline, a first drawing of something).
+Before main's cheaper promotions both had one 0.5-0.76 s frame some ticks after the shot, all of
+it in `_process`, none in the physics tick, with `--whole` as with storey units. After merging them
+(one palette snapshot shared by bakes) it is gone: the worst frame of the 90 ticks after the shot
+is 37 ms in both modes, and not the shot's tick.
 
 Then (storey units) storey 17 blown out with blasts all through it: the storeys over the last
 laid one leave as **one shell piece** (storeys 20-34) at tick 67; the building is 5 laid storeys
