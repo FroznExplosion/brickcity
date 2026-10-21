@@ -1884,6 +1884,8 @@ func _placed_model() -> void:
 			and _ws._edit_groups.size() == groups + 2, "%.3f studs" % ((moved.position.x - own.position.x) / STUD))
 	_ws._undo()
 	_ok("Z moves it back a stud", absf(_form_box(node).position.x - own.position.x - STUD) < 0.05)
+	_ok("undo keeps it picked, the gizmo where it now is", not _ws.placed_model().is_empty() and _ws._gizmo.visible
+			and _ws._gizmo.position.is_equal_approx(_ws._placed_centre()))
 	_ws.select_model(_ws.models[0])
 	var esc := InputEventKey.new()
 	esc.keycode = KEY_ESCAPE
@@ -1915,6 +1917,13 @@ func _placed_model() -> void:
 	var pal: PackedColorArray = (_ws._placed.node as AssetSculpt).palette
 	_ok("two models; a piece given a part takes its colour", _ws.models.size() == 2 and _ws._placed.parts[1] == barrel
 			and pal[2] == _ws.sculpt.palette[barrel + 1] and pal[1] != pal[2])
+	var first: AABB = (_ws.models[0].xf as Transform3D) * (_ws.models[0].box as AABB)
+	var second: AABB = (_ws._placed.xf as Transform3D) * (_ws._placed.box as AABB)
+	var lead: float = second.position.z / STUD
+	_ok("the second spawns beside the first: two studs clear on +z, on a stud line, on its bottom",
+			not first.intersects(second) and second.position.z >= first.end.z + 2.0 * STUD - 0.001
+			and absf(lead - roundf(lead)) < 0.001 and absf(second.position.y - first.position.y) < 0.001,
+			"%s vs %s" % [second, first])
 	_ws._gizmo_xf0 = _ws._placed.xf
 	_ws._placed.xf = _ws.dragged_xf({"move": Vector3(0, 0, 20.0 * STUD)}, false)
 	_ws._stamp_placed()

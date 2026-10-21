@@ -723,6 +723,32 @@ joins one into the block-out, spawn at the build's centre; `sdf_form_probe` -- c
 
 **Built 2026-10-20** as planned, but the combine is checked in `asset_workshop_probe` (Convert tags a piece's cells with its part; bake) rather than in `sdf_form_probe`. Undo and Remove deselect; Escape and Enter let the selected model go without removing it. asset_workshop_probe 286 (the old placed-model checks rewritten for objects), sdf_form_probe 38. `-- --shot --model`: the model inside the grid, the ruler under it.
 
+### A second model beside the first, undo keeps the pick (2026-10-20)
+
+The user (2026-10-20) picked this from the handoff's gaps: a second model spawns on top of the
+first (both centred on the build), and undo lets the selected model go.
+
+- **Where a model spawns.** The first, as now: centred on the build (the grid's middle), on
+  the mirror plane, on the bottom plate. Every one after it spawns **beside the models already
+  there**, across z on the near side (+z, the side the view looks from): its far side two
+  studs past their near side, rounded out to a whole stud so it starts on a stud line; along
+  x centred on the build as before; its bottom on theirs (the lowest model's), not lower than
+  the bottom plate. So it never overlaps another model and it is framed in front of them. It
+  is off the mirror plane; "centre on mirror" puts it there. The block-out does not push it
+  aside (a model added onto a sculpt may be meant to join it).
+- **Undo and redo keep the selection.** The model selected before Z / Shift Z stays selected
+  (the gizmo where it now stands) if it is still there after; one the undo takes away is let
+  go. Remove still lets go.
+
+Checks (`asset_workshop_probe`): a second model's box does not meet the first's, starts two
+studs or more past it on +z on a stud line, and stands on the same bottom; a move undone
+leaves the model selected with the gizmo on its new place.
+
+**Built 2026-10-20** as planned. Z and Shift Z had let the model go before running (left over
+from when a placed model was stamped into the block-out and "laid" there); now they note the
+pick and give it back after, only while the block-out is showing (an undo back to bricks lets
+it go). asset_workshop_probe 288 (2 new).
+
 ### Planned: the form, sliders and shells (2026-10-17, not built)
 
 **How the block-out is used** (the user, 2026-10-17): a quick start. Draw the asset's

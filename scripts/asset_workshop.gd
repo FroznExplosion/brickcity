@@ -2775,7 +2775,8 @@ func _last_brick() -> Variant:
 ## Z: a fill, a copy, a mirrored pair or a sketch change goes at once; anything else one
 ## edit at a time. An RMB delete is laid back.
 func _undo() -> bool:
-	# A placed model is laid, then this undoes it: Z takes it back out.
+	# The selected model is let go while the undo runs and picked again after.
+	var pick := _pick_id()
 	lay_model()
 	var n := 1
 	var sketch = null
@@ -2824,15 +2825,17 @@ func _undo() -> bool:
 		_restore_sketch(sketch, "before")
 	if not items.is_empty() or sketch != null:
 		_redo.append({"items": items, "sketch": sketch})
+	_repick(pick)
 	return any
 
 
 ## Shift Z: do the last undone group again -- each brick back in its own part, each
 ## delete taken up again, a sketch back to what it was.
 func redo() -> int:
-	lay_model()
 	if _redo.is_empty():
 		return 0
+	var pick := _pick_id()
+	lay_model()
 	var entry: Dictionary = _redo.pop_back()
 	var items: Array = (entry.items as Array).duplicate()
 	items.reverse()
@@ -2859,6 +2862,7 @@ func redo() -> int:
 		_restore_sketch(sketch, "after")
 	_group_with(done, sketch)
 	_redoing = false
+	_repick(pick)
 	return done
 
 
@@ -8889,6 +8893,14 @@ func add_model(pieces: Array, path: String, op: int = SdfForm.ADD) -> bool:
 	var c := build_centre()
 	var at := Vector3(c.x - on.get_center().x, maxf(c.y - on.size.y * 0.5, BrickPalette.PLATE_M) - on.position.y,
 			mirror_z * BrickPalette.STUD_M - on.get_center().z)
+	# Not the first: beside the others on the near side, two studs clear, on a stud line, on
+	# their bottom (Docs/AssetWorkshop.md, "A second model beside the first").
+	if not models.is_empty():
+		var others := (models[0].xf as Transform3D) * (models[0].box as AABB)
+		for o in models:
+			others = others.merge((o.xf as Transform3D) * (o.box as AABB))
+		at.y = maxf(others.position.y, BrickPalette.PLATE_M) - on.position.y
+		at.z = ceilf(others.end.z / BrickPalette.STUD_M + 2.0) * BrickPalette.STUD_M - on.position.z
 	var before := models_state()
 	var m := _make_model(entry, Transform3D(b, at), op, [], part_sel)
 	models.append(m)
@@ -9093,6 +9105,21 @@ func model_op(op: int) -> void:
 	_stamp_model(_placed)
 	_model_record(before)
 	_show_gizmo()
+
+
+## The selected model's id, -1 for none.
+func _pick_id() -> int:
+	return -1 if _placed.is_empty() else int(_placed.id)
+
+
+## Pick model `id` again after an undo or redo, if it is still there and the block-out
+## showing (Docs/AssetWorkshop.md, "A second model beside the first").
+func _repick(id: int) -> void:
+	if id < 0 or sculpt_state != "sdf":
+		return
+	for m in models:
+		if int(m.id) == id:
+			select_model(m)
 
 
 ## Deselect: the model stays an object, the gizmo goes (pick it again to move it).

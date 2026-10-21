@@ -25,7 +25,7 @@ marked smooth; **Edit as SDF** goes back 1:1. One sample a tick: a stud is 5, a 
 | `scripts/model_mesh.gd` | `ModelMesh`: reads glTF/GLB/FBX (skinned meshes posed by hand), OBJ, STL; `read_pieces` |
 | `scripts/model_gizmo.gd` | `ModelGizmo`: arrows move, rings turn, cube resizes (2x per 200 px) |
 | `scripts/fit_kit.gd` | `FitKit`: slopes/wedges/curves sampled for `SdfForm.fit_pieces`; `mirror_name` |
-| `tools/asset_workshop_probe.gd` | 286 checks; `tools/sdf_form_probe.gd` 38 |
+| `tools/asset_workshop_probe.gd` | 288 checks; `tools/sdf_form_probe.gd` 38 |
 
 ## Built, newest first
 
@@ -47,7 +47,8 @@ marked smooth; **Edit as SDF** goes back 1:1. One sample a tick: a stud is 5, a 
 
 - Brush strokes act on the block-out only; to carve a model, bake it. Bricks deleted inside
   an unbaked model come back at the next Convert.
-- Undo deselects the model; a second model spawns on top of the first (at the build centre).
+- (Fixed 2026-10-20: a second model spawns beside the others on +z, two studs clear; undo
+  keeps the selected model picked.)
 - Mirror plane is across z only (a model symmetric left-right seen from the front must be
   turned a quarter first).
 - Corner slopes impossible until shapes other than prisms (ShapedSampler, print profiles).
