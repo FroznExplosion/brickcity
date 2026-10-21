@@ -1112,6 +1112,9 @@ func _ready() -> void:
 	# A squad's breaching charge is a blast like any other: asked for, queued,
 	# committed by the host, replayed by clients.
 	ai_services.on_breach = _blast
+	# Cover and garrison spots authors marked in builds (Docs/AI.md 3.3.1).
+	ai_services.marks = func(p: Vector3, radius: float, kind: String) -> Array[Vector3]:
+		return BuildingMarks.near(p, radius, kind, registry)
 	mech_nav = MechBrain.mech_nav(ai_world)
 	# Whatever changes where a figure can walk changes where a mech can.
 	ai_nav.nav_changed.connect(mech_nav.invalidate_box)
