@@ -7902,6 +7902,7 @@ func _run_floating_pass() -> void:
 func _run_lodbreak_pass() -> void:
 	print("[lodbreak] a tower shot down from each tier, then flown up to")
 	respawn_buildings = false
+	BrickHeap.track = true
 	var picks: Array = []
 	for c in registry.buildings:
 		if c.is_build() or _wide_ids.has(c.id):
@@ -7974,6 +7975,7 @@ func _run_lodbreak_pass() -> void:
 			for f in ff:
 				if f[0] == "heap":
 					foot = f[1]
+					print("    a heap brick at %s, laid %s" % [str(foot.snapped(Vector3.ONE * 0.1)), f[2]])
 					break
 			for side in 2:
 				camera.global_position = foot + (Vector3(7.0, 3.0, 5.0) if side == 0 else Vector3(-6.0, 2.0, -7.0))
@@ -8384,7 +8386,8 @@ func _floating_furniture() -> Array:
 				var hy := 0.5 * (absf(xf.basis.x.y) * size.x + absf(xf.basis.y.y) * size.y
 						+ absf(xf.basis.z.y) * size.z)
 				if not _float_held(xf.origin - Vector3(0.0, hy, 0.0), space, under):
-					out.append(["heap", xf.origin - Vector3(0.0, hy, 0.0)])
+					out.append(["heap", xf.origin - Vector3(0.0, hy, 0.0),
+							h.why[i] if not h.why.is_empty() else ""])
 	return out
 
 
