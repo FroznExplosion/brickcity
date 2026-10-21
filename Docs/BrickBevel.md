@@ -150,7 +150,8 @@ cut, whatever is next to it.
 * Two bricks side by side are two boxes: the groove between them is their two facets, meeting
   where the bricks touch. Every box is closed, so there is no slit to see into a brick through
   (the gap probe: none in any view, where the rules above left a few pixels). Where four corners
-  meet, the four upright bevels leave a small diamond channel between the bricks, as real ones do.
+  meet, the four upright bevels leave a small diamond channel between the bricks -- which a
+  corner post fills (2.6).
 * Its hidden faces are drawn as well -- the depth prepass buries them -- so a brick shot away
   uncovers the whole brick behind it with no rebuild: the carrier's quads are drawn while the
   block lives, whatever stands against the face (`chamfer_indices`).
@@ -160,6 +161,35 @@ cut, whatever is next to it.
 
 Shaped parts (`EDGE_RAW`) are copied as they were, and a block that is not a plain box still goes
 by 2.1-2.3.
+
+### 2.6 Corner posts
+
+Where bricks' corners meet along an edge line, their bevels leave a diamond channel a bevel across
+with nothing in it. Seen through a scope that was daylight: straight through a wall one brick thick
+wherever a vertical seam meets a course's groove (a T in running bond, a cross in stack bond), and
+between two bricks that touch only at a corner. `chamfer_posts` finds them on the main thread (it
+needs `Chunk::occupancy`) and `chamfer_faces_into` draws them with the box that carries them.
+
+* Round an edge line of a box, the four cells of its quadrants. A CHANNEL is four blocks with at
+  least one corner on the line (a block whose neighbours round it on both axes are other blocks;
+  at a T the brick below fills two quadrants and has none), or two blocks across a diagonal.
+* A post is a square bar turned 45 degrees, 0.9 of the bevel to its corner so it never fights the
+  facets, shaded as a groove's floor and darkened. It stops a bevel short of each end, where the
+  four corner triangles close the pit in front of it.
+* Four plain boxes round it close the channel all round, so the post is only its two end caps:
+  four triangles, which stop every sight line through. And it is drawn only if the channel is open
+  at BOTH ends -- deep in a thick wall its ends are other bricks' faces and nothing shows. A
+  diagonal gap, or a channel with a shaped part round it (whose faces follow 2.1-2.3, not a closed
+  box), gets the whole bar.
+* Drawn once, by the first plain box with a corner on the line, and chosen from the bricks as
+  BUILT: a band is patched after a hit, not rebuilt, and a fresh build must draw the same. So a post
+  beside a brick shot away stays (a bevel's sliver of groove); one whose own brick goes, goes.
+* Not across a chunk's border: a cell outside the chunk counts as open.
+
+Cost: the bevel probe's chunk, 35,232 triangles to 38,260 (+8.6%). The gap probe looks straight
+into the T's and crosses of a wall one brick thick against a magenta backdrop: 6,048 and 11,232
+pixels through without posts, none with. `tools/bevel_corner_shot.gd --layout=wall|checker` shows
+them with the bevel blown up.
 
 ## 3. The near tier (`BrickNear`)
 

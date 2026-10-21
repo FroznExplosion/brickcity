@@ -1422,7 +1422,15 @@ private:
         const int32_t *owner = nullptr;
         const int32_t *other = nullptr;
         const uint8_t *box = nullptr;
+        /// Corner posts (chamfer_posts), or null: POST_FLOATS floats a post,
+        /// and per face the first of its posts (faces + 1, the last closing).
+        /// A carrier face draws its posts with its box.
+        const float *posts = nullptr;
+        const int32_t *post_at = nullptr;
     };
+    /// A corner post: axis, from, to (metres along it), the edge line's two
+    /// other coordinates, and the diamond's half diagonal.
+    static constexpr int POST_FLOATS = 6;
     struct ChamferOut {
         std::vector<Vector3> vv;
         std::vector<Vector3> nn;
@@ -1455,6 +1463,8 @@ private:
         std::vector<int32_t> owner;
         std::vector<int32_t> other;
         std::vector<uint8_t> box;
+        std::vector<float> posts;
+        std::vector<int32_t> post_at;
         ChamferIn in;
         ChamferOut out;
         std::atomic<bool> done{false};
@@ -1474,6 +1484,11 @@ private:
     /// Which faces of a run belong to plain boxes (ChamferIn::box).
     void chamfer_box_flags(const brick::Chunk &c, int first, int faces,
             std::vector<uint8_t> &out) const;
+    /// The corner posts of a run's boxes (Docs/BrickBevel.md 2.6), carried by
+    /// the faces `box` marks as carriers.
+    void chamfer_posts(const brick::Chunk &c, int first, int faces, float bevel,
+            const std::vector<uint8_t> &box, std::vector<float> &posts,
+            std::vector<int32_t> &post_at) const;
     static void chamfer_indices(const brick::Chunk &c, int section,
             const std::vector<int32_t> &quad_first, PackedInt32Array &out,
             const std::vector<uint8_t> &carrier = {});

@@ -25,7 +25,13 @@ extends SceneTree
 ##
 ## It leaves the on/off pair in shots/brick_bevel_off.png and _on.png.
 ##
-## With GAP_WHERE=1 in the environment it also says, for each view's biggest
+## And SEEN THROUGH: a wall one brick thick, in running bond and in stack
+## bond, against a magenta backdrop, wide and through a scope. Every brick is closed, so a magenta
+## pixel there is a way through BETWEEN bricks: the channel their bevels leave
+## where corners meet, which a corner post fills (Docs/BrickBevel.md 2.6).
+##
+## GAP_THROUGH=1 runs only the seen-through cases. With GAP_WHERE=1 in the
+## environment it also says, for each view's biggest
 ## patch, which cell the ray through it meets first, the blocks round that
 ## cell and their parts: enough to work out which arrangement opened it.
 
@@ -365,6 +371,99 @@ func _case(what: String, w: BrickWorld, chunk: int, views: int, seed_: int, shot
 				w.get_last_chamfer_ms()])
 
 
+## Seen through a chunk with no cores, against a backdrop `normal` points
+## away from: close views from the `normal` side, wide and through a scope.
+## Counted are the pixels magenta with the chamfered mesh and NOT with the
+## flat one -- the flat mesh shows the backdrop past the chunk's ends and
+## through the gaps that are really there (a checkerboard's empty squares).
+##
+## A channel between corners is a bevel wide and the wall's thickness long,
+## and shows only from nearly dead on: `aims` are junctions to look straight
+## into, as well as the views from round about.
+func _through(what: String, w: BrickWorld, chunk: int, centre: Vector3, normal: Vector3,
+		span: Vector2, aims: Array = []) -> void:
+	print("\n%s" % what)
+	var t1 := normal.cross(Vector3.FORWARD if absf(normal.y) > 0.9 else Vector3.UP).normalized()
+	var t2 := normal.cross(t1).normalized()
+	var rng := RandomNumberGenerator.new()
+	rng.seed = 77
+	var views := []
+	for i in 24:
+		var at := centre + t1 * rng.randf_range(-span.x, span.x) * 0.5 \
+				+ t2 * rng.randf_range(-span.y, span.y) * 0.5
+		var eye := at + normal * rng.randf_range(0.4, 1.4) \
+				+ t1 * rng.randf_range(-0.3, 0.3) + t2 * rng.randf_range(-0.3, 0.3)
+		views.append([Transform3D(Basis(), eye).looking_at(at, t2), 60.0 if i % 2 == 0 else 12.0])
+	for at in aims:
+		views.append([Transform3D(Basis(), at + normal * 0.6).looking_at(at, t2), 60.0])
+		views.append([Transform3D(Basis(), at + normal * 1.5).looking_at(at, t2), 12.0])
+	var shots := [[], []]
+	for pass_ in 2:
+		_show(w, chunk, pass_ == 1)
+		for c in _holder.get_children():
+			if c is MultiMeshInstance3D:
+				c.free()
+		var back := MeshInstance3D.new()
+		var qm := QuadMesh.new()
+		qm.size = Vector2(40, 40)
+		back.mesh = qm
+		back.material_override = _core_mat
+		_holder.add_child(back)
+		back.global_transform = Transform3D(Basis(), centre - normal * 3.0).looking_at(
+				centre - normal * 4.0, t2)
+		for v in views:
+			_cam.global_transform = v[0]
+			_cam.fov = v[1]
+			for f in 2:
+				await process_frame
+			await RenderingServer.frame_post_draw
+			shots[pass_].append(_view.get_texture().get_image())
+	_cam.fov = 60.0
+	var total := 0
+	var worst := 0
+	for i in views.size():
+		var off: Image = shots[0][i]
+		var on: Image = shots[1][i]
+		var n := 0
+		for y in on.get_height():
+			for x in on.get_width():
+				var c := on.get_pixel(x, y)
+				if c.r > 0.85 and c.b > 0.85 and c.g < 0.2:
+					var o := off.get_pixel(x, y)
+					if not (o.r > 0.85 and o.b > 0.85 and o.g < 0.2):
+						n += 1
+		total += n
+		if n > worst:
+			worst = n
+			on.save_png("res://shots/brick_bevel_through_on.png")
+			off.save_png("res://shots/brick_bevel_through_off.png")
+	print("  magenta with the chamfer and not without, over %d views: %d (worst %d)"
+			% [views.size(), total, worst])
+	_ok("the chamfer opens no way through", worst <= LONE_PIXELS
+			and float(total) <= CRACK_RATE * views.size(),
+			"%d in its worst view, %d in all" % [worst, total])
+
+
+## A wall one brick thick along X: 1x4s, twelve courses, offset by `shift`
+## studs a course (2 is running bond, 0 stack bond). Big enough that no view
+## reaches its ends: past them the bevelled edge shows a little more of the
+## backdrop than a square one, which is no way through.
+func _wall(w: BrickWorld, shift: int) -> int:
+	var palette := BrickPalette.bake(w)
+	var run_x := -1
+	for name in palette:
+		if String(name).begins_with("brick_1x4") \
+				and w.get_archetype_size(int(palette[name])) == Vector3i(4, 3, 1):
+			run_x = int(palette[name])
+	var chunk := w.create_chunk(Vector3i.ZERO, Vector3i(44, 36, 1))
+	w.set_chunk_transform(chunk, Transform3D.IDENTITY)
+	for course in 12:
+		var off := (course * shift) % 4
+		for x in range(off, 41, 4):
+			w.place_block(chunk, Vector3i(x, course * 3, 0), run_x, course % 3)
+	return chunk
+
+
 func _tower(w: BrickWorld, x: int, z: int, courses: int) -> int:
 	var palette := TowerRecipe.bake_palette(w)
 	var chunk := w.create_chunk(Vector3i.ZERO, TowerRecipe.chunk_dims(x, z, courses))
@@ -451,6 +550,30 @@ func _run() -> void:
 		await process_frame
 
 	var w := BrickWorld.new()
+	var stud := BrickWorld.get_stud_metres()
+	var plate := BrickWorld.get_plate_metres()
+	# Where corners meet: a running bond's T's (a seam over a brick's
+	# middle), a stack bond's crosses.
+	var tees := []
+	var crosses := []
+	for course in range(5, 8):
+		for k in range(4, 7):
+			var y := course * 3 * plate
+			tees.append(Vector3(float(k * 4 + (course % 2) * 2) * stud, y, stud))
+			crosses.append(Vector3(float(k * 4) * stud, y, stud))
+	var wall := _wall(w, 2)
+	await _through("a wall one brick thick, running bond, seen through", w, wall,
+			Vector3(22 * stud, 18 * plate, 0.5 * stud), Vector3.BACK, Vector2(8 * stud, 10 * plate), tees)
+	var stack := _wall(w, 0)
+	await _through("the same wall in stack bond", w, stack,
+			Vector3(22 * stud, 18 * plate, 0.5 * stud), Vector3.BACK, Vector2(8 * stud, 10 * plate),
+			crosses)
+	# GAP_THROUGH=1: only the seen-through cases.
+	if OS.get_environment("GAP_THROUGH") == "1":
+		print("\nbrick bevel gap probe: %d passed, %d failed" % [_passed, _failed])
+		quit(1 if _failed > 0 else 0)
+		return
+
 	var tower := _tower(w, 12, 10, 12)
 	await _case("a tower's walls, floors and windows", w, tower, 40, 11, true)
 
