@@ -91,7 +91,16 @@ both lists, in this order; the detail of each item is where it points.
    palette parts), about 1-4 parts a cell instead of 1, and a recipe-version bump. A jog
    between storeys costs only a few wall studs, so the gain is uncertain: build it as an A/B and
    measure `big_city.tscn -- --breakshape` (pieces, slices, layers) and the part count before
-   merging. Was: CollapseNext 30: buildings still come apart in vertical slices along the floor-panel seams
+   merging. **Only the slab plates shift; columns and interior walls do not** (user, 2026-10-21:
+   "the support columns should line up with each floor"). They stay on the 10-stud lattice every
+   storey -- `plan()` is per footprint, not per storey, and `columned` only adds lattice points
+   lower down, so every column already stands on one below it. On a shifted storey a 2x2 column
+   top lands inside one lower panel instead of on a four-panel corner (4 studs into one plate, not
+   1 into each of four); that is fine, the two layers tie their own seams. Two traps: lay the
+   shifted layer from its own cut list, not by changing `lattice()` (columns and walls read it);
+   and keep `_build_plan`'s small-strip rule (a column at a strip plate's corner) off the shifted
+   layout, or alternate storeys grow off-lattice columns.
+   Was: CollapseNext 30: buildings still come apart in vertical slices along the floor-panel seams
    (13 pieces against 21 since two-layer floors). Decide with the user: accepted as what a shot
    face does physically, or the generator staggers the panel seams storey to storey so vertical
    cuts stop lining up.
