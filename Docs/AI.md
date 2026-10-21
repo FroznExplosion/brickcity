@@ -374,17 +374,58 @@ it.
 4. The plays read the graph (stack, clear, search). `bt_play_clear_room` already takes an opening
    and stack slots.
 
-**Step 1 is blocked, and why (2026-10-20).** Two things the step assumed are not in the game:
+**Step 1, revised: in through the windows, by vaulting (2026-10-20).** Generated towers have no
+doorway to the street -- their only openings are windows (`TowerRecipe.window_gaps`) -- so the way
+into a pristine tower is a window. Correction to an earlier note: the PLAYER can already climb
+through one. `PawnMoves` has a mantle (a ledge up to a body's height, `MANTLE_REACH`, climbed
+straight over, ducked where only crouching room is), and a tower window fits it exactly: the sill
+is 6 plates (0.84 m) over the floor, the opening 9 plates (1.26 m) tall -- `AINav.HEAD_CROUCH` is
+9 -- and 4 studs wide for a 2-stud body, through a 2-stud wall. What is missing is all on the AI
+side:
 
-* **Generated towers have no doorway to the street.** Their only openings are windows
-  (`TowerRecipe.window_gaps`), whose sills stand two courses above every floor, ground floor
-  included. Builds from the workshop can have doorways; towers cannot.
-* **Nothing climbs through a window.** `AINav` steps up one brick (`STEP_UP`) and has no vault
-  or climb link; `pawn_moves.gd` has no vault either.
+* **Soldiers have no moves.** `Pawn.moves` is null for a soldier ("whose walk is the plain one").
+  Give an AI pawn the MANTLE half of `PawnMoves` only -- not the slide, wall-run or grapple --
+  asked for through `PawnIntents` like every other move (a `vault` edge-triggered intent, or the
+  existing `jump` while pressed against a sill). The motor is shared, so the AI's vault is the
+  player's, frame for frame.
+* **`AINav` has no link for it.** It steps up one brick (`STEP_UP`, 3 plates) and drops a storey.
+  Add a VAULT link: from a column whose floor is `f`, across up to `thick` + 1 columns of wall,
+  to a floor within one brick of `f`, where the wall has a gap from `f + 6` up through `f + 15`
+  plates (sill to lintel, crouch room) at least two studs wide. Cost: the walk plus a vault time
+  (~0.8 s, the mantle's own `MANTLE_TIME_MAX` doubled for the climb out). Found by the same column
+  reads the map already does, so a window shot wider, or a wall shot down to sill height, becomes
+  a vault link the moment its columns are read again -- the rule in §3.6, "nav links from
+  destruction", made real for windows first.
+* **`BuildingLayout` already lists the windows** (portals, kind `window`, with the room behind
+  each), so a squad picks its window from the graph before it is anywhere near it, and the
+  building materialises as the squad arrives -- the pristine shell's proxy boxes are the four
+  walls with no holes, so the vault link exists only on the materialised bricks. Until it is, the
+  route ends at the window's outside point; the last few metres are walked on the bricks.
 
-So today a squad gets into a tower only by breaching (§3.6, built). Step 1 waits on either a
-street doorway in the tower recipe (the building side) or a vault move plus a nav link for it
-(pawn and `AINav`). Until then the graph serves the route once a squad is inside.
+**The F.E.A.R. effect.** What made F.E.A.R.'s soldiers read as clever was not the pathfinding but
+that they used the level the way a person would: vaulting a rail or diving through a window to
+flank, *while you watched*, and calling it out. Here, on top of the vault link:
+
+* **Window entries as a play.** `bt_play_clear_room` gains a WINDOW entry beside the door: the
+  stack takes the window's outside corners (the opening's two sides, from the portal), one member
+  vaults while the others cover the room through the glass, then the rest follow. Mixed entries --
+  two through the door, one through the window -- are the dangerous ones and the casebook can weight
+  them (Docs/Tactics).
+* **Vault out to flank or flee.** A soldier inside whose room is being cleared takes a window out
+  if its cover runs out (§3.7) or morale breaks (§6.3 "fall back"), ground floor only (a drop past
+  `SAFE_DROP` from an upper window is a hurt drop the costs already price).
+* **Through glass.** A window with glass in it (`Cell.GLASS`, translucent bricks) is shot out or
+  smashed by the vault itself -- one CHIP command through the authority, so co-op agrees -- and the
+  glass breaking is the cue the player hears.
+* **Callouts.** "Going through the window!" / "Window, left side!" (§6.5 subtitles), so the player
+  knows it was a choice, not a glitch.
+* **Masked by suppression** (§6, A13): the vault is a few hundred milliseconds of exposure; the
+  squad suppresses the room first, the way it does for a door.
+
+**Order:** the vault link in `AINav` and its probe (a squad member on one side of a towered
+window reaches a point inside, ducked through, with no breach) → the AI pawn's mantle → the window
+entry in the room-clearing play → vault-out and glass. The building side may still add street
+doorways to the tower recipe; the window route stays useful either way, as a second way in.
 
 **Step 2 built (2026-10-20): `scripts/ai/building_layout.gd`.** `BuildingLayout.for_tower(fx, fz,
 courses, keepouts)` from the recipe alone -- rooms from `TowerRecipe.plan`, a stair space per
@@ -404,6 +445,52 @@ sees the same rooms and doorways. Measured:
 | 30 x 30, 12 courses | 10 | 11 | 0.5 ms | 73 us | ~450 nodes |
 | 40 x 30, 24 courses | 20 | 19 | 0.5 ms | 161 us | ~1,200 nodes |
 | 40 x 40, 60 courses | 50 | 39 | 1.0 ms | 259 us | ~4,000 nodes |
+
+**Step 3, designed: broken rooms on the grid.** The graph knows the building as built; damage is
+the brick grid's job, room by room.
+
+* **Which rooms are broken.** A `DamageLog` entry on a building marks every space whose box it
+  touches (`BuildingLayout.space_at` over the hit's radius, in building space) as *broken*. The
+  same entry already compromises a room for the interiors (Interiors.md §5); one list, read by both.
+* **Routing through a broken room.** A route still goes through the graph, but each broken space on
+  it is crossed by a grid search inside that space's box (plus a column of margin), from the
+  opening it is entered by to the one it leaves by -- a few hundred nodes, not the building's
+  thousands. If that small search fails, the link through the room is dropped for this request and
+  the graph routes round it; if nothing goes round, the whole request falls back to today's full
+  grid search (`AINav` with the hierarchy), which knows every hole.
+* **New holes become openings.** A breach or blast that opens a wall between two spaces adds a
+  link between them, found when the room's columns are read again: the grid search above finds
+  the way through the hole, and the link it took is kept on the graph (kind `breach`) until the
+  building is forgotten. The spaces finder re-finds a room a second after its bricks change
+  (Structures.md 3.3) -- for a build with a structure record that is the authority instead.
+* **A room that is gone is not a space.** Floor or two walls missing: the space is removed from the
+  graph and that volume is ordinary brick grid, joined to the graph wherever a body crosses into a
+  neighbouring space.
+* **The blocked door.** Before a squad commits to a doorway the graph believes is open, one column
+  read through the doorway (`AINav` headroom at its two middle columns) says whether rubble or a
+  fallen slab now fills it. Blocked: that link is marked shut and the route is asked again.
+* **Gate:** shoot out the stairwell between a squad and the player's storey -- the squad breaches
+  a slab, takes another way, or holds; it does not stand at the foot of a staircase that is gone.
+  And a blast that opens a wall between two rooms puts a `breach` link on the graph that the next
+  route uses.
+
+**Step 4, designed: the plays read the graph.**
+
+* **Stack and clear** (`bt_play_clear_room`, already takes an opening and stack slots): the
+  opening comes from the graph's link into the target space -- doorway, breach or window -- and
+  the room corners and entry points from that space's box, without the bricks
+  (`RoomManifest.openings_for` needed the building materialised).
+* **Is the player reachable?** `BuildingLayout.reachable` from the squad's chosen way in to the
+  player's space. Yes: enter, climb, stack, clear. No (stairs gone, doors shut): breach (built),
+  flush with grenades into the space (§6.3), or hold the exits -- the graph lists them -- and wait.
+* **Search** (§6.3, "search in pairs over the room graph"): from the last known space, spaces in
+  order of graph distance, each marked cleared in the squad's knowledge; the spiral outside when
+  the graph is exhausted.
+* **Defend** (§6.2 "hold angles, not doors"): a squad posted in a building takes the spaces that
+  cover the graph's ways in, one member per opening, standing back from it.
+* **When a building becomes known** (§3.6.1 above): the squad's plan asks for the layout at the
+  moment it targets a building; `BuildingLayout.for_tower` is cached per recipe, so it costs a
+  dictionary lookup after the first.
 
 **What the probe found in the buildings** (for the building side, not fixed here):
 
