@@ -463,6 +463,37 @@ func _shot() -> void:
 			for q in [Vector2(10, 26), Vector2(16, 29)]:
 				lathe_click(at.call(q.x, q.y))
 			_show_stamp(at.call(24.0, 27.0))
+		if "--pick" in OS.get_cmdline_user_args():
+			# Pick and move (Docs/AssetWorkshop.md, "Pick and move"): the test gun as a model of
+			# its pieces beside the block-out, its second piece picked (lighter); the block-out's
+			# barrel lifted, raised four studs and turned, the gizmo on it.
+			rail_pick("sculpt")
+			var scene := _test_gun_scene()
+			var pieces := []
+			for mi in scene.find_children("*", "MeshInstance3D", true, false):
+				var one := ArrayMesh.new()
+				ModelMesh._add_one(mi as MeshInstance3D, scene, one)
+				pieces.append(["box %d" % (pieces.size() + 1), one])
+			scene.free()
+			add_model(pieces, "test_gun.glb")
+			var m: Dictionary = _placed
+			m.xf = Transform3D((m.xf as Transform3D).basis, (m.xf as Transform3D).origin + Vector3(0, 0, 25.0 * BrickPalette.STUD_M))
+			_stamp_model(m)
+			lift_part(maxi(0, part_names.find("barrel")) + 1)
+			m.piece = 1
+			_colour_model(m)
+			_gizmo_xf0 = _placed.xf
+			_gizmo.position = _placed_centre()
+			_placed.xf = dragged_xf({"move": Vector3(0, BrickPalette.STUD_M * 4.0, 0)}, false)
+			_held_follow()
+			_gizmo_xf0 = _placed.xf
+			_gizmo.position = _placed_centre()
+			_placed.xf = dragged_xf({"turn": [Vector3.BACK, deg_to_rad(15.0)]}, false)
+			_held_moved([])
+			_gizmo.set_hover("move1")
+			sculpt_mode = "models"
+			print("[pick] lifted %s, %s studs; model pieces %d, picked %d" % [_placed.path, str(placed_size()),
+					pieces.size(), int(m.piece)])
 		if "--convert" in OS.get_cmdline_user_args():
 			var t0 := Time.get_ticks_msec()
 			sculpt_convert()
@@ -473,7 +504,9 @@ func _shot() -> void:
 					shaped[part] = int(shaped.get(part, 0)) + 1
 			print("[sculpt] converted in %d ms: %d bricks, shaped %s, shells %s" % [Time.get_ticks_msec() - t0,
 					recipe.size(), str(shaped), str(_shell_tris)])
-		rail_pick("sculpt")
+		# Picking the tool again would put a lifted part down (--pick wants it held).
+		if _held_kind() != "part":
+			rail_pick("sculpt")
 		var bb := sculpt.form.bounds()
 		print("[sculpt] %d blocks, %d triangles, %d cells, bounds %s" % [sculpt.form.block_count(),
 				sculpt.triangles(), sculpt.form.cells().size() / 5, str(bb)])

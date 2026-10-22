@@ -804,7 +804,9 @@ Edits that need the block-out whole (a brush stroke, Convert, Z, a tool change, 
 this part") put a lifted part down first; a picked guide stays picked through them. Shift Z
 with a moved part lifted puts it down, which is a new edit: nothing is left to redo. The
 gizmo now answers in any tool (a guide picked from the F3 panel), not only in Sculpt.
-sdf_form_probe 43 (5 new), asset_workshop_probe 296 (8 new). No picture pass yet.
+sdf_form_probe 43 (5 new), asset_workshop_probe 296 (8 new). Picture pass: `-- --shot --sculpt
+--pick` -- the block-out's barrel lifted, raised and turned under the gizmo, and the test gun as a
+model of five pieces beside it, its second piece picked (lighter).
 
 ### Planned: the form, sliders and shells (2026-10-17, not built)
 
