@@ -28,6 +28,8 @@ func run(test: String) -> void:
 			await _jitter_test()
 		"tilt":
 			await (load("res://tools/planet_tilt.gd") as GDScript).new(self).run()
+		"sun":
+			await (load("res://tools/planet_sun.gd") as GDScript).new(self).run()
 		_:
 			print("[planet] FAIL unknown test %s" % test)
 	city.get_tree().quit()
