@@ -9430,47 +9430,16 @@ func _float_supports(here: Vector3) -> Dictionary:
 			chunks.append([b.chunk, world.get_chunk_transform(b.chunk).affine_inverse(),
 					world.get_chunk_origin(b.chunk)])
 			# Laid a storey at a time: the storeys still whole are its rest
-			# shell, and what lies on them is held (Docs/Space.md 5.3a) -- on a
-			# floor, or on the top of a run of wall under a storey that is gone.
+			# shell, and what lies on them is held (Docs/Space.md 5.3a).
 			if _rest_shells.has(id) and not b.is_build():
-				var rtops := PackedFloat32Array()
-				var rest := registry.rest_profile(id)
-				var ri := 0
-				var standing := false
-				var last_top := 0.0
-				for band in TowerRecipe.layout(b.recipe.courses):
-					var gone := BuildingShell._band_is_gone(rest.get(ri, PackedInt32Array()))
-					ri += 1
-					var top := float(int(band.y) + int(band.plates)) * PLATE
-					if not gone and (band.kind == "base" or band.kind == "slab"):
-						rtops.append(top)
-					if standing and gone:
-						rtops.append(last_top)
-					standing = not gone
-					last_top = top
-				if standing:
-					rtops.append(last_top)
 				shells.append([b.xform.affine_inverse(), b.recipe.footprint_x * STUD,
-						b.recipe.footprint_z * STUD, rtops])
+						b.recipe.footprint_z * STUD,
+						_shell_tops(b.recipe.courses, registry.rest_profile(id))])
 		elif not b.is_build() and _shells.has(id):
-			var tops := PackedFloat32Array()
+			var tops := _shell_tops(b.recipe.courses, b.damage_profile)
 			if bool(_shell_coarse.get(id, false)):
-				# The far-far tier: one solid band and a cap. And its roof: the
-				# cap is at the cornice's top, a row of buttresses along one edge,
-				# and what lies on the roof lies a cornice lower.
+				# The far-far tier: one solid band and a cap at the cornice's top.
 				tops.append(TowerRecipe.total_plates(b.recipe.courses) * PLATE)
-				var lay := TowerRecipe.layout(b.recipe.courses)
-				for li in range(lay.size() - 1, -1, -1):
-					if lay[li].kind == "slab" or lay[li].kind == "base":
-						tops.append(float(int(lay[li].y) + int(lay[li].plates)) * PLATE)
-						break
-			else:
-				var bi := 0
-				for band in TowerRecipe.layout(b.recipe.courses):
-					var masks: PackedInt32Array = b.damage_profile.get(bi, PackedInt32Array())
-					bi += 1
-					if (band.kind == "base" or band.kind == "slab") and not BuildingShell._band_is_gone(masks):
-						tops.append(float(int(band.y) + int(band.plates)) * PLATE)
 			shells.append([b.xform.affine_inverse(), b.recipe.footprint_x * STUD,
 					b.recipe.footprint_z * STUD, tops])
 	for isl in islands.islands:
@@ -9499,6 +9468,24 @@ func _float_supports(here: Vector3) -> Dictionary:
 		if dm.stand_in != null and is_instance_valid(dm.stand_in):
 			sleepers.append(dm.record.box)
 	return {"chunks": chunks, "shells": shells, "sleepers": sleepers}
+
+
+## What lies on a shell's top surfaces lies on something: its floors, the top
+## of a band of wall where the band over it is shot away or holed (the shell's
+## boxes stand to there: BuildingShell._damaged_boxes), and its top. Heights in
+## the building's own metres, from a damage profile.
+func _shell_tops(courses: int, profile: Dictionary) -> PackedFloat32Array:
+	var tops := PackedFloat32Array()
+	var lay := TowerRecipe.layout(courses)
+	for i in lay.size():
+		var band: Dictionary = lay[i]
+		if BuildingShell._band_is_gone(profile.get(i, PackedInt32Array())):
+			continue
+		var top := float(int(band.y) + int(band.plates)) * PLATE
+		var is_floor: bool = band.kind == "base" or band.kind == "slab"
+		if is_floor or i + 1 >= lay.size() or profile.has(i + 1):
+			tops.append(top)
+	return tops
 
 
 ## Something under `foot` within FLOAT_REACH: the ground, or one of `under`
