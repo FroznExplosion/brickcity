@@ -2971,6 +2971,9 @@ func _dead_by_frame(b: BuildingRegistry.Building) -> Array:
 	var out := []
 	if not b.is_build():
 		return out
+	# Storeys that left as a shell piece are not drawn either (Docs/Space.md 5.3a).
+	if b.cut_storey >= 0:
+		return registry.build_hidden(b, func(s: int) -> bool: return s < b.cut_storey)
 	var frames: int = b.build.frame_count()
 	for f in frames:
 		var gone := {}
@@ -3092,7 +3095,8 @@ func _queue_promotion(id: int, want: PackedInt32Array, first: bool) -> void:
 ## none (the whole building) when they are off or it is a build.
 func _storeys_for(id: int, point: Vector3, radius: float) -> PackedInt32Array:
 	var b := registry.get_building(id)
-	if b == null or b.is_build() or not registry.storey_units:
+	if b == null or not registry.storey_units \
+			or (b.is_build() and not b.build.is_single_frame()):
 		return PackedInt32Array()
 	return registry.storeys_in(id, point, radius)
 
@@ -3372,12 +3376,18 @@ func _rest_sync(id: int) -> void:
 
 func _make_rest(id: int, key: Array) -> void:
 	var b := registry.get_building(id)
-	var profile := registry.rest_profile(id)
-	var fx: int = b.recipe.footprint_x
-	var fz: int = b.recipe.footprint_z
-	var courses: int = b.recipe.courses
+	var profile := registry.rest_profile(id) if not b.is_build() else {}
+	var hidden: Array = []
+	if b.is_build():
+		# A build's shell walks its blocks: the laid storeys' are left out.
+		hidden = registry.build_hidden(b, func(s: int) -> bool:
+			return not b.storeys_laid.has(s) and (b.cut_storey < 0 or s < b.cut_storey))
 	var mi := MeshInstance3D.new()
-	mi.mesh = BuildingShell.build_mesh(fx, fz, courses, profile)
+	if b.is_build():
+		mi.mesh = BuildShell.build_mesh(world, b.build, hidden)
+	else:
+		mi.mesh = BuildingShell.build_mesh(b.recipe.footprint_x, b.recipe.footprint_z,
+				b.recipe.courses, profile)
 	mi.material_override = brick_material
 	mi.transform = b.xform
 	mi.physics_interpolation_mode = Node.PHYSICS_INTERPOLATION_MODE_OFF
@@ -3386,7 +3396,9 @@ func _make_rest(id: int, key: Array) -> void:
 	PhysicsServer3D.body_set_mode(body, PhysicsServer3D.BODY_MODE_STATIC)
 	PhysicsServer3D.body_set_collision_layer(body, Layers.STRUCTURE)
 	PhysicsServer3D.body_set_collision_mask(body, Layers.STRUCTURE_MASK)
-	var boxes: Array = BuildingShell.collision_boxes(fx, fz, courses, false, profile)
+	var boxes: Array = BuildShell.collision_boxes(world, b.build, hidden) if b.is_build() \
+			else BuildingShell.collision_boxes(b.recipe.footprint_x, b.recipe.footprint_z,
+					b.recipe.courses, false, profile)
 	var proxies := 0
 	for box in boxes:
 		# The shell's ground plate is the bricks' when storey 0 is laid.
@@ -3403,8 +3415,9 @@ func _make_rest(id: int, key: Array) -> void:
 	_rest_shells[id] = [mi, body, key, proxies]
 	rest_shells_made += 1
 	_nav_touch(id)
-	# Its windows, as any shell's (_build_owed_glass).
-	_glass_owed.append([mi, id, profile, false, false])
+	# Its windows, as any shell's (_build_owed_glass). A build has none.
+	if not b.is_build():
+		_glass_owed.append([mi, id, profile, false, false])
 
 
 func _free_rest(id: int) -> void:
@@ -3575,7 +3588,11 @@ func _tend_shell_pieces() -> void:
 			p.landed_hard = false
 			var speed := p.landed_speed
 			p.landed_speed = 0.0
-			if islands.far_from_everyone(p.global_transform * p.center_of_mass):
+			# Measured from its box, as a brick piece's landing is
+			# (IslandManager._landing_matters): a tall piece's middle is far up.
+			var points := islands.interest_points()
+			if not points.is_empty() and islands._distance_to_interest(p.world_box(registry),
+					points) > IslandManager.FRACTURE_RANGE:
 				continue
 			var isl := _piece_to_bricks(p)
 			if isl != null and isl.is_valid():
@@ -7684,6 +7701,11 @@ var _whole_mode := false     ## -- --whole: every building laid whole, as before
 ## falling as one shell piece and landing; then the building given back and
 ## laid again, its record replayed. `-- --storeys --big`, and with `--whole`
 ## for today's numbers. Timing only means anything with the editor closed.
+## The --storeys gate's line between a top that came to rest on its stump and
+## one that fell: three storeys of drop.
+const STOREY_FALL := 3.0 * TowerRecipe.STOREY_PLATES * 0.14
+
+
 func _run_storeys_pass() -> void:
 	var units := registry.storey_units
 	print("[storeys] storey units %s" % ("on" if units else "OFF (--whole)"))
@@ -7808,12 +7830,26 @@ func _run_storeys_pass() -> void:
 			int(rep2.get("bricks", 0)) <= whole_bricks / 4,
 			"%d of %d bricks" % [int(rep2.get("bricks", 0)), whole_bricks])
 	var t3 := 0
+	var bottom0 := piece.world_box(registry).position.y if piece != null else 0.0
+	var fell := 0.0
 	while t3 < 600 and shell_pieces_bricked == bricked0:
 		await get_tree().physics_frame
 		t3 += 1
-	_gate_ok("it lands hard, close by, and becomes ONE brick piece that breaks where it landed",
-			shell_pieces_bricked == bricked0 + 1, "after %d ticks, %d piece(s) made bricks" % [t3,
-			shell_pieces_bricked - bricked0])
+		# Somebody watching it fall, wherever it goes: a landing nobody is
+		# near lands whole and stays a shell, as a brick piece's does.
+		if piece != null and is_instance_valid(piece):
+			var pbox := piece.world_box(registry)
+			fell = maxf(fell, bottom0 - pbox.position.y)
+			camera.position = Vector3(pbox.get_center().x, pbox.position.y + 2.0,
+					pbox.get_center().z) - camera.global_transform.basis.z * 25.0
+	# A top that tipped onto what is left of its storey and came to rest leaning
+	# there, a few metres down, never landed hard: it stays a shell, as a brick
+	# piece that settles does. One that fell must land hard and become bricks.
+	print("[storeys] its bottom fell %.1f m; %d piece(s) made bricks after %d ticks" % [fell,
+			shell_pieces_bricked - bricked0, t3])
+	_gate_ok("a top that falls lands hard, close by, and becomes ONE brick piece",
+			shell_pieces_bricked == bricked0 + 1 or fell < STOREY_FALL,
+			"fell %.1f m, %d piece(s) made bricks" % [fell, shell_pieces_bricked - bricked0])
 	await _frames(120)
 
 	# Given back and laid again: the same record. Of the template's blocks: a
@@ -7869,21 +7905,66 @@ func _run_storeys_pass() -> void:
 					z += 1.0
 				x += 1.0
 		var tp: ShellPiece = null
+		var found := false   ## a freed piece compares equal to null: kept apart
 		var tilt := 0.0
 		var t4 := 0
-		while t4 < 900 and (tp == null or t4 < 600):
+		while t4 < 900 and (not found or t4 < 600):
 			await get_tree().physics_frame
 			t4 += 1
-			if tp == null:
+			if not found:
 				for p in _shell_pieces:
 					if is_instance_valid(p) and p.building == tb.id:
 						tp = p
+						found = true
 			elif is_instance_valid(tp):
 				tilt = maxf(tilt, rad_to_deg(tp.global_transform.basis.y.angle_to(Vector3.UP)))
 		print("[storeys] building %d's ground storey blown out under its west side: %s, tilted %.0f degrees" % [
-				tb.id, "a shell piece" if tp != null else "no shell piece", tilt])
-		_gate_ok("off balance, the rest tips over as one shell piece", tp != null and tilt > 20.0,
+				tb.id, "a shell piece" if found else "no shell piece", tilt])
+		_gate_ok("off balance, the rest tips over as one shell piece", found and tilt > 20.0,
 				"tilt %.0f degrees before it landed" % tilt)
+
+	# A build is laid a storey at a time too, cut at the floors the floor finder
+	# finds (Structures 2.4): a watchtower set down in the street by the big
+	# tower, one storey hit, then its first floor's storey blown out.
+	var wt := BuildRecipe.from_dict(JSON.parse_string(
+			FileAccess.get_file_as_string("res://builds/watchtower.json")))
+	var wid := registry.register_build(wt, Transform3D(Basis(), b.xform * Vector3(fx * 0.5, 0.0, -8.0)))
+	_index_building(wid)
+	_make_shell(wid)
+	var wb := registry.get_building(wid)
+	var wlines := registry.storey_lines(wb)
+	var wbox := registry.local_box(wid)
+	camera.position = wb.xform * Vector3(wbox.get_center().x, 6.0, -10.0)
+	camera.look_at(wb.xform * wbox.get_center(), Vector3.UP)
+	await _frames(20)
+	var wmid := (wlines[1] + wlines[2]) * 0.5 * PLATE
+	_blast(wb.xform * Vector3(wbox.get_center().x, wmid, wbox.position.z), 0.6)
+	await _frames(30)
+	var wrep := registry.storey_report(wid)
+	print("[storeys] the watchtower (%d storeys: %s), hit: laid %s, rest shell %s" % [
+			wlines.size() - 1, str(wlines), str(wrep.get("laid", [])), _rest_shells.has(wid)])
+	_gate_ok("a build hit lays the storey hit, and its rest shell draws the others",
+			bool(wrep.get("banded", false)) and _rest_shells.has(wid)
+			and (wrep.laid as PackedInt32Array).size() < wlines.size() - 1,
+			"laid %s of %d" % [str(wrep.get("laid", [])), wlines.size() - 1])
+	var wmade := shell_pieces_made
+	for pass_n in 10:
+		for h in [wlines[1] * PLATE + 0.5, wlines[1] * PLATE + 1.3, wlines[1] * PLATE + 2.1]:
+			for gx in 3:
+				for gz in 3:
+					_blast(wb.xform * Vector3(wbox.position.x + (gx + 0.5) * wbox.size.x / 3.0, h,
+							wbox.position.z + (gz + 0.5) * wbox.size.z / 3.0), 0.6)
+		await _frames(8)
+	var wpiece := false
+	for t6 in 300:
+		await get_tree().physics_frame
+		if shell_pieces_made > wmade or wb.cut_storey >= 0:
+			wpiece = true
+			break
+	print("[storeys] the watchtower's first floor blown out: cut at %d, %d shell piece(s) made" % [
+			wb.cut_storey, shell_pieces_made - wmade])
+	_gate_ok("and what is over a storey of it that gives way leaves as one shell piece",
+			wpiece and wb.cut_storey >= 0, "cut at %d" % wb.cut_storey)
 
 	# The brick budget (Docs/Space.md 5.3): just over what is in play now, and
 	# four more towers shot. The quietest storeys furthest from the camera go
@@ -9351,7 +9432,7 @@ func _float_supports(here: Vector3) -> Dictionary:
 			# Laid a storey at a time: the storeys still whole are its rest
 			# shell, and what lies on them is held (Docs/Space.md 5.3a) -- on a
 			# floor, or on the top of a run of wall under a storey that is gone.
-			if _rest_shells.has(id):
+			if _rest_shells.has(id) and not b.is_build():
 				var rtops := PackedFloat32Array()
 				var rest := registry.rest_profile(id)
 				var ri := 0

@@ -41,7 +41,7 @@ func shape(registry: BuildingRegistry, material: Material) -> bool:
 	var b := registry.get_building(building)
 	if b == null or hi <= lo:
 		return false
-	var profile := piece_profile(registry)
+	var profile := piece_profile(registry) if not b.is_build() else {}
 	for c in get_children():
 		if c is CollisionShape3D:
 			remove_child(c)
@@ -50,11 +50,19 @@ func shape(registry: BuildingRegistry, material: Material) -> bool:
 		_mesh = MeshInstance3D.new()
 		_mesh.material_override = material
 		add_child(_mesh)
-	var fx: int = b.recipe.footprint_x
-	var fz: int = b.recipe.footprint_z
-	var courses: int = b.recipe.courses
-	_mesh.mesh = BuildingShell.build_mesh(fx, fz, courses, profile)
-	var boxes: Array = BuildingShell.collision_boxes(fx, fz, courses, false, profile)
+	var boxes: Array
+	if b.is_build():
+		# A build's shell walks its blocks: all but this piece's are left out.
+		var hidden := registry.build_hidden(b, func(s: int) -> bool:
+			return s >= lo and s < hi and not holes.has(s))
+		_mesh.mesh = BuildShell.build_mesh(registry.world, b.build, hidden)
+		boxes = BuildShell.collision_boxes(registry.world, b.build, hidden)
+	else:
+		var fx: int = b.recipe.footprint_x
+		var fz: int = b.recipe.footprint_z
+		var courses: int = b.recipe.courses
+		_mesh.mesh = BuildingShell.build_mesh(fx, fz, courses, profile)
+		boxes = BuildingShell.collision_boxes(fx, fz, courses, false, profile)
 	var lines := registry.storey_lines(b)
 	var plate := BrickWorld.get_plate_metres()
 	var y_lo: float = lines[lo] * plate
@@ -118,6 +126,19 @@ func storeys_at(registry: BuildingRegistry, point: Vector3, radius: float) -> Pa
 		if lines[s + 1] > y0 and lines[s] <= y1:
 			out.append(s)
 	return out
+
+
+## Its box in the world: its storeys' box, turned as it is now.
+func world_box(registry: BuildingRegistry) -> AABB:
+	var b := registry.get_building(building)
+	if b == null:
+		return AABB(global_position, Vector3.ZERO)
+	var lines := registry.storey_lines(b)
+	var plate := BrickWorld.get_plate_metres()
+	var box := BuildingRegistry.own_box(b)
+	box.position.y = lines[lo] * plate
+	box.size.y = (lines[hi] - lines[lo]) * plate
+	return global_transform * box
 
 
 ## Is a world point within `margin` of it?
