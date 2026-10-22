@@ -13247,7 +13247,7 @@ func _process(delta: float) -> void:
 	RenderingServer.global_shader_parameter_set(&"lod_zoom", 1.0 / zoom_in)
 	if brick_near != null:
 		brick_near.uploads = _band_jobs.size() + islands.mesh_jobs()
-		brick_near.step(camera.global_position, zoom_in)
+		brick_near.step(camera.global_position, zoom_in, -camera.global_basis.z)
 	if _spaces_view != null:
 		_follow_spaces_view()
 	if _sea != null:
@@ -15842,7 +15842,10 @@ func _run_chamfer_pass() -> void:
 	# A timing run (CLAUDE.md: the editor closed), and with `--no-near` the
 	# same run without the tier, to set beside it.
 	if "--cost" in OS.get_cmdline_user_args():
-		await _run_chamfer_cost()
+		if "--street" in OS.get_cmdline_user_args():
+			await _run_chamfer_street()
+		else:
+			await _run_chamfer_cost()
 		get_tree().quit(0)
 		return
 	print("[chamfer] real bevels where the camera is, none where it is not")
@@ -15918,6 +15921,28 @@ func _run_chamfer_pass() -> void:
 			"%d drawn, %d wanted, over %d bands" % [after.drawn, after.wanted, after.bands])
 	await _save("chamfer_hit")
 
+	# The cap (Options > Video): squeezed to two bands of each, it holds two,
+	# and they are the ones in front of the camera. Then turned round, the
+	# bands it holds follow the view.
+	var cap_was := [BrickNear.cap_enabled, BrickNear.max_bands, BrickNear.max_stud_bands]
+	BrickNear.cap_enabled = true
+	BrickNear.max_bands = 2
+	BrickNear.max_stud_bands = 2
+	await _frames(4)
+	brick_near.settle(camera.global_position)
+	await _frames(4)
+	var held: Vector2i = brick_near.held()
+	_gate_ok("with the cap at two, two bands are chamfered and two have stud geometry",
+			held.x <= 2 and held.y <= 2 and brick_near.chamfered_bands > 0,
+			"%d chamfered (%d held), %d with stud geometry" % [brick_near.chamfered_bands,
+				held.x, held.y])
+	var ahead := camera.global_position + (-camera.global_basis.z) * 1.6
+	var ahead_near := _near_band_at(ahead)
+	_gate_ok("and the wall in front is one of them", ahead_near)
+	BrickNear.cap_enabled = cap_was[0]
+	BrickNear.max_bands = cap_was[1]
+	BrickNear.max_stud_bands = cap_was[2]
+
 	# And from across the street there is none: at that size it is noise, and
 	# it is not paid for.
 	camera.global_position = wall - Vector3(0.0, -6.0, 110.0)
@@ -15936,16 +15961,43 @@ func _run_chamfer_pass() -> void:
 	get_tree().quit(1 if _gate_fail > 0 else 0)
 
 
+## Whether a chamfered band of a building is drawn round `at` (a point on its
+## wall): any band whose box holds it, a few centimetres either way.
+func _near_band_at(at: Vector3) -> bool:
+	for node in _bands_round(at):
+		if brick_near.is_near(node):
+			return true
+	return false
+
+
+func _bands_round(at: Vector3) -> Array:
+	var out := []
+	for n in get_tree().root.find_children("*", "MeshInstance3D", true, false):
+		var mi: MeshInstance3D = n
+		if mi.mesh == null or not mi.is_inside_tree():
+			continue
+		var local := mi.global_transform.affine_inverse() * at
+		if mi.mesh.get_aabb().grow(0.1).has_point(local):
+			out.append(mi)
+	return out
+
+
 ## Frame times while a building six metres from the camera is shot at and then
-## cut down, with whatever near tier the run has.
+## cut down, with whatever near tier the run has (`--no-cap`: the cap off).
 func _run_chamfer_cost() -> void:
-	print("[chamfer] cost, near tier %s" % ("ON" if BrickNear.enabled else "OFF (--no-near)"))
+	# A test window takes the menu's defaults once it is up, after this starts:
+	# the flag is set again once the city has settled (_cap_arg).
+	_cap_arg()
+	print("[chamfer] cost, near tier %s, cap %s" % ["ON" if BrickNear.enabled else "OFF (--no-near)",
+			"on (%d/%d)" % [BrickNear.max_bands, BrickNear.max_stud_bands]
+			if BrickNear.cap_enabled else "OFF (--no-cap)"])
 	# The renderer's own clock as well as the frame's: a frame is held to the
 	# display's 16.6 ms whatever it cost to draw.
 	RenderingServer.viewport_set_measure_render_time(get_viewport().get_viewport_rid(), true)
 	var b := registry.get_building(0)
 	var chunk := _promote(0)
 	await _frames(60)
+	_cap_arg()
 	var fx: float = b.recipe.footprint_x * STUD
 	var wall: Vector3 = b.xform * Vector3(fx * 0.5, 2.6, 0.0)
 	camera.global_position = wall - Vector3(1.5, -0.4, 6.0)
@@ -15974,6 +16026,78 @@ func _run_chamfer_cost() -> void:
 	print("[chamfer]   brought down: %s" % _frame_line(fall))
 	print("[chamfer]   %s" % brick_near.report())
 	await _save("chamfer_cost_%s" % ("near" if BrickNear.enabled else "flat"))
+
+
+## `--no-cap`: the near tier's cap off for this run.
+func _cap_arg() -> void:
+	if "--no-cap" in OS.get_cmdline_user_args():
+		BrickNear.cap_enabled = false
+
+
+## A walk down a street at eye height past every building near the first one,
+## the view swinging from side to side and once right round, as a player looks
+## about: frame times, and what the near tier held and cost on the way. A timing
+## run (the editor closed); `--no-cap` for the same walk without the cap.
+func _run_chamfer_street() -> void:
+	RenderingServer.viewport_set_measure_render_time(get_viewport().get_viewport_rid(), true)
+	var b := registry.get_building(0)
+	for i in mini(registry.buildings.size(), 12):
+		_promote(i)
+	await _frames(90)
+	_cap_arg()
+	print("[street] near tier %s, cap %s" % ["ON" if BrickNear.enabled else "OFF",
+			"on (%d/%d)" % [BrickNear.max_bands, BrickNear.max_stud_bands]
+			if BrickNear.cap_enabled else "OFF"])
+	var fx: float = b.recipe.footprint_x * STUD
+	var start: Vector3 = b.xform * Vector3(-4.0, 0.0, -3.0)
+	var along: Vector3 = (b.xform.basis * Vector3.RIGHT).normalized()
+	var side: Vector3 = (b.xform.basis * Vector3.BACK).normalized()
+	start.y = DebugCamera.EYE_HEIGHT
+	camera.global_position = start
+	camera.look_at(start + along, Vector3.UP)
+	await _frames(30)
+	var view := get_viewport().get_viewport_rid()
+	var frames := 480
+	var times := []
+	var near_worst := 0.0
+	var held_max := Vector2i.ZERO
+	var tris_max := 0
+	var studs_max := 0
+	var last := Time.get_ticks_usec()
+	for i in frames:
+		var t := float(i) / float(frames)
+		var at: Vector3 = start + along * ((fx + 30.0) * t)
+		# Side to side three times, and once right round in the middle.
+		var yaw := sin(t * TAU * 3.0) * 1.2 + (TAU * clampf((t - 0.45) * 10.0, 0.0, 1.0))
+		var dir: Vector3 = along.rotated(Vector3.UP, yaw)
+		camera.global_position = at
+		camera.look_at(at + dir + side * 0.0, Vector3.UP)
+		var w0 := brick_near.worst_step_ms
+		brick_near.worst_step_ms = 0.0
+		await get_tree().process_frame
+		near_worst = maxf(near_worst, brick_near.worst_step_ms)
+		brick_near.worst_step_ms = maxf(w0, brick_near.worst_step_ms)
+		var now := Time.get_ticks_usec()
+		times.append([float(now - last) / 1000.0,
+				RenderingServer.viewport_get_measured_render_time_cpu(view)
+				+ RenderingServer.get_frame_setup_time_cpu(),
+				RenderingServer.viewport_get_measured_render_time_gpu(view)])
+		last = now
+		var h: Vector2i = brick_near.held()
+		held_max = Vector2i(maxi(held_max.x, h.x), maxi(held_max.y, h.y))
+		tris_max = maxi(tris_max, brick_near.chamfered_tris)
+		studs_max = maxi(studs_max, brick_near.stud_instances)
+	var over := 0
+	for tt in times:
+		if float(tt[0]) > 25.0:
+			over += 1
+	print("[street]   walk: %s; %d frames over 25 ms" % [_frame_line(times), over])
+	print("[street]   held at most %d chamfered, %d with stud geometry; %d triangles, %d studs at most; worst step %.2f ms"
+			% [held_max.x, held_max.y, tris_max, studs_max, near_worst])
+	print("[street]   %s" % brick_near.report())
+	print("[street]   studs, worst: fetch %.2f ms, split %.2f, set %.2f; %d in one band at most"
+			% [brick_near.worst_fetch_ms, brick_near.worst_split_ms, brick_near.worst_set_ms,
+				brick_near.most_band_studs])
 
 
 ## The next `n` frames: each one's length, and what the renderer says the

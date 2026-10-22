@@ -238,6 +238,12 @@ func _check_studs() -> void:
 			closed_high = maxf(closed_high, y)
 	_ok("a byte a stud says which are open", open.size() * 16 == buf.size(),
 			"%d bytes, %d studs" % [open.size(), buf.size() / 16])
+	# What BrickNear asks: both from one walk, the same as the two calls.
+	var both: Array = w.get_chunk_studs_and_open(chunk, -1)
+	_ok("studs and open from one call are the two calls' answers",
+			both.size() == 2 and both[0] == buf and both[1] == open,
+			"%d floats, %d bytes" % [(both[0] as PackedFloat32Array).size(),
+				(both[1] as PackedByteArray).size()])
 	_ok("the roof's studs are open, every floor's under it is not",
 			open_n > 0 and open_n < open.size() and open_low > closed_high,
 			"%d of %d open, the lowest at %.2f m, the highest closed at %.2f m" % [open_n,

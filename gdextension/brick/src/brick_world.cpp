@@ -797,6 +797,20 @@ PackedByteArray BrickWorld::get_chunk_studs_open(int chunk_id, int section) cons
     return out;
 }
 
+Array BrickWorld::get_chunk_studs_and_open(int chunk_id, int section) const {
+    std::vector<uint8_t> open;
+    const PackedFloat32Array buffer = chunk_studs(chunk_id, section, false, &open);
+    PackedByteArray flags;
+    flags.resize((int64_t)open.size());
+    if (!open.empty()) {
+        std::memcpy(flags.ptrw(), open.data(), open.size());
+    }
+    Array out;
+    out.push_back(buffer);
+    out.push_back(flags);
+    return out;
+}
+
 Array BrickWorld::split_studs(const PackedFloat32Array &buffer, Vector3 eye,
         const PackedFloat32Array &rings, const PackedByteArray &open, int closed_rings) {
     Array out;
@@ -10351,6 +10365,8 @@ void BrickWorld::_bind_methods() {
             &BrickWorld::get_chunk_studs_section);
     ClassDB::bind_method(D_METHOD("get_chunk_studs_open", "chunk_id", "section"),
             &BrickWorld::get_chunk_studs_open);
+    ClassDB::bind_method(D_METHOD("get_chunk_studs_and_open", "chunk_id", "section"),
+            &BrickWorld::get_chunk_studs_and_open);
     ClassDB::bind_static_method("BrickWorld", D_METHOD("split_studs", "buffer", "eye", "rings",
             "open", "closed_rings"), &BrickWorld::split_studs, DEFVAL(PackedByteArray()), DEFVAL(0));
     ClassDB::bind_method(D_METHOD("build_chunk_chamfer_mesh", "chunk_id", "bevel"),

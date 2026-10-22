@@ -254,6 +254,22 @@ a mesh of the whole chunk.
   own is uploading, no band's studs are touched; `settle` does not wait. Two runs each way: near
   spikes over 5 ms 16 and 34 without, 6 and 8 with; step mean 0.60-0.85 ms against 0.51.
 
+* **The cap** (2026-10-21; Options > Video: Near Detail Cap, Near Detail -- Bevelled, Near
+  Detail -- Studs). Distance alone let the tier take on every band inside its rings: a dense
+  street's storeys, a collapse's every piece -- each a build, an upload, and its studs re-sorted
+  as the camera walks. With `cap_enabled`, at most `max_bands` (32) bands hold a chamfered mesh
+  (or are building one) and `max_stud_bands` (48) have stud GEOMETRY. Bands are placed by a
+  score: their distance (through the zoom) times 1 straight ahead, `FACING_SIDE` (1.75) square to
+  the side, `FACING_BEHIND` (2.5) behind -- except within `ALWAYS_NEAR` (2 m), the player's own
+  surroundings, which come first whichever way they face. The held bands are scored every step;
+  the rest as the round robin reaches them. A band placed better than the worst held, by
+  `SWAP_MARGIN` (0.8), takes its place, one a step, and the place given up is kept for a band
+  placed at least that well (otherwise whichever band the round robin reached first took it,
+  and two could trade places for ever). A band without a stud place draws its open studs as the
+  far ring's cards, whatever its distance -- the brick shader paints none, so leaving them out
+  would leave its tops smooth; the card ring past `stud_radius` is not capped. Off: distance
+  alone, as before. The `--chamfer` gate squeezes it to two of each and checks it holds two and
+  that the wall in front is one of them; `--chamfer --cost --no-cap` is the timing pass without.
 * **Zoom.** Through a scope the world is as near as it looks. The city passes `step` the zoom
   (the unzoomed field of view's tangent over the camera's, capped at 6) and every distance here
   is divided by it: a wall seen through 4x glass is chamfered and studded -- bevelled studs, not

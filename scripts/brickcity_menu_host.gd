@@ -146,6 +146,12 @@ func _apply_setting(id: StringName, value: Variant) -> void:
 		&"floor_reach":
 			if DisplayServer.get_name() != "headless":
 				BrickStrength.span_reach = float(value)
+		&"near_cap":
+			BrickNear.cap_enabled = MENU_SETTINGS.truthy(value)
+		&"near_cap_bands":
+			BrickNear.max_bands = int(value)
+		&"near_cap_studs":
+			BrickNear.max_stud_bands = int(value)
 		&"aa_mouse":
 			AimAssist.mouse_level = int(value)
 		&"aa_pad":
@@ -208,6 +214,20 @@ func _setting_defs() -> Array:
 			"hint": "How far a floor reaches past what holds it up before it gives way: a floor "
 			+ "over a gap, an overhang, wreckage lying across two stubs. Stone reaches 2.5 times "
 			+ "as far, metal 4. Asked once a building has stopped coming apart."},
+		# The near tier's cap (BrickNear): how much close-up brick detail at once.
+		{"id": &"near_cap", "tab": "video", "type": MENU_SETTINGS.T_BOOL,
+			"label": "Near Detail Cap", "default": true,
+			"hint": "Limits how many pieces of nearby wall get real bevelled edges and stud "
+			+ "geometry at once, nearest and in front of you first. Off: everything in range does, "
+			+ "which can stutter in a dense street or a collapse."},
+		{"id": &"near_cap_bands", "tab": "video", "type": MENU_SETTINGS.T_SLIDER,
+			"label": "Near Detail — Bevelled", "default": 32, "min": 4, "max": 128, "step": 4,
+			"hint": "With the cap on: how many pieces of wall (a storey of a building, a piece of "
+			+ "wreckage) are drawn with real bevelled edges at once."},
+		{"id": &"near_cap_studs", "tab": "video", "type": MENU_SETTINGS.T_SLIDER,
+			"label": "Near Detail — Studs", "default": 48, "min": 4, "max": 160, "step": 4,
+			"hint": "With the cap on: how many pieces of wall are drawn with studs as real geometry "
+			+ "at once. Past them they are flat cards that face you."},
 	] + AIM_ASSIST_DEFS + AIM_ASSIST_ADVANCED
 
 
