@@ -161,6 +161,11 @@ const PERCH_FOOT := 3.0
 const PERCH_SHARE := 0.2
 const PERCH_EDGE_SPEED := 1.5
 var perched_tipped := 0
+## A pass that asks why a piece was frozen where it was (--lodbreak's piece
+## lines) sets this: each piece's last perch answer and how it was frozen, by
+## piece id. Nothing pays for it otherwise.
+var perch_say := false
+var perch_said := {}
 const RIPPLE_START_SPEED := 0.6
 ## How far a piece that others were frozen on may move before they are woken
 ## (_note_holders). A heap's jitter is centimetres; a piece that falls away
@@ -3309,21 +3314,26 @@ func _tip_if_perched(isl: BrickIsland) -> bool:
 	var box := world_aabb(isl)
 	var foot := minf(box.size.x, box.size.z)
 	if foot < PERCH_FOOT:
+		_perch_note(isl, "narrow (%.1f m)" % foot)
 		return false
 	var st := PhysicsServer3D.body_get_direct_state(isl.body.get_rid())
 	if st == null:
+		_perch_note(isl, "no body state")
 		return false
 	var com := isl.body.global_position
 	var under := Rect2()
 	var any := false
+	var aside := 0
 	for i in st.get_contact_count():
 		var n := st.get_contact_local_normal(i)
 		var at := st.get_contact_local_position(i)
 		if absf(n.y) < LANDED_NORMAL_Y or at.y > com.y:
+			aside += 1
 			continue   # a wall it leans on, or something on top of it
 		# Lying in a heap, on other pieces: theirs to settle together. Tipped
 		# there, one levered its neighbours out of the heap (--jam --big).
 		if st.get_contact_collider_object(i) is RigidBody3D:
+			_perch_note(isl, "on another piece")
 			return false
 		var p := Vector2(at.x, at.z)
 		if not any:
@@ -3332,11 +3342,15 @@ func _tip_if_perched(isl: BrickIsland) -> bool:
 		else:
 			under = under.expand(p)
 	if not any:
+		_perch_note(isl, "%d contact(s), none under it (%d beside or over it)" % [
+				st.get_contact_count(), aside])
 		return false
 	var c := Vector2(com.x, com.z)
 	var over := under.grow(0.05).has_point(c)
 	if over and minf(under.size.x, under.size.y) >= foot * PERCH_SHARE:
+		_perch_note(isl, "held: weight %s over %s" % [str(c.snapped(Vector2.ONE * 0.1)), str(under)])
 		return false
+	_perch_note(isl, "tipped: weight %s, under it %s" % [str(c.snapped(Vector2.ONE * 0.1)), str(under)])
 	# Tip it over the side its weight is towards; straight over a point, the
 	# way its id says, so every run of a replay tips it the same way.
 	var off := c - under.get_center()
@@ -3348,6 +3362,11 @@ func _tip_if_perched(isl: BrickIsland) -> bool:
 	isl.body.angular_velocity += axis * PERCH_EDGE_SPEED / maxf(isl.radius, 1.0)
 	perched_tipped += 1
 	return true
+
+
+func _perch_note(isl: BrickIsland, why: String) -> void:
+	if perch_say:
+		perch_said[isl.piece_id] = why
 
 
 ## Is any other body within TOUCH_MARGIN of this piece's world box? One box
@@ -4778,6 +4797,11 @@ func tick() -> void:
 				settled_by_rule += 1
 			elif by_age:
 				settled_by_age += 1
+			if perch_say:
+				perch_said[isl.piece_id] = "%s; frozen %s, window %d ms, tries %d" % [
+						perch_said.get(isl.piece_id, "never asked"),
+						"by rule" if by_rule else "by age" if by_age else "at rest",
+						_slow_window(isl), isl.unsupported_tries]
 			settle_now(isl)
 
 	_moving_of = moving_of_now

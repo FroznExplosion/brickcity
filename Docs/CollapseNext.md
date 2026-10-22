@@ -371,9 +371,12 @@ In the order to do it. Each line points at where the item is written up.
     with the heap left alone 4 of 4 clean, as without the rule). Same pass: the top tips, falls
     43 m and lies on the ground in pieces; `--lodbreak` 8/8, `collapse_probe` 63, `hang_probe` 10,
     `float_probe` 46, `debris_probe` 29. The pass now prints every piece of the tower (size,
-    height, frozen, what is under it). Still to look at: from 320 m an 829-brick piece 37 m tall
+    height, frozen, what is under it). ~~Still to look at: from 320 m an 829-brick piece 37 m tall
     stays frozen inside the tower's crater at 54 m, 22 m over what is under its middle -- wedged
-    against the walls, or hanging; not seen in a picture yet.
+    against the walls, or hanging; not seen in a picture yet.~~ Looked at 2026-10-22 (after storey
+    units, a 54-brick piece 21 m over its middle): levered under the standing top, held -- tipped
+    three times, and woken close up it moved 0.0 m. `--lodbreak` now pictures, wakes and gates every
+    piece frozen over air (HandoffStructBugs item 5).
 
 30. **Buildings break in vertical slices, along the floor panels** (user, 2026-10-18: "buildings
     break in half vertically, when lego breaks along the layer lines"). Measured with
