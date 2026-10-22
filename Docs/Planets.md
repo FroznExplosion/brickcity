@@ -572,6 +572,81 @@ city scene gains those lines and nothing else.
 
 Results below, as each test is run.
 
+**Summary (2026-10-22): nothing breaks the route.**
+
+| # | test | result | fix size |
+|---|---|---|---|
+| 1 | jitter at distance | passed: invisible to 8 km, about a pixel on near objects at 15 km while turning; physics unchanged at 15 km | none (shift at ~2 km, as planned; 8 km would do) |
+| 2 | origin shift | problem found: ~1-12 ms + AI, no wake storm; everything keyed by world column into the static field breaks | medium: one field origin per system (terrain, sea, snow, heap, AINav), the AI's stored positions |
+| 3 | tilted building | problem found: solve, hangs, collision, pieces all right in the building's frame; crumbs and the heap fall along the scene's -Y | small-medium |
+| 4 | gravity reads | problem found: pieces rest on curved ground; ~25 places in ~15 files still use -Y (crumbs, heap, support checks, VFX) | small-medium |
+| 5 | walking round a sphere | passed (prototype walker); the pawn, mech and camera port is ~185 places | a week and a half |
+| 6 | cubed-sphere ground | problem found: tiles map watertight; a 2D field cannot close a cube (1.3-1.7 m cliffs at cut edges) | medium: the field on the sphere |
+| 7 | two physics spaces | passed | none |
+| 8 | two nav regions | passed | none (HPA portals) |
+| 9 | moving sun | passed: casting +0.06 ms GPU here; a full re-bake lands in 1.3 s with no frame cost | none |
+
+#### Test 1, jitter at distance: passed
+
+`--planet=jitter`: the plain city's corner, the pawn with arms and gun beside a column of five
+loose 2x4 bricks and a staggered wall, the whole scene moved by the shift of test 2 to 0, 2, 8 and
+15 km from the origin along the diagonal (every axis that far: the float step is 0.12, 0.49 and
+0.98 mm) and left there. Pictures are measured, not looked at: Lucas-Kanade over a fixed crop,
+frame to frame, while the pawn strafes 1 mm a tick or the camera turns 0.11° a frame; for the
+brick 3 m off, less the motion its exact projection predicts. Positive controls calibrate it: a
+random 0.3 mm shake of the gun reads 0.089 px, 0.1 mm reads 0.039.
+
+| | 0 km | 2 km | 8 km | 15 km |
+|---|---|---|---|---|
+| gun, strafing (px rms) | 0.001 | 0.000 | 0.001 | 0.001 |
+| gun, turning (px rms / max) | 0.019 / 0.03 | 0.045 / 0.11 | 0.108 / 0.19 | 0.136 / 0.24 |
+| gun, turning, as a shake of the gun | ~0.06 mm | ~0.15 mm | ~0.35 mm | ~0.45 mm |
+| brick 3 m off, strafing | 0.055 | 0.052 | 0.065 | 0.046 |
+| brick 3 m off, turning (px rms / max) | 0.010 / 0.02 | 0.012 / 0.03 | 0.017 / 0.04 | **0.261 / 0.47** |
+| stack: asleep at tick, woke in 20 s, crept | 105, 0, 0.00 mm | 173, 0, 0.00 | 30, 0, 0.00 | 70, 0, 0.00 |
+| stack: bottom brick's contact depth | 34 mm | 28 | 11 | 10 |
+
+- **Strafing never jitters**, at any distance. Within one binade the float grid is uniform, so
+  the camera and everything it carries round to the same offset wherever it is: the gun is a fixed
+  fraction of a millimetre off, not shaking. CPU-side, the gun's transform relative to the camera
+  and the brick's projected position came out exact at every distance for the same reason.
+- **Turning is where it shows**, because rotation mixes the big translation into every component.
+  The gun stays under a fifth of a pixel even at 15 km. The near brick is clean to 8 km and jumps
+  at 15 km (the next binade, 8,192 m per axis) to a quarter of a pixel measured -- by the gun's
+  controls about a pixel of real shimmer on near geometry.
+- **Physics: no difference to 15 km.** The stack sleeps and never wakes, creeps 0.00 mm, and its
+  contacts sink no deeper far out than at the origin; three headless repeats gave identical
+  numbers at every distance. (One windowed run toppled the column at 15 km; the headless repeats and
+  the other windowed run did not, and a ten-high column toppled at the origin as readily: loose
+  boxes 0.7 m deep are simply unstable.)
+- The pieces of a collapse next door settled at every distance (2 of 2).
+
+So the 2 km shift distance is conservative: nothing a player could see happens before ~8 km.
+
+![the gun at 0 and 15 km](Planets/t1_gun_0_15km.jpg)
+![the brick 3 m off, 0 and 15 km](Planets/t1_near_0_15km.jpg)
+
+#### Test 9, the moving sun: passed
+
+`--planet=sun` on the terrain city, windowed, the editor closed and no other Godot running, a
+street-level view; the renderer's own clock (`viewport_get_measured_render_time_*`) and each
+frame's wall time, 300 frames a case:
+
+| | render CPU ms (mean / worst) | render GPU ms (mean / worst) | frame wall time (mean / worst) |
+|---|---|---|---|
+| A baked, the sun still | 0.82 / 1.33 | 11.11 / 12.00 | 16.7 / 22.1 |
+| B the terrain in the shadow map (radius 3: 49 tiles), the sun turning | 0.81 / 1.24 | 11.17 / 13.40 | 16.7 / 24.0 |
+| C one re-bake of all 277 detail tiles, the sun 2° on (three runs) | 1.11-1.28 / 1.85-4.51 | 11.18-11.19 / 12.5-13.1 | 16.6-16.7 / 22.4-23.0 |
+
+- A re-bake of every detail tile **lands in 1.23-1.37 s** (74-82 frames) on the workers, with no
+  change in frame time and +0.3-0.45 ms of render CPU while the tiles upload. At 2° a step that
+  is a day of 4.5 minutes before re-bakes overlap; a real day is far slower.
+- Casting instead costs +0.06 ms of GPU on average here (Terrain.md 19.9 measured 1.6 ms on the
+  heightfield scene, whose view sees far more ground). Either is affordable; baking keeps the
+  worst frame lower. The coarse tier was not re-baked (its shadow is the far ground's, and it is
+  rebuilt by ring -- §19.11).
+- The process-time monitor read 22-23 ms throughout and does not separate the cases.
+
 #### Test 2, origin shift: problem found (fixes small to medium), not plan-breaking
 
 `tools/planet_origin.gd` -- `shift(city, offset)`, one frame, whole 32-stud tiles (11.2 m). It moves
@@ -621,6 +696,9 @@ world-space stud lattice of the terrain and brick shaders lands on itself).
 
 ![terrain city: the sea before the shift, gone after](Planets/t2_terrain_before_after.jpg)
 
+(A rerun on 2026-10-22 gave the same: 599 / 600 rays, 198 / 200 lines, 32-42% of pixels in the
+terrain views changed, all of it water; the shift itself 10.0 ms.)
+
 What holds an absolute position and must follow a shift:
 
 | where | what | fix |
@@ -658,6 +736,9 @@ never turn, so most of a planet is further round than 7° -- 60° is the honest 
 | crumbs laid on the heap | 207, flat on the pad (0.0°) | 204, **turned 7.0°** from the pad | 222, **median 32 m below the pad**, 36° off: they fell along world -Y |
 | AI line square through it | 2 bricks | 2 | 2 |
 | AI: stand on its ground floor | -- (baseline) | as the baseline | snap moves it 60 m: columns run along world Y |
+
+![7 degrees: standing, and after](Planets/t3_tilt07.jpg)
+![60 degrees: standing, falling, and the crumbs flat on the scene's ground below](Planets/t3_tilt60.jpg)
 
 - **Stress solve, hang check, collision: work in building space at any tilt.** The solve and the
   hang rule run in the chunk's own grid, and a building on a tangent frame has its grid -Y along
@@ -699,7 +780,10 @@ again where it lay.
 | 45° | 2 | 2 | 2.08 .. 2.16 m | 60 | median **42.8°** |
 | 90° | 3 | 3 | -0.26 .. 2.12 m | **1** | 24° |
 
-Of 820 laid bricks, 253 are on the sphere and **567 fell to the world's flat ground 50 m below**.
+Of 820 laid bricks, 253 are on the sphere and **567 fell to the world's flat ground 50 m below**
+(a windowed rerun: 251 and 574).
+
+![the sphere: standing, the 45 degree tower down, the crumbs below the sphere](Planets/t4_sphere.jpg)
 Rigid pieces are right everywhere (Jolt); crumbs and the heap are right only where the scene's -Y
 is the local down.
 
@@ -792,6 +876,8 @@ come from different parts of the 2D field, as 7 edges and all 8 corners must.
 | a tile edge inside a face (the flat game's own seam) | 5,120 | 0 | median 0.4 mm, worst 1 mm |
 | the face edge +Y \| +X | 5,120 | 0 | median 0.0 mm, worst 1 mm |
 | the cut edge +X \| -Z at the corner | 2,460 | 0 | median 0.4 mm, worst 1 mm |
+
+![the face edge (left) and the corner, the cut edge running up to the right](Planets/t6_cube_edge_corner.jpg)
 
 - **The mapping is watertight and faithful**: the two faces of an edge agree on it exactly, every
   mapped tile is the flat game's ground to within a millimetre, and nothing opens at a face edge.

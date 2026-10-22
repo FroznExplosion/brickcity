@@ -326,7 +326,9 @@ func _jitter_at(km: float, spot: Vector3, hit: Dictionary) -> Array:
 
 	# A collapse next door.
 	# Far enough that nothing it drops reaches the pawn or the stack.
-	var bid := await _make_debris(false, spot, hit, 30.0)
+	# `--stack-only`: the physics alone, repeated cheaply headless.
+	var stack_only := "--stack-only" in OS.get_cmdline_user_args()
+	var bid := -1 if stack_only else await _make_debris(false, spot, hit, 30.0)
 	hit[bid] = true
 	var debris_ticks := _last_settle
 	var debris_n := 0
@@ -341,7 +343,7 @@ func _jitter_at(km: float, spot: Vector3, hit: Dictionary) -> Array:
 	pawn.place(spot + Vector3(0.0, 0.2, 0.0))
 	cam.global_rotation = Vector3(-0.12, -PI * 0.5, 0.0)
 	await _ticks(30)
-	var drawn := DisplayServer.get_name() != "headless"
+	var drawn := DisplayServer.get_name() != "headless" and not stack_only
 	var pics := {}
 	const TURN := 0.002   # rad a frame: 7 degrees over a measurement
 	if drawn:
