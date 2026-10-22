@@ -540,6 +540,386 @@ they are pieces; far, asleep and hidden. The storey record of Space.md §5 is wh
 Rigid buildings on tangent pads are the default; at 10-20 km a 100 m building sags 0.14-0.9 m.
 Bending (§4.2) stays possible and visual only -- the AI keeps the flat building -- for long things.
 
+### Feasibility tests (2026-10-21)
+
+Before any planet work: does anything break the route above? Prototype measurements only -- probes
+and passes under `tools/`, nothing that changes how the game plays. Each ends **passed**, **problem
+found** (with the size of the fix) or **plan-breaking**. Windowed runs one at a time, the heat log
+read after each; timings only with the editor closed.
+
+The scene passes run inside the city scene (it has the buildings, pieces, pawn, gun and AI wired
+up) through one hook, `-- --planet=<test>`, that hands the scene to `tools/planet_passes.gd`; the
+city scene gains those lines and nothing else.
+
+**Tier 1 -- could break the plan**
+
+| # | test | how | passes if |
+|---|---|---|---|
+| 1 | jitter at distance | a small brick scene -- one building, a stack of loose bricks, settled pieces, the pawn with arms and gun -- moved to 2, 8 and 15 km from the origin (along the diagonal, the worst case per axis) and left there. The camera strafes 1 mm a frame. Pictures of the viewmodel and of a brick 2 m away at each distance; per frame, the gun's transform relative to the camera (float32, as the GPU gets it) against its value at the origin; the stack's drift, its sleep state and Jolt's contacts over 20 s | at 2 km nothing a player could see; the doc's ~2 km shift distance stands |
+| 2 | origin shift cost | the terrain city, debris settled, soldiers out; ONE frame moves everything by ~2 km in whole 32-stud tiles, through a reusable shift function. Measured: the frame's time, the sleeping bodies before and after, pictures before/after with the camera moved by the same offset (pixel difference per shader), and a list of every place that holds an absolute position | under the user's guess of 5-30 ms; no wake storm; no visible change, or a known fix; every holder listed with its fix |
+| 3 | tilted building, point gravity | a tower on a pad tilted 7°, its frame square to the pad; an `Area3D` with point gravity toward a centre 10 km below the pad. Shoot it, blast it, collapse it, let it settle | the solve, hang check, pieces, sleep and collision work in the building's frame; every remaining "AABB / world grid" assumption listed with its size |
+| 4 | debris and gravity reads | grep: every read of fixed gravity or +Y-as-down for loose bodies and VFX outside `gravity.gd`; then pieces dropped on a curved ground (a small sphere with point gravity, the curvature exaggerated) | pieces come to rest on the curve and sleep; the list sized |
+
+**Tier 2 -- needed for the route, with fallbacks**
+
+| # | test | how | passes if |
+|---|---|---|---|
+| 5 | walking round a sphere | a plain-mesh sphere planet, `Gravity` pointed at its centre (a test hook, off by default), the pawn and the mech on local down after STA doc 05's radial controller | strafing with no drift, jumping, slopes, mantling and the camera behave; a full great-circle loop ends where it began |
+| 6 | cubed-sphere ground | our terrain tiles' meshes mapped onto a cube face edge and a corner by STA doc 23's mapping, with trimesh colliders | no visible seam, no collision gap, walking over the edge smooth |
+| 7 | two physics spaces | two `World3D`s (the second in a viewport that draws nothing), bodies in both, stepped together | no interaction; the second space's cost measured |
+| 8 | two nav regions | two flat nav regions 1-2° apart, each in its own frame, joined at a border; a path across | the joined path is continuous across the border and the AI's flat assumptions hold inside each |
+| 9 | moving sun | frame cost of terrain casting real-time shadows against re-baking nearby tiles every few degrees (§10a "The sun": baked saves 1.6 ms; a tile bakes in 2.9 ms on a worker) | one of them affordable |
+
+Results below, as each test is run.
+
+**Summary (2026-10-22): nothing breaks the route.**
+
+| # | test | result | fix size |
+|---|---|---|---|
+| 1 | jitter at distance | passed: invisible to 8 km, about a pixel on near objects at 15 km while turning; physics unchanged at 15 km | none (shift at ~2 km, as planned; 8 km would do) |
+| 2 | origin shift | problem found: ~1-12 ms + AI, no wake storm; everything keyed by world column into the static field breaks | medium: one field origin per system (terrain, sea, snow, heap, AINav), the AI's stored positions |
+| 3 | tilted building | problem found: solve, hangs, collision, pieces all right in the building's frame; crumbs and the heap fall along the scene's -Y | small-medium |
+| 4 | gravity reads | problem found: pieces rest on curved ground; ~25 places in ~15 files still use -Y (crumbs, heap, support checks, VFX) | small-medium |
+| 5 | walking round a sphere | passed (prototype walker); the pawn, mech and camera port is ~185 places | a week and a half |
+| 6 | cubed-sphere ground | problem found: tiles map watertight; a 2D field cannot close a cube (1.3-1.7 m cliffs at cut edges) | medium: the field on the sphere |
+| 7 | two physics spaces | passed | none |
+| 8 | two nav regions | passed | none (HPA portals) |
+| 9 | moving sun | passed: casting +0.06 ms GPU here; a full re-bake lands in 1.3 s with no frame cost | none |
+
+#### Test 1, jitter at distance: passed
+
+`--planet=jitter`: the plain city's corner, the pawn with arms and gun beside a column of five
+loose 2x4 bricks and a staggered wall, the whole scene moved by the shift of test 2 to 0, 2, 8 and
+15 km from the origin along the diagonal (every axis that far: the float step is 0.12, 0.49 and
+0.98 mm) and left there. Pictures are measured, not looked at: Lucas-Kanade over a fixed crop,
+frame to frame, while the pawn strafes 1 mm a tick or the camera turns 0.11° a frame; for the
+brick 3 m off, less the motion its exact projection predicts. Positive controls calibrate it: a
+random 0.3 mm shake of the gun reads 0.089 px, 0.1 mm reads 0.039.
+
+| | 0 km | 2 km | 8 km | 15 km |
+|---|---|---|---|---|
+| gun, strafing (px rms) | 0.001 | 0.000 | 0.001 | 0.001 |
+| gun, turning (px rms / max) | 0.019 / 0.03 | 0.045 / 0.11 | 0.108 / 0.19 | 0.136 / 0.24 |
+| gun, turning, as a shake of the gun | ~0.06 mm | ~0.15 mm | ~0.35 mm | ~0.45 mm |
+| brick 3 m off, strafing | 0.055 | 0.052 | 0.065 | 0.046 |
+| brick 3 m off, turning (px rms / max) | 0.010 / 0.02 | 0.012 / 0.03 | 0.017 / 0.04 | **0.261 / 0.47** |
+| stack: asleep at tick, woke in 20 s, crept | 105, 0, 0.00 mm | 173, 0, 0.00 | 30, 0, 0.00 | 70, 0, 0.00 |
+| stack: bottom brick's contact depth | 34 mm | 28 | 11 | 10 |
+
+- **Strafing never jitters**, at any distance. Within one binade the float grid is uniform, so
+  the camera and everything it carries round to the same offset wherever it is: the gun is a fixed
+  fraction of a millimetre off, not shaking. CPU-side, the gun's transform relative to the camera
+  and the brick's projected position came out exact at every distance for the same reason.
+- **Turning is where it shows**, because rotation mixes the big translation into every component.
+  The gun stays under a fifth of a pixel even at 15 km. The near brick is clean to 8 km and jumps
+  at 15 km (the next binade, 8,192 m per axis) to a quarter of a pixel measured -- by the gun's
+  controls about a pixel of real shimmer on near geometry.
+- **Physics: no difference to 15 km.** The stack sleeps and never wakes, creeps 0.00 mm, and its
+  contacts sink no deeper far out than at the origin; three headless repeats gave identical
+  numbers at every distance. (One windowed run toppled the column at 15 km; the headless repeats and
+  the other windowed run did not, and a ten-high column toppled at the origin as readily: loose
+  boxes 0.7 m deep are simply unstable.)
+- The pieces of a collapse next door settled at every distance (2 of 2).
+
+So the 2 km shift distance is conservative: nothing a player could see happens before ~8 km.
+
+![the gun at 0 and 15 km](Planets/t1_gun_0_15km.jpg)
+![the brick 3 m off, 0 and 15 km](Planets/t1_near_0_15km.jpg)
+
+#### Test 9, the moving sun: passed
+
+`--planet=sun` on the terrain city, windowed, the editor closed and no other Godot running, a
+street-level view; the renderer's own clock (`viewport_get_measured_render_time_*`) and each
+frame's wall time, 300 frames a case:
+
+| | render CPU ms (mean / worst) | render GPU ms (mean / worst) | frame wall time (mean / worst) |
+|---|---|---|---|
+| A baked, the sun still | 0.82 / 1.33 | 11.11 / 12.00 | 16.7 / 22.1 |
+| B the terrain in the shadow map (radius 3: 49 tiles), the sun turning | 0.81 / 1.24 | 11.17 / 13.40 | 16.7 / 24.0 |
+| C one re-bake of all 277 detail tiles, the sun 2° on (three runs) | 1.11-1.28 / 1.85-4.51 | 11.18-11.19 / 12.5-13.1 | 16.6-16.7 / 22.4-23.0 |
+
+- A re-bake of every detail tile **lands in 1.23-1.37 s** (74-82 frames) on the workers, with no
+  change in frame time and +0.3-0.45 ms of render CPU while the tiles upload. At 2° a step that
+  is a day of 4.5 minutes before re-bakes overlap; a real day is far slower.
+- Casting instead costs +0.06 ms of GPU on average here (Terrain.md 19.9 measured 1.6 ms on the
+  heightfield scene, whose view sees far more ground). Either is affordable; baking keeps the
+  worst frame lower. The coarse tier was not re-baked (its shadow is the far ground's, and it is
+  rebuilt by ring -- §19.11).
+- The process-time monitor read 22-23 ms throughout and does not separate the cases.
+
+#### Test 2, origin shift: problem found (fixes small to medium), not plan-breaking
+
+`tools/planet_origin.gd` -- `shift(city, offset)`, one frame, whole 32-stud tiles (11.2 m). It moves
+every Node3D with no Node3D above it (children follow) and resets their physics interpolation;
+the static bodies that live only on the physics server (shells, rooms, bands, terrain tiles, the
+sea); every BrickWorld chunk transform; the registry's building transforms; the AI (new C++
+`AIWorld.shift_origin`: proxies, cover, smoke, danger, and the ground asked at the shifted stud
+column); drops `AINav`'s caches; and moves `WorldFrame.origin` the other way.
+
+Checked by asking the scene the same questions before and after, moved by the offset (1.41 km X,
+1.41 km Z): 600 random physics rays, 200 AI lines, a path across the city, the sleep census.
+
+| | plain city (22 buildings) | terrain city (822 registry entries, 277 tiles, sea) |
+|---|---|---|
+| rays the same | 600 / 600 (worst 0.84 mm) | 599 / 600 (one tile collider at the streaming edge), worst 0.10 mm |
+| AI lines the same | 197 / 200 (3 off by 0.01 of a proxy brick: rounding) | 199 / 200 |
+| path across the city | the same 97 points, 216.6 m | -- |
+| sleep | 22 Jolt-asleep bricks stay asleep, 2 settled pieces stay frozen, 0 woken | the same |
+| pictures (plain city, 3 views) | 0.00 / 0.75 / 1.08 % of pixels differ (two shots before it: 0.01 / 0.11 / 0.00 %) | the sea vanishes (below) |
+| first frame after it | identical to before: no interpolation smear | |
+
+**No wake storm.** Moving a sleeping body's transform does not wake it in Jolt, and the city's own
+"sleep" (a settled piece is frozen, a quiet one dormant as a record) is untouched.
+
+**Cost.** The user's guess of 5-30 ms holds at the low end. The prototype found the server-only
+bodies with one 30 km shape query (9-250 ms, not counted: a real shift keeps a list).
+
+| step | plain | terrain |
+|---|---|---|
+| nodes + interpolation reset | 0.7 ms | 4.0 ms |
+| server-only bodies | 0.07 (23) | 0.9 (532) |
+| chunks, registry | 0.03 | 0.45 |
+| AIWorld shift + sync | 0.03 | 7.0 |
+| AINav caches dropped | 13.2 (warm with one 216 m path) | 0.03 (empty) |
+| frame with the shift | 26.8 ms against 13-22 round it | ~23 ms, +~12 |
+
+The one thing that scales badly is dropping `AINav`'s caches: 13 ms for one path's worth, several
+times that after a fight, then cold searches (127 ms against 21 warm here). **Fix (small C++):**
+key `AINav` by field column with one integer origin at its boundary, as `AIWorld`'s ground now is
+-- the shift is then free for it and the caches stay warm.
+
+**What breaks: everything keyed by world stud column into the static field.** In the terrain city
+the sea and the underwater tint vanish after the shift, because the water's wet cells, shore field
+and mask/seabed textures are looked up at the new world column, where the field has dry land.
+Ground, buildings, trees, bricks and their studs are unchanged (the shift is whole tiles, so the
+world-space stud lattice of the terrain and brick shaders lands on itself).
+
+![terrain city: the sea before the shift, gone after](Planets/t2_terrain_before_after.jpg)
+
+(A rerun on 2026-10-22 gave the same: 599 / 600 rays, 198 / 200 lines, 32-42% of pixels in the
+terrain views changed, all of it water; the shift itself 10.0 ms.)
+
+What holds an absolute position and must follow a shift:
+
+| where | what | fix |
+|---|---|---|
+| BrickWorld (C++) | chunk transforms | loop over chunks (done in the shift) |
+| AIWorld (C++) | proxies, cover, smoke, danger, ground cache | `shift_origin` (built) |
+| AINav (C++) | columns and clusters keyed by world stud; pending path and cover requests (goal, path, breaches); water level is absolute Y; columns count plates from y = 0 | field-column origin (small); a vertical shift needs the nav regions' own frames (test 8) |
+| BrickTerrain (C++), TerrainStreamer, TerrainCoarse | the field is sampled at world stud columns; tiles keyed by world tile | one integer tile origin in the field, applied at every world-to-column conversion (medium-small, terrain area); the streamer was frozen for the test |
+| sea and water (BrickWave, water_sea / sheet / surface) | wet cells, shore field, `snapped_origin`, `seabed_origin`, `pool_mask_origin`, `hole_centre` | the same field origin (water area) |
+| SnowCover, BrickHeap | squares and heap cells keyed by world XZ; heap `_tops` height per world stud | the same |
+| IslandManager | crumbs' positions and floor heights, dormant records (`ChunkRecord.xform`, box) | shift them (small) |
+| MultiMeshes with world instance transforms (crumbs, heap, joined pieces) | nodes moved by the shift, but later writes are world positions | keep those nodes at identity and shift the instances, or write positions relative to the node |
+| swarm (C++) | ~17 world positions: rows, goals, lattice and field origins | shift (small) |
+| ImpostorSet (C++) | instance transforms | shift (small) |
+| GDScript AI and gameplay | ~180 typed position/vector members in 76 files, about half positions: goals, paths, rally / breach / cover points (soldier 11, mech brain 12, vehicles ~10, squads, commander), danger and airspace boxes, storm paths, ledge and hook points | STA's `origin_shift` group: each holder adds the offset (mechanical, 1-2 days), or shift only between encounters and re-plan |
+| GPU particles in world space | the emitter moves, live particles stay | accept at a quiet moment, or restart |
+
+#### Test 3, tilted building under point gravity: problem found (small to medium), not plan-breaking
+
+`--planet=tilt [--tilt=7]` (`tools/planet_tilt.gd`): a 70 m pad in a tangent frame, an `Area3D`
+with point gravity toward a centre 10 km below the pad (replacing the project's), a 16 x 16 tower
+of 30 courses registered as any is and then **re-framed onto the pad** -- `on_grid` would have
+snapped the tilt away, since `grid_frame_at` is still the world's frame. Shot (six small blasts up
+a face), then its ground storey blasted out, then left to settle. Run at 0° (the baseline), 7°
+(a building 1.2 km round a 10 km planet) and 60°: with a translation-only origin the scene's axes
+never turn, so most of a planet is further round than 7° -- 60° is the honest case.
+
+| | 0° | 7° | 60° |
+|---|---|---|---|
+| stands when made bricks (752) | yes | yes | yes |
+| chunk gravity | grid -Y | grid -Y | grid -Y |
+| shot: bricks left | 686 | 686 | 686 |
+| collapse settles | 135 ticks | 139 | 190 |
+| the falling section | 1 piece, on the pad, frozen | the same | the same |
+| crumbs laid on the heap | 207, flat on the pad (0.0°) | 204, **turned 7.0°** from the pad | 222, **median 32 m below the pad**, 36° off: they fell along world -Y |
+| AI line square through it | 2 bricks | 2 | 2 |
+| AI: stand on its ground floor | -- (baseline) | as the baseline | snap moves it 60 m: columns run along world Y |
+
+![7 degrees: standing, and after](Planets/t3_tilt07.jpg)
+![60 degrees: standing, falling, and the crumbs flat on the scene's ground below](Planets/t3_tilt60.jpg)
+
+- **Stress solve, hang check, collision: work in building space at any tilt.** The solve and the
+  hang rule run in the chunk's own grid, and a building on a tangent frame has its grid -Y along
+  local down, so the default chunk gravity is right. (`set_chunk_gravity` snaps the world's down to
+  the nearest grid axis: past 45° that would be a building on its side -- but nothing should ask it
+  for a standing building, whose down IS its grid -Y.) Shells and bands collide where they are
+  drawn.
+- **Pieces: work.** Jolt applies the area's point gravity to every loose body; the falling
+  section lands on the pad and settles, at 60° as at 0°.
+- **Crumbs and the heap: broken past a few degrees.** They are integrated along world -Y with a
+  floor height found by a ray down -Y, and laid flat in the world (`BrickHeap`, IslandManager
+  ~1900-2160). Fix: integrate along `Gravity.down_at`, floor along the local down, lay square to
+  the local up, heap cells in the tangent frame -- small to medium.
+- **IslandManager's support checks** (rays down -Y `SUPPORT_REACH`, `SUPPORT_NUDGE`,
+  `MAX_RISE_SPEED` on `.y`, impact on `linear_velocity.y`, `_wake_resting_on` comparing box Y) did
+  not misbehave here -- the section landed flat on the pad -- but each is a -Y assumption that a
+  piece resting on a slope will meet. Same fix, same list as test 4.
+- **The AI's view:** lines go into the building through its own transform and count the same
+  bricks at any tilt. Navigation does not: `AINav` columns are along world Y, so on a tilted floor
+  it finds no standing place -- the room graph (§9.3) and nav regions in their own frames (test 8)
+  are what fix it.
+- **Code still assuming the AABB or the world grid:** `on_grid` / `grid_frame_at` (must return the
+  tangent frame), the placer's snap, `_index_building` (an XZ hash of the 8 corners: fine as a broad
+  phase), and the `box_of` callers -- the placer (2), the city (4: pad and range checks, a fall
+  line), the disaster context (3), the earthquake (3), material effects (1). All are broad phases or
+  footprints that work on a tilted box's AABB, but a fall line or a "which building is this point
+  in" through them must go through `BuildingRegistry.contains` instead.
+
+#### Test 4, fixed gravity and +Y-as-down for loose bodies and VFX: problem found (small to medium)
+
+**Pieces come to rest on curved ground.** `--planet=tilt --ground=sphere`: a 40 m sphere (the
+curvature 250 times a 10 km planet's) with point gravity to its centre and a 12 x 12 tower in the
+tangent frame at 0°, 45° and 90° round it, each brought down and its fallen section broken up
+again where it lay.
+
+| tower at | pieces | settled | centres over the ground | laid bricks near it | their faces off the ground's |
+|---|---|---|---|---|---|
+| 0° | 2 | 2 | -0.65 .. 2.14 m | 192 | median 5.4° (the small sphere's curve) |
+| 45° | 2 | 2 | 2.08 .. 2.16 m | 60 | median **42.8°** |
+| 90° | 3 | 3 | -0.26 .. 2.12 m | **1** | 24° |
+
+Of 820 laid bricks, 253 are on the sphere and **567 fell to the world's flat ground 50 m below**
+(a windowed rerun: 251 and 574).
+
+![the sphere: standing, the 45 degree tower down, the crumbs below the sphere](Planets/t4_sphere.jpg)
+Rigid pieces are right everywhere (Jolt); crumbs and the heap are right only where the scene's -Y
+is the local down.
+
+What reads fixed gravity or uses -Y as down outside `scripts/gravity.gd` (loose bodies, VFX,
+projectiles), ~25 places in ~15 files:
+
+| file | what |
+|---|---|
+| island_manager.gd | crumbs: `v.y -= g * dt`, floor by a ray down -Y (`_crumb_floor`), laid at `floor_y`; support rays down -Y (`_under`), `SUPPORT_NUDGE` along -Y, `MAX_RISE_SPEED` and impact tests on `.y`, `_wake_resting_on` comparing box Y; `DEBRIS_GRAVITY` is a `gravity_scale` and follows the area (fine) |
+| brick_heap.gd | lays flat in the world (`cols[up] = Vector3.UP`), piles by a height per world stud |
+| ai/danger.gd, city_scene.gd (path ahead) | a falling piece's predicted path along -Y |
+| autoload/vfx_pool.gd | shards fall along `Gravity.down_at` (right) but land on a `floor_y` plane |
+| disasters: hailstorm, rain_splash | particle gravity `Gravity.down_at(Vector3.ZERO)`: the origin's down, not the emitter's |
+| disasters: sandstorm, tornado, meteor_shower, acid_rain, lightning_storm, brick_fire | directions and ground rays along ±Y |
+| ai/air_strike.gd | fall along -Y with its own `FALL_G` |
+| loot/world_gun_pickup.gd, pawn/player_arsenal.gd | floor rays down -Y |
+| tank, truck, debug camera, pawn, dart, grenade, flyer, titan | already `Gravity.down_at` (§9.1); their `.y` logic is the controllers' work (test 5) |
+
+Fix: each takes `Gravity.down_at(p)` at its own position, and `Gravity` answers from the planet
+(a point toward the body's centre). Mechanical, ~1-2 days; the crumbs and the heap are the part
+that needs thought (a heap in a tangent cell).
+
+#### Test 7, two physics spaces: passed
+
+`tools/planet_spaces_probe.gd` (headless, `--fixed-fps 30`, frames flat out): a second `World3D`
+in a `SubViewport` that never draws (`UPDATE_DISABLED`), and a pile of 400 boxes dropped onto a
+floor in each **at the same coordinates**.
+
+- The two piles come to rest identical to 0.000000 m and four boxes high (shared, they would be
+  eight); a ray in the first space meets only its own bodies. The spaces are separate Jolt
+  `PhysicsSystem`s, as Godot's module promises.
+- Cost, per tick, while the piles fall (another chat's run was on the machine, so roughly):
+
+| bodies | one space | two spaces |
+|---|---|---|
+| 400 (+ an empty second space) | 0.24 ms | 0.24 ms |
+| 800 | 0.44-0.77 ms (two piles side by side) | 0.42-0.56 ms (400 in each) |
+
+An empty second space costs nothing measurable, and a body costs the same in either: the second
+region's cost is its own bodies. Asleep, both are 0.01 ms.
+
+#### Test 5, walking round a sphere: passed (the port is the work: ~185 places)
+
+Our pawn cannot walk a sphere as it is: it, its moves, its view, the titan motor, the mech and
+the debug camera hold ~185 places of `.y` logic and `Vector3.UP/DOWN` (pawn 28, moves 73, view
+18, titan motor 18, mech 22, debug camera 26). What the test answers is whether the radial
+approach those would be ported to works with Godot's `CharacterBody3D` and Jolt at our sizes.
+`tools/planet_radial_body.gd` is STA doc 05's controller with the pawn's numbers -- up from where
+it stands, the whole basis rebuilt from it every tick, `up_direction` set to it, gravity and
+jumps along it, the camera pitching only -- and `tools/planet_walk_probe.gd` walks it (headless,
+28 checks, all pass):
+
+| | pawn | mech-sized (7 m, 6 m/s) |
+|---|---|---|
+| 150 m planet (trimesh), a full great circle forward over both poles | off its plane 9 mm at most; ends 0.03 m from the start; feet on the ground every tick | 3 mm; 0.13 m |
+| the same, strafing | 0.000 m off; ends 0.05 m away | 0.000 m; 0.14 m |
+| camera roll over a loop | 0.000° | 0.000° |
+| standing jump at the equator, 45°, the pole | 0.47 s, 0.51 m high, lands 0.000 m from where it left, at all three | the same |
+| a 30° ramp / a 60° ramp | walked up (2.84 m) / refused | -- |
+| 10 km planet, origin at the walker: 2 km forward, 2 km strafing | 0.000 m off its great circle | 0.000 m |
+
+- **Strafing does not drift** when the whole basis is rebuilt each tick: STA's fix holds.
+- **A walker must press into the floor** (a small velocity along -up when standing): at exactly
+  zero, `move_and_slide` touches nothing on a convex surface and `is_on_floor` flickered on 10-50%
+  of ticks while the feet never left the ground by more than 6 mm.
+- One run of four on the 10 km planet (the pawn's first, forward) lost floor contact for its first
+  29 s on Jolt's analytic 10 km `SphereShape3D`; the other three never did. Planet ground will be
+  tile trimeshes (test 6), where nothing like it showed; worth a look before trusting a huge
+  analytic shape.
+- **Mantling, slides, wall runs, the grapple** are the pawn's moves (`pawn_moves.gd`, 73 of the
+  185): not in the prototype. They are the same port -- "up" from `Gravity.up_at`, heights along it
+  -- and the biggest single file of it.
+- Size: the port is mechanical but wide -- a week for the pawn and its moves, two to three days for
+  the titan, a day each for the debug camera and vehicles.
+
+#### Test 6, cubed-sphere ground: problem found (the field must live on the sphere), not plan-breaking
+
+`tools/planet_cube_probe.gd`: R = 10 km, STA doc 23's warp (blend 0.48), N = 1402 tiles a face
+edge, real tiles from `BrickTerrain.build_tile` with every vertex mapped onto the sphere and the
+mapped triangles as their collider. Each tile is also built unmapped in a second physics space,
+and rays toward the centre on a 5 cm grid across each seam (13 mm off the stud lattice) are
+compared, ray by ray, with a ray down through the flat twin at the same field point.
+
+The faces are an unfolded net of the flat field, so across +Y | +X the field runs on unbroken (a
+cube's 12 edges can be joined like this 5 at a time); at the corner, +X | -Z is a CUT: the two sides
+come from different parts of the 2D field, as 7 edges and all 8 corners must.
+
+| | rays | holes the flat game has not | height against the flat game's |
+|---|---|---|---|
+| a tile edge inside a face (the flat game's own seam) | 5,120 | 0 | median 0.4 mm, worst 1 mm |
+| the face edge +Y \| +X | 5,120 | 0 | median 0.0 mm, worst 1 mm |
+| the cut edge +X \| -Z at the corner | 2,460 | 0 | median 0.4 mm, worst 1 mm |
+
+![the face edge (left) and the corner, the cut edge running up to the right](Planets/t6_cube_edge_corner.jpg)
+
+- **The mapping is watertight and faithful**: the two faces of an edge agree on it exactly, every
+  mapped tile is the flat game's ground to within a millimetre, and nothing opens at a face edge.
+- **Walking over the face edge is smooth**: the radial walker crossed it on its feet every tick, the
+  biggest change in its speed along up 0.19 m/s (crossing an ordinary tile edge with a brick step
+  in it: 1.39 m/s).
+- **The cut edge has a cliff**: the two sides' field heights at the same point of the sphere differ
+  by **1.26 m median, 1.68 m worst** (56 of 60 points). A 2D field cannot close a cube. **Fix:** the
+  planet's field is a function of the point on the sphere (3D noise of the direction, pads and
+  sculpts stored per face in their face's coordinates and blended across edges), and the mesher
+  samples it through the map. Medium -- the terrain generator's planet mode, terrain area.
+- **The warp changes the size of a tile**: 32 studs are 12.80 m mid-face, 9.09 m at an edge and
+  8.57 m at a corner (1.49:1 linear, as STA measured), and at a corner the three tiles meet at 120°.
+  Ground bricks then cannot keep the buildings' stud pitch: on a planet the ground is the smooth
+  low-poly tier with **bricks only in patches on their own tangent frames** (§3.1, §9.4), not the
+  stepped brick ground everywhere.
+- The flat game's colliders are boxes per piece (`boxes`); the test used the mapped triangles. On a
+  planet each box would need its own tangent rotation -- trimesh is the simpler collider there.
+
+#### Test 8, two nav regions in different frames: passed
+
+`tools/planet_nav_probe.gd` (headless): two regions of 8 x 8 tiles (256 studs, 89.6 m), each an
+`AIWorld` + `AINav` of its own seeing its region in its own flat frame (the plane y = 0, a wall as
+a proxy); region B turned 1.5° (and 0.5°) about the shared border, as the next tangent frame round a
+sphere is. A wall in each forces a detour; the path is stitched at the best of 44 portals on the
+border (A's length to it plus B's from it).
+
+| | 1.5° (R 3.4 km) | 0.5° (R 10.3 km) |
+|---|---|---|
+| the path | 183.4 m, round both walls, crossing at z = 2 | the same |
+| gap between the halves at the border, in the world | 0.000 m | 0.000 m |
+| either half past the border | 0.00 m | 0.00 m |
+| a region's plane against the sphere, at its corners | 0.59 m off, ground tilted 1.06° | 0.20 m, 0.35° |
+
+- Each region's AI is the AI we have, unchanged: its frame turns everything into its flat world.
+- **Borders on a stud line** (regions in whole tiles): with a 90 m region the halves met 0.3 m apart,
+  because `AINav` answers in stud-column centres.
+- The 44-portal search took 1.8 s -- the prototype's brute force. The real one is the HPA* graph
+  (`ai_nav_hpa.cpp`): portals precomputed per border, as its cluster sides already are.
+- At 10 km the flat regions are within 0.2 m and 0.35° of the sphere: flat to anything the AI
+  measures. Under 5 km a region of 8 x 8 tiles is too big (0.6 m at 3.4 km) -- 4 x 4 there.
+
 ## 10. If it is taken up: order of work
 
 1. **Prototype, outside the game:** one planet of our low-poly tiles on a cubed sphere, baked;

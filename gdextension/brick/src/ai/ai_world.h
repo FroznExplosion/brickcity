@@ -142,6 +142,19 @@ public:
     /// the field is everywhere, its colliders only where the detail tier is.
     bool ground_blocks(const Vector3 &from, const Vector3 &to);
 
+    // --- a moving origin ----------------------------------------------------
+
+    /// The scene's origin moved by `offset` (a translation-only floating origin,
+    /// Docs/Planets.md 10b): every proxy, cover box, smoke sphere and danger box
+    /// moves with it. Chunks follow by themselves -- sync() reads them from
+    /// BrickWorld. The terrain field stays where it is: the ground is asked at
+    /// the stud column the offset puts it at, so X and Z must be whole studs. Y
+    /// moves boxes only: columns count plates up from y = 0 (column_solid), so a
+    /// vertical shift is a datum this flat AI does not have.
+    void shift_origin(const Vector3 &offset);
+    /// Studs between the scene's columns and the field's (X, Z).
+    Vector2i get_ground_shift() const { return Vector2i(ground_dx, ground_dz); }
+
     // --- measuring ----------------------------------------------------------
 
     Dictionary get_stats() const;
@@ -201,6 +214,8 @@ private:
     // in play changes it (pads are cut before the city is built).
     bool terrain_ground = false;
     std::unordered_map<int64_t, int32_t> ground_cache;
+    int ground_dx = 0;   // shift_origin: scene column - field column, studs
+    int ground_dz = 0;
     int _ground_plate(int gx, int gz);
     /// Does the ground rise above the segment anywhere? `t` is where, 0..1.
     bool _terrain_hit(const Vector3 &from, const Vector3 &to, float &t);

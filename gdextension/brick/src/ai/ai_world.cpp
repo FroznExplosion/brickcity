@@ -55,6 +55,8 @@ void AIWorld::_bind_methods() {
     ClassDB::bind_method(D_METHOD("clear_proxies"), &AIWorld::clear_proxies);
     ClassDB::bind_method(D_METHOD("get_proxy_count"), &AIWorld::get_proxy_count);
     ClassDB::bind_method(D_METHOD("set_smoke", "id", "centre", "radius"), &AIWorld::set_smoke);
+    ClassDB::bind_method(D_METHOD("shift_origin", "offset"), &AIWorld::shift_origin);
+    ClassDB::bind_method(D_METHOD("get_ground_shift"), &AIWorld::get_ground_shift);
     ClassDB::bind_method(D_METHOD("remove_smoke", "id"), &AIWorld::remove_smoke);
     ClassDB::bind_method(D_METHOD("clear_smoke"), &AIWorld::clear_smoke);
     ClassDB::bind_method(D_METHOD("smoke_blocks", "from", "to"), &AIWorld::smoke_blocks);
@@ -478,6 +480,35 @@ bool AIWorld::smoke_blocks(const Vector3 &from, const Vector3 &to) const {
     return false;
 }
 
+void AIWorld::shift_origin(const Vector3 &offset) {
+    for (auto &kv : proxies) {
+        Proxy &p = kv.second;
+        p.xform.origin += offset;
+        p.inv = p.xform.affine_inverse();
+        p.box.position += offset;
+    }
+    proxies_dirty = true;
+    for (auto &kv : smoke) {
+        kv.second.centre += offset;
+    }
+    for (auto &kv : danger) {
+        kv.second.position += offset;
+    }
+    const float sx = offset.x / brick::STUD_M;
+    const float sz = offset.z / brick::STUD_M;
+    const int dx = (int)std::lround(sx);
+    const int dz = (int)std::lround(sz);
+    if (std::abs(sx - (float)dx) > 1e-3f || std::abs(sz - (float)dz) > 1e-3f) {
+        ERR_PRINT("AIWorld.shift_origin: X and Z are not whole studs; the ground will be off");
+    }
+    ground_dx += dx;
+    ground_dz += dz;
+    ground_cache.clear();
+    // The chunks' entries are rebuilt from BrickWorld by the next sync().
+    chunk_entries.clear();
+    hash.clear();
+}
+
 void AIWorld::set_danger(int id, const AABB &box) {
     danger[id] = box;
 }
@@ -738,7 +769,7 @@ int AIWorld::_ground_plate(int gx, int gz) {
     // The first plate of AIR: `surface_plate` is the top solid one. Never below
     // plate 0 -- navigation counts plates up from there, and a seabed below
     // the city's datum is somewhere nobody walks anyway.
-    const int g = std::max(0, BrickTerrain::surface_plate(gx, gz) + 1);
+    const int g = std::max(0, BrickTerrain::surface_plate(gx - ground_dx, gz - ground_dz) + 1);
     ground_cache.emplace(k, g);
     return g;
 }
