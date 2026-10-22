@@ -741,6 +741,99 @@ floor in each **at the same coordinates**.
 An empty second space costs nothing measurable, and a body costs the same in either: the second
 region's cost is its own bodies. Asleep, both are 0.01 ms.
 
+#### Test 5, walking round a sphere: passed (the port is the work: ~185 places)
+
+Our pawn cannot walk a sphere as it is: it, its moves, its view, the titan motor, the mech and
+the debug camera hold ~185 places of `.y` logic and `Vector3.UP/DOWN` (pawn 28, moves 73, view
+18, titan motor 18, mech 22, debug camera 26). What the test answers is whether the radial
+approach those would be ported to works with Godot's `CharacterBody3D` and Jolt at our sizes.
+`tools/planet_radial_body.gd` is STA doc 05's controller with the pawn's numbers -- up from where
+it stands, the whole basis rebuilt from it every tick, `up_direction` set to it, gravity and
+jumps along it, the camera pitching only -- and `tools/planet_walk_probe.gd` walks it (headless,
+28 checks, all pass):
+
+| | pawn | mech-sized (7 m, 6 m/s) |
+|---|---|---|
+| 150 m planet (trimesh), a full great circle forward over both poles | off its plane 9 mm at most; ends 0.03 m from the start; feet on the ground every tick | 3 mm; 0.13 m |
+| the same, strafing | 0.000 m off; ends 0.05 m away | 0.000 m; 0.14 m |
+| camera roll over a loop | 0.000° | 0.000° |
+| standing jump at the equator, 45°, the pole | 0.47 s, 0.51 m high, lands 0.000 m from where it left, at all three | the same |
+| a 30° ramp / a 60° ramp | walked up (2.84 m) / refused | -- |
+| 10 km planet, origin at the walker: 2 km forward, 2 km strafing | 0.000 m off its great circle | 0.000 m |
+
+- **Strafing does not drift** when the whole basis is rebuilt each tick: STA's fix holds.
+- **A walker must press into the floor** (a small velocity along -up when standing): at exactly
+  zero, `move_and_slide` touches nothing on a convex surface and `is_on_floor` flickered on 10-50%
+  of ticks while the feet never left the ground by more than 6 mm.
+- One run of four on the 10 km planet (the pawn's first, forward) lost floor contact for its first
+  29 s on Jolt's analytic 10 km `SphereShape3D`; the other three never did. Planet ground will be
+  tile trimeshes (test 6), where nothing like it showed; worth a look before trusting a huge
+  analytic shape.
+- **Mantling, slides, wall runs, the grapple** are the pawn's moves (`pawn_moves.gd`, 73 of the
+  185): not in the prototype. They are the same port -- "up" from `Gravity.up_at`, heights along it
+  -- and the biggest single file of it.
+- Size: the port is mechanical but wide -- a week for the pawn and its moves, two to three days for
+  the titan, a day each for the debug camera and vehicles.
+
+#### Test 6, cubed-sphere ground: problem found (the field must live on the sphere), not plan-breaking
+
+`tools/planet_cube_probe.gd`: R = 10 km, STA doc 23's warp (blend 0.48), N = 1402 tiles a face
+edge, real tiles from `BrickTerrain.build_tile` with every vertex mapped onto the sphere and the
+mapped triangles as their collider. Each tile is also built unmapped in a second physics space,
+and rays toward the centre on a 5 cm grid across each seam (13 mm off the stud lattice) are
+compared, ray by ray, with a ray down through the flat twin at the same field point.
+
+The faces are an unfolded net of the flat field, so across +Y | +X the field runs on unbroken (a
+cube's 12 edges can be joined like this 5 at a time); at the corner, +X | -Z is a CUT: the two sides
+come from different parts of the 2D field, as 7 edges and all 8 corners must.
+
+| | rays | holes the flat game has not | height against the flat game's |
+|---|---|---|---|
+| a tile edge inside a face (the flat game's own seam) | 5,120 | 0 | median 0.4 mm, worst 1 mm |
+| the face edge +Y \| +X | 5,120 | 0 | median 0.0 mm, worst 1 mm |
+| the cut edge +X \| -Z at the corner | 2,460 | 0 | median 0.4 mm, worst 1 mm |
+
+- **The mapping is watertight and faithful**: the two faces of an edge agree on it exactly, every
+  mapped tile is the flat game's ground to within a millimetre, and nothing opens at a face edge.
+- **Walking over the face edge is smooth**: the radial walker crossed it on its feet every tick, the
+  biggest change in its speed along up 0.19 m/s (crossing an ordinary tile edge with a brick step
+  in it: 1.39 m/s).
+- **The cut edge has a cliff**: the two sides' field heights at the same point of the sphere differ
+  by **1.26 m median, 1.68 m worst** (56 of 60 points). A 2D field cannot close a cube. **Fix:** the
+  planet's field is a function of the point on the sphere (3D noise of the direction, pads and
+  sculpts stored per face in their face's coordinates and blended across edges), and the mesher
+  samples it through the map. Medium -- the terrain generator's planet mode, terrain area.
+- **The warp changes the size of a tile**: 32 studs are 12.80 m mid-face, 9.09 m at an edge and
+  8.57 m at a corner (1.49:1 linear, as STA measured), and at a corner the three tiles meet at 120°.
+  Ground bricks then cannot keep the buildings' stud pitch: on a planet the ground is the smooth
+  low-poly tier with **bricks only in patches on their own tangent frames** (§3.1, §9.4), not the
+  stepped brick ground everywhere.
+- The flat game's colliders are boxes per piece (`boxes`); the test used the mapped triangles. On a
+  planet each box would need its own tangent rotation -- trimesh is the simpler collider there.
+
+#### Test 8, two nav regions in different frames: passed
+
+`tools/planet_nav_probe.gd` (headless): two regions of 8 x 8 tiles (256 studs, 89.6 m), each an
+`AIWorld` + `AINav` of its own seeing its region in its own flat frame (the plane y = 0, a wall as
+a proxy); region B turned 1.5° (and 0.5°) about the shared border, as the next tangent frame round a
+sphere is. A wall in each forces a detour; the path is stitched at the best of 44 portals on the
+border (A's length to it plus B's from it).
+
+| | 1.5° (R 3.4 km) | 0.5° (R 10.3 km) |
+|---|---|---|
+| the path | 183.4 m, round both walls, crossing at z = 2 | the same |
+| gap between the halves at the border, in the world | 0.000 m | 0.000 m |
+| either half past the border | 0.00 m | 0.00 m |
+| a region's plane against the sphere, at its corners | 0.59 m off, ground tilted 1.06° | 0.20 m, 0.35° |
+
+- Each region's AI is the AI we have, unchanged: its frame turns everything into its flat world.
+- **Borders on a stud line** (regions in whole tiles): with a 90 m region the halves met 0.3 m apart,
+  because `AINav` answers in stud-column centres.
+- The 44-portal search took 1.8 s -- the prototype's brute force. The real one is the HPA* graph
+  (`ai_nav_hpa.cpp`): portals precomputed per border, as its cluster sides already are.
+- At 10 km the flat regions are within 0.2 m and 0.35° of the sphere: flat to anything the AI
+  measures. Under 5 km a region of 8 x 8 tiles is too big (0.6 m at 3.4 km) -- 4 x 4 there.
+
 ## 10. If it is taken up: order of work
 
 1. **Prototype, outside the game:** one planet of our low-poly tiles on a cubed sphere, baked;
