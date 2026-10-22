@@ -22,6 +22,7 @@ func _init() -> void:
 	_check_anchors_and_loads()
 	_check_give_way()
 	_check_tip()
+	_check_unlay()
 	_check_window()
 	print("\n[storey_unit] %d ok, %d FAIL" % [_pass, _fail])
 	quit(1 if _fail > 0 else 0)
@@ -256,3 +257,32 @@ func _check_tip() -> void:
 	var s := reg.storey_gave_way(id)
 	_ok(s == 15 and reg.gave_way_tipping, "the west three fifths gone: storey 15 up tips (%d, tipping %s)"
 			% [s, reg.gave_way_tipping])
+
+
+func _check_unlay() -> void:
+	print("
+=== a storey given back keeps its damage, and comes back with it ===")
+	var part := _make(true)
+	var w: BrickWorld = part[0]
+	var reg: BuildingRegistry = part[1]
+	var id: int = part[2]
+	var c := reg.materialise(id, PackedInt32Array([10, 11]))
+	var lines := reg.storey_lines(reg.get_building(id))
+	var cell := BrickWorld.get_cell_size()
+	reg.damage(id, Vector3(20.0 * cell.x, (lines[11] + 10) * cell.y, 0.3), 1.0)
+	var dead := w.get_dead_blocks(c)
+	var alive := w.get_alive_block_count(c)
+	var occ := w.get_occupancy_bytes(c)
+	var gone := reg.unlay_storeys(id, PackedInt32Array([11]))
+	var b := reg.get_building(id)
+	_ok(gone > 300 and b.storeys_laid == PackedInt32Array([10]),
+			"storey 11 given back: %d blocks, %s laid" % [gone, str(b.storeys_laid)])
+	_ok(w.get_dead_blocks(c) == dead, "its dead are still in the record (%d)" % dead.size())
+	_ok(w.find_detached_groups(c).is_empty(), "and storey 10 still stands")
+	var profile_gone := 0
+	for i in b.damage_profile:
+		profile_gone += 1
+	_ok(profile_gone > 0, "the shell draws its damage (%d band(s) in the profile)" % profile_gone)
+	reg.lay_storeys(id, PackedInt32Array([11]))
+	_ok(w.get_dead_blocks(c) == dead and w.get_alive_block_count(c) == alive,
+			"laid again: the same %d dead, %d standing" % [dead.size(), alive])

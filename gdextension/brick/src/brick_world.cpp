@@ -6619,6 +6619,65 @@ int BrickWorld::lay_band(int chunk_id, int template_id, int y_lo, int y_hi) {
     return (int)in.size();
 }
 
+int BrickWorld::unlay_band(int chunk_id, int y_lo, int y_hi, int template_blocks) {
+    if (!valid_chunk(chunk_id)) {
+        return 0;
+    }
+    Chunk &c = chunks[chunk_id];
+    if (c.absent.size() != c.blocks.size()) {
+        return 0; // not a band chunk
+    }
+    const size_t n = std::min(c.blocks.size(), (size_t)std::max(template_blocks, 0));
+    std::vector<int32_t> out;
+    for (size_t i = 0; i < n; ++i) {
+        const Block &b = c.blocks[i];
+        if (b.removed || (c.absent[i] & Chunk::ABSENT) != 0) {
+            continue;
+        }
+        if (b.cell.y >= y_lo && b.cell.y < y_hi) {
+            out.push_back((int32_t)i);
+        }
+    }
+    if (out.empty()) {
+        return 0;
+    }
+    // As lay_band: a worker may be reading this chunk.
+    settle_bake_job(chunk_id, false);
+    settle_coarse_job(chunk_id);
+    drop_chamfer(chunk_id, -1, true);
+    for (const int32_t i : out) {
+        Block &b = c.blocks[(size_t)i];
+        // Its cells, then its record: alive or not, left as a piece or not.
+        const Archetype &a = archetypes[b.archetype];
+        const Vector3i base = b.cell - c.origin;
+        for (int x = 0; x < a.size.x; ++x) {
+            for (int y = 0; y < a.size.y; ++y) {
+                for (int z = 0; z < a.size.z; ++z) {
+                    if (!a.solid_at(x, y, z)) {
+                        continue;
+                    }
+                    const int64_t k = c.index_of(Vector3i(base.x + x, base.y + y, base.z + z));
+                    if (c.occupancy[k] == i) {
+                        c.occupancy.set(k, -1);
+                    }
+                }
+            }
+        }
+        c.absent[(size_t)i] = Chunk::ABSENT | (b.alive ? Chunk::ABSENT_ALIVE : 0)
+                | (b.detached ? Chunk::ABSENT_DETACHED : 0);
+        b.removed = true;
+        b.alive = false;
+        b.support_broken = false;
+        b.strained = false;
+        b.held = false;
+        b.bottom_broken = false;
+    }
+    joint_cache[chunk_id] = brick::JointCache();
+    conn_forget(chunk_id);
+    c.bake.valid = false;
+    return (int)out.size();
+}
+
 int BrickWorld::get_absent_count(int chunk_id) const {
     if (!valid_chunk(chunk_id)) {
         return 0;
@@ -10440,6 +10499,8 @@ void BrickWorld::_bind_methods() {
     ClassDB::bind_method(D_METHOD("lay_band", "chunk_id", "template_id", "y_lo", "y_hi"),
             &BrickWorld::lay_band);
     ClassDB::bind_method(D_METHOD("get_absent_count", "chunk_id"), &BrickWorld::get_absent_count);
+    ClassDB::bind_method(D_METHOD("unlay_band", "chunk_id", "y_lo", "y_hi", "template_blocks"),
+            &BrickWorld::unlay_band);
     ClassDB::bind_method(D_METHOD("is_block_absent", "chunk_id", "block_id"),
             &BrickWorld::is_block_absent);
     ClassDB::bind_method(D_METHOD("get_template_mass", "template_id", "y_lo", "y_hi"),

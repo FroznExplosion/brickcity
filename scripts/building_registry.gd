@@ -122,6 +122,9 @@ class Building:
 	## The damage record of the storeys that left, taken from the chunk as they
 	## went -- they were absent, so it is only there (shell_piece_chunk).
 	var cut_record := {}
+	## storey -> when it was laid, msec: a storey just laid is not given back
+	## to the brick budget at once (CityScene._trim_budget).
+	var storey_laid_at := {}
 
 	func is_build() -> bool:
 		return build != null
@@ -1030,6 +1033,62 @@ func lay_storeys(id: int, storeys: PackedInt32Array) -> int:
 	return _lay_storeys(b, storeys)
 
 
+## Give storeys of a building laid a storey at a time back to its rest shell
+## (Docs/Space.md 5.3, the brick budget): their bricks absent again, their
+## damage kept -- in the record, and in the profile the rest shell draws them
+## with. A room's piece laid as bricks on them goes back to being drawn, or is
+## written off if a brick of it died (as dematerialise does). Returns how many
+## blocks went; the caller gives the building back whole if none are left.
+func unlay_storeys(id: int, storeys: PackedInt32Array) -> int:
+	var b := get_building(id)
+	if b == null or not b.banded or not b.is_materialised():
+		return 0
+	var lines := storey_lines(b)
+	var going := PackedInt32Array()
+	for s in storeys:
+		if b.storeys_laid.has(s):
+			going.append(s)
+	if going.is_empty():
+		return 0
+	# What the shell will draw of them: their damage as it is now.
+	b.damage_profile = _build_damage_profile(b)
+	if not b.laid_rooms.is_empty():
+		var dead := {}
+		for d in world.get_dead_blocks(b.chunk):
+			dead[d] = true
+		for index in b.laid_rooms.duplicate():
+			var room: Room = b.rooms[index]
+			var on := false
+			for s in going:
+				if room.lo.y >= lines[s] and room.lo.y < lines[s + 1]:
+					on = true
+			if not on:
+				continue
+			for i in room.laid:
+				var item: Dictionary = room.items[i]
+				for bid in (item.get("blocks", PackedInt32Array()) as PackedInt32Array):
+					if dead.has(bid):
+						room.gone[i] = true
+					world.remove_block(b.chunk, bid)
+				item["blocks"] = PackedInt32Array()
+			room.laid.clear()
+			b.laid_rooms.erase(index)
+	var n := 0
+	for s in going:
+		n += world.unlay_band(b.chunk, lines[s], lines[s + 1], b.blocks)
+		var k := b.storeys_laid.find(s)
+		if k >= 0:
+			b.storeys_laid.remove_at(k)
+	b.structure_version += 1
+	b.floors_memo = null
+	set_storey_bounds(b)
+	storeys_unlaid_total += going.size()
+	return n
+
+
+var storeys_unlaid_total := 0   ## storeys given back to a rest shell, all told
+
+
 ## How many storeys this building has laid, of how many (for the gates).
 func storey_report(id: int) -> Dictionary:
 	var b := get_building(id)
@@ -1060,6 +1119,7 @@ func _lay_storeys(b: Building, storeys: PackedInt32Array) -> int:
 			continue   # left as a shell piece
 		laid += world.lay_band(b.chunk, b.band_template, lines[s], lines[s + 1])
 		b.storeys_laid.append(s)
+		b.storey_laid_at[s] = Time.get_ticks_msec()
 		storeys_laid_total += 1
 		any = true
 	if not any:

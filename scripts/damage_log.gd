@@ -99,8 +99,9 @@ enum Kind {
 	## storeys are laid changes how a solve comes out (each run is anchored and
 	## carries the weight over it), so it is a command, not each machine's own.
 	LAY,
-	## Building `target`, laid a storey at a time, gave its bricks back. Laid
-	## again it lays what the next LAY says, not what it had.
+	## Building `target`, laid a storey at a time, gave storeys `blocks` back
+	## to its rest shell (the brick budget), or with none named, all its bricks.
+	## Laid again it lays what the next LAY says, not what it had.
 	UNLAY,
 	## Building `target`: storey `limit` up gave way and left it as one shell
 	## piece (its laid storeys up there left first, as a DETACH).

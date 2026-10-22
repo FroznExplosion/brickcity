@@ -27,7 +27,8 @@ var on_toppled := Callable()
 ## (piece id, chunk, owner): a piece has come into being.
 var on_piece := Callable()
 ## Storey units (Docs/Space.md 5.3a), which need the buildings' registry -- the
-## caller's. (building id, storeys): LAY. (building id): UNLAY. (building id,
+## caller's. (building id, storeys): LAY. (building id, storeys -- none for
+## the whole building): UNLAY. (building id,
 ## storey): GIVE_WAY. (entry) -> chunk holding the shell piece's storeys:
 ## SHELL_BRICKS (BuildingRegistry.shell_piece_chunk). Unset, those commands
 ## are misses.
@@ -99,7 +100,7 @@ func apply(e: DamageLog.Entry) -> bool:
 		DamageLog.Kind.UNLAY:
 			if not on_unlay.is_valid():
 				return _miss(e, "no one gives storeys back")
-			on_unlay.call(e.target)
+			on_unlay.call(e.target, e.blocks)
 		DamageLog.Kind.GIVE_WAY:
 			if not on_give_way.is_valid():
 				return _miss(e, "no one cuts storeys")

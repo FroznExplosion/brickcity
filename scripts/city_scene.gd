@@ -144,6 +144,12 @@ func _program_for(shape: Dictionary, index: int) -> Dictionary:
 ## and nothing reappears. It costs memory -- that is what the trim was for --
 ## and it is the switch to reach for when something is fighting the physics.
 @export var respawn_buildings := true
+## The brick budget (Docs/Space.md 5.3): how many bricks of buildings may be in
+## play at once. Over it, the quietest storeys furthest from everybody are given
+## back to their rest shells -- a building laid whole goes back whole -- until
+## it is not (_trim_budget). `--brick-budget=` overrides it. The first guess the
+## doc made, to be set by a gate.
+@export var brick_budget := 150000
 ## The city on the terrain field rather than the flat plane (`--terrain`), set in
 ## a scene so it can be opened and played.
 @export var terrain_ground := false
@@ -1041,6 +1047,8 @@ func _ready() -> void:
 			debris_large_max = maxi(0, int(a.split("=")[1]))
 		elif a.begins_with("--debris-total="):
 			debris_total_max = maxi(0, int(a.split("=")[1]))
+		elif a.begins_with("--brick-budget="):
+			brick_budget = maxi(0, int(a.split("=")[1]))
 	if _stress_mode:
 		for a in args:
 			if a.begins_with("--collapse="):
@@ -3139,9 +3147,16 @@ func _storey_hooks(rep: StructureReplayer, reg: BuildingRegistry, map: Callable,
 		reg.materialise(t, storeys)
 		if laid.is_valid():
 			laid.call(t)
-	rep.on_unlay = func(id: int) -> void:
+	rep.on_unlay = func(id: int, storeys: PackedInt32Array) -> void:
 		var t: int = map.call(id)
-		if t >= 0:
+		if t < 0:
+			return
+		if storeys.is_empty():
+			reg.dematerialise(t)
+			return
+		reg.unlay_storeys(t, storeys)
+		var ub := reg.get_building(t)
+		if ub != null and ub.banded and ub.storeys_laid.is_empty():
 			reg.dematerialise(t)
 	rep.on_give_way = func(id: int, s: int) -> void:
 		var t: int = map.call(id)
@@ -3153,6 +3168,120 @@ func _storey_hooks(rep: StructureReplayer, reg: BuildingRegistry, map: Callable,
 			return -1
 		return reg.shell_piece_chunk(t, e.blocks[0], e.blocks[1], e.blocks.slice(2),
 				DamageLog.rest_transform(e))
+
+
+## Storeys given back to a building's rest shell, the reverse of _lay_more:
+## unlaid in its chunk, the bands rebuilt, their collision taken out -- and the
+## rest shell rebuilt AT ONCE, so they are solid and drawn the tick they go (the
+## old bands draw their bricks too until each is replaced). A building left
+## with none laid is given back whole (_demote).
+func _unlay(id: int, storeys: PackedInt32Array) -> void:
+	var b := registry.get_building(id)
+	if b == null or not b.banded or not b.is_materialised():
+		return
+	if registry.unlay_storeys(id, storeys) == 0:
+		return
+	var e := DamageLog.Entry.new()
+	e.tick = Engine.get_physics_frames()
+	e.kind = DamageLog.Kind.UNLAY
+	e.target = id
+	e.blocks = storeys
+	authority.commit_entry(e)
+	storeys_given_back += storeys.size()
+	if b.storeys_laid.is_empty():
+		_demote(id, 0.0)
+		_materialised.erase(id)
+		return
+	world.bake_chunk_async(b.chunk)
+	if not _pending_bricks.has(id) and _brick_nodes.has(id):
+		_rebuild_bands(id, b.chunk)
+	_reshape_storeys(id, storeys)
+	_refresh_furniture(id)
+	_free_rest(id)
+	if _rest_wanted(b):
+		_make_rest(id, [b.storeys_laid.duplicate(), b.cut_storey])
+	_nav_touch(id)
+	_mark_dirty(id)
+
+
+var storeys_given_back := 0
+var budget_trims := 0
+## Never given back to the budget: a storey somebody is within this of, or one
+## laid or hit more recently than BUDGET_QUIET_MS.
+const BUDGET_KEEP := 20.0
+const BUDGET_QUIET_MS := 3000
+
+
+## Bricks of buildings in play: a building laid a storey at a time counts what
+## is laid, one laid whole all of it.
+func bricks_in_play() -> int:
+	var n := 0
+	for id in _materialised:
+		var b := registry.get_building(id)
+		if b == null or not b.is_materialised():
+			continue
+		for c in b.chunks():
+			n += world.get_block_count(c) - world.get_absent_count(c)
+	return n
+
+
+## The brick budget (Docs/Space.md 5.3): over it, the one unit -- a storey of a
+## building laid a storey at a time, or a building laid whole -- that is
+## quietest and furthest from everybody goes back to its shell. One a pass. A
+## unit somebody is near, or one just laid or hit, is never given back; a
+## building toppling, burning, pinned by an encounter or aimed at is left be.
+func _trim_budget() -> void:
+	if not respawn_buildings or brick_budget <= 0:
+		return
+	if bricks_in_play() <= brick_budget:
+		return
+	var now := Time.get_ticks_msec()
+	var points := islands.interest_points()
+	var best := []   # [distance, id, storey or -1]
+	for id in _materialised:
+		var b := registry.get_building(id)
+		if b == null or not b.is_materialised() or b.toppled or _toppling.has(id) or _pinned(id):
+			continue
+		if now - int(_aimed_at.get(id, -1000000)) < AIM_KEEP_MS:
+			continue
+		if now - int(_last_hit.get(id, -1000000)) < BUDGET_QUIET_MS:
+			continue
+		if world.fire_burning(b.chunk) > 0 or _bands_building(id) or _pending_bricks.has(id):
+			continue
+		if not b.banded:
+			var d := _nearest_to(points, _world_box(b))
+			if d > BUDGET_KEEP and (best.is_empty() or d > float(best[0])):
+				best = [d, id, -1]
+			continue
+		var lines := registry.storey_lines(b)
+		var cell := BrickWorld.get_cell_size()
+		var box := registry.local_box(id)
+		for s in b.storeys_laid:
+			if now - int(b.storey_laid_at.get(s, 0)) < BUDGET_QUIET_MS:
+				continue
+			var lb := AABB(Vector3(box.position.x, lines[s] * cell.y, box.position.z),
+					Vector3(box.size.x, (lines[s + 1] - lines[s]) * cell.y, box.size.z))
+			var wb := AABB(b.xform * lb.position, Vector3.ZERO).expand(b.xform * lb.end)
+			var d := _nearest_to(points, wb)
+			if d > BUDGET_KEEP and (best.is_empty() or d > float(best[0])):
+				best = [d, id, s]
+	if best.is_empty():
+		return
+	budget_trims += 1
+	if int(best[2]) < 0:
+		_demote(int(best[1]), float(best[0]))
+		_materialised.erase(int(best[1]))
+	else:
+		_unlay(int(best[1]), PackedInt32Array([int(best[2])]))
+
+
+func _nearest_to(points: PackedVector3Array, box: AABB) -> float:
+	if points.is_empty():
+		return INF
+	var d := INF
+	for p in points:
+		d = minf(d, _box_distance(box, p))
+	return d
 
 
 ## Storeys laid are a command (DamageLog LAY): which are laid changes how the
@@ -7756,6 +7885,44 @@ func _run_storeys_pass() -> void:
 		_gate_ok("off balance, the rest tips over as one shell piece", tp != null and tilt > 20.0,
 				"tilt %.0f degrees before it landed" % tilt)
 
+	# The brick budget (Docs/Space.md 5.3): just over what is in play now, and
+	# four more towers shot. The quietest storeys furthest from the camera go
+	# back to their rest shells until it is met again -- never the one stood by.
+	var budget0 := brick_budget
+	brick_budget = bricks_in_play() + 3000
+	var given0 := storeys_given_back
+	var shot: Array = []
+	for c in registry.buildings:
+		if shot.size() >= 4:
+			break
+		if c == b or c == tb or c.is_build() or c.is_materialised() or _wide_ids.has(c.id) \
+				or _is_tree(c.id) or c.recipe.courses < 36:
+			continue
+		shot.append(c)
+	for c in shot:
+		var cfx: float = c.recipe.footprint_x * STUD
+		_blast(c.xform * Vector3(cfx * 0.5, 9.0, 0.0), BLAST_RADIUS)
+	var near: BuildingRegistry.Building = shot[shot.size() - 1] if not shot.is_empty() else null
+	if near != null:
+		var nfx: float = near.recipe.footprint_x * STUD
+		camera.position = near.xform * Vector3(nfx * 0.5, 9.0, -6.0)
+		camera.look_at(near.xform * Vector3(nfx * 0.5, 9.0, 0.0), Vector3.UP)
+	var peak := 0
+	for t5 in 30 * 10:
+		await get_tree().physics_frame
+		peak = maxi(peak, bricks_in_play())
+	var after := bricks_in_play()
+	print("[storeys] brick budget %d: peak %d, %d after ten seconds; %d storey(s) given back to their shells" % [
+			brick_budget, peak, after, storeys_given_back - given0])
+	_gate_ok("over the brick budget, the far storeys go back to their shells until it is met",
+			storeys_given_back > given0 and after <= brick_budget + 2500,
+			"%d in play of %d" % [after, brick_budget])
+	_gate_ok("and not the storey stood by", near == null or (near.is_materialised()
+			and not near.storeys_laid.is_empty()),
+			"building %d laid %s" % [near.id if near != null else -1,
+			str(near.storeys_laid) if near != null else "-"])
+	brick_budget = budget0
+
 	# Co-op and saves: the host's log, replayed into fresh twins, has to lay the
 	# same storeys, cut the same top off and make the same brick piece of it
 	# (DamageLog LAY, UNLAY, GIVE_WAY, SHELL_BRICKS).
@@ -11563,6 +11730,8 @@ func _physics_process(_delta: float) -> void:
 		var t_st := Time.get_ticks_usec()
 		if camera != null and Engine.get_physics_frames() % TRIM_EVERY == 0:
 			_trim_quiet()
+		if camera != null and Engine.get_physics_frames() % TRIM_EVERY == TRIM_EVERY / 2:
+			_trim_budget()
 		t_st = _part("st_trim", t_st)
 		if Engine.get_physics_frames() % 8 == 5:
 			_merge_quiet_buildings()

@@ -725,6 +725,13 @@ public:
     /// Y, absolute), with the damage record it carried while absent. Grows the
     /// occupancy window to hold it. Returns how many were laid.
     int lay_band(int chunk_id, int template_id, int y_lo, int y_hi);
+    /// The reverse of lay_band: every present block whose cell Y is in
+    /// [y_lo, y_hi) becomes absent again, its damage kept in its record bits,
+    /// its cells given back. A storey given back to the rest shell under a
+    /// brick budget (Docs/Space.md 5.3). Only template blocks: anything placed
+    /// after them (a room's piece laid as bricks) is the caller's. Returns how
+    /// many went.
+    int unlay_band(int chunk_id, int y_lo, int y_hi, int template_blocks);
     /// How many blocks of a band chunk are absent (0 for any other chunk).
     int get_absent_count(int chunk_id) const;
     bool is_block_absent(int chunk_id, int block_id) const;
