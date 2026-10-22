@@ -8905,13 +8905,15 @@ func _run_floating_pass() -> void:
 ## Gates, at each tower's end: no brick of the heap lying in mid-air (a crumb's
 ## floor gone before it got there: IslandManager._crumb_floor_gone), no stud
 ## drawn on a brick that has gone (BrickNear.stale_studs), and at every stop
-## inside SHELL_RANGE something drawing its walls (_walls_drawn_by). Furniture riding a
+## inside SHELL_RANGE something drawing its walls (_walls_drawn_by), and no piece
+## frozen over air that drops when woken close up (_wake_hung_pieces). Furniture riding a
 ## piece lying on its side reads as floating to _floating_furniture: printed,
 ## not gated.
 func _run_lodbreak_pass() -> void:
 	print("[lodbreak] a tower shot down from each tier, then flown up to")
 	respawn_buildings = false
 	BrickHeap.track = true
+	islands.perch_say = true
 	var picks: Array = []
 	for c in registry.buildings:
 		if c.is_build() or _wide_ids.has(c.id):
@@ -9003,6 +9005,9 @@ func _run_lodbreak_pass() -> void:
 								", a piece settled %s" % isl.settled if isl != null else ""]
 					print("    under it: %s" % under)
 				_save("lodbreak_%d_%dm_float%d" % [k, int(d), side])
+		var hung: Array = await _wake_hung_pieces(b.id, "lodbreak_%d_%dm" % [k, int(d)])
+		_gate_ok("%d m: no piece frozen over air drops when woken close up (CollapseNext 29)" % int(d),
+				int(hung[1]) == 0, "%d of %d dropped" % [hung[1], hung[0]])
 	print("[lodbreak] %d ok, %d FAIL" % [_gate_pass, _gate_fail])
 	get_tree().quit(1 if _gate_fail > 0 else 0)
 
@@ -9316,6 +9321,79 @@ func _pieces_say(id: int) -> void:
 					"has a mesh" if isl.mesh.mesh != null else "no mesh"]
 		print("      drawn: %s; coarse %s, coarse drawn %s, fly merged %s, mm key %s" % [
 				drawn, isl.coarse, isl.coarse_drawn, isl.fly_merged, str(isl.mm_key)])
+		# What holds it, from the same nine rays IslandManager._under asks (but
+		# 30 m long): the gap under each, rows of x by z, and where its weight is.
+		var gaps := PackedStringArray()
+		for fx in [0.02, 0.5, 0.98]:
+			for fz in [0.02, 0.5, 0.98]:
+				var at := Vector3(box.position.x + box.size.x * fx, box.position.y + 0.1,
+						box.position.z + box.size.z * fz)
+				var rq := PhysicsRayQueryParameters3D.create(at, at + Vector3.DOWN * 30.0,
+						isl.body.collision_mask, [isl.body.get_rid()])
+				rq.hit_from_inside = true
+				var rh := space.intersect_ray(rq)
+				var on := ""
+				if not rh.is_empty():
+					var hp := islands.find_by_body(rh.collider) if rh.collider is Node else null
+					on = ("p%d" % hp.piece_id) if hp != null else "b" if rh.collider == null else "g"
+				gaps.append("%.1f%s" % [at.y - 0.1 - (rh.position as Vector3).y, on] if not rh.is_empty() else "-")
+		var com := isl.body.global_position - box.position
+		print("      plan %.1f x %.1f m (perch foot %.1f), weight at %.1f, %.1f of it; gaps under: %s / %s / %s" % [
+				box.size.x, box.size.z, IslandManager.PERCH_FOOT, com.x, com.z,
+				" ".join(gaps.slice(0, 3)), " ".join(gaps.slice(3, 6)), " ".join(gaps.slice(6, 9))])
+		print("      perch: %s" % islands.perch_said.get(isl.piece_id, "never asked"))
+
+
+## Each frozen piece of the building with more than HUNG_GAP of air under its
+## middle (the first three): a picture from 15 m off, level with it, then woken
+## with the camera there -- the near settle window, 1.5 s to begin tipping by
+## itself -- and asked again 3 s on. Frozen where it would fall, it drops; held
+## (wedged, or levered under what still stands), it stays. CollapseNext 29: from
+## 320 m a piece frozen 21 m over what is under its middle. 2026-10-22 it was a
+## 54-brick corner of a storey levered under the standing top: tipped three
+## times on the far window, and woken close up it moved 0.0 m. Returns
+## [asked, moved more than HUNG_DROP]. The camera is put back after.
+const HUNG_GAP := 3.0
+const HUNG_DROP := 0.5
+
+func _wake_hung_pieces(id: int, prefix: String) -> Array:
+	var was := camera.global_transform
+	var shot := 0
+	var moved := 0
+	for e in islands.islands.duplicate():
+		var isl: BrickIsland = e
+		if shot >= 3:
+			break
+		if not isl.is_valid() or isl.owner != id or not isl.body.freeze:
+			continue
+		var box := islands.world_aabb(isl)
+		var c := box.get_center()
+		var q := PhysicsRayQueryParameters3D.create(Vector3(c.x, box.position.y + 0.1, c.z),
+				Vector3(c.x, box.position.y - 60.0, c.z), isl.body.collision_mask, [isl.body.get_rid()])
+		q.hit_from_inside = true
+		var hit := isl.body.get_world_3d().direct_space_state.intersect_ray(q)
+		if not hit.is_empty() and box.position.y + 0.1 - (hit.position as Vector3).y <= HUNG_GAP:
+			continue
+		var from := was.origin - c
+		from.y = 0.0
+		from = from.normalized() if from.length() > 0.1 else Vector3(1.0, 0.0, 0.0)
+		camera.global_position = c + from * maxf(15.0, box.size.length() * 1.2)
+		camera.look_at(c, Vector3.UP)
+		await _frames(30)
+		_save("%s_hung%d" % [prefix, shot])
+		var y0 := box.position.y
+		islands.wake(isl)
+		await _frames(180)
+		var now_y := islands.world_aabb(isl).position.y if isl.is_valid() else NAN
+		if is_nan(now_y) or y0 - now_y > HUNG_DROP:
+			moved += 1
+		print("    piece %d woken close up: %s" % [isl.piece_id,
+				"gone" if is_nan(now_y) else "down %.1f m, %s" % [y0 - now_y,
+				"settled" if isl.settled else "moving"]])
+		_save("%s_hung%d_woken" % [prefix, shot])
+		shot += 1
+	camera.global_transform = was
+	return [shot, moved]
 
 
 func _pieces_of(id: int) -> int:

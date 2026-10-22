@@ -28,6 +28,13 @@ floating check's blind spots (2's first half). Open, in order: 2 (one real heap 
 flaky -- the next `--lodbreak` failure says what it lay on), 3-5, 7-8, 9 (user: stagger the seams;
 see 9 below), 10, 13-16. 6 waits for the user to look in play.
 
+**State 2026-10-22 (the third chat):** main merged in (storey units), DLL rebuilt. 2: not seen in
+6 `--lodbreak` runs since storey units (the tracker stays on). 3: walls drawn at every stop in all
+6. 5: what is left of it is physical -- see 5 below; `--lodbreak` gates it now (16 checks). Open,
+in order: 4, 7-8, 9, 10, 13-16; 6 waits for the user. Aside, for the storey-units chat: the
+`--ring` pass prints `[city] FAIL the log does not replay into the same structure` (host 862
+bricks, replay 1506: the replay lays the whole building, the host only the storeys it reached).
+
 Two chats worked on destruction: this branch (`struct-bugs`, DestructionLod.md) and `lod-collapse`
 (worktree `C:\Users\lbaun\Documents\brickcity\.claude\worktrees\lod-collapse`; CollapseNext.md items
 19-30, Structures.md). Both are merged into `main`. From here **one chat and one worktree** carries
@@ -73,8 +80,17 @@ both lists, in this order; the detail of each item is where it points.
    down on and when, while `--lodbreak` runs (`BrickHeap.track`): the next failure prints it.
 4. CollapseNext 29(a): from mid range (LOD 2) parts of a wall that should be gone stay drawn until
    the player comes close.
-5. CollapseNext 29: from 320 m an 829-brick piece stays frozen 22 m over what is under its middle
-   -- the perched-piece rule (`IslandManager._tip_if_perched`) on that case.
+5. ~~CollapseNext 29: from 320 m an 829-brick piece stays frozen 22 m over what is under its middle
+   -- the perched-piece rule (`IslandManager._tip_if_perched`) on that case.~~ -- looked at
+   2026-10-22, after storey units: now a 54-brick piece, 9 x 9 m on plan, frozen 21 m over what is
+   under its middle (`--lodbreak --pick=3 --at=320` gets it every run). It is the broken bottom
+   storey of the standing top, one corner on the building and its weight 1.5 m past that: the
+   perch rule tipped it three times and it came back each time, and woken with the camera close
+   (1.5 s to begin tipping) it moved 0.0 m -- levered under the standing top, held. The pass's
+   piece lines now say the gap under each of the nine support rays and what they hit, and why the
+   perch rule let it be frozen (`IslandManager.perch_say`); at each tower's end every piece frozen
+   over more than 3 m of air is pictured, woken close up and gated: "no piece frozen over air
+   drops when woken close up" (`CityScene._wake_hung_pieces`).
 6. CollapseNext 26: furniture floating where a collapsing building was (small city). Not
    reproduced by `--floating`; DestructionLod 5.2 (no groups until a hit building is known
    standing) and wreckage furniture as bricks may have fixed it -- ask the user to look again
@@ -169,7 +185,7 @@ areas' tests).
   `workshop_spaces` 8 (all passed 2026-10-20, `far_rules` after `ad080d8`).
 - Windowed (Bash, `override.cfg`): `city.tscn -- --storeys --big` 13 (and `--whole` for today's
   numbers), `city.tscn -- --groups --big` 25, `--jam --big` 4,
-  `--breaklag --big` 7, `--wreck` 2, `big_city.tscn -- --lodbreak` 12,
+  `--breaklag --big` 7, `--wreck` 2, `big_city.tscn -- --lodbreak` 16,
   `big_city.tscn -- --far --buildings=150` 19, `city.tscn -- --floating` 6.
 - Profile: `city.tscn -- --big --shot`; the `[prof]` lines now break damage down
   (`of which damage, mean per tick`, `loose pieces (damage_near)`, `a hit on a piece`).
