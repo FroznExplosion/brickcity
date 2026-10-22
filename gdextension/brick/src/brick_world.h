@@ -739,6 +739,13 @@ public:
     PackedInt32Array get_blocks_in_band(int chunk_id, int y_lo, int y_hi) const;
     /// Bytes the chunk's occupancy grid holds (the window, for a band chunk).
     int64_t get_occupancy_bytes(int chunk_id) const;
+    /// Mass-weighted centre, in cells (absolute grid), of the template's
+    /// structure whose cell Y is in [y_lo, y_hi): where the intact storeys
+    /// there put their weight. Zero when there is none.
+    Vector3 get_template_com(int template_id, int y_lo, int y_hi) const;
+    /// The corners on plan (x, z, cells, absolute grid) of each of these blocks:
+    /// four a block. What a run of storeys stands the storey over it on.
+    PackedVector2Array get_blocks_footprint(int chunk_id, const PackedInt32Array &ids) const;
 
     // --- damage ------------------------------------------------------------
 

@@ -3342,6 +3342,7 @@ func _give_way(id: int, s: int) -> void:
 	var top: int = lines.size() - 1 if b.cut_storey < 0 else b.cut_storey
 	if s >= top:
 		return
+	var tipping := registry.gave_way_tipping
 	var holes := PackedInt32Array()
 	for k in b.storeys_laid:
 		if k >= s:
@@ -3378,8 +3379,9 @@ func _give_way(id: int, s: int) -> void:
 	else:
 		_shell_pieces.append(p)
 		shell_pieces_made += 1
-		print("[storeys] building %d: storey %d gave way; storeys %d-%d leave as one shell piece (%d laid up there went as bricks)" % [
-				id, s - 1, s, top - 1, holes.size()])
+		print("[storeys] building %d: storey %d %s; storeys %d-%d leave as one shell piece (%d laid up there went as bricks)" % [
+				id, s - 1, "carries what is over it off to one side: it tips" if tipping
+				else "gave way", s, top - 1, holes.size()])
 	_nav_touch(id)
 	_rest_sync(id)
 
@@ -7711,6 +7713,49 @@ func _run_storeys_pass() -> void:
 			same = false
 	_gate_ok("given back and laid again, its record replays", same,
 			"%d dead before, %d after" % [dead.size(), again.size()])
+	# Off balance: another tower's ground storey blown out under the west three
+	# fifths of it. What is left still carries it -- in compression, which the
+	# stress solve never fails -- but off to one side: it tips (storey_gave_way),
+	# leaving as one shell piece over the stump's edge.
+	var tb: BuildingRegistry.Building = null
+	for c in registry.buildings:
+		if c == b or c.is_build() or c.is_materialised() or _wide_ids.has(c.id) or _is_tree(c.id) \
+				or c.recipe.courses < 60:
+			continue
+		tb = c
+		break
+	if tb != null:
+		var tfx: float = tb.recipe.footprint_x * STUD
+		var tfz: float = tb.recipe.footprint_z * STUD
+		camera.position = tb.xform * Vector3(tfx * 0.5, 20.0, -50.0)
+		camera.look_at(tb.xform * Vector3(tfx * 0.5, 10.0, tfz * 0.5), Vector3.UP)
+		# Low enough that no blast reaches the storey over it (2.8 m): the piece
+		# it leaves as would be made bricks by the next blast in the queue.
+		for h in [0.9, 1.6]:
+			var x := 0.5
+			while x < tfx * 0.6:
+				var z := 0.5
+				while z < tfz:
+					_blast(tb.xform * Vector3(x, h, z), 1.0)
+					z += 1.0
+				x += 1.0
+		var tp: ShellPiece = null
+		var tilt := 0.0
+		var t4 := 0
+		while t4 < 900 and (tp == null or t4 < 600):
+			await get_tree().physics_frame
+			t4 += 1
+			if tp == null:
+				for p in _shell_pieces:
+					if is_instance_valid(p) and p.building == tb.id:
+						tp = p
+			elif is_instance_valid(tp):
+				tilt = maxf(tilt, rad_to_deg(tp.global_transform.basis.y.angle_to(Vector3.UP)))
+		print("[storeys] building %d's ground storey blown out under its west side: %s, tilted %.0f degrees" % [
+				tb.id, "a shell piece" if tp != null else "no shell piece", tilt])
+		_gate_ok("off balance, the rest tips over as one shell piece", tp != null and tilt > 20.0,
+				"tilt %.0f degrees before it landed" % tilt)
+
 	# Co-op and saves: the host's log, replayed into fresh twins, has to lay the
 	# same storeys, cut the same top off and make the same brick piece of it
 	# (DamageLog LAY, UNLAY, GIVE_WAY, SHELL_BRICKS).

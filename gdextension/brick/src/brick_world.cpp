@@ -6687,6 +6687,48 @@ PackedInt32Array BrickWorld::get_blocks_in_band(int chunk_id, int y_lo, int y_hi
     return out;
 }
 
+Vector3 BrickWorld::get_template_com(int template_id, int y_lo, int y_hi) const {
+    if (template_id < 0 || template_id >= (int)templates.size()) {
+        return Vector3();
+    }
+    double m = 0.0, x = 0.0, y = 0.0, z = 0.0;
+    for (const Block &b : templates[template_id].blocks) {
+        if (b.removed || !b.alive || b.decorative || b.cell.y < y_lo || b.cell.y >= y_hi) {
+            continue;
+        }
+        const Archetype &a = archetypes[b.archetype];
+        const double w = std::max(a.mass, 0.0001f);
+        m += w;
+        x += w * (b.cell.x + a.size.x * 0.5);
+        y += w * (b.cell.y + a.size.y * 0.5);
+        z += w * (b.cell.z + a.size.z * 0.5);
+    }
+    return m > 0.0 ? Vector3((float)(x / m), (float)(y / m), (float)(z / m)) : Vector3();
+}
+
+PackedVector2Array BrickWorld::get_blocks_footprint(int chunk_id, const PackedInt32Array &ids) const {
+    PackedVector2Array out;
+    if (!valid_chunk(chunk_id)) {
+        return out;
+    }
+    const Chunk &c = chunks[chunk_id];
+    for (int64_t i = 0; i < ids.size(); ++i) {
+        const int32_t id = ids[i];
+        if (id < 0 || id >= (int32_t)c.blocks.size()) {
+            continue;
+        }
+        const Block &b = c.blocks[id];
+        const Vector3i sz = archetypes[b.archetype].size;
+        const float x0 = (float)b.cell.x, z0 = (float)b.cell.z;
+        const float x1 = x0 + sz.x, z1 = z0 + sz.z;
+        out.push_back(Vector2(x0, z0));
+        out.push_back(Vector2(x1, z0));
+        out.push_back(Vector2(x1, z1));
+        out.push_back(Vector2(x0, z1));
+    }
+    return out;
+}
+
 int64_t BrickWorld::get_occupancy_bytes(int chunk_id) const {
     return valid_chunk(chunk_id) ? chunks[chunk_id].occupancy.bytes() : 0;
 }
@@ -10406,6 +10448,10 @@ void BrickWorld::_bind_methods() {
             &BrickWorld::get_blocks_topping);
     ClassDB::bind_method(D_METHOD("get_blocks_in_band", "chunk_id", "y_lo", "y_hi"),
             &BrickWorld::get_blocks_in_band);
+    ClassDB::bind_method(D_METHOD("get_template_com", "template_id", "y_lo", "y_hi"),
+            &BrickWorld::get_template_com);
+    ClassDB::bind_method(D_METHOD("get_blocks_footprint", "chunk_id", "ids"),
+            &BrickWorld::get_blocks_footprint);
     ClassDB::bind_method(D_METHOD("get_occupancy_bytes", "chunk_id"),
             &BrickWorld::get_occupancy_bytes);
     ClassDB::bind_method(D_METHOD("set_anchor_levels", "chunk_id", "grid_ys"),

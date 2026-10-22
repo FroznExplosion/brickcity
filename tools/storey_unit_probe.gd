@@ -21,6 +21,7 @@ func _init() -> void:
 	_check_record_rides_absent()
 	_check_anchors_and_loads()
 	_check_give_way()
+	_check_tip()
 	_check_window()
 	print("\n[storey_unit] %d ok, %d FAIL" % [_pass, _fail])
 	quit(1 if _fail > 0 else 0)
@@ -229,3 +230,29 @@ func _check_window() -> void:
 	var inside := w.place_block(c, Vector3i(35, lines[5] + 10, 35), palette.brick_2x2, 4)
 	_ok(inside >= w.get_block_count(c) - 1 and w.is_block_absent(c, inside) == false,
 			"placing inside the laid one goes on the end, present (%d)" % inside)
+
+
+func _check_tip() -> void:
+	print("
+=== what is left carries the storey over it off to one side: it tips ===")
+	var part := _make(true)
+	var w: BrickWorld = part[0]
+	var reg: BuildingRegistry = part[1]
+	var id: int = part[2]
+	var c := reg.materialise(id, PackedInt32Array([14]))
+	var lines := reg.storey_lines(reg.get_building(id))
+	# One corner gone: the rest still stands round the weight.
+	var corner := PackedInt32Array()
+	var half := PackedInt32Array()
+	for bid in w.get_blocks_topping(c, lines[15]):
+		var fp := w.get_blocks_footprint(c, PackedInt32Array([bid]))
+		if fp[0].x < FX * 0.25 and fp[0].y < FZ * 0.25:
+			corner.append(bid)
+		if fp[0].x < FX * 0.6:
+			half.append(bid)
+	w.kill_blocks(c, corner)
+	_ok(reg.storey_gave_way(id) == -1, "a corner gone: it stands (%d)" % reg.storey_gave_way(id))
+	w.kill_blocks(c, half)
+	var s := reg.storey_gave_way(id)
+	_ok(s == 15 and reg.gave_way_tipping, "the west three fifths gone: storey 15 up tips (%d, tipping %s)"
+			% [s, reg.gave_way_tipping])

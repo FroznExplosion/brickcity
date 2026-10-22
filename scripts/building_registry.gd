@@ -1117,8 +1117,9 @@ func set_storey_bounds(b: Building) -> void:
 	b.load_runs = runs.size()
 
 
-## The runs whose top has nothing left standing under the storey on it: the
-## intact storeys over such a run hang on nothing (Docs/Space.md 5.3a). Returns
+## The runs whose top has nothing left standing under the storey on it -- the
+## intact storeys over such a run hang on nothing -- or what is left stands
+## off to one side of their weight, so they tip (Docs/Space.md 5.3a). Returns
 ## the lowest storey that has lost its support, or -1.
 func storey_gave_way(id: int) -> int:
 	var b := get_building(id)
@@ -1127,13 +1128,29 @@ func storey_gave_way(id: int) -> int:
 	var lines := storey_lines(b)
 	var n := lines.size() - 1
 	var top := n if b.cut_storey < 0 else b.cut_storey
+	gave_way_tipping = false
 	for run in storey_runs(b.storeys_laid):
 		var above: int = int(run[1])
 		if above >= top:
 			continue   # nothing over it
-		if world.get_blocks_topping(b.chunk, lines[above]).is_empty():
+		var under := world.get_blocks_topping(b.chunk, lines[above])
+		if under.is_empty():
+			return above
+		# Still carried, but off balance: the weight of everything over it
+		# stands outside what is left under it, on plan. The stress solve never
+		# sees that -- what is left only takes it in compression -- and the
+		# building, laid whole, would have tipped (BrickWorld.check_stability).
+		# What is above leaves resting on what is left, and tips over its edge.
+		var com := world.get_template_com(b.band_template, lines[above], lines[top])
+		var hull := Geometry2D.convex_hull(world.get_blocks_footprint(b.chunk, under))
+		if hull.size() >= 3 and not Geometry2D.is_point_in_polygon(Vector2(com.x, com.z), hull):
+			gave_way_tipping = true
 			return above
 	return -1
+
+
+## Whether the last storey_gave_way was a tip (true) or nothing left under it.
+var gave_way_tipping := false
 
 
 ## Everything from storey `s` up has left the building as a shell piece: it is
