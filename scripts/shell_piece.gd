@@ -5,16 +5,16 @@ extends RigidBody3D
 ## body: drawn by their shell bands, held by their shell boxes, and no bricks
 ## (Docs/Space.md 5.2 and 5.3a). A storey of a building laid a storey at a time
 ## gives way when nothing is left under the storey on it; everything over it
-## comes away as this. It becomes bricks a storey at a time: its lowest when it
-## lands hard, the ones a blast reaches when it is shot (CityScene._piece_to_bricks).
+## comes away as this. It becomes bricks -- all of it, ONE piece, every joint as
+## it was -- when it lands hard where somebody could see it break, or is shot
+## (CityScene._piece_to_bricks); the landing then breaks it where it touched,
+## by the same rule as any brick piece (IslandManager.fracture_on_impact). Far
+## from everyone it lands whole and stays a shell, as a brick piece would.
+## Undamaged storeys are as stiff as LEGO: nothing comes away a floor at a time.
 ##
 ## Its frame is the building's -- the body's transform is where the building's
 ## cell (0, 0, 0) is now -- so a storey laid from the template lands in the
 ## right place with no offset to carry.
-
-## Faster than this into something, m/s, and it has landed hard: its lowest
-## storey becomes bricks and breaks as a brick piece does.
-const LAND_SPEED := 3.0
 
 var building := -1
 ## Storeys [lo, hi) of the building.
@@ -23,17 +23,16 @@ var hi := 0
 ## Storeys inside [lo, hi) that are not in it: laid as bricks when it broke off,
 ## they left as brick pieces of their own.
 var holes := PackedInt32Array()
-## The building's damage record when it broke off, for laying a storey of it
-## later: the blocks of its storeys were absent then, and their record was in
-## the building's chunk (BrickWorld.create_band_chunk).
-var record := {}
-## Hard landings and hits seen, waiting for CityScene to act on.
+## A hard landing seen, waiting for CityScene to act on, and the speed it lost
+## -- a brick piece's landing rule (IslandManager: IMPACT_DELTA after a fall of
+## IMPACT_FALL_TICKS at IMPACT_MIN_SPEED or more).
 var landed_hard := false
 var landed_speed := 0.0
 var made_at := 0
 
 var _mesh: MeshInstance3D
-var _last_v := Vector3.ZERO
+var _prev_speed := 0.0
+var _fall_ticks := 0
 
 
 ## Build the body for storeys [lo, hi): mesh, boxes, mass. Called again when a
@@ -42,7 +41,7 @@ func shape(registry: BuildingRegistry, material: Material) -> bool:
 	var b := registry.get_building(building)
 	if b == null or hi <= lo:
 		return false
-	var profile := piece_profile(registry)
+	var profile := piece_profile(registry) if not b.is_build() else {}
 	for c in get_children():
 		if c is CollisionShape3D:
 			remove_child(c)
@@ -51,11 +50,19 @@ func shape(registry: BuildingRegistry, material: Material) -> bool:
 		_mesh = MeshInstance3D.new()
 		_mesh.material_override = material
 		add_child(_mesh)
-	var fx: int = b.recipe.footprint_x
-	var fz: int = b.recipe.footprint_z
-	var courses: int = b.recipe.courses
-	_mesh.mesh = BuildingShell.build_mesh(fx, fz, courses, profile)
-	var boxes: Array = BuildingShell.collision_boxes(fx, fz, courses, false, profile)
+	var boxes: Array
+	if b.is_build():
+		# A build's shell walks its blocks: all but this piece's are left out.
+		var hidden := registry.build_hidden(b, func(s: int) -> bool:
+			return s >= lo and s < hi and not holes.has(s))
+		_mesh.mesh = BuildShell.build_mesh(registry.world, b.build, hidden)
+		boxes = BuildShell.collision_boxes(registry.world, b.build, hidden)
+	else:
+		var fx: int = b.recipe.footprint_x
+		var fz: int = b.recipe.footprint_z
+		var courses: int = b.recipe.courses
+		_mesh.mesh = BuildingShell.build_mesh(fx, fz, courses, profile)
+		boxes = BuildingShell.collision_boxes(fx, fz, courses, false, profile)
 	var lines := registry.storey_lines(b)
 	var plate := BrickWorld.get_plate_metres()
 	var y_lo: float = lines[lo] * plate
@@ -121,6 +128,19 @@ func storeys_at(registry: BuildingRegistry, point: Vector3, radius: float) -> Pa
 	return out
 
 
+## Its box in the world: its storeys' box, turned as it is now.
+func world_box(registry: BuildingRegistry) -> AABB:
+	var b := registry.get_building(building)
+	if b == null:
+		return AABB(global_position, Vector3.ZERO)
+	var lines := registry.storey_lines(b)
+	var plate := BrickWorld.get_plate_metres()
+	var box := BuildingRegistry.own_box(b)
+	box.position.y = lines[lo] * plate
+	box.size.y = (lines[hi] - lines[lo]) * plate
+	return global_transform * box
+
+
 ## Is a world point within `margin` of it?
 func reaches(registry: BuildingRegistry, point: Vector3, margin: float) -> bool:
 	var b := registry.get_building(building)
@@ -144,10 +164,12 @@ func _ready() -> void:
 
 
 func _physics_process(_delta: float) -> void:
-	# A hard landing is the speed lost in one step while touching something.
-	var v := linear_velocity
-	var lost := (_last_v - v).length()
-	if lost > LAND_SPEED and get_contact_count() > 0:
+	var speed := linear_velocity.length()
+	var lost := _prev_speed - speed
+	var fell := _fall_ticks
+	_fall_ticks = _fall_ticks + 1 if speed > IslandManager.IMPACT_MIN_SPEED else 0
+	if lost > IslandManager.IMPACT_DELTA and _prev_speed > IslandManager.IMPACT_MIN_SPEED \
+			and fell >= IslandManager.IMPACT_FALL_TICKS:
 		landed_hard = true
 		landed_speed = maxf(landed_speed, lost)
-	_last_v = v
+	_prev_speed = speed

@@ -140,10 +140,14 @@ static func from_bytes(bytes: PackedByteArray) -> AreaSnapshot:
 ## dormant_failed, released, furniture, furniture_failed, pending, scene}. `scene`
 ## is what the caller passed to capture(): its own queue, to queue again.
 func restore(world: BrickWorld, resolve: Callable, islands: IslandManager,
-		on_toppled := Callable()) -> Dictionary:
+		on_toppled := Callable(), hooks := Callable()) -> Dictionary:
 	var history := DamageLog.from_data(commands)
 	var rep := StructureReplayer.new(world, resolve)
 	rep.on_toppled = on_toppled
+	# Anything else the replay needs that only the caller has: the registry's
+	# storey commands (CityScene._storey_hooks).
+	if hooks.is_valid():
+		hooks.call(rep)
 	rep.apply_all(history.entries)
 
 	var parts := {}

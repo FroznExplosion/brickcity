@@ -729,6 +729,13 @@ public:
     /// Y, absolute), with the damage record it carried while absent. Grows the
     /// occupancy window to hold it. Returns how many were laid.
     int lay_band(int chunk_id, int template_id, int y_lo, int y_hi);
+    /// The reverse of lay_band: every present block whose cell Y is in
+    /// [y_lo, y_hi) becomes absent again, its damage kept in its record bits,
+    /// its cells given back. A storey given back to the rest shell under a
+    /// brick budget (Docs/Space.md 5.3). Only template blocks: anything placed
+    /// after them (a room's piece laid as bricks) is the caller's. Returns how
+    /// many went.
+    int unlay_band(int chunk_id, int y_lo, int y_hi, int template_blocks);
     /// How many blocks of a band chunk are absent (0 for any other chunk).
     int get_absent_count(int chunk_id) const;
     bool is_block_absent(int chunk_id, int block_id) const;
@@ -743,6 +750,13 @@ public:
     PackedInt32Array get_blocks_in_band(int chunk_id, int y_lo, int y_hi) const;
     /// Bytes the chunk's occupancy grid holds (the window, for a band chunk).
     int64_t get_occupancy_bytes(int chunk_id) const;
+    /// Mass-weighted centre, in cells (absolute grid), of the template's
+    /// structure whose cell Y is in [y_lo, y_hi): where the intact storeys
+    /// there put their weight. Zero when there is none.
+    Vector3 get_template_com(int template_id, int y_lo, int y_hi) const;
+    /// The corners on plan (x, z, cells, absolute grid) of each of these blocks:
+    /// four a block. What a run of storeys stands the storey over it on.
+    PackedVector2Array get_blocks_footprint(int chunk_id, const PackedInt32Array &ids) const;
 
     // --- damage ------------------------------------------------------------
 
