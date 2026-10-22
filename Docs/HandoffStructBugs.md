@@ -161,13 +161,13 @@ areas' tests).
 
 ## How to check
 
-- Probes (headless): `float` 50, `debris` 29, `hang` 10, `collapse` 56, `shellhit` 2, `farcut` 5, `storey_unit` 24, `heap` 11, `crack` 9,
+- Probes (headless): `float` 50, `debris` 29, `hang` 10, `collapse` 56, `shellhit` 2, `farcut` 5, `storey_unit` 39, `heap` 11, `crack` 9,
   `seam` 23, `spaces` 20, `interior_group` 33, `interior` 87, `fixture` 47, `shell` 38,
   `section` 32, `barrage` 8 (keeps the index and components checks on).
 - Also (lod-collapse's, headless): `barrage` 7-8, `push` 16, `blast_ring` 19, `storey` 4,
   `far_rules` 9, `replay` 13, `loopback` 32, `snapshot` 48, `dormant` 33, `span` 6,
   `workshop_spaces` 8 (all passed 2026-10-20, `far_rules` after `ad080d8`).
-- Windowed (Bash, `override.cfg`): `city.tscn -- --storeys --big` 8 (and `--whole` for today's
+- Windowed (Bash, `override.cfg`): `city.tscn -- --storeys --big` 13 (and `--whole` for today's
   numbers), `city.tscn -- --groups --big` 25, `--jam --big` 4,
   `--breaklag --big` 7, `--wreck` 2, `big_city.tscn -- --lodbreak` 12,
   `big_city.tscn -- --far --buildings=150` 19, `city.tscn -- --floating` 6.

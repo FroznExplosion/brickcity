@@ -26,6 +26,16 @@ var resolve: Callable
 var on_toppled := Callable()
 ## (piece id, chunk, owner): a piece has come into being.
 var on_piece := Callable()
+## Storey units (Docs/Space.md 5.3a), which need the buildings' registry -- the
+## caller's. (building id, storeys): LAY. (building id, storeys -- none for
+## the whole building): UNLAY. (building id,
+## storey): GIVE_WAY. (entry) -> chunk holding the shell piece's storeys:
+## SHELL_BRICKS (BuildingRegistry.shell_piece_chunk). Unset, those commands
+## are misses.
+var on_lay := Callable()
+var on_unlay := Callable()
+var on_give_way := Callable()
+var on_shell_bricks := Callable()
 
 ## piece id -> chunk
 var pieces := {}
@@ -83,6 +93,32 @@ func apply(e: DamageLog.Entry) -> bool:
 				return _miss(e, "no building to topple")
 			if on_toppled.is_valid():
 				on_toppled.call(e.target)
+		DamageLog.Kind.LAY:
+			if not on_lay.is_valid():
+				return _miss(e, "no one lays storeys")
+			on_lay.call(e.target, e.blocks)
+		DamageLog.Kind.UNLAY:
+			if not on_unlay.is_valid():
+				return _miss(e, "no one gives storeys back")
+			on_unlay.call(e.target, e.blocks)
+		DamageLog.Kind.GIVE_WAY:
+			if not on_give_way.is_valid():
+				return _miss(e, "no one cuts storeys")
+			on_give_way.call(e.target, e.limit)
+		DamageLog.Kind.SHELL_BRICKS:
+			if not on_shell_bricks.is_valid():
+				return _miss(e, "no one makes shell pieces bricks")
+			var source: int = int(on_shell_bricks.call(e))
+			if source < 0:
+				return _miss(e, "no shell piece chunk")
+			var lines_lo := int(e.limit)
+			var ids := world.get_blocks_in_band(source, lines_lo, int(e.radius))
+			var cut: Dictionary = world.split_island(source, ids)
+			world.release_chunk(source)
+			if cut.is_empty():
+				return _miss(e, "shell piece had no bricks")
+			world.heal_joints(int(cut.chunk))
+			_add_piece(DamageLog.piece_id(e.seq), int(cut.chunk), e.target)
 		DamageLog.Kind.DETACH:
 			var from_piece := bool(e.flags & DamageLog.FLAG_FROM_PIECE)
 			var source := piece_chunk(e.target) if from_piece \
@@ -102,12 +138,17 @@ func apply(e: DamageLog.Entry) -> bool:
 			var cut: Dictionary = world.split_island(source, ids)
 			if cut.is_empty():
 				var dead := 0
+				var absent := 0
+				var top := -1
 				for id in ids:
+					top = maxi(top, id)
+					if world.is_block_absent(source, id):
+						absent += 1
 					if not world.is_solid(source, world.get_chunk_origin(source)
 							+ _cell_of(source, id)):
 						dead += 1
-				return _miss(e, "split found nothing: %d named, %d found, %d of those not standing, source has %d alive of %d, origin %s" % [
-					maxi(e.blocks.size(), e.points.size()), ids.size(), dead,
+				return _miss(e, "split found nothing: %d named, %d found, %d of those not standing (%d not laid, the highest id %d), source has %d alive of %d, origin %s" % [
+					maxi(e.blocks.size(), e.points.size()), ids.size(), dead, absent, top,
 					world.get_alive_block_count(source), world.get_block_count(source),
 					world.get_chunk_origin(source)])
 			if e.flags & DamageLog.FLAG_GONE:

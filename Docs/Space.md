@@ -279,22 +279,44 @@ is partly laid, its bricks are drawn (`_brick_nodes`) and no stand-in shell is u
 `_rest_sync` keeps that true. `--whole` turns storey units off (the gate's "today").
 
 **A storey gives way** when no brick of it is left under the storey above
-(`get_blocks_topping` empty after the solve). Then everything above leaves as a **shell piece**
+(`get_blocks_topping` empty after the solve) -- or when what is left still carries it but off to
+one side: the template's centre of mass over the run stands outside the plan (convex hull) of the
+bricks topping it. The stress solve never fails that (what is left takes it in compression); laid
+whole the building would have tipped (`check_stability`). Then everything above leaves as a **shell piece**
 (`ShellPiece`): one rigid body drawn by the shell bands of those storeys, with their boxes, no
 bricks. The building keeps `cut_storey`: those storeys are never laid in it again (their blocks
 stay absent), its profile marks their bands gone and their rooms are written off. Laid storeys
-above the gap leave as ordinary brick pieces. When the shell piece lands hard (speed lost over
-`ShellPiece.LAND_SPEED` in a step) its lowest storey is laid from the template into a chunk of
-its own and let go as a brick piece moving as the shell moved; the rest stays a shell piece,
-resting on it. Shot, the storeys the blast reaches become bricks the same way and the piece
-splits round them. So a tower comes down a storey of bricks at a time.
+above the gap leave as ordinary brick pieces. A tipping top leaves resting on the stump and goes
+over its edge. When the shell piece lands hard -- a brick piece's own rule: speed lost over
+`IslandManager.IMPACT_DELTA` after a fall -- where somebody could see it break (its box within
+`FRACTURE_RANGE`, as a brick piece's landing), ALL of it is laid from the template into one brick
+piece with every joint it had (`heal_joints`, as a collapse chunk), and the landing breaks it where
+it touched (`fracture_on_impact`). Far from everyone it lands whole and stays a shell. Shot, it does
+the same and the blast lands on the bricks. Undamaged storeys stay as stiff as LEGO: nothing comes
+away a floor at a time. (The first build split off its lowest storey at every landing as a body of
+its own, and a falling top came apart floor by floor -- user, 2026-10-21.)
 
 **Templates per band** come free: `lay_band` copies blocks out of the template, so a storey is
 never built.
 
-**Builds** (`BuildRecipe`) are to be sliced at the slabs the floor finder finds (`floor_lines`,
-Structures §2.4) -- **not built yet**: a build is still laid whole, and needs a template of its
-own and a rest shell from `BuildShell` first.
+**Builds** (`BuildRecipe`, one frame) are sliced at the floors the floor finder finds
+(`floor_lines`, Structures §2.4): a template a recipe (`_build_template_of`: the build, then its
+fixtures, as materialise lays them), and their rest shell and shell pieces drawn by `BuildShell`
+with every block of the other storeys left out (`build_hidden`). A build of several frames is laid
+whole.
+
+**The brick budget** (§5.3) is `CityScene.brick_budget` (150k, `--brick-budget=`): over it, the
+quietest storey furthest from everybody goes back to its rest shell, one a pass
+(`_trim_budget`, `BrickWorld.unlay_band`: present blocks absent again, damage in the record bits,
+the profile the shell draws taken first); a building laid whole goes back whole. Never a storey
+within 20 m of somebody, or one laid or hit in the last 3 s. The distance trim (`_trim_quiet`)
+runs as before; the budget is a ceiling over it.
+
+**The log.** Which storeys are laid changes how a building's solves come out, so it is a command:
+`LAY` (storeys laid), `UNLAY` (storeys given back, or none named: all), `GIVE_WAY` (a storey gave
+way: the cut), `SHELL_BRICKS` (a shell piece became one brick piece at a transform, its id its seq).
+`StructureReplayer` applies them through the caller's registry (`CityScene._storey_hooks`) -- the
+twins of `_check_log_replays`, and a checkpoint load (`AreaSnapshot.restore`'s hooks).
 
 Gate: `city.tscn -- --storeys --big` (new): the biggest tower shot at mid-height, first-hit time,
 bricks laid and chunk memory, `--whole` against storey units; the part above falls as one shell
@@ -328,8 +350,13 @@ is 37 ms in both modes, and not the shot's tick.
 Then (storey units) storey 17 blown out with blasts all through it: the storeys over the last
 laid one leave as **one shell piece** (storeys 20-34) at tick 67; the building is 5 laid storeys
 (3,623 bricks -- the blasts and the wreckage landing reached 15-19); the piece lands hard and is
-made bricks a storey at a time; given back and laid again, the record replays exactly
-(template ids; a room's piece laid as bricks is not laid again, as before).
+(since the rule above) becomes one brick piece where it lands; given back and laid again, the
+record replays exactly (template ids; a room's piece laid as bricks is not laid again, as before).
+The same pass, 2026-10-21 later: another tower's ground storey blown out under its west three
+fifths tips over as one shell piece (90 degrees); a watchtower build laid a storey at a time, its
+first floor blown out, the top leaving as a shell piece; four towers shot over a tight budget, the
+far storeys given back and the one stood by kept; and the whole log replayed into twins -- some
+2,700 commands, 0 missed, the same structure.
 
 Found on the way and fixed: `lay_band` changed a chunk a worker was baking (barrage probe
 crashed); bands rebuilt for storeys just laid drew what the building had shed (held now, as a
@@ -337,9 +364,11 @@ promotion is behind its shell); a landing on a building's shell (`_shear_buildin
 whole building; falling-path promotion laid every storey under wreckage falling *inside* its own
 building; the collapse director took a banded building's template count for its size.
 
-Not done: builds; the brick budget (§5.3); the shell piece and a storey giving way are not
-DamageLog commands yet (co-op clients would not see them); a building laid a storey at a time
-never topples whole (only a storey gives way); rooms as units; anchor cells by list.
+Not done: rooms as units, anchor cells by list (§5.2); a shell piece is not in a checkpoint's
+pieces (one loaded mid-fall is gone; the building is cut as it was); a live co-op client would
+lay storeys of its own on a look or a walk-up as the host does, and only the host's LAYs are in the
+log -- the city has no live client yet, so that is unchecked; the budget's figure is the doc's
+first guess, not a measured one.
 
 ### 5.4 What it should buy (estimates)
 

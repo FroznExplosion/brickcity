@@ -21,6 +21,9 @@ func _init() -> void:
 	_check_record_rides_absent()
 	_check_anchors_and_loads()
 	_check_give_way()
+	_check_tip()
+	_check_unlay()
+	_check_build()
 	_check_window()
 	print("\n[storey_unit] %d ok, %d FAIL" % [_pass, _fail])
 	quit(1 if _fail > 0 else 0)
@@ -229,3 +232,127 @@ func _check_window() -> void:
 	var inside := w.place_block(c, Vector3i(35, lines[5] + 10, 35), palette.brick_2x2, 4)
 	_ok(inside >= w.get_block_count(c) - 1 and w.is_block_absent(c, inside) == false,
 			"placing inside the laid one goes on the end, present (%d)" % inside)
+
+
+func _check_tip() -> void:
+	print("
+=== what is left carries the storey over it off to one side: it tips ===")
+	var part := _make(true)
+	var w: BrickWorld = part[0]
+	var reg: BuildingRegistry = part[1]
+	var id: int = part[2]
+	var c := reg.materialise(id, PackedInt32Array([14]))
+	var lines := reg.storey_lines(reg.get_building(id))
+	# One corner gone: the rest still stands round the weight.
+	var corner := PackedInt32Array()
+	var half := PackedInt32Array()
+	for bid in w.get_blocks_topping(c, lines[15]):
+		var fp := w.get_blocks_footprint(c, PackedInt32Array([bid]))
+		if fp[0].x < FX * 0.25 and fp[0].y < FZ * 0.25:
+			corner.append(bid)
+		if fp[0].x < FX * 0.6:
+			half.append(bid)
+	w.kill_blocks(c, corner)
+	_ok(reg.storey_gave_way(id) == -1, "a corner gone: it stands (%d)" % reg.storey_gave_way(id))
+	w.kill_blocks(c, half)
+	var s := reg.storey_gave_way(id)
+	_ok(s == 15 and reg.gave_way_tipping, "the west three fifths gone: storey 15 up tips (%d, tipping %s)"
+			% [s, reg.gave_way_tipping])
+
+
+func _check_unlay() -> void:
+	print("
+=== a storey given back keeps its damage, and comes back with it ===")
+	var part := _make(true)
+	var w: BrickWorld = part[0]
+	var reg: BuildingRegistry = part[1]
+	var id: int = part[2]
+	var c := reg.materialise(id, PackedInt32Array([10, 11]))
+	var lines := reg.storey_lines(reg.get_building(id))
+	var cell := BrickWorld.get_cell_size()
+	reg.damage(id, Vector3(20.0 * cell.x, (lines[11] + 10) * cell.y, 0.3), 1.0)
+	var dead := w.get_dead_blocks(c)
+	var alive := w.get_alive_block_count(c)
+	var occ := w.get_occupancy_bytes(c)
+	var gone := reg.unlay_storeys(id, PackedInt32Array([11]))
+	var b := reg.get_building(id)
+	_ok(gone > 300 and b.storeys_laid == PackedInt32Array([10]),
+			"storey 11 given back: %d blocks, %s laid" % [gone, str(b.storeys_laid)])
+	_ok(w.get_dead_blocks(c) == dead, "its dead are still in the record (%d)" % dead.size())
+	_ok(w.find_detached_groups(c).is_empty(), "and storey 10 still stands")
+	var profile_gone := 0
+	for i in b.damage_profile:
+		profile_gone += 1
+	_ok(profile_gone > 0, "the shell draws its damage (%d band(s) in the profile)" % profile_gone)
+	reg.lay_storeys(id, PackedInt32Array([11]))
+	_ok(w.get_dead_blocks(c) == dead and w.get_alive_block_count(c) == alive,
+			"laid again: the same %d dead, %d standing" % [dead.size(), alive])
+
+
+func _watchtower(units: bool) -> Array:
+	var w := BrickWorld.new()
+	var palette := TowerRecipe.bake_palette(w)
+	var reg := BuildingRegistry.new(w, palette)
+	reg.storey_units = units
+	var r := BuildRecipe.from_dict(JSON.parse_string(
+			FileAccess.get_file_as_string("res://builds/watchtower.json")))
+	var id := reg.register_build(r, Transform3D())
+	return [w, reg, id]
+
+
+func _check_build() -> void:
+	print("
+=== a build is laid a storey at a time too, cut at the floors the finder finds ===")
+	var whole := _watchtower(false)
+	var ww: BrickWorld = whole[0]
+	var wreg: BuildingRegistry = whole[1]
+	var wc := wreg.materialise(whole[2])
+	var part := _watchtower(true)
+	var pw: BrickWorld = part[0]
+	var preg: BuildingRegistry = part[1]
+	var id: int = part[2]
+	var b := preg.get_building(id)
+	var lines := preg.storey_lines(b)
+	_ok(lines.size() >= 4, "the watchtower has %d storeys: %s" % [lines.size() - 1, str(lines)])
+	var pc := preg.materialise(id, PackedInt32Array([1]))
+	_ok(b.banded and pw.get_block_count(pc) == ww.get_block_count(wc),
+			"laid by storeys, every id of the build (%d)" % pw.get_block_count(pc))
+	var same := true
+	var dims: Vector3i = b.build.chunk_dims()
+	for y in range(lines[1], lines[2]):
+		for z in dims.z:
+			for x in dims.x:
+				if pw.block_at(pc, Vector3i(x, y, z)) != ww.block_at(wc, Vector3i(x, y, z)):
+					same = false
+	_ok(same, "storey 1 holds the same block ids as the build laid whole")
+	var laid := pw.get_block_count(pc) - pw.get_absent_count(pc)
+	_ok(laid > 0 and laid < ww.get_alive_block_count(wc), "and only it: %d of %d" % [laid,
+			ww.get_alive_block_count(wc)])
+	_ok(pw.find_detached_groups(pc).is_empty(), "standing on the storey under it")
+	var hidden: Array = preg.build_hidden(b, func(s: int) -> bool: return s != 1)
+	var hid := 0
+	for i in b.build.size():
+		if (hidden[0] as Dictionary).has(i):
+			hid += 1
+	_ok(hid == laid, "its rest shell leaves out exactly the laid storey's blocks (%d)" % hid)
+	var cell := BrickWorld.get_cell_size()
+	# At a brick of storey 2, found in the grid once it is laid.
+	preg.lay_storeys(id, PackedInt32Array([2]))
+	var at := Vector3.INF
+	for y in range(lines[2] + 3, lines[3]):
+		for z in dims.z:
+			for x in dims.x:
+				if at == Vector3.INF and pw.is_solid(pc, Vector3i(x, y, z)):
+					at = Vector3((x + 0.5) * cell.x, (y + 0.5) * cell.y, (z + 0.5) * cell.z)
+	# Stone: a blast wears it before it breaks it. Hit until something dies.
+	var hit := PackedInt32Array()
+	for k in 8:
+		hit.append_array(preg.damage(id, at, 0.6))
+	_ok(b.storeys_laid.has(2) and hit.size() > 0, "hits on storey 2 kill %d" % hit.size())
+	var dead := pw.get_dead_blocks(pc)
+	var worn := pw.get_worn_blocks(pc)
+	preg.dematerialise(id)
+	preg.storey_units = false
+	var c2 := preg.materialise(id)
+	_ok(pw.get_dead_blocks(c2) == dead and pw.get_worn_blocks(c2) == worn and dead.size() > 0,
+			"given back, laid whole: the same %d dead and %d worn" % [dead.size(), worn.size() / 2])
