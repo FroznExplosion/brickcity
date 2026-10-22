@@ -128,6 +128,9 @@ Scale.md §4.7: never ask a question proportional to the building. A 200-course
 tower still materialises as one thing. Band-at-a-time baking is in; making the
 *unit* a section rather than a building is not.
 
+**Taken up 2026-10-21:** the unit is a storey -- the plan and what was built are
+in [Space.md](Space.md) §5.3a.
+
 ### 2.6 Workshop room tools
 
 Scale.md §6 Stage 6. Auto-detect rooms and floors from an authored build, or

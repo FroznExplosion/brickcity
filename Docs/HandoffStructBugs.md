@@ -17,6 +17,11 @@ For the next chat picking this up. The plan and everything measured is in
 
 ## The merged plan (2026-10-20) -- start here
 
+**Storey units (2026-10-21, a third chat):** a hit makes bricks of the storeys it reaches, not the
+building; the rest is the building's rest shell, and a storey that gives way sends what is above
+it off as one shell piece. Plan and numbers: [Space.md](Space.md) §5.3a-b. Every probe and gate
+below was run with it on (2026-10-21); `collapse_probe`'s "farcut" moved to `farcut_probe`.
+
 **State 2026-10-21 (the second chat):** worktree `C:\Users\lbaun\bc-struct`, everything merged into
 `main` and pushed, the worktree's DLL built from main's C++. Done: 0 (baseline), 1, 11, 12, and the
 floating check's blind spots (2's first half). Open, in order: 2 (one real heap brick in mid-air,
@@ -156,13 +161,14 @@ areas' tests).
 
 ## How to check
 
-- Probes (headless): `float` 50, `debris` 29, `hang` 10, `collapse` 61, `shellhit` 2, `heap` 11, `crack` 9,
+- Probes (headless): `float` 50, `debris` 29, `hang` 10, `collapse` 56, `shellhit` 2, `farcut` 5, `storey_unit` 39, `heap` 11, `crack` 9,
   `seam` 23, `spaces` 20, `interior_group` 33, `interior` 87, `fixture` 47, `shell` 38,
   `section` 32, `barrage` 8 (keeps the index and components checks on).
 - Also (lod-collapse's, headless): `barrage` 7-8, `push` 16, `blast_ring` 19, `storey` 4,
   `far_rules` 9, `replay` 13, `loopback` 32, `snapshot` 48, `dormant` 33, `span` 6,
   `workshop_spaces` 8 (all passed 2026-10-20, `far_rules` after `ad080d8`).
-- Windowed (Bash, `override.cfg`): `city.tscn -- --groups --big` 25, `--jam --big` 4,
+- Windowed (Bash, `override.cfg`): `city.tscn -- --storeys --big` 13 (and `--whole` for today's
+  numbers), `city.tscn -- --groups --big` 25, `--jam --big` 4,
   `--breaklag --big` 7, `--wreck` 2, `big_city.tscn -- --lodbreak` 12,
   `big_city.tscn -- --far --buildings=150` 19, `city.tscn -- --floating` 6.
 - Profile: `city.tscn -- --big --shot`; the `[prof]` lines now break damage down
