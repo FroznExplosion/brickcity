@@ -133,10 +133,12 @@ class Band:
 	var since := 0
 	var layers := 1
 	var near: MeshInstance3D
+	var shadow: MeshInstance3D   ## the flat mesh, shadows only, while near (_show_near)
 	var mesh: ArrayMesh
 	var task := -1
 	var holder: Array
 	var discard := false
+	var show_waits := 0   ## steps its mesh has waited to be shown (_show_waits)
 	var studs: Array[MultiMeshInstance3D] = []   ## bevelled, plain, square, card
 	var stud_buffer := PackedFloat32Array()      ## every stud of the band
 	var stud_open := PackedByteArray()           ## ... and which have nothing over them
@@ -167,6 +169,7 @@ var worst_damage_ms := 0.0
 ## build of a band's studs: the three things `step` does that are not a glance.
 var worst_take_ms := 0.0
 var worst_show_ms := 0.0
+var show_waited := 0     ## steps a band's mesh waited to be shown (_show_waits)
 var worst_studs_ms := 0.0
 ## Of a band's studs, the worst: fetch from the bricks (when they changed),
 ## split into rings, handing the rings to their MultiMeshes; and the most studs
@@ -183,6 +186,13 @@ var most_band_studs := 0
 ## to bricks has its bands in flight. A frame or two later costs nothing seen.
 var uploads := 0
 var _held := false
+## Uploads in flight on a worker this step: the city's (`uploads`) and this
+## class's own. A band whose mesh has come in is SHOWN only once there are none
+## -- giving a node its mesh waits for them just as a stud call does (12.8 ms
+## measured, PerfCaps.md 3) -- or once it has waited SHOW_WAIT_MAX steps.
+var _flying := 0
+const SHOW_WAIT_MAX := 30
+var _settling := false
 
 var _bands := {}              ## flat node's instance id -> Band
 var _order: Array[int] = []
@@ -339,10 +349,13 @@ func step(eye: Vector3, zoom_in := 1.0, forward := Vector3.ZERO) -> void:
 				if b != null:
 					_rescore(b)
 	_held = uploads > 0
+	_flying = uploads
 	for key in _busy:
 		var b: Band = _bands.get(key)
 		if b != null and b.state == UPLOADING:
 			_held = true
+			if not WorkerThreadPool.is_task_completed(b.task):
+				_flying += 1
 	for key in _busy.duplicate():
 		_visit(key, eye, now, stud_budget)
 	var n := mini(SLICE, _order.size())
@@ -377,6 +390,22 @@ func is_near(node: MeshInstance3D) -> bool:
 	return band != null and band.state == NEAR
 
 
+## For the gate: chamfered meshes that cast a shadow themselves (x, should be
+## none), and bands held near whose flat stand-in does not cast where the band
+## would, or casts an old mesh (y, should be none). PerfCaps.md 2.2.
+func shadow_faults() -> Vector2i:
+	var out := Vector2i.ZERO
+	for band: Band in _bands.values():
+		if band.state != NEAR or not is_instance_valid(band.near):
+			continue
+		if band.near.cast_shadow != GeometryInstance3D.SHADOW_CASTING_SETTING_OFF:
+			out.x += 1
+		var casts := band.node.cast_shadow != GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		if not is_instance_valid(band.shadow) or band.shadow.visible != casts 				or band.shadow.mesh != band.node.mesh:
+			out.y += 1
+	return out
+
+
 ## One line for a pass's report.
 func report() -> String:
 	return ("%d chamfered band(s) built, %d held now (%d triangles), %d stud(s) in %d band(s); "
@@ -394,6 +423,12 @@ func report() -> String:
 ## Everything the camera wants, now, blocking: for a capture or a gate.
 func settle(eye: Vector3, rounds := 4000) -> void:
 	_held = false   # blocking anyway: the wait is the point
+	_settling = true
+	_settle(eye, rounds)
+	_settling = false
+
+
+func _settle(eye: Vector3, rounds: int) -> void:
 	for band in _bands.values():
 		(band as Band).since = 0
 	_eye = eye
@@ -527,7 +562,8 @@ func _visit(key: int, eye: Vector3, now: int, stud_budget: Array) -> void:
 				else:
 					_upload(band, arrays)
 		UPLOADING:
-			if WorkerThreadPool.is_task_completed(band.task):
+			if WorkerThreadPool.is_task_completed(band.task) and not _show_waits(band):
+				band.show_waits = 0
 				WorkerThreadPool.wait_for_task_completion(band.task)
 				band.task = -1
 				_busy.erase(key)
@@ -546,11 +582,21 @@ func _visit(key: int, eye: Vector3, now: int, stud_budget: Array) -> void:
 		NEAR:
 			if not want:
 				_to_flat(band)
-			elif band.near.cast_shadow != node.cast_shadow:
-				band.near.cast_shadow = node.cast_shadow
+			else:
+				_sync_shadow(band)
 
 	if studs_on:
 		_studs(band, dist, local, stud_budget)
+
+
+## Whether a band whose mesh has come in waits a step: another upload is in
+## flight (see _flying).
+func _show_waits(band: Band) -> bool:
+	if _settling or _flying <= 0 or band.show_waits >= SHOW_WAIT_MAX:
+		return false
+	band.show_waits += 1
+	show_waited += 1
+	return true
 
 
 func _idle(key: int, band: Band, now: int) -> void:
@@ -569,6 +615,7 @@ func _upload(band: Band, arrays: Array) -> void:
 	# uploads, and a band's studs touched after it in the same step waited for
 	# it -- 4-11 ms, the worst steps of a street walk (PerfCaps.md 3).
 	_held = true
+	_flying += 1
 	band.task = WorkerThreadPool.add_task(func() -> void:
 		var m := ArrayMesh.new()
 		m.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
@@ -582,7 +629,10 @@ func _show_near(band: Band, mesh: ArrayMesh) -> void:
 	near.name = "Chamfered"
 	near.mesh = mesh
 	near.material_override = node.material_override
-	near.cast_shadow = node.cast_shadow
+	# Its shadow is the flat mesh's: at shadow resolution a bevel is not there,
+	# and the chamfered mesh is several times the triangles, drawn again into
+	# every cascade (PerfCaps.md 2.2).
+	near.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	near.physics_interpolation_mode = Node.PHYSICS_INTERPOLATION_MODE_OFF
 	near.set_instance_shader_parameter("geo_bevel", 1.0)
 	for param in [&"weather_sway", &"weather_snowcap"]:
@@ -592,6 +642,15 @@ func _show_near(band: Band, mesh: ArrayMesh) -> void:
 	band.layers = _layers_of(node)
 	near.layers = band.layers
 	node.add_child(near)
+	var shadow := MeshInstance3D.new()
+	shadow.name = "FlatShadow"
+	shadow.material_override = node.material_override
+	shadow.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_SHADOWS_ONLY
+	shadow.physics_interpolation_mode = Node.PHYSICS_INTERPOLATION_MODE_OFF
+	shadow.layers = band.layers
+	node.add_child(shadow)
+	band.shadow = shadow
+	_sync_shadow(band)
 	_set_layers(node, 0)
 	band.near = near
 	band.mesh = mesh
@@ -607,6 +666,26 @@ func _show_near(band: Band, mesh: ArrayMesh) -> void:
 	chamfered_bands += 1
 	chamfered_tris += band.tris
 	builds += 1
+
+
+## The flat mesh's shadow stands in for the chamfered one's: it casts when the
+## band would (the city turns bands' shadows on and off by distance), and it is
+## the band's mesh of now.
+func _sync_shadow(band: Band) -> void:
+	var shadow := band.shadow
+	if not is_instance_valid(shadow):
+		return
+	var on := band.node.cast_shadow != GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	if shadow.visible != on:
+		shadow.visible = on
+	if shadow.mesh != band.node.mesh:
+		shadow.mesh = band.node.mesh
+
+
+func _free_shadow(band: Band) -> void:
+	if is_instance_valid(band.shadow):
+		band.shadow.queue_free()
+	band.shadow = null
 
 
 func _to_flat(band: Band) -> void:
@@ -625,6 +704,7 @@ func _to_flat(band: Band) -> void:
 			if is_instance_valid(band.near):
 				band.near.queue_free()
 			band.near = null
+			_free_shadow(band)
 			band.mesh = null
 			chamfered_bands -= 1
 			chamfered_tris -= band.tris
@@ -938,6 +1018,7 @@ func _forget(key: int) -> void:
 			_set_layers(band.node, band.layers)
 		if is_instance_valid(band.near):
 			band.near.queue_free()
+		_free_shadow(band)
 	_drop_studs(band)
 	_busy.erase(key)
 	_hold_erase(key)

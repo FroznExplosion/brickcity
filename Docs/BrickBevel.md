@@ -288,6 +288,10 @@ a mesh of the whole chunk.
   3.8-11.6 ms for 2,166 studs). Growing the buffers in powers of two and drawing a part of them
   (`visible_instance_count`), so no resort reallocated, was tried and made no difference
   (6.2-11.6 ms): the wait is elsewhere in the renderer, and is the next thing to find.
+* **Shadows.** The chamfered mesh casts none; a shadows-only copy of the flat mesh
+  (`FlatShadow`) casts for it while the band is near, whenever the band itself would. At shadow
+  resolution the bevel is not there, and its triangles were drawn into every cascade
+  (PerfCaps.md 2.2).
 * **Zoom.** Through a scope the world is as near as it looks. The city passes `step` the zoom
   (the unzoomed field of view's tangent over the camera's, capped at 6) and every distance here
   is divided by it: a wall seen through 4x glass is chamfered and studded -- bevelled studs, not

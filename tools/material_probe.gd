@@ -25,13 +25,19 @@ func _mat(name: String) -> int:
 	return -1
 
 
-func _init() -> void:
+var _fx: MaterialFx
+var _wall := Vector3.ZERO
+
+
+func _initialize() -> void:
 	print("material probe")
 	_toughness()
 	_damage()
 	_see_through()
 	_sounds_and_marks()
 	_where()
+	await process_frame
+	_debris_cap()
 	print("\n%d passed, %d failed" % [_pass, _fail])
 	quit(1 if _fail > 0 else 0)
 
@@ -193,3 +199,24 @@ func _where() -> void:
 	_ok("nowhere near a building is nothing", fx.material_at(Vector3(500, 1, 500)) == -1)
 	_ok("a hit on the wall leaves a mark", fx.impact_at(wall + Vector3(-0.1, 0, 0), Vector3.LEFT)
 			and fx._marks.size() == 1)
+	_fx = fx
+	_wall = wall
+
+
+## What flies off is capped (PerfCaps.md 2.6): a long burst of fire into the
+## wall keeps at most MAX_DEBRIS bursts, and they share their mesh. Once the fx
+## is in the tree (a burst is made only there).
+func _debris_cap() -> void:
+	print("\nwhat flies off a hit")
+	var fx := _fx
+	var wall := _wall
+	for i in MaterialFx.MAX_DEBRIS + 20:
+		fx.impact_at(wall + Vector3(-0.1, 0, 0), Vector3.LEFT)
+	var live := 0
+	for p in fx._bursts:
+		if is_instance_valid(p) and not p.is_queued_for_deletion():
+			live += 1
+	_ok("a long burst of hits keeps at most MAX_DEBRIS debris bursts",
+			live > 0 and live <= MaterialFx.MAX_DEBRIS, "%d live" % live)
+	_ok("and they share one mesh", fx._debris_meshes.size() == 1,
+			"%d meshes" % fx._debris_meshes.size())
