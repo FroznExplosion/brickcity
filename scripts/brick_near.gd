@@ -68,17 +68,26 @@ static var stud_card_radius := 70.0
 ## THE CAP (Options > Video, Near Detail Cap). Distance alone let the tier
 ## take on as many bands as stood inside its rings -- a street of storeys, a
 ## collapse's every piece -- and each one held is a build, an upload and its
-## studs' MultiMeshes re-sorted as the camera walks. With the cap on, at most
-## `max_bands` bands are chamfered and `max_stud_bands` have stud geometry,
-## the best placed first: by distance (through the zoom, as everything here)
+## studs' MultiMeshes re-sorted as the camera walks. With the cap on, the
+## bands chamfered hold at most `max_tris` triangles between them and the
+## bands with stud geometry at most `max_studs` studs -- a BUDGET, not a count:
+## a band is a storey, from a few hundred triangles to twenty thousand, and a
+## count of them bounded nothing (a street walk held ten bands, 145k triangles,
+## under a cap of 32). A band's cost before it is built is its flat mesh's
+## triangles times what built bands came out at (`_ratio`); then its own. The
+## budget can run over by OVER_SLACK before anything is given back, so a band
+## that came out a little bigger than guessed is not built and dropped in turn;
+## and one band is always let in, whatever it costs. The best placed first: by
+## distance (through the zoom, as everything here)
 ## weighed by where the camera LOOKS -- straight ahead as it is, to the side
 ## FACING_SIDE times as far, behind FACING_BEHIND -- except within
 ## ALWAYS_NEAR, which is the player's own surroundings and comes first
 ## whichever way they face. A band better placed than the worst held, by
 ## SWAP_MARGIN, takes its place, one a step. Off: by distance alone, as before.
 static var cap_enabled := true
-static var max_bands := 32
-static var max_stud_bands := 48
+static var max_tris := 120000
+static var max_studs := 4000
+const OVER_SLACK := 1.1
 const FACING_SIDE := 1.75
 const FACING_BEHIND := 2.5
 const ALWAYS_NEAR := 2.0
@@ -138,6 +147,7 @@ class Band:
 	var studs_dirty := true
 	var score := INF                             ## where it stands for the cap; less is first
 	var stud_geo := false                        ## has a place for stud GEOMETRY (the cap)
+	var stud_geo_n := -1                         ## ... and how many of its studs that was
 
 
 var world: BrickWorld
@@ -187,6 +197,15 @@ var _eye := Vector3.ZERO
 ## band of each kind left waiting for a place.
 var _holding := {}
 var _studded := {}
+## ... their costs (key -> triangles, key -> studs), and the sums.
+var _hold_cost := 0
+var _stud_cost := 0
+## Chamfered triangles over flat ones, as built bands came out: the guess at a
+## band's cost before it is built.
+var _ratio := 6.0
+## What the best placed waiting band of each kind would cost.
+var _wait_bevel_cost := 0
+var _wait_studs_cost := 0
 var _wait_bevel := INF
 var _wait_studs := INF
 ## A place given up for a better band goes to a band placed at least that
@@ -346,6 +365,12 @@ func held() -> Vector2i:
 	return Vector2i(_holding.size(), _studded.size())
 
 
+## For a gate and a report: [triangles the chamfered bands hold or are
+## guessed at, studs drawn as geometry].
+func held_cost() -> Vector2i:
+	return Vector2i(_hold_cost, _stud_cost)
+
+
 ## For a gate: whether the band `node` draws is chamfered now.
 func is_near(node: MeshInstance3D) -> bool:
 	var band: Band = _bands.get(node.get_instance_id()) if node != null else null
@@ -355,11 +380,12 @@ func is_near(node: MeshInstance3D) -> bool:
 ## One line for a pass's report.
 func report() -> String:
 	return ("%d chamfered band(s) built, %d held now (%d triangles), %d stud(s) in %d band(s); "
-			+ "cap %s (%d/%d), %d bevel and %d stud visits turned away; "
+			+ "cap %s (%dk triangles of %dk, %d of %d studs), %d bevel and %d stud visits turned away; "
 			+ "step %.3f ms mean, %.2f worst (take %.2f, hang %.2f, studs %.2f); "
 			+ "a hit's patch %.3f ms mean over %d, %.2f worst") % [
 			builds, chamfered_bands, chamfered_tris, stud_instances, _studded.size(),
-			"on" if cap_enabled else "off", max_bands, max_stud_bands, capped_bevel, capped_studs,
+			"on" if cap_enabled else "off", _hold_cost / 1000, max_tris / 1000, _stud_cost, max_studs,
+			capped_bevel, capped_studs,
 			step_ms / maxf(steps, 1.0), worst_step_ms, worst_take_ms, worst_show_ms,
 			worst_studs_ms,
 			damage_ms / maxf(damage_calls, 1.0), damage_calls, worst_damage_ms]
@@ -470,11 +496,13 @@ func _visit(key: int, eye: Vector3, now: int, stud_budget: Array) -> void:
 	var want := enabled and dist < radius + (MARGIN if band.state != FLAT else 0.0)
 	match band.state:
 		FLAT:
-			if want and cap_enabled and (_holding.size() >= max_bands
+			if want and cap_enabled and (not _fits(_hold_cost, _est_tris(band), max_tris, _holding)
 					or band.score > _admit_bevel):
-				# No place: it waits, and takes the worst held band's if it is
+				# No room: it waits, and takes the worst held band's if it is
 				# placed better (_make_room).
-				_wait_bevel = minf(_wait_bevel, band.score)
+				if band.score < _wait_bevel:
+					_wait_bevel = band.score
+					_wait_bevel_cost = _est_tris(band)
 				capped_bevel += 1
 			elif want and world.has_bake(band.chunk):
 				if now - band.since < SETTLE_MS or _busy.size() >= IN_FLIGHT:
@@ -484,7 +512,7 @@ func _visit(key: int, eye: Vector3, now: int, stud_budget: Array) -> void:
 					if world.chamfer_pending(band.chunk, band.section):
 						band.state = PENDING
 						_busy.append(key)
-						_holding[key] = true
+						_hold_set(key, _est_tris(band))
 						_admit_bevel = INF
 		PENDING:
 			if not want:
@@ -509,7 +537,7 @@ func _visit(key: int, eye: Vector3, now: int, stud_budget: Array) -> void:
 					world.drop_chamfer(band.chunk, band.section)
 					band.state = FLAT
 					band.since = now
-					_holding.erase(key)
+					_hold_erase(key)
 				else:
 					var t_show := Time.get_ticks_usec()
 					_show_near(band, mesh)
@@ -529,7 +557,7 @@ func _idle(key: int, band: Band, now: int) -> void:
 	band.state = FLAT
 	band.since = now
 	_busy.erase(key)
-	_holding.erase(key)
+	_hold_erase(key)
 
 
 func _upload(band: Band, arrays: Array) -> void:
@@ -566,6 +594,12 @@ func _show_near(band: Band, mesh: ArrayMesh) -> void:
 	band.state = NEAR
 	@warning_ignore("integer_division")
 	band.tris = mesh.surface_get_array_index_len(0) / 3
+	# Its own cost now, and what it says about the next guess.
+	var flat := _flat_tris(band)
+	if flat > 0:
+		_ratio = lerpf(_ratio, float(band.tris) / float(flat), 0.25)
+	if _holding.has(band.key):
+		_hold_set(band.key, band.tris)
 	chamfered_bands += 1
 	chamfered_tris += band.tris
 	builds += 1
@@ -592,7 +626,7 @@ func _to_flat(band: Band) -> void:
 			chamfered_tris -= band.tris
 	band.state = FLAT
 	band.since = Time.get_ticks_msec()
-	_holding.erase(band.key)
+	_hold_erase(band.key)
 
 
 func _studs(band: Band, dist: float, local_eye: Vector3, budget: Array) -> void:
@@ -608,17 +642,20 @@ func _studs(band: Band, dist: float, local_eye: Vector3, budget: Array) -> void:
 	# shader paints none, so leaving them out would leave the tops smooth).
 	var geo := dist < stud_radius + (MARGIN if band.stud_geo else 0.0)
 	if geo and not band.stud_geo and cap_enabled \
-			and (_studded.size() >= max_stud_bands or band.score > _admit_studs):
-		_wait_studs = minf(_wait_studs, band.score)
+			and (not _fits(_stud_cost, _est_studs(band), max_studs, _studded)
+				or band.score > _admit_studs):
+		if band.score < _wait_studs:
+			_wait_studs = band.score
+			_wait_studs_cost = _est_studs(band)
 		capped_studs += 1
 		geo = false
 	if geo != band.stud_geo:
 		band.stud_geo = geo
 		if geo:
-			_studded[band.key] = true
+			_stud_set(band.key, _est_studs(band))
 			_admit_studs = INF
 		else:
-			_studded.erase(band.key)
+			_stud_erase(band.key)
 		band.stud_eye = Vector3.INF   # sorted again, into its new rings
 	var fetch := band.studs.is_empty() or band.studs_dirty
 	# Out among the cards only the outer ring's edge moves, and a card coming
@@ -697,6 +734,13 @@ func _sort_studs(band: Band, local_eye: Vector3) -> void:
 		band.studs[k].visible = n > 0
 		drawn += n
 	worst_set_ms = maxf(worst_set_ms, float(Time.get_ticks_usec() - t_b) / 1000.0)
+	if band.stud_geo:
+		# What its geometry rings came to: its cost from here.
+		@warning_ignore("integer_division")
+		var geo_n := ((parts[0] as PackedFloat32Array).size() + (parts[1] as PackedFloat32Array).size()
+				+ (parts[2] as PackedFloat32Array).size()) / 16
+		band.stud_geo_n = geo_n
+		_stud_set(band.key, geo_n)
 	stud_instances += drawn - band.stud_count
 	band.stud_count = drawn
 
@@ -706,8 +750,9 @@ func _drop_studs(band: Band) -> void:
 		if is_instance_valid(mmi):
 			mmi.queue_free()
 	band.studs.clear()
-	_studded.erase(band.key)
+	_stud_erase(band.key)
 	band.stud_geo = false
+	band.stud_geo_n = -1
 	band.stud_buffer = PackedFloat32Array()
 	band.stud_open = PackedByteArray()
 	band.stud_eye = Vector3.INF
@@ -744,38 +789,96 @@ func _rescore(band: Band) -> void:
 ## the worst gives its place up (one of each kind a step). The waiting band
 ## takes it when the round robin next comes to it.
 func _make_room() -> void:
-	# More than one place free: nothing is being kept for anyone.
-	if _holding.size() < max_bands - 1:
+	# Room for more than a band again: nothing is being kept for anyone.
+	if _hold_cost < max_tris * 0.75:
 		_admit_bevel = INF
-	if _studded.size() < max_stud_bands - 1:
+	if _stud_cost < max_studs * 0.75:
 		_admit_studs = INF
-	if _wait_bevel < INF and _holding.size() >= max_bands:
+	if _wait_bevel < INF and not _fits(_hold_cost, _wait_bevel_cost, max_tris, _holding):
 		var worst: Band = _worst(_holding)
 		if worst != null and _wait_bevel < worst.score * SWAP_MARGIN:
 			_admit_bevel = worst.score * SWAP_MARGIN
 			_to_flat(worst)
-	if _wait_studs < INF and _studded.size() >= max_stud_bands:
+	if _wait_studs < INF and not _fits(_stud_cost, _wait_studs_cost, max_studs, _studded):
 		var worst: Band = _worst(_studded)
 		if worst != null and _wait_studs < worst.score * SWAP_MARGIN:
 			_admit_studs = worst.score * SWAP_MARGIN
 			_demote_studs(worst)
-	# Shrunk from the menu: give back the worst until it fits.
-	while _holding.size() > max_bands:
+	# Over budget -- shrunk from the menu, or bands that came out bigger than
+	# guessed: give back the worst until it fits, always keeping one.
+	while _hold_cost > max_tris * OVER_SLACK and _holding.size() > 1:
 		var w: Band = _worst(_holding)
-		if w == null or w.state == UPLOADING:
+		if w == null:
 			break
 		_to_flat(w)
-	while _studded.size() > max_stud_bands:
+	while _stud_cost > max_studs * OVER_SLACK and _studded.size() > 1:
 		var w: Band = _worst(_studded)
 		if w == null:
 			break
 		_demote_studs(w)
 
 
+## Whether `cost` more fits a budget of `limit` already holding `used` over
+## `held`'s bands. The first band always does.
+static func _fits(used: int, cost: int, limit: int, held_: Dictionary) -> bool:
+	return held_.is_empty() or used + cost <= limit
+
+
+## The triangles a band's flat mesh draws.
+func _flat_tris(band: Band) -> int:
+	if not is_instance_valid(band.node):
+		return 0
+	var m := band.node.mesh as ArrayMesh
+	if m == null:
+		return 0
+	var n := 0
+	for i in m.get_surface_count():
+		var idx: int = m.surface_get_array_index_len(i)
+		@warning_ignore("integer_division")
+		n += (idx if idx > 0 else m.surface_get_array_len(i)) / 3
+	return n
+
+
+## A band's chamfered triangles: its own once built, else the guess.
+func _est_tris(band: Band) -> int:
+	if band.state == NEAR and band.tris > 0:
+		return band.tris
+	return int(float(_flat_tris(band)) * _ratio)
+
+
+## A band's studs as geometry: what they came to last time, else half of all
+## it has (the far half of a storey is out past the geometry rings).
+func _est_studs(band: Band) -> int:
+	if band.stud_geo_n >= 0:
+		return band.stud_geo_n
+	@warning_ignore("integer_division")
+	return band.stud_buffer.size() / 32
+
+
+func _hold_set(key: int, cost: int) -> void:
+	_hold_cost += cost - int(_holding.get(key, 0))
+	_holding[key] = cost
+
+
+func _hold_erase(key: int) -> void:
+	_hold_cost -= int(_holding.get(key, 0))
+	_holding.erase(key)
+
+
+func _stud_set(key: int, cost: int) -> void:
+	_stud_cost += cost - int(_studded.get(key, 0))
+	_studded[key] = cost
+
+
+func _stud_erase(key: int) -> void:
+	_stud_cost -= int(_studded.get(key, 0))
+	_studded.erase(key)
+
+
 ## A band's stud geometry given up for cards (its next visit sorts them).
 func _demote_studs(band: Band) -> void:
 	band.stud_geo = false
-	_studded.erase(band.key)
+	_stud_erase(band.key)
 	band.stud_eye = Vector3.INF
 
 
@@ -833,7 +936,7 @@ func _forget(key: int) -> void:
 			band.near.queue_free()
 	_drop_studs(band)
 	_busy.erase(key)
-	_holding.erase(key)
+	_hold_erase(key)
 	_unlink(key, band.chunk)
 	_bands.erase(key)
 	_order.erase(key)
