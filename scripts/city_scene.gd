@@ -16009,27 +16009,26 @@ func _run_chamfer_pass() -> void:
 			"%d drawn, %d wanted, over %d bands" % [after.drawn, after.wanted, after.bands])
 	await _save("chamfer_hit")
 
-	# The cap (Options > Video): squeezed to two bands of each, it holds two,
-	# and they are the ones in front of the camera. Then turned round, the
-	# bands it holds follow the view.
-	var cap_was := [BrickNear.cap_enabled, BrickNear.max_bands, BrickNear.max_stud_bands]
+	# The cap (Options > Video): its budgets squeezed to nothing, it still lets
+	# one band of each in -- and that one is the wall in front of the camera.
+	var cap_was := [BrickNear.cap_enabled, BrickNear.max_tris, BrickNear.max_studs]
 	BrickNear.cap_enabled = true
-	BrickNear.max_bands = 2
-	BrickNear.max_stud_bands = 2
+	BrickNear.max_tris = 1
+	BrickNear.max_studs = 1
 	await _frames(4)
 	brick_near.settle(camera.global_position)
 	await _frames(4)
 	var held: Vector2i = brick_near.held()
-	_gate_ok("with the cap at two, two bands are chamfered and two have stud geometry",
-			held.x <= 2 and held.y <= 2 and brick_near.chamfered_bands > 0,
+	_gate_ok("with the cap's budgets at nothing, one band is chamfered and one has stud geometry",
+			held.x == 1 and held.y <= 1 and brick_near.chamfered_bands == 1,
 			"%d chamfered (%d held), %d with stud geometry" % [brick_near.chamfered_bands,
 				held.x, held.y])
 	var ahead := camera.global_position + (-camera.global_basis.z) * 1.6
 	var ahead_near := _near_band_at(ahead)
-	_gate_ok("and the wall in front is one of them", ahead_near)
+	_gate_ok("and it is the wall in front", ahead_near)
 	BrickNear.cap_enabled = cap_was[0]
-	BrickNear.max_bands = cap_was[1]
-	BrickNear.max_stud_bands = cap_was[2]
+	BrickNear.max_tris = cap_was[1]
+	BrickNear.max_studs = cap_was[2]
 
 	# And from across the street there is none: at that size it is noise, and
 	# it is not paid for.
@@ -16077,7 +16076,7 @@ func _run_chamfer_cost() -> void:
 	# the flag is set again once the city has settled (_cap_arg).
 	_cap_arg()
 	print("[chamfer] cost, near tier %s, cap %s" % ["ON" if BrickNear.enabled else "OFF (--no-near)",
-			"on (%d/%d)" % [BrickNear.max_bands, BrickNear.max_stud_bands]
+			"on (%dk triangles, %d studs)" % [BrickNear.max_tris / 1000, BrickNear.max_studs]
 			if BrickNear.cap_enabled else "OFF (--no-cap)"])
 	# The renderer's own clock as well as the frame's: a frame is held to the
 	# display's 16.6 ms whatever it cost to draw.
@@ -16134,7 +16133,7 @@ func _run_chamfer_street() -> void:
 	await _frames(90)
 	_cap_arg()
 	print("[street] near tier %s, cap %s" % ["ON" if BrickNear.enabled else "OFF",
-			"on (%d/%d)" % [BrickNear.max_bands, BrickNear.max_stud_bands]
+			"on (%dk triangles, %d studs)" % [BrickNear.max_tris / 1000, BrickNear.max_studs]
 			if BrickNear.cap_enabled else "OFF"])
 	var fx: float = b.recipe.footprint_x * STUD
 	var start: Vector3 = b.xform * Vector3(-4.0, 0.0, -3.0)
@@ -16180,8 +16179,9 @@ func _run_chamfer_street() -> void:
 		if float(tt[0]) > 25.0:
 			over += 1
 	print("[street]   walk: %s; %d frames over 25 ms" % [_frame_line(times), over])
-	print("[street]   held at most %d chamfered, %d with stud geometry; %d triangles, %d studs at most; worst step %.2f ms"
-			% [held_max.x, held_max.y, tris_max, studs_max, near_worst])
+	print("[street]   held at most %d chamfered, %d with stud geometry (budgets %dk triangles, %d studs); %d triangles, %d studs at most; worst step %.2f ms"
+			% [held_max.x, held_max.y, BrickNear.max_tris / 1000, BrickNear.max_studs,
+				tris_max, studs_max, near_worst])
 	print("[street]   %s" % brick_near.report())
 	print("[street]   studs, worst: fetch %.2f ms, split %.2f, set %.2f; %d in one band at most"
 			% [brick_near.worst_fetch_ms, brick_near.worst_split_ms, brick_near.worst_set_ms,

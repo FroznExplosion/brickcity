@@ -148,10 +148,10 @@ func _apply_setting(id: StringName, value: Variant) -> void:
 				BrickStrength.span_reach = float(value)
 		&"near_cap":
 			BrickNear.cap_enabled = MENU_SETTINGS.truthy(value)
-		&"near_cap_bands":
-			BrickNear.max_bands = int(value)
-		&"near_cap_studs":
-			BrickNear.max_stud_bands = int(value)
+		&"near_cap_tris":
+			BrickNear.max_tris = int(value) * 1000
+		&"near_cap_stud_n":
+			BrickNear.max_studs = int(value)
 		&"aa_mouse":
 			AimAssist.mouse_level = int(value)
 		&"aa_pad":
@@ -217,17 +217,19 @@ func _setting_defs() -> Array:
 		# The near tier's cap (BrickNear): how much close-up brick detail at once.
 		{"id": &"near_cap", "tab": "video", "type": MENU_SETTINGS.T_BOOL,
 			"label": "Near Detail Cap", "default": true,
-			"hint": "Limits how many pieces of nearby wall get real bevelled edges and stud "
-			+ "geometry at once, nearest and in front of you first. Off: everything in range does, "
-			+ "which can stutter in a dense street or a collapse."},
-		{"id": &"near_cap_bands", "tab": "video", "type": MENU_SETTINGS.T_SLIDER,
-			"label": "Near Detail — Bevelled", "default": 32, "min": 4, "max": 128, "step": 4,
-			"hint": "With the cap on: how many pieces of wall (a storey of a building, a piece of "
-			+ "wreckage) are drawn with real bevelled edges at once."},
-		{"id": &"near_cap_studs", "tab": "video", "type": MENU_SETTINGS.T_SLIDER,
-			"label": "Near Detail — Studs", "default": 48, "min": 4, "max": 160, "step": 4,
-			"hint": "With the cap on: how many pieces of wall are drawn with studs as real geometry "
-			+ "at once. Past them they are flat cards that face you."},
+			"hint": "Limits how much nearby brick gets real bevelled edges and stud geometry at "
+			+ "once, nearest and in front of you first. Off: everything in range does, which can "
+			+ "stutter in a dense street or a collapse."},
+		{"id": &"near_cap_tris", "tab": "video", "type": MENU_SETTINGS.T_SLIDER,
+			"label": "Near Detail — Bevelled", "default": 120, "min": 20, "max": 1000, "step": 20,
+			"suffix": "k triangles",
+			"hint": "With the cap on: how many triangles of real bevelled edges may be drawn at "
+			+ "once. Past them, walls are drawn flat with their edges shaded."},
+		{"id": &"near_cap_stud_n", "tab": "video", "type": MENU_SETTINGS.T_SLIDER,
+			"label": "Near Detail — Studs", "default": 4000, "min": 500, "max": 30000, "step": 500,
+			"suffix": " studs",
+			"hint": "With the cap on: how many studs may be drawn as real geometry at once. Past "
+			+ "them they are flat cards that face you."},
 	] + AIM_ASSIST_DEFS + AIM_ASSIST_ADVANCED
 
 
