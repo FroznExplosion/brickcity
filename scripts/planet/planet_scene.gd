@@ -11,6 +11,10 @@ extends Node3D
 
 var data: PlanetData
 var planet: PlanetBody
+var buildings: PlanetBuildings
+var spawn_dir := Vector3.UP
+var town_dirs: Array = []
+var landmark_dirs: Array = []
 var walker: PlanetWalker
 var sun: DirectionalLight3D
 var sky_mat: ProceduralSkyMaterial
@@ -32,9 +36,32 @@ func _ready() -> void:
 	_gate = "--gate" in OS.get_cmdline_user_args()
 	data = PlanetData.new()
 	data.planet_name = "proto"
+	# Towns and landmarks: their pads go into the ground before it is built.
+	var rng := RandomNumberGenerator.new()
+	rng.seed = 0x70C1
+	spawn_dir = Vector3(0.12, 1.0, -0.08).normalized()
+	var east := spawn_dir.cross(Vector3.FORWARD).normalized()
+	town_dirs = [_round_dir(spawn_dir, east, 220.0)]
+	for k in 6:
+		town_dirs.append(Vector3(rng.randf_range(-1, 1), rng.randf_range(-1, 1), rng.randf_range(-1, 1)).normalized())
+	landmark_dirs = [_round_dir(spawn_dir, east, 2600.0), _round_dir(spawn_dir, east.rotated(spawn_dir, 2.0), 9000.0),
+			Vector3(-0.3, -0.8, 0.5).normalized()]
+	for d in town_dirs:
+		data.pads.append(PlanetBuildings.town_pad(data, d, 95.0, 70.0))
+	for d in landmark_dirs:
+		data.pads.append(PlanetBuildings.town_pad(data, d, 30.0, 40.0))
 	planet = PlanetBody.new()
 	add_child(planet)
 	planet.setup(data)
+	buildings = PlanetBuildings.new()
+	planet.add_child(buildings)
+	buildings.setup(planet)
+	for d in town_dirs:
+		buildings.add_town(d, 6, 30.0, rng)
+	buildings.add_landmark(landmark_dirs[0], 80, 80, 900, rng)
+	buildings.add_landmark(landmark_dirs[1], 100, 100, 1200, rng)
+	buildings.add_landmark(landmark_dirs[2], 80, 80, 700, rng)
+	buildings.finish()
 	Gravity.planet = planet
 	Gravity.planet_strength = data.gravity_strength
 	print("[planet] %s: radius %.0f m, relief %.0f m, sea %.0f m; impostor baked in %d ms" % [
@@ -44,9 +71,8 @@ func _ready() -> void:
 	walker.name = "Walker"
 	add_child(walker)
 	walker.camera.current = true
-	var spawn_dir := Vector3(0.12, 1.0, -0.08).normalized()
 	walker.place(planet.global_position + data.surface_point(spawn_dir) + spawn_dir * 1.0,
-			Vector3(1, 0, 0))
+			east)
 	planet.activate()
 	# The walker at the origin from the start: the planet's centre is 10 km off.
 	PlanetFrame.recentre(self, walker.global_position)
@@ -129,10 +155,17 @@ func _process(_delta: float) -> void:
 	if walker.frozen and _ground_hit(walker.global_position) != Vector3.INF:
 		walker.frozen = false
 	if hud != null:
-		hud.text = "%s  alt %.0f m  %.0f fps  view %d  shifts %d (last %.1f ms)  %s" % [
+		hud.text = "%s  alt %.0f m  %.0f fps  view %d  shifts %d (last %.1f ms)  buildings %d near, %d far  %s" % [
 				"FLY %.0f m/s" % walker.fly_speed if walker.flying else "walk", alt,
 				Engine.get_frames_per_second(), walker.viewer.view_distance, PlanetFrame.shifts,
-				PlanetFrame.last_us / 1000.0, "(waiting for ground)" if walker.frozen else ""]
+				PlanetFrame.last_us / 1000.0, buildings.near_count, buildings.far_count,
+				"(waiting for ground)" if walker.frozen else ""]
+
+
+## `dir` carried `metres` along the surface toward `toward` (tangent).
+func _round_dir(dir: Vector3, toward: Vector3, metres: float) -> Vector3:
+	var axis := dir.cross(toward).normalized()
+	return dir.rotated(axis, metres / data.radius).normalized()
 
 
 ## A ray down from 50 m over `world` to the ground's collider: the hit, or INF.
@@ -180,6 +213,21 @@ func _run_gate() -> void:
 	_check("the ground under the spawn streams in (< 20 s)", not walker.frozen and wait_s < 20.0, "%.1f s" % wait_s)
 	await get_tree().create_timer(2.0).timeout
 	await _shot("planet_gate_ground")
+	# The town, from 90 m up behind the spawn.
+	if DisplayServer.get_name() != "headless":
+		var town: Vector3 = planet.global_position + data.surface_point(town_dirs[0])
+		var up0 := Gravity.up_at(town)
+		var over := Camera3D.new()
+		over.far = 20000.0
+		add_child(over)
+		var back := (walker.global_position - town)
+		back = (back - up0 * back.dot(up0)).normalized()
+		over.look_at_from_position(town + back * 260.0 + up0 * 90.0, town + up0 * 10.0, up0)
+		over.current = true
+		await _frames(30)
+		await _shot("planet_gate_town")
+		walker.camera.current = true
+		over.queue_free()
 	# Walk 30 s forward.
 	var start := walker.global_position - planet.global_position
 	var air_ticks := 0
@@ -196,6 +244,30 @@ func _run_gate() -> void:
 	_check("walks on the voxel ground (feet down > 97% of ticks)", air_ticks < ticks * 0.03, "%d of %d off, %.0f m walked" % [air_ticks, ticks, walked])
 	var h := planet.altitude_of(walker.global_position) - data.height(planet.dir_of(walker.global_position))
 	_check("stands ON the ground the CPU says is there (within 0.3 m)", absf(h) < 0.3, "%.2f m" % h)
+	# A low cruise toward the first landmark, 2.6 km off: it and the town's
+	# towers come up over the horizon ahead.
+	walker.flying = true
+	walker.pitch = 0.0
+	var lm: Vector3 = planet.global_position + data.surface_point(landmark_dirs[0])
+	var to_lm := lm - walker.global_position
+	walker.place(walker.global_position, to_lm)
+	var near_seen := 0
+	var t_c := Time.get_ticks_msec()
+	var shot_mid := false
+	while Time.get_ticks_msec() - t_c < 32000:
+		var over := planet.altitude_of(walker.global_position) - data.height(planet.dir_of(walker.global_position))
+		walker.fly_speed = 70.0
+		walker.wish = Vector2(0, 1)
+		walker.rise = clampf((25.0 - over) * 0.1, -1.0, 1.0)
+		await get_tree().physics_frame
+		near_seen = maxi(near_seen, buildings.near_count)
+		if not shot_mid and Time.get_ticks_msec() - t_c > 9000:
+			shot_mid = true
+			await _shot("planet_gate_cruise")
+	walker.wish = Vector2.ZERO
+	walker.rise = 0.0
+	await _shot("planet_gate_landmark")
+	_check("the near tier: shells were built near the town", near_seen > 0, "%d at most" % near_seen)
 	# Fly up to 30 km, looking down at the ground ahead.
 	walker.flying = true
 	walker.pitch = -0.9
@@ -213,9 +285,9 @@ func _run_gate() -> void:
 				walker.rise = 0.0
 				await _frames(20)
 				await _shot(marks[m])
-				print("[planet] at %.0f m: impostor %s (fade %.2f), ground %s, view %d" % [
+				print("[planet] at %.0f m: impostor %s (fade %.2f), ground %s, view %d; buildings %d far, %d near" % [
 						alt, planet.impostor.visible, float(planet._impostor_mat.get_shader_parameter("fade")),
-						planet.terrain.visible, walker.viewer.view_distance])
+						planet.terrain.visible, walker.viewer.view_distance, buildings.far_count, buildings.near_count])
 		reached = alt
 	walker.rise = 0.0
 	_check("flew to 30 km", reached >= 30000.0, "%.0f m" % reached)
@@ -237,6 +309,8 @@ func _run_gate() -> void:
 	_check("lands and stands on the ground again", walker.is_on_floor(), "%.2f m over it" % (
 			planet.altitude_of(walker.global_position) - data.height(planet.dir_of(walker.global_position))))
 	await _shot("planet_gate_landed")
+	_check("no building popped in plain sight (fade jumped > 1/3 over the horizon)", buildings.pops == 0,
+			"%d; the biggest one-frame step %.2f" % [buildings.pops, buildings.max_step])
 	print("[planet] frames: worst %.1f ms; over 40 ms: %s" % [_worst_ms, _hitches])
 	print("[planet] gate: %d ok, %d FAIL" % [_ok, _fail])
 	get_tree().quit(1 if _fail > 0 else 0)

@@ -46,6 +46,8 @@ func _init() -> void:
 	cs.shape = cap
 	cs.position = Vector3(0.0, HEIGHT * 0.5, 0.0)
 	add_child(cs)
+	# The ground (layer 1) and the buildings' shells (STRUCTURE).
+	collision_mask = 1 | Layers.STRUCTURE
 	floor_max_angle = deg_to_rad(50.0)
 	floor_snap_length = 0.3
 	camera = Camera3D.new()

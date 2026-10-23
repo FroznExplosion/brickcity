@@ -38,6 +38,10 @@ static func bake(data: PlanetData, width := 512, height_px := 256) -> Dictionary
 				c = snow
 			elif h > 26.0:
 				c = rock
+			# A town's pad from orbit: concrete grey.
+			for pad in data.pads:
+				if (dir * data.radius).distance_to((pad.dir as Vector3) * data.radius) < float(pad.flat):
+					c = Color(0.55, 0.55, 0.57)
 			cm.set_pixel(x, y, c)
 	return {
 		"heightmap": ImageTexture.create_from_image(hm),

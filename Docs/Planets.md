@@ -1124,3 +1124,28 @@ Above the ground the horizon is kilometres off and nothing hides a building's fo
    on the impostor.
 5. Then the pawn and mech ported to local down, the AI's nav regions, storeys and destruction on
    the planet, biomes (`PlanetFields`), vegetation.
+
+### 11.6 State (2026-10-23): a planet to walk on and fly from
+
+Built (steps 1-4 of 11.5): `addons/zylann.voxel`; `scripts/planet/` -- `PlanetData`,
+`PlanetGraph` (the generator), `PlanetImpostorBake`, `PlanetBody`, `PlanetBuildings`,
+`PlanetWalker`, `PlanetFrame`, `planet_scene.gd`; `shaders/planet_*`; `scenes/planet.tscn`. Run it,
+or `-- --gate` (9 checks, all pass, windowed and headless):
+
+- the ground streams in under the spawn in 0.3-3 s; a 30 s walk never leaves the floor and stands
+  exactly where the CPU says the ground is (`tools/planet_graph_probe.gd` holds the generator to
+  the CPU within 6 mm, pads included -- both sample the relief on the datum sphere under a point);
+- a cruise at 25 m passes a town (32 shells built) toward a 900-course spire 2.6 km off, which comes
+  up over the horizon ahead;
+- climbing to 30 km the voxel ground fades into the impostor (fade 0.62 at 1.2 km, 1.0 by 5 km),
+  the origin follows in 8 shifts of 0.1 ms each, and the descent lands on the ground again;
+- **no building popped in plain sight** (a fade jumping by more than a third while its top is over
+  the horizon): they crest, then fade by size from the air.
+
+What it is NOT yet: the pawn (the walker stands in for it), the AI, destruction (shells only, from
+the city's `BuildingShell`, with their collision boxes), biomes (one ground palette), trees. The
+worst frames are the first frame's shader compiles (~1.7 s) and the gate's own screenshots
+(~100-200 ms each); a frame-time pass with the editor closed comes with the next step.
+
+![a town on its pad, the cruise toward the spire, the spire up close](Planets/c1_town_cruise_landmark.jpg)
+![the climb: 1.2 km (the cross-fade), 5 km, 30 km](Planets/c1_climb.jpg)
