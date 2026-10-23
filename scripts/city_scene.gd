@@ -2662,11 +2662,13 @@ func _make_shell(id: int, coarse: bool = false, far: bool = false) -> void:
 	# came back whole past DEMESH_RANGE, windows and all, and went again inside
 	# it -- "respawning" as the camera moved. One with no bricks left draws
 	# nothing.
+	var t_sh := Time.get_ticks_usec()
 	var damage: Dictionary = b.damage_profile
 	var nothing_left := false
 	if b.is_materialised() and not b.is_build():
 		damage = registry.live_damage_profile(id)
 		nothing_left = world.get_alive_block_count(b.chunk) == 0 and not registry.is_partial(b)
+	t_sh = _part("sh_profile", t_sh)
 	var mi := MeshInstance3D.new()
 	# G1b: a damaged building that has given its bricks back must still LOOK
 	# damaged. A tower takes that as a per-band segment mask, because its shell
@@ -2687,6 +2689,7 @@ func _make_shell(id: int, coarse: bool = false, far: bool = false) -> void:
 		pass  # the node, for every "has a shell" question; nothing drawn
 	else:
 		mi.mesh = _recipe_shell_mesh(b, coarse, damage)
+	t_sh = _part("sh_mesh", t_sh)
 	mi.material_override = brick_material
 	mi.transform = b.xform
 	# Stage 5: a banded shell fades out over the fade band, blended over its
@@ -2699,11 +2702,17 @@ func _make_shell(id: int, coarse: bool = false, far: bool = false) -> void:
 	_shells[id] = mi
 	_shell_coarse[id] = coarse
 	# Damaged and still in bricks (_demesh): drawn from its bricks as they are
-	# once a coarse mesh of them is made (_far_real); the shell meanwhile.
+	# once a coarse mesh of them is made (_far_real); the shell meanwhile. Laid
+	# a storey at a time too: its bricks are the laid storeys, and its rest
+	# shell draws the others beside them (_rest_drawn). Left to the shell, its
+	# damage was the profile's -- a hole per band, the floors drawn across it
+	# from 110 m out (CollapseNext 29(a), --lodbreak's ghost walls: 14-31 of
+	# 337-355 hits on the 320 m tower).
 	var real := b.is_materialised() and not b.is_build() and not nothing_left and not boxed \
-			and not damage.is_empty() and not _toppling.has(id) and not registry.is_partial(b)
+			and not damage.is_empty() and not _toppling.has(id)
 	if real:
 		_far_real(id, mi)
+	t_sh = _part("sh_real", t_sh)
 	# Its windows, with a room painted behind each: a shell has no openings, so
 	# the fake rung cannot show through it. Not on the coarse tier -- past a
 	# hundred metres a window is a pixel -- and not on a player build, which
@@ -2725,6 +2734,7 @@ func _make_shell(id: int, coarse: bool = false, far: bool = false) -> void:
 		_shell_far[id] = true
 		return
 	_make_shell_body(id)
+	_part("sh_body", t_sh)
 
 
 ## The collision boxes of a shell, and the AI's proxies of them.
@@ -3356,13 +3366,16 @@ var rest_shells_made := 0
 ## only collision -- and its proxies the only thing the AI asks -- where the
 ## storeys are not laid. It is DRAWN only while the bricks are: behind a
 ## stand-in shell (promoting, or its mesh given up at range) that shell draws
-## all of it (_rest_drawn).
+## all of it (_rest_drawn) -- until that shell is drawn from the bricks
+## (_far_real), which are only the laid storeys: then it draws the rest again.
 func _rest_wanted(b: BuildingRegistry.Building) -> bool:
 	return b != null and registry.is_partial(b) and not _toppling.has(b.id)
 
 
 func _rest_drawn(id: int) -> bool:
-	return _brick_nodes.has(id) and not _shells.has(id)
+	if not _shells.has(id):
+		return _brick_nodes.has(id)
+	return _far_real_done.get(id) == _shells[id]
 
 
 func _rest_sync(id: int) -> void:
@@ -3551,7 +3564,9 @@ func _piece_to_bricks(p: ShellPiece) -> BrickIsland:
 		return null
 	var lines := registry.storey_lines(b)
 	var xf := p.global_transform
+	var _t0 := Time.get_ticks_usec()
 	var chunk := registry.shell_piece_chunk(p.building, p.lo, p.hi, p.holes, xf)
+	var _t1 := Time.get_ticks_usec()
 	var ids := world.get_blocks_in_band(chunk, lines[p.lo], lines[p.hi]) if chunk >= 0 \
 			else PackedInt32Array()
 	var isl: BrickIsland = null
@@ -3569,14 +3584,25 @@ func _piece_to_bricks(p: ShellPiece) -> BrickIsland:
 		e.points = DamageLog.rest_points(xf)
 		var done := authority.commit_entry(e)
 		var piece := DamageLog.piece_id(done.seq) if done != null else -1
+		var _t2 := Time.get_ticks_usec()
 		isl = islands.spawn(chunk, ids, p.linear_velocity, p.angular_velocity, piece, p.building)
+		var _t3 := Time.get_ticks_usec()
 		if isl != null and isl.is_valid():
 			world.heal_joints(isl.chunk)
+		shell_brick_split = "%d bricks, storeys %d-%d: laid %.1f + log %.1f + spawn %.1f (%s) + joints %.1f ms" % [
+				ids.size(), p.lo, p.hi - 1, float(_t1 - _t0) / 1000.0, float(_t2 - _t1) / 1000.0,
+				float(_t3 - _t2) / 1000.0, str(islands.spawn_last),
+				float(Time.get_ticks_usec() - _t3) / 1000.0]
 	if chunk >= 0:
 		world.release_chunk(chunk)
 	shell_pieces_bricked += 1
 	p.queue_free()
 	return isl
+
+
+## The last shell piece made bricks, where its time went (a --big --shot's
+## damage spikes, 2026-10-23: 23-80 ms in _blast_shell_pieces).
+var shell_brick_split := ""
 
 
 ## Once a tick: a shell piece that landed hard where somebody could see it
@@ -8948,8 +8974,11 @@ func _run_lodbreak_pass() -> void:
 		await _frames(90)
 		_lodbreak_say(b, "%d m, before" % int(d))
 		_fire(12.0)
+		_ghost_asked = false
+		_ghost_stops.clear()
 		for sec in [1, 3, 8]:
 			await _frames(60 if sec == 1 else 120 if sec == 3 else 300)
+			_ghost_asked = sec == 8
 			_lodbreak_say(b, "%d m, after" % int(d))
 			_save("lodbreak_%d_%dm_wait%d" % [k, int(d), sec])
 		var at := d
@@ -8979,6 +9008,9 @@ func _run_lodbreak_pass() -> void:
 		_gate_ok("%d m: its walls drawn at every stop (CollapseNext 29(b))" % int(d),
 				_lodbreak_blind == 0, "%d stop(s) with nothing drawing them" % _lodbreak_blind)
 		_lodbreak_blind = 0
+		_gate_ok("%d m: no wall drawn where its bricks are gone, from 8 s on (CollapseNext 29(a))" % int(d),
+				_ghost_stops.is_empty(), "; ".join(_ghost_stops))
+		_ghost_asked = false
 		_save("lodbreak_%d_%dm_settled" % [k, int(d)])
 		var ff: Array = _floating_furniture()
 		if not ff.is_empty():
@@ -9008,6 +9040,10 @@ func _run_lodbreak_pass() -> void:
 		var hung: Array = await _wake_hung_pieces(b.id, "lodbreak_%d_%dm" % [k, int(d)])
 		_gate_ok("%d m: no piece frozen over air drops when woken close up (CollapseNext 29)" % int(d),
 				int(hung[1]) == 0, "%d of %d dropped" % [hung[1], hung[0]])
+		if k == mini(dists.size(), picks.size()) - 1:
+			var gc: Array = _ghost_control(b.id)
+			_gate_ok("the ghost-wall check sees bricks killed and not yet redrawn",
+					int(gc[1]) > int(gc[0]), "%d ghost hit(s) before, %d after %d brick(s) killed" % gc)
 	print("[lodbreak] %d ok, %d FAIL" % [_gate_pass, _gate_fail])
 	get_tree().quit(1 if _gate_fail > 0 else 0)
 
@@ -9042,7 +9078,143 @@ func _walls_drawn_by(id: int) -> String:
 	return " + ".join(by)
 
 
+## Walls drawn where no brick is (CollapseNext 29(a): "from mid range, parts
+## of the wall drawn that should be gone, there until the player comes close").
+## GHOST_RAYS rays from the camera across building `id`'s box, against the
+## triangles of what draws it from its bricks -- its brick mesh, its bands
+## (_brick_bands), its shell -- and at the nearest hit, half a cell into the
+## face: no solid cell of its chunk within a cell of there is a ghost. The rest
+## shell (storeys not laid), the far box and the instanced set are whole by
+## design and not asked. [rays that hit, ghosts, {source: ghosts}, five ghosts,
+## hits on storeys not laid]. `solid_out`, if given, gets the solid cells hit
+## (up to 40): _ghost_control kills them to see the check see them.
+const GHOST_RAYS := Vector2i(24, 48)
+
+func _ghost_walls(id: int, solid_out: Array = []) -> Array:
+	var b := registry.get_building(id)
+	if b == null or not b.is_materialised():
+		return [0, 0, {}, [], 0]
+	var sources: Array = []   # [MeshInstance3D, its TriangleMesh, what it is]
+	var bricks = _brick_nodes.get(id)
+	if bricks is MeshInstance3D and (bricks as MeshInstance3D).is_visible_in_tree() \
+			and (bricks as MeshInstance3D).mesh != null \
+			and (bricks as MeshInstance3D).mesh.get_surface_count() > 0:
+		sources.append([bricks, (bricks as MeshInstance3D).mesh.generate_triangle_mesh(), "bricks"])
+	for n in _brick_bands.get(id, []):
+		var band := n as MeshInstance3D
+		if band != null and is_instance_valid(band) and band.is_visible_in_tree() \
+				and band.mesh != null and band.mesh.get_surface_count() > 0:
+			sources.append([band, band.mesh.generate_triangle_mesh(), "band"])
+	var shell: MeshInstance3D = _shells.get(id)
+	if shell != null and shell.is_visible_in_tree() and shell.mesh != null \
+			and shell.mesh.get_surface_count() > 0:
+		sources.append([shell, shell.mesh.generate_triangle_mesh(), "shell"])
+	var rest = _rest_shells.get(id, [null])[0]
+	if rest is MeshInstance3D and is_instance_valid(rest) and (rest as MeshInstance3D).is_visible_in_tree() \
+			and (rest as MeshInstance3D).mesh != null and (rest as MeshInstance3D).mesh.get_surface_count() > 0:
+		sources.append([rest, (rest as MeshInstance3D).mesh.generate_triangle_mesh(), "rest shell"])
+	if sources.is_empty():
+		return [0, 0, {}, [], 0]
+	var box := CityPlacer.box_of(b)
+	var c := box.get_center()
+	var eye := camera.global_position
+	var right := Vector3(-(c - eye).z, 0.0, (c - eye).x).normalized()
+	var wide := absf(box.size.x * right.x) + absf(box.size.z * right.z)
+	var reach := eye.distance_to(c) + box.size.length()
+	var into := world.get_chunk_transform(b.chunk).affine_inverse()
+	var origin := world.get_chunk_origin(b.chunk)
+	var cs := BrickWorld.get_cell_size()
+	var hits := 0
+	var whole := 0
+	var ghosts := 0
+	var by := {}
+	var some: Array = []   # up to five ghosts: where, and its face's normal
+	for i in GHOST_RAYS.x:
+		for j in GHOST_RAYS.y:
+			var at := c + right * wide * ((i + 0.5) / GHOST_RAYS.x - 0.5) \
+					+ Vector3.UP * box.size.y * ((j + 0.5) / GHOST_RAYS.y - 0.5)
+			var to := eye + (at - eye).normalized() * reach
+			var best := INF
+			var p := Vector3.ZERO
+			var nrm := Vector3.ZERO
+			var what := ""
+			for s in sources:
+				var xf: Transform3D = (s[0] as Node3D).global_transform
+				var inv := xf.affine_inverse()
+				var hit: Dictionary = (s[1] as TriangleMesh).intersect_segment(inv * eye, inv * to)
+				if hit.is_empty():
+					continue
+				var w: Vector3 = xf * (hit.position as Vector3)
+				var dd := eye.distance_to(w)
+				if dd < best:
+					best = dd
+					p = w
+					nrm = (xf.basis * (hit.normal as Vector3)).normalized()
+					what = s[2]
+			if what == "":
+				continue
+			# Half a cell into the face: what was drawn there. On a storey line
+			# the face itself belongs to neither (the underside of a storey not
+			# laid, seen from a crater, read as the laid one under it).
+			var inner := p - nrm * cs.y * 0.5
+			# Laid a storey at a time: a storey not laid, and still the
+			# building's, is drawn whole by design -- not asked. One laid, or
+			# one that left over the cut, is judged by its bricks.
+			if b.banded:
+				var at_s := registry.storeys_in(id, inner, 0.0)
+				var s := at_s[0] if not at_s.is_empty() else -1
+				if not b.storeys_laid.has(s) and (b.cut_storey < 0 or s < b.cut_storey):
+					whole += 1
+					continue
+			hits += 1
+			var cell := Vector3i(((into * inner) / cs).floor()) + origin
+			var solid := false
+			for dx in [0, -1, 1]:
+				for dy in [0, -1, 1]:
+					for dz in [0, -1, 1]:
+						if not solid and world.is_solid(b.chunk, cell + Vector3i(dx, dy, dz)):
+							solid = true
+							if solid_out.size() < 40:
+								solid_out.append(cell + Vector3i(dx, dy, dz))
+			if not solid:
+				ghosts += 1
+				by[what] = int(by.get(what, 0)) + 1
+				if some.size() < 5:
+					some.append("%s n%s" % [str(p.snapped(Vector3.ONE * 0.1)), str(nrm.snapped(Vector3.ONE * 0.1))])
+	return [hits, ghosts, by, some, whole]
+
+
+## Does _ghost_walls see a wall drawn where its bricks have gone? The bricks
+## its rays hit, and every one within two cells, are killed -- with no word to
+## anything that redraws -- and it is asked again in the same frame: those
+## hits must now be ghosts. Leaves the building drawn wrong, so only once, at
+## the pass's end. [ghosts before, ghosts after, bricks killed].
+func _ghost_control(id: int) -> Array:
+	var b := registry.get_building(id)
+	var cells: Array = []
+	var before: Array = _ghost_walls(id, cells)
+	if b == null or not b.is_materialised() or cells.is_empty():
+		return [before[1], before[1], 0]
+	var killed := 0
+	for e in cells:
+		var cell: Vector3i = e
+		for dx in range(-2, 3):
+			for dy in range(-2, 3):
+				for dz in range(-2, 3):
+					if world.kill_block(b.chunk, cell + Vector3i(dx, dy, dz)) >= 0:
+						killed += 1
+	var after: Array = _ghost_walls(id)
+	return [before[1], after[1], killed]
+
+
 var _lodbreak_blind := 0   ## stops where a building with bricks alive drew no walls
+## From 8 s after the shot on (the building quiet, flown up to through the mid
+## ring), a stop may show GHOST_ALLOWED ghost hits or GHOST_SHARE of its hits,
+## whichever is more: 1-2 are seen while pieces are still moving off it.
+const GHOST_ALLOWED := 2
+const GHOST_SHARE := 0.03
+var _ghost_asked := false
+var _ghost_stops: Array = []
 
 
 ## Of eight ways round building `b`, starting at `away`, the first with no other
@@ -9066,6 +9238,16 @@ func _lodbreak_say(b: BuildingRegistry.Building, what: String) -> void:
 	var bricks: Node3D = _brick_nodes.get(b.id)
 	var drawn := _walls_drawn_by(b.id)
 	print("    its walls drawn by: %s" % (drawn if drawn != "" else "NOTHING"))
+	var t_ghost := Time.get_ticks_msec()
+	var gw: Array = _ghost_walls(b.id)
+	print("    ghost walls: %d of %d hits drawn where no brick is %s, %d on storeys not laid%s (%d ms)" % [
+			gw[1], gw[0], str(gw[2]), gw[4],
+			" at " + ", ".join(gw[3]) if int(gw[1]) > 0 else "",
+			Time.get_ticks_msec() - t_ghost])
+	if b.banded:
+		print("      storeys laid %s of %d, cut at %d" % [str(b.storeys_laid), registry.storey_count(b.id), b.cut_storey])
+	if _ghost_asked and int(gw[1]) > maxi(GHOST_ALLOWED, int(float(gw[0]) * GHOST_SHARE)):
+		_ghost_stops.append("%s: %d of %d" % [what, gw[1], gw[0]])
 	# Past SHELL_RANGE a building has no node at all: the far city draws it.
 	if drawn == "" and alive != 0 and b.xform.origin.distance_to(camera.global_position) < SHELL_RANGE:
 		_lodbreak_blind += 1
@@ -11436,11 +11618,15 @@ func _apply_blast(point: Vector3, radius: float, chip_hp := 0) -> void:
 	# rest stays at rest until something is taken from under it (CollapseNext
 	# 1.10); a piece's own bricks say the same for themselves in damage().
 	var t_pieces := Time.get_ticks_usec()
+	var t_part := t_pieces
 	if not _shell_pieces.is_empty():
 		_blast_shell_pieces(point, reach)
+		t_part = _part("dmg_shell_pieces", t_part)
 	islands.damage_near(point, radius, chip_hp)
+	t_part = _part("dmg_near", t_part)
 	if took_bricks:
 		islands.support_gone(AABB(point - Vector3.ONE * reach, Vector3.ONE * reach * 2.0))
+		_part("dmg_support", t_part)
 	_part("dmg_pieces", t_pieces)
 
 
@@ -11488,6 +11674,42 @@ func _fire(radius: float) -> void:
 # Per-tick: collapse whatever is materialised
 # ---------------------------------------------------------------------------
 
+## What inside a slow tick's biggest phase it was, from this tick's parts: the
+## spikes of a --big --shot are a different phase run to run (islands, damage,
+## promote, stream, bands), and only the worst tick used to say its parts.
+const _SPIKE_PARTS := {"damage": ["dmg_promote", "dmg_rooms", "dmg_hit", "dmg_pieces",
+				"dmg_shell_pieces", "dmg_near", "dmg_support", "dmg_disable"],
+		"stream": ["st_trim", "st_merge", "st_rooms", "st_detail", "st_demesh", "st_remesh",
+				"st_reshell", "st_residency", "st_shells", "sh_profile", "sh_mesh", "sh_real", "sh_body"],
+		"bands": ["bd_harvest", "bd_apply", "bd_done", "bd_cpp", "bd_upload"],
+		"disable": ["dis_collision", "dis_rooms"],
+		"promote": ["bricks", "collision", "frames", "furniture", "shell"]}
+
+func _spike_parts(phase: String) -> String:
+	if phase == "islands":
+		var lt: Array = islands.last_tick
+		if lt.size() < 6:
+			return ""
+		return "loop %.1f, resolve %s, landings %.1f, reshapes %.1f, mesh %.1f; slowest mesh so far %s" % [
+				lt[1], str(lt[2]), lt[3], lt[4], lt[5], str(islands.mesh_drain_worst)]
+	var out := ""
+	for k in _SPIKE_PARTS.get(phase, []):
+		var v := float(_prof.get(k, 0.0))
+		if v >= 0.5:
+			out += "%s %.1f  " % [k, v]
+	if phase == "damage" and float(_prof.get("dmg_shell_pieces", 0.0)) >= 0.5:
+		out += "(last shell piece made bricks: %s) " % shell_brick_split
+	if phase == "damage" and _near_at_tick.size() == 5:
+		var dn: Array = islands.damage_near_ms
+		out += "(near: wake %.1f, walk %.1f, hits %.1f, push %.1f, %d call(s); worst unit so far %s)" % [
+				dn[0] - _near_at_tick[0], dn[1] - _near_at_tick[1], dn[2] - _near_at_tick[2],
+				dn[3] - _near_at_tick[3], dn[4] - _near_at_tick[4], str(islands.unit_worst)]
+	return out
+
+
+var _near_at_tick: Array = []   ## islands.damage_near_ms as this tick began
+
+
 ## Time a PART of a phase, into the same per-tick record, so the worst tick can
 ## say what inside `damage` it was: see _report_profile.
 func _part(key: String, t0: int) -> int:
@@ -11507,6 +11729,8 @@ func _physics_process(_delta: float) -> void:
 		_restud()
 	_prof = {}
 	_sync_invincible()
+	if _sampling:
+		_near_at_tick = islands.damage_near_ms.duplicate()
 	var t_tick := Time.get_ticks_usec()
 	var t := t_tick
 	# What the workers finished uploading since the last call into the
@@ -11976,6 +12200,8 @@ func _physics_process(_delta: float) -> void:
 			var top := ""
 			for k in mini(3, phases.size()):
 				top += "%s %.1f  " % [phases[k][1], phases[k][0]]
+			if not phases.is_empty():
+				top += "| " + _spike_parts(phases[0][1])
 			_prof_spikes.append([tick_total, Engine.get_physics_frames(), top])
 		if tick_total > _prof_worst_ms:
 			_prof_worst_ms = tick_total
@@ -11998,6 +12224,7 @@ func _free_shell(id: int) -> void:
 	_shell_box.erase(id)
 	_far_hide(id)
 	_shell_inst.erase(id)
+	_far_real_done.erase(id)
 	var fb := registry.get_building(id)
 	if fb != null:
 		_inst_sync(fb)
@@ -12818,13 +13045,14 @@ static func _far_box_mesh() -> ArrayMesh:
 ## mesh has its holes where the bricks are gone. Asked again whenever the shell
 ## is (_shell_stale, after a hit).
 var _far_real_owed := {}   ## building id -> the shell node waiting for its mesh
+var _far_real_done := {}   ## building id -> the shell node drawn from its bricks
 var far_real_built := 0
 
 
 func _far_real(id: int, mi: MeshInstance3D) -> void:
 	var b := registry.get_building(id)
 	if world.get_alive_block_count(b.chunk) < IslandManager.COARSE_ASYNC_BLOCKS:
-		_far_real_apply(mi, world.build_chunk_coarse_mesh(b.chunk))
+		_far_real_apply(id, mi, world.build_chunk_coarse_mesh(b.chunk))
 		return
 	if not world.coarse_pending(b.chunk):
 		world.coarse_chunk_async(b.chunk)
@@ -12840,19 +13068,20 @@ func _harvest_far_real() -> void:
 			continue
 		if world.coarse_ready(b.chunk):
 			_far_real_owed.erase(id)
-			_far_real_apply(mi, world.take_coarse_mesh(b.chunk))
+			_far_real_apply(id, mi, world.take_coarse_mesh(b.chunk))
 		elif not world.coarse_pending(b.chunk):
 			# Settled by an edit (BrickWorld.settle_coarse_job): asked again.
 			world.coarse_chunk_async(b.chunk)
 
 
-func _far_real_apply(mi: MeshInstance3D, arrays: Array) -> void:
+func _far_real_apply(id: int, mi: MeshInstance3D, arrays: Array) -> void:
 	var m := ArrayMesh.new()
 	if not arrays.is_empty() and IslandManager.mesh_arrays_ok(arrays, "far building"):
 		m.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
 	if mi.mesh != null:
 		_retirer.retire(mi.mesh)
 	mi.mesh = m
+	_far_real_done[id] = mi
 	far_real_built += 1
 
 
@@ -12884,16 +13113,22 @@ func _stream_detail() -> void:
 				continue
 			if now - b.materialised_at < DEMESH_AFTER_MS:
 				continue
+			var t_one := Time.get_ticks_usec()
 			_demesh(id)
+			_part("st_demesh", t_one)
 			done += 1
 		elif dist < DEMESH_RANGE:
 			_shell_stale.erase(id)
+			var t_one := Time.get_ticks_usec()
 			_remesh_bricks(id)
+			_part("st_remesh", t_one)
 			done += 1
 		elif _shell_stale.has(id):
 			_shell_stale.erase(id)
+			var t_one := Time.get_ticks_usec()
 			_free_shell(id)
 			_make_shell(id, true)
+			_part("st_reshell", t_one)
 			done += 1
 	_demesh_ms += float(Time.get_ticks_usec() - t0) / 1000.0
 
@@ -13334,7 +13569,9 @@ func _process(delta: float) -> void:
 	zoom_in = minf(zoom_in, 6.0)   # a scripted shot through a pinhole is not a scope
 	RenderingServer.global_shader_parameter_set(&"lod_zoom", 1.0 / zoom_in)
 	if brick_near != null:
-		brick_near.uploads = _band_jobs.size() + islands.mesh_jobs()
+		# Every upload on a worker: the bands', the pieces', the shadow proxies'
+		# (BuildingShell.build_mesh makes its ArrayMesh there too).
+		brick_near.uploads = _band_jobs.size() + islands.mesh_jobs() + _shadow_jobs.size()
 		brick_near.step(camera.global_position, zoom_in, -camera.global_basis.z)
 	if _spaces_view != null:
 		_follow_spaces_view()
@@ -16009,27 +16246,26 @@ func _run_chamfer_pass() -> void:
 			"%d drawn, %d wanted, over %d bands" % [after.drawn, after.wanted, after.bands])
 	await _save("chamfer_hit")
 
-	# The cap (Options > Video): squeezed to two bands of each, it holds two,
-	# and they are the ones in front of the camera. Then turned round, the
-	# bands it holds follow the view.
-	var cap_was := [BrickNear.cap_enabled, BrickNear.max_bands, BrickNear.max_stud_bands]
+	# The cap (Options > Video): its budgets squeezed to nothing, it still lets
+	# one band of each in -- and that one is the wall in front of the camera.
+	var cap_was := [BrickNear.cap_enabled, BrickNear.max_tris, BrickNear.max_studs]
 	BrickNear.cap_enabled = true
-	BrickNear.max_bands = 2
-	BrickNear.max_stud_bands = 2
+	BrickNear.max_tris = 1
+	BrickNear.max_studs = 1
 	await _frames(4)
 	brick_near.settle(camera.global_position)
 	await _frames(4)
 	var held: Vector2i = brick_near.held()
-	_gate_ok("with the cap at two, two bands are chamfered and two have stud geometry",
-			held.x <= 2 and held.y <= 2 and brick_near.chamfered_bands > 0,
+	_gate_ok("with the cap's budgets at nothing, one band is chamfered and one has stud geometry",
+			held.x == 1 and held.y <= 1 and brick_near.chamfered_bands == 1,
 			"%d chamfered (%d held), %d with stud geometry" % [brick_near.chamfered_bands,
 				held.x, held.y])
 	var ahead := camera.global_position + (-camera.global_basis.z) * 1.6
 	var ahead_near := _near_band_at(ahead)
-	_gate_ok("and the wall in front is one of them", ahead_near)
+	_gate_ok("and it is the wall in front", ahead_near)
 	BrickNear.cap_enabled = cap_was[0]
-	BrickNear.max_bands = cap_was[1]
-	BrickNear.max_stud_bands = cap_was[2]
+	BrickNear.max_tris = cap_was[1]
+	BrickNear.max_studs = cap_was[2]
 
 	# And from across the street there is none: at that size it is noise, and
 	# it is not paid for.
@@ -16077,7 +16313,7 @@ func _run_chamfer_cost() -> void:
 	# the flag is set again once the city has settled (_cap_arg).
 	_cap_arg()
 	print("[chamfer] cost, near tier %s, cap %s" % ["ON" if BrickNear.enabled else "OFF (--no-near)",
-			"on (%d/%d)" % [BrickNear.max_bands, BrickNear.max_stud_bands]
+			"on (%dk triangles, %d studs)" % [BrickNear.max_tris / 1000, BrickNear.max_studs]
 			if BrickNear.cap_enabled else "OFF (--no-cap)"])
 	# The renderer's own clock as well as the frame's: a frame is held to the
 	# display's 16.6 ms whatever it cost to draw.
@@ -16134,7 +16370,7 @@ func _run_chamfer_street() -> void:
 	await _frames(90)
 	_cap_arg()
 	print("[street] near tier %s, cap %s" % ["ON" if BrickNear.enabled else "OFF",
-			"on (%d/%d)" % [BrickNear.max_bands, BrickNear.max_stud_bands]
+			"on (%dk triangles, %d studs)" % [BrickNear.max_tris / 1000, BrickNear.max_studs]
 			if BrickNear.cap_enabled else "OFF"])
 	var fx: float = b.recipe.footprint_x * STUD
 	var start: Vector3 = b.xform * Vector3(-4.0, 0.0, -3.0)
@@ -16180,8 +16416,9 @@ func _run_chamfer_street() -> void:
 		if float(tt[0]) > 25.0:
 			over += 1
 	print("[street]   walk: %s; %d frames over 25 ms" % [_frame_line(times), over])
-	print("[street]   held at most %d chamfered, %d with stud geometry; %d triangles, %d studs at most; worst step %.2f ms"
-			% [held_max.x, held_max.y, tris_max, studs_max, near_worst])
+	print("[street]   held at most %d chamfered, %d with stud geometry (budgets %dk triangles, %d studs); %d triangles, %d studs at most; worst step %.2f ms"
+			% [held_max.x, held_max.y, BrickNear.max_tris / 1000, BrickNear.max_studs,
+				tris_max, studs_max, near_worst])
 	print("[street]   %s" % brick_near.report())
 	print("[street]   studs, worst: fetch %.2f ms, split %.2f, set %.2f; %d in one band at most"
 			% [brick_near.worst_fetch_ms, brick_near.worst_split_ms, brick_near.worst_set_ms,

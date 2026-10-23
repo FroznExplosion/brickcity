@@ -962,7 +962,8 @@ func _round7() -> void:
 	var shown := []
 	for i in m._open_filter.item_count:
 		shown.append(m._open_filter.get_item_metadata(i))
-	_ok("Open lists only assets", shown == ["gun", "mech"], str(shown))
+	# Furniture and items are made here too (their library is shared with the workshop).
+	_ok("Open lists only assets, and furniture and items", shown == ["item", "gun", "mech"], str(shown))
 	_ok("no building menus: Insert, Type, Layer, Generated hidden", not m._insert.visible and not m._type.visible
 			and not m._layer.visible and not m._gen.visible)
 	_ok("and no Test in city", m._file.get_popup().get_item_index(WorkshopMenu.F_CITY) < 0)

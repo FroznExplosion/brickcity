@@ -254,22 +254,40 @@ a mesh of the whole chunk.
   own is uploading, no band's studs are touched; `settle` does not wait. Two runs each way: near
   spikes over 5 ms 16 and 34 without, 6 and 8 with; step mean 0.60-0.85 ms against 0.51.
 
-* **The cap** (2026-10-21; Options > Video: Near Detail Cap, Near Detail -- Bevelled, Near
-  Detail -- Studs). Distance alone let the tier take on every band inside its rings: a dense
-  street's storeys, a collapse's every piece -- each a build, an upload, and its studs re-sorted
-  as the camera walks. With `cap_enabled`, at most `max_bands` (32) bands hold a chamfered mesh
-  (or are building one) and `max_stud_bands` (48) have stud GEOMETRY. Bands are placed by a
-  score: their distance (through the zoom) times 1 straight ahead, `FACING_SIDE` (1.75) square to
-  the side, `FACING_BEHIND` (2.5) behind -- except within `ALWAYS_NEAR` (2 m), the player's own
-  surroundings, which come first whichever way they face. The held bands are scored every step;
-  the rest as the round robin reaches them. A band placed better than the worst held, by
-  `SWAP_MARGIN` (0.8), takes its place, one a step, and the place given up is kept for a band
-  placed at least that well (otherwise whichever band the round robin reached first took it,
-  and two could trade places for ever). A band without a stud place draws its open studs as the
-  far ring's cards, whatever its distance -- the brick shader paints none, so leaving them out
-  would leave its tops smooth; the card ring past `stud_radius` is not capped. Off: distance
-  alone, as before. The `--chamfer` gate squeezes it to two of each and checks it holds two and
-  that the wall in front is one of them; `--chamfer --cost --no-cap` is the timing pass without.
+* **The cap** (2026-10-21, a budget since 10-23; Options > Video: Near Detail Cap, Near Detail --
+  Bevelled in thousands of triangles, Near Detail -- Studs). Distance alone let the tier take on
+  every band inside its rings: a dense street's storeys, a collapse's every piece -- each a build,
+  an upload, and its studs re-sorted as the camera walks. With `cap_enabled`, the bands holding a
+  chamfered mesh (or building one) hold at most `max_tris` (120k) triangles between them, and the
+  bands with stud GEOMETRY at most `max_studs` (4,000) studs. A BUDGET, not a count: a band is a
+  storey, a few hundred triangles to twenty thousand, and the first cap -- 32 bands and 48 --
+  bounded nothing (the street walk held 10 and 12). A band's cost before it is built is its flat
+  mesh's triangles times what built bands came out at (`_ratio`, learnt as they come in), then its
+  own; a stud band's is what its geometry rings came to last time, else half its studs. The
+  budget may run over by `OVER_SLACK` (10%) before anything is given back, so a band that came out
+  a little bigger than guessed is not built and dropped in turn; one band is always let in,
+  whatever it costs.
+
+  Bands are placed by a score: their distance (through the zoom) times 1 straight ahead,
+  `FACING_SIDE` (1.75) square to the side, `FACING_BEHIND` (2.5) behind -- except within
+  `ALWAYS_NEAR` (2 m), the player's own surroundings, which come first whichever way they face. The
+  held bands are scored every step; the rest as the round robin reaches them. A band placed better
+  than the worst held, by `SWAP_MARGIN` (0.8), takes its place, one a step, and the room given up is
+  kept for a band placed at least that well until the budget is three-quarters free again
+  (otherwise whichever band the round robin reached first took it, and two could trade places for
+  ever). A band without a stud place draws its open studs as the far ring's cards, whatever its
+  distance -- the brick shader paints none, so leaving them out would leave its tops smooth; the
+  card ring past `stud_radius` is not capped. Off: distance alone, as before.
+
+  The `--chamfer` gate sets both budgets to nothing and checks it holds exactly one band (the one
+  always let in) and that it is the wall in front. `big_city.tscn -- --chamfer --cost --street`
+  walks 40 m of street at eye height looking about, `--no-cap` without; two runs each (2026-10-23,
+  editor closed): held at most 7 bands, 102k triangles against 10 and 145k; GPU 12.1-12.9 ms
+  mean against 12.4-13.3. What the cap does NOT touch is the worst step, 8-17 ms either way: it
+  is handing a storey's stud rings to the renderer (`MultiMesh.set_buffer`, `worst_set_ms`
+  3.8-11.6 ms for 2,166 studs). Growing the buffers in powers of two and drawing a part of them
+  (`visible_instance_count`), so no resort reallocated, was tried and made no difference
+  (6.2-11.6 ms): the wait is elsewhere in the renderer, and is the next thing to find.
 * **Zoom.** Through a scope the world is as near as it looks. The city passes `step` the zoom
   (the unzoomed field of view's tangent over the camera's, capped at 6) and every distance here
   is divided by it: a wall seen through 4x glass is chamfered and studded -- bevelled studs, not

@@ -34,6 +34,9 @@ see 9 below), 10, 13-16. 6 waits for the user to look in play.
 in order: 4, 7-8, 9, 10, 13-16; 6 waits for the user. Aside, for the storey-units chat: the
 `--ring` pass prints `[city] FAIL the log does not replay into the same structure` (host 862
 bricks, replay 1506: the replay lays the whole building, the host only the storeys it reached).
+**2026-10-23:** 4 found and fixed -- see 4 below; `--lodbreak` 21. The replay FAIL above is gone
+since storey units' log commands (`--ring` 4 of 4, no FAIL line). Open, in order: 7-8, 9, 10,
+13-16; 6 waits for the user.
 
 Two chats worked on destruction: this branch (`struct-bugs`, DestructionLod.md) and `lod-collapse`
 (worktree `C:\Users\lbaun\Documents\brickcity\.claude\worktrees\lod-collapse`; CollapseNext.md items
@@ -78,8 +81,22 @@ both lists, in this order; the detail of each item is where it points.
    on the 60 m tower, 1.96 m over the building's collision -- item 2 is real after all, and
    flaky (passed the run before, and the run after). Each heap brick now keeps what it came
    down on and when, while `--lodbreak` runs (`BrickHeap.track`): the next failure prints it.
-4. CollapseNext 29(a): from mid range (LOD 2) parts of a wall that should be gone stay drawn until
-   the player comes close.
+4. ~~CollapseNext 29(a): from mid range (LOD 2) parts of a wall that should be gone stay drawn until
+   the player comes close.~~ -- found and fixed 2026-10-23. **The check:** at every `--lodbreak`
+   stop, 24 x 48 rays from the camera across the tower against the triangles of what draws it from
+   its bricks (brick mesh, bands, shell, rest shell); half a cell into each face hit, no live brick
+   within a cell is a ghost (`CityScene._ghost_walls`). Storeys not laid (storey units) are drawn
+   whole by design and not asked. Gated from 8 s after the shot on: at most 2 hits or 3% a stop.
+   Its own control, once a pass: the bricks its rays hit are killed with no redraw, and it must
+   then see ghosts (`_ghost_control`). **What it found:** past `DEMESH_RANGE` (110 m) a damaged
+   tower still in bricks is drawn from them (`_far_real`, Structures 2.1) -- but not one laid a
+   storey at a time (`registry.is_partial`), and since storey units every tower hit is. That one
+   got the recipe shell with the damage profile, a hole per band, its floors drawn across the
+   crater: on the 320 m tower 14-31 ghost hits of 337-355 from 8 s to 110 m, 0 once its bricks
+   were drawn at 60 m. **Fixed:** a partial tower is drawn from its bricks too, and its rest shell
+   draws the storeys not laid beside them once that mesh is up (`_rest_drawn`,
+   `_far_real_done`); 0 ghosts at every stop. `--lodbreak` 21, `--storeys --big` 13,
+   `--far --buildings=150` 19.
 5. ~~CollapseNext 29: from 320 m an 829-brick piece stays frozen 22 m over what is under its middle
    -- the perched-piece rule (`IslandManager._tip_if_perched`) on that case.~~ -- looked at
    2026-10-22, after storey units: now a 54-brick piece, 9 x 9 m on plan, frozen 21 m over what is
@@ -103,6 +120,26 @@ both lists, in this order; the detail of each item is where it points.
 8. CollapseNext 24: with the display awake, a single 50-66 ms `islands` tick now and then. The
    `[prof] worst islands.tick` line and its "of which" lines name the part. (The RUNS of 150-480
    ms ticks are the display asleep -- not this.) May be the same as 7.
+   **2026-10-23, measured (9 `--big --shot` runs, editor closed, no other Godot, display awake,
+   storey units in):** frames mean **16.8-20.2 ms** (run to run, ~3 ms of noise), 8-74 of 906 over
+   33.3 ms, worst 40-162. Every spike now says what inside its biggest phase it was (`[prof] N
+   tick(s) over 25 ms`, `CityScene._spike_parts`: damage, stream, bands, promote parts, the
+   islands tick's own split, a shell piece's). What comes back:
+   - **A shell piece made bricks by a blast** (`_blast_shell_pieces` -> `_piece_to_bricks`,
+     storey units): every run, the same three ticks (~90, ~258, ~339), **23-32 ms**; one run
+     **99 ms** (23,801 bricks: laid 68.5 + spawn 19.6, its split 16.7). The whole piece is laid
+     from the template (`lay_band`, ~1.3-2.9 us a brick) and cut into a new chunk (`spawn` ->
+     `split_island`) in the blast's tick. Ideas, not built -- the storey-units design, the user
+     to decide: lay the piece's chunk a storey a tick while it falls, so a blast pays only the
+     spawn; take the laid chunk whole (`IslandManager.adopt`, as a toppled building) instead of
+     splitting it into a copy -- but `spawn` also holds the move caps, crumbling, landmark rules
+     and the co-op piece ids.
+   - **A shell rebuilt for a building still in bricks** (`_stream_detail`, `st_reshell`): 15-19
+     ms = `live_damage_profile` 7.2 + recipe shell mesh 7.3. When it is drawn from its bricks
+     (`_far_real`), both are spent on a shell that draws for a tick or two.
+   - Once each: an islands tick of 226 ms that was ONE 76-brick stand-in rebuilt in the mesh
+     queue (its build 1.1 ms at most -- a stall around it; `coarse_split` now says where, not
+     caught again); a landing of 36.8 ms; promote 71.8; render 33-38.
 
 **4. How buildings break**
 9. **User, 2026-10-21: stagger the seams.** Worked out, not built: two offset layers make a cut
@@ -185,7 +222,7 @@ areas' tests).
   `workshop_spaces` 8 (all passed 2026-10-20, `far_rules` after `ad080d8`).
 - Windowed (Bash, `override.cfg`): `city.tscn -- --storeys --big` 13 (and `--whole` for today's
   numbers), `city.tscn -- --groups --big` 25, `--jam --big` 4,
-  `--breaklag --big` 7, `--wreck` 2, `big_city.tscn -- --lodbreak` 16,
+  `--breaklag --big` 7, `--wreck` 2, `big_city.tscn -- --lodbreak` 21,
   `big_city.tscn -- --far --buildings=150` 19, `city.tscn -- --floating` 6.
 - Profile: `city.tscn -- --big --shot`; the `[prof]` lines now break damage down
   (`of which damage, mean per tick`, `loose pieces (damage_near)`, `a hit on a piece`).

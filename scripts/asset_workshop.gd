@@ -1614,7 +1614,10 @@ func _reset_space() -> void:
 
 
 const ASSET_QUICK_SAVE := "user://asset_workshop_quick.json"
-const ASSET_KINDS := BuildRecipe.ASSET_KINDS
+## What is made here: the asset kinds, and furniture and items for rooms -- the item
+## library is shared with the building workshop, so the generator furnishes rooms from
+## what is saved here (Docs/AssetWorkshop.md, "Furniture and items").
+const ASSET_KINDS := ["gun", "mech", "item"]
 
 
 ## A build here is one of the asset kinds; anything else (a build saved before guns had a
@@ -1623,6 +1626,15 @@ func _set_asset_kind(k: String) -> void:
 	recipe.kind = k if ASSET_KINDS.has(k) else "gun"
 	if _menu != null:
 		_menu.set_kind(recipe.kind)
+
+
+## Asset > Make a gun / a mech / furniture or an item: what this build is saved as.
+func set_asset_kind(k: String) -> void:
+	_set_asset_kind(k)
+	_dirty = true
+	print("[asset workshop] making %s: Save As files it in %s" % [
+			"furniture or an item" if recipe.kind == "item" else "a " + recipe.kind,
+			BuildRecipe.player_dir(recipe.kind)])
 
 
 func _load_recipe(r: BuildRecipe) -> void:
@@ -8760,6 +8772,11 @@ func _on_asset_menu(id: int) -> void:
 
 func _build_menus() -> void:
 	var menus := [
+		["Asset", [
+			["Make a gun", "", func() -> void: set_asset_kind("gun")],
+			["Make a mech", "", func() -> void: set_asset_kind("mech")],
+			["Make furniture or an item (rooms: tagged by planet, type, room)", "", func() -> void: set_asset_kind("item")],
+		]],
 		["Edit", [
 			["Redo", "Shift Z", func() -> void: redo()],
 		]],
