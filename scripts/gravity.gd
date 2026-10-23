@@ -14,22 +14,33 @@ class_name Gravity
 
 static var _strength := -1.0
 
+## On a planet (Docs/Planets.md 11): the node at its centre and its surface
+## gravity. Null in the flat game, where down is -Y as before.
+static var planet: Node3D = null
+static var planet_strength := 9.8
 
-## The project's gravity, m/s^2 (physics/3d/default_gravity).
+
+## The project's gravity, m/s^2 (physics/3d/default_gravity); the planet's on one.
 static func strength() -> float:
+	if planet != null:
+		return planet_strength
 	if _strength < 0.0:
 		_strength = float(ProjectSettings.get_setting("physics/3d/default_gravity", 9.8))
 	return _strength
 
 
-## Unit vector down at a world point.
-static func down_at(_p: Vector3) -> Vector3:
+## Unit vector down at a world point: toward the planet's centre on one.
+static func down_at(p: Vector3) -> Vector3:
+	if planet != null and is_instance_valid(planet):
+		var d := planet.global_position - p
+		if d.length_squared() > 1e-6:
+			return d.normalized()
 	return Vector3.DOWN
 
 
 ## Unit vector up at a world point: away from the ground.
-static func up_at(_p: Vector3) -> Vector3:
-	return Vector3.UP
+static func up_at(p: Vector3) -> Vector3:
+	return -down_at(p)
 
 
 ## The project's gravity as a vector at a world point.

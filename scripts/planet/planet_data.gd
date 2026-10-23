@@ -23,10 +23,10 @@ extends Resource
 
 ## The relief: hills of `amplitude` metres at noise 1, a `period`-metre wavelength,
 ## ridged (1 - 2|n|) for ridgelines instead of round hills.
-@export var amplitude := 45.0
+@export var amplitude := 55.0
 @export var period := 900.0
 @export var octaves := 5
-@export var ridged := true
+@export var ridged := false
 
 ## Flat pads the ground is levelled to, for buildings to stand on (Planets.md 11.2):
 ## each {dir: Vector3 (unit, planet-local), height: float (over the datum),
