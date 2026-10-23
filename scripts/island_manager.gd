@@ -877,8 +877,13 @@ func moving_of(owner_id: int) -> int:
 ## DETACHes recorded with FLAG_GONE, by the piece id they would have had.
 var _gone_pieces := {}
 var tick_worst := {}
+## The last tick, split as tick_worst: [total, loop, resolve parts (harvest,
+## upload, mesh queue, band holes, resolve queue), landings, reshapes, mesh] --
+## for CityScene's spikes, which keep every slow tick, not the worst alone.
+var last_tick: Array = []
 ## The worst single spawn: [ms, split, shapes, node, mesh, bricks].
 var spawn_worst := [0.0, 0.0, 0.0, 0.0, 0.0, 0, 0.0, 0.0, 0]
+var spawn_last := []   ## the last spawn, the same way
 ## The worst single landing or re-solve of a piece, by part, for the report.
 var unit_worst := {}
 var _unit := {}
@@ -1490,6 +1495,7 @@ func spawn(source: int, block_ids: PackedInt32Array,
 	spawn_prof.total += float(Time.get_ticks_usec() - _t0) / 1000.0
 	_w[4] = float(Time.get_ticks_usec() - _t) / 1000.0
 	_w[0] = float(Time.get_ticks_usec() - _t0) / 1000.0
+	spawn_last = _w
 	if float(_w[0]) > float(spawn_worst[0]):
 		spawn_worst = _w
 	_census_body(isl, ("piece: " + (_shed_cause if _shed_cause != "" else "other"))
@@ -2883,9 +2889,20 @@ func _build_coarse(isl: BrickIsland) -> void:
 		if not _coarse_jobs.has(isl):
 			_coarse_jobs.append(isl)
 		return
+	var _t0 := Time.get_ticks_usec()
 	var arrays: Array = world.build_chunk_coarse_mesh(isl.chunk)
+	var _t1 := Time.get_ticks_usec()
 	coarse_main_worst_ms = maxf(coarse_main_worst_ms, world.get_last_coarse_ms())
 	_finish_coarse(isl, arrays)
+	coarse_split = "built %.1f ms (%.1f of it the build's own) + %s" % [
+			float(_t1 - _t0) / 1000.0, world.get_last_coarse_ms(), _finish_split]
+
+
+## Where the time of the last stand-in built on the main thread went, for the
+## mesh queue's slowest (_note_mesh_drain): one of 76 bricks took 216.6 ms in a
+## --big --shot (2026-10-23), its build 1.1 ms at most.
+var coarse_split := ""
+var _finish_split := ""
 
 
 ## Attach the stand-ins the workers have finished.
@@ -2934,10 +2951,14 @@ func _finish_coarse(isl: BrickIsland, arrays: Array) -> void:
 				return
 			_submit_mesh_job(isl, arrays, true)
 			return
+	var _t0 := Time.get_ticks_usec()
 	var mesh := ArrayMesh.new()
 	if ok:
 		mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
+	var _t1 := Time.get_ticks_usec()
 	_apply_mesh(isl, mesh, arrays, true)
+	_finish_split = "surface %.1f + hung %.1f ms" % [float(_t1 - _t0) / 1000.0,
+			float(Time.get_ticks_usec() - _t1) / 1000.0]
 
 
 ## Hang a finished mesh on a piece. `coarse`: it is the stand-in.
@@ -4867,6 +4888,8 @@ func tick() -> void:
 		start_mesh_jobs()
 	tick_prof.mm += float(Time.get_ticks_usec() - _tm) / 1000.0
 	var _total := float(Time.get_ticks_usec() - _t_loop) / 1000.0
+	last_tick = [_total, float(_tl - _t_loop) / 1000.0, _resolve_parts.duplicate(),
+			float(_tfq - _tr) / 1000.0, float(_tf - _tfq) / 1000.0, float(_tm - _tf) / 1000.0]
 	if _total > float(tick_worst.get("total", 0.0)):
 		tick_worst = {"total": _total,
 				"loop": float(_tl - _t_loop) / 1000.0,
@@ -4990,10 +5013,11 @@ func _drain_mesh_queue() -> void:
 			_mesh_queue.remove_at(i)
 			var _tc := Time.get_ticks_usec()
 			var _was := "rebuilt" if isl.coarse_drawn else "first"
+			coarse_split = "on a worker"
 			rebuild_mesh(isl, true)
-			_note_mesh_drain(isl, _tc, "stand-in, %s, from %s (%s), %d ms old, settled %s, edits %d" % [
+			_note_mesh_drain(isl, _tc, "stand-in, %s, from %s (%s), %d ms old, settled %s, edits %d: %s" % [
 					_was, isl.census_from, isl.shed_cause, Time.get_ticks_msec() - isl.born_ms,
-					isl.settled, isl.edits])
+					isl.settled, isl.edits, coarse_split])
 			done += 1
 			continue
 		# Still on the worker? Leave it and look at the next one -- a big bake

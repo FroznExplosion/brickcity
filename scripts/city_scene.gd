@@ -2662,11 +2662,13 @@ func _make_shell(id: int, coarse: bool = false, far: bool = false) -> void:
 	# came back whole past DEMESH_RANGE, windows and all, and went again inside
 	# it -- "respawning" as the camera moved. One with no bricks left draws
 	# nothing.
+	var t_sh := Time.get_ticks_usec()
 	var damage: Dictionary = b.damage_profile
 	var nothing_left := false
 	if b.is_materialised() and not b.is_build():
 		damage = registry.live_damage_profile(id)
 		nothing_left = world.get_alive_block_count(b.chunk) == 0 and not registry.is_partial(b)
+	t_sh = _part("sh_profile", t_sh)
 	var mi := MeshInstance3D.new()
 	# G1b: a damaged building that has given its bricks back must still LOOK
 	# damaged. A tower takes that as a per-band segment mask, because its shell
@@ -2687,6 +2689,7 @@ func _make_shell(id: int, coarse: bool = false, far: bool = false) -> void:
 		pass  # the node, for every "has a shell" question; nothing drawn
 	else:
 		mi.mesh = _recipe_shell_mesh(b, coarse, damage)
+	t_sh = _part("sh_mesh", t_sh)
 	mi.material_override = brick_material
 	mi.transform = b.xform
 	# Stage 5: a banded shell fades out over the fade band, blended over its
@@ -2709,6 +2712,7 @@ func _make_shell(id: int, coarse: bool = false, far: bool = false) -> void:
 			and not damage.is_empty() and not _toppling.has(id)
 	if real:
 		_far_real(id, mi)
+	t_sh = _part("sh_real", t_sh)
 	# Its windows, with a room painted behind each: a shell has no openings, so
 	# the fake rung cannot show through it. Not on the coarse tier -- past a
 	# hundred metres a window is a pixel -- and not on a player build, which
@@ -2730,6 +2734,7 @@ func _make_shell(id: int, coarse: bool = false, far: bool = false) -> void:
 		_shell_far[id] = true
 		return
 	_make_shell_body(id)
+	_part("sh_body", t_sh)
 
 
 ## The collision boxes of a shell, and the AI's proxies of them.
@@ -3559,7 +3564,9 @@ func _piece_to_bricks(p: ShellPiece) -> BrickIsland:
 		return null
 	var lines := registry.storey_lines(b)
 	var xf := p.global_transform
+	var _t0 := Time.get_ticks_usec()
 	var chunk := registry.shell_piece_chunk(p.building, p.lo, p.hi, p.holes, xf)
+	var _t1 := Time.get_ticks_usec()
 	var ids := world.get_blocks_in_band(chunk, lines[p.lo], lines[p.hi]) if chunk >= 0 \
 			else PackedInt32Array()
 	var isl: BrickIsland = null
@@ -3577,14 +3584,25 @@ func _piece_to_bricks(p: ShellPiece) -> BrickIsland:
 		e.points = DamageLog.rest_points(xf)
 		var done := authority.commit_entry(e)
 		var piece := DamageLog.piece_id(done.seq) if done != null else -1
+		var _t2 := Time.get_ticks_usec()
 		isl = islands.spawn(chunk, ids, p.linear_velocity, p.angular_velocity, piece, p.building)
+		var _t3 := Time.get_ticks_usec()
 		if isl != null and isl.is_valid():
 			world.heal_joints(isl.chunk)
+		shell_brick_split = "%d bricks, storeys %d-%d: laid %.1f + log %.1f + spawn %.1f (%s) + joints %.1f ms" % [
+				ids.size(), p.lo, p.hi - 1, float(_t1 - _t0) / 1000.0, float(_t2 - _t1) / 1000.0,
+				float(_t3 - _t2) / 1000.0, str(islands.spawn_last),
+				float(Time.get_ticks_usec() - _t3) / 1000.0]
 	if chunk >= 0:
 		world.release_chunk(chunk)
 	shell_pieces_bricked += 1
 	p.queue_free()
 	return isl
+
+
+## The last shell piece made bricks, where its time went (a --big --shot's
+## damage spikes, 2026-10-23: 23-80 ms in _blast_shell_pieces).
+var shell_brick_split := ""
 
 
 ## Once a tick: a shell piece that landed hard where somebody could see it
@@ -11600,11 +11618,15 @@ func _apply_blast(point: Vector3, radius: float, chip_hp := 0) -> void:
 	# rest stays at rest until something is taken from under it (CollapseNext
 	# 1.10); a piece's own bricks say the same for themselves in damage().
 	var t_pieces := Time.get_ticks_usec()
+	var t_part := t_pieces
 	if not _shell_pieces.is_empty():
 		_blast_shell_pieces(point, reach)
+		t_part = _part("dmg_shell_pieces", t_part)
 	islands.damage_near(point, radius, chip_hp)
+	t_part = _part("dmg_near", t_part)
 	if took_bricks:
 		islands.support_gone(AABB(point - Vector3.ONE * reach, Vector3.ONE * reach * 2.0))
+		_part("dmg_support", t_part)
 	_part("dmg_pieces", t_pieces)
 
 
@@ -11652,6 +11674,42 @@ func _fire(radius: float) -> void:
 # Per-tick: collapse whatever is materialised
 # ---------------------------------------------------------------------------
 
+## What inside a slow tick's biggest phase it was, from this tick's parts: the
+## spikes of a --big --shot are a different phase run to run (islands, damage,
+## promote, stream, bands), and only the worst tick used to say its parts.
+const _SPIKE_PARTS := {"damage": ["dmg_promote", "dmg_rooms", "dmg_hit", "dmg_pieces",
+				"dmg_shell_pieces", "dmg_near", "dmg_support", "dmg_disable"],
+		"stream": ["st_trim", "st_merge", "st_rooms", "st_detail", "st_demesh", "st_remesh",
+				"st_reshell", "st_residency", "st_shells", "sh_profile", "sh_mesh", "sh_real", "sh_body"],
+		"bands": ["bd_harvest", "bd_apply", "bd_done", "bd_cpp", "bd_upload"],
+		"disable": ["dis_collision", "dis_rooms"],
+		"promote": ["bricks", "collision", "frames", "furniture", "shell"]}
+
+func _spike_parts(phase: String) -> String:
+	if phase == "islands":
+		var lt: Array = islands.last_tick
+		if lt.size() < 6:
+			return ""
+		return "loop %.1f, resolve %s, landings %.1f, reshapes %.1f, mesh %.1f; slowest mesh so far %s" % [
+				lt[1], str(lt[2]), lt[3], lt[4], lt[5], str(islands.mesh_drain_worst)]
+	var out := ""
+	for k in _SPIKE_PARTS.get(phase, []):
+		var v := float(_prof.get(k, 0.0))
+		if v >= 0.5:
+			out += "%s %.1f  " % [k, v]
+	if phase == "damage" and float(_prof.get("dmg_shell_pieces", 0.0)) >= 0.5:
+		out += "(last shell piece made bricks: %s) " % shell_brick_split
+	if phase == "damage" and _near_at_tick.size() == 5:
+		var dn: Array = islands.damage_near_ms
+		out += "(near: wake %.1f, walk %.1f, hits %.1f, push %.1f, %d call(s); worst unit so far %s)" % [
+				dn[0] - _near_at_tick[0], dn[1] - _near_at_tick[1], dn[2] - _near_at_tick[2],
+				dn[3] - _near_at_tick[3], dn[4] - _near_at_tick[4], str(islands.unit_worst)]
+	return out
+
+
+var _near_at_tick: Array = []   ## islands.damage_near_ms as this tick began
+
+
 ## Time a PART of a phase, into the same per-tick record, so the worst tick can
 ## say what inside `damage` it was: see _report_profile.
 func _part(key: String, t0: int) -> int:
@@ -11671,6 +11729,8 @@ func _physics_process(_delta: float) -> void:
 		_restud()
 	_prof = {}
 	_sync_invincible()
+	if _sampling:
+		_near_at_tick = islands.damage_near_ms.duplicate()
 	var t_tick := Time.get_ticks_usec()
 	var t := t_tick
 	# What the workers finished uploading since the last call into the
@@ -12140,6 +12200,8 @@ func _physics_process(_delta: float) -> void:
 			var top := ""
 			for k in mini(3, phases.size()):
 				top += "%s %.1f  " % [phases[k][1], phases[k][0]]
+			if not phases.is_empty():
+				top += "| " + _spike_parts(phases[0][1])
 			_prof_spikes.append([tick_total, Engine.get_physics_frames(), top])
 		if tick_total > _prof_worst_ms:
 			_prof_worst_ms = tick_total
@@ -13051,16 +13113,22 @@ func _stream_detail() -> void:
 				continue
 			if now - b.materialised_at < DEMESH_AFTER_MS:
 				continue
+			var t_one := Time.get_ticks_usec()
 			_demesh(id)
+			_part("st_demesh", t_one)
 			done += 1
 		elif dist < DEMESH_RANGE:
 			_shell_stale.erase(id)
+			var t_one := Time.get_ticks_usec()
 			_remesh_bricks(id)
+			_part("st_remesh", t_one)
 			done += 1
 		elif _shell_stale.has(id):
 			_shell_stale.erase(id)
+			var t_one := Time.get_ticks_usec()
 			_free_shell(id)
 			_make_shell(id, true)
+			_part("st_reshell", t_one)
 			done += 1
 	_demesh_ms += float(Time.get_ticks_usec() - t0) / 1000.0
 
