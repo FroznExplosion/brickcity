@@ -1045,3 +1045,107 @@ far-apart co-op group adds its own bodies' physics on the host; an origin shift 
    vehicles (a day each); the water shell; co-op in planet-local positions, a second physics space
    for a group far away (test 7).
 8. Bent buildings, if long things want them.
+
+---
+
+## 11. The conversion (started 2026-10-23)
+
+The user: go to planets, taking most systems from STA's smooth SDF planets, which already work;
+the ground is indestructible, so none of STA's water physics; tall buildings appear as they crest
+the horizon, not pop in; approaching from space, big buildings and features fade in, and the
+largest are visible from orbit.
+
+### 11.1 What comes from STA, and what changes
+
+STA (`C:\Users\lbaun\Documents\sta`) builds a planet as one `PlanetUnit` node at the planet's
+centre. Everything on the planet is its child in planet-local space, so a floating-origin rebase
+moves that one node and nothing streams again.
+
+| system | STA | here |
+|---|---|---|
+| ground | Zylann's voxel module (`addons/zylann.voxel`, MIT), `VoxelLodTerrain`, Transvoxel, clipbox streaming, `VoxelGeneratorGraph` built by `PlanetGraphBuilder` from `PlanetData` / `PlanetFields` | **taken**, with no edits: no stream, no edit tool, no caves. Smooth ground everywhere; a 3D field, so test 6's cube-edge cliffs never arise. Collision from the voxel mesher (`collision_lod_count` 1) |
+| biomes, continents, oceans, mountains | `PlanetProfile` -> `PlanetFields`, one set of noises feeding the graph, the impostor and CPU height queries | **taken**, second pass (first pass: STA's simpler noise-layer path) |
+| terrain shader | `shaders/terrain.gdshader`, with Transvoxel's stitch in the vertex stage (required) | **taken**; brick look comes later through §3's patches |
+| impostor from orbit | sphere + baked heightmap + colour map, cross-faded with the voxel terrain by altitude (`tier1/tier2` 8% / 15% of R) | **taken** |
+| atmosphere | a shell at 1.08 R | **taken**, with test 12's scattering pass for the air |
+| streaming distance | horizon-based view distance (`_update_view_distance`: eye-to-horizon + horizon-to-peak) | **taken**, and the same rule drives buildings (§11.3) |
+| floating origin | `_shift_world`: moves planets, star, player, `origin_shift` group | **ours**: `PlanetOrigin.shift` (tests 1-2), translation only, at 4 km; the planet node moves with everything else |
+| gravity, controllers | `GravityBodyConfig`, radial controller (STA doc 05) | our `Gravity` answers from the planet; `tools/planet_radial_body.gd` until the pawn is ported |
+| water | `WaterSystem` v3: flow graph, lakes, solver, ripple fields, CA | **not taken**. Only the ocean SHELL: a Gerstner surface on a sphere at sea level, shader only (STA's `water.gdshader` far tier), and "under it" is `radius < sea level`. No flow, no lakes, no simulation: the ground never changes |
+| caves, granules, goo, vegetation | placed caves, 2 cm granules, goo, `VegetationInstancer` | not now (vegetation later, as our trees) |
+| solar system, orbits, stations | `SolarSystem`, analytic orbits, anchored frame | later; one planet first |
+
+### 11.2 Our buildings on it
+
+Buildings stay ours: BrickWorld chunks, shells, storey units, the far tier. Each stands in the
+**tangent frame** at its site (`BuildingRegistry.grid_frame_at` returns it on a planet), on a pad
+the generator flattens: a smooth SDF plateau under each site, blended into the ground, so the
+building's floor is level and its foundation meets the ground (test 3: the solve, hangs, pieces and
+collision already work in the building's frame).
+
+### 11.3 Buildings over the horizon: crest, don't pop
+
+From an eye at height `h` over a planet of radius `R`, the horizon is `sqrt(2Rh)` away, and a
+thing of height `H` past it shows its top once its distance is under
+`sqrt(2Rh) + sqrt(2RH)`. So a building is **resident (drawn in its far tier) from just before its
+own top can crest the horizon**:
+
+    show_at(H) = sqrt(h (2R + h)) + sqrt(H (2R + H)) + margin
+
+On foot on 10 km, a 10 m house shows from ~630 m, a 100 m tower from ~1.6 km, a 400 m spire from
+~3 km -- each appears *below* the horizon and rises into view as the player walks, because the
+ground (voxel terrain, or the impostor sphere further out) hides its foot. Tall buildings are
+therefore loaded further out than short ones, by the same rule STA's streaming uses for peaks. The
+near tiers (shell, bricks) keep their distance rings; only the far tier's range follows the horizon.
+
+### 11.4 From the air and from space: fade in by size on screen
+
+Above the ground the horizon is kilometres off and nothing hides a building's foot, so a building
+**fades in by its size on screen**: a dithered alpha (as STA's impostor cross-fade) from 0 at about
+1.5 px tall to 1 at about 4 px. At 720p and 75 degrees a tower 100 m tall is 4 px from ~12 km; a 400 m one from ~47 km.
+
+- **Landmarks** -- the tallest buildings and the big features (a mega tower, a dam, a crater ring)
+  -- are also drawn on the planet's impostor from space: baked into its colour and height maps
+  (STA's impostor bake) and, the tallest, as a small marker instanced on the impostor shell that
+  never fades below ~2 px, so a city reads as a glint of towers from orbit.
+- A building's far box carries its standing height (§10b), so what shows from space is what still
+  stands.
+
+### 11.5 Order
+
+1. `addons/zylann.voxel` into the project; check it loads beside `addons/brick` (Godot 4.6.2).
+2. `scripts/planet/`: `PlanetData` (trimmed), `PlanetGraphBuilder` (noise path, no caves, plus site
+   pads), the impostor baker; `shaders/planet_*`: terrain, impostor, atmosphere, ocean shell.
+3. `scenes/planet.tscn` + `scripts/planet/planet_scene.gd`: one 10 km planet, `PlanetBody` (STA's
+   `PlanetUnit`, trimmed), horizon view distance, impostor cross-fade, `Gravity` toward its centre,
+   the radial walker, `PlanetOrigin.shift` at 4 km. Gate: walk, fly to orbit and back, no seams,
+   no pops, no jitter.
+4. Buildings on tangent pads, drawn by the far tier with §11.3's range and §11.4's fade; landmarks
+   on the impostor.
+5. Then the pawn and mech ported to local down, the AI's nav regions, storeys and destruction on
+   the planet, biomes (`PlanetFields`), vegetation.
+
+### 11.6 State (2026-10-23): a planet to walk on and fly from
+
+Built (steps 1-4 of 11.5): `addons/zylann.voxel`; `scripts/planet/` -- `PlanetData`,
+`PlanetGraph` (the generator), `PlanetImpostorBake`, `PlanetBody`, `PlanetBuildings`,
+`PlanetWalker`, `PlanetFrame`, `planet_scene.gd`; `shaders/planet_*`; `scenes/planet.tscn`. Run it,
+or `-- --gate` (9 checks, all pass, windowed and headless):
+
+- the ground streams in under the spawn in 0.3-3 s; a 30 s walk never leaves the floor and stands
+  exactly where the CPU says the ground is (`tools/planet_graph_probe.gd` holds the generator to
+  the CPU within 6 mm, pads included -- both sample the relief on the datum sphere under a point);
+- a cruise at 25 m passes a town (32 shells built) toward a 900-course spire 2.6 km off, which comes
+  up over the horizon ahead;
+- climbing to 30 km the voxel ground fades into the impostor (fade 0.62 at 1.2 km, 1.0 by 5 km),
+  the origin follows in 8 shifts of 0.1 ms each, and the descent lands on the ground again;
+- **no building popped in plain sight** (a fade jumping by more than a third while its top is over
+  the horizon): they crest, then fade by size from the air.
+
+What it is NOT yet: the pawn (the walker stands in for it), the AI, destruction (shells only, from
+the city's `BuildingShell`, with their collision boxes), biomes (one ground palette), trees. The
+worst frames are the first frame's shader compiles (~1.7 s) and the gate's own screenshots
+(~100-200 ms each); a frame-time pass with the editor closed comes with the next step.
+
+![a town on its pad, the cruise toward the spire, the spire up close](Planets/c1_town_cruise_landmark.jpg)
+![the climb: 1.2 km (the cross-fade), 5 km, 30 km](Planets/c1_climb.jpg)
