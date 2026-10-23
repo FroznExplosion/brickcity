@@ -353,7 +353,9 @@ In the order to do it. Each line points at where the item is written up.
     comes back as undamaged interiors with no walls (both still open, item 29).
 29. **Open, from the user's pictures of 2026-10-17**, not reproduced yet by `--lodbreak`:
     (a) shot from mid range (LOD 2), parts of the wall drawn that should be gone, there until the
-    player comes close; (b) shot from far (LOD 3), the building sometimes vanishes, then close up
+    player comes close (**found and fixed 2026-10-23**: past 110 m a tower laid a storey at a
+    time was drawn by its recipe shell and damage profile, floors across the crater, not from its
+    bricks; `--lodbreak` now counts walls drawn where no brick is -- HandoffStructBugs item 4); (b) shot from far (LOD 3), the building sometimes vanishes, then close up
     its interiors are drawn whole and its walls invisible, until it is shot again; (c) in a
     collapse, a big part hanging in the air with nothing holding it. ~~What the pass did see: a
     12 m blast at the middle of a tower leaves its top standing on the stair core and what is left
