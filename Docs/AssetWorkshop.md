@@ -846,17 +846,35 @@ Registered as Item, every brick is Detail; as Furniture, a brick is Interior unl
 as Detail (a table with a cup: the cup stays an item). Open lists items in the asset workshop
 too. `tools/asset_tags_probe.gd`: 32 checks.
 
+**Built 2026-10-23 (stages 2 and 3).**
+
+*The catalogue* (`AssetCatalog`, `scripts/asset_catalog.gd`; the panel `AssetCatalogPanel`):
+every file in the item library with its tags, one panel for the workshop and the game. Each
+level is a row of chips -- All, then each value with how many it would leave, greyed when that
+is none -- over a search box and the list; picking from the list puts the piece in hand. The
+filter is remembered (`user://asset_catalog.json`).
+
+*The placer in the workshop* (`FurnishTool`, `scripts/furnish_tool.gd`), both workshops: **F6**
+opens the catalogue. The piece in hand is a ghost centred on the stud under the cursor, on top
+of the bricks in that column or of a piece already placed (a cup on a table); R turns it a
+quarter, LMB places it (it stays in hand), RMB takes away the placed piece under the cursor, Esc
+puts it down and then closes. Each place and take-away is one undo step ("furnish").
+
+**A build keeps a placement, not the bricks**: `recipe.placements`, `{asset, cell, turn}`
+(`AssetPlacements`). The workshop draws them from the asset's file and keeps them out of its
+chunk (block id there is recipe index). They go into the city as bricks
+(`AssetPlacements.expand`, called by `BuildingRegistry.register_build` and the city's ghost),
+after the build's own so no block id of its own moves: Interior for furniture, Detail for an
+item, the author's colours. So a chair edited and saved again is the new chair in every build
+laid after. Turning or inserting a build turns and moves its placements; an asset whose file is
+gone is left out with a warning. Generated rooms keep placing by seed.
+`tools/furnish_probe.gd`: 40 checks.
+
+A trap met on the way: a static var set from a probe was reset when a scene loaded (loading
+reloads the scripts). The probe's test folder is kept on `Engine` meta (`AssetCatalog.use_dir`).
+
 **Planned, in order:**
 
-2. *The catalogue*: one panel shared by the workshop and the game -- the three levels as rows
-   of chips, each showing how many it would leave and greyed when none, a search box, the last
-   filter remembered. In a game world the planet starts on the planet underfoot.
-3. *The placer in the workshop*: pick from the catalogue, a ghost on the stud grid, R turns a
-   quarter, LMB places, RMB takes away. **A room saves a placement, not the bricks**:
-   `{asset, cell, turn}`, laid when the building is spawned -- the same reference generated
-   rooms already use (Workshop.md §0, Stage E), so editing a chair changes every room it stands
-   in. Authored buildings with authored rooms keep those placements; generated rooms keep
-   placing by seed.
 4. *The placer in game buildings*: the same placement, laid into the building's chunk as its
    Interior and Detail bricks (`BuildingRegistry.lay_item_into`).
 5. *Outside buildings* (a bench in a park): needs its own drawing by distance, LOD and a cheap
