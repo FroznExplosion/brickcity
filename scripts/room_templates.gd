@@ -247,6 +247,10 @@ static func parts(type: String) -> Array:
 	if not (type.begins_with("item:") or type.begins_with("room:")):
 		return []
 	_ensure()
+	if not _parts.has(type) and type.begins_with("item:") and type.contains("@"):
+		# A placed piece (item_type), asked for again after a reload.
+		var at := type.rfind("@")
+		item_type(type.substr(5, at - 5), int(type.substr(at + 1)))
 	return _parts.get(type, [])
 
 
