@@ -220,6 +220,10 @@ var _shader_toggles := {
 var stats_label: Label
 var camera: DebugCamera
 var _placer: CityPlacer
+## F6: furniture and items from the catalogue, into rooms, builds or outdoors
+## (Docs/AssetWorkshop.md, "Furniture and items").
+var _furnisher: WorldFurnisher
+var _props: OutdoorProps
 ## Hit marks, debris and sounds by material, and footsteps (material_fx.gd).
 var _material_fx: MaterialFx
 ## Natural disasters (Docs/Disasters.md), in every city.
@@ -1225,6 +1229,7 @@ func _ready() -> void:
 		_placer.ground_top = func(x: int, z: int) -> float:
 			var brick := float(BrickTerrain.surface_plate(x, z) + 1) * BrickWorld.get_plate_metres()
 			return BrickTerrain.surface_raw(x, z) if BrickTerrain.smooth_at(x, z) else brick
+	_setup_furnisher()
 	_material_fx = MaterialFx.new()
 	_material_fx.name = "MaterialFx"
 	add_child(_material_fx)
@@ -11494,10 +11499,51 @@ func _index_building(id: int) -> void:
 			(_building_grid[key] as Array).append(id)
 
 
+## F6 places furniture and items from the catalogue (WorldFurnisher): into a
+## generated building's room as one more of its items, into a player build as
+## its bricks, or outdoors as a prop (OutdoorProps) that is bricks once shot.
+func _setup_furnisher() -> void:
+	_props = OutdoorProps.new()
+	_props.name = "Props"
+	add_child(_props)
+	_props.setup(brick_material, TerrainTile.stud_material())
+	_props.make_build = func(r: BuildRecipe, xf: Transform3D) -> int:
+		var id := registry.register_build(r, xf)
+		if id >= 0:
+			_index_building(id)
+			_make_shell(id)
+			_note_placed(id, false)
+		return id
+	_furnisher = WorldFurnisher.new()
+	_furnisher.name = "Furnisher"
+	add_child(_furnisher)
+	_furnisher.setup(registry, camera, _props)
+	_furnisher.ground_ray = func(from: Vector3, dir: Vector3) -> Vector3:
+		var q := PhysicsRayQueryParameters3D.create(from, from + dir * 200.0, Layers.HITSCAN_MASK)
+		var hit := get_world_3d().direct_space_state.intersect_ray(q)
+		return Vector3.INF if hit.is_empty() else hit["position"]
+	# A room gained a piece: every drawing of the storeys it is on is stale.
+	_furnisher.room_changed = func(b: BuildingRegistry.Building, y_lo: float, y_hi: float) -> void:
+		for g in interior_groups.known(b.id):
+			if g.box.position.y > y_hi or g.box.end.y < y_lo:
+				continue
+			g.dirty = true
+			if g.shown:
+				interior_groups.work(b, g, Time.get_ticks_usec() + 2000)
+				_group_show(b, g)
+	_furnisher.build_furnished = func(id: int, _blocks: PackedInt32Array) -> void:
+		_furnished[id] = true
+		_refresh_furniture(id)
+
+
 ## `chip` > 0: a gun's wear instead of a blast (DamageLog.Kind.CHIP).
 func _apply_blast(point: Vector3, radius: float, chip_hp := 0) -> void:
 	# A bullet has no radius, but it still has to find the building it struck.
 	var reach := maxf(radius, 0.25)
+	# A prop the blast reaches becomes bricks first, so the blast breaks it
+	# like anything else (OutdoorProps).
+	if _props != null:
+		_props.promote_near(point, reach)
 	var took_bricks := false   ## from a building: what rested on them is woken
 	# Everything within the blast, not only what the ray touched — a rocket does
 	# not care which building it hit first.

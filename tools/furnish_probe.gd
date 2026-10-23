@@ -37,8 +37,8 @@ func _make_assets() -> void:
 	var table := BuildRecipe.new()
 	table.kind = "item"
 	table.name = "Probe Table"
-	table.add("brick_2x4", Vector3i(5, 1, 5), 2, 0, BuildRecipe.Role.STRUCTURE)
-	table.add("plate_2x4", Vector3i(5, 4, 5), 3, 0, BuildRecipe.Role.STRUCTURE)
+	table.add("brick_2x4_x", Vector3i(5, 1, 5), 2, 0, BuildRecipe.Role.STRUCTURE)
+	table.add("plate_2x4_x", Vector3i(5, 4, 5), 3, 0, BuildRecipe.Role.STRUCTURE)
 	table.meta = {"tags": {"planet": ["earth"], "type": ["furniture"], "room": ["kitchen", "office"]}}
 	table.save_to(DIR + "probe_table.json")
 	var cup := BuildRecipe.new()
