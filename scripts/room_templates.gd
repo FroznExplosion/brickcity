@@ -39,6 +39,9 @@ static var _parts := {}
 static var _rooms := {}
 ## room kind -> [item type], authored items meant for that kind of room
 static var _items_for := {}
+## The planet the generator furnishes for: an item tagged for other planets
+## only is not registered (AssetTags; untagged is every planet).
+static var planet := "earth"
 
 
 ## Forget what was read, so a template saved a moment ago is picked up.
@@ -62,20 +65,25 @@ static func _ensure() -> void:
 		add_room(path.get_file().get_basename(), BuildRecipe.load_from(path))
 
 
-## Register an Item build under `item:<id>`. Every brick is the item, whatever
-## layer it was built on -- an item is furniture by definition -- except that
-## DETAIL stays detail.
+## Register an Item build under `item:<id>`, if it is meant for this planet
+## (its tags, AssetTags). Every brick is the item, whatever layer it was built
+## on: Furniture is Interior except what was built as Detail, and an Item
+## (tagged so) is Detail through and through -- seen only up close.
 static func add_item(id: String, r: BuildRecipe) -> String:
 	if r.is_empty():
+		return ""
+	var tags := AssetTags.tags_of(r)
+	var planets: Array = tags.get("planet", [])
+	if not planets.is_empty() and not planets.has(planet):
 		return ""
 	var ids := []
 	for i in r.size():
 		if r.frame_of(i) == 0:
 			ids.append(i)
 	var type := "item:" + id
-	_parts[type] = _parts_of(r, ids, _lo_of(r, ids))
+	_parts[type] = _parts_of(r, ids, _lo_of(r, ids), AssetTags.type_of(tags) == AssetTags.ITEM)
 	RoomManifest.forget_spans()
-	for k in _kinds_meant(r):
+	for k in _kinds_meant(tags):
 		var list: Array = _items_for.get(k, [])
 		list.append(type)
 		_items_for[k] = list
@@ -125,13 +133,13 @@ static func add_room(id: String, r: BuildRecipe) -> bool:
 	return true
 
 
-## The room kinds an item is meant for: its meta "room_kind" (one) or
-## "room_kinds" (several). None means every kind that has furniture.
-static func _kinds_meant(r: BuildRecipe) -> Array:
-	if r.meta.has("room_kinds"):
-		return (r.meta.room_kinds as Array).duplicate()
-	if r.meta.has("room_kind"):
-		return [str(r.meta.room_kind)]
+## The room kinds an item is meant for: its "room" tag (AssetTags.tags_of
+## reads an older file's room_kind or room_kinds into it). None means every
+## kind that has furniture.
+static func _kinds_meant(tags: Dictionary) -> Array:
+	var rooms: Array = tags.get("room", [])
+	if not rooms.is_empty():
+		return rooms.duplicate()
 	var out := []
 	for k in Room.KINDS:
 		if k != "empty":
@@ -147,10 +155,10 @@ static func _lo_of(r: BuildRecipe, ids: Array) -> Vector3i:
 	return lo
 
 
-static func _parts_of(r: BuildRecipe, ids: Array, lo: Vector3i) -> Array:
+static func _parts_of(r: BuildRecipe, ids: Array, lo: Vector3i, all_detail := false) -> Array:
 	var out := []
 	for i in ids:
-		var role := BuildRecipe.Role.DETAIL if r.role_of(i) == BuildRecipe.Role.DETAIL \
+		var role := BuildRecipe.Role.DETAIL if all_detail or r.role_of(i) == BuildRecipe.Role.DETAIL \
 				else BuildRecipe.Role.INTERIOR
 		out.append([r.part_of(i), r.cell_of(i) - lo, 0, role, r.colour_of(i), r.material_of(i)])
 	return out

@@ -808,6 +808,64 @@ sdf_form_probe 43 (5 new), asset_workshop_probe 296 (8 new). Picture pass: `-- -
 --pick` -- the block-out's barrel lifted, raised and turned under the gizmo, and the test gun as a
 model of five pieces beside it, its second piece picked (lighter).
 
+### Furniture and items (2026-10-23)
+
+The user (2026-10-23): build furniture and household items here, since the tools are better for
+them than the building workshop's; place them like bricks, in the workshop and in the game
+worlds; filter them by planet, then by furniture or item, then by room. Buildings keep their
+generated rooms, and there will also be fully authored buildings with authored rooms.
+
+**Two types, named for the player.** *Furniture* -- beds, desks, shelves, counters, benches --
+is `BuildRecipe.Role.INTERIOR`: drawn from far off (60 m), through windows and holes.
+*Items* -- cups, books, lamps, food -- are `Role.DETAIL`: drawn only up close (20 m). The code
+keeps the role names; only the menus say Furniture. How a building breaks is unchanged for both
+(Interiors.md §3.1, §8): they weigh nothing, hold nothing up, ride the floor they stand on, and
+a hit lays them as bricks.
+
+**Tags, three levels, from one file.** `data/asset_tags.json` lists the levels in filter order;
+`AssetTags` (`scripts/asset_tags.gd`) reads it. Adding a level or a value is a line in that file:
+the Save As dialog, the filter and the generator all take it from there.
+
+| Level | Choice | Values | Empty means |
+|---|---|---|---|
+| 1. Planet | several | Earth (more as they come) | Common: every planet |
+| 2. Type | one | Furniture, Item | -- (always set) |
+| 3. Room | several | `Room.KINDS` but empty: storeroom, office, kitchen, bedroom, living, bathroom, lab, shop | Any room |
+
+A filter ANDs the levels and ORs within one: Earth, Furniture, Kitchen or Bedroom. An asset's
+tags are in its file, `meta.tags` (level -> list), never in folders, because a folder cannot put
+one chair under two rooms. A file saved before tags reads its `room_kind`/`room_kinds` as its
+rooms and its bricks as its type (all Detail is an item).
+
+**Built 2026-10-23 (stage 1).** *Asset > Make furniture or an item* sets the build's kind to
+`item`; Save As then shows the three levels as boxes to tick (Type as one choice) and saves to
+`user://items/` -- the folder the generator already furnishes rooms from (`RoomTemplates`), so
+a new chair tagged Kitchen turns up in generated kitchens with nothing else done. An item
+tagged for some planets only is furnished on those (`RoomTemplates.planet`, Earth today).
+Registered as Item, every brick is Detail; as Furniture, a brick is Interior unless it was built
+as Detail (a table with a cup: the cup stays an item). Open lists items in the asset workshop
+too. `tools/asset_tags_probe.gd`: 32 checks.
+
+**Planned, in order:**
+
+2. *The catalogue*: one panel shared by the workshop and the game -- the three levels as rows
+   of chips, each showing how many it would leave and greyed when none, a search box, the last
+   filter remembered. In a game world the planet starts on the planet underfoot.
+3. *The placer in the workshop*: pick from the catalogue, a ghost on the stud grid, R turns a
+   quarter, LMB places, RMB takes away. **A room saves a placement, not the bricks**:
+   `{asset, cell, turn}`, laid when the building is spawned -- the same reference generated
+   rooms already use (Workshop.md §0, Stage E), so editing a chair changes every room it stands
+   in. Authored buildings with authored rooms keep those placements; generated rooms keep
+   placing by seed.
+4. *The placer in game buildings*: the same placement, laid into the building's chunk as its
+   Interior and Detail bricks (`BuildingRegistry.lay_item_into`).
+5. *Outside buildings* (a bench in a park): needs its own drawing by distance, LOD and a cheap
+   body, since there is no storey group to ride; planned when stage 4 works.
+
+Open: the asset workshop's gun tools (parts, hands, export) still show for an item; its ruler
+reads gun scale (a stud = 16 mm), while an item placed in a building is at city scale (a stud =
+0.35 m). Custom and fitted pieces are not yet carried into a room: only bricks are.
+
 ### Planned: the form, sliders and shells (2026-10-17, not built)
 
 **How the block-out is used** (the user, 2026-10-17): a quick start. Draw the asset's
