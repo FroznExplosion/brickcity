@@ -591,7 +591,7 @@ city scene gains those lines and nothing else.
 
 Results below, as each test is run.
 
-**Summary (2026-10-22): nothing breaks the route.**
+**Summary (2026-10-22, tests 10-12 2026-10-23): nothing breaks the route.**
 
 | # | test | result | fix size |
 |---|---|---|---|
@@ -604,6 +604,9 @@ Results below, as each test is run.
 | 7 | two physics spaces | passed | none |
 | 8 | two nav regions | passed | none (HPA portals) |
 | 9 | moving sun | passed: casting +0.06 ms GPU here; a full re-bake lands in 1.3 s with no frame cost | none |
+| 10 | debris on planet ground | passed: trimesh ground costs the same as boxes, 400 loose bricks included | none |
+| 11 | drawing curved ground | passed: the same as flat; a horizon cull saves 40% of the ground's GPU on foot | the cull: small |
+| 12 | atmosphere from the air | passed: +0.8-1.1 ms GPU at 720p | none |
 
 #### Test 1, jitter at distance: passed
 
@@ -964,6 +967,66 @@ the plan; they run before any of the order of work below.
 | 10 | debris on planet ground | the city's collapse, its pieces landing on the ground as (a) the flat game's boxes per piece, (b) the same tiles as trimeshes (what a curved tile is), (c) trimeshes mapped onto the 10 km sphere. Physics time per tick while the pieces fall and settle, the worst tick, and settle time | (b) and (c) within ~20% of (a), or a box-on-tangent-frame collider is cheap enough to keep |
 | 11 | drawing curved ground | the terrain city's ground drawn flat against the same tiles mapped onto a 10 km sphere, from street level and from 100 m up; GPU and CPU render time, draw calls, triangles; and what the horizon hides: the tiles and buildings past it | the curved ground costs no more than the flat; the horizon's saving measured |
 | 12 | the atmosphere from the air | a full-screen atmosphere pass (single-scattering, a few samples a pixel) over the city at 720p, GPU time against none | under ~1.5 ms, the estimate in §10a |
+
+#### Test 10, debris on planet ground: passed
+
+`--terrain --planet=ground [--collider=boxes|trimesh]` (`tools/planet_ground.gd`), headless and
+flat out (`--fixed-fps 30`, so a tick's wall time is its work), twice each. The terrain city's 178
+collided tiles keep their boxes (35,507 shapes), or each swaps them for one trimesh of its drawn
+surface (437,901 triangles in all) -- on the same flat ground, since curving a tile changes no
+triangle count. Three towers brought down, the fallen sections broken up again, then 400 loose
+bricks dropped over 20 x 20 m of hillside:
+
+| ms a tick, mean / 95th / worst | boxes | trimesh |
+|---|---|---|
+| three towers coming down | 1.71 / 4.29 / 15.8 -- 1.63 / 3.38 / 17.5 | 1.49 / 3.18 / 20.0 -- 1.56 / 3.30 / 15.5 |
+| the sections broken up | 1.34 / 2.64 / 12.5 -- 1.52 / 2.89 / 13.5 | 1.32 / 2.63 / 8.7 -- 1.31 / 2.81 / 8.3 |
+| 400 loose bricks landing | 3.11 / 5.19 / 7.9 -- 2.40 / 3.51 / 5.3 | 2.31 / 4.57 / 8.2 -- 2.48 / 3.76 / 6.3 |
+
+The same within run-to-run noise. (Another chat's `--ring` ran beside the brick drops.) The game
+sends small debris to crumbs, which never touch the colliders, so only 4-8 bodies ever landed from
+the collapses; the brick drop is the heavy case, and it does not care either. **Curved tiles collide
+as their own triangles.**
+
+#### Test 11, drawing curved ground: passed, and the horizon saves 40% at street level
+
+`tools/planet_draw_probe.gd`, windowed, the editor closed, no other Godot: 33 x 33 detail tiles
+(370 m square, 3.7 million triangles, the ground material, no studs) built flat and again mapped
+onto a 10 km sphere mid-face, drawn from one edge looking across; the renderer's clock over 240
+frames.
+
+| | render CPU ms (mean / worst) | render GPU ms (mean / worst) |
+|---|---|---|
+| flat, street level (1.7 m) | 1.99 / 4.17 | 18.58 / 22.07 |
+| curved, street level | 2.01 / 4.06 | 18.50 / 20.50 |
+| curved, street level, horizon cull: **547 of 1,089 tiles hidden** | 0.87 / 1.44 | **11.19** / 12.51 |
+| flat, 100 m up | 1.78 / 3.00 | 17.65 / 19.41 |
+| curved, 100 m up | 1.89 / 2.82 | 17.91 / 20.26 |
+| curved, 100 m up, horizon cull (none hidden: the horizon is 1.4 km off) | 2.57 / 4.93 | 18.03 / 20.47 |
+
+- **Curved ground draws exactly as flat** (both runs).
+- **The horizon is a saving we do not have now**: on foot, everything past ~180 m that is not a
+  hill is under it, and a per-tile test (the tile's top against the eye's horizon angle) hides half
+  of this patch and 40% of its GPU time. From the air it saves nothing near; it is the far tier and
+  the coarse ground beyond 1.4 km that the curve then hides. (The absolute numbers are this probe's,
+  detail tiles everywhere; the game draws coarse ground past four tiles.)
+- The mapped tiles had to be rewound: the cube net's map mirrors them, and a back-face-culled
+  material drew only their walls until it was.
+
+#### Test 12, the atmosphere from the air: passed
+
+`tools/planet_atmosphere.gdshader`: single scattering, Rayleigh and Mie, 12 samples along each view
+ray to the depth buffer, 4 toward the sun from each, as a full-screen quad, over the flat patch from
+100 m at 1280 x 720. **+0.76 and +1.11 ms of GPU** in two runs (17.78 to 18.89 ms), CPU unchanged:
+inside §10a's 0.5-1.5 ms, and only while flying. Its look is unbalanced (a first pass, not tuned),
+but its cost is the cost of the technique.
+
+![test 11 street level (horizon cull: the near ground, a far hill over the horizon), from 100 m; test 12 the atmosphere pass](Planets/t11_t12_draw.jpg)
+
+**Performance against the flat game, all measured:** a fight on the ground costs the same (tests 5,
+7, 9, 10, 11) and, with a horizon cull, less to draw on foot; flying adds ~1 ms of atmosphere; a
+far-apart co-op group adds its own bodies' physics on the host; an origin shift is ~10 ms once every
+4-8 km of travel.
 
 ## 10. If it is taken up: order of work
 
