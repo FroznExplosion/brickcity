@@ -565,6 +565,10 @@ func _upload(band: Band, arrays: Array) -> void:
 	band.holder = holder
 	band.discard = false
 	band.state = UPLOADING
+	# From now, in THIS step too: the worker holds the renderer while it
+	# uploads, and a band's studs touched after it in the same step waited for
+	# it -- 4-11 ms, the worst steps of a street walk (PerfCaps.md 3).
+	_held = true
 	band.task = WorkerThreadPool.add_task(func() -> void:
 		var m := ArrayMesh.new()
 		m.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
