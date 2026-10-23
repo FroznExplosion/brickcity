@@ -129,11 +129,15 @@ both lists, in this order; the detail of each item is where it points.
      storey units): every run, the same three ticks (~90, ~258, ~339), **23-32 ms**; one run
      **99 ms** (23,801 bricks: laid 68.5 + spawn 19.6, its split 16.7). The whole piece is laid
      from the template (`lay_band`, ~1.3-2.9 us a brick) and cut into a new chunk (`spawn` ->
-     `split_island`) in the blast's tick. Ideas, not built -- the storey-units design, the user
-     to decide: lay the piece's chunk a storey a tick while it falls, so a blast pays only the
-     spawn; take the laid chunk whole (`IslandManager.adopt`, as a toppled building) instead of
-     splitting it into a copy -- but `spawn` also holds the move caps, crumbling, landmark rules
-     and the co-op piece ids.
+     `split_island`) in the blast's tick. **The laying, fixed 2026-10-23:** it was a storey a
+     `lay_band`, from the bottom up, and every call that reached past the grid's window built
+     the grid again for every brick laid so far -- quadratic in storeys. Now a run of storeys a
+     call (`BuildingRegistry._lay_runs`, also for the storeys a hit reaches): same bricks, same
+     absent ones, same grid (`storey_unit_probe`, 42), 12,484 bricks over 18 storeys 13.3 ->
+     2.4 ms. Left: the split, 5-17 ms. Not built: lay the chunk a storey a tick while it falls
+     (a barrage converts a piece within a tick or two of it forming, so likely no help); take
+     the laid chunk whole (`IslandManager.adopt`) instead of splitting a copy -- but `spawn`
+     also holds the move caps, crumbling, landmark rules and the co-op piece ids.
    - **A shell rebuilt for a building still in bricks** (`_stream_detail`, `st_reshell`): 15-19
      ms = `live_damage_profile` 7.2 + recipe shell mesh 7.3. When it is drawn from its bricks
      (`_far_real`), both are spent on a shell that draws for a tick or two.
@@ -214,7 +218,7 @@ areas' tests).
 
 ## How to check
 
-- Probes (headless): `float` 50, `debris` 29, `hang` 10, `collapse` 56, `shellhit` 2, `farcut` 5, `storey_unit` 39, `heap` 11, `crack` 9,
+- Probes (headless): `float` 50, `debris` 29, `hang` 10, `collapse` 56, `shellhit` 2, `farcut` 5, `storey_unit` 42, `heap` 11, `crack` 9,
   `seam` 23, `spaces` 20, `interior_group` 33, `interior` 87, `fixture` 47, `shell` 38,
   `section` 32, `barrage` 8 (keeps the index and components checks on).
 - Also (lod-collapse's, headless): `barrage` 7-8, `push` 16, `blast_ring` 19, `storey` 4,

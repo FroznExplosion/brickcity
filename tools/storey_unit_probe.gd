@@ -21,6 +21,7 @@ func _init() -> void:
 	_check_record_rides_absent()
 	_check_anchors_and_loads()
 	_check_give_way()
+	_check_piece_runs()
 	_check_tip()
 	_check_unlay()
 	_check_build()
@@ -217,6 +218,48 @@ func _check_give_way() -> void:
 			"laid again it is still laid a storey at a time, without the storeys that left (%s)"
 			% str(rep.laid).left(40))
 	_ok(w.get_alive_block_count(c2) < 15000, "and holds only what is left (%d)" % w.get_alive_block_count(c2))
+
+
+## A shell piece made bricks is laid a run of storeys a lay_band
+## (BuildingRegistry._lay_runs), not a storey a call: each call that reached
+## past the grid's window built the grid again for every brick laid so far --
+## 68.5 ms for a 34-storey piece in a blast's tick. Asked here: the same
+## bricks, the same absent ones and the same grid as a storey a call, with a
+## hole in the run; the time of each printed.
+func _check_piece_runs() -> void:
+	print("\n=== a shell piece is laid a run of storeys a call: the same bricks as a storey a call ===")
+	var part := _make(true)
+	var w: BrickWorld = part[0]
+	var reg: BuildingRegistry = part[1]
+	var id: int = part[2]
+	var b := reg.get_building(id)
+	reg.materialise(id, PackedInt32Array([14]))
+	var lines := reg.storey_lines(b)
+	var n := lines.size() - 1
+	var holes := PackedInt32Array([20, 21])
+	var t0 := Time.get_ticks_usec()
+	var runs := reg.shell_piece_chunk(id, 15, n, holes, Transform3D())
+	var t1 := Time.get_ticks_usec()
+	var tid := reg._template_of(b)
+	var one := w.create_band_chunk(tid)
+	for s in range(15, n):
+		if not holes.has(s):
+			w.lay_band(one, tid, lines[s], lines[s + 1])
+	var t2 := Time.get_ticks_usec()
+	print("    storeys 15-%d less %s: a run a call %.1f ms, a storey a call %.1f ms" % [
+			n - 1, str(holes), (t1 - t0) / 1000.0, (t2 - t1) / 1000.0])
+	_ok(runs >= 0 and one >= 0 and w.get_alive_block_count(runs) == w.get_alive_block_count(one)
+			and w.get_alive_block_count(runs) > 0,
+			"as many bricks alive (%d, %d)" % [w.get_alive_block_count(runs), w.get_alive_block_count(one)])
+	var absent_differ := 0
+	for i in w.get_block_count(one):
+		if w.is_block_absent(runs, i) != w.is_block_absent(one, i):
+			absent_differ += 1
+	_ok(w.get_block_count(runs) == w.get_block_count(one) and absent_differ == 0,
+			"the same blocks absent: the holes and everything under storey 15 (%d differ)" % absent_differ)
+	_ok(_cells_of(w, runs, lines[19], lines[23]) == _cells_of(w, one, lines[19], lines[23])
+			and _cells_of(w, runs, lines[n - 1], lines[n]) == _cells_of(w, one, lines[n - 1], lines[n]),
+			"the same grid round the hole and in the top storey")
 
 
 func _check_window() -> void:
