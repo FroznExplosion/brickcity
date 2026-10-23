@@ -1102,7 +1102,7 @@ near tiers (shell, bricks) keep their distance rings; only the far tier's range 
 
 Above the ground the horizon is kilometres off and nothing hides a building's foot, so a building
 **fades in by its size on screen**: a dithered alpha (as STA's impostor cross-fade) from 0 at about
-1.5 px tall to 1 at about 4 px. A tower 100 m tall is 4 px from ~25 km; a 400 m one from ~100 km.
+1.5 px tall to 1 at about 4 px. At 720p and 75 degrees a tower 100 m tall is 4 px from ~12 km; a 400 m one from ~47 km.
 
 - **Landmarks** -- the tallest buildings and the big features (a mega tower, a dam, a crater ring)
   -- are also drawn on the planet's impostor from space: baked into its colour and height maps
