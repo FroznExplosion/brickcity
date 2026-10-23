@@ -2886,6 +2886,12 @@ func _build_glass_here(owed: Array) -> void:
 
 
 func _hang_glass(mi: MeshInstance3D, panes: Mesh, fades: bool) -> void:
+	# One set a shell: a shell drawn from its bricks has its panes asked again
+	# after a hit (_refresh_real_shell), and the old set goes as the new hangs.
+	for c in mi.get_children():
+		if c is MeshInstance3D and (c as MeshInstance3D).material_override == BuildingShell.window_material():
+			_retirer.retire((c as MeshInstance3D).mesh)
+			c.queue_free()
 	var glass := MeshInstance3D.new()
 	glass.mesh = panes
 	glass.material_override = BuildingShell.window_material()
@@ -3594,8 +3600,9 @@ func _piece_to_bricks(p: ShellPiece) -> BrickIsland:
 		var _t3 := Time.get_ticks_usec()
 		if isl != null and isl.is_valid():
 			world.heal_joints(isl.chunk)
-		shell_brick_split = "%d bricks, storeys %d-%d: laid %.1f + log %.1f + spawn %.1f (%s) + joints %.1f ms" % [
-				ids.size(), p.lo, p.hi - 1, float(_t1 - _t0) / 1000.0, float(_t2 - _t1) / 1000.0,
+		shell_brick_split = "%d bricks, storeys %d-%d, %d ms old: laid %.1f + log %.1f + spawn %.1f (%s) + joints %.1f ms" % [
+				ids.size(), p.lo, p.hi - 1, Time.get_ticks_msec() - p.made_at,
+				float(_t1 - _t0) / 1000.0, float(_t2 - _t1) / 1000.0,
 				float(_t3 - _t2) / 1000.0, str(islands.spawn_last),
 				float(Time.get_ticks_usec() - _t3) / 1000.0]
 	if chunk >= 0:
@@ -13125,6 +13132,28 @@ func _harvest_far_real() -> void:
 			world.coarse_chunk_async(b.chunk)
 
 
+## A shell drawn from its bricks, hit again: asked again of the bricks, in
+## place -- its coarse mesh (on a worker past COARSE_ASYNC_BLOCKS) and its
+## panes, each drawing what it has until the new one lands. Made anew it was
+## a damage profile and a recipe shell (7.2 + 7.3 ms on a --big --shot,
+## 2026-10-23) for a drawing replaced a tick or two later. False when it is
+## not one, or no longer can be: made anew as before.
+func _refresh_real_shell(id: int) -> bool:
+	var mi = _shells.get(id)
+	if mi == null or not is_instance_valid(mi):
+		return false
+	if _far_real_done.get(id) != mi and _far_real_owed.get(id) != mi:
+		return false
+	var b := registry.get_building(id)
+	if b == null or not b.is_materialised() or b.is_build() or _toppling.has(id):
+		return false
+	if world.get_alive_block_count(b.chunk) == 0 and not registry.is_partial(b):
+		return false
+	_far_real(id, mi)
+	_glass_owed.append([mi, id, {}, false, true])
+	return true
+
+
 func _far_real_apply(id: int, mi: MeshInstance3D, arrays: Array) -> void:
 	var m := ArrayMesh.new()
 	if not arrays.is_empty() and IslandManager.mesh_arrays_ok(arrays, "far building"):
@@ -13177,8 +13206,9 @@ func _stream_detail() -> void:
 		elif _shell_stale.has(id):
 			_shell_stale.erase(id)
 			var t_one := Time.get_ticks_usec()
-			_free_shell(id)
-			_make_shell(id, true)
+			if not _refresh_real_shell(id):
+				_free_shell(id)
+				_make_shell(id, true)
 			_part("st_reshell", t_one)
 			done += 1
 	_demesh_ms += float(Time.get_ticks_usec() - t0) / 1000.0
