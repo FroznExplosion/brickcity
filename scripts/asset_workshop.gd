@@ -1039,6 +1039,10 @@ func build_centre() -> Vector3:
 func _unhandled_input(e: InputEvent) -> void:
 	if (_file_dialog != null and _file_dialog.visible) or (_length_dialog != null and _length_dialog.visible):
 		return
+	# The catalogue (F6) first: while it is open, clicks place furniture.
+	if _furnish != null and _furnish.input(e):
+		get_viewport().set_input_as_handled()
+		return
 	# The wheel over the rail scrolls the rail only: at its end it must not go on to the
 	# hotbar (or zoom).
 	if e is InputEventMouseButton and _over_rail():

@@ -72,6 +72,13 @@ var groups := []
 ##   {"cell": [x, y, z], "params": {"x", "z", "courses", "rooms", "stairs", "windows"}}
 var towers := []
 
+## Furniture and items placed in this build from the catalogue: WHERE, not the
+## bricks (AssetPlacements; Docs/AssetWorkshop.md, "Furniture and items").
+## Laid from the asset's own file when the build goes into the city.
+##
+##   {"asset": catalogue id, "cell": [x, y, z], "turn": 0-3}
+var placements := []
+
 ## Distinct archetype names used, in first-use order. Blocks index into this, so
 ## a 500-brick house carries ~8 strings rather than 500.
 var parts := PackedStringArray()
@@ -151,7 +158,7 @@ func is_empty() -> bool:
 
 ## Anything at all to build: bricks, fixtures or a generated building.
 func has_content() -> bool:
-	return not _parts.is_empty() or not _fixtures.is_empty() or not towers.is_empty()
+	return not _parts.is_empty() or not _fixtures.is_empty() or not towers.is_empty() 			or not placements.is_empty()
 
 
 ## Append a block. Returns the block id it will have when built, which is also
@@ -251,6 +258,9 @@ func append(other: BuildRecipe, offset: Vector3i, frame_offsets: Dictionary = {}
 	for t in other.towers:
 		towers.append({"cell": _plain_cell(cell_from(t.cell) + offset),
 				"params": (t.params as Dictionary).duplicate(true)})
+	for p in other.placements:
+		placements.append(AssetPlacements.make(str(p.asset), cell_from(p.cell) + offset,
+				int(p.get("turn", 0))))
 	return first
 
 
@@ -315,6 +325,10 @@ func turned(k: int) -> BuildRecipe:
 		var copy: Dictionary = (g as Dictionary).duplicate(true)
 		copy.turn = posmod(int(copy.get("turn", 0)) + k, 4)
 		out.groups.append(copy)
+	for p in placements:
+		var pt := int(p.get("turn", 0))
+		var at := _turn_box(cell_from(p.cell) - lo, AssetPlacements.size_of(str(p.asset), pt), d, k) + lo
+		out.placements.append(AssetPlacements.make(str(p.asset), at, pt + k))
 	return out
 
 
@@ -823,6 +837,7 @@ func to_dict() -> Dictionary:
 		"meta": meta.duplicate(true),
 		"groups": groups.duplicate(true),
 		"towers": towers.duplicate(true),
+		"placements": placements.duplicate(true),
 		"parts": _plain(parts),
 		"cells": _plain(_cells),
 		"part_index": _plain(_parts),
@@ -857,6 +872,9 @@ static func from_dict(d: Dictionary) -> BuildRecipe:
 	for raw in (d.get("towers", []) as Array):
 		if typeof(raw) == TYPE_DICTIONARY and (raw as Dictionary).has("cell"):
 			r.towers.append(_json_ints(raw))
+	for raw in (d.get("placements", []) as Array):
+		if typeof(raw) == TYPE_DICTIONARY and (raw as Dictionary).has("asset"):
+			r.placements.append(_json_ints(raw))
 	r.parts = _strings(d.get("parts", []))
 	r._cells = _ints(d.get("cells", []))
 	r._parts = _ints(d.get("part_index", []))
