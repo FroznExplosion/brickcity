@@ -2480,7 +2480,10 @@ func _on_menu(what: String, arg: Variant) -> void:
 		"new": _new_build()
 		"open": _open_path(str(arg))
 		"save": _save_current()
-		"save_as": _save_as(str(arg.name), str(arg.get("room_kind", "")))
+		"save_as_ask": _menu.show_save_as(recipe.name if recipe.name != "untitled" else "",
+				str(recipe.meta.get("room_kind", "")),
+				AssetTags.tags_of(recipe) if recipe.kind == "item" else {})
+		"save_as": _save_as(str(arg.name), str(arg.get("room_kind", "")), arg.get("tags", {}))
 		"quick_save": _save()
 		"quick_load": _load()
 		"city": _place_in_city()
@@ -2542,14 +2545,15 @@ static func _writable(path: String) -> bool:
 func _save_current() -> void:
 	if _current_path == "" or not _writable(_current_path):
 		_menu.show_save_as(recipe.name if recipe.name != "untitled" else "",
-				str(recipe.meta.get("room_kind", "")))
+				str(recipe.meta.get("room_kind", "")),
+				AssetTags.tags_of(recipe) if recipe.kind == "item" else {})
 		return
 	_write(_current_path)
 
 
 ## File > Save As: a named file in the library for this kind of build --
 ## buildings where the city placer finds them, rooms filed by room kind.
-func _save_as(build_name: String, room_kind: String = "") -> String:
+func _save_as(build_name: String, room_kind: String = "", tags: Dictionary = {}) -> String:
 	recipe.name = build_name
 	var dir := BuildRecipe.player_dir(recipe.kind)   # the player's, not the shipped one
 	if recipe.kind == "room":
@@ -2558,11 +2562,16 @@ func _save_as(build_name: String, room_kind: String = "") -> String:
 		recipe.meta["room_kind"] = room_kind
 		dir += room_kind + "/"
 	elif recipe.kind == "item":
-		# Which rooms the generator may put it in (RoomTemplates._kinds_meant).
-		if room_kind == "" or room_kind == "any":
-			recipe.meta.erase("room_kind")
-		else:
-			recipe.meta["room_kind"] = room_kind
+		# Planet, type and rooms (AssetTags): what the catalogue filters by and
+		# where the generator may put it (RoomTemplates.add_item). A room kind
+		# alone is the older form of the room tag.
+		if tags.is_empty():
+			tags = AssetTags.tags_of(recipe)
+			if room_kind != "":
+				tags["room"] = [] if room_kind == "any" else [room_kind]
+		recipe.meta["tags"] = AssetTags.clean(tags)
+		recipe.meta.erase("room_kind")
+		recipe.meta.erase("room_kinds")
 	if _builds_dir != BuildRecipe.player_dir():
 		dir = _builds_dir   # the gate writes somewhere a test cannot hurt
 	var path := dir + slug(build_name) + ".json"

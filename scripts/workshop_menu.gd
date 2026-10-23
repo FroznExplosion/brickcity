@@ -49,6 +49,10 @@ var _save_dialog: ConfirmationDialog
 var _save_name: LineEdit
 var _save_room_kind: OptionButton
 var _save_room_row: HBoxContainer
+## An item's tags (AssetTags), one row per level: level id ->
+## {"any": CheckBox or null, "values": {value id: CheckBox}}.
+var _save_tags_box: VBoxContainer
+var _save_tags := {}
 
 var _clear_dialog: ConfirmationDialog
 
@@ -268,7 +272,7 @@ func _on_file(id: int) -> void:
 		F_NEW: _clear_dialog.popup_centered()
 		F_OPEN: show_open("open")
 		F_SAVE: action.emit("save", null)
-		F_SAVE_AS: show_save_as("")
+		F_SAVE_AS: action.emit("save_as_ask", null)   # the build knows its name and tags
 		F_QUICK_SAVE: action.emit("quick_save", null)
 		F_QUICK_LOAD: action.emit("quick_load", null)
 		F_CITY: action.emit("city", null)
@@ -365,7 +369,7 @@ func _build_open_dialog() -> void:
 func _fill_filter() -> void:
 	_open_filter.clear()
 	for k in BuildRecipe.LIBRARY_DIRS:
-		if _asset_kinds.is_empty() == BuildRecipe.ASSET_KINDS.has(k):
+		if _asset_kinds.is_empty() and BuildRecipe.ASSET_KINDS.has(k):
 			continue
 		if not _asset_kinds.is_empty() and not _asset_kinds.has(k):
 			continue
@@ -460,6 +464,13 @@ static func describe(path: String) -> Dictionary:
 		bits.append("%d fixture(s)" % r.fixture_count())
 	if r.kind == "room" and r.meta.has("room_kind"):
 		bits.append(str(r.meta.room_kind))
+	if r.kind == "item":
+		var tags := AssetTags.tags_of(r)
+		var where: Array = tags.get("room", [])
+		var on: Array = tags.get("planet", [])
+		bits.append("%s, %s, %s" % [AssetTags.type_of(tags),
+				"every planet" if on.is_empty() else "/".join(on),
+				"any room" if where.is_empty() else "/".join(where)])
 	return {"name": n, "summary": ", ".join(bits), "recipe": r}
 
 
@@ -494,12 +505,78 @@ func _build_save_dialog() -> void:
 		_save_room_kind.add_item(k)
 	_save_room_kind.add_item("any")   # items only: every kind of room
 	_save_room_row.add_child(_save_room_kind)
+	_build_save_tags(box)
 	_save_dialog.confirmed.connect(_save_chosen)
 
 
-func show_save_as(current_name: String, room_kind: String = "") -> void:
+## The tag rows for an item: each level of AssetTags, its values as boxes to
+## tick. A level with an "any" box (Common, Any room) means none chosen; a
+## single-choice level (Type) behaves as radio buttons.
+func _build_save_tags(box: VBoxContainer) -> void:
+	_save_tags_box = VBoxContainer.new()
+	box.add_child(_save_tags_box)
+	for l: Dictionary in AssetTags.levels():
+		var title := Label.new()
+		title.text = "%s:" % l.label
+		_save_tags_box.add_child(title)
+		var flow := HFlowContainer.new()
+		_save_tags_box.add_child(flow)
+		var row := {"any": null, "values": {}}
+		var group: ButtonGroup = null if l.multi else ButtonGroup.new()
+		if str(l.any) != "":
+			var any := CheckBox.new()
+			any.text = l.any
+			flow.add_child(any)
+			row.any = any
+			any.toggled.connect(func(on: bool) -> void:
+				if on:
+					for b: CheckBox in (row.values as Dictionary).values():
+						b.set_pressed_no_signal(false))
+		for v: Dictionary in (l.values as Array):
+			var b := CheckBox.new()
+			b.text = v.label
+			b.button_group = group
+			flow.add_child(b)
+			row.values[v.id] = b
+			b.toggled.connect(func(on: bool) -> void:
+				if on and row.any != null:
+					(row.any as CheckBox).set_pressed_no_signal(false)
+				elif not on and row.any != null:
+					var none := true
+					for o: CheckBox in (row.values as Dictionary).values():
+						none = none and not o.button_pressed
+					(row.any as CheckBox).set_pressed_no_signal(none))
+		_save_tags[l.id] = row
+
+
+func _set_save_tags(tags: Dictionary) -> void:
+	for id in _save_tags:
+		var row: Dictionary = _save_tags[id]
+		var has: Array = tags.get(id, [])
+		for v in (row.values as Dictionary):
+			(row.values[v] as CheckBox).set_pressed_no_signal(has.has(v))
+		if row.any != null:
+			(row.any as CheckBox).set_pressed_no_signal(has.is_empty())
+
+
+func _get_save_tags() -> Dictionary:
+	var out := {}
+	for id in _save_tags:
+		var row: Dictionary = _save_tags[id]
+		var on := []
+		for v in (row.values as Dictionary):
+			if (row.values[v] as CheckBox).button_pressed:
+				on.append(v)
+		out[id] = on
+	return out
+
+
+func show_save_as(current_name: String, room_kind: String = "", tags: Dictionary = {}) -> void:
 	_save_name.text = current_name
-	_save_room_row.visible = _kind == "room" or _kind == "item"
+	# An item says where it goes by its tags; a room template is one kind of room.
+	_save_room_row.visible = _kind == "room"
+	_save_tags_box.visible = _kind == "item"
+	_set_save_tags(tags)
 	# "any" is for an item; a room template IS one kind of room.
 	_save_room_kind.set_item_disabled(_save_room_kind.item_count - 1, _kind == "room")
 	if _kind == "item" and room_kind == "":
@@ -518,8 +595,10 @@ func _save_chosen() -> void:
 	if n == "":
 		return
 	var arg := {"name": n}
-	if _kind == "room" or _kind == "item":
+	if _kind == "room":
 		arg["room_kind"] = _save_room_kind.get_item_text(_save_room_kind.selected)
+	elif _kind == "item":
+		arg["tags"] = _get_save_tags()
 	action.emit("save_as", arg)
 
 

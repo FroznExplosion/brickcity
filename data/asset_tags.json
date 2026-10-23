@@ -1,0 +1,30 @@
+{
+	"_doc": "Docs/AssetWorkshop.md, 'Furniture and items'. The filter levels, in order. Add a level or a value here and the save dialog, the catalogue and the generator all take it; no code changes. A level with an 'any' label lets an asset leave it empty, meaning it fits every value. 'values_from': 'room_kinds' takes Room.KINDS.",
+	"levels": [
+		{
+			"id": "planet",
+			"label": "Planet",
+			"multi": true,
+			"any": "Common (every planet)",
+			"values": [
+				{"id": "earth", "label": "Earth"}
+			]
+		},
+		{
+			"id": "type",
+			"label": "Type",
+			"multi": false,
+			"values": [
+				{"id": "furniture", "label": "Furniture"},
+				{"id": "item", "label": "Item"}
+			]
+		},
+		{
+			"id": "room",
+			"label": "Room",
+			"multi": true,
+			"any": "Any room",
+			"values_from": "room_kinds"
+		}
+	]
+}
