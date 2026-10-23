@@ -12586,6 +12586,11 @@ func _setup_sun_shadows(sun: DirectionalLight3D) -> void:
 	sun.directional_shadow_split_3 = 0.3
 	sun.directional_shadow_blend_splits = true
 	sun.directional_shadow_fade_start = 0.9
+	# Options > Video: two slices, the near one as sharp as the four's, the
+	# far one to the end (PerfCaps.md 2.2).
+	if BrickcityMenuHost.sun_cascades == 2:
+		sun.directional_shadow_mode = DirectionalLight3D.SHADOW_PARALLEL_2_SPLITS
+		sun.directional_shadow_split_1 = 0.025
 
 
 ## Every so often: who casts what. Cheap -- a distance per brick building and
@@ -16197,6 +16202,13 @@ func _run_chamfer_pass() -> void:
 				brick_near.chamfered_tris, brick_near.stud_instances, brick_near.worst_step_ms])
 	_gate_ok("and its exposed studs are geometry", brick_near.stud_instances > 0,
 			"%d" % brick_near.stud_instances)
+	# Their shadows are the flat meshes' (PerfCaps.md 2.2): the bevel is not
+	# there at shadow resolution, its triangles would be drawn in every cascade.
+	var shadow_faults: Vector2i = brick_near.shadow_faults()
+	_gate_ok("the chamfered bands cast their flat mesh's shadow, not their own",
+			shadow_faults == Vector2i.ZERO,
+			"%d chamfered meshes casting, %d bands without a flat shadow" % [shadow_faults.x,
+				shadow_faults.y])
 	var near_diff := _image_difference(near_off, near_on)
 	_gate_ok("up close, the bevel changes the picture", near_diff > 0.01,
 			"%.1f%% of sampled pixels" % (near_diff * 100.0))
@@ -16423,6 +16435,8 @@ func _run_chamfer_street() -> void:
 	print("[street]   studs, worst: fetch %.2f ms, split %.2f, set %.2f; %d in one band at most"
 			% [brick_near.worst_fetch_ms, brick_near.worst_split_ms, brick_near.worst_set_ms,
 				brick_near.most_band_studs])
+	print("[street]   showing a band, worst %.2f ms; %d steps a band waited for an upload to finish first"
+			% [brick_near.worst_show_ms, brick_near.show_waited])
 
 
 ## The next `n` frames: each one's length, and what the renderer says the

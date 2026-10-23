@@ -22,6 +22,11 @@ const WORKSHOP := "res://scenes/workshop.tscn"
 ## workshop and the terrain tools have their own Escape (menus, cancelling a grab).
 const CITY_SCRIPT := "res://scripts/city_scene.gd"
 
+## Options > Video, Sun Shadow Cascades: 4 or 2. Read by the city as it makes its sun, and
+## put on a city that is up (CityScene._setup_sun_shadows). Two drew a street walk's frame
+## 1.6 ms sooner on the GPU of 12.9 (PerfCaps.md 2.2), the far shadows softer.
+static var sun_cascades := 4
+
 
 func _game_title() -> String:
 	return "PRINTED BRICK CITY"
@@ -152,6 +157,11 @@ func _apply_setting(id: StringName, value: Variant) -> void:
 			BrickNear.max_tris = int(value) * 1000
 		&"near_cap_stud_n":
 			BrickNear.max_studs = int(value)
+		&"sun_cascades":
+			sun_cascades = 2 if int(value) == 1 else 4
+			var city := _city()
+			if city != null and city.get("_sun") is DirectionalLight3D:
+				city.call("_setup_sun_shadows", city.get("_sun"))
 		&"aa_mouse":
 			AimAssist.mouse_level = int(value)
 		&"aa_pad":
@@ -230,6 +240,10 @@ func _setting_defs() -> Array:
 			"suffix": " studs",
 			"hint": "With the cap on: how many studs may be drawn as real geometry at once. Past "
 			+ "them they are flat cards that face you."},
+		{"id": &"sun_cascades", "tab": "video", "type": MENU_SETTINGS.T_ENUM,
+			"label": "Sun Shadow Cascades", "default": 0, "choices": ["4 (Sharp)", "2 (Faster)"],
+			"hint": "How many slices the sun's shadow is drawn in. Two is faster; shadows past "
+			+ "about ten metres are softer."},
 	] + AIM_ASSIST_DEFS + AIM_ASSIST_ADVANCED
 
 

@@ -18,10 +18,12 @@ with the editor closed (CLAUDE.md), and a pass that times something is named wit
 | Bricks in play | a brick budget: quiet storeys furthest from everybody go back to shells | `CityScene` (Space.md 5.3) |
 | Printed detail | print lines fade 7-22 m, seams 30-75 m, the shaded bevel 18-55 m | `brick.gdshader`, `print_surface.gdshaderinc` |
 | The underside's hollow | sphere-traced within 10 m (`under_parallax_range`), flat past it | `brick.gdshader` |
-| Sun shadows | 400 m; brick bands cast only within a range of the camera, shadow proxies past it | `CityScene._set_brick_shadows_near` |
+| Sun shadows | 400 m; brick bands cast only within a range of the camera, shadow proxies past it; a chamfered band casts its flat mesh's shadow; four cascades or two (Options > Video) | `CityScene._set_brick_shadows_near`, `BrickNear._sync_shadow` |
 | Building collision | one body per band, so a hit rebuilds only the bands it touched | `BuildingCollision` |
 | Terrain | detail tiles, chamfer within 12 m, coarse tiers out | `TerrainStreamer`, Terrain.md |
 | AI | the heavy-tick scheduler | `ai_sched` |
+| Hit debris | 32 bursts at once, none past 60 m, meshes shared | `MaterialFx._debris` |
+| Lights | fixed pools, none shadowed (2.3) | the disasters, `torch_flame` |
 
 ## 2. To do, in order
 
@@ -33,36 +35,53 @@ studs (`big_city.tscn -- --chamfer --cost --street`, `worst_set_ms`). 2,166 stud
 copy is not the cost. Growing the buffers instead of reallocating them on every resort made no
 difference. Find what the call waits on, and stop it waiting. See 3.
 
-### 2.2 Shadows of the bevelled bands
+### 2.2 Shadows of the bevelled bands -- DONE (2026-10-23)
 
-A chamfered band copies its flat band's `cast_shadow`, so up to 120k bevelled triangles are drawn
-again into every shadow cascade. At shadow resolution a bevel is invisible: the flat mesh's
-shadow is the same picture. Cast the flat band's shadow (shadows only) and never the chamfered
-one's. Add a cascade count / split to Options > Video if the cascades are still a large part of
-the frame.
+A chamfered band copied its flat band's `cast_shadow`, so up to 120k bevelled triangles were drawn
+again into every shadow cascade. Now the chamfered mesh casts nothing, and a shadows-only copy of
+the flat mesh (`FlatShadow`, the band's own mesh, no upload) casts in its place whenever the band
+would (`BrickNear._sync_shadow`). At shadow resolution the bevel is not there. The `--chamfer`
+gate checks it ("the chamfered bands cast their flat mesh's shadow, not their own").
 
-### 2.3 Lights
+Street walk, cap off, two runs each: GPU 12.2-12.8 ms mean against 13.0-13.4 with the chamfered
+meshes casting; the worst GPU frame 22-23 ms against 26-29.
 
-Fires, the wildfire, lightning and meteors make point lights with no limit on how many are alive,
-or on how many of them cast shadows. Cap both, nearest (and in front) first.
+The cascades: the same walk drew in 12.9 ms with four, 11.3 with two, 9.2 with no sun shadow. Two
+are now an Options > Video row, **Sun Shadow Cascades** (default four, the look as it was): the
+near slice as sharp as before (10 m), the far one softer (`BrickcityMenuHost.sun_cascades`, read by
+`CityScene._setup_sun_shadows`, put on a city that is up).
 
-### 2.4 Collision far away
+### 2.3 Lights -- checked, nothing to cap
 
-A standing building keeps its collision bodies however far it is from anything that moves. Turn
-off the bodies of bands nothing is near (the player, a vehicle, an AI, a falling piece) and put
-them back before anything can reach them. Cap the active physics pieces by distance as well as by
-count.
+The doc's first guess was wrong. Every light the game makes at run time is a fixed pool made once:
+fire spread 6, wildfire 4, lightning 2, meteors 8 + 4 flashes, a torch's one, the workbench's one
+-- about 25 at the very most, with every disaster going at once -- and none casts a shadow. Forward+
+takes that many without a cap.
 
-### 2.5 Texture detail by distance
+### 2.4 Collision far away -- checked, capped already
 
-The underside's hollow runs a per-pixel sphere trace within 10 m; give it fewer steps with
-distance (through the zoom, as everything else). The print lines fade out past 7-22 m; give them
-a cheaper form past about 15 m (one band of shade, no relief) instead of the whole pattern faded.
+A building past `SHELL_RANGE` (260 m) has no body at all; a shell inside it has one simple body; a
+building's brick bodies exist only while it is bricks, which the brick budget (Space.md 5.3) keeps
+to what is near somebody; settled debris goes to sleep past 150 m (`IslandManager.SLEEP_RANGE`) and
+the live pieces are capped by count. The bodies that are left are static, and Jolt keeps static
+bodies apart from moving ones: they cost nothing until something moving comes near. Nothing done.
 
-### 2.6 Effects
+### 2.5 Texture detail by distance -- measured, not worth doing
 
-Particles, decals and bullet holes have no global cap. One budget for each, oldest and furthest
-dropped first.
+The street walk with every print detail switched off -- lines, seams, the shaded bevel, the
+underside's hollow and its trace -- drew in 12.39 ms on the GPU against 12.32 with all of it on.
+The shader already skips each one past its range (a real branch, not a fade to nothing), and the
+underside's trace stops at the first wall it meets. Nothing to save; nothing done.
+
+### 2.6 Effects -- DONE (2026-10-23)
+
+Decals were capped already (hit marks 96, oldest reused; the pools in `VfxPool` and the meteor
+shower). What was not: every hit on a brick made a new particle system, with a new mesh and a new
+material, and nothing limited how many were alive (`MaterialFx._debris`). Now: at most
+`MAX_DEBRIS` (32) bursts at once, the oldest cut short for a new one; none past `DEBRIS_RANGE`
+(60 m) of the camera, where a 2 cm chip is under a pixel (the mark and the sound are still made);
+one mesh and material per material and colour, shared. `material_probe` checks the cap and the
+sharing. A death's burst and a collapse's dust are one each per event, and left as they are.
 
 ## 3. The stud upload stall (2.1)
 
@@ -90,8 +109,11 @@ hand-off timed (the ring's `instance_count` and its `set_buffer` apart) and ever
 | before | 8-17 ms | 3.8-11.6 ms |
 | after | 4.6, 5.4 ms | 1.4, 2.0 ms |
 
-Left: once a run, the FIRST band shown chamfered took ~11.5 ms (its visit going from uploading to
-near, `_show_near`), however small the band -- a first-use cost (most likely its material's
-pipeline for that mesh), to be warmed at load. And frames over 25 ms are as many as before (15-25
-a walk): most of the walk's long frames are not the near tier's, and the next thing to look at in
-them is what else runs in those frames.
+Then the ~12 ms show, once or twice a walk (a band's visit going from uploading to near,
+`_show_near`). Not a first-use cost, as first guessed: timed in parts, it was all in giving the new
+node its mesh, while another upload was in flight -- the same wait. A band whose mesh has come in
+now waits to be shown until a step with no upload in flight (`_flying`: the city's and the tier's
+own), at most `SHOW_WAIT_MAX` (30) steps; `settle` does not wait. Worst show 12.8 ms -> 0.16-0.19.
+
+Left: frames over 25 ms are as many as before (19-25 a walk). Most of the walk's long frames are
+not the near tier's; the next thing to look at in them is what else runs in those frames.

@@ -19,6 +19,12 @@ const MAX_MARKS := 96
 ## How big a hit's mark is, in metres: a stud's width -- a 9 mm round at the
 ## game's scale would be forty centimetres across, which reads as a crater.
 const MARK_SIZE := 0.24
+## What flies off a hit (PerfCaps.md 2.6): at most this many bursts at once, the
+## oldest cut short for a new one -- a long burst of fire into a wall was a new
+## particle system every hit, with no limit -- and none past DEBRIS_RANGE of the
+## camera, where a burst is a few pixels. The mark and the sound are still made.
+const MAX_DEBRIS := 32
+const DEBRIS_RANGE := 60.0
 ## A stride, in metres of the walker's horizontal travel.
 const STRIDE := 0.62
 
@@ -29,6 +35,10 @@ var registry: BuildingRegistry
 var walker: Node = null
 
 var _marks: Array[Decal] = []
+var _bursts: Array[CPUParticles3D] = []
+## One mesh (and its material) per material family and colour, shared by every
+## burst of it: was a new mesh and material per hit.
+var _debris_meshes := {}
 var _players: Array[AudioStreamPlayer3D] = []
 var _next_player := 0
 var _stride_left := STRIDE
@@ -89,6 +99,13 @@ func _mark(point: Vector3, normal: Vector3, fam: String) -> void:
 func _debris(point: Vector3, normal: Vector3, fam: String, brick_colour: Color) -> void:
 	if not is_inside_tree():
 		return
+	var cam := get_viewport().get_camera_3d()
+	if cam != null and cam.global_position.distance_to(point) > DEBRIS_RANGE:
+		return
+	while not _bursts.is_empty() and not is_instance_valid(_bursts[0]):
+		_bursts.pop_front()
+	if _bursts.size() >= MAX_DEBRIS:
+		_bursts.pop_front().queue_free()
 	var spec := BrickMaterials.debris(fam, brick_colour)
 	var p := CPUParticles3D.new()
 	p.one_shot = true
@@ -103,6 +120,19 @@ func _debris(point: Vector3, normal: Vector3, fam: String, brick_colour: Color) 
 	p.gravity = Vector3(0, -float(spec.gravity), 0)
 	p.scale_amount_min = 0.6
 	p.scale_amount_max = 1.2
+	p.mesh = _debris_mesh(fam, spec)
+	add_child(p)
+	p.global_position = point + normal * 0.02
+	p.emitting = true
+	# One shot, then gone: finished is emitted when the last particle dies.
+	p.finished.connect(p.queue_free)
+	_bursts.append(p)
+
+
+func _debris_mesh(fam: String, spec: Dictionary) -> BoxMesh:
+	var key := "%s|%s|%s" % [fam, spec.colour, spec.size]
+	if _debris_meshes.has(key):
+		return _debris_meshes[key]
 	var mesh := BoxMesh.new()
 	var s := float(spec.size)
 	mesh.size = Vector3(s, s, s)
@@ -114,12 +144,8 @@ func _debris(point: Vector3, normal: Vector3, fam: String, brick_colour: Color) 
 		mat.emission = spec.colour
 		mat.emission_energy_multiplier = 3.0
 	mesh.material = mat
-	p.mesh = mesh
-	add_child(p)
-	p.global_position = point + normal * 0.02
-	p.emitting = true
-	# One shot, then gone: finished is emitted when the last particle dies.
-	p.finished.connect(p.queue_free)
+	_debris_meshes[key] = mesh
+	return mesh
 
 
 func _play(stream: AudioStream, at: Vector3, pitch: float, volume_db: float = 0.0) -> void:
