@@ -61,7 +61,7 @@ trees. Rerun before believing it.
 ## What is next, in order
 
 1. **Bake the tree cards while the spawn loads** (before the walker is let go), so the six load
-   hitches go. Then the windowed A/B again (`-- --gate -- --no-trees` vs `-- --gate`), quiet.
+   hitches go. Then the windowed A/B again (`-- --gate --no-trees` vs `-- --gate`), quiet.
 2. **Sway and snow on trees** (the user: later). The brick shader's snow and the weather sway are
    world-up; on a planet they need the instance's up. `ImpostorLod.sway` / `snowcap` are off now.
 3. **Trees solid to vehicles** -- or knocked over by them (tanks crush walls already, Splatter).
