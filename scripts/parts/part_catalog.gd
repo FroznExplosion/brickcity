@@ -48,6 +48,7 @@ func load_dir(base: String, source: String) -> int:
 			push_warning("PartCatalog: %s is not a part" % path)
 			continue
 		r.source = source
+		r.dir = path.get_base_dir() + "/"
 		if add(r):
 			n += 1
 	return n

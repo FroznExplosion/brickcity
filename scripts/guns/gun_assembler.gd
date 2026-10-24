@@ -40,6 +40,14 @@ static func assemble(recipe: Dictionary) -> Node3D:
 			var def: GunPartDef = recipe.get(slot)
 			if def == null or def.scene == null:
 				continue # Optional slot left empty — fine.
+			# Only parts that fit go together (Docs/ModularParts.md section 7). The
+			# generator never rolls one that does not; a save from before a part's
+			# interfaces changed can still name one.
+			var host_def: GunPartDef = recipe.get(host.get_meta(&"part_slot", -1))
+			if host_def != null and not host_def.takes(def, GunPartDef.slot_key(slot)):
+				push_warning("GunAssembler: %s does not fit %s's %s socket; left off."
+						% [def.id, host_def.id, GunPartDef.slot_key(slot)])
+				continue
 			var part := _instantiate_part(def)
 			attach_to_socket(part, socket)
 			placed[slot] = true

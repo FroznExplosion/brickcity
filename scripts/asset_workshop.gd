@@ -1485,11 +1485,15 @@ func _store_asset_meta() -> void:
 			"smooth": Array(smooth_parts), "muzzle": muzzle_end, "part_width": part_width.duplicate(),
 			"sketches": sketches, "part_bricks": part_bricks, "studs": extra_studs, "curves": curve_level,
 			"shells": shells, "sdf": _sdf_meta, "sculpt": {"state": sculpt_state, "cells": Array(_sdf_cells),
-			"stash": _sdf_stash, "shell_cells": Array(_sdf_shell)}, "models": _models_meta()}   # not a copy: this runs on every edit, and a save writes it out as it is
+			"stash": _sdf_stash, "shell_cells": Array(_sdf_shell)}, "models": _models_meta(),
+			"part_ids": part_ids, "part_hashes": part_hashes, "part_revs": part_revs}   # not a copy: this runs on every edit, and a save writes it out as it is
 
 
 func _restore_asset_meta() -> void:
 	var a: Dictionary = recipe.meta.get("asset", {})
+	part_ids = (a.get("part_ids", {}) as Dictionary).duplicate()
+	part_hashes = (a.get("part_hashes", {}) as Dictionary).duplicate()
+	part_revs = (a.get("part_revs", {}) as Dictionary).duplicate()
 	var parts: Dictionary = a.get("parts", {})
 	if parts.has("names") and not (parts.names as Array).is_empty():
 		part_names = PackedStringArray(parts.names)
@@ -1606,6 +1610,7 @@ func _reset_space() -> void:
 	_sdf_meta = {}
 	extra_studs.clear()
 	_draw_studs()
+	_forget_part_ids()
 	_part_vol.clear()
 	_sketch_cache.clear()
 	for p in photos:
@@ -3286,7 +3291,7 @@ A gun is a quarter-size model: a Thompson is 53 studs long, 3 studs wide.
 [b]1. Photo.[/b]  F2, [i]Load photo...[/i], pick a side view. Click [i]Calibrate[/i], click two points on the photo (butt and muzzle), type the real length in mm (852 for a Thompson).
 [b]2. Look at it flat.[/b]  Alt 1 for the side view (Alt 2 top, Alt 3 front, Alt 0 back to 3D). Alt + wheel zooms where the cursor is, WASD moves. ESC frees the mouse for the panels. Tick [i]stud grid on the photo[/i] in F2 to check its size.
 [b]3. Pick the part.[/b]  Y (shift Y back) to body, barrel, stock, grip ... Every brick you lay belongs to the part you are on, and each part keeps its own 9 toolbar slots.
-[b]4. Build.[/b]  Bricks go where the cursor is on the working plane (free placement, Alt F to aim at studs instead); PgUp / PgDn move the plane. The tools are down the left, with the open tool's options under them and the part picker at the top; every other action is in the menus at the top (View, Part, Brick, Gun, Photos, Help), its key beside it. Keys still work. [b]Saving:[/b] File > Save (Ctrl S), Save As (Ctrl Shift S) and Open (Ctrl O) keep guns in their own library (user://guns/), apart from the buildings; the build is also autosaved every few seconds. [b]Explode[/b] (Alt E) pulls the parts apart -- barrel forward, stock behind, grip and underbarrel under, sight over, a magazine out the way it sits -- and you keep building on them where they are drawn. [b]Move part[/b] (Alt G): drag a part across the view to move it whole, studs, sketch and points with it (one Z). [b]Export to game[/b] (Alt X): each part as a game scene in a folder beside the gun's file (user://guns/<name>/), real size, muzzle forward, with the sockets the game's assembler joins them on. Which end is the muzzle is read off the build (barrel forward of the body, stock behind). [b]Hands[/b] (Alt H): the game's brick hands at the gun's scale, the right C round the grip, the left round the underbarrel (or the barrel). [b]Play[/b] (Alt P): three shots and a reload, the magazine out and back in -- the parts are baked into pieces of their own first. [b]Shapes[/b] (K) drags a box and fills it, or, set to [i]brush[/i], LMB lays a shape and RMB carves one out, held and dragged to go on; Ctrl + click does the same from any tool. The brush: Ctrl + LMB lays a ball, cube, cylinder, or a flat circle or square (on the plane the ghost is on -- hold E to lock its height, as for bricks); Ctrl + RMB carves the shape out of whatever is built, the rest of each brick it touches laid again. Hold and drag to keep going (one Z). Ctrl + wheel sizes it; its shape is on the left. [b]Studs[/b] (Alt U): LMB puts a stud on any face of any brick, a slope's too, on that face's half-stud lattice; RMB takes it off; shift LMB makes a stud a connection point (mount or socket), facing the way the stud does. LMB places one brick; hold it and drag to lay a row. RMB deletes (Z brings it back). R turns, F flips. Alt S mirrors: every brick is placed on the other side too.
+[b]4. Build.[/b]  Bricks go where the cursor is on the working plane (free placement, Alt F to aim at studs instead); PgUp / PgDn move the plane. The tools are down the left, with the open tool's options under them and the part picker at the top; every other action is in the menus at the top (View, Part, Brick, Gun, Photos, Help), its key beside it. Keys still work. [b]Saving:[/b] File > Save (Ctrl S), Save As (Ctrl Shift S) and Open (Ctrl O) keep guns in their own library (user://guns/), apart from the buildings, and Save also writes every part on its own (user://parts/custom/): the parts are what the game makes guns of, and only parts whose connection points fit. The build is also autosaved every few seconds. [b]Explode[/b] (Alt E) pulls the parts apart -- barrel forward, stock behind, grip and underbarrel under, sight over, a magazine out the way it sits -- and you keep building on them where they are drawn. [b]Move part[/b] (Alt G): drag a part across the view to move it whole, studs, sketch and points with it (one Z). [b]Export to game[/b] (Alt X): each part as a game scene in a folder beside the gun's file (user://guns/<name>/), real size, muzzle forward, with the sockets the game's assembler joins them on. Which end is the muzzle is read off the build (barrel forward of the body, stock behind). [b]Hands[/b] (Alt H): the game's brick hands at the gun's scale, the right C round the grip, the left round the underbarrel (or the barrel). [b]Play[/b] (Alt P): three shots and a reload, the magazine out and back in -- the parts are baked into pieces of their own first. [b]Shapes[/b] (K) drags a box and fills it, or, set to [i]brush[/i], LMB lays a shape and RMB carves one out, held and dragged to go on; Ctrl + click does the same from any tool. The brush: Ctrl + LMB lays a ball, cube, cylinder, or a flat circle or square (on the plane the ghost is on -- hold E to lock its height, as for bricks); Ctrl + RMB carves the shape out of whatever is built, the rest of each brick it touches laid again. Hold and drag to keep going (one Z). Ctrl + wheel sizes it; its shape is on the left. [b]Studs[/b] (Alt U): LMB puts a stud on any face of any brick, a slope's too, on that face's half-stud lattice; RMB takes it off; shift LMB makes a stud a connection point (mount or socket), facing the way the stud does. LMB places one brick; hold it and drag to lay a row. RMB deletes (Z brings it back). R turns, F flips. Alt S mirrors: every brick is placed on the other side too.
 [b]   Or block it out.[/b]  The [i]Block out[/i] tool on the rail (Alt D): its panel says how, step by step. Draw each part's shape, add shapes with the Shapes brush, then at the bottom of the panel [i]size of the block-out[/i] scales the whole asset, [i]curves[/i] sets how many slopes and curves it is laid with, and [i]smooth shell[/i] gives a part a smooth custom outside (thickness: how far in the bricks start; detail: how many triangles). In detail: set the part's thickness, then draw on the working plane: LMB draws area in, RMB draws it out -- and takes up any brick under the stroke, a hand-laid one or another part's (untick [i]RMB erases any brick[/i] to keep them) -- and the part's bricks are worked out again each time (one Z undoes a change). An outline that crosses itself fills to its outermost line. Edges at a slope's or curve's pitch get slopes and curves, flipped under bottom edges; set slopes to [i]eager[/i] for more of them. Draw a drum magazine as a circle on the front plane (Alt 3). [b]Three views:[/b] the first plane a part is drawn on gives it its thickness; drawn for the same part on another plane (Alt 2 top, Alt 3 front, PgUp/PgDn to move it), area in keeps only what is inside it and area out cuts right through, or set [i]RMB cuts in[/i] to make a pocket so many studs deep. A blue line is the whole part from this plane, grey the other parts. Draw with an outline, a brush (its size and shape on the left), a rectangle, an ellipse, or a polygon of clicked corners (Enter, a double click or the first corner closes it).
 [b]5. Smooth parts.[/b]  On a part that should be a smooth custom piece (stock, grip, handguard), press N. Its bricks are only its outline.
 [b]6. Joints.[/b]  J where a part attaches: a [i]mount[/i] on the part, a [i]socket[/i] on the part it goes onto, same interface.
@@ -8217,13 +8222,7 @@ func export_game(dir: String = "") -> Dictionary:
 	if dir == "":
 		dir = game_dir()
 	settle_muzzle()
-	var by_part := {}
-	for i in recipe.size():
-		if _brick_frame(i) < 0:
-			continue
-		var name := part_names[part_of[i] if i < part_of.size() else part_sel]
-		if GUN_PARTS.has(name):
-			(by_part.get_or_add(name, []) as Array).append(i)
+	var by_part := _gun_bricks()
 	if not by_part.has("body"):
 		print("[asset workshop] export to game: the gun needs a body")
 		return {"ok": false, "why": "no body"}
@@ -8236,12 +8235,7 @@ func export_game(dir: String = "") -> Dictionary:
 		if q.kind == "mount" and by_part.has(String(q.part)):
 			at[q.part] = Vector3(float(q.at[0]) * BrickPalette.STUD_M, float(q.at[1]) * BrickPalette.PLATE_M,
 					float(q.at[2]) * BrickPalette.STUD_M)
-	var host := {}
-	for name in by_part:
-		if name == "body":
-			continue
-		var h: String = GAME_HOST.get(name, "body")
-		host[name] = h if by_part.has(h) else "body"
+	var host := _game_hosts(by_part)
 	# The muzzle socket: on the muzzle part's tip, else the barrel's, else the body's.
 	var front := "muzzle" if by_part.has("muzzle") else ("barrel" if by_part.has("barrel") else "body")
 	var b := game_basis()
@@ -8311,6 +8305,222 @@ func export_game(dir: String = "") -> Dictionary:
 	print("[asset workshop] exported %d parts to %s, %.2f m long in the game" % [written.size(),
 			ProjectSettings.globalize_path(dir), length])
 	return {"ok": true, "dir": dir, "parts": written, "length_m": length}
+
+
+## Each gun part's bricks, by recipe index: {part name: [index ...]}.
+func _gun_bricks() -> Dictionary:
+	var by_part := {}
+	for i in recipe.size():
+		if _brick_frame(i) < 0:
+			continue
+		var name := part_names[part_of[i] if i < part_of.size() else part_sel]
+		if GUN_PARTS.has(name):
+			(by_part.get_or_add(name, []) as Array).append(i)
+	return by_part
+
+
+## The part each part hangs from in the game: GAME_HOST's, or the body when that is missing.
+static func _game_hosts(by_part: Dictionary) -> Dictionary:
+	var host := {}
+	for name in by_part:
+		if name == "body":
+			continue
+		var h: String = GAME_HOST.get(name, "body")
+		host[name] = h if by_part.has(h) else "body"
+	return host
+
+
+# ---------------------------------------------------------------------------
+# Save: every part on its own (Docs/ModularParts.md section 7)
+# ---------------------------------------------------------------------------
+
+## Each part's id, made on its first save and kept: {part name: id}. In meta.asset.
+var part_ids := {}
+## What each part was when last saved, to tell whether a save changes it: {name: md5}.
+var part_hashes := {}
+## Each part's rev: {name: rev}.
+var part_revs := {}
+## Who makes the parts saved here: a name until there is a Steam one (ModularParts stage 10).
+var creator_name := "player"
+
+
+## A new build, or the same bricks saved as another: new parts, not new revs of the old.
+func _forget_part_ids() -> void:
+	part_ids = {}
+	part_hashes = {}
+	part_revs = {}
+
+
+## Where this build's parts go: the shipped catalogue for a shipped build (written only
+## from the editor), the player's custom folder otherwise, a test's own folder in a test.
+func parts_dir() -> String:
+	if _builds_dir != BuildRecipe.player_dir():
+		return _builds_dir + "parts/"
+	if _current_path.begins_with("res://"):
+		return PartCatalog.OFFICIAL_DIR + "gun/"
+	return PartCatalog.CUSTOM_DIR
+
+
+## File > Save As under another name makes new parts; the old ones stay as they were.
+func _save_as(build_name: String, room_kind: String = "", tags: Dictionary = {}) -> String:
+	if build_name != recipe.name:
+		_forget_part_ids()
+	return super._save_as(build_name, room_kind, tags)
+
+
+## File > Save writes the build (the workshop's own file, to open here again: the game
+## never reads it) and then every part of it on its own (save_parts).
+func _write(path: String) -> bool:
+	if not super._write(path):
+		return false
+	if recipe.kind == "gun":
+		save_parts()
+	return true
+
+
+## Every gun part as a part record and its game scene, each in its own folder:
+## <dir>/<id>/part.json and part.scn. A part unchanged since its last save is not written
+## again. Returns {ok, written: [id ...], kept: [id ...]} or {ok: false, why}.
+func save_parts(dir: String = "") -> Dictionary:
+	if dir == "":
+		dir = parts_dir()
+	var by_part := _gun_bricks()
+	if not by_part.has("body"):
+		return {"ok": false, "why": "no body"}
+	# The scenes as Export to game makes them, into a staging folder, each then moved into
+	# its part's folder. Staging has no part.json, so the catalogue never reads it.
+	var staging := dir + ".staging/"
+	var out := export_game(staging)
+	if not out.get("ok", false):
+		return out
+	var official := dir.begins_with("res://")
+	var hosts := _game_hosts(by_part)
+	var written := []
+	var kept := []
+	for name: String in by_part:
+		if not part_ids.has(name):
+			part_ids[name] = ("%s_%s" % [slug(recipe.name), name]) if official else ("%s.%s_%s.%s" % [
+					slug(creator_name), slug(recipe.name), name, _short_hash()])
+		var r := _part_record(name, by_part, hosts, official)
+		# The scene too: shells, hand-put studs and where the parts on it sit change it
+		# without changing a brick of its own.
+		var sig := (_part_signature(r) + scene_signature(staging + name + ".scn")).md5_text()
+		var folder := dir + String(part_ids[name]) + "/"
+		if part_hashes.get(name, "") == sig and FileAccess.file_exists(folder + PartCatalog.FILE):
+			kept.append(r.id)
+			continue
+		if part_hashes.has(name):
+			part_revs[name] = int(part_revs.get(name, 1)) + 1
+		r.rev = int(part_revs.get(name, 1))
+		part_revs[name] = r.rev
+		r.saved = int(Time.get_unix_time_from_system())
+		DirAccess.make_dir_recursive_absolute(folder)
+		DirAccess.remove_absolute(folder + "part.scn")
+		var err := DirAccess.rename_absolute(staging + name + ".scn", folder + "part.scn")
+		if err == OK:
+			err = r.save_file(folder + PartCatalog.FILE)
+		if err != OK:
+			return {"ok": false, "why": "%s: %s" % [name, error_string(err)]}
+		part_hashes[name] = sig
+		written.append(r.id)
+	for f in DirAccess.get_files_at(staging):
+		DirAccess.remove_absolute(staging + f)
+	DirAccess.remove_absolute(staging)
+	_store_asset_meta()
+	print("[asset workshop] saved %d part(s) to %s, %d unchanged" % [written.size(),
+			ProjectSettings.globalize_path(dir), kept.size()])
+	return {"ok": true, "written": written, "kept": kept}
+
+
+## A part's record: what it is, what it mounts with and what its sockets take (its J
+## points), its bricks, and the build it was last saved from (`from`: where it came from,
+## never a gun -- the game only makes guns of parts that fit).
+func _part_record(name: String, by_part: Dictionary, hosts: Dictionary, official: bool) -> PartRecord:
+	var r := PartRecord.new()
+	r.id = String(part_ids[name])
+	r.family = "gun"
+	r.scale = "held"
+	r.slot = name
+	r.display_name = "%s %s" % [recipe.name, name]
+	r.manufacturer = String(AssetGuns.BRAND)
+	r.source = "official" if official else "custom"
+	if not official:
+		r.creator = {"name": creator_name}
+	if name == "body":
+		r.weapon_class = gun_class
+		r.name_fragment = recipe.name
+	if name == "magazine":
+		r.tags = PackedStringArray(["detaches"])   # PlayerView takes it out on a reload
+	for q in points:
+		if String(q.part) == name and q.kind == "mount" and String(q.interface) != "":
+			r.mount = {"interface": String(q.interface)}
+	var accepts := {}
+	for child in hosts:
+		if hosts[child] == name:
+			accepts[child] = []
+	for q in points:
+		if String(q.part) == name and q.kind == "socket" and String(q.interface) != "":
+			(accepts.get_or_add(String(q.slot), []) as Array).append(String(q.interface))
+	for k in accepts:
+		r.sockets.append({"name": k, "accepts": accepts[k]})
+	r.extra["from"] = recipe.name
+	r.extra["bricks"] = _part_recipe(by_part[name]).to_dict()
+	return r
+
+
+## The bricks `ids` as a recipe of their own, in the build's frames.
+func _part_recipe(ids: Array) -> BuildRecipe:
+	var out := BuildRecipe.new()
+	out.name = recipe.name
+	out.kind = "gun"
+	for f in range(1, recipe.frame_count()):
+		out.add_frame(recipe.frame_rotation(f), recipe.frame_ticks(f))
+	for i: int in ids:
+		out.add(recipe.part_of(i), recipe.cell_of(i), recipe.colour_of(i), recipe.frame_of(i),
+				recipe.role_of(i), recipe.material_of(i))
+	return out
+
+
+## What decides whether a save changes a part: everything but its rev and time.
+static func _part_signature(r: PartRecord) -> String:
+	var d := r.to_dict()
+	d.erase("rev")
+	d.erase("saved")
+	return JSON.stringify(d).md5_text()
+
+
+## What a saved scene holds, as a hash: every node's name and place, every mesh's
+## vertices and colours, every material's colour. The file itself is no good for this:
+## the same scene saved twice is not the same bytes.
+static func scene_signature(path: String) -> String:
+	var ps := ResourceLoader.load(path, "", ResourceLoader.CACHE_MODE_IGNORE) as PackedScene
+	if ps == null:
+		return ""
+	var top := ps.instantiate()
+	var h := HashingContext.new()
+	h.start(HashingContext.HASH_MD5)
+	var nodes: Array[Node] = [top]
+	nodes.append_array(top.find_children("*", "", true, false))
+	for n in nodes:
+		h.update(String(top.get_path_to(n)).to_utf8_buffer())
+		if n is Node3D:
+			h.update(var_to_bytes((n as Node3D).transform))
+		if n is MeshInstance3D and (n as MeshInstance3D).mesh != null:
+			var mesh := (n as MeshInstance3D).mesh
+			for i in mesh.get_surface_count():
+				var arrays := mesh.surface_get_arrays(i)
+				h.update(var_to_bytes(arrays[Mesh.ARRAY_VERTEX]))
+				if arrays[Mesh.ARRAY_COLOR] != null:
+					h.update(var_to_bytes(arrays[Mesh.ARRAY_COLOR]))
+			var mat := (n as MeshInstance3D).material_override as BaseMaterial3D
+			if mat != null:
+				h.update(var_to_bytes(mat.albedo_color))
+	top.free()
+	return h.finish().hex_encode()
+
+
+static func _short_hash() -> String:
+	return ("%d%d" % [Time.get_ticks_usec(), randi()]).md5_text().substr(0, 8)
 
 
 ## The middle of some bricks' cells, workshop metres (sideways ones too).

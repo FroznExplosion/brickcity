@@ -319,7 +319,7 @@ static func _pick(library: GunPartLibrary, slot: GunPartDef.Slot, rarity: int,
 	var target := clampi(rarity + offset, 1, 6)
 
 	while true:
-		var pool := _pool_at(library, slot, rarity, target, want_brand, kind)
+		var pool := _pool_at(library, slot, rarity, target, want_brand, kind, placed)
 		if not pool.is_empty():
 			return _filtered_pick(pool, placed, rng)
 		if target == rarity:
@@ -333,12 +333,19 @@ static func _pick(library: GunPartLibrary, slot: GunPartDef.Slot, rarity: int,
 ## the gun was never allowed to carry.
 ## A heavy gun takes its kind's parts where the slot has any (its look); every other
 ## gun never takes them, so a light gun's pool is exactly what it was before kinds.
+## A part that does not fit the gun so far (`placed`: GunPartDef.fits_recipe) is never
+## in the pool: the game only ever puts together parts that fit (Docs/ModularParts.md
+## section 7). Parts from before interfaces all fit each other, so their pools are as
+## they were.
 static func _pool_at(library: GunPartLibrary, slot: GunPartDef.Slot, rarity: int,
-		target: int, want_brand: StringName, kind: StringName = &"") -> Array[GunPartDef]:
+		target: int, want_brand: StringName, kind: StringName = &"",
+		placed: Dictionary = {}) -> Array[GunPartDef]:
 	var out: Array[GunPartDef] = []
 	var own: Array[GunPartDef] = []
 	for def in library.candidates(slot, rarity, want_brand):
 		if def.exclusive_to != &"" or def.tier() != target:
+			continue
+		if slot != Slot.BODY and not GunPartDef.fits_recipe(def, placed):
 			continue
 		if def.kind == &"":
 			out.append(def)
