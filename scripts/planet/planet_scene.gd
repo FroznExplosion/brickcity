@@ -26,6 +26,7 @@ var gun: GunController
 var view: PlayerView
 var on_foot := false
 var _pawn_gate := false
+var _mech_gate := false
 var sun: DirectionalLight3D
 var sky_mat: ProceduralSkyMaterial
 var env: Environment
@@ -45,7 +46,8 @@ var _last_us := 0
 func _ready() -> void:
 	_gate = "--gate" in OS.get_cmdline_user_args()
 	_pawn_gate = "--gate=pawn" in OS.get_cmdline_user_args()
-	_gate = _gate or _pawn_gate
+	_mech_gate = "--gate=mech" in OS.get_cmdline_user_args()
+	_gate = _gate or _pawn_gate or _mech_gate
 	data = PlanetData.new()
 	data.planet_name = "proto"
 	# Towns and landmarks: their pads go into the ground before it is built.
@@ -98,6 +100,8 @@ func _ready() -> void:
 			tw.use_default_settings()
 		if _pawn_gate:
 			_run_pawn_gate()
+		elif _mech_gate:
+			_run_mech_gate()
 		else:
 			_run_gate()
 
@@ -268,7 +272,7 @@ func _process(_delta: float) -> void:
 	# collider); then, unless this is the walker's own gate, the pawn stands on it.
 	if walker.frozen and pawn == null and _ground_hit(walker.global_position) != Vector3.INF:
 		walker.frozen = false
-		if not _gate or _pawn_gate:
+		if not _gate or _pawn_gate or _mech_gate:
 			_spawn_player(_ground_hit(walker.global_position), -walker.global_transform.basis.z)
 	if not on_foot:
 		walker.flying = pawn != null or walker.flying
@@ -591,4 +595,107 @@ func _run_pawn_gate() -> void:
 	await _shot("planet_pawn_landed")
 	print("[planet] frames: worst %.1f ms; over 40 ms: %s" % [_worst_ms, _hitches])
 	print("[planet] pawn gate: %d ok, %d FAIL" % [_ok, _fail])
+	get_tree().quit(1 if _fail > 0 else 0)
+
+
+
+# ---------------------------------------------------------------------------
+# The mech's gate: a titan on local down (Planets.md 11.7).
+
+func _arc(a: Vector3, b: Vector3) -> float:
+	var c := planet.global_position
+	return (a - c).normalized().angle_to((b - c).normalized()) * data.radius
+
+
+func _run_mech_gate() -> void:
+	var t0 := Time.get_ticks_msec()
+	while pawn == null and Time.get_ticks_msec() - t0 < 60000:
+		await _frames(1)
+	await get_tree().create_timer(1.0).timeout
+	var fwd := Gravity.flat(-cam.global_transform.basis.z, pawn.up).normalized()
+	var spot := pawn.feet() + fwd * 25.0
+	var ground := _ground_hit(spot + Gravity.up_at(spot) * 20.0)
+	if ground == Vector3.INF:
+		ground = spot
+	var mech := Mech.spawn(self, ground + Gravity.up_at(ground) * 0.2, 0.0)
+	PlanetBody.track(mech.body)
+	await get_tree().create_timer(3.0).timeout
+	var up := mech.motor.up
+	var tilt := rad_to_deg(mech.body.global_transform.basis.y.angle_to(up))
+	_check("the mech stands upright on the planet (< 0.5 deg)", tilt < 0.5, "%.3f deg" % tilt)
+	_check("on the voxel ground", mech.body.is_on_floor(), "%.2f m over it" % _over_ground(mech.feet()))
+	# Look at it from the pawn.
+	_face(Gravity.flat(mech.body.global_position - pawn.body.global_position, pawn.up).normalized())
+	await _frames(10)
+	await _shot("planet_mech_stand")
+	# Forward 15 s along the torso.
+	var p0 := mech.feet()
+	var n := (p0 - planet.global_position).normalized().cross(-mech.motor.torso_basis().z).normalized()
+	var air := 0
+	var ticks := 0
+	var off := 0.0
+	mech.intents.move_dir = Vector2(0.0, 1.0)
+	var t1 := Time.get_ticks_msec()
+	while Time.get_ticks_msec() - t1 < 15000:
+		await get_tree().physics_frame
+		ticks += 1
+		if not mech.body.is_on_floor():
+			air += 1
+		off = maxf(off, absf((mech.feet() - planet.global_position).dot(n)))
+	mech.intents.move_dir = Vector2.ZERO
+	var walked := _arc(p0, mech.feet())
+	_check("walks on the voxel ground (feet down > 95% of ticks)", air < ticks * 0.05, "%d of %d off" % [air, ticks])
+	_check("covers ground at a walk (15 s, > 40 m)", walked > 40.0, "%.1f m" % walked)
+	_check("straight along its great circle (< 1% off)", off < walked * 0.01, "%.2f m off over %.0f m" % [off, walked])
+	_check("still upright after the walk (< 0.5 deg)",
+			rad_to_deg(mech.body.global_transform.basis.y.angle_to(mech.motor.up)) < 0.5)
+	await _shot("planet_mech_walked")
+	# Strafe 8 s.
+	await get_tree().create_timer(1.5).timeout
+	var s0 := mech.feet()
+	var n2 := (s0 - planet.global_position).normalized().cross(mech.motor.torso_basis().x).normalized()
+	var off2 := 0.0
+	mech.intents.move_dir = Vector2(1.0, 0.0)
+	var t2 := Time.get_ticks_msec()
+	while Time.get_ticks_msec() - t2 < 8000:
+		await get_tree().physics_frame
+		off2 = maxf(off2, absf((mech.feet() - planet.global_position).dot(n2)))
+	mech.intents.move_dir = Vector2.ZERO
+	var strafed := _arc(s0, mech.feet())
+	_check("strafes along its great circle (< 1% off)", strafed > 10.0 and off2 < strafed * 0.01,
+			"%.2f m off over %.0f m" % [off2, strafed])
+	# A dash: the speed jumps and comes back.
+	await get_tree().create_timer(1.5).timeout
+	var peak := 0.0
+	mech.intents.move_dir = Vector2(0.0, 1.0)
+	await get_tree().physics_frame
+	mech.intents.dash = true
+	for i in 30:
+		await get_tree().physics_frame
+		mech.intents.dash = false
+		peak = maxf(peak, mech.motor.planar_speed())
+	mech.intents.move_dir = Vector2.ZERO
+	_check("dashes along the ground", peak > mech.motor.max_speed * 1.5, "peak %.1f m/s (walk %.1f)" % [peak, mech.motor.max_speed])
+	# The torso turns about the local up.
+	await get_tree().create_timer(2.0).timeout
+	var f0 := -mech.motor.torso_basis().z
+	mech.intents.aim_yaw = mech.motor.torso_yaw + 1.0
+	await get_tree().create_timer(3.0).timeout
+	var f1 := -mech.motor.torso_basis().z
+	var turned := rad_to_deg(Gravity.flat(f0, mech.motor.up).signed_angle_to(Gravity.flat(f1, mech.motor.up), mech.motor.up))
+	_check("the torso turns about the local up (57 deg asked)", absf(turned - 57.3) < 3.0, "%.1f deg" % turned)
+	_check("and stays square to the ground (forward level, < 1 deg)",
+			absf(90.0 - rad_to_deg(f1.angle_to(mech.motor.up))) < 1.0)
+	# Dropped from 15 m: lands standing.
+	var drop_at := mech.feet() + mech.motor.up * 15.0
+	mech.body.global_position = drop_at + mech.motor.up * Mech.HEIGHT * 0.5
+	mech.body.velocity = Vector3.ZERO
+	mech.body.reset_physics_interpolation()
+	var landed := [false]
+	mech.motor.landed.connect(func(_f) -> void: landed[0] = true)
+	await get_tree().create_timer(4.0).timeout
+	_check("dropped 15 m, it lands and stands", landed[0] and mech.body.is_on_floor(),
+			"%.2f m over the ground" % _over_ground(mech.feet()))
+	print("[planet] frames: worst %.1f ms; over 40 ms: %s" % [_worst_ms, _hitches])
+	print("[planet] mech gate: %d ok, %d FAIL" % [_ok, _fail])
 	get_tree().quit(1 if _fail > 0 else 0)

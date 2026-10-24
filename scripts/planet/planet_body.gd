@@ -87,6 +87,23 @@ func deactivate() -> void:
 		terrain = null
 
 
+## Ground under `node` wherever it goes: a VoxelViewer of its own, for
+## colliders only, `radius` metres round it. The player's viewer streams the
+## ground round the PLAYER; a mech, a vehicle or a soldier 150 m off would
+## otherwise walk off the edge of the colliders and fall into the planet.
+## Zylann's terrain serves any number of viewers.
+static func track(node: Node3D, radius := 96) -> VoxelViewer:
+	if node.has_node(^"GroundViewer"):
+		return node.get_node(^"GroundViewer")
+	var v := VoxelViewer.new()
+	v.name = "GroundViewer"
+	v.view_distance = radius
+	v.requires_visuals = false
+	v.requires_collisions = true
+	node.add_child(v)
+	return v
+
+
 ## Altitude of a world point over the datum.
 func altitude_of(world: Vector3) -> float:
 	return (world - global_position).length() - data.radius
