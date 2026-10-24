@@ -6,12 +6,13 @@ mounts with and what it takes, and is found in one catalogue that filters and so
 for all of them. A gun or a mech in the game is an **assembly** the generator puts together from
 parts that fit, from a seed and a design (section 7).
 
-Status (2026-10-24): **stages 1 to 4 built.** The part record, the fit check and the
+Status (2026-10-24): **stages 1 to 5 built.** The part record, the fit check and the
 catalogue (`scripts/parts/`, `tools/parts_probe.gd`, 65 checks); guns on them: the workshop's
 Save writes every part on its own, the generator and the assembler only put together parts
 that fit (`tools/part_save_probe.gd`); the catalogue panel, F7 in the workshop
 (`tools/part_panel_probe.gd`, 38 checks); trying any part on in the workshop, with fit marks
-(`part_save_probe`, now 61 checks). Section 11 is the order the rest is built in;
+(`part_save_probe`, now 61 checks); mech mode in the workshop (`tools/mech_workshop_probe.gd`, 50
+checks). Section 11 is the order the rest is built in;
 "Stage 1 as built" and "Stage 2 as built" below say what differs from the plan.
 
 Builds on: [Parts/joints.md](Parts/joints.md) (joints, the one pin, hands),
@@ -321,7 +322,7 @@ interfaces.
 | 2 | **Done.** Guns on it: `GunAssembler` and the generator check interfaces; Save writes each part on its own; the game reads those parts (old `guns/` folders still load). Design files with fixed and pool slots moved to stage 6, where the generator first needs them | `scripts/guns/`, `asset_workshop.gd` |
 | 3 | **Done.** The catalogue panel: filters, sort, custom and creator, the Fits toggle; F7 in the workshop; `tools/part_panel_probe.gd` | UI, shared by workshop and inventory |
 | 4 | **Done.** The workshop's anything-on-anything swap, with fit marks (section 9): pick in F7 to try a part on | `asset_workshop.gd` |
-| 5 | The workshop's mech mode: slot, side, class, reference mech, ready mounts, test fit | `asset_workshop.gd` |
+| 5 | **Done.** The workshop's mech mode: slot, side, class, reference mech, ready mounts, test fit; `tools/mech_workshop_probe.gd` | `asset_workshop.gd` |
 | 6 | Mechs in the game from parts: a mech assembler on a skeleton, IK legs and arms by length, class from the chassis; replaces the boxes in `mech.gd` | `scripts/mech/` |
 | 7 | Pods: slots, `PodGenerator`, the three kinds, pod names, the inventory screen; mech guns (scale `mech`) rolled for the hands | `scripts/mech/`, `scripts/guns/`, loot |
 | 8 | Motion sets library (section 8) | |
@@ -426,6 +427,50 @@ interfaces.
 - Off: try the build's own saved part of that slot, or menu Photos > Take off the tried parts.
   A new or opened build takes them all off.
 - The catalogue's Fits follows: with a body tried on, it lists what fits that body.
+
+### Stage 5 as built
+
+- **Asset > Make a mech** turns the build into a mech's ten parts: `chassis`, `head`, `arm_L`,
+  `arm_R`, `hand_L`, `hand_R`, `leg_L`, `leg_R`, `pod_L`, `pod_R` (`MechReference.PARTS`). Each
+  is its part's slot and side (the build part *is* the slot and side: Y picks it). Switching
+  renames the parts in place (a gun's body becomes the chassis), so no brick changes part. Make
+  a gun turns them back.
+- **Class and leg length**: menu Mech > Class light / normal / heavy, Legs 1 / 2 / 3. Saved with
+  the build. Every part saved from it is filed under that class; only the chassis's counts in
+  the game (section 4), the limbs' is their look.
+- **The reference mech** (`scripts/parts/mech_reference.gd`, menu Mech > Reference mech): its
+  joints as labelled balls, the bones between them and its footprint, drawn through the bricks.
+  It faces -X; its left is +Z, so the mirror (across Z) makes a right part of a left one.
+  Numbers, in nano bricks from the ground:
+
+  | | light | normal | heavy |
+  |---|---|---|---|
+  | hip, legs 1 / 2 / 3 | 12 / 16 / 20 | same | same |
+  | hips apart (studs, each side) | 4 | 5 | 6 |
+  | shoulder | hip + 2 | hip + 2 | hip + 2 |
+  | shoulders apart (studs, each side) | 9 | 11 | 13 |
+  | neck | hip + 5 | hip + 6 | hip + 7 |
+  | wrist | shoulder - 8, 2 studs ahead | same | same |
+  | pods | at the neck, 3 studs behind, 4 in from the shoulders | same | same |
+
+  Legs 2 long puts the hip at joints.md's 16. These are first numbers, to change when the first
+  mechs are built round them.
+- **Ready joints**: every part's mount and, on the part it hangs from, a socket taking it, laid
+  on the reference's joints with the right interface (`mech.neck`, `mech.shoulder`,
+  `mech.wrist`, `mech.hip`, `mech.pod`). Another class or length moves them; points put by hand
+  stay. J on a joint takes away the current part's point there first, so a mount can be moved
+  and the socket left. Mech > Lay the joints ready again. The J panel offers the mech's sockets.
+- **Save** writes every part on its own, as a gun's are: family `mech` (`pod` for a pod's body),
+  slot, side, class, mount, a leg's `length` in its mount params, what each socket takes. Scenes
+  are nano size in the game (a nano stud 0.175 m), facing -Z, with `mount` and `socket_<name>`
+  nodes where the points are. Saved apart, they make a whole mech by the body plan (PartFit
+  layer 2).
+- **Try on** works for mech parts: a part goes on its slot and side (one for either side goes on
+  the part being built if it is of that slot, else the left). The legs' rule is checked too:
+  legs of two lengths are both marked "legs 3 and 2 long". The catalogue's Fits aims at the
+  part's socket on the mech plan (`arm_R/hand` for the right hand).
+- **Not yet**: the game does not build mechs from these parts -- that is stage 6, which replaces
+  `mech.gd`'s boxes. Pod bodies are saved; the pods rolled onto them are stage 7.
 
 ## 12. Decided
 
