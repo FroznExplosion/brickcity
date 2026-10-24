@@ -57,15 +57,24 @@ since storey units' log commands (`--ring` 4 of 4, no FAIL line). Open, in order
   (`_refresh_real_shell`, ~15 ms a time).
 
 **Open, in order:**
-1. **Re-time `--big --shot` on a quiet machine** (editor closed, NO other Godot -- check other
-   chats' processes, two were up for the last one; `--ring` ~14 s first). The one run after both
-   fixes said 16.8 ms mean, 5 of 906 over 33.3 ms (8-74 before); it is unreliable. Run 3 and
-   compare with the nine of 2026-10-23 in item 8 (16.8-20.2 ms, 8-74 over).
-2. **The rest of 8, from the spike lines** (`[prof] N tick(s) over 25 ms`): a stand-in's
+1. ~~Re-time `--big --shot` on a quiet machine~~ -- done 2026-10-23 evening (code at `8c67313`,
+   before perf caps `c35046e`; editor closed, `--ring` 14 s, peak 73-80 C, not held back): two
+   clean runs 18.1 ms mean / 21 of 906 over 33.3 ms (worst 64.0) and 18.1 / 17 (worst 88.1); a
+   third with another chat's headless probe up said 17.6 / 26 (unreliable). Inside the nine of
+   item 8 (16.8-20.2, 8-74): the two fixes did not move the mean; the earlier 16.8 / 5 was noise.
+2. **The rest of 8, from the spike lines** (`[prof] N tick(s) over 25 ms`; since `c35046e` also
+   `big_city.tscn -- --chamfer --cost --street --long`, Docs/PerfCaps.md 4): a stand-in's
    `add_surface_from_arrays` stalling 9-216 ms (the renderer; idea: every stand-in through the
    worker upload path, `IslandManager._submit_mesh_job`); a shell piece's split 5-17 ms
    (`spawn` -> `split_island`; `adopt` would skip it but `spawn` holds the move caps, crumbling,
-   landmark rules and co-op piece ids -- ask the user first).
+   landmark rules and co-op piece ids -- ask the user first). Two more from the perf-caps chat
+   (`c35046e`, which moved band uploads, brick panes and real-shell glass to workers):
+   `_make_shadow_proxy` calls `registry.live_damage_profile` on the main thread, 2-7 ms for a
+   big building, worst during collapses -- take a copy (like `get_solid_cells`, or a C++
+   snapshot) and build the profile on the worker with the proxy mesh; and `_standing_copy`
+   copies the whole chunk (~3 ms for a big tower, once as it turns to bricks) where the panes
+   only read outer-wall cells within `WALL_THICK`+2 of each face on the sill, lintel and floor
+   rows -- a wall-ring or rows-only copy.
 3. **9: stagger the slab seams** (user's decision; design under item 9, columns and walls stay on
    the lattice). A/B with `big_city.tscn -- --breakshape` and the part count before merging.
 4. 10, 13-16 as listed. 6 waits for the user to look in play.
