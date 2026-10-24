@@ -296,6 +296,9 @@ public:
     bool set_block_material(int chunk_id, int block_id, int material);
 
     bool is_solid(int chunk_id, Vector3i cell) const;
+    // is_solid for every cell of the chunk at once, one byte a cell, x fastest
+    // then y then z (local cells): for a worker that may not ask the live world.
+    PackedByteArray get_solid_cells(int chunk_id) const;
     int block_at(int chunk_id, Vector3i cell) const;
 
     int get_block_count(int chunk_id) const;

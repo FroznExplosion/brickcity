@@ -846,21 +846,69 @@ Registered as Item, every brick is Detail; as Furniture, a brick is Interior unl
 as Detail (a table with a cup: the cup stays an item). Open lists items in the asset workshop
 too. `tools/asset_tags_probe.gd`: 32 checks.
 
-**Planned, in order:**
+**Built 2026-10-23 (stages 2 and 3).**
 
-2. *The catalogue*: one panel shared by the workshop and the game -- the three levels as rows
-   of chips, each showing how many it would leave and greyed when none, a search box, the last
-   filter remembered. In a game world the planet starts on the planet underfoot.
-3. *The placer in the workshop*: pick from the catalogue, a ghost on the stud grid, R turns a
-   quarter, LMB places, RMB takes away. **A room saves a placement, not the bricks**:
-   `{asset, cell, turn}`, laid when the building is spawned -- the same reference generated
-   rooms already use (Workshop.md §0, Stage E), so editing a chair changes every room it stands
-   in. Authored buildings with authored rooms keep those placements; generated rooms keep
-   placing by seed.
-4. *The placer in game buildings*: the same placement, laid into the building's chunk as its
-   Interior and Detail bricks (`BuildingRegistry.lay_item_into`).
-5. *Outside buildings* (a bench in a park): needs its own drawing by distance, LOD and a cheap
-   body, since there is no storey group to ride; planned when stage 4 works.
+*The catalogue* (`AssetCatalog`, `scripts/asset_catalog.gd`; the panel `AssetCatalogPanel`):
+every file in the item library with its tags, one panel for the workshop and the game. Each
+level is a row of chips -- All, then each value with how many it would leave, greyed when that
+is none -- over a search box and the list; picking from the list puts the piece in hand. The
+filter is remembered (`user://asset_catalog.json`).
+
+*The placer in the workshop* (`FurnishTool`, `scripts/furnish_tool.gd`), both workshops: **F6**
+opens the catalogue. The piece in hand is a ghost centred on the stud under the cursor, on top
+of the bricks in that column or of a piece already placed (a cup on a table); R turns it a
+quarter, LMB places it (it stays in hand), RMB takes away the placed piece under the cursor, Esc
+puts it down and then closes. Each place and take-away is one undo step ("furnish").
+
+**A build keeps a placement, not the bricks**: `recipe.placements`, `{asset, cell, turn}`
+(`AssetPlacements`). The workshop draws them from the asset's file and keeps them out of its
+chunk (block id there is recipe index). They go into the city as bricks
+(`AssetPlacements.expand`, called by `BuildingRegistry.register_build` and the city's ghost),
+after the build's own so no block id of its own moves: Interior for furniture, Detail for an
+item, the author's colours. So a chair edited and saved again is the new chair in every build
+laid after. Turning or inserting a build turns and moves its placements; an asset whose file is
+gone is left out with a warning. Generated rooms keep placing by seed.
+`tools/furnish_probe.gd`: 40 checks.
+
+A trap met on the way: a static var set from a probe was reset when a scene loaded (loading
+reloads the scripts). The probe's test folder is kept on `Engine` meta (`AssetCatalog.use_dir`).
+
+**Built 2026-10-23 (stages 4 and 5): placing in a game world** (`WorldFurnisher`,
+`scripts/world_furnisher.gd`; the city scene's `_setup_furnisher`). **F6** opens the same
+catalogue, filtered to the planet underfoot (`planet`, Earth). The ghost follows the aim; R turns,
+LMB places, RMB puts the piece down, Backspace takes back the last piece placed (unless it has
+been shot or laid since: then it is the world's), Esc closes. Where the aim lands decides what a
+placement is:
+
+* **A room of a generated building** -- the nearest room floor along the aim, or the top of a
+  piece already in the room, short of whatever the physics ray hits first (a wall). The piece
+  goes into that room's own list, `room.items`, as `{type: item:<id>@<turn>, cell, yaw}`, the
+  same record the generator writes. It must stay inside the room, off its columns and clear of
+  other pieces. From then on it is the generator's furniture in every way: drawn with its storey
+  group by distance (Interiors.md 8.2), laid as bricks when a blast reaches it (8.4), riding a
+  floor that falls (8.3). `Room.placed_edits` moves the room's `diff_stamp` so its group redraws.
+* **A player build** -- laid at once into its chunk as decorative bricks
+  (`RoomManifest.build_item`), inside the build's own box, as its own furniture is.
+* **Anywhere else: outdoors** (`OutdoorProps`, `scripts/outdoor_props.gd`) -- on the course just
+  above what the aim hit, clear of other props and of every building's box. Cheap until touched:
+  - *drawn* as one MultiMesh per (asset, turn) per 16 m tile, Godot's visibility range as the
+    LOD: furniture to 60 m, items to 20 m (InteriorGroups' ranges), faded over 6 m. Measured from
+    the tile's middle, so the edge is up to a tile's half-diagonal off;
+  - *solid*: a box per prop in a static body per tile, on `Layers.WORLD`;
+  - *bricks when hit*: `_apply_blast` first promotes every prop it reaches to a small build of
+    its own (`OutdoorProps.promote`), its bricks as STRUCTURE (out here nothing else holds it up,
+    and a decorative block has no body), indexed, shelled and saved as any placed build is. It
+    is then ordinary brick destruction.
+
+`tools/world_furnish_probe.gd`: 31 checks (a room upstairs furnished, a cup stacked on the
+placed table, refused into the table and through a wall, the table laid as bricks like a
+generated piece; a player build; props drawn and ranged by type, refused on a taken spot and in
+a building's box, promoted by a blast at them and only them).
+
+Not yet: pieces placed in rooms or outdoors are not in a save or the damage log (only promoted
+props are, as placed builds), so a checkpoint loads without them and a client is not told; the
+ghost is not checked against anything but the room's own pieces and walls; and props carry no
+distance-ranged LOD finer than on/off.
 
 Open: the asset workshop's gun tools (parts, hands, export) still show for an item; its ruler
 reads gun scale (a stud = 16 mm), while an item placed in a building is at city scale (a stud =

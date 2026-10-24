@@ -1003,7 +1003,43 @@ Dictionary BrickWorld::build_damage_profile(int chunk_id, int fx, int fz, int th
     // de-materialising a building cost and therefore what held the trim budget
     // down to one building a run. It is a pure walk over occupancy, so it
     // belongs here.
+    //
+    // Only the columns the rectangle tests below read are walked: the outer
+    // ring `thick` wide (a big tower's interior was ~80% of the cells), and
+    // alive is read per block first, not per cell (a Block is big; the same
+    // trick as get_solid_cells). Asked every time a building in bricks has its
+    // shadow proxy remade, it was 2-7 ms a big building on the main thread
+    // during a collapse (PerfCaps.md 4).
     std::vector<uint8_t> col((size_t)c.dims.x * (size_t)c.dims.z);
+    if ((int)col.size() < fx * fz) {
+        return out;
+    }
+    std::vector<uint8_t> want(col.size(), 0);
+    auto mark = [&](int x0, int x1, int z0, int z1) {
+        for (int z = std::max(z0, 0); z < z1; ++z) {
+            for (int x = std::max(x0, 0); x < x1; ++x) {
+                const int i = x + fx * z;
+                if (i >= 0 && i < (int)want.size()) {
+                    want[(size_t)i] = 1;
+                }
+            }
+        }
+    };
+    mark(0, fx, 0, thick);
+    mark(0, fx, fz - thick, fz);
+    mark(0, thick, 0, fz);
+    mark(fx - thick, fx, 0, fz);
+    // Each wanted column as (x, z) of the chunk.
+    std::vector<int32_t> cols;
+    for (size_t k = 0; k < want.size(); ++k) {
+        if (want[k]) {
+            cols.push_back((int32_t)k);
+        }
+    }
+    std::vector<uint8_t> alive(c.blocks.size());
+    for (size_t i = 0; i < c.blocks.size(); ++i) {
+        alive[i] = c.blocks[i].alive ? 1 : 0;
+    }
 
     const int band_count = bands.size() / 2;
     for (int bi = 0; bi < band_count; ++bi) {
@@ -1014,17 +1050,20 @@ Dictionary BrickWorld::build_damage_profile(int chunk_id, int fx, int fz, int th
         const int lo = std::max(0, y0 - c.origin.y);
         const int hi = std::min(c.dims.y, y1 - c.origin.y);
         for (int y = lo; y < hi; ++y) {
-            for (int z = 0; z < c.dims.z; ++z) {
-                for (int x = 0; x < c.dims.x; ++x) {
-                    const size_t k = (size_t)x + (size_t)c.dims.x * (size_t)z;
-                    if (!col[k] && c.solid_at(Vector3i(x, y, z))) {
-                        col[k] = 1;
-                    }
+            if (c.index_of(Vector3i(0, y, 0)) < 0) {
+                continue; // outside a band chunk's window: nothing there
+            }
+            for (int32_t k : cols) {
+                if (col[(size_t)k]) {
+                    continue;
+                }
+                const int x = k % c.dims.x;
+                const int z = k / c.dims.x;
+                const int32_t blk = c.occupancy[c.index_of(Vector3i(x, y, z))];
+                if (blk >= 0 && alive[(size_t)blk]) {
+                    col[(size_t)k] = 1;
                 }
             }
-        }
-        if ((int)col.size() < fx * fz) {
-            continue;
         }
 
         // Is any column alive in this XZ rectangle?
@@ -1169,6 +1208,38 @@ bool BrickWorld::is_solid(int chunk_id, Vector3i cell) const {
     }
     const Chunk &c = chunks[chunk_id];
     return c.solid_at(cell - c.origin);
+}
+
+PackedByteArray BrickWorld::get_solid_cells(int chunk_id) const {
+    PackedByteArray out;
+    if (!valid_chunk(chunk_id)) {
+        return out;
+    }
+    const Chunk &c = chunks[chunk_id];
+    const Vector3i d = c.dims;
+    out.resize((int64_t)d.x * d.y * d.z);
+    uint8_t *w = out.ptrw();
+    memset(w, 0, (size_t)out.size());
+    // Alive per block first: a Block is big, and reading it per cell was most
+    // of the cost (5.7 ms for a tower; PerfCaps.md 4).
+    std::vector<uint8_t> alive(c.blocks.size());
+    for (size_t i = 0; i < c.blocks.size(); ++i) {
+        alive[i] = c.blocks[i].alive ? 1 : 0;
+    }
+    for (int z = 0; z < d.z; ++z) {
+        for (int y = 0; y < d.y; ++y) {
+            const int64_t row = c.index_of(Vector3i(0, y, z));
+            if (row < 0) {
+                continue; // outside a band chunk's window: nothing there
+            }
+            uint8_t *o = w + (int64_t)d.x * ((int64_t)y + (int64_t)d.y * z);
+            for (int x = 0; x < d.x; ++x) {
+                const int32_t blk = c.occupancy[row + x];
+                o[x] = (blk >= 0 && alive[(size_t)blk]) ? 1 : 0;
+            }
+        }
+    }
+    return out;
 }
 
 int BrickWorld::block_at(int chunk_id, Vector3i cell) const {
@@ -10531,6 +10602,7 @@ void BrickWorld::_bind_methods() {
             &BrickWorld::get_blocks_footprint);
     ClassDB::bind_method(D_METHOD("get_occupancy_bytes", "chunk_id"),
             &BrickWorld::get_occupancy_bytes);
+    ClassDB::bind_method(D_METHOD("get_solid_cells", "chunk_id"), &BrickWorld::get_solid_cells);
     ClassDB::bind_method(D_METHOD("set_anchor_levels", "chunk_id", "grid_ys"),
             &BrickWorld::set_anchor_levels);
     ClassDB::bind_method(D_METHOD("get_template_count"), &BrickWorld::get_template_count);

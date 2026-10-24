@@ -140,7 +140,9 @@ func start(path: String) -> bool:
 
 ## Take a recipe in hand. Split from `start` so a probe can hand one over.
 func hold(r: BuildRecipe, label: String = "build") -> bool:
-	# A generated building in it is parameters until now (Docs/Workshop.md).
+	# A generated building in it is parameters until now (Docs/Workshop.md),
+	# and so is its furniture from the catalogue (AssetPlacements).
+	r = AssetPlacements.expand(r)
 	_recipe = TowerBlockout.flatten(r)
 	_name = label
 	_dims = r.chunk_dims()

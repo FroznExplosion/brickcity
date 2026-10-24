@@ -7,13 +7,21 @@ For the next chat picking this up. The plan and everything measured is in
 ## Where things are (struct-bugs)
 
 - Worktree `C:\Users\lbaun\bc-struct`, branch `struct-bugs`, everything committed and merged into
-  `main` (last merge `de3e794`, pushed). Main's DLL was rebuilt after the last C++ merge.
-- **The worktree's DLL is stale**: it was built from a temporary revert of the "hits on falling
-  pieces" commit (an A/B that was stopped for low memory). Before any run in the worktree:
-  `cd gdextension/brick && python -m SCons`, then `--headless --path . --import`.
+  `main` (last merge `d3d78df`, 2026-10-23, pushed). No C++ changed since the worktree's DLL was
+  built; after `git merge main`, rebuild only if main brought C++ (`python -m SCons` in
+  `gdextension/brick`), then `--headless --path . --import`.
+- A merge of main can stop on untracked `.uid` files that `--import` made in the worktree and
+  main now tracks: delete those (only the ones git names) and merge again.
 - `override.cfg` is in the worktree (test windows hands-off). Never in main.
 - Main has other areas' uncommitted files (`Docs/Status.md`, `project.godot`, the brickify pyc,
   `Docs/please rename/`, some `.uid`s): leave them.
+- The heat-aware runner for windowed passes: `gates_seq.sh` and `gate1.sh` in
+  `C:\Users\lbaun\AppData\Local\Temp\claude\C--Users-lbaun-Documents-brickcity\892fd689-e560-4645-be18-932f9272afb1\scratchpad\`
+  -- copy both to your own scratchpad and set `SP=` in both to it (`ROOT` is bc-struct).
+  `bash gates_seq.sh <name> <args joined by +>`, `big:` before the args for `big_city.tscn`
+  (e.g. `big:--lodbreak`, `--big+--shot`). It waits for heat under 80 C and for no other
+  windowed Godot, runs ONE pass under a 900 s timeout, prints its ok/FAIL and the heat of that
+  run. One call per command -- never chain two.
 
 ## The merged plan (2026-10-20) -- start here
 
@@ -37,6 +45,47 @@ bricks, replay 1506: the replay lays the whole building, the host only the store
 **2026-10-23:** 4 found and fixed -- see 4 below; `--lodbreak` 21. The replay FAIL above is gone
 since storey units' log commands (`--ring` 4 of 4, no FAIL line). Open, in order: 7-8, 9, 10,
 13-16; 6 waits for the user.
+
+**State 2026-10-23, end of the third chat -- the next chat starts here.** Merged and pushed
+(`d3d78df`). Done since the 10-22 state:
+- 4 (ghost walls from 110 m): partial towers drawn from their bricks past `DEMESH_RANGE`;
+  `--lodbreak` counts walls drawn where no brick is, with its own control (item 4 below).
+- 7-8 (performance), measured and two spikes cut (item 8 below): every tick over 25 ms now
+  prints what inside its biggest phase it was (`CityScene._spike_parts`); storeys laid a run a
+  `lay_band` (`BuildingRegistry._lay_runs` -- a shell piece made bricks was quadratic in
+  storeys, 68.5 ms for 34); a shell drawn from its bricks refreshed in place after a hit
+  (`_refresh_real_shell`, ~15 ms a time).
+
+**Open, in order:**
+1. ~~Re-time `--big --shot` on a quiet machine~~ -- done 2026-10-23 evening (code at `8c67313`,
+   before perf caps `c35046e`; editor closed, `--ring` 14 s, peak 73-80 C, not held back): two
+   clean runs 18.1 ms mean / 21 of 906 over 33.3 ms (worst 64.0) and 18.1 / 17 (worst 88.1); a
+   third with another chat's headless probe up said 17.6 / 26 (unreliable). Inside the nine of
+   item 8 (16.8-20.2, 8-74): the two fixes did not move the mean; the earlier 16.8 / 5 was noise.
+2. **The rest of 8, from the spike lines** (`[prof] N tick(s) over 25 ms`; since `c35046e` also
+   `big_city.tscn -- --chamfer --cost --street --long`, Docs/PerfCaps.md 4). **2026-10-23
+   evening, done, not yet timed:** every stand-in now uploads on a worker
+   (`IslandManager._finish_coarse`), and `build_damage_profile` walks only the outer-wall columns
+   with alive read per block (`damage_profile_probe`: same answer as the full walk, 0.12 ms mean
+   vs 0.40 on a 40x30x34 tower) -- the shadow proxy's profile stays on the main thread; time it
+   with `--cost --street --long` before moving it. Was: a stand-in's
+   `add_surface_from_arrays` stalling 9-216 ms (the renderer; idea: every stand-in through the
+   worker upload path, `IslandManager._submit_mesh_job`); a shell piece's split 5-17 ms
+   (`spawn` -> `split_island`; `adopt` would skip it but `spawn` holds the move caps, crumbling,
+   landmark rules and co-op piece ids -- ask the user first). Two more from the perf-caps chat
+   (`c35046e`, which moved band uploads, brick panes and real-shell glass to workers):
+   `_make_shadow_proxy` calls `registry.live_damage_profile` on the main thread, 2-7 ms for a
+   big building, worst during collapses -- take a copy (like `get_solid_cells`, or a C++
+   snapshot) and build the profile on the worker with the proxy mesh; and `_standing_copy`
+   copies the whole chunk (~3 ms for a big tower, once as it turns to bricks) where the panes
+   only read outer-wall cells within `WALL_THICK`+2 of each face on the sill, lintel and floor
+   rows -- a wall-ring or rows-only copy.
+3. **9: stagger the slab seams** (user's decision; design under item 9, columns and walls stay on
+   the lattice). A/B with `big_city.tscn -- --breakshape` and the part count before merging.
+4. 10, 13-16 as listed. 6 waits for the user to look in play.
+
+Two one-offs to watch for (item 8 below): `--lodbreak` "160 m: no stud drawn on a brick that has
+gone" on pieces still moving at the gate, and Godot crashing at exit after the results.
 
 Two chats worked on destruction: this branch (`struct-bugs`, DestructionLod.md) and `lod-collapse`
 (worktree `C:\Users\lbaun\Documents\brickcity\.claude\worktrees\lod-collapse`; CollapseNext.md items
@@ -129,17 +178,34 @@ both lists, in this order; the detail of each item is where it points.
      storey units): every run, the same three ticks (~90, ~258, ~339), **23-32 ms**; one run
      **99 ms** (23,801 bricks: laid 68.5 + spawn 19.6, its split 16.7). The whole piece is laid
      from the template (`lay_band`, ~1.3-2.9 us a brick) and cut into a new chunk (`spawn` ->
-     `split_island`) in the blast's tick. Ideas, not built -- the storey-units design, the user
-     to decide: lay the piece's chunk a storey a tick while it falls, so a blast pays only the
-     spawn; take the laid chunk whole (`IslandManager.adopt`, as a toppled building) instead of
-     splitting it into a copy -- but `spawn` also holds the move caps, crumbling, landmark rules
-     and the co-op piece ids.
+     `split_island`) in the blast's tick. **The laying, fixed 2026-10-23:** it was a storey a
+     `lay_band`, from the bottom up, and every call that reached past the grid's window built
+     the grid again for every brick laid so far -- quadratic in storeys. Now a run of storeys a
+     call (`BuildingRegistry._lay_runs`, also for the storeys a hit reaches): same bricks, same
+     absent ones, same grid (`storey_unit_probe`, 42), 12,484 bricks over 18 storeys 13.3 ->
+     2.4 ms. Left: the split, 5-17 ms. Not built: lay the chunk a storey a tick while it falls
+     (a barrage converts a piece within a tick or two of it forming, so likely no help); take
+     the laid chunk whole (`IslandManager.adopt`) instead of splitting a copy -- but `spawn`
+     also holds the move caps, crumbling, landmark rules and the co-op piece ids.
    - **A shell rebuilt for a building still in bricks** (`_stream_detail`, `st_reshell`): 15-19
      ms = `live_damage_profile` 7.2 + recipe shell mesh 7.3. When it is drawn from its bricks
-     (`_far_real`), both are spent on a shell that draws for a tick or two.
+     (`_far_real`), both are spent on a shell that draws for a tick or two. **Fixed 2026-10-23:**
+     a shell drawn from its bricks and hit again is asked again in place -- its coarse mesh and
+     its panes, each drawing what it has until the new one lands (`_refresh_real_shell`;
+     `_hang_glass` replaces a shell's panes). `--lodbreak` 21 (display awake).
    - Once each: an islands tick of 226 ms that was ONE 76-brick stand-in rebuilt in the mesh
-     queue (its build 1.1 ms at most -- a stall around it; `coarse_split` now says where, not
-     caught again); a landing of 36.8 ms; promote 71.8; render 33-38.
+     queue (its build 1.1 ms at most); a landing of 36.8 ms; promote 71.8; render 33-38. Caught
+     again smaller (`coarse_split`): a 77-brick stand-in 10.9 ms = build 0.7 + **`add_surface_
+     from_arrays` 9.1** + hung 0.9 -- the renderer, not the build. Not built: send stand-ins
+     through the worker upload path (`_submit_mesh_job`) whatever their size.
+   - **After both fixes** (one run, two other Godot processes up at its start -- unreliable): frames
+     mean 16.8 ms, worst 50.0, **5 of 906 over 33.3 ms** (8-74 before), 2 ticks over 25 ms, no shell
+     piece or reshell among them. Time it again on a quiet machine.
+   - Seen once each in `--lodbreak` (2026-10-23, after these): "160 m: no stud drawn on a brick
+     that has gone" 172 of 119,555, on pieces still moving at the gate (the tower alone passed,
+     and the next full run); and Godot crashing at exit (signal 11, after the results: an
+     ArrayMesh freed after the RenderingServer -- likely a mesh or band job still in flight when
+     the pass quits, just after `_ghost_control` kills bricks).
 
 **4. How buildings break**
 9. **User, 2026-10-21: stagger the seams.** Worked out, not built: two offset layers make a cut
@@ -214,7 +280,7 @@ areas' tests).
 
 ## How to check
 
-- Probes (headless): `float` 50, `debris` 29, `hang` 10, `collapse` 56, `shellhit` 2, `farcut` 5, `storey_unit` 39, `heap` 11, `crack` 9,
+- Probes (headless): `float` 50, `debris` 29, `hang` 10, `collapse` 56, `shellhit` 2, `farcut` 5, `storey_unit` 42, `heap` 11, `crack` 9,
   `seam` 23, `spaces` 20, `interior_group` 33, `interior` 87, `fixture` 47, `shell` 38,
   `section` 32, `barrage` 8 (keeps the index and components checks on).
 - Also (lod-collapse's, headless): `barrage` 7-8, `push` 16, `blast_ring` 19, `storey` 4,

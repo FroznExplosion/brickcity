@@ -85,10 +85,15 @@ var openings: Array[AABB] = []
 var openings_at := -1
 
 
+## Pieces put in or taken back by hand (WorldFurnisher), counted up and never
+## down, so a drawing made before either is never mistaken for current.
+var placed_edits := 0
+
+
 ## Changes whenever what a drawing of this room should show changes: an item
-## written off, or one laid as bricks.
+## written off, one laid as bricks, or one placed by hand.
 func diff_stamp() -> int:
-	return gone.size() + laid.size() * 65536
+	return gone.size() + laid.size() * 65536 + placed_edits * 16777216
 
 
 func has_opening() -> bool:

@@ -338,8 +338,9 @@ func register(footprint_x: int, footprint_z: int, courses: int, xform: Transform
 ## Building used to hold one chunk and refuse anything sideways.
 func register_build(recipe: BuildRecipe, xform: Transform3D) -> int:
 	# A generated building inside a player build is parameters until it is
-	# placed (Docs/Workshop.md, Stage C). Everything below wants bricks.
-	recipe = TowerBlockout.flatten(recipe)
+	# placed (Docs/Workshop.md, Stage C), and so is furniture placed from the
+	# catalogue (AssetPlacements). Everything below wants bricks.
+	recipe = TowerBlockout.flatten(AssetPlacements.expand(recipe))
 	var b := Building.new()
 	b.id = buildings.size()
 	b.build = recipe
@@ -1153,26 +1154,48 @@ func _lay_storeys(b: Building, storeys: PackedInt32Array) -> int:
 	var t0 := Time.get_ticks_usec()
 	var lines := storey_lines(b)
 	var n := lines.size() - 1
-	var laid := 0
-	var any := false
+	var taking := PackedInt32Array()
 	for s in storeys:
-		if s < 0 or s >= n or b.storeys_laid.has(s):
+		if s < 0 or s >= n or b.storeys_laid.has(s) or taking.has(s):
 			continue
 		if b.cut_storey >= 0 and s >= b.cut_storey:
 			continue   # left as a shell piece
-		laid += world.lay_band(b.chunk, b.band_template, lines[s], lines[s + 1])
+		taking.append(s)
+	if taking.is_empty():
+		return 0
+	var laid := _lay_runs(b.chunk, b.band_template, lines, taking)
+	for s in taking:
 		b.storeys_laid.append(s)
 		b.storey_laid_at[s] = Time.get_ticks_msec()
 		storeys_laid_total += 1
-		any = true
-	if not any:
-		return 0
 	b.storeys_laid.sort()
 	storey_blocks_total += laid
 	b.structure_version += 1
 	b.floors_memo = null
 	set_storey_bounds(b)
 	storey_ms += float(Time.get_ticks_usec() - t0) / 1000.0
+	return laid
+
+
+## Lay `storeys` of a band chunk from its template: each run of storeys one
+## over the other in ONE BrickWorld.lay_band. A lay that reaches past the grid's
+## window builds the grid again for every brick laid so far (set_occupancy_window),
+## so a storey a call, from the bottom up, built it again for every storey: a
+## shell piece of 34 storeys, 23,801 bricks, took 68.5 ms to lay in a blast's
+## tick (--big --shot, 2026-10-23). The same bricks either way -- a storey's
+## band ends where the next begins. Sorts `storeys`. Returns the blocks laid.
+func _lay_runs(chunk: int, template: int, lines: PackedInt32Array, storeys: PackedInt32Array) -> int:
+	storeys.sort()
+	var laid := 0
+	var k := 0
+	while k < storeys.size():
+		var first := storeys[k]
+		var last := first
+		while k + 1 < storeys.size() and storeys[k + 1] == last + 1:
+			k += 1
+			last = storeys[k]
+		laid += world.lay_band(chunk, template, lines[first], lines[last + 1])
+		k += 1
 	return laid
 
 
@@ -1314,9 +1337,11 @@ func shell_piece_chunk(id: int, lo: int, hi: int, holes: PackedInt32Array,
 		world.kill_blocks(chunk, b.cut_record.gone)
 		world.set_worn_blocks(chunk, b.cut_record.worn)
 		world.set_scorched_blocks(chunk, b.cut_record.scorched)
+	var storeys := PackedInt32Array()
 	for s in range(lo, hi):
 		if not holes.has(s):
-			world.lay_band(chunk, tid, lines[s], lines[s + 1])
+			storeys.append(s)
+	_lay_runs(chunk, tid, lines, storeys)
 	world.set_chunk_transform(chunk, xform)
 	return chunk
 

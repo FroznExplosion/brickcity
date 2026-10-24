@@ -125,6 +125,8 @@ var _hud: Label
 ## The spaces tool (O): rooms, openings and points (WorkshopSpaces;
 ## Docs/Structures.md 3.2).
 var _spaces: WorkshopSpaces
+## Furniture and items placed from the catalogue (F6; Docs/AssetWorkshop.md).
+var _furnish: FurnishTool
 var _dot: ColorRect
 const DOT_PX := 8.0
 var _keys: GridContainer
@@ -298,6 +300,10 @@ func _ready() -> void:
 	_spaces = WorkshopSpaces.new()
 	add_child(_spaces)
 	_spaces.setup(self)
+	_furnish = FurnishTool.new()
+	_furnish.name = "Furnish"
+	add_child(_furnish)
+	_furnish.setup(self)
 	_remesh()
 	if "--gate" in OS.get_cmdline_args() + OS.get_cmdline_user_args():
 		call_deferred("_run_gate")
@@ -924,7 +930,10 @@ func _process(_dt: float) -> void:
 	_place_handles()
 	if _spaces != null:
 		_spaces.process()
-	if _stamp != null:
+	if _furnish != null and _furnish.is_open():
+		_ghost.visible = false
+		_furnish.process()
+	elif _stamp != null:
 		_ghost.visible = false
 		_stamp_process()
 	elif _spaces != null and _spaces.active:
@@ -1569,6 +1578,8 @@ func _unhandled_input(e: InputEvent) -> void:
 	# camera's "down". Neither is a build key.
 	if e is InputEventKey and e.ctrl_pressed:
 		return
+	if _furnish != null and _furnish.input(e):
+		return
 	if _stamp != null and _stamp_input(e):
 		return
 	if _spaces != null and _spaces_input(e):
@@ -1761,6 +1772,11 @@ func _clear_fixtures(keep: int = 0) -> void:
 ## of the middle would renumber every block after it and invalidate any damage
 ## record keyed on those ids.
 func _undo() -> bool:
+	if not _edits.is_empty() and _edits[_edits.size() - 1] == "furnish":
+		_edits.pop_back()
+		_furnish.undo()
+		_after_edit()
+		return true
 	if not _edits.is_empty() and _edits[_edits.size() - 1] == "stamp":
 		return _undo_stamp()
 	if not _edits.is_empty() and _edits[_edits.size() - 1] == "tower":
@@ -1971,6 +1987,8 @@ func _after_edit() -> void:
 		else:
 			_menu.set_tower_options(false, false, false, false, false)
 	_remesh()
+	if _furnish != null:
+		_furnish.redraw()
 	if _overlay_on:
 		_refresh_overlay()
 
@@ -2307,6 +2325,8 @@ func _load() -> void:
 ## empty, every stack emptied. New, and the first half of every load.
 func _reset_space() -> void:
 	_cancel_stamp()
+	if _furnish != null:
+		_furnish.reset()
 	_stamp_moving = false
 	_select_group(-1)
 	_ungrouped.clear()
@@ -2593,8 +2613,11 @@ func _write(path: String) -> bool:
 	DirAccess.make_dir_recursive_absolute(path.get_base_dir())
 	var err := recipe.save_to(path)
 	if recipe.kind == "room" or recipe.kind == "item":
-		# The generator reads templates once; this one is new.
+		# The generator reads templates once; this one is new. So do the
+		# catalogue and the furniture meshes.
 		RoomTemplates.reload()
+		AssetCatalog.reload()
+		AssetPlacements.forget_meshes()
 	print("[workshop] saved '%s' (%s): %d bricks, %d fixture(s), %d generated building(s) to %s (%s)"
 			% [recipe.name, recipe.kind, recipe.size(), recipe.fixture_count(),
 			recipe.towers.size(), path, error_string(err)])
@@ -2851,6 +2874,7 @@ func _commit_stamp() -> bool:
 	var fo := _frame_offsets(_stamp, off)
 	var first := recipe.size()
 	var fix0 := recipe.fixture_count()
+	var pl0 := recipe.placements.size()
 	var tow0 := recipe.towers.size()
 	var weld0 := recipe.weld_count()
 	recipe.append(_stamp, off, fo)
@@ -2861,7 +2885,7 @@ func _commit_stamp() -> bool:
 		"first": first, "count": recipe.size() - first,
 		"turn": _stamp_turn, "offset": [off.x, off.y, off.z],
 	})
-	_stamp_marks.append({"first": first, "fixtures": fix0, "towers": tow0})
+	_stamp_marks.append({"first": first, "fixtures": fix0, "towers": tow0, "placements": pl0})
 	_edits.append("stamp")
 	_batch = false
 	_stamp_moving = false
@@ -2917,6 +2941,8 @@ func _undo_stamp() -> bool:
 	while not _edits.is_empty() and _edits[_edits.size() - 1] == "brick" \
 			and recipe.size() > int(m.first):
 		_undo()
+	if m.has("placements"):
+		recipe.placements.resize(mini(recipe.placements.size(), int(m.placements)))
 	var respawn := false
 	while recipe.towers.size() > int(m.towers):
 		recipe.towers.pop_back()

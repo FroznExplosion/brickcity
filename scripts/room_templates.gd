@@ -90,6 +90,33 @@ static func add_item(id: String, r: BuildRecipe) -> String:
 	return type
 
 
+## The item type of a catalogue asset turned `turn` quarters (AssetCatalog id):
+## `item:<id>@<turn>`, registered the first time it is asked for, whatever
+## planet it is tagged for -- a placement is the author's choice, not the
+## generator's. "" if there is no such asset, or it cannot turn.
+static func item_type(id: String, turn: int) -> String:
+	_ensure()
+	turn = posmod(turn, 4)
+	var type := "item:%s@%d" % [id, turn]
+	if _parts.has(type):
+		return type
+	var r := AssetCatalog.recipe(id)
+	if r == null or r.is_empty():
+		return ""
+	var t := r.turned(turn)
+	if t == null:
+		return ""
+	var ids := []
+	for i in t.size():
+		if t.frame_of(i) == 0:
+			ids.append(i)
+	if ids.is_empty():
+		return ""
+	var tags := AssetTags.tags_of(r)
+	_parts[type] = _parts_of(t, ids, _lo_of(t, ids), AssetTags.type_of(tags) == AssetTags.ITEM)
+	return type
+
+
 ## Register a Room template, in all four turns.
 static func add_room(id: String, r: BuildRecipe) -> bool:
 	var kind := str(r.meta.get("room_kind", ""))
@@ -220,6 +247,10 @@ static func parts(type: String) -> Array:
 	if not (type.begins_with("item:") or type.begins_with("room:")):
 		return []
 	_ensure()
+	if not _parts.has(type) and type.begins_with("item:") and type.contains("@"):
+		# A placed piece (item_type), asked for again after a reload.
+		var at := type.rfind("@")
+		item_type(type.substr(5, at - 5), int(type.substr(at + 1)))
 	return _parts.get(type, [])
 
 
