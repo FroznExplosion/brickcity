@@ -1426,6 +1426,49 @@ func _toggle_panel() -> void:
 
 
 
+## Every saved part of this build as a package to share (Docs/ModularParts.md stage 9), in
+## user://parts/export/ (or `out_dir`): [{ok, path, hash} or {ok: false, why}].
+func export_packages(out_dir: String = PartPackage.EXPORT_DIR) -> Array:
+	var out := []
+	DirAccess.make_dir_recursive_absolute(out_dir)
+	for name in part_ids:
+		var dir := parts_dir() + String(part_ids[name]) + "/"
+		if FileAccess.file_exists(dir + PartCatalog.FILE):
+			out.append(PartPackage.export_part(dir, out_dir + "%s.%s" % [part_ids[name], PartPackage.EXT]))
+	var good := out.filter(func(r: Dictionary) -> bool: return r.ok).size()
+	_export_check = "packages: %d of %d written to %s%s" % [good, out.size(), ProjectSettings.globalize_path(out_dir),
+			"" if not part_ids.is_empty() else " (save the build first)"]
+	print("[asset workshop] " + _export_check)
+	return out
+
+
+## A package from someone else into the custom parts: checked, its part built here from its
+## data. What the status line says.
+func import_package(path: String) -> Dictionary:
+	var r := PartPackage.import_file(path)
+	_export_check = ("package: %s rev %d in" % [r.id, r.rev]) if r.ok else ("package refused: " + String(r.why))
+	print("[asset workshop] " + _export_check)
+	if r.ok and _catalog_panel != null and _catalog_panel.visible:
+		_catalog_panel.set_catalog(PartCatalog.load_all())
+	return r
+
+
+var _package_dialog: FileDialog
+
+
+func _open_package_dialog() -> void:
+	if _package_dialog == null:
+		_package_dialog = FileDialog.new()
+		_package_dialog.file_mode = FileDialog.FILE_MODE_OPEN_FILE
+		_package_dialog.access = FileDialog.ACCESS_FILESYSTEM
+		_package_dialog.filters = PackedStringArray(["*.%s ; part packages" % PartPackage.EXT])
+		_package_dialog.file_selected.connect(func(p: String) -> void: import_package(p))
+		_ruler.get_parent().add_child(_package_dialog)
+	if _camera.has_method("_set_captured"):
+		_camera.call("_set_captured", false)
+	_package_dialog.popup_centered_ratio(0.6)
+
+
 ## Open or close the parts catalogue (F7). It reads the part folders each time it opens, so
 ## a part just saved is in it.
 func toggle_catalog() -> void:
@@ -9673,6 +9716,9 @@ func _build_menus() -> void:
 			["Make a gun", "", func() -> void: set_asset_kind("gun")],
 			["Make a mech", "", func() -> void: set_asset_kind("mech")],
 			["Make furniture or an item (rooms: tagged by planet, type, room)", "", func() -> void: set_asset_kind("item")],
+			[],
+			["Export this build's parts to share (.bcpart)", "", func() -> void: export_packages()],
+			["Import a part package (.bcpart)...", "", func() -> void: _open_package_dialog()],
 		]],
 		["Edit", [
 			["Redo", "Shift Z", func() -> void: redo()],
