@@ -6,7 +6,10 @@ mounts with and what it takes, and is found in one catalogue that filters and so
 for all of them. A gun or a mech in the game is an **assembly** the generator puts together from
 parts that fit, from a seed and a design (section 7).
 
-Status: design, 2026-10-23. Nothing here is built. Section 11 is the order it is built in.
+Status (2026-10-23): **stage 1 built** -- the part record, the fit check and the catalogue
+(`scripts/parts/`: `PartRecord`, `PartStandards`, `PartFit`, `PartCatalog`), checked by
+`tools/parts_probe.gd` (headless, 65 checks). Nothing uses them yet: stage 2 puts guns on them.
+Section 11 is the order the rest is built in.
 
 Builds on: [Parts/joints.md](Parts/joints.md) (joints, the one pin, hands),
 [Parts/standards.json](Parts/standards.json) (`gun_interfaces`, `gun_platforms`, `gun_adapters`,
@@ -311,7 +314,7 @@ interfaces.
 
 | # | Stage | Where |
 |---|---|---|
-| 1 | The part record, the catalogue (facets, filter, sort), the fit check (layers 1-2), `mech_interfaces` / `figure_interfaces` / `body_plans` in `standards.json`; a headless probe | new `scripts/parts/` |
+| 1 | **Done.** The part record, the catalogue (facets, filter, sort), the fit check (layers 1-2), `mech_interfaces` / `figure_interfaces` / `mgun_interfaces` / `body_plans` in `standards.json`; `tools/parts_probe.gd` | `scripts/parts/` |
 | 2 | Guns on it: `GunAssembler` checks interfaces; Save writes each part on its own; designs with fixed and pool slots; `guns/` moved over | `scripts/guns/`, `asset_workshop.gd` |
 | 3 | The catalogue panel: filters, sort, custom and creator, the Fits toggle | UI, shared by workshop and inventory |
 | 4 | The workshop's anything-on-anything swap, with fit marks (section 9) | `asset_workshop.gd` |
@@ -325,6 +328,23 @@ interfaces.
 | 12 | The figure body plan; animals later | |
 
 ---
+
+### Stage 1 as built
+
+- A build is checked against a **body plan** (`standards.json` `body_plans`: `mech`, `figure`,
+  `gun`; a mech gun is a `gun` plan with `mgun.*` interfaces and `scale: mech`). A plan names its
+  root slot and every socket **path** -- the host's path, `/`, the socket's name: `arm_L`,
+  `arm_L/hand`, `neck/hat` -- with the slot and side it takes and whether it must be filled;
+  `same` lists paths whose parts share a mount param (the legs' `length`).
+- Every check gives a **reason** ("mounts on mag.wide, socket takes mag.narrow"), so the
+  workshop's marks (section 9) and the generator's refusals read the same.
+- A part's own problems (`PartRecord.problems`) keep it out of the catalogue: an interface not in
+  `standards.json`, a custom part with no creator, a hip with no length.
+- **The folder decides official or custom**, never the file: a downloaded part cannot make itself
+  official. The first folder read wins an id; a second with the same id is left out.
+- JSON has no ints: mount params that are whole numbers are read back as ints.
+- Not yet: a seed-stable order for the generator (new parts at the end, section 7) is stage 2's;
+  the catalogue's lists are in id order.
 
 ## 12. Decided
 
