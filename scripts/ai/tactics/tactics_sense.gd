@@ -69,9 +69,10 @@ static func read(so: Soldier, c: FactionKnowledge.Contact, cover: Dictionary) ->
 	# Our tank or mech near, crewed: the moment "Our heavy support is here".
 	if heavy_near(so) != null:
 		add.call("heavy_near")
-	if them.y - feet.y > LEVEL_DIFF:
+	var rise := Gravity.vert(them - feet, Gravity.up_at(feet))
+	if rise > LEVEL_DIFF:
 		add.call("p_high")
-	elif feet.y - them.y > LEVEL_DIFF:
+	elif -rise > LEVEL_DIFF:
 		add.call("p_low")
 	if dist <= REACH:
 		add.call("p_reach")
@@ -96,7 +97,7 @@ static func read(so: Soldier, c: FactionKnowledge.Contact, cover: Dictionary) ->
 
 	# Cover, both ways: bricks across the line from the other's eye to the head
 	# and to the chest.
-	var mine := cover_level(s, them + Vector3.UP * HEAD, feet)
+	var mine := cover_level(s, them + Gravity.up_at(them) * HEAD, feet)
 	var theirs := cover_level(s, so.eye_pos(), them)
 	amounts["cover"] = mine
 	amounts["pcover"] = theirs
@@ -312,13 +313,14 @@ static func way_done(heavy: Object) -> void:
 ## Is the wall at `at` open -- a doorway through it, both at the knee and at the
 ## head, along the way from `from`?
 static func way_open(s: AIServices, from: Vector3, at: Vector3) -> bool:
-	var d := Vector3(at.x - from.x, 0.0, at.z - from.z)
+	var up := Gravity.up_at(at)
+	var d := Gravity.flat(at - from, up)
 	if d.length() < 0.05:
 		return true
 	d = d.normalized() * 1.2
 	var base := Vector3(at.x, at.y, at.z)
 	for h: float in [0.5, 1.6]:
-		var p := base + Vector3.UP * h
+		var p := base + up * h
 		if not s.ai_world.line_clear(p - d, p + d):
 			return false
 	return true
@@ -495,9 +497,10 @@ static func heavy_near(so: Soldier) -> Object:
 ## 1 partly (head or chest), 2 fully (both).
 static func cover_level(s: AIServices, from: Vector3, feet: Vector3) -> int:
 	var n := 0
-	if not s.ai_world.line_clear(from, feet + Vector3.UP * HEAD):
+	var up := Gravity.up_at(feet)
+	if not s.ai_world.line_clear(from, feet + up * HEAD):
 		n += 1
-	if not s.ai_world.line_clear(from, feet + Vector3.UP * CHEST):
+	if not s.ai_world.line_clear(from, feet + up * CHEST):
 		n += 1
 	return n
 

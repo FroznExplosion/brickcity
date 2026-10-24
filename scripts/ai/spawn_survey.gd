@@ -160,8 +160,8 @@ func ring_of(id: int, count: int, rng: RandomNumberGenerator) -> Array[Vector3]:
 		# From the centre out to the footprint's edge along d, then the ring.
 		var to_edge := minf(half.x / maxf(absf(d.x), 0.001), half.y / maxf(absf(d.y), 0.001))
 		var r := to_edge + rng.randf_range(RING_NEAR, RING_FAR)
-		var p := Vector3(centre.x + d.x * r, 0.0, centre.z + d.y * r)
-		p.y = _city.ai_world.ground_at(p.x, p.z)
+		var p: Vector3 = _city.ai_world.ground_under(Gravity.lift_to(centre, 0.0)
+				+ Gravity.tangent_basis(centre) * Vector3(d.x * r, 0.0, d.y * r))
 		out.append(_city.ai_nav.snap(p))
 	return out
 
@@ -197,7 +197,7 @@ func check(feet: Vector3, inside: int, player: Pawn, others: Array) -> Dictionar
 				return _refuse("on loose rubble")
 			_:
 				return _refuse("no ground under it")
-	if absf(float(under.y) - feet.y) > 0.35:
+	if absf(float(under.y) - Gravity.height_of(feet)) > 0.35:
 		return _refuse("floor not where it was")
 	if not _city.ai_nav.can_stand(feet):
 		return _refuse("no room to stand")
@@ -205,7 +205,7 @@ func check(feet: Vector3, inside: int, player: Pawn, others: Array) -> Dictionar
 	# is born inside a wall it cannot get out of.
 	if not Soldier.body_fits(_city.get_world_3d(), feet):
 		return _refuse("inside solid (physics)")
-	if _city.ai_world.in_danger(feet + Vector3.UP * 0.9):
+	if _city.ai_world.in_danger(feet + Gravity.up_at(feet) * 0.9):
 		return _refuse("danger marked")
 	if player != null and is_instance_valid(player) and feet.distance_to(player.feet()) < MIN_FROM_PLAYER:
 		return _refuse("too close to the player")
@@ -215,16 +215,18 @@ func check(feet: Vector3, inside: int, player: Pawn, others: Array) -> Dictionar
 	return {"ok": true, "why": "", "on": on, "building": inside}
 
 
-## What a body put at `feet` would land on: {on, y, settled, body}.
+## What a body put at `feet` would land on: {on, y, settled, body} (y: the
+## hit's height, Gravity.height_of).
 func what_is_under(feet: Vector3) -> Dictionary:
-	var from := feet + Vector3.UP * 0.6
-	var q := PhysicsRayQueryParameters3D.create(from, feet - Vector3.UP * 1.2,
+	var up := Gravity.up_at(feet)
+	var from := feet + up * 0.6
+	var q := PhysicsRayQueryParameters3D.create(from, feet - up * 1.2,
 			Layers.HITSCAN_MASK)
 	var hit: Dictionary = _city.get_world_3d().direct_space_state.intersect_ray(q)
 	if hit.is_empty():
 		return {"on": On.NOTHING, "y": -INF, "settled": false, "body": null}
 	var layer := PhysicsServer3D.body_get_collision_layer(hit["rid"])
-	var out := {"on": On.NOTHING, "y": (hit["position"] as Vector3).y, "settled": false,
+	var out := {"on": On.NOTHING, "y": Gravity.height_of(hit["position"] as Vector3), "settled": false,
 			"body": hit.get("collider")}
 	if layer & Layers.STRUCTURE:
 		out.on = On.BUILDING
@@ -293,7 +295,7 @@ func _floor_cell_solid(id: int, feet: Vector3) -> bool:
 		return false
 	var world: BrickWorld = _city.world
 	var cs := BrickWorld.get_cell_size()
-	var under := feet - Vector3.UP * cs.y * 0.5
+	var under := feet - Gravity.up_at(feet) * cs.y * 0.5
 	var local: Vector3 = world.get_chunk_transform(b.chunk).affine_inverse() * under
 	var origin: Vector3i = world.get_chunk_origin(b.chunk)
 	# The feet are at the corner of four columns; any of them holding is a floor.

@@ -56,6 +56,8 @@ var bombs := 0
 var _t := 0.0
 var _start := Vector3.ZERO
 var _alt := 0.0
+## Up at the target: the run is flown in its tangent plane (Planets.md 11.8).
+var _up := Vector3.UP
 var _next_round := -WINDOW
 var _bombs_at: Array[float] = []
 var _falling := false
@@ -70,7 +72,8 @@ static func launch(s: AIServices, parent: Node, at: Vector3, p_dir: Vector3, p_k
 	a.team = p_team
 	a.kind = p_kind
 	a.target = at
-	var d := Vector3(p_dir.x, 0.0, p_dir.z)
+	a._up = Gravity.up_at(at)
+	var d := Gravity.flat(p_dir, a._up)
 	a.dir = d.normalized() if d.length() > 0.01 else Vector3.FORWARD
 	a.caller = p_caller
 	parent.add_child(a)
@@ -85,11 +88,11 @@ func _begin() -> void:
 	var k := -LEAD
 	while k <= LEAD:
 		var p := target + dir * k
-		var h := services.ai_world.top_at(p.x, p.z)
-		if is_finite(h):
-			top = maxf(top, h)
+		var t: Vector3 = services.ai_world.top_over(p)
+		if is_finite(t.x):
+			top = maxf(top, Gravity.height_of(t))
 		k += 5.0
-	_alt = maxf(top, target.y) + ALTITUDE
+	_alt = maxf(top, Gravity.height_of(target)) + ALTITUDE
 	for i in BOMBS:
 		_bombs_at.append(-WINDOW + (2.0 * WINDOW) * (float(i) + 0.5) / float(BOMBS))
 	body = CharacterBody3D.new()
@@ -124,8 +127,8 @@ func _begin() -> void:
 	body.add_child(hull)
 	body.visible = false
 	add_child(body)
-	body.global_position = _start + Vector3.UP * _alt
-	body.look_at(body.global_position + dir, Vector3.UP)
+	body.global_position = _start + _up * _alt
+	body.look_at(body.global_position + dir, _up)
 	if caller != null and is_instance_valid(caller):
 		services.say(caller, "air_inbound", ["Air strike inbound!", "Strafing run, get down!",
 				"Bombs on the way!"][services.rng.randi() % 3], AIServices.SHOUT)
@@ -154,7 +157,7 @@ func _physics_process(delta: float) -> void:
 		_fall(delta)
 		return
 	var flown := (_t - WARN_SECONDS) * SPEED
-	body.global_position = _start + dir * flown + Vector3.UP * _alt
+	body.global_position = _start + dir * flown + _up * _alt
 	var x := along()
 	if x > LEAD:
 		state = "gone"
@@ -176,16 +179,16 @@ func _strafe(upto: float) -> void:
 
 
 func _round(on_line: Vector3) -> void:
-	var side := dir.cross(Vector3.UP)
+	var side := dir.cross(_up)
 	var at := on_line + side * services.rng.randf_range(-ROUND_SPREAD, ROUND_SPREAD)
-	at.y = _ground(at)
+	at = Gravity.lift_to(at, _ground(at))
 	rounds += 1
 	var from := body.global_position
 	for p in services.pawns:
 		if not is_instance_valid(p) or p.team == team or p.health == null or p.health.is_dead():
 			continue
 		var f := p.feet()
-		if Vector2(f.x - at.x, f.z - at.z).length() > ROUND_REACH or absf(f.y - at.y) > 3.0:
+		if Gravity.flat(f - at, _up).length() > ROUND_REACH or absf(Gravity.vert(f - at, _up)) > 3.0:
 			continue
 		if not services.ai_world.line_clear(from, p.chest()):
 			continue
@@ -201,7 +204,7 @@ func _bomb(x: float) -> void:
 	while not _bombs_at.is_empty() and x >= _bombs_at[0]:
 		var k: float = _bombs_at.pop_front()
 		var at := target + dir * k
-		at.y = _ground(at)
+		at = Gravity.lift_to(at, _ground(at))
 		bombs += 1
 		var b := Grenade.blast(services, at, null, BOMB_DAMAGE, BOMB_RADIUS)
 		hits.append_array(b)
@@ -209,10 +212,10 @@ func _bomb(x: float) -> void:
 			services.on_breach.call(at, 2.0)
 
 
-## The top of what is under `p`: a roof, or the ground.
+## The top of what is under `p`: a roof, or the ground -- as a height (Gravity.height_of).
 func _ground(p: Vector3) -> float:
-	var h := services.ai_world.top_at(p.x, p.z)
-	return h if is_finite(h) else target.y
+	var t: Vector3 = services.ai_world.top_over(p)
+	return Gravity.height_of(t) if is_finite(t.x) else Gravity.height_of(target)
 
 
 func _fall(delta: float) -> void:
@@ -222,10 +225,10 @@ func _fall(delta: float) -> void:
 		_falling = true
 		state = "falling"
 		shot_down.emit(body.global_position)
-	var v := dir * SPEED * 0.8 + Vector3.DOWN * FALL_G * (_t - WARN_SECONDS) * 0.5
+	var v := dir * SPEED * 0.8 + -_up * FALL_G * (_t - WARN_SECONDS) * 0.5
 	body.global_position += v * delta
 	var p := body.global_position
-	if p.y <= _ground(p) + 0.8:
+	if Gravity.height_of(p) <= _ground(p) + 0.8:
 		state = "crashed"
 		hits.append_array(Grenade.blast(services, p, null, CRASH[0], CRASH[1]))
 		if services.on_breach.is_valid():
