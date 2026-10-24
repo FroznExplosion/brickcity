@@ -69,7 +69,12 @@ func _process(_delta: float) -> void:
 	if not is_piloting():
 		return
 	var it := mech.intents
+	# On a planet the look is in the chassis' carried frame (Docs/Planets.md 11.7).
+	if Gravity.planet != null and camera is DebugCamera:
+		(camera as DebugCamera).set_frame(mech.body.global_transform.basis.orthonormalized())
 	var r := camera.global_rotation
+	if camera is DebugCamera and (camera as DebugCamera).frame != Basis.IDENTITY:
+		r = (camera as DebugCamera).look_angles()
 	it.aim_yaw = r.y
 	it.aim_pitch = r.x
 	if _active():

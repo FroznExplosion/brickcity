@@ -385,7 +385,7 @@ func _ridden(now: float) -> bool:
 				if d < 0.0:
 					stance = Stance.FIRE
 					return false
-				crush_point = mech.feet() + Basis(Vector3.UP, mech.motor.torso_yaw).z * d
+				crush_point = mech.feet() + mech.motor.torso_basis().z * d
 			# Straight at the wall, back first and hard (_fire keeps the torso
 			# turned away from it).
 			var to := crush_point - mech.feet()
@@ -437,7 +437,7 @@ static func _low_over(w: AIWorld, at: Vector3) -> bool:
 ## back to it; -1 for none within CRUSH_SEARCH.
 func wall_behind() -> float:
 	var w := services.ai_world
-	var back := Basis(Vector3.UP, mech.motor.torso_yaw).z
+	var back := mech.motor.torso_basis().z
 	var feet := mech.feet()
 	var seat := Vector3.UP * (Rodeo.SEAT_UP + Pawn.BODY_HEIGHT * 0.5)
 	var d := Mech.RADIUS
@@ -459,7 +459,7 @@ func can_see(h: Pawn) -> bool:
 	var at := h.chest()
 	if e.distance_to(at) > SIGHT_RANGE:
 		return false
-	var look := -Basis(Vector3.UP, mech.motor.torso_yaw).z
+	var look := -mech.motor.torso_basis().z
 	var to := at - e
 	to.y = 0.0
 	if to.length() > 6.0 and rad_to_deg(look.angle_to(to.normalized())) > SIGHT_CONE_DEG:
@@ -825,7 +825,7 @@ func _steer() -> void:
 	if _want_dir == Vector3.ZERO:
 		it.move_dir = Vector2.ZERO
 		return
-	var b := Basis(Vector3.UP, mech.motor.torso_yaw)
+	var b := mech.motor.torso_basis()
 	it.move_dir = Vector2(_want_dir.dot(b.x), -_want_dir.dot(b.z))
 	# Nothing to shoot: face where it is going -- unless it is backing into a
 	# wall on purpose (CRUSH).
