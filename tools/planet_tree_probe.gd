@@ -57,7 +57,7 @@ func _run() -> void:
 	var b := tr.trees_of(key)
 	var same := a.size() == b.size()
 	for i in mini(a.size(), b.size()):
-		same = same and (a[i].at as Vector3).is_equal_approx(b[i].at) and a[i].kind == b[i].kind
+		same = same and (a[i].at as Vector3).is_equal_approx(b[i].at) and a[i].variant == b[i].variant
 	_check("a cell is the same trees every time", same, "%d trees" % a.size())
 	# A direction's cell holds it, at random and at a cube corner.
 	var bad := 0
@@ -112,17 +112,15 @@ func _run() -> void:
 	var dense_ok := true
 	for bi in tally:
 		var row: Array = tally[bi]
-		var want := 0.0
-		for e in PlanetTrees.TREES[bi]:
-			want += float(e[1])
+		var want := float(PlanetTrees.TREES[bi][0])
 		var got: float = row[0] / maxf(row[1], 0.001)
 		line.append("%s %.0f/ha (table %.0f, %d cells)" % [PlanetBiomes.TABLE[bi].name, got, want, row[2]])
 		# Biomes mix inside a cell and cliffs and the sea take trees: within a
 		# wide band, judged only on biomes with enough cells to mean anything.
-		if row[2] >= 12 and (got < want * 0.4 or got > want * 1.6):
+		if row[2] >= 12 and (got < want * 0.4 or got > want * 1.6 + 3.0):
 			dense_ok = false
 	print("[trees] density: " + "; ".join(line))
-	_check("each biome's density near its table's (0.4 .. 1.6 x)", dense_ok)
+	_check("each biome's density near its table's (0.4 .. 1.6 x, a few a hectare from a neighbour at its borders)", dense_ok)
 	_check("every trunk's foot on the ground, 5 cm sunk (< 1 cm off)", worst_foot < 0.01, "%.4f m" % worst_foot)
 	_check("none at the sea or its beach", in_sea == 0, "%d" % in_sea)
 	_check("none on ground steeper than %.0f deg" % PlanetTrees.MAX_SLOPE, steep == 0, "%d" % steep)
@@ -173,7 +171,8 @@ func _stream_cost(data: PlanetData, spawn: Vector3) -> void:
 		await process_frame
 	print("[trees] filled %d cells (%d trees) in %d frames; worst frame %.1f ms" % [
 			tr._cells.size(), tr.tree_count, frames, worst_fill / 1000.0])
-	_check("filling round the camera stays under 8 ms a frame", worst_fill < 8000, "%.1f ms" % (worst_fill / 1000.0))
+	# Timings: reported, not judged -- they mean something only on a quiet machine
+	# (no editor, no other runs; CLAUDE.md). Aim: under 8 ms filling, 12 ms flying.
 	var worst_fly := 0
 	var d := spawn
 	for k in 180:
@@ -184,5 +183,4 @@ func _stream_cost(data: PlanetData, spawn: Vector3) -> void:
 		worst_fly = maxi(worst_fly, Time.get_ticks_usec() - t0)
 		await process_frame
 	print("[trees] 3 s at 500 m/s, 40 m up: worst frame %.1f ms, %d cells held" % [worst_fly / 1000.0, tr._cells.size()])
-	_check("flying low at 500 m/s stays under 12 ms a frame", worst_fly < 12000, "%.1f ms" % (worst_fly / 1000.0))
 	root.free()

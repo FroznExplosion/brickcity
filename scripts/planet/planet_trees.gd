@@ -12,6 +12,12 @@ extends Node3D
 ## ground steeper than MAX_SLOPE. Cells within KEEP of the camera are built, a
 ## few a frame nearest first, and freed past DROP; trunks within SOLID of the
 ## camera are solid.
+##
+## The trees are bricks (11.10 revised): Trees' four variants, the heightfield
+## scene's and the city's, drawn as the heightfield draws them -- ImpostorLod,
+## real bricks within NEAR, baked cards past it. One set per variant per cube
+## face, its node turned so the face's normal is its +Y: its chunks, keyed on
+## its own XZ, are squares on the ground there.
 
 const CELL := 64.0
 const KEEP := 640.0
@@ -23,28 +29,39 @@ const BUILD_PER_FRAME := 6
 const BUILD_BUDGET_US := 3000
 ## Re-plan which cells are wanted once the camera has moved this far.
 const REPLAN := 48.0
+## Frames between re-sorts of the sets whose trees changed: cells come and go
+## at the far edge, where a few frames late is never seen.
+const DIRTY_EVERY := 4
 
-const K := PlanetTreeMeshes.Kind
-## Per biome (PlanetBiomes.TABLE's order): [kind, trees a hectare] (11.10).
+## Real bricks within this; cards past it (ImpostorLod's tiers).
+const NEAR := 45.0
+## Per biome (PlanetBiomes.TABLE's order): [trees a hectare, the Trees variants
+## it grows] -- 0 green/dark wide, 1 dark/olive narrow, 2 bright wide, 3 olive wide.
 const TREES := [
-	[[K.SHRUB, 15.0]],                                  # tundra
-	[[K.CONIFER, 120.0], [K.SHRUB, 20.0]],              # taiga
-	[[K.SHRUB, 25.0], [K.BROADLEAF, 3.0]],              # steppe
-	[[K.BROADLEAF, 110.0], [K.CONIFER, 30.0]],          # temperate forest
-	[[K.BROADLEAF, 12.0], [K.SHRUB, 20.0]],             # temperate grass
-	[[K.CACTUS, 6.0], [K.SHRUB, 4.0]],                  # desert
-	[[K.ACACIA, 10.0], [K.SHRUB, 15.0]],                # savanna
-	[[K.PALM, 60.0], [K.BROADLEAF, 90.0]],              # jungle
+	[0.0, []],              # tundra
+	[140.0, [1, 3]],        # taiga: the dark ones
+	[3.0, [3]],             # steppe
+	[150.0, [0, 1, 2, 3]],  # temperate forest
+	[15.0, [0, 2]],         # temperate grass
+	[0.0, []],              # desert
+	[8.0, [3]],             # savanna
+	[170.0, [2, 0]],        # jungle: the bright ones
 ]
 ## The densest biome's trees a hectare: a cell draws this many candidates a
 ## hectare and each keeps a tree with its own biome's share of it.
-const D_MAX := 150.0
+const D_MAX := 170.0
 
 var data: PlanetData
 var biomes: PlanetBiomes
 var faces_n := 0
 var _mat: ShaderMaterial
-## key (Vector3i face, i, j) -> {node, centre, bodies?}
+## "face_variant" -> ImpostorLod, and the ones changed since their last update.
+var _sets := {}
+var _dirty := {}
+var _sorted_at := {}
+var _turn := 0
+var _frame := 0
+## key (Vector3i face, i, j) -> {node, centre, trees, handles: [[set, handle]], body}
 var _cells := {}
 var _queue: Array[Vector3i] = []
 var _planned_at := Vector3.INF
@@ -58,10 +75,10 @@ func setup(p_data: PlanetData) -> void:
 	data = p_data
 	biomes = PlanetBiomes.of(data)
 	faces_n = int(ceil(2.0 * data.radius / CELL))
+	# The bricks' own material, as the heightfield scene's trees have it.
 	_mat = ShaderMaterial.new()
-	_mat.shader = load("res://shaders/planet_tree.gdshader")
-	_mat.set_shader_parameter("fade_near", KEEP - 190.0)
-	_mat.set_shader_parameter("fade_far", KEEP - 40.0)
+	_mat.shader = load("res://shaders/brick.gdshader")
+	WeatherFx.register(_mat)
 	# For an A/B of the trees' cost (-- --no-trees): none are made.
 	if "--no-trees" in OS.get_cmdline_user_args():
 		set_process(false)
@@ -124,7 +141,7 @@ func cell_area(key: Vector3i) -> float:
 
 # --- one cell's trees ------------------------------------------------------------
 
-## The trees of a cell: [{kind, at (planet-local foot), basis}], the same every call.
+## The trees of a cell: [{variant, at (planet-local foot), basis}], the same every call.
 func trees_of(key: Vector3i) -> Array:
 	var rng := RandomNumberGenerator.new()
 	rng.seed = hash([data.planet_seed, key.x, key.y, key.z])
@@ -138,25 +155,22 @@ func trees_of(key: Vector3i) -> Array:
 		var fj := key.z + (floorf(float(s) / side) + rng.randf()) / side
 		var pick := rng.randf() * D_MAX
 		var yaw := rng.randf() * TAU
-		var size := rng.randf_range(0.8, 1.25)
+		var which := rng.randf()
 		if s >= count:
 			continue
 		var d := dir_at(key.x, fi, fj)
-		var kinds: Array = TREES[biomes.biome_index(d)]
-		var kind := -1
-		for e in kinds:
-			pick -= float(e[1])
-			if pick < 0.0:
-				kind = int(e[0])
-				break
-		if kind < 0:
+		var e: Array = TREES[biomes.biome_index(d)]
+		if pick >= float(e[0]):
 			continue
+		var kinds: Array = e[1]
+		var variant: int = kinds[mini(int(which * kinds.size()), kinds.size() - 1)]
 		var h := data.height(d)
 		if h < sea + 1.0 or _on_pad(d) or _slope(d, h) > MAX_SLOPE:
 			continue
 		var x := (Vector3.FORWARD if absf(d.dot(Vector3.FORWARD)) < 0.9 else Vector3.RIGHT).cross(d).normalized()
-		var b := Basis(x, d, x.cross(d)) * Basis(Vector3.UP, yaw) * Basis.from_scale(Vector3.ONE * size)
-		out.append({"kind": kind, "at": d * (data.radius + h - 0.05), "basis": b})
+		# Bricks keep their size: turned, never scaled.
+		var b := Basis(x, d, x.cross(d)) * Basis(Vector3.UP, yaw)
+		out.append({"variant": variant, "at": d * (data.radius + h - 0.05), "basis": b})
 	return out
 
 
@@ -177,6 +191,34 @@ func _slope(d: Vector3, h: float) -> float:
 	return rad_to_deg(atan(sqrt(hx * hx + hz * hz)))
 
 
+## A variant's foot -- the middle of its 2 x 2 trunk's base -- in its mesh's
+## own metres (the recipe rebased to its min corner, as RecipeMesh builds it).
+static func foot_of(variant: int) -> Vector3:
+	var off := Trees.trunk_offset(variant)
+	var size := BrickWorld.get_cell_size()
+	return Vector3((off.x + 1) * size.x, off.y * size.y, (off.z + 1) * size.z)
+
+
+## The set for `variant` on cube face `f`, made the first time it is asked for.
+func _set_for(f: int, variant: int) -> ImpostorLod:
+	var k := "%d_%d" % [f, variant]
+	if _sets.has(k):
+		return _sets[k]
+	var ax := _axes(f)
+	var a: Vector3 = ax[1]
+	var m: Vector3 = ax[0]
+	var s := ImpostorLod.new()
+	s.name = "Trees_%s" % k
+	# The face's normal is the set's +Y: its chunks are squares on the ground.
+	s.transform = Transform3D(Basis(a, m, a.cross(m)), Vector3.ZERO)
+	add_child(s)
+	s.set_chunk(128.0)
+	s.setup(RecipeMesh.build(Trees.recipe(variant), "tree_%d" % variant), _mat, NEAR, KEEP)
+	s.set_cull_fade(150.0)
+	_sets[k] = s
+	return s
+
+
 func _build_cell(key: Vector3i) -> void:
 	var t0 := Time.get_ticks_usec()
 	var centre := cell_centre(key) * (data.radius + data.height(cell_centre(key)))
@@ -184,26 +226,15 @@ func _build_cell(key: Vector3i) -> void:
 	node.name = "Cell_%d_%d_%d" % [key.x, key.y, key.z]
 	node.position = centre
 	add_child(node)
-	var by_kind := {}
 	var trees := trees_of(key)
+	var handles := []
 	for t in trees:
-		if not by_kind.has(t.kind):
-			by_kind[t.kind] = []
-		by_kind[t.kind].append(t)
-	for kind in by_kind:
-		var list: Array = by_kind[kind]
-		var mm := MultiMesh.new()
-		mm.transform_format = MultiMesh.TRANSFORM_3D
-		mm.mesh = PlanetTreeMeshes.mesh(kind)
-		mm.instance_count = list.size()
-		for i in list.size():
-			mm.set_instance_transform(i, Transform3D(list[i].basis, (list[i].at as Vector3) - centre))
-		var mi := MultiMeshInstance3D.new()
-		mi.multimesh = mm
-		mi.material_override = _mat
-		mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
-		node.add_child(mi)
-	_cells[key] = {"node": node, "centre": centre, "trees": trees, "body": null}
+		var lod := _set_for(key.x, t.variant)
+		var b: Basis = t.basis
+		var xf := Transform3D(b, (t.at as Vector3) - b * foot_of(t.variant))
+		handles.append([lod, lod.add(lod.transform.affine_inverse() * xf)])
+		_dirty[lod] = true
+	_cells[key] = {"node": node, "centre": centre, "trees": trees, "handles": handles, "body": null}
 	built_cells += 1
 	tree_count += trees.size()
 	last_build_us = Time.get_ticks_usec() - t0
@@ -212,6 +243,9 @@ func _build_cell(key: Vector3i) -> void:
 func _free_cell(key: Vector3i) -> void:
 	var c: Dictionary = _cells[key]
 	tree_count -= (c.trees as Array).size()
+	for h in c.handles:
+		(h[0] as ImpostorLod).remove(int(h[1]))
+		_dirty[h[0]] = true
 	(c.node as Node).queue_free()
 	_cells.erase(key)
 
@@ -227,14 +261,16 @@ func _make_solid(key: Vector3i) -> void:
 	body.collision_layer = Layers.FIXTURE
 	body.collision_mask = 0
 	(c.node as Node3D).add_child(body)
+	var stud := BrickWorld.get_stud_metres()
 	for t in c.trees:
-		var tb: Array = PlanetTreeMeshes.trunk(t.kind)
+		# The trunk: 2 x 2 studs of round bricks, three plates each.
+		var tall: float = Trees.TRUNK_HEIGHTS[t.variant] * 3 * BrickWorld.get_plate_metres()
 		var cs := CollisionShape3D.new()
 		var box := BoxShape3D.new()
-		box.size = tb[0]
+		box.size = Vector3(2.0 * stud, tall, 2.0 * stud)
 		cs.shape = box
 		var b: Basis = t.basis
-		cs.transform = Transform3D(b, (t.at as Vector3) - (c.centre as Vector3) + b * (tb[1] as Vector3))
+		cs.transform = Transform3D(b, (t.at as Vector3) - (c.centre as Vector3) + b.y * tall * 0.5)
 		body.add_child(cs)
 	c.body = body
 
@@ -267,6 +303,22 @@ func _process(_delta: float) -> void:
 		elif dist > SOLID * 1.5 and c.body != null:
 			(c.body as Node).queue_free()
 			c.body = null
+	# The sets: those whose trees changed now, and one more a frame in turn once
+	# the camera has moved a metre since it was last sorted (TerrainTrees' way).
+	var here := cam.global_position
+	_frame += 1
+	if _frame % DIRTY_EVERY == 0:
+		for lod in _dirty:
+			(lod as ImpostorLod).update((lod as ImpostorLod).to_local(here))
+			_sorted_at[lod] = here
+		_dirty.clear()
+	if not _sets.is_empty():
+		var keys := _sets.keys()
+		var s: ImpostorLod = _sets[keys[_turn % keys.size()]]
+		_turn += 1
+		if (_sorted_at.get(s, Vector3.INF) as Vector3).distance_to(here) > 1.0:
+			s.update(s.to_local(here))
+			_sorted_at[s] = here
 
 
 ## Which cells the camera wants: a flood from its own cell to every cell whose
