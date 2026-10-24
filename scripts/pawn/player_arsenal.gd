@@ -92,6 +92,9 @@ var inventory_open := false
 var inventory_index := 0
 ## The open screen's page: 0 the backpack, 1 the skill tree, 2 the workbench (only at one).
 var inventory_page := 0
+## The mech page (MechLoadoutScreen, Docs/ModularParts.md stage 7): page 3, after the
+## skills, when the player has a mech. Null: no such page.
+var mech_screen: MechLoadoutScreen
 var skills: SkillScreen
 ## Short notes for the HUD ("Backpack full").
 var note := ""
@@ -525,7 +528,13 @@ func _inventory_input(event: InputEvent) -> void:
 	if _pressed(event, &"inventory"):
 		inventory_open = false
 	elif _pressed(event, &"swap_weapon"):
-		inventory_page = 1 if inventory_page == 0 else 0
+		if inventory_page == 1 and mech_screen != null:
+			inventory_page = 3
+		else:
+			inventory_page = 1 if inventory_page == 0 else 0
+	elif inventory_page == 3:
+		if mech_screen != null:
+			mech_screen.handle(event)
 	elif inventory_page == 1:
 		if skills != null:
 			skills.handle(event)
@@ -553,6 +562,8 @@ func _process(delta: float) -> void:
 			note = ""
 	if skills != null:
 		skills.show_screen(inventory_open and inventory_page == 1 and _active())
+	if mech_screen != null:
+		mech_screen.show_screen(inventory_open and inventory_page == 3 and _active())
 	if ability_cool > 0.0:
 		ability_cool = maxf(ability_cool - delta, 0.0)
 	if overshield_left > 0.0:

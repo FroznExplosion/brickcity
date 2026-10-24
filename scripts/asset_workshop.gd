@@ -1216,6 +1216,8 @@ func ruler_text() -> String:
 	var modes := PackedStringArray(["view: " + VIEWS[view]])
 	if recipe.kind == "mech":
 		modes.append("MECH %s, legs %d long" % [mech_class, leg_length])
+	elif recipe.kind == "gun" and gun_scale == "mech":
+		modes.append("MECH GUN (nano scale)")
 	if free_place:
 		modes.append("FREE on the %s plane at %s (PgUp/PgDn)" % [work_plane, _plane_at_text()])
 	else:
@@ -1540,7 +1542,7 @@ func _store_asset_meta() -> void:
 			"shells": shells, "sdf": _sdf_meta, "sculpt": {"state": sculpt_state, "cells": Array(_sdf_cells),
 			"stash": _sdf_stash, "shell_cells": Array(_sdf_shell)}, "models": _models_meta(),
 			"part_ids": part_ids, "part_hashes": part_hashes, "part_revs": part_revs,
-			"mech": {"class": mech_class, "length": leg_length}}   # not a copy: this runs on every edit, and a save writes it out as it is
+			"mech": {"class": mech_class, "length": leg_length}, "gun_scale": gun_scale}   # not a copy: this runs on every edit, and a save writes it out as it is
 
 
 func _restore_asset_meta() -> void:
@@ -1557,6 +1559,7 @@ func _restore_asset_meta() -> void:
 	var mech: Dictionary = a.get("mech", {})
 	mech_class = String(mech.get("class", "normal"))
 	leg_length = int(mech.get("length", 2))
+	gun_scale = String(a.get("gun_scale", "held"))
 	part_of = PackedInt32Array()
 	for v in parts.get("of", []):
 		part_of.append(int(v))
@@ -1961,7 +1964,7 @@ func _load_interfaces() -> void:
 		return
 	var d = JSON.parse_string(FileAccess.get_file_as_string(path))
 	if d is Dictionary:
-		for table in ["gun_interfaces", "mech_interfaces"]:
+		for table in ["gun_interfaces", "mgun_interfaces", "mech_interfaces"]:
 			for k in (d.get(table, {}) as Dictionary):
 				if k != "note":
 					_interfaces[k] = d[table][k]
@@ -2081,8 +2084,12 @@ func _fill_point_ifaces() -> void:
 				slot = MechReference.SPEC[k].slot
 				break
 	for k in _interfaces:
-		if String(_interfaces[k].get("slot", "")) == slot:
-			_point_iface.add_item(k)
+		if String(_interfaces[k].get("slot", "")) != slot:
+			continue
+		# A gun's joints are its scale's: a mech gun's mgun.*, a player's the rest.
+		if recipe.kind == "gun" and (String(k).begins_with("mgun.") != (gun_scale == "mech")):
+			continue
+		_point_iface.add_item(k)
 
 
 func _draw_points() -> void:
@@ -8339,7 +8346,9 @@ func game_dir() -> String:
 ## real metre, GAME_PER_WORKSHOP), its muzzle along -Z, up up; across the gun is X.
 func game_basis() -> Basis:
 	var turn := -PI * 0.5 if muzzle_end == "-x" else PI * 0.5
-	return Basis(Vector3.UP, turn).scaled(Vector3.ONE * GAME_PER_WORKSHOP)
+	# A mech's gun is built on the nano grid the mechs are, at their size (section 5).
+	var k := MECH_GAME_PER_WORKSHOP if gun_scale == "mech" else GAME_PER_WORKSHOP
+	return Basis(Vector3.UP, turn).scaled(Vector3.ONE * k)
 
 
 ## Export the gun for the game: each part (of the gun's slots) as a scene of its own --
@@ -9065,7 +9074,7 @@ func _part_record(name: String, by_part: Dictionary, hosts: Dictionary, official
 	var r := PartRecord.new()
 	r.id = String(part_ids.get(name, "unsaved." + name))   # unsaved: a fit check before a save
 	r.family = "gun"
-	r.scale = "held"
+	r.scale = gun_scale
 	r.slot = name
 	r.display_name = "%s %s" % [recipe.name, name]
 	r.manufacturer = String(AssetGuns.BRAND)
@@ -9745,6 +9754,8 @@ func _build_menus() -> void:
 			["Size: rifle (62 studs)", "", func() -> void: set_gun_class("rifle")],
 			["Size: pistol (13.5 studs)", "", func() -> void: set_gun_class("pistol")],
 			["Turn the ruler (which end is the butt)", "", func() -> void: flip_butt()],
+			["Mech gun (nano scale, mgun joints) / player's gun", "", func() -> void:
+				set_gun_scale("held" if gun_scale == "mech" else "mech")],
 			[],
 			["Export to game", "Alt X", func() -> void: export_game()],
 			["Export to print (parts and whole)", "Alt B", func() -> void: export_print()],
@@ -9818,6 +9829,21 @@ const MODEL_MAX_STUDS := 250.0
 ## The nudge buttons' step: half a stud (up and down: a plate) or a whole one (a brick).
 var nudge_whole := false
 var gun_class := "smg"
+## A player's gun ("held") or a mech's ("mech": nano scale, its own mgun.* interfaces;
+## Docs/ModularParts.md section 5). The two never mix.
+var gun_scale := "held"
+
+
+## Gun > Mech gun: build a mech's gun (nano scale, mgun.* joints) or a player's.
+func set_gun_scale(s: String) -> void:
+	if not s in ["held", "mech"] or s == gun_scale:
+		return
+	gun_scale = s
+	_forget_part_ids()   # another scale: other parts
+	if _point_slot != null:
+		_fill_point_ifaces()
+	_store_asset_meta()
+	_dirty = true
 var size_marks_on := true
 ## The shared grip at print size, mm (standards.json "held_grip"; these until it is read).
 var _grip_std := {"length_min": 24.0, "fore_aft": [10.0, 15.5], "thick": [7.0, 9.5]}
