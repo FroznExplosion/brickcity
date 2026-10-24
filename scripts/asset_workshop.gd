@@ -178,6 +178,11 @@ var free_place := true
 var work_plane := "side"
 var work_depth := 40.5
 var work_height := 30
+## The sculpt panel's mode list, and its show-for callback (set_sculpt_mode).
+var _sculpt_modes: OptionButton
+var _sculpt_show_for := Callable()
+## Said once a session: a mirror image left out because it fell outside the area.
+var _mirror_warned := false
 var work_x := 40
 ## Lay a starting brick when the build is empty (off in a headless run: probes count bricks).
 var auto_start_brick := true
@@ -905,6 +910,41 @@ func set_mirror(on: bool) -> void:
 	_mirror_sheet.visible = on
 	_place_mirror_sheet()
 	_store_asset_meta()
+
+
+## A mirror plane that misses the build (saved when the build area was smaller, or the
+## build moved) goes through the middle of the build instead, on a stud line, so a stroke
+## and its mirror image are both inside the area. True when it moved.
+func _mirror_onto_build() -> bool:
+	# The block-out is the work while there is one; else the bricks (a lone starting
+	# brick left where an old plane was must not hold the plane there).
+	var lo := 1 << 30
+	var hi := -(1 << 30)
+	if sculpt != null:
+		var cells := sculpt.form.cells()
+		for i in range(0, cells.size(), 5):
+			var c := Vector3i(cells[i], cells[i + 1], cells[i + 2])
+			if in_area(c):
+				lo = mini(lo, c.z)
+				hi = maxi(hi, c.z + 1)
+	if lo > hi:
+		for i in recipe.size():
+			if recipe.frame_of(i) == 0 and in_area(recipe.cell_of(i)):
+				lo = mini(lo, recipe.cell_of(i).z)
+				hi = maxi(hi, recipe.cell_of(i).z + BrickPalette.size_of(recipe.part_of(i)).z)
+	var inside := mirror_z >= 1.0 and mirror_z <= plate_studs - 1.0
+	if lo > hi:
+		if not inside:
+			mirror_z = plate_studs * 0.5 + 0.5
+			return true
+		return false
+	if inside and mirror_z >= lo - 2 and mirror_z <= hi + 2:
+		return false
+	var was := mirror_z
+	mirror_z = roundf((lo + hi) * 0.5)
+	print("[asset workshop] the mirror plane was at %.1f studs across, off the build (%d to %d): moved to %.1f"
+			% [was, lo, hi, mirror_z])
+	return true
 
 
 ## Put the plane down the middle of the ghost.
@@ -1663,6 +1703,7 @@ func _restore_asset_meta() -> void:
 	_draw_mech_ref()
 	var m: Dictionary = a.get("mirror", {})
 	mirror_z = float(m.get("z", mirror_z))
+	_mirror_onto_build()
 	set_mirror(bool(m.get("on", false)))
 	for d in a.get("photos", []):
 		var img := Image.load_from_file(String(d.path)) if FileAccess.file_exists(String(d.path)) else null
@@ -1684,6 +1725,11 @@ func _restore_asset_meta() -> void:
 
 func _reset_space() -> void:
 	super._reset_space()
+	# One place for everything: the middle of the area, where the camera, the grid and
+	# the starting brick are (a plane kept from an older, smaller area was 460 studs off).
+	mirror_z = plate_studs * 0.5 + 0.5
+	@warning_ignore("integer_division")
+	work_x = plate_studs / 2
 	if not tried.is_empty():
 		untry_all()
 	part_of = PackedInt32Array()
@@ -3693,7 +3739,10 @@ func _ensure_start_brick() -> void:
 		return
 	var keep := _batch
 	_batch = true
-	place_named(arch, Vector3i(plate_studs / 2 - 2, work_height, int(floor(mirror_z))))
+	var z := int(floor(mirror_z))
+	if z < 1 or z > plate_studs - 2:
+		z = plate_studs / 2
+	place_named(arch, Vector3i(plate_studs / 2 - 2, work_height, z))
 	_batch = keep
 	_after_edit()
 	_edit_groups.clear()
@@ -3889,7 +3938,7 @@ func _sculpt_input(e: InputEvent) -> bool:
 			_show_sculpt_note(true)
 			return true
 		return false
-	if _gizmo_input(e) or _model_pick_input(e):
+	if sculpt_mode == "models" and (_gizmo_input(e) or _model_pick_input(e)):
 		return true
 	var stamping: bool = sculpt_mode == "stamp" and not (e is InputEventWithModifiers and e.shift_pressed and not _sculpt_on)
 	if e is InputEventMouseButton and e.button_index in [MOUSE_BUTTON_LEFT, MOUSE_BUTTON_RIGHT]:
@@ -4219,7 +4268,15 @@ func _sculpt_dab(a: Vector3, b: Vector3) -> void:
 		var mb := sculpt.to_world(b)
 		ma.z = 2.0 * z - ma.z
 		mb.z = 2.0 * z - mb.z
-		sculpt.form.stroke(_sculpt_op, sculpt.to_sample(ma), sculpt.to_sample(mb), _sculpt_r(), blend, part_sel + 1)
+		# The mirror image only where bricks could be laid: a plane far from the stroke
+		# threw it out of the area, where it was drawn, never converted, and lost.
+		var inside := ma.z >= 0.0 and mb.z >= 0.0 and ma.z < plate_studs * BrickPalette.STUD_M 				and mb.z < plate_studs * BrickPalette.STUD_M
+		if inside:
+			sculpt.form.stroke(_sculpt_op, sculpt.to_sample(ma), sculpt.to_sample(mb), _sculpt_r(), blend, part_sel + 1)
+		elif not _mirror_warned:
+			_mirror_warned = true
+			_show_sculpt_note(true, "The mirror plane is far from this stroke: its mirror image would be outside "
+					+ "the build area, so it is not drawn. Alt Shift S puts the plane where the ghost is.")
 	sculpt.remesh()
 	_sculpt_last = b
 
@@ -4349,6 +4406,7 @@ func _build_sculpt_box() -> void:
 		modes.add_item(m[1])
 	modes.focus_mode = Control.FOCUS_NONE
 	_sculpt_box.add_child(modes)
+	_sculpt_modes = modes
 	# Stamp: its shape and the grid snap; flatten and grow: their strength.
 	var shapes := OptionButton.new()
 	for m in SCULPT_SHAPES:
@@ -4384,9 +4442,8 @@ func _build_sculpt_box() -> void:
 		strength_label.visible = mode in ["flatten", "grow"]
 		strength.visible = mode in ["flatten", "grow"]
 	show_for.call(sculpt_mode)
-	modes.item_selected.connect(func(i: int) -> void:
-		sculpt_mode = SCULPT_MODES[i][0]
-		show_for.call(sculpt_mode))
+	_sculpt_show_for = show_for
+	modes.item_selected.connect(func(i: int) -> void: set_sculpt_mode(SCULPT_MODES[i][0]))
 	var places := OptionButton.new()
 	for m in SCULPT_PLACES:
 		places.add_item(m[1])
@@ -4588,6 +4645,25 @@ func sculpt_convert() -> void:
 	_set_down()
 	if sculpt_state == "bricks":
 		return
+	# Bricks can only be laid inside the build area. A block-out wholly outside it
+	# (drawn under the area, or mirrored across a plane far from it) would convert to
+	# nothing and vanish: say so and keep it instead.
+	var out := _cells_outside_area(sculpt.form.cells())
+	if out.x > 0 and out.x == out.y:
+		_show_sculpt_note(true, ("Nothing converted: all %d cells of the block-out are outside the build "
+				+ "area (below its floor, or past its edge). Move it in, or turn the mirror off if its "
+				+ "plane is far away (View > Mirror plane where the ghost is).") % out.y)
+		print("[sculpt] convert refused: %d of %d cells outside the build area" % [out.x, out.y])
+		return
+	if mirror_on and _mirror_misses(sculpt.form.cells(), int(ceilf(mirror_z))):
+		# Most of the mirror half would be outside the area: the plane is far from the
+		# drawing. Checked before anything is touched, so the block-out stays as it is.
+		_show_sculpt_note(true, ("Nothing converted: the mirror is on and its plane (%d studs across) is far "
+				+ "from the block-out, so its mirror half would be outside the build area. Put the plane "
+				+ "through the middle of the shape (Alt Shift S with the ghost there), or turn the mirror "
+				+ "off (Alt S).") % int(ceilf(mirror_z)))
+		print("[sculpt] convert refused: the mirror plane at %.1f is off the block-out" % mirror_z)
+		return
 	_begin_gather()
 	var was := _sculpt_state()
 	sculpt.form.begin_edit()
@@ -4622,6 +4698,19 @@ func sculpt_convert() -> void:
 			_show_sculpt_note(true, "The mirror was on a stud's middle: moved half a stud to a stud line, "
 					+ "so the two halves can be joined. Centre on mirror lines the model up with it.")
 		pz = int(roundf(mirror_z))
+		# The side that holds the drawing is the truth, near or far: a block-out drawn
+		# wholly past the plane used to be dropped whole and convert to nothing.
+		var near_n := 0
+		var far_n := 0
+		for c in label_of:
+			if c.z < pz:
+				near_n += 1
+			else:
+				far_n += 1
+		if far_n > near_n:
+			label_of = _flipped_z(label_of, pz)
+			zone = _flipped_z(zone, pz)
+			brick_at = _flipped_z(brick_at, pz)
 		_symmetric(label_of, pz)
 		_symmetric(zone, pz)
 		_symmetric(brick_at, pz)
@@ -4742,10 +4831,63 @@ func sculpt_convert() -> void:
 		shells[part] = {"sdf": true, "thick": 0.0, "res": 1, "tris": int(st.get("tris", SDF_PIECE_TRIS)),
 				"colour": col[0], "mat": col[1]}
 	sculpt_state = "bricks"
-	_sdf_cells = cells
+	# Only the cells that could become bricks: Edit as SDF takes a cell recorded here and
+	# not a brick now as deleted, and one outside the area never was a brick.
+	_sdf_cells = PackedInt32Array()
+	for i in range(0, cells.size(), 5):
+		if in_area(Vector3i(cells[i], cells[i + 1], cells[i + 2])):
+			_sdf_cells.append_array(cells.slice(i, i + 5))
 	_sculpt_finish(was, rec)
 	_models_out(mrec)
 	_end_gather()
+	if out.x > 0:
+		_show_sculpt_note(true, ("Converted, but %d of %d cells were outside the build area (below its "
+				+ "floor, or past its edge) and have no bricks.") % [out.x, out.y])
+		print("[sculpt] converted; %d of %d cells outside the build area left out" % [out.x, out.y])
+
+
+## Would most of a symmetric Convert's mirror half land outside the area? The side with
+## more cells is the truth (sculpt_convert); its image across `pz` is what is laid.
+func _mirror_misses(cells: PackedInt32Array, pz: int) -> bool:
+	var near_n := 0
+	var far_n := 0
+	var lost_near := 0
+	var lost_far := 0
+	for i in range(0, cells.size(), 5):
+		var c := Vector3i(cells[i], cells[i + 1], cells[i + 2])
+		var image := Vector3i(c.x, c.y, 2 * pz - 1 - c.z)
+		if c.z < pz:
+			near_n += 1
+			lost_near += int(not in_area(image))
+		else:
+			far_n += 1
+			lost_far += int(not in_area(image))
+	var lost := lost_far if far_n > near_n else lost_near
+	return lost * 2 > maxi(near_n, far_n)
+
+
+## Cells mirrored across the stud line `pz` (the far side's become the near side's).
+static func _flipped_z(cells: Dictionary, pz: int) -> Dictionary:
+	var out := {}
+	for c in cells:
+		out[Vector3i(c.x, c.y, 2 * pz - 1 - c.z)] = cells[c]
+	return out
+
+
+## Is a cell of the upright grid inside the build area, where a brick can be laid?
+func in_area(c: Vector3i) -> bool:
+	return c.x >= 0 and c.z >= 0 and c.y >= 0 and c.x < plate_studs and c.z < plate_studs 			and c.y < height_plates
+
+
+## Of the field's cells (SdfForm.cells: five ints each), how many are outside the build
+## area, and how many there are: Vector2i(outside, all).
+func _cells_outside_area(cells: PackedInt32Array) -> Vector2i:
+	var n := 0
+	for i in range(0, cells.size(), 5):
+		if not in_area(Vector3i(cells[i], cells[i + 1], cells[i + 2])):
+			n += 1
+	@warning_ignore("integer_division")
+	return Vector2i(n, cells.size() / 5)
 
 
 ## A packed brick laid by Convert, noted for its part's piece; `mirror`: and again across
@@ -10134,6 +10276,23 @@ func _restore_models(list: Array) -> void:
 	_refresh_model_list()
 
 
+## The sculpt mode. The gizmo belongs to "pick and move" alone: shown there for what is
+## picked, hidden in every drawing mode, so a click near it draws rather than grabbing it
+## (and a click on it never draws). The pick is kept across modes.
+func set_sculpt_mode(m: String) -> void:
+	sculpt_mode = m
+	if _sculpt_modes != null:
+		for i in SCULPT_MODES.size():
+			if SCULPT_MODES[i][0] == m:
+				_sculpt_modes.select(i)
+	if _sculpt_show_for.is_valid():
+		_sculpt_show_for.call(m)
+	if m == "models" and not _placed.is_empty():
+		_show_gizmo()
+	else:
+		_hide_gizmo()
+
+
 ## Pick `m` (a model, a lifted part or a guide: Docs/AssetWorkshop.md, "Pick and move"), or
 ## null for nothing. A lifted part picked away from is put down (one undo).
 func select_model(m: Variant) -> void:
@@ -10150,6 +10309,9 @@ func select_model(m: Variant) -> void:
 		_hide_gizmo()
 		_show_sculpt_note()
 	else:
+		# Picking something is moving it: into "pick and move", where the gizmo is.
+		if sculpt_mode != "models":
+			set_sculpt_mode("models")
 		_show_gizmo()
 		_show_placed_note()
 	_refresh_model_list()
@@ -10374,6 +10536,9 @@ func _placed_centre() -> Vector3:
 
 
 func _show_gizmo() -> void:
+	if sculpt_mode != "models":
+		_hide_gizmo()   # drawing: no gizmo to catch a click (set_sculpt_mode)
+		return
 	if _gizmo == null:
 		_gizmo = ModelGizmo.new()
 		add_child(_gizmo)
