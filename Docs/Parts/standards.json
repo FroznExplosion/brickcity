@@ -520,5 +520,237 @@
       }
     }
   },
-  "gun_sights_note": "A sight is a single piece pressed on a rail, like one brick. A body may instead have its sights moulded in and no sight socket."
+  "gun_sights_note": "A sight is a single piece pressed on a rail, like one brick. A body may instead have its sights moulded in and no sight socket.",
+  "mech_interfaces": {
+    "note": "Where a mech part mounts (Docs/ModularParts.md section 4). One pin size for every class (joints.md section 2): any part of a slot fits any chassis.",
+    "mech.neck": {
+      "slot": "head",
+      "joint": "neck",
+      "connector": "AXLE"
+    },
+    "mech.shoulder": {
+      "slot": "arm",
+      "joint": "shoulder",
+      "connector": "AXLE"
+    },
+    "mech.wrist": {
+      "slot": "hand",
+      "joint": "wrist",
+      "connector": "AXLE"
+    },
+    "mech.hip": {
+      "slot": "leg",
+      "joint": "hip",
+      "connector": "KNUCKLE, double",
+      "params": [
+        "length"
+      ]
+    },
+    "mech.pod": {
+      "slot": "pod",
+      "joint": "none",
+      "connector": "stud grid",
+      "shape": "a pod's foot on the chassis's top studs"
+    }
+  },
+  "figure_interfaces": {
+    "note": "Where a figure part mounts (joints.md section 4). One figure size: every torso takes every head, arm and leg.",
+    "fig.neck": {
+      "slot": "head",
+      "joint": "neck",
+      "connector": "AXLE"
+    },
+    "fig.shoulder": {
+      "slot": "arm",
+      "joint": "shoulder",
+      "connector": "AXLE"
+    },
+    "fig.wrist": {
+      "slot": "hand",
+      "joint": "wrist",
+      "connector": "AXLE"
+    },
+    "fig.hip": {
+      "slot": "leg",
+      "joint": "hip",
+      "connector": "KNUCKLE"
+    },
+    "fig.hat": {
+      "slot": "hat",
+      "joint": "none",
+      "connector": "stud grid",
+      "shape": "the studs on top of a head"
+    }
+  },
+  "mgun_interfaces": {
+    "note": "A mech gun's interfaces: the gun_interfaces' shapes at mech scale, on the nano grid (ModularParts section 5). Never join a held gun's.",
+    "mgun.barrel.collar": {
+      "slot": "barrel"
+    },
+    "mgun.stock.tube": {
+      "slot": "stock"
+    },
+    "mgun.grip.pin": {
+      "slot": "grip"
+    },
+    "mgun.mag.narrow": {
+      "slot": "magazine"
+    },
+    "mgun.mag.wide": {
+      "slot": "magazine"
+    },
+    "mgun.muzzle.pin": {
+      "slot": "muzzle"
+    },
+    "mgun.rail": {
+      "slot": "sight"
+    },
+    "mgun.guard.bar": {
+      "slot": "underbarrel"
+    }
+  },
+  "body_plans": {
+    "note": "What a whole build is made of (ModularParts sections 4, 5, 10): its root slot, and each socket path, the slot it takes, its side, whether it must be filled. A path is the host's path, '/', the socket's name; the root's sockets have bare names. `same` lists paths whose parts must share a mount param.",
+    "mech": {
+      "root": "chassis",
+      "sockets": {
+        "neck": {
+          "slot": "head",
+          "required": true
+        },
+        "arm_L": {
+          "slot": "arm",
+          "side": "L",
+          "required": true
+        },
+        "arm_R": {
+          "slot": "arm",
+          "side": "R",
+          "required": true
+        },
+        "arm_L/hand": {
+          "slot": "hand",
+          "side": "L",
+          "required": true
+        },
+        "arm_R/hand": {
+          "slot": "hand",
+          "side": "R",
+          "required": true
+        },
+        "leg_L": {
+          "slot": "leg",
+          "side": "L",
+          "required": true
+        },
+        "leg_R": {
+          "slot": "leg",
+          "side": "R",
+          "required": true
+        },
+        "pod_L": {
+          "slot": "pod",
+          "side": "L",
+          "required": false
+        },
+        "pod_R": {
+          "slot": "pod",
+          "side": "R",
+          "required": false
+        }
+      },
+      "same": [
+        {
+          "paths": [
+            "leg_L",
+            "leg_R"
+          ],
+          "param": "length"
+        }
+      ],
+      "leg_lengths": [
+        1,
+        2,
+        3
+      ]
+    },
+    "figure": {
+      "root": "torso",
+      "sockets": {
+        "neck": {
+          "slot": "head",
+          "required": true
+        },
+        "neck/hat": {
+          "slot": "hat",
+          "required": false
+        },
+        "arm_L": {
+          "slot": "arm",
+          "side": "L",
+          "required": true
+        },
+        "arm_R": {
+          "slot": "arm",
+          "side": "R",
+          "required": true
+        },
+        "arm_L/hand": {
+          "slot": "hand",
+          "side": "L",
+          "required": true
+        },
+        "arm_R/hand": {
+          "slot": "hand",
+          "side": "R",
+          "required": true
+        },
+        "leg_L": {
+          "slot": "leg",
+          "side": "L",
+          "required": true
+        },
+        "leg_R": {
+          "slot": "leg",
+          "side": "R",
+          "required": true
+        }
+      },
+      "same": []
+    },
+    "gun": {
+      "root": "body",
+      "sockets": {
+        "barrel": {
+          "slot": "barrel",
+          "required": true
+        },
+        "grip": {
+          "slot": "grip",
+          "required": true
+        },
+        "magazine": {
+          "slot": "magazine",
+          "required": true
+        },
+        "stock": {
+          "slot": "stock",
+          "required": false
+        },
+        "sight": {
+          "slot": "sight",
+          "required": false
+        },
+        "barrel/muzzle": {
+          "slot": "muzzle",
+          "required": false
+        },
+        "barrel/underbarrel": {
+          "slot": "underbarrel",
+          "required": false
+        }
+      },
+      "same": []
+    }
+  }
 }
