@@ -1464,3 +1464,10 @@ boxes: the brick trees' densities). `planet_tree_probe` 10/10; its two frame-tim
 open and another chat's windowed pass running; judge them on a quiet machine. Shots
 (`tools/planet_tree_shot.gd`, not headless): bricks at 20 m, cards at 90 m, all upright to local
 up. The walker gate 9/9, squad 10/10, pawn 12/12 with them.
+
+**Timed on a quiet machine (2026-10-24, editor closed, no other runs):** `planet_tree_probe`
+twice -- filling round the spawn 6.4 / 5.8 ms worst a frame (aim 8), 3 s at 500 m/s 40 m up
+8.8 / 11.5 ms (aim 12). Windowed walker gate A/B, frames over 40 ms: without trees 10, with
+them 16; the six extra are all at the spawn while it loads (43-247 ms; worst frame 680 vs 549 ms,
+the scene's own load) -- the four variants' card bakes and first draws; from there on the two
+runs match. Next: bake the cards while the spawn is still loading (before the walker is let go).
