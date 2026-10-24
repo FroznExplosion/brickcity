@@ -10,6 +10,7 @@ const TABLES := ["gun_interfaces", "mgun_interfaces", "mech_interfaces", "figure
 
 static var _interfaces: Dictionary = {}
 static var _plans: Dictionary = {}
+static var _version := 0
 static var _loaded := false
 
 
@@ -21,6 +22,7 @@ static func _load() -> void:
 	if not d is Dictionary:
 		push_error("PartStandards: cannot read %s" % PATH)
 		return
+	_version = int(d.get("version", 0))
 	for t in TABLES:
 		for k in (d.get(t, {}) as Dictionary):
 			if k != "note":
@@ -28,6 +30,12 @@ static func _load() -> void:
 	for k in (d.get("body_plans", {}) as Dictionary):
 		if k != "note":
 			_plans[k] = d.body_plans[k]
+
+
+## standards.json's version: a part package says which it was made against.
+static func version() -> int:
+	_load()
+	return _version
 
 
 ## The interface's entry ({slot, connector ...}), or {} if there is no such interface.
