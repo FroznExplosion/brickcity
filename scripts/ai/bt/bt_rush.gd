@@ -25,7 +25,7 @@ func _tick(_delta: float) -> Status:
 		at = c.pawn.feet()
 	so.state = "rush"
 	so.fire_ok = c.visible
-	so.look_at_point(at + Vector3.UP * 1.2)
+	so.look_at_point(at + Gravity.up_at(at) * 1.2)
 	var feet := so.pawn.feet()
 	if Vector2(at.x - feet.x, at.z - feet.z).length() <= CLOSE:
 		so.stop()

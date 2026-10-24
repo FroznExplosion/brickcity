@@ -51,7 +51,7 @@ static func marked(s: AIServices, from: Vector3, threat_eye: Vector3) -> Diction
 	var rated := 0
 	for p: Vector3 in s.marks.call(from, BuildingMarks.REACH, "cover"):
 		# The ring's own rule: cover on the floor the soldier is on.
-		if absf(p.y - from.y) > 1.0:
+		if absf(Gravity.vert(p - from, Gravity.up_at(from))) > 1.0:
 			continue
 		if rated >= BuildingMarks.MAX_RATED:
 			break
@@ -155,4 +155,4 @@ static func rate(s: AIServices, p: Vector3, threat_eye: Vector3) -> Dictionary:
 ## watches, and leaves before it runs out.
 static func life_at(s: AIServices, p: Vector3, threat_eye: Vector3) -> float:
 	var chest := STAND_CHEST if s.ai_nav.get_stand_only() else CROUCH_CHEST
-	return s.ai_world.cover_seconds(threat_eye, p + Vector3.UP * chest, THREAT_HP, THREAT_RATE)
+	return s.ai_world.cover_seconds(threat_eye, p + Gravity.up_at(p) * chest, THREAT_HP, THREAT_RATE)

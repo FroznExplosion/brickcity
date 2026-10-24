@@ -17,7 +17,7 @@ func _tick(_delta: float) -> Status:
 		return FAILURE
 	so.state = "going to help"
 	so.fire_ok = false
-	so.look_at_point(so.help_point + Vector3.UP * 1.2)
+	so.look_at_point(so.help_point + Gravity.up_at(so.help_point) * 1.2)
 	var r := so.move_to(so.help_point, true)
 	if r != 0 or so.pawn.feet().distance_to(so.help_point) < THERE \
 			or so.stuck >= Soldier.MAX_STUCK:

@@ -25,8 +25,9 @@ func _tick(_delta: float) -> Status:
 	var feet := so.pawn.feet()
 	so.state = "bomber"
 	so.fire_ok = false
-	so.look_at_point(at + Vector3.UP * 1.2)
-	if Vector2(at.x - feet.x, at.z - feet.z).length() <= Soldier.DETONATE_REACH and absf(at.y - feet.y) < 2.0:
+	so.look_at_point(at + Gravity.up_at(at) * 1.2)
+	var up := Gravity.up_at(feet)
+	if Gravity.flat(at - feet, up).length() <= Soldier.DETONATE_REACH and absf(Gravity.vert(at - feet, up)) < 2.0:
 		so.light_fuse()
 	var to := so.approach_point(at, 0.8)
 	if to == Vector3.INF:

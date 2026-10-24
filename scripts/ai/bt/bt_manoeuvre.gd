@@ -43,7 +43,7 @@ func _tick(_delta: float) -> Status:
 	else:
 		so.state = "push" if push else "flank"
 	so.fire_ok = c.visible
-	so.look_at_point(c.pos + Vector3.UP * 1.2)
+	so.look_at_point(c.pos + Gravity.up_at(c.pos) * 1.2)
 	if _to == Vector3.INF:
 		if heavy != null:
 			_to = screen_point(so, heavy.call(&"feet"), c.pos, so.screen_move == "screen_heavy")
@@ -86,7 +86,7 @@ static func screen_point(so: Soldier, at: Vector3, threat: Vector3, flank: bool)
 			var want: Vector3 = at + side * k * out + (u * SCREEN_AHEAD if flank else -u * (LEE_BACK + step))
 			var p := s.ai_nav.snap(want)
 			if s.ai_nav.can_stand(p) and Vector2(p.x - want.x, p.z - want.z).length() < 2.0 \
-					and not s.ai_world.in_danger(p + Vector3.UP * 0.9) and not s.in_lane(so.team, p):
+					and not s.ai_world.in_danger(p + Gravity.up_at(p) * 0.9) and not s.in_lane(so.team, p):
 				return p
 	return Vector3.INF
 
@@ -102,7 +102,9 @@ func _push_point(so: Soldier, feet: Vector3, enemy: Vector3) -> Vector3:
 
 func _flank_point(so: Soldier, feet: Vector3, enemy: Vector3) -> Vector3:
 	var s := so.services
-	var from := Vector3(feet.x - enemy.x, 0.0, feet.z - enemy.z)
+	# Angles in the ground's plane at the enemy (identity off a planet).
+	var tb := Gravity.tangent_basis(enemy)
+	var from := tb.transposed() * Gravity.flat(feet - enemy, tb.y)
 	var d := clampf(from.length(), FLANK_RANGE[0], FLANK_RANGE[1])
 	var a0 := atan2(from.z, from.x)
 	# Either side, the nearer-to-free one first: fewer friends already there.
@@ -110,10 +112,10 @@ func _flank_point(so: Soldier, feet: Vector3, enemy: Vector3) -> Vector3:
 	for side in sides:
 		for turn in [PI * 0.5, PI * 0.35]:
 			var a: float = a0 + side * turn
-			var want := Vector3(enemy.x + cos(a) * d, feet.y, enemy.z + sin(a) * d)
+			var want := Gravity.lift_to(enemy + tb * Vector3(cos(a) * d, 0.0, sin(a) * d), Gravity.height_of(feet))
 			var p := s.ai_nav.snap(want)
-			if s.ai_nav.can_stand(p) and Vector2(p.x - want.x, p.z - want.z).length() < 2.5 \
-					and not s.ai_world.in_danger(p + Vector3.UP * 0.9) and not s.near_lane(so.team, p):
+			if s.ai_nav.can_stand(p) and Gravity.flat(p - want, tb.y).length() < 2.5 \
+					and not s.ai_world.in_danger(p + Gravity.up_at(p) * 0.9) and not s.near_lane(so.team, p):
 				return p
 	return Vector3.INF
 

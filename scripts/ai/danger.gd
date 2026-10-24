@@ -15,9 +15,11 @@ static func of_piece(islands: IslandManager, isl: BrickIsland) -> AABB:
 	var g := Gravity.strength() \
 			* isl.body.gravity_scale
 	var ahead := box
-	ahead.position += v * HORIZON + Vector3.DOWN * 0.5 * g * HORIZON * HORIZON
+	ahead.position += v * HORIZON + Gravity.down_at(box.get_center()) * 0.5 * g * HORIZON * HORIZON
 	# It stops at the ground; what matters is the column it comes down through.
-	ahead.position.y = maxf(ahead.position.y, minf(box.position.y, 0.0))
+	# (The flat game's ground plane; on a planet the box runs on through it.)
+	if Gravity.planet == null:
+		ahead.position.y = maxf(ahead.position.y, minf(box.position.y, 0.0))
 	return box.merge(ahead).grow(MARGIN)
 
 

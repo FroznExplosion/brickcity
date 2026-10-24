@@ -53,8 +53,8 @@ func _tick(_delta: float) -> Status:
 static func covered(s: AIServices, feet: Vector3) -> bool:
 	if s.world3d == null:
 		return false
-	var from := feet + Vector3.UP * (Pawn.BODY_HEIGHT + 0.05)
-	var q := PhysicsRayQueryParameters3D.create(from, from + Vector3.UP * ROOF_WITHIN)
+	var from := feet + Gravity.up_at(feet) * (Pawn.BODY_HEIGHT + 0.05)
+	var q := PhysicsRayQueryParameters3D.create(from, from + Gravity.up_at(from) * ROOF_WITHIN)
 	q.collision_mask = Layers.STRUCTURE | Layers.DEBRIS
 	return not s.world3d.direct_space_state.intersect_ray(q).is_empty()
 
@@ -63,13 +63,14 @@ static func covered(s: AIServices, feet: Vector3) -> bool:
 ## first, the same order every time.
 func _find(so: Soldier, feet: Vector3) -> Vector3:
 	var s := so.services
+	var tb := Gravity.tangent_basis(feet)
 	for r in REACH:
 		for k in 16:
 			var a := TAU * k / 16.0
-			var p := s.ai_nav.snap(feet + Vector3(cos(a), 0.0, sin(a)) * float(r))
-			if not s.ai_nav.can_stand(p) or absf(p.y - feet.y) > 3.0:
+			var p := s.ai_nav.snap(feet + tb * Vector3(cos(a), 0.0, sin(a)) * float(r))
+			if not s.ai_nav.can_stand(p) or absf(Gravity.vert(p - feet, tb.y)) > 3.0:
 				continue
-			if covered(s, p) and not s.ai_world.in_danger(p + Vector3.UP * 0.9):
+			if covered(s, p) and not s.ai_world.in_danger(p + Gravity.up_at(p) * 0.9):
 				return p
 	return Vector3.INF
 

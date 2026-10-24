@@ -150,7 +150,7 @@ func _view(l: Listener, world3d: World3D, ai_world: AIWorld) -> void:
 		return
 	var ear := l.camera.global_position
 	for line in live:
-		var head := line.speaker.eye.global_position + Vector3.UP * 0.3
+		var head := line.speaker.eye.global_position + Gravity.up_at(line.speaker.eye.global_position) * 0.3
 		if ear.distance_to(head) > line.range_m:
 			continue
 		var v := View.new()

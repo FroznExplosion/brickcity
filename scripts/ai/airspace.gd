@@ -77,10 +77,12 @@ func separation(f: Object, p: Vector3) -> Vector3:
 	for b in services.pawns:
 		if not is_instance_valid(b) or b.stand_height < 2.5 or b.health == null or b.health.is_dead():
 			continue
-		var top := b.feet().y + b.stand_height
-		var flat := Vector2(p.x - b.feet().x, p.z - b.feet().z).length()
-		if flat < 4.0 and p.y < top + OVER_TALL:
-			push.y += (top + OVER_TALL - p.y) * 2.0
+		var up := Gravity.up_at(b.feet())
+		var top := Gravity.height_of(b.feet()) + b.stand_height
+		var flat := Gravity.flat(p - b.feet(), up).length()
+		var h := Gravity.height_of(p)
+		if flat < 4.0 and h < top + OVER_TALL:
+			push += up * ((top + OVER_TALL - h) * 2.0)
 	return push
 
 
@@ -89,7 +91,7 @@ func separation(f: Object, p: Vector3) -> Vector3:
 func claim_pad(owner: Object, at: Vector3, radius: float) -> int:
 	for id in pads:
 		var o: Dictionary = pads[id]
-		if Vector2(at.x - o.at.x, at.z - o.at.z).length() < radius + float(o.radius):
+		if Gravity.flat(at - (o.at as Vector3), Gravity.up_at(at)).length() < radius + float(o.radius):
 			return -1
 	var id := PAD_ID_BASE + _next_pad
 	_next_pad += 1
@@ -116,13 +118,15 @@ func pad_clear(id: int) -> bool:
 		if not is_instance_valid(b) or b.health == null or b.health.is_dead() or b.has_meta(&"in_vehicle"):
 			continue
 		var f := b.feet()
-		if Vector2(f.x - at.x, f.z - at.z).length() < r + 0.5 and absf(f.y - at.y) < 3.0:
+		var up := Gravity.up_at(at)
+		if Gravity.flat(f - at, up).length() < r + 0.5 and absf(Gravity.vert(f - at, up)) < 3.0:
 			return false
 	for o in flyers:
 		if o == pad.owner or not is_instance_valid(o) or o.is_dead():
 			continue
 		var q: Vector3 = o.body.global_position
-		if Vector2(q.x - at.x, q.z - at.z).length() < r and q.y < at.y + PAD_HEIGHT:
+		if Gravity.flat(q - at, Gravity.up_at(at)).length() < r \
+				and Gravity.height_of(q) < Gravity.height_of(at) + PAD_HEIGHT:
 			return false
 	return true
 

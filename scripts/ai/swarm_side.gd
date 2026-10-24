@@ -124,7 +124,7 @@ func _promote() -> void:
 		while n < PROMOTE_PER_TICK:
 			if node_room.is_valid() and int(node_room.call()) <= 0:
 				return
-			var h := core.query_cone_handle(p.feet() + Vector3.UP * 0.8, Vector3.FORWARD, PI,
+			var h := core.query_cone_handle(p.feet() + Gravity.up_at(p.feet()) * 0.8, Vector3.FORWARD, PI,
 					PROMOTE_RANGE)
 			if h < 0 or not core.is_handle_live(h):
 				break

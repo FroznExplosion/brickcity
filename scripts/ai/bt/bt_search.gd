@@ -22,7 +22,7 @@ func _tick(_delta: float) -> Status:
 	so.state = "search"
 	var now := so.services.now()
 	if _arrived_at < 0.0:
-		so.look_at_point(c.pos + Vector3.UP * 1.2)
+		so.look_at_point(c.pos + Gravity.up_at(c.pos) * 1.2)
 		var r := so.move_to(c.pos)
 		if r == 1 or so.pawn.feet().distance_to(c.pos) < 1.2:
 			_arrived_at = now

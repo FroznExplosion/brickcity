@@ -46,13 +46,13 @@ func request(at: Vector3, caller: Pawn = null, kind := "") -> AirStrike:
 		kind = "bombs" if _covered(at) else "strafe"
 	var dir := Vector3.FORWARD
 	if caller != null and is_instance_valid(caller):
-		var to := at - caller.feet()
-		to.y = 0.0
+		var up := Gravity.up_at(at)
+		var to := Gravity.flat(at - caller.feet(), up)
 		if to.length() > 1.0:
-			dir = to.normalized().cross(Vector3.UP)
+			dir = to.normalized().cross(up)
 	else:
 		var a := services.rng.randf() * TAU
-		dir = Vector3(cos(a), 0.0, sin(a))
+		dir = Gravity.tangent_basis(at) * Vector3(cos(a), 0.0, sin(a))
 	current = AirStrike.launch(services, parent, at, dir, kind, team, caller)
 	ready_at = services.now() + COOLDOWN
 	runs += 1
@@ -65,4 +65,5 @@ func request(at: Vector3, caller: Pawn = null, kind := "") -> AirStrike:
 
 func _covered(at: Vector3) -> bool:
 	var w := services.ai_world
-	return not w.line_clear(at + Vector3.UP * 1.0, at + Vector3.UP * 30.0)
+	var up := Gravity.up_at(at)
+	return not w.line_clear(at + up * 1.0, at + up * 30.0)

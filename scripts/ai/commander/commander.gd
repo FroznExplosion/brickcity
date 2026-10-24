@@ -476,11 +476,10 @@ func _off_lane(q: Squad, f: Vector3, ahead_only := false) -> float:
 		for m in q.alive():
 			feet_of.append(m.pawn.feet())
 	for at in feet_of:
-		var rel := at - p.feet()
-		rel.y = 0.0
+		var rel := Gravity.flat(at - p.feet(), p.up)
 		var along := rel.dot(u)
 		if along < length and (along > 0.0 or not ahead_only):
-			least = minf(least, absf(rel.dot(Vector3(-u.z, 0.0, u.x))))
+			least = minf(least, absf(rel.dot(u.cross(p.up))))
 	return least
 
 

@@ -205,7 +205,8 @@ func _face(so: Soldier, yaw: float, seen: bool) -> void:
 
 func _far(so: Soldier, p: Vector3, r: float) -> bool:
 	var f := so.pawn.feet()
-	return Vector2(f.x - p.x, f.z - p.z).length() > r or absf(f.y - p.y) > 1.2
+	var up := Gravity.up_at(p)
+	return Gravity.flat(f - p, up).length() > r or absf(Gravity.vert(f - p, up)) > 1.2
 
 
 func _exit() -> void:

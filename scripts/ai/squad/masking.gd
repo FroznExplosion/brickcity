@@ -28,7 +28,7 @@ static func why(s: AIServices, mover: Pawn, c: FactionKnowledge.Contact) -> Stri
 	var t: Pawn = c.pawn if c.pawn != null and is_instance_valid(c.pawn) else null
 	if t != null and s.is_suppressed(t):
 		return SUPPRESSED
-	var eye := t.eye.global_position if t != null else c.pos + Vector3.UP * CoverSearch.STAND_EYE
+	var eye := t.eye.global_position if t != null else c.pos + Gravity.up_at(c.pos) * CoverSearch.STAND_EYE
 	var chest := mover.chest()
 	if s.ai_world.bricks_between(eye, chest) > 0 or s.ai_world.smoke_blocks(eye, chest):
 		return OCCLUDED
