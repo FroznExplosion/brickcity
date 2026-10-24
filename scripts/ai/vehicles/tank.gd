@@ -212,7 +212,8 @@ static func make(s: AIServices, parent: Node, feet: Vector3, p_yaw: float, p_tea
 	t.main_gun.fired.connect(func(_i: Dictionary) -> void: t.shells += 1)
 	t.rodeo = VehicleDeck.attach(t, RIDE_SPOTS, BOARD_SPOT, Vector2(HULL.x * 0.5, HULL.z * 0.5))
 	parent.add_child(t)
-	t.global_position = feet + Vector3.UP * HEIGHT * 0.5
+	t.up = Gravity.up_at(feet)
+	t.global_position = feet + t.up * HEIGHT * 0.5
 	t.yaw = p_yaw
 	t.rotation.y = p_yaw
 	t.reset_physics_interpolation()
@@ -268,11 +269,11 @@ func make_target() -> Pawn:
 
 
 func feet() -> Vector3:
-	return global_position - Vector3.UP * HEIGHT * 0.5
+	return global_position - up * HEIGHT * 0.5
 
 
 func forward() -> Vector3:
-	return -Basis(Vector3.UP, yaw).z
+	return -_yb().z
 
 
 func is_wrecked() -> bool:
@@ -350,7 +351,7 @@ static func _alive(p: Variant) -> bool:
 
 ## Where a crewman stands to get in: beside the hull on its left, at the hatch.
 func mount_point() -> Vector3:
-	var b := Basis(Vector3.UP, yaw)
+	var b := _yb()
 	var at := feet() - b.x * (HULL.x * 0.5 + 0.9) + b.z * 0.8
 	if services != null and services.ai_nav != null:
 		var snapped := services.ai_nav.snap(at)
@@ -362,12 +363,12 @@ func mount_point() -> Vector3:
 func can_reach(p: Pawn) -> bool:
 	var f := p.feet()
 	var mp := mount_point()
-	if Vector2(f.x - mp.x, f.z - mp.z).length() <= MOUNT_REACH and absf(f.y - mp.y) < 1.5:
+	if Gravity.flat(f - mp, up).length() <= MOUNT_REACH and absf(Gravity.vert(f - mp, up)) < 1.5:
 		return true
 	# Or anywhere along its side: a tank is long.
-	var local := Basis(Vector3.UP, yaw).inverse() * (f - feet())
+	var local := _yb().inverse() * (f - feet())
 	return absf(local.x) < HULL.x * 0.5 + MOUNT_REACH and absf(local.z) < HULL.z * 0.5 \
-			and absf(f.y - feet().y) < 1.5
+			and absf(Gravity.vert(f - feet(), up)) < 1.5
 
 
 ## `p` takes `seat` -- from beside the hull, or `anywhere` for a crewman fielded
@@ -433,7 +434,7 @@ func _quiet() -> void:
 ## Everybody out, at the hatch; `hurt` for climbing out of a wreck.
 func crew_get_out(hurt := 0.0) -> Array[Pawn]:
 	var out: Array[Pawn] = []
-	var b := Basis(Vector3.UP, yaw)
+	var b := _yb()
 	var i := 0
 	for s in crew:
 		var p = crew[s]
@@ -494,7 +495,7 @@ func _stow(p: Pawn) -> void:
 	p.body.collision_mask = 0
 	p.body.visible = false
 	p.intents.clear()
-	p.place(feet() + Vector3.UP * 1.0)
+	p.place(feet() + up * 1.0)
 	p.body.process_mode = Node.PROCESS_MODE_DISABLED
 	p.set_meta(&"in_vehicle", self)
 
@@ -559,7 +560,7 @@ func _cook_off() -> void:
 	bail_hurt = COOK_OFF_HURT
 	var at := turret.global_position
 	if on_crush.is_valid():
-		on_crush.call(at, Vector3.DOWN, {"blast": true, "radius": 3.0, "hp": 0})
+		on_crush.call(at, -up, {"blast": true, "radius": 3.0, "hp": 0})
 	if services != null:
 		for p: Pawn in services.pawns.duplicate():
 			if not is_instance_valid(p) or p == pawn or p.health == null or p.health.is_dead():
@@ -584,7 +585,7 @@ func _cook_off() -> void:
 	get_parent().add_child(lid)
 	lid.global_transform = turret.global_transform
 	turret.reparent(lid)
-	lid.linear_velocity = velocity + Vector3.UP * 9.0 + forward().rotated(Vector3.UP, 2.0) * 2.0
+	lid.linear_velocity = velocity + up * 9.0 + forward().rotated(up, 2.0) * 2.0
 	lid.angular_velocity = Vector3(2.5, 1.5, -1.0)
 	_smoke_from(Vector3(0.0, -HEIGHT * 0.5 + RING_Y, 0.4))
 
@@ -611,34 +612,70 @@ func _on_wrecked() -> void:
 	wrecked.emit(self)
 
 
+# --- the frame (Docs/Planets.md 11.7) -------------------------------------------------
+#
+# On a planet the hull's yaw is measured in a tangent frame carried along the
+# curve, and its basis is that frame turned by the yaw. In the flat game the
+# frame is the identity and every line below takes the path it always took.
+
+var frame := Basis.IDENTITY
+var up := Vector3.UP
+
+
+## The world basis of a yaw in the frame.
+func _yb(y: float = NAN) -> Basis:
+	var b := Basis(Vector3.UP, yaw if is_nan(y) else y)
+	return b if frame == Basis.IDENTITY else frame * b
+
+
+## A world vector in the frame (itself off a planet).
+func _local(v: Vector3) -> Vector3:
+	return v if frame == Basis.IDENTITY else frame.inverse() * v
+
+
 # --- the tick -----------------------------------------------------------------------
 
 func _physics_process(delta: float) -> void:
 	_clock += delta
+	up = Gravity.up_at(global_position)
+	if Gravity.planet != null:
+		frame = Gravity.carry(frame, up)
+		up_direction = up
 	if cover != null:
-		cover.update(self, feet() + Vector3.UP * RING_Y * 0.5)
+		cover.update(self, feet() + up * RING_Y * 0.5)
 	if not is_on_floor():
 		velocity += Gravity.down_at(global_position) * GRAVITY * delta
 	else:
-		velocity.y = maxf(velocity.y, 0.0)
+		var vv := Gravity.vert(velocity, up)
+		if Gravity.planet != null and vv <= Gravity.floor_rise():
+			vv = Gravity.standing_vert()
+		velocity = Gravity.with_vert(velocity, up, maxf(vv, 0.0) if Gravity.planet == null else vv)
 	var go := throttle if driven() and can_drive() else 0.0
 	var turn := steer if driven() and can_turn() else 0.0
 	var rate := TURN if can_drive() else TURN * ONE_TRACK_TURN
 	yaw = wrapf(yaw + clampf(turn, -1.0, 1.0) * rate * delta, -PI, PI)
-	rotation.y = yaw
 	var speed := go * (DRIVE if go > 0.0 else BACK)
 	var fwd := forward()
-	velocity.x = move_toward(velocity.x, fwd.x * speed, DRIVE * delta * 2.0)
-	velocity.z = move_toward(velocity.z, fwd.z * speed, DRIVE * delta * 2.0)
+	if frame == Basis.IDENTITY:
+		rotation.y = yaw
+		velocity.x = move_toward(velocity.x, fwd.x * speed, DRIVE * delta * 2.0)
+		velocity.z = move_toward(velocity.z, fwd.z * speed, DRIVE * delta * 2.0)
+	else:
+		global_transform.basis = _yb()
+		var lv := _local(velocity)
+		var lf := _local(fwd)
+		lv.x = move_toward(lv.x, lf.x * speed, DRIVE * delta * 2.0)
+		lv.z = move_toward(lv.z, lf.z * speed, DRIVE * delta * 2.0)
+		velocity = frame * lv
 	move_and_slide()
 	if driven():
 		splats += Splatter.run_down(services, self, team, feet(), fwd, Vector2(HULL.x * 0.5, HULL.z * 0.5),
-				Vector2(velocity.x, velocity.z).dot(Vector2(fwd.x, fwd.z)), _splat_last)
+				Gravity.flat(velocity, up).dot(fwd), _splat_last)
 	# A kerb: pressed against something, on the ground, going nowhere -- the
 	# tracks climb it (KERB_POP is about half a metre).
 	if absf(go) > 0.1 and is_on_floor() and is_on_wall() \
-			and Vector2(velocity.x, velocity.z).length() < absf(speed) * 0.3:
-		velocity.y = KERB_POP
+			and Gravity.flat(velocity, up).length() < absf(speed) * 0.3:
+		velocity = Gravity.with_vert(velocity, up, KERB_POP)
 	_crush(go)
 	_turn_turret(delta)
 	_guns()
@@ -653,7 +690,7 @@ func _crush(go: float) -> void:
 	if absf(go) < 0.1 or _clock < _crush_at or not on_crush.is_valid() or not is_inside_tree() 			or not is_on_wall():
 		return
 	var nose := forward() * signf(go)
-	var b := Basis(Vector3.UP, yaw)
+	var b := _yb()
 	var ahead := HULL.z * 0.5 + 0.35
 	var front := feet() + nose * ahead
 	if not _front_has(front, 0.2, CRUSH_HEIGHT) or _front_has(front, CRUSH_HEIGHT + 0.15, HEIGHT - 0.15):
@@ -666,7 +703,7 @@ func _crush(go: float) -> void:
 	for i in 6:
 		var x := lerpf(-HULL.x * 0.5 - 0.05, HULL.x * 0.5 + 0.05, float(i) / 5.0)
 		for y in [0.45, 1.0]:
-			on_crush.call(at + b.x * x + Vector3.UP * y, nose,
+			on_crush.call(at + b.x * x + up * y, nose,
 					{"blast": false, "radius": 0.55, "hp": CRUSH_HP})
 
 
@@ -677,7 +714,7 @@ func _front_has(front: Vector3, y0: float, y1: float) -> bool:
 	var box := BoxShape3D.new()
 	box.size = Vector3(HULL.x + 0.1, y1 - y0, 0.7)
 	q.shape = box
-	q.transform = Transform3D(Basis(Vector3.UP, yaw), front + Vector3.UP * (y0 + y1) * 0.5)
+	q.transform = Transform3D(_yb(), front + up * (y0 + y1) * 0.5)
 	q.collision_mask = Layers.STRUCTURE | Layers.DEBRIS
 	q.exclude = [get_rid()]
 	return not get_world_3d().direct_space_state.intersect_shape(q, 1).is_empty()
@@ -686,8 +723,8 @@ func _front_has(front: Vector3, y0: float, y1: float) -> bool:
 func _turn_turret(delta: float) -> void:
 	if aim_point == Vector3.INF or is_wrecked():
 		return
-	var ring := global_position + Vector3.UP * (RING_Y - HEIGHT * 0.5)
-	var to := aim_point - ring
+	var ring := global_position + up * (RING_Y - HEIGHT * 0.5)
+	var to := _local(aim_point - ring)
 	var want_yaw := wrapf(atan2(-to.x, -to.z) - yaw, -PI, PI)
 	var d := wrapf(want_yaw - turret_yaw, -PI, PI)
 	# A dead engine: turned by hand. A jammed turret: not at all.
@@ -734,7 +771,7 @@ func main_ready() -> bool:
 ## Where the commander's eye is: the cupola, on top of the turret.
 func eye_interpolated() -> Vector3:
 	var o := get_global_transform_interpolated().origin
-	return o + Vector3.UP * (HEIGHT * 0.5 + 0.9)
+	return o + up * (HEIGHT * 0.5 + 0.9)
 
 
 ## Its body in bricks (VehicleBricks), by zone. Studs across (x) and along (z,
@@ -809,7 +846,7 @@ func _smoke_from(at: Vector3) -> void:
 	s.spread = 12.0
 	s.initial_velocity_min = 1.0
 	s.initial_velocity_max = 2.0
-	s.gravity = Vector3.UP * 0.4
+	s.gravity = Gravity.up_at(global_position) * 0.4
 	s.scale_amount_min = 0.6
 	s.scale_amount_max = 1.4
 	var m := SphereMesh.new()

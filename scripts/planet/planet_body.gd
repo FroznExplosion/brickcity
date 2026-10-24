@@ -104,6 +104,11 @@ static func track(node: Node3D, radius := 96) -> VoxelViewer:
 	return v
 
 
+## Height of the ground over the datum under a world point (Gravity.ground_height).
+func ground_height(world: Vector3) -> float:
+	return data.height(dir_of(world))
+
+
 ## Altitude of a world point over the datum.
 func altitude_of(world: Vector3) -> float:
 	return (world - global_position).length() - data.radius

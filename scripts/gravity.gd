@@ -103,6 +103,26 @@ static func lift_to(p: Vector3, h: float) -> Vector3:
 	return Vector3(p.x, h, p.z)
 
 
+## How high the GROUND stands under a world point, over the datum: the
+## planet's own height field. NAN off a planet (there the AI asks its grid).
+static func ground_height(p: Vector3) -> float:
+	if planet != null and is_instance_valid(planet) and planet.has_method(&"ground_height"):
+		return planet.call(&"ground_height", p)
+	return NAN
+
+
+## A basis at `p` whose Y is up there and whose X and Z lie along the ground:
+## the identity off a planet. For 2D maths on the ground (an orbit round a
+## target, a ring of spots) that used to be done in the world's XZ.
+static func tangent_basis(p: Vector3) -> Basis:
+	if planet == null or not is_instance_valid(planet):
+		return Basis.IDENTITY
+	var u := up_at(p)
+	var ref := Vector3.FORWARD if absf(u.dot(Vector3.FORWARD)) < 0.9 else Vector3.RIGHT
+	var x := ref.cross(u).normalized()
+	return Basis(x, u, x.cross(u))
+
+
 ## The basis `b` turned by the least rotation that takes its Y to `up`: how a
 ## body is carried along the curve, so nothing about its heading changes but
 ## what the ground's tilt demands (STA doc 05's full-basis rebuild).

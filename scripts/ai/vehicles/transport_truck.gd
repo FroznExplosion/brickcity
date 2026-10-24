@@ -283,13 +283,65 @@ func feet() -> Vector3:
 	return global_position
 
 
+# --- the frame (Docs/Planets.md 11.7) ---------------------------------------
+#
+# On a planet the yaw is measured in a tangent frame carried along the curve;
+# in the flat game the frame is the identity and every line takes its old path.
+
+var frame := Basis.IDENTITY
+var up := Vector3.UP
+
+
+func _local(v: Vector3) -> Vector3:
+	return v if frame == Basis.IDENTITY else frame.inverse() * v
+
+
+## The yaw that faces along world `to`, in the frame.
+func _yaw_to(to: Vector3) -> float:
+	var l := _local(to)
+	return atan2(-l.x, -l.z)
+
+
+## Turn the body to `_yaw` (in the frame).
+func _face() -> void:
+	if frame == Basis.IDENTITY:
+		rotation.y = _yaw
+	else:
+		global_transform.basis = frame * Basis(Vector3.UP, _yaw)
+
+
+## The velocity along the ground set to `v` (along up kept).
+func _set_flat(v: Vector3) -> void:
+	velocity = Gravity.flat(v, up) + up * Gravity.vert(velocity, up)
+
+
+## Rolling to a stop, axis by axis as it always did: in the frame on a planet.
+func _ease_stop(rate: float) -> void:
+	if frame == Basis.IDENTITY:
+		velocity.x = move_toward(velocity.x, 0.0, rate)
+		velocity.z = move_toward(velocity.z, 0.0, rate)
+		return
+	var lv := _local(velocity)
+	lv.x = move_toward(lv.x, 0.0, rate)
+	lv.z = move_toward(lv.z, 0.0, rate)
+	velocity = frame * lv
+
+
 func _physics_process(delta: float) -> void:
+	up = Gravity.up_at(global_position)
+	if Gravity.planet != null:
+		frame = Gravity.carry(frame, up)
+		up_direction = up
+		_face()
 	if not is_on_floor():
 		velocity += Gravity.down_at(global_position) * GRAVITY * delta
 	else:
-		velocity.y = maxf(velocity.y, 0.0)
+		var vv := Gravity.vert(velocity, up)
+		if Gravity.planet != null and vv <= Gravity.floor_rise():
+			vv = Gravity.standing_vert()
+		velocity = Gravity.with_vert(velocity, up, maxf(vv, 0.0) if Gravity.planet == null else vv)
 	if cover != null:
-		cover.update(self, feet() + Vector3.UP * (size.y + CLEARANCE * 0.5) * 0.5)
+		cover.update(self, feet() + up * (size.y + CLEARANCE * 0.5) * 0.5)
 	if gun != null:
 		_gunner(delta)
 	if player_in:
@@ -299,16 +351,14 @@ func _physics_process(delta: float) -> void:
 		_cover_squad(delta)
 		return
 	if state != "driving":
-		velocity.x = move_toward(velocity.x, 0.0, drive * delta * 2.0)
-		velocity.z = move_toward(velocity.z, 0.0, drive * delta * 2.0)
+		_ease_stop(drive * delta * 2.0)
 		move_and_slide()
 		return
 	var now := services.now()
 	if now < _reverse_until:
 		# Backing off what it was stuck on, before trying the way again.
 		var back := global_transform.basis.z
-		velocity.x = back.x * drive * 0.35
-		velocity.z = back.z * drive * 0.35
+		_set_flat(back * drive * 0.35)
 		move_and_slide()
 		_from = global_position
 		_moved_at = now
@@ -332,11 +382,11 @@ func _physics_process(delta: float) -> void:
 		# tail into whatever it was parked beside.
 		if _wp < _path.size():
 			var first := _path[mini(_wp + 2, _path.size() - 1)] - global_position
-			if Vector2(first.x, first.z).length() > 0.5:
-				_yaw = atan2(-first.x, -first.z)
-				rotation.y = _yaw
+			if Gravity.flat(first, up).length() > 0.5:
+				_yaw = _yaw_to(first)
+				_face()
 	var at := global_position
-	if Vector2(goal.x - at.x, goal.z - at.z).length() < DROP:
+	if Gravity.flat(goal - at, up).length() < DROP:
 		_arrive("there")
 		return
 	if not can_drive():
@@ -346,7 +396,7 @@ func _physics_process(delta: float) -> void:
 	if is_apc() and _contact_within(CONTACT_STOP):
 		_arrive("contact")
 		return
-	while _wp < _path.size() and Vector2(_path[_wp].x - at.x, _path[_wp].z - at.z).length() < 2.0:
+	while _wp < _path.size() and Gravity.flat(_path[_wp] - at, up).length() < 2.0:
 		_wp += 1
 	# A flyer coming down ahead (Airspace pad): hold short until it is down and gone.
 	if services.airspace != null and services.airspace.blocks(at - global_transform.basis.z * (size.z * 0.5 + 4.0), size.x):
@@ -359,22 +409,21 @@ func _physics_process(delta: float) -> void:
 		_arrive("end of path")
 		return
 	var to := _path[_wp] - at
-	var want := atan2(-to.x, -to.z)
+	var want := _yaw_to(to)
 	var turn := clampf(wrapf(want - _yaw, -PI, PI), -TURN * delta, TURN * delta)
 	_yaw += turn
-	rotation.y = _yaw
+	_face()
 	# Slower through a sharp turn.
 	var speed := top_speed() * clampf(1.0 - absf(wrapf(want - _yaw, -PI, PI)) / PI, 0.3, 1.0)
 	var fwd := -global_transform.basis.z
-	velocity.x = fwd.x * speed
-	velocity.z = fwd.z * speed
+	_set_flat(fwd * speed)
 	move_and_slide()
 	_run_down(fwd)
 	# A kerb: pressed against something while on the ground and going nowhere,
 	# a pop up the way wheels climb one. Not a wall: a wall is still a wall,
 	# and STUCK lets them out there.
-	if is_on_floor() and is_on_wall() and Vector2(velocity.x, velocity.z).length() < speed * 0.3:
-		velocity.y = KERB_POP
+	if is_on_floor() and is_on_wall() and Gravity.flat(velocity, up).length() < speed * 0.3:
+		velocity = Gravity.with_vert(velocity, up, KERB_POP)
 	if at.distance_to(_from) > 1.0:
 		_from = at
 		_moved_at = now
@@ -404,16 +453,15 @@ func _drive_keys(delta: float) -> void:
 	_speed = move_toward(_speed, want, rate * delta)
 	var bite := clampf(absf(_speed) / STEER_FULL, 0.0, 1.0) * signf(_speed)
 	_yaw = wrapf(_yaw + clampf(steer, -1.0, 1.0) * TURN * bite * delta, -PI, PI)
-	rotation.y = _yaw
+	_face()
 	var fwd := -global_transform.basis.z
-	velocity.x = fwd.x * _speed
-	velocity.z = fwd.z * _speed
+	_set_flat(fwd * _speed)
 	move_and_slide()
 	if absf(throttle) > 0.1 and is_on_floor() and is_on_wall() \
-			and Vector2(velocity.x, velocity.z).length() < absf(_speed) * 0.3:
-		velocity.y = KERB_POP
+			and Gravity.flat(velocity, up).length() < absf(_speed) * 0.3:
+		velocity = Gravity.with_vert(velocity, up, KERB_POP)
 	# Into a wall it stops: what it went at is what it keeps.
-	_speed = Vector2(velocity.x, velocity.z).dot(Vector2(fwd.x, fwd.z))
+	_speed = Gravity.flat(velocity, up).dot(Gravity.flat(fwd, up))
 	_run_down(fwd)
 
 
@@ -474,7 +522,7 @@ func _contact_within(r: float) -> bool:
 
 
 func eye() -> Vector3:
-	return global_position + Vector3.UP * (size.y + 0.5)
+	return global_position + up * (size.y + 0.5)
 
 
 ## All round from its turret, within SIGHT, to the chest or the eye.
@@ -535,8 +583,8 @@ func _gunner(delta: float) -> void:
 func _turn_gun(delta: float) -> void:
 	if aim_point == Vector3.INF:
 		return
-	var to := aim_point - turret.global_position
-	var want := wrapf(atan2(-to.x, -to.z) - rotation.y, -PI, PI)
+	var to := _local(aim_point - turret.global_position)
+	var want := wrapf(atan2(-to.x, -to.z) - (rotation.y if frame == Basis.IDENTITY else _yaw), -PI, PI)
 	var rate := GUN_TURN if bricks == null or bricks.has(&"gun") else 0.0
 	gun_yaw = wrapf(gun_yaw + clampf(wrapf(want - gun_yaw, -PI, PI), -rate * delta, rate * delta), -PI, PI)
 	turret.rotation.y = gun_yaw
@@ -580,14 +628,12 @@ func _cover_squad(delta: float) -> void:
 	if threat == Vector3.INF:
 		_coast(delta)
 		return
-	var dir := threat - mid
-	dir.y = 0.0
+	var dir := Gravity.flat(threat - mid, up)
 	if dir.length() < 1.0:
 		_coast(delta)
 		return
 	var want := mid + dir.normalized() * COVER_AHEAD
-	var to := want - global_position
-	to.y = 0.0
+	var to := Gravity.flat(want - global_position, up)
 	if to.length() < 2.5:
 		_coast(delta)
 		return
@@ -596,8 +642,7 @@ func _cover_squad(delta: float) -> void:
 
 ## Slowing to a stop.
 func _coast(delta: float) -> void:
-	velocity.x = move_toward(velocity.x, 0.0, drive * delta * 2.0)
-	velocity.z = move_toward(velocity.z, 0.0, drive * delta * 2.0)
+	_ease_stop(drive * delta * 2.0)
 	move_and_slide()
 
 
@@ -605,17 +650,16 @@ func _coast(delta: float) -> void:
 ## behind (short moves of cover need no three-point turns).
 func _steer_to(at: Vector3, speed: float, delta: float) -> void:
 	var to := at - global_position
-	var want := atan2(-to.x, -to.z)
+	var want := _yaw_to(to)
 	var off := wrapf(want - _yaw, -PI, PI)
 	var back := absf(off) > PI * 0.6
 	if back:
 		off = wrapf(off + PI, -PI, PI)
 	_yaw += clampf(off, -TURN * delta, TURN * delta)
-	rotation.y = _yaw
+	_face()
 	var fwd := -global_transform.basis.z
 	var v := speed * (-1.0 if back else 1.0) * clampf(1.0 - absf(off) / PI, 0.3, 1.0)
-	velocity.x = fwd.x * v
-	velocity.z = fwd.z * v
+	_set_flat(fwd * v)
 	move_and_slide()
 	_run_down(fwd)
 
@@ -639,7 +683,7 @@ func _smoke_from(at: Vector3) -> void:
 	s.spread = 12.0
 	s.initial_velocity_min = 1.0
 	s.initial_velocity_max = 2.0
-	s.gravity = Vector3.UP * 0.4
+	s.gravity = Gravity.up_at(global_position) * 0.4
 	var m := SphereMesh.new()
 	m.radius = 0.3
 	m.height = 0.6
@@ -788,7 +832,7 @@ static func room_at(world: World3D, at: Vector3) -> bool:
 	c.radius = SIZE.z + 1.0
 	c.height = SIZE.y - CLEARANCE
 	q.shape = c
-	q.transform = Transform3D(Basis(), at + Vector3.UP * (CLEARANCE + c.height * 0.5 + 0.05))
+	q.transform = Transform3D(Gravity.tangent_basis(at), at + Gravity.up_at(at) * (CLEARANCE + c.height * 0.5 + 0.05))
 	q.collision_mask = Layers.STRUCTURE | Layers.DEBRIS | Layers.FALLING | Layers.WORLD
 	return world.direct_space_state.intersect_shape(q, 1).is_empty()
 
