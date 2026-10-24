@@ -405,6 +405,7 @@ func eye_pos() -> Vector3:
 func _physics_process(_delta: float) -> void:
 	if _dead or pawn == null:
 		return
+	services.focus(pawn.feet())
 	var now := services.now()
 	# Frozen or staggered (Pawn.is_held): the body stands, and the mind waits with it --
 	# no sensing, no thinking, no aim, no fire. Its think clock stops too, so it picks
@@ -462,6 +463,8 @@ func _physics_process(_delta: float) -> void:
 
 func _sense() -> void:
 	_sense_queued = false
+	if pawn != null:
+		services.focus(pawn.feet())
 	var now := services.now()
 	_next_sense = now + 1.0 / (_sense_hz() * services.sched.rate_scale(AIScheduler.PERCEPTION))
 	var k := knowledge()
@@ -486,6 +489,8 @@ func _steer_field() -> void:
 
 func _think() -> void:
 	_think_queued = false
+	if pawn != null:
+		services.focus(pawn.feet())
 	var now := services.now()
 	_next_think = now + 1.0 / (_think_hz() * services.sched.rate_scale(AIScheduler.TREES))
 	var dt := now - _last_think if _last_think > 0.0 else 1.0 / _think_hz()

@@ -1346,9 +1346,22 @@ out of the town walks it in 88 s across 3 cells (6 regions made round it on the 
 behind), feet on the ground the whole way; the AI's worst tick 3.8 ms. `--gate=squad` on the
 net 10/10.
 
-**Not yet:** soldiers' sight, cover and danger ask `ai_world`, the player's region -- a fight
-far from the player (two player groups apart) needs those per region too; HPA* inside a region
-is AINav's own (24-column clusters); legs are re-worked only when a region is made again.
+**Each agent in its own region (2026-10-24).** `AIServices.focus(p)`: on a planet, `ai_world`
+and `ai_nav` become the region `p` is in (off a planet it does nothing). A soldier focuses on
+its feet as its physics tick, its sensing and its thinking begin, a squad on its centre as it
+thinks, an animal on itself; a grenade sets and takes down its danger box in the region it
+landed in, and a blast is asked where it goes off. Between thinkers (and for the shared tick)
+the services are the player's region. Gate `--gate=far` (headless, 11/11): an allied squad and
+an enemy squad meet on the town's far side, 168 m from the player and in another region (the
+player's has no ground to stand on there); both see the other, fire (~90 rounds each), take
+cover (63-141 member-ticks still with bricks between them and the other side's eyes) and hurt
+each other. With `focus` a no-op the same gate has nobody in cover and one squad wiped out in
+the open (2 FAIL): what an agent asks is answered by its own region.
+
+**Not yet:** a line between two regions is asked of the asker's region only (its buildings,
+not the far region's beyond the overlap); a grenade's danger is in its own region only; size
+and vehicle maps (`nav_for`, mech maps) are made on whichever region was focused; legs are
+re-worked only when a region is made again.
 
 ### 11.9 Plan: biomes (2026-10-24)
 
