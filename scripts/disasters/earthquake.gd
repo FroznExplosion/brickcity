@@ -89,6 +89,11 @@ var axis := Vector3.RIGHT
 var _failing := {}
 ## For the probe: solver checks, and the failures they found.
 var lateral_checks := 0
+## Main-thread time in the pulse's lateral checks and in the facade chips, ms
+## (the probe's "shaking alone" line).
+var lateral_ms := 0.0
+var lateral_worst_ms := 0.0
+var facade_ms := 0.0
 var lateral_fails := 0
 var _rumble: AudioStreamPlayer
 var _booms: Array[AudioStreamPlayer3D] = []
@@ -186,6 +191,7 @@ func _pulse(dt: float) -> void:
 		return
 	var player := ctx.player_pos()
 	var due := false
+	var t_lat := Time.get_ticks_usec()
 	for b in ctx.registry.buildings:
 		if b.toppled or b.is_build() or b.chunk < 0 or _failing.has(b.id):
 			continue
@@ -207,6 +213,9 @@ func _pulse(dt: float) -> void:
 		plan.append({"id": b.id, "t": phase_t, "lateral": true, "dir": worst_dir,
 				"level": worst.level, "ratio": float(worst.ratio)})
 		due = true
+	var lat := float(Time.get_ticks_usec() - t_lat) / 1000.0
+	lateral_ms += lat
+	lateral_worst_ms = maxf(lateral_worst_ms, lat)
 	if due:
 		plan.sort_custom(func(a: Dictionary, b: Dictionary) -> bool: return a.t < b.t)
 
@@ -261,6 +270,7 @@ func _facades(dt: float) -> void:
 			near.append(box)
 	if near.is_empty():
 		return
+	var t_fa := Time.get_ticks_usec()
 	for i in n:
 		var box: AABB = near[rng.randi_range(0, near.size() - 1)]
 		var side := rng.randi_range(0, 3)
@@ -280,6 +290,7 @@ func _facades(dt: float) -> void:
 		else:
 			ctx.chip(p, 0.45, int(CHIP_HP * intensity))
 			facade_chips += 1
+	facade_ms += float(Time.get_ticks_usec() - t_fa) / 1000.0
 
 
 # --- Collapses ----------------------------------------------------------------------

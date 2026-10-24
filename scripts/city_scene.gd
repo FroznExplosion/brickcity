@@ -311,6 +311,14 @@ const BAND_VERTS_PER_TICK := 60000
 ## something nearly always is (bands, pieces, the near tier, terrain, glass).
 ## It was the biggest part of most of the walk's long frames (PerfCaps.md 4).
 const BAND_THREAD_VERTS := 0
+## Headless, the renderer is the dummy one, and its meshes are not safe to make
+## on two threads at once: a band made on a worker while the main thread made
+## another mesh broke its RIDs ("Initializing already initialized RID") and
+## the probe after it. There, meshes are made on the main thread as before --
+## nothing is drawn, so nothing waits -- and big bands still go to a worker
+## as they always did.
+static var worker_meshes := DisplayServer.get_name() != "headless"
+const BAND_THREAD_VERTS_HEADLESS := 4000
 ## Bands being uploaded: [building id, band, task id, [mesh], arrays, pass].
 var _band_jobs: Array = []
 var _band_verts_now := 0
@@ -2808,6 +2816,8 @@ func _build_owed_glass() -> void:
 		WorkerThreadPool.wait_for_task_completion(int(job[0]))
 		_glass_jobs.remove_at(i)
 		var gm = job[1][0]
+		if gm is Array:
+			gm = BuildingShell.window_mesh_of(gm)   # headless: made here (worker_meshes)
 		if gm == null or not is_instance_valid(job[2]) \
 				or not _is_shell_node(int(job[3]), job[2]):
 			continue
@@ -2871,11 +2881,13 @@ func _submit_glass(owed: Array) -> void:
 	# The mesh is made there too: handed to the renderer here, it waited for
 	# whatever else was being uploaded.
 	var holder := [null]
+	var on_worker := worker_meshes
 	var task := WorkerThreadPool.add_task(func() -> void:
 		var arrays := BuildingShell.window_arrays(fx, fz, courses, room_seed, layout,
 				lattice, damage, program, standing)
 		if not arrays.is_empty():
-			holder[0] = BuildingShell.window_mesh_of(arrays), true, "shell glass")
+			holder[0] = BuildingShell.window_mesh_of(arrays) if on_worker else arrays,
+			true, "shell glass")
 	glass_built += 1
 	_glass_jobs.append([task, holder, owed[0], id, owed[3]])
 
@@ -4507,7 +4519,8 @@ func _build_one_band(id: int) -> bool:
 	if ok:
 		_brick_index_width[id] = IslandManager.index_width(arrays)
 		_band_verts_now += (arrays[Mesh.ARRAY_VERTEX] as PackedVector3Array).size()
-	if ok and (arrays[Mesh.ARRAY_VERTEX] as PackedVector3Array).size() >= BAND_THREAD_VERTS:
+	if ok and (arrays[Mesh.ARRAY_VERTEX] as PackedVector3Array).size() \
+			>= (BAND_THREAD_VERTS if worker_meshes else BAND_THREAD_VERTS_HEADLESS):
 		_submit_band_job(id, at, arrays)
 	else:
 		var mesh := ArrayMesh.new()
@@ -13301,11 +13314,13 @@ func _tend_brick_panes() -> void:
 	var standing := _standing_copy(b.chunk)
 	_part("pn_copy", t_pp)
 	var holder := [null]
+	var on_worker := worker_meshes
 	var task := WorkerThreadPool.add_task(func() -> void:
 		var arrays := BuildingShell.window_arrays(fx, fz, courses, room_seed, layout, lattice,
 				{}, program, standing)
 		if not arrays.is_empty():
-			holder[0] = BuildingShell.window_mesh_of(arrays), true, "brick panes")
+			holder[0] = BuildingShell.window_mesh_of(arrays) if on_worker else arrays,
+			true, "brick panes")
 	_pane_job = [task, holder, best]
 	brick_panes_built += 1
 	brick_panes_ms += float(Time.get_ticks_usec() - t0) / 1000.0
@@ -13369,10 +13384,17 @@ func _tend_far_coarse() -> void:
 			_far_coarse_jobs.erase(id)
 			continue
 		var holder := [null]
-		job[1] = WorkerThreadPool.add_task(func() -> void:
-			var m := ArrayMesh.new()
-			m.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
-			holder[0] = m, false, "far coarse building")
+		if not worker_meshes:
+			# Headless: made here, and shown next pass (worker_meshes).
+			var hm := ArrayMesh.new()
+			hm.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
+			holder[0] = hm
+			job[1] = WorkerThreadPool.add_task(func() -> void: pass, false, "far coarse building")
+		else:
+			job[1] = WorkerThreadPool.add_task(func() -> void:
+				var m := ArrayMesh.new()
+				m.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
+				holder[0] = m, false, "far coarse building")
 		job[2] = holder
 	# Which go coarse, and which come back. At most one asked for a pass.
 	var now := Time.get_ticks_msec()
@@ -13442,7 +13464,10 @@ func _harvest_panes() -> bool:
 		return false
 	WorkerThreadPool.wait_for_task_completion(int(_pane_job[0]))
 	var id: int = _pane_job[2]
-	var panes: ArrayMesh = (_pane_job[1] as Array)[0]
+	var made = (_pane_job[1] as Array)[0]
+	if made is Array:
+		made = BuildingShell.window_mesh_of(made)   # headless: made here (worker_meshes)
+	var panes: ArrayMesh = made
 	_pane_job = []
 	var parent = _brick_nodes.get(id)
 	if parent == null or not is_instance_valid(parent):
