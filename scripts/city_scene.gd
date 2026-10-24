@@ -2768,7 +2768,7 @@ func _make_shell(id: int, coarse: bool = false, far: bool = false) -> void:
 ## line where its banded tier is swapped for the coarse one waits (kept owed,
 ## not built) until it is either replaced -- its successor owes its own -- or
 ## near again. A shell drawn from its bricks (`real`) asks the bricks about
-## each pane: a copy of which cells stand (_standing_copy), so it is made on a
+## each pane: a copy of which cells stand (BuildingShell.standing_copy), so it is made on a
 ## worker as well (it was built here, 3-8 ms a tick; PerfCaps.md 4).
 const GLASS_JOBS := 4
 var _glass_owed: Array = []   ## [shell node, building id, damage, fades, drawn from its bricks]
@@ -2863,7 +2863,10 @@ func _submit_glass(owed: Array) -> void:
 	var program: Dictionary = (b.recipe.get("program", {}) as Dictionary).duplicate(true)
 	# A window still in bricks asks the bricks which panes stand: a copy of
 	# them, made here (it was the whole build here, 3-8 ms a tick, PerfCaps.md 4).
-	var standing := _standing_copy(b.chunk) if owed[4] and b.is_materialised() else Callable()
+	var standing := Callable()
+	if owed[4] and b.is_materialised():
+		standing = BuildingShell.standing_copy(world, b.chunk,
+				BuildingShell.window_rows(courses, layout, lattice))
 	# The mesh is made there too: handed to the renderer here, it waited for
 	# whatever else was being uploaded.
 	var holder := [null]
@@ -13285,7 +13288,8 @@ func _tend_brick_panes() -> void:
 	var lattice := RoomManifest.lattice_for(fx, fz, courses)
 	var program: Dictionary = (b.recipe.get("program", {}) as Dictionary).duplicate(true)
 	t_pp = _part("pn_prep", t_pp)
-	var standing := _standing_copy(b.chunk)
+	var standing := BuildingShell.standing_copy(world, b.chunk,
+			BuildingShell.window_rows(courses, layout, lattice))
 	_part("pn_copy", t_pp)
 	var holder := [null]
 	var task := WorkerThreadPool.add_task(func() -> void:
@@ -13327,18 +13331,6 @@ func _harvest_panes() -> bool:
 		(parent as Node3D).add_child(glass)
 		_brick_panes[id] = glass
 	return true
-
-
-## `_cell_standing` for a worker: which of a chunk's cells stand, copied now
-## (BrickWorld.get_solid_cells), asked by a building's own cells.
-func _standing_copy(chunk: int) -> Callable:
-	var solid: PackedByteArray = world.get_solid_cells(chunk)
-	var dims: Vector3i = world.get_chunk_dims(chunk)
-	return func(cell: Vector3i) -> bool:
-		if cell.x < 0 or cell.y < 0 or cell.z < 0 \
-				or cell.x >= dims.x or cell.y >= dims.y or cell.z >= dims.z:
-			return false
-		return solid[cell.x + dims.x * (cell.y + dims.y * cell.z)] != 0
 
 
 ## Give back the bake and the mesh; keep the chunk and the collision.

@@ -454,9 +454,10 @@ static func window_arrays(footprint_x: int, footprint_z: int, courses: int,
 				break
 		var y0: float = int(band.y) * PLATE
 		var y1 := y0 + tall
-		var sill_y := int(band.y) - 1
-		var lintel_y := int(band.y) + TowerRecipe.WINDOW_COURSES * TowerRecipe.PLATES_PER_COURSE
-		var floor_y: int = int(storeys[storey].floor_y) - 1 if storey >= 0 else sill_y
+		var rows := _pane_rows(band, storeys, storey)
+		var sill_y := rows.x
+		var lintel_y := rows.y
+		var floor_y := rows.z
 		var inner := int(reach)
 		# Front (-Z) and back (+Z) along X; left (-X) and right (+X) along Z.
 		for g in gx:
@@ -511,6 +512,69 @@ static func window_arrays(footprint_x: int, footprint_z: int, courses: int,
 	arrays[Mesh.ARRAY_TEX_UV2] = uv2s
 	arrays[Mesh.ARRAY_INDEX] = indices
 	return arrays
+
+
+## A window band's sill, lintel and floor rows: the cells a pane asks `standing`.
+static func _pane_rows(band, storeys: Array, storey: int) -> Vector3i:
+	var sill_y := int(band.y) - 1
+	var lintel_y := int(band.y) + TowerRecipe.WINDOW_COURSES * TowerRecipe.PLATES_PER_COURSE
+	var floor_y: int = int(storeys[storey].floor_y) - 1 if storey >= 0 else sill_y
+	return Vector3i(sill_y, lintel_y, floor_y)
+
+
+## Every row window_arrays may ask `standing` about, whatever the damage: what
+## a copy of which cells stand needs (standing_copy). Its columns are
+## within PANE_REACH of a face.
+const PANE_REACH := TowerRecipe.WALL_THICK + 3
+
+
+static func window_rows(courses: int, layout: Array, lattice: Dictionary) -> PackedInt32Array:
+	var out := PackedInt32Array()
+	var storeys: Array = lattice.storeys
+	var first := TowerRecipe.COURSES_PER_FLOOR - 1 - TowerRecipe.WINDOW_COURSES
+	for band in layout:
+		if band.kind != "course":
+			continue
+		var index: int = band.index
+		if index % TowerRecipe.COURSES_PER_FLOOR != first \
+				or not TowerRecipe.is_window_course(index, courses):
+			continue
+		var storey := -1
+		for si in storeys.size():
+			var st: Dictionary = storeys[si]
+			if int(band.y) >= int(st.floor_y) and int(band.y) < int(st.floor_y) + int(st.height):
+				storey = si
+				break
+		var rows := _pane_rows(band, storeys, storey)
+		for y in [rows.x, rows.y, rows.z]:
+			if not out.has(y):
+				out.push_back(y)
+	return out
+
+
+## `standing` for window_arrays on a worker: which of a chunk's cells stand,
+## copied now, asked by a building's own cells. Only the rows `rows`
+## (window_rows) and the columns within PANE_REACH of a face, all a pane asks
+## (BrickWorld.get_solid_cells_at): the whole chunk was ~3 ms for a big tower
+## (PerfCaps.md 4). Any other cell reads as not standing.
+static func standing_copy(world: BrickWorld, chunk: int, rows: PackedInt32Array) -> Callable:
+	var solid: PackedByteArray = world.get_solid_cells_at(chunk, rows, PANE_REACH)
+	var dims: Vector3i = world.get_chunk_dims(chunk)
+	var row_of := PackedInt32Array()
+	row_of.resize(maxi(dims.y, 0))
+	row_of.fill(-1)
+	for i in rows.size():
+		if rows[i] >= 0 and rows[i] < dims.y:
+			row_of[rows[i]] = i
+	var plane := dims.x * dims.z
+	return func(cell: Vector3i) -> bool:
+		if cell.x < 0 or cell.y < 0 or cell.z < 0 \
+				or cell.x >= dims.x or cell.y >= dims.y or cell.z >= dims.z:
+			return false
+		var r := row_of[cell.y]
+		if r < 0:
+			return false
+		return solid[r * plane + cell.x + dims.x * cell.z] != 0
 
 
 ## Whether a pane is drawn: always, with no `standing` to ask; otherwise only
