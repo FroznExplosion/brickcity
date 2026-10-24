@@ -400,6 +400,19 @@ In the order to do it. Each line points at where the item is written up.
     their boundary, `region_probe`, now 0.63 at worst). Measured on `--breakshape` before the
     columns went: 13 pieces against 21, still slices -- what a face shot leaves hangs sideways
     off the floors and parts on a vertical line, which is what it physically does.
+    **Changed 2026-10-24 (user, 10-21: "stagger the seams"):** every other floor's two layers are
+    laid 2 and 6 studs in from the face instead of 0 and 5 (`TowerRecipe.STAGGER`, `_lay_layer`),
+    so no seam of an odd floor is a line of an even one; the edges take seven new LEGO plates
+    (2x8, 2x10, 4x6, 4x10, 6x6, 6x10, 8x8; a 10 x 8 edge cell is an 8x8 and a 2x8). Columns and
+    interior walls stay on the lattice every storey (user: "the support columns should line up
+    with each floor"). Round a stairwell a staggered layer lays its free part as rows (lower) or
+    columns (upper), never a greedy fill: that stacked identical 4x4s in both layers, pairs joined
+    only to each other (16-280 detached a tower, `structure_probe`). About 2% more parts
+    (`stagger_probe`, which also checks the same cells solid, no seam over the floor below's, the
+    upper layer across every lower seam, nothing detached). `RECIPE_VERSION` 2.
+    Measured, `--breakshape --picks=12` (deterministic: the same run twice is the same answer),
+    `--no-stagger` the A/B: **layers 0 -> 5, slices 5 -> 3, other 2 -> 6** pieces of 50+; the
+    slices left 2-3 storeys tall. More of a tower now comes off as whole floors.
 
 **Waiting on something else**
 11. Clients see nothing where the host sees crumbs (§1.7) -- needs a live co-op client.
