@@ -956,6 +956,7 @@ selecting and changing shells, small custom parts.
 | **Shape drag** | K, then drag | box, rectangle, cylinder, circle, sphere, wedge. Filled **clean** (fewest bricks, studs holding) or **random** (mixed sizes) |
 | **Box select** | L, drag | a region: move, copy, delete, or re-pack it clean |
 | **Guide models** | F3 (panel) | load an existing model (glTF, FBX, OBJ) on its own locked, see-through layer, and build inside it. A bought model is a guide only: it is never exported ([custom.md](Parts/custom.md) section 6) |
+| **Parts catalogue** | F7 (panel) | every saved part, official and custom, to filter by any maker, part, class, gun class, creator or tag, search and sort; **Fits** lists only what goes on the socket of the part being built ([ModularParts.md](ModularParts.md) section 6) |
 | **Section view** | O | hide everything past a plane, to build inside |
 | **Isolate / explode** | P | show only the current part, or pull the parts apart; tint bricks by part |
 
