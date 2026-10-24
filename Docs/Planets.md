@@ -1247,3 +1247,9 @@ round the curve, takes cover, fires; their paths stay on the ground (within a pl
 
 **Not here:** buildings' bricks in the AI's world on a planet (their own frames, 9.2), vehicle
 nav (`VehicleNav`), `VehicleCover` -- after N2.
+
+**11.8 state (2026-10-24):** N1b's GDScript half is built -- `PlanetNavRegion`
+(scripts/planet/planet_nav_region.gd): a 1024-stud region's tangent frame and its ground as
+257 x 257 heights in it, built in 222 ms; on the ground within 2.4 mm, 1.3 cm between samples,
+corners 1.45° (tools/planet_nav_grid_probe.gd, 9/9). N1, the C++ half of N1b, N2-N4: open;
+Docs/HandoffPlanetNav.md carries them.
