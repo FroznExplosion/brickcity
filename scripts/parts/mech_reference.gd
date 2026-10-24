@@ -10,6 +10,8 @@ extends RefCounted
 ## is across Z, so a left part mirrors into a right one). Heights follow Docs/Parts/joints.md
 ## section 5's greybox (hip 16 nano bricks up at the middle leg length, shoulder 2 above).
 
+const ROOT := "chassis"
+const PLAN := "mech"
 ## The parts a mech build is made of, in the order the workshop lists them.
 const PARTS := ["chassis", "head", "arm_L", "arm_R", "hand_L", "hand_R", "leg_L", "leg_R",
 		"pod_L", "pod_R"]
@@ -67,6 +69,11 @@ static func joints(klass: String, length: int) -> Dictionary:
 		"pod_L": Vector3(POD_BEHIND, neck_y, sh - POD_IN),
 		"pod_R": Vector3(POD_BEHIND, neck_y, -(sh - POD_IN)),
 	}
+
+
+## Half the footprint drawn under it, in studs: the shoulders' span.
+static func footprint(klass: String = "normal") -> float:
+	return float(SHOULDER_HALF.get(klass, SHOULDER_HALF.normal))
 
 
 ## The body plan path of a part's socket: "arm_L", "arm_L/hand".
