@@ -84,7 +84,7 @@ const PRINT_MM_PER_PLATE := 1.6
 const REAL_PER_PRINT := 4.0
 const PLANES := ["side", "top", "front"]
 const VIEWS := ["perspective", "side", "top", "front"]
-const KEYS_TEXT := "F10 instructions   F2 photos   F3 guide models   Alt 0-3 view   Alt C the game's view   Alt M measure   Alt S mirror (shift: plane here)   Alt F free place   Alt D block out   Alt U studs   Alt G move part   Alt E explode   Alt H hands   Alt P play   PgUp/PgDn working plane\nY part toolbar (shift: back)   hold LMB + move: lay a run   J connection point   K shapes   L select   O section   P outlines\nN part smooth / bricks   F4 wand from a photo   F12 export and preview   Z undo (a fill at once)   shift Z redo"
+const KEYS_TEXT := "F10 instructions   F2 photos   F3 guide models   F7 parts   Alt 0-3 view   Alt C the game's view   Alt M measure   Alt S mirror (shift: plane here)   Alt F free place   Alt D block out   Alt U studs   Alt G move part   Alt E explode   Alt H hands   Alt P play   PgUp/PgDn working plane\nY part toolbar (shift: back)   hold LMB + move: lay a run   J connection point   K shapes   L select   O section   P outlines\nN part smooth / bricks   F4 wand from a photo   F12 export and preview   Z undo (a fill at once)   shift Z redo"
 
 ## Each: {path, plane, px (image size), mpp (metres a pixel), centre, opacity, shown, node}.
 var photos: Array = []
@@ -133,6 +133,8 @@ var _loading := false
 var _part_label: Label
 var _points_root: Node3D
 var _point_panel: PanelContainer
+## The parts catalogue (F7, Docs/ModularParts.md section 6), made when first opened.
+var _catalog_panel: PartCatalogPanel
 var _point_kind: OptionButton
 var _point_slot: OptionButton
 var _point_iface: OptionButton
@@ -1141,6 +1143,7 @@ func _unhandled_input(e: InputEvent) -> void:
 			KEY_J: toggle_point_here()
 			KEY_F10: show_help(not _help.visible)
 			KEY_F2: _toggle_panel()
+			KEY_F7: toggle_catalog()
 			KEY_HOME: zoom(0.85)
 			KEY_END: zoom(1.0 / 0.85)
 			_: mine = false
@@ -1416,6 +1419,43 @@ func _toggle_panel() -> void:
 	if _panel.visible and _camera.has_method("_set_captured"):
 		_camera.call("_set_captured", false)
 	_refresh_panel()
+
+
+
+## Open or close the parts catalogue (F7). It reads the part folders each time it opens, so
+## a part just saved is in it.
+func toggle_catalog() -> void:
+	if _catalog_panel == null:
+		_catalog_panel = PartCatalogPanel.new()
+		_catalog_panel.visible = false
+		_catalog_panel.position = Vector2(RAIL_W + 24, 60)
+		_catalog_panel.part_picked.connect(func(r: PartRecord) -> void:
+			_export_check = "parts: %s picked; putting it on comes next (stage 4)" % r.display_name)
+		_ruler.get_parent().add_child(_catalog_panel)
+	_catalog_panel.visible = not _catalog_panel.visible
+	if not _catalog_panel.visible:
+		return
+	if _camera.has_method("_set_captured"):
+		_camera.call("_set_captured", false)
+	var cat := PartCatalog.load_all()
+	if not parts_dir().begins_with(PartCatalog.OFFICIAL_DIR) and parts_dir() != PartCatalog.CUSTOM_DIR:
+		cat.load_dir(parts_dir(), "custom")   # a test's own folder
+	_catalog_panel.set_catalog(cat)
+	_aim_catalog(cat)
+
+
+## Point the catalogue's Fits at the part being built: the socket it goes in, on the saved
+## part it hangs from. Nothing to fit to for the body, a build that is not a gun, or a host
+## not saved yet.
+func _aim_catalog(cat: PartCatalog) -> void:
+	var part := String(part_names[part_sel]) if part_sel < part_names.size() else ""
+	var sockets: Dictionary = PartStandards.plan("gun").get("sockets", {})
+	var path := part if sockets.has(part) else "barrel/" + part
+	if recipe.kind != "gun" or part == "body" or not sockets.has(path):
+		_catalog_panel.set_fit_target(null, "", "")
+		return
+	var host_name := path.get_base_dir() if path.contains("/") else "body"
+	_catalog_panel.set_fit_target(cat.get_part(String(part_ids.get(host_name, ""))), path, "gun")
 
 
 func _scale_photo(i: int, f: float) -> void:
@@ -1699,6 +1739,8 @@ func select_part(i: int) -> void:
 	_outlines_dirty = true
 	if _width_spin != null:
 		_width_spin.set_value_no_signal(width_of(part_names[part_sel]))
+	if _catalog_panel != null and _catalog_panel.visible:
+		_aim_catalog(_catalog_panel.catalog)
 	var f := FileAccess.open(toolbars_save, FileAccess.WRITE)
 	if f != null:
 		f.store_string(JSON.stringify(toolbars))
@@ -3299,6 +3341,7 @@ A gun is a quarter-size model: a Thompson is 53 studs long, 3 studs wide.
 
 [font_size=18][b]Tools[/b][/font_size]
 [b]F2[/b] photos   [b]F3[/b] guide models (an existing model to build inside, never exported)   [b]F4[/b] wand: click a colour patch on a photo to fill it
+[b]F7[/b] parts: every saved part, official and custom; tick any maker, part, class, gun class or creator, sort, and [i]Fits[/i] shows only what goes on the part being built
 [b]Alt 0-3[/b] view: 3D, side, top, front   [b]Alt M[/b] measure: two clicks   [b]Alt S[/b] mirror (Alt shift S: plane under the ghost)
 [b]Alt F[/b] free placement / aim at studs   [b]PgUp PgDn[/b] move the working plane   [b]Alt D[/b] block out   [b]Alt + drag[/b] move a photo
 [b]Y[/b] next part   [b]J[/b] mount / socket   [b]K[/b] shapes: drag a box, cylinder, sphere or wedge, filled clean or random
@@ -9067,6 +9110,7 @@ func _build_menus() -> void:
 		["Photos", [
 			["Photos panel", "F2", func() -> void: _toggle_panel()],
 			["Guide models panel", "F3", func() -> void: _toggle_guide_panel()],
+			["Parts catalogue", "F7", func() -> void: toggle_catalog()],
 			["Wand: fill a patch of a photo", "F4", func() -> void: set_tool("" if tool == "wand" else "wand")],
 			["Measure", "Alt M", func() -> void: set_measure(not measure_on)],
 		]],

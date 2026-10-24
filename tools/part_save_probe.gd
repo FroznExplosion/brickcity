@@ -229,6 +229,26 @@ func _save() -> void:
 			recipe[GunPartDef.Slot.MAGAZINE].mount_interface])
 	gun.queue_free()
 
+	# The catalogue (F7) lists them, and its Fits points at the part being built.
+	_ws.select_part(_ws.part_names.find("magazine"))
+	_ws.toggle_catalog()
+	var panel: PartCatalogPanel = _ws._catalog_panel
+	var listed := panel.shown().map(func(r: PartRecord) -> String: return r.id)
+	_ok("F7 opens the catalogue with the saved parts", panel.visible
+			and _ws.part_ids.values().all(func(i: String) -> bool: return i in listed))
+	_ok("its Fits aims at the body's magazine well", panel.has_fit_target()
+			and panel._fit_host.id == _ws.part_ids.body and panel._fit_path == "magazine")
+	panel.fits_only = true
+	panel.refresh()
+	listed = panel.shown().map(func(r: PartRecord) -> String: return r.id)
+	_ok("the wide magazine is not among what fits", not _ws.part_ids.magazine in listed, str(listed))
+	panel.select_part(_ws.part_ids.magazine)
+	_ok("and the panel says why", panel._detail.text.contains("socket takes mag.narrow"), panel._detail.text)
+	_ws.select_part(_ws.part_names.find("body"))
+	_ok("on the body: nothing to fit to", not panel.has_fit_target())
+	_ws.toggle_catalog()
+	_ok("F7 again closes it", not panel.visible)
+
 	# Save As another name: new parts; the old stay.
 	var old_ids: Dictionary = _ws.part_ids.duplicate()
 	_ws._save_as("Probe Parts Two")

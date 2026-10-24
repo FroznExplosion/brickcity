@@ -6,10 +6,11 @@ mounts with and what it takes, and is found in one catalogue that filters and so
 for all of them. A gun or a mech in the game is an **assembly** the generator puts together from
 parts that fit, from a seed and a design (section 7).
 
-Status (2026-10-24): **stages 1 and 2 built.** The part record, the fit check and the
+Status (2026-10-24): **stages 1 to 3 built.** The part record, the fit check and the
 catalogue (`scripts/parts/`, `tools/parts_probe.gd`, 65 checks); guns on them: the workshop's
 Save writes every part on its own, the generator and the assembler only put together parts
-that fit (`tools/part_save_probe.gd`, 34 checks). Section 11 is the order the rest is built in;
+that fit (`tools/part_save_probe.gd`, 40 checks); the catalogue panel, F7 in the workshop
+(`tools/part_panel_probe.gd`, 38 checks). Section 11 is the order the rest is built in;
 "Stage 1 as built" and "Stage 2 as built" below say what differs from the plan.
 
 Builds on: [Parts/joints.md](Parts/joints.md) (joints, the one pin, hands),
@@ -317,7 +318,7 @@ interfaces.
 |---|---|---|
 | 1 | **Done.** The part record, the catalogue (facets, filter, sort), the fit check (layers 1-2), `mech_interfaces` / `figure_interfaces` / `mgun_interfaces` / `body_plans` in `standards.json`; `tools/parts_probe.gd` | `scripts/parts/` |
 | 2 | **Done.** Guns on it: `GunAssembler` and the generator check interfaces; Save writes each part on its own; the game reads those parts (old `guns/` folders still load). Design files with fixed and pool slots moved to stage 6, where the generator first needs them | `scripts/guns/`, `asset_workshop.gd` |
-| 3 | The catalogue panel: filters, sort, custom and creator, the Fits toggle | UI, shared by workshop and inventory |
+| 3 | **Done.** The catalogue panel: filters, sort, custom and creator, the Fits toggle; F7 in the workshop; `tools/part_panel_probe.gd` | UI, shared by workshop and inventory |
 | 4 | The workshop's anything-on-anything swap, with fit marks (section 9) | `asset_workshop.gd` |
 | 5 | The workshop's mech mode: slot, side, class, reference mech, ready mounts, test fit | `asset_workshop.gd` |
 | 6 | Mechs in the game from parts: a mech assembler on a skeleton, IK legs and arms by length, class from the chassis; replaces the boxes in `mech.gd` | `scripts/mech/` |
@@ -379,6 +380,28 @@ interfaces.
   official parts ship (the same on every machine) and the lobby carries custom ones (stage 10).
 - **Old guns:** an exported `guns/<name>/` folder still loads. Open it in the workshop and Save,
   and its parts are written; the parts win over the folder of the same name.
+
+### Stage 3 as built
+
+- **`PartCatalogPanel`** (`scripts/parts/part_catalog_panel.gd`), one panel for every screen: a
+  search line, a row of buttons per facet, the list, a detail line, and Sort, reversed, by maker
+  and Fits. A screen gives it a catalogue and, for the inventory, the parts the player has
+  (`set_catalog(cat, parts)`); what a pick does is the screen's (`part_picked`).
+- **Any one button alone filters**; OR inside a facet, AND across (section 6). Each button's
+  number is how many parts ticking it would show, counted with every OTHER facet's ticks, so
+  ticking `light` keeps `heavy` and its count. A facet every listed part shares has no row.
+- **Search**: every word must be in the name, id, maker or creator.
+- **Grouped by maker** by default (a heading per maker, makers A-Z), sorted inside by the Sort;
+  off, one flat list. Ties on id.
+- Custom parts in the same list, `custom, by <creator>` beside them; `custom` and the creator are
+  buttons like any other.
+- **Fits** is greyed until the screen points it at a socket (`set_fit_target(host, path,
+  plan)`); then only what passes layers 1-2 there. The detail line says why a part does not fit
+  ("mounts on mag.wide, socket takes mag.narrow") whether Fits is on or not.
+- **In the workshop: F7** (menu: Photos > Parts catalogue). It reads the part folders each time
+  it opens. Its Fits points at the socket of the part being built (Y), on the saved part it hangs
+  from: the body's magazine well for the magazine, the barrel's for a muzzle. Picking a part only
+  names it for now; putting it on is stage 4.
 
 ## 12. Decided
 
