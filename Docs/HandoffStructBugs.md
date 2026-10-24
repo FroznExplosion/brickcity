@@ -140,10 +140,23 @@ both lists, in this order; the detail of each item is where it points.
      also holds the move caps, crumbling, landmark rules and the co-op piece ids.
    - **A shell rebuilt for a building still in bricks** (`_stream_detail`, `st_reshell`): 15-19
      ms = `live_damage_profile` 7.2 + recipe shell mesh 7.3. When it is drawn from its bricks
-     (`_far_real`), both are spent on a shell that draws for a tick or two.
+     (`_far_real`), both are spent on a shell that draws for a tick or two. **Fixed 2026-10-23:**
+     a shell drawn from its bricks and hit again is asked again in place -- its coarse mesh and
+     its panes, each drawing what it has until the new one lands (`_refresh_real_shell`;
+     `_hang_glass` replaces a shell's panes). `--lodbreak` 21 (display awake).
    - Once each: an islands tick of 226 ms that was ONE 76-brick stand-in rebuilt in the mesh
-     queue (its build 1.1 ms at most -- a stall around it; `coarse_split` now says where, not
-     caught again); a landing of 36.8 ms; promote 71.8; render 33-38.
+     queue (its build 1.1 ms at most); a landing of 36.8 ms; promote 71.8; render 33-38. Caught
+     again smaller (`coarse_split`): a 77-brick stand-in 10.9 ms = build 0.7 + **`add_surface_
+     from_arrays` 9.1** + hung 0.9 -- the renderer, not the build. Not built: send stand-ins
+     through the worker upload path (`_submit_mesh_job`) whatever their size.
+   - **After both fixes** (one run, two other Godot processes up at its start -- unreliable): frames
+     mean 16.8 ms, worst 50.0, **5 of 906 over 33.3 ms** (8-74 before), 2 ticks over 25 ms, no shell
+     piece or reshell among them. Time it again on a quiet machine.
+   - Seen once each in `--lodbreak` (2026-10-23, after these): "160 m: no stud drawn on a brick
+     that has gone" 172 of 119,555, on pieces still moving at the gate (the tower alone passed,
+     and the next full run); and Godot crashing at exit (signal 11, after the results: an
+     ArrayMesh freed after the RenderingServer -- likely a mesh or band job still in flight when
+     the pass quits, just after `_ghost_control` kills bricks).
 
 **4. How buildings break**
 9. **User, 2026-10-21: stagger the seams.** Worked out, not built: two offset layers make a cut
