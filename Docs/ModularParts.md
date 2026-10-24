@@ -40,7 +40,8 @@ One record shape for every family. One folder per part:
 id            "korr_arm_heavy_01"        unique; a custom part's is "<creator>.<name>.<hash8>"
 rev           3                          bumped on every save that changes it
 family        gun | mech | figure | creature | pod
-slot          arm | leg | hand | chassis | head | pod | barrel | magazine | ...
+scale         held | mech                guns only: a player's gun, or a mech's (section 5)
+slot          arm | leg | hand | chassis | head | pod | barrel | magazine | hat | ...
 side          L | R | any                + mirrorable: a right twin may be made by mirroring
 manufacturer  "korr"                     custom parts keep theirs, or "workshop"
 class         light | normal | heavy     only where it means something (section 4)
@@ -125,6 +126,8 @@ are the mech's special weapons and buffs, and what the player picks for them is 
 - Pods are **rolled like guns**: kind, manufacturer, rarity and effects from a seed (a
   `PodGenerator` beside `GunGenerator`), with the same effect list so stacking and merges are
   one rule (MANUFACTURER_SPEC section 8).
+- Pods are **named like guns** -- grade word, element word, a noun from the pod body's
+  `name_fragment` -- but from **their own word lists**, so a pod's name never reads as a gun's.
 - Players fit them in their **inventory screen**, not the workshop (the workshop makes pod
   bodies; the game rolls pods onto them).
 - Two pods of one kind: allowed; their effects stack by the one rule.
@@ -144,9 +147,13 @@ bone, one rigid assembly), may not enter a sweep, adds mass, and breaks off as d
 - `GunAssembler` checks the interface as well as the slot (layer 1).
 - The weapon-class filter (section 6) is worked out, not tagged: a receiver is its class; any
   other part is in every class whose receivers it fits.
-- A gun made whole in the workshop is exported **as its parts plus an assembly**: each part
-  joins the catalogue, the assembly is the design. `exclusive_to` stays for a design's signature
-  parts (legendaries, or a gun whose maker wants it kept whole).
+- A gun made whole in the workshop is saved **as its parts plus an assembly** (section 7):
+  each part joins the catalogue, the assembly is the design.
+- **Mech guns are guns at mech scale** (`scale: mech`): their own receivers, barrels and the
+  rest, built in the workshop and rolled by the same generator, on the nano grid the mechs are
+  built on (joints.md section 5: no held scale on a mech). The two scales never mix: a mech
+  part fits only a mech receiver, and a mech's hand holds only a mech gun. Their interfaces are
+  their own (`mgun.*` beside `gun_interfaces`), and `scale` is a catalogue facet.
 
 ---
 
@@ -169,7 +176,12 @@ Every part has **facets**: family, source (official / custom), manufacturer, slo
 
 ## 7. Custom parts, sharing and multiplayer
 
-### Saving and the package
+### Saving: every part on its own
+
+**Save writes every part as its own file**, however many are in the workshop at once. A gun
+with eight parts open is eight part files, plus one **assembly** file naming them by `id` +
+`rev`. Nothing is ever saved as one lump; a part unchanged since its last save is not written
+again (its `rev` stays).
 
 A player's part is saved by name in `user://parts/custom/`, apart from the official ones. Export
 writes one file, a **part package** (`.bcpart`, a zip):
@@ -209,6 +221,25 @@ slot and its mech still plays.
   seed rolls differently.
 
 ---
+
+### Designs: fixed slots and rolled slots
+
+An assembly is a **design**: for each slot, either a **fixed** part or a **pool** to roll from.
+Most rolled guns and mechs are all pools; the special cases are fixed slots.
+
+| Case | Design |
+|---|---|
+| a rolled gun | every slot a pool (the generator's candidates, as now) |
+| a legendary: barrel and receiver joined | `receiver` and `barrel` fixed, as a **joined pair**: they always roll together; the rest pools |
+| a special character, always the same | every slot fixed |
+| John: same limbs and torso, different hats | torso, arms, legs, head fixed; `hat` a pool (hats tagged `john` or any hat) |
+
+- A **joined pair** (or group) is several fixed parts that are only ever placed together: still
+  separate part files, kept together by the design. Their parts carry `exclusive_to` the design,
+  so nothing else rolls them, as legendaries' do today.
+- A pool is a filter (section 6) plus weights: "any light chassis", "hats tagged john".
+- The seed rolls only the pool slots; fixed slots take no roll, so a fixed part never moves
+  another slot's roll.
 
 ## 8. Motion sets: one animation library for everything
 
@@ -274,12 +305,12 @@ interfaces.
 | # | Stage | Where |
 |---|---|---|
 | 1 | The part record, the catalogue (facets, filter, sort), the fit check (layers 1-2), `mech_interfaces` / `figure_interfaces` / `body_plans` in `standards.json`; a headless probe | new `scripts/parts/` |
-| 2 | Guns on it: `GunAssembler` checks interfaces; the workshop exports each part on its own plus an assembly; `guns/` moved over | `scripts/guns/`, `asset_workshop.gd` |
+| 2 | Guns on it: `GunAssembler` checks interfaces; Save writes each part on its own plus an assembly; designs with fixed and pool slots; `guns/` moved over | `scripts/guns/`, `asset_workshop.gd` |
 | 3 | The catalogue panel: filters, sort, custom and creator, the Fits toggle | UI, shared by workshop and inventory |
 | 4 | The workshop's anything-on-anything swap, with fit marks (section 9) | `asset_workshop.gd` |
 | 5 | The workshop's mech mode: slot, side, class, reference mech, ready mounts, test fit | `asset_workshop.gd` |
 | 6 | Mechs in the game from parts: a mech assembler on a skeleton, IK legs and arms by length, class from the chassis; replaces the boxes in `mech.gd` | `scripts/mech/` |
-| 7 | Pods: slots, `PodGenerator`, the three kinds, the inventory screen | `scripts/mech/`, loot |
+| 7 | Pods: slots, `PodGenerator`, the three kinds, pod names, the inventory screen; mech guns (scale `mech`) rolled for the hands | `scripts/mech/`, `scripts/guns/`, loot |
 | 8 | Motion sets library (section 8) | |
 | 9 | Part packages: export, import, hash, data-only loading | `scripts/parts/` |
 | 10 | Multiplayer: lobby part list, host download, Steam Workshop | with the netcode |
@@ -294,7 +325,7 @@ interfaces.
   saved with a mark (an unfit barrel) be used in the game, or does it have to fit there?
   Proposed: official designs may ship forced (made by us, on purpose); a player's forced design
   is workshop-only until it fits, so a downloaded part never makes an impossible gun in a match.
-- **Pod names and the naming system.** Guns name themselves from parts' `name_fragment`s and
-  grades; pods will want the same.
-- **Mech gun sizes.** A mech's hand holds a mech-scale gun: whether those are their own receivers
-  or player guns at nano full size (joints.md section 5: no held scale on a mech).
+
+Decided 2026-10-23: every part saves on its own (section 7); joined pairs and fixed characters
+are designs (section 7, Designs); pods name like guns from their own word lists (section 4);
+mech guns are their own guns at mech scale (section 5).
