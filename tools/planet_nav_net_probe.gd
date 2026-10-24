@@ -148,6 +148,41 @@ func _run() -> void:
 	var len2 := PlanetNavNet._length(path2)
 	_check("with the legs known, the path is no worse (<= +5%)", path2.size() > 2 and len2 <= len0 * 1.05,
 			"%.0f m, was %.0f m" % [len2, len0])
+	# Other maps on the net: a tank's and a mech's, each its own AINav in every
+	# region it is asked for in, its own portals and legs (PlanetNavMap).
+	for spec in [["vehicle:tank", func(wd: AIWorld) -> AINav: return VehicleNav.make(wd, &"tank"),
+			VehicleNav.span_of(&"tank")],
+			["mech", func(wd: AIWorld) -> AINav: return MechBrain.mech_nav(wd),
+			int(round(Mech.RADIUS * 2.0 / Mech.STUD))]]:
+		net.add_map(spec[0], spec[1])
+		var mv := net.map_view(spec[0])
+		var t2 := Time.get_ticks_usec()
+		var mp := mv.find_path(mv.snap(from), mv.snap(to), 200000)
+		var mms := (Time.get_ticks_usec() - t2) / 1000.0
+		var mcross := 0
+		var mlast := net.key_at(mp[0]) if mp.size() > 0 else Vector2i.ZERO
+		var stands := 0
+		var tried := 0
+		for i in mp.size():
+			var k := net.key_at(mp[i])
+			if k != mlast:
+				mcross += 1
+				mlast = k
+			if i % 5 == 0:
+				tried += 1
+				if mv.can_stand(mv.snap(mp[i])):
+					stands += 1
+		var mworst := 0.0
+		for j in net.last_joins:
+			mworst = maxf(mworst, j)
+		print("[nav-net] the %s map: %d points in %.0f ms, %d border(s), span %d studs" % [
+				spec[0], mp.size(), mms, mcross, mv.get_span()])
+		_check("the %s map has its own body (span %d studs)" % [spec[0], int(spec[2])], mv.get_span() == int(spec[2]))
+		_check("a %s path across the regions (>= 4 borders)" % spec[0], mp.size() > 2 and mcross >= 4
+				and mp[mp.size() - 1].distance_to(to) < 6.0, "%d points, %d borders" % [mp.size(), mcross])
+		_check("its stretches meet at the borders (<= 0.5 m)", mworst <= 0.5, "%.3f m" % mworst)
+		_check("it is where that body stands (sampled points, >= 95%)", tried > 0 and stands * 100 >= tried * 95,
+				"%d of %d" % [stands, tried])
 	# Sight lines across borders: the ground off a region's grid is its
 	# neighbour's (AIWorld.set_peers). Against the planet's own ground.
 	var r0: PlanetNavNet.Region = net.regions[Vector2i(0, 0)]

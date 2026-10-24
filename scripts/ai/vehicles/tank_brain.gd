@@ -81,7 +81,8 @@ var _path := PackedVector3Array()
 var _path_id := -1
 var _path_goal := Vector3.INF
 ## The map the path in hand was asked of.
-var _nav: AINav
+## The map its path is on: an AINav, or on a planet a nav net map (PlanetNavMap).
+var _nav = null
 var _wp := 0
 var _next_sense := -INF
 var _sense_queued := false
@@ -291,7 +292,7 @@ func _driver(now: float) -> void:
 		if _path_id < 0:
 			state = "stuck"
 			return
-		var st := _nav.get_status(_path_id)
+		var st: int = _nav.get_status(_path_id)
 		if st == AINav.PENDING:
 			return
 		if st != AINav.DONE:
@@ -310,7 +311,8 @@ func _driver(now: float) -> void:
 	while _wp < _path.size() and _flat(_path[_wp] - at).length() < 2.5:
 		_wp += 1
 	var to := ((drive_to if drive_to != Vector3.INF else goal) if _wp >= _path.size() else _path[_wp]) - at
-	var off := wrapf(atan2(-to.x, -to.z) - tank.yaw, -PI, PI)
+	var tl := tank._local(to)
+	var off := wrapf(atan2(-tl.x, -tl.z) - tank.yaw, -PI, PI)
 	tank.steer = clampf(off * 2.0, -1.0, 1.0)
 	if absf(off) > PIVOT:
 		state = "pivot"
@@ -343,16 +345,17 @@ func _ask_path(on_foot := false) -> void:
 	_path = PackedVector3Array()
 	_path_goal = goal
 	_path_id = -1
-	var vn := services.vehicle_nav(&"tank") if not on_foot else null
+	var vn = services.vehicle_nav(&"tank") if not on_foot else null
 	var to := VehicleNav.reach_point(vn, goal) if vn != null else Vector3.INF
-	var from := vn.snap(tank.feet()) if vn != null else Vector3.INF
+	var from: Vector3 = vn.snap(tank.feet()) if vn != null else Vector3.INF
 	if vn != null and to != Vector3.INF and vn.can_stand(from):
 		_nav = vn
 		road = "vehicle"
 		drive_to = to
 		_path_id = vn.request_path(from, to, 8.0, 40000)
 	else:
-		_nav = services.ai_nav
+		# The walking map; on a planet the nav net's, across regions.
+		_nav = services.nav_net if services.nav_net != null else services.ai_nav
 		road = "foot"
 		drive_to = goal
 		_path_id = _nav.request_path(_nav.snap(tank.feet()), goal, 8.0, 20000)
@@ -371,8 +374,11 @@ func _escort_behind() -> float:
 	return 0.0 if best == INF else best
 
 
-static func _flat(v: Vector3) -> Vector2:
-	return Vector2(v.x, v.z)
+## `v` on the ground, as 2D: in the tank's carried frame on a planet (its
+## yaw is measured there, Planets.md 11.7); the world's XZ off one.
+func _flat(v: Vector3) -> Vector2:
+	var l := tank._local(v)
+	return Vector2(l.x, l.z)
 
 
 func _exit_tree() -> void:

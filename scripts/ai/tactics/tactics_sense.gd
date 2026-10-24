@@ -173,10 +173,10 @@ static func ways_in(so: Soldier, them: Vector3) -> Dictionary:
 	var held: Dictionary = _ways.get(key, {})
 	if not held.is_empty() and now - float(held.at) < WAY_KEEP:
 		return held
-	var nav := so._nav()
-	var walk_path := nav.find_path(nav.snap(feet), nav.snap(them), WAY_BUDGET)
-	var bn := s.foot_breach_nav()
-	var breach_path := bn.find_path(bn.snap(feet), bn.snap(them), WAY_BUDGET)
+	var nav = so._nav()
+	var walk_path: PackedVector3Array = nav.find_path(nav.snap(feet), nav.snap(them), WAY_BUDGET)
+	var bn = s.foot_breach_nav()
+	var breach_path: PackedVector3Array = bn.find_path(bn.snap(feet), bn.snap(them), WAY_BUDGET)
 	var holes := PackedVector3Array()
 	if not breach_path.is_empty() and bn.has_method(&"get_last_breaches"):
 		holes = bn.call(&"get_last_breaches")
@@ -200,22 +200,22 @@ static func ways_known(so: Soldier, them: Vector3) -> Dictionary:
 	if asked.is_empty():
 		if _ways_asked.size() > 64:
 			_forget_asked()
-		var nav := so._nav()
-		var bn := s.foot_breach_nav()
+		var nav = so._nav()
+		var bn = s.foot_breach_nav()
 		_ways_asked[key] = {"nav": nav, "bn": bn, "feet": feet, "them": them,
 				"walk": nav.request_path(nav.snap(feet), nav.snap(them), so.importance, WAY_BUDGET),
 				"breach": bn.request_path(bn.snap(feet), bn.snap(them), so.importance, WAY_BUDGET)}
 		return held
-	var an: AINav = asked.nav
-	var ab: AINav = asked.bn
-	var ws := an.get_status(int(asked.walk))
-	var bs := ab.get_status(int(asked.breach))
+	var an = asked.nav
+	var ab = asked.bn
+	var ws: int = an.get_status(int(asked.walk))
+	var bs: int = ab.get_status(int(asked.breach))
 	if ws == AINav.PENDING or bs == AINav.PENDING:
 		return held
 	_ways_asked.erase(key)
-	var walk_path := an.get_path(int(asked.walk)) if ws == AINav.DONE else PackedVector3Array()
-	var breach_path := ab.get_path(int(asked.breach)) if bs == AINav.DONE else PackedVector3Array()
-	var holes := ab.get_breaches(int(asked.breach)) if bs == AINav.DONE else PackedVector3Array()
+	var walk_path: PackedVector3Array = an.get_path(int(asked.walk)) if ws == AINav.DONE else PackedVector3Array()
+	var breach_path: PackedVector3Array = ab.get_path(int(asked.breach)) if bs == AINav.DONE else PackedVector3Array()
+	var holes: PackedVector3Array = ab.get_breaches(int(asked.breach)) if bs == AINav.DONE else PackedVector3Array()
 	an.release(int(asked.walk))
 	ab.release(int(asked.breach))
 	return _keep_way(key, _way_from(s, now, asked.feet, asked.them, walk_path, breach_path, holes))
@@ -229,9 +229,9 @@ static func _forget_asked() -> void:
 	for k in _ways_asked:
 		var e: Dictionary = _ways_asked[k]
 		if is_instance_valid(e.nav):
-			(e.nav as AINav).release(int(e.walk))
+			e.nav.release(int(e.walk))
 		if is_instance_valid(e.bn):
-			(e.bn as AINav).release(int(e.breach))
+			e.bn.release(int(e.breach))
 	_ways_asked.clear()
 
 
