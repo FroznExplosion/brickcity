@@ -1285,3 +1285,13 @@ Probe `tools/planet_biome_probe.gd` (headless): the map's pixel against `PlanetB
 direction (exact), the shader's lookup UV against the bake's (same pixel), every biome present
 on the default planet, temperature falling with latitude and height, bake time. A windowed shot
 from orbit and on foot (`--gate`'s shots) for the look.
+
+**11.9 state (2026-10-24): built.** `PlanetBiomes` (scripts/planet/planet_biomes.gd),
+`PlanetData.climate_axis` (the proto's spawn at ~50°), the biome map baked in the impostor's
+pass (512 x 256 with the heightmap and colours: 690-820 ms), the ground shader on it (snow from
+the temperature at the height, lapse 0.25 °C/m; sand and cliff rock live as before).
+`tools/planet_biome_probe.gd` 8/8: the map is `PlanetBiomes` to an 8-bit step, the shader's UV on
+the bake's pixel, sea-level 29.9 / 22.9 / 3.1 / -18.7 °C at 0/30/60/85°; shares with mean
+humidity 0.62: jungle 30%, savanna 25%, forest 11%, taiga 8%, tundra 8%, desert 8%, grass 6%,
+steppe 6%. The spawn's town is on a patch of steppe. `--gate` 9/9 with the map, its shots
+(ground, 5 km, 30 km) show the biomes from the ground to orbit. Next: trees (11.10).
