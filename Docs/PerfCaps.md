@@ -117,3 +117,43 @@ own), at most `SHOW_WAIT_MAX` (30) steps; `settle` does not wait. Worst show 12.
 
 Left: frames over 25 ms are as many as before (19-25 a walk). Most of the walk's long frames are
 not the near tier's; the next thing to look at in them is what else runs in those frames.
+
+## 4. The long frames of a street walk (2026-10-23)
+
+Section 3 left 15-25 frames over 25 ms a walk that were not the near tier's. `big_city.tscn --
+--chamfer --cost --street --long` now prints every frame over 25 ms with the one before and after:
+frame time, physics ticks in it, render CPU and GPU, the near tier's step, and the tick's biggest
+phases with their parts (`_spike_parts`; new parts: `bd_rest`, `bd_pieces`, `ss_*`, `sp_*`,
+`sd_*`, `pn_*`).
+
+Nearly every long frame was a frame with a physics tick in it, and what made the tick long was the
+same wait as the studs' (3): a mesh handed to the renderer on the main thread while a worker was
+uploading another.
+
+* **Bands** (`bd_upload`, 3-13 ms). A band under 4,000 vertices was uploaded in the tick; most
+  bands are. Now every band goes to a worker (`BAND_THREAD_VERTS` 0). Asking first whether any
+  upload was in flight was tried and was not enough: terrain and other workers upload too.
+* **Panes of a building in bricks** (`sd_panes`, 6-15 ms) and **glass of a shell drawn from its
+  bricks** (`gl_here`, 3-8 ms): built and uploaded in the tick, because they ask the bricks which
+  panes stand. Now a copy of which cells stand is taken (`BrickWorld.get_solid_cells`, new: 3 ms
+  for a big tower) and the panes, and every shell's glass mesh, are made on a worker.
+* **Shadow switching** (`ss_shadows`): every node of every building in bricks had its
+  `cast_shadow` set every eighth tick, a renderer call each; now only when it changes.
+* The new pane and glass jobs count in `BrickNear.uploads`, and the city waits for them, and the
+  near tier for its own uploads (`BrickNear.shutdown`), when it quits: a task not waited for kept
+  its mesh until after the renderer was gone, and freeing it then crashed on exit.
+
+| Street walk, cap on | Frames over 25 ms | Worst frame | Worst tick part |
+|---|---|---|---|
+| before | 19-25 | 36-47 ms | bands 13 ms, panes 15, stream 13 |
+| after (three quiet runs) | 10-13 | 30-38 ms | panes' copy 3 ms, shadow proxy 2-7 |
+
+Left, and why it is left:
+* Most remaining frames over 25 ms have a tick of 1-4 ms: the test window draws at a pinned
+  16.6 ms, and a frame a little over that waits for the next one (a 31 ms frame next to a 2 ms
+  one). The rest are views over the whole city where the GPU itself takes 20-29 ms.
+* A shadow proxy's damage profile (`registry.live_damage_profile`, C++ already) is 2-7 ms on the
+  main thread when a big building's proxy is rebuilt. It reads the live bricks; moving it needs the
+  same kind of copy as the panes', in the buildings' area.
+* The panes' copy could shrink to the outer walls' rows (it copies the whole chunk); 3 ms once per
+  building as it turns to bricks.

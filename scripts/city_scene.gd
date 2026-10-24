@@ -305,7 +305,12 @@ const BAND_VERTS_PER_TICK := 60000
 ## where the rest goes). The band's old mesh goes on drawing until the new one
 ## is attached, and a band waits behind a piece for a worker, since a piece
 ## without a mesh is a hole and a band without a new one is not.
-const BAND_THREAD_VERTS := 4000
+## Now every band (2026-10-23): it was 4,000 vertices, and a band under it,
+## a few hundred vertices, took 6-13 ms in the tick on a street walk -- handing
+## arrays to the renderer here waits for whatever a worker is uploading, and
+## something nearly always is (bands, pieces, the near tier, terrain, glass).
+## It was the biggest part of most of the walk's long frames (PerfCaps.md 4).
+const BAND_THREAD_VERTS := 0
 ## Bands being uploaded: [building id, band, task id, [mesh], arrays, pass].
 var _band_jobs: Array = []
 var _band_verts_now := 0
@@ -1380,6 +1385,12 @@ func _exit_tree() -> void:
 	for job in _glass_jobs:
 		WorkerThreadPool.wait_for_task_completion(int((job as Array)[0]))
 	_glass_jobs.clear()
+	if brick_near != null:
+		brick_near.shutdown()
+	# And the panes of a building in bricks.
+	if not _pane_job.is_empty():
+		WorkerThreadPool.wait_for_task_completion(int(_pane_job[0]))
+		_pane_job = []
 	# And a shadow proxy being built.
 	for job in _shadow_jobs.values():
 		WorkerThreadPool.wait_for_task_completion(int((job as Array)[0]))
@@ -2756,10 +2767,9 @@ func _make_shell(id: int, coarse: bool = false, far: bool = false) -> void:
 ## it for shells the streamer was about to take back: so a shell past the
 ## line where its banded tier is swapped for the coarse one waits (kept owed,
 ## not built) until it is either replaced -- its successor owes its own -- or
-## near again. A shell drawn from its bricks (`real`) asks the live bricks
-## about each pane, which a worker may not, so those are still built here,
-## up to GLASS_BUDGET_MS a tick (one at least).
-const GLASS_BUDGET_MS := 2.5
+## near again. A shell drawn from its bricks (`real`) asks the bricks about
+## each pane: a copy of which cells stand (_standing_copy), so it is made on a
+## worker as well (it was built here, 3-8 ms a tick; PerfCaps.md 4).
 const GLASS_JOBS := 4
 var _glass_owed: Array = []   ## [shell node, building id, damage, fades, drawn from its bricks]
 var _glass_jobs: Array = []   ## [task, [arrays], shell node, building id, fades]
@@ -2793,12 +2803,12 @@ func _build_owed_glass() -> void:
 			continue
 		WorkerThreadPool.wait_for_task_completion(int(job[0]))
 		_glass_jobs.remove_at(i)
-		var arrays: Array = job[1][0]
-		if arrays.is_empty() or not is_instance_valid(job[2]) \
+		var gm = job[1][0]
+		if gm == null or not is_instance_valid(job[2]) \
 				or not _is_shell_node(int(job[3]), job[2]):
 			continue
 		var t_hang := Time.get_ticks_usec()
-		_hang_glass(job[2], BuildingShell.window_mesh_of(arrays), job[4])
+		_hang_glass(job[2], gm, job[4])
 		_glass_hang_worst_usec = maxi(_glass_hang_worst_usec, Time.get_ticks_usec() - t_hang)
 	if _glass_owed.is_empty():
 		return
@@ -2824,21 +2834,10 @@ func _build_owed_glass() -> void:
 	if ready.is_empty():
 		return
 	ready.sort_custom(func(a: Array, c: Array) -> bool: return float(a[0]) < float(c[0]))
-	var t0 := Time.get_ticks_usec()
 	var taken := {}
-	var made_here := 0
 	for r in ready:
 		var owed: Array = _glass_owed[int(r[1])]
-		if owed[4]:
-			if made_here > 0 and Time.get_ticks_usec() - t0 > int(GLASS_BUDGET_MS * 1000.0):
-				continue
-			var t_here := Time.get_ticks_usec()
-			_build_glass_here(owed)
-			_glass_here_worst_usec = maxi(_glass_here_worst_usec, Time.get_ticks_usec() - t_here)
-			_glass_here += 1
-			made_here += 1
-			taken[int(r[1])] = true
-		elif _glass_jobs.size() < GLASS_JOBS:
+		if _glass_jobs.size() < GLASS_JOBS:
 			_submit_glass(owed)
 			taken[int(r[1])] = true
 	if not taken.is_empty():
@@ -2862,27 +2861,19 @@ func _submit_glass(owed: Array) -> void:
 	var lattice := RoomManifest.lattice_for(fx, fz, courses)
 	var damage: Dictionary = (owed[2] as Dictionary).duplicate(true)
 	var program: Dictionary = (b.recipe.get("program", {}) as Dictionary).duplicate(true)
-	var holder := [[]]
+	# A window still in bricks asks the bricks which panes stand: a copy of
+	# them, made here (it was the whole build here, 3-8 ms a tick, PerfCaps.md 4).
+	var standing := _standing_copy(b.chunk) if owed[4] and b.is_materialised() else Callable()
+	# The mesh is made there too: handed to the renderer here, it waited for
+	# whatever else was being uploaded.
+	var holder := [null]
 	var task := WorkerThreadPool.add_task(func() -> void:
-		holder[0] = BuildingShell.window_arrays(fx, fz, courses, room_seed, layout,
-				lattice, damage, program), true, "shell glass")
+		var arrays := BuildingShell.window_arrays(fx, fz, courses, room_seed, layout,
+				lattice, damage, program, standing)
+		if not arrays.is_empty():
+			holder[0] = BuildingShell.window_mesh_of(arrays), true, "shell glass")
 	glass_built += 1
 	_glass_jobs.append([task, holder, owed[0], id, owed[3]])
-
-
-## A window still in bricks: its panes asked of the live bricks, so here.
-func _build_glass_here(owed: Array) -> void:
-	var id: int = owed[1]
-	var b := registry.get_building(id)
-	var standing := Callable()
-	if b.is_materialised():
-		standing = _cell_standing.bind(b.chunk, world.get_chunk_origin(b.chunk))
-	var panes := BuildingShell.build_window_mesh(b.recipe.footprint_x,
-			b.recipe.footprint_z, b.recipe.courses, registry.room_seed_of(id),
-			owed[2], b.recipe.get("program", {}), standing)
-	glass_built += 1
-	if panes != null:
-		_hang_glass(owed[0], panes, owed[3])
 
 
 func _hang_glass(mi: MeshInstance3D, panes: Mesh, fades: bool) -> void:
@@ -11732,9 +11723,13 @@ func _fire(radius: float) -> void:
 ## promote, stream, bands), and only the worst tick used to say its parts.
 const _SPIKE_PARTS := {"damage": ["dmg_promote", "dmg_rooms", "dmg_hit", "dmg_pieces",
 				"dmg_shell_pieces", "dmg_near", "dmg_support", "dmg_disable"],
-		"stream": ["st_trim", "st_merge", "st_rooms", "st_detail", "st_demesh", "st_remesh",
-				"st_reshell", "st_residency", "st_shells", "sh_profile", "sh_mesh", "sh_real", "sh_body"],
-		"bands": ["bd_harvest", "bd_apply", "bd_done", "bd_cpp", "bd_upload"],
+		"stream": ["st_trim", "st_merge", "st_rooms", "st_detail", "sd_far", "sd_panes", "pn_prep",
+				"pn_copy",
+				"st_demesh", "st_remesh",
+				"st_reshell", "st_residency", "st_shells", "ss_shells", "ss_glass", "ss_proxies",
+				"ss_shadows", "sp_make", "sp_near", "ss_inst", "sh_profile", "sh_mesh", "sh_real", "sh_body"],
+		"bands": ["bd_harvest", "bd_apply", "bd_done", "bd_cpp", "bd_upload", "bd_rest",
+				"bd_pieces"],
 		"disable": ["dis_collision", "dis_rooms"],
 		"promote": ["bricks", "collision", "frames", "furniture", "shell"]}
 
@@ -12090,8 +12085,12 @@ func _physics_process(_delta: float) -> void:
 	_retirer.drain()
 	t = _mark("retire", t)
 	_advance_bands()
+	var t_rest := Time.get_ticks_usec()
 	_tend_rest_shells()
+	_part("bd_rest", t_rest)
+	var t_pieces := Time.get_ticks_usec()
 	_tend_shell_pieces()
+	_part("bd_pieces", t_pieces)
 	t = _mark("bands", t)
 	_finish_promotions()
 	t = _mark("promote_finish", t)
@@ -12183,18 +12182,24 @@ func _physics_process(_delta: float) -> void:
 	# Every fourth tick is fifteen times a second: far faster than anyone can
 	# cross an LOD band, and a quarter of the cost.
 	var t_sh := Time.get_ticks_usec()
+	var t_ss := t_sh
 	if camera != null and Engine.get_physics_frames() % 4 == 0:
 		_stream_shells()
+	t_ss = _part("ss_shells", t_ss)
 	if not _glass_owed.is_empty() or not _glass_jobs.is_empty():
 		var t_gl := Time.get_ticks_usec()
 		_build_owed_glass()
 		_glass_note(Time.get_ticks_usec() - t_gl)
+	t_ss = _part("ss_glass", t_ss)
 	if not _shadow_jobs.is_empty():
 		_harvest_shadow_jobs()
+	t_ss = _part("ss_proxies", t_ss)
 	if camera != null and Engine.get_physics_frames() % 8 == 2:
 		_stream_shadows()
+	t_ss = _part("ss_shadows", t_ss)
 	if camera != null and Engine.get_physics_frames() % 4 == 1:
 		_inst_update()
+	_part("ss_inst", t_ss)
 	_part("st_shells", t_sh)
 	if _show_grids:
 		_draw_grids()
@@ -12667,18 +12672,23 @@ func _stream_shadows() -> void:
 			stale = alive == int(_shadow_seen.get(id, -1)) \
 					or int(_shadow_stale[id]) >= SHADOW_STALE_PASSES
 		_shadow_seen[id] = alive
+		var t_sp := Time.get_ticks_usec()
 		if stale and built < SHADOW_PROXIES_PER_PASS and _make_shadow_proxy(b):
 			built += 1
 			_shadow_stale.erase(id)
+		t_sp = _part("sp_make", t_sp)
 		casting += _set_brick_shadows_near(id, here)
+		_part("sp_near", t_sp)
 	var quiet := 0
 	for isl in islands.islands:
 		if isl == null or not is_instance_valid(isl.mesh):
 			continue
 		var cast := isl.radius > SMALL_ISLAND_RADIUS \
 				or isl.mesh.global_position.distance_to(here) < SMALL_SHADOW_RANGE + isl.radius
-		isl.mesh.cast_shadow = (GeometryInstance3D.SHADOW_CASTING_SETTING_ON if cast
+		var mode := (GeometryInstance3D.SHADOW_CASTING_SETTING_ON if cast
 				else GeometryInstance3D.SHADOW_CASTING_SETTING_OFF)
+		if isl.mesh.cast_shadow != mode:
+			isl.mesh.cast_shadow = mode
 		if not cast:
 			quiet += 1
 	_shadow_stats = {"proxies": _shadow_proxy.size(), "bricks_casting": casting,
@@ -12707,8 +12717,13 @@ func _set_brick_shadows_near(id: int, here: Vector3) -> int:
 		if not on and g is MeshInstance3D and (g as MeshInstance3D).mesh != null:
 			var box: AABB = g.global_transform * (g as MeshInstance3D).get_aabb()
 			on = _box_distance(box, here) < BRICK_SHADOW_RANGE
-		g.cast_shadow = (GeometryInstance3D.SHADOW_CASTING_SETTING_ON if on
+		# Only when it changes: every set is a renderer call, and this pass
+		# set every node of every building in bricks every eighth tick
+		# (PerfCaps.md 4).
+		var mode := (GeometryInstance3D.SHADOW_CASTING_SETTING_ON if on
 				else GeometryInstance3D.SHADOW_CASTING_SETTING_OFF)
+		if g.cast_shadow != mode:
+			g.cast_shadow = mode
 		if on:
 			casting += 1
 	return casting
@@ -13168,9 +13183,12 @@ func _far_real_apply(id: int, mi: MeshInstance3D, arrays: Array) -> void:
 ## Drop the mesh of resident buildings nobody can see the bricks of, and put it
 ## back for ones that have come close again. See DEMESH_RANGE.
 func _stream_detail() -> void:
+	var t_sd := Time.get_ticks_usec()
 	if not _far_real_owed.is_empty():
 		_harvest_far_real()
+	t_sd = _part("sd_far", t_sd)
 	_tend_brick_panes()
+	_part("sd_panes", t_sd)
 	var here := camera.global_position
 	var t0 := Time.get_ticks_usec()
 	var until := t0 + int(DEMESH_BUDGET_MS * 1000.0)
@@ -13228,6 +13246,8 @@ var _panes_owed := {}     ## building id -> true: its bricks changed since its p
 var brick_panes_built := 0
 var brick_panes_ms := 0.0
 func _tend_brick_panes() -> void:
+	if not _harvest_panes():
+		return
 	var here := camera.global_position
 	var best := -1
 	var best_d := INF
@@ -13252,24 +13272,73 @@ func _tend_brick_panes() -> void:
 	var t0 := Time.get_ticks_usec()
 	var b := registry.get_building(best)
 	_panes_owed.erase(best)
-	var old = _brick_panes.get(best)
+	# Made on a worker, from a copy of which cells stand: made here, the panes
+	# of a big building were 6-15 ms in one tick, half of it handing the mesh to
+	# the renderer while some other upload held it (PerfCaps.md 4). The old
+	# panes stay up until the new ones are hung.
+	var fx: int = b.recipe.footprint_x
+	var fz: int = b.recipe.footprint_z
+	var courses: int = b.recipe.courses
+	var room_seed := registry.room_seed_of(best)
+	var t_pp := Time.get_ticks_usec()
+	var layout := TowerRecipe.layout(courses)
+	var lattice := RoomManifest.lattice_for(fx, fz, courses)
+	var program: Dictionary = (b.recipe.get("program", {}) as Dictionary).duplicate(true)
+	t_pp = _part("pn_prep", t_pp)
+	var standing := _standing_copy(b.chunk)
+	_part("pn_copy", t_pp)
+	var holder := [null]
+	var task := WorkerThreadPool.add_task(func() -> void:
+		var arrays := BuildingShell.window_arrays(fx, fz, courses, room_seed, layout, lattice,
+				{}, program, standing)
+		if not arrays.is_empty():
+			holder[0] = BuildingShell.window_mesh_of(arrays), true, "brick panes")
+	_pane_job = [task, holder, best]
+	brick_panes_built += 1
+	brick_panes_ms += float(Time.get_ticks_usec() - t0) / 1000.0
+
+
+var _pane_job: Array = []   ## [task, [mesh], building id] while panes are being made
+
+
+## Hang the panes a worker has finished. False while one is still being made.
+func _harvest_panes() -> bool:
+	if _pane_job.is_empty():
+		return true
+	if not WorkerThreadPool.is_task_completed(int(_pane_job[0])):
+		return false
+	WorkerThreadPool.wait_for_task_completion(int(_pane_job[0]))
+	var id: int = _pane_job[2]
+	var panes: ArrayMesh = (_pane_job[1] as Array)[0]
+	_pane_job = []
+	var parent = _brick_nodes.get(id)
+	if parent == null or not is_instance_valid(parent):
+		return true
+	var old = _brick_panes.get(id)
 	if old != null and is_instance_valid(old):
 		(old as Node).queue_free()
-	_brick_panes.erase(best)
-	var panes := BuildingShell.build_window_mesh(b.recipe.footprint_x,
-			b.recipe.footprint_z, b.recipe.courses, registry.room_seed_of(best),
-			{}, b.recipe.get("program", {}),
-			_cell_standing.bind(b.chunk, world.get_chunk_origin(b.chunk)))
+	_brick_panes.erase(id)
 	if panes != null:
 		var glass := MeshInstance3D.new()
 		glass.mesh = panes
 		glass.material_override = BuildingShell.window_material()
 		glass.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 		glass.set_instance_shader_parameter("near_hide", InteriorGroups.INTERIOR_RANGE)
-		(_brick_nodes[best] as Node3D).add_child(glass)
-		_brick_panes[best] = glass
-	brick_panes_built += 1
-	brick_panes_ms += float(Time.get_ticks_usec() - t0) / 1000.0
+		(parent as Node3D).add_child(glass)
+		_brick_panes[id] = glass
+	return true
+
+
+## `_cell_standing` for a worker: which of a chunk's cells stand, copied now
+## (BrickWorld.get_solid_cells), asked by a building's own cells.
+func _standing_copy(chunk: int) -> Callable:
+	var solid: PackedByteArray = world.get_solid_cells(chunk)
+	var dims: Vector3i = world.get_chunk_dims(chunk)
+	return func(cell: Vector3i) -> bool:
+		if cell.x < 0 or cell.y < 0 or cell.z < 0 \
+				or cell.x >= dims.x or cell.y >= dims.y or cell.z >= dims.z:
+			return false
+		return solid[cell.x + dims.x * (cell.y + dims.y * cell.z)] != 0
 
 
 ## Give back the bake and the mesh; keep the chunk and the collision.
@@ -13651,8 +13720,10 @@ func _process(delta: float) -> void:
 	RenderingServer.global_shader_parameter_set(&"lod_zoom", 1.0 / zoom_in)
 	if brick_near != null:
 		# Every upload on a worker: the bands', the pieces', the shadow proxies'
-		# (BuildingShell.build_mesh makes its ArrayMesh there too).
-		brick_near.uploads = _band_jobs.size() + islands.mesh_jobs() + _shadow_jobs.size()
+		# (BuildingShell.build_mesh makes its ArrayMesh there too), the windows'
+		# (shells' glass, and the panes of a building in bricks).
+		brick_near.uploads = _band_jobs.size() + islands.mesh_jobs() + _shadow_jobs.size() \
+				+ _glass_jobs.size() + (0 if _pane_job.is_empty() else 1)
 		brick_near.step(camera.global_position, zoom_in, -camera.global_basis.z)
 	if _spaces_view != null:
 		_follow_spaces_view()
@@ -16476,6 +16547,8 @@ func _run_chamfer_street() -> void:
 	var tris_max := 0
 	var studs_max := 0
 	var last := Time.get_ticks_usec()
+	var rows := []   # per frame: what was in it (the long frames, below)
+	var pf_last := Engine.get_physics_frames()
 	for i in frames:
 		var t := float(i) / float(frames)
 		var at: Vector3 = start + along * ((fx + 30.0) * t)
@@ -16495,6 +16568,24 @@ func _run_chamfer_street() -> void:
 				+ RenderingServer.get_frame_setup_time_cpu(),
 				RenderingServer.viewport_get_measured_render_time_gpu(view)])
 		last = now
+		var pf := Engine.get_physics_frames()
+		var top := ""
+		if pf != pf_last:
+			var ph: Array = []
+			for k in _prof:
+				if not (k as String).contains("_"):
+					ph.append([float(_prof[k]), k])
+			ph.sort_custom(func(a: Array, c: Array) -> bool: return a[0] > c[0])
+			for k in mini(3, ph.size()):
+				top += "%s %.1f " % [ph[k][1], ph[k][0]]
+			if not ph.is_empty():
+				top += "| " + _spike_parts(ph[0][1])
+		rows.append([float(times[-1][0]), pf - pf_last,
+				Performance.get_monitor(Performance.TIME_PROCESS) * 1000.0,
+				Performance.get_monitor(Performance.TIME_PHYSICS_PROCESS) * 1000.0,
+				float(times[-1][1]), float(times[-1][2]), brick_near.worst_step_ms,
+				float(_prof.get("script_total", 0.0)) if pf != pf_last else 0.0, top])
+		pf_last = pf
 		var h: Vector2i = brick_near.held()
 		held_max = Vector2i(maxi(held_max.x, h.x), maxi(held_max.y, h.y))
 		tris_max = maxi(tris_max, brick_near.chamfered_tris)
@@ -16504,6 +16595,15 @@ func _run_chamfer_street() -> void:
 		if float(tt[0]) > 25.0:
 			over += 1
 	print("[street]   walk: %s; %d frames over 25 ms" % [_frame_line(times), over])
+	if "--long" in OS.get_cmdline_user_args():
+		print("[street]   long frames, with the one before and after (ms: frame, ticks, process, physics, render cpu, gpu, near step, tick script; the tick's top phases):")
+		for i in rows.size():
+			if float(rows[i][0]) <= 25.0:
+				continue
+			for j in range(maxi(i - 1, 0), mini(i + 2, rows.size())):
+				var r: Array = rows[j]
+				print("[street]     %s%3d  %5.1f  %d  %5.1f  %5.1f  %5.2f  %5.1f  %5.2f  %5.1f  %s" % [
+						"*" if j == i else " ", j, r[0], r[1], r[2], r[3], r[4], r[5], r[6], r[7], r[8]])
 	print("[street]   held at most %d chamfered, %d with stud geometry (budgets %dk triangles, %d studs); %d triangles, %d studs at most; worst step %.2f ms"
 			% [held_max.x, held_max.y, BrickNear.max_tris / 1000, BrickNear.max_studs,
 				tris_max, studs_max, near_worst])

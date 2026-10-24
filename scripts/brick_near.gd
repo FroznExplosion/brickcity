@@ -589,6 +589,17 @@ func _visit(key: int, eye: Vector3, now: int, stud_budget: Array) -> void:
 		_studs(band, dist, local, stud_budget)
 
 
+## At shutdown: wait for the uploads in flight. A task not waited for keeps its
+## mesh until the pool closes, after the renderer, and freeing it then crashed.
+func shutdown() -> void:
+	for b in _bands.values():
+		var band: Band = b
+		if band.state == UPLOADING and band.task >= 0:
+			WorkerThreadPool.wait_for_task_completion(band.task)
+			band.task = -1
+			band.holder = []
+
+
 ## Whether a band whose mesh has come in waits a step: another upload is in
 ## flight (see _flying).
 func _show_waits(band: Band) -> bool:
