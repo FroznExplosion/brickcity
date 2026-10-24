@@ -411,12 +411,15 @@ func _unhandled_input(event: InputEvent) -> void:
 
 ## Each running disaster ticks in the order it started, with the context told
 ## which it is (DisasterContext.source).
+var tick_ms := 0.0   ## the last tick of every running disaster, together (the probe's)
 func _physics_process(delta: float) -> void:
+	var t0 := Time.get_ticks_usec()
 	for d in running.duplicate():
 		if is_instance_valid(d):
 			ctx.source = d
 			d.tick(delta)
 	ctx.source = null
+	tick_ms = float(Time.get_ticks_usec() - t0) / 1000.0
 
 
 func _process(delta: float) -> void:

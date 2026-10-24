@@ -838,14 +838,38 @@ func _check_quake(city: Node3D, dir: DisasterDirector) -> void:
 	var q0: Earthquake = dir.current
 	var worst0 := 0.0
 	var total0 := 0.0
+	var script0 := 0.0
+	var dis0 := 0.0
+	var dis_worst0 := 0.0
+	var script_worst0 := 0.0
+	var awake_most := 0
 	for i in 30 * 12:
 		await physics_frame
 		var ms := Performance.get_monitor(Performance.TIME_PHYSICS_PROCESS) * 1000.0
 		worst0 = maxf(worst0, ms)
 		total0 += ms
+		var sc := float(city._prof.get("script_total", 0.0))
+		dis0 += dir.tick_ms
+		dis_worst0 = maxf(dis_worst0, dir.tick_ms)
+		script0 += sc
+		script_worst0 = maxf(script_worst0, sc)
+		var awake := 0
+		for isl in city.islands.islands:
+			if isl != null and isl.is_valid() and not isl.settled:
+				awake += 1
+		awake_most = maxi(awake_most, awake)
 	var none: bool = q0.collapses.is_empty()
 	print("  --   shaking alone, no collapses, 12 s: mean %.2f ms, worst %.1f ms; %d chip(s), %d clump(s)" % [
 			total0 / (30 * 12), worst0, q0.facade_chips, q0.facade_shears])
+	# What of the physics frame is the quake and the city at all: measured
+	# 2026-10-23, the quake 0.1 ms and the city 2 ms of a 20 ms "physics tick",
+	# and 17.6 ms with no chips and nothing awake -- the frame figure above is
+	# mostly not the disaster's (PerfCaps.md 6).
+	print("  --   the city's own tick: mean %.2f ms, worst %.1f; the quake's %.2f, worst %.1f; %d pieces, %d awake at most" % [
+			script0 / (30 * 12), script_worst0, dis0 / (30 * 12), dis_worst0,
+			city.islands.islands.size(), awake_most])
+	print("  --   of it: lateral checks %.1f ms in all (%d, worst pulse %.1f ms), facades %.1f ms in all" % [
+			q0.lateral_ms, q0.lateral_checks, q0.lateral_worst_ms, q0.facade_ms])
 	dir.stop()
 	await _until_over(dir)
 	var topples0 := 0

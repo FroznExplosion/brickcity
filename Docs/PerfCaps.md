@@ -157,3 +157,57 @@ Left, and why it is left:
   same kind of copy as the panes', in the buildings' area.
 * The panes' copy could shrink to the outer walls' rows (it copies the whole chunk); 3 ms once per
   building as it turns to bricks.
+
+## 5. A look out over the city (2026-10-23)
+
+`big_city.tscn -- --chamfer --cost --overview`: from the street walk's start, eight directions,
+then the dearest one with each kind of node hidden in turn, then the far tier off and on.
+
+The dearest view (down a street of twelve buildings in bricks) drew in 20.5-21.7 ms on the GPU:
+653 draws, 4.6M triangles. The buildings in bricks were 16.7 ms of it; the sun's shadow 2.6-2.9,
+the far city's MultiMesh and the shadow proxies about 1 each (1 ms is the noise of the method).
+Their bands are every brick's faces, out to DEMESH_RANGE (110 m).
+
+**The far tier** (`CityScene._tend_far_coarse`): a building in bricks past `FAR_COARSE_RANGE`
+(60 m, past where the print's shaded bevel has faded) that has been quiet for 3 s is drawn as
+its coarse stand-in -- `BrickWorld.build_chunk_coarse_mesh`, what a far piece of debris already
+is: the outer surface merged across bricks of a colour, brick outlines from its UV2. Built on
+the world's worker, uploaded on ours. The bands stay built underneath, hidden, and are what a
+hit patches; any change to its bricks (`_remesh`, `_apply_band`, `_take_bands`) shows them at
+once, and it goes coarse again once quiet. Back inside `FAR_COARSE_BACK` (50 m).
+
+| Dearest view | GPU | Draws | Triangles |
+|---|---|---|---|
+| bands | 20.3-20.8 ms | 653 | 4.6M |
+| far tier | 11.6-11.8 ms | 191 | 1.65M |
+
+The picture differs at 0.01% of sampled pixels. The pass checks it, and that a hit on a far
+building shows at once and that it goes coarse again. Street walk after it: GPU 9.8 ms mean
+(was 12.6), worst 17 (was 22-29).
+
+Headless, the renderer is the dummy one, whose meshes are not safe to make on two threads: with
+every band, pane and glass mesh on workers it broke its RIDs mid-probe. Headless, those are made
+on the main thread as before (`CityScene.worker_meshes`). Two RID errors are left in the
+disaster probe from older worker uploads (pieces, shadow proxies); main has the same two.
+
+## 6. Destruction and disasters: what is capped (2026-10-23)
+
+Destruction is capped nearly everywhere already: damage drained 8 hits / 6 ms a tick, solves 4,
+cascades 3 ms, promotions queued at 24, live pieces 220 / 60 / 240 and 48 moving, crumbs 1,500,
+heaps, impacts, shears, band uploads 60k vertices a tick, shells, demesh and trims all per tick;
+collapses at once and in total by the disaster menu (2 / 6).
+
+Disasters: every one makes its lights, particles, decals and sounds once, in pools; fire is hard
+capped (900 burning bricks in the city, 300 in a building; the cell fire 48 cells); tornado and
+quake pushes go only to the live pieces (the debris cap) and at most 3 buildings pushed over;
+lightning, meteors and blasts go through the damage queue. Nothing new is needed.
+
+Measured, the quake (`disaster_probe --only=quake`, new lines): its own tick 0.1 ms, the lateral
+checks 6-7 ms and the facade chips 10-11 ms in all over 12 s, the city's tick 2 ms -- of a
+"physics tick" the probe reads at 20-23 ms, which is 17.6 ms with no chips and nothing awake. The
+probe's tick figure is mostly not the disaster's; it would need splitting before it is a budget.
+
+The disaster probe fails 8 checks, on main as on this branch (none from this work): the meteor
+ring left in the AI's world (2), the quake's tall-tower/foundation/authority checks (3: the tower
+reads 0.03 of its strength at 0.6 g -- stud strength was raised fourfold since), and snow on a
+roof (3).
