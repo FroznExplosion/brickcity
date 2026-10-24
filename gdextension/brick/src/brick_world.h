@@ -299,6 +299,9 @@ public:
     // is_solid for every cell of the chunk at once, one byte a cell, x fastest
     // then y then z (local cells): for a worker that may not ask the live world.
     PackedByteArray get_solid_cells(int chunk_id) const;
+    // The same for rows `ys` only (one x-z plane each, in that order, x fastest
+    // then z) and only the columns within `ring` of a face; the rest read 0.
+    PackedByteArray get_solid_cells_at(int chunk_id, PackedInt32Array ys, int ring) const;
     int block_at(int chunk_id, Vector3i cell) const;
 
     int get_block_count(int chunk_id) const;

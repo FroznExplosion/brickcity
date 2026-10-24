@@ -1242,6 +1242,47 @@ PackedByteArray BrickWorld::get_solid_cells(int chunk_id) const {
     return out;
 }
 
+PackedByteArray BrickWorld::get_solid_cells_at(int chunk_id, PackedInt32Array ys, int ring) const {
+    PackedByteArray out;
+    if (!valid_chunk(chunk_id)) {
+        return out;
+    }
+    const Chunk &c = chunks[chunk_id];
+    const Vector3i d = c.dims;
+    const int64_t plane = (int64_t)d.x * d.z;
+    out.resize(plane * ys.size());
+    uint8_t *w = out.ptrw();
+    memset(w, 0, (size_t)out.size());
+    // Only the columns within `ring` of a face: a window pane asks the outer
+    // walls, and a big tower's whole chunk was ~3 ms to copy (PerfCaps.md 4).
+    std::vector<int32_t> cols;
+    for (int z = 0; z < d.z; ++z) {
+        for (int x = 0; x < d.x; ++x) {
+            if (x < ring || x >= d.x - ring || z < ring || z >= d.z - ring) {
+                cols.push_back(x + d.x * z);
+            }
+        }
+    }
+    std::vector<uint8_t> alive(c.blocks.size());
+    for (size_t i = 0; i < c.blocks.size(); ++i) {
+        alive[i] = c.blocks[i].alive ? 1 : 0;
+    }
+    for (int i = 0; i < ys.size(); ++i) {
+        const int y = ys[i];
+        if (y < 0 || y >= d.y || c.index_of(Vector3i(0, y, 0)) < 0) {
+            continue; // outside the chunk or a band chunk's window: nothing there
+        }
+        uint8_t *o = w + plane * i;
+        for (int32_t k : cols) {
+            const int x = k % d.x;
+            const int z = k / d.x;
+            const int32_t blk = c.occupancy[c.index_of(Vector3i(x, y, z))];
+            o[k] = (blk >= 0 && alive[(size_t)blk]) ? 1 : 0;
+        }
+    }
+    return out;
+}
+
 int BrickWorld::block_at(int chunk_id, Vector3i cell) const {
     if (!valid_chunk(chunk_id)) {
         return -1;
@@ -10603,6 +10644,8 @@ void BrickWorld::_bind_methods() {
     ClassDB::bind_method(D_METHOD("get_occupancy_bytes", "chunk_id"),
             &BrickWorld::get_occupancy_bytes);
     ClassDB::bind_method(D_METHOD("get_solid_cells", "chunk_id"), &BrickWorld::get_solid_cells);
+    ClassDB::bind_method(D_METHOD("get_solid_cells_at", "chunk_id", "ys", "ring"),
+            &BrickWorld::get_solid_cells_at);
     ClassDB::bind_method(D_METHOD("set_anchor_levels", "chunk_id", "grid_ys"),
             &BrickWorld::set_anchor_levels);
     ClassDB::bind_method(D_METHOD("get_template_count"), &BrickWorld::get_template_count);

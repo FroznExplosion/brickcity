@@ -68,7 +68,15 @@ since storey units' log commands (`--ring` 4 of 4, no FAIL line). Open, in order
    (`IslandManager._finish_coarse`), and `build_damage_profile` walks only the outer-wall columns
    with alive read per block (`damage_profile_probe`: same answer as the full walk, 0.12 ms mean
    vs 0.40 on a 40x30x34 tower) -- the shadow proxy's profile stays on the main thread; time it
-   with `--cost --street --long` before moving it. Was: a stand-in's
+   with `--cost --street --long` before moving it. 2026-10-24: the panes' copy is only the window
+   rows and outer-wall columns (`BuildingShell.standing_copy`, `get_solid_cells_at`;
+   `pane_copy_probe`: same panes, 0.028 ms vs 0.147). **Watch:** `--lodbreak` failed "60 m: no
+   wall drawn where its bricks are gone" in 2 of 7 runs with these changes (3-4 of 62 hits, on a
+   band, both times the tower's corner at y ~49 -- the top laid storey under the cut, storeys
+   16-24 laid, cut at 25 -- persisting two stops, gone by the third) and 0 of 3 on the scripts of
+   `300e2f5`; one other run failed "no piece frozen over air drops" (item 5's kind). Nothing in
+   the copy touches band meshes; a timing-exposed miss in a cut storey's band patch is the guess.
+   Was: a stand-in's
    `add_surface_from_arrays` stalling 9-216 ms (the renderer; idea: every stand-in through the
    worker upload path, `IslandManager._submit_mesh_job`); a shell piece's split 5-17 ms
    (`spawn` -> `split_island`; `adopt` would skip it but `spawn` holds the move caps, crumbling,
