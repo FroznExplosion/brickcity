@@ -72,7 +72,7 @@ func _ready() -> void:
 	# Right after the motor (-10) has moved the body, before anything reads it.
 	process_physics_priority = -9
 	if mech != null:
-		_peak_y = mech.feet().y
+		_peak_y = Gravity.height_of(mech.feet())
 		_saved_mask = mech.body.collision_mask
 
 
@@ -80,7 +80,7 @@ func _physics_process(_delta: float) -> void:
 	if mech == null or mech.body == null:
 		return
 	var body := mech.body
-	var y := mech.feet().y
+	var y := Gravity.height_of(mech.feet())
 	var now := _now()
 	if _through_y != INF and (y < _through_y or now > _through_until):
 		# Past the floor it broke: buildings are solid again.
@@ -114,7 +114,7 @@ func _land(y: float) -> bool:
 		mech.body.collision_mask = _saved_mask
 		return false
 	breaks += 1
-	on_break.call(mech.feet() - Vector3.UP * 0.07, FOOT_RADIUS, fl)
+	on_break.call(mech.feet() - mech.motor.up * 0.07, FOOT_RADIUS, fl)
 	_carry = energy - A
 	_carry_y = y
 	_carrying = true
@@ -122,14 +122,14 @@ func _land(y: float) -> bool:
 	# neither is anything falling with it.
 	_through_y = y - 0.35
 	if next_floor.is_valid():
-		var below: float = next_floor.call(mech.feet() - Vector3.UP * 0.3)
+		var below: float = next_floor.call(mech.feet() - mech.motor.up * 0.3)
 		if below > -INF:
 			_through_y = below + 0.3
 	_through_until = _now() + PASS_SECONDS
 	mech.body.collision_mask = _saved_mask & ~(Layers.STRUCTURE | PIECE_LAYERS)
 	var g := Gravity.strength() \
 			* mech.motor.gravity_scale
-	mech.body.velocity.y = -sqrt(2.0 * g * maxf(_carry, 0.0) * BRICK)
+	mech.body.velocity = Gravity.with_vert(mech.body.velocity, mech.motor.up, -sqrt(2.0 * g * maxf(_carry, 0.0) * BRICK))
 	_peak_y = y
 	_was_on_floor = false
 	return true

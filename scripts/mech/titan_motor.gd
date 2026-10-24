@@ -206,7 +206,7 @@ func _ready() -> void:
 	body.motion_mode = CharacterBody3D.MOTION_MODE_GROUNDED
 	_charges = dash_charges
 	_last_pos = body.global_position
-	_air_peak_y = body.global_position.y
+	_air_peak_y = Gravity.height_of(body.global_position)
 	torso_yaw = body.rotation.y
 	legs_yaw = torso_yaw
 	_own_intents.aim_yaw = torso_yaw
@@ -270,7 +270,7 @@ func reset(yaw: float) -> void:
 	if body != null:
 		body.velocity = Vector3.ZERO
 		_last_pos = body.global_position
-		_air_peak_y = body.global_position.y
+		_air_peak_y = Gravity.height_of(body.global_position)
 		_was_on_floor = true
 	dash_charges_changed.emit(_charges, dash_charges)
 
@@ -307,9 +307,40 @@ func sprint_spool() -> float:
 
 # ------------------------------------------------------------------------------ the tick
 
+## Up where the chassis stands (Gravity.up_at; +Y in the flat game). The body
+## is carried so its own Y is this, and every yaw here is in its frame
+## (Docs/Planets.md 11.7).
+var up := Vector3.UP
+
+
+## The basis that turns a yaw in the body's frame into the world: the body's
+## own (the identity in the flat game, where yaws are the world's).
+func yaw_basis(yaw: float) -> Basis:
+	var b := Basis(Vector3.UP, yaw)
+	if body == null:
+		return b
+	var f := body.global_transform.basis
+	return b if f == Basis.IDENTITY else f.orthonormalized() * b
+
+
+## The torso's frame in the world: forward is -z.
+func torso_basis() -> Basis:
+	return yaw_basis(torso_yaw)
+
+
+func _stand_up() -> void:
+	up = Gravity.up_at(body.global_position)
+	var b := body.global_transform.basis
+	var nb := Gravity.carry(b, up)
+	if nb != b:
+		body.global_transform.basis = nb
+	body.up_direction = up
+
+
 func _physics_process(delta: float) -> void:
 	if body == null:
 		return
+	_stand_up()
 	# `body`, not `self`. [EntityTime.of] resolves through [ComponentCache.find], which
 	# searches the given node's DESCENDANTS — and this motor has none, so passing `self`
 	# could never find the `EntityTime` child that EntityTime's own docs tell you to hang
@@ -447,7 +478,7 @@ func _try_dash(it: TitanIntents) -> void:
 
 	var dir := _wish_dir
 	if dir.length_squared() < 1e-6:
-		dir = -Basis(Vector3.UP, torso_yaw).z    # torso-forward when there is no input
+		dir = -torso_basis().z    # torso-forward when there is no input
 	dir = dir.normalized()
 
 	# THE CHAINING RULE (§6.1). Whatever the chassis was carrying ABOVE its walking cap
@@ -461,7 +492,7 @@ func _try_dash(it: TitanIntents) -> void:
 	# here with impossible speed in `body.velocity` (a launcher, a conveyor, a physics
 	# shove) degrades to the sprint→dash number instead of scaling without limit. The two
 	# legal outcomes stay `dash_speed` from rest and `dash_speed + 4.5` out of a sprint.
-	var planar := Vector3(body.velocity.x, 0.0, body.velocity.z)
+	var planar := Gravity.flat(body.velocity, up)
 	var carry_cap: float = maxf(max_speed * sprint_speed_mult - max_speed, 0.0)
 	var carry: float = clampf(planar.dot(dir) - max_speed, 0.0, carry_cap)
 	_dash_target_speed = dash_speed + carry
@@ -526,7 +557,7 @@ func _update_wish(it: TitanIntents) -> void:
 	if _sprinting:
 		md.x *= lerpf(1.0, sprint_strafe_mult, _sprint_spool)
 	# TORSO frame, not aim frame (§6.1). This single line is the Titanfall feel.
-	var b := Basis(Vector3.UP, torso_yaw)
+	var b := torso_basis()
 	var wish := b.x * md.x - b.z * md.y
 	if wish.length_squared() > 1.0:
 		wish = wish.normalized()
@@ -536,7 +567,7 @@ func _update_wish(it: TitanIntents) -> void:
 
 func _apply_horizontal(dt: float, on_floor: bool) -> void:
 	var wish := _wish
-	var planar := Vector3(body.velocity.x, 0.0, body.velocity.z)
+	var planar := Gravity.flat(body.velocity, up)
 	if _dash_time > 0.0:
 		planar = _dash_dir * _dash_target_speed
 	else:
@@ -549,19 +580,18 @@ func _apply_horizontal(dt: float, on_floor: bool) -> void:
 		else:
 			rate = 0.0    # no jump means barely any air time; air friction would be invented physics
 		planar = planar.move_toward(wish * top, rate * dt)
-	body.velocity.x = planar.x
-	body.velocity.z = planar.z
+	body.velocity = planar + up * Gravity.vert(body.velocity, up)
 
 
 func _apply_vertical(dt: float, on_floor: bool) -> void:
 	if on_floor:
 		# Never positive. No jump — vertical is gravity only (§6.1) — and this is the line
 		# that has to stay honest for that claim to survive a refactor.
-		body.velocity.y = -GROUND_PRESS
-		_air_peak_y = body.global_position.y
+		body.velocity = Gravity.with_vert(body.velocity, up, -GROUND_PRESS)
+		_air_peak_y = Gravity.height_of(body.global_position)
 	else:
 		body.velocity += Gravity.down_at(body.global_position) * _gravity * dt
-		_air_peak_y = maxf(_air_peak_y, body.global_position.y)
+		_air_peak_y = maxf(_air_peak_y, Gravity.height_of(body.global_position))
 
 
 # ------------------------------------------------------------------------------ steps
@@ -594,7 +624,7 @@ func _step_assist(dt: float) -> void:
 		return
 	if not body.is_on_floor():
 		return                                              # gate 0: never climb mid-fall
-	var motion := Vector3(body.velocity.x, 0.0, body.velocity.z) * dt
+	var motion := Gravity.flat(body.velocity, up) * dt
 	if motion.length_squared() < 1e-8:
 		return
 	if motion.length() < STEP_MIN_MOTION:
@@ -602,7 +632,7 @@ func _step_assist(dt: float) -> void:
 	var t := body.global_transform
 	if not body.test_move(t, motion, _probe):
 		return                                              # not blocked; nothing to do
-	if _probe.get_normal().angle_to(Vector3.UP) <= deg_to_rad(max_slope_deg):
+	if _probe.get_normal().angle_to(up) <= deg_to_rad(max_slope_deg):
 		return                                              # gate 1: a walkable slope
 
 	var reach := motion.normalized() * maxf(motion.length(), STEP_PROBE_REACH)
@@ -611,7 +641,7 @@ func _step_assist(dt: float) -> void:
 	# transform we have not yet shown the capsule can legally occupy. Conservative on
 	# purpose: it refuses a legal 0.4 m step under a 0.5 m overhang. Refusing to climb is a
 	# titan that walks into a wall; not refusing is a titan Jolt spits out of a ceiling.
-	if body.test_move(t, Vector3.UP * ceiling):
+	if body.test_move(t, up * ceiling):
 		return
 	if body.test_move(_raised(t, ceiling), reach):
 		return                                              # gates 2+3: too tall, or a slope
@@ -631,17 +661,17 @@ func _step_assist(dt: float) -> void:
 	# and a swept rise that reaches the ceiling reaches everything below it, so this is
 	# belt and braces — but the committing line is an unswept teleport, and the last thing
 	# before an unswept teleport should be a swept test of exactly the distance it moves.
-	if body.test_move(t, Vector3.UP * lift):
+	if body.test_move(t, up * lift):
 		return
 
-	body.global_position.y += lift
+	body.global_position += up * lift
 	# Pure horizontal for this tick, so the descent does not immediately re-clip the riser
 	# we just cleared. Gravity resumes next tick.
-	body.velocity.y = 0.0
+	body.velocity = Gravity.with_vert(body.velocity, up, 0.0)
 
 
 func _raised(t: Transform3D, by: float) -> Transform3D:
-	return Transform3D(t.basis, t.origin + Vector3.UP * by)
+	return Transform3D(t.basis, t.origin + up * by)
 
 
 # ------------------------------------------------------------------------------ post-move
@@ -651,12 +681,12 @@ func _post_move(_dt: float) -> void:
 	var on_floor := body.is_on_floor()
 
 	if on_floor and not _was_on_floor:
-		var fall: float = maxf(_air_peak_y - pos.y, 0.0)
+		var fall: float = maxf(_air_peak_y - Gravity.height_of(pos), 0.0)
 		if fall >= landing_min_fall:
 			landed.emit(fall)
 	_was_on_floor = on_floor
 
-	var moved := Vector3(pos.x - _last_pos.x, 0.0, pos.z - _last_pos.z).length()
+	var moved := Gravity.flat(pos - _last_pos, up).length()
 	_last_pos = pos
 
 	# Distance cadence, spec §10.4's documented fallback for "no method tracks yet". Phase

@@ -150,7 +150,7 @@ func _to_the_fight(now: float) -> void:
 # --- eyes ---------------------------------------------------------------------------
 
 func eye() -> Vector3:
-	return tank.global_position + Vector3.UP * (Tank.HEIGHT * 0.5 + 0.6)
+	return tank.global_position + tank.up * (Tank.HEIGHT * 0.5 + 0.6)
 
 
 func _sense() -> void:
@@ -207,17 +207,17 @@ func _gunner(now: float) -> void:
 		hold_fire = "contact too old" if age > BLIND_FIRE_AGE else "out of range"
 		return
 	target = c.pawn
-	var at := c.pawn.chest() if c.visible else c.pos + Vector3.UP * 1.0
+	var at := c.pawn.chest() if c.visible else c.pos + tank.up * 1.0
 	# Asked by its squad for a way in (TacticsSense.ask_way): while it does not
 	# see the player, the doorway they asked for, at the knee, until it is open.
 	var way := TacticsSense.way_asked(tank, now)
 	if way != Vector3.INF and not c.visible:
-		var into := Vector3(c.pos.x - way.x, 0.0, c.pos.z - way.z).normalized()
+		var into := Gravity.flat(c.pos - way, tank.up).normalized()
 		if TacticsSense.way_open(services, way - into * 3.0, way):
 			TacticsSense.way_done(tank)
 			made_ways += 1
 		else:
-			at = way + into * 0.6 + Vector3.UP * 0.6
+			at = way + into * 0.6 + tank.up * 0.6
 	tank.aim_point = at
 	if _friend_near_line(tank.muzzle.global_position, at):
 		hold_fire = "friend in the line"

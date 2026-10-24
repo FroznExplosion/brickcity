@@ -1149,3 +1149,52 @@ worst frames are the first frame's shader compiles (~1.7 s) and the gate's own s
 
 ![a town on its pad, the cruise toward the spire, the spire up close](Planets/c1_town_cruise_landmark.jpg)
 ![the climb: 1.2 km (the cross-fade), 5 km, 30 km](Planets/c1_climb.jpg)
+
+### 11.7 Porting the movers to local down (2026-10-23)
+
+Pawn (and its moves, view, controller, the debug camera), titan motor and mech, tank, truck,
+flyer, soldier. One rule everywhere: **"up" is `Gravity.up_at(position)`**, never `Vector3.UP`
+or `.y`, through four helpers in `scripts/gravity.gd`:
+
+| helper | flat game (up = +Y) | on a planet |
+|---|---|---|
+| `Gravity.vert(v, up)` | `v.y` | `v.dot(up)` |
+| `Gravity.flat(v, up)` | `Vector3(v.x, 0, v.z)` | `v - up * v.dot(up)` |
+| `Gravity.with_vert(v, up, x)` | `v` with `y = x` | its along-up part replaced |
+| `Gravity.height_of(p)` | `p.y` | `|p - centre| - radius` |
+
+In the flat game each is EXACT (a dot with (0, 1, 0) is `y`), so nothing there moves by a bit and
+every existing probe still guards it. Bodies turn with the ground: a body's basis is carried along
+the curve each tick (the minimal rotation from its old up to its new one, STA doc 05's full-basis
+rebuild), so its local Y is up; look yaw and pitch are angles in that frame, not the world's.
+Local offsets on a body (`Vector3.UP * eye_offset` on a child) stay as they are -- they are
+already in the body's frame.
+
+The AI's navigation stays on the flat grid until the nav regions (test 8) are built: on a planet a
+soldier moves, turns and shoots in its local frame, but paths only inside one flat region.
+
+**Where it stands.** Ported, each with the flat path kept literal wherever a helper is not exact
+(`if Gravity.planet == null` / `if frame == Basis.IDENTITY`):
+
+- **Pawn** (moves, view, controller, debug camera): body carried, look in the body frame; on a
+  planet only, a standing body presses into the floor (`Gravity.standing_vert`) and an upward
+  speed under 1.5 m/s on the floor is the ground rising (`Gravity.floor_rise`), which cured
+  is_on_floor flicker on the voxel facets. `Pawn.frame_look` turns world look angles (what
+  AimModel returns) into the body frame; `look_angles_to`, `look_dir` the same for a vector.
+- **Titan** (motor, mech, brain, rodeo, fall rule, pilot, cockpit view): `motor.torso_basis()`
+  is the torso frame everywhere.
+- **Tank, truck, APC** (and Splatter, the deck, the brain's eye, brick debris, the chase camera):
+  a carried `frame`, yaw measured in it.
+- **Flyer**: ground from the planet's own height (`Gravity.ground_height`), orbits round the
+  target in its tangent plane.
+- **Soldier** (body side): steering, sight cone, aim, reach, waypoints, unstick ring,
+  `body_fits`, breach plants, grenades, look.
+
+Planet gates (scenes/planet.tscn, each body tracked with its own collision viewer,
+`PlanetBody.track`): `--gate=pawn`, `--gate=mech`, `--gate=tank` (the player's tank: stand,
+drive a great circle, turn about local up, stop, reverse, drop), `--gate=soldier` (an AI body
+walked 40 m round the curve as walk_toward walks it, aimed through `frame_look`, `body_fits`).
+
+**Not yet:** the soldier's brain on a planet -- its nav, sight grid, cover and the AI world are
+the flat game's C++ grid (needs the nav regions, test 8); `VehicleCover`, `VehicleNav`;
+destruction on the planet; biomes and trees.

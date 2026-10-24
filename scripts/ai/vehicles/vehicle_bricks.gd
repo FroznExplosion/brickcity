@@ -386,11 +386,12 @@ func _fly(b: Brick, world: Vector3, from: Vector3) -> void:
 	body.add_child(mi)
 	parent.add_child(body)
 	body.global_transform = Transform3D(parts[b.part].global_basis, world)
+	var up := Gravity.up_at(world)
 	var away := world - from
-	away.y = maxf(away.y, 0.0)
-	away = away.normalized() if away.length() > 0.01 else Vector3.UP
+	away = Gravity.with_vert(away, up, maxf(Gravity.vert(away, up), 0.0))
+	away = away.normalized() if away.length() > 0.01 else up
 	var cv := vehicle as CharacterBody3D
-	body.linear_velocity = away * rng.randf_range(2.5, 5.0) + Vector3.UP * rng.randf_range(2.0, 4.0) \
+	body.linear_velocity = away * rng.randf_range(2.5, 5.0) + up * rng.randf_range(2.0, 4.0) \
 			+ (cv.velocity if cv != null else Vector3.ZERO)
 	body.angular_velocity = Vector3(rng.randf_range(-6, 6), rng.randf_range(-6, 6), rng.randf_range(-6, 6))
 	_flying += 1

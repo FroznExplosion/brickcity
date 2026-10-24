@@ -477,8 +477,7 @@ func _sense() -> void:
 ## The shared field's way toward `field_goal`, read every tick: a node is a stud,
 ## and at a run a third of a second between thinks is two metres of corner.
 func _steer_field() -> void:
-	var d := services.field_dir(field_goal, pawn.feet())
-	d.y = 0.0
+	var d := Gravity.flat(services.field_dir(field_goal, pawn.feet()), pawn.up)
 	pawn.intents.move = d.normalized() if d.length() > 0.01 else Vector3.ZERO
 	_want_move = pawn.intents.move
 
@@ -515,9 +514,8 @@ func can_see(h: Pawn) -> bool:
 	if d > SIGHT_RANGE * services.sight_mul:
 		return false
 	if d > NEAR_SENSE:
-		var look := -Basis(Vector3.UP, pawn.intents.look_yaw).z
-		var to := aim_at - eye
-		to.y = 0.0
+		var look := pawn.look_dir()
+		var to := Gravity.flat(aim_at - eye, pawn.up)
 		if to.length() > 0.01 and rad_to_deg(look.angle_to(to.normalized())) > SIGHT_CONE_DEG:
 			return false
 	var q := PhysicsRayQueryParameters3D.create(eye, aim_at, Layers.HITSCAN_MASK,
@@ -558,6 +556,8 @@ func _aim_and_fire(now: float) -> void:
 		aim.track(c.pawn, now)
 		aim.weather = services.aim_mul
 		var ang := aim.aim(eye, at, now)
+		if Gravity.planet != null:
+			ang = pawn.frame_look(ang.x, ang.y)
 		it.look_yaw = ang.x
 		it.look_pitch = ang.y
 		it.fire = fire_ok and clear and mine and aim.ready_to_fire(now) and _burst(now) \
@@ -568,6 +568,8 @@ func _aim_and_fire(now: float) -> void:
 		_aim_target = null
 		aim.track(null, now)
 		var ang := aim.aim(eye, suppress_point, now)
+		if Gravity.planet != null:
+			ang = pawn.frame_look(ang.x, ang.y)
 		it.look_yaw = ang.x
 		it.look_pitch = ang.y
 		it.fire = fire_ok and services.ai_world.bricks_between(eye, suppress_point) == 0 \
@@ -590,7 +592,7 @@ func _friend_in_line(eye: Vector3, at: Vector3) -> bool:
 		if eye.distance_to(ch) > d:
 			continue
 		var q := Geometry3D.get_closest_point_to_segment(ch, eye, at)
-		if Vector2(q.x - ch.x, q.z - ch.z).length() < 0.6 and absf(q.y - ch.y) < 0.9:
+		if Gravity.flat(q - ch, pawn.up).length() < 0.6 and absf(Gravity.height_of(q) - Gravity.height_of(ch)) < 0.9:
 			friendly_holds += 1
 			return true
 	return false
@@ -660,7 +662,7 @@ func _gate_masked() -> void:
 func _measure_masked() -> void:
 	var f := pawn.feet()
 	if _last_feet != Vector3.INF:
-		var d := Vector2(f.x - _last_feet.x, f.z - _last_feet.z).length()
+		var d := Gravity.flat(f - _last_feet, pawn.up).length()
 		# From the second held tick on: on the first, the hold was decided with
 		# the body already stepping -- a tick of reaction, not a move it made
 		# while it knew to stay (0.19 m at a run, once per unmasking).
@@ -678,8 +680,8 @@ func _measure_masked() -> void:
 ## leader's trail). 1 there, 0 on the way, -1 stuck against something.
 func walk_toward(p: Vector3, run := false) -> int:
 	var feet := pawn.feet()
-	var d := Vector3(p.x - feet.x, 0.0, p.z - feet.z)
-	if d.length() <= WAYPOINT_REACHED and absf(p.y - feet.y) <= WAYPOINT_LEVEL:
+	var d := Gravity.flat(p - feet, pawn.up)
+	if d.length() <= WAYPOINT_REACHED and absf(Gravity.height_of(p) - Gravity.height_of(feet)) <= WAYPOINT_LEVEL:
 		pawn.intents.move = Vector3.ZERO
 		return 1
 	pawn.intents.move = d.normalized()
@@ -795,10 +797,10 @@ func _rodeo_step(now: float) -> void:
 	var to: Vector3
 	if m is Mech:
 		var mm := m as Mech
-		to = mm.feet() + Basis(Vector3.UP, mm.motor.torso_yaw).z * (Mech.RADIUS + 1.0)
+		to = mm.feet() + mm.motor.torso_basis().z * (Mech.RADIUS + 1.0)
 	else:
 		var t := m as Tank
-		to = t.feet() + Basis(Vector3.UP, t.yaw).z * (Tank.HULL.z * 0.5 + 1.0)
+		to = t.feet() + t._yb().z * (Tank.HULL.z * 0.5 + 1.0)
 	if move_to(_nav().snap(to), true) == -1:
 		rodeo_target = null
 		_rodeo_retry_at = now + RODEO_RETRY
@@ -866,7 +868,7 @@ func _board_vehicle_step(now: float) -> void:
 		deck.ride(pawn)
 		return
 	# To its side nearest this soldier.
-	var side: Vector3 = Basis(Vector3.UP, v.rotation.y).x
+	var side: Vector3 = Basis(Vector3.UP, v.rotation.y).x if Gravity.planet == null else v.global_transform.basis.x
 	var out := deck.half.x + 1.0
 	var to: Vector3 = v.feet() + side * (out if (pawn.feet() - v.feet()).dot(side) >= 0.0 else -out)
 	if move_to(_nav().snap(to), true) == -1:
@@ -944,12 +946,12 @@ func move_to(goal: Vector3, run := false) -> int:
 		# Level with it too: the far side of a drop is a step away across and a
 		# storey down, and counting it reached from the top sent a soldier on
 		# to "arrive" a floor above its goal (Docs/Collapse.md 4.3).
-		if Vector2(w.x - feet.x, w.z - feet.z).length() > WAYPOINT_REACHED \
-				or absf(w.y - feet.y) > WAYPOINT_LEVEL:
+		if Gravity.flat(w - feet, pawn.up).length() > WAYPOINT_REACHED \
+				or absf(Gravity.height_of(w) - Gravity.height_of(feet)) > WAYPOINT_LEVEL:
 			break
 		_wp += 1
 	if _wp >= _path.size() and _path.size() > 0 \
-			and Vector2(_path[_path.size() - 1].x - feet.x, _path[_path.size() - 1].z - feet.z).length() > 1.0:
+			and Gravity.flat(_path[_path.size() - 1] - feet, pawn.up).length() > 1.0:
 		# The path is walked but the body is not there: it was put somewhere
 		# else (placed, unstuck, shoved). A path from where it is now.
 		_repath = true
@@ -963,13 +965,13 @@ func move_to(goal: Vector3, run := false) -> int:
 		_want_move = Vector3.ZERO
 		return 1
 	var next: Vector3 = _path[_wp]
-	var dir := Vector3(next.x - feet.x, 0.0, next.z - feet.z)
+	var dir := Gravity.flat(next - feet, pawn.up)
 	# The foot of a drop is often a step across from its top, and a body walked
 	# to it stops with its centre over the point and its rim still on the ledge
 	# -- stood there for good. Keep walking the way it came until it falls.
-	if next.y < feet.y - WAYPOINT_LEVEL:
+	if Gravity.height_of(next) < Gravity.height_of(feet) - WAYPOINT_LEVEL:
 		var from: Vector3 = _path[_wp - 1] if _wp > 0 else feet
-		var way := Vector3(next.x - from.x, 0.0, next.z - from.z)
+		var way := Gravity.flat(next - from, pawn.up)
 		if way.length() < 0.01:
 			way = dir
 		if way.length() > 0.01:
@@ -1005,16 +1007,20 @@ func move_to(goal: Vector3, run := false) -> int:
 ## where it was going first. The last resort, and what every shooter does.
 func _unstick(toward: Vector3) -> void:
 	var feet := pawn.feet()
-	var ahead := Vector3(toward.x - feet.x, 0.0, toward.z - feet.z)
-	var a0 := atan2(ahead.z, ahead.x) if ahead.length() > 0.01 else 0.0
+	var ahead := Gravity.flat(toward - feet, pawn.up)
+	# Round the feet in the ground's plane there (the world's XZ off a planet).
+	var tb := Gravity.tangent_basis(feet)
+	var al := tb.inverse() * ahead if Gravity.planet != null else ahead
+	var a0 := atan2(al.z, al.x) if ahead.length() > 0.01 else 0.0
 	for r in [0.35, 0.6, 0.9, 1.3]:
 		for k in 8:
 			# Toward the goal first, then fanning out either side.
 			@warning_ignore("integer_division")
 			var turn := (k + 1) / 2 * (PI / 4.0) * (1.0 if k % 2 == 0 else -1.0)
 			var a: float = a0 + turn
-			var p := _nav().snap(feet + Vector3(cos(a), 0.0, sin(a)) * r)
-			if absf(p.y - feet.y) > 0.5 or not _nav().can_stand(p):
+			var ring: Vector3 = Vector3(cos(a), 0.0, sin(a)) * r
+			var p := _nav().snap(feet + (tb * ring if Gravity.planet != null else ring))
+			if absf(Gravity.height_of(p) - Gravity.height_of(feet)) > 0.5 or not _nav().can_stand(p):
 				continue
 			if not body_fits(services.world3d, p, pawn.body.get_rid()):
 				continue
@@ -1039,7 +1045,7 @@ static func body_fits(space_world: World3D, feet: Vector3, skip: RID = RID()) ->
 	var q := PhysicsShapeQueryParameters3D.new()
 	q.shape = cap
 	# A hair above the floor, and a hair thinner: touching is not overlapping.
-	q.transform = Transform3D(Basis(), feet + Vector3.UP * (Pawn.BODY_HEIGHT * 0.5 + 0.04))
+	q.transform = Transform3D(Gravity.tangent_basis(feet), feet + Gravity.up_at(feet) * (Pawn.BODY_HEIGHT * 0.5 + 0.04))
 	q.margin = -0.02
 	q.collision_mask = Layers.PAWN_MASK
 	if skip.is_valid():
@@ -1199,13 +1205,13 @@ func _plant_step(feet: Vector3, now: float) -> bool:
 	if _bi >= _breaches.size():
 		return false
 	var b: Vector3 = _breaches[_bi]
-	if Vector2(b.x - feet.x, b.z - feet.z).length() > 1.8 or absf(b.y - feet.y) > 1.5:
+	if Gravity.flat(b - feet, pawn.up).length() > 1.8 or absf(Gravity.height_of(b) - Gravity.height_of(feet)) > 1.5:
 		return false
-	var dir := Vector3(b.x - feet.x, 0.0, b.z - feet.z)
+	var dir := Gravity.flat(b - feet, pawn.up)
 	dir = dir.normalized() if dir.length() > 0.05 else -pawn.body.global_basis.z
-	var at := Vector3(b.x, feet.y + 1.0, b.z) + dir * 0.2
+	var at := Gravity.lift_to(b, Gravity.height_of(feet) + 1.0) + dir * 0.2
 	# Bricks there still? Blown already, or never: on.
-	if services.ai_world.line_clear(feet + Vector3.UP * 1.0, at + dir * 0.8):
+	if services.ai_world.line_clear(feet + pawn.up * 1.0, at + dir * 0.8):
 		_bi += 1
 		_plant_since = -INF
 		return false
@@ -1297,7 +1303,7 @@ func set_name_tag(text: String) -> void:
 func approach_point(at: Vector3, stand_off: float) -> Vector3:
 	var nav := _nav()
 	var feet := pawn.feet()
-	var back := Vector3(feet.x - at.x, 0.0, feet.z - at.z)
+	var back := Gravity.flat(feet - at, pawn.up)
 	var d := back.length()
 	var p := at + (back / d) * minf(stand_off, d) if d > 0.01 else feet
 	p = nav.snap(p)
@@ -1313,7 +1319,7 @@ func can_throw_at(at: Vector3) -> bool:
 	if grenades <= 0 or services.now() < grenade_ready_at or is_dead():
 		return false
 	var feet := pawn.feet()
-	var d := Vector2(at.x - feet.x, at.z - feet.z).length()
+	var d := Gravity.flat(at - feet, pawn.up).length()
 	if d < THROW_RANGE[0] or d > THROW_RANGE[1]:
 		return false
 	for ally in allies():
@@ -1328,7 +1334,7 @@ func throw_grenade(at: Vector3) -> bool:
 		return false
 	grenades -= 1
 	grenade_ready_at = services.now() + GRENADE_GAP
-	var g := Grenade.throw(services, pawn, eye_pos() + Vector3.UP * 0.2, at, pawn.get_parent())
+	var g := Grenade.throw(services, pawn, eye_pos() + pawn.up * 0.2, at, pawn.get_parent())
 	thrown.append(g)
 	var lines := ["Grenade!", "Frag out!", "Fire in the hole!"]
 	services.say(pawn, "grenade", lines[services.rng.randi() % lines.size()])
@@ -1344,7 +1350,7 @@ func melee(target: Pawn) -> bool:
 		return false   # a fist does nothing to a mech
 	var f := pawn.feet()
 	var t := target.feet()
-	if Vector2(t.x - f.x, t.z - f.z).length() > melee_reach or absf(t.y - f.y) > 1.2:
+	if Gravity.flat(t - f, pawn.up).length() > melee_reach or absf(Gravity.height_of(t) - Gravity.height_of(f)) > 1.2:
 		return false
 	melee_ready_at = now + MELEE_GAP
 	var before := target.health.total_current()
@@ -1373,13 +1379,14 @@ func look_at_point(p: Vector3) -> void:
 	if _aim_target != null:
 		return
 	var to := p - eye_pos()
-	pawn.intents.look_yaw = atan2(-to.x, -to.z)
-	pawn.intents.look_pitch = clampf(atan2(to.y, Vector2(to.x, to.z).length()), -0.6, 0.6)
+	var la := pawn.look_angles_to(to)
+	pawn.intents.look_yaw = la.x
+	pawn.intents.look_pitch = clampf(la.y, -0.6, 0.6)
 
 
 func _on_nav_changed(box: AABB) -> void:
 	for i in range(_wp, _path.size()):
-		if box.grow(0.5).has_point(_path[i] + Vector3.UP * 0.5):
+		if box.grow(0.5).has_point(_path[i] + Gravity.up_at(_path[i]) * 0.5):
 			_repath = true
 			return
 

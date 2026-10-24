@@ -192,9 +192,41 @@ func _input(event: InputEvent) -> void:
 		add_look(d.x, d.y)
 
 
+## The frame the look is measured in (Docs/Planets.md 11.7): the identity in
+## the flat game, where the look is the camera's own rotation exactly as
+## before; on a planet the possessed pawn's carried basis, so yaw turns about
+## the local up and pitch is from the local horizon.
+var frame := Basis.IDENTITY
+
+
+## The look as (pitch, yaw, roll) in `frame`.
+func look_angles() -> Vector3:
+	if frame == Basis.IDENTITY:
+		return rotation
+	return (frame.inverse() * global_transform.basis.orthonormalized()).get_euler()
+
+
+## Measure the look in a new frame, keeping the angles: the camera turns with it.
+func set_frame(f: Basis) -> void:
+	if f == frame:
+		return
+	var e := look_angles()
+	frame = f
+	if frame == Basis.IDENTITY:
+		rotation = e
+	else:
+		global_transform.basis = frame * Basis.from_euler(e)
+
+
 ## Turn by `yaw` and `pitch` radians -- the mouse, or a gun's recoil. From where
 ## the camera points NOW, so a scripted look_at in between is kept, not undone.
 func add_look(yaw: float, pitch: float) -> void:
+	if frame != Basis.IDENTITY:
+		var e := look_angles()
+		_yaw = e.y + yaw
+		_pitch = clampf(e.x + pitch, -1.5, 1.5)
+		global_transform.basis = frame * Basis.from_euler(Vector3(_pitch, _yaw, roll))
+		return
 	_yaw = rotation.y + yaw
 	_pitch = clampf(rotation.x + pitch, -1.5, 1.5)
 	rotation = Vector3(_pitch, _yaw, roll)
@@ -202,6 +234,10 @@ func add_look(yaw: float, pitch: float) -> void:
 
 func set_roll(r: float) -> void:
 	roll = r
+	if frame != Basis.IDENTITY:
+		var e := look_angles()
+		global_transform.basis = frame * Basis.from_euler(Vector3(e.x, e.y, r))
+		return
 	rotation.z = r
 
 
@@ -333,8 +369,9 @@ func _fly(delta: float) -> void:
 	if Input.is_key_pressed(KEY_S): dir += basis.z
 	if Input.is_key_pressed(KEY_A): dir -= basis.x
 	if Input.is_key_pressed(KEY_D): dir += basis.x
-	if (e_climbs and Input.is_key_pressed(KEY_E)) or Input.is_key_pressed(KEY_SPACE): dir += Vector3.UP
-	if Input.is_key_pressed(KEY_Q) or Input.is_key_pressed(KEY_CTRL): dir -= Vector3.UP
+	var up := Gravity.up_at(global_position)   # +Y off a planet
+	if (e_climbs and Input.is_key_pressed(KEY_E)) or Input.is_key_pressed(KEY_SPACE): dir += up
+	if Input.is_key_pressed(KEY_Q) or Input.is_key_pressed(KEY_CTRL): dir -= up
 
 	var speed := SPEED
 	if Input.is_key_pressed(KEY_SHIFT):
