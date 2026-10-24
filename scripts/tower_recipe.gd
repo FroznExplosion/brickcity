@@ -34,6 +34,20 @@ const COURSES_PER_FLOOR := 6
 ## Two plates: a floor is two layers of panels, the upper laid half a panel
 ## over from the lower (_lay_slab).
 const SLAB_PLATES := 2
+## Every other floor laid with its seams moved (user, 2026-10-21: "stagger the
+## seams"). Two layers offset tie a floor's own seams, but every floor had them
+## on the same lines -- the lower layer every PANEL from the face, the upper
+## half a panel over -- so a vertical cut down one of those lines met a seam in
+## every floor of the tower, and towers came apart in vertical slices along
+## them (Docs/CollapseNext.md 30). An odd floor's layers start STAGGER studs in
+## instead: [lower, upper], each still a panel apart and the upper still across
+## the lower's seams. Not a multiple of five, so no line of an odd floor is a
+## line of an even one. Only the slab plates move: the columns and interior
+## walls stay on the lattice every storey (user: "the support columns should
+## line up with each floor"), and a column top inside one panel is still under
+## the floor. `stagger` off lays every floor as before (the A/B, --no-stagger).
+const STAGGER := [2, 6]
+static var stagger := true
 ## A storey, slab and walls: the base slab is plates [0, 2), storey n's walls
 ## [20n + 2, 20n + 20) and the slab over them [20(n + 1), 20(n + 1) + 2). So a block's storey is
 ## its cell's y / STOREY_PLATES, in a piece of the building as much as in the
@@ -592,7 +606,7 @@ static func build(world: BrickWorld, chunk_id: int, palette: Dictionary,
 				# Full footprint, walls included. This is what ties the four
 				# walls together across the span AND what you see from outside.
 				_lay_slab(world, chunk_id, palette, band.y, footprint_x,
-						footprint_z, SLAB_COLOUR, clear, pl)
+						footprint_z, SLAB_COLOUR, clear, pl, stagger and int(band.floor) % 2 == 1)
 				if columns_first:
 					_lay_storey_columns(world, chunk_id, palette, int(band.y), pl, clear, slabs)
 				else:
@@ -654,8 +668,15 @@ static func build(world: BrickWorld, chunk_id: int, palette: Dictionary,
 ## footprint divides. See the lattice. Returns what the lower layer laid.
 static func _lay_slab(world: BrickWorld, chunk_id: int, palette: Dictionary,
 		y: int, footprint_x: int, footprint_z: int, colour: int,
-		keepouts: Array, pl: Dictionary) -> Array:
-	var t := WALL_THICK
+		keepouts: Array, pl: Dictionary, staggered := false) -> Array:
+	if staggered:
+		_lay_layer(world, chunk_id, palette, y, footprint_x, footprint_z, colour,
+				keepouts, int(STAGGER[0]))
+		_lay_layer(world, chunk_id, palette, y + 1, footprint_x, footprint_z, colour,
+				keepouts, int(STAGGER[1]))
+		_lay_band_strip(world, chunk_id, palette, y, footprint_x, footprint_z, colour,
+				keepouts)
+		return []
 	# One cell at a time, from the building's face. On a conforming footprint
 	# every cell is exactly PANEL square and `_fill_rect` lays it as a single
 	# `plate_10x10`, the ones round the edge reaching out under the walls.
@@ -676,23 +697,168 @@ static func _lay_slab(world: BrickWorld, chunk_id: int, palette: Dictionary,
 	# Only a keep-out that reaches the band can have left any of it bare, and a
 	# stairwell never does (TowerRecipe.stair_line): walking the whole perimeter
 	# to find nothing to lay was ~1,100 failed placements a floor.
+	_lay_upper(world, chunk_id, palette, y + 1, footprint_x, footprint_z, colour, keepouts)
+	_lay_band_strip(world, chunk_id, palette, y, footprint_x, footprint_z, colour, keepouts)
+	return laid
+
+
+## The wall band of both layers of a floor, where a keep-out left it bare: the
+## walls above stand on the upper one. Only a keep-out that reaches the band can
+## have; a stairwell never does (TowerRecipe.stair_line).
+static func _lay_band_strip(world: BrickWorld, chunk_id: int, palette: Dictionary,
+		y: int, footprint_x: int, footprint_z: int, colour: int, keepouts: Array) -> void:
+	var t := WALL_THICK
 	var touches_band := false
 	for k in keepouts:
 		var r: Rect2i = k
 		if r.position.x < t or r.position.y < t or r.end.x > footprint_x - t \
 				or r.end.y > footprint_z - t:
 			touches_band = true
-	_lay_upper(world, chunk_id, palette, y + 1, footprint_x, footprint_z, colour, keepouts)
-	# In both layers: the walls above stand on the upper one.
-	if touches_band:
-		for ly in [y, y + 1]:
-			_fill_rect(world, chunk_id, palette, ly, 0, 0, footprint_x, t, colour, [])
-			_fill_rect(world, chunk_id, palette, ly, 0, footprint_z - t, footprint_x,
-					footprint_z, colour, [])
-			_fill_rect(world, chunk_id, palette, ly, 0, t, t, footprint_z - t, colour, [])
-			_fill_rect(world, chunk_id, palette, ly, footprint_x - t, t, footprint_x,
-					footprint_z - t, colour, [])
-	return laid
+	if not touches_band:
+		return
+	for ly in [y, y + 1]:
+		_fill_rect(world, chunk_id, palette, ly, 0, 0, footprint_x, t, colour, [])
+		_fill_rect(world, chunk_id, palette, ly, 0, footprint_z - t, footprint_x,
+				footprint_z, colour, [])
+		_fill_rect(world, chunk_id, palette, ly, 0, t, t, footprint_z - t, colour, [])
+		_fill_rect(world, chunk_id, palette, ly, footprint_x - t, t, footprint_x,
+				footprint_z - t, colour, [])
+
+
+## One layer of a staggered floor: panels on a grid `shift` studs in from the
+## face, the strips that leaves at the faces in the plates that fit them
+## (`_slab_cell`). A cell a keep-out reaches is filled round it as the
+## lattice's are (`_fill_rect`).
+static func _lay_layer(world: BrickWorld, chunk_id: int, palette: Dictionary,
+		y: int, footprint_x: int, footprint_z: int, colour: int, keepouts: Array,
+		shift: int) -> void:
+	var xs := _shifted_cuts(footprint_x, shift)
+	var zs := _shifted_cuts(footprint_z, shift)
+	for i in xs.size() - 1:
+		var x0: int = xs[i]
+		var x1: int = xs[i + 1]
+		for j in zs.size() - 1:
+			var z0: int = zs[j]
+			var z1: int = zs[j + 1]
+			if not _blocked(keepouts, x0, z0, x1 - x0, z1 - z0):
+				_slab_cell(world, chunk_id, palette, y, x0, z0, x1 - x0, z1 - z0, colour)
+				continue
+			# Laid round the keep-out a plate a piece. A greedy fill laid the
+			# same 4x4s at the same studs in both layers here, and two plates
+			# stacked exactly join only each other: pairs beside a stairwell
+			# detached from the floor (structure_probe). The lower layer takes
+			# the free part as rows across the cell, the upper as columns, so
+			# the one's cut beside the hole is spanned by the other.
+			var hole := _one_hole(keepouts, x0, z0, x1, z1)
+			if hole.size != Vector2i.ZERO:
+				for r in _round_hole(x0, z0, x1, z1, hole, shift == int(STAGGER[0])):
+					var q: Rect2i = r
+					_slab_cell(world, chunk_id, palette, y, q.position.x, q.position.y,
+							q.size.x, q.size.y, colour)
+				continue
+			# More than one keep-out in the cell: cut along all their edges.
+			var cx := [x0, x1]
+			var cz := [z0, z1]
+			for k in keepouts:
+				var r: Rect2i = k
+				for e in [r.position.x, r.end.x]:
+					if e > x0 and e < x1 and not cx.has(e):
+						cx.append(e)
+				for e in [r.position.y, r.end.y]:
+					if e > z0 and e < z1 and not cz.has(e):
+						cz.append(e)
+			cx.sort()
+			cz.sort()
+			for a in cx.size() - 1:
+				for c in cz.size() - 1:
+					var sx0: int = cx[a]
+					var sz0: int = cz[c]
+					var w: int = int(cx[a + 1]) - sx0
+					var l: int = int(cz[c + 1]) - sz0
+					if not _blocked(keepouts, sx0, sz0, w, l):
+						_slab_cell(world, chunk_id, palette, y, sx0, sz0, w, l, colour)
+
+
+## The one keep-out reaching into a cell, clipped to it; an empty rect if none
+## or more than one does.
+static func _one_hole(keepouts: Array, x0: int, z0: int, x1: int, z1: int) -> Rect2i:
+	var cell := Rect2i(x0, z0, x1 - x0, z1 - z0)
+	var found := Rect2i()
+	for k in keepouts:
+		var r: Rect2i = k
+		if not r.intersects(cell):
+			continue
+		if found.size != Vector2i.ZERO:
+			return Rect2i()
+		found = r.intersection(cell)
+	return found
+
+
+## A cell less the hole in it, as up to four rectangles. `rows`: the strips
+## above and below the hole run the cell's whole width (the pieces beside it
+## between them); otherwise the strips beside it run its whole length.
+static func _round_hole(x0: int, z0: int, x1: int, z1: int, hole: Rect2i, rows: bool) -> Array:
+	var hx0 := hole.position.x
+	var hz0 := hole.position.y
+	var hx1 := hole.end.x
+	var hz1 := hole.end.y
+	var out := []
+	if rows:
+		out.append(Rect2i(x0, z0, x1 - x0, hz0 - z0))
+		out.append(Rect2i(x0, hz1, x1 - x0, z1 - hz1))
+		out.append(Rect2i(x0, hz0, hx0 - x0, hz1 - hz0))
+		out.append(Rect2i(hx1, hz0, x1 - hx1, hz1 - hz0))
+	else:
+		out.append(Rect2i(x0, z0, hx0 - x0, z1 - z0))
+		out.append(Rect2i(hx1, z0, x1 - hx1, z1 - z0))
+		out.append(Rect2i(hx0, z0, hx1 - hx0, hz0 - z0))
+		out.append(Rect2i(hx0, hz1, hx1 - hx0, z1 - hz1))
+	return out.filter(func(r: Rect2i) -> bool: return r.size.x > 0 and r.size.y > 0)
+
+
+## The face, then every PANEL from `shift`, then the far face.
+static func _shifted_cuts(span: int, shift: int) -> Array:
+	var out := [0]
+	var at := shift
+	while at < span:
+		if at > 0:
+			out.append(at)
+		at += PANEL
+	out.append(span)
+	return out
+
+
+## A `w` x `l` cell of a staggered layer as one plate where the palette has
+## one that size, else split across its PANEL side: a 10 x 8 edge cell is an
+## 8x8 and a 2x8 (no 8x10 plate is made). Anything else -- a footprint that does
+## not divide -- the lattice's way.
+static func _slab_cell(world: BrickWorld, chunk_id: int, palette: Dictionary, y: int,
+		x: int, z: int, w: int, l: int, colour: int) -> void:
+	var part := _slab_part(palette, w, l)
+	if part != "":
+		world.place_block(chunk_id, Vector3i(x, y, z), palette[part], colour)
+		return
+	var a := int(STAGGER[0])
+	if w == PANEL and l < PANEL:
+		_slab_cell(world, chunk_id, palette, y, x, z, PANEL - a, l, colour)
+		_slab_cell(world, chunk_id, palette, y, x + PANEL - a, z, a, l, colour)
+		return
+	if l == PANEL and w < PANEL:
+		_slab_cell(world, chunk_id, palette, y, x, z, w, PANEL - a, colour)
+		_slab_cell(world, chunk_id, palette, y, x, z + PANEL - a, w, a, colour)
+		return
+	_fill_rect(world, chunk_id, palette, y, x, z, x + w, z + l, colour, [])
+
+
+## The palette name of a `w` x `l` plate laid that way round, or "".
+static func _slab_part(palette: Dictionary, w: int, l: int) -> String:
+	var name := "plate_%dx%d" % [mini(w, l), maxi(w, l)]
+	if w == l:
+		return name if palette.has(name) else ""
+	for axis in ["_z", "_x"]:
+		if palette.has(name + axis) and BrickPalette.size_of(name + axis) == Vector3i(w, 1, l):
+			return name + axis
+	return ""
 
 
 ## A floor's upper layer: panels on a grid half a panel over from the

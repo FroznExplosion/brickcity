@@ -132,6 +132,16 @@ const _PARTS := {
 	## the other (TowerRecipe._lay_slab). Structural parts, as the panel is.
 	"plate_5x10": Vector3i(5, 1, 10),
 	"plate_5x5": Vector3i(5, 1, 5),
+	## The edges of a STAGGERED floor (TowerRecipe.STAGGER): every other
+	## floor's two layers are laid 2 and 6 studs over instead of 0 and 5, so
+	## their seams do not stand over the ones below. Real LEGO plates, all.
+	"plate_2x8": Vector3i(2, 1, 8),
+	"plate_2x10": Vector3i(2, 1, 10),
+	"plate_4x6": Vector3i(4, 1, 6),
+	"plate_4x10": Vector3i(4, 1, 10),
+	"plate_6x6": Vector3i(6, 1, 6),
+	"plate_6x10": Vector3i(6, 1, 10),
+	"plate_8x8": Vector3i(8, 1, 8),
 
 	# --- columns, six bricks tall ---------------------------------------
 	# One block each rather than six stacked bricks, because a column is a

@@ -196,7 +196,8 @@ class Building:
 		return false
 
 
-const RECIPE_VERSION := 1
+## 2: every other floor's seams staggered (TowerRecipe.STAGGER).
+const RECIPE_VERSION := 2
 
 ## Storey units (Docs/Space.md 5.3a): a building a blast or a look reaches is
 ## laid as the storeys reached, not whole. Off, every materialise lays the
