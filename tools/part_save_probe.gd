@@ -20,6 +20,11 @@ extends SceneTree
 ##               leaves it off
 ##   new parts   Save As another name makes new parts and leaves the old; a new build
 ##               starts with no part ids
+##   try on      (stage 4) any held gun part goes on its slot, fitting or not, drawn from
+##               its scene where the socket is, the build's own part hidden; what does not
+##               fit is marked with why; a tried body brings its sockets and the build's
+##               other parts move onto them; a mech part cannot be tried; Save writes
+##               none of it; taking them off puts everything back
 
 const DIR := "user://_probe_parts/"
 
@@ -206,6 +211,8 @@ func _save() -> void:
 		_ok("the assembler puts all three on the body", placed == 3, str(placed))
 		gun.queue_free()
 
+	_try_on(parts_dir)
+
 	# The magazine changed to a wide one: it no longer fits.
 	_ws.points = _ws.points.filter(func(q: Dictionary) -> bool: return not (q.part == "magazine" and q.kind == "mount"))
 	_point("magazine", "mount", "magazine", "mag.wide", [28, 30, 1])
@@ -258,6 +265,114 @@ func _save() -> void:
 	_ws._new_build()
 	_ok("a new build has no part ids", _ws.part_ids.is_empty())
 	_ws._builds_dir = BuildRecipe.player_dir()
+
+
+## A catalogue part with a scene of its own (a box, and a socket node per `sockets`
+## entry: {slot: position in the game's metres}), in a folder outside the build's.
+func _try_part(id: String, slot: String, mount: String, accepts: Dictionary = {},
+		sockets: Dictionary = {}) -> PartRecord:
+	var d := {"id": id, "name": "Tried " + slot, "family": "gun", "scale": "held", "slot": slot,
+			"source": "custom", "creator": {"name": "Lu"}, "manufacturer": "workshop"}
+	if mount != "":
+		d["mount"] = {"interface": mount}
+	var socks := []
+	for k in accepts:
+		socks.append({"name": k, "accepts": accepts[k]})
+	d["sockets"] = socks
+	var r := PartRecord.from_dict(d)
+	r.dir = DIR + "try/" + id + "/"
+	DirAccess.make_dir_recursive_absolute(r.dir)
+	var root_node := Node3D.new()
+	root_node.name = slot
+	var box := MeshInstance3D.new()
+	box.name = "Model"
+	box.mesh = BoxMesh.new()
+	root_node.add_child(box)
+	box.owner = root_node
+	for k in sockets:
+		var n := Node3D.new()
+		n.name = "socket_" + k
+		n.position = sockets[k]
+		root_node.add_child(n)
+		n.owner = root_node
+	var ps := PackedScene.new()
+	ps.pack(root_node)
+	root_node.free()
+	ResourceSaver.save(ps, r.dir + "part.scn")
+	return r
+
+
+func _try_on(parts_dir: String) -> void:
+	print("try on")
+	var before := DirAccess.get_directories_at(parts_dir).size()
+	var leg := PartRecord.from_dict({"id": "korr_leg", "family": "mech", "slot": "leg",
+			"mount": {"interface": "mech.hip", "params": {"length": 2}}})
+	_ok("a mech leg cannot be tried on a gun", _ws.try_part(leg).contains("not a part of a held gun"))
+	_ok("nothing tried: no marks", _ws.tried.is_empty() and _ws.fit_marks.is_empty())
+
+	var narrow := _try_part("lu.narrow_mag", "magazine", "mag.narrow")
+	var wide := _try_part("lu.wide_mag", "magazine", "mag.wide")
+	_ok("a narrow magazine goes on", _ws.try_part(narrow) == "" and _ws.tried.has("magazine"))
+	_ok("it fits the narrow well", _ws.fit_marks.get("magazine", "?") == "", str(_ws.fit_marks))
+	_ok("the build's own magazine hidden, the rest drawn", not _ws._display.has("magazine")
+			and _ws._display.has("body") and _ws._display.has("barrel"), str(_ws._display.keys()))
+	var at: Dictionary = _ws._part_points(_ws._gun_bricks())
+	var node: Node3D = _ws._tried_nodes.get("magazine")
+	_ok("drawn where the build's magazine mounts", node != null
+			and node.position.is_equal_approx(at.magazine), "%s vs %s" % [node.position if node else null, at.magazine])
+	_ok("marked as fitting", _ws._tried_root.get_node_or_null("Mark_magazine") != null
+			and (_ws._tried_root.get_node("Mark_magazine") as Label3D).text == "magazine fits")
+
+	_ok("a wide one goes on as well", _ws.try_part(wide) == "" and _ws.tried.magazine.id == "lu.wide_mag")
+	_ok("and is marked with why it does not fit", String(_ws.fit_marks.get("magazine", "")).contains(
+			"mounts on mag.wide, socket takes mag.narrow"), str(_ws.fit_marks))
+	var mark := _ws._tried_root.get_node_or_null("Mark_magazine") as Label3D
+	_ok("the mark says so", mark != null and mark.text.contains("does not fit") and mark.text.contains("mag.wide"),
+			mark.text if mark else "")
+	_ok("and the status line", _ws.try_text().contains("magazine: mounts on mag.wide"), _ws.try_text())
+
+	# A body that takes the wide one, its sockets elsewhere: the build's parts go on them.
+	var sock_barrel := Vector3(0, 0.02, -0.3)
+	var body := _try_part("lu.wide_body", "body", "", {"barrel": ["barrel.collar"],
+			"grip": ["grip.pin"], "magazine": ["mag.wide"]},
+			{"barrel": sock_barrel, "grip": Vector3(0, -0.05, 0.1), "magazine": Vector3(0, -0.06, -0.05)})
+	_ok("a body goes on", _ws.try_part(body) == "" and not _ws._display.has("body"))
+	_ok("the wide magazine fits it", _ws.fit_marks.get("magazine", "?") == "", str(_ws.fit_marks))
+	_ok("the build's barrel fits it too", _ws.fit_marks.get("barrel", "?") == "", str(_ws.fit_marks))
+	var want: Vector3 = _ws._try_place.body + _ws.game_basis().inverse() * sock_barrel
+	_ok("the build's barrel drawn on the tried body's socket",
+			(at.barrel + _ws.part_offset("barrel")).is_equal_approx(want),
+			"%s vs %s" % [at.barrel + _ws.part_offset("barrel"), want])
+	_ok("the mouse finds it there", _ws._drawn_apart() and _ws.part_offset("barrel") != Vector3.ZERO)
+
+	var saved: Dictionary = _ws.save_parts()
+	_ok("Save with parts tried on: none of them written, nor the build's", (saved.written as Array).is_empty()
+			and DirAccess.get_directories_at(parts_dir).size() == before, str(saved))
+
+	var lu := PartCatalog.new()
+	for r in [narrow, wide, body]:
+		lu.add(r)
+	_ws.toggle_catalog()
+	var panel: PartCatalogPanel = _ws._catalog_panel
+	panel.set_catalog(lu)
+	_ws.select_part(_ws.part_names.find("magazine"))
+	_ok("the catalogue's Fits aims at the tried body", panel.has_fit_target() and panel._fit_host.id == "lu.wide_body")
+	panel.pick("lu.narrow_mag")
+	_ok("a pick in the catalogue tries it on", _ws.tried.magazine.id == "lu.narrow_mag"
+			and String(_ws.fit_marks.magazine).contains("socket takes mag.wide"), str(_ws.fit_marks))
+	_ws.toggle_catalog()
+
+	var own := PartRecord.new()
+	own.id = _ws.part_ids.magazine
+	own.family = "gun"
+	own.scale = "held"
+	own.slot = "magazine"
+	_ws.try_part(own)
+	_ok("trying the build's own part takes off the tried one", not _ws.tried.has("magazine"))
+	_ws.untry_all()
+	_ok("all off: everything back", _ws.tried.is_empty() and _ws.fit_marks.is_empty()
+			and _ws._display.is_empty() and _ws.part_offset("barrel") == Vector3.ZERO
+			and _ws._tried_nodes.is_empty() and _ws.try_text() == "")
 
 
 func _find(cat: PartCatalog, slot: String) -> PartRecord:

@@ -6,11 +6,12 @@ mounts with and what it takes, and is found in one catalogue that filters and so
 for all of them. A gun or a mech in the game is an **assembly** the generator puts together from
 parts that fit, from a seed and a design (section 7).
 
-Status (2026-10-24): **stages 1 to 3 built.** The part record, the fit check and the
+Status (2026-10-24): **stages 1 to 4 built.** The part record, the fit check and the
 catalogue (`scripts/parts/`, `tools/parts_probe.gd`, 65 checks); guns on them: the workshop's
 Save writes every part on its own, the generator and the assembler only put together parts
-that fit (`tools/part_save_probe.gd`, 40 checks); the catalogue panel, F7 in the workshop
-(`tools/part_panel_probe.gd`, 38 checks). Section 11 is the order the rest is built in;
+that fit (`tools/part_save_probe.gd`); the catalogue panel, F7 in the workshop
+(`tools/part_panel_probe.gd`, 38 checks); trying any part on in the workshop, with fit marks
+(`part_save_probe`, now 61 checks). Section 11 is the order the rest is built in;
 "Stage 1 as built" and "Stage 2 as built" below say what differs from the plan.
 
 Builds on: [Parts/joints.md](Parts/joints.md) (joints, the one pin, hands),
@@ -319,7 +320,7 @@ interfaces.
 | 1 | **Done.** The part record, the catalogue (facets, filter, sort), the fit check (layers 1-2), `mech_interfaces` / `figure_interfaces` / `mgun_interfaces` / `body_plans` in `standards.json`; `tools/parts_probe.gd` | `scripts/parts/` |
 | 2 | **Done.** Guns on it: `GunAssembler` and the generator check interfaces; Save writes each part on its own; the game reads those parts (old `guns/` folders still load). Design files with fixed and pool slots moved to stage 6, where the generator first needs them | `scripts/guns/`, `asset_workshop.gd` |
 | 3 | **Done.** The catalogue panel: filters, sort, custom and creator, the Fits toggle; F7 in the workshop; `tools/part_panel_probe.gd` | UI, shared by workshop and inventory |
-| 4 | The workshop's anything-on-anything swap, with fit marks (section 9) | `asset_workshop.gd` |
+| 4 | **Done.** The workshop's anything-on-anything swap, with fit marks (section 9): pick in F7 to try a part on | `asset_workshop.gd` |
 | 5 | The workshop's mech mode: slot, side, class, reference mech, ready mounts, test fit | `asset_workshop.gd` |
 | 6 | Mechs in the game from parts: a mech assembler on a skeleton, IK legs and arms by length, class from the chassis; replaces the boxes in `mech.gd` | `scripts/mech/` |
 | 7 | Pods: slots, `PodGenerator`, the three kinds, pod names, the inventory screen; mech guns (scale `mech`) rolled for the hands | `scripts/mech/`, `scripts/guns/`, loot |
@@ -402,6 +403,29 @@ interfaces.
   it opens. Its Fits points at the socket of the part being built (Y), on the saved part it hangs
   from: the body's magazine well for the magazine, the barrel's for a muzzle. Picking a part only
   names it for now; putting it on is stage 4.
+
+### Stage 4 as built
+
+- **Try a part on**: double click a part in the catalogue (F7). Any held gun part goes on its
+  own slot, fitting or not (`AssetWorkshop.try_part`). A mech, figure or pod part cannot be
+  tried on a gun: same kind only.
+- It is drawn from its **saved game scene**, its mount where this build's socket for it is:
+  where the build's own part of that slot mounts, else the host's J socket point for it, else
+  (a muzzle) the tip. The build's own part of that slot is hidden meanwhile.
+- A **tried body** (or barrel) brings its sockets: the build's own parts that hang on it are
+  drawn on its `socket_<slot>` nodes, as the game's assembler would put them, and are edited
+  there (the mouse follows them, as in the exploded view).
+- **Marks**: every part is checked against what it hangs from by the game's own rule (both say
+  their interfaces: PartFit layer 1; neither does: by slot). A part that does not fit gets a
+  red mark with the reason ("magazine does not fit: mounts on mag.wide, socket takes
+  mag.narrow"); a tried part that fits, a green one. The status line lists them.
+- **Never saved.** A tried part is already saved on its own; Save writes only this build's own
+  parts, unchanged by what is tried on. A part from another build is not brought into this
+  one's design: putting a fixed part of another build in a design is the design files'
+  job (stage 6).
+- Off: try the build's own saved part of that slot, or menu Photos > Take off the tried parts.
+  A new or opened build takes them all off.
+- The catalogue's Fits follows: with a body tried on, it lists what fits that body.
 
 ## 12. Decided
 
