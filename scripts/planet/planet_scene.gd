@@ -20,6 +20,7 @@ extends Node3D
 var data: PlanetData
 var planet: PlanetBody
 var buildings: PlanetBuildings
+var trees: PlanetTrees
 var spawn_dir := Vector3.UP
 var town_dirs: Array = []
 var landmark_dirs: Array = []
@@ -96,6 +97,10 @@ func _ready() -> void:
 	buildings.add_landmark(landmark_dirs[1], 100, 100, 1200, rng)
 	buildings.add_landmark(landmark_dirs[2], 80, 80, 700, rng)
 	buildings.finish()
+	# Trees by biome, streamed round the camera (11.10).
+	trees = PlanetTrees.new()
+	planet.add_child(trees)
+	trees.setup(data)
 	Gravity.planet = planet
 	Gravity.planet_strength = data.gravity_strength
 	Gravity.planet_radius = data.radius

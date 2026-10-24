@@ -1391,3 +1391,40 @@ the bake's pixel, sea-level 29.9 / 22.9 / 3.1 / -18.7 °C at 0/30/60/85°; share
 humidity 0.62: jungle 30%, savanna 25%, forest 11%, taiga 8%, tundra 8%, desert 8%, grass 6%,
 steppe 6%. The spawn's town is on a patch of steppe. `--gate` 9/9 with the map, its shots
 (ground, 5 km, 30 km) show the biomes from the ground to orbit. Next: trees (11.10).
+
+### 11.10 Plan: trees (2026-10-24)
+
+- **Where:** cells of 64 m on the cube-sphere (a direction's cube face and its gnomonic (u, v),
+  cut in steps of 64 m at the datum), so a cell is the same patch of ground every visit and its
+  trees come from a generator seeded by the cell's key: the same trees every time, nothing
+  stored. A candidate spot is jittered in its cell; it keeps a tree by the biome's density there
+  (`PlanetBiomes`, the same climate that colours the ground), and not on a town's pad (flat +
+  blend), in the sea or its beach (under sea level + 1 m), or on ground steeper than 30°. Its base
+  is on `PlanetData.height`, a few cm sunk; it stands along the local up, a random yaw and size.
+- **What:** six kinds, low-poly and brick-cut to match the game -- conifer (stacked shrinking
+  boxes), broadleaf (a trunk and a block canopy), acacia (flat-topped), palm (a tall trunk, plate
+  fronds), cactus (a column and arms), shrub. Built once in code (`PlanetTreeMeshes`), vertex
+  coloured. Biome -> kinds and trees a hectare: tundra shrub 15; taiga conifer 120, shrub 20;
+  steppe shrub 25, broadleaf 3; temperate forest broadleaf 110, conifer 30; temperate grass
+  broadleaf 12, shrub 20; desert cactus 6, shrub 4; savanna acacia 10, shrub 15; jungle palm 60,
+  broadleaf 90.
+- **Drawn:** one MultiMesh per kind per cell, under the planet's node (so the translation
+  re-centre carries them). Cells within 600 m of the camera are kept, built a few a frame nearest
+  first, freed past 700 m. **No pop:** each tree's material fades in by a dither from 600 to 450 m
+  (the far buildings' way); past that the biome's colour on the ground is the forest.
+- **Solid:** trunks of trees in cells within 64 m of the player get a box collider each (one
+  StaticBody per cell), so nobody walks through a trunk; the canopy is not solid.
+- **Probe** `tools/planet_tree_probe.gd` (headless): a cell built twice is the same trees; the
+  density in a forest and a desert against the table; none on a pad, in the sea or on a cliff;
+  every base on the ground (within 5 cm); time a cell. Look: the walker gate's shots.
+
+**11.10 state (2026-10-24): built.** `PlanetTrees` (scripts/planet/planet_trees.gd), six kinds in
+`PlanetTreeMeshes`, `shaders/planet_tree.gdshader` (dither fade 450-600 m). A cell builds in
+under 1 ms; round the spawn 325 cells, 4450 trees, filled in 28 frames (worst 6 ms a frame); 3 s
+at 500 m/s 40 m up, worst 9.5 ms a frame (headless, CPU only). Densities run ~0.65 x the table
+over a biome's cells: the sea and beaches take the rest (a third of this planet is under water).
+`tools/planet_tree_probe.gd` 12/12. The walker gate's shots show them from the ground, the town
+and 300 m. Windowed frame times were not judged: both the A/B runs (`-- --no-trees` and with)
+had the same 250 / 750 ms frames at the spawn, the display-sleep stall of a run nobody watches.
+Not yet: trees in the AI's world (they are not cover or obstacles to the nav), trees on the
+impostor from orbit (the biome colour stands for them).
