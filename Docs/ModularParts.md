@@ -6,7 +6,7 @@ mounts with and what it takes, and is found in one catalogue that filters and so
 for all of them. A gun or a mech in the game is an **assembly** the generator puts together from
 parts that fit, from a seed and a design (section 7).
 
-Status (2026-10-24): **stages 1 to 9 built.** The part record, the fit check and the
+Status (2026-10-24): **stages 1 to 9 built, and stage 10's offline half.** The part record, the fit check and the
 catalogue (`scripts/parts/`, `tools/parts_probe.gd`, 65 checks); guns on them: the workshop's
 Save writes every part on its own, the generator and the assembler only put together parts
 that fit (`tools/part_save_probe.gd`); the catalogue panel, F7 in the workshop
@@ -14,7 +14,7 @@ that fit (`tools/part_save_probe.gd`); the catalogue panel, F7 in the workshop
 (`part_save_probe`, now 61 checks); mech mode in the workshop (`tools/mech_workshop_probe.gd`, 56
 checks); mechs in the game from parts (`tools/mech_parts_probe.gd`, 70 checks); pods and mech guns
 (`tools/pods_probe.gd`, 28; `mech_workshop_probe` now 62); the motion sets (`tools/motion_probe.gd`,
-29); part packages (`tools/package_probe.gd`, 26). Section 11 is the order the rest is built in;
+29); part packages (`tools/package_probe.gd`, 26); the match's parts offline (`tools/lobby_probe.gd`, 24). Section 11 is the order the rest is built in;
 "Stage 1 as built" and "Stage 2 as built" below say what differs from the plan.
 
 Builds on: [Parts/joints.md](Parts/joints.md) (joints, the one pin, hands),
@@ -329,7 +329,7 @@ interfaces.
 | 7 | **Done.** Pods: slots, `PodGenerator`, the three kinds, pod names, the inventory screen; mech guns (scale `mech`) rolled for the hands; `tools/pods_probe.gd` | `scripts/mech/`, `scripts/guns/`, loot |
 | 8 | **Done.** Motion sets library (section 8): `MotionSets`, the mech walk by leg length, the pods' arms; `tools/motion_probe.gd` | `scripts/parts/` |
 | 9 | **Done.** Part packages: export, import, hash, data-only loading; `tools/package_probe.gd` | `scripts/parts/` |
-| 10 | Multiplayer: lobby part list, host download, Steam Workshop | with the netcode |
+| 10 | **Half done** (all but the network): lobby part list, what is missing, host download in checked chunks, placeholders, a Steam Workshop wrapper; `tools/lobby_probe.gd`. The messages themselves wait on the netcode | `scripts/parts/`, then the netcode |
 | 11 | Dressing on studs outside the workshop | |
 | 12 | The figure body plan; animals later | |
 
@@ -609,6 +609,34 @@ interfaces.
 - **Not yet**: thumbnails are carried but not yet made (the workshop needs a window to render
   one); the zip reader cannot ask a file's size before unpacking it, so the 8 MB file cap is the
   guard against a file that unpacks huge. Steam Workshop and the lobby are stage 10.
+
+### Stage 10, the offline half, as built
+
+The game has no netcode yet. Everything a match needs of the parts is built so that the
+netcode only has to carry dictionaries and byte chunks:
+
+- **`PartLobby.list(ids, catalogue)`** (host): each part's id, rev, content hash
+  (`PartPackage.hash_for`: an imported part's from its manifest, a part made here worked out
+  from its package), its source, its Steam item when it has one, and its record without the
+  bricks (its shape: enough to stand in for it).
+- **`PartLobby.missing(list, catalogue)`** (client): what it lacks, or has another version of
+  (another hash). Shipped parts are never missing. `source_for(entry)`: Steam if the part has an
+  item and Steam is there, else the host.
+- **`PartTransfer`**: `make_offer(dir)` packs the part (`PartPackage.pack`, in memory) into 32 KB
+  chunks with an offer {id, rev, hash, size, count}. The client's `PartTransfer.new(offer,
+  lobby_hash)` refuses an offer over 8 MB, with a chunk count that does not match its size, or
+  of another hash than the lobby named; `take(i, bytes)` takes chunks in any order, again is
+  harmless, the wrong size or out of range refused; `progress()` for the join bar, `wanted()`
+  for what to ask again for; `finish()` checks the whole is the hash offered, then imports it as
+  any package (data only).
+- **`PartLobby.placeholder(entry)`**: a missing part's stand-in -- its record as the lobby gave
+  it, so it fits where the real one would, tagged `placeholder`, drawn as a plain block. A mech
+  goes together with one.
+- **`SteamParts`**: subscribe, the installed folder, an item id kept beside its part
+  (`steam.json`), through GodotSteam's UGC calls when the game runs with it. GodotSteam is not
+  in the project, so today it says it is not there and everything comes from the host.
+- **Waiting on the netcode**: the lobby message, asking for and sending the chunks, the join
+  screen's bar, swapping a placeholder for the real part when it lands, publishing to Steam.
 
 ## 12. Decided
 
