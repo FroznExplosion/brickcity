@@ -24,6 +24,12 @@ if ARGUMENTS.get("pdb", "no") == "yes":
     else:
         env.Append(CCFLAGS=["-g"])
 
+# `map=yes`: a linker map beside the DLL (MSVC). Does not change the code, so a
+# crash offset in a library built without it can be looked up in this one's map.
+if ARGUMENTS.get("map", "no") == "yes" and env["platform"] == "windows" and not env.get("use_mingw", False):
+    env = env.Clone()
+    env.Append(LINKFLAGS=["/MAP"])
+
 # SwarmCore -- BoomerBorder's C++ horde (Docs/AIPlan.md P1, R18) -- is built into
 # this library rather than as an extension of its own: one godot-cpp, one DLL, and
 # horde code can read the brick grid directly, which a second extension cannot.
