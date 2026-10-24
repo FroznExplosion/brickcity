@@ -4,6 +4,7 @@
 #include "../brick_terrain.h"
 
 #include <godot_cpp/core/class_db.hpp>
+#include <godot_cpp/core/object.hpp>
 
 #include <algorithm>
 #include <chrono>
@@ -80,6 +81,7 @@ void AIWorld::_bind_methods() {
     ClassDB::bind_method(D_METHOD("set_ground_grid", "origin", "step", "size", "heights"),
             &AIWorld::set_ground_grid);
     ClassDB::bind_method(D_METHOD("has_ground_grid"), &AIWorld::has_ground_grid);
+    ClassDB::bind_method(D_METHOD("set_peers", "worlds"), &AIWorld::set_peers);
     ClassDB::bind_method(D_METHOD("get_stats"), &AIWorld::get_stats);
     ClassDB::bind_method(D_METHOD("reset_stats"), &AIWorld::reset_stats);
 }
@@ -255,6 +257,39 @@ void AIWorld::set_ground_grid(const Vector2 &origin, float step, int size,
             grid_plates[(size_t)j * grid_nx + i] = (int16_t)std::min(32000, _grid_plate(grid_gx0 + i, grid_gz0 + j));
         }
     }
+}
+
+void AIWorld::set_peers(const Array &worlds) {
+    peers.clear();
+    for (int i = 0; i < worlds.size(); ++i) {
+        AIWorld *w = Object::cast_to<AIWorld>(worlds[i]);
+        if (w != nullptr && w != this) {
+            peers.push_back(w->get_instance_id());
+        }
+    }
+}
+
+int AIWorld::_peer_under(const Vector3 &w, float slack) const {
+    for (uint64_t id : peers) {
+        AIWorld *peer = Object::cast_to<AIWorld>(ObjectDB::get_instance(id));
+        if (peer == nullptr || peer->grid_size <= 0) {
+            continue;
+        }
+        const Vector3 l = peer->to_region(w);
+        if (peer->_off_grid(l.x, l.z)) {
+            continue;
+        }
+        const int gx = (int)std::floor(l.x / brick::STUD_M);
+        const int gz = (int)std::floor(l.z / brick::STUD_M);
+        const int i = gx - peer->grid_gx0;
+        const int j = gz - peer->grid_gz0;
+        if (i < 0 || j < 0 || i >= peer->grid_nx || j >= peer->grid_nz) {
+            continue;
+        }
+        const float g = (float)peer->grid_plates[(size_t)j * peer->grid_nx + i] * brick::PLATE_M;
+        return l.y < g - slack ? 1 : 0;
+    }
+    return -1;
 }
 
 bool AIWorld::_off_grid(float x, float z) const {
@@ -1032,6 +1067,11 @@ bool AIWorld::_terrain_hit(const Vector3 &from, const Vector3 &to, float &t) {
         const float s = (float)i / (float)n;
         const Vector3 p = from + d * s;
         if (grid_size > 0 && _off_grid(p.x, p.z)) {
+            // Off this grid: the neighbour's ground, if one has it there.
+            if (!peers.empty() && _peer_under(to_world(p), slack) == 1) {
+                t = s;
+                return true;
+            }
             continue;
         }
         if (p.y < ground_at(p.x, p.z) - slack) {

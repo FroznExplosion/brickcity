@@ -36,8 +36,6 @@ var exploded := false
 ## [pawn, damage] for each body it hurt, for gates.
 var hits: Array = []
 var _danger_id := -1
-## The world its danger box is in (on a planet, the region it landed in).
-var _danger_world: AIWorld
 
 signal went_off(point: Vector3)
 
@@ -76,14 +74,12 @@ func _physics_process(_delta: float) -> void:
 		global_position = to
 		_next_id += 1
 		_danger_id = DANGER_ID_BASE + _next_id
-		s.focus(to)
-		_danger_world = s.ai_world
 		var r := Vector3(RADIUS, 1.5, RADIUS)
 		if Gravity.planet == null:
-			_danger_world.set_danger(_danger_id, AABB(to - Vector3(RADIUS, 0.5, RADIUS), r * 2.0))
+			s.set_danger(_danger_id, AABB(to - Vector3(RADIUS, 0.5, RADIUS), r * 2.0))
 		else:
 			# A world box: the world's Y is not up here, so a cube round it.
-			_danger_world.set_danger(_danger_id, AABB(to - Vector3.ONE * RADIUS, Vector3.ONE * RADIUS * 2.0))
+			s.set_danger(_danger_id, AABB(to - Vector3.ONE * RADIUS, Vector3.ONE * RADIUS * 2.0))
 	if now - t0 >= flight + FUSE:
 		_explode()
 
@@ -91,7 +87,7 @@ func _physics_process(_delta: float) -> void:
 func _explode() -> void:
 	exploded = true
 	if _danger_id >= 0:
-		_danger_world.remove_danger(_danger_id)
+		s.remove_danger(_danger_id)
 	hits = blast(s, to, thrower, damage, RADIUS)
 	went_off.emit(to)
 	queue_free()
@@ -132,4 +128,4 @@ static func blast(services: AIServices, at: Vector3, by: Pawn, damage: float, ra
 
 func _exit_tree() -> void:
 	if not exploded and _danger_id >= 0 and s != null:
-		_danger_world.remove_danger(_danger_id)
+		s.remove_danger(_danger_id)

@@ -473,14 +473,14 @@ func _on_fuse_lit(kind: String, _seconds: float) -> void:
 		return
 	var reach := float((MechLayers.NUKE if kind == "nuke" else MechLayers.SELF_DESTRUCT)[1])
 	_danger_id = DANGER_ID_BASE + int(get_instance_id() % 100000)
-	s.ai_world.set_danger(_danger_id, AABB(feet() - Vector3(reach, 0.5, reach), Vector3(reach * 2.0, HEIGHT + 1.0, reach * 2.0)))
+	s.set_danger(_danger_id, AABB(feet() - Vector3(reach, 0.5, reach), Vector3(reach * 2.0, HEIGHT + 1.0, reach * 2.0)))
 
 
 ## Destroyed with its pilot inside: the pilot goes with it.
 func _on_destroyed(_why: String) -> void:
 	var s := layers.services
 	if _danger_id >= 0 and s != null and s.ai_world != null:
-		s.ai_world.remove_danger(_danger_id)
+		s.remove_danger(_danger_id)
 		_danger_id = -1
 	if pilot_pawn != null and is_instance_valid(pilot_pawn) and pilot_pawn.health != null:
 		pilot_pawn.health.apply_impact(1e9, &"")
