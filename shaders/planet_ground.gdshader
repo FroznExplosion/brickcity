@@ -13,12 +13,15 @@ uniform int u_transition_mask;
 uniform float planet_radius = 10000.0;
 uniform vec3 planet_centre = vec3(0.0);   // world
 uniform float sea_level = -6.0;
-uniform vec3 grass : source_color = vec3(0.36, 0.47, 0.27);
-uniform vec3 dry : source_color = vec3(0.47, 0.50, 0.30);
+// The biomes (Docs/Planets.md 11.9; PlanetBiomes): an equirect map baked with
+// the impostor -- RGB the ground's base colour, A the sea-level temperature
+// in t_range. No mipmaps: the date line's jump in u would draw a seam.
+uniform sampler2D biome_map : source_color, filter_linear, repeat_enable;
+uniform vec2 t_range = vec2(-30.0, 40.0);
+uniform float lapse = 0.25;       // degrees C a metre up
 uniform vec3 rock : source_color = vec3(0.46, 0.43, 0.40);
 uniform vec3 sand : source_color = vec3(0.76, 0.70, 0.52);
 uniform vec3 snow : source_color = vec3(0.92, 0.93, 0.96);
-uniform float snow_line = 34.0;     // metres over the datum
 uniform float cliff_deg = 34.0;
 // Faceted: shade by the triangle's own normal, the low-poly look of our
 // ground; off, the mesher's smooth normals.
@@ -61,14 +64,21 @@ void fragment() {
 	// The planet never turns (its node only translates): world axes are its axes.
 	vec3 n_obj = normalize((INV_VIEW_MATRIX * vec4(n_view, 0.0)).xyz);
 	float slope = degrees(acos(clamp(dot(n_obj, up), -1.0, 1.0)));
-	// A slow mottle of grass and dry grass, by direction (no seams on a sphere).
+	// The biome's colour, the UV as PlanetBiomes.pixel_of_dir: the planet never
+	// turns, so planet-local `up` is the map's direction.
+	float lat = asin(clamp(up.y, -1.0, 1.0));
+	float lon = atan(up.x, up.z);
+	vec4 bm = texture(biome_map, vec2(lon / 6.2831853 + 0.5, 0.5 - lat / 3.14159265));
+	// A fine mottle over it (the map's pixel is tens of metres), by direction.
 	vec3 q = up * planet_radius;
-	float mot = 0.5 + 0.25 * sin(q.x * 0.013 + sin(q.z * 0.009)) * sin(q.z * 0.011 + sin(q.y * 0.007))
-			+ 0.15 * sin(q.y * 0.031 + q.x * 0.017);
-	vec3 c = mix(grass, dry, clamp(mot, 0.0, 1.0) * 0.55);
+	float mot = 0.25 * sin(q.x * 0.13 + sin(q.z * 0.09)) * sin(q.z * 0.11 + sin(q.y * 0.07))
+			+ 0.15 * sin(q.y * 0.31 + q.x * 0.17);
+	vec3 c = bm.rgb * (1.0 + 0.12 * mot);
 	c = mix(c, sand, smoothstep(sea_level + 2.0, sea_level + 0.5, h));
 	c = mix(c, rock, smoothstep(cliff_deg - 5.0, cliff_deg + 5.0, slope));
-	c = mix(c, snow, smoothstep(snow_line - 4.0, snow_line + 4.0, h) * (1.0 - smoothstep(40.0, 55.0, slope)));
+	// Snow where it is below freezing at this height, not on steep faces.
+	float temp = mix(t_range.x, t_range.y, bm.a) - lapse * max(h, 0.0);
+	c = mix(c, snow, smoothstep(1.5, -1.5, temp) * (1.0 - smoothstep(40.0, 55.0, slope)));
 	ALBEDO = c;
 	NORMAL = n_view;
 	ROUGHNESS = 0.95;

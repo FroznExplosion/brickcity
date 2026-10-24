@@ -35,6 +35,8 @@ var _impostor_mat: ShaderMaterial
 var _atmo_mat: ShaderMaterial
 var _ocean_mat: ShaderMaterial
 var _ground_mat: ShaderMaterial
+## The biome map (PlanetBiomes), baked with the impostor; the ground samples it.
+var biome_map: Texture2D
 var _graph: VoxelGeneratorGraph
 var _time := 0.0
 
@@ -166,12 +168,17 @@ func _ground_material() -> ShaderMaterial:
 		_ground_mat.shader = load("res://shaders/planet_ground.gdshader")
 		_ground_mat.set_shader_parameter("planet_radius", data.radius)
 		_ground_mat.set_shader_parameter("sea_level", data.sea_level if not is_nan(data.sea_level) else -1e9)
+		# The biomes (Planets.md 11.9): the map baked with the impostor.
+		_ground_mat.set_shader_parameter("biome_map", biome_map)
+		_ground_mat.set_shader_parameter("t_range", PlanetBiomes.T_RANGE)
+		_ground_mat.set_shader_parameter("lapse", PlanetBiomes.LAPSE)
 	return _ground_mat
 
 
 func _build_impostor() -> void:
 	var b := PlanetImpostorBake.bake(data)
 	bake_ms = int(b.ms)
+	biome_map = b.biome_map
 	var sm := SphereMesh.new()
 	sm.radius = data.radius
 	sm.height = data.radius * 2.0

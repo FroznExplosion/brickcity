@@ -1271,3 +1271,45 @@ trace, danger, nav_changed, the edge and a re-centre all in world values. Found 
 main too: `AINav.field_dir` is zero everywhere (it takes only a neighbour strictly cheaper than
 the field's own parent, which ties exactly) -- the soldier's directed move and the animals that
 ask it get no direction; a fix moves the flat game, so it is its own change.
+
+### 11.9 Plan: biomes (2026-10-24)
+
+After STA's `PlanetFields` (temperature, humidity, a biome by climate, one baked map shared by the
+ground and the impostor), trimmed: no continents, no underground, no material textures.
+
+- **Climate, by direction.** Temperature at sea level from latitude (warm at the equator, cold at
+  the poles, the band edges wobbled by noise so they are not rings), less a lapse with height
+  (`lapse` °C a metre); humidity from its own slow noise. All in `PlanetBiomes`
+  (scripts/planet/planet_biomes.gd), seeded from `PlanetData.planet_seed`.
+- **Biomes: a short table** `{name, colour, dry colour, temperature band, humidity band}` --
+  tundra, taiga, temperate grass, temperate forest, steppe, desert, savanna, jungle. A direction
+  takes the biome whose bands it is in (nearest band when none), with a few metres of blend at the
+  borders from a patch noise, so edges are ragged, not lines.
+- **One map.** `PlanetBiomes.bake(width, height)`: equirect RGBA8, RGB the biome's colour (mottled
+  toward its dry colour by humidity), A the sea-level temperature normalised -- the convention the
+  impostor already uses (`dir = (cos lat sin lon, sin lat, cos lat cos lon)`). 1024 x 512 at 10 km:
+  61 m a pixel at the equator, finer toward the poles; bilinear, no mipmaps (no seam line at the
+  date line).
+- **The ground shader reads it** (`shaders/planet_ground.gdshader`): the map's colour in place of
+  today's grass/dry mottle (the fine mottle stays, as a multiply); live from the real surface,
+  as today: rock on cliffs, sand at the sea's edge, snow where the temperature at that height is
+  under 0 °C and the ground not steep. **The impostor's colour map is baked from the same
+  function**, so a desert seen from orbit is the desert you land in. Town pads stay concrete grey
+  from orbit.
+- **Trees, later (11.10):** each biome carries a tree density and kind; scattering reads
+  `PlanetBiomes` on the CPU, so it agrees with the colour.
+
+Probe `tools/planet_biome_probe.gd` (headless): the map's pixel against `PlanetBiomes` at its
+direction (exact), the shader's lookup UV against the bake's (same pixel), every biome present
+on the default planet, temperature falling with latitude and height, bake time. A windowed shot
+from orbit and on foot (`--gate`'s shots) for the look.
+
+**11.9 state (2026-10-24): built.** `PlanetBiomes` (scripts/planet/planet_biomes.gd),
+`PlanetData.climate_axis` (the proto's spawn at ~50°), the biome map baked in the impostor's
+pass (512 x 256 with the heightmap and colours: 690-820 ms), the ground shader on it (snow from
+the temperature at the height, lapse 0.25 °C/m; sand and cliff rock live as before).
+`tools/planet_biome_probe.gd` 8/8: the map is `PlanetBiomes` to an 8-bit step, the shader's UV on
+the bake's pixel, sea-level 29.9 / 22.9 / 3.1 / -18.7 °C at 0/30/60/85°; shares with mean
+humidity 0.62: jungle 30%, savanna 25%, forest 11%, taiga 8%, tundra 8%, desert 8%, grass 6%,
+steppe 6%. The spawn's town is on a patch of steppe. `--gate` 9/9 with the map, its shots
+(ground, 5 km, 30 km) show the biomes from the ground to orbit. Next: trees (11.10).

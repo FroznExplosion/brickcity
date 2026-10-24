@@ -1430,7 +1430,9 @@ func toggle_catalog() -> void:
 		_catalog_panel.visible = false
 		_catalog_panel.position = Vector2(RAIL_W + 24, 60)
 		_catalog_panel.part_picked.connect(func(r: PartRecord) -> void:
-			_export_check = "parts: %s picked; putting it on comes next (stage 4)" % r.display_name)
+			var why := try_part(r)
+			if why != "":
+				_export_check = "parts: " + why)
 		_ruler.get_parent().add_child(_catalog_panel)
 	_catalog_panel.visible = not _catalog_panel.visible
 	if not _catalog_panel.visible:
@@ -1455,7 +1457,8 @@ func _aim_catalog(cat: PartCatalog) -> void:
 		_catalog_panel.set_fit_target(null, "", "")
 		return
 	var host_name := path.get_base_dir() if path.contains("/") else "body"
-	_catalog_panel.set_fit_target(cat.get_part(String(part_ids.get(host_name, ""))), path, "gun")
+	var host: PartRecord = tried.get(host_name, cat.get_part(String(part_ids.get(host_name, ""))))
+	_catalog_panel.set_fit_target(host, path, "gun")
 
 
 func _scale_photo(i: int, f: float) -> void:
@@ -1617,6 +1620,8 @@ func _restore_asset_meta() -> void:
 
 func _reset_space() -> void:
 	super._reset_space()
+	if not tried.is_empty():
+		untry_all()
 	part_of = PackedInt32Array()
 	points = []
 	if _points_root != null:
@@ -6615,7 +6620,7 @@ func set_exploded(on: bool) -> void:
 		_show_sculpt_note(true, "Explode works once the block-out is converted to bricks.")
 	exploded = on
 	_display_dirty = true
-	if not on:
+	if not on and tried.is_empty():
 		_clear_display()
 		_offsets.clear()
 	if _explode_button != null:
@@ -6664,12 +6669,18 @@ func explode_offsets() -> Dictionary:
 
 ## Where a part is drawn: its exploded place, or where it is.
 func part_offset(part: String) -> Vector3:
-	return _offsets.get(part, Vector3.ZERO) if exploded else Vector3.ZERO
+	return _offsets.get(part, Vector3.ZERO) if _drawn_apart() else Vector3.ZERO
+
+
+## Are the parts drawn one by one: exploded, or a catalogue part tried on (one of them
+## hidden, the rest maybe moved onto a tried body's sockets)?
+func _drawn_apart() -> bool:
+	return exploded or not tried.is_empty()
 
 
 ## The offset the last mouse ray was taken in by: the part it met, else the current part.
 func _ray_offset() -> Vector3:
-	if not exploded:
+	if not _drawn_apart():
 		return Vector3.ZERO
 	return part_offset(_ray_part if _ray_part != "" else part_names[part_sel])
 
@@ -6679,13 +6690,15 @@ func _ray_offset() -> Vector3:
 func _rebuild_display() -> void:
 	_display_dirty = false
 	_clear_display()
-	_offsets = explode_offsets() if exploded else {}
+	_offsets = _drawn_offsets()
 	var by_part := {}
 	for i in recipe.size():
 		if recipe.frame_of(i) == 0:
 			(by_part.get_or_add(part_names[part_of[i] if i < part_of.size() else part_sel], []) as Array).append(i)
 	var base := world.get_chunk_transform(chunk)
 	for name in by_part:
+		if tried.has(name):
+			continue   # a catalogue part is tried in its place
 		var ids: Array = by_part[name]
 		var lo := Vector3i(1 << 30, 1 << 30, 1 << 30)
 		var hi := -lo
@@ -6740,6 +6753,7 @@ func _rebuild_display() -> void:
 				"centre": xform * (Vector3(hi - lo) * Vector3(BrickPalette.STUD_M, BrickPalette.PLATE_M, BrickPalette.STUD_M) * 0.5)}
 	_draw_studs()
 	_draw_points()
+	_draw_tried()
 
 
 func _clear_display() -> void:
@@ -6751,14 +6765,14 @@ func _clear_display() -> void:
 ## Each frame, exploded: the parts built again if an edit changed them, the build itself
 ## hidden behind them, and what follows the mouse drawn where its part is.
 func _explode_process() -> void:
-	var apart := exploded or not _play.is_empty()
+	var apart := _drawn_apart() or not _play.is_empty()
 	for f in _frame_meshes:
 		(_frame_meshes[f] as Node3D).visible = not apart
 	if apart and _display_dirty:
 		_rebuild_display()
 	_play_process()
 	_place_hands()
-	if not exploded:
+	if not _drawn_apart():
 		_tool_lines.position = Vector3.ZERO
 		return
 	var off := _ray_offset()
@@ -6778,7 +6792,7 @@ func _mouse_ray() -> Array:
 
 func ray_into_parts(r: Array) -> Array:
 	_ray_part = ""
-	if not exploded:
+	if not _drawn_apart():
 		return r
 	if _display_dirty:
 		_rebuild_display()
@@ -7772,7 +7786,7 @@ func _play_process() -> void:
 	if float(_play.t) >= PLAY_LENGTH:
 		_play = {}
 		_display_dirty = true
-		if not exploded:
+		if not _drawn_apart():
 			_clear_display()
 		for name in _display:
 			(_display[name].mesh as Node3D).transform = _display[name].xform
@@ -8270,14 +8284,7 @@ func export_game(dir: String = "") -> Dictionary:
 		print("[asset workshop] export to game: the gun needs a body")
 		return {"ok": false, "why": "no body"}
 	var fwd := Vector3(-1 if muzzle_end == "-x" else 1, 0, 0)
-	# Each part's point: its mount, else the middle of its bricks.
-	var at := {}
-	for name in by_part:
-		at[name] = _cells_centre(by_part[name])
-	for q in points:
-		if q.kind == "mount" and by_part.has(String(q.part)):
-			at[q.part] = Vector3(float(q.at[0]) * BrickPalette.STUD_M, float(q.at[1]) * BrickPalette.PLATE_M,
-					float(q.at[2]) * BrickPalette.STUD_M)
+	var at := _part_points(by_part)
 	var host := _game_hosts(by_part)
 	# The muzzle socket: on the muzzle part's tip, else the barrel's, else the body's.
 	var front := "muzzle" if by_part.has("muzzle") else ("barrel" if by_part.has("barrel") else "body")
@@ -8371,6 +8378,251 @@ static func _game_hosts(by_part: Dictionary) -> Dictionary:
 		var h: String = GAME_HOST.get(name, "body")
 		host[name] = h if by_part.has(h) else "body"
 	return host
+
+
+# ---------------------------------------------------------------------------
+# Trying catalogue parts on (Docs/ModularParts.md section 9)
+# ---------------------------------------------------------------------------
+
+## Parts from the catalogue (F7) tried on this build: {slot: PartRecord}. Any part of a
+## held gun goes on its own slot, fitting or not: it is drawn from its saved game scene,
+## its mount on this build's socket for it, and this build's own part of that slot is
+## hidden meanwhile. A tried body brings its sockets: this build's other parts are drawn
+## on them. Never saved, never exported: a tried part is already saved on its own, and
+## Save writes only this build's own parts.
+var tried := {}
+## Why each part does not fit what it hangs from, with tried parts on: {slot: reason};
+## "" fits.
+var fit_marks := {}
+var _tried_packed := {}       # slot -> PackedScene
+var _tried_nodes := {}        # slot -> its scene, drawn
+var _tried_root: Node3D
+## Where each part sits with tried parts on, in the build's metres: {slot: Vector3}.
+var _try_place := {}
+
+
+## Try catalogue part `r` on its slot. "" when it is on, else why it cannot be: not a held
+## gun's part, no scene, or this is not a gun build. Trying this build's own saved part
+## of a slot takes off what was tried there.
+func try_part(r: PartRecord) -> String:
+	if recipe.kind != "gun":
+		return "parts are tried on a gun build"
+	if r.family != "gun" or r.scale != "held" or not GUN_PARTS.has(r.slot):
+		return "%s is not a part of a held gun" % r.id
+	if String(part_ids.get(r.slot, "")) == r.id:
+		untry(r.slot)
+		return ""
+	var ps: PackedScene = null
+	if r.dir != "":
+		ps = ResourceLoader.load(r.dir + AssetGuns.PART_SCENE) as PackedScene
+	if ps == null:
+		return "%s has no scene" % r.id
+	tried[r.slot] = r
+	_tried_packed[r.slot] = ps
+	_try_changed()
+	return ""
+
+
+func untry(slot: String) -> void:
+	if tried.erase(slot):
+		_tried_packed.erase(slot)
+		_try_changed()
+
+
+func untry_all() -> void:
+	tried.clear()
+	_tried_packed.clear()
+	_try_changed()
+
+
+func _try_changed() -> void:
+	_display_dirty = true
+	if _drawn_apart():
+		_rebuild_display()   # draws the tried parts too
+	else:
+		_clear_display()
+		_offsets.clear()
+		fit_marks.clear()
+		_draw_tried()
+		_draw_studs()
+		_draw_points()
+	_outlines_dirty = true
+	_export_check = try_text()
+	if _catalog_panel != null and _catalog_panel.visible:
+		_aim_catalog(_catalog_panel.catalog)
+
+
+## What is tried on, and what does not fit: the status line.
+func try_text() -> String:
+	if tried.is_empty():
+		return ""
+	var bad := PackedStringArray()
+	for slot in fit_marks:
+		if fit_marks[slot] != "":
+			bad.append("%s: %s" % [slot, fit_marks[slot]])
+	var on := PackedStringArray()
+	for slot in tried:
+		on.append("%s %s" % [slot, (tried[slot] as PartRecord).display_name])
+	return "trying %s -- %s" % [", ".join(on), "all fit" if bad.is_empty() else "; ".join(bad)]
+
+
+## The part `slot` hangs from: its game host (GAME_HOST), own or tried, else the body.
+func _try_host(slot: String, by_part: Dictionary) -> String:
+	var h: String = GAME_HOST.get(slot, "body")
+	return h if by_part.has(h) or tried.has(h) else "body"
+
+
+## Each own part's draw offset with tried parts on: where a tried host's socket puts it,
+## against where it was built. Fills _try_place and fit_marks.
+func _try_offsets() -> Dictionary:
+	var by_part := _gun_bricks()
+	var at := _part_points(by_part)
+	var b_inv := game_basis().inverse()
+	var offset := {}
+	_try_place.clear()
+	_make_tried_nodes()
+	for slot: String in GUN_PARTS:
+		var own := by_part.has(slot)
+		if not own and not tried.has(slot):
+			continue
+		var h := _try_host(slot, by_part)
+		if slot == "body" or not _try_place.has(h):
+			_try_place[slot] = at.get(slot, Vector3.ZERO)
+			offset[slot] = Vector3.ZERO
+			continue
+		var p: Vector3
+		if tried.has(h):
+			# On the tried host's own socket for it: where its own build had that part.
+			var sock := (_tried_nodes[h] as Node3D).get_node_or_null("socket_" + slot) as Node3D
+			p = (_try_place[h] as Vector3) + (b_inv * sock.position if sock != null else Vector3.ZERO)
+		else:
+			var built: Vector3 = at[slot] if own else _socket_point(h, slot, by_part, at)
+			p = built + (offset[h] as Vector3)
+		_try_place[slot] = p
+		offset[slot] = p - (at[slot] as Vector3) if own else Vector3.ZERO
+	_check_fit(by_part)
+	return offset
+
+
+## Where this build's own `host` takes a `slot` part it does not have: its socket point
+## for it, the tip for a muzzle, else the host's point.
+func _socket_point(host: String, slot: String, by_part: Dictionary, at: Dictionary) -> Vector3:
+	for q in points:
+		if String(q.part) == host and q.kind == "socket" and String(q.slot) == slot:
+			return _point_m(q)
+	if slot == "muzzle" and by_part.has(host):
+		return _tip(by_part[host], Vector3(-1 if muzzle_end == "-x" else 1, 0, 0))
+	return at.get(host, Vector3.ZERO)
+
+
+## Every part against what it hangs from, tried or own, by the game's rule: parts that
+## both say their interfaces join on a shared one (PartFit, layer 1); parts that say none
+## join by slot (GunPartDef.takes).
+func _check_fit(by_part: Dictionary) -> void:
+	fit_marks.clear()
+	var hosts := _game_hosts(by_part)
+	var recs := {}
+	for slot: String in GUN_PARTS:
+		if tried.has(slot):
+			recs[slot] = tried[slot]
+		elif by_part.has(slot):
+			recs[slot] = _part_record(slot, by_part, hosts, false)
+	var sockets: Dictionary = PartStandards.plan("gun").get("sockets", {})
+	for slot: String in recs:
+		if slot == "body":
+			continue
+		var h := _try_host(slot, by_part)
+		if not recs.has(h):
+			fit_marks[slot] = "nothing to hang from"
+			continue
+		var path := slot if sockets.has(slot) else "barrel/" + slot
+		fit_marks[slot] = fit_reason(recs[slot], recs[h], path)
+
+
+## Why `part` does not go on `host` at `path` ("" when it does), as the game decides.
+static func fit_reason(part: PartRecord, host: PartRecord, path: String) -> String:
+	if not _declares(part) and not _declares(host):
+		return ""   # both from before interfaces: they join by slot
+	return PartFit.why_not(part, host, path, "gun")
+
+
+static func _declares(r: PartRecord) -> bool:
+	if r.interface() != "":
+		return true
+	for sk: Dictionary in r.sockets:
+		if not (sk.get("accepts", []) as Array).is_empty():
+			return true
+	return false
+
+
+## The draw offsets: exploded, plus where tried hosts' sockets put this build's parts.
+func _drawn_offsets() -> Dictionary:
+	var out: Dictionary = explode_offsets() if exploded else {}
+	if tried.is_empty():
+		fit_marks.clear()
+		return out
+	var t := _try_offsets()
+	for slot in t:
+		out[slot] = (out.get(slot, Vector3.ZERO) as Vector3) + (t[slot] as Vector3)
+	return out
+
+
+func _make_tried_nodes() -> void:
+	for slot in _tried_nodes.keys():
+		if not tried.has(slot) or (_tried_nodes[slot] as Node3D).get_meta(&"part_id", "") != (tried[slot] as PartRecord).id:
+			_tried_root.remove_child(_tried_nodes[slot])
+			(_tried_nodes[slot] as Node).queue_free()
+			_tried_nodes.erase(slot)
+	if _tried_root == null:
+		_tried_root = Node3D.new()
+		_tried_root.name = "Tried"
+		add_child(_tried_root)
+	for slot in tried:
+		if _tried_nodes.has(slot):
+			continue
+		var n := (_tried_packed[slot] as PackedScene).instantiate() as Node3D
+		n.set_meta(&"part_id", (tried[slot] as PartRecord).id)
+		_tried_root.add_child(n)
+		_tried_nodes[slot] = n
+
+
+## The tried parts where their sockets put them, and a mark on every part that does not
+## fit, saying why (and on every tried part that does).
+func _draw_tried() -> void:
+	if _tried_root != null:
+		for c in _tried_root.get_children():
+			if c is Label3D:
+				_tried_root.remove_child(c)
+				c.queue_free()
+	if tried.is_empty():
+		for slot in _tried_nodes:
+			_tried_root.remove_child(_tried_nodes[slot])
+			(_tried_nodes[slot] as Node).queue_free()
+		_tried_nodes.clear()
+		return
+	_make_tried_nodes()
+	_tried_root.transform = world.get_chunk_transform(chunk)
+	var xo: Dictionary = explode_offsets() if exploded else {}
+	var b_inv := game_basis().inverse()
+	for slot in _tried_nodes:
+		(_tried_nodes[slot] as Node3D).transform = Transform3D(b_inv,
+				(_try_place.get(slot, Vector3.ZERO) as Vector3) + (xo.get(slot, Vector3.ZERO) as Vector3))
+	for slot in fit_marks:
+		var ok: bool = fit_marks[slot] == ""
+		if ok and not tried.has(slot):
+			continue
+		var mark := Label3D.new()
+		mark.name = "Mark_" + slot
+		mark.text = ("%s fits" % slot) if ok else ("%s does not fit:\n%s" % [slot, fit_marks[slot]])
+		mark.modulate = Color(0.4, 1.0, 0.5) if ok else Color(1.0, 0.35, 0.3)
+		mark.billboard = BaseMaterial3D.BILLBOARD_ENABLED
+		mark.no_depth_test = true
+		mark.font_size = 40
+		mark.pixel_size = 0.004
+		mark.outline_size = 8
+		mark.position = (_try_place.get(slot, Vector3.ZERO) as Vector3) \
+				+ (xo.get(slot, Vector3.ZERO) as Vector3) + Vector3.UP * 0.4
+		_tried_root.add_child(mark)
 
 
 # ---------------------------------------------------------------------------
@@ -8480,7 +8732,7 @@ func save_parts(dir: String = "") -> Dictionary:
 ## never a gun -- the game only makes guns of parts that fit).
 func _part_record(name: String, by_part: Dictionary, hosts: Dictionary, official: bool) -> PartRecord:
 	var r := PartRecord.new()
-	r.id = String(part_ids[name])
+	r.id = String(part_ids.get(name, "unsaved." + name))   # unsaved: a fit check before a save
 	r.family = "gun"
 	r.scale = "held"
 	r.slot = name
@@ -8866,6 +9118,22 @@ func _studs_node(list: Array) -> MultiMeshInstance3D:
 	return mmi
 
 
+## Each part's point, in the build's metres: its mount, else the middle of its bricks.
+func _part_points(by_part: Dictionary) -> Dictionary:
+	var at := {}
+	for name in by_part:
+		at[name] = _cells_centre(by_part[name])
+	for q in points:
+		if q.kind == "mount" and by_part.has(String(q.part)):
+			at[q.part] = _point_m(q)
+	return at
+
+
+static func _point_m(q: Dictionary) -> Vector3:
+	return Vector3(float(q.at[0]) * BrickPalette.STUD_M, float(q.at[1]) * BrickPalette.PLATE_M,
+			float(q.at[2]) * BrickPalette.STUD_M)
+
+
 static func _game_node(parent: Node3D, node_name: String, pos: Vector3) -> void:
 	var n := Node3D.new()
 	n.name = node_name
@@ -9111,6 +9379,7 @@ func _build_menus() -> void:
 			["Photos panel", "F2", func() -> void: _toggle_panel()],
 			["Guide models panel", "F3", func() -> void: _toggle_guide_panel()],
 			["Parts catalogue", "F7", func() -> void: toggle_catalog()],
+			["Take off the tried parts", "", func() -> void: untry_all()],
 			["Wand: fill a patch of a photo", "F4", func() -> void: set_tool("" if tool == "wand" else "wand")],
 			["Measure", "Alt M", func() -> void: set_measure(not measure_on)],
 		]],

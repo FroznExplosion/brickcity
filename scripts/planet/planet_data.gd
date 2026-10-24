@@ -28,6 +28,11 @@ extends Resource
 @export var octaves := 5
 @export var ridged := false
 
+## The axis the climate's latitude is measured about (PlanetBiomes, Planets.md
+## 11.9): warm round its equator, cold at its poles. The default puts the
+## proto's spawn (scenes/planet.tscn, near +Y) at ~50 degrees: temperate.
+@export var climate_axis := Vector3(0.7, 0.7, 0.0)
+
 ## Flat pads the ground is levelled to, for buildings to stand on (Planets.md 11.2):
 ## each {dir: Vector3 (unit, planet-local), height: float (over the datum),
 ## flat: float (metres of level ground from the centre), blend: float (metres of
