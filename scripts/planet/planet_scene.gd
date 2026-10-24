@@ -14,6 +14,8 @@ extends Node3D
 ##   player's controls, a soldier's body moved and aimed as its brain does it.
 ##   -- --gate=squad: a squad on the AI's nav region round the town (11.8 N2)
 ##   walks to the player round the curve, takes cover, fires.
+##   -- --gate=travel: a squad ordered 200 m out of the town on the nav net
+##   (11.8 N4), across the regions' borders.
 
 var data: PlanetData
 var planet: PlanetBody
@@ -34,10 +36,11 @@ var _mech_gate := false
 var _tank_gate := false
 var _soldier_gate := false
 var _squad_gate := false
-## The AI round the fight (Docs/Planets.md 11.8, N2): one nav region round the
-## player's town, the AIWorld and AINav framed on it. Made by setup_ai.
+## The AI round the fight (Docs/Planets.md 11.8, N2, N4): the nav net round the
+## player's town; ai_world / ai_nav the region the player is in. Made by setup_ai.
 var ai: AIServices
 var nav_region: PlanetNavRegion
+var _travel_gate := false
 var sun: DirectionalLight3D
 var sky_mat: ProceduralSkyMaterial
 var env: Environment
@@ -61,7 +64,8 @@ func _ready() -> void:
 	_tank_gate = "--gate=tank" in OS.get_cmdline_user_args()
 	_soldier_gate = "--gate=soldier" in OS.get_cmdline_user_args()
 	_squad_gate = "--gate=squad" in OS.get_cmdline_user_args()
-	_gate = _gate or _pawn_gate or _mech_gate or _tank_gate or _soldier_gate or _squad_gate
+	_travel_gate = "--gate=travel" in OS.get_cmdline_user_args()
+	_gate = _gate or _pawn_gate or _mech_gate or _tank_gate or _soldier_gate or _squad_gate or _travel_gate
 	data = PlanetData.new()
 	data.planet_name = "proto"
 	# Towns and landmarks: their pads go into the ground before it is built.
@@ -122,6 +126,8 @@ func _ready() -> void:
 			_run_soldier_gate()
 		elif _squad_gate:
 			_run_squad_gate()
+		elif _travel_gate:
+			_run_travel_gate()
 		else:
 			_run_gate()
 
@@ -272,7 +278,7 @@ func _process(_delta: float) -> void:
 	if _anchor().length() > PlanetFrame.SHIFT_AT:
 		var offset := PlanetFrame.recentre(self, _anchor())
 		if ai != null:
-			ai.ai_world.shift_origin(offset)
+			(ai.nav_net as PlanetNavNet).shift_origin(offset)
 	# Stream the voxel ground to the horizon and the peaks behind it, no further.
 	var want := planet.horizon_reach(cam_pos, data.peak()) + VIEW_MARGIN
 	var q := clampi(int(ceil(want / VIEW_STEP)) * VIEW_STEP, VIEW_MIN, VIEW_MAX)
@@ -294,7 +300,7 @@ func _process(_delta: float) -> void:
 	# collider); then, unless this is the walker's own gate, the pawn stands on it.
 	if walker.frozen and pawn == null and _ground_hit(walker.global_position) != Vector3.INF:
 		walker.frozen = false
-		if not _gate or _pawn_gate or _mech_gate or _tank_gate or _soldier_gate or _squad_gate:
+		if not _gate or _pawn_gate or _mech_gate or _tank_gate or _soldier_gate or _squad_gate or _travel_gate:
 			_spawn_player(_ground_hit(walker.global_position), -walker.global_transform.basis.z)
 	if not on_foot:
 		walker.flying = pawn != null or walker.flying
@@ -884,58 +890,84 @@ func _run_soldier_gate() -> void:
 
 
 # ---------------------------------------------------------------------------
-# The AI on the planet (Docs/Planets.md 11.8, N2): one nav region round a town.
+# The AI on the planet (Docs/Planets.md 11.8, N2 and N4): nav regions round the fight.
 
-## Set up the AI services on a nav region of PlanetNavRegion's 1024 studs
-## centred over planet-local `dir`: its AIWorld framed on the region (world =
-## the planet's transform * the region's frame), the region's ground grid as
-## its ground, its sea as the nav's water. The buildings there go in as proxy
-## boxes -- solid to walk round, bricks to hide behind (their own bricks in the
-## AI's world are later work, 11.8 "Not here"). The floating origin moves the
-## frame with the scene (_process).
+## Regions are kept round everybody fighting within this (PlanetNavNet.keep_around).
+const AI_KEEP_M := 60.0
+## How often the regions round the fight are looked at again, seconds.
+const AI_KEEP_EVERY := 0.5
+var _ai_keep_t := 0.0
+## The AI's longest physics tick (us) and its parts: keep_around, the net, the rest.
+var ai_worst_us := 0
+var ai_worst_parts: Array = []
+
+
+## Set up the AI services on the nav net (PlanetNavNet) anchored over
+## planet-local `dir`: regions of 8 x 8 tiles, each its own framed AIWorld and
+## AINav on its ground grid (N1, N1b), made round whoever fights and dropped
+## behind them. The buildings go into the regions they reach as proxy boxes --
+## solid to walk round, bricks to hide behind (their own bricks in the AI's
+## world are later work, 11.8 "Not here"). ai_world and ai_nav are the region
+## the player is in; a soldier's paths go through the net, across regions. The
+## floating origin moves every region's frame with the scene (_process).
 func setup_ai(dir: Vector3) -> void:
-	nav_region = PlanetNavRegion.make(data, dir)
-	var r := nav_region
-	var aw := AIWorld.new()
-	aw.set_world(BrickWorld.new())
-	aw.set_frame(r.world_frame(planet.global_transform))
-	aw.set_ground_grid(Vector2(-r.half, -r.half), r.step_m, r.size, r.heights)
-	aw.set_terrain_ground(true)
+	var t0 := Time.get_ticks_usec()
 	var stud := BrickWorld.get_stud_metres()
-	var inv := r.frame.affine_inverse()
-	var n := 0
+	var sites: Array = []
 	for s in buildings.sites:
 		var size := Vector3(s.fx * stud, s.height, s.fz * stud)
-		var centre := s.frame * Transform3D(Basis(), size * 0.5)
-		var l := inv * centre.origin
-		if absf(l.x) > r.half or absf(l.z) > r.half:
-			continue
-		aw.set_proxy(n, planet.global_transform * centre, size, 1.0 / stud)
-		n += 1
-	aw.sync()
-	var nav := AINav.new()
-	nav.set_ai_world(aw)
-	AIServices.use_hierarchy(nav)
-	if not is_nan(r.sea_y):
-		nav.set_water_level(r.sea_y)
+		sites.append([s.frame * Transform3D(Basis(), size * 0.5), size])
+	var net := PlanetNavNet.make(data, dir, planet)
+	net.set_sites(sites)
+	var at := planet.global_transform * data.surface_point(dir)
+	net.keep_around([at], AI_KEEP_M, 99)
+	# From here on regions' grids are built on worker threads, off the frame.
+	net.threaded = true
+	var r := net.region_at(at)
+	nav_region = r.nav_region
 	ai = AIServices.new()
-	ai.ai_world = aw
-	ai.ai_nav = nav
+	ai.nav_net = net
+	ai.ai_world = r.world
+	ai.ai_nav = r.nav
 	ai.sched = AIScheduler.new()
 	ai.sched.set_base_budget_ms(2.5)
 	ai.world3d = get_world_3d()
 	ai.rng.seed = 0x9A7E7
-	print("[planet] AI region over the town: %d x %d samples in %.0f ms, %d building(s) as proxies" % [
-			r.size, r.size, r.build_ms, n])
+	print("[planet] AI nav net over the town: %d region(s) in %.0f ms (%.0f ms the one there), %d building(s)" % [
+			net.regions.size(), (Time.get_ticks_usec() - t0) / 1000.0, r.made_ms, sites.size()])
 
 
-func _physics_process(_delta: float) -> void:
+func _physics_process(delta: float) -> void:
 	if ai == null:
 		return
+	var net := ai.nav_net as PlanetNavNet
+	var t_ai := Time.get_ticks_usec()
+	_ai_keep_t += delta
+	if _ai_keep_t >= AI_KEEP_EVERY:
+		_ai_keep_t = 0.0
+		var points: Array = []
+		if pawn != null:
+			points.append(pawn.feet())
+		for p in ai.pawns:
+			if is_instance_valid(p) and p.health != null and not p.health.is_dead():
+				points.append(p.feet())
+		net.keep_around(points, AI_KEEP_M, 1)
+		# The services' own region is the player's.
+		var here := net.region_at(pawn.feet()) if pawn != null else null
+		if here != null and here.nav != ai.ai_nav:
+			ai.ai_world = here.world
+			ai.ai_nav = here.nav
+			nav_region = here.nav_region
+	var t_keep := Time.get_ticks_usec()
 	ai.ai_world.sync()
-	ai.ai_nav.service(500)
+	net.service(800)
+	var t_net := Time.get_ticks_usec()
 	ai.sched.run()
 	ai.tick()
+	var t_end := Time.get_ticks_usec()
+	if t_end - t_ai > ai_worst_us:
+		ai_worst_us = t_end - t_ai
+		ai_worst_parts = [t_keep - t_ai, t_net - t_keep, t_end - t_net]
 
 
 # The squad's gate: four soldiers set down in the town walk to the player round
@@ -971,7 +1003,7 @@ func _run_squad_gate() -> void:
 	pawn.set_meta(&"player", 0)
 	ai.add_pawn(pawn)
 	# The nav's own path from the squad to the player first: on the ground.
-	var path := ai.ai_nav.find_path(q_spot, pawn.feet(), 200000)
+	var path := (ai.nav_net as PlanetNavNet).find_path(q_spot, pawn.feet(), 200000)
 	var worst := 0.0
 	for p in path:
 		worst = maxf(worst, absf(_over_ground(p)))
@@ -1054,4 +1086,117 @@ func _run_squad_gate() -> void:
 	await _shot("planet_squad")
 	print("[planet] frames: worst %.1f ms; over 40 ms: %s" % [_worst_ms, _hitches])
 	print("[planet] squad gate: %d ok, %d FAIL" % [_ok, _fail])
+	get_tree().quit(0 if _fail == 0 else 1)
+
+
+# The travel gate (11.8 N4): a squad of four, on the player's side, ordered to a
+# point 200 m out of the town, walks it on the nav net -- across the borders of
+# regions made round it as it goes.
+
+func _run_travel_gate() -> void:
+	var t0 := Time.get_ticks_msec()
+	while pawn == null and Time.get_ticks_msec() - t0 < 60000:
+		await _frames(1)
+	await get_tree().create_timer(1.0).timeout
+	var town: Vector3 = town_dirs[0]
+	var p_feet := _surface(_round_dir(town, spawn_dir, 88.0))
+	var q_spot := _surface(_round_dir(town, spawn_dir, 80.0))
+	var goal := _surface(_round_dir(town, spawn_dir, 280.0))
+	pawn.place(p_feet + Gravity.up_at(p_feet) * 0.3)
+	pawn.health.layer_configs[0].max_value = 1e7
+	pawn.health.reset()
+	var marker := Node3D.new()
+	add_child(marker)
+	marker.global_position = q_spot
+	PlanetBody.track(marker)
+	t0 = Time.get_ticks_msec()
+	while (_ground_hit(p_feet) == Vector3.INF or _ground_hit(q_spot) == Vector3.INF) \
+			and Time.get_ticks_msec() - t0 < 30000:
+		await _frames(1)
+	await get_tree().create_timer(1.0).timeout
+	setup_ai(town)
+	var net := ai.nav_net as PlanetNavNet
+	pawn.set_meta(&"player", 0)
+	ai.add_pawn(pawn)
+	var plate := BrickWorld.get_plate_metres()
+	# The net's own path first.
+	var path := net.find_path(q_spot, goal, 200000)
+	var worst := 0.0
+	var crossed := 0
+	var last := net.key_at(q_spot)
+	for p in path:
+		worst = maxf(worst, absf(_over_ground(p)))
+		var k := net.key_at(p)
+		if k != last:
+			crossed += 1
+			last = k
+	var worst_join := 0.0
+	for j in net.last_joins:
+		worst_join = maxf(worst_join, j)
+	_check("a path 200 m out of the town on the nav net", path.size() > 2
+			and path[path.size() - 1].distance_to(goal) < 1.5, "%d points" % path.size())
+	_check("across the regions' borders (>= 2)", crossed >= 2, "%d" % crossed)
+	_check("its stretches meet at the borders (<= 0.36 m)", worst_join <= 0.36, "%.3f m" % worst_join)
+	_check("on the ground (within 1.5 plates)", path.size() > 2 and worst <= plate * 1.5, "worst %.3f m" % worst)
+	var lib := GunPlaceholderParts.build_library()
+	var up_q := Gravity.up_at(q_spot)
+	var side := Gravity.flat(goal - q_spot, up_q).normalized().cross(up_q)
+	var members: Array[Soldier] = []
+	for i in 4:
+		var at := ai.ai_nav.snap(q_spot + side * (i - 1.5) * 1.4 + up_q * 0.3)
+		var gun := GunInstance.from_result(GunGenerator.generate(lib, 70 + i, WeaponClass.builtin(&"rifle"), 1))
+		var so := Soldier.spawn(ai, self, at + Gravity.up_at(at) * 0.1, 0, gun)
+		PlanetBody.track(so.pawn.body)
+		members.append(so)
+	var q := Squad.make(ai, self, members, 0)
+	await get_tree().create_timer(0.5).timeout
+	var o := SquadMsg.Order.make(SquadMsg.OrderKind.MOVE)
+	o.point = goal
+	var order_id := q.give(o)
+	var made0 := net.regions_made
+	var ticks := 0
+	var floor_ticks := 0
+	var body_ticks := 0
+	var sunk := 0.0
+	var report: Variant = null
+	var keys := {}
+	var t1 := Time.get_ticks_msec()
+	while Time.get_ticks_msec() - t1 < 150000:
+		await get_tree().physics_frame
+		ticks += 1
+		for m in q.alive():
+			body_ticks += 1
+			if m.pawn.body.is_on_floor():
+				floor_ticks += 1
+			sunk = minf(sunk, _over_ground(m.pawn.feet()))
+			keys[net.key_at(m.pawn.feet())] = true
+		for r in q.reports:
+			if r.order_id == order_id and r.kind != SquadMsg.ReportKind.ACCEPTED:
+				report = r
+		if report != null:
+			break
+	var secs := (Time.get_ticks_msec() - t1) / 1000.0
+	var near := 0
+	var nearest := INF
+	for m in q.alive():
+		var d := Gravity.flat(m.pawn.feet() - goal, Gravity.up_at(goal)).length()
+		nearest = minf(nearest, d)
+		if d < 12.0:
+			near += 1
+	print("[planet] travel: %s after %.0f s; %d of %d within 12 m (nearest %.1f m); %d cell(s) walked, %d region(s) made on the way, %d dropped" % [
+			report, secs, near, members.size(), nearest, keys.size(), net.regions_made - made0, net.regions_dropped])
+	_check("the squad gets there: MOVE reported DONE", report != null and report.kind == SquadMsg.ReportKind.DONE,
+			str(report))
+	_check("all of it (>= 3 of 4 within 12 m)", near >= 3, "%d" % near)
+	_check("through several regions (>= 3 cells walked)", keys.size() >= 3, "%d" % keys.size())
+	_check("regions made round it as it went", net.regions_made > made0, "%d" % (net.regions_made - made0))
+	_check("its feet on the ground on the way (> 90% of body-ticks)", floor_ticks > body_ticks * 0.9,
+			"%d of %d" % [floor_ticks, body_ticks])
+	_check("nobody falls through the planet (never > 0.5 m under the ground)", sunk > -0.5, "%.2f m" % sunk)
+	print("[planet] frames: worst %.1f ms; over 40 ms: %s" % [_worst_ms, _hitches])
+	print("[planet] nav net service: worst %.1f ms %s (builds, region queues, routes, legs; us)" % [
+			net.worst_service_us / 1000.0, net.worst_service_parts])
+	print("[planet] AI tick: worst %.1f ms (keep_around %.1f, net %.1f, scheduler and services %.1f)" % [
+			ai_worst_us / 1000.0, ai_worst_parts[0] / 1000.0, ai_worst_parts[1] / 1000.0, ai_worst_parts[2] / 1000.0])
+	print("[planet] travel gate: %d ok, %d FAIL" % [_ok, _fail])
 	get_tree().quit(0 if _fail == 0 else 1)

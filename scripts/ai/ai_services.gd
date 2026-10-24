@@ -32,6 +32,9 @@ const WARM_RADIUS := 70.0
 var _next_warm := 0.0
 var ai_world: AIWorld
 var ai_nav: AINav
+## On a planet: the nav regions round the fight (PlanetNavNet, Planets.md 11.8
+## N4). ai_world and ai_nav are then the region the player is in.
+var nav_net: RefCounted
 var sched: AIScheduler
 ## Flyers and the ground sharing space: lanes, separation, landing pads (air()).
 var airspace: Airspace

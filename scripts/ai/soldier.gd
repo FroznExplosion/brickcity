@@ -156,7 +156,9 @@ const CHARGE_RADIUS := 1.3
 var _breaches := PackedVector3Array()
 var _bi := 0
 var _plant_since := -INF
-var _path_nav: AINav
+## The map its path in hand is on: an AINav, or on a planet the nav net
+## (PlanetNavNet, the same calls for paths).
+var _path_nav = null
 var board_vehicle: Node3D
 ## A seat in `board_vehicle` (Tank.Seat) to take rather than its deck, or -1.
 var board_seat := -1
@@ -886,14 +888,17 @@ func ride_on(v: Node3D, seat := -1) -> void:
 func move_to(goal: Vector3, run := false) -> int:
 	var now := services.now()
 	# Its own way in (breach_way): the breaching map, kept for the path in hand.
-	var want_nav := services.foot_breach_nav() if breach_way and self.nav == null else _nav()
+	var want_nav = services.foot_breach_nav() if breach_way and self.nav == null else _nav()
+	# On a planet a person's paths go through the nav net: across regions.
+	if services.nav_net != null and self.nav == null and not breach_way:
+		want_nav = services.nav_net
 	if _path_nav != want_nav:
 		if _path_id >= 0 and _path_nav != null:
 			_path_nav.release(_path_id)
 			_path_id = -1
 		_path_nav = want_nav
 		_repath = true
-	var nav := _path_nav
+	var nav = _path_nav
 	# Trapped (no way anywhere, several times running): stop asking until it is
 	# time to look again -- rubble may have made a way down since.
 	if trapped:
@@ -918,7 +923,7 @@ func move_to(goal: Vector3, run := false) -> int:
 		# picking new places to go (a strafe every second or two) is still
 		# pinned, and resetting here meant it was never counted stuck at all.
 	if _path.is_empty():
-		var st := nav.get_status(_path_id)
+		var st: int = nav.get_status(_path_id)
 		if st == AINav.PENDING:
 			pawn.intents.move = Vector3.ZERO
 			# Waiting for a path is not being stuck.

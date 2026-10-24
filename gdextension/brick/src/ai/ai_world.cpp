@@ -226,6 +226,7 @@ void AIWorld::set_ground_grid(const Vector2 &origin, float step, int size,
     if (size < 2 || step <= 0.0f || heights.size() < (int64_t)size * size) {
         grid_size = 0;
         grid_heights.clear();
+        grid_plates.clear();
         return;
     }
     grid_origin = origin;
@@ -239,6 +240,28 @@ void AIWorld::set_ground_grid(const Vector2 &origin, float step, int size,
     // Outside: solid to well over anything inside, past any step or drop a
     // map allows -- a path never leaves the region.
     grid_wall = (int)std::ceil(top / brick::PLATE_M) + 256;
+    // Every stud whose centre is on the grid.
+    const float st = brick::STUD_M;
+    grid_gx0 = (int)std::ceil(origin.x / st - 0.5f);
+    grid_gz0 = (int)std::ceil(origin.y / st - 0.5f);
+    const float span = step * (float)(size - 1);
+    grid_nx = (int)std::floor((origin.x + span) / st - 0.5f) - grid_gx0 + 1;
+    grid_nz = (int)std::floor((origin.y + span) / st - 0.5f) - grid_gz0 + 1;
+    grid_nx = std::max(0, grid_nx);
+    grid_nz = std::max(0, grid_nz);
+    grid_plates.assign((size_t)grid_nx * grid_nz, 0);
+    for (int j = 0; j < grid_nz; ++j) {
+        for (int i = 0; i < grid_nx; ++i) {
+            grid_plates[(size_t)j * grid_nx + i] = (int16_t)std::min(32000, _grid_plate(grid_gx0 + i, grid_gz0 + j));
+        }
+    }
+}
+
+bool AIWorld::_off_grid(float x, float z) const {
+    const float fx = (x - grid_origin.x) / grid_step;
+    const float fz = (z - grid_origin.y) / grid_step;
+    const float last = (float)(grid_size - 1);
+    return !(fx >= 0.0f && fz >= 0.0f && fx <= last && fz <= last);
 }
 
 // The first plate of air over stud column (gx, gz): the grid read bilinearly
@@ -960,6 +983,14 @@ void AIWorld::set_terrain_ground(bool on) {
 }
 
 int AIWorld::_ground_plate(int gx, int gz) {
+    if (grid_size > 0) {
+        const int i = gx - grid_gx0;
+        const int j = gz - grid_gz0;
+        if (i < 0 || j < 0 || i >= grid_nx || j >= grid_nz) {
+            return grid_wall;
+        }
+        return grid_plates[(size_t)j * grid_nx + i];
+    }
     const int64_t k = key(gx, gz);
     auto it = ground_cache.find(k);
     if (it != ground_cache.end()) {
@@ -971,9 +1002,7 @@ int AIWorld::_ground_plate(int gx, int gz) {
     // The first plate of AIR: `surface_plate` is the top solid one. Never below
     // plate 0 -- navigation counts plates up from there, and a seabed below
     // the city's datum is somewhere nobody walks anyway.
-    const int g = grid_size > 0
-            ? _grid_plate(gx, gz)
-            : std::max(0, BrickTerrain::surface_plate(gx - ground_dx, gz - ground_dz) + 1);
+    const int g = std::max(0, BrickTerrain::surface_plate(gx - ground_dx, gz - ground_dz) + 1);
     ground_cache.emplace(k, g);
     return g;
 }
@@ -1002,6 +1031,9 @@ bool AIWorld::_terrain_hit(const Vector3 &from, const Vector3 &to, float &t) {
     for (int i = 0; i <= n; ++i) {
         const float s = (float)i / (float)n;
         const Vector3 p = from + d * s;
+        if (grid_size > 0 && _off_grid(p.x, p.z)) {
+            continue;
+        }
         if (p.y < ground_at(p.x, p.z) - slack) {
             t = s;
             return true;
