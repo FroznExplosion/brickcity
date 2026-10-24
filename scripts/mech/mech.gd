@@ -32,6 +32,8 @@ const RADIUS := STUD * 5.0
 const COCKPIT_Y := COURSE * 10.0
 ## The eye sits this far ahead of the torso's centre, behind the canopy.
 const COCKPIT_FORWARD := 0.9
+## The eye over the hips: the greybox's hips are 8 courses up (Docs/Parts/joints.md section 5).
+const EYE_OVER_HIPS := COCKPIT_Y - COURSE * 8.0
 ## The arm's shoulder, relative to the torso: right, and just under the cockpit.
 const SHOULDER := Vector3(2.0, COURSE * 9.0, -0.4)
 const ARM_YAW_LIMIT := deg_to_rad(55.0)
@@ -115,6 +117,14 @@ var muzzle: Node3D
 ## Arm yaw relative to the torso, radians.
 var arm_yaw := 0.0
 var arm_pitch := 0.0
+## Where the gun arm's shoulder and the pilot's eye are: the greybox's, until the mech is
+## made of parts (set_parts), when its chassis and legs say (Docs/ModularParts.md section 4:
+## nothing may assume the eye's height once legs vary).
+var shoulder := SHOULDER
+var cockpit_y := COCKPIT_Y
+## Made of parts: the hips' joints, swung as it walks.
+var _hips: Array[Node3D] = []
+var _gait := 0.0
 
 
 ## A standing mech with its feet at `feet`, facing `yaw`.
@@ -184,7 +194,7 @@ func make_target() -> Pawn:
 		return pawn
 	var e := Node3D.new()
 	e.name = "Eye"
-	e.position = Vector3.UP * (COCKPIT_Y - HEIGHT * 0.5)
+	e.position = Vector3.UP * (cockpit_y - HEIGHT * 0.5)
 	body.add_child(e)
 	var p := Pawn.new()
 	p.name = "Pawn"
@@ -214,6 +224,17 @@ func set_type(id: String, roster: Roster) -> void:
 	type_id = id
 	type_facts = roster.facts(id).duplicate()
 	no_gun = str(d.get("attack", "")) == "melee"
+	_set_layers(spec)
+	layers.nuker = (roster.recipe(id).get("mods", []) as Array).has("nuker")
+	if name_tag == null or not is_instance_valid(name_tag):
+		name_tag = TypeKit.make_tag(body, TypeKit.tag_text(d), team, HEIGHT * 0.5 + 0.7)
+	else:
+		name_tag.text = TypeKit.tag_text(d)
+
+
+## New layers from `spec` (a roster's derived.mech, or a chassis's class), keeping who is
+## in it and whom its blast can reach.
+func _set_layers(spec: Dictionary) -> void:
 	var keep := layers.services if layers != null else null
 	if layers != null:
 		health.damage_filter = Callable()
@@ -224,15 +245,70 @@ func set_type(id: String, roster: Roster) -> void:
 	var was_auto := layers.auto if layers != null else false
 	layers = MechLayers.attach(self, spec)
 	layers.services = keep
-	layers.nuker = (roster.recipe(id).get("mods", []) as Array).has("nuker")
 	layers.piloted = was_piloted
 	layers.auto = was_auto
 	layers.pilot = pilot_pawn
 	_wire_layers()
-	if name_tag == null or not is_instance_valid(name_tag):
-		name_tag = TypeKit.make_tag(body, TypeKit.tag_text(d), team, HEIGHT * 0.5 + 0.7)
-	else:
-		name_tag.text = TypeKit.tag_text(d)
+
+
+## Made of parts (MechAssembler.dress): `model`'s joints take the boxes' places -- the legs
+## on the legs (they turn with the legs), the right arm and hand on the gun arm (posed
+## forward, so it aims), the chassis, head, left arm and pods on the torso. `hip_height`:
+## the hips above the feet, from the legs' length; the eye rides on it. `layer_spec`: the
+## chassis's class's layers ({} keeps them).
+func set_parts(model: Node3D, hip_height: float, layer_spec: Dictionary = {}) -> void:
+	for n: Node3D in [legs, torso]:
+		for c in n.get_children():
+			c.queue_free()
+	for c in arm.get_children():
+		if c is MeshInstance3D:
+			c.queue_free()
+	# Nothing to hide from the cockpit: MechPilot still hides it.
+	canopy = MeshInstance3D.new()
+	canopy.name = "Canopy"
+	torso.add_child(canopy)
+	var hips := Vector3(0.0, -HEIGHT * 0.5 + hip_height, 0.0)
+	var joints: Dictionary = model.get_meta(&"joints", {})
+	var chassis := model.get_node_or_null(^"Chassis") as Node3D
+	if chassis != null:
+		model.remove_child(chassis)
+		torso.add_child(chassis)
+		chassis.position += hips
+	_hips.clear()
+	var pose := Node3D.new()
+	pose.name = "Pose"
+	arm.add_child(pose)
+	var arm_at: Vector3 = (joints[&"arm_R"] as Node3D).position if joints.has("arm_R") else SHOULDER - hips
+	shoulder = Vector3(arm_at.x, hip_height + arm_at.y, arm_at.z)   # from the feet, as SHOULDER
+	for path: String in joints:
+		var j: Node3D = joints[path]
+		var xf := j.transform
+		model.remove_child(j)
+		if path.begins_with("leg_"):
+			legs.add_child(j)
+			j.transform = Transform3D(xf.basis, xf.origin + hips)
+			_hips.append(j)
+		elif path == "arm_R" or path == "arm_R/hand":
+			pose.add_child(j)
+			j.transform = Transform3D(xf.basis, xf.origin - arm_at)
+		else:
+			torso.add_child(j)
+			j.transform = Transform3D(xf.basis, xf.origin + hips)
+	model.free()
+	# The arm hangs from the shoulder; aimed, it points along the aim: turned so the line
+	# from shoulder to wrist runs forward (-Z), the gun at the wrist, the muzzle ahead of it.
+	var wrist := Vector3(0.0, -1.0, -0.2)
+	var hand := pose.get_node_or_null(^"Joint_arm_R_hand") as Node3D
+	if hand != null and hand.position.length() > 0.01:
+		wrist = hand.position
+	pose.basis = Basis(Quaternion(wrist.normalized(), Vector3.FORWARD))
+	muzzle.position = Vector3.FORWARD * (wrist.length() + 1.0)
+	cockpit_y = hip_height + EYE_OVER_HIPS
+	var eye := body.get_node_or_null(^"Eye") as Node3D
+	if eye != null:
+		eye.position = Vector3.UP * (cockpit_y - HEIGHT * 0.5)
+	if not layer_spec.is_empty():
+		_set_layers(layer_spec)
 
 
 # --- getting in and out (Docs/AIRoster.md 4.4, 4.7; R14) ----------------------------
@@ -452,7 +528,7 @@ func feet() -> Vector3:
 func cockpit_interpolated() -> Vector3:
 	var o := body.get_global_transform_interpolated().origin
 	var fwd := -motor.torso_basis().z
-	return o + motor.up * (COCKPIT_Y - HEIGHT * 0.5) + fwd * COCKPIT_FORWARD
+	return o + motor.up * (cockpit_y - HEIGHT * 0.5) + fwd * COCKPIT_FORWARD
 
 
 func _physics_process(delta: float) -> void:
@@ -462,6 +538,13 @@ func _physics_process(delta: float) -> void:
 	_aim_arm(delta)
 	legs.rotation.y = motor.legs_yaw
 	torso.rotation.y = motor.torso_yaw
+	if not _hips.is_empty():
+		# Legs of parts swing at the hips as it walks (the motion sets come later: stage 8).
+		var speed := Gravity.flat(body.velocity, motor.up).length()
+		_gait = fmod(_gait + delta * speed * 0.9, TAU)
+		var swing := 0.4 * sin(_gait) * clampf(speed / 4.0, 0.0, 1.0)
+		for i in _hips.size():
+			_hips[i].rotation.x = swing if i % 2 == 0 else -swing
 
 
 ## The arm chases the aim: yaw within its shoulder's reach of the torso, pitch
@@ -470,10 +553,10 @@ func _physics_process(delta: float) -> void:
 func _aim_arm(delta: float) -> void:
 	var want_yaw := intents.aim_yaw
 	var want_pitch := intents.aim_pitch
-	var shoulder := body.global_position + motor.up * (SHOULDER.y - HEIGHT * 0.5) \
-			+ motor.torso_basis() * Vector3(SHOULDER.x, 0.0, SHOULDER.z)
+	var at_shoulder := body.global_position + motor.up * (shoulder.y - HEIGHT * 0.5) \
+			+ motor.torso_basis() * Vector3(shoulder.x, 0.0, shoulder.z)
 	if aim_point != Vector3.INF:
-		var to := aim_point - shoulder
+		var to := aim_point - at_shoulder
 		if to.length() > 2.0:
 			# In the body's frame, as every yaw here is (Docs/Planets.md 11.7).
 			var tl := body.global_transform.basis.orthonormalized().inverse() * to \
@@ -484,7 +567,7 @@ func _aim_arm(delta: float) -> void:
 	arm_yaw = move_toward(arm_yaw, rel, ARM_YAW_SPEED * delta)
 	arm_pitch = clampf(want_pitch, -ARM_PITCH_LIMIT, ARM_PITCH_LIMIT)
 	# The arm is a child of the body, which never rotates; put it in world yaw.
-	arm.position = shoulder - body.global_position
+	arm.position = at_shoulder - body.global_position
 	arm.rotation = Vector3(arm_pitch, motor.torso_yaw + arm_yaw, 0.0)
 
 

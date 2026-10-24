@@ -5756,6 +5756,7 @@ func _mech_at_hatch(p: Pawn) -> Mech:
 
 func _spawn_mech(feet: Vector3, yaw: float) -> Mech:
 	_mech = Mech.spawn(self, feet, yaw, 0)
+	MechAssembler.dress_rolled(_mech, hash(feet), "normal")
 	if _gun_library == null:
 		_gun_library = GunPlaceholderParts.build_library()
 	var res := GunGenerator.generate(_gun_library, _combat_rng.randi(),
@@ -6085,7 +6086,11 @@ func _wire_mech(m: Mech) -> void:
 ## the enemy tree -- it breaches to get at infantry (AI.md 6.4).
 ## `recipe`: which of the roster's mechs it is (AIRoster.md RO11: a commander
 ## buys one by its recipe).
-func _spawn_enemy_mech(feet: Vector3, yaw: float, recipe := "medium_gunner") -> MechBrain:
+## Which workshop mech Ctrl Y spawned last.
+var _mech_design := -1
+
+
+func _spawn_enemy_mech(feet: Vector3, yaw: float, recipe := "medium_gunner", design: PartDesign = null) -> MechBrain:
 	if _gun_library == null:
 		_gun_library = GunPlaceholderParts.build_library()
 	var m := Mech.spawn(self, feet, yaw, 1)
@@ -6100,6 +6105,12 @@ func _spawn_enemy_mech(feet: Vector3, yaw: float, recipe := "medium_gunner") -> 
 	var br := MechBrain.attach(ai_services, m, mech_nav, MechTree.enemy(), 1)
 	# A mech by the roster: its layers and the name over it (AIRoster.md RO6).
 	m.set_type(recipe, Roster.shared())
+	# Made of parts when there are parts to make it of (Docs/ModularParts.md stage 6): a
+	# chassis of its class, every part fitting -- or a design's, of the design's class.
+	# Else the boxes. Seeded from where it stands: no roll of the combat dice moves.
+	MechAssembler.dress_rolled(m, hash(feet), MechAssembler.class_of(
+			str(Roster.shared().recipe(recipe).get("class", ""))) if design == null else "",
+			design, design != null)
 	# Its pilot, a soldier of its side, inside: one who can bail out (RO8).
 	var pilot := _spawn_soldier(feet)
 	m.mount(pilot.pawn, true)
@@ -14324,7 +14335,19 @@ func _unhandled_input(event: InputEvent) -> void:
 			_spawn_squad(_on_ground(ahead))
 		KEY_Y:
 			var ahead := camera.global_position - camera.global_transform.basis.z * 40.0
-			_spawn_enemy_mech(mech_nav.snap(_on_ground(ahead)), camera.global_rotation.y + PI)
+			var design: PartDesign = null
+			if event.ctrl_pressed:
+				# Ctrl Y: the mechs made in the asset workshop, in turn.
+				var made := MechAssembler.designs(MechAssembler.catalog(true))
+				if made.is_empty():
+					print("[city] no mech saved in the asset workshop yet")
+					return
+				var ids := made.keys()
+				ids.sort()
+				_mech_design = (_mech_design + 1) % ids.size()
+				design = made[ids[_mech_design]]
+			_spawn_enemy_mech(mech_nav.snap(_on_ground(ahead)), camera.global_rotation.y + PI,
+					"medium_gunner", design)
 		KEY_M:
 			if _vehicle_pilot.is_driving():
 				_leave_vehicle()

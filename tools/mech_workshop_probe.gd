@@ -186,6 +186,22 @@ func _save() -> void:
 	var again: Dictionary = _ws.save_parts()
 	_ok("saved again unchanged: nothing written", (again.written as Array).is_empty(), str(again))
 
+	# Into the game (stage 6): the build's parts are a design, the design a mech.
+	var made := MechAssembler.designs(cat)
+	var d: PartDesign = made.get("probe_mech")
+	_ok("the saved parts are a design by the build's name, every slot fixed", d != null
+			and d.slots.size() == 10 and d.slots.root.fixed == _ws.part_ids.chassis, str(made.keys()))
+	var b := PartBuilder.generate("mech", d, 1, cat)
+	_ok("it rolls whole: every part its own", (b.problems as Array).is_empty() and b.at.size() == 9, str(b.problems))
+	var m := Mech.spawn(root, Vector3(0, 0, 50), 0.0, 0)
+	_ok("a mech in the game made of them", MechAssembler.dress(m, b, true)
+			and m.legs.get_node_or_null(^"Joint_leg_L") != null and m.arm.get_node_or_null(^"Pose/Joint_arm_R") != null)
+	_ok("heavy, as its chassis", is_equal_approx(m.health.layer_configs[1].max_value, 2400.0))
+	_ok("legs 3 long: the eye higher than the greybox's", m.cockpit_y > Mech.COCKPIT_Y + 0.8, str(m.cockpit_y))
+	var arm_j: Vector3 = _ws.mech_basis() * (_ws.mech_joint_m("arm_R") - _ws.mech_joint_m("chassis"))
+	_ok("its right shoulder where the reference has it", m.shoulder.is_equal_approx(
+			Vector3(arm_j.x, MechAssembler.hip_height(b) + arm_j.y, arm_j.z)), "%s vs %s" % [m.shoulder, arm_j])
+
 
 func _try_part(id: String, slot: String, side: String, mount: String, params: Dictionary = {},
 		sockets: Dictionary = {}) -> PartRecord:

@@ -8569,7 +8569,7 @@ func _mech_record(name: String, by_part: Dictionary, official: bool) -> PartReco
 
 
 ## Export a mech's parts for the game, as export_game does a gun's: each part's scene at
-## its mount (else its joint), nano size, facing -Z, a `mount` node on each part but the
+## its mount (else its joint; the chassis's is the hips), nano size, facing -Z, a `mount` node on each part but the
 ## chassis and a `socket_<name>` on the part it hangs from at each of its socket points.
 func export_mech(dir: String) -> Dictionary:
 	var by_part := _kind_bricks()
@@ -8577,7 +8577,7 @@ func export_mech(dir: String) -> Dictionary:
 		return {"ok": false, "why": "nothing built"}
 	var at := {}
 	for name in by_part:
-		at[name] = mech_joint_m(name) if name != "chassis" else _cells_centre(by_part[name])
+		at[name] = mech_joint_m(name)   # the chassis's is the hips: the game stands it on its legs
 	for q in points:
 		if q.kind == "mount" and by_part.has(String(q.part)):
 			at[q.part] = _point_m(q)
