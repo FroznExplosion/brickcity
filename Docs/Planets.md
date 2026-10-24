@@ -1253,3 +1253,35 @@ nav (`VehicleNav`), `VehicleCover` -- after N2.
 257 x 257 heights in it, built in 222 ms; on the ground within 2.4 mm, 1.3 cm between samples,
 corners 1.45° (tools/planet_nav_grid_probe.gd, 9/9). N1, the C++ half of N1b, N2-N4: open;
 Docs/HandoffPlanetNav.md carries them.
+
+### 11.9 Plan: biomes (2026-10-24)
+
+After STA's `PlanetFields` (temperature, humidity, a biome by climate, one baked map shared by the
+ground and the impostor), trimmed: no continents, no underground, no material textures.
+
+- **Climate, by direction.** Temperature at sea level from latitude (warm at the equator, cold at
+  the poles, the band edges wobbled by noise so they are not rings), less a lapse with height
+  (`lapse` °C a metre); humidity from its own slow noise. All in `PlanetBiomes`
+  (scripts/planet/planet_biomes.gd), seeded from `PlanetData.planet_seed`.
+- **Biomes: a short table** `{name, colour, dry colour, temperature band, humidity band}` --
+  tundra, taiga, temperate grass, temperate forest, steppe, desert, savanna, jungle. A direction
+  takes the biome whose bands it is in (nearest band when none), with a few metres of blend at the
+  borders from a patch noise, so edges are ragged, not lines.
+- **One map.** `PlanetBiomes.bake(width, height)`: equirect RGBA8, RGB the biome's colour (mottled
+  toward its dry colour by humidity), A the sea-level temperature normalised -- the convention the
+  impostor already uses (`dir = (cos lat sin lon, sin lat, cos lat cos lon)`). 1024 x 512 at 10 km:
+  61 m a pixel at the equator, finer toward the poles; bilinear, no mipmaps (no seam line at the
+  date line).
+- **The ground shader reads it** (`shaders/planet_ground.gdshader`): the map's colour in place of
+  today's grass/dry mottle (the fine mottle stays, as a multiply); live from the real surface,
+  as today: rock on cliffs, sand at the sea's edge, snow where the temperature at that height is
+  under 0 °C and the ground not steep. **The impostor's colour map is baked from the same
+  function**, so a desert seen from orbit is the desert you land in. Town pads stay concrete grey
+  from orbit.
+- **Trees, later (11.10):** each biome carries a tree density and kind; scattering reads
+  `PlanetBiomes` on the CPU, so it agrees with the colour.
+
+Probe `tools/planet_biome_probe.gd` (headless): the map's pixel against `PlanetBiomes` at its
+direction (exact), the shader's lookup UV against the bake's (same pixel), every biome present
+on the default planet, temperature falling with latitude and height, bake time. A windowed shot
+from orbit and on foot (`--gate`'s shots) for the look.
