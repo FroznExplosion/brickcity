@@ -100,6 +100,8 @@ static func dress(m: Mech, build: Dictionary, take_class: bool = true) -> bool:
 	var spec: Dictionary = CLASS_LAYERS.get(klass, {}) if take_class else {}
 	m.set_parts(model, hip_height(build), spec)
 	m.set_meta(&"mech_parts", _ids(build))
+	# Its walk from the motion sets: by its class, or the design's pick (stage 8).
+	MotionSets.walk_mech(m, build, String((build.get("motion", {}) as Dictionary).get("walk", "")))
 	return true
 
 
