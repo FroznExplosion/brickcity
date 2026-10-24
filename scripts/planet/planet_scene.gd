@@ -28,6 +28,8 @@ var pawn: Pawn
 var player: PlayerController
 var gun: GunController
 var view: PlayerView
+## The firefight's player kit round the pawn: arsenal, HUD, aim assist (PlanetPlayerKit).
+var kit: PlanetPlayerKit
 var on_foot := false
 var _pawn_gate := false
 var _mech_gate := false
@@ -162,6 +164,14 @@ func _spawn_player(feet: Vector3, facing: Vector3) -> void:
 	gun.exclude = [pawn.body.get_rid()] as Array[RID]
 	_face(facing)
 	_set_on_foot(true)
+	# The AI it fights: the town's region (11.8 N2), unless a gate sets up its own.
+	if ai == null and not _gate:
+		setup_ai(town_dirs[0])
+	var s := ai
+	if s == null:
+		s = AIServices.new()
+		s.world3d = get_world_3d()
+	kit = PlanetPlayerKit.attach(self, player, cam, gun, view, s, _gate)
 
 
 ## Turn the camera, in the pawn's frame, to look along `facing`.
@@ -250,7 +260,9 @@ func _build_light() -> void:
 func _build_hud() -> void:
 	var layer := CanvasLayer.new()
 	hud = Label.new()
-	hud.position = Vector2(14, 12)
+	# Under the kit's line of controls (PlayerHud), over its aggro meter.
+	hud.position = Vector2(14, 120)
+	hud.add_theme_font_size_override("font_size", 13)
 	hud.add_theme_color_override("font_color", Color(0.95, 0.96, 0.98))
 	hud.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.8))
 	hud.add_theme_constant_override("outline_size", 4)
