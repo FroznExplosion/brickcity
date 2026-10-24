@@ -340,14 +340,14 @@ func _walk_tick(delta: float, wish: Vector3, speed: float, on_floor: bool) -> bo
 		if on_floor or _coyote > 0.0:
 			_buffer = 0.0
 			_coyote = 0.0
-			_jump(b.global_position.y)
+			_jump(Gravity.height_of(b.global_position))
 			on_floor = false
-	var h := Vector3(b.velocity.x, 0.0, b.velocity.z)
+	var h := Gravity.flat(b.velocity, pawn.up)
 	if on_floor:
 		var rate := GROUND_ACCEL if wish != Vector3.ZERO else GROUND_FRICTION
 		h = h.move_toward(wish * speed, rate * delta)
-		if b.velocity.y <= 0.0:
-			b.velocity.y = 0.0
+		if Gravity.vert(b.velocity, pawn.up) <= 0.0:
+			b.velocity = Gravity.with_vert(b.velocity, pawn.up, 0.0)
 	else:
 		if wish != Vector3.ZERO:
 			var add := maxf(speed, Pawn.WALK_SPEED) - h.dot(wish)
@@ -357,12 +357,11 @@ func _walk_tick(delta: float, wish: Vector3, speed: float, on_floor: bool) -> bo
 		if _air_time > 0.5 and hs > Pawn.RUN_SPEED * 1.2:
 			h = h * (maxf(hs - AIR_DRAG * delta, Pawn.RUN_SPEED * 1.2) / hs)
 		b.velocity += Gravity.down_at(b.global_position) * Pawn.GRAVITY * delta
-	b.velocity.x = h.x
-	b.velocity.z = h.z
+	b.velocity = h + pawn.up * Gravity.vert(b.velocity, pawn.up)
 	if not on_floor:
 		# Falling, not rising hard: reach for a ledge, run the wall beside you, or
 		# hold on to the one in front.
-		if b.velocity.y < 2.0 and (_try_mantle(wish, false) or _try_grab(wish, false)):
+		if Gravity.vert(b.velocity, pawn.up) < 2.0 and (_try_mantle(wish, false) or _try_grab(wish, false)):
 			return false
 		if not _try_wall_run(wish):
 			_try_stick(wish)
@@ -371,7 +370,7 @@ func _walk_tick(delta: float, wish: Vector3, speed: float, on_floor: bool) -> bo
 
 ## Up at the full jump; `from` is the body's height at take-off.
 func _jump(from: float) -> void:
-	pawn.body.velocity.y = rise_speed(JUMP_HIGH)
+	pawn.body.velocity = Gravity.with_vert(pawn.body.velocity, pawn.up, rise_speed(JUMP_HIGH))
 	pawn.rising_jump = true
 	_jump_from = from
 
@@ -382,13 +381,13 @@ func _cut_jump() -> void:
 	if is_nan(_jump_from):
 		return
 	var b := pawn.body
-	if b.velocity.y <= 0.0 or state != State.WALK:
+	if Gravity.vert(b.velocity, pawn.up) <= 0.0 or state != State.WALK:
 		_jump_from = NAN
 		return
 	if pawn.intents.jump_held:
 		return
-	var left := maxf(JUMP_LOW - (b.global_position.y - _jump_from), 0.0)
-	b.velocity.y = minf(b.velocity.y, rise_speed(left))
+	var left := maxf(JUMP_LOW - (Gravity.height_of(b.global_position) - _jump_from), 0.0)
+	b.velocity = Gravity.with_vert(b.velocity, pawn.up, minf(Gravity.vert(b.velocity, pawn.up), rise_speed(left)))
 	_jump_from = NAN
 
 
@@ -407,9 +406,9 @@ static func rise_speed(h: float) -> float:
 func _move(delta: float, wish: Vector3, speed: float) -> void:
 	var b := pawn.body
 	var shove := pawn.shove
-	var push := Vector3(shove.x, 0.0, shove.z)
-	if shove.y > 0.0 and b.velocity.y < shove.y:
-		b.velocity.y = shove.y
+	var push := Gravity.flat(shove, pawn.up)
+	if Gravity.vert(shove, pawn.up) > 0.0 and Gravity.vert(b.velocity, pawn.up) < Gravity.vert(shove, pawn.up):
+		b.velocity = Gravity.with_vert(b.velocity, pawn.up, Gravity.vert(shove, pawn.up))
 	pawn.shove *= exp(-Pawn.SHOVE_DECAY * delta)
 	var before := b.global_position
 	b.velocity += push
@@ -418,7 +417,7 @@ func _move(delta: float, wish: Vector3, speed: float) -> void:
 	if state == State.WALK and b.is_on_floor() and wish != Vector3.ZERO and b.is_on_wall():
 		var wanted := wish * speed * delta
 		var moved := b.global_position - before
-		if Vector2(moved.x, moved.z).length() < Vector2(wanted.x, wanted.z).length() * 0.5:
+		if Gravity.flat(moved, pawn.up).length() < Gravity.flat(wanted, pawn.up).length() * 0.5:
 			pawn._step_over(wanted)
 
 
@@ -426,13 +425,12 @@ func _move(delta: float, wish: Vector3, speed: float) -> void:
 
 func _start_slide() -> void:
 	var b := pawn.body
-	var h := Vector3(b.velocity.x, 0.0, b.velocity.z)
+	var h := Gravity.flat(b.velocity, pawn.up)
 	var hs := h.length()
 	if hs < 0.01:
 		return
 	h = h / hs * maxf(hs, SLIDE_SPEED)
-	b.velocity.x = h.x
-	b.velocity.z = h.z
+	b.velocity = h + pawn.up * Gravity.vert(b.velocity, pawn.up)
 	state = State.SLIDE
 	_slide_t = 0.0
 	_slide_air = 0.0
@@ -444,12 +442,12 @@ func _slide_tick(delta: float, wish: Vector3) -> void:
 	var b := pawn.body
 	var it := pawn.intents
 	_slide_t += delta
-	var h := Vector3(b.velocity.x, 0.0, b.velocity.z)
+	var h := Gravity.flat(b.velocity, pawn.up)
 	var hs := h.length()
 	if b.is_on_floor():
 		_slide_air = 0.0
-		if b.velocity.y <= 0.0:
-			b.velocity.y = 0.0
+		if Gravity.vert(b.velocity, pawn.up) <= 0.0:
+			b.velocity = Gravity.with_vert(b.velocity, pawn.up, 0.0)
 	else:
 		_slide_air += delta
 		b.velocity += Gravity.down_at(b.global_position) * Pawn.GRAVITY * delta
@@ -460,7 +458,7 @@ func _slide_tick(delta: float, wish: Vector3) -> void:
 		return
 	if _buffer > 0.0:
 		_buffer = 0.0
-		_jump(b.global_position.y)
+		_jump(Gravity.height_of(b.global_position))
 		state = State.WALK
 		return
 	if wish != Vector3.ZERO:
@@ -469,8 +467,7 @@ func _slide_tick(delta: float, wish: Vector3) -> void:
 	if _slide_t > SLIDE_FREE:
 		var slowed := maxf(hs - SLIDE_FRICTION * delta, 0.0)
 		h = h * (slowed / maxf(hs, 0.001))
-	b.velocity.x = h.x
-	b.velocity.z = h.z
+	b.velocity = h + pawn.up * Gravity.vert(b.velocity, pawn.up)
 
 
 # --- wall-run -----------------------------------------------------------------
@@ -479,22 +476,22 @@ func _try_wall_run(wish: Vector3) -> bool:
 	var b := pawn.body
 	if _wall_cd > 0.0 or b.is_on_floor():
 		return false
-	var h := Vector3(b.velocity.x, 0.0, b.velocity.z)
-	if h.length() < WALL_RUN_MIN or b.velocity.y < -6.0:
+	var h := Gravity.flat(b.velocity, pawn.up)
+	if h.length() < WALL_RUN_MIN or Gravity.vert(b.velocity, pawn.up) < -6.0:
 		return false
 	var along := h.normalized()
 	# Asked for: the move is pushing along the flight, not coasting past a wall.
 	if wish.dot(along) < 0.3:
 		return false
-	var side := along.cross(Vector3.UP)
+	var side := along.cross(pawn.up)
 	for s in [side, -side]:
 		var hit := _ray(_chest(), _chest() + (s as Vector3) * (Pawn.BODY_RADIUS + WALL_REACH))
 		if hit.is_empty():
 			continue
 		var n: Vector3 = hit.normal
-		if absf(n.y) > 0.3:
+		if absf(n.dot(pawn.up)) > 0.3:
 			continue
-		n = Vector3(n.x, 0.0, n.z).normalized()
+		n = Gravity.flat(n, pawn.up).normalized()
 		if _last_wall != Vector3.ZERO and n.dot(_last_wall) > SAME_WALL:
 			continue
 		state = State.WALL_RUN
@@ -502,7 +499,7 @@ func _try_wall_run(wish: Vector3) -> bool:
 		wall_normal = n
 		_wall_t = 0.0
 		_wall_idle = 0.0
-		b.velocity.y = maxf(b.velocity.y, WALL_RUN_LIFT)
+		b.velocity = Gravity.with_vert(b.velocity, pawn.up, maxf(Gravity.vert(b.velocity, pawn.up), WALL_RUN_LIFT))
 		return true
 	return false
 
@@ -522,8 +519,8 @@ func _wall_run_tick(delta: float, wish: Vector3) -> void:
 		_buffer = 0.0
 		_wall_jump()
 		return
-	var along := wall_normal.cross(Vector3.UP).normalized()
-	var h := Vector3(b.velocity.x, 0.0, b.velocity.z)
+	var along := wall_normal.cross(pawn.up).normalized()
+	var h := Gravity.flat(b.velocity, pawn.up)
 	if h.dot(along) < 0.0:
 		along = -along
 	# Let go of the stick and the run ends; push along it and it holds its pace.
@@ -538,9 +535,9 @@ func _wall_run_tick(delta: float, wish: Vector3) -> void:
 	# Pressed against it, so move_and_slide keeps the contact.
 	b.velocity -= wall_normal * 1.5
 	if _wall_t < WALL_RUN_FREE:
-		b.velocity.y = move_toward(b.velocity.y, 0.0, WALL_RUN_LEVEL * delta)
+		b.velocity = Gravity.with_vert(b.velocity, pawn.up, move_toward(Gravity.vert(b.velocity, pawn.up), 0.0, WALL_RUN_LEVEL * delta))
 	else:
-		b.velocity.y = maxf(b.velocity.y - Pawn.GRAVITY * WALL_RUN_SAG * delta, -6.0)
+		b.velocity = Gravity.with_vert(b.velocity, pawn.up, maxf(Gravity.vert(b.velocity, pawn.up) - Pawn.GRAVITY * WALL_RUN_SAG * delta, -6.0))
 
 
 func _leave_wall() -> void:
@@ -564,7 +561,7 @@ func _wall_jump() -> void:
 	var push := v.dot(wall_normal)
 	if push < WALL_JUMP_PUSH:
 		v += wall_normal * (WALL_JUMP_PUSH - push)
-	v.y = WALL_JUMP_UP
+	v = Gravity.with_vert(v, pawn.up, WALL_JUMP_UP)
 	b.velocity = v
 	_leave_wall()
 	wall_jumped.emit()
@@ -581,7 +578,7 @@ func _try_mantle(wish: Vector3, jumped: bool) -> bool:
 		return false
 	var feet := pawn.feet()
 	# Just over a kerb: anything taller than a step is found at this height.
-	var low := feet + Vector3.UP * (Pawn.STEP_HEIGHT + 0.05)
+	var low := feet + pawn.up * (Pawn.STEP_HEIGHT + 0.05)
 	var face := _ray(low, low + fwd * (Pawn.BODY_RADIUS + 0.45))
 	if face.is_empty():
 		# Nothing at the knees: in the air it may be a lip at the chest.
@@ -589,23 +586,23 @@ func _try_mantle(wish: Vector3, jumped: bool) -> bool:
 		if face.is_empty():
 			return false
 	var n: Vector3 = face.normal
-	if absf(n.y) > 0.4:
+	if absf(n.dot(pawn.up)) > 0.4:
 		return false
-	n = Vector3(n.x, 0.0, n.z).normalized()
+	n = Gravity.flat(n, pawn.up).normalized()
 	if fwd.dot(-n) < 0.5:
 		return false
 	var into := -n
 	# A body-width in from the face, look down for the top.
 	var over: Vector3 = face.position + into * (Pawn.BODY_RADIUS + 0.06)
-	var top_from := Vector3(over.x, feet.y + MANTLE_REACH + 0.05, over.z)
-	var top := _ray(top_from, Vector3(over.x, feet.y + Pawn.STEP_HEIGHT * 0.5, over.z))
-	if top.is_empty() or (top.normal as Vector3).y < 0.7:
+	var top_from := Gravity.lift_to(over, Gravity.height_of(feet) + MANTLE_REACH + 0.05)
+	var top := _ray(top_from, Gravity.lift_to(over, Gravity.height_of(feet) + Pawn.STEP_HEIGHT * 0.5))
+	if top.is_empty() or (top.normal as Vector3).dot(pawn.up) < 0.7:
 		return false
-	var top_y: float = top.position.y
-	var rise := top_y - feet.y
+	var top_y: float = Gravity.height_of(top.position)
+	var rise := top_y - Gravity.height_of(feet)
 	if rise < Pawn.STEP_HEIGHT * 0.8 or rise > MANTLE_REACH:
 		return false
-	return _climb(Vector3(over.x, top_y + 0.02, over.z), into,
+	return _climb(Gravity.lift_to(over, top_y + 0.02), into,
 			maxf(Pawn.WALK_SPEED, _hspeed() * 0.7))
 
 
@@ -637,12 +634,12 @@ func _climb(land_feet: Vector3, into: Vector3, exit_speed: float) -> bool:
 	if low and pawn._height > Pawn.CROUCH_HEIGHT:
 		pawn._set_height(Pawn.CROUCH_HEIGHT)
 	var half := pawn._height * 0.5
-	var top_y := land_feet.y - 0.02
+	var top_y := Gravity.height_of(land_feet) - 0.02
 	var start := b.global_position
-	var mid := Vector3(start.x, top_y + 0.04 + half, start.z)
-	var end := Vector3(land_feet.x, top_y + 0.04 + half, land_feet.z)
+	var mid := Gravity.lift_to(start, top_y + 0.04 + half)
+	var end := Gravity.lift_to(land_feet, top_y + 0.04 + half)
 	var xf := b.global_transform
-	var blocked := mid.y > start.y and b.test_move(xf, mid - start)
+	var blocked := Gravity.height_of(mid) > Gravity.height_of(start) and b.test_move(xf, mid - start)
 	if not blocked:
 		xf.origin = mid
 		blocked = b.test_move(xf, end - mid)
@@ -657,7 +654,7 @@ func _climb(land_feet: Vector3, into: Vector3, exit_speed: float) -> bool:
 	_m_mid = mid
 	_m_to = end
 	_m_t = 0.0
-	_m_dur = clampf(0.16 + (top_y - (start.y - half)) * 0.12, MANTLE_TIME_MIN, MANTLE_TIME_MAX)
+	_m_dur = clampf(0.16 + (top_y - (Gravity.height_of(start) - half)) * 0.12, MANTLE_TIME_MIN, MANTLE_TIME_MAX)
 	_m_exit = into * exit_speed
 	_buffer = 0.0
 	_ledge_cd = LEDGE_COOLDOWN
@@ -702,7 +699,7 @@ func _try_grab(wish: Vector3, jumped: bool) -> bool:
 		return false
 	var b := pawn.body
 	var feet := pawn.feet()
-	var hv := Vector3(b.velocity.x, 0.0, b.velocity.z)
+	var hv := Gravity.flat(b.velocity, pawn.up)
 	var dirs: Array[Vector3] = []
 	if wish != Vector3.ZERO:
 		dirs.append(wish.normalized())
@@ -716,19 +713,19 @@ func _try_grab(wish: Vector3, jumped: bool) -> bool:
 			continue
 		# Dense heights, so a single course of brick sticking out is not missed.
 		for cast_h in [0.6, 0.9, 1.2, 1.5, 1.8, 2.1]:
-			var o: Vector3 = feet + Vector3.UP * float(cast_h)
+			var o: Vector3 = feet + pawn.up * float(cast_h)
 			var wall := _ray(o, o + approach * (Pawn.BODY_RADIUS + 0.55))
-			if wall.is_empty() or absf((wall.normal as Vector3).y) > 0.4:
+			if wall.is_empty() or absf((wall.normal as Vector3).dot(pawn.up)) > 0.4:
 				continue
 			var n := _flat(wall.normal)
 			if n == Vector3.ZERO:
 				continue
 			var face: Vector3 = wall.position
-			var top := _top_over(face, -n, feet.y + HANG_REACH + 0.3, feet.y + MANTLE_REACH * 0.75)
+			var top := _top_over(face, -n, Gravity.height_of(feet) + HANG_REACH + 0.3, Gravity.height_of(feet) + MANTLE_REACH * 0.75)
 			if top.is_empty():
 				continue
-			var top_y: float = top.position.y
-			var rise := top_y - feet.y
+			var top_y: float = Gravity.height_of(top.position)
+			var rise := top_y - Gravity.height_of(feet)
 			if rise < MANTLE_REACH * 0.75 or rise > HANG_REACH:
 				continue
 			if not _lip_grippable(face, top_y, -n):
@@ -746,7 +743,7 @@ func _try_grab(wish: Vector3, jumped: bool) -> bool:
 ## the body would otherwise be inside): the arms reach, the body hangs clear.
 func _hang_spot(face: Vector3, n: Vector3, top_y: float) -> Vector3:
 	for out in [0.0, 0.2, 0.4, 0.6]:
-		var feet := Vector3(face.x, top_y - HANG_DROP, face.z) + n * (HANG_DIST + float(out))
+		var feet := Gravity.lift_to(face, top_y - HANG_DROP) + n * (HANG_DIST + float(out))
 		if _fits_at(feet, Pawn.BODY_HEIGHT):
 			return feet
 	return Vector3.INF
@@ -758,8 +755,8 @@ func _hang_spot(face: Vector3, n: Vector3, top_y: float) -> Vector3:
 func _top_over(face: Vector3, into: Vector3, from_y: float, to_y: float) -> Dictionary:
 	for inset in [0.06, 0.18, 0.3]:
 		var p: Vector3 = face + into * float(inset)
-		var hit := _ray(Vector3(p.x, from_y, p.z), Vector3(p.x, to_y, p.z))
-		if not hit.is_empty() and (hit.normal as Vector3).y > 0.7:
+		var hit := _ray(Gravity.lift_to(p, from_y), Gravity.lift_to(p, to_y))
+		if not hit.is_empty() and (hit.normal as Vector3).dot(pawn.up) > 0.7:
 			return hit
 	return {}
 
@@ -768,15 +765,15 @@ func _top_over(face: Vector3, into: Vector3, from_y: float, to_y: float) -> Dict
 ## it for the hand. It also refuses the seam between two bricks inside a wall,
 ## which a ray from inside the wall reads as a "top" with no air over it.
 func _lip_grippable(face: Vector3, top_y: float, into: Vector3) -> bool:
-	var edge := Vector3(face.x, top_y, face.z)
-	var over := edge + into * 0.02 + Vector3.UP * 0.005
-	var up := _ray(over, over + Vector3.UP * 0.6)
-	var gap := 0.6 if up.is_empty() else (up.position as Vector3).y - top_y
+	var edge := Gravity.lift_to(face, top_y)
+	var over := edge + into * 0.02 + pawn.up * 0.005
+	var up := _ray(over, over + pawn.up * 0.6)
+	var gap := 0.6 if up.is_empty() else Gravity.height_of(up.position as Vector3) - top_y
 	if gap < LIP_AIR:
 		return false
-	var probe := edge + into * LIP_DEPTH + Vector3.UP * (gap - 0.01)
-	var down := _ray(probe, probe + Vector3.DOWN * (gap + 0.1))
-	return not down.is_empty() and absf((down.position as Vector3).y - top_y) <= 0.06
+	var probe := edge + into * LIP_DEPTH + pawn.up * (gap - 0.01)
+	var down := _ray(probe, probe + -pawn.up * (gap + 0.1))
+	return not down.is_empty() and absf(Gravity.height_of(down.position as Vector3) - top_y) <= 0.06
 
 
 ## The lip's frame, and whether a body fits on top of it.
@@ -789,7 +786,7 @@ func _set_ledge(face: Vector3, n: Vector3, top_y: float) -> void:
 
 ## Where a climb from the hang puts the feet: over the lip, a body-width in.
 func _climb_feet() -> Vector3:
-	return Vector3(ledge_face.x, ledge_top + 0.02, ledge_face.z) \
+	return Gravity.lift_to(ledge_face, ledge_top + 0.02) \
 			- ledge_normal * (Pawn.BODY_RADIUS + 0.2)
 
 
@@ -806,7 +803,7 @@ func _start_hang(face: Vector3, n: Vector3, top_y: float, feet: Vector3) -> void
 	_hang_t = 0.0
 	_buffer = 0.0
 	b.velocity = Vector3.ZERO
-	_ease_body(feet + Vector3.UP * Pawn.BODY_HEIGHT * 0.5, HANG_ENTER)
+	_ease_body(feet + pawn.up * Pawn.BODY_HEIGHT * 0.5, HANG_ENTER)
 	grabbed.emit()
 
 
@@ -837,14 +834,14 @@ func _hang_tick(delta: float, wish: Vector3, crouch_edge: bool) -> void:
 		_buffer = 0.0
 		if facing:
 			if not (ledge_climbable and _climb_from_hang()):
-				_leave_hang(ledge_normal * HANG_BACK + Vector3.UP * rise_speed(JUMP_LOW))
+				_leave_hang(ledge_normal * HANG_BACK + pawn.up * rise_speed(JUMP_LOW))
 		else:
-			_leave_hang(look * HANG_LEAP + Vector3.UP * rise_speed(JUMP_LOW))
+			_leave_hang(look * HANG_LEAP + pawn.up * rise_speed(JUMP_LOW))
 		return
 	if crouch_edge:
-		_leave_hang(ledge_normal * 1.5 + Vector3.DOWN)
+		_leave_hang(ledge_normal * 1.5 + -pawn.up)
 		return
-	var side := ledge_normal.cross(Vector3.UP).normalized()
+	var side := ledge_normal.cross(pawn.up).normalized()
 	var side_in := wish.dot(side)
 	var in_axis := wish.dot(-ledge_normal)
 	if absf(side_in) > 0.3 and absf(side_in) >= absf(in_axis) * 0.8:
@@ -866,7 +863,7 @@ func _hang_tick(delta: float, wish: Vector3, crouch_edge: bool) -> void:
 			_step_ledge(true)
 	elif in_axis < -0.4:
 		if not _step_ledge(false):
-			_leave_hang(ledge_normal * 1.5 + Vector3.DOWN)
+			_leave_hang(ledge_normal * 1.5 + -pawn.up)
 
 
 ## Pull up over the lip. Re-measured now -- the hang may have lasted a while, and
@@ -891,11 +888,11 @@ func _leave_hang(v: Vector3) -> void:
 ## (a fan of rays finds the face, and the normal turns with it). False when the
 ## lip runs out, which the caller takes for a corner.
 func _shimmy(pos: Vector3) -> bool:
-	var o := Vector3(pos.x, ledge_top - 0.1, pos.z)
+	var o := Gravity.lift_to(pos, ledge_top - 0.1)
 	var best := {}
 	var best_d := INF
 	for deg in [0.0, -15.0, 15.0, -28.0, 28.0]:
-		var d := (-ledge_normal).rotated(Vector3.UP, deg_to_rad(float(deg)))
+		var d := (-ledge_normal).rotated(pawn.up, deg_to_rad(float(deg)))
 		var wh := _ray(o, o + d * (HANG_DIST + 0.5))
 		if wh.is_empty() or _flat(wh.normal) == Vector3.ZERO:
 			continue
@@ -910,14 +907,14 @@ func _shimmy(pos: Vector3) -> bool:
 	var top := _top_over(face, -n, ledge_top + 0.35, ledge_top - 0.35)
 	if top.is_empty():
 		return false
-	var ny: float = top.position.y
+	var ny: float = Gravity.height_of(top.position)
 	if absf(ny - ledge_top) > 0.3 or not _lip_grippable(face, ny, -n):
 		return false
 	var feet := _hang_spot(face, n, ny)
 	if feet == Vector3.INF:
 		return false
 	_set_ledge(face, n, ny)
-	pawn.body.global_position = feet + Vector3.UP * Pawn.BODY_HEIGHT * 0.5
+	pawn.body.global_position = feet + pawn.up * Pawn.BODY_HEIGHT * 0.5
 	return true
 
 
@@ -940,14 +937,14 @@ func _corner(tangent: Vector3) -> bool:
 	var top := _top_over(face, -n, ledge_top + 0.4, ledge_top - 0.4)
 	if top.is_empty():
 		return false
-	var ny: float = top.position.y
+	var ny: float = Gravity.height_of(top.position)
 	if absf(ny - ledge_top) > 0.4 or not _lip_grippable(face, ny, -n):
 		return false
 	var feet := _hang_spot(face, n, ny)
 	if feet == Vector3.INF:
 		return false
 	_set_ledge(face, n, ny)
-	_ease_body(feet + Vector3.UP * Pawn.BODY_HEIGHT * 0.5, HANG_CORNER_TIME)
+	_ease_body(feet + pawn.up * Pawn.BODY_HEIGHT * 0.5, HANG_CORNER_TIME)
 	_corner_cd = 0.35
 	return true
 
@@ -964,10 +961,10 @@ func _step_ledge(up: bool) -> bool:
 			continue
 		var n := _flat(wh.normal)
 		var face: Vector3 = wh.position
-		var top := _top_over(face, -n, face.y + 0.4, face.y - 0.4)
+		var top := _top_over(face, -n, Gravity.height_of(face) + 0.4, Gravity.height_of(face) - 0.4)
 		if top.is_empty():
 			continue
-		var ny: float = top.position.y
+		var ny: float = Gravity.height_of(top.position)
 		if up and (ny <= ledge_top + 0.3 or ny > ledge_top + 1.9):
 			continue
 		if not up and (ny >= ledge_top - 0.3 or ny < ledge_top - 1.9):
@@ -980,7 +977,7 @@ func _step_ledge(up: bool) -> bool:
 		_set_ledge(face, n, ny)
 		if up and ledge_climbable and _climb_from_hang():
 			return true
-		_ease_body(feet + Vector3.UP * Pawn.BODY_HEIGHT * 0.5, HANG_STEP_TIME)
+		_ease_body(feet + pawn.up * Pawn.BODY_HEIGHT * 0.5, HANG_STEP_TIME)
 		return true
 	return false
 
@@ -995,19 +992,19 @@ func _try_stick(wish: Vector3) -> bool:
 	var b := pawn.body
 	if _wall_cd > 0.0 or b.is_on_floor():
 		return false
-	var hv := Vector3(b.velocity.x, 0.0, b.velocity.z)
+	var hv := Gravity.flat(b.velocity, pawn.up)
 	var n := Vector3.ZERO
 	if b.is_on_wall():
 		n = _flat(b.get_wall_normal())
 	elif hv.length() >= STICK_MIN_SPEED:
 		var hit := _ray(_chest(), _chest() + hv.normalized() * (Pawn.BODY_RADIUS + 0.35))
-		if not hit.is_empty() and absf((hit.normal as Vector3).y) < 0.3:
+		if not hit.is_empty() and absf((hit.normal as Vector3).dot(pawn.up)) < 0.3:
 			n = _flat(hit.normal)
 	if n == Vector3.ZERO:
 		return false
 	var into_speed := hv.dot(-n)
 	var impact := into_speed >= STICK_MIN_SPEED
-	if not impact and (wish.dot(-n) < 0.35 or b.velocity.y > -0.5):
+	if not impact and (wish.dot(-n) < 0.35 or Gravity.vert(b.velocity, pawn.up) > -0.5):
 		return false
 	if impact and hv.length() > WALL_RUN_MIN and hv.normalized().dot(-n) < 0.65:
 		return false
@@ -1024,8 +1021,8 @@ func _try_stick(wish: Vector3) -> bool:
 	_stick_pos = b.global_position
 	_stick_dur = lerpf(STICK_TIME_MIN, STICK_TIME_MAX, t)
 	_stick_t = _stick_dur if (same or not impact) else 0.0
-	_stick_fast = b.velocity.y < -STICK_MAX_FALL
-	b.velocity = Vector3(0.0, b.velocity.y if _stick_fast else 0.0, 0.0)
+	_stick_fast = Gravity.vert(b.velocity, pawn.up) < -STICK_MAX_FALL
+	b.velocity = Vector3(0.0, Gravity.vert(b.velocity, pawn.up) if _stick_fast else 0.0, 0.0)
 	stuck.emit()
 	return true
 
@@ -1033,12 +1030,12 @@ func _try_stick(wish: Vector3) -> bool:
 ## A lip on this wall within reach -- the grab's or the mantle's, not the stick's.
 func _lip_in_reach(n: Vector3) -> bool:
 	var feet := pawn.feet()
-	var o := feet + Vector3.UP * 1.0
+	var o := feet + pawn.up * 1.0
 	var wh := _ray(o, o - n * (Pawn.BODY_RADIUS + 0.5))
 	if wh.is_empty():
 		return false
-	var top := _top_over(wh.position, -n, feet.y + HANG_REACH + 0.3, feet.y + Pawn.STEP_HEIGHT)
-	return not top.is_empty() and _lip_grippable(wh.position, top.position.y, -n)
+	var top := _top_over(wh.position, -n, Gravity.height_of(feet) + HANG_REACH + 0.3, Gravity.height_of(feet) + Pawn.STEP_HEIGHT)
+	return not top.is_empty() and _lip_grippable(wh.position, Gravity.height_of(top.position), -n)
 
 
 func _stick_tick(delta: float, wish: Vector3) -> void:
@@ -1066,11 +1063,11 @@ func _stick_tick(delta: float, wish: Vector3) -> void:
 		return
 	var vy: float
 	if _stick_fast:
-		vy = maxf(b.velocity.y - Pawn.GRAVITY * delta, -20.0)
+		vy = maxf(Gravity.vert(b.velocity, pawn.up) - Pawn.GRAVITY * delta, -20.0)
 	else:
 		vy = 0.0 if _stick_t < _stick_dur else -STICK_SLIDE_SPEED
-	var tangent := wall_normal.cross(Vector3.UP).normalized()
-	b.velocity = tangent * wish.dot(tangent) * STICK_STRAFE + Vector3.UP * vy \
+	var tangent := wall_normal.cross(pawn.up).normalized()
+	b.velocity = tangent * wish.dot(tangent) * STICK_STRAFE + pawn.up * vy \
 			- wall_normal * 1.5
 
 
@@ -1078,7 +1075,7 @@ func _stick_tick(delta: float, wish: Vector3) -> void:
 ## you look.
 func _stick_jump() -> void:
 	if _look_flat().dot(-wall_normal) > 0.5:
-		pawn.body.velocity = wall_normal * STICK_BACK_JUMP + Vector3.UP * rise_speed(JUMP_LOW)
+		pawn.body.velocity = wall_normal * STICK_BACK_JUMP + pawn.up * rise_speed(JUMP_LOW)
 		_leave_wall()
 		wall_jumped.emit()
 	else:
@@ -1106,7 +1103,7 @@ func _try_grapple() -> void:
 	_g_last = pawn.body.global_position
 	state = State.GRAPPLE
 	pawn.rising_jump = false
-	pawn.body.velocity.y = maxf(pawn.body.velocity.y, 1.5)
+	pawn.body.velocity = Gravity.with_vert(pawn.body.velocity, pawn.up, maxf(Gravity.vert(pawn.body.velocity, pawn.up), 1.5))
 	grappled.emit(hook)
 
 
@@ -1122,12 +1119,12 @@ func _grapple_tick(delta: float, wish: Vector3) -> void:
 		return
 	if _buffer > 0.0:
 		_buffer = 0.0
-		b.velocity.y = maxf(b.velocity.y, 0.0) + GRAPPLE_RELEASE_BOOST
+		b.velocity = Gravity.with_vert(b.velocity, pawn.up, maxf(Gravity.vert(b.velocity, pawn.up), 0.0) + GRAPPLE_RELEASE_BOOST)
 		_release_grapple()
 		return
 	if d < GRAPPLE_ARRIVE:
 		var fwd := to / maxf(d, 0.001)
-		b.velocity = Vector3(fwd.x, 0.0, fwd.z) * 3.0 + Vector3.UP * 3.5
+		b.velocity = Gravity.flat(fwd, pawn.up) * 3.0 + pawn.up * 3.5
 		_release_grapple()
 		return
 	var moved := b.global_position.distance_to(_g_last)
@@ -1167,23 +1164,24 @@ func _release_grapple() -> void:
 
 ## A normal laid flat and unit length; zero when it points (nearly) straight up
 ## or down.
-static func _flat(n: Vector3) -> Vector3:
-	var f := Vector3(n.x, 0.0, n.z)
+func _flat(n: Vector3) -> Vector3:
+	var f := Gravity.flat(n, pawn.up)
 	return f.normalized() if f.length() > 0.3 else Vector3.ZERO
 
 
 func _hspeed() -> float:
-	return Vector2(pawn.body.velocity.x, pawn.body.velocity.z).length()
+	return Gravity.flat(pawn.body.velocity, pawn.up).length()
 
 
 func _chest() -> Vector3:
-	return pawn.feet() + Vector3.UP * pawn._height * 0.6
+	return pawn.feet() + pawn.up * pawn._height * 0.6
 
 
 ## Where the eye looks, flattened; the look yaw when the eye is straight down.
 func _look_flat() -> Vector3:
 	var yaw := pawn.intents.look_yaw
-	return Vector3(-sin(yaw), 0.0, -cos(yaw))
+	# The yaw is in the body's frame (Docs/Planets.md 11.7): the world's off a planet.
+	return pawn.body.global_transform.basis * Vector3(-sin(yaw), 0.0, -cos(yaw))
 
 
 func _ray(from: Vector3, to: Vector3, mask := Layers.PAWN_MASK) -> Dictionary:
@@ -1199,7 +1197,7 @@ func _fits_at(feet: Vector3, h: float) -> bool:
 	cap.height = h - 0.06
 	var q := PhysicsShapeQueryParameters3D.new()
 	q.shape = cap
-	q.transform = Transform3D(Basis.IDENTITY, feet + Vector3.UP * (h * 0.5 + 0.03))
+	q.transform = Transform3D(pawn.body.global_transform.basis, feet + pawn.up * (h * 0.5 + 0.03))
 	q.collision_mask = Layers.PAWN_MASK
 	q.exclude = [pawn.body.get_rid()]
 	return pawn.body.get_world_3d().direct_space_state.intersect_shape(q, 1).is_empty()

@@ -40,7 +40,60 @@ static func down_at(p: Vector3) -> Vector3:
 
 ## Unit vector up at a world point: away from the ground.
 static func up_at(p: Vector3) -> Vector3:
-	return -down_at(p)
+	if planet != null and is_instance_valid(planet):
+		return -down_at(p)
+	return Vector3.UP
+
+
+# --- one up, everywhere (Docs/Planets.md 11.7) ------------------------------
+#
+# What `.y` meant, said with the local up. With up = +Y each is exact: a dot
+# with (0, 1, 0) is `y`, and taking `up * y` off leaves (x, 0, z) -- so the flat
+# game does not move by a bit.
+
+## The part of `v` along `up` (was `v.y`).
+static func vert(v: Vector3, up: Vector3) -> float:
+	return v.dot(up)
+
+
+## `v` without its part along `up` (was `Vector3(v.x, 0, v.z)`).
+static func flat(v: Vector3, up: Vector3) -> Vector3:
+	return v - up * v.dot(up)
+
+
+## `v` with its part along `up` set to `x` (was `v.y = x`). Exactly that
+## off a planet: `v.y + (x - v.y)` is not always `x` to the last bit.
+static func with_vert(v: Vector3, up: Vector3, x: float) -> Vector3:
+	if up == Vector3.UP:
+		return Vector3(v.x, x, v.z)
+	return v + up * (x - v.dot(up))
+
+
+## How high a world point stands (was `p.y`): over the planet's datum on one.
+static var planet_radius := 0.0
+
+
+static func height_of(p: Vector3) -> float:
+	if planet != null and is_instance_valid(planet):
+		return (p - planet.global_position).length() - planet_radius
+	return p.y
+
+
+## `p` moved along its up to stand at height `h` (was `Vector3(p.x, h, p.z)`).
+static func lift_to(p: Vector3, h: float) -> Vector3:
+	if planet != null and is_instance_valid(planet):
+		return p + up_at(p) * (h - height_of(p))
+	return Vector3(p.x, h, p.z)
+
+
+## The basis `b` turned by the least rotation that takes its Y to `up`: how a
+## body is carried along the curve, so nothing about its heading changes but
+## what the ground's tilt demands (STA doc 05's full-basis rebuild).
+static func carry(b: Basis, up: Vector3) -> Basis:
+	var y := b.y.normalized()
+	if y.is_equal_approx(up):
+		return b
+	return Basis(Quaternion(y, up)) * b
 
 
 ## The project's gravity as a vector at a world point.

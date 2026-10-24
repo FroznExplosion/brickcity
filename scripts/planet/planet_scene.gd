@@ -64,6 +64,7 @@ func _ready() -> void:
 	buildings.finish()
 	Gravity.planet = planet
 	Gravity.planet_strength = data.gravity_strength
+	Gravity.planet_radius = data.radius
 	print("[planet] %s: radius %.0f m, relief %.0f m, sea %.0f m; impostor baked in %d ms" % [
 			data.planet_name, data.radius, data.amplitude, data.sea_level, planet.bake_ms])
 	_build_light()
