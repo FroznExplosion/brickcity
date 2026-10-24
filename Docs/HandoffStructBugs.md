@@ -76,6 +76,11 @@ since storey units' log commands (`--ring` 4 of 4, no FAIL line). Open, in order
    16-24 laid, cut at 25 -- persisting two stops, gone by the third) and 0 of 3 on the scripts of
    `300e2f5`; one other run failed "no piece frozen over air drops" (item 5's kind). Nothing in
    the copy touches band meshes; a timing-exposed miss in a cut storey's band patch is the guess.
+   **Timed 2026-10-24 05:31** (`dd87254`, quiet machine, `--ring` 14 s, peak 70-77 C):
+   `--big --shot` 16.9 ms / 8 of 906 over 33.3 (worst 50.0), 16.8 / 5 (38.3), 16.8 / 6 (50.0),
+   against 18.1 / 17-21 the evening before -- which was also before perf caps (`c35046e`), so
+   this is both chats' work. The ticks over 25 ms left are 2-4 a run, most of them `render`
+   (19-28 ms, the renderer itself); one `bands` 8.7 (`bd_rest`).
    Was: a stand-in's
    `add_surface_from_arrays` stalling 9-216 ms (the renderer; idea: every stand-in through the
    worker upload path, `IslandManager._submit_mesh_job`); a shell piece's split 5-17 ms
