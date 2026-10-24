@@ -1171,6 +1171,38 @@ bool BrickWorld::is_solid(int chunk_id, Vector3i cell) const {
     return c.solid_at(cell - c.origin);
 }
 
+PackedByteArray BrickWorld::get_solid_cells(int chunk_id) const {
+    PackedByteArray out;
+    if (!valid_chunk(chunk_id)) {
+        return out;
+    }
+    const Chunk &c = chunks[chunk_id];
+    const Vector3i d = c.dims;
+    out.resize((int64_t)d.x * d.y * d.z);
+    uint8_t *w = out.ptrw();
+    memset(w, 0, (size_t)out.size());
+    // Alive per block first: a Block is big, and reading it per cell was most
+    // of the cost (5.7 ms for a tower; PerfCaps.md 4).
+    std::vector<uint8_t> alive(c.blocks.size());
+    for (size_t i = 0; i < c.blocks.size(); ++i) {
+        alive[i] = c.blocks[i].alive ? 1 : 0;
+    }
+    for (int z = 0; z < d.z; ++z) {
+        for (int y = 0; y < d.y; ++y) {
+            const int64_t row = c.index_of(Vector3i(0, y, z));
+            if (row < 0) {
+                continue; // outside a band chunk's window: nothing there
+            }
+            uint8_t *o = w + (int64_t)d.x * ((int64_t)y + (int64_t)d.y * z);
+            for (int x = 0; x < d.x; ++x) {
+                const int32_t blk = c.occupancy[row + x];
+                o[x] = (blk >= 0 && alive[(size_t)blk]) ? 1 : 0;
+            }
+        }
+    }
+    return out;
+}
+
 int BrickWorld::block_at(int chunk_id, Vector3i cell) const {
     if (!valid_chunk(chunk_id)) {
         return -1;
@@ -10531,6 +10563,7 @@ void BrickWorld::_bind_methods() {
             &BrickWorld::get_blocks_footprint);
     ClassDB::bind_method(D_METHOD("get_occupancy_bytes", "chunk_id"),
             &BrickWorld::get_occupancy_bytes);
+    ClassDB::bind_method(D_METHOD("get_solid_cells", "chunk_id"), &BrickWorld::get_solid_cells);
     ClassDB::bind_method(D_METHOD("set_anchor_levels", "chunk_id", "grid_ys"),
             &BrickWorld::set_anchor_levels);
     ClassDB::bind_method(D_METHOD("get_template_count"), &BrickWorld::get_template_count);
