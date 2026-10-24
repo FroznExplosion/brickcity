@@ -122,9 +122,6 @@ var arm_pitch := 0.0
 ## nothing may assume the eye's height once legs vary).
 var shoulder := SHOULDER
 var cockpit_y := COCKPIT_Y
-## Made of parts: the hips' joints, swung as it walks.
-var _hips: Array[Node3D] = []
-var _gait := 0.0
 
 
 ## A standing mech with its feet at `feet`, facing `yaw`.
@@ -256,7 +253,7 @@ func _set_layers(spec: Dictionary) -> void:
 
 
 ## Made of parts (MechAssembler.dress): `model`'s joints take the boxes' places -- the legs
-## on the legs (they turn with the legs), the right arm and hand on the gun arm (posed
+## on the legs (they turn with the legs; a motion set walks them, MotionSets), the right arm and hand on the gun arm (posed
 ## forward, so it aims), the chassis, head, left arm and pods on the torso. `hip_height`:
 ## the hips above the feet, from the legs' length; the eye rides on it. `layer_spec`: the
 ## chassis's class's layers ({} keeps them).
@@ -278,7 +275,6 @@ func set_parts(model: Node3D, hip_height: float, layer_spec: Dictionary = {}) ->
 		model.remove_child(chassis)
 		torso.add_child(chassis)
 		chassis.position += hips
-	_hips.clear()
 	var pose := Node3D.new()
 	pose.name = "Pose"
 	arm.add_child(pose)
@@ -291,7 +287,6 @@ func set_parts(model: Node3D, hip_height: float, layer_spec: Dictionary = {}) ->
 		if path.begins_with("leg_"):
 			legs.add_child(j)
 			j.transform = Transform3D(xf.basis, xf.origin + hips)
-			_hips.append(j)
 		elif path == "arm_R" or path == "arm_R/hand":
 			pose.add_child(j)
 			j.transform = Transform3D(xf.basis, xf.origin - arm_at)
@@ -542,13 +537,6 @@ func _physics_process(delta: float) -> void:
 	_aim_arm(delta)
 	legs.rotation.y = motor.legs_yaw
 	torso.rotation.y = motor.torso_yaw
-	if not _hips.is_empty():
-		# Legs of parts swing at the hips as it walks (the motion sets come later: stage 8).
-		var speed := Gravity.flat(body.velocity, motor.up).length()
-		_gait = fmod(_gait + delta * speed * 0.9, TAU)
-		var swing := 0.4 * sin(_gait) * clampf(speed / 4.0, 0.0, 1.0)
-		for i in _hips.size():
-			_hips[i].rotation.x = swing if i % 2 == 0 else -swing
 
 
 ## The arm chases the aim: yaw within its shoulder's reach of the torso, pitch

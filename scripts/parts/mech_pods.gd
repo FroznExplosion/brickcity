@@ -32,6 +32,8 @@ var cool: Array[float] = [0.0, 0.0]
 var _guns: Array = [null, null]       # GunController per active weapon pod
 var _bursts: Array[int] = [0, 0]      # rounds left to fire
 var _base := {}                       # layer index -> its size before passives
+var _arms: Array = [null, null]       # PodArmMotion per animated pod
+var _stand_ins: Array = [null, null]  # a box for a pod on a mech with no pod part there
 
 
 static func attach(m: Mech, lib: GunPartLibrary = null, p_rng: RandomNumberGenerator = null) -> MechPods:
@@ -57,6 +59,7 @@ func fit(slot: int, pod: PodGenerator.Result) -> PodGenerator.Result:
 	cool[slot] = 0.0
 	_bursts[slot] = 0
 	_make_gun(slot)
+	_make_body(slot)
 	_apply_passives()
 	changed.emit()
 	return was
@@ -82,8 +85,46 @@ func use(slot: int) -> bool:
 	else:
 		return false
 	cool[slot] = float(pod.stats.get("cooldown", 5.0))
+	if _arms[slot] != null:
+		(_arms[slot] as PodArmMotion).play()
 	used.emit(slot, pod.kind)
 	return true
+
+
+## What is seen of the pod in `slot`: the mech's pod part there, or a stand-in box on the
+## chassis's top; an animated pod's arm (its motion set, MotionSets "pod.arm.*") moves it.
+func _make_body(slot: int) -> void:
+	if _arms[slot] != null:
+		(_arms[slot] as Node).queue_free()
+		_arms[slot] = null
+	if _stand_ins[slot] != null:
+		(_stand_ins[slot] as Node).queue_free()
+		_stand_ins[slot] = null
+	var pod: PodGenerator.Result = slots[slot]
+	if pod == null or mech.torso == null:
+		return
+	var side := "L" if slot == 0 else "R"
+	var body := mech.torso.get_node_or_null(NodePath("Joint_pod_" + side)) as Node3D
+	if body == null:
+		var box := MeshInstance3D.new()
+		box.name = "PodStandIn_" + side
+		var bm := BoxMesh.new()
+		bm.size = Vector3(0.9, 0.7, 1.4)
+		box.mesh = bm
+		var mat := StandardMaterial3D.new()
+		mat.albedo_color = Color(0.42, 0.45, 0.5)
+		box.material_override = mat
+		# On top of the torso, either side of the cockpit (its left is -X: it faces -Z).
+		box.position = Vector3(1.2 if side == "R" else -1.2, mech.cockpit_y - Mech.HEIGHT * 0.5 + 1.1, 0.6)
+		mech.torso.add_child(box)
+		_stand_ins[slot] = box
+		body = box
+	var id := MotionSets.best("pod", ["pod.arm", String(pod.kind)], {})
+	if pod.sort == "active_animated" and id != "":
+		var arm := MotionSets.make(id) as PodArmMotion
+		arm.target = body
+		add_child(arm)
+		_arms[slot] = arm
 
 
 func _physics_process(delta: float) -> void:
