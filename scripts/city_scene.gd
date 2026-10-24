@@ -698,6 +698,7 @@ const TERRAIN_SEED := 20260921
 var _terrain_streamer: TerrainStreamer = null
 ## The same streamer under the name the terrain dev menu reads (a host whose
 ## detail square follows the camera: terrain_dev_menu.gd's header).
+@warning_ignore("unused_private_class_variable")
 var _streamer: TerrainStreamer:
 	get:
 		return _terrain_streamer
@@ -2830,7 +2831,7 @@ func _build_owed_glass() -> void:
 	var here := camera.global_position if camera != null else Vector3.ZERO
 	var swap_at := SHELL_DETAIL_RANGE + SHELL_HYSTERESIS
 	var live: Array = []
-	var ready: Array = []   ## [distance, index into live]
+	var due: Array = []   ## [distance, index into live]
 	for owed in _glass_owed:
 		var mi = owed[0]
 		var id: int = owed[1]
@@ -2843,13 +2844,13 @@ func _build_owed_glass() -> void:
 		live.append(owed)
 		var dist := b.xform.origin.distance_to(here)
 		if dist <= swap_at:
-			ready.append([dist, live.size() - 1])
+			due.append([dist, live.size() - 1])
 	_glass_owed = live
-	if ready.is_empty():
+	if due.is_empty():
 		return
-	ready.sort_custom(func(a: Array, c: Array) -> bool: return float(a[0]) < float(c[0]))
+	due.sort_custom(func(a: Array, c: Array) -> bool: return float(a[0]) < float(c[0]))
 	var taken := {}
-	for r in ready:
+	for r in due:
 		var owed: Array = _glass_owed[int(r[1])]
 		if _glass_jobs.size() < GLASS_JOBS:
 			_submit_glass(owed)
@@ -2889,7 +2890,7 @@ func _submit_glass(owed: Array) -> void:
 		var arrays := BuildingShell.window_arrays(fx, fz, courses, room_seed, layout,
 				lattice, damage, program, standing)
 		if not arrays.is_empty():
-			holder[0] = BuildingShell.window_mesh_of(arrays) if on_worker else arrays,
+			holder[0] = BuildingShell.window_mesh_of(arrays) if on_worker else (arrays as Variant),
 			true, "shell glass")
 	glass_built += 1
 	_glass_jobs.append([task, holder, owed[0], id, owed[3]])
@@ -7892,6 +7893,7 @@ func _run_storeys_pass() -> void:
 				"storeys %d-%d" % [piece.lo, piece.hi - 1])
 	# The storey blown out, the ones its blasts reached and the ones its wreckage
 	# landed on (_shear_building) -- a few storeys, not the tower.
+	@warning_ignore("integer_division")
 	_gate_ok("and the building stays a few storeys of bricks, not the tower",
 			int(rep2.get("bricks", 0)) <= whole_bricks / 4,
 			"%d of %d bricks" % [int(rep2.get("bricks", 0)), whole_bricks])
@@ -9044,6 +9046,7 @@ func _run_lodbreak_pass() -> void:
 		_save("lodbreak_%d_%dm_settled" % [k, int(d)])
 		var ff: Array = _floating_furniture()
 		if not ff.is_empty():
+			@warning_ignore("integer_division")
 			var foot: Vector3 = ff[ff.size() / 2][1]
 			for f in ff:
 				if f[0] == "heap":
@@ -9342,7 +9345,6 @@ func _run_breakshape_pass() -> void:
 			if b.toppled:
 				break
 			var fx: float = b.recipe.footprint_x * STUD
-			var fz: float = b.recipe.footprint_z * STUD
 			var tall := TowerRecipe.total_plates(b.recipe.courses) * PLATE
 			var aim: Vector3 = b.xform * Vector3(fx * float(shot[0]), tall * float(shot[1]), 0.0)
 			camera.global_position = b.xform * Vector3(fx * float(shot[0]), tall * float(shot[1]), -30.0)
@@ -10140,6 +10142,7 @@ func _run_groups_pass() -> void:
 		var deco: PackedInt32Array = world.get_decorative_blocks(isl.chunk)
 		if deco.is_empty():
 			continue
+		@warning_ignore("integer_division")
 		var ticks: Array = world.get_block_ticks(isl.chunk, deco[deco.size() / 2])
 		if ticks.is_empty():
 			continue
@@ -11185,6 +11188,7 @@ func _run_arms_pass() -> void:
 			WeaponClass.builtin(&"pistol").with_kind(&"heavy"), 1))
 	_arsenal.replace_in_hand(magnum)
 	await _frames(40)
+	@warning_ignore("integer_division")
 	_gate_ok("a magnum is held", _gun.gun == magnum and arms.reach_gap[0] < 0.005
 			and _gun.mag_size() == int(magnum.stats[&"mag_size"]) / 2,
 			"%d shots of %d rounds" % [_gun.mag_size(), int(magnum.stats[&"mag_size"])])
@@ -11582,9 +11586,9 @@ func _apply_blast(point: Vector3, radius: float, chip_hp := 0) -> void:
 		var box := registry.local_box(b.id).grow(reach)
 		if not box.has_point(local):
 			continue
-		var t_part := Time.get_ticks_usec()
+		var t_hit := Time.get_ticks_usec()
 		var chunk := _promote(b.id, true, _storeys_for(b.id, point, reach))
-		t_part = _part("dmg_promote", t_part)
+		t_hit = _part("dmg_promote", t_hit)
 		if chunk < 0:
 			continue
 		# What the blast reaches of the interior is dealt with before the hit
@@ -11614,9 +11618,9 @@ func _apply_blast(point: Vector3, radius: float, chip_hp := 0) -> void:
 			_pieces_hit += woke
 			_pieces_laid += (reached.laid as Array).size()
 			_pieces_hit_ms += float(Time.get_ticks_usec() - t_room) / 1000.0
-		t_part = _part("dmg_rooms", t_part)
+		t_hit = _part("dmg_rooms", t_hit)
 		var killed: PackedInt32Array = world.chip_hit(chunk, point, radius, chip_hp) 				if chip_hp > 0 else world.apply_hit(chunk, point, radius)
-		t_part = _part("dmg_hit", t_part)
+		t_hit = _part("dmg_hit", t_hit)
 		# Committed as soon as it is applied, so the log's order is the order
 		# the world changed in. ALWAYS, whether or not a brick died: the hp a
 		# hit took is state. A blast used to be logged only when it killed,
@@ -12189,6 +12193,7 @@ func _physics_process(_delta: float) -> void:
 		var t_st := Time.get_ticks_usec()
 		if camera != null and Engine.get_physics_frames() % TRIM_EVERY == 0:
 			_trim_quiet()
+		@warning_ignore("integer_division")
 		if camera != null and Engine.get_physics_frames() % TRIM_EVERY == TRIM_EVERY / 2:
 			_trim_budget()
 		t_st = _part("st_trim", t_st)
@@ -13281,8 +13286,8 @@ func _tend_brick_panes() -> void:
 	var best := -1
 	var best_d := INF
 	for id in _brick_nodes:
-		var b := registry.get_building(id)
-		if b == null or b.is_build() or b.toppled or _toppling.has(id):
+		var cand := registry.get_building(id)
+		if cand == null or cand.is_build() or cand.toppled or _toppling.has(id):
 			continue
 		var have = _brick_panes.get(id)
 		if have != null and not is_instance_valid(have):
@@ -13292,7 +13297,7 @@ func _tend_brick_panes() -> void:
 			continue
 		if _interior_unsure(id):
 			continue
-		var d := b.xform.origin.distance_to(here)
+		var d := cand.xform.origin.distance_to(here)
 		if d < best_d:
 			best_d = d
 			best = id
@@ -13323,7 +13328,7 @@ func _tend_brick_panes() -> void:
 		var arrays := BuildingShell.window_arrays(fx, fz, courses, room_seed, layout, lattice,
 				{}, program, standing)
 		if not arrays.is_empty():
-			holder[0] = BuildingShell.window_mesh_of(arrays) if on_worker else arrays,
+			holder[0] = BuildingShell.window_mesh_of(arrays) if on_worker else (arrays as Variant),
 			true, "brick panes")
 	_pane_job = [task, holder, best]
 	brick_panes_built += 1
@@ -16763,6 +16768,7 @@ func _run_chamfer_cost() -> void:
 	# A test window takes the menu's defaults once it is up, after this starts:
 	# the flag is set again once the city has settled (_cap_arg).
 	_cap_arg()
+	@warning_ignore("integer_division")
 	print("[chamfer] cost, near tier %s, cap %s" % ["ON" if BrickNear.enabled else "OFF (--no-near)",
 			"on (%dk triangles, %d studs)" % [BrickNear.max_tris / 1000, BrickNear.max_studs]
 			if BrickNear.cap_enabled else "OFF (--no-cap)"])
@@ -16820,6 +16826,7 @@ func _run_chamfer_street() -> void:
 		_promote(i)
 	await _frames(90)
 	_cap_arg()
+	@warning_ignore("integer_division")
 	print("[street] near tier %s, cap %s" % ["ON" if BrickNear.enabled else "OFF",
 			"on (%dk triangles, %d studs)" % [BrickNear.max_tris / 1000, BrickNear.max_studs]
 			if BrickNear.cap_enabled else "OFF"])
@@ -16896,6 +16903,7 @@ func _run_chamfer_street() -> void:
 				var r: Array = rows[j]
 				print("[street]     %s%3d  %5.1f  %d  %5.1f  %5.1f  %5.2f  %5.1f  %5.2f  %5.1f  %s" % [
 						"*" if j == i else " ", j, r[0], r[1], r[2], r[3], r[4], r[5], r[6], r[7], r[8]])
+	@warning_ignore("integer_division")
 	print("[street]   held at most %d chamfered, %d with stud geometry (budgets %dk triangles, %d studs); %d triangles, %d studs at most; worst step %.2f ms"
 			% [held_max.x, held_max.y, BrickNear.max_tris / 1000, BrickNear.max_studs,
 				tris_max, studs_max, near_worst])
