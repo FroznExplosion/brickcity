@@ -166,3 +166,43 @@ static func dress_rolled(m: Mech, gen_seed: int, klass: String = "", design: Par
 		take_class: bool = false) -> bool:
 	var b := PartBuilder.generate("mech", design, gen_seed, catalog(), {"class": klass})
 	return dress(m, b, take_class)
+
+
+## The mech guns made in the workshop (scale mech, Docs/ModularParts.md section 5): their
+## design ids, in order.
+static func mech_gun_ids(cat: PartCatalog = null) -> Array:
+	var ids := AssetGuns.designs(cat if cat != null else catalog(), "mech").keys()
+	ids.sort()
+	return ids
+
+
+## A mech gun rolled from `seed`: one of the workshop's mech gun designs, its stats and
+## modifiers rolled as any gun's. Null when there is none.
+static func roll_gun(lib: GunPartLibrary, gen_seed: int, cat: PartCatalog = null) -> GunGenerator.Result:
+	if cat == null:
+		cat = catalog()
+	var ids := mech_gun_ids(cat)
+	if ids.is_empty():
+		return null
+	return AssetGuns.generate(lib, ids[posmod(gen_seed, ids.size())], gen_seed, 1, 3, cat, "mech")
+
+
+## Put mech gun `res` in mech `m`'s right hand, seen, in place of what it held: at the
+## wrist, pointing along the arm's aim, the arm's muzzle moved to the gun's.
+static func arm_gun(m: Mech, res: GunGenerator.Result) -> GunInstance:
+	if res == null or m.gun == null:
+		return null
+	var gi := GunInstance.from_result(res)
+	var old: Node = m.gun.gun
+	var pose := m.arm.get_node_or_null(^"Pose") as Node3D
+	var hand := m.arm.get_node_or_null(^"Pose/Joint_arm_R_hand") as Node3D
+	gi.position = pose.transform * hand.position if pose != null and hand != null else Vector3.FORWARD * 1.5
+	m.arm.add_child(gi)
+	m.gun.equip(gi)
+	gi.visible = true
+	if old != null and old != gi:
+		old.queue_free()
+	var mp := gi.get_muzzle_point()
+	if mp != null and mp != gi and m.arm.is_inside_tree():
+		m.muzzle.position = m.arm.to_local(mp.global_position)
+	return gi

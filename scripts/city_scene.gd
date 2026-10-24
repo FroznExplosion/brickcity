@@ -5459,6 +5459,7 @@ func _enter_pawn(feet: Vector3) -> void:
 		_arsenal = PlayerArsenal.new()
 		_arsenal.name = "Arsenal"
 		_arsenal.board = _hold_board
+		_arsenal.mech_screen = _mech_screen
 		add_child(_arsenal)
 		_loot_rng.seed = 0x1007
 		_load_progress()
@@ -5760,12 +5761,17 @@ func _spawn_mech(feet: Vector3, yaw: float) -> Mech:
 	MechAssembler.dress_rolled(_mech, hash(feet), "normal")
 	if _gun_library == null:
 		_gun_library = GunPlaceholderParts.build_library()
+	_give_pods(_mech)
 	var res := GunGenerator.generate(_gun_library, _combat_rng.randi(),
 			WeaponClass.builtin(&"lmg"), 1)
 	var gi := GunInstance.from_result(res)
 	gi.visible = false  # the arm's greybox is the gun, for now
 	_mech.arm.add_child(gi)
 	_mech.gun.equip(gi)
+	# A mech gun made in the workshop, if there is one, in its hand instead (stage 7) --
+	# not in a scripted pass, which must not change with what this machine has saved.
+	if not _scripted:
+		MechAssembler.arm_gun(_mech, MechAssembler.roll_gun(_gun_library, hash(feet)))
 	_mech.gun.rng = _combat_rng
 	_mech.gun.on_structure_hit = _gun.on_structure_hit
 	# The player's mech's kills are the player's XP (PlayerLevel).
@@ -6089,6 +6095,43 @@ func _wire_mech(m: Mech) -> void:
 ## buys one by its recipe).
 ## Which workshop mech Ctrl Y spawned last.
 var _mech_design := -1
+## The player's mech's pods and the mech page of the backpack (Docs/ModularParts.md stage 7).
+var _mech_pods: MechPods
+var _mech_screen: MechLoadoutScreen
+## The pods the player starts with: one of each kind, rolled from fixed seeds.
+const START_POD_SEED := 0x90D5
+
+
+## The player's mech gets its two pod slots, and the backpack its mech page with the
+## pods the player has; a missile pod and a shield booster fitted to start (not in a
+## scripted pass, whose mech must fight as it always has).
+func _give_pods(m: Mech) -> void:
+	_mech_pods = MechPods.attach(m, _gun_library, _combat_rng)
+	_mech_pods.on_structure_hit = _gun.on_structure_hit
+	if _mech_screen == null:
+		_mech_screen = MechLoadoutScreen.new()
+		_mech_screen.name = "MechLoadout"
+		add_child(_mech_screen)
+		var kinds := PodGenerator.kinds()
+		for i in kinds.size():
+			_mech_screen.stash.append(PodGenerator.generate(START_POD_SEED + i, 2, 1, kinds[i]))
+		_mech_screen.index = 0
+		# Not in a scripted pass: a pass's mech fights as it always has.
+		for want in ([] if _scripted else [&"missiles", &"shield_boost"]):
+			for i in _mech_screen.stash.size():
+				if (_mech_screen.stash[i] as PodGenerator.Result).kind == want:
+					_mech_screen.index = i
+					_mech_screen.fit_selected(0 if want == &"missiles" else 1)
+					break
+	else:
+		# A new mech of the player's: the pods it had go on it again.
+		var old: Array = _mech_screen.pods.slots.duplicate() if _mech_screen.pods != null else []
+		for i in old.size():
+			if old[i] != null:
+				_mech_pods.fit(i, old[i])
+	_mech_screen.pods = _mech_pods
+	if _arsenal != null:
+		_arsenal.mech_screen = _mech_screen
 
 
 func _spawn_enemy_mech(feet: Vector3, yaw: float, recipe := "medium_gunner", design: PartDesign = null) -> MechBrain:
@@ -6100,6 +6143,9 @@ func _spawn_enemy_mech(feet: Vector3, yaw: float, recipe := "medium_gunner", des
 	gi.visible = false
 	m.arm.add_child(gi)
 	m.gun.equip(gi)
+	if design != null:
+		# A workshop mech carries a workshop mech gun, if there is one.
+		MechAssembler.arm_gun(m, MechAssembler.roll_gun(_gun_library, hash(feet)))
 	m.gun.rng = _combat_rng
 	m.gun.on_structure_hit = _gun.on_structure_hit
 	_wire_mech(m)
@@ -14312,6 +14358,15 @@ func _unhandled_input(event: InputEvent) -> void:
 		return
 	if not (event is InputEventKey and event.pressed and not event.echo):
 		return
+	# In the mech, 1 and 2 are its pods (MechPods).
+	if _pilot.is_piloting() and _mech_pods != null and _pilot.mech == _mech_pods.mech:
+		for slot in MechPods.SLOTS:
+			if event.is_action_pressed(StringName("slot_%d" % (slot + 1))):
+				if not _mech_pods.use(slot):
+					var pod: PodGenerator.Result = _mech_pods.slots[slot]
+					print("[city] pod %d: %s" % [slot + 1, "empty" if pod == null else
+							("passive" if not pod.is_active() else "cooling, %.1f s" % _mech_pods.cool[slot])])
+				return
 	match _key_of(event):
 		KEY_X:
 			_fire(BIG_BLAST)

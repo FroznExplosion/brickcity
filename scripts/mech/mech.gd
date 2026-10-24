@@ -249,6 +249,10 @@ func _set_layers(spec: Dictionary) -> void:
 	layers.auto = was_auto
 	layers.pilot = pilot_pawn
 	_wire_layers()
+	# What its pods add goes on the new layers (MechPods).
+	var pods := body.get_node_or_null(^"MechPods")
+	if pods != null:
+		pods.call(&"layers_changed")
 
 
 ## Made of parts (MechAssembler.dress): `model`'s joints take the boxes' places -- the legs
