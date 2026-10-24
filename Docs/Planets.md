@@ -1149,3 +1149,26 @@ worst frames are the first frame's shader compiles (~1.7 s) and the gate's own s
 
 ![a town on its pad, the cruise toward the spire, the spire up close](Planets/c1_town_cruise_landmark.jpg)
 ![the climb: 1.2 km (the cross-fade), 5 km, 30 km](Planets/c1_climb.jpg)
+
+### 11.7 Porting the movers to local down (2026-10-23)
+
+Pawn (and its moves, view, controller, the debug camera), titan motor and mech, tank, truck,
+flyer, soldier. One rule everywhere: **"up" is `Gravity.up_at(position)`**, never `Vector3.UP`
+or `.y`, through four helpers in `scripts/gravity.gd`:
+
+| helper | flat game (up = +Y) | on a planet |
+|---|---|---|
+| `Gravity.vert(v, up)` | `v.y` | `v.dot(up)` |
+| `Gravity.flat(v, up)` | `Vector3(v.x, 0, v.z)` | `v - up * v.dot(up)` |
+| `Gravity.with_vert(v, up, x)` | `v` with `y = x` | its along-up part replaced |
+| `Gravity.height_of(p)` | `p.y` | `|p - centre| - radius` |
+
+In the flat game each is EXACT (a dot with (0, 1, 0) is `y`), so nothing there moves by a bit and
+every existing probe still guards it. Bodies turn with the ground: a body's basis is carried along
+the curve each tick (the minimal rotation from its old up to its new one, STA doc 05's full-basis
+rebuild), so its local Y is up; look yaw and pitch are angles in that frame, not the world's.
+Local offsets on a body (`Vector3.UP * eye_offset` on a child) stay as they are -- they are
+already in the body's frame.
+
+The AI's navigation stays on the flat grid until the nav regions (test 8) are built: on a planet a
+soldier moves, turns and shoots in its local frame, but paths only inside one flat region.
