@@ -165,8 +165,8 @@ func begin() -> void:
 			Vector3(reach * 2.0, 120.0, reach * 2.0)))
 	city._promote(focus, false)
 	_breach(focus)
-	city.camera.global_position = centre + Vector3.UP * 3.0
-	city.camera.look_at(city._world_box(city.registry.get_building(focus)).get_center(), Vector3.UP)
+	city.camera.global_position = centre + Gravity.up_at(centre) * 3.0
+	city.camera.look_at(city._world_box(city.registry.get_building(focus)).get_center(), Gravity.up_at(centre))
 	var guard := 0
 	while guard < 600 and (not _encounter.is_ready() or not _ground_under(centre)):
 		await get_tree().physics_frame
@@ -176,7 +176,7 @@ func begin() -> void:
 	_build_barrier()
 	city._gun_class = city.GUN_CLASSES.find(&"rifle")
 	city._equip_gun(&"rifle", city._combat_rng.randi())
-	city._enter_pawn(centre + Vector3.UP * 0.3)
+	city._enter_pawn(centre + Gravity.up_at(centre) * 0.3)
 	listener = city.ai_services.callouts.listen(city.camera, PLAYER_TEAM, _player())
 	callout_hud = CalloutHud.new()
 	callout_hud.name = "Callouts"
@@ -213,8 +213,8 @@ func _build_barrier() -> void:
 	var seg_len := TAU * RING_RADIUS / float(BARRIER_SEGMENTS) + 0.3
 	for i in BARRIER_SEGMENTS:
 		var a := TAU * (float(i) + 0.5) / float(BARRIER_SEGMENTS)
-		var at := centre + Vector3(cos(a), 0.0, sin(a)) * RING_RADIUS
-		var g: float = city.ai_world.ground_at(at.x, at.z)
+		var at := centre + Gravity.tangent_basis(centre) * Vector3(cos(a), 0.0, sin(a)) * RING_RADIUS
+		var ground: Vector3 = city.ai_world.ground_under(at)
 		var body := StaticBody3D.new()
 		body.collision_layer = Layers.FIXTURE
 		body.collision_mask = 0
@@ -240,12 +240,17 @@ func _build_barrier() -> void:
 		body.add_child(band)
 		barrier.add_child(body)
 		# Centred 6 m below ground to BARRIER_HEIGHT above, facing the middle.
-		body.global_position = Vector3(at.x, g + (BARRIER_HEIGHT - 6.0) * 0.5, at.z)
-		body.rotation.y = -a + PI * 0.5
+		if Gravity.planet == null:
+			body.global_position = Vector3(at.x, ground.y + (BARRIER_HEIGHT - 6.0) * 0.5, at.z)
+			body.rotation.y = -a + PI * 0.5
+		else:
+			var up := Gravity.up_at(ground)
+			body.global_transform = Transform3D(Gravity.tangent_basis(ground) * Basis(Vector3.UP, -a + PI * 0.5),
+					ground + up * (BARRIER_HEIGHT - 6.0) * 0.5)
 
 
 func in_ring(p: Vector3, grace := 0.0) -> bool:
-	return Vector2(p.x - centre.x, p.z - centre.z).length() <= RING_RADIUS + grace
+	return Gravity.flat(p - centre, Gravity.up_at(centre)).length() <= RING_RADIUS + grace
 
 
 ## Spots in the street round the ring a squad can land on: on the ground, out
@@ -256,11 +261,10 @@ func _find_drop_zones() -> void:
 		var r: float = RING_RADIUS * (DROP_OUT if k == 0 else DROP_IN)
 		for i in DROP_TURNS:
 			var a := TAU * (float(i) + 0.5 * k) / float(DROP_TURNS)
-			var want := centre + Vector3(cos(a), 0.0, sin(a)) * r
-			want.y = city.ai_world.ground_at(want.x, want.z)
+			var want: Vector3 = city.ai_world.ground_under(centre + Gravity.tangent_basis(centre) * Vector3(cos(a), 0.0, sin(a)) * r)
 			var at: Vector3 = city.ai_nav.snap(want)
 			if not city.ai_nav.can_stand(at) or _in_a_building(at) or not in_ring(at, -2.0) \
-					or absf(at.y - centre.y) > 6.0:
+					or absf(Gravity.vert(at - centre, Gravity.up_at(centre))) > 6.0:
 				continue
 			drop_zones.append(at)
 
@@ -404,8 +408,8 @@ func _drop_mech() -> MechBrain:
 			if not city.mech_nav.can_stand(at) or not in_ring(at, -3.0):
 				continue
 		var to := from - at
-		var br: MechBrain = city._spawn_enemy_mech(at + Vector3.UP * 0.1, atan2(-to.x, -to.z))
-		feedback.burst(at + Vector3.UP * 2.0, Color(1.0, 0.55, 0.2))
+		var br: MechBrain = city._spawn_enemy_mech(at + Gravity.up_at(at) * 0.1, atan2(-to.x, -to.z))
+		feedback.burst(at + Gravity.up_at(at) * 2.0, Color(1.0, 0.55, 0.2))
 		_tip()
 		print("[firefight] enemy mech dropped in at %v" % at)
 		return br
@@ -499,8 +503,7 @@ func _land_squad(given: Array = []) -> void:
 		for t in 6:
 			var a := TAU * float(i + t * n) / float(maxi(n, 1) * 2) + _rng.randf() * 0.3
 			var r := 0.0 if i == 0 and t == 0 else 1.6 + 0.4 * t
-			var want := drop + Vector3(cos(a), 0.0, sin(a)) * r
-			want.y = city.ai_world.ground_at(want.x, want.z)
+			var want: Vector3 = city.ai_world.ground_under(drop + Gravity.tangent_basis(drop) * Vector3(cos(a), 0.0, sin(a)) * r)
 			var at: Vector3 = city.ai_nav.snap(want)
 			if not in_ring(at, -1.0) or _in_a_building(at):
 				continue
@@ -518,7 +521,7 @@ func _land_squad(given: Array = []) -> void:
 	if given.is_empty():
 		wave_left -= landed
 	if landed > 0:
-		feedback.burst(drop + Vector3.UP * 1.0, Color(0.4, 0.8, 1.0))
+		feedback.burst(drop + Gravity.up_at(drop) * 1.0, Color(0.4, 0.8, 1.0))
 		_tip()
 		_field_armour()
 
@@ -597,7 +600,7 @@ func restart() -> void:
 	var p := _player()
 	if p != null:
 		p.health.reset()
-		p.place(centre + Vector3.UP * 0.3)
+		p.place(centre + Gravity.up_at(centre) * 0.3)
 	_enter_intro()
 
 
@@ -696,7 +699,7 @@ func banner(text: String, seconds: float) -> void:
 func _keep_in_ring() -> void:
 	var p := _player()
 	if p != null and not in_ring(p.feet(), OUTSIDE_GRACE):
-		p.place(centre + Vector3.UP * 0.3)
+		p.place(centre + Gravity.up_at(centre) * 0.3)
 		banner("Stay inside the barrier", 2.0)
 	for so in alive.duplicate():
 		if is_instance_valid(so) and so.pawn != null and is_instance_valid(so.pawn) \
@@ -713,7 +716,8 @@ func _player_tick(now: float) -> void:
 	if _player_dead_at >= 0.0 and phase != Phase.GAME_OVER and now - _player_dead_at >= PLAYER_RESPAWN:
 		_player_dead_at = -1.0
 		p.health.reset()
-		p.place(_respawn_spot() + Vector3.UP * 0.3)
+		var spot := _respawn_spot()
+		p.place(spot + Gravity.up_at(spot) * 0.3)
 		print("[firefight] player back in at %v, %d li%s left" % [p.feet(), lives,
 				"fe" if lives == 1 else "ves"])
 
@@ -815,11 +819,13 @@ func call_mech(aim: Vector3) -> bool:
 func _mech_spot(aim: Vector3) -> Vector3:
 	var tries: Array[Vector3] = []
 	if aim != Vector3.INF:
-		var flat := Vector3(aim.x - centre.x, 0.0, aim.z - centre.z)
+		var up := Gravity.up_at(centre)
+		var flat := Gravity.flat(aim - centre, up)
 		if flat.length() > RING_RADIUS - 4.0:
 			flat = flat.normalized() * (RING_RADIUS - 4.0)
 		var a := centre + flat
-		a.y = city.ai_world.ground_at(a.x, a.z) if absf(aim.y - centre.y) > 6.0 else aim.y
+		a = city.ai_world.ground_under(a) if absf(Gravity.vert(aim - centre, up)) > 6.0 \
+				else Gravity.lift_to(a, Gravity.height_of(aim))
 		tries.append(a)
 	var p := _player()
 	var from := p.feet() if p != null else centre
@@ -854,7 +860,7 @@ func _show_beacon(at: Vector3) -> void:
 	_beacon.material_override = mat
 	_beacon.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	city.add_child(_beacon)
-	_beacon.global_position = at + Vector3.UP * 40.0
+	_beacon.global_position = at + Gravity.up_at(at) * 40.0
 
 
 func _clear_beacon() -> void:
@@ -874,8 +880,8 @@ func _land_mech() -> void:
 			so.pawn.health.apply_impact(1e9, &"")
 	var p := _player()
 	var to := (p.feet() - at) if p != null else Vector3.FORWARD
-	city._spawn_mech(at + Vector3.UP * 0.1, atan2(-to.x, -to.z) + PI)
-	feedback.burst(at + Vector3.UP * 1.5, Color(0.3, 1.0, 0.45))
+	city._spawn_mech(at + Gravity.up_at(at) * 0.1, atan2(-to.x, -to.z) + PI)
+	feedback.burst(at + Gravity.up_at(at) * 1.5, Color(0.3, 1.0, 0.45))
 	banner("Mech down\nM at its hatch to board", 3.0)
 	print("[firefight] mech landed at %v" % at)
 

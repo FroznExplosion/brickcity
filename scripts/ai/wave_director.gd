@@ -194,9 +194,9 @@ func begin() -> void:
 	_hold(focus)
 	_start = _street_of(focus)
 	# The terrain's colliders are where the camera is: put it there first.
-	city.camera.global_position = _start + Vector3.UP * 3.0
+	city.camera.global_position = _start + Gravity.up_at(_start) * 3.0
 	var b: BuildingRegistry.Building = city.registry.get_building(focus)
-	city.camera.look_at(city._world_box(b).get_center(), Vector3.UP)
+	city.camera.look_at(city._world_box(b).get_center(), Gravity.up_at(_start))
 	# Wait for the encounter's buildings and for ground under the start.
 	var guard := 0
 	while guard < 600 and (not _encounter.is_ready() or not _ground_under(_start)):
@@ -208,7 +208,7 @@ func begin() -> void:
 	# in the game, and the first thing a player should hold is a fair fight.
 	city._gun_class = city.GUN_CLASSES.find(&"rifle")
 	city._equip_gun(&"rifle", city._combat_rng.randi())
-	city._enter_pawn(_start + Vector3.UP * 0.3)
+	city._enter_pawn(_start + Gravity.up_at(_start) * 0.3)
 	listener = city.ai_services.callouts.listen(city.camera, PLAYER_TEAM, _player())
 	callout_hud = CalloutHud.new()
 	callout_hud.name = "Callouts"
@@ -410,11 +410,12 @@ func _field_flyer(kind: StringName) -> Flyer:
 	var over := Vector3.ZERO
 	if hovers:
 		var c: Vector3 = city._world_box(city.registry.get_building(focus)).get_center()
-		over = Vector3(c.x, 0.0, c.z)
-		at = over + Vector3.UP * 40.0
+		over = Gravity.lift_to(c, 0.0)
+		at = over + Gravity.up_at(over) * 40.0
 	else:
 		var ang: float = city._combat_rng.randf() * TAU
-		at = p.feet() + Vector3(cos(ang), 0.0, sin(ang)) * 45.0 + Vector3.UP * 25.0
+		at = p.feet() + Gravity.tangent_basis(p.feet()) * Vector3(cos(ang), 0.0, sin(ang)) * 45.0 \
+				+ Gravity.up_at(p.feet()) * 25.0
 	var f := Flyer.spawn(city.ai_services, city, at, ENEMY_TEAM, gun)
 	UnitCatalog.apply_health(f.health, kind, level)
 	f.set_type(str(unit.get("recipe", "")), Roster.shared())
@@ -472,10 +473,11 @@ func _mech_start() -> Vector3:
 	var best_d := INF
 	for out in [6.0, 12.0, 18.0, 24.0, 30.0, 36.0, 42.0, MECH_OUT]:
 		for step in 12:
-			var q: Vector3 = street + Vector3(cos(step * TAU / 12.0), 0.0, sin(step * TAU / 12.0)) * float(out)
-			q.y = city.ai_world.ground_at(q.x, q.z)
+			var q: Vector3 = street + Gravity.tangent_basis(street) * Vector3(cos(step * TAU / 12.0), 0.0,
+					sin(step * TAU / 12.0)) * float(out)
+			q = city.ai_world.ground_under(q)
 			q = nav.snap(q)
-			if not nav.can_stand(q) or _in_a_building(q) or absf(q.y - street.y) > 3.5:
+			if not nav.can_stand(q) or _in_a_building(q) or absf(Gravity.vert(q - street, Gravity.up_at(street))) > 3.5:
 				continue
 			if p != null and q.distance_to(p.feet()) < MECH_NEAR:
 				continue
@@ -506,7 +508,7 @@ func _field_mech(recipe: StringName) -> MechBrain:
 		print("[arena] no ground for a mech by the fight (looked for %.1f ms)" % took)
 		return null
 	var to := p.feet() - at
-	var br: MechBrain = city._spawn_enemy_mech(at + Vector3.UP * 0.1, atan2(-to.x, -to.z), String(recipe))
+	var br: MechBrain = city._spawn_enemy_mech(at + Gravity.up_at(at) * 0.1, atan2(-to.x, -to.z), String(recipe))
 	if br == null:
 		return null
 	var cost := UnitCatalog.points(recipe)
@@ -592,7 +594,7 @@ func _field_allies(kinds: Array[StringName], _arrival: StringName) -> bool:
 		return false
 	ally_soldiers = ally_soldiers.filter(func(so): return is_instance_valid(so) and not so.is_dead())
 	var back := p.eye.global_basis.z if p.eye != null else Vector3.BACK
-	back.y = 0.0
+	back = Gravity.flat(back, p.up)
 	back = back.normalized() if back.length() > 0.1 else Vector3.BACK
 	var side := Vector3(-back.z, 0.0, back.x)
 	var base := _ally_spot(p.feet(), back)
@@ -603,14 +605,14 @@ func _field_allies(kinds: Array[StringName], _arrival: StringName) -> bool:
 	for i in kinds.size():
 		var want := base + side * (1.5 * i - 2.25)
 		var at: Vector3 = city.ai_nav.snap(want)
-		if not city.ai_nav.can_stand(at) or absf(at.y - base.y) > 1.5:
+		if not city.ai_nav.can_stand(at) or absf(Gravity.vert(at - base, Gravity.up_at(base))) > 1.5:
 			continue
 		var unit := UnitCatalog.get_unit(kinds[i])
 		if city._gun_library == null:
 			city._gun_library = GunPlaceholderParts.build_library()
 		var gun := GunInstance.from_result(GunGenerator.generate(city._gun_library,
 				city._combat_rng.randi(), WeaponClass.builtin(StringName(unit.weapon)), 1))
-		var so := Soldier.spawn(city.ai_services, city, at + Vector3.UP * 0.02, ALLY_TEAM, gun)
+		var so := Soldier.spawn(city.ai_services, city, at + Gravity.up_at(at) * 0.02, ALLY_TEAM, gun)
 		so.set_meta(&"unit", kinds[i])
 		so.max_health = UnitCatalog.apply_health(so.pawn.health, kinds[i], level)
 		so.set_type(str(unit.get("recipe", "")), Roster.shared())
@@ -633,9 +635,9 @@ func _field_allies(kinds: Array[StringName], _arrival: StringName) -> bool:
 func _ally_spot(feet: Vector3, back: Vector3) -> Vector3:
 	for r in [ALLY_BEHIND, 8.0, 16.0, 20.0]:
 		for deg in [0.0, 35.0, -35.0, 70.0, -70.0, 110.0, -110.0]:
-			var want: Vector3 = feet + back.rotated(Vector3.UP, deg_to_rad(deg)) * r
+			var want: Vector3 = feet + back.rotated(Gravity.up_at(feet), deg_to_rad(deg)) * r
 			var at: Vector3 = city.ai_nav.snap(want)
-			if city.ai_nav.can_stand(at) and absf(at.y - feet.y) < 2.0 \
+			if city.ai_nav.can_stand(at) and absf(Gravity.vert(at - feet, Gravity.up_at(feet))) < 2.0 \
 					and Vector2(at.x - want.x, at.z - want.z).length() < 3.0:
 				return at
 	return Vector3.INF
@@ -775,7 +777,7 @@ func _spawn_at(feet: Vector3, inside: int) -> void:
 		city._gun_library = GunPlaceholderParts.build_library()
 	var gun := GunInstance.from_result(GunGenerator.generate(city._gun_library,
 			city._combat_rng.randi(), WeaponClass.builtin(StringName(unit.weapon)), 1))
-	var so := Soldier.spawn(city.ai_services, city, feet + Vector3.UP * 0.02, ENEMY_TEAM, gun)
+	var so := Soldier.spawn(city.ai_services, city, feet + Gravity.up_at(feet) * 0.02, ENEMY_TEAM, gun)
 	so.aim.reaction = AIM_REACTION
 	so.aim.cone_start = AIM_CONE_START
 	so.aim.cone_min = AIM_CONE_MIN
@@ -831,7 +833,8 @@ func _settle_check() -> void:
 			var at: Vector3 = s.feet
 			# One that has walked off is not one that sank: its brain starts on
 			# its first tick, and a step down a kerb in half a second is a walk.
-			s.drop = 0.0 if Vector2(now_at.x - at.x, now_at.z - at.z).length() > 0.4 else at.y - now_at.y
+			var up_here := Gravity.up_at(at)
+			s.drop = 0.0 if Gravity.flat(now_at - at, up_here).length() > 0.4 else Gravity.vert(at - now_at, up_here)
 
 
 func _on_soldier_died(so: Soldier) -> void:
@@ -845,7 +848,7 @@ func _on_soldier_died(so: Soldier) -> void:
 	# one the player saw it fire, card and all.
 	var held := held_gun_result(so)
 	if held != null:
-		city.drop_gun(held, so.pawn.feet() + so.pawn.body.global_basis.x * 0.35 + Vector3.UP * 1.1)
+		city.drop_gun(held, so.pawn.feet() + so.pawn.body.global_basis.x * 0.35 + so.pawn.up * 1.1)
 	# And its loot besides (LootRoller), on chance: what the player picks up and
 	# tries. The officer is a boss's worth.
 	city.drop_loot(so.pawn.feet(), &"badass" if so == hq_officer else &"trash")
@@ -905,7 +908,7 @@ func _reap(_now_s: float) -> void:
 	for so in alive.duplicate():
 		if not is_instance_valid(so) or so.pawn == null or not is_instance_valid(so.pawn):
 			alive.erase(so)
-		elif so.pawn.feet().y < -60.0:
+		elif Gravity.height_of(so.pawn.feet()) < -60.0:
 			so.pawn.health.apply_impact(1e9, &"")
 
 
@@ -918,7 +921,8 @@ func _player_tick(now: float) -> void:
 	if _player_dead_at >= 0.0 and now - _player_dead_at >= PLAYER_RESPAWN:
 		_player_dead_at = -1.0
 		p.health.reset()
-		p.place(_street_of(focus) + Vector3.UP * 0.3)
+		var street := _street_of(focus)
+		p.place(street + Gravity.up_at(street) * 0.3)
 		print("[arena] player back in at %v" % p.feet())
 
 
@@ -1010,13 +1014,11 @@ func _street_of(id: int) -> Vector3:
 	var faces := [Vector3(fx * 0.5, 0.0, -STREET_OUT), Vector3(fx * 0.5, 0.0, fz + STREET_OUT),
 			Vector3(-STREET_OUT, 0.0, fz * 0.5), Vector3(fx + STREET_OUT, 0.0, fz * 0.5)]
 	for f in faces:
-		var p: Vector3 = b.xform * f
-		p.y = city.ai_world.ground_at(p.x, p.z)
+		var p: Vector3 = city.ai_world.ground_under(b.xform * f)
 		var q: Vector3 = city.ai_nav.snap(p)
 		if city.ai_nav.can_stand(q) and not _in_a_building(q):
 			return q
-	var p0: Vector3 = b.xform * faces[0]
-	p0.y = city.ai_world.ground_at(p0.x, p0.z)
+	var p0: Vector3 = city.ai_world.ground_under(b.xform * faces[0])
 	return p0
 
 
@@ -1048,7 +1050,7 @@ func _breach(id: int) -> void:
 
 
 func _ground_under(p: Vector3) -> bool:
-	var q := PhysicsRayQueryParameters3D.create(p + Vector3.UP * 2.0, p - Vector3.UP * 3.0,
+	var q := PhysicsRayQueryParameters3D.create(p + Gravity.up_at(p) * 2.0, p - Gravity.up_at(p) * 3.0,
 			Layers.PAWN_MASK)
 	return not city.get_world_3d().direct_space_state.intersect_ray(q).is_empty()
 
@@ -1172,7 +1174,7 @@ func run_gate() -> void:
 		while feedback.kills_shown == kills0 and _now() - t_fire < 20.0:
 			var t := _soldier_in_sight()
 			if t != null:
-				city.camera.look_at(t.pawn.chest(), Vector3.UP)
+				city.camera.look_at(t.pawn.chest(), Gravity.up_at(city.camera.global_position))
 			await get_tree().physics_frame
 			if feedback.hits - marks == 2 and not shot_hit and DirAccess.dir_exists_absolute("res://shots"):
 				shot_hit = true
@@ -1211,7 +1213,7 @@ func run_gate() -> void:
 				f = g
 				break
 		var before := survey.check(f, focus, null, [])
-		city._blast(f - Vector3.UP * 0.1, 1.2)
+		city._blast(f - Gravity.up_at(f) * 0.1, 1.2)
 		await _frames(45)
 		var after := survey.check(f, focus, null, [])
 		ok.call("a spot on the floor is good, then refused once the floor is blown out",
@@ -1220,7 +1222,7 @@ func run_gate() -> void:
 		var again := survey.floors_of(focus)
 		var near := 0
 		for g in again:
-			if Vector2(g.x - f.x, g.z - f.z).length() < 0.6 and absf(g.y - f.y) < 0.3:
+			if Gravity.flat(g - f, Gravity.up_at(f)).length() < 0.6 and absf(Gravity.vert(g - f, Gravity.up_at(f))) < 0.3:
 				near += 1
 		ok.call("and the survey no longer finds a floor there", near == 0,
 				"%d spot(s) still at %v" % [near, f])
@@ -1238,6 +1240,8 @@ func run_gate() -> void:
 					else box.position + Vector3(0.0, 0.0, box.size.z * t)
 			var other := edge + (Vector3(0.0, 0.0, box.size.z) if tries % 2 == 0
 					else Vector3(box.size.x, 0.0, 0.0))
+			# The building's world box: a flat-game building (a planet's stand in
+			# their own frames, Planets.md 9.2), kept literal.
 			for p in [edge, other]:
 				city._blast(Vector3(p.x, box.position.y + 1.0 + (tries % 3) * 1.2, p.z),
 						city.BIG_BLAST)
@@ -1646,18 +1650,18 @@ func _set_up_hq() -> void:
 	if spots.size() < 2:
 		return
 	# Top floor first; the radio a stride from him on the same floor.
-	spots.sort_custom(func(x: Vector3, y: Vector3) -> bool: return x.y > y.y)
+	spots.sort_custom(func(x: Vector3, y: Vector3) -> bool: return Gravity.height_of(x) > Gravity.height_of(y))
 	var at: Vector3 = spots[0]
 	var beside: Vector3 = spots[1]
 	for s in spots:
-		if absf(s.y - at.y) < 0.2 and s.distance_to(at) > 1.0 and s.distance_to(at) < 3.0:
+		if absf(Gravity.vert(s - at, Gravity.up_at(at))) < 0.2 and s.distance_to(at) > 1.0 and s.distance_to(at) < 3.0:
 			beside = s
 			break
 	if city._gun_library == null:
 		city._gun_library = GunPlaceholderParts.build_library()
 	var gun := GunInstance.from_result(GunGenerator.generate(city._gun_library,
 			city._combat_rng.randi(), WeaponClass.builtin(&"pistol"), 1))
-	hq_officer = Soldier.spawn(city.ai_services, city, at + Vector3.UP * 0.02, ENEMY_TEAM, gun)
+	hq_officer = Soldier.spawn(city.ai_services, city, at + Gravity.up_at(at) * 0.02, ENEMY_TEAM, gun)
 	hq_officer.set_meta(&"unit", &"officer")
 	hq_officer.max_health = UnitCatalog.apply_health(hq_officer.pawn.health, &"officer", level)
 	hq_officer.set_type(str(UnitCatalog.get_unit(&"officer").get("recipe", "")), Roster.shared())
@@ -1813,10 +1817,9 @@ func _truck_spot(i: int, c: Vector3, away: Vector3, goal: Vector3) -> Vector3:
 	var out := TRUCK_OUT * float(TRUCK_DISTANCES[i / TRUCK_TURNS])
 	var step := i % TRUCK_TURNS
 	var turn := float(ceili(step / 2.0)) * (TAU / float(TRUCK_TURNS)) * (1.0 if step % 2 == 1 else -1.0)
-	var q := c + away.rotated(Vector3.UP, turn) * out
-	q.y = city.ai_world.ground_at(q.x, q.z)
+	var q: Vector3 = city.ai_world.ground_under(c + away.rotated(Gravity.up_at(c), turn) * out)
 	q = city.ai_nav.snap(q)
-	if not city.ai_nav.can_stand(q) or _in_a_building(q) or absf(q.y - goal.y) > TRUCK_LEVEL:
+	if not city.ai_nav.can_stand(q) or _in_a_building(q) or absf(Gravity.vert(q - goal, Gravity.up_at(goal))) > TRUCK_LEVEL:
 		return Vector3.INF
 	if survey.what_is_under(q).on != SpawnSurvey.On.GROUND:
 		return Vector3.INF
@@ -1830,7 +1833,7 @@ func _truck_frame() -> Array:
 	var c: Vector3 = city._world_box(city.registry.get_building(focus)).get_center()
 	var p := _player()
 	var away := (c - p.feet()) if p != null else Vector3.FORWARD
-	away.y = 0.0
+	away = Gravity.flat(away, Gravity.up_at(c))
 	away = away.normalized() if away.length() > 0.1 else Vector3.FORWARD
 	return [c, away, _street_of(focus)]
 
@@ -1866,7 +1869,7 @@ func _road_tick(now: float) -> void:
 			vn.release(int(job.path))
 			job.path = -1
 			if st == AINav.DONE:
-				r.start = (job.at as Vector3) + Vector3.UP * 0.3
+				r.start = (job.at as Vector3) + Gravity.up_at(job.at as Vector3) * 0.3
 				r.focus = int(job.focus)
 				r.redo_at = now + ROAD_REFRESH
 				r.job = {}
@@ -1918,10 +1921,10 @@ func _truck_start(kind := &"truck") -> Vector3:
 			var vq := vn.snap(q)
 			if vn.can_stand(vq) and not vn.find_path(vq, drive_to, ROAD_EXPANSIONS).is_empty():
 				_truck_road = "vehicle map"
-				return vq + Vector3.UP * 0.3
+				return vq + Gravity.up_at(vq) * 0.3
 		# A way on foot, at least -- not a beach below the tide line.
 		if by_foot == Vector3.INF and not city.ai_nav.find_path(q, f[2], 20000).is_empty():
-			by_foot = q + Vector3.UP * 0.3
+			by_foot = q + Gravity.up_at(q) * 0.3
 	_truck_road = "walking map: no road for a truck" if by_foot != Vector3.INF else ""
 	return by_foot
 
@@ -1966,7 +1969,7 @@ func _truck_wrecked(t: TransportTruck) -> void:
 ## A floor spot in a room of the focus, lowest storey first, or INF.
 func _room_spot() -> Vector3:
 	var spots := survey.floors_of(focus)
-	spots.sort_custom(func(x: Vector3, y: Vector3) -> bool: return x.y < y.y)
+	spots.sort_custom(func(x: Vector3, y: Vector3) -> bool: return Gravity.height_of(x) < Gravity.height_of(y))
 	# Well inside the room, not on its edge: a body put down beside a wall
 	# settles a hand's width from where it was put, and from an edge spot that
 	# is outside the room -- the commander then sees a contact in no room at
@@ -2125,7 +2128,7 @@ func _draw_overlay() -> void:
 		im.surface_set_color(col)
 		im.surface_add_vertex(p)
 		im.surface_set_color(col)
-		im.surface_add_vertex(p + Vector3.UP * 1.2)
+		im.surface_add_vertex(p + Gravity.up_at(p) * 1.2)
 		im.surface_set_color(col)
 		im.surface_add_vertex(p + Vector3(-0.25, 0.05, 0.0))
 		im.surface_set_color(col)
