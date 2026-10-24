@@ -223,6 +223,34 @@ public:
     void reset_stats();
 
 private:
+    // The bound forms (Docs/Planets.md 11.8, N1): world values in and out
+    // through the AIWorld's region frame; unframed, straight through. Inside,
+    // everything is the region's.
+    bool _framed() const { return ai.is_valid() && ai->is_framed(); }
+    PackedVector3Array _path_to_world(const PackedVector3Array &path) const;
+    Dictionary _cover_to_world(const Dictionary &cover) const;
+    PackedVector3Array _b_find_path(const Vector3 &from, const Vector3 &to, int max_expansions);
+    int _b_request_path(const Vector3 &from, const Vector3 &to, float priority, int max_expansions);
+    PackedVector3Array _b_get_path(int id) const;
+    PackedVector3Array _b_get_breaches(int id) const;
+    PackedVector3Array _b_get_last_breaches() const;
+    void _b_invalidate_box(const AABB &box);
+    void _b_warm(const Vector3 &at, float radius_m);
+    int _b_request_field(const Vector3 &goal, float radius_m, float priority);
+    Vector3 _b_field_dir(int id, const Vector3 &point);
+    float _b_field_cost(int id, const Vector3 &point);
+    Vector3 _b_snap(const Vector3 &point);
+    bool _b_can_stand(const Vector3 &point);
+    Dictionary _b_find_cover(const Vector3 &from, const Vector3 &threat_eye, int hp_per_hit,
+            float hits_per_second, float ideal_range);
+    Dictionary _b_rate_cover(const Vector3 &p, const Vector3 &threat_eye, int hp_per_hit,
+            float hits_per_second);
+    int _b_request_cover(const Vector3 &from, const Vector3 &threat_eye, int hp_per_hit,
+            float hits_per_second, float ideal_range, float priority);
+    Dictionary _b_get_cover(int id) const;
+    /// invalidate_box's work, without the signal.
+    void _invalidate(const AABB &box);
+
     struct Floor {
         int16_t y = 0;       // plate the feet are on
         int16_t head = 0;    // plates of air above

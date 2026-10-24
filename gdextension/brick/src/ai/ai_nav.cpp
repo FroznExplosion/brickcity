@@ -30,37 +30,37 @@ constexpr int DZ[8] = { 0, 0, 1, -1, 1, -1, 1, -1 };
 
 void AINav::_bind_methods() {
     ClassDB::bind_method(D_METHOD("set_ai_world", "ai"), &AINav::set_ai_world);
-    ClassDB::bind_method(D_METHOD("find_path", "from", "to", "max_expansions"), &AINav::find_path,
+    ClassDB::bind_method(D_METHOD("find_path", "from", "to", "max_expansions"), &AINav::_b_find_path,
             DEFVAL(60000));
     ClassDB::bind_method(D_METHOD("request_path", "from", "to", "priority", "max_expansions"),
-            &AINav::request_path, DEFVAL(60000));
+            &AINav::_b_request_path, DEFVAL(60000));
     ClassDB::bind_method(D_METHOD("service", "budget_usec"), &AINav::service);
     ClassDB::bind_method(D_METHOD("get_status", "id"), &AINav::get_status);
-    ClassDB::bind_method(D_METHOD("get_path", "id"), &AINav::get_path);
+    ClassDB::bind_method(D_METHOD("get_path", "id"), &AINav::_b_get_path);
     ClassDB::bind_method(D_METHOD("release", "id"), &AINav::release);
     ClassDB::bind_method(D_METHOD("pending"), &AINav::pending);
-    ClassDB::bind_method(D_METHOD("invalidate_box", "box"), &AINav::invalidate_box);
+    ClassDB::bind_method(D_METHOD("invalidate_box", "box"), &AINav::_b_invalidate_box);
     ClassDB::bind_method(D_METHOD("clear_cache"), &AINav::clear_cache);
     ClassDB::bind_method(D_METHOD("set_water_level", "metres"), &AINav::set_water_level);
     ClassDB::bind_method(D_METHOD("set_stand_only", "on"), &AINav::set_stand_only);
     ClassDB::bind_method(D_METHOD("get_stand_only"), &AINav::get_stand_only);
     ClassDB::bind_method(D_METHOD("get_water_level"), &AINav::get_water_level);
     ClassDB::bind_method(D_METHOD("get_wade"), &AINav::get_wade);
-    ClassDB::bind_method(D_METHOD("snap", "point"), &AINav::snap);
-    ClassDB::bind_method(D_METHOD("can_stand", "point"), &AINav::can_stand);
+    ClassDB::bind_method(D_METHOD("snap", "point"), &AINav::_b_snap);
+    ClassDB::bind_method(D_METHOD("can_stand", "point"), &AINav::_b_can_stand);
     ClassDB::bind_method(D_METHOD("request_cover", "from", "threat_eye", "hp_per_hit",
                                  "hits_per_second", "ideal_range", "priority"),
-            &AINav::request_cover);
+            &AINav::_b_request_cover);
     ClassDB::bind_method(D_METHOD("service_cover", "budget_usec"), &AINav::service_cover);
     ClassDB::bind_method(D_METHOD("get_cover_status", "id"), &AINav::get_cover_status);
-    ClassDB::bind_method(D_METHOD("get_cover", "id"), &AINav::get_cover);
+    ClassDB::bind_method(D_METHOD("get_cover", "id"), &AINav::_b_get_cover);
     ClassDB::bind_method(D_METHOD("release_cover", "id"), &AINav::release_cover);
     ClassDB::bind_method(D_METHOD("cover_pending"), &AINav::cover_pending);
     ClassDB::bind_method(D_METHOD("find_cover", "from", "threat_eye", "hp_per_hit",
                                  "hits_per_second", "ideal_range"),
-            &AINav::find_cover);
+            &AINav::_b_find_cover);
     ClassDB::bind_method(D_METHOD("rate_cover", "p", "threat_eye", "hp_per_hit", "hits_per_second"),
-            &AINav::rate_cover);
+            &AINav::_b_rate_cover);
     ClassDB::bind_method(D_METHOD("get_stats"), &AINav::get_stats);
     ClassDB::bind_method(D_METHOD("reset_stats"), &AINav::reset_stats);
 
@@ -82,18 +82,153 @@ void AINav::_bind_methods() {
     ClassDB::bind_method(D_METHOD("get_crush"), &AINav::get_crush);
     ClassDB::bind_method(D_METHOD("set_hierarchy", "cluster_columns"), &AINav::set_hierarchy);
     ClassDB::bind_method(D_METHOD("get_hierarchy"), &AINav::get_hierarchy);
-    ClassDB::bind_method(D_METHOD("warm", "at", "radius_m"), &AINav::warm);
+    ClassDB::bind_method(D_METHOD("warm", "at", "radius_m"), &AINav::_b_warm);
     ClassDB::bind_method(D_METHOD("warm_pending"), &AINav::warm_pending);
     ClassDB::bind_method(D_METHOD("set_breach", "cost_m"), &AINav::set_breach);
     ClassDB::bind_method(D_METHOD("get_breach"), &AINav::get_breach);
-    ClassDB::bind_method(D_METHOD("get_breaches", "id"), &AINav::get_breaches);
-    ClassDB::bind_method(D_METHOD("get_last_breaches"), &AINav::get_last_breaches);
-    ClassDB::bind_method(D_METHOD("request_field", "goal", "radius_m", "priority"), &AINav::request_field);
+    ClassDB::bind_method(D_METHOD("get_breaches", "id"), &AINav::_b_get_breaches);
+    ClassDB::bind_method(D_METHOD("get_last_breaches"), &AINav::_b_get_last_breaches);
+    ClassDB::bind_method(D_METHOD("request_field", "goal", "radius_m", "priority"), &AINav::_b_request_field);
     ClassDB::bind_method(D_METHOD("get_field_status", "id"), &AINav::get_field_status);
-    ClassDB::bind_method(D_METHOD("field_dir", "id", "point"), &AINav::field_dir);
-    ClassDB::bind_method(D_METHOD("field_cost", "id", "point"), &AINav::field_cost);
+    ClassDB::bind_method(D_METHOD("field_dir", "id", "point"), &AINav::_b_field_dir);
+    ClassDB::bind_method(D_METHOD("field_cost", "id", "point"), &AINav::_b_field_cost);
     ClassDB::bind_method(D_METHOD("get_field_size", "id"), &AINav::get_field_size);
     ClassDB::bind_method(D_METHOD("release_field", "id"), &AINav::release_field);
+}
+
+// --- the bound forms: world values in and out (AIWorld::set_frame) -----------
+
+PackedVector3Array AINav::_path_to_world(const PackedVector3Array &path) const {
+    PackedVector3Array out;
+    out.resize(path.size());
+    for (int i = 0; i < path.size(); ++i) {
+        out.set(i, ai->to_world(path[i]));
+    }
+    return out;
+}
+
+Dictionary AINav::_cover_to_world(const Dictionary &cover) const {
+    if (cover.is_empty()) {
+        return cover;
+    }
+    Dictionary out = cover.duplicate();
+    if (out.has("cover")) {
+        out["cover"] = ai->to_world((Vector3)out["cover"]);
+    }
+    if (out.has("peek")) {
+        out["peek"] = ai->to_world((Vector3)out["peek"]);
+    }
+    return out;
+}
+
+PackedVector3Array AINav::_b_find_path(const Vector3 &from, const Vector3 &to, int max_expansions) {
+    if (!_framed()) {
+        return find_path(from, to, max_expansions);
+    }
+    return _path_to_world(find_path(ai->to_region(from), ai->to_region(to), max_expansions));
+}
+
+int AINav::_b_request_path(const Vector3 &from, const Vector3 &to, float priority,
+        int max_expansions) {
+    if (!_framed()) {
+        return request_path(from, to, priority, max_expansions);
+    }
+    return request_path(ai->to_region(from), ai->to_region(to), priority, max_expansions);
+}
+
+PackedVector3Array AINav::_b_get_path(int id) const {
+    if (!_framed()) {
+        return get_path(id);
+    }
+    return _path_to_world(get_path(id));
+}
+
+PackedVector3Array AINav::_b_get_breaches(int id) const {
+    if (!_framed()) {
+        return get_breaches(id);
+    }
+    return _path_to_world(get_breaches(id));
+}
+
+PackedVector3Array AINav::_b_get_last_breaches() const {
+    if (!_framed()) {
+        return get_last_breaches();
+    }
+    return _path_to_world(get_last_breaches());
+}
+
+void AINav::_b_invalidate_box(const AABB &box) {
+    if (!_framed()) {
+        invalidate_box(box);
+        return;
+    }
+    // Forget the region's columns under it; tell the followers in the world's.
+    _invalidate(ai->box_to_region(box));
+    emit_signal("nav_changed", box);
+}
+
+void AINav::_b_warm(const Vector3 &at, float radius_m) {
+    warm(_framed() ? ai->to_region(at) : at, radius_m);
+}
+
+int AINav::_b_request_field(const Vector3 &goal, float radius_m, float priority) {
+    return request_field(_framed() ? ai->to_region(goal) : goal, radius_m, priority);
+}
+
+Vector3 AINav::_b_field_dir(int id, const Vector3 &point) {
+    if (!_framed()) {
+        return field_dir(id, point);
+    }
+    return ai->dir_to_world(field_dir(id, ai->to_region(point)));
+}
+
+float AINav::_b_field_cost(int id, const Vector3 &point) {
+    return field_cost(id, _framed() ? ai->to_region(point) : point);
+}
+
+Vector3 AINav::_b_snap(const Vector3 &point) {
+    if (!_framed()) {
+        return snap(point);
+    }
+    return ai->to_world(snap(ai->to_region(point)));
+}
+
+bool AINav::_b_can_stand(const Vector3 &point) {
+    return can_stand(_framed() ? ai->to_region(point) : point);
+}
+
+Dictionary AINav::_b_find_cover(const Vector3 &from, const Vector3 &threat_eye, int hp_per_hit,
+        float hits_per_second, float ideal_range) {
+    if (!_framed()) {
+        return find_cover(from, threat_eye, hp_per_hit, hits_per_second, ideal_range);
+    }
+    return _cover_to_world(find_cover(ai->to_region(from), ai->to_region(threat_eye), hp_per_hit,
+            hits_per_second, ideal_range));
+}
+
+Dictionary AINav::_b_rate_cover(const Vector3 &p, const Vector3 &threat_eye, int hp_per_hit,
+        float hits_per_second) {
+    if (!_framed()) {
+        return rate_cover(p, threat_eye, hp_per_hit, hits_per_second);
+    }
+    return _cover_to_world(rate_cover(ai->to_region(p), ai->to_region(threat_eye), hp_per_hit,
+            hits_per_second));
+}
+
+int AINav::_b_request_cover(const Vector3 &from, const Vector3 &threat_eye, int hp_per_hit,
+        float hits_per_second, float ideal_range, float priority) {
+    if (!_framed()) {
+        return request_cover(from, threat_eye, hp_per_hit, hits_per_second, ideal_range, priority);
+    }
+    return request_cover(ai->to_region(from), ai->to_region(threat_eye), hp_per_hit,
+            hits_per_second, ideal_range, priority);
+}
+
+Dictionary AINav::_b_get_cover(int id) const {
+    if (!_framed()) {
+        return get_cover(id);
+    }
+    return _cover_to_world(get_cover(id));
 }
 
 // The caches are hash maps that grow to tens of thousands of entries, and a
@@ -879,6 +1014,11 @@ int AINav::pending() const {
 }
 
 void AINav::invalidate_box(const AABB &box) {
+    _invalidate(box);
+    emit_signal("nav_changed", box);
+}
+
+void AINav::_invalidate(const AABB &box) {
     stat_invalidations++;
     const int x0 = (int)std::floor(box.position.x / STUD) - span;
     const int x1 = (int)std::floor((box.position.x + box.size.x) / STUD) + 1;
@@ -948,7 +1088,6 @@ void AINav::invalidate_box(const AABB &box) {
             s.max_expansions = s.full_cap;
         }
     }
-    emit_signal("nav_changed", box);
 }
 
 void AINav::set_agent(int p_span, int p_head_stand, int p_head_crouch, int p_step_up,
