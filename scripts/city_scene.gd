@@ -1387,6 +1387,10 @@ func _exit_tree() -> void:
 	_glass_jobs.clear()
 	if brick_near != null:
 		brick_near.shutdown()
+	for job in _far_coarse_jobs.values():
+		if int((job as Array)[1]) >= 0:
+			WorkerThreadPool.wait_for_task_completion(int((job as Array)[1]))
+	_far_coarse_jobs.clear()
 	# And the panes of a building in bricks.
 	if not _pane_job.is_empty():
 		WorkerThreadPool.wait_for_task_completion(int(_pane_job[0]))
@@ -4356,6 +4360,8 @@ func _remesh(id: int, force_full: bool = false) -> void:
 		if b != null and b.is_materialised() and _shells.has(id):
 			_shell_stale[id] = true
 		return
+	# Its bricks changed: drawn as bricks again, at once (_tend_far_coarse).
+	_far_coarse_drop(id)
 	# A build's other frames are rebuilt whole, every time. They are small, and
 	# a surface under 65,536 vertices cannot be index-patched anyway.
 	if b.frames.size() > 1:
@@ -4559,6 +4565,9 @@ func _sway_of(id: int) -> Vector3:
 
 ## Hang a finished band mesh in its slot.
 func _apply_band(id: int, at: int, mesh: ArrayMesh, arrays: Array) -> void:
+	# Its bricks changed: its far stand-in is out of date, and the bands are
+	# what is right (_tend_far_coarse makes it again once it is quiet).
+	_far_coarse_drop(id)
 	var nodes: Array = _brick_bands.get(id, [])
 	if at >= nodes.size() or not _brick_nodes.has(id):
 		_retirer.retire(mesh)
@@ -4733,6 +4742,8 @@ func _advance_bands() -> void:
 
 ## Drop a building's band nodes, returning them so a caller can hand them on.
 func _take_bands(id: int) -> Array:
+	# Drawn again, wherever they are going (_far_coarse_drop).
+	_far_coarse_drop(id)
 	# Whatever is being uploaded for it lands first: a piece carrying these
 	# bands away patches them, and a slot still waiting holds nothing to patch.
 	_harvest_band_jobs(id)
@@ -11723,7 +11734,7 @@ func _fire(radius: float) -> void:
 ## promote, stream, bands), and only the worst tick used to say its parts.
 const _SPIKE_PARTS := {"damage": ["dmg_promote", "dmg_rooms", "dmg_hit", "dmg_pieces",
 				"dmg_shell_pieces", "dmg_near", "dmg_support", "dmg_disable"],
-		"stream": ["st_trim", "st_merge", "st_rooms", "st_detail", "sd_far", "sd_panes", "pn_prep",
+		"stream": ["st_trim", "st_merge", "st_rooms", "st_detail", "sd_far", "sd_panes", "sd_coarse", "pn_prep",
 				"pn_copy",
 				"st_demesh", "st_remesh",
 				"st_reshell", "st_residency", "st_shells", "ss_shells", "ss_glass", "ss_proxies",
@@ -13188,7 +13199,9 @@ func _stream_detail() -> void:
 		_harvest_far_real()
 	t_sd = _part("sd_far", t_sd)
 	_tend_brick_panes()
-	_part("sd_panes", t_sd)
+	t_sd = _part("sd_panes", t_sd)
+	_tend_far_coarse()
+	_part("sd_coarse", t_sd)
 	var here := camera.global_position
 	var t0 := Time.get_ticks_usec()
 	var until := t0 + int(DEMESH_BUDGET_MS * 1000.0)
@@ -13299,6 +13312,126 @@ func _tend_brick_panes() -> void:
 
 
 var _pane_job: Array = []   ## [task, [mesh], building id] while panes are being made
+
+
+## A building in bricks far off is drawn as its coarse stand-in -- the live
+## bricks' outer surface merged across bricks of a colour, brick outlines
+## still drawn from its UV2 (BrickWorld.build_chunk_coarse_mesh, a far
+## piece's stand-in) -- instead of its bands, every brick's faces. Looking down
+## a street of twelve buildings in bricks the bands were 4.6M triangles and
+## 16.7 ms of a 21.7 ms GPU frame; the four past 80 m drawn coarse, 1.7M
+## triangles became 140k and the frame 12.7 ms, the picture the same
+## (PerfCaps.md 5). Past FAR_COARSE_RANGE, quiet for FAR_COARSE_QUIET_MS; back
+## to its bands inside FAR_COARSE_BACK, or the moment a band of it changes. The
+## bands stay built underneath, only hidden: what a hit patches is them.
+const FAR_COARSE_RANGE := 60.0
+const FAR_COARSE_BACK := 50.0
+const FAR_COARSE_QUIET_MS := 3000
+static var far_coarse_enabled := true
+var _far_coarse := {}        ## building id -> its stand-in node (bands hidden)
+## building id -> [alive bricks asked at, upload task or -1, [mesh]]: being made.
+var _far_coarse_jobs := {}
+var far_coarse_built := 0
+
+
+func _tend_far_coarse() -> void:
+	var here := camera.global_position
+	# Stand-ins come in: arrays from the world's worker, then the mesh made on
+	# one of ours (handed to the renderer here, it would wait as a band did).
+	for id in _far_coarse_jobs.keys():
+		var job: Array = _far_coarse_jobs[id]
+		var b := registry.get_building(id)
+		var gone: bool = b == null or not b.is_materialised() or not _brick_nodes.has(id)
+		if int(job[1]) >= 0:
+			if not WorkerThreadPool.is_task_completed(int(job[1])):
+				continue
+			WorkerThreadPool.wait_for_task_completion(int(job[1]))
+			_far_coarse_jobs.erase(id)
+			var mesh: ArrayMesh = (job[2] as Array)[0]
+			if mesh != null and not gone and far_coarse_enabled \
+					and world.get_alive_block_count(b.chunk) == int(job[0]) \
+					and not _bands_building(id) and not _toppling.has(id) \
+					and _box_distance(CityPlacer.box_of(b), here) > FAR_COARSE_BACK:
+				_far_coarse_show(id, mesh)
+			elif mesh != null:
+				_retirer.retire(mesh)
+			continue
+		if gone:
+			if b == null or not world.coarse_pending(b.chunk):
+				_far_coarse_jobs.erase(id)
+			continue
+		if not world.coarse_ready(b.chunk):
+			if not world.coarse_pending(b.chunk):
+				_far_coarse_jobs.erase(id)   # settled by a change to the chunk
+			continue
+		var arrays: Array = world.take_coarse_mesh(b.chunk)
+		if arrays.is_empty():
+			_far_coarse_jobs.erase(id)
+			continue
+		var holder := [null]
+		job[1] = WorkerThreadPool.add_task(func() -> void:
+			var m := ArrayMesh.new()
+			m.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
+			holder[0] = m, false, "far coarse building")
+		job[2] = holder
+	# Which go coarse, and which come back. At most one asked for a pass.
+	var now := Time.get_ticks_msec()
+	var asked := false
+	for id in _brick_nodes:
+		var b := registry.get_building(id)
+		if b == null or not b.is_materialised():
+			continue
+		var dist := _box_distance(CityPlacer.box_of(b), here)
+		if _far_coarse.has(id) and not is_instance_valid(_far_coarse[id]):
+			_far_coarse.erase(id)   # its node went with its bricks' node
+		if _far_coarse.has(id):
+			if not far_coarse_enabled or dist < FAR_COARSE_BACK or _toppling.has(id) \
+					or b.toppled:
+				_far_coarse_drop(id)
+			continue
+		if asked or not far_coarse_enabled or _far_coarse_jobs.has(id) \
+				or dist <= FAR_COARSE_RANGE or now - b.materialised_at < FAR_COARSE_QUIET_MS \
+				or _bands_building(id) or _toppling.has(id) or b.toppled \
+				or world.coarse_pending(b.chunk):
+			continue
+		world.coarse_chunk_async(b.chunk)
+		_far_coarse_jobs[id] = [world.get_alive_block_count(b.chunk), -1, []]
+		asked = true
+
+
+func _far_coarse_show(id: int, mesh: ArrayMesh) -> void:
+	var parent = _brick_nodes.get(id)
+	if parent == null or not is_instance_valid(parent):
+		_retirer.retire(mesh)
+		return
+	var node := MeshInstance3D.new()
+	node.name = "FarCoarse"
+	node.mesh = mesh
+	node.material_override = brick_material
+	node.set_instance_shader_parameter("weather_sway", _sway_of(id))
+	node.set_instance_shader_parameter("weather_snowcap", 1.0 if _is_tree(id) else 0.0)
+	node.physics_interpolation_mode = Node.PHYSICS_INTERPOLATION_MODE_OFF
+	node.cast_shadow = (parent as MeshInstance3D).cast_shadow
+	(parent as Node3D).add_child(node)
+	for band in _brick_bands.get(id, []):
+		if is_instance_valid(band):
+			(band as Node3D).visible = false
+	_far_coarse[id] = node
+	far_coarse_built += 1
+
+
+## Its bands drawn again, and its stand-in gone. Nothing if it has none.
+func _far_coarse_drop(id: int) -> void:
+	if not _far_coarse.has(id):
+		return
+	var node = _far_coarse[id]
+	_far_coarse.erase(id)
+	for band in _brick_bands.get(id, []):
+		if is_instance_valid(band):
+			(band as Node3D).visible = true
+	if node != null and is_instance_valid(node):
+		_retirer.retire((node as MeshInstance3D).mesh)
+		(node as Node).queue_free()
 
 
 ## Hang the panes a worker has finished. False while one is still being made.
@@ -16321,6 +16454,8 @@ func _run_chamfer_pass() -> void:
 	if "--cost" in OS.get_cmdline_user_args():
 		if "--street" in OS.get_cmdline_user_args():
 			await _run_chamfer_street()
+		elif "--overview" in OS.get_cmdline_user_args():
+			await _run_overview()
 		else:
 			await _run_chamfer_cost()
 		get_tree().quit(0)
@@ -16463,6 +16598,146 @@ func _bands_round(at: Vector3) -> Array:
 		if mi.mesh.get_aabb().grow(0.1).has_point(local):
 			out.append(mi)
 	return out
+
+
+## What a look out over the city costs the GPU, and what of it is what
+## (PerfCaps.md 5). From the street walk's start, at eye height: eight
+## directions, then the dearest one with each kind of thing hidden in turn.
+func _run_overview() -> void:
+	var view := get_viewport().get_viewport_rid()
+	RenderingServer.viewport_set_measure_render_time(view, true)
+	var b := registry.get_building(0)
+	for i in mini(registry.buildings.size(), 12):
+		_promote(i)
+	await _frames(120)
+	var start: Vector3 = b.xform * Vector3(-4.0, 0.0, -3.0)
+	start.y = DebugCamera.EYE_HEIGHT
+	var along: Vector3 = (b.xform.basis * Vector3.RIGHT).normalized()
+	camera.global_position = start
+	print("[overview] %d buildings, from %s" % [registry.buildings.size(), str(start)])
+	var worst_dir := Vector3.ZERO
+	var worst_gpu := 0.0
+	for k in 8:
+		var dir := along.rotated(Vector3.UP, TAU * float(k) / 8.0)
+		camera.look_at(start + dir, Vector3.UP)
+		var m := await _overview_measure()
+		print("[overview]   yaw %3d: %s" % [k * 45, _overview_line(m)])
+		if float(m.gpu) > worst_gpu:
+			worst_gpu = float(m.gpu)
+			worst_dir = dir
+	camera.look_at(start + worst_dir, Vector3.UP)
+	var base := await _overview_measure()
+	print("[overview] dearest view: %s" % _overview_line(base))
+	# The sun's shadow, off.
+	if _sun != null:
+		_sun.shadow_enabled = false
+		print("[overview]   no sun shadow: %s" % _overview_line(await _overview_measure()))
+		_sun.shadow_enabled = true
+	# Each kind of thing among the city's children, hidden in turn. A kind is
+	# a child's class and its name without digits.
+	var kinds := {}
+	for c in get_children():
+		if not (c is Node3D) or not (c as Node3D).visible or c == camera:
+			continue
+		var key := "%s %s" % [c.get_class(), _overview_kind(c.name)]
+		if not kinds.has(key):
+			kinds[key] = []
+		(kinds[key] as Array).append(c)
+	var rows := []
+	for key in kinds:
+		var nodes: Array = kinds[key]
+		for n in nodes:
+			(n as Node3D).visible = false
+		var m := await _overview_measure()
+		for n in nodes:
+			(n as Node3D).visible = true
+		rows.append([float(base.gpu) - float(m.gpu), key, nodes.size(), m])
+	rows.sort_custom(func(a: Array, c: Array) -> bool: return a[0] > c[0])
+	for r in rows:
+		print("[overview]   without %-44s (x%3d): GPU %5.2f ms less; %s" % [r[1], r[2], r[0],
+				_overview_line(r[3])])
+	# The far tier for buildings in bricks (_tend_far_coarse): off, then on.
+	far_coarse_enabled = false
+	await _frames(30)
+	var off := await _overview_measure()
+	var img_off := get_viewport().get_texture().get_image()
+	await _save("overview_bands")
+	far_coarse_enabled = true
+	for i in 600:
+		await get_tree().physics_frame
+		if _far_coarse_jobs.is_empty() and i > 60:
+			break
+	var on := await _overview_measure()
+	var img_on := get_viewport().get_texture().get_image()
+	await _save("overview_coarse")
+	print("[overview] far tier off: %s" % _overview_line(off))
+	print("[overview] far tier on (%d buildings coarse): %s" % [_far_coarse.size(),
+			_overview_line(on)])
+	print("[overview]   picture differs at %.2f%% of sampled pixels" % [
+			_image_difference(img_off, img_on) * 100.0])
+	_gate_ok("far buildings in bricks are drawn coarse, and the picture is the same",
+			not _far_coarse.is_empty() and _image_difference(img_off, img_on) < 0.01,
+			"%d coarse" % _far_coarse.size())
+	# A hit on one: its bands at once, coarse again once quiet.
+	if not _far_coarse.is_empty():
+		var hit_id: int = _far_coarse.keys()[0]
+		var hb := registry.get_building(hit_id)
+		var box := CityPlacer.box_of(hb)
+		_blast(Vector3(box.position.x, box.position.y + 3.0, box.get_center().z), 1.5)
+		var back := false
+		for i in 60:
+			await get_tree().physics_frame
+			if not _far_coarse.has(hit_id):
+				back = true
+				break
+		var bands_shown := true
+		for band in _brick_bands.get(hit_id, []):
+			if is_instance_valid(band) and not (band as Node3D).visible:
+				bands_shown = false
+		_gate_ok("a hit on a far building draws its bricks again at once", back and bands_shown)
+		var again := false
+		for i in 300:
+			await get_tree().physics_frame
+			if _far_coarse.has(hit_id):
+				again = true
+				break
+		_gate_ok("and it goes coarse again once it is quiet", again)
+	print("[overview] %d ok, %d FAIL" % [_gate_pass, _gate_fail])
+
+
+func _overview_kind(n: String) -> String:
+	var out := ""
+	for ch in n:
+		if not ch.is_valid_int():
+			out += ch
+	return out
+
+
+func _overview_measure() -> Dictionary:
+	var view := get_viewport().get_viewport_rid()
+	await _frames(20)
+	var gpu := 0.0
+	var n := 40
+	for i in n:
+		await get_tree().process_frame
+		gpu += RenderingServer.viewport_get_measured_render_time_gpu(view)
+	return {"gpu": gpu / n,
+		"draws": RenderingServer.viewport_get_render_info(view, RenderingServer.VIEWPORT_RENDER_INFO_TYPE_VISIBLE,
+				RenderingServer.VIEWPORT_RENDER_INFO_DRAW_CALLS_IN_FRAME),
+		"objects": RenderingServer.viewport_get_render_info(view, RenderingServer.VIEWPORT_RENDER_INFO_TYPE_VISIBLE,
+				RenderingServer.VIEWPORT_RENDER_INFO_OBJECTS_IN_FRAME),
+		"tris": RenderingServer.viewport_get_render_info(view, RenderingServer.VIEWPORT_RENDER_INFO_TYPE_VISIBLE,
+				RenderingServer.VIEWPORT_RENDER_INFO_PRIMITIVES_IN_FRAME),
+		"sh_draws": RenderingServer.viewport_get_render_info(view, RenderingServer.VIEWPORT_RENDER_INFO_TYPE_SHADOW,
+				RenderingServer.VIEWPORT_RENDER_INFO_DRAW_CALLS_IN_FRAME),
+		"sh_tris": RenderingServer.viewport_get_render_info(view, RenderingServer.VIEWPORT_RENDER_INFO_TYPE_SHADOW,
+				RenderingServer.VIEWPORT_RENDER_INFO_PRIMITIVES_IN_FRAME)}
+
+
+func _overview_line(m: Dictionary) -> String:
+	return "GPU %5.2f ms, %4d draws, %4d objects, %5.0fk tris; shadows %4d draws, %5.0fk tris" % [
+			float(m.gpu), int(m.draws), int(m.objects), float(m.tris) / 1000.0,
+			int(m.sh_draws), float(m.sh_tris) / 1000.0]
 
 
 ## Frame times while a building six metres from the camera is shot at and then
