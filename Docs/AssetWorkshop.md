@@ -957,6 +957,7 @@ selecting and changing shells, small custom parts.
 | **Box select** | L, drag | a region: move, copy, delete, or re-pack it clean |
 | **Guide models** | F3 (panel) | load an existing model (glTF, FBX, OBJ) on its own locked, see-through layer, and build inside it. A bought model is a guide only: it is never exported ([custom.md](Parts/custom.md) section 6) |
 | **Parts catalogue** | F7 (panel) | every saved part, official and custom, to filter by any maker, part, class, gun class, creator or tag, search and sort; **Fits** lists only what goes on the socket of the part being built. Double click a part to **try it on** its slot, fitting or not: drawn where the socket is, marked red with why when it does not fit, never saved ([ModularParts.md](ModularParts.md) sections 6 and 9) |
+| **Mech mode** | Asset > Make a mech; the Mech menu | a mech's ten parts (chassis, head, arms, hands, legs, pods), a class and a leg length, a reference mech of joints to build round and every joint's mount and socket laid ready; Save writes each part on its own ([ModularParts.md](ModularParts.md) stage 5) |
 | **Section view** | O | hide everything past a plane, to build inside |
 | **Isolate / explode** | P | show only the current part, or pull the parts apart; tint bricks by part |
 

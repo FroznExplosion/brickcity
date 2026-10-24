@@ -1214,6 +1214,8 @@ func ruler_text() -> String:
 				d.x * PRINT_MM_PER_STUD * REAL_PER_PRINT, d.z * PRINT_MM_PER_STUD * REAL_PER_PRINT,
 				d.y * PRINT_MM_PER_PLATE * REAL_PER_PRINT])
 	var modes := PackedStringArray(["view: " + VIEWS[view]])
+	if recipe.kind == "mech":
+		modes.append("MECH %s, legs %d long" % [mech_class, leg_length])
 	if free_place:
 		modes.append("FREE on the %s plane at %s (PgUp/PgDn)" % [work_plane, _plane_at_text()])
 	else:
@@ -1451,6 +1453,14 @@ func toggle_catalog() -> void:
 ## not saved yet.
 func _aim_catalog(cat: PartCatalog) -> void:
 	var part := String(part_names[part_sel]) if part_sel < part_names.size() else ""
+	if recipe.kind == "mech":
+		var spec: Dictionary = MechReference.SPEC.get(part, {})
+		if not spec.has("host"):
+			_catalog_panel.set_fit_target(null, "", "")
+			return
+		var mh: PartRecord = tried.get(spec.host, cat.get_part(String(part_ids.get(spec.host, ""))))
+		_catalog_panel.set_fit_target(mh, MechReference.path_of(part), "mech")
+		return
 	var sockets: Dictionary = PartStandards.plan("gun").get("sockets", {})
 	var path := part if sockets.has(part) else "barrel/" + part
 	if recipe.kind != "gun" or part == "body" or not sockets.has(path):
@@ -1529,7 +1539,8 @@ func _store_asset_meta() -> void:
 			"sketches": sketches, "part_bricks": part_bricks, "studs": extra_studs, "curves": curve_level,
 			"shells": shells, "sdf": _sdf_meta, "sculpt": {"state": sculpt_state, "cells": Array(_sdf_cells),
 			"stash": _sdf_stash, "shell_cells": Array(_sdf_shell)}, "models": _models_meta(),
-			"part_ids": part_ids, "part_hashes": part_hashes, "part_revs": part_revs}   # not a copy: this runs on every edit, and a save writes it out as it is
+			"part_ids": part_ids, "part_hashes": part_hashes, "part_revs": part_revs,
+			"mech": {"class": mech_class, "length": leg_length}}   # not a copy: this runs on every edit, and a save writes it out as it is
 
 
 func _restore_asset_meta() -> void:
@@ -1540,6 +1551,12 @@ func _restore_asset_meta() -> void:
 	var parts: Dictionary = a.get("parts", {})
 	if parts.has("names") and not (parts.names as Array).is_empty():
 		part_names = PackedStringArray(parts.names)
+	elif recipe.kind in ["gun", "mech"]:
+		part_names = PackedStringArray(kind_parts())
+	part_sel = mini(part_sel, part_names.size() - 1)
+	var mech: Dictionary = a.get("mech", {})
+	mech_class = String(mech.get("class", "normal"))
+	leg_length = int(mech.get("length", 2))
 	part_of = PackedInt32Array()
 	for v in parts.get("of", []):
 		part_of.append(int(v))
@@ -1597,6 +1614,7 @@ func _restore_asset_meta() -> void:
 				guides[i].adjust = _list_xf(g.adjust)
 			_fit_guide(guides[i])
 	_restore_models(a.get("models", []))
+	_draw_mech_ref()
 	var m: Dictionary = a.get("mirror", {})
 	mirror_z = float(m.get("z", mirror_z))
 	set_mirror(bool(m.get("on", false)))
@@ -1680,11 +1698,39 @@ func _set_asset_kind(k: String) -> void:
 	recipe.kind = k if ASSET_KINDS.has(k) else "gun"
 	if _menu != null:
 		_menu.set_kind(recipe.kind)
+	_kind_changed()
 
 
-## Asset > Make a gun / a mech / furniture or an item: what this build is saved as.
+## The parts a build of this kind is made of.
+func kind_parts() -> Array:
+	return MechReference.PARTS if recipe.kind == "mech" else GUN_PARTS
+
+
+func _kind_changed() -> void:
+	if _point_slot != null:
+		_fill_point_slots()
+	_draw_mech_ref()
+
+
+## Asset > Make a gun / a mech / furniture or an item: what this build is saved as. A gun
+## and a mech have their own parts: switching renames them in place (a gun's body is a
+## mech's chassis), so no brick changes part; a new mech gets its joints laid ready.
 func set_asset_kind(k: String) -> void:
+	var was := recipe.kind
 	_set_asset_kind(k)
+	if recipe.kind != was and recipe.kind in ["gun", "mech"]:
+		var want := PackedStringArray(kind_parts())
+		if part_names != want:
+			part_names = want
+			part_sel = mini(part_sel, part_names.size() - 1)
+			if sculpt != null:
+				sculpt.set_parts(part_names.size())
+			_load_toolbar(part_names[part_sel])
+		_forget_part_ids()
+		if recipe.kind == "mech" and not points.any(func(q: Dictionary) -> bool: return q.get("ready", false)):
+			lay_ready_points()
+		_store_asset_meta()
+	_kind_changed()
 	_dirty = true
 	print("[asset workshop] making %s: Save As files it in %s" % [
 			"furniture or an item" if recipe.kind == "item" else "a " + recipe.kind,
@@ -1915,9 +1961,10 @@ func _load_interfaces() -> void:
 		return
 	var d = JSON.parse_string(FileAccess.get_file_as_string(path))
 	if d is Dictionary:
-		for k in (d.get("gun_interfaces", {}) as Dictionary):
-			if k != "note":
-				_interfaces[k] = d.gun_interfaces[k]
+		for table in ["gun_interfaces", "mech_interfaces"]:
+			for k in (d.get(table, {}) as Dictionary):
+				if k != "note":
+					_interfaces[k] = d[table][k]
 		if d.get("held_grip") is Dictionary:
 			for k in ["length_min", "fore_aft", "thick"]:
 				if d.held_grip.has(k):
@@ -1934,12 +1981,15 @@ func point_under_ghost() -> Array:
 ## A mount or socket where the ghost is, for the current part; or, if one is there
 ## already, take it away. Returns true if one was added.
 func toggle_point(at: Array, kind: String, slot: String, iface: String, dir: Array = []) -> bool:
+	var hit := -1
 	for i in points.size():
-		if points[i].at == at:
-			points.remove_at(i)
-			_draw_points()
-			_store_asset_meta()
-			return false
+		if points[i].at == at and (hit < 0 or points[i].part == part_names[part_sel]):
+			hit = i
+	if hit >= 0:
+		points.remove_at(hit)
+		_draw_points()
+		_store_asset_meta()
+		return false
 	var q := {"part": part_names[part_sel], "kind": kind, "slot": slot, "interface": iface, "at": at}
 	if not dir.is_empty():
 		q["dir"] = dir   # on a stud: the way the stud faces
@@ -1978,8 +2028,7 @@ func _build_point_panel(layer: CanvasLayer) -> void:
 		_point_kind.add_item(k)
 	box.add_child(_point_kind)
 	_point_slot = OptionButton.new()
-	for k in GUN_PARTS:
-		_point_slot.add_item(k)
+	_fill_point_slots()
 	_point_slot.item_selected.connect(func(_i: int) -> void: _fill_point_ifaces())
 	box.add_child(_point_slot)
 	_point_iface = OptionButton.new()
@@ -2001,10 +2050,36 @@ func _build_point_panel(layer: CanvasLayer) -> void:
 	row.add_child(cancel)
 
 
+## What a point is for: a gun's slots, or a mech's sockets (the body plan's names).
+func _fill_point_slots() -> void:
+	_point_slot.clear()
+	var names := []
+	if recipe.kind == "mech":
+		for k in MechReference.PARTS:
+			var sk := String(MechReference.SPEC[k].get("socket", ""))
+			if sk != "" and not sk in names:
+				names.append(sk)
+	else:
+		names = GUN_PARTS
+	for k in names:
+		_point_slot.add_item(k)
+	_fill_point_ifaces()
+
+
 ## The interfaces of the chosen slot: a mount and a socket join only on the same one.
 func _fill_point_ifaces() -> void:
+	if _point_iface == null:
+		return
 	_point_iface.clear()
+	if _point_slot.item_count == 0:
+		return
 	var slot := _point_slot.get_item_text(maxi(_point_slot.selected, 0))
+	if recipe.kind == "mech":
+		# A mech's point is named for its socket (arm_L, hand); its interface for the slot.
+		for k in MechReference.SPEC:
+			if MechReference.SPEC[k].get("socket", "") == slot:
+				slot = MechReference.SPEC[k].slot
+				break
 	for k in _interfaces:
 		if String(_interfaces[k].get("slot", "")) == slot:
 			_point_iface.add_item(k)
@@ -6648,7 +6723,8 @@ func explode_offsets() -> Dictionary:
 				(c.z + size.z * 0.5) * BrickPalette.STUD_M)
 		sums[name] = sums.get(name, Vector3.ZERO) + m
 		counts[name] = int(counts.get(name, 0)) + 1
-	var body: Vector3 = sums["body"] / counts["body"] if sums.has("body") else Vector3.ZERO
+	var core := "chassis" if recipe.kind == "mech" else "body"
+	var body: Vector3 = sums[core] / counts[core] if sums.has(core) else Vector3.ZERO
 	var fwd := Vector3(-1 if muzzle_end == "-x" else 1, 0, 0)
 	var g := EXPLODE_GAP * BrickPalette.STUD_M
 	var out := {}
@@ -8292,31 +8368,7 @@ func export_game(dir: String = "") -> Dictionary:
 	DirAccess.make_dir_recursive_absolute(dir)
 	var written := {}
 	for name in by_part:
-		var root := Node3D.new()
-		root.name = name
-		var model := Node3D.new()
-		model.name = "Model"
-		model.transform = Transform3D(b, -(b * (at[name] as Vector3)))
-		root.add_child(model)
-		# A mesh a frame the part has bricks in: sideways bricks are in grids of their own.
-		var groups := _by_frame(_uncovered(name, by_part[name]))
-		for af in groups:
-			var mi := _bake_part_mesh(groups[af], af)
-			if af != groups.keys()[0]:
-				mi.name = "Bricks%d" % af
-			model.add_child(mi)
-		if _shell_nodes.has(name):
-			# The shell, in the workshop metres the bricks are in; the bricks it covers left out.
-			var sh := MeshInstance3D.new()
-			sh.name = "Shell"
-			var src: MeshInstance3D = _shell_nodes[name]
-			sh.mesh = src.mesh
-			sh.material_override = src.material_override
-			sh.transform = world.get_chunk_transform(asm.frames[0]).affine_inverse() * src.transform
-			model.add_child(sh)
-		var extra := extra_studs.filter(func(st: Dictionary) -> bool: return String(st.get("part", "")) == name)
-		if not extra.is_empty():
-			model.add_child(_studs_node(extra))
+		var root := _part_root(name, by_part[name], at[name], b)
 		if name != "body":
 			var mount := Node3D.new()
 			mount.name = "mount"
@@ -8381,6 +8433,251 @@ static func _game_hosts(by_part: Dictionary) -> Dictionary:
 
 
 # ---------------------------------------------------------------------------
+# Mech mode (Docs/ModularParts.md section 9, stage 5)
+# ---------------------------------------------------------------------------
+
+## A game metre in the workshop's metres for a mech: a stud here is a nano stud, 0.175 m
+## in the game (Docs/Parts/nano.md section 1).
+const MECH_GAME_PER_WORKSHOP := 0.175 / BrickPalette.STUD_M
+## Where the reference mech stands: between its feet, on this plate, in the middle.
+const MECH_GROUND := 30
+## The chassis's class -- the mech's, its stats come from it alone -- and the legs' length.
+## Every part saved from a mech build is filed under the class (limbs only as looks).
+var mech_class := "normal"
+var leg_length := 2
+var mech_ref_on := true
+var _mech_ref: Node3D
+
+
+func set_mech_class(k: String) -> void:
+	if not MechReference.CLASSES.has(k):
+		return
+	mech_class = k
+	_mech_changed()
+
+
+func set_leg_length(n: int) -> void:
+	if not MechReference.HIP_BRICKS.has(n):
+		return
+	leg_length = n
+	_mech_changed()
+
+
+func set_mech_ref(on: bool) -> void:
+	mech_ref_on = on
+	_draw_mech_ref()
+
+
+## A class or a length changed: the joints move, and the ready points with them (points put
+## by hand stay where they were put).
+func _mech_changed() -> void:
+	lay_ready_points()
+	_store_asset_meta()
+	_dirty = true
+
+
+## The reference mech's origin, in cells: between the feet, on the ground plate.
+func mech_origin() -> Vector3:
+	return Vector3(floor(plate_studs * 0.5), MECH_GROUND, mirror_z)
+
+
+## Part `part`'s joint on the reference mech, in cells (studs, plates, studs).
+func mech_joint(part: String) -> Vector3:
+	return mech_origin() + (MechReference.joints(mech_class, leg_length).get(part, Vector3.ZERO) as Vector3)
+
+
+func mech_joint_m(part: String) -> Vector3:
+	var c := mech_joint(part)
+	return Vector3(c.x * BrickPalette.STUD_M, c.y * BrickPalette.PLATE_M, c.z * BrickPalette.STUD_M)
+
+
+## A mech part scene's frame: nano size, facing -Z in the game (it faces -X here).
+func mech_basis() -> Basis:
+	return Basis(Vector3.UP, -PI * 0.5).scaled(Vector3.ONE * MECH_GAME_PER_WORKSHOP)
+
+
+## The mount and the sockets of every part laid ready on the reference mech's joints:
+## each part's mount on its joint, and on the part it hangs from a socket there that
+## takes it. They are marked `ready`; laying them again (another class or length) moves
+## those and leaves points put by hand. J on one takes it away, to put it elsewhere.
+func lay_ready_points() -> void:
+	if recipe.kind != "mech":
+		return
+	points = points.filter(func(q: Dictionary) -> bool: return not q.get("ready", false))
+	for part: String in MechReference.PARTS:
+		var spec: Dictionary = MechReference.SPEC[part]
+		if not spec.has("host"):
+			continue
+		var c := mech_joint(part)
+		var at := [c.x, c.y, c.z]
+		points.append({"part": part, "kind": "mount", "slot": spec.socket, "interface": spec.iface,
+				"at": at, "ready": true})
+		points.append({"part": spec.host, "kind": "socket", "slot": spec.socket, "interface": spec.iface,
+				"at": at.duplicate(), "ready": true})
+	_draw_points()
+	_draw_mech_ref()
+	_store_asset_meta()
+
+
+## A mech's parts by their bricks: {part: [brick ids]}.
+func _kind_bricks() -> Dictionary:
+	if recipe.kind != "mech":
+		return _gun_bricks()
+	var by_part := {}
+	for i in recipe.size():
+		if _brick_frame(i) < 0:
+			continue
+		var name := part_names[part_of[i] if i < part_of.size() else part_sel]
+		if MechReference.SPEC.has(name):
+			(by_part.get_or_add(name, []) as Array).append(i)
+	return by_part
+
+
+## A mech part's record: family mech (a pod's body: pod), its slot and side, the build's
+## class, its mount and what its sockets take (its points), a leg's length, its bricks.
+func _mech_record(name: String, by_part: Dictionary, official: bool) -> PartRecord:
+	var spec: Dictionary = MechReference.SPEC[name]
+	var r := PartRecord.new()
+	r.id = String(part_ids.get(name, "unsaved." + name))
+	r.family = "pod" if spec.slot == "pod" else "mech"
+	r.slot = spec.slot
+	r.side = spec.side
+	r.weight_class = mech_class
+	r.display_name = "%s %s" % [recipe.name, name.replace("_", " ")]
+	r.manufacturer = String(AssetGuns.BRAND)
+	r.source = "official" if official else "custom"
+	if not official:
+		r.creator = {"name": creator_name}
+	if name == "chassis":
+		r.name_fragment = recipe.name
+	for q in points:
+		if String(q.part) == name and q.kind == "mount" and String(q.interface) != "":
+			r.mount = {"interface": String(q.interface)}
+			if spec.slot == "leg":
+				r.mount["params"] = {"length": leg_length}
+	var accepts := {}
+	for q in points:
+		if String(q.part) == name and q.kind == "socket" and String(q.interface) != "":
+			var list: Array = accepts.get_or_add(String(q.slot), [])
+			if not String(q.interface) in list:
+				list.append(String(q.interface))
+	for k in accepts:
+		r.sockets.append({"name": k, "accepts": accepts[k]})
+	r.extra["from"] = recipe.name
+	r.extra["bricks"] = _part_recipe(by_part[name]).to_dict() if by_part.has(name) else {}
+	return r
+
+
+## Export a mech's parts for the game, as export_game does a gun's: each part's scene at
+## its mount (else its joint), nano size, facing -Z, a `mount` node on each part but the
+## chassis and a `socket_<name>` on the part it hangs from at each of its socket points.
+func export_mech(dir: String) -> Dictionary:
+	var by_part := _kind_bricks()
+	if by_part.is_empty():
+		return {"ok": false, "why": "nothing built"}
+	var at := {}
+	for name in by_part:
+		at[name] = mech_joint_m(name) if name != "chassis" else _cells_centre(by_part[name])
+	for q in points:
+		if q.kind == "mount" and by_part.has(String(q.part)):
+			at[q.part] = _point_m(q)
+	var b := mech_basis()
+	DirAccess.make_dir_recursive_absolute(dir)
+	var written := {}
+	for name in by_part:
+		var root := _part_root(name, by_part[name], at[name], b)
+		if name != "chassis":
+			var mount := Node3D.new()
+			mount.name = "mount"
+			root.add_child(mount)
+		var made := {}
+		for q in points:
+			if String(q.part) == name and q.kind == "socket" and not made.has(String(q.slot)):
+				made[String(q.slot)] = true
+				_game_node(root, "socket_" + String(q.slot), b * (_point_m(q) - (at[name] as Vector3)))
+		_own(root, root)
+		var ps := PackedScene.new()
+		var err := ps.pack(root)
+		root.free()
+		var path: String = dir + name + ".scn"
+		if err == OK:
+			err = ResourceSaver.save(ps, path)
+		if err != OK:
+			return {"ok": false, "why": "%s: %s" % [name, error_string(err)]}
+		written[name] = path
+	return {"ok": true, "dir": dir, "parts": written}
+
+
+## The reference mech: its joints as balls with their names, the bones between them, the
+## ground under it. Shown in mech mode (Mech > Reference mech), never saved or exported.
+func _draw_mech_ref() -> void:
+	if _mech_ref != null:
+		_mech_ref.queue_free()
+		_mech_ref = null
+	if recipe.kind != "mech" or not mech_ref_on or not is_inside_tree():
+		return
+	_mech_ref = Node3D.new()
+	_mech_ref.name = "MechReference"
+	add_child(_mech_ref)
+	_mech_ref.transform = world.get_chunk_transform(chunk)
+	var mat := StandardMaterial3D.new()
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	mat.albedo_color = Color(0.35, 0.85, 1.0, 0.8)
+	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	mat.no_depth_test = true
+	var j := {}
+	for part in MechReference.PARTS:
+		j[part] = mech_joint_m(part)
+	var ground := mech_origin() * Vector3(BrickPalette.STUD_M, BrickPalette.PLATE_M, BrickPalette.STUD_M)
+	var lines := ImmediateMesh.new()
+	lines.surface_begin(Mesh.PRIMITIVE_LINES, mat)
+	var bone := func(a: Vector3, b: Vector3) -> void:
+		lines.surface_add_vertex(a)
+		lines.surface_add_vertex(b)
+	for side in ["L", "R"]:
+		var hip: Vector3 = j["leg_" + side]
+		bone.call(hip, Vector3(hip.x, ground.y, hip.z))           # the leg, hip to ground
+		bone.call(j.chassis, hip)
+		bone.call(j.chassis, j["arm_" + side])
+		bone.call(j["arm_" + side], j["hand_" + side])            # the arm, shoulder to wrist
+		bone.call(j.head, j["pod_" + side])
+	bone.call(j.chassis, j.head)                                  # the spine
+	var half: float = MechReference.SHOULDER_HALF[mech_class] * BrickPalette.STUD_M
+	var corners := [Vector3(-half, 0, -half), Vector3(half, 0, -half), Vector3(half, 0, half), Vector3(-half, 0, half)]
+	for k in 4:
+		bone.call(ground + corners[k], ground + corners[(k + 1) % 4])
+	bone.call(ground, ground + Vector3(-half * 1.5, 0, 0))       # the way it faces
+	lines.surface_end()
+	var mi := MeshInstance3D.new()
+	mi.name = "Bones"
+	mi.mesh = lines
+	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	_mech_ref.add_child(mi)
+	for part in MechReference.PARTS:
+		var ball := MeshInstance3D.new()
+		var sm := SphereMesh.new()
+		sm.radius = 0.12
+		sm.height = 0.24
+		sm.radial_segments = 8
+		sm.rings = 4
+		ball.mesh = sm
+		ball.material_override = mat
+		ball.position = j[part]
+		_mech_ref.add_child(ball)
+		var label := Label3D.new()
+		label.name = "Joint_" + part
+		var spec: Dictionary = MechReference.SPEC[part]
+		label.text = String(spec.get("socket", "hips")) if part != "chassis" else "hips"
+		label.billboard = BaseMaterial3D.BILLBOARD_ENABLED
+		label.no_depth_test = true
+		label.font_size = 32
+		label.pixel_size = 0.004
+		label.modulate = Color(0.55, 0.9, 1.0)
+		label.position = j[part] + Vector3.UP * 0.25
+		_mech_ref.add_child(label)
+
+
+# ---------------------------------------------------------------------------
 # Trying catalogue parts on (Docs/ModularParts.md section 9)
 # ---------------------------------------------------------------------------
 
@@ -8405,20 +8702,29 @@ var _try_place := {}
 ## gun's part, no scene, or this is not a gun build. Trying this build's own saved part
 ## of a slot takes off what was tried there.
 func try_part(r: PartRecord) -> String:
-	if recipe.kind != "gun":
-		return "parts are tried on a gun build"
-	if r.family != "gun" or r.scale != "held" or not GUN_PARTS.has(r.slot):
-		return "%s is not a part of a held gun" % r.id
-	if String(part_ids.get(r.slot, "")) == r.id:
-		untry(r.slot)
+	var at := ""
+	if recipe.kind == "gun":
+		if r.family != "gun" or r.scale != "held" or not GUN_PARTS.has(r.slot):
+			return "%s is not a part of a held gun" % r.id
+		at = r.slot
+	elif recipe.kind == "mech":
+		if not r.family in ["mech", "pod"]:
+			return "%s is not a mech's part" % r.id
+		at = MechReference.part_for(r.slot, r.side, part_names[part_sel])
+		if at == "":
+			return "a mech has no %s %s" % [r.side, r.slot]
+	else:
+		return "parts are tried on a gun or a mech"
+	if String(part_ids.get(at, "")) == r.id:
+		untry(at)
 		return ""
 	var ps: PackedScene = null
 	if r.dir != "":
 		ps = ResourceLoader.load(r.dir + AssetGuns.PART_SCENE) as PackedScene
 	if ps == null:
 		return "%s has no scene" % r.id
-	tried[r.slot] = r
-	_tried_packed[r.slot] = ps
+	tried[at] = r
+	_tried_packed[at] = ps
 	_try_changed()
 	return ""
 
@@ -8466,34 +8772,47 @@ func try_text() -> String:
 	return "trying %s -- %s" % [", ".join(on), "all fit" if bad.is_empty() else "; ".join(bad)]
 
 
-## The part `slot` hangs from: its game host (GAME_HOST), own or tried, else the body.
+## The part `slot` hangs from: its game host (GAME_HOST; a mech's SPEC), own or tried,
+## else the body (the chassis).
 func _try_host(slot: String, by_part: Dictionary) -> String:
-	var h: String = GAME_HOST.get(slot, "body")
-	return h if by_part.has(h) or tried.has(h) else "body"
+	var root := "chassis" if recipe.kind == "mech" else "body"
+	var h: String = MechReference.SPEC.get(slot, {}).get("host", root) if recipe.kind == "mech" \
+			else GAME_HOST.get(slot, root)
+	return h if by_part.has(h) or tried.has(h) else root
+
+
+## The name of the socket `part` goes in on its host: a gun's slot, a mech's SPEC socket.
+func _socket_name(part: String) -> String:
+	return String(MechReference.SPEC[part].get("socket", "")) if recipe.kind == "mech" else part
+
+
+## A part scene's frame against the workshop's: guns real size, mechs at nano scale.
+func _scene_basis() -> Basis:
+	return mech_basis() if recipe.kind == "mech" else game_basis()
 
 
 ## Each own part's draw offset with tried parts on: where a tried host's socket puts it,
 ## against where it was built. Fills _try_place and fit_marks.
 func _try_offsets() -> Dictionary:
-	var by_part := _gun_bricks()
+	var by_part := _kind_bricks()
 	var at := _part_points(by_part)
-	var b_inv := game_basis().inverse()
+	var b_inv := _scene_basis().inverse()
 	var offset := {}
 	_try_place.clear()
 	_make_tried_nodes()
-	for slot: String in GUN_PARTS:
+	for slot: String in kind_parts():
 		var own := by_part.has(slot)
 		if not own and not tried.has(slot):
 			continue
 		var h := _try_host(slot, by_part)
-		if slot == "body" or not _try_place.has(h):
+		if slot == "body" or slot == "chassis" or not _try_place.has(h):
 			_try_place[slot] = at.get(slot, Vector3.ZERO)
 			offset[slot] = Vector3.ZERO
 			continue
 		var p: Vector3
 		if tried.has(h):
 			# On the tried host's own socket for it: where its own build had that part.
-			var sock := (_tried_nodes[h] as Node3D).get_node_or_null("socket_" + slot) as Node3D
+			var sock := (_tried_nodes[h] as Node3D).get_node_or_null("socket_" + _socket_name(slot)) as Node3D
 			p = (_try_place[h] as Vector3) + (b_inv * sock.position if sock != null else Vector3.ZERO)
 		else:
 			var built: Vector3 = at[slot] if own else _socket_point(h, slot, by_part, at)
@@ -8508,8 +8827,10 @@ func _try_offsets() -> Dictionary:
 ## for it, the tip for a muzzle, else the host's point.
 func _socket_point(host: String, slot: String, by_part: Dictionary, at: Dictionary) -> Vector3:
 	for q in points:
-		if String(q.part) == host and q.kind == "socket" and String(q.slot) == slot:
+		if String(q.part) == host and q.kind == "socket" and String(q.slot) == _socket_name(slot):
 			return _point_m(q)
+	if recipe.kind == "mech":
+		return mech_joint_m(slot)
 	if slot == "muzzle" and by_part.has(host):
 		return _tip(by_part[host], Vector3(-1 if muzzle_end == "-x" else 1, 0, 0))
 	return at.get(host, Vector3.ZERO)
@@ -8520,30 +8841,39 @@ func _socket_point(host: String, slot: String, by_part: Dictionary, at: Dictiona
 ## join by slot (GunPartDef.takes).
 func _check_fit(by_part: Dictionary) -> void:
 	fit_marks.clear()
-	var hosts := _game_hosts(by_part)
+	var mech := recipe.kind == "mech"
+	var hosts := {} if mech else _game_hosts(by_part)
 	var recs := {}
-	for slot: String in GUN_PARTS:
+	for slot: String in kind_parts():
 		if tried.has(slot):
 			recs[slot] = tried[slot]
 		elif by_part.has(slot):
-			recs[slot] = _part_record(slot, by_part, hosts, false)
+			recs[slot] = _mech_record(slot, by_part, false) if mech else _part_record(slot, by_part, hosts, false)
 	var sockets: Dictionary = PartStandards.plan("gun").get("sockets", {})
 	for slot: String in recs:
-		if slot == "body":
+		if slot == "body" or slot == "chassis":
 			continue
 		var h := _try_host(slot, by_part)
 		if not recs.has(h):
 			fit_marks[slot] = "nothing to hang from"
 			continue
-		var path := slot if sockets.has(slot) else "barrel/" + slot
-		fit_marks[slot] = fit_reason(recs[slot], recs[h], path)
+		var path := MechReference.path_of(slot) if mech else (slot if sockets.has(slot) else "barrel/" + slot)
+		fit_marks[slot] = fit_reason(recs[slot], recs[h], path, "mech" if mech else "gun")
+	# The whole build's rule (layer 2): both legs one length.
+	if mech and recs.has("leg_L") and recs.has("leg_R"):
+		var a: Variant = (recs.leg_L as PartRecord).param("length")
+		var b: Variant = (recs.leg_R as PartRecord).param("length")
+		if a != null and b != null and int(a) != int(b):
+			for leg in ["leg_L", "leg_R"]:
+				if fit_marks.get(leg, "") == "":
+					fit_marks[leg] = "legs %d and %d long" % [int(a), int(b)]
 
 
 ## Why `part` does not go on `host` at `path` ("" when it does), as the game decides.
-static func fit_reason(part: PartRecord, host: PartRecord, path: String) -> String:
+static func fit_reason(part: PartRecord, host: PartRecord, path: String, plan: String = "gun") -> String:
 	if not _declares(part) and not _declares(host):
 		return ""   # both from before interfaces: they join by slot
-	return PartFit.why_not(part, host, path, "gun")
+	return PartFit.why_not(part, host, path, plan)
 
 
 static func _declares(r: PartRecord) -> bool:
@@ -8603,7 +8933,7 @@ func _draw_tried() -> void:
 	_make_tried_nodes()
 	_tried_root.transform = world.get_chunk_transform(chunk)
 	var xo: Dictionary = explode_offsets() if exploded else {}
-	var b_inv := game_basis().inverse()
+	var b_inv := _scene_basis().inverse()
 	for slot in _tried_nodes:
 		(_tried_nodes[slot] as Node3D).transform = Transform3D(b_inv,
 				(_try_place.get(slot, Vector3.ZERO) as Vector3) + (xo.get(slot, Vector3.ZERO) as Vector3))
@@ -8652,7 +8982,7 @@ func parts_dir() -> String:
 	if _builds_dir != BuildRecipe.player_dir():
 		return _builds_dir + "parts/"
 	if _current_path.begins_with("res://"):
-		return PartCatalog.OFFICIAL_DIR + "gun/"
+		return PartCatalog.OFFICIAL_DIR + ("mech/" if recipe.kind == "mech" else "gun/")
 	return PartCatalog.CUSTOM_DIR
 
 
@@ -8668,7 +8998,7 @@ func _save_as(build_name: String, room_kind: String = "", tags: Dictionary = {})
 func _write(path: String) -> bool:
 	if not super._write(path):
 		return false
-	if recipe.kind == "gun":
+	if recipe.kind in ["gun", "mech"]:
 		save_parts()
 	return true
 
@@ -8679,24 +9009,25 @@ func _write(path: String) -> bool:
 func save_parts(dir: String = "") -> Dictionary:
 	if dir == "":
 		dir = parts_dir()
-	var by_part := _gun_bricks()
-	if not by_part.has("body"):
-		return {"ok": false, "why": "no body"}
+	var mech := recipe.kind == "mech"
+	var by_part := _kind_bricks()
+	if by_part.is_empty() or (not mech and not by_part.has("body")):
+		return {"ok": false, "why": "nothing built" if by_part.is_empty() else "no body"}
 	# The scenes as Export to game makes them, into a staging folder, each then moved into
 	# its part's folder. Staging has no part.json, so the catalogue never reads it.
 	var staging := dir + ".staging/"
-	var out := export_game(staging)
+	var out := export_mech(staging) if mech else export_game(staging)
 	if not out.get("ok", false):
 		return out
 	var official := dir.begins_with("res://")
-	var hosts := _game_hosts(by_part)
+	var hosts := {} if mech else _game_hosts(by_part)
 	var written := []
 	var kept := []
 	for name: String in by_part:
 		if not part_ids.has(name):
 			part_ids[name] = ("%s_%s" % [slug(recipe.name), name]) if official else ("%s.%s_%s.%s" % [
 					slug(creator_name), slug(recipe.name), name, _short_hash()])
-		var r := _part_record(name, by_part, hosts, official)
+		var r := _mech_record(name, by_part, official) if mech else _part_record(name, by_part, hosts, official)
 		# The scene too: shells, hand-put studs and where the parts on it sit change it
 		# without changing a brick of its own.
 		var sig := (_part_signature(r) + scene_signature(staging + name + ".scn")).md5_text()
@@ -9118,6 +9449,38 @@ func _studs_node(list: Array) -> MultiMeshInstance3D:
 	return mmi
 
 
+## One part as a game scene's root: at its point (`at`, the build's metres), its bricks
+## (and shell, and hand-put studs) under "Model" turned and sized by `b`. The caller adds
+## the mount and socket nodes.
+func _part_root(name: String, ids: Array, at: Vector3, b: Basis) -> Node3D:
+	var root := Node3D.new()
+	root.name = name
+	var model := Node3D.new()
+	model.name = "Model"
+	model.transform = Transform3D(b, -(b * at))
+	root.add_child(model)
+	# A mesh a frame the part has bricks in: sideways bricks are in grids of their own.
+	var groups := _by_frame(_uncovered(name, ids))
+	for af in groups:
+		var mi := _bake_part_mesh(groups[af], af)
+		if af != groups.keys()[0]:
+			mi.name = "Bricks%d" % af
+		model.add_child(mi)
+	if _shell_nodes.has(name):
+		# The shell, in the workshop metres the bricks are in; the bricks it covers left out.
+		var sh := MeshInstance3D.new()
+		sh.name = "Shell"
+		var src: MeshInstance3D = _shell_nodes[name]
+		sh.mesh = src.mesh
+		sh.material_override = src.material_override
+		sh.transform = world.get_chunk_transform(asm.frames[0]).affine_inverse() * src.transform
+		model.add_child(sh)
+	var extra := extra_studs.filter(func(st: Dictionary) -> bool: return String(st.get("part", "")) == name)
+	if not extra.is_empty():
+		model.add_child(_studs_node(extra))
+	return root
+
+
 ## Each part's point, in the build's metres: its mount, else the middle of its bricks.
 func _part_points(by_part: Dictionary) -> Dictionary:
 	var at := {}
@@ -9360,6 +9723,18 @@ func _build_menus() -> void:
 			["Next colour", ".", func() -> void: _hotbar.set_colour(_colour + 1)],
 			["Previous colour", ",", func() -> void: _hotbar.set_colour(_colour - 1)],
 			["Paint", "B", func() -> void: rail_pick("place" if _painting else "paint")],
+		]],
+		["Mech", [
+			["Class: light", "", func() -> void: set_mech_class("light")],
+			["Class: normal", "", func() -> void: set_mech_class("normal")],
+			["Class: heavy", "", func() -> void: set_mech_class("heavy")],
+			[],
+			["Legs: 1 long", "", func() -> void: set_leg_length(1)],
+			["Legs: 2 long", "", func() -> void: set_leg_length(2)],
+			["Legs: 3 long", "", func() -> void: set_leg_length(3)],
+			[],
+			["Lay the joints ready again", "", func() -> void: lay_ready_points()],
+			["Reference mech", "", func() -> void: set_mech_ref(not mech_ref_on)],
 		]],
 		["Gun", [
 			["Explode: pull the parts apart", "Alt E", func() -> void: set_exploded(not exploded)],
