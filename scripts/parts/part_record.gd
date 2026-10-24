@@ -52,6 +52,8 @@ var mass: float = 0.0
 ## Unix time of the save that made this rev: the catalogue's "newest".
 var saved: int = 0
 var extra: Dictionary = {}
+## The folder it was read from (PartCatalog), never saved: where its part.scn is.
+var dir: String = ""
 
 const _KNOWN := ["id", "rev", "family", "scale", "slot", "side", "mirrorable", "name",
 		"manufacturer", "class", "weapon_class", "pod_kind", "rarity", "source", "creator",

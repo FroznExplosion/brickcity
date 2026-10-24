@@ -6,10 +6,11 @@ mounts with and what it takes, and is found in one catalogue that filters and so
 for all of them. A gun or a mech in the game is an **assembly** the generator puts together from
 parts that fit, from a seed and a design (section 7).
 
-Status (2026-10-23): **stage 1 built** -- the part record, the fit check and the catalogue
-(`scripts/parts/`: `PartRecord`, `PartStandards`, `PartFit`, `PartCatalog`), checked by
-`tools/parts_probe.gd` (headless, 65 checks). Nothing uses them yet: stage 2 puts guns on them.
-Section 11 is the order the rest is built in.
+Status (2026-10-24): **stages 1 and 2 built.** The part record, the fit check and the
+catalogue (`scripts/parts/`, `tools/parts_probe.gd`, 65 checks); guns on them: the workshop's
+Save writes every part on its own, the generator and the assembler only put together parts
+that fit (`tools/part_save_probe.gd`, 34 checks). Section 11 is the order the rest is built in;
+"Stage 1 as built" and "Stage 2 as built" below say what differs from the plan.
 
 Builds on: [Parts/joints.md](Parts/joints.md) (joints, the one pin, hands),
 [Parts/standards.json](Parts/standards.json) (`gun_interfaces`, `gun_platforms`, `gun_adapters`,
@@ -315,7 +316,7 @@ interfaces.
 | # | Stage | Where |
 |---|---|---|
 | 1 | **Done.** The part record, the catalogue (facets, filter, sort), the fit check (layers 1-2), `mech_interfaces` / `figure_interfaces` / `mgun_interfaces` / `body_plans` in `standards.json`; `tools/parts_probe.gd` | `scripts/parts/` |
-| 2 | Guns on it: `GunAssembler` checks interfaces; Save writes each part on its own; designs with fixed and pool slots; `guns/` moved over | `scripts/guns/`, `asset_workshop.gd` |
+| 2 | **Done.** Guns on it: `GunAssembler` and the generator check interfaces; Save writes each part on its own; the game reads those parts (old `guns/` folders still load). Design files with fixed and pool slots moved to stage 6, where the generator first needs them | `scripts/guns/`, `asset_workshop.gd` |
 | 3 | The catalogue panel: filters, sort, custom and creator, the Fits toggle | UI, shared by workshop and inventory |
 | 4 | The workshop's anything-on-anything swap, with fit marks (section 9) | `asset_workshop.gd` |
 | 5 | The workshop's mech mode: slot, side, class, reference mech, ready mounts, test fit | `asset_workshop.gd` |
@@ -345,6 +346,39 @@ interfaces.
 - JSON has no ints: mount params that are whole numbers are read back as ints.
 - Not yet: a seed-stable order for the generator (new parts at the end, section 7) is stage 2's;
   the catalogue's lists are in id order.
+
+### Stage 2 as built
+
+- **Save** (Ctrl S, Save As) writes the build -- the workshop's own file, for opening it here
+  again; the game never reads it -- and then **every part on its own**:
+  `<parts dir>/<id>/part.json` + `part.scn`. The parts dir is `user://parts/custom/` for the
+  player's builds and `res://parts/gun/` for a shipped one (written only from the editor).
+  `AssetWorkshop.save_parts`.
+- A part's **id** is made on its first save and kept in the build (`meta.asset.part_ids`):
+  `<creator>.<build>_<part>.<8 hex>` for a custom part, `<build>_<part>` for a shipped one. The
+  creator is `player` until Steam names one (stage 10). Save As under another name, or a new
+  build, makes new ids; the old parts stay as they were.
+- A part **unchanged** since its last save is not written again. Unchanged means its record and
+  what its scene holds (nodes, places, mesh vertices, colours: `scene_signature`) -- not the
+  scene file, which is different bytes every save. A changed part's `rev` goes up by one.
+- A record holds: family `gun`, scale `held`, slot, maker, `custom` and its creator, the body's
+  weapon class (the workshop's Size), its mount interface and what each socket takes (from its J
+  points), `from` (the build it was last saved from), and its own bricks as a recipe.
+- **Fit in the game** (`GunPartDef.mount_interface`, `socket_accepts`, `takes`, `fits_recipe`):
+  parts that both say their interfaces join only on a shared one; parts from before interfaces
+  (every placeholder part, and a workshop part with no J points) join each other by slot as
+  always, and **never** a part that says its interfaces. The generator leaves an unfit part out
+  of every pool (`_pool_at`); the assembler leaves an unfit part off with a warning. 600 rolls
+  over six classes are the same, part for part, before and after.
+- **The game reads the parts** (`AssetGuns.designs`): parts saved from one build, by its name,
+  are that build's gun (T in the city), fenced to it as before, and made only if they fit
+  (`AssetGuns.why_not`). A build that half-says its interfaces (a body whose sockets take
+  `mag.narrow`, a magazine with no mount point) makes no gun, with the part that does not fit.
+- **Not in the random pools yet.** Workshop parts stay fenced to their own design. In the pools
+  they would change what every seed rolls on each machine by what is saved there; they join when
+  official parts ship (the same on every machine) and the lobby carries custom ones (stage 10).
+- **Old guns:** an exported `guns/<name>/` folder still loads. Open it in the workshop and Save,
+  and its parts are written; the parts win over the folder of the same name.
 
 ## 12. Decided
 

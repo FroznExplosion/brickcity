@@ -78,6 +78,47 @@ const SLOT_BY_SUFFIX: Dictionary[String, Slot] = {
 ## gun look like one and go on nothing else; empty fits any gun.
 @export var kind: StringName = &""
 
+@export_group("Fit")
+## The interface this part mounts with (standards.json gun_interfaces: &"mag.narrow" ...),
+## &"" for a part from before interfaces (Docs/ModularParts.md section 3).
+@export var mount_interface: StringName = &""
+## What each of its sockets takes: slot suffix ("barrel", "muzzle") -> interfaces.
+## Empty for a part from before interfaces.
+@export var socket_accepts: Dictionary = {}
+
+
+func fit_declared() -> bool:
+	return mount_interface != &"" or not socket_accepts.is_empty()
+
+
+## Does `part` go in this part's socket for `slot_name`? Parts that both say their
+## interfaces join only on a shared one. Parts from before interfaces join each other as
+## they always have, by slot -- and never a part that says its interfaces, so a workshop
+## part never lands on a placeholder gun, nor a placeholder part on a workshop gun.
+func takes(part: GunPartDef, slot_name: String) -> bool:
+	if not fit_declared() and not part.fit_declared():
+		return true
+	if part.mount_interface == &"" or not socket_accepts.has(slot_name):
+		return false
+	return String(part.mount_interface) in Array(socket_accepts[slot_name])
+
+
+## Does `part` fit a gun whose parts so far are `recipe` (Slot -> def)? On the body, or
+## for a muzzle or an underbarrel, on the barrel or the body, wherever there is a socket.
+static func fits_recipe(part: GunPartDef, recipe: Dictionary) -> bool:
+	var hosts: Array = [Slot.BODY]
+	if part.slot == Slot.MUZZLE or part.slot == Slot.UNDERBARREL:
+		hosts = [Slot.BARREL, Slot.BODY]
+	for h in hosts:
+		var host: GunPartDef = recipe.get(h)
+		if host != null and host.takes(part, slot_key(part.slot)):
+			return true
+	return false
+
+
+static func slot_key(s: Slot) -> String:
+	return SLOT_BY_SUFFIX.find_key(s)
+
 
 func fits_rarity(rarity: int) -> bool:
 	return rarity >= min_rarity and rarity <= max_rarity

@@ -988,6 +988,7 @@ does not change, so a build made here opens in the main workshop and the city as
 | `sketches` | each sketch: part, plane, where, thickness, areas drawn in and out (outlines, brush strokes, depth cuts), and its order (a part's first plane is its base) |
 | `part_bricks` | the bricks each part's sketches laid, so a change lays only what differs |
 | `studs` | studs put on by hand: part, foot, the way it faces, its brick's paint |
+| `part_ids`, `part_hashes`, `part_revs` | each part's id in the part catalogue, what it was when last saved and its rev: Save writes every part on its own ([ModularParts.md](ModularParts.md), "Stage 2 as built") |
 
 A photo is referred to by its path and is not copied: a bought or borrowed picture stays out of
 the repository.
