@@ -7,13 +7,21 @@ For the next chat picking this up. The plan and everything measured is in
 ## Where things are (struct-bugs)
 
 - Worktree `C:\Users\lbaun\bc-struct`, branch `struct-bugs`, everything committed and merged into
-  `main` (last merge `de3e794`, pushed). Main's DLL was rebuilt after the last C++ merge.
-- **The worktree's DLL is stale**: it was built from a temporary revert of the "hits on falling
-  pieces" commit (an A/B that was stopped for low memory). Before any run in the worktree:
-  `cd gdextension/brick && python -m SCons`, then `--headless --path . --import`.
+  `main` (last merge `d3d78df`, 2026-10-23, pushed). No C++ changed since the worktree's DLL was
+  built; after `git merge main`, rebuild only if main brought C++ (`python -m SCons` in
+  `gdextension/brick`), then `--headless --path . --import`.
+- A merge of main can stop on untracked `.uid` files that `--import` made in the worktree and
+  main now tracks: delete those (only the ones git names) and merge again.
 - `override.cfg` is in the worktree (test windows hands-off). Never in main.
 - Main has other areas' uncommitted files (`Docs/Status.md`, `project.godot`, the brickify pyc,
   `Docs/please rename/`, some `.uid`s): leave them.
+- The heat-aware runner for windowed passes: `gates_seq.sh` and `gate1.sh` in
+  `C:\Users\lbaun\AppData\Local\Temp\claude\C--Users-lbaun-Documents-brickcity\892fd689-e560-4645-be18-932f9272afb1\scratchpad\`
+  -- copy both to your own scratchpad and set `SP=` in both to it (`ROOT` is bc-struct).
+  `bash gates_seq.sh <name> <args joined by +>`, `big:` before the args for `big_city.tscn`
+  (e.g. `big:--lodbreak`, `--big+--shot`). It waits for heat under 80 C and for no other
+  windowed Godot, runs ONE pass under a 900 s timeout, prints its ok/FAIL and the heat of that
+  run. One call per command -- never chain two.
 
 ## The merged plan (2026-10-20) -- start here
 
@@ -37,6 +45,33 @@ bricks, replay 1506: the replay lays the whole building, the host only the store
 **2026-10-23:** 4 found and fixed -- see 4 below; `--lodbreak` 21. The replay FAIL above is gone
 since storey units' log commands (`--ring` 4 of 4, no FAIL line). Open, in order: 7-8, 9, 10,
 13-16; 6 waits for the user.
+
+**State 2026-10-23, end of the third chat -- the next chat starts here.** Merged and pushed
+(`d3d78df`). Done since the 10-22 state:
+- 4 (ghost walls from 110 m): partial towers drawn from their bricks past `DEMESH_RANGE`;
+  `--lodbreak` counts walls drawn where no brick is, with its own control (item 4 below).
+- 7-8 (performance), measured and two spikes cut (item 8 below): every tick over 25 ms now
+  prints what inside its biggest phase it was (`CityScene._spike_parts`); storeys laid a run a
+  `lay_band` (`BuildingRegistry._lay_runs` -- a shell piece made bricks was quadratic in
+  storeys, 68.5 ms for 34); a shell drawn from its bricks refreshed in place after a hit
+  (`_refresh_real_shell`, ~15 ms a time).
+
+**Open, in order:**
+1. **Re-time `--big --shot` on a quiet machine** (editor closed, NO other Godot -- check other
+   chats' processes, two were up for the last one; `--ring` ~14 s first). The one run after both
+   fixes said 16.8 ms mean, 5 of 906 over 33.3 ms (8-74 before); it is unreliable. Run 3 and
+   compare with the nine of 2026-10-23 in item 8 (16.8-20.2 ms, 8-74 over).
+2. **The rest of 8, from the spike lines** (`[prof] N tick(s) over 25 ms`): a stand-in's
+   `add_surface_from_arrays` stalling 9-216 ms (the renderer; idea: every stand-in through the
+   worker upload path, `IslandManager._submit_mesh_job`); a shell piece's split 5-17 ms
+   (`spawn` -> `split_island`; `adopt` would skip it but `spawn` holds the move caps, crumbling,
+   landmark rules and co-op piece ids -- ask the user first).
+3. **9: stagger the slab seams** (user's decision; design under item 9, columns and walls stay on
+   the lattice). A/B with `big_city.tscn -- --breakshape` and the part count before merging.
+4. 10, 13-16 as listed. 6 waits for the user to look in play.
+
+Two one-offs to watch for (item 8 below): `--lodbreak` "160 m: no stud drawn on a brick that has
+gone" on pieces still moving at the gate, and Godot crashing at exit after the results.
 
 Two chats worked on destruction: this branch (`struct-bugs`, DestructionLod.md) and `lod-collapse`
 (worktree `C:\Users\lbaun\Documents\brickcity\.claude\worktrees\lod-collapse`; CollapseNext.md items
