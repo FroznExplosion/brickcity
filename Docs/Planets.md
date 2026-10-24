@@ -1272,6 +1272,22 @@ main too: `AINav.field_dir` is zero everywhere (it takes only a neighbour strict
 the field's own parent, which ties exactly) -- the soldier's directed move and the animals that
 ask it get no direction; a fix moves the flat game, so it is its own change.
 
+**N2 built (2026-10-24).** `PlanetScene.setup_ai(dir)` (scripts/planet/planet_scene.gd): an
+`AIServices` on a `PlanetNavRegion` round `dir` -- the AIWorld framed on it (`planet transform *
+region frame`), the grid as its ground, the region's sea as the nav's water, the town's
+buildings inside it as proxy boxes (solid to walk round, bricks to hide behind; their own bricks
+in the AI's world are later work), ticked in `_physics_process` as the arena ticks; the floating
+origin's offset goes to `shift_origin`. Building the region is ~0.7 s in the scene, synchronous:
+fine for a gate, to move off the frame before the game sets one up mid-flight. Gate
+`--gate=squad` (headless, 10/10, 3 of 3 runs): the player at the town's edge, a squad of four
+set down 60 m off inside the town (after the ground's colliders stream in there -- dropped
+before, they fell into the planet); the nav's path to the player is on the ground within
+0.069 m; the squad sees the player, is ordered to ADVANCE, closes 15 m round the curve with its
+feet on the ground (99%), bounds into cover (hundreds of member-ticks still with bricks between
+the player's eye and their chests) and fires (first round ~10 s). The squad and tactics
+GDScript still read world `.y` there -- at the town 8° from the planet's up -- and work; N3 puts
+them on the local up.
+
 ### 11.9 Plan: biomes (2026-10-24)
 
 After STA's `PlanetFields` (temperature, humidity, a biome by climate, one baked map shared by the
