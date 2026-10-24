@@ -129,7 +129,6 @@ static func _build_lattice(footprint_x: int, footprint_z: int, courses: int) -> 
 	var mine: Array = []
 	var mine_few: Array = []
 	var m := WALL_MARGIN
-	var t := TowerRecipe.WALL_THICK
 	for entry in (pl.rooms as Array):
 		var r: Rect2i = entry
 		var inset := Rect2i(r.position + Vector2i(m, m), r.size - Vector2i(m, m) * 2)

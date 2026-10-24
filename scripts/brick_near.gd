@@ -408,6 +408,7 @@ func shadow_faults() -> Vector2i:
 
 ## One line for a pass's report.
 func report() -> String:
+	@warning_ignore("integer_division")
 	return ("%d chamfered band(s) built, %d held now (%d triangles), %d stud(s) in %d band(s); "
 			+ "cap %s (%dk triangles of %dk, %d of %d studs), %d bevel and %d stud visits turned away; "
 			+ "step %.3f ms mean, %.2f worst (take %.2f, hang %.2f, studs %.2f); "
