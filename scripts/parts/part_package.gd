@@ -44,6 +44,23 @@ const ALLOWED_ARRAYS := [Mesh.ARRAY_VERTEX, Mesh.ARRAY_NORMAL, Mesh.ARRAY_TANGEN
 ## Write the part in folder `dir` (part.json, part.scn) as a package at `out` (default
 ## EXPORT_DIR/<id>.bcpart). {ok, path, hash} or {ok: false, why}.
 static func export_part(dir: String, out: String = "") -> Dictionary:
+	var made := pack(dir)
+	if not made.ok:
+		return made
+	if out == "":
+		DirAccess.make_dir_recursive_absolute(EXPORT_DIR)
+		out = EXPORT_DIR + "%s.%s" % [made.id, EXT]
+	var f := FileAccess.open(out, FileAccess.WRITE)
+	if f == null:
+		return {"ok": false, "why": "cannot write %s: %s" % [out, error_string(FileAccess.get_open_error())]}
+	f.store_buffer(made.bytes)
+	f.close()
+	return {"ok": true, "path": out, "hash": made.hash}
+
+
+## The part in folder `dir` as a package, in memory: {ok, id, rev, hash, bytes} -- what is
+## written to a file, sent to a joining player in chunks, or hashed for the lobby.
+static func pack(dir: String) -> Dictionary:
 	var r := PartRecord.load_file(dir + PartCatalog.FILE)
 	if r == null:
 		return {"ok": false, "why": "no part in %s" % dir}
@@ -65,19 +82,29 @@ static func export_part(dir: String, out: String = "") -> Dictionary:
 		manifest.files[f] = _sha(files[f])
 	manifest["hash"] = content_hash(manifest.files)
 	files["manifest.json"] = _canon(manifest)
-	if out == "":
-		DirAccess.make_dir_recursive_absolute(EXPORT_DIR)
-		out = EXPORT_DIR + "%s.%s" % [r.id, EXT]
+	var tmp := "user://.bcpart_%d.tmp" % Time.get_ticks_usec()
 	var zip := ZIPPacker.new()
-	var err := zip.open(out)
+	var err := zip.open(tmp)
 	if err != OK:
-		return {"ok": false, "why": "cannot write %s: %s" % [out, error_string(err)]}
+		return {"ok": false, "why": "cannot pack: %s" % error_string(err)}
 	for f: String in files:
 		zip.start_file(f)
 		zip.write_file(files[f])
 		zip.close_file()
 	zip.close()
-	return {"ok": true, "path": out, "hash": manifest.hash}
+	var bytes := FileAccess.get_file_as_bytes(tmp)
+	DirAccess.remove_absolute(tmp)
+	return {"ok": true, "id": r.id, "rev": r.rev, "hash": manifest.hash, "bytes": bytes}
+
+
+## The content hash of the part in `dir`: the imported package's, else worked out (a part
+## made here). "" if it is not a part.
+static func hash_for(dir: String) -> String:
+	var h := hash_of(dir)
+	if h != "":
+		return h
+	var made := pack(dir)
+	return String(made.hash) if made.ok else ""
 
 
 ## The identity of a part's content: the sha256 of its files' hashes, in name order. The
