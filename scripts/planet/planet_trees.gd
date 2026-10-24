@@ -216,11 +216,15 @@ func _free_cell(key: Vector3i) -> void:
 	_cells.erase(key)
 
 
-## Box colliders on a cell's trunks, one StaticBody for the cell.
+## Box colliders on a cell's trunks, one StaticBody for the cell. On FIXTURE:
+## walkers and bullets meet a trunk, nothing that falls does, and vehicles
+## (WORLD | STRUCTURE | DEBRIS) drive through for now. (On WORLD the planet's
+## squad gate failed -- the squad never ordered on -- with the nearest trunk 89 m
+## from anyone; the cause was not found.)
 func _make_solid(key: Vector3i) -> void:
 	var c: Dictionary = _cells[key]
 	var body := StaticBody3D.new()
-	body.collision_layer = Layers.WORLD
+	body.collision_layer = Layers.FIXTURE
 	body.collision_mask = 0
 	(c.node as Node3D).add_child(body)
 	for t in c.trees:

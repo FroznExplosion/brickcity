@@ -1426,5 +1426,7 @@ over a biome's cells: the sea and beaches take the rest (a third of this planet 
 `tools/planet_tree_probe.gd` 12/12. The walker gate's shots show them from the ground, the town
 and 300 m. Windowed frame times were not judged: both the A/B runs (`-- --no-trees` and with)
 had the same 250 / 750 ms frames at the spawn, the display-sleep stall of a run nobody watches.
-Not yet: trees in the AI's world (they are not cover or obstacles to the nav), trees on the
+Trunks are on FIXTURE (walkers and bullets meet them; vehicles drive through for now -- on WORLD the
+squad gate failed with the nearest trunk 89 m away, cause not found). Not yet: trees in the AI's
+world (they are not cover or obstacles to the nav), trees on the
 impostor from orbit (the biome colour stands for them).
