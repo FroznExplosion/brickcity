@@ -1251,8 +1251,26 @@ nav (`VehicleNav`), `VehicleCover` -- after N2.
 **11.8 state (2026-10-24):** N1b's GDScript half is built -- `PlanetNavRegion`
 (scripts/planet/planet_nav_region.gd): a 1024-stud region's tangent frame and its ground as
 257 x 257 heights in it, built in 222 ms; on the ground within 2.4 mm, 1.3 cm between samples,
-corners 1.45° (tools/planet_nav_grid_probe.gd, 9/9). N1, the C++ half of N1b, N2-N4: open;
-Docs/HandoffPlanetNav.md carries them.
+corners 1.45° (tools/planet_nav_grid_probe.gd, 9/9).
+
+**N1 and N1b's C++ half built (2026-10-24).** `AIWorld.set_frame(region_to_world)`: every
+bound method of AIWorld and AINav is a thin `_b_` wrapper -- unframed it calls straight
+through (no transform, the flat game bit-identical: the flat AI probes unchanged); framed,
+positions in through the inverse, positions, paths, breaches, cover and peek points out through
+the frame, `field_dir` through its basis, proxies, smoke and danger boxes into the region,
+`invalidate_box` into the region with `nav_changed` still carrying the world box. AINav's own
+calls into AIWorld are C++ and never converted twice. `sync()` puts chunks in the region;
+framed, `shift_origin` moves the frame's origin and nothing inside. `top_at` / `ground_at`
+stay region-local; their world forms are `ground_under(point)` (was `p.y = ground_at(p.x,
+p.z)`, exact unframed) and `top_over(point)`. `set_ground_grid(origin, step, size, heights)`:
+`_ground_plate` reads the grid bilinearly at the stud's centre; outside it the ground is a wall
+256 plates over the region's highest ground. Probe `tools/planet_nav_frame_probe.gd` (headless,
+18/18): a framed path between two world points is the unframed nav's path over the same grid
+moved by the frame (0.0000 m), its points within 0.105 m of `PlanetData.height`; snap, cover,
+trace, danger, nav_changed, the edge and a re-centre all in world values. Found on the way, on
+main too: `AINav.field_dir` is zero everywhere (it takes only a neighbour strictly cheaper than
+the field's own parent, which ties exactly) -- the soldier's directed move and the animals that
+ask it get no direction; a fix moves the flat game, so it is its own change.
 
 ### 11.9 Plan: biomes (2026-10-24)
 

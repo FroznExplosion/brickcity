@@ -23,6 +23,7 @@
 #include <godot_cpp/variant/packed_float32_array.hpp>
 #include <godot_cpp/variant/packed_vector3_array.hpp>
 #include <godot_cpp/variant/transform3d.hpp>
+#include <godot_cpp/variant/vector2.hpp>
 
 #include <cstdint>
 #include <unordered_map>
@@ -135,8 +136,15 @@ public:
 
     void set_terrain_ground(bool on);
     bool get_terrain_ground() const { return terrain_ground; }
-    /// The top of the ground over (x, z) in metres: 0 without terrain.
+    /// The top of the ground over (x, z) in metres: 0 without terrain. Region
+    /// values (set_frame): from GDScript, ground_under is the world's form.
     float ground_at(float x, float z);
+    /// `point` moved along the region's up onto the ground under it -- what
+    /// `p.y = ground_at(p.x, p.z)` was, in world values. Unframed it is exactly that.
+    Vector3 ground_under(const Vector3 &point);
+    /// The highest top over `point` (top_at) as a height along the region's
+    /// up: a world point over `point` at that top, or INF with nothing there.
+    Vector3 top_over(const Vector3 &point);
     /// Does the ground rise between two points? The terrain half of
     /// line_clear, for eyes that see bricks some other way (physics rays):
     /// the field is everywhere, its colliders only where the detail tier is.
@@ -150,10 +158,38 @@ public:
     /// BrickWorld. The terrain field stays where it is: the ground is asked at
     /// the stud column the offset puts it at, so X and Z must be whole studs. Y
     /// moves boxes only: columns count plates up from y = 0 (column_solid), so a
-    /// vertical shift is a datum this flat AI does not have.
+    /// vertical shift is a datum this flat AI does not have. Framed (a planet,
+    /// set_frame), the frame's origin moves instead and nothing inside does.
     void shift_origin(const Vector3 &offset);
     /// Studs between the scene's columns and the field's (X, Z).
     Vector2i get_ground_shift() const { return Vector2i(ground_dx, ground_dz); }
+
+    // --- a region frame (Docs/Planets.md 11.8, N1) ----------------------------
+    //
+    // On a planet the AI sees the world through a flat REGION: inside, every
+    // query, column and cache is the region's flat world (+Y up, plates from
+    // 0); the bound methods take and return WORLD values, converted at the
+    // boundary by the `_b_` wrappers below. C++ callers (AINav) talk region
+    // values to the unwrapped methods, so nothing is converted twice. With the
+    // frame identity (the flat game) every wrapper calls straight through.
+
+    /// Region -> world. Forgets the broad phase (sync() again) and the ground.
+    void set_frame(const Transform3D &region_to_world);
+    Transform3D get_frame() const { return frame; }
+    bool is_framed() const { return framed; }
+    Vector3 to_region(const Vector3 &p) const { return framed ? frame_inv.xform(p) : p; }
+    Vector3 to_world(const Vector3 &p) const { return framed ? frame.xform(p) : p; }
+    Vector3 dir_to_world(const Vector3 &d) const { return framed ? frame.basis.xform(d) : d; }
+    AABB box_to_region(const AABB &b) const { return framed ? frame_inv.xform(b) : b; }
+
+    /// The ground as a grid of heights in the region (N1b, PlanetNavRegion):
+    /// `size` x `size` samples `step` metres apart from region (x, z) =
+    /// `origin`, row by row along +X then +Z. With terrain ground on, a stud
+    /// column's ground is the grid read bilinearly at its centre in place of
+    /// BrickTerrain's field; outside the grid it is a wall no body climbs.
+    /// An empty `heights` goes back to the field.
+    void set_ground_grid(const Vector2 &origin, float step, int size, const PackedFloat32Array &heights);
+    bool has_ground_grid() const { return grid_size > 0; }
 
     // --- measuring ----------------------------------------------------------
 
@@ -161,6 +197,37 @@ public:
     void reset_stats();
 
 private:
+    // The bound forms of the queries above: world in, world out (set_frame).
+    Dictionary _b_trace(const Vector3 &from, const Vector3 &to);
+    int _b_bricks_between(const Vector3 &from, const Vector3 &to);
+    bool _b_line_clear(const Vector3 &from, const Vector3 &to);
+    float _b_cover_seconds(const Vector3 &from, const Vector3 &to, int hp_per_hit,
+            float hits_per_second);
+    PackedFloat32Array _b_cover_seconds_batch(const Vector3 &from, const PackedVector3Array &to,
+            int hp_per_hit, float hits_per_second);
+    void _b_set_proxy(int id, const Transform3D &xform, const Vector3 &size, float bricks_per_metre);
+    void _b_set_cover(int id, const Transform3D &xform, const Vector3 &size, float bricks_per_metre);
+    void _b_set_smoke(int id, const Vector3 &centre, float radius);
+    bool _b_smoke_blocks(const Vector3 &from, const Vector3 &to) const;
+    void _b_set_danger(int id, const AABB &box);
+    bool _b_in_danger(const Vector3 &point) const;
+    float _b_danger_distance(const Vector3 &point) const;
+    bool _b_solid_at(const Vector3 &point);
+    Vector2i _b_block_at(const Vector3 &point);
+    bool _b_ground_blocks(const Vector3 &from, const Vector3 &to);
+
+    bool framed = false;
+    Transform3D frame;       // region -> world
+    Transform3D frame_inv;   // world -> region
+
+    // set_ground_grid.
+    Vector2 grid_origin;
+    float grid_step = 1.0f;
+    int grid_size = 0;
+    std::vector<float> grid_heights;
+    int grid_wall = 0;   // the plate a column outside the grid is solid up to
+    int _grid_plate(int gx, int gz) const;
+
     struct ChunkEntry {
         int chunk = -1;
         AABB box;

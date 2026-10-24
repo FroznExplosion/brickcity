@@ -39,41 +39,227 @@ void AIWorld::_bind_methods() {
     ClassDB::bind_method(D_METHOD("get_world"), &AIWorld::get_world);
     ClassDB::bind_method(D_METHOD("sync"), &AIWorld::sync);
     ClassDB::bind_method(D_METHOD("get_indexed_chunks"), &AIWorld::get_indexed_chunks);
-    ClassDB::bind_method(D_METHOD("trace", "from", "to"), &AIWorld::trace);
-    ClassDB::bind_method(D_METHOD("bricks_between", "from", "to"), &AIWorld::bricks_between);
-    ClassDB::bind_method(D_METHOD("line_clear", "from", "to"), &AIWorld::line_clear);
+    ClassDB::bind_method(D_METHOD("trace", "from", "to"), &AIWorld::_b_trace);
+    ClassDB::bind_method(D_METHOD("bricks_between", "from", "to"), &AIWorld::_b_bricks_between);
+    ClassDB::bind_method(D_METHOD("line_clear", "from", "to"), &AIWorld::_b_line_clear);
     ClassDB::bind_method(D_METHOD("cover_seconds", "from", "to", "hp_per_hit", "hits_per_second"),
-            &AIWorld::cover_seconds);
+            &AIWorld::_b_cover_seconds);
     ClassDB::bind_method(D_METHOD("cover_seconds_batch", "from", "to", "hp_per_hit",
                                  "hits_per_second"),
-            &AIWorld::cover_seconds_batch);
+            &AIWorld::_b_cover_seconds_batch);
     ClassDB::bind_method(D_METHOD("set_proxy", "id", "xform", "size", "bricks_per_metre"),
-            &AIWorld::set_proxy);
+            &AIWorld::_b_set_proxy);
     ClassDB::bind_method(D_METHOD("set_cover", "id", "xform", "size", "bricks_per_metre"),
-            &AIWorld::set_cover);
+            &AIWorld::_b_set_cover);
     ClassDB::bind_method(D_METHOD("remove_proxy", "id"), &AIWorld::remove_proxy);
     ClassDB::bind_method(D_METHOD("clear_proxies"), &AIWorld::clear_proxies);
     ClassDB::bind_method(D_METHOD("get_proxy_count"), &AIWorld::get_proxy_count);
-    ClassDB::bind_method(D_METHOD("set_smoke", "id", "centre", "radius"), &AIWorld::set_smoke);
+    ClassDB::bind_method(D_METHOD("set_smoke", "id", "centre", "radius"), &AIWorld::_b_set_smoke);
     ClassDB::bind_method(D_METHOD("shift_origin", "offset"), &AIWorld::shift_origin);
     ClassDB::bind_method(D_METHOD("get_ground_shift"), &AIWorld::get_ground_shift);
     ClassDB::bind_method(D_METHOD("remove_smoke", "id"), &AIWorld::remove_smoke);
     ClassDB::bind_method(D_METHOD("clear_smoke"), &AIWorld::clear_smoke);
-    ClassDB::bind_method(D_METHOD("smoke_blocks", "from", "to"), &AIWorld::smoke_blocks);
-    ClassDB::bind_method(D_METHOD("set_danger", "id", "box"), &AIWorld::set_danger);
+    ClassDB::bind_method(D_METHOD("smoke_blocks", "from", "to"), &AIWorld::_b_smoke_blocks);
+    ClassDB::bind_method(D_METHOD("set_danger", "id", "box"), &AIWorld::_b_set_danger);
     ClassDB::bind_method(D_METHOD("remove_danger", "id"), &AIWorld::remove_danger);
     ClassDB::bind_method(D_METHOD("clear_danger"), &AIWorld::clear_danger);
-    ClassDB::bind_method(D_METHOD("in_danger", "point"), &AIWorld::in_danger);
-    ClassDB::bind_method(D_METHOD("danger_distance", "point"), &AIWorld::danger_distance);
-    ClassDB::bind_method(D_METHOD("block_at", "point"), &AIWorld::block_at);
-    ClassDB::bind_method(D_METHOD("solid_at", "point"), &AIWorld::solid_at);
+    ClassDB::bind_method(D_METHOD("in_danger", "point"), &AIWorld::_b_in_danger);
+    ClassDB::bind_method(D_METHOD("danger_distance", "point"), &AIWorld::_b_danger_distance);
+    ClassDB::bind_method(D_METHOD("block_at", "point"), &AIWorld::_b_block_at);
+    ClassDB::bind_method(D_METHOD("solid_at", "point"), &AIWorld::_b_solid_at);
     ClassDB::bind_method(D_METHOD("top_at", "x", "z"), &AIWorld::top_at);
     ClassDB::bind_method(D_METHOD("set_terrain_ground", "on"), &AIWorld::set_terrain_ground);
     ClassDB::bind_method(D_METHOD("get_terrain_ground"), &AIWorld::get_terrain_ground);
     ClassDB::bind_method(D_METHOD("ground_at", "x", "z"), &AIWorld::ground_at);
-    ClassDB::bind_method(D_METHOD("ground_blocks", "from", "to"), &AIWorld::ground_blocks);
+    ClassDB::bind_method(D_METHOD("ground_blocks", "from", "to"), &AIWorld::_b_ground_blocks);
+    ClassDB::bind_method(D_METHOD("ground_under", "point"), &AIWorld::ground_under);
+    ClassDB::bind_method(D_METHOD("top_over", "point"), &AIWorld::top_over);
+    ClassDB::bind_method(D_METHOD("set_frame", "region_to_world"), &AIWorld::set_frame);
+    ClassDB::bind_method(D_METHOD("get_frame"), &AIWorld::get_frame);
+    ClassDB::bind_method(D_METHOD("is_framed"), &AIWorld::is_framed);
+    ClassDB::bind_method(D_METHOD("set_ground_grid", "origin", "step", "size", "heights"),
+            &AIWorld::set_ground_grid);
+    ClassDB::bind_method(D_METHOD("has_ground_grid"), &AIWorld::has_ground_grid);
     ClassDB::bind_method(D_METHOD("get_stats"), &AIWorld::get_stats);
     ClassDB::bind_method(D_METHOD("reset_stats"), &AIWorld::reset_stats);
+}
+
+// --- the bound forms: world values in and out (set_frame) ---------------------
+//
+// Unframed, each calls straight through: the flat game takes exactly the path
+// it always has.
+
+Dictionary AIWorld::_b_trace(const Vector3 &from, const Vector3 &to) {
+    if (!framed) {
+        return trace(from, to);
+    }
+    Dictionary out = trace(frame_inv.xform(from), frame_inv.xform(to));
+    out["point"] = frame.xform((Vector3)out["point"]);
+    return out;
+}
+
+int AIWorld::_b_bricks_between(const Vector3 &from, const Vector3 &to) {
+    if (!framed) {
+        return bricks_between(from, to);
+    }
+    return bricks_between(frame_inv.xform(from), frame_inv.xform(to));
+}
+
+bool AIWorld::_b_line_clear(const Vector3 &from, const Vector3 &to) {
+    if (!framed) {
+        return line_clear(from, to);
+    }
+    return line_clear(frame_inv.xform(from), frame_inv.xform(to));
+}
+
+float AIWorld::_b_cover_seconds(const Vector3 &from, const Vector3 &to, int hp_per_hit,
+        float hits_per_second) {
+    if (!framed) {
+        return cover_seconds(from, to, hp_per_hit, hits_per_second);
+    }
+    return cover_seconds(frame_inv.xform(from), frame_inv.xform(to), hp_per_hit, hits_per_second);
+}
+
+PackedFloat32Array AIWorld::_b_cover_seconds_batch(const Vector3 &from,
+        const PackedVector3Array &to, int hp_per_hit, float hits_per_second) {
+    if (!framed) {
+        return cover_seconds_batch(from, to, hp_per_hit, hits_per_second);
+    }
+    PackedVector3Array local;
+    local.resize(to.size());
+    for (int i = 0; i < to.size(); ++i) {
+        local.set(i, frame_inv.xform(to[i]));
+    }
+    return cover_seconds_batch(frame_inv.xform(from), local, hp_per_hit, hits_per_second);
+}
+
+void AIWorld::_b_set_proxy(int id, const Transform3D &xform, const Vector3 &size,
+        float bricks_per_metre) {
+    if (!framed) {
+        set_proxy(id, xform, size, bricks_per_metre);
+        return;
+    }
+    set_proxy(id, frame_inv * xform, size, bricks_per_metre);
+}
+
+void AIWorld::_b_set_cover(int id, const Transform3D &xform, const Vector3 &size,
+        float bricks_per_metre) {
+    if (!framed) {
+        set_cover(id, xform, size, bricks_per_metre);
+        return;
+    }
+    set_cover(id, frame_inv * xform, size, bricks_per_metre);
+}
+
+void AIWorld::_b_set_smoke(int id, const Vector3 &centre, float radius) {
+    set_smoke(id, framed ? frame_inv.xform(centre) : centre, radius);
+}
+
+bool AIWorld::_b_smoke_blocks(const Vector3 &from, const Vector3 &to) const {
+    if (!framed) {
+        return smoke_blocks(from, to);
+    }
+    return smoke_blocks(frame_inv.xform(from), frame_inv.xform(to));
+}
+
+void AIWorld::_b_set_danger(int id, const AABB &box) {
+    if (!framed) {
+        set_danger(id, box);
+        return;
+    }
+    set_danger(id, frame_inv.xform(box));
+}
+
+bool AIWorld::_b_in_danger(const Vector3 &point) const {
+    return in_danger(framed ? frame_inv.xform(point) : point);
+}
+
+float AIWorld::_b_danger_distance(const Vector3 &point) const {
+    return danger_distance(framed ? frame_inv.xform(point) : point);
+}
+
+bool AIWorld::_b_solid_at(const Vector3 &point) {
+    return solid_at(framed ? frame_inv.xform(point) : point);
+}
+
+Vector2i AIWorld::_b_block_at(const Vector3 &point) {
+    return block_at(framed ? frame_inv.xform(point) : point);
+}
+
+bool AIWorld::_b_ground_blocks(const Vector3 &from, const Vector3 &to) {
+    if (!framed) {
+        return ground_blocks(from, to);
+    }
+    return ground_blocks(frame_inv.xform(from), frame_inv.xform(to));
+}
+
+Vector3 AIWorld::ground_under(const Vector3 &point) {
+    if (!framed) {
+        return Vector3(point.x, ground_at(point.x, point.z), point.z);
+    }
+    const Vector3 l = frame_inv.xform(point);
+    return frame.xform(Vector3(l.x, ground_at(l.x, l.z), l.z));
+}
+
+Vector3 AIWorld::top_over(const Vector3 &point) {
+    const Vector3 l = to_region(point);
+    const float top = top_at(l.x, l.z);
+    if (!std::isfinite(top)) {
+        return Vector3(INFINITY, INFINITY, INFINITY);
+    }
+    return to_world(Vector3(l.x, top, l.z));
+}
+
+void AIWorld::set_frame(const Transform3D &region_to_world) {
+    frame = region_to_world;
+    frame_inv = region_to_world.affine_inverse();
+    framed = region_to_world != Transform3D();
+    // The chunks' boxes are in the region: the next sync() puts them there.
+    chunk_entries.clear();
+    hash.clear();
+    ground_cache.clear();
+}
+
+void AIWorld::set_ground_grid(const Vector2 &origin, float step, int size,
+        const PackedFloat32Array &heights) {
+    ground_cache.clear();
+    if (size < 2 || step <= 0.0f || heights.size() < (int64_t)size * size) {
+        grid_size = 0;
+        grid_heights.clear();
+        return;
+    }
+    grid_origin = origin;
+    grid_step = step;
+    grid_size = size;
+    grid_heights.assign(heights.ptr(), heights.ptr() + (int64_t)size * size);
+    float top = 0.0f;
+    for (float h : grid_heights) {
+        top = std::max(top, h);
+    }
+    // Outside: solid to well over anything inside, past any step or drop a
+    // map allows -- a path never leaves the region.
+    grid_wall = (int)std::ceil(top / brick::PLATE_M) + 256;
+}
+
+// The first plate of air over stud column (gx, gz): the grid read bilinearly
+// at the stud's centre, as PlanetNavRegion.ground_at reads it.
+int AIWorld::_grid_plate(int gx, int gz) const {
+    const float fx = ((gx + 0.5f) * brick::STUD_M - grid_origin.x) / grid_step;
+    const float fz = ((gz + 0.5f) * brick::STUD_M - grid_origin.y) / grid_step;
+    const float last = (float)(grid_size - 1);
+    if (!(fx >= 0.0f && fz >= 0.0f && fx <= last && fz <= last)) {
+        return grid_wall;
+    }
+    const int i = std::min((int)fx, grid_size - 2);
+    const int j = std::min((int)fz, grid_size - 2);
+    const float sx = fx - (float)i;
+    const float sz = fz - (float)j;
+    const float *row0 = grid_heights.data() + (size_t)j * grid_size + i;
+    const float *row1 = row0 + grid_size;
+    const float a = row0[0] + (row0[1] - row0[0]) * sx;
+    const float b = row1[0] + (row1[1] - row1[0]) * sx;
+    const float h = a + (b - a) * sz;
+    return std::max(0, (int)std::lround(h / brick::PLATE_M));
 }
 
 void AIWorld::set_world(const Ref<BrickWorld> &p_world) {
@@ -101,9 +287,16 @@ void AIWorld::sync() {
         ChunkEntry e;
         e.chunk = id;
         e.dims = c.dims;
-        e.inv = c.xform.affine_inverse();
         const AABB local(Vector3(), Vector3(c.dims.x * cs.x, c.dims.y * cs.y, c.dims.z * cs.z));
-        e.box = c.xform.xform(local);
+        if (framed) {
+            // Chunk -> region: the AI's whole world is the region's.
+            const Transform3D xf = frame_inv * c.xform;
+            e.inv = xf.affine_inverse();
+            e.box = xf.xform(local);
+        } else {
+            e.inv = c.xform.affine_inverse();
+            e.box = c.xform.xform(local);
+        }
         const int index = (int)chunk_entries.size();
         chunk_entries.push_back(e);
         const int x0 = (int)std::floor(e.box.position.x / HASH_CELL);
@@ -481,6 +674,15 @@ bool AIWorld::smoke_blocks(const Vector3 &from, const Vector3 &to) const {
 }
 
 void AIWorld::shift_origin(const Vector3 &offset) {
+    if (framed) {
+        // A planet's re-centre: the region moves with the scene, and inside it
+        // nothing moves -- every box is the region's already.
+        frame.origin += offset;
+        frame_inv = frame.affine_inverse();
+        chunk_entries.clear();
+        hash.clear();
+        return;
+    }
     for (auto &kv : proxies) {
         Proxy &p = kv.second;
         p.xform.origin += offset;
@@ -769,7 +971,9 @@ int AIWorld::_ground_plate(int gx, int gz) {
     // The first plate of AIR: `surface_plate` is the top solid one. Never below
     // plate 0 -- navigation counts plates up from there, and a seabed below
     // the city's datum is somewhere nobody walks anyway.
-    const int g = std::max(0, BrickTerrain::surface_plate(gx - ground_dx, gz - ground_dz) + 1);
+    const int g = grid_size > 0
+            ? _grid_plate(gx, gz)
+            : std::max(0, BrickTerrain::surface_plate(gx - ground_dx, gz - ground_dz) + 1);
     ground_cache.emplace(k, g);
     return g;
 }
