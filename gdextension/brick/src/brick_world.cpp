@@ -533,6 +533,14 @@ int BrickWorld::place_block(int chunk_id, Vector3i cell, int archetype_id, int c
         }
     }
 
+    // A bake or stand-in worker may be walking this block list, and the
+    // push_back below can move it: they read freed memory and the game died
+    // (a close-up break of 20-30 rooms, whose furniture lands here as
+    // DECORATIVE blocks -- which never waited at all). Wait first; what they
+    // made is kept here and dropped below if this block changes the geometry.
+    if (!bake_jobs.empty() || !coarse_jobs.empty()) {
+        join_chunk_readers(chunk_id);
+    }
     const int32_t id = (int32_t)c.blocks.size();
     Block b;
     b.cell = cell;
@@ -574,8 +582,8 @@ int BrickWorld::place_block(int chunk_id, Vector3i cell, int archetype_id, int c
         return id;
     }
     c.bake.valid = false;
-    // A bake running against the old geometry is now worthless, and it is
-    // reading the very arrays this call just wrote. Join it and drop it.
+    // A bake made from the old geometry is now worthless: drop it (joined
+    // above, before the arrays were written).
     // `place_block` is called once per block when an island is cut out of a
     // building, so this check is on the hottest path there is. Scanning the job
     // list is only worth it when there is a job.
@@ -607,6 +615,10 @@ bool BrickWorld::remove_block(int chunk_id, int block_id) {
     }
     const Archetype &a = archetypes[b.archetype];
     const Vector3i base = b.cell - c.origin;
+    // Workers reading this chunk finish before its cells change (place_block).
+    if (!bake_jobs.empty() || !coarse_jobs.empty()) {
+        join_chunk_readers(chunk_id);
+    }
     // What its joints reached, asked while its cells are still its own.
     std::vector<int32_t> touching;
     const bool keep_joints = joint_cache[chunk_id].valid;
@@ -2117,6 +2129,19 @@ void BrickWorld::settle_bake_job(int chunk_id, bool adopt) {
         }
         bake_jobs.erase(bake_jobs.begin() + (long)i);
         return;
+    }
+}
+
+void BrickWorld::join_chunk_readers(int chunk_id) {
+    for (auto &j : bake_jobs) {
+        if (j->chunk_id == chunk_id && j->worker.joinable()) {
+            j->worker.join();
+        }
+    }
+    for (auto &j : coarse_jobs) {
+        if (j->chunk_id == chunk_id && j->worker.joinable()) {
+            j->worker.join();
+        }
     }
 }
 

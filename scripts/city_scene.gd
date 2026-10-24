@@ -698,6 +698,7 @@ const TERRAIN_SEED := 20260921
 var _terrain_streamer: TerrainStreamer = null
 ## The same streamer under the name the terrain dev menu reads (a host whose
 ## detail square follows the camera: terrain_dev_menu.gd's header).
+@warning_ignore("unused_private_class_variable")
 var _streamer: TerrainStreamer:
 	get:
 		return _terrain_streamer
@@ -2830,7 +2831,7 @@ func _build_owed_glass() -> void:
 	var here := camera.global_position if camera != null else Vector3.ZERO
 	var swap_at := SHELL_DETAIL_RANGE + SHELL_HYSTERESIS
 	var live: Array = []
-	var ready: Array = []   ## [distance, index into live]
+	var due: Array = []   ## [distance, index into live]
 	for owed in _glass_owed:
 		var mi = owed[0]
 		var id: int = owed[1]
@@ -2843,13 +2844,13 @@ func _build_owed_glass() -> void:
 		live.append(owed)
 		var dist := b.xform.origin.distance_to(here)
 		if dist <= swap_at:
-			ready.append([dist, live.size() - 1])
+			due.append([dist, live.size() - 1])
 	_glass_owed = live
-	if ready.is_empty():
+	if due.is_empty():
 		return
-	ready.sort_custom(func(a: Array, c: Array) -> bool: return float(a[0]) < float(c[0]))
+	due.sort_custom(func(a: Array, c: Array) -> bool: return float(a[0]) < float(c[0]))
 	var taken := {}
-	for r in ready:
+	for r in due:
 		var owed: Array = _glass_owed[int(r[1])]
 		if _glass_jobs.size() < GLASS_JOBS:
 			_submit_glass(owed)
@@ -2889,7 +2890,7 @@ func _submit_glass(owed: Array) -> void:
 		var arrays := BuildingShell.window_arrays(fx, fz, courses, room_seed, layout,
 				lattice, damage, program, standing)
 		if not arrays.is_empty():
-			holder[0] = BuildingShell.window_mesh_of(arrays) if on_worker else arrays,
+			holder[0] = BuildingShell.window_mesh_of(arrays) if on_worker else (arrays as Variant),
 			true, "shell glass")
 	glass_built += 1
 	_glass_jobs.append([task, holder, owed[0], id, owed[3]])
@@ -5458,6 +5459,7 @@ func _enter_pawn(feet: Vector3) -> void:
 		_arsenal = PlayerArsenal.new()
 		_arsenal.name = "Arsenal"
 		_arsenal.board = _hold_board
+		_arsenal.mech_screen = _mech_screen
 		add_child(_arsenal)
 		_loot_rng.seed = 0x1007
 		_load_progress()
@@ -5756,14 +5758,20 @@ func _mech_at_hatch(p: Pawn) -> Mech:
 
 func _spawn_mech(feet: Vector3, yaw: float) -> Mech:
 	_mech = Mech.spawn(self, feet, yaw, 0)
+	MechAssembler.dress_rolled(_mech, hash(feet), "normal")
 	if _gun_library == null:
 		_gun_library = GunPlaceholderParts.build_library()
+	_give_pods(_mech)
 	var res := GunGenerator.generate(_gun_library, _combat_rng.randi(),
 			WeaponClass.builtin(&"lmg"), 1)
 	var gi := GunInstance.from_result(res)
 	gi.visible = false  # the arm's greybox is the gun, for now
 	_mech.arm.add_child(gi)
 	_mech.gun.equip(gi)
+	# A mech gun made in the workshop, if there is one, in its hand instead (stage 7) --
+	# not in a scripted pass, which must not change with what this machine has saved.
+	if not _scripted:
+		MechAssembler.arm_gun(_mech, MechAssembler.roll_gun(_gun_library, hash(feet)))
 	_mech.gun.rng = _combat_rng
 	_mech.gun.on_structure_hit = _gun.on_structure_hit
 	# The player's mech's kills are the player's XP (PlayerLevel).
@@ -6085,7 +6093,48 @@ func _wire_mech(m: Mech) -> void:
 ## the enemy tree -- it breaches to get at infantry (AI.md 6.4).
 ## `recipe`: which of the roster's mechs it is (AIRoster.md RO11: a commander
 ## buys one by its recipe).
-func _spawn_enemy_mech(feet: Vector3, yaw: float, recipe := "medium_gunner") -> MechBrain:
+## Which workshop mech Ctrl Y spawned last.
+var _mech_design := -1
+## The player's mech's pods and the mech page of the backpack (Docs/ModularParts.md stage 7).
+var _mech_pods: MechPods
+var _mech_screen: MechLoadoutScreen
+## The pods the player starts with: one of each kind, rolled from fixed seeds.
+const START_POD_SEED := 0x90D5
+
+
+## The player's mech gets its two pod slots, and the backpack its mech page with the
+## pods the player has; a missile pod and a shield booster fitted to start (not in a
+## scripted pass, whose mech must fight as it always has).
+func _give_pods(m: Mech) -> void:
+	_mech_pods = MechPods.attach(m, _gun_library, _combat_rng)
+	_mech_pods.on_structure_hit = _gun.on_structure_hit
+	if _mech_screen == null:
+		_mech_screen = MechLoadoutScreen.new()
+		_mech_screen.name = "MechLoadout"
+		add_child(_mech_screen)
+		var kinds := PodGenerator.kinds()
+		for i in kinds.size():
+			_mech_screen.stash.append(PodGenerator.generate(START_POD_SEED + i, 2, 1, kinds[i]))
+		_mech_screen.index = 0
+		# Not in a scripted pass: a pass's mech fights as it always has.
+		for want in ([] if _scripted else [&"missiles", &"shield_boost"]):
+			for i in _mech_screen.stash.size():
+				if (_mech_screen.stash[i] as PodGenerator.Result).kind == want:
+					_mech_screen.index = i
+					_mech_screen.fit_selected(0 if want == &"missiles" else 1)
+					break
+	else:
+		# A new mech of the player's: the pods it had go on it again.
+		var old: Array = _mech_screen.pods.slots.duplicate() if _mech_screen.pods != null else []
+		for i in old.size():
+			if old[i] != null:
+				_mech_pods.fit(i, old[i])
+	_mech_screen.pods = _mech_pods
+	if _arsenal != null:
+		_arsenal.mech_screen = _mech_screen
+
+
+func _spawn_enemy_mech(feet: Vector3, yaw: float, recipe := "medium_gunner", design: PartDesign = null) -> MechBrain:
 	if _gun_library == null:
 		_gun_library = GunPlaceholderParts.build_library()
 	var m := Mech.spawn(self, feet, yaw, 1)
@@ -6094,12 +6143,21 @@ func _spawn_enemy_mech(feet: Vector3, yaw: float, recipe := "medium_gunner") -> 
 	gi.visible = false
 	m.arm.add_child(gi)
 	m.gun.equip(gi)
+	if design != null:
+		# A workshop mech carries a workshop mech gun, if there is one.
+		MechAssembler.arm_gun(m, MechAssembler.roll_gun(_gun_library, hash(feet)))
 	m.gun.rng = _combat_rng
 	m.gun.on_structure_hit = _gun.on_structure_hit
 	_wire_mech(m)
 	var br := MechBrain.attach(ai_services, m, mech_nav, MechTree.enemy(), 1)
 	# A mech by the roster: its layers and the name over it (AIRoster.md RO6).
 	m.set_type(recipe, Roster.shared())
+	# Made of parts when there are parts to make it of (Docs/ModularParts.md stage 6): a
+	# chassis of its class, every part fitting -- or a design's, of the design's class.
+	# Else the boxes. Seeded from where it stands: no roll of the combat dice moves.
+	MechAssembler.dress_rolled(m, hash(feet), MechAssembler.class_of(
+			str(Roster.shared().recipe(recipe).get("class", ""))) if design == null else "",
+			design, design != null)
 	# Its pilot, a soldier of its side, inside: one who can bail out (RO8).
 	var pilot := _spawn_soldier(feet)
 	m.mount(pilot.pawn, true)
@@ -7892,6 +7950,7 @@ func _run_storeys_pass() -> void:
 				"storeys %d-%d" % [piece.lo, piece.hi - 1])
 	# The storey blown out, the ones its blasts reached and the ones its wreckage
 	# landed on (_shear_building) -- a few storeys, not the tower.
+	@warning_ignore("integer_division")
 	_gate_ok("and the building stays a few storeys of bricks, not the tower",
 			int(rep2.get("bricks", 0)) <= whole_bricks / 4,
 			"%d of %d bricks" % [int(rep2.get("bricks", 0)), whole_bricks])
@@ -9044,6 +9103,7 @@ func _run_lodbreak_pass() -> void:
 		_save("lodbreak_%d_%dm_settled" % [k, int(d)])
 		var ff: Array = _floating_furniture()
 		if not ff.is_empty():
+			@warning_ignore("integer_division")
 			var foot: Vector3 = ff[ff.size() / 2][1]
 			for f in ff:
 				if f[0] == "heap":
@@ -9342,7 +9402,6 @@ func _run_breakshape_pass() -> void:
 			if b.toppled:
 				break
 			var fx: float = b.recipe.footprint_x * STUD
-			var fz: float = b.recipe.footprint_z * STUD
 			var tall := TowerRecipe.total_plates(b.recipe.courses) * PLATE
 			var aim: Vector3 = b.xform * Vector3(fx * float(shot[0]), tall * float(shot[1]), 0.0)
 			camera.global_position = b.xform * Vector3(fx * float(shot[0]), tall * float(shot[1]), -30.0)
@@ -10140,6 +10199,7 @@ func _run_groups_pass() -> void:
 		var deco: PackedInt32Array = world.get_decorative_blocks(isl.chunk)
 		if deco.is_empty():
 			continue
+		@warning_ignore("integer_division")
 		var ticks: Array = world.get_block_ticks(isl.chunk, deco[deco.size() / 2])
 		if ticks.is_empty():
 			continue
@@ -11185,6 +11245,7 @@ func _run_arms_pass() -> void:
 			WeaponClass.builtin(&"pistol").with_kind(&"heavy"), 1))
 	_arsenal.replace_in_hand(magnum)
 	await _frames(40)
+	@warning_ignore("integer_division")
 	_gate_ok("a magnum is held", _gun.gun == magnum and arms.reach_gap[0] < 0.005
 			and _gun.mag_size() == int(magnum.stats[&"mag_size"]) / 2,
 			"%d shots of %d rounds" % [_gun.mag_size(), int(magnum.stats[&"mag_size"])])
@@ -11582,9 +11643,9 @@ func _apply_blast(point: Vector3, radius: float, chip_hp := 0) -> void:
 		var box := registry.local_box(b.id).grow(reach)
 		if not box.has_point(local):
 			continue
-		var t_part := Time.get_ticks_usec()
+		var t_hit := Time.get_ticks_usec()
 		var chunk := _promote(b.id, true, _storeys_for(b.id, point, reach))
-		t_part = _part("dmg_promote", t_part)
+		t_hit = _part("dmg_promote", t_hit)
 		if chunk < 0:
 			continue
 		# What the blast reaches of the interior is dealt with before the hit
@@ -11614,9 +11675,9 @@ func _apply_blast(point: Vector3, radius: float, chip_hp := 0) -> void:
 			_pieces_hit += woke
 			_pieces_laid += (reached.laid as Array).size()
 			_pieces_hit_ms += float(Time.get_ticks_usec() - t_room) / 1000.0
-		t_part = _part("dmg_rooms", t_part)
+		t_hit = _part("dmg_rooms", t_hit)
 		var killed: PackedInt32Array = world.chip_hit(chunk, point, radius, chip_hp) 				if chip_hp > 0 else world.apply_hit(chunk, point, radius)
-		t_part = _part("dmg_hit", t_part)
+		t_hit = _part("dmg_hit", t_hit)
 		# Committed as soon as it is applied, so the log's order is the order
 		# the world changed in. ALWAYS, whether or not a brick died: the hp a
 		# hit took is state. A blast used to be logged only when it killed,
@@ -12189,6 +12250,7 @@ func _physics_process(_delta: float) -> void:
 		var t_st := Time.get_ticks_usec()
 		if camera != null and Engine.get_physics_frames() % TRIM_EVERY == 0:
 			_trim_quiet()
+		@warning_ignore("integer_division")
 		if camera != null and Engine.get_physics_frames() % TRIM_EVERY == TRIM_EVERY / 2:
 			_trim_budget()
 		t_st = _part("st_trim", t_st)
@@ -13281,8 +13343,8 @@ func _tend_brick_panes() -> void:
 	var best := -1
 	var best_d := INF
 	for id in _brick_nodes:
-		var b := registry.get_building(id)
-		if b == null or b.is_build() or b.toppled or _toppling.has(id):
+		var cand := registry.get_building(id)
+		if cand == null or cand.is_build() or cand.toppled or _toppling.has(id):
 			continue
 		var have = _brick_panes.get(id)
 		if have != null and not is_instance_valid(have):
@@ -13292,7 +13354,7 @@ func _tend_brick_panes() -> void:
 			continue
 		if _interior_unsure(id):
 			continue
-		var d := b.xform.origin.distance_to(here)
+		var d := cand.xform.origin.distance_to(here)
 		if d < best_d:
 			best_d = d
 			best = id
@@ -13323,7 +13385,7 @@ func _tend_brick_panes() -> void:
 		var arrays := BuildingShell.window_arrays(fx, fz, courses, room_seed, layout, lattice,
 				{}, program, standing)
 		if not arrays.is_empty():
-			holder[0] = BuildingShell.window_mesh_of(arrays) if on_worker else arrays,
+			holder[0] = BuildingShell.window_mesh_of(arrays) if on_worker else (arrays as Variant),
 			true, "brick panes")
 	_pane_job = [task, holder, best]
 	brick_panes_built += 1
@@ -14296,6 +14358,15 @@ func _unhandled_input(event: InputEvent) -> void:
 		return
 	if not (event is InputEventKey and event.pressed and not event.echo):
 		return
+	# In the mech, 1 and 2 are its pods (MechPods).
+	if _pilot.is_piloting() and _mech_pods != null and _pilot.mech == _mech_pods.mech:
+		for slot in MechPods.SLOTS:
+			if event.is_action_pressed(StringName("slot_%d" % (slot + 1))):
+				if not _mech_pods.use(slot):
+					var pod: PodGenerator.Result = _mech_pods.slots[slot]
+					print("[city] pod %d: %s" % [slot + 1, "empty" if pod == null else
+							("passive" if not pod.is_active() else "cooling, %.1f s" % _mech_pods.cool[slot])])
+				return
 	match _key_of(event):
 		KEY_X:
 			_fire(BIG_BLAST)
@@ -14324,7 +14395,19 @@ func _unhandled_input(event: InputEvent) -> void:
 			_spawn_squad(_on_ground(ahead))
 		KEY_Y:
 			var ahead := camera.global_position - camera.global_transform.basis.z * 40.0
-			_spawn_enemy_mech(mech_nav.snap(_on_ground(ahead)), camera.global_rotation.y + PI)
+			var design: PartDesign = null
+			if event.ctrl_pressed:
+				# Ctrl Y: the mechs made in the asset workshop, in turn.
+				var made := MechAssembler.designs(MechAssembler.catalog(true))
+				if made.is_empty():
+					print("[city] no mech saved in the asset workshop yet")
+					return
+				var ids := made.keys()
+				ids.sort()
+				_mech_design = (_mech_design + 1) % ids.size()
+				design = made[ids[_mech_design]]
+			_spawn_enemy_mech(mech_nav.snap(_on_ground(ahead)), camera.global_rotation.y + PI,
+					"medium_gunner", design)
 		KEY_M:
 			if _vehicle_pilot.is_driving():
 				_leave_vehicle()
@@ -16763,6 +16846,7 @@ func _run_chamfer_cost() -> void:
 	# A test window takes the menu's defaults once it is up, after this starts:
 	# the flag is set again once the city has settled (_cap_arg).
 	_cap_arg()
+	@warning_ignore("integer_division")
 	print("[chamfer] cost, near tier %s, cap %s" % ["ON" if BrickNear.enabled else "OFF (--no-near)",
 			"on (%dk triangles, %d studs)" % [BrickNear.max_tris / 1000, BrickNear.max_studs]
 			if BrickNear.cap_enabled else "OFF (--no-cap)"])
@@ -16820,6 +16904,7 @@ func _run_chamfer_street() -> void:
 		_promote(i)
 	await _frames(90)
 	_cap_arg()
+	@warning_ignore("integer_division")
 	print("[street] near tier %s, cap %s" % ["ON" if BrickNear.enabled else "OFF",
 			"on (%dk triangles, %d studs)" % [BrickNear.max_tris / 1000, BrickNear.max_studs]
 			if BrickNear.cap_enabled else "OFF"])
@@ -16896,6 +16981,7 @@ func _run_chamfer_street() -> void:
 				var r: Array = rows[j]
 				print("[street]     %s%3d  %5.1f  %d  %5.1f  %5.1f  %5.2f  %5.1f  %5.2f  %5.1f  %s" % [
 						"*" if j == i else " ", j, r[0], r[1], r[2], r[3], r[4], r[5], r[6], r[7], r[8]])
+	@warning_ignore("integer_division")
 	print("[street]   held at most %d chamfered, %d with stud geometry (budgets %dk triangles, %d studs); %d triangles, %d studs at most; worst step %.2f ms"
 			% [held_max.x, held_max.y, BrickNear.max_tris / 1000, BrickNear.max_studs,
 				tris_max, studs_max, near_worst])

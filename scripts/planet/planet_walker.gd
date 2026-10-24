@@ -24,7 +24,9 @@ const EYE := HEIGHT - 0.2
 var camera: Camera3D
 var viewer: VoxelViewer
 var flying := false
-var fly_speed := 20.0
+var fly_speed := 50.0
+## Shift held while flying: this fast, or ten times the wheel's speed if that is more.
+const FAST_FLY := 500.0
 ## Held off the ground until the ground under it has streamed in.
 var frozen := true
 var pitch := 0.0
@@ -122,12 +124,12 @@ func _physics_process(delta: float) -> void:
 		if not flying and Input.is_key_pressed(KEY_SPACE):
 			jump = true
 	if flying:
-		# Along the camera's own axes, the speed on the wheel.
+		# Along the camera's own axes, the speed on the wheel (Shift: fast).
 		var cb := camera.global_transform.basis
 		var v := (-cb.z * w.y + cb.x * w.x + up * rise_in)
 		if v.length_squared() > 1.0:
 			v = v.normalized()
-		velocity = v * fly_speed
+		velocity = v * (maxf(FAST_FLY, fly_speed * 10.0) if run else fly_speed)
 		up_direction = up
 		move_and_slide()
 		return

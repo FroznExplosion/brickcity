@@ -1372,7 +1372,6 @@ func build_hidden(b: Building, keep: Callable) -> Array:
 		for d in b.dead:
 			hide[d] = true
 	var lo: Vector3i = b.build.origin()
-	var storey_of := {}
 	for i in b.build.size():
 		if b.build.frame_of(i) != 0:
 			continue
