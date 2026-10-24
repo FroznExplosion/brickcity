@@ -9529,6 +9529,9 @@ func _bake_part_mesh(ids: Array, af: int = 0) -> MeshInstance3D:
 		mm.instance_count = count
 		mm.set_buffer(studs)
 		mmi.multimesh = mm
+		# The studs kept on the node as well: the renderer holds a multimesh's buffer, and
+		# without one (headless) a part's studs would be lost to dressing and packages.
+		mmi.set_meta(&"buffer", studs)
 		mi.add_child(mmi)
 	world.release_chunk(c)
 	return mi
@@ -9635,11 +9638,16 @@ func _studs_node(list: Array) -> MultiMeshInstance3D:
 	mm.use_colors = true
 	mm.mesh = PieceMeshes.stud()
 	mm.instance_count = list.size()
+	var buf := PackedFloat32Array()
 	for i in list.size():
 		var st: Dictionary = list[i]
-		mm.set_instance_transform(i, _stud_transform(st))
-		mm.set_instance_color(i, BrickWorld.get_material_colour(int(st.get("mat", 0)), int(st.get("colour", 0))))
+		var t := _stud_transform(st)
+		var c := BrickWorld.get_material_colour(int(st.get("mat", 0)), int(st.get("colour", 0)))
+		mm.set_instance_transform(i, t)
+		mm.set_instance_color(i, c)
+		buf.append_array(PartDressing.buffer_row(t, c))
 	mmi.multimesh = mm
+	mmi.set_meta(&"buffer", buf)   # as the bricks' studs (_bake_part_mesh)
 	return mmi
 
 

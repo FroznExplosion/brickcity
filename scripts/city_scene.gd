@@ -5761,7 +5761,9 @@ func _mech_at_hatch(p: Pawn) -> Mech:
 
 func _spawn_mech(feet: Vector3, yaw: float) -> Mech:
 	_mech = Mech.spawn(self, feet, yaw, 0)
-	MechAssembler.dress_rolled(_mech, hash(feet), "normal")
+	# The player's dressing on it -- not in a scripted pass, which must not change with what
+	# this machine's player has put on.
+	MechAssembler.dress_rolled(_mech, hash(feet), "normal", null, false, "" if _scripted else "player")
 	if _gun_library == null:
 		_gun_library = GunPlaceholderParts.build_library()
 	_give_pods(_mech)
@@ -6098,6 +6100,43 @@ func _wire_mech(m: Mech) -> void:
 ## buys one by its recipe).
 ## Which workshop mech Ctrl Y spawned last.
 var _mech_design := -1
+var _dress_colour := 1
+
+
+## Put a dressing brick on (or take one off) the player's mech's stud nearest the crosshair
+## line, within half a metre of it and 30 m off. What happened, in words.
+func _dress_at_crosshair(take_off: bool) -> String:
+	var from := camera.global_position
+	var dir := -camera.global_transform.basis.z
+	var best_d := 0.5
+	var best := {}
+	var parts := PartDressing.parts_of(_mech)
+	for id: String in parts:
+		var part: Node3D = parts[id]
+		for st in PartDressing.studs(part).studs:
+			var at: Vector3 = part.global_transform * (st.at as Vector3)
+			var along := (at - from).dot(dir)
+			if along < 0.0 or along > 30.0:
+				continue
+			var d := (from + dir * along).distance_to(at)
+			if d < best_d:
+				best_d = d
+				best = {"id": id, "key": st.key}
+	if best.is_empty():
+		return "no stud of your mech under the crosshair"
+	var store := PartDressing.load_store()
+	var list := PartDressing.of(store, "player", best.id)
+	if take_off:
+		list = PartDressing.remove(list, best.key)
+	else:
+		var r := PartDressing.add(parts[best.id], list, best.key, "brick", _dress_colour)
+		if not r.ok:
+			return "not there: " + String(r.why)
+		list = r.list
+	PartDressing.put(store, "player", best.id, list)
+	PartDressing.save_store(store)
+	PartDressing.apply(parts[best.id], list)
+	return "%d bricks on %s, %.1f kg" % [list.size(), best.id, PartDressing.mass(list)]
 ## The player's mech's pods and the mech page of the backpack (Docs/ModularParts.md stage 7).
 var _mech_pods: MechPods
 var _mech_screen: MechLoadoutScreen
@@ -14462,6 +14501,16 @@ func _unhandled_input(event: InputEvent) -> void:
 			print("[city] mech order: %s" % MechBrain.Order.keys()[o])
 		return
 	if not (event is InputEventKey and event.pressed and not event.echo):
+		return
+	# On foot by the player's own mech of parts: Ctrl B puts a brick on the stud under the
+	# crosshair, Ctrl Shift B takes it off, Ctrl Alt B the next colour (stage 11: dressing).
+	if event.ctrl_pressed and event.keycode == KEY_B and _player.is_possessing() and _mech != null \
+			and is_instance_valid(_mech) and not PartDressing.parts_of(_mech).is_empty():
+		if event.alt_pressed:
+			_dress_colour = (_dress_colour + 1) % PartDressing.COLOURS
+			print("[city] dressing colour %d" % _dress_colour)
+		else:
+			print("[city] dressing: %s" % _dress_at_crosshair(event.shift_pressed))
 		return
 	# In the mech, 1 and 2 are its pods (MechPods).
 	if _pilot.is_piloting() and _mech_pods != null and _pilot.mech == _mech_pods.mech:

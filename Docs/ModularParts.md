@@ -6,7 +6,7 @@ mounts with and what it takes, and is found in one catalogue that filters and so
 for all of them. A gun or a mech in the game is an **assembly** the generator puts together from
 parts that fit, from a seed and a design (section 7).
 
-Status (2026-10-24): **stages 1 to 9 built, and stage 10's offline half.** The part record, the fit check and the
+Status (2026-10-24): **stages 1 to 9 and 11 built, and stage 10's offline half.** The part record, the fit check and the
 catalogue (`scripts/parts/`, `tools/parts_probe.gd`, 65 checks); guns on them: the workshop's
 Save writes every part on its own, the generator and the assembler only put together parts
 that fit (`tools/part_save_probe.gd`); the catalogue panel, F7 in the workshop
@@ -14,7 +14,7 @@ that fit (`tools/part_save_probe.gd`); the catalogue panel, F7 in the workshop
 (`part_save_probe`, now 61 checks); mech mode in the workshop (`tools/mech_workshop_probe.gd`, 56
 checks); mechs in the game from parts (`tools/mech_parts_probe.gd`, 70 checks); pods and mech guns
 (`tools/pods_probe.gd`, 28; `mech_workshop_probe` now 62); the motion sets (`tools/motion_probe.gd`,
-29); part packages (`tools/package_probe.gd`, 26); the match's parts offline (`tools/lobby_probe.gd`, 24). Section 11 is the order the rest is built in;
+29); part packages (`tools/package_probe.gd`, 26); the match's parts offline (`tools/lobby_probe.gd`, 24); dressing (`tools/dressing_probe.gd`, 20). Section 11 is the order the rest is built in;
 "Stage 1 as built" and "Stage 2 as built" below say what differs from the plan.
 
 Builds on: [Parts/joints.md](Parts/joints.md) (joints, the one pin, hands),
@@ -330,7 +330,7 @@ interfaces.
 | 8 | **Done.** Motion sets library (section 8): `MotionSets`, the mech walk by leg length, the pods' arms; `tools/motion_probe.gd` | `scripts/parts/` |
 | 9 | **Done.** Part packages: export, import, hash, data-only loading; `tools/package_probe.gd` | `scripts/parts/` |
 | 10 | **Half done** (all but the network): lobby part list, what is missing, host download in checked chunks, placeholders, a Steam Workshop wrapper; `tools/lobby_probe.gd`. The messages themselves wait on the netcode | `scripts/parts/`, then the netcode |
-| 11 | Dressing on studs outside the workshop | |
+| 11 | **Done.** Dressing on studs outside the workshop: `PartDressing`, Ctrl B by your mech; `tools/dressing_probe.gd` | `scripts/parts/` |
 | 12 | The figure body plan; animals later | |
 
 ---
@@ -637,6 +637,31 @@ netcode only has to carry dictionaries and byte chunks:
   in the project, so today it says it is not there and everything comes from the host.
 - **Waiting on the netcode**: the lobby message, asking for and sending the chunks, the join
   screen's bar, swapping a placeholder for the real part when it lands, publishing to Steam.
+
+### Stage 11 as built
+
+- **`PartDressing`** (`scripts/parts/part_dressing.gd`): a part's studs are read from its stud
+  multimeshes -- their place, which way is up, the pitch between them -- and a stud is keyed by
+  its place in the part (to the millimetre), so dressing survives saves of the same part.
+- **The rules**: a 1x1 brick or plate, one a stud, only on a stud the part has; not within
+  1.6 stud pitches of the part's mount or any socket (it would cross where the next part turns);
+  not more than 2 pitches out past the part's own bounds (the space it swings through). Each
+  brick adds 0.9 kg, a plate 0.3 (`mass()`).
+- **Owned**: kept in `user://parts/dressing.json` by owner and part id, so it goes with the part
+  to whatever mech it is put on and is never another player's. A newer rev of a part that moved
+  a stud leaves that brick off, and says which (`apply` returns them).
+- **In the city**: on foot by your own mech of parts, **Ctrl B** puts a brick on the stud
+  nearest the crosshair line (within half a metre, 30 m off), **Ctrl Shift B** takes it off,
+  **Ctrl Alt B** the next colour; saved at once. Your mech is dressed when it is made
+  (`MechAssembler.dress(..., owner)`), and when its armour breaks, three bricks a part fly off
+  as falling debris for eight seconds -- off this mech, not out of your things. Not in a
+  scripted pass.
+- **Studs kept on the node**: the renderer holds a multimesh's buffer, so headless a part's
+  studs read back empty. The workshop now keeps each stud multimesh's buffer as `buffer` meta,
+  packages carry it and rebuild it, and dressing reads it first. (Before this, a package made
+  headless had lost its studs' places; `package_probe` now checks they come through.)
+- **Not yet**: one layer of bricks (no brick on a dressing brick), 1x1 only; no dressing on
+  guns or figures in the game yet (the same code takes any part with studs).
 
 ## 12. Decided
 

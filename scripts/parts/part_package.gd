@@ -146,8 +146,12 @@ static func _describe(n: Node, parent: int, nodes: Array, meshes: Array, mesh_id
 		var mmi := n as MultiMeshInstance3D
 		var mm := mmi.multimesh
 		if mm != null:
+			# The buffer kept on the node first: the renderer's copy is empty headless.
+			var buf: PackedFloat32Array = mmi.get_meta(&"buffer", PackedFloat32Array())
+			if buf.is_empty():
+				buf = mm.buffer
 			d["multimesh"] = {"count": mm.instance_count, "colors": mm.use_colors,
-					"custom": mm.use_custom_data, "buffer": _enc(mm.buffer),
+					"custom": mm.use_custom_data, "buffer": _enc(buf),
 					"mesh": _mesh_id(mm.mesh, meshes, mesh_ids) if mm.mesh != null else -1}
 		d["material"] = _material_of(mmi.material_override)
 	var me := nodes.size()
@@ -444,6 +448,7 @@ static func build(mesh: Dictionary) -> Node3D:
 					mm.instance_count = int(d.multimesh.count)
 					if mm.instance_count > 0:
 						mm.buffer = _dec(d.multimesh.buffer)
+						mmi.set_meta(&"buffer", _dec(d.multimesh.buffer))
 					mmi.multimesh = mm
 				mmi.material_override = _material(d.get("material", {}))
 				mmi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
