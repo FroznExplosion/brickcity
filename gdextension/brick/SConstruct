@@ -13,6 +13,17 @@ env = SConscript("godot-cpp/SConstruct")
 
 env.Append(CPPPATH=["src/", "src/swarm/", "src/creature/", "src/ai/"])
 
+# `pdb=yes`: this library with debug symbols (a .pdb beside the DLL), so a crash
+# inside it names the function and line in Godot's backtrace. On a copy of the
+# environment: godot-cpp's objects keep their flags and are not rebuilt (a
+# worktree reaches them through a junction into the main folder).
+if ARGUMENTS.get("pdb", "no") == "yes":
+    env = env.Clone()
+    if env["platform"] == "windows" and not env.get("use_mingw", False):
+        env.Append(CCFLAGS=["/Z7"], LINKFLAGS=["/DEBUG:FULL"])
+    else:
+        env.Append(CCFLAGS=["-g"])
+
 # SwarmCore -- BoomerBorder's C++ horde (Docs/AIPlan.md P1, R18) -- is built into
 # this library rather than as an extension of its own: one godot-cpp, one DLL, and
 # horde code can read the brick grid directly, which a second extension cannot.
