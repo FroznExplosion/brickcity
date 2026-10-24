@@ -143,7 +143,7 @@ func _tick(_delta: float) -> Status:
 				_phase = "fuse"
 		"fuse":
 			if now >= _at:
-				var at: Vector3 = (_opening.center as Vector3) + Vector3.UP * RoomTactics.BREACH_HEIGHT
+				var at: Vector3 = (_opening.center as Vector3) + Gravity.up_at(_opening.center as Vector3) * RoomTactics.BREACH_HEIGHT
 				if s.on_breach.is_valid():
 					s.on_breach.call(at, RoomTactics.BREACH_RADIUS)
 				q.events["breached"] = now
@@ -186,11 +186,11 @@ func _plan(q: Squad, room: RoomTactics, o: SquadMsg.Order, now: float) -> Status
 	var c := q.contact()
 	if c != null and room.contains(c.pos) and c.age(now) < 15.0:
 		defender_eye = c.pawn.eye.global_position if c.pawn != null and is_instance_valid(c.pawn) \
-				else c.pos + Vector3.UP * CoverSearch.STAND_EYE
+				else c.pos + Gravity.up_at(c.pos) * CoverSearch.STAND_EYE
 	var door := o.opening
 	var watched := not door.is_empty() and defender_eye != Vector3.INF \
 			and s.ai_world.bricks_between(defender_eye,
-				RoomTactics.entry_point(door) + Vector3.UP * 1.1) == 0
+				RoomTactics.entry_point(door) + Gravity.up_at(RoomTactics.entry_point(door)) * 1.1) == 0
 	_breach = door.is_empty() or watched or o.breach
 	_opening = door
 	if _breach:
@@ -264,7 +264,7 @@ func _thrower() -> Soldier:
 func _prep(q: Squad, room: RoomTactics, _now: float) -> void:
 	_phase = "flash"
 	_at = -1.0
-	_flash_point = room.center() + Vector3.UP * 1.0
+	_flash_point = room.center() + Gravity.up_at(room.center()) * 1.0
 	var a := SquadMsg.Assignment.make(SquadMsg.Task.FLASH, _flash_point)
 	a.role = "flash"
 	q.assign(_thrower(), a)

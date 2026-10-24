@@ -100,7 +100,7 @@ func watch(so: Soldier, dt: float) -> void:
 	var v := so.pawn.body.velocity
 	if so.pawn.intents.move.length() > 0.1 and Vector2(v.x, v.z).length() < 0.2:
 		ep.stuck_s = float(ep.stuck_s) + dt
-	if s.ai_world.in_danger(so.pawn.feet() + Vector3.UP * 0.9):
+	if s.ai_world.in_danger(so.pawn.feet() + Gravity.up_at(so.pawn.feet()) * 0.9):
 		ep.danger_s = float(ep.danger_s) + dt
 	# It can see the enemy, so the enemy can see it.
 	if reloading and sees and not in_cover:

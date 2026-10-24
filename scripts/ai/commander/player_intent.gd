@@ -53,8 +53,7 @@ func observe() -> void:
 		var was: Dictionary = _track.get(k, {})
 		var vel := Vector3.ZERO
 		if not was.is_empty() and now > float(was.at):
-			vel = (at - (was.pos as Vector3)) / (now - float(was.at))
-			vel.y = 0.0
+			vel = Gravity.flat((at - (was.pos as Vector3)) / (now - float(was.at)), p.up)
 			vel = (was.vel as Vector3).lerp(vel, 0.5)
 		_track[k] = {"pos": at, "at": now, "vel": vel}
 		if p.gun != null and not _watched.has(p.gun.get_instance_id()):
@@ -125,7 +124,7 @@ func in_lane(at: Vector3) -> bool:
 			continue
 		var from := p.eye.global_position
 		var dir := -p.eye.global_basis.z
-		var to := at + Vector3.UP * 1.2 - from
+		var to := at + Gravity.up_at(at) * 1.2 - from
 		var along := to.dot(dir)
 		if along < 0.0 or along > LANE_LENGTH:
 			continue
@@ -151,12 +150,12 @@ func support_point(f: Vector3, slot := 0) -> Vector3:
 	var p := nearest_player(f)
 	if p == null or f == Vector3.INF:
 		return Vector3.INF
-	var u := Vector3(f.x - p.feet().x, 0.0, f.z - p.feet().z)
+	var u := Gravity.flat(f - p.feet(), p.up)
 	if u.length() < 1.0:
 		u = -p.eye.global_basis.z if p.eye != null else Vector3.FORWARD
-		u.y = 0.0
+		u = Gravity.flat(u, p.up)
 	u = u.normalized()
-	var side := Vector3(-u.z, 0.0, u.x)
+	var side := u.cross(p.up)
 	var first := 1.0 if slot % 2 == 0 else -1.0
 	for k in [first, -first]:
 		for out in [SIDE, SIDE * 1.5, SIDE * 0.6]:

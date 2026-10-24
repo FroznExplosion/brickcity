@@ -46,7 +46,7 @@ func _tick(_delta: float) -> Status:
 	if not s.may_decide_tactic():
 		return SUCCESS if so.tactic >= 0 else FAILURE
 	var t_decide := Time.get_ticks_usec()
-	var threat := c.pos + Vector3.UP * CoverSearch.STAND_EYE
+	var threat := c.pos + Gravity.up_at(c.pos) * CoverSearch.STAND_EYE
 	# The cover search is the expensive part of the observation, and the cover
 	# tactics use its answer: kept for them (BTFindCover reads it).
 	# Cover it already has that still stands against much the same threat is

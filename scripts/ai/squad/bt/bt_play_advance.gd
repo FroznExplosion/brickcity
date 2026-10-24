@@ -81,7 +81,7 @@ func _tick(_delta: float) -> Status:
 	if _movers.is_empty() or moved or now - _bound_at > BOUND_TIMEOUT:
 		_next_bound(q, c, now)
 	# Keep the suppression on where the enemy is now.
-	var sp := target + Vector3.UP * 1.5
+	var sp := target + Gravity.up_at(target) * 1.5
 	if _suppress_at == Vector3.INF or sp.distance_to(_suppress_at) > 1.0:
 		_suppress(q, sp)
 	return RUNNING
@@ -142,22 +142,22 @@ func _next_bound(q: Squad, c: FactionKnowledge.Contact, now: float) -> void:
 	_bound_at = now
 	bounds += 1
 	q.events["bounds"] = bounds
-	var threat_eye := c.pos + Vector3.UP * CoverSearch.STAND_EYE
+	var threat_eye := c.pos + Gravity.up_at(c.pos) * CoverSearch.STAND_EYE
 	var goal := _goal(q, c)
 	var stop := ARRIVE if goal != c.pos else STOP
 	var k := 0
 	for m in _movers:
 		var feet := m.pawn.feet()
-		var to := goal - feet
-		to.y = 0.0
+		var up := Gravity.up_at(feet)
+		var to := Gravity.flat(goal - feet, up)
 		var dir := to.normalized()
-		var side := dir.cross(Vector3.UP) * (k - (_movers.size() - 1) * 0.5) * 3.0
+		var side := dir.cross(up) * (k - (_movers.size() - 1) * 0.5) * 3.0
 		var ahead := feet + dir * minf(BOUND, maxf(to.length() - stop + 1.0, 1.0)) + side
 		_waiting[m] = {"ahead": ahead, "feet": feet, "goal": goal, "threat": threat_eye}
 		k += 1
 	# Those whose cover is already in go now; the rest as theirs comes in.
 	_send_movers(q, now)
-	_suppress(q, c.pos + Vector3.UP * 1.5)
+	_suppress(q, c.pos + Gravity.up_at(c.pos) * 1.5)
 	if not _movers.is_empty():
 		q.say(_movers[0], "moving", "Moving!")
 	if not _cover.is_empty():

@@ -103,8 +103,7 @@ func _physics_process(_delta: float) -> void:
 		_queued = true
 		services.sched.submit(AIScheduler.TREES, 4.0, _think)
 	if _field_goal != Vector3.INF:
-		var d := services.field_dir(_field_goal, pawn.feet())
-		d.y = 0.0
+		var d := Gravity.flat(services.field_dir(_field_goal, pawn.feet()), pawn.up)
 		pawn.intents.move = d.normalized() if d.length() > 0.01 else Vector3.ZERO
 	elif _goal != Vector3.INF:
 		_follow()
@@ -139,8 +138,7 @@ func _think() -> void:
 		AnimalPack.Mode.FLEE:
 			state = "flee"
 			_field_goal = Vector3.INF
-			var away := pawn.feet() - pack.threat
-			away.y = 0.0
+			var away := Gravity.flat(pawn.feet() - pack.threat, pawn.up)
 			away = away.normalized() if away.length() > 0.1 else Vector3.BACK
 			pawn.intents.run = true
 			_walk_to(pawn.feet() + away * 12.0)
@@ -175,18 +173,16 @@ func _follow() -> void:
 			return
 		if st != AINav.DONE:
 			# No way there: straight at it, and let the body find out.
-			var d := _goal - pawn.feet()
-			d.y = 0.0
+			var d := Gravity.flat(_goal - pawn.feet(), pawn.up)
 			pawn.intents.move = d.normalized() if d.length() > ARRIVED else Vector3.ZERO
 			return
 		_path = services.ai_nav.get_path(_path_id)
 		_wp = 1 if _path.size() > 1 else 0
 	var feet := pawn.feet()
-	while _wp < _path.size() and Vector2(_path[_wp].x - feet.x, _path[_wp].z - feet.z).length() < 0.4:
+	while _wp < _path.size() and Gravity.flat(_path[_wp] - feet, pawn.up).length() < 0.4:
 		_wp += 1
 	if _wp >= _path.size():
 		pawn.intents.move = Vector3.ZERO
 		return
-	var dir := _path[_wp] - feet
-	dir.y = 0.0
+	var dir := Gravity.flat(_path[_wp] - feet, pawn.up)
 	pawn.intents.move = dir.normalized() if dir.length() > 0.01 else Vector3.ZERO

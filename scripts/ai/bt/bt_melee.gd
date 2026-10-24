@@ -30,7 +30,7 @@ func _tick(_delta: float) -> Status:
 	if d > GIVE_UP_RANGE:
 		so.tactic_done = true
 		return FAILURE
-	so.look_at_point(at + Vector3.UP * 1.2)
+	so.look_at_point(at + Gravity.up_at(at) * 1.2)
 	if target != null and d <= so.melee_reach * 0.9:
 		so.stop()
 		so.melee(target)

@@ -67,7 +67,7 @@ func _physics_process(_delta: float) -> void:
 	if not landed:
 		if t < 1.0:
 			var p := from.lerp(to, t)
-			p.y += ARC * 4.0 * t * (1.0 - t)
+			p += Gravity.up_at(p) * (ARC * 4.0 * t * (1.0 - t))
 			global_position = p
 			return
 		landed = true
@@ -75,7 +75,11 @@ func _physics_process(_delta: float) -> void:
 		_next_id += 1
 		_danger_id = DANGER_ID_BASE + _next_id
 		var r := Vector3(RADIUS, 1.5, RADIUS)
-		s.ai_world.set_danger(_danger_id, AABB(to - Vector3(RADIUS, 0.5, RADIUS), r * 2.0))
+		if Gravity.planet == null:
+			s.ai_world.set_danger(_danger_id, AABB(to - Vector3(RADIUS, 0.5, RADIUS), r * 2.0))
+		else:
+			# A world box: the world's Y is not up here, so a cube round it.
+			s.ai_world.set_danger(_danger_id, AABB(to - Vector3.ONE * RADIUS, Vector3.ONE * RADIUS * 2.0))
 	if now - t0 >= flight + FUSE:
 		_explode()
 
@@ -96,7 +100,7 @@ func _explode() -> void:
 static func blast(services: AIServices, at: Vector3, by: Pawn, damage: float, radius: float,
 		skip: Pawn = null) -> Array:
 	var out: Array = []
-	var from := at + Vector3.UP * 0.3
+	var from := at + Gravity.up_at(at) * 0.3
 	var done := {}
 	# Guns lying near it are thrown (WorldGunPickup).
 	WorldGunPickup.blast(at, radius * 1.5)
@@ -116,7 +120,7 @@ static func blast(services: AIServices, at: Vector3, by: Pawn, damage: float, ra
 			p.health.apply_impact(dmg, &"")
 		out.append([p, dmg])
 	if services.on_structure_hit.is_valid():
-		services.on_structure_hit.call(at, Vector3.DOWN, StructuralDamage.for_shot(WeaponClass.builtin(&"grenade")))
+		services.on_structure_hit.call(at, Gravity.down_at(at), StructuralDamage.for_shot(WeaponClass.builtin(&"grenade")))
 	services.noise(at, HEARD, by)
 	return out
 

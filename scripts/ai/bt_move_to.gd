@@ -27,8 +27,7 @@ func _tick(_delta: float) -> Status:
 	if pawn == null or not blackboard.has_var(target_var):
 		return FAILURE
 	var target: Vector3 = blackboard.get_var(target_var)
-	var to := target - pawn.feet()
-	to.y = 0.0
+	var to := Gravity.flat(target - pawn.feet(), pawn.up)
 	if to.length() <= tolerance:
 		pawn.intents.move = Vector3.ZERO
 		pawn.intents.run = false

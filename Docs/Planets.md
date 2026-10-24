@@ -1288,6 +1288,24 @@ the player's eye and their chests) and fires (first round ~10 s). The squad and 
 GDScript still read world `.y` there -- at the town 8° from the planet's up -- and work; N3 puts
 them on the local up.
 
+**N3 done (2026-10-24).** The squad and tactics GDScript on the Gravity helpers, every change
+exact in the flat game (`up_at` is `Vector3.UP`, `vert` a dot that is `y`, `flat` a subtraction
+that zeroes only `y`, `tangent_basis` the identity, `ground_under` the old `p.y = ground_at`):
+WaveDirector 35 sites, FirefightDirector 17 (its barrier ring kept literal behind
+`Gravity.planet == null`), SpawnSurvey 6 (`what_is_under`'s `y` is a height), AirStrike 12 (the
+run in the target's tangent plane, its ground from `top_over`), TacticsSense 5, RoomTactics 3,
+then the soldier's BT tasks, the squad plays (advance, fall back, search pairs, travel, clear
+room), CoverSearch, BTMoveTo, Masking, Grenade (its danger box a cube on a planet), Danger,
+Commander, PlayerIntent, CombatPolicy, DecisionJudge, SwarmSide, Callouts, Animal,
+WeightTracker, Airspace, AirSupport. Left as they are, by design: BuildingLayout and building
+boxes (building space), child-local offsets, screen-space UI, AimModel's world yaw and pitch
+(the body turns them with `frame_look`, 11.7), and the vehicles' remaining sites (their carried
+frame, 11.7; VehicleNav and VehicleCover are after N2). The flat probes pass as before, the
+windowed `combat_arena --gate` 37/37 and `firefight --gate` 27/27 (single flakes matched on
+main), `--gate=squad` 10/10. Two things fail on main as well, not from this: `fights_back`'s
+"rounds went into the wall" (20 hiding ticks against its > 20, every run) and `threat_style`
+segfaulting at exit after its 7/7. Next: N4.
+
 ### 11.9 Plan: biomes (2026-10-24)
 
 After STA's `PlanetFields` (temperature, humidity, a biome by climate, one baked map shared by the

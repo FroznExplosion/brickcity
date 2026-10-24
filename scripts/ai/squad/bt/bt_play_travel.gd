@@ -148,10 +148,10 @@ func _place(q: Squad, k: int) -> Vector3:
 		p = b
 	if dir.length() < 0.01:
 		dir = _heading()
-	var across := Vector3(-dir.z, 0.0, dir.x).normalized()
+	var across := Gravity.flat(dir, Gravity.up_at(p)).cross(Gravity.up_at(p)).normalized()
 	var side := 1.0 if k % 2 == 1 else -1.0
 	var stepped := q.services.ai_nav.snap(p + across * SIDE_STEP * side)
-	if q.services.ai_nav.can_stand(stepped) and absf(stepped.y - p.y) < 0.5:
+	if q.services.ai_nav.can_stand(stepped) and absf(Gravity.vert(stepped - p, Gravity.up_at(p))) < 0.5:
 		return stepped
 	return p
 
@@ -159,21 +159,23 @@ func _place(q: Squad, k: int) -> Vector3:
 ## There: rank `k` of `n` on a ring round the leader, where a body stands.
 func _gather(q: Squad, k: int, n: int) -> Vector3:
 	var c := _leader.pawn.feet()
-	var a0 := atan2(_heading().z, _heading().x) + PI
+	var tb := Gravity.tangent_basis(c)
+	var h := tb.transposed() * _heading()
+	var a0 := atan2(h.z, h.x) + PI
 	var a := a0 + (float(k) - (n + 1) * 0.5) * (PI / maxf(n, 1))
-	var p := q.services.ai_nav.snap(c + Vector3(cos(a), 0.0, sin(a)) * GATHER)
+	var p := q.services.ai_nav.snap(c + tb * Vector3(cos(a), 0.0, sin(a)) * GATHER)
 	return p if q.services.ai_nav.can_stand(p) else c
 
 
 func _heading() -> Vector3:
 	if _trail.size() >= 2:
-		var d := _trail[_trail.size() - 1] - _trail[maxi(_trail.size() - 4, 0)]
-		d.y = 0.0
+		var d := Gravity.flat(_trail[_trail.size() - 1] - _trail[maxi(_trail.size() - 4, 0)],
+				Gravity.up_at(_trail[_trail.size() - 1]))
 		if d.length() > 0.01:
 			return d.normalized()
 	var q := agent as Squad
 	var to := q.order.point - _leader.pawn.feet() if q.order != null else Vector3.FORWARD
-	to.y = 0.0
+	to = Gravity.flat(to, _leader.pawn.up)
 	return to.normalized() if to.length() > 0.01 else Vector3.FORWARD
 
 

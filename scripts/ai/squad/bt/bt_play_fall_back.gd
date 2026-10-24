@@ -31,16 +31,16 @@ func _enter() -> void:
 	var c := q.contact()
 	var center := q.center()
 	var threat := c.pos if c != null else (q.order.point if q.order != null else center - Vector3.FORWARD)
-	var away := center - threat
-	away.y = 0.0
+	var up := Gravity.up_at(center)
+	var away := Gravity.flat(center - threat, up)
 	away = away.normalized() if away.length() > 0.1 else Vector3.BACK
-	var side := away.cross(Vector3.UP)
+	var side := away.cross(up)
 	var base := center + away * BACK
 	var alive := q.alive()
 	_upgrade.clear()
 	for i in alive.size():
 		var want := base + side * (i - (alive.size() - 1) * 0.5) * 2.0
-		var eye := threat + Vector3.UP * CoverSearch.STAND_EYE
+		var eye := threat + Gravity.up_at(threat) * CoverSearch.STAND_EYE
 		# Off to the rally spot at once; cover near it, when the search is in.
 		_upgrade[i] = {"member": alive[i], "want": want, "threat": threat, "center": center}
 		var cov = CoverSearch.find_queued(alive[i], &"rally", want, eye, false, CoverSearch.POINT_MOVE)
@@ -84,7 +84,7 @@ func _take_cover(q: Squad) -> void:
 			continue
 		var m: Soldier = u.member
 		var cov = CoverSearch.find_queued(m, &"rally", u.want,
-				(u.threat as Vector3) + Vector3.UP * CoverSearch.STAND_EYE, false, CoverSearch.POINT_MOVE)
+				(u.threat as Vector3) + Gravity.up_at(u.threat as Vector3) * CoverSearch.STAND_EYE, false, CoverSearch.POINT_MOVE)
 		if cov == null:
 			continue
 		var spot := _rally_spot(i, cov, Vector3.INF)

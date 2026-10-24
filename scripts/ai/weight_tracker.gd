@@ -96,7 +96,7 @@ func bearer(owner: int) -> Bearer:
 ## The block under a point just below `feet`, or (-1, -1).
 func block_under(feet: Vector3) -> Vector2i:
 	for dy in [0.05, 0.2]:
-		var v := ai_world.block_at(feet - Vector3.UP * dy)
+		var v := ai_world.block_at(feet - Gravity.up_at(feet) * dy)
 		if v.x >= 0:
 			return v
 	return Vector2i(-1, -1)
@@ -157,7 +157,7 @@ func _step_off(b: Bearer) -> void:
 func _cell(chunk: int, feet: Vector3) -> Vector3i:
 	var cs := BrickWorld.get_cell_size()
 	for dy in [0.05, 0.2]:
-		var local: Vector3 = world.get_chunk_transform(chunk).affine_inverse() * (feet - Vector3.UP * dy)
+		var local: Vector3 = world.get_chunk_transform(chunk).affine_inverse() * (feet - Gravity.up_at(feet) * dy)
 		var at := world.get_chunk_origin(chunk) + Vector3i(floori(local.x / cs.x),
 				floori(local.y / cs.y), floori(local.z / cs.z))
 		if world.block_at(chunk, at) >= 0:

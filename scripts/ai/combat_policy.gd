@@ -145,7 +145,7 @@ static func observe(so: Soldier, contact: FactionKnowledge.Contact, cover: Dicti
 	o[Obs.COVER_DIST] = 1.0 if cover.is_empty() \
 			else clampf(feet.distance_to(cover.cover) / 12.0, 0.0, 1.0)
 	o[Obs.COVER_LIFE] = 0.0 if cover.is_empty() else clampf(float(cover.life) / 10.0, 0.0, 1.0)
-	o[Obs.IN_COVER] = 0.0 if s.ai_nav.rate_cover(feet, threat + Vector3.UP * CoverSearch.STAND_EYE,
+	o[Obs.IN_COVER] = 0.0 if s.ai_nav.rate_cover(feet, threat + Gravity.up_at(threat) * CoverSearch.STAND_EYE,
 			CoverSearch.THREAT_HP, CoverSearch.THREAT_RATE).is_empty() else 1.0
 	var g := so.pawn.gun
 	o[Obs.AMMO] = float(g.ammo) / float(maxi(g.mag_size(), 1)) if g != null else 0.0

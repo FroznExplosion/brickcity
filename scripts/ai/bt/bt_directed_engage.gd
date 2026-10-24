@@ -33,14 +33,14 @@ func _tick(_delta: float) -> Status:
 		so.state = "directed close"
 		so.field_goal = c.pos
 		so.pawn.intents.run = d > RUN_BEYOND
-		so.look_at_point(c.pos + Vector3.UP * 1.2)
+		so.look_at_point(c.pos + Gravity.up_at(c.pos) * 1.2)
 	return RUNNING
 
 
 func _close_in(so: Soldier, c: FactionKnowledge.Contact, d: float) -> Status:
 	so.fire_ok = false
 	var target: Pawn = c.pawn if c.pawn != null and is_instance_valid(c.pawn) else null
-	so.look_at_point(c.pos + Vector3.UP * 1.2)
+	so.look_at_point(c.pos + Gravity.up_at(c.pos) * 1.2)
 	if so.attack_kind == "bomber":
 		so.state = "directed bomber"
 		if d <= Soldier.DETONATE_REACH:

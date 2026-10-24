@@ -27,10 +27,10 @@ func _enter() -> void:
 	if c == null:
 		return
 	var lkp := c.pos
-	var dir := lkp - q.center()
-	dir.y = 0.0
+	var up := Gravity.up_at(lkp)
+	var dir := Gravity.flat(lkp - q.center(), up)
 	dir = dir.normalized() if dir.length() > 0.1 else Vector3.FORWARD
-	var right := dir.cross(Vector3.UP)
+	var right := dir.cross(up)
 	var alive := q.alive()
 	for i in alive.size():
 		var pair := i % 2
