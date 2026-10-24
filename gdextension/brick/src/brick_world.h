@@ -1615,6 +1615,10 @@ private:
     /// Join a chunk's bake if one is running. `adopt` takes the result; without
     /// it the work is thrown away, which is what a geometry change wants.
     void settle_bake_job(int chunk_id, bool adopt);
+    /// Wait for every worker reading this chunk (its bake, its stand-in) and
+    /// keep what they made. Before ANY write to its blocks or occupancy: a
+    /// push_back can move the block list out from under a worker.
+    void join_chunk_readers(int chunk_id);
 
     /// Fill c.live_indices for the current alive state. Fixed length: six per
     /// baked face, degenerate where the face is not drawn.
