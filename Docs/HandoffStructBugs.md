@@ -63,7 +63,12 @@ since storey units' log commands (`--ring` 4 of 4, no FAIL line). Open, in order
    third with another chat's headless probe up said 17.6 / 26 (unreliable). Inside the nine of
    item 8 (16.8-20.2, 8-74): the two fixes did not move the mean; the earlier 16.8 / 5 was noise.
 2. **The rest of 8, from the spike lines** (`[prof] N tick(s) over 25 ms`; since `c35046e` also
-   `big_city.tscn -- --chamfer --cost --street --long`, Docs/PerfCaps.md 4): a stand-in's
+   `big_city.tscn -- --chamfer --cost --street --long`, Docs/PerfCaps.md 4). **2026-10-23
+   evening, done, not yet timed:** every stand-in now uploads on a worker
+   (`IslandManager._finish_coarse`), and `build_damage_profile` walks only the outer-wall columns
+   with alive read per block (`damage_profile_probe`: same answer as the full walk, 0.12 ms mean
+   vs 0.40 on a 40x30x34 tower) -- the shadow proxy's profile stays on the main thread; time it
+   with `--cost --street --long` before moving it. Was: a stand-in's
    `add_surface_from_arrays` stalling 9-216 ms (the renderer; idea: every stand-in through the
    worker upload path, `IslandManager._submit_mesh_job`); a shell piece's split 5-17 ms
    (`spawn` -> `split_island`; `adopt` would skip it but `spawn` holds the move caps, crumbling,
