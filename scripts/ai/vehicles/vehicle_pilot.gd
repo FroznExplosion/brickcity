@@ -138,15 +138,19 @@ func _exclude() -> Array[RID]:
 
 
 func _follow() -> void:
+	# On a planet the look is measured in the vehicle's frame (Planets.md 11.7).
+	if Gravity.planet != null and camera is DebugCamera:
+		(camera as DebugCamera).set_frame(vehicle.get(&"frame"))
 	var inside: Vector3 = vehicle.eye_interpolated()
 	if not chase or not camera.is_inside_tree():
 		camera.global_position = inside
 		return
 	var k := _kind()
-	var pivot: Vector3 = vehicle.get_global_transform_interpolated().origin \
-			+ Vector3.UP * (float(CHASE_UP[k]) - (Tank.HEIGHT * 0.5 if vehicle is Tank else 0.0))
+	var o: Vector3 = vehicle.get_global_transform_interpolated().origin
+	var up := Gravity.up_at(o)
+	var pivot: Vector3 = o + up * (float(CHASE_UP[k]) - (Tank.HEIGHT * 0.5 if vehicle is Tank else 0.0))
 	var back := camera.global_transform.basis.z
-	back.y = maxf(back.y, -0.2)
+	back = Gravity.with_vert(back, up, maxf(Gravity.vert(back, up), -0.2))
 	var want := pivot + back.normalized() * float(CHASE_BACK[k])
 	# Pulled in where a wall comes between, as a spring arm does.
 	var q := PhysicsRayQueryParameters3D.create(pivot, want, Layers.WORLD | Layers.STRUCTURE, _exclude())

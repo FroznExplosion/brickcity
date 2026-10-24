@@ -239,6 +239,32 @@ func place(at_feet: Vector3) -> void:
 	body.reset_physics_interpolation()
 
 
+## World look angles (yaw about +Y, pitch) as angles in this body's frame
+## (Docs/Planets.md 11.7) -- what `intents.look_yaw/pitch` mean. Themselves
+## off a planet, where the body's basis is the identity.
+func frame_look(yaw: float, pitch: float) -> Vector2:
+	var b := body.global_transform.basis
+	if Gravity.planet == null or b == Basis.IDENTITY:
+		return Vector2(yaw, pitch)
+	var d := Basis.from_euler(Vector3(pitch, yaw, 0.0)) * Vector3.FORWARD
+	var l := b.orthonormalized().inverse() * d
+	return Vector2(atan2(-l.x, -l.z), atan2(l.y, Vector2(l.x, l.z).length()))
+
+
+## The look angles, in this body's frame, that face along world vector `to`.
+func look_angles_to(to: Vector3) -> Vector2:
+	var b := body.global_transform.basis
+	var l := to if Gravity.planet == null or b == Basis.IDENTITY else b.orthonormalized().inverse() * to
+	return Vector2(atan2(-l.x, -l.z), atan2(l.y, Vector2(l.x, l.z).length()))
+
+
+## Where the look yaw points, along the ground, in the world.
+func look_dir() -> Vector3:
+	var f := -Basis(Vector3.UP, intents.look_yaw).z
+	var b := body.global_transform.basis
+	return f if Gravity.planet == null or b == Basis.IDENTITY else b.orthonormalized() * f
+
+
 ## The middle of the body: what somebody aiming at this pawn aims at.
 func chest() -> Vector3:
 	# Six tenths of the way up, standing or crouched.

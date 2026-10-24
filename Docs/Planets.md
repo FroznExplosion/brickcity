@@ -1172,3 +1172,29 @@ already in the body's frame.
 
 The AI's navigation stays on the flat grid until the nav regions (test 8) are built: on a planet a
 soldier moves, turns and shoots in its local frame, but paths only inside one flat region.
+
+**Where it stands.** Ported, each with the flat path kept literal wherever a helper is not exact
+(`if Gravity.planet == null` / `if frame == Basis.IDENTITY`):
+
+- **Pawn** (moves, view, controller, debug camera): body carried, look in the body frame; on a
+  planet only, a standing body presses into the floor (`Gravity.standing_vert`) and an upward
+  speed under 1.5 m/s on the floor is the ground rising (`Gravity.floor_rise`), which cured
+  is_on_floor flicker on the voxel facets. `Pawn.frame_look` turns world look angles (what
+  AimModel returns) into the body frame; `look_angles_to`, `look_dir` the same for a vector.
+- **Titan** (motor, mech, brain, rodeo, fall rule, pilot, cockpit view): `motor.torso_basis()`
+  is the torso frame everywhere.
+- **Tank, truck, APC** (and Splatter, the deck, the brain's eye, brick debris, the chase camera):
+  a carried `frame`, yaw measured in it.
+- **Flyer**: ground from the planet's own height (`Gravity.ground_height`), orbits round the
+  target in its tangent plane.
+- **Soldier** (body side): steering, sight cone, aim, reach, waypoints, unstick ring,
+  `body_fits`, breach plants, grenades, look.
+
+Planet gates (scenes/planet.tscn, each body tracked with its own collision viewer,
+`PlanetBody.track`): `--gate=pawn`, `--gate=mech`, `--gate=tank` (the player's tank: stand,
+drive a great circle, turn about local up, stop, reverse, drop), `--gate=soldier` (an AI body
+walked 40 m round the curve as walk_toward walks it, aimed through `frame_look`, `body_fits`).
+
+**Not yet:** the soldier's brain on a planet -- its nav, sight grid, cover and the AI world are
+the flat game's C++ grid (needs the nav regions, test 8); `VehicleCover`, `VehicleNav`;
+destruction on the planet; biomes and trees.

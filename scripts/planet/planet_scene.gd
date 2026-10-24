@@ -10,6 +10,8 @@ extends Node3D
 ##   land on foot. Left click to look, Esc to let go.
 ##   -- --gate: the walker -- walk, fly to 30 km and back, land; quit.
 ##   -- --gate=pawn: the pawn -- walk, strafe, jump, mantle, fire, fly, land.
+##   -- --gate=mech, --gate=tank, --gate=soldier: a titan, a tank on the
+##   player's controls, a soldier's body moved and aimed as its brain does it.
 
 var data: PlanetData
 var planet: PlanetBody
@@ -27,6 +29,8 @@ var view: PlayerView
 var on_foot := false
 var _pawn_gate := false
 var _mech_gate := false
+var _tank_gate := false
+var _soldier_gate := false
 var sun: DirectionalLight3D
 var sky_mat: ProceduralSkyMaterial
 var env: Environment
@@ -47,7 +51,9 @@ func _ready() -> void:
 	_gate = "--gate" in OS.get_cmdline_user_args()
 	_pawn_gate = "--gate=pawn" in OS.get_cmdline_user_args()
 	_mech_gate = "--gate=mech" in OS.get_cmdline_user_args()
-	_gate = _gate or _pawn_gate or _mech_gate
+	_tank_gate = "--gate=tank" in OS.get_cmdline_user_args()
+	_soldier_gate = "--gate=soldier" in OS.get_cmdline_user_args()
+	_gate = _gate or _pawn_gate or _mech_gate or _tank_gate or _soldier_gate
 	data = PlanetData.new()
 	data.planet_name = "proto"
 	# Towns and landmarks: their pads go into the ground before it is built.
@@ -102,6 +108,10 @@ func _ready() -> void:
 			_run_pawn_gate()
 		elif _mech_gate:
 			_run_mech_gate()
+		elif _tank_gate:
+			_run_tank_gate()
+		elif _soldier_gate:
+			_run_soldier_gate()
 		else:
 			_run_gate()
 
@@ -272,7 +282,7 @@ func _process(_delta: float) -> void:
 	# collider); then, unless this is the walker's own gate, the pawn stands on it.
 	if walker.frozen and pawn == null and _ground_hit(walker.global_position) != Vector3.INF:
 		walker.frozen = false
-		if not _gate or _pawn_gate or _mech_gate:
+		if not _gate or _pawn_gate or _mech_gate or _tank_gate or _soldier_gate:
 			_spawn_player(_ground_hit(walker.global_position), -walker.global_transform.basis.z)
 	if not on_foot:
 		walker.flying = pawn != null or walker.flying
@@ -699,3 +709,163 @@ func _run_mech_gate() -> void:
 	print("[planet] frames: worst %.1f ms; over 40 ms: %s" % [_worst_ms, _hitches])
 	print("[planet] mech gate: %d ok, %d FAIL" % [_ok, _fail])
 	get_tree().quit(1 if _fail > 0 else 0)
+
+
+# ---------------------------------------------------------------------------
+# The tank's gate: the player's tank on local down (Planets.md 11.7). Driven by
+# its throttle and steer, as VehiclePilot drives it; no AI services.
+
+## A spot `metres` ahead of the pawn's camera, on the ground.
+func _ahead_on_ground(metres: float) -> Vector3:
+	var fwd := Gravity.flat(-cam.global_transform.basis.z, pawn.up).normalized()
+	var spot := pawn.feet() + fwd * metres
+	var ground := _ground_hit(spot + Gravity.up_at(spot) * 20.0)
+	return spot if ground == Vector3.INF else ground
+
+
+func _run_tank_gate() -> void:
+	var t0 := Time.get_ticks_msec()
+	while pawn == null and Time.get_ticks_msec() - t0 < 60000:
+		await _frames(1)
+	await get_tree().create_timer(1.0).timeout
+	var at := _ahead_on_ground(20.0)
+	var tk := Tank.make(null, self, at + Gravity.up_at(at) * 0.3, 0.0, 0, null, null, Callable(),
+			RandomNumberGenerator.new())
+	PlanetBody.track(tk)
+	await get_tree().create_timer(3.0).timeout
+	var tilt := rad_to_deg(tk.global_transform.basis.y.angle_to(tk.up))
+	_check("the tank stands square to local up (< 0.5 deg)", tilt < 0.5, "%.3f deg" % tilt)
+	_check("on the voxel ground", tk.is_on_floor(), "%.2f m over it" % _over_ground(tk.feet()))
+	_face(Gravity.flat(tk.global_position - pawn.body.global_position, pawn.up).normalized())
+	await _frames(10)
+	await _shot("planet_tank_stand")
+	_check("the player takes the wheel", tk.take_player(0, Tank.Seat.DRIVER) and tk.driven())
+	# Full ahead 12 s: along the great circle its nose points down.
+	var p0 := tk.feet()
+	var n := (p0 - planet.global_position).normalized().cross(tk.forward()).normalized()
+	var air := 0
+	var ticks := 0
+	var off := 0.0
+	tk.throttle = 1.0
+	var t1 := Time.get_ticks_msec()
+	while Time.get_ticks_msec() - t1 < 12000:
+		await get_tree().physics_frame
+		ticks += 1
+		if not tk.is_on_floor():
+			air += 1
+		off = maxf(off, absf((tk.feet() - planet.global_position).dot(n)))
+	var driven := _arc(p0, tk.feet())
+	_check("drives on the voxel ground (on it > 95% of ticks)", air < ticks * 0.05, "%d of %d off" % [air, ticks])
+	_check("covers ground at its speed (12 s, > 45 m)", driven > 45.0, "%.1f m" % driven)
+	_check("straight along its great circle (< 1% off)", off < driven * 0.01, "%.2f m off over %.0f m" % [off, driven])
+	_check("still square to local up (< 0.5 deg)",
+			rad_to_deg(tk.global_transform.basis.y.angle_to(tk.up)) < 0.5)
+	await _shot("planet_tank_driven")
+	# Steer left 2 s at speed: it turns about the local up.
+	var f0 := tk.forward()
+	tk.steer = 1.0
+	await get_tree().create_timer(2.0).timeout
+	tk.steer = 0.0
+	var f1 := tk.forward()
+	var turned := rad_to_deg(Gravity.flat(f0, tk.up).signed_angle_to(Gravity.flat(f1, tk.up), tk.up))
+	var asked := rad_to_deg(Tank.TURN * 2.0)
+	_check("turns left about the local up (~%.0f deg asked)" % asked,
+			turned > asked * 0.7 and turned < asked * 1.1, "%.1f deg" % turned)
+	_check("its nose level along the ground (< 1 deg)", absf(90.0 - rad_to_deg(f1.angle_to(tk.up))) < 1.0)
+	# Off the throttle: it rolls to a stop.
+	tk.throttle = 0.0
+	await get_tree().create_timer(3.0).timeout
+	var sp := Gravity.flat(tk.velocity, tk.up).length()
+	_check("off the throttle it stops (< 0.3 m/s)", sp < 0.3, "%.2f m/s" % sp)
+	# Back up 3 s: the other way along its nose.
+	var b0 := tk.feet()
+	tk.throttle = -1.0
+	await get_tree().create_timer(3.0).timeout
+	tk.throttle = 0.0
+	var back := (tk.feet() - b0).dot(-tk.forward())
+	_check("reverses along its nose (> 5 m)", back > 5.0, "%.1f m" % back)
+	# Dropped from 6 m: down on its tracks.
+	await get_tree().create_timer(2.0).timeout
+	tk.global_position = tk.feet() + tk.up * (6.0 + Tank.HEIGHT * 0.5)
+	tk.velocity = Vector3.ZERO
+	tk.reset_physics_interpolation()
+	await get_tree().create_timer(4.0).timeout
+	_check("dropped 6 m, it lands on the ground", tk.is_on_floor(), "%.2f m over it" % _over_ground(tk.feet()))
+	print("[planet] frames: worst %.1f ms; over 40 ms: %s" % [_worst_ms, _hitches])
+	print("[planet] tank gate: %d ok, %d FAIL" % [_ok, _fail])
+	get_tree().quit(0 if _fail == 0 else 1)
+
+
+# ---------------------------------------------------------------------------
+# The soldier's gate: an AI body on local down (Planets.md 11.7). Moved the way
+# Soldier.walk_toward moves it (a world direction along the ground) and aimed
+# the way Soldier aims (AimModel's world angles through Pawn.frame_look). The
+# brain's world -- nav, sight, the AI grid -- is still the flat game's.
+
+func _run_soldier_gate() -> void:
+	var t0 := Time.get_ticks_msec()
+	while pawn == null and Time.get_ticks_msec() - t0 < 60000:
+		await _frames(1)
+	await get_tree().create_timer(1.0).timeout
+	var at := _ahead_on_ground(10.0)
+	var so := Pawn.spawn(self, at + Gravity.up_at(at) * 0.2, 1)
+	so.moves = PawnMoves.new(so)
+	PlanetBody.track(so.body)
+	await get_tree().create_timer(2.5).timeout
+	_check("the soldier stands upright (< 0.5 deg)",
+			rad_to_deg(so.body.global_transform.basis.y.angle_to(so.up)) < 0.5)
+	_check("on the voxel ground", so.body.is_on_floor(), "%.2f m over it" % _over_ground(so.feet()))
+	# Walk to a point 40 m round the planet, steering as walk_toward does.
+	var c := planet.global_position
+	var radial := (so.feet() - c).normalized()
+	var side := Gravity.flat(so.feet() - pawn.feet(), so.up).normalized()
+	var goal := c + _round_dir(radial, radial + side, 40.0) * (so.feet() - c).length()
+	var ticks := 0
+	var air := 0
+	var left := INF
+	var t1 := Time.get_ticks_msec()
+	while Time.get_ticks_msec() - t1 < 20000:
+		await get_tree().physics_frame
+		ticks += 1
+		if not so.body.is_on_floor():
+			air += 1
+		var d := Gravity.flat(goal - so.feet(), so.up)
+		left = d.length()
+		if left <= 0.6:
+			break
+		so.intents.move = d.normalized()
+		so.intents.run = true
+	so.intents.move = Vector3.ZERO
+	_check("walks 40 m round the curve to its goal (< 0.6 m)", left <= 0.6, "%.2f m short" % left)
+	_check("feet on the ground on the way (> 95% of ticks)", air < ticks * 0.05, "%d of %d off" % [air, ticks])
+	_face(Gravity.flat(so.body.global_position - pawn.body.global_position, pawn.up).normalized())
+	await _frames(10)
+	await _shot("planet_soldier_walked")
+	await get_tree().create_timer(1.0).timeout
+	# Aim at the player: AimModel's world yaw and pitch, through frame_look.
+	var eye := so.eye.global_position
+	var to := pawn.chest() - eye
+	var wyaw := atan2(-to.x, -to.z)
+	var wpitch := atan2(to.y, Vector2(to.x, to.z).length())
+	var la := so.frame_look(wyaw, wpitch)
+	so.intents.look_yaw = la.x
+	so.intents.look_pitch = la.y
+	var miss := rad_to_deg(so.look_dir().angle_to(Gravity.flat(to, so.up).normalized()))
+	_check("its look turns to the player along the ground (< 0.5 deg)", miss < 0.5, "%.2f deg" % miss)
+	var tl := so.body.global_transform.basis.orthonormalized().inverse() * to
+	var want_pitch := atan2(tl.y, Vector2(tl.x, tl.z).length())
+	_check("and its pitch is the pitch in its own frame (< 0.5 deg)", absf(rad_to_deg(la.y - want_pitch)) < 0.5,
+			"%.2f vs %.2f deg" % [rad_to_deg(la.y), rad_to_deg(want_pitch)])
+	var la2 := so.look_angles_to(to)
+	_check("look_angles_to agrees with frame_look",
+			absf(wrapf(la2.x - la.x, -PI, PI)) < 0.002 and absf(la2.y - la.y) < 0.002)
+	# Its body fits where it stands, upright to local up; sunk half a metre into
+	# the ground it does not. (The voxel collider is one-sided: a capsule with
+	# its middle under the surface meets only back faces, which Jolt ignores --
+	# never a spot body_fits is asked about, as they are snapped to the ground.)
+	_check("body_fits: room where it stands", Soldier.body_fits(get_world_3d(), so.feet(), so.body.get_rid()))
+	_check("body_fits: no room half a metre into the ground",
+			not Soldier.body_fits(get_world_3d(), so.feet() - so.up * 0.5, so.body.get_rid()))
+	print("[planet] frames: worst %.1f ms; over 40 ms: %s" % [_worst_ms, _hitches])
+	print("[planet] soldier gate: %d ok, %d FAIL" % [_ok, _fail])
+	get_tree().quit(0 if _fail == 0 else 1)
