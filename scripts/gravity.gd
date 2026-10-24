@@ -69,6 +69,23 @@ static func with_vert(v: Vector3, up: Vector3, x: float) -> Vector3:
 	return v + up * (x - v.dot(up))
 
 
+## What a body standing on the floor keeps along its up: nothing on the flat
+## game's flat floors; on a planet a little INTO the floor, or move_and_slide
+## meets nothing on the convex ground and is_on_floor flickers (test 5, and
+## the pawn: 22% of a walk's ticks "in the air" with nothing).
+static func standing_vert() -> float:
+	return -1.0 if planet != null and is_instance_valid(planet) else 0.0
+
+
+## How fast a body on the floor may be moving along its up and still be
+## following the floor, not leaving it: 0 in the flat game, as it always was;
+## on a planet a slide up a facet of the voxel ground leaves a little upward
+## speed, and kept, it lifts the body off for a tick every half metre (the
+## pawn: 79 such hops in 42 m). Well under a jump's 4.2 m/s.
+static func floor_rise() -> float:
+	return 1.5 if planet != null and is_instance_valid(planet) else 0.0
+
+
 ## How high a world point stands (was `p.y`): over the planet's datum on one.
 static var planet_radius := 0.0
 

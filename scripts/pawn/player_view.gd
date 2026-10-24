@@ -252,7 +252,8 @@ func setup(cam: DebugCamera, p: Pawn, g: GunController) -> void:
 	pawn.meleed.connect(_on_meleed)
 	if pawn.moves != null:
 		pawn.moves.mantled.connect(_on_mantled)
-	_prev_look = Vector2(camera.rotation.y, camera.rotation.x)
+	var la0: Vector3 = camera.look_angles()
+	_prev_look = Vector2(la0.y, la0.x)
 	if gun.gun != null:
 		hold(gun.gun)
 	# The first gun comes up from below.
@@ -397,7 +398,7 @@ func _hands_on_lip() -> bool:
 	if mv == null or not mv.is_hanging():
 		return false
 	var look := -camera.global_transform.basis.z
-	var flat := Vector3(look.x, 0.0, look.z)
+	var flat := Gravity.flat(look, pawn.up)
 	return flat.length() < 0.1 or flat.normalized().dot(-mv.ledge_normal) > -0.2
 
 
@@ -504,7 +505,8 @@ func _recover_kick(delta: float) -> void:
 func _model(delta: float, on_floor: bool, hv: float, sliding: bool) -> void:
 	# Turn rate, low-passed: mouse deltas arrive in spikes, and a gun chasing the
 	# raw rate jitters.
-	var look := Vector2(camera.rotation.y, camera.rotation.x)
+	var la: Vector3 = camera.look_angles()   # the camera's rotation, off a planet
+	var look := Vector2(la.y, la.x)
 	var raw := Vector2(wrapf(look.x - _prev_look.x, -PI, PI), look.y - _prev_look.y) / delta
 	_prev_look = look
 	raw = raw.clamp(Vector2(-LOOK_RATE_MAX, -LOOK_RATE_MAX), Vector2(LOOK_RATE_MAX, LOOK_RATE_MAX))
@@ -525,7 +527,7 @@ func _model(delta: float, on_floor: bool, hv: float, sliding: bool) -> void:
 	var vel := pawn.body.velocity
 	var acc := (vel - _prev_vel) / delta
 	_prev_vel = vel
-	acc.y = 0.0
+	acc = Gravity.flat(acc, pawn.up)
 	acc = camera.global_transform.basis.orthonormalized().inverse() * acc
 	_accel = _accel.lerp(acc.limit_length(60.0), clampf(20.0 * delta, 0.0, 1.0))
 	_mom_vel += (-MOM_STIFF * _mom - MOM_DAMP * _mom_vel - _accel * MOM_GAIN * MOM_STIFF) * delta
@@ -577,7 +579,7 @@ func _model(delta: float, on_floor: bool, hv: float, sliding: bool) -> void:
 	# Rising, the hands sink a little; falling, they float up, the muzzle with them,
 	# the more the faster the fall -- the landing then slams it down (_on_landed).
 	if not on_floor:
-		var vy := pawn.body.velocity.y
+		var vy := Gravity.vert(pawn.body.velocity, pawn.up)
 		pos.y += clampf(-vy * 0.004, -0.04, 0.05) * free
 		rot.x += clampf(-vy * 0.01, -0.05, 0.22) * free
 

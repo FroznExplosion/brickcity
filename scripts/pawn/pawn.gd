@@ -428,8 +428,8 @@ func _walk(delta: float, wish: Vector3, speed: float) -> void:
 	var shove_up := Gravity.vert(shove, up)
 	if shove_up > 0.0 and v_up < shove_up:
 		v_up = shove_up
-	elif body.is_on_floor() and v_up <= 0.0:
-		v_up = 0.0
+	elif body.is_on_floor() and v_up <= Gravity.floor_rise():
+		v_up = Gravity.standing_vert()
 	else:
 		v_up -= GRAVITY * delta
 	body.velocity = wish * speed + Gravity.flat(shove, up) + up * v_up

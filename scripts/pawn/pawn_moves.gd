@@ -346,8 +346,8 @@ func _walk_tick(delta: float, wish: Vector3, speed: float, on_floor: bool) -> bo
 	if on_floor:
 		var rate := GROUND_ACCEL if wish != Vector3.ZERO else GROUND_FRICTION
 		h = h.move_toward(wish * speed, rate * delta)
-		if Gravity.vert(b.velocity, pawn.up) <= 0.0:
-			b.velocity = Gravity.with_vert(b.velocity, pawn.up, 0.0)
+		if Gravity.vert(b.velocity, pawn.up) <= Gravity.floor_rise():
+			b.velocity = Gravity.with_vert(b.velocity, pawn.up, Gravity.standing_vert())
 	else:
 		if wish != Vector3.ZERO:
 			var add := maxf(speed, Pawn.WALK_SPEED) - h.dot(wish)
@@ -446,8 +446,8 @@ func _slide_tick(delta: float, wish: Vector3) -> void:
 	var hs := h.length()
 	if b.is_on_floor():
 		_slide_air = 0.0
-		if Gravity.vert(b.velocity, pawn.up) <= 0.0:
-			b.velocity = Gravity.with_vert(b.velocity, pawn.up, 0.0)
+		if Gravity.vert(b.velocity, pawn.up) <= Gravity.floor_rise():
+			b.velocity = Gravity.with_vert(b.velocity, pawn.up, Gravity.standing_vert())
 	else:
 		_slide_air += delta
 		b.velocity += Gravity.down_at(b.global_position) * Pawn.GRAVITY * delta
