@@ -2940,17 +2940,22 @@ func _finish_coarse(isl: BrickIsland, arrays: Array) -> void:
 	coarse_built += 1
 	coarse_worst_ms = maxf(coarse_worst_ms, isl.coarse_ms)
 	var ok := not arrays.is_empty() and mesh_arrays_ok(arrays, "island %d (coarse)" % isl.chunk)
+	# Every stand-in is uploaded on a worker, however small (THREAD_MESH_VERTS
+	# is for the bricks). One handed to the renderer here waited for the other
+	# workers' uploads: a 76-brick one 216.6 ms in a --big --shot, its build
+	# 1.1 (2026-10-23) -- as the bands did (CityScene.BAND_THREAD_VERTS). It is
+	# far off: a tick or two of the old mesh, or of none, is not seen.
 	if ok:
 		var verts := (arrays[Mesh.ARRAY_VERTEX] as PackedVector3Array).size()
 		coarse_verts += verts
-		if verts >= THREAD_MESH_VERTS:
-			if not _upload_ok(verts):
-				isl.upload_waiting = true
-				_upload_waiting.append([isl, arrays, true])
-				uploads_waited += 1
-				return
-			_submit_mesh_job(isl, arrays, true)
+		if not _upload_ok(verts):
+			isl.upload_waiting = true
+			_upload_waiting.append([isl, arrays, true])
+			uploads_waited += 1
 			return
+		_submit_mesh_job(isl, arrays, true)
+		_finish_split = "to a worker"
+		return
 	var _t0 := Time.get_ticks_usec()
 	var mesh := ArrayMesh.new()
 	if ok:
