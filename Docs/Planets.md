@@ -1195,6 +1195,55 @@ Planet gates (scenes/planet.tscn, each body tracked with its own collision viewe
 drive a great circle, turn about local up, stop, reverse, drop), `--gate=soldier` (an AI body
 walked 40 m round the curve as walk_toward walks it, aimed through `frame_look`, `body_fits`).
 
-**Not yet:** the soldier's brain on a planet -- its nav, sight grid, cover and the AI world are
+**Not yet:** the soldier's brain on a planet (plan: 11.8) -- its nav, sight grid, cover and the AI world are
 the flat game's C++ grid (needs the nav regions, test 8); `VehicleCover`, `VehicleNav`;
 destruction on the planet; biomes and trees.
+
+### 11.8 Plan: the AI's nav regions on a planet (2026-10-24)
+
+The soldier's body is on local down (11.7); its brain is not: `AIWorld` and `AINav` (C++) and
+the squad and tactics layer above them assume world +Y is up and read the ground from the flat
+terrain's field. Test 8 showed a flat region in its own frame is flat enough at 10 km (0.2 m and
+0.35° off the sphere for 8 x 8 tiles); this is how it goes into the game.
+
+**N1. A frame for `AIWorld` and `AINav` (C++).** `AIWorld.set_frame(Transform3D)` -- region to
+world. Every bound method takes and returns WORLD values: positions in through the inverse,
+positions and paths out through the frame, directions (`field_dir`) through its basis, cover
+results' points through the frame. Inside, everything stays the region's flat world: AINav's
+own calls into AIWorld are C++ calls, never the bound ones, so they are not converted twice.
+With the frame IDENTITY (the flat game) every wrapper takes the path it takes today -- no
+transform at all, bit-identical, and every AI probe still guards it. The translation-only
+re-centre (PlanetFrame) moves the frame's origin; nothing inside is recomputed.
+
+**N1b. Ground from a grid.** `AIWorld.set_ground_grid(origin, step, w, h, heights)`: the
+region's ground as heights in its own frame, one sample every 4 studs (1.4 m), read bilinearly
+at a stud's centre in `_ground_plate` instead of `BrickTerrain::surface_plate`. The frame's
+origin sits under the region's lowest ground, so its plates count up from 0 as the flat game's
+do. Outside the grid the ground is a wall: a path never leaves its region. Built from
+`PlanetData.height` (GDScript, ~65 000 samples for a 1024-stud region, about 0.3 s, off the
+fight's path), the sea level from `PlanetData.sea_level` in the frame.
+
+**N2. One region round the fight first.** `PlanetAI`: an `AIServices` whose world and nav see a
+region of 1024 x 1024 studs (358 m; its corners tilt 1.45° and sag 3 m at 10 km -- the sag is
+only ground height, the tilt is the AI's "vertical" 1.45° from the true one at the edge, 5 cm
+over a body's height) centred on the player's town when the AI is set up there. Soldiers there
+fight on it with their brains unchanged. Leaving it: no paths outside (N4 is the fix).
+
+**N3. The squad and tactics layer on the Gravity helpers.** The GDScript AI still reads world
+`.y` and `Vector3.UP` in about 280 places (most: wave_director 39, firefight_director 18,
+building_layout 18, transport_truck 17, spawn_survey 13, air_strike 11, tactics_sense 8,
+room_tactics 6). Ported as 11.7 ported the movers, the flat path exact or kept literal, file by
+file, each file's own probes run before the next.
+
+**N4. Many regions: HPA* clusters in their own frames.** Regions of 8 x 8 tiles on stud-line
+borders (4 x 4 under 5 km radius), each the next tangent frame; portals precomputed per border,
+the path stitched at them as test 8 did by brute force (1.8 s there; the precomputed graph is
+what `ai_nav_hpa.cpp` already does for its clusters). Regions made round each player group as
+it goes, dropped behind it.
+
+**Gate (planet scene, `--gate=squad`):** a squad set down on the region walks to the player
+round the curve, takes cover, fires; their paths stay on the ground (within a plate of
+`PlanetData.height`); the flat AI probes unchanged after N1 and after each file of N3.
+
+**Not here:** buildings' bricks in the AI's world on a planet (their own frames, 9.2), vehicle
+nav (`VehicleNav`), `VehicleCover` -- after N2.
