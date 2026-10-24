@@ -84,6 +84,8 @@ func services() -> AIServices:
 
 
 func _basis() -> Basis:
+	if Gravity.planet != null:
+		return vehicle.global_transform.basis.orthonormalized()
 	return Basis(Vector3.UP, vehicle.rotation.y)
 
 

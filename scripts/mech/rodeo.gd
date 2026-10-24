@@ -145,7 +145,7 @@ func drop(why: String) -> void:
 		p.body.collision_layer = _rider_layers.x
 		p.body.collision_mask = _rider_layers.y
 		if why != "dead":
-			var back := Basis(Vector3.UP, mech.motor.torso_yaw).z
+			var back := mech.motor.torso_basis().z
 			var at := mech.feet() + back * DROP_OUT
 			var s := services()
 			if s != null and s.ai_nav != null:
@@ -157,7 +157,7 @@ func drop(why: String) -> void:
 
 
 func seat_point() -> Vector3:
-	var back := Basis(Vector3.UP, mech.motor.torso_yaw).z
+	var back := mech.motor.torso_basis().z
 	return mech.feet() + Vector3.UP * SEAT_UP + back * SEAT_BACK
 
 
@@ -283,7 +283,7 @@ func _crushed() -> bool:
 	var s := services()
 	if s == null or s.ai_world == null:
 		return false
-	var back := Basis(Vector3.UP, mech.motor.torso_yaw).z
+	var back := mech.motor.torso_basis().z
 	# Going back first, and fast.
 	var v := Vector3(mech.body.velocity.x, 0.0, mech.body.velocity.z)
 	if v.length() < CRUSH_SPEED or v.normalized().dot(back) < 0.5:

@@ -154,9 +154,9 @@ static func spawn(parent: Node, at_feet: Vector3, yaw := 0.0, p_team := 0) -> Me
 	m._build_greybox()
 	parent.add_child(b)
 	if b.is_inside_tree():
-		b.global_position = at_feet + Vector3.UP * HEIGHT * 0.5
+		b.global_position = at_feet + Gravity.up_at(at_feet) * HEIGHT * 0.5
 	else:
-		b.position = at_feet + Vector3.UP * HEIGHT * 0.5
+		b.position = at_feet + Gravity.up_at(at_feet) * HEIGHT * 0.5
 	b.reset_physics_interpolation()
 	mo.reset(yaw)
 	m.intents.clear(yaw)
@@ -263,7 +263,7 @@ func is_empty() -> bool:
 ## on the walking map when there is one.
 func mount_point() -> Vector3:
 	var z_sign := -1.0 if layers.hatch_side == "front" else 1.0
-	var back := Basis(Vector3.UP, motor.torso_yaw).z
+	var back := motor.torso_basis().z
 	var at := feet() + back * z_sign * MOUNT_OUT
 	var s := layers.services
 	if s != null and s.ai_nav != null:
@@ -280,9 +280,9 @@ func mount_spot_clear() -> bool:
 	if s == null or s.ai_world == null:
 		return true
 	var z_sign := -1.0 if layers.hatch_side == "front" else 1.0
-	var back := Basis(Vector3.UP, motor.torso_yaw).z
+	var back := motor.torso_basis().z
 	var at := feet() + back * z_sign * MOUNT_OUT
-	if s.ai_world.solid_at(at + Vector3.UP * 0.9) or s.ai_world.solid_at(at + Vector3.UP * 1.5):
+	if s.ai_world.solid_at(at + motor.up * 0.9) or s.ai_world.solid_at(at + motor.up * 1.5):
 		return false
 	if s.ai_nav != null:
 		var snapped := s.ai_nav.snap(at)
@@ -295,7 +295,7 @@ func mount_spot_clear() -> bool:
 func can_reach(p: Pawn) -> bool:
 	var mp := mount_point()
 	var f := p.feet()
-	return Vector2(f.x - mp.x, f.z - mp.z).length() <= MOUNT_REACH and absf(f.y - mp.y) < 1.2
+	return Gravity.flat(f - mp, motor.up).length() <= MOUNT_REACH and absf(Gravity.vert(f - mp, motor.up)) < 1.2
 
 
 ## `p` gets in, from the mount point (or from `anywhere`, for a pilot fielded in
@@ -344,7 +344,7 @@ func dismount(thrown := false) -> Pawn:
 	var at := mount_point()
 	if thrown:
 		var z_sign := -1.0 if layers.hatch_side == "front" else 1.0
-		var out := Basis(Vector3.UP, motor.torso_yaw).z * z_sign
+		var out := motor.torso_basis().z * z_sign
 		at = feet() + out * (float(MechLayers.NUKE[1]) + EJECT_CLEAR)
 		var s := layers.services
 		if s != null and s.ai_nav != null:
@@ -368,7 +368,7 @@ func _stow(p: Pawn) -> void:
 	p.body.collision_mask = 0
 	p.body.visible = false
 	p.intents.clear()
-	p.place(feet() + Vector3.UP * (COCKPIT_Y - Pawn.BODY_HEIGHT * 0.5))
+	p.place(feet() + motor.up * (COCKPIT_Y - Pawn.BODY_HEIGHT * 0.5))
 	p.body.process_mode = Node.PROCESS_MODE_DISABLED
 	p.set_meta(&"in_mech", self)
 
@@ -418,13 +418,13 @@ func melee(target: Mech) -> bool:
 	if target == null or target.layers == null or target.layers.dead or _clock < melee_ready_at:
 		return false
 	var to := target.feet() - feet()
-	if Vector2(to.x, to.z).length() > MELEE_REACH or absf(to.y) > HEIGHT * 0.5:
+	if Gravity.flat(to, motor.up).length() > MELEE_REACH or absf(Gravity.vert(to, motor.up)) > HEIGHT * 0.5:
 		return false
 	melee_ready_at = _clock + MELEE_GAP
 	melee_hits += 1
 	# Where the fist lands: the near side of its torso, at the cockpit's height.
-	var flat := Vector3(-to.x, 0.0, -to.z).normalized()
-	var at := target.feet() + Vector3.UP * COCKPIT_Y + flat * RADIUS * 0.85
+	var flat := Gravity.flat(-to, motor.up).normalized()
+	var at := target.feet() + motor.up * COCKPIT_Y + flat * RADIUS * 0.85
 	target.layers.melee(MELEE_DAMAGE, target.layers.zone_at(at))
 	return true
 
@@ -436,23 +436,23 @@ func punch_wall(at: Vector3, on_hit: Callable) -> bool:
 	if not on_hit.is_valid() or _clock < melee_ready_at:
 		return false
 	var to := at - feet()
-	if Vector2(to.x, to.z).length() > MELEE_REACH or to.y < -0.5 or to.y > HEIGHT:
+	if Gravity.flat(to, motor.up).length() > MELEE_REACH or Gravity.vert(to, motor.up) < -0.5 or Gravity.vert(to, motor.up) > HEIGHT:
 		return false
 	melee_ready_at = _clock + MELEE_GAP
 	wall_punches += 1
-	on_hit.call(at, Vector3(to.x, 0.0, to.z).normalized(), {"blast": true, "radius": PUNCH_RADIUS, "hp": 0})
+	on_hit.call(at, Gravity.flat(to, motor.up).normalized(), {"blast": true, "radius": PUNCH_RADIUS, "hp": 0})
 	return true
 
 
 func feet() -> Vector3:
-	return body.global_position - Vector3.UP * HEIGHT * 0.5
+	return body.global_position - motor.up * HEIGHT * 0.5
 
 
 ## The pilot's eye between physics ticks: the chassis is moved 30 times a second.
 func cockpit_interpolated() -> Vector3:
 	var o := body.get_global_transform_interpolated().origin
-	var fwd := -Basis(Vector3.UP, motor.torso_yaw).z
-	return o + Vector3.UP * (COCKPIT_Y - HEIGHT * 0.5) + fwd * COCKPIT_FORWARD
+	var fwd := -motor.torso_basis().z
+	return o + motor.up * (COCKPIT_Y - HEIGHT * 0.5) + fwd * COCKPIT_FORWARD
 
 
 func _physics_process(delta: float) -> void:
@@ -470,13 +470,16 @@ func _physics_process(delta: float) -> void:
 func _aim_arm(delta: float) -> void:
 	var want_yaw := intents.aim_yaw
 	var want_pitch := intents.aim_pitch
-	var shoulder := body.global_position + Vector3.UP * (SHOULDER.y - HEIGHT * 0.5) \
-			+ Basis(Vector3.UP, motor.torso_yaw) * Vector3(SHOULDER.x, 0.0, SHOULDER.z)
+	var shoulder := body.global_position + motor.up * (SHOULDER.y - HEIGHT * 0.5) \
+			+ motor.torso_basis() * Vector3(SHOULDER.x, 0.0, SHOULDER.z)
 	if aim_point != Vector3.INF:
 		var to := aim_point - shoulder
 		if to.length() > 2.0:
-			want_yaw = atan2(-to.x, -to.z)
-			want_pitch = atan2(to.y, Vector2(to.x, to.z).length())
+			# In the body's frame, as every yaw here is (Docs/Planets.md 11.7).
+			var tl := body.global_transform.basis.orthonormalized().inverse() * to \
+					if body.global_transform.basis != Basis.IDENTITY else to
+			want_yaw = atan2(-tl.x, -tl.z)
+			want_pitch = atan2(tl.y, Vector2(tl.x, tl.z).length())
 	var rel := clampf(wrapf(want_yaw - motor.torso_yaw, -PI, PI), -ARM_YAW_LIMIT, ARM_YAW_LIMIT)
 	arm_yaw = move_toward(arm_yaw, rel, ARM_YAW_SPEED * delta)
 	arm_pitch = clampf(want_pitch, -ARM_PITCH_LIMIT, ARM_PITCH_LIMIT)

@@ -249,6 +249,12 @@ func set_loiter(center: Vector3) -> void:
 func in_area(p: Vector3) -> Vector3:
 	if not hover or loiter_center == Vector3.INF:
 		return p
+	if Gravity.planet != null:
+		# Along the ground round the centre, at p's own height (Planets.md 11.7).
+		var ru := Gravity.flat(p - loiter_center, Gravity.up_at(loiter_center))
+		if ru.length() <= LOITER:
+			return p
+		return Gravity.lift_to(loiter_center + ru.normalized() * LOITER, Gravity.height_of(p))
 	var rel := Vector2(p.x - loiter_center.x, p.z - loiter_center.z)
 	if rel.length() <= LOITER:
 		return p
@@ -260,7 +266,7 @@ func from_center() -> float:
 	if loiter_center == Vector3.INF:
 		return 0.0
 	var p := body.global_position
-	return Vector2(p.x - loiter_center.x, p.z - loiter_center.z).length()
+	return Gravity.flat(p - loiter_center, Gravity.up_at(p)).length()
 
 
 ## A bomber goes off: the blast, and it is gone.
@@ -269,7 +275,7 @@ func go_off() -> void:
 		return
 	_went_off = true
 	fuse_at = INF
-	blast_hits = Grenade.blast(services, body.global_position - Vector3.UP * 0.3, null,
+	blast_hits = Grenade.blast(services, body.global_position - Gravity.up_at(body.global_position) * 0.3, null,
 			Soldier.BLAST_DAMAGE, Soldier.BLAST_RADIUS)
 	health.apply_impact(1e9, &"")
 	body.queue_free()
@@ -290,6 +296,9 @@ func budget_bonus(_now: float) -> float:
 ## The top of what is under `p`, over a patch round it: the ground, the tallest
 ## brick, whichever is higher.
 func height_at(p: Vector3) -> float:
+	# On a planet: the planet's own ground (the AI's grid is the flat world's).
+	if Gravity.planet != null:
+		return Gravity.ground_height(p)
 	var h := services.ai_world.ground_at(p.x, p.z) if services.ai_world.get_terrain_ground() else 0.0
 	for dx in [-SAMPLE, 0.0, SAMPLE]:
 		for dz in [-SAMPLE, 0.0, SAMPLE]:
@@ -300,6 +309,12 @@ func height_at(p: Vector3) -> float:
 
 
 ## The top of what is straight under (x, z): the ground or a brick.
+func _top_at(p: Vector3) -> float:
+	if Gravity.planet != null:
+		return Gravity.ground_height(p)
+	return _top(p.x, p.z)
+
+
 func _top(x: float, z: float) -> float:
 	var h := services.ai_world.ground_at(x, z) if services.ai_world.get_terrain_ground() else 0.0
 	var t := services.ai_world.top_at(x, z)
@@ -323,21 +338,25 @@ func _physics_process(delta: float) -> void:
 		_queued = true
 		services.sched.submit(AIScheduler.TREES, 5.0, _think)
 	var p := body.global_position
+	var up := Gravity.up_at(p)
+	var hp := Gravity.height_of(p)
+	if Gravity.planet != null:
+		body.up_direction = up
 	# What it is over, for the gate: straight down.
-	lowest_clearance = minf(lowest_clearance, p.y - _top(p.x, p.z))
+	lowest_clearance = minf(lowest_clearance, hp - _top_at(p))
 	# Never below CLEARANCE over the height field -- round it and ahead of it --
 	# whatever it wants.
 	if land_at != Vector3.INF:
 		_land_step(p, delta)
 		_fire()
 		return
-	var ahead := p + Vector3(body.velocity.x, 0.0, body.velocity.z) * LOOK_AHEAD
+	var ahead := p + Gravity.flat(body.velocity, up) * LOOK_AHEAD
 	var floor_h := maxf(height_at(p), height_at(ahead))
 	var v := _want + services.air().separation(self, p)
 	var min_y := floor_h + CLEARANCE
 	# A bomber on its last stretch comes down to its target: nothing else may.
 	if mode == Mode.DIVE and target != null and is_instance_valid(target) \
-			and Vector2(p.x - target.feet().x, p.z - target.feet().z).length() < DIVE_LOW:
+			and Gravity.flat(p - target.feet(), up).length() < DIVE_LOW:
 		# Steered every tick, not at the think's rate: at this speed a second-old
 		# heading misses by metres.
 		v = (target.chest() - p).normalized() * DIVE_SPEED
@@ -346,16 +365,16 @@ func _physics_process(delta: float) -> void:
 		if p.distance_to(target.chest()) <= Soldier.DETONATE_REACH and fuse_at == INF:
 			fuse_at = now + Soldier.FUSE
 		return
-	if p.y < min_y + 0.5:
-		v.y = maxf(v.y, (min_y + 1.0 - p.y) * 3.0)
+	if hp < min_y + 0.5:
+		v = Gravity.with_vert(v, up, maxf(Gravity.vert(v, up), (min_y + 1.0 - hp) * 3.0))
 		# Too low for what is ahead: hold off until it has climbed.
-		if p.y < min_y - 0.5:
-			v.x *= 0.2
-			v.z *= 0.2
+		if hp < min_y - 0.5:
+			v = Gravity.flat(v, up) * 0.2 + up * Gravity.vert(v, up)
 	body.velocity = body.velocity.lerp(v, clampf(delta * 3.0, 0.0, 1.0))
 	# The floor is hard: under it, it climbs NOW, not as the velocity eases round.
-	if p.y < min_y + 1.0:
-		body.velocity.y = maxf(body.velocity.y, (min_y + 1.5 - p.y) * 4.0)
+	if hp < min_y + 1.0:
+		body.velocity = Gravity.with_vert(body.velocity, up,
+				maxf(Gravity.vert(body.velocity, up), (min_y + 1.5 - hp) * 4.0))
 	body.move_and_slide()
 	_fire()
 
@@ -368,22 +387,24 @@ func _land_step(p: Vector3, delta: float) -> void:
 		body.velocity = Vector3.ZERO
 		return
 	var air := services.air()
-	var wait_y := land_at.y + PAD_WAIT
-	var flat := Vector2(land_at.x - p.x, land_at.z - p.z)
+	var up := Gravity.up_at(p)
+	var hp := Gravity.height_of(p)
+	var wait_y := Gravity.height_of(land_at) + PAD_WAIT
+	var flat := Gravity.flat(land_at - p, up)
 	var v := Vector3.ZERO
 	if flat.length() > 1.0:
 		state = "to the pad"
 		var alt := maxf(height_at(p) + CLEARANCE, wait_y)
-		v = Vector3(flat.x, 0.0, flat.y).normalized() * minf(HOVER_SPEED if hover else SPEED, flat.length() * 2.0)
-		v.y = (alt - p.y) * 2.0
+		v = flat.normalized() * minf(HOVER_SPEED if hover else SPEED, flat.length() * 2.0)
+		v = Gravity.with_vert(v, up, (alt - hp) * 2.0)
 		v += air.separation(self, p)
 	elif not air.pad_clear(pad):
 		state = "waiting for the pad"
-		v = Vector3(flat.x, (wait_y - p.y) * 2.0, flat.y)
+		v = flat + up * ((wait_y - hp) * 2.0)
 	else:
 		state = "landing"
-		v = Vector3(flat.x * 2.0, -LAND_SPEED, flat.y * 2.0)
-		if p.y - land_at.y <= 0.7:
+		v = flat * 2.0 - up * LAND_SPEED
+		if hp - Gravity.height_of(land_at) <= 0.7:
 			landed = true
 			body.velocity = Vector3.ZERO
 			return
@@ -395,17 +416,17 @@ func _land_step(p: Vector3, delta: float) -> void:
 func _fall(delta: float) -> void:
 	if crashed or _went_off or not is_instance_valid(body) or not body.is_inside_tree():
 		return
-	body.velocity.x *= 0.98
-	body.velocity.z *= 0.98
+	var fu := Gravity.up_at(body.global_position)
+	body.velocity = Gravity.flat(body.velocity, fu) * 0.98 + fu * Gravity.vert(body.velocity, fu)
 	body.velocity += Gravity.down_at(body.global_position) * FALL_G * delta
 	body.move_and_slide()
 	var p := body.global_position
-	# Off the edge of the world: down, with nothing to crash on.
-	if p.y < -60.0:
+	# Off the edge of the world: down, with nothing to crash on (a planet has no edge).
+	if Gravity.planet == null and p.y < -60.0:
 		crashed = true
 		body.velocity = Vector3.ZERO
 		return
-	if body.get_slide_collision_count() > 0 or p.y - _top(p.x, p.z) < 0.7:
+	if body.get_slide_collision_count() > 0 or Gravity.height_of(p) - _top_at(p) < 0.7:
 		crashed = true
 		body.velocity = Vector3.ZERO
 		if hover:
@@ -433,8 +454,8 @@ func _think() -> void:
 		_want = Vector3.ZERO
 		# A hover craft with nothing to fight goes back over its area.
 		if hover and from_center() > LOITER * 0.5:
-			var home := loiter_center - p
-			home.y = height_at(loiter_center) + HOVER_UP - p.y
+			var home := Gravity.with_vert(loiter_center - p, Gravity.up_at(p),
+					height_at(loiter_center) + HOVER_UP - Gravity.height_of(p))
 			_want = home.normalized() * HOVER_SPEED
 		return
 	var t := target.feet()
@@ -449,8 +470,7 @@ func _think() -> void:
 			if hover and mode == Mode.DIVE:
 				mode = Mode.ORBIT
 			if mode == Mode.RUN:
-				var over := t - p
-				over.y = 0.0
+				var over := Gravity.flat(t - p, Gravity.up_at(p))
 				_run_dir = over.normalized()
 	elif attack_kind == "bomber":
 		mode = Mode.DIVE
@@ -460,7 +480,7 @@ func _think() -> void:
 			_want = (target.chest() - p).normalized() * DIVE_SPEED
 		Mode.CLIMB:
 			state = "climb"
-			_want = Vector3.UP * (CLIMB_OUT / CLIMB_SECONDS) + (p - t).normalized() * 4.0
+			_want = Gravity.up_at(p) * (CLIMB_OUT / CLIMB_SECONDS) + (p - t).normalized() * 4.0
 			if now > _mode_until:
 				mode = Mode.ORBIT
 		Mode.RUN:
@@ -468,7 +488,7 @@ func _think() -> void:
 			var rs := HOVER_RUN if hover else RUN_SPEED
 			var alt := maxf(height_at(p), height_at(p + _run_dir * rs)) + CLEARANCE + 3.0 \
 					+ services.air().lane_of(self)
-			_want = _run_dir * rs + Vector3.UP * (alt - p.y) * 1.5
+			_want = _run_dir * rs + Gravity.up_at(p) * (alt - Gravity.height_of(p)) * 1.5
 			# A pass that would take a hover craft out of its area is broken off.
 			var next := p + _run_dir * rs * 1.5
 			if hover and in_area(next) != next:
@@ -482,16 +502,19 @@ func _think() -> void:
 			if not services.policy.has_method(&"decide_air") and now >= _next_run and _next_run > 0.0:
 				mode = Mode.RUN
 				_mode_until = now + RUN_SECONDS
-				var across := t - p
-				across.y = 0.0
+				var across := Gravity.flat(t - p, Gravity.up_at(p))
 				_run_dir = across.normalized()
 				return
 			if _next_run == 0.0:
 				_next_run = now + RUN_EVERY
-			var rel := Vector2(p.x - t.x, p.z - t.z)
+			# Round the target in the ground's own plane there (the world's XZ off a planet).
+			var tb := Gravity.tangent_basis(t)
+			var dl := tb.inverse() * (p - t) if Gravity.planet != null else p - t
+			var rel := Vector2(dl.x, dl.z)
 			_orbit_angle = rel.angle() + 0.35 * orbit_dir
-			var spot := in_area(t + Vector3(cos(_orbit_angle), 0.0, sin(_orbit_angle)) * ORBIT)
-			spot.y = height_at(spot) + (HOVER_UP if hover else ORBIT_UP) + services.air().lane_of(self)
+			var round := Vector3(cos(_orbit_angle), 0.0, sin(_orbit_angle)) * ORBIT
+			var spot := in_area(t + (tb * round if Gravity.planet != null else round))
+			spot = Gravity.lift_to(spot, height_at(spot) + (HOVER_UP if hover else ORBIT_UP) + services.air().lane_of(self))
 			var to := spot - p
 			_want = to.normalized() * minf(HOVER_SPEED if hover else SPEED, to.length() * 2.0)
 
@@ -520,7 +543,7 @@ func _fire() -> void:
 	var from := body.global_position
 	var at := MechLayers.aim_point(target, from)
 	if from.distance_to(at) > 0.5:
-		aim.look_at(at, Vector3.UP)
+		aim.look_at(at, Gravity.up_at(from))
 	var clear := services.ai_world.bricks_between(from, at) == 0 and from.distance_to(at) < 60.0
 	gun.set_trigger(clear)
 

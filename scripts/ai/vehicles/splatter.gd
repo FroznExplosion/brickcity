@@ -23,7 +23,9 @@ static func run_down(s: AIServices, v: Node3D, team: int, feet: Vector3, fwd: Ve
 	if s == null or absf(speed) < MIN_SPEED:
 		return 0
 	var nose := fwd * signf(speed)
-	var side := Vector3(-nose.z, 0.0, nose.x)
+	# Across the nose, in the ground's plane (exactly (-z, 0, x) off a planet).
+	var up := Gravity.up_at(feet)
+	var side := nose.cross(up)
 	var now := s.now()
 	var hits := 0
 	for p in s.pawns:
@@ -33,7 +35,8 @@ static func run_down(s: AIServices, v: Node3D, team: int, feet: Vector3, fwd: Ve
 				or p.has_meta(&"aboard") or p.has_meta(&"riding"):
 			continue
 		var d := p.feet() - feet
-		if d.y < -0.5 or d.y > 1.5:
+		var dy := Gravity.vert(d, up)
+		if dy < -0.5 or dy > 1.5:
 			continue
 		var along := d.dot(nose)
 		if along < 0.0 or along > half.y + REACH or absf(d.dot(side)) > half.x + 0.3:

@@ -3,10 +3,13 @@
 One part system for everything that is built from swappable pieces: a gun's barrel, a mech's
 left leg, a figure's torso, a shoulder pod. Every part is saved on its own, carries what it
 mounts with and what it takes, and is found in one catalogue that filters and sorts the same way
-for all of them. A gun or a mech is then an **assembly**: a list of part ids, made by hand or
-rolled from a seed.
+for all of them. A gun or a mech in the game is an **assembly** the generator puts together from
+parts that fit, from a seed and a design (section 7).
 
-Status: design, 2026-10-23. Nothing here is built. Section 11 is the order it is built in.
+Status (2026-10-23): **stage 1 built** -- the part record, the fit check and the catalogue
+(`scripts/parts/`: `PartRecord`, `PartStandards`, `PartFit`, `PartCatalog`), checked by
+`tools/parts_probe.gd` (headless, 65 checks). Nothing uses them yet: stage 2 puts guns on them.
+Section 11 is the order the rest is built in.
 
 Builds on: [Parts/joints.md](Parts/joints.md) (joints, the one pin, hands),
 [Parts/standards.json](Parts/standards.json) (`gun_interfaces`, `gun_platforms`, `gun_adapters`,
@@ -147,8 +150,8 @@ bone, one rigid assembly), may not enter a sweep, adds mass, and breaks off as d
 - `GunAssembler` checks the interface as well as the slot (layer 1).
 - The weapon-class filter (section 6) is worked out, not tagged: a receiver is its class; any
   other part is in every class whose receivers it fits.
-- A gun made whole in the workshop is saved **as its parts plus an assembly** (section 7):
-  each part joins the catalogue, the assembly is the design.
+- A gun made whole in the workshop is saved **as its parts** (section 7): each joins the
+  catalogue, and the generator makes guns of them.
 - **Mech guns are guns at mech scale** (`scale: mech`): their own receivers, barrels and the
   rest, built in the workshop and rolled by the same generator, on the nano grid the mechs are
   built on (joints.md section 5: no held scale on a mech). The two scales never mix: a mech
@@ -179,9 +182,14 @@ Every part has **facets**: family, source (official / custom), manufacturer, slo
 ### Saving: every part on its own
 
 **Save writes every part as its own file**, however many are in the workshop at once. A gun
-with eight parts open is eight part files, plus one **assembly** file naming them by `id` +
-`rev`. Nothing is ever saved as one lump; a part unchanged since its last save is not written
-again (its `rev` stays).
+with eight parts open is eight part files and nothing else: **parts are the only thing the
+workshop saves**. A part unchanged since its last save is not written again (its `rev` stays).
+
+So a build never saves a wrong part: what is put together in the workshop, fitting or not, is
+a view to look at and try things in, never a gun. **Every gun, mech and pod in the game is put
+together by the generator, and the generator only ever puts together parts that fit** (section
+3, layers 1 and 2). Which parts were open is kept only as the workshop's own session (its
+autosave), which the game never reads.
 
 A player's part is saved by name in `user://parts/custom/`, apart from the official ones. Export
 writes one file, a **part package** (`.bcpart`, a zip):
@@ -224,8 +232,10 @@ slot and its mech still plays.
 
 ### Designs: fixed slots and rolled slots
 
-An assembly is a **design**: for each slot, either a **fixed** part or a **pool** to roll from.
-Most rolled guns and mechs are all pools; the special cases are fixed slots.
+What the generator rolls from is a **design**: for each slot, either a **fixed** part or a
+**pool** to roll from. The ordinary design is all pools and needs no file. The special cases
+below are design files, written on purpose (not by the workshop's Save), and **checked to fit
+when they load**: a design whose fixed parts do not fit is refused, with the reason.
 
 | Case | Design |
 |---|---|
@@ -304,8 +314,8 @@ interfaces.
 
 | # | Stage | Where |
 |---|---|---|
-| 1 | The part record, the catalogue (facets, filter, sort), the fit check (layers 1-2), `mech_interfaces` / `figure_interfaces` / `body_plans` in `standards.json`; a headless probe | new `scripts/parts/` |
-| 2 | Guns on it: `GunAssembler` checks interfaces; Save writes each part on its own plus an assembly; designs with fixed and pool slots; `guns/` moved over | `scripts/guns/`, `asset_workshop.gd` |
+| 1 | **Done.** The part record, the catalogue (facets, filter, sort), the fit check (layers 1-2), `mech_interfaces` / `figure_interfaces` / `mgun_interfaces` / `body_plans` in `standards.json`; `tools/parts_probe.gd` | `scripts/parts/` |
+| 2 | Guns on it: `GunAssembler` checks interfaces; Save writes each part on its own; designs with fixed and pool slots; `guns/` moved over | `scripts/guns/`, `asset_workshop.gd` |
 | 3 | The catalogue panel: filters, sort, custom and creator, the Fits toggle | UI, shared by workshop and inventory |
 | 4 | The workshop's anything-on-anything swap, with fit marks (section 9) | `asset_workshop.gd` |
 | 5 | The workshop's mech mode: slot, side, class, reference mech, ready mounts, test fit | `asset_workshop.gd` |
@@ -319,13 +329,26 @@ interfaces.
 
 ---
 
-## 12. Open
+### Stage 1 as built
 
-- **Forced fits outside the workshop.** The workshop lets anything go on anything. Can a design
-  saved with a mark (an unfit barrel) be used in the game, or does it have to fit there?
-  Proposed: official designs may ship forced (made by us, on purpose); a player's forced design
-  is workshop-only until it fits, so a downloaded part never makes an impossible gun in a match.
+- A build is checked against a **body plan** (`standards.json` `body_plans`: `mech`, `figure`,
+  `gun`; a mech gun is a `gun` plan with `mgun.*` interfaces and `scale: mech`). A plan names its
+  root slot and every socket **path** -- the host's path, `/`, the socket's name: `arm_L`,
+  `arm_L/hand`, `neck/hat` -- with the slot and side it takes and whether it must be filled;
+  `same` lists paths whose parts share a mount param (the legs' `length`).
+- Every check gives a **reason** ("mounts on mag.wide, socket takes mag.narrow"), so the
+  workshop's marks (section 9) and the generator's refusals read the same.
+- A part's own problems (`PartRecord.problems`) keep it out of the catalogue: an interface not in
+  `standards.json`, a custom part with no creator, a hip with no length.
+- **The folder decides official or custom**, never the file: a downloaded part cannot make itself
+  official. The first folder read wins an id; a second with the same id is left out.
+- JSON has no ints: mount params that are whole numbers are read back as ints.
+- Not yet: a seed-stable order for the generator (new parts at the end, section 7) is stage 2's;
+  the catalogue's lists are in id order.
+
+## 12. Decided
 
 Decided 2026-10-23: every part saves on its own (section 7); joined pairs and fixed characters
 are designs (section 7, Designs); pods name like guns from their own word lists (section 4);
-mech guns are their own guns at mech scale (section 5).
+mech guns are their own guns at mech scale (section 5); the workshop saves only parts, so
+nothing unfit is ever saved, and the game only assembles parts that fit (section 7).

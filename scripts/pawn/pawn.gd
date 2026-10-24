@@ -136,6 +136,9 @@ var _eye_snap := 0.0
 var _placed := false
 ## How far the last landing dropped, for the probe.
 var last_fall := 0.0
+## Up where the body stands (Gravity.up_at; +Y in the flat game), refreshed
+## every tick. The body is carried so its own Y is this (Docs/Planets.md 11.7).
+var up := Vector3.UP
 
 
 ## A standing pawn with its feet at `feet`, under `parent`. Returns the pawn;
@@ -224,24 +227,52 @@ func place(at_feet: Vector3) -> void:
 		body = get_parent() as CharacterBody3D
 	# Put here, not fallen here: the drop to the first floor below is free.
 	_placed = true
+	up = Gravity.up_at(at_feet)
 	# Before the tree is running (a probe's _init) there is no global transform
 	# yet; the parent is then taken to sit at the origin.
 	if body.is_inside_tree():
-		body.global_position = at_feet + Vector3.UP * _height * 0.5
+		body.global_position = at_feet + up * _height * 0.5
+		_stand_up()
 	else:
-		body.position = at_feet + Vector3.UP * _height * 0.5
+		body.position = at_feet + up * _height * 0.5
 	body.velocity = Vector3.ZERO
 	body.reset_physics_interpolation()
+
+
+## World look angles (yaw about +Y, pitch) as angles in this body's frame
+## (Docs/Planets.md 11.7) -- what `intents.look_yaw/pitch` mean. Themselves
+## off a planet, where the body's basis is the identity.
+func frame_look(yaw: float, pitch: float) -> Vector2:
+	var b := body.global_transform.basis
+	if Gravity.planet == null or b == Basis.IDENTITY:
+		return Vector2(yaw, pitch)
+	var d := Basis.from_euler(Vector3(pitch, yaw, 0.0)) * Vector3.FORWARD
+	var l := b.orthonormalized().inverse() * d
+	return Vector2(atan2(-l.x, -l.z), atan2(l.y, Vector2(l.x, l.z).length()))
+
+
+## The look angles, in this body's frame, that face along world vector `to`.
+func look_angles_to(to: Vector3) -> Vector2:
+	var b := body.global_transform.basis
+	var l := to if Gravity.planet == null or b == Basis.IDENTITY else b.orthonormalized().inverse() * to
+	return Vector2(atan2(-l.x, -l.z), atan2(l.y, Vector2(l.x, l.z).length()))
+
+
+## Where the look yaw points, along the ground, in the world.
+func look_dir() -> Vector3:
+	var f := -Basis(Vector3.UP, intents.look_yaw).z
+	var b := body.global_transform.basis
+	return f if Gravity.planet == null or b == Basis.IDENTITY else b.orthonormalized() * f
 
 
 ## The middle of the body: what somebody aiming at this pawn aims at.
 func chest() -> Vector3:
 	# Six tenths of the way up, standing or crouched.
-	return feet() + Vector3.UP * _height * 0.62
+	return feet() + up * _height * 0.62
 
 
 func feet() -> Vector3:
-	return body.global_position - Vector3.UP * _height * 0.5
+	return body.global_position - up * _height * 0.5
 
 
 ## Body centre (a capsule's origin) up to the eye: the middle of the head,
@@ -256,12 +287,12 @@ func eye_offset() -> float:
 ## Where the eye is between physics ticks -- what a camera should follow, since
 ## the body moves 30 times a second under a faster picture.
 func eye_interpolated() -> Vector3:
-	return body.get_global_transform_interpolated().origin + Vector3.UP * eye_offset()
+	return body.get_global_transform_interpolated().origin + up * eye_offset()
 
 
 ## The feet between physics ticks, at the body's present height.
 func feet_interpolated() -> Vector3:
-	return body.get_global_transform_interpolated().origin - Vector3.UP * _height * 0.5
+	return body.get_global_transform_interpolated().origin - up * _height * 0.5
 
 
 ## Feet up to the eye: EYE_HEIGHT standing, a brick less crouched.
@@ -286,6 +317,8 @@ func _physics_process(delta: float) -> void:
 	if body == null or not body.is_inside_tree():
 		return
 	stagger_left = maxf(stagger_left - delta, 0.0)
+	up = Gravity.up_at(body.global_position)
+	_stand_up()
 	if is_held():
 		intents.move = Vector3.ZERO
 		intents.jump = false
@@ -309,6 +342,16 @@ func _physics_process(delta: float) -> void:
 	intents.reload = false
 
 
+## The body's Y along `up`: carried by the least turn (Gravity.carry), and its
+## floor taken along it. Nothing at all in the flat game, where up never moves.
+func _stand_up() -> void:
+	var b := body.global_transform.basis
+	var nb := Gravity.carry(b, up)
+	if nb != b:
+		body.global_transform.basis = nb
+	body.up_direction = up
+
+
 ## Frozen or staggered: the body stands where it is and does nothing, and a soldier's
 ## brain waits (Soldier).
 func is_held() -> bool:
@@ -324,9 +367,9 @@ func stagger(seconds: float, push := Vector3.ZERO) -> void:
 		return
 	# The plain walk sets the velocity every tick: a knock goes on the shove, which decays.
 	if moves == null:
-		shove += Vector3(push.x, 0.0, push.z)
+		shove += Gravity.flat(push, up)
 	elif body != null:
-		body.velocity += Vector3(push.x, 0.0, push.z)
+		body.velocity += Gravity.flat(push, up)
 
 
 ## Throw a melee down the eye now (MeleeStrike). The blow's damage is this pawn's
@@ -342,9 +385,8 @@ func melee() -> Dictionary:
 	# Kinetic Lunge: a blow that landed past the plain reach carries the pawn in.
 	if melee_lunge and not info.is_empty() \
 			and eye.global_position.distance_to(info.point) > MeleeStrike.REACH:
-		var flat := Vector3(dir.x, 0.0, dir.z).normalized()
-		body.velocity = Vector3(flat.x * MeleeStrike.LUNGE_SPEED, body.velocity.y,
-				flat.z * MeleeStrike.LUNGE_SPEED)
+		var flat := Gravity.flat(dir, up).normalized()
+		body.velocity = flat * MeleeStrike.LUNGE_SPEED + up * Gravity.vert(body.velocity, up)
 		info["lunged"] = true
 	meleed.emit(info)
 	return info
@@ -357,7 +399,7 @@ func is_meleeing() -> bool:
 
 ## One tick of movement from `intents`.
 func step(delta: float) -> void:
-	var wish := Vector3(intents.move.x, 0.0, intents.move.z)
+	var wish := Gravity.flat(intents.move, up)
 	if wish.length() > 1.0:
 		wish = wish.normalized()
 
@@ -402,20 +444,21 @@ func step(delta: float) -> void:
 ## The plain walk: the velocity is the wish, every tick -- no momentum, which is
 ## what a soldier on a path wants.
 func _walk(delta: float, wish: Vector3, speed: float) -> void:
+	var v_up := Gravity.vert(body.velocity, up)
 	if intents.jump:
 		intents.jump = false
 		if body.is_on_floor():
-			body.velocity.y = JUMP_SPEED
+			v_up = JUMP_SPEED
 
 	var before := body.global_position
-	body.velocity.x = wish.x * speed + shove.x
-	body.velocity.z = wish.z * speed + shove.z
-	if shove.y > 0.0 and body.velocity.y < shove.y:
-		body.velocity.y = shove.y
-	elif body.is_on_floor() and body.velocity.y <= 0.0:
-		body.velocity.y = 0.0
+	var shove_up := Gravity.vert(shove, up)
+	if shove_up > 0.0 and v_up < shove_up:
+		v_up = shove_up
+	elif body.is_on_floor() and v_up <= Gravity.floor_rise():
+		v_up = Gravity.standing_vert()
 	else:
-		body.velocity += Gravity.down_at(body.global_position) * GRAVITY * delta
+		v_up -= GRAVITY * delta
+	body.velocity = wish * speed + Gravity.flat(shove, up) + up * v_up
 	shove *= exp(-SHOVE_DECAY * delta)
 	body.move_and_slide()
 
@@ -424,7 +467,7 @@ func _walk(delta: float, wish: Vector3, speed: float) -> void:
 	if wish != Vector3.ZERO and body.is_on_wall():
 		var wanted := wish * speed * delta
 		var moved := body.global_position - before
-		if Vector2(moved.x, moved.z).length() < Vector2(wanted.x, wanted.z).length() * 0.5:
+		if Gravity.flat(moved, up).length() < Gravity.flat(wanted, up).length() * 0.5:
 			_step_over(wanted)
 
 
@@ -432,18 +475,18 @@ func _walk(delta: float, wish: Vector3, speed: float) -> void:
 func _track_fall() -> void:
 	var on_floor := body.is_on_floor()
 	# Where a fall started: the highest the feet were since they left a floor.
-	var feet_y := feet().y
+	var feet_y := Gravity.height_of(feet())
 	if on_floor and _was_on_floor:
 		_placed = false   # placed standing: the next fall is a real one
 	if _was_on_floor and not on_floor:
 		_fall_from = feet_y
 		_jump_gain = 0.0
 	elif not on_floor:
-		if rising_jump and body.velocity.y > 0.0:
+		if rising_jump and Gravity.vert(body.velocity, up) > 0.0:
 			_jump_gain = maxf(_jump_gain, feet_y - _fall_from)
 		else:
 			_fall_from = maxf(_fall_from, feet_y - _jump_gain)
-	if on_floor or body.velocity.y <= 0.0:
+	if on_floor or Gravity.vert(body.velocity, up) <= 0.0:
 		rising_jump = false
 	if on_floor and not _was_on_floor:
 		# Landed with the legs pulled up: they reach the ground that much higher
@@ -484,12 +527,12 @@ func _set_height(h: float, from_top := false) -> void:
 	_height = h
 	_capsule.height = h
 	if from_top:
-		body.global_position.y -= delta * 0.5
+		body.global_position -= up * (delta * 0.5)
 		_tuck = maxf(_tuck - delta, 0.0)
 		_fall_from -= delta
 		_eye_snap += delta
 	else:
-		body.global_position.y += delta * 0.5
+		body.global_position += up * (delta * 0.5)
 
 
 ## Would the body fit at `h` if it moved by `motion`? The capsule has to be the
@@ -499,7 +542,7 @@ func _fits(h: float, motion: Vector3, from_top := false) -> bool:
 		return true
 	var was := _height
 	var xf := body.global_transform
-	xf.origin.y += (h - was) * (-0.5 if from_top else 0.5)
+	xf.origin += up * ((h - was) * (-0.5 if from_top else 0.5))
 	_capsule.height = h
 	var blocked := body.test_move(xf, motion)
 	_capsule.height = was
@@ -510,22 +553,22 @@ func _fits(h: float, motion: Vector3, from_top := false) -> bool:
 ## -- otherwise that was a ledge to walk off, not a step to climb.
 func _step_over(motion: Vector3) -> bool:
 	var start := body.global_transform
-	if body.test_move(start, Vector3.UP * STEP_HEIGHT):
+	if body.test_move(start, up * STEP_HEIGHT):
 		# No headroom to rise into. Crouching is what makes a step up onto a brick
 		# possible under a low ceiling, so try it before giving up.
-		if _height <= crouch_height or not _fits(crouch_height, Vector3.UP * STEP_HEIGHT):
+		if _height <= crouch_height or not _fits(crouch_height, up * STEP_HEIGHT):
 			return false
 		_set_height(crouch_height)
 		_auto_crouched = true
 		start = body.global_transform
-		if body.test_move(start, Vector3.UP * STEP_HEIGHT):
+		if body.test_move(start, up * STEP_HEIGHT):
 			return false
-	var lifted := start.translated(Vector3.UP * STEP_HEIGHT)
+	var lifted := start.translated(up * STEP_HEIGHT)
 	if body.test_move(lifted, motion):
 		return false
 	body.global_transform = lifted.translated(motion)
-	body.move_and_collide(Vector3.DOWN * (STEP_HEIGHT + 0.02))
-	if body.global_position.y > start.origin.y + STEP_HEIGHT * 0.9:
+	body.move_and_collide(-up * (STEP_HEIGHT + 0.02))
+	if Gravity.height_of(body.global_position) > Gravity.height_of(start.origin) + STEP_HEIGHT * 0.9:
 		body.global_transform = start
 		return false
 	return true
