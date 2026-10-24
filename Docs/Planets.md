@@ -1358,10 +1358,24 @@ cover (63-141 member-ticks still with bricks between them and the other side's e
 each other. With `focus` a no-op the same gate has nobody in cover and one squad wiped out in
 the open (2 FAIL): what an agent asks is answered by its own region.
 
-**Not yet:** a line between two regions is asked of the asker's region only (its buildings,
-not the far region's beyond the overlap); a grenade's danger is in its own region only; size
-and vehicle maps (`nav_for`, mech maps) are made on whichever region was focused; legs are
-re-worked only when a region is made again.
+**Across borders (2026-10-24).** A sight line asked in one region and running into the next:
+- *its ground*: `AIWorld.set_peers(worlds)` (C++) -- off its own grid a line's march reads the
+  ground from the neighbour whose grid has the point (held by object id; the net relinks a
+  region and its eight neighbours whenever one is made or dropped). 300 random lines from a
+  region into its neighbours against the planet's own height: 298 agree (163 blocked), 287
+  without the neighbours' ground;
+- *its buildings*: every region carries proxies for buildings up to `LINE_REACH` (100 m) past
+  its edge -- outside its walking map, inside its sight;
+- *danger*: `AIServices.set_danger` / `remove_danger` (on a planet `PlanetNavNet.set_danger`:
+  the box into every region it reaches, and into regions made later); the grenade, a flyer's
+  landing pad (Airspace) and a mech's self-destruct go through it. Off a planet it is
+  `ai_world.set_danger`, as before.
+Probe checks in `tools/planet_nav_net_probe.gd` (17/17).
+
+**Not yet:** size and vehicle maps (`nav_for`, mech maps) are made on whichever region was
+focused; danger boxes are world-axis boxes (on a planet a cube round a grenade); legs are
+re-worked only when a region is made again; the city's own danger sources (falling pieces,
+disasters) set `ai_world` directly -- there is no destruction on the planet yet.
 
 ### 11.9 Plan: biomes (2026-10-24)
 

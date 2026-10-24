@@ -19,6 +19,7 @@
 #include <godot_cpp/classes/ref.hpp>
 #include <godot_cpp/classes/ref_counted.hpp>
 #include <godot_cpp/variant/aabb.hpp>
+#include <godot_cpp/variant/array.hpp>
 #include <godot_cpp/variant/dictionary.hpp>
 #include <godot_cpp/variant/packed_float32_array.hpp>
 #include <godot_cpp/variant/packed_vector3_array.hpp>
@@ -190,6 +191,11 @@ public:
     /// An empty `heights` goes back to the field.
     void set_ground_grid(const Vector2 &origin, float step, int size, const PackedFloat32Array &heights);
     bool has_ground_grid() const { return grid_size > 0; }
+    /// The neighbouring regions' worlds (Planets.md 11.8): where a sight line
+    /// leaves this grid, the ground it passes over is read from the peer whose
+    /// grid has it -- a hill in the next region blocks a line asked here. Held
+    /// by id, not reference: regions come and go.
+    void set_peers(const Array &worlds);
 
     // --- measuring ----------------------------------------------------------
 
@@ -234,6 +240,10 @@ private:
     /// Is region (x, z) off the grid? Its wall is for walking: a sight line
     /// past the region's edge is not blocked by it.
     bool _off_grid(float x, float z) const;
+    std::vector<uint64_t> peers;   // ObjectIDs of the neighbours' AIWorlds
+    /// Is world point `w` under the ground of a peer whose grid has it? -1 no
+    /// peer has it, 0 over, 1 under.
+    int _peer_under(const Vector3 &w, float slack) const;
 
     struct ChunkEntry {
         int chunk = -1;

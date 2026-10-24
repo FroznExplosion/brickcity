@@ -97,13 +97,13 @@ func claim_pad(owner: Object, at: Vector3, radius: float) -> int:
 	_next_pad += 1
 	pads[id] = {"owner": owner, "at": at, "radius": radius}
 	if services.ai_world != null:
-		services.ai_world.set_danger(id, _box(at, radius))
+		services.set_danger(id, _box(at, radius))
 	return id
 
 
 func release_pad(id: int) -> void:
 	if pads.erase(id) and services.ai_world != null:
-		services.ai_world.remove_danger(id)
+		services.remove_danger(id)
 
 
 ## Is the pad free of everybody but its owner -- bodies, vehicles, other flyers
@@ -145,7 +145,7 @@ func refresh() -> void:
 	if services.ai_world == null:
 		return
 	for id in pads:
-		services.ai_world.set_danger(id, _box(pads[id].at, float(pads[id].radius)))
+		services.set_danger(id, _box(pads[id].at, float(pads[id].radius)))
 
 
 static func _box(at: Vector3, radius: float) -> AABB:

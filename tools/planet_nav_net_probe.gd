@@ -58,7 +58,13 @@ func _run() -> void:
 	var base: Vector3 = at.call(wall_q)
 	var wall_xf := Transform3D(Gravity.carry(Basis(net.ax, net.anchor, net.az), wall_up), base + wall_up * -2.0)
 	var wall_size := Vector3(1.0, 16.0, 0.8 * w)
-	net.set_sites([[wall_xf, wall_size]])
+	# A building 54 m past cell (0, 0)'s east edge, off the route: a sight line
+	# asked in (0, 0) must meet it (PlanetNavNet.LINE_REACH).
+	var hut_q := Vector2(1.1 * w, 0.3 * w)
+	var hut_up := net._dir_of(hut_q)
+	var hut_xf := Transform3D(Gravity.carry(Basis(net.ax, net.anchor, net.az), hut_up),
+			(at.call(hut_q) as Vector3) + hut_up * 4.0)
+	net.set_sites([[wall_xf, wall_size], [hut_xf, Vector3(8.0, 10.0, 8.0)]])
 	var from: Vector3 = at.call(Vector2(-0.3 * w, -0.2 * w))
 	var to: Vector3 = at.call(Vector2(4.2 * w, 0.3 * w))
 	var t0 := Time.get_ticks_usec()
@@ -142,6 +148,81 @@ func _run() -> void:
 	var len2 := PlanetNavNet._length(path2)
 	_check("with the legs known, the path is no worse (<= +5%)", path2.size() > 2 and len2 <= len0 * 1.05,
 			"%.0f m, was %.0f m" % [len2, len0])
+	# Sight lines across borders: the ground off a region's grid is its
+	# neighbour's (AIWorld.set_peers). Against the planet's own ground.
+	var r0: PlanetNavNet.Region = net.regions[Vector2i(0, 0)]
+	var rng := RandomNumberGenerator.new()
+	rng.seed = 5
+	var agree := 0
+	var agree_alone := 0
+	var blocked := 0
+	var n_lines := 0
+	var lines: Array = []
+	while lines.size() < 300:
+		var qa := Vector2(rng.randf_range(-0.4, 0.4), rng.randf_range(-0.4, 0.4)) * w
+		var ang := rng.randf() * TAU
+		var qb := qa + Vector2(cos(ang), sin(ang)) * rng.randf_range(0.6, 1.2) * w
+		var cb := Vector2i(roundi(qb.x / w), roundi(qb.y / w))
+		if cb == Vector2i(0, 0) or not net.regions.has(cb):
+			continue
+		var pa: Vector3 = at.call(qa)
+		var pb: Vector3 = at.call(qb)
+		lines.append([pa + pa.normalized() * 1.5, pb + pb.normalized() * 1.5])
+	var slack := plate * 1.5
+	for ln in lines:
+		var a0: Vector3 = ln[0]
+		var b0: Vector3 = ln[1]
+		var truth := false
+		var steps := int(ceil(a0.distance_to(b0) / 0.35))
+		for i in steps + 1:
+			var p := a0.lerp(b0, float(i) / steps)
+			if p.length() - data.radius < data.height(p.normalized()) - slack:
+				truth = true
+				break
+		if truth:
+			blocked += 1
+		if r0.world.ground_blocks(a0, b0) == truth:
+			agree += 1
+		n_lines += 1
+	r0.world.set_peers([])
+	for ln in lines:
+		var a1: Vector3 = ln[0]
+		var b1: Vector3 = ln[1]
+		var truth1 := false
+		var steps1 := int(ceil(a1.distance_to(b1) / 0.35))
+		for i in steps1 + 1:
+			var p := a1.lerp(b1, float(i) / steps1)
+			if p.length() - data.radius < data.height(p.normalized()) - slack:
+				truth1 = true
+				break
+		if r0.world.ground_blocks(a1, b1) == truth1:
+			agree_alone += 1
+	net._relink(Vector2i(0, 0))
+	print("[nav-net] %d sight lines from (0, 0) into its neighbours, %d blocked by the ground: asked in (0, 0) %d agree; without its neighbours' ground %d" % [
+			n_lines, blocked, agree, agree_alone])
+	_check("a sight line into the next region is blocked by that region's ground (>= 97% agree)",
+			agree * 100 >= n_lines * 97, "%d of %d" % [agree, n_lines])
+	var hut_far: Vector3 = at.call(Vector2(1.5 * w, 0.3 * w))
+	var hut_near: Vector3 = at.call(Vector2(0.2 * w, 0.3 * w))
+	var up_n := hut_near.normalized()
+	var up_f := hut_far.normalized()
+	_check("a building 54 m past a region's edge is in its world for sight",
+			r0.world.bricks_between(hut_near + up_n * 3.0, hut_far + up_f * 3.0) > 0)
+	# Danger: in every region it reaches, and in one made later.
+	var on_border: Vector3 = at.call(Vector2(0.5 * w, 0.0))
+	net.set_danger(7, AABB(on_border - Vector3.ONE * 3.0, Vector3.ONE * 6.0))
+	var r1: PlanetNavNet.Region = net.regions[Vector2i(1, 0)]
+	_check("a danger box on a border is in both regions", r0.world.in_danger(on_border) and r1.world.in_danger(on_border))
+	var later_q := Vector2(9.0 * w, 0.0)
+	var later: Vector3 = at.call(later_q)
+	net.set_danger(8, AABB(later - Vector3.ONE * 3.0, Vector3.ONE * 6.0))
+	var r9 := net.ensure(Vector2i(9, 0))
+	_check("and in a region made after it was set", r9.world.in_danger(later))
+	net.remove_danger(7)
+	net.remove_danger(8)
+	_check("taken down from all of them", not r0.world.in_danger(on_border) and not r1.world.in_danger(on_border)
+			and not r9.world.in_danger(later))
+	net.drop(Vector2i(9, 0))
 	# The fight moves on: round the far end only.
 	var before := net.regions.size()
 	net.keep_around([to], 60.0, 99)

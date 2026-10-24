@@ -149,6 +149,22 @@ func focus(p: Vector3) -> void:
 		ai_nav = r.nav
 
 
+## A danger box (AIWorld.set_danger): on a planet into every nav region it
+## reaches (PlanetNavNet.set_danger), else the one world.
+func set_danger(id: int, box: AABB) -> void:
+	if nav_net != null:
+		nav_net.call(&"set_danger", id, box)
+	elif ai_world != null:
+		ai_world.set_danger(id, box)
+
+
+func remove_danger(id: int) -> void:
+	if nav_net != null:
+		nav_net.call(&"remove_danger", id)
+	elif ai_world != null:
+		ai_world.remove_danger(id)
+
+
 ## Simulation time in seconds, from the physics tick -- never the wall clock, so
 ## a run is the same run however fast the machine is.
 func now() -> float:

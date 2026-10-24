@@ -40,6 +40,9 @@ const END_ESTIMATE := 1.08
 const LEG_EXPANSIONS := 40000
 ## Routes planned again after a stretch failed, before the request fails.
 const MAX_TRIES := 6
+## Buildings this far past a region's edge go into its world too: they are
+## outside its walking map, but a sight line from inside it reaches them.
+const LINE_REACH := 100.0
 ## Most regions a single request may make on its way.
 const MAX_ROUTE_REGIONS := 64
 
@@ -256,7 +259,7 @@ func _finish(k: Vector2i, nr: PlanetNavRegion, grid_ms: float) -> Region:
 		var xf: Transform3D = s[0]
 		var size: Vector3 = s[1]
 		var l := inv * xf.origin
-		var reach := nr.half + Vector2(size.x, size.z).length() * 0.5
+		var reach := nr.half + LINE_REACH + Vector2(size.x, size.z).length() * 0.5
 		if absf(l.x) > reach or absf(l.z) > reach:
 			continue
 		r.world.set_proxy(n, _planet_xf() * xf, size, 1.0 / BrickWorld.get_stud_metres())
@@ -275,6 +278,12 @@ func _finish(k: Vector2i, nr: PlanetNavRegion, grid_ms: float) -> Region:
 			r.leg_queue.append(Vector2i(r.portals[a], r.portals[b]))
 	regions[k] = r
 	regions_made += 1
+	_relink(k)
+	var xf := _planet_xf()
+	for id in _dangers:
+		var box: AABB = xf * (_dangers[id] as AABB)
+		if _reaches(r, box):
+			r.world.set_danger(id, box)
 	r.made_ms = grid_ms + (Time.get_ticks_usec() - t0) / 1000.0
 	return r
 
@@ -282,6 +291,54 @@ func _finish(k: Vector2i, nr: PlanetNavRegion, grid_ms: float) -> Region:
 func drop(k: Vector2i) -> void:
 	if regions.erase(k):
 		regions_dropped += 1
+		_relink(k)
+
+
+## Each region of `k` and its eight neighbours told who its neighbours are now
+## (AIWorld.set_peers: the ground a sight line passes over off its own grid).
+func _relink(k: Vector2i) -> void:
+	for di in range(-1, 2):
+		for dj in range(-1, 2):
+			var c := k + Vector2i(di, dj)
+			var r: Region = regions.get(c)
+			if r == null:
+				continue
+			var peers: Array = []
+			for ei in range(-1, 2):
+				for ej in range(-1, 2):
+					var o: Region = regions.get(c + Vector2i(ei, ej))
+					if o != null and o != r:
+						peers.append(o.world)
+			r.world.set_peers(peers)
+
+
+# --- danger -------------------------------------------------------------------
+
+## id -> AABB, planet-local: what set_danger was given, for regions made later.
+var _dangers := {}
+
+
+## A danger box (world) in every region it reaches -- and in any made later --
+## so a grenade by a border is avoided from both sides (AIWorld.set_danger).
+func set_danger(id: int, box: AABB) -> void:
+	_dangers[id] = _planet_xf().affine_inverse() * box
+	for r in regions.values():
+		if _reaches(r, box):
+			(r as Region).world.set_danger(id, box)
+		else:
+			(r as Region).world.remove_danger(id)
+
+
+func remove_danger(id: int) -> void:
+	_dangers.erase(id)
+	for r in regions.values():
+		(r as Region).world.remove_danger(id)
+
+
+func _reaches(r: Region, box: AABB) -> bool:
+	var l := r.nav_region.frame.affine_inverse() * (_planet_xf().affine_inverse() * box.get_center())
+	var reach := r.nav_region.half + box.size.length() * 0.5
+	return absf(l.x) <= reach and absf(l.z) <= reach
 
 
 ## Regions round every point in `points` (world) within `radius` metres made,
