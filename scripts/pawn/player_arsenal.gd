@@ -338,8 +338,7 @@ func shockwave(at: Vector3, hit: Node = null) -> int:
 		if pawn != null and pawn.team == team:
 			continue
 		if pawn != null:
-			var away: Vector3 = pawn.feet() - at
-			away.y = 0.0
+			var away: Vector3 = Gravity.flat(pawn.feet() - at, pawn.up)
 			pawn.stagger(SHOCKWAVE_STAGGER, away.normalized() * SHOCKWAVE_PUSH if away.length() > 0.01
 					else Vector3.ZERO)
 		if target == hit:
@@ -804,8 +803,10 @@ func _find_pickup() -> WorldGunPickup:
 			best_dot = dot
 			best = p
 		# Under the feet (Halo's): the nearest, looked at or not.
-		var up := at.y - feet.y
-		var flat := Vector2(at.x - feet.x, at.z - feet.z).length()
+		# Along the local up (Planets.md 11.7; exact in the flat game).
+		var lu := Gravity.up_at(feet)
+		var up := Gravity.vert(at - feet, lu)
+		var flat := Gravity.flat(at - feet, lu).length()
 		if up > -0.6 and up < 1.2 and flat < near_d:
 			near_d = flat
 			near = p
@@ -874,11 +875,11 @@ func _drop(g: GunInstance) -> void:
 	if g == null or g.result == null or world_parent == null or player == null or player.pawn == null:
 		return
 	var pawn := player.pawn
-	var fwd := Vector3(-sin(pawn.intents.look_yaw), 0.0, -cos(pawn.intents.look_yaw))
+	var fwd := Vector3(-sin(pawn.intents.look_yaw), 0.0, -cos(pawn.intents.look_yaw)) 			if Gravity.planet == null else pawn.look_dir()
 	var p := WorldGunPickup.create(library, g.result)
 	world_parent.add_child(p)
 	# Out of the hands at chest height, tossed ahead: it falls and lies (WorldGunPickup).
-	p.global_position = pawn.feet() + fwd * 0.8 + Vector3.UP * 1.1
+	p.global_position = pawn.feet() + fwd * 0.8 + pawn.up * 1.1
 	p.toss()
 	p.linear_velocity += fwd * 1.5
 
