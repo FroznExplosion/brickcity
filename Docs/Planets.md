@@ -1373,3 +1373,14 @@ steppe 6%. The spawn's town is on a patch of steppe. `--gate` 9/9 with the map, 
 - **Probe** `tools/planet_tree_probe.gd` (headless): a cell built twice is the same trees; the
   density in a forest and a desert against the table; none on a pad, in the sea or on a cliff;
   every base on the ground (within 5 cm); time a cell. Look: the walker gate's shots.
+
+**11.10 state (2026-10-24): built.** `PlanetTrees` (scripts/planet/planet_trees.gd), six kinds in
+`PlanetTreeMeshes`, `shaders/planet_tree.gdshader` (dither fade 450-600 m). A cell builds in
+under 1 ms; round the spawn 325 cells, 4450 trees, filled in 28 frames (worst 6 ms a frame); 3 s
+at 500 m/s 40 m up, worst 9.5 ms a frame (headless, CPU only). Densities run ~0.65 x the table
+over a biome's cells: the sea and beaches take the rest (a third of this planet is under water).
+`tools/planet_tree_probe.gd` 12/12. The walker gate's shots show them from the ground, the town
+and 300 m. Windowed frame times were not judged: both the A/B runs (`-- --no-trees` and with)
+had the same 250 / 750 ms frames at the spawn, the display-sleep stall of a run nobody watches.
+Not yet: trees in the AI's world (they are not cover or obstacles to the nav), trees on the
+impostor from orbit (the biome colour stands for them).
