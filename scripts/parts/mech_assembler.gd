@@ -90,7 +90,7 @@ static func assemble(build: Dictionary) -> Node3D:
 ## Give mech `m` the parts of `build` (PartBuilder.generate's): its boxes go, its parts
 ## come, its layers become the chassis's class's. False (and the mech as it was) when the
 ## build has problems or its chassis no scene: only parts that fit are ever put together.
-static func dress(m: Mech, build: Dictionary, take_class: bool = true) -> bool:
+static func dress(m: Mech, build: Dictionary, take_class: bool = true, owner: String = "") -> bool:
 	if not (build.get("problems", []) as Array).is_empty():
 		return false
 	var model := assemble(build)
@@ -102,6 +102,14 @@ static func dress(m: Mech, build: Dictionary, take_class: bool = true) -> bool:
 	m.set_meta(&"mech_parts", _ids(build))
 	# Its walk from the motion sets: by its class, or the design's pick (stage 8).
 	MotionSets.walk_mech(m, build, String((build.get("motion", {}) as Dictionary).get("walk", "")))
+	# The owner's dressing on its parts (stage 11), knocked off when the armour goes.
+	if owner != "":
+		m.set_meta(&"dressing_owner", owner)
+		PartDressing.dress_mech(m, owner, PartDressing.load_store())
+		if m.layers != null:
+			m.layers.armour_broken.connect(func() -> void:
+				for p: Node3D in PartDressing.parts_of(m).values():
+					PartDressing.shed(p, 3, m.body.get_parent()))
 	return true
 
 
@@ -165,9 +173,9 @@ static func class_of(roster_class: String) -> String:
 ## mech parts shipped, for every rolled mech. Pools are official parts only, so a seed
 ## makes the same mech on every machine; a design's fixed parts may be anyone's.
 static func dress_rolled(m: Mech, gen_seed: int, klass: String = "", design: PartDesign = null,
-		take_class: bool = false) -> bool:
+		take_class: bool = false, owner: String = "") -> bool:
 	var b := PartBuilder.generate("mech", design, gen_seed, catalog(), {"class": klass})
-	return dress(m, b, take_class)
+	return dress(m, b, take_class, owner)
 
 
 ## The mech guns made in the workshop (scale mech, Docs/ModularParts.md section 5): their
