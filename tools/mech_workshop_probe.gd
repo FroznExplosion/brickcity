@@ -14,6 +14,8 @@ extends SceneTree
 ##   try on      a mech part goes on its slot and side; a gun part does not; legs of two
 ##               lengths are marked; a tried chassis brings its sockets
 ##   catalogue   Fits aims at the socket of the part being built, on the mech plan
+##   mech gun    (stage 7) a gun built as a mech's: mgun joints only, nano scale, filed as
+##               scale mech, never among the players' guns; rolled and put in a mech's hand
 ##   back        Make a gun: the gun's parts again, no reference
 
 const DIR := "user://_probe_mech/"
@@ -56,6 +58,7 @@ func _tick() -> void:
 	_mode()
 	_save()
 	_try_on()
+	_mech_gun()
 	_back()
 	_ws._builds_dir = BuildRecipe.player_dir()
 	_wipe(DIR)
@@ -186,6 +189,22 @@ func _save() -> void:
 	var again: Dictionary = _ws.save_parts()
 	_ok("saved again unchanged: nothing written", (again.written as Array).is_empty(), str(again))
 
+	# Into the game (stage 6): the build's parts are a design, the design a mech.
+	var made := MechAssembler.designs(cat)
+	var d: PartDesign = made.get("probe_mech")
+	_ok("the saved parts are a design by the build's name, every slot fixed", d != null
+			and d.slots.size() == 10 and d.slots.root.fixed == _ws.part_ids.chassis, str(made.keys()))
+	var b := PartBuilder.generate("mech", d, 1, cat)
+	_ok("it rolls whole: every part its own", (b.problems as Array).is_empty() and b.at.size() == 9, str(b.problems))
+	var m := Mech.spawn(root, Vector3(0, 0, 50), 0.0, 0)
+	_ok("a mech in the game made of them", MechAssembler.dress(m, b, true)
+			and m.legs.get_node_or_null(^"Joint_leg_L") != null and m.arm.get_node_or_null(^"Pose/Joint_arm_R") != null)
+	_ok("heavy, as its chassis", is_equal_approx(m.health.layer_configs[1].max_value, 2400.0))
+	_ok("legs 3 long: the eye higher than the greybox's", m.cockpit_y > Mech.COCKPIT_Y + 0.8, str(m.cockpit_y))
+	var arm_j: Vector3 = _ws.mech_basis() * (_ws.mech_joint_m("arm_R") - _ws.mech_joint_m("chassis"))
+	_ok("its right shoulder where the reference has it", m.shoulder.is_equal_approx(
+			Vector3(arm_j.x, MechAssembler.hip_height(b) + arm_j.y, arm_j.z)), "%s vs %s" % [m.shoulder, arm_j])
+
 
 func _try_part(id: String, slot: String, side: String, mount: String, params: Dictionary = {},
 		sockets: Dictionary = {}) -> PartRecord:
@@ -259,6 +278,54 @@ func _try_on() -> void:
 	_ok("Save with parts tried on writes none", (before.written as Array).is_empty())
 	_ws.untry_all()
 	_ok("all off", _ws.tried.is_empty() and _ws.fit_marks.is_empty())
+
+
+func _mech_gun() -> void:
+	print("mech gun")
+	_ws._new_build()
+	_ws.set_asset_kind("gun")
+	_ws.set_gun_scale("mech")
+	_ws._point_slot.select(_ws.GUN_PARTS.find("magazine"))
+	_ws._fill_point_ifaces()
+	var ifaces := []
+	for i in _ws._point_iface.item_count:
+		ifaces.append(_ws._point_iface.get_item_text(i))
+	_ok("a mech gun's joints are mgun ones only", not ifaces.is_empty()
+			and ifaces.all(func(k: String) -> bool: return k.begins_with("mgun.")), str(ifaces))
+	_ws.work_plane = "side"
+	for spec in [["body", 3, [Vector2(20, 30), Vector2(40, 30), Vector2(40, 42), Vector2(20, 42)]],
+			["barrel", 1, [Vector2(8, 35), Vector2(20, 35), Vector2(20, 38), Vector2(8, 38)]],
+			["magazine", 1, [Vector2(26, 20), Vector2(30, 20), Vector2(30, 30), Vector2(26, 30)]]]:
+		_ws.select_part(_ws.part_names.find(spec[0]))
+		_ws.part_width[spec[0]] = spec[1]
+		_ws.sketch_region(spec[2])
+	for q in [["barrel", "mount", "barrel", "mgun.barrel.collar", [20, 36, 1]],
+			["body", "socket", "barrel", "mgun.barrel.collar", [20, 36, 2]],
+			["magazine", "mount", "magazine", "mgun.mag.narrow", [28, 30, 1]],
+			["body", "socket", "magazine", "mgun.mag.narrow", [28, 30, 2]]]:
+		_ws.select_part(_ws.part_names.find(q[0]))
+		_ws.toggle_point(q[4], q[1], q[2], q[3])
+	_ws._save_as("Probe Mech Gun")
+	var cat := PartCatalog.new()
+	cat.load_dir(_ws.parts_dir(), "custom")
+	var body := cat.get_part(String(_ws.part_ids.body))
+	_ok("filed as a mech's gun", body != null and body.scale == "mech" and body.family == "gun")
+	_ok("a mech gun design, not a player's gun", AssetGuns.designs(cat, "mech").has(&"probe_mech_gun")
+			and not AssetGuns.designs(cat).has(&"probe_mech_gun"))
+	var ps := load(body.dir + "part.scn") as PackedScene if body != null else null
+	var sc := ps.instantiate() as Node3D if ps != null else null
+	var k := (sc.get_node(^"Model") as Node3D).transform.basis.x.length() if sc != null else 0.0
+	_ok("at the mechs' scale, not a held gun's", is_equal_approx(k, _ws.MECH_GAME_PER_WORKSHOP), str(k))
+	if sc != null:
+		sc.free()
+	var lib := GunPlaceholderParts.build_library()
+	var res := MechAssembler.roll_gun(lib, 3, cat)
+	_ok("rolled as a gun", res != null and res.gun_name.ends_with("Probe Mech Gun"), res.gun_name if res else "null")
+	var m := Mech.spawn(root, Vector3(0, 0, 90), 0.0, 0)
+	var gi := MechAssembler.arm_gun(m, res)
+	_ok("in a mech's hand, seen, the one it fires", gi != null and m.gun.gun == gi and gi.visible
+			and gi.get_parent() == m.arm)
+	_ws.set_gun_scale("held")
 
 
 func _back() -> void:

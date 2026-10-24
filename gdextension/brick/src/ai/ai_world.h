@@ -226,7 +226,14 @@ private:
     int grid_size = 0;
     std::vector<float> grid_heights;
     int grid_wall = 0;   // the plate a column outside the grid is solid up to
+    // Every stud column's ground plate over the grid, worked out once by
+    // set_ground_grid: no cache to grow (and rehash) as the AI reads it.
+    std::vector<int16_t> grid_plates;
+    int grid_gx0 = 0, grid_gz0 = 0, grid_nx = 0, grid_nz = 0;
     int _grid_plate(int gx, int gz) const;
+    /// Is region (x, z) off the grid? Its wall is for walking: a sight line
+    /// past the region's edge is not blocked by it.
+    bool _off_grid(float x, float z) const;
 
     struct ChunkEntry {
         int chunk = -1;

@@ -1306,6 +1306,50 @@ main), `--gate=squad` 10/10. Two things fail on main as well, not from this: `fi
 "rounds went into the wall" (20 hiding ticks against its > 20, every run) and `threat_style`
 segfaulting at exit after its 7/7. Next: N4.
 
+**N4 built (2026-10-24): the nav net.** `PlanetNavNet` (scripts/planet/planet_nav_net.gd):
+
+- **Regions on a lattice.** Cell (i, j) is the gnomonic square (i, j) of the tangent plane at
+  an ANCHOR direction (the town), 8 x 8 tiles (256 studs, 89.6 m) at the anchor and a little
+  smaller away from it (1% at 1 km); its region is a `PlanetNavRegion` in the tangent frame at
+  the cell's centre, built 16 studs wider each side so the borders are inside both neighbours,
+  with its own framed AIWorld and AINav (N1, N1b). A region is ~14 ms to build on the bare
+  planet, ~60 ms in the scene (the towns' pads in the height): its grid is built on a
+  WorkerThreadPool task (`threaded`) and finished on the main thread (~4 ms with the 210
+  buildings to sort into it). Buildings go into every region they reach as proxy boxes.
+- **Portals and legs.** A border carries a portal every 12 m (7 a border), a point on the
+  ground; a portal counts only where both its regions stand a body within 0.5 m of each other
+  there (a wall along a border would otherwise be crossed at the join) and that snapped point is
+  the waypoint. A leg (a region's portal to another of its portals) is worked out in spare time
+  as a low-priority request on the region's own AINav (378 a region, ~0.4 ms each); until then
+  it is its straight line x 1.3, and a route's end legs x 1.08.
+- **Routes.** A path whose ends are in different cells is an A* over the portals (a binary
+  heap, the regions along the straight line and either side made first, two a call), then the
+  real path a region at a time between the portals it chose, joined end to end; a stretch with
+  no way closes its leg and the route is planned again (6 tries). The API is AINav's for paths
+  (request_path / service / get_status / get_path / release, find_path, snap, can_stand), so
+  `Soldier.move_to` walks it as it walks a map: on a planet a person's paths go through
+  `AIServices.nav_net` (`_path_nav` is untyped now; off a planet nothing changes).
+- **Round the fight.** `keep_around(points, radius)`: regions within 60 m of the player and
+  every live pawn made, those further than twice that from all of them dropped -- never one a
+  request in hand is walking. `ai_world` / `ai_nav` are the region the player is in.
+- **AIWorld for a grid** (C++): each stud's ground plate is worked out once into an array by
+  `set_ground_grid` (the hash-map cache rehashing as it grew was 5 ms column reads in 21
+  regions); a sight line is not blocked by a region's edge wall -- it is for walking.
+
+Probe `tools/planet_nav_net_probe.gd` (headless, 12/12): ~400 m across 4 borders round a wall
+with a gap on the first border; stretches meet within 0.19 m; on the ground within 0.11 m;
+never through the wall; 438 m for 407 m straight; every leg worked out with service(2 ms) over
+3 ms in 0.2% of calls (the AINav hierarchy's own steps); legs known, the path no worse than
++5%; the regions behind dropped; regions built on threads identical to those built in the call.
+Gate `--gate=travel` (headless, 10/10): a squad of four on the player's side ordered MOVE 200 m
+out of the town walks it in 88 s across 3 cells (6 regions made round it on the way, 6 dropped
+behind), feet on the ground the whole way; the AI's worst tick 3.8 ms. `--gate=squad` on the
+net 10/10.
+
+**Not yet:** soldiers' sight, cover and danger ask `ai_world`, the player's region -- a fight
+far from the player (two player groups apart) needs those per region too; HPA* inside a region
+is AINav's own (24-column clusters); legs are re-worked only when a region is made again.
+
 ### 11.9 Plan: biomes (2026-10-24)
 
 After STA's `PlanetFields` (temperature, humidity, a biome by climate, one baked map shared by the

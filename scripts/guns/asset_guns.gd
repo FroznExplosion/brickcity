@@ -45,11 +45,11 @@ static func all() -> Dictionary:
 
 ## Every design saved as parts: id -> {name, class, parts: {slot name: PartRecord}}. Held
 ## guns only (a mech's gun is not a player's); a part needs its scene beside it.
-static func designs(cat: PartCatalog = null) -> Dictionary:
+static func designs(cat: PartCatalog = null, scale: String = "held") -> Dictionary:
 	if cat == null:
 		cat = PartCatalog.load_all()
 	var out := {}
-	for r in cat.filter({"family": ["gun"], "scale": ["held"]}):
+	for r in cat.filter({"family": ["gun"], "scale": [scale]}):
 		var from := String(r.extra.get("from", ""))
 		if from == "" or not GunPartDef.SLOT_BY_SUFFIX.has(r.slot) \
 				or not FileAccess.file_exists(r.dir + PART_SCENE):
@@ -82,15 +82,15 @@ static func ids() -> Array[StringName]:
 
 
 ## What keeps a design's parts to itself.
-static func fence(id: StringName) -> StringName:
-	return StringName("asset_%s" % id)
+static func fence(id: StringName, scale: String = "held") -> StringName:
+	return StringName("asset_%s" % id) if scale == "held" else StringName("asset_mech_%s" % id)
 
 
 ## The parts of every design, as part defs. `cat`: the catalogue to read designs from
 ## (default: every part folder).
-static func parts(cat: PartCatalog = null) -> Array[GunPartDef]:
+static func parts(cat: PartCatalog = null, scale: String = "held") -> Array[GunPartDef]:
 	var out: Array[GunPartDef] = []
-	var saved := designs(cat)
+	var saved := designs(cat, scale)
 	for id: StringName in saved:
 		for slot_name: String in saved[id].parts:
 			var r: PartRecord = saved[id].parts[slot_name]
@@ -101,7 +101,7 @@ static func parts(cat: PartCatalog = null) -> Array[GunPartDef]:
 			def.id = StringName(r.id)
 			def.display_name = r.display_name
 			def.scene = scene
-			def.exclusive_to = fence(id)
+			def.exclusive_to = fence(id, scale)
 			def.tags = r.tags
 			def.mount_interface = StringName(r.interface())
 			for s: Dictionary in r.sockets:
@@ -111,6 +111,8 @@ static func parts(cat: PartCatalog = null) -> Array[GunPartDef]:
 			if slot_name == "body":
 				def.name_fragment = r.name_fragment if r.name_fragment != "" else String(saved[id].name)
 			out.append(def)
+	if scale != "held":
+		return out   # the old folders are all players' guns
 	var guns := all()
 	for id: StringName in guns:
 		if saved.has(id):
@@ -164,13 +166,13 @@ static func _def(slot: GunPartDef.Slot) -> GunPartDef:
 
 ## Put every design's parts on the end of `lib` (once): at the end, so every existing
 ## part keeps its place and every seed rolls what it did.
-static func add_to(lib: GunPartLibrary, cat: PartCatalog = null) -> void:
+static func add_to(lib: GunPartLibrary, cat: PartCatalog = null, scale: String = "held") -> void:
 	var have := {}
 	for def in lib.parts:
 		if def != null:
 			have[def.id] = true
 	var added := false
-	for def in parts(cat):
+	for def in parts(cat, scale):
 		if not have.has(def.id):
 			lib.parts.append(def)
 			added = true
@@ -180,8 +182,8 @@ static func add_to(lib: GunPartLibrary, cat: PartCatalog = null) -> void:
 
 ## Why design `id`'s parts in `lib` do not make a gun ("" when they do): no body, or a
 ## part that does not fit what it hangs from.
-static func why_not(lib: GunPartLibrary, id: StringName) -> String:
-	var recipe := _recipe(lib, id)
+static func why_not(lib: GunPartLibrary, id: StringName, scale: String = "held") -> String:
+	var recipe := _recipe(lib, id, scale)
 	if not recipe.has(GunPartDef.Slot.BODY):
 		return "no body"
 	for slot: GunPartDef.Slot in recipe:
@@ -190,10 +192,10 @@ static func why_not(lib: GunPartLibrary, id: StringName) -> String:
 	return ""
 
 
-static func _recipe(lib: GunPartLibrary, id: StringName) -> Dictionary:
+static func _recipe(lib: GunPartLibrary, id: StringName, scale: String = "held") -> Dictionary:
 	var recipe := {}
 	for def in lib.parts:
-		if def != null and def.exclusive_to == fence(id):
+		if def != null and def.exclusive_to == fence(id, scale):
 			recipe[def.slot] = def
 	return recipe
 
@@ -201,15 +203,15 @@ static func _recipe(lib: GunPartLibrary, id: StringName) -> Dictionary:
 ## A gun of design `id` from `lib` (which add_to fills), or null if there is no such
 ## design or its parts do not make a gun (why_not says why).
 static func generate(lib: GunPartLibrary, id: StringName, gen_seed: int, tier: int = 1,
-		rarity: int = 3, cat: PartCatalog = null) -> GunGenerator.Result:
+		rarity: int = 3, cat: PartCatalog = null, scale: String = "held") -> GunGenerator.Result:
 	if cat == null:
 		cat = PartCatalog.load_all()
-	add_to(lib, cat)
-	var why := why_not(lib, id)
+	add_to(lib, cat, scale)
+	var why := why_not(lib, id, scale)
 	if why != "":
 		print("[asset guns] '%s' makes no gun: %s" % [id, why])
 		return null
-	var saved := designs(cat)
+	var saved := designs(cat, scale)
 	var wc_id: StringName = DEFAULT_CLASS
 	var display := String(id)
 	if saved.has(id):
@@ -222,5 +224,5 @@ static func generate(lib: GunPartLibrary, id: StringName, gen_seed: int, tier: i
 		var m: Dictionary = guns[id].manifest
 		wc_id = StringName(m.get("class", DEFAULT_CLASS))
 		display = String(m.get("name", id))
-	return GunGenerator.generate_fixed(_recipe(lib, id), gen_seed, WeaponClass.builtin(wc_id),
+	return GunGenerator.generate_fixed(_recipe(lib, id, scale), gen_seed, WeaponClass.builtin(wc_id),
 			tier, rarity, display)

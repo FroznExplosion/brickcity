@@ -6,13 +6,14 @@ mounts with and what it takes, and is found in one catalogue that filters and so
 for all of them. A gun or a mech in the game is an **assembly** the generator puts together from
 parts that fit, from a seed and a design (section 7).
 
-Status (2026-10-24): **stages 1 to 5 built.** The part record, the fit check and the
+Status (2026-10-24): **stages 1 to 7 built.** The part record, the fit check and the
 catalogue (`scripts/parts/`, `tools/parts_probe.gd`, 65 checks); guns on them: the workshop's
 Save writes every part on its own, the generator and the assembler only put together parts
 that fit (`tools/part_save_probe.gd`); the catalogue panel, F7 in the workshop
 (`tools/part_panel_probe.gd`, 38 checks); trying any part on in the workshop, with fit marks
-(`part_save_probe`, now 61 checks); mech mode in the workshop (`tools/mech_workshop_probe.gd`, 50
-checks). Section 11 is the order the rest is built in;
+(`part_save_probe`, now 61 checks); mech mode in the workshop (`tools/mech_workshop_probe.gd`, 56
+checks); mechs in the game from parts (`tools/mech_parts_probe.gd`, 70 checks); pods and mech guns
+(`tools/pods_probe.gd`, 28; `mech_workshop_probe` now 62). Section 11 is the order the rest is built in;
 "Stage 1 as built" and "Stage 2 as built" below say what differs from the plan.
 
 Builds on: [Parts/joints.md](Parts/joints.md) (joints, the one pin, hands),
@@ -323,8 +324,8 @@ interfaces.
 | 3 | **Done.** The catalogue panel: filters, sort, custom and creator, the Fits toggle; F7 in the workshop; `tools/part_panel_probe.gd` | UI, shared by workshop and inventory |
 | 4 | **Done.** The workshop's anything-on-anything swap, with fit marks (section 9): pick in F7 to try a part on | `asset_workshop.gd` |
 | 5 | **Done.** The workshop's mech mode: slot, side, class, reference mech, ready mounts, test fit; `tools/mech_workshop_probe.gd` | `asset_workshop.gd` |
-| 6 | Mechs in the game from parts: a mech assembler on a skeleton, IK legs and arms by length, class from the chassis; replaces the boxes in `mech.gd` | `scripts/mech/` |
-| 7 | Pods: slots, `PodGenerator`, the three kinds, pod names, the inventory screen; mech guns (scale `mech`) rolled for the hands | `scripts/mech/`, `scripts/guns/`, loot |
+| 6 | **Done.** Mechs in the game from parts: designs (fixed and rolled slots), `PartBuilder`, `MechAssembler`, class from the chassis, hips from the legs' length; the boxes in `mech.gd` give way to parts; `tools/mech_parts_probe.gd` | `scripts/mech/` |
+| 7 | **Done.** Pods: slots, `PodGenerator`, the three kinds, pod names, the inventory screen; mech guns (scale `mech`) rolled for the hands; `tools/pods_probe.gd` | `scripts/mech/`, `scripts/guns/`, loot |
 | 8 | Motion sets library (section 8) | |
 | 9 | Part packages: export, import, hash, data-only loading | `scripts/parts/` |
 | 10 | Multiplayer: lobby part list, host download, Steam Workshop | with the netcode |
@@ -471,6 +472,85 @@ interfaces.
   part's socket on the mech plan (`arm_R/hand` for the right hand).
 - **Not yet**: the game does not build mechs from these parts -- that is stage 6, which replaces
   `mech.gd`'s boxes. Pod bodies are saved; the pods rolled onto them are stage 7.
+
+### Stage 6 as built
+
+- **Designs** (`PartDesign`, `scripts/parts/part_design.gd`): a file per design in
+  `res://parts/designs/` (shipped) or `user://parts/designs/` (the player's), naming parts slot
+  by slot: `{"fixed": id}`, `{"pool": query}` or `{"empty": true}`; a slot not named is rolled
+  from everything that fits. A design names parts, it never holds them. A joined pair is two
+  fixed slots; John is a figure design with his torso and head fixed and `neck/hat` a pool of
+  hats. The workshop's saved mech builds are designs too, every slot fixed
+  (`MechAssembler.designs`).
+- **Rolling** (`PartBuilder.generate(plan, design, seed, catalog, opts)`): any body plan (mech,
+  figure, gun). The root first (of a class if asked), then each socket from the root out, each
+  from the parts that fit what it hangs from (layer 1) and the plan's `same` rule (layer 2): the
+  legs' length is rolled once, from the lengths both sides have a leg for. Candidates in id
+  order, one seeded RNG: the same seed, design and catalogue roll the same build. Pools are
+  official parts only unless asked (`custom`), so a seed rolls one mech on every machine; a
+  design's fixed parts may be anyone's. A fixed part that does not fit, or a required socket
+  nothing fits, is a problem, and a build with problems is never made.
+- **Assembling** (`MechAssembler.assemble`): each part's saved scene on a joint node where its
+  host's `socket_<name>` is, one level deeper for the hand on the arm. The chassis's scene is at
+  the hips (the workshop now exports it there). The hips stand `hip_height` above the feet:
+  the legs' `length` in nano bricks (12 / 16 / 20; a boss's any other length on the same line).
+- **In the mech** (`Mech.set_parts`, via `MechAssembler.dress`): the boxes go. The legs' joints
+  go on the legs (they turn with the legs and swing at the hips as it walks, until stage 8's
+  motion sets); the right arm and hand on the gun arm, posed so shoulder-to-wrist points along
+  the aim, the muzzle ahead of the wrist; chassis, head, left arm and pods on the torso. The gun
+  arm's shoulder (`Mech.shoulder`) and the pilot's eye (`Mech.cockpit_y`, 0.84 m over the hips)
+  come from the parts. The chassis's class is the mech's layers (AIRoster 4.1: light's hatch at
+  the back). The capsule and the rodeo points are as they were.
+- **In the city**: every mech spawned is dressed if a whole one can be rolled -- a roster mech
+  with a chassis of its class -- and keeps its boxes otherwise. No mech parts ship yet, so today
+  every rolled mech keeps its boxes. **Ctrl Y** spawns an enemy mech of each mech saved in the
+  workshop in turn, with its chassis's class. Seeded from where it stands, so no combat roll
+  moves.
+- **Not yet**: the arms and legs are rigid parts on joints (no knee or elbow inside a part);
+  the mech's gun is still the placeholder LMG, hidden, at the wrist (stage 7: mech guns).
+
+### Stage 7 as built
+
+- **`PodGenerator`** (`scripts/parts/pod_generator.gd`), beside `GunGenerator` and
+  `ShieldGenerator`: a kind, a maker, a rarity (rolled as a gun's) and a tier from a seed; one
+  power roll scaled by rarity x tier, traded against the cooldown at a constant product; a grade
+  word as a gun's; a score on the guns' 100-a-tier scale. Saved by `{seed, rarity, tier, kind,
+  body}` and rolled back the same.
+
+  | Kind | Sort | Does |
+  |---|---|---|
+  | `missiles` (Missile Pod) | active, fixed | a burst of 4 rockets (a `rocket_launcher` of its own) where the mech aims |
+  | `laser` (Laser) | active, fixed | one heavy shot (a `sniper`) |
+  | `grenade_arm` (Grenade Arm) | active, animated | lobs 2 grenades (a `grenade_launcher`) |
+  | `melee_arm` (Strike Arm) | active, animated | the nearest enemy mech within 7 m takes ~450 |
+  | `shield_boost` (Shield Booster) | passive | the shield layer ~30 % bigger |
+  | `directional_shield` (Brace Plate) | passive | the armour layer ~22 % bigger (see below) |
+
+- **Names** from the pods' own lists -- grade word (shared with guns: one grade scale), an
+  adjective, a noun of the kind ("Shouldered Hive", "Pylon Lance") or the pod body's
+  `name_fragment`. `pods_probe` checks no gun noun is in them (it caught "Bulwark", a heavy gun's
+  noun). A pod body's `pod_kind` (active_animated / active_fixed / passive) limits what is
+  rolled onto it; a body that says none carries any.
+- **`MechPods`** (`scripts/parts/mech_pods.gd`) on a mech: `pod_L` and `pod_R`. Passives resize
+  the layers while fitted (as full as they were) and hold when the layers are made again (a
+  chassis's class). Actives are used, then cool down; a weapon pod is a `GunController` of its
+  own on the mech's aim, its damage the pod's power. Two of one kind stack.
+- **In the mech**: 1 and 2 (the gun slot keys) use the left and right pod.
+- **Fitting: the backpack's mech page** (`MechLoadoutScreen`): swap weapon steps backpack ->
+  skills -> mech -> backpack when the player has a mech. Up / Down pick a pod, 1 / 2 fit it
+  left / right (what was there goes back), Shift 1 / 2 take one off. The player starts with one
+  pod of each kind, a missile pod and a shield booster fitted (not in a scripted pass, whose
+  mech must fight as it always has).
+- **Mech guns**: Gun > "Mech gun" in the workshop builds a gun at the mechs' nano scale, with
+  the `mgun.*` joints only, saved as `scale: mech`. `AssetGuns` takes a scale (fenced apart:
+  `asset_mech_<id>`), so a mech gun never joins a player's guns. `MechAssembler.roll_gun` rolls
+  one of them (stats and modifiers from the seed, as any gun) and `arm_gun` puts it, seen, in the
+  mech's right hand, the muzzle moved to its own. The player's mech carries one when any is
+  saved (not in a scripted pass); Ctrl Y's workshop mechs do too. With none, the hidden
+  placeholder LMG stays.
+- **Not yet**: the animated pods have no arm of their own to see (stage 8's motion sets); the
+  Brace Plate is armour all round until hits say which way they came from; enemy mechs carry
+  no pods (their brain would need to use them: the AI's); pods do not drop as loot yet.
 
 ## 12. Decided
 
