@@ -829,9 +829,11 @@ static func _shifted_cuts(span: int, shift: int) -> Array:
 
 
 ## A `w` x `l` cell of a staggered layer as one plate where the palette has
-## one that size, else split across its PANEL side: a 10 x 8 edge cell is an
-## 8x8 and a 2x8 (no 8x10 plate is made). Anything else -- a footprint that does
-## not divide -- the lattice's way.
+## one that size, else split across its PANEL side: a 10 x 8 edge cell is a
+## 2x8 and an 8x8 (no 8x10 plate is made), the 2x8 FIRST -- the other way the
+## cut fell 8 studs in, on a lower layer starting at 2 a lattice line, which is
+## every even floor's seam. Anything else -- a footprint that does not divide --
+## the lattice's way.
 static func _slab_cell(world: BrickWorld, chunk_id: int, palette: Dictionary, y: int,
 		x: int, z: int, w: int, l: int, colour: int) -> void:
 	var part := _slab_part(palette, w, l)
@@ -840,12 +842,12 @@ static func _slab_cell(world: BrickWorld, chunk_id: int, palette: Dictionary, y:
 		return
 	var a := int(STAGGER[0])
 	if w == PANEL and l < PANEL:
-		_slab_cell(world, chunk_id, palette, y, x, z, PANEL - a, l, colour)
-		_slab_cell(world, chunk_id, palette, y, x + PANEL - a, z, a, l, colour)
+		_slab_cell(world, chunk_id, palette, y, x, z, a, l, colour)
+		_slab_cell(world, chunk_id, palette, y, x + a, z, PANEL - a, l, colour)
 		return
 	if l == PANEL and w < PANEL:
-		_slab_cell(world, chunk_id, palette, y, x, z, w, PANEL - a, colour)
-		_slab_cell(world, chunk_id, palette, y, x, z + PANEL - a, w, a, colour)
+		_slab_cell(world, chunk_id, palette, y, x, z, w, a, colour)
+		_slab_cell(world, chunk_id, palette, y, x, z + a, w, PANEL - a, colour)
 		return
 	_fill_rect(world, chunk_id, palette, y, x, z, x + w, z + l, colour, [])
 

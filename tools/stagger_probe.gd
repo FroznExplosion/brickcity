@@ -40,33 +40,34 @@ func _init() -> void:
 		_ok("%d x %d: the same cells solid both ways" % [s.x, s.z], differ == 0,
 				"%d differ" % differ)
 		# Seams, floor by floor: which x lines each layer is cut on, read from the
-		# bricks along one row through the middle.
+		# bricks along a row near each face. Not one past the stairwell: the
+		# hole's edge is a cut in every floor whatever the layout, the hole
+		# being there -- and the layers lay round it on its own lines.
 		var floors := 0
 		var clash := 0
 		var unbridged := 0
-		var prev_lines := {}
-		for band in TowerRecipe.layout(s.y):
-			if band.kind != "slab" and band.kind != "base":
-				continue
-			@warning_ignore("integer_division")
-			var row := origin.z + s.z / 2
-			var lower := _seams(w_on, c_on, origin, int(band.y), row, s.x)
-			var upper := _seams(w_on, c_on, origin, int(band.y) + 1, row, s.x)
-			var here := {}
-			for v in lower:
-				here[v] = true
-			for v in upper:
-				here[v] = true
-			if band.kind == "slab":
-				floors += 1
-				for v in here:
-					if prev_lines.has(v):
-						clash += 1
-			for v in lower:
-				if upper.has(v):
-					unbridged += 1
-			prev_lines = here
-		_ok("%d x %d: no seam over a seam of the floor below (%d floors)" % [s.x, s.z, floors],
+		for row in [origin.z + 3, origin.z + s.z - 4]:
+			var prev_lines := {}
+			for band in TowerRecipe.layout(s.y):
+				if band.kind != "slab" and band.kind != "base":
+					continue
+				var lower := _seams(w_on, c_on, origin, int(band.y), row, s.x)
+				var upper := _seams(w_on, c_on, origin, int(band.y) + 1, row, s.x)
+				var here := {}
+				for v in lower:
+					here[v] = true
+				for v in upper:
+					here[v] = true
+				if band.kind == "slab":
+					floors += 1
+					for v in here:
+						if prev_lines.has(v):
+							clash += 1
+				for v in lower:
+					if upper.has(v):
+						unbridged += 1
+				prev_lines = here
+		_ok("%d x %d: no seam over a seam of the floor below (%d floor rows)" % [s.x, s.z, floors],
 				clash == 0, "%d line(s) shared" % clash)
 		_ok("%d x %d: the upper layer crosses every lower seam" % [s.x, s.z], unbridged == 0,
 				"%d seam(s) in both layers" % unbridged)
