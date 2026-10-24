@@ -536,8 +536,8 @@ int BrickWorld::place_block(int chunk_id, Vector3i cell, int archetype_id, int c
     // A bake or stand-in worker may be walking this block list, and the
     // push_back below can move it: they read freed memory and the game died
     // (a close-up break of 20-30 rooms, whose furniture lands here as
-    // DECORATIVE blocks -- which never waited at all). Wait first; what they
-    // made is kept here and dropped below if this block changes the geometry.
+    // DECORATIVE blocks -- which never waited at all). Stop them first (a
+    // running bake is cancelled and started again later; see the header).
     if (!bake_jobs.empty() || !coarse_jobs.empty()) {
         join_chunk_readers(chunk_id);
     }
@@ -1352,8 +1352,10 @@ Vector2i BrickWorld::get_block_index_range(int chunk_id, int block_id) const {
 // Nothing about the seam shader changes: UV is still position within the
 // BLOCK's face rectangle and UV2 is still that rectangle's size, so a merged
 // quad covering four cells still carries one brick outline, not four.
+// `cancel`: a worker's bake stops at the next block once it is set, and leaves
+// `fb` invalid (BrickWorld::join_chunk_readers).
 static void bake_faces_into(const Chunk &c, const std::vector<Archetype> &parts,
-        FaceBake &fb) {
+        FaceBake &fb, const std::atomic<bool> *cancel = nullptr) {
     const auto t0 = std::chrono::steady_clock::now();
     fb.clear();
 
@@ -1387,6 +1389,10 @@ static void bake_faces_into(const Chunk &c, const std::vector<Archetype> &parts,
     for (int sec = 0; sec < section_n; ++sec) {
     fb.section_first[(size_t)sec] = (int32_t)fb.owner.size();
     for (int32_t bi : by_section[(size_t)sec]) {
+        if (cancel != nullptr && cancel->load(std::memory_order_relaxed)) {
+            fb.clear();
+            return;
+        }
         const Block &b = c.blocks[bi];
         if (b.removed) {
             continue; // edited away: owns no cells, so it has no faces
@@ -2133,15 +2139,42 @@ void BrickWorld::settle_bake_job(int chunk_id, bool adopt) {
 }
 
 void BrickWorld::join_chunk_readers(int chunk_id) {
-    for (auto &j : bake_jobs) {
-        if (j->chunk_id == chunk_id && j->worker.joinable()) {
+    const auto t0 = std::chrono::steady_clock::now();
+    bool waited = false;
+    // A bake still running is stopped, not waited for: a mega tower's takes
+    // 50-80 ms, and a close-up blast lays furniture into it (20-30 rooms' worth
+    // froze the game that long a shot, 2026-10-24). It is started again when
+    // next asked for (bake_ready), after this tick's writes. A finished one is
+    // kept: for a decorative write it is still right.
+    for (size_t i = 0; i < bake_jobs.size(); ++i) {
+        BakeJob *j = bake_jobs[i].get();
+        if (j->chunk_id != chunk_id) {
+            continue;
+        }
+        if (j->done.load(std::memory_order_acquire)) {
+            if (j->worker.joinable()) {
+                j->worker.join();
+            }
+            continue;
+        }
+        j->cancel.store(true, std::memory_order_relaxed);
+        if (j->worker.joinable()) {
             j->worker.join();
         }
+        waited = true;
+        bake_jobs.erase(bake_jobs.begin() + (long)i);
+        bake_restart.insert(chunk_id);
+        break;
     }
     for (auto &j : coarse_jobs) {
         if (j->chunk_id == chunk_id && j->worker.joinable()) {
             j->worker.join();
+            waited = true;
         }
+    }
+    if (waited) {
+        join_wait_usec += std::chrono::duration_cast<std::chrono::microseconds>(
+                std::chrono::steady_clock::now() - t0).count();
     }
 }
 
@@ -2166,6 +2199,7 @@ void BrickWorld::bake_chunk_async(int chunk_id) {
     if (!valid_chunk(chunk_id) || chunks[chunk_id].bake.valid || bake_pending(chunk_id)) {
         return;
     }
+    bake_restart.erase(chunk_id);
     auto job = std::make_unique<BakeJob>();
     job->chunk_id = chunk_id;
     // The palette is copied rather than shared: baking a new archetype on the
@@ -2174,7 +2208,7 @@ void BrickWorld::bake_chunk_async(int chunk_id) {
     BakeJob *raw = job.get();
     const Chunk *cp = &chunks[chunk_id]; // stable: chunks is a deque
     raw->worker = std::thread([raw, cp]() {
-        bake_faces_into(*cp, *raw->parts, raw->bake);
+        bake_faces_into(*cp, *raw->parts, raw->bake, &raw->cancel);
         raw->done.store(true, std::memory_order_release);
     });
     bake_jobs.push_back(std::move(job));
@@ -2189,6 +2223,10 @@ bool BrickWorld::bake_ready(int chunk_id) {
     }
     BakeJob *job = find_bake_job(chunk_id);
     if (job == nullptr) {
+        // Cancelled by a write (join_chunk_readers): start it again now.
+        if (bake_restart.erase(chunk_id) > 0) {
+            bake_chunk_async(chunk_id);
+        }
         return false;
     }
     if (!job->done.load(std::memory_order_acquire)) {
@@ -10595,6 +10633,7 @@ void BrickWorld::_bind_methods() {
     ClassDB::bind_method(D_METHOD("bake_pending", "chunk_id"), &BrickWorld::bake_pending);
     ClassDB::bind_method(D_METHOD("drop_chunk_bake", "chunk_id"), &BrickWorld::drop_chunk_bake);
     ClassDB::bind_method(D_METHOD("bakes_in_flight"), &BrickWorld::bakes_in_flight);
+    ClassDB::bind_method(D_METHOD("get_join_wait_usec"), &BrickWorld::get_join_wait_usec);
     ClassDB::bind_method(D_METHOD("get_chunk_mass", "chunk_id"), &BrickWorld::get_chunk_mass);
     ClassDB::bind_method(D_METHOD("get_chunk_content_hash", "chunk_id"),
             &BrickWorld::get_chunk_content_hash);

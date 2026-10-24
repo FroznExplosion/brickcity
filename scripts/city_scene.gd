@@ -1044,6 +1044,7 @@ func _ready() -> void:
 	_view_mode = "--view" in args
 	DebugView.reset()
 	_breaklag_mode = "--breaklag" in args
+	_bigbreak_mode = "--bigbreak" in args
 	_storeys_mode = "--storeys" in args
 	_whole_mode = "--whole" in args
 	_squad_mode = "--squad" in args
@@ -1299,6 +1300,8 @@ func _ready() -> void:
 		_run_soldier_pass()
 	elif _breaklag_mode:
 		_run_breaklag_pass()
+	elif _bigbreak_mode:
+		_run_bigbreak_pass()
 	elif _storeys_mode:
 		_run_storeys_pass()
 	elif _wreck_mode:
@@ -7758,6 +7761,8 @@ func _start_firefight(gate: bool) -> void:
 ## bricks it lies on -- a LOAD command, applied and solved on the host, replayed
 ## by the twin buildings of the log check like everything else.
 var _breaklag_mode := false
+## -- --bigbreak [--big] [--far]: a player's widest shots, close up (_run_bigbreak_pass)
+var _bigbreak_mode := false
 var _storeys_mode := false   ## -- --storeys: the storey-units gate (Docs/Space.md 5.3a)
 var _whole_mode := false     ## -- --whole: every building laid whole, as before storey units
 
@@ -8154,6 +8159,100 @@ func _run_breaklag_pass() -> void:
 				TowerRecipe.total_plates(biggest.recipe.courses) * PLATE / 3.0)
 	print("[breaklag] %d ok, %d FAIL" % [_gate_pass, _gate_fail])
 	get_tree().quit(1 if _gate_fail > 0 else 0)
+
+
+## A player's widest shots at the biggest building, from close up. Reported
+## (2026-10-24): the left click at a big radius into a large building, 20-30
+## rooms at once, froze and then crashed the game close up and was smooth from
+## far away. The crash was a bake worker's (BrickWorld::join_chunk_readers);
+## this measures what is left: every FRAME after each shot -- what the player
+## sees as a freeze -- its worst, how many went over 33 and 100 ms, and what the
+## physics tick of the worst one spent, part by part (_part, _mark). `--far`
+## takes the same shots from 150 m, the case that was fine.
+func _run_bigbreak_pass() -> void:
+	var far := "--far" in OS.get_cmdline_user_args()
+	var b: BuildingRegistry.Building = null
+	for c in registry.buildings:
+		if c.is_build() or _wide_ids.has(c.id):
+			continue
+		if b == null or c.recipe.courses * c.recipe.footprint_x * c.recipe.footprint_z \
+				> b.recipe.courses * b.recipe.footprint_x * b.recipe.footprint_z:
+			b = c
+	if b == null:
+		print("[bigbreak] no building")
+		get_tree().quit(1)
+		return
+	var fx: float = b.recipe.footprint_x * STUD
+	var back := 150.0 if far else 14.0
+	print("[bigbreak] building %d (%dx%d, %d courses), shots from %.0f m" % [b.id,
+			b.recipe.footprint_x, b.recipe.footprint_z, b.recipe.courses, back])
+	# Where a player stands: in front of the face, a few storeys up.
+	camera.position = b.xform * Vector3(fx * 0.5, 9.0, -back)
+	camera.look_at(b.xform * Vector3(fx * 0.5, 9.0, 0.0), Vector3.UP)
+	await _frames(120)
+	var shots := [[0.3, 8.0, 8.0], [0.7, 10.0, 12.0], [0.5, 22.0, 12.0]]
+	var worst_all := 0.0
+	for shot in shots:
+		var at: Vector3 = b.xform * Vector3(fx * float(shot[0]), float(shot[1]), 0.0)
+		camera.look_at(at, Vector3.UP)
+		await _frames(30)
+		var bricks0 := world.get_alive_block_count(b.chunk) if b.is_materialised() else 0
+		var rep0 := registry.storey_report(b.id)
+		var held0 := director.held_rounds
+		var lay0 := registry.lay_usec
+		var laid0 := registry.items_laid
+		var join0 := world.get_join_wait_usec()
+		_blast(at, float(shot[2]))
+		var worst := 0.0
+		var worst_at := -1
+		var worst_parts := {}
+		var worst_process := 0.0
+		var over33 := 0
+		var over100 := 0
+		var total := 0.0
+		var frames := 0
+		var prev := Time.get_ticks_usec()
+		var quiet := 0
+		var last_alive := -1
+		# Until the break is over: the damage applied and a second of nothing.
+		while frames < 900 and (quiet < 60 or not _damage_queue.is_empty()):
+			await get_tree().process_frame
+			var now := Time.get_ticks_usec()
+			var dt := float(now - prev) / 1000.0
+			prev = now
+			frames += 1
+			total += dt
+			if dt > 33.3:
+				over33 += 1
+			if dt > 100.0:
+				over100 += 1
+			if dt > worst:
+				worst = dt
+				worst_at = frames
+				worst_parts = _prof.duplicate()
+				worst_process = Performance.get_monitor(Performance.TIME_PROCESS) * 1000.0
+			var alive := world.get_alive_block_count(b.chunk) if b.is_materialised() else 0
+			quiet = quiet + 1 if alive == last_alive else 0
+			last_alive = alive
+		var rep := registry.storey_report(b.id)
+		var parts := []
+		for k in worst_parts:
+			if float(worst_parts[k]) >= 1.0:
+				parts.append("%s %.1f" % [k, float(worst_parts[k])])
+		print("[bigbreak] radius %.0f m at %.0f m up: %d bricks gone of %d; storeys laid %s -> %s; director held %d" % [
+				float(shot[2]), float(shot[1]), bricks0 - last_alive, bricks0,
+				str(rep0.get("laid", "all")), str(rep.get("laid", "all")),
+				director.held_rounds - held0])
+		print("[bigbreak]   %d frames, mean %.1f ms, worst %.1f ms at frame %d, %d over 33 ms, %d over 100 ms" % [
+				frames, total / maxf(frames, 1), worst, worst_at, over33, over100])
+		print("[bigbreak]   worst frame's physics tick: %s; process %.1f ms" % [
+				", ".join(parts), worst_process])
+		print("[bigbreak]   %d interior pieces laid as bricks, %.1f ms laying them; %.1f ms waiting on bake workers" % [
+				registry.items_laid - laid0, (registry.lay_usec - lay0) / 1000.0,
+				(world.get_join_wait_usec() - join0) / 1000.0])
+		worst_all = maxf(worst_all, worst)
+	print("[bigbreak] worst frame of all %.1f ms" % worst_all)
+	get_tree().quit(0)
 
 
 ## Stairs go with their floors.
@@ -11604,20 +11703,26 @@ func _apply_blast(point: Vector3, radius: float, chip_hp := 0) -> void:
 		# (Interiors.md 8.4): what is hit is bricks from here on, and the rest
 		# of the room goes on being drawn.
 		var reached: Dictionary = registry.compromise_items(b.id, point, reach, watched_room)
+		var t_rm := _part("rm_items", t_room)
 		var woke: int = (reached.laid as Array).size() + int(reached.gone)
 		if not (reached.laid as Array).is_empty():
 			_add_item_shapes(b.id, reached.laid)
+			t_rm = _part("rm_shapes", t_rm)
 			# The building has to be told it holds furniture now, or the
 			# redraw's guard skips it for ever.
 			_furnished[b.id] = true
 			_refresh_furniture(b.id)
+			t_rm = _part("rm_refresh", t_rm)
 		if woke > 0:
 			# Laid as bricks or written off: out of its group's drawing now. A
 			# pass later is a piece drawn twice for four ticks.
 			_groups_rooms_moved(b, local.y - reach, local.y + reach)
+			t_rm = _part("rm_groups", t_rm)
 			_pieces_hit += woke
 			_pieces_laid += (reached.laid as Array).size()
 			_pieces_hit_ms += float(Time.get_ticks_usec() - t_room) / 1000.0
+		_prof["rm_laid"] = float(_prof.get("rm_laid", 0.0)) + (reached.laid as Array).size()
+		_prof["rm_gone"] = float(_prof.get("rm_gone", 0.0)) + int(reached.gone)
 		t_hit = _part("dmg_rooms", t_hit)
 		var killed: PackedInt32Array = world.chip_hit(chunk, point, radius, chip_hp) 				if chip_hp > 0 else world.apply_hit(chunk, point, radius)
 		t_hit = _part("dmg_hit", t_hit)
