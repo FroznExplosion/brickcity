@@ -6,7 +6,7 @@ mounts with and what it takes, and is found in one catalogue that filters and so
 for all of them. A gun or a mech in the game is an **assembly** the generator puts together from
 parts that fit, from a seed and a design (section 7).
 
-Status (2026-10-24): **stages 1 to 8 built.** The part record, the fit check and the
+Status (2026-10-24): **stages 1 to 9 built.** The part record, the fit check and the
 catalogue (`scripts/parts/`, `tools/parts_probe.gd`, 65 checks); guns on them: the workshop's
 Save writes every part on its own, the generator and the assembler only put together parts
 that fit (`tools/part_save_probe.gd`); the catalogue panel, F7 in the workshop
@@ -14,7 +14,7 @@ that fit (`tools/part_save_probe.gd`); the catalogue panel, F7 in the workshop
 (`part_save_probe`, now 61 checks); mech mode in the workshop (`tools/mech_workshop_probe.gd`, 56
 checks); mechs in the game from parts (`tools/mech_parts_probe.gd`, 70 checks); pods and mech guns
 (`tools/pods_probe.gd`, 28; `mech_workshop_probe` now 62); the motion sets (`tools/motion_probe.gd`,
-29). Section 11 is the order the rest is built in;
+29); part packages (`tools/package_probe.gd`, 26). Section 11 is the order the rest is built in;
 "Stage 1 as built" and "Stage 2 as built" below say what differs from the plan.
 
 Builds on: [Parts/joints.md](Parts/joints.md) (joints, the one pin, hands),
@@ -328,7 +328,7 @@ interfaces.
 | 6 | **Done.** Mechs in the game from parts: designs (fixed and rolled slots), `PartBuilder`, `MechAssembler`, class from the chassis, hips from the legs' length; the boxes in `mech.gd` give way to parts; `tools/mech_parts_probe.gd` | `scripts/mech/` |
 | 7 | **Done.** Pods: slots, `PodGenerator`, the three kinds, pod names, the inventory screen; mech guns (scale `mech`) rolled for the hands; `tools/pods_probe.gd` | `scripts/mech/`, `scripts/guns/`, loot |
 | 8 | **Done.** Motion sets library (section 8): `MotionSets`, the mech walk by leg length, the pods' arms; `tools/motion_probe.gd` | `scripts/parts/` |
-| 9 | Part packages: export, import, hash, data-only loading | `scripts/parts/` |
+| 9 | **Done.** Part packages: export, import, hash, data-only loading; `tools/package_probe.gd` | `scripts/parts/` |
 | 10 | Multiplayer: lobby part list, host download, Steam Workshop | with the netcode |
 | 11 | Dressing on studs outside the workshop | |
 | 12 | The figure body plan; animals later | |
@@ -582,6 +582,33 @@ interfaces.
 - **Not yet**: the animals' DNA makes legs in pairs (2, 4, 6 ...); the library takes 1 to 10, so
   odd counts wait on the creatures' DNA (the animals stage). The pod arm is a swing of the pod
   body, not an arm of joints. Knees and elbows inside a part need parts with more than one bone.
+
+### Stage 9 as built
+
+- **`PartPackage`** (`scripts/parts/part_package.gd`). A `.bcpart` is a zip of `part.json`
+  (the record, creator and bricks in it), `mesh.json` (the part's nodes as data: Node3D,
+  MeshInstance3D and MultiMeshInstance3D only, their places, their meshes as base64 packed arrays,
+  their materials by role -- `brick`, `stud` -- or as a plain colour), `interfaces.json` (the
+  interfaces it uses and standards.json's `version`), `thumb.png` when the part has one, and
+  `manifest.json` (format, id, rev, each file's sha256, and the **content hash**: the sha256 of
+  the content files' hashes, the part's identity across machines).
+- **Export**: Asset > "Export this build's parts to share" writes each saved part of the build to
+  `user://parts/export/<id>.bcpart`.
+- **Import**: Asset > "Import a part package..." (`PartPackage.import_file`). Refused: a package
+  over 8 MB or a file in it over 16 MB; any file but the five (a `.scn`, `.tscn`, `.gd` ...);
+  a file that does not match its hash; a record that breaks the schema (`PartRecord.problems`);
+  an id a folder cannot have; a shipped part's id; a mesh with a node of another type, a parent
+  out of order, a bad place or name, an array of the wrong kind or length, bones or weights, an
+  index out of range, more than 512 nodes or 2 million vertices, a multimesh buffer not whole.
+- What passes goes in `user://parts/custom/<id>/`: `part.json` (always `custom`, whatever it says;
+  the creator kept), a `part.scn` **built here from the arrays** by our own code, `package.json`
+  (the manifest, so its hash is known: `PartPackage.hash_of`) and the thumbnail. The same
+  package again changes nothing; a newer rev replaces the part; an older one is refused.
+- Round trip: an exported and imported part has the same nodes, meshes and materials (normals and
+  tangents to the engine's packing), the catalogue reads it and the game makes the gun of it.
+- **Not yet**: thumbnails are carried but not yet made (the workshop needs a window to render
+  one); the zip reader cannot ask a file's size before unpacking it, so the 8 MB file cap is the
+  guard against a file that unpacks huge. Steam Workshop and the lobby are stage 10.
 
 ## 12. Decided
 
