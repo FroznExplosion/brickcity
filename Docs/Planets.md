@@ -1443,3 +1443,24 @@ Trunks are on FIXTURE (walkers and bullets meet them; vehicles drive through for
 squad gate failed with the nearest trunk 89 m away, cause not found). Not yet: trees in the AI's
 world (they are not cover or obstacles to the nav), trees on the
 impostor from orbit (the biome colour stands for them).
+
+**11.10 revised (2026-10-24): brick trees, the heightfield's own.** Only the terrain is low-poly;
+everything else is bricks, furniture and items. So the trees are `Trees`' four brick variants
+(`Trees.recipe` -> `RecipeMesh`, the heightfield scene's and the city's), drawn as the heightfield
+draws them: `ImpostorLod`, real bricks within 45 m, baked octahedral cards past that, faded out by
+640 m. The cells, seeds and biome densities stay; what changes per biome is how many trees a
+hectare (forest 150, taiga 140, jungle 170, temperate grass 15, savanna 8, steppe 3, tundra and
+desert none) and which variants (the darker greens in taiga, the bright ones in jungle). One
+`ImpostorLod` set per variant per cube face, its node turned so the face's normal is its +Y: its
+chunks, keyed on its own XZ, are squares on the ground there (keyed on the planet's XZ, a chunk at
+the equator would be a strip kilometres tall). The cards choose their view in the instance's own
+frame (`impostor.gdshader`), so a tree tilted to local up is drawn right. Trunk colliders as before
+(2 x 2 studs, the trunk's height); no snow caps (the brick shader's snow is world-up). The box
+kinds (`PlanetTreeMeshes`) and their shader go.
+
+**State (2026-10-24):** brick trees in. Round the spawn 325 cells, 2633 trees (fewer than the
+boxes: the brick trees' densities). `planet_tree_probe` 10/10; its two frame-time numbers (fill
+6.0-9.2 ms, 500 m/s low 14.8-29.9 ms) are reported, not judged -- they were taken with the editor
+open and another chat's windowed pass running; judge them on a quiet machine. Shots
+(`tools/planet_tree_shot.gd`, not headless): bricks at 20 m, cards at 90 m, all upright to local
+up. The walker gate 9/9, squad 10/10, pawn 12/12 with them.
