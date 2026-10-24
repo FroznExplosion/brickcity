@@ -12,6 +12,8 @@ extends Node3D
 ##   -- --gate=pawn: the pawn -- walk, strafe, jump, mantle, fire, fly, land.
 ##   -- --gate=mech, --gate=tank, --gate=soldier: a titan, a tank on the
 ##   player's controls, a soldier's body moved and aimed as its brain does it.
+##   -- --gate=squad: a squad on the AI's nav region round the town (11.8 N2)
+##   walks to the player round the curve, takes cover, fires.
 
 var data: PlanetData
 var planet: PlanetBody
@@ -31,6 +33,11 @@ var _pawn_gate := false
 var _mech_gate := false
 var _tank_gate := false
 var _soldier_gate := false
+var _squad_gate := false
+## The AI round the fight (Docs/Planets.md 11.8, N2): one nav region round the
+## player's town, the AIWorld and AINav framed on it. Made by setup_ai.
+var ai: AIServices
+var nav_region: PlanetNavRegion
 var sun: DirectionalLight3D
 var sky_mat: ProceduralSkyMaterial
 var env: Environment
@@ -53,7 +60,8 @@ func _ready() -> void:
 	_mech_gate = "--gate=mech" in OS.get_cmdline_user_args()
 	_tank_gate = "--gate=tank" in OS.get_cmdline_user_args()
 	_soldier_gate = "--gate=soldier" in OS.get_cmdline_user_args()
-	_gate = _gate or _pawn_gate or _mech_gate or _tank_gate or _soldier_gate
+	_squad_gate = "--gate=squad" in OS.get_cmdline_user_args()
+	_gate = _gate or _pawn_gate or _mech_gate or _tank_gate or _soldier_gate or _squad_gate
 	data = PlanetData.new()
 	data.planet_name = "proto"
 	# Towns and landmarks: their pads go into the ground before it is built.
@@ -112,6 +120,8 @@ func _ready() -> void:
 			_run_tank_gate()
 		elif _soldier_gate:
 			_run_soldier_gate()
+		elif _squad_gate:
+			_run_squad_gate()
 		else:
 			_run_gate()
 
@@ -260,7 +270,9 @@ func _process(_delta: float) -> void:
 	var alt := planet.altitude_of(cam_pos)
 	# The origin follows the player, by translation, every SHIFT_AT.
 	if _anchor().length() > PlanetFrame.SHIFT_AT:
-		PlanetFrame.recentre(self, _anchor())
+		var offset := PlanetFrame.recentre(self, _anchor())
+		if ai != null:
+			ai.ai_world.shift_origin(offset)
 	# Stream the voxel ground to the horizon and the peaks behind it, no further.
 	var want := planet.horizon_reach(cam_pos, data.peak()) + VIEW_MARGIN
 	var q := clampi(int(ceil(want / VIEW_STEP)) * VIEW_STEP, VIEW_MIN, VIEW_MAX)
@@ -282,7 +294,7 @@ func _process(_delta: float) -> void:
 	# collider); then, unless this is the walker's own gate, the pawn stands on it.
 	if walker.frozen and pawn == null and _ground_hit(walker.global_position) != Vector3.INF:
 		walker.frozen = false
-		if not _gate or _pawn_gate or _mech_gate or _tank_gate or _soldier_gate:
+		if not _gate or _pawn_gate or _mech_gate or _tank_gate or _soldier_gate or _squad_gate:
 			_spawn_player(_ground_hit(walker.global_position), -walker.global_transform.basis.z)
 	if not on_foot:
 		walker.flying = pawn != null or walker.flying
@@ -868,4 +880,178 @@ func _run_soldier_gate() -> void:
 			not Soldier.body_fits(get_world_3d(), so.feet() - so.up * 0.5, so.body.get_rid()))
 	print("[planet] frames: worst %.1f ms; over 40 ms: %s" % [_worst_ms, _hitches])
 	print("[planet] soldier gate: %d ok, %d FAIL" % [_ok, _fail])
+	get_tree().quit(0 if _fail == 0 else 1)
+
+
+# ---------------------------------------------------------------------------
+# The AI on the planet (Docs/Planets.md 11.8, N2): one nav region round a town.
+
+## Set up the AI services on a nav region of PlanetNavRegion's 1024 studs
+## centred over planet-local `dir`: its AIWorld framed on the region (world =
+## the planet's transform * the region's frame), the region's ground grid as
+## its ground, its sea as the nav's water. The buildings there go in as proxy
+## boxes -- solid to walk round, bricks to hide behind (their own bricks in the
+## AI's world are later work, 11.8 "Not here"). The floating origin moves the
+## frame with the scene (_process).
+func setup_ai(dir: Vector3) -> void:
+	nav_region = PlanetNavRegion.make(data, dir)
+	var r := nav_region
+	var aw := AIWorld.new()
+	aw.set_world(BrickWorld.new())
+	aw.set_frame(r.world_frame(planet.global_transform))
+	aw.set_ground_grid(Vector2(-r.half, -r.half), r.step_m, r.size, r.heights)
+	aw.set_terrain_ground(true)
+	var stud := BrickWorld.get_stud_metres()
+	var inv := r.frame.affine_inverse()
+	var n := 0
+	for s in buildings.sites:
+		var size := Vector3(s.fx * stud, s.height, s.fz * stud)
+		var centre := s.frame * Transform3D(Basis(), size * 0.5)
+		var l := inv * centre.origin
+		if absf(l.x) > r.half or absf(l.z) > r.half:
+			continue
+		aw.set_proxy(n, planet.global_transform * centre, size, 1.0 / stud)
+		n += 1
+	aw.sync()
+	var nav := AINav.new()
+	nav.set_ai_world(aw)
+	AIServices.use_hierarchy(nav)
+	if not is_nan(r.sea_y):
+		nav.set_water_level(r.sea_y)
+	ai = AIServices.new()
+	ai.ai_world = aw
+	ai.ai_nav = nav
+	ai.sched = AIScheduler.new()
+	ai.sched.set_base_budget_ms(2.5)
+	ai.world3d = get_world_3d()
+	ai.rng.seed = 0x9A7E7
+	print("[planet] AI region over the town: %d x %d samples in %.0f ms, %d building(s) as proxies" % [
+			r.size, r.size, r.build_ms, n])
+
+
+func _physics_process(_delta: float) -> void:
+	if ai == null:
+		return
+	ai.ai_world.sync()
+	ai.ai_nav.service(500)
+	ai.sched.run()
+	ai.tick()
+
+
+# The squad's gate: four soldiers set down in the town walk to the player round
+# the curve, take cover and fire, on the region's nav (11.8 N2).
+
+func _surface(dir: Vector3) -> Vector3:
+	return planet.global_transform * data.surface_point(dir)
+
+
+func _run_squad_gate() -> void:
+	var t0 := Time.get_ticks_msec()
+	while pawn == null and Time.get_ticks_msec() - t0 < 60000:
+		await _frames(1)
+	await get_tree().create_timer(1.0).timeout
+	var town: Vector3 = town_dirs[0]
+	# The player at the town's edge on the spawn's side, the squad inside it.
+	var p_feet := _surface(_round_dir(town, spawn_dir, 88.0))
+	var q_spot := _surface(_round_dir(town, spawn_dir, 28.0))
+	pawn.place(p_feet + Gravity.up_at(p_feet) * 0.3)
+	pawn.health.layer_configs[0].max_value = 1e7
+	pawn.health.reset()
+	_face(Gravity.flat(q_spot - p_feet, Gravity.up_at(p_feet)).normalized())
+	t0 = Time.get_ticks_msec()
+	while _ground_hit(p_feet) == Vector3.INF and Time.get_ticks_msec() - t0 < 30000:
+		await _frames(1)
+	await get_tree().create_timer(1.5).timeout
+	setup_ai(town)
+	# The cover mechanics, not the engage decision's dice (as soldier_probe).
+	ai.policy = CombatPolicy.new()
+	var plate := BrickWorld.get_plate_metres()
+	_check("the region builds off the fight's path (< 2 s)", nav_region.build_ms < 2000.0,
+			"%.0f ms" % nav_region.build_ms)
+	pawn.set_meta(&"player", 0)
+	ai.add_pawn(pawn)
+	# The nav's own path from the squad to the player first: on the ground.
+	var path := ai.ai_nav.find_path(q_spot, pawn.feet(), 200000)
+	var worst := 0.0
+	for p in path:
+		worst = maxf(worst, absf(_over_ground(p)))
+	_check("a path from the squad to the player round the curve", path.size() > 2
+			and path[path.size() - 1].distance_to(pawn.feet()) < 1.5, "%d points" % path.size())
+	_check("the path is on the ground (within a plate, %.3f m)" % plate, path.size() > 2 and worst <= plate,
+			"worst %.3f m" % worst)
+	# The ground's colliders where the squad is set down, before it is: a body
+	# dropped on ground not streamed yet falls into the planet.
+	var marker := Node3D.new()
+	add_child(marker)
+	marker.global_position = q_spot
+	PlanetBody.track(marker)
+	t0 = Time.get_ticks_msec()
+	while _ground_hit(q_spot) == Vector3.INF and Time.get_ticks_msec() - t0 < 30000:
+		await _frames(1)
+	await get_tree().create_timer(0.5).timeout
+	_check("the ground streams in where the squad is set down", _ground_hit(q_spot) != Vector3.INF)
+	var lib := GunPlaceholderParts.build_library()
+	var up_q := Gravity.up_at(q_spot)
+	var side := Gravity.flat(p_feet - q_spot, up_q).normalized().cross(up_q)
+	var members: Array[Soldier] = []
+	for i in 4:
+		var at := ai.ai_nav.snap(q_spot + side * (i - 1.5) * 1.4 + up_q * 0.3)
+		var gun := GunInstance.from_result(GunGenerator.generate(lib, 50 + i, WeaponClass.builtin(&"rifle"), 1))
+		var so := Soldier.spawn(ai, self, at + Gravity.up_at(at) * 0.1, 1, gun)
+		PlanetBody.track(so.pawn.body)
+		members.append(so)
+	var q := Squad.make(ai, self, members, 1)
+	var start := INF
+	for m in members:
+		start = minf(start, m.pawn.feet().distance_to(pawn.feet()))
+	var nearest := start
+	var ordered := false
+	var ticks := 0
+	var floor_ticks := 0
+	var body_ticks := 0
+	var sunk := 0.0
+	var covered := 0
+	var fired_at := -1.0
+	var t1 := Time.get_ticks_msec()
+	while Time.get_ticks_msec() - t1 < 60000:
+		await get_tree().physics_frame
+		ticks += 1
+		if not ordered and q.contact() != null:
+			var o := SquadMsg.Order.make(SquadMsg.OrderKind.ADVANCE)
+			o.point = pawn.feet()
+			q.give(o)
+			ordered = true
+		var shots := 0
+		for m in q.alive():
+			var f := m.pawn.feet()
+			nearest = minf(nearest, f.distance_to(pawn.feet()))
+			body_ticks += 1
+			if m.pawn.body.is_on_floor():
+				floor_ticks += 1
+			sunk = minf(sunk, _over_ground(f))
+			shots += m.shots
+			# In cover: still, with bricks between the player's eye and its chest
+			# (a bound ends on a CoverSearch spot; a soldier's own cover tactic too).
+			var still := Gravity.flat(m.pawn.body.velocity, m.pawn.up).length() < 0.3
+			if still and ai.ai_world.bricks_between(pawn.eye.global_position, f + m.pawn.up * 1.1) > 0:
+				covered += 1
+		if shots > 0 and fired_at < 0.0:
+			fired_at = (Time.get_ticks_msec() - t1) / 1000.0
+		if start - nearest >= 15.0 and fired_at >= 0.0 and covered >= 60:
+			break
+	var states := {}
+	for m in members:
+		states[m.state] = int(states.get(m.state, 0)) + 1
+	print("[planet] squad: %s; play %s; %d of %d alive" % [states, q.play, q.alive().size(), members.size()])
+	_check("the squad sees the player and is ordered on", ordered)
+	_check("it walks to the player round the curve (closes >= 15 m)", start - nearest >= 15.0,
+			"%.1f m -> %.1f m" % [start, nearest])
+	_check("its feet on the ground on the way (> 90% of body-ticks)", floor_ticks > body_ticks * 0.9,
+			"%d of %d" % [floor_ticks, body_ticks])
+	_check("nobody falls through the planet (never > 0.5 m under the ground)", sunk > -0.5, "%.2f m" % sunk)
+	_check("it takes cover (still, hidden from the player)", covered >= 60, "%d member-ticks" % covered)
+	_check("it fires at the player", fired_at >= 0.0, "first at %.1f s" % fired_at)
+	await _shot("planet_squad")
+	print("[planet] frames: worst %.1f ms; over 40 ms: %s" % [_worst_ms, _hitches])
+	print("[planet] squad gate: %d ok, %d FAIL" % [_ok, _fail])
 	get_tree().quit(0 if _fail == 0 else 1)
