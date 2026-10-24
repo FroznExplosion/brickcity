@@ -20,6 +20,7 @@
 #include <utility>
 #include <memory>
 #include <thread>
+#include <unordered_set>
 #include <vector>
 
 using namespace godot;
@@ -1102,6 +1103,9 @@ public:
     /// again when it matters.
     void drop_chunk_bake(int chunk_id);
     int bakes_in_flight() const;
+    /// Microseconds the main thread has waited in join_chunk_readers, all told:
+    /// a write to a chunk a worker was still reading.
+    int64_t get_join_wait_usec() const { return join_wait_usec; }
 
     /// Which way is down for this chunk, in ITS OWN grid axes.
     ///
@@ -1589,9 +1593,17 @@ private:
         // for as long as the worker reads it, whatever the palette does since.
         std::shared_ptr<const std::vector<brick::Archetype>> parts;
         std::atomic<bool> done{false};
+        // Set by join_chunk_readers: the chunk is about to be written, so the
+        // worker stops at its next block rather than finishing a bake the
+        // main thread would have to wait the whole of.
+        std::atomic<bool> cancel{false};
         std::thread worker;
     };
     std::vector<std::unique_ptr<BakeJob>> bake_jobs;
+    int64_t join_wait_usec = 0;
+    /// Chunks whose bake was cancelled by a write: bake_ready starts it again
+    /// when next asked, once the writes of the tick are over.
+    std::unordered_set<int> bake_restart;
 
     /// Box collision shapes, shared by size. Keyed by size in tenths of a
     /// millimetre so a float size is a stable key.
@@ -1615,9 +1627,10 @@ private:
     /// Join a chunk's bake if one is running. `adopt` takes the result; without
     /// it the work is thrown away, which is what a geometry change wants.
     void settle_bake_job(int chunk_id, bool adopt);
-    /// Wait for every worker reading this chunk (its bake, its stand-in) and
-    /// keep what they made. Before ANY write to its blocks or occupancy: a
-    /// push_back can move the block list out from under a worker.
+    /// Stop every worker reading this chunk before ANY write to its blocks or
+    /// occupancy: a push_back can move the block list out from under one. A
+    /// running bake is cancelled and restarted by bake_ready; a finished one,
+    /// and a stand-in, are waited for and kept.
     void join_chunk_readers(int chunk_id);
 
     /// Fill c.live_indices for the current alive state. Fixed length: six per

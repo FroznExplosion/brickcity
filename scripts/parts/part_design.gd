@@ -23,6 +23,9 @@ var display_name := ""
 var plan := "mech"
 ## path ("root" for the plan's root) -> {fixed: part id} | {pool: catalogue query} | {empty: true}
 var slots := {}
+## The motion sets it asks for, by action: {"walk": "mech.walk.stomp"} (MotionSets). One the
+## build cannot do is passed over for the best it can.
+var motion := {}
 var source := "official"
 
 
@@ -32,11 +35,15 @@ static func from_dict(d: Dictionary) -> PartDesign:
 	p.display_name = String(d.get("name", p.id))
 	p.plan = String(d.get("plan", "mech"))
 	p.slots = (d.get("slots", {}) as Dictionary).duplicate(true)
+	p.motion = (d.get("motion", {}) as Dictionary).duplicate()
 	return p
 
 
 func to_dict() -> Dictionary:
-	return {"id": id, "name": display_name, "plan": plan, "slots": slots.duplicate(true)}
+	var d := {"id": id, "name": display_name, "plan": plan, "slots": slots.duplicate(true)}
+	if not motion.is_empty():
+		d["motion"] = motion.duplicate()
+	return d
 
 
 func save_file(path: String) -> Error:

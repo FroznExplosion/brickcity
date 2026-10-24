@@ -220,6 +220,8 @@ func _physics_process(_delta: float) -> void:
 
 func _think() -> void:
 	_queued = false
+	if not alive().is_empty():
+		services.focus(center())
 	var now := services.now()
 	_next = now + 1.0 / (TICK_HZ * services.sched.rate_scale(AIScheduler.TACTICAL))
 	var dt := now - _last if _last >= 0.0 else 1.0 / TICK_HZ

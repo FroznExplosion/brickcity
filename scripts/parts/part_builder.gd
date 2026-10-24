@@ -20,7 +20,8 @@ extends RefCounted
 ## Returns {root: PartRecord, at: {path: PartRecord}, problems: PackedStringArray}.
 static func generate(plan_name: String, design: PartDesign, gen_seed: int, cat: PartCatalog,
 		opts: Dictionary = {}) -> Dictionary:
-	var out := {"root": null, "at": {}, "problems": PackedStringArray()}
+	var out := {"root": null, "at": {}, "problems": PackedStringArray(),
+			"motion": design.motion.duplicate() if design != null else {}}
 	var plan := PartStandards.plan(plan_name)
 	if plan.is_empty():
 		out.problems.append("no body plan '%s'" % plan_name)

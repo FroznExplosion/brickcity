@@ -98,6 +98,7 @@ func retire() -> void:
 func _physics_process(_delta: float) -> void:
 	if is_dead():
 		return
+	services.focus(pawn.feet())
 	var now := services.now()
 	if now >= _next_think and not _queued:
 		_queued = true
@@ -121,6 +122,7 @@ func _physics_process(_delta: float) -> void:
 
 func _think() -> void:
 	_queued = false
+	services.focus(pawn.feet())
 	var now := services.now()
 	var hz := THINK_HZ if tier == AgentTier.SMART else DIRECTED_THINK_HZ
 	_next_think = now + 1.0 / (hz * services.sched.rate_scale(AIScheduler.TREES))

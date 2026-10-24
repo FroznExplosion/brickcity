@@ -46,7 +46,7 @@ bricks, replay 1506: the replay lays the whole building, the host only the store
 since storey units' log commands (`--ring` 4 of 4, no FAIL line). Open, in order: 7-8, 9, 10,
 13-16; 6 waits for the user.
 
-**State 2026-10-23, end of the third chat -- the next chat starts here.** Merged and pushed
+**State 2026-10-23, end of the third chat.** Merged and pushed
 (`d3d78df`). Done since the 10-22 state:
 - 4 (ghost walls from 110 m): partial towers drawn from their bricks past `DEMESH_RANGE`;
   `--lodbreak` counts walls drawn where no brick is, with its own control (item 4 below).
@@ -55,6 +55,22 @@ since storey units' log commands (`--ring` 4 of 4, no FAIL line). Open, in order
   `lay_band` (`BuildingRegistry._lay_runs` -- a shell piece made bricks was quadratic in
   storeys, 68.5 ms for 34); a shell drawn from its bricks refreshed in place after a hit
   (`_refresh_real_shell`, ~15 ms a time).
+
+**State 2026-10-24, end of the fourth chat -- the next chat starts here.** Merged and pushed
+(`0f8bd6d`). Main's DLL NOT yet rebuilt with it (the editor was open): rebuild first
+(`python -m SCons pdb=yes` in main, editor closed).
+- The close-up big-break crash (user: 20-30 rooms at once, left click, big city, close up): a
+  bake worker read the block list `place_block` had just grown -- furniture (decorative blocks)
+  never waited for the bake at all. Every write now stops the chunk's workers first
+  (`BrickWorld::join_chunk_readers`); `bake_race_probe` crashes 3 of 3 on the old library.
+- The freeze that left: waiting for the mega tower's bake (49-77 ms a shot). A running bake is
+  now cancelled (a flag the worker checks every block) and restarted by `bake_ready`.
+  `big_city.tscn -- --bigbreak --big` (`--far` from 150 m): worst frame 83/95/198 -> 30.5/32.6/
+  34.7 ms, mean 16.6, none over 100 ms.
+- Crash offsets: main's DLL is built `pdb=yes`; `map=yes` writes a linker map to look an offset
+  up in a library built without symbols (another chat may rebuild main without pdb).
+- GDScript warnings in the city/building scripts cleared (`tools/warn_check.tscn` prints a
+  script's warnings); `city_scene.gd` Tank.Seat = -1 left for the vehicles chat.
 
 **Open, in order:**
 1. ~~Re-time `--big --shot` on a quiet machine~~ -- done 2026-10-23 evening (code at `8c67313`,

@@ -6,14 +6,15 @@ mounts with and what it takes, and is found in one catalogue that filters and so
 for all of them. A gun or a mech in the game is an **assembly** the generator puts together from
 parts that fit, from a seed and a design (section 7).
 
-Status (2026-10-24): **stages 1 to 7 built.** The part record, the fit check and the
+Status (2026-10-24): **stages 1 to 8 built.** The part record, the fit check and the
 catalogue (`scripts/parts/`, `tools/parts_probe.gd`, 65 checks); guns on them: the workshop's
 Save writes every part on its own, the generator and the assembler only put together parts
 that fit (`tools/part_save_probe.gd`); the catalogue panel, F7 in the workshop
 (`tools/part_panel_probe.gd`, 38 checks); trying any part on in the workshop, with fit marks
 (`part_save_probe`, now 61 checks); mech mode in the workshop (`tools/mech_workshop_probe.gd`, 56
 checks); mechs in the game from parts (`tools/mech_parts_probe.gd`, 70 checks); pods and mech guns
-(`tools/pods_probe.gd`, 28; `mech_workshop_probe` now 62). Section 11 is the order the rest is built in;
+(`tools/pods_probe.gd`, 28; `mech_workshop_probe` now 62); the motion sets (`tools/motion_probe.gd`,
+29). Section 11 is the order the rest is built in;
 "Stage 1 as built" and "Stage 2 as built" below say what differs from the plan.
 
 Builds on: [Parts/joints.md](Parts/joints.md) (joints, the one pin, hands),
@@ -326,7 +327,7 @@ interfaces.
 | 5 | **Done.** The workshop's mech mode: slot, side, class, reference mech, ready mounts, test fit; `tools/mech_workshop_probe.gd` | `asset_workshop.gd` |
 | 6 | **Done.** Mechs in the game from parts: designs (fixed and rolled slots), `PartBuilder`, `MechAssembler`, class from the chassis, hips from the legs' length; the boxes in `mech.gd` give way to parts; `tools/mech_parts_probe.gd` | `scripts/mech/` |
 | 7 | **Done.** Pods: slots, `PodGenerator`, the three kinds, pod names, the inventory screen; mech guns (scale `mech`) rolled for the hands; `tools/pods_probe.gd` | `scripts/mech/`, `scripts/guns/`, loot |
-| 8 | Motion sets library (section 8) | |
+| 8 | **Done.** Motion sets library (section 8): `MotionSets`, the mech walk by leg length, the pods' arms; `tools/motion_probe.gd` | `scripts/parts/` |
 | 9 | Part packages: export, import, hash, data-only loading | `scripts/parts/` |
 | 10 | Multiplayer: lobby part list, host download, Steam Workshop | with the netcode |
 | 11 | Dressing on studs outside the workshop | |
@@ -495,8 +496,7 @@ interfaces.
   the hips (the workshop now exports it there). The hips stand `hip_height` above the feet:
   the legs' `length` in nano bricks (12 / 16 / 20; a boss's any other length on the same line).
 - **In the mech** (`Mech.set_parts`, via `MechAssembler.dress`): the boxes go. The legs' joints
-  go on the legs (they turn with the legs and swing at the hips as it walks, until stage 8's
-  motion sets); the right arm and hand on the gun arm, posed so shoulder-to-wrist points along
+  go on the legs (they turn with the legs; stage 8's motion set walks them); the right arm and hand on the gun arm, posed so shoulder-to-wrist points along
   the aim, the muzzle ahead of the wrist; chassis, head, left arm and pods on the torso. The gun
   arm's shoulder (`Mech.shoulder`) and the pilot's eye (`Mech.cockpit_y`, 0.84 m over the hips)
   come from the parts. The chassis's class is the mech's layers (AIRoster 4.1: light's hatch at
@@ -548,9 +548,40 @@ interfaces.
   mech's right hand, the muzzle moved to its own. The player's mech carries one when any is
   saved (not in a scripted pass); Ctrl Y's workshop mechs do too. With none, the hidden
   placeholder LMG stays.
-- **Not yet**: the animated pods have no arm of their own to see (stage 8's motion sets); the
-  Brace Plate is armour all round until hits say which way they came from; enemy mechs carry
+- **Not yet**: the Brace Plate is armour all round until hits say which way they came from; enemy mechs carry
   no pods (their brain would need to use them: the AI's); pods do not drop as loot yet.
+
+### Stage 8 as built
+
+- **`MotionSets`** (`scripts/parts/motion_sets.gd`): every set says its body plans, the tags it
+  answers to, the paths it needs (`leg_L`, `magazine`) and, for creatures, a leg count. A build
+  asks with an action and what it would like (`["walk", "heavy"]`, `["pod.arm", "melee_arm"]`,
+  `["reload", "reload.mag"]`) and gets the set it satisfies that does the action with the most
+  of them; ties on id. A pick (a player's, a design's `motion: {"walk": id}`) wins when the
+  build satisfies it, else it is passed over. `satisfying()` lists what a user may pick from.
+
+  | Set | For | Run by |
+  |---|---|---|
+  | `mech.walk.stride` | mechs, light and normal | `MechStride` |
+  | `mech.walk.stomp` | mechs, heavy: a shorter swing | `MechStride` |
+  | `pod.arm.strike`, `pod.arm.throw` | the Strike Arm and Grenade Arm pods | `PodArmMotion` |
+  | `gun.reload.mag`, `gun.reload.fixed` | guns, by whether the magazine comes off | `PlayerView` (as before) |
+  | `creature.gait`, `creature.gait.far` | animals of 1 to 10 legs, near and far | `GaitController`, `CannedGait` (as before) |
+  | `figure.walk.clips` | figures, Mixamo-named clips | stage 12 |
+
+- **The mech walk** (`MechStride`): the legs swing at the hips, left against right. The swing
+  grows with speed (widest at 9 m/s); a step is `2 x hip height x sin(swing)` long and the
+  cadence is whatever makes steps x length the speed, so **the feet keep pace with the ground at
+  every leg length** -- legs 1, 2, 3 and a boss's -- and longer legs step slower. The length is
+  read from the build (`MechAssembler.hip_height`). Moved out of `mech.gd`, which only puts the
+  parts on now.
+- **Pod arms** (`PodArmMotion`): a Strike Arm winds back and hammers down and forward, a Grenade
+  Arm winds further back and flings, then each settles. What swings is the pod part on the
+  chassis (`Joint_pod_L` / `_R`), or, on a mech with no pod part there, a **stand-in box** on the
+  torso that `MechPods` puts up for every fitted pod and takes away with it.
+- **Not yet**: the animals' DNA makes legs in pairs (2, 4, 6 ...); the library takes 1 to 10, so
+  odd counts wait on the creatures' DNA (the animals stage). The pod arm is a swing of the pod
+  body, not an arm of joints. Knees and elbows inside a part need parts with more than one bone.
 
 ## 12. Decided
 

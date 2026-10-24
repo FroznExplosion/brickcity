@@ -530,6 +530,7 @@ func lay_item(building_id: int, index: int, i: int) -> int:
 
 
 var items_laid := 0   ## items laid as bricks one at a time, all told
+var lay_usec := 0     ## the time compromise_items spent in lay_item, all told
 
 
 ## Lay ONE item of a room as bricks into a PIECE of the building: `chunk`, an
@@ -605,7 +606,10 @@ func compromise_items(building_id: int, world_point: Vector3, radius: float,
 					(item.cell as Vector3i) - offset) <= 0.5:
 				continue   # not standing here: on a piece somewhere
 			if build:
-				if lay_item(building_id, room.id, i) > 0:
+				var t_lay := Time.get_ticks_usec()
+				var laid_n := lay_item(building_id, room.id, i)
+				lay_usec += Time.get_ticks_usec() - t_lay
+				if laid_n > 0:
 					(out.laid as Array).append([room.id, i])
 				elif room.gone.has(i):
 					out.gone += 1

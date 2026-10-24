@@ -135,6 +135,20 @@ var _next_aggro := -INF
 var _last_aggro := -1.0
 
 
+## On a planet (nav_net): make ai_world and ai_nav the region `p` is in, so what
+## an agent asks next -- sight, cover, danger, its map -- is asked of the
+## ground and the bricks where it is, not where the player is (Planets.md 11.8).
+## Each agent focuses on itself as its tick and its thinks begin. Off a planet
+## it does nothing.
+func focus(p: Vector3) -> void:
+	if nav_net == null:
+		return
+	var r = nav_net.call(&"region_at", p)
+	if r != null and r.nav != ai_nav:
+		ai_world = r.world
+		ai_nav = r.nav
+
+
 ## Simulation time in seconds, from the physics tick -- never the wall clock, so
 ## a run is the same run however fast the machine is.
 func now() -> float:

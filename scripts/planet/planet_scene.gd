@@ -16,6 +16,8 @@ extends Node3D
 ##   walks to the player round the curve, takes cover, fires.
 ##   -- --gate=travel: a squad ordered 200 m out of the town on the nav net
 ##   (11.8 N4), across the regions' borders.
+##   -- --gate=far: two squads fight on the far side of the town, in a region
+##   the player is not in: each agent asks its own region (AIServices.focus).
 
 var data: PlanetData
 var planet: PlanetBody
@@ -44,6 +46,7 @@ var _squad_gate := false
 var ai: AIServices
 var nav_region: PlanetNavRegion
 var _travel_gate := false
+var _far_gate := false
 var sun: DirectionalLight3D
 var sky_mat: ProceduralSkyMaterial
 var env: Environment
@@ -68,7 +71,8 @@ func _ready() -> void:
 	_soldier_gate = "--gate=soldier" in OS.get_cmdline_user_args()
 	_squad_gate = "--gate=squad" in OS.get_cmdline_user_args()
 	_travel_gate = "--gate=travel" in OS.get_cmdline_user_args()
-	_gate = _gate or _pawn_gate or _mech_gate or _tank_gate or _soldier_gate or _squad_gate or _travel_gate
+	_far_gate = "--gate=far" in OS.get_cmdline_user_args()
+	_gate = _gate or _pawn_gate or _mech_gate or _tank_gate or _soldier_gate or _squad_gate or _travel_gate or _far_gate
 	data = PlanetData.new()
 	data.planet_name = "proto"
 	# Towns and landmarks: their pads go into the ground before it is built.
@@ -135,6 +139,8 @@ func _ready() -> void:
 			_run_squad_gate()
 		elif _travel_gate:
 			_run_travel_gate()
+		elif _far_gate:
+			_run_far_gate()
 		else:
 			_run_gate()
 
@@ -317,7 +323,7 @@ func _process(_delta: float) -> void:
 	# collider); then, unless this is the walker's own gate, the pawn stands on it.
 	if walker.frozen and pawn == null and _ground_hit(walker.global_position) != Vector3.INF:
 		walker.frozen = false
-		if not _gate or _pawn_gate or _mech_gate or _tank_gate or _soldier_gate or _squad_gate or _travel_gate:
+		if not _gate or _pawn_gate or _mech_gate or _tank_gate or _soldier_gate or _squad_gate or _travel_gate or _far_gate:
 			_spawn_player(_ground_hit(walker.global_position), -walker.global_transform.basis.z)
 	if not on_foot:
 		walker.flying = pawn != null or walker.flying
@@ -969,17 +975,20 @@ func _physics_process(delta: float) -> void:
 			if is_instance_valid(p) and p.health != null and not p.health.is_dead():
 				points.append(p.feet())
 		net.keep_around(points, AI_KEEP_M, 1)
-		# The services' own region is the player's.
 		var here := net.region_at(pawn.feet()) if pawn != null else null
-		if here != null and here.nav != ai.ai_nav:
-			ai.ai_world = here.world
-			ai.ai_nav = here.nav
+		if here != null:
 			nav_region = here.nav_region
 	var t_keep := Time.get_ticks_usec()
+	# Between thinkers the services are the player's region (AIServices.focus).
+	if pawn != null:
+		ai.focus(pawn.feet())
 	ai.ai_world.sync()
 	net.service(800)
 	var t_net := Time.get_ticks_usec()
 	ai.sched.run()
+	# Each thinker focused the services on its own region; the shared tick is the player's.
+	if pawn != null:
+		ai.focus(pawn.feet())
 	ai.tick()
 	var t_end := Time.get_ticks_usec()
 	if t_end - t_ai > ai_worst_us:
@@ -1216,4 +1225,130 @@ func _run_travel_gate() -> void:
 	print("[planet] AI tick: worst %.1f ms (keep_around %.1f, net %.1f, scheduler and services %.1f)" % [
 			ai_worst_us / 1000.0, ai_worst_parts[0] / 1000.0, ai_worst_parts[1] / 1000.0, ai_worst_parts[2] / 1000.0])
 	print("[planet] travel gate: %d ok, %d FAIL" % [_ok, _fail])
+	get_tree().quit(0 if _fail == 0 else 1)
+
+
+# The far gate (11.8): a fight away from the player. Two squads -- one on the
+# player's side, one against it -- meet on the town's far side, ~170 m from the
+# player and in another region. What they see, hide behind and walk on is their
+# own region's (AIServices.focus): the player's region has no ground there.
+
+func _run_far_gate() -> void:
+	var t0 := Time.get_ticks_msec()
+	while pawn == null and Time.get_ticks_msec() - t0 < 60000:
+		await _frames(1)
+	await get_tree().create_timer(1.0).timeout
+	var town: Vector3 = town_dirs[0]
+	var e := Gravity.flat(spawn_dir - town, town).normalized()
+	var p_feet := _surface(_round_dir(town, spawn_dir, 88.0))
+	var a_spot := _surface(_round_dir(town, town - e, 80.0))
+	var b_spot := _surface(_round_dir(town, town - e, 112.0))
+	pawn.place(p_feet + Gravity.up_at(p_feet) * 0.3)
+	pawn.health.layer_configs[0].max_value = 1e7
+	pawn.health.reset()
+	for at in [a_spot, b_spot]:
+		var marker := Node3D.new()
+		add_child(marker)
+		marker.global_position = at
+		PlanetBody.track(marker)
+	t0 = Time.get_ticks_msec()
+	while (_ground_hit(p_feet) == Vector3.INF or _ground_hit(a_spot) == Vector3.INF
+			or _ground_hit(b_spot) == Vector3.INF) and Time.get_ticks_msec() - t0 < 30000:
+		await _frames(1)
+	await get_tree().create_timer(1.0).timeout
+	setup_ai(town)
+	ai.policy = CombatPolicy.new()
+	var net := ai.nav_net as PlanetNavNet
+	pawn.set_meta(&"player", 0)
+	ai.add_pawn(pawn)
+	net.keep_around([a_spot, b_spot], AI_KEEP_M, 99)
+	var kp := net.key_at(p_feet)
+	var ka := net.key_at(a_spot)
+	var kb := net.key_at(b_spot)
+	print("[planet] far: player in %s, the squads in %s and %s, %.0f m off" % [kp, ka, kb, p_feet.distance_to(a_spot)])
+	_check("the fight is in another region than the player's", ka != kp and kb != kp)
+	var here: AINav = net.regions[kp].nav
+	_check("where the player's region has no ground to stand on", not here.can_stand(a_spot)
+			and net.nav_at(a_spot).can_stand(net.nav_at(a_spot).snap(a_spot)))
+	var lib := GunPlaceholderParts.build_library()
+	var sides: Array = []
+	for team in [0, 1]:
+		var at: Vector3 = a_spot if team == 0 else b_spot
+		var other: Vector3 = b_spot if team == 0 else a_spot
+		var up := Gravity.up_at(at)
+		var side := Gravity.flat(other - at, up).normalized().cross(up)
+		var members: Array[Soldier] = []
+		for i in 4:
+			var feet := net.snap(at + side * (i - 1.5) * 1.4 + up * 0.3)
+			var gun := GunInstance.from_result(GunGenerator.generate(lib, 90 + team * 10 + i,
+					WeaponClass.builtin(&"rifle"), 1))
+			var so := Soldier.spawn(ai, self, feet + Gravity.up_at(feet) * 0.1, team, gun)
+			PlanetBody.track(so.pawn.body)
+			members.append(so)
+		sides.append({"squad": Squad.make(ai, self, members, team), "members": members,
+				"ordered": false, "covered": 0, "seen": false})
+	var ticks := 0
+	var floor_ticks := 0
+	var body_ticks := 0
+	var sunk := 0.0
+	var t1 := Time.get_ticks_msec()
+	while Time.get_ticks_msec() - t1 < 60000:
+		await get_tree().physics_frame
+		ticks += 1
+		var all_done := true
+		for k in 2:
+			var sd: Dictionary = sides[k]
+			var q: Squad = sd.squad
+			var c := q.contact()
+			if c != null:
+				sd.seen = true
+				if not sd.ordered:
+					var o := SquadMsg.Order.make(SquadMsg.OrderKind.ADVANCE)
+					o.point = c.pos
+					q.give(o)
+					sd.ordered = true
+			var foe: Dictionary = sides[1 - k]
+			for m in q.alive():
+				var f := m.pawn.feet()
+				body_ticks += 1
+				if m.pawn.body.is_on_floor():
+					floor_ticks += 1
+				sunk = minf(sunk, _over_ground(f))
+				var still := Gravity.flat(m.pawn.body.velocity, m.pawn.up).length() < 0.3
+				var w := net.world_at(f)
+				if still and w != null:
+					for fm in (foe.squad as Squad).alive():
+						if fm.pawn.eye.global_position.distance_to(f) < 60.0 								and w.bricks_between(fm.pawn.eye.global_position, f + m.pawn.up * 1.1) > 0:
+							sd.covered += 1
+							break
+			var shots := 0
+			for m in (sd.members as Array):
+				if is_instance_valid(m):
+					shots += (m as Soldier).shots
+			sd["shots"] = shots
+			if not (sd.seen and shots > 0 and int(sd.covered) >= 60):
+				all_done = false
+		if all_done:
+			break
+	var hurt := 0
+	for k in 2:
+		for m in (sides[k].members as Array):
+			if not is_instance_valid(m) or (m as Soldier).is_dead() 					or (m as Soldier).pawn.health.total_current() < (m as Soldier).max_health:
+				hurt += 1
+	for k in 2:
+		var sd: Dictionary = sides[k]
+		var who := "ours" if k == 0 else "theirs"
+		print("[planet] far: %s -- seen %s, %d round(s), %d member-ticks in cover, %d of 4 alive" % [
+				who, sd.seen, int(sd.get("shots", 0)), int(sd.covered), (sd.squad as Squad).alive().size()])
+		_check("%s see the other side" % who, bool(sd.seen))
+		_check("%s fire on it" % who, int(sd.get("shots", 0)) > 0, "%d round(s)" % int(sd.get("shots", 0)))
+		_check("%s take cover (still, bricks between them and the other side's eyes)" % who,
+				int(sd.covered) >= 60, "%d member-ticks" % int(sd.covered))
+	_check("rounds land: somebody is hurt", hurt > 0, "%d" % hurt)
+	_check("feet on the ground (> 90% of body-ticks)", floor_ticks > body_ticks * 0.9,
+			"%d of %d" % [floor_ticks, body_ticks])
+	_check("nobody falls through the planet (never > 0.5 m under the ground)", sunk > -0.5, "%.2f m" % sunk)
+	print("[planet] frames: worst %.1f ms; over 40 ms: %s" % [_worst_ms, _hitches])
+	print("[planet] AI tick: worst %.1f ms" % (ai_worst_us / 1000.0))
+	print("[planet] far gate: %d ok, %d FAIL" % [_ok, _fail])
 	get_tree().quit(0 if _fail == 0 else 1)
