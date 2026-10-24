@@ -51,7 +51,7 @@ func contains(p: Vector3) -> bool:
 
 
 static func right_of(opening: Dictionary) -> Vector3:
-	return (opening.inward as Vector3).cross(Vector3.UP).normalized()
+	return (opening.inward as Vector3).cross(Gravity.up_at(opening.center as Vector3)).normalized()
 
 
 ## Stack slots for `n` members, outside the opening, alternating left and right
@@ -153,7 +153,8 @@ func breach(s: AIServices, squad_at: Vector3, avoid: Array, defender_eye: Vector
 					near_door = true
 			if near_door:
 				continue
-			var chest := Vector3.UP * 1.1
+			var up := Gravity.up_at(inside)
+			var chest := up * 1.1
 			var bricks := s.ai_world.bricks_between(inside + n_w * (thick + 0.3) + chest,
 					inside - n_w * 0.3 + chest)
 			if bricks == 0:
@@ -164,8 +165,7 @@ func breach(s: AIServices, squad_at: Vector3, avoid: Array, defender_eye: Vector
 				if sees:
 					score += 3.0
 				# Head-on to the defender is worse than oblique.
-				var to_def := defender_eye - inside
-				to_def.y = 0.0
+				var to_def := Gravity.flat(defender_eye - inside, up)
 				if to_def.length() > 0.1:
 					score += maxf(0.0, (-n_w).dot(to_def.normalized())) * 1.5
 			score += squad_at.distance_to(mid) * 0.08
