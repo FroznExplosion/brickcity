@@ -714,6 +714,20 @@ netcode only has to carry dictionaries and byte chunks:
 - **Not yet**: one bend a part; an ankle or a wrist turn; the shell of a smooth part stays with
   the upper half.
 
+### Characters, as built
+
+- **What a figure does** (`Figure.mode`): `idle` stands; `wander` walks a circle round where it
+  was put; `follow` walks after its `target`, turning to face it, and stops 2 m short;
+  `patrol` walks its `route` round and round. A character's simple brain -- fighting stays the
+  AI area's.
+- **The character builder** (`CharacterBuilder`, **Ctrl Alt T** in the city): the figure turning
+  in a preview and its slots; Up / Down picks a slot, Left / Right steps through the parts that
+  fit there -- only those (a mech's arm never; a head with nowhere for the hat not while a hat
+  is on) -- R rolls a whole new one (custom parts too: it is the player's), S saves it as a
+  design of fixed slots in `user://parts/designs/`, Enter puts it in the world (following you on
+  foot, else walking its circle). Saved characters come back with Ctrl T as any figure design.
+- Probed in `tools/character_probe.gd` (16).
+
 ## 12. Decided
 
 Decided 2026-10-23: every part saves on its own (section 7); joined pairs and fixed characters

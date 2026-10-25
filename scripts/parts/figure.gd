@@ -21,11 +21,28 @@ var build: Dictionary = {}
 var model: Node3D
 var walk: MechStride
 var walk_id := ""
-## Walking speed now, m/s; with `wander` it walks a circle round where it was put.
+## Walking speed now, m/s.
 var speed := 0.0
-var wander := false
+## What it does (a character's simple brain; fighting is the AI's): "idle" stands; "wander"
+## walks a circle round where it was put; "follow" walks after `target`, stopping FOLLOW_GAP
+## short; "patrol" walks `route` round and round.
+var mode := "idle"
+var target: Node3D
+var route: Array[Vector3] = []
+var _leg := 0
 var _home := Vector3.ZERO
 var _angle := 0.0
+const WALK := 1.6
+const FOLLOW_GAP := 2.0
+const ARRIVE := 0.3
+const TURN := 6.0
+
+## `wander = true` is the circle walk (kept for its callers).
+var wander: bool:
+	get:
+		return mode == "wander"
+	set(v):
+		mode = "wander" if v else "idle"
 
 
 ## A figure of `b` (PartBuilder.generate's), or null if it has problems or no torso scene:
@@ -121,13 +138,51 @@ func _ready() -> void:
 
 
 func _physics_process(delta: float) -> void:
-	if wander:
-		speed = WANDER_SPEED
-		_angle = fmod(_angle + delta * speed / WANDER_RADIUS, TAU)
-		position = _home + Vector3(cos(_angle), 0.0, sin(_angle)) * WANDER_RADIUS
-		rotation.y = -_angle   # facing along the circle (it faces -Z)
+	think(delta)
 	if walk != null:
 		walk.step(delta, speed)
+
+
+## One step of its brain: where it goes this tick.
+func think(delta: float) -> void:
+	match mode:
+		"wander":
+			speed = WANDER_SPEED
+			_angle = fmod(_angle + delta * speed / WANDER_RADIUS, TAU)
+			position = _home + Vector3(cos(_angle), 0.0, sin(_angle)) * WANDER_RADIUS
+			rotation.y = -_angle   # facing along the circle (it faces -Z)
+		"follow":
+			if target == null or not is_instance_valid(target):
+				speed = 0.0
+				return
+			_walk_to(target.global_position if target.is_inside_tree() else target.position, FOLLOW_GAP, delta)
+		"patrol":
+			if route.is_empty():
+				speed = 0.0
+				return
+			if _walk_to(route[_leg % route.size()], ARRIVE, delta):
+				_leg = (_leg + 1) % route.size()
+		_:
+			speed = 0.0
+
+
+## Walk toward `to` on the flat, turning to face it, until `gap` from it. True once there.
+func _walk_to(to: Vector3, gap: float, delta: float) -> bool:
+	var flat := Vector3(to.x - position.x, 0.0, to.z - position.z)
+	var d := flat.length()
+	if d <= gap:
+		speed = 0.0
+		return true
+	var want := atan2(-flat.x, -flat.z)   # it faces -Z
+	rotation.y = lerp_angle(rotation.y, want, clampf(TURN * delta, 0.0, 1.0))
+	speed = WALK
+	position += flat / d * minf(WALK * delta, d - gap)
+	return false
+
+
+## Where it stands, in words: for gates and the builder.
+func doing() -> String:
+	return mode if speed == 0.0 else "%s, walking" % mode
 
 
 ## The figures made in the workshop: the parts saved from one build (by its name) fixed on
