@@ -238,8 +238,8 @@ func _begin(stage: String) -> void:
 			print("H. the tank's map")
 			# A low wall 40 m long with no gap, at z = 80 m.
 			a.bricks(Vector3i(int(-220.0 / STUD), 0, int(80.0 / STUD)), Vector3i(int(40.0 / STUD), 3, 1))
-			var tank_nav := a.s.vehicle_nav(&"tank")
-			var truck_nav := a.s.vehicle_nav(&"truck")
+			var tank_nav: AINav = a.s.vehicle_nav(&"tank")
+			var truck_nav: AINav = a.s.vehicle_nav(&"truck")
 			var from := Vector3(-200.0, 0.0, 70.0)
 			var to := Vector3(-200.0, 0.0, 90.0)
 			var tk := tank_nav.find_path(tank_nav.snap(from), tank_nav.snap(to), 60000)

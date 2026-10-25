@@ -18,6 +18,8 @@ extends Node3D
 ##   (11.8 N4), across the regions' borders.
 ##   -- --gate=far: two squads fight on the far side of the town, in a region
 ##   the player is not in: each agent asks its own region (AIServices.focus).
+##   -- --gate=drive: an AI tank driven 200 m out of the town on the nav net's
+##   tank map, across the regions' borders.
 
 var data: PlanetData
 var planet: PlanetBody
@@ -47,6 +49,7 @@ var ai: AIServices
 var nav_region: PlanetNavRegion
 var _travel_gate := false
 var _far_gate := false
+var _drive_gate := false
 var sun: DirectionalLight3D
 var sky_mat: ProceduralSkyMaterial
 var env: Environment
@@ -72,7 +75,8 @@ func _ready() -> void:
 	_squad_gate = "--gate=squad" in OS.get_cmdline_user_args()
 	_travel_gate = "--gate=travel" in OS.get_cmdline_user_args()
 	_far_gate = "--gate=far" in OS.get_cmdline_user_args()
-	_gate = _gate or _pawn_gate or _mech_gate or _tank_gate or _soldier_gate or _squad_gate or _travel_gate or _far_gate
+	_drive_gate = "--gate=drive" in OS.get_cmdline_user_args()
+	_gate = _gate or _pawn_gate or _mech_gate or _tank_gate or _soldier_gate or _squad_gate or _travel_gate or _far_gate or _drive_gate
 	data = PlanetData.new()
 	data.planet_name = "proto"
 	# Towns and landmarks: their pads go into the ground before it is built.
@@ -141,6 +145,8 @@ func _ready() -> void:
 			_run_travel_gate()
 		elif _far_gate:
 			_run_far_gate()
+		elif _drive_gate:
+			_run_drive_gate()
 		else:
 			_run_gate()
 
@@ -323,7 +329,7 @@ func _process(_delta: float) -> void:
 	# collider); then, unless this is the walker's own gate, the pawn stands on it.
 	if walker.frozen and pawn == null and _ground_hit(walker.global_position) != Vector3.INF:
 		walker.frozen = false
-		if not _gate or _pawn_gate or _mech_gate or _tank_gate or _soldier_gate or _squad_gate or _travel_gate or _far_gate:
+		if not _gate or _pawn_gate or _mech_gate or _tank_gate or _soldier_gate or _squad_gate or _travel_gate or _far_gate or _drive_gate:
 			_spawn_player(_ground_hit(walker.global_position), -walker.global_transform.basis.z)
 	if not on_foot:
 		walker.flying = pawn != null or walker.flying
@@ -1351,4 +1357,79 @@ func _run_far_gate() -> void:
 	print("[planet] frames: worst %.1f ms; over 40 ms: %s" % [_worst_ms, _hitches])
 	print("[planet] AI tick: worst %.1f ms" % (ai_worst_us / 1000.0))
 	print("[planet] far gate: %d ok, %d FAIL" % [_ok, _fail])
+	get_tree().quit(0 if _fail == 0 else 1)
+
+
+# The drive gate (11.8): an AI tank, crewed, on the player's side, sent 200 m out
+# of the town. Its road is the nav net's tank map (AIServices.vehicle_nav on a
+# planet: a PlanetNavMap, its own AINav in each region), across the borders.
+
+func _run_drive_gate() -> void:
+	var t0 := Time.get_ticks_msec()
+	while pawn == null and Time.get_ticks_msec() - t0 < 60000:
+		await _frames(1)
+	await get_tree().create_timer(1.0).timeout
+	var town: Vector3 = town_dirs[0]
+	var p_feet := _surface(_round_dir(town, spawn_dir, 88.0))
+	var start := _surface(_round_dir(town, spawn_dir, 100.0))
+	var goal := _surface(_round_dir(town, spawn_dir, 300.0))
+	pawn.place(p_feet + Gravity.up_at(p_feet) * 0.3)
+	pawn.health.layer_configs[0].max_value = 1e7
+	pawn.health.reset()
+	var marker := Node3D.new()
+	add_child(marker)
+	marker.global_position = start
+	PlanetBody.track(marker)
+	t0 = Time.get_ticks_msec()
+	while (_ground_hit(p_feet) == Vector3.INF or _ground_hit(start) == Vector3.INF) \
+			and Time.get_ticks_msec() - t0 < 30000:
+		await _frames(1)
+	await get_tree().create_timer(1.0).timeout
+	setup_ai(town)
+	var net := ai.nav_net as PlanetNavNet
+	pawn.set_meta(&"player", 0)
+	ai.add_pawn(pawn)
+	var vn = ai.vehicle_nav(&"tank")
+	_check("on a planet the tank's map is the nav net's", vn is PlanetNavMap)
+	var at: Vector3 = vn.snap(start)
+	var lib := GunPlaceholderParts.build_library()
+	var main := GunInstance.from_result(GunGenerator.generate(lib, 5, WeaponClass.builtin(&"rocket_launcher"), 1))
+	var mg := GunInstance.from_result(GunGenerator.generate(lib, 6, WeaponClass.builtin(&"lmg"), 1))
+	var face := Gravity.flat(goal - at, Gravity.up_at(at))
+	var tk := Tank.make(ai, self, at + Gravity.up_at(at) * 0.3, 0.0, 0, main, mg, Callable(), ai.rng)
+	PlanetBody.track(tk)
+	ai.add_pawn(tk.make_target())
+	var br := TankBrain.attach(ai, tk)
+	for seat in [Tank.Seat.DRIVER, Tank.Seat.GUNNER]:
+		var so := Soldier.spawn(ai, self, at + Gravity.up_at(at) * 0.3 + face.normalized().cross(Gravity.up_at(at)) * 5.0,
+				0, GunInstance.from_result(GunGenerator.generate(lib, 60 + seat, WeaponClass.builtin(&"rifle"), 1)))
+		PlanetBody.track(so.pawn.body)
+		tk.board(so.pawn, seat, true)
+	await get_tree().create_timer(2.0).timeout
+	br.send(goal)
+	var keys := {}
+	var sunk := 0.0
+	var roads := {}
+	var t1 := Time.get_ticks_msec()
+	var left := INF
+	while Time.get_ticks_msec() - t1 < 150000:
+		await get_tree().physics_frame
+		var f := tk.feet()
+		keys[net.key_at(f)] = true
+		sunk = minf(sunk, _over_ground(f))
+		roads[br.road] = true
+		left = Gravity.flat(goal - f, Gravity.up_at(goal)).length()
+		if left < 8.0 and br.state in ["hold", "idle"]:
+			break
+	var secs := (Time.get_ticks_msec() - t1) / 1000.0
+	print("[planet] drive: %.1f m short after %.0f s, state %s, roads %s, %d cell(s), %d region(s) now" % [
+			left, secs, br.state, roads.keys(), keys.size(), net.regions.size()])
+	_check("the tank gets there (< 8 m)", left < 8.0, "%.1f m short, %s" % [left, br.state])
+	_check("on the tank's own map (its road the vehicle map)", roads.has("vehicle") and not roads.has("foot"),
+			str(roads.keys()))
+	_check("across the regions (>= 3 cells driven)", keys.size() >= 3, "%d" % keys.size())
+	_check("never under the ground (> -1 m)", sunk > -1.0, "%.2f m" % sunk)
+	print("[planet] frames: worst %.1f ms; over 40 ms: %s" % [_worst_ms, _hitches])
+	print("[planet] AI tick: worst %.1f ms" % (ai_worst_us / 1000.0))
+	print("[planet] drive gate: %d ok, %d FAIL" % [_ok, _fail])
 	get_tree().quit(0 if _fail == 0 else 1)

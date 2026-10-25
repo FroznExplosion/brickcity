@@ -120,7 +120,9 @@ var chase_goal := Vector3.INF
 ## Its size of body, the map a body that size walks (null: the person's), and
 ## how far its arm reaches.
 var body_size := "person"
-var nav: AINav
+## A size's own map (nav_for), or null for the person's: an AINav, or on a
+## planet a nav net map (PlanetNavMap).
+var nav = null
 var melee_reach := MELEE_REACH
 ## A mech of its own side to get into (Docs/AIRoster.md 4.4; go_board): walked to,
 ## to its hatch's side, and boarded. Null for none. While it goes, the tree waits.
@@ -1029,7 +1031,7 @@ func _unstick(toward: Vector3) -> void:
 			var turn := (k + 1) / 2 * (PI / 4.0) * (1.0 if k % 2 == 0 else -1.0)
 			var a: float = a0 + turn
 			var ring: Vector3 = Vector3(cos(a), 0.0, sin(a)) * r
-			var p := _nav().snap(feet + (tb * ring if Gravity.planet != null else ring))
+			var p: Vector3 = _nav().snap(feet + (tb * ring if Gravity.planet != null else ring))
 			if absf(Gravity.height_of(p) - Gravity.height_of(feet)) > 0.5 or not _nav().can_stand(p):
 				continue
 			if not body_fits(services.world3d, p, pawn.body.get_rid()):
@@ -1243,7 +1245,7 @@ func _plant_step(feet: Vector3, now: float) -> bool:
 
 
 ## The map this body walks.
-func _nav() -> AINav:
+func _nav():
 	return nav if nav != null else services.ai_nav
 
 
@@ -1311,7 +1313,7 @@ func set_name_tag(text: String) -> void:
 ## Where to run to, to end up `stand_off` metres short of `at` on this side:
 ## a spot a body can stand on (the target's own feet are not one).
 func approach_point(at: Vector3, stand_off: float) -> Vector3:
-	var nav := _nav()
+	var nav = _nav()
 	var feet := pawn.feet()
 	var back := Gravity.flat(feet - at, pawn.up)
 	var d := back.length()
@@ -1319,7 +1321,7 @@ func approach_point(at: Vector3, stand_off: float) -> Vector3:
 	p = nav.snap(p)
 	if nav.can_stand(p):
 		return p
-	var q := nav.snap(at)
+	var q: Vector3 = nav.snap(at)
 	return q if nav.can_stand(q) else Vector3.INF
 
 

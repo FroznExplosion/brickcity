@@ -84,7 +84,8 @@ const FIRE_CONE_DEG := 4.0
 
 var services: AIServices
 var mech: Mech
-var nav: AINav
+## Its walking map: an AINav, or on a planet a nav net map (PlanetNavMap).
+var nav = null
 var team := 1
 var brain: BTPlayer
 var importance := 8.0
@@ -132,13 +133,13 @@ var _target: Pawn
 var breach_point := Vector3.INF
 ## The breaching mech map (a mech with a launcher), and where the path in hand
 ## goes into bricks; the brick it is opening now, or INF.
-var breach_nav: AINav
+var breach_nav = null
 var can_breach := true
 var path_breach := Vector3.INF
 ## Holes opened on the way, and doorways its squad asked for, for gates.
 var breached := 0
 var made_ways := 0
-var _path_nav: AINav
+var _path_nav = null
 var _breaches := PackedVector3Array()
 var _bi := 0
 var _breach_since := -INF
@@ -163,7 +164,7 @@ var _stuck_at := 0.0
 
 
 ## Give `m` a brain: `tree` is MechTree.enemy() or MechTree.companion().
-static func attach(s: AIServices, m: Mech, p_mech_nav: AINav, tree: BehaviorTree, p_team: int) -> MechBrain:
+static func attach(s: AIServices, m: Mech, p_mech_nav, tree: BehaviorTree, p_team: int) -> MechBrain:
 	var br := MechBrain.new()
 	br.name = "MechBrain"
 	br.services = s
@@ -629,7 +630,7 @@ func move_to(goal: Vector3, run := false) -> int:
 		_near_goals.clear()
 		_near_tried = false
 	if _path.is_empty():
-		var st := _path_nav.get_status(_path_id)
+		var st: int = _path_nav.get_status(_path_id)
 		if st == AINav.PENDING:
 			_want_dir = Vector3.ZERO
 			return 0
@@ -770,7 +771,7 @@ func _gap_through(feet: Vector3, b: Vector3) -> bool:
 	if dir.length() < 0.1:
 		return false
 	var past := Vector3(b.x, feet.y, b.z) + dir.normalized() * (Mech.RADIUS * 2.0 + 1.0)
-	var p := nav.find_path(nav.snap(feet), nav.snap(past), 4000)
+	var p: PackedVector3Array = nav.find_path(nav.snap(feet), nav.snap(past), 4000)
 	if p.is_empty():
 		return false
 	var walk := 0.0

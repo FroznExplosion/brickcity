@@ -23,6 +23,9 @@ constexpr float STUD = brick::STUD_M;
 constexpr float PLATE = brick::PLATE_M;
 // Open sky: more air than anything could need.
 constexpr int16_t SKY = 4096;
+// The steepest ground a body is mapped on across its own footprint, as plates of
+// rise a stud: tan(25 deg) * 0.35 / 0.14 (a planet's terrain; _node_head).
+constexpr float GRADE_PLATES = 1.17f;
 constexpr int DX[8] = { 1, -1, 0, 0, 1, 1, -1, -1 };
 constexpr int DZ[8] = { 0, 0, 1, -1, 1, -1, 1, -1 };
 
@@ -359,13 +362,19 @@ int AINav::_node_head(int x, int z, int y) {
         }
     }
     int head = std::numeric_limits<int>::max();
+    // On a ground grid (a planet's region) the ground is a smooth slope, not
+    // brick courses: the footprint's far columns may also stand higher by what
+    // the slope a body climbs gives across it (GRADE_PLATES a stud). Off a
+    // grid it is 0 -- the flat game's rule, a step and no more.
+    const int grade = (ai.is_valid() && ai->has_ground_grid())
+            ? (int)std::ceil(GRADE_PLATES * (float)(span - 1)) : 0;
     for (int i = 0; i < span * span && head >= 0; ++i) {
         const int cx = x + i % span;
         const int cz = z + i / span;
         const Column &col = _column(cx, cz);
         int best = -1;
         for (const Floor &f : col.floors) {
-            if (i == 0 ? f.y != y : f.y > y + step_up) {
+            if (i == 0 ? f.y != y : f.y > y + step_up + grade) {
                 continue;
             }
             // Its air runs from its ground up; the body needs it from its own

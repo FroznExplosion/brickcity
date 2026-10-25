@@ -158,7 +158,8 @@ var _smoke: CPUParticles3D
 
 var _path := PackedVector3Array()
 var _path_id := -1
-var _nav: AINav
+## The map its path is on: an AINav, or on a planet a nav net map (PlanetNavMap).
+var _nav = null
 var _wp := 0
 var _from := Vector3.ZERO
 var _moved_at := 0.0
@@ -266,15 +267,16 @@ func send(to: Vector3) -> void:
 
 
 func _ask_path(on_foot: bool) -> void:
-	var vn := services.vehicle_nav(StringName(KINDS[kind].nav)) if not on_foot else null
+	var vn = services.vehicle_nav(StringName(KINDS[kind].nav)) if not on_foot else null
 	var to := VehicleNav.reach_point(vn, goal) if vn != null else Vector3.INF
-	var from := vn.snap(feet()) if vn != null else Vector3.INF
+	var from: Vector3 = vn.snap(feet()) if vn != null else Vector3.INF
 	if vn != null and to != Vector3.INF and vn.can_stand(from):
 		_nav = vn
 		road = "vehicle"
 		_path_id = vn.request_path(from, to, 8.0, 40000)
 	else:
-		_nav = services.ai_nav
+		# The walking map; on a planet the nav net's, across regions.
+		_nav = services.nav_net if services.nav_net != null else services.ai_nav
 		road = "foot"
 		_path_id = _nav.request_path(global_position, goal, 8.0, 20000)
 
@@ -364,7 +366,7 @@ func _physics_process(delta: float) -> void:
 		_moved_at = now
 		return
 	if _path.is_empty():
-		var st := _nav.get_status(_path_id)
+		var st: int = _nav.get_status(_path_id)
 		if st == AINav.PENDING:
 			move_and_slide()
 			return

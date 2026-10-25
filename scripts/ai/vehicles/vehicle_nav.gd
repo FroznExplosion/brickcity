@@ -65,11 +65,13 @@ static func head_of(kind: StringName) -> int:
 ## The place nearest `goal` a vehicle can drive to on `nav`: `goal` itself when
 ## it fits there, else the nearest spot round it within `max_r` metres, at about
 ## its height -- a street beside a building, not the roof of it. INF for none.
-static func reach_point(nav: AINav, goal: Vector3, max_r := 24.0) -> Vector3:
+static func reach_point(nav, goal: Vector3, max_r := 24.0) -> Vector3:
 	if nav == null or goal == Vector3.INF:
 		return Vector3.INF
-	var at := nav.snap(goal)
-	if nav.can_stand(at) and _flat(at - goal).length() < 2.0 and absf(at.y - goal.y) < 1.5:
+	var up := Gravity.up_at(goal)
+	var tb := Gravity.tangent_basis(goal)
+	var at: Vector3 = nav.snap(goal)
+	if nav.can_stand(at) and Gravity.flat(at - goal, up).length() < 2.0 and absf(Gravity.vert(at - goal, up)) < 1.5:
 		return at
 	var r := 2.0
 	while r <= max_r:
@@ -77,9 +79,9 @@ static func reach_point(nav: AINav, goal: Vector3, max_r := 24.0) -> Vector3:
 		var best_d := INF
 		var n := maxi(8, int(TAU * r / 2.0))
 		for i in n:
-			var dir := Vector3.FORWARD.rotated(Vector3.UP, TAU * i / n)
-			var q := nav.snap(goal + dir * r)
-			if not nav.can_stand(q) or absf(q.y - goal.y) > 2.0:
+			var dir := tb * Vector3.FORWARD.rotated(Vector3.UP, TAU * i / n)
+			var q: Vector3 = nav.snap(goal + dir * r)
+			if not nav.can_stand(q) or absf(Gravity.vert(q - goal, up)) > 2.0:
 				continue
 			var d := q.distance_to(goal)
 			if d < best_d:

@@ -6621,7 +6621,7 @@ func _run_vehicles_pass() -> void:
 	var open := Vector3(-70.0, 0.0, -70.0)
 	camera.global_position = open + Vector3(0.0, 6.0, 12.0)
 	camera.rotation = Vector3.ZERO
-	var truck_at := ai_services.vehicle_nav(&"truck").snap(_on_ground(open))
+	var truck_at: Vector3 = ai_services.vehicle_nav(&"truck").snap(_on_ground(open))
 	var truck := _spawn_truck(truck_at, 0.0, 0, [] as Array[StringName])
 	await _frames(20)
 	_enter_pawn(truck.mount_point())
@@ -6669,7 +6669,7 @@ func _run_vehicles_pass() -> void:
 		so.pawn.health.apply_impact(1e9, &"")
 
 	# An enemy's crewed tank: E beside it climbs on, E held pries the hatch.
-	var tank_at := ai_services.vehicle_nav(&"tank").snap(_on_ground(open + Vector3(25.0, 0.0, 0.0)))
+	var tank_at: Vector3 = ai_services.vehicle_nav(&"tank").snap(_on_ground(open + Vector3(25.0, 0.0, 0.0)))
 	var t := _spawn_tank(tank_at, PI * 0.5, 1, true)
 	(t.get_node(^"TankBrain") as TankBrain).enabled = false
 	await _frames(20)
@@ -14740,7 +14740,7 @@ func _unhandled_input(event: InputEvent) -> void:
 				_board_mech()
 		KEY_Z:
 			var ahead := camera.global_position - camera.global_transform.basis.z * 30.0
-			var truck_nav := ai_services.vehicle_nav(&"truck")
+			var truck_nav = ai_services.vehicle_nav(&"truck")
 			if event.alt_pressed and event.shift_pressed:
 				_spawn_truck(ai_services.vehicle_nav(&"apc").snap(_on_ground(ahead)), camera.global_rotation.y, 0,
 						[] as Array[StringName], &"apc")
