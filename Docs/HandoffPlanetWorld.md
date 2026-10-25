@@ -74,7 +74,7 @@ trees. Rerun before believing it.
    `planet_tree_ai_probe` 8/8.
 5. The spawn town on greener ground (a temperate-grass pad or a nudge to `climate_axis`), if the
    user wants it.
-6. From orbit the trees are only the biome colour on the impostor; a darker forest tint there.
+6. From orbit, a darker forest tint -- done (Planets.md 11.10 "Forests from orbit").
 
 ## Rules that bite
 

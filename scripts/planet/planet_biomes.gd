@@ -126,7 +126,11 @@ static func _band_dist(v: float, band: Vector2) -> float:
 ## The ground's base colour along `dir`: the biome's, toward its dry colour by
 ## a slow mottle and the dryness there.
 func colour(dir: Vector3) -> Color:
-	var e: Dictionary = TABLE[biome_index(dir)]
+	return _colour_of(dir, biome_index(dir))
+
+
+func _colour_of(dir: Vector3, index: int) -> Color:
+	var e: Dictionary = TABLE[index]
 	var m := clampf(0.5 + 0.6 * _mot.get_noise_3dv(dir * data.radius) + (0.5 - humidity(dir)) * 0.6, 0.0, 1.0)
 	return (e.colour as Color).lerp(e.dry, m)
 
@@ -150,6 +154,12 @@ static func pixel_of_dir(dir: Vector3, width: int, height_px: int) -> Vector2i:
 
 
 func pixel(dir: Vector3) -> Color:
-	var c := colour(dir)
+	return pixel_index(dir)[0]
+
+
+## pixel() and the biome's index, from one lookup: [Color, int].
+func pixel_index(dir: Vector3) -> Array:
+	var i := biome_index(dir)
+	var c := _colour_of(dir, i)
 	c.a = clampf(inverse_lerp(T_RANGE.x, T_RANGE.y, temperature_sea(dir)), 0.0, 1.0)
-	return c
+	return [c, i]

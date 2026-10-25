@@ -1558,3 +1558,12 @@ within 40 m); all 160 trunks of its region in the world; a path across the fores
 from every trunk axis (without the trunks it went through some); a trunk is cover (2 bricks); taken
 away, it is not, and its spot is walkable. Not yet: the canopy does not block sight; a tank's map
 goes round trunks rather than through them (it could knock them down).
+
+**Forests from orbit (2026-10-24).** The impostor's colour map (only it -- the ground on foot has
+its trees) darkens land toward a canopy green by the biome's trees a hectare
+(`PlanetTrees.TREES` / `D_MAX`, up to `FOREST_TINT` 0.6 for the densest): taiga darkest, jungle
+and temperate forest deep green, grass and savanna barely. `PlanetBiomes.pixel_index` gives the
+colour and the biome from one lookup, so the bake is no slower (728 ms). `planet_biome_probe`
+10/10: of 3000 sampled land pixels, all 809 forest ones are darker than their ground and all 123
+treeless ones are their ground's colour. The walker gate's 5 km and 30 km shots show the forests as
+darker patches; the gate 9/9 (twice, windowed, peak 82 C, not held back).

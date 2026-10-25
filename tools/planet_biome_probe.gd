@@ -57,6 +57,44 @@ func _run() -> void:
 		worst = maxf(worst, maxf(maxf(absf(want.r - got.r), absf(want.g - got.g)), maxf(absf(want.b - got.b), absf(want.a - got.a))))
 	_check("the map is PlanetBiomes, pixel by pixel (within one 8-bit step)", worst <= 1.0 / 255.0 + 1e-4,
 			"worst %.4f" % worst)
+	# From orbit a forest is darker than its ground (its canopy, 11.10), a treeless
+	# biome is its ground's colour: land pixels, off the sea, the beach and snow.
+	var cimg: Image = b.color_image
+	var darker := 0
+	var forests := 0
+	var bare_same := 0
+	var bares := 0
+	for k in 3000:
+		var x := rng.randi_range(0, w - 1)
+		var y := rng.randi_range(0, hpx - 1)
+		var d := PlanetBiomes.dir_of_pixel(x, y, w, hpx)
+		var h := data.height(d)
+		var gp := img.get_pixel(x, y)
+		if h < data.sea_level + 2.0 or PlanetBiomes.temperature_at(lerpf(PlanetBiomes.T_RANGE.x, PlanetBiomes.T_RANGE.y, gp.a), h) < 0.5:
+			continue
+		var on_pad := false
+		for pad in data.pads:
+			if (d * data.radius).distance_to((pad.dir as Vector3) * data.radius) < float(pad.flat) + 1.0:
+				on_pad = true
+		if on_pad:
+			continue
+		var i := bio.biome_index(d)
+		var cp := cimg.get_pixel(x, y)
+		var lum_g := gp.r * 0.3 + gp.g * 0.59 + gp.b * 0.11
+		var lum_c := cp.r * 0.3 + cp.g * 0.59 + cp.b * 0.11
+		if float(PlanetTrees.TREES[i][0]) >= 100.0:
+			forests += 1
+			if lum_c < lum_g - 0.02:
+				darker += 1
+		elif float(PlanetTrees.TREES[i][0]) == 0.0:
+			bares += 1
+			if absf(cp.r - gp.r) + absf(cp.g - gp.g) + absf(cp.b - gp.b) <= 3.0 / 255.0:
+				bare_same += 1
+	print("[biomes] from orbit: %d of %d forest pixels darker than their ground, %d of %d treeless ones its colour" % [
+			darker, forests, bare_same, bares])
+	_check("from orbit a forest is darker than its ground (its canopy)", forests > 20 and darker == forests,
+			"%d of %d" % [darker, forests])
+	_check("and a treeless biome is its ground's colour", bares > 20 and bare_same == bares, "%d of %d" % [bare_same, bares])
 	# The shader's UV (PlanetBiomes.pixel_of_dir) lands on the pixel the bake wrote.
 	var miss := 0
 	for k in 300:
