@@ -1045,6 +1045,9 @@ func _ready() -> void:
 	DebugView.reset()
 	_breaklag_mode = "--breaklag" in args
 	_bigbreak_mode = "--bigbreak" in args
+	_wide_mode = "--widecheck" in args
+	# The A/B for staggered floor seams: every floor laid as before.
+	TowerRecipe.stagger = not ("--no-stagger" in args)
 	_storeys_mode = "--storeys" in args
 	_whole_mode = "--whole" in args
 	_squad_mode = "--squad" in args
@@ -1302,6 +1305,8 @@ func _ready() -> void:
 		_run_breaklag_pass()
 	elif _bigbreak_mode:
 		_run_bigbreak_pass()
+	elif _wide_mode:
+		_run_wide_pass()
 	elif _storeys_mode:
 		_run_storeys_pass()
 	elif _wreck_mode:
@@ -7859,6 +7864,8 @@ func _start_firefight(gate: bool) -> void:
 var _breaklag_mode := false
 ## -- --bigbreak [--big] [--far]: a player's widest shots, close up (_run_bigbreak_pass)
 var _bigbreak_mode := false
+## -- --widecheck --big: the wide buildings' own break checks (_run_wide_pass)
+var _wide_mode := false
 var _storeys_mode := false   ## -- --storeys: the storey-units gate (Docs/Space.md 5.3a)
 var _whole_mode := false     ## -- --whole: every building laid whole, as before storey units
 
@@ -8349,6 +8356,108 @@ func _run_bigbreak_pass() -> void:
 		worst_all = maxf(worst_all, worst)
 	print("[bigbreak] worst frame of all %.1f ms" % worst_all)
 	get_tree().quit(0)
+
+
+## The wide buildings' own checks (CollapseNext 25; WIDE_SHAPES). `--breaklag`
+## and `--far` keep to towers (`_wide_ids`) because the wide ones failed
+## what a tower is asked there; these ask them the same things on their own,
+## one building each so no shot lands on another's wreckage:
+##   the first (240 x 50): a shell shot through its ground storey shows it
+##     within 15 ticks (_shell_lag);
+##   the second (160 x 60): made bricks, its ground storey blown out -- pieces
+##     move within 10 ticks of its bricks going and its body comes off within
+##     3 of the first piece (_break_lag);
+##   the third (200 x 80): far off, a shell stands in drawn with the damage
+##     it has, and a hit taken there shows on it (_far_shell_check);
+##   the fourth (120 x 40): a bay of its ground storey shot out across its
+##     whole depth, BAY_STUDS wide -- the floor over it comes down by the span
+##     rule (Structures 2.3: nothing within Floor Reach holds it) and the rest
+##     of the building stands (_bay_check).
+##     godot --path . scenes/big_city.tscn -- --widecheck --big
+func _run_wide_pass() -> void:
+	print("[widecheck] the wide buildings, asked a tower's questions")
+	respawn_buildings = false
+	var wides: Array = []
+	for c in registry.buildings:
+		if _wide_ids.has(c.id):
+			wides.append(c)
+	wides.sort_custom(func(a, c) -> bool: return a.id < c.id)
+	if wides.size() < 4:
+		print("[widecheck] %d wide building(s); run it in big_city.tscn with --big" % wides.size())
+		get_tree().quit(1)
+		return
+	for b: BuildingRegistry.Building in wides:
+		print("[widecheck] building %d: %d x %d studs, %d courses" % [b.id,
+				b.recipe.footprint_x, b.recipe.footprint_z, b.recipe.courses])
+	await _shell_lag(wides[0])
+	_promote(wides[1].id)
+	await _break_lag(wides[1], true)
+	_promote(wides[2].id)
+	await _frames(30)
+	await _far_shell_check(wides[2], true)
+	await _bay_check(wides[3])
+	print("[widecheck] %d ok, %d FAIL" % [_gate_pass, _gate_fail])
+	get_tree().quit(1 if _gate_fail > 0 else 0)
+
+
+
+## How wide a bay `_bay_check` shoots out: twice Floor Reach at its default, so
+## the middle of the floor over it is a reach from either side.
+const BAY_STUDS := 40
+
+
+## A bay of a wide building's ground storey shot out across its whole depth,
+## BAY_STUDS wide, a third of the way along: walls, columns and room walls all
+## gone under it. The floor over it has nothing within reach to hold it (the
+## span rule) and must come down; past the bay, at the building's ends, it
+## stands. Read from the bricks: the first floor's slab over the middle of the
+## bay, and over each end.
+func _bay_check(b: BuildingRegistry.Building) -> void:
+	var fz: float = b.recipe.footprint_z * STUD
+	@warning_ignore("integer_division")
+	var bay0: int = b.recipe.footprint_x / 3
+	var bay1: int = bay0 + BAY_STUDS
+	@warning_ignore("integer_division")
+	var over := bay0 + BAY_STUDS / 2
+	camera.position = b.xform * Vector3(float(over) * STUD, 15.0, -25.0)
+	camera.look_at(b.xform * Vector3(float(over) * STUD, 4.0, fz * 0.5), Vector3.UP)
+	_promote(b.id, true, PackedInt32Array([0, 1]))
+	await _frames(60)
+	var slab_y := TowerRecipe.STOREY_PLATES
+	@warning_ignore("integer_division")
+	var mid_z: int = b.recipe.footprint_z / 2
+	var probe := func(x: int) -> bool:
+		if not b.is_materialised():
+			return false
+		var origin := world.get_chunk_origin(b.chunk)
+		return world.is_solid(b.chunk, origin + Vector3i(x, slab_y, mid_z)) \
+				and world.is_solid(b.chunk, origin + Vector3i(x, slab_y + 1, mid_z))
+	var ends := [5, b.recipe.footprint_x - 6]
+	var before: bool = probe.call(over) and probe.call(ends[0]) and probe.call(ends[1])
+	_gate_ok("building %d: its first floor laid over the bay and both ends before the shot" % b.id,
+			before, "over the bay %s, ends %s %s" % [probe.call(over), probe.call(ends[0]),
+				probe.call(ends[1])])
+	var blasts := 0
+	var x := float(bay0) * STUD
+	while x <= float(bay1) * STUD + 0.01:
+		var z := 0.0
+		while z <= fz + 0.01:
+			_blast(b.xform * Vector3(x, 1.2, z), 2.2)
+			blasts += 1
+			z += 2.5
+		x += 2.5
+	var t := 0
+	while t < 600 and probe.call(over):
+		await get_tree().physics_frame
+		t += 1
+	await _frames(120)
+	print("[widecheck] building %d: a %d-stud bay shot out at studs %d..%d (%d blasts); the floor over it %s at tick %d" % [
+			b.id, BAY_STUDS, bay0, bay1, blasts, "still there" if probe.call(over) else "gone", t])
+	_gate_ok("building %d: the floor over the bay comes down (span rule)" % b.id,
+			not probe.call(over), "still standing after %d ticks" % t)
+	_gate_ok("building %d: and the building either side of it stands" % b.id,
+			probe.call(ends[0]) and probe.call(ends[1]),
+			"ends %s, %s" % [probe.call(ends[0]), probe.call(ends[1])])
 
 
 ## Stairs go with their floors.
@@ -9521,16 +9630,25 @@ func _lodbreak_say(b: BuildingRegistry.Building, what: String) -> void:
 ## floor panel line (TowerRecipe.PANEL), a 32-stud region line, the edge of a
 ## window column, or elsewhere.
 ##
-##     godot --path . scenes/big_city.tscn -- --breakshape
+##     godot --path . scenes/big_city.tscn -- --breakshape [--picks=N] [--no-stagger]
+##
+## Four towers unless `--picks` asks for more: four make three pieces of 50+,
+## too few to tell one floor layout from another (TowerRecipe.STAGGER).
 func _run_breakshape_pass() -> void:
-	print("[breakshape] towers shot close up, every piece measured as it leaves")
+	print("[breakshape] towers shot close up, every piece measured as it leaves (stagger %s)"
+			% ("on" if TowerRecipe.stagger else "off"))
 	respawn_buildings = false
 	var picks: Array = []
 	for c in registry.buildings:
 		if not c.is_build() and not _wide_ids.has(c.id) and c.recipe.courses >= 30:
 			picks.append(c)
 	picks.sort_custom(func(a, c) -> bool: return a.id < c.id)
-	picks = picks.slice(0, 4)
+	var count := 4
+	for a in OS.get_cmdline_user_args():
+		if a.begins_with("--picks="):
+			count = int(a.substr(8))
+	print("[breakshape] %d of %d tower(s)" % [mini(count, picks.size()), picks.size()])
+	picks = picks.slice(0, count)
 	var storey_m := TowerRecipe.STOREY_PLATES * PLATE
 	var tally := {"layer": 0, "slice": 0, "other": 0}
 	var faces := {"panel": 0, "region": 0, "window": 0, "elsewhere": 0}

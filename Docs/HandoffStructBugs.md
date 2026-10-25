@@ -72,6 +72,15 @@ since storey units' log commands (`--ring` 4 of 4, no FAIL line). Open, in order
 - GDScript warnings in the city/building scripts cleared (`tools/warn_check.tscn` prints a
   script's warnings); `city_scene.gd` Tank.Seat = -1 left for the vehicles chat.
 
+**Later 2026-10-24:** main's DLL rebuilt (freeze fix live). Item 9 done: staggered seams
+(CollapseNext 30; `stagger_probe`; `--breakshape --picks=12`: layers 0->4, slices 5->2, other
+2->6; ~3% parts). Item 10 started: `big_city.tscn -- --widecheck --big`, 8 ok 2 FAIL -- **next**:
+building 23 (160 x 60) body comes off 9 ticks after its first piece (line 3); building 24
+(200 x 80) a hit taken far off is not drawn (21824 vertices drawn vs 2692 from its damage --
+the far shell drawn from bricks, `_far_shell_counts`, may just be the wrong measure for a wide
+one). The bay check (span rule) passes. `collapse_probe` "building 14: pushed over, it turns"
+fails with or without the stagger: likely resting flat on its stump, check from a lifted start.
+
 **Open, in order:**
 1. ~~Re-time `--big --shot` on a quiet machine~~ -- done 2026-10-23 evening (code at `8c67313`,
    before perf caps `c35046e`; editor closed, `--ring` 14 s, peak 73-80 C, not held back): two
