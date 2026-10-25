@@ -32,8 +32,11 @@ const SETS := {
 			"legs": [1, 10], "by": "GaitController"},
 	"creature.gait.far": {"kind": "procedural", "plans": ["creature"], "tags": ["walk", "far"],
 			"legs": [1, 10], "by": "CannedGait"},
-	# Figures: Mixamo-named clips, when figures are built (stage 12).
-	"figure.walk.clips": {"kind": "clips", "plans": ["figure"], "tags": ["walk", "biped"],
+	# Figures: the legs swing at the hips, as a mech's (Figure); Mixamo-named clips are there to
+	# be picked when a figure has the bones for them.
+	"figure.walk.stride": {"kind": "procedural", "plans": ["figure"], "tags": ["walk", "biped"],
+			"needs": ["leg_L", "leg_R"], "mover": "stride", "swing": 0.5},
+	"figure.walk.clips": {"kind": "clips", "plans": ["figure"], "tags": ["walk", "clips"],
 			"needs": ["leg_L", "leg_R"], "by": "clips"},
 }
 

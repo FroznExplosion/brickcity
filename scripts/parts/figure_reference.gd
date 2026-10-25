@@ -59,7 +59,8 @@ static func path_of(part: String) -> String:
 	var s: Dictionary = SPEC.get(part, {})
 	if not s.has("host"):
 		return ""
-	return s.socket if s.host == ROOT else "%s/%s" % [s.host, s.socket]
+	# Paths run by socket names from the root: the hat on the head is "neck/hat".
+	return s.socket if s.host == ROOT else "%s/%s" % [path_of(s.host), s.socket]
 
 
 static func part_for(slot: String, side: String, prefer: String = "") -> String:

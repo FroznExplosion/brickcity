@@ -6105,6 +6105,48 @@ func _wire_mech(m: Mech) -> void:
 ## buys one by its recipe).
 ## Which workshop mech Ctrl Y spawned last.
 var _mech_design := -1
+## The figures Ctrl T put down, and which design was last.
+var _figures: Array[Figure] = []
+var _figure_design := -1
+
+
+func _spawn_figure() -> String:
+	var cat := MechAssembler.catalog(true)
+	var made := Figure.designs(cat)
+	if made.is_empty():
+		return "no figure saved in the asset workshop yet"
+	var ids := made.keys()
+	ids.sort()
+	_figure_design = (_figure_design + 1) % ids.size()
+	var b := PartBuilder.generate("figure", made[ids[_figure_design]], hash(ids[_figure_design]), cat)
+	var f := Figure.make(b)
+	if f == null:
+		return "figure %s does not go together: %s" % [ids[_figure_design], "; ".join(b.problems)]
+	f.position = _on_ground(camera.global_position - camera.global_transform.basis.z * 6.0)
+	f.wander = true
+	add_child(f)
+	_figures.append(f)
+	return "figure %s" % ids[_figure_design]
+
+
+func _swap_figure_limb() -> String:
+	while not _figures.is_empty() and not is_instance_valid(_figures[-1]):
+		_figures.pop_back()
+	if _figures.is_empty():
+		return "no figure to swap a limb of (Ctrl T puts one down)"
+	var f := _figures[-1]
+	var cat := MechAssembler.catalog()
+	var paths: Array = (f.build.at as Dictionary).keys()
+	paths.shuffle()
+	for path: String in paths:
+		var now: PartRecord = f.build.at[path]
+		var options := cat.filter({"family": ["figure"], "slot": [now.slot]}).filter(
+				func(r: PartRecord) -> bool: return r.id != now.id and f.why_not_swap(path, r) == "")
+		if not options.is_empty():
+			var pick: PartRecord = options[randi() % options.size()]
+			f.swap(path, pick)
+			return "figure's %s is now %s" % [path, pick.display_name]
+	return "no other part fits any of its slots"
 var _dress_colour := 1
 
 
@@ -14629,6 +14671,11 @@ func _unhandled_input(event: InputEvent) -> void:
 			print("[city] dressing colour %d" % _dress_colour)
 		else:
 			print("[city] dressing: %s" % _dress_at_crosshair(event.shift_pressed))
+		return
+	# Ctrl T: the figures made in the asset workshop, in turn, walking a circle ahead of the
+	# camera; Ctrl Shift T swaps a limb of the last one for another that fits (stage 12).
+	if event.ctrl_pressed and event.keycode == KEY_T:
+		print("[city] %s" % (_swap_figure_limb() if event.shift_pressed else _spawn_figure()))
 		return
 	# In the mech, 1 and 2 are its pods (MechPods).
 	if _pilot.is_piloting() and _mech_pods != null and _pilot.mech == _mech_pods.mech:

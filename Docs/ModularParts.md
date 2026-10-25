@@ -6,7 +6,7 @@ mounts with and what it takes, and is found in one catalogue that filters and so
 for all of them. A gun or a mech in the game is an **assembly** the generator puts together from
 parts that fit, from a seed and a design (section 7).
 
-Status (2026-10-24): **stages 1 to 9 and 11 built, and stage 10's offline half.** The part record, the fit check and the
+Status (2026-10-24): **stages 1 to 9, 11 and 12 built, and stage 10's offline half** (its network half waits on the netcode). The part record, the fit check and the
 catalogue (`scripts/parts/`, `tools/parts_probe.gd`, 65 checks); guns on them: the workshop's
 Save writes every part on its own, the generator and the assembler only put together parts
 that fit (`tools/part_save_probe.gd`); the catalogue panel, F7 in the workshop
@@ -14,7 +14,7 @@ that fit (`tools/part_save_probe.gd`); the catalogue panel, F7 in the workshop
 (`part_save_probe`, now 61 checks); mech mode in the workshop (`tools/mech_workshop_probe.gd`, 56
 checks); mechs in the game from parts (`tools/mech_parts_probe.gd`, 70 checks); pods and mech guns
 (`tools/pods_probe.gd`, 28; `mech_workshop_probe` now 62); the motion sets (`tools/motion_probe.gd`,
-29); part packages (`tools/package_probe.gd`, 26); the match's parts offline (`tools/lobby_probe.gd`, 24); dressing (`tools/dressing_probe.gd`, 20). Section 11 is the order the rest is built in;
+29); part packages (`tools/package_probe.gd`, 26); the match's parts offline (`tools/lobby_probe.gd`, 24); dressing (`tools/dressing_probe.gd`, 20); figures (`tools/figure_probe.gd`, 32). Section 11 is the order the rest is built in;
 "Stage 1 as built" and "Stage 2 as built" below say what differs from the plan.
 
 Builds on: [Parts/joints.md](Parts/joints.md) (joints, the one pin, hands),
@@ -331,7 +331,7 @@ interfaces.
 | 9 | **Done.** Part packages: export, import, hash, data-only loading; `tools/package_probe.gd` | `scripts/parts/` |
 | 10 | **Half done** (all but the network): lobby part list, what is missing, host download in checked chunks, placeholders, a Steam Workshop wrapper; `tools/lobby_probe.gd`. The messages themselves wait on the netcode | `scripts/parts/`, then the netcode |
 | 11 | **Done.** Dressing on studs outside the workshop: `PartDressing`, Ctrl B by your mech; `tools/dressing_probe.gd` | `scripts/parts/` |
-| 12 | The figure body plan; animals later | |
+| 12 | **Done.** The figure body plan: the workshop's figure mode, `Figure` in the game with swappable limbs and a walk; `tools/figure_probe.gd`. Animals stay the creatures' own | `scripts/parts/` |
 
 ---
 
@@ -662,6 +662,38 @@ netcode only has to carry dictionaries and byte chunks:
   headless had lost its studs' places; `package_probe` now checks they come through.)
 - **Not yet**: one layer of bricks (no brick on a dressing brick), 1x1 only; no dressing on
   guns or figures in the game yet (the same code takes any part with studs).
+
+### Stage 12 as built
+
+- **`FigureReference`** (`scripts/parts/figure_reference.gd`), with the same calls as
+  `MechReference`: nine parts -- `torso`, `head`, `arm_L`, `arm_R`, `hand_L`, `hand_R`,
+  `leg_L`, `leg_R`, `hat` -- on the figure body plan's joints (`fig.neck`, `fig.shoulder`,
+  `fig.wrist`, `fig.hip`, `fig.hat`). One size, 8 nano bricks (1.68 m): hips 12 nano plates up,
+  shoulders 20, neck 21, the hat's studs 27; shoulders 2 studs out, hips 1. No class, no leg
+  length: every part fits every figure.
+- **The workshop's body mode serves mechs and figures.** Asset > "Make a figure": its parts, its
+  reference drawn (each part's bone to what it hangs from, legs to the ground), every joint's
+  mount and socket laid ready, the J panel offering its sockets, Save writing nine `figure`
+  parts. Try on (F7) takes figure parts. `figure` is a recipe and asset kind
+  (`user://figures/`).
+- **Paths by socket names**: a part's plan path runs by the sockets from the root -- the hat
+  on the head is `neck/hat` (`path_of` had made it `head/hat`; the figure probe caught it).
+- **`Figure`** (`scripts/parts/figure.gd`) in the game: `Figure.make(build)` from
+  `PartBuilder.generate("figure", design, seed, catalogue)` -- nothing if the build has
+  problems -- every part on its joint (`MechAssembler.assemble`), standing on its hips.
+  **`swap(path, part)`** changes a limb where it stands: refused, with nothing changed, if the
+  part does not fit there or the figure would not be whole; what hangs on it stays on, on the new
+  part's socket. It walks by `figure.walk.stride` (the mechs' stride, from its leg length; the
+  Mixamo clip set is there to pick when a figure has those bones). `Figure.designs()`: the
+  workshop's figures and figure design files (John is one: torso and head fixed, hat rolled).
+- **In the city**: **Ctrl T** puts the workshop's figures down in turn ahead of the camera,
+  walking a circle; **Ctrl Shift T** swaps a limb of the last one for another figure part that
+  fits.
+- **Animals stay the creatures'** (`ProcCreature`, their DNA and gaits), their own catalogue, as
+  decided; MotionSets already picks their gait for 1 to 10 legs.
+- **Not yet**: figures are models that walk, not characters with a brain (an NPC's AI is the AI
+  area's); a character-builder screen beyond the workshop and Ctrl Shift T; Mixamo clips on
+  figure parts (one rigid bone a part today).
 
 ## 12. Decided
 

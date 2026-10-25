@@ -81,7 +81,8 @@ static func path_of(part: String) -> String:
 	var s: Dictionary = SPEC.get(part, {})
 	if not s.has("host"):
 		return ""
-	return s.socket if s.host == "chassis" else "%s/%s" % [s.host, s.socket]
+	# Paths run by socket names from the root: the hat on the head is "neck/hat".
+	return s.socket if s.host == "chassis" else "%s/%s" % [path_of(s.host), s.socket]
 
 
 ## The build part a catalogue part goes on: its slot and side; a part for either side goes
