@@ -87,6 +87,11 @@ the other way if blocked; leftover pieces blocked +x in 3 runs of 4). Item 15 me
 working, kept; the watchdog 0 (and 0 in the tornado), kept while the user still sees floating
 furniture now and then (rarer since; item 6). Item 16 measured, not built: DestructionLod 3.5
 (`--rubble --big`): settled pieces cost no physics, at most 3.7 ms GPU / 62 draw calls.
+Then built on the user's word: the rubble field (DestructionLod 3.5) -- sleeping wreckage merged
+a tile at a time, far tiles capped at 48 by apparent size (tall before short). Open: a timing of
+the field's draw saving with the display awake (`--rubble --big` sleeps the screen in its settle
+wait; every awake-looking run so far had another stall); `--dormant` "with the same bricks" fails
+about half the time with or without the field (4268-4344 against 4184).
 
 **Open, in order:**
 1. ~~Re-time `--big --shot` on a quiet machine~~ -- done 2026-10-23 evening (code at `8c67313`,

@@ -725,6 +725,9 @@ class Dormant:
 	## The rubble field's tile its stand-in is drawn in (_field_add), if any.
 	var field_key := Vector2i.ZERO
 	var in_field := false
+	## The arrays its stand-in was made from (BrickIsland.coarse_arrays), or none:
+	## a stand-in of its bricks, which draws itself, unmerged.
+	var stand_in_arrays: Array = []
 
 
 ## Far enough that a piece is not part of the scene any more, and close enough
@@ -2979,6 +2982,7 @@ func _apply_mesh(isl: BrickIsland, mesh: ArrayMesh, arrays: Array, coarse := fal
 	_retirer.retire(isl.mesh.mesh)
 	isl.array_mesh = mesh if mesh != null and mesh.get_surface_count() > 0 else null
 	isl.coarse_drawn = coarse
+	isl.coarse_arrays = arrays if coarse and isl.array_mesh != null else []
 	# A stand-in has nothing to patch: 0 bytes is a patch that never fits.
 	isl.index_bytes = index_patch_bytes(arrays) if isl.array_mesh != null and not coarse else 0
 	isl.index_width = index_width(arrays)
@@ -3080,6 +3084,9 @@ func _exit_tree() -> void:
 		tile.holder = []
 	_field.clear()
 	_field_jobs = 0
+	for c in _coarsening:
+		world.release_chunk(int(c[1]))
+	_coarsening.clear()
 
 
 ## Attach the meshes the workers have finished, and do what was asked of those
@@ -5350,6 +5357,7 @@ func _commit_sleep(isl: BrickIsland, index: int, record: ChunkRecord, by_cap := 
 	d.piece_id = isl.piece_id
 	d.owner = isl.owner
 	d.stand_in = _leave_stand_in(isl)
+	d.stand_in_arrays = _stand_in_arrays
 	dormant.append(d)
 	_field_add(d)
 	slept += 1
@@ -5462,9 +5470,12 @@ func restore_piece(chunk: int, piece_id: int, owner_id: int, chunk_xform: Transf
 ## mesh to leave; its stand-in is built, from the chunk while it is still there.
 ## Those are whole buildings, and few. A single brick (the MultiMesh's) just goes.
 func _leave_stand_in(isl: BrickIsland) -> MeshInstance3D:
+	_stand_in_arrays = []
 	if isl.mesh == null or not isl.mesh.is_inside_tree():
 		return null
 	var mesh: ArrayMesh = isl.array_mesh
+	if isl.coarse_drawn:
+		_stand_in_arrays = isl.coarse_arrays
 	if (mesh == null or mesh.get_surface_count() == 0) and _any_band(isl):
 		var arrays: Array = world.build_chunk_coarse_mesh(isl.chunk)
 		coarse_built += 1
@@ -5473,6 +5484,7 @@ func _leave_stand_in(isl: BrickIsland) -> MeshInstance3D:
 			coarse_verts += (arrays[Mesh.ARRAY_VERTEX] as PackedVector3Array).size()
 			mesh = ArrayMesh.new()
 			mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
+			_stand_in_arrays = arrays
 	if mesh == null or mesh.get_surface_count() == 0:
 		return null
 	var node := MeshInstance3D.new()
@@ -5503,6 +5515,7 @@ func _take_stand_in(d: Dormant, isl: BrickIsland) -> bool:
 	isl.mesh.mesh = m
 	isl.array_mesh = m
 	isl.coarse_drawn = true
+	isl.coarse_arrays = d.stand_in_arrays
 	isl.index_bytes = 0
 	return true
 
@@ -5596,6 +5609,7 @@ func build_due_stand_ins(budget_ms := 2.0) -> int:
 		# Where its bricks lay: the chunk's own transform, as a piece's mesh has.
 		node.transform = d.record.xform
 		d.stand_in = node
+		d.stand_in_arrays = arrays
 		stand_ins += 1
 		_field_add(d)
 	return n
@@ -5637,8 +5651,19 @@ class FieldTile:
 ## tiles. Until then, and while its worker runs, its stand-ins draw themselves.
 const FIELD_QUIET_TICKS := 30
 const FIELD_JOBS := 2
+## A stand-in left as its BRICKS -- the cap puts pieces to sleep near as well as
+## far, and 95 of 132 after a big collapse were -- has no arrays to merge from.
+## Past the coarse ladder's range (ISLAND_MESH_RANGE + ISLAND_MESH_HYSTERESIS,
+## where an awake piece would be coarse too) it is made coarse: its record made a
+## chunk again, the coarse mesh built on a worker, the chunk given back, as
+## build_due_stand_ins does for a save's. FIELD_COARSEN_JOBS at a time. Nearer,
+## it keeps its bricks and draws itself.
+const FIELD_COARSEN_JOBS := 2
+var _coarsening: Array = []    ## [Dormant, chunk]
+var field_coarsened := 0
 
 var _field := {}               ## Vector2i -> FieldTile
+var _stand_in_arrays: Array = []   ## what _leave_stand_in drew from, if arrays
 var _field_root: Node3D = null
 var _field_ranked := -1000
 var _field_jobs := 0
@@ -5711,7 +5736,7 @@ func _field_show(tile: FieldTile) -> void:
 	for d in tile.members:
 		var dd: Dormant = d
 		if dd.stand_in != null and is_instance_valid(dd.stand_in):
-			dd.stand_in.visible = tile.shown and not merged
+			dd.stand_in.visible = tile.shown and (not merged or dd.stand_in_arrays.is_empty())
 
 
 func _tend_field() -> void:
@@ -5726,9 +5751,12 @@ func _tend_field() -> void:
 			continue
 		if tile.dirty and _field_jobs < FIELD_JOBS and now - tile.changed_tick >= FIELD_QUIET_TICKS:
 			_field_start(key, tile)
+	if not _coarsening.is_empty():
+		_field_coarsen_finish()
 	if now - _field_ranked >= FIELD_RANK_TICKS:
 		_field_ranked = now
 		_field_rank()
+		_field_coarsen_start()
 
 
 ## Hand a tile's stand-ins to a worker to merge. Members whose piece has woken
@@ -5744,15 +5772,20 @@ func _field_start(key: Vector2i, tile: FieldTile) -> void:
 			d.in_field = false
 			tile.members.remove_at(i)
 			continue
+		if d.stand_in_arrays.is_empty():
+			continue   # drawn by itself (_field_show)
 		var node := d.stand_in
-		items.append([node.mesh, into * node.global_transform, node.material_override,
-				node.cast_shadow])
-	if items.is_empty():
+		items.append([d.stand_in_arrays, into * node.global_transform,
+				node.material_override if node.material_override != null else brick_material])
+	if tile.members.is_empty():
 		if tile.node != null and is_instance_valid(tile.node):
 			tile.node.queue_free()
 		_field.erase(key)
 		return
 	tile.dirty = false
+	if items.is_empty():
+		_field_show(tile)   # every one of them draws itself
+		return
 	tile.restart = false
 	var holder := [null, AABB()]
 	tile.holder = holder
@@ -5790,80 +5823,125 @@ func _field_finish(tile: FieldTile) -> void:
 	field_main_worst_ms = maxf(field_main_worst_ms, float(Time.get_ticks_usec() - t0) / 1000.0)
 
 
-## On a worker: [mesh, its box] of `items` ([mesh, transform, material, shadow]
-## each), a surface per material and vertex format. The arrays are joined, not
-## fed through a SurfaceTool: append_from walks every vertex in turn, and a big
-## tile took 858 ms that way (--rubble --big). Positions and normals are moved
-## in one call each; only the indices are offset one by one. A surface with
-## tangents (which would need turning one by one) goes the SurfaceTool's way.
+## On a worker: [mesh, its box] of `items` ([arrays, transform, material]
+## each), a surface per material and set of arrays. Joined, not fed through a
+## SurfaceTool (append_from walks every vertex in turn): positions and normals
+## are moved in one call each, only the indices offset one by one. From the
+## arrays a stand-in was made from, never read back from its mesh -- that was
+## the GPU's copy.
 static func _field_build(items: Array) -> Array:
-	var groups := {}    # [material, format] -> [arrays, vertex count]
+	var groups := {}    # [material, slots present] -> [arrays, vertex count]
 	var mats := {}
-	var tools := {}
-	var box := AABB()
-	var first := true
 	for it in items:
-		var mesh: ArrayMesh = it[0]
+		var src: Array = it[0]
 		var xf: Transform3D = it[1]
-		var over: Material = it[2]
+		var mat: Material = it[2]
 		var turn := Transform3D(xf.basis.orthonormalized(), Vector3.ZERO)
-		for sf in mesh.get_surface_count():
-			var mat: Material = over if over != null else mesh.surface_get_material(sf)
-			var fmt: int = mesh.surface_get_format(sf)
-			var k := [mat, fmt]
-			mats[k] = mat
-			if fmt & Mesh.ARRAY_FORMAT_TANGENT:
-				var st: SurfaceTool = tools.get(k)
-				if st == null:
-					st = SurfaceTool.new()
-					st.begin(Mesh.PRIMITIVE_TRIANGLES)
-					tools[k] = st
-				st.append_from(mesh, sf, xf)
+		var present := 0
+		for slot in Mesh.ARRAY_MAX:
+			if slot < src.size() and src[slot] != null:
+				present |= 1 << slot
+		var k := [mat, present]
+		mats[k] = mat
+		var g: Array = groups.get(k, [])
+		if g.is_empty():
+			var fresh := []
+			fresh.resize(Mesh.ARRAY_MAX)
+			g = [fresh, 0]
+			groups[k] = g
+		var dst: Array = g[0]
+		var base: int = g[1]
+		for slot in Mesh.ARRAY_MAX:
+			if not (present & (1 << slot)):
 				continue
-			var src: Array = mesh.surface_get_arrays(sf)
-			var verts: PackedVector3Array = src[Mesh.ARRAY_VERTEX]
-			var g: Array = groups.get(k, [])
-			if g.is_empty():
-				var fresh := []
-				fresh.resize(Mesh.ARRAY_MAX)
-				g = [fresh, 0]
-				groups[k] = g
-			var dst: Array = g[0]
-			var base: int = g[1]
-			for slot in Mesh.ARRAY_MAX:
-				var v = src[slot]
-				if v == null:
-					continue
-				if slot == Mesh.ARRAY_VERTEX:
-					v = xf * (v as PackedVector3Array)
-				elif slot == Mesh.ARRAY_NORMAL:
-					v = turn * (v as PackedVector3Array)
-				elif slot == Mesh.ARRAY_INDEX and base > 0:
-					var idx := (v as PackedInt32Array).duplicate()
-					for i in idx.size():
-						idx[i] += base
-					v = idx
-				if dst[slot] == null:
-					dst[slot] = v
-				else:
-					dst[slot].append_array(v)
-			g[1] = base + verts.size()
-		var wb := xf * mesh.get_aabb()
-		box = wb if first else box.merge(wb)
-		first = false
+			var v = src[slot]
+			if slot == Mesh.ARRAY_VERTEX:
+				v = xf * (v as PackedVector3Array)
+			elif slot == Mesh.ARRAY_NORMAL:
+				v = turn * (v as PackedVector3Array)
+			elif slot == Mesh.ARRAY_TANGENT:
+				var tangents := (v as PackedFloat32Array).duplicate()
+				for i in range(0, tangents.size(), 4):
+					var t3 := turn.basis * Vector3(tangents[i], tangents[i + 1], tangents[i + 2])
+					tangents[i] = t3.x
+					tangents[i + 1] = t3.y
+					tangents[i + 2] = t3.z
+				v = tangents
+			elif slot == Mesh.ARRAY_INDEX and base > 0:
+				var idx := (v as PackedInt32Array).duplicate()
+				for i in idx.size():
+					idx[i] += base
+				v = idx
+			if dst[slot] == null:
+				dst[slot] = v
+			else:
+				dst[slot].append_array(v)
+		g[1] = base + (src[Mesh.ARRAY_VERTEX] as PackedVector3Array).size()
 	var out := ArrayMesh.new()
 	for k in groups:
 		out.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, (groups[k] as Array)[0])
 		out.surface_set_material(out.get_surface_count() - 1, mats[k])
-	for k in tools:
-		(tools[k] as SurfaceTool).commit(out)
-		out.surface_set_material(out.get_surface_count() - 1, mats[k])
-	return [out, box]
+	return [out, out.get_aabb()]
+
+
+## Start making far stand-ins of bricks coarse (FIELD_COARSEN_JOBS).
+func _field_coarsen_start() -> void:
+	if _coarsening.size() >= FIELD_COARSEN_JOBS:
+		return
+	var points := interest_points()
+	if points.is_empty():
+		return
+	var busy := {}
+	for c in _coarsening:
+		busy[c[0]] = true
+	for d in dormant:
+		if _coarsening.size() >= FIELD_COARSEN_JOBS:
+			return
+		if busy.has(d) or not d.stand_in_arrays.is_empty() or d.stand_in == null \
+				or not is_instance_valid(d.stand_in) or d.record.block_count() <= 1:
+			continue
+		if _distance_to_interest(d.record.box, points) < ISLAND_MESH_RANGE + ISLAND_MESH_HYSTERESIS:
+			continue
+		var chunk := d.record.restore(world)
+		if chunk < 0:
+			continue
+		world.coarse_chunk_async(chunk)
+		_coarsening.append([d, chunk])
+
+
+func _field_coarsen_finish() -> void:
+	for i in range(_coarsening.size() - 1, -1, -1):
+		var d: Dormant = _coarsening[i][0]
+		var chunk: int = _coarsening[i][1]
+		if not world.coarse_ready(chunk):
+			if not world.coarse_pending(chunk):
+				world.coarse_chunk_async(chunk)
+			continue
+		_coarsening.remove_at(i)
+		var arrays: Array = world.take_coarse_mesh(chunk)
+		world.release_chunk(chunk)
+		# Woken meanwhile: it has its own mesh now.
+		if not dormant.has(d) or d.stand_in == null or not is_instance_valid(d.stand_in):
+			continue
+		if arrays.is_empty() or not mesh_arrays_ok(arrays, "coarse stand-in of piece %d" % d.piece_id):
+			continue
+		var mesh := ArrayMesh.new()
+		mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
+		d.stand_in.mesh = mesh
+		d.stand_in.material_override = brick_material
+		d.stand_in.transform = d.record.xform
+		d.stand_in_arrays = arrays
+		field_coarsened += 1
+		var tile: FieldTile = _field.get(d.field_key)
+		if d.in_field and tile != null:
+			_field_touch(tile)
 
 
 ## The cap: the FIELD_MAX_DRAWN tiles that look biggest are drawn, the rest
-## are not (still asleep, still there, only unseen). A tile not merged yet is
-## ranked by its stand-ins' own boxes.
+## are not (still asleep, still there, only unseen). Every tile within the
+## coarse ladder's range is drawn whatever the count -- the cap is for FAR
+## wreckage -- and fills the cap first. A tile not merged yet is ranked by its
+## stand-ins' own boxes.
 func _field_rank() -> void:
 	var points := interest_points()
 	if points.is_empty():
@@ -5877,14 +5955,17 @@ func _field_rank() -> void:
 			for d in tile.members:
 				var dd: Dormant = d
 				box = dd.record.box if box.size == Vector3.ZERO else box.merge(dd.record.box)
-		seen[tile] = apparent_size(box, _distance_to_interest(box, points))
+		var dist := _distance_to_interest(box, points)
+		# Near wreckage is never culled: it would blink out at somebody's feet.
+		# It is drawn, and counts against the cap.
+		seen[tile] = INF if dist < ISLAND_MESH_RANGE + ISLAND_MESH_HYSTERESIS 				else apparent_size(box, dist)
 		tiles.append(tile)
 	tiles.sort_custom(func(a, c) -> bool: return float(seen[a]) > float(seen[c]))
 	field_drawn = 0
 	field_culled = 0
 	for i in tiles.size():
 		var tile: FieldTile = tiles[i]
-		tile.shown = i < FIELD_MAX_DRAWN
+		tile.shown = i < FIELD_MAX_DRAWN or is_inf(float(seen[tile]))
 		_field_show(tile)
 		if tile.shown:
 			field_drawn += 1
