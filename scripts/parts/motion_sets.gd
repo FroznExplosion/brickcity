@@ -131,5 +131,6 @@ static func walk_mech(m: Mech, build: Dictionary, pick: String = "") -> String:
 		if String(c.name).begins_with("Joint_leg_"):
 			mover.hips.append(c)
 			mover.knees.append(_bend_in(c, "knee"))
+			mover.ankles.append(_bend_in(c, "ankle"))
 	m.body.add_child(mover)
 	return id

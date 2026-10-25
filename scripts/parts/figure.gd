@@ -15,6 +15,8 @@ const PLAN := "figure"
 ## Walking about: how fast, how far from where it was put down.
 const WANDER_SPEED := 1.4
 const WANDER_RADIUS := 3.0
+## A figure's run, m/s: its stride is widest there (a mech's is 9).
+const RUN := 3.5
 
 ## The build it is made of: {root, at: {path: PartRecord}}.
 var build: Dictionary = {}
@@ -120,11 +122,13 @@ func _rebuild(pick_walk: String) -> bool:
 	walk = MotionSets.make(walk_id) as MechStride
 	if walk != null:
 		walk.hip_height = hip_height()
+		walk.run = RUN
 		for path in ["leg_L", "leg_R"]:
 			var j := joint(path)
 			if j != null:
 				walk.hips.append(j)
 				walk.knees.append(MotionSets._bend_in(j, "knee"))
+				walk.ankles.append(MotionSets._bend_in(j, "ankle"))
 		for path in ["arm_L", "arm_R"]:
 			var j := joint(path)
 			if j != null:

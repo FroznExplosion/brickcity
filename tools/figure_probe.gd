@@ -87,7 +87,7 @@ func _workshop() -> PartCatalog:
 		if part.begins_with("leg") or part.begins_with("hand") or part.begins_with("arm"):
 			c.y -= 3
 		_ok("a brick for %s" % part, _ws.place_named(_arch, c), str(c))
-		var bend: Vector3 = FigureReference.bend_at(part)
+		var bend: Vector3 = FigureReference.bend_at(part, "knee" if part.begins_with("leg") else "")
 		if bend != Vector3.INF:
 			# And one below its knee or elbow: the part's lower half.
 			var low: Vector3 = _ws.mech_origin() + bend
@@ -169,7 +169,10 @@ func _game(cat: PartCatalog) -> void:
 	var lower := leg_scene.get_node_or_null(^"Bend_knee/Lower")
 	_ok("a leg's scene: its bricks below the knee under the bend", lower != null and lower.get_child_count() > 0
 			and leg_scene.get_node(^"Model").get_child_count() > 0)
-	_ok("its record says it bends", leg_rec.extra.get("bends", []) == ["knee"])
+	_ok("its record says where it bends", leg_rec.extra.get("bends", []) == ["knee", "ankle"], str(leg_rec.extra.get("bends")))
+	var ankle_pivot := (load(leg_rec.dir + "part.scn") as PackedScene).instantiate() as Node3D
+	_ok("the ankle hangs on the knee", ankle_pivot.get_node_or_null(^"Bend_knee/Bend_ankle") != null)
+	ankle_pivot.free()
 	leg_scene.free()
 	var elbow := f.joint("arm_L").find_child("Bend_elbow", true, false) as Node3D
 	var hand := f.joint("arm_L/hand")
@@ -187,6 +190,13 @@ func _game(cat: PartCatalog) -> void:
 	_ok("walking, the knee folds back as the leg swings through", folded < -0.05 and knee.rotation.x <= 0.0, str(folded))
 	f.walk.step(0.03, 0.0)
 	_ok("standing, the knees straight", is_zero_approx(knee.rotation.x))
+	var ankle := knee.get_node_or_null(^"Bend_ankle") as Node3D
+	_ok("the walk has both ankles", f.walk.ankles.size() == 2 and f.walk.ankles[0] == ankle)
+	var level := true
+	for i in 30:
+		f.walk.step(0.03, 1.5)
+		level = level and is_zero_approx(f.joint("leg_L").rotation.x + knee.rotation.x + ankle.rotation.x)
+	_ok("walking, the foot kept level", level)
 
 	print("swap")
 	var other := _arm("lu.long_arm", "fig.shoulder")

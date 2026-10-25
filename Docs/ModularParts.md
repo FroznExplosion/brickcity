@@ -710,8 +710,29 @@ netcode only has to carry dictionaries and byte chunks:
   with the elbows a little bent. A mech's gun arm still aims straight.
 - Probed in `figure_probe` (joints: 7 checks) and `mech_workshop_probe` (the ready bends, the
   wrist under the elbow).
-- **Not yet**: one bend a part; an ankle or a wrist turn; the shell of a smooth part stays with
-  the upper half.
+- **Several bends a part**: a leg bends at its knee (half way down) and its ankle (0.85 of the
+  way down), an arm at its elbow (`BENDS` is a list a part, `BEND_DOWN` how far down each).
+  Each piece between two bends hangs under the pivot of the bend above it
+  (`Bend_knee/Bend_ankle`), and a socket goes under the deepest bend above it. The walk keeps
+  the foot level: the ankle turns against the hip and the knee together. A figure's stride is
+  widest at its own run, 3.5 m/s (a mech's is 9).
+- **Looked at** (`tools/figure_look.gd`, windowed: the workshop's side, front and 3D views and
+  the figure standing, mid-stride, at full reach and with an elbow bent, into
+  `user://figure_look/`). What the pictures showed, and what changed:
+  - mid-stride the swinging leg's knee folds back, its foot level; at full reach the legs
+    scissor with both feet flat; the elbow folds the forearm and hand forward;
+  - a figure's walk had used the mech's 9 m/s scale, so at walking pace its knees barely moved:
+    its own run now;
+  - in mech and figure mode the gun's size marks (the class ruler, "butt", the grip box) were
+    still drawn: a gun's only now; the status line said "in the game 0.03 m long" (a gun's
+    length): a body's says how tall it is in the game;
+  - a figure was a speck in the flat views (framed for 80 studs) and far off in 3D: its flat
+    views are framed to 26 studs, above the readouts, and 3D starts by its height;
+  - a mount and its socket at one spot drew two labels over each other, and the reference its
+    own label too: one label a spot now ("arm_L on torso  (fig.shoulder)", "leg_L knee"),
+    smaller in a figure's view.
+- **Not yet**: a wrist turn; the shell of a smooth part stays with the upper piece; the ready
+  elbow sits where it falls, not on a brick seam (a brick across it turns with the upper arm).
 
 ### Characters, as built
 
