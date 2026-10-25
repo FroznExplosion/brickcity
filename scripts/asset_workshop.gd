@@ -178,6 +178,10 @@ var free_place := true
 var work_plane := "side"
 var work_depth := 40.5
 var work_height := 30
+## The stage tabs, tool rail and outliner (AssetWorkshopUI), and where the options panel
+## (the old rail) starts under its tools; -1 before there is one.
+var _ui: AssetWorkshopUI
+var rail_top := -1.0
 ## The sculpt panel's mode list, and its show-for callback (set_sculpt_mode).
 var _sculpt_modes: OptionButton
 var _sculpt_show_for := Callable()
@@ -311,6 +315,11 @@ func _ready() -> void:
 	_set_asset_kind(recipe.kind)
 	_build_asset_tools()
 	_setup_parts()
+	# The frame round it all: stage tabs, the tool rail, the outliner (AssetWorkshopUI).
+	_ui = AssetWorkshopUI.new()
+	_ui.name = "Frame"
+	add_child(_ui)
+	_ui.setup(self, _ruler.get_parent() as CanvasLayer)
 	var args := OS.get_cmdline_args() + OS.get_cmdline_user_args()
 	var headless := DisplayServer.get_name() == "headless"
 	auto_start_brick = not headless
@@ -1061,8 +1070,11 @@ func zoom(by: float) -> void:
 		_camera.size = _ortho_size
 
 
-## The middle of what has been built, or of the baseplate before anything is.
+## The middle of what has been built, or of the baseplate before anything is -- or of what
+## is selected: the grid, the size marks and the view go to the thing being worked on.
 func build_centre() -> Vector3:
+	if not _placed.is_empty():
+		return _placed_centre()
 	# While sculpting the block-out and the models are the build, not the starting brick
 	# (models spawned away from the grid: Docs/AssetWorkshop.md, "Models as objects").
 	if sculpt != null and sculpt_state == "sdf" and (sculpt.form.block_count() > 0 or not models.is_empty()):
@@ -1200,6 +1212,8 @@ func _unhandled_input(e: InputEvent) -> void:
 
 func _process(dt: float) -> void:
 	super._process(dt)
+	if _ui != null:
+		_ui.process(dt)
 	if _ruler == null:
 		return
 	if _run_on and not Input.is_mouse_button_pressed(MOUSE_BUTTON_LEFT):
@@ -1648,7 +1662,7 @@ func _store_asset_meta() -> void:
 			"shells": shells, "sdf": _sdf_meta, "sculpt": {"state": sculpt_state, "cells": Array(_sdf_cells),
 			"stash": _sdf_stash, "shell_cells": Array(_sdf_shell)}, "models": _models_meta(),
 			"part_ids": part_ids, "part_hashes": part_hashes, "part_revs": part_revs,
-			"mech": {"class": mech_class, "length": leg_length}, "gun_scale": gun_scale}   # not a copy: this runs on every edit, and a save writes it out as it is
+			"mech": {"class": mech_class, "length": leg_length}, "gun_scale": gun_scale, "maker": part_maker}   # not a copy: this runs on every edit, and a save writes it out as it is
 
 
 func _restore_asset_meta() -> void:
@@ -1666,6 +1680,7 @@ func _restore_asset_meta() -> void:
 	mech_class = String(mech.get("class", "normal"))
 	leg_length = int(mech.get("length", 2))
 	gun_scale = String(a.get("gun_scale", "held"))
+	part_maker = String(a.get("maker", AssetGuns.BRAND))
 	part_of = PackedInt32Array()
 	for v in parts.get("of", []):
 		part_of.append(int(v))
@@ -1813,6 +1828,8 @@ func _set_asset_kind(k: String) -> void:
 	recipe.kind = k if ASSET_KINDS.has(k) else "gun"
 	if _menu != null:
 		_menu.set_kind(recipe.kind)
+	if _ui != null:
+		_ui.sync_kind()
 	_kind_changed()
 
 
@@ -2248,6 +2265,21 @@ func _draw_points() -> void:
 		# One label a spot: a mount and the socket it goes in share one ("arm_L on torso").
 		var key := "%.3f,%.3f,%.3f" % [where.x, where.y, where.z]
 		(labels.get_or_add(key, {"at": where, "lines": []}).lines as Array).append(_point_words(q))
+	# Labels whose spots share a row (a figure's hands and hips are level) go up by turns, so
+	# side by side they do not run into each other.
+	var rows := {}
+	for key in labels:
+		(rows.get_or_add(roundi((labels[key].at as Vector3).y * 4.0), []) as Array).append(key)
+	var lift := {}
+	var line := 0.16 if recipe.kind == "figure" else 0.27
+	for r in rows:
+		var row: Array = rows[r]
+		row.sort_custom(func(a: String, c: String) -> bool:
+			var pa: Vector3 = labels[a].at
+			var pc: Vector3 = labels[c].at
+			return pa.z + pa.x < pc.z + pc.x)
+		for i in row.size():
+			lift[row[i]] = line * float(i % 2) if row.size() > 2 else 0.0
 	for key in labels:
 		var label := Label3D.new()
 		label.text = "\n".join(PackedStringArray(_merged_words(labels[key].lines)))
@@ -2256,7 +2288,8 @@ func _draw_points() -> void:
 		label.pixel_size = 0.0018 if recipe.kind == "figure" else 0.003   # a figure's view is small
 		label.font_size = 40
 		label.outline_size = 10
-		label.position = (labels[key].at as Vector3) + Vector3.UP * 0.25
+		label.position = (labels[key].at as Vector3) + Vector3.UP * (0.25 + float(lift.get(key, 0.0)))
+		label.name = "Label_" + key.replace(",", "_").replace(".", "p").replace("-", "m")
 		_points_root.add_child(label)
 
 
@@ -6703,14 +6736,15 @@ func _rail_process() -> void:
 	_shape_size_slider.set_value_no_signal(shape_size)
 	_shape_size_label.text = "%d stud%s across%s" % [shape_size, "" if shape_size == 1 else "s",
 			"  (Ctrl + wheel)" if on == "place" else ""]
-	_rail.position.y = 12.0 + (_menu.bar_height() if _menu != null else 0.0)
+	_rail.position.y = rail_top if rail_top >= 0.0 else 12.0 + (_menu.bar_height() if _menu != null else 0.0)
 	var room := get_viewport().get_visible_rect().size.y - _rail.position.y - 28.0
 	_rail_scroll.custom_minimum_size = Vector2(RAIL_W - 16, minf(_rail_box.get_combined_minimum_size().y, room))
 	_rail.size = Vector2.ZERO
 	if _paint_palette != null:
 		_paint_palette.position = Vector2(_rail_right(), _rail.position.y)
 	# The workshop's own readout moves over beside the rail.
-	_hud.position = Vector2(_rail_right(), _rail.position.y)
+	_hud.position = Vector2(_rail_right(), (_menu.bar_height() if _menu != null else 0.0)
+			+ (50.0 if _ui != null else 12.0))
 	_draws.select(SKETCH_DRAWS.map(func(d: Array) -> String: return d[0]).find(_draw_2d))
 
 
@@ -8830,7 +8864,7 @@ func _mech_record(name: String, by_part: Dictionary, official: bool) -> PartReco
 	r.side = spec.side
 	r.weight_class = mech_class if recipe.kind == "mech" else ""
 	r.display_name = "%s %s" % [recipe.name, name.replace("_", " ")]
-	r.manufacturer = String(AssetGuns.BRAND)
+	r.manufacturer = part_maker
 	r.source = "official" if official else "custom"
 	if not official:
 		r.creator = {"name": creator_name}
@@ -8877,7 +8911,7 @@ func export_mech(dir: String) -> Dictionary:
 	DirAccess.make_dir_recursive_absolute(dir)
 	var written := {}
 	for name in by_part:
-		var bends := _part_bends(name)
+		var bends := _part_bends(name, by_part[name])
 		var root := _part_root(name, by_part[name], at[name], b, bends)
 		if name != body_ref().ROOT:
 			var mount := Node3D.new()
@@ -9270,6 +9304,9 @@ var part_ids := {}
 var part_hashes := {}
 ## Each part's rev: {name: rev}.
 var part_revs := {}
+## The maker on the parts saved here: "workshop" for a player's; a shipped set its brand
+## (the starter mech is Korr's). Kept in meta.asset.
+var part_maker := String(AssetGuns.BRAND)
 ## Who makes the parts saved here: a name until there is a Steam one (ModularParts stage 10).
 var creator_name := "player"
 
@@ -9376,7 +9413,7 @@ func _part_record(name: String, by_part: Dictionary, hosts: Dictionary, official
 	r.scale = gun_scale
 	r.slot = name
 	r.display_name = "%s %s" % [recipe.name, name]
-	r.manufacturer = String(AssetGuns.BRAND)
+	r.manufacturer = part_maker
 	r.source = "official" if official else "custom"
 	if not official:
 		r.creator = {"name": creator_name}
@@ -9809,17 +9846,71 @@ func _part_root(name: String, ids: Array, at: Vector3, b: Basis, bends: Array = 
 		model.add_child(mi)
 	if _shell_nodes.has(name):
 		# The shell, in the workshop metres the bricks are in; the bricks it covers left out.
-		var sh := MeshInstance3D.new()
-		sh.name = "Shell"
+		# On a part that bends, cut at the bends: each piece goes with what bends.
 		var src: MeshInstance3D = _shell_nodes[name]
-		sh.mesh = src.mesh
-		sh.material_override = src.material_override
-		sh.transform = world.get_chunk_transform(asm.frames[0]).affine_inverse() * src.transform
-		model.add_child(sh)
+		var sxf := world.get_chunk_transform(asm.frames[0]).affine_inverse() * src.transform
+		var pieces := split_by_bends(src.mesh, sxf, bends) if not bends.is_empty() else [src.mesh]
+		var holders: Array = [model]
+		var p: Node = root
+		for k in bends.size():
+			p = p.get_node(NodePath("Bend_" + String(bends[k].name)))
+			holders.append(p.get_node(^"Lower"))
+		for k in pieces.size():
+			if pieces[k] == null:
+				continue
+			var sh := MeshInstance3D.new()
+			sh.name = "Shell"
+			sh.mesh = pieces[k]
+			sh.material_override = src.material_override
+			sh.transform = sxf
+			(holders[k] as Node).add_child(sh)
 	var extra := extra_studs.filter(func(st: Dictionary) -> bool: return String(st.get("part", "")) == name)
 	if not extra.is_empty():
 		model.add_child(_studs_node(extra))
 	return root
+
+
+## `mesh` cut into the pieces of a part that bends at `bends` (top to bottom): [above the
+## first, below the first, below the second ...], each an ArrayMesh or null if empty. A
+## triangle goes with the piece its middle is in; `xf` takes the mesh's points into the
+## build's metres, where the bends are.
+static func split_by_bends(mesh: Mesh, xf: Transform3D, bends: Array) -> Array:
+	var surfaces := []   # per piece: [arrays per surface]
+	for k in bends.size() + 1:
+		surfaces.append([])
+	for si in mesh.get_surface_count():
+		var arr := mesh.surface_get_arrays(si)
+		var verts: PackedVector3Array = arr[Mesh.ARRAY_VERTEX]
+		var idx: PackedInt32Array = arr[Mesh.ARRAY_INDEX] if arr[Mesh.ARRAY_INDEX] != null else PackedInt32Array()
+		var tris := idx if not idx.is_empty() else PackedInt32Array(range(verts.size()))
+		var picks := []
+		for k in bends.size() + 1:
+			picks.append(PackedInt32Array())
+		for t in range(0, tris.size() - 2, 3):
+			var mid := (xf * verts[tris[t]] + xf * verts[tris[t + 1]] + xf * verts[tris[t + 2]]) / 3.0
+			var piece := segment_of(mid.y, bends) + 1
+			# Packed arrays are copied out of an Array: take it, add, put it back.
+			var pk: PackedInt32Array = picks[piece]
+			pk.append_array([tris[t], tris[t + 1], tris[t + 2]])
+			picks[piece] = pk
+		for k in picks.size():
+			if (picks[k] as PackedInt32Array).is_empty():
+				continue
+			var out := arr.duplicate()
+			out[Mesh.ARRAY_INDEX] = picks[k]
+			(surfaces[k] as Array).append([out, mesh.surface_get_material(si)])
+	var meshes := []
+	for k in surfaces.size():
+		if (surfaces[k] as Array).is_empty():
+			meshes.append(null)
+			continue
+		var am := ArrayMesh.new()
+		for pair in surfaces[k]:
+			am.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, pair[0])
+			if pair[1] != null:
+				am.surface_set_material(am.get_surface_count() - 1, pair[1])
+		meshes.append(am)
+	return meshes
 
 
 ## Which piece of a bending part a height is in: -1 above every bend, else the deepest bend
@@ -9833,13 +9924,34 @@ static func segment_of(y: float, bends: Array) -> int:
 
 
 ## A part's bends, top to bottom: [{name, at (the build's metres)}].
-func _part_bends(name: String) -> Array:
+func _part_bends(name: String, ids: Array = []) -> Array:
 	var out := []
 	for q in points:
 		if String(q.part) == name and q.kind == "bend":
-			out.append({"name": String(q.slot), "at": _point_m(q)})
+			var at := _point_m(q)
+			if not ids.is_empty():
+				at.y = seam_near(at.y, ids.map(func(i: int) -> AABB: return _brick_box(i)))
+			out.append({"name": String(q.slot), "at": at})
 	out.sort_custom(func(a: Dictionary, c: Dictionary) -> bool: return (a.at as Vector3).y > (c.at as Vector3).y)
 	return out
+
+
+## The height nearest `y` that no box crosses: a brick seam, so a bend never cuts a brick
+## (a brick across it would turn with the piece above and gape). `y` itself if nothing crosses
+## it; among the boxes' tops and bottoms otherwise.
+static func seam_near(y: float, boxes: Array) -> float:
+	var crossed := func(h: float) -> bool:
+		return boxes.any(func(b: AABB) -> bool: return b.position.y + 0.0001 < h and h < b.end.y - 0.0001)
+	if not crossed.call(y):
+		return y
+	var best := y
+	var best_d := INF
+	for b: AABB in boxes:
+		for h in [b.position.y, b.end.y]:
+			if absf(h - y) < best_d and not crossed.call(h):
+				best_d = absf(h - y)
+				best = h
+	return best
 
 
 ## Each part's point, in the build's metres: its mount, else the middle of its bricks.
@@ -10444,6 +10556,26 @@ func _restore_models(list: Array) -> void:
 		models.append(_make_model(_cache_model(pieces, String(s.path)), xf, int(s.get("op", SdfForm.ADD)), parts,
 				int(s.get("default_part", 0))))
 	_refresh_model_list()
+
+
+## The grid and the size marks drawn again round the selection (build_centre), and with
+## `frame` the view on it.
+func _centre_on_selection(frame := false) -> void:
+	_build_grid()
+	_size_sig = ""
+	if frame:
+		if not _placed.is_empty():
+			_frame_placed()
+		else:
+			_look_at_build()
+
+
+## The mirror plane through the middle of the selection (or of the build), on a stud line.
+func mirror_through_selection() -> void:
+	mirror_z = roundf(build_centre().z / BrickPalette.STUD_M)
+	_place_mirror_sheet()
+	_store_asset_meta()
+	print("[asset workshop] mirror plane through the selection: %.0f studs across" % mirror_z)
 
 
 ## The sculpt mode. The gizmo belongs to "pick and move" alone: shown there for what is

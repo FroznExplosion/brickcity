@@ -1448,14 +1448,39 @@ func _check_tops() -> void:
 		# And pushed, it turns. It did not, at all, for as long as the staircase
 		# of the building below ran up through its stairwell -- a rod through a
 		# bead (Docs/Collapse.md 6).
+		#
+		# Turned about the bottom edge it tips over, as a push does: the spin and
+		# its centre's velocity round that edge. Spun about its own centre, a top
+		# lying flat on its stump has to drive one side down into it, and the
+		# contacts there held the 5-storey one to 0.0-0.4 degrees (2026-10-25)
+		# with nothing wrong with it. A rod through it stops this just the same.
+		# Pushed one way and, if that does not take it, the other: the 5-storey
+		# one's +x side is often blocked by what this probe's earlier checks left
+		# lying there (1.0-1.1 degrees that way in 3 runs of 4, 19-21 the other).
+		# A rod stops both.
 		var tilt := 0.0
+		var tried := []
 		city.islands.hold_awake(top, 3000)
-		for k in 30:
-			bd.angular_velocity = Vector3(0, 0, -0.6)
-			bd.sleeping = false
-			await physics_frame
-			tilt = maxf(tilt, rad_to_deg(acos(clampf(bd.global_basis.y.dot(Vector3.UP), -1.0, 1.0))))
-		_ok("building %d: pushed over, it turns" % id, tilt > 10.0, "%.1f deg in a second" % tilt)
+		for way in [1.0, -1.0]:
+			var spin := Vector3(0, 0, -0.6 * way)   # way 1: the top moves +x, over its +x edge
+			var wb: AABB = city.islands.world_aabb(top)
+			var pivot := Vector3(wb.end.x if way > 0.0 else wb.position.x, wb.position.y, 0.0)
+			var turned := 0.0
+			for k in 30:
+				var st := PhysicsServer3D.body_get_direct_state(bd.get_rid())
+				var com := st.transform.origin + st.center_of_mass
+				pivot.z = com.z
+				bd.angular_velocity = spin
+				bd.linear_velocity = spin.cross(com - pivot)
+				bd.sleeping = false
+				await physics_frame
+				turned = maxf(turned, rad_to_deg(acos(clampf(bd.global_basis.y.dot(Vector3.UP), -1.0, 1.0))))
+			tried.append("%s %.1f" % ["+x" if way > 0.0 else "-x", turned])
+			tilt = maxf(tilt, turned)
+			if tilt > 10.0:
+				break
+		_ok("building %d: pushed over, it turns" % id, tilt > 10.0,
+				"%s deg in a second" % ", ".join(tried))
 
 
 # --- A soldier inside a building that topples --------------------------------------

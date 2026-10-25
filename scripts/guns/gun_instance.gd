@@ -35,6 +35,14 @@ var _model_root: Node3D
 var _muzzle_point: Node3D
 var _receiver_anim: AnimationPlayer
 var _shot_audio: AudioStreamPlayer3D
+## Muzzle flashes and bullet trails alive at once, over every gun. Each shot
+## instantiates its barrel's scene; a fight of fast guns had no ceiling. Past
+## it the oldest is freed early. No barrel sets either scene yet (2026-10-25):
+## this is in place before one does.
+const MAX_FLASHES := 12
+const MAX_TRAILS := 32
+static var _live_flashes: Array[Node] = []
+static var _live_trails: Array[Node] = []
 
 var _receiver_def: GunReceiverDef
 var _barrel_def: GunBarrelDef
@@ -178,7 +186,9 @@ func describe() -> String:
 func _spawn_muzzle_flash() -> void:
 	if _barrel_def.muzzle_flash_scene == null:
 		return
+	_make_room(_live_flashes, MAX_FLASHES)
 	var flash := _barrel_def.muzzle_flash_scene.instantiate()
+	_live_flashes.append(flash)
 	get_muzzle_point().add_child(flash)
 	if flash.has_method(&"flash"):
 		flash.call(&"flash")
@@ -193,13 +203,25 @@ func _spawn_muzzle_flash() -> void:
 func _spawn_trail(hit_point: Vector3) -> void:
 	if _barrel_def.bullet_trail_scene == null:
 		return
+	_make_room(_live_trails, MAX_TRAILS)
 	var trail := _barrel_def.bullet_trail_scene.instantiate()
+	_live_trails.append(trail)
 	# Trails live in world space, not under the (moving) gun.
 	get_tree().current_scene.add_child(trail)
 	if trail.has_method(&"setup"):
 		trail.call(&"setup", get_muzzle_position(), hit_point)
 	elif trail is Node3D:
 		(trail as Node3D).global_position = get_muzzle_position()
+
+
+## Drop the freed from `live`, then free the oldest until one more fits `cap`.
+static func _make_room(live: Array[Node], cap: int) -> void:
+	for i in range(live.size() - 1, -1, -1):
+		if not is_instance_valid(live[i]) or live[i].is_queued_for_deletion():
+			live.remove_at(i)
+	while live.size() >= cap:
+		var old: Node = live.pop_front()
+		old.queue_free()
 
 
 func _cache_muzzle() -> void:

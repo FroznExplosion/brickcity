@@ -731,8 +731,19 @@ netcode only has to carry dictionaries and byte chunks:
   - a mount and its socket at one spot drew two labels over each other, and the reference its
     own label too: one label a spot now ("arm_L on torso  (fig.shoulder)", "leg_L knee"),
     smaller in a figure's view.
-- **Not yet**: a wrist turn; the shell of a smooth part stays with the upper piece; the ready
-  elbow sits where it falls, not on a brick seam (a brick across it turns with the upper arm).
+- **Bends on seams**: on export a bend that would cut through one of the part's bricks moves to
+  the nearest height no brick crosses (`seam_near`), so every brick is wholly on one side and a
+  folded joint never gapes. The J point stays where it was put.
+- **Wrist turn**: a hand turns about its forearm -- `Figure.turn_wrist(side, angle)`,
+  `Mech.turn_wrist(angle)` for the gun hand (a roll of the gun); a figure's walk turns its hands
+  in as its arms swing forward.
+- **Shells cut at the bends**: a smooth part's shell is cut into the pieces between its bends
+  (`split_by_bends`: a triangle goes with the piece its middle is in, none lost), each piece
+  under its pivot, so the shell bends with the bricks.
+- **Labels on one row** (a figure's hands and hips are level) go up by turns, so side by side
+  they do not run into each other.
+- Probed in `figure_probe` (51: a brick across the elbow, the shell cut and counted, the wrist,
+  the labels), looked at in `figure_look`.
 
 ### Characters, as built
 
@@ -760,6 +771,28 @@ netcode only has to carry dictionaries and byte chunks:
 - Probed by `tools/thumb_probe.gd` (windowed: 7 checks -- the part in the middle in its colour,
   clear round it, framed, the icon, the package; headless: 2). Its one windowed run peaked at
   68 C, not held back.
+
+### Starter parts: the normal mech, as built
+
+- **The first official mech parts**: one normal-class Korr mech, legs 2 long -- chassis, head,
+  arms, hands, legs, two pod bodies -- in `res://parts/mech/starter_normal_*` with their
+  pictures, its build in `res://mechs/starter_normal.json` (open it in the workshop to change
+  it; Save writes the parts again, official, as `starter_normal_<part>`). Light and heavy, and
+  legs 1 and 3 long, wait.
+- **Sized to the city**: the pilot's eye is 4.2 m up and looks straight into a second-storey
+  window (3.64 m to 4.90 m); the cockpit window is drawn round it; the mech stands 5.88 m, two
+  storeys. Hips 3.36 m, shoulders 3.78 m, 1.93 m out: the greybox's, so it aims from where the
+  boxes did. Its elbows, knees and ankles fall on brick seams.
+- **Made by `tools/make_starter_mech.gd`** (headless): the workshop's mech mode on the reference,
+  boxes of cells packed into bricks, part by part. `AssetWorkshop.part_maker` names a set's maker
+  (a player's parts stay "workshop").
+- **In the game** every mech that is not in a scripted pass is now made of them -- the player's
+  and the roster's normal ones -- with its walk, knees and ankles; a scripted pass keeps the boxes
+  its numbers were taken with. The chassis is what `MechPilot` hides in the cockpit
+  (`Mech.canopy` is now any node): the eye is inside its bricks.
+- **Looked at** (`tools/mech_look.gd`, windowed, `user://mech_look/`): beside a wall with a
+  second-storey window; from the cockpit the window is square ahead at eye level, the gun arm's
+  forearm reaching out below; walking, the legs scissor with the feet level and the knee folds.
 
 ## 12. Decided
 

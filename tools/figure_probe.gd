@@ -92,6 +92,45 @@ func _workshop() -> PartCatalog:
 			# And one below its knee or elbow: the part's lower half.
 			var low: Vector3 = _ws.mech_origin() + bend
 			_ws.place_named(_arch, Vector3i(int(low.x) - 2, int(low.y) - 4, int(floor(low.z))))
+	# A brick across the left elbow (beside the arm), to see the bend move to a seam.
+	var elbow_y := int(_ws.mech_origin().y + FigureReference.bend_at("arm_L").y)
+	var jl: Vector3 = _ws.mech_joint("arm_L")
+	_ws.select_part(_ws.part_names.find("arm_L"))
+	_ok("a brick across the elbow", _ws.place_named(_arch, Vector3i(int(jl.x) + 2, elbow_y - 1, int(floor(jl.z)))))
+	# A shell on the left leg, hip to ground, to see it cut at the knee and the ankle.
+	var hip: Vector3 = _ws.mech_joint_m("leg_L")
+	var ground := float(_ws.mech_origin().y) * BrickPalette.PLATE_M
+	var shell := MeshInstance3D.new()
+	var bm := BoxMesh.new()
+	bm.size = Vector3(0.3, hip.y - ground, 0.3)
+	bm.subdivide_height = 12
+	shell.mesh = bm
+	shell.transform = _ws.world.get_chunk_transform(_ws.asm.frames[0]) * Transform3D(Basis(),
+			Vector3(hip.x - 0.4, (hip.y + ground) * 0.5, hip.z))
+	_ws._shell_nodes["leg_L"] = shell
+	var by_part: Dictionary = _ws._kind_bricks()
+	var cut_root: Node3D = _ws._part_root("leg_L", by_part.leg_L, _ws.mech_joint_m("leg_L"), _ws.mech_basis(),
+			_ws._part_bends("leg_L", by_part.leg_L))
+	_ok("a leg's shell cut at the knee and the ankle, each piece with its own",
+			cut_root.get_node_or_null(^"Model/Shell") != null
+			and cut_root.get_node_or_null(^"Bend_knee/Lower/Shell") != null
+			and cut_root.get_node_or_null(^"Bend_knee/Bend_ankle/Lower/Shell") != null)
+	var tris := 0
+	for sh in cut_root.find_children("Shell", "MeshInstance3D", true, false):
+		var m := (sh as MeshInstance3D).mesh
+		for si in m.get_surface_count():
+			tris += (m.surface_get_arrays(si)[Mesh.ARRAY_INDEX] as PackedInt32Array).size() / 3
+	var whole := (bm.surface_get_arrays(0)[Mesh.ARRAY_INDEX] as PackedInt32Array).size() / 3
+	_ok("every triangle in one piece, none lost", tris == whole, "%d of %d" % [tris, whole])
+	cut_root.free()
+	_ws._shell_nodes.erase("leg_L")
+	# The labels along the hip row: hands and hips are level on a figure.
+	_ws._draw_points()
+	var row_ys := {}
+	for c in _ws._points_root.get_children():
+		if c is Label3D and absf((c as Label3D).position.y - (hip.y + 0.25)) < 0.3:
+			row_ys[snappedf((c as Label3D).position.y, 0.01)] = true
+	_ok("labels on one row go up by turns", row_ys.size() >= 2, str(row_ys.keys()))
 	_ws._builds_dir = DIR
 	_ws._save_as("Probe Figure")
 	var cat := PartCatalog.new()
@@ -197,6 +236,31 @@ func _game(cat: PartCatalog) -> void:
 		f.walk.step(0.03, 1.5)
 		level = level and is_zero_approx(f.joint("leg_L").rotation.x + knee.rotation.x + ankle.rotation.x)
 	_ok("walking, the foot kept level", level)
+
+	print("seams, wrists, shells")
+	_ok("a bend not on a seam moves to the nearest one", is_equal_approx(_ws.seam_near(1.0,
+			[AABB(Vector3(0, 0, 0), Vector3(1, 1.4, 1))]), 1.4) and is_equal_approx(_ws.seam_near(0.5,
+			[AABB(Vector3(0, 1, 0), Vector3(1, 1, 1))]), 0.5))
+	var arm_rec: PartRecord = f.build.at.arm_L
+	var arm_scene := (load(arm_rec.dir + "part.scn") as PackedScene).instantiate() as Node3D
+	var pivot := arm_scene.get_node_or_null(^"Bend_elbow") as Node3D
+	var cut := true
+	if pivot != null:
+		for mi in arm_scene.find_children("*", "MeshInstance3D", true, false):
+			var box := MechAssembler._chain(mi, arm_scene) * (mi as MeshInstance3D).get_aabb()
+			var below := pivot.is_ancestor_of(mi)
+			cut = cut and (box.end.y <= pivot.position.y + 0.002 if below else box.position.y >= pivot.position.y - 0.002)
+	_ok("so no brick crosses the elbow: above it all in the upper arm, below it all in the forearm", pivot != null and cut)
+	arm_scene.free()
+	var hand_l := f.joint("arm_L/hand")
+	_ok("the wrist turns, the hand still on the forearm", f.turn_wrist("L", 0.6)
+			and is_equal_approx(hand_l.rotation.y, 0.6) and f.joint("arm_L").find_child("Bend_elbow", true, false).is_ancestor_of(hand_l))
+	_ok("the walk has both wrists", f.walk.wrists.size() == 2 and f.walk.wrists[0] == hand_l)
+	var turned := false
+	for i in 30:
+		f.walk.step(0.03, 1.5)
+		turned = turned or absf(hand_l.rotation.y) > 0.05
+	_ok("walking, the hands turn at the wrist", turned)
 
 	print("swap")
 	var other := _arm("lu.long_arm", "fig.shoulder")

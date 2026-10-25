@@ -808,6 +808,68 @@ sdf_form_probe 43 (5 new), asset_workshop_probe 296 (8 new). Picture pass: `-- -
 --pick` -- the block-out's barrel lifted, raised and turned under the gizmo, and the test gun as a
 model of five pieces beside it, its second piece picked (lighter).
 
+### Convert lost the block-out; one place for everything (2026-10-24)
+
+The user: drew, pressed Convert, and the block-out vanished with no bricks; the measuring was
+off from the grid; the gizmo could be clicked but only started drawing. Their autosave: the
+mirror on, its plane at 41 studs across -- kept from when the area was 80 studs -- while they drew
+near 500. Convert kept the near side of the plane (z < plane) and mirrored it; the drawing was
+all past it, so it laid nothing and hid the block-out; Edit as SDF then took every recorded cell
+without a brick as deleted and wiped it.
+
+Now: the side holding the drawing is the truth; Convert refuses -- keeping the block-out and
+saying why -- when all of it, or its mirror half, would be outside the build area, and says how
+many cells it left out when some are; Edit as SDF only takes back cells that could have been
+bricks; a mirror image outside the area is not drawn. New puts the mirror and working planes in
+the middle of the area with the camera, grid and starting brick, and a loaded plane off the
+block-out is moved onto it. The gizmo is "pick and move"'s alone (`set_sculpt_mode`): picking or
+adding a model goes there, a drawing mode hides it. asset_workshop_probe `_one_place`.
+
+### The asset workshop's frame (2026-10-25)
+
+The user: the UI is complicated and not intuitive. Wanted: each imported asset one item, its
+pieces children of its main body; a list top right of everything, to select from and edit;
+fewer tools on the left with a pop-up saying what each does; stages of work, with only what a
+stage can do; the gizmo only with Select, drawing only with Draw; Convert gone for what is
+already bricks. Looked at first: Substance 3D Modeler (a small palette, a separate gizmo, an
+Outliner to select, hide, group), Blender (outliner children under parents; workspaces per kind
+of work), BrickLink Studio (submodels, steps), MagicaVoxel (few brushes x attach/erase/paint),
+Fusion 360 (a workspace switcher -- and Autodesk's own note that users got lost between modes).
+
+Built (`AssetWorkshopUI`, `scripts/asset_workshop_ui.gd`). It holds no state that matters: every
+button calls the workshop's own functions, and what is lit is read back each frame, so a key
+does the same as its button.
+
+1. **Stage tabs**, top left: *1 Block out* (clay: SDF), *2 Bricks*, *3 Detail*, *4 Finish*. A tab
+   changes the tools, never the build. Beside them one button: **Make bricks** while it is clay
+   (Convert, then the Bricks stage), **Back to clay** once it is bricks (Edit as SDF, then
+   Block out). On the wrong stage the hint line says which to press.
+2. **Outliner**, top right: the asset (its kind, clay or bricks); each imported model one item --
+   named for its file and its first piece, the main body -- with its other pieces as children,
+   each with its part chosen in its row; the parts (clay, or how many bricks); guide models and
+   photos. A tick shows or hides. A row selects: a model or piece goes to Select with the gizmo
+   on it. Under it, what the selection can do: Make bricks (only while clay), Back to clay,
+   Remove and Bake into clay (models), Mirror through it, Frame it.
+3. **Tool rail**, under the tabs: a stage's few tools, each with a pop-up (what it does, its key)
+   and a line under them for the tool in hand. Block out: Select, Draw, Shape, Smooth, Import
+   model, Measure. Bricks: Place, Select, Paint, Sketch, Shapes, Move part, Measure. Detail:
+   Studs, Connection point, Paint, Measure. Finish: Explode, Hands and Play (guns), Export to
+   game, Export to print, Save as. The other sculpt modes (flatten, grow, paint, mark smooth)
+   stay in Draw's options.
+4. **Options**, under the rail: the old rail with its tool list and finish buttons hidden -- the
+   part picker and the open tool's own options. Its how-to paragraphs went (the pop-ups say it).
+5. **Select alone has the gizmo** (above); Draw, Shape and Smooth only draw.
+6. **The selection is the centre**: `build_centre` is the picked thing's middle, so the grid,
+   the size marks and the view go to it ("Frame it"); "Mirror through it" puts the plane there.
+7. **A kind's menus**: Gun only for a gun, Mech only for a mech.
+
+What the workshop says (a refused Convert, a moved plane) also shows big at the top for a few
+seconds, and the building workshop's brick readout is hidden in Block out.
+`tools/asset_ui_probe.gd`: 28 checks.
+
+Not yet: renaming or regrouping in the outliner, dragging a piece onto a part (its row's list
+does it), a part's own Make bricks (Convert is the whole block-out), icons on the rail.
+
 ### Furniture and items (2026-10-23)
 
 The user (2026-10-23): build furniture and household items here, since the tools are better for

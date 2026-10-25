@@ -495,10 +495,13 @@ func _fire_pellets(from: Vector3, dir: Vector3, aim_basis: Basis, mult: float) -
 		var res := _hit_living(target, point, hit.normal, mult * k)
 		if not by_target.has(target):
 			by_target[target] = {"point": point, "normal": hit.normal, "collider": hit.collider,
-					"dealt": 0.0, "killed": false, "crit": false, "n": 0, "colour": res.element_color}
+					"dealt": 0.0, "killed": false, "crit": false, "n": 0, "colour": res.element_color,
+					"each": []}
 			order.append(target)
 		var e: Dictionary = by_target[target]
 		e.dealt += res.dealt
+		# Each pellet's own, for the damage numbers (CombatFeedback.PELLET_NUMBERS).
+		(e.each as Array).append([res.dealt, res.was_crit, point])
 		e.killed = e.killed or res.killed
 		e.crit = e.crit or res.was_crit
 		e.n += 1
@@ -518,7 +521,8 @@ func _fire_pellets(from: Vector3, dir: Vector3, aim_basis: Basis, mult: float) -
 		sum.was_crit = e.crit
 		sum.element_color = e.colour
 		var info := {"point": e.point, "normal": e.normal, "collider": e.collider,
-				"structure": false, "result": sum, "pellets_hit": e.n, "pellets": n}
+				"structure": false, "result": sum, "pellets_hit": e.n, "pellets": n,
+				"each": e.each}
 		if _shot_effect == GunFireMode.KNOCKBACK:
 			info["impact_mult"] = GunFireMode.KNOCK_MULT
 		fired.emit(info)
