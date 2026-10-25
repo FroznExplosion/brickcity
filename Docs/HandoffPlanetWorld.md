@@ -61,7 +61,7 @@ trees. Rerun before believing it.
 ## Brick buildings (2026-10-25)
 
 Planets.md 11.11: near buildings are real brick towers (drawn, solid, a front door, bricks to
-the AI); `--gate=bricks` 8/8. Next there: time the brick tier awake and quiet; stairs (the city's
+the AI); `--gate=bricks` 8/8; timed awake (GPU 11.2 ms vs 9.4 with shells only). Next there: stairs (the city's
 staircase fixtures); damage and destruction on the planet; furniture.
 
 ## What is next, in order

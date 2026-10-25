@@ -1585,8 +1585,33 @@ func _run_bricks_gate() -> void:
 			want.append(i)
 	t0 = Time.get_ticks_msec()
 	var all_in := false
+	# Frame times over the brick-in, and 3 s after: what walking into town costs.
+	# With -- --no-bricks the same 8 s with shells only, for the A/B.
+	var frame_ms: Array[float] = []
+	var last_us := Time.get_ticks_usec()
+	var settle_until := -1
+	# The renderer's own clock (a test window's frames are paced): GPU ms a frame,
+	# over the settled window (all in, or the shells' last 3 s).
+	var vp_rid := get_viewport().get_viewport_rid()
+	RenderingServer.viewport_set_measure_render_time(vp_rid, true)
+	var gpu_ms: Array[float] = []
+	var cpu_ms: Array[float] = []
 	while Time.get_ticks_msec() - t0 < 60000:
 		await _frames(1)
+		var now_us := Time.get_ticks_usec()
+		frame_ms.append((now_us - last_us) / 1000.0)
+		last_us = now_us
+		if settle_until > 0 or (not buildings.bricks_on and Time.get_ticks_msec() - t0 > 5000):
+			gpu_ms.append(RenderingServer.viewport_get_measured_render_time_gpu(vp_rid))
+			cpu_ms.append(RenderingServer.viewport_get_measured_render_time_cpu(vp_rid))
+		if not buildings.bricks_on:
+			if Time.get_ticks_msec() - t0 > 8000:
+				break
+			continue
+		if settle_until > 0:
+			if Time.get_ticks_msec() > settle_until:
+				break
+			continue
 		# Held where it stands: a long frame (an unwatched window's stall) can
 		# drop a body through the voxel ground, and the bricks follow the camera.
 		if _over_ground(pawn.feet()) < -0.5:
@@ -1596,8 +1621,33 @@ func _run_bricks_gate() -> void:
 			if not buildings.sites[i].bricked:
 				all_in = false
 				break
-		if all_in:
-			break
+		if all_in and settle_until < 0:
+			settle_until = Time.get_ticks_msec() + 3000
+	var sorted := frame_ms.duplicate()
+	sorted.sort()
+	var over25 := 0
+	var over40 := 0
+	var sum := 0.0
+	for f in frame_ms:
+		sum += f
+		if f > 25.0:
+			over25 += 1
+		if f > 40.0:
+			over40 += 1
+	print("[planet] frames over the brick-in%s: %d, mean %.1f ms, 95th %.1f, 99th %.1f, worst %.1f; over 25 ms %d, over 40 ms %d" % [
+			"" if buildings.bricks_on else " (no bricks)", frame_ms.size(), sum / maxf(frame_ms.size(), 1),
+			sorted[int(sorted.size() * 0.95)], sorted[int(sorted.size() * 0.99)], sorted[sorted.size() - 1], over25, over40])
+	var g_sum := 0.0
+	var c_sum := 0.0
+	for g in gpu_ms:
+		g_sum += g
+	for c in cpu_ms:
+		c_sum += c
+	print("[planet] settled, the renderer: GPU %.1f ms, render CPU %.1f ms a frame (%d frames)" % [
+			g_sum / maxf(gpu_ms.size(), 1), c_sum / maxf(cpu_ms.size(), 1), gpu_ms.size()])
+	if not buildings.bricks_on:
+		get_tree().quit(0)
+		return
 	var secs := (Time.get_ticks_msec() - t0) / 1000.0
 	print("[planet] bricks: %d of %d buildings near in %.1f s; the worst brick step %.1f ms (%s)" % [
 			buildings.bricked_count, want.size(), secs, buildings.brick_worst_us / 1000.0, buildings.brick_worst_what])
@@ -1619,7 +1669,8 @@ func _run_bricks_gate() -> void:
 	var stud := BrickWorld.get_stud_metres()
 	var w := site.fx * stud
 	var dd := site.fz * stud
-	_check("its shell is gone (not drawn, not solid)", site.shell == null or (not site.shell.visible and site.body.collision_layer == 0))
+	_check("its shell is gone (only its shadow drawn, not solid)", site.shell == null
+			or (site.shell.cast_shadow == GeometryInstance3D.SHADOW_CASTING_SETTING_SHADOWS_ONLY and site.body.collision_layer == 0))
 	# A ray at a wall: bricks, not the shell.
 	var space := get_world_3d().direct_space_state
 	var mid := bxf * Vector3(w * 0.5, 1.2, -3.0)
