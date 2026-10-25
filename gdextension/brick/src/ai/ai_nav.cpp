@@ -957,8 +957,13 @@ Vector3 AINav::field_dir(int id, const Vector3 &point) {
     if (self->second <= 0.0f) {
         return Vector3();
     }
+    // The neighbour the way to the goal goes through: the least cost through
+    // it (its cost to the goal and the step to it), of those nearer the goal
+    // than here. It was "cheaper than here by more than a hair" -- but the
+    // Dijkstra's own parent is EXACTLY as cheap (here = parent + step), so no
+    // neighbour ever qualified and every direction was zero.
     const int hn = _node_head(n.x, n.z, n.y);
-    float best = self->second;
+    float best = std::numeric_limits<float>::infinity();
     Node pick = n;
     for (int d = 0; d < 8; ++d) {
         Node out;
@@ -967,7 +972,7 @@ Vector3 AINav::field_dir(int id, const Vector3 &point) {
             continue;
         }
         auto o = f.cost.find(nkey(out.x, out.z, out.y));
-        if (o != f.cost.end() && o->second + c < best - 1e-4f) {
+        if (o != f.cost.end() && o->second < self->second && o->second + c < best) {
             best = o->second + c;
             pick = out;
         }

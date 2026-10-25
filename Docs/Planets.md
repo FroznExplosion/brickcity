@@ -1268,9 +1268,11 @@ p.z)`, exact unframed) and `top_over(point)`. `set_ground_grid(origin, step, siz
 18/18): a framed path between two world points is the unframed nav's path over the same grid
 moved by the frame (0.0000 m), its points within 0.105 m of `PlanetData.height`; snap, cover,
 trace, danger, nav_changed, the edge and a re-centre all in world values. Found on the way, on
-main too: `AINav.field_dir` is zero everywhere (it takes only a neighbour strictly cheaper than
+main too: `AINav.field_dir` was zero everywhere (it took only a neighbour strictly cheaper than
 the field's own parent, which ties exactly) -- the soldier's directed move and the animals that
-ask it get no direction; a fix moves the flat game, so it is its own change.
+ask it got no direction. **Fixed (2026-10-25):** the neighbour nearer the goal with the least cost
+through it; directed soldiers in `many_probe` now close 59.7 -> 51.5 m (54.1 before);
+`planet_nav_frame_probe` checks the direction points at the goal (19/19).
 
 **N2 built (2026-10-24).** `PlanetScene.setup_ai(dir)` (scripts/planet/planet_scene.gd): an
 `AIServices` on a `PlanetNavRegion` round `dir` -- the AIWorld framed on it (`planet transform *

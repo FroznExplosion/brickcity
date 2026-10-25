@@ -135,10 +135,7 @@ func _run() -> void:
 			and cp_l.z > 10.0 and absf(cp_l.x) < 3.5 and _altitude_error(data, cp) <= plate,
 			str(cp_l))
 	# The flow field, against the unframed nav's over the same grid: its cost at
-	# a world point, its direction turned by the frame. (field_dir is zero
-	# everywhere on main as well, flat ground too: it only takes a neighbour
-	# STRICTLY cheaper than the Dijkstra's own parent, which ties exactly. Not
-	# the frame's to fix -- it would move the flat game.)
+	# a world point, its direction turned by the frame -- toward the goal.
 	var fid := nav.request_field(b, 30.0, 1.0)
 	var lfid := flat.request_field(lb, 30.0, 1.0)
 	for k in 200:
@@ -153,7 +150,11 @@ func _run() -> void:
 			and absf(fc - flat.field_cost(lfid, lf)) < 1e-4, "%.3f m" % fc)
 	var fd := nav.field_dir(fid, from_f)
 	_check("field_dir is the unframed field's, turned by the frame",
-			fd.distance_to(r.frame.basis * flat.field_dir(lfid, lf)) < 1e-4, str(fd))
+			fd.length() > 0.5 and fd.distance_to(r.frame.basis * flat.field_dir(lfid, lf)) < 1e-4, str(fd))
+	var want := b - from_f
+	want -= r.frame.basis.y * want.dot(r.frame.basis.y)
+	_check("and it points toward the goal", fd.normalized().dot(want.normalized()) > 0.7,
+			"dot %.2f" % fd.normalized().dot(want.normalized()))
 	# Danger, set and asked in the world.
 	w_aw.set_danger(1, AABB(b - Vector3(1, 1, 1), Vector3(2, 2, 2)))
 	_check("danger is asked in the world", w_aw.in_danger(b) and not w_aw.in_danger(a)
