@@ -1256,6 +1256,8 @@ func ruler_text() -> String:
 	var modes := PackedStringArray(["view: " + VIEWS[view]])
 	if recipe.kind == "mech":
 		modes.append("MECH %s, legs %d long" % [mech_class, leg_length])
+	elif recipe.kind == "figure":
+		modes.append("FIGURE (one size: every part fits every figure)")
 	elif recipe.kind == "gun" and gun_scale == "mech":
 		modes.append("MECH GUN (nano scale)")
 	if free_place:
@@ -1538,13 +1540,13 @@ func toggle_catalog() -> void:
 ## not saved yet.
 func _aim_catalog(cat: PartCatalog) -> void:
 	var part := String(part_names[part_sel]) if part_sel < part_names.size() else ""
-	if recipe.kind == "mech":
-		var spec: Dictionary = MechReference.SPEC.get(part, {})
+	if _body():
+		var spec: Dictionary = body_ref().SPEC.get(part, {})
 		if not spec.has("host"):
 			_catalog_panel.set_fit_target(null, "", "")
 			return
 		var mh: PartRecord = tried.get(spec.host, cat.get_part(String(part_ids.get(spec.host, ""))))
-		_catalog_panel.set_fit_target(mh, MechReference.path_of(part), "mech")
+		_catalog_panel.set_fit_target(mh, body_ref().path_of(part), body_ref().PLAN)
 		return
 	var sockets: Dictionary = PartStandards.plan("gun").get("sockets", {})
 	var path := part if sockets.has(part) else "barrel/" + part
@@ -1636,7 +1638,7 @@ func _restore_asset_meta() -> void:
 	var parts: Dictionary = a.get("parts", {})
 	if parts.has("names") and not (parts.names as Array).is_empty():
 		part_names = PackedStringArray(parts.names)
-	elif recipe.kind in ["gun", "mech"]:
+	elif recipe.kind in ["gun", "mech", "figure"]:
 		part_names = PackedStringArray(kind_parts())
 	part_sel = mini(part_sel, part_names.size() - 1)
 	var mech: Dictionary = a.get("mech", {})
@@ -1781,7 +1783,7 @@ const ASSET_QUICK_SAVE := "user://asset_workshop_quick.json"
 ## What is made here: the asset kinds, and furniture and items for rooms -- the item
 ## library is shared with the building workshop, so the generator furnishes rooms from
 ## what is saved here (Docs/AssetWorkshop.md, "Furniture and items").
-const ASSET_KINDS := ["gun", "mech", "item"]
+const ASSET_KINDS := ["gun", "mech", "figure", "item"]
 
 
 ## A build here is one of the asset kinds; anything else (a build saved before guns had a
@@ -1795,7 +1797,17 @@ func _set_asset_kind(k: String) -> void:
 
 ## The parts a build of this kind is made of.
 func kind_parts() -> Array:
-	return MechReference.PARTS if recipe.kind == "mech" else GUN_PARTS
+	return body_ref().PARTS if _body() else GUN_PARTS
+
+
+## A mech or a figure: a body of parts on a reference's joints (the same mode serves both).
+func _body() -> bool:
+	return recipe.kind in ["mech", "figure"]
+
+
+## The reference the body is built round.
+func body_ref() -> GDScript:
+	return FigureReference if recipe.kind == "figure" else MechReference
 
 
 func _kind_changed() -> void:
@@ -1810,7 +1822,7 @@ func _kind_changed() -> void:
 func set_asset_kind(k: String) -> void:
 	var was := recipe.kind
 	_set_asset_kind(k)
-	if recipe.kind != was and recipe.kind in ["gun", "mech"]:
+	if recipe.kind != was and recipe.kind in ["gun", "mech", "figure"]:
 		var want := PackedStringArray(kind_parts())
 		if part_names != want:
 			part_names = want
@@ -1819,7 +1831,7 @@ func set_asset_kind(k: String) -> void:
 				sculpt.set_parts(part_names.size())
 			_load_toolbar(part_names[part_sel])
 		_forget_part_ids()
-		if recipe.kind == "mech" and not points.any(func(q: Dictionary) -> bool: return q.get("ready", false)):
+		if _body() and not points.any(func(q: Dictionary) -> bool: return q.get("ready", false)):
 			lay_ready_points()
 		_store_asset_meta()
 	_kind_changed()
@@ -2146,9 +2158,9 @@ func _build_point_panel(layer: CanvasLayer) -> void:
 func _fill_point_slots() -> void:
 	_point_slot.clear()
 	var names := []
-	if recipe.kind == "mech":
-		for k in MechReference.PARTS:
-			var sk := String(MechReference.SPEC[k].get("socket", ""))
+	if _body():
+		for k in body_ref().PARTS:
+			var sk := String(body_ref().SPEC[k].get("socket", ""))
 			if sk != "" and not sk in names:
 				names.append(sk)
 	else:
@@ -2166,11 +2178,11 @@ func _fill_point_ifaces() -> void:
 	if _point_slot.item_count == 0:
 		return
 	var slot := _point_slot.get_item_text(maxi(_point_slot.selected, 0))
-	if recipe.kind == "mech":
+	if _body():
 		# A mech's point is named for its socket (arm_L, hand); its interface for the slot.
-		for k in MechReference.SPEC:
-			if MechReference.SPEC[k].get("socket", "") == slot:
-				slot = MechReference.SPEC[k].slot
+		for k in body_ref().SPEC:
+			if body_ref().SPEC[k].get("socket", "") == slot:
+				slot = body_ref().SPEC[k].slot
 				break
 	for k in _interfaces:
 		if String(_interfaces[k].get("slot", "")) != slot:
@@ -6915,7 +6927,7 @@ func explode_offsets() -> Dictionary:
 				(c.z + size.z * 0.5) * BrickPalette.STUD_M)
 		sums[name] = sums.get(name, Vector3.ZERO) + m
 		counts[name] = int(counts.get(name, 0)) + 1
-	var core := "chassis" if recipe.kind == "mech" else "body"
+	var core: String = body_ref().ROOT if _body() else "body"
 	var body: Vector3 = sums[core] / counts[core] if sums.has(core) else Vector3.ZERO
 	var fwd := Vector3(-1 if muzzle_end == "-x" else 1, 0, 0)
 	var g := EXPLODE_GAP * BrickPalette.STUD_M
@@ -8677,7 +8689,7 @@ func mech_origin() -> Vector3:
 
 ## Part `part`'s joint on the reference mech, in cells (studs, plates, studs).
 func mech_joint(part: String) -> Vector3:
-	return mech_origin() + (MechReference.joints(mech_class, leg_length).get(part, Vector3.ZERO) as Vector3)
+	return mech_origin() + (body_ref().joints(mech_class, leg_length).get(part, Vector3.ZERO) as Vector3)
 
 
 func mech_joint_m(part: String) -> Vector3:
@@ -8695,11 +8707,11 @@ func mech_basis() -> Basis:
 ## takes it. They are marked `ready`; laying them again (another class or length) moves
 ## those and leaves points put by hand. J on one takes it away, to put it elsewhere.
 func lay_ready_points() -> void:
-	if recipe.kind != "mech":
+	if not _body():
 		return
 	points = points.filter(func(q: Dictionary) -> bool: return not q.get("ready", false))
-	for part: String in MechReference.PARTS:
-		var spec: Dictionary = MechReference.SPEC[part]
+	for part: String in body_ref().PARTS:
+		var spec: Dictionary = body_ref().SPEC[part]
 		if not spec.has("host"):
 			continue
 		var c := mech_joint(part)
@@ -8715,14 +8727,14 @@ func lay_ready_points() -> void:
 
 ## A mech's parts by their bricks: {part: [brick ids]}.
 func _kind_bricks() -> Dictionary:
-	if recipe.kind != "mech":
+	if not _body():
 		return _gun_bricks()
 	var by_part := {}
 	for i in recipe.size():
 		if _brick_frame(i) < 0:
 			continue
 		var name := part_names[part_of[i] if i < part_of.size() else part_sel]
-		if MechReference.SPEC.has(name):
+		if body_ref().SPEC.has(name):
 			(by_part.get_or_add(name, []) as Array).append(i)
 	return by_part
 
@@ -8730,24 +8742,24 @@ func _kind_bricks() -> Dictionary:
 ## A mech part's record: family mech (a pod's body: pod), its slot and side, the build's
 ## class, its mount and what its sockets take (its points), a leg's length, its bricks.
 func _mech_record(name: String, by_part: Dictionary, official: bool) -> PartRecord:
-	var spec: Dictionary = MechReference.SPEC[name]
+	var spec: Dictionary = body_ref().SPEC[name]
 	var r := PartRecord.new()
 	r.id = String(part_ids.get(name, "unsaved." + name))
-	r.family = "pod" if spec.slot == "pod" else "mech"
+	r.family = "figure" if recipe.kind == "figure" else ("pod" if spec.slot == "pod" else "mech")
 	r.slot = spec.slot
 	r.side = spec.side
-	r.weight_class = mech_class
+	r.weight_class = mech_class if recipe.kind == "mech" else ""
 	r.display_name = "%s %s" % [recipe.name, name.replace("_", " ")]
 	r.manufacturer = String(AssetGuns.BRAND)
 	r.source = "official" if official else "custom"
 	if not official:
 		r.creator = {"name": creator_name}
-	if name == "chassis":
+	if name == body_ref().ROOT:
 		r.name_fragment = recipe.name
 	for q in points:
 		if String(q.part) == name and q.kind == "mount" and String(q.interface) != "":
 			r.mount = {"interface": String(q.interface)}
-			if spec.slot == "leg":
+			if spec.slot == "leg" and recipe.kind == "mech":
 				r.mount["params"] = {"length": leg_length}
 	var accepts := {}
 	for q in points:
@@ -8771,7 +8783,7 @@ func export_mech(dir: String) -> Dictionary:
 		return {"ok": false, "why": "nothing built"}
 	var at := {}
 	for name in by_part:
-		at[name] = mech_joint_m(name)   # the chassis's is the hips: the game stands it on its legs
+		at[name] = mech_joint_m(name)   # the root's is the hips: the game stands it on its legs
 	for q in points:
 		if q.kind == "mount" and by_part.has(String(q.part)):
 			at[q.part] = _point_m(q)
@@ -8780,7 +8792,7 @@ func export_mech(dir: String) -> Dictionary:
 	var written := {}
 	for name in by_part:
 		var root := _part_root(name, by_part[name], at[name], b)
-		if name != "chassis":
+		if name != body_ref().ROOT:
 			var mount := Node3D.new()
 			mount.name = "mount"
 			root.add_child(mount)
@@ -8808,7 +8820,7 @@ func _draw_mech_ref() -> void:
 	if _mech_ref != null:
 		_mech_ref.queue_free()
 		_mech_ref = null
-	if recipe.kind != "mech" or not mech_ref_on or not is_inside_tree():
+	if not _body() or not mech_ref_on or not is_inside_tree():
 		return
 	_mech_ref = Node3D.new()
 	_mech_ref.name = "MechReference"
@@ -8820,7 +8832,7 @@ func _draw_mech_ref() -> void:
 	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
 	mat.no_depth_test = true
 	var j := {}
-	for part in MechReference.PARTS:
+	for part in body_ref().PARTS:
 		j[part] = mech_joint_m(part)
 	var ground := mech_origin() * Vector3(BrickPalette.STUD_M, BrickPalette.PLATE_M, BrickPalette.STUD_M)
 	var lines := ImmediateMesh.new()
@@ -8828,15 +8840,14 @@ func _draw_mech_ref() -> void:
 	var bone := func(a: Vector3, b: Vector3) -> void:
 		lines.surface_add_vertex(a)
 		lines.surface_add_vertex(b)
-	for side in ["L", "R"]:
-		var hip: Vector3 = j["leg_" + side]
-		bone.call(hip, Vector3(hip.x, ground.y, hip.z))           # the leg, hip to ground
-		bone.call(j.chassis, hip)
-		bone.call(j.chassis, j["arm_" + side])
-		bone.call(j["arm_" + side], j["hand_" + side])            # the arm, shoulder to wrist
-		bone.call(j.head, j["pod_" + side])
-	bone.call(j.chassis, j.head)                                  # the spine
-	var half: float = MechReference.SHOULDER_HALF[mech_class] * BrickPalette.STUD_M
+	for part: String in j:
+		var spec: Dictionary = body_ref().SPEC[part]
+		if spec.has("host"):
+			bone.call(j[spec.host], j[part])                      # each part to what it hangs from
+		if spec.slot == "leg":
+			var hip: Vector3 = j[part]
+			bone.call(hip, Vector3(hip.x, ground.y, hip.z))       # the leg, hip to ground
+	var half: float = float(body_ref().footprint(mech_class)) * BrickPalette.STUD_M
 	var corners := [Vector3(-half, 0, -half), Vector3(half, 0, -half), Vector3(half, 0, half), Vector3(-half, 0, half)]
 	for k in 4:
 		bone.call(ground + corners[k], ground + corners[(k + 1) % 4])
@@ -8847,7 +8858,7 @@ func _draw_mech_ref() -> void:
 	mi.mesh = lines
 	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	_mech_ref.add_child(mi)
-	for part in MechReference.PARTS:
+	for part in body_ref().PARTS:
 		var ball := MeshInstance3D.new()
 		var sm := SphereMesh.new()
 		sm.radius = 0.12
@@ -8860,8 +8871,8 @@ func _draw_mech_ref() -> void:
 		_mech_ref.add_child(ball)
 		var label := Label3D.new()
 		label.name = "Joint_" + part
-		var spec: Dictionary = MechReference.SPEC[part]
-		label.text = String(spec.get("socket", "hips")) if part != "chassis" else "hips"
+		var spec: Dictionary = body_ref().SPEC[part]
+		label.text = String(spec.get("socket", "hips")) if part != body_ref().ROOT else "hips"
 		label.billboard = BaseMaterial3D.BILLBOARD_ENABLED
 		label.no_depth_test = true
 		label.font_size = 32
@@ -8901,10 +8912,10 @@ func try_part(r: PartRecord) -> String:
 		if r.family != "gun" or r.scale != "held" or not GUN_PARTS.has(r.slot):
 			return "%s is not a part of a held gun" % r.id
 		at = r.slot
-	elif recipe.kind == "mech":
-		if not r.family in ["mech", "pod"]:
-			return "%s is not a mech's part" % r.id
-		at = MechReference.part_for(r.slot, r.side, part_names[part_sel])
+	elif _body():
+		if not r.family in (["mech", "pod"] if recipe.kind == "mech" else ["figure"]):
+			return "%s is not a %s's part" % [r.id, recipe.kind]
+		at = body_ref().part_for(r.slot, r.side, part_names[part_sel])
 		if at == "":
 			return "a mech has no %s %s" % [r.side, r.slot]
 	else:
@@ -8969,20 +8980,20 @@ func try_text() -> String:
 ## The part `slot` hangs from: its game host (GAME_HOST; a mech's SPEC), own or tried,
 ## else the body (the chassis).
 func _try_host(slot: String, by_part: Dictionary) -> String:
-	var root := "chassis" if recipe.kind == "mech" else "body"
-	var h: String = MechReference.SPEC.get(slot, {}).get("host", root) if recipe.kind == "mech" \
+	var root: String = body_ref().ROOT if _body() else "body"
+	var h: String = body_ref().SPEC.get(slot, {}).get("host", root) if _body() \
 			else GAME_HOST.get(slot, root)
 	return h if by_part.has(h) or tried.has(h) else root
 
 
 ## The name of the socket `part` goes in on its host: a gun's slot, a mech's SPEC socket.
 func _socket_name(part: String) -> String:
-	return String(MechReference.SPEC[part].get("socket", "")) if recipe.kind == "mech" else part
+	return String(body_ref().SPEC[part].get("socket", "")) if _body() else part
 
 
 ## A part scene's frame against the workshop's: guns real size, mechs at nano scale.
 func _scene_basis() -> Basis:
-	return mech_basis() if recipe.kind == "mech" else game_basis()
+	return mech_basis() if _body() else game_basis()
 
 
 ## Each own part's draw offset with tried parts on: where a tried host's socket puts it,
@@ -8999,7 +9010,7 @@ func _try_offsets() -> Dictionary:
 		if not own and not tried.has(slot):
 			continue
 		var h := _try_host(slot, by_part)
-		if slot == "body" or slot == "chassis" or not _try_place.has(h):
+		if slot in ["body", "chassis", "torso"] or not _try_place.has(h):
 			_try_place[slot] = at.get(slot, Vector3.ZERO)
 			offset[slot] = Vector3.ZERO
 			continue
@@ -9023,7 +9034,7 @@ func _socket_point(host: String, slot: String, by_part: Dictionary, at: Dictiona
 	for q in points:
 		if String(q.part) == host and q.kind == "socket" and String(q.slot) == _socket_name(slot):
 			return _point_m(q)
-	if recipe.kind == "mech":
+	if _body():
 		return mech_joint_m(slot)
 	if slot == "muzzle" and by_part.has(host):
 		return _tip(by_part[host], Vector3(-1 if muzzle_end == "-x" else 1, 0, 0))
@@ -9035,7 +9046,7 @@ func _socket_point(host: String, slot: String, by_part: Dictionary, at: Dictiona
 ## join by slot (GunPartDef.takes).
 func _check_fit(by_part: Dictionary) -> void:
 	fit_marks.clear()
-	var mech := recipe.kind == "mech"
+	var mech := _body()
 	var hosts := {} if mech else _game_hosts(by_part)
 	var recs := {}
 	for slot: String in kind_parts():
@@ -9045,16 +9056,16 @@ func _check_fit(by_part: Dictionary) -> void:
 			recs[slot] = _mech_record(slot, by_part, false) if mech else _part_record(slot, by_part, hosts, false)
 	var sockets: Dictionary = PartStandards.plan("gun").get("sockets", {})
 	for slot: String in recs:
-		if slot == "body" or slot == "chassis":
+		if slot in ["body", "chassis", "torso"]:
 			continue
 		var h := _try_host(slot, by_part)
 		if not recs.has(h):
 			fit_marks[slot] = "nothing to hang from"
 			continue
-		var path := MechReference.path_of(slot) if mech else (slot if sockets.has(slot) else "barrel/" + slot)
-		fit_marks[slot] = fit_reason(recs[slot], recs[h], path, "mech" if mech else "gun")
-	# The whole build's rule (layer 2): both legs one length.
-	if mech and recs.has("leg_L") and recs.has("leg_R"):
+		var path: String = body_ref().path_of(slot) if mech else (slot if sockets.has(slot) else "barrel/" + slot)
+		fit_marks[slot] = fit_reason(recs[slot], recs[h], path, body_ref().PLAN if mech else "gun")
+	# The whole build's rule (layer 2): both legs one length -- a mech's (a figure is one size).
+	if recipe.kind == "mech" and recs.has("leg_L") and recs.has("leg_R"):
 		var a: Variant = (recs.leg_L as PartRecord).param("length")
 		var b: Variant = (recs.leg_R as PartRecord).param("length")
 		if a != null and b != null and int(a) != int(b):
@@ -9176,7 +9187,7 @@ func parts_dir() -> String:
 	if _builds_dir != BuildRecipe.player_dir():
 		return _builds_dir + "parts/"
 	if _current_path.begins_with("res://"):
-		return PartCatalog.OFFICIAL_DIR + ("mech/" if recipe.kind == "mech" else "gun/")
+		return PartCatalog.OFFICIAL_DIR + (recipe.kind + "/" if _body() else "gun/")
 	return PartCatalog.CUSTOM_DIR
 
 
@@ -9192,7 +9203,7 @@ func _save_as(build_name: String, room_kind: String = "", tags: Dictionary = {})
 func _write(path: String) -> bool:
 	if not super._write(path):
 		return false
-	if recipe.kind in ["gun", "mech"]:
+	if recipe.kind in ["gun", "mech", "figure"]:
 		save_parts()
 	return true
 
@@ -9203,7 +9214,7 @@ func _write(path: String) -> bool:
 func save_parts(dir: String = "") -> Dictionary:
 	if dir == "":
 		dir = parts_dir()
-	var mech := recipe.kind == "mech"
+	var mech := _body()
 	var by_part := _kind_bricks()
 	if by_part.is_empty() or (not mech and not by_part.has("body")):
 		return {"ok": false, "why": "nothing built" if by_part.is_empty() else "no body"}
@@ -9865,6 +9876,7 @@ func _build_menus() -> void:
 		["Asset", [
 			["Make a gun", "", func() -> void: set_asset_kind("gun")],
 			["Make a mech", "", func() -> void: set_asset_kind("mech")],
+			["Make a figure (an action figure: every part fits every figure)", "", func() -> void: set_asset_kind("figure")],
 			["Make furniture or an item (rooms: tagged by planet, type, room)", "", func() -> void: set_asset_kind("item")],
 			[],
 			["Export this build's parts to share (.bcpart)", "", func() -> void: export_packages()],

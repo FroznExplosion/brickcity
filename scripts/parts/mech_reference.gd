@@ -10,6 +10,8 @@ extends RefCounted
 ## is across Z, so a left part mirrors into a right one). Heights follow Docs/Parts/joints.md
 ## section 5's greybox (hip 16 nano bricks up at the middle leg length, shoulder 2 above).
 
+const ROOT := "chassis"
+const PLAN := "mech"
 ## The parts a mech build is made of, in the order the workshop lists them.
 const PARTS := ["chassis", "head", "arm_L", "arm_R", "hand_L", "hand_R", "leg_L", "leg_R",
 		"pod_L", "pod_R"]
@@ -69,12 +71,18 @@ static func joints(klass: String, length: int) -> Dictionary:
 	}
 
 
+## Half the footprint drawn under it, in studs: the shoulders' span.
+static func footprint(klass: String = "normal") -> float:
+	return float(SHOULDER_HALF.get(klass, SHOULDER_HALF.normal))
+
+
 ## The body plan path of a part's socket: "arm_L", "arm_L/hand".
 static func path_of(part: String) -> String:
 	var s: Dictionary = SPEC.get(part, {})
 	if not s.has("host"):
 		return ""
-	return s.socket if s.host == "chassis" else "%s/%s" % [s.host, s.socket]
+	# Paths run by socket names from the root: the hat on the head is "neck/hat".
+	return s.socket if s.host == "chassis" else "%s/%s" % [path_of(s.host), s.socket]
 
 
 ## The build part a catalogue part goes on: its slot and side; a part for either side goes

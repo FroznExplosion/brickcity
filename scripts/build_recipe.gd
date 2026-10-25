@@ -34,7 +34,7 @@ var name := "untitled"
 ## What this build is FOR (Docs/Workshop.md section 1). It changes where the
 ## library offers it and how the city anchors it, and nothing about how its
 ## bricks are placed. Every file older than v6 is a building.
-const KINDS := ["building", "room", "item", "mech", "gun", "vehicle", "aircraft"]
+const KINDS := ["building", "room", "item", "mech", "gun", "vehicle", "aircraft", "figure"]
 ## The kinds the workshop can author today. The rest need BuildMode section 6's
 ## articulated links and are listed so the menu shows where they will go.
 const KINDS_ENABLED := ["building", "room", "item"]
@@ -998,10 +998,11 @@ const LIBRARY_DIRS := {
 	# Made in the asset workshop (Docs/AssetWorkshop.md): bricks plus meta.asset.
 	"gun": ["res://guns/", "user://guns/"],
 	"mech": ["res://mechs/", "user://mechs/"],
+	"figure": ["res://figures/", "user://figures/"],
 }
 ## The kinds made in the asset workshop, not the building workshop: each workshop's
 ## Open lists only its own.
-const ASSET_KINDS := ["gun", "mech"]
+const ASSET_KINDS := ["gun", "mech", "figure"]
 ## The workshop's one quick-save slot (F5 there), and what the city places
 ## when it is asked for a build without being told which (`--build`, P).
 const QUICK_SAVE := "user://workshop_build.json"
