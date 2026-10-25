@@ -92,6 +92,42 @@ func setup(p_mesh: Mesh, p_material: Material, p_near_range: float = 40.0,
 	_bake_later()
 
 
+## A mesh's bake, done once whoever asks: every set drawing the same mesh (the
+## planet's trees: a set per variant per cube face) shares its cards, and a
+## second set asking while the first bakes waits for it. A node source is baked
+## for each asker, as before. Headless the bake is {} (the real mesh stands in).
+static var _bakes := {}
+static var _baking := {}
+
+
+class BakeWait:
+	signal done
+
+
+static func baked(host: Node, what: Variant, tile: int = 128) -> Dictionary:
+	if not (what is Mesh):
+		return await ImpostorBaker.bake(host, what, ImpostorBaker.GRID, tile)
+	var key := "%d:%d" % [(what as Mesh).get_instance_id(), tile]
+	if _bakes.has(key):
+		return _bakes[key][1]
+	if _baking.has(key):
+		await (_baking[key] as BakeWait).done
+		return _bakes[key][1] if _bakes.has(key) else {}
+	var w := BakeWait.new()
+	_baking[key] = w
+	var got: Dictionary = await ImpostorBaker.bake(host, what, ImpostorBaker.GRID, tile)
+	# The mesh is held with its bake, so its id is never another mesh's.
+	_bakes[key] = [what, got]
+	_baking.erase(key)
+	w.done.emit()
+	return got
+
+
+## Bake a mesh's cards now, before any set draws it (a scene loading).
+static func prebake(host: Node, p_mesh: Mesh, tile: int = 128) -> void:
+	await baked(host, p_mesh, tile)
+
+
 ## The same, for a node its owner draws up close (see the class notes).
 func setup_node(p_source: Node3D, p_near_range: float = 12.0,
 		p_cull_range: float = 150.0, far_shadows: bool = false, tile: int = 64) -> void:
@@ -109,7 +145,7 @@ func _bake_later() -> void:
 	var what: Variant = source
 	if mesh != null:
 		what = mesh
-	var got: Dictionary = await ImpostorBaker.bake(self, what, ImpostorBaker.GRID, _tile)
+	var got: Dictionary = await baked(self, what, _tile)
 	if got.is_empty() or not is_instance_valid(self):
 		return
 	bake = got
