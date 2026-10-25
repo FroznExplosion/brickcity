@@ -1510,3 +1510,23 @@ twice -- filling round the spawn 6.4 / 5.8 ms worst a frame (aim 8), 3 s at 500 
 them 16; the six extra are all at the spawn while it loads (43-247 ms; worst frame 680 vs 549 ms,
 the scene's own load) -- the four variants' card bakes and first draws; from there on the two
 runs match. Next: bake the cards while the spawn is still loading (before the walker is let go).
+
+**Plan: the cards baked while the spawn loads (2026-10-24).** Every `ImpostorLod` set baked its
+own cards, and the planet has a set per variant per cube face -- the same four meshes baked again
+on every face, each bake two renders, a GPU read-back and mipmaps on the CPU. So:
+- `ImpostorLod.baked(host, mesh)`: a mesh's bake done once and shared by every set drawing it
+  (a set asking while it bakes waits for it); `ImpostorLod.prebake` bakes ahead of any set.
+- `PlanetTrees.prebake()` bakes the four variants as the scene starts; the walker is held (as it
+  is for the ground) until they are in, so the bakes land in the load, not in play.
+- The gates report frames over 40 ms twice: all of them, and those **in play** (after the walker
+  is let go) -- what a player sees; the load is behind the wait for the ground either way.
+- A/B on a quiet machine: `-- --gate --no-trees` vs `-- --gate`, the in-play count the measure.
+
+**State (2026-10-24): built; the A/B not timed yet.** `ImpostorLod.baked` / `prebake` (a bake
+per mesh, shared), `PlanetTrees.prebake()` from the scene's start, the walker held for it, and
+the gates' "in play" hitch list. Headless: `planet_tree_probe` 10/10, biomes 8/8, `--gate=pawn`
+12/12, `--gate=squad` 10/10. Windowed, both runs went through (with trees the walker was let go
+after 1.8 s, the bakes in), but the machine was in the display-sleep stall (frames of 250 and
+750 ms all through, chip 45-69 C, nobody at the screen): no frame time from them counts, and the
+"no building popped" check failed in both on a long frame, as before. The quiet, awake A/B is
+still to do.

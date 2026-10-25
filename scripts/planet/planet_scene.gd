@@ -63,6 +63,8 @@ const VIEW_MARGIN := 300.0
 var _gate := false
 var _worst_ms := 0.0
 var _hitches: Array = []
+## The same, from when the walker is let go: what play sees, not the load.
+var _play_hitches: Array = []
 var _last_us := 0
 
 
@@ -109,6 +111,7 @@ func _ready() -> void:
 	trees = PlanetTrees.new()
 	planet.add_child(trees)
 	trees.setup(data)
+	trees.prebake()
 	Gravity.planet = planet
 	Gravity.planet_strength = data.gravity_strength
 	Gravity.planet_radius = data.radius
@@ -300,6 +303,8 @@ func _process(_delta: float) -> void:
 		_worst_ms = maxf(_worst_ms, ms)
 		if ms > 40.0 and _hitches.size() < 40:
 			_hitches.append([snappedf(ms, 0.1), int(planet.altitude_of(_anchor()))])
+		if ms > 40.0 and not walker.frozen and _play_hitches.size() < 40:
+			_play_hitches.append([snappedf(ms, 0.1), int(planet.altitude_of(_anchor()))])
 	_last_us = now
 	var cam_pos := _eye()
 	var alt := planet.altitude_of(cam_pos)
@@ -326,8 +331,9 @@ func _process(_delta: float) -> void:
 	# plane, and the world's Y is the local up only at the pole.
 	env.sky_rotation = Quaternion(Vector3.UP, Gravity.up_at(cam_pos)).get_euler()
 	# Hold the walker until the ground under it has streamed (and has a
-	# collider); then, unless this is the walker's own gate, the pawn stands on it.
-	if walker.frozen and pawn == null and _ground_hit(walker.global_position) != Vector3.INF:
+	# collider) and the trees' cards are baked; then, unless this is the
+	# walker's own gate, the pawn stands on it.
+	if walker.frozen and pawn == null and trees.prebaked and _ground_hit(walker.global_position) != Vector3.INF:
 		walker.frozen = false
 		if not _gate or _pawn_gate or _mech_gate or _tank_gate or _soldier_gate or _squad_gate or _travel_gate or _far_gate or _drive_gate:
 			_spawn_player(_ground_hit(walker.global_position), -walker.global_transform.basis.z)
@@ -490,7 +496,8 @@ func _run_gate() -> void:
 	await _shot("planet_gate_landed")
 	_check("no building popped in plain sight (fade jumped > 1/3 over the horizon)", buildings.pops == 0,
 			"%d; the biggest one-frame step %.2f" % [buildings.pops, buildings.max_step])
-	print("[planet] frames: worst %.1f ms; over 40 ms: %s" % [_worst_ms, _hitches])
+	print("[planet] frames: worst %.1f ms; over 40 ms: %s; of them in play (after the walker is let go): %d %s" % [
+			_worst_ms, _hitches, _play_hitches.size(), _play_hitches])
 	print("[planet] gate: %d ok, %d FAIL" % [_ok, _fail])
 	get_tree().quit(1 if _fail > 0 else 0)
 

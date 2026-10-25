@@ -68,6 +68,8 @@ var _planned_at := Vector3.INF
 var built_cells := 0
 var tree_count := 0
 var last_build_us := 0
+## Every variant's cards baked (prebake): the scene holds the walker until then.
+var prebaked := false
 
 
 func setup(p_data: PlanetData) -> void:
@@ -82,6 +84,22 @@ func setup(p_data: PlanetData) -> void:
 	# For an A/B of the trees' cost (-- --no-trees): none are made.
 	if "--no-trees" in OS.get_cmdline_user_args():
 		set_process(false)
+		prebaked = true
+
+
+## Bake every variant's cards while the spawn loads (ImpostorLod.prebake), so
+## the first sets find them baked instead of baking in play: four bakes were
+## six frames of 43-247 ms at the spawn (11.10). Headless there is no bake.
+func prebake() -> void:
+	if prebaked:
+		return
+	for v in Trees.VARIANTS:
+		await ImpostorLod.prebake(self, _mesh_of(v))
+	prebaked = true
+
+
+func _mesh_of(variant: int) -> Mesh:
+	return RecipeMesh.build(Trees.recipe(variant), "tree_%d" % variant)
 
 
 # --- cells ---------------------------------------------------------------------
@@ -213,7 +231,7 @@ func _set_for(f: int, variant: int) -> ImpostorLod:
 	s.transform = Transform3D(Basis(a, m, a.cross(m)), Vector3.ZERO)
 	add_child(s)
 	s.set_chunk(128.0)
-	s.setup(RecipeMesh.build(Trees.recipe(variant), "tree_%d" % variant), _mat, NEAR, KEEP)
+	s.setup(_mesh_of(variant), _mat, NEAR, KEEP)
 	s.set_cull_fade(150.0)
 	_sets[k] = s
 	return s
