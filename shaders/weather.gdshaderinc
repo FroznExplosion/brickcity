@@ -44,6 +44,10 @@ uniform vec4 weather_burn_rect = vec4(0.0);
 // PER INSTANCE: how much an object's tops take the cap (trees 1). Buildings
 // and the near ground carry real cover instead, so 0.
 instance uniform float weather_snowcap = 0.0;
+// The cap on faces up in the OBJECT's own frame, not the world's: a planet's
+// trees stand along their local up (Docs/Planets.md 11.10). Off by default --
+// everything else takes the world's up, as it always has.
+uniform bool weather_snow_model_up = false;
 
 // `local` in model space with +Y up from the base. Returns it bent.
 vec3 weather_sway_vertex(vec3 wp_local, mat4 wp_model, float wp_t) {
@@ -103,6 +107,19 @@ void weather_snow_surface(inout vec3 wp_albedo, inout float wp_roughness, inout 
         return;
     }
     float wx_up = (wp_inv_view * vec4(wp_normal_view, 0.0)).y;
+    float wx_k = smoothstep(0.55, 0.85, wx_up) * clamp(weather_snow * 1.4, 0.0, 1.0) * wp_cap;
+    wp_albedo = mix(wp_albedo, weather_snow_colour, wx_k);
+    wp_roughness = mix(wp_roughness, 0.6, wx_k);
+    wp_specular = mix(wp_specular, 0.35, wx_k);
+}
+
+// The same cap, with "up" the object's own (`wp_up_view`, view space).
+void weather_snow_surface_up(inout vec3 wp_albedo, inout float wp_roughness, inout float wp_specular,
+        vec3 wp_normal_view, vec3 wp_up_view, float wp_cap) {
+    if (weather_snow <= 0.0 || wp_cap <= 0.0) {
+        return;
+    }
+    float wx_up = dot(wp_normal_view, wp_up_view);
     float wx_k = smoothstep(0.55, 0.85, wx_up) * clamp(weather_snow * 1.4, 0.0, 1.0) * wp_cap;
     wp_albedo = mix(wp_albedo, weather_snow_colour, wx_k);
     wp_roughness = mix(wp_roughness, 0.6, wx_k);

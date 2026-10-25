@@ -144,6 +144,23 @@ func _run() -> void:
 				missed += 1
 		_check("the camera's plan reaches every cell within KEEP (%s)" % ("a cube corner" if where == Vector3(1, 1, 1) else "mid-face"),
 				missed == 0, "%d cells planned, %d missed" % [tr._queue.size(), missed])
+	# Snow on the crowns by the ground's own rule (snow under freezing at the
+	# height): every tree's bucket is the rule's, and the planet has all three.
+	var buckets := [0, 0, 0]
+	var wrong := 0
+	for k in 400:
+		var d := Vector3(rng.randfn(), rng.randfn(), rng.randfn()).normalized()
+		for t in tr.trees_of(tr.cell_of(d)):
+			var td: Vector3 = (t.at as Vector3).normalized()
+			var hh := data.height(td)
+			var cap := smoothstep(1.5, -1.5, PlanetBiomes.temperature_at(tr.biomes.temperature_sea(td), hh))
+			var want := 0 if cap < 0.25 else (1 if cap < 0.75 else 2)
+			buckets[int(t.snow)] += 1
+			if int(t.snow) != want:
+				wrong += 1
+	print("[trees] snow on the crowns, 400 cells: none %d, a little %d, a full cap %d" % buckets)
+	_check("each tree's snow is the ground's rule at its foot", wrong == 0, "%d wrong" % wrong)
+	_check("the planet has snowy trees and bare ones", buckets[0] > 0 and buckets[2] > 0, str(buckets))
 	tr.free()
 	await _stream_cost(data, spawn)
 

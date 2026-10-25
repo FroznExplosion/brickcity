@@ -90,7 +90,9 @@ func setup(p_data: PlanetData) -> void:
 	# The bricks' own material, as the heightfield scene's trees have it.
 	_mat = ShaderMaterial.new()
 	_mat.shader = load("res://shaders/brick.gdshader")
-	WeatherFx.register(_mat)
+	# Not WeatherFx's: the planet has no weather system, so its trees carry their
+	# own -- a breeze along each cube face, snow on the crowns where it is cold
+	# (_set_for) -- and nothing else writes over it.
 	# For an A/B of the trees' cost (-- --no-trees): none are made.
 	if "--no-trees" in OS.get_cmdline_user_args():
 		set_process(false)
@@ -198,7 +200,8 @@ func trees_of(key: Vector3i) -> Array:
 		var x := (Vector3.FORWARD if absf(d.dot(Vector3.FORWARD)) < 0.9 else Vector3.RIGHT).cross(d).normalized()
 		# Bricks keep their size: turned, never scaled.
 		var b := Basis(x, d, x.cross(d)) * Basis(Vector3.UP, yaw)
-		out.append({"variant": variant, "at": d * (data.radius + h - 0.05), "basis": b})
+		out.append({"variant": variant, "at": d * (data.radius + h - 0.05), "basis": b,
+				"snow": snow_bucket(d, h)})
 	return out
 
 
@@ -227,9 +230,25 @@ static func foot_of(variant: int) -> Vector3:
 	return Vector3((off.x + 1) * size.x, off.y * size.y, (off.z + 1) * size.z)
 
 
-## The set for `variant` on cube face `f`, made the first time it is asked for.
-func _set_for(f: int, variant: int) -> ImpostorLod:
-	var k := "%d_%d" % [f, variant]
+## Snow on a tree's crown, by the ground shader's own rule (snow where the
+## temperature at the height is under freezing, planet_ground.gdshader):
+## 0 none, 1 a little, 2 a full cap. Trees are set by it (_set_for).
+const SNOW_CAPS := [0.0, 0.5, 1.0]
+## The breeze the crowns sway in, along each cube face (weather.gdshaderinc's
+## wind, 0..~1.5): a light one.
+const BREEZE := 0.35
+
+
+func snow_bucket(d: Vector3, h: float) -> int:
+	var t := PlanetBiomes.temperature_at(biomes.temperature_sea(d), h)
+	var cap := smoothstep(1.5, -1.5, t)
+	return 0 if cap < 0.25 else (1 if cap < 0.75 else 2)
+
+
+## The set for `variant` on cube face `f` with snow cap `snow`, made the first
+## time it is asked for.
+func _set_for(f: int, variant: int, snow := 0) -> ImpostorLod:
+	var k := "%d_%d_%d" % [f, variant, snow]
 	if _sets.has(k):
 		return _sets[k]
 	var ax := _axes(f)
@@ -241,6 +260,14 @@ func _set_for(f: int, variant: int) -> ImpostorLod:
 	s.transform = Transform3D(Basis(a, m, a.cross(m)), Vector3.ZERO)
 	add_child(s)
 	s.set_chunk(128.0)
+	var mesh := _mesh_of(variant)
+	# Crowns sway about their own base, in their own frame (weather_sway_vertex),
+	# in a breeze along the face; snow whitens what faces the tree's own up.
+	s.sway = WeatherFx.sway_tree(mesh.get_aabb().end.y)
+	s.snowcap = SNOW_CAPS[snow]
+	var wind := a * BREEZE
+	s.near_params = {"weather_wind": wind, "weather_snow": 1.0, "weather_snow_model_up": true}
+	s.card_params = {"weather_snow": SNOW_CAPS[snow], "weather_snow_model_up": true}
 	s.setup(_mesh_of(variant), _mat, NEAR, KEEP)
 	s.set_cull_fade(150.0)
 	_sets[k] = s
@@ -257,7 +284,7 @@ func _build_cell(key: Vector3i) -> void:
 	var trees := trees_of(key)
 	var handles := []
 	for t in trees:
-		var lod := _set_for(key.x, t.variant)
+		var lod := _set_for(key.x, t.variant, int(t.get("snow", 0)))
 		var b: Basis = t.basis
 		var xf := Transform3D(b, (t.at as Vector3) - b * foot_of(t.variant))
 		var down: Dictionary = _knocked.get(key, {})

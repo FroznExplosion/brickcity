@@ -72,6 +72,11 @@ var _chunks := {}
 var sway := Vector3.ZERO
 ## How much the up-close copies' tops take a cap of snow (trees 1).
 var snowcap := 0.0
+## Shader parameters for this set's own near material and its cards' (set
+## before setup): a planet's trees carry their own breeze and snow there
+## (PlanetTrees). Empty: the materials as they come.
+var near_params := {}
+var card_params := {}
 var near_count := 0
 var far_count := 0
 
@@ -89,6 +94,8 @@ func setup(p_mesh: Mesh, p_material: Material, p_near_range: float = 40.0,
 	_tile = tile
 	_near_mat = _fading(material, near_range, hysteresis)
 	WeatherFx.adopt(_near_mat, material)
+	for k in near_params:
+		(_near_mat as ShaderMaterial).set_shader_parameter(k, near_params[k])
 	_bake_later()
 
 
@@ -163,6 +170,8 @@ func _bake_later() -> void:
 	# a node source's owner has no fade, so it has none.
 	_card_mat.set_shader_parameter("lod_near", near_range if mesh != null else -1.0)
 	_card_mat.set_shader_parameter("lod_band", hysteresis)
+	for k in card_params:
+		_card_mat.set_shader_parameter(k, card_params[k])
 	_dress_cull()
 	for key in _chunks:
 		_dress_far(_chunks[key])
