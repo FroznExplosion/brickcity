@@ -108,6 +108,13 @@ once, when it settles.
 ### 3.5 Rubble at rest merges
 Settled pieces of one building, in one 32-stud tile, become one static body (Structures §2.5, not
 built). Wreckage then costs about what a building costs.
+**Measured 2026-10-25, not built** (`big_city.tscn -- --rubble --big`: the `--shot` cut, every
+piece left to settle, then 240 frames each way; display awake, nothing else running): 24 pieces
+at rest (4,207 boxes, 25,211 bricks) and 165 asleep. Out of the physics space the settled ones
+saved **nothing** (physics 4.9 ms with them, 6.1 without -- noise; a frozen body costs the step
+about nothing). Not drawn at all they saved **3.7 ms of 41 on the GPU and 62 of 970 draw calls**,
+and merging keeps every triangle -- it would save only part of the draw calls. Not worth a
+static-body merge now. If wreckage cost comes back, look at the 165 asleep pieces' stand-ins first.
 
 ## 4. Markers, made by the generator
 
