@@ -8620,6 +8620,19 @@ func _run_rubble_pass() -> void:
 			bricks += world.get_alive_block_count(isl.chunk)
 	print("[rubble] after %.0f s: %d piece(s) at rest (%d boxes, %d bricks), %d still moving, %d asleep" % [
 			t / 60.0, settled.size(), boxes, bricks, moving, islands.dormant.size()])
+	# And the rubble field's work done: far stand-ins of bricks made coarse and
+	# every tile merged (IslandManager._tend_field), up to 20 s.
+	var w := 0
+	var last_coarse := -1
+	while w < 1200:
+		await _frames(60)
+		w += 60
+		var busy := not islands._coarsening.is_empty()
+		for key in islands._field:
+			busy = busy or islands._field[key].dirty or islands._field[key].job >= 0
+		if not busy and islands.field_coarsened == last_coarse:
+			break
+		last_coarse = islands.field_coarsened
 	var vp := get_viewport().get_viewport_rid()
 	RenderingServer.viewport_set_measure_render_time(vp, true)
 	var as_is: Array = await _rubble_window(vp)
@@ -8636,8 +8649,28 @@ func _run_rubble_pass() -> void:
 	for isl in settled:
 		if _rubble_live(isl):
 			_rubble_show(isl, true)
+	# The asleep: their stand-ins drawn a tile at a time (IslandManager's rubble
+	# field), the biggest-looking FIELD_MAX_DRAWN tiles only.
+	var field := islands.get_node_or_null("RubbleField") as Node3D
+	print("[rubble] field: %d tile(s), %d drawn, %d left undrawn by the cap; %d merge(s), the slowest %.2f ms on a worker, %.2f ms on the main thread" % [
+			islands._field.size(), islands.field_drawn, islands.field_culled, islands.field_merges,
+			islands.field_worst_ms, islands.field_main_worst_ms])
+	var with_arrays := 0
+	var stand_ins := 0
+	for dm in islands.dormant:
+		if dm.stand_in != null and is_instance_valid(dm.stand_in):
+			stand_ins += 1
+			if not dm.stand_in_arrays.is_empty():
+				with_arrays += 1
+	print("[rubble] %d stand-in(s), %d with the arrays to merge from; %d made coarse from their record" % [
+			stand_ins, with_arrays, islands.field_coarsened])
+	var no_field: Array = as_is
+	if field != null:
+		field.visible = false
+		no_field = await _rubble_window(vp)
+		field.visible = true
 	for row in [["as it is", as_is], ["settled out of physics", no_physics],
-			["settled not drawn", no_draw]]:
+			["settled not drawn", no_draw], ["the asleep not drawn", no_field]]:
 		var m: Array = row[1]
 		print("[rubble]   %-24s frame %.2f ms, physics %.2f ms, render cpu %.2f ms gpu %.2f ms, %d draw calls" % [
 				row[0], m[0], m[1], m[2], m[3], int(m[4])])

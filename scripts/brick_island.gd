@@ -105,6 +105,11 @@ var coarse := false
 ## bricks it asked for are baking. A stand-in's index buffer is not the bake's,
 ## and is never patched.
 var coarse_drawn := false
+## The arrays its coarse mesh was made from, while it is drawn by one: what a
+## stand-in it leaves is merged from (IslandManager's rubble field). Reading a
+## mesh back from the renderer instead was the GPU's copy -- 54 ms of a merge on
+## the main thread, 545 on a worker.
+var coarse_arrays: Array = []
 ## The physics tick its stand-in was last built (IslandManager.COARSE_REBUILD_TICKS).
 var coarse_tick := -1000000
 ## How long its last stand-in took to build, ms (IslandManager.coarse_wait).

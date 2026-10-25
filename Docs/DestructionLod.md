@@ -115,6 +115,23 @@ saved **nothing** (physics 4.9 ms with them, 6.1 without -- noise; a frozen body
 about nothing). Not drawn at all they saved **3.7 ms of 41 on the GPU and 62 of 970 draw calls**,
 and merging keeps every triangle -- it would save only part of the draw calls. Not worth a
 static-body merge now. If wreckage cost comes back, look at the 165 asleep pieces' stand-ins first.
+**Built anyway, 2026-10-25 (user: "lets merge anyways and be able to cull far wreckage ... a tall
+wreckage that could be seen from around a planet should be seen before something short even if
+the short thing is actually closer"), as the rubble field** (`IslandManager`, "THE RUBBLE FIELD"):
+* What sleeping wreckage leaves drawn -- its stand-ins -- is merged a **32-stud tile** at a time,
+  one mesh a material, on a worker, once the tile has been quiet half a second; until then, and
+  while a piece wakes out of it, its stand-ins draw themselves. Merged from the arrays a coarse
+  stand-in was made from (`BrickIsland.coarse_arrays`, `Dormant.stand_in_arrays`), never read
+  back from the GPU (that was 54 ms main / 545 ms worker a merge; now 0.13 / 5.7).
+* A stand-in left as its bricks (the cap sleeps pieces near too) past the coarse ladder's 145 m is
+  made coarse from its record on a worker, and merged; nearer it keeps its bricks.
+* **The cap:** `FIELD_MAX_DRAWN` (48) tiles drawn, ranked by **apparent size** -- (height + a
+  quarter of the width) / distance (`apparent_size`), so a 60 m spire 600 m off (0.10) outranks a
+  3 m heap 200 m off (0.03). Tiles within 145 m are always drawn and fill the cap first. The live
+  debris cap now puts the least visible piece to sleep first too, not the farthest.
+* Collision stays a body a piece: frozen bodies cost the physics step nothing (measured above).
+`rubble_field_probe` (ranking, merge); `--rubble --big` reports the field. `--big --shot` 17.0 ms
+mean, inside its usual spread.
 
 ## 4. Markers, made by the generator
 
