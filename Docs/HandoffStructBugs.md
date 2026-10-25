@@ -74,11 +74,11 @@ since storey units' log commands (`--ring` 4 of 4, no FAIL line). Open, in order
 
 **Later 2026-10-24:** main's DLL rebuilt (freeze fix live). Item 9 done: staggered seams
 (CollapseNext 30; `stagger_probe`; `--breakshape --picks=12`: layers 0->4, slices 5->2, other
-2->6; ~3% parts). Item 10 started: `big_city.tscn -- --widecheck --big`, 8 ok 2 FAIL -- **next**:
-building 23 (160 x 60) body comes off 9 ticks after its first piece (line 3); building 24
-(200 x 80) a hit taken far off is not drawn (21824 vertices drawn vs 2692 from its damage --
-the far shell drawn from bricks, `_far_shell_counts`, may just be the wrong measure for a wide
-one). The bay check (span rule) passes. `collapse_probe` "building 14: pushed over, it turns"
+2->6; ~3% parts). Item 10: `big_city.tscn -- --widecheck --big`, **10 ok, 0 FAIL**: a shell shot shows at
+once; the body of a wide building goes within 3 ticks of its first piece or of a long shot
+landing (a 160 x 60 storey is 207 blasts over 27 ticks); a far wide building is drawn from its
+bricks and judged by them (`_far_shell_counts`); a 40-stud bay shot out drops the floor over it
+by the span rule and the ends stand. `--breaklag --big` 7 ok. `collapse_probe` "building 14: pushed over, it turns"
 fails with or without the stagger: likely resting flat on its stump, check from a lifted start.
 
 **Open, in order:**
