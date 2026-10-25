@@ -123,6 +123,18 @@ var _border_portals := {}
 var _next_portal := 1
 ## Building boxes: [planet-local centre transform, size].
 var sites: Array = []
+## Where the trees are (PlanetTrees.trees_near: Callable(dir, radius) -> [{key,
+## index, at, basis, variant}]); each trunk goes into the regions it is in as a
+## proxy box -- walked round, and cover. Unset: no trees.
+var tree_source := Callable()
+## "face:i:j:index" -> proxy id, the same in every region; and the trees knocked
+## down (remove_tree), left out of regions made later.
+var _tree_ids := {}
+var _trees_gone := {}
+var _next_tree_id := TREE_PROXY_BASE
+const TREE_PROXY_BASE := 1 << 20
+## Trunk proxies put into regions so far (probes).
+var tree_count := 0
 var _reqs := {}
 var _turn := 0
 var _next_id := 1
@@ -276,7 +288,7 @@ func ensure(k: Vector2i) -> Region:
 		var b: Array = _building[k]
 		WorkerThreadPool.wait_for_task_completion(int(b[0]))
 		_building.erase(k)
-		return _finish(k, (b[1] as Dictionary).nr, 0.0)
+		return _finish(k, (b[1] as Dictionary).nr, 0.0, (b[1] as Dictionary).trees)
 	var t0 := Time.get_ticks_usec()
 	var nr := _grid(k)
 	return _finish(k, nr, (Time.get_ticks_usec() - t0) / 1000.0)
@@ -290,8 +302,11 @@ func _grid(k: Vector2i) -> PlanetNavRegion:
 func _start_build(k: Vector2i) -> void:
 	if regions.has(k) or _building.has(k):
 		return
-	var box := {"nr": null}
-	var task := WorkerThreadPool.add_task(func() -> void: box.nr = _grid(k), false, "nav region")
+	var box := {"nr": null, "trees": null}
+	# The ground grid and the trees standing on it, both off the main thread.
+	var task := WorkerThreadPool.add_task(func() -> void:
+			box.nr = _grid(k)
+			box.trees = _trees_for(box.nr), false, "nav region")
 	_building[k] = [task, box]
 
 
@@ -307,7 +322,7 @@ func _collect_builds(max_n: int) -> void:
 		WorkerThreadPool.wait_for_task_completion(int(b[0]))
 		_building.erase(k)
 		if not regions.has(k):
-			_finish(k, (b[1] as Dictionary).nr, 0.0)
+			_finish(k, (b[1] as Dictionary).nr, 0.0, (b[1] as Dictionary).trees)
 		n += 1
 
 
@@ -316,7 +331,14 @@ func regions_building() -> int:
 
 
 ## The region round a grid built: its framed world, its proxies, its nav.
-func _finish(k: Vector2i, nr: PlanetNavRegion, grid_ms: float) -> Region:
+## The trees a region's grid stands under (tree_source), or [] with none.
+func _trees_for(nr: PlanetNavRegion) -> Array:
+	if not tree_source.is_valid():
+		return []
+	return tree_source.call(nr.frame.basis.y.normalized(), nr.half * 1.42 + 2.0)
+
+
+func _finish(k: Vector2i, nr: PlanetNavRegion, grid_ms: float, p_trees: Variant = null) -> Region:
 	var t0 := Time.get_ticks_usec()
 	var r := Region.new()
 	r.key = k
@@ -337,6 +359,23 @@ func _finish(k: Vector2i, nr: PlanetNavRegion, grid_ms: float) -> Region:
 			continue
 		r.world.set_proxy(n, _planet_xf() * xf, size, 1.0 / BrickWorld.get_stud_metres())
 		n += 1
+	if tree_source.is_valid():
+		for t in (p_trees if p_trees != null else _trees_for(nr)):
+			var tk := "%d:%d:%d:%d" % [t.key.x, t.key.y, t.key.z, t.index]
+			if _trees_gone.has(tk):
+				continue
+			var l := inv * (t.at as Vector3)
+			if absf(l.x) > nr.half + 2.0 or absf(l.z) > nr.half + 2.0:
+				continue
+			if not _tree_ids.has(tk):
+				_tree_ids[tk] = _next_tree_id
+				_next_tree_id += 1
+			var size := PlanetTrees.trunk_size(int(t.variant))
+			var b: Basis = t.basis
+			r.world.set_proxy(int(_tree_ids[tk]), _planet_xf() * Transform3D(b, (t.at as Vector3) + b.y * size.y * 0.5),
+					size, 1.0 / BrickWorld.get_stud_metres())
+			tree_count += 1
+			_tree_boxes[tk] = AABB((t.at as Vector3) - Vector3.ONE * 2.0, Vector3.ONE * 4.0)
 	r.world.sync()
 	for side in 4:
 		for pid in _border(k, side):
@@ -376,6 +415,24 @@ func _relink(k: Vector2i) -> void:
 					if o != null and o != r:
 						peers.append(o.world)
 			r.world.set_peers(peers)
+
+
+## A tree came down (PlanetTrees.tree_knocked): its trunk leaves every region's
+## world, and every map forgets the columns round it.
+func remove_tree(key: Vector3i, index: int) -> void:
+	var tk := "%d:%d:%d:%d" % [key.x, key.y, key.z, index]
+	_trees_gone[tk] = true
+	if not _tree_ids.has(tk):
+		return
+	var id: int = _tree_ids[tk]
+	for r in regions.values():
+		(r as Region).world.remove_proxy(id)
+	if _tree_boxes.has(tk):
+		invalidate_box(_planet_xf() * (_tree_boxes[tk] as AABB))
+
+
+## "face:i:j:index" -> planet-local box round a trunk, for remove_tree.
+var _tree_boxes := {}
 
 
 # --- danger -------------------------------------------------------------------

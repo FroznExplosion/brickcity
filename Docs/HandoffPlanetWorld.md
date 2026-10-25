@@ -69,8 +69,9 @@ trees. Rerun before believing it.
    world-up; on a planet they need the instance's up. `ImpostorLod.sway` / `snowcap` are off now.
 3. **Trees solid to vehicles** -- done (Planets.md 11.10 "Trees and vehicles"): trucks and APCs
    are stopped by trunks (`Layers.TREE`), a tank knocks a tree down; `--gate=trees` 7/7.
-4. **Trees in the AI's world** (cover, nav obstacles) -- with the nav chat, through its
-   AIWorld proxies.
+4. **Trees in the AI's world** -- done (Planets.md 11.10 "Trees in the AI's world"): trunks are
+   proxies in the nav regions (walked round, cover), a knocked one leaves them;
+   `planet_tree_ai_probe` 8/8.
 5. The spawn town on greener ground (a temperate-grass pad or a nudge to `climate_axis`), if the
    user wants it.
 6. From orbit the trees are only the biome colour on the impostor; a darker forest tint there.

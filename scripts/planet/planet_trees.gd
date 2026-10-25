@@ -71,6 +71,8 @@ var _falls: Array = []
 ## How long a knocked tree takes to come down, seconds.
 const FALL_S := 1.2
 var knocked_count := 0
+## A tree came down (knock): the AI's world takes its trunk away (PlanetNavNet).
+signal tree_knocked(key: Vector3i, index: int)
 var _queue: Array[Vector3i] = []
 var _planned_at := Vector3.INF
 var built_cells := 0
@@ -352,7 +354,42 @@ func knock(key: Vector3i, index: int, push: Vector3) -> bool:
 	_knocked[key] = down
 	_falls.append({"lod": h[0], "handle": h[1], "from": from, "axis": axis, "foot": foot, "t": 0.0})
 	knocked_count += 1
+	tree_knocked.emit(key, index)
 	return true
+
+
+## Every tree within `radius` metres (on the datum) of planet-local unit `dir`,
+## whether its cell is built or not: [{key, index, at, basis, variant}]. The
+## same every call (trees_of is seeded by the cell); for the AI's world
+## (PlanetNavNet.tree_source). Knocked ones are left out.
+func trees_near(dir: Vector3, radius: float) -> Array:
+	var at := dir.normalized() * data.radius
+	var start := cell_of(dir.normalized())
+	var seen := {start: true}
+	var open: Array[Vector3i] = [start]
+	var out: Array = []
+	while not open.is_empty():
+		var key: Vector3i = open.pop_back()
+		if (cell_centre(key) * data.radius).distance_to(at) > radius + CELL:
+			continue
+		var trees := trees_of(key)
+		for i in trees.size():
+			var t: Dictionary = trees[i]
+			if is_knocked(key, i) or (t.at as Vector3).normalized().distance_to(dir.normalized()) * data.radius > radius:
+				continue
+			out.append({"key": key, "index": i, "at": t.at, "basis": t.basis, "variant": t.variant})
+		for o in [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]:
+			var nk := cell_of(dir_at(key.x, key.y + 0.5 + o.x, key.z + 0.5 + o.y))
+			if not seen.has(nk):
+				seen[nk] = true
+				open.append(nk)
+	return out
+
+
+## A trunk's box (the collider's): 2 x 2 studs, its height in bricks.
+static func trunk_size(variant: int) -> Vector3:
+	var stud := BrickWorld.get_stud_metres()
+	return Vector3(2.0 * stud, Trees.TRUNK_HEIGHTS[variant] * 3 * BrickWorld.get_plate_metres(), 2.0 * stud)
 
 
 ## The standing trees of the built cells nearest planet-local `p`, nearest
