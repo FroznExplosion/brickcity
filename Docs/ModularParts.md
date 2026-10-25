@@ -606,8 +606,7 @@ interfaces.
   package again changes nothing; a newer rev replaces the part; an older one is refused.
 - Round trip: an exported and imported part has the same nodes, meshes and materials (normals and
   tangents to the engine's packing), the catalogue reads it and the game makes the gun of it.
-- **Not yet**: thumbnails are carried but not yet made (the workshop needs a window to render
-  one); the zip reader cannot ask a file's size before unpacking it, so the 8 MB file cap is the
+- **Not yet**: the zip reader cannot ask a file's size before unpacking it, so the 8 MB file cap is the
   guard against a file that unpacks huge. Steam Workshop and the lobby are stage 10.
 
 ### Stage 10, the offline half, as built
@@ -727,6 +726,19 @@ netcode only has to carry dictionaries and byte chunks:
   design of fixed slots in `user://parts/designs/`, Enter puts it in the world (following you on
   foot, else walking its circle). Saved characters come back with Ctrl T as any figure design.
 - Probed in `tools/character_probe.gd` (16).
+
+### Thumbnails, as built
+
+- **`PartThumbnail`** (`scripts/parts/part_thumbnail.gd`): a part drawn in a viewport of its own,
+  from three quarters above, framed to its meshes, on a clear background, 256 across, kept beside
+  it as `thumb.png`. It needs a window: headless it makes none (and nothing breaks).
+- **The workshop's Save** makes one for every part it writes, one after another, when it has a
+  window; Asset > "Make pictures of this build's saved parts" makes them again.
+- **The catalogue** shows a part's picture as its icon in the list (40 px). Packages carry it and
+  an import keeps it (stage 9 already took a `thumb.png`).
+- Probed by `tools/thumb_probe.gd` (windowed: 7 checks -- the part in the middle in its colour,
+  clear round it, framed, the icon, the package; headless: 2). Its one windowed run peaked at
+  68 C, not held back.
 
 ## 12. Decided
 
