@@ -11,6 +11,8 @@ extends SceneTree
 ##              stack; taken off, back as it was; on new layers (a chassis's class) it holds
 ##   use        a passive is not used; a missile pod fires its burst, then cools; a strike
 ##              arm hits the enemy mech in reach and only that
+##   loot       a pod on the ground: a block in a beam of its rarity's colour, its name over it;
+##              the player out of reach does not take it, in reach does, once
 ##   screen     the backpack's mech page: fit from the stash, swap, take off; its text; swap
 ##              weapon steps to it after the skills when there is a mech
 
@@ -35,6 +37,7 @@ func _ok(what: String, cond: bool, detail: String = "") -> void:
 func _run() -> void:
 	_roll()
 	await _fit_and_use()
+	await _loot()
 	_screen()
 	print("pods probe: %d passed, %d failed" % [_pass, _fail])
 	quit(1 if _fail > 0 else 0)
@@ -136,6 +139,36 @@ func _fit_and_use() -> void:
 	_ok("a strike arm hits the enemy in reach", pods.use(1) and foe.health.total_current() < before,
 			"%s -> %s" % [before, foe.health.total_current()])
 	_ok("and not its own side", is_equal_approx(friend.health.total_current(), friend_before))
+
+
+func _loot() -> void:
+	print("loot")
+	var pod := PodGenerator.generate(77, 5, 1, &"missiles")
+	var w := WorldPodPickup.create(pod)
+	root.add_child(w)
+	w.global_position = Vector3(100, 0, 100)
+	var beam := (w.get_node(^"Beam") as MeshInstance3D).material_override as StandardMaterial3D
+	_ok("a block in a beam of its rarity's colour, its name over it", beam != null
+			and beam.albedo_color.is_equal_approx(Color(WorldPodPickup.rarity_colour(5), 0.55))
+			and (w.get_node(^"Tag") as Label3D).text == pod.pod_name)
+	var got := []
+	w.picked.connect(func(p: PodGenerator.Result) -> void: got.append(p))
+	var player := Node3D.new()
+	root.add_child(player)
+	player.global_position = Vector3(100, 0, 105)
+	w.taker_of = func() -> Node3D: return player
+	_ok("out of reach: not taken", not w.check() and got.is_empty())
+	player.global_position = Vector3(100, 0, 101)
+	_ok("in reach: taken, the pod it holds", w.check() and got == [pod])
+	_ok("once", not w.check() and got.size() == 1)
+	await process_frame
+	_ok("and gone from the ground", not is_instance_valid(w))
+	var w2 := WorldPodPickup.create(pod)
+	root.add_child(w2)
+	w2.taker_of = func() -> Node3D: return null   # the player in a mech: not on foot
+	_ok("nobody on foot: not taken", not w2.check())
+	w2.queue_free()
+	player.queue_free()
 
 
 func _screen() -> void:

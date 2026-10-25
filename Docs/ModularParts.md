@@ -549,7 +549,7 @@ interfaces.
   saved (not in a scripted pass); Ctrl Y's workshop mechs do too. With none, the hidden
   placeholder LMG stays.
 - **Not yet**: the Brace Plate is armour all round until hits say which way they came from; enemy mechs carry
-  no pods (their brain would need to use them: the AI's); pods do not drop as loot yet.
+  no pods (their brain would need to use them: the AI's).
 
 ### Stage 8 as built
 
@@ -793,6 +793,17 @@ netcode only has to carry dictionaries and byte chunks:
 - **Looked at** (`tools/mech_look.gd`, windowed, `user://mech_look/`): beside a wall with a
   second-storey window; from the cockpit the window is square ahead at eye level, the gun arm's
   forearm reaching out below; walking, the legs scissor with the feet level and the knee folds.
+
+### Pods as loot, as built
+
+- **A destroyed enemy mech leaves a pod** (`CityScene.drop_pod`): of the fight's tier, its rarity
+  rolled as loot is (`LootRoller.roll_rarity`, a heavy's luck), on its own dice so the guns'
+  loot stream draws what it always did. Not in a scripted pass.
+- **On the ground** (`WorldPodPickup`): a block turning in a beam of its rarity's colour, its
+  name over it. The player walking onto it on foot (2.2 m) takes it: it goes to the backpack's
+  mech page (`MechLoadoutScreen.stash`, made then if the player has had no mech), with a note on
+  screen. From a mech it is not taken.
+- Probed in `pods_probe` (loot: 6 checks).
 
 ## 12. Decided
 

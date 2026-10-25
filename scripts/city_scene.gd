@@ -5268,6 +5268,43 @@ func drop_loot(at: Vector3, archetype: StringName = &"trash") -> Array[WorldGunP
 	return out
 
 
+## The pods' own dice: a pod drop never moves what the guns' loot stream draws.
+var _pod_rng := RandomNumberGenerator.new()
+
+
+## A pod on the ground at `at`, of the fight's tier and a rolled rarity (as loot is): the
+## player walking onto it takes it into the backpack's mech page.
+func drop_pod(at: Vector3) -> WorldPodPickup:
+	if _pod_rng.seed == 0:
+		_pod_rng.seed = 0x90D0
+	var t := arena.level if arena != null else 1
+	var pod := PodGenerator.generate(_pod_rng.randi(), LootRoller.roll_rarity(_pod_rng,
+			LootRoller.total_luck(t, t, &"heavy")), t)
+	var w := WorldPodPickup.create(pod)
+	add_child(w)
+	w.global_position = _on_ground(at)
+	w.taker_of = func() -> Node3D:
+		return _player_pawn.body if _player.is_possessing() and _player_pawn != null 				and is_instance_valid(_player_pawn) else null
+	w.picked.connect(func(p: PodGenerator.Result) -> void:
+		_pod_stash().stash.append(p)
+		if _arsenal != null:
+			_arsenal._say("Pod: %s (backpack, mech page)" % p.pod_name)
+		print("[city] picked up pod %s" % p.pod_name))
+	print("[city] pod dropped: %s" % pod.pod_name)
+	return w
+
+
+## The backpack's mech page, made if the player has had no mech yet: where pods go.
+func _pod_stash() -> MechLoadoutScreen:
+	if _mech_screen == null:
+		_mech_screen = MechLoadoutScreen.new()
+		_mech_screen.name = "MechLoadout"
+		add_child(_mech_screen)
+		if _arsenal != null:
+			_arsenal.mech_screen = _mech_screen
+	return _mech_screen
+
+
 ## A gun on the floor, made from what it is (the recipe, not a re-roll): up off the
 ## ground at `at` and tossed, it falls, lands and lies (WorldGunPickup). What a dead
 ## soldier's gun becomes, and every loot drop.
@@ -6284,6 +6321,9 @@ func _spawn_enemy_mech(feet: Vector3, yaw: float, recipe := "medium_gunner", des
 				_combat_rng.randi(), WeaponClass.builtin(&"rocket_launcher"), 1)), _combat_rng,
 				_gun.on_structure_hit)
 	mech_brains.append(br)
+	# Destroyed, it leaves a pod (stage 7's pods as loot) -- not in a scripted pass.
+	if not _scripted and m.layers != null:
+		m.layers.destroyed.connect(func(_why: String) -> void: drop_pod(m.feet()))
 	print("[city] enemy mech (%s) at %v" % [m.name_tag.text if m.name_tag != null else recipe, feet])
 	return br
 
