@@ -722,6 +722,9 @@ class Dormant:
 	## body (IslandManager._leave_stand_in). For a piece put back asleep from a
 	## save, built a little after (build_due_stand_ins).
 	var stand_in: MeshInstance3D = null
+	## The rubble field's tile its stand-in is drawn in (_field_add), if any.
+	var field_key := Vector2i.ZERO
+	var in_field := false
 
 
 ## Far enough that a piece is not part of the scene any more, and close enough
@@ -3068,6 +3071,15 @@ func _exit_tree() -> void:
 		(job[2] as Array)[0] = null
 	_mesh_jobs.clear()
 	_upload_waiting.clear()
+	# And the rubble field's merges, the same way (it crashed on quit without).
+	for key in _field:
+		var tile: FieldTile = _field[key]
+		if tile.job >= 0:
+			WorkerThreadPool.wait_for_task_completion(tile.job)
+			tile.job = -1
+		tile.holder = []
+	_field.clear()
+	_field_jobs = 0
 
 
 ## Attach the meshes the workers have finished, and do what was asked of those
@@ -4852,6 +4864,7 @@ func tick() -> void:
 	_advance_sleep_jobs()
 	if not _stand_ins_due.is_empty():
 		build_due_stand_ins()
+	_tend_field()
 	var _tl := Time.get_ticks_usec()
 	tick_prof.loop += float(_tl - _t_loop) / 1000.0
 	tick_prof.pieces += float(_tp - _t_loop) / 1000.0
@@ -5160,18 +5173,22 @@ func _plan_debris_cap() -> Array:
 		for k in mini(over_small, small.size()):
 			plan.append([small[k], true])
 	if over_large > 0:
-		# Farthest from anybody first, and nobody's cover or floor at all: a piece
-		# asleep has no collision (see CAP_KEEP_RANGE).
+		# The least seen first (apparent_size: a tall wreck far off outranks a low
+		# heap nearer), and nobody's cover or floor at all: a piece asleep has no
+		# collision (see CAP_KEEP_RANGE). It was farthest first.
 		var points := interest_points()
 		var away := {}
+		var seen := {}
 		var keep: Array = []
 		for isl in large:
-			var d := _distance_to_interest(world_aabb(isl), points)
+			var box := world_aabb(isl)
+			var d := _distance_to_interest(box, points)
 			if d < CAP_KEEP_RANGE:
 				continue
 			away[isl] = d
+			seen[isl] = apparent_size(box, d)
 			keep.append(isl)
-		keep.sort_custom(func(a, c) -> bool: return float(away[a]) > float(away[c]))
+		keep.sort_custom(func(a, c) -> bool: return float(seen[a]) < float(seen[c]))
 		for k in mini(over_large, keep.size()):
 			plan.append([keep[k], false])
 		# What is still awake after this plan, the farthest of it.
@@ -5334,6 +5351,7 @@ func _commit_sleep(isl: BrickIsland, index: int, record: ChunkRecord, by_cap := 
 	d.owner = isl.owner
 	d.stand_in = _leave_stand_in(isl)
 	dormant.append(d)
+	_field_add(d)
 	slept += 1
 	piece_slept.emit(isl.piece_id, record)
 	_retire(isl, index, &"slept")
@@ -5473,6 +5491,7 @@ func _leave_stand_in(isl: BrickIsland) -> MeshInstance3D:
 ## whatever it is -- coarse or the bricks it slept with -- because either way it
 ## is not the new chunk's bake, and must be built again, never patched.
 func _take_stand_in(d: Dormant, isl: BrickIsland) -> bool:
+	_field_remove(d)
 	var node := d.stand_in
 	d.stand_in = null
 	if node == null or not is_instance_valid(node):
@@ -5578,7 +5597,299 @@ func build_due_stand_ins(budget_ms := 2.0) -> int:
 		node.transform = d.record.xform
 		d.stand_in = node
 		stand_ins += 1
+		_field_add(d)
 	return n
+
+
+# ---------------------------------------------------------------------------
+# THE RUBBLE FIELD (Docs/DestructionLod.md 3.5)
+# ---------------------------------------------------------------------------
+
+## What sleeping wreckage leaves drawn -- its stand-ins (_leave_stand_in) -- is
+## drawn a TILE at a time: every stand-in in one FIELD_TILE_M square merged into
+## one mesh, a surface per material, the stand-ins' own nodes kept (hidden) for
+## the piece to take back when it wakes. And only so many tiles are drawn: the
+## FIELD_MAX_DRAWN that look biggest from where everybody is (apparent_size), so
+## a tall wreck far off -- one seen from round the planet -- is drawn before a
+## low heap nearer (user, 2026-10-25). Ranked every FIELD_RANK_TICKS; merged on
+## workers (FIELD_JOBS at a time) once a tile has been quiet FIELD_QUIET_TICKS.
+##
+## Measured before (--rubble --big): 165 pieces asleep after a big collapse,
+## each its own node and draw call; settled pieces cost the physics step
+## nothing, and drawing them was 62 of 970 draw calls.
+const FIELD_TILE_M := 32.0 * BrickPalette.STUD_M
+const FIELD_MAX_DRAWN := 48
+const FIELD_RANK_TICKS := 30
+
+class FieldTile:
+	var members: Array = []   ## Dormant
+	var node: MeshInstance3D = null
+	var box := AABB()
+	var dirty := true
+	var shown := true
+	var changed_tick := 0
+	var job := -1               ## the worker merging it, or -1
+	var holder: Array = []      ## what the worker made: [ArrayMesh, AABB]
+	var restart := false        ## changed while the worker ran
+
+## A tile is merged once it has been left alone this long: a collapse puts its
+## pieces to sleep one a tick, and merging on every one was 378 merges for 77
+## tiles. Until then, and while its worker runs, its stand-ins draw themselves.
+const FIELD_QUIET_TICKS := 30
+const FIELD_JOBS := 2
+
+var _field := {}               ## Vector2i -> FieldTile
+var _field_root: Node3D = null
+var _field_ranked := -1000
+var _field_jobs := 0
+var field_merges := 0          ## tiles merged, all told
+var field_worst_ms := 0.0      ## the slowest worker merge
+var field_main_worst_ms := 0.0 ## the slowest a merge cost the main thread
+var field_drawn := 0           ## tiles drawn at the last ranking
+var field_culled := 0          ## tiles the cap left undrawn at the last ranking
+
+
+## How big something looks from `distance` metres: its height, and a quarter of
+## its width, over the distance. Height first: a tall wreck stands on the
+## skyline, a wide low one does not.
+static func apparent_size(box: AABB, distance: float) -> float:
+	return (box.size.y + 0.25 * maxf(box.size.x, box.size.z)) / maxf(distance, 1.0)
+
+
+func _field_key_of(p: Vector3) -> Vector2i:
+	return Vector2i(floori(p.x / FIELD_TILE_M), floori(p.z / FIELD_TILE_M))
+
+
+func _field_add(d: Dormant) -> void:
+	if d.in_field or d.stand_in == null or not is_instance_valid(d.stand_in):
+		return
+	if _field_root == null:
+		_field_root = Node3D.new()
+		_field_root.name = "RubbleField"
+		add_child(_field_root)
+	var key := _field_key_of(d.stand_in.global_position)
+	var tile: FieldTile = _field.get(key)
+	if tile == null:
+		tile = FieldTile.new()
+		_field[key] = tile
+	tile.members.append(d)
+	d.field_key = key
+	d.in_field = true
+	_field_touch(tile)
+
+
+## A piece waking takes its stand-in back, out of its tile: the tile draws its
+## stand-ins one by one until it is merged again, so nothing is drawn twice.
+func _field_remove(d: Dormant) -> void:
+	if not d.in_field:
+		return
+	d.in_field = false
+	if d.stand_in != null and is_instance_valid(d.stand_in):
+		d.stand_in.visible = true
+	var tile: FieldTile = _field.get(d.field_key)
+	if tile == null:
+		return
+	tile.members.erase(d)
+	_field_touch(tile)
+
+
+## Changed: drawn piece by piece from now until merged again.
+func _field_touch(tile: FieldTile) -> void:
+	tile.dirty = true
+	tile.changed_tick = Engine.get_physics_frames()
+	if tile.job >= 0:
+		tile.restart = true
+	_field_show(tile)
+
+
+## What draws a tile: its merged mesh when that is up to date, else each of
+## its stand-ins -- and neither when the cap has culled it.
+func _field_show(tile: FieldTile) -> void:
+	var merged := not tile.dirty and tile.node != null and is_instance_valid(tile.node)
+	if tile.node != null and is_instance_valid(tile.node):
+		tile.node.visible = tile.shown and merged
+	for d in tile.members:
+		var dd: Dormant = d
+		if dd.stand_in != null and is_instance_valid(dd.stand_in):
+			dd.stand_in.visible = tile.shown and not merged
+
+
+func _tend_field() -> void:
+	if _field.is_empty():
+		return
+	var now := Engine.get_physics_frames()
+	for key in _field.keys():
+		var tile: FieldTile = _field[key]
+		if tile.job >= 0:
+			if WorkerThreadPool.is_task_completed(tile.job):
+				_field_finish(tile)
+			continue
+		if tile.dirty and _field_jobs < FIELD_JOBS and now - tile.changed_tick >= FIELD_QUIET_TICKS:
+			_field_start(key, tile)
+	if now - _field_ranked >= FIELD_RANK_TICKS:
+		_field_ranked = now
+		_field_rank()
+
+
+## Hand a tile's stand-ins to a worker to merge. Members whose piece has woken
+## or gone are dropped here; an empty tile is freed.
+func _field_start(key: Vector2i, tile: FieldTile) -> void:
+	var t0 := Time.get_ticks_usec()
+	var into := _field_root.global_transform.affine_inverse()
+	var items: Array = []
+	for i in range(tile.members.size() - 1, -1, -1):
+		var d: Dormant = tile.members[i]
+		if not dormant.has(d) or d.stand_in == null or not is_instance_valid(d.stand_in) \
+				or d.stand_in.mesh == null:
+			d.in_field = false
+			tile.members.remove_at(i)
+			continue
+		var node := d.stand_in
+		items.append([node.mesh, into * node.global_transform, node.material_override,
+				node.cast_shadow])
+	if items.is_empty():
+		if tile.node != null and is_instance_valid(tile.node):
+			tile.node.queue_free()
+		_field.erase(key)
+		return
+	tile.dirty = false
+	tile.restart = false
+	var holder := [null, AABB()]
+	tile.holder = holder
+	tile.job = WorkerThreadPool.add_task(func() -> void:
+		var t := Time.get_ticks_usec()
+		var built := IslandManager._field_build(items)
+		holder[0] = built[0]
+		holder[1] = built[1]
+		holder.append(float(Time.get_ticks_usec() - t) / 1000.0), true, "rubble field")
+	_field_jobs += 1
+	field_main_worst_ms = maxf(field_main_worst_ms, float(Time.get_ticks_usec() - t0) / 1000.0)
+
+
+func _field_finish(tile: FieldTile) -> void:
+	var t0 := Time.get_ticks_usec()
+	WorkerThreadPool.wait_for_task_completion(tile.job)
+	tile.job = -1
+	_field_jobs -= 1
+	var mesh: ArrayMesh = tile.holder[0]
+	if tile.holder.size() > 2:
+		field_worst_ms = maxf(field_worst_ms, float(tile.holder[2]))
+	if tile.restart or mesh == null:
+		# Changed while it was merged: what it made is already out of date.
+		tile.dirty = true
+		_field_show(tile)
+		return
+	if tile.node == null or not is_instance_valid(tile.node):
+		tile.node = MeshInstance3D.new()
+		tile.node.physics_interpolation_mode = Node.PHYSICS_INTERPOLATION_MODE_OFF
+		_field_root.add_child(tile.node)
+	tile.node.mesh = mesh
+	tile.box = _field_root.global_transform * (tile.holder[1] as AABB)
+	field_merges += 1
+	_field_show(tile)
+	field_main_worst_ms = maxf(field_main_worst_ms, float(Time.get_ticks_usec() - t0) / 1000.0)
+
+
+## On a worker: [mesh, its box] of `items` ([mesh, transform, material, shadow]
+## each), a surface per material and vertex format. The arrays are joined, not
+## fed through a SurfaceTool: append_from walks every vertex in turn, and a big
+## tile took 858 ms that way (--rubble --big). Positions and normals are moved
+## in one call each; only the indices are offset one by one. A surface with
+## tangents (which would need turning one by one) goes the SurfaceTool's way.
+static func _field_build(items: Array) -> Array:
+	var groups := {}    # [material, format] -> [arrays, vertex count]
+	var mats := {}
+	var tools := {}
+	var box := AABB()
+	var first := true
+	for it in items:
+		var mesh: ArrayMesh = it[0]
+		var xf: Transform3D = it[1]
+		var over: Material = it[2]
+		var turn := Transform3D(xf.basis.orthonormalized(), Vector3.ZERO)
+		for sf in mesh.get_surface_count():
+			var mat: Material = over if over != null else mesh.surface_get_material(sf)
+			var fmt: int = mesh.surface_get_format(sf)
+			var k := [mat, fmt]
+			mats[k] = mat
+			if fmt & Mesh.ARRAY_FORMAT_TANGENT:
+				var st: SurfaceTool = tools.get(k)
+				if st == null:
+					st = SurfaceTool.new()
+					st.begin(Mesh.PRIMITIVE_TRIANGLES)
+					tools[k] = st
+				st.append_from(mesh, sf, xf)
+				continue
+			var src: Array = mesh.surface_get_arrays(sf)
+			var verts: PackedVector3Array = src[Mesh.ARRAY_VERTEX]
+			var g: Array = groups.get(k, [])
+			if g.is_empty():
+				var fresh := []
+				fresh.resize(Mesh.ARRAY_MAX)
+				g = [fresh, 0]
+				groups[k] = g
+			var dst: Array = g[0]
+			var base: int = g[1]
+			for slot in Mesh.ARRAY_MAX:
+				var v = src[slot]
+				if v == null:
+					continue
+				if slot == Mesh.ARRAY_VERTEX:
+					v = xf * (v as PackedVector3Array)
+				elif slot == Mesh.ARRAY_NORMAL:
+					v = turn * (v as PackedVector3Array)
+				elif slot == Mesh.ARRAY_INDEX and base > 0:
+					var idx := (v as PackedInt32Array).duplicate()
+					for i in idx.size():
+						idx[i] += base
+					v = idx
+				if dst[slot] == null:
+					dst[slot] = v
+				else:
+					dst[slot].append_array(v)
+			g[1] = base + verts.size()
+		var wb := xf * mesh.get_aabb()
+		box = wb if first else box.merge(wb)
+		first = false
+	var out := ArrayMesh.new()
+	for k in groups:
+		out.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, (groups[k] as Array)[0])
+		out.surface_set_material(out.get_surface_count() - 1, mats[k])
+	for k in tools:
+		(tools[k] as SurfaceTool).commit(out)
+		out.surface_set_material(out.get_surface_count() - 1, mats[k])
+	return [out, box]
+
+
+## The cap: the FIELD_MAX_DRAWN tiles that look biggest are drawn, the rest
+## are not (still asleep, still there, only unseen). A tile not merged yet is
+## ranked by its stand-ins' own boxes.
+func _field_rank() -> void:
+	var points := interest_points()
+	if points.is_empty():
+		return
+	var tiles: Array = []
+	var seen := {}
+	for key in _field:
+		var tile: FieldTile = _field[key]
+		var box := tile.box
+		if box.size == Vector3.ZERO:
+			for d in tile.members:
+				var dd: Dormant = d
+				box = dd.record.box if box.size == Vector3.ZERO else box.merge(dd.record.box)
+		seen[tile] = apparent_size(box, _distance_to_interest(box, points))
+		tiles.append(tile)
+	tiles.sort_custom(func(a, c) -> bool: return float(seen[a]) > float(seen[c]))
+	field_drawn = 0
+	field_culled = 0
+	for i in tiles.size():
+		var tile: FieldTile = tiles[i]
+		tile.shown = i < FIELD_MAX_DRAWN
+		_field_show(tile)
+		if tile.shown:
+			field_drawn += 1
+		else:
+			field_culled += 1
 
 
 ## Wake anything dormant that this volume reaches, so that a blast lands on

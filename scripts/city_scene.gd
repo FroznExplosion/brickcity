@@ -8596,8 +8596,19 @@ func _run_rubble_pass() -> void:
 	for isl in settled:
 		if _rubble_live(isl):
 			_rubble_show(isl, true)
+	# The asleep: their stand-ins drawn a tile at a time (IslandManager's rubble
+	# field), the biggest-looking FIELD_MAX_DRAWN tiles only.
+	var field := islands.get_node_or_null("RubbleField") as Node3D
+	print("[rubble] field: %d tile(s), %d drawn, %d left undrawn by the cap; %d merge(s), the slowest %.2f ms on a worker, %.2f ms on the main thread" % [
+			islands._field.size(), islands.field_drawn, islands.field_culled, islands.field_merges,
+			islands.field_worst_ms, islands.field_main_worst_ms])
+	var no_field: Array = as_is
+	if field != null:
+		field.visible = false
+		no_field = await _rubble_window(vp)
+		field.visible = true
 	for row in [["as it is", as_is], ["settled out of physics", no_physics],
-			["settled not drawn", no_draw]]:
+			["settled not drawn", no_draw], ["the asleep not drawn", no_field]]:
 		var m: Array = row[1]
 		print("[rubble]   %-24s frame %.2f ms, physics %.2f ms, render cpu %.2f ms gpu %.2f ms, %d draw calls" % [
 				row[0], m[0], m[1], m[2], m[3], int(m[4])])
