@@ -1580,3 +1580,23 @@ colour and the biome from one lookup, so the bake is no slower (728 ms). `planet
 10/10: of 3000 sampled land pixels, all 809 forest ones are darker than their ground and all 123
 treeless ones are their ground's colour. The walker gate's 5 km and 30 km shots show the forests as
 darker patches; the gate 9/9 (twice, windowed, peak 82 C, not held back).
+
+**Sway and snow on the trees (2026-10-24).** Both were world-up; on a planet they are the tree's
+own:
+- *Sway*: `weather_sway_vertex` already bends a copy about its own base, in its own frame (height
+  along its local Y, the wind into its local axes), so the planet's trees take the heightfield's
+  sway (`WeatherFx.sway_tree` by the variant's height) and a breeze of 0.35 along each cube face's
+  tangent axis (`PlanetTrees.BREEZE`). The planet has no weather system: its tree materials are
+  not WeatherFx's (nothing writes over them); the breeze and snow are set on each set's own near
+  material and cards (`ImpostorLod.near_params` / `card_params`).
+- *Snow*: by the ground's own rule -- snow where the temperature at the height is under freezing
+  (`planet_ground.gdshader`) -- each tree gets a bucket (none, a little, a full cap;
+  `PlanetTrees.snow_bucket`, `SNOW_CAPS`) and the sets are split by it (face x variant x
+  bucket), the cap the set's `weather_snowcap` and its cards' `weather_snow`. The cap whitens
+  what faces the TREE's up: `weather_snow_model_up` (weather.gdshaderinc, in `brick.gdshader` and
+  `impostor.gdshader`), off by default -- everything else takes the world's up exactly as before.
+`planet_tree_probe` 12/12: over 400 random cells every tree's bucket is the rule at its foot
+(4724 bare, 51 a little, 185 capped). `tools/planet_tree_shot.gd -- --snow` sets the player down
+by the snowiest stand (77 capped within 40 m): at 90 m the crowns on the snowy ground are white,
+near bricks and cards alike, the forest past the snow line green (shots
+planet_trees_snow_*.png). The windowed runs peaked 92-97 C (the scene's load), never held back.

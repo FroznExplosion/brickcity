@@ -43,6 +43,7 @@ varying flat vec3 v_c;         // the object's centre, world
 varying flat float v_s;        // its scale
 varying flat float v_fade;     // how much of the card is drawn, 0 none .. 1 all
 varying mat3 v_rot;
+varying flat vec3 v_up;        // the object's up, world (weather_snow_model_up)
 
 vec2 encode(vec3 d) {
     d.y = max(d.y, 0.0);
@@ -80,6 +81,7 @@ float ign(vec2 px) {
 void vertex() {
     vec3 sx = MODEL_MATRIX[0].xyz;
     vec3 sy = MODEL_MATRIX[1].xyz;
+    v_up = sy;
     vec3 sz = MODEL_MATRIX[2].xyz;
     float s = length(sx);
     mat3 rot = mat3(sx / s, sy / length(sy), sz / length(sz));
@@ -164,7 +166,12 @@ void fragment() {
     weather_wet_surface(albedo, out_rough, out_spec, wet_normal, VERTEX, INV_VIEW_MATRIX,
             VIEW_MATRIX, 0.14, 0.0, TIME);
     NORMAL = wet_normal;
-    weather_snow_surface(albedo, out_rough, out_spec, NORMAL, INV_VIEW_MATRIX, 1.0);
+    if (weather_snow_model_up) {
+        weather_snow_surface_up(albedo, out_rough, out_spec, NORMAL,
+                normalize((VIEW_MATRIX * vec4(v_up, 0.0)).xyz), 1.0);
+    } else {
+        weather_snow_surface(albedo, out_rough, out_spec, NORMAL, INV_VIEW_MATRIX, 1.0);
+    }
     ALBEDO = albedo;
     ALPHA = cover;
     ALPHA_SCISSOR_THRESHOLD = 0.5;

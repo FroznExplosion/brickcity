@@ -144,12 +144,15 @@ varying vec2 v_uv;
 varying vec2 v_face;
 varying vec3 v_local;
 varying vec3 v_local_normal;
+// The object's up, world (weather_snow_model_up).
+varying vec3 v_model_up;
 
 void vertex() {
     v_uv = UV;
     v_face = UV2;
     v_local = VERTEX;
     v_local_normal = normalize(NORMAL);
+    v_model_up = MODEL_MATRIX[1].xyz;
     // Wind (weather.gdshaderinc): only what has a sway height set -- a tree, a
     // standing building -- and after v_local, so the print lines ride along.
     VERTEX = weather_sway_vertex(VERTEX, MODEL_MATRIX, TIME);
@@ -659,7 +662,12 @@ void fragment() {
             VIEW_MATRIX, 0.14 * (1.0 - MAT_METAL[mat]), 0.4, TIME);
     NORMAL = wet_normal;
     // A tree's crown takes a cap of snow; a building has real cover.
-    weather_snow_surface(albedo, out_rough, out_spec, NORMAL, INV_VIEW_MATRIX, weather_snowcap);
+    if (weather_snow_model_up) {
+        weather_snow_surface_up(albedo, out_rough, out_spec, NORMAL,
+                normalize((VIEW_MATRIX * vec4(v_model_up, 0.0)).xyz), weather_snowcap);
+    } else {
+        weather_snow_surface(albedo, out_rough, out_spec, NORMAL, INV_VIEW_MATRIX, weather_snowcap);
+    }
     // A tree over burnt ground is burnt too (the wildfire's map).
     if (weather_snowcap > 0.0) {
         emission += weather_burn_surface(albedo, out_rough,
