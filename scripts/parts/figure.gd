@@ -23,10 +23,11 @@ var walk: MechStride
 var walk_id := ""
 ## Walking speed now, m/s.
 var speed := 0.0
-## What it does (a character's simple brain; fighting is the AI's): "idle" stands; "wander"
+## What it does (a character's simple brain; fighting is the AI's): "" nothing of its own
+## (whoever holds it sets `speed`); "idle" stands; "wander"
 ## walks a circle round where it was put; "follow" walks after `target`, stopping FOLLOW_GAP
 ## short; "patrol" walks `route` round and round.
-var mode := "idle"
+var mode := ""
 var target: Node3D
 var route: Array[Vector3] = []
 var _leg := 0
@@ -42,7 +43,7 @@ var wander: bool:
 	get:
 		return mode == "wander"
 	set(v):
-		mode = "wander" if v else "idle"
+		mode = "wander" if v else ""
 
 
 ## A figure of `b` (PartBuilder.generate's), or null if it has problems or no torso scene:
@@ -162,7 +163,7 @@ func think(delta: float) -> void:
 				return
 			if _walk_to(route[_leg % route.size()], ARRIVE, delta):
 				_leg = (_leg + 1) % route.size()
-		_:
+		"idle":
 			speed = 0.0
 
 
