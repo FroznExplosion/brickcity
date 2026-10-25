@@ -72,9 +72,10 @@ func _apply_swap(path: String, part: PartRecord) -> bool:
 	return _rebuild(walk_id)
 
 
-## The joint node of `path` (a part's place on the figure), or null.
+## The joint node of `path` (a part's place on the figure), or null. A hand's is inside its
+## arm, under the elbow.
 func joint(path: String) -> Node3D:
-	return model.get_node_or_null(NodePath("Joint_" + path.replace("/", "_"))) as Node3D if model != null else null
+	return model.find_child("Joint_" + path.replace("/", "_"), true, false) as Node3D if model != null else null
 
 
 ## The hips above the feet: one figure size.
@@ -105,6 +106,12 @@ func _rebuild(pick_walk: String) -> bool:
 			var j := joint(path)
 			if j != null:
 				walk.hips.append(j)
+				walk.knees.append(MotionSets._bend_in(j, "knee"))
+		for path in ["arm_L", "arm_R"]:
+			var j := joint(path)
+			if j != null:
+				walk.arms.append(j)
+				walk.elbows.append(MotionSets._bend_in(j, "elbow"))
 		add_child(walk)
 	return true
 

@@ -104,6 +104,14 @@ static func make(id: String) -> Node:
 	return null
 
 
+## The bend `name` of the part on joint `j`, or null.
+static func _bend_in(j: Node3D, name: String) -> Node3D:
+	for c in j.get_children():
+		if c.has_meta(&"part_id"):
+			return MechAssembler.bends_of(c).get(name)
+	return null
+
+
 ## Give dressed mech `m` its walk: the set its build gets (or `pick`), its legs as long as
 ## the build's. Any walk it had goes. The set's id, or "" (no legs: nothing walks).
 static func walk_mech(m: Mech, build: Dictionary, pick: String = "") -> String:
@@ -122,5 +130,6 @@ static func walk_mech(m: Mech, build: Dictionary, pick: String = "") -> String:
 	for c in m.legs.get_children():
 		if String(c.name).begins_with("Joint_leg_"):
 			mover.hips.append(c)
+			mover.knees.append(_bend_in(c, "knee"))
 	m.body.add_child(mover)
 	return id
