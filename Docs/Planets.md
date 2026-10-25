@@ -1544,3 +1544,17 @@ past where it stood; it lies at 90 degrees, its top along the tank's way; a truc
 (`TransportTruck.BODY_MASK`) moved at a trunk is stopped by it. Not yet: the AI's world does not
 know the trees (11.10 step 4) -- a truck's path goes through a trunk and it backs off and tries
 again; fallen trees are not solid.
+
+**Trees in the AI's world (2026-10-24).** `PlanetTrees.trees_near(dir, radius)` gives the trees
+round a point whether their cells are drawn or not (the same seeded `trees_of`); the nav net
+(`PlanetNavNet.tree_source`, set in `setup_ai`) puts each trunk standing in a region into its
+AIWorld as a proxy box (2 x 2 studs, the trunk's height, two bricks of cover across it) -- the
+person's, sizes' and vehicles' maps walk round it and a soldier can hide behind it. The trees
+are looked up in the region's worker task with its grid (a dense-forest region was 25 ms on the
+main thread with them, 14 without). A tree knocked down (`tree_knocked`) leaves every region's
+world (`remove_tree`) and the maps forget the columns round it; regions made later leave it out.
+Probe `tools/planet_tree_ai_probe.gd` (headless, 8/8): the densest forest of 600 spots (92 trees
+within 40 m); all 160 trunks of its region in the world; a path across the forest keeps 0.68 m
+from every trunk axis (without the trunks it went through some); a trunk is cover (2 bricks); taken
+away, it is not, and its spot is walkable. Not yet: the canopy does not block sight; a tank's map
+goes round trunks rather than through them (it could knock them down).

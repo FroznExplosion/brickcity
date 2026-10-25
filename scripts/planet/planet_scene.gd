@@ -961,6 +961,9 @@ func setup_ai(dir: Vector3) -> void:
 		sites.append([s.frame * Transform3D(Basis(), size * 0.5), size])
 	var net := PlanetNavNet.make(data, dir, planet)
 	net.set_sites(sites)
+	# The trees' trunks too: walked round, and cover; one knocked down goes (11.10).
+	net.tree_source = trees.trees_near
+	trees.tree_knocked.connect(net.remove_tree)
 	var at := planet.global_transform * data.surface_point(dir)
 	net.keep_around([at], AI_KEEP_M, 99)
 	# From here on regions' grids are built on worker threads, off the frame.
