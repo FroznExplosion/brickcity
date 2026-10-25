@@ -80,7 +80,13 @@ func _mode() -> void:
 	_ws._new_build()
 	_ws.set_asset_kind("mech")
 	_ok("a mech's ten parts", Array(_ws.part_names) == MechReference.PARTS, str(_ws.part_names))
-	_ok("nine joints laid ready, a mount and a socket each", _ws.points.size() == 18, str(_ws.points.size()))
+	_ok("nine joints laid ready, a mount and a socket each, and the knees and elbows", _ws.points.size() == 22,
+			str(_ws.points.size()))
+	var bends: Array = _ws.points.filter(func(q: Dictionary) -> bool: return q.kind == "bend")
+	var knee: Array = bends.filter(func(q: Dictionary) -> bool: return q.part == "leg_L")
+	_ok("a knee half way down each leg, an elbow half way down each arm", bends.size() == 4 and knee.size() == 1
+			and knee[0].slot == "knee" and is_equal_approx(float(knee[0].at[1]),
+			_ws.mech_origin().y + (_ws.mech_joint("leg_L").y - _ws.mech_origin().y) * 0.5))
 	var mount: Array = _ready_points("arm_L", "mount")
 	var sock: Array = _ws.points.filter(func(q: Dictionary) -> bool:
 		return q.part == "chassis" and q.kind == "socket" and q.slot == "arm_L")
@@ -121,7 +127,7 @@ func _mode() -> void:
 	_ok("legs 3 long: the hip 20 bricks up", leg.size() == 1
 			and is_equal_approx(float(leg[0].at[1]), _ws.mech_origin().y + 60.0), str(leg))
 	_ok("a point put by hand stays", _ws.points.any(func(q: Dictionary) -> bool: return q.at == [1.0, 2.0, 3.0]))
-	_ok("still 18 ready", _ws.points.filter(func(q: Dictionary) -> bool: return q.get("ready", false)).size() == 18)
+	_ok("still 22 ready", _ws.points.filter(func(q: Dictionary) -> bool: return q.get("ready", false)).size() == 22)
 	_ws.toggle_point([1.0, 2.0, 3.0], "", "", "")
 	_ws.select_part(_ws.part_names.find("arm_L"))
 	var at: Array = _at(_ws.mech_joint("arm_L"))
@@ -178,9 +184,10 @@ func _save() -> void:
 	var ps := load(arm.dir + "part.scn") as PackedScene
 	var scene := ps.instantiate() as Node3D if ps != null else null
 	_ok("the arm's scene has its mount and its wrist socket", scene != null
-			and scene.get_node_or_null("mount") != null and scene.get_node_or_null("socket_hand") != null)
+			and scene.get_node_or_null("mount") != null and scene.find_child("socket_hand", true, false) != null)
+	_ok("its wrist goes with its elbow", scene != null and scene.get_node_or_null("Bend_elbow/socket_hand") != null)
 	if scene != null:
-		var wrist: Vector3 = (scene.get_node("socket_hand") as Node3D).position
+		var wrist: Vector3 = MechAssembler._chain(scene.find_child("socket_hand", true, false), scene).origin
 		var want: Vector3 = _ws.mech_basis() * (_ws.mech_joint_m("hand_L") - _ws.mech_joint_m("arm_L"))
 		_ok("the wrist where the reference has it, at game size", wrist.is_equal_approx(want), "%s vs %s" % [wrist, want])
 		_ok("an arm 24 nano plates long is 1.68 m in the game", is_equal_approx(snappedf(-wrist.y, 0.001), 1.68),

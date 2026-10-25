@@ -12,6 +12,9 @@ extends SceneTree
 ##              walks by the figure walk, left against right
 ##   swap       any figure's arm on any figure's shoulder; what hangs on it stays; a head on
 ##              a shoulder, or a mech's arm, refused, and nothing changes
+##   joints     a leg bends at its knee, an arm at its elbow: the bricks below in the scene
+##              under the bend, the wrist with them; on the figure the hand rides the elbow;
+##              walking, the knee folds back as its leg swings through
 ##   back       Make a mech after: a mech's parts, a mech's reference
 
 const DIR := "user://_probe_figure/"
@@ -65,7 +68,7 @@ func _workshop() -> PartCatalog:
 	_ws._new_build()
 	_ws.set_asset_kind("figure")
 	_ok("a figure's nine parts", Array(_ws.part_names) == FigureReference.PARTS, str(_ws.part_names))
-	var ready: Array = _ws.points.filter(func(q: Dictionary) -> bool: return q.get("ready", false))
+	var ready: Array = _ws.points.filter(func(q: Dictionary) -> bool: return q.get("ready", false) and q.kind != "bend")
 	_ok("eight joints laid ready, a mount and a socket each", ready.size() == 16, str(ready.size()))
 	_ok("on fig interfaces", ready.all(func(q: Dictionary) -> bool: return String(q.interface).begins_with("fig.")))
 	var hat: Array = ready.filter(func(q: Dictionary) -> bool: return q.part == "head" and q.kind == "socket")
@@ -84,6 +87,11 @@ func _workshop() -> PartCatalog:
 		if part.begins_with("leg") or part.begins_with("hand") or part.begins_with("arm"):
 			c.y -= 3
 		_ok("a brick for %s" % part, _ws.place_named(_arch, c), str(c))
+		var bend: Vector3 = FigureReference.bend_at(part)
+		if bend != Vector3.INF:
+			# And one below its knee or elbow: the part's lower half.
+			var low: Vector3 = _ws.mech_origin() + bend
+			_ws.place_named(_arch, Vector3i(int(low.x) - 2, int(low.y) - 4, int(floor(low.z))))
 	_ws._builds_dir = DIR
 	_ws._save_as("Probe Figure")
 	var cat := PartCatalog.new()
@@ -154,6 +162,31 @@ func _game(cat: PartCatalog) -> void:
 		await physics_frame
 	_ok("its legs swing, left against right", absf(f.joint("leg_L").rotation.x) > 0.01
 			and is_equal_approx(f.joint("leg_L").rotation.x, -f.joint("leg_R").rotation.x))
+
+	print("joints")
+	var leg_rec: PartRecord = f.build.at.leg_L
+	var leg_scene := (load(leg_rec.dir + "part.scn") as PackedScene).instantiate() as Node3D
+	var lower := leg_scene.get_node_or_null(^"Bend_knee/Lower")
+	_ok("a leg's scene: its bricks below the knee under the bend", lower != null and lower.get_child_count() > 0
+			and leg_scene.get_node(^"Model").get_child_count() > 0)
+	_ok("its record says it bends", leg_rec.extra.get("bends", []) == ["knee"])
+	leg_scene.free()
+	var elbow := f.joint("arm_L").find_child("Bend_elbow", true, false) as Node3D
+	var hand := f.joint("arm_L/hand")
+	_ok("the hand rides the elbow", elbow != null and hand != null and elbow.is_ancestor_of(hand))
+	var before_hand := hand.global_position
+	elbow.rotation.x = 1.0
+	_ok("the elbow bent: the hand moved", not hand.global_position.is_equal_approx(before_hand))
+	elbow.rotation.x = 0.0
+	var knee := f.joint("leg_L").find_child("Bend_knee", true, false) as Node3D
+	_ok("the walk has both knees", f.walk.knees.size() == 2 and f.walk.knees[0] == knee)
+	var folded := 0.0
+	for i in 40:
+		f.walk.step(0.03, 1.5)
+		folded = minf(folded, knee.rotation.x)
+	_ok("walking, the knee folds back as the leg swings through", folded < -0.05 and knee.rotation.x <= 0.0, str(folded))
+	f.walk.step(0.03, 0.0)
+	_ok("standing, the knees straight", is_zero_approx(knee.rotation.x))
 
 	print("swap")
 	var other := _arm("lu.long_arm", "fig.shoulder")

@@ -14,6 +14,14 @@ const RUN := 9.0
 var set_id := ""
 var mech: Mech
 var hips: Array[Node3D] = []
+## The knees, one a hip (null where a leg has none): the leg folds as it swings forward.
+var knees: Array = []
+## Arms that swing against the legs as it walks (a figure's; a mech's gun arm aims), and
+## their elbows.
+var arms: Array[Node3D] = []
+var elbows: Array = []
+const KNEE_FOLD := 1.1
+const ELBOW_BEND := 0.35
 var hip_height := 3.36
 var swing_max := 0.45
 var phase := 0.0
@@ -37,9 +45,22 @@ func step(dt: float, speed: float) -> void:
 	cadence = speed / stride if stride > 0.001 else 0.0
 	phase = fmod(phase + PI * cadence * dt, TAU)
 	swing = a * sin(phase)
+	var amount := clampf(speed / RUN, 0.0, 1.0)
 	for i in hips.size():
 		if is_instance_valid(hips[i]):
 			hips[i].rotation.x = swing if i % 2 == 0 else -swing
+		# The knee folds while its leg swings through, the foot clearing the ground: the
+		# half of the cycle the leg is moving forward.
+		var k: Node3D = knees[i] if i < knees.size() else null
+		if k != null and is_instance_valid(k):
+			var through := cos(phase) if i % 2 == 0 else -cos(phase)
+			k.rotation.x = -KNEE_FOLD * amount * maxf(through, 0.0)
+	for i in arms.size():
+		if is_instance_valid(arms[i]):
+			arms[i].rotation.x = (-swing if i % 2 == 0 else swing) * 0.6
+		var e: Node3D = elbows[i] if i < elbows.size() else null
+		if e != null and is_instance_valid(e):
+			e.rotation.x = ELBOW_BEND * (0.4 + amount)
 
 
 ## How fast the feet go past the body at the speed it is walking: the speed, if nothing skids.

@@ -695,6 +695,25 @@ netcode only has to carry dictionaries and byte chunks:
   area's); a character-builder screen beyond the workshop and Ctrl Shift T; Mixamo clips on
   figure parts (one rigid bone a part today).
 
+### Joints inside a part (knees, elbows), as built
+
+- A part can **bend**: a third kind of J point, `bend`, named `knee` or `elbow`. Body mode lays
+  them ready half way down each leg (hip to ground) and each arm (shoulder to wrist), with the
+  other ready points (`MechReference` / `FigureReference.BENDS`, `bend_at`).
+- **Export**: the part's bricks below the bend go under a pivot `Bend_<name>` at the bend (in
+  `Lower`), the rest stay in `Model`; a socket below the bend goes under the pivot too, so the
+  hand goes with the forearm. The record lists them (`extra.bends`).
+- **Assembly**: a socket inside a part (under a bend) is found where it is, and the part hung on
+  it goes under the pivot -- the hand rides the elbow. `Mech.set_parts` leaves such joints
+  inside their part; the gun arm's wrist is worked out through them.
+- **Motion**: `MechStride` folds each knee back while its leg swings through (the half of the
+  cycle it moves forward), straight when standing; figures swing their arms against their legs
+  with the elbows a little bent. A mech's gun arm still aims straight.
+- Probed in `figure_probe` (joints: 7 checks) and `mech_workshop_probe` (the ready bends, the
+  wrist under the elbow).
+- **Not yet**: one bend a part; an ankle or a wrist turn; the shell of a smooth part stays with
+  the upper half.
+
 ## 12. Decided
 
 Decided 2026-10-23: every part saves on its own (section 7); joined pairs and fixed characters

@@ -282,6 +282,8 @@ func set_parts(model: Node3D, hip_height: float, layer_spec: Dictionary = {}) ->
 	shoulder = Vector3(arm_at.x, hip_height + arm_at.y, arm_at.z)   # from the feet, as SHOULDER
 	for path: String in joints:
 		var j: Node3D = joints[path]
+		if j.get_parent() != model:
+			continue   # inside another part, under its bend: it goes with that part
 		var xf := j.transform
 		model.remove_child(j)
 		if path.begins_with("leg_"):
@@ -297,9 +299,15 @@ func set_parts(model: Node3D, hip_height: float, layer_spec: Dictionary = {}) ->
 	# The arm hangs from the shoulder; aimed, it points along the aim: turned so the line
 	# from shoulder to wrist runs forward (-Z), the gun at the wrist, the muzzle ahead of it.
 	var wrist := Vector3(0.0, -1.0, -0.2)
-	var hand := pose.get_node_or_null(^"Joint_arm_R_hand") as Node3D
-	if hand != null and hand.position.length() > 0.01:
-		wrist = hand.position
+	var hand := pose.find_child("Joint_arm_R_hand", true, false) as Node3D
+	if hand != null:
+		var t := Transform3D.IDENTITY
+		var c: Node = hand
+		while c != null and c != pose:
+			t = (c as Node3D).transform * t
+			c = c.get_parent()
+		if t.origin.length() > 0.01:
+			wrist = t.origin
 	pose.basis = Basis(Quaternion(wrist.normalized(), Vector3.FORWARD))
 	muzzle.position = Vector3.FORWARD * (wrist.length() + 1.0)
 	cockpit_y = hip_height + EYE_OVER_HIPS
