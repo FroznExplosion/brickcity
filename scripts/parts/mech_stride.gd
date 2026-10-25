@@ -22,6 +22,9 @@ var ankles: Array = []
 ## their elbows.
 var arms: Array[Node3D] = []
 var elbows: Array = []
+## The hands, one an arm (or null): they turn at the wrist as the arm swings, palms in.
+var wrists: Array = []
+const WRIST_TURN := 0.35
 const KNEE_FOLD := 1.1
 const ELBOW_BEND := 0.35
 var hip_height := 3.36
@@ -69,6 +72,11 @@ func step(dt: float, speed: float) -> void:
 		var e: Node3D = elbows[i] if i < elbows.size() else null
 		if e != null and is_instance_valid(e):
 			e.rotation.x = ELBOW_BEND * (0.4 + amount)
+		var w: Node3D = wrists[i] if i < wrists.size() else null
+		if w != null and is_instance_valid(w):
+			# A turn about the forearm (the hand's own up): in on the forward swing.
+			var turn := WRIST_TURN * (swing / maxf(swing_max, 0.001)) * (1.0 if i % 2 == 0 else -1.0)
+			w.basis = Basis(Vector3.UP, turn)
 
 
 ## How fast the feet go past the body at the speed it is walking: the speed, if nothing skids.

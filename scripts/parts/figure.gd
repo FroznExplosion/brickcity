@@ -134,6 +134,7 @@ func _rebuild(pick_walk: String) -> bool:
 			if j != null:
 				walk.arms.append(j)
 				walk.elbows.append(MotionSets._bend_in(j, "elbow"))
+				walk.wrists.append(joint(path + "/hand"))
 		add_child(walk)
 	return true
 
@@ -183,6 +184,16 @@ func _walk_to(to: Vector3, gap: float, delta: float) -> bool:
 	speed = WALK
 	position += flat / d * minf(WALK * delta, d - gap)
 	return false
+
+
+## Turn a hand at its wrist, about the forearm: `side` "L" or "R", `angle` radians from
+## straight. False if it has no hand there.
+func turn_wrist(side: String, angle: float) -> bool:
+	var h := joint("arm_%s/hand" % side)
+	if h == null:
+		return false
+	h.basis = Basis(Vector3.UP, angle)
+	return true
 
 
 ## Where it stands, in words: for gates and the builder.

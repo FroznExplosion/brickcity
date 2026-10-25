@@ -731,8 +731,19 @@ netcode only has to carry dictionaries and byte chunks:
   - a mount and its socket at one spot drew two labels over each other, and the reference its
     own label too: one label a spot now ("arm_L on torso  (fig.shoulder)", "leg_L knee"),
     smaller in a figure's view.
-- **Not yet**: a wrist turn; the shell of a smooth part stays with the upper piece; the ready
-  elbow sits where it falls, not on a brick seam (a brick across it turns with the upper arm).
+- **Bends on seams**: on export a bend that would cut through one of the part's bricks moves to
+  the nearest height no brick crosses (`seam_near`), so every brick is wholly on one side and a
+  folded joint never gapes. The J point stays where it was put.
+- **Wrist turn**: a hand turns about its forearm -- `Figure.turn_wrist(side, angle)`,
+  `Mech.turn_wrist(angle)` for the gun hand (a roll of the gun); a figure's walk turns its hands
+  in as its arms swing forward.
+- **Shells cut at the bends**: a smooth part's shell is cut into the pieces between its bends
+  (`split_by_bends`: a triangle goes with the piece its middle is in, none lost), each piece
+  under its pivot, so the shell bends with the bricks.
+- **Labels on one row** (a figure's hands and hips are level) go up by turns, so side by side
+  they do not run into each other.
+- Probed in `figure_probe` (51: a brick across the elbow, the shell cut and counted, the wrist,
+  the labels), looked at in `figure_look`.
 
 ### Characters, as built
 
