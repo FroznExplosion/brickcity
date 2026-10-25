@@ -62,9 +62,8 @@ trees. Rerun before believing it.
 
 1. **Bake the tree cards while the spawn loads** -- built (Planets.md 11.10, "Plan: the cards
    baked while the spawn loads"): one bake per mesh shared by every set, prebaked before the
-   walker is let go; gates print the hitches "in play" too. **Left:** the windowed A/B
-   (`-- --gate --no-trees` vs `-- --gate`) on an awake, quiet machine -- the first try was in the
-   display-sleep stall and does not count.
+   walker is let go; gates print the hitches "in play" too. A/B timed awake and quiet: in
+   play 9 / 8 with trees vs 9 / 9 without, frame for frame; the trees' extra frames are in the load.
 2. **Sway and snow on trees** (the user: later -- skipped for now). The brick shader's snow and the weather sway are
    world-up; on a planet they need the instance's up. `ImpostorLod.sway` / `snowcap` are off now.
 3. **Trees solid to vehicles** -- done (Planets.md 11.10 "Trees and vehicles"): trucks and APCs

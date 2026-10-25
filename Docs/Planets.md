@@ -1531,6 +1531,19 @@ after 1.8 s, the bakes in), but the machine was in the display-sleep stall (fram
 "no building popped" check failed in both on a long frame, as before. The quiet, awake A/B is
 still to do.
 
+**A/B timed (2026-10-24, awake, quiet: editor closed, no other runs, each run 113-114 s).** The
+windowed walker gate, frames over 40 ms -- all / in play (after the walker is let go):
+
+| run | without trees | with trees |
+|---|---|---|
+| 1 | 10 / 9 | 15 / 9 |
+| 2 | 10 / 9 | 14 / 8 |
+
+In play the two match frame for frame (110-250 ms just after the walker is let go and at 52, 325,
+1300 and 5400 m: the scene's own streaming and flight, there without trees too); the four or five
+extra frames with trees are all in the load now, before anyone moves. Worst frame 333-462 ms
+either way (the load). 9/9 every run. Peaks 81-89 C, never held back.
+
 **Trees and vehicles (2026-10-24).** Trunks are on `Layers.TREE` (new, 1 << 7) as well as
 FIXTURE: walkers and rounds meet them as before; vehicles collide with TREE (not FIXTURE, which is
 the city's furniture and the firefight's barrier), so a truck or an APC is stopped by a trunk. A
