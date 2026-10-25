@@ -170,6 +170,11 @@ var _reversals := 0
 
 ## A truck (or, `p_kind` &"apc", an APC armed with `p_gun` -- a GunInstance --
 ## whose structure hits go to `on_hit`) on the ground at `at`, facing `yaw`.
+## What a truck's body runs into: the ground, buildings, wreckage, a planet's
+## trees (Layers.TREE: a trunk stops a wheeled vehicle).
+const BODY_MASK := Layers.WORLD | Layers.STRUCTURE | Layers.DEBRIS | Layers.TREE
+
+
 static func make(s: AIServices, parent: Node, at: Vector3, yaw: float, p_kind := &"truck",
 		p_gun: GunInstance = null, on_hit := Callable(), rng: RandomNumberGenerator = null) -> TransportTruck:
 	var t := TransportTruck.new()
@@ -182,7 +187,7 @@ static func make(s: AIServices, parent: Node, at: Vector3, yaw: float, p_kind :=
 	# Solid to pawns and to rounds, like wreckage: not brick, so not cover the
 	# AI knows of yet (AIVehicles.md: brick-built is the next step).
 	t.collision_layer = Layers.DEBRIS
-	t.collision_mask = Layers.WORLD | Layers.STRUCTURE | Layers.DEBRIS
+	t.collision_mask = BODY_MASK
 	t.floor_max_angle = deg_to_rad(40.0)
 	t.floor_snap_length = 0.6
 	t.floor_stop_on_slope = true

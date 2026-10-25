@@ -63,6 +63,14 @@ var _turn := 0
 var _frame := 0
 ## key (Vector3i face, i, j) -> {node, centre, trees, handles: [[set, handle]], body}
 var _cells := {}
+## Trees knocked down this session: cell key -> {index: fallen planet-local
+## transform}, so a cell built again has them lying where they fell.
+var _knocked := {}
+## Falling now: [{lod, handle, from: Transform3D, axis, foot, t}].
+var _falls: Array = []
+## How long a knocked tree takes to come down, seconds.
+const FALL_S := 1.2
+var knocked_count := 0
 var _queue: Array[Vector3i] = []
 var _planned_at := Vector3.INF
 var built_cells := 0
@@ -250,6 +258,9 @@ func _build_cell(key: Vector3i) -> void:
 		var lod := _set_for(key.x, t.variant)
 		var b: Basis = t.basis
 		var xf := Transform3D(b, (t.at as Vector3) - b * foot_of(t.variant))
+		var down: Dictionary = _knocked.get(key, {})
+		if down.has(handles.size()):
+			xf = down[handles.size()]
 		handles.append([lod, lod.add(lod.transform.affine_inverse() * xf)])
 		_dirty[lod] = true
 	_cells[key] = {"node": node, "centre": centre, "trees": trees, "handles": handles, "body": null}
@@ -276,11 +287,17 @@ func _free_cell(key: Vector3i) -> void:
 func _make_solid(key: Vector3i) -> void:
 	var c: Dictionary = _cells[key]
 	var body := StaticBody3D.new()
-	body.collision_layer = Layers.FIXTURE
+	# FIXTURE for walkers and rounds, TREE for vehicles (Layers.TREE).
+	body.collision_layer = Layers.FIXTURE | Layers.TREE
 	body.collision_mask = 0
+	body.set_meta(&"on_vehicle", _hit_by_vehicle.bind(key, body))
 	(c.node as Node3D).add_child(body)
 	var stud := BrickWorld.get_stud_metres()
-	for t in c.trees:
+	var down: Dictionary = _knocked.get(key, {})
+	for ti in (c.trees as Array).size():
+		var t: Dictionary = c.trees[ti]
+		if down.has(ti):
+			continue
 		# The trunk: 2 x 2 studs of round bricks, three plates each.
 		var tall: float = Trees.TRUNK_HEIGHTS[t.variant] * 3 * BrickWorld.get_plate_metres()
 		var cs := CollisionShape3D.new()
@@ -289,13 +306,110 @@ func _make_solid(key: Vector3i) -> void:
 		cs.shape = box
 		var b: Basis = t.basis
 		cs.transform = Transform3D(b, (t.at as Vector3) - (c.centre as Vector3) + b.y * tall * 0.5)
+		cs.set_meta(&"tree", ti)
 		body.add_child(cs)
 	c.body = body
+
+
+# --- knocked down ------------------------------------------------------------
+
+## A vehicle ran into one of a cell's trunks (Tank._knock): a tracked one knocks
+## the tree down, away from it; a wheeled one is just stopped by it.
+func _hit_by_vehicle(shape_index: int, vehicle: Node3D, key: Vector3i, body: StaticBody3D) -> void:
+	if not (vehicle is Tank) or not is_instance_valid(body):
+		return
+	var owner_id := body.shape_find_owner(shape_index)
+	var cs := body.shape_owner_get_owner(owner_id) as CollisionShape3D
+	if cs == null or not cs.has_meta(&"tree"):
+		return
+	var push := (vehicle as CharacterBody3D).velocity
+	if push.length() < 0.1:
+		push = -vehicle.global_transform.basis.z
+	knock(key, int(cs.get_meta(&"tree")), to_local(global_position + push) - to_local(global_position))
+	cs.queue_free()
+
+
+## Knock tree `index` of cell `key` down toward `push` (planet-local): it
+## falls about its foot over FALL_S and lies there for the rest of the session.
+func knock(key: Vector3i, index: int, push: Vector3) -> bool:
+	var c: Dictionary = _cells.get(key, {})
+	if c.is_empty() or index < 0 or index >= (c.trees as Array).size():
+		return false
+	var down: Dictionary = _knocked.get(key, {})
+	if down.has(index):
+		return false
+	var t: Dictionary = c.trees[index]
+	var b: Basis = t.basis
+	var foot: Vector3 = t.at
+	var p := (push - b.y * push.dot(b.y))
+	if p.length() < 1e-3:
+		p = b.x
+	# About the horizontal axis that tips the tree's up toward the push.
+	var axis := b.y.cross(p.normalized()).normalized()
+	var from := Transform3D(b, foot - b * foot_of(t.variant))
+	var h: Array = c.handles[index]
+	down[index] = _rotated(from, axis, foot, PI * 0.5)
+	_knocked[key] = down
+	_falls.append({"lod": h[0], "handle": h[1], "from": from, "axis": axis, "foot": foot, "t": 0.0})
+	knocked_count += 1
+	return true
+
+
+## The standing trees of the built cells nearest planet-local `p`, nearest
+## first: [{key, index, at, variant}], at most `n`.
+func nearest(p: Vector3, n := 1, skip: Array = []) -> Array:
+	var all: Array = []
+	for key in _cells:
+		var trees: Array = _cells[key].trees
+		for i in trees.size():
+			if is_knocked(key, i) or skip.has([key, i]):
+				continue
+			all.append([(trees[i].at as Vector3).distance_to(p), key, i])
+	all.sort_custom(func(a, b) -> bool: return a[0] < b[0])
+	var out: Array = []
+	for e in all.slice(0, n):
+		var t: Dictionary = _cells[e[1]].trees[e[2]]
+		out.append({"key": e[1], "index": e[2], "at": t.at, "variant": t.variant})
+	return out
+
+
+## Where a knocked tree lies (planet-local transform of its copy), or none.
+func fallen_xf(key: Vector3i, index: int) -> Variant:
+	return (_knocked.get(key, {}) as Dictionary).get(index)
+
+
+func is_knocked(key: Vector3i, index: int) -> bool:
+	return (_knocked.get(key, {}) as Dictionary).has(index)
+
+
+static func _rotated(xf: Transform3D, axis: Vector3, foot: Vector3, a: float) -> Transform3D:
+	var r := Basis(axis, a)
+	return Transform3D(r * xf.basis, foot + r * (xf.origin - foot))
+
+
+func _fall_step(delta: float) -> void:
+	var i := 0
+	while i < _falls.size():
+		var f: Dictionary = _falls[i]
+		f.t = float(f.t) + delta
+		# As a falling body goes: slowly from upright, fast at the end.
+		var k := clampf(float(f.t) / FALL_S, 0.0, 1.0)
+		var xf := _rotated(f.from, f.axis, f.foot, PI * 0.5 * k * k)
+		var lod: ImpostorLod = f.lod
+		if is_instance_valid(lod):
+			lod.move(int(f.handle), lod.transform.affine_inverse() * xf)
+			_dirty[lod] = true
+		if k >= 1.0:
+			_falls.remove_at(i)
+		else:
+			i += 1
 
 
 # --- streaming round the camera -----------------------------------------------------
 
 func _process(_delta: float) -> void:
+	if not _falls.is_empty():
+		_fall_step(_delta)
 	var cam := get_viewport().get_camera_3d()
 	if cam == null or data == null:
 		return
