@@ -8673,6 +8673,14 @@ func _far_shell_counts(b: BuildingRegistry.Building) -> Array:
 		got = ((mi as MeshInstance3D).mesh.surface_get_arrays(0)[Mesh.ARRAY_VERTEX]
 				as PackedVector3Array).size()
 	var r: Dictionary = b.recipe
+	# Drawn from its bricks (_far_real): what it should draw is their coarse
+	# mesh as they are now, not a recipe shell with holes -- a wide one far off
+	# is drawn so (it was 21,824 vertices against the profile's 2,692, and right).
+	if is_instance_valid(mi) and _far_real_done.get(b.id) == mi and b.is_materialised():
+		var coarse: Array = world.build_chunk_coarse_mesh(b.chunk)
+		var cw := 0 if coarse.is_empty() \
+				else (coarse[Mesh.ARRAY_VERTEX] as PackedVector3Array).size()
+		return [got, cw, -1]
 	var profile: Dictionary = b.damage_profile
 	var want := 0
 	if b.is_materialised():
@@ -8894,6 +8902,7 @@ func _break_lag(b: BuildingRegistry.Building, storey: bool, y := 1.2) -> void:
 	# as bodies, and still are.
 	var crumbs0 := islands.crumbled
 	var crumbs_at := -1
+	var landed_at := -1   # the tick the damage queue emptied: the whole shot applied
 	var t := 0
 	var timeline: Array[String] = []
 	# Until nothing has changed for a second: the damage applied, what was
@@ -8921,6 +8930,8 @@ func _break_lag(b: BuildingRegistry.Building, storey: bool, y := 1.2) -> void:
 			drawn_at = t
 		if islands.crumbled > crumbs0 and crumbs_at < 0:
 			crumbs_at = t
+		if _damage_queue.is_empty() and landed_at < 0:
+			landed_at = t
 		if (fastest > 1.0 or crumbs_at >= 0) and moving_at < 0:
 			moving_at = t
 		var alive := world.get_alive_block_count(b.chunk) if b.is_materialised() else 0
@@ -8965,11 +8976,16 @@ func _break_lag(b: BuildingRegistry.Building, storey: bool, y := 1.2) -> void:
 		_gate_ok("building %d: no flight of stairs stands without its storey" % b.id,
 				left == 0, "%d left standing alone" % left)
 	# The body is let go with the first of them, not after the debris: it was
-	# 13 ticks behind when two pieces went a tick, smallest first.
+	# 13 ticks behind when two pieces went a tick, smallest first. Or while the
+	# shot is still landing: a wide building's storey is 207 blasts, the queue
+	# takes 27 ticks over them, and the body goes when the last of what held it
+	# does -- 9 ticks after the first piece and 4 before the last blast landed
+	# (160 x 60, --widecheck). A tower's shot has landed before anything is cut.
 	if not CollapseDirector.is_mega(bricks):
-		_gate_ok("building %d: and the biggest piece within 3 ticks of the first" % b.id,
-				biggest_at > 0 and cut_at > 0 and biggest_at - cut_at <= 3,
-				"first %d, biggest %d" % [cut_at, biggest_at])
+		_gate_ok("building %d: and the biggest piece within 3 ticks of the first, or of the shot landing" % b.id,
+				biggest_at > 0 and cut_at > 0
+						and (biggest_at - cut_at <= 3 or biggest_at <= landed_at + 3),
+				"first %d, biggest %d, the shot landed %d" % [cut_at, biggest_at, landed_at])
 	else:
 		# A mega tower: when it comes down is the structure's -- what still
 		# holds it, and when it tips -- as much as anything held back, so it
