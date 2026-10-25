@@ -761,6 +761,28 @@ netcode only has to carry dictionaries and byte chunks:
   clear round it, framed, the icon, the package; headless: 2). Its one windowed run peaked at
   68 C, not held back.
 
+### Starter parts: the normal mech, as built
+
+- **The first official mech parts**: one normal-class Korr mech, legs 2 long -- chassis, head,
+  arms, hands, legs, two pod bodies -- in `res://parts/mech/starter_normal_*` with their
+  pictures, its build in `res://mechs/starter_normal.json` (open it in the workshop to change
+  it; Save writes the parts again, official, as `starter_normal_<part>`). Light and heavy, and
+  legs 1 and 3 long, wait.
+- **Sized to the city**: the pilot's eye is 4.2 m up and looks straight into a second-storey
+  window (3.64 m to 4.90 m); the cockpit window is drawn round it; the mech stands 5.88 m, two
+  storeys. Hips 3.36 m, shoulders 3.78 m, 1.93 m out: the greybox's, so it aims from where the
+  boxes did. Its elbows, knees and ankles fall on brick seams.
+- **Made by `tools/make_starter_mech.gd`** (headless): the workshop's mech mode on the reference,
+  boxes of cells packed into bricks, part by part. `AssetWorkshop.part_maker` names a set's maker
+  (a player's parts stay "workshop").
+- **In the game** every mech that is not in a scripted pass is now made of them -- the player's
+  and the roster's normal ones -- with its walk, knees and ankles; a scripted pass keeps the boxes
+  its numbers were taken with. The chassis is what `MechPilot` hides in the cockpit
+  (`Mech.canopy` is now any node): the eye is inside its bricks.
+- **Looked at** (`tools/mech_look.gd`, windowed, `user://mech_look/`): beside a wall with a
+  second-storey window; from the cockpit the window is square ahead at eye level, the gun arm's
+  forearm reaching out below; walking, the legs scissor with the feet level and the knee folds.
+
 ## 12. Decided
 
 Decided 2026-10-23: every part saves on its own (section 7); joined pairs and fixed characters

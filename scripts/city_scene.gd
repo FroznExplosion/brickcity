@@ -5768,7 +5768,8 @@ func _spawn_mech(feet: Vector3, yaw: float) -> Mech:
 	_mech = Mech.spawn(self, feet, yaw, 0)
 	# The player's dressing on it -- not in a scripted pass, which must not change with what
 	# this machine's player has put on.
-	MechAssembler.dress_rolled(_mech, hash(feet), "normal", null, false, "" if _scripted else "player")
+	if not _scripted:   # a scripted pass's mech stays the boxes its numbers were taken with
+		MechAssembler.dress_rolled(_mech, hash(feet), "normal", null, false, "player")
 	if _gun_library == null:
 		_gun_library = GunPlaceholderParts.build_library()
 	_give_pods(_mech)
@@ -6267,9 +6268,10 @@ func _spawn_enemy_mech(feet: Vector3, yaw: float, recipe := "medium_gunner", des
 	# Made of parts when there are parts to make it of (Docs/ModularParts.md stage 6): a
 	# chassis of its class, every part fitting -- or a design's, of the design's class.
 	# Else the boxes. Seeded from where it stands: no roll of the combat dice moves.
-	MechAssembler.dress_rolled(m, hash(feet), MechAssembler.class_of(
-			str(Roster.shared().recipe(recipe).get("class", ""))) if design == null else "",
-			design, design != null)
+	if not _scripted or design != null:   # a scripted pass's mechs stay the boxes it measured
+		MechAssembler.dress_rolled(m, hash(feet), MechAssembler.class_of(
+				str(Roster.shared().recipe(recipe).get("class", ""))) if design == null else "",
+				design, design != null)
 	# Its pilot, a soldier of its side, inside: one who can bail out (RO8).
 	var pilot := _spawn_soldier(feet)
 	m.mount(pilot.pawn, true)
