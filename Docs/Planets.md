@@ -1372,8 +1372,33 @@ the open (2 FAIL): what an agent asks is answered by its own region.
   `ai_world.set_danger`, as before.
 Probe checks in `tools/planet_nav_net_probe.gd` (17/17).
 
-**Not yet:** size and vehicle maps (`nav_for`, mech maps) are made on whichever region was
-focused; danger boxes are world-axis boxes (on a planet a cube round a grenade); legs are
+**Every body's map on the net (2026-10-24).** `PlanetNavNet` holds MAPS: "person" (the region's
+own AINav) and any other a caller adds (`add_map(name, maker)`: a size's, the mech's and the
+mech's breaching map, the foot breaching map, each vehicle kind's). A map is its own AINav in each
+region it is asked for in, made there by its maker, with its own portal checks (a wider body's
+snap may sit a little further off the border) and its own legs. `map_view(name)` is a
+`PlanetNavMap`: AINav's path calls, snap / can_stand by the point's region (made if a far goal
+needs it), its breaches joined across stretches. On a planet `AIServices.nav_for`,
+`vehicle_nav`, `mech_breach_nav`, `foot_breach_nav` and the new `mech_map` hand out these views
+(off a planet the AINavs as before); the vehicle brains' fallback to the walking map is the net.
+The holders (soldier, mech brain, tank and truck brains, tactics sense, `VehicleNav.reach_point`)
+take either: their map variables are untyped, nothing else changes off a planet. Makers are
+static functions (`AIServices._mk_*`): a lambda capturing the services that hold the net was a
+reference cycle -- the net leaked and the probe crashed at exit.
+
+On a region's grid the node fit allows for the slope (`AINav`, C++, grid worlds only): a
+footprint's far columns may stand higher than its anchor by a step AND what a 25 degree slope
+rises across it (`GRADE_PLATES`, 1.17 plates a stud) -- without it a tank's 10-stud footprint fit
+nowhere steeper than 7 degrees, and the town pad's embankment was a wall to it. Off a grid the
+rule is the flat game's, unchanged. The tank's brain steers in its carried frame (11.7's
+`_local`; identical off a planet).
+
+`tools/planet_nav_net_probe.gd` 25/25: the tank's and the mech's maps (span 10 studs) route ~400 m
+across 4 borders, joins within 0.19 m, every sampled point where that body stands. Gate
+`--gate=drive` (headless, 5/5): a crewed AI tank on the player's side is sent 200 m out of the
+town and gets there (3 m short, holding) in 39 s on its own map across 3 cells.
+
+**Not yet:** danger boxes are world-axis boxes (on a planet a cube round a grenade); legs are
 re-worked only when a region is made again; the city's own danger sources (falling pieces,
 disasters) set `ai_world` directly -- there is no destruction on the planet yet.
 

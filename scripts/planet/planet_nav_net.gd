@@ -144,9 +144,10 @@ var worst_service_us := 0
 var worst_service_parts: Array = [0, 0, 0, 0]
 
 
-## map name -> Callable(AIWorld) -> AINav
+## map name -> Callable(AIWorld) -> AINav. A maker must not hold this net (a
+## lambda capturing whoever holds it is a cycle that never frees): a static
+## function, bound to its arguments.
 var _makers := {}
-var _views := {}
 
 
 static func make(p_data: PlanetData, p_anchor: Vector3, p_planet: Node3D = null) -> PlanetNavNet:
@@ -226,14 +227,13 @@ func has_map(name: String) -> bool:
 	return _makers.has(name)
 
 
-## The map as one object with AINav's path calls (PlanetNavMap).
+## The map as one object with AINav's path calls (PlanetNavMap). Not kept
+## here: a view holds the net, so the net holding it would never free.
 func map_view(name: String) -> PlanetNavMap:
-	if not _views.has(name):
-		var v := PlanetNavMap.new()
-		v.net = self
-		v.map = name
-		_views[name] = v
-	return _views[name]
+	var v := PlanetNavMap.new()
+	v.net = self
+	v.map = name
+	return v
 
 
 ## Map `map` in region `r`, made the first time it is asked for there.

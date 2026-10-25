@@ -108,7 +108,7 @@ func _tags() -> void:
 
 ## Is there a way from outside a walled room to its middle, for a body of `size`?
 func _way_in(size: String, x0: int, z0: int) -> bool:
-	var nav := a.s.nav_for(size)
+	var nav: AINav = a.s.nav_for(size)
 	var inside := Vector3((x0 + 8) * Arena.STUD, 0.0, (z0 + 8) * Arena.STUD)
 	var outside := Vector3((x0 + 8) * Arena.STUD, 0.0, (z0 - 14) * Arena.STUD)
 	return not nav.find_path(nav.snap(outside), nav.snap(inside), 60000).is_empty()

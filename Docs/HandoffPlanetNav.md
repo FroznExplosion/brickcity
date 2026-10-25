@@ -28,8 +28,8 @@ Steps 1-5 are done and merged (Planets.md 11.8, "N1 and N1b's C++ half built", "
 squad and tactics GDScript on the Gravity helpers. Step 6 (N4) too: `PlanetNavNet`, probe
 `tools/planet_nav_net_probe.gd` 12/12, `--gate=travel` 10/10 (11.8 "N4 built"); each agent
 asks its own region (`AIServices.focus`, `--gate=far` 11/11). Lines and danger across
-regions too (`AIWorld.set_peers`, `LINE_REACH`, `AIServices.set_danger`). Open: size/vehicle
-maps per region; buildings'
+regions too (`AIWorld.set_peers`, `LINE_REACH`, `AIServices.set_danger`). Size, mech and vehicle
+maps on the net too (`PlanetNavMap`, `--gate=drive` 5/5). Open: buildings'
 own bricks in the AI's world on a planet (proxies stand in for now); VehicleNav / VehicleCover;
 `AINav.field_dir` is zero everywhere on main (see 11.8) -- a fix moves the flat game.
 

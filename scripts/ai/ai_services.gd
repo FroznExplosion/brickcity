@@ -262,8 +262,7 @@ func say(speaker: Pawn, key: String, text: String, range_m: float = TALK) -> voi
 ## served and warmed with the other maps, told what changes the walking map.
 func mech_breach_nav():
 	if nav_net != null:
-		return _net_map("mech:breach", func(w: AIWorld) -> AINav:
-				return MechBrain.mech_nav(w, MechBrain.BREACH_COST))
+		return _net_map("mech:breach", Callable(AIServices, &"_mk_mech").bind(MechBrain.BREACH_COST))
 	if navs.has("mech:breach"):
 		return navs["mech:breach"]
 	var n := MechBrain.mech_nav(ai_world, MechBrain.BREACH_COST)
@@ -282,11 +281,7 @@ const FOOT_BREACH_COST := 4.0
 
 func foot_breach_nav():
 	if nav_net != null:
-		return _net_map("person:breach", func(w: AIWorld) -> AINav:
-				var b := AINav.new()
-				b.set_ai_world(w)
-				b.set_breach(FOOT_BREACH_COST)
-				return use_hierarchy(b))
+		return _net_map("person:breach", Callable(AIServices, &"_mk_foot_breach"))
 	if navs.has("person:breach"):
 		return navs["person:breach"]
 	var n := AINav.new()
@@ -356,11 +351,7 @@ func nav_for(size: String):
 	if prof.size() < 6:
 		return ai_nav
 	if nav_net != null:
-		return _net_map("size:" + size, func(w: AIWorld) -> AINav:
-				var m := AINav.new()
-				m.set_ai_world(w)
-				m.set_agent(int(prof[0]), int(prof[1]), int(prof[2]), int(prof[3]), int(prof[4]), int(prof[5]))
-				return use_hierarchy(m))
+		return _net_map("size:" + size, Callable(AIServices, &"_mk_size").bind(prof))
 	var n := AINav.new()
 	n.set_ai_world(ai_world)
 	n.set_agent(int(prof[0]), int(prof[1]), int(prof[2]), int(prof[3]), int(prof[4]), int(prof[5]))
@@ -382,7 +373,7 @@ func vehicle_nav(kind: StringName):
 	if ai_world == null or not VehicleNav.has_kind(kind):
 		return null
 	if nav_net != null:
-		return _net_map(key, func(w: AIWorld) -> AINav: return VehicleNav.make(w, kind))
+		return _net_map(key, Callable(AIServices, &"_mk_vehicle").bind(kind))
 	var n := VehicleNav.make(ai_world, kind)
 	if ai_nav != null:
 		n.set_water_level(ai_nav.get_water_level())
@@ -395,9 +386,37 @@ func vehicle_nav(kind: StringName):
 ## (PlanetNavMap): its own AINav in every region it is asked for in, made by
 ## `maker` there, its paths across regions. Off a planet these maps are the
 ## AINavs above, kept in `navs`.
+var _net_views := {}
+
+
 func _net_map(name: String, maker: Callable) -> PlanetNavMap:
-	nav_net.call(&"add_map", name, maker)
-	return nav_net.call(&"map_view", name)
+	if not _net_views.has(name):
+		nav_net.call(&"add_map", name, maker)
+		_net_views[name] = nav_net.call(&"map_view", name)
+	return _net_views[name]
+
+
+## The net's map makers: static, so a maker holds nothing that holds the net.
+static func _mk_mech(w: AIWorld, breach := 0.0) -> AINav:
+	return MechBrain.mech_nav(w, breach)
+
+
+static func _mk_foot_breach(w: AIWorld) -> AINav:
+	var b := AINav.new()
+	b.set_ai_world(w)
+	b.set_breach(FOOT_BREACH_COST)
+	return use_hierarchy(b)
+
+
+static func _mk_size(w: AIWorld, prof: Array) -> AINav:
+	var m := AINav.new()
+	m.set_ai_world(w)
+	m.set_agent(int(prof[0]), int(prof[1]), int(prof[2]), int(prof[3]), int(prof[4]), int(prof[5]))
+	return use_hierarchy(m)
+
+
+static func _mk_vehicle(w: AIWorld, kind: StringName) -> AINav:
+	return VehicleNav.make(w, kind)
 
 
 ## A mech's walking map on a planet (the net's "mech" map); null off a planet,
@@ -405,7 +424,7 @@ func _net_map(name: String, maker: Callable) -> PlanetNavMap:
 func mech_map():
 	if nav_net == null:
 		return null
-	return _net_map("mech", func(w: AIWorld) -> AINav: return MechBrain.mech_nav(w))
+	return _net_map("mech", Callable(AIServices, &"_mk_mech"))
 
 
 ## Log a decision; the judge fills in its reward and flags when it closes.
