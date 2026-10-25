@@ -1484,6 +1484,17 @@ func export_packages(out_dir: String = PartPackage.EXPORT_DIR) -> Array:
 	return out
 
 
+## The catalogue pictures of parts `ids` in `dir`, drawn one after another. How many.
+func make_thumbnails(dir: String, ids: Array) -> int:
+	var n := 0
+	for id in ids:
+		if await PartThumbnail.make_for(dir + String(id) + "/", self):
+			n += 1
+	if n > 0:
+		print("[asset workshop] %d part picture(s) made" % n)
+	return n
+
+
 ## A package from someone else into the custom parts: checked, its part built here from its
 ## data. What the status line says.
 func import_package(path: String) -> Dictionary:
@@ -9286,6 +9297,9 @@ func save_parts(dir: String = "") -> Dictionary:
 	_store_asset_meta()
 	print("[asset workshop] saved %d part(s) to %s, %d unchanged" % [written.size(),
 			ProjectSettings.globalize_path(dir), kept.size()])
+	# Each written part's picture, for its card and its package (with a window to draw in).
+	if not written.is_empty() and PartThumbnail.can_render():
+		make_thumbnails.call_deferred(dir, written.duplicate())
 	return {"ok": true, "written": written, "kept": kept}
 
 
@@ -9928,6 +9942,8 @@ func _build_menus() -> void:
 			[],
 			["Export this build's parts to share (.bcpart)", "", func() -> void: export_packages()],
 			["Import a part package (.bcpart)...", "", func() -> void: _open_package_dialog()],
+			["Make pictures of this build's saved parts", "", func() -> void:
+				make_thumbnails(parts_dir(), part_ids.values())],
 		]],
 		["Edit", [
 			["Redo", "Shift Z", func() -> void: redo()],

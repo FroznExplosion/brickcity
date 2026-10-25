@@ -28,7 +28,11 @@ const TITLES := {
 	"rarity": "Rarity", "creator": "Creator", "tags": "Tags", "scale": "Scale", "side": "Side",
 }
 
+## A part's picture in the list, pixels across.
+const ICON := 40
+
 var catalog: PartCatalog
+var _thumbs := {}   # dir -> Texture2D (or null: none)
 ## The parts the panel draws from (null: the whole catalogue). The inventory gives the
 ## parts a player owns.
 var pool: Variant = null
@@ -96,6 +100,7 @@ func _init() -> void:
 	_tree.set_column_custom_minimum_width(1, 130)
 	_tree.set_column_expand(2, false)
 	_tree.set_column_custom_minimum_width(2, 150)
+	_tree.set_column_expand_ratio(0, 3)
 	_tree.item_selected.connect(_on_tree_selected)
 	_tree.item_activated.connect(_on_tree_activated)
 	split.add_child(_tree)
@@ -135,6 +140,7 @@ func _check(row: HBoxContainer, text: String, set_it: Callable) -> CheckBox:
 
 func set_catalog(cat: PartCatalog, parts: Variant = null) -> void:
 	catalog = cat
+	_thumbs.clear()   # read again: pictures may have been made since
 	pool = parts
 	refresh()
 
@@ -302,6 +308,11 @@ func _fill_tree() -> void:
 		it.set_text(2, _source_text(r))
 		it.set_metadata(0, r.id)
 		it.set_tooltip_text(0, r.id)
+		# Its picture, when it has one (PartThumbnail).
+		var tex := _thumb(r)
+		if tex != null:
+			it.set_icon(0, tex)
+			it.set_icon_max_width(0, ICON)
 		if r.is_custom():
 			it.set_custom_color(2, Color(0.55, 0.85, 1.0))
 		if r.id == _selected:
@@ -309,6 +320,14 @@ func _fill_tree() -> void:
 	if keep != null:
 		keep.select(0)
 	_show_detail(catalog.get_part(_selected) if catalog != null and _selected != "" else null)
+
+
+func _thumb(r: PartRecord) -> Texture2D:
+	if r.dir == "":
+		return null
+	if not _thumbs.has(r.dir):
+		_thumbs[r.dir] = PartThumbnail.texture_for(r.dir)
+	return _thumbs[r.dir]
 
 
 func _kind_text(r: PartRecord) -> String:
