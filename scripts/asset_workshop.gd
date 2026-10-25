@@ -1662,7 +1662,7 @@ func _store_asset_meta() -> void:
 			"shells": shells, "sdf": _sdf_meta, "sculpt": {"state": sculpt_state, "cells": Array(_sdf_cells),
 			"stash": _sdf_stash, "shell_cells": Array(_sdf_shell)}, "models": _models_meta(),
 			"part_ids": part_ids, "part_hashes": part_hashes, "part_revs": part_revs,
-			"mech": {"class": mech_class, "length": leg_length}, "gun_scale": gun_scale}   # not a copy: this runs on every edit, and a save writes it out as it is
+			"mech": {"class": mech_class, "length": leg_length}, "gun_scale": gun_scale, "maker": part_maker}   # not a copy: this runs on every edit, and a save writes it out as it is
 
 
 func _restore_asset_meta() -> void:
@@ -1680,6 +1680,7 @@ func _restore_asset_meta() -> void:
 	mech_class = String(mech.get("class", "normal"))
 	leg_length = int(mech.get("length", 2))
 	gun_scale = String(a.get("gun_scale", "held"))
+	part_maker = String(a.get("maker", AssetGuns.BRAND))
 	part_of = PackedInt32Array()
 	for v in parts.get("of", []):
 		part_of.append(int(v))
@@ -8847,7 +8848,7 @@ func _mech_record(name: String, by_part: Dictionary, official: bool) -> PartReco
 	r.side = spec.side
 	r.weight_class = mech_class if recipe.kind == "mech" else ""
 	r.display_name = "%s %s" % [recipe.name, name.replace("_", " ")]
-	r.manufacturer = String(AssetGuns.BRAND)
+	r.manufacturer = part_maker
 	r.source = "official" if official else "custom"
 	if not official:
 		r.creator = {"name": creator_name}
@@ -9287,6 +9288,9 @@ var part_ids := {}
 var part_hashes := {}
 ## Each part's rev: {name: rev}.
 var part_revs := {}
+## The maker on the parts saved here: "workshop" for a player's; a shipped set its brand
+## (the starter mech is Korr's). Kept in meta.asset.
+var part_maker := String(AssetGuns.BRAND)
 ## Who makes the parts saved here: a name until there is a Steam one (ModularParts stage 10).
 var creator_name := "player"
 
@@ -9393,7 +9397,7 @@ func _part_record(name: String, by_part: Dictionary, hosts: Dictionary, official
 	r.scale = gun_scale
 	r.slot = name
 	r.display_name = "%s %s" % [recipe.name, name]
-	r.manufacturer = String(AssetGuns.BRAND)
+	r.manufacturer = part_maker
 	r.source = "official" if official else "custom"
 	if not official:
 		r.creator = {"name": creator_name}

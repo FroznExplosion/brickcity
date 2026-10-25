@@ -109,9 +109,10 @@ var aim_point := Vector3.INF
 var legs: Node3D
 var torso: Node3D
 var arm: Node3D
-## The dark slab across the front at the eye. Hidden while the player sits behind
-## it (MechPilot): from inside it was a black wall across the view.
-var canopy: MeshInstance3D
+## What is round the pilot's eye, hidden while the player sits in it (MechPilot): the dark
+## slab across the front of the boxes; the chassis part of a mech of parts, whose bricks are
+## all round the eye.
+var canopy: Node3D
 ## Where rounds leave the arm. GunController's aim.
 var muzzle: Node3D
 ## Arm yaw relative to the torso, radians.
@@ -264,10 +265,6 @@ func set_parts(model: Node3D, hip_height: float, layer_spec: Dictionary = {}) ->
 	for c in arm.get_children():
 		if c is MeshInstance3D:
 			c.queue_free()
-	# Nothing to hide from the cockpit: MechPilot still hides it.
-	canopy = MeshInstance3D.new()
-	canopy.name = "Canopy"
-	torso.add_child(canopy)
 	var hips := Vector3(0.0, -HEIGHT * 0.5 + hip_height, 0.0)
 	var joints: Dictionary = model.get_meta(&"joints", {})
 	var chassis := model.get_node_or_null(^"Chassis") as Node3D
@@ -275,6 +272,8 @@ func set_parts(model: Node3D, hip_height: float, layer_spec: Dictionary = {}) ->
 		model.remove_child(chassis)
 		torso.add_child(chassis)
 		chassis.position += hips
+	# The pilot's eye is inside the chassis's bricks: that is what MechPilot hides.
+	canopy = chassis if chassis != null else Node3D.new()
 	var pose := Node3D.new()
 	pose.name = "Pose"
 	arm.add_child(pose)
