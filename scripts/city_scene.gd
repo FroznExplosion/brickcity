@@ -1045,6 +1045,9 @@ func _ready() -> void:
 	DebugView.reset()
 	_breaklag_mode = "--breaklag" in args
 	_bigbreak_mode = "--bigbreak" in args
+	_wide_mode = "--widecheck" in args
+	# The A/B for staggered floor seams: every floor laid as before.
+	TowerRecipe.stagger = not ("--no-stagger" in args)
 	_storeys_mode = "--storeys" in args
 	_whole_mode = "--whole" in args
 	_squad_mode = "--squad" in args
@@ -1302,6 +1305,8 @@ func _ready() -> void:
 		_run_breaklag_pass()
 	elif _bigbreak_mode:
 		_run_bigbreak_pass()
+	elif _wide_mode:
+		_run_wide_pass()
 	elif _storeys_mode:
 		_run_storeys_pass()
 	elif _wreck_mode:
@@ -5761,7 +5766,9 @@ func _mech_at_hatch(p: Pawn) -> Mech:
 
 func _spawn_mech(feet: Vector3, yaw: float) -> Mech:
 	_mech = Mech.spawn(self, feet, yaw, 0)
-	MechAssembler.dress_rolled(_mech, hash(feet), "normal")
+	# The player's dressing on it -- not in a scripted pass, which must not change with what
+	# this machine's player has put on.
+	MechAssembler.dress_rolled(_mech, hash(feet), "normal", null, false, "" if _scripted else "player")
 	if _gun_library == null:
 		_gun_library = GunPlaceholderParts.build_library()
 	_give_pods(_mech)
@@ -6098,6 +6105,85 @@ func _wire_mech(m: Mech) -> void:
 ## buys one by its recipe).
 ## Which workshop mech Ctrl Y spawned last.
 var _mech_design := -1
+## The figures Ctrl T put down, and which design was last.
+var _figures: Array[Figure] = []
+var _figure_design := -1
+
+
+func _spawn_figure() -> String:
+	var cat := MechAssembler.catalog(true)
+	var made := Figure.designs(cat)
+	if made.is_empty():
+		return "no figure saved in the asset workshop yet"
+	var ids := made.keys()
+	ids.sort()
+	_figure_design = (_figure_design + 1) % ids.size()
+	var b := PartBuilder.generate("figure", made[ids[_figure_design]], hash(ids[_figure_design]), cat)
+	var f := Figure.make(b)
+	if f == null:
+		return "figure %s does not go together: %s" % [ids[_figure_design], "; ".join(b.problems)]
+	f.position = _on_ground(camera.global_position - camera.global_transform.basis.z * 6.0)
+	f.wander = true
+	add_child(f)
+	_figures.append(f)
+	return "figure %s" % ids[_figure_design]
+
+
+func _swap_figure_limb() -> String:
+	while not _figures.is_empty() and not is_instance_valid(_figures[-1]):
+		_figures.pop_back()
+	if _figures.is_empty():
+		return "no figure to swap a limb of (Ctrl T puts one down)"
+	var f := _figures[-1]
+	var cat := MechAssembler.catalog()
+	var paths: Array = (f.build.at as Dictionary).keys()
+	paths.shuffle()
+	for path: String in paths:
+		var now: PartRecord = f.build.at[path]
+		var options := cat.filter({"family": ["figure"], "slot": [now.slot]}).filter(
+				func(r: PartRecord) -> bool: return r.id != now.id and f.why_not_swap(path, r) == "")
+		if not options.is_empty():
+			var pick: PartRecord = options[randi() % options.size()]
+			f.swap(path, pick)
+			return "figure's %s is now %s" % [path, pick.display_name]
+	return "no other part fits any of its slots"
+var _dress_colour := 1
+
+
+## Put a dressing brick on (or take one off) the player's mech's stud nearest the crosshair
+## line, within half a metre of it and 30 m off. What happened, in words.
+func _dress_at_crosshair(take_off: bool) -> String:
+	var from := camera.global_position
+	var dir := -camera.global_transform.basis.z
+	var best_d := 0.5
+	var best := {}
+	var parts := PartDressing.parts_of(_mech)
+	for id: String in parts:
+		var part: Node3D = parts[id]
+		for st in PartDressing.studs(part).studs:
+			var at: Vector3 = part.global_transform * (st.at as Vector3)
+			var along := (at - from).dot(dir)
+			if along < 0.0 or along > 30.0:
+				continue
+			var d := (from + dir * along).distance_to(at)
+			if d < best_d:
+				best_d = d
+				best = {"id": id, "key": st.key}
+	if best.is_empty():
+		return "no stud of your mech under the crosshair"
+	var store := PartDressing.load_store()
+	var list := PartDressing.of(store, "player", best.id)
+	if take_off:
+		list = PartDressing.remove(list, best.key)
+	else:
+		var r := PartDressing.add(parts[best.id], list, best.key, "brick", _dress_colour)
+		if not r.ok:
+			return "not there: " + String(r.why)
+		list = r.list
+	PartDressing.put(store, "player", best.id, list)
+	PartDressing.save_store(store)
+	PartDressing.apply(parts[best.id], list)
+	return "%d bricks on %s, %.1f kg" % [list.size(), best.id, PartDressing.mass(list)]
 ## The player's mech's pods and the mech page of the backpack (Docs/ModularParts.md stage 7).
 var _mech_pods: MechPods
 var _mech_screen: MechLoadoutScreen
@@ -7820,6 +7906,8 @@ func _start_firefight(gate: bool) -> void:
 var _breaklag_mode := false
 ## -- --bigbreak [--big] [--far]: a player's widest shots, close up (_run_bigbreak_pass)
 var _bigbreak_mode := false
+## -- --widecheck --big: the wide buildings' own break checks (_run_wide_pass)
+var _wide_mode := false
 var _storeys_mode := false   ## -- --storeys: the storey-units gate (Docs/Space.md 5.3a)
 var _whole_mode := false     ## -- --whole: every building laid whole, as before storey units
 
@@ -8310,6 +8398,108 @@ func _run_bigbreak_pass() -> void:
 		worst_all = maxf(worst_all, worst)
 	print("[bigbreak] worst frame of all %.1f ms" % worst_all)
 	get_tree().quit(0)
+
+
+## The wide buildings' own checks (CollapseNext 25; WIDE_SHAPES). `--breaklag`
+## and `--far` keep to towers (`_wide_ids`) because the wide ones failed
+## what a tower is asked there; these ask them the same things on their own,
+## one building each so no shot lands on another's wreckage:
+##   the first (240 x 50): a shell shot through its ground storey shows it
+##     within 15 ticks (_shell_lag);
+##   the second (160 x 60): made bricks, its ground storey blown out -- pieces
+##     move within 10 ticks of its bricks going and its body comes off within
+##     3 of the first piece (_break_lag);
+##   the third (200 x 80): far off, a shell stands in drawn with the damage
+##     it has, and a hit taken there shows on it (_far_shell_check);
+##   the fourth (120 x 40): a bay of its ground storey shot out across its
+##     whole depth, BAY_STUDS wide -- the floor over it comes down by the span
+##     rule (Structures 2.3: nothing within Floor Reach holds it) and the rest
+##     of the building stands (_bay_check).
+##     godot --path . scenes/big_city.tscn -- --widecheck --big
+func _run_wide_pass() -> void:
+	print("[widecheck] the wide buildings, asked a tower's questions")
+	respawn_buildings = false
+	var wides: Array = []
+	for c in registry.buildings:
+		if _wide_ids.has(c.id):
+			wides.append(c)
+	wides.sort_custom(func(a, c) -> bool: return a.id < c.id)
+	if wides.size() < 4:
+		print("[widecheck] %d wide building(s); run it in big_city.tscn with --big" % wides.size())
+		get_tree().quit(1)
+		return
+	for b: BuildingRegistry.Building in wides:
+		print("[widecheck] building %d: %d x %d studs, %d courses" % [b.id,
+				b.recipe.footprint_x, b.recipe.footprint_z, b.recipe.courses])
+	await _shell_lag(wides[0])
+	_promote(wides[1].id)
+	await _break_lag(wides[1], true)
+	_promote(wides[2].id)
+	await _frames(30)
+	await _far_shell_check(wides[2], true)
+	await _bay_check(wides[3])
+	print("[widecheck] %d ok, %d FAIL" % [_gate_pass, _gate_fail])
+	get_tree().quit(1 if _gate_fail > 0 else 0)
+
+
+
+## How wide a bay `_bay_check` shoots out: twice Floor Reach at its default, so
+## the middle of the floor over it is a reach from either side.
+const BAY_STUDS := 40
+
+
+## A bay of a wide building's ground storey shot out across its whole depth,
+## BAY_STUDS wide, a third of the way along: walls, columns and room walls all
+## gone under it. The floor over it has nothing within reach to hold it (the
+## span rule) and must come down; past the bay, at the building's ends, it
+## stands. Read from the bricks: the first floor's slab over the middle of the
+## bay, and over each end.
+func _bay_check(b: BuildingRegistry.Building) -> void:
+	var fz: float = b.recipe.footprint_z * STUD
+	@warning_ignore("integer_division")
+	var bay0: int = b.recipe.footprint_x / 3
+	var bay1: int = bay0 + BAY_STUDS
+	@warning_ignore("integer_division")
+	var over := bay0 + BAY_STUDS / 2
+	camera.position = b.xform * Vector3(float(over) * STUD, 15.0, -25.0)
+	camera.look_at(b.xform * Vector3(float(over) * STUD, 4.0, fz * 0.5), Vector3.UP)
+	_promote(b.id, true, PackedInt32Array([0, 1]))
+	await _frames(60)
+	var slab_y := TowerRecipe.STOREY_PLATES
+	@warning_ignore("integer_division")
+	var mid_z: int = b.recipe.footprint_z / 2
+	var probe := func(x: int) -> bool:
+		if not b.is_materialised():
+			return false
+		var origin := world.get_chunk_origin(b.chunk)
+		return world.is_solid(b.chunk, origin + Vector3i(x, slab_y, mid_z)) \
+				and world.is_solid(b.chunk, origin + Vector3i(x, slab_y + 1, mid_z))
+	var ends := [5, b.recipe.footprint_x - 6]
+	var before: bool = probe.call(over) and probe.call(ends[0]) and probe.call(ends[1])
+	_gate_ok("building %d: its first floor laid over the bay and both ends before the shot" % b.id,
+			before, "over the bay %s, ends %s %s" % [probe.call(over), probe.call(ends[0]),
+				probe.call(ends[1])])
+	var blasts := 0
+	var x := float(bay0) * STUD
+	while x <= float(bay1) * STUD + 0.01:
+		var z := 0.0
+		while z <= fz + 0.01:
+			_blast(b.xform * Vector3(x, 1.2, z), 2.2)
+			blasts += 1
+			z += 2.5
+		x += 2.5
+	var t := 0
+	while t < 600 and probe.call(over):
+		await get_tree().physics_frame
+		t += 1
+	await _frames(120)
+	print("[widecheck] building %d: a %d-stud bay shot out at studs %d..%d (%d blasts); the floor over it %s at tick %d" % [
+			b.id, BAY_STUDS, bay0, bay1, blasts, "still there" if probe.call(over) else "gone", t])
+	_gate_ok("building %d: the floor over the bay comes down (span rule)" % b.id,
+			not probe.call(over), "still standing after %d ticks" % t)
+	_gate_ok("building %d: and the building either side of it stands" % b.id,
+			probe.call(ends[0]) and probe.call(ends[1]),
+			"ends %s, %s" % [probe.call(ends[0]), probe.call(ends[1])])
 
 
 ## Stairs go with their floors.
@@ -9482,16 +9672,25 @@ func _lodbreak_say(b: BuildingRegistry.Building, what: String) -> void:
 ## floor panel line (TowerRecipe.PANEL), a 32-stud region line, the edge of a
 ## window column, or elsewhere.
 ##
-##     godot --path . scenes/big_city.tscn -- --breakshape
+##     godot --path . scenes/big_city.tscn -- --breakshape [--picks=N] [--no-stagger]
+##
+## Four towers unless `--picks` asks for more: four make three pieces of 50+,
+## too few to tell one floor layout from another (TowerRecipe.STAGGER).
 func _run_breakshape_pass() -> void:
-	print("[breakshape] towers shot close up, every piece measured as it leaves")
+	print("[breakshape] towers shot close up, every piece measured as it leaves (stagger %s)"
+			% ("on" if TowerRecipe.stagger else "off"))
 	respawn_buildings = false
 	var picks: Array = []
 	for c in registry.buildings:
 		if not c.is_build() and not _wide_ids.has(c.id) and c.recipe.courses >= 30:
 			picks.append(c)
 	picks.sort_custom(func(a, c) -> bool: return a.id < c.id)
-	picks = picks.slice(0, 4)
+	var count := 4
+	for a in OS.get_cmdline_user_args():
+		if a.begins_with("--picks="):
+			count = int(a.substr(8))
+	print("[breakshape] %d of %d tower(s)" % [mini(count, picks.size()), picks.size()])
+	picks = picks.slice(0, count)
 	var storey_m := TowerRecipe.STOREY_PLATES * PLATE
 	var tally := {"layer": 0, "slice": 0, "other": 0}
 	var faces := {"panel": 0, "region": 0, "window": 0, "elsewhere": 0}
@@ -14462,6 +14661,21 @@ func _unhandled_input(event: InputEvent) -> void:
 			print("[city] mech order: %s" % MechBrain.Order.keys()[o])
 		return
 	if not (event is InputEventKey and event.pressed and not event.echo):
+		return
+	# On foot by the player's own mech of parts: Ctrl B puts a brick on the stud under the
+	# crosshair, Ctrl Shift B takes it off, Ctrl Alt B the next colour (stage 11: dressing).
+	if event.ctrl_pressed and event.keycode == KEY_B and _player.is_possessing() and _mech != null \
+			and is_instance_valid(_mech) and not PartDressing.parts_of(_mech).is_empty():
+		if event.alt_pressed:
+			_dress_colour = (_dress_colour + 1) % PartDressing.COLOURS
+			print("[city] dressing colour %d" % _dress_colour)
+		else:
+			print("[city] dressing: %s" % _dress_at_crosshair(event.shift_pressed))
+		return
+	# Ctrl T: the figures made in the asset workshop, in turn, walking a circle ahead of the
+	# camera; Ctrl Shift T swaps a limb of the last one for another that fits (stage 12).
+	if event.ctrl_pressed and event.keycode == KEY_T:
+		print("[city] %s" % (_swap_figure_limb() if event.shift_pressed else _spawn_figure()))
 		return
 	# In the mech, 1 and 2 are its pods (MechPods).
 	if _pilot.is_piloting() and _mech_pods != null and _pilot.mech == _mech_pods.mech:

@@ -116,6 +116,10 @@ func _import(made: Array) -> void:
 	_ok("the sockets where they were", back.get_node_or_null(^"socket_magazine") != null
 			and (back.get_node(^"socket_magazine") as Node3D).position.is_equal_approx(
 			(src.get_node(^"socket_magazine") as Node3D).position))
+	var studs_src := PartDressing.studs(src).studs as Array
+	var studs_back := PartDressing.studs(back).studs as Array
+	_ok("its studs came too (dressing finds them)", studs_src.size() > 0 and studs_back.size() == studs_src.size(),
+			"%d vs %d" % [studs_src.size(), studs_back.size()])
 	src.free()
 	back.free()
 	var cat := PartCatalog.new()

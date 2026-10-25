@@ -106,6 +106,7 @@ func _tick() -> void:
 	_round8()
 	_round9()
 	_round10()
+	_one_place()
 	_form()
 	_resize()
 	_curves()
@@ -401,6 +402,10 @@ func _guide() -> void:
 
 
 func _section() -> void:
+	# The plane through this probe's bricks: New puts it in the middle of the area, and
+	# they were laid near its edge.
+	_ws._mirror_onto_build()
+	_ws._place_mirror_sheet()
 	_ws.set_view(1)
 	_ws.set_section(true)
 	_ok("a flat view with the section on cuts at the mirror plane", (_ws._camera as Camera3D).near > 1.0,
@@ -962,8 +967,9 @@ func _round7() -> void:
 	var shown := []
 	for i in m._open_filter.item_count:
 		shown.append(m._open_filter.get_item_metadata(i))
-	# Furniture and items are made here too (their library is shared with the workshop).
-	_ok("Open lists only assets, and furniture and items", shown == ["item", "gun", "mech"], str(shown))
+	# Furniture and items are made here too (their library is shared with the workshop), and
+	# figures since Docs/ModularParts.md stage 12.
+	_ok("Open lists only assets, and furniture and items", shown == ["item", "gun", "mech", "figure"], str(shown))
 	_ok("no building menus: Insert, Type, Layer, Generated hidden", not m._insert.visible and not m._type.visible
 			and not m._layer.visible and not m._gen.visible)
 	_ok("and no Test in city", m._file.get_popup().get_item_index(WorkshopMenu.F_CITY) < 0)
@@ -1143,6 +1149,110 @@ func _round9() -> void:
 	_ws._part_pick.select(0)
 	_ws._part_pick.item_selected.emit(0)
 	_ok("the rail's part picker picks the part", _ws.part_sel == 0)
+
+
+## Everything in one place (2026-10-24): a block-out outside the build area is not
+## converted to nothing; a mirror plane far from the build is moved onto it and its
+## images outside the area are not drawn; the gizmo only in "pick and move".
+func _one_place() -> void:
+	print("[probe] one place: the area, the mirror, the gizmo")
+	_ws._reset_space()
+	_ws.rail_pick("sculpt")
+	_ws.set_sculpt_mode("shape")
+	_ok("New puts the mirror plane in the middle of the area",
+			is_equal_approx(_ws.mirror_z, _ws.plate_studs * 0.5 + 0.5))
+	# Drawn wholly under the area's floor: Convert refuses and keeps it.
+	var under: Vector3 = _ws.sculpt.to_sample(Vector3(500, -20, 500) * STUD)
+	_ws.sculpt.form.begin_edit()
+	_ws._sculpt_op = SdfForm.ADD
+	_ws.sculpt_radius = 1.5
+	_ws._sculpt_dab(under, under + Vector3(30, 0, 0))
+	_ws._sculpt_record(_ws.sculpt.form.end_edit())
+	var bricks: int = _ws.recipe.size()
+	_ws.sculpt_convert()
+	_ok("a block-out all outside the area is not converted to nothing: kept, and said",
+			_ws.sculpt_state == "sdf" and _ws.recipe.size() == bricks
+			and String(_ws._sculpt_note.text).begins_with("Nothing converted"), _ws._sculpt_note.text)
+	_ws._reset_space()
+	_ws.rail_pick("sculpt")
+	# A plane 460 studs from the stroke (an older, smaller area's): its image is not drawn.
+	_ws.set_mirror(true)
+	_ws.mirror_z = 41.0
+	var at: Vector3 = _ws.sculpt.to_sample(Vector3(500, 40, 500) * STUD)
+	_ws.sculpt.form.begin_edit()
+	_ws._sculpt_dab(at, at + Vector3(30, 0, 0))
+	_ws._sculpt_record(_ws.sculpt.form.end_edit())
+	var cells: PackedInt32Array = _ws.sculpt.form.cells()
+	_ok("a mirror image outside the area is not drawn", _ws._cells_outside_area(cells).x == 0
+			and cells.size() > 0, str(_ws._cells_outside_area(cells)))
+	_ws.sculpt_convert()
+	_ok("a plane far from the block-out: Convert refuses, block-out kept", _ws.sculpt_state == "sdf"
+			and String(_ws._sculpt_note.text).contains("plane"), _ws._sculpt_note.text)
+	_ok("a plane far from the block-out is moved onto it", _ws._mirror_onto_build()
+			and absf(_ws.mirror_z - 500.0) < 3.0, "%.1f" % _ws.mirror_z)
+	_ok("and one through it stays", not _ws._mirror_onto_build())
+	bricks = _ws.recipe.size()
+	_ws.sculpt_convert()
+	_ok("that block-out converts to bricks", _ws.sculpt_state == "bricks" and _ws.recipe.size() > bricks)
+	_ws.set_mirror(false)
+	# Drawn wholly past the plane, mirror on: that side is the truth, both halves laid.
+	_ws._reset_space()
+	_ws.rail_pick("sculpt")
+	_ws.mirror_z = 500.0
+	_ws.set_mirror(true)
+	var far: Vector3 = _ws.sculpt.to_sample(Vector3(500, 40, 506) * STUD)
+	_ws.sculpt.form.begin_edit()
+	_ws._sculpt_dab(far, far + Vector3(30, 0, 0))
+	_ws._sculpt_record(_ws.sculpt.form.end_edit())
+	bricks = _ws.recipe.size()
+	_ws.sculpt_convert()
+	var sides := Vector2i.ZERO
+	for i in range(bricks, _ws.recipe.size()):
+		if _ws.recipe.cell_of(i).z < 500:
+			sides.x += 1
+		else:
+			sides.y += 1
+	_ok("drawn past the mirror plane: converted, both halves", _ws.sculpt_state == "bricks"
+			and sides.x > 0 and sides.y > 0, str(sides))
+	_ws.set_mirror(false)
+	# Part under the floor: converted, and Edit as SDF keeps the part that had no bricks.
+	_ws._reset_space()
+	_ws.rail_pick("sculpt")
+	var half: Vector3 = _ws.sculpt.to_sample(Vector3(500, 0, 500) * STUD)
+	_ws.sculpt.form.begin_edit()
+	_ws.sculpt_radius = 2.0
+	_ws._sculpt_dab(half, half + Vector3(30, 0, 0))
+	_ws._sculpt_record(_ws.sculpt.form.end_edit())
+	var out0: Vector2i = _ws._cells_outside_area(_ws.sculpt.form.cells())
+	_ws.sculpt_convert()
+	_ok("part outside: converted, and said", _ws.sculpt_state == "bricks" and out0.x > 0
+			and String(_ws._sculpt_note.text).begins_with("Converted, but"), str(out0))
+	_ws.sculpt_to_sdf()
+	_ok("Edit as SDF keeps the cells that never were bricks",
+			_ws._cells_outside_area(_ws.sculpt.form.cells()).x == out0.x,
+			"%s then %s" % [out0, _ws._cells_outside_area(_ws.sculpt.form.cells())])
+	# The gizmo: only in pick and move.
+	_ws.sculpt_to_sdf()
+	var bm := BoxMesh.new()
+	bm.size = Vector3(1.0, 0.4, 0.4)
+	var mesh := ArrayMesh.new()
+	mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, bm.get_mesh_arrays())
+	_ws.set_sculpt_mode("shape")
+	_ws.add_model([["box", mesh]], "box.glb")
+	_ok("a model added is picked, in pick and move, with its gizmo", _ws.sculpt_mode == "models"
+			and _ws._gizmo != null and _ws._gizmo.visible)
+	_ws.set_sculpt_mode("shape")
+	_ok("a drawing mode hides the gizmo, the pick kept", not _ws._gizmo.visible and not _ws._placed.is_empty())
+	var click := InputEventMouseButton.new()
+	click.button_index = MOUSE_BUTTON_LEFT
+	click.pressed = true
+	_ok("and a click there is not the gizmo's", not _ws._gizmo_input(click) or not _ws._gizmo.visible)
+	_ws.set_sculpt_mode("models")
+	_ok("back in pick and move, the gizmo is back", _ws._gizmo.visible)
+	_ws.select_model(null)
+	_ws.set_sculpt_mode("shape")
+	_ws._reset_space()
+	_ws.rail_pick("place")
 
 
 func _round10() -> void:

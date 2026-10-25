@@ -178,6 +178,11 @@ var free_place := true
 var work_plane := "side"
 var work_depth := 40.5
 var work_height := 30
+## The sculpt panel's mode list, and its show-for callback (set_sculpt_mode).
+var _sculpt_modes: OptionButton
+var _sculpt_show_for := Callable()
+## Said once a session: a mirror image left out because it fell outside the area.
+var _mirror_warned := false
 var work_x := 40
 ## Lay a starting brick when the build is empty (off in a headless run: probes count bricks).
 var auto_start_brick := true
@@ -907,6 +912,41 @@ func set_mirror(on: bool) -> void:
 	_store_asset_meta()
 
 
+## A mirror plane that misses the build (saved when the build area was smaller, or the
+## build moved) goes through the middle of the build instead, on a stud line, so a stroke
+## and its mirror image are both inside the area. True when it moved.
+func _mirror_onto_build() -> bool:
+	# The block-out is the work while there is one; else the bricks (a lone starting
+	# brick left where an old plane was must not hold the plane there).
+	var lo := 1 << 30
+	var hi := -(1 << 30)
+	if sculpt != null:
+		var cells := sculpt.form.cells()
+		for i in range(0, cells.size(), 5):
+			var c := Vector3i(cells[i], cells[i + 1], cells[i + 2])
+			if in_area(c):
+				lo = mini(lo, c.z)
+				hi = maxi(hi, c.z + 1)
+	if lo > hi:
+		for i in recipe.size():
+			if recipe.frame_of(i) == 0 and in_area(recipe.cell_of(i)):
+				lo = mini(lo, recipe.cell_of(i).z)
+				hi = maxi(hi, recipe.cell_of(i).z + BrickPalette.size_of(recipe.part_of(i)).z)
+	var inside := mirror_z >= 1.0 and mirror_z <= plate_studs - 1.0
+	if lo > hi:
+		if not inside:
+			mirror_z = plate_studs * 0.5 + 0.5
+			return true
+		return false
+	if inside and mirror_z >= lo - 2 and mirror_z <= hi + 2:
+		return false
+	var was := mirror_z
+	mirror_z = roundf((lo + hi) * 0.5)
+	print("[asset workshop] the mirror plane was at %.1f studs across, off the build (%d to %d): moved to %.1f"
+			% [was, lo, hi, mirror_z])
+	return true
+
+
 ## Put the plane down the middle of the ghost.
 func mirror_here() -> void:
 	mirror_z = _cell.z + BrickPalette.size_of(_archetype_name()).z * 0.5
@@ -1216,6 +1256,8 @@ func ruler_text() -> String:
 	var modes := PackedStringArray(["view: " + VIEWS[view]])
 	if recipe.kind == "mech":
 		modes.append("MECH %s, legs %d long" % [mech_class, leg_length])
+	elif recipe.kind == "figure":
+		modes.append("FIGURE (one size: every part fits every figure)")
 	elif recipe.kind == "gun" and gun_scale == "mech":
 		modes.append("MECH GUN (nano scale)")
 	if free_place:
@@ -1498,13 +1540,13 @@ func toggle_catalog() -> void:
 ## not saved yet.
 func _aim_catalog(cat: PartCatalog) -> void:
 	var part := String(part_names[part_sel]) if part_sel < part_names.size() else ""
-	if recipe.kind == "mech":
-		var spec: Dictionary = MechReference.SPEC.get(part, {})
+	if _body():
+		var spec: Dictionary = body_ref().SPEC.get(part, {})
 		if not spec.has("host"):
 			_catalog_panel.set_fit_target(null, "", "")
 			return
 		var mh: PartRecord = tried.get(spec.host, cat.get_part(String(part_ids.get(spec.host, ""))))
-		_catalog_panel.set_fit_target(mh, MechReference.path_of(part), "mech")
+		_catalog_panel.set_fit_target(mh, body_ref().path_of(part), body_ref().PLAN)
 		return
 	var sockets: Dictionary = PartStandards.plan("gun").get("sockets", {})
 	var path := part if sockets.has(part) else "barrel/" + part
@@ -1596,7 +1638,7 @@ func _restore_asset_meta() -> void:
 	var parts: Dictionary = a.get("parts", {})
 	if parts.has("names") and not (parts.names as Array).is_empty():
 		part_names = PackedStringArray(parts.names)
-	elif recipe.kind in ["gun", "mech"]:
+	elif recipe.kind in ["gun", "mech", "figure"]:
 		part_names = PackedStringArray(kind_parts())
 	part_sel = mini(part_sel, part_names.size() - 1)
 	var mech: Dictionary = a.get("mech", {})
@@ -1663,6 +1705,7 @@ func _restore_asset_meta() -> void:
 	_draw_mech_ref()
 	var m: Dictionary = a.get("mirror", {})
 	mirror_z = float(m.get("z", mirror_z))
+	_mirror_onto_build()
 	set_mirror(bool(m.get("on", false)))
 	for d in a.get("photos", []):
 		var img := Image.load_from_file(String(d.path)) if FileAccess.file_exists(String(d.path)) else null
@@ -1684,6 +1727,11 @@ func _restore_asset_meta() -> void:
 
 func _reset_space() -> void:
 	super._reset_space()
+	# One place for everything: the middle of the area, where the camera, the grid and
+	# the starting brick are (a plane kept from an older, smaller area was 460 studs off).
+	mirror_z = plate_studs * 0.5 + 0.5
+	@warning_ignore("integer_division")
+	work_x = plate_studs / 2
 	if not tried.is_empty():
 		untry_all()
 	part_of = PackedInt32Array()
@@ -1735,7 +1783,7 @@ const ASSET_QUICK_SAVE := "user://asset_workshop_quick.json"
 ## What is made here: the asset kinds, and furniture and items for rooms -- the item
 ## library is shared with the building workshop, so the generator furnishes rooms from
 ## what is saved here (Docs/AssetWorkshop.md, "Furniture and items").
-const ASSET_KINDS := ["gun", "mech", "item"]
+const ASSET_KINDS := ["gun", "mech", "figure", "item"]
 
 
 ## A build here is one of the asset kinds; anything else (a build saved before guns had a
@@ -1749,7 +1797,17 @@ func _set_asset_kind(k: String) -> void:
 
 ## The parts a build of this kind is made of.
 func kind_parts() -> Array:
-	return MechReference.PARTS if recipe.kind == "mech" else GUN_PARTS
+	return body_ref().PARTS if _body() else GUN_PARTS
+
+
+## A mech or a figure: a body of parts on a reference's joints (the same mode serves both).
+func _body() -> bool:
+	return recipe.kind in ["mech", "figure"]
+
+
+## The reference the body is built round.
+func body_ref() -> GDScript:
+	return FigureReference if recipe.kind == "figure" else MechReference
 
 
 func _kind_changed() -> void:
@@ -1764,7 +1822,7 @@ func _kind_changed() -> void:
 func set_asset_kind(k: String) -> void:
 	var was := recipe.kind
 	_set_asset_kind(k)
-	if recipe.kind != was and recipe.kind in ["gun", "mech"]:
+	if recipe.kind != was and recipe.kind in ["gun", "mech", "figure"]:
 		var want := PackedStringArray(kind_parts())
 		if part_names != want:
 			part_names = want
@@ -1773,7 +1831,7 @@ func set_asset_kind(k: String) -> void:
 				sculpt.set_parts(part_names.size())
 			_load_toolbar(part_names[part_sel])
 		_forget_part_ids()
-		if recipe.kind == "mech" and not points.any(func(q: Dictionary) -> bool: return q.get("ready", false)):
+		if _body() and not points.any(func(q: Dictionary) -> bool: return q.get("ready", false)):
 			lay_ready_points()
 		_store_asset_meta()
 	_kind_changed()
@@ -2100,9 +2158,9 @@ func _build_point_panel(layer: CanvasLayer) -> void:
 func _fill_point_slots() -> void:
 	_point_slot.clear()
 	var names := []
-	if recipe.kind == "mech":
-		for k in MechReference.PARTS:
-			var sk := String(MechReference.SPEC[k].get("socket", ""))
+	if _body():
+		for k in body_ref().PARTS:
+			var sk := String(body_ref().SPEC[k].get("socket", ""))
 			if sk != "" and not sk in names:
 				names.append(sk)
 	else:
@@ -2120,11 +2178,11 @@ func _fill_point_ifaces() -> void:
 	if _point_slot.item_count == 0:
 		return
 	var slot := _point_slot.get_item_text(maxi(_point_slot.selected, 0))
-	if recipe.kind == "mech":
+	if _body():
 		# A mech's point is named for its socket (arm_L, hand); its interface for the slot.
-		for k in MechReference.SPEC:
-			if MechReference.SPEC[k].get("socket", "") == slot:
-				slot = MechReference.SPEC[k].slot
+		for k in body_ref().SPEC:
+			if body_ref().SPEC[k].get("socket", "") == slot:
+				slot = body_ref().SPEC[k].slot
 				break
 	for k in _interfaces:
 		if String(_interfaces[k].get("slot", "")) != slot:
@@ -3693,7 +3751,10 @@ func _ensure_start_brick() -> void:
 		return
 	var keep := _batch
 	_batch = true
-	place_named(arch, Vector3i(plate_studs / 2 - 2, work_height, int(floor(mirror_z))))
+	var z := int(floor(mirror_z))
+	if z < 1 or z > plate_studs - 2:
+		z = plate_studs / 2
+	place_named(arch, Vector3i(plate_studs / 2 - 2, work_height, z))
 	_batch = keep
 	_after_edit()
 	_edit_groups.clear()
@@ -3889,7 +3950,7 @@ func _sculpt_input(e: InputEvent) -> bool:
 			_show_sculpt_note(true)
 			return true
 		return false
-	if _gizmo_input(e) or _model_pick_input(e):
+	if sculpt_mode == "models" and (_gizmo_input(e) or _model_pick_input(e)):
 		return true
 	var stamping: bool = sculpt_mode == "stamp" and not (e is InputEventWithModifiers and e.shift_pressed and not _sculpt_on)
 	if e is InputEventMouseButton and e.button_index in [MOUSE_BUTTON_LEFT, MOUSE_BUTTON_RIGHT]:
@@ -4219,7 +4280,15 @@ func _sculpt_dab(a: Vector3, b: Vector3) -> void:
 		var mb := sculpt.to_world(b)
 		ma.z = 2.0 * z - ma.z
 		mb.z = 2.0 * z - mb.z
-		sculpt.form.stroke(_sculpt_op, sculpt.to_sample(ma), sculpt.to_sample(mb), _sculpt_r(), blend, part_sel + 1)
+		# The mirror image only where bricks could be laid: a plane far from the stroke
+		# threw it out of the area, where it was drawn, never converted, and lost.
+		var inside := ma.z >= 0.0 and mb.z >= 0.0 and ma.z < plate_studs * BrickPalette.STUD_M 				and mb.z < plate_studs * BrickPalette.STUD_M
+		if inside:
+			sculpt.form.stroke(_sculpt_op, sculpt.to_sample(ma), sculpt.to_sample(mb), _sculpt_r(), blend, part_sel + 1)
+		elif not _mirror_warned:
+			_mirror_warned = true
+			_show_sculpt_note(true, "The mirror plane is far from this stroke: its mirror image would be outside "
+					+ "the build area, so it is not drawn. Alt Shift S puts the plane where the ghost is.")
 	sculpt.remesh()
 	_sculpt_last = b
 
@@ -4349,6 +4418,7 @@ func _build_sculpt_box() -> void:
 		modes.add_item(m[1])
 	modes.focus_mode = Control.FOCUS_NONE
 	_sculpt_box.add_child(modes)
+	_sculpt_modes = modes
 	# Stamp: its shape and the grid snap; flatten and grow: their strength.
 	var shapes := OptionButton.new()
 	for m in SCULPT_SHAPES:
@@ -4384,9 +4454,8 @@ func _build_sculpt_box() -> void:
 		strength_label.visible = mode in ["flatten", "grow"]
 		strength.visible = mode in ["flatten", "grow"]
 	show_for.call(sculpt_mode)
-	modes.item_selected.connect(func(i: int) -> void:
-		sculpt_mode = SCULPT_MODES[i][0]
-		show_for.call(sculpt_mode))
+	_sculpt_show_for = show_for
+	modes.item_selected.connect(func(i: int) -> void: set_sculpt_mode(SCULPT_MODES[i][0]))
 	var places := OptionButton.new()
 	for m in SCULPT_PLACES:
 		places.add_item(m[1])
@@ -4588,6 +4657,25 @@ func sculpt_convert() -> void:
 	_set_down()
 	if sculpt_state == "bricks":
 		return
+	# Bricks can only be laid inside the build area. A block-out wholly outside it
+	# (drawn under the area, or mirrored across a plane far from it) would convert to
+	# nothing and vanish: say so and keep it instead.
+	var out := _cells_outside_area(sculpt.form.cells())
+	if out.x > 0 and out.x == out.y:
+		_show_sculpt_note(true, ("Nothing converted: all %d cells of the block-out are outside the build "
+				+ "area (below its floor, or past its edge). Move it in, or turn the mirror off if its "
+				+ "plane is far away (View > Mirror plane where the ghost is).") % out.y)
+		print("[sculpt] convert refused: %d of %d cells outside the build area" % [out.x, out.y])
+		return
+	if mirror_on and _mirror_misses(sculpt.form.cells(), int(ceilf(mirror_z))):
+		# Most of the mirror half would be outside the area: the plane is far from the
+		# drawing. Checked before anything is touched, so the block-out stays as it is.
+		_show_sculpt_note(true, ("Nothing converted: the mirror is on and its plane (%d studs across) is far "
+				+ "from the block-out, so its mirror half would be outside the build area. Put the plane "
+				+ "through the middle of the shape (Alt Shift S with the ghost there), or turn the mirror "
+				+ "off (Alt S).") % int(ceilf(mirror_z)))
+		print("[sculpt] convert refused: the mirror plane at %.1f is off the block-out" % mirror_z)
+		return
 	_begin_gather()
 	var was := _sculpt_state()
 	sculpt.form.begin_edit()
@@ -4622,6 +4710,19 @@ func sculpt_convert() -> void:
 			_show_sculpt_note(true, "The mirror was on a stud's middle: moved half a stud to a stud line, "
 					+ "so the two halves can be joined. Centre on mirror lines the model up with it.")
 		pz = int(roundf(mirror_z))
+		# The side that holds the drawing is the truth, near or far: a block-out drawn
+		# wholly past the plane used to be dropped whole and convert to nothing.
+		var near_n := 0
+		var far_n := 0
+		for c in label_of:
+			if c.z < pz:
+				near_n += 1
+			else:
+				far_n += 1
+		if far_n > near_n:
+			label_of = _flipped_z(label_of, pz)
+			zone = _flipped_z(zone, pz)
+			brick_at = _flipped_z(brick_at, pz)
 		_symmetric(label_of, pz)
 		_symmetric(zone, pz)
 		_symmetric(brick_at, pz)
@@ -4742,10 +4843,63 @@ func sculpt_convert() -> void:
 		shells[part] = {"sdf": true, "thick": 0.0, "res": 1, "tris": int(st.get("tris", SDF_PIECE_TRIS)),
 				"colour": col[0], "mat": col[1]}
 	sculpt_state = "bricks"
-	_sdf_cells = cells
+	# Only the cells that could become bricks: Edit as SDF takes a cell recorded here and
+	# not a brick now as deleted, and one outside the area never was a brick.
+	_sdf_cells = PackedInt32Array()
+	for i in range(0, cells.size(), 5):
+		if in_area(Vector3i(cells[i], cells[i + 1], cells[i + 2])):
+			_sdf_cells.append_array(cells.slice(i, i + 5))
 	_sculpt_finish(was, rec)
 	_models_out(mrec)
 	_end_gather()
+	if out.x > 0:
+		_show_sculpt_note(true, ("Converted, but %d of %d cells were outside the build area (below its "
+				+ "floor, or past its edge) and have no bricks.") % [out.x, out.y])
+		print("[sculpt] converted; %d of %d cells outside the build area left out" % [out.x, out.y])
+
+
+## Would most of a symmetric Convert's mirror half land outside the area? The side with
+## more cells is the truth (sculpt_convert); its image across `pz` is what is laid.
+func _mirror_misses(cells: PackedInt32Array, pz: int) -> bool:
+	var near_n := 0
+	var far_n := 0
+	var lost_near := 0
+	var lost_far := 0
+	for i in range(0, cells.size(), 5):
+		var c := Vector3i(cells[i], cells[i + 1], cells[i + 2])
+		var image := Vector3i(c.x, c.y, 2 * pz - 1 - c.z)
+		if c.z < pz:
+			near_n += 1
+			lost_near += int(not in_area(image))
+		else:
+			far_n += 1
+			lost_far += int(not in_area(image))
+	var lost := lost_far if far_n > near_n else lost_near
+	return lost * 2 > maxi(near_n, far_n)
+
+
+## Cells mirrored across the stud line `pz` (the far side's become the near side's).
+static func _flipped_z(cells: Dictionary, pz: int) -> Dictionary:
+	var out := {}
+	for c in cells:
+		out[Vector3i(c.x, c.y, 2 * pz - 1 - c.z)] = cells[c]
+	return out
+
+
+## Is a cell of the upright grid inside the build area, where a brick can be laid?
+func in_area(c: Vector3i) -> bool:
+	return c.x >= 0 and c.z >= 0 and c.y >= 0 and c.x < plate_studs and c.z < plate_studs 			and c.y < height_plates
+
+
+## Of the field's cells (SdfForm.cells: five ints each), how many are outside the build
+## area, and how many there are: Vector2i(outside, all).
+func _cells_outside_area(cells: PackedInt32Array) -> Vector2i:
+	var n := 0
+	for i in range(0, cells.size(), 5):
+		if not in_area(Vector3i(cells[i], cells[i + 1], cells[i + 2])):
+			n += 1
+	@warning_ignore("integer_division")
+	return Vector2i(n, cells.size() / 5)
 
 
 ## A packed brick laid by Convert, noted for its part's piece; `mirror`: and again across
@@ -6773,7 +6927,7 @@ func explode_offsets() -> Dictionary:
 				(c.z + size.z * 0.5) * BrickPalette.STUD_M)
 		sums[name] = sums.get(name, Vector3.ZERO) + m
 		counts[name] = int(counts.get(name, 0)) + 1
-	var core := "chassis" if recipe.kind == "mech" else "body"
+	var core: String = body_ref().ROOT if _body() else "body"
 	var body: Vector3 = sums[core] / counts[core] if sums.has(core) else Vector3.ZERO
 	var fwd := Vector3(-1 if muzzle_end == "-x" else 1, 0, 0)
 	var g := EXPLODE_GAP * BrickPalette.STUD_M
@@ -8535,7 +8689,7 @@ func mech_origin() -> Vector3:
 
 ## Part `part`'s joint on the reference mech, in cells (studs, plates, studs).
 func mech_joint(part: String) -> Vector3:
-	return mech_origin() + (MechReference.joints(mech_class, leg_length).get(part, Vector3.ZERO) as Vector3)
+	return mech_origin() + (body_ref().joints(mech_class, leg_length).get(part, Vector3.ZERO) as Vector3)
 
 
 func mech_joint_m(part: String) -> Vector3:
@@ -8553,11 +8707,11 @@ func mech_basis() -> Basis:
 ## takes it. They are marked `ready`; laying them again (another class or length) moves
 ## those and leaves points put by hand. J on one takes it away, to put it elsewhere.
 func lay_ready_points() -> void:
-	if recipe.kind != "mech":
+	if not _body():
 		return
 	points = points.filter(func(q: Dictionary) -> bool: return not q.get("ready", false))
-	for part: String in MechReference.PARTS:
-		var spec: Dictionary = MechReference.SPEC[part]
+	for part: String in body_ref().PARTS:
+		var spec: Dictionary = body_ref().SPEC[part]
 		if not spec.has("host"):
 			continue
 		var c := mech_joint(part)
@@ -8573,14 +8727,14 @@ func lay_ready_points() -> void:
 
 ## A mech's parts by their bricks: {part: [brick ids]}.
 func _kind_bricks() -> Dictionary:
-	if recipe.kind != "mech":
+	if not _body():
 		return _gun_bricks()
 	var by_part := {}
 	for i in recipe.size():
 		if _brick_frame(i) < 0:
 			continue
 		var name := part_names[part_of[i] if i < part_of.size() else part_sel]
-		if MechReference.SPEC.has(name):
+		if body_ref().SPEC.has(name):
 			(by_part.get_or_add(name, []) as Array).append(i)
 	return by_part
 
@@ -8588,24 +8742,24 @@ func _kind_bricks() -> Dictionary:
 ## A mech part's record: family mech (a pod's body: pod), its slot and side, the build's
 ## class, its mount and what its sockets take (its points), a leg's length, its bricks.
 func _mech_record(name: String, by_part: Dictionary, official: bool) -> PartRecord:
-	var spec: Dictionary = MechReference.SPEC[name]
+	var spec: Dictionary = body_ref().SPEC[name]
 	var r := PartRecord.new()
 	r.id = String(part_ids.get(name, "unsaved." + name))
-	r.family = "pod" if spec.slot == "pod" else "mech"
+	r.family = "figure" if recipe.kind == "figure" else ("pod" if spec.slot == "pod" else "mech")
 	r.slot = spec.slot
 	r.side = spec.side
-	r.weight_class = mech_class
+	r.weight_class = mech_class if recipe.kind == "mech" else ""
 	r.display_name = "%s %s" % [recipe.name, name.replace("_", " ")]
 	r.manufacturer = String(AssetGuns.BRAND)
 	r.source = "official" if official else "custom"
 	if not official:
 		r.creator = {"name": creator_name}
-	if name == "chassis":
+	if name == body_ref().ROOT:
 		r.name_fragment = recipe.name
 	for q in points:
 		if String(q.part) == name and q.kind == "mount" and String(q.interface) != "":
 			r.mount = {"interface": String(q.interface)}
-			if spec.slot == "leg":
+			if spec.slot == "leg" and recipe.kind == "mech":
 				r.mount["params"] = {"length": leg_length}
 	var accepts := {}
 	for q in points:
@@ -8629,7 +8783,7 @@ func export_mech(dir: String) -> Dictionary:
 		return {"ok": false, "why": "nothing built"}
 	var at := {}
 	for name in by_part:
-		at[name] = mech_joint_m(name)   # the chassis's is the hips: the game stands it on its legs
+		at[name] = mech_joint_m(name)   # the root's is the hips: the game stands it on its legs
 	for q in points:
 		if q.kind == "mount" and by_part.has(String(q.part)):
 			at[q.part] = _point_m(q)
@@ -8638,7 +8792,7 @@ func export_mech(dir: String) -> Dictionary:
 	var written := {}
 	for name in by_part:
 		var root := _part_root(name, by_part[name], at[name], b)
-		if name != "chassis":
+		if name != body_ref().ROOT:
 			var mount := Node3D.new()
 			mount.name = "mount"
 			root.add_child(mount)
@@ -8666,7 +8820,7 @@ func _draw_mech_ref() -> void:
 	if _mech_ref != null:
 		_mech_ref.queue_free()
 		_mech_ref = null
-	if recipe.kind != "mech" or not mech_ref_on or not is_inside_tree():
+	if not _body() or not mech_ref_on or not is_inside_tree():
 		return
 	_mech_ref = Node3D.new()
 	_mech_ref.name = "MechReference"
@@ -8678,7 +8832,7 @@ func _draw_mech_ref() -> void:
 	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
 	mat.no_depth_test = true
 	var j := {}
-	for part in MechReference.PARTS:
+	for part in body_ref().PARTS:
 		j[part] = mech_joint_m(part)
 	var ground := mech_origin() * Vector3(BrickPalette.STUD_M, BrickPalette.PLATE_M, BrickPalette.STUD_M)
 	var lines := ImmediateMesh.new()
@@ -8686,15 +8840,14 @@ func _draw_mech_ref() -> void:
 	var bone := func(a: Vector3, b: Vector3) -> void:
 		lines.surface_add_vertex(a)
 		lines.surface_add_vertex(b)
-	for side in ["L", "R"]:
-		var hip: Vector3 = j["leg_" + side]
-		bone.call(hip, Vector3(hip.x, ground.y, hip.z))           # the leg, hip to ground
-		bone.call(j.chassis, hip)
-		bone.call(j.chassis, j["arm_" + side])
-		bone.call(j["arm_" + side], j["hand_" + side])            # the arm, shoulder to wrist
-		bone.call(j.head, j["pod_" + side])
-	bone.call(j.chassis, j.head)                                  # the spine
-	var half: float = MechReference.SHOULDER_HALF[mech_class] * BrickPalette.STUD_M
+	for part: String in j:
+		var spec: Dictionary = body_ref().SPEC[part]
+		if spec.has("host"):
+			bone.call(j[spec.host], j[part])                      # each part to what it hangs from
+		if spec.slot == "leg":
+			var hip: Vector3 = j[part]
+			bone.call(hip, Vector3(hip.x, ground.y, hip.z))       # the leg, hip to ground
+	var half: float = float(body_ref().footprint(mech_class)) * BrickPalette.STUD_M
 	var corners := [Vector3(-half, 0, -half), Vector3(half, 0, -half), Vector3(half, 0, half), Vector3(-half, 0, half)]
 	for k in 4:
 		bone.call(ground + corners[k], ground + corners[(k + 1) % 4])
@@ -8705,7 +8858,7 @@ func _draw_mech_ref() -> void:
 	mi.mesh = lines
 	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	_mech_ref.add_child(mi)
-	for part in MechReference.PARTS:
+	for part in body_ref().PARTS:
 		var ball := MeshInstance3D.new()
 		var sm := SphereMesh.new()
 		sm.radius = 0.12
@@ -8718,8 +8871,8 @@ func _draw_mech_ref() -> void:
 		_mech_ref.add_child(ball)
 		var label := Label3D.new()
 		label.name = "Joint_" + part
-		var spec: Dictionary = MechReference.SPEC[part]
-		label.text = String(spec.get("socket", "hips")) if part != "chassis" else "hips"
+		var spec: Dictionary = body_ref().SPEC[part]
+		label.text = String(spec.get("socket", "hips")) if part != body_ref().ROOT else "hips"
 		label.billboard = BaseMaterial3D.BILLBOARD_ENABLED
 		label.no_depth_test = true
 		label.font_size = 32
@@ -8759,10 +8912,10 @@ func try_part(r: PartRecord) -> String:
 		if r.family != "gun" or r.scale != "held" or not GUN_PARTS.has(r.slot):
 			return "%s is not a part of a held gun" % r.id
 		at = r.slot
-	elif recipe.kind == "mech":
-		if not r.family in ["mech", "pod"]:
-			return "%s is not a mech's part" % r.id
-		at = MechReference.part_for(r.slot, r.side, part_names[part_sel])
+	elif _body():
+		if not r.family in (["mech", "pod"] if recipe.kind == "mech" else ["figure"]):
+			return "%s is not a %s's part" % [r.id, recipe.kind]
+		at = body_ref().part_for(r.slot, r.side, part_names[part_sel])
 		if at == "":
 			return "a mech has no %s %s" % [r.side, r.slot]
 	else:
@@ -8827,20 +8980,20 @@ func try_text() -> String:
 ## The part `slot` hangs from: its game host (GAME_HOST; a mech's SPEC), own or tried,
 ## else the body (the chassis).
 func _try_host(slot: String, by_part: Dictionary) -> String:
-	var root := "chassis" if recipe.kind == "mech" else "body"
-	var h: String = MechReference.SPEC.get(slot, {}).get("host", root) if recipe.kind == "mech" \
+	var root: String = body_ref().ROOT if _body() else "body"
+	var h: String = body_ref().SPEC.get(slot, {}).get("host", root) if _body() \
 			else GAME_HOST.get(slot, root)
 	return h if by_part.has(h) or tried.has(h) else root
 
 
 ## The name of the socket `part` goes in on its host: a gun's slot, a mech's SPEC socket.
 func _socket_name(part: String) -> String:
-	return String(MechReference.SPEC[part].get("socket", "")) if recipe.kind == "mech" else part
+	return String(body_ref().SPEC[part].get("socket", "")) if _body() else part
 
 
 ## A part scene's frame against the workshop's: guns real size, mechs at nano scale.
 func _scene_basis() -> Basis:
-	return mech_basis() if recipe.kind == "mech" else game_basis()
+	return mech_basis() if _body() else game_basis()
 
 
 ## Each own part's draw offset with tried parts on: where a tried host's socket puts it,
@@ -8857,7 +9010,7 @@ func _try_offsets() -> Dictionary:
 		if not own and not tried.has(slot):
 			continue
 		var h := _try_host(slot, by_part)
-		if slot == "body" or slot == "chassis" or not _try_place.has(h):
+		if slot in ["body", "chassis", "torso"] or not _try_place.has(h):
 			_try_place[slot] = at.get(slot, Vector3.ZERO)
 			offset[slot] = Vector3.ZERO
 			continue
@@ -8881,7 +9034,7 @@ func _socket_point(host: String, slot: String, by_part: Dictionary, at: Dictiona
 	for q in points:
 		if String(q.part) == host and q.kind == "socket" and String(q.slot) == _socket_name(slot):
 			return _point_m(q)
-	if recipe.kind == "mech":
+	if _body():
 		return mech_joint_m(slot)
 	if slot == "muzzle" and by_part.has(host):
 		return _tip(by_part[host], Vector3(-1 if muzzle_end == "-x" else 1, 0, 0))
@@ -8893,7 +9046,7 @@ func _socket_point(host: String, slot: String, by_part: Dictionary, at: Dictiona
 ## join by slot (GunPartDef.takes).
 func _check_fit(by_part: Dictionary) -> void:
 	fit_marks.clear()
-	var mech := recipe.kind == "mech"
+	var mech := _body()
 	var hosts := {} if mech else _game_hosts(by_part)
 	var recs := {}
 	for slot: String in kind_parts():
@@ -8903,16 +9056,16 @@ func _check_fit(by_part: Dictionary) -> void:
 			recs[slot] = _mech_record(slot, by_part, false) if mech else _part_record(slot, by_part, hosts, false)
 	var sockets: Dictionary = PartStandards.plan("gun").get("sockets", {})
 	for slot: String in recs:
-		if slot == "body" or slot == "chassis":
+		if slot in ["body", "chassis", "torso"]:
 			continue
 		var h := _try_host(slot, by_part)
 		if not recs.has(h):
 			fit_marks[slot] = "nothing to hang from"
 			continue
-		var path := MechReference.path_of(slot) if mech else (slot if sockets.has(slot) else "barrel/" + slot)
-		fit_marks[slot] = fit_reason(recs[slot], recs[h], path, "mech" if mech else "gun")
-	# The whole build's rule (layer 2): both legs one length.
-	if mech and recs.has("leg_L") and recs.has("leg_R"):
+		var path: String = body_ref().path_of(slot) if mech else (slot if sockets.has(slot) else "barrel/" + slot)
+		fit_marks[slot] = fit_reason(recs[slot], recs[h], path, body_ref().PLAN if mech else "gun")
+	# The whole build's rule (layer 2): both legs one length -- a mech's (a figure is one size).
+	if recipe.kind == "mech" and recs.has("leg_L") and recs.has("leg_R"):
 		var a: Variant = (recs.leg_L as PartRecord).param("length")
 		var b: Variant = (recs.leg_R as PartRecord).param("length")
 		if a != null and b != null and int(a) != int(b):
@@ -9034,7 +9187,7 @@ func parts_dir() -> String:
 	if _builds_dir != BuildRecipe.player_dir():
 		return _builds_dir + "parts/"
 	if _current_path.begins_with("res://"):
-		return PartCatalog.OFFICIAL_DIR + ("mech/" if recipe.kind == "mech" else "gun/")
+		return PartCatalog.OFFICIAL_DIR + (recipe.kind + "/" if _body() else "gun/")
 	return PartCatalog.CUSTOM_DIR
 
 
@@ -9050,7 +9203,7 @@ func _save_as(build_name: String, room_kind: String = "", tags: Dictionary = {})
 func _write(path: String) -> bool:
 	if not super._write(path):
 		return false
-	if recipe.kind in ["gun", "mech"]:
+	if recipe.kind in ["gun", "mech", "figure"]:
 		save_parts()
 	return true
 
@@ -9061,7 +9214,7 @@ func _write(path: String) -> bool:
 func save_parts(dir: String = "") -> Dictionary:
 	if dir == "":
 		dir = parts_dir()
-	var mech := recipe.kind == "mech"
+	var mech := _body()
 	var by_part := _kind_bricks()
 	if by_part.is_empty() or (not mech and not by_part.has("body")):
 		return {"ok": false, "why": "nothing built" if by_part.is_empty() else "no body"}
@@ -9387,6 +9540,9 @@ func _bake_part_mesh(ids: Array, af: int = 0) -> MeshInstance3D:
 		mm.instance_count = count
 		mm.set_buffer(studs)
 		mmi.multimesh = mm
+		# The studs kept on the node as well: the renderer holds a multimesh's buffer, and
+		# without one (headless) a part's studs would be lost to dressing and packages.
+		mmi.set_meta(&"buffer", studs)
 		mi.add_child(mmi)
 	world.release_chunk(c)
 	return mi
@@ -9493,11 +9649,16 @@ func _studs_node(list: Array) -> MultiMeshInstance3D:
 	mm.use_colors = true
 	mm.mesh = PieceMeshes.stud()
 	mm.instance_count = list.size()
+	var buf := PackedFloat32Array()
 	for i in list.size():
 		var st: Dictionary = list[i]
-		mm.set_instance_transform(i, _stud_transform(st))
-		mm.set_instance_color(i, BrickWorld.get_material_colour(int(st.get("mat", 0)), int(st.get("colour", 0))))
+		var t := _stud_transform(st)
+		var c := BrickWorld.get_material_colour(int(st.get("mat", 0)), int(st.get("colour", 0)))
+		mm.set_instance_transform(i, t)
+		mm.set_instance_color(i, c)
+		buf.append_array(PartDressing.buffer_row(t, c))
 	mmi.multimesh = mm
+	mmi.set_meta(&"buffer", buf)   # as the bricks' studs (_bake_part_mesh)
 	return mmi
 
 
@@ -9715,6 +9876,7 @@ func _build_menus() -> void:
 		["Asset", [
 			["Make a gun", "", func() -> void: set_asset_kind("gun")],
 			["Make a mech", "", func() -> void: set_asset_kind("mech")],
+			["Make a figure (an action figure: every part fits every figure)", "", func() -> void: set_asset_kind("figure")],
 			["Make furniture or an item (rooms: tagged by planet, type, room)", "", func() -> void: set_asset_kind("item")],
 			[],
 			["Export this build's parts to share (.bcpart)", "", func() -> void: export_packages()],
@@ -10134,6 +10296,23 @@ func _restore_models(list: Array) -> void:
 	_refresh_model_list()
 
 
+## The sculpt mode. The gizmo belongs to "pick and move" alone: shown there for what is
+## picked, hidden in every drawing mode, so a click near it draws rather than grabbing it
+## (and a click on it never draws). The pick is kept across modes.
+func set_sculpt_mode(m: String) -> void:
+	sculpt_mode = m
+	if _sculpt_modes != null:
+		for i in SCULPT_MODES.size():
+			if SCULPT_MODES[i][0] == m:
+				_sculpt_modes.select(i)
+	if _sculpt_show_for.is_valid():
+		_sculpt_show_for.call(m)
+	if m == "models" and not _placed.is_empty():
+		_show_gizmo()
+	else:
+		_hide_gizmo()
+
+
 ## Pick `m` (a model, a lifted part or a guide: Docs/AssetWorkshop.md, "Pick and move"), or
 ## null for nothing. A lifted part picked away from is put down (one undo).
 func select_model(m: Variant) -> void:
@@ -10150,6 +10329,9 @@ func select_model(m: Variant) -> void:
 		_hide_gizmo()
 		_show_sculpt_note()
 	else:
+		# Picking something is moving it: into "pick and move", where the gizmo is.
+		if sculpt_mode != "models":
+			set_sculpt_mode("models")
 		_show_gizmo()
 		_show_placed_note()
 	_refresh_model_list()
@@ -10374,6 +10556,9 @@ func _placed_centre() -> Vector3:
 
 
 func _show_gizmo() -> void:
+	if sculpt_mode != "models":
+		_hide_gizmo()   # drawing: no gizmo to catch a click (set_sculpt_mode)
+		return
 	if _gizmo == null:
 		_gizmo = ModelGizmo.new()
 		add_child(_gizmo)

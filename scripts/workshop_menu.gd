@@ -22,6 +22,7 @@ const KIND_LABELS := {
 	"gun": "Gun",
 	"vehicle": "Vehicle",
 	"aircraft": "Aircraft",
+	"figure": "Figure",
 }
 const ROLE_LABELS := ["Structure", "Interior", "Detail"]
 const FINISH_MOULDED := 10
