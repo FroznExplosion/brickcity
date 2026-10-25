@@ -867,8 +867,28 @@ What the workshop says (a refused Convert, a moved plane) also shows big at the 
 seconds, and the building workshop's brick readout is hidden in Block out.
 `tools/asset_ui_probe.gd`: 28 checks.
 
-Not yet: renaming or regrouping in the outliner, dragging a piece onto a part (its row's list
-does it), a part's own Make bricks (Convert is the whole block-out), icons on the rail.
+**Then (2026-10-25, the four left over):**
+
+- **Names and groups.** Double-click a model's name to rename it (`set_model_name`); models go
+  in groups of the user's (`set_model_group`) -- a group is a row with its models under it,
+  renamed the same way. Both are kept with the models (saved, one undo each). A furniture item's
+  parts are its own: renamed in their rows or with Rename part, everywhere a part's name is a
+  key (`rename_part`: shells, toolbars, sketches, points, studs, part ids), and Add part makes
+  another. A gun's, a mech's and a figure's parts are slots the game assembles by name and keep
+  their names.
+- **Drag and drop.** A piece dragged onto a part takes that part; a model onto a group goes into
+  it, onto another model groups the two (a new group if that one has none), onto the asset row
+  leaves its group (`drop_on`).
+- **A part's own Make bricks** (`convert_part`): only that part's clay is packed into bricks --
+  slopes and curves where they fit better, as Convert -- and taken out of the block-out; the rest
+  stays clay, and its row says "clay + N bricks" or "N bricks". "This part back to clay"
+  (`clay_part`) puts its bricks back. One undo each. Models are not in it (they join at Make
+  bricks (all), or Bake into clay first), and its smooth marks are bricks there. Make bricks
+  (all) later keeps the part's bricks where its cells still are.
+- **Icons**: each rail tool has a line drawing, 24 x 24 SVG drawn by Godot
+  (`AssetWorkshopUI.ICONS`).
+
+`tools/asset_ui_probe.gd`: 50 checks.
 
 ### Furniture and items (2026-10-23)
 

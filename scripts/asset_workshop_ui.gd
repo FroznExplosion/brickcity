@@ -5,16 +5,19 @@ extends Node
 ##
 ##   stage tabs     1 Block out -> 2 Bricks -> 3 Detail -> 4 Finish, top left. A stage shows
 ##                  only its own tools. "Make bricks" takes the block-out to bricks, "Back to
-##                  block-out" the other way (Convert and Edit as SDF).
-##   tool rail      under the tabs: a few tools a stage, each with a pop-up saying what it
-##                  does and its key, and a line under them for the tool in hand.
+##                  clay" the other way (Convert and Edit as SDF).
+##   tool rail      under the tabs: a few tools a stage, each an icon and a name, with a
+##                  pop-up saying what it does and its key, and a line under them for the
+##                  tool in hand.
 ##   options        under the rail: the old rail, its tool list hidden -- what is left is
 ##                  the open tool's own options (brush size, shape, strength...).
-##   outliner       top right: the asset, each imported model as one item with its pieces
-##                  as children (its first piece is the main body, the item itself), the
-##                  parts, guides and photos. Click to select, tick to show or hide, a
-##                  piece's part chosen in its row, and buttons for what the selection can
-##                  do -- "Make bricks" only while it is still clay.
+##   outliner       top right: the asset; imported models, each one item (its first piece
+##                  the main body) with its other pieces as children, in groups of the
+##                  user's; the parts; guides; photos. Click to select, double-click a name
+##                  to rename it (models, groups, and a furniture item's parts), tick to
+##                  show or hide, drag a piece onto a part to give it that part, a model
+##                  onto a group or another model to group them. Under it, what the
+##                  selection can do -- a part's own "Make bricks" while it is clay.
 ##
 ## It owns no state of its own that matters: every button calls the workshop's own
 ## functions (the menus' and the keys'), and what is lit is read back from the workshop
@@ -64,6 +67,29 @@ const TOOLS := {
 ## Finish actions that only mean something for a gun.
 const GUN_ONLY := ["!hands", "!play"]
 
+## The rail's icons: 24 x 24 line drawings, drawn by Godot from these (Image.load_svg_from_string).
+const ICONS := {
+	"select": '<path d="M5 3l14 8-6 2-3 6z"/>',
+	"draw": '<path d="M4 20c3 0 5-2 5-5"/><path d="M9 15L19 5l2 2-10 10z"/>',
+	"shape": '<path d="M12 3l8 4.5v9L12 21l-8-4.5v-9z"/><path d="M12 12l8-4.5M12 12v9M12 12L4 7.5"/>',
+	"smooth": '<path d="M3 9c3-3 6 3 9 0s6 3 9 0"/><path d="M3 15c3-3 6 3 9 0s6 3 9 0"/>',
+	"!import": '<path d="M12 3v12"/><path d="M7 10l5 5 5-5"/><path d="M4 19h16"/>',
+	"measure": '<rect x="2" y="8" width="20" height="8" rx="1"/><path d="M6 8v3M10 8v4M14 8v3M18 8v4"/>',
+	"place": '<rect x="3" y="10" width="18" height="9" rx="1"/><rect x="6" y="6" width="4" height="4"/><rect x="14" y="6" width="4" height="4"/>',
+	"paint": '<path d="M12 3c4 5 6 8 6 11a6 6 0 0 1-12 0c0-3 2-6 6-11z"/>',
+	"sketch": '<path d="M4 20l1-5L16 4l4 4L9 19z"/><path d="M14 6l4 4"/>',
+	"move": '<path d="M12 3v18M3 12h18M9 6l3-3 3 3M9 18l3 3 3-3M6 9l-3 3 3 3M18 9l3 3-3 3"/>',
+	"stud": '<ellipse cx="12" cy="9" rx="7" ry="3"/><path d="M5 9v6c0 1.7 3.1 3 7 3s7-1.3 7-3V9"/>',
+	"!point": '<circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="3"/>',
+	"!explode": '<path d="M12 2v5M12 17v5M2 12h5M17 12h5M5 5l3 3M16 16l3 3M19 5l-3 3M8 16l-3 3"/>',
+	"!hands": '<path d="M8 13V5a1.5 1.5 0 0 1 3 0v6M11 11V4a1.5 1.5 0 0 1 3 0v7M14 11V6a1.5 1.5 0 0 1 3 0v8c0 4-3 7-6 7s-5-2-6-4l-2-4a1.5 1.5 0 0 1 2.5-1.5L8 14"/>',
+	"!play": '<path d="M7 4l13 8-13 8z"/>',
+	"!export_game": '<path d="M12 21V9"/><path d="M7 14l5-5 5 5"/><path d="M4 4h16"/>',
+	"!export_print": '<path d="M7 9V3h10v6"/><rect x="3" y="9" width="18" height="8" rx="1"/><path d="M7 14h10v7H7z"/>',
+	"!save": '<path d="M4 4h13l3 3v13H4z"/><path d="M8 4v5h7V4M8 20v-6h8v6"/>',
+}
+static var _icon_cache := {}
+
 var ws    ## the AssetWorkshop
 var stage := "blockout"
 
@@ -86,6 +112,9 @@ var _since := 0.0
 var _toast: Label
 var _said := ""
 var _toast_left := 0.0
+var _ask: ConfirmationDialog
+var _ask_line: LineEdit
+var _ask_then := Callable()
 
 
 func setup(workshop, layer: CanvasLayer) -> void:
@@ -106,10 +135,43 @@ func setup(workshop, layer: CanvasLayer) -> void:
 	_layer.add_child(_toast)
 	if ws._sculpt_note != null:
 		_said = ws._sculpt_note.text
+	_ask = ConfirmationDialog.new()
+	_ask_line = LineEdit.new()
+	_ask.add_child(_ask_line)
+	_ask.register_text_enter(_ask_line)
+	_ask.confirmed.connect(func() -> void:
+		if _ask_then.is_valid():
+			_ask_then.call(_ask_line.text))
+	_layer.add_child(_ask)
 	_slim_old_rail()
 	stage = "bricks" if ws.sculpt_state == "bricks" else "blockout"
 	_fill_tools()
 	sync_kind()
+
+
+## A rail icon, drawn once.
+static func icon(id: String) -> Texture2D:
+	if not ICONS.has(id):
+		return null
+	if not _icon_cache.has(id):
+		var svg := ('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24" '
+				+ 'fill="none" stroke="#e8ecf2" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">'
+				+ String(ICONS[id]) + '</svg>')
+		var img := Image.new()
+		if img.load_svg_from_string(svg, 0.8) != OK:
+			return null
+		_icon_cache[id] = ImageTexture.create_from_image(img)
+	return _icon_cache[id]
+
+
+## Ask for a name: `then` gets it.
+func ask(title: String, start: String, then: Callable) -> void:
+	_ask.title = title
+	_ask_line.text = start
+	_ask_then = then
+	_ask.popup_centered(Vector2i(360, 90))
+	_ask_line.grab_focus()
+	_ask_line.select_all()
 
 
 # ---------------------------------------------------------------------------
@@ -156,7 +218,7 @@ func set_stage(id: String) -> void:
 
 
 ## The button beside the tabs: "Make bricks" while the block-out is clay, "Back to
-## block-out" once it is bricks.
+## clay" once it is bricks.
 func _stage_step() -> void:
 	if ws.sculpt_state == "sdf":
 		ws.sculpt_convert()
@@ -204,6 +266,7 @@ func _fill_tools() -> void:
 			continue
 		var b := Button.new()
 		b.text = String(t[1]) + ("   " + String(t[2]) if String(t[2]) != "" else "")
+		b.icon = icon(id)
 		b.alignment = HORIZONTAL_ALIGNMENT_LEFT
 		b.focus_mode = Control.FOCUS_NONE
 		b.tooltip_text = "%s%s\n%s" % [t[1], ("  (%s)" % t[2]) if String(t[2]) != "" else "", t[3]]
@@ -288,27 +351,32 @@ func _build_outliner() -> void:
 	bg.set_corner_radius_all(4)
 	_outliner.add_theme_stylebox_override("panel", bg)
 	_outliner.set_anchors_preset(Control.PRESET_TOP_RIGHT)
-	_outliner.offset_left = -330
+	_outliner.offset_left = -370
 	_outliner.offset_right = -10
 	_layer.add_child(_outliner)
 	var box := VBoxContainer.new()
 	_outliner.add_child(box)
 	var title := Label.new()
 	title.text = "Outliner"
+	title.tooltip_text = ("Click to select. Double-click a name to rename it. Tick to show or hide. "
+			+ "Drag a piece onto a part to give it that part; a model onto a group, or onto another "
+			+ "model, to group them; a model onto the asset to take it out of its group.")
+	title.mouse_filter = Control.MOUSE_FILTER_PASS
 	title.add_theme_font_size_override("font_size", 13)
 	box.add_child(title)
 	_tree = Tree.new()
 	_tree.columns = 3
 	_tree.hide_root = true
-	_tree.custom_minimum_size = Vector2(310, 260)
+	_tree.custom_minimum_size = Vector2(350, 260)
 	_tree.set_column_expand(0, true)
 	_tree.set_column_expand(1, false)
-	_tree.set_column_custom_minimum_width(1, 90)
+	_tree.set_column_custom_minimum_width(1, 132)
 	_tree.set_column_expand(2, false)
 	_tree.set_column_custom_minimum_width(2, 28)
-	_tree.focus_mode = Control.FOCUS_NONE
+	_tree.focus_mode = Control.FOCUS_CLICK
 	_tree.item_selected.connect(_on_select)
 	_tree.item_edited.connect(_on_edit)
+	_tree.set_drag_forwarding(_drag_data, _can_drop, _drop)
 	box.add_child(_tree)
 	_actions = HFlowContainer.new()
 	box.add_child(_actions)
@@ -317,10 +385,11 @@ func _build_outliner() -> void:
 ## What the tree shows, as a string: rebuilt only when it changes.
 func _signature() -> String:
 	var bits := PackedStringArray([ws.recipe.kind, ws.recipe.name, ws.sculpt_state, str(ws.part_sel),
-			",".join(ws.part_names), str(ws.guides.size()), str(ws.photos.size())])
+			",".join(ws.part_names), str(ws.guides.size()), str(ws.photos.size()), str(ws.recipe.size()),
+			str(ws._edits.size())])
 	for m in ws.models:
-		bits.append("%d:%s:%s:%s:%s" % [int(m.id), String(m.path), str(m.parts), str((m.node as Node3D).visible),
-				str(int(m.op))])
+		bits.append("%d:%s:%s:%s:%s:%s:%s" % [int(m.id), String(m.path), str(m.parts),
+				str((m.node as Node3D).visible), str(int(m.op)), String(m.get("name", "")), String(m.get("group", ""))])
 	var held: Dictionary = ws._placed
 	bits.append("%s:%s:%s:%s" % [held.get("kind", "model" if not held.is_empty() else ""),
 			str(held.get("id", -2)), str(held.get("piece", -1)), str(held.get("label", -1))])
@@ -334,6 +403,7 @@ func _signature() -> String:
 func refresh() -> void:
 	_sig = _signature()
 	_syncing = true
+	var keep := _selected_meta()
 	_tree.clear()
 	var root := _tree.create_item()
 	var clay: bool = ws.sculpt_state == "sdf"
@@ -347,24 +417,34 @@ func refresh() -> void:
 	top.set_selectable(1, false)
 	top.set_selectable(2, false)
 	var held: Dictionary = ws._placed
-	# Imported models: one item each, its first piece the item, the rest its children.
+	# Imported models: in their groups, then the rest; one item each, its first piece the
+	# item, the rest its children.
+	var group_rows := {}
+	for g in ws.model_groups():
+		var gr := _tree.create_item(top)
+		gr.set_text(0, g)
+		gr.set_text(1, "group")
+		gr.set_editable(0, true)
+		gr.set_metadata(0, {"t": "group", "g": g})
+		gr.set_selectable(1, false)
+		group_rows[g] = gr
 	for m in ws.models:
+		var under: TreeItem = group_rows.get(String(m.get("group", "")), top)
 		var pieces: Array = m.pieces
-		var it := _tree.create_item(top)
-		var name := String(m.path).get_file().get_basename()
-		if pieces.size() > 0:
-			name = "%s  (%s)" % [name, String(pieces[0].name)]
-		it.set_text(0, ("carves: " if int(m.op) == SdfForm.REMOVE else "") + name)
-		it.set_text(1, "clay model")
+		var it := _tree.create_item(under)
+		it.set_text(0, ws.model_name(m))
+		it.set_editable(0, true)
+		it.set_tooltip_text(0, "%s  --  its body: %s%s" % [String(m.path).get_file(),
+				String(pieces[0].name) if pieces.size() > 0 else "?",
+				"  (carves)" if int(m.op) == SdfForm.REMOVE else ""])
+		it.set_text(1, "carving model" if int(m.op) == SdfForm.REMOVE else "clay model")
 		it.set_custom_color(1, _state_colour(true))
 		it.set_metadata(0, {"t": "model", "m": m})
 		_check(it, (m.node as Node3D).visible)
-		if not held.is_empty() and is_same(held, m) and int(held.get("piece", -1)) <= 0:
-			it.select(0)
 		for k in range(1, pieces.size()):
 			var c := _tree.create_item(it)
 			c.set_text(0, String(pieces[k].name))
-			# Its part, chosen here.
+			# Its part, chosen here (or dragged onto a part).
 			var names := PackedStringArray(["(as the body)"])
 			names.append_array(ws.part_names)
 			c.set_cell_mode(1, TreeItem.CELL_MODE_RANGE)
@@ -372,26 +452,31 @@ func refresh() -> void:
 			c.set_range(1, int(m.parts[k]) + 1)
 			c.set_editable(1, true)
 			c.set_metadata(0, {"t": "piece", "m": m, "k": k})
-			if not held.is_empty() and is_same(held, m) and int(held.get("piece", -1)) == k:
-				c.select(0)
 	# The parts: what each brick and each cell of clay belongs to.
 	var parts := _tree.create_item(top)
 	parts.set_text(0, "Parts")
-	parts.set_selectable(0, false)
+	parts.set_metadata(0, {"t": "parts"})
 	parts.set_selectable(1, false)
 	parts.set_selectable(2, false)
 	var counts := {}
 	for i in ws.part_of.size():
 		counts[int(ws.part_of[i])] = int(counts.get(int(ws.part_of[i]), 0)) + 1
+	var cells: Dictionary = ws.clay_counts()
 	for i in ws.part_names.size():
 		var p := _tree.create_item(parts)
 		p.set_text(0, ws.part_names[i])
-		p.set_text(1, "clay" if clay else "%d bricks" % int(counts.get(i, 0)))
-		p.set_custom_color(1, _state_colour(clay))
+		p.set_editable(0, ws.can_name_parts())
+		var n_clay := int(cells.get(i + 1, 0))
+		var n_bricks := int(counts.get(i, 0))
+		var state := "clay" if n_bricks == 0 else ("%d bricks" % n_bricks)
+		if n_clay > 0 and n_bricks > 0:
+			state = "clay + %d bricks" % n_bricks
+		elif n_clay == 0 and n_bricks == 0:
+			state = "empty"
+		p.set_text(1, state)
+		p.set_custom_color(1, _state_colour(n_bricks == 0))
 		p.set_metadata(0, {"t": "part", "i": i})
 		p.set_selectable(2, false)
-		if i == ws.part_sel and (held.is_empty() or held.get("kind") == "part"):
-			p.select(0)
 	if not ws.guides.is_empty():
 		var gs := _tree.create_item(top)
 		gs.set_text(0, "Guide models")
@@ -412,8 +497,47 @@ func refresh() -> void:
 			p.set_text(1, String(ws.photos[i].plane))
 			p.set_metadata(0, {"t": "photo", "i": i})
 			_check(p, bool(ws.photos[i].shown))
+	_select_current(root, held, keep)
 	_syncing = false
 	_fill_actions()
+
+
+## Light the row of what the workshop has picked; else the row lit before.
+func _select_current(root: TreeItem, held: Dictionary, keep: Dictionary) -> void:
+	var want := {}
+	if not held.is_empty() and held.get("kind", "model") == "model":
+		var k := int(held.get("piece", -1))
+		want = {"t": "piece", "m": held, "k": k} if k >= 1 else {"t": "model", "m": held}
+	elif held.is_empty() and not keep.is_empty():
+		want = keep
+	else:
+		want = {"t": "part", "i": ws.part_sel}
+	var it := root.get_first_child()
+	while it != null:
+		var d: Variant = it.get_metadata(0)
+		if d is Dictionary and _same(d, want):
+			it.select(0)
+			it.get_parent().collapsed = false
+			return
+		it = it.get_next_in_tree()
+
+
+func _same(a: Dictionary, b: Dictionary) -> bool:
+	if a.get("t") != b.get("t"):
+		return false
+	match String(a.t):
+		"model": return is_same(a.m, b.m)
+		"piece": return is_same(a.m, b.m) and int(a.k) == int(b.k)
+		"part", "guide", "photo": return int(a.i) == int(b.i)
+		"group": return String(a.g) == String(b.g)
+	return true
+
+
+func _selected_meta() -> Dictionary:
+	var it := _tree.get_selected() if _tree != null else null
+	if it != null and it.get_metadata(0) is Dictionary:
+		return it.get_metadata(0)
+	return {}
 
 
 func _check(it: TreeItem, on: bool) -> void:
@@ -453,7 +577,7 @@ func _on_select() -> void:
 		"photo":
 			ws.photo_sel = int(d.i)
 			ws._refresh_panel()
-		"asset":
+		"asset", "group", "parts":
 			ws.select_model(null)
 	ws._centre_on_selection()
 	_fill_actions()
@@ -471,21 +595,106 @@ func _on_edit() -> void:
 	edited(_tree.get_edited(), _tree.get_edited_column())
 
 
-## A cell of a row changed: a piece's part, or a tick. Public for the probe.
+## A cell of a row changed: a name, a piece's part, or a tick. Public for the probe.
 func edited(it: TreeItem, col: int) -> void:
 	var d: Dictionary = it.get_metadata(0) if it.get_metadata(0) is Dictionary else {}
-	if col == 1 and d.get("t") == "piece":
+	var t := String(d.get("t", ""))
+	if col == 0:
+		var n := it.get_text(0).strip_edges()
+		match t:
+			"model":
+				ws.set_model_name(d.m, n)
+			"group":
+				for m in ws.models:
+					if String(m.get("group", "")) == String(d.g):
+						ws.set_model_group(m, n)
+			"part":
+				if not ws.rename_part(int(d.i), n):
+					_sig = ""   # refused: the tree shows the name again
+		return
+	if col == 1 and t == "piece":
 		ws.select_model(d.m)
 		ws.set_piece_part(int(d.k), int(it.get_range(1)) - 1)
 	elif col == 2:
 		var on := it.is_checked(2)
-		match String(d.get("t", "")):
+		match t:
 			"model":
 				(d.m.node as Node3D).visible = on
 			"guide":
 				(ws.guides[int(d.i)].node as Node3D).visible = on
 			"photo":
 				ws.set_photo_shown(int(d.i), on)
+
+
+# ---------------------------------------------------------------------------
+# Drag and drop in the outliner
+# ---------------------------------------------------------------------------
+
+func _drag_data(at: Vector2) -> Variant:
+	var it := _tree.get_item_at_position(at)
+	if it == null or not it.get_metadata(0) is Dictionary:
+		return null
+	var d: Dictionary = it.get_metadata(0)
+	if not String(d.get("t", "")) in ["piece", "model"]:
+		return null
+	var l := Label.new()
+	l.text = it.get_text(0)
+	_tree.set_drag_preview(l)
+	_tree.drop_mode_flags = Tree.DROP_MODE_ON_ITEM
+	return {"outliner": d}
+
+
+func _can_drop(at: Vector2, data: Variant) -> bool:
+	return not drop_on(_tree.get_item_at_position(at), data, false).is_empty()
+
+
+func _drop(at: Vector2, data: Variant) -> void:
+	drop_on(_tree.get_item_at_position(at), data, true)
+	_tree.drop_mode_flags = Tree.DROP_MODE_DISABLED
+
+
+## What dropping `data` on row `it` does ("" for nothing), and with `apply` does it:
+##   a piece on a part    the piece takes that part;
+##   a model on a group   into that group; on another model: grouped with it (a new group
+##                        if that one has none); on the asset row: out of its group.
+func drop_on(it: TreeItem, data: Variant, apply: bool) -> String:
+	if it == null or not data is Dictionary or not (data as Dictionary).has("outliner"):
+		return ""
+	var src: Dictionary = data.outliner
+	if not it.get_metadata(0) is Dictionary:
+		return ""
+	var dst: Dictionary = it.get_metadata(0)
+	var st := String(src.get("t", ""))
+	var dt := String(dst.get("t", ""))
+	if st == "piece" and dt == "part":
+		if apply:
+			ws.select_model(src.m)
+			ws.set_piece_part(int(src.k), int(dst.i))
+		return "part"
+	if st == "model" and dt == "group":
+		if apply:
+			ws.set_model_group(src.m, String(dst.g))
+		return "group"
+	if st == "model" and dt == "model" and not is_same(src.m, dst.m):
+		if apply:
+			var g := String(dst.m.get("group", ""))
+			if g == "":
+				g = _new_group_name()
+				ws.set_model_group(dst.m, g)
+			ws.set_model_group(src.m, g)
+		return "group"
+	if st == "model" and dt == "asset" and String(src.m.get("group", "")) != "":
+		if apply:
+			ws.set_model_group(src.m, "")
+		return "ungroup"
+	return ""
+
+
+func _new_group_name() -> String:
+	var n := 1
+	while ws.model_groups().has("group %d" % n):
+		n += 1
+	return "group %d" % n
 
 
 ## What the selection can do, as buttons under the tree.
@@ -495,18 +704,45 @@ func _fill_actions() -> void:
 		c.queue_free()
 	var clay: bool = ws.sculpt_state == "sdf"
 	var held: Dictionary = ws._placed
-	var it := _tree.get_selected()
-	var t := ""
-	if it != null and it.get_metadata(0) is Dictionary:
-		t = String((it.get_metadata(0) as Dictionary).get("t", ""))
-	if clay and t in ["asset", "model", "piece", "part", ""]:
-		# Gone once it is bricks: a brick part has nothing to convert.
-		_action("Make bricks", "Turn the clay into bricks (all of the block-out).", func() -> void: _stage_step())
-	if not clay and t in ["asset", "part", ""]:
+	var d := _selected_meta()
+	var t := String(d.get("t", ""))
+	if t == "part" and clay:
+		var i := int(d.i)
+		var cells: Dictionary = ws.clay_counts()
+		# A part's own: gone once it has no clay; back again while it has bricks.
+		if int(cells.get(i + 1, 0)) > 0:
+			_action("Make bricks of this part", "Only this part's clay into bricks; the rest stays clay.",
+					func() -> void: ws.convert_part(i))
+		if ws.part_of.has(i):
+			_action("This part back to clay", "This part's bricks back into clay; the rest as it is.",
+					func() -> void: ws.clay_part(i))
+	if clay:
+		_action("Make bricks (all)", "Turn all the clay into bricks: the block-out and the models.",
+				func() -> void: _stage_step())
+	else:
 		_action("Back to clay", "Turn the bricks back into clay to reshape them.", func() -> void: _stage_step())
+	if t == "model" and not held.is_empty():
+		var m: Dictionary = d.m
+		_action("Rename", "Give this model a name of your own.", func() -> void:
+			ask("Rename the model", ws.model_name(m), func(n: String) -> void: ws.set_model_name(m, n)))
+		_action("Group", "Put it in a group (a new name makes a new group).", func() -> void:
+			ask("Group it as", String(m.get("group", "")) if String(m.get("group", "")) != "" else _new_group_name(),
+					func(n: String) -> void: ws.set_model_group(m, n)))
+		if String(m.get("group", "")) != "":
+			_action("Ungroup", "Take it out of its group.", func() -> void: ws.set_model_group(m, ""))
 	if t in ["model", "piece"] and held.get("kind", "model") == "model" and not held.is_empty():
 		_action("Remove", "Take this model out.", func() -> void: ws.drop_model())
 		_action("Bake into clay", "Join this model into the block-out for good.", func() -> void: ws.bake_model())
+	if t in ["part", "parts"] and ws.can_name_parts():
+		_action("Add part", "A new part of this item, with its own colour.", func() -> void:
+			ask("New part", "part %d" % (ws.part_names.size() + 1), func(n: String) -> void:
+				var i: int = ws.add_part(n)
+				if i >= 0:
+					ws.select_part(i)))
+		if t == "part":
+			var pi := int(d.i)
+			_action("Rename part", "Give this part a name of your own.", func() -> void:
+				ask("Rename the part", ws.part_names[pi], func(n: String) -> void: ws.rename_part(pi, n)))
 	if not held.is_empty() or t == "part":
 		_action("Mirror through it", "Put the mirror plane through the middle of the selection.",
 				func() -> void: ws.mirror_through_selection())
@@ -520,6 +756,22 @@ func _action(text: String, tip: String, f: Callable) -> void:
 	b.focus_mode = Control.FOCUS_NONE
 	b.pressed.connect(f)
 	_actions.add_child(b)
+
+
+## The action buttons now, by text: for the probe.
+func action_names() -> Array:
+	var out := []
+	for c in _actions.get_children():
+		out.append((c as Button).text)
+	return out
+
+
+func press_action(text: String) -> bool:
+	for c in _actions.get_children():
+		if (c as Button).text == text:
+			(c as Button).pressed.emit()
+			return true
+	return false
 
 
 # ---------------------------------------------------------------------------
@@ -594,7 +846,7 @@ func process(dt: float) -> void:
 		if stage == "blockout" and not clay:
 			text = "This is bricks now. \"Back to clay\" turns it back to reshape it."
 		elif stage != "blockout" and stage != "finish" and clay:
-			text = "Still clay: \"Make bricks\" turns it into bricks to work on here."
+			text = "Still clay: \"Make bricks\" turns it into bricks to work on here (or one part: select it in the outliner)."
 		_hint.text = text
 	if ws._sculpt_note != null and ws._sculpt_note.text != _said:
 		_said = ws._sculpt_note.text
