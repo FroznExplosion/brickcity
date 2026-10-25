@@ -1659,5 +1659,22 @@ up where long frames would drop it through the ground): its frame times do not c
 again on an awake, quiet machine. The town from the street: real bricks, windows and glass
 (shots/planet_bricks_town.png).
 
+**Timed (2026-10-25, awake and quiet: editor closed, no other runs, 74-82 C, never held back).**
+The bricks gate windowed, over the brick-in and the 3 s after; `-- --no-bricks` is the same scene
+with shells only. The renderer's own clock (the test window paces frames at 16.6 ms):
+
+| | frame mean | 99th | > 25 ms | > 40 ms | GPU a frame (settled) |
+|---|---|---|---|---|---|
+| shells only | 16.6-16.7 | 24-26 | 2-15 | 0-1 | 9.3-9.4 ms |
+| bricks, first cut | 26.4-27.0 | 47-51 | 182 | 24-47 | 29.6 ms |
+| + shadows from the shell | 17.5 | 32 | 28 | 0 | 17.6 ms |
+| + bricks drawn to 80 m only | 16.6-16.9 | 25-31 | 7-19 | 0-1 | 11.2-11.3 ms |
+
+So two changes went in. The bands cast no shadow: the shell, no longer drawn, stays as a
+shadow-only caster with the building's own outline (every floor and wall of 25 towers in the sun's
+cascades had tripled the GPU's frame). And bricks are DRAWN within 80 m only (dithered over 10 m);
+past it the shell's look (its mesh, no shadow) to the near tier's edge -- the building stays bricks
+to collision and the AI out to 160 m. The town's brick steps stay at 6-8 ms worst.
+
 Not yet: stairs (only the ground floor is reached), damage and destruction, furniture,
 materialising for a fight far from the camera.

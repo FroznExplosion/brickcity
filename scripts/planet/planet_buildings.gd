@@ -48,6 +48,9 @@ class Site:
 	# Bands uploading on workers: [task id, [mesh]] (the city's way: making the
 	# GPU mesh is ~9 ms on the main thread whatever its size).
 	var band_jobs: Array = []
+	# Past BRICK_DRAW_M a materialised building looks like its shell (this, the
+	# shell's mesh dithered in), its bricks still solid and the AI's.
+	var shell_look: MeshInstance3D = null
 
 var planet: PlanetBody
 var sites: Array[Site] = []
@@ -69,6 +72,10 @@ var _time := 0.0
 ## A building this near the camera is its bricks; past BRICK_DROP the shell again.
 const BRICK_M := 160.0
 const BRICK_DROP := 220.0
+## Drawn as bricks only this near (dithered over BRICK_DRAW_FADE): further, the
+## shell's look -- a tower's every floor and wall at 150 m is GPU for nothing.
+const BRICK_DRAW_M := 80.0
+const BRICK_DRAW_FADE := 10.0
 ## Drawing bands, as the city cuts its buildings (CityScene.SECTION_PLATES / _STUDS).
 const SECTION_PLATES := 24
 const SECTION_STUDS := 32
@@ -81,6 +88,8 @@ var _templates := {}
 var _brick_queue: Array[int] = []
 var _brick_site := -1
 var bricked_count := 0
+## Off (-- --no-bricks): shells only, as before 11.11 -- for an A/B of the cost.
+var bricks_on := not ("--no-bricks" in OS.get_cmdline_user_args())
 var brick_worst_us := 0
 ## What that worst step was doing: "start", "band", "finish" or "template".
 var brick_worst_what := ""
@@ -245,7 +254,7 @@ func _process(delta: float) -> void:
 		elif s.shell != null and dist > NEAR_M + NEAR_FADE * 3.0:
 			_free_near(s)
 		# Nearer still, its bricks (not a landmark: a thousand courses).
-		if not s.landmark:
+		if not s.landmark and bricks_on:
 			if dist < BRICK_M and s.chunk < 0 and i != _brick_site and not _brick_queue.has(i):
 				_brick_queue.append(i)
 			elif dist > BRICK_DROP and (s.chunk >= 0 or _brick_queue.has(i)):
@@ -496,6 +505,12 @@ func _harvest_bands(s: Site) -> void:
 		var mi := MeshInstance3D.new()
 		mi.mesh = mesh
 		mi.material_override = brick_material
+		# The shell casts the building's shadow (_finish_bricks): every floor and
+		# wall of a tower in the sun's cascades tripled the GPU's frame.
+		mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		mi.visibility_range_end = BRICK_DRAW_M
+		mi.visibility_range_end_margin = BRICK_DRAW_FADE
+		mi.visibility_range_fade_mode = GeometryInstance3D.VISIBILITY_RANGE_FADE_SELF
 		s.brick_node.add_child(mi)
 
 
@@ -514,7 +529,20 @@ func _finish_bricks(i: int) -> void:
 	bricked_count += 1
 	# The shell and its walls go: the bricks are the building now.
 	if s.shell != null:
-		s.shell.visible = false
+		# Not drawn, but its outline still casts the building's shadow.
+		s.shell.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_SHADOWS_ONLY
+		var look := MeshInstance3D.new()
+		look.mesh = s.shell.mesh
+		look.material_override = brick_material
+		look.transform = s.frame
+		look.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		look.visibility_range_begin = BRICK_DRAW_M
+		look.visibility_range_begin_margin = BRICK_DRAW_FADE
+		look.visibility_range_end = NEAR_M
+		look.visibility_range_end_margin = NEAR_FADE
+		look.visibility_range_fade_mode = GeometryInstance3D.VISIBILITY_RANGE_FADE_SELF
+		add_child(look)
+		s.shell_look = look
 	if s.body != null:
 		s.body.collision_layer = 0
 	site_bricks.emit(i, true)
@@ -538,7 +566,10 @@ func _free_bricks(i: int) -> void:
 	bricks.release_chunk(s.chunk)
 	s.chunk = -1
 	if s.shell != null:
-		s.shell.visible = true
+		s.shell.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
+	if s.shell_look != null:
+		s.shell_look.queue_free()
+		s.shell_look = null
 	if s.body != null:
 		s.body.collision_layer = Layers.STRUCTURE
 	site_bricks.emit(i, false)
