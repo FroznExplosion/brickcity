@@ -10480,7 +10480,8 @@ func models_state() -> Array:
 	var out := []
 	for m in models:
 		out.append({"id": m.id, "path": m.path, "xf": m.xf, "op": m.op, "parts": (m.parts as Array).duplicate(),
-				"default_part": m.default_part})
+				"default_part": m.default_part, "name": String(m.get("name", "")),
+				"group": String(m.get("group", ""))})
 	return out
 
 
@@ -10519,6 +10520,8 @@ func _set_models(state: Array) -> void:
 			m.default_part = int(s.default_part)
 			_colour_model(m)
 			_stamp_model(m)
+		m["name"] = String(s.get("name", ""))
+		m["group"] = String(s.get("group", ""))
 		order.append(m)
 	models = order
 	_refresh_model_list()
@@ -10553,9 +10556,208 @@ func _restore_models(list: Array) -> void:
 		var parts := []
 		for p in s.get("parts", []):
 			parts.append(int(p))
-		models.append(_make_model(_cache_model(pieces, String(s.path)), xf, int(s.get("op", SdfForm.ADD)), parts,
-				int(s.get("default_part", 0))))
+		var m := _make_model(_cache_model(pieces, String(s.path)), xf, int(s.get("op", SdfForm.ADD)), parts,
+				int(s.get("default_part", 0)))
+		m["name"] = String(s.get("name", ""))
+		m["group"] = String(s.get("group", ""))
+		models.append(m)
 	_refresh_model_list()
+
+
+# ---------------------------------------------------------------------------
+# The outliner's edits (Docs/AssetWorkshop.md, "The asset workshop's frame")
+# ---------------------------------------------------------------------------
+
+## A model's name in the outliner: its own, else its file's.
+func model_name(m: Dictionary) -> String:
+	var own := String(m.get("name", ""))
+	return own if own != "" else String(m.path).get_file().get_basename()
+
+
+## Rename a model, or put it in a group ("" for none). One undo each.
+func set_model_name(m: Dictionary, n: String) -> void:
+	var before := models_state()
+	m["name"] = n.strip_edges()
+	_model_record(before)
+
+
+func set_model_group(m: Dictionary, g: String) -> void:
+	var before := models_state()
+	m["group"] = g.strip_edges()
+	_model_record(before)
+
+
+## The groups in use, in first-use order.
+func model_groups() -> PackedStringArray:
+	var out := PackedStringArray()
+	for m in models:
+		var g := String(m.get("group", ""))
+		if g != "" and not out.has(g):
+			out.append(g)
+	return out
+
+
+## A gun's, a mech's and a figure's parts are slots the game assembles by name; furniture
+## and items name their own.
+func can_name_parts() -> bool:
+	return recipe.kind == "item"
+
+
+## Rename part `i`, everywhere its name is a key: shells, toolbars, sketches, points,
+## studs, the part ids. False when it cannot be (a slot, a name taken, empty).
+func rename_part(i: int, n: String) -> bool:
+	n = n.strip_edges().to_lower().replace("|", " ")
+	if not can_name_parts() or i < 0 or i >= part_names.size() or n == "" or part_names.has(n):
+		return false
+	var old := part_names[i]
+	part_names[i] = n
+	for d: Dictionary in [toolbars, part_width, part_bricks, _part_vol, _part_box, shells, _shell_nodes,
+			_shell_tris, _shell_joins, part_ids, part_hashes, part_revs, _display, _offsets]:
+		if d.has(old):
+			d[n] = d[old]
+			d.erase(old)
+	var k := smooth_parts.find(old)
+	if k >= 0:
+		smooth_parts[k] = n
+	for q in points:
+		if String(q.get("part", "")) == old:
+			q.part = n
+	for st in extra_studs:
+		if String(st.get("part", "")) == old:
+			st.part = n
+	for key in sketches.keys():
+		if String(key).begins_with(old + "|"):
+			var sk: Dictionary = sketches[key]
+			sk.part = n
+			sketches.erase(key)
+			sketches[n + String(key).substr(old.length())] = sk
+	_store_asset_meta()
+	_dirty = true
+	print("[asset workshop] part '%s' is '%s' now" % [old, n])
+	return true
+
+
+## A new part (furniture and items): its own label and colour. Its index, or -1.
+func add_part(n: String) -> int:
+	n = n.strip_edges().to_lower().replace("|", " ")
+	if not can_name_parts() or n == "" or part_names.has(n):
+		return -1
+	part_names.append(n)
+	if sculpt != null:
+		sculpt.set_parts(part_names.size())
+	_store_asset_meta()
+	_dirty = true
+	return part_names.size() - 1
+
+
+## How many clay cells each part label has in the block-out (label -> count).
+func clay_counts() -> Dictionary:
+	var out := {}
+	if sculpt == null or sculpt_state != "sdf":
+		return out
+	var cells := sculpt.form.cells()
+	for j in range(3, cells.size(), 5):
+		out[cells[j]] = int(out.get(cells[j], 0)) + 1
+	return out
+
+
+## Make bricks of one part: its clay (in the area) packed into bricks of that part --
+## slopes and curves where they fit better, as Convert -- and taken out of the block-out;
+## the other parts stay clay. Models are not in it (they join at the full Make bricks, or
+## Bake into clay first), and its smooth marks are bricks here. One undo. Bricks laid.
+func convert_part(i: int) -> int:
+	if sculpt_state != "sdf" or i < 0 or i >= part_names.size():
+		return 0
+	_set_down()
+	var label := i + 1
+	var all := sculpt.form.cells()
+	var mine := {}
+	var gone := PackedInt32Array()
+	for j in range(0, all.size(), 5):
+		if all[j + 3] != label:
+			continue
+		var c := Vector3i(all[j], all[j + 1], all[j + 2])
+		if in_area(c):
+			mine[c] = true
+			gone.append_array(all.slice(j, j + 5))
+	if mine.is_empty():
+		_show_sculpt_note(true, "The part '%s' has no clay in the build area to make bricks of." % part_names[i])
+		return 0
+	_begin_gather()
+	var was := _sculpt_state()
+	var keep := part_sel
+	part_sel = i
+	var before := recipe.size()
+	_batch = true
+	if curve_level >= 1:
+		var free := PackedInt32Array()
+		for c in mine:
+			free.append_array([c.x, c.y, c.z])
+		var kit := FitKit.kit(curve_level >= 2)
+		var fit := sculpt.form.fit_pieces(free, kit.pieces, SDF_FIT_EAGER if slope_eager else SDF_FIT_GAIN)
+		for j in range(0, fit.size(), 4):
+			var arch := String(kit.names[fit[j]])
+			var at := Vector3i(fit[j + 1], fit[j + 2], fit[j + 3])
+			var size := BrickPalette.size_of(arch)
+			var cs := []
+			for dx in size.x:
+				for dy in size.y:
+					for dz in size.z:
+						var c := at + Vector3i(dx, dy, dz)
+						if mine.has(c):
+							cs.append(c)
+			if not cs.is_empty() and place_named(arch, at):
+				for c in cs:
+					mine.erase(c)
+	for b in pack_cells(mine):
+		place_named(String(b[0]), b[1])
+	_batch = false
+	part_sel = keep
+	sculpt.form.begin_edit()
+	sculpt.form.sync_cells(gone, PackedInt32Array())
+	var rec := sculpt.form.end_edit()
+	sculpt.remesh()
+	_after_edit()
+	_sculpt_finish(was, rec)
+	_end_gather()
+	var laid := recipe.size() - before
+	_show_sculpt_note(true, "'%s' is bricks now (%d); the rest is still clay." % [part_names[i], laid])
+	print("[asset workshop] part '%s' made bricks: %d" % [part_names[i], laid])
+	return laid
+
+
+## One part's bricks back into clay, the rest as they are. One undo. Bricks taken.
+func clay_part(i: int) -> int:
+	if sculpt_state != "sdf" or i < 0 or i >= part_names.size():
+		return 0
+	_set_down()
+	var label := i + 1
+	var list := _brick_cell_list()
+	var back := PackedInt32Array()
+	for j in range(0, list.size(), 5):
+		if list[j + 3] == label:
+			back.append_array(list.slice(j, j + 5))
+	var ids := []
+	for k in recipe.size():
+		if _brick_frame(k) == 0 and k < part_of.size() and part_of[k] == i:
+			ids.append(k)
+	if ids.is_empty():
+		return 0
+	_begin_gather()
+	var was := _sculpt_state()
+	sculpt.form.begin_edit()
+	sculpt.form.sync_cells(PackedInt32Array(), back)
+	var rec := sculpt.form.end_edit()
+	sculpt.remesh()
+	_batch = true
+	ids.reverse()
+	for k in ids:
+		take_brick(int(k))
+	_batch = false
+	_after_edit()
+	_sculpt_finish(was, rec)
+	_end_gather()
+	return ids.size()
 
 
 ## The grid and the size marks drawn again round the selection (build_centre), and with
