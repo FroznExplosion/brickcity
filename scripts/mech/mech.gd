@@ -253,6 +253,16 @@ func _set_layers(spec: Dictionary) -> void:
 		pods.call(&"layers_changed")
 
 
+## Turn the gun hand at its wrist, about the forearm (which points along the aim): a roll of
+## the gun, `angle` radians. False on a mech of boxes (it has no wrist).
+func turn_wrist(angle: float) -> bool:
+	var h := arm.find_child("Joint_arm_R_hand", true, false) as Node3D
+	if h == null:
+		return false
+	h.basis = Basis(Vector3.UP, angle)
+	return true
+
+
 ## Made of parts (MechAssembler.dress): `model`'s joints take the boxes' places -- the legs
 ## on the legs (they turn with the legs; a motion set walks them, MotionSets), the right arm and hand on the gun arm (posed
 ## forward, so it aims), the chassis, head, left arm and pods on the torso. `hip_height`:
