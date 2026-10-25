@@ -12,6 +12,8 @@ extends Node3D
 ##   -- --gate=pawn: the pawn -- walk, strafe, jump, mantle, fire, fly, land.
 ##   -- --gate=mech, --gate=tank, --gate=soldier: a titan, a tank on the
 ##   player's controls, a soldier's body moved and aimed as its brain does it.
+##   -- --gate=bricks: the town's buildings near the player as real bricks --
+##   drawn, solid, a way in, and bricks to the AI (11.11).
 ##   -- --gate=trees: a tank knocks a tree down; a truck is stopped by one
 ##   (11.10, trees and vehicles).
 ##   -- --gate=squad: a squad on the AI's nav region round the town (11.8 N2)
@@ -46,6 +48,7 @@ var _tank_gate := false
 var _soldier_gate := false
 var _squad_gate := false
 var _trees_gate := false
+var _bricks_gate := false
 ## The AI round the fight (Docs/Planets.md 11.8, N2, N4): the nav net round the
 ## player's town; ai_world / ai_nav the region the player is in. Made by setup_ai.
 var ai: AIServices
@@ -79,10 +82,11 @@ func _ready() -> void:
 	_soldier_gate = "--gate=soldier" in OS.get_cmdline_user_args()
 	_squad_gate = "--gate=squad" in OS.get_cmdline_user_args()
 	_trees_gate = "--gate=trees" in OS.get_cmdline_user_args()
+	_bricks_gate = "--gate=bricks" in OS.get_cmdline_user_args()
 	_travel_gate = "--gate=travel" in OS.get_cmdline_user_args()
 	_far_gate = "--gate=far" in OS.get_cmdline_user_args()
 	_drive_gate = "--gate=drive" in OS.get_cmdline_user_args()
-	_gate = _gate or _pawn_gate or _mech_gate or _tank_gate or _soldier_gate or _squad_gate or _travel_gate or _far_gate or _drive_gate or _trees_gate
+	_gate = _gate or _pawn_gate or _mech_gate or _tank_gate or _soldier_gate or _squad_gate or _travel_gate or _far_gate or _drive_gate or _trees_gate or _bricks_gate
 	data = PlanetData.new()
 	data.planet_name = "proto"
 	# Towns and landmarks: their pads go into the ground before it is built.
@@ -116,11 +120,13 @@ func _ready() -> void:
 	planet.add_child(trees)
 	trees.setup(data)
 	trees.prebake()
+	# The brick buildings' shapes round the spawn, while it loads (11.11).
+	var tpl_ms := buildings.prepare_templates(planet.global_position + data.surface_point(spawn_dir), 400.0)
 	Gravity.planet = planet
 	Gravity.planet_strength = data.gravity_strength
 	Gravity.planet_radius = data.radius
-	print("[planet] %s: radius %.0f m, relief %.0f m, sea %.0f m; impostor baked in %d ms" % [
-			data.planet_name, data.radius, data.amplitude, data.sea_level, planet.bake_ms])
+	print("[planet] %s: radius %.0f m, relief %.0f m, sea %.0f m; impostor baked in %d ms; brick shapes %.0f ms" % [
+			data.planet_name, data.radius, data.amplitude, data.sea_level, planet.bake_ms, tpl_ms])
 	_build_light()
 	walker = PlanetWalker.new()
 	walker.name = "Walker"
@@ -150,6 +156,8 @@ func _ready() -> void:
 			_run_squad_gate()
 		elif _trees_gate:
 			_run_trees_gate()
+		elif _bricks_gate:
+			_run_bricks_gate()
 		elif _travel_gate:
 			_run_travel_gate()
 		elif _far_gate:
@@ -317,6 +325,7 @@ func _process(_delta: float) -> void:
 	# The origin follows the player, by translation, every SHIFT_AT.
 	if _anchor().length() > PlanetFrame.SHIFT_AT:
 		var offset := PlanetFrame.recentre(self, _anchor())
+		buildings.on_origin_shift()
 		if ai != null:
 			(ai.nav_net as PlanetNavNet).shift_origin(offset)
 	# Stream the voxel ground to the horizon and the peaks behind it, no further.
@@ -341,7 +350,7 @@ func _process(_delta: float) -> void:
 	# walker's own gate, the pawn stands on it.
 	if walker.frozen and pawn == null and trees.prebaked and _ground_hit(walker.global_position) != Vector3.INF:
 		walker.frozen = false
-		if not _gate or _pawn_gate or _mech_gate or _tank_gate or _soldier_gate or _squad_gate or _travel_gate or _far_gate or _drive_gate or _trees_gate:
+		if not _gate or _pawn_gate or _mech_gate or _tank_gate or _soldier_gate or _squad_gate or _travel_gate or _far_gate or _drive_gate or _trees_gate or _bricks_gate:
 			_spawn_player(_ground_hit(walker.global_position), -walker.global_transform.basis.z)
 	if not on_foot:
 		walker.flying = pawn != null or walker.flying
@@ -961,6 +970,13 @@ func setup_ai(dir: Vector3) -> void:
 		sites.append([s.frame * Transform3D(Basis(), size * 0.5), size])
 	var net := PlanetNavNet.make(data, dir, planet)
 	net.set_sites(sites)
+	# The buildings' bricks (11.11): the regions read them, a site's box goes
+	# while its bricks stand.
+	net.bricks = buildings.bricks
+	buildings.site_bricks.connect(func(i: int, on: bool) -> void: net.set_site_bricks(i, on, buildings.site_box(i)))
+	for i in buildings.sites.size():
+		if buildings.sites[i].bricked:
+			net.set_site_bricks(i, true, buildings.site_box(i))
 	# The trees' trunks too: walked round, and cover; one knocked down goes (11.10).
 	net.tree_source = trees.trees_near
 	trees.tree_knocked.connect(net.remove_tree)
@@ -1542,4 +1558,99 @@ func _run_trees_gate() -> void:
 	_check("a truck's body is stopped by a trunk (Layers.TREE)", stopped, "%d tried" % tried)
 	print("[planet] trees: %d knocked; frames worst %.1f ms" % [trees.knocked_count, _worst_ms])
 	print("[planet] trees gate: %d ok, %d FAIL" % [_ok, _fail])
+	get_tree().quit(0 if _fail == 0 else 1)
+
+
+# The bricks gate (11.11): near the player the town's buildings are bricks --
+# drawn by band, solid, the shell gone -- a building has a way in at the ground,
+# and the AI's world has the bricks: the nav net's path goes in through it.
+
+func _run_bricks_gate() -> void:
+	var t0 := Time.get_ticks_msec()
+	while pawn == null and Time.get_ticks_msec() - t0 < 60000:
+		await _frames(1)
+	var town: Vector3 = town_dirs[0]
+	var p_feet := _surface(_round_dir(town, spawn_dir, 88.0))
+	pawn.place(p_feet + Gravity.up_at(p_feet) * 0.3)
+	t0 = Time.get_ticks_msec()
+	while _ground_hit(p_feet) == Vector3.INF and Time.get_ticks_msec() - t0 < 30000:
+		await _frames(1)
+	setup_ai(town)
+	var net := ai.nav_net as PlanetNavNet
+	# Which buildings should be bricks: every one but a landmark within BRICK_M.
+	var want: Array[int] = []
+	for i in buildings.sites.size():
+		var st: PlanetBuildings.Site = buildings.sites[i]
+		if not st.landmark and cam.global_position.distance_to(planet.global_position + st.frame.origin) < PlanetBuildings.BRICK_M - 10.0:
+			want.append(i)
+	t0 = Time.get_ticks_msec()
+	var all_in := false
+	while Time.get_ticks_msec() - t0 < 60000:
+		await _frames(1)
+		# Held where it stands: a long frame (an unwatched window's stall) can
+		# drop a body through the voxel ground, and the bricks follow the camera.
+		if _over_ground(pawn.feet()) < -0.5:
+			pawn.place(p_feet + Gravity.up_at(p_feet) * 0.3)
+		all_in = true
+		for i in want:
+			if not buildings.sites[i].bricked:
+				all_in = false
+				break
+		if all_in:
+			break
+	var secs := (Time.get_ticks_msec() - t0) / 1000.0
+	print("[planet] bricks: %d of %d buildings near in %.1f s; the worst brick step %.1f ms (%s)" % [
+			buildings.bricked_count, want.size(), secs, buildings.brick_worst_us / 1000.0, buildings.brick_worst_what])
+	_check("the buildings near the player are bricks", not want.is_empty() and all_in,
+			"%d of %d in %.1f s" % [buildings.bricked_count, want.size(), secs])
+	_check("brick work stays small a frame (< 12 ms)", buildings.brick_worst_us < 12000,
+			"%.1f ms" % (buildings.brick_worst_us / 1000.0))
+	if want.is_empty():
+		get_tree().quit(1)
+		return
+	# The nearest of them.
+	var bi: int = want[0]
+	for i in want:
+		if pawn.feet().distance_to(planet.global_position + buildings.sites[i].frame.origin) \
+				< pawn.feet().distance_to(planet.global_position + buildings.sites[bi].frame.origin):
+			bi = i
+	var site: PlanetBuildings.Site = buildings.sites[bi]
+	var bxf := planet.global_transform * site.frame
+	var stud := BrickWorld.get_stud_metres()
+	var w := site.fx * stud
+	var dd := site.fz * stud
+	_check("its shell is gone (not drawn, not solid)", site.shell == null or (not site.shell.visible and site.body.collision_layer == 0))
+	# A ray at a wall: bricks, not the shell.
+	var space := get_world_3d().direct_space_state
+	var mid := bxf * Vector3(w * 0.5, 1.2, -3.0)
+	var into := bxf * Vector3(w * 0.5, 1.2, dd * 0.5)
+	var hit := space.intersect_ray(PhysicsRayQueryParameters3D.create(mid, into, Layers.STRUCTURE))
+	_check("a ray at a wall meets its bricks", not hit.is_empty() and (hit.collider as Node).name == "BrickBody",
+			str(hit.get("collider", "nothing")))
+	# The AI: its world has the bricks, and the nav net walks in.
+	# Just inside the brick the ray met.
+	var wall_pt: Vector3 = (hit.position as Vector3) + (into - mid).normalized() * 0.1 if not hit.is_empty() else mid
+	var aw := net.world_at(wall_pt)
+	_check("the AI's world has its bricks (where the ray met a wall is solid)", aw != null and aw.solid_at(wall_pt))
+	# The room the front door opens into.
+	var inside_pt := net.snap(bxf * Vector3(w * 0.5, 0.3, 2.5))
+	# Its front door (PlanetBuildings._cut_door): a ray through it at a metre
+	# meets nothing; the nav net walks in through it to a ground-floor room.
+	var door_out := bxf * Vector3(w * 0.5, 1.0, -1.5)
+	var door_in := bxf * Vector3(w * 0.5, 1.0, 2.5)
+	_check("a front door: a ray goes through it", space.intersect_ray(
+			PhysicsRayQueryParameters3D.create(door_out, door_in, Layers.STRUCTURE)).is_empty())
+	var path := net.find_path(pawn.feet(), inside_pt, 200000)
+	var li := bxf.affine_inverse() * (path[path.size() - 1] if path.size() > 0 else Vector3.INF)
+	var by_door := false
+	for p in path:
+		var lp := bxf.affine_inverse() * p
+		if lp.z > -0.5 and lp.z < 1.0 and absf(lp.x - w * 0.5) < 1.5:
+			by_door = true
+	_check("the nav net walks in, to the room behind the door", path.size() > 2 and li.x > stud and li.x < w - stud
+			and li.z > 2.0 * stud and li.z < dd - stud and absf(li.y) < 1.0, "%d points, ends at %s" % [path.size(), li])
+	_check("through the door", by_door)
+	await _shot("planet_bricks_town")
+	print("[planet] frames: worst %.1f ms; over 40 ms: %s" % [_worst_ms, _hitches])
+	print("[planet] bricks gate: %d ok, %d FAIL" % [_ok, _fail])
 	get_tree().quit(0 if _fail == 0 else 1)

@@ -58,6 +58,12 @@ Known noise: a windowed run nobody watches stalls (250 / 750 ms frames, display 
 the walker gate's "no building popped" check can fail on one long frame -- it did once WITHOUT
 trees. Rerun before believing it.
 
+## Brick buildings (2026-10-25)
+
+Planets.md 11.11: near buildings are real brick towers (drawn, solid, a front door, bricks to
+the AI); `--gate=bricks` 8/8. Next there: time the brick tier awake and quiet; stairs (the city's
+staircase fixtures); damage and destruction on the planet; furniture.
+
 ## What is next, in order
 
 1. **Bake the tree cards while the spawn loads** -- built (Planets.md 11.10, "Plan: the cards
