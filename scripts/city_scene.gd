@@ -6129,6 +6129,29 @@ func _spawn_figure() -> String:
 	return "figure %s" % ids[_figure_design]
 
 
+var _builder: CharacterBuilder
+
+
+## Ctrl Alt T: the character builder. What it puts in the world stands ahead of the camera
+## and follows the player on foot (else walks a circle).
+func _open_character_builder() -> void:
+	if _builder == null:
+		_builder = CharacterBuilder.new()
+		_builder.name = "CharacterBuilder"
+		add_child(_builder)
+		_builder.spawned.connect(func(f: Figure) -> void:
+			f.position = _on_ground(camera.global_position - camera.global_transform.basis.z * 4.0)
+			add_child(f)
+			if _player.is_possessing() and _player_pawn != null and is_instance_valid(_player_pawn):
+				f.mode = "follow"
+				f.target = _player_pawn.body
+			else:
+				f.mode = "wander"
+			_figures.append(f)
+			print("[city] character put down, %s" % f.mode))
+	_builder.open(MechAssembler.catalog(true))
+
+
 func _swap_figure_limb() -> String:
 	while not _figures.is_empty() and not is_instance_valid(_figures[-1]):
 		_figures.pop_back()
@@ -14675,7 +14698,10 @@ func _unhandled_input(event: InputEvent) -> void:
 	# Ctrl T: the figures made in the asset workshop, in turn, walking a circle ahead of the
 	# camera; Ctrl Shift T swaps a limb of the last one for another that fits (stage 12).
 	if event.ctrl_pressed and event.keycode == KEY_T:
-		print("[city] %s" % (_swap_figure_limb() if event.shift_pressed else _spawn_figure()))
+		if event.alt_pressed:
+			_open_character_builder()
+		else:
+			print("[city] %s" % (_swap_figure_limb() if event.shift_pressed else _spawn_figure()))
 		return
 	# In the mech, 1 and 2 are its pods (MechPods).
 	if _pilot.is_piloting() and _mech_pods != null and _pilot.mech == _mech_pods.mech:
