@@ -18,6 +18,12 @@ extends Node
 	# "shatter_puff":preload("res://fx/emitters/shatter_puff.tscn"),
 }
 @export var prewarm_per_key := 4
+## Caps: the pool used to grow without end once a key's pre-warmed nodes were
+## all out. Past these, acquire_emitter / acquire_arc return null (callers skip
+## the effect) and a shatter takes over the oldest one still flying.
+@export var max_per_key := 16
+@export var max_arcs := 24
+@export var max_shatters := 6
 @export var max_decals := 16
 @export var shard_mesh: Mesh                 # low-poly crystal chunk
 @export var arc_ribbon_scene: PackedScene    # QuadMesh strip w/ electric_arc.gdshader
@@ -29,6 +35,10 @@ var _decal_cursor := 0
 var _shatters: Array[ShatterBurst] = []
 var _free_shatters: Array[ShatterBurst] = []
 var _free_arcs: Array[Node3D] = []
+var _live := {}         # key -> emitters out of the pool (acquired or bursting)
+var _arcs_out := 0
+## Requests turned away by the caps, for gates.
+var refused := 0
 
 func _ready() -> void:
 	for key in emitter_scenes:
@@ -47,14 +57,22 @@ func _ready() -> void:
 # ------------------------------------------------------------- emitters
 ## Attach a looping emitter (fire, sparks…) to a parent. Returns handle; keep it
 ## and call release_emitter() when the status ends.
+## Null when `key` has no scene or max_per_key of it are already out.
 func acquire_emitter(key: String, parent: Node, local_pos := Vector3.ZERO) -> Node3D:
+	if not emitter_scenes.has(key) or parent == null:
+		return null
 	var arr: Array = _free.get(key, [])
+	_free[key] = arr
 	var n: Node3D
 	if arr.is_empty():
-		n = emitter_scenes[key].instantiate()  # pool exhausted — grow (rare)
+		if int(_live.get(key, 0)) >= max_per_key:
+			refused += 1
+			return null
+		n = emitter_scenes[key].instantiate()  # pool exhausted — grow, up to the cap
 	else:
 		n = arr.pop_back()
 		n.get_parent().remove_child(n)
+	_live[key] = int(_live.get(key, 0)) + 1
 	parent.add_child(n)
 	n.position = local_pos
 	n.visible = true
@@ -68,6 +86,7 @@ func release_emitter(key: String, n: Node3D) -> void:
 	# Reparent back after longest lifetime; cheap deferred cleanup.
 	var t := get_tree().create_timer(2.0)
 	t.timeout.connect(func():
+		_live[key] = maxi(int(_live.get(key, 0)) - 1, 0)
 		if not is_instance_valid(n): return
 		if n.get_parent(): n.get_parent().remove_child(n)
 		add_child(n)
@@ -77,11 +96,14 @@ func release_emitter(key: String, n: Node3D) -> void:
 ## Fire-and-forget one-shot burst at a world position.
 func burst(key: String, world_pos: Vector3) -> void:
 	var n := acquire_emitter(key, self)
+	if n == null:
+		return
 	n.global_position = world_pos
 	for p in _all_particles(n):
 		p.one_shot = true
 		p.restart()
 	get_tree().create_timer(3.0).timeout.connect(func():
+		_live[key] = maxi(int(_live.get(key, 0)) - 1, 0)
 		if is_instance_valid(n):
 			_sleep(n)
 			_free[key].append(n))
@@ -119,7 +141,14 @@ func fade_puddle(d: Decal, duration := 3.0) -> void:
 	tw.tween_callback(func(): d.visible = false)
 
 # ------------------------------------------------------------- arc ribbons
+## Null when there is no ribbon scene or max_arcs are already out.
 func acquire_arc(parent: Node3D) -> Node3D:
+	if arc_ribbon_scene == null or parent == null:
+		return null
+	if _arcs_out >= max_arcs:
+		refused += 1
+		return null
+	_arcs_out += 1
 	var a: Node3D
 	if _free_arcs.is_empty():
 		a = arc_ribbon_scene.instantiate()
@@ -132,6 +161,7 @@ func acquire_arc(parent: Node3D) -> Node3D:
 
 func release_arc(a: Node3D) -> void:
 	if not is_instance_valid(a): return
+	_arcs_out = maxi(_arcs_out - 1, 0)
 	a.visible = false
 	if a.get_parent(): a.get_parent().remove_child(a)
 	add_child(a)
@@ -158,7 +188,13 @@ class ShatterBurst:
 func spawn_shatter(world_pos: Vector3, aabb_size: Vector3, count := 40,
 		floor_y := 0.0) -> void:
 	var b: ShatterBurst
-	if _free_shatters.is_empty():
+	if _free_shatters.is_empty() and _shatters.size() >= max_shatters:
+		# All flying: the one nearest its end starts over here.
+		b = _shatters[0]
+		for s in _shatters:
+			if s.life > b.life:
+				b = s
+	elif _free_shatters.is_empty():
 		b = ShatterBurst.new()
 		b.mmi = MultiMeshInstance3D.new()
 		var mm := MultiMesh.new()

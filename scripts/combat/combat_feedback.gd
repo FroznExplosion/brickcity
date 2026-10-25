@@ -20,6 +20,16 @@ const KILL_MARK_SECONDS := 0.35
 const NUMBER_SECONDS := 0.8
 const FLASH_SECONDS := 0.09
 const HURT_FADE := 1.6
+## A spread gun's pellets on one body: a number each, up to this many; past it
+## the pellets share them out (ten hits read as five numbers, not one sum).
+const PELLET_NUMBERS := 5
+## Numbers in the air at once, over every target. Past it the oldest is taken
+## over: a shotgun into a crowd was a new Label3D per pellet-target, unbounded.
+const MAX_NUMBERS := 16
+## Death bursts at once, reused: each was a new CPUParticles3D, box and
+## material per kill, and an air strike or a collapse kills several together.
+const MAX_BURSTS := 8
+const BURST_LIFETIME := 1.1
 
 var city: Node3D
 ## Counts, for gates: hitmarkers, numbers and kill markers shown.
@@ -34,7 +44,13 @@ var _mark_size := 9.0
 var _hurt := 0.0
 var _hurt_dir := 0.0   # radians, screen space: 0 up, + clockwise
 var _hurt_dir_left := 0.0
-var _numbers: Array = []   # [Label3D, born, velocity]
+var _numbers: Array = []   # [Label3D, born, velocity], oldest first
+var _spare_labels: Array[Label3D] = []
+## Labels made and numbers that took over an older one, for gates.
+var labels_made := 0
+var numbers_recycled := 0
+var _bursts: Array[CPUParticles3D] = []
+var _burst_cursor := 0
 var _flashes := {}         # MeshInstance3D -> [material it had, until]
 var _flash_mat: StandardMaterial3D
 var _hit_snd: AudioStreamPlayer
@@ -88,7 +104,26 @@ func on_player_shot(info: Dictionary) -> void:
 		_mark_size = 9.0
 	_play(_kill_snd if r.killed else (_crit_snd if r.was_crit else _hit_snd))
 	if r.dealt > 0.0:
-		_number(info.point, r.dealt, r.was_crit, r.killed)
+		numbers_shown += 1
+		var each: Array = info.get("each", [])
+		if each.size() <= 1:
+			_number(info.point, r.dealt, r.was_crit, r.killed, 0)
+		else:
+			# Pellets share out PELLET_NUMBERS numbers in turn; the kill
+			# colours the last.
+			var bins: Array = []
+			for i in each.size():
+				var p: Array = each[i]
+				if i < PELLET_NUMBERS:
+					bins.append([float(p[0]), bool(p[1]), p[2]])
+				else:
+					var b: Array = bins[i % PELLET_NUMBERS]
+					b[0] = float(b[0]) + float(p[0])
+					b[1] = bool(b[1]) or bool(p[1])
+			for i in bins.size():
+				var b: Array = bins[i]
+				if float(b[0]) > 0.0:
+					_number(b[2], b[0], b[1], r.killed and i == bins.size() - 1, i)
 	var body := info.get("collider") as Node
 	if body != null and not r.killed:
 		_flash(body)
@@ -106,18 +141,38 @@ func player_hurt(amount: float, from: Vector3) -> void:
 
 
 ## A body died at `where`: burst it into bricks.
+## One of MAX_BURSTS, the oldest taken over when they are all in the air.
 func burst(where: Vector3, colour: Color) -> void:
+	if city == null or not city.is_inside_tree():
+		return
+	if _bursts.size() < MAX_BURSTS:
+		_bursts.append(null)
+	var at := _burst_cursor % _bursts.size()
+	_burst_cursor = (at + 1) % MAX_BURSTS
+	var p := _bursts[at]
+	if not is_instance_valid(p):
+		p = _new_burst()
+		_bursts[at] = p
+	p.color = colour
+	p.global_position = where + Vector3.UP * 0.8
+	p.visible = true
+	p.restart()
+
+
+func _new_burst() -> CPUParticles3D:
 	var p := CPUParticles3D.new()
 	var cube := BoxMesh.new()
 	cube.size = Vector3(0.14, 0.12, 0.14)
+	# One material for every burst; the kill's colour is the particles' own.
 	var mat := StandardMaterial3D.new()
-	mat.albedo_color = colour
+	mat.vertex_color_use_as_albedo = true
 	cube.material = mat
 	p.mesh = cube
 	p.amount = 28
 	p.one_shot = true
+	p.emitting = false
 	p.explosiveness = 0.95
-	p.lifetime = 1.1
+	p.lifetime = BURST_LIFETIME
 	p.emission_shape = CPUParticles3D.EMISSION_SHAPE_BOX
 	p.emission_box_extents = Vector3(0.25, 0.8, 0.25)
 	p.direction = Vector3.UP
@@ -130,9 +185,7 @@ func burst(where: Vector3, colour: Color) -> void:
 	p.scale_amount_min = 0.7
 	p.scale_amount_max = 1.3
 	city.add_child(p)
-	p.global_position = where + Vector3.UP * 0.8
-	p.emitting = true
-	get_tree().create_timer(p.lifetime + 0.3).timeout.connect(p.queue_free)
+	return p
 
 
 func _play(p: AudioStreamPlayer) -> void:
@@ -175,29 +228,45 @@ static func _tone(freqs: Array, seconds: float, decay: float, gain: float) -> Au
 	return w
 
 
-func _number(at: Vector3, dealt: float, crit: bool, killed: bool) -> void:
-	numbers_shown += 1
-	var l := Label3D.new()
+## `slot`: which of a spread's numbers this is, so they fan out, not stack.
+func _number(at: Vector3, dealt: float, crit: bool, killed: bool, slot: int) -> void:
+	var l: Label3D
+	if _numbers.size() >= MAX_NUMBERS:
+		# Over the cap: the oldest number gives up its label to this one.
+		l = (_numbers.pop_front() as Array)[0]
+		numbers_recycled += 1
+	elif not _spare_labels.is_empty():
+		l = _spare_labels.pop_back()
+	if not is_instance_valid(l):
+		l = _new_label()
 	l.text = ("%d!" if crit else "%d") % roundi(dealt)
+	l.font_size = 44 if not (crit or killed) else 60
+	l.modulate = Color(1.0, 0.3, 0.25) if killed else (Color(1.0, 0.85, 0.2) if crit else Color.WHITE)
+	l.outline_modulate = Color(0.0, 0.0, 0.0, 0.85)
+	l.visible = true
+	# Up and to the right of where it landed, in screen pixels (the label is
+	# fixed-size): clear of the crosshair at any range. A spread's numbers
+	# step on up and out from there.
+	l.offset = Vector2(110.0 + 26.0 * slot, 80.0 + 34.0 * slot)
+	l.global_position = at
+	var drift := Vector3(randf_range(-0.4, 0.4), 1.2, randf_range(-0.4, 0.4))
+	_numbers.append([l, Time.get_ticks_msec(), drift])
+
+
+func _new_label() -> Label3D:
+	labels_made += 1
+	var l := Label3D.new()
 	l.billboard = BaseMaterial3D.BILLBOARD_ENABLED
 	l.no_depth_test = true
 	l.fixed_size = true
 	l.pixel_size = 0.0014
-	l.font_size = 44 if not (crit or killed) else 60
 	l.outline_size = 12
-	l.outline_modulate = Color(0.0, 0.0, 0.0, 0.85)
 	# The text over its own outline: with no depth test the two are sorted by
 	# priority alone, and at the defaults the outline could land on top.
 	l.render_priority = 2
 	l.outline_render_priority = 1
-	l.modulate = Color(1.0, 0.3, 0.25) if killed else (Color(1.0, 0.85, 0.2) if crit else Color.WHITE)
 	city.add_child(l)
-	# Up and to the right of where it landed, in screen pixels (the label is
-	# fixed-size): clear of the crosshair at any range.
-	l.offset = Vector2(110.0, 80.0)
-	l.global_position = at
-	var drift := Vector3(randf_range(-0.4, 0.4), 1.2, randf_range(-0.4, 0.4))
-	_numbers.append([l, Time.get_ticks_msec(), drift])
+	return l
 
 
 func _flash(body: Node) -> void:
@@ -222,7 +291,8 @@ func _process(delta: float) -> void:
 		var age := float(now - int(e[1])) / 1000.0
 		if age > NUMBER_SECONDS or not is_instance_valid(l):
 			if is_instance_valid(l):
-				l.queue_free()
+				l.visible = false
+				_spare_labels.append(l)
 			_numbers.remove_at(i)
 			continue
 		l.global_position += (e[2] as Vector3) * delta
