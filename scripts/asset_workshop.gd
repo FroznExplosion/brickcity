@@ -282,6 +282,8 @@ const SMALL_HEIGHT_PLATES := 200
 ## What is drawn and framed round the build -- the working plane's grid, the mirror
 ## sheet, a new photo's size, the flat views' zoom: this many studs, not the whole area.
 const VIEW_STUDS := 80
+## A figure's flat views: it is 8 nano bricks tall, a hat on top.
+const FIGURE_VIEW_STUDS := 26
 
 
 func _init() -> void:
@@ -1037,6 +1039,9 @@ func set_view(v: int) -> void:
 	work_plane = VIEWS[v]
 	_draw_work_plane()
 	var c := build_centre()
+	if _body():
+		# A body stands up the screen: it sits above the readouts along the bottom.
+		c += Vector3.DOWN * _ortho_size * 0.08
 	match VIEWS[v]:
 		"side":
 			_camera.global_position = c + Vector3.BACK * 60.0
@@ -1280,8 +1285,13 @@ func ruler_text() -> String:
 			if counts[name] > 0:
 				bits.append("%s%s %d" % [name, "~" if smooth_parts.has(name) else "", counts[name]])
 		var d: Vector3i = recipe.bounds()[1]
-		lines.append("parts: %s   (~ leaves smooth)   in the game %.2f m long" % [", ".join(bits),
-				d.x * PRINT_MM_PER_STUD * REAL_PER_PRINT / 1000.0])
+		if _body():
+			# A body is at nano scale in the game (a nano plate 0.07 m), as tall as it is built.
+			lines.append("parts: %s   (~ leaves smooth)   in the game %.2f m tall" % [", ".join(bits),
+					d.y * BrickPalette.PLATE_M * MECH_GAME_PER_WORKSHOP])
+		else:
+			lines.append("parts: %s   (~ leaves smooth)   in the game %.2f m long" % [", ".join(bits),
+					d.x * PRINT_MM_PER_STUD * REAL_PER_PRINT / 1000.0])
 	var tris := triangles_text()
 	if tris != "":
 		lines.append(tris)
@@ -1825,6 +1835,10 @@ func _kind_changed() -> void:
 	if _point_slot != null:
 		_fill_point_slots()
 	_draw_mech_ref()
+	# The flat views framed to what is made: a figure is a few studs tall, a gun's view 80.
+	_ortho_size = (FIGURE_VIEW_STUDS if recipe.kind == "figure" else VIEW_STUDS) * BrickPalette.STUD_M * 0.75
+	if _camera != null and view != 0:
+		_camera.size = _ortho_size
 
 
 ## Asset > Make a gun / a mech / furniture or an item: what this build is saved as. A gun
@@ -2172,7 +2186,7 @@ func _fill_point_slots() -> void:
 	_point_slot.clear()
 	var names := []
 	if _point_kind != null and _point_kind.item_count > 2 and _point_kind.selected == 2:
-		names = ["knee", "elbow"]   # a bend: where a part folds inside itself
+		names = ["knee", "ankle", "elbow"]   # a bend: where a part folds inside itself
 	elif _body():
 		for k in body_ref().PARTS:
 			var sk := String(body_ref().SPEC[k].get("socket", ""))
@@ -2211,6 +2225,7 @@ func _fill_point_ifaces() -> void:
 func _draw_points() -> void:
 	for c in _points_root.get_children():
 		c.queue_free()
+	var labels := {}
 	for q in points:
 		var at: Array = q.at
 		var where := Vector3(float(at[0]) * BrickPalette.STUD_M, float(at[1]) * BrickPalette.PLATE_M,
@@ -2230,14 +2245,53 @@ func _draw_points() -> void:
 		mark.material_override = mat
 		mark.position = where
 		_points_root.add_child(mark)
+		# One label a spot: a mount and the socket it goes in share one ("arm_L on torso").
+		var key := "%.3f,%.3f,%.3f" % [where.x, where.y, where.z]
+		(labels.get_or_add(key, {"at": where, "lines": []}).lines as Array).append(_point_words(q))
+	for key in labels:
 		var label := Label3D.new()
-		label.text = "%s %s\n%s" % [q.part, q.kind, q.interface]
+		label.text = "\n".join(PackedStringArray(_merged_words(labels[key].lines)))
 		label.billboard = BaseMaterial3D.BILLBOARD_ENABLED
 		label.no_depth_test = true
-		label.pixel_size = 0.003
+		label.pixel_size = 0.0018 if recipe.kind == "figure" else 0.003   # a figure's view is small
 		label.font_size = 40
-		label.position = where + Vector3.UP * 0.25
+		label.outline_size = 10
+		label.position = (labels[key].at as Vector3) + Vector3.UP * 0.25
 		_points_root.add_child(label)
+
+
+## What a point is, in words: a mount by its part, a socket by what it takes, a bend by name.
+static func _point_words(q: Dictionary) -> Dictionary:
+	return {"part": String(q.part), "kind": String(q.kind), "slot": String(q.get("slot", "")),
+			"iface": String(q.get("interface", ""))}
+
+
+## A spot's lines: a mount and a socket of one interface as "arm_L on torso  (fig.shoulder)",
+## a bend as "leg_L knee", anything else as it is.
+static func _merged_words(list: Array) -> Array:
+	var out := []
+	var used := {}
+	for i in list.size():
+		var a: Dictionary = list[i]
+		if used.has(i):
+			continue
+		used[i] = true
+		if a.kind == "bend":
+			out.append("%s %s" % [a.part, a.slot])
+			continue
+		var pair := -1
+		for j in list.size():
+			var b: Dictionary = list[j]
+			if j != i and not used.has(j) and b.iface == a.iface and b.kind != a.kind and b.kind != "bend":
+				pair = j
+		if pair >= 0:
+			used[pair] = true
+			var mount: Dictionary = a if a.kind == "mount" else list[pair]
+			var sock: Dictionary = list[pair] if a.kind == "mount" else a
+			out.append("%s on %s  (%s)" % [mount.part, sock.part, a.iface])
+		else:
+			out.append("%s %s  %s" % [a.part, a.kind, a.iface])
+	return out
 
 
 # ---------------------------------------------------------------------------
@@ -3780,7 +3834,12 @@ func _look_at_build() -> void:
 	if view != 0:
 		return
 	var c := build_centre()
-	_camera.global_position = c + Vector3(-5.0, 3.0, 8.0)
+	var off := Vector3(-5.0, 3.0, 8.0)
+	if _body() and recipe.size() > 0:
+		# A body by its height: far enough to see all of it, a little above.
+		var tall := float((recipe.bounds()[1] as Vector3i).y) * BrickPalette.PLATE_M
+		off = Vector3(-0.5, 0.35, 1.0).normalized() * maxf(tall * 1.15, 2.0)
+	_camera.global_position = c + off
 	_camera.look_at(c, Vector3.UP)
 
 
@@ -8736,10 +8795,10 @@ func lay_ready_points() -> void:
 				"at": at, "ready": true})
 		points.append({"part": spec.host, "kind": "socket", "slot": spec.socket, "interface": spec.iface,
 				"at": at.duplicate(), "ready": true})
-		var bend: Vector3 = body_ref().bend_at(part, mech_class, leg_length)
-		if bend != Vector3.INF:
+		for bend_name in body_ref().BENDS.get(part, []):
+			var bend: Vector3 = body_ref().bend_at(part, bend_name, mech_class, leg_length)
 			var bc := mech_origin() + bend
-			points.append({"part": part, "kind": "bend", "slot": body_ref().BENDS[part], "interface": "",
+			points.append({"part": part, "kind": "bend", "slot": bend_name, "interface": "",
 					"at": [bc.x, bc.y, bc.z], "ready": true})
 	_draw_points()
 	_draw_mech_ref()
@@ -8818,11 +8877,8 @@ func export_mech(dir: String) -> Dictionary:
 	DirAccess.make_dir_recursive_absolute(dir)
 	var written := {}
 	for name in by_part:
-		var bend := {}
-		for q in points:
-			if String(q.part) == name and q.kind == "bend":
-				bend = {"name": String(q.slot), "at": _point_m(q)}
-		var root := _part_root(name, by_part[name], at[name], b, bend)
+		var bends := _part_bends(name)
+		var root := _part_root(name, by_part[name], at[name], b, bends)
 		if name != body_ref().ROOT:
 			var mount := Node3D.new()
 			mount.name = "mount"
@@ -8832,10 +8888,14 @@ func export_mech(dir: String) -> Dictionary:
 			if String(q.part) == name and q.kind == "socket" and not made.has(String(q.slot)):
 				made[String(q.slot)] = true
 				var p := _point_m(q)
-				if not bend.is_empty() and p.y < (bend.at as Vector3).y:
-					# Below the bend: it goes with what bends (the hand with the forearm).
-					_game_node(root.get_node(NodePath("Bend_" + String(bend.name))), "socket_" + String(q.slot),
-							b * (p - (bend.at as Vector3)))
+				var seg := segment_of(p.y, bends)
+				if seg >= 0:
+					# Below a bend: it goes with what bends (the hand with the forearm).
+					var path := ""
+					for k in seg + 1:
+						path += ("/" if k > 0 else "") + "Bend_" + String(bends[k].name)
+					_game_node(root.get_node(NodePath(path)), "socket_" + String(q.slot),
+							b * (p - (bends[seg].at as Vector3)))
 				else:
 					_game_node(root, "socket_" + String(q.slot), b * (p - (at[name] as Vector3)))
 		_own(root, root)
@@ -8908,6 +8968,9 @@ func _draw_mech_ref() -> void:
 		_mech_ref.add_child(ball)
 		var label := Label3D.new()
 		label.name = "Joint_" + part
+		var said := points.any(func(q: Dictionary) -> bool:
+				return q.part == part and q.kind == "mount" and q.get("ready", false))
+		label.visible = not said   # the ready point's label says it
 		var spec: Dictionary = body_ref().SPEC[part]
 		label.text = String(spec.get("socket", "hips")) if part != body_ref().ROOT else "hips"
 		label.billboard = BaseMaterial3D.BILLBOARD_ENABLED
@@ -9705,34 +9768,38 @@ func _studs_node(list: Array) -> MultiMeshInstance3D:
 ## One part as a game scene's root: at its point (`at`, the build's metres), its bricks
 ## (and shell, and hand-put studs) under "Model" turned and sized by `b`. The caller adds
 ## the mount and socket nodes.
-func _part_root(name: String, ids: Array, at: Vector3, b: Basis, bend: Dictionary = {}) -> Node3D:
+func _part_root(name: String, ids: Array, at: Vector3, b: Basis, bends: Array = []) -> Node3D:
 	var root := Node3D.new()
 	root.name = name
 	var model := Node3D.new()
 	model.name = "Model"
 	model.transform = Transform3D(b, -(b * at))
 	root.add_child(model)
-	# A part that bends (a knee, an elbow): its bricks below the bend under a pivot there,
-	# "Bend_<name>", turned by the walk and the pose.
-	var upper := ids
-	if not bend.is_empty():
-		var bm: Vector3 = bend.at
-		upper = ids.filter(func(i: int) -> bool: return _brick_box(i).get_center().y >= bm.y)
-		var lower := ids.filter(func(i: int) -> bool: return _brick_box(i).get_center().y < bm.y)
+	# A part that bends (a knee, an ankle, an elbow): the bricks between one bend and the next
+	# under a pivot at the upper one, "Bend_<name>", each pivot hanging on the one above,
+	# turned by the walk and the pose. `bends` top to bottom (_part_bends).
+	var upper := ids.filter(func(i: int) -> bool: return segment_of(_brick_box(i).get_center().y, bends) < 0)
+	var parent: Node3D = root
+	var above := at
+	for k in bends.size():
+		var bm: Vector3 = bends[k].at
 		var pivot := Node3D.new()
-		pivot.name = "Bend_" + String(bend.name)
-		pivot.position = b * (bm - at)
-		root.add_child(pivot)
+		pivot.name = "Bend_" + String(bends[k].name)
+		pivot.position = b * (bm - above) if k > 0 else b * (bm - at)
+		parent.add_child(pivot)
 		var low := Node3D.new()
 		low.name = "Lower"
 		low.transform = Transform3D(b, -(b * bm))
 		pivot.add_child(low)
-		var lg := _by_frame(_uncovered(name, lower))
+		var seg := ids.filter(func(i: int) -> bool: return segment_of(_brick_box(i).get_center().y, bends) == k)
+		var lg := _by_frame(_uncovered(name, seg))
 		for af in lg:
 			var mi := _bake_part_mesh(lg[af], af)
 			if af != lg.keys()[0]:
 				mi.name = "Bricks%d" % af
 			low.add_child(mi)
+		parent = pivot
+		above = bm
 	# A mesh a frame the part has bricks in: sideways bricks are in grids of their own.
 	var groups := _by_frame(_uncovered(name, upper))
 	for af in groups:
@@ -9753,6 +9820,26 @@ func _part_root(name: String, ids: Array, at: Vector3, b: Basis, bend: Dictionar
 	if not extra.is_empty():
 		model.add_child(_studs_node(extra))
 	return root
+
+
+## Which piece of a bending part a height is in: -1 above every bend, else the deepest bend
+## it is below (`bends` top to bottom).
+static func segment_of(y: float, bends: Array) -> int:
+	var seg := -1
+	for k in bends.size():
+		if y < (bends[k].at as Vector3).y:
+			seg = k
+	return seg
+
+
+## A part's bends, top to bottom: [{name, at (the build's metres)}].
+func _part_bends(name: String) -> Array:
+	var out := []
+	for q in points:
+		if String(q.part) == name and q.kind == "bend":
+			out.append({"name": String(q.slot), "at": _point_m(q)})
+	out.sort_custom(func(a: Dictionary, c: Dictionary) -> bool: return (a.at as Vector3).y > (c.at as Vector3).y)
+	return out
 
 
 ## Each part's point, in the build's metres: its mount, else the middle of its bricks.
@@ -11137,7 +11224,7 @@ func _size_marks_process() -> void:
 	if Time.get_ticks_msec() < _size_at:
 		return
 	_size_at = Time.get_ticks_msec() + 500
-	var sig := "%s %s %s %d %d %s %s %s %d" % [size_marks_on, gun_class, muzzle_end, _edits.size(), _edit_groups.size(),
+	var sig := "%s %s %s %s %d %d %s %s %s %d" % [recipe.kind, size_marks_on, gun_class, muzzle_end, _edits.size(), _edit_groups.size(),
 			sculpt_state, str(_placed.get("xf", "")), mirror_z, models.size()]
 	if sig != _size_sig:
 		_size_sig = sig
@@ -11161,8 +11248,9 @@ func draw_size_marks() -> void:
 		add_child(_size_labels)
 	for c in _size_labels.get_children():
 		c.queue_free()
-	# Not in the game's view: it is to see the gun as the player will.
-	var on := size_marks_on and not game_view_on
+	# Not in the game's view: it is to see the gun as the player will. A gun's only: a mech or
+	# a figure has its reference instead.
+	var on := size_marks_on and not game_view_on and recipe.kind == "gun"
 	_size_marks.visible = on
 	_size_labels.visible = on
 	if not on:

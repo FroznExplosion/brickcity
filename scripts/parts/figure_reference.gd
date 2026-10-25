@@ -24,11 +24,15 @@ const SPEC := {
 }
 ## In nano plates up and studs across: hips 4 bricks up, the shoulders 2.5 bricks over them,
 ## the neck at the shoulders, the hat's studs 2 bricks over the neck.
-## The joints inside a part (stage "joints"): a leg bends at its knee, an arm at its elbow,
-## half way down. The part's bricks below the bend swing about it; its sockets below it go too.
-## Which way each folds, for a part hanging down and facing -Z: a knee back, an elbow forward.
-const BENDS := {"leg_L": "knee", "leg_R": "knee", "arm_L": "elbow", "arm_R": "elbow"}
-const FOLD := {"knee": -1.0, "elbow": 1.0}
+## The joints inside a part, top to bottom: a leg bends at its knee (half way down) and its
+## ankle (an eighth of the way up from the ground), an arm at its elbow (half way down). The
+## bricks below a bend swing about it, and each bend below hangs on the one above.
+## Which way each folds, for a part hanging down and facing -Z: a knee back, an elbow forward;
+## an ankle keeps the foot level.
+const BENDS := {"leg_L": ["knee", "ankle"], "leg_R": ["knee", "ankle"], "arm_L": ["elbow"], "arm_R": ["elbow"]}
+const FOLD := {"knee": -1.0, "elbow": 1.0, "ankle": 1.0}
+## How far down each bend is, from the part's joint (0) to its end (1).
+const BEND_DOWN := {"knee": 0.5, "elbow": 0.5, "ankle": 0.85}
 const HIP_PLATES := 12
 const SHOULDER_PLATES := 20
 const NECK_PLATES := 21
@@ -56,13 +60,18 @@ static func joints(_klass: String = "", _length: int = 0) -> Dictionary:
 
 
 ## Where part `part` bends, as MechReference.bend_at.
-static func bend_at(part: String, _klass: String = "", _length: int = 0) -> Vector3:
-	if not BENDS.has(part):
+static func bend_at(part: String, bend: String = "", _klass: String = "", _length: int = 0) -> Vector3:
+	var names: Array = BENDS.get(part, [])
+	if names.is_empty():
+		return Vector3.INF
+	if bend == "":
+		bend = names[0]
+	if not bend in names:
 		return Vector3.INF
 	var j := joints()
 	var top: Vector3 = j[part]
 	var end: Vector3 = Vector3(top.x, 0.0, top.z) if part.begins_with("leg") else j["hand" + part.substr(3)]
-	return (top + end) * 0.5
+	return top.lerp(end, float(BEND_DOWN[bend]))
 
 
 ## Half the footprint drawn under it, in studs.

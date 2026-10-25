@@ -80,12 +80,13 @@ func _mode() -> void:
 	_ws._new_build()
 	_ws.set_asset_kind("mech")
 	_ok("a mech's ten parts", Array(_ws.part_names) == MechReference.PARTS, str(_ws.part_names))
-	_ok("nine joints laid ready, a mount and a socket each, and the knees and elbows", _ws.points.size() == 22,
+	_ok("nine joints laid ready, a mount and a socket each, and the knees and elbows", _ws.points.size() == 24,
 			str(_ws.points.size()))
 	var bends: Array = _ws.points.filter(func(q: Dictionary) -> bool: return q.kind == "bend")
 	var knee: Array = bends.filter(func(q: Dictionary) -> bool: return q.part == "leg_L")
-	_ok("a knee half way down each leg, an elbow half way down each arm", bends.size() == 4 and knee.size() == 1
-			and knee[0].slot == "knee" and is_equal_approx(float(knee[0].at[1]),
+	_ok("a knee half way down each leg and an ankle near its foot, an elbow half way down each arm",
+			bends.size() == 6 and knee.size() == 2
+			and knee[0].slot == "knee" and knee[1].slot == "ankle" and is_equal_approx(float(knee[0].at[1]),
 			_ws.mech_origin().y + (_ws.mech_joint("leg_L").y - _ws.mech_origin().y) * 0.5))
 	var mount: Array = _ready_points("arm_L", "mount")
 	var sock: Array = _ws.points.filter(func(q: Dictionary) -> bool:
@@ -127,7 +128,7 @@ func _mode() -> void:
 	_ok("legs 3 long: the hip 20 bricks up", leg.size() == 1
 			and is_equal_approx(float(leg[0].at[1]), _ws.mech_origin().y + 60.0), str(leg))
 	_ok("a point put by hand stays", _ws.points.any(func(q: Dictionary) -> bool: return q.at == [1.0, 2.0, 3.0]))
-	_ok("still 22 ready", _ws.points.filter(func(q: Dictionary) -> bool: return q.get("ready", false)).size() == 22)
+	_ok("still 24 ready", _ws.points.filter(func(q: Dictionary) -> bool: return q.get("ready", false)).size() == 24)
 	_ws.toggle_point([1.0, 2.0, 3.0], "", "", "")
 	_ws.select_part(_ws.part_names.find("arm_L"))
 	var at: Array = _at(_ws.mech_joint("arm_L"))
