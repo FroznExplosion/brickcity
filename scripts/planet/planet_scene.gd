@@ -12,6 +12,8 @@ extends Node3D
 ##   -- --gate=pawn: the pawn -- walk, strafe, jump, mantle, fire, fly, land.
 ##   -- --gate=mech, --gate=tank, --gate=soldier: a titan, a tank on the
 ##   player's controls, a soldier's body moved and aimed as its brain does it.
+##   -- --gate=trees: a tank knocks a tree down; a truck is stopped by one
+##   (11.10, trees and vehicles).
 ##   -- --gate=squad: a squad on the AI's nav region round the town (11.8 N2)
 ##   walks to the player round the curve, takes cover, fires.
 ##   -- --gate=travel: a squad ordered 200 m out of the town on the nav net
@@ -43,6 +45,7 @@ var _mech_gate := false
 var _tank_gate := false
 var _soldier_gate := false
 var _squad_gate := false
+var _trees_gate := false
 ## The AI round the fight (Docs/Planets.md 11.8, N2, N4): the nav net round the
 ## player's town; ai_world / ai_nav the region the player is in. Made by setup_ai.
 var ai: AIServices
@@ -75,10 +78,11 @@ func _ready() -> void:
 	_tank_gate = "--gate=tank" in OS.get_cmdline_user_args()
 	_soldier_gate = "--gate=soldier" in OS.get_cmdline_user_args()
 	_squad_gate = "--gate=squad" in OS.get_cmdline_user_args()
+	_trees_gate = "--gate=trees" in OS.get_cmdline_user_args()
 	_travel_gate = "--gate=travel" in OS.get_cmdline_user_args()
 	_far_gate = "--gate=far" in OS.get_cmdline_user_args()
 	_drive_gate = "--gate=drive" in OS.get_cmdline_user_args()
-	_gate = _gate or _pawn_gate or _mech_gate or _tank_gate or _soldier_gate or _squad_gate or _travel_gate or _far_gate or _drive_gate
+	_gate = _gate or _pawn_gate or _mech_gate or _tank_gate or _soldier_gate or _squad_gate or _travel_gate or _far_gate or _drive_gate or _trees_gate
 	data = PlanetData.new()
 	data.planet_name = "proto"
 	# Towns and landmarks: their pads go into the ground before it is built.
@@ -144,6 +148,8 @@ func _ready() -> void:
 			_run_soldier_gate()
 		elif _squad_gate:
 			_run_squad_gate()
+		elif _trees_gate:
+			_run_trees_gate()
 		elif _travel_gate:
 			_run_travel_gate()
 		elif _far_gate:
@@ -335,7 +341,7 @@ func _process(_delta: float) -> void:
 	# walker's own gate, the pawn stands on it.
 	if walker.frozen and pawn == null and trees.prebaked and _ground_hit(walker.global_position) != Vector3.INF:
 		walker.frozen = false
-		if not _gate or _pawn_gate or _mech_gate or _tank_gate or _soldier_gate or _squad_gate or _travel_gate or _far_gate or _drive_gate:
+		if not _gate or _pawn_gate or _mech_gate or _tank_gate or _soldier_gate or _squad_gate or _travel_gate or _far_gate or _drive_gate or _trees_gate:
 			_spawn_player(_ground_hit(walker.global_position), -walker.global_transform.basis.z)
 	if not on_foot:
 		walker.flying = pawn != null or walker.flying
@@ -1439,4 +1445,98 @@ func _run_drive_gate() -> void:
 	print("[planet] frames: worst %.1f ms; over 40 ms: %s" % [_worst_ms, _hitches])
 	print("[planet] AI tick: worst %.1f ms" % (ai_worst_us / 1000.0))
 	print("[planet] drive gate: %d ok, %d FAIL" % [_ok, _fail])
+	get_tree().quit(0 if _fail == 0 else 1)
+
+
+# The trees gate (11.10): a tank, its tracks, knocks a tree down and drives on; a
+# truck's body is stopped by a trunk; walkers and rounds still meet trunks.
+
+func _run_trees_gate() -> void:
+	var t0 := Time.get_ticks_msec()
+	while pawn == null and Time.get_ticks_msec() - t0 < 60000:
+		await _frames(1)
+	await get_tree().create_timer(3.0).timeout
+	var xf := planet.global_transform
+	var near: Array = trees.nearest(xf.affine_inverse() * pawn.feet(), 1)
+	_check("trees round the spawn", not near.is_empty())
+	if near.is_empty():
+		get_tree().quit(1)
+		return
+	# Stand by the tree, so its cell is solid and its ground streamed.
+	var w1: Vector3 = xf * (near[0].at as Vector3)
+	var up1 := Gravity.up_at(w1)
+	var d := Gravity.flat(w1 - pawn.feet(), up1)
+	d = d.normalized() if d.length() > 0.5 else Gravity.tangent_basis(w1).x
+	var stand := _ground_hit(w1 - d * 18.0 + Gravity.tangent_basis(w1).z * 6.0 + up1 * 20.0)
+	pawn.place((stand if stand != Vector3.INF else w1 - d * 18.0) + up1 * 0.3)
+	t0 = Time.get_ticks_msec()
+	while _ground_hit(w1 - d * 10.0 + up1 * 20.0) == Vector3.INF and Time.get_ticks_msec() - t0 < 20000:
+		await _frames(1)
+	await get_tree().create_timer(1.5).timeout
+	var hit := get_world_3d().direct_space_state.intersect_ray(
+			PhysicsRayQueryParameters3D.create(w1 - d * 3.0 + up1 * 1.0, w1 + d * 3.0 + up1 * 1.0, Layers.HITSCAN_MASK))
+	_check("a round meets the trunk (FIXTURE, as before)", not hit.is_empty() and (hit.collider as Object).has_meta(&"on_vehicle"))
+	# The tank: 10 m back from the tree, facing it, driven straight at it.
+	var at := _ground_hit(w1 - d * 10.0 + up1 * 20.0)
+	var tk := Tank.make(null, self, at + up1 * 0.3, 0.0, 0, null, null, Callable(), RandomNumberGenerator.new())
+	PlanetBody.track(tk)
+	await get_tree().create_timer(1.5).timeout
+	var l := tk._local(d)
+	tk.yaw = atan2(-l.x, -l.z)
+	_check("the player takes the wheel", tk.take_player(0, Tank.Seat.DRIVER) and tk.driven())
+	tk.throttle = 1.0
+	var key: Vector3i = near[0].key
+	var idx: int = near[0].index
+	var t1 := Time.get_ticks_msec()
+	while Time.get_ticks_msec() - t1 < 8000:
+		await get_tree().physics_frame
+		if trees.is_knocked(key, idx) and (tk.feet() - w1).dot(d) > 4.0:
+			break
+	tk.throttle = 0.0
+	var past := (tk.feet() - w1).dot(d)
+	_check("the tank knocks the tree down", trees.is_knocked(key, idx))
+	_check("and drives on past where it stood (> 4 m)", past > 4.0, "%.1f m" % past)
+	await get_tree().create_timer(PlanetTrees.FALL_S + 0.5).timeout
+	var lying: Variant = trees.fallen_xf(key, idx)
+	var lean := 90.0 if lying == null else rad_to_deg((lying as Transform3D).basis.y.normalized().angle_to(
+			xf.affine_inverse().basis * up1))
+	var toward := -1.0 if lying == null else (xf.basis * (lying as Transform3D).basis.y).normalized().dot(d)
+	_check("it lies on the ground, away from the tank (85-95 deg over, top along its way)",
+			lying != null and lean > 85.0 and lean < 95.0 and toward > 0.9, "%.1f deg, %.2f along" % [lean, toward])
+	await _shot("planet_tree_knocked")
+	# A truck's body: a trunk in its way stops it.
+	var others: Array = trees.nearest(xf.affine_inverse() * pawn.feet(), 6, [[key, idx]])
+	var stopped := false
+	var tried := 0
+	for o in others:
+		var w2: Vector3 = xf * (o.at as Vector3)
+		var up2 := Gravity.up_at(w2)
+		var d2 := Gravity.flat(w2 - pawn.feet(), up2).normalized()
+		var g2 := _ground_hit(w2 - d2 * 6.0 + up2 * 20.0)
+		if g2 == Vector3.INF:
+			continue
+		tried += 1
+		var body := CharacterBody3D.new()
+		body.collision_layer = 0
+		body.collision_mask = TransportTruck.BODY_MASK
+		var cs := CollisionShape3D.new()
+		var box := BoxShape3D.new()
+		box.size = Vector3(2.3, 1.2, 5.0)
+		cs.shape = box
+		body.add_child(cs)
+		add_child(body)
+		var basis := Gravity.tangent_basis(w2)
+		var start := Transform3D(basis.looking_at(d2, up2), g2 + up2 * 1.4)
+		body.global_transform = start
+		await get_tree().physics_frame
+		var col := KinematicCollision3D.new()
+		var met := body.test_move(start, d2 * 12.0, col)
+		var by_tree := met and col.get_collider() != null and (col.get_collider() as Object).has_meta(&"on_vehicle")
+		body.queue_free()
+		if by_tree:
+			stopped = true
+			break
+	_check("a truck's body is stopped by a trunk (Layers.TREE)", stopped, "%d tried" % tried)
+	print("[planet] trees: %d knocked; frames worst %.1f ms" % [trees.knocked_count, _worst_ms])
+	print("[planet] trees gate: %d ok, %d FAIL" % [_ok, _fail])
 	get_tree().quit(0 if _fail == 0 else 1)

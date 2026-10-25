@@ -26,6 +26,11 @@ const RUBBLE := 1 << 5     ## a piece too small to matter to a collapse
 ## what lands on it breaks it. The layer stays for a fixture that is genuinely
 ## not brick.
 const FIXTURE := 1 << 6
+## A planet's trees' trunks (PlanetTrees), on FIXTURE too so walkers and rounds
+## meet them as before. Vehicles collide with this layer and not FIXTURE: a
+## wheeled one is stopped by a trunk, a tracked one knocks the tree down
+## (on_vehicle). Nothing else in the game is on it.
+const TREE := 1 << 7
 
 ## What a projectile or an aim ray should be allowed to hit. Everything made of
 ## bricks, however small and whatever it is doing.

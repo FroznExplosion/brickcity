@@ -177,7 +177,8 @@ static func make(s: AIServices, parent: Node, feet: Vector3, p_yaw: float, p_tea
 	t.team = p_team
 	# On the pawns' layer, as a mech is: rounds hit it, bodies bump it.
 	t.collision_layer = Layers.PAWN
-	t.collision_mask = Layers.WORLD | Layers.STRUCTURE | Layers.DEBRIS | Layers.PAWN
+	# A planet's trees too (Layers.TREE): the tracks knock one down (_knock).
+	t.collision_mask = Layers.WORLD | Layers.STRUCTURE | Layers.DEBRIS | Layers.PAWN | Layers.TREE
 	t.floor_max_angle = deg_to_rad(40.0)
 	t.floor_snap_length = 0.6
 	t.floor_stop_on_slope = true
@@ -628,6 +629,16 @@ func _yb(y: float = NAN) -> Basis:
 	return b if frame == Basis.IDENTITY else frame * b
 
 
+## What it drove into and can knock down: a body with an `on_vehicle` meta (a
+## planet's trees, PlanetTrees) is told which of its shapes was hit, and by whom.
+func _knock() -> void:
+	for i in get_slide_collision_count():
+		var c := get_slide_collision(i)
+		var o := c.get_collider()
+		if o != null and o.has_meta(&"on_vehicle"):
+			(o.get_meta(&"on_vehicle") as Callable).call(c.get_collider_shape_index(), self)
+
+
 ## A world vector in the frame (itself off a planet).
 func _local(v: Vector3) -> Vector3:
 	return v if frame == Basis.IDENTITY else frame.inverse() * v
@@ -668,6 +679,7 @@ func _physics_process(delta: float) -> void:
 		lv.z = move_toward(lv.z, lf.z * speed, DRIVE * delta * 2.0)
 		velocity = frame * lv
 	move_and_slide()
+	_knock()
 	if driven():
 		splats += Splatter.run_down(services, self, team, feet(), fwd, Vector2(HULL.x * 0.5, HULL.z * 0.5),
 				Gravity.flat(velocity, up).dot(fwd), _splat_last)

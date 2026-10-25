@@ -1530,3 +1530,17 @@ after 1.8 s, the bakes in), but the machine was in the display-sleep stall (fram
 750 ms all through, chip 45-69 C, nobody at the screen): no frame time from them counts, and the
 "no building popped" check failed in both on a long frame, as before. The quiet, awake A/B is
 still to do.
+
+**Trees and vehicles (2026-10-24).** Trunks are on `Layers.TREE` (new, 1 << 7) as well as
+FIXTURE: walkers and rounds meet them as before; vehicles collide with TREE (not FIXTURE, which is
+the city's furniture and the firefight's barrier), so a truck or an APC is stopped by a trunk. A
+tank's tracks knock a tree down: `Tank._knock` tells whatever it drove into that has an
+`on_vehicle` meta which shape it hit, and `PlanetTrees` tips that tree's brick copy over about its
+foot, away from the tank, in 1.2 s (slow off upright, fast at the end, as a falling body goes),
+takes its trunk collider away and keeps it lying there for the session (a cell built again has it
+down). The tank is held for a tick by the trunk and drives on. Gate `--gate=trees` (headless, 7/7,
+3 of 3): a round meets a trunk; the player's tank drives at a tree, knocks it down and goes 4 m
+past where it stood; it lies at 90 degrees, its top along the tank's way; a truck's body
+(`TransportTruck.BODY_MASK`) moved at a trunk is stopped by it. Not yet: the AI's world does not
+know the trees (11.10 step 4) -- a truck's path goes through a trunk and it backs off and tries
+again; fallen trees are not solid.
