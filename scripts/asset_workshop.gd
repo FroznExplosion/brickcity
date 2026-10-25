@@ -178,6 +178,10 @@ var free_place := true
 var work_plane := "side"
 var work_depth := 40.5
 var work_height := 30
+## The stage tabs, tool rail and outliner (AssetWorkshopUI), and where the options panel
+## (the old rail) starts under its tools; -1 before there is one.
+var _ui: AssetWorkshopUI
+var rail_top := -1.0
 ## The sculpt panel's mode list, and its show-for callback (set_sculpt_mode).
 var _sculpt_modes: OptionButton
 var _sculpt_show_for := Callable()
@@ -311,6 +315,11 @@ func _ready() -> void:
 	_set_asset_kind(recipe.kind)
 	_build_asset_tools()
 	_setup_parts()
+	# The frame round it all: stage tabs, the tool rail, the outliner (AssetWorkshopUI).
+	_ui = AssetWorkshopUI.new()
+	_ui.name = "Frame"
+	add_child(_ui)
+	_ui.setup(self, _ruler.get_parent() as CanvasLayer)
 	var args := OS.get_cmdline_args() + OS.get_cmdline_user_args()
 	var headless := DisplayServer.get_name() == "headless"
 	auto_start_brick = not headless
@@ -1061,8 +1070,11 @@ func zoom(by: float) -> void:
 		_camera.size = _ortho_size
 
 
-## The middle of what has been built, or of the baseplate before anything is.
+## The middle of what has been built, or of the baseplate before anything is -- or of what
+## is selected: the grid, the size marks and the view go to the thing being worked on.
 func build_centre() -> Vector3:
+	if not _placed.is_empty():
+		return _placed_centre()
 	# While sculpting the block-out and the models are the build, not the starting brick
 	# (models spawned away from the grid: Docs/AssetWorkshop.md, "Models as objects").
 	if sculpt != null and sculpt_state == "sdf" and (sculpt.form.block_count() > 0 or not models.is_empty()):
@@ -1200,6 +1212,8 @@ func _unhandled_input(e: InputEvent) -> void:
 
 func _process(dt: float) -> void:
 	super._process(dt)
+	if _ui != null:
+		_ui.process(dt)
 	if _ruler == null:
 		return
 	if _run_on and not Input.is_mouse_button_pressed(MOUSE_BUTTON_LEFT):
@@ -1813,6 +1827,8 @@ func _set_asset_kind(k: String) -> void:
 	recipe.kind = k if ASSET_KINDS.has(k) else "gun"
 	if _menu != null:
 		_menu.set_kind(recipe.kind)
+	if _ui != null:
+		_ui.sync_kind()
 	_kind_changed()
 
 
@@ -6703,14 +6719,15 @@ func _rail_process() -> void:
 	_shape_size_slider.set_value_no_signal(shape_size)
 	_shape_size_label.text = "%d stud%s across%s" % [shape_size, "" if shape_size == 1 else "s",
 			"  (Ctrl + wheel)" if on == "place" else ""]
-	_rail.position.y = 12.0 + (_menu.bar_height() if _menu != null else 0.0)
+	_rail.position.y = rail_top if rail_top >= 0.0 else 12.0 + (_menu.bar_height() if _menu != null else 0.0)
 	var room := get_viewport().get_visible_rect().size.y - _rail.position.y - 28.0
 	_rail_scroll.custom_minimum_size = Vector2(RAIL_W - 16, minf(_rail_box.get_combined_minimum_size().y, room))
 	_rail.size = Vector2.ZERO
 	if _paint_palette != null:
 		_paint_palette.position = Vector2(_rail_right(), _rail.position.y)
 	# The workshop's own readout moves over beside the rail.
-	_hud.position = Vector2(_rail_right(), _rail.position.y)
+	_hud.position = Vector2(_rail_right(), (_menu.bar_height() if _menu != null else 0.0)
+			+ (50.0 if _ui != null else 12.0))
 	_draws.select(SKETCH_DRAWS.map(func(d: Array) -> String: return d[0]).find(_draw_2d))
 
 
@@ -10444,6 +10461,26 @@ func _restore_models(list: Array) -> void:
 		models.append(_make_model(_cache_model(pieces, String(s.path)), xf, int(s.get("op", SdfForm.ADD)), parts,
 				int(s.get("default_part", 0))))
 	_refresh_model_list()
+
+
+## The grid and the size marks drawn again round the selection (build_centre), and with
+## `frame` the view on it.
+func _centre_on_selection(frame := false) -> void:
+	_build_grid()
+	_size_sig = ""
+	if frame:
+		if not _placed.is_empty():
+			_frame_placed()
+		else:
+			_look_at_build()
+
+
+## The mirror plane through the middle of the selection (or of the build), on a stud line.
+func mirror_through_selection() -> void:
+	mirror_z = roundf(build_centre().z / BrickPalette.STUD_M)
+	_place_mirror_sheet()
+	_store_asset_meta()
+	print("[asset workshop] mirror plane through the selection: %.0f studs across" % mirror_z)
 
 
 ## The sculpt mode. The gizmo belongs to "pick and move" alone: shown there for what is
