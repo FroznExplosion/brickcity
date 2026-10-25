@@ -8,6 +8,8 @@ static func on_applied(t: ElementalTarget) -> void:
 	var arcs: Array = []
 	for i in ARC_COUNT:
 		var a := VfxPool.acquire_arc(t.chest_socket)
+		if a == null:
+			continue   # the pool's cap (VfxPool.max_arcs)
 		a.rotation.y = TAU * float(i) / ARC_COUNT
 		# Each ribbon gets a random seed so bolts don't sync.
 		for m in a.find_children("*", "MeshInstance3D", true, false):

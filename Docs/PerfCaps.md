@@ -211,3 +211,26 @@ The disaster probe fails 8 checks, on main as on this branch (none from this wor
 ring left in the AI's world (2), the quake's tall-tower/foundation/authority checks (3: the tower
 reads 0.03 of its strength at 0.6 g -- stud strength was raised fourfold since), and snow on a
 roof (3).
+
+## 7. AI, pathfinding and the fight's effects (2026-10-25)
+
+AI and pathfinding were already capped: 10 smart agents and 40 directed (ImportanceBudget), 3
+promotions a tick (2 from the swarm), tactic decisions 2 ms a tick (AIServices.DECIDE_BUDGET_USEC),
+path searches queued best-first in 0.5 ms a tick (NAV_BUDGET_US) with a node budget by distance
+(3000-20000), cover searches queued, encounter promotions 3 ms a tick, 8 enemies alive in a wave,
+4 allies, support 3 air / 1 tank / 1 mech. Nothing added.
+
+The effects had four nodes made per event with no ceiling. Now capped (`tools/fx_cap_probe.gd`):
+
+- **Damage numbers** (CombatFeedback): up to PELLET_NUMBERS = 5 per body per shot, one per
+  pellet; past five the pellets share the five out, so ten hits read as five numbers (the gun
+  passes each pellet's damage as `info.each`). At most MAX_NUMBERS = 16 in the air; past it the
+  oldest gives up its label. Labels are reused, not freed.
+- **Death bursts**: MAX_BURSTS = 8 reused CPUParticles3D, one shared material, the kill's colour
+  as the particles' colour. Was a new emitter, box and material per kill.
+- **Gun muzzle flashes and trails** (GunInstance): MAX_FLASHES = 12, MAX_TRAILS = 32 over every
+  gun, the oldest freed early. No barrel sets either scene yet; this is in place before one does.
+- **VfxPool**: an emitter key grows to max_per_key = 16 out at once, arcs to max_arcs = 24, then
+  null (callers skip it; shock and radiation arcs check); an unknown key is null, not a crash.
+  Shatters keep to max_shatters = 6, the oldest flying one taken over. Its emitter list is empty
+  today.
