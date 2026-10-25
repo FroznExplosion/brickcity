@@ -15204,6 +15204,10 @@ func _run_shot_pass() -> void:
 	print("[city]   support: %d settled piece(s) woken because what held them went, %d because something landed on them; %d nudged down instead of settling with nothing under them; %d jolt(s) not taken for landings; %d woken as the piece under them moved off, %d settle(s) put off for a piece under still moving" % [
 			islands.ripple_woken, islands.touch_woken, islands.unsupported_nudges, islands.jolts_ignored,
 			islands.holder_woken, islands.settle_waits])
+	# The patches CollapseNext's cleanup would retire once they stay at 0.
+	print("[city]   patches: %d nudged (nothing under), %d settle(s) refused floating, %d perched piece(s) tipped, %d floating piece(s) the watchdog woke" % [
+			islands.unsupported_nudges, islands.floating_refused, islands.perched_tipped,
+			islands.audit_woken])
 	print("[city]   %d merge(s) down to %d box(es); %d box(es) rebuilt per block when hit" % [
 		isl.merged_shapes, isl.merged_boxes, isl.unmerged_boxes])
 	print("[city] impacts: %d landing(s) sheared %d joint(s), %d split(s), %d snapped across" % [
