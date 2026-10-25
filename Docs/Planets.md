@@ -1602,3 +1602,62 @@ own:
 by the snowiest stand (77 capped within 40 m): at 90 m the crowns on the snowy ground are white,
 near bricks and cards alike, the forest past the snow line green (shots
 planet_trees_snow_*.png). The windowed runs peaked 92-97 C (the scene's load), never held back.
+
+### 11.11 Plan: brick buildings on the planet (2026-10-25)
+
+The user chose real brick buildings over the AI merely seeing the shell. Today a planet building is
+the city's SHELL (`BuildingShell` mesh and four solid collision walls) near and a box far: no
+doors, no inside, no bricks, and in the AI's world one solid proxy box. The city's own buildings
+are bricks once materialised (`BuildingRegistry.materialise`: `TowerRecipe.build` into a chunk,
+templates per shape, banded drawing, collision from the bricks). The planet does the same, near:
+
+1. **Materialise near (step 1).** One planet-wide `BrickWorld` (`PlanetBuildings.bricks`). A
+   building within `BRICK_M` (160 m) of the camera becomes a chunk -- `TowerRecipe.build` the first
+   time a shape is asked for, its template loaded after (under 0.5 ms) -- its transform the site's
+   frame in the world (moved with the floating origin). Its drawing: the chunk baked on a worker
+   (`bake_chunk_async`), then one band a frame (`build_chunk_mesh_section`, the city's sections
+   of 24 plates / 32 studs) into MeshInstances under the site; its collision from its bricks
+   (`add_chunk_shapes`, merged). When every band is in, the shell and its collision go; past
+   `BRICK_M` + 60 m the bricks go and the shell comes back. Measured (headless): a 36 x 36 x 60
+   tower is 14 ms to build the first time, 0.4 ms from its template, 50 ms to mesh whole (so: by
+   band), 1.5 ms of collision.
+2. **The AI's world.** The nav regions read the same BrickWorld (`AIWorld.set_world`), so a
+   materialised building is bricks to the AI -- doorways, rooms, wall thickness -- and its proxy
+   box (one per site, id = the site's index) leaves every region when its bricks arrive and comes
+   back when they go (`PlanetNavNet.set_site_bricks`).
+3. Later: stairs (the city's fixtures), damage and destruction (chip hits, pieces, collapse),
+   furniture; materialising for fights far from the camera.
+
+Gate `--gate=bricks` (headless): the player at the town's edge; the buildings within `BRICK_M`
+materialise; a ray at a wall meets bricks, not the shell; a building has a way in at the ground;
+the nav net's path from outside reaches a ground-floor room through a doorway.
+
+**State (2026-10-25): steps 1 and 2 built.** `PlanetBuildings` (scripts/planet/planet_buildings.gd):
+- *Materialised near*: every building but a landmark within 160 m of the camera is a chunk in
+  `PlanetBuildings.bricks` -- `TowerRecipe.build` once a shape (all the shapes within 400 m of the
+  spawn while the scene loads, 246 ms; the rest in idle frames, nearest first within 600 m), a
+  template load after. Past 220 m back to the shell.
+- *A front door*: a city tower has none (its squads breach a wall); a planet town is walked into,
+  so the bricks in a 4-stud x 5-course box in the middle of the ground storey's -Z wall are
+  removed before the shape's template is saved (`_cut_door`; the lintel course stays).
+- *Drawn and solid*: the chunk baked on a worker, a band a frame -- the band's mesh with its OPEN
+  studs merged in (`MeshMerge`), made into a GPU mesh on a worker and drawn when done, as the
+  city's big bands are (on the main thread a mesh or a MultiMesh going to the renderer was
+  10-25 ms windowed whatever its size; tens of thousands of studs under ceilings are not drawn).
+  Collision from its bricks, merged -- added before the body is in the physics space (in it, each
+  shape updated the broadphase: 300-1000 ms a tower). Then the shell and its walls go. The stud
+  mesh is made at setup (its first use was 15 ms).
+- *The AI*: the nav regions read `bricks`; a site's proxy box (id = its index) leaves every region
+  when its bricks are in and comes back when they go (`PlanetNavNet.set_site_bricks`), and the
+  maps forget the box.
+Gate `--gate=bricks` (headless 8/8; windowed 8/8): all 25 buildings near the player are bricks in
+2.0 s headless; the worst brick step 7 ms; a ray at a wall meets its bricks; the shell is gone; the
+AI's world is solid where the wall is; a ray goes through the front door and the nav net walks
+through it into the room behind (6 points). The other planet gates pass with the town in bricks.
+The windowed run was in the display-sleep stall (36 s to brick the town at ~4 fps, the player held
+up where long frames would drop it through the ground): its frame times do not count -- time
+again on an awake, quiet machine. The town from the street: real bricks, windows and glass
+(shots/planet_bricks_town.png).
+
+Not yet: stairs (only the ground floor is reached), damage and destruction, furniture,
+materialising for a fight far from the camera.

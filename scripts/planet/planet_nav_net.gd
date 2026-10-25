@@ -121,8 +121,14 @@ var regions := {}
 var portals := {}
 var _border_portals := {}
 var _next_portal := 1
-## Building boxes: [planet-local centre transform, size].
+## Building boxes: [planet-local centre transform, size], each a proxy whose id
+## is its index -- until its bricks are in (set_site_bricks).
 var sites: Array = []
+## The planet's bricks (PlanetBuildings.bricks): every region's AIWorld reads
+## them, so a materialised building is bricks to the AI. Null: no bricks.
+var bricks: BrickWorld
+## Site index -> true while its bricks stand in for its proxy box.
+var _site_bricks := {}
 ## Where the trees are (PlanetTrees.trees_near: Callable(dir, radius) -> [{key,
 ## index, at, basis, variant}]); each trunk goes into the regions it is in as a
 ## proxy box -- walked round, and cover. Unset: no trees.
@@ -150,6 +156,7 @@ var legs_done := 0
 ## find_path's last request: its joins and replans (probes).
 var last_joins: Array[float] = []
 var last_tries := 0
+var last_breaches := PackedVector3Array()
 ## service()'s longest call (us) and its parts: builds finished, the regions'
 ## own queues, routes, legs.
 var worst_service_us := 0
@@ -344,21 +351,15 @@ func _finish(k: Vector2i, nr: PlanetNavRegion, grid_ms: float, p_trees: Variant 
 	r.key = k
 	r.nav_region = nr
 	r.world = AIWorld.new()
-	r.world.set_world(BrickWorld.new())
+	r.world.set_world(bricks if bricks != null else BrickWorld.new())
 	r.world.set_frame(_planet_xf() * nr.frame)
 	r.world.set_ground_grid(Vector2(-nr.half, -nr.half), nr.step_m, nr.size, nr.heights)
 	r.world.set_terrain_ground(true)
 	var inv := nr.frame.affine_inverse()
-	var n := 0
-	for s in sites:
-		var xf: Transform3D = s[0]
-		var size: Vector3 = s[1]
-		var l := inv * xf.origin
-		var reach := nr.half + LINE_REACH + Vector2(size.x, size.z).length() * 0.5
-		if absf(l.x) > reach or absf(l.z) > reach:
+	for si in sites.size():
+		if _site_bricks.has(si):
 			continue
-		r.world.set_proxy(n, _planet_xf() * xf, size, 1.0 / BrickWorld.get_stud_metres())
-		n += 1
+		_site_proxy(r, si)
 	if tree_source.is_valid():
 		for t in (p_trees if p_trees != null else _trees_for(nr)):
 			var tk := "%d:%d:%d:%d" % [t.key.x, t.key.y, t.key.z, t.index]
@@ -415,6 +416,36 @@ func _relink(k: Vector2i) -> void:
 					if o != null and o != r:
 						peers.append(o.world)
 			r.world.set_peers(peers)
+
+
+## Site `si`'s proxy box into region `r`, if it reaches it.
+func _site_proxy(r: Region, si: int) -> void:
+	var xf: Transform3D = sites[si][0]
+	var size: Vector3 = sites[si][1]
+	var l := r.nav_region.frame.affine_inverse() * xf.origin
+	var reach := r.nav_region.half + LINE_REACH + Vector2(size.x, size.z).length() * 0.5
+	if absf(l.x) > reach or absf(l.z) > reach:
+		return
+	r.world.set_proxy(si, _planet_xf() * xf, size, 1.0 / BrickWorld.get_stud_metres())
+
+
+## Site `si`'s bricks came in (on) or went (PlanetBuildings.site_bricks): its
+## proxy leaves every region or comes back, every region reads the bricks
+## again, and every map forgets `box` (world) -- doorways and rooms now, or a
+## solid box again.
+func set_site_bricks(si: int, on: bool, box: AABB) -> void:
+	if on:
+		_site_bricks[si] = true
+	else:
+		_site_bricks.erase(si)
+	for r in regions.values():
+		var reg := r as Region
+		if on:
+			reg.world.remove_proxy(si)
+		else:
+			_site_proxy(reg, si)
+		reg.world.sync()
+	invalidate_box(box.grow(1.0))
 
 
 ## A tree came down (PlanetTrees.tree_knocked): its trunk leaves every region's
@@ -513,6 +544,8 @@ func keep_around(points: Array, radius: float, max_new := 1) -> void:
 func shift_origin(offset: Vector3) -> void:
 	for r in regions.values():
 		(r as Region).world.shift_origin(offset)
+		# The bricks' chunks moved with the scene (PlanetBuildings.on_origin_shift).
+		(r as Region).world.sync()
 
 
 # --- portals ----------------------------------------------------------------
@@ -729,6 +762,7 @@ func find_path(from: Vector3, to: Vector3, max_expansions := 60000, map := "pers
 	var rq: Req = _reqs.get(id)
 	last_joins = rq.joins if rq != null else ([] as Array[float])
 	last_tries = rq.tries if rq != null else 0
+	last_breaches = get_breaches(id)
 	release(id)
 	return p
 
@@ -844,6 +878,8 @@ func _advance(rq: Req, until_usec: int, sync: bool) -> void:
 ## The stretch that failed: close its leg, for this request (an end) or for
 ## everyone (two portals).
 func _close(rq: Req) -> void:
+	if rq.route_portals.is_empty():
+		return   # one region, no portal to close: the request fails on its tries
 	var i := rq.stretch
 	var last := rq.route.size() - 2
 	if i == 0:

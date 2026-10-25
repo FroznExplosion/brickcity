@@ -39,6 +39,15 @@ class Site:
 	var body: StaticBody3D = null
 	var fade := 0.0             # the far tier's, this frame
 	var shown_at := -1.0        # first time the far tier showed it (s), for the gate
+	# Its bricks (11.11): the chunk in `bricks`, -1 with none; the node its bands
+	# and collision hang from; the next band to draw; all of them in.
+	var chunk := -1
+	var brick_node: Node3D = null
+	var band_next := 0
+	var bricked := false
+	# Bands uploading on workers: [task id, [mesh]] (the city's way: making the
+	# GPU mesh is ~9 ms on the main thread whatever its size).
+	var band_jobs: Array = []
 
 var planet: PlanetBody
 var sites: Array[Site] = []
@@ -55,6 +64,30 @@ var pops := 0
 var max_step := 0.0
 var _time := 0.0
 
+# --- real bricks near (Docs/Planets.md 11.11) -------------------------------------
+
+## A building this near the camera is its bricks; past BRICK_DROP the shell again.
+const BRICK_M := 160.0
+const BRICK_DROP := 220.0
+## Drawing bands, as the city cuts its buildings (CityScene.SECTION_PLATES / _STUDS).
+const SECTION_PLATES := 24
+const SECTION_STUDS := 32
+## The planet's bricks: every materialised building is a chunk here, its
+## transform its site's frame in the world. The AI's nav regions read it too.
+var bricks: BrickWorld
+var _palette: Dictionary
+## Vector3i(fx, fz, courses) -> template id: a shape is built once.
+var _templates := {}
+var _brick_queue: Array[int] = []
+var _brick_site := -1
+var bricked_count := 0
+var brick_worst_us := 0
+## What that worst step was doing: "start", "band", "finish" or "template".
+var brick_worst_what := ""
+var _stud_arrays: Array = []
+## A site's bricks came in (true) or went (false): the AI's world follows.
+signal site_bricks(index: int, on: bool)
+
 
 func setup(p: PlanetBody) -> void:
 	planet = p
@@ -62,6 +95,11 @@ func setup(p: PlanetBody) -> void:
 	brick_material = ShaderMaterial.new()
 	brick_material.shader = load("res://shaders/brick.gdshader")
 	BrickMaterials.add_glass(brick_material)
+	bricks = BrickWorld.new()
+	_palette = TowerRecipe.bake_palette(bricks)
+	# The studs' mesh and material are made on first use: ~15 ms, in the load
+	# rather than in the first band that has open studs.
+	_stud_arrays = PieceMeshes.stud().surface_get_arrays(0)
 
 
 ## A town of towers on a grid round `dir`, in the tangent frame there, on the
@@ -206,6 +244,13 @@ func _process(delta: float) -> void:
 			near_count += 1
 		elif s.shell != null and dist > NEAR_M + NEAR_FADE * 3.0:
 			_free_near(s)
+		# Nearer still, its bricks (not a landmark: a thousand courses).
+		if not s.landmark:
+			if dist < BRICK_M and s.chunk < 0 and i != _brick_site and not _brick_queue.has(i):
+				_brick_queue.append(i)
+			elif dist > BRICK_DROP and (s.chunk >= 0 or _brick_queue.has(i)):
+				_brick_queue.erase(i)
+				_free_bricks(i)
 		# Far: only where its top can crest the horizon, by its size on screen,
 		# and fading in where the shell fades out.
 		# From its TOP's altitude over the datum (ground + height): a tower on a
@@ -234,6 +279,7 @@ func _process(delta: float) -> void:
 			mm.set_instance_custom_data(i, Color(a, w, s.height, dd))
 		if a > 0.0:
 			far_count += 1
+	_brick_step(eye)
 	# Beacons a few pixels across, on each landmark's top.
 	var bmm := beacons.multimesh
 	for k in _landmarks.size():
@@ -273,6 +319,251 @@ func _make_near(s: Site) -> void:
 	add_child(body)
 	body.transform = s.frame
 	s.body = body
+
+
+## One piece of brick work a frame: start the nearest building waiting (its
+## chunk from its shape's template, baked on a worker), or draw the next band
+## of the one in hand; with its last band, its collision, and the shell goes.
+func _brick_step(eye: Vector3) -> void:
+	var t0 := Time.get_ticks_usec()
+	var what := ""
+	if _brick_site < 0:
+		if _brick_queue.is_empty():
+			_idle_template(eye)
+			_note_step(t0, "template")
+			return
+		var best := 0
+		var best_d := INF
+		for qi in _brick_queue.size():
+			var d := eye.distance_to(planet.global_position + sites[_brick_queue[qi]].frame.origin)
+			if d < best_d:
+				best_d = d
+				best = qi
+		_brick_site = _brick_queue[best]
+		_brick_queue.remove_at(best)
+		_start_bricks(sites[_brick_site])
+		what = "start"
+	else:
+		var s := sites[_brick_site]
+		if not bricks.bake_ready(s.chunk):
+			if not bricks.bake_pending(s.chunk):
+				bricks.bake_chunk_async(s.chunk)
+			return
+		_harvest_bands(s)
+		if s.band_next < bricks.get_chunk_sections(s.chunk):
+			_draw_band(s, s.band_next)
+			s.band_next += 1
+			what = "band"
+		elif not s.band_jobs.is_empty():
+			what = "upload"
+		else:
+			_finish_bricks(_brick_site)
+			_brick_site = -1
+			what = "finish"
+	_note_step(t0, what)
+
+
+func _note_step(t0: int, what: String) -> void:
+	var us := Time.get_ticks_usec() - t0
+	if us > brick_worst_us:
+		brick_worst_us = us
+		brick_worst_what = what
+
+
+## A shape's template, built if there is none: the tower, its front door,
+## saved. 5-20 ms; done ahead (prepare_templates, idle frames), not when a
+## building is wanted.
+func _template(fx: int, fz: int, courses: int) -> int:
+	var key := Vector3i(fx, fz, courses)
+	if _templates.has(key):
+		return _templates[key]
+	var c := bricks.create_chunk(Vector3i.ZERO, TowerRecipe.chunk_dims(fx, fz, courses))
+	TowerRecipe.build(bricks, c, _palette, fx, fz, courses, [])
+	_cut_door(c, fx)
+	_templates[key] = bricks.save_template(c)
+	bricks.release_chunk(c)
+	return _templates[key]
+
+
+## Every shape within `radius` of world `p` built now (a scene loading).
+## Returns milliseconds.
+func prepare_templates(p: Vector3, radius: float) -> float:
+	var t0 := Time.get_ticks_usec()
+	for s in sites:
+		if not s.landmark and p.distance_to(planet.global_position + s.frame.origin) < radius:
+			_template(s.fx, s.fz, s.courses)
+	return (Time.get_ticks_usec() - t0) / 1000.0
+
+
+## In a frame with no brick work: the nearest shape within this of the camera
+## that has no template yet.
+const TEMPLATE_AHEAD := 600.0
+
+
+func _idle_template(eye: Vector3) -> void:
+	var best: Site = null
+	var best_d := TEMPLATE_AHEAD
+	for s in sites:
+		if s.landmark or _templates.has(Vector3i(s.fx, s.fz, s.courses)):
+			continue
+		var d := eye.distance_to(planet.global_position + s.frame.origin)
+		if d < best_d:
+			best_d = d
+			best = s
+	if best != null:
+		_template(best.fx, best.fz, best.courses)
+
+
+func _start_bricks(s: Site) -> void:
+	s.chunk = bricks.create_chunk(Vector3i.ZERO, TowerRecipe.chunk_dims(s.fx, s.fz, s.courses))
+	bricks.load_template(_template(s.fx, s.fz, s.courses), s.chunk)
+	bricks.set_chunk_anchored(s.chunk, true)
+	bricks.set_chunk_section_plates(s.chunk, SECTION_PLATES)
+	bricks.set_chunk_section_studs(s.chunk, SECTION_STUDS)
+	bricks.set_chunk_transform(s.chunk, planet.global_transform * s.frame)
+	s.brick_node = Node3D.new()
+	s.brick_node.name = "Bricks"
+	s.brick_node.transform = s.frame
+	add_child(s.brick_node)
+	s.band_next = 0
+	bricks.bake_chunk_async(s.chunk)
+
+
+## A front door in the middle of the ground storey's -Z wall: the bricks in a
+## DOOR_WIDE x five-course box taken out (remove_block: as never placed), the
+## lintel course over it left. A city tower has none -- its squads breach --
+## but a town on a planet is walked into.
+func _cut_door(chunk: int, fx: int) -> void:
+	var x0 := fx / 2 - TowerRecipe.DOOR_WIDE / 2
+	var y0 := TowerRecipe.SLAB_PLATES
+	var y1 := y0 + 5 * TowerRecipe.PLATES_PER_COURSE
+	var gone := {}
+	for x in range(x0, x0 + TowerRecipe.DOOR_WIDE):
+		for z in TowerRecipe.WALL_THICK:
+			for y in range(y0, y1):
+				var b := bricks.block_at(chunk, Vector3i(x, y, z))
+				if b >= 0 and not gone.has(b):
+					gone[b] = true
+					bricks.remove_block(chunk, b)
+
+
+func _draw_band(s: Site, band: int) -> void:
+	var arrays: Array = bricks.build_chunk_mesh_section(s.chunk, band)
+	# Its studs: only the OPEN ones (a roof, a ledge); a floor's under a ceiling
+	# show only through a window, and a tower has tens of thousands.
+	var got: Array = bricks.get_chunk_studs_and_open(s.chunk, band)
+	var buf: PackedFloat32Array = got[0]
+	var open: PackedByteArray = got[1]
+	var keep := PackedFloat32Array()
+	for k in open.size():
+		if open[k] != 0:
+			keep.append_array(buf.slice(k * 16, k * 16 + 16))
+	if arrays.is_empty() and keep.is_empty():
+		return
+	# Merged and made into a GPU mesh on a worker (the city's way, CityScene.
+	# _submit_band_job): on the main thread a mesh -- or a MultiMesh of studs --
+	# going to the renderer is 10-25 ms windowed, whatever its size.
+	var stud: Array = _stud_arrays
+	var holder := [null]
+	var task := WorkerThreadPool.add_task(func() -> void:
+			var merge := MeshMerge.new()
+			if not arrays.is_empty():
+				merge.add_surface(arrays, Transform3D.IDENTITY, Color(-1, 0, 0))
+			if not keep.is_empty():
+				merge.add_instances(stud, Transform3D.IDENTITY, keep)
+			var out := merge.commit()
+			if out.is_empty():
+				return
+			var m := ArrayMesh.new()
+			m.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, out, [], {}, IslandManager.UPLOAD_COMPRESS)
+			holder[0] = m, false, "planet band")
+	s.band_jobs.append([task, holder])
+
+
+## The bands whose meshes are made: drawn now.
+func _harvest_bands(s: Site) -> void:
+	var k := 0
+	while k < s.band_jobs.size():
+		var job: Array = s.band_jobs[k]
+		if not WorkerThreadPool.is_task_completed(int(job[0])):
+			k += 1
+			continue
+		WorkerThreadPool.wait_for_task_completion(int(job[0]))
+		s.band_jobs.remove_at(k)
+		var mesh: ArrayMesh = (job[1] as Array)[0]
+		if mesh == null or s.brick_node == null:
+			continue
+		var mi := MeshInstance3D.new()
+		mi.mesh = mesh
+		mi.material_override = brick_material
+		s.brick_node.add_child(mi)
+
+
+func _finish_bricks(i: int) -> void:
+	var s := sites[i]
+	var body := StaticBody3D.new()
+	body.name = "BrickBody"
+	body.collision_layer = Layers.STRUCTURE
+	body.collision_mask = 0
+	# The shapes before the body is in the physics space: added to a body in
+	# it, each shape updates the broadphase -- 300-1000 ms for a tower, against
+	# 1.5 ms outside it.
+	bricks.add_chunk_shapes(body.get_rid(), s.chunk, Vector3.ZERO, true)
+	s.brick_node.add_child(body)
+	s.bricked = true
+	bricked_count += 1
+	# The shell and its walls go: the bricks are the building now.
+	if s.shell != null:
+		s.shell.visible = false
+	if s.body != null:
+		s.body.collision_layer = 0
+	site_bricks.emit(i, true)
+
+
+func _free_bricks(i: int) -> void:
+	var s := sites[i]
+	if i == _brick_site:
+		_brick_site = -1
+	if s.chunk < 0:
+		return
+	if s.bricked:
+		bricked_count -= 1
+	s.bricked = false
+	for job in s.band_jobs:
+		WorkerThreadPool.wait_for_task_completion(int(job[0]))
+	s.band_jobs.clear()
+	if s.brick_node != null:
+		s.brick_node.queue_free()
+		s.brick_node = null
+	bricks.release_chunk(s.chunk)
+	s.chunk = -1
+	if s.shell != null:
+		s.shell.visible = true
+	if s.body != null:
+		s.body.collision_layer = Layers.STRUCTURE
+	site_bricks.emit(i, false)
+
+
+func _exit_tree() -> void:
+	# Bands still uploading: waited for, or the pool tears down under them.
+	for s in sites:
+		for job in s.band_jobs:
+			WorkerThreadPool.wait_for_task_completion(int(job[0]))
+		s.band_jobs.clear()
+
+
+## The floating origin moved the scene: every chunk's transform is the world's.
+func on_origin_shift() -> void:
+	for s in sites:
+		if s.chunk >= 0:
+			bricks.set_chunk_transform(s.chunk, planet.global_transform * s.frame)
+
+
+## The world box a site stands in (for the AI: what to forget when its bricks change).
+func site_box(i: int) -> AABB:
+	var s := sites[i]
+	var stud := BrickWorld.get_stud_metres()
+	return (planet.global_transform * s.frame) * AABB(Vector3.ZERO, Vector3(s.fx * stud, s.height, s.fz * stud))
 
 
 func _free_near(s: Site) -> void:
