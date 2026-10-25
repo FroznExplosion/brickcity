@@ -2128,8 +2128,9 @@ func _build_point_panel(layer: CanvasLayer) -> void:
 	title.text = "Connection point (J)"
 	box.add_child(title)
 	_point_kind = OptionButton.new()
-	for k in ["mount", "socket"]:
+	for k in ["mount", "socket", "bend"]:
 		_point_kind.add_item(k)
+	_point_kind.item_selected.connect(func(_i: int) -> void: _fill_point_slots())
 	box.add_child(_point_kind)
 	_point_slot = OptionButton.new()
 	_fill_point_slots()
@@ -2142,10 +2143,11 @@ func _build_point_panel(layer: CanvasLayer) -> void:
 	var ok := Button.new()
 	ok.text = "Place"
 	ok.pressed.connect(func() -> void:
-		if _point_iface.item_count > 0:
+		var bend_kind := _point_kind.get_item_text(_point_kind.selected) == "bend"
+		if _point_iface.item_count > 0 or bend_kind:
 			toggle_point(_point_panel.get_meta("at"), _point_kind.get_item_text(_point_kind.selected),
 					_point_slot.get_item_text(_point_slot.selected),
-					_point_iface.get_item_text(_point_iface.selected), _point_panel.get_meta("dir", []))
+					"" if bend_kind else _point_iface.get_item_text(_point_iface.selected), _point_panel.get_meta("dir", []))
 		_point_panel.visible = false)
 	row.add_child(ok)
 	var cancel := Button.new()
@@ -2158,7 +2160,9 @@ func _build_point_panel(layer: CanvasLayer) -> void:
 func _fill_point_slots() -> void:
 	_point_slot.clear()
 	var names := []
-	if _body():
+	if _point_kind != null and _point_kind.item_count > 2 and _point_kind.selected == 2:
+		names = ["knee", "elbow"]   # a bend: where a part folds inside itself
+	elif _body():
 		for k in body_ref().PARTS:
 			var sk := String(body_ref().SPEC[k].get("socket", ""))
 			if sk != "" and not sk in names:
@@ -2210,7 +2214,8 @@ func _draw_points() -> void:
 		var mat := StandardMaterial3D.new()
 		mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 		mat.no_depth_test = true
-		mat.albedo_color = Color(0.3, 1.0, 0.4) if q.kind == "mount" else Color(1.0, 0.35, 0.3)
+		mat.albedo_color = Color(0.3, 1.0, 0.4) if q.kind == "mount" else (Color(1.0, 0.85, 0.2)
+				if q.kind == "bend" else Color(1.0, 0.35, 0.3))
 		mark.material_override = mat
 		mark.position = where
 		_points_root.add_child(mark)
@@ -8720,6 +8725,11 @@ func lay_ready_points() -> void:
 				"at": at, "ready": true})
 		points.append({"part": spec.host, "kind": "socket", "slot": spec.socket, "interface": spec.iface,
 				"at": at.duplicate(), "ready": true})
+		var bend: Vector3 = body_ref().bend_at(part, mech_class, leg_length)
+		if bend != Vector3.INF:
+			var bc := mech_origin() + bend
+			points.append({"part": part, "kind": "bend", "slot": body_ref().BENDS[part], "interface": "",
+					"at": [bc.x, bc.y, bc.z], "ready": true})
 	_draw_points()
 	_draw_mech_ref()
 	_store_asset_meta()
@@ -8771,6 +8781,12 @@ func _mech_record(name: String, by_part: Dictionary, official: bool) -> PartReco
 		r.sockets.append({"name": k, "accepts": accepts[k]})
 	r.extra["from"] = recipe.name
 	r.extra["bricks"] = _part_recipe(by_part[name]).to_dict() if by_part.has(name) else {}
+	var bends := []
+	for q in points:
+		if String(q.part) == name and q.kind == "bend":
+			bends.append(String(q.slot))
+	if not bends.is_empty():
+		r.extra["bends"] = bends
 	return r
 
 
@@ -8791,7 +8807,11 @@ func export_mech(dir: String) -> Dictionary:
 	DirAccess.make_dir_recursive_absolute(dir)
 	var written := {}
 	for name in by_part:
-		var root := _part_root(name, by_part[name], at[name], b)
+		var bend := {}
+		for q in points:
+			if String(q.part) == name and q.kind == "bend":
+				bend = {"name": String(q.slot), "at": _point_m(q)}
+		var root := _part_root(name, by_part[name], at[name], b, bend)
 		if name != body_ref().ROOT:
 			var mount := Node3D.new()
 			mount.name = "mount"
@@ -8800,7 +8820,13 @@ func export_mech(dir: String) -> Dictionary:
 		for q in points:
 			if String(q.part) == name and q.kind == "socket" and not made.has(String(q.slot)):
 				made[String(q.slot)] = true
-				_game_node(root, "socket_" + String(q.slot), b * (_point_m(q) - (at[name] as Vector3)))
+				var p := _point_m(q)
+				if not bend.is_empty() and p.y < (bend.at as Vector3).y:
+					# Below the bend: it goes with what bends (the hand with the forearm).
+					_game_node(root.get_node(NodePath("Bend_" + String(bend.name))), "socket_" + String(q.slot),
+							b * (p - (bend.at as Vector3)))
+				else:
+					_game_node(root, "socket_" + String(q.slot), b * (p - (at[name] as Vector3)))
 		_own(root, root)
 		var ps := PackedScene.new()
 		var err := ps.pack(root)
@@ -9665,15 +9691,36 @@ func _studs_node(list: Array) -> MultiMeshInstance3D:
 ## One part as a game scene's root: at its point (`at`, the build's metres), its bricks
 ## (and shell, and hand-put studs) under "Model" turned and sized by `b`. The caller adds
 ## the mount and socket nodes.
-func _part_root(name: String, ids: Array, at: Vector3, b: Basis) -> Node3D:
+func _part_root(name: String, ids: Array, at: Vector3, b: Basis, bend: Dictionary = {}) -> Node3D:
 	var root := Node3D.new()
 	root.name = name
 	var model := Node3D.new()
 	model.name = "Model"
 	model.transform = Transform3D(b, -(b * at))
 	root.add_child(model)
+	# A part that bends (a knee, an elbow): its bricks below the bend under a pivot there,
+	# "Bend_<name>", turned by the walk and the pose.
+	var upper := ids
+	if not bend.is_empty():
+		var bm: Vector3 = bend.at
+		upper = ids.filter(func(i: int) -> bool: return _brick_box(i).get_center().y >= bm.y)
+		var lower := ids.filter(func(i: int) -> bool: return _brick_box(i).get_center().y < bm.y)
+		var pivot := Node3D.new()
+		pivot.name = "Bend_" + String(bend.name)
+		pivot.position = b * (bm - at)
+		root.add_child(pivot)
+		var low := Node3D.new()
+		low.name = "Lower"
+		low.transform = Transform3D(b, -(b * bm))
+		pivot.add_child(low)
+		var lg := _by_frame(_uncovered(name, lower))
+		for af in lg:
+			var mi := _bake_part_mesh(lg[af], af)
+			if af != lg.keys()[0]:
+				mi.name = "Bricks%d" % af
+			low.add_child(mi)
 	# A mesh a frame the part has bricks in: sideways bricks are in grids of their own.
-	var groups := _by_frame(_uncovered(name, ids))
+	var groups := _by_frame(_uncovered(name, upper))
 	for af in groups:
 		var mi := _bake_part_mesh(groups[af], af)
 		if af != groups.keys()[0]:

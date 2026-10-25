@@ -24,6 +24,11 @@ const SPEC := {
 }
 ## In nano plates up and studs across: hips 4 bricks up, the shoulders 2.5 bricks over them,
 ## the neck at the shoulders, the hat's studs 2 bricks over the neck.
+## The joints inside a part (stage "joints"): a leg bends at its knee, an arm at its elbow,
+## half way down. The part's bricks below the bend swing about it; its sockets below it go too.
+## Which way each folds, for a part hanging down and facing -Z: a knee back, an elbow forward.
+const BENDS := {"leg_L": "knee", "leg_R": "knee", "arm_L": "elbow", "arm_R": "elbow"}
+const FOLD := {"knee": -1.0, "elbow": 1.0}
 const HIP_PLATES := 12
 const SHOULDER_PLATES := 20
 const NECK_PLATES := 21
@@ -48,6 +53,16 @@ static func joints(_klass: String = "", _length: int = 0) -> Dictionary:
 		"leg_R": Vector3(0, HIP_PLATES, -HIP_HALF),
 		"hat": Vector3(0, HAT_PLATES, 0),
 	}
+
+
+## Where part `part` bends, as MechReference.bend_at.
+static func bend_at(part: String, _klass: String = "", _length: int = 0) -> Vector3:
+	if not BENDS.has(part):
+		return Vector3.INF
+	var j := joints()
+	var top: Vector3 = j[part]
+	var end: Vector3 = Vector3(top.x, 0.0, top.z) if part.begins_with("leg") else j["hand" + part.substr(3)]
+	return (top + end) * 0.5
 
 
 ## Half the footprint drawn under it, in studs.

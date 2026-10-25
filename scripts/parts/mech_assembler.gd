@@ -66,17 +66,24 @@ static func assemble(build: Dictionary) -> Node3D:
 		if not scenes.has(host_path):
 			continue
 		var host: Node3D = scenes[host_path]
-		var sock := host.get_node_or_null("socket_" + path.get_file()) as Node3D
+		# A socket below a bend (the wrist on a forearm) is inside the part, under its pivot.
+		var sock := host.find_child("socket_" + path.get_file(), true, false) as Node3D
 		if sock == null:
 			push_warning("MechAssembler: %s has no socket_%s" % [host.get_meta(&"part_id", "?"), path.get_file()])
-		var j_xf: Transform3D = (xf[host_path] as Transform3D) * (sock.transform if sock != null else Transform3D.IDENTITY)
+		var nested := sock != null and sock.get_parent() != host
+		var j_xf: Transform3D = (xf[host_path] as Transform3D) * (_chain(sock, host) if sock != null else Transform3D.IDENTITY)
 		var inst := _instance(at[path])
 		if inst == null:
 			continue
 		var j := Node3D.new()
 		j.name = "Joint_" + path.replace("/", "_")
-		j.transform = j_xf
-		model.add_child(j)
+		if nested:
+			# It goes with the bend: under the pivot, where the socket is.
+			j.transform = sock.transform
+			sock.get_parent().add_child(j)
+		else:
+			j.transform = j_xf
+			model.add_child(j)
 		var mount := inst.get_node_or_null("mount") as Node3D
 		inst.transform = mount.transform.affine_inverse() if mount != null else Transform3D.IDENTITY
 		j.add_child(inst)
@@ -131,6 +138,29 @@ static func designs(cat: PartCatalog = null) -> Dictionary:
 	for did: String in files:
 		if (files[did] as PartDesign).plan == "mech" and not out.has(did):
 			out[did] = files[did]
+	return out
+
+
+## `n`'s place in `root`'s frame: the transforms between them.
+static func _chain(n: Node, root: Node) -> Transform3D:
+	var t := Transform3D.IDENTITY
+	var c := n
+	while c != null and c != root:
+		t = (c as Node3D).transform * t
+		c = c.get_parent()
+	return t
+
+
+## The bends (knees, elbows) of a part's scene: {name: pivot node}.
+static func bends_of(part: Node) -> Dictionary:
+	var out := {}
+	for c in part.find_children("Bend_*", "Node3D", true, false):
+		# Its own, not those of the parts hanging on it.
+		var owner_part := c.get_parent()
+		while owner_part != null and not owner_part.has_meta(&"part_id"):
+			owner_part = owner_part.get_parent()
+		if owner_part == part:
+			out[String(c.name).trim_prefix("Bend_")] = c
 	return out
 
 
@@ -205,8 +235,8 @@ static func arm_gun(m: Mech, res: GunGenerator.Result) -> GunInstance:
 	var gi := GunInstance.from_result(res)
 	var old: Node = m.gun.gun
 	var pose := m.arm.get_node_or_null(^"Pose") as Node3D
-	var hand := m.arm.get_node_or_null(^"Pose/Joint_arm_R_hand") as Node3D
-	gi.position = pose.transform * hand.position if pose != null and hand != null else Vector3.FORWARD * 1.5
+	var hand := m.arm.find_child("Joint_arm_R_hand", true, false) as Node3D
+	gi.position = _chain(hand, m.arm).origin if pose != null and hand != null else Vector3.FORWARD * 1.5
 	m.arm.add_child(gi)
 	m.gun.equip(gi)
 	gi.visible = true

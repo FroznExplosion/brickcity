@@ -29,6 +29,11 @@ const SPEC := {
 	"pod_L": {"slot": "pod", "side": "L", "host": "chassis", "socket": "pod_L", "iface": "mech.pod"},
 	"pod_R": {"slot": "pod", "side": "R", "host": "chassis", "socket": "pod_R", "iface": "mech.pod"},
 }
+## The joints inside a part (stage "joints"): a leg bends at its knee, an arm at its elbow,
+## half way down. The part's bricks below the bend swing about it; its sockets below it go too.
+## Which way each folds, for a part hanging down and facing -Z: a knee back, an elbow forward.
+const BENDS := {"leg_L": "knee", "leg_R": "knee", "arm_L": "elbow", "arm_R": "elbow"}
+const FOLD := {"knee": -1.0, "elbow": 1.0}
 const CLASSES := ["light", "normal", "heavy"]
 ## Hip height, nano bricks, by leg length (body_plans.mech.leg_lengths). A boss's legs may
 ## be any length; these are the players' three.
@@ -69,6 +74,17 @@ static func joints(klass: String, length: int) -> Dictionary:
 		"pod_L": Vector3(POD_BEHIND, neck_y, sh - POD_IN),
 		"pod_R": Vector3(POD_BEHIND, neck_y, -(sh - POD_IN)),
 	}
+
+
+## Where part `part` bends (BENDS), in the joints' units: half way from its joint to its end
+## (a leg's foot on the ground, an arm's wrist). Vector3.INF for a part that does not bend.
+static func bend_at(part: String, klass: String = "normal", length: int = 2) -> Vector3:
+	if not BENDS.has(part):
+		return Vector3.INF
+	var j := joints(klass, length)
+	var top: Vector3 = j[part]
+	var end: Vector3 = Vector3(top.x, 0.0, top.z) if part.begins_with("leg") else j["hand" + part.substr(3)]
+	return (top + end) * 0.5
 
 
 ## Half the footprint drawn under it, in studs: the shoulders' span.
