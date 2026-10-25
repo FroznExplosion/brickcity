@@ -1046,6 +1046,7 @@ func _ready() -> void:
 	_breaklag_mode = "--breaklag" in args
 	_bigbreak_mode = "--bigbreak" in args
 	_wide_mode = "--widecheck" in args
+	_rubble_mode = "--rubble" in args
 	# The A/B for staggered floor seams: every floor laid as before.
 	TowerRecipe.stagger = not ("--no-stagger" in args)
 	_storeys_mode = "--storeys" in args
@@ -1307,6 +1308,8 @@ func _ready() -> void:
 		_run_bigbreak_pass()
 	elif _wide_mode:
 		_run_wide_pass()
+	elif _rubble_mode:
+		_run_rubble_pass()
 	elif _storeys_mode:
 		_run_storeys_pass()
 	elif _wreck_mode:
@@ -7931,6 +7934,8 @@ var _breaklag_mode := false
 var _bigbreak_mode := false
 ## -- --widecheck --big: the wide buildings' own break checks (_run_wide_pass)
 var _wide_mode := false
+## -- --rubble --big: what wreckage at rest costs (_run_rubble_pass)
+var _rubble_mode := false
 var _storeys_mode := false   ## -- --storeys: the storey-units gate (Docs/Space.md 5.3a)
 var _whole_mode := false     ## -- --whole: every building laid whole, as before storey units
 
@@ -8491,12 +8496,12 @@ func _bay_check(b: BuildingRegistry.Building) -> void:
 	var slab_y := TowerRecipe.STOREY_PLATES
 	@warning_ignore("integer_division")
 	var mid_z: int = b.recipe.footprint_z / 2
-	var probe := func(x: int) -> bool:
+	var probe := func(at: int) -> bool:
 		if not b.is_materialised():
 			return false
 		var origin := world.get_chunk_origin(b.chunk)
-		return world.is_solid(b.chunk, origin + Vector3i(x, slab_y, mid_z)) \
-				and world.is_solid(b.chunk, origin + Vector3i(x, slab_y + 1, mid_z))
+		return world.is_solid(b.chunk, origin + Vector3i(at, slab_y, mid_z)) \
+				and world.is_solid(b.chunk, origin + Vector3i(at, slab_y + 1, mid_z))
 	var ends := [5, b.recipe.footprint_x - 6]
 	var before: bool = probe.call(over) and probe.call(ends[0]) and probe.call(ends[1])
 	_gate_ok("building %d: its first floor laid over the bay and both ends before the shot" % b.id,
@@ -8523,6 +8528,116 @@ func _bay_check(b: BuildingRegistry.Building) -> void:
 	_gate_ok("building %d: and the building either side of it stands" % b.id,
 			probe.call(ends[0]) and probe.call(ends[1]),
 			"ends %s, %s" % [probe.call(ends[0]), probe.call(ends[1])])
+
+
+## What wreckage at rest costs -- the measurement DestructionLod 3.5 waits for
+## ("rubble at rest merged into one static body per tile ... worth doing when a
+## measurement says it costs something"). The --shot pass's cut (one side of
+## every tall tower, eight courses up), then until every piece has settled,
+## then three windows of WINDOW frames: as it is; with the settled pieces out of
+## the physics space (what merging them could save the physics step at most);
+## with them hidden (what it could save drawing at most). Each window: the
+## frame, the physics frame and the renderer's own CPU and GPU time, means.
+##     godot --path . scenes/big_city.tscn -- --rubble --big
+func _run_rubble_pass() -> void:
+	print("[rubble] wreckage at rest: what it costs")
+	respawn_buildings = false
+	camera.position = Vector3(-52.0, 34.0, -52.0)
+	camera.rotation = Vector3(-0.42, -2.36, 0.0)
+	await _frames(30)
+	for b in registry.buildings:
+		if b.is_build() or b.recipe.courses < 44:
+			continue
+		var w: float = b.recipe.footprint_x * STUD
+		var d: float = b.recipe.footprint_z * STUD
+		for course in range(0, 8):
+			var y := (1 + course * TowerRecipe.PLATES_PER_COURSE) * PLATE
+			var px := 0.3
+			while px < w * 0.55:
+				var pz := 0.3
+				while pz < d:
+					_blast(b.xform.origin + Vector3(px, y, pz), 1.5)
+					pz += 2.0
+				px += 2.0
+	var t := 0
+	var moving := 1
+	while t < 60 * 60 and (moving > 0 or not _damage_queue.is_empty()):
+		await _frames(30)
+		t += 30
+		moving = 0
+		for isl in islands.islands:
+			if isl.is_valid() and not isl.settled:
+				moving += 1
+	var settled: Array = []
+	var boxes := 0
+	var bricks := 0
+	for isl in islands.islands:
+		if isl.is_valid() and isl.settled:
+			settled.append(isl)
+			boxes += isl.shape_count
+			bricks += world.get_alive_block_count(isl.chunk)
+	print("[rubble] after %.0f s: %d piece(s) at rest (%d boxes, %d bricks), %d still moving, %d asleep" % [
+			t / 60.0, settled.size(), boxes, bricks, moving, islands.dormant.size()])
+	var vp := get_viewport().get_viewport_rid()
+	RenderingServer.viewport_set_measure_render_time(vp, true)
+	var as_is: Array = await _rubble_window(vp)
+	var space := get_world_3d().space
+	for isl in settled:
+		if _rubble_live(isl):
+			PhysicsServer3D.body_set_space((isl as BrickIsland).body.get_rid(), RID())
+	var no_physics: Array = await _rubble_window(vp)
+	for isl in settled:
+		if _rubble_live(isl):
+			PhysicsServer3D.body_set_space((isl as BrickIsland).body.get_rid(), space)
+			_rubble_show(isl, false)
+	var no_draw: Array = await _rubble_window(vp)
+	for isl in settled:
+		if _rubble_live(isl):
+			_rubble_show(isl, true)
+	for row in [["as it is", as_is], ["settled out of physics", no_physics],
+			["settled not drawn", no_draw]]:
+		var m: Array = row[1]
+		print("[rubble]   %-24s frame %.2f ms, physics %.2f ms, render cpu %.2f ms gpu %.2f ms, %d draw calls" % [
+				row[0], m[0], m[1], m[2], m[3], int(m[4])])
+	print("[rubble] the most merging could save: physics %.2f ms a frame, drawing %.2f ms cpu %.2f ms gpu, %d draw calls" % [
+			float(as_is[1]) - float(no_physics[1]), float(as_is[2]) - float(no_draw[2]),
+			float(as_is[3]) - float(no_draw[3]), int(as_is[4]) - int(no_draw[4])])
+	get_tree().quit(0)
+
+
+const _RUBBLE_WINDOW := 240
+
+
+## A piece can be freed between the windows (a stand-in's turn, a trim).
+func _rubble_live(isl: BrickIsland) -> bool:
+	return isl.is_valid() and is_instance_valid(isl.body)
+
+
+func _rubble_show(isl: BrickIsland, on: bool) -> void:
+	isl.body.visible = on
+	if is_instance_valid(isl.mesh):
+		isl.mesh.visible = on
+
+
+## Means over _RUBBLE_WINDOW frames: [frame, physics, render cpu, render gpu,
+## draw calls], ms but the last.
+func _rubble_window(vp: RID) -> Array:
+	await _frames(30)
+	var sum := [0.0, 0.0, 0.0, 0.0, 0.0]
+	var prev := Time.get_ticks_usec()
+	for k in _RUBBLE_WINDOW:
+		await get_tree().process_frame
+		var now := Time.get_ticks_usec()
+		sum[0] += (now - prev) / 1000.0
+		prev = now
+		sum[1] += Performance.get_monitor(Performance.TIME_PHYSICS_PROCESS) * 1000.0
+		sum[2] += RenderingServer.viewport_get_measured_render_time_cpu(vp)
+		sum[3] += RenderingServer.viewport_get_measured_render_time_gpu(vp)
+		sum[4] += RenderingServer.get_rendering_info(
+				RenderingServer.RENDERING_INFO_TOTAL_DRAW_CALLS_IN_FRAME)
+	for i in sum.size():
+		sum[i] /= float(_RUBBLE_WINDOW)
+	return sum
 
 
 ## Stairs go with their floors.

@@ -81,6 +81,13 @@ bricks and judged by them (`_far_shell_counts`); a 40-stud bay shot out drops th
 by the span rule and the ends stand. `--breaklag --big` 7 ok. `collapse_probe` "building 14: pushed over, it turns"
 fails with or without the stagger: likely resting flat on its stump, check from a lifted start.
 
+**2026-10-25:** `collapse_probe` 56/0 (the push-over check turns a top about its bottom edge,
+the other way if blocked; leftover pieces blocked +x in 3 runs of 4). Item 15 measured (census
+"patches:" line): nudge 22 and perch 9 a `--big --shot`, perch 9 in `--lodbreak --big` -- still
+working, kept; the watchdog 0 (and 0 in the tornado), kept while the user still sees floating
+furniture now and then (rarer since; item 6). Item 16 measured, not built: DestructionLod 3.5
+(`--rubble --big`): settled pieces cost no physics, at most 3.7 ms GPU / 62 draw calls.
+
 **Open, in order:**
 1. ~~Re-time `--big --shot` on a quiet machine~~ -- done 2026-10-23 evening (code at `8c67313`,
    before perf caps `c35046e`; editor closed, `--ring` 14 s, peak 73-80 C, not held back): two
