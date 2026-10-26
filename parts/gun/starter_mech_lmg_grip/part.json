@@ -1,0 +1,81 @@
+{
+	"bricks": {
+		"block_frames": [
+			0,
+			0,
+			0,
+			0
+		],
+		"cells": [
+			507,
+			40,
+			499,
+			507,
+			40,
+			501,
+			507,
+			43,
+			500,
+			507,
+			43,
+			499
+		],
+		"colours": [
+			1,
+			1,
+			1,
+			1
+		],
+		"fixtures": [],
+		"frame_rot": [],
+		"frame_ticks": [],
+		"groups": [],
+		"interior": [
+			0,
+			0,
+			0,
+			0
+		],
+		"kind": "gun",
+		"materials": [
+			0,
+			0,
+			0,
+			0
+		],
+		"meta": {
+
+		},
+		"name": "Starter Mech LMG",
+		"part_index": [
+			0,
+			1,
+			0,
+			1
+		],
+		"parts": [
+			"brick_2x2",
+			"brick_1x2_x"
+		],
+		"placements": [],
+		"towers": [],
+		"version": 6,
+		"welds": []
+	},
+	"family": "gun",
+	"from": "Starter Mech LMG",
+	"id": "starter_mech_lmg_grip",
+	"manufacturer": "korr",
+	"mount": {
+		"interface": "mgun.grip.pin"
+	},
+	"name": "Starter Mech LMG grip",
+	"rev": 1,
+	"saved": 1793024770,
+	"scale": "mech",
+	"side": "any",
+	"slot": "grip",
+	"sockets": [],
+	"source": "official",
+	"tags": []
+}

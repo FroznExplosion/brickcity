@@ -10289,6 +10289,7 @@ const GUN_CLASSES := {
 	"smg": {"name": "SMG", "real_mm": 852.0},
 	"rifle": {"name": "rifle", "real_mm": 1000.0},
 	"pistol": {"name": "pistol", "real_mm": 216.0},
+	"lmg": {"name": "LMG", "real_mm": 1100.0},
 }
 ## The shared grip leans back like a real pistol grip, and sits this share of the gun's
 ## length from the butt (an SMG's).
@@ -11584,7 +11585,7 @@ func draw_size_marks() -> void:
 		c.queue_free()
 	# Not in the game's view: it is to see the gun as the player will. A gun's only: a mech or
 	# a figure has its reference instead.
-	var on := size_marks_on and not game_view_on and recipe.kind == "gun"
+	var on := size_marks_on and not game_view_on and recipe.kind == "gun" and gun_scale == "held"
 	_size_marks.visible = on
 	_size_labels.visible = on
 	if not on:

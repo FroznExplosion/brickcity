@@ -88,6 +88,9 @@ func _go() -> void:
 	cat.load_dir(PartCatalog.OFFICIAL_DIR, "official")
 	var b := PartBuilder.generate("mech", null, 1, cat, {"class": "normal"})
 	var ok := MechAssembler.dress(m, b, true)
+	var gun := MechAssembler.arm_gun(m, MechAssembler.roll_gun(GunPlaceholderParts.build_library(), 1, cat))
+	print("[mech look] its gun: %s" % (gun.gun_name if gun != null else "none"))
+	m._aim_arm(0.016)   # the arm on its shoulder, along the aim, as a physics tick puts it
 	print("[mech look] dressed: %s, parts %d, eye %.2f m, shoulder %s" % [ok, cat.size(), m.cockpit_y, m.shoulder])
 	# The eye: a small red ball where the pilot looks from.
 	_box(stage, Vector3(0, m.cockpit_y, -Mech.COCKPIT_FORWARD), Vector3(0.15, 0.15, 0.15), Color(1, 0.1, 0.1))
