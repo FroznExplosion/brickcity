@@ -51,6 +51,12 @@ class Site:
 	# Past BRICK_DRAW_M a materialised building looks like its shell (this, the
 	# shell's mesh dithered in), its bricks still solid and the AI's.
 	var shell_look: MeshInstance3D = null
+	# Its collision, banded as the city's (BuildingCollision): a hit switches its
+	# bricks' shapes off and the band is merged again at the end of the tick.
+	var collision: BuildingCollision = null
+	# Band index -> its drawn mesh; the bands a hit has changed, to draw again.
+	var band_nodes := {}
+	var remesh := PackedInt32Array()
 
 var planet: PlanetBody
 var sites: Array[Site] = []
@@ -97,6 +103,11 @@ var _stud_arrays: Array = []
 var _stair_parts := PackedInt32Array()
 ## A site's bricks came in (true) or went (false): the AI's world follows.
 signal site_bricks(index: int, on: bool)
+## A hit took bricks out of a site (world box round it): the AI's maps forget it.
+signal site_damaged(index: int, box: AABB)
+## Every hit on the planet's bricks, as the host's commands (DamageLog).
+var damage_log := DamageLog.new()
+var bricks_killed := 0
 
 
 func setup(p: PlanetBody) -> void:
@@ -291,6 +302,7 @@ func _process(delta: float) -> void:
 		if a > 0.0:
 			far_count += 1
 	_brick_step(eye)
+	_damage_step()
 	# Beacons a few pixels across, on each landmark's top.
 	var bmm := beacons.multimesh
 	for k in _landmarks.size():
@@ -507,7 +519,7 @@ func _draw_band(s: Site, band: int) -> void:
 			var m := ArrayMesh.new()
 			m.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, out, [], {}, IslandManager.UPLOAD_COMPRESS)
 			holder[0] = m, false, "planet band")
-	s.band_jobs.append([task, holder])
+	s.band_jobs.append([task, holder, band])
 
 
 ## The bands whose meshes are made: drawn now.
@@ -521,7 +533,15 @@ func _harvest_bands(s: Site) -> void:
 		WorkerThreadPool.wait_for_task_completion(int(job[0]))
 		s.band_jobs.remove_at(k)
 		var mesh: ArrayMesh = (job[1] as Array)[0]
-		if mesh == null or s.brick_node == null:
+		var band: int = job[2]
+		if s.brick_node == null:
+			continue
+		# A band drawn again (a hit) replaces the one it was.
+		var old: Node = s.band_nodes.get(band)
+		if old != null:
+			old.queue_free()
+			s.band_nodes.erase(band)
+		if mesh == null:
 			continue
 		var mi := MeshInstance3D.new()
 		mi.mesh = mesh
@@ -533,19 +553,16 @@ func _harvest_bands(s: Site) -> void:
 		mi.visibility_range_end_margin = BRICK_DRAW_FADE
 		mi.visibility_range_fade_mode = GeometryInstance3D.VISIBILITY_RANGE_FADE_SELF
 		s.brick_node.add_child(mi)
+		s.band_nodes[band] = mi
 
 
 func _finish_bricks(i: int) -> void:
 	var s := sites[i]
-	var body := StaticBody3D.new()
-	body.name = "BrickBody"
-	body.collision_layer = Layers.STRUCTURE
-	body.collision_mask = 0
-	# The shapes before the body is in the physics space: added to a body in
-	# it, each shape updates the broadphase -- 300-1000 ms for a tower, against
-	# 1.5 ms outside it.
-	bricks.add_chunk_shapes(body.get_rid(), s.chunk, Vector3.ZERO, true)
-	s.brick_node.add_child(body)
+	# The city's banded collision, merged: shaped before it is in the space
+	# (shapes added to a body in it update the broadphase one by one -- 300-1000
+	# ms for a tower, against 1.5 ms outside it).
+	s.collision = BuildingCollision.new(bricks, s.chunk, get_world_3d().space,
+			planet.global_transform * s.frame, true)
 	s.bricked = true
 	bricked_count += 1
 	# The shell and its walls go: the bricks are the building now.
@@ -581,6 +598,11 @@ func _free_bricks(i: int) -> void:
 	for job in s.band_jobs:
 		WorkerThreadPool.wait_for_task_completion(int(job[0]))
 	s.band_jobs.clear()
+	if s.collision != null:
+		s.collision.free_bodies()
+		s.collision = null
+	s.band_nodes.clear()
+	s.remesh = PackedInt32Array()
 	if s.brick_node != null:
 		s.brick_node.queue_free()
 		s.brick_node = null
@@ -602,6 +624,10 @@ func _exit_tree() -> void:
 		for job in s.band_jobs:
 			WorkerThreadPool.wait_for_task_completion(int(job[0]))
 		s.band_jobs.clear()
+		# Its collision is RIDs, not nodes: nothing frees them but this.
+		if s.collision != null:
+			s.collision.free_bodies()
+			s.collision = null
 
 
 ## The floating origin moved the scene: every chunk's transform is the world's.
@@ -609,6 +635,82 @@ func on_origin_shift() -> void:
 	for s in sites:
 		if s.chunk >= 0:
 			bricks.set_chunk_transform(s.chunk, planet.global_transform * s.frame)
+		# Its collision is RIDs in the world: built again where it is now (from
+		# the live bricks, so what was shot out stays out).
+		if s.collision != null:
+			s.collision.free_bodies()
+			s.collision = BuildingCollision.new(bricks, s.chunk, get_world_3d().space,
+					planet.global_transform * s.frame, true)
+
+
+# --- damage (Docs/Planets.md 11.11, D1) --------------------------------------------
+
+## The materialised site a world point is in (its box, half a metre round), or -1.
+func site_at(p: Vector3) -> int:
+	var stud := BrickWorld.get_stud_metres()
+	for i in sites.size():
+		var s := sites[i]
+		if not s.bricked:
+			continue
+		var l := (planet.global_transform * s.frame).affine_inverse() * p
+		if l.x > -0.5 and l.z > -0.5 and l.y > -0.5 and l.x < s.fx * stud + 0.5 \
+				and l.z < s.fz * stud + 0.5 and l.y < s.height + 0.5:
+			return i
+	return -1
+
+
+## A round or a blast at world `point` (StructuralDamage.for_shot's record:
+## {blast, radius, hp}), as the city's bricks take one: a gun wears them
+## (chip_hit), ordnance blasts them (apply_hit). The killed bricks' shapes go,
+## their bands are drawn again, the AI's maps forget the spot. False when no
+## building's bricks are there.
+func damage(point: Vector3, shot: Dictionary) -> bool:
+	var i := site_at(point)
+	if i < 0:
+		return false
+	var s := sites[i]
+	var blast := bool(shot.get("blast", false))
+	var radius := float(shot.get("radius", 0.0))
+	var e := damage_log.record(0, DamageLog.Kind.BLAST if blast else DamageLog.Kind.CHIP, s.chunk,
+			point, radius, Vector3.ZERO, int(shot.get("hp", 0)))
+	var killed := DamageLog.apply_entry(bricks, s.chunk, e)
+	if killed.is_empty():
+		return true
+	bricks_killed += killed.size()
+	s.collision.disable(killed)
+	for b in s.collision.bands_of(killed):
+		if not s.remesh.has(b):
+			s.remesh.append(b)
+	# The bands are drawn from the chunk's bake: stale now.
+	bricks.bake_chunk_async(s.chunk)
+	var r := Vector3.ONE * (radius + 1.0)
+	site_damaged.emit(i, AABB(point - r, r * 2.0))
+	return true
+
+
+## Once a frame: merge again the bands hits changed (a few), and draw again the
+## bands they took bricks out of, once the bake is fresh.
+const FLUSH_BUDGET := 2
+
+
+func _damage_step() -> void:
+	for i in sites.size():
+		var s := sites[i]
+		if s.collision == null:
+			continue
+		if s.collision.any_stale():
+			s.collision.flush(FLUSH_BUDGET)
+		if not s.remesh.is_empty() and i != _brick_site:
+			if not bricks.bake_ready(s.chunk):
+				if not bricks.bake_pending(s.chunk):
+					bricks.bake_chunk_async(s.chunk)
+				continue
+			_harvest_bands(s)
+			for b in s.remesh:
+				_draw_band(s, b)
+			s.remesh = PackedInt32Array()
+		elif not s.band_jobs.is_empty() and i != _brick_site:
+			_harvest_bands(s)
 
 
 ## The world box a site stands in (for the AI: what to forget when its bricks change).

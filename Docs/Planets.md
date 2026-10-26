@@ -1683,4 +1683,18 @@ after (`Fixture.build_into`), all before the shape's template is saved -- so it 
 again. `--gate=bricks` 9/9: the nav net walks from outside, through the front door and up the
 staircase to a first-floor spot by the stairwell (39 points). Shapes at load 283 ms (was 246).
 
-Not yet: damage and destruction, furniture, materialising for a fight far from the camera.
+**Damage, D1 (2026-10-26): bricks shot and blasted out.** A planet building takes a hit as a
+city building does: `PlanetBuildings.damage(point, shot)` with `StructuralDamage.for_shot`'s record
+-- a gun's round wears its bricks (`chip_hit`, a rifle 54 hp a round, a brick in 5), ordnance and a
+squad's breaching charge blast them (`apply_hit`), each a `DamageLog` entry. Wired to the player's
+gun and the AI's (`on_structure_hit`, `on_breach`). Collision is the city's `BuildingCollision`
+(merged bands; a killed brick's band merged again at the end of the frame, two a frame), the bands
+it changed are drawn again on a worker, and `site_damaged` tells the nav net to forget the box --
+a blown hole is a way in. Its brick step got cheaper too (2.7 ms worst, was 5.5). Gate
+`--gate=damage` 10/10 (headless and windowed): five rifle rounds take a brick out of a wall, the
+AI's world and the collision lose it, its band is redrawn; a charge blows 20 bricks out of a side
+wall, the collision has the hole and the nav net's way in goes through it (4 points against 10
+round by the door). A hit is 0.2-0.4 ms. Not yet: what is left hanging falling (the structure
+solve, loose pieces), which is D2.
+
+Not yet: falling pieces (D2), furniture, materialising for a fight far from the camera.
