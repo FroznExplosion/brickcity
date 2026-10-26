@@ -181,6 +181,14 @@ var blind_stages := {}
 ## Do not rebuild this piece's mesh before this process frame: a child it shed
 ## is still coming up, and until it has, these bricks are drawn by nobody else.
 var hold_until := -1
+## When that hold began, and the children it is for that were shed undrawn
+## (their mesh on a worker): the hold lasts until they are drawn, up to
+## IslandManager.HOLD_MAX_FRAMES.
+var hold_started := -1
+## Band meshes a full rebuild has replaced, still drawing until the one mesh
+## it builds is up (IslandManager._apply_mesh lets them go).
+var retiring_bands: Array = []
+var waiting_children: Array = []
 var fractures := 0   ## times damage split this island
 var impacts := 0     ## times it landed hard enough to lose blocks
 ## Times it has come back from sleep. Diagnostic: a piece that has been through a
