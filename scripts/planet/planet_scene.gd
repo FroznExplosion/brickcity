@@ -14,6 +14,8 @@ extends Node3D
 ##   player's controls, a soldier's body moved and aimed as its brain does it.
 ##   -- --gate=bricks: the town's buildings near the player as real bricks --
 ##   drawn, solid, a way in, and bricks to the AI (11.11).
+##   -- --gate=damage: rounds wear a brick out of a planet building, a blast
+##   opens its wall; drawing, collision and the AI's map follow (11.11 D1).
 ##   -- --gate=trees: a tank knocks a tree down; a truck is stopped by one
 ##   (11.10, trees and vehicles).
 ##   -- --gate=squad: a squad on the AI's nav region round the town (11.8 N2)
@@ -49,6 +51,7 @@ var _soldier_gate := false
 var _squad_gate := false
 var _trees_gate := false
 var _bricks_gate := false
+var _damage_gate := false
 ## The AI round the fight (Docs/Planets.md 11.8, N2, N4): the nav net round the
 ## player's town; ai_world / ai_nav the region the player is in. Made by setup_ai.
 var ai: AIServices
@@ -83,10 +86,11 @@ func _ready() -> void:
 	_squad_gate = "--gate=squad" in OS.get_cmdline_user_args()
 	_trees_gate = "--gate=trees" in OS.get_cmdline_user_args()
 	_bricks_gate = "--gate=bricks" in OS.get_cmdline_user_args()
+	_damage_gate = "--gate=damage" in OS.get_cmdline_user_args()
 	_travel_gate = "--gate=travel" in OS.get_cmdline_user_args()
 	_far_gate = "--gate=far" in OS.get_cmdline_user_args()
 	_drive_gate = "--gate=drive" in OS.get_cmdline_user_args()
-	_gate = _gate or _pawn_gate or _mech_gate or _tank_gate or _soldier_gate or _squad_gate or _travel_gate or _far_gate or _drive_gate or _trees_gate or _bricks_gate
+	_gate = _gate or _pawn_gate or _mech_gate or _tank_gate or _soldier_gate or _squad_gate or _travel_gate or _far_gate or _drive_gate or _trees_gate or _bricks_gate or _damage_gate
 	data = PlanetData.new()
 	data.planet_name = "proto"
 	# Towns and landmarks: their pads go into the ground before it is built.
@@ -158,6 +162,8 @@ func _ready() -> void:
 			_run_trees_gate()
 		elif _bricks_gate:
 			_run_bricks_gate()
+		elif _damage_gate:
+			_run_damage_gate()
 		elif _travel_gate:
 			_run_travel_gate()
 		elif _far_gate:
@@ -166,6 +172,12 @@ func _ready() -> void:
 			_run_drive_gate()
 		else:
 			_run_gate()
+
+
+## A round or a blast at a building's bricks (GunController.on_structure_hit):
+## the planet's buildings take it (11.11 D1).
+func _structure_hit(point: Vector3, _dir: Vector3, shot: Dictionary) -> void:
+	buildings.damage(point, shot)
 
 
 ## The pawn, its controller, camera, gun and arms, standing at `feet`, looking
@@ -202,6 +214,7 @@ func _spawn_player(feet: Vector3, facing: Vector3) -> void:
 	view.hold(gi)
 	pawn.gun = gun
 	gun.exclude = [pawn.body.get_rid()] as Array[RID]
+	gun.on_structure_hit = _structure_hit
 	_face(facing)
 	_set_on_foot(true)
 	# The AI it fights: the town's region (11.8 N2), unless a gate sets up its own.
@@ -350,7 +363,7 @@ func _process(_delta: float) -> void:
 	# walker's own gate, the pawn stands on it.
 	if walker.frozen and pawn == null and trees.prebaked and _ground_hit(walker.global_position) != Vector3.INF:
 		walker.frozen = false
-		if not _gate or _pawn_gate or _mech_gate or _tank_gate or _soldier_gate or _squad_gate or _travel_gate or _far_gate or _drive_gate or _trees_gate or _bricks_gate:
+		if not _gate or _pawn_gate or _mech_gate or _tank_gate or _soldier_gate or _squad_gate or _travel_gate or _far_gate or _drive_gate or _trees_gate or _bricks_gate or _damage_gate:
 			_spawn_player(_ground_hit(walker.global_position), -walker.global_transform.basis.z)
 	if not on_foot:
 		walker.flying = pawn != null or walker.flying
@@ -980,6 +993,9 @@ func setup_ai(dir: Vector3) -> void:
 	# The trees' trunks too: walked round, and cover; one knocked down goes (11.10).
 	net.tree_source = trees.trees_near
 	trees.tree_knocked.connect(net.remove_tree)
+	# What breaks the buildings' bricks (11.11 D1): a soldier's rounds, a squad's
+	# breaching charge; the maps forget where bricks went.
+	buildings.site_damaged.connect(func(_i: int, box: AABB) -> void: net.invalidate_box(box))
 	var at := planet.global_transform * data.surface_point(dir)
 	net.keep_around([at], AI_KEEP_M, 99)
 	# From here on regions' grids are built on worker threads, off the frame.
@@ -994,6 +1010,8 @@ func setup_ai(dir: Vector3) -> void:
 	ai.sched.set_base_budget_ms(2.5)
 	ai.world3d = get_world_3d()
 	ai.rng.seed = 0x9A7E7
+	ai.on_structure_hit = _structure_hit
+	ai.on_breach = func(p: Vector3, r: float) -> void: buildings.damage(p, {"blast": true, "radius": r, "hp": 0})
 	print("[planet] AI nav net over the town: %d region(s) in %.0f ms (%.0f ms the one there), %d building(s)" % [
 			net.regions.size(), (Time.get_ticks_usec() - t0) / 1000.0, r.made_ms, sites.size()])
 
@@ -1671,13 +1689,14 @@ func _run_bricks_gate() -> void:
 	var dd := site.fz * stud
 	_check("its shell is gone (only its shadow drawn, not solid)", site.shell == null
 			or (site.shell.cast_shadow == GeometryInstance3D.SHADOW_CASTING_SETTING_SHADOWS_ONLY and site.body.collision_layer == 0))
-	# A ray at a wall: bricks, not the shell.
+	# A ray at the building: bricks, not the shell. Through the front door, so
+	# it meets the staircase in the middle (or the back wall).
 	var space := get_world_3d().direct_space_state
 	var mid := bxf * Vector3(w * 0.5, 1.2, -3.0)
-	var into := bxf * Vector3(w * 0.5, 1.2, dd * 0.5)
+	var into := bxf * Vector3(w * 0.5, 1.2, dd * 0.9)
 	var hit := space.intersect_ray(PhysicsRayQueryParameters3D.create(mid, into, Layers.STRUCTURE))
-	_check("a ray at a wall meets its bricks", not hit.is_empty() and (hit.collider as Node).name == "BrickBody",
-			str(hit.get("collider", "nothing")))
+	_check("a ray at a wall meets its bricks", not hit.is_empty() and site.collision != null
+			and site.collision.owns(hit.rid), str(hit.get("rid", "nothing")))
 	# The AI: its world has the bricks, and the nav net walks in.
 	# Just inside the brick the ray met.
 	var wall_pt: Vector3 = (hit.position as Vector3) + (into - mid).normalized() * 0.1 if not hit.is_empty() else mid
@@ -1725,4 +1744,126 @@ func _run_bricks_gate() -> void:
 	await _shot("planet_bricks_town")
 	print("[planet] frames: worst %.1f ms; over 40 ms: %s" % [_worst_ms, _hitches])
 	print("[planet] bricks gate: %d ok, %d FAIL" % [_ok, _fail])
+	get_tree().quit(0 if _fail == 0 else 1)
+
+
+# The damage gate (11.11 D1): the town in bricks, then a rifle's rounds at a wall
+# until a brick goes, and a charge at another wall. What the bricks lost is gone
+# from the collision, the drawing and the AI's world; the charge's hole is a way in.
+
+func _run_damage_gate() -> void:
+	var t0 := Time.get_ticks_msec()
+	while pawn == null and Time.get_ticks_msec() - t0 < 60000:
+		await _frames(1)
+	var town: Vector3 = town_dirs[0]
+	var p_feet := _surface(_round_dir(town, spawn_dir, 88.0))
+	pawn.place(p_feet + Gravity.up_at(p_feet) * 0.3)
+	t0 = Time.get_ticks_msec()
+	while _ground_hit(p_feet) == Vector3.INF and Time.get_ticks_msec() - t0 < 30000:
+		await _frames(1)
+	setup_ai(town)
+	var net := ai.nav_net as PlanetNavNet
+	# The nearest building, once it is bricks.
+	var bi := -1
+	t0 = Time.get_ticks_msec()
+	while Time.get_ticks_msec() - t0 < 60000:
+		await _frames(1)
+		if _over_ground(pawn.feet()) < -0.5:
+			pawn.place(p_feet + Gravity.up_at(p_feet) * 0.3)
+		var best := INF
+		bi = -1
+		for i in buildings.sites.size():
+			var st: PlanetBuildings.Site = buildings.sites[i]
+			var d := pawn.feet().distance_to(planet.global_position + st.frame.origin)
+			if not st.landmark and d < best:
+				best = d
+				bi = i
+		if bi >= 0 and buildings.sites[bi].bricked and buildings.sites[bi].band_jobs.is_empty():
+			break
+	var site: PlanetBuildings.Site = buildings.sites[bi]
+	_check("the nearest building is bricks", site.bricked)
+	_check("the player's gun and the AI's break the planet's bricks", gun.on_structure_hit.is_valid()
+			and ai.on_structure_hit.is_valid() and ai.on_breach.is_valid())
+	var bxf := planet.global_transform * site.frame
+	var stud := BrickWorld.get_stud_metres()
+	var w := site.fx * stud
+	var dd := site.fz * stud
+	var space := get_world_3d().direct_space_state
+	# Rounds: a rifle's, at the -Z wall a stud right of the door's edge, 1.2 m up.
+	# The first spot along the wall where a ray meets a brick in the wall's own
+	# plane (not a window: through one it meets the room's far side).
+	var from := Vector3.ZERO
+	var to := Vector3.ZERO
+	var hit := {}
+	var tried := []
+	for fx in [0.25, 0.2, 0.3, 0.15, 0.35, 0.1]:
+		for fy in [0.6, 1.2, 2.0]:
+			from = bxf * Vector3(w * fx, fy, -4.0)
+			to = bxf * Vector3(w * fx, fy, dd * 0.5)
+			hit = space.intersect_ray(PhysicsRayQueryParameters3D.create(from, to, Layers.STRUCTURE))
+			var lz := 99.0 if hit.is_empty() else (bxf.affine_inverse() * (hit.position as Vector3)).z
+			tried.append("%.2f/%.1f:%.2f" % [fx, fy, lz])
+			if not hit.is_empty() and lz < stud * 1.5:
+				break
+			hit = {}
+		if not hit.is_empty():
+			break
+	var dir := (to - from).normalized()
+	_check("a ray at the wall meets its bricks", not hit.is_empty() and site.collision.owns(hit.rid),
+			"" if not hit.is_empty() else " ".join(tried))
+	if hit.is_empty():
+		get_tree().quit(1)
+		return
+	var at: Vector3 = hit.position
+	var shot := StructuralDamage.for_shot(WeaponClass.builtin(&"rifle"))
+	var killed0 := buildings.bricks_killed
+	var rounds := 0
+	var band0 := 0
+	var aw := net.world_at(at)
+	var solid0 := aw.solid_at(at + dir * 0.1)
+	while rounds < 200 and buildings.bricks_killed == killed0:
+		_structure_hit(at + dir * 0.05, dir, shot)
+		rounds += 1
+	_check("a rifle's rounds wear a brick out", buildings.bricks_killed > killed0,
+			"%d brick(s) after %d round(s), %d hp a round" % [buildings.bricks_killed - killed0, rounds, int(shot.hp)])
+	var bands: Array = site.remesh.duplicate()
+	for b in bands:
+		if site.band_nodes.has(b):
+			band0 = (site.band_nodes[b] as Node).get_instance_id()
+	await _frames(20)
+	_check("the AI's world has lost it (no longer solid there)", solid0 and not aw.solid_at(at + dir * 0.1))
+	var hit2 := space.intersect_ray(PhysicsRayQueryParameters3D.create(from, to, Layers.STRUCTURE))
+	var deeper := hit2.is_empty() or (hit2.position as Vector3).distance_to(from) > at.distance_to(from) + 0.1
+	_check("and the collision (a ray goes further in)", deeper,
+			"from %.2f m to %s" % [at.distance_to(from), "through" if hit2.is_empty() else "%.2f m" % (hit2.position as Vector3).distance_to(from)])
+	var redrawn: bool = site.remesh.is_empty() and site.band_jobs.is_empty() and band0 != 0 \
+			and site.band_nodes.has(bands[0]) and (site.band_nodes[bands[0]] as Node).get_instance_id() != band0
+	_check("its band is drawn again", redrawn, "bands %s" % [bands])
+	# A charge: at the middle of the +X wall, a metre up -- no door there.
+	var c_out := bxf * Vector3(w + 3.0, 0.3, dd * 0.5)
+	var c_at := bxf * Vector3(w - stud * 0.5, 1.0, dd * 0.5)
+	var c_in := net.snap(bxf * Vector3(w - 2.5, 0.3, dd * 0.5))
+	var before := net.find_path(net.snap(c_out), c_in, 60000)
+	var k1 := buildings.bricks_killed
+	buildings.damage(c_at, {"blast": true, "radius": 1.6, "hp": 0})
+	await _frames(20)
+	_check("a charge blows bricks out of the wall", buildings.bricks_killed - k1 >= 8, "%d" % (buildings.bricks_killed - k1))
+	var after := net.find_path(net.snap(c_out), c_in, 200000)
+	var through := false
+	# A leg of the path that crosses the +X wall's plane by the hole.
+	for k in range(1, after.size()):
+		var a := bxf.affine_inverse() * after[k - 1]
+		var b := bxf.affine_inverse() * after[k]
+		if (a.x - w) * (b.x - w) <= 0.0 and absf(a.x - b.x) > 0.001:
+			var z := lerpf(a.z, b.z, (w - a.x) / (b.x - a.x))
+			if absf(z - dd * 0.5) < 2.0:
+				through = true
+	_check("and its hole is a way in: the nav net walks through it", after.size() > 2 and through,
+			"%d points (before: %d)" % [after.size(), before.size()])
+	var hole := space.intersect_ray(PhysicsRayQueryParameters3D.create(c_at + bxf.basis.x.normalized() * 2.0,
+			c_at - bxf.basis.x.normalized() * 1.0, Layers.STRUCTURE))
+	_check("and the collision has the hole", hole.is_empty())
+	await _shot("planet_damage")
+	print("[planet] damage: %d bricks killed; frames worst %.1f ms" % [buildings.bricks_killed, _worst_ms])
+	print("[planet] damage gate: %d ok, %d FAIL" % [_ok, _fail])
 	get_tree().quit(0 if _fail == 0 else 1)
