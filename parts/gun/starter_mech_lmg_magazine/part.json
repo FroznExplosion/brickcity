@@ -1,0 +1,133 @@
+{
+	"bricks": {
+		"block_frames": [
+			0,
+			0,
+			0,
+			0,
+			0,
+			0,
+			0,
+			0,
+			0,
+			0
+		],
+		"cells": [
+			501,
+			40,
+			498,
+			501,
+			40,
+			500,
+			501,
+			40,
+			502,
+			505,
+			40,
+			498,
+			505,
+			40,
+			502,
+			502,
+			43,
+			501,
+			502,
+			43,
+			499,
+			502,
+			43,
+			498,
+			501,
+			43,
+			499,
+			501,
+			43,
+			498
+		],
+		"colours": [
+			33,
+			33,
+			33,
+			33,
+			33,
+			33,
+			33,
+			33,
+			33,
+			33
+		],
+		"fixtures": [],
+		"frame_rot": [],
+		"frame_ticks": [],
+		"groups": [],
+		"interior": [
+			0,
+			0,
+			0,
+			0,
+			0,
+			0,
+			0,
+			0,
+			0,
+			0
+		],
+		"kind": "gun",
+		"materials": [
+			0,
+			0,
+			0,
+			0,
+			0,
+			0,
+			0,
+			0,
+			0,
+			0
+		],
+		"meta": {
+
+		},
+		"name": "Starter Mech LMG",
+		"part_index": [
+			0,
+			0,
+			1,
+			2,
+			3,
+			0,
+			0,
+			1,
+			2,
+			3
+		],
+		"parts": [
+			"brick_2x4_x",
+			"brick_1x4_x",
+			"brick_1x4_z",
+			"brick_1x1"
+		],
+		"placements": [],
+		"towers": [],
+		"version": 6,
+		"welds": []
+	},
+	"family": "gun",
+	"from": "Starter Mech LMG",
+	"id": "starter_mech_lmg_magazine",
+	"manufacturer": "korr",
+	"mount": {
+		"interface": "mgun.mag.wide"
+	},
+	"name": "Starter Mech LMG magazine",
+	"rev": 1,
+	"saved": 1793024770,
+	"scale": "mech",
+	"side": "any",
+	"slot": "magazine",
+	"sockets": [],
+	"source": "official",
+	"tags": [
+		"detaches"
+	]
+}

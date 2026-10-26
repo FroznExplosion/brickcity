@@ -1,0 +1,115 @@
+{
+	"bricks": {
+		"block_frames": [
+			0,
+			0,
+			0,
+			0,
+			0,
+			0,
+			0,
+			0
+		],
+		"cells": [
+			510,
+			48,
+			499,
+			510,
+			48,
+			501,
+			510,
+			51,
+			500,
+			510,
+			51,
+			499,
+			510,
+			54,
+			499,
+			510,
+			54,
+			501,
+			510,
+			55,
+			500,
+			510,
+			55,
+			499
+		],
+		"colours": [
+			13,
+			13,
+			13,
+			13,
+			13,
+			13,
+			13,
+			13
+		],
+		"fixtures": [],
+		"frame_rot": [],
+		"frame_ticks": [],
+		"groups": [],
+		"interior": [
+			0,
+			0,
+			0,
+			0,
+			0,
+			0,
+			0,
+			0
+		],
+		"kind": "gun",
+		"materials": [
+			0,
+			0,
+			0,
+			0,
+			0,
+			0,
+			0,
+			0
+		],
+		"meta": {
+
+		},
+		"name": "Starter Mech LMG",
+		"part_index": [
+			0,
+			1,
+			0,
+			1,
+			2,
+			3,
+			2,
+			3
+		],
+		"parts": [
+			"brick_2x4_x",
+			"brick_1x4_x",
+			"plate_2x4_x",
+			"plate_1x4_x"
+		],
+		"placements": [],
+		"towers": [],
+		"version": 6,
+		"welds": []
+	},
+	"family": "gun",
+	"from": "Starter Mech LMG",
+	"id": "starter_mech_lmg_stock",
+	"manufacturer": "korr",
+	"mount": {
+		"interface": "mgun.stock.tube"
+	},
+	"name": "Starter Mech LMG stock",
+	"rev": 1,
+	"saved": 1793024770,
+	"scale": "mech",
+	"side": "any",
+	"slot": "stock",
+	"sockets": [],
+	"source": "official",
+	"tags": []
+}
