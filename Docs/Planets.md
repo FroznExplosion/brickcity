@@ -1676,5 +1676,11 @@ cascades had tripled the GPU's frame). And bricks are DRAWN within 80 m only (di
 past it the shell's look (its mesh, no shadow) to the near tier's edge -- the building stays bricks
 to collision and the AI out to 160 m. The town's brick steps stay at 6-8 ms worst.
 
-Not yet: stairs (only the ground floor is reached), damage and destruction, furniture,
-materialising for a fight far from the camera.
+**Stairs (2026-10-26).** Every planet tower carries the city's staircase (`CityScene.
+_add_staircase`'s fixture): on the lattice point inside the walls, a step a course, its shaft
+kept clear while the tower is laid (`TowerRecipe` keep-out), its flight laid into the same chunk
+after (`Fixture.build_into`), all before the shape's template is saved -- so it costs nothing
+again. `--gate=bricks` 9/9: the nav net walks from outside, through the front door and up the
+staircase to a first-floor spot by the stairwell (39 points). Shapes at load 283 ms (was 246).
+
+Not yet: damage and destruction, furniture, materialising for a fight far from the camera.
