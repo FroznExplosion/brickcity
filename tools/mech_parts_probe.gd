@@ -12,6 +12,9 @@ extends SceneTree
 ##              empty; a fixed part that does not fit makes no mech; John (a figure): his
 ##              body fixed, his hat rolled
 ##   assemble   every part on its host's socket, the hand on the arm's
+##   starter    the shipped parts: a whole normal mech rolls from them, its eye 4.2 m up (a
+##              second-storey window); the shipped mech gun in its fist, grip in the hand,
+##              muzzle ahead along the aim
 ##   dress      a mech's boxes give way to its parts: legs on the legs, the gun arm posed
 ##              forward, the chassis's class its layers, the eye on long legs higher; a
 ##              build with problems leaves the boxes
@@ -41,6 +44,7 @@ func _run() -> void:
 	_roll()
 	_designs()
 	await _assemble_and_dress()
+	_starter()
 	_wipe(DIR)
 	print("mech parts probe: %d passed, %d failed" % [_pass, _fail])
 	quit(1 if _fail > 0 else 0)
@@ -280,6 +284,36 @@ func _assemble_and_dress() -> void:
 		"root": {"fixed": "korr_chassis_l"}}}), 3, cat)
 	MechAssembler.dress(m2, light, true)
 	_ok("a light chassis: its hatch at the back", m2.layers.hatch_side == "back")
+
+
+func _starter() -> void:
+	print("starter")
+	var cat := PartCatalog.new()
+	cat.load_dir(PartCatalog.OFFICIAL_DIR, "official")
+	var b := PartBuilder.generate("mech", null, 1, cat, {"class": "normal"})
+	_ok("a whole normal mech from the shipped parts", (b.problems as Array).is_empty() and b.root != null
+			and b.root.manufacturer == "korr", str(b.problems))
+	var m := Mech.spawn(root, Vector3(0, 0, 200), 0.0, 0)
+	MechAssembler.dress(m, b, true)
+	_ok("its eye 4.2 m up: a second-storey window", is_equal_approx(m.cockpit_y, 4.2), str(m.cockpit_y))
+	var lib := GunPlaceholderParts.build_library()
+	var res := MechAssembler.roll_gun(lib, 1, cat)
+	_ok("the shipped mech gun rolls", res != null and res.gun_name.ends_with("Starter Mech LMG"),
+			res.gun_name if res else "null")
+	var gi := MechAssembler.arm_gun(m, res)
+	_ok("in its hand, seen, the one it fires", gi != null and gi.visible and m.gun.gun == gi)
+	if gi == null:
+		return
+	var hand := m.arm.find_child("Joint_arm_R_hand", true, false) as Node3D
+	var part: Node3D = null
+	for c in hand.get_children():
+		if c.has_meta(&"part_id"):
+			part = c
+	var fist := MechAssembler._chain(part, m.arm) * PartThumbnail.bounds(part).get_center()
+	var grip := MechAssembler._chain(gi.find_child("socket_grip", true, false), m.arm).origin
+	_ok("its grip in the fist", grip.distance_to(fist) < 0.01, "%s vs %s" % [grip, fist])
+	_ok("the muzzle ahead of the fist, along the aim", m.muzzle.position.z < fist.z - 2.0
+			and absf(m.muzzle.position.x - fist.x) < 0.5, "%s / fist %s" % [m.muzzle.position, fist])
 
 
 func _in_part(n: Node) -> bool:

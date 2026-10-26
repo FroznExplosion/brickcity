@@ -227,8 +227,9 @@ static func roll_gun(lib: GunPartLibrary, gen_seed: int, cat: PartCatalog = null
 	return AssetGuns.generate(lib, ids[posmod(gen_seed, ids.size())], gen_seed, 1, 3, cat, "mech")
 
 
-## Put mech gun `res` in mech `m`'s right hand, seen, in place of what it held: at the
-## wrist, pointing along the arm's aim, the arm's muzzle moved to the gun's.
+## Put mech gun `res` in mech `m`'s right hand, seen, in place of what it held: its grip in
+## the fist (the middle of the hand part), pointing along the arm's aim, the arm's muzzle moved
+## to the gun's.
 static func arm_gun(m: Mech, res: GunGenerator.Result) -> GunInstance:
 	if res == null or m.gun == null:
 		return null
@@ -236,8 +237,21 @@ static func arm_gun(m: Mech, res: GunGenerator.Result) -> GunInstance:
 	var old: Node = m.gun.gun
 	var pose := m.arm.get_node_or_null(^"Pose") as Node3D
 	var hand := m.arm.find_child("Joint_arm_R_hand", true, false) as Node3D
-	gi.position = _chain(hand, m.arm).origin if pose != null and hand != null else Vector3.FORWARD * 1.5
+	var fist := Vector3.FORWARD * 1.5
+	if pose != null and hand != null:
+		fist = _chain(hand, m.arm).origin
+		var part: Node3D = null
+		for c in hand.get_children():
+			if c.has_meta(&"part_id"):
+				part = c
+		if part != null:
+			var box := PartThumbnail.bounds(part)
+			if box.size != Vector3.ZERO:
+				fist = _chain(part, m.arm) * box.get_center()
 	m.arm.add_child(gi)
+	# The grip in the fist: the gun moved by where its grip is on it.
+	var grip := gi.find_child("socket_grip", true, false) as Node3D
+	gi.position = fist - (_chain(grip, gi).origin if grip != null else Vector3.ZERO)
 	m.gun.equip(gi)
 	gi.visible = true
 	if old != null and old != gi:

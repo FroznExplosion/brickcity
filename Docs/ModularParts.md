@@ -805,6 +805,22 @@ netcode only has to carry dictionaries and byte chunks:
   screen. From a mech it is not taken.
 - Probed in `pods_probe` (loot: 6 checks).
 
+### The starter mech gun, as built
+
+- **The first official mech-scale gun**: a Korr LMG -- body, barrel, grip, box magazine, stock --
+  in `res://parts/gun/starter_mech_lmg_*` (scale `mech`, the `mgun.*` joints) with pictures, its
+  build `res://guns/starter_mech_lmg.json`, made by `tools/make_starter_mech_gun.gd`. 26 nano
+  studs, 4.6 m: a little longer than the arm from shoulder to fist, as a titan's gun is. Stats
+  and modifiers roll from the seed as any gun's (an LMG's class).
+- **In the hand**: `MechAssembler.arm_gun` now puts the gun's grip in the fist (the middle of the
+  hand part, not the wrist), pointing along the aim, the muzzle 3.85 m ahead of the fist. Every
+  mech outside a scripted pass carries it -- the player's and the roster's -- in place of the
+  hidden placeholder LMG.
+- The workshop's sizes gain an LMG (1100 mm real); a mech gun draws no held gun's size marks.
+- Probed in `mech_parts_probe` (starter: 6 -- the shipped mech and gun, the eye at 4.2 m, the
+  grip in the fist, the muzzle ahead); looked at in `mech_look` (from the cockpit the window is
+  clear ahead, the gun low on the right).
+
 ## 12. Decided
 
 Decided 2026-10-23: every part saves on its own (section 7); joined pairs and fixed characters

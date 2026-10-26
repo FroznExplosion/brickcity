@@ -6296,8 +6296,8 @@ func _spawn_enemy_mech(feet: Vector3, yaw: float, recipe := "medium_gunner", des
 	gi.visible = false
 	m.arm.add_child(gi)
 	m.gun.equip(gi)
-	if design != null:
-		# A workshop mech carries a workshop mech gun, if there is one.
+	if not _scripted:
+		# A mech gun in its hand, seen: the shipped one, or one made in the workshop.
 		MechAssembler.arm_gun(m, MechAssembler.roll_gun(_gun_library, hash(feet)))
 	m.gun.rng = _combat_rng
 	m.gun.on_structure_hit = _gun.on_structure_hit
