@@ -602,6 +602,16 @@ var band_breaks := 0
 ## off a furnished building draws its own furniture from here.
 var _furniture := {}
 static var OVERLAP_FRAMES := 2
+## A hold lasts while a child it is for is still undrawn -- a big one is baked
+## and meshed on a worker, and in a busy tick that is many frames -- up to this
+## many. It was OVERLAP_FRAMES whatever: a toppled tower's top landed, broke in
+## two, the parent stopped drawing the half that left, and that 2,145-brick half
+## was drawn by nothing until its mesh came; only its window glass was left in
+## the air (user, 2026-10-26: "the entire building glassed and disappears for a
+## second"; big_city --landing). The child is drawn where the parent was for
+## those frames, which on the ground is where it is.
+const HOLD_MAX_FRAMES := 90
+var holds_extended := 0
 var _ghosts: Array = []   ## [node, free on this process frame]
 var _band_holes: Array = []  ## toppled pieces with bands still to build
 var _mesh_jobs: Array = []   ## [island, task id, [mesh], arrays]
@@ -2794,13 +2804,14 @@ func rebuild_mesh(isl: BrickIsland, force_full: bool = false, allow_sync: bool =
 			return
 		if _patch_bands(isl):
 			return
-	# Something a patch cannot carry: drop the bands and build the one mesh an
-	# island uses.
+	# Something a patch cannot carry: build the one mesh an island uses. The
+	# bands go on drawing until it is up (_apply_mesh): freed here, a toppled
+	# tower that landed and broke was drawn by nothing while its new mesh was
+	# baked and uploaded on a worker -- only its window glass was left (user,
+	# 2026-10-26: "the entire building glassed and disappears for a second";
+	# big_city --landing). Stale for those ticks, never empty.
 	if not isl.bands.is_empty():
-		for node in isl.bands:
-			if is_instance_valid(node):
-				_retirer.retire((node as MeshInstance3D).mesh)
-				(node as MeshInstance3D).queue_free()
+		isl.retiring_bands.append_array(isl.bands)
 		isl.bands.clear()
 		isl.array_mesh = null
 		force_full = true
@@ -2980,6 +2991,7 @@ func _apply_mesh(isl: BrickIsland, mesh: ArrayMesh, arrays: Array, coarse := fal
 	isl.radius = _body_radius(isl)
 	# The renderer may still be drawing the mesh this replaces.
 	_retirer.retire(isl.mesh.mesh)
+	_drop_retiring_bands(isl)
 	isl.array_mesh = mesh if mesh != null and mesh.get_surface_count() > 0 else null
 	isl.coarse_drawn = coarse
 	isl.coarse_arrays = arrays if coarse and isl.array_mesh != null else []
@@ -3879,6 +3891,8 @@ func _shed(isl: BrickIsland, groups: Array) -> int:
 		_shed_cause = isl.shed_cause
 		var came := spawn(isl.chunk, moved, linear, angular, child, isl.owner)
 		_shedding = false
+		if came != null and is_blind(came):
+			isl.waiting_children.append(came)
 		if came != null:
 			bodies += 1
 		if came == null:
@@ -3893,6 +3907,7 @@ func _shed(isl: BrickIsland, groups: Array) -> int:
 		# OVERLAP_FRAMES at a time and no longer.
 		if isl.hold_until <= Engine.get_process_frames():
 			isl.hold_until = Engine.get_process_frames() + OVERLAP_FRAMES
+			isl.hold_started = Engine.get_process_frames()
 		_touched(isl)
 		# Whether or not spawn() kept the piece, those blocks are out of this
 		# body. A discarded one is deleted, not left behind as ghost collision.
@@ -4470,7 +4485,8 @@ func is_blind(isl: BrickIsland) -> bool:
 	if not isl.is_valid() or isl.mesh == null:
 		return false
 	var m: Mesh = isl.mesh.mesh
-	return (m == null or m.get_surface_count() == 0) and not _any_band(isl)
+	return (m == null or m.get_surface_count() == 0) and not _any_band(isl) \
+			and not _retiring_band(isl)
 
 
 func _count_meshless() -> void:
@@ -4517,6 +4533,23 @@ func _any_band(isl: BrickIsland) -> bool:
 		if is_instance_valid(node):
 			return true
 	return false
+
+
+## Bands still drawing for a piece whose one mesh is not up yet (rebuild_mesh)?
+func _retiring_band(isl: BrickIsland) -> bool:
+	for node in isl.retiring_bands:
+		if is_instance_valid(node):
+			return true
+	return false
+
+
+## The new mesh is up: the bands it replaces go.
+func _drop_retiring_bands(isl: BrickIsland) -> void:
+	for node in isl.retiring_bands:
+		if is_instance_valid(node):
+			_retirer.retire((node as MeshInstance3D).mesh)
+			(node as MeshInstance3D).queue_free()
+	isl.retiring_bands.clear()
 
 
 ## Build the bands a toppled building never got to, one a tick, from the bake
@@ -4640,10 +4673,25 @@ func _process(_delta: float) -> void:
 		if not h.is_valid() or h.mesh == null:
 			_held.remove_at(hi)
 		elif now >= h.hold_until:
-			_held.remove_at(hi)
-			rebuild_mesh(h)
+			if _still_waiting(h) and now - h.hold_started < HOLD_MAX_FRAMES:
+				h.hold_until = now + 1
+				holds_extended += 1
+			else:
+				h.waiting_children.clear()
+				_held.remove_at(hi)
+				rebuild_mesh(h)
 		hi -= 1
 
+
+
+## Is a child this piece shed still drawn by nothing? Those that are drawn, or
+## gone, are dropped from the list.
+func _still_waiting(isl: BrickIsland) -> bool:
+	for i in range(isl.waiting_children.size() - 1, -1, -1):
+		var c: BrickIsland = isl.waiting_children[i]
+		if not c.is_valid() or not is_blind(c):
+			isl.waiting_children.remove_at(i)
+	return not isl.waiting_children.is_empty()
 
 
 ## How long a piece has to stay slow before it settles: longer where the
@@ -5650,6 +5698,8 @@ class FieldTile:
 ## pieces to sleep one a tick, and merging on every one was 378 merges for 77
 ## tiles. Until then, and while its worker runs, its stand-ins draw themselves.
 const FIELD_QUIET_TICKS := 30
+## Off (--no-field), every stand-in draws itself and none is culled: the A/B.
+var field_enabled := true
 const FIELD_JOBS := 2
 ## A stand-in left as its BRICKS -- the cap puts pieces to sleep near as well as
 ## far, and 95 of 132 after a big collapse were -- has no arrays to merge from.
@@ -5686,7 +5736,7 @@ func _field_key_of(p: Vector3) -> Vector2i:
 
 
 func _field_add(d: Dormant) -> void:
-	if d.in_field or d.stand_in == null or not is_instance_valid(d.stand_in):
+	if not field_enabled or d.in_field or d.stand_in == null or not is_instance_valid(d.stand_in):
 		return
 	if _field_root == null:
 		_field_root = Node3D.new()

@@ -1047,6 +1047,7 @@ func _ready() -> void:
 	_bigbreak_mode = "--bigbreak" in args
 	_wide_mode = "--widecheck" in args
 	_rubble_mode = "--rubble" in args
+	_landing_mode = "--landing" in args
 	# The A/B for staggered floor seams: every floor laid as before.
 	TowerRecipe.stagger = not ("--no-stagger" in args)
 	_storeys_mode = "--storeys" in args
@@ -1310,6 +1311,8 @@ func _ready() -> void:
 		_run_wide_pass()
 	elif _rubble_mode:
 		_run_rubble_pass()
+	elif _landing_mode:
+		_run_landing_pass()
 	elif _storeys_mode:
 		_run_storeys_pass()
 	elif _wreck_mode:
@@ -7978,6 +7981,8 @@ var _bigbreak_mode := false
 var _wide_mode := false
 ## -- --rubble --big: what wreckage at rest costs (_run_rubble_pass)
 var _rubble_mode := false
+## -- --landing [--big]: a toppled tower landing, watched for blinks (_run_landing_pass)
+var _landing_mode := false
 var _storeys_mode := false   ## -- --storeys: the storey-units gate (Docs/Space.md 5.3a)
 var _whole_mode := false     ## -- --whole: every building laid whole, as before storey units
 
@@ -8582,7 +8587,9 @@ func _bay_check(b: BuildingRegistry.Building) -> void:
 ## frame, the physics frame and the renderer's own CPU and GPU time, means.
 ##     godot --path . scenes/big_city.tscn -- --rubble --big
 func _run_rubble_pass() -> void:
-	print("[rubble] wreckage at rest: what it costs")
+	islands.field_enabled = not ("--no-field" in OS.get_cmdline_user_args())
+	print("[rubble] wreckage at rest: what it costs (rubble field %s)" % (
+			"on" if islands.field_enabled else "off"))
 	respawn_buildings = false
 	camera.position = Vector3(-52.0, 34.0, -52.0)
 	camera.rotation = Vector3(-0.42, -2.36, 0.0)
@@ -8713,6 +8720,118 @@ func _rubble_window(vp: RID) -> Array:
 	for i in sum.size():
 		sum[i] /= float(_RUBBLE_WINDOW)
 	return sum
+
+
+## Reported (user, 2026-10-26): a building comes down fine, but as it hits the
+## ground "all the other rooms and floors become active" and "the entire
+## building glassed and disappears for a second". A tower's ground storey shot
+## out on one side, from 45 m, so it tips and lands; then 600 ticks watched, every
+## tick: is its shell drawn (the far drawing, with painted windows), is its brick
+## node drawn, how many of the bricks of its pieces are drawn (not blind), how
+## many are drawn by a stand-in or the rubble field, and what material the
+## biggest piece is drawn with. A tick where most of its bricks go undrawn, or
+## the shell comes back while it has pieces down, is printed and pictured.
+func _run_landing_pass() -> void:
+	print("[landing] a tower comes down: is it drawn all the way to the ground?")
+	respawn_buildings = false
+	var b: BuildingRegistry.Building = null
+	for c in registry.buildings:
+		if c.is_build() or _wide_ids.has(c.id):
+			continue
+		if c.recipe.courses >= 36 and c.recipe.courses <= 90:
+			b = c
+			break
+	if b == null:
+		print("[landing] no tower")
+		get_tree().quit(1)
+		return
+	var fx: float = b.recipe.footprint_x * STUD
+	var fz: float = b.recipe.footprint_z * STUD
+	camera.position = b.xform * Vector3(fx * 0.5 + 35.0, 25.0, -30.0)
+	camera.look_at(b.xform * Vector3(fx * 0.5, 10.0, fz * 0.5), Vector3.UP)
+	_promote(b.id)
+	await _frames(60)
+	var known := {}
+	for isl in islands.islands:
+		known[isl] = true
+	# The -x half of the ground storey: it tips that way.
+	var px := 0.3
+	while px < fx * 0.55:
+		var pz := 0.3
+		while pz < fz:
+			for y in [1.0, 2.4]:
+				_blast(b.xform * Vector3(px, y, pz), 1.6)
+			pz += 2.0
+		px += 2.0
+	var bricks0 := world.get_alive_block_count(b.chunk) if b.is_materialised() else 0
+	var worst_blind := 0.0
+	var worst_at := -1
+	var shell_back := 0
+	var shots := 0
+	var lines: Array[String] = []
+	for t in range(1, 601):
+		await get_tree().physics_frame
+		var total := 0
+		var blind := 0
+		var stood := 0
+		var biggest: BrickIsland = null
+		var most := 0
+		# A child shed undrawn is drawn by its parent's held mesh meanwhile
+		# (IslandManager.HOLD_MAX_FRAMES): not blind to the eye.
+		var covered := {}
+		var frame := Engine.get_process_frames()
+		for isl in islands.islands:
+			if isl.is_valid() and isl.hold_until > frame:
+				for c in isl.waiting_children:
+					covered[c] = true
+		for isl in islands.islands:
+			if known.has(isl) or not isl.is_valid() or isl.owner != b.id:
+				continue
+			var n := world.get_alive_block_count(isl.chunk)
+			total += n
+			if islands.is_blind(isl) and not covered.has(isl):
+				blind += n
+			if n > most:
+				most = n
+				biggest = isl
+		for dm in islands.dormant:
+			if dm.owner == b.id:
+				stood += dm.record.block_count()
+		var shell = _shells.get(b.id)
+		var shell_shown: bool = shell != null and is_instance_valid(shell) and (shell as Node3D).is_visible_in_tree()
+		var bn = _brick_nodes.get(b.id)
+		var bricks_shown: bool = bn != null and is_instance_valid(bn) and (bn as Node3D).is_visible_in_tree()
+		var share := float(blind) / maxf(total, 1.0)
+		if total > 200 and share > worst_blind:
+			worst_blind = share
+			worst_at = t
+		if total > 200 and shell_shown:
+			shell_back += 1
+		var mat := ""
+		if biggest != null and biggest.mesh != null:
+			var m: Material = biggest.mesh.material_override
+			mat = m.resource_name if m != null and m.resource_name != "" else str(m)
+		var odd := total > 200 and (share > 0.3 or shell_shown)
+		if t <= 10 or t % 30 == 0 or odd:
+			lines.append("%d: pieces %d bricks (%d blind), asleep %d; standing %d; shell %s, brick node %s; biggest %d drawn with %s%s" % [
+					t, total, blind, stood,
+					world.get_alive_block_count(b.chunk) if b.is_materialised() else 0,
+					shell_shown, bricks_shown, most, mat, "  <--" if odd else ""])
+		if odd and shots < 4 and t % 5 == 0:
+			shots += 1
+			await _save("landing_%03d" % t)
+	print("[landing] building %d, %d bricks, shot from %.0f m:" % [b.id, bricks0,
+			camera.global_position.distance_to(b.xform.origin)])
+	for line in lines:
+		print("[landing]   " + line)
+	_gate_ok("building %d: its pieces drawn as they come down and land (at most 30%% undrawn)" % b.id,
+			worst_blind <= 0.3, "%.0f%% of its pieces' bricks undrawn at tick %d" % [
+				worst_blind * 100.0, worst_at])
+	_gate_ok("building %d: and its shell does not come back while it lies there" % b.id,
+			shell_back == 0, "%d tick(s) shell drawn" % shell_back)
+	print("[landing] holds extended for children still undrawn: %d frame(s)" % islands.holds_extended)
+	print("[landing] %d ok, %d FAIL" % [_gate_pass, _gate_fail])
+	get_tree().quit(1 if _gate_fail > 0 else 0)
 
 
 ## Stairs go with their floors.
