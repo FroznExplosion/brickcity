@@ -1701,6 +1701,27 @@ func _run_bricks_gate() -> void:
 	_check("the nav net walks in, to the room behind the door", path.size() > 2 and li.x > stud and li.x < w - stud
 			and li.z > 2.0 * stud and li.z < dd - stud and absf(li.y) < 1.0, "%d points, ends at %s" % [path.size(), li])
 	_check("through the door", by_door)
+	# Up the stairs: a spot on the first floor beside the stairwell, and the nav
+	# net's way to it from outside.
+	var plate := BrickWorld.get_plate_metres()
+	var floor1 := float(TowerRecipe.SLAB_PLATES + TowerRecipe.STOREY_PLATES) * plate
+	var sx := TowerRecipe.stair_line(site.fx)
+	var sz := TowerRecipe.stair_line(site.fz)
+	var up_pt := Vector3.INF
+	var shaft := StaircaseRecipe.DIAMETER
+	for off in [Vector2i(-2, shaft / 2), Vector2i(shaft + 1, shaft / 2), Vector2i(shaft / 2, -2), Vector2i(shaft / 2, shaft + 1)]:
+		var q := net.snap(bxf * Vector3((sx + off.x + 0.5) * stud, floor1 + 0.3, (sz + off.y + 0.5) * stud))
+		var lq := bxf.affine_inverse() * q
+		if net.can_stand(q) and absf(lq.y - floor1) < 0.5:
+			up_pt = q
+			break
+	var up_path := net.find_path(pawn.feet(), up_pt, 200000) if up_pt != Vector3.INF else PackedVector3Array()
+	var lu := bxf.affine_inverse() * (up_path[up_path.size() - 1] if up_path.size() > 0 else Vector3.INF)
+	var climbed := 0.0
+	for p in up_path:
+		climbed = maxf(climbed, (bxf.affine_inverse() * p).y)
+	_check("a staircase: the nav net walks up to the first floor", up_pt != Vector3.INF and up_path.size() > 2
+			and absf(lu.y - floor1) < 0.5, "%d points, up to %.2f m (the floor %.2f m)" % [up_path.size(), climbed, floor1])
 	await _shot("planet_bricks_town")
 	print("[planet] frames: worst %.1f ms; over 40 ms: %s" % [_worst_ms, _hitches])
 	print("[planet] bricks gate: %d ok, %d FAIL" % [_ok, _fail])

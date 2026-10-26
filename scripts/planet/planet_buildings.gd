@@ -94,6 +94,7 @@ var brick_worst_us := 0
 ## What that worst step was doing: "start", "band", "finish" or "template".
 var brick_worst_what := ""
 var _stud_arrays: Array = []
+var _stair_parts := PackedInt32Array()
 ## A site's bricks came in (true) or went (false): the AI's world follows.
 signal site_bricks(index: int, on: bool)
 
@@ -109,6 +110,7 @@ func setup(p: PlanetBody) -> void:
 	# The studs' mesh and material are made on first use: ~15 ms, in the load
 	# rather than in the first band that has open studs.
 	_stud_arrays = PieceMeshes.stud().surface_get_arrays(0)
+	_stair_parts = StaircaseRecipe.flight_parts(_palette)
 
 
 ## A town of towers on a grid round `dir`, in the tangent frame there, on the
@@ -387,7 +389,12 @@ func _template(fx: int, fz: int, courses: int) -> int:
 	if _templates.has(key):
 		return _templates[key]
 	var c := bricks.create_chunk(Vector3i.ZERO, TowerRecipe.chunk_dims(fx, fz, courses))
-	TowerRecipe.build(bricks, c, _palette, fx, fz, courses, [])
+	# The city's staircase up the middle (CityScene._add_staircase): its shaft
+	# kept clear while the tower is laid, its flight laid after, in the same chunk.
+	var stair := _staircase(fx, fz, courses)
+	TowerRecipe.build(bricks, c, _palette, fx, fz, courses, [stair.footprint()] if stair != null else [])
+	if stair != null:
+		stair.build_into(bricks, c, _stair_parts)
 	_cut_door(c, fx)
 	_templates[key] = bricks.save_template(c)
 	bricks.release_chunk(c)
@@ -436,6 +443,20 @@ func _start_bricks(s: Site) -> void:
 	add_child(s.brick_node)
 	s.band_next = 0
 	bricks.bake_chunk_async(s.chunk)
+
+
+## The staircase a shape gets, as the city's buildings get theirs: on the
+## lattice point inside the walls, every storey's steps; null with no room.
+func _staircase(fx: int, fz: int, courses: int) -> Fixture:
+	var sx := TowerRecipe.stair_line(fx)
+	var sz := TowerRecipe.stair_line(fz)
+	if sx < 0 or sz < 0:
+		return null
+	var f := Fixture.new()
+	f.kind = "staircase"
+	f.params = {"steps": StaircaseRecipe.steps_for_courses(courses), "colour": 11}
+	f.cell = Vector3i(sx, TowerRecipe.SLAB_PLATES, sz)
+	return f
 
 
 ## A front door in the middle of the ground storey's -Z wall: the bricks in a
