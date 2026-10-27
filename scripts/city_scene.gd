@@ -8597,12 +8597,12 @@ func _run_rubble_pass() -> void:
 	for b in registry.buildings:
 		if b.is_build() or b.recipe.courses < 44:
 			continue
-		var w: float = b.recipe.footprint_x * STUD
+		var bw: float = b.recipe.footprint_x * STUD
 		var d: float = b.recipe.footprint_z * STUD
 		for course in range(0, 8):
 			var y := (1 + course * TowerRecipe.PLATES_PER_COURSE) * PLATE
 			var px := 0.3
-			while px < w * 0.55:
+			while px < bw * 0.55:
 				var pz := 0.3
 				while pz < d:
 					_blast(b.xform.origin + Vector3(px, y, pz), 1.5)
