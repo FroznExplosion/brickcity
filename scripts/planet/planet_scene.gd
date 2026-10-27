@@ -1863,6 +1863,86 @@ func _run_damage_gate() -> void:
 	var hole := space.intersect_ray(PhysicsRayQueryParameters3D.create(c_at + bxf.basis.x.normalized() * 2.0,
 			c_at - bxf.basis.x.normalized() * 1.0, Layers.STRUCTURE))
 	_check("and the collision has the hole", hole.is_empty())
+	# D2: what a hit leaves joined to nothing falls. A ring cut round a panel of
+	# the ground storey's -X wall -- two studs each side, the top course under
+	# the slab, and the base slab under it -- leaves the panel held by nothing:
+	# it must drop, as one piece, to the ground and lie there. Cut by cell, not
+	# by blasts: a 2x4 brick is 1.4 m long and a blast's ring left gaps
+	# (26 blasts, 30 bricks, the panel still held). Fifteen studs along the
+	# wall, off the 30-stud lines where an interior wall would hold it inside.
+	var pieces0 := buildings.pieces.pieces.size()
+	var zc_c := mini(15, site.fz / 2)
+	var z0 := zc_c - 6
+	var z1 := zc_c + 6
+	var top := TowerRecipe.SLAB_PLATES + TowerRecipe.COURSES_PER_FLOOR * TowerRecipe.PLATES_PER_COURSE
+	var ring_ids := {}
+	var inside_cells: Array[Vector3i] = []
+	for zc in range(z0, z1):
+		for yc in range(0, top):
+			for xc in TowerRecipe.WALL_THICK:
+				var cell := Vector3i(xc, yc, zc)
+				if not buildings.bricks.is_solid(site.chunk, cell):
+					continue
+				var edge := zc < z0 + 2 or zc >= z1 - 2 or yc < TowerRecipe.SLAB_PLATES \
+						or yc >= top - TowerRecipe.PLATES_PER_COURSE
+				if edge:
+					ring_ids[buildings.bricks.block_at(site.chunk, cell)] = true
+				else:
+					inside_cells.append(cell)
+	var ring := PackedInt32Array(ring_ids.keys())
+	var inside := {}
+	for cell in inside_cells:
+		var bid := buildings.bricks.block_at(site.chunk, cell)
+		if not ring_ids.has(bid):
+			inside[bid] = true
+	buildings.bricks.kill_blocks(site.chunk, ring)
+	buildings.after_kill(bi, ring, bxf * AABB(Vector3(-1.0, -0.5, z0 * stud - 1.0),
+			Vector3(3.0, top * BrickWorld.get_plate_metres() + 1.0, (z1 - z0) * stud + 2.0)))
+	# Everything inside has left the building (its cells no longer the site's)
+	# and every piece it went as has come to rest.
+	var left := 0
+	var fresh: Array = []
+	t0 = Time.get_ticks_msec()
+	while Time.get_ticks_msec() - t0 < 10000:
+		await _frames(1)
+		left = 0
+		for cell in inside_cells:
+			if not buildings.bricks.is_solid(site.chunk, cell):
+				left += 1
+		fresh = buildings.pieces.pieces.slice(pieces0)
+		var all_still := not fresh.is_empty()
+		for p in fresh:
+			all_still = all_still and (p as PlanetPieces.Piece).settled
+		if left == inside_cells.size() and all_still:
+			break
+	var fell := 0
+	for p in fresh:
+		fell += (p as PlanetPieces.Piece).bricks
+	print("[planet] ring: %d bricks cut round studs %d-%d of the -X wall; %d inside, %d piece(s) of %d" % [
+			ring.size(), z0, z1 - 1, inside.size(), fresh.size(), fell])
+	_check("all a ring cut round a piece of wall held comes loose and falls", not inside.is_empty()
+			and left == inside_cells.size() and not fresh.is_empty(),
+			"%d of %d cells left, %d piece(s), %d bricks, %d solve(s), the worst %.1f ms" % [left,
+			inside_cells.size(), fresh.size(), fell, buildings.solves, buildings.solve_worst_ms])
+	var landed := 0
+	var where := []
+	for q in fresh:
+		var p: PlanetPieces.Piece = q
+		var up_here := Gravity.up_at(p.body.global_position)
+		var under := space.intersect_ray(PhysicsRayQueryParameters3D.create(
+				p.body.global_position, p.body.global_position - up_here * 4.0,
+				Layers.WORLD | Layers.STRUCTURE, [p.body.get_rid()]))
+		# The terrain is no CollisionObject3D (a VoxelLodTerrain's): ground is
+		# whatever the ray met that is not the building's own collision.
+		var ground: bool = not under.is_empty() and not site.collision.owns(under.rid)
+		if p.settled and ground:
+			landed += 1
+		else:
+			where.append("%d bricks at %s, settled %s, on %s" % [p.bricks,
+					str((bxf.affine_inverse() * p.body.global_position).snapped(Vector3.ONE * 0.1)),
+					p.settled, "nothing" if under.is_empty() else str(under.collider)])
+	_check("and every piece of it comes down to the planet's ground and lies there",
+			not fresh.is_empty() and landed == fresh.size(), "%d of %d; %s" % [landed, fresh.size(), "; ".join(where)])
 	await _shot("planet_damage")
 	print("[planet] damage: %d bricks killed; frames worst %.1f ms" % [buildings.bricks_killed, _worst_ms])
 	print("[planet] damage gate: %d ok, %d FAIL" % [_ok, _fail])

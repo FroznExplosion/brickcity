@@ -66,6 +66,10 @@ staircase fixtures); damage and destruction on the planet; furniture.
 For D2 (falling): a "chassis" redesign of the city's destruction is being weighed
 (Docs/HandoffDestructionNext.md, "Theory: a chassis", not decided). Port today's solve and loose
 pieces anyway, but keep "ask the solve" to one call, so a frame graph could replace it for both.
+**D2 step 1 built (2026-10-27, branch `planet-fall`):** the one call is `PlanetBuildings._solve_site`
+(the city's `solve_structure`); loose groups fall as `PlanetPieces` toward the planet's centre and
+freeze where they lie (Planets.md 11.11 "Falling, D2 step 1"); `--gate=damage` 12/12. Next in D2: a
+hard landing breaking a piece, hits on pieces, crumbs and a cap, a building toppling whole.
 
 ## What is next, in order
 
