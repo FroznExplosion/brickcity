@@ -1744,6 +1744,7 @@ func _sculpt() -> void:
 	_flatten()
 	_placed_model()
 	_pick_and_move()
+	_grid_stays()
 	_nudges()
 	_symmetric_convert()
 	_size_and_view()
@@ -2171,6 +2172,77 @@ func _pick_and_move() -> void:
 				"%.3f %.3f" % [moved_z / STUD, kept_z / STUD])
 	_ws._reset_space()
 	DirAccess.remove_absolute(ProjectSettings.globalize_path(obj))
+
+
+## The grid stays put; no stray starting bricks; strays cleaned up (Docs/AssetWorkshop.md,
+## "The grid stays put"). The user's autosave had a 1x4 on a plane kept from the 80-stud area,
+## the block-out mirrored ~920 studs off, and the grid jumping with every brick and pick.
+func _grid_stays() -> void:
+	_ws._reset_space()
+	_ws.rail_pick("sculpt")
+	_ws.sculpt_clear()
+	_ws._new_build()
+	var mid: int = _ws.plate_studs / 2
+	_ws.mirror_z = 41.0
+	_ws.auto_start_brick = true
+	_ws._ensure_start_brick()
+	_ok("an empty build's starting brick and mirror plane go to the middle", _ws.recipe.size() == 1
+			and _ws.recipe.cell_of(0).z == mid and is_equal_approx(_ws.mirror_z, mid + 0.5),
+			"%s, plane %.1f" % [str(_ws.recipe.cell_of(0)) if _ws.recipe.size() > 0 else "none", _ws.mirror_z])
+	# The grid: a brick 10 studs off leaves it, the build 40 studs off takes it along.
+	_ws._regrid(true)
+	var vb: Array = _ws.view_box()
+	var arch: String = _ws.recipe.part_of(0)
+	var c0: Vector3i = _ws.recipe.cell_of(0)
+	_ws.place_named(arch, c0 + Vector3i(10, 0, 0))
+	_ws._regrid()
+	_ok("a brick laid 10 studs off leaves the grid where it was", _ws.view_box() == vb, str(_ws.view_box()))
+	# A model picked 30 studs off: the grid does not follow the pick.
+	var bm := BoxMesh.new()
+	bm.size = Vector3(0.4, 0.4, 0.4)
+	var am := ArrayMesh.new()
+	am.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, bm.get_mesh_arrays())
+	_ws.place_mesh(am, "box.glb")
+	_ws._placed.xf = Transform3D((_ws._placed.xf as Transform3D).basis, (_ws._placed.xf as Transform3D).origin + Vector3(30.0 * STUD, 0, 0))
+	_ws._stamp_model(_ws._placed)
+	_ws._regrid()
+	_ok("a model picked 30 studs off does not move the grid", _ws.view_box() == vb, str(_ws.view_box()))
+	_ws.drop_model()
+	for k in 3:
+		_ws.place_named(arch, c0 + Vector3i(40, 0, 2 * k))
+	_ws._regrid()
+	var moved: Array = _ws.view_box()
+	_ok("the build moved 40 studs takes the grid along", (moved[0] as Vector3i).x > (vb[0] as Vector3i).x, str(moved))
+	_ws.auto_start_brick = false
+	# No starting brick while there is a block-out (Edit as SDF empties the bricks).
+	_ws._new_build()
+	_ws.sculpt_clear()
+	var f: SdfForm = _ws.sculpt.form
+	f.box(SdfForm.ADD, Vector3(mid * 5 + 2, 60, mid * 5 + 2), Vector3(20, 8, 10), 0.0, 1)
+	_ws.auto_start_brick = true
+	_ws._ensure_start_brick()
+	_ws.auto_start_brick = false
+	_ok("no starting brick while there is a block-out", _ws.recipe.size() == 0, "%d bricks" % _ws.recipe.size())
+	# A few cells on an old plane do not hold it there.
+	f.box(SdfForm.ADD, Vector3(mid * 5 + 2, 60, 41 * 5 + 2), Vector3(3, 3, 3), 0.0, 1)
+	_ws.mirror_z = 41.0
+	_ok("a few cells on an old plane do not hold the mirror there", _ws._mirror_onto_build()
+			and absf(_ws.mirror_z - (mid + 0.5)) <= 2.0, "plane %.1f" % _ws.mirror_z)
+	# Clean up: the block-out outside the area and a lone far brick; Z gives them back.
+	f.box(SdfForm.ADD, Vector3(mid * 5 + 2, 60, -100), Vector3(10, 6, 10), 0.0, 1)
+	for k in 4:
+		_ws.place_named(arch, Vector3i(mid - 2, 40 + 3 * k, mid))
+	_ws.place_named(arch, Vector3i(mid + 200, 40, mid))
+	var outside: int = _ws._cells_outside_area(f.cells()).x
+	var bricks: int = _ws.recipe.size()
+	var took: Vector2i = _ws.clean_strays()
+	_ok("clean up takes the block-out outside the area and the lone far brick", outside > 0
+			and _ws._cells_outside_area(f.cells()).x == 0 and _ws.recipe.size() == bricks - 1 and took.y == 1,
+			"%d outside, %s taken, %d -> %d bricks" % [outside, str(took), bricks, _ws.recipe.size()])
+	_ws._undo()
+	_ok("Z gives them back", _ws._cells_outside_area(f.cells()).x == outside and _ws.recipe.size() == bricks,
+			"%d outside, %d bricks" % [_ws._cells_outside_area(f.cells()).x, _ws.recipe.size()])
+	_ws._reset_space()
 
 
 ## A form's solid cells, cell -> part label.

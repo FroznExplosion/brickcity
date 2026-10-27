@@ -746,7 +746,10 @@ func _fill_actions() -> void:
 	if not held.is_empty() or t == "part":
 		_action("Mirror through it", "Put the mirror plane through the middle of the selection.",
 				func() -> void: ws.mirror_through_selection())
-	_action("Frame it", "Point the view at the selection.", func() -> void: ws._centre_on_selection(true))
+	_action("Frame it", "Point the view and the grid at the selection.", func() -> void: ws._centre_on_selection(true))
+	if t == "asset":
+		_action("Clean up strays", "Take away the block-out outside the build area, and lone bricks far from the build. One undo.",
+				func() -> void: ws.clean_strays())
 
 
 func _action(text: String, tip: String, f: Callable) -> void:

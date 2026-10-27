@@ -794,17 +794,84 @@ func _default_centre(plane: String) -> Vector3:
 
 
 ## The cells drawn round the build (`VIEW_STUDS` along and across, two and a half times
-## that in plates up), inside the build area: [min cell, max cell + 1].
+## that in plates up), inside the build area: [min cell, max cell + 1]. Round the grid's own
+## middle (`_regrid`), which stays put while the build stays in it.
 func view_box() -> Array:
-	var c := build_centre()
 	var half := Vector3i(VIEW_STUDS / 2, int(VIEW_STUDS * 1.25), VIEW_STUDS / 2)
-	var mid := Vector3i(int(c.x / BrickPalette.STUD_M), int(c.y / BrickPalette.PLATE_M), int(c.z / BrickPalette.STUD_M))
+	var mid := _grid_mid
+	if mid.x < 0:
+		mid = _cell_of(_grid_target())
 	var area := Vector3i(plate_studs, height_plates, plate_studs)
 	var lo := (mid - half).clamp(Vector3i.ZERO, area)
 	var hi := (mid + half).clamp(Vector3i.ZERO, area)
 	if lo.y == 0:
 		hi.y = mini(area.y, half.y * 2)
 	return [lo, hi]
+
+
+## The grid's middle, cells (Docs/AssetWorkshop.md, "The grid stays put"); x < 0 until set.
+var _grid_mid := Vector3i(-1, -1, -1)
+var _grid_sig := ""
+
+
+static func _cell_of(p: Vector3) -> Vector3i:
+	return Vector3i(int(p.x / BrickPalette.STUD_M), int(p.y / BrickPalette.PLATE_M), int(p.z / BrickPalette.STUD_M))
+
+
+## Where the build is, metres: the median of its cells -- the bricks inside the area, the
+## block-out's while it is clay, the models' middles -- so a few strays far off do not pull
+## it; the middle of the area for an empty build. Never the selection (Frame it is).
+func _grid_target() -> Vector3:
+	var xs := PackedInt32Array()
+	var ys := PackedInt32Array()
+	var zs := PackedInt32Array()
+	for i in recipe.size():
+		var c := recipe.cell_of(i)
+		if recipe.frame_of(i) == 0 and in_area(c):
+			xs.append(c.x)
+			ys.append(c.y)
+			zs.append(c.z)
+	if sculpt != null and sculpt_state == "sdf" and sculpt.form.block_count() > 0:
+		var cells := sculpt.form.cells()
+		# At most ~4000 of them: a median does not need every cell of a big block-out.
+		var step := maxi(1, cells.size() / 5 / 4000) * 5
+		for i in range(0, cells.size(), step):
+			var c := Vector3i(cells[i], cells[i + 1], cells[i + 2])
+			if in_area(c):
+				xs.append(c.x)
+				ys.append(c.y)
+				zs.append(c.z)
+	for m in models:
+		var c := _cell_of(((m.xf as Transform3D) * (m.box as AABB)).get_center())
+		xs.append(c.x)
+		ys.append(c.y)
+		zs.append(c.z)
+	if xs.is_empty():
+		var mid := plate_studs * BrickPalette.STUD_M * 0.5
+		return Vector3(mid, 1.5, mid)
+	xs.sort()
+	ys.sort()
+	zs.sort()
+	var n := xs.size() / 2
+	return Vector3((xs[n] + 0.5) * BrickPalette.STUD_M, (ys[n] + 0.5) * BrickPalette.PLATE_M,
+			(zs[n] + 0.5) * BrickPalette.STUD_M)
+
+
+## The grid's window moved to the build when the build's middle has left the inner part of it
+## (a quarter of the window from its middle), or to `to` (metres) with `force` -- Frame it, a
+## new or loaded build. Picking something never moves it. True when it moved.
+func _regrid(force := false, to: Variant = null) -> bool:
+	var m := _cell_of(to if to is Vector3 else _grid_target())
+	@warning_ignore("integer_division")
+	var q := VIEW_STUDS / 4
+	if not force and _grid_mid.x >= 0 and absi(m.x - _grid_mid.x) <= q and absi(m.z - _grid_mid.z) <= q \
+			and absi(m.y - _grid_mid.y) <= q * 2:
+		return false
+	_grid_mid = m
+	_view_drawn = view_box()
+	_draw_work_plane()
+	_place_mirror_sheet()
+	return true
 
 
 ## The plane's axes: x along the picture, y up it, z out of it towards the viewer.
@@ -929,20 +996,27 @@ func set_mirror(on: bool) -> void:
 func _mirror_onto_build() -> bool:
 	# The block-out is the work while there is one; else the bricks (a lone starting
 	# brick left where an old plane was must not hold the plane there).
-	var lo := 1 << 30
-	var hi := -(1 << 30)
+	# The middle 80% across (10th to 90th percentile of the cells): a few strays -- a starting
+	# brick left on an old plane, taken into the block-out -- must not hold the plane there
+	# (Docs/AssetWorkshop.md, "The grid stays put").
+	var zs := PackedInt32Array()
 	if sculpt != null:
 		var cells := sculpt.form.cells()
 		for i in range(0, cells.size(), 5):
 			var c := Vector3i(cells[i], cells[i + 1], cells[i + 2])
 			if in_area(c):
-				lo = mini(lo, c.z)
-				hi = maxi(hi, c.z + 1)
-	if lo > hi:
+				zs.append(c.z)
+	if zs.is_empty():
 		for i in recipe.size():
 			if recipe.frame_of(i) == 0 and in_area(recipe.cell_of(i)):
-				lo = mini(lo, recipe.cell_of(i).z)
-				hi = maxi(hi, recipe.cell_of(i).z + BrickPalette.size_of(recipe.part_of(i)).z)
+				for dz in BrickPalette.size_of(recipe.part_of(i)).z:
+					zs.append(recipe.cell_of(i).z + dz)
+	var lo := 1 << 30
+	var hi := -(1 << 30)
+	if not zs.is_empty():
+		zs.sort()
+		lo = zs[zs.size() / 10]
+		hi = zs[zs.size() * 9 / 10] + 1
 	var inside := mirror_z >= 1.0 and mirror_z <= plate_studs - 1.0
 	if lo > hi:
 		if not inside:
@@ -1768,6 +1842,7 @@ func _reset_space() -> void:
 	mirror_z = plate_studs * 0.5 + 0.5
 	@warning_ignore("integer_division")
 	work_x = plate_studs / 2
+	_grid_mid = Vector3i(-1, -1, -1)
 	if not tried.is_empty():
 		untry_all()
 	part_of = PackedInt32Array()
@@ -1891,6 +1966,7 @@ func _load_recipe(r: BuildRecipe) -> void:
 	_loading = false
 	_set_asset_kind(recipe.kind)
 	_restore_asset_meta()
+	_regrid(true)
 
 
 # ---------------------------------------------------------------------------
@@ -3845,6 +3921,14 @@ func _baseplate_blocks() -> int:
 func _ensure_start_brick() -> void:
 	if not auto_start_brick or recipe.size() > 0 or _loading:
 		return
+	# Only a truly empty build. Edit as SDF empties the bricks into the block-out; a brick
+	# laid then went into the block-out at the next Make bricks, one a round trip, on the plane
+	# wherever it was (Docs/AssetWorkshop.md, "The grid stays put").
+	if sculpt != null and (sculpt.form.block_count() > 0 or not models.is_empty()):
+		return
+	# Nothing to mirror yet: the plane goes to the middle of the area with the brick.
+	mirror_z = plate_studs * 0.5 + 0.5
+	_place_mirror_sheet()
 	var arch := ""
 	for yaw in 2:
 		var name := BrickPalette.variant_name("brick_1x4", yaw, false)
@@ -3861,6 +3945,7 @@ func _ensure_start_brick() -> void:
 	_batch = keep
 	_after_edit()
 	_edit_groups.clear()
+	_regrid(true)
 
 
 func _look_at_build() -> void:
@@ -4635,6 +4720,7 @@ func _build_sculpt_box() -> void:
 			["lay the model (Enter)", func() -> void: lay_model()],
 			["snap to studs", func() -> void: snap_to_studs()],
 			["centre on mirror", func() -> void: centre_on_mirror()],
+			["clean up strays", func() -> void: clean_strays()],
 			["clear", func() -> void: sculpt_clear()],
 			["Convert", func() -> void: sculpt_convert()],
 			["Edit as SDF", func() -> void: sculpt_to_sdf()]]:
@@ -10767,10 +10853,92 @@ func _centre_on_selection(frame := false) -> void:
 	_build_grid()
 	_size_sig = ""
 	if frame:
+		# Frame it moves the grid too; a pick alone leaves it ("The grid stays put").
+		_regrid(true, build_centre())
 		if not _placed.is_empty():
 			_frame_placed()
 		else:
 			_look_at_build()
+
+
+## How far from the build's middle 80% a lone brick is a stray, studs (plates up: 2.5 times).
+const STRAY_STUDS := 40
+
+
+## Clean up strays (Docs/AssetWorkshop.md, "The grid stays put"): the block-out outside the
+## build area carved away, and bricks touching no other brick farther than STRAY_STUDS from
+## the middle 80% of the bricks taken up. One undo. Returns (cells, bricks) taken.
+func clean_strays() -> Vector2i:
+	_set_down()
+	_begin_gather()
+	var cells_out := 0
+	if sculpt != null and sculpt.form.block_count() > 0:
+		cells_out = _cells_outside_area(sculpt.form.cells()).x
+		if cells_out > 0:
+			var bb := sculpt.form.bounds().grow(8.0)   # the band (6 samples) and a little
+			var area := Vector3(plate_studs * BrickWorld.ticks_per_stud(), height_plates * BrickWorld.ticks_per_plate(),
+					plate_studs * BrickWorld.ticks_per_stud())
+			sculpt.form.begin_edit()
+			# One slab each side of the area, cut to the block-out's own box (a slab out to
+			# infinity would walk blocks that never existed).
+			for axis in 3:
+				for side in 2:
+					var lo := bb.position
+					var hi := bb.end
+					if side == 0:
+						hi[axis] = minf(hi[axis], 0.0)
+					else:
+						lo[axis] = maxf(lo[axis], area[axis])
+					if hi[axis] <= lo[axis]:
+						continue
+					sculpt.form.box(SdfForm.REMOVE, (lo + hi) * 0.5, (hi - lo) * 0.5 + Vector3.ONE, 0.0, 0)
+			sculpt.remesh()
+			_sculpt_record(sculpt.form.end_edit())
+	# Lone bricks far from the bulk.
+	var taken := 0
+	if recipe.size() >= 5:
+		var axes := [[], [], []]   # plain Arrays: a packed one in an Array is a copy
+		for i in recipe.size():
+			var c := recipe.cell_of(i)
+			for a in 3:
+				(axes[a] as Array).append(c[a])
+		var lo := Vector3i.ZERO
+		var hi := Vector3i.ZERO
+		for a in 3:
+			var v: Array = axes[a]
+			v.sort()
+			var far := STRAY_STUDS if a != 1 else int(STRAY_STUDS * 2.5)
+			# The middle 80%, and at least one left out each end (a stray among few bricks).
+			var k := maxi(1, v.size() / 10)
+			lo[a] = int(v[k]) - far
+			hi[a] = int(v[v.size() - 1 - k]) + far
+		var strays := []
+		for i in recipe.size():
+			var c := recipe.cell_of(i)
+			var out := false
+			for a in 3:
+				out = out or c[a] < lo[a] or c[a] > hi[a]
+			if out and not _touches_brick(i):
+				strays.append(i)
+		strays.reverse()
+		for i in strays:
+			if take_brick(int(i)):
+				taken += 1
+	_end_gather()
+	_regrid(true)
+	var msg := "Clean up: %d cells of the block-out outside the build area, %d lone bricks far from the build." % [cells_out, taken]
+	_show_sculpt_note(false, msg)
+	print("[asset workshop] " + msg)
+	return Vector2i(cells_out, taken)
+
+
+## Does brick `i` touch another (their boxes meet or overlap)?
+func _touches_brick(i: int) -> bool:
+	var a := AABB(Vector3(recipe.cell_of(i)), Vector3(BrickPalette.size_of(recipe.part_of(i)))).grow(0.5)
+	for j in recipe.size():
+		if j != i and a.intersects(AABB(Vector3(recipe.cell_of(j)), Vector3(BrickPalette.size_of(recipe.part_of(j))))):
+			return true
+	return false
 
 
 ## The mirror plane through the middle of the selection (or of the build), on a stud line.
@@ -11564,6 +11732,11 @@ func _size_marks_process() -> void:
 	if sig != _size_sig:
 		_size_sig = sig
 		draw_size_marks()
+	var gsig := "%d %d %s %d %s" % [_edits.size(), _edit_groups.size(), sculpt_state, models.size(),
+			str(models_state().map(func(st: Dictionary) -> Transform3D: return st.xf))]
+	if gsig != _grid_sig:
+		_grid_sig = gsig
+		_regrid()
 
 
 ## The ruler along x on the plate from the butt -- a tick a stud, numbers every five, the
