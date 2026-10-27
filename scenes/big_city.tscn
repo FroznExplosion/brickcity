@@ -1,9 +1,9 @@
-[gd_scene load_steps=2 format=3]
+[gd_scene format=3 uid="uid://cluuopomi1can"]
 
-[ext_resource type="Script" path="res://scripts/city_scene.gd" id="1_city"]
+[ext_resource type="Script" uid="uid://dganjxne1qc5w" path="res://scripts/city_scene.gd" id="1_city"]
 
-[node name="BigCity" type="Node3D"]
+[node name="BigCity" type="Node3D" unique_id=671866547]
 script = ExtResource("1_city")
 big_shapes = true
-building_count = 22
+building_count = 23
 respawn_buildings = false

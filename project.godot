@@ -323,13 +323,6 @@ dev_grids={
 
 host_script="res://scripts/brickcity_menu_host.gd"
 
-[shader_globals]
-
-lod_zoom={
-"type": "float",
-"value": 1.0
-}
-
 [physics]
 
 common/physics_ticks_per_second=30
@@ -342,3 +335,10 @@ jolt_physics_3d/limits/temporary_memory_buffer_size=64
 jolt_physics_3d/limits/max_body_pairs=131072
 jolt_physics_3d/limits/max_contact_constraints=40960
 common/physics_interpolation=true
+
+[shader_globals]
+
+lod_zoom={
+"type": "float",
+"value": 1.0
+}
