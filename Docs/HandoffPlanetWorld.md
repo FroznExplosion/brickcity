@@ -63,6 +63,9 @@ trees. Rerun before believing it.
 Planets.md 11.11: near buildings are real brick towers (drawn, solid, a front door, bricks to
 the AI); `--gate=bricks` 8/8; timed awake (GPU 11.2 ms vs 9.4 with shells only). Next there: stairs (the city's
 staircase fixtures); damage and destruction on the planet; furniture.
+For D2 (falling): a "chassis" redesign of the city's destruction is being weighed
+(Docs/HandoffDestructionNext.md, "Theory: a chassis", not decided). Port today's solve and loose
+pieces anyway, but keep "ask the solve" to one call, so a frame graph could replace it for both.
 
 ## What is next, in order
 
