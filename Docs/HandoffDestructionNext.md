@@ -90,6 +90,106 @@ For the next chat working on building destruction. Read this first, then
    radius), patch the piece's own mesh (index regions) instead of rebuilding it.
 4. Then tiles instead of bands (Structures.md) for standing buildings.
 
+## Theory: a chassis -- the frame holds the building, the panels break (2026-10-27)
+
+**Not built, not decided.** The user asked for the idea worked through, with no change to the
+game: "what if we made the destruction more like Battlefield, so the chassis of a building is the
+structure rather than all walls, floors, etc. -- the edges of floors and the support beams. The
+centres of a wall or floor could be broken brick by brick, then the edges and actual support
+structure is a bit stronger." Would that make destruction faster and more consistent?
+
+In Battlefield (Bad Company 2 on) walls and floors are panels that blow out piece by piece, and
+the building stands on a frame; it comes down when enough of its supports are gone. Here every
+brick is structure: any brick can carry load, and every hit asks the whole building.
+
+### What it would be here
+
+- **Two kinds of brick** in a generated tower:
+  - **Frame**: the columns (`TowerRecipe.frame` "columns" -- the generator already records them,
+    DestructionLod 4 / 5.3), the stair core ("core"), and the edges of each floor -- the slab
+    ring under the facade and slab strips along the lattice lines (**beams: not in the recipe
+    yet**; the interior walls on every third line stand where beams would).
+  - **Infill**: the wall panels between frame members and the middle of each floor panel.
+- **Infill hangs on its frame cell** (the panel between two columns and two slabs). A hit kills or
+  loosens infill bricks one by one, as now, but "does anything fall?" is asked only inside that
+  cell -- a flood fill bounded by the frame -- not of the whole building.
+- **The frame is a small graph**: a node where a column meets a slab at a lattice point, an edge
+  for each column storey and each slab edge between two points. Load and support are solved on
+  it. The 80 x 60, 34-storey tower: 9 x 7 lattice points x 35 levels = ~2,200 nodes and ~6,000
+  edges, against the 24,522 bricks (and their joints) the solve walks today.
+- **A member fails** when force breaks enough of its own bricks (a blast through a column) or
+  when the graph says it carries more than it can. When the graph splits, each part with no path
+  to the ground leaves as ONE piece: its members and the infill hanging on them.
+- **The user's attachment rule still holds** (memory "brick-attachment-rule", `hang_probe`): an
+  infill brick still clicked into bricks that stay does not fall. "A bit stronger" should be
+  real, not a hidden multiplier: frame members built from parts that are stronger in a real model
+  too -- long plates or beams overlapping across the joints -- so it still passes the user's
+  yardstick, "what a real brick model does" (2026-10-13).
+
+### Would it be faster?
+
+Against what `--big --shot` measured on 2026-10-23 (HandoffStructBugs item 8) and DestructionLod:
+
+| cost today | with a chassis |
+|---|---|
+| **Physics of moving pieces**, the mean frame (item 7): 4,000-12,000 boxes in motion; one 23,801-brick piece is 3,008 merged boxes, set by its layers, not its width (DestructionLod 5.6) | A falling piece collides by its members: a column line one box per run, a slab one box per storey -- ~100-200 for that piece, if infill rides without boxes of its own (it cannot fall out of a cell while the cell's frame holds). **The biggest win.** |
+| **The stress solve**: mega buildings solved alone 97-143 times a run, 37-60 ms a run, the worst single 1.7-3.4 ms | Most hits touch only infill: no solve, a bounded flood fill in one cell. A hit on the frame: a solve of ~2,000 nodes instead of ~24,000 bricks. |
+| **Making a piece**: `split_island` copies its bricks into a new chunk, 5-17 ms for a big one | The same per piece (it is still bricks); pieces come apart at members, so fewer and more predictable ones. |
+| **Landing**: broken where it lands; any change a patch cannot carry rebuilds the whole mesh | Local by construction: members at the contact fail, infill near it shatters to crumbs, the rest stays one piece with its mesh patched -- the "break locally" proposal above, with the frame saying where "locally" ends. |
+| **Drawing**: meshes, panes, furniture, uploads (the landing blink, stand-in upload stalls) | No change. The chassis decides what breaks, not how it is drawn. |
+
+So: clear wins in physics while things fall and in skipped solves; none in drawing, which is
+where the blink and most of the spikes are.
+
+### Would it be more consistent?
+
+- **Breaks follow the frame.** A building comes apart at failed columns and beams, storey by
+  storey -- not along whichever panel seams line up (CollapseNext 30; the stagger fixed the
+  seams, it does not decide where a building fails).
+- **Same hit, same result.** A small graph has few near-ties. Today load routed along one
+  grounding path through single bricks is what once sprayed loose bricks (memory
+  "brick-attachment-rule").
+- **Storey units fit it.** "A storey gave way" (`registry.storey_gave_way`) becomes "this storey's
+  columns and walls cannot carry what is over them" -- asked of ~63 columns, not every brick
+  topping the storey; and the frame of the whole building can exist before any storey is laid.
+- **Holes look like holes.** A wall shot through loses a panel; the opening's edges are the
+  frame, which reads as a building, not a cloud of bricks.
+- **What it loses:** a building can no longer fail through a wall that is not frame -- the
+  interior walls on every third line carry load today and would have to count as frame, or the
+  building gets stiffer than its bricks say. Less emergent breakage: no cracks running across
+  infill from one cell to the next.
+
+### What it touches (why it is a big change)
+
+- **Generator**: beams (slab edges, lattice lines) as real parts; `TowerRecipe.frame` gains
+  "beams"; new long parts in Docs/Parts (and printable).
+- **BrickWorld (C++)**: a frame graph per building, a member's capacity from its bricks, the solve
+  on the graph, infill connectivity bounded by cells.
+- **IslandManager**: pieces collide by members; infill rides a piece without boxes.
+- **Co-op**: DamageLog SOLVE/SEVER entries name members -- fewer and smaller.
+- **Player builds** have no recipe: a frame by part kind (beams and columns tagged in the
+  palette), or inferred (`StructureSpaces.find_floors` for slabs, columns by stack), or builds
+  keep today's all-brick solve -- two paths to keep working.
+- **Planet buildings** (Docs/HandoffPlanetWorld.md, D2 "falling") copy the city's solve and loose
+  pieces next. A frame graph takes a gravity direction and nothing else, so it would port to a
+  planet's local down more easily than the brick solve. D2 should not wait for it: port today's
+  path, and keep "ask the solve" to one call, so a chassis can replace it for both later.
+
+### If tried: the smallest steps, each measured
+
+1. **Measure first**: what share of hits in `--big --shot` touch only infill (no brick of a member
+   from `TowerRecipe.frame`, nor the slab ring). If most do, skipping their solves is worth a lot;
+   if not, the solve half of the idea is small.
+2. **A frame overlay, data only**: members from `TowerRecipe.frame` plus the slab edges, each
+   with its bricks. Ask `storey_gave_way` of it and compare with today's answers over
+   `--storeys --big` and `storey_unit_probe` -- same decisions, fewer bricks walked.
+3. **Infill hits without a solve**: the bounded flood fill; `hang_probe` and `collapse_probe` must
+   pass; the solve ms of `--big --shot` before and after.
+4. **Falling pieces collide by members**, infill as passengers: boxes in motion and the mean
+   frame of `--big --shot`; `--jam --big` and `--floating` for what that breaks.
+5. Only then real beams in the generator (parts, strength), and `--breakshape` for how buildings
+   come apart.
+
 ## Errors and warnings (2026-10-26)
 
 - **Fixed:** `_field_build(): array.size() != p_vertex_array_len` (rubble field merge; an empty
