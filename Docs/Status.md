@@ -1255,18 +1255,18 @@ the camera looks away.
   * **Held while it is still growing.** What has given way stays in the building until the
     cascade stops growing for two solves, or 1.5 s has passed. Released every tick, a cascade made
     one small chunk a tick for as long as it ran -- 331 of them in one pass -- and the moment it
-    hangs before it goes is Red Faction's groan.
+	hangs before it goes is Red Faction's groan.
   * **Then cut into a few chunks**, bottom to top, of a size set by how far the nearest player is:
-    1,500 bricks near (under 60 m), 4,000 mid, and beyond 150 m no more than three.
+	1,500 bricks near (under 60 m), 4,000 mid, and beyond 150 m no more than three.
   * **Each chunk is one piece until it lands.** A chunk is a union of groups that the stress solve
-    separated, and an island treats a failed joint as cut -- so the first thing to touch it took it
-    straight back apart into those groups and hundreds of single bricks (818,000 bricks' worth of
+	separated, and an island treats a failed joint as cut -- so the first thing to touch it took it
+	straight back apart into those groups and hundreds of single bricks (818,000 bricks' worth of
     re-spawning in one pass). Its joints are mended when it is cut out (`BrickWorld.heal_joints`),
     on every machine: the DETACH says so (`DamageLog.FLAG_CHUNK`).
   * **Its furniture is written off**: taken out of the chunks into a group of its own, which the
     furniture rule deletes unless somebody is right next to it.
   * A placeholder dust cloud (`CollapseDust`) where a chunk breaks away. Effects are the weapons
-    and effects area's; this is so a collapse across the city reads as one meanwhile.
+	and effects area's; this is so a collapse across the city reads as one meanwhile.
 
 Also: **waking a sleeping piece** placed its bricks one call at a time from script -- 11-16 ms for
 an 8,000-brick piece, and the worst islands tick more than once. `BrickWorld.place_blocks` does
@@ -1460,9 +1460,9 @@ they fall now; worst script tick 32 ms, of which 12 the upload flush.
   * `--fixture`, the step count: a flight is `StaircaseRecipe.flight_pieces(steps)` pieces now, not
     one per step. And "the building is damaged" counted fewer bricks than before -- which rooms
     opening round the camera made false (their furniture went in: 638 -> 647). It counts the steps
-    in the building's own dead list.
+	in the building's own dead list.
   * `--dormant`, the blast: counted every piece within 20 m of the blast (2,814 bricks "left" of a
-    1,421-brick piece). It follows the piece that slept, by id.
+	1,421-brick piece). It follows the piece that slept, by id.
 * **The AI arbiter under the collapse** (`--stress`). The check required a step down, and failed
   once the collapse itself got cheap: its worst tick 42.6 ms, but never two ticks running over
   8 ms, where the arbiter's line is three (AIPlan R14). It now asks the contract -- a step down when
@@ -1491,12 +1491,12 @@ they fall now; worst script tick 32 ms, of which 12 the upload flush.
   triangles they draw; built in 0.9-1.1 ms for a 20x20 tower, 3.6 ms for a 40x30 one of 60 courses
   (a grid of 234,000 cells -- the build walks the grid once and then only the exposed faces).
   * A piece that **comes loose** out there starts as the stand-in, so a far collapse never bakes or
-    uploads its full bricks -- those uploads were its worst frames (buffers made on the main thread).
+	uploads its full bricks -- those uploads were its worst frames (buffers made on the main thread).
   * A piece **put to sleep** leaves its stand-in drawn where it lay, in a node with no body
-    (`Dormant.stand_in`), and hands it back when it wakes: drawn from its first tick, and far off,
-    that stand-in is what it goes on drawing. A dormant piece from a save has none until it wakes.
+	(`Dormant.stand_in`), and hands it back when it wakes: drawn from its first tick, and far off,
+	that stand-in is what it goes on drawing. A dormant piece from a save has none until it wakes.
   * Damage to a far piece rebuilds its stand-in from the mesh queue, once per tick at most, in the
-    queue's budget -- never a patch, since its index buffer is not the bake's.
+	queue's budget -- never a patch, since its index buffer is not the bake's.
 
 ### A break, then nothing for a second
 
