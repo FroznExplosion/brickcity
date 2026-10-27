@@ -861,6 +861,8 @@ does the same as its button.
 5. **Select alone has the gizmo** (above); Draw, Shape and Smooth only draw.
 6. **The selection is the centre**: `build_centre` is the picked thing's middle, so the grid,
    the size marks and the view go to it ("Frame it"); "Mirror through it" puts the plane there.
+   *(2026-10-27: the grid now moves only with Frame it, not on every pick -- "The grid stays
+   put".)*
 7. **A kind's menus**: Gun only for a gun, Mech only for a mech.
 
 What the workshop says (a refused Convert, a moved plane) also shows big at the top for a few
@@ -889,6 +891,59 @@ seconds, and the building workshop's brick readout is hidden in Block out.
   (`AssetWorkshopUI.ICONS`).
 
 `tools/asset_ui_probe.gd`: 50 checks.
+
+### The grid stays put; no stray starting bricks (2026-10-27)
+
+The user: the grid moves around when they start placing bricks or import an asset, and 1x4
+bricks float round the scene at its edges. Their autosave (read, not changed):
+
+- 33 bricks, three of them strays: a 1x4 at (498, 30, 41) and two 2x4s at (0, 0, 0) and
+  (0, 0, 80), the area's corner; the build itself is round x 240-262, z 500.
+- The mirror on at 41 studs across (from the 80-stud area), and the block-out holding the gun
+  twice: round z 500 and, mirrored, round z -420 -- outside the area -- plus a few cells round
+  z 40-60 on the old plane.
+
+Why:
+
+1. **A starting brick whenever the bricks run out.** `_after_edit` lays one whenever the recipe
+   is empty -- also when Edit as SDF has just put the bricks into the block-out. It goes on the
+   mirror plane (z 41), and the next Make bricks takes it into the block-out as hand-laid. Round
+   trips leave one each.
+2. **That brick holds the old plane.** `_mirror_onto_build` keeps a plane inside the span of
+   what is built; a starting brick on the old plane makes the span reach it, so the plane stays
+   at 41 and every mirrored stroke lands ~920 studs away, outside the area.
+3. **The grid is a window round `build_centre`**, which is the picked thing while one is picked
+   (the frame's point 6) and otherwise the middle of everything's bounds. Importing a model picks
+   it: the grid jumps to it. Every brick changes the bounds: the grid moves with them. With strays
+   at the edges the middle of the bounds is nowhere near the build.
+
+Changes:
+
+1. **The grid stays put.** Its window keeps its middle until the build's own middle -- the
+   median of the bricks' cells (and the block-out's, while it is clay), so a few strays do not
+   count -- is more than a quarter of the window (20 studs) from it; then it moves to it. Picking
+   something never moves it; **Frame it** does (the grid and the view to the selection). The
+   size marks still measure the selection.
+2. **A starting brick only for a truly empty build**: no bricks, no block-out and no models. It
+   goes in the middle of the area, and the mirror plane with it (nothing is there to mirror).
+3. **The mirror's repair ignores strays**: the plane is on the build when it is within the
+   middle 80% of what is built across (10th to 90th percentile of the cells, two studs' margin);
+   else it moves to the middle of that span.
+4. **Clean up strays** (Block out's options and the asset row's actions; one undo): takes away
+   the block-out outside the build area, and bricks touching no other brick farther than 40
+   studs from the build's middle 80%; it says what it took.
+
+Checks (`asset_workshop_probe`): a brick laid 10 studs off leaves the grid where it was, a build
+moved 40 studs takes it along, a picked model does not; no starting brick while there is a
+block-out; an empty build's brick and plane in the middle; a few cells on an old plane do not hold
+it; clean up takes the outside cells and a far lone brick, and Z gives them back.
+
+**Built 2026-10-27** as planned (`_regrid`, `_grid_target`, `clean_strays`). The window's middle
+is checked with the size marks, twice a second, when the edits or models change. With few bricks
+the clean-up leaves out at least one brick each end of the middle span (five bricks, one far:
+80% would keep it). On a copy of the user's autosave: loading moves the plane from 41 to 510 and
+the grid onto the build; Clean up takes 1,893 cells of the block-out outside the area and the
+three stray bricks. asset_workshop_probe 318 (8 new), asset_ui_probe 50.
 
 ### Furniture and items (2026-10-23)
 
