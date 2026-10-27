@@ -57,6 +57,8 @@ class Site:
 	# Band index -> its drawn mesh; the bands a hit has changed, to draw again.
 	var band_nodes := {}
 	var remesh := PackedInt32Array()
+	# Hit since its structure was last asked what comes loose (_solve_site).
+	var solve_due := false
 
 var planet: PlanetBody
 var sites: Array[Site] = []
@@ -108,6 +110,10 @@ signal site_damaged(index: int, box: AABB)
 ## Every hit on the planet's bricks, as the host's commands (DamageLog).
 var damage_log := DamageLog.new()
 var bricks_killed := 0
+## What comes loose and falls (D2).
+var pieces: PlanetPieces
+var solves := 0
+var solve_worst_ms := 0.0
 
 
 func setup(p: PlanetBody) -> void:
@@ -122,6 +128,10 @@ func setup(p: PlanetBody) -> void:
 	# rather than in the first band that has open studs.
 	_stud_arrays = PieceMeshes.stud().surface_get_arrays(0)
 	_stair_parts = StaircaseRecipe.flight_parts(_palette)
+	pieces = PlanetPieces.new()
+	pieces.name = "Pieces"
+	add_child(pieces)
+	pieces.setup(bricks, p, brick_material)
 
 
 ## A town of towers on a grid round `dir`, in the tangent frame there, on the
@@ -641,6 +651,8 @@ func on_origin_shift() -> void:
 			s.collision.free_bodies()
 			s.collision = BuildingCollision.new(bricks, s.chunk, get_world_3d().space,
 					planet.global_transform * s.frame, true)
+	if pieces != null:
+		pieces.on_origin_shift()
 
 
 # --- damage (Docs/Planets.md 11.11, D1) --------------------------------------------
@@ -676,6 +688,16 @@ func damage(point: Vector3, shot: Dictionary) -> bool:
 	var killed := DamageLog.apply_entry(bricks, s.chunk, e)
 	if killed.is_empty():
 		return true
+	var r := Vector3.ONE * (radius + 1.0)
+	after_kill(i, killed, AABB(point - r, r * 2.0))
+	return true
+
+
+## Bricks of site `i` just killed (a hit's -- or a pass's, by id): their shapes
+## off, their bands drawn again, the AI's maps told (`box`, world), and the
+## structure asked what falls now.
+func after_kill(i: int, killed: PackedInt32Array, box: AABB) -> void:
+	var s := sites[i]
 	bricks_killed += killed.size()
 	s.collision.disable(killed)
 	for b in s.collision.bands_of(killed):
@@ -683,9 +705,51 @@ func damage(point: Vector3, shot: Dictionary) -> bool:
 			s.remesh.append(b)
 	# The bands are drawn from the chunk's bake: stale now.
 	bricks.bake_chunk_async(s.chunk)
-	var r := Vector3.ONE * (radius + 1.0)
-	site_damaged.emit(i, AABB(point - r, r * 2.0))
-	return true
+	site_damaged.emit(i, box)
+	s.solve_due = true
+
+
+## What a hit left hanging comes loose and falls (D2), the city's way: one
+## solve_structure -- stress, then balance, then what is joined to nothing,
+## the cascade of joints failing under the load the last ones carried, inside
+## CASCADE_BUDGET_MS (CityScene's numbers) -- and each loose group cut out as a
+## falling piece (PlanetPieces). Asked again the frame after anything left:
+## what is left may be hanging now. The ONE place the planet asks its bricks
+## what falls -- so whatever answers it later (Docs/HandoffDestructionNext.md,
+## "a chassis") answers it here.
+const CASCADE_ROUNDS := 48
+const CASCADE_BUDGET_MS := 3.0
+
+func _solve_site(i: int) -> void:
+	var s := sites[i]
+	s.solve_due = false
+	var t0 := Time.get_ticks_usec()
+	var solve: Dictionary = bricks.solve_structure(s.chunk, CASCADE_ROUNDS, CASCADE_BUDGET_MS)
+	solves += 1
+	solve_worst_ms = maxf(solve_worst_ms, float(Time.get_ticks_usec() - t0) / 1000.0)
+	var res: Dictionary = solve.stress
+	if int(res.get("failures", 0)) > 0 or int(res.get("reattached", 0)) > 0:
+		# When it ran, relative to the hits round it, decides what it failed.
+		damage_log.record(0, DamageLog.Kind.SOLVE, s.chunk, Vector3.ZERO, 0.0,
+				Vector3(1.0, 0.0, 0.0), int(res.get("rounds", 0)))
+	var groups: Array = solve.groups
+	if groups.is_empty():
+		# Joints failed but nothing is loose yet: the next round may let it go.
+		s.solve_due = int(res.get("failures", 0)) > 0
+		return
+	var all := PackedInt32Array()
+	for g in groups:
+		all.append_array(g as PackedInt32Array)
+	# Its shapes and its drawing let go first: the piece is the bricks now.
+	var box := bricks.get_blocks_box(s.chunk, all)
+	s.collision.disable(all)
+	for b in s.collision.bands_of(all):
+		if not s.remesh.has(b):
+			s.remesh.append(b)
+	pieces.shed(s.chunk, groups)
+	bricks.bake_chunk_async(s.chunk)
+	site_damaged.emit(i, (planet.global_transform * s.frame) * box.grow(1.0))
+	s.solve_due = true
 
 
 ## Once a frame: merge again the bands hits changed (a few), and draw again the
@@ -694,6 +758,11 @@ const FLUSH_BUDGET := 2
 
 
 func _damage_step() -> void:
+	# One site's structure a frame: a solve is up to CASCADE_BUDGET_MS.
+	for i in sites.size():
+		if sites[i].solve_due and sites[i].bricked and sites[i].collision != null:
+			_solve_site(i)
+			break
 	for i in sites.size():
 		var s := sites[i]
 		if s.collision == null:

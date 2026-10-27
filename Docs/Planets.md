@@ -1697,4 +1697,23 @@ wall, the collision has the hole and the nav net's way in goes through it (4 poi
 round by the door). A hit is 0.2-0.4 ms. Not yet: what is left hanging falling (the structure
 solve, loose pieces), which is D2.
 
-Not yet: falling pieces (D2), furniture, materialising for a fight far from the camera.
+**Falling, D2 step 1 (2026-10-27): what is joined to nothing falls to the ground.** A hit marks its
+building; once a frame one marked building is asked what comes loose, with the city's own call
+(`BrickWorld.solve_structure`: stress, balance, then what is joined to nothing, the cascade inside
+3 ms -- CityScene's numbers), and a SOLVE entry is logged when joints failed. That is the ONE place
+the planet asks its bricks what falls (`PlanetBuildings._solve_site`), so whatever answers it later
+-- Docs/HandoffDestructionNext.md's "chassis", if it is built -- answers it there. Each loose group
+is cut into a chunk of its own (`split_island`) and falls as one rigid body (`PlanetPieces`): its
+gravity toward the planet's centre (`Gravity.down_at`, as `constant_force`; the body's own gravity
+off), the city's 1.6x debris weight and mass scale, merged shapes from 200 bricks, its mesh made on
+a worker as the bands' are, its chunk's transform kept with the body (a piece can be asked about
+later), put back on the planet after a floating-origin shift, and frozen where it lies once still
+for 0.7 s. Not `IslandManager`: it is the flat city's up throughout (landing normals, support rays,
+crumbs, the heap), and a planet's town stands anywhere on the sphere with an origin that only
+translates. `--gate=damage` 12/12: a ring cut round a panel of a ground-storey wall (by cell -- a
+blast ring left gaps: a 2x4 brick is 1.4 m long), everything inside comes loose and every piece of
+it lies on the ground. Not yet (D2's next steps): a hard landing breaking a piece, hits on a piece,
+small groups as crumbs, a cap, a building toppling whole (`solve.stability`), the AI told where a
+piece lies.
+
+Not yet: the rest of D2 (above), furniture, materialising for a fight far from the camera.
