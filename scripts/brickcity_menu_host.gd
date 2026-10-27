@@ -157,6 +157,8 @@ func _apply_setting(id: StringName, value: Variant) -> void:
 			BrickNear.max_tris = int(value) * 1000
 		&"near_cap_stud_n":
 			BrickNear.max_studs = int(value)
+		&"near_cap_cards":
+			BrickNear.max_card_bands = int(value)
 		&"sun_cascades":
 			sun_cascades = 2 if int(value) == 1 else 4
 			var city := _city()
@@ -240,6 +242,11 @@ func _setting_defs() -> Array:
 			"suffix": " studs",
 			"hint": "With the cap on: how many studs may be drawn as real geometry at once. Past "
 			+ "them they are flat cards that face you."},
+		{"id": &"near_cap_cards", "tab": "video", "type": MENU_SETTINGS.T_SLIDER,
+			"label": "Near Detail — Studded Pieces", "default": 96, "min": 16, "max": 512, "step": 16,
+			"hint": "With the cap on: how many pieces of wall and wreckage show their studs at all "
+			+ "(as geometry or as far cards), nearest and in front of you first. Past them, the "
+			+ "tops of the furthest pieces are smooth. Lower helps most after a lot of destruction."},
 		{"id": &"sun_cascades", "tab": "video", "type": MENU_SETTINGS.T_ENUM,
 			"label": "Sun Shadow Cascades", "default": 0, "choices": ["4 (Sharp)", "2 (Faster)"],
 			"hint": "How many slices the sun's shadow is drawn in. Two is faster; shadows past "

@@ -87,6 +87,15 @@ static var stud_card_radius := 70.0
 static var cap_enabled := true
 static var max_tris := 120000
 static var max_studs := 4000
+## And how many bands hold studs AT ALL -- geometry or the far ring's cards.
+## The budgets above bound what is drawn up close; nothing bounded the cards
+## out to `stud_card_radius`, and every band holding them is up to four
+## MultiMeshes, a fetch of its studs from the bricks and a re-sort as the
+## camera walks. Past a collapse that is every piece of wreckage in 70 m. A
+## COUNT here, not a budget: what a band costs is mostly that it is one more
+## set of nodes, whatever its studs number. Past it, the worst placed band's
+## tops are smooth (the brick shader paints no studs).
+static var max_card_bands := 96
 const OVER_SLACK := 1.1
 const FACING_SIDE := 1.75
 const FACING_BEHIND := 2.5
@@ -226,6 +235,13 @@ var _admit_studs := INF
 ## Bands the cap has turned away, for a report.
 var capped_bevel := 0
 var capped_studs := 0
+## The bands holding studs of any kind (max_card_bands), as _studded is the
+## ones with geometry: key -> true; the best placed band waiting for a place,
+## and the line a place given up is kept behind (as _admit_*).
+var _carded := {}
+var _wait_cards := INF
+var _admit_cards := INF
+var capped_cards := 0
 
 
 func _init(w: BrickWorld) -> void:
@@ -336,6 +352,7 @@ func step(eye: Vector3, zoom_in := 1.0, forward := Vector3.ZERO) -> void:
 	var stud_budget := [STUD_BUILDS]
 	_wait_bevel = INF
 	_wait_studs = INF
+	_wait_cards = INF
 	# The held bands' places, fresh: the camera turns faster than the round
 	# robin comes back to them.
 	if cap_enabled:
@@ -343,11 +360,12 @@ func step(eye: Vector3, zoom_in := 1.0, forward := Vector3.ZERO) -> void:
 			var b: Band = _bands.get(key)
 			if b != null:
 				_rescore(b)
-		for key in _studded:
-			if not _holding.has(key):
-				var b: Band = _bands.get(key)
-				if b != null:
-					_rescore(b)
+		for held_ in [_studded, _carded]:
+			for key in held_:
+				if not _holding.has(key) and not (held_ == _carded and _studded.has(key)):
+					var b: Band = _bands.get(key)
+					if b != null:
+						_rescore(b)
 	_held = uploads > 0
 	_flying = uploads
 	for key in _busy:
@@ -380,6 +398,11 @@ func held() -> Vector2i:
 
 ## For a gate and a report: [triangles the chamfered bands hold or are
 ## guessed at, studs drawn as geometry].
+## For a gate: the bands holding studs of any kind (max_card_bands).
+func held_cards() -> int:
+	return _carded.size()
+
+
 func held_cost() -> Vector2i:
 	return Vector2i(_hold_cost, _stud_cost)
 
@@ -410,12 +433,13 @@ func shadow_faults() -> Vector2i:
 func report() -> String:
 	@warning_ignore("integer_division")
 	return ("%d chamfered band(s) built, %d held now (%d triangles), %d stud(s) in %d band(s); "
-			+ "cap %s (%dk triangles of %dk, %d of %d studs), %d bevel and %d stud visits turned away; "
+			+ "cap %s (%dk triangles of %dk, %d of %d studs, %d of %d bands with studs), "
+			+ "%d bevel, %d stud and %d card visits turned away; "
 			+ "step %.3f ms mean, %.2f worst (take %.2f, hang %.2f, studs %.2f); "
 			+ "a hit's patch %.3f ms mean over %d, %.2f worst") % [
 			builds, chamfered_bands, chamfered_tris, stud_instances, _studded.size(),
 			"on" if cap_enabled else "off", _hold_cost / 1000, max_tris / 1000, _stud_cost, max_studs,
-			capped_bevel, capped_studs,
+			_carded.size(), max_card_bands, capped_bevel, capped_studs, capped_cards,
 			step_ms / maxf(steps, 1.0), worst_step_ms, worst_take_ms, worst_show_ms,
 			worst_studs_ms,
 			damage_ms / maxf(damage_calls, 1.0), damage_calls, worst_damage_ms]
@@ -437,17 +461,19 @@ func _settle(eye: Vector3, rounds: int) -> void:
 		_blocked = 0
 		_wait_bevel = INF
 		_wait_studs = INF
+		_wait_cards = INF
 		var now := Time.get_ticks_msec()
 		for key in _order.duplicate():
 			_visit(key, eye, now, [1 << 20])
-		var swapped := _holding.size() + _studded.size()
+		var swapped := _holding.size() + _studded.size() + _carded.size()
 		if cap_enabled:
 			_make_room()
-		if _busy.is_empty() and _blocked == 0 and _wait_bevel == INF and _wait_studs == INF:
+		if _busy.is_empty() and _blocked == 0 and _wait_bevel == INF and _wait_studs == INF \
+				and _wait_cards == INF:
 			return
 		# Waiting for a place nobody will give up: as settled as it gets.
 		if _busy.is_empty() and _blocked == 0 \
-				and _holding.size() + _studded.size() == swapped and i > 2:
+				and _holding.size() + _studded.size() + _carded.size() == swapped and i > 2:
 			return
 		OS.delay_msec(1)
 
@@ -733,6 +759,13 @@ func _studs(band: Band, dist: float, local_eye: Vector3, budget: Array) -> void:
 		if not band.studs.is_empty():
 			_drop_studs(band)
 		return
+	# Any studs at all take a place (max_card_bands): none free, or one kept for
+	# a band placed better, and this band's tops stay smooth for now.
+	if band.studs.is_empty() and cap_enabled \
+			and (_carded.size() >= max_card_bands or band.score > _admit_cards):
+		_wait_cards = minf(_wait_cards, band.score)
+		capped_cards += 1
+		return
 	# Studs as geometry take a place under the cap; a band without one has its
 	# studs drawn as the far ring's cards, whatever its distance (the brick
 	# shader paints none, so leaving them out would leave the tops smooth).
@@ -801,6 +834,8 @@ func _sort_studs(band: Band, local_eye: Vector3) -> void:
 			mmi.multimesh = mm
 			band.node.add_child(mmi)
 			band.studs.append(mmi)
+		_carded[band.key] = true
+		_admit_cards = INF
 	band.stud_eye = local_eye
 	band.stud_zoom = zoom
 	band.stud_bevelled = enabled
@@ -847,6 +882,7 @@ func _drop_studs(band: Band) -> void:
 			mmi.queue_free()
 	band.studs.clear()
 	_stud_erase(band.key)
+	_carded.erase(band.key)
 	band.stud_geo = false
 	band.stud_geo_n = -1
 	band.stud_buffer = PackedFloat32Array()
@@ -912,6 +948,21 @@ func _make_room() -> void:
 		if w == null:
 			break
 		_demote_studs(w)
+	# Studs of any kind, by count: as above, the worst placed gives its studs
+	# up to a better placed band waiting, and the menu shrinking it gives back
+	# the worst until it fits.
+	if _carded.size() < max_card_bands - 1:
+		_admit_cards = INF
+	if _wait_cards < INF and _carded.size() >= max_card_bands:
+		var worst: Band = _worst(_carded)
+		if worst != null and _wait_cards < worst.score * SWAP_MARGIN:
+			_admit_cards = worst.score * SWAP_MARGIN
+			_drop_studs(worst)
+	while _carded.size() > max_card_bands:
+		var w: Band = _worst(_carded)
+		if w == null:
+			break
+		_drop_studs(w)
 
 
 ## Whether `cost` more fits a budget of `limit` already holding `used` over

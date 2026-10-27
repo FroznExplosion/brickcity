@@ -4882,8 +4882,11 @@ func _on_island_impact(source: BrickIsland, point: Vector3, severity: float,
 		if not (far and not registry.get_building(named).is_materialised()):
 			_shear_building(named, point, radius)
 	else:
-		for b in registry.buildings:
-			if far and not b.is_materialised():
+		# The buildings whose footprint is near, from the index shots use --
+		# not every building in the city, trees and all, a landing at a time.
+		for id in _near_buildings(point, radius):
+			var b := registry.get_building(id)
+			if b == null or (far and not b.is_materialised()):
 				continue
 			var local := b.xform.affine_inverse() * point
 			var size := Vector3(b.recipe.footprint_x * STUD,
@@ -17331,6 +17334,17 @@ func _run_chamfer_pass() -> void:
 	var ahead := camera.global_position + (-camera.global_basis.z) * 1.6
 	var ahead_near := _near_band_at(ahead)
 	_gate_ok("and it is the wall in front", ahead_near)
+	# Studs of any kind by count (max_card_bands): squeezed to two, two bands
+	# hold studs, and studs are still drawn -- the best placed keep theirs.
+	var cards_was := BrickNear.max_card_bands
+	BrickNear.max_card_bands = 2
+	await _frames(4)
+	brick_near.settle(camera.global_position)
+	await _frames(4)
+	_gate_ok("with studded bands capped at two, two bands hold studs, and studs are drawn",
+			brick_near.held_cards() <= 2 and brick_near.stud_instances > 0,
+			"%d bands with studs, %d studs" % [brick_near.held_cards(), brick_near.stud_instances])
+	BrickNear.max_card_bands = cards_was
 	BrickNear.cap_enabled = cap_was[0]
 	BrickNear.max_tris = cap_was[1]
 	BrickNear.max_studs = cap_was[2]

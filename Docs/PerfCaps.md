@@ -13,6 +13,7 @@ with the editor closed (CLAUDE.md), and a pass that times something is named wit
 |---|---|---|
 | Real bevels near the camera | within 14 m (through a scope's zoom), at most 120k triangles, nearest and in front first; Options > Video | `BrickNear` (BrickBevel.md 3) |
 | Stud geometry | 38 / 22 / 10 triangles by the stud's own distance to 18 m, at most 4,000 as geometry, cards to 70 m, open studs only | `BrickNear._sort_studs` |
+| Bands with studs at all | at most 96 bands hold studs (geometry or the far cards), nearest and in front first; past it the worst placed are smooth; Options > Video, Near Detail -- Studded Pieces (2026-10-27) | `BrickNear.max_card_bands` |
 | Loose pieces | small / large / total live counts | `IslandManager.small_live_max` and the rest |
 | Bricks left lying | a count, oldest heaps swept first; Options > Gameplay | `BrickHeap.max_bricks` |
 | Bricks in play | a brick budget: quiet storeys furthest from everybody go back to shells | `CityScene` (Space.md 5.3) |
@@ -234,3 +235,19 @@ The effects had four nodes made per event with no ceiling. Now capped (`tools/fx
   null (callers skip it; shock and radiation arcs check); an unknown key is null, not a crash.
   Shatters keep to max_shatters = 6, the oldest flying one taken over. Its emitter list is empty
   today.
+
+## 8. Studded bands and landings (2026-10-27)
+
+* **Studs on every band out to 70 m.** The cap bounded stud GEOMETRY (4,000) but not the bands
+  holding cards: past a collapse every piece of wreckage within `stud_card_radius` held up to four
+  MultiMeshes, a fetch of its studs and a re-sort as the camera walked. `max_card_bands` (96)
+  counts the bands holding studs of any kind, placed and swapped as the other caps are. The
+  `--chamfer` gate squeezes it to two. A band's studs and which are open now come from one walk
+  (`BrickWorld.get_chunk_studs_and_open`), not two.
+* **A landing's look for what it hit.** When the collider was not a building's body (wreckage,
+  ground), `CityScene._on_island_impact` tested every building in the registry -- every tree
+  too -- a landing at a time; it asks the building index now (`_near_buildings`). Landings were
+  already held to the island tick's work clock, so no count was added. `--big --shot`: 82
+  landings, the island tick's landings 1.0-1.6 ms; the run's worst ticks (100-226 ms) are a
+  collapse's pieces taking their bands and resolving, not landings.
+
