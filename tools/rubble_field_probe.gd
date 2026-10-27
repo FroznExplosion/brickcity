@@ -40,6 +40,14 @@ func _init() -> void:
 	_ok("its indices offset to its own vertices", idx == PackedInt32Array([0, 1, 2, 3, 4, 5]),
 			str(idx))
 	_ok("the box covers both", (built[1] as AABB).end.x >= 11.0 - 0.001, str(built[1]))
+	# One with an EMPTY UV2 among ones with none: joined, its empty slot left
+	# out -- it was counted present and left the slot short (seen in play).
+	var c := _tri()
+	c[Mesh.ARRAY_TEX_UV2] = PackedVector2Array()
+	var mixed := IslandManager._field_build([[a, Transform3D.IDENTITY, mat],
+			[c, Transform3D(Basis(), Vector3(0, 0, 5)), mat]])
+	_ok("a stand-in with an empty slot still merges", (mixed[0] as ArrayMesh).get_surface_count() == 1,
+			"%d surface(s)" % (mixed[0] as ArrayMesh).get_surface_count())
 	print("[rubble_field] %s" % ("ok" if _fails == 0 else "FAIL"))
 	quit(0 if _fails == 0 else 1)
 

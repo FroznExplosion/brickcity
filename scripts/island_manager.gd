@@ -5887,9 +5887,13 @@ static func _field_build(items: Array) -> Array:
 		var xf: Transform3D = it[1]
 		var mat: Material = it[2]
 		var turn := Transform3D(xf.basis.orthonormalized(), Vector3.ZERO)
+		# Present means non-empty: a stand-in can carry an empty array in a slot
+		# (a UV2 with nothing in it), and joined with full ones it left that
+		# slot short of the vertex count -- "array.size() != p_vertex_array_len",
+		# no surface made (seen in play, 2026-10-26).
 		var present := 0
 		for slot in Mesh.ARRAY_MAX:
-			if slot < src.size() and src[slot] != null:
+			if slot < src.size() and src[slot] != null and src[slot].size() > 0:
 				present |= 1 << slot
 		var k := [mat, present]
 		mats[k] = mat
@@ -5929,9 +5933,28 @@ static func _field_build(items: Array) -> Array:
 		g[1] = base + (src[Mesh.ARRAY_VERTEX] as PackedVector3Array).size()
 	var out := ArrayMesh.new()
 	for k in groups:
-		out.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, (groups[k] as Array)[0])
+		var arrays: Array = (groups[k] as Array)[0]
+		if not _field_arrays_ok(arrays, int((groups[k] as Array)[1])):
+			continue
+		out.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
 		out.surface_set_material(out.get_surface_count() - 1, mats[k])
 	return [out, out.get_aabb()]
+
+
+## Every per-vertex slot as long as the vertices (TANGENT four a vertex), so
+## add_surface_from_arrays takes it. A group that is not is left unmerged.
+static func _field_arrays_ok(arrays: Array, verts: int) -> bool:
+	if verts == 0 or arrays[Mesh.ARRAY_VERTEX] == null:
+		return false
+	for slot in Mesh.ARRAY_MAX:
+		var v = arrays[slot]
+		if v == null or slot == Mesh.ARRAY_INDEX:
+			continue
+		var per := 4 if slot == Mesh.ARRAY_TANGENT else 1
+		if slot == Mesh.ARRAY_VERTEX or slot == Mesh.ARRAY_NORMAL or slot == Mesh.ARRAY_COLOR 				or slot == Mesh.ARRAY_TEX_UV or slot == Mesh.ARRAY_TEX_UV2 or slot == Mesh.ARRAY_TANGENT:
+			if v.size() != verts * per:
+				return false
+	return true
 
 
 ## Start making far stand-ins of bricks coarse (FIELD_COARSEN_JOBS).
