@@ -98,3 +98,11 @@ hard landing breaking a piece, hits on pieces, crumbs and a cap, a building topp
 - Test windows: `cp tools/test_window.cfg override.cfg` once in the worktree, launch from Bash,
   no `--resolution`.
 - Write Python patch files with Write, not heredocs (the Bash tool halves backslashes).
+
+## Falling, D2 step 2 (2026-10-27)
+
+Planets.md 11.11 "D2 step 2 built": hard landings shear and snap a piece, small groups are crumbs
+(`PlanetCrumbs`), a cap (48 moving, 160 kept). `--gate=fall` 7/7. Next in D2: hits on a piece
+(the city's `IslandManager.damage` on a planet piece), the city's snap preferences, a whole
+building toppling (`solve.stability`), the AI told where pieces lie. `BrickWorld.is_solid` reads
+false for live bricks after a solve -- use `block_at` + `is_block_absent`.

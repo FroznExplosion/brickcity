@@ -1716,4 +1716,57 @@ it lies on the ground. Not yet (D2's next steps): a hard landing breaking a piec
 small groups as crumbs, a cap, a building toppling whole (`solve.stability`), the AI told where a
 piece lies.
 
-Not yet: the rest of D2 (above), furniture, materialising for a fight far from the camera.
+**Plan, D2 step 2 (2026-10-27): landings break, crumbs, a cap.** The city's rules
+(`IslandManager`), with the planet's down instead of -Y:
+- *A hard landing breaks a piece.* Each moving piece keeps its speed a tick; a drop of more than
+  `IMPACT_DELTA` (2.5 m/s) after `IMPACT_FALL_TICKS` (3) ticks above `IMPACT_MIN_SPEED` (4 m/s), at
+  most `MAX_IMPACTS` (4) a piece, is a landing. At up to `SHEAR_CONTACTS_MAX` (3) of its contact
+  points (the body's own, `contact_monitor`), a `PIECE_SHEAR` with `FLAG_PEEL`, its radius by the
+  speed lost (`IMPACT_RADIUS` 0.8 .. 2.6 m, the city's formula), at most `SHEAR_MAX_BLOCKS` (14)
+  loosened -- `DamageLog.apply_entry` on the piece's chunk, in its grid frame, as the city's. Then
+  what is no longer joined comes away (`get_components_near`): every group but the first is a new
+  piece moving as the old one did, or crumbs; the old piece's shapes are rebuilt (out of the space
+  first) and its mesh made again on a worker. A piece of fewer than `MIN_IMPACT_BLOCKS` (3) breaks
+  nothing. Not here yet: the long piece snapping across (`_snap_across`) -- with the topple.
+- *Crumbs.* A group of `DEBRIS_MAX_BLOCKS` (8) bricks or fewer -- from a building's solve or a
+  landing -- is cut out and freed (`split_island`, `release_chunk`) and thrown as crumbs
+  (`PlanetCrumbs`): each brick its own size and colour in one MultiMesh per size, falling along
+  `Gravity.down_at` from where it was, a kick out of the face and a spin, stopped on the first
+  thing under it (one ray along down: the ground or a building), lying 1.4 s, then shrunk away.
+  Presentation only: no collision, nothing for the AI.
+- *A cap.* At most `MAX_MOVING` (48) pieces moving; past it a new group of any size is crumbs. At
+  most `MAX_PIECES` (160) kept; past it the oldest settled piece out of the player's sight shrinks
+  away and is freed.
+Gate `--gate=fall` (headless): a panel cut free two storeys up falls, lands hard and comes apart
+(more pieces than came loose, crumbs thrown); every piece ends on the ground; 60 groups shed at
+once leave at most 48 moving. The other planet gates and the city's collapse probes unchanged.
+
+**D2 step 2 built (2026-10-27).** `PlanetPieces` (scripts/planet/planet_pieces.gd) and
+`PlanetCrumbs` (scripts/planet/planet_crumbs.gd), the city's constants throughout:
+- *Landings*: the rule as planned; at its contacts a `PIECE_SHEAR` with peel, and -- built now, not
+  deferred -- a long piece snaps across (`_snap_across`: its grid's long axis, at least 5 m, a plane
+  at each contact away from the ends and each other, one `PIECE_SNAP`). The peel alone did nothing
+  to a panel that lands on its side (it cuts along the piece's grid-down: three bricks loosened, still
+  joined); the snap is what breaks it. Not yet the city's preferences for where to snap (a weak seam,
+  a floor line, a crack), which read its islands' own records. Piece breaks are not in the planet's
+  DamageLog yet (no netcode there).
+- *Crumbs*: groups of 8 bricks or fewer, from a building's solve or a landing, the city's chamfered
+  boxes in their colours, falling along the planet's down to the first thing under them, gone 1.75 s
+  after landing.
+- *The cap*: 48 moving, past it crumbs; 160 kept, past it the oldest settled piece out of sight (or
+  60 m off) shrinks away over 0.6 s and is freed.
+- *The ring in the gates is wider* (24 studs, was 12): main's towers are now laid in long, staggered
+  bricks, and the old ring kept three bricks inside -- crumbs now, not a piece. `--gate=damage`
+  12/12 again with it.
+- *Found*: `BrickWorld.is_solid` reads false for cells whose bricks are still alive in the chunk
+  after a solve (1581 alive, every panel cell "not solid"): the gates use `block_at` +
+  `is_block_absent` to gather bricks. A first-storey panel cut free stays held: its wall's bricks
+  reach past the wall onto the floor slab inside.
+Gate `--gate=fall` (headless 7/7, three runs; windowed 7/7): the damage gate's panel (15 bricks)
+lifted 8 m and let go lands at 15.5 m/s, a landing by the rule, snaps into crumbs (2-5 small groups,
+6-8 crumbs), everything ends on the ground, the crumbs are gone 2.2 s later; sixty groups of nine
+shed at once make 48 pieces and 12 to crumbs. Damage 12, bricks 9, trees 7, squad 10, pawn 12.
+
+Not yet: hits on a piece, the city's snap preferences, a building toppling whole
+(`solve.stability`), the AI told where a piece lies; furniture, materialising for a fight far from
+the camera.
