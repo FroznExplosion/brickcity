@@ -2387,6 +2387,7 @@ func _slicer_panel() -> void:
 	_ws._xform_keep.button_pressed = false
 	var groups: int = _ws._edit_groups.size()
 	(_ws._xform_size[1] as SpinBox).value = size0.y * 2.0
+	_ws._xform_settle(true)
 	var s1: Vector3 = _ws.held_shape()[2]
 	var box: AABB = (_ws._placed.xf as Transform3D) * (_ws._placed.box as AABB)
 	_ok("a size typed without proportions stretches it along that axis alone, one undo",
@@ -2396,11 +2397,13 @@ func _slicer_panel() -> void:
 	# With proportions: x halved halves all three.
 	_ws._xform_keep.button_pressed = true
 	(_ws._xform_size[0] as SpinBox).value = s1.x * 0.5
+	_ws._xform_settle(true)
 	var s2: Vector3 = _ws.held_shape()[2]
 	_ok("with proportions kept, one size changes all three", absf(s2.x - s1.x * 0.5) < 0.05
 			and absf(s2.y - s1.y * 0.5) < 0.05, "%s -> %s" % [s1, s2])
 	# A turn typed.
 	(_ws._xform_turn[1] as SpinBox).value = 90.0
+	_ws._xform_settle(true)
 	_ok("a turn typed", absf((_ws.held_shape()[1] as Vector3).y - 90.0) < 0.5, str(_ws.held_shape()[1]))
 	# The gizmo's scale handle runs along the model's own x, which now lies along z.
 	_ws.set_gizmo_mode("scale")
@@ -2413,6 +2416,39 @@ func _slicer_panel() -> void:
 			and after.size.z > before.size.z * 1.9 and absf(after.size.x - before.size.x) < 0.02,
 			"axis %s, %s -> %s" % [ax, before.size, after.size])
 	_ws.set_gizmo_mode("all")
+	# Many steps quickly: shown at once, stamped once when they settle, one undo (an arrow held
+	# down stamped the model again every step -- up to a second each -- and the user's game crashed).
+	groups = _ws._edit_groups.size()
+	var form_box := _form_box(_ws._placed.node)
+	for k in 20:
+		(_ws._xform_pos[0] as SpinBox).value = (_ws._xform_pos[0] as SpinBox).value + 0.25
+	var unstamped := _form_box(_ws._placed.node).is_equal_approx(form_box)
+	_ws._xform_settle(true)
+	var moved := _form_box(_ws._placed.node).position.x - form_box.position.x
+	_ok("twenty quick steps: stamped once when settled, one undo", unstamped and absf(moved - 5.0 * STUD) < STUD * 0.3
+			and _ws._edit_groups.size() == groups + 1, "%.2f studs, %d undos" % [moved / STUD, _ws._edit_groups.size() - groups])
+	# Tab frees and takes the mouse, the pick kept; Escape with the mouse looking only frees it.
+	var tab := InputEventKey.new()
+	tab.keycode = KEY_TAB
+	tab.pressed = true
+	var was: bool = bool(_ws._camera.get("_captured"))
+	_ok("Tab: cursor and look swapped, the pick kept", _ws._tab_key(tab) and bool(_ws._camera.get("_captured")) != was
+			and not _ws._placed.is_empty())
+	_ws._camera.call("_set_captured", true)
+	var esc := InputEventKey.new()
+	esc.keycode = KEY_ESCAPE
+	esc.pressed = true
+	_ok("Escape with the mouse looking leaves the pick (the camera frees the mouse)", not _ws._placed_key(esc)
+			and not _ws._placed.is_empty())
+	_ws._camera.call("_set_captured", false)
+	# Enter typed in a number box is the box's: the pick stays.
+	(_ws._xform_size[0] as SpinBox).get_line_edit().grab_focus()
+	var enter := InputEventKey.new()
+	enter.keycode = KEY_ENTER
+	enter.pressed = true
+	_ok("Enter in a number box keeps the pick", not _ws._placed_key(enter) and not _ws._placed.is_empty(),
+			str(_ws.get_viewport().gui_get_focus_owner()))
+	(_ws._xform_size[0] as SpinBox).get_line_edit().release_focus()
 	# Nothing picked: the hint; a drawing tool: the brush and the clay, not the panel.
 	_ws.select_model(null)
 	_ws.set_sculpt_mode("models")

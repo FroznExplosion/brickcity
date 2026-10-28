@@ -1052,6 +1052,24 @@ before), Move, Rotate, Scale. The number boxes take a hundredth and step a quart
 only the axis typed changes, so the others are not moved by the boxes' rounding.
 asset_workshop_probe 336 (8 new).
 
+**Then (2026-10-28, the user's report):** to use the panel they pressed Escape to get the cursor,
+and it let the pick go; Enter in a number box let it go too; stepping a number quickly crashed the
+game. Escape and Enter were the workshop's first (`_placed_key`, ahead of the GUI), and every
+step stamped the model again -- measured 0.2 s a size step and 0.6-0.8 s a turn or move step on
+a 100-stud model, each its own undo (92 after 90 steps). Now:
+
+- **Tab** frees the cursor or takes the mouse back to look, the pick kept (`_tab_key`); the
+  parts browser moved to **Shift+Tab** here (`WorkshopHotbar.browser_on_shift_tab`; the building
+  workshop's Tab is as it was).
+- **Escape** with the mouse looking only frees it (the camera's); with the cursor free it lets
+  the pick go. Enter, Escape and Tab typed in a number box are the box's; Enter takes the value
+  and leaves the box.
+- A typed or stepped number shows at once (the model's ghost) and stamps the model once the
+  numbers have been still for 0.4 s, one undo (`_xform_settle`); a new pick, letting go, Make
+  bricks, undo or a gizmo drag stamps it first. 90 quick steps: 7 ms, against 48 s.
+
+asset_workshop_probe 340 (4 new).
+
 ### Furniture and items (2026-10-23)
 
 The user (2026-10-23): build furniture and household items here, since the tools are better for
