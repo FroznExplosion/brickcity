@@ -346,3 +346,66 @@ All of it, merged; `tools/build_tools_probe.gd` 130 checks, `palette_probe` 2104
   `_rail_right` and the paint palette read its global place.
 * The probes' programmatic paths (`add_shape`, `floor_at`, `finish_walls`) keep `tall` and
   `floor_tall`; the rail no longer shows them.
+
+## 9. Floor plans: sketch it, raise it, storey by storey (2026-10-28)
+
+Asked: an option in Sketch to choose the grid the sketch (and its bricks) goes on; bricks that
+follow the sketch's outline at the held brick's thickness; and a way to build a building from
+a floor plan -- draw it (with shapes inside the sketch), drag the walls up along its outline,
+floors placed by themselves at the heights wanted, windows that repeat on every floor, and a
+new sketch on top to go on up with another outline.
+
+### The flow
+
+1. **Choose the level** (Sketch's "draw on"): where you aim (the first stroke's surface), or
+   a set level -- a plate number with up and down buttons a course at a time, and "on top of
+   the last building". The level's grid is drawn while Sketch is out.
+2. **Draw the plan**: strokes add to one outline on that level -- freehand, brush,
+   rectangle, ellipse or clicked corners, as many as you like (the shapes in the sketch);
+   RMB (or "cuts them out") takes area away (a courtyard, a notch). The plan shows as its
+   outline; Take back removes the last stroke, Clear all of it.
+3. **Raise it**: the Raise button, Enter, or a click (no drag) inside the plan -- then the
+   height follows the cursor and a click places it, as everything else (section 8). What it
+   makes is Sketch's "makes":
+   * **solid**: the plan filled, course on course (as before);
+   * **walls**: walls along the plan's outline, as thick as the held brick is wide -- the
+     bricks follow the outline;
+   * **a building**: walls along the outline and a **floor every storey** -- each storey a
+     floor (a plate, the whole plan, under the walls, so the walls stand on it and tie into
+     it) and `storey` courses of wall; pulled a storey at a time; a flat roof on top if
+     ticked.
+   The see-through preview shows the bricks, floors included.
+4. **Windows on every floor**: Cut's door and window have "every floor": clicked on a
+   building's wall, the opening is cut at the same place on each of its storeys (where it
+   fits in that storey's wall), frames and glass with it. One undo.
+5. **Go on up**: "On top of the last building" sets the level to its top; "...with its plan"
+   also starts the new plan from the last one's outline, to add to or cut from (a setback, a
+   tower on a podium). Raise, and so on.
+
+### Underneath
+
+* One kept shape for what a plan makes: kind `plan`, `points` {adds, subs} (the strokes, as
+  the pen gives them), `fill`, `storey` (wall plates a storey; 0 none), `floor` (1 plate),
+  `roof`. Its cells come from `BrickShapes.plan_cells`; the courses restart above each floor
+  (`course_starts`), so every storey's walls are whole bricks from its floor up.
+* A standing sketch (Sketch on "standing") keeps the old way: one stroke, then its thickness.
+
+### As built (2026-10-28)
+
+Merged; `tools/build_tools_probe.gd` 148 checks.
+
+* Sketch on "flat": strokes go into `WorkshopTools._draft` ({at, adds, subs}); `raise_plan`
+  makes a `plan` record and hands it to the section 8 height flow; a building pulls a storey
+  (`step`: its walls and its floor) at a time, its flat roof added on (`extra`). A tap (no
+  stroke) inside the plan raises it; Enter too.
+* "Solid" sketches are `plan` shapes now (filled), no longer `outline`; old saves' `outline`
+  shapes still lay as before.
+* A building's courses restart above each floor (`BrickShapes.course_starts`, passed to
+  `pack_courses` as `starts`): the probe checks every brick of its walls starts on a course
+  from its storey's floor, and the floors are plates.
+* Windows "on every floor" (`_every_floor`) only where the opening and its frame fit inside
+  that storey's wall band; a door on a building stands on its storey's floor. Openings are
+  cut when placed: raising the building higher later does not add them to the new storeys
+  (Repeat a storey, or place them again).
+* The level is a plate number; the grid drawn is the level's, a stud apart, over the plate.
+  Plans are on the upright grid only.

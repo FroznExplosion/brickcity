@@ -10,7 +10,9 @@ extends RefCounted
 ##   kind    rect, hollow, circle, ring, triangle, line, arch, stairs, jamb (a hollow
 ##           rectangle with no bottom: a door's frame), outline (`points`: drawn), polyline
 ##           (`points` {pts, closed}: a wall line), cells (`points`: the cells themselves, a
-##           floor), or roof (its own: `roof_plan`)
+##           floor), roof (its own: `roof_plan`), or plan (a floor plan: `points`
+##           {adds, subs} of strokes; filled, walls along its outline, or a building with a
+##           floor each storey -- `plan_cells`)
 ##   lie     flat (on a plane: u = x, v = z, stacked up y), wall_x (standing, u = x,
 ##           v = y, stacked along z) or wall_z (u = z, v = y, stacked along x)
 ##   a, b    the corners dragged, [u, v] cells; the box between them is the shape's
@@ -63,6 +65,8 @@ static func cells_2d(kind: String, a: Vector2i, b: Vector2i, rim: int = 1, asp: 
 			return cs
 		"polyline":
 			return polyline_cells(points, rim, asp)
+		"plan":
+			return plan_region(points)
 	var lo := Vector2i(mini(a.x, b.x), mini(a.y, b.y))
 	var hi := Vector2i(maxi(a.x, b.x), maxi(a.y, b.y))
 	var w := hi.x - lo.x + 1
@@ -190,6 +194,8 @@ static func outline_cells(points: Variant) -> Dictionary:
 static func solid_cells(sh: Dictionary) -> Dictionary:
 	if String(sh.get("kind", "")) == "roof":
 		return roof_plan(sh).cells
+	if String(sh.get("kind", "")) == "plan":
+		return plan_cells(sh)
 	var lie := String(sh.get("lie", "flat"))
 	var a := _v2(sh.get("a", [0, 0]))
 	var b := _v2(sh.get("b", [0, 0]))
@@ -210,6 +216,90 @@ static func shape_cells(sh: Dictionary) -> Dictionary:
 		for c in solid_cells(cut):
 			out.erase(c)
 	return out
+
+
+## A floor plan's area: every stroke drawn into it (`points.adds`: outlines and brush
+## strokes, as the sketch pen gives them) less every one drawn out (`points.subs`).
+static func plan_region(points: Variant) -> Dictionary:
+	var res := {}
+	if not (points is Dictionary):
+		return res
+	for e in points.get("adds", []):
+		res.merge(SketchPen.region_cells(e))
+	for e in points.get("subs", []):
+		for c in SketchPen.region_cells(e):
+			res.erase(c)
+	return res
+
+
+## The cells of `region` within `rim` cells of its outside (corners too): walls along its
+## outline, as thick as `rim`.
+static func ring(region: Dictionary, rim: int) -> Dictionary:
+	var res := {}
+	var r := maxi(1, rim)
+	for c in region:
+		var edge := false
+		for dx in range(-r, r + 1):
+			for dy in range(-r, r + 1):
+				if not region.has(c + Vector2i(dx, dy)):
+					edge = true
+					break
+			if edge:
+				break
+		if edge:
+			res[c] = true
+	return res
+
+
+## Which band layer `y` of a plan is: "floor" (the whole plan) or "wall" (its outline, or
+## all of it when filled). A building's storey is a floor (`floor` plates) and `storey`
+## plates of wall over it; a flat roof (`roof`) is a floor over the last storey.
+static func plan_band(sh: Dictionary, y: int) -> String:
+	var storey := int(sh.get("storey", 0))
+	if storey <= 0:
+		return "wall"
+	var ft := maxi(1, int(sh.get("floor", 1)))
+	var rel := y - int(sh.get("at", 0))
+	var depth := int(sh.get("depth", 1))
+	if bool(sh.get("roof", false)) and rel >= depth - ft:
+		return "floor"
+	return "floor" if posmod(rel, storey + ft) < ft else "wall"
+
+
+## Every cell of a plan: its floors the whole plan, its walls the outline `rim` wide (or the
+## whole plan, `fill`).
+static func plan_cells(sh: Dictionary) -> Dictionary:
+	var region := plan_region(sh.get("points", {}))
+	var walls := region if bool(sh.get("fill", false)) else ring(region, int(sh.get("rim", 1)))
+	var at := int(sh.get("at", 0))
+	var out := {}
+	for y in range(at, at + maxi(1, int(sh.get("depth", 1)))):
+		var band := region if plan_band(sh, y) == "floor" else walls
+		for c in band:
+			out[Vector3i(c.x, y, c.y)] = true
+	return out
+
+
+## The layers a brick `tall` plates high may start on, for a shape whose courses restart
+## (a building's walls, a course at a time up from each floor); empty for the rest -- their
+## courses count from their bottom.
+static func course_starts(sh: Dictionary, tall: int) -> Dictionary:
+	var res := {}
+	if String(sh.get("kind", "")) != "plan" or int(sh.get("storey", 0)) <= 0:
+		return res
+	var at := int(sh.get("at", 0))
+	var y := at
+	var end := at + int(sh.get("depth", 1))
+	while y < end:
+		if plan_band(sh, y) == "wall" and (y == at or plan_band(sh, y - 1) == "floor"):
+			var k := y
+			while k < end and plan_band(sh, k) == "wall":
+				res[k] = true
+				k += maxi(1, tall)
+			y = k
+		else:
+			y += 1
+	return res
 
 
 ## A roof on a footprint (Docs/BuildTools.md sections 7, 8): {slopes: [[facing, min cell,
@@ -303,7 +393,13 @@ static func reflected(sh: Dictionary, axis: int, plane: float) -> Dictionary:
 		for k in ["a", "b"]:
 			if out.has(k):
 				out[k][i] = int(round(2.0 * plane - int(out[k][i]) - 1))
-		if out.has("points"):
+		if out.has("points") and out.points is Dictionary and out.points.has("adds"):
+			var fl := func(q: Vector2) -> Vector2:
+				var v := q
+				v[i] = 2.0 * plane - v[i]
+				return v
+			out.points = map_plan(out.points, fl)
+		elif out.has("points"):
 			# A drawn outline is in plane numbers (cell edges); the others are cells.
 			var cont := String(sh.get("kind", "")) == "outline"
 			var flip := func(q: Variant) -> Array:
@@ -326,6 +422,26 @@ static func reflected(sh: Dictionary, axis: int, plane: float) -> Dictionary:
 	return out
 
 
+## A plan's strokes, every point put through `f` (Vector2 -> Vector2, in plane numbers).
+static func map_plan(points: Dictionary, f: Callable) -> Dictionary:
+	var out := {}
+	for k in ["adds", "subs"]:
+		var list := []
+		for e in points.get(k, []):
+			if e is Dictionary:
+				var d: Dictionary = e.duplicate(true)
+				d.brush = (d.brush as Array).map(func(q: Array) -> Array:
+					var v: Vector2 = f.call(Vector2(float(q[0]), float(q[1])))
+					return [v.x, v.y])
+				list.append(d)
+			else:
+				list.append((e as Array).map(func(q: Variant) -> Array:
+					var v: Vector2 = f.call(q if q is Vector2 else Vector2(float(q[0]), float(q[1])))
+					return [v.x, v.y]))
+		out[k] = list
+	return out
+
+
 ## A shape, a cut or a door's or window's spec moved `d` grid cells: its corners, its layer,
 ## its outline or brush stroke, its cuts and its opening with it. Its bricks are not (a copy
 ## is laid fresh).
@@ -337,7 +453,10 @@ static func shifted(sh: Dictionary, d: Vector3i) -> Dictionary:
 			out[k] = [int(out[k][0]) + m.x, int(out[k][1]) + m.y]
 	if out.has("at"):
 		out.at = int(out.at) + m.z
-	if out.has("points"):
+	if out.has("points") and out.points is Dictionary and out.points.has("adds"):
+		var mv := func(q: Vector2) -> Vector2: return q + Vector2(m.x, m.y)
+		out.points = map_plan(out.points, mv)
+	elif out.has("points"):
 		var pts = out.points
 		if pts is Dictionary and pts.has("brush"):
 			pts.brush = (pts.brush as Array).map(func(q: Array) -> Array: return [float(q[0]) + m.x, float(q[1]) + m.y])
@@ -418,9 +537,10 @@ static func parts_for(held: String, palette: Dictionary) -> Array:
 ## bond). Aligned: the same every course, seams straight up (stack bond).
 ##
 ## `taken`: cells already built in (Vector3i -> true) -- the courses go round them.
-## `base`: the layer the courses count from (default the lowest cell's).
+## `base`: the layer the courses count from (default the lowest cell's). `starts`: if given,
+## the layers bricks may start on (`course_starts`), counted as courses in order.
 static func pack_courses(cells: Dictionary, parts: Array, staggered: bool = true,
-		taken: Dictionary = {}, base: int = 1 << 30) -> Array:
+		taken: Dictionary = {}, base: int = 1 << 30, starts: Dictionary = {}) -> Array:
 	var out := []
 	var left := {}
 	var ys := {}
@@ -441,9 +561,14 @@ static func pack_courses(cells: Dictionary, parts: Array, staggered: bool = true
 		tall = maxi(tall, p[1].y)
 		long = maxi(long, maxi(p[1].x, p[1].z))
 		wide = maxi(wide, mini(p[1].x, p[1].z))
+	var start_list := starts.keys()
+	start_list.sort()
 	for y in layers:
 		var course: int = floori(float(y - base) / tall)
 		var on_course: bool = posmod(y - base, tall) == 0
+		if not starts.is_empty():
+			on_course = starts.has(y)
+			course = start_list.bsearch(y, false) - 1 if not on_course else start_list.find(y)
 		var along_x: bool = not staggered or course % 2 == 0
 		var here := []
 		for c in left:
