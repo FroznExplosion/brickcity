@@ -124,9 +124,6 @@ var part_sel := 0
 var toolbars := {}
 ## Mounts and sockets: {part, kind, slot, interface, at: [studs along, plates up, studs across]}.
 var points: Array = []
-## Holding LMB to lay a run: the cell last laid, or NO_STUD between runs.
-var _run_last := NO_STUD
-var _run_on := false
 ## A brick the workshop is about to delete, by recipe index, so its tag goes with it.
 var _removing := -1
 var _loading := false
@@ -205,11 +202,6 @@ var _sketch: Array[Vector2] = []
 var _photo_drag = null
 ## An RMB delete, for undo: what it took, newest last, one for each "delete" edit.
 var _deleted: Array = []
-## A held click lays a run only after the mouse has moved this far, this long after.
-const RUN_START_PX := 14.0
-const RUN_START_MS := 150
-var _run_moved := 0.0
-var _run_press_ms := 0
 ## The kept sketches: "part|plane|where" -> {part, plane, at, width, adds, subs, n}. `n`
 ## orders them: a part's first plane is its base (Round 4 in Docs/AssetWorkshop.md).
 ## adds and subs are outlines ([[across, up], ...]); bricks are what the sketch laid,
@@ -302,6 +294,11 @@ func _init() -> void:
 	@warning_ignore("integer_division")
 	work_x = plate_studs / 2
 	_ortho_size = VIEW_STUDS * BrickPalette.STUD_M * 0.75
+
+
+## The asset workshop has its own rail (AssetWorkshopUI), not the building tools'.
+func _wants_tools() -> bool:
+	return false
 
 
 func _ready() -> void:
@@ -1213,14 +1210,6 @@ func _unhandled_input(e: InputEvent) -> void:
 			_finish_drag()
 		get_viewport().set_input_as_handled()
 		return
-	if e is InputEventMouseButton and e.button_index == MOUSE_BUTTON_LEFT:
-		if e.pressed and not _painting and _stamp == null:
-			_run_on = true
-			_run_last = _cell
-			_run_moved = 0.0
-			_run_press_ms = Time.get_ticks_msec()
-		elif not e.pressed:
-			_run_on = false
 	if e is InputEventKey and e.pressed and not e.echo and not e.ctrl_pressed and e.alt_pressed:
 		var alt := true
 		match e.keycode:
@@ -1290,9 +1279,6 @@ func _process(dt: float) -> void:
 		_ui.process(dt)
 	if _ruler == null:
 		return
-	if _run_on and not Input.is_mouse_button_pressed(MOUSE_BUTTON_LEFT):
-		_run_on = false
-	run_step()
 	if tool in ["sketch", "stud", "move"]:
 		_ghost.visible = false
 		_ghost_studs.visible = false
@@ -2090,20 +2076,7 @@ func _brick_info(i: int) -> Dictionary:
 			"mat": recipe.material_of(i), "tag": part_of[i] if i < part_of.size() else part_sel}
 
 
-## The upright-grid brick of this part at this cell, by recipe index, or -1. Found
-## through the world's own cell lookup, not by walking the recipe.
-func find_brick(arch: String, cell: Vector3i) -> int:
-	var size := BrickPalette.size_of(arch)
-	for dx in size.x:
-		for dy in size.y:
-			for dz in size.z:
-				var block := world.block_at(chunk, cell + Vector3i(dx, dy, dz))
-				if block < 0:
-					continue
-				var i := _recipe_id_at(0, block)
-				if i >= 0 and recipe.cell_of(i) == cell and recipe.part_of(i) == arch:
-					return i
-	return -1
+## (`find_brick`, the brick of a part at a cell, is the building workshop's: workshop.gd.)
 
 
 ## Take a brick up as RMB would, found by part and cell. True if it went.
@@ -2153,24 +2126,12 @@ func part_counts() -> Dictionary:
 
 
 # ---------------------------------------------------------------------------
-# Phase 2: holding LMB lays a run
+# Phase 2: holding LMB lays a run (the run itself is the building workshop's: workshop.gd)
 # ---------------------------------------------------------------------------
 
-## While a run is held, the ghost stays on the plane it started on, as with E.
+## While a shape or a select box is dragged, the ghost stays on the plane it started on.
 func _hold_lock(on: bool) -> void:
-	super._hold_lock(on or _run_on or _dragging)
-
-
-## Lay the held brick where the ghost has moved to, if it fits there -- once the click
-## has become a drag: a hand that shook a little while clicking laid two bricks.
-func run_step() -> void:
-	if not _run_on or _cell == _run_last:
-		return
-	if _run_moved < RUN_START_PX or Time.get_ticks_msec() - _run_press_ms < RUN_START_MS:
-		return
-	_run_last = _cell
-	if _valid:
-		_place()
+	super._hold_lock(on or _dragging)
 
 
 # ---------------------------------------------------------------------------
@@ -6334,8 +6295,6 @@ func _input(e: InputEvent) -> void:
 		get_viewport().set_input_as_handled()
 		return
 	super._input(e)
-	if _run_on and e is InputEventMouseMotion:
-		_run_moved += (e as InputEventMouseMotion).relative.length()
 
 
 # ---------------------------------------------------------------------------

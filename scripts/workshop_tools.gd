@@ -1,0 +1,879 @@
+class_name WorkshopTools
+extends Node
+
+## The building workshop's tools (Docs/BuildTools.md): the rail down the left (`ToolRail`,
+## the asset workshop's own), and the tools that build buildings fast -- Shapes of the held
+## brick, flat or standing as a wall, staggered or aligned; Cut, for doorways and windows;
+## Select, to change or let go of a kept shape. Place, Paint and Rooms are the workshop's
+## own hand, brush and spaces tool.
+##
+## A shape stays a shape: it is kept in `recipe.meta.shapes` with its cuts and the bricks
+## it laid, so a doorway cut through a wall later lays the wall again round it and leaves
+## the rest of the wall's bricks where they are.
+
+const TOOLS := [
+	["place", "Place", "Esc", "Click to put the brick in hand on the stud you aim at; hold and move to lay a run. RMB takes one away; R turns it; 1-9 and the wheel pick the brick."],
+	["paint", "Paint", "B", "Click or drag over bricks to give them the colour in hand."],
+	["shape", "Shapes", "K", "Drag out a shape of the held brick: flat on the plane you aim at, or standing as a wall. RMB drag cuts the same shape out. Shift keeps a circle round."],
+	["cut", "Cut", "N", "Drag a doorway, window or any shape on a wall: the wall is laid again round it. Door and window: one click."],
+	["select", "Select", "L", "Click a shape's brick to pick the shape: change its height, bond or brick, take its cuts out, delete it, or let it go (keep the bricks)."],
+	["rooms", "Rooms", "O", "Rooms and openings, as O: LMB marks a room or an opening, RMB forgets it."],
+]
+const LIE_NAMES := [["flat", "flat (floor, or walls round it)"], ["wall", "standing wall"]]
+const CUT_KINDS := [["rect", "rectangle (drag)"], ["arch", "arch (drag)"], ["circle", "circle (drag)"],
+		["door", "door (click)"], ["window", "window (click)"]]
+## A door and a window cut by one click: studs across, plates up; a window's sill is where
+## it is clicked, a door stands on the floor of the wall.
+const DOOR := Vector2i(4, 18)
+const WINDOW := Vector2i(4, 9)
+
+var ws    ## the workshop (workshop.gd)
+var rail: ToolRail
+var tool := "place"
+
+## Shapes options.
+var kind := "rect"
+var lie := "flat"
+var tall := 3        # plates, flat
+var thick := 1       # studs, a wall's depth
+var rim := 1         # studs, a hollow rectangle's or a ring's
+var staggered := true
+var cut_kind := "rect"
+
+## A drag under way: {button, lie, at, a, b, depth} in the plane's own cells; empty if none.
+var _drag := {}
+## The kept shape picked with Select: its id, or -1.
+var selected := -1
+## Undo records, newest last, one for each "shape" edit: {before: {id: shape or null},
+## hand: [[part, [x, y, z], colour, mat, role]]} -- hand-laid bricks a cut took up.
+var _undo := []
+## "part|x|y|z" -> shape id, for the bricks of kept shapes; rebuilt when stale.
+var _owner := {}
+var _owner_dirty := true
+## Bumped when a kept shape changes: Select's options are read back then, not each frame
+## (a number being typed would be put back under the cursor).
+var _rev := 0
+var _shown := Vector2i(-2, -1)
+
+var _lines: MeshInstance3D
+var _im: ImmediateMesh
+var _shape_box: VBoxContainer
+var _cut_box: VBoxContainer
+var _select_box: VBoxContainer
+var _select_label: Label
+var _kind_pick: OptionButton
+var _lie_pick: OptionButton
+var _bond_pick: OptionButton
+var _tall_spin: SpinBox
+var _thick_spin: SpinBox
+var _rim_spin: SpinBox
+var _sel_depth: SpinBox
+var _sel_rim: SpinBox
+var _sel_bond: OptionButton
+var _syncing := false
+
+
+func setup(workshop, layer: CanvasLayer) -> void:
+	ws = workshop
+	rail = ToolRail.new(184.0)
+	rail.name = "ToolRail"
+	layer.add_child(rail)
+	rail.fill("Build", TOOLS, pick)
+	_build_options()
+	_im = ImmediateMesh.new()
+	_lines = MeshInstance3D.new()
+	_lines.mesh = _im
+	var m := StandardMaterial3D.new()
+	m.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	m.vertex_color_use_as_albedo = true
+	m.no_depth_test = true
+	m.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	_lines.material_override = m
+	_lines.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	ws.add_child(_lines)
+
+
+# ---------------------------------------------------------------------------
+# Kept shapes: recipe.meta.shapes
+# ---------------------------------------------------------------------------
+
+func shapes() -> Array:
+	if not ws.recipe.meta.has("shapes"):
+		ws.recipe.meta["shapes"] = []
+	return ws.recipe.meta["shapes"]
+
+
+func _index_of(id: int) -> int:
+	var list := shapes()
+	for i in list.size():
+		if int(list[i].id) == id:
+			return i
+	return -1
+
+
+func shape_of(id: int) -> Dictionary:
+	var i := _index_of(id)
+	return {} if i < 0 else shapes()[i]
+
+
+func _next_id() -> int:
+	var n := 0
+	for sh in shapes():
+		n = maxi(n, int(sh.id) + 1)
+	return n
+
+
+## Put a shape's record in (or with `sh` empty, take it out). Records are never changed in
+## place, so an undo can hold the old one as it is.
+func _store(id: int, sh: Dictionary) -> void:
+	var i := _index_of(id)
+	if sh.is_empty():
+		if i >= 0:
+			shapes().remove_at(i)
+	elif i >= 0:
+		shapes()[i] = sh
+	else:
+		shapes().append(sh)
+	_owner_dirty = true
+	_rev += 1
+
+
+## A new build was opened or begun: its shapes are its own.
+func recipe_changed() -> void:
+	_undo.clear()
+	_drag = {}
+	selected = -1
+	_owner_dirty = true
+
+
+## The kept shape a brick was laid by, or -1.
+func owner_of(part: String, cell: Vector3i) -> int:
+	if _owner_dirty:
+		_owner.clear()
+		for sh in shapes():
+			for b in sh.bricks:
+				_owner["%s|%d|%d|%d" % [b[0], b[1][0], b[1][1], b[1][2]]] = int(sh.id)
+		_owner_dirty = false
+	return int(_owner.get("%s|%d|%d|%d" % [part, cell.x, cell.y, cell.z], -1))
+
+
+## A kept shape's brick taken up by hand (RMB): it is no longer the shape's until the shape
+## is laid again.
+func forget_brick(part: String, cell: Vector3i) -> void:
+	var id := owner_of(part, cell)
+	var i := _index_of(id)
+	if i < 0:
+		return
+	var sh: Dictionary = shapes()[i].duplicate(true)
+	sh.bricks = (sh.bricks as Array).filter(func(b: Array) -> bool:
+		return not (String(b[0]) == part and BuildRecipe.cell_from(b[1]) == cell))
+	shapes()[i] = sh
+	_owner_dirty = true
+
+
+## A new kept shape, from the options in hand: returns its id.
+func add_shape(k: String, l: String, a: Vector2i, b: Vector2i, at: int, points: Array = []) -> int:
+	var id := _next_id()
+	var sh := {
+		"id": id, "kind": k, "lie": l, "a": [a.x, a.y], "b": [b.x, b.y], "at": at,
+		"depth": tall if l == "flat" else thick, "rim": rim, "bond": "stagger" if staggered else "align",
+		"part": BrickPalette.part_of(ws._archetype_name()), "colour": ws._colour, "mat": ws._mat,
+		"role": ws._role, "cuts": [], "bricks": [],
+	}
+	if not points.is_empty():
+		sh.points = points
+	var rec := _begin()
+	rec.before[id] = null
+	_lay(sh)
+	_end(rec)
+	return id
+
+
+## Change a kept shape -- `change` merged into it -- and lay it again whole. One undo.
+func change_shape(id: int, change: Dictionary) -> void:
+	var old := shape_of(id)
+	if old.is_empty():
+		return
+	var sh := old.duplicate(true)
+	sh.merge(change, true)
+	var rec := _begin()
+	rec.before[id] = old
+	_take_up(old)
+	_lay(sh)
+	_end(rec)
+
+
+## Take a kept shape and its bricks away. One undo.
+func delete_shape(id: int) -> void:
+	var old := shape_of(id)
+	if old.is_empty():
+		return
+	var rec := _begin()
+	rec.before[id] = old
+	_take_up(old)
+	_store(id, {})
+	if selected == id:
+		selected = -1
+	_end(rec)
+
+
+## Forget a shape and keep its bricks: plain bricks from now on. One undo.
+func let_go(id: int) -> void:
+	var old := shape_of(id)
+	if old.is_empty():
+		return
+	var rec := _begin()
+	rec.before[id] = old
+	_store(id, {})
+	# Its bricks stay: the undo must not take them up, only give the record back.
+	rec["kept"] = true
+	if selected == id:
+		selected = -1
+	_end(rec)
+
+
+## Cut a shape (a cut record: kind, lie, a, b, at, depth) out of every kept shape it
+## touches -- each laid again near the cut only -- and take up hand-laid bricks in it.
+## One undo. Returns how many shapes it cut.
+func apply_cut(cut: Dictionary) -> int:
+	var cells := BrickShapes.solid_cells(cut)
+	if cells.is_empty():
+		return 0
+	var rec := _begin()
+	var n := 0
+	for sh in shapes().duplicate():
+		var mine := BrickShapes.shape_cells(sh)
+		var hit := false
+		for c in cells:
+			if mine.has(c):
+				hit = true
+				break
+		if not hit:
+			continue
+		var next: Dictionary = sh.duplicate(true)
+		(next.cuts as Array).append(cut.duplicate(true))
+		rec.before[int(sh.id)] = sh
+		_lay(next, _near_box(cells, sh, String(cut.get("lie", ""))))
+		n += 1
+	# Hand-laid bricks in the cut go too: the hole is a hole.
+	var hand := {}
+	for c in cells:
+		var rid := _rid_at(c)
+		if rid >= 0 and owner_of(ws.recipe.part_of(rid), ws.recipe.cell_of(rid)) < 0:
+			hand[rid] = true
+	var rids := hand.keys()
+	rids.sort()
+	rids.reverse()
+	for rid in rids:
+		rec.hand.append([ws.recipe.part_of(rid), _plain(ws.recipe.cell_of(rid)), ws.recipe.colour_of(rid),
+				ws.recipe.material_of(rid), ws.recipe.role_of(rid)])
+		ws._remove_rid(int(rid))
+	_end(rec)
+	return n + rids.size()
+
+
+func _rid_at(c: Vector3i) -> int:
+	var block: int = ws.world.block_at(ws.asm.frames[0], c)
+	if block < 0 or not ws.world.is_solid(ws.asm.frames[0], c):
+		return -1
+	return ws._recipe_id_at(0, block)
+
+
+## The box round a cut, a brick's length out along its plane and a course up and down (not
+## deeper than the cut: a wall's cut leaves the wall behind it alone): a shape's bricks
+## outside it stay where they are when it is laid again.
+func _near_box(cells: Dictionary, sh: Dictionary, cut_lie: String = "") -> AABB:
+	var lo := Vector3i(1 << 30, 1 << 30, 1 << 30)
+	var hi := -lo
+	for c in cells:
+		lo = Vector3i(mini(lo.x, c.x), mini(lo.y, c.y), mini(lo.z, c.z))
+		hi = Vector3i(maxi(hi.x, c.x), maxi(hi.y, c.y), maxi(hi.z, c.z))
+	var size := BrickPalette.part_size(String(sh.part))
+	var reach := maxi(size.x, size.z)
+	var up := maxi(1, size.y)
+	var g := Vector3i(reach, up, reach)
+	match cut_lie:
+		"flat": g.y = 0
+		"wall_x": g.z = 0
+		"wall_z": g.x = 0
+	return AABB(Vector3(lo - g), Vector3(hi - lo + g * 2 + Vector3i.ONE))
+
+
+## Lay a shape's bricks and store it. `near`: only the bricks touching it are taken up and
+## laid again (the rest of the shape stays as it was); without it, all of them.
+func _lay(sh: Dictionary, near: AABB = AABB()) -> void:
+	var cells := BrickShapes.shape_cells(sh)
+	var keep := []
+	ws._batch = true
+	if near.size == Vector3.ZERO:
+		_take_up(sh)
+	else:
+		for b in sh.bricks:
+			var at := BuildRecipe.cell_from(b[1])
+			var size := BrickPalette.size_of(String(b[0]))
+			var box := AABB(Vector3(at), Vector3(size))
+			if box.intersects(near):
+				_take_part(String(b[0]), at)
+			else:
+				keep.append(b)
+	var taken := {}
+	for c in cells:
+		if _rid_at(c) >= 0:
+			taken[c] = true
+	var parts := BrickShapes.parts_for(String(sh.part), ws.palette)
+	var base := _base_layer(sh)
+	var laid := keep.duplicate()
+	for pc in BrickShapes.pack_courses(cells, parts, String(sh.bond) != "align", taken, base):
+		if ws.lay_part(String(pc[0]), pc[1], int(sh.colour), int(sh.mat), int(sh.get("role", 0))):
+			laid.append([pc[0], _plain(pc[1])])
+	ws._batch = false
+	var out := sh.duplicate(true)
+	out.bricks = laid
+	_store(int(sh.id), out)
+
+
+## The layer a shape's courses count from: its lowest, cuts or not, so a cut does not move
+## the courses of the wall round it.
+func _base_layer(sh: Dictionary) -> int:
+	var l := String(sh.lie)
+	if l == "flat":
+		return int(sh.at)
+	return mini(int(sh.a[1]), int(sh.b[1]))
+
+
+## Take up a shape's bricks. The caller redraws (`_end`): taking up does not.
+func _take_up(sh: Dictionary) -> void:
+	for b in sh.bricks:
+		_take_part(String(b[0]), BuildRecipe.cell_from(b[1]))
+
+
+func _take_part(part: String, cell: Vector3i) -> bool:
+	var rid: int = ws.find_brick(part, cell)
+	if rid < 0:
+		return false
+	# A shape's bricks have no edit of their own: the shape's undo puts them back.
+	ws._remove_rid(rid, false)
+	return true
+
+
+static func _plain(c: Vector3i) -> Array:
+	return [c.x, c.y, c.z]
+
+
+func _begin() -> Dictionary:
+	return {"before": {}, "hand": []}
+
+
+func _end(rec: Dictionary) -> void:
+	_undo.append(rec)
+	ws._edits.append("shape")
+	ws._after_edit()
+
+
+## Z on a shape edit: each shape it changed back as it was, its bricks with it; hand-laid
+## bricks a cut took up laid again.
+func undo() -> bool:
+	if _undo.is_empty():
+		return false
+	var rec: Dictionary = _undo.pop_back()
+	ws._edits.pop_back()
+	ws._batch = true
+	for id in rec.before:
+		var now := shape_of(int(id))
+		if not now.is_empty() and not rec.get("kept", false):
+			_take_up(now)
+		var was = rec.before[id]
+		if was == null:
+			_store(int(id), {})
+			continue
+		_store(int(id), was)
+		if rec.get("kept", false):
+			continue
+		for b in was.bricks:
+			ws.lay_part(String(b[0]), BuildRecipe.cell_from(b[1]), int(was.colour), int(was.mat), int(was.get("role", 0)))
+	for h in rec.hand:
+		ws.lay_part(String(h[0]), BuildRecipe.cell_from(h[1]), int(h[2]), int(h[3]), int(h[4]))
+	ws._batch = false
+	ws._after_edit()
+	if selected >= 0 and shape_of(selected).is_empty():
+		selected = -1
+	return true
+
+
+# ---------------------------------------------------------------------------
+# The rail
+# ---------------------------------------------------------------------------
+
+## A rail button or its key: that tool in hand, everything else put down.
+func pick(id: String) -> void:
+	_drag = {}
+	if ws._spaces != null and ws._spaces.active and id != "rooms":
+		ws._spaces.toggle()
+	match id:
+		"paint":
+			ws._set_painting(true)
+		"rooms":
+			ws._set_painting(false)
+			if ws._spaces != null and not ws._spaces.active:
+				ws._spaces.toggle()
+		_:
+			ws._set_painting(false)
+	tool = id if id != "paint" and id != "rooms" else "place"
+	if id != "select":
+		selected = -1
+
+
+## The tool in hand, as the rail lights it.
+func active() -> String:
+	if ws._painting:
+		return "paint"
+	if ws._spaces != null and ws._spaces.active:
+		return "rooms"
+	return tool
+
+
+## True while a shape or a cut is dragged: the workshop holds the ghost's plane.
+func dragging() -> bool:
+	return not _drag.is_empty()
+
+
+func _build_options() -> void:
+	rail.options.visible = true
+	rail.options.add_child(HSeparator.new())
+	_shape_box = VBoxContainer.new()
+	rail.options.add_child(_shape_box)
+	_kind_pick = _choice(_shape_box, "shape", BrickShapes.KINDS, func(i: int) -> void:
+		kind = BrickShapes.KINDS[i][0])
+	_lie_pick = _choice(_shape_box, "lies", LIE_NAMES, func(i: int) -> void:
+		lie = LIE_NAMES[i][0])
+	_tall_spin = _spin(_shape_box, "tall (plates; a brick is 3)", 1, 240, tall, func(v: float) -> void: tall = int(v))
+	_thick_spin = _spin(_shape_box, "thick (studs)", 1, 16, thick, func(v: float) -> void: thick = int(v))
+	_rim_spin = _spin(_shape_box, "rim (studs)", 1, 16, rim, func(v: float) -> void: rim = int(v))
+	_bond_pick = _choice(_shape_box, "bond", [["stagger", "staggered (running bond)"], ["align", "aligned (stack bond)"]],
+			func(i: int) -> void: staggered = i == 0)
+
+	_cut_box = VBoxContainer.new()
+	rail.options.add_child(_cut_box)
+	_choice(_cut_box, "cut", CUT_KINDS, func(i: int) -> void: cut_kind = CUT_KINDS[i][0])
+	var cl := Label.new()
+	cl.text = "Goes through the wall clicked, not the one behind it."
+	_cut_box.add_child(cl)
+
+	_select_box = VBoxContainer.new()
+	rail.options.add_child(_select_box)
+	_select_label = Label.new()
+	_select_box.add_child(_select_label)
+	_sel_depth = _spin(_select_box, "tall / thick", 1, 240, 3, func(v: float) -> void:
+		if not _syncing and selected >= 0:
+			change_shape(selected, {"depth": int(v)}))
+	_sel_rim = _spin(_select_box, "rim (studs)", 1, 16, 1, func(v: float) -> void:
+		if not _syncing and selected >= 0:
+			change_shape(selected, {"rim": int(v)}))
+	_sel_bond = _choice(_select_box, "bond", [["stagger", "staggered"], ["align", "aligned"]], func(i: int) -> void:
+		if not _syncing and selected >= 0:
+			change_shape(selected, {"bond": "stagger" if i == 0 else "align"}))
+	_button(_select_box, "Lay it with the held brick", func() -> void:
+		if selected >= 0:
+			change_shape(selected, {"part": BrickPalette.part_of(ws._archetype_name()), "colour": ws._colour,
+					"mat": ws._mat}))
+	_button(_select_box, "Take its cuts out", func() -> void:
+		if selected >= 0:
+			change_shape(selected, {"cuts": []}))
+	_button(_select_box, "Let go (keep the bricks)", func() -> void:
+		if selected >= 0:
+			let_go(selected))
+	_button(_select_box, "Delete it", func() -> void:
+		if selected >= 0:
+			delete_shape(selected))
+	_fit(rail.options)
+
+
+func _choice(box: Container, label: String, items: Array, then: Callable) -> OptionButton:
+	var l := Label.new()
+	l.text = label
+	box.add_child(l)
+	var o := OptionButton.new()
+	for it in items:
+		o.add_item(String(it[1]))
+	o.focus_mode = Control.FOCUS_NONE
+	o.item_selected.connect(then)
+	box.add_child(o)
+	return o
+
+
+func _spin(box: Container, label: String, lo: int, hi: int, v: int, then: Callable) -> SpinBox:
+	var row := HBoxContainer.new()
+	box.add_child(row)
+	var l := Label.new()
+	l.text = label
+	row.add_child(l)
+	var s := SpinBox.new()
+	s.min_value = lo
+	s.max_value = hi
+	s.value = v
+	s.value_changed.connect(then)
+	row.add_child(s)
+	return s
+
+
+func _button(box: Container, text: String, then: Callable) -> void:
+	var b := Button.new()
+	b.text = text
+	b.focus_mode = Control.FOCUS_NONE
+	b.pressed.connect(then)
+	box.add_child(b)
+
+
+## Everything kept to the rail's width: labels wrap, choices clip.
+func _fit(n: Node) -> void:
+	for c in n.get_children():
+		if c is Label:
+			(c as Label).autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+			(c as Label).custom_minimum_size.x = 168
+			(c as Label).add_theme_font_size_override("font_size", 11)
+		elif c is OptionButton:
+			(c as OptionButton).clip_text = true
+			(c as OptionButton).custom_minimum_size.x = 168
+		elif c is HBoxContainer:
+			for k in c.get_children():
+				if k is Label:
+					(k as Label).autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+					(k as Label).size_flags_horizontal = Control.SIZE_EXPAND_FILL
+					(k as Label).custom_minimum_size.x = 96
+					(k as Label).add_theme_font_size_override("font_size", 11)
+				elif k is SpinBox:
+					(k as SpinBox).custom_minimum_size.x = 64
+			continue
+		_fit(c)
+
+
+func _rail_right() -> float:
+	return rail.position.x + rail.size.x + 12.0
+
+
+# ---------------------------------------------------------------------------
+# Input
+# ---------------------------------------------------------------------------
+
+## The tools' share of the input. True when it was theirs.
+func input(e: InputEvent) -> bool:
+	if e is InputEventMouseButton and rail.has_mouse():
+		return true
+	if e is InputEventKey and e.pressed and not e.echo and not e.ctrl_pressed:
+		if e.alt_pressed:
+			return false
+		match e.keycode:
+			KEY_K:
+				pick("place" if tool == "shape" else "shape")
+				return true
+			KEY_N:
+				pick("place" if tool == "cut" else "cut")
+				return true
+			KEY_L:
+				pick("place" if tool == "select" else "select")
+				return true
+			KEY_ESCAPE:
+				if tool != "place" and _drag.is_empty():
+					pick("place")
+				elif not _drag.is_empty():
+					_drag = {}
+				return false   # Esc still frees the mouse
+	if not (e is InputEventMouseButton) or e.button_index not in [MOUSE_BUTTON_LEFT, MOUSE_BUTTON_RIGHT]:
+		return false
+	match tool:
+		"shape":
+			return _shape_input(e)
+		"cut":
+			return _cut_input(e)
+		"select":
+			if e.pressed and e.button_index == MOUSE_BUTTON_LEFT:
+				_select_click()
+				return true
+	return false
+
+
+func _ray() -> Array:
+	return ws._mouse_ray()
+
+
+## Shapes: press where the ghost is, drag, let go. LMB lays the shape, RMB cuts it out.
+func _shape_input(e: InputEventMouseButton) -> bool:
+	if e.pressed:
+		if not _drag.is_empty() or ws._frame != 0:
+			return true
+		var c: Vector3i = ws._cell
+		var l := lie
+		var at := c.y
+		var a := Vector2i(c.x, c.z)
+		if l == "wall":
+			var fwd: Vector3 = -ws._camera.global_transform.basis.z
+			l = "wall_x" if absf(fwd.z) >= absf(fwd.x) else "wall_z"
+			var uvw := BrickShapes.from_3d(l, c)
+			a = Vector2i(uvw.x, uvw.y)
+			at = uvw.z
+		_drag = {"button": e.button_index, "lie": l, "at": at, "a": a, "b": a,
+				"depth": tall if l == "flat" else thick, "kind": kind}
+		return true
+	if _drag.is_empty() or e.button_index != int(_drag.button):
+		return true
+	var d := _drag
+	_drag = {}
+	if d.button == MOUSE_BUTTON_LEFT:
+		add_shape(String(d.kind), String(d.lie), d.a, d.b, int(d.at))
+	else:
+		apply_cut({"kind": d.kind, "lie": d.lie, "a": [d.a.x, d.a.y], "b": [d.b.x, d.b.y],
+				"at": d.at, "depth": d.depth, "rim": rim})
+	return true
+
+
+## Cut: press on a face of the build, drag on its plane, let go; a door or a window is
+## one click.
+func _cut_input(e: InputEventMouseButton) -> bool:
+	if e.button_index != MOUSE_BUTTON_LEFT:
+		return false
+	if e.pressed:
+		var face := face_under(_ray()[0], _ray()[1])
+		if face.is_empty():
+			return true
+		var uvw := BrickShapes.from_3d(String(face.lie), face.cell)
+		var a := Vector2i(uvw.x, uvw.y)
+		if cut_kind in ["door", "window"]:
+			apply_cut(preset_cut(cut_kind, face))
+			return true
+		_drag = {"button": MOUSE_BUTTON_LEFT, "lie": face.lie, "at": face.at, "a": a, "b": a,
+				"depth": face.depth, "kind": cut_kind, "cut": true}
+		return true
+	if _drag.is_empty():
+		return true
+	var d := _drag
+	_drag = {}
+	apply_cut({"kind": d.kind, "lie": d.lie, "a": [d.a.x, d.a.y], "b": [d.b.x, d.b.y],
+			"at": d.at, "depth": d.depth})
+	return true
+
+
+## The face of the build under a ray: {cell, lie, at, depth} -- the cell hit, the plane
+## of the face (a side facing Z is wall_x, facing X wall_z, a top or bottom flat), and how
+## deep the build is behind it there: a cut goes that far in, through the wall and no
+## further. Empty if the ray hits nothing of the upright grid.
+func face_under(from: Vector3, dir: Vector3) -> Dictionary:
+	var hit: Dictionary = ws._first_hit(from, dir)
+	if hit.is_empty() or hit.frame != ws.asm.frames[0]:
+		return {}
+	var f: int = ws.asm.frames[0]
+	var c: Vector3i = ws._cell_in(f, hit.point)
+	var back: Vector3i = ws._cell_in(f, hit.point - dir * BrickPalette.PLATE_M * 0.34)
+	var n := back - c
+	var l := "wall_x"
+	var axis := 2
+	if n.y != 0 and n.x == 0 and n.z == 0:
+		l = "flat"
+		axis = 1
+	elif n.x != 0 and n.z == 0:
+		l = "wall_z"
+		axis = 0
+	elif n == Vector3i.ZERO or (n.x != 0 and n.z != 0):
+		# A corner: the way the ray mostly went.
+		var ldir: Vector3 = ws.world.get_chunk_transform(f).basis.inverse() * dir
+		if absf(ldir.x) > absf(ldir.z) and absf(ldir.x) > absf(ldir.y):
+			l = "wall_z"
+			axis = 0
+		elif absf(ldir.y) > absf(ldir.z):
+			l = "flat"
+			axis = 1
+	# In from the face while there is something built: that is the wall's thickness here.
+	var step := Vector3i.ZERO
+	step[axis] = -1 if n[axis] > 0 else 1
+	if n[axis] == 0:
+		var ldir2: Vector3 = ws.world.get_chunk_transform(f).basis.inverse() * dir
+		step[axis] = 1 if ldir2[axis] > 0.0 else -1
+	var p := c
+	var depth := 0
+	while depth < 64 and ws.world.is_solid(f, p):
+		depth += 1
+		p += step
+	var first := c[axis]
+	var last := c[axis] + step[axis] * (depth - 1)
+	return {"cell": c, "lie": l, "at": mini(first, last), "depth": maxi(1, depth)}
+
+
+## A door or a window where a face was clicked: a door stands on the lowest brick of the
+## wall below the click, a window's sill is the click.
+func preset_cut(k: String, face: Dictionary) -> Dictionary:
+	var size := DOOR if k == "door" else WINDOW
+	var l := String(face.lie)
+	var uvw := BrickShapes.from_3d(l, face.cell)
+	var u0 := uvw.x - (size.x >> 1)
+	var v0 := uvw.y
+	if k == "door":
+		var v := uvw.y
+		# Down while there is wall (the build's own bricks: not the baseplate).
+		while v > 0 and _rid_at(BrickShapes.to_3d(l, Vector2i(uvw.x, v - 1), uvw.z)) >= 0:
+			v -= 1
+		v0 = v
+	return {"kind": "rect", "lie": l, "a": [u0, v0], "b": [u0 + size.x - 1, v0 + size.y - 1],
+			"at": face.at, "depth": face.depth}
+
+
+func _select_click() -> void:
+	var ray := _ray()
+	var hit: Dictionary = ws._first_hit(ray[0], ray[1])
+	selected = -1
+	if hit.is_empty() or hit.frame != ws.asm.frames[0]:
+		return
+	var rid: int = ws._recipe_id_at(0, hit.block)
+	if rid >= 0:
+		selected = owner_of(ws.recipe.part_of(rid), ws.recipe.cell_of(rid))
+
+
+func _sync_select() -> void:
+	var sh := shape_of(selected)
+	_syncing = true
+	if sh.is_empty():
+		_select_label.text = "Click a brick of a shape to pick it."
+	else:
+		var names := {}
+		for k in BrickShapes.KINDS:
+			names[k[0]] = k[1]
+		_select_label.text = "%s, %s, %d bricks of %s%s" % [names.get(sh.kind, sh.kind),
+				"flat" if sh.lie == "flat" else "a wall", (sh.bricks as Array).size(), sh.part,
+				"" if (sh.cuts as Array).is_empty() else ", %d cut%s" % [(sh.cuts as Array).size(),
+				"" if (sh.cuts as Array).size() == 1 else "s"]]
+		_sel_depth.set_value_no_signal(int(sh.depth))
+		_sel_rim.set_value_no_signal(int(sh.rim))
+		_sel_bond.select(0 if sh.bond != "align" else 1)
+	_syncing = false
+
+
+# ---------------------------------------------------------------------------
+# Each frame
+# ---------------------------------------------------------------------------
+
+func process() -> void:
+	var top: float = 12.0 + (ws._menu.bar_height() if ws._menu != null else 0.0)
+	rail.position = Vector2(12, top)
+	rail.size = Vector2.ZERO
+	var on := active()
+	rail.show_active(on, TOOLS)
+	_shape_box.visible = on == "shape"
+	_cut_box.visible = on == "cut"
+	_select_box.visible = on == "select"
+	_tall_spin.get_parent().visible = lie == "flat"
+	_thick_spin.get_parent().visible = lie == "wall"
+	_rim_spin.get_parent().visible = kind in ["hollow", "ring", "line"]
+	if on == "select" and _shown != Vector2i(selected, _rev):
+		_shown = Vector2i(selected, _rev)
+		_sync_select()
+	# The workshop's readout and the paint palette move over beside the rail.
+	var x := _rail_right()
+	if ws._hud != null:
+		ws._hud.position = Vector2(x, top)
+	if ws._paint_palette != null:
+		ws._paint_palette.position = Vector2(x, top + 110.0)
+	if not _drag.is_empty():
+		_drag.b = _drag_point()
+		ws._ghost.visible = false
+	elif tool in ["cut", "select"]:
+		ws._ghost.visible = false
+	_draw()
+
+
+## Where the drag is now, in its plane's cells: the ray under the cursor on that plane.
+func _drag_point() -> Vector2i:
+	var ray := _ray()
+	var f: int = ws.asm.frames[0]
+	var xf: Transform3D = ws.world.get_chunk_transform(f)
+	var from: Vector3 = xf.affine_inverse() * (ray[0] as Vector3)
+	var dir: Vector3 = xf.basis.inverse() * (ray[1] as Vector3)
+	var l := String(_drag.lie)
+	var axis := 1 if l == "flat" else (2 if l == "wall_x" else 0)
+	var unit := BrickPalette.PLATE_M if axis == 1 else BrickPalette.STUD_M
+	# Flat: the plane under the layer (the top of what it stands on); a wall: its middle.
+	var plane := float(_drag.at) * unit if axis == 1 else (float(_drag.at) + 0.5) * unit
+	if absf(dir[axis]) < 1e-5:
+		return _drag.b
+	var t := (plane - from[axis]) / dir[axis]
+	if t <= 0.0:
+		return _drag.b
+	var p := from + dir * t
+	var cell := Vector3i(int(floor(p.x / BrickPalette.STUD_M)), int(floor(p.y / BrickPalette.PLATE_M)),
+			int(floor(p.z / BrickPalette.STUD_M)))
+	var uvw := BrickShapes.from_3d(l, cell)
+	var b := Vector2i(uvw.x, uvw.y)
+	if Input.is_key_pressed(KEY_SHIFT) and String(_drag.kind) in ["circle", "ring", "rect", "hollow"]:
+		b = _square(_drag.a, b, BrickShapes.aspect(l))
+	if l != "flat":
+		b.y = maxi(b.y, 0)
+	return b
+
+
+## `b` moved so the box from `a` is as tall as it is wide, in metres.
+static func _square(a: Vector2i, b: Vector2i, asp: float) -> Vector2i:
+	var du := b.x - a.x
+	var dv := b.y - a.y
+	var w := maxf(absf(du) + 1.0, (absf(dv) + 1.0) * asp)
+	var su := 1 if du >= 0 else -1
+	var sv := 1 if dv >= 0 else -1
+	return Vector2i(a.x + su * (int(round(w)) - 1), a.y + sv * (int(round(w / asp)) - 1))
+
+
+func _draw() -> void:
+	_im.clear_surfaces()
+	var any := false
+	if not _drag.is_empty():
+		var d := _drag.duplicate()
+		d.a = [d.a.x, d.a.y]
+		d.b = [d.b.x, d.b.y]
+		d.rim = rim
+		var col := Color(1.0, 0.4, 0.3) if d.get("cut", false) or d.button == MOUSE_BUTTON_RIGHT \
+				else Color(0.4, 0.95, 1.0)
+		any = _outline(d, col, any)
+	if tool == "select" and selected >= 0:
+		var sh := shape_of(selected)
+		if not sh.is_empty():
+			any = _outline(sh, Color(1.0, 0.85, 0.3), any)
+			for cut in sh.cuts:
+				any = _outline(cut, Color(1.0, 0.4, 0.3), any)
+	if any:
+		_im.surface_end()
+	_lines.transform = ws.world.get_chunk_transform(ws.asm.frames[0])
+
+
+## A shape's outline in its plane, drawn on its front and back face. True once begun.
+func _outline(sh: Dictionary, col: Color, begun: bool) -> bool:
+	var l := String(sh.lie)
+	var c2 := BrickShapes.cells_2d(String(sh.kind), BrickShapes._v2(sh.a), BrickShapes._v2(sh.b),
+			int(sh.get("rim", 1)), BrickShapes.aspect(l), sh.get("points", []))
+	if c2.size() > 20000:
+		return begun
+	if not begun:
+		_im.surface_begin(Mesh.PRIMITIVE_LINES)
+	var ws_ := [float(sh.at), float(sh.at) + maxi(1, int(sh.depth))]
+	for c in c2:
+		for side in 4:
+			var nb: Vector2i = c + [Vector2i(-1, 0), Vector2i(1, 0), Vector2i(0, -1), Vector2i(0, 1)][side]
+			if c2.has(nb):
+				continue
+			var p0: Vector2
+			var p1: Vector2
+			match side:
+				0: p0 = Vector2(c.x, c.y); p1 = Vector2(c.x, c.y + 1)
+				1: p0 = Vector2(c.x + 1, c.y); p1 = Vector2(c.x + 1, c.y + 1)
+				2: p0 = Vector2(c.x, c.y); p1 = Vector2(c.x + 1, c.y)
+				_: p0 = Vector2(c.x, c.y + 1); p1 = Vector2(c.x + 1, c.y + 1)
+			for w in ws_:
+				_im.surface_set_color(col)
+				_im.surface_add_vertex(_local(l, p0, w))
+				_im.surface_set_color(col)
+				_im.surface_add_vertex(_local(l, p1, w))
+	return true
+
+
+## A point of a lie's plane (u, v) `w` layers along, in the grid's own metres.
+static func _local(l: String, p: Vector2, w: float) -> Vector3:
+	var s := BrickPalette.STUD_M
+	var pl := BrickPalette.PLATE_M
+	match l:
+		"flat": return Vector3(p.x * s, w * pl, p.y * s)
+		"wall_x": return Vector3(p.x * s, p.y * pl, w * s)
+	return Vector3(w * s, p.y * pl, p.x * s)
