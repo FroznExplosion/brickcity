@@ -1797,6 +1797,24 @@ crumbs (8 crumbs); the ray from above goes 0.43 m further in; a charge on it kil
 2 bricks (9 crumbs); what is left lies at rest on the ground. Fall 7, damage 12, bricks 9, trees 7,
 squad 10, pawn 12. Not tested: a piece resting on another woken when the one under it is shot.
 
+**Plan, D2 step 4 (2026-10-27): a building toppling whole.** As the city's (`CityScene._topple`):
+the solve already answers it -- `solve_structure`'s `stability` (is the whole building's centre of
+mass over what holds it up?) -- and in the site's own grid, which is the tangent frame, so it needs
+no change for the planet. In `_solve_site`, before the loose groups: unstable, and not toppled
+already, the building is handed over whole (`_topple`). Nothing is copied: its chunk becomes a
+piece as it is (`PlanetPieces.adopt`: `get_chunk_com` / `get_chunk_mass`, its shapes merged,
+added before the body joins the space), its drawn bands ride the body until the first change
+draws it again (then they go), and they cast their own shadow now. The site is done as a building:
+its collision freed FIRST (else the body starts inside it and is thrown), its shell, shell look and
+walls gone, its far box faded to nothing, never bricked again, and its AI proxy box never back
+(the nav net forgets the box: `site_damaged`). The falling tower is a piece like any other:
+landings snap it (it is long), hits break it, settled it lies. Not here: a storey giving way under
+what is above (the city's `_gravity_fail`, TIP and CRUSH) -- the storey-units chat's ground.
+Gate `--gate=topple` (headless): the ground storey under 55% of a building's footprint cut away
+(by cell); the building topples (one piece, every brick it had); its shell and collision are
+gone; it falls over (its up tilts more than 30 degrees from the ground's) and comes to rest on the
+ground, in pieces; no shell or far box comes back; the AI's world has no proxy box there.
+
 Not yet: the city's snap preferences, a building toppling whole
 (`solve.stability`), the AI told where a piece lies; furniture, materialising for a fight far from
 the camera.
