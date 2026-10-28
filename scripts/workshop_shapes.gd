@@ -13,7 +13,8 @@ extends RefCounted
 ##   a, b    the corners dragged, [u, v] cells; the box between them is the shape's
 ##   at      the first layer along the stacking axis; `depth` layers from there
 ##   rim     a hollow rectangle's, ring's or line's thickness, in studs
-##   points  an outline's corners, [[u, v], ...] in cells (its kind is "outline")
+##   points  a sketched shape's outline, [[u, v], ...] in cells, or its brush stroke
+##           (SketchPen.brush_entry); its kind is "outline"
 ##
 ## A kept shape has more (tall/thick, bond, part, colour, cuts, bricks): `WorkshopTools`.
 
@@ -47,7 +48,7 @@ static func from_3d(lie: String, c: Vector3i) -> Vector3i:
 ## The cells (Vector2i -> true) of a kind in the box between `a` and `b`, ends included.
 ## `rim` in studs; `asp` how tall a v cell is next to a u one (`aspect`).
 static func cells_2d(kind: String, a: Vector2i, b: Vector2i, rim: int = 1, asp: float = 1.0,
-		points: Array = []) -> Dictionary:
+		points: Variant = []) -> Dictionary:
 	if kind == "outline":
 		return outline_cells(points)
 	var lo := Vector2i(mini(a.x, b.x), mini(a.y, b.y))
@@ -109,39 +110,10 @@ static func _segment_dist(p: Vector2, a: Vector2, b: Vector2) -> float:
 	return p.distance_to(a + ab * t)
 
 
-## The cells inside an outline ([[u, v], ...] or Vector2s), by winding: a stretch circled
-## twice is in, not cancelled out. A cell is in when its centre is.
-static func outline_cells(points: Array) -> Dictionary:
-	var pts := PackedVector2Array()
-	for q in points:
-		pts.append(q if q is Vector2 else Vector2(float(q[0]), float(q[1])))
-	var out := {}
-	if pts.size() < 3:
-		return out
-	var lo_y := INF
-	var hi_y := -INF
-	for q in pts:
-		lo_y = minf(lo_y, q.y)
-		hi_y = maxf(hi_y, q.y)
-	var n := pts.size()
-	for v in range(int(floor(lo_y)), int(ceil(hi_y))):
-		var y := v + 0.5
-		var xs := []
-		for i in n:
-			var a := pts[i]
-			var b := pts[(i + 1) % n]
-			if (a.y <= y) == (b.y <= y):
-				continue
-			xs.append([a.x + (y - a.y) / (b.y - a.y) * (b.x - a.x), 1 if b.y > a.y else -1])
-		xs.sort_custom(func(p: Array, q: Array) -> bool: return p[0] < q[0])
-		var wind := 0
-		for j in range(xs.size() - 1):
-			wind += int(xs[j][1])
-			if wind == 0:
-				continue
-			for u in range(int(ceil(float(xs[j][0]) - 0.5)), int(ceil(float(xs[j + 1][0]) - 0.5))):
-				out[Vector2i(u, v)] = true
-	return out
+## The cells inside an outline ([[u, v], ...] or Vector2s), or under a brush stroke: the
+## sketch pen's (SketchPen.region_cells), so both workshops' sketches fill the same.
+static func outline_cells(points: Variant) -> Dictionary:
+	return SketchPen.region_cells(points)
 
 
 ## Every grid cell a shape (or a cut) fills, before its cuts: its 2D cells, `depth`

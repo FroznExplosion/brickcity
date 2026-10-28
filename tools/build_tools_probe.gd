@@ -33,6 +33,7 @@ func _initialize() -> void:
 	_run_checks()
 	_kept_checks()
 	_wall_checks()
+	_sketch_checks()
 	print("\n%d passed, %d failed" % [_pass, _fail])
 	quit(1 if _fail > 0 else 0)
 
@@ -400,3 +401,50 @@ func _wall_checks() -> void:
 		if _ws.world.is_solid(f0, c):
 			rf += 1
 	_ok("a ring lying flat is laid", rf == rc.size() and rc.size() > 30, "%d of %d" % [rf, rc.size()])
+
+
+func _sketch_checks() -> void:
+	print("[probe] sketch: the asset workshop's pen, making kept shapes")
+	var sq := SketchPen.region_cells([[4, 4], [12, 4], [12, 10], [4, 10]])
+	_ok("the pen fills an outline 8 x 6 with 48 cells", sq.size() == 48)
+	_ok("and a brush stroke round its path", SketchPen.region_cells(SketchPen.brush_entry([Vector2(5.5, 5.5)], 1, true, "top")).size() == 9)
+	_ok("BrickShapes fills an outline with the same code", BrickShapes.outline_cells([[4, 4], [12, 4], [12, 10], [4, 10]]) == sq)
+	_ws._new_build()
+	var t: WorkshopTools = _ws._tools
+	var f0: int = _ws.asm.frames[0]
+	_hold("brick_1x2")
+	t.pick("sketch")
+	_ok("Sketch is on the rail", t.active() == "sketch" and t.rail.buttons.has("sketch"))
+	t.tall = 3
+	t.pen.draw = "polygon"
+	t._sk = {"lie": "flat", "at": 1}
+	for q in [Vector2(4, 4), Vector2(12, 4), Vector2(12, 10)]:
+		t.pen.polygon_click(q, false, false)
+	_ok("a polygon closes on its first corner", t.pen.polygon_click(Vector2(4.2, 4.1), false, false))
+	t.pen.points.clear()
+	t.pen.out = false
+	for q in [Vector2(4, 4), Vector2(12, 4), Vector2(12, 10), Vector2(4, 10)]:
+		t.pen.polygon_click(q, false, false)
+	t._sketch_commit()
+	_ok("a sketched outline becomes a kept shape", t.shapes().size() == 1 and String(t.shapes()[0].kind) == "outline")
+	var cells := BrickShapes.shape_cells(t.shapes()[0])
+	var filled := 0
+	for c in cells:
+		if _ws.world.is_solid(f0, c):
+			filled += 1
+	_ok("of the held brick, every cell laid (%d)" % cells.size(), cells.size() == 48 * 3 and filled == cells.size())
+	# RMB with the brush: a cut through it.
+	t.pen.draw = "brush"
+	t.brush_size = 1
+	t.brush_square = true
+	t._sk = {"lie": "flat", "at": 1}
+	t.pen.press(Vector2(8.5, 7.5), true)
+	t._sketch_commit()
+	_ok("a stroke drawn with RMB cuts the shape", (t.shapes()[0].cuts as Array).size() == 1
+			and not _ws.world.is_solid(f0, Vector3i(8, 2, 7)) and _ws.world.is_solid(f0, Vector3i(4, 2, 4)))
+	# Saved, and laid again from the save: the outline is kept.
+	var back := BuildRecipe.from_dict(JSON.parse_string(JSON.stringify(_ws.recipe.to_dict())))
+	var kept: Dictionary = back.meta.shapes[0]
+	_ok("saved, a sketched shape's outline fills the same", BrickShapes.shape_cells(kept).size()
+			== BrickShapes.shape_cells(t.shapes()[0]).size())
+	t.pick("place")
