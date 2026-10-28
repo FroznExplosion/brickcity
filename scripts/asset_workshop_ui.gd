@@ -121,6 +121,12 @@ func setup(workshop, layer: CanvasLayer) -> void:
 			_ask_then.call(_ask_line.text))
 	_layer.add_child(_ask)
 	_slim_old_rail()
+	# The open tool's options go in the rail, under its tools: one panel (Docs/BuildTools.md
+	# section 8), scrolling as one when taller than the window.
+	ws._rail.get_parent().remove_child(ws._rail)
+	ws._rail.add_theme_stylebox_override("panel", StyleBoxEmpty.new())
+	_tools_panel.options.add_child(ws._rail)
+	_tools_panel.options.visible = true
 	stage = "bricks" if ws.sculpt_state == "bricks" else "blockout"
 	_fill_tools()
 	sync_kind()
@@ -203,7 +209,7 @@ func _stage_step() -> void:
 # ---------------------------------------------------------------------------
 
 func _build_tools() -> void:
-	_tools_panel = ToolRail.new(ws.RAIL_W)
+	_tools_panel = ToolRail.new(ws.RAIL_W, true)
 	_layer.add_child(_tools_panel)
 
 
@@ -766,6 +772,7 @@ func process(dt: float) -> void:
 	if ws._hud != null:
 		ws._hud.visible = stage != "blockout"
 	_tools_panel.position = Vector2(12, top + 38)
+	_tools_panel.fit_height(ws.get_viewport().get_visible_rect().size.y - top - 38.0 - 12.0)
 	_tools_panel.size = Vector2.ZERO
 	ws.rail_top = _tools_panel.position.y + _tools_panel.size.y + 6.0
 	_outliner.offset_top = top

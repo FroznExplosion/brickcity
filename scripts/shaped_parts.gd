@@ -110,6 +110,8 @@ static func _shape(kind: String, size: Vector3i, axis: String) -> Dictionary:
 		"wedge":
 			var p := _wedge_prism(size)
 			return {"draw": [p], "pieces": [p]}
+		"slope_corner":
+			return _slope_corner(size)
 		"arch":
 			return _arch(size)
 		"spiral":
@@ -195,6 +197,88 @@ static func _wedge_prism(size: Vector3i) -> Dictionary:
 	var l := size.z * S
 	var poly := PackedVector2Array([Vector2(w, 0), Vector2(w, l), Vector2(0, l)])
 	return _prism(poly, "xz", 0.0, size.y * P)
+
+
+## An outer corner of two slopes (Docs/BuildTools.md section 8): the 45-degree slope's
+## profile falling toward -X and toward -Z at once -- the height at (x, z) is the lower of
+## the two profiles there. The intersection of two slope prisms: convex, but no prism, so it
+## is DRAWN as its own triangles (cut on the cell grid where they lie on a cell's face, as
+## `_mesh` cuts a prism's walls) and SAMPLED and COLLIDES as stacked slabs, each the
+## footprint the corner keeps at the slab's middle height.
+static func _slope_corner(size: Vector3i) -> Dictionary:
+	var h := size.y * P
+	var wx := size.x * S
+	var wz := size.z * S
+	var f := func(d: float) -> float:
+		return P + (h - P) * clampf(d / S, 0.0, 1.0)
+	var pos := PackedVector3Array()
+	var nrm := PackedVector3Array()
+	# The top: on the grid of stud lines the profile bends at.
+	var xs := [0.0, S, wx]
+	var zs := [0.0, S, wz]
+	for i in 2:
+		for j in 2:
+			var c := [Vector3(xs[i], 0, zs[j]), Vector3(xs[i + 1], 0, zs[j]),
+					Vector3(xs[i + 1], 0, zs[j + 1]), Vector3(xs[i], 0, zs[j + 1])]
+			for k in 4:
+				c[k].y = minf(f.call(c[k].x), f.call(c[k].z))
+			# Split along the corner's diagonal: the crease where the two slopes meet.
+			for tri in [[c[0], c[1], c[2]], [c[0], c[2], c[3]]]:
+				var n: Vector3 = (tri[1] - tri[0]).cross(tri[2] - tri[0]).normalized()
+				if n.y < 0.0:
+					n = -n
+				pos.append_array(PackedVector3Array(tri))
+				nrm.append_array(PackedVector3Array([n, n, n]))
+	# The bottom and the four sides, each a polygon on one face, cut per cell.
+	var bottom := PackedVector2Array([Vector2(0, 0), Vector2(wx, 0), Vector2(wx, wz), Vector2(0, wz)])
+	_face_cells(pos, nrm, bottom, func(p: Vector2) -> Vector3: return Vector3(p.x, 0.0, p.y),
+			Vector3.DOWN, Vector2(S, S))
+	var lip_z := PackedVector2Array([Vector2(0, 0), Vector2(wz, 0), Vector2(wz, P), Vector2(0, P)])
+	_face_cells(pos, nrm, lip_z, func(p: Vector2) -> Vector3: return Vector3(0.0, p.y, p.x),
+			Vector3.LEFT, Vector2(S, P))
+	var lip_x := PackedVector2Array([Vector2(0, 0), Vector2(wx, 0), Vector2(wx, P), Vector2(0, P)])
+	_face_cells(pos, nrm, lip_x, func(p: Vector2) -> Vector3: return Vector3(p.x, p.y, 0.0),
+			Vector3.FORWARD, Vector2(S, P))
+	var back_z := PackedVector2Array([Vector2(0, 0), Vector2(wz, 0), Vector2(wz, h), Vector2(S, h), Vector2(0, P)])
+	_face_cells(pos, nrm, back_z, func(p: Vector2) -> Vector3: return Vector3(wx, p.y, p.x),
+			Vector3.RIGHT, Vector2(S, P))
+	var back_x := PackedVector2Array([Vector2(0, 0), Vector2(wx, 0), Vector2(wx, h), Vector2(S, h), Vector2(0, P)])
+	_face_cells(pos, nrm, back_x, func(p: Vector2) -> Vector3: return Vector3(p.x, p.y, wz),
+			Vector3.BACK, Vector2(S, P))
+	# Slabs to sample and collide: half a plate each.
+	var pieces := []
+	var slabs := size.y * 2
+	for k in slabs:
+		var y0 := h * k / slabs
+		var y1 := h * (k + 1) / slabs
+		var ym := (y0 + y1) * 0.5
+		var d0 := 0.0 if ym <= P else (ym - P) / (h - P) * S
+		var poly := PackedVector2Array([Vector2(d0, d0), Vector2(wx, d0), Vector2(wx, wz), Vector2(d0, wz)])
+		pieces.append(_prism(poly, "xz", y0, y1))
+	# The slabs only approach the sloped faces: their volume is the drawn one's to a few
+	# percent (shaped_probe allows for it), and the cells are sampled from them.
+	return {"draw": [{"tris": pos, "nrms": nrm}], "pieces": pieces, "approx": true}
+
+
+## A flat convex polygon on a face of the part, cut into the pieces each cell of `cell`
+## (its two sizes along the polygon's axes) holds, as triangles facing `n`.
+static func _face_cells(pos: PackedVector3Array, nrm: PackedVector3Array, poly: PackedVector2Array,
+		to3: Callable, n: Vector3, cell: Vector2) -> void:
+	var lo := Vector2(INF, INF)
+	var hi := -lo
+	for p in poly:
+		lo = lo.min(p)
+		hi = hi.max(p)
+	for i in range(floori(lo.x / cell.x + 1e-4), ceili(hi.x / cell.x - 1e-4)):
+		for j in range(floori(lo.y / cell.y + 1e-4), ceili(hi.y / cell.y - 1e-4)):
+			var r := PackedVector2Array([Vector2(i * cell.x, j * cell.y), Vector2((i + 1) * cell.x, j * cell.y),
+					Vector2((i + 1) * cell.x, (j + 1) * cell.y), Vector2(i * cell.x, (j + 1) * cell.y)])
+			var clipped := Geometry2D.intersect_polygons(poly, r)
+			for part in clipped:
+				var tris := Geometry2D.triangulate_polygon(part)
+				for t in tris:
+					pos.append(to3.call(part[t]))
+					nrm.append(n)
 
 
 ## An arch along its length (Z): a pillar one stud long at each end, a beam one
@@ -404,6 +488,11 @@ static func _mesh(prisms: Array) -> Array:
 	var nrm := PackedVector3Array()
 	var cell := Vector3(S, P, S)
 	for pr in prisms:
+		# A shape that is no prism brings its own triangles (`_slope_corner`).
+		if pr.has("tris"):
+			pos.append_array(pr.tris)
+			nrm.append_array(pr.nrms)
+			continue
 		var poly: PackedVector2Array = pr.poly
 		var plane: String = pr.plane
 		var n := poly.size()

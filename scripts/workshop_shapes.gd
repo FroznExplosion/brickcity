@@ -212,8 +212,9 @@ static func shape_cells(sh: Dictionary) -> Dictionary:
 	return out
 
 
-## A roof on a footprint (Docs/BuildTools.md section 7): {slopes: [[facing, min cell], ...]
-## -- 45-degree slopes (1 stud wide, 2 deep) facing out -- and cells: every cell it fills}.
+## A roof on a footprint (Docs/BuildTools.md sections 7, 8): {slopes: [[facing, min cell,
+## part?], ...] -- 45-degree slopes (1 stud wide, 2 deep) facing out, and at a hip roof's
+## corners a corner slope (its part named) -- and cells: every cell it fills}.
 ## `a`, `b` the footprint's corners (x, z), `at` its first layer, `ridge` "x" or "z" (the way
 ## the ridge runs), `style` gable (sloped on the two long sides, the ends closed) or hip (all
 ## four sides, brick corners). A course a brick high, each stepped in a stud; the last, two or
@@ -261,11 +262,20 @@ static func roof_plan(sh: Dictionary) -> Dictionary:
 					var front: bool = t == al.x or t == al.y
 					for dy in (2 if front else 3):
 						cells[to3.call(t, c, y + dy)] = true
-			# The corners, bricks: there are no corner slopes yet.
-			for t in [al.x, al.x + 1, al.y - 1, al.y]:
-				for c in [ac.x, ac.x + 1, ac.y - 1, ac.y]:
-					for dy in 3:
-						cells[to3.call(t, c, y + dy)] = true
+			# The corners: a corner slope each (slopecorner_2x2), low toward both sides.
+			for corner in [[al.x, ac.x, -1, -1], [al.y - 1, ac.x, 1, -1], [al.x, ac.y - 1, -1, 1],
+					[al.y - 1, ac.y - 1, 1, 1]]:
+				var t0: int = corner[0]
+				var c0: int = corner[1]
+				slopes.append([out_al * int(corner[2]) + out_ac * int(corner[3]), to3.call(t0, c0, y),
+						"slopecorner_2x2"])
+				# The back cell (toward the middle) is whole; the other three fall away.
+				var bt := t0 + (1 if corner[2] < 0 else 0)
+				var bc := c0 + (1 if corner[3] < 0 else 0)
+				for t in [t0, t0 + 1]:
+					for c in [c0, c0 + 1]:
+						for dy in (3 if t == bt and c == bc else 2):
+							cells[to3.call(t, c, y + dy)] = true
 		else:
 			# The gable ends, closed.
 			for t in [al.x, al.y]:
