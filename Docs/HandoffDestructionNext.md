@@ -90,9 +90,39 @@ For the next chat working on building destruction. Read this first, then
    radius), patch the piece's own mesh (index regions) instead of rebuilding it.
 4. Then tiles instead of bands (Structures.md) for standing buildings.
 
+## Direction (user, 2026-10-27): test on handmade buildings; the chassis is parked
+
+- **What matters most is varied destruction of varied buildings** -- "really varied destruction
+  with really varied buildings", including ones with no easily defined corners (round towers).
+  Most generated buildings stay boxes, but the ones players destroy most will be the interesting,
+  handmade ones. The box-only machinery (the lattice, the frame record, room markers, storey
+  lines, the recipe shell and its damage profile, painted panes, the far box) cannot show those;
+  the brick-derived paths a build already takes (BuildShell walking its blocks, `find_floors`, the
+  spaces tool, the far view from bricks, the brick solve) can, but are far less tested.
+- **The chassis below is parked.** It needs a defined frame -- columns, beams, corners -- that a
+  round tower, an arch or a dome does not have; it would make the buildings that matter most
+  second-class. The brick-level solve (real LEGO) is the one system that works for any shape;
+  performance should come from representation (what far and falling things are drawn and
+  simulated as), not from simplifying how buildings break.
+- **Corners are a building rule, not a marker.** The user's idea: corner bricks (2x4 and 2x2, or
+  1x2 and 1x4 on some buildings) interlock course by course, each lapping over the other wall's
+  end, never stacked straight. Under the brick solve that is stronger by itself -- more studs hold
+  it. The generator already alternates which pair of walls owns a corner; for handmade buildings
+  it is how the builder lays them (BuildMode.md 9.3's structural warning could flag a straight
+  stack).
+- **Collapse pace: as a real LEGO building breaks -- somewhat fast.** No slow creaking: what fails
+  goes within a frame or two, falls at full speed as one piece and breaks where it hits (memory
+  "brick-attachment-rule": "a falling LEGO tower would likely stay as one piece until it hits
+  something"). The "a second before it falls" lag (memory "break-lag priorities") is a bug.
+- **Next:** the user is improving the workshop in another chat and will make test buildings with
+  hard features (round, arches, overhangs, spires, domes, courtyards), then come back here with
+  what looks wrong when they break. Then: place each in the city (`--build=`), shoot it the
+  `--lodbreak` / `--breakshape` way (close, mid, far), pictures and numbers, fix what looks wrong,
+  and only then pick performance work -- measured on those buildings, not on generated boxes.
+
 ## Theory: a chassis -- the frame holds the building, the panels break (2026-10-27)
 
-**Not built, not decided.** The user asked for the idea worked through, with no change to the
+**Parked 2026-10-27 (see "Direction" above). Not built, not decided.** The user asked for the idea worked through, with no change to the
 game: "what if we made the destruction more like Battlefield, so the chassis of a building is the
 structure rather than all walls, floors, etc. -- the edges of floors and the support beams. The
 centres of a wall or floor could be broken brick by brick, then the edges and actual support
