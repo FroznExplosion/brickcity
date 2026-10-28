@@ -1858,6 +1858,35 @@ coordinates (it subtracts the chunk's origin); the gates passed chunk-local cell
 read "false for live bricks" (step 2's note above is wrong about it being stale).
 `block_at` takes chunk-local cells.
 
+**Plan, D2 step 6 (2026-10-28): a storey gives way under what is above it.** The city's rule
+(`CityScene._gravity_fail` / `_region_fail`, `BrickWorld.gravity_check`; the storey-units work's,
+ported, the city's code untouched). The stress solve fails only joints in tension and the
+stability test only asks whether the whole building stands on its foundation, so a storey shot
+away but for one corner holds the storeys above up for good. In `_solve_site`, after
+`solve.stability` (a building off balance whole still topples, step 4) and where the solve found no
+loose group -- as the city asks it -- the site is asked `gravity_check` (in its own grid, the
+tangent frame; `level` comes back in the world):
+- *TIP* -- what is above is off the edge of what is left: a clean seam at that boundary
+  (`SEVER`, `FLAG_SEAM`, `sever_seams`), so the next solve finds everything above loose and sheds
+  it as one piece (`PlanetPieces.shed`), which goes over the edge under the planet's down.
+- *CRUSH* -- too much on too little: the storey under the boundary torn loose (`SEVER`, a slab a
+  storey thick, `separate_plane`), its bricks crumbs, and what is above sheds as one piece that
+  comes down a floor.
+- *Crushed under one region* (`_region_fail`: a column of `GRAVITY_REGION` studs that cannot carry
+  what stands over it): that region's storey only (`DamageLog.region_crush`).
+The cut's axis is the site's own up (its frame's Y, which is `Gravity.up_at` there), never +Y; the
+entry goes in the planet's `damage_log`; the site is solved again the next frame. `CRUSH_PER_STUD`
+is the city's (20). And the planet's bricks get the city's stud strength
+(`set_tension_per_stud(BrickStrength.tension())`, as `CityScene._promote` sets it): they had the
+engine's default (400, ten times the city's 37), which the tip check weighs against.
+Gate `--gate=storey` (headless): a tower of three storeys or more; its first-floor storey's walls
+cut away (by cell) but for one corner -- the storey check says TIP, nothing of the building is left
+above that storey, the piece that left goes over (tilts past 30 degrees), and every piece ends at
+rest; the building still stands below. A second tower made weak (`crush_per_stud` 0.5, as the
+city's collapse probe) -- the check says CRUSH, a storey comes down (fewer than half its bricks
+left standing, what left dropped at least half a storey), every piece at rest. And no undamaged
+building in the town is near failing a storey (ratio under 0.8).
+
 Not yet: the city's snap preferences, a storey giving way under what is above (TIP / CRUSH);
 furniture, materialising for a fight far from
 the camera.
