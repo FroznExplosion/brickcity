@@ -3,7 +3,8 @@ extends PanelContainer
 
 ## The tool rail both workshops show down the left (Docs/BuildTools.md, "The rail"): each
 ## tool an icon, its name and its key, with a pop-up saying what it does; a line under them
-## for the tool in hand; and under that a slot for the open tool's own options.
+## for the tool in hand; under that, buttons for actions (a rotate, a toggle: every key has
+## one, Docs/BuildTools.md section 7); and a slot for the open tool's own options.
 ##
 ## It keeps no state of its own that matters: `fill` is given the rows and what a press
 ## calls, and the owner lights the tool in hand each frame (`show_active`), so a key pressed
@@ -32,6 +33,12 @@ const ICONS := {
 	"wall": '<rect x="3" y="5" width="18" height="14"/><path d="M3 9.7h18M3 14.3h18M9 5v4.7M15 5v4.7M6 9.7v4.6M12 9.7v4.6M18 9.7v4.6M9 14.3V19M15 14.3V19"/>',
 	"cut": '<path d="M6 20V9a6 6 0 0 1 12 0v11"/><path d="M3 20h18"/>',
 	"repeat": '<rect x="4" y="13" width="16" height="7"/><rect x="4" y="4" width="16" height="7" stroke-dasharray="3 2"/>',
+	"pick": '<path d="M14 4l6 6-9 9H5v-6z"/><path d="M12 6l6 6"/>',
+	"walls": '<path d="M4 20V8h8v6h8v6"/><path d="M4 8V4M12 8V4"/>',
+	"floor": '<path d="M3 15l9-5 9 5-9 5z"/><path d="M3 15v2l9 5 9-5v-2"/>',
+	"roof": '<path d="M2 13L12 4l10 9"/><path d="M5 11v9h14v-9"/>',
+	"stairs": '<path d="M3 20h5v-5h5v-5h5V5h3"/>',
+	"builds": '<rect x="3" y="3" width="8" height="8"/><rect x="13" y="13" width="8" height="8"/><path d="M11 7h4v4M13 17H9v-4"/>',
 	"rooms": '<rect x="3" y="4" width="18" height="16"/><path d="M12 4v7M12 15v5M3 12h5"/>',
 }
 static var _icon_cache := {}
@@ -42,11 +49,17 @@ var buttons := {}
 var hint: Label
 ## The open tool's options go in here, under the hint.
 var options: VBoxContainer
+## Action id -> its Button, for the sections `actions` was given.
+var action_buttons := {}
 var _box: VBoxContainer
+var _actions: VBoxContainer
+var _outer: VBoxContainer
+var _scroll: ScrollContainer
 var _width := 184.0
 
 
-func _init(width: float = 184.0) -> void:
+## `scroll`: the rail scrolls when taller than `fit_height` allows (the owner calls it).
+func _init(width: float = 184.0, scroll: bool = false) -> void:
 	_width = width
 	var bg := StyleBoxFlat.new()
 	bg.bg_color = Color(0.11, 0.12, 0.15, 0.96)
@@ -56,10 +69,22 @@ func _init(width: float = 184.0) -> void:
 	custom_minimum_size.x = width
 	var outer := VBoxContainer.new()
 	outer.add_theme_constant_override("separation", 3)
-	add_child(outer)
+	_outer = outer
+	if scroll:
+		_scroll = ScrollContainer.new()
+		_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+		add_child(_scroll)
+		outer.custom_minimum_size.x = width - 14
+		_scroll.add_child(outer)
+	else:
+		add_child(outer)
 	_box = VBoxContainer.new()
 	_box.add_theme_constant_override("separation", 3)
 	outer.add_child(_box)
+	_actions = VBoxContainer.new()
+	_actions.add_theme_constant_override("separation", 2)
+	_actions.visible = false
+	outer.add_child(_actions)
 	# Hidden until an owner puts options in it: an empty box still takes a gap.
 	options = VBoxContainer.new()
 	options.add_theme_constant_override("separation", 2)
@@ -84,8 +109,9 @@ static func icon(id: String) -> Texture2D:
 
 ## The rail's buttons: a title, then a row each -- [id, label, key, what it does]. An id
 ## starting "!" is an action (a plain button), the rest are tools (one lit at a time).
-## `skip`: ids not to show. A press calls `picked` with the id.
-func fill(title_text: String, rows: Array, picked: Callable, skip: Array = []) -> void:
+## `skip`: ids not to show. A press calls `picked` with the id. `columns` above 1: the tools
+## in a grid, icon and name (the key in the pop-up), so more fit.
+func fill(title_text: String, rows: Array, picked: Callable, skip: Array = [], columns: int = 1) -> void:
 	for c in _box.get_children():
 		_box.remove_child(c)
 		c.queue_free()
@@ -95,6 +121,14 @@ func fill(title_text: String, rows: Array, picked: Callable, skip: Array = []) -
 	title.add_theme_color_override("font_color", Color(0.75, 0.8, 0.88))
 	title.text = title_text
 	_box.add_child(title)
+	var into: Container = _box
+	if columns > 1:
+		var grid := GridContainer.new()
+		grid.columns = columns
+		grid.add_theme_constant_override("h_separation", 3)
+		grid.add_theme_constant_override("v_separation", 3)
+		_box.add_child(grid)
+		into = grid
 	var group := ButtonGroup.new()
 	for t in rows:
 		var id := String(t[0])
@@ -102,8 +136,12 @@ func fill(title_text: String, rows: Array, picked: Callable, skip: Array = []) -
 			continue
 		var key := String(t[2])
 		var b := Button.new()
-		b.text = String(t[1]) + ("   " + key if key != "" else "")
+		b.text = String(t[1]) + ("   " + key if key != "" and columns <= 1 else "")
 		b.icon = icon(id)
+		if columns > 1:
+			b.add_theme_font_size_override("font_size", 12)
+			b.custom_minimum_size.x = (_width - 18.0) / columns - 2.0
+			b.clip_text = true
 		b.alignment = HORIZONTAL_ALIGNMENT_LEFT
 		b.focus_mode = Control.FOCUS_NONE
 		b.tooltip_text = "%s%s\n%s" % [t[1], ("  (%s)" % key) if key != "" else "", t[3]]
@@ -111,7 +149,7 @@ func fill(title_text: String, rows: Array, picked: Callable, skip: Array = []) -
 			b.toggle_mode = true
 			b.button_group = group
 		b.pressed.connect(picked.bind(id))
-		_box.add_child(b)
+		into.add_child(b)
 		buttons[id] = b
 	hint = Label.new()
 	hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
@@ -119,6 +157,62 @@ func fill(title_text: String, rows: Array, picked: Callable, skip: Array = []) -
 	hint.add_theme_font_size_override("font_size", 11)
 	hint.add_theme_color_override("font_color", Color(0.72, 0.76, 0.82))
 	_box.add_child(hint)
+
+
+## Buttons for actions, under the tools: `sections` is [[title, rows], ...], a row [id,
+## label, key, what it does, toggle?]. A toggle stays lit while its thing is on
+## (`show_toggles`). A press calls `picked` with the id. Three to a row, small.
+func actions(sections: Array, picked: Callable) -> void:
+	for c in _actions.get_children():
+		_actions.remove_child(c)
+		c.queue_free()
+	action_buttons.clear()
+	_actions.visible = not sections.is_empty()
+	for sec in sections:
+		var l := Label.new()
+		l.text = String(sec[0])
+		l.add_theme_font_size_override("font_size", 11)
+		l.add_theme_color_override("font_color", Color(0.62, 0.68, 0.76))
+		_actions.add_child(l)
+		var grid := GridContainer.new()
+		grid.columns = 3
+		grid.add_theme_constant_override("h_separation", 2)
+		grid.add_theme_constant_override("v_separation", 2)
+		_actions.add_child(grid)
+		for t in sec[1]:
+			var id := String(t[0])
+			var key := String(t[2])
+			var b := Button.new()
+			b.text = String(t[1])
+			b.add_theme_font_size_override("font_size", 11)
+			b.custom_minimum_size.x = (_width - 18.0) / 3.0 - 2.0
+			b.clip_text = true
+			b.focus_mode = Control.FOCUS_NONE
+			b.toggle_mode = t.size() > 4 and bool(t[4])
+			b.tooltip_text = "%s%s\n%s" % [t[1], ("  (%s)" % key) if key != "" else "", t[3]]
+			b.pressed.connect(picked.bind(id))
+			grid.add_child(b)
+			action_buttons[id] = b
+
+
+## Light the toggles that are on: id -> bool.
+func show_toggles(states: Dictionary) -> void:
+	for id in states:
+		if action_buttons.has(id):
+			(action_buttons[id] as Button).set_pressed_no_signal(bool(states[id]))
+
+
+## An action button's text now (the layer it is on, the way the mirror goes).
+func set_action_text(id: String, text: String) -> void:
+	if action_buttons.has(id) and (action_buttons[id] as Button).text != text:
+		(action_buttons[id] as Button).text = text
+
+
+## A scrolling rail: no taller than `max_h`, its content scrolling inside.
+func fit_height(max_h: float) -> void:
+	if _scroll == null:
+		return
+	_scroll.custom_minimum_size = Vector2(_width - 12.0, minf(_outer.get_combined_minimum_size().y, maxf(120.0, max_h)))
 
 
 ## Light the tool in hand ("" for none) and say what it does from `rows`.

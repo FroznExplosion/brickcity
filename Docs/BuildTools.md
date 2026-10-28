@@ -204,3 +204,76 @@ Both merged; `tools/build_tools_probe.gd` 86 checks.
   stands where its wall's bricks go back).
 * Fixed on the way: a sketched brush stroke laid with LMB passed a Dictionary to a
   parameter typed Array (`add_shape` now takes a Variant); only the RMB cut path was tested.
+
+## 7. Everything a button; the rest of the list (2026-10-28)
+
+Asked: things must be tool buttons on the rail, not key presses to remember; and finish the
+rest of section 4.
+
+### Every key has a button
+
+The rail keeps every key, and adds a button for each:
+
+* **Tools in two columns** (icon and name; the key in the pop-up), so more fit: Place, Pick,
+  Paint, Shapes, Walls, Floor, Roof, Stairs, Cut, Sketch, Repeat, Select, Builds, Rooms.
+* **Hand** buttons: Rotate (R), Flip (F), Turn last (T), Lock height (E -- now a button that
+  stays on, as well as the held key), Side studs (V), Layer (I: says which), Mirror and Mirror
+  here, Colour back / on (, .), All parts (Tab).
+* **Edit**: Undo (Z), Redo (shift Z).
+* **View**: Grid (G), Stress (H), Keys (F1), Room guide (U).
+* Toggles show lit while on. The rail scrolls when it is taller than the window.
+* What was a modifier is an option: Shapes and Sketch have **lay / cut out** (RMB still
+  cuts), Shapes **keep round** (Shift still does), a polygon has **Close** and **Take back a
+  corner** (Enter, Backspace), and anything being drawn a **Cancel** (Esc).
+* **Pick** is the middle click as a tool: click a brick to hold its part and colour.
+* **Builds** is X, M, C, Delete as a tool: click an inserted build, then Move, Copy, Delete.
+* **Rooms** shows its kind with back / on buttons, the opening point kind, and "click marks a
+  point" in place of P.
+* **Paint** shows its brush size (- =).
+
+### The rest of the list
+
+* **Redo**, and **a run as one undo**: a held run (and a mirrored click's pair) undoes with
+  one Z; Shift Z or Redo lays back what Z took (bricks and shape edits; anything else undone
+  clears it). A redone brick is laid again as it was, but a weld it had is not.
+* **Mirror**, moved down from the asset workshop (`_place_mirrored`, `mirrored_z`): across a
+  plane along X or along Z, through the middle of the plate or "here" (the ghost). Placing and
+  runs lay the mirror image too; so do Shapes, Walls, Floor, Sketch (the kept shape's mirror
+  is a kept shape).
+* **Walls** (wall line): click corners on the plane you aim at; each click a corner, a wall
+  `thick` studs and `tall` plates along each segment; Finish (or a click on the first corner,
+  which closes it). Straight keeps segments along X or Z. One kept shape (`polyline`), so its
+  corners interlock like a hollow rectangle's.
+* **Floor**: click inside closed walls: the floor is the space the walls close in, `tall`
+  plates thick (1: a plate). "On top of the walls" lays it over the walls' tops instead, out
+  to their outer faces: the next storey's floor, or a flat roof. Refused when the walls do not
+  close (the fill would run out of the plate). A kept shape (`cells`).
+* **Stairs**: click the lower floor, then the upper: a straight stair, a brick high a step,
+  each step one stud over the one below, `wide` studs across. A kept shape (`stairs`, standing).
+* **Roof**: click a kept shape (a room's walls): a roof on top of it, its footprint plus the
+  overhang. Gable (sloped on the two long sides, the ends closed) or hip (all four; brick
+  corners: there are no corner slopes yet). Each course steps in a stud, its edge a row of
+  45-degree slopes (`slope_1x2`) facing out, the ridge bricks. A kept shape (`roof`).
+
+### As built (2026-10-28)
+
+All of it, merged; `tools/build_tools_probe.gd` 115 checks.
+
+* `ToolRail` (shared) gained `columns` (the tools in a grid), `actions` (sections of small
+  buttons, toggles lit by `show_toggles`, text changed by `set_action_text`) and a scrolling
+  mode (`fit_height`). The asset workshop's rail is unchanged (one column, no actions).
+* `WorkshopTools.ACTIONS` lists the buttons; `act(id)` does what the key does. Lock height is
+  `plane_locked` on the workshop (E held still works). The keys all still work.
+* Redo and run grouping are the building workshop's (`_redo_list`, `_brick_groups`,
+  `redo_last`); the asset workshop keeps its own `_redo`/`_edit_groups`. A shape edit's undo
+  and redo are one routine (`WorkshopTools._apply`), each giving back the other's record.
+* The mirror's state and `_place_mirrored` moved into `workshop.gd`, generalised to a plane
+  across X or Z; the asset workshop draws and saves its plane as before (across Z only). Kept
+  shapes, cuts and doors/windows are mirrored with `BrickShapes.reflected`.
+* Roof slopes: `slope_1x2` turned so `BrickPalette.front_of` is the way out; a slope's front
+  cell's top plate is its open face, so the roof's cells leave it out. Ridges and hip corners
+  are bricks.
+* Floor "on top of the walls" also takes the corners (they touch the inside only across a
+  diagonal).
+* Not done: corner slopes for hip roofs; the asset workshop's options are still its old
+  panel (its tools were already buttons).
