@@ -1827,6 +1827,18 @@ fall over 64 ms headless, none over 60 ms windowed. The gates' worst frames (350
 scene's load, as every planet gate's. The other planet gates unchanged (hits 8, fall 7, damage 12,
 bricks 9, trees 7, squad 10, pawn 12).
 
-Not yet: the city's snap preferences, a storey giving way under what is above (TIP / CRUSH),
-the AI told where a piece lies; furniture, materialising for a fight far from
+**Plan, D2 step 5 (2026-10-28): the AI knows where pieces lie.** The nav regions' AIWorlds already
+index every live chunk -- pieces too -- with the transform it had at their last `sync`, and read
+its bricks live: a piece that has come to rest is bricks to sight and cover once its region syncs.
+What is missing is the telling. `PlanetPieces.ground_changed(box)` -- when a piece settles, wakes,
+is hit, or goes -- and `setup_ai` connects it as it does `site_damaged`: every region syncs (its
+chunks' transforms), and the nav net forgets the box (`invalidate_box`), so paths go round a piece
+where it lies and through where it was. Moving pieces stay as the region last saw them until they
+settle. Gate `--gate=pieces_ai` (headless): a building toppled across the open ground; once at
+rest, the AI's world is solid inside it, a line across it is blocked by bricks (cover), and a path
+from one side of it to the other goes round it, none of its points inside; a charge clearing a
+stretch of it, the path goes through there.
+
+Not yet: the city's snap preferences, a storey giving way under what is above (TIP / CRUSH);
+furniture, materialising for a fight far from
 the camera.
