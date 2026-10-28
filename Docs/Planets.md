@@ -1839,6 +1839,25 @@ rest, the AI's world is solid inside it, a line across it is blocked by bricks (
 from one side of it to the other goes round it, none of its points inside; a charge clearing a
 stretch of it, the path goes through there.
 
+**D2 step 5 built (2026-10-28): the AI knows where pieces lie.** `PlanetPieces.ground_changed`
+(settled, woken, hit, gone), connected in `setup_ai`: every region syncs and the nav net forgets
+the box. Gate `--gate=pieces_ai` 4/4 (x3): a building toppled across the open ground (its regions
+made, and the town done bricking, before it falls); its biggest piece (1335 bricks, 17.6 m) is
+solid in the AI's world -- 1875 of 2177 sampled bricks (the rest, by the look, where the piece
+crosses into a region it was not synced into; not chased) -- a line across it a metre up meets 5
+bricks (cover), and a path from one side to the other (29.6 m straight) goes round it, 35.6-37.5 m,
+none of it inside. **The A/B does not single out the hookup:** with it switched off the gate passes
+too, because the scene syncs the AI's world every physics tick (`PlanetScene._physics_process`)
+and a building's bricks coming or going syncs every region (`set_site_bricks`). It is kept for
+the box: the nav forgets its columns where a piece comes to rest, not only where the building
+stood. Other planet gates unchanged (topple 6, hits 8, fall 7, damage 12, bricks 9, trees 7,
+squad 10, pawn 12).
+
+**Correction (2026-10-28):** `BrickWorld.is_solid(chunk, cell)` takes the cell in GRID
+coordinates (it subtracts the chunk's origin); the gates passed chunk-local cells, which is why it
+read "false for live bricks" (step 2's note above is wrong about it being stale).
+`block_at` takes chunk-local cells.
+
 Not yet: the city's snap preferences, a storey giving way under what is above (TIP / CRUSH);
 furniture, materialising for a fight far from
 the camera.

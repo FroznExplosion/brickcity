@@ -23,8 +23,10 @@ extends Node3D
 ## Step 4: a whole building handed over as one piece (`adopt`, the city's
 ## CityScene._topple): its chunk as it is, nothing copied.
 ##
-## Not yet (D2's next steps): the city's snap preferences, the AI told where a
-## piece lies.
+## Step 5: the AI told where pieces lie (`ground_changed`: a piece settled,
+## woken, hit or gone -- the nav regions sync and forget the box).
+##
+## Not yet (D2's next steps): the city's snap preferences.
 
 ## A falling piece's weight, as the city's debris (IslandManager.DEBRIS_GRAVITY):
 ## a brick model falls faster than a building would, at this scale.
@@ -79,6 +81,10 @@ class Piece:
 	var impacts := 0
 	## Over the cap: shrinking since (ms), 0 while kept.
 	var fading_since := 0
+
+## The ground changed where `box` (world) is: a piece settled there, woke, was
+## hit or went. The scene's AI syncs its regions and forgets the box (setup_ai).
+signal ground_changed(box: AABB)
 
 var bricks: BrickWorld
 var planet: Node3D
@@ -427,6 +433,8 @@ func damage(p: Piece, point: Vector3, shot: Dictionary) -> int:
 		_reshape(p)
 		_start_mesh(p)
 	support_gone(gone_box, p)
+	if p.settled:
+		ground_changed.emit(gone_box.grow(1.0))
 	return killed.size()
 
 
@@ -456,6 +464,7 @@ func _wake(p: Piece) -> void:
 	p.fall_ticks = 0
 	settled_count -= 1
 	woken += 1
+	ground_changed.emit(world_box(p))
 
 
 ## A long piece landing hard snaps across at its contacts: the city's rule
@@ -531,11 +540,13 @@ func _fade(p: Piece, now: int) -> bool:
 		if p.mesh_node != null and is_instance_valid(p.mesh_node):
 			p.mesh_node.scale = Vector3.ONE * maxf(k, 0.001)
 		return false
+	var gone_box := world_box(p)
 	if is_instance_valid(p.body):
 		p.body.queue_free()
 	bricks.release_chunk(p.chunk)
 	if p.settled:
 		settled_count -= 1
+		ground_changed.emit(gone_box)
 	faded += 1
 	return true
 
@@ -551,6 +562,7 @@ func _settle(p: Piece) -> void:
 	p.planet_local = planet.global_transform.affine_inverse() * b.global_transform
 	p.settled = true
 	settled_count += 1
+	ground_changed.emit(world_box(p))
 
 
 ## The floating origin moved the scene: a moving body is where the physics
@@ -578,3 +590,9 @@ func _exit_tree() -> void:
 		if not p.job.is_empty():
 			WorkerThreadPool.wait_for_task_completion(int(p.job[0]))
 			p.job = []
+
+
+## Where piece `p`'s grid is, in the world.
+func world_box(p: Piece) -> AABB:
+	return bricks.get_chunk_transform(p.chunk) \
+			* AABB(Vector3.ZERO, Vector3(bricks.get_chunk_dims(p.chunk)) * BrickWorld.get_cell_size())

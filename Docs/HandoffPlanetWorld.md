@@ -105,6 +105,7 @@ Planets.md 11.11 "D2 step 2 built": hard landings shear and snap a piece, small 
 (`PlanetCrumbs`), a cap (48 moving, 160 kept). `--gate=fall` 7/7. Step 3, hits on pieces:
 built (`PlanetPieces.damage`, `--gate=hits` 8/8; a building's killed bricks are crumbs too).
 Step 4, a whole building toppling: built (`PlanetBuildings._topple`, `PlanetPieces.adopt`,
-`--gate=topple` 6/6). Next in D2: the city's snap preferences, a storey giving way (TIP / CRUSH),
-the AI told where pieces lie. `BrickWorld.is_solid` reads
-false for live bricks after a solve -- use `block_at` + `is_block_absent`.
+`--gate=topple` 6/6). Step 5, the AI and pieces: built (`PlanetPieces.ground_changed`, `--gate=pieces_ai` 4/4; the
+A/B shows the scene's own per-tick sync already covers it). Next in D2: the city's snap
+preferences, a storey giving way (TIP / CRUSH). `BrickWorld.is_solid` takes GRID cells
+(it subtracts the chunk's origin); `block_at` takes chunk-local ones.
