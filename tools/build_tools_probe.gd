@@ -41,6 +41,7 @@ func _initialize() -> void:
 	_mirror_checks()
 	_house_checks()
 	_pull_checks()
+	_floor_plan_checks()
 	print("\n%d passed, %d failed" % [_pass, _fail])
 	quit(1 if _fail > 0 else 0)
 
@@ -433,8 +434,10 @@ func _sketch_checks() -> void:
 	for q in [Vector2(4, 4), Vector2(12, 4), Vector2(12, 10), Vector2(4, 10)]:
 		t.pen.polygon_click(q, false, false)
 	t._sketch_commit()
+	_ok("a stroke on a level goes into the plan, nothing laid yet", t.shapes().is_empty() and not t._draft.is_empty())
+	t.raise_plan()
 	t.commit_pending()
-	_ok("a sketched outline becomes a kept shape", t.shapes().size() == 1 and String(t.shapes()[0].kind) == "outline")
+	_ok("raised and placed: a kept shape", t.shapes().size() == 1 and String(t.shapes()[0].kind) == "plan")
 	var cells := BrickShapes.shape_cells(t.shapes()[0])
 	var filled := 0
 	for c in cells:
@@ -582,6 +585,7 @@ func _repeat_checks() -> void:
 	t.pen.move(Vector2(34.5, 30.5), 1)
 	var before := t.shapes().size()
 	t._sketch_commit()
+	t.raise_plan()
 	t.commit_pending()
 	_ok("a brush stroke drawn with LMB is a kept shape", t.shapes().size() == before + 1 and _solid(Vector3i(32, 1, 30)))
 	t.pick("place")
@@ -851,3 +855,99 @@ func _pull_checks() -> void:
 		if String(b[0]).begins_with("curve_1x2"):
 			curves += 1
 	_ok("a curve in hand: a roof of curves", curves >= 10, "%d" % curves)
+
+
+func _floor_plan_checks() -> void:
+	print("[probe] floor plans: sketch, raise, storeys (section 9)")
+	var pts := {"adds": [[[0, 0], [10, 0], [10, 8], [0, 8]]], "subs": [[[3, 3], [5, 3], [5, 5], [3, 5]]]}
+	_ok("a plan is its strokes in, less its strokes out", BrickShapes.plan_region(pts).size() == 80 - 4)
+	_ok("walls along its outline: a ring the brick's width", BrickShapes.ring(BrickShapes.plan_region(
+			{"adds": [[[0, 0], [10, 0], [10, 8], [0, 8]]]}), 1).size() == 32)
+	_ws._new_build()
+	var t: WorkshopTools = _ws._tools
+	var f0: int = _ws.asm.frames[0]
+	_hold("brick_1x2")
+	t.pick("sketch")
+	t.lie = "flat"
+	t.sketch_level = 1
+	# The plan: a rectangle and a wing on its side, two strokes.
+	for poly in [[Vector2(4, 4), Vector2(20, 4), Vector2(20, 16), Vector2(4, 16)],
+			[Vector2(20, 8), Vector2(26, 8), Vector2(26, 12), Vector2(20, 12)]]:
+		t.pen.draw = "polygon"
+		t.pen.points.clear()
+		t._sk = {"lie": "flat", "at": 1}
+		for q in poly:
+			t.pen.polygon_click(q, false, false)
+		t._sketch_commit()
+	_ok("two strokes, one plan", (t._draft.adds as Array).size() == 2 and t.shapes().is_empty())
+	t.sketch_makes = "building"
+	t.storey_courses = 3
+	t.flat_roof = true
+	t.raise_plan()
+	_ok("raised as a building: a storey (and the roof) to start", t._drag.phase == "height"
+			and int(t._drag.rec.depth) == 11 and int(t._drag.rec.step) == 10)
+	t._drag.rec.depth = 21
+	var b := t.commit_pending()
+	var sh := t.shape_of(b)
+	_ok("placed: two storeys and a flat roof", b >= 0 and String(sh.kind) == "plan" and int(sh.depth) == 21
+			and t._draft.is_empty())
+	_ok("a floor at the bottom, the whole plan", _solid(Vector3i(10, 1, 10)) and _solid(Vector3i(24, 1, 10)))
+	_ok("walls along the outline above it, the inside open", _solid(Vector3i(4, 5, 10)) and _solid(Vector3i(25, 5, 9))
+			and not _solid(Vector3i(10, 5, 10)) and not _solid(Vector3i(20, 5, 10)))
+	_ok("the next storey's floor, and the flat roof", _solid(Vector3i(10, 11, 10)) and _solid(Vector3i(10, 21, 10))
+			and not _solid(Vector3i(10, 22, 10)) and not _solid(Vector3i(10, 15, 10)))
+	var cells := BrickShapes.shape_cells(sh)
+	var filled := 0
+	for c in cells:
+		if _solid(c):
+			filled += 1
+	_ok("every cell of it laid (%d)" % cells.size(), filled == cells.size())
+	var starts_ok := true
+	var floors_plates := true
+	for i in _ws.recipe.size():
+		var size := BrickPalette.size_of(_ws.recipe.part_of(i))
+		var y: int = _ws.recipe.cell_of(i).y
+		if size.y == 3:
+			starts_ok = starts_ok and y in [2, 5, 8, 12, 15, 18]
+		if y in [1, 11, 21]:
+			floors_plates = floors_plates and size.y == 1
+	_ok("each storey's walls are whole courses up from its floor", starts_ok)
+	_ok("the floors are plates", floors_plates)
+	# A window on every floor, and a door that stands on its storey's floor.
+	_hold("brick_1x2")
+	t.window_size = Vector2i(2, 3)
+	t.every_floor = true
+	var face := t.face_under(Vector3(12.5 * 0.35, 5.5 * 0.14, -3.0), Vector3(0, 0, 1))
+	t.apply_opening("window", face)
+	var g := WorkshopTools.glass_paint()
+	var gl0: int = _ws.world.block_at(f0, Vector3i(12, 6, 4))
+	var gl1: int = _ws.world.block_at(f0, Vector3i(12, 16, 4))
+	_ok("a window on every floor: glass on both storeys", gl0 >= 0 and gl1 >= 0
+			and _ws.world.get_block_material(f0, gl0) == g.x and _ws.world.get_block_material(f0, gl1) == g.x)
+	_ws._undo()
+	_ok("one undo takes them all", _ws.world.get_block_material(f0, _ws.world.block_at(f0, Vector3i(12, 16, 4))) != g.x)
+	t.door_size = Vector2i(3, 6)
+	var dface := t.face_under(Vector3(8.5 * 0.35, 15.5 * 0.14, -3.0), Vector3(0, 0, 1))
+	var dop := t.opening_spec("door", dface)
+	_ok("a door on the upper storey stands on its floor", int(dop.a[1]) == 12, str(dop.a))
+	# On top: the next plan starts at the roof, from the same outline.
+	t.plan_on_top(true)
+	_ok("on top of the last building, starting from its plan", int(t._draft.at) == 22
+			and (t._draft.adds as Array).size() == 2)
+	(t._draft.subs as Array).append([[20, 4], [27, 4], [27, 17], [20, 17]])
+	t.sketch_makes = "walls"
+	t.raise_plan()
+	t._drag.rec.depth = 6
+	var top := t.commit_pending()
+	_ok("a setback storey on top: walls along the new outline", top >= 0 and int(t.shape_of(top).at) == 22
+			and _solid(Vector3i(4, 23, 10)) and not _solid(Vector3i(24, 23, 10)))
+	# A plan moves and mirrors with its strokes.
+	var moved := BrickShapes.shifted(sh, Vector3i(3, 0, 2))
+	var want := {}
+	for c in BrickShapes.solid_cells(sh):
+		want[c + Vector3i(3, 0, 2)] = true
+	_ok("a plan moved is its cells moved", BrickShapes.solid_cells(moved) == want)
+	t.lie = "flat"
+	t.sketch_level = -1
+	t.sketch_makes = "solid"
+	t.pick("place")

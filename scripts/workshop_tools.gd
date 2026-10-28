@@ -24,7 +24,7 @@ const TOOLS := [
 	["roof", "Roof", "", "Click a shape (a room's walls): a gable or hip roof of slopes on top of it."],
 	["stairs", "Stairs", "", "Click the lower floor, then the upper one: a straight stair between them."],
 	["cut", "Cut", "N", "Drag a doorway, window or any shape on a wall: the wall is laid again round it. Door and window: one click, framed."],
-	["sketch", "Sketch", "Alt D", "Draw an outline on the plane you aim at -- freehand, brush, rectangle, ellipse or clicked corners; then move the cursor up for its height and click to place."],
+	["sketch", "Sketch", "Alt D", "Draw a plan on a level -- freehand, brush, rectangles, ellipses, clicked corners, as many as you like (RMB takes area away); then Raise (or click inside it), move the cursor up and click: a solid, walls along its outline, or a building with a floor each storey."],
 	["repeat", "Repeat", "J", "Copy the picked shape -- or a storey, everything between two heights -- N times up, or along X or Z. Click a brick here to pick what to repeat; a door or window repeats with its cut."],
 	["select", "Select", "L", "Click a shape's brick to pick the shape: change its height, bond or brick, take its cuts out, delete it, or let it go (keep the bricks)."],
 	["builds", "Builds", "X", "Click an inserted build to pick it, then Move, Copy or Delete it."],
@@ -65,6 +65,9 @@ const CUT_KINDS := [["rect", "rectangle (drag)"], ["arch", "arch (drag)"], ["cir
 ## is where it is clicked, a door stands on the floor of the wall.
 const DOOR := Vector2i(4, 18)
 const WINDOW := Vector2i(4, 9)
+## What a raised plan makes (Docs/BuildTools.md section 9).
+const SKETCH_MAKES := [["solid", "a solid shape (filled)"], ["walls", "walls along its outline"],
+		["building", "a building: walls, a floor each storey"]]
 const REPEAT_WHAT := [["shape", "the picked shape"], ["storey", "a storey (from / to)"]]
 const REPEAT_DIRS := [["up", "up"], ["x", "along X"], ["z", "along Z"]]
 
@@ -118,6 +121,21 @@ var pen := SketchPen.new()
 var brush_size := 1
 var brush_square := false
 var _sk := {}
+## Sketch as a floor plan (section 9): the level drawn on (-1: where you aim), what raising
+## it makes, a building's storey (courses of wall) and flat roof; the plan being drawn
+## ({at, adds, subs}); the last plan raised. Cut: a window on a building on every floor.
+var sketch_level := -1
+var sketch_makes := "solid"
+var storey_courses := 4
+var flat_roof := true
+var every_floor := true
+var _draft := {}
+var _last_plan := -1
+var _drawon_pick: OptionButton
+var _level_row: HBoxContainer
+var _level_spin: SpinBox
+var _storey_box: VBoxContainer
+var _plan_box: VBoxContainer
 ## The wall the last Walls drag made: the next one, drawn from its end, joins it.
 var _last_wall := -1
 ## The bricks a shape in the making will lay, shown: its key, and [[part, cell], ...].
@@ -261,6 +279,8 @@ func _store(id: int, sh: Dictionary) -> void:
 ## A new build was opened or begun: its shapes are its own.
 func recipe_changed() -> void:
 	_undo.clear()
+	_draft = {}
+	_last_plan = -1
 	_drag = {}
 	selected = -1
 	_owner_dirty = true
@@ -462,14 +482,50 @@ func _cut_into(rec: Dictionary, cut: Dictionary) -> int:
 func apply_opening(k: String, face: Dictionary) -> Dictionary:
 	var op := opening_spec(k, face)
 	var rec := _begin()
-	_open_into(rec, op)
-	if ws.mirror_on:
-		var plane: float = ws.mirror_x if ws.mirror_axis == 0 else ws.mirror_z
-		var m := BrickShapes.reflected(op, ws.mirror_axis, plane)
-		if m != op:
-			_open_into(rec, m)
+	var ops := _every_floor(op, face) if every_floor else [op]
+	for o in ops:
+		_open_into(rec, o)
+		if ws.mirror_on:
+			var plane: float = ws.mirror_x if ws.mirror_axis == 0 else ws.mirror_z
+			var m := BrickShapes.reflected(o, ws.mirror_axis, plane)
+			if m != o:
+				_open_into(rec, m)
 	_end(rec)
 	return op
+
+
+## The building a face belongs to (a plan with storeys), or empty.
+func _building_at(c: Vector3i) -> Dictionary:
+	var rid := _rid_at(c)
+	if rid < 0:
+		return {}
+	var sh := shape_of(owner_of(ws.recipe.part_of(rid), ws.recipe.cell_of(rid)))
+	if String(sh.get("kind", "")) != "plan" or int(sh.get("storey", 0)) <= 0:
+		return {}
+	return sh
+
+
+## A door or a window on a building's wall, at the same place on each of its storeys where
+## it fits in that storey's wall; on anything else, just the one.
+func _every_floor(op: Dictionary, face: Dictionary) -> Array:
+	var b := _building_at(face.cell)
+	if b.is_empty():
+		return [op]
+	var ft := int(b.get("floor", 1))
+	var pitch := int(b.storey) + ft
+	var at := int(b.at)
+	var storeys := floori(float(int(b.depth) - (ft if b.get("roof", false) else 0)) / pitch)
+	var box := opening_box(op)
+	var k0 := floori(float(int(box[0].y) - at) / pitch)
+	var out := []
+	for k in storeys:
+		var o := BrickShapes.shifted(op, Vector3i(0, (k - k0) * pitch, 0))
+		var ob := opening_box(o)
+		var wall_lo := at + k * pitch + ft
+		var wall_hi := at + (k + 1) * pitch - 1
+		if int(ob[0].y) >= wall_lo and int(ob[1].y) <= wall_hi:
+			out.append(o)
+	return out if not out.is_empty() else [op]
 
 
 ## What a door or a window clicked on a face would be: {kind, lie, at, depth, a, b (the
@@ -482,9 +538,16 @@ func opening_spec(k: String, face: Dictionary) -> Dictionary:
 	var v0 := uvw.y
 	if k == "door":
 		var v := uvw.y
-		# Down while there is wall (the build's own bricks: not the baseplate).
-		while v > 0 and _rid_at(BrickShapes.to_3d(l, Vector2i(uvw.x, v - 1), uvw.z)) >= 0:
-			v -= 1
+		var b := _building_at(face.cell)
+		if not b.is_empty():
+			# A building's door stands on its storey's floor.
+			var ft := int(b.get("floor", 1))
+			var pitch := int(b.storey) + ft
+			v = int(b.at) + floori(float(uvw.y - int(b.at)) / pitch) * pitch + ft
+		else:
+			# Down while there is wall (the build's own bricks: not the baseplate).
+			while v > 0 and _rid_at(BrickShapes.to_3d(l, Vector2i(uvw.x, v - 1), uvw.z)) >= 0:
+				v -= 1
 		v0 = v
 	return {"kind": k, "lie": l, "at": int(face.at), "depth": int(face.depth),
 			"a": [u0, v0], "b": [u0 + size.x - 1, v0 + size.y - 1],
@@ -760,7 +823,8 @@ func _lay(sh: Dictionary, near: AABB = AABB()) -> void:
 							for dz in size.z:
 								taken[at + Vector3i(dx, dy, dz)] = true
 					break
-	for pc in BrickShapes.pack_courses(cells, parts, String(sh.bond) != "align", taken, base):
+	var starts := BrickShapes.course_starts(sh, height_step("flat"))
+	for pc in BrickShapes.pack_courses(cells, parts, String(sh.bond) != "align", taken, base, starts):
 		if ws.lay_part(String(pc[0]), pc[1], int(sh.colour), int(sh.mat), int(sh.get("role", 0))):
 			laid.append([pc[0], _plain(pc[1])])
 	ws._batch = false
@@ -976,6 +1040,16 @@ func act(id: String) -> void:
 		"guide": ws._cycle_guide()
 
 
+## The plan's level a course (the held brick's height) up or down.
+func _step_level(d: int) -> void:
+	var base := sketch_level if sketch_level >= 0 else int(_draft.get("at", ws._cell.y))
+	sketch_level = maxi(0, base + d * height_step("flat"))
+	if not _draft.is_empty():
+		_draft.at = sketch_level
+	_level_spin.set_value_no_signal(sketch_level)
+	_drawon_pick.select(1)
+
+
 ## Say something on the rail for a few seconds (a fill refused, the next click wanted).
 func say(text: String) -> void:
 	_status.text = text
@@ -1035,6 +1109,52 @@ func _build_options() -> void:
 	sq.focus_mode = Control.FOCUS_NONE
 	sq.toggled.connect(func(on: bool) -> void: brush_square = on)
 	_sketch_box.add_child(sq)
+
+	_plan_box = VBoxContainer.new()
+	_sketch_box.add_child(_plan_box)
+	_drawon_pick = _choice(_plan_box, "draw on", [["aim", "where you aim"], ["level", "a set level (plate)"]],
+			func(i: int) -> void:
+				sketch_level = -1 if i == 0 else maxi(0, int(_draft.get("at", ws._cell.y)))
+				if not _draft.is_empty() and sketch_level >= 0:
+					_draft.at = sketch_level
+				_level_spin.set_value_no_signal(maxi(0, sketch_level)))
+	_level_row = HBoxContainer.new()
+	_plan_box.add_child(_level_row)
+	_button(_level_row, "v", func() -> void: _step_level(-1))
+	_level_spin = SpinBox.new()
+	_level_spin.min_value = 0
+	_level_spin.max_value = 4000
+	_level_spin.value_changed.connect(func(v: float) -> void:
+		sketch_level = int(v)
+		if not _draft.is_empty():
+			_draft.at = sketch_level)
+	_level_row.add_child(_level_spin)
+	_button(_level_row, "^", func() -> void: _step_level(1))
+	_button(_plan_box, "On top of the last building", func() -> void: plan_on_top(false))
+	_button(_plan_box, "... starting from its plan", func() -> void: plan_on_top(true))
+	_choice(_plan_box, "raising it makes", SKETCH_MAKES, func(i: int) -> void: sketch_makes = SKETCH_MAKES[i][0])
+	_storey_box = VBoxContainer.new()
+	_plan_box.add_child(_storey_box)
+	_spin(_storey_box, "storey (courses of wall)", 1, 40, storey_courses, func(v: float) -> void: storey_courses = int(v))
+	var fr := CheckBox.new()
+	fr.text = "flat roof on top"
+	fr.button_pressed = flat_roof
+	fr.focus_mode = Control.FOCUS_NONE
+	fr.toggled.connect(func(on: bool) -> void: flat_roof = on)
+	_storey_box.add_child(fr)
+	var drow := HBoxContainer.new()
+	_plan_box.add_child(drow)
+	_button(drow, "Raise", func() -> void: raise_plan())
+	_button(drow, "Take back", func() -> void:
+		if not _draft.is_empty():
+			var last_sub: bool = not (_draft.subs as Array).is_empty()
+			if last_sub:
+				(_draft.subs as Array).pop_back()
+			elif not (_draft.adds as Array).is_empty():
+				(_draft.adds as Array).pop_back()
+			if (_draft.adds as Array).is_empty() and (_draft.subs as Array).is_empty():
+				_draft = {})
+	_button(drow, "Clear", func() -> void: _draft = {})
 
 	_poly_box = HBoxContainer.new()
 	_sketch_box.add_child(_poly_box)
@@ -1121,6 +1241,12 @@ func _build_options() -> void:
 	gc.focus_mode = Control.FOCUS_NONE
 	gc.toggled.connect(func(on: bool) -> void: glass_on = on)
 	_window_box.add_child(gc)
+	var ef := CheckBox.new()
+	ef.text = "on every floor of a building"
+	ef.button_pressed = every_floor
+	ef.focus_mode = Control.FOCUS_NONE
+	ef.toggled.connect(func(on: bool) -> void: every_floor = on)
+	_cut_box.add_child(ef)
 	var fc := CheckBox.new()
 	fc.text = "frame (the held brick and colour)"
 	fc.button_pressed = frame_on
@@ -1277,6 +1403,9 @@ func input(e: InputEvent) -> bool:
 				if _drag.get("phase", "") == "height":
 					commit_pending()
 					return true
+				if tool == "sketch" and not _draft.is_empty():
+					raise_plan()
+					return true
 	if not (e is InputEventMouseButton) or e.button_index not in [MOUSE_BUTTON_LEFT, MOUSE_BUTTON_RIGHT]:
 		return false
 	match tool:
@@ -1330,6 +1459,9 @@ func _sketch_input(e: InputEvent) -> bool:
 				if ws._frame != 0:
 					return true
 				_sk = _plane_at_ghost(lie)
+				if lie == "flat":
+					# On the plan's level, else the set level, else where you aim.
+					_sk.at = int(_draft.get("at", sketch_level if sketch_level >= 0 else int(_sk.at)))
 			var q = _plane_point(String(_sk.lie), int(_sk.at))
 			if q == null:
 				return true
@@ -1358,13 +1490,28 @@ func _sketch_input(e: InputEvent) -> bool:
 	return false
 
 
-## The stroke drawn, as a kept shape (or with RMB, a cut).
+## The stroke drawn: on a level, into the plan being drawn (in, or with RMB out of it); a
+## click inside the plan raises it. Standing -- or RMB with no plan -- it goes on to its
+## thickness (or depth, cutting) at once, as Shapes.
 func _sketch_commit() -> void:
 	var sk := _sk
 	var entry = pen.entry("top" if sk.lie == "flat" else "side", brush_size, brush_square)
 	var remove := pen.out
+	var tap: Array = pen.points.duplicate()
 	_sk = {}
 	pen.points.clear()
+	if sk.lie == "flat" and not (remove and _draft.is_empty()):
+		if entry == null or (pen.draw != "brush" and _spread(tap) < 0.6):
+			# A click, not a stroke: inside the plan, raise it.
+			if not tap.is_empty() and not _draft.is_empty() and BrickShapes.plan_region(_draft).has(
+					Vector2i(int(floor(tap[0].x)), int(floor(tap[0].y)))):
+				raise_plan()
+			return
+		if _draft.is_empty():
+			_draft = {"at": int(sk.at), "adds": [], "subs": []}
+		(_draft.subs if remove else _draft.adds).append(entry)
+		say("Draw more, or Raise (or click inside the plan) to pull it up.")
+		return
 	if entry == null:
 		return
 	var cells := SketchPen.region_cells(entry)
@@ -1379,6 +1526,60 @@ func _sketch_commit() -> void:
 	_drag = {"phase": "base", "tool": "sketch", "button": MOUSE_BUTTON_LEFT, "lie": sk.lie, "at": sk.at,
 			"a": lo, "b": hi, "kind": "outline", "cut": remove}
 	_to_height(_new_shape("outline", String(sk.lie), lo, hi, int(sk.at), entry))
+
+
+static func _spread(pts: Array) -> float:
+	var d := 0.0
+	for q in pts:
+		d = maxf(d, (q as Vector2).distance_to(pts[0]))
+	return d
+
+
+## Raise the plan drawn: then its height follows the cursor, and a click places what
+## "makes" says -- a solid, walls along its outline, or a building (a floor every storey).
+func raise_plan() -> void:
+	if _draft.is_empty() or (_draft.adds as Array).is_empty():
+		say("Draw the plan first: a rectangle, an ellipse, an outline...")
+		return
+	var pts := {"adds": (_draft.adds as Array).duplicate(true), "subs": (_draft.subs as Array).duplicate(true)}
+	var region := BrickShapes.plan_region(pts)
+	if region.is_empty():
+		say("That plan has nothing left in it.")
+		return
+	var lo := Vector2i(1 << 30, 1 << 30)
+	var hi := -lo
+	for c in region:
+		lo = lo.min(c)
+		hi = hi.max(c)
+	var rec := _new_shape("plan", "flat", lo, hi, int(_draft.at), pts)
+	rec.fill = sketch_makes == "solid"
+	if sketch_makes == "building":
+		rec.storey = storey_courses * height_step("flat")
+		rec.floor = 1
+		rec.roof = flat_roof
+		rec.step = int(rec.storey) + 1
+		rec.extra = 1 if flat_roof else 0
+	_drag = {"phase": "base", "tool": "plan", "button": MOUSE_BUTTON_LEFT, "lie": "flat", "at": int(_draft.at),
+			"a": lo, "b": hi, "kind": "plan", "cut": false}
+	_to_height(rec)
+
+
+## Draw the next plan on top of the last building (or the picked plan): its level its top;
+## `with_plan`, starting from its outline.
+func plan_on_top(with_plan: bool) -> void:
+	var sh := shape_of(selected) if String(shape_of(selected).get("kind", "")) == "plan" else shape_of(_last_plan)
+	if sh.is_empty():
+		say("Raise a plan first (or pick one with Select).")
+		return
+	sketch_level = int(sh.at) + int(sh.depth)
+	_draft = {"at": sketch_level, "adds": [], "subs": []}
+	if with_plan:
+		_draft.adds = (sh.points.adds as Array).duplicate(true)
+		_draft.subs = (sh.points.subs as Array).duplicate(true)
+	if _level_spin != null:
+		_level_spin.set_value_no_signal(sketch_level)
+		_drawon_pick.select(1)
+	say("On top, at plate %d. Draw%s, then Raise." % [sketch_level, " onto its plan" if with_plan else ""])
 
 
 ## The plane a shape or a stroke starts on: where the ghost is -- flat on its layer, or
@@ -1472,7 +1673,7 @@ func _to_height(rec: Dictionary = {}) -> void:
 	if rec.is_empty():
 		_drag = {}
 		return
-	rec.depth = height_step(String(rec.lie))
+	rec.depth = int(rec.get("step", height_step(String(rec.lie)))) + int(rec.get("extra", 0))
 	var l := String(rec.lie)
 	var c2 := BrickShapes.cells_2d(String(rec.kind), BrickShapes._v2(rec.a), BrickShapes._v2(rec.b),
 			int(rec.get("rim", 1)), BrickShapes.aspect(l), rec.get("points", []))
@@ -1512,17 +1713,20 @@ func _pull_height() -> void:
 	if absf(den) < 1e-6:
 		return
 	var along := (b * dir.dot(w0) - axis.dot(w0)) / den
-	var step := height_step(l)
+	var step := int(rec.get("step", height_step(l)))
 	var n := int(round(along / unit / step)) * step
 	if l == "flat":
-		rec.depth = maxi(step, n)
+		rec.depth = maxi(step, n) + int(rec.get("extra", 0))
 		rec.at = int(_drag.at0)
 	else:
 		# Standing: pulled toward you or away, its thickness.
 		rec.depth = maxi(1, absi(n))
 		rec.at = int(_drag.at0) if n >= 0 else int(_drag.at0) - rec.depth + 1
 	var bricks := ""
-	if l == "flat" and step == 1:
+	if int(rec.get("storey", 0)) > 0:
+		var storeys := floori(float(int(rec.depth) - int(rec.get("extra", 0))) / step)
+		bricks = " (%d storey%s%s)" % [storeys, "" if storeys == 1 else "s", ", flat roof" if rec.get("roof", false) else ""]
+	elif l == "flat" and step == 1:
 		bricks = " (%d brick%s and %d plate%s)" % [rec.depth / 3, "" if rec.depth / 3 == 1 else "s",
 				rec.depth % 3, "" if rec.depth % 3 == 1 else "s"]
 	elif l == "flat":
@@ -1552,6 +1756,12 @@ func commit_pending() -> int:
 		return -1
 	if String(d.get("tool", "")) == "walls":
 		return _commit_wall(rec)
+	if String(d.get("tool", "")) == "plan":
+		rec.erase("step")
+		rec.erase("extra")
+		_last_plan = create(rec)
+		_draft = {}
+		return _last_plan
 	return create(rec)
 
 
@@ -1587,8 +1797,9 @@ func _commit_wall(rec: Dictionary) -> int:
 ## The bricks a shape will lay, worked out as it would lay them (cached while it does not
 ## change): [[part, cell], ...].
 func _plan_for(rec: Dictionary) -> Array:
-	var key := "%s|%s|%s|%s|%s|%s|%s|%s|%s" % [rec.kind, rec.lie, rec.a, rec.b, rec.at, rec.depth,
-			rec.get("rim", 1), rec.part, str(rec.get("points", [])).hash()]
+	var key := "%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s" % [rec.kind, rec.lie, rec.a, rec.b, rec.at, rec.depth,
+			rec.get("rim", 1), rec.part, str(rec.get("points", [])).hash(), rec.get("fill", false),
+			rec.get("storey", 0), rec.get("roof", false)]
 	if key == _plan_key:
 		return _plan
 	_plan_key = key
@@ -1601,7 +1812,8 @@ func _plan_for(rec: Dictionary) -> Array:
 		if ws.world.is_solid(ws.asm.frames[0], c):
 			taken[c] = true
 	var parts := BrickShapes.parts_for(_fill_part(String(rec.part)), ws.palette)
-	_plan = BrickShapes.pack_courses(cells, parts, String(rec.bond) != "align", taken, _base_layer(rec))
+	_plan = BrickShapes.pack_courses(cells, parts, String(rec.bond) != "align", taken, _base_layer(rec),
+			BrickShapes.course_starts(rec, height_step("flat")))
 	return _plan
 
 
@@ -1869,9 +2081,16 @@ func preset_cut(k: String, face: Dictionary) -> Dictionary:
 	var v0 := uvw.y
 	if k == "door":
 		var v := uvw.y
-		# Down while there is wall (the build's own bricks: not the baseplate).
-		while v > 0 and _rid_at(BrickShapes.to_3d(l, Vector2i(uvw.x, v - 1), uvw.z)) >= 0:
-			v -= 1
+		var b := _building_at(face.cell)
+		if not b.is_empty():
+			# A building's door stands on its storey's floor.
+			var ft := int(b.get("floor", 1))
+			var pitch := int(b.storey) + ft
+			v = int(b.at) + floori(float(uvw.y - int(b.at)) / pitch) * pitch + ft
+		else:
+			# Down while there is wall (the build's own bricks: not the baseplate).
+			while v > 0 and _rid_at(BrickShapes.to_3d(l, Vector2i(uvw.x, v - 1), uvw.z)) >= 0:
+				v -= 1
 		v0 = v
 	return {"kind": "rect", "lie": l, "a": [u0, v0], "b": [u0 + size.x - 1, v0 + size.y - 1],
 			"at": face.at, "depth": face.depth}
@@ -1943,6 +2162,9 @@ func process() -> void:
 		_rooms_label.text = "next room: %s   point: %s" % [ws._spaces.kind, ws._spaces.point_kind]
 	_shape_box.visible = on in ["shape", "sketch", "walls", "floor"]
 	_sketch_box.visible = on == "sketch"
+	_plan_box.visible = lie == "flat"
+	_level_row.visible = sketch_level >= 0
+	_storey_box.visible = sketch_makes == "building"
 	_kind_pick.get_parent().get_child(_kind_pick.get_index() - 1).visible = on == "shape"
 	_kind_pick.visible = on == "shape"
 	_sketch_box.get_child(2).visible = pen.draw == "brush"   # the brush's size
@@ -2099,6 +2321,8 @@ func _draw() -> void:
 			_im.surface_add_vertex(corners[k])
 			_im.surface_set_color(Color(0.9, 0.5, 1.0, 0.8))
 			_im.surface_add_vertex(corners[(k + 1) % 4])
+	if tool == "sketch" and lie == "flat":
+		any = _draw_level(any)
 	if tool in ["select", "repeat"] and selected >= 0:
 		var sh := shape_of(selected)
 		if not sh.is_empty():
@@ -2108,6 +2332,28 @@ func _draw() -> void:
 	if any:
 		_im.surface_end()
 	_lines.transform = ws.world.get_chunk_transform(ws.asm.frames[0])
+
+
+## Sketch on a level: that level's grid, faint, and the plan drawn so far.
+func _draw_level(begun: bool) -> bool:
+	var at := int(_draft.get("at", sketch_level if sketch_level >= 0 else int(ws._cell.y)))
+	if not begun:
+		_im.surface_begin(Mesh.PRIMITIVE_LINES)
+	var n := float(ws.plate_studs)
+	var y := at * BrickPalette.PLATE_M + 0.004
+	var col := Color(0.55, 0.75, 1.0, 0.22)
+	for i in int(n) + 1:
+		var t := i * BrickPalette.STUD_M
+		for seg in [[Vector3(t, y, 0), Vector3(t, y, n * BrickPalette.STUD_M)],
+				[Vector3(0, y, t), Vector3(n * BrickPalette.STUD_M, y, t)]]:
+			_im.surface_set_color(col)
+			_im.surface_add_vertex(seg[0])
+			_im.surface_set_color(col)
+			_im.surface_add_vertex(seg[1])
+	if not _draft.is_empty():
+		_outline({"kind": "plan", "lie": "flat", "a": [0, 0], "b": [0, 0], "at": at, "depth": 1,
+				"points": _draft}, Color(1.0, 1.0, 0.6), true)
+	return true
 
 
 ## A shape's outline in its plane, drawn on its front and back face. True once begun.
