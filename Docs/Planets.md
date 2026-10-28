@@ -1741,4 +1741,32 @@ Gate `--gate=fall` (headless): a panel cut free two storeys up falls, lands hard
 (more pieces than came loose, crumbs thrown); every piece ends on the ground; 60 groups shed at
 once leave at most 48 moving. The other planet gates and the city's collapse probes unchanged.
 
-Not yet: the rest of D2 (above), furniture, materialising for a fight far from the camera.
+**D2 step 2 built (2026-10-27).** `PlanetPieces` (scripts/planet/planet_pieces.gd) and
+`PlanetCrumbs` (scripts/planet/planet_crumbs.gd), the city's constants throughout:
+- *Landings*: the rule as planned; at its contacts a `PIECE_SHEAR` with peel, and -- built now, not
+  deferred -- a long piece snaps across (`_snap_across`: its grid's long axis, at least 5 m, a plane
+  at each contact away from the ends and each other, one `PIECE_SNAP`). The peel alone did nothing
+  to a panel that lands on its side (it cuts along the piece's grid-down: three bricks loosened, still
+  joined); the snap is what breaks it. Not yet the city's preferences for where to snap (a weak seam,
+  a floor line, a crack), which read its islands' own records. Piece breaks are not in the planet's
+  DamageLog yet (no netcode there).
+- *Crumbs*: groups of 8 bricks or fewer, from a building's solve or a landing, the city's chamfered
+  boxes in their colours, falling along the planet's down to the first thing under them, gone 1.75 s
+  after landing.
+- *The cap*: 48 moving, past it crumbs; 160 kept, past it the oldest settled piece out of sight (or
+  60 m off) shrinks away over 0.6 s and is freed.
+- *The ring in the gates is wider* (24 studs, was 12): main's towers are now laid in long, staggered
+  bricks, and the old ring kept three bricks inside -- crumbs now, not a piece. `--gate=damage`
+  12/12 again with it.
+- *Found*: `BrickWorld.is_solid` reads false for cells whose bricks are still alive in the chunk
+  after a solve (1581 alive, every panel cell "not solid"): the gates use `block_at` +
+  `is_block_absent` to gather bricks. A first-storey panel cut free stays held: its wall's bricks
+  reach past the wall onto the floor slab inside.
+Gate `--gate=fall` (headless 7/7, three runs; windowed 7/7): the damage gate's panel (15 bricks)
+lifted 8 m and let go lands at 15.5 m/s, a landing by the rule, snaps into crumbs (2-5 small groups,
+6-8 crumbs), everything ends on the ground, the crumbs are gone 2.2 s later; sixty groups of nine
+shed at once make 48 pieces and 12 to crumbs. Damage 12, bricks 9, trees 7, squad 10, pawn 12.
+
+Not yet: hits on a piece, the city's snap preferences, a building toppling whole
+(`solve.stability`), the AI told where a piece lies; furniture, materialising for a fight far from
+the camera.

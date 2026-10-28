@@ -11,8 +11,13 @@ extends Node3D
 ## city's up throughout (landing normals, support rays, crumbs, the heap).
 ## A piece lands on the ground or the building and, still, is frozen there.
 ##
-## Not yet (D2's next steps): a hard landing breaking a piece, hits on a piece,
-## the small ones as crumbs, a cap on how many, a building toppling whole.
+## Step 2: a hard landing breaks it (the city's rule: joints sheared at its
+## contacts, what is no longer joined comes away); a group of DEBRIS_MAX_BLOCKS
+## or fewer is crumbs (PlanetCrumbs), not a piece; and a cap -- MAX_MOVING
+## moving, MAX_PIECES kept, the oldest settled one out of sight shrunk away.
+##
+## Not yet (D2's next steps): hits on a piece, a long piece snapping across,
+## a building toppling whole, the AI told where a piece lies.
 
 ## A falling piece's weight, as the city's debris (IslandManager.DEBRIS_GRAVITY):
 ## a brick model falls faster than a building would, at this scale.
@@ -21,6 +26,31 @@ const GRAVITY_SCALE := 1.6
 const SETTLE_SPEED := 0.15
 const SETTLE_SPIN := 0.2
 const SETTLE_MS := 700
+## The city's landing rule (IslandManager): a drop of IMPACT_DELTA in a tick,
+## after IMPACT_FALL_TICKS over IMPACT_MIN_SPEED, MAX_IMPACTS a piece at most.
+const IMPACT_MIN_SPEED := IslandManager.IMPACT_MIN_SPEED
+const IMPACT_DELTA := IslandManager.IMPACT_DELTA
+const IMPACT_FALL_TICKS := IslandManager.IMPACT_FALL_TICKS
+const MAX_IMPACTS := IslandManager.MAX_IMPACTS
+const MIN_IMPACT_BLOCKS := IslandManager.MIN_IMPACT_BLOCKS
+const SHEAR_CONTACTS_MAX := IslandManager.SHEAR_CONTACTS_MAX
+const SHEAR_MAX_BLOCKS := IslandManager.SHEAR_MAX_BLOCKS
+const IMPACT_RADIUS := IslandManager.IMPACT_RADIUS
+const IMPACT_RADIUS_MAX := IslandManager.IMPACT_RADIUS_MAX
+## A long piece SNAPS across where it lands (IslandManager._snap_across).
+const BREAK_MIN_DROP := IslandManager.BREAK_MIN_DROP
+const BREAK_MIN_LENGTH := IslandManager.BREAK_MIN_LENGTH
+const BREAK_MIN_PIECE := IslandManager.BREAK_MIN_PIECE
+const BREAK_SPACING := IslandManager.BREAK_SPACING
+const BREAK_PLANES_MAX := IslandManager.BREAK_PLANES_MAX
+const BREAK_THICKNESS := IslandManager.BREAK_THICKNESS
+## This many bricks or fewer: crumbs, not a piece.
+const DEBRIS_MAX_BLOCKS := IslandManager.DEBRIS_MAX_BLOCKS
+## The cap: moving at once, and kept in all.
+const MAX_MOVING := IslandManager.MAX_MOVING
+const MAX_PIECES := 160
+## A piece over the cap shrinks away over this long (never a pop).
+const FADE_MS := 600
 
 class Piece:
 	var chunk := -1
@@ -34,6 +64,13 @@ class Piece:
 	var born_ms := 0
 	## Its mesh, made on a worker: [task id, [mesh]], empty once hung.
 	var job: Array = []
+	var mesh_node: MeshInstance3D = null
+	## The landing rule's state.
+	var prev_speed := 0.0
+	var fall_ticks := 0
+	var impacts := 0
+	## Over the cap: shrinking since (ms), 0 while kept.
+	var fading_since := 0
 
 var bricks: BrickWorld
 var planet: Node3D
@@ -41,21 +78,41 @@ var brick_material: Material
 var pieces: Array[Piece] = []
 var made := 0
 var settled_count := 0
+var crumbs: PlanetCrumbs
+## Counters, for the gates: hard landings, the pieces they broke off, the
+## groups that went to crumbs (small / over the cap), pieces faded off the cap.
+var landings := 0
+var snaps := 0
+var broke_off := 0
+var crumbed_small := 0
+var crumbed_cap := 0
+var faded := 0
 
 
 func setup(world: BrickWorld, p: Node3D, material: Material) -> void:
 	bricks = world
 	planet = p
 	brick_material = material
+	crumbs = PlanetCrumbs.new()
+	add_child(crumbs)
+	crumbs.setup(p)
 
 
-## Cut each group of `groups` (block ids of `source`) out into a falling piece.
-## Returns how many were made.
-func shed(source: int, groups: Array) -> int:
+## Cut each group of `groups` (block ids of `source`) out into a falling piece,
+## moving at `linear` (world) -- or into crumbs, when it is small or the cap is
+## full. Returns how many pieces were made.
+func shed(source: int, groups: Array, linear := Vector3.ZERO) -> int:
 	var n := 0
 	for g in groups:
 		var ids: PackedInt32Array = g
 		if ids.is_empty():
+			continue
+		if ids.size() <= DEBRIS_MAX_BLOCKS or moving() >= MAX_MOVING:
+			if ids.size() <= DEBRIS_MAX_BLOCKS:
+				crumbed_small += 1
+			else:
+				crumbed_cap += 1
+			_crumble(source, ids, linear)
 			continue
 		var split: Dictionary = bricks.split_island(source, ids)
 		if split.is_empty():
@@ -72,19 +129,54 @@ func shed(source: int, groups: Array) -> int:
 		body.collision_layer = Layers.FALLING
 		body.collision_mask = Layers.FALLING_MASK
 		body.physics_interpolation_mode = Node.PHYSICS_INTERPOLATION_MODE_OFF
+		# Where it touched, for a landing (IslandManager.MAX_CONTACTS).
+		body.contact_monitor = true
+		body.max_contacts_reported = IslandManager.MAX_CONTACTS
 		# Shapes before the body joins a space (IslandManager.spawn's note).
 		bricks.add_chunk_shapes(body.get_rid(), p.chunk, p.local_com, true,
 				ids.size() >= IslandManager.MERGE_FALLING_BLOCKS)
 		add_child(body)
 		body.global_transform = bricks.get_chunk_transform(p.chunk) \
 				* Transform3D(Basis(), p.local_com)
+		body.linear_velocity = linear
 		p.body = body
+		p.prev_speed = linear.length()
 		p.planet_local = planet.global_transform.affine_inverse() * body.global_transform
 		_start_mesh(p)
 		pieces.append(p)
 		made += 1
 		n += 1
+	_cap()
 	return n
+
+
+## `ids` of `source` thrown as crumbs, then cut out and freed.
+func _crumble(source: int, ids: PackedInt32Array, linear: Vector3) -> void:
+	crumbs.throw(bricks, source, ids, linear)
+	var cut: Dictionary = bricks.split_island(source, ids)
+	if not cut.is_empty():
+		bricks.release_chunk(int(cut.chunk))
+
+
+## Over MAX_PIECES: the oldest settled piece the camera cannot see shrinks away.
+func _cap() -> void:
+	var kept := 0
+	for p in pieces:
+		if p.fading_since == 0:
+			kept += 1
+	if kept <= MAX_PIECES:
+		return
+	var cam := get_viewport().get_camera_3d() if is_inside_tree() else null
+	for p in pieces:
+		if kept <= MAX_PIECES:
+			break
+		if not p.settled or p.fading_since != 0 or not is_instance_valid(p.body):
+			continue
+		if cam != null and not cam.is_position_behind(p.body.global_position) \
+				and cam.global_position.distance_to(p.body.global_position) < 60.0:
+			continue
+		p.fading_since = Time.get_ticks_msec()
+		kept -= 1
 
 
 ## Its arrays here, its GPU mesh on a worker -- the planet's bands' way
@@ -114,11 +206,21 @@ func _hang_mesh(p: Piece) -> void:
 	mi.material_override = brick_material
 	mi.physics_interpolation_mode = Node.PHYSICS_INTERPOLATION_MODE_OFF
 	mi.position = -p.local_com
+	if p.mesh_node != null and is_instance_valid(p.mesh_node):
+		p.mesh_node.queue_free()
+	p.mesh_node = mi
 	p.body.add_child(mi)
 
 
 func _physics_process(_delta: float) -> void:
 	var now := Time.get_ticks_msec()
+	var landed: Array = []
+	var i := pieces.size() - 1
+	while i >= 0:
+		var p := pieces[i]
+		if p.fading_since != 0 and _fade(p, now):
+			pieces.remove_at(i)
+		i -= 1
 	for p in pieces:
 		if not p.job.is_empty():
 			_hang_mesh(p)
@@ -129,6 +231,17 @@ func _physics_process(_delta: float) -> void:
 				* GRAVITY_SCALE * b.mass
 		bricks.set_chunk_transform(p.chunk, b.global_transform * Transform3D(Basis(), -p.local_com))
 		p.planet_local = planet.global_transform.affine_inverse() * b.global_transform
+		# A hard landing: the city's rule.
+		var speed := b.linear_velocity.length()
+		var lost := p.prev_speed - speed
+		var fell := p.fall_ticks
+		p.fall_ticks = p.fall_ticks + 1 if speed > IMPACT_MIN_SPEED else 0
+		if lost > IMPACT_DELTA and p.prev_speed > IMPACT_MIN_SPEED and fell >= IMPACT_FALL_TICKS \
+				and p.impacts < MAX_IMPACTS and p.bricks >= MIN_IMPACT_BLOCKS:
+			p.impacts += 1
+			p.fall_ticks = 0
+			landed.append([p, lost])
+		p.prev_speed = speed
 		if b.linear_velocity.length() < SETTLE_SPEED and b.angular_velocity.length() < SETTLE_SPIN:
 			if p.slow_since == 0:
 				p.slow_since = now
@@ -136,6 +249,139 @@ func _physics_process(_delta: float) -> void:
 				_settle(p)
 		else:
 			p.slow_since = 0
+	for l in landed:
+		_break_on_landing(l[0], l[1])
+
+
+## A hard landing SHEARS the joints where it touched (IslandManager.
+## fracture_on_impact's sweeps, its radius by the speed lost) -- it destroys
+## nothing -- and what is no longer joined to the rest comes away.
+func _break_on_landing(p: Piece, lost: float) -> void:
+	if not is_instance_valid(p.body):
+		return
+	landings += 1
+	var b := p.body
+	var radius := clampf(IMPACT_RADIUS * lost * 0.08, IMPACT_RADIUS, IMPACT_RADIUS_MAX)
+	var xf := b.global_transform * Transform3D(Basis(), -p.local_com)
+	bricks.set_chunk_transform(p.chunk, xf)
+	var st := PhysicsServer3D.body_get_direct_state(b.get_rid())
+	var contacts := PackedVector3Array()
+	if st != null:
+		for k in mini(st.get_contact_count(), SHEAR_CONTACTS_MAX):
+			contacts.append(st.get_contact_local_position(k))
+	if contacts.is_empty():
+		# No manifold left: under its middle, along the planet's down, a third
+		# of its grid's size away.
+		var size := Vector3(bricks.get_chunk_dims(p.chunk)) * BrickWorld.get_cell_size()
+		contacts.append(b.global_position + Gravity.down_at(b.global_position) * size.length() * 0.3)
+	var inv := DamageLog.grid_frame(bricks, p.chunk) * xf.affine_inverse()
+	var loosened := 0
+	for c in contacts:
+		var e := DamageLog.Entry.new()
+		e.kind = DamageLog.Kind.PIECE_SHEAR
+		e.point = inv * c
+		e.radius = radius
+		e.limit = SHEAR_MAX_BLOCKS
+		e.flags = DamageLog.FLAG_PEEL
+		loosened += DamageLog.apply_entry(bricks, p.chunk, e).size()
+	loosened += _snap_across(p, contacts, lost, xf)
+	bricks.set_chunk_transform(p.chunk, xf)
+	if loosened == 0:
+		return
+	var comps: Array = bricks.get_components_near(p.chunk)
+	if comps.size() <= 1:
+		return
+	var off := comps.slice(1)
+	var gone := 0
+	for g in off:
+		gone += (g as PackedInt32Array).size()
+	broke_off += shed(p.chunk, off, b.linear_velocity)
+	bricks.mark_chunk_whole(p.chunk)
+	p.bricks = maxi(p.bricks - gone, 1)
+	_reshape(p)
+	_start_mesh(p)
+
+
+## A long piece landing hard snaps across at its contacts: the city's rule
+## (IslandManager._snap_across) -- its long axis, at least BREAK_MIN_LENGTH; the
+## drop it needs less the longer it is; a plane at each contact, never within
+## BREAK_MIN_PIECE of an end nor BREAK_SPACING of another, BREAK_PLANES_MAX at
+## most; one PIECE_SNAP (a seam first, a torn band where there is none). Not yet
+## the city's preferences -- a weak seam, a floor line, a crack -- which read
+## its island's own records. Returns the bricks torn.
+func _snap_across(p: Piece, contacts: PackedVector3Array, severity: float, xf: Transform3D) -> int:
+	var size := Vector3(bricks.get_chunk_dims(p.chunk)) * BrickWorld.get_cell_size()
+	var axis := Vector3(0, 1, 0)
+	var length := size.y
+	if size.x > length and size.x >= size.z:
+		axis = Vector3(1, 0, 0)
+		length = size.x
+	elif size.z > length:
+		axis = Vector3(0, 0, 1)
+		length = size.z
+	if length < BREAK_MIN_LENGTH:
+		return 0
+	if severity < BREAK_MIN_DROP * clampf(BREAK_MIN_LENGTH / length, 0.2, 1.0):
+		return 0
+	var inv := xf.affine_inverse()
+	var used: Array[float] = []
+	var points := PackedVector3Array()
+	for c in contacts:
+		if points.size() >= BREAK_PLANES_MAX:
+			break
+		var local := inv * c
+		var at := local.dot(axis)
+		if at < BREAK_MIN_PIECE or length - at < BREAK_MIN_PIECE:
+			continue
+		var crowded := false
+		for u in used:
+			crowded = crowded or absf(u - at) < BREAK_SPACING
+		if crowded:
+			continue
+		used.append(at)
+		points.append(DamageLog.grid_frame(bricks, p.chunk) * local)
+	if points.is_empty():
+		return 0
+	var e := DamageLog.Entry.new()
+	e.kind = DamageLog.Kind.PIECE_SNAP
+	e.points = points
+	e.normal = axis
+	e.radius = BREAK_THICKNESS
+	e.flags = DamageLog.FLAG_STEP
+	var torn := DamageLog.apply_entry(bricks, p.chunk, e)
+	if not torn.is_empty():
+		snaps += points.size()
+	return torn.size()
+
+
+## The piece's shapes from its bricks as they are now -- out of the space
+## first: a shape call on a body in a space costs by its shape count.
+func _reshape(p: Piece) -> void:
+	var rid := p.body.get_rid()
+	var space := PhysicsServer3D.body_get_space(rid)
+	if space.is_valid():
+		PhysicsServer3D.body_set_space(rid, RID())
+	PhysicsServer3D.body_clear_shapes(rid)
+	bricks.add_chunk_shapes(rid, p.chunk, p.local_com, true,
+			p.bricks >= IslandManager.MERGE_FALLING_BLOCKS)
+	if space.is_valid():
+		PhysicsServer3D.body_set_space(rid, space)
+
+
+## Shrinking away over FADE_MS; true once gone (its body and chunk freed).
+func _fade(p: Piece, now: int) -> bool:
+	var k := 1.0 - clampf(float(now - p.fading_since) / FADE_MS, 0.0, 1.0)
+	if k > 0.0 and is_instance_valid(p.body):
+		if p.mesh_node != null and is_instance_valid(p.mesh_node):
+			p.mesh_node.scale = Vector3.ONE * maxf(k, 0.001)
+		return false
+	if is_instance_valid(p.body):
+		p.body.queue_free()
+	bricks.release_chunk(p.chunk)
+	if p.settled:
+		settled_count -= 1
+	faded += 1
+	return true
 
 
 func _settle(p: Piece) -> void:

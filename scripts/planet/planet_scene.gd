@@ -52,6 +52,7 @@ var _squad_gate := false
 var _trees_gate := false
 var _bricks_gate := false
 var _damage_gate := false
+var _fall_gate := false
 ## The AI round the fight (Docs/Planets.md 11.8, N2, N4): the nav net round the
 ## player's town; ai_world / ai_nav the region the player is in. Made by setup_ai.
 var ai: AIServices
@@ -87,10 +88,11 @@ func _ready() -> void:
 	_trees_gate = "--gate=trees" in OS.get_cmdline_user_args()
 	_bricks_gate = "--gate=bricks" in OS.get_cmdline_user_args()
 	_damage_gate = "--gate=damage" in OS.get_cmdline_user_args()
+	_fall_gate = "--gate=fall" in OS.get_cmdline_user_args()
 	_travel_gate = "--gate=travel" in OS.get_cmdline_user_args()
 	_far_gate = "--gate=far" in OS.get_cmdline_user_args()
 	_drive_gate = "--gate=drive" in OS.get_cmdline_user_args()
-	_gate = _gate or _pawn_gate or _mech_gate or _tank_gate or _soldier_gate or _squad_gate or _travel_gate or _far_gate or _drive_gate or _trees_gate or _bricks_gate or _damage_gate
+	_gate = _gate or _pawn_gate or _mech_gate or _tank_gate or _soldier_gate or _squad_gate or _travel_gate or _far_gate or _drive_gate or _trees_gate or _bricks_gate or _damage_gate or _fall_gate
 	data = PlanetData.new()
 	data.planet_name = "proto"
 	# Towns and landmarks: their pads go into the ground before it is built.
@@ -164,6 +166,8 @@ func _ready() -> void:
 			_run_bricks_gate()
 		elif _damage_gate:
 			_run_damage_gate()
+		elif _fall_gate:
+			_run_fall_gate()
 		elif _travel_gate:
 			_run_travel_gate()
 		elif _far_gate:
@@ -363,7 +367,7 @@ func _process(_delta: float) -> void:
 	# walker's own gate, the pawn stands on it.
 	if walker.frozen and pawn == null and trees.prebaked and _ground_hit(walker.global_position) != Vector3.INF:
 		walker.frozen = false
-		if not _gate or _pawn_gate or _mech_gate or _tank_gate or _soldier_gate or _squad_gate or _travel_gate or _far_gate or _drive_gate or _trees_gate or _bricks_gate or _damage_gate:
+		if not _gate or _pawn_gate or _mech_gate or _tank_gate or _soldier_gate or _squad_gate or _travel_gate or _far_gate or _drive_gate or _trees_gate or _bricks_gate or _damage_gate or _fall_gate:
 			_spawn_player(_ground_hit(walker.global_position), -walker.global_transform.basis.z)
 	if not on_foot:
 		walker.flying = pawn != null or walker.flying
@@ -1872,8 +1876,12 @@ func _run_damage_gate() -> void:
 	# wall, off the 30-stud lines where an interior wall would hold it inside.
 	var pieces0 := buildings.pieces.pieces.size()
 	var zc_c := mini(15, site.fz / 2)
-	var z0 := zc_c - 6
-	var z1 := zc_c + 6
+	# Wide enough that whole bricks stand inside the ring: the towers are laid in
+	# long, staggered bricks, and twelve studs kept three (a group that small is
+	# crumbs, not a piece -- D2 step 2).
+	var half := mini(12, site.fz / 2 - 2)
+	var z0 := zc_c - half
+	var z1 := zc_c + half
 	var top := TowerRecipe.SLAB_PLATES + TowerRecipe.COURSES_PER_FLOOR * TowerRecipe.PLATES_PER_COURSE
 	var ring_ids := {}
 	var inside_cells: Array[Vector3i] = []
@@ -1946,4 +1954,185 @@ func _run_damage_gate() -> void:
 	await _shot("planet_damage")
 	print("[planet] damage: %d bricks killed; frames worst %.1f ms" % [buildings.bricks_killed, _worst_ms])
 	print("[planet] damage gate: %d ok, %d FAIL" % [_ok, _fail])
+	get_tree().quit(0 if _fail == 0 else 1)
+
+
+# ---------------------------------------------------------------------------
+# The falling gate (Planets.md 11.11, D2 step 2): the damage gate's panel --
+# a ring cut by cell round a piece of the ground storey's -X wall, which falls
+# as one piece -- lifted 8 m the moment it comes loose and let go, as the mech
+# gate drops its titan: it lands hard and comes apart, pieces and crumbs, and
+# all of it lies on the ground. (A panel cut free a storey up stays held: its
+# wall's bricks reach past the wall onto the floor slab inside.) Then the cap:
+# sixty groups shed at once from another building leave at most MAX_MOVING
+# moving.
+
+## The nearest building to the pawn but `except`, once it is bricks.
+func _bricked_near(except := -1) -> int:
+	var t0 := Time.get_ticks_msec()
+	var bi := -1
+	while Time.get_ticks_msec() - t0 < 60000:
+		await _frames(1)
+		var best := INF
+		bi = -1
+		for i in buildings.sites.size():
+			var st: PlanetBuildings.Site = buildings.sites[i]
+			var d := pawn.feet().distance_to(planet.global_position + st.frame.origin)
+			if i != except and not st.landmark and d < best:
+				best = d
+				bi = i
+		if bi >= 0 and buildings.sites[bi].bricked and buildings.sites[bi].band_jobs.is_empty():
+			return bi
+	return bi
+
+
+func _run_fall_gate() -> void:
+	var t0 := Time.get_ticks_msec()
+	while pawn == null and Time.get_ticks_msec() - t0 < 60000:
+		await _frames(1)
+	var town: Vector3 = town_dirs[0]
+	var p_feet := _surface(_round_dir(town, spawn_dir, 88.0))
+	pawn.place(p_feet + Gravity.up_at(p_feet) * 0.3)
+	t0 = Time.get_ticks_msec()
+	while _ground_hit(p_feet) == Vector3.INF and Time.get_ticks_msec() - t0 < 30000:
+		await _frames(1)
+	setup_ai(town)
+	var bi: int = await _bricked_near()
+	var site: PlanetBuildings.Site = buildings.sites[bi]
+	_check("the nearest building is bricks", site.bricked)
+	var bxf := planet.global_transform * site.frame
+	var stud := BrickWorld.get_stud_metres()
+	var space := get_world_3d().direct_space_state
+	var pc := buildings.pieces
+	var storey := TowerRecipe.SLAB_PLATES + TowerRecipe.COURSES_PER_FLOOR * TowerRecipe.PLATES_PER_COURSE
+	var zc_c := mini(15, site.fz / 2)
+	# Wide enough that whole bricks stand inside the ring: the towers are laid in
+	# long, staggered bricks, and twelve studs kept three (a group that small is
+	# crumbs, not a piece -- D2 step 2).
+	var half := mini(12, site.fz / 2 - 2)
+	var z0 := zc_c - half
+	var z1 := zc_c + half
+	var ring_ids := {}
+	for zc in range(z0, z1):
+		for yc in range(0, storey):
+			for xc in TowerRecipe.WALL_THICK:
+				var cell := Vector3i(xc, yc, zc)
+				if not buildings.bricks.is_solid(site.chunk, cell):
+					continue
+				var edge := zc < z0 + 2 or zc >= z1 - 2 or yc < TowerRecipe.SLAB_PLATES \
+						or yc >= storey - TowerRecipe.PLATES_PER_COURSE
+				if edge:
+					ring_ids[buildings.bricks.block_at(site.chunk, cell)] = true
+	var ring := PackedInt32Array(ring_ids.keys())
+	var landings0 := pc.landings
+	var crumbs0 := pc.crumbs.thrown
+	var broke0 := pc.broke_off
+	var pieces0 := pc.pieces.size()
+	buildings.bricks.kill_blocks(site.chunk, ring)
+	buildings.after_kill(bi, ring, bxf * AABB(Vector3(-1.0, -0.5, z0 * stud - 1.0),
+			Vector3(3.0, storey * BrickWorld.get_plate_metres() + 1.0, (z1 - z0) * stud + 2.0)))
+	# The panel, the moment it is a piece: lifted 8 m and let go.
+	t0 = Time.get_ticks_msec()
+	while pc.pieces.size() == pieces0 and Time.get_ticks_msec() - t0 < 5000:
+		await get_tree().physics_frame
+	var panel: PlanetPieces.Piece = null
+	for q in pc.pieces.slice(pieces0):
+		var pp: PlanetPieces.Piece = q
+		if panel == null or pp.bricks > panel.bricks:
+			panel = pp
+	_check("the ring's panel comes loose as a piece", panel != null and is_instance_valid(panel.body),
+			"%d piece(s)" % (pc.pieces.size() - pieces0))
+	if panel == null:
+		get_tree().quit(1)
+		return
+	var bricks0 := panel.bricks
+	var up0 := Gravity.up_at(panel.body.global_position)
+	panel.body.global_position += up0 * 8.0
+	panel.body.linear_velocity = Vector3.ZERO
+	panel.body.angular_velocity = Vector3.ZERO
+	panel.body.reset_physics_interpolation()
+	panel.prev_speed = 0.0
+	panel.fall_ticks = 0
+	var fresh: Array = []
+	var peak_speed := 0.0
+	t0 = Time.get_ticks_msec()
+	while Time.get_ticks_msec() - t0 < 15000:
+		await get_tree().physics_frame
+		fresh = pc.pieces.slice(pieces0)
+		var all_still := not fresh.is_empty()
+		for q in fresh:
+			var p: PlanetPieces.Piece = q
+			all_still = all_still and p.settled
+			if is_instance_valid(p.body):
+				peak_speed = maxf(peak_speed, p.body.linear_velocity.length())
+		if all_still and Time.get_ticks_msec() - t0 > 1500:
+			break
+	print("[planet] fall: ring %d bricks round studs %d-%d; the panel %d bricks, dropped 8 m; %d piece(s) now, landings %d, broke off %d, crumbs %d (groups: %d small, %d over the cap); fastest %.1f m/s" % [
+			ring.size(), z0, z1 - 1, bricks0, fresh.size(), pc.landings - landings0, pc.broke_off - broke0,
+			pc.crumbs.thrown - crumbs0, pc.crumbed_small, pc.crumbed_cap, peak_speed])
+	_check("dropped 8 m, it lands hard (a landing by the city's rule)", pc.landings > landings0,
+			"fastest %.1f m/s" % peak_speed)
+	_check("and comes apart: pieces broken off or crumbs thrown",
+			pc.broke_off > broke0 or pc.crumbs.thrown > crumbs0,
+			"broke off %d, crumbs %d" % [pc.broke_off - broke0, pc.crumbs.thrown - crumbs0])
+	var landed := 0
+	var where := []
+	for q in fresh:
+		var p: PlanetPieces.Piece = q
+		if not is_instance_valid(p.body):
+			continue
+		var up_here := Gravity.up_at(p.body.global_position)
+		var hit := space.intersect_ray(PhysicsRayQueryParameters3D.create(
+				p.body.global_position, p.body.global_position - up_here * 4.0,
+				Layers.WORLD | Layers.STRUCTURE | Layers.DEBRIS, [p.body.get_rid()]))
+		# Ground is what is not the building's own collision (the terrain is no
+		# CollisionObject3D); a piece on a piece is down too.
+		var down: bool = not hit.is_empty() and not site.collision.owns(hit.rid)
+		if p.settled and down:
+			landed += 1
+		else:
+			where.append("%d bricks at %s, settled %s" % [p.bricks,
+					str((bxf.affine_inverse() * p.body.global_position).snapped(Vector3.ONE * 0.1)), p.settled])
+	_check("every piece of it ends on the ground and lies there", not fresh.is_empty() and landed == fresh.size(),
+			"%d of %d; %s" % [landed, fresh.size(), "; ".join(where)])
+	await _shot("planet_fall")
+	await get_tree().create_timer(2.2).timeout
+	_check("its crumbs lie a moment and are gone", pc.crumbs.alive == 0, "%d still" % pc.crumbs.alive)
+	# The cap: sixty groups of nine of another building's bricks, shed at once.
+	var b2: int = await _bricked_near(bi)
+	var s2: PlanetBuildings.Site = buildings.sites[b2]
+	var ids := PackedInt32Array()
+	# Its bricks, all of it (whole bricks are long: a storey is ~200), from the
+	# top down, so the building under them is what is left standing.
+	var dims := buildings.bricks.get_chunk_dims(s2.chunk)
+	for yc in range(dims.y - 1, -1, -1):
+		for zc in dims.z:
+			for xc in dims.x:
+				var bid := buildings.bricks.block_at(s2.chunk, Vector3i(xc, yc, zc))
+				if bid >= 0 and not buildings.bricks.is_block_absent(s2.chunk, bid) and not ids.has(bid):
+					ids.append(bid)
+	var groups: Array = []
+	# Nine bricks a group: one over what is crumbs, so each is a piece unless
+	# the cap says not.
+	var per := PlanetPieces.DEBRIS_MAX_BLOCKS + 1
+	for g in 60:
+		if (g + 1) * per > ids.size():
+			break
+		groups.append(ids.slice(g * per, (g + 1) * per))
+	var all := PackedInt32Array()
+	for g in groups:
+		all.append_array(g as PackedInt32Array)
+	s2.collision.disable(all)
+	for b in s2.collision.bands_of(all):
+		if not s2.remesh.has(b):
+			s2.remesh.append(b)
+	var cap0 := pc.crumbed_cap
+	var made := pc.shed(s2.chunk, groups)
+	buildings.bricks.bake_chunk_async(s2.chunk)
+	await _frames(2)
+	_check("sixty groups at once: at most %d move, the rest are crumbs" % PlanetPieces.MAX_MOVING,
+			groups.size() == 60 and pc.moving() <= PlanetPieces.MAX_MOVING and pc.crumbed_cap - cap0 >= 60 - PlanetPieces.MAX_MOVING,
+			"%d groups, %d pieces made, %d moving, %d to crumbs over the cap" % [groups.size(), made, pc.moving(), pc.crumbed_cap - cap0])
+	print("[planet] frames: worst %.1f ms; over 40 ms: %s" % [_worst_ms, _hitches])
+	print("[planet] fall gate: %d ok, %d FAIL" % [_ok, _fail])
 	get_tree().quit(0 if _fail == 0 else 1)
