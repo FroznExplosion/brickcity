@@ -7,7 +7,8 @@ extends RefCounted
 ##
 ## A shape or a cut is a Dictionary, saved as it is in the recipe's meta.shapes:
 ##
-##   kind    rect, hollow, circle, ring, triangle, line, arch, or outline (`points`)
+##   kind    rect, hollow, circle, ring, triangle, line, arch, jamb (a hollow rectangle
+##           with no bottom: a door's frame), or outline (`points`)
 ##   lie     flat (on a plane: u = x, v = z, stacked up y), wall_x (standing, u = x,
 ##           v = y, stacked along z) or wall_z (u = z, v = y, stacked along x)
 ##   a, b    the corners dragged, [u, v] cells; the box between them is the shape's
@@ -71,6 +72,8 @@ static func cells_2d(kind: String, a: Vector2i, b: Vector2i, rim: int = 1, asp: 
 			match kind:
 				"hollow":
 					inside = u - lo.x < r or hi.x - u < r or v - lo.y < rv or hi.y - v < rv
+				"jamb":
+					inside = u - lo.x < r or hi.x - u < r or hi.y - v < rv
 				"circle":
 					inside = _in_ellipse(pu, pv, cx, cy, rx, ry)
 				"ring":
@@ -138,6 +141,34 @@ static func shape_cells(sh: Dictionary) -> Dictionary:
 	for cut in sh.get("cuts", []):
 		for c in solid_cells(cut):
 			out.erase(c)
+	return out
+
+
+## A shape, a cut or a door's or window's spec moved `d` grid cells: its corners, its layer,
+## its outline or brush stroke, its cuts and its opening with it. Its bricks are not (a copy
+## is laid fresh).
+static func shifted(sh: Dictionary, d: Vector3i) -> Dictionary:
+	var out := sh.duplicate(true)
+	var m := from_3d(String(sh.get("lie", "flat")), d)
+	for k in ["a", "b"]:
+		if out.has(k):
+			out[k] = [int(out[k][0]) + m.x, int(out[k][1]) + m.y]
+	if out.has("at"):
+		out.at = int(out.at) + m.z
+	if out.has("points"):
+		var pts = out.points
+		if pts is Dictionary:
+			pts.brush = (pts.brush as Array).map(func(q: Array) -> Array: return [float(q[0]) + m.x, float(q[1]) + m.y])
+		else:
+			out.points = (pts as Array).map(func(q: Variant) -> Array:
+				var v := q as Vector2 if q is Vector2 else Vector2(float(q[0]), float(q[1]))
+				return [v.x + m.x, v.y + m.y])
+	if out.has("cuts"):
+		out.cuts = (out.cuts as Array).map(func(c: Dictionary) -> Dictionary: return shifted(c, d))
+	if out.has("opening"):
+		out.opening = shifted(out.opening, d)
+	if out.has("bricks"):
+		out.bricks = []
 	return out
 
 
