@@ -1073,7 +1073,7 @@ moves that one node and nothing streams again.
 | gravity, controllers | `GravityBodyConfig`, radial controller (STA doc 05) | our `Gravity` answers from the planet; `tools/planet_radial_body.gd` until the pawn is ported |
 | water | `WaterSystem` v3: flow graph, lakes, solver, ripple fields, CA | **not taken**. Only the ocean SHELL: a Gerstner surface on a sphere at sea level, shader only (STA's `water.gdshader` far tier), and "under it" is `radius < sea level`. No flow, no lakes, no simulation: the ground never changes |
 | caves, granules, goo, vegetation | placed caves, 2 cm granules, goo, `VegetationInstancer` | not now (vegetation later, as our trees) |
-| solar system, orbits, stations | `SolarSystem`, analytic orbits, anchored frame | later; one planet first |
+| solar system, orbits, stations | `SolarSystem`, analytic orbits, anchored frame | §11.12 (2026-10-28): a generated universe of star systems, spinning planets |
 
 ### 11.2 Our buildings on it
 
@@ -1916,3 +1916,113 @@ Not done: a crush, TIP or region cut is in the planet's `damage_log`, the crumbs
 
 Not yet: the city's snap preferences; furniture, materialising for a fight far from
 the camera.
+
+### 11.12 Plan: the universe -- star systems, orbits, spinning planets (2026-10-28)
+
+The user: several planets; a procedurally generated universe of separate star systems, each
+system generated with its own number of planets, each planet generated; planets **spin**, lit
+realistically by their sun, with each planet's own times of day; orbit speeds as STA's. Until now
+the scene was one planet under a fixed sun (§11.1: "solar system, orbits, stations | later").
+
+From STA (`scripts/solar_system.gd`, `star_system_data.gd`, Docs/12): orbits computed from the
+clock, never integrated (no drift, every peer agrees); the **anchored frame** (the planet you are
+near holds still, the sky moves round it); the frame handoff that carries velocity; one voxel
+ground at a time, the rest impostors; the horizon view distance (have). Not STA's: its compact
+scale (star 3 km at 13-30 km) and its non-spinning planets.
+
+#### What is generated
+
+`Universe` (scripts/space/universe.gd): a seed. System `i` is a pure function of `(seed, i)`:
+a place in the galaxy (for the map and jumps later) and a `StarSystem`.
+
+`StarSystem` (scripts/space/star_system.gd): a star (radius, colour, luminosity) and its bodies,
+each a `PlanetData` with its orbit and its spin. Generated from the system's seed:
+
+| | range | rule |
+|---|---|---|
+| planets | 2-8 | weighted to 4-6 |
+| orbit radius | first 700-1100 km, then x1.5-1.9 each | so no two planets' moon systems meet |
+| orbit period | STA's: 8 min at the innermost, Kepler `(a / a0)^1.5` outward | `time_scale` 1 = STA's pace (STA: "slow these down once the seam is validated") |
+| planet radius | 6-16 km | 10-20 km keeps the flat-feel rules (§10a); smaller is a moon's |
+| moons | 0-2 a planet, radius 2.5-5 km | orbit 8-16 R of the parent, period STA's 4 min scaled; **tidally locked** (day = orbit) |
+| day | 10-40 min | spin about the climate axis (`climate_axis` is the spin axis: the equator is warm because the sun is over it) |
+| axial tilt | 0-30 deg | seasons as the planet goes round |
+| temperature | from the star's light at the orbit, `T ~ (L / a^2)^(1/4)` | an offset on the biome temperatures: hot worlds desert, cold tundra and snow |
+| relief, sea, colours | per seed | `amplitude`, `period`, `ridged`, `sea_level` (none on hot worlds and moons), air colour; no air on moons |
+
+The star: 25-60 km radius, so from a planet at 2,000 km it is 1-3 degrees across (the real sun
+is 0.5). System 0 holds **the home planet** (today's proto planet, its towns, landmarks and
+spawn unchanged) at a habitable orbit; its temperature offset is 0 by definition.
+
+#### Frames
+
+One transform, `space_to_world`, places the whole system each frame; a body's world transform
+is `space_to_world * T_X(t)`, `T_X(t)` its orbit position (parent chain, as STA) and its spin
+basis `S_X(t)`.
+
+- **Anchored** (the player inside body A's shell, 5 R): A holds still with an identity basis --
+  the **co-rotating** frame. The ground, the buildings, the AI, the physics see nothing move or
+  turn; the star and the other bodies (and so the sun's direction) turn round A once a day.
+  `space_to_world = (I, A.pos) * T_A(t)^-1`.
+- **Space** (in no shell): the star's frame at a fixed orientation; every body orbits and turns.
+- **Handoff** (STA Docs/12 §3, with spin): the player's velocity changes by the frames' velocity
+  difference at its point, `v_frame(x) = v_A + Omega_A x (x - p_A)` (STA's "rotation subtlety",
+  now required: the ground turns 10 km x 2 pi / day under you). Physically continuous: the planet
+  starts to turn under you as the sky stops.
+- **Arriving** at A from space, A's basis is wherever its spin has it. The world turns with it
+  once, about A's centre, so that A is the identity again: only what is in space (the player) is
+  moved, by one rigid transform -- nothing the player can see changes.
+- **A planet left behind sleeps.** Its top-level things (soldiers, vehicles, pieces) are
+  reparented under its body, process off (their bodies leave physics), so they ride its orbit and
+  spin exactly, untouched by origin shifts; on arrival they go back to the scene root where they
+  were on the ground. Its AI and nav caches are not shifted while it sleeps; on arrival they take
+  the one offset between where it was left and where it is now (small numbers, so no precision
+  is lost however far the player went).
+- The floating origin (`PlanetFrame`, 4 km, translation only) is unchanged; `WorldFrame.origin`
+  follows the anchored body.
+
+#### Light, day and night
+
+The sun is still one `DirectionalLight3D` (§10a), pointed from the star at the player each frame
+(in steps of 0.05 deg, so the shadow cascades do not crawl). How much of it reaches the player is
+how much of the **star's disc is uncovered by the bodies** seen from the camera: on the ground
+the planet covers half the sky, so that is the sun's height over the horizon, with the star's own
+size giving the sunset; in space it is the planet's shadow; a moon in front is an **eclipse**, for
+free. The sky's colour and the ambient follow it (with twilight from the sun's height while in
+air). Each body's impostor, atmosphere and sea get their own sun direction in their own frame.
+The star is an emissive sphere; the sky's own sun disc is off.
+
+#### Getting about
+
+The walker's fly mode stays the way to travel for now (a ship is step 3 below). It keeps an
+**inertia** -- the handoff's kick goes into it -- and, like a flight computer, matches the
+nearest body's orbital velocity over a few seconds, so flight is relative to what is near. Shift
+in space cruises at a speed that grows with the distance to the nearest ground (from 500 m/s to
+300 km/s), so a crossing of 1,000 km takes seconds. Cameras see to 50,000 km (Godot's reversed
+depth keeps near detail).
+
+#### Cost control
+
+- Each body bakes its impostor on a worker thread, small (192 x 96) first, full size (512 x 256,
+  the biome map the ground needs) nearest first; nothing generated is baked on the main thread.
+- A body's voxel generator graph is built when it is first anchored, not at start.
+- Only the anchored body has voxel ground; trees and buildings only on the home planet for now.
+
+#### Order
+
+1. **The system layer** (this step): `Universe`, `StarSystem` generation, `PlanetSystem` (the
+   frames, the clock, gravity toward the anchor or the nearest body, handoff, sleep and wake,
+   the sun and the light from the star), the walker's inertia and cruise. `--no-system` keeps the
+   old fixed sun; every existing gate runs with the clock **stopped** (the home planet at the
+   spawn's noon), so their numbers keep their meaning.
+   Gates: `tools/system_probe.gd` (headless: the generator is deterministic and in range, orbits
+   analytic, the frame velocity is the derivative of positions, the handoff kick); `--gate=system`
+   (fly off the home planet, a handoff without a jump, land on another planet and stand on it,
+   back home, what slept is where it was; the sun goes round once a day at the spawn).
+2. Stations and satellites on rails (STA `OrbitalUnit`): brick builds, gravity zones, sleep far.
+3. A ship to fly (zylanntest `ship_controller.gd`: 6DOF, speed capped near ground, board and
+   leave, ride its frame).
+4. Trees and buildings on generated planets; biome tables for hot, cold and airless worlds.
+5. Jumps between systems and the galaxy map (`Universe`'s positions); markers for planets too
+   small to see.
+6. Zero-g debris and drift records (Space.md §4); belts and rings (STA Docs/15 §3).
