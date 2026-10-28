@@ -40,6 +40,7 @@ func _initialize() -> void:
 	_redo_checks()
 	_mirror_checks()
 	_house_checks()
+	_pull_checks()
 	print("\n%d passed, %d failed" % [_pass, _fail])
 	quit(1 if _fail > 0 else 0)
 
@@ -432,6 +433,7 @@ func _sketch_checks() -> void:
 	for q in [Vector2(4, 4), Vector2(12, 4), Vector2(12, 10), Vector2(4, 10)]:
 		t.pen.polygon_click(q, false, false)
 	t._sketch_commit()
+	t.commit_pending()
 	_ok("a sketched outline becomes a kept shape", t.shapes().size() == 1 and String(t.shapes()[0].kind) == "outline")
 	var cells := BrickShapes.shape_cells(t.shapes()[0])
 	var filled := 0
@@ -446,6 +448,7 @@ func _sketch_checks() -> void:
 	t._sk = {"lie": "flat", "at": 1}
 	t.pen.press(Vector2(8.5, 7.5), true)
 	t._sketch_commit()
+	t.commit_pending()
 	_ok("a stroke drawn with RMB cuts the shape", (t.shapes()[0].cuts as Array).size() == 1
 			and not _ws.world.is_solid(f0, Vector3i(8, 2, 7)) and _ws.world.is_solid(f0, Vector3i(4, 2, 4)))
 	# Saved, and laid again from the save: the outline is kept.
@@ -579,6 +582,7 @@ func _repeat_checks() -> void:
 	t.pen.move(Vector2(34.5, 30.5), 1)
 	var before := t.shapes().size()
 	t._sketch_commit()
+	t.commit_pending()
 	_ok("a brush stroke drawn with LMB is a kept shape", t.shapes().size() == before + 1 and _solid(Vector3i(32, 1, 30)))
 	t.pick("place")
 
@@ -756,3 +760,94 @@ func _house_checks() -> void:
 	t.roof_style = "hip"
 	var hid := t.roof_on(room)
 	_ok("hip roof too", hid >= 0 and (t.shape_of(hid).bricks as Array).size() > 10)
+
+
+func _pull_checks() -> void:
+	print("[probe] base, then height (section 8)")
+	_ws._new_build()
+	var t: WorkshopTools = _ws._tools
+	_hold("plate_1x4")
+	_ok("a plate in hand: the height goes a plate at a time", t.height_step("flat") == 1)
+	_hold("brick_2x4")
+	_ok("a brick: a course (3 plates) at a time", t.height_step("flat") == 3)
+	_ok("and a wall of it is two studs thick", t.held_width() == 2)
+	_hold("brick_1x2")
+	# Walls: drag a line, let go, pull it up 9 plates, click.
+	t.pick("walls")
+	t._drag = {"phase": "base", "tool": "walls", "button": MOUSE_BUTTON_LEFT, "lie": "flat", "at": 1,
+			"a": Vector2i(4, 4), "b": Vector2i(15, 4), "kind": "polyline", "cut": false}
+	var plan := t._plan_for(t._making())
+	_ok("the bricks it will lay are worked out while it is drawn", plan.size() > 0)
+	t._to_height()
+	_ok("let go: the height comes next, a course to start", t._drag.phase == "height" and int(t._drag.rec.depth) == 3)
+	t._drag.rec.depth = 9
+	var shown := t._plan_for(t._drag.rec)
+	var w1 := t.commit_pending()
+	var laid := {}
+	for b in t.shape_of(w1).bricks:
+		laid["%s@%s" % [b[0], str(BuildRecipe.cell_from(b[1]))]] = true
+	var same := shown.size() == laid.size()
+	for pc in shown:
+		same = same and laid.has("%s@%s" % [pc[0], str(pc[1])])
+	_ok("clicked: a wall 9 plates tall, exactly the bricks shown", w1 >= 0 and int(t.shape_of(w1).depth) == 9 and same)
+	_ok("of the held brick", BrickPalette.part_of(String(t.shape_of(w1).bricks[0][0])).begins_with("brick_1x"))
+	# The next wall from its end joins it; the last one back to the start closes it.
+	for seg in [[Vector2i(15, 4), Vector2i(15, 11)], [Vector2i(15, 11), Vector2i(4, 11)], [Vector2i(4, 11), Vector2i(4, 4)]]:
+		t._drag = {"phase": "base", "tool": "walls", "button": MOUSE_BUTTON_LEFT, "lie": "flat", "at": 1,
+				"a": seg[0], "b": seg[1], "kind": "polyline", "cut": false}
+		t._to_height()
+		t._drag.rec.depth = 9
+		t.commit_pending()
+	var w := t.shape_of(w1)
+	_ok("walls drawn end to end are one wall line, closed", t.shapes().size() == 1 and (w.points.pts as Array).size() == 4
+			and bool(w.points.closed))
+	_ok("its cells a hollow rectangle's: the corners joined", BrickShapes.shape_cells(w) == BrickShapes.shape_cells(
+			{"kind": "hollow", "lie": "flat", "a": [4, 4], "b": [15, 11], "at": 1, "depth": 9, "rim": 1}))
+	# Floor: a click (no drag) inside fills it; pulled to 2 plates, of the held plate.
+	_hold("plate_2x2")
+	t.pick("floor")
+	t._drag = {"phase": "base", "tool": "floor", "button": MOUSE_BUTTON_LEFT, "lie": "flat", "at": 1,
+			"a": Vector2i(8, 7), "b": Vector2i(8, 7), "kind": "rect", "cut": false}
+	t._to_height()
+	_ok("a floor clicked inside the walls fills them, a plate to start", t._drag.rec.kind == "cells"
+			and int(t._drag.rec.depth) == 1)
+	t._drag.rec.depth = 2
+	var f := t.commit_pending()
+	_ok("placed, 2 plates of 2x2 plates", f >= 0 and _solid(Vector3i(5, 2, 5)) and not _solid(Vector3i(5, 3, 5))
+			and BrickPalette.part_of(String(t.shape_of(f).bricks[0][0])).begins_with("plate_"))
+	# Shapes: a ring footprint, then its height.
+	_hold("brick_1x2")
+	t.pick("shape")
+	t.kind = "ring"
+	t._drag = {"phase": "base", "tool": "shape", "button": MOUSE_BUTTON_LEFT, "lie": "flat", "at": 1,
+			"a": Vector2i(24, 24), "b": Vector2i(34, 34), "kind": "ring", "cut": false}
+	t._to_height()
+	t._drag.rec.depth = 6
+	var r := t.commit_pending()
+	_ok("Shapes: a ring 6 plates tall", r >= 0 and int(t.shape_of(r).depth) == 6 and _solid(Vector3i(29, 6, 24)))
+	t.kind = "rect"
+	t.pick("place")
+	# Roofs: a hip has corner slopes; a held curve makes a curved roof.
+	var room := _small_room()
+	t.roof_style = "hip"
+	var hid := t.roof_on(room)
+	var corners := 0
+	for b in t.shape_of(hid).bricks:
+		if String(b[0]).begins_with("slopecorner_2x2"):
+			corners += 1
+	var hc := BrickShapes.shape_cells(t.shape_of(hid))
+	var hf := 0
+	for c in hc:
+		if _solid(c):
+			hf += 1
+	_ok("a hip roof's corners are corner slopes (%d)" % corners, corners >= 4 and corners % 4 == 0)
+	_ok("and every cell of it is laid", hf == hc.size(), "%d of %d" % [hf, hc.size()])
+	_ws._undo()
+	_hold("curve_1x2")
+	t.roof_style = "gable"
+	var cid := t.roof_on(room)
+	var curves := 0
+	for b in t.shape_of(cid).bricks:
+		if String(b[0]).begins_with("curve_1x2"):
+			curves += 1
+	_ok("a curve in hand: a roof of curves", curves >= 10, "%d" % curves)

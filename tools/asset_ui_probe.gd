@@ -64,8 +64,8 @@ func _frame(ui: AssetWorkshopUI) -> void:
 		old_hidden = old_hidden and not (_ws._rail_buttons[id] as Button).visible
 	_ok("the old rail's tool list is gone; its part picker stays", old_hidden
 			and (_ws._rail_box.get_child(0) as Control).visible)
-	_ok("the options panel sits under the tools", _ws._rail.position.y >= ui._tools_panel.position.y
-			and absf(_ws.rail_top - (ui._tools_panel.position.y + ui._tools_panel.size.y + 6.0)) < 1.0)
+	_ok("the options are in the rail, under the tools", ui._tools_panel.is_ancestor_of(_ws._rail)
+			and _ws._rail.get_global_rect().position.y >= ui._tools_panel.hint.get_global_rect().end.y)
 	for pair in [["draw", "shape"], ["shape", "stamp"], ["smooth", "smooth"], ["select", "models"]]:
 		ui.pick_tool(pair[0])
 		_ok("Block out %s: sculpting, %s" % [pair[0], pair[1]], _ws.tool == "sketch" and _ws.sketch_draw == "sculpt"

@@ -216,6 +216,9 @@ const _PARTS := {
 	"wedgeplate_2x4": Vector3i(2, 1, 4),
 	"wedge_2x2": Vector3i(2, 3, 2),
 	"wedge_2x4": Vector3i(2, 3, 4),
+	# Two 45-degree slopes meeting at an outer corner: a hip roof's corner
+	# (Docs/BuildTools.md section 8). The back cell carries the stud.
+	"slopecorner_2x2": Vector3i(2, 3, 2),
 	"round_1x1": Vector3i(1, 3, 1),
 	"round_2x2": Vector3i(2, 3, 2),
 	"arch_1x4": Vector3i(1, 3, 4),
@@ -256,6 +259,8 @@ const _SHAPED := {
 	"wedgeplate_2x4": {"kind": "wedge", "front": Vector3i(-1, 0, 0)},
 	"wedge_2x2": {"kind": "wedge", "front": Vector3i(-1, 0, 0)},
 	"wedge_2x4": {"kind": "wedge", "front": Vector3i(-1, 0, 0)},
+	# Low at the origin corner, falling toward -X and -Z at once.
+	"slopecorner_2x2": {"kind": "slope_corner", "front": Vector3i(-1, 0, -1)},
 	"round_1x1": {"kind": "round"},
 	"round_2x2": {"kind": "round"},
 	"arch_1x4": {"kind": "arch"},
@@ -401,7 +406,7 @@ const CATEGORIES := [
 	["Bricks", ["brick"]],
 	["Plates", ["plate"]],
 	["Tiles", ["tile"]],
-	["Slopes", ["slope", "curve", "cheese", "wedge", "wedgeplate"]],
+	["Slopes", ["slope", "slopecorner", "curve", "cheese", "wedge", "wedgeplate"]],
 	["Round", ["round"]],
 	["Arches", ["arch"]],
 	["Sideways", ["bracket"]],
