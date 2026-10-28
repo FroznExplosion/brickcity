@@ -16,6 +16,8 @@ extends Node3D
 ##   drawn, solid, a way in, and bricks to the AI (11.11).
 ##   -- --gate=damage: rounds wear a brick out of a planet building, a blast
 ##   opens its wall; drawing, collision and the AI's map follow (11.11 D1).
+##   -- --gate=storey: a storey cut to one corner tips what is above off it; a
+##   tower too weak for its own weight is crushed a storey (11.11 D2 step 6).
 ##   -- --gate=trees: a tank knocks a tree down; a truck is stopped by one
 ##   (11.10, trees and vehicles).
 ##   -- --gate=squad: a squad on the AI's nav region round the town (11.8 N2)
@@ -56,6 +58,7 @@ var _fall_gate := false
 var _hits_gate := false
 var _topple_gate := false
 var _pieces_ai_gate := false
+var _storey_gate := false
 ## The AI round the fight (Docs/Planets.md 11.8, N2, N4): the nav net round the
 ## player's town; ai_world / ai_nav the region the player is in. Made by setup_ai.
 var ai: AIServices
@@ -95,10 +98,11 @@ func _ready() -> void:
 	_hits_gate = "--gate=hits" in OS.get_cmdline_user_args()
 	_topple_gate = "--gate=topple" in OS.get_cmdline_user_args()
 	_pieces_ai_gate = "--gate=pieces_ai" in OS.get_cmdline_user_args()
+	_storey_gate = "--gate=storey" in OS.get_cmdline_user_args()
 	_travel_gate = "--gate=travel" in OS.get_cmdline_user_args()
 	_far_gate = "--gate=far" in OS.get_cmdline_user_args()
 	_drive_gate = "--gate=drive" in OS.get_cmdline_user_args()
-	_gate = _gate or _pawn_gate or _mech_gate or _tank_gate or _soldier_gate or _squad_gate or _travel_gate or _far_gate or _drive_gate or _trees_gate or _bricks_gate or _damage_gate or _fall_gate or _hits_gate or _topple_gate or _pieces_ai_gate
+	_gate = _gate or _pawn_gate or _mech_gate or _tank_gate or _soldier_gate or _squad_gate or _travel_gate or _far_gate or _drive_gate or _trees_gate or _bricks_gate or _damage_gate or _fall_gate or _hits_gate or _topple_gate or _pieces_ai_gate or _storey_gate
 	data = PlanetData.new()
 	data.planet_name = "proto"
 	# Towns and landmarks: their pads go into the ground before it is built.
@@ -180,6 +184,8 @@ func _ready() -> void:
 			_run_topple_gate()
 		elif _pieces_ai_gate:
 			_run_pieces_ai_gate()
+		elif _storey_gate:
+			_run_storey_gate()
 		elif _travel_gate:
 			_run_travel_gate()
 		elif _far_gate:
@@ -379,7 +385,7 @@ func _process(_delta: float) -> void:
 	# walker's own gate, the pawn stands on it.
 	if walker.frozen and pawn == null and trees.prebaked and _ground_hit(walker.global_position) != Vector3.INF:
 		walker.frozen = false
-		if not _gate or _pawn_gate or _mech_gate or _tank_gate or _soldier_gate or _squad_gate or _travel_gate or _far_gate or _drive_gate or _trees_gate or _bricks_gate or _damage_gate or _fall_gate or _hits_gate or _topple_gate or _pieces_ai_gate:
+		if not _gate or _pawn_gate or _mech_gate or _tank_gate or _soldier_gate or _squad_gate or _travel_gate or _far_gate or _drive_gate or _trees_gate or _bricks_gate or _damage_gate or _fall_gate or _hits_gate or _topple_gate or _pieces_ai_gate or _storey_gate:
 			_spawn_player(_ground_hit(walker.global_position), -walker.global_transform.basis.z)
 	if not on_foot:
 		walker.flying = pawn != null or walker.flying
@@ -1985,8 +1991,9 @@ func _run_damage_gate() -> void:
 # sixty groups shed at once from another building leave at most MAX_MOVING
 # moving.
 
-## The nearest building to the pawn but `except`, once it is bricks.
-func _bricked_near(except := -1) -> int:
+## The nearest building to the pawn but `except` (of `min_courses` or more), once
+## it is bricks.
+func _bricked_near(except := -1, min_courses := 0) -> int:
 	var t0 := Time.get_ticks_msec()
 	var bi := -1
 	while Time.get_ticks_msec() - t0 < 60000:
@@ -1996,7 +2003,7 @@ func _bricked_near(except := -1) -> int:
 		for i in buildings.sites.size():
 			var st: PlanetBuildings.Site = buildings.sites[i]
 			var d := pawn.feet().distance_to(planet.global_position + st.frame.origin)
-			if i != except and not st.landmark and d < best:
+			if i != except and not st.landmark and st.courses >= min_courses and d < best:
 				best = d
 				bi = i
 		if bi >= 0 and buildings.sites[bi].bricked and buildings.sites[bi].band_jobs.is_empty():
@@ -2516,4 +2523,217 @@ func _run_pieces_ai_gate() -> void:
 			path.size(), inside, length, a.distance_to(b)])
 	print("[planet] pieces_ai: %d region(s) before it fell, %d after" % [regions0, net.regions.size()])
 	print("[planet] pieces_ai gate: %d ok, %d FAIL" % [_ok, _fail])
+	get_tree().quit(0 if _fail == 0 else 1)
+
+
+# ---------------------------------------------------------------------------
+# The storey gate (Planets.md 11.11, D2 step 6): what is left of a storey has to
+# carry what is above it (PlanetBuildings._storey_fail, the city's
+# _gravity_fail). A tower's first-floor walls cut away (by cell) but for one
+# corner: what is above is off the edge of it -- TIP -- and goes over as one
+# piece. Another tower made too weak for its own weight (as the city's collapse
+# probe does it): a storey is crushed -- CRUSH -- and what is above comes down.
+# Every piece ends at rest. Untouched buildings are nowhere near failing.
+
+## Live bricks of `chunk` whose middle is above `y` (chunk-local metres).
+func _bricks_above(chunk: int, y: float) -> int:
+	var n := 0
+	for bx in buildings.bricks.get_block_boxes(chunk):
+		var d: Dictionary = bx
+		if bool(d.alive) and (d.pos as Vector3).y > y and not buildings.bricks.is_block_absent(chunk, int(d.block)):
+			n += 1
+	return n
+
+
+## Waits for every piece born since `pieces0` to be still (or gone), `ms` at
+## most and 2 s at least. Of every piece of BIG_PIECE bricks or more, from when
+## it is first seen: the most it tilted from its first up, the most it dropped
+## along it, and the most bricks one had.
+const BIG_PIECE := 100
+
+func _settle(pieces0: int, ms: int) -> Dictionary:
+	var pc := buildings.pieces
+	var first := {}   # piece -> [basis, up, position]
+	var tilt := 0.0
+	var drop := 0.0
+	var born := 0
+	var fresh: Array = []
+	var t0 := Time.get_ticks_msec()
+	while Time.get_ticks_msec() - t0 < ms:
+		await get_tree().physics_frame
+		fresh = pc.pieces.slice(pieces0)
+		var all_still := true
+		for q in fresh:
+			var p: PlanetPieces.Piece = q
+			all_still = all_still and (p.settled or p.fading_since != 0)
+			if not is_instance_valid(p.body):
+				continue
+			if not first.has(p):
+				if p.bricks < BIG_PIECE:
+					continue
+				born = maxi(born, p.bricks)
+				first[p] = [p.body.global_transform.basis, Gravity.up_at(p.body.global_position),
+						p.body.global_position]
+			var f: Array = first[p]
+			var b: Basis = p.body.global_transform.basis
+			tilt = maxf(tilt, rad_to_deg((b * ((f[0] as Basis).inverse() * (f[1] as Vector3))).angle_to(
+					Gravity.up_at(p.body.global_position))))
+			drop = maxf(drop, ((f[2] as Vector3) - p.body.global_position).dot(f[1] as Vector3))
+		if all_still and Time.get_ticks_msec() - t0 > 2000:
+			break
+	return {"fresh": fresh, "tilt": tilt, "drop": drop, "born": born}
+
+
+## Of `fresh`, the pieces left that are settled on something (a ray along down).
+func _resting(fresh: Array) -> Dictionary:
+	var space := get_world_3d().direct_space_state
+	var resting := 0
+	var left := 0
+	var where := []
+	for q in fresh:
+		var p: PlanetPieces.Piece = q
+		if not is_instance_valid(p.body) or p.fading_since != 0:
+			continue
+		left += 1
+		var u := Gravity.up_at(p.body.global_position)
+		var under := space.intersect_ray(PhysicsRayQueryParameters3D.create(
+				p.body.global_position, p.body.global_position - u * 12.0,
+				Layers.WORLD | Layers.STRUCTURE | Layers.DEBRIS, [p.body.get_rid()]))
+		if p.settled and not under.is_empty():
+			resting += 1
+		else:
+			where.append("%d bricks, settled %s" % [p.bricks, p.settled])
+	return {"resting": resting, "left": left, "where": where}
+
+
+func _run_storey_gate() -> void:
+	var t0 := Time.get_ticks_msec()
+	while pawn == null and Time.get_ticks_msec() - t0 < 60000:
+		await _frames(1)
+	var town: Vector3 = town_dirs[0]
+	var p_feet := _surface(_round_dir(town, spawn_dir, 88.0))
+	pawn.place(p_feet + Gravity.up_at(p_feet) * 0.3)
+	t0 = Time.get_ticks_msec()
+	while _ground_hit(p_feet) == Vector3.INF and Time.get_ticks_msec() - t0 < 30000:
+		await _frames(1)
+	setup_ai(town)
+	var bw := buildings.bricks
+	var pc := buildings.pieces
+	var st := TowerRecipe.STOREY_PLATES
+	var plate := BrickWorld.get_plate_metres()
+	var tall := 3 * TowerRecipe.COURSES_PER_FLOOR
+	var bi: int = await _bricked_near(-1, tall)
+	var site: PlanetBuildings.Site = buildings.sites[bi]
+	_check("a tower of three storeys or more is bricks", site.bricked and site.courses >= tall,
+			"%d courses" % site.courses)
+	if not site.bricked:
+		get_tree().quit(1)
+		return
+	# Untouched, as the city's probe asks it: the crush load is the same whatever
+	# a stud holds in tension (BrickStrength).
+	var worst := 0.0
+	var worst_region := 0.0
+	var asked := 0
+	for k in buildings.sites.size():
+		var sk: PlanetBuildings.Site = buildings.sites[k]
+		if not sk.bricked or sk.chunk < 0 or sk.toppled:
+			continue
+		var r: Dictionary = bw.gravity_check(sk.chunk,
+				buildings.crush_per_stud * BrickStrength.SCALED / bw.get_tension_per_stud(sk.chunk))
+		worst = maxf(worst, float(r.get("ratio", 0.0)))
+		worst_region = maxf(worst_region, float(r.get("region_ratio", 0.0)))
+		asked += 1
+	_check("no untouched building is near failing a storey", asked > 0 and worst < 0.8 and worst_region < 0.8,
+			"%d asked, worst %.2f of what it can (one region %.2f)" % [asked, worst, worst_region])
+
+	# TIP: the first floor's walls cut but for one corner, CORNER studs square
+	# (every brick with a cell in it kept, so the corner is whole).
+	const CORNER := 7
+	var keep := {}
+	for yc in range(st + TowerRecipe.SLAB_PLATES, 2 * st):
+		for zc in range(site.fz - CORNER, site.fz):
+			for xc in range(site.fx - CORNER, site.fx):
+				var bid := bw.block_at(site.chunk, Vector3i(xc, yc, zc))
+				if bid >= 0:
+					keep[bid] = true
+	var cut_ids := {}
+	for yc in range(st + TowerRecipe.SLAB_PLATES, 2 * st):
+		for zc in site.fz:
+			for xc in site.fx:
+				var bid := bw.block_at(site.chunk, Vector3i(xc, yc, zc))
+				if bid >= 0 and not keep.has(bid) and not bw.is_block_absent(site.chunk, bid):
+					cut_ids[bid] = true
+	var cut := PackedInt32Array(cut_ids.keys())
+	var top_y := 2 * st * plate
+	var alive0 := bw.get_alive_block_count(site.chunk)
+	var tip0 := int(buildings.storey_fails.tip)
+	var pieces0 := pc.pieces.size()
+	bw.kill_blocks(site.chunk, cut)
+	buildings.after_kill(bi, cut, buildings.site_box(bi).grow(1.0))
+	# What the building holds once cut (a piece shed later still counts as
+	# alive in it: measured from here, not after).
+	var alive1 := bw.get_alive_block_count(site.chunk)
+	t0 = Time.get_ticks_msec()
+	while int(buildings.storey_fails.tip) == tip0 and not site.toppled and Time.get_ticks_msec() - t0 < 10000:
+		await get_tree().physics_frame
+	print("[planet] storey: tower %d (%d x %d studs, %d courses), %d of %d bricks cut from its first floor, %d kept in the corner; fails %s" % [
+			bi, site.fx, site.fz, site.courses, cut.size(), alive0, keep.size(), str(buildings.storey_fails)])
+	_check("one corner left: the storey check says TIP", int(buildings.storey_fails.tip) > tip0 and not site.toppled,
+			"tips %d, toppled whole %s" % [int(buildings.storey_fails.tip) - tip0, site.toppled])
+	var tipped: Dictionary = await _settle(pieces0, 25000)
+	var left_above := _bricks_above(site.chunk, top_y) if site.chunk >= 0 else -1
+	var went := alive1 - (bw.get_alive_block_count(site.chunk) if site.chunk >= 0 else 0)
+	print("[planet] storey: tip -- the piece above %d bricks (%d left the building), tilted %.0f deg; %d piece(s), landings %d, snaps %d, crumbs %d; storey check worst %.2f ms" % [
+			int(tipped.born), went, float(tipped.tilt), (tipped.fresh as Array).size(), pc.landings, pc.snaps,
+			pc.crumbs.thrown, buildings.storey_worst_ms])
+	_check("what is above leaves as one piece", int(tipped.born) >= went * 0.8 and went > 0,
+			"%d of the %d that left" % [int(tipped.born), went])
+	_check("nothing of it is left above that storey", left_above == 0, "%d brick(s)" % left_above)
+	# Over the edge of the corner, onto the first floor's own slab: a storey
+	# post under a top three times its width tips it some 15 degrees.
+	_check("it goes over the edge (its up more than 10 deg from the ground's) and comes down",
+			float(tipped.tilt) > 10.0 and float(tipped.drop) > 1.0,
+			"%.0f deg, %.1f m" % [float(tipped.tilt), float(tipped.drop)])
+	var rest: Dictionary = _resting(tipped.fresh)
+	_check("and every piece of it comes to rest on something", int(rest.left) > 0 and int(rest.resting) == int(rest.left),
+			"%d of %d; %s" % [int(rest.resting), int(rest.left), "; ".join(rest.where)])
+	_check("the building still stands below it", site.bricked and not site.toppled and site.chunk >= 0
+			and bw.get_alive_block_count(site.chunk) > 0)
+	await _shot("planet_storey_tip")
+
+	# CRUSH: an untouched tower too weak for its own weight (crush_per_stud 0.5,
+	# as the city's collapse probe weakens one) is asked again.
+	var ci: int = await _bricked_near(bi, tall)
+	var cs: PlanetBuildings.Site = buildings.sites[ci]
+	if not cs.bricked:
+		_check("a second tower is bricks", false)
+		get_tree().quit(1)
+		return
+	var c_alive0 := bw.get_alive_block_count(cs.chunk)
+	var crush0 := int(buildings.storey_fails.crush) + int(buildings.storey_fails.region)
+	pieces0 = pc.pieces.size()
+	buildings.crush_per_stud = 0.5
+	cs.solve_due = true
+	t0 = Time.get_ticks_msec()
+	while int(buildings.storey_fails.crush) + int(buildings.storey_fails.region) == crush0 \
+			and not cs.toppled and Time.get_ticks_msec() - t0 < 10000:
+		await get_tree().physics_frame
+	buildings.crush_per_stud = PlanetBuildings.CRUSH_PER_STUD
+	print("[planet] storey: tower %d (%d x %d studs, %d courses, %d bricks) made weak; fails %s" % [
+			ci, cs.fx, cs.fz, cs.courses, c_alive0, str(buildings.storey_fails)])
+	_check("too weak for its weight: the storey check says CRUSH",
+			int(buildings.storey_fails.crush) + int(buildings.storey_fails.region) > crush0 and not cs.toppled)
+	var crushed: Dictionary = await _settle(pieces0, 25000)
+	var drop := float(crushed.drop)
+	var c_left := bw.get_alive_block_count(cs.chunk) if cs.chunk >= 0 else 0
+	print("[planet] storey: crushed -- the piece above %d bricks, dropped %.1f m; %d of %d bricks left standing; %d piece(s), crumbs %d" % [
+			int(crushed.born), drop, c_left, c_alive0, (crushed.fresh as Array).size(), pc.crumbs.thrown])
+	_check("what is above comes down: fewer than half its bricks left standing", int(crushed.born) > 0
+			and c_left < c_alive0 / 2, "%d of %d" % [c_left, c_alive0])
+	_check("it dropped half a storey or more", drop >= st * plate * 0.5, "%.1f m (a storey %.1f m)" % [drop, st * plate])
+	rest = _resting(crushed.fresh)
+	_check("and every piece of it comes to rest on something", int(rest.left) > 0 and int(rest.resting) == int(rest.left),
+			"%d of %d; %s" % [int(rest.resting), int(rest.left), "; ".join(rest.where)])
+	await _shot("planet_storey_crush")
+	print("[planet] storey gate: %d ok, %d FAIL" % [_ok, _fail])
 	get_tree().quit(0 if _fail == 0 else 1)
