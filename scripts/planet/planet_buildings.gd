@@ -677,17 +677,31 @@ func site_at(p: Vector3) -> int:
 ## their bands are drawn again, the AI's maps forget the spot. False when no
 ## building's bricks are there.
 func damage(point: Vector3, shot: Dictionary) -> bool:
-	var i := site_at(point)
-	if i < 0:
-		return false
-	var s := sites[i]
 	var blast := bool(shot.get("blast", false))
 	var radius := float(shot.get("radius", 0.0))
+	# A piece first (D2 step 3): a round in one is that piece's; a blast is every
+	# piece in its reach and the building under it as well.
+	var on_piece := false
+	if blast:
+		for p in pieces.pieces_near(point, radius):
+			on_piece = pieces.damage(p, point, shot) > 0 or on_piece
+	else:
+		var hit := pieces.piece_at(point)
+		if hit != null:
+			pieces.damage(hit, point, shot)
+			return true
+	var i := site_at(point)
+	if i < 0:
+		return on_piece
+	var s := sites[i]
 	var e := damage_log.record(0, DamageLog.Kind.BLAST if blast else DamageLog.Kind.CHIP, s.chunk,
 			point, radius, Vector3.ZERO, int(shot.get("hp", 0)))
 	var killed := DamageLog.apply_entry(bricks, s.chunk, e)
 	if killed.is_empty():
 		return true
+	# Thrown as crumbs, as a piece's are -- a blast's ring, not its core.
+	pieces.crumbs.throw(bricks, s.chunk, killed, Vector3.ZERO, point,
+			radius * IslandManager.BLAST_CORE if blast else 0.0)
 	var r := Vector3.ONE * (radius + 1.0)
 	after_kill(i, killed, AABB(point - r, r * 2.0))
 	return true
