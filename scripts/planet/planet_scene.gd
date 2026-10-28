@@ -55,6 +55,7 @@ var _damage_gate := false
 var _fall_gate := false
 var _hits_gate := false
 var _topple_gate := false
+var _pieces_ai_gate := false
 ## The AI round the fight (Docs/Planets.md 11.8, N2, N4): the nav net round the
 ## player's town; ai_world / ai_nav the region the player is in. Made by setup_ai.
 var ai: AIServices
@@ -93,10 +94,11 @@ func _ready() -> void:
 	_fall_gate = "--gate=fall" in OS.get_cmdline_user_args()
 	_hits_gate = "--gate=hits" in OS.get_cmdline_user_args()
 	_topple_gate = "--gate=topple" in OS.get_cmdline_user_args()
+	_pieces_ai_gate = "--gate=pieces_ai" in OS.get_cmdline_user_args()
 	_travel_gate = "--gate=travel" in OS.get_cmdline_user_args()
 	_far_gate = "--gate=far" in OS.get_cmdline_user_args()
 	_drive_gate = "--gate=drive" in OS.get_cmdline_user_args()
-	_gate = _gate or _pawn_gate or _mech_gate or _tank_gate or _soldier_gate or _squad_gate or _travel_gate or _far_gate or _drive_gate or _trees_gate or _bricks_gate or _damage_gate or _fall_gate or _hits_gate or _topple_gate
+	_gate = _gate or _pawn_gate or _mech_gate or _tank_gate or _soldier_gate or _squad_gate or _travel_gate or _far_gate or _drive_gate or _trees_gate or _bricks_gate or _damage_gate or _fall_gate or _hits_gate or _topple_gate or _pieces_ai_gate
 	data = PlanetData.new()
 	data.planet_name = "proto"
 	# Towns and landmarks: their pads go into the ground before it is built.
@@ -176,6 +178,8 @@ func _ready() -> void:
 			_run_hits_gate()
 		elif _topple_gate:
 			_run_topple_gate()
+		elif _pieces_ai_gate:
+			_run_pieces_ai_gate()
 		elif _travel_gate:
 			_run_travel_gate()
 		elif _far_gate:
@@ -375,7 +379,7 @@ func _process(_delta: float) -> void:
 	# walker's own gate, the pawn stands on it.
 	if walker.frozen and pawn == null and trees.prebaked and _ground_hit(walker.global_position) != Vector3.INF:
 		walker.frozen = false
-		if not _gate or _pawn_gate or _mech_gate or _tank_gate or _soldier_gate or _squad_gate or _travel_gate or _far_gate or _drive_gate or _trees_gate or _bricks_gate or _damage_gate or _fall_gate or _hits_gate or _topple_gate:
+		if not _gate or _pawn_gate or _mech_gate or _tank_gate or _soldier_gate or _squad_gate or _travel_gate or _far_gate or _drive_gate or _trees_gate or _bricks_gate or _damage_gate or _fall_gate or _hits_gate or _topple_gate or _pieces_ai_gate:
 			_spawn_player(_ground_hit(walker.global_position), -walker.global_transform.basis.z)
 	if not on_foot:
 		walker.flying = pawn != null or walker.flying
@@ -1008,6 +1012,12 @@ func setup_ai(dir: Vector3) -> void:
 	# What breaks the buildings' bricks (11.11 D1): a soldier's rounds, a squad's
 	# breaching charge; the maps forget where bricks went.
 	buildings.site_damaged.connect(func(_i: int, box: AABB) -> void: net.invalidate_box(box))
+	# A piece settled, woke, was hit or went (D2 step 5): the regions' worlds
+	# take its chunk where it is now, and the maps forget the box.
+	buildings.pieces.ground_changed.connect(func(box: AABB) -> void:
+		for r in net.regions.values():
+			r.world.sync()
+		net.invalidate_box(box.grow(1.0)))
 	var at := planet.global_transform * data.surface_point(dir)
 	net.keep_around([at], AI_KEEP_M, 99)
 	# From here on regions' grids are built on worker threads, off the frame.
@@ -2370,4 +2380,140 @@ func _run_topple_gate() -> void:
 	_check("no shell and no far box come back where it stood", site.shell == null and site.fade == 0.0
 			and site.chunk < 0)
 	print("[planet] topple gate: %d ok, %d FAIL" % [_ok, _fail])
+	get_tree().quit(0 if _fail == 0 else 1)
+
+
+# ---------------------------------------------------------------------------
+# The pieces' AI gate (Planets.md 11.11, D2 step 5): a building toppled across
+# the open ground (as the topple gate); at rest, its biggest piece is bricks to
+# the AI -- solid in its world, cover across it -- and a path from one side of
+# it to the other goes round it.
+
+func _run_pieces_ai_gate() -> void:
+	var t0 := Time.get_ticks_msec()
+	while pawn == null and Time.get_ticks_msec() - t0 < 60000:
+		await _frames(1)
+	var town: Vector3 = town_dirs[0]
+	var p_feet := _surface(_round_dir(town, spawn_dir, 88.0))
+	pawn.place(p_feet + Gravity.up_at(p_feet) * 0.3)
+	t0 = Time.get_ticks_msec()
+	while _ground_hit(p_feet) == Vector3.INF and Time.get_ticks_msec() - t0 < 30000:
+		await _frames(1)
+	setup_ai(town)
+	var net := ai.nav_net as PlanetNavNet
+	var bi: int = await _bricked_near()
+	var site: PlanetBuildings.Site = buildings.sites[bi]
+	var pc := buildings.pieces
+	var storey := TowerRecipe.SLAB_PLATES + TowerRecipe.COURSES_PER_FLOOR * TowerRecipe.PLATES_PER_COURSE
+	var cut_ids := {}
+	for yc in range(0, storey):
+		for zc in site.fz:
+			for xc in int(ceil(site.fx * 0.55)):
+				var bid := buildings.bricks.block_at(site.chunk, Vector3i(xc, yc, zc))
+				if bid >= 0 and not buildings.bricks.is_block_absent(site.chunk, bid):
+					cut_ids[bid] = true
+	var cut := PackedInt32Array(cut_ids.keys())
+	var pieces0 := pc.pieces.size()
+	# The AI's regions round the building made BEFORE it falls (paths every way
+	# across where it stands), so what they know of it afterwards is what they
+	# were told, not what a fresh region read.
+	var mid := buildings.site_box(bi).get_center()
+	var u0 := Gravity.up_at(mid)
+	var ax := Gravity.flat(Vector3.RIGHT, u0).normalized()
+	for k in 8:
+		var d := ax.rotated(u0, TAU * k / 8.0)
+		net.find_path(net.snap(mid + d * 45.0), net.snap(mid - d * 45.0), 60000)
+	# And the town done bricking: a building's bricks coming or going re-syncs
+	# every region (PlanetNavNet.set_site_bricks), which would tell them of the
+	# pieces whatever this step does.
+	t0 = Time.get_ticks_msec()
+	while (not buildings._brick_queue.is_empty() or buildings._brick_site >= 0) \
+			and Time.get_ticks_msec() - t0 < 90000:
+		await _frames(1)
+	await _frames(5)
+	var regions0 := net.regions.size()
+	buildings.bricks.kill_blocks(site.chunk, cut)
+	buildings.after_kill(bi, cut, buildings.site_box(bi).grow(1.0))
+	# At rest: every piece of it settled.
+	var fresh: Array = []
+	t0 = Time.get_ticks_msec()
+	while Time.get_ticks_msec() - t0 < 30000:
+		await get_tree().physics_frame
+		fresh = pc.pieces.slice(pieces0)
+		var all_still := not fresh.is_empty()
+		for q in fresh:
+			all_still = all_still and ((q as PlanetPieces.Piece).settled or (q as PlanetPieces.Piece).fading_since != 0)
+		if all_still and Time.get_ticks_msec() - t0 > 2000:
+			break
+	var big: PlanetPieces.Piece = null
+	for q in fresh:
+		var pp: PlanetPieces.Piece = q
+		if pp.settled and pp.fading_since == 0 and (big == null or pp.bricks > big.bricks):
+			big = pp
+	_check("the building toppled and lies at rest", big != null and buildings.toppled_count > 0,
+			"%d piece(s)" % fresh.size())
+	if big == null:
+		get_tree().quit(1)
+		return
+	await _frames(3)
+	var bw := buildings.bricks
+	var xf := bw.get_chunk_transform(big.chunk)
+	var dims := bw.get_chunk_dims(big.chunk)
+	var cs := BrickWorld.get_cell_size()
+	# Its bricks, sampled, and the AI's world at each (the region round it).
+	var brick_at := Vector3.INF
+	var sampled := 0
+	var solid := 0
+	for yc in range(0, dims.y, 2):
+		for zc in range(0, dims.z, 3):
+			for xc in range(0, dims.x, 3):
+				var bid := bw.block_at(big.chunk, Vector3i(xc, yc, zc))
+				if bid < 0 or bw.is_block_absent(big.chunk, bid) or bw.is_block_decorative(big.chunk, bid):
+					continue
+				var w := xf * ((Vector3(xc, yc, zc) + Vector3.ONE * 0.5) * cs)
+				if brick_at == Vector3.INF:
+					brick_at = w
+				var r := net.world_at(w)
+				sampled += 1
+				if r != null and r.solid_at(w):
+					solid += 1
+	var aw := net.world_at(brick_at)
+	_check("its bricks are solid in the AI's world where it lies (most of a sample)",
+			aw != null and sampled > 0 and solid > sampled * 0.75, "%d of %d" % [solid, sampled])
+	# Across it: its long axis lies along the ground; points either side of it.
+	var com := big.body.global_position
+	var up := Gravity.up_at(com)
+	var size := Vector3(dims) * cs
+	var long_axis := xf.basis.y.normalized()
+	var long := size.y
+	if size.x > long:
+		long_axis = xf.basis.x.normalized()
+		long = size.x
+	if size.z > long:
+		long_axis = xf.basis.z.normalized()
+		long = size.z
+	var side := Gravity.flat(long_axis.cross(up), up).normalized()
+	var reach := maxf(maxf(size.x, size.y), size.z)
+	var a := _ground_hit(com + side * (reach * 0.5 + 6.0) + up * 20.0)
+	var b := _ground_hit(com - side * (reach * 0.5 + 6.0) + up * 20.0)
+	var lift := up * 1.0
+	var blocks := aw.bricks_between(a + lift, b + lift) if a != Vector3.INF and b != Vector3.INF else 0
+	_check("a line across it, a metre up, meets its bricks (cover)", blocks > 0, "%d brick(s)" % blocks)
+	var path := net.find_path(net.snap(a), net.snap(b), 200000)
+	var inside := 0
+	var inv := xf.affine_inverse()
+	for pt in path:
+		var l := inv * pt
+		if l.x > 0.3 and l.y > 0.3 and l.z > 0.3 and l.x < size.x - 0.3 and l.y < size.y - 0.3 and l.z < size.z - 0.3:
+			inside += 1
+	var length := 0.0
+	for k in range(1, path.size()):
+		length += path[k].distance_to(path[k - 1])
+	print("[planet] pieces_ai: the biggest piece %d bricks, %.1f m long; across it %.1f m straight, the path %.1f m (%d points, %d inside it)" % [
+			big.bricks, long, a.distance_to(b), length, path.size(), inside])
+	_check("a path from one side to the other goes round it, none of it inside", path.size() > 2 and inside == 0
+			and length > a.distance_to(b) * 1.05, "%d points, %d inside, %.1f m vs %.1f m straight" % [
+			path.size(), inside, length, a.distance_to(b)])
+	print("[planet] pieces_ai: %d region(s) before it fell, %d after" % [regions0, net.regions.size()])
+	print("[planet] pieces_ai gate: %d ok, %d FAIL" % [_ok, _fail])
 	get_tree().quit(0 if _fail == 0 else 1)
