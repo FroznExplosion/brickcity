@@ -945,6 +945,63 @@ the clean-up leaves out at least one brick each end of the middle span (five bri
 the grid onto the build; Clean up takes 1,893 cells of the block-out outside the area and the
 three stray bricks. asset_workshop_probe 318 (8 new), asset_ui_probe 50.
 
+### Clay and bricks apart; Select's cursor; Measure (2026-10-27)
+
+The user (2026-10-27): still confusing. Rotating a model and pressing Make bricks mirrored it when
+they did not mean to, and the bricks came out in an old orientation. Clay (the SDF) should be
+separate from the bricks: bricks take their shape from the clay, and nothing goes back and forth
+unless the bricks are turned into clay on purpose. With Select active the cursor is still the
+drawing brush. Measure should show the size of the clay or the bricks, and measure between any
+two points clicked on the model.
+
+**Why it mirrored, and why the old orientation.** The mirror was on in their save, and with it on,
+Make bricks was symmetric: it kept the half of the block-out on one side of the plane and mirrored
+it over the other half (Symmetric Convert, 2026-10-20). A model rotated off the plane came out
+with one half replaced by the other's mirror image -- what reads as "an old orientation". Make
+bricks also put the bricks laid so far into the clay first and laid "a brick from before" back
+where the clay still had it, and Back to clay synced the bricks back into it: the back and forth.
+
+**Decided with the user:**
+
+1. **Make bricks is one way.** The clay -- the block-out and every model, where they are now --
+   becomes bricks, and the clay that became bricks is **used up**. What is marked smooth stays
+   clay: it is the part's custom smooth piece (as before), joined to the bricks.
+2. **Bricks made from clay are replaced, bricks laid by hand are not.** Make bricks again, after
+   drawing more clay: where the new clay is, the bricks an earlier Make bricks made there are
+   taken up and made again; bricks laid by hand stay, and new bricks skip the cells they fill.
+   Which bricks clay made is kept (`clay_bricks`, saved); a clay brick moved by hand is the
+   user's from then on.
+3. **Bricks into clay only on purpose**: *Bricks to clay* (the stage button on the Bricks
+   stage, and per part as before) turns the bricks into clay and takes them up. Nothing else
+   does: the stage tabs only change what is shown and what the tools work on.
+4. **The stages show, they do not convert.** Block out shows the clay and its tools (and the
+   bricks as they are); Bricks hides the clay but its smooth pieces.
+5. **Make bricks mirrors only when asked**: a *symmetric bricks* tick in Block out's options,
+   off by default. The mirror itself stays a drawing aid (strokes on both sides).
+
+**Select's cursor.** In Select (pick and move) the brush and its plane disc are not shown; the
+mouse is a pointing hand over something that can be picked, an arrow elsewhere.
+
+**Measure.**
+- The readout above the hotbar always gives the **clay's size** (block-out and models together)
+  beside the bricks' size: studs along x across x plates up, and mm on the real thing and printed.
+- **Measure** (Alt M, Measure in the rail): a click anywhere on the model -- clay, a model, a
+  lifted part or a brick, whichever is nearest along the ray -- and a second click elsewhere on it
+  give the line and the distance (studs, plates, mm real and print); a third click starts again,
+  Escape clears. Past the model it lands on the working plane (the old floor plane was far below a
+  floating build).
+
+**Old saves.** A save in the old "bricks" state still holds the whole clay under its bricks: on
+loading, the cells its last Make bricks turned into bricks are taken out of the clay and its bricks
+count as made from clay, so it reads as if made the new way. Bricks put aside in the old "clay"
+state are dropped: they were already in the clay.
+
+Checks (`asset_workshop_probe`): Make bricks leaves no clay where bricks went, keeps a smooth
+part's clay, and does not mirror with the mirror on unless symmetric is ticked; a model rotated
+then made bricks gives the rotated cells; Make bricks again replaces clay bricks under new clay
+and keeps a hand-laid brick; the stage tabs change nothing in the build; Bricks to clay turns
+the bricks into clay; Measure lands on clay and on a model; the clay size readout.
+
 ### Furniture and items (2026-10-23)
 
 The user (2026-10-23): build furniture and household items here, since the tools are better for
