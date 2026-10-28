@@ -1887,6 +1887,32 @@ city's collapse probe) -- the check says CRUSH, a storey comes down (fewer than 
 left standing, what left dropped at least half a storey), every piece at rest. And no undamaged
 building in the town is near failing a storey (ratio under 0.8).
 
-Not yet: the city's snap preferences, a storey giving way under what is above (TIP / CRUSH);
-furniture, materialising for a fight far from
+**D2 step 6 built (2026-10-28): a storey gives way under what is above it.**
+`PlanetBuildings._storey_fail`, asked from `_solve_site` when the solve found nothing loose, as
+planned: TIP a seam at the boundary, CRUSH and a region's crush a storey-thick slab, each a
+`SEVER` about the site's own up in `damage_log`; the site solved again the next frame, which sheds
+what was let go. The planet's bricks have the city's stud strength now (37, was the engine's 400).
+One change from the plan, found by the gate: *a crushed storey's bricks are crumbs* (killed and
+thrown, `after_kill`). Left torn but alive in the chunk, they went with what they carried -- the
+solve's loose group does not part at a torn joint (`get_components` would; the city's islands
+part it later) -- so the top fell as one piece with its crushed storey still under it, and did not
+move (dropped 0.0 m). The city's own probe says "comes down"; this is that on the planet.
+Gate `--gate=storey` 12/12 (headless x3, windowed x1): no untouched building is near failing a
+storey (worst 0.17 of what it can, regions 0.17). TIP: a 30 x 28 stud tower of 36 courses, its
+first floor's walls cut (157 of 1622 bricks) but for a 7-stud corner; the check says TIP under
+plate 37 (15.9x what the corner can hold over), five bricks seamed; the next solve sheds 1097
+bricks as one piece (of the 1117 that left), which tips 17 degrees off the corner onto the first
+floor's own slab and comes down 1.4 m; nothing of the building above that storey, every piece at
+rest, the building standing below. (The plan's 30 degrees was wrong for a first-floor cut: a
+storey-high post under a top three times its width tips it some 15 degrees before the slab stops
+it; a ground storey cut so would be the whole building off balance -- step 4.) CRUSH: a 32 x 32
+tower of 31 courses (1862 bricks) at `crush_per_stud` 0.5: the storey under plate 14 is crushed
+(3.5x, 318 bricks cut, 321 crumbs), the 1521 bricks above come down 2.0 m as one piece and lie at
+rest; nothing left standing (the crushed slab took in the ground slab). The check is 0.2 ms.
+The other planet gates unchanged with the city's stud strength (pieces_ai 4, topple 6, hits 8,
+fall 7, damage 12, bricks 9, trees 7, squad 10, pawn 12).
+Not done: a crush, TIP or region cut is in the planet's `damage_log`, the crumbs' kill is not
+(no netcode or replay on the planet yet).
+
+Not yet: the city's snap preferences; furniture, materialising for a fight far from
 the camera.

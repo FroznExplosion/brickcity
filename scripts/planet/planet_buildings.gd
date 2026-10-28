@@ -463,6 +463,9 @@ func _start_bricks(s: Site) -> void:
 	s.chunk = bricks.create_chunk(Vector3i.ZERO, TowerRecipe.chunk_dims(s.fx, s.fz, s.courses))
 	bricks.load_template(_template(s.fx, s.fz, s.courses), s.chunk)
 	bricks.set_chunk_anchored(s.chunk, true)
+	# What a stud holds, as the city's (CityScene._promote): the engine's default
+	# is ten times it, and the storey check weighs tipping against it (D2 step 6).
+	bricks.set_tension_per_stud(s.chunk, BrickStrength.tension())
 	bricks.set_chunk_section_plates(s.chunk, SECTION_PLATES)
 	bricks.set_chunk_section_studs(s.chunk, SECTION_STUDS)
 	bricks.set_chunk_transform(s.chunk, planet.global_transform * s.frame)
@@ -764,6 +767,11 @@ func _solve_site(i: int) -> void:
 				Vector3(1.0, 0.0, 0.0), int(res.get("rounds", 0)))
 	var groups: Array = solve.groups
 	if groups.is_empty():
+		# Nothing is loose -- but can each storey still carry what is above it?
+		# (D2 step 6.) If not, it is cut, and the next solve sheds what it let go.
+		if _storey_fail(i):
+			s.solve_due = true
+			return
 		# Joints failed but nothing is loose yet: the next round may let it go.
 		s.solve_due = int(res.get("failures", 0)) > 0
 		return
@@ -780,6 +788,81 @@ func _solve_site(i: int) -> void:
 	bricks.bake_chunk_async(s.chunk)
 	site_damaged.emit(i, (planet.global_transform * s.frame) * box.grow(1.0))
 	s.solve_due = true
+
+
+## Storey by storey, can what is left carry what is above it? (D2 step 6; the
+## city's CityScene._gravity_fail and _region_fail, BrickWorld.gravity_check.)
+## The stress solve fails only joints in tension, and the stability test only
+## asks whether the whole building stands on its foundation: a storey shot away
+## but for one corner holds the storeys above it up for good.
+##   TIP    what is above, off the edge of what is left: cut clean at that
+##          boundary (a seam), and it goes over the edge as a piece.
+##   CRUSH  too much on too little: everything in the storey under that
+##          boundary is torn loose, and what is above comes down a floor.
+## The cut is a SEVER across the site's own up (its frame's Y -- Gravity.up_at
+## there), never +Y. True when something was cut.
+## The city's CityScene.CRUSH_PER_STUD: what a stud bears, in units of what it
+## held in tension at BrickStrength.SCALED. Settable: the gate weakens a tower.
+const CRUSH_PER_STUD := 20.0
+var crush_per_stud := CRUSH_PER_STUD
+var storey_fails := {"tip": 0, "crush": 0, "region": 0}
+var storey_worst_ms := 0.0
+
+func _storey_fail(i: int) -> bool:
+	var s := sites[i]
+	if s.toppled or s.chunk < 0:
+		return false
+	var t0 := Time.get_ticks_usec()
+	var r: Dictionary = bricks.gravity_check(s.chunk,
+			crush_per_stud * BrickStrength.SCALED / bricks.get_tension_per_stud(s.chunk))
+	storey_worst_ms = maxf(storey_worst_ms, float(Time.get_ticks_usec() - t0) / 1000.0)
+	var up := bricks.get_chunk_transform(s.chunk).basis.y.normalized()
+	var storey := float(TowerRecipe.STOREY_PLATES) * BrickPalette.PLATE_M
+	var e: DamageLog.Entry
+	var kind := ""
+	if float(r.get("ratio", 0.0)) >= 1.0 and r.has("level"):
+		var level: Vector3 = r.level
+		kind = str(r.kind)
+		e = DamageLog.Entry.new()
+		e.kind = DamageLog.Kind.SEVER
+		e.normal = up
+		if kind == "tip":
+			e.point = level
+			e.flags = DamageLog.FLAG_SEAM
+		else:
+			# The storey under the boundary: its middle, and a storey thick.
+			e.point = level - up * storey * 0.5
+			e.radius = storey
+	elif float(r.get("region_ratio", 0.0)) >= 1.0 and r.has("region"):
+		# The whole boundary holds; one region of it does not: that region's
+		# storey only (DamageLog.region_crush, about the site's up).
+		kind = "region"
+		e = DamageLog.region_crush(bricks, s.chunk, r, storey)
+		e.normal = up
+	else:
+		return false
+	e.target = s.chunk
+	var cut := DamageLog.apply_entry(bricks, s.chunk, e)
+	if cut.is_empty():
+		return false
+	damage_log.add(e)
+	if kind != "tip":
+		# Torn loose, and on the planet a brick joined to nothing is a crumb (D2
+		# step 2). Left in the chunk, the torn storey went with what it carried:
+		# the solve's loose group does not part at a torn joint, so the top fell
+		# as one piece with its storey under it, and stood where it stood.
+		bricks.kill_blocks(s.chunk, cut)
+		pieces.crumbs.throw(bricks, s.chunk, cut)
+		var box := (planet.global_transform * s.frame) * bricks.get_blocks_box(s.chunk, cut)
+		after_kill(i, cut, box.grow(1.0))
+	storey_fails[kind] = int(storey_fails.get(kind, 0)) + 1
+	var what := {"tip": "tips over", "crush": "is crushed", "region": "is crushed under %s studs of it" % str(r.get("region"))}
+	var reg := kind == "region"
+	print("[planet] building %d: the storey under plate %d %s (%.1fx what it can, %.0f above), %d bricks cut" % [
+			i, int(r.get("region_level_cell" if reg else "level_cell", -1)), what[kind],
+			float(r.get("region_ratio" if reg else "ratio", 0.0)),
+			float(r.get("region_mass_above" if reg else "mass_above", 0.0)), cut.size()])
+	return true
 
 
 ## Site `i` handed over whole as one falling piece (PlanetPieces.adopt): its
