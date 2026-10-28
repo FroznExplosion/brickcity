@@ -170,6 +170,8 @@ func _build_tabs() -> void:
 ## convert by itself: the stage button does, so nothing is turned into bricks by a tab.
 func set_stage(id: String) -> void:
 	stage = id
+	# Block out shows the clay, the others hide it; nothing is converted by a tab.
+	ws.set_clay_view(id == "blockout")
 	_fill_tools()
 	match id:
 		"blockout":
@@ -651,7 +653,7 @@ func _fill_actions() -> void:
 		_action("Make bricks (all)", "Turn all the clay into bricks: the block-out and the models.",
 				func() -> void: _stage_step())
 	else:
-		_action("Back to clay", "Turn the bricks back into clay to reshape them.", func() -> void: _stage_step())
+		_action("Bricks to clay", "Turn the bricks into clay to reshape them.", func() -> void: _stage_step())
 	if t == "model" and not held.is_empty():
 		var m: Dictionary = d.m
 		_action("Rename", "Give this model a name of your own.", func() -> void:
@@ -754,9 +756,9 @@ func process(dt: float) -> void:
 	var top: float = 8.0 + (ws._menu.bar_height() if ws._menu != null else 0.0)
 	_tabs.position = Vector2(12, top)
 	var clay: bool = ws.sculpt_state == "sdf"
-	_stage_button.text = "Make bricks  >" if clay else "<  Back to clay"
-	_stage_button.tooltip_text = ("Turn the clay into bricks and go on to stage 2." if clay
-			else "Turn the bricks back into clay (Edit as SDF) and go back to stage 1.")
+	_stage_button.text = "Make bricks  >" if clay else "<  Bricks to clay"
+	_stage_button.tooltip_text = ("Turn the clay into bricks and go on to stage 2. The clay that becomes bricks is used up; smooth-marked clay stays." if clay
+			else "Turn the bricks into clay to reshape them, and go back to stage 1. Only this turns bricks into clay.")
 	for id in _tab_buttons:
 		(_tab_buttons[id] as Button).set_pressed_no_signal(id == stage)
 	# The building workshop's readout (the brick in hand, its layer, its cell) means
@@ -777,10 +779,6 @@ func process(dt: float) -> void:
 		for t in TOOLS[stage]:
 			if t[0] == on:
 				text = t[3]
-		if stage == "blockout" and not clay:
-			text = "This is bricks now. \"Back to clay\" turns it back to reshape it."
-		elif stage != "blockout" and stage != "finish" and clay:
-			text = "Still clay: \"Make bricks\" turns it into bricks to work on here (or one part: select it in the outliner)."
 		_hint.text = text
 	if ws._sculpt_note != null and ws._sculpt_note.text != _said:
 		_said = ws._sculpt_note.text

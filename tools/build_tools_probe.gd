@@ -33,6 +33,9 @@ func _initialize() -> void:
 	_run_checks()
 	_kept_checks()
 	_wall_checks()
+	_sketch_checks()
+	_opening_checks()
+	_repeat_checks()
 	print("\n%d passed, %d failed" % [_pass, _fail])
 	quit(1 if _fail > 0 else 0)
 
@@ -400,3 +403,177 @@ func _wall_checks() -> void:
 		if _ws.world.is_solid(f0, c):
 			rf += 1
 	_ok("a ring lying flat is laid", rf == rc.size() and rc.size() > 30, "%d of %d" % [rf, rc.size()])
+
+
+func _sketch_checks() -> void:
+	print("[probe] sketch: the asset workshop's pen, making kept shapes")
+	var sq := SketchPen.region_cells([[4, 4], [12, 4], [12, 10], [4, 10]])
+	_ok("the pen fills an outline 8 x 6 with 48 cells", sq.size() == 48)
+	_ok("and a brush stroke round its path", SketchPen.region_cells(SketchPen.brush_entry([Vector2(5.5, 5.5)], 1, true, "top")).size() == 9)
+	_ok("BrickShapes fills an outline with the same code", BrickShapes.outline_cells([[4, 4], [12, 4], [12, 10], [4, 10]]) == sq)
+	_ws._new_build()
+	var t: WorkshopTools = _ws._tools
+	var f0: int = _ws.asm.frames[0]
+	_hold("brick_1x2")
+	t.pick("sketch")
+	_ok("Sketch is on the rail", t.active() == "sketch" and t.rail.buttons.has("sketch"))
+	t.tall = 3
+	t.pen.draw = "polygon"
+	t._sk = {"lie": "flat", "at": 1}
+	for q in [Vector2(4, 4), Vector2(12, 4), Vector2(12, 10)]:
+		t.pen.polygon_click(q, false, false)
+	_ok("a polygon closes on its first corner", t.pen.polygon_click(Vector2(4.2, 4.1), false, false))
+	t.pen.points.clear()
+	t.pen.out = false
+	for q in [Vector2(4, 4), Vector2(12, 4), Vector2(12, 10), Vector2(4, 10)]:
+		t.pen.polygon_click(q, false, false)
+	t._sketch_commit()
+	_ok("a sketched outline becomes a kept shape", t.shapes().size() == 1 and String(t.shapes()[0].kind) == "outline")
+	var cells := BrickShapes.shape_cells(t.shapes()[0])
+	var filled := 0
+	for c in cells:
+		if _ws.world.is_solid(f0, c):
+			filled += 1
+	_ok("of the held brick, every cell laid (%d)" % cells.size(), cells.size() == 48 * 3 and filled == cells.size())
+	# RMB with the brush: a cut through it.
+	t.pen.draw = "brush"
+	t.brush_size = 1
+	t.brush_square = true
+	t._sk = {"lie": "flat", "at": 1}
+	t.pen.press(Vector2(8.5, 7.5), true)
+	t._sketch_commit()
+	_ok("a stroke drawn with RMB cuts the shape", (t.shapes()[0].cuts as Array).size() == 1
+			and not _ws.world.is_solid(f0, Vector3i(8, 2, 7)) and _ws.world.is_solid(f0, Vector3i(4, 2, 4)))
+	# Saved, and laid again from the save: the outline is kept.
+	var back := BuildRecipe.from_dict(JSON.parse_string(JSON.stringify(_ws.recipe.to_dict())))
+	var kept: Dictionary = back.meta.shapes[0]
+	_ok("saved, a sketched shape's outline fills the same", BrickShapes.shape_cells(kept).size()
+			== BrickShapes.shape_cells(t.shapes()[0]).size())
+	t.pick("place")
+
+
+## A room 16 x 10, 24 plates tall, of 1x4s, on the baseplate; returns its shape id.
+func _room() -> int:
+	_ws._new_build()
+	var t: WorkshopTools = _ws._tools
+	_hold("brick_1x4")
+	_ws._colour = 2
+	t.tall = 24
+	t.rim = 1
+	t.staggered = true
+	return t.add_shape("hollow", "flat", Vector2i(4, 4), Vector2i(19, 13), 1)
+
+
+func _solid(c: Vector3i) -> bool:
+	return _ws.world.is_solid(_ws.asm.frames[0], c)
+
+
+func _opening_checks() -> void:
+	print("[probe] doors and windows, with frames and glass")
+	var wall := _room()
+	var t: WorkshopTools = _ws._tools
+	var f0: int = _ws.asm.frames[0]
+	var before := _bricks(t.shape_of(wall))
+	var n0: int = _ws.recipe.size()
+	# A window, clicked on the front wall at plate 6, framed in white 1x2s.
+	_hold("brick_1x2")
+	_ws._colour = 1
+	t.frame_on = true
+	t.glass_on = true
+	var face := t.face_under(Vector3(11.5 * 0.35, 6.5 * 0.14, -3.0), Vector3(0, 0, 1))
+	var op := t.apply_opening("window", face)
+	_ok("one undo for the window, its frame and its glass", (_ws._edits as Array).back() == "shape"
+			and t.shapes().size() == 3, "%d shapes" % t.shapes().size())
+	var glass := WorkshopTools.glass_paint()
+	_ok("there is a see-through material for glass", BrickWorld.is_material_translucent(glass.x))
+	var a := BrickShapes._v2(op.a)
+	var b := BrickShapes._v2(op.b)
+	var mid := Vector3i((a.x + b.x) >> 1, (a.y + b.y) >> 1, 4)
+	var bid: int = _ws.world.block_at(f0, mid)
+	_ok("the window is glass", bid >= 0 and _ws.world.get_block_material(f0, bid) == glass.x)
+	var fr := Vector3i(a.x - 1, (a.y + b.y) >> 1, 4)
+	var fid: int = _ws.world.block_at(f0, fr)
+	_ok("framed beside it in the held colour", fid >= 0 and _ws.world.get_block_colour(f0, fid) == 1)
+	var sill := Vector3i((a.x + b.x) >> 1, a.y - 1, 4)
+	var sid: int = _ws.world.block_at(f0, sill)
+	_ok("with a sill under it", sid >= 0 and _ws.world.get_block_colour(f0, sid) == 1)
+	var wall_ok := _solid(Vector3i(a.x - 2, a.y, 4)) and _solid(Vector3i(a.x, b.y + 4, 4))
+	var wid: int = _ws.world.block_at(f0, Vector3i(a.x - 2, a.y, 4))
+	_ok("and the wall round the frame is the wall's", wall_ok and _ws.world.get_block_colour(f0, wid) == 2)
+	_ok("the back wall untouched", _solid(Vector3i((a.x + b.x) >> 1, a.y + 2, 13)))
+	_ws._undo()
+	_ok("undo: the wall exactly as it was, no frame or glass", t.shapes().size() == 1
+			and _bricks(t.shape_of(wall)) == before and _ws.recipe.size() == n0,
+			"%d shapes, %d of %d bricks" % [t.shapes().size(), _ws.recipe.size(), n0])
+	# A door: no sill, the floor stays open.
+	var dface := t.face_under(Vector3(8.5 * 0.35, 4.5 * 0.14, -3.0), Vector3(0, 0, 1))
+	var dop := t.apply_opening("door", dface)
+	var da := BrickShapes._v2(dop.a)
+	var db := BrickShapes._v2(dop.b)
+	_ok("a door stands on the floor and is open to it", int(da.y) == 1
+			and not _solid(Vector3i((da.x + db.x) >> 1, 1, 4)) and not _solid(Vector3i(da.x, db.y, 4)))
+	_ok("with jambs both sides and a head", _solid(Vector3i(da.x - 1, 2, 4)) and _solid(Vector3i(db.x + 1, 2, 4))
+			and _solid(Vector3i(da.x, db.y + 1, 4)))
+	_ok("and no glass", t.shapes().size() == 2)
+
+
+func _repeat_checks() -> void:
+	print("[probe] repeat: storeys and rows")
+	var wall := _room()
+	var t: WorkshopTools = _ws._tools
+	_hold("brick_1x2")
+	var face := t.face_under(Vector3(8.5 * 0.35, 4.5 * 0.14, -3.0), Vector3(0, 0, 1))
+	t.apply_opening("door", face)
+	# A plain brick on the floor inside, in the storey.
+	_hold("plate_1x1")
+	_ws._cell = Vector3i(10, 1, 8)
+	_ws._update_ghost()
+	_ws._place()
+	var shapes0 := t.shapes().size()
+	var n0: int = _ws.recipe.size()
+	t.rep_what = "storey"
+	t.rep_lo = 1
+	t.rep_hi = 24
+	var made := t.repeat("up", 2, 0)
+	_ok("a storey repeated twice up: its shapes, door and all, and its loose brick", made > 0
+			and t.shapes().size() == shapes0 * 3, "%d shapes, %d made" % [t.shapes().size(), made])
+	_ok("the walls go on up", _solid(Vector3i(4, 25, 4)) and _solid(Vector3i(19, 72, 13)) and not _solid(Vector3i(4, 73, 4)))
+	_ok("each storey has its door, open, framed", not _solid(Vector3i(9, 26, 4)) and not _solid(Vector3i(9, 50, 4))
+			and _solid(Vector3i(5, 26, 4)) and _solid(Vector3i(5, 50, 4)))
+	_ok("and its loose brick", _solid(Vector3i(10, 25, 8)) and _solid(Vector3i(10, 49, 8)))
+	_ws._undo()
+	_ok("one undo takes every copy back", t.shapes().size() == shapes0 and _ws.recipe.size() == n0,
+			"%d shapes, %d bricks" % [t.shapes().size(), _ws.recipe.size()])
+	# A window repeated along X: three windows, each cut in the wall.
+	_hold("brick_1x2")
+	var wface := t.face_under(Vector3(11.5 * 0.35, 6.5 * 0.14, -3.0), Vector3(0, 0, 1))
+	t.window_size = Vector2i(2, 6)
+	var op := t.apply_opening("window", wface)
+	var frame_id := -1
+	for sh in t.shapes():
+		if sh.has("opening") and String(sh.kind) == "hollow":
+			frame_id = int(sh.id)
+	t.selected = frame_id
+	t.rep_what = "shape"
+	t.repeat("x", 2, 1)
+	var a := BrickShapes._v2(op.a)
+	var g := WorkshopTools.glass_paint()
+	var f0: int = _ws.asm.frames[0]
+	var ok := true
+	for k in [0, 1, 2]:
+		var c := Vector3i(a.x + k * 5, a.y + 1, 4)
+		var bid: int = _ws.world.block_at(f0, c)
+		ok = ok and bid >= 0 and _ws.world.get_block_material(f0, bid) == g.x
+	_ok("a window repeated twice along X, a stud between frames: three windows of glass", ok)
+	_ok("its copies cut the wall they land on", (t.shape_of(wall).cuts as Array).size() >= 4)
+	# A sketched brush stroke laid with LMB is a shape too.
+	t.pick("sketch")
+	t.pen.draw = "brush"
+	t.brush_size = 1
+	t._sk = {"lie": "flat", "at": 1}
+	t.pen.press(Vector2(30.5, 30.5), false)
+	t.pen.move(Vector2(34.5, 30.5), 1)
+	var before := t.shapes().size()
+	t._sketch_commit()
+	_ok("a brush stroke drawn with LMB is a kept shape", t.shapes().size() == before + 1 and _solid(Vector3i(32, 1, 30)))
+	t.pick("place")

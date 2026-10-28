@@ -198,7 +198,11 @@ var _plane_lines: MeshInstance3D
 var _photo_lines: MeshInstance3D
 var photo_grid := false
 ## A sketch being drawn: points on the side plane, (studs along, plates up).
-var _sketch: Array[Vector2] = []
+## The stroke being drawn is the shared pen's (SketchPen, scripts/workshop_sketch.gd); these
+## name its parts as this file always has.
+var _pen := SketchPen.new()
+var _sketch: Array[Vector2]:
+	get: return _pen.points
 var _photo_drag = null
 ## An RMB delete, for undo: what it took, newest last, one for each "delete" edit.
 var _deleted: Array = []
@@ -228,7 +232,9 @@ var curve_level := 2:
 		slope_eager = curve_level >= 4
 const CURVE_LEVELS := ["steps only", "slopes", "slopes and curves", "from the side and front",
 		"eager slopes too"]
-var _sketch_out := false
+var _sketch_out: bool:
+	get: return _pen.out
+	set(v): _pen.out = v
 var _sketch_cache := {}
 
 ## Phase 4. Parts that leave as smooth custom pieces rather than bricks.
@@ -900,13 +906,49 @@ func _fit_photo(p: Dictionary) -> void:
 static func measure_text(a: Vector3, b: Vector3) -> String:
 	var d := (b - a).abs()
 	var straight := print_mm(a.distance_to(b))
-	return "%s along, %s up, %s across\n%.1f mm print, %.0f mm real" % [
-			_num(d.x / BrickPalette.STUD_M) + " studs", _num(d.y / BrickPalette.PLATE_M) + " plates",
-			_num(d.z / BrickPalette.STUD_M) + " studs", straight, straight * REAL_PER_PRINT]
+	return "%s studs straight: %s along, %s up, %s across\n%.1f mm print, %.0f mm real" % [
+			_num(a.distance_to(b) / BrickPalette.STUD_M), _num(d.x / BrickPalette.STUD_M) + " studs",
+			_num(d.y / BrickPalette.PLATE_M) + " plates", _num(d.z / BrickPalette.STUD_M) + " studs", straight,
+			straight * REAL_PER_PRINT]
 
 
-## Where a ray lands for measuring: a brick, else a shown photo, else the baseplate.
+## Where a ray lands for measuring: the nearest of the clay, a model, a lifted part and a
+## brick; else a shown photo; else the working plane (Docs/AssetWorkshop.md, "Clay and bricks
+## apart": the old floor plane was far below a floating build).
 func measure_point(from: Vector3, dir: Vector3) -> Variant:
+	var best = null
+	var best_d := INF
+	var gf := global_transform * from
+	var gd := global_transform.basis * dir
+	var shapes := []
+	if sculpt != null and sculpt.visible and sculpt.form.block_count() > 0:
+		shapes.append(sculpt)
+	for m in models:
+		if (m.node as Node3D).visible:
+			shapes.append(m.node)
+	if _held_kind() == "part":
+		shapes.append(_placed.node)
+	for node in shapes:
+		var h = (node as AssetSculpt).hit(gf, gd)
+		if h != null:
+			var w: Vector3 = global_transform.affine_inverse() * (node as AssetSculpt).to_world(h)
+			if w.distance_to(from) < best_d:
+				best_d = w.distance_to(from)
+				best = w
+	var brick = _measure_brick(from, dir)
+	if brick != null and (brick as Vector3).distance_to(from) < best_d:
+		best = brick
+	if best != null:
+		return best
+	if photo_sel >= 0 and bool(photos[photo_sel].shown):
+		var on = ray_on_photo(photo_sel, from, dir)
+		if on != null:
+			return on
+	return work_plane_hit(from, dir)
+
+
+## Where a ray meets a brick's face, or null.
+func _measure_brick(from: Vector3, dir: Vector3) -> Variant:
 	var hit := _first_hit(from, dir)
 	if not hit.is_empty():
 		# The workshop's ray steps a third of a plate at a time, so its hit is somewhere
@@ -922,14 +964,6 @@ func measure_point(from: Vector3, dir: Vector3) -> Variant:
 			else:
 				outside = mid
 		return from + dir * inside
-	if photo_sel >= 0 and bool(photos[photo_sel].shown):
-		var on = ray_on_photo(photo_sel, from, dir)
-		if on != null:
-			return on
-	if absf(dir.y) > 1e-5:
-		var t := (BrickPalette.PLATE_M - from.y) / dir.y
-		if t > 0.0:
-			return from + dir * t
 	return null
 
 
@@ -1332,6 +1366,8 @@ func ruler_text() -> String:
 				d.x, d.z, d.y, d.x * PRINT_MM_PER_STUD, d.z * PRINT_MM_PER_STUD, d.y * PRINT_MM_PER_PLATE,
 				d.x * PRINT_MM_PER_STUD * REAL_PER_PRINT, d.z * PRINT_MM_PER_STUD * REAL_PER_PRINT,
 				d.y * PRINT_MM_PER_PLATE * REAL_PER_PRINT])
+	if _clay_size_text != "":
+		lines.append(_clay_size_text)
 	var modes := PackedStringArray(["view: " + VIEWS[view]])
 	if recipe.kind == "mech":
 		modes.append("MECH %s, legs %d long" % [mech_class, leg_length])
@@ -1720,7 +1756,9 @@ func _store_asset_meta() -> void:
 			"smooth": Array(smooth_parts), "muzzle": muzzle_end, "part_width": part_width.duplicate(),
 			"sketches": sketches, "part_bricks": part_bricks, "studs": extra_studs, "curves": curve_level,
 			"shells": shells, "sdf": _sdf_meta, "sculpt": {"state": sculpt_state, "cells": Array(_sdf_cells),
-			"stash": _sdf_stash, "shell_cells": Array(_sdf_shell)}, "models": _models_meta(),
+			"stash": _sdf_stash, "shell_cells": Array(_sdf_shell), "clay_bricks": clay_bricks.keys(), "v2": true,
+			"clay_colours": clay_colours},
+			"models": _models_meta(),
 			"part_ids": part_ids, "part_hashes": part_hashes, "part_revs": part_revs,
 			"mech": {"class": mech_class, "length": leg_length}, "gun_scale": gun_scale, "maker": part_maker}   # not a copy: this runs on every edit, and a save writes it out as it is
 
@@ -1778,9 +1816,18 @@ func _restore_asset_meta() -> void:
 	_sdf_cells = PackedInt32Array(sst.get("cells", []))
 	_sdf_stash = (sst.get("stash", []) as Array).duplicate(true)
 	_sdf_shell = PackedInt32Array(sst.get("shell_cells", []))
+	clay_bricks = {}
+	for k in sst.get("clay_bricks", []):
+		clay_bricks[String(k)] = true
+	clay_colours = {}
+	var cc: Dictionary = sst.get("clay_colours", {})
+	for k in cc:
+		clay_colours[int(k)] = [int(cc[k][0]), int(cc[k][1])]
 	if sculpt != null:
 		sculpt.set_parts(part_names.size())
 		sculpt.load_meta(_sdf_meta)
+		if not bool(sst.get("v2", false)):
+			_clay_migrate()
 		sculpt.visible = sculpt_state == "sdf"
 	shells = (a.get("shells", {}) as Dictionary).duplicate(true)
 	for part in _shell_nodes.keys():
@@ -4073,12 +4120,12 @@ func _sketch_input(e: InputEvent) -> bool:
 		return _polygon_input(e)
 	if e is InputEventMouseButton and e.button_index in [MOUSE_BUTTON_LEFT, MOUSE_BUTTON_RIGHT]:
 		if e.pressed:
-			_sketch.clear()
-			_sketch_out = e.button_index == MOUSE_BUTTON_RIGHT
 			var q = _sketch_mouse()
 			if q != null:
-				_sketch_anchor = q
-				_sketch.append(q)
+				_pen.press(q, e.button_index == MOUSE_BUTTON_RIGHT)
+			else:
+				_sketch.clear()
+				_sketch_out = e.button_index == MOUSE_BUTTON_RIGHT
 		else:
 			_sketch_commit()
 		return true
@@ -4106,6 +4153,17 @@ func _sculpt_input(e: InputEvent) -> bool:
 		return false
 	if sculpt_mode == "models" and (_gizmo_input(e) or _model_pick_input(e)):
 		return true
+	if sculpt_mode == "models":
+		# Select points and picks, it never draws: no brush, no plane disc; a hand over what
+		# can be picked (Docs/AssetWorkshop.md, "Clay and bricks apart").
+		sculpt.show_cursor(null, 0.0, Color.WHITE)
+		if e is InputEventMouseMotion and Input.mouse_mode != Input.MOUSE_MODE_CAPTURED:
+			var at: Vector2 = (e as InputEventMouse).position
+			var from := _camera.project_ray_origin(at)
+			var dir := _camera.project_ray_normal(at)
+			var hot := _pickable_at(from, dir) or (_gizmo != null and _gizmo.visible and _gizmo.pick(from, dir) != "")
+			Input.set_default_cursor_shape(Input.CURSOR_POINTING_HAND if hot else Input.CURSOR_ARROW)
+		return false
 	var stamping: bool = sculpt_mode == "stamp" and not (e is InputEventWithModifiers and e.shift_pressed and not _sculpt_on)
 	if e is InputEventMouseButton and e.button_index in [MOUSE_BUTTON_LEFT, MOUSE_BUTTON_RIGHT]:
 		if e.pressed:
@@ -4588,6 +4646,13 @@ func _build_sculpt_box() -> void:
 	snap.focus_mode = Control.FOCUS_NONE
 	snap.toggled.connect(func(on: bool) -> void: sculpt_snap = on)
 	_sculpt_box.add_child(snap)
+	var sym := CheckBox.new()
+	sym.text = "symmetric bricks (Make bricks mirrors one half)"
+	sym.tooltip_text = "Off: the bricks are made as the clay is drawn. On: one side of the mirror plane is made and mirrored onto the other."
+	sym.button_pressed = convert_mirror
+	sym.focus_mode = Control.FOCUS_NONE
+	sym.toggled.connect(func(on: bool) -> void: convert_mirror = on)
+	_sculpt_box.add_child(sym)
 	var strength_label := Label.new()
 	var strength := HSlider.new()
 	strength.min_value = 0.05
@@ -4736,6 +4801,7 @@ func _brick_cell_list() -> PackedInt32Array:
 ## What Convert and Edit as SDF change besides bricks and the field, for undo.
 func _sculpt_state() -> Dictionary:
 	return {"state": sculpt_state, "cells": _sdf_cells.duplicate(), "stash": _sdf_stash.duplicate(true),
+			"clay_bricks": clay_bricks.duplicate(), "clay_colours": clay_colours.duplicate(true),
 			"shell_cells": _sdf_shell.duplicate(),
 			"part_bricks": part_bricks.duplicate(true), "shells": shells.duplicate(true)}
 
@@ -4744,6 +4810,8 @@ func _set_sculpt_state(st: Dictionary) -> void:
 	sculpt_state = String(st.state)
 	_sdf_cells = PackedInt32Array(st.cells)
 	_sdf_stash = (st.stash as Array).duplicate(true)
+	clay_bricks = (st.get("clay_bricks", {}) as Dictionary).duplicate()
+	clay_colours = (st.get("clay_colours", {}) as Dictionary).duplicate(true)
 	_sdf_shell = PackedInt32Array(st.get("shell_cells", []))
 	part_bricks = (st.part_bricks as Dictionary).duplicate(true)
 	shells = (st.shells as Dictionary).duplicate(true)
@@ -4770,28 +4838,37 @@ func _bricks_into_field(before: PackedInt32Array, shell_cells := PackedInt32Arra
 		if not have.has(Vector3i(shell_cells[i], shell_cells[i + 1], shell_cells[i + 2])):
 			after.append_array(shell_cells.slice(i, i + 5))
 	sculpt.form.sync_cells(before, after)
+	# Each part's colour, as most of its bricks had it: Make bricks gives it back.
+	var tally := {}
+	for i in recipe.size():
+		if _brick_frame(i) == 0:
+			var t: Dictionary = tally.get_or_add((part_of[i] if i < part_of.size() else 0) + 1, {})
+			var cm := [recipe.colour_of(i), recipe.material_of(i)]
+			t[cm] = int(t.get(cm, 0)) + 1
+	for label in tally:
+		var best := 0
+		for cm in tally[label]:
+			if tally[label][cm] > best:
+				best = tally[label][cm]
+				clay_colours[label] = cm
 	_batch = true
 	for i in range(recipe.size() - 1, -1, -1):
 		if _brick_frame(i) != 0:
 			continue
-		var b := _brick_info(i)
-		var c: Vector3i = b.cell
-		_sdf_stash.append([b.arch, c.x, c.y, c.z, b.colour, b.mat, b.tag])
+		clay_bricks.erase(_brick_key(recipe.part_of(i), recipe.cell_of(i)))
 		take_brick(i)
 	_batch = false
 	_after_edit()
 
 
-## Edit as SDF: the bricks back into the block-out -- only the cells changed since the
-## last Convert, so the smooth surface stays where they were not touched -- and the
-## block-out shown again. A build never converted (bricks only) goes in whole. One undo.
+## Bricks to clay (Docs/AssetWorkshop.md, "Clay and bricks apart"): every upright brick into
+## the clay, whole, and taken up; the clay shown. Only on purpose: nothing else turns bricks
+## into clay. One undo.
 func sculpt_to_sdf() -> void:
-	# Not yet converted: whatever bricks there are (a bricks-only gun) go in whole.
-	var before := _sdf_cells if sculpt_state == "bricks" else PackedInt32Array()
 	_begin_gather()
 	var was := _sculpt_state()
 	sculpt.form.begin_edit()
-	_bricks_into_field(before, _sdf_shell if sculpt_state == "bricks" else PackedInt32Array())
+	_bricks_into_field(PackedInt32Array())
 	var rec := sculpt.form.end_edit()
 	for part in shells.keys():
 		if shells[part].get("sdf", false):
@@ -4802,42 +4879,43 @@ func sculpt_to_sdf() -> void:
 	_end_gather()
 
 
-## Convert: the block-out into the asset. Every solid cell gets a brick, in its part; a
-## brick that was there before goes back where all its cells are still the part's, with
-## its colour and shape; the rest packed biggest first. Cells in a brick zone stay bricks;
-## the rest of a part becomes its custom piece -- a shell from the field, over bricks the
-## game and the print leave out except where it meets bricks (the join, with studs).
-## Bricks laid in the meantime go into the field first. One undo.
+## Make bricks (Docs/AssetWorkshop.md, "Clay and bricks apart"): the clay -- the block-out and
+## every model, where they stand now -- into bricks, one way. Every solid cell gets a brick in
+## its part, packed biggest first, slopes and curves fitted where they match better. Cells marked
+## smooth stay clay: the part's custom piece, a shell from the field, over bricks only where the
+## surface holds the whole cell or meets a brick (the join, with studs). The clay that became
+## bricks is used up, and the models with it. Bricks an earlier Make bricks laid where the new
+## clay is are made again; bricks laid by hand stay, and new ones skip their cells. One half is
+## mirrored onto the other only with `convert_mirror`. One undo.
 func sculpt_convert() -> void:
 	_set_down()
-	if sculpt_state == "bricks":
+	if sculpt.form.block_count() == 0 and models.is_empty():
+		_show_sculpt_note(true, "No clay to make bricks of: draw or import some first.")
 		return
-	# Bricks can only be laid inside the build area. A block-out wholly outside it
-	# (drawn under the area, or mirrored across a plane far from it) would convert to
-	# nothing and vanish: say so and keep it instead.
+	# Bricks can only be laid inside the build area. A block-out wholly outside it (drawn
+	# under the area, or mirrored across a plane far from it) would convert to nothing and
+	# vanish: say so and keep it instead.
 	var out := _cells_outside_area(sculpt.form.cells())
-	if out.x > 0 and out.x == out.y:
+	if models.is_empty() and out.x > 0 and out.x == out.y:
 		_show_sculpt_note(true, ("Nothing converted: all %d cells of the block-out are outside the build "
-				+ "area (below its floor, or past its edge). Move it in, or turn the mirror off if its "
-				+ "plane is far away (View > Mirror plane where the ghost is).") % out.y)
+				+ "area (below its floor, or past its edge). Move it in, or Clean up strays.") % out.y)
 		print("[sculpt] convert refused: %d of %d cells outside the build area" % [out.x, out.y])
 		return
-	if mirror_on and _mirror_misses(sculpt.form.cells(), int(ceilf(mirror_z))):
+	if convert_mirror and _mirror_misses(sculpt.form.cells(), int(ceilf(mirror_z))):
 		# Most of the mirror half would be outside the area: the plane is far from the
-		# drawing. Checked before anything is touched, so the block-out stays as it is.
-		_show_sculpt_note(true, ("Nothing converted: the mirror is on and its plane (%d studs across) is far "
-				+ "from the block-out, so its mirror half would be outside the build area. Put the plane "
-				+ "through the middle of the shape (Alt Shift S with the ghost there), or turn the mirror "
-				+ "off (Alt S).") % int(ceilf(mirror_z)))
-		print("[sculpt] convert refused: the mirror plane at %.1f is off the block-out" % mirror_z)
+		# drawing. Checked before anything is touched, so the clay stays as it is.
+		_show_sculpt_note(true, ("Nothing converted: symmetric bricks is ticked and the mirror plane (%d studs "
+				+ "across) is far from the clay, so its mirror half would be outside the build area. Put the "
+				+ "plane through the middle of the shape, or untick symmetric bricks.") % int(ceilf(mirror_z)))
+		print("[sculpt] convert refused: the mirror plane at %.1f is off the clay" % mirror_z)
 		return
 	_begin_gather()
 	var was := _sculpt_state()
+	var models_before := models_state()
 	sculpt.form.begin_edit()
-	_bricks_into_field(PackedInt32Array())
-	var rec := sculpt.form.end_edit()
-	# The models join the block-out for this Convert, and leave it after: they stay objects.
-	var mrec := _models_into_field()
+	# The models join the clay for good, where they stand now: they become bricks with it.
+	for m in models:
+		sculpt.form.combine((m.node as AssetSculpt).form, int(m.op), _model_labels(m))
 	var cells := sculpt.form.cells()
 	var label_of := {}
 	var zone := {}
@@ -4855,9 +4933,10 @@ func sculpt_convert() -> void:
 			brick_at[c] = true
 		else:
 			_sdf_shell.append_array([c.x, c.y, c.z, label_of[c], 0])
-	# With the mirror on, the near half is the truth and the far half its mirror image
-	# (Docs/AssetWorkshop.md, "Symmetric Convert"); the plane on a stud line.
-	var sym := mirror_on
+	# Symmetric bricks, only when ticked: the side that holds more of the drawing is the
+	# truth and the other its mirror image (Docs/AssetWorkshop.md, "Symmetric Convert"); the
+	# plane on a stud line.
+	var sym := convert_mirror
 	var pz := 0
 	if sym:
 		if not is_equal_approx(mirror_z, roundf(mirror_z)):
@@ -4865,8 +4944,6 @@ func sculpt_convert() -> void:
 			_show_sculpt_note(true, "The mirror was on a stud's middle: moved half a stud to a stud line, "
 					+ "so the two halves can be joined. Centre on mirror lines the model up with it.")
 		pz = int(roundf(mirror_z))
-		# The side that holds the drawing is the truth, near or far: a block-out drawn
-		# wholly past the plane used to be dropped whole and convert to nothing.
 		var near_n := 0
 		var far_n := 0
 		for c in label_of:
@@ -4889,52 +4966,55 @@ func sculpt_convert() -> void:
 	var used := {}
 	var colour_of := {}   # part -> [colour, material] of its first brick, for its piece
 	var laid := {}   # part -> [[arch, [x, y, z]]] in smooth cells
-	# Bricks packed new take their part's colour: the one most of its old bricks had, else
-	# its piece's, else the hotbar's.
+	# The bricks already there. An earlier Make bricks' bricks under the new clay are made
+	# again (their colours kept for the new ones); the user's stay, and new bricks skip them.
 	var tally := {}   # label -> {[colour, material]: count}
-	for s in _sdf_stash:
-		var cm := [int(s[4]), int(s[5])]
-		var t: Dictionary = tally.get_or_add(int(s[6]) + 1, {})
-		t[cm] = int(t.get(cm, 0)) + 1
+	_batch = true
+	for i in range(recipe.size() - 1, -1, -1):
+		if _brick_frame(i) != 0:
+			continue
+		var arch := recipe.part_of(i)
+		var at := recipe.cell_of(i)
+		var size := BrickPalette.size_of(arch)
+		var cs := []
+		var under := false
+		for dx in size.x:
+			for dy in size.y:
+				for dz in size.z:
+					var c := at + Vector3i(dx, dy, dz)
+					cs.append(c)
+					under = under or brick_at.has(c)
+		var key := _brick_key(arch, at)
+		if under and clay_bricks.has(key):
+			var cm := [recipe.colour_of(i), recipe.material_of(i)]
+			var t: Dictionary = tally.get_or_add((part_of[i] if i < part_of.size() else 0) + 1, {})
+			t[cm] = int(t.get(cm, 0)) + 1
+			clay_bricks.erase(key)
+			take_brick(i)
+		else:
+			for c in cs:
+				used[c] = true
+	var keys_before := {}
+	for i in recipe.size():
+		keys_before[_brick_key(recipe.part_of(i), recipe.cell_of(i))] = true
+	# Bricks packed new take their part's colour: the one most of the clay bricks taken up had,
+	# else its piece's, else the hotbar's.
 	var part_col := {}   # label -> [colour, material]
 	for label in range(1, part_names.size() + 1):
 		var st: Dictionary = shells.get(part_names[label - 1], {})
 		part_col[label] = [int(st.colour), int(st.get("mat", 0))] if st.has("colour") else [-1, -1]
+		if clay_colours.has(label):
+			part_col[label] = clay_colours[label]
 		var best := 0
 		var t: Dictionary = tally.get(label, {})
 		for cm in t:
 			if t[cm] > best:
 				best = t[cm]
 				part_col[label] = cm
-	_batch = true
-	if sym:
-		# Old bricks are one-sided: not laid again.
-		_sdf_stash = []
-	for s in _sdf_stash:
-		var arch := String(s[0])
-		var at := Vector3i(int(s[1]), int(s[2]), int(s[3]))
-		var label := int(s[6]) + 1
-		var size := BrickPalette.size_of(arch)
-		var fits := true
-		var cs := []
-		for dx in size.x:
-			for dy in size.y:
-				for dz in size.z:
-					var c := at + Vector3i(dx, dy, dz)
-					fits = fits and int(label_of.get(c, -1)) == label and brick_at.has(c) and not used.has(c)
-					cs.append(c)
-		if not fits:
-			continue
-		part_sel = label - 1
-		if place_named(arch, at, int(s[4]), int(s[5])):
-			for c in cs:
-				used[c] = true
-			_note_laid(laid, arch, at, cs, zone)
-			colour_of.get_or_add(part_names[part_sel], [int(s[4]), int(s[5])])
 	_sdf_stash = []
 	var by_part := {}
 	for c in brick_at:
-		if not used.has(c):
+		if not used.has(c) and in_area(c):
 			(by_part.get_or_add(maxi(1, int(label_of[c])), {}) as Dictionary)[c] = true
 	for label in by_part:
 		part_sel = clampi(int(label) - 1, 0, part_names.size() - 1)
@@ -4987,6 +5067,10 @@ func sculpt_convert() -> void:
 	_batch = false
 	part_sel = keep_sel
 	_after_edit()
+	for i in recipe.size():
+		var key := _brick_key(recipe.part_of(i), recipe.cell_of(i))
+		if not keys_before.has(key):
+			clay_bricks[key] = true
 	var smooth_parts_now := {}
 	for c in label_of:
 		if not zone.has(c):
@@ -4997,18 +5081,32 @@ func sculpt_convert() -> void:
 		var col: Array = colour_of.get(part, [int(st.get("colour", 0)), int(st.get("mat", 0))])
 		shells[part] = {"sdf": true, "thick": 0.0, "res": 1, "tris": int(st.get("tris", SDF_PIECE_TRIS)),
 				"colour": col[0], "mat": col[1]}
-	sculpt_state = "bricks"
-	# Only the cells that could become bricks: Edit as SDF takes a cell recorded here and
-	# not a brick now as deleted, and one outside the area never was a brick.
+	# Only the cells that could become bricks: what the custom pieces and Bricks to clay read.
 	_sdf_cells = PackedInt32Array()
 	for i in range(0, cells.size(), 5):
 		if in_area(Vector3i(cells[i], cells[i + 1], cells[i + 2])):
 			_sdf_cells.append_array(cells.slice(i, i + 5))
+	# The clay that became bricks is used up: every cell not marked smooth, inside the area.
+	# What is marked smooth stays clay -- the custom pieces are made from it.
+	var gone := PackedInt32Array()
+	for i in range(0, cells.size(), 5):
+		if cells[i + 4] == 0 and in_area(Vector3i(cells[i], cells[i + 1], cells[i + 2])):
+			gone.append_array(cells.slice(i, i + 5))
+	sculpt.form.sync_cells(gone, PackedInt32Array())
+	sculpt.remesh()
+	var rec := sculpt.form.end_edit()
+	sculpt_state = "bricks"
+	# The models became bricks: they are gone with the clay (Z brings them back).
+	for m in models:
+		(m.node as Node).queue_free()
+	models.clear()
+	_refresh_model_list()
 	_sculpt_finish(was, rec)
-	_models_out(mrec)
+	if not models_before.is_empty():
+		_model_record(models_before)
 	_end_gather()
 	if out.x > 0:
-		_show_sculpt_note(true, ("Converted, but %d of %d cells were outside the build area (below its "
+		_show_sculpt_note(true, ("Made bricks, but %d of %d cells were outside the build area (below its "
 				+ "floor, or past its edge) and have no bricks.") % [out.x, out.y])
 		print("[sculpt] converted; %d of %d cells outside the build area left out" % [out.x, out.y])
 
@@ -5279,15 +5377,8 @@ func _sketch_add() -> void:
 	var q = _sketch_mouse()
 	if q == null:
 		return
-	match sketch_draw:
-		"rect", "ellipse":
-			_sketch.assign(drag_shape(sketch_draw, _sketch_anchor, q))
-		"brush":
-			if _sketch.is_empty() or q.distance_to(_sketch.back()) > maxf(0.25, brush_size * 0.25):
-				_sketch.append(q)
-		_:
-			if _sketch.is_empty() or q.distance_to(_sketch.back()) > 0.3:
-				_sketch.append(q)
+	_pen.draw = sketch_draw
+	_pen.move(q, brush_size)
 
 
 ## What the stroke under way comes to, into the sketch: an outline, or a brush's path.
@@ -5306,48 +5397,27 @@ func _polygon_input(e: InputEvent) -> bool:
 		var q = _sketch_mouse()
 		if q == null:
 			return true
-		if _sketch.is_empty():
-			_sketch_out = e.button_index == MOUSE_BUTTON_RIGHT
-		elif e.double_click or (_sketch.size() >= 3 and q.distance_to(_sketch[0]) < 0.7):
+		if _pen.polygon_click(q, e.button_index == MOUSE_BUTTON_RIGHT, e.double_click):
 			_sketch_commit()
-			return true
-		_sketch.append(q)
 		return true
-	if e is InputEventKey and e.pressed and not _sketch.is_empty():
-		match e.keycode:
-			KEY_ENTER, KEY_KP_ENTER:
+	if e is InputEventKey:
+		match _pen.polygon_key(e):
+			"commit":
 				_sketch_commit()
 				return true
-			KEY_BACKSPACE:
-				_sketch.pop_back()
+			"back":
 				return true
 	return false
 
 
-## A rectangle or an ellipse dragged from corner `a` to corner `b`, as an outline.
+## A rectangle or an ellipse dragged from corner `a` to corner `b`, as an outline (the pen's).
 static func drag_shape(kind: String, a: Vector2, b: Vector2) -> Array[Vector2]:
-	var out: Array[Vector2] = []
-	var lo := Vector2(minf(a.x, b.x), minf(a.y, b.y))
-	var hi := Vector2(maxf(a.x, b.x), maxf(a.y, b.y))
-	if kind == "rect":
-		out.assign([lo, Vector2(hi.x, lo.y), hi, Vector2(lo.x, hi.y)])
-		return out
-	var c := (lo + hi) * 0.5
-	var r := (hi - lo) * 0.5
-	for i in 32:
-		var t := TAU * i / 32.0
-		out.append(c + Vector2(cos(t) * r.x, sin(t) * r.y))
-	return out
+	return SketchPen.drag_shape(kind, a, b)
 
 
-## A brush stroke as a sketch entry: its path, and its reach across and up the plane (a
-## stud across is two and a half plates up on the side and front planes).
+## A brush stroke as a sketch entry (the pen's).
 static func brush_entry(path: Array, size: int, square: bool, plane: String) -> Dictionary:
-	var pts := []
-	for q in path:
-		pts.append([q.x, q.y])
-	var rx := maxf(0.5, float(size))
-	return {"brush": pts, "rx": rx, "ry": rx * (1.0 if plane == "top" else 2.5), "square": square}
+	return SketchPen.brush_entry(path, size, square, plane)
 
 
 ## A point of the working plane in the sketch's own two numbers: across the plane and up
@@ -6026,95 +6096,15 @@ func solid_cells(solid: Dictionary) -> Dictionary:
 	return out
 
 
+## The cells an outline or a brush stroke covers (the pen's: shared with the building
+## workshop's sketch and shapes).
 static func region_cells(poly: Variant) -> Dictionary:
-	if poly is Dictionary:
-		return brush_cells(poly)
-	var pts := PackedVector2Array()
-	for q in poly:
-		pts.append(Vector2(float(q[0]), float(q[1])))
-	if pts.size() < 3:
-		return {}
-	var lo := Vector2i(1 << 30, 1 << 30)
-	var hi := Vector2i(-(1 << 30), -(1 << 30))
-	for q in pts:
-		lo = Vector2i(mini(lo.x, int(floor(q.x))), mini(lo.y, int(floor(q.y))))
-		hi = Vector2i(maxi(hi.x, int(ceil(q.x))), maxi(hi.y, int(ceil(q.y))))
-	# A bitmap one cell wider all round, so the outside is connected: 1 inside, 2 outside.
-	var w := hi.x - lo.x + 2
-	var h := hi.y - lo.y + 2
-	var map := PackedByteArray()
-	map.resize(w * h)
-	# Inside by winding, not even-odd (a stretch circled twice is in, not cancelled out),
-	# a row at a time: where each edge crosses the row's centre line, and which way.
-	var n := pts.size()
-	for v in range(lo.y, hi.y):
-		var y := v + 0.5
-		var xs := []
-		for i in n:
-			var a := pts[i]
-			var b := pts[(i + 1) % n]
-			if (a.y <= y) == (b.y <= y):
-				continue
-			xs.append([a.x + (y - a.y) / (b.y - a.y) * (b.x - a.x), 1 if b.y > a.y else -1])
-		if xs.is_empty():
-			continue
-		xs.sort_custom(func(p: Array, q: Array) -> bool: return p[0] < q[0])
-		var wind := 0
-		for j in xs.size() - 1:
-			wind += int(xs[j][1])
-			if wind == 0:
-				continue
-			# Cells whose centres lie between this crossing and the next.
-			var u0 := maxi(lo.x, int(ceil(float(xs[j][0]) - 0.5)))
-			var u1 := mini(hi.x - 1, int(ceil(float(xs[j + 1][0]) - 0.5)) - 1)
-			for u in range(u0, u1 + 1):
-				map[(v - lo.y + 1) * w + (u - lo.x + 1)] = 1
-	# Outermost: whatever the outside cannot reach is in, holes the crossing made included.
-	var todo := PackedInt32Array([0])
-	map[0] = 2
-	while not todo.is_empty():
-		var at := todo[todo.size() - 1]
-		todo.resize(todo.size() - 1)
-		var ax := at % w
-		@warning_ignore("integer_division")
-		var ay := at / w
-		for nb in [at - 1 if ax > 0 else -1, at + 1 if ax < w - 1 else -1, at - w if ay > 0 else -1,
-				at + w if ay < h - 1 else -1]:
-			if nb >= 0 and map[nb] == 0:
-				map[nb] = 2
-				todo.append(nb)
-	var out := {}
-	for v in range(lo.y, hi.y):
-		for u in range(lo.x, hi.x):
-			if map[(v - lo.y + 1) * w + (u - lo.x + 1)] != 2:
-				out[Vector2i(u, v)] = true
-	return out
+	return SketchPen.region_cells(poly)
 
 
-## The cells a brush stroke covers: every cell whose centre is within its reach of the
-## path (an ellipse, or a box when square), the path walked in steps shorter than that.
+## The cells a brush stroke covers (the pen's).
 static func brush_cells(entry: Dictionary) -> Dictionary:
-	var out := {}
-	var rx := float(entry.get("rx", 0.5))
-	var ry := float(entry.get("ry", 0.5))
-	var square := bool(entry.get("square", false))
-	var path: Array = entry.get("brush", [])
-	var pts: Array[Vector2] = []
-	for i in path.size():
-		var b := Vector2(float(path[i][0]), float(path[i][1]))
-		if i > 0:
-			var a: Vector2 = pts.back()
-			var steps := int(ceil(maxf(absf(b.x - a.x) / (rx * 0.5), absf(b.y - a.y) / (ry * 0.5))))
-			for k in range(1, steps):
-				pts.append(a.lerp(b, float(k) / steps))
-		pts.append(b)
-	for p in pts:
-		for u in range(int(floor(p.x - rx)), int(ceil(p.x + rx)) + 1):
-			for v in range(int(floor(p.y - ry)), int(ceil(p.y + ry)) + 1):
-				var d := Vector2((u + 0.5 - p.x) / rx, (v + 0.5 - p.y) / ry)
-				if (maxf(absf(d.x), absf(d.y)) <= 1.0) if square else (d.length_squared() <= 1.0):
-					out[Vector2i(u, v)] = true
-	return out
+	return SketchPen.brush_cells(entry)
 
 
 ## How many times an outline goes round a point, counting direction.
@@ -6146,32 +6136,13 @@ func _draw_sketch(im: ImmediateMesh) -> void:
 	_draw_sketch_static()
 	im.surface_begin(Mesh.PRIMITIVE_LINES)
 	var any := false
-	var col := Color(1.0, 0.35, 0.3) if _sketch_out else Color(1, 1, 1)
-	var mouse = _sketch_mouse()
-	var line: Array[Vector2] = _sketch.duplicate()
-	var closed := sketch_draw in ["outline", "rect", "ellipse"]
-	if sketch_draw == "polygon" and not line.is_empty() and mouse != null:
-		line.append(mouse)
-	if sketch_draw == "brush" and mouse != null:
-		# The brush's reach round the cursor.
-		var e := brush_entry([mouse], brush_size, brush_shape == "square", work_plane)
-		var ring: Array[Vector2] = drag_shape("rect" if e.square else "ellipse",
-				mouse - Vector2(e.rx, e.ry), mouse + Vector2(e.rx, e.ry))
-		for i in ring.size():
-			im.surface_set_color(Color(0.6, 0.9, 1.0))
-			im.surface_add_vertex(_sketch_world(ring[i], work_plane, _plane_value(work_plane)))
-			im.surface_set_color(Color(0.6, 0.9, 1.0))
-			im.surface_add_vertex(_sketch_world(ring[(i + 1) % ring.size()], work_plane, _plane_value(work_plane)))
-			any = true
-	if line.size() >= 2:
-		for i in (line.size() if closed else line.size() - 1):
-			var a := line[i]
-			var b := line[(i + 1) % line.size()]
-			im.surface_set_color(col)
-			im.surface_add_vertex(_sketch_world(a, work_plane, _plane_value(work_plane)))
-			im.surface_set_color(col)
-			im.surface_add_vertex(_sketch_world(b, work_plane, _plane_value(work_plane)))
-			any = true
+	_pen.draw = sketch_draw
+	for seg in _pen.preview(_sketch_mouse(), work_plane, brush_size, brush_shape == "square"):
+		im.surface_set_color(seg[2])
+		im.surface_add_vertex(_sketch_world(seg[0], work_plane, _plane_value(work_plane)))
+		im.surface_set_color(seg[2])
+		im.surface_add_vertex(_sketch_world(seg[1], work_plane, _plane_value(work_plane)))
+		any = true
 	if not any:
 		im.surface_add_vertex(Vector3.ZERO)
 		im.surface_add_vertex(Vector3.ZERO)
@@ -6433,13 +6404,25 @@ var sculpt_state := "sdf"
 var _sdf_cells := PackedInt32Array()
 ## Bricks Edit as SDF took up, for Convert to lay back: [arch, x, y, z, colour, mat, part].
 var _sdf_stash := []
+## The bricks Make bricks laid, "arch|x|y|z": made again where new clay is; every other brick
+## is the user's and stays (Docs/AssetWorkshop.md, "Clay and bricks apart").
+var clay_bricks := {}
+## Make bricks mirrors one half onto the other only when this is ticked; off, as drawn.
+var convert_mirror := false
+## The clay's size for the readout, worked out when the clay changes.
+var _clay_size_text := ""
+## Each part's colour as its bricks had it most when they were turned into clay (label ->
+## [colour, material]): Make bricks gives it back to the new bricks.
+var clay_colours := {}
 ## Cells a converted part's custom piece fills with no brick inside (its edge): still the
 ## asset's for Edit as SDF. x, y, z, label, 0 each, as `SdfForm.cells`.
 var _sdf_shell := PackedInt32Array()
 var brush_size := 1          # studs: a sketch brush's reach; a paint brush's is the workshop's own
 var brush_shape := "round"   # or "square", for both
 var paint_what := "both"
-var _sketch_anchor := Vector2.ZERO
+var _sketch_anchor: Vector2:
+	get: return _pen.anchor
+	set(v): _pen.anchor = v
 var _rail: PanelContainer
 var _rail_buttons := {}
 var _brush_box: VBoxContainer
@@ -10913,6 +10896,8 @@ func mirror_through_selection() -> void:
 ## (and a click on it never draws). The pick is kept across modes.
 func set_sculpt_mode(m: String) -> void:
 	sculpt_mode = m
+	if m != "models":
+		Input.set_default_cursor_shape(Input.CURSOR_ARROW)
 	if _sculpt_modes != null:
 		for i in SCULPT_MODES.size():
 			if SCULPT_MODES[i][0] == m:
@@ -11025,6 +11010,79 @@ func _put_part_back(p: Dictionary) -> void:
 		_sculpt_record(sculpt.form.end_edit())
 	sculpt.remesh()
 	node.queue_free()
+
+
+## Is there something Select can pick under a ray (workshop space): a model, the clay, the
+## lifted part? For the pointing hand; guides are left out (their triangles are slow to test).
+func _pickable_at(from: Vector3, dir: Vector3) -> bool:
+	var gf := global_transform * from
+	var gd := global_transform.basis * dir
+	for m in models:
+		if (m.node as Node3D).visible and (m.node as AssetSculpt).hit(gf, gd) != null:
+			return true
+	if _held_kind() == "part" and (_placed.node as AssetSculpt).hit(gf, gd) != null:
+		return true
+	return sculpt.visible and sculpt.form.block_count() > 0 and sculpt.hit(gf, gd) != null
+
+
+## The stage shows the clay (Block out) or not (the others); it converts nothing
+## (Docs/AssetWorkshop.md, "Clay and bricks apart"). Not an edit: no undo.
+func set_clay_view(on: bool) -> void:
+	var st := "sdf" if on else "bricks"
+	if st == sculpt_state:
+		return
+	if not on:
+		_set_down()
+	sculpt_state = st
+	sculpt.visible = on
+	if on and exploded:
+		set_exploded(false)
+	_show_sculpt_note()
+	_store_asset_meta()
+
+
+static func _brick_key(arch: String, c: Vector3i) -> String:
+	return "%s|%d|%d|%d" % [arch, c.x, c.y, c.z]
+
+
+## A save from before clay and bricks were apart: in its bricks state the whole clay was still
+## under the bricks. The cells its last Make bricks made bricks are taken out of the clay and its
+## bricks count as made from clay; bricks put aside in its clay state were in the clay already.
+func _clay_migrate() -> void:
+	_sdf_stash = []
+	if sculpt_state != "bricks" or _sdf_cells.is_empty():
+		return
+	var gone := PackedInt32Array()
+	for i in range(0, _sdf_cells.size(), 5):
+		if _sdf_cells[i + 4] == 0:
+			gone.append_array(_sdf_cells.slice(i, i + 5))
+	sculpt.form.sync_cells(gone, PackedInt32Array())
+	sculpt.remesh()
+	_sdf_meta = sculpt.save_meta()
+	for i in recipe.size():
+		clay_bricks[_brick_key(recipe.part_of(i), recipe.cell_of(i))] = true
+
+
+## The clay's size for the readout: the block-out and the models together, or "" with none.
+func clay_size_text() -> String:
+	var box := AABB()
+	var any := false
+	if sculpt != null and sculpt.form.block_count() > 0:
+		var bb := sculpt.form.bounds()
+		if bb.size != Vector3.ZERO:
+			box = global_transform.affine_inverse() * sculpt.global_transform * bb
+			any = true
+	for m in models:
+		var mb := (m.xf as Transform3D) * (m.box as AABB)
+		box = mb if not any else box.merge(mb)
+		any = true
+	if not any:
+		return ""
+	var d := Vector3(box.size.x / BrickPalette.STUD_M, box.size.y / BrickPalette.PLATE_M, box.size.z / BrickPalette.STUD_M)
+	return "clay: %s x %s studs, %s plates high -> %.0f x %.0f x %.1f mm print, %.0f x %.0f x %.0f mm real" % [
+			_num(d.x), _num(d.z), _num(d.y), d.x * PRINT_MM_PER_STUD, d.z * PRINT_MM_PER_STUD, d.y * PRINT_MM_PER_PLATE,
+			d.x * PRINT_MM_PER_STUD * REAL_PER_PRINT, d.z * PRINT_MM_PER_STUD * REAL_PER_PRINT,
+			d.y * PRINT_MM_PER_PLATE * REAL_PER_PRINT]
 
 
 ## Pick guide `i` (the guide panel's list, or LMB on it in pick and move): the gizmo on it.
@@ -11696,6 +11754,7 @@ func _size_marks_process() -> void:
 	if gsig != _grid_sig:
 		_grid_sig = gsig
 		_regrid()
+		_clay_size_text = clay_size_text()
 
 
 ## The ruler along x on the plate from the butt -- a tick a stud, numbers every five, the

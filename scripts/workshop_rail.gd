@@ -31,6 +31,7 @@ const ICONS := {
 	"!save": '<path d="M4 4h13l3 3v13H4z"/><path d="M8 4v5h7V4M8 20v-6h8v6"/>',
 	"wall": '<rect x="3" y="5" width="18" height="14"/><path d="M3 9.7h18M3 14.3h18M9 5v4.7M15 5v4.7M6 9.7v4.6M12 9.7v4.6M18 9.7v4.6M9 14.3V19M15 14.3V19"/>',
 	"cut": '<path d="M6 20V9a6 6 0 0 1 12 0v11"/><path d="M3 20h18"/>',
+	"repeat": '<rect x="4" y="13" width="16" height="7"/><rect x="4" y="4" width="16" height="7" stroke-dasharray="3 2"/>',
 	"rooms": '<rect x="3" y="4" width="18" height="16"/><path d="M12 4v7M12 15v5M3 12h5"/>',
 }
 static var _icon_cache := {}

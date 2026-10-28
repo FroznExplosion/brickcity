@@ -161,9 +161,12 @@ func _measure() -> void:
 	var t: String = _ws.measure_text(Vector3.ZERO, Vector3(STUD * 10.0, 0, 0))
 	_ok("10 studs measure 40 mm printed, 160 mm real",
 			t.contains("10 studs along") and t.contains("40.0 mm print") and t.contains("160 mm real"), t)
-	var p = _ws.measure_point(Vector3(2.0, 5.0, 2.0), Vector3(0, -1, 0))
-	# Within a millimetre of the workshop (0.01 mm printed): the face, not inside the brick.
-	_ok("measuring onto the bare baseplate lands on its top", p != null and absf((p as Vector3).y - 0.14) < 1e-3, str(p))
+	# Past the model a measurement lands on the working plane (the old floor plane was far
+	# below a floating build: Docs/AssetWorkshop.md, "Clay and bricks apart").
+	_ws.work_plane = "side"
+	_ws.work_depth = 40.5
+	var p = _ws.measure_point(Vector3(2.0, 5.0, 40.0), Vector3(0, 0, -1))
+	_ok("measuring past the model lands on the working plane", p != null and absf((p as Vector3).z - 40.5 * STUD) < 1e-3, str(p))
 
 
 func _part_index(name: String) -> int:
@@ -1185,6 +1188,8 @@ func _one_place() -> void:
 	var cells: PackedInt32Array = _ws.sculpt.form.cells()
 	_ok("a mirror image outside the area is not drawn", _ws._cells_outside_area(cells).x == 0
 			and cells.size() > 0, str(_ws._cells_outside_area(cells)))
+	# Symmetric bricks only when ticked (Docs/AssetWorkshop.md, "Clay and bricks apart").
+	_ws.convert_mirror = true
 	_ws.sculpt_convert()
 	_ok("a plane far from the block-out: Convert refuses, block-out kept", _ws.sculpt_state == "sdf"
 			and String(_ws._sculpt_note.text).contains("plane"), _ws._sculpt_note.text)
@@ -1195,6 +1200,7 @@ func _one_place() -> void:
 	_ws.sculpt_convert()
 	_ok("that block-out converts to bricks", _ws.sculpt_state == "bricks" and _ws.recipe.size() > bricks)
 	_ws.set_mirror(false)
+	_ws.convert_mirror = false
 	# Drawn wholly past the plane, mirror on: that side is the truth, both halves laid.
 	_ws._reset_space()
 	_ws.rail_pick("sculpt")
@@ -1205,7 +1211,9 @@ func _one_place() -> void:
 	_ws._sculpt_dab(far, far + Vector3(30, 0, 0))
 	_ws._sculpt_record(_ws.sculpt.form.end_edit())
 	bricks = _ws.recipe.size()
+	_ws.convert_mirror = true
 	_ws.sculpt_convert()
+	_ws.convert_mirror = false
 	var sides := Vector2i.ZERO
 	for i in range(bricks, _ws.recipe.size()):
 		if _ws.recipe.cell_of(i).z < 500:
@@ -1226,7 +1234,7 @@ func _one_place() -> void:
 	var out0: Vector2i = _ws._cells_outside_area(_ws.sculpt.form.cells())
 	_ws.sculpt_convert()
 	_ok("part outside: converted, and said", _ws.sculpt_state == "bricks" and out0.x > 0
-			and String(_ws._sculpt_note.text).begins_with("Converted, but"), str(out0))
+			and String(_ws._sculpt_note.text).begins_with("Made bricks, but"), str(out0))
 	_ws.sculpt_to_sdf()
 	_ok("Edit as SDF keeps the cells that never were bricks",
 			_ws._cells_outside_area(_ws.sculpt.form.cells()).x == out0.x,
@@ -1745,6 +1753,7 @@ func _sculpt() -> void:
 	_placed_model()
 	_pick_and_move()
 	_grid_stays()
+	_clay_apart()
 	_nudges()
 	_symmetric_convert()
 	_size_and_view()
@@ -1800,7 +1809,9 @@ func _convert() -> void:
 		zone_bricks += 1 - cells[i + 4]   # not marked smooth
 	_ok("the brick zone stays bricks on the sheet, the rest under the shell", shown > 0 and zone_bricks > 0,
 			"%d barrel bricks on the sheet, %d zone cells" % [shown, zone_bricks])
-	# Edit the bricks, then back to the SDF: exactly those edits show.
+	# Edit the bricks, then Bricks to clay: the clay is the bricks, edits and all (the clay that
+	# became bricks was used up; what is marked smooth stayed: Docs/AssetWorkshop.md, "Clay and
+	# bricks apart").
 	var i0: int = _ws.recipe.size() - 1
 	var gone_cell: Vector3i = _ws.recipe.cell_of(i0)
 	_ws.take_brick(i0)
@@ -1808,18 +1819,21 @@ func _convert() -> void:
 	var top := Vector3i(gone_cell.x, gone_cell.y + 20, gone_cell.z)
 	_ok("a brick laid by hand", _ws.place_named(BrickPalette.variant_name("brick_1x1", 0, false), top))
 	var want := _asset_cells()
+	var used_colours := {}
+	for i in _ws.recipe.size():
+		used_colours[_ws.recipe.colour_of(i)] = true
 	_ws.sculpt_to_sdf()
 	var got: Dictionary = {}
 	var sc: PackedInt32Array = _ws.sculpt.form.cells()
 	for i in range(0, sc.size(), 5):
 		got[Vector3i(sc[i], sc[i + 1], sc[i + 2])] = sc[i + 3]
-	_ok("Edit as SDF: the field is the bricks, edits and all", got == want and _ws.sculpt.visible,
-			"%d vs %d" % [got.size(), want.size()])
-	_ok("and the bricks are put aside", _ws._brick_cell_list().is_empty() and not _ws._sdf_stash.is_empty())
+	var lost := 0
+	for c in want:
+		lost += int(not got.has(c) or got[c] != want[c])
+	_ok("Bricks to clay: every brick and piece cell is clay, edits and all", lost == 0 and _ws.sculpt.visible,
+			"%d of %d cells not clay (%d clay)" % [lost, want.size(), got.size()])
+	_ok("and the bricks are taken up", _ws._brick_cell_list().is_empty() and _ws.recipe.size() == 0)
 	# New bricks take their part's colour, not the hotbar's.
-	var used_colours := {}
-	for s in _ws._sdf_stash:
-		used_colours[int(s[4])] = true
 	var keep_colour: int = _ws._colour
 	var odd := 0
 	while used_colours.has(odd):
@@ -1834,7 +1848,11 @@ func _convert() -> void:
 			"%d bricks in the hotbar's colour" % hotbar_coloured)
 	var again := _asset_cells()
 	var bl: PackedInt32Array = _ws._brick_cell_list()
-	_ok("converted again: the same cells", again == want, "%d vs %d" % [again.size(), want.size()])
+	var missed := 0
+	for c in want:
+		missed += int(not again.has(c))
+	_ok("made bricks again: every cell back as a brick or a piece", missed == 0,
+			"%d of %d missed (%d now)" % [missed, want.size(), again.size()])
 	_ws._undo()
 	_ok("one Z: back to sculpting", _ws.sculpt_state == "sdf" and _ws._brick_cell_list().is_empty())
 	_ws.redo()
@@ -2047,8 +2065,12 @@ func _placed_model() -> void:
 		tags[_ws.part_names[_ws.part_of[i]]] = true
 	_ok("Convert joins the models: the piece's cells are the barrel's", _ws.recipe.size() > 20 and tags.has("barrel")
 			and tags.has("body"), str(tags.keys()))
-	_ws.sculpt_to_sdf()
-	_ok("Convert and Edit as SDF leave them objects", _ws.models.size() == 2 and _ws.sculpt.form.block_count() == 0)
+	# Make bricks uses the models up with the clay; Z brings them back (Docs/AssetWorkshop.md,
+	# "Clay and bricks apart").
+	_ok("Make bricks uses the models up", _ws.models.is_empty())
+	_ws._undo()
+	_ok("one Z: the models back as objects, and no bricks", _ws.models.size() == 2 and _ws.recipe.size() == 0
+			and _ws.sculpt.form.block_count() == 0, "%d models, %d bricks" % [_ws.models.size(), _ws.recipe.size()])
 	_ws.select_model(_ws.models[0])
 	_ws.drop_model()
 	_ok("remove takes one away", _ws.models.size() == 1)
@@ -2245,6 +2267,104 @@ func _grid_stays() -> void:
 	_ws._reset_space()
 
 
+## Clay and bricks apart (Docs/AssetWorkshop.md, "Clay and bricks apart"): Make bricks one way,
+## the clay used up but what is marked smooth, no mirroring unless ticked, a rotated model made
+## as it stands, clay bricks made again and hand-laid ones kept, the stage tabs changing nothing,
+## Measure on the clay and a model, the clay's size.
+func _clay_apart() -> void:
+	_ws._reset_space()
+	_ws.rail_pick("sculpt")
+	_ws.sculpt_clear()
+	_ws.set_clay_view(true)
+	var mid: int = _ws.plate_studs / 2
+	var f: SdfForm = _ws.sculpt.form
+	# A box wholly on one side of the plane, the mirror on, symmetric not ticked.
+	_ws.set_mirror(true)
+	_ws.mirror_z = mid + 0.5
+	f.box(SdfForm.ADD, Vector3(mid * 5 + 2, 60, (mid + 6) * 5 + 2), Vector3(20, 8, 10), 0.0, 1)
+	_ws.sculpt.remesh()
+	_ws.convert_mirror = false
+	_ws.sculpt_convert()
+	var other_side := 0
+	for i in _ws.recipe.size():
+		other_side += int(_ws.recipe.cell_of(i).z < mid)
+	_ok("the mirror on, symmetric not ticked: bricks only where the clay is", _ws.recipe.size() > 0 and other_side == 0,
+			"%d bricks, %d across the plane" % [_ws.recipe.size(), other_side])
+	var unmarked := 0
+	var cs := f.cells()
+	for i in range(0, cs.size(), 5):
+		unmarked += int(cs[i + 4] == 0)
+	_ok("the clay that became bricks is used up", unmarked == 0, "%d clay cells left unmarked" % unmarked)
+	_ws.set_mirror(false)
+	# Clay bricks made again under new clay; a hand-laid brick kept and skipped.
+	var arch := BrickPalette.variant_name("brick_1x1", 0, false)
+	var hand: Vector3i = _ws.recipe.cell_of(0)
+	_ws.take_brick(0)
+	_ok("a brick laid by hand", _ws.place_named(arch, hand))
+	var made: int = _ws.clay_bricks.size()
+	_ws.set_clay_view(true)
+	f.box(SdfForm.ADD, Vector3(mid * 5 + 2, 60, (mid + 6) * 5 + 2), Vector3(20, 8, 10), 0.0, 1)
+	_ws.sculpt_convert()
+	var cells := {}
+	var overlap := 0
+	for i in _ws.recipe.size():
+		var size := BrickPalette.size_of(_ws.recipe.part_of(i))
+		for dx in size.x:
+			for dy in size.y:
+				for dz in size.z:
+					var c: Vector3i = _ws.recipe.cell_of(i) + Vector3i(dx, dy, dz)
+					overlap += int(cells.has(c))
+					cells[c] = true
+	_ok("made again: the clay's bricks made anew, the hand-laid brick kept, nothing doubled",
+			_ws.find_brick(arch, hand) >= 0 and overlap == 0 and not _ws.clay_bricks.has(_ws._brick_key(arch, hand)),
+			"%d overlapping cells, %d clay bricks (were %d)" % [overlap, _ws.clay_bricks.size(), made])
+	# The stage tabs change nothing in the build.
+	var n: int = _ws.recipe.size()
+	var groups: int = _ws._edit_groups.size()
+	_ws.set_clay_view(true)
+	_ws.set_clay_view(false)
+	_ws.set_clay_view(true)
+	_ok("the stages show, they do not convert", _ws.recipe.size() == n and _ws._edit_groups.size() == groups
+			and _ws.sculpt_state == "sdf")
+	# A model rotated a quarter turn, then made bricks: as it stands now.
+	_ws._reset_space()
+	_ws.rail_pick("sculpt")
+	_ws.sculpt_clear()
+	_ws.set_clay_view(true)
+	var bm := BoxMesh.new()
+	bm.size = Vector3(2.0, 0.3, 0.3)
+	var am := ArrayMesh.new()
+	am.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, bm.get_mesh_arrays())
+	_ws.place_mesh(am, "bar.glb")
+	_ws._gizmo_xf0 = _ws._placed.xf
+	_ws._gizmo.position = _ws._placed_centre()
+	_ws._placed.xf = _ws.dragged_xf({"turn": [Vector3.UP, PI * 0.5]}, false)
+	_ws._held_moved(_ws.models_state())
+	var bb: AABB = (_ws._placed.xf as Transform3D) * (_ws._placed.box as AABB)
+	# Measure on the model, and the clay's size readout.
+	var mp = _ws.measure_point(bb.get_center() + Vector3(0, 5, 0), Vector3.DOWN)
+	_ok("Measure lands on a model's top", mp != null and absf((mp as Vector3).y - bb.end.y) < STUD * 0.5, "%s vs %.2f" % [str(mp), bb.end.y])
+	_ws._clay_size_text = _ws.clay_size_text()
+	_ok("the clay's size in the readout", _ws.ruler_text().contains("clay: "), _ws._clay_size_text)
+	_ws.sculpt_convert()
+	var lo := Vector3i(1 << 30, 1 << 30, 1 << 30)
+	var hi := -lo
+	for i in _ws.recipe.size():
+		lo = lo.min(_ws.recipe.cell_of(i))
+		hi = hi.max(_ws.recipe.cell_of(i) + BrickPalette.size_of(_ws.recipe.part_of(i)))
+	var ext := hi - lo
+	_ok("a model turned a quarter, then made bricks: long across, as it stands", ext.z > ext.x * 3,
+			"%d along, %d across" % [ext.x, ext.z])
+	# Measure on the clay.
+	_ws._undo()
+	_ws.select_model(_ws.models[0])
+	_ws.bake_model()
+	var cb: AABB = _ws.global_transform.affine_inverse() * _ws.sculpt.global_transform * f.bounds()
+	var cp = _ws.measure_point(cb.get_center() + Vector3(0, 5, 0), Vector3.DOWN)
+	_ok("Measure lands on the clay's top", cp != null and absf((cp as Vector3).y - cb.end.y) < STUD * 0.5, "%s vs %.2f" % [str(cp), cb.end.y])
+	_ws._reset_space()
+
+
 ## A form's solid cells, cell -> part label.
 func _cells_by_part(f: SdfForm) -> Dictionary:
 	var out := {}
@@ -2352,7 +2472,9 @@ func _symmetric_convert() -> void:
 	_ok("centre on mirror: the plane on a stud line, the model's middle on it", is_equal_approx(_ws.mirror_z, float(pz))
 			and absf(_ws.size_box().get_center().z - pz * STUD) < 0.01, "%.2f, %s" % [_ws.mirror_z, _ws.size_box()])
 	_ws.lay_model()
+	_ws.convert_mirror = true   # symmetric bricks: only when ticked
 	_ws.sculpt_convert()
+	_ws.convert_mirror = false
 	var have := {}
 	for i in _ws.recipe.size():
 		have["%s %s" % [_ws.recipe.part_of(i), _ws.recipe.cell_of(i)]] = true

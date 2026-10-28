@@ -7,13 +7,15 @@ extends RefCounted
 ##
 ## A shape or a cut is a Dictionary, saved as it is in the recipe's meta.shapes:
 ##
-##   kind    rect, hollow, circle, ring, triangle, line, arch, or outline (`points`)
+##   kind    rect, hollow, circle, ring, triangle, line, arch, jamb (a hollow rectangle
+##           with no bottom: a door's frame), or outline (`points`)
 ##   lie     flat (on a plane: u = x, v = z, stacked up y), wall_x (standing, u = x,
 ##           v = y, stacked along z) or wall_z (u = z, v = y, stacked along x)
 ##   a, b    the corners dragged, [u, v] cells; the box between them is the shape's
 ##   at      the first layer along the stacking axis; `depth` layers from there
 ##   rim     a hollow rectangle's, ring's or line's thickness, in studs
-##   points  an outline's corners, [[u, v], ...] in cells (its kind is "outline")
+##   points  a sketched shape's outline, [[u, v], ...] in cells, or its brush stroke
+##           (SketchPen.brush_entry); its kind is "outline"
 ##
 ## A kept shape has more (tall/thick, bond, part, colour, cuts, bricks): `WorkshopTools`.
 
@@ -47,7 +49,7 @@ static func from_3d(lie: String, c: Vector3i) -> Vector3i:
 ## The cells (Vector2i -> true) of a kind in the box between `a` and `b`, ends included.
 ## `rim` in studs; `asp` how tall a v cell is next to a u one (`aspect`).
 static func cells_2d(kind: String, a: Vector2i, b: Vector2i, rim: int = 1, asp: float = 1.0,
-		points: Array = []) -> Dictionary:
+		points: Variant = []) -> Dictionary:
 	if kind == "outline":
 		return outline_cells(points)
 	var lo := Vector2i(mini(a.x, b.x), mini(a.y, b.y))
@@ -70,6 +72,8 @@ static func cells_2d(kind: String, a: Vector2i, b: Vector2i, rim: int = 1, asp: 
 			match kind:
 				"hollow":
 					inside = u - lo.x < r or hi.x - u < r or v - lo.y < rv or hi.y - v < rv
+				"jamb":
+					inside = u - lo.x < r or hi.x - u < r or hi.y - v < rv
 				"circle":
 					inside = _in_ellipse(pu, pv, cx, cy, rx, ry)
 				"ring":
@@ -109,39 +113,10 @@ static func _segment_dist(p: Vector2, a: Vector2, b: Vector2) -> float:
 	return p.distance_to(a + ab * t)
 
 
-## The cells inside an outline ([[u, v], ...] or Vector2s), by winding: a stretch circled
-## twice is in, not cancelled out. A cell is in when its centre is.
-static func outline_cells(points: Array) -> Dictionary:
-	var pts := PackedVector2Array()
-	for q in points:
-		pts.append(q if q is Vector2 else Vector2(float(q[0]), float(q[1])))
-	var out := {}
-	if pts.size() < 3:
-		return out
-	var lo_y := INF
-	var hi_y := -INF
-	for q in pts:
-		lo_y = minf(lo_y, q.y)
-		hi_y = maxf(hi_y, q.y)
-	var n := pts.size()
-	for v in range(int(floor(lo_y)), int(ceil(hi_y))):
-		var y := v + 0.5
-		var xs := []
-		for i in n:
-			var a := pts[i]
-			var b := pts[(i + 1) % n]
-			if (a.y <= y) == (b.y <= y):
-				continue
-			xs.append([a.x + (y - a.y) / (b.y - a.y) * (b.x - a.x), 1 if b.y > a.y else -1])
-		xs.sort_custom(func(p: Array, q: Array) -> bool: return p[0] < q[0])
-		var wind := 0
-		for j in range(xs.size() - 1):
-			wind += int(xs[j][1])
-			if wind == 0:
-				continue
-			for u in range(int(ceil(float(xs[j][0]) - 0.5)), int(ceil(float(xs[j + 1][0]) - 0.5))):
-				out[Vector2i(u, v)] = true
-	return out
+## The cells inside an outline ([[u, v], ...] or Vector2s), or under a brush stroke: the
+## sketch pen's (SketchPen.region_cells), so both workshops' sketches fill the same.
+static func outline_cells(points: Variant) -> Dictionary:
+	return SketchPen.region_cells(points)
 
 
 ## Every grid cell a shape (or a cut) fills, before its cuts: its 2D cells, `depth`
@@ -166,6 +141,34 @@ static func shape_cells(sh: Dictionary) -> Dictionary:
 	for cut in sh.get("cuts", []):
 		for c in solid_cells(cut):
 			out.erase(c)
+	return out
+
+
+## A shape, a cut or a door's or window's spec moved `d` grid cells: its corners, its layer,
+## its outline or brush stroke, its cuts and its opening with it. Its bricks are not (a copy
+## is laid fresh).
+static func shifted(sh: Dictionary, d: Vector3i) -> Dictionary:
+	var out := sh.duplicate(true)
+	var m := from_3d(String(sh.get("lie", "flat")), d)
+	for k in ["a", "b"]:
+		if out.has(k):
+			out[k] = [int(out[k][0]) + m.x, int(out[k][1]) + m.y]
+	if out.has("at"):
+		out.at = int(out.at) + m.z
+	if out.has("points"):
+		var pts = out.points
+		if pts is Dictionary:
+			pts.brush = (pts.brush as Array).map(func(q: Array) -> Array: return [float(q[0]) + m.x, float(q[1]) + m.y])
+		else:
+			out.points = (pts as Array).map(func(q: Variant) -> Array:
+				var v := q as Vector2 if q is Vector2 else Vector2(float(q[0]), float(q[1]))
+				return [v.x + m.x, v.y + m.y])
+	if out.has("cuts"):
+		out.cuts = (out.cuts as Array).map(func(c: Dictionary) -> Dictionary: return shifted(c, d))
+	if out.has("opening"):
+		out.opening = shifted(out.opening, d)
+	if out.has("bricks"):
+		out.bricks = []
 	return out
 
 
