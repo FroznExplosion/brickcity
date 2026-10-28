@@ -1767,6 +1767,23 @@ lifted 8 m and let go lands at 15.5 m/s, a landing by the rule, snaps into crumb
 6-8 crumbs), everything ends on the ground, the crumbs are gone 2.2 s later; sixty groups of nine
 shed at once make 48 pieces and 12 to crumbs. Damage 12, bricks 9, trees 7, squad 10, pawn 12.
 
+**Plan, D2 step 3 (2026-10-27): hits on pieces.** As the city's `IslandManager.damage`:
+- *Which.* `PlanetBuildings.damage(point, shot)` asks the pieces first: a round's point (just
+  inside what it struck) is in a piece when the cell there, in that piece's chunk, holds a live
+  brick (`PlanetPieces.piece_at`); otherwise the building, as now. A blast is both: the building
+  under it, if any, and every piece within its radius of its centre.
+- *What it does.* A round chips (`PIECE_CHIP`, its hp), ordnance blasts (`PIECE_BLAST`, its radius),
+  in the piece's grid frame. The bricks it killed are thrown as crumbs -- a blast's from its ring,
+  not its core (`IslandManager.BLAST_CORE`) -- and so are a building's now (it threw none: its
+  bricks just went). Then the piece's shapes are rebuilt, what is no longer joined comes away
+  (`get_components_near`: pieces, or crumbs when small), its mesh is made again on a worker. A
+  piece lying on the ground stays put; anything settled resting on what was taken away is woken
+  (`support_gone`: the settled pieces whose box meets the gone bricks' box).
+Gate `--gate=hits` (headless): a panel brought down as in the damage gate, at rest; rifle rounds
+wear a brick out of it (fewer live bricks, crumbs thrown, a ray goes further in); a charge on it
+breaks it up (pieces or crumbs, the panel smaller or gone); after a few seconds every piece left is
+settled on something; the building still takes its own hits.
+
 Not yet: hits on a piece, the city's snap preferences, a building toppling whole
 (`solve.stability`), the AI told where a piece lies; furniture, materialising for a fight far from
 the camera.
