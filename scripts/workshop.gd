@@ -35,8 +35,11 @@ const KEY_ROWS := [
 	["", "1-9  wheel", "toolbar slot", "TAB", "all parts (creative)"],
 	["", "MMB", "pick a placed brick", ", .", "colour of the slot"],
 	["", "R", "rotate a quarter turn", "F", "flip (studs down)"],
-	["", "T", "rotate the brick just placed", "", ""],
+	["", "T", "rotate the brick just placed", "hold LMB", "move: lay a run"],
 	["", "V", "snap to side studs", "B", "paint brush (LMB paints, drag)"],
+	["TOOLS", "rail", "on the left (Docs/BuildTools.md)", "K", "shapes of the held brick"],
+	["", "N", "cut a door / window / shape", "L", "select a kept shape"],
+	["", "J", "repeat: storeys, rows", "alt D", "sketch an outline"],
 	["PAINT", "palette", "material + colour (ESC, click)", "- =", "brush size"],
 	["", "MMB", "take a brick's material + colour", "PGUP/DN", "material"],
 	["GROUP", "X", "select the inserted build aimed at", "M", "move it"],
@@ -127,6 +130,9 @@ var _hud: Label
 var _spaces: WorkshopSpaces
 ## Furniture and items placed from the catalogue (F6; Docs/AssetWorkshop.md).
 var _furnish: FurnishTool
+## The rail and the building tools (Docs/BuildTools.md); null where a workshop has its own.
+var _tools: WorkshopTools
+var _hud_layer: CanvasLayer
 var _dot: ColorRect
 const DOT_PX := 8.0
 var _keys: GridContainer
@@ -232,6 +238,14 @@ var _placed_at := []
 ## rather than assuming, because a fixture is not a block and popping the wrong
 ## list would take a brick out from under a staircase.
 var _edits := []
+## Holding LMB lays a run (Docs/BuildTools.md): the cell last laid, or NO_STUD between runs.
+var _run_last := NO_STUD
+var _run_on := false
+## A held click lays a run only after the mouse has moved this far, this long after.
+const RUN_START_PX := 14.0
+const RUN_START_MS := 150
+var _run_moved := 0.0
+var _run_press_ms := 0
 ## The blocks each fixture laid into frame 0, newest last.
 ##
 ## A fixture is built into the grid it is authored in -- the same grid the
@@ -297,6 +311,11 @@ func _ready() -> void:
 	_build_lights()
 	_build_camera()
 	_build_hud()
+	if _wants_tools():
+		_tools = WorkshopTools.new()
+		_tools.name = "Tools"
+		add_child(_tools)
+		_tools.setup(self, _hud_layer)
 	_spaces = WorkshopSpaces.new()
 	add_child(_spaces)
 	_spaces.setup(self)
@@ -557,9 +576,16 @@ func _build_camera() -> void:
 	_camera.look_at(centre + Vector3(0.0, mid * 0.25, 0.0), Vector3.UP)
 
 
+## The building tools' rail: the building workshop's. A workshop built on this one with a
+## rail of its own (the asset workshop) says no.
+func _wants_tools() -> bool:
+	return true
+
+
 func _build_hud() -> void:
 	var layer := CanvasLayer.new()
 	add_child(layer)
+	_hud_layer = layer
 
 	_hotbar = WorkshopHotbar.new()
 	_hotbar.name = "Hotbar"
@@ -944,7 +970,12 @@ func _process(_dt: float) -> void:
 		_ghost.visible = true
 		_aim()
 		_update_ghost()
+		if _run_on and not Input.is_mouse_button_pressed(MOUSE_BUTTON_LEFT):
+			_run_on = false
+		run_step()
 	_update_hud()
+	if _tools != null:
+		_tools.process()
 	# A PanelContainer does not know its height until it has laid out, so the
 	# first placement lands short. Cheap to keep pinned rather than to guess.
 	if _keys_panel != null and _keys_panel.visible:
@@ -1001,6 +1032,8 @@ func _mouse_ray() -> Array:
 ## E down freezes the plane the ghost is on right now; E up lets it go. Over
 ## bare floor that is the floor, which is as much a plane as a brick top.
 func _hold_lock(on: bool) -> void:
+	# While a run is held, the ghost stays on the plane it started on, as with E.
+	on = on or _run_on or (_tools != null and _tools.dragging())
 	if not on:
 		_lock = {}
 	elif _lock.is_empty():
@@ -1584,6 +1617,10 @@ func _unhandled_input(e: InputEvent) -> void:
 		return
 	if _spaces != null and _spaces_input(e):
 		return
+	if _tools != null and _tools.input(e):
+		return
+	if e is InputEventMouseButton and not e.pressed and e.button_index == MOUSE_BUTTON_LEFT:
+		_run_on = false
 	if e is InputEventMouseButton and e.pressed:
 		match e.button_index:
 			MOUSE_BUTTON_LEFT:
@@ -1591,6 +1628,7 @@ func _unhandled_input(e: InputEvent) -> void:
 					_begin_stroke()
 				else:
 					_place()
+					_begin_run()
 			MOUSE_BUTTON_RIGHT:
 				var ray := _mouse_ray()
 				_delete_ray(ray[0], ray[1])
@@ -1713,6 +1751,65 @@ func _place() -> void:
 	_after_edit()
 
 
+## Lay a part (a palette variant name) at a cell of the upright grid, in a colour and a
+## material, as a click would but with no edit of its own: a kept shape's bricks undo with
+## the shape (Docs/BuildTools.md). False if it does not fit there.
+func lay_part(arch: String, cell: Vector3i, colour: int, mat: int, role: int = -1) -> bool:
+	if not palette.has(arch):
+		return false
+	var f: int = asm.frames[0]
+	var id: int = palette[arch]
+	if world.would_connect(f, cell, id) < 0 or not asm.can_place(f, cell, id):
+		return false
+	var placed := asm.place(f, cell, id, colour)
+	if placed < 0:
+		return false
+	if mat != 0:
+		world.set_block_material(f, placed, mat)
+	recipe.add(arch, cell, colour, _recipe_frame_for(0), _role if role < 0 else role, mat)
+	_placed_at.append([0, placed])
+	_after_edit()
+	return true
+
+
+## The upright-grid brick of this part at this cell, by recipe index, or -1. Found
+## through the world's own cell lookup, not by walking the recipe.
+func find_brick(arch: String, cell: Vector3i) -> int:
+	var size := BrickPalette.size_of(arch)
+	for dx in size.x:
+		for dy in size.y:
+			for dz in size.z:
+				var block := world.block_at(asm.frames[0], cell + Vector3i(dx, dy, dz))
+				if block < 0:
+					continue
+				var i := _recipe_id_at(0, block)
+				if i >= 0 and recipe.cell_of(i) == cell and recipe.part_of(i) == arch:
+					return i
+	return -1
+
+
+## A held click: from here, moving the cursor lays a run (`run_step`).
+func _begin_run() -> void:
+	if _stamp != null:
+		return
+	_run_on = true
+	_run_last = _cell
+	_run_moved = 0.0
+	_run_press_ms = Time.get_ticks_msec()
+
+
+## Lay the held brick where the ghost has moved to, if it fits there -- once the click
+## has become a drag: a hand that shook a little while clicking laid two bricks.
+func run_step() -> void:
+	if not _run_on or _cell == _run_last:
+		return
+	if _run_moved < RUN_START_PX or Time.get_ticks_msec() - _run_press_ms < RUN_START_MS:
+		return
+	_run_last = _cell
+	if _valid:
+		_place()
+
+
 ## Which recipe block is this (frame, block) in the world? -1 for anything the
 ## recipe does not own, which in practice means the baseplate.
 func _recipe_id_at(frame_index: int, block: int) -> int:
@@ -1772,6 +1869,8 @@ func _clear_fixtures(keep: int = 0) -> void:
 ## of the middle would renumber every block after it and invalidate any damage
 ## record keyed on those ids.
 func _undo() -> bool:
+	if not _edits.is_empty() and _edits[_edits.size() - 1] == "shape" and _tools != null:
+		return _tools.undo()
 	if not _edits.is_empty() and _edits[_edits.size() - 1] == "furnish":
 		_edits.pop_back()
 		_furnish.undo()
@@ -1829,9 +1928,14 @@ func _delete_ray(from: Vector3, dir: Vector3) -> bool:
 		var at: Array = _placed_at[rid]
 		if not world.remove_block(asm.frames[at[0]], at[1]):
 			return false
+		# A kept shape's brick has no edit of its own (the shape's undo has it).
+		var shaped := _tools != null and _tools.owner_of(recipe.part_of(rid), recipe.cell_of(rid)) >= 0
+		if shaped:
+			_tools.forget_brick(recipe.part_of(rid), recipe.cell_of(rid))
 		_placed_at.remove_at(rid)
 		recipe.remove_at(rid)
-		_drop_edit("brick", rid)
+		if not shaped:
+			_drop_edit("brick", rid)
 		for stroke in _paints:
 			for e in stroke:
 				if int(e[0]) == rid:
@@ -2358,6 +2462,8 @@ func _reset_space() -> void:
 	_lay_baseplate()
 	world.set_foundation_level(chunk, 0)
 	recipe = BuildRecipe.new()
+	if _tools != null:
+		_tools.recipe_changed()
 
 
 ## Load a recipe into a cleared space. The generated buildings go first, as the
@@ -2365,6 +2471,8 @@ func _reset_space() -> void:
 func _load_recipe(r: BuildRecipe) -> void:
 	_reset_space()
 	recipe = r
+	if _tools != null:
+		_tools.recipe_changed()
 	for i in recipe.towers.size():
 		_spawn_tower(i)
 	# The six grids already exist, so match the recipe's frames onto them by
@@ -3251,6 +3359,8 @@ func _handle_under() -> String:
 ## Handles take the click before anything else does -- ahead of the camera,
 ## which would otherwise capture the mouse, and of placement.
 func _input(e: InputEvent) -> void:
+	if _run_on and e is InputEventMouseMotion:
+		_run_moved += (e as InputEventMouseMotion).relative.length()
 	if not (e is InputEventMouseButton and e.button_index == MOUSE_BUTTON_LEFT):
 		return
 	if _menu != null and _menu.is_modal():
@@ -3442,13 +3552,16 @@ func _lift_group(g: int) -> BuildRecipe:
 
 ## One recipe block out of the middle: world, recipe, placement list, undo
 ## stack and paint strokes, all renumbered together (as RMB does).
-func _remove_rid(rid: int) -> void:
+## `drop`: forget the "brick" edit that laid it -- not for a brick a kept shape laid,
+## which has none.
+func _remove_rid(rid: int, drop: bool = true) -> void:
 	var at: Array = _placed_at[rid]
 	if int(at[0]) >= 0:
 		world.remove_block(asm.frames[at[0]], at[1])
 	_placed_at.remove_at(rid)
 	recipe.remove_at(rid)
-	_drop_edit("brick", rid)
+	if drop:
+		_drop_edit("brick", rid)
 	for stroke in _paints:
 		for e in stroke:
 			if int(e[0]) == rid:

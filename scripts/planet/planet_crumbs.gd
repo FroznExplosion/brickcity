@@ -68,8 +68,11 @@ func setup(p: Node3D) -> void:
 
 
 ## Bricks `ids` of chunk `source` (in `world`) thrown as crumbs, moving at
-## `linear` (world) as their group was. Call before the bricks are freed.
-func throw(world: BrickWorld, source: int, ids: PackedInt32Array, linear := Vector3.ZERO) -> int:
+## `linear` (world) as their group was. Call before the bricks are freed. A
+## blast's (`core` > 0, centred on `core_at`): those within `core` of it are
+## gone, not thrown (IslandManager.BLAST_CORE), the rest thrown out from it.
+func throw(world: BrickWorld, source: int, ids: PackedInt32Array, linear := Vector3.ZERO,
+		core_at := Vector3.INF, core := 0.0) -> int:
 	var xf := world.get_chunk_transform(source)
 	var tick_m: float = BrickWorld.get_cell_size().x / float(BrickWorld.ticks_per_stud())
 	var to_planet := planet.global_transform.affine_inverse()
@@ -93,11 +96,17 @@ func throw(world: BrickWorld, source: int, ids: PackedInt32Array, linear := Vect
 			continue
 		var size := Vector3(t[1] as Vector3i) * tick_m
 		var local := (Vector3(t[0] as Vector3i) + Vector3(t[1] as Vector3i) * 0.5) * tick_m
+		var at: Vector3 = xf * local
+		var away := Vector3.ZERO
+		if core > 0.0:
+			if at.distance_to(core_at) < core:
+				continue
+			away = (at - core_at).normalized() * randf_range(1.0, 3.0)
 		var st := _set_for(size.snapped(Vector3.ONE * 0.001))
-		var vel := linear + kick + (Gravity.flat(Vector3(randf_range(-1.0, 1.0), randf_range(-1.0, 1.0),
+		var vel := linear + kick + away + (Gravity.flat(Vector3(randf_range(-1.0, 1.0), randf_range(-1.0, 1.0),
 				randf_range(-1.0, 1.0)), up) + up * randf_range(0.0, 1.0)) * SCATTER
 		var ax := Vector3(randf() - 0.5, randf() - 0.5, randf() - 0.5)
-		st.pos.append(to_planet * (xf * local))
+		st.pos.append(to_planet * at)
 		st.vel.append(to_planet.basis * vel)
 		st.base.append(frame_basis)
 		st.axis.append(ax.normalized() if ax.length() > 0.01 else Vector3.UP)

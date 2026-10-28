@@ -67,28 +67,6 @@ const TOOLS := {
 ## Finish actions that only mean something for a gun.
 const GUN_ONLY := ["!hands", "!play"]
 
-## The rail's icons: 24 x 24 line drawings, drawn by Godot from these (Image.load_svg_from_string).
-const ICONS := {
-	"select": '<path d="M5 3l14 8-6 2-3 6z"/>',
-	"draw": '<path d="M4 20c3 0 5-2 5-5"/><path d="M9 15L19 5l2 2-10 10z"/>',
-	"shape": '<path d="M12 3l8 4.5v9L12 21l-8-4.5v-9z"/><path d="M12 12l8-4.5M12 12v9M12 12L4 7.5"/>',
-	"smooth": '<path d="M3 9c3-3 6 3 9 0s6 3 9 0"/><path d="M3 15c3-3 6 3 9 0s6 3 9 0"/>',
-	"!import": '<path d="M12 3v12"/><path d="M7 10l5 5 5-5"/><path d="M4 19h16"/>',
-	"measure": '<rect x="2" y="8" width="20" height="8" rx="1"/><path d="M6 8v3M10 8v4M14 8v3M18 8v4"/>',
-	"place": '<rect x="3" y="10" width="18" height="9" rx="1"/><rect x="6" y="6" width="4" height="4"/><rect x="14" y="6" width="4" height="4"/>',
-	"paint": '<path d="M12 3c4 5 6 8 6 11a6 6 0 0 1-12 0c0-3 2-6 6-11z"/>',
-	"sketch": '<path d="M4 20l1-5L16 4l4 4L9 19z"/><path d="M14 6l4 4"/>',
-	"move": '<path d="M12 3v18M3 12h18M9 6l3-3 3 3M9 18l3 3 3-3M6 9l-3 3 3 3M18 9l3 3-3 3"/>',
-	"stud": '<ellipse cx="12" cy="9" rx="7" ry="3"/><path d="M5 9v6c0 1.7 3.1 3 7 3s7-1.3 7-3V9"/>',
-	"!point": '<circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="3"/>',
-	"!explode": '<path d="M12 2v5M12 17v5M2 12h5M17 12h5M5 5l3 3M16 16l3 3M19 5l-3 3M8 16l-3 3"/>',
-	"!hands": '<path d="M8 13V5a1.5 1.5 0 0 1 3 0v6M11 11V4a1.5 1.5 0 0 1 3 0v7M14 11V6a1.5 1.5 0 0 1 3 0v8c0 4-3 7-6 7s-5-2-6-4l-2-4a1.5 1.5 0 0 1 2.5-1.5L8 14"/>',
-	"!play": '<path d="M7 4l13 8-13 8z"/>',
-	"!export_game": '<path d="M12 21V9"/><path d="M7 14l5-5 5 5"/><path d="M4 4h16"/>',
-	"!export_print": '<path d="M7 9V3h10v6"/><rect x="3" y="9" width="18" height="8" rx="1"/><path d="M7 14h10v7H7z"/>',
-	"!save": '<path d="M4 4h13l3 3v13H4z"/><path d="M8 4v5h7V4M8 20v-6h8v6"/>',
-}
-static var _icon_cache := {}
 
 var ws    ## the AssetWorkshop
 var stage := "blockout"
@@ -97,8 +75,7 @@ var _layer: CanvasLayer
 var _tabs: HBoxContainer
 var _tab_buttons := {}
 var _stage_button: Button
-var _tools_panel: PanelContainer
-var _tools_box: VBoxContainer
+var _tools_panel: ToolRail
 var _tool_buttons := {}
 var _hint: Label
 var _outliner: PanelContainer
@@ -149,19 +126,9 @@ func setup(workshop, layer: CanvasLayer) -> void:
 	sync_kind()
 
 
-## A rail icon, drawn once.
+## A rail icon (the shared rail's, `ToolRail.ICONS`).
 static func icon(id: String) -> Texture2D:
-	if not ICONS.has(id):
-		return null
-	if not _icon_cache.has(id):
-		var svg := ('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24" '
-				+ 'fill="none" stroke="#e8ecf2" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">'
-				+ String(ICONS[id]) + '</svg>')
-		var img := Image.new()
-		if img.load_svg_from_string(svg, 0.8) != OK:
-			return null
-		_icon_cache[id] = ImageTexture.create_from_image(img)
-	return _icon_cache[id]
+	return ToolRail.icon(id)
 
 
 ## Ask for a name: `then` gets it.
@@ -236,54 +203,18 @@ func _stage_step() -> void:
 # ---------------------------------------------------------------------------
 
 func _build_tools() -> void:
-	_tools_panel = PanelContainer.new()
-	var bg := StyleBoxFlat.new()
-	bg.bg_color = Color(0.11, 0.12, 0.15, 0.96)
-	bg.set_content_margin_all(6)
-	bg.set_corner_radius_all(4)
-	_tools_panel.add_theme_stylebox_override("panel", bg)
-	_tools_panel.custom_minimum_size.x = ws.RAIL_W
+	_tools_panel = ToolRail.new(ws.RAIL_W)
 	_layer.add_child(_tools_panel)
-	_tools_box = VBoxContainer.new()
-	_tools_box.add_theme_constant_override("separation", 3)
-	_tools_panel.add_child(_tools_box)
 
 
 func _fill_tools() -> void:
-	for c in _tools_box.get_children():
-		_tools_box.remove_child(c)
-		c.queue_free()
-	_tool_buttons.clear()
-	var title := Label.new()
-	title.add_theme_font_size_override("font_size", 13)
-	title.add_theme_color_override("font_color", Color(0.75, 0.8, 0.88))
+	var title := ""
 	for s in STAGES:
 		if s[0] == stage:
-			title.text = String(s[1]).substr(2)
-	_tools_box.add_child(title)
-	var group := ButtonGroup.new()
-	for t in TOOLS[stage]:
-		var id := String(t[0])
-		if id in GUN_ONLY and ws.recipe.kind != "gun":
-			continue
-		var b := Button.new()
-		b.text = String(t[1]) + ("   " + String(t[2]) if String(t[2]) != "" else "")
-		b.icon = icon(id)
-		b.alignment = HORIZONTAL_ALIGNMENT_LEFT
-		b.focus_mode = Control.FOCUS_NONE
-		b.tooltip_text = "%s%s\n%s" % [t[1], ("  (%s)" % t[2]) if String(t[2]) != "" else "", t[3]]
-		if not id.begins_with("!"):
-			b.toggle_mode = true
-			b.button_group = group
-		b.pressed.connect(pick_tool.bind(id))
-		_tools_box.add_child(b)
-		_tool_buttons[id] = b
-	_hint = Label.new()
-	_hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	_hint.custom_minimum_size.x = ws.RAIL_W - 16
-	_hint.add_theme_font_size_override("font_size", 11)
-	_hint.add_theme_color_override("font_color", Color(0.72, 0.76, 0.82))
-	_tools_box.add_child(_hint)
+			title = String(s[1]).substr(2)
+	_tools_panel.fill(title, TOOLS[stage], pick_tool, [] if ws.recipe.kind == "gun" else GUN_ONLY)
+	_tool_buttons = _tools_panel.buttons
+	_hint = _tools_panel.hint
 
 
 ## A rail button: the workshop's own tool for it, or the action.
@@ -816,7 +747,7 @@ func sync_kind() -> void:
 					(mb as MenuButton).visible = ws.recipe.kind == "gun"
 				"Mech":
 					(mb as MenuButton).visible = ws.recipe.kind == "mech"
-	if _tools_box != null:
+	if _tools_panel != null:
 		_fill_tools()
 	_sig = ""
 

@@ -16,8 +16,12 @@ extends Node3D
 ## or fewer is crumbs (PlanetCrumbs), not a piece; and a cap -- MAX_MOVING
 ## moving, MAX_PIECES kept, the oldest settled one out of sight shrunk away.
 ##
-## Not yet (D2's next steps): hits on a piece, a long piece snapping across,
-## a building toppling whole, the AI told where a piece lies.
+## Step 3: hits on a piece (`damage`, the city's IslandManager.damage): a round
+## chips, ordnance blasts, its killed bricks thrown as crumbs; what is no longer
+## joined comes away; what rested on the bricks taken is woken.
+##
+## Not yet (D2's next steps): the city's snap preferences, a building toppling
+## whole, the AI told where a piece lies.
 
 ## A falling piece's weight, as the city's debris (IslandManager.DEBRIS_GRAVITY):
 ## a brick model falls faster than a building would, at this scale.
@@ -87,6 +91,10 @@ var broke_off := 0
 var crumbed_small := 0
 var crumbed_cap := 0
 var faded := 0
+## Hits that killed bricks, the bricks they killed, settled pieces woken.
+var hits := 0
+var hit_killed := 0
+var woken := 0
 
 
 func setup(world: BrickWorld, p: Node3D, material: Material) -> void:
@@ -300,6 +308,108 @@ func _break_on_landing(p: Piece, lost: float) -> void:
 	p.bricks = maxi(p.bricks - gone, 1)
 	_reshape(p)
 	_start_mesh(p)
+
+
+## The piece whose live brick is at world `point` (a round's point, just inside
+## what it struck), or null.
+func piece_at(point: Vector3) -> Piece:
+	var cs := BrickWorld.get_cell_size()
+	for p in pieces:
+		if p.fading_since != 0 or not is_instance_valid(p.body):
+			continue
+		var l := bricks.get_chunk_transform(p.chunk).affine_inverse() * point
+		var dims := bricks.get_chunk_dims(p.chunk)
+		var c := Vector3i(floori(l.x / cs.x), floori(l.y / cs.y), floori(l.z / cs.z))
+		if c.x < 0 or c.y < 0 or c.z < 0 or c.x >= dims.x or c.y >= dims.y or c.z >= dims.z:
+			continue
+		var bid := bricks.block_at(p.chunk, c)
+		if bid >= 0 and not bricks.is_block_absent(p.chunk, bid):
+			return p
+	return null
+
+
+## The pieces any part of whose grid is within `radius` of world `point`.
+func pieces_near(point: Vector3, radius: float) -> Array[Piece]:
+	var out: Array[Piece] = []
+	for p in pieces:
+		if p.fading_since != 0 or not is_instance_valid(p.body):
+			continue
+		var l := bricks.get_chunk_transform(p.chunk).affine_inverse() * point
+		var box := AABB(Vector3.ZERO, Vector3(bricks.get_chunk_dims(p.chunk)) * BrickWorld.get_cell_size())
+		var near := l.clamp(box.position, box.end)
+		if near.distance_to(l) <= radius:
+			out.append(p)
+	return out
+
+
+## A hit on piece `p` at world `point` (StructuralDamage's record, `shot`): a
+## round chips (`PIECE_CHIP`, its hp), ordnance blasts (`PIECE_BLAST`). What it
+## killed is thrown as crumbs; the piece's shapes are rebuilt; what is no longer
+## joined comes away; its mesh is made again; what rested on the bricks taken
+## is woken. Returns the bricks killed.
+func damage(p: Piece, point: Vector3, shot: Dictionary) -> int:
+	if p == null or not is_instance_valid(p.body):
+		return 0
+	var blast := bool(shot.get("blast", false))
+	var radius := float(shot.get("radius", 0.0))
+	var xf := bricks.get_chunk_transform(p.chunk)
+	var e := DamageLog.Entry.new()
+	e.kind = DamageLog.Kind.PIECE_BLAST if blast else DamageLog.Kind.PIECE_CHIP
+	e.point = DamageLog.grid_frame(bricks, p.chunk) * xf.affine_inverse() * point
+	e.radius = radius
+	e.limit = 0 if blast else int(shot.get("hp", 0))
+	var killed := DamageLog.apply_entry(bricks, p.chunk, e)
+	bricks.set_chunk_transform(p.chunk, xf)
+	if killed.is_empty():
+		return 0
+	hits += 1
+	hit_killed += killed.size()
+	var linear := Vector3.ZERO if p.settled else p.body.linear_velocity
+	crumbs.throw(bricks, p.chunk, killed, linear, point, radius * IslandManager.BLAST_CORE if blast else 0.0)
+	var gone_box := xf * bricks.get_blocks_box(p.chunk, killed)
+	p.bricks = maxi(p.bricks - killed.size(), 0)
+	if bricks.get_alive_block_count(p.chunk) == 0:
+		p.fading_since = Time.get_ticks_msec() - FADE_MS
+	else:
+		var comps: Array = bricks.get_components_near(p.chunk)
+		if comps.size() > 1:
+			var off := comps.slice(1)
+			for g in off:
+				p.bricks = maxi(p.bricks - (g as PackedInt32Array).size(), 0)
+			broke_off += shed(p.chunk, off, linear)
+			bricks.mark_chunk_whole(p.chunk)
+		_reshape(p)
+		_start_mesh(p)
+	support_gone(gone_box, p)
+	return killed.size()
+
+
+## Bricks in world box `box` are gone: every settled piece but `except` whose
+## grid meets it is woken and falls if nothing else holds it
+## (IslandManager.support_gone). Not the piece the bricks came out of: it is
+## still lying where it lay.
+func support_gone(box: AABB, except: Piece = null) -> void:
+	var grown := box.grow(0.3)
+	for p in pieces:
+		if p == except or not p.settled or p.fading_since != 0 or not is_instance_valid(p.body):
+			continue
+		var pb := bricks.get_chunk_transform(p.chunk) \
+				* AABB(Vector3.ZERO, Vector3(bricks.get_chunk_dims(p.chunk)) * BrickWorld.get_cell_size())
+		if pb.intersects(grown):
+			_wake(p)
+
+
+func _wake(p: Piece) -> void:
+	var b := p.body
+	b.freeze = false
+	b.collision_layer = Layers.FALLING
+	b.collision_mask = Layers.FALLING_MASK
+	p.settled = false
+	p.slow_since = 0
+	p.prev_speed = 0.0
+	p.fall_ticks = 0
+	settled_count -= 1
+	woken += 1
 
 
 ## A long piece landing hard snaps across at its contacts: the city's rule
