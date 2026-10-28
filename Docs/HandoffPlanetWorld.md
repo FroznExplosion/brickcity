@@ -104,6 +104,7 @@ hard landing breaking a piece, hits on pieces, crumbs and a cap, a building topp
 Planets.md 11.11 "D2 step 2 built": hard landings shear and snap a piece, small groups are crumbs
 (`PlanetCrumbs`), a cap (48 moving, 160 kept). `--gate=fall` 7/7. Step 3, hits on pieces:
 built (`PlanetPieces.damage`, `--gate=hits` 8/8; a building's killed bricks are crumbs too).
-Next in D2: the city's snap preferences, a whole
-building toppling (`solve.stability`), the AI told where pieces lie. `BrickWorld.is_solid` reads
+Step 4, a whole building toppling: built (`PlanetBuildings._topple`, `PlanetPieces.adopt`,
+`--gate=topple` 6/6). Next in D2: the city's snap preferences, a storey giving way (TIP / CRUSH),
+the AI told where pieces lie. `BrickWorld.is_solid` reads
 false for live bricks after a solve -- use `block_at` + `is_block_absent`.

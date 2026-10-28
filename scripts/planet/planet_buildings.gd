@@ -59,6 +59,9 @@ class Site:
 	var remesh := PackedInt32Array()
 	# Hit since its structure was last asked what comes loose (_solve_site).
 	var solve_due := false
+	# Toppled whole (D2 step 4): its bricks are a piece now; it is no building
+	# any more -- no shell, no far box, never bricked again.
+	var toppled := false
 
 var planet: PlanetBody
 var sites: Array[Site] = []
@@ -96,6 +99,8 @@ var _templates := {}
 var _brick_queue: Array[int] = []
 var _brick_site := -1
 var bricked_count := 0
+## Buildings that went over whole (D2 step 4).
+var toppled_count := 0
 ## Off (-- --no-bricks): shells only, as before 11.11 -- for an A/B of the cost.
 var bricks_on := not ("--no-bricks" in OS.get_cmdline_user_args())
 var brick_worst_us := 0
@@ -267,6 +272,8 @@ func _process(delta: float) -> void:
 	far_count = 0
 	for i in sites.size():
 		var s := sites[i]
+		if s.toppled:
+			continue
 		var base := centre + s.frame * Vector3(s.fx * 0.175, 0.0, s.fz * 0.175)
 		var dist := eye.distance_to(base + (centre - base).normalized() * -s.height * 0.5)
 		# Near: the shell, built on the way in, freed well past the edge.
@@ -742,6 +749,15 @@ func _solve_site(i: int) -> void:
 	solves += 1
 	solve_worst_ms = maxf(solve_worst_ms, float(Time.get_ticks_usec() - t0) / 1000.0)
 	var res: Dictionary = solve.stress
+	# Off balance as a whole (the centre of mass outside what holds it up): it
+	# goes over in one piece (D2 step 4; CityScene's check, in the site's own
+	# grid, which is the tangent frame).
+	var stability: Dictionary = solve.stability
+	if not bool(stability.get("stable", true)) and not s.toppled:
+		print("[planet] building %d is toppling: centre of mass %.1f m outside its support, %d bricks" % [
+				i, float(stability.get("overhang", 0.0)), (stability.get("blocks", PackedInt32Array()) as PackedInt32Array).size()])
+		_topple(i)
+		return
 	if int(res.get("failures", 0)) > 0 or int(res.get("reattached", 0)) > 0:
 		# When it ran, relative to the hits round it, decides what it failed.
 		damage_log.record(0, DamageLog.Kind.SOLVE, s.chunk, Vector3.ZERO, 0.0,
@@ -764,6 +780,46 @@ func _solve_site(i: int) -> void:
 	bricks.bake_chunk_async(s.chunk)
 	site_damaged.emit(i, (planet.global_transform * s.frame) * box.grow(1.0))
 	s.solve_due = true
+
+
+## Site `i` handed over whole as one falling piece (PlanetPieces.adopt): its
+## collision freed first, its drawing carried by the piece, its shell and far
+## box gone for good, the AI's maps told to forget the box.
+func _topple(i: int) -> void:
+	var s := sites[i]
+	if s.toppled or s.chunk < 0:
+		return
+	s.toppled = true
+	s.solve_due = false
+	if i == _brick_site:
+		_brick_site = -1
+	_brick_queue.erase(i)
+	for job in s.band_jobs:
+		WorkerThreadPool.wait_for_task_completion(int(job[0]))
+	s.band_jobs.clear()
+	if s.collision != null:
+		s.collision.free_bodies()
+		s.collision = null
+	if s.shell_look != null:
+		s.shell_look.queue_free()
+		s.shell_look = null
+	if s.shell != null:
+		_free_near(s)
+	if s.bricked:
+		bricked_count -= 1
+	s.bricked = false
+	s.fade = 0.0
+	far.multimesh.set_instance_custom_data(i, Color(0.0, 0.0, 0.0, 0.0))
+	var box := site_box(i)
+	var carried := s.brick_node
+	s.brick_node = null
+	s.band_nodes.clear()
+	s.remesh = PackedInt32Array()
+	var chunk := s.chunk
+	s.chunk = -1
+	pieces.adopt(chunk, carried)
+	toppled_count += 1
+	site_damaged.emit(i, box.grow(2.0))
 
 
 ## Once a frame: merge again the bands hits changed (a few), and draw again the

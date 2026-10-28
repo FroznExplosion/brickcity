@@ -54,6 +54,7 @@ var _bricks_gate := false
 var _damage_gate := false
 var _fall_gate := false
 var _hits_gate := false
+var _topple_gate := false
 ## The AI round the fight (Docs/Planets.md 11.8, N2, N4): the nav net round the
 ## player's town; ai_world / ai_nav the region the player is in. Made by setup_ai.
 var ai: AIServices
@@ -91,10 +92,11 @@ func _ready() -> void:
 	_damage_gate = "--gate=damage" in OS.get_cmdline_user_args()
 	_fall_gate = "--gate=fall" in OS.get_cmdline_user_args()
 	_hits_gate = "--gate=hits" in OS.get_cmdline_user_args()
+	_topple_gate = "--gate=topple" in OS.get_cmdline_user_args()
 	_travel_gate = "--gate=travel" in OS.get_cmdline_user_args()
 	_far_gate = "--gate=far" in OS.get_cmdline_user_args()
 	_drive_gate = "--gate=drive" in OS.get_cmdline_user_args()
-	_gate = _gate or _pawn_gate or _mech_gate or _tank_gate or _soldier_gate or _squad_gate or _travel_gate or _far_gate or _drive_gate or _trees_gate or _bricks_gate or _damage_gate or _fall_gate or _hits_gate
+	_gate = _gate or _pawn_gate or _mech_gate or _tank_gate or _soldier_gate or _squad_gate or _travel_gate or _far_gate or _drive_gate or _trees_gate or _bricks_gate or _damage_gate or _fall_gate or _hits_gate or _topple_gate
 	data = PlanetData.new()
 	data.planet_name = "proto"
 	# Towns and landmarks: their pads go into the ground before it is built.
@@ -172,6 +174,8 @@ func _ready() -> void:
 			_run_fall_gate()
 		elif _hits_gate:
 			_run_hits_gate()
+		elif _topple_gate:
+			_run_topple_gate()
 		elif _travel_gate:
 			_run_travel_gate()
 		elif _far_gate:
@@ -371,7 +375,7 @@ func _process(_delta: float) -> void:
 	# walker's own gate, the pawn stands on it.
 	if walker.frozen and pawn == null and trees.prebaked and _ground_hit(walker.global_position) != Vector3.INF:
 		walker.frozen = false
-		if not _gate or _pawn_gate or _mech_gate or _tank_gate or _soldier_gate or _squad_gate or _travel_gate or _far_gate or _drive_gate or _trees_gate or _bricks_gate or _damage_gate or _fall_gate or _hits_gate:
+		if not _gate or _pawn_gate or _mech_gate or _tank_gate or _soldier_gate or _squad_gate or _travel_gate or _far_gate or _drive_gate or _trees_gate or _bricks_gate or _damage_gate or _fall_gate or _hits_gate or _topple_gate:
 			_spawn_player(_ground_hit(walker.global_position), -walker.global_transform.basis.z)
 	if not on_foot:
 		walker.flying = pawn != null or walker.flying
@@ -2264,4 +2268,106 @@ func _run_hits_gate() -> void:
 	print("[planet] hits: %d hit(s) on pieces, %d bricks; %d woken; crumbs %d; frames worst %.1f ms" % [
 			pc.hits, pc.hit_killed, pc.woken, pc.crumbs.thrown, _worst_ms])
 	print("[planet] hits gate: %d ok, %d FAIL" % [_ok, _fail])
+	get_tree().quit(0 if _fail == 0 else 1)
+
+
+# ---------------------------------------------------------------------------
+# The topple gate (Planets.md 11.11, D2 step 4): the ground storey under 55% of
+# a building's footprint cut away (by cell, as the city's stress pass blasts
+# it); off balance, it goes over whole, falls, and lies on the ground; it is no
+# building any more.
+
+func _run_topple_gate() -> void:
+	var t0 := Time.get_ticks_msec()
+	while pawn == null and Time.get_ticks_msec() - t0 < 60000:
+		await _frames(1)
+	var town: Vector3 = town_dirs[0]
+	var p_feet := _surface(_round_dir(town, spawn_dir, 88.0))
+	pawn.place(p_feet + Gravity.up_at(p_feet) * 0.3)
+	t0 = Time.get_ticks_msec()
+	while _ground_hit(p_feet) == Vector3.INF and Time.get_ticks_msec() - t0 < 30000:
+		await _frames(1)
+	setup_ai(town)
+	var bi: int = await _bricked_near()
+	var site: PlanetBuildings.Site = buildings.sites[bi]
+	_check("the nearest building is bricks", site.bricked)
+	var bxf := planet.global_transform * site.frame
+	var pc := buildings.pieces
+	var storey := TowerRecipe.SLAB_PLATES + TowerRecipe.COURSES_PER_FLOOR * TowerRecipe.PLATES_PER_COURSE
+	var alive0 := buildings.bricks.get_alive_block_count(site.chunk)
+	var cut_ids := {}
+	var x_end := int(ceil(site.fx * 0.55))
+	for yc in range(0, storey):
+		for zc in site.fz:
+			for xc in x_end:
+				var bid := buildings.bricks.block_at(site.chunk, Vector3i(xc, yc, zc))
+				if bid >= 0 and not buildings.bricks.is_block_absent(site.chunk, bid):
+					cut_ids[bid] = true
+	var cut := PackedInt32Array(cut_ids.keys())
+	var toppled0 := buildings.toppled_count
+	var pieces0 := pc.pieces.size()
+	buildings.bricks.kill_blocks(site.chunk, cut)
+	buildings.after_kill(bi, cut, buildings.site_box(bi).grow(1.0))
+	t0 = Time.get_ticks_msec()
+	while buildings.toppled_count == toppled0 and Time.get_ticks_msec() - t0 < 10000:
+		await get_tree().physics_frame
+	var tower: PlanetPieces.Piece = null
+	for q in pc.pieces.slice(pieces0):
+		var pp: PlanetPieces.Piece = q
+		if tower == null or pp.bricks > tower.bricks:
+			tower = pp
+	print("[planet] topple: %d of %d bricks cut from the ground storey under %d of %d studs" % [
+			cut.size(), alive0, x_end, site.fx])
+	_check("off balance, it topples whole: one piece of every brick it had",
+			buildings.toppled_count > toppled0 and tower != null and tower.bricks >= (alive0 - cut.size()) * 0.9,
+			"%s" % ("no topple" if tower == null else "%d bricks (%d left standing)" % [tower.bricks, alive0 - cut.size()]))
+	_check("and it is no building any more: no collision, no shell, not bricks", site.toppled
+			and site.collision == null and site.shell == null and not site.bricked)
+	if tower == null:
+		get_tree().quit(1)
+		return
+	# It goes over, and comes to rest.
+	var up0 := Gravity.up_at(tower.body.global_position)
+	var b0: Basis = tower.body.global_transform.basis
+	var tilt := 0.0
+	var fresh: Array = []
+	t0 = Time.get_ticks_msec()
+	while Time.get_ticks_msec() - t0 < 25000:
+		await get_tree().physics_frame
+		if is_instance_valid(tower.body):
+			var b: Basis = tower.body.global_transform.basis
+			tilt = maxf(tilt, rad_to_deg((b * (b0.inverse() * up0)).angle_to(Gravity.up_at(tower.body.global_position))))
+		fresh = pc.pieces.slice(pieces0)
+		var all_still := not fresh.is_empty()
+		for q in fresh:
+			all_still = all_still and ((q as PlanetPieces.Piece).settled or (q as PlanetPieces.Piece).fading_since != 0)
+		if all_still and Time.get_ticks_msec() - t0 > 2000:
+			break
+	print("[planet] topple: tilted %.0f deg; %d piece(s), landings %d, snaps %d, crumbs %d; frames worst %.1f ms" % [
+			tilt, fresh.size(), pc.landings, pc.snaps, pc.crumbs.thrown, _worst_ms])
+	_check("it falls over (its up more than 30 deg from the ground's)", tilt > 30.0, "%.0f deg" % tilt)
+	var space := get_world_3d().direct_space_state
+	var resting := 0
+	var left := 0
+	var where := []
+	for q in fresh:
+		var p: PlanetPieces.Piece = q
+		if not is_instance_valid(p.body) or p.fading_since != 0:
+			continue
+		left += 1
+		var u := Gravity.up_at(p.body.global_position)
+		var under := space.intersect_ray(PhysicsRayQueryParameters3D.create(
+				p.body.global_position, p.body.global_position - u * 12.0,
+				Layers.WORLD | Layers.STRUCTURE | Layers.DEBRIS, [p.body.get_rid()]))
+		if p.settled and not under.is_empty():
+			resting += 1
+		else:
+			where.append("%d bricks, settled %s" % [p.bricks, p.settled])
+	_check("and it comes to rest, every piece of it on something", left > 0 and resting == left,
+			"%d of %d; %s" % [resting, left, "; ".join(where)])
+	await _shot("planet_topple")
+	await get_tree().create_timer(1.0).timeout
+	_check("no shell and no far box come back where it stood", site.shell == null and site.fade == 0.0
+			and site.chunk < 0)
+	print("[planet] topple gate: %d ok, %d FAIL" % [_ok, _fail])
 	get_tree().quit(0 if _fail == 0 else 1)

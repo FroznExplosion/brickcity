@@ -1815,6 +1815,18 @@ Gate `--gate=topple` (headless): the ground storey under 55% of a building's foo
 gone; it falls over (its up tilts more than 30 degrees from the ground's) and comes to rest on the
 ground, in pieces; no shell or far box comes back; the AI's world has no proxy box there.
 
-Not yet: the city's snap preferences, a building toppling whole
-(`solve.stability`), the AI told where a piece lies; furniture, materialising for a fight far from
+**D2 step 4 built (2026-10-28): a building topples whole.** `PlanetBuildings._topple` (called from
+`_solve_site` when `solve.stability` says unstable) and `PlanetPieces.adopt`, as planned. Gate
+`--gate=topple` 6/6 (headless x3, windowed x2): 150 of 1622 bricks cut from the ground storey under
+17 of its 30 studs, the building (centre of mass 1.0 m outside its support) goes over as one piece
+of 1472 bricks, tilts 89-90 degrees, lands (2-3 landings), snaps in one or two places into 3
+pieces (12-28 crumbs), and lies at rest; no collision, shell or far box left where it stood.
+Measured headless: the hand-over 0.8 ms; the first landing's break ~10-45 ms (shed 9-29 ms: the
+halves' `split_island`, and the big half's mesh arrays 14 ms, on the main thread); no frame of the
+fall over 64 ms headless, none over 60 ms windowed. The gates' worst frames (350-690 ms) are the
+scene's load, as every planet gate's. The other planet gates unchanged (hits 8, fall 7, damage 12,
+bricks 9, trees 7, squad 10, pawn 12).
+
+Not yet: the city's snap preferences, a storey giving way under what is above (TIP / CRUSH),
+the AI told where a piece lies; furniture, materialising for a fight far from
 the camera.

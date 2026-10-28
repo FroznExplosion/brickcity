@@ -20,8 +20,11 @@ extends Node3D
 ## chips, ordnance blasts, its killed bricks thrown as crumbs; what is no longer
 ## joined comes away; what rested on the bricks taken is woken.
 ##
-## Not yet (D2's next steps): the city's snap preferences, a building toppling
-## whole, the AI told where a piece lies.
+## Step 4: a whole building handed over as one piece (`adopt`, the city's
+## CityScene._topple): its chunk as it is, nothing copied.
+##
+## Not yet (D2's next steps): the city's snap preferences, the AI told where a
+## piece lies.
 
 ## A falling piece's weight, as the city's debris (IslandManager.DEBRIS_GRAVITY):
 ## a brick model falls faster than a building would, at this scale.
@@ -68,7 +71,8 @@ class Piece:
 	var born_ms := 0
 	## Its mesh, made on a worker: [task id, [mesh]], empty once hung.
 	var job: Array = []
-	var mesh_node: MeshInstance3D = null
+	## What draws it: its own mesh, or a toppled building's bands (a Node3D).
+	var mesh_node: Node3D = null
 	## The landing rule's state.
 	var prev_speed := 0.0
 	var fall_ticks := 0
@@ -95,6 +99,7 @@ var faded := 0
 var hits := 0
 var hit_killed := 0
 var woken := 0
+var toppled := 0
 
 
 func setup(world: BrickWorld, p: Node3D, material: Material) -> void:
@@ -156,6 +161,47 @@ func shed(source: int, groups: Array, linear := Vector3.ZERO) -> int:
 		n += 1
 	_cap()
 	return n
+
+
+## A whole chunk made a falling piece as it is -- a building toppling (the
+## city's CityScene._topple: nothing copied, no split_island). `carried` is
+## what draws it now (its bands, placed as the chunk is); it rides the body
+## until the piece is first drawn again, and casts its own shadow meanwhile.
+## The caller has freed the building's collision FIRST: a body that starts
+## inside it is thrown by the solver.
+func adopt(chunk: int, carried: Node3D) -> Piece:
+	var p := Piece.new()
+	p.chunk = chunk
+	p.local_com = bricks.get_chunk_com(chunk)
+	p.bricks = bricks.get_alive_block_count(chunk)
+	p.born_ms = Time.get_ticks_msec()
+	bricks.set_chunk_anchored(chunk, false)
+	var xf := bricks.get_chunk_transform(chunk)
+	var body := RigidBody3D.new()
+	body.mass = maxf(bricks.get_chunk_mass(chunk) * IslandManager.MASS_SCALE, 0.5)
+	body.gravity_scale = 0.0
+	body.collision_layer = Layers.FALLING
+	body.collision_mask = Layers.FALLING_MASK
+	body.physics_interpolation_mode = Node.PHYSICS_INTERPOLATION_MODE_OFF
+	body.contact_monitor = true
+	body.max_contacts_reported = IslandManager.MAX_CONTACTS
+	bricks.add_chunk_shapes(body.get_rid(), chunk, p.local_com, true,
+			p.bricks >= IslandManager.MERGE_FALLING_BLOCKS)
+	add_child(body)
+	body.global_transform = xf * Transform3D(Basis(), p.local_com)
+	p.body = body
+	p.planet_local = planet.global_transform.affine_inverse() * body.global_transform
+	if carried != null:
+		carried.reparent(body, false)
+		carried.transform = Transform3D(Basis(), -p.local_com)
+		for n in carried.find_children("*", "GeometryInstance3D", true, false):
+			(n as GeometryInstance3D).cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
+		# Drawn by the bands until it is first drawn again: then they go.
+		p.mesh_node = carried
+	pieces.append(p)
+	made += 1
+	toppled += 1
+	return p
 
 
 ## `ids` of `source` thrown as crumbs, then cut out and freed.
