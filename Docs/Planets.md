@@ -1716,4 +1716,29 @@ it lies on the ground. Not yet (D2's next steps): a hard landing breaking a piec
 small groups as crumbs, a cap, a building toppling whole (`solve.stability`), the AI told where a
 piece lies.
 
+**Plan, D2 step 2 (2026-10-27): landings break, crumbs, a cap.** The city's rules
+(`IslandManager`), with the planet's down instead of -Y:
+- *A hard landing breaks a piece.* Each moving piece keeps its speed a tick; a drop of more than
+  `IMPACT_DELTA` (2.5 m/s) after `IMPACT_FALL_TICKS` (3) ticks above `IMPACT_MIN_SPEED` (4 m/s), at
+  most `MAX_IMPACTS` (4) a piece, is a landing. At up to `SHEAR_CONTACTS_MAX` (3) of its contact
+  points (the body's own, `contact_monitor`), a `PIECE_SHEAR` with `FLAG_PEEL`, its radius by the
+  speed lost (`IMPACT_RADIUS` 0.8 .. 2.6 m, the city's formula), at most `SHEAR_MAX_BLOCKS` (14)
+  loosened -- `DamageLog.apply_entry` on the piece's chunk, in its grid frame, as the city's. Then
+  what is no longer joined comes away (`get_components_near`): every group but the first is a new
+  piece moving as the old one did, or crumbs; the old piece's shapes are rebuilt (out of the space
+  first) and its mesh made again on a worker. A piece of fewer than `MIN_IMPACT_BLOCKS` (3) breaks
+  nothing. Not here yet: the long piece snapping across (`_snap_across`) -- with the topple.
+- *Crumbs.* A group of `DEBRIS_MAX_BLOCKS` (8) bricks or fewer -- from a building's solve or a
+  landing -- is cut out and freed (`split_island`, `release_chunk`) and thrown as crumbs
+  (`PlanetCrumbs`): each brick its own size and colour in one MultiMesh per size, falling along
+  `Gravity.down_at` from where it was, a kick out of the face and a spin, stopped on the first
+  thing under it (one ray along down: the ground or a building), lying 1.4 s, then shrunk away.
+  Presentation only: no collision, nothing for the AI.
+- *A cap.* At most `MAX_MOVING` (48) pieces moving; past it a new group of any size is crumbs. At
+  most `MAX_PIECES` (160) kept; past it the oldest settled piece out of the player's sight shrinks
+  away and is freed.
+Gate `--gate=fall` (headless): a panel cut free two storeys up falls, lands hard and comes apart
+(more pieces than came loose, crumbs thrown); every piece ends on the ground; 60 groups shed at
+once leave at most 48 moving. The other planet gates and the city's collapse probes unchanged.
+
 Not yet: the rest of D2 (above), furniture, materialising for a fight far from the camera.
