@@ -277,3 +277,72 @@ All of it, merged; `tools/build_tools_probe.gd` 115 checks.
   diagonal).
 * Not done: corner slopes for hip roofs; the asset workshop's options are still its old
   panel (its tools were already buttons).
+
+## 8. Draw the base, pull the height; the held brick, seen (2026-10-28)
+
+Asked: most tools are confusing. Every tool should use the brick selected in the toolbar at
+the bottom. Walls: click and hold, drag a line, let go; then aim up to the height wanted and
+click again to place. The same for floors and shapes. And finish what section 7 left.
+
+### One way to make things: base, then height
+
+Walls, Floor, Shapes and Sketch all work the same:
+
+1. **Base**: press on the surface you aim at (the floor, a brick top) and drag -- a line
+   (Walls), a rectangle (Floor), the shape's outline (Shapes), the stroke (Sketch) -- and let
+   go. A floor clicked without a drag fills the space the walls round it close in.
+2. **Height**: now move the cursor up: the height follows it, a course of the held brick at a
+   time (3 plates for a brick, 1 for a plate). A standing shape is pulled toward or away from
+   you instead -- its thickness. **Click** to place. Right-click or Esc cancels.
+3. While both happen, the **bricks it will lay are shown**: the held brick, in the held
+   colour, laid as they will be (staggered or aligned), see-through.
+
+Walls drawn one after another, each starting where the last ended at the same height, are one
+wall line: its corners interlock, and ending on the first corner closes it.
+
+### The held brick is the brick
+
+* Everything lays the brick selected in the toolbar at the bottom, in its colour and material:
+  smaller ones of its kind fill the ends.
+* A wall's thickness, and the rim of a hollow rectangle or a ring, is the held brick's width
+  (a 1x4: one stud; a 2x4: two). No separate thickness to set.
+* The height snaps to the held brick's own height.
+* A roof's edges: the held brick when it is a slope, else 45-degree 1x2 slopes, in the held
+  colour.
+* The rail loses the numbers it no longer needs (tall, thick, rim, floor thickness): what
+  is pulled is what is laid. Select still changes a placed shape's height.
+
+### Section 7's leftovers
+
+* **Corner slopes**: a new part, `slopecorner_2x2` (two 45-degree slopes meeting at an outer
+  corner: the back stud carries a stud, the other three cells fall away), in the Slopes
+  category. Drawn as its own triangles; sampled and collided as stacked slabs (the shape is
+  the intersection of two slope prisms, convex but not a prism). Hip roofs put one on each
+  corner of each course.
+* **The asset workshop's options** go inside its tool rail, under the tools -- one panel, as
+  in the building workshop -- and the rail scrolls when it is taller than the window.
+
+### As built (2026-10-28)
+
+All of it, merged; `tools/build_tools_probe.gd` 130 checks, `palette_probe` 2104, `shaped_probe`
+438.
+
+* The flow is `WorkshopTools._make_input` (press, drag, let go), `_to_height`, `_pull_height`
+  (where the cursor's ray passes closest to the line straight up from the base's middle --
+  so it works aiming freely or through the middle of the screen) and `commit_pending`. It
+  only re-reads the cursor when it moved. Enter places too.
+* The preview is `_plan_for` (the same `pack_courses` the laying uses, cached while the shape
+  does not change) drawn as see-through boxes; the probe checks the wall laid is exactly the
+  bricks shown.
+* Walls join (`_commit_wall`) when drawn from the last wall's end at the same height and
+  brick; not while the mirror is on (the mirror image would not follow the join).
+* A shape laid with a part that is no brick, plate or tile (a slope in hand) fills with a
+  brick of its footprint (`_fill_part`); a roof uses a held 1x2 or 2x2 slope or curve.
+* `slopecorner_2x2` (`ShapedParts._slope_corner`): its triangles cut per cell where they lie
+  on a cell face, as a prism's walls are; six half-plate slabs collide and give its cells
+  (the back cell three plates, the other three two). `shaped_probe` checks the slabs' volume
+  against the drawn one to 3% (`approx`), not exactly.
+* The asset workshop's old rail is moved into its `ToolRail`'s options (a scrolling rail);
+  `_rail_right` and the paint palette read its global place.
+* The probes' programmatic paths (`add_shape`, `floor_at`, `finish_walls`) keep `tall` and
+  `floor_tall`; the rail no longer shows them.

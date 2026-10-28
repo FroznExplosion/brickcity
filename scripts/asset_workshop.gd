@@ -6626,7 +6626,12 @@ func _over_rail() -> bool:
 
 ## Where things to the right of the rail start.
 func _rail_right() -> float:
-	return 12.0 if _rail == null else _rail.position.x + maxf(RAIL_W, _rail.size.x) + 12.0
+	if _rail == null:
+		return 12.0
+	# Inside the tool rail: right of the rail's own panel.
+	if _rail.get_parent() is Container:
+		return _rail.get_global_rect().end.x + 18.0
+	return _rail.position.x + maxf(RAIL_W, _rail.size.x) + 12.0
 
 
 ## A rail button: the tool it names, everything else put down.
@@ -6729,12 +6734,16 @@ func _rail_process() -> void:
 	_shape_size_slider.set_value_no_signal(shape_size)
 	_shape_size_label.text = "%d stud%s across%s" % [shape_size, "" if shape_size == 1 else "s",
 			"  (Ctrl + wheel)" if on == "place" else ""]
-	_rail.position.y = rail_top if rail_top >= 0.0 else 12.0 + (_menu.bar_height() if _menu != null else 0.0)
-	var room := get_viewport().get_visible_rect().size.y - _rail.position.y - 28.0
+	# Inside the tool rail (AssetWorkshopUI), the rail's own scroll does the scrolling and
+	# this one shows all of it; on its own it sits under the tools and scrolls itself.
+	var inside := _rail.get_parent() is Container
+	if not inside:
+		_rail.position.y = rail_top if rail_top >= 0.0 else 12.0 + (_menu.bar_height() if _menu != null else 0.0)
+	var room := INF if inside else get_viewport().get_visible_rect().size.y - _rail.position.y - 28.0
 	_rail_scroll.custom_minimum_size = Vector2(RAIL_W - 16, minf(_rail_box.get_combined_minimum_size().y, room))
 	_rail.size = Vector2.ZERO
 	if _paint_palette != null:
-		_paint_palette.position = Vector2(_rail_right(), _rail.position.y)
+		_paint_palette.position = Vector2(_rail_right(), _rail.global_position.y)
 	# The workshop's own readout moves over beside the rail.
 	_hud.position = Vector2(_rail_right(), (_menu.bar_height() if _menu != null else 0.0)
 			+ (50.0 if _ui != null else 12.0))

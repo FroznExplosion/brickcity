@@ -99,6 +99,9 @@ func _mesh_volume(pos: PackedVector3Array, nrm: PackedVector3Array) -> float:
 
 
 func _prism_volume(pr: Dictionary) -> float:
+	# A shape that is no prism (the corner slope) draws its own triangles.
+	if pr.has("tris"):
+		return _mesh_volume(pr.tris, pr.nrms)
 	return absf(ShapedParts._signed_area(pr.poly)) * (pr.hi - pr.lo)
 
 
@@ -152,14 +155,18 @@ func _check_geometry() -> void:
 		# newel) draws and collides as those same pieces, so there is no
 		# tiling to check -- its volume is their UNION, sampled.
 		var overlapping: bool = shape.get("overlapping", false)
-		if not overlapping:
+		if shape.get("approx", false):
+			# Stacked slabs standing in for sloped faces (the corner slope): close, not exact.
+			_ok("%s: the slabs fill what is drawn to 3%%" % part,
+					absf(pieces - drawn) < 0.03 * drawn, "%.5f vs %.5f" % [pieces, drawn])
+		elif not overlapping:
 			_ok("%s: the pieces fill exactly what is drawn, no gap, no overlap" % part,
 					absf(pieces - drawn) < 1e-4, "%.5f vs %.5f" % [pieces, drawn])
 		else:
 			_ok("%s: draws and collides as the same pieces" % part, shape.draw == shape.pieces)
 		_ok("%s: one hull per piece" % part, sh.hulls.size() == shape.pieces.size())
 		var vol := drawn if not overlapping else _union_volume(shape.pieces, size)
-		var slack := 1e-4 if not overlapping else 0.02 * vol
+		var slack := 0.02 * vol if overlapping or shape.get("approx", false) else 1e-4
 
 		# The cells are the shape, to the half-cell. Every solid cell is at least
 		# half full and every empty one at most half, so the volume is pinned
