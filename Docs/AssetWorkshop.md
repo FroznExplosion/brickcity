@@ -1002,6 +1002,56 @@ then made bricks gives the rotated cells; Make bricks again replaces clay bricks
 and keeps a hand-laid brick; the stage tabs change nothing in the build; Bricks to clay turns
 the bricks into clay; Measure lands on clay and on a model; the clay size readout.
 
+### Sizing a selection like a slicer; the left bar by context (2026-10-28)
+
+The user (2026-10-28): how is a clay model resized? Wanted a side menu as a 3D-printing slicer
+has: select a thing, drag sliders to resize it evenly or not; choosing to size shows resize arrows
+on the gizmo instead of the move arrows. With a part selected the left bar should show only what
+places, sizes and sculpts the clay. They like the stages in order (Block out, then Bricks ...).
+Also: after Bricks to clay the clay looked scattered until a Smooth click redrew it blocky.
+
+**The scattered clay** was not re-meshed after Bricks to clay (its blocks were changed but only
+the next stroke drew them). Bricks to clay and showing the clay now draw it.
+
+**The Selected panel** (Block out, Select, with a model, a lifted part or a guide picked), at the
+top of the left bar:
+
+| row | what it does |
+|---|---|
+| gizmo: **Move / Rotate / Scale** | which handles the gizmo shows. Move: three arrows. Rotate: three rings. Scale: three axis handles ending in cubes, along the thing's own axes (the gizmo turns with it), and the middle cube resizes evenly |
+| **size, studs** X / Y / Z | the thing's own length along each of its axes; type a size, or step it. **Keep proportions** (on by default): one changes all three |
+| **scale %** | with proportions kept, one slider; without, one per axis -- dragged live, laid on let go (one undo); 100% is the size when it was picked |
+| **turn, degrees** X / Y / Z | its turn about each axis |
+| **position, studs** X / Y / Z | where its middle is; the nudge buttons (half a stud or a stud each way), snap to studs, centre on mirror |
+| its own | a model: remove, bake into clay, its pieces each with a part; a guide: into the clay, carve it out |
+
+Every change is one undo, as a gizmo drag is. A model stretched along one axis is stamped
+stretched (its mesh through the transform); a lifted part is resampled through it (the distance
+scaled by the volume's cube root: near enough for the surface, which is what converts).
+
+**The left bar by context**, Block out:
+
+- **Select**: the Selected panel when something is picked, else a line saying what to click, and
+  the models list to pick from.
+- **Draw, Shape, Smooth**: the brush (the draw mode -- flatten, grow, paint, mark smooth --,
+  placement, radius, blend, strength; a stamp's shape and snap), then the clay (smoother, size of
+  the block-out, a part's piece detail, add a 3D model, symmetric bricks, clean up strays, clear,
+  the gun's size marks).
+- Gone from the bar: Convert and Edit as SDF (the stage button is Make bricks / Bricks to clay),
+  "lay the model" (Enter, or Done in the Selected panel), the how-to paragraph (the rail's pop-ups
+  say it).
+
+Checks (`asset_workshop_probe`): Bricks to clay leaves nothing un-drawn; a size typed for one axis
+without proportions stretches a model along it (its box), with proportions all three; the gizmo's
+scale handle along a turned model's own axis; a turn typed; the left bar's sections by mode and
+pick.
+
+**Built 2026-10-28** as planned (`_build_xform_box`, `held_shape` / `set_held_shape`,
+`set_gizmo_mode`, `ModelGizmo.set_mode`). The gizmo's mode buttons are All (arrows and rings, as
+before), Move, Rotate, Scale. The number boxes take a hundredth and step a quarter stud (a degree);
+only the axis typed changes, so the others are not moved by the boxes' rounding.
+asset_workshop_probe 336 (8 new).
+
 ### Furniture and items (2026-10-23)
 
 The user (2026-10-23): build furniture and household items here, since the tools are better for

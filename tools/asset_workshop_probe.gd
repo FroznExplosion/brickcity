@@ -1754,6 +1754,7 @@ func _sculpt() -> void:
 	_pick_and_move()
 	_grid_stays()
 	_clay_apart()
+	_slicer_panel()
 	_nudges()
 	_symmetric_convert()
 	_size_and_view()
@@ -2362,6 +2363,67 @@ func _clay_apart() -> void:
 	var cb: AABB = _ws.global_transform.affine_inverse() * _ws.sculpt.global_transform * f.bounds()
 	var cp = _ws.measure_point(cb.get_center() + Vector3(0, 5, 0), Vector3.DOWN)
 	_ok("Measure lands on the clay's top", cp != null and absf((cp as Vector3).y - cb.end.y) < STUD * 0.5, "%s vs %.2f" % [str(cp), cb.end.y])
+	_ws._reset_space()
+
+
+## Sizing a selection like a slicer (Docs/AssetWorkshop.md): the Selected panel's sizes typed with
+## and without proportions, a turn typed, one undo each; the gizmo's scale handle along a turned
+## model's own axis; the left bar's sections by mode and pick; Bricks to clay leaves nothing
+## un-drawn (the user saw the clay scattered until a Smooth click).
+func _slicer_panel() -> void:
+	_ws._reset_space()
+	_ws.rail_pick("sculpt")
+	_ws.sculpt_clear()
+	_ws.set_clay_view(true)
+	var bm := BoxMesh.new()
+	bm.size = Vector3(2.0, 0.4, 0.4)
+	var am := ArrayMesh.new()
+	am.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, bm.get_mesh_arrays())
+	_ws.place_mesh(am, "bar.glb")
+	_ok("a pick shows the Selected panel, not the brush", _ws._sec_select.visible and _ws._xform_box.visible
+			and not _ws._sec_brush.visible)
+	var size0: Vector3 = _ws.held_shape()[2]
+	# Without proportions: only y doubles.
+	_ws._xform_keep.button_pressed = false
+	var groups: int = _ws._edit_groups.size()
+	(_ws._xform_size[1] as SpinBox).value = size0.y * 2.0
+	var s1: Vector3 = _ws.held_shape()[2]
+	var box: AABB = (_ws._placed.xf as Transform3D) * (_ws._placed.box as AABB)
+	_ok("a size typed without proportions stretches it along that axis alone, one undo",
+			absf(s1.y - size0.y * 2.0) < 0.05 and absf(s1.x - size0.x) < 0.05 and absf(s1.z - size0.z) < 0.05
+			and absf(box.size.y - size0.y * 2.0 * STUD) < 0.02 and _ws._edit_groups.size() == groups + 1,
+			"%s -> %s" % [size0, s1])
+	# With proportions: x halved halves all three.
+	_ws._xform_keep.button_pressed = true
+	(_ws._xform_size[0] as SpinBox).value = s1.x * 0.5
+	var s2: Vector3 = _ws.held_shape()[2]
+	_ok("with proportions kept, one size changes all three", absf(s2.x - s1.x * 0.5) < 0.05
+			and absf(s2.y - s1.y * 0.5) < 0.05, "%s -> %s" % [s1, s2])
+	# A turn typed.
+	(_ws._xform_turn[1] as SpinBox).value = 90.0
+	_ok("a turn typed", absf((_ws.held_shape()[1] as Vector3).y - 90.0) < 0.5, str(_ws.held_shape()[1]))
+	# The gizmo's scale handle runs along the model's own x, which now lies along z.
+	_ws.set_gizmo_mode("scale")
+	var ax: Vector3 = _ws._gizmo.axis(0)
+	var before: AABB = (_ws._placed.xf as Transform3D) * (_ws._placed.box as AABB)
+	_ws._gizmo_xf0 = _ws._placed.xf
+	var stretched: Transform3D = _ws.dragged_xf({"scale": [0, 2.0]}, false)
+	var after: AABB = stretched * (_ws._placed.box as AABB)
+	_ok("scale mode: the handle runs along the model's own axis, turned with it", absf(absf(ax.z) - 1.0) < 0.01
+			and after.size.z > before.size.z * 1.9 and absf(after.size.x - before.size.x) < 0.02,
+			"axis %s, %s -> %s" % [ax, before.size, after.size])
+	_ws.set_gizmo_mode("all")
+	# Nothing picked: the hint; a drawing tool: the brush and the clay, not the panel.
+	_ws.select_model(null)
+	_ws.set_sculpt_mode("models")
+	_ok("Select with nothing picked: what to click", _ws._select_hint.visible and not _ws._xform_box.visible)
+	_ws.set_sculpt_mode("shape")
+	_ok("a drawing tool: the brush and the clay, no Selected panel", _ws._sec_brush.visible and _ws._sec_clay.visible
+			and not _ws._sec_select.visible)
+	# Bricks to clay draws all of it.
+	_ws.sculpt_convert()
+	_ws.sculpt_to_sdf()
+	_ok("Bricks to clay leaves nothing un-drawn", _ws.sculpt.form.take_dirty().is_empty() and _ws.sculpt.form.block_count() > 0)
 	_ws._reset_space()
 
 

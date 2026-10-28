@@ -4,7 +4,10 @@ extends Node3D
 ## The gizmo on a placed model (Docs/AssetWorkshop.md, "SDF tools, round 4"): three arrows
 ## move it along x, y and z, three rings turn it about them, the cube in the middle resizes
 ## it evenly. Drawn over everything and kept the same size on screen. It only says what a
-## drag means; the workshop moves the model.
+## drag means; the workshop moves the model. Modes (Docs/AssetWorkshop.md, "Sizing a selection
+## like a slicer"): "move" the arrows, "turn" the rings, "scale" three axis handles ending in
+## cubes and the middle cube -- along the gizmo's own axes, which the workshop turns with the
+## thing; "all" every handle but the scale ones.
 
 const AXES: Array[Vector3] = [Vector3.RIGHT, Vector3.UP, Vector3.BACK]
 const COLOURS: Array[Color] = [Color(0.95, 0.3, 0.3), Color(0.4, 0.9, 0.35), Color(0.35, 0.55, 1.0)]
@@ -23,7 +26,9 @@ const SIZE_PX := 200.0
 const MOVE_MAX := 60.0
 
 var hover := ""
+var mode := "all"
 var _mats := {}   # handle -> material
+var _nodes := {}   # handle -> its meshes
 ## The drag under way: which handle, where it started.
 var _drag := ""
 var _s0 := 0.0
@@ -50,9 +55,33 @@ func _init() -> void:
 		ring.outer_radius = RING + 0.015
 		ring.rings = 48
 		_add("turn%d" % i, [[ring, Transform3D(up, Vector3.ZERO)]], COLOURS[i])
+		var end := BoxMesh.new()
+		end.size = Vector3.ONE * 0.11
+		_add("scale%d" % i, [[shaft, Transform3D(up, up * Vector3(0, 0.5, 0))],
+				[end, Transform3D(up, up * Vector3(0, ARROW - 0.05, 0))]], COLOURS[i])
 	var cube := BoxMesh.new()
 	cube.size = Vector3.ONE * CUBE * 2.0
 	_add("size", [[cube, Transform3D()]], Color(0.95, 0.95, 0.95))
+	set_mode(mode)
+
+
+## Which handles show and can be picked: "move", "turn", "scale" or "all".
+func set_mode(m: String) -> void:
+	mode = m
+	for id in _nodes:
+		for mi in _nodes[id]:
+			(mi as Node3D).visible = _shown(id)
+
+
+func _shown(id: String) -> bool:
+	match mode:
+		"move":
+			return id.begins_with("move")
+		"turn":
+			return id.begins_with("turn")
+		"scale":
+			return id.begins_with("scale") or id == "size"
+	return not id.begins_with("scale")
 
 
 ## A basis turning +Y onto `axis`.
@@ -71,6 +100,7 @@ func _add(id: String, parts: Array, col: Color) -> void:
 	m.render_priority = 10
 	m.albedo_color = col
 	_mats[id] = m
+	_nodes[id] = []
 	for p in parts:
 		var mi := MeshInstance3D.new()
 		mi.mesh = p[0]
@@ -78,6 +108,7 @@ func _add(id: String, parts: Array, col: Color) -> void:
 		mi.material_override = m
 		mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 		add_child(mi)
+		(_nodes[id] as Array).append(mi)
 
 
 func _process(_dt: float) -> void:
@@ -110,20 +141,21 @@ func pick(from: Vector3, dir: Vector3) -> String:
 	var inv := global_transform.affine_inverse()
 	var o := inv * from
 	var d := (inv.basis * dir).normalized()
-	if _hits_box(o, d, Vector3.ONE * CUBE * 1.4):
+	if _shown("size") and _hits_box(o, d, Vector3.ONE * CUBE * 1.4):
 		return "size"
 	var best := ""
 	var best_t := INF
 	for i in 3:
 		var a := AXES[i]
-		# An arrow: the ray passes near its shaft.
+		# An arrow or a scale handle: the ray passes near its shaft.
 		var c := _closest(Vector3.ZERO, a, o, d)
-		if c.x > 0.12 and c.x < ARROW and c.z < PICK * 1.5 and c.y < best_t:
-			best = "move%d" % i
-			best_t = c.y
+		for kind in ["move", "scale"]:
+			if _shown("%s%d" % [kind, i]) and c.x > 0.12 and c.x < ARROW and c.z < PICK * 1.5 and c.y < best_t:
+				best = "%s%d" % [kind, i]
+				best_t = c.y
 		# A ring: where the ray meets its plane, near its circle.
 		var dn := d.dot(a)
-		if absf(dn) > 1e-4:
+		if _shown("turn%d" % i) and absf(dn) > 1e-4:
 			var t := -o.dot(a) / dn
 			if t > 0.0 and absf((o + d * t).length() - RING) < PICK and t < best_t:
 				best = "turn%d" % i
@@ -164,8 +196,8 @@ func begin(id: String, from: Vector3, dir: Vector3, mouse: Vector2, cam: Camera3
 	_drag = id
 	_m0 = mouse
 	_c0 = cam.unproject_position(global_position)
-	if id.begins_with("move"):
-		_s0 = _closest(global_position, AXES[int(id.right(1))], from, dir.normalized()).x
+	if id.begins_with("move") or id.begins_with("scale"):
+		_s0 = _closest(global_position, axis(int(id.right(1))), from, dir.normalized()).x
 	elif id.begins_with("turn"):
 		_v0 = _on_ring_plane(AXES[int(id.right(1))], from, dir)
 
@@ -178,8 +210,14 @@ func end() -> void:
 	_drag = ""
 
 
+## Axis `i` as the gizmo is turned now, in workshop space (unit).
+func axis(i: int) -> Vector3:
+	return (global_transform.basis * AXES[i]).normalized()
+
+
 ## What the drag has done since it began, in workshop space: {move: Vector3} along an
-## axis, {turn: [axis, radians]} about one through the gizmo, or {size: factor} about it.
+## axis, {turn: [axis, radians]} about one through the gizmo, {size: factor} about it, or
+## {scale: [i, factor]} along the gizmo's own axis i (the thing's own axis, in scale mode).
 ## The gizmo stays where it began until `begin` again (the workshop moves it).
 func drag_delta(from: Vector3, dir: Vector3, mouse: Vector2) -> Dictionary:
 	if _drag.begins_with("move"):
@@ -196,6 +234,16 @@ func drag_delta(from: Vector3, dir: Vector3, mouse: Vector2) -> Dictionary:
 		if v == Vector3.ZERO or _v0 == Vector3.ZERO:
 			return {"turn": [a, 0.0]}
 		return {"turn": [a, atan2(a.dot(_v0.cross(v)), _v0.dot(v))]}
+	if _drag.begins_with("scale"):
+		var i := int(_drag.right(1))
+		var a := axis(i)
+		if absf(a.dot(dir.normalized())) > 0.97:
+			return {"scale": [i, 1.0]}
+		# The handle's length on screen is the whole size: dragged out to twice as far, twice
+		# as long.
+		var c := _closest(global_position, a, from, dir.normalized())
+		var reach := ARROW * global_transform.basis.get_scale().x
+		return {"scale": [i, maxf(0.05, 1.0 + (c.x - _s0) / maxf(reach, 1e-4))]}
 	if _drag == "size":
 		# Twice the size for every SIZE_PX right or up. (It was the mouse's distance from
 		# the middle over where it started: grabbed at the middle, a short drag made the

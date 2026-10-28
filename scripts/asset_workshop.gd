@@ -502,11 +502,11 @@ func _shot() -> void:
 			m.piece = 1
 			_colour_model(m)
 			_gizmo_xf0 = _placed.xf
-			_gizmo.position = _placed_centre()
+			_place_gizmo()
 			_placed.xf = dragged_xf({"move": Vector3(0, BrickPalette.STUD_M * 4.0, 0)}, false)
 			_held_follow()
 			_gizmo_xf0 = _placed.xf
-			_gizmo.position = _placed_centre()
+			_place_gizmo()
 			_placed.xf = dragged_xf({"turn": [Vector3.BACK, deg_to_rad(15.0)]}, false)
 			_held_moved([])
 			_gizmo.set_hover("move1")
@@ -543,10 +543,10 @@ func _shot() -> void:
 		scene.free()
 		muzzle_end = "-x"
 		_gizmo_xf0 = _placed.xf
-		_gizmo.position = _placed_centre()
+		_place_gizmo()
 		_placed.xf = dragged_xf({"move": Vector3(0, BrickPalette.STUD_M * 4.0, 0)}, false)
 		_gizmo_xf0 = _placed.xf
-		_gizmo.position = _placed_centre()
+		_place_gizmo()
 		_placed.xf = dragged_xf({"turn": [Vector3.BACK, deg_to_rad(5.0)]}, false)
 		_stamp_placed()
 		_show_gizmo()
@@ -2720,7 +2720,7 @@ func _fit_guide(g: Dictionary) -> void:
 	_shade_guide(holder, float(g.opacity))
 	if is_same(_placed.get("guide"), g):
 		_placed.xf = holder.transform
-		_gizmo.position = _placed_centre()
+		_place_gizmo()
 
 
 ## Where the panel's fit puts a guide, before the gizmo's adjust.
@@ -4578,26 +4578,34 @@ func _build_sculpt_box() -> void:
 	_sculpt_box = VBoxContainer.new()
 	_sculpt_box.visible = sketch_draw == "sculpt"
 	_sketch_box.add_child(_sculpt_box)
-	var how := Label.new()
-	how.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	how.custom_minimum_size.x = RAIL_W - 16
-	how.text = ("Sculpt in 3D: LMB adds to this part, RMB carves, Shift smooths. "
-			+ "The brush starts on the working plane, then follows the surface; an add keeps "
-			+ "the depth it started at. Parts blend while sculpting; each has its colour. "
-			+ "Convert makes it all bricks, except what is marked smooth (lighter): that "
-			+ "becomes the part's custom piece.")
-	_sculpt_box.add_child(how)
 	_sculpt_note = Label.new()
 	_sculpt_note.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	_sculpt_note.custom_minimum_size.x = RAIL_W - 16
 	_sculpt_note.add_theme_color_override("font_color", Color(1.0, 0.85, 0.45))
 	_sculpt_box.add_child(_sculpt_note)
 	_show_sculpt_note()
+	# The left bar by context (Docs/AssetWorkshop.md, "Sizing a selection like a slicer"):
+	# Select shows what is picked and how to size, turn and move it; the drawing tools show
+	# their brush and the clay.
+	_sec_select = VBoxContainer.new()
+	_sculpt_box.add_child(_sec_select)
+	_sec_brush = VBoxContainer.new()
+	_sculpt_box.add_child(_sec_brush)
+	_sec_clay = VBoxContainer.new()
+	_sculpt_box.add_child(_sec_clay)
+	_select_hint = Label.new()
+	_select_hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_select_hint.custom_minimum_size.x = RAIL_W - 16
+	_select_hint.text = "Click a model, a part of the clay or a guide to select it; then size, turn and move it here."
+	_sec_select.add_child(_select_hint)
+	_build_xform_box(_sec_select)
+	_build_models_box(_sec_select)
+	# The brush.
 	var modes := OptionButton.new()
 	for m in SCULPT_MODES:
 		modes.add_item(m[1])
 	modes.focus_mode = Control.FOCUS_NONE
-	_sculpt_box.add_child(modes)
+	_sec_brush.add_child(modes)
 	_sculpt_modes = modes
 	# Stamp: its shape and the grid snap; flatten and grow: their strength.
 	var shapes := OptionButton.new()
@@ -4607,20 +4615,13 @@ func _build_sculpt_box() -> void:
 	shapes.item_selected.connect(func(i: int) -> void:
 		lathe_drop()
 		sculpt_shape = SCULPT_SHAPES[i][0])
-	_sculpt_box.add_child(shapes)
+	_sec_brush.add_child(shapes)
 	var snap := CheckBox.new()
 	snap.text = "snap to the brick grid"
 	snap.button_pressed = sculpt_snap
 	snap.focus_mode = Control.FOCUS_NONE
 	snap.toggled.connect(func(on: bool) -> void: sculpt_snap = on)
-	_sculpt_box.add_child(snap)
-	var sym := CheckBox.new()
-	sym.text = "symmetric bricks (Make bricks mirrors one half)"
-	sym.tooltip_text = "Off: the bricks are made as the clay is drawn. On: one side of the mirror plane is made and mirrored onto the other."
-	sym.button_pressed = convert_mirror
-	sym.focus_mode = Control.FOCUS_NONE
-	sym.toggled.connect(func(on: bool) -> void: convert_mirror = on)
-	_sculpt_box.add_child(sym)
+	_sec_brush.add_child(snap)
 	var strength_label := Label.new()
 	var strength := HSlider.new()
 	strength.min_value = 0.05
@@ -4633,25 +4634,27 @@ func _build_sculpt_box() -> void:
 	strength.value_changed.connect(func(x: float) -> void:
 		sculpt_strength = x
 		strength_label.text = "strength: %.2f" % x)
-	_sculpt_box.add_child(strength_label)
-	_sculpt_box.add_child(strength)
+	_sec_brush.add_child(strength_label)
+	_sec_brush.add_child(strength)
 	var show_for := func(mode: String) -> void:
 		shapes.visible = mode == "stamp"
 		snap.visible = mode == "stamp"
 		strength_label.visible = mode in ["flatten", "grow"]
 		strength.visible = mode in ["flatten", "grow"]
-	show_for.call(sculpt_mode)
-	_sculpt_show_for = show_for
+		_sec_select.visible = mode == "models"
+		_sec_brush.visible = mode != "models"
+		_sec_clay.visible = mode != "models"
+		_refresh_xform()
 	modes.item_selected.connect(func(i: int) -> void: set_sculpt_mode(SCULPT_MODES[i][0]))
 	var places := OptionButton.new()
 	for m in SCULPT_PLACES:
 		places.add_item(m[1])
 	places.focus_mode = Control.FOCUS_NONE
 	places.item_selected.connect(func(i: int) -> void: sculpt_place = SCULPT_PLACES[i][0])
-	_sculpt_box.add_child(places)
-	var slider := func(text: String, lo: float, hi: float, step: float, v: float, set_v: Callable) -> HSlider:
+	_sec_brush.add_child(places)
+	var slider := func(box: Container, text: String, lo: float, hi: float, step: float, v: float, set_v: Callable) -> HSlider:
 		var l := Label.new()
-		_sculpt_box.add_child(l)
+		box.add_child(l)
 		var hs := HSlider.new()
 		hs.min_value = lo
 		hs.max_value = hi
@@ -4663,13 +4666,16 @@ func _build_sculpt_box() -> void:
 			set_v.call(x))
 		hs.value = v
 		l.text = text % v
-		_sculpt_box.add_child(hs)
+		box.add_child(hs)
 		return hs
-	slider.call("brush radius: %.1f studs", 0.2, 10.0, 0.1, sculpt_radius,
+	slider.call(_sec_brush, "brush radius: %.1f studs", 0.2, 10.0, 0.1, sculpt_radius,
 			func(x: float) -> void: sculpt_radius = x)
-	slider.call("blend: %.1f studs", 0.0, 3.0, 0.1, sculpt_blend,
+	slider.call(_sec_brush, "blend: %.1f studs", 0.0, 3.0, 0.1, sculpt_blend,
 			func(x: float) -> void: sculpt_blend = x)
-	# Size: let go and the whole block-out is scaled about its bottom middle, one undo.
+	# The clay. Size: let go and the whole block-out is scaled about its bottom middle, one undo.
+	var clay_title := Label.new()
+	clay_title.text = "the clay"
+	_sec_clay.add_child(clay_title)
 	var size_label := Label.new()
 	var size_s := HSlider.new()
 	size_s.min_value = 25
@@ -4684,9 +4690,9 @@ func _build_sculpt_box() -> void:
 		sculpt_scale(size_s.value / 100.0)
 		size_s.set_value_no_signal(100)
 		size_label.text = "size of the block-out: 100%")
-	_sculpt_box.add_child(size_label)
-	_sculpt_box.add_child(size_s)
-	# Detail of this part's custom piece (after Convert): its triangles, applied on let go.
+	_sec_clay.add_child(size_label)
+	_sec_clay.add_child(size_s)
+	# Detail of this part's custom piece (after Make bricks): its triangles, applied on let go.
 	var tris_label := Label.new()
 	var tris_s := HSlider.new()
 	tris_s.min_value = 2.5
@@ -4696,37 +4702,336 @@ func _build_sculpt_box() -> void:
 	tris_s.focus_mode = Control.FOCUS_NONE
 	tris_s.custom_minimum_size.x = 150
 	var tris_text := func(x: float) -> void:
-		tris_label.text = "this part's piece: %d triangles" % int(pow(10.0, x))
+		tris_label.text = "this part's smooth piece: %d triangles" % int(pow(10.0, x))
 	tris_text.call(tris_s.value)
 	tris_s.value_changed.connect(tris_text)
 	tris_s.drag_ended.connect(func(_c: bool) -> void:
 		sculpt_piece_detail(part_names[clampi(part_sel, 0, part_names.size() - 1)], int(pow(10.0, tris_s.value))))
-	_sculpt_box.add_child(tris_label)
-	_sculpt_box.add_child(tris_s)
+	_sec_clay.add_child(tris_label)
+	_sec_clay.add_child(tris_s)
+	var sym := CheckBox.new()
+	sym.text = "symmetric bricks (Make bricks mirrors one half)"
+	sym.tooltip_text = "Off: the bricks are made as the clay is drawn. On: one side of the mirror plane is made and mirrored onto the other."
+	sym.button_pressed = convert_mirror
+	sym.focus_mode = Control.FOCUS_NONE
+	sym.toggled.connect(func(on: bool) -> void: convert_mirror = on)
+	_sec_clay.add_child(sym)
 	var row := HFlowContainer.new()
-	_sculpt_box.add_child(row)
+	_sec_clay.add_child(row)
 	for b in [["smoother", func() -> void: sculpt_smooth(1)],
 			["add a 3D model...", func() -> void:
 				_guide_into_sdf = true
 				_guide_dialog.popup_centered_ratio(0.6)],
-			["model into this part", func() -> void: model_op(SdfForm.ADD)],
-			["carve the model out", func() -> void: model_op(SdfForm.REMOVE)],
-			["lay the model (Enter)", func() -> void: lay_model()],
 			["snap to studs", func() -> void: snap_to_studs()],
 			["centre on mirror", func() -> void: centre_on_mirror()],
 			["clean up strays", func() -> void: clean_strays()],
-			["clear", func() -> void: sculpt_clear()],
-			["Convert", func() -> void: sculpt_convert()],
-			["Edit as SDF", func() -> void: sculpt_to_sdf()]]:
+			["clear", func() -> void: sculpt_clear()]]:
 		var btn := Button.new()
 		btn.text = b[0]
 		btn.focus_mode = Control.FOCUS_NONE
 		btn.pressed.connect(b[1])
 		row.add_child(btn)
-	_build_nudge_row(_sculpt_box)
-	_build_models_box(_sculpt_box)
-	_build_size_row(_sculpt_box)
+	_build_nudge_row(_sec_clay)
+	_build_size_row(_sec_clay)
+	show_for.call(sculpt_mode)
+	_sculpt_show_for = show_for
 	_sculpt_box.add_child(HSeparator.new())
+
+
+## The left bar's sections (Docs/AssetWorkshop.md, "Sizing a selection like a slicer").
+var _sec_select: VBoxContainer
+var _sec_brush: VBoxContainer
+var _sec_clay: VBoxContainer
+var _select_hint: Label
+## The Selected panel: what is picked, sized, turned and moved by numbers and sliders.
+var _xform_box: VBoxContainer
+var _xform_title: Label
+var _xform_modes := {}   # gizmo mode -> its button
+var _xform_size := []   # three SpinBoxes, studs
+var _xform_turn := []   # three SpinBoxes, degrees
+var _xform_pos := []   # three SpinBoxes, studs
+var _xform_keep: CheckBox
+var _xform_scale := []   # [label, slider]: all, x, y, z
+var _xform_model_row: HFlowContainer
+var _xform_guide_row: HFlowContainer
+## Its size (studs) when it was picked: 100% on the scale sliders.
+var _xform_base := Vector3.ONE
+## models_state when a panel edit began, for its one undo; [] between edits.
+var _xform_before := []
+## Values being written back: their signals do nothing.
+var _xform_busy := false
+## The gizmo's handles: "all" (arrows and rings), "move", "turn" or "scale".
+var gizmo_mode := "all"
+
+
+func _build_xform_box(box: Container) -> void:
+	_xform_box = VBoxContainer.new()
+	box.add_child(_xform_box)
+	_xform_title = Label.new()
+	_xform_title.add_theme_color_override("font_color", Color(1.0, 0.85, 0.45))
+	_xform_box.add_child(_xform_title)
+	var modes := HBoxContainer.new()
+	_xform_box.add_child(modes)
+	var group := ButtonGroup.new()
+	for m in [["all", "All"], ["move", "Move"], ["turn", "Rotate"], ["scale", "Scale"]]:
+		var b := Button.new()
+		b.text = m[1]
+		b.toggle_mode = true
+		b.button_group = group
+		b.focus_mode = Control.FOCUS_NONE
+		var id: String = m[0]
+		b.pressed.connect(func() -> void: set_gizmo_mode(id))
+		modes.add_child(b)
+		_xform_modes[id] = b
+	_xform_size = _xform_row("size, studs (its own axes)", 0.1, MODEL_MAX_STUDS, 0.25, func() -> void: _xform_typed("size"))
+	_xform_keep = CheckBox.new()
+	_xform_keep.text = "keep proportions"
+	_xform_keep.button_pressed = true
+	_xform_keep.focus_mode = Control.FOCUS_NONE
+	_xform_keep.toggled.connect(func(_on: bool) -> void: _refresh_xform())
+	_xform_box.add_child(_xform_keep)
+	for k in 4:
+		var l := Label.new()
+		var hs := HSlider.new()
+		hs.min_value = 10
+		hs.max_value = 400
+		hs.step = 1
+		hs.value = 100
+		hs.focus_mode = Control.FOCUS_NONE
+		hs.custom_minimum_size.x = 150
+		var axis := k - 1   # -1: all three
+		hs.value_changed.connect(func(x: float) -> void:
+			l.text = _scale_text(axis, x)
+			if not _xform_busy:
+				_xform_slid(axis, x, false))
+		hs.drag_ended.connect(func(_c: bool) -> void:
+			if not _xform_busy:
+				_xform_slid(axis, hs.value, true))
+		l.text = _scale_text(axis, 100)
+		_xform_box.add_child(l)
+		_xform_box.add_child(hs)
+		_xform_scale.append([l, hs])
+	_xform_turn = _xform_row("turn, degrees", -180.0, 180.0, 1.0, func() -> void: _xform_typed("turn"))
+	_xform_pos = _xform_row("position of its middle, studs", -2000.0, 3000.0, 0.25, func() -> void: _xform_typed("pos"))
+	_build_nudge_row(_xform_box)
+	var row := HFlowContainer.new()
+	_xform_box.add_child(row)
+	for b in [["snap to studs", func() -> void: snap_to_studs()], ["centre on mirror", func() -> void: centre_on_mirror()],
+			["reset turn", func() -> void: _xform_reset_turn()], ["done (Enter)", func() -> void: lay_model()]]:
+		row.add_child(_small_button(b[0], b[1]))
+	_xform_model_row = HFlowContainer.new()
+	_xform_box.add_child(_xform_model_row)
+	for b in [["remove", func() -> void: drop_model()], ["bake into clay", func() -> void: bake_model()]]:
+		_xform_model_row.add_child(_small_button(b[0], b[1]))
+	_xform_guide_row = HFlowContainer.new()
+	_xform_box.add_child(_xform_guide_row)
+	for b in [["into the clay", func() -> void: model_op(SdfForm.ADD)],
+			["carve it out of the clay", func() -> void: model_op(SdfForm.REMOVE)]]:
+		_xform_guide_row.add_child(_small_button(b[0], b[1]))
+	_refresh_xform()
+
+
+func _small_button(text: String, f: Callable) -> Button:
+	var b := Button.new()
+	b.text = text
+	b.focus_mode = Control.FOCUS_NONE
+	b.pressed.connect(f)
+	return b
+
+
+static func _scale_text(axis: int, pct: float) -> String:
+	return ("scale: %d%%" if axis < 0 else "scale " + "XYZ"[axis] + ": %d%%") % int(pct)
+
+
+## A titled row of three number boxes (x, y, z); `changed` when one is typed or stepped.
+func _xform_row(title: String, lo: float, hi: float, step: float, changed: Callable) -> Array:
+	var l := Label.new()
+	l.text = title
+	_xform_box.add_child(l)
+	var row := HBoxContainer.new()
+	_xform_box.add_child(row)
+	var out := []
+	for k in 3:
+		var sb := SpinBox.new()
+		sb.min_value = lo
+		sb.max_value = hi
+		# Typed to a hundredth; the arrows step `step` (a quarter stud, a degree).
+		sb.step = 0.01
+		sb.custom_arrow_step = step
+		sb.prefix = "XYZ"[k]
+		sb.custom_minimum_size.x = 78
+		sb.select_all_on_focus = true
+		sb.value_changed.connect(func(_v: float) -> void:
+			if not _xform_busy:
+				changed.call())
+		row.add_child(sb)
+		out.append(sb)
+	return out
+
+
+## The picked thing as the panel shows it: [its middle (workshop space), its turn (degrees,
+## about x, y, z), its size along its own axes (studs)].
+func held_shape() -> Array:
+	var xf: Transform3D = _placed.xf
+	var box: AABB = _placed.box
+	var sc := xf.basis.get_scale()
+	var turn := xf.basis.orthonormalized().get_euler() * (180.0 / PI)
+	var size := Vector3(box.size.x * sc.x, box.size.y * sc.y, box.size.z * sc.z) / BrickPalette.STUD_M
+	return [xf * box.get_center(), turn, size]
+
+
+## Put the picked thing at `centre` (workshop space), turned `turn_deg`, `size_studs` long along
+## its own axes: live while a slider is dragged, laid with `final` (one undo, as a gizmo drag).
+func set_held_shape(centre: Vector3, turn_deg: Vector3, size_studs: Vector3, final: bool) -> void:
+	if _placed.is_empty():
+		return
+	var box: AABB = _placed.box
+	var want := size_studs
+	# Held to MODEL_MAX_STUDS on its longest side: past that the stamp refuses it.
+	var longest := maxf(want.x, maxf(want.y, want.z))
+	if longest > MODEL_MAX_STUDS:
+		want *= MODEL_MAX_STUDS / longest
+	var s := Vector3.ONE
+	for k in 3:
+		s[k] = maxf(want[k], 0.1) * BrickPalette.STUD_M / maxf(box.size[k], 1e-4)
+	var b := Basis.from_euler(turn_deg * (PI / 180.0)) * Basis.from_scale(s)
+	if _xform_before.is_empty():
+		_xform_before = models_state()
+	_placed.xf = Transform3D(b, centre - b * box.get_center())
+	if final:
+		if _placed_ghost != null:
+			_placed_ghost.visible = false
+		_held_moved(_xform_before)
+		_xform_before = []
+	elif _held_kind() == "model":
+		_placed_ghost.transform = _placed.xf
+		_placed_ghost.visible = true
+		_place_gizmo()
+	else:
+		_held_follow()
+		_place_gizmo()
+	_refresh_xform()
+
+
+## A number typed or stepped in the panel: `what` is the row ("size", "turn", "pos").
+func _xform_typed(what: String) -> void:
+	if _placed.is_empty():
+		return
+	var sh := held_shape()
+	var centre: Vector3 = sh[0]
+	var turn: Vector3 = sh[1]
+	var size: Vector3 = sh[2]
+	var typed := Vector3.ZERO
+	for k in 3:
+		typed[k] = ((_xform_size if what == "size" else _xform_turn if what == "turn" else _xform_pos)[k] as SpinBox).value
+	match what:
+		"size":
+			if _xform_keep.button_pressed:
+				# The axis that changed most decides; the others follow it.
+				var f := 1.0
+				var most := 0.0
+				for k in 3:
+					var r := typed[k] / maxf(snappedf(size[k], 0.01), 1e-4)
+					if absf(r - 1.0) > most:
+						most = absf(r - 1.0)
+						f = r
+				size *= f
+			else:
+				# Only the axes typed: the others keep their exact size, not the box's rounding.
+				for k in 3:
+					if absf(typed[k] - snappedf(size[k], 0.01)) > 0.005:
+						size[k] = typed[k]
+		"turn":
+			for k in 3:
+				if absf(typed[k] - snappedf(turn[k], 0.1)) > 0.05:
+					turn[k] = typed[k]
+		"pos":
+			for k in 3:
+				if absf(typed[k] - snappedf(centre[k] / BrickPalette.STUD_M, 0.01)) > 0.005:
+					centre[k] = typed[k] * BrickPalette.STUD_M
+	set_held_shape(centre, turn, size, true)
+
+
+## A scale slider: `axis` -1 all three (kept as they are to each other), else one; `pct` of the
+## size when picked.
+func _xform_slid(axis: int, pct: float, final: bool) -> void:
+	if _placed.is_empty():
+		return
+	var sh := held_shape()
+	var size: Vector3 = sh[2]
+	if axis < 0:
+		var now := 100.0 * size.x / maxf(_xform_base.x, 1e-4)
+		size *= pct / maxf(now, 1e-4)
+	else:
+		size[axis] = _xform_base[axis] * pct / 100.0
+	set_held_shape(sh[0], sh[1], size, final)
+
+
+func _xform_reset_turn() -> void:
+	if _placed.is_empty():
+		return
+	var sh := held_shape()
+	set_held_shape(sh[0], Vector3.ZERO, sh[2], true)
+
+
+## The panel shows the picked thing as it is now (and nothing when nothing is picked).
+func _refresh_xform() -> void:
+	if _xform_box == null:
+		return
+	var has := not _placed.is_empty()
+	_xform_box.visible = has
+	_select_hint.visible = not has
+	if not has:
+		return
+	_xform_busy = true
+	var sh := held_shape()
+	var kind := _held_kind()
+	var name := String(_placed.get("path", "")).get_file()
+	if kind == "model":
+		name = model_name(_placed) if has_method("model_name") else name
+	_xform_title.text = "selected: %s %s" % [{"model": "model", "part": "clay part", "guide": "guide"}.get(kind, kind), name]
+	for k in 3:
+		(_xform_size[k] as SpinBox).set_value_no_signal(snappedf((sh[2] as Vector3)[k], 0.01))
+		(_xform_turn[k] as SpinBox).set_value_no_signal(snappedf((sh[1] as Vector3)[k], 0.1))
+		(_xform_pos[k] as SpinBox).set_value_no_signal(snappedf((sh[0] as Vector3)[k] / BrickPalette.STUD_M, 0.01))
+	var keep := _xform_keep.button_pressed
+	for k in 4:
+		var on := (k == 0) == keep
+		(_xform_scale[k][0] as Label).visible = on
+		(_xform_scale[k][1] as HSlider).visible = on
+		var axis := maxi(k - 1, 0)
+		var pct := 100.0 * (sh[2] as Vector3)[axis] / maxf(_xform_base[axis], 1e-4)
+		(_xform_scale[k][1] as HSlider).set_value_no_signal(pct)
+		(_xform_scale[k][0] as Label).text = _scale_text(k - 1, pct)
+	for id in _xform_modes:
+		(_xform_modes[id] as Button).set_pressed_no_signal(id == gizmo_mode)
+	_xform_model_row.visible = kind == "model"
+	_xform_guide_row.visible = kind == "guide"
+	_xform_busy = false
+
+
+## Which handles the gizmo shows: "all", "move", "turn" or "scale".
+func set_gizmo_mode(m: String) -> void:
+	gizmo_mode = m
+	if _gizmo != null:
+		_gizmo.set_mode(m)
+	_place_gizmo()
+	_refresh_xform()
+
+
+## The gizmo on the picked thing's middle; in scale mode turned with it, so its handles run
+## along the thing's own axes.
+func _place_gizmo() -> void:
+	if _gizmo == null or _placed.is_empty():
+		return
+	_gizmo.position = _placed_centre()
+	var rot := Basis()
+	if gizmo_mode == "scale":
+		rot = (_placed.xf as Transform3D).basis.orthonormalized()
+		if rot.determinant() < 0.0:
+			rot = Basis()
+	_gizmo.quaternion = rot.get_rotation_quaternion()
+
 
 # ---------------------------------------------------------------------------
 # The SDF block-out: Convert, and back (Docs/AssetWorkshop.md, "The SDF block-out")
@@ -4838,6 +5143,9 @@ func sculpt_to_sdf() -> void:
 	sculpt.form.begin_edit()
 	_bricks_into_field(PackedInt32Array())
 	var rec := sculpt.form.end_edit()
+	# Drawn again: without it the clay showed what was there before, in pieces, until the
+	# next stroke re-meshed it (the user's report, 2026-10-28).
+	sculpt.remesh()
 	for part in shells.keys():
 		if shells[part].get("sdf", false):
 			shells.erase(part)
@@ -10897,6 +11205,11 @@ func select_model(m: Variant) -> void:
 		_show_gizmo()
 		_show_placed_note()
 	_refresh_model_list()
+	# The Selected panel: 100% on its sliders is the size it has now.
+	_xform_before = []
+	if not _placed.is_empty():
+		_xform_base = held_shape()[2]
+	_refresh_xform()
 
 
 ## The added (ADD) or carving (REMOVE) model; with none selected, the guide picked in the
@@ -11000,6 +11313,8 @@ func set_clay_view(on: bool) -> void:
 		_set_down()
 	sculpt_state = st
 	sculpt.visible = on
+	if on:
+		sculpt.remesh()
 	if on and exploded:
 		set_exploded(false)
 	_show_sculpt_note()
@@ -11077,7 +11392,8 @@ func _held_moved(before: Array) -> void:
 			_show_placed_note()
 		_:
 			_show_placed_note()
-	_gizmo.position = _placed_centre()
+	_place_gizmo()
+	_refresh_xform()
 
 
 ## A lifted part's or a guide's drawing where `_placed.xf` says (a model shows its ghost).
@@ -11197,6 +11513,7 @@ func _show_gizmo() -> void:
 	if _gizmo == null:
 		_gizmo = ModelGizmo.new()
 		add_child(_gizmo)
+		_gizmo.set_mode(gizmo_mode)
 		_placed_ghost = MeshInstance3D.new()
 		var m := StandardMaterial3D.new()
 		m.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
@@ -11206,7 +11523,7 @@ func _show_gizmo() -> void:
 		_placed_ghost.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 		add_child(_placed_ghost)
 	_gizmo.visible = true
-	_gizmo.position = _placed_centre()
+	_place_gizmo()
 	_placed_ghost.visible = false
 	var ghost := ArrayMesh.new()
 	for p in _placed.pieces:
@@ -11260,7 +11577,7 @@ func _gizmo_input(e: InputEvent) -> bool:
 		_placed_ghost.visible = false
 		if not (_placed.xf as Transform3D).is_equal_approx(_gizmo_xf0):
 			_held_moved(_gizmo_before)
-		_gizmo.position = _placed_centre()
+		_place_gizmo()
 		return true
 	if e is InputEventMouseMotion:
 		if _gizmo.dragging() != "":
@@ -11271,6 +11588,7 @@ func _gizmo_input(e: InputEvent) -> bool:
 			else:
 				_held_follow()
 			_show_placed_note()
+			_refresh_xform()
 			return true
 		_gizmo.set_hover(_gizmo.pick(ray[0], ray[1]))
 	return false
@@ -11414,8 +11732,8 @@ func _build_models_box(box: Container) -> void:
 	box.add_child(_model_list)
 	var row := HFlowContainer.new()
 	box.add_child(row)
-	for b in [["remove", func() -> void: drop_model()], ["bake into SDF", func() -> void: bake_model()],
-			["give the piece this part", func() -> void: give_piece_part()]]:
+	# Remove and bake are in the Selected panel (_build_xform_box).
+	for b in [["give the piece this part", func() -> void: give_piece_part()]]:
 		var btn := Button.new()
 		btn.text = b[0]
 		btn.focus_mode = Control.FOCUS_NONE
@@ -11481,6 +11799,20 @@ func dragged_xf(d: Dictionary, free: bool) -> Transform3D:
 			a = snappedf(a, deg_to_rad(15.0))
 		var r := Basis(d.turn[0] as Vector3, a)
 		return Transform3D(r, c - r * c) * xf
+	if d.has("scale"):
+		# Along the thing's own axis i (the gizmo turns with it in scale mode), about its middle;
+		# its length snapped to a quarter stud (`free`: as dragged).
+		var i: int = d.scale[0]
+		var box: AABB = _placed.box
+		var len := box.size[i] * xf.basis.get_scale()[i] / BrickPalette.STUD_M
+		var want := len * float(d.scale[1])
+		if not free:
+			want = maxf(snappedf(want, 0.25), 0.25)
+		want = clampf(want, 0.1, MODEL_MAX_STUDS)
+		var v := Vector3.ONE
+		v[i] = want / maxf(len, 1e-4)
+		var cl := box.get_center()
+		return xf * Transform3D(Basis.from_scale(v), cl - cl * v)
 	if d.has("size"):
 		var f: float = d.size
 		# Held between a stud and MODEL_MAX_STUDS long: past that the stamp refuses it.
