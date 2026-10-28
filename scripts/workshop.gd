@@ -39,6 +39,7 @@ const KEY_ROWS := [
 	["", "V", "snap to side studs", "B", "paint brush (LMB paints, drag)"],
 	["TOOLS", "rail", "on the left (Docs/BuildTools.md)", "K", "shapes of the held brick"],
 	["", "N", "cut a door / window / shape", "L", "select a kept shape"],
+	["", "J", "repeat: storeys, rows", "alt D", "sketch an outline"],
 	["PAINT", "palette", "material + colour (ESC, click)", "- =", "brush size"],
 	["", "MMB", "take a brick's material + colour", "PGUP/DN", "material"],
 	["GROUP", "X", "select the inserted build aimed at", "M", "move it"],

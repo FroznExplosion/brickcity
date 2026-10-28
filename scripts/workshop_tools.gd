@@ -4,7 +4,8 @@ extends Node
 ## The building workshop's tools (Docs/BuildTools.md): the rail down the left (`ToolRail`,
 ## the asset workshop's own), and the tools that build buildings fast -- Shapes of the held
 ## brick, flat or standing as a wall, staggered or aligned; Cut, for doorways and windows;
-## Sketch, an outline drawn by hand with the asset workshop's own pen (SketchPen); Select,
+## Sketch, an outline drawn by hand with the asset workshop's own pen (SketchPen); Repeat,
+## for storeys and rows of windows; Select,
 ## to change or let go of a kept shape. Place, Paint and Rooms are the workshop's
 ## own hand, brush and spaces tool.
 ##
@@ -18,16 +19,19 @@ const TOOLS := [
 	["shape", "Shapes", "K", "Drag out a shape of the held brick: flat on the plane you aim at, or standing as a wall. RMB drag cuts the same shape out. Shift keeps a circle round."],
 	["cut", "Cut", "N", "Drag a doorway, window or any shape on a wall: the wall is laid again round it. Door and window: one click."],
 	["sketch", "Sketch", "Alt D", "Draw an outline on the plane you aim at, flat or standing -- freehand, brush, rectangle, ellipse or clicked corners: it fills with the held brick as a kept shape. RMB draws one to cut out."],
+	["repeat", "Repeat", "J", "Copy the picked shape -- or a storey, everything between two heights -- N times up, or along X or Z. Click a brick here to pick what to repeat; a door or window repeats with its cut."],
 	["select", "Select", "L", "Click a shape's brick to pick the shape: change its height, bond or brick, take its cuts out, delete it, or let it go (keep the bricks)."],
 	["rooms", "Rooms", "O", "Rooms and openings, as O: LMB marks a room or an opening, RMB forgets it."],
 ]
 const LIE_NAMES := [["flat", "flat (floor, or walls round it)"], ["wall", "standing wall"]]
 const CUT_KINDS := [["rect", "rectangle (drag)"], ["arch", "arch (drag)"], ["circle", "circle (drag)"],
 		["door", "door (click)"], ["window", "window (click)"]]
-## A door and a window cut by one click: studs across, plates up; a window's sill is where
-## it is clicked, a door stands on the floor of the wall.
+## A door and a window cut by one click, to start: studs across, plates up; a window's sill
+## is where it is clicked, a door stands on the floor of the wall.
 const DOOR := Vector2i(4, 18)
 const WINDOW := Vector2i(4, 9)
+const REPEAT_WHAT := [["shape", "the picked shape"], ["storey", "a storey (from / to)"]]
+const REPEAT_DIRS := [["up", "up"], ["x", "along X"], ["z", "along Z"]]
 
 var ws    ## the workshop (workshop.gd)
 var rail: ToolRail
@@ -41,6 +45,19 @@ var thick := 1       # studs, a wall's depth
 var rim := 1         # studs, a hollow rectangle's or a ring's
 var staggered := true
 var cut_kind := "rect"
+## Doors and windows (Docs/BuildTools.md section 6): their size, and whether they get a
+## frame (the held brick and colour) and, windows, glass.
+var door_size := DOOR
+var window_size := WINDOW
+var frame_on := true
+var glass_on := true
+## Repeat: what, which way, how many, the gap between copies, and a storey's plates.
+var rep_what := "shape"
+var rep_dir := "up"
+var rep_times := 1
+var rep_gap := 0
+var rep_lo := 1
+var rep_hi := 9
 ## Sketch: the pen (the asset workshop's), its brush, and the plane a stroke is on --
 ## {lie, at} while one is drawn, else empty.
 var pen := SketchPen.new()
@@ -79,6 +96,12 @@ var _rim_spin: SpinBox
 var _sel_depth: SpinBox
 var _sel_rim: SpinBox
 var _sel_bond: OptionButton
+var _repeat_box: VBoxContainer
+var _repeat_label: Label
+var _rep_lo_spin: SpinBox
+var _rep_hi_spin: SpinBox
+var _door_box: VBoxContainer
+var _window_box: VBoxContainer
 var _syncing := false
 
 
@@ -181,21 +204,34 @@ func forget_brick(part: String, cell: Vector3i) -> void:
 
 
 ## A new kept shape, from the options in hand: returns its id.
-func add_shape(k: String, l: String, a: Vector2i, b: Vector2i, at: int, points: Array = []) -> int:
-	var id := _next_id()
+func add_shape(k: String, l: String, a: Vector2i, b: Vector2i, at: int, points: Variant = []) -> int:
+	var sh := _new_shape(k, l, a, b, at, points)
+	var rec := _begin()
+	_add_into(rec, sh)
+	_end(rec)
+	return int(sh.id)
+
+
+## A shape's record from the options in hand (the held brick, colour, material), not laid.
+func _new_shape(k: String, l: String, a: Vector2i, b: Vector2i, at: int, points: Variant = []) -> Dictionary:
 	var sh := {
-		"id": id, "kind": k, "lie": l, "a": [a.x, a.y], "b": [b.x, b.y], "at": at,
+		"id": _next_id(), "kind": k, "lie": l, "a": [a.x, a.y], "b": [b.x, b.y], "at": at,
 		"depth": tall if l == "flat" else thick, "rim": rim, "bond": "stagger" if staggered else "align",
 		"part": BrickPalette.part_of(ws._archetype_name()), "colour": ws._colour, "mat": ws._mat,
 		"role": ws._role, "cuts": [], "bricks": [],
 	}
-	if not points.is_empty():
+	if (points is Array and not (points as Array).is_empty()) or points is Dictionary:
 		sh.points = points
-	var rec := _begin()
-	rec.before[id] = null
+	return sh
+
+
+## Lay a new shape as part of an undo record (it gets the next id if its own is taken).
+func _add_into(rec: Dictionary, sh: Dictionary) -> int:
+	if not shape_of(int(sh.id)).is_empty():
+		sh.id = _next_id()
+	rec.before[int(sh.id)] = null
 	_lay(sh)
-	_end(rec)
-	return id
+	return int(sh.id)
 
 
 ## Change a kept shape -- `change` merged into it -- and lay it again whole. One undo.
@@ -245,10 +281,17 @@ func let_go(id: int) -> void:
 ## touches -- each laid again near the cut only -- and take up hand-laid bricks in it.
 ## One undo. Returns how many shapes it cut.
 func apply_cut(cut: Dictionary) -> int:
+	var rec := _begin()
+	var n := _cut_into(rec, cut)
+	_end(rec)
+	return n
+
+
+## A cut, as part of an undo record. Returns how many shapes and hand bricks it cut.
+func _cut_into(rec: Dictionary, cut: Dictionary) -> int:
 	var cells := BrickShapes.solid_cells(cut)
 	if cells.is_empty():
 		return 0
-	var rec := _begin()
 	var n := 0
 	for sh in shapes().duplicate():
 		var mine := BrickShapes.shape_cells(sh)
@@ -261,7 +304,8 @@ func apply_cut(cut: Dictionary) -> int:
 			continue
 		var next: Dictionary = sh.duplicate(true)
 		(next.cuts as Array).append(cut.duplicate(true))
-		rec.before[int(sh.id)] = sh
+		if not rec.before.has(int(sh.id)):
+			rec.before[int(sh.id)] = sh
 		_lay(next, _near_box(cells, sh, String(cut.get("lie", ""))))
 		n += 1
 	# Hand-laid bricks in the cut go too: the hole is a hole.
@@ -277,8 +321,225 @@ func apply_cut(cut: Dictionary) -> int:
 		rec.hand.append([ws.recipe.part_of(rid), _plain(ws.recipe.cell_of(rid)), ws.recipe.colour_of(rid),
 				ws.recipe.material_of(rid), ws.recipe.role_of(rid)])
 		ws._remove_rid(int(rid))
-	_end(rec)
 	return n + rids.size()
+
+
+# ---------------------------------------------------------------------------
+# Doors and windows (Docs/BuildTools.md section 6)
+# ---------------------------------------------------------------------------
+
+## A door or a window where a face was clicked, with its frame and glass as the options
+## say: one cut through the wall (the opening and its frame), the frame and the glass kept
+## shapes of their own. One undo. Returns the opening's spec.
+func apply_opening(k: String, face: Dictionary) -> Dictionary:
+	var op := opening_spec(k, face)
+	var rec := _begin()
+	_open_into(rec, op)
+	_end(rec)
+	return op
+
+
+## What a door or a window clicked on a face would be: {kind, lie, at, depth, a, b (the
+## opening), frame, glass, part, colour, mat (the frame's: the held brick)}.
+func opening_spec(k: String, face: Dictionary) -> Dictionary:
+	var size := door_size if k == "door" else window_size
+	var l := String(face.lie)
+	var uvw := BrickShapes.from_3d(l, face.cell)
+	var u0 := uvw.x - (size.x >> 1)
+	var v0 := uvw.y
+	if k == "door":
+		var v := uvw.y
+		# Down while there is wall (the build's own bricks: not the baseplate).
+		while v > 0 and _rid_at(BrickShapes.to_3d(l, Vector2i(uvw.x, v - 1), uvw.z)) >= 0:
+			v -= 1
+		v0 = v
+	return {"kind": k, "lie": l, "at": int(face.at), "depth": int(face.depth),
+			"a": [u0, v0], "b": [u0 + size.x - 1, v0 + size.y - 1],
+			"frame": frame_on, "glass": glass_on and k == "window",
+			"part": BrickPalette.part_of(ws._archetype_name()), "colour": ws._colour, "mat": ws._mat}
+
+
+## The box an opening takes out of its wall: the opening, and its frame round it -- a stud
+## each side, a brick's height over it, and under a window a brick's height of sill.
+static func opening_box(op: Dictionary) -> Array:
+	var a := BrickShapes._v2(op.a)
+	var b := BrickShapes._v2(op.b)
+	if not bool(op.get("frame", true)):
+		return [a, b]
+	var rv := maxi(1, int(round(1.0 / BrickShapes.aspect(String(op.lie)))))
+	var lo := Vector2i(a.x - 1, a.y if op.kind == "door" else a.y - rv)
+	return [lo, Vector2i(b.x + 1, b.y + rv)]
+
+
+func _open_into(rec: Dictionary, op: Dictionary) -> void:
+	var box := opening_box(op)
+	var l := String(op.lie)
+	_cut_into(rec, {"kind": "rect", "lie": l, "a": [box[0].x, box[0].y], "b": [box[1].x, box[1].y],
+			"at": op.at, "depth": op.depth})
+	if bool(op.frame):
+		var fr := _new_shape("jamb" if op.kind == "door" else "hollow", l, box[0], box[1], int(op.at))
+		fr.depth = int(op.depth)
+		fr.rim = 1
+		fr.part = op.part
+		fr.colour = op.colour
+		fr.mat = op.mat
+		fr.opening = op
+		_add_into(rec, fr)
+	if bool(op.glass):
+		var paint := glass_paint()
+		var gl := _new_shape("rect", l, BrickShapes._v2(op.a), BrickShapes._v2(op.b),
+				int(op.at) + ((int(op.depth) - 1) >> 1))
+		gl.depth = 1
+		gl.part = op.part
+		gl.colour = paint.y
+		gl.mat = paint.x
+		gl.opening = op
+		_add_into(rec, gl)
+
+
+## Glass: (the see-through material, its clearest colour).
+static func glass_paint() -> Vector2i:
+	for m in BrickWorld.get_material_count():
+		if not BrickWorld.is_material_translucent(m):
+			continue
+		var best := 0
+		var score := -1
+		for c in BrickWorld.get_material_colour_count(m):
+			var n := BrickWorld.get_material_colour_name(m, c).to_lower()
+			var sc := 0
+			for w in [["clear", 5], ["transparent", 5], ["glass", 4], ["sky", 3], ["light blue", 3], ["ice", 3],
+					["blue", 2], ["white", 1]]:
+				if n.contains(String(w[0])):
+					sc = maxi(sc, int(w[1]))
+			if sc > score:
+				score = sc
+				best = c
+		return Vector2i(m, best)
+	return Vector2i(0, 0)
+
+
+# ---------------------------------------------------------------------------
+# Repeat: storeys and bays (Docs/BuildTools.md section 6)
+# ---------------------------------------------------------------------------
+
+## Copy what Repeat has (`rep_what`: the picked shape, or the storey rep_lo..rep_hi) `times`
+## times `dir` ("up", "x", "z"), `gap` cells apart. One undo. Returns how many copies of
+## shapes, openings and plain bricks were made.
+func repeat(dir: String, times: int, gap: int) -> int:
+	var g := _repeat_group()
+	if g.is_empty() or times < 1:
+		return 0
+	var axis := 1 if dir == "up" else (0 if dir == "x" else 2)
+	var lo: Vector3i = g.lo
+	var hi: Vector3i = g.hi
+	var span := hi[axis] - lo[axis] + 1 + gap
+	var rec := _begin()
+	rec.laid = []
+	var n := 0
+	ws._batch = true
+	for k in range(1, times + 1):
+		var d := Vector3i.ZERO
+		d[axis] = span * k
+		for sh in g.shapes:
+			_add_into(rec, BrickShapes.shifted(sh, d))
+			n += 1
+		for op in g.openings:
+			_open_into(rec, BrickShapes.shifted(op, d))
+			n += 1
+		ws._batch = true
+		for b in g.bricks:
+			var at: Vector3i = b[1] + d
+			if ws.lay_part(String(b[0]), at, int(b[2]), int(b[3]), int(b[4])):
+				rec.laid.append([b[0], _plain(at)])
+				n += 1
+	ws._batch = false
+	_end(rec)
+	return n
+
+
+## What Repeat copies: {shapes, openings, bricks ([part, cell, colour, mat, role]), lo, hi
+## (the box round it all, in cells)}, or empty for nothing.
+func _repeat_group() -> Dictionary:
+	var g := {"shapes": [], "openings": [], "bricks": [], "lo": Vector3i(1 << 30, 1 << 30, 1 << 30),
+			"hi": -Vector3i(1 << 30, 1 << 30, 1 << 30)}
+	if rep_what == "shape":
+		var sh := shape_of(selected)
+		if sh.is_empty():
+			return {}
+		if sh.has("opening"):
+			var op: Dictionary = sh.opening
+			g.openings.append(op)
+			var box := opening_box(op)
+			_grow(g, BrickShapes.solid_cells({"kind": "rect", "lie": op.lie, "a": [box[0].x, box[0].y],
+					"b": [box[1].x, box[1].y], "at": op.at, "depth": op.depth}))
+		else:
+			g.shapes.append(sh)
+			_grow(g, BrickShapes.solid_cells(sh))
+		return g
+	# A storey: the shapes wholly inside it, and every other brick inside it.
+	var lo := mini(rep_lo, rep_hi)
+	var hi := maxi(rep_lo, rep_hi)
+	var copied := {}
+	for sh in shapes():
+		var cells := BrickShapes.solid_cells(sh)
+		var inside := true
+		for c in cells:
+			if c.y < lo or c.y > hi:
+				inside = false
+				break
+		if inside and not cells.is_empty():
+			g.shapes.append(sh)
+			copied[int(sh.id)] = true
+	for i in ws.recipe.size():
+		if ws.recipe.frame_of(i) != 0:
+			continue
+		var c: Vector3i = ws.recipe.cell_of(i)
+		var size := BrickPalette.size_of(ws.recipe.part_of(i))
+		if c.y < lo or c.y + size.y - 1 > hi:
+			continue
+		if copied.has(owner_of(ws.recipe.part_of(i), c)):
+			continue
+		g.bricks.append([ws.recipe.part_of(i), c, ws.recipe.colour_of(i), ws.recipe.material_of(i), ws.recipe.role_of(i)])
+		_grow(g, {c: true, c + size - Vector3i.ONE: true})
+	for sh in g.shapes:
+		_grow(g, BrickShapes.solid_cells(sh))
+	if g.shapes.is_empty() and g.bricks.is_empty():
+		return {}
+	# Up, a storey is its own height, whatever is built in it.
+	g.lo.y = lo
+	g.hi.y = hi
+	return g
+
+
+static func _grow(g: Dictionary, cells: Dictionary) -> void:
+	for c in cells:
+		g.lo = Vector3i(mini(g.lo.x, c.x), mini(g.lo.y, c.y), mini(g.lo.z, c.z))
+		g.hi = Vector3i(maxi(g.hi.x, c.x), maxi(g.hi.y, c.y), maxi(g.hi.z, c.z))
+
+
+## Repeat: a click picks the shape under it, and sets the storey to its height (or a
+## plain brick's own).
+func _repeat_click() -> void:
+	_select_click()
+	var sh := shape_of(selected)
+	var ray := _ray()
+	var hit: Dictionary = ws._first_hit(ray[0], ray[1])
+	if not sh.is_empty():
+		var cells := BrickShapes.solid_cells(sh)
+		var lo := 1 << 30
+		var hi := -(1 << 30)
+		for c in cells:
+			lo = mini(lo, c.y)
+			hi = maxi(hi, c.y)
+		rep_lo = lo
+		rep_hi = hi
+	elif not hit.is_empty() and hit.frame == ws.asm.frames[0]:
+		var rid: int = ws._recipe_id_at(0, hit.block)
+		if rid >= 0:
+			rep_lo = ws.recipe.cell_of(rid).y
+			rep_hi = rep_lo + BrickPalette.size_of(ws.recipe.part_of(rid)).y - 1
+	_rep_lo_spin.set_value_no_signal(rep_lo)
+	_rep_hi_spin.set_value_no_signal(rep_hi)
 
 
 func _rid_at(c: Vector3i) -> int:
@@ -387,10 +648,15 @@ func undo() -> bool:
 	var rec: Dictionary = _undo.pop_back()
 	ws._edits.pop_back()
 	ws._batch = true
+	# Everything the edit laid comes up first, then what was there goes back: a door's frame
+	# stands where its wall's bricks will go.
+	for b in rec.get("laid", []):
+		_take_part(String(b[0]), BuildRecipe.cell_from(b[1]))
 	for id in rec.before:
 		var now := shape_of(int(id))
 		if not now.is_empty() and not rec.get("kept", false):
 			_take_up(now)
+	for id in rec.before:
 		var was = rec.before[id]
 		if was == null:
 			_store(int(id), {})
@@ -430,7 +696,7 @@ func pick(id: String) -> void:
 		_:
 			ws._set_painting(false)
 	tool = id if id != "paint" and id != "rooms" else "place"
-	if id != "select":
+	if id != "select" and id != "repeat":
 		selected = -1
 
 
@@ -480,9 +746,41 @@ func _build_options() -> void:
 	_cut_box = VBoxContainer.new()
 	rail.options.add_child(_cut_box)
 	_choice(_cut_box, "cut", CUT_KINDS, func(i: int) -> void: cut_kind = CUT_KINDS[i][0])
+	_door_box = VBoxContainer.new()
+	_cut_box.add_child(_door_box)
+	_spin(_door_box, "door wide (studs)", 1, 32, door_size.x, func(v: float) -> void: door_size.x = int(v))
+	_spin(_door_box, "door tall (plates)", 3, 120, door_size.y, func(v: float) -> void: door_size.y = int(v))
+	_window_box = VBoxContainer.new()
+	_cut_box.add_child(_window_box)
+	_spin(_window_box, "window wide (studs)", 1, 32, window_size.x, func(v: float) -> void: window_size.x = int(v))
+	_spin(_window_box, "window tall (plates)", 1, 120, window_size.y, func(v: float) -> void: window_size.y = int(v))
+	var gc := CheckBox.new()
+	gc.text = "glass"
+	gc.button_pressed = glass_on
+	gc.focus_mode = Control.FOCUS_NONE
+	gc.toggled.connect(func(on: bool) -> void: glass_on = on)
+	_window_box.add_child(gc)
+	var fc := CheckBox.new()
+	fc.text = "frame (the held brick and colour)"
+	fc.button_pressed = frame_on
+	fc.focus_mode = Control.FOCUS_NONE
+	fc.toggled.connect(func(on: bool) -> void: frame_on = on)
+	_cut_box.add_child(fc)
 	var cl := Label.new()
 	cl.text = "Goes through the wall clicked, not the one behind it."
 	_cut_box.add_child(cl)
+
+	_repeat_box = VBoxContainer.new()
+	rail.options.add_child(_repeat_box)
+	_repeat_label = Label.new()
+	_repeat_box.add_child(_repeat_label)
+	_choice(_repeat_box, "repeat", REPEAT_WHAT, func(i: int) -> void: rep_what = REPEAT_WHAT[i][0])
+	_rep_lo_spin = _spin(_repeat_box, "storey from (plate)", 0, 2000, rep_lo, func(v: float) -> void: rep_lo = int(v))
+	_rep_hi_spin = _spin(_repeat_box, "to (plate)", 0, 2000, rep_hi, func(v: float) -> void: rep_hi = int(v))
+	_choice(_repeat_box, "which way", REPEAT_DIRS, func(i: int) -> void: rep_dir = REPEAT_DIRS[i][0])
+	_spin(_repeat_box, "times", 1, 50, rep_times, func(v: float) -> void: rep_times = int(v))
+	_spin(_repeat_box, "gap (studs, or plates up)", 0, 100, rep_gap, func(v: float) -> void: rep_gap = int(v))
+	_button(_repeat_box, "Repeat", func() -> void: repeat(rep_dir, rep_times, rep_gap))
 
 	_select_box = VBoxContainer.new()
 	rail.options.add_child(_select_box)
@@ -602,6 +900,9 @@ func input(e: InputEvent) -> bool:
 			KEY_L:
 				pick("place" if tool == "select" else "select")
 				return true
+			KEY_J:
+				pick("place" if tool == "repeat" else "repeat")
+				return true
 			KEY_ESCAPE:
 				if tool != "place" and _drag.is_empty() and _sk.is_empty():
 					pick("place")
@@ -620,6 +921,10 @@ func input(e: InputEvent) -> bool:
 		"select":
 			if e.pressed and e.button_index == MOUSE_BUTTON_LEFT:
 				_select_click()
+				return true
+		"repeat":
+			if e.pressed and e.button_index == MOUSE_BUTTON_LEFT:
+				_repeat_click()
 				return true
 	return false
 
@@ -737,7 +1042,7 @@ func _cut_input(e: InputEventMouseButton) -> bool:
 		var uvw := BrickShapes.from_3d(String(face.lie), face.cell)
 		var a := Vector2i(uvw.x, uvw.y)
 		if cut_kind in ["door", "window"]:
-			apply_cut(preset_cut(cut_kind, face))
+			apply_opening(cut_kind, face)
 			return true
 		_drag = {"button": MOUSE_BUTTON_LEFT, "lie": face.lie, "at": face.at, "a": a, "b": a,
 				"depth": face.depth, "kind": cut_kind, "cut": true}
@@ -861,6 +1166,15 @@ func process() -> void:
 	_sketch_box.get_child(2).visible = pen.draw == "brush"   # the brush's size
 	_sketch_box.get_child(3).visible = pen.draw == "brush"   # and shape
 	_cut_box.visible = on == "cut"
+	_door_box.visible = cut_kind == "door"
+	_window_box.visible = cut_kind == "window"
+	_repeat_box.visible = on == "repeat"
+	if on == "repeat":
+		var sh := shape_of(selected)
+		_repeat_label.text = ("Click a brick to pick what to repeat." if sh.is_empty()
+				else "Picked: %s%s." % [sh.kind, " (a door or window: it repeats with its cut)" if sh.has("opening") else ""])
+		_rep_lo_spin.get_parent().visible = rep_what == "storey"
+		_rep_hi_spin.get_parent().visible = rep_what == "storey"
 	_select_box.visible = on == "select"
 	_tall_spin.get_parent().visible = lie == "flat"
 	_thick_spin.get_parent().visible = lie == "wall"
@@ -877,7 +1191,7 @@ func process() -> void:
 	if not _drag.is_empty():
 		_drag.b = _drag_point()
 		ws._ghost.visible = false
-	elif tool in ["cut", "select"] or not _sk.is_empty():
+	elif tool in ["cut", "select", "repeat"] or not _sk.is_empty():
 		ws._ghost.visible = false
 	_draw()
 
@@ -954,7 +1268,7 @@ func _draw() -> void:
 			_im.surface_add_vertex(_local(l, seg[0], w0))
 			_im.surface_set_color(seg[2])
 			_im.surface_add_vertex(_local(l, seg[1], w0))
-	if tool == "select" and selected >= 0:
+	if tool in ["select", "repeat"] and selected >= 0:
 		var sh := shape_of(selected)
 		if not sh.is_empty():
 			any = _outline(sh, Color(1.0, 0.85, 0.3), any)
