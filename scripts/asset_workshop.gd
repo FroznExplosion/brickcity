@@ -198,7 +198,11 @@ var _plane_lines: MeshInstance3D
 var _photo_lines: MeshInstance3D
 var photo_grid := false
 ## A sketch being drawn: points on the side plane, (studs along, plates up).
-var _sketch: Array[Vector2] = []
+## The stroke being drawn is the shared pen's (SketchPen, scripts/workshop_sketch.gd); these
+## name its parts as this file always has.
+var _pen := SketchPen.new()
+var _sketch: Array[Vector2]:
+	get: return _pen.points
 var _photo_drag = null
 ## An RMB delete, for undo: what it took, newest last, one for each "delete" edit.
 var _deleted: Array = []
@@ -228,7 +232,9 @@ var curve_level := 2:
 		slope_eager = curve_level >= 4
 const CURVE_LEVELS := ["steps only", "slopes", "slopes and curves", "from the side and front",
 		"eager slopes too"]
-var _sketch_out := false
+var _sketch_out: bool:
+	get: return _pen.out
+	set(v): _pen.out = v
 var _sketch_cache := {}
 
 ## Phase 4. Parts that leave as smooth custom pieces rather than bricks.
@@ -4073,12 +4079,12 @@ func _sketch_input(e: InputEvent) -> bool:
 		return _polygon_input(e)
 	if e is InputEventMouseButton and e.button_index in [MOUSE_BUTTON_LEFT, MOUSE_BUTTON_RIGHT]:
 		if e.pressed:
-			_sketch.clear()
-			_sketch_out = e.button_index == MOUSE_BUTTON_RIGHT
 			var q = _sketch_mouse()
 			if q != null:
-				_sketch_anchor = q
-				_sketch.append(q)
+				_pen.press(q, e.button_index == MOUSE_BUTTON_RIGHT)
+			else:
+				_sketch.clear()
+				_sketch_out = e.button_index == MOUSE_BUTTON_RIGHT
 		else:
 			_sketch_commit()
 		return true
@@ -5279,15 +5285,8 @@ func _sketch_add() -> void:
 	var q = _sketch_mouse()
 	if q == null:
 		return
-	match sketch_draw:
-		"rect", "ellipse":
-			_sketch.assign(drag_shape(sketch_draw, _sketch_anchor, q))
-		"brush":
-			if _sketch.is_empty() or q.distance_to(_sketch.back()) > maxf(0.25, brush_size * 0.25):
-				_sketch.append(q)
-		_:
-			if _sketch.is_empty() or q.distance_to(_sketch.back()) > 0.3:
-				_sketch.append(q)
+	_pen.draw = sketch_draw
+	_pen.move(q, brush_size)
 
 
 ## What the stroke under way comes to, into the sketch: an outline, or a brush's path.
@@ -5306,48 +5305,27 @@ func _polygon_input(e: InputEvent) -> bool:
 		var q = _sketch_mouse()
 		if q == null:
 			return true
-		if _sketch.is_empty():
-			_sketch_out = e.button_index == MOUSE_BUTTON_RIGHT
-		elif e.double_click or (_sketch.size() >= 3 and q.distance_to(_sketch[0]) < 0.7):
+		if _pen.polygon_click(q, e.button_index == MOUSE_BUTTON_RIGHT, e.double_click):
 			_sketch_commit()
-			return true
-		_sketch.append(q)
 		return true
-	if e is InputEventKey and e.pressed and not _sketch.is_empty():
-		match e.keycode:
-			KEY_ENTER, KEY_KP_ENTER:
+	if e is InputEventKey:
+		match _pen.polygon_key(e):
+			"commit":
 				_sketch_commit()
 				return true
-			KEY_BACKSPACE:
-				_sketch.pop_back()
+			"back":
 				return true
 	return false
 
 
-## A rectangle or an ellipse dragged from corner `a` to corner `b`, as an outline.
+## A rectangle or an ellipse dragged from corner `a` to corner `b`, as an outline (the pen's).
 static func drag_shape(kind: String, a: Vector2, b: Vector2) -> Array[Vector2]:
-	var out: Array[Vector2] = []
-	var lo := Vector2(minf(a.x, b.x), minf(a.y, b.y))
-	var hi := Vector2(maxf(a.x, b.x), maxf(a.y, b.y))
-	if kind == "rect":
-		out.assign([lo, Vector2(hi.x, lo.y), hi, Vector2(lo.x, hi.y)])
-		return out
-	var c := (lo + hi) * 0.5
-	var r := (hi - lo) * 0.5
-	for i in 32:
-		var t := TAU * i / 32.0
-		out.append(c + Vector2(cos(t) * r.x, sin(t) * r.y))
-	return out
+	return SketchPen.drag_shape(kind, a, b)
 
 
-## A brush stroke as a sketch entry: its path, and its reach across and up the plane (a
-## stud across is two and a half plates up on the side and front planes).
+## A brush stroke as a sketch entry (the pen's).
 static func brush_entry(path: Array, size: int, square: bool, plane: String) -> Dictionary:
-	var pts := []
-	for q in path:
-		pts.append([q.x, q.y])
-	var rx := maxf(0.5, float(size))
-	return {"brush": pts, "rx": rx, "ry": rx * (1.0 if plane == "top" else 2.5), "square": square}
+	return SketchPen.brush_entry(path, size, square, plane)
 
 
 ## A point of the working plane in the sketch's own two numbers: across the plane and up
@@ -6026,95 +6004,15 @@ func solid_cells(solid: Dictionary) -> Dictionary:
 	return out
 
 
+## The cells an outline or a brush stroke covers (the pen's: shared with the building
+## workshop's sketch and shapes).
 static func region_cells(poly: Variant) -> Dictionary:
-	if poly is Dictionary:
-		return brush_cells(poly)
-	var pts := PackedVector2Array()
-	for q in poly:
-		pts.append(Vector2(float(q[0]), float(q[1])))
-	if pts.size() < 3:
-		return {}
-	var lo := Vector2i(1 << 30, 1 << 30)
-	var hi := Vector2i(-(1 << 30), -(1 << 30))
-	for q in pts:
-		lo = Vector2i(mini(lo.x, int(floor(q.x))), mini(lo.y, int(floor(q.y))))
-		hi = Vector2i(maxi(hi.x, int(ceil(q.x))), maxi(hi.y, int(ceil(q.y))))
-	# A bitmap one cell wider all round, so the outside is connected: 1 inside, 2 outside.
-	var w := hi.x - lo.x + 2
-	var h := hi.y - lo.y + 2
-	var map := PackedByteArray()
-	map.resize(w * h)
-	# Inside by winding, not even-odd (a stretch circled twice is in, not cancelled out),
-	# a row at a time: where each edge crosses the row's centre line, and which way.
-	var n := pts.size()
-	for v in range(lo.y, hi.y):
-		var y := v + 0.5
-		var xs := []
-		for i in n:
-			var a := pts[i]
-			var b := pts[(i + 1) % n]
-			if (a.y <= y) == (b.y <= y):
-				continue
-			xs.append([a.x + (y - a.y) / (b.y - a.y) * (b.x - a.x), 1 if b.y > a.y else -1])
-		if xs.is_empty():
-			continue
-		xs.sort_custom(func(p: Array, q: Array) -> bool: return p[0] < q[0])
-		var wind := 0
-		for j in xs.size() - 1:
-			wind += int(xs[j][1])
-			if wind == 0:
-				continue
-			# Cells whose centres lie between this crossing and the next.
-			var u0 := maxi(lo.x, int(ceil(float(xs[j][0]) - 0.5)))
-			var u1 := mini(hi.x - 1, int(ceil(float(xs[j + 1][0]) - 0.5)) - 1)
-			for u in range(u0, u1 + 1):
-				map[(v - lo.y + 1) * w + (u - lo.x + 1)] = 1
-	# Outermost: whatever the outside cannot reach is in, holes the crossing made included.
-	var todo := PackedInt32Array([0])
-	map[0] = 2
-	while not todo.is_empty():
-		var at := todo[todo.size() - 1]
-		todo.resize(todo.size() - 1)
-		var ax := at % w
-		@warning_ignore("integer_division")
-		var ay := at / w
-		for nb in [at - 1 if ax > 0 else -1, at + 1 if ax < w - 1 else -1, at - w if ay > 0 else -1,
-				at + w if ay < h - 1 else -1]:
-			if nb >= 0 and map[nb] == 0:
-				map[nb] = 2
-				todo.append(nb)
-	var out := {}
-	for v in range(lo.y, hi.y):
-		for u in range(lo.x, hi.x):
-			if map[(v - lo.y + 1) * w + (u - lo.x + 1)] != 2:
-				out[Vector2i(u, v)] = true
-	return out
+	return SketchPen.region_cells(poly)
 
 
-## The cells a brush stroke covers: every cell whose centre is within its reach of the
-## path (an ellipse, or a box when square), the path walked in steps shorter than that.
+## The cells a brush stroke covers (the pen's).
 static func brush_cells(entry: Dictionary) -> Dictionary:
-	var out := {}
-	var rx := float(entry.get("rx", 0.5))
-	var ry := float(entry.get("ry", 0.5))
-	var square := bool(entry.get("square", false))
-	var path: Array = entry.get("brush", [])
-	var pts: Array[Vector2] = []
-	for i in path.size():
-		var b := Vector2(float(path[i][0]), float(path[i][1]))
-		if i > 0:
-			var a: Vector2 = pts.back()
-			var steps := int(ceil(maxf(absf(b.x - a.x) / (rx * 0.5), absf(b.y - a.y) / (ry * 0.5))))
-			for k in range(1, steps):
-				pts.append(a.lerp(b, float(k) / steps))
-		pts.append(b)
-	for p in pts:
-		for u in range(int(floor(p.x - rx)), int(ceil(p.x + rx)) + 1):
-			for v in range(int(floor(p.y - ry)), int(ceil(p.y + ry)) + 1):
-				var d := Vector2((u + 0.5 - p.x) / rx, (v + 0.5 - p.y) / ry)
-				if (maxf(absf(d.x), absf(d.y)) <= 1.0) if square else (d.length_squared() <= 1.0):
-					out[Vector2i(u, v)] = true
-	return out
+	return SketchPen.brush_cells(entry)
 
 
 ## How many times an outline goes round a point, counting direction.
@@ -6146,32 +6044,13 @@ func _draw_sketch(im: ImmediateMesh) -> void:
 	_draw_sketch_static()
 	im.surface_begin(Mesh.PRIMITIVE_LINES)
 	var any := false
-	var col := Color(1.0, 0.35, 0.3) if _sketch_out else Color(1, 1, 1)
-	var mouse = _sketch_mouse()
-	var line: Array[Vector2] = _sketch.duplicate()
-	var closed := sketch_draw in ["outline", "rect", "ellipse"]
-	if sketch_draw == "polygon" and not line.is_empty() and mouse != null:
-		line.append(mouse)
-	if sketch_draw == "brush" and mouse != null:
-		# The brush's reach round the cursor.
-		var e := brush_entry([mouse], brush_size, brush_shape == "square", work_plane)
-		var ring: Array[Vector2] = drag_shape("rect" if e.square else "ellipse",
-				mouse - Vector2(e.rx, e.ry), mouse + Vector2(e.rx, e.ry))
-		for i in ring.size():
-			im.surface_set_color(Color(0.6, 0.9, 1.0))
-			im.surface_add_vertex(_sketch_world(ring[i], work_plane, _plane_value(work_plane)))
-			im.surface_set_color(Color(0.6, 0.9, 1.0))
-			im.surface_add_vertex(_sketch_world(ring[(i + 1) % ring.size()], work_plane, _plane_value(work_plane)))
-			any = true
-	if line.size() >= 2:
-		for i in (line.size() if closed else line.size() - 1):
-			var a := line[i]
-			var b := line[(i + 1) % line.size()]
-			im.surface_set_color(col)
-			im.surface_add_vertex(_sketch_world(a, work_plane, _plane_value(work_plane)))
-			im.surface_set_color(col)
-			im.surface_add_vertex(_sketch_world(b, work_plane, _plane_value(work_plane)))
-			any = true
+	_pen.draw = sketch_draw
+	for seg in _pen.preview(_sketch_mouse(), work_plane, brush_size, brush_shape == "square"):
+		im.surface_set_color(seg[2])
+		im.surface_add_vertex(_sketch_world(seg[0], work_plane, _plane_value(work_plane)))
+		im.surface_set_color(seg[2])
+		im.surface_add_vertex(_sketch_world(seg[1], work_plane, _plane_value(work_plane)))
+		any = true
 	if not any:
 		im.surface_add_vertex(Vector3.ZERO)
 		im.surface_add_vertex(Vector3.ZERO)
@@ -6439,7 +6318,9 @@ var _sdf_shell := PackedInt32Array()
 var brush_size := 1          # studs: a sketch brush's reach; a paint brush's is the workshop's own
 var brush_shape := "round"   # or "square", for both
 var paint_what := "both"
-var _sketch_anchor := Vector2.ZERO
+var _sketch_anchor: Vector2:
+	get: return _pen.anchor
+	set(v): _pen.anchor = v
 var _rail: PanelContainer
 var _rail_buttons := {}
 var _brush_box: VBoxContainer

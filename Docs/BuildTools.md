@@ -109,7 +109,35 @@ In rough order of what saves the most time:
 
 | Stage | What | Check |
 |---|---|---|
-| 1 | Shared `ToolRail` (the asset workshop on it, unchanged to the eye); the run moved into `workshop.gd`; the building workshop's rail with Place, Paint, Rooms | `workshop_probe`, `asset_ui_probe`, `asset_workshop_probe` (its run check now runs the base's code) |
-| 2 | `BrickShapes` (kinds, flat and wall, courses staggered and aligned); Shapes tool | `tools/build_tools_probe.gd`: each kind's cells, bricks are the held kind, no seam straight up when staggered, corners alternate, one undo |
-| 3 | Kept shapes and Cut; Select for shapes; saved and opened | probe: a door cut keeps the wall's bricks away from it, a wall re-laid after a cut has the hole, save and open keeps shapes |
-| 4 | `SketchPen` shared; Sketch in the building workshop | probe: a polygon becomes a kept shape; the asset sketch probe checks unchanged |
+| 1 ✅ | Shared `ToolRail` (the asset workshop on it, unchanged to the eye); the run moved into `workshop.gd`; the building workshop's rail with Place, Paint, Rooms | `workshop_probe`, `asset_ui_probe`, `asset_workshop_probe` (its run check now runs the base's code) |
+| 2 ✅ | `BrickShapes` (kinds, flat and wall, courses staggered and aligned); Shapes tool | `tools/build_tools_probe.gd`: each kind's cells, bricks are the held kind, no seam straight up when staggered, corners alternate, one undo |
+| 3 ✅ | Kept shapes and Cut; Select for shapes; saved and opened | probe: a door cut keeps the wall's bricks away from it, a wall re-laid after a cut has the hole, save and open keeps shapes |
+| 4 ✅ | `SketchPen` shared; Sketch in the building workshop | probe: a polygon becomes a kept shape, an RMB brush stroke cuts it; `asset_workshop_probe` unchanged (318) |
+
+### As built (2026-10-27)
+
+All four stages, merged. `tools/build_tools_probe.gd`: 67 checks. Notes from building it:
+
+* **Shapes**: the kinds are rectangle, hollow rectangle, circle, ring, triangle, line and
+  arch. RMB drag in Shapes cuts the same shape out (as the asset workshop's RMB carves).
+  A wall stands on the plane through the ghost, across the camera's view.
+* **"Long both ways"** (a corner or a floor, where the course picks the way) means both runs
+  through the cell are longer than two of the held brick's widths -- so a two-stud wall still
+  runs its own way, and a room's corners interlock.
+* **Near only**: a cut lays again the shape's bricks within a brick's length and a course of
+  it, along the cut's plane only -- not behind it, so the side walls a door's wall meets keep
+  theirs.
+* **Door and window**: 4 x 18 plates and 4 x 9 (`WorkshopTools.DOOR`, `WINDOW`); a door stands
+  on the lowest of the build's own bricks under the click (never the baseplate).
+* **Sketch**: the asset workshop's stroke code moved into `SketchPen`
+  (`scripts/workshop_sketch.gd`) -- press, move, polygon clicks and keys, the preview lines,
+  `drag_shape`, `brush_entry`, `region_cells`, `brush_cells`. The asset workshop's `_sketch`,
+  `_sketch_out`, `_sketch_anchor` are its pen's now, and its static helpers call the pen's,
+  so a change to the pen changes both workshops. `BrickShapes.outline_cells` is the pen's too.
+* **Undo**: one Z per shape edit (lay, change, cut, delete, let go). A run is still a brick
+  per Z (as in the asset workshop). A shape's bricks have no "brick" edit of their own; RMB on
+  one takes it out of the shape (laying the shape again puts it back). Hand-laid bricks a cut
+  took up come back on undo, but at the end of the build, so their own Z is gone.
+* Not done: Select shows no gizmo to move a kept shape; shapes are upright-grid only (a
+  sideways frame refuses them); the asset workshop does not use Shapes/Cut yet (its Shapes
+  tool is its own: box, ball, cylinder, wedge, brush).

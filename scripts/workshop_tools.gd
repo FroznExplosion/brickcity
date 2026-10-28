@@ -4,7 +4,8 @@ extends Node
 ## The building workshop's tools (Docs/BuildTools.md): the rail down the left (`ToolRail`,
 ## the asset workshop's own), and the tools that build buildings fast -- Shapes of the held
 ## brick, flat or standing as a wall, staggered or aligned; Cut, for doorways and windows;
-## Select, to change or let go of a kept shape. Place, Paint and Rooms are the workshop's
+## Sketch, an outline drawn by hand with the asset workshop's own pen (SketchPen); Select,
+## to change or let go of a kept shape. Place, Paint and Rooms are the workshop's
 ## own hand, brush and spaces tool.
 ##
 ## A shape stays a shape: it is kept in `recipe.meta.shapes` with its cuts and the bricks
@@ -16,6 +17,7 @@ const TOOLS := [
 	["paint", "Paint", "B", "Click or drag over bricks to give them the colour in hand."],
 	["shape", "Shapes", "K", "Drag out a shape of the held brick: flat on the plane you aim at, or standing as a wall. RMB drag cuts the same shape out. Shift keeps a circle round."],
 	["cut", "Cut", "N", "Drag a doorway, window or any shape on a wall: the wall is laid again round it. Door and window: one click."],
+	["sketch", "Sketch", "Alt D", "Draw an outline on the plane you aim at, flat or standing -- freehand, brush, rectangle, ellipse or clicked corners: it fills with the held brick as a kept shape. RMB draws one to cut out."],
 	["select", "Select", "L", "Click a shape's brick to pick the shape: change its height, bond or brick, take its cuts out, delete it, or let it go (keep the bricks)."],
 	["rooms", "Rooms", "O", "Rooms and openings, as O: LMB marks a room or an opening, RMB forgets it."],
 ]
@@ -39,6 +41,12 @@ var thick := 1       # studs, a wall's depth
 var rim := 1         # studs, a hollow rectangle's or a ring's
 var staggered := true
 var cut_kind := "rect"
+## Sketch: the pen (the asset workshop's), its brush, and the plane a stroke is on --
+## {lie, at} while one is drawn, else empty.
+var pen := SketchPen.new()
+var brush_size := 1
+var brush_square := false
+var _sk := {}
 
 ## A drag under way: {button, lie, at, a, b, depth} in the plane's own cells; empty if none.
 var _drag := {}
@@ -60,6 +68,7 @@ var _im: ImmediateMesh
 var _shape_box: VBoxContainer
 var _cut_box: VBoxContainer
 var _select_box: VBoxContainer
+var _sketch_box: VBoxContainer
 var _select_label: Label
 var _kind_pick: OptionButton
 var _lie_pick: OptionButton
@@ -407,6 +416,8 @@ func undo() -> bool:
 ## A rail button or its key: that tool in hand, everything else put down.
 func pick(id: String) -> void:
 	_drag = {}
+	_sk = {}
+	pen.points.clear()
 	if ws._spaces != null and ws._spaces.active and id != "rooms":
 		ws._spaces.toggle()
 	match id:
@@ -434,7 +445,7 @@ func active() -> String:
 
 ## True while a shape or a cut is dragged: the workshop holds the ghost's plane.
 func dragging() -> bool:
-	return not _drag.is_empty()
+	return not _drag.is_empty() or not _sk.is_empty()
 
 
 func _build_options() -> void:
@@ -451,6 +462,20 @@ func _build_options() -> void:
 	_rim_spin = _spin(_shape_box, "rim (studs)", 1, 16, rim, func(v: float) -> void: rim = int(v))
 	_bond_pick = _choice(_shape_box, "bond", [["stagger", "staggered (running bond)"], ["align", "aligned (stack bond)"]],
 			func(i: int) -> void: staggered = i == 0)
+
+	_sketch_box = VBoxContainer.new()
+	rail.options.add_child(_sketch_box)
+	rail.options.move_child(_sketch_box, _shape_box.get_index())
+	_choice(_sketch_box, "draw with", SketchPen.DRAWS, func(i: int) -> void:
+		pen.draw = SketchPen.DRAWS[i][0]
+		pen.points.clear()
+		_sk = {})
+	_spin(_sketch_box, "brush (studs)", 0, 8, brush_size, func(v: float) -> void: brush_size = int(v))
+	var sq := CheckBox.new()
+	sq.text = "square brush"
+	sq.focus_mode = Control.FOCUS_NONE
+	sq.toggled.connect(func(on: bool) -> void: brush_square = on)
+	_sketch_box.add_child(sq)
 
 	_cut_box = VBoxContainer.new()
 	rail.options.add_child(_cut_box)
@@ -559,8 +584,13 @@ func _rail_right() -> float:
 func input(e: InputEvent) -> bool:
 	if e is InputEventMouseButton and rail.has_mouse():
 		return true
+	if tool == "sketch" and _sketch_input(e):
+		return true
 	if e is InputEventKey and e.pressed and not e.echo and not e.ctrl_pressed:
 		if e.alt_pressed:
+			if e.keycode == KEY_D:
+				pick("place" if tool == "sketch" else "sketch")
+				return true
 			return false
 		match e.keycode:
 			KEY_K:
@@ -573,10 +603,12 @@ func input(e: InputEvent) -> bool:
 				pick("place" if tool == "select" else "select")
 				return true
 			KEY_ESCAPE:
-				if tool != "place" and _drag.is_empty():
+				if tool != "place" and _drag.is_empty() and _sk.is_empty():
 					pick("place")
-				elif not _drag.is_empty():
+				else:
 					_drag = {}
+					_sk = {}
+					pen.points.clear()
 				return false   # Esc still frees the mouse
 	if not (e is InputEventMouseButton) or e.button_index not in [MOUSE_BUTTON_LEFT, MOUSE_BUTTON_RIGHT]:
 		return false
@@ -601,17 +633,10 @@ func _shape_input(e: InputEventMouseButton) -> bool:
 	if e.pressed:
 		if not _drag.is_empty() or ws._frame != 0:
 			return true
-		var c: Vector3i = ws._cell
-		var l := lie
-		var at := c.y
-		var a := Vector2i(c.x, c.z)
-		if l == "wall":
-			var fwd: Vector3 = -ws._camera.global_transform.basis.z
-			l = "wall_x" if absf(fwd.z) >= absf(fwd.x) else "wall_z"
-			var uvw := BrickShapes.from_3d(l, c)
-			a = Vector2i(uvw.x, uvw.y)
-			at = uvw.z
-		_drag = {"button": e.button_index, "lie": l, "at": at, "a": a, "b": a,
+		var pl := _plane_at_ghost(lie)
+		var l := String(pl.lie)
+		var a: Vector2i = pl.a
+		_drag = {"button": e.button_index, "lie": l, "at": pl.at, "a": a, "b": a,
 				"depth": tall if l == "flat" else thick, "kind": kind}
 		return true
 	if _drag.is_empty() or e.button_index != int(_drag.button):
@@ -624,6 +649,80 @@ func _shape_input(e: InputEventMouseButton) -> bool:
 		apply_cut({"kind": d.kind, "lie": d.lie, "a": [d.a.x, d.a.y], "b": [d.b.x, d.b.y],
 				"at": d.at, "depth": d.depth, "rim": rim})
 	return true
+
+
+## Sketch: the plane is where the ghost is when the stroke begins (flat on that layer, or
+## standing through it across the view, as Shapes); the pen draws on it; let go (or close a
+## polygon) and it is a kept shape of the held brick -- drawn with RMB, a cut.
+func _sketch_input(e: InputEvent) -> bool:
+	if e is InputEventMouseButton and e.button_index in [MOUSE_BUTTON_LEFT, MOUSE_BUTTON_RIGHT]:
+		if e.pressed:
+			if _sk.is_empty():
+				if ws._frame != 0:
+					return true
+				_sk = _plane_at_ghost(lie)
+			var q = _plane_point(String(_sk.lie), int(_sk.at))
+			if q == null:
+				return true
+			var rmb: bool = e.button_index == MOUSE_BUTTON_RIGHT
+			if pen.draw == "polygon":
+				if pen.polygon_click(q, rmb, e.double_click):
+					_sketch_commit()
+			else:
+				pen.press(q, rmb)
+		elif pen.draw != "polygon" and not _sk.is_empty():
+			_sketch_commit()
+		return true
+	if e is InputEventMouseMotion and not _sk.is_empty() and pen.draw != "polygon" \
+			and (Input.is_mouse_button_pressed(MOUSE_BUTTON_LEFT) or Input.is_mouse_button_pressed(MOUSE_BUTTON_RIGHT)):
+		var q = _plane_point(String(_sk.lie), int(_sk.at))
+		if q != null:
+			pen.move(q, brush_size)
+		return true
+	if e is InputEventKey and pen.draw == "polygon" and not _sk.is_empty():
+		match pen.polygon_key(e):
+			"commit":
+				_sketch_commit()
+				return true
+			"back":
+				return true
+	return false
+
+
+## The stroke drawn, as a kept shape (or with RMB, a cut).
+func _sketch_commit() -> void:
+	var sk := _sk
+	var entry = pen.entry("top" if sk.lie == "flat" else "side", brush_size, brush_square)
+	var remove := pen.out
+	_sk = {}
+	pen.points.clear()
+	if entry == null:
+		return
+	var cells := SketchPen.region_cells(entry)
+	if cells.is_empty():
+		return
+	var lo := Vector2i(1 << 30, 1 << 30)
+	var hi := -lo
+	for c in cells:
+		lo = Vector2i(mini(lo.x, c.x), mini(lo.y, c.y))
+		hi = Vector2i(maxi(hi.x, c.x), maxi(hi.y, c.y))
+	if remove:
+		apply_cut({"kind": "outline", "lie": sk.lie, "a": [lo.x, lo.y], "b": [hi.x, hi.y], "at": sk.at,
+				"depth": tall if sk.lie == "flat" else thick, "points": entry})
+	else:
+		add_shape("outline", String(sk.lie), lo, hi, int(sk.at), entry)
+
+
+## The plane a shape or a stroke starts on: where the ghost is -- flat on its layer, or
+## standing through it across the view. {lie, at, a}: `a` the ghost's cell in the plane.
+func _plane_at_ghost(want: String) -> Dictionary:
+	var c: Vector3i = ws._cell
+	var l := "flat"
+	if want == "wall":
+		var fwd: Vector3 = -ws._camera.global_transform.basis.z
+		l = "wall_x" if absf(fwd.z) >= absf(fwd.x) else "wall_z"
+	var uvw := BrickShapes.from_3d(l, c)
+	return {"lie": l, "at": uvw.z, "a": Vector2i(uvw.x, uvw.y)}
 
 
 ## Cut: press on a face of the build, drag on its plane, let go; a door or a window is
@@ -755,12 +854,17 @@ func process() -> void:
 	rail.size = Vector2.ZERO
 	var on := active()
 	rail.show_active(on, TOOLS)
-	_shape_box.visible = on == "shape"
+	_shape_box.visible = on == "shape" or on == "sketch"
+	_sketch_box.visible = on == "sketch"
+	_kind_pick.get_parent().get_child(_kind_pick.get_index() - 1).visible = on == "shape"
+	_kind_pick.visible = on == "shape"
+	_sketch_box.get_child(2).visible = pen.draw == "brush"   # the brush's size
+	_sketch_box.get_child(3).visible = pen.draw == "brush"   # and shape
 	_cut_box.visible = on == "cut"
 	_select_box.visible = on == "select"
 	_tall_spin.get_parent().visible = lie == "flat"
 	_thick_spin.get_parent().visible = lie == "wall"
-	_rim_spin.get_parent().visible = kind in ["hollow", "ring", "line"]
+	_rim_spin.get_parent().visible = on == "shape" and kind in ["hollow", "ring", "line"]
 	if on == "select" and _shown != Vector2i(selected, _rev):
 		_shown = Vector2i(selected, _rev)
 		_sync_select()
@@ -773,38 +877,48 @@ func process() -> void:
 	if not _drag.is_empty():
 		_drag.b = _drag_point()
 		ws._ghost.visible = false
-	elif tool in ["cut", "select"]:
+	elif tool in ["cut", "select"] or not _sk.is_empty():
 		ws._ghost.visible = false
 	_draw()
 
 
-## Where the drag is now, in its plane's cells: the ray under the cursor on that plane.
+## Where the drag is now, in its plane's cells.
 func _drag_point() -> Vector2i:
-	var ray := _ray()
-	var f: int = ws.asm.frames[0]
-	var xf: Transform3D = ws.world.get_chunk_transform(f)
-	var from: Vector3 = xf.affine_inverse() * (ray[0] as Vector3)
-	var dir: Vector3 = xf.basis.inverse() * (ray[1] as Vector3)
 	var l := String(_drag.lie)
-	var axis := 1 if l == "flat" else (2 if l == "wall_x" else 0)
-	var unit := BrickPalette.PLATE_M if axis == 1 else BrickPalette.STUD_M
-	# Flat: the plane under the layer (the top of what it stands on); a wall: its middle.
-	var plane := float(_drag.at) * unit if axis == 1 else (float(_drag.at) + 0.5) * unit
-	if absf(dir[axis]) < 1e-5:
+	var q = _plane_point(l, int(_drag.at))
+	if q == null:
 		return _drag.b
-	var t := (plane - from[axis]) / dir[axis]
-	if t <= 0.0:
-		return _drag.b
-	var p := from + dir * t
-	var cell := Vector3i(int(floor(p.x / BrickPalette.STUD_M)), int(floor(p.y / BrickPalette.PLATE_M)),
-			int(floor(p.z / BrickPalette.STUD_M)))
-	var uvw := BrickShapes.from_3d(l, cell)
-	var b := Vector2i(uvw.x, uvw.y)
+	var b := Vector2i(int(floor(q.x)), int(floor(q.y)))
 	if Input.is_key_pressed(KEY_SHIFT) and String(_drag.kind) in ["circle", "ring", "rect", "hollow"]:
 		b = _square(_drag.a, b, BrickShapes.aspect(l))
 	if l != "flat":
 		b.y = maxi(b.y, 0)
 	return b
+
+
+## The ray under the cursor on a lie's plane `at` layers along, in the plane's own numbers
+## (cells, as floats), or null if it misses. A flat plane is the bottom of its layer (the
+## top of what it stands on); a standing one goes through the middle of its layer.
+func _plane_point(l: String, at: int) -> Variant:
+	var ray := _ray()
+	var f: int = ws.asm.frames[0]
+	var xf: Transform3D = ws.world.get_chunk_transform(f)
+	var from: Vector3 = xf.affine_inverse() * (ray[0] as Vector3)
+	var dir: Vector3 = xf.basis.inverse() * (ray[1] as Vector3)
+	var axis := 1 if l == "flat" else (2 if l == "wall_x" else 0)
+	var unit := BrickPalette.PLATE_M if axis == 1 else BrickPalette.STUD_M
+	var plane := float(at) * unit if axis == 1 else (float(at) + 0.5) * unit
+	if absf(dir[axis]) < 1e-5:
+		return null
+	var t := (plane - from[axis]) / dir[axis]
+	if t <= 0.0:
+		return null
+	var p := from + dir * t
+	var g := Vector3(p.x / BrickPalette.STUD_M, p.y / BrickPalette.PLATE_M, p.z / BrickPalette.STUD_M)
+	match l:
+		"flat": return Vector2(g.x, g.z)
+		"wall_x": return Vector2(g.x, g.y)
+	return Vector2(g.z, g.y)
 
 
 ## `b` moved so the box from `a` is as tall as it is wide, in metres.
@@ -828,6 +942,18 @@ func _draw() -> void:
 		var col := Color(1.0, 0.4, 0.3) if d.get("cut", false) or d.button == MOUSE_BUTTON_RIGHT \
 				else Color(0.4, 0.95, 1.0)
 		any = _outline(d, col, any)
+	if not _sk.is_empty():
+		var l := String(_sk.lie)
+		var q = _plane_point(l, int(_sk.at))
+		var w0 := float(_sk.at) + (0.0 if l == "flat" else 0.5)
+		for seg in pen.preview(q, "top" if l == "flat" else "side", brush_size, brush_square):
+			if not any:
+				_im.surface_begin(Mesh.PRIMITIVE_LINES)
+				any = true
+			_im.surface_set_color(seg[2])
+			_im.surface_add_vertex(_local(l, seg[0], w0))
+			_im.surface_set_color(seg[2])
+			_im.surface_add_vertex(_local(l, seg[1], w0))
 	if tool == "select" and selected >= 0:
 		var sh := shape_of(selected)
 		if not sh.is_empty():
