@@ -84,7 +84,7 @@ const PRINT_MM_PER_PLATE := 1.6
 const REAL_PER_PRINT := 4.0
 const PLANES := ["side", "top", "front"]
 const VIEWS := ["perspective", "side", "top", "front"]
-const KEYS_TEXT := "F10 instructions   F2 photos   F3 guide models   F7 parts   Alt 0-3 view   Alt C the game's view   Alt M measure   Alt S mirror (shift: plane here)   Alt F free place   Alt D block out   Alt U studs   Alt G move part   Alt E explode   Alt H hands   Alt P play   PgUp/PgDn working plane\nY part toolbar (shift: back)   hold LMB + move: lay a run   J connection point   K shapes   L select   O section   P outlines\nN part smooth / bricks   F4 wand from a photo   F12 export and preview   Z undo (a fill at once)   shift Z redo"
+const KEYS_TEXT := "TAB cursor / look (shift TAB: all parts)   F10 instructions   F2 photos   F3 guide models   F7 parts   Alt 0-3 view   Alt C the game's view   Alt M measure   Alt S mirror (shift: plane here)   Alt F free place   Alt D block out   Alt U studs   Alt G move part   Alt E explode   Alt H hands   Alt P play   PgUp/PgDn working plane\nY part toolbar (shift: back)   hold LMB + move: lay a run   J connection point   K shapes   L select   O section   P outlines\nN part smooth / bricks   F4 wand from a photo   F12 export and preview   Z undo (a fill at once)   shift Z redo"
 
 ## Each: {path, plane, px (image size), mpp (metres a pixel), centre, opacity, shown, node}.
 var photos: Array = []
@@ -1979,6 +1979,8 @@ func _setup_parts() -> void:
 		part_names = PackedStringArray(GUN_PARTS)
 	# Its own file: switching toolbars must never write over the main workshop's hotbar.
 	_hotbar.save_path = "user://asset_workshop_hotbar.json"
+	# Plain Tab frees and takes the mouse here; Shift+Tab is all parts (_tab_key).
+	_hotbar.browser_on_shift_tab = true
 	if FileAccess.file_exists(toolbars_save):
 		var d = JSON.parse_string(FileAccess.get_file_as_string(toolbars_save))
 		if d is Dictionary:
@@ -4864,6 +4866,8 @@ func _xform_row(title: String, lo: float, hi: float, step: float, changed: Calla
 		sb.value_changed.connect(func(_v: float) -> void:
 			if not _xform_busy:
 				changed.call())
+		var le := sb.get_line_edit()
+		le.text_submitted.connect(func(_t: String) -> void: le.release_focus())
 		row.add_child(sb)
 		out.append(sb)
 	return out
@@ -4882,7 +4886,13 @@ func held_shape() -> Array:
 
 ## Put the picked thing at `centre` (workshop space), turned `turn_deg`, `size_studs` long along
 ## its own axes: live while a slider is dragged, laid with `final` (one undo, as a gizmo drag).
-func set_held_shape(centre: Vector3, turn_deg: Vector3, size_studs: Vector3, final: bool) -> void:
+## When a typed or stepped number lays a model (msec), 0 for none: stamping one again takes up
+## to a second, and an arrow held down asked for it many times a second (the user's crash).
+var _xform_due := 0
+const XFORM_SETTLE_MS := 400
+
+
+func set_held_shape(centre: Vector3, turn_deg: Vector3, size_studs: Vector3, final: bool, settle := false) -> void:
 	if _placed.is_empty():
 		return
 	var box: AABB = _placed.box
@@ -4898,7 +4908,13 @@ func set_held_shape(centre: Vector3, turn_deg: Vector3, size_studs: Vector3, fin
 	if _xform_before.is_empty():
 		_xform_before = models_state()
 	_placed.xf = Transform3D(b, centre - b * box.get_center())
-	if final:
+	if final and settle and _held_kind() == "model":
+		# Shown at once, stamped when the numbers have stopped changing (`_xform_settle`).
+		_placed_ghost.transform = _placed.xf
+		_placed_ghost.visible = true
+		_place_gizmo()
+		_xform_due = Time.get_ticks_msec() + XFORM_SETTLE_MS
+	elif final:
 		if _placed_ghost != null:
 			_placed_ghost.visible = false
 		_held_moved(_xform_before)
@@ -4949,7 +4965,21 @@ func _xform_typed(what: String) -> void:
 			for k in 3:
 				if absf(typed[k] - snappedf(centre[k] / BrickPalette.STUD_M, 0.01)) > 0.005:
 					centre[k] = typed[k] * BrickPalette.STUD_M
-	set_held_shape(centre, turn, size, true)
+	set_held_shape(centre, turn, size, true, true)
+
+
+## A model's typed or stepped change stamped, once the numbers have settled -- or now, before
+## anything that reads it (a new pick, letting go, Make bricks, undo). One undo.
+func _xform_settle(now := false) -> void:
+	if _xform_due == 0 or (not now and Time.get_ticks_msec() < _xform_due):
+		return
+	_xform_due = 0
+	if _held_kind() != "model" or _xform_before.is_empty():
+		return
+	if _placed_ghost != null:
+		_placed_ghost.visible = false
+	_held_moved(_xform_before)
+	_xform_before = []
 
 
 ## A scale slider: `axis` -1 all three (kept as they are to each other), else one; `pct` of the
@@ -6538,10 +6568,27 @@ func _input(e: InputEvent) -> void:
 		if f != null and _rail.is_ancestor_of(f) and not (f is LineEdit or f is SpinBox or f is TextEdit) \
 				and (e is InputEventKey or not _over_rail()):
 			f.release_focus()
-	if _lathe_key(e) or _placed_key(e) or _game_view_input(e):
+	if _tab_key(e) or _lathe_key(e) or _placed_key(e) or _game_view_input(e):
 		get_viewport().set_input_as_handled()
 		return
 	super._input(e)
+
+
+## Is a text or number box being typed in? Its Enter, Escape and Tab are its own.
+func _typing() -> bool:
+	var f := get_viewport().gui_get_focus_owner()
+	return f is LineEdit or f is TextEdit
+
+
+## Tab: the cursor free (to use the panels) or the mouse looking (to fly), the pick kept
+## (Docs/AssetWorkshop.md, "Sizing a selection like a slicer"). Shift+Tab: all parts.
+func _tab_key(e: InputEvent) -> bool:
+	if not (e is InputEventKey and e.pressed and not e.echo and (e as InputEventKey).keycode == KEY_TAB) \
+			or (e as InputEventKey).shift_pressed or _typing():
+		return false
+	if _camera.has_method("_set_captured"):
+		_camera.call("_set_captured", not bool(_camera.get("_captured")))
+	return true
 
 
 # ---------------------------------------------------------------------------
@@ -11195,6 +11242,7 @@ func set_sculpt_mode(m: String) -> void:
 ## Pick `m` (a model, a lifted part or a guide: Docs/AssetWorkshop.md, "Pick and move"), or
 ## null for nothing. A lifted part picked away from is put down (one undo).
 func select_model(m: Variant) -> void:
+	_xform_settle(true)
 	var was := _placed
 	var now: Dictionary = m if m is Dictionary else {}
 	if not was.is_empty() and not is_same(was, now):
@@ -11576,6 +11624,7 @@ func _gizmo_input(e: InputEvent) -> bool:
 			var id := _gizmo.pick(ray[0], ray[1])
 			if id == "":
 				return false
+			_xform_settle(true)
 			_gizmo_xf0 = _placed.xf
 			_gizmo_before = models_state()
 			_gizmo.begin(id, ray[0], ray[1], e.position, _camera)
@@ -11836,12 +11885,16 @@ func dragged_xf(d: Dictionary, free: bool) -> Transform3D:
 
 ## Enter lays a placed model, Escape takes it out. True when the key was the model's.
 func _placed_key(e: InputEvent) -> bool:
-	if _placed.is_empty() or not (e is InputEventKey and e.pressed and not e.echo):
+	if _placed.is_empty() or not (e is InputEventKey and e.pressed and not e.echo) or _typing():
 		return false
 	match (e as InputEventKey).keycode:
 		KEY_ENTER, KEY_KP_ENTER:
 			lay_model()
 		KEY_ESCAPE:
+			# With the mouse looking, Escape frees it (the camera's) and the pick stays; with
+			# the cursor free it lets the pick go.
+			if _camera != null and bool(_camera.get("_captured")):
+				return false
 			# A lifted part goes back exactly as it was, no undo.
 			if _held_kind() == "part":
 				_placed.xf = Transform3D()
@@ -12047,6 +12100,7 @@ func _size_marks_process() -> void:
 		(m.node as Node3D).visible = sculpt.visible and sculpt_state == "sdf"
 	if sculpt_state != "sdf" and _held_kind() in ["model", "part"]:
 		lay_model()
+	_xform_settle()
 	if Time.get_ticks_msec() < _size_at:
 		return
 	_size_at = Time.get_ticks_msec() + 500

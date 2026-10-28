@@ -178,10 +178,16 @@ func toggle_browser() -> void:
 	browsing_changed.emit(_browser.visible)
 
 
+## Only Shift+Tab opens and closes the browser: the asset workshop's plain Tab frees and takes
+## the mouse (Docs/AssetWorkshop.md, "Sizing a selection like a slicer").
+var browser_on_shift_tab := false
+
+
 ## TAB here rather than in the workshop: with the search box focused, the GUI
 ## would take TAB as "next control" and the browser could never be closed.
 func _input(e: InputEvent) -> void:
-	if e is InputEventKey and e.pressed and not e.echo and e.keycode == KEY_TAB:
+	if e is InputEventKey and e.pressed and not e.echo and e.keycode == KEY_TAB \
+			and (e.shift_pressed or not browser_on_shift_tab):
 		toggle_browser()
 		get_viewport().set_input_as_handled()
 
