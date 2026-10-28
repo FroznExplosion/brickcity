@@ -36,6 +36,10 @@ func _initialize() -> void:
 	_sketch_checks()
 	_opening_checks()
 	_repeat_checks()
+	_button_checks()
+	_redo_checks()
+	_mirror_checks()
+	_house_checks()
 	print("\n%d passed, %d failed" % [_pass, _fail])
 	quit(1 if _fail > 0 else 0)
 
@@ -577,3 +581,178 @@ func _repeat_checks() -> void:
 	t._sketch_commit()
 	_ok("a brush stroke drawn with LMB is a kept shape", t.shapes().size() == before + 1 and _solid(Vector3i(32, 1, 30)))
 	t.pick("place")
+
+
+func _button_checks() -> void:
+	print("[probe] every key a button (section 7)")
+	var t: WorkshopTools = _ws._tools
+	var all := true
+	for sec in WorkshopTools.ACTIONS:
+		for row in sec[1]:
+			var b: Button = t.rail.action_buttons.get(row[0])
+			all = all and b != null and b.tooltip_text.length() > 15
+	_ok("every action has a button with a pop-up", all and t.rail.action_buttons.size() >= 18)
+	var tools_ok := true
+	for row in WorkshopTools.TOOLS:
+		var b: Button = t.rail.buttons.get(row[0])
+		tools_ok = tools_ok and b != null and b.icon != null
+	_ok("every tool a button with an icon", tools_ok and t.rail.buttons.size() == 14)
+	var yaw: int = _ws._yaw
+	t.act("rotate")
+	_ok("Rotate turns the brick in hand", _ws._yaw == (yaw + 1) % 4)
+	t.act("lock")
+	_ok("Lock height stays on", _ws.plane_locked)
+	t.act("lock")
+	var grid: bool = _ws._grid_on
+	t.act("grid")
+	_ok("Grid toggles", _ws._grid_on != grid and _ws._grid.visible == _ws._grid_on)
+	t.act("grid")
+	var role: int = _ws._role
+	t.act("layer")
+	_ok("Layer moves the hand to the next layer", _ws._role != role)
+	while _ws._role != role:
+		t.act("layer")
+
+
+func _redo_checks() -> void:
+	print("[probe] redo, and a run as one undo")
+	_ws._new_build()
+	var t: WorkshopTools = _ws._tools
+	_hold("plate_1x1")
+	_ws._cell = Vector3i(20, 1, 20)
+	_ws._update_ghost()
+	var before: int = _ws.recipe.size()
+	_ws._place()
+	_ws._begin_run(before)
+	_ws._run_moved = 40.0
+	_ws._run_press_ms = Time.get_ticks_msec() - 1000
+	for x in [21, 22, 23]:
+		_ws._cell = Vector3i(x, 1, 20)
+		_ws._update_ghost()
+		_ws.run_step()
+	_ws._end_run()
+	_ok("a run of four", _ws.recipe.size() == 4)
+	_ws._undo()
+	_ok("one Z takes the whole run back", _ws.recipe.size() == 0, "%d left" % _ws.recipe.size())
+	_ws.redo_last()
+	_ok("Redo lays it all back", _ws.recipe.size() == 4 and _solid(Vector3i(23, 1, 20)))
+	_ws._undo()
+	_ok("and it undoes as one again", _ws.recipe.size() == 0)
+	_hold("brick_1x4")
+	t.tall = 3
+	var id := t.add_shape("rect", "flat", Vector2i(4, 4), Vector2i(11, 7), 1)
+	var laid := _bricks(t.shape_of(id))
+	_ws._undo()
+	_ok("a shape undone", t.shapes().is_empty() and _ws.recipe.size() == 0)
+	_ws.redo_last()
+	_ok("and redone, the same bricks", t.shapes().size() == 1 and _bricks(t.shapes()[0]) == laid)
+	_ws._undo()
+	_ok("and undone again", t.shapes().is_empty())
+	_ws._place()
+	_ok("a new edit clears what redo had", _ws._redo_list.is_empty())
+
+
+func _mirror_checks() -> void:
+	print("[probe] the mirror (moved down from the asset workshop)")
+	_ws._new_build()
+	var t: WorkshopTools = _ws._tools
+	_ws.mirror_axis = 2
+	_ws.mirror_z = 24.0
+	_ws.set_mirror(true)
+	_hold("plate_1x1")
+	_ws._cell = Vector3i(20, 1, 10)
+	_ws._update_ghost()
+	var before: int = _ws.recipe.size()
+	_ws._place()
+	_ws._begin_run(before)
+	_ws._end_run()
+	_ok("a brick placed is placed again across the plane", _solid(Vector3i(20, 1, 10)) and _solid(Vector3i(20, 1, 37)))
+	_ws._undo()
+	_ok("the pair undoes as one", _ws.recipe.size() == 0)
+	_hold("brick_1x2")
+	t.tall = 3
+	t.add_shape("rect", "flat", Vector2i(4, 4), Vector2i(9, 7), 1)
+	_ok("a shape and its mirror image", t.shapes().size() == 2 and _solid(Vector3i(4, 1, 43)) and _solid(Vector3i(9, 1, 40)))
+	_ws.set_mirror(false)
+
+
+## A room 12 x 8, 12 plates of 1x2s; returns its id.
+func _small_room() -> int:
+	_ws._new_build()
+	var t: WorkshopTools = _ws._tools
+	_hold("brick_1x2")
+	t.tall = 12
+	t.rim = 1
+	return t.add_shape("hollow", "flat", Vector2i(4, 4), Vector2i(15, 11), 1)
+
+
+func _house_checks() -> void:
+	print("[probe] walls, floor, stairs, roof")
+	_ws._new_build()
+	var t: WorkshopTools = _ws._tools
+	_hold("brick_1x2")
+	t.tall = 6
+	t.thick = 1
+	t._wall_at = 1
+	for c in [Vector2i(4, 4), Vector2i(15, 4), Vector2i(15, 11), Vector2i(4, 11)]:
+		t._wall_pts.append(c)
+	var wid := t.finish_walls(true)
+	var w := t.shape_of(wid)
+	_ok("Walls: four corners, closed, are a hollow rectangle's cells",
+			BrickShapes.shape_cells(w) == BrickShapes.shape_cells({"kind": "hollow", "lie": "flat", "a": [4, 4],
+					"b": [15, 11], "at": 1, "depth": 6, "rim": 1}))
+	var fill := 0
+	for c in BrickShapes.shape_cells(w):
+		if _solid(c):
+			fill += 1
+	_ok("and laid", fill == BrickShapes.shape_cells(w).size())
+	var room := _small_room()
+	t.floor_tall = 1
+	var fid := t.floor_at(Vector3i(8, 1, 7), false)
+	_ok("Floor: the room's inside, a plate", fid >= 0 and BrickShapes.shape_cells(t.shape_of(fid)).size() == 10 * 6
+			and _solid(Vector3i(5, 1, 5)) and _solid(Vector3i(14, 1, 10)))
+	var cid := t.floor_at(Vector3i(8, 2, 7), true)
+	var cs := t.shape_of(cid)
+	_ok("on top of the walls: over them, out to their faces", cid >= 0 and int(cs.at) == 13
+			and _solid(Vector3i(4, 13, 4)) and _solid(Vector3i(15, 13, 11)) and _solid(Vector3i(9, 13, 8)))
+	_ok("open ground is refused", t.floor_at(Vector3i(30, 1, 30), false) == -1)
+	# Stairs from the floor to the floor on top.
+	_hold("brick_1x2")
+	t.stair_wide = 2
+	var sid := t.stairs_between(Vector3i(5, 2, 24), Vector3i(14, 14, 24))
+	var st := t.shape_of(sid)
+	var sc := BrickShapes.shape_cells(st)
+	var sf := 0
+	for c in sc:
+		if _solid(c):
+			sf += 1
+	_ok("Stairs: a step a brick high, laid", sid >= 0 and sf == sc.size() and _solid(Vector3i(5, 2, 24))
+			and _solid(Vector3i(14, 13, 24)) and not _solid(Vector3i(14, 2, 24)), "%d of %d" % [sf, sc.size()])
+	# A roof on the room.
+	room = _small_room()
+	_hold("brick_1x2")
+	t.roof_style = "gable"
+	t.roof_overhang = 1
+	var rid := t.roof_on(room)
+	var slopes := 0
+	for i in _ws.recipe.size():
+		if _ws.recipe.part_of(i).begins_with("slope_1x2"):
+			slopes += 1
+	var rc := BrickShapes.shape_cells(t.shape_of(rid))
+	var rf := 0
+	for c in rc:
+		if _solid(c):
+			rf += 1
+	_ok("Roof: gable, slopes along its edges", rid >= 0 and slopes >= 20, "%d slopes" % slopes)
+	_ok("every cell of it laid (%d)" % rc.size(), rf == rc.size())
+	_ok("it sits on the walls, a stud past them", _solid(Vector3i(3, 13, 3)) or _solid(Vector3i(3, 13, 7)))
+	var front := Vector3i.ZERO
+	for i in _ws.recipe.size():
+		if _ws.recipe.part_of(i).begins_with("slope_1x2") and _ws.recipe.cell_of(i).z == 3:
+			front = BrickPalette.front_of(_ws.recipe.part_of(i))
+	_ok("the low side's slopes face out", front == Vector3i(0, 0, -1), str(front))
+	_ws._undo()
+	_ok("one undo", t.shape_of(rid).is_empty())
+	t.roof_style = "hip"
+	var hid := t.roof_on(room)
+	_ok("hip roof too", hid >= 0 and (t.shape_of(hid).bricks as Array).size() > 10)

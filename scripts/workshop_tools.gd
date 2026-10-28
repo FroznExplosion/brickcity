@@ -4,6 +4,7 @@ extends Node
 ## The building workshop's tools (Docs/BuildTools.md): the rail down the left (`ToolRail`,
 ## the asset workshop's own), and the tools that build buildings fast -- Shapes of the held
 ## brick, flat or standing as a wall, staggered or aligned; Cut, for doorways and windows;
+## Walls, Floor, Roof and Stairs, the parts of a house a click or two each;
 ## Sketch, an outline drawn by hand with the asset workshop's own pen (SketchPen); Repeat,
 ## for storeys and rows of windows; Select,
 ## to change or let go of a kept shape. Place, Paint and Rooms are the workshop's
@@ -14,14 +15,48 @@ extends Node
 ## the rest of the wall's bricks where they are.
 
 const TOOLS := [
-	["place", "Place", "Esc", "Click to put the brick in hand on the stud you aim at; hold and move to lay a run. RMB takes one away; R turns it; 1-9 and the wheel pick the brick."],
+	["place", "Place", "Esc", "Click to put the brick in hand on the stud you aim at; hold and move to lay a run (one undo). RMB takes one away."],
+	["pick", "Pick", "MMB", "Click a brick to hold its part, colour and material."],
 	["paint", "Paint", "B", "Click or drag over bricks to give them the colour in hand."],
-	["shape", "Shapes", "K", "Drag out a shape of the held brick: flat on the plane you aim at, or standing as a wall. RMB drag cuts the same shape out. Shift keeps a circle round."],
-	["cut", "Cut", "N", "Drag a doorway, window or any shape on a wall: the wall is laid again round it. Door and window: one click."],
-	["sketch", "Sketch", "Alt D", "Draw an outline on the plane you aim at, flat or standing -- freehand, brush, rectangle, ellipse or clicked corners: it fills with the held brick as a kept shape. RMB draws one to cut out."],
+	["shape", "Shapes", "K", "Drag out a shape of the held brick: flat on the plane you aim at, or standing as a wall."],
+	["walls", "Walls", "", "Click corners on the plane you aim at: a wall along each segment, as tall and thick as set. Finish, or click the first corner to close it."],
+	["floor", "Floor", "", "Click the floor inside closed walls: a floor fills them -- or, set below, one on top of the walls (the next floor, or a flat roof)."],
+	["roof", "Roof", "", "Click a shape (a room's walls): a gable or hip roof of slopes on top of it."],
+	["stairs", "Stairs", "", "Click the lower floor, then the upper one: a straight stair between them."],
+	["cut", "Cut", "N", "Drag a doorway, window or any shape on a wall: the wall is laid again round it. Door and window: one click, framed."],
+	["sketch", "Sketch", "Alt D", "Draw an outline on the plane you aim at, flat or standing -- freehand, brush, rectangle, ellipse or clicked corners: it fills with the held brick as a kept shape."],
 	["repeat", "Repeat", "J", "Copy the picked shape -- or a storey, everything between two heights -- N times up, or along X or Z. Click a brick here to pick what to repeat; a door or window repeats with its cut."],
 	["select", "Select", "L", "Click a shape's brick to pick the shape: change its height, bond or brick, take its cuts out, delete it, or let it go (keep the bricks)."],
-	["rooms", "Rooms", "O", "Rooms and openings, as O: LMB marks a room or an opening, RMB forgets it."],
+	["builds", "Builds", "X", "Click an inserted build to pick it, then Move, Copy or Delete it."],
+	["rooms", "Rooms", "O", "Rooms and openings: click a room to find it or an opening to turn its kind; RMB forgets one."],
+]
+## Every key's button (Docs/BuildTools.md section 7): [id, label, key, what it does, toggle?].
+const ACTIONS := [
+	["Hand", [
+		["rotate", "Rotate", "R", "Turn the brick in hand a quarter."],
+		["flip", "Flip", "F", "Turn it over: studs down."],
+		["turn_last", "Turn last", "T", "Turn the brick just placed a quarter."],
+		["lock", "Lock", "E", "Lock height: keep the ghost at the height it is on now (as E held) until this is pressed again.", true],
+		["snap", "Side stud", "V", "Snap to side studs.", true],
+		["layer", "Structure", "I", "The layer the next brick goes in: structure, interior or detail (press for the next)."],
+		["mirror", "Mirror", "", "Lay every brick and shape again across the mirror plane.", true],
+		["mirror_axis", "across Z", "", "Which way the mirror plane goes: across Z or across X."],
+		["mirror_here", "Set plane", "", "Mirror plane here: through the middle of the ghost."],
+		["colour_back", "< Colour", ",", "The colour before, in the slot in hand."],
+		["colour_on", "Colour >", ".", "The next colour, in the slot in hand."],
+		["parts", "All parts", "Tab", "Open the parts browser."],
+	]],
+	["Edit", [
+		["undo", "Undo", "Z", "Take back the last edit: a brick, a run, a shape."],
+		["redo", "Redo", "Shift Z", "Lay back what Undo took."],
+		["cancel", "Cancel", "Esc", "Drop what is being drawn (a drag, a sketch, a wall line, a stair's first click)."],
+	]],
+	["View", [
+		["grid", "Grid", "G", "Show the grid.", true],
+		["stress", "Stress", "H", "Show how hard each brick is working.", true],
+		["keys", "Keys", "F1", "Show every key.", true],
+		["guide", "Guide", "U", "Room guide: a room template's size; again for the next."],
+	]],
 ]
 const LIE_NAMES := [["flat", "flat (floor, or walls round it)"], ["wall", "standing wall"]]
 const CUT_KINDS := [["rect", "rectangle (drag)"], ["arch", "arch (drag)"], ["circle", "circle (drag)"],
@@ -58,6 +93,25 @@ var rep_times := 1
 var rep_gap := 0
 var rep_lo := 1
 var rep_hi := 9
+## What was a modifier, as an option (section 7): LMB lays or cuts out; Shift's round.
+var cut_mode := false
+var keep_round := false
+## Walls: the corners clicked (cells of the flat plane at `_wall_at`), straight or free.
+var wall_straight := true
+var _wall_pts: Array[Vector2i] = []
+var _wall_at := 0
+## Floor: how thick (plates), and on the floor clicked or on top of the walls round it.
+var floor_tall := 1
+var floor_on_top := false
+## Stairs: how wide (studs); the first click (the lower floor), or NO_CELL.
+const NO_CELL := Vector3i(-1048576, 0, 0)
+var stair_wide := 3
+var _stair_from := NO_CELL
+## Roof: gable or hip, and how far it reaches past the walls (studs).
+var roof_style := "gable"
+var roof_overhang := 1
+## Rooms: a click marks an opening point (P) instead of finding a room.
+var room_points := false
 ## Sketch: the pen (the asset workshop's), its brush, and the plane a stroke is on --
 ## {lie, at} while one is drawn, else empty.
 var pen := SketchPen.new()
@@ -97,6 +151,22 @@ var _sel_depth: SpinBox
 var _sel_rim: SpinBox
 var _sel_bond: OptionButton
 var _repeat_box: VBoxContainer
+var _status: Label
+var _status_left := 0.0
+var _lay_box: VBoxContainer
+var _poly_box: HBoxContainer
+var _walls_box: VBoxContainer
+var _floor_box: VBoxContainer
+var _floor_tall_spin: SpinBox
+var _stairs_box: VBoxContainer
+var _roof_box: VBoxContainer
+var _paint_box: VBoxContainer
+var _paint_spin: SpinBox
+var _builds_box: VBoxContainer
+var _builds_label: Label
+var _rooms_box: VBoxContainer
+var _rooms_label: Label
+var _slope_cache := {}
 var _repeat_label: Label
 var _rep_lo_spin: SpinBox
 var _rep_hi_spin: SpinBox
@@ -107,10 +177,11 @@ var _syncing := false
 
 func setup(workshop, layer: CanvasLayer) -> void:
 	ws = workshop
-	rail = ToolRail.new(184.0)
+	rail = ToolRail.new(210.0, true)
 	rail.name = "ToolRail"
 	layer.add_child(rail)
-	rail.fill("Build", TOOLS, pick)
+	rail.fill("Build", TOOLS, pick, [], 2)
+	rail.actions(ACTIONS, act)
 	_build_options()
 	_im = ImmediateMesh.new()
 	_lines = MeshInstance3D.new()
@@ -206,10 +277,32 @@ func forget_brick(part: String, cell: Vector3i) -> void:
 ## A new kept shape, from the options in hand: returns its id.
 func add_shape(k: String, l: String, a: Vector2i, b: Vector2i, at: int, points: Variant = []) -> int:
 	var sh := _new_shape(k, l, a, b, at, points)
+	return create(sh)
+
+
+## Lay a new shape (and, with the mirror on, its mirror image) as one undo. Returns its id.
+func create(sh: Dictionary) -> int:
 	var rec := _begin()
-	_add_into(rec, sh)
+	var id := _add_into(rec, sh)
+	var m = _mirrored(sh)
+	if m != null:
+		_add_into(rec, m)
 	_end(rec)
-	return int(sh.id)
+	return id
+
+
+## A shape's (or a cut's, or an opening's) mirror image while the mirror is on, or null --
+## also when it is its own mirror image.
+func _mirrored(sh: Dictionary) -> Variant:
+	if not ws.mirror_on:
+		return null
+	var plane: float = ws.mirror_x if ws.mirror_axis == 0 else ws.mirror_z
+	var m := BrickShapes.reflected(sh, ws.mirror_axis, plane)
+	if m.has("kind") and BrickShapes.solid_cells(m) == BrickShapes.solid_cells(sh):
+		return null
+	if m.has("id"):
+		m.id = _next_id()
+	return m
 
 
 ## A shape's record from the options in hand (the held brick, colour, material), not laid.
@@ -283,6 +376,9 @@ func let_go(id: int) -> void:
 func apply_cut(cut: Dictionary) -> int:
 	var rec := _begin()
 	var n := _cut_into(rec, cut)
+	var m = _mirrored(cut)
+	if m != null:
+		n += _cut_into(rec, m)
 	_end(rec)
 	return n
 
@@ -335,6 +431,11 @@ func apply_opening(k: String, face: Dictionary) -> Dictionary:
 	var op := opening_spec(k, face)
 	var rec := _begin()
 	_open_into(rec, op)
+	if ws.mirror_on:
+		var plane: float = ws.mirror_x if ws.mirror_axis == 0 else ws.mirror_z
+		var m := BrickShapes.reflected(op, ws.mirror_axis, plane)
+		if m != op:
+			_open_into(rec, m)
 	_end(rec)
 	return op
 
@@ -450,7 +551,7 @@ func repeat(dir: String, times: int, gap: int) -> int:
 		for b in g.bricks:
 			var at: Vector3i = b[1] + d
 			if ws.lay_part(String(b[0]), at, int(b[2]), int(b[3]), int(b[4])):
-				rec.laid.append([b[0], _plain(at)])
+				rec.laid.append([b[0], _plain(at), b[2], b[3], b[4]])
 				n += 1
 	ws._batch = false
 	_end(rec)
@@ -575,7 +676,8 @@ func _lay(sh: Dictionary, near: AABB = AABB()) -> void:
 	var cells := BrickShapes.shape_cells(sh)
 	var keep := []
 	ws._batch = true
-	if near.size == Vector3.ZERO:
+	var roof := String(sh.kind) == "roof"
+	if near.size == Vector3.ZERO or roof:
 		_take_up(sh)
 	else:
 		for b in sh.bricks:
@@ -593,6 +695,31 @@ func _lay(sh: Dictionary, near: AABB = AABB()) -> void:
 	var parts := BrickShapes.parts_for(String(sh.part), ws.palette)
 	var base := _base_layer(sh)
 	var laid := keep.duplicate()
+	if roof:
+		# The slopes along its edges first, facing out; the bricks fill the rest.
+		for sl in BrickShapes.roof_plan(sh).slopes:
+			var v := _slope_facing(sl[0])
+			var at: Vector3i = sl[1]
+			if v == "":
+				continue
+			var size := BrickPalette.size_of(v)
+			var free := true
+			var inside := 0
+			for dx in size.x:
+				for dy in size.y:
+					for dz in size.z:
+						var c := at + Vector3i(dx, dy, dz)
+						free = free and not taken.has(c)
+						if cells.has(c):
+							inside += 1
+			# All of it the roof's but its open face's top plate (none of it cut away).
+			free = free and inside >= size.x * size.y * size.z - 1
+			if free and ws.lay_part(v, at, int(sh.colour), int(sh.mat), int(sh.get("role", 0))):
+				laid.append([v, _plain(at)])
+				for dx in size.x:
+					for dy in size.y:
+						for dz in size.z:
+							taken[at + Vector3i(dx, dy, dz)] = true
 	for pc in BrickShapes.pack_courses(cells, parts, String(sh.bond) != "align", taken, base):
 		if ws.lay_part(String(pc[0]), pc[1], int(sh.colour), int(sh.mat), int(sh.get("role", 0))):
 			laid.append([pc[0], _plain(pc[1])])
@@ -600,6 +727,20 @@ func _lay(sh: Dictionary, near: AABB = AABB()) -> void:
 	var out := sh.duplicate(true)
 	out.bricks = laid
 	_store(int(sh.id), out)
+
+
+## The 45-degree slope (slope_1x2) turned to face `dir`, or "" if the palette has none.
+func _slope_facing(dir: Vector3i) -> String:
+	if _slope_cache.has(dir):
+		return _slope_cache[dir]
+	var out := ""
+	for y in 4:
+		var v := BrickPalette.variant_name("slope_1x2", y, false)
+		if ws.palette.has(v) and BrickPalette.front_of(v) == dir:
+			out = v
+			break
+	_slope_cache[dir] = out
+	return out
 
 
 ## The layer a shape's courses count from: its lowest, cuts or not, so a cut does not move
@@ -641,12 +782,37 @@ func _end(rec: Dictionary) -> void:
 
 
 ## Z on a shape edit: each shape it changed back as it was, its bricks with it; hand-laid
-## bricks a cut took up laid again.
+## bricks a cut took up laid again, plain bricks a repeat laid taken up. What it undid goes
+## on the workshop's redo list.
 func undo() -> bool:
 	if _undo.is_empty():
 		return false
 	var rec: Dictionary = _undo.pop_back()
 	ws._edits.pop_back()
+	ws._redo_list.append({"kind": "shape", "rec": _apply(rec)})
+	return true
+
+
+## Redo: a record `undo` gave back, done again (and undoable again).
+func redo(rec: Dictionary) -> bool:
+	_undo.append(_apply(rec))
+	ws._edits.append("shape")
+	ws._after_edit()
+	return true
+
+
+## Put the shapes in `rec.before` back as they were (null: gone), take up `rec.laid`, lay
+## `rec.hand` back. Returns the record that does the opposite.
+func _apply(rec: Dictionary) -> Dictionary:
+	var kept: bool = rec.get("kept", false)
+	var inv := {"before": {}, "hand": (rec.get("laid", []) as Array).duplicate(true),
+			"laid": (rec.get("hand", []) as Array).duplicate(true), "kept": kept}
+	for id in rec.before:
+		var now := shape_of(int(id))
+		if now.is_empty():
+			inv.before[id] = null
+		else:
+			inv.before[id] = now
 	ws._batch = true
 	# Everything the edit laid comes up first, then what was there goes back: a door's frame
 	# stands where its wall's bricks will go.
@@ -654,7 +820,7 @@ func undo() -> bool:
 		_take_part(String(b[0]), BuildRecipe.cell_from(b[1]))
 	for id in rec.before:
 		var now := shape_of(int(id))
-		if not now.is_empty() and not rec.get("kept", false):
+		if not now.is_empty() and not kept:
 			_take_up(now)
 	for id in rec.before:
 		var was = rec.before[id]
@@ -662,17 +828,17 @@ func undo() -> bool:
 			_store(int(id), {})
 			continue
 		_store(int(id), was)
-		if rec.get("kept", false):
+		if kept:
 			continue
 		for b in was.bricks:
 			ws.lay_part(String(b[0]), BuildRecipe.cell_from(b[1]), int(was.colour), int(was.mat), int(was.get("role", 0)))
-	for h in rec.hand:
+	for h in rec.get("hand", []):
 		ws.lay_part(String(h[0]), BuildRecipe.cell_from(h[1]), int(h[2]), int(h[3]), int(h[4]))
 	ws._batch = false
 	ws._after_edit()
 	if selected >= 0 and shape_of(selected).is_empty():
 		selected = -1
-	return true
+	return inv
 
 
 # ---------------------------------------------------------------------------
@@ -681,9 +847,7 @@ func undo() -> bool:
 
 ## A rail button or its key: that tool in hand, everything else put down.
 func pick(id: String) -> void:
-	_drag = {}
-	_sk = {}
-	pen.points.clear()
+	cancel()
 	if ws._spaces != null and ws._spaces.active and id != "rooms":
 		ws._spaces.toggle()
 	match id:
@@ -696,8 +860,64 @@ func pick(id: String) -> void:
 		_:
 			ws._set_painting(false)
 	tool = id if id != "paint" and id != "rooms" else "place"
-	if id != "select" and id != "repeat":
+	if id != "select" and id != "repeat" and id != "roof":
 		selected = -1
+	match id:
+		"stairs": say("Click the lower floor where the stair starts.")
+		"walls": say("Click the first corner.")
+		_: say("")
+
+
+## Drop what is being drawn: a drag, a stroke, a wall line, a stair's first click.
+func cancel() -> void:
+	_drag = {}
+	_sk = {}
+	pen.points.clear()
+	_wall_pts.clear()
+	_stair_from = NO_CELL
+
+
+## An action button (or its key, which the workshop handles as before).
+func act(id: String) -> void:
+	match id:
+		"rotate": ws._yaw = (ws._yaw + 1) % 4
+		"flip": ws._flip = not ws._flip
+		"turn_last": ws._rotate_last()
+		"lock": ws.plane_locked = not ws.plane_locked
+		"snap": ws._snap_on = not ws._snap_on
+		"layer": ws._toggle_layer()
+		"mirror": ws.set_mirror(not ws.mirror_on)
+		"mirror_axis":
+			ws.mirror_axis = 0 if ws.mirror_axis == 2 else 2
+			ws.set_mirror(ws.mirror_on)
+		"mirror_here":
+			ws.mirror_here()
+			if not ws.mirror_on:
+				ws.set_mirror(true)
+		"colour_back": ws._hotbar.set_colour(ws._colour - 1)
+		"colour_on": ws._hotbar.set_colour(ws._colour + 1)
+		"parts": ws._hotbar.toggle_browser()
+		"undo": ws._undo()
+		"redo": ws.redo_last()
+		"cancel": cancel()
+		"grid":
+			ws._grid_on = not ws._grid_on
+			ws._grid.visible = ws._grid_on
+		"stress":
+			ws._overlay_on = not ws._overlay_on
+			ws._stress_dirty = true
+			ws._refresh_overlay()
+		"keys":
+			ws._keys_on = not ws._keys_on
+			ws._keys_panel.visible = ws._keys_on
+		"guide": ws._cycle_guide()
+
+
+## Say something on the rail for a few seconds (a fill refused, the next click wanted).
+func say(text: String) -> void:
+	_status.text = text
+	_status.visible = text != ""
+	_status_left = 6.0
 
 
 ## The tool in hand, as the rail lights it.
@@ -711,12 +931,25 @@ func active() -> String:
 
 ## True while a shape or a cut is dragged: the workshop holds the ghost's plane.
 func dragging() -> bool:
-	return not _drag.is_empty() or not _sk.is_empty()
+	return not _drag.is_empty() or not _sk.is_empty() or not _wall_pts.is_empty()
 
 
 func _build_options() -> void:
 	rail.options.visible = true
 	rail.options.add_child(HSeparator.new())
+	_status = Label.new()
+	_status.add_theme_color_override("font_color", Color(1.0, 0.88, 0.5))
+	_status.visible = false
+	rail.options.add_child(_status)
+	_lay_box = VBoxContainer.new()
+	rail.options.add_child(_lay_box)
+	_choice(_lay_box, "a drag (or a stroke)", [["lay", "lays bricks"], ["cut", "cuts them out (as RMB)"]],
+			func(i: int) -> void: cut_mode = i == 1)
+	var kr := CheckBox.new()
+	kr.text = "keep circles round (Shift)"
+	kr.focus_mode = Control.FOCUS_NONE
+	kr.toggled.connect(func(on: bool) -> void: keep_round = on)
+	_lay_box.add_child(kr)
 	_shape_box = VBoxContainer.new()
 	rail.options.add_child(_shape_box)
 	_kind_pick = _choice(_shape_box, "shape", BrickShapes.KINDS, func(i: int) -> void:
@@ -742,6 +975,79 @@ func _build_options() -> void:
 	sq.focus_mode = Control.FOCUS_NONE
 	sq.toggled.connect(func(on: bool) -> void: brush_square = on)
 	_sketch_box.add_child(sq)
+
+	_poly_box = HBoxContainer.new()
+	_sketch_box.add_child(_poly_box)
+	_button(_poly_box, "Close", func() -> void:
+		if pen.draw == "polygon" and not _sk.is_empty():
+			_sketch_commit())
+	_button(_poly_box, "Take back", func() -> void:
+		if not pen.points.is_empty():
+			pen.points.pop_back())
+
+	_walls_box = VBoxContainer.new()
+	rail.options.add_child(_walls_box)
+	var st := CheckBox.new()
+	st.text = "straight (along X or Z)"
+	st.button_pressed = wall_straight
+	st.focus_mode = Control.FOCUS_NONE
+	st.toggled.connect(func(on: bool) -> void: wall_straight = on)
+	_walls_box.add_child(st)
+	var wrow := HBoxContainer.new()
+	_walls_box.add_child(wrow)
+	_button(wrow, "Finish", func() -> void: finish_walls(false))
+	_button(wrow, "Close", func() -> void: finish_walls(true))
+	_button(wrow, "Take back", func() -> void:
+		if not _wall_pts.is_empty():
+			_wall_pts.pop_back())
+
+	_floor_box = VBoxContainer.new()
+	rail.options.add_child(_floor_box)
+	_choice(_floor_box, "lay it", [["here", "on the floor clicked"], ["top", "on top of the walls"]],
+			func(i: int) -> void: floor_on_top = i == 1)
+	_floor_tall_spin = _spin(_floor_box, "thick (plates)", 1, 30, floor_tall, func(v: float) -> void: floor_tall = int(v))
+
+	_stairs_box = VBoxContainer.new()
+	rail.options.add_child(_stairs_box)
+	_spin(_stairs_box, "wide (studs)", 1, 16, stair_wide, func(v: float) -> void: stair_wide = int(v))
+
+	_roof_box = VBoxContainer.new()
+	rail.options.add_child(_roof_box)
+	_choice(_roof_box, "roof", [["gable", "gable (two sides slope)"], ["hip", "hip (all four slope)"]],
+			func(i: int) -> void: roof_style = "gable" if i == 0 else "hip")
+	_spin(_roof_box, "overhang (studs)", 0, 4, roof_overhang, func(v: float) -> void: roof_overhang = int(v))
+
+	_paint_box = VBoxContainer.new()
+	rail.options.add_child(_paint_box)
+	_paint_spin = _spin(_paint_box, "brush (studs; - =)", 0, ws.PAINT_RADIUS_MAX, ws._paint_radius, func(v: float) -> void:
+		ws._paint_radius = int(v)
+		if ws._paint_palette != null:
+			ws._paint_palette.info = ws._paint_info())
+
+	_builds_box = VBoxContainer.new()
+	rail.options.add_child(_builds_box)
+	_builds_label = Label.new()
+	_builds_box.add_child(_builds_label)
+	var brow := HBoxContainer.new()
+	_builds_box.add_child(brow)
+	_button(brow, "Move", func() -> void: ws.move_group())
+	_button(brow, "Copy", func() -> void: ws.copy_group())
+	_button(brow, "Delete", func() -> void: ws.delete_group())
+
+	_rooms_box = VBoxContainer.new()
+	rail.options.add_child(_rooms_box)
+	_rooms_label = Label.new()
+	_rooms_box.add_child(_rooms_label)
+	var rrow := HBoxContainer.new()
+	_rooms_box.add_child(rrow)
+	_button(rrow, "< kind", func() -> void: ws._spaces.cycle_kind(-1))
+	_button(rrow, "kind >", func() -> void: ws._spaces.cycle_kind(1))
+	_button(_rooms_box, "Opening point kind (shift P)", func() -> void: ws._spaces.cycle_point_kind())
+	var rp := CheckBox.new()
+	rp.text = "click marks an opening point (P)"
+	rp.focus_mode = Control.FOCUS_NONE
+	rp.toggled.connect(func(on: bool) -> void: room_points = on)
+	_rooms_box.add_child(rp)
 
 	_cut_box = VBoxContainer.new()
 	rail.options.add_child(_cut_box)
@@ -904,13 +1210,19 @@ func input(e: InputEvent) -> bool:
 				pick("place" if tool == "repeat" else "repeat")
 				return true
 			KEY_ESCAPE:
-				if tool != "place" and _drag.is_empty() and _sk.is_empty():
+				if tool != "place" and not dragging() and _stair_from == NO_CELL:
 					pick("place")
 				else:
-					_drag = {}
-					_sk = {}
-					pen.points.clear()
+					cancel()
 				return false   # Esc still frees the mouse
+			KEY_ENTER, KEY_KP_ENTER:
+				if tool == "walls" and not _wall_pts.is_empty():
+					finish_walls(false)
+					return true
+			KEY_BACKSPACE:
+				if tool == "walls" and not _wall_pts.is_empty():
+					_wall_pts.pop_back()
+					return true
 	if not (e is InputEventMouseButton) or e.button_index not in [MOUSE_BUTTON_LEFT, MOUSE_BUTTON_RIGHT]:
 		return false
 	match tool:
@@ -926,6 +1238,35 @@ func input(e: InputEvent) -> bool:
 			if e.pressed and e.button_index == MOUSE_BUTTON_LEFT:
 				_repeat_click()
 				return true
+		"pick":
+			if e.pressed and e.button_index == MOUSE_BUTTON_LEFT:
+				ws._pick_block()
+				return true
+		"builds":
+			if e.pressed and e.button_index == MOUSE_BUTTON_LEFT:
+				var ray := _ray()
+				ws.select_group_ray(ray[0], ray[1])
+				return true
+		"walls":
+			if e.pressed and e.button_index == MOUSE_BUTTON_LEFT:
+				_walls_click(e.double_click)
+				return true
+		"floor":
+			if e.pressed and e.button_index == MOUSE_BUTTON_LEFT:
+				floor_at(ws._cell, floor_on_top)
+				return true
+		"stairs":
+			if e.pressed and e.button_index == MOUSE_BUTTON_LEFT:
+				_stairs_click()
+				return true
+		"roof":
+			if e.pressed and e.button_index == MOUSE_BUTTON_LEFT:
+				_select_click()
+				if selected >= 0:
+					roof_on(selected)
+				else:
+					say("Click a brick of a shape (a room's walls).")
+				return true
 	return false
 
 
@@ -933,7 +1274,8 @@ func _ray() -> Array:
 	return ws._mouse_ray()
 
 
-## Shapes: press where the ghost is, drag, let go. LMB lays the shape, RMB cuts it out.
+## Shapes: press where the ghost is, drag, let go. LMB lays the shape, RMB (or LMB with
+## "cuts them out") cuts it out.
 func _shape_input(e: InputEventMouseButton) -> bool:
 	if e.pressed:
 		if not _drag.is_empty() or ws._frame != 0:
@@ -948,7 +1290,7 @@ func _shape_input(e: InputEventMouseButton) -> bool:
 		return true
 	var d := _drag
 	_drag = {}
-	if d.button == MOUSE_BUTTON_LEFT:
+	if d.button == MOUSE_BUTTON_LEFT and not cut_mode:
 		add_shape(String(d.kind), String(d.lie), d.a, d.b, int(d.at))
 	else:
 		apply_cut({"kind": d.kind, "lie": d.lie, "a": [d.a.x, d.a.y], "b": [d.b.x, d.b.y],
@@ -969,7 +1311,7 @@ func _sketch_input(e: InputEvent) -> bool:
 			var q = _plane_point(String(_sk.lie), int(_sk.at))
 			if q == null:
 				return true
-			var rmb: bool = e.button_index == MOUSE_BUTTON_RIGHT
+			var rmb: bool = e.button_index == MOUSE_BUTTON_RIGHT or cut_mode
 			if pen.draw == "polygon":
 				if pen.polygon_click(q, rmb, e.double_click):
 					_sketch_commit()
@@ -1028,6 +1370,166 @@ func _plane_at_ghost(want: String) -> Dictionary:
 		l = "wall_x" if absf(fwd.z) >= absf(fwd.x) else "wall_z"
 	var uvw := BrickShapes.from_3d(l, c)
 	return {"lie": l, "at": uvw.z, "a": Vector2i(uvw.x, uvw.y)}
+
+
+# ---------------------------------------------------------------------------
+# Walls, Floor, Stairs, Roof (Docs/BuildTools.md section 7)
+# ---------------------------------------------------------------------------
+
+## Walls: a click is a corner on the flat plane the first click was on; on the first
+## corner again it closes; a double click finishes.
+func _walls_click(double: bool) -> void:
+	if ws._frame != 0:
+		return
+	if _wall_pts.is_empty():
+		_wall_at = ws._cell.y
+	var q = _plane_point("flat", _wall_at)
+	if q == null:
+		return
+	var c := Vector2i(int(floor(q.x)), int(floor(q.y)))
+	if not _wall_pts.is_empty() and wall_straight:
+		c = _straight(_wall_pts.back(), c)
+	if _wall_pts.size() >= 3 and c == _wall_pts[0]:
+		finish_walls(true)
+		return
+	if double and _wall_pts.size() >= 2:
+		finish_walls(false)
+		return
+	if _wall_pts.is_empty() or c != _wall_pts.back():
+		_wall_pts.append(c)
+	say("Click the next corner; the first again closes it, Finish ends it.")
+
+
+## `c` moved so the segment from `last` runs along X or along Z.
+static func _straight(last: Vector2i, c: Vector2i) -> Vector2i:
+	var d := c - last
+	return Vector2i(c.x, last.y) if absi(d.x) >= absi(d.y) else Vector2i(last.x, c.y)
+
+
+## The wall line clicked, as one kept shape: `thick` studs, `tall` plates. `closed`: the
+## last corner joins the first.
+func finish_walls(closed: bool) -> int:
+	if _wall_pts.size() < 2:
+		say("A wall needs two corners.")
+		return -1
+	var pts := []
+	var lo := Vector2i(1 << 30, 1 << 30)
+	var hi := -lo
+	for c in _wall_pts:
+		pts.append([c.x, c.y])
+		lo = Vector2i(mini(lo.x, c.x), mini(lo.y, c.y))
+		hi = Vector2i(maxi(hi.x, c.x), maxi(hi.y, c.y))
+	var sh := _new_shape("polyline", "flat", lo, hi, _wall_at, {"pts": pts, "closed": closed and _wall_pts.size() >= 3})
+	sh.rim = thick
+	sh.depth = tall
+	_wall_pts.clear()
+	say("")
+	return create(sh)
+
+
+## Floor: the space closed in by walls round `c`'s cell, on its layer -- filled where it is,
+## `floor_tall` plates thick, or with `on_top` over the walls' tops out to their outer
+## faces. Refused when the walls do not close. Returns the shape's id, or -1.
+func floor_at(c: Vector3i, on_top: bool) -> int:
+	var f0: int = ws.asm.frames[0]
+	if ws._frame != 0 or ws.world.is_solid(f0, c):
+		say("Click the floor inside closed walls.")
+		return -1
+	var region := {}
+	var edge := {}
+	var todo: Array[Vector2i] = [Vector2i(c.x, c.z)]
+	region[todo[0]] = true
+	var n: int = ws.plate_studs
+	while not todo.is_empty():
+		var p: Vector2i = todo.pop_back()
+		if p.x <= 0 or p.y <= 0 or p.x >= n - 1 or p.y >= n - 1 or region.size() > 20000:
+			say("Those walls do not close: the floor would run out of the plate.")
+			return -1
+		for d in [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]:
+			var q: Vector2i = p + d
+			if region.has(q) or edge.has(q):
+				continue
+			if ws.world.is_solid(f0, Vector3i(q.x, c.y, q.y)):
+				edge[q] = true
+			else:
+				region[q] = true
+				todo.append(q)
+	var at := c.y
+	if on_top:
+		# Over the walls: their highest top, and out over them -- corners too, which touch
+		# the inside only across a diagonal.
+		for p in region.keys():
+			for d in [Vector2i(1, 1), Vector2i(1, -1), Vector2i(-1, 1), Vector2i(-1, -1)]:
+				var q: Vector2i = p + d
+				if not region.has(q) and ws.world.is_solid(f0, Vector3i(q.x, c.y, q.y)):
+					edge[q] = true
+		var top := c.y
+		for q in edge:
+			var t := c.y
+			while t < c.y + 600 and ws.world.is_solid(f0, Vector3i(q.x, t + 1, q.y)):
+				t += 1
+			top = maxi(top, t)
+		at = top + 1
+		region.merge(edge)
+	var pts := []
+	var lo := Vector2i(1 << 30, 1 << 30)
+	var hi := -lo
+	for q in region:
+		pts.append([q.x, q.y])
+		lo = Vector2i(mini(lo.x, q.x), mini(lo.y, q.y))
+		hi = Vector2i(maxi(hi.x, q.x), maxi(hi.y, q.y))
+	var sh := _new_shape("cells", "flat", lo, hi, at, pts)
+	sh.depth = floor_tall
+	say("")
+	return create(sh)
+
+
+## Stairs: the first click the lower floor, the second the upper one.
+func _stairs_click() -> void:
+	if ws._frame != 0:
+		return
+	if _stair_from == NO_CELL:
+		_stair_from = ws._cell
+		say("Now click the upper floor where the stair arrives.")
+		return
+	stairs_between(_stair_from, ws._cell)
+
+
+## A straight stair from `lo` (a cell on the lower floor) up to `up` (one on the upper):
+## `stair_wide` studs across, a step a brick high. Returns its id, or -1.
+func stairs_between(lo: Vector3i, up: Vector3i) -> int:
+	_stair_from = NO_CELL
+	if up.y <= lo.y + 2:
+		say("The second click must be on a higher floor.")
+		return -1
+	var d := up - lo
+	var l := "wall_x" if absi(d.x) >= absi(d.z) else "wall_z"
+	var a3 := BrickShapes.from_3d(l, lo)
+	var b3 := BrickShapes.from_3d(l, up)
+	var sh := _new_shape("stairs", l, Vector2i(a3.x, lo.y), Vector2i(b3.x, up.y - 1), a3.z - ((stair_wide - 1) >> 1))
+	sh.depth = stair_wide
+	say("")
+	return create(sh)
+
+
+## Roof: on top of a kept shape, its footprint and the overhang round it; the ridge along
+## its longer side. Returns the roof's id, or -1.
+func roof_on(id: int) -> int:
+	var sh := shape_of(id)
+	if sh.is_empty():
+		return -1
+	var lo := Vector3i(1 << 30, 1 << 30, 1 << 30)
+	var hi := -lo
+	for c in BrickShapes.solid_cells(sh):
+		lo = Vector3i(mini(lo.x, c.x), mini(lo.y, c.y), mini(lo.z, c.z))
+		hi = Vector3i(maxi(hi.x, c.x), maxi(hi.y, c.y), maxi(hi.z, c.z))
+	var o := roof_overhang
+	var r := _new_shape("roof", "flat", Vector2i(lo.x - o, lo.z - o), Vector2i(hi.x + o, hi.z + o), hi.y + 1)
+	r.style = roof_style
+	r.ridge = "x" if hi.x - lo.x >= hi.z - lo.z else "z"
+	r.depth = 1
+	selected = -1
+	return create(r)
 
 
 ## Cut: press on a face of the build, drag on its plane, let go; a door or a window is
@@ -1159,7 +1661,31 @@ func process() -> void:
 	rail.size = Vector2.ZERO
 	var on := active()
 	rail.show_active(on, TOOLS)
-	_shape_box.visible = on == "shape" or on == "sketch"
+	rail.show_toggles({"lock": ws.plane_locked, "snap": ws._snap_on, "mirror": ws.mirror_on,
+			"grid": ws._grid_on, "stress": ws._overlay_on, "keys": ws._keys_on})
+	rail.set_action_text("layer", ["Structure", "Interior", "Detail"][clampi(ws._role, 0, 2)])
+	rail.set_action_text("mirror_axis", "across X" if ws.mirror_axis == 0 else "across Z")
+	var vh: float = ws.get_viewport().get_visible_rect().size.y
+	rail.fit_height(vh - top - 104.0)
+	if _status_left > 0.0:
+		_status_left -= ws.get_process_delta_time()
+		_status.visible = _status_left > 0.0
+	_lay_box.visible = on in ["shape", "sketch"]
+	_poly_box.visible = pen.draw == "polygon"
+	_walls_box.visible = on == "walls"
+	_floor_box.visible = on == "floor"
+	_stairs_box.visible = on == "stairs"
+	_roof_box.visible = on == "roof"
+	_paint_box.visible = on == "paint"
+	_paint_spin.set_value_no_signal(ws._paint_radius)
+	_builds_box.visible = on == "builds"
+	if on == "builds":
+		_builds_label.text = ("Click an inserted build." if ws._selected < 0
+				else "Picked: %s" % String(ws.recipe.groups[ws._selected].get("name", "a build")))
+	_rooms_box.visible = on == "rooms"
+	if on == "rooms":
+		_rooms_label.text = "next room: %s   point: %s" % [ws._spaces.kind, ws._spaces.point_kind]
+	_shape_box.visible = on in ["shape", "sketch", "walls"]
 	_sketch_box.visible = on == "sketch"
 	_kind_pick.get_parent().get_child(_kind_pick.get_index() - 1).visible = on == "shape"
 	_kind_pick.visible = on == "shape"
@@ -1176,8 +1702,10 @@ func process() -> void:
 		_rep_lo_spin.get_parent().visible = rep_what == "storey"
 		_rep_hi_spin.get_parent().visible = rep_what == "storey"
 	_select_box.visible = on == "select"
-	_tall_spin.get_parent().visible = lie == "flat"
-	_thick_spin.get_parent().visible = lie == "wall"
+	_tall_spin.get_parent().visible = lie == "flat" or on == "walls"
+	_thick_spin.get_parent().visible = lie == "wall" or on == "walls"
+	_lie_pick.visible = on != "walls"
+	_lie_pick.get_parent().get_child(_lie_pick.get_index() - 1).visible = on != "walls"
 	_rim_spin.get_parent().visible = on == "shape" and kind in ["hollow", "ring", "line"]
 	if on == "select" and _shown != Vector2i(selected, _rev):
 		_shown = Vector2i(selected, _rev)
@@ -1191,7 +1719,7 @@ func process() -> void:
 	if not _drag.is_empty():
 		_drag.b = _drag_point()
 		ws._ghost.visible = false
-	elif tool in ["cut", "select", "repeat"] or not _sk.is_empty():
+	elif tool in ["cut", "select", "repeat", "pick", "builds", "roof"] or not _sk.is_empty():
 		ws._ghost.visible = false
 	_draw()
 
@@ -1203,7 +1731,7 @@ func _drag_point() -> Vector2i:
 	if q == null:
 		return _drag.b
 	var b := Vector2i(int(floor(q.x)), int(floor(q.y)))
-	if Input.is_key_pressed(KEY_SHIFT) and String(_drag.kind) in ["circle", "ring", "rect", "hollow"]:
+	if (Input.is_key_pressed(KEY_SHIFT) or keep_round) and String(_drag.kind) in ["circle", "ring", "rect", "hollow"]:
 		b = _square(_drag.a, b, BrickShapes.aspect(l))
 	if l != "flat":
 		b.y = maxi(b.y, 0)
@@ -1268,6 +1796,47 @@ func _draw() -> void:
 			_im.surface_add_vertex(_local(l, seg[0], w0))
 			_im.surface_set_color(seg[2])
 			_im.surface_add_vertex(_local(l, seg[1], w0))
+	if not _wall_pts.is_empty():
+		var q = _plane_point("flat", _wall_at)
+		var pts: Array = _wall_pts.duplicate()
+		if q != null:
+			var c := Vector2i(int(floor(q.x)), int(floor(q.y)))
+			pts.append(_straight(_wall_pts.back(), c) if wall_straight else c)
+		for i in pts.size() - 1:
+			if not any:
+				_im.surface_begin(Mesh.PRIMITIVE_LINES)
+				any = true
+			for p in [pts[i], pts[i + 1]]:
+				_im.surface_set_color(Color(0.4, 0.95, 1.0))
+				_im.surface_add_vertex(_local("flat", Vector2(p) + Vector2(0.5, 0.5), _wall_at))
+	if _stair_from != NO_CELL:
+		if not any:
+			_im.surface_begin(Mesh.PRIMITIVE_LINES)
+			any = true
+		var s0 := Vector3(_stair_from) * Vector3(BrickPalette.STUD_M, BrickPalette.PLATE_M, BrickPalette.STUD_M)
+		for d in [Vector3(BrickPalette.STUD_M, 0, 0), Vector3(0, 0, BrickPalette.STUD_M), Vector3(0, 1.0, 0)]:
+			_im.surface_set_color(Color(1.0, 0.85, 0.3))
+			_im.surface_add_vertex(s0)
+			_im.surface_set_color(Color(1.0, 0.85, 0.3))
+			_im.surface_add_vertex(s0 + d)
+	if ws.mirror_on:
+		if not any:
+			_im.surface_begin(Mesh.PRIMITIVE_LINES)
+			any = true
+		var n := float(ws.plate_studs)
+		var h := 20.0 * BrickPalette.STUD_M
+		var corners: Array
+		if ws.mirror_axis == 0:
+			var x: float = ws.mirror_x * BrickPalette.STUD_M
+			corners = [Vector3(x, 0, 0), Vector3(x, 0, n * BrickPalette.STUD_M), Vector3(x, h, n * BrickPalette.STUD_M), Vector3(x, h, 0)]
+		else:
+			var z: float = ws.mirror_z * BrickPalette.STUD_M
+			corners = [Vector3(0, 0, z), Vector3(n * BrickPalette.STUD_M, 0, z), Vector3(n * BrickPalette.STUD_M, h, z), Vector3(0, h, z)]
+		for k in 4:
+			_im.surface_set_color(Color(0.9, 0.5, 1.0, 0.8))
+			_im.surface_add_vertex(corners[k])
+			_im.surface_set_color(Color(0.9, 0.5, 1.0, 0.8))
+			_im.surface_add_vertex(corners[(k + 1) % 4])
 	if tool in ["select", "repeat"] and selected >= 0:
 		var sh := shape_of(selected)
 		if not sh.is_empty():

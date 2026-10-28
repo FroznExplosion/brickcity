@@ -89,10 +89,8 @@ const KEYS_TEXT := "F10 instructions   F2 photos   F3 guide models   F7 parts   
 ## Each: {path, plane, px (image size), mpp (metres a pixel), centre, opacity, shown, node}.
 var photos: Array = []
 var photo_sel := -1
-var mirror_on := false
-## Where the mirror plane is, in studs across (Z). Half a stud past a whole one is the
-## middle of a stud, so a part an odd number of studs wide sits centred on it.
-var mirror_z := 0.0
+## (The mirror -- mirror_on, mirror_z: where the plane is, in studs across (Z); half a stud
+## past a whole one is the middle of a stud -- is the building workshop's: workshop.gd.)
 var view := 0
 var measure_on := false
 var measure_points: Array[Vector3] = []
@@ -1009,9 +1007,8 @@ func _draw_measure() -> void:
 # Mirror
 # ---------------------------------------------------------------------------
 
-## The first stud across of a part `width` studs wide at `z`, mirrored across the plane.
-func mirrored_z(z: int, width: int) -> int:
-	return int(round(2.0 * mirror_z - float(z + width)))
+## (`mirrored_z`, `_place_mirrored` and the mirror's state are the building workshop's now:
+## workshop.gd. This workshop draws the plane and saves it.)
 
 
 func set_mirror(on: bool) -> void:
@@ -1072,40 +1069,11 @@ func mirror_here() -> void:
 
 func _place() -> void:
 	var before := recipe.size()
-	super._place()
+	super._place()   # the brick, and its mirror image when the mirror is on
 	if recipe.size() > before:
 		_redo.clear()
-	if mirror_on and recipe.size() > before and _frame == 0:
-		_place_mirrored()
-		if recipe.size() == before + 2:
-			_edit_groups.append({"end": _edits.size(), "n": 2})
-
-
-## The brick just placed, again, on the other side of the plane. A part with a front
-## that looks across the plane is turned to look the other way; one straddling the plane
-## exactly is its own mirror and is not placed twice. Upright grid only, for now.
-func _place_mirrored() -> void:
-	var arch := _archetype_name()
-	var size := BrickPalette.size_of(arch)
-	var z := mirrored_z(_cell.z, size.z)
-	if z == _cell.z:
-		return
-	var keep := [_cell, _yaw, _snapped]
-	var front := BrickPalette.front_of(arch)
-	if front.z != 0:
-		var want := Vector3i(front.x, front.y, -front.z)
-		for y in 4:
-			if BrickPalette.front_of(BrickPalette.variant_name(_part(), y, _flip)) == want:
-				_yaw = y
-				break
-	_snapped = {}
-	_cell = Vector3i(_cell.x, _cell.y, z)
-	_update_ghost()
-	super._place()
-	_cell = keep[0]
-	_yaw = keep[1]
-	_snapped = keep[2]
-	_update_ghost()
+	if mirror_on and recipe.size() == before + 2:
+		_edit_groups.append({"end": _edits.size(), "n": 2})
 
 
 func _place_mirror_sheet() -> void:
@@ -6420,9 +6388,6 @@ var _sdf_shell := PackedInt32Array()
 var brush_size := 1          # studs: a sketch brush's reach; a paint brush's is the workshop's own
 var brush_shape := "round"   # or "square", for both
 var paint_what := "both"
-var _sketch_anchor: Vector2:
-	get: return _pen.anchor
-	set(v): _pen.anchor = v
 var _rail: PanelContainer
 var _rail_buttons := {}
 var _brush_box: VBoxContainer

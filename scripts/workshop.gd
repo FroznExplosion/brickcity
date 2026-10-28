@@ -238,6 +238,22 @@ var _placed_at := []
 ## rather than assuming, because a fixture is not a block and popping the wrong
 ## list would take a brick out from under a staircase.
 var _edits := []
+## The mirror (Docs/BuildTools.md section 7; moved down from the asset workshop): while on,
+## a brick placed is placed again across the plane -- across Z at `mirror_z` studs, or with
+## `mirror_axis` 0 across X at `mirror_x`.
+var mirror_on := false
+var mirror_z := 0.0
+var mirror_x := 0.0
+var mirror_axis := 2
+## Lock height as a button: the plane stays as with E held, until it is pressed again.
+var plane_locked := false
+## Redo (the building workshop's): what Z took back, newest last -- {kind: "bricks", items}
+## or {kind: "shape", rec}. A new edit clears it; so does undoing anything else.
+var _redo_list := []
+var _in_undo := false
+## A run, or a click and its mirror image, as one undo: {end: _edits.size(), n}.
+var _brick_groups := []
+var _run_from := 0
 ## Holding LMB lays a run (Docs/BuildTools.md): the cell last laid, or NO_STUD between runs.
 var _run_last := NO_STUD
 var _run_on := false
@@ -971,7 +987,7 @@ func _process(_dt: float) -> void:
 		_aim()
 		_update_ghost()
 		if _run_on and not Input.is_mouse_button_pressed(MOUSE_BUTTON_LEFT):
-			_run_on = false
+			_end_run()
 		run_step()
 	_update_hud()
 	if _tools != null:
@@ -1010,7 +1026,7 @@ func _process(_dt: float) -> void:
 ## across the floor, which read as placement being broken.
 func _aim() -> void:
 	var ray := _mouse_ray()
-	_hold_lock(Input.is_key_pressed(KEY_E))
+	_hold_lock(Input.is_key_pressed(KEY_E) or plane_locked)
 	_aim_ray(ray[0], ray[1])
 
 
@@ -1620,15 +1636,16 @@ func _unhandled_input(e: InputEvent) -> void:
 	if _tools != null and _tools.input(e):
 		return
 	if e is InputEventMouseButton and not e.pressed and e.button_index == MOUSE_BUTTON_LEFT:
-		_run_on = false
+		_end_run()
 	if e is InputEventMouseButton and e.pressed:
 		match e.button_index:
 			MOUSE_BUTTON_LEFT:
 				if _painting:
 					_begin_stroke()
 				else:
+					var before := recipe.size()
 					_place()
-					_begin_run()
+					_begin_run(before)
 			MOUSE_BUTTON_RIGHT:
 				var ray := _mouse_ray()
 				_delete_ray(ray[0], ray[1])
@@ -1665,7 +1682,11 @@ func _unhandled_input(e: InputEvent) -> void:
 		KEY_U: _cycle_guide()
 		KEY_C: copy_group()
 		KEY_DELETE, KEY_BACKSPACE: delete_group()
-		KEY_Z: _undo()
+		KEY_Z:
+			if e.shift_pressed:
+				redo_last()
+			else:
+				_undo()
 		KEY_V: _snap_on = not _snap_on
 		KEY_B: _set_painting(not _painting)
 		KEY_O:
@@ -1693,7 +1714,10 @@ func _spaces_input(e: InputEvent) -> bool:
 		var ray := _mouse_ray()
 		match e.button_index:
 			MOUSE_BUTTON_LEFT:
-				_spaces.click(ray[0], ray[1])
+				if _tools != null and _tools.room_points:
+					_spaces.toggle_point(ray[0], ray[1])
+				else:
+					_spaces.click(ray[0], ray[1])
 				return true
 			MOUSE_BUTTON_RIGHT:
 				_spaces.right_click(ray[0], ray[1])
@@ -1718,6 +1742,73 @@ func _spaces_input(e: InputEvent) -> bool:
 
 
 func _place() -> void:
+	var before := recipe.size()
+	_place_one()
+	if mirror_on and recipe.size() > before and _frame == 0:
+		_place_mirrored()
+
+
+## The first stud across of a part `width` studs wide at `z`, mirrored across the plane.
+func mirrored_z(z: int, width: int) -> int:
+	return int(round(2.0 * mirror_z - float(z + width)))
+
+
+## The same across X.
+func mirrored_x(x: int, width: int) -> int:
+	return int(round(2.0 * mirror_x - float(x + width)))
+
+
+func set_mirror(on: bool) -> void:
+	mirror_on = on
+	if on and mirror_z == 0.0:
+		mirror_z = plate_studs * 0.5
+	if on and mirror_x == 0.0:
+		mirror_x = plate_studs * 0.5
+
+
+## Put the plane down the middle of the ghost.
+func mirror_here() -> void:
+	var size := BrickPalette.size_of(_archetype_name())
+	if mirror_axis == 0:
+		mirror_x = _cell.x + size.x * 0.5
+	else:
+		mirror_z = _cell.z + size.z * 0.5
+
+
+## The brick just placed, again, on the other side of the plane. A part with a front
+## that looks across the plane is turned to look the other way; one straddling the plane
+## exactly is its own mirror and is not placed twice. Upright grid only, for now.
+func _place_mirrored() -> void:
+	var arch := _archetype_name()
+	var size := BrickPalette.size_of(arch)
+	var to := _cell
+	if mirror_axis == 0:
+		to.x = mirrored_x(_cell.x, size.x)
+	else:
+		to.z = mirrored_z(_cell.z, size.z)
+	if to == _cell:
+		return
+	var keep := [_cell, _yaw, _snapped]
+	var front := BrickPalette.front_of(arch)
+	if front[mirror_axis] != 0:
+		var want := front
+		want[mirror_axis] = -front[mirror_axis]
+		for y in 4:
+			if BrickPalette.front_of(BrickPalette.variant_name(_part(), y, _flip)) == want:
+				_yaw = y
+				break
+	_snapped = {}
+	_cell = to
+	_update_ghost()
+	_place_one()
+	_cell = keep[0]
+	_yaw = keep[1]
+	_snapped = keep[2]
+	_update_ghost()
+
+
+## One brick where the ghost is (`_place` is this and its mirror image).
+func _place_one() -> void:
 	if not _valid:
 		return
 	var arch_name := _archetype_name()
@@ -1788,14 +1879,26 @@ func find_brick(arch: String, cell: Vector3i) -> int:
 	return -1
 
 
-## A held click: from here, moving the cursor lays a run (`run_step`).
-func _begin_run() -> void:
+## A held click: from here, moving the cursor lays a run (`run_step`). `from`: the recipe's
+## size before the click laid its brick, so the run (and a mirror image) undo as one.
+func _begin_run(from: int = -1) -> void:
 	if _stamp != null:
 		return
+	_run_from = recipe.size() if from < 0 else from
 	_run_on = true
 	_run_last = _cell
 	_run_moved = 0.0
 	_run_press_ms = Time.get_ticks_msec()
+
+
+## The button is up: what the click and its run laid is one undo (the building workshop's;
+## the asset workshop groups its own).
+func _end_run() -> void:
+	if _run_on and _tools != null:
+		var n := recipe.size() - _run_from
+		if n > 1 and _edits.size() >= n:
+			_brick_groups.append({"end": _edits.size(), "n": n})
+	_run_on = false
 
 
 ## Lay the held brick where the ghost has moved to, if it fits there -- once the click
@@ -1869,6 +1972,17 @@ func _clear_fixtures(keep: int = 0) -> void:
 ## of the middle would renumber every block after it and invalidate any damage
 ## record keyed on those ids.
 func _undo() -> bool:
+	_in_undo = true
+	var ok := _undo_step()
+	_in_undo = false
+	return ok
+
+
+func _undo_step() -> bool:
+	# Only bricks and shapes come back with redo: undoing anything else forgets it, so redo
+	# never jumps past it.
+	if not _edits.is_empty() and not (String(_edits.back()) in ["brick", "shape"]):
+		_redo_list.clear()
 	if not _edits.is_empty() and _edits[_edits.size() - 1] == "shape" and _tools != null:
 		return _tools.undo()
 	if not _edits.is_empty() and _edits[_edits.size() - 1] == "furnish":
@@ -1896,6 +2010,38 @@ func _undo() -> bool:
 		_clear_fixtures(recipe.fixture_count())
 		_after_edit()
 		return true
+	# A run (or a click and its mirror image) goes back as one.
+	while not _brick_groups.is_empty() and int(_brick_groups.back().end) > _edits.size():
+		_brick_groups.pop_back()
+	var n := 1
+	if not _brick_groups.is_empty() and int(_brick_groups.back().end) == _edits.size():
+		n = int(_brick_groups.pop_back().n)
+	var items := []
+	_batch = n > 1
+	for _k in n:
+		var item := _last_brick_item()
+		if not _undo_brick():
+			break
+		items.append(item)
+	if _batch:
+		_batch = false
+		_after_edit()
+	if items.is_empty():
+		return false
+	_redo_list.append({"kind": "bricks", "items": items})
+	return true
+
+
+## The newest brick, as redo would lay it again.
+func _last_brick_item() -> Dictionary:
+	if recipe.is_empty() or _placed_at.is_empty():
+		return {}
+	var rid := recipe.size() - 1
+	return {"arch": recipe.part_of(rid), "cell": recipe.cell_of(rid), "colour": recipe.colour_of(rid),
+			"mat": recipe.material_of(rid), "role": recipe.role_of(rid), "af": int(_placed_at[rid][0])}
+
+
+func _undo_brick() -> bool:
 	if recipe.is_empty() or _placed_at.is_empty():
 		return false
 	var at: Array = _placed_at[_placed_at.size() - 1]
@@ -1907,6 +2053,55 @@ func _undo() -> bool:
 	recipe.pop()
 	if not _edits.is_empty():
 		_edits.pop_back()
+	_after_edit()
+	return true
+
+
+## Shift Z (and the rail's Redo): lay back what the last Z took -- its bricks, or a shape
+## edit. A redone brick is laid as it was; a weld it had is not made again.
+func redo_last() -> bool:
+	if _redo_list.is_empty():
+		return false
+	var r: Dictionary = _redo_list.pop_back()
+	_in_undo = true
+	var ok := false
+	if r.kind == "shape" and _tools != null:
+		ok = _tools.redo(r.rec)
+	elif r.kind == "bricks":
+		var items: Array = r.items
+		var n := 0
+		_batch = true
+		for i in range(items.size() - 1, -1, -1):
+			if _relay(items[i]):
+				n += 1
+		_batch = false
+		_after_edit()
+		if n > 1:
+			_brick_groups.append({"end": _edits.size(), "n": n})
+		ok = n > 0
+	_in_undo = false
+	return ok
+
+
+func _relay(item: Dictionary) -> bool:
+	if item.is_empty() or not palette.has(String(item.arch)):
+		return false
+	var af := int(item.af)
+	if af < 0 or af >= asm.frames.size():
+		return false
+	var f: int = asm.frames[af]
+	var id: int = palette[String(item.arch)]
+	var cell: Vector3i = item.cell
+	if world.would_connect(f, cell, id) < 0 or not asm.can_place(f, cell, id):
+		return false
+	var placed := asm.place(f, cell, id, int(item.colour))
+	if placed < 0:
+		return false
+	if int(item.mat) != 0:
+		world.set_block_material(f, placed, int(item.mat))
+	recipe.add(String(item.arch), cell, int(item.colour), _recipe_frame_for(af), int(item.role), int(item.mat))
+	_placed_at.append([af, placed])
+	_edits.append("brick")
 	_after_edit()
 	return true
 
@@ -2076,6 +2271,8 @@ func _recipe_frame_for(asm_frame: int) -> int:
 
 func _after_edit() -> void:
 	_dirty = true
+	if not _in_undo:
+		_redo_list.clear()
 	if _spaces != null:
 		_spaces.edited()
 	if _batch:
