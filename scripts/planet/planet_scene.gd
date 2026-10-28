@@ -53,6 +53,7 @@ var _trees_gate := false
 var _bricks_gate := false
 var _damage_gate := false
 var _fall_gate := false
+var _hits_gate := false
 ## The AI round the fight (Docs/Planets.md 11.8, N2, N4): the nav net round the
 ## player's town; ai_world / ai_nav the region the player is in. Made by setup_ai.
 var ai: AIServices
@@ -89,10 +90,11 @@ func _ready() -> void:
 	_bricks_gate = "--gate=bricks" in OS.get_cmdline_user_args()
 	_damage_gate = "--gate=damage" in OS.get_cmdline_user_args()
 	_fall_gate = "--gate=fall" in OS.get_cmdline_user_args()
+	_hits_gate = "--gate=hits" in OS.get_cmdline_user_args()
 	_travel_gate = "--gate=travel" in OS.get_cmdline_user_args()
 	_far_gate = "--gate=far" in OS.get_cmdline_user_args()
 	_drive_gate = "--gate=drive" in OS.get_cmdline_user_args()
-	_gate = _gate or _pawn_gate or _mech_gate or _tank_gate or _soldier_gate or _squad_gate or _travel_gate or _far_gate or _drive_gate or _trees_gate or _bricks_gate or _damage_gate or _fall_gate
+	_gate = _gate or _pawn_gate or _mech_gate or _tank_gate or _soldier_gate or _squad_gate or _travel_gate or _far_gate or _drive_gate or _trees_gate or _bricks_gate or _damage_gate or _fall_gate or _hits_gate
 	data = PlanetData.new()
 	data.planet_name = "proto"
 	# Towns and landmarks: their pads go into the ground before it is built.
@@ -168,6 +170,8 @@ func _ready() -> void:
 			_run_damage_gate()
 		elif _fall_gate:
 			_run_fall_gate()
+		elif _hits_gate:
+			_run_hits_gate()
 		elif _travel_gate:
 			_run_travel_gate()
 		elif _far_gate:
@@ -367,7 +371,7 @@ func _process(_delta: float) -> void:
 	# walker's own gate, the pawn stands on it.
 	if walker.frozen and pawn == null and trees.prebaked and _ground_hit(walker.global_position) != Vector3.INF:
 		walker.frozen = false
-		if not _gate or _pawn_gate or _mech_gate or _tank_gate or _soldier_gate or _squad_gate or _travel_gate or _far_gate or _drive_gate or _trees_gate or _bricks_gate or _damage_gate or _fall_gate:
+		if not _gate or _pawn_gate or _mech_gate or _tank_gate or _soldier_gate or _squad_gate or _travel_gate or _far_gate or _drive_gate or _trees_gate or _bricks_gate or _damage_gate or _fall_gate or _hits_gate:
 			_spawn_player(_ground_hit(walker.global_position), -walker.global_transform.basis.z)
 	if not on_foot:
 		walker.flying = pawn != null or walker.flying
@@ -2135,4 +2139,129 @@ func _run_fall_gate() -> void:
 			"%d groups, %d pieces made, %d moving, %d to crumbs over the cap" % [groups.size(), made, pc.moving(), pc.crumbed_cap - cap0])
 	print("[planet] frames: worst %.1f ms; over 40 ms: %s" % [_worst_ms, _hitches])
 	print("[planet] fall gate: %d ok, %d FAIL" % [_ok, _fail])
+	get_tree().quit(0 if _fail == 0 else 1)
+
+
+# ---------------------------------------------------------------------------
+# The hits gate (Planets.md 11.11, D2 step 3): the damage gate's panel brought
+# down and at rest; rifle rounds wear a brick out of it, a charge breaks it
+# up, and what is left lies on something.
+
+func _run_hits_gate() -> void:
+	var t0 := Time.get_ticks_msec()
+	while pawn == null and Time.get_ticks_msec() - t0 < 60000:
+		await _frames(1)
+	var town: Vector3 = town_dirs[0]
+	var p_feet := _surface(_round_dir(town, spawn_dir, 88.0))
+	pawn.place(p_feet + Gravity.up_at(p_feet) * 0.3)
+	t0 = Time.get_ticks_msec()
+	while _ground_hit(p_feet) == Vector3.INF and Time.get_ticks_msec() - t0 < 30000:
+		await _frames(1)
+	setup_ai(town)
+	var bi: int = await _bricked_near()
+	var site: PlanetBuildings.Site = buildings.sites[bi]
+	var bxf := planet.global_transform * site.frame
+	var stud := BrickWorld.get_stud_metres()
+	var space := get_world_3d().direct_space_state
+	var pc := buildings.pieces
+	var storey := TowerRecipe.SLAB_PLATES + TowerRecipe.COURSES_PER_FLOOR * TowerRecipe.PLATES_PER_COURSE
+	var zc_c := mini(15, site.fz / 2)
+	var half := mini(12, site.fz / 2 - 2)
+	var z0 := zc_c - half
+	var z1 := zc_c + half
+	var ring_ids := {}
+	for zc in range(z0, z1):
+		for yc in range(0, storey):
+			for xc in TowerRecipe.WALL_THICK:
+				var cell := Vector3i(xc, yc, zc)
+				if not buildings.bricks.is_solid(site.chunk, cell):
+					continue
+				var edge := zc < z0 + 2 or zc >= z1 - 2 or yc < TowerRecipe.SLAB_PLATES \
+						or yc >= storey - TowerRecipe.PLATES_PER_COURSE
+				if edge:
+					ring_ids[buildings.bricks.block_at(site.chunk, cell)] = true
+	var ring := PackedInt32Array(ring_ids.keys())
+	var pieces0 := pc.pieces.size()
+	buildings.bricks.kill_blocks(site.chunk, ring)
+	buildings.after_kill(bi, ring, bxf * AABB(Vector3(-1.0, -0.5, z0 * stud - 1.0),
+			Vector3(3.0, storey * BrickWorld.get_plate_metres() + 1.0, (z1 - z0) * stud + 2.0)))
+	var panel: PlanetPieces.Piece = null
+	t0 = Time.get_ticks_msec()
+	while Time.get_ticks_msec() - t0 < 10000:
+		await get_tree().physics_frame
+		for q in pc.pieces.slice(pieces0):
+			var pp: PlanetPieces.Piece = q
+			if panel == null or pp.bricks > panel.bricks:
+				panel = pp
+		if panel != null and panel.settled:
+			break
+	_check("the panel comes down and lies at rest", panel != null and panel.settled,
+			"%d piece(s)" % (pc.pieces.size() - pieces0))
+	if panel == null or not panel.settled:
+		get_tree().quit(1)
+		return
+	# Rounds: a rifle's, straight down onto it from above its middle.
+	var up := Gravity.up_at(panel.body.global_position)
+	var from := panel.body.global_position + up * 4.0
+	var to := panel.body.global_position - up * 1.0
+	var mask := Layers.DEBRIS | Layers.FALLING
+	var hit := space.intersect_ray(PhysicsRayQueryParameters3D.create(from, to, mask))
+	_check("a ray from above meets the panel", not hit.is_empty() and hit.collider == panel.body)
+	if hit.is_empty():
+		get_tree().quit(1)
+		return
+	var at: Vector3 = hit.position
+	var dir := (to - from).normalized()
+	var shot := StructuralDamage.for_shot(WeaponClass.builtin(&"rifle"))
+	var bricks0 := panel.bricks
+	var killed0 := pc.hit_killed
+	var crumbs0 := pc.crumbs.thrown
+	var rounds := 0
+	while rounds < 200 and pc.hit_killed == killed0:
+		_structure_hit(at + dir * 0.05, dir, shot)
+		rounds += 1
+	_check("a rifle's rounds wear a brick out of it", pc.hit_killed > killed0 and panel.bricks < bricks0,
+			"%d brick(s) after %d round(s); %d -> %d bricks" % [pc.hit_killed - killed0, rounds, bricks0, panel.bricks])
+	_check("the brick it killed is thrown as crumbs", pc.crumbs.thrown > crumbs0,
+			"%d crumb(s)" % (pc.crumbs.thrown - crumbs0))
+	await _frames(3)
+	var hit2 := space.intersect_ray(PhysicsRayQueryParameters3D.create(from, to, mask))
+	var deeper: bool = hit2.is_empty() or hit2.collider != panel.body \
+			or (hit2.position as Vector3).distance_to(from) > at.distance_to(from) + 0.05
+	_check("and its shapes have the hole (the ray goes further in)", deeper,
+			"from %.2f m to %s" % [at.distance_to(from), "through" if hit2.is_empty() else "%.2f m" % (hit2.position as Vector3).distance_to(from)])
+	# A charge on it.
+	var k1 := pc.hit_killed
+	var made0 := pc.made
+	var c0 := pc.crumbs.thrown
+	var b1 := panel.bricks
+	buildings.damage(panel.body.global_position, {"blast": true, "radius": 1.6, "hp": 0})
+	_check("a charge blows bricks out of it", pc.hit_killed - k1 >= 3, "%d" % (pc.hit_killed - k1))
+	_check("and breaks it up: pieces off, crumbs, or the panel gone",
+			pc.made > made0 or pc.crumbs.thrown > c0 or panel.fading_since != 0,
+			"%d -> %d bricks, %d new piece(s), %d crumb(s)" % [b1, panel.bricks, pc.made - made0, pc.crumbs.thrown - c0])
+	# What is left lies on something.
+	await get_tree().create_timer(4.0).timeout
+	var resting := 0
+	var left := 0
+	var where := []
+	for q in pc.pieces.slice(pieces0):
+		var p: PlanetPieces.Piece = q
+		if not is_instance_valid(p.body) or p.fading_since != 0:
+			continue
+		left += 1
+		var u := Gravity.up_at(p.body.global_position)
+		var under := space.intersect_ray(PhysicsRayQueryParameters3D.create(
+				p.body.global_position, p.body.global_position - u * 4.0,
+				Layers.WORLD | Layers.STRUCTURE | Layers.DEBRIS, [p.body.get_rid()]))
+		if p.settled and not under.is_empty():
+			resting += 1
+		else:
+			where.append("%d bricks, settled %s" % [p.bricks, p.settled])
+	_check("and what is left of it lies on something, at rest", resting == left,
+			"%d of %d; %s" % [resting, left, "; ".join(where)])
+	await _shot("planet_hits")
+	print("[planet] hits: %d hit(s) on pieces, %d bricks; %d woken; crumbs %d; frames worst %.1f ms" % [
+			pc.hits, pc.hit_killed, pc.woken, pc.crumbs.thrown, _worst_ms])
+	print("[planet] hits gate: %d ok, %d FAIL" % [_ok, _fail])
 	get_tree().quit(0 if _fail == 0 else 1)

@@ -1784,6 +1784,19 @@ wear a brick out of it (fewer live bricks, crumbs thrown, a ray goes further in)
 breaks it up (pieces or crumbs, the panel smaller or gone); after a few seconds every piece left is
 settled on something; the building still takes its own hits.
 
-Not yet: hits on a piece, the city's snap preferences, a building toppling whole
+**D2 step 3 built (2026-10-27): hits on pieces.** `PlanetPieces.piece_at` / `pieces_near` /
+`damage` / `support_gone`, routed from `PlanetBuildings.damage` (a round: the piece it is in, else
+the building; a blast: every piece in reach and the building). A round chips, ordnance blasts, in
+the piece's grid frame; the killed bricks are crumbs (a blast's ring, thrown out from it; its core
+gone) -- and a building's killed bricks are thrown as crumbs too now; the piece's shapes rebuilt,
+what is no longer joined shed (pieces or crumbs), its mesh made again; a piece with nothing left
+shrinks away; settled pieces whose grid meets the gone bricks are woken (not the piece hit: it lies
+where it lay). Gate `--gate=hits` 8/8 (headless x3, windowed): the panel at rest; five rifle rounds
+kill a brick, and with it the panel parts -- 15 bricks to 7, the 7 a group small enough to be
+crumbs (8 crumbs); the ray from above goes 0.43 m further in; a charge on it kills 5 more and leaves
+2 bricks (9 crumbs); what is left lies at rest on the ground. Fall 7, damage 12, bricks 9, trees 7,
+squad 10, pawn 12. Not tested: a piece resting on another woken when the one under it is shot.
+
+Not yet: the city's snap preferences, a building toppling whole
 (`solve.stability`), the AI told where a piece lies; furniture, materialising for a fight far from
 the camera.
