@@ -49,22 +49,31 @@ const SEE_FAR := 250000.0
 const RIG := &"player_rig"
 
 ## `kick`: the world velocity everything that travels takes on at this handoff
-## (its velocity already turned with the world).
-signal anchor_changed(old_body: PlanetBody, new_body: PlanetBody, kick: Vector3)
-## `body` woke as the anchor: what holds world positions for it, and was not
+## (its velocity already turned with the world). A frame is a PlanetBody, a
+## SpaceStation, or null (space).
+signal anchor_changed(old_frame: Node3D, new_frame: Node3D, kick: Vector3)
+## `frame` woke as the anchor: what holds world positions for it, and was not
 ## shifted while it slept, takes `offset`.
-signal woke(body: PlanetBody, offset: Vector3)
+signal woke(frame: Node3D, offset: Vector3)
+
+## A station nearer than this is the velocity flight matches (docking).
+const MATCH_STATION := 3000.0
 
 var sys: StarSystem
 ## By index in sys.bodies; home's is the scene's own PlanetBody.
 var bodies: Array[PlanetBody] = []
+## By index in sys.orbitals.
+var stations: Array[SpaceStation] = []
 ## The orbit clock, seconds; `time_scale` 1 is STA's pace.
 var t := 0.0
 var time_scale := 1.0
 ## Stopped: no orbit, no spin, no handoff kick (STA's T). Every gate but the
 ## system's own runs stopped.
 var frozen := false
+## The planet the player is on, or null (in space, or on a station).
 var anchor: PlanetBody = null
+## The station the player is on, or null.
+var station: SpaceStation = null
 ## Where the star truly is (its node); `star_look` draws it.
 var star: Node3D
 var star_look: MeshInstance3D
@@ -106,6 +115,15 @@ func setup(p_sys: StarSystem, home_body: PlanetBody = null) -> void:
 		b.process_mode = Node.PROCESS_MODE_DISABLED
 		b.far_only()
 		bodies.append(b)
+	for k in sys.orbitals.size():
+		var st := SpaceStation.new()
+		add_child(st)
+		st.setup(sys.orbitals[k])
+		st.process_mode = Node.PROCESS_MODE_DISABLED
+		stations.append(st)
+		# Home's stations' bricks while the scene loads.
+		if sys.orbitals[k].parent == sys.home and home_body != null:
+			st.prepare()
 	if home_body != null:
 		anchor = home_body
 	_build_star()
@@ -116,10 +134,31 @@ func index_of(b: PlanetBody) -> int:
 	return bodies.find(b)
 
 
+## The frame the player is in: its station, its planet, or null (space).
+func frame_node() -> Node3D:
+	return station if station != null else anchor
+
+
+## A frame's index in StarSystem's frames.
+func _fi(n: Node3D) -> int:
+	if n is PlanetBody:
+		return bodies.find(n)
+	return bodies.size() + stations.find(n)
+
+
+static func name_of(n: Node3D) -> String:
+	if n is PlanetBody:
+		return (n as PlanetBody).data.planet_name
+	if n is SpaceStation:
+		return (n as SpaceStation).data.orbital_name
+	return "space"
+
+
 ## Space frame to world, now.
 func space_to_world() -> Transform3D:
-	if anchor != null:
-		return Transform3D(Basis(), anchor.global_position) * sys.xform(index_of(anchor), t).affine_inverse()
+	var f := frame_node()
+	if f != null:
+		return Transform3D(Basis(), f.global_position) * sys.frame_xform(_fi(f), t).affine_inverse()
 	return Transform3D(_space_basis, star.global_position)
 
 
@@ -135,13 +174,21 @@ func nearest(p: Vector3) -> PlanetBody:
 	return best
 
 
-## The world velocity flight there should hold to: still on the anchor; the
-## nearest body's orbital velocity in space (a flight computer matching it).
+## The world velocity flight there should hold to (a flight computer): a
+## station's within MATCH_STATION of it, to dock; else still on a planet or
+## station; in space the nearest body's orbital velocity.
 func match_velocity(p: Vector3) -> Vector3:
-	if anchor != null or frozen:
+	if frozen:
 		return Vector3.ZERO
-	var b := nearest(p)
-	return _space_basis * sys.vel(index_of(b), t)
+	var s2w := space_to_world()
+	var x := s2w.affine_inverse() * p
+	var here := _frame_velocity(frame_node(), x)
+	for st in stations:
+		if st.is_station() and st != station and (st.global_position - p).length() < MATCH_STATION:
+			return s2w.basis * (_frame_velocity(st, x) - here)
+	if frame_node() != null:
+		return Vector3.ZERO
+	return s2w.basis * sys.vel(index_of(nearest(p)), t)
 
 
 ## The hour of the day (0..24) at a world point on the anchor: 12 with the sun
@@ -159,11 +206,18 @@ func hour_at(p: Vector3) -> float:
 	return fposmod(12.0 - here.signed_angle_to(s, axis) * 12.0 / PI, 24.0)
 
 
+## The floating origin moved the scene: a station's bricks follow.
+func on_origin_shift() -> void:
+	if station != null:
+		station.on_origin_shift()
+
+
 func _process(delta: float) -> void:
 	if not frozen:
 		t += delta * time_scale
 	if observer.is_valid():
 		_choose_anchor(observer.call())
+		_prepare_near(observer.call())
 	_place()
 	_gravity()
 	if eye.is_valid():
@@ -172,19 +226,39 @@ func _process(delta: float) -> void:
 	_bake_service()
 
 
-## Every body but the anchor, and the star, where the clock has them.
+## A station's template built once the player is within PREPARE_AT of it.
+const PREPARE_AT := 20000.0
+
+
+func _prepare_near(p: Vector3) -> void:
+	for st in stations:
+		if st.is_station() and st._template < 0 and (st.global_position - p).length() < PREPARE_AT:
+			st.prepare()
+			print("[system] %s prepared on the way in: %.1f ms" % [st.data.orbital_name, st.template_ms])
+			return
+
+
+## Every frame but the player's, and the star, where the clock has them.
 func _place() -> void:
 	var s2w := space_to_world()
+	var f := frame_node()
 	star.global_position = s2w.origin
 	for i in bodies.size():
-		var b := bodies[i]
-		if b != anchor:
-			b.global_transform = s2w * sys.xform(i, t)
+		if bodies[i] != f:
+			bodies[i].global_transform = s2w * sys.xform(i, t)
+	for k in stations.size():
+		if stations[k] != f:
+			stations[k].global_transform = s2w * sys.orbital_xform(k, t)
 	for b in bodies:
 		b.set_sun(b.global_basis.inverse() * (star.global_position - b.global_position).normalized())
 
 
 func _gravity() -> void:
+	if station != null:
+		Gravity.planet = station.gravity_centre
+		Gravity.planet_strength = station.data.gravity
+		Gravity.planet_radius = SpaceStation.DEPTH
+		return
 	var g := anchor
 	if g == null and observer.is_valid():
 		g = nearest(observer.call())
@@ -195,8 +269,17 @@ func _gravity() -> void:
 	Gravity.planet_radius = g.data.radius
 
 
+## A station's field first (it is in its planet's shell), then the planets'.
 func _choose_anchor(p: Vector3) -> void:
-	if anchor != null and (p - anchor.global_position).length() < anchor.data.radius * SHELL * SHELL_OUT:
+	if station != null and (p - station.global_position).length() < SpaceStation.FIELD * SHELL_OUT:
+		return
+	for st in stations:
+		if st.is_station() and (p - st.global_position).length() < SpaceStation.FIELD:
+			if st != frame_node():
+				_switch(st, p)
+			return
+	if station == null and anchor != null \
+			and (p - anchor.global_position).length() < anchor.data.radius * SHELL * SHELL_OUT:
 		return
 	var best: PlanetBody = null
 	var best_q := 1.0
@@ -205,14 +288,14 @@ func _choose_anchor(p: Vector3) -> void:
 		if q < best_q:
 			best_q = q
 			best = b
-	if best != anchor:
+	if best != frame_node():
 		_switch(best, p)
 
 
-## Hand the frame over from the anchor to `next` (either may be null: space)
-## at the player's world point `p`.
-func _switch(next: PlanetBody, p: Vector3) -> void:
-	var old := anchor
+## Hand the frame over from the player's to `next` (a body, a station, or null:
+## space) at the player's world point `p`.
+func _switch(next: Node3D, p: Vector3) -> void:
+	var old := frame_node()
 	var s2w := space_to_world()
 	var x := s2w.affine_inverse() * p
 	var vf_old := _frame_velocity(old, x)
@@ -221,35 +304,37 @@ func _switch(next: PlanetBody, p: Vector3) -> void:
 		_space_basis = s2w.basis
 		star.global_position = s2w.origin
 		anchor = null
+		station = null
 		_sleep(old)
 	var s2w_new := space_to_world()
 	if next != null:
 		# `next` is turned to the identity where it is seen from the player:
 		# the world turns about the player, who stays put.
-		var tx := sys.xform(index_of(next), t)
+		var tx := sys.frame_xform(_fi(next), t)
 		var at := p - tx.basis.inverse() * (x - tx.origin)
 		s2w_new = Transform3D(Basis(), at) * tx.affine_inverse()
 		var m := s2w_new * s2w.affine_inverse()
 		next.global_transform = Transform3D(Basis(), at)
-		anchor = next
+		if next is SpaceStation:
+			station = next
+		else:
+			anchor = next
 		_travel(m)
 		_wake(next)
 	var kick := s2w_new.basis * (vf_old - _frame_velocity(next, x))
 	handoffs += 1
 	last_kick = kick
-	print("[system] handoff %s -> %s at t %.1f s: kick %.1f m/s" % [
-			old.data.planet_name if old != null else "space", next.data.planet_name if next != null else "space",
-			t, kick.length()])
+	print("[system] handoff %s -> %s at t %.1f s: kick %.1f m/s" % [name_of(old), name_of(next), t, kick.length()])
 	_place()
 	anchor_changed.emit(old, next, kick)
 
 
-## The space-frame velocity of body `b`'s turning frame at space point `x` (0:
-## the star's frame, or the clock stopped).
-func _frame_velocity(b: PlanetBody, x: Vector3) -> Vector3:
-	if b == null or frozen:
+## The space-frame velocity of frame `n` at space point `x` (0: the star's
+## frame, or the clock stopped).
+func _frame_velocity(n: Node3D, x: Vector3) -> Vector3:
+	if n == null or frozen:
 		return Vector3.ZERO
-	return sys.frame_velocity(index_of(b), t, x)
+	return sys.frame_velocity_of(_fi(n), t, x)
 
 
 ## The scene's top-level 3D nodes but the system's own, the bodies and the sun.
@@ -275,7 +360,7 @@ func _travel(m: Transform3D) -> void:
 		n.reset_physics_interpolation()
 
 
-func _sleep(b: PlanetBody) -> void:
+func _sleep(f: Node3D) -> void:
 	var list: Array = []
 	for n in _top_level():
 		if n.is_in_group(RIG):
@@ -284,29 +369,30 @@ func _sleep(b: PlanetBody) -> void:
 	for e in list:
 		var n: Node3D = e[0]
 		n.process_mode = Node.PROCESS_MODE_DISABLED
-		n.reparent(b, true)
-	_sleepers[b] = list
-	_left_at[b] = b.global_position
-	b.deactivate()
-	b.process_mode = Node.PROCESS_MODE_DISABLED
-	print("[system] %s sleeps with %d thing(s) on it" % [b.data.planet_name, list.size()])
+		n.reparent(f, true)
+	_sleepers[f] = list
+	_left_at[f] = f.global_position
+	f.call(&"deactivate")
+	f.process_mode = Node.PROCESS_MODE_DISABLED
+	print("[system] %s sleeps with %d thing(s) on it" % [name_of(f), list.size()])
 
 
-func _wake(b: PlanetBody) -> void:
-	b.process_mode = Node.PROCESS_MODE_INHERIT
-	for e in _sleepers.get(b, []):
+func _wake(f: Node3D) -> void:
+	f.process_mode = Node.PROCESS_MODE_INHERIT
+	for e in _sleepers.get(f, []):
 		var n: Node3D = e[0]
 		if is_instance_valid(n):
 			n.reparent(get_parent(), true)
 			n.process_mode = e[1]
 			n.reset_physics_interpolation()
-	_sleepers.erase(b)
-	WorldFrame.origin = -b.global_position
-	_full_bake(b)
-	b.activate()
-	var offset: Vector3 = b.global_position - _left_at.get(b, b.global_position)
-	_left_at.erase(b)
-	woke.emit(b, offset)
+	_sleepers.erase(f)
+	WorldFrame.origin = -f.global_position
+	if f is PlanetBody:
+		_full_bake(f)
+	f.call(&"activate")
+	var offset: Vector3 = f.global_position - _left_at.get(f, f.global_position)
+	_left_at.erase(f)
+	woke.emit(f, offset)
 
 
 # --- the light -----------------------------------------------------------------
@@ -346,6 +432,8 @@ func _scaled_space(e: Vector3) -> void:
 		var near := _draw_at(b.look, b.global_transform, e)
 		if b.ocean != null:
 			b.ocean.visible = near or b == anchor
+	for st in stations:
+		_draw_at(st.look, st.global_transform, e)
 	_draw_at(star_look, star.global_transform, e)
 
 

@@ -361,7 +361,7 @@ func _home_awake() -> bool:
 	return system == null or system.anchor == planet
 
 
-func _on_anchor_changed(_old: PlanetBody, _new: PlanetBody, kick: Vector3) -> void:
+func _on_anchor_changed(_old: Node3D, _new: Node3D, kick: Vector3) -> void:
 	if walker.flying:
 		walker.inertia += kick
 	else:
@@ -370,7 +370,7 @@ func _on_anchor_changed(_old: PlanetBody, _new: PlanetBody, kick: Vector3) -> vo
 		pawn.body.process_mode = Node.PROCESS_MODE_DISABLED
 
 
-func _on_woke(body: PlanetBody, offset: Vector3) -> void:
+func _on_woke(body: Node3D, offset: Vector3) -> void:
 	if body != planet:
 		return
 	buildings.on_origin_shift()
@@ -439,6 +439,8 @@ func _process(_delta: float) -> void:
 			buildings.on_origin_shift()
 			if ai != null:
 				(ai.nav_net as PlanetNavNet).shift_origin(offset)
+		if system != null:
+			system.on_origin_shift()
 	if system != null:
 		walker.match_velocity = system.match_velocity(walker.global_position)
 		walker.reach = body.altitude_of(walker.global_position)
@@ -484,7 +486,8 @@ func _process(_delta: float) -> void:
 				"(waiting for ground)" if walker.frozen else ""]
 		if system != null:
 			var h := system.hour_at(_anchor())
-			hud.text += "\n%s  %s  %02d:%02d  sun %.0f%%  t %.0f s%s" % [system.sys.system_name, body.data.planet_name,
+			hud.text += "\n%s  %s  %02d:%02d  sun %.0f%%  t %.0f s%s" % [system.sys.system_name,
+					PlanetSystem.name_of(system.frame_node()) if system.frame_node() != null else "space, near " + body.data.planet_name,
 					int(h), int(fmod(h, 1.0) * 60.0), system.sunlight * 100.0, system.t, "  (clock stopped)" if system.frozen else ""]
 
 
@@ -1609,6 +1612,23 @@ func _run_system_gate() -> void:
 	var over := target.altitude_of(walker.global_position) - target.data.height(target.dir_of(walker.global_position))
 	_check("stands on its ground", walker.is_on_floor() and absf(over) < 0.5, "%.2f m over it, g %.1f" % [over, Gravity.strength()])
 	await _shot("system_gate_other")
+	# Up to the home planet's station: onto its roof, its bricks laid, its gravity.
+	var st: SpaceStation = null
+	for o in system.stations:
+		if o.is_station() and o.data.parent == system.index_of(planet):
+			st = o
+	_check("the home planet has a station in orbit", st != null)
+	if st != null:
+		print("[planet] system gate: to %s, %.0f km up, round in %.1f min" % [st.data.orbital_name,
+				(st.data.orbit_radius - data.radius) / 1000.0, st.data.orbit_period / 60.0])
+		var ok_st: bool = await _station_cross(st)
+		_check("on the station: its frame, its bricks laid and solid", ok_st and system.station == st and st.bricked,
+				"bricks laid in %.1f ms" % st.lay_ms)
+		var up := Gravity.up_at(walker.global_position)
+		_check("standing on its roof, down through its deck", walker.is_on_floor() and up.dot(st.global_basis.y) > 0.999,
+				"up off the deck's by %.2f deg" % rad_to_deg(acos(clampf(up.dot(st.global_basis.y), -1.0, 1.0))))
+		_check("the home planet sleeps under it", planet.terrain == null and marker.get_parent() == planet)
+		await _shot("system_gate_station")
 	# Home, over the marker.
 	var ok_home: bool = await _system_cross(planet, marker_local.origin.normalized())
 	_check("home again: its anchor, its ground", ok_home and system.anchor == planet and planet.terrain != null)
@@ -1623,6 +1643,34 @@ func _run_system_gate() -> void:
 			system.handoffs, _worst_ms, _play_hitches.size(), _play_hitches])
 	print("[planet] gate: %d ok, %d FAIL" % [_ok, _fail])
 	get_tree().quit(1 if _fail > 0 else 0)
+
+
+## Carry the (frozen) walker to station `st`'s roof and stand it there once
+## its bricks are solid. True when it got there.
+func _station_cross(st: SpaceStation) -> bool:
+	walker.frozen = true
+	walker.flying = false
+	var t0 := Time.get_ticks_msec()
+	while Time.get_ticks_msec() - t0 < 120000:
+		var goal := st.global_transform * Vector3(0.0, st.height + 3.0, 0.0)
+		var to := goal - walker.global_position
+		if to.length() < 1.0:
+			break
+		var stride := clampf(to.length() * 0.04, 1.0, 100000.0)
+		walker.global_position += to.normalized() * minf(stride, to.length())
+		await get_tree().physics_frame
+	if system.station != st:
+		return false
+	t0 = Time.get_ticks_msec()
+	while not st.bricked and Time.get_ticks_msec() - t0 < 30000:
+		await _frames(1)
+	var g := _ground_hit(walker.global_position)
+	if g == Vector3.INF:
+		return false
+	walker.place(g + Gravity.up_at(g) * 0.5, st.global_basis.x)
+	walker.frozen = false
+	await get_tree().create_timer(3.0).timeout
+	return true
 
 
 ## Carry the (frozen) walker to body `b` -- toward its centre, or down onto
