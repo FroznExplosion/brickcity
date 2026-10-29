@@ -1942,10 +1942,10 @@ each a `PlanetData` with its orbit and its spin. Generated from the system's see
 |---|---|---|
 | planets | 2-8 | weighted to 4-6 |
 | orbit radius | first 700-1100 km, then x1.5-1.9 each | so no two planets' moon systems meet |
-| orbit period | STA's: 8 min at the innermost, Kepler `(a / a0)^1.5` outward | `time_scale` 1 = STA's pace (STA: "slow these down once the seam is validated") |
+| orbit speed | STA's: 200 m/s at the innermost (STA's planets went 170-196 m/s), Kepler `v ~ a^-1/2` outward; moons 440 m/s at 2.8 R (STA's moon) | years of hours (a 6-30 h year at 700 km-3,000 km); `time_scale` runs the whole clock faster. *Built note:* STA's PERIODS (8-16 min) on these orbits made home's year (16 min) shorter than its day (20 min) and the sun ran backwards; its speeds do not |
 | planet radius | 6-16 km | 10-20 km keeps the flat-feel rules (§10a); smaller is a moon's |
 | moons | 0-2 a planet, radius 2.5-5 km | orbit 8-16 R of the parent, period STA's 4 min scaled; **tidally locked** (day = orbit) |
-| day | 10-40 min | spin about the climate axis (`climate_axis` is the spin axis: the equator is warm because the sun is over it) |
+| day | 10-40 min, and at most an eighth of the year | spin about the climate axis (`climate_axis` is the spin axis: the equator is warm because the sun is over it) |
 | axial tilt | 0-30 deg | seasons as the planet goes round |
 | temperature | from the star's light at the orbit, `T ~ (L / a^2)^(1/4)` | an offset on the biome temperatures: hot worlds desert, cold tundra and snow |
 | relief, sea, colours | per seed | `amplitude`, `period`, `ridged`, `sea_level` (none on hot worlds and moons), air colour; no air on moons |
@@ -1998,8 +1998,11 @@ The walker's fly mode stays the way to travel for now (a ship is step 3 below). 
 **inertia** -- the handoff's kick goes into it -- and, like a flight computer, matches the
 nearest body's orbital velocity over a few seconds, so flight is relative to what is near. Shift
 in space cruises at a speed that grows with the distance to the nearest ground (from 500 m/s to
-300 km/s), so a crossing of 1,000 km takes seconds. Cameras see to 50,000 km (Godot's reversed
-depth keeps near detail).
+300 km/s), so a crossing of 1,000 km takes seconds. Cameras reach 250 km; past 100 km a body
+and the star are drawn in **scaled space**: nearer and smaller on the same line, the same size on
+screen, at `100 km x (1 + 0.1 ln(d / 100 km))` so what is behind stays behind. (*Built note:* a far
+plane of 50,000 km broke Godot's light culler -- `prepare_camera` failed every frame.) Each body's
+far look (impostor, air, sea) is a child `look` node for this; the body's own node stays true.
 
 #### Cost control
 
@@ -2026,3 +2029,32 @@ depth keeps near detail).
 5. Jumps between systems and the galaxy map (`Universe`'s positions); markers for planets too
    small to see.
 6. Zero-g debris and drift records (Space.md §4); belts and rings (STA Docs/15 §3).
+
+#### Step 1 built (2026-10-29)
+
+`scripts/space/`: `Universe`, `StarSystem` (generation and the clockwork), `PlanetSystem` (the
+frames, handoff, sleep and wake, gravity, the light, scaled space, impostor bakes on a worker).
+`PlanetData` has its orbit, spin, `t_offset` and `has_air`; `PlanetBiomes` adds `t_offset`;
+`PlanetBody` takes `far` bodies (worker-baked maps, the generator built on first arrival) and
+draws from afar through its `look` node; the walker carries `inertia` and cruises.
+`planet.tscn` now runs system 0 ("Helnox": the home planet at 1,652 km, a 20 min day, an 18 h
+year, and one other planet); `--no-system` is the old fixed sun. The HUD's second line: system,
+body, local time, how much sun, the clock.
+
+- `tools/system_probe.gd` 20/20 (headless).
+- `--gate=system` 13/13, windowed and headless: noon at the spawn, midnight dark (sky 0.04 of
+  noon's, the light off), dawn with the sun on the horizon; up and out of the shell at 42 km with
+  no jump (the step after the handoff 100.2 m, before it 100.0 m); 1,015 km across to Helnox I,
+  onto its day side, standing on its ground (9.3 m/s2); home again, the marker left on the ground
+  back within 0.002 m. Worst frame in play 62.7 ms (headless); windowed, four over 40 ms at the
+  spawn as it loads, none at a handoff.
+- Every other planet gate unchanged, headless, clock stopped: walker 9, pawn 12, mech 11, tank 12,
+  soldier 9, squad 10, trees 7, bricks 9, damage 12, fall 7, hits 8, topple 6, pieces_ai 4,
+  storey 12, travel 10, far 11, drive 5; probes biome 10, tree 12, graph 2.
+
+Known: headless only, waking the home planet logs RID errors from the dummy renderer's mesh store
+(not thread-safe; the voxel meshers on workers and the main thread both make meshes) -- none
+windowed. A full impostor bake is ~1.2 s on a worker. Things nested `top_level` under a top-level
+node do not ride a sleeping planet; nodes that do things in `_exit_tree` are reparented when a
+planet sleeps (none seen yet). BrickWorld chunks and collision RIDs of the sleeping home planet's
+bricks stay where they were until it wakes (`buildings.on_origin_shift` on wake).
