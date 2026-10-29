@@ -141,6 +141,30 @@ func _run() -> void:
 	_check("orbit velocities are the derivative of positions (moons too)", worst < 1e-3)
 	_check("a point on a turning body moves at its frame velocity", worst_f < 1e-3)
 
+	# What orbits (step 2): home's station and satellites, on their own frames.
+	var st := 0
+	var sat := 0
+	var worst_o := 0.0
+	var radial := 1.0
+	for k in hs.orbitals.size():
+		var o := hs.orbitals[k]
+		if o.parent == hs.home:
+			st += int(o.kind == "station")
+			sat += int(o.kind == "satellite")
+		var f := hs.bodies.size() + k
+		var t := 321.0
+		var local := Vector3(3.0, 10.0, -4.0)
+		# A short step: a station goes round in minutes.
+		var fv := hs.frame_velocity_of(f, t, hs.frame_xform(f, t) * local)
+		var fd := (hs.frame_xform(f, t + 1.0) * local - hs.frame_xform(f, t - 1.0) * local) / 2.0
+		worst_o = maxf(worst_o, (fd - fv).length() / maxf(fv.length(), 1.0))
+		var x := hs.frame_xform(f, t)
+		radial = minf(radial, x.basis.y.dot((x.origin - hs.pos(o.parent, t)).normalized()))
+	print("[system] home: %d station(s), %d satellite(s); %d orbitals in the system" % [st, sat, hs.orbitals.size()])
+	_check("home has its station and three satellites", st == 1 and sat == 3)
+	_check("an orbital's points move at its frame velocity, its +Y away from its planet", worst_o < 1e-3 and radial > 0.9999,
+			"%s, %.5f" % [str(worst_o), radial])
+
 	_frames(hs, home)
 
 

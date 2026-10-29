@@ -21,6 +21,8 @@ var luminosity := 1.0
 ## The orbit at which a world is as warm as home: the star's light there is home's.
 var habitable := 2000000.0
 var bodies: Array[PlanetData] = []
+## Stations and satellites, round the bodies (step 2).
+var orbitals: Array[OrbitalData] = []
 ## The home planet's index, or -1.
 var home := -1
 
@@ -109,6 +111,35 @@ func frame_velocity(i: int, t: float, x: Vector3) -> Vector3:
 	return vel(i, t) + omega(i).cross(x - pos(i, t))
 
 
+# --- frames: bodies, then what orbits them ---------------------------------------
+
+## Frame `f`: body `f`, or past the bodies orbitals[f - bodies.size()].
+func frame_count() -> int:
+	return bodies.size() + orbitals.size()
+
+
+func frame_xform(f: int, t: float) -> Transform3D:
+	return xform(f, t) if f < bodies.size() else orbital_xform(f - bodies.size(), t)
+
+
+## The space-frame velocity of the point `x` held fixed in frame `f`.
+func frame_velocity_of(f: int, t: float, x: Vector3) -> Vector3:
+	if f < bodies.size():
+		return frame_velocity(f, t, x)
+	var o := orbitals[f - bodies.size()]
+	var om := Basis(Vector3.UP, o.orbit_node) * Basis(Vector3.RIGHT, o.orbit_inclination) * Vector3.UP * (TAU / o.orbit_period)
+	return vel(o.parent, t) + om.cross(x - pos(o.parent, t))
+
+
+## Orbital `k` at time `t`: its +Y away from its body, +X along its way.
+func orbital_xform(k: int, t: float) -> Transform3D:
+	var o := orbitals[k]
+	var q := Basis(Vector3.UP, o.orbit_node) * Basis(Vector3.RIGHT, o.orbit_inclination)
+	var r := Basis(q.y, o.orbit_phase + TAU * t / o.orbit_period) * q.x
+	var along := q.y.cross(r)
+	return Transform3D(Basis(along, r, along.cross(r)), pos(o.parent, t) + r * o.orbit_radius)
+
+
 ## The star's direction from body `i`, in its own planet-local frame.
 func sun_local(i: int, t: float) -> Vector3:
 	return spin(i, t).inverse() * (-pos(i, t)).normalized()
@@ -193,7 +224,38 @@ static func generate(p_seed: int, home_data: PlanetData = null) -> StarSystem:
 		for m in moons:
 			s.bodies.append(_moon(s, rng, pi, mo))
 			mo *= rng.randf_range(1.3, 1.6)
+	_add_orbitals(s)
 	return s
+
+
+## Stations and satellites round the planets with air (home: one station,
+## three satellites -- the story's), each on a circular orbit at its own
+## speed, `sqrt(g R^2 / r)`.
+static func _add_orbitals(s: StarSystem) -> void:
+	var rng := RandomNumberGenerator.new()
+	rng.seed = hash(str("orbitals:", s.system_seed))
+	for i in s.bodies.size():
+		var p := s.bodies[i]
+		if p.parent >= 0 or not p.has_air:
+			continue
+		var stations := 1 if i == s.home else _weighted(rng, [6, 3, 1])
+		var sats := 3 if i == s.home else _weighted(rng, [3, 3, 2, 1])
+		for k in stations + sats:
+			var o := OrbitalData.new()
+			o.kind = "station" if k < stations else "satellite"
+			o.orbital_seed = rng.randi() & 0x7fffffff
+			o.orbital_name = "%s %s %d" % [p.planet_name, o.kind, k + 1]
+			o.parent = i
+			o.orbit_radius = p.radius * (rng.randf_range(1.5, 2.4) if o.kind == "station" else rng.randf_range(1.3, 2.2))
+			o.orbit_period = TAU * o.orbit_radius / sqrt(p.gravity_strength * p.radius * p.radius / o.orbit_radius)
+			o.orbit_phase = rng.randf() * TAU
+			o.orbit_inclination = rng.randf_range(-0.5, 0.5)
+			o.orbit_node = rng.randf() * TAU
+			o.fx = 32 + 4 * rng.randi_range(0, 4)
+			o.fz = 32 + 4 * rng.randi_range(0, 4)
+			o.courses = [12, 18, 24][rng.randi() % 3]
+			o.colour = Color(0.82, 0.83, 0.86).lerp(Color.from_hsv(rng.randf(), 0.5, 0.8), 0.25)
+			s.orbitals.append(o)
 
 
 ## A planet of its own: everything but its orbit and spin.

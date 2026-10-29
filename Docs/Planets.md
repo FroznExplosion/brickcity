@@ -2058,3 +2058,35 @@ windowed. A full impostor bake is ~1.2 s on a worker. Things nested `top_level` 
 node do not ride a sleeping planet; nodes that do things in `_exit_tree` are reparented when a
 planet sleeps (none seen yet). BrickWorld chunks and collision RIDs of the sleeping home planet's
 bricks stay where they were until it wakes (`buildings.on_origin_shift` on wake).
+
+#### Step 2 built (2026-10-29): stations and satellites on rails
+
+A station is a **frame**, as a planet is (STA's OrbitalUnit, with our anchored frames in place of
+its ride-carry): `OrbitalData` (scripts/space/orbital_data.gd) in `StarSystem.orbitals`, on a
+circular orbit at its own speed `sqrt(g R^2 / r)` (home's: 8 km up, round in 8 min), turning once
+an orbit with its +Y away from its planet. `SpaceStation` (scripts/space/space_station.gd):
+
+- Within `FIELD` (250 m) the station is the player's frame -- `PlanetSystem.station`, before any
+  planet's shell -- and holds still with the identity basis while its planet sleeps beneath it.
+  Its module (a tower's recipe: storeys, the city's staircase, a door cut in the ground storey)
+  is laid in bricks from a template (1.5 ms; the template, ~60 ms, built while the scene loads for
+  home's stations and 20 km out for others), drawn a band a frame, then solid; the shell's boxes
+  stand in until then. Down is its -Y, toward `gravity_centre` 3 km under its floor (STA's virtual
+  centre): `Gravity.planet` is that node, so every mover stands on the deck with no new code.
+- Elsewhere it is its shell and two solar wings, moving; in scaled space past 100 km.
+- Flight matches a station's velocity within 3 km of it (docking); handoffs to and from it carry
+  velocity as a planet's do (143 m/s between home's ground frame and its station).
+- Satellites (home: three, the story's) are only seen: a body, a dish, two wings.
+
+Generated: home one station and three satellites; any other planet with air 0-2 stations, 0-3
+satellites, orbits 1.3-2.4 R, inclined up to 0.5 rad.
+
+`tools/system_probe.gd` 22/22 (adds: home's station and satellites; an orbital's points move at its
+frame velocity, its +Y from its planet). `--gate=system` 17/17, windowed and headless: after the
+other planet, up to home's station (8 km up, round in 8.0 min), onto its roof once its bricks are
+solid, standing with down through its deck (0.00 deg off), home asleep under it, then home. Windowed:
+no errors, worst frame in play 123 ms at the spawn as it loads, none at a handoff; peak 79 C.
+
+Not yet: hits on a station's bricks (`_structure_hit` goes to the planet's buildings), its damage
+kept when it is left (its bricks are freed and laid fresh), anything inside (rooms, furniture,
+AI), a station's own lights (its door is black inside), gravity off in space for loose things.
