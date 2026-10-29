@@ -235,6 +235,9 @@ func _frames(_hs: StarSystem, _home: PlanetData) -> void:
 	ps._process(0.0)
 	_check("leaving its shell: in space, the kick its ground's speed", ps.anchor == null and ps.last_kick.length() > 1.0, "%.0f m/s" % ps.last_kick.length())
 	_check("what was on it sleeps under it", thing.get_parent() == body and thing.process_mode == Node.PROCESS_MODE_DISABLED)
+	# Far off in space while it goes round (placed first, it could come back to an
+	# old point).
+	who = ps.star.global_position + Vector3(0, 1.0e7, 0)
 	ps.t += 200.0
 	ps._process(0.0)
 	_check("in space it moves and turns, what sleeps with it", (body.global_transform.affine_inverse() * thing.global_transform).is_equal_approx(thing_local)
@@ -245,6 +248,8 @@ func _frames(_hs: StarSystem, _home: PlanetData) -> void:
 	_check("back on it: what slept is on the scene's root, where it was on the ground",
 			ps.anchor == body and thing.get_parent() == root and back.is_equal_approx(thing_local)
 			and thing.process_mode == Node.PROCESS_MODE_INHERIT)
+	# Gravity keeps the last body it was given in a static: not a freed one.
+	Gravity.planet = null
 	ps.queue_free()
 	thing.queue_free()
 

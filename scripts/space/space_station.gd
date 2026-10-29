@@ -22,6 +22,8 @@ const SECTION_PLATES := 24
 const SECTION_STUDS := 32
 
 var data: OrbitalData
+## Inside this of its node the player is on it (a ship's is smaller).
+var field := FIELD
 var look: Node3D
 var gravity_centre: Node3D
 var brick_material: ShaderMaterial
@@ -68,7 +70,8 @@ func setup(d: OrbitalData) -> void:
 	shell.material_override = brick_material
 	shell.transform = frame
 	look.add_child(shell)
-	_panels(w * 0.5, height * 0.5, maxf(w, dd) * 1.1, height * 0.7)
+	if d.kind == "station":
+		_panels(w * 0.5, height * 0.5, maxf(w, dd) * 1.1, height * 0.7)
 	shell_body = StaticBody3D.new()
 	shell_body.name = "ShellBody"
 	shell_body.collision_layer = Layers.STRUCTURE
@@ -88,8 +91,9 @@ func setup(d: OrbitalData) -> void:
 	add_child(gravity_centre)
 
 
+## A frame of its own (a station or a ship), not only seen (a satellite).
 func is_station() -> bool:
-	return data.kind == "station"
+	return data.kind != "satellite"
 
 
 ## Two solar wings, either side along X, `span` long, from `x0` out.
