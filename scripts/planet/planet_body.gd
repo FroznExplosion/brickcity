@@ -18,6 +18,11 @@ var terrain: VoxelLodTerrain
 var impostor: MeshInstance3D
 var atmosphere: MeshInstance3D
 var ocean: MeshInstance3D
+## What draws the body from afar -- impostor, atmosphere, sea -- under one node
+## that a star system draws nearer and smaller when the body is past a camera's
+## reach (PlanetSystem's scaled space, Planets.md 11.12). The body's own node
+## stays where it truly is.
+var look: Node3D
 var active := false
 var bake_ms := 0
 
@@ -39,18 +44,39 @@ var _ground_mat: ShaderMaterial
 var biome_map: Texture2D
 var _graph: VoxelGeneratorGraph
 var _time := 0.0
+## The width of the impostor's maps baked so far: 0 none yet, 512 the full set
+## the voxel ground's biome map needs (Planets.md 11.12).
+var baked_width := 0
 
 
-func setup(p_data: PlanetData) -> void:
+## `far`: a body of a star system the player is not on yet (Planets.md 11.12):
+## a lighter impostor, its maps baked on a worker (PlanetSystem gives them,
+## `apply_bake`), the voxel generator built on the first `activate`, the sea
+## shell drawn only near.
+func setup(p_data: PlanetData, far := false) -> void:
 	data = p_data
+	look = Node3D.new()
+	look.name = "Look"
+	add_child(look)
 	name = "Planet_" + data.planet_name
 	tier1 = data.radius * 0.08
 	tier2 = data.radius * 0.15
-	_graph = PlanetGraph.build(data)
-	_build_impostor()
-	_build_atmosphere()
+	if far:
+		_build_impostor_mesh(128, 64)
+	else:
+		_graph = PlanetGraph.build(data)
+		_build_impostor_mesh(256, 128)
+		apply_bake(PlanetImpostorBake.bake(data))
+	if data.has_air:
+		_build_atmosphere()
 	if not is_nan(data.sea_level):
 		_build_ocean()
+		if far:
+			# From afar the impostor's colours are the sea; the shell is a
+			# million triangles.
+			ocean.visibility_range_end = data.radius * 3.0
+			ocean.visibility_range_end_margin = data.radius * 0.5
+			ocean.visibility_range_fade_mode = GeometryInstance3D.VISIBILITY_RANGE_FADE_SELF
 
 
 ## The voxel ground, for the planet the player is on.
@@ -58,6 +84,8 @@ func activate() -> void:
 	if active:
 		return
 	active = true
+	if _graph == null:
+		_graph = PlanetGraph.build(data)
 	var t := VoxelLodTerrain.new()
 	t.name = "Ground"
 	t.mesher = VoxelMesherTransvoxel.new()
@@ -87,6 +115,15 @@ func deactivate() -> void:
 	if terrain != null:
 		terrain.queue_free()
 		terrain = null
+	far_only()
+
+
+## Drawn by the impostor alone, whatever the camera's height (a body nobody is
+## on: its _process may not run).
+func far_only() -> void:
+	if impostor != null:
+		impostor.visible = baked_width > 0
+		_impostor_mat.set_shader_parameter("fade", 1.0)
 
 
 ## Ground under `node` wherever it goes: a VoxelViewer of its own, for
@@ -175,23 +212,32 @@ func _ground_material() -> ShaderMaterial:
 	return _ground_mat
 
 
-func _build_impostor() -> void:
-	var b := PlanetImpostorBake.bake(data)
+## The impostor's maps (PlanetImpostorBake, textured) -- again when a larger
+## bake comes in.
+func apply_bake(b: Dictionary) -> void:
 	bake_ms = int(b.ms)
+	baked_width = (b.color_image as Image).get_width()
 	biome_map = b.biome_map
+	_impostor_mat.set_shader_parameter("heightmap", b.heightmap)
+	_impostor_mat.set_shader_parameter("color_map", b.color_map)
+	_impostor_mat.set_shader_parameter("amplitude", b.amplitude)
+	if _ground_mat != null:
+		_ground_mat.set_shader_parameter("biome_map", biome_map)
+	if terrain == null:
+		far_only()
+
+
+func _build_impostor_mesh(segments: int, rings: int) -> void:
 	var sm := SphereMesh.new()
 	sm.radius = data.radius
 	sm.height = data.radius * 2.0
-	sm.radial_segments = 256
-	sm.rings = 128
+	sm.radial_segments = segments
+	sm.rings = rings
 	impostor = MeshInstance3D.new()
 	impostor.name = "Impostor"
 	impostor.mesh = sm
 	_impostor_mat = ShaderMaterial.new()
 	_impostor_mat.shader = load("res://shaders/planet_impostor.gdshader")
-	_impostor_mat.set_shader_parameter("heightmap", b.heightmap)
-	_impostor_mat.set_shader_parameter("color_map", b.color_map)
-	_impostor_mat.set_shader_parameter("amplitude", b.amplitude)
 	_impostor_mat.set_shader_parameter("atmo_color", data.atmosphere_color)
 	_impostor_mat.set_shader_parameter("sun_dir", sun_dir)
 	# A few metres under the true ground: where both draw, the voxels win.
@@ -199,7 +245,7 @@ func _build_impostor() -> void:
 	impostor.material_override = _impostor_mat
 	impostor.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	impostor.extra_cull_margin = data.radius
-	add_child(impostor)
+	look.add_child(impostor)
 
 
 func _build_atmosphere() -> void:
@@ -218,7 +264,7 @@ func _build_atmosphere() -> void:
 	_atmo_mat.set_shader_parameter("sun_dir", sun_dir)
 	atmosphere.material_override = _atmo_mat
 	atmosphere.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-	add_child(atmosphere)
+	look.add_child(atmosphere)
 
 
 func _build_ocean() -> void:
@@ -236,4 +282,4 @@ func _build_ocean() -> void:
 	ocean.material_override = _ocean_mat
 	ocean.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	ocean.extra_cull_margin = data.radius
-	add_child(ocean)
+	look.add_child(ocean)

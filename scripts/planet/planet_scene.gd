@@ -66,6 +66,9 @@ var nav_region: PlanetNavRegion
 var _travel_gate := false
 var _far_gate := false
 var _drive_gate := false
+var _system_gate := false
+## The star system round the planet (Planets.md 11.12); null with --no-system.
+var system: PlanetSystem
 var sun: DirectionalLight3D
 var sky_mat: ProceduralSkyMaterial
 var env: Environment
@@ -102,7 +105,8 @@ func _ready() -> void:
 	_travel_gate = "--gate=travel" in OS.get_cmdline_user_args()
 	_far_gate = "--gate=far" in OS.get_cmdline_user_args()
 	_drive_gate = "--gate=drive" in OS.get_cmdline_user_args()
-	_gate = _gate or _pawn_gate or _mech_gate or _tank_gate or _soldier_gate or _squad_gate or _travel_gate or _far_gate or _drive_gate or _trees_gate or _bricks_gate or _damage_gate or _fall_gate or _hits_gate or _topple_gate or _pieces_ai_gate or _storey_gate
+	_system_gate = "--gate=system" in OS.get_cmdline_user_args()
+	_gate = _gate or _system_gate or _pawn_gate or _mech_gate or _tank_gate or _soldier_gate or _squad_gate or _travel_gate or _far_gate or _drive_gate or _trees_gate or _bricks_gate or _damage_gate or _fall_gate or _hits_gate or _topple_gate or _pieces_ai_gate or _storey_gate
 	data = PlanetData.new()
 	data.planet_name = "proto"
 	# Towns and landmarks: their pads go into the ground before it is built.
@@ -143,10 +147,19 @@ func _ready() -> void:
 	Gravity.planet_radius = data.radius
 	print("[planet] %s: radius %.0f m, relief %.0f m, sea %.0f m; impostor baked in %d ms; brick shapes %.0f ms" % [
 			data.planet_name, data.radius, data.amplitude, data.sea_level, planet.bake_ms, tpl_ms])
+	if not "--no-system" in OS.get_cmdline_user_args():
+		_build_system()
 	_build_light()
 	walker = PlanetWalker.new()
 	walker.name = "Walker"
+	walker.add_to_group(PlanetSystem.RIG)
+	walker.camera.far = SEE_FAR
 	add_child(walker)
+	if system != null:
+		system.sun = sun
+		system.sun_energy = sun.light_energy
+		system.observer = _anchor
+		system.eye = _eye
 	walker.camera.current = true
 	walker.place(planet.global_position + data.surface_point(spawn_dir) + spawn_dir * 1.0,
 			east)
@@ -192,6 +205,8 @@ func _ready() -> void:
 			_run_far_gate()
 		elif _drive_gate:
 			_run_drive_gate()
+		elif _system_gate:
+			_run_system_gate()
 		else:
 			_run_gate()
 
@@ -209,10 +224,12 @@ func _spawn_player(feet: Vector3, facing: Vector3) -> void:
 	cam.name = "Camera"
 	cam.capture_mouse = false
 	cam.allow_walk = false
-	cam.far = 200000.0
+	cam.far = SEE_FAR
+	cam.add_to_group(PlanetSystem.RIG)
 	add_child(cam)
 	cam.set_process(false)
 	pawn = Pawn.spawn(self, feet, 0)
+	pawn.body.add_to_group(PlanetSystem.RIG)
 	pawn.moves = PawnMoves.new(pawn)
 	player = PlayerController.new()
 	player.name = "Player"
@@ -237,6 +254,7 @@ func _spawn_player(feet: Vector3, facing: Vector3) -> void:
 	pawn.gun = gun
 	gun.exclude = [pawn.body.get_rid()] as Array[RID]
 	gun.on_structure_hit = _structure_hit
+	gun.add_to_group(PlanetSystem.RIG)
 	_face(facing)
 	_set_on_foot(true)
 	# The AI it fights: the town's region (11.8 N2), unless a gate sets up its own.
@@ -247,6 +265,7 @@ func _spawn_player(feet: Vector3, facing: Vector3) -> void:
 		s = AIServices.new()
 		s.world3d = get_world_3d()
 	kit = PlanetPlayerKit.attach(self, player, cam, gun, view, s, _gate)
+	kit.add_to_group(PlanetSystem.RIG)
 
 
 ## Turn the camera, in the pawn's frame, to look along `facing`.
@@ -267,6 +286,7 @@ func _set_on_foot(on: bool) -> void:
 		if feet == Vector3.INF:
 			feet = walker.global_position
 		var fwd := -walker.camera.global_transform.basis.z
+		pawn.body.process_mode = Node.PROCESS_MODE_INHERIT
 		pawn.place(feet + Gravity.up_at(feet) * 0.05)
 		if not player.is_possessing():
 			player.possess(pawn, cam)
@@ -308,6 +328,56 @@ func _eye() -> Vector3:
 	return cam.global_position if on_foot else walker.camera.global_position
 
 
+## Cameras reach this far; what is further is drawn nearer (PlanetSystem's
+## scaled space).
+const SEE_FAR := PlanetSystem.SEE_FAR
+
+
+## The star system round the planet (Planets.md 11.12): system 0 of the
+## universe, the planet on its habitable orbit, the spawn at noon. Every gate
+## but the system's own runs with the clock stopped.
+func _build_system() -> void:
+	var sys := Universe.new(1).system(0, data)
+	data.spin_phase = sys.noon_phase(sys.home, spawn_dir, 0.0)
+	system = PlanetSystem.new()
+	add_child(system)
+	system.setup(sys, planet)
+	system.frozen = _gate and not _system_gate
+	system.anchor_changed.connect(_on_anchor_changed)
+	system.woke.connect(_on_woke)
+	print("[planet] system %s: %d bodies, the planet at %.0f km, a %.0f min day, a %.0f min year" % [
+			sys.system_name, sys.bodies.size(), data.orbit_radius / 1000.0, data.day / 60.0, data.orbit_period / 60.0])
+
+
+## The planet the player is on or nearest: the streaming, the sky and the HUD follow it.
+func _body() -> PlanetBody:
+	if system == null:
+		return planet
+	return system.anchor if system.anchor != null else system.nearest(_anchor())
+
+
+## The home planet is the anchor: its AI runs, its caches follow the origin.
+func _home_awake() -> bool:
+	return system == null or system.anchor == planet
+
+
+func _on_anchor_changed(_old: PlanetBody, _new: PlanetBody, kick: Vector3) -> void:
+	if walker.flying:
+		walker.inertia += kick
+	else:
+		walker.velocity += kick
+	if pawn != null and not on_foot:
+		pawn.body.process_mode = Node.PROCESS_MODE_DISABLED
+
+
+func _on_woke(body: PlanetBody, offset: Vector3) -> void:
+	if body != planet:
+		return
+	buildings.on_origin_shift()
+	if ai != null:
+		(ai.nav_net as PlanetNavNet).shift_origin(offset)
+
+
 func _build_light() -> void:
 	sun = DirectionalLight3D.new()
 	sun.light_energy = 1.1
@@ -323,6 +393,9 @@ func _build_light() -> void:
 	sky_mat.sky_horizon_color = Color(0.70, 0.77, 0.84)
 	sky_mat.ground_bottom_color = Color(0.25, 0.27, 0.24)
 	sky_mat.ground_horizon_color = Color(0.70, 0.77, 0.84)
+	if system != null:
+		# The star is the sun's disc; the sky's own would not sit on it.
+		sky_mat.sun_angle_max = 0.5
 	sky.sky_material = sky_mat
 	env.sky = sky
 	env.ambient_light_source = Environment.AMBIENT_SOURCE_SKY
@@ -356,27 +429,41 @@ func _process(_delta: float) -> void:
 			_play_hitches.append([snappedf(ms, 0.1), int(planet.altitude_of(_anchor()))])
 	_last_us = now
 	var cam_pos := _eye()
-	var alt := planet.altitude_of(cam_pos)
-	# The origin follows the player, by translation, every SHIFT_AT.
+	var body := _body()
+	var alt := body.altitude_of(cam_pos)
+	# The origin follows the player, by translation, every SHIFT_AT. A planet
+	# asleep (11.12) is moved with its node; its caches wait for it to wake.
 	if _anchor().length() > PlanetFrame.SHIFT_AT:
 		var offset := PlanetFrame.recentre(self, _anchor())
-		buildings.on_origin_shift()
-		if ai != null:
-			(ai.nav_net as PlanetNavNet).shift_origin(offset)
+		if _home_awake():
+			buildings.on_origin_shift()
+			if ai != null:
+				(ai.nav_net as PlanetNavNet).shift_origin(offset)
+	if system != null:
+		walker.match_velocity = system.match_velocity(walker.global_position)
+		walker.reach = body.altitude_of(walker.global_position)
 	# Stream the voxel ground to the horizon and the peaks behind it, no further.
-	var want := planet.horizon_reach(cam_pos, data.peak()) + VIEW_MARGIN
+	var want := body.horizon_reach(cam_pos, body.data.peak()) + VIEW_MARGIN
 	var q := clampi(int(ceil(want / VIEW_STEP)) * VIEW_STEP, VIEW_MIN, VIEW_MAX)
 	if q != walker.viewer.view_distance:
 		walker.viewer.view_distance = q
 	# The sky goes to black as the air thins (to ~the impostor's band).
-	var air := 1.0 - clampf(alt / (data.radius * 0.12), 0.0, 1.0)
-	sky_mat.sky_top_color = Color(0.36, 0.53, 0.78) * air
-	sky_mat.sky_horizon_color = Color(0.70, 0.77, 0.84) * air
+	var air := 1.0 - clampf(alt / (body.data.radius * 0.12), 0.0, 1.0) if body.data.has_air else 0.0
+	# Day and night (11.12): the sky by the sun's height, with twilight; the
+	# ambient down to starlight.
+	var day := 1.0
+	if system != null:
+		day = smoothstep(-0.18, 0.12, system.sun_height) if air > 0.0 else system.sunlight
+	var night := Color(0.03, 0.04, 0.08)
+	var dusk := (1.0 - absf(day * 2.0 - 1.0)) * 0.5
+	var haze := Color(0.70, 0.77, 0.84).lerp(Color(0.85, 0.45, 0.25), dusk).lerp(night, 1.0 - day) * air
+	sky_mat.sky_top_color = Color(0.36, 0.53, 0.78).lerp(night, 1.0 - day) * air
+	sky_mat.sky_horizon_color = haze
 	# Under the horizon only a sliver of sky ever shows past the ground: haze.
-	sky_mat.ground_horizon_color = Color(0.70, 0.77, 0.84) * air
-	sky_mat.ground_bottom_color = Color(0.62, 0.68, 0.74) * air
-	sky_mat.sky_energy_multiplier = maxf(air, 0.02)
-	env.ambient_light_energy = 0.15 + 0.45 * air
+	sky_mat.ground_horizon_color = haze
+	sky_mat.ground_bottom_color = Color(0.62, 0.68, 0.74).lerp(night, 1.0 - day) * air
+	sky_mat.sky_energy_multiplier = maxf(air * maxf(day, 0.1), 0.02)
+	env.ambient_light_energy = 0.04 + (0.11 + 0.45 * air) * day
 	# The sky's up is the local up: a procedural sky's horizon is its own XZ
 	# plane, and the world's Y is the local up only at the pole.
 	env.sky_rotation = Quaternion(Vector3.UP, Gravity.up_at(cam_pos)).get_euler()
@@ -395,6 +482,10 @@ func _process(_delta: float) -> void:
 				Engine.get_frames_per_second(), walker.viewer.view_distance, PlanetFrame.shifts,
 				PlanetFrame.last_us / 1000.0, buildings.near_count, buildings.far_count,
 				"(waiting for ground)" if walker.frozen else ""]
+		if system != null:
+			var h := system.hour_at(_anchor())
+			hud.text += "\n%s  %s  %02d:%02d  sun %.0f%%  t %.0f s%s" % [system.sys.system_name, body.data.planet_name,
+					int(h), int(fmod(h, 1.0) * 60.0), system.sunlight * 100.0, system.t, "  (clock stopped)" if system.frozen else ""]
 
 
 ## `dir` carried `metres` along the surface toward `toward` (tangent).
@@ -1045,7 +1136,7 @@ func setup_ai(dir: Vector3) -> void:
 
 
 func _physics_process(delta: float) -> void:
-	if ai == null:
+	if ai == null or not _home_awake():
 		return
 	var net := ai.nav_net as PlanetNavNet
 	var t_ai := Time.get_ticks_usec()
@@ -1436,6 +1527,133 @@ func _run_far_gate() -> void:
 	print("[planet] AI tick: worst %.1f ms" % (ai_worst_us / 1000.0))
 	print("[planet] far gate: %d ok, %d FAIL" % [_ok, _fail])
 	get_tree().quit(0 if _fail == 0 else 1)
+
+
+# The system's gate (11.12): day and night at the spawn, off the home planet
+# through a handoff, across to the nearest other body, onto its ground, and
+# home again to what was left there. The clock runs.
+
+func _run_system_gate() -> void:
+	var t0 := Time.get_ticks_msec()
+	while walker.frozen and Time.get_ticks_msec() - t0 < 60000:
+		await _frames(1)
+	await get_tree().create_timer(1.0).timeout
+	var home_day := data.day
+	var h := system.hour_at(walker.global_position)
+	_check("the spawn starts at noon, lit", absf(h - 12.0) < 0.5 and system.sunlight > 0.99, "%.2f h, sun %.2f" % [h, system.sunlight])
+	var day_sky := sky_mat.sky_top_color.get_luminance()
+	await _shot("system_gate_noon")
+	# Half a day on: night. (The clock is analytic: set it.)
+	system.t += home_day * 0.5
+	await _frames(3)
+	h = system.hour_at(walker.global_position)
+	_check("half a day later it is midnight, no sun, a dark sky",
+			(h < 0.5 or h > 23.5) and system.sunlight < 0.01 and sky_mat.sky_top_color.get_luminance() < day_sky * 0.2,
+			"%.2f h, sun %.2f, sky %.3f of %.3f" % [h, system.sunlight, sky_mat.sky_top_color.get_luminance(), day_sky])
+	_check("and the light is off", sun.light_energy < 0.01)
+	await _shot("system_gate_night")
+	system.t += home_day * 0.25
+	await _frames(3)
+	h = system.hour_at(walker.global_position)
+	_check("a quarter on, morning: the sun near the horizon", absf(h - 6.0) < 0.5 and absf(system.sun_height) < 0.35,
+			"%.2f h, height %.2f" % [h, system.sun_height])
+	await _shot("system_gate_dawn")
+	system.t += home_day * 0.25
+	await _frames(3)
+	# Something left on the home planet's ground.
+	var marker := Node3D.new()
+	marker.name = "SystemGateMarker"
+	add_child(marker)
+	marker.global_transform = Transform3D(Basis(Gravity.up_at(walker.global_position), 0.4), walker.global_position)
+	var marker_local := planet.global_transform.affine_inverse() * marker.global_transform
+	# Straight up and out of the shell, flying: the handoff must not jump.
+	walker.flying = true
+	walker.pitch = 0.0
+	var prev := planet.global_transform.affine_inverse() * walker.global_position
+	var step := 0.0
+	var t1 := Time.get_ticks_msec()
+	while system.anchor == planet and Time.get_ticks_msec() - t1 < 120000:
+		var alt := planet.altitude_of(walker.global_position)
+		walker.fly_speed = clampf(alt * 0.6, 20.0, 3000.0)
+		walker.rise = 1.0
+		await get_tree().physics_frame
+		var rel := planet.global_transform.affine_inverse() * walker.global_position
+		step = (rel - prev).length()
+		prev = rel
+	var kick := system.last_kick
+	# The frame after the handoff: the walker goes on as it was going, seen from the planet.
+	await get_tree().physics_frame
+	var jump := (planet.global_transform.affine_inverse() * walker.global_position - prev).length()
+	walker.rise = 0.0
+	_check("off the home planet's shell: in space", system.anchor == null, "%.0f km up, the kick %.0f m/s" % [
+			planet.altitude_of(walker.global_position) / 1000.0, kick.length()])
+	_check("the handoff did not jump (the step after it as the steps before)", jump < step * 1.5 + 2.0,
+			"%.1f m against %.1f m" % [jump, step])
+	_check("the home planet sleeps: its ground gone, what was on it under it",
+			planet.terrain == null and marker.get_parent() == planet and marker.process_mode == Node.PROCESS_MODE_DISABLED)
+	# Across to the nearest other body.
+	var target: PlanetBody = null
+	for b in system.bodies:
+		if b != planet and (target == null or (b.global_position - walker.global_position).length()
+				< (target.global_position - walker.global_position).length()):
+			target = b
+	print("[planet] system gate: across to %s, %.0f km" % [target.data.planet_name,
+			(target.global_position - walker.global_position).length() / 1000.0])
+	# Onto its day side, mid-morning.
+	var noon := target.global_basis.inverse() * (system.star.global_position - target.global_position).normalized()
+	var side := noon.cross(Vector3.UP if absf(noon.y) < 0.9 else Vector3.RIGHT).normalized()
+	var ok_arrive: bool = await _system_cross(target, noon.rotated(side, 0.5))
+	_check("lands in daylight there", system.sunlight > 0.99, "%.2f, %.1f h" % [system.sunlight, system.hour_at(walker.global_position)])
+	_check("arrived on %s: its anchor, the identity, its ground streamed" % target.data.planet_name,
+			ok_arrive and system.anchor == target and target.global_basis.is_equal_approx(Basis()) and target.terrain != null)
+	var over := target.altitude_of(walker.global_position) - target.data.height(target.dir_of(walker.global_position))
+	_check("stands on its ground", walker.is_on_floor() and absf(over) < 0.5, "%.2f m over it, g %.1f" % [over, Gravity.strength()])
+	await _shot("system_gate_other")
+	# Home, over the marker.
+	var ok_home: bool = await _system_cross(planet, marker_local.origin.normalized())
+	_check("home again: its anchor, its ground", ok_home and system.anchor == planet and planet.terrain != null)
+	var back := planet.global_transform.affine_inverse() * marker.global_transform
+	_check("what was left on it is where it was, on the scene again",
+			marker.get_parent() == self and back.is_equal_approx(marker_local) and marker.process_mode == Node.PROCESS_MODE_INHERIT,
+			"%.3f m off" % (back.origin - marker_local.origin).length())
+	over = _over_ground(walker.global_position)
+	_check("and stands on the home ground", walker.is_on_floor() and absf(over) < 0.5, "%.2f m" % over)
+	await _shot("system_gate_home")
+	print("[planet] system gate: %d handoffs; frames: worst %.1f ms; over 40 ms in play: %d %s" % [
+			system.handoffs, _worst_ms, _play_hitches.size(), _play_hitches])
+	print("[planet] gate: %d ok, %d FAIL" % [_ok, _fail])
+	get_tree().quit(1 if _fail > 0 else 0)
+
+
+## Carry the (frozen) walker to body `b` -- toward its centre, or down onto
+## planet-local `dir` of it -- slowing as it nears, then onto its ground once
+## that has streamed, and let it stand. True when it got there.
+func _system_cross(b: PlanetBody, dir: Vector3) -> bool:
+	walker.frozen = true
+	walker.flying = false
+	var t0 := Time.get_ticks_msec()
+	while Time.get_ticks_msec() - t0 < 120000:
+		var d := dir if dir != Vector3.ZERO else b.dir_of(walker.global_position)
+		var goal := b.global_transform * (d * (b.data.radius + b.data.height(d) + 40.0))
+		var to := goal - walker.global_position
+		if to.length() < 5.0:
+			break
+		var stride := clampf(maxf(b.altitude_of(walker.global_position), 50.0) * 0.04, 2.0, 100000.0)
+		walker.global_position += to.normalized() * minf(stride, to.length())
+		await get_tree().physics_frame
+	if system.anchor != b:
+		return false
+	# Down onto the ground once it is there.
+	t0 = Time.get_ticks_msec()
+	while _ground_hit(walker.global_position) == Vector3.INF and Time.get_ticks_msec() - t0 < 60000:
+		await _frames(1)
+	var g := _ground_hit(walker.global_position)
+	if g == Vector3.INF:
+		return false
+	walker.place(g + Gravity.up_at(g) * 0.5, -walker.global_transform.basis.z)
+	walker.frozen = false
+	await get_tree().create_timer(3.0).timeout
+	return true
 
 
 # The drive gate (11.8): an AI tank, crewed, on the player's side, sent 200 m out

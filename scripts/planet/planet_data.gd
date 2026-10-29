@@ -33,6 +33,29 @@ extends Resource
 ## proto's spawn (scenes/planet.tscn, near +Y) at ~50 degrees: temperate.
 @export var climate_axis := Vector3(0.7, 0.7, 0.0)
 
+## Its place in a star system (Planets.md 11.12; StarSystem computes from these,
+## STA's analytic orbits): round body `parent` (an index in the system's bodies,
+## -1 the star) at `orbit_radius` metres once every `orbit_period` seconds (0:
+## holds still), in the plane turned `orbit_inclination` about X and then
+## `orbit_node` about Y, `orbit_phase` radians along it at time 0.
+@export var parent := -1
+@export var orbit_radius := 0.0
+@export var orbit_period := 0.0
+@export var orbit_phase := 0.0
+@export var orbit_inclination := 0.0
+@export var orbit_node := 0.0
+## One turn about `climate_axis` every `day` seconds (0: none), `spin_phase`
+## radians at time 0; `tilt` takes planet-local to space at phase 0 (where the
+## axis points: the axial tilt).
+@export var day := 0.0
+@export var spin_phase := 0.0
+@export var tilt := Basis()
+## Degrees C on every biome's temperature: the star's warmth at this orbit
+## against home's (PlanetBiomes).
+@export var t_offset := 0.0
+## An atmosphere: its shell, its sky. Moons have none.
+@export var has_air := true
+
 ## Flat pads the ground is levelled to, for buildings to stand on (Planets.md 11.2):
 ## each {dir: Vector3 (unit, planet-local), height: float (over the datum),
 ## flat: float (metres of level ground from the centre), blend: float (metres of

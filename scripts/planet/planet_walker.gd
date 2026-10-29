@@ -27,6 +27,18 @@ var flying := false
 var fly_speed := 50.0
 ## Shift held while flying: this fast, or ten times the wheel's speed if that is more.
 const FAST_FLY := 500.0
+## Flying between bodies (Planets.md 11.12): the velocity carried besides the
+## walker's own -- a frame handoff's kick goes into it -- let go toward
+## `match_velocity` (the body it is near, PlanetSystem) over MATCH_TIME, like a
+## flight computer; Shift cruises faster the higher it is over the nearest
+## ground (`reach`), CRUISE of it a second, so a crossing takes seconds and an
+## approach slows itself.
+var inertia := Vector3.ZERO
+var match_velocity := Vector3.ZERO
+var reach := 0.0
+const MATCH_TIME := 3.0
+const CRUISE := 0.5
+const CRUISE_MAX := 300000.0
 ## Held off the ground until the ground under it has streamed in.
 var frozen := true
 var pitch := 0.0
@@ -129,7 +141,9 @@ func _physics_process(delta: float) -> void:
 		var v := (-cb.z * w.y + cb.x * w.x + up * rise_in)
 		if v.length_squared() > 1.0:
 			v = v.normalized()
-		velocity = v * (maxf(FAST_FLY, fly_speed * 10.0) if run else fly_speed)
+		var fast := maxf(maxf(FAST_FLY, fly_speed * 10.0), minf(reach * CRUISE, CRUISE_MAX))
+		inertia = inertia.lerp(match_velocity, 1.0 - exp(-delta / MATCH_TIME))
+		velocity = v * (fast if run else fly_speed) + inertia
 		up_direction = up
 		move_and_slide()
 		return
@@ -141,6 +155,7 @@ func _physics_process(delta: float) -> void:
 	else:
 		v_up -= GRAVITY * delta
 	jump = false
+	inertia = Vector3.ZERO
 	var across := r * w.x + f * w.y
 	if across.length_squared() > 1.0:
 		across = across.normalized()

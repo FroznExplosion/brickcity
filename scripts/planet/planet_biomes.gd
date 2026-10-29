@@ -83,7 +83,7 @@ func latitude(dir: Vector3) -> float:
 ## Temperature at sea level along unit `dir`, degrees C.
 func temperature_sea(dir: Vector3) -> float:
 	var t01 := cos(deg_to_rad(clampf(absf(latitude(dir)), 0.0, 90.0)))
-	return lerpf(T_POLE, T_EQUATOR, t01)
+	return lerpf(T_POLE, T_EQUATOR, t01) + data.t_offset
 
 
 ## Temperature on the ground `h` metres over the datum.

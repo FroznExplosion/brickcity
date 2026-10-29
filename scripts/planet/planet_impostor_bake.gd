@@ -15,7 +15,9 @@ extends RefCounted
 const FOREST_TINT := 0.6
 
 
-static func bake(data: PlanetData, width := 512, height_px := 256) -> Dictionary:
+## `textures` false: the images only, for a worker thread (Planets.md 11.12);
+## `textured` makes the textures on the main thread after.
+static func bake(data: PlanetData, width := 512, height_px := 256, textures := true) -> Dictionary:
 	var amp := maxf(data.peak(), 1.0)
 	var hm := Image.create(width, height_px, false, Image.FORMAT_RF)
 	var cm := Image.create(width, height_px, false, Image.FORMAT_RGB8)
@@ -56,12 +58,19 @@ static func bake(data: PlanetData, width := 512, height_px := 256) -> Dictionary
 				if (dir * data.radius).distance_to((pad.dir as Vector3) * data.radius) < float(pad.flat):
 					c = Color(0.55, 0.55, 0.57)
 			cm.set_pixel(x, y, c)
-	return {
-		"heightmap": ImageTexture.create_from_image(hm),
-		"color_map": ImageTexture.create_from_image(cm),
-		"biome_map": ImageTexture.create_from_image(bm),
+	var b := {
+		"height_image": hm,
 		"biome_image": bm,
 		"color_image": cm,
 		"amplitude": amp,
 		"ms": Time.get_ticks_msec() - t0,
 	}
+	return textured(b) if textures else b
+
+
+## The bake's images made textures.
+static func textured(b: Dictionary) -> Dictionary:
+	b.heightmap = ImageTexture.create_from_image(b.height_image)
+	b.color_map = ImageTexture.create_from_image(b.color_image)
+	b.biome_map = ImageTexture.create_from_image(b.biome_image)
+	return b
