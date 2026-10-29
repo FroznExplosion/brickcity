@@ -2090,3 +2090,56 @@ no errors, worst frame in play 123 ms at the spawn as it loads, none at a handof
 Not yet: hits on a station's bricks (`_structure_hit` goes to the planet's buildings), its damage
 kept when it is left (its bricks are freed and laid fresh), anything inside (rooms, furniture,
 AI), a station's own lights (its door is black inside), gravity off in space for loose things.
+
+#### Step 3 built (2026-10-29): a ship to fly; the planet from space
+
+The user: fly off the planet into space, see it become a sphere with its buildings on it at their
+furthest LOD until really far, then gone; travel to another planet and land on it.
+
+**The planet from space.** `PlanetBuildings.far_tier` (split out of `_process`, and called by the
+scene while the home planet sleeps, so space still sees its towns): over 1.2-3 km of altitude every
+far box comes in, its footprint widened to at least 1.5 px on screen (a town a grey patch on the
+sphere); all of them fade as the planet shrinks on screen, its radius from 18 to 8 px (~260 to
+~590 km off a 10 km planet at 720p and 75 deg), landmarks and beacons too. The far boxes and
+beacons hang from `PlanetBody.look`, so scaled space draws them on the scaled planet. On foot
+nothing changes (the widening starts at 1.2 km).
+
+**The ship.** `SpaceShip` (scripts/space/space_ship.gd) extends `SpaceStation`: a brick module
+(24 x 36 studs, one storey, a door, the city's staircase) with two engines and a chase camera; a
+frame the same way, field 60 m. It keeps itself: `rel` and `vel` in the frame of `ref`, the planet
+whose shell it is in (planet-local, so landed it turns with the ground), or the star's in open
+space; `PlanetSystem._ship_refs` carries it between frames, place and velocity unchanged in space.
+
+- **In open space with the player aboard it is the player's frame**: it holds still, the universe
+  moves round it (flying it moves the universe), so its deck is walked while it flies -- down
+  through its deck as a station's.
+- **In a planet's shell** it moves in the planet's frame (seated only): kept off the ground by the
+  planet's own height field (`PlanetData.height`, the voxels to 6 mm), levelled under 120 m, set
+  down at 0.3 m with under 0.5 m/s.
+- **Flying** (zylanntest's ship_controller, simplified): W/S ahead and back, A/D aside, Space/Ctrl
+  up and down, the mouse to turn, Z/C roll, Shift cruise. The speed cap is half the height over the
+  ground a second, 25 to 2,000 m/s (zylanntest's 300 -> 2,000), cruising to 300 km/s; in open space
+  "stopped" is stopped beside the nearest body (a flight computer). **E** takes and leaves the seat
+  within 8 m of it.
+- Its bricks are laid when it is the frame, or landed on the player's planet with the player near
+  and nobody at the controls (template built once, ~60 ms; laid 1-3 ms). The ship is parked 45 m
+  behind the spawn (not in the other gates, whose paths it would cross).
+
+`--gate=ship` 10/10 windowed (no errors, peak 73 C; worst frame in play 117 ms): the parked ship
+laid in bricks; lift-off; up and out at 42 km, the ship the frame; out of the seat in open space,
+standing (down 0.04 deg off its deck's) and walking 3.2 m across the deck; home looked back on --
+209 buildings drawn at 160 km and 300 km, none at 882 km; into Helnox I's shell (one handoff, ship
+to planet), down onto its ground (0.3 m), out of the seat and standing in the landed ship, its
+bricks solid. Headless the same but the far count (a headless viewport has no size on screen).
+
+Found on the way: the player's position for the frames is the seat while piloting (the walker,
+put there last frame, was 340 m behind at 20 km/s and never inside the ship's field); bodies are
+placed before the frame is chosen (a frame-stale position made a ship-to-planet arrival two
+handoffs); the parked ship's first basis was a mirror (determinant -1) and broke the levelling.
+And a class cycle: `PlanetSystem` names `SpaceShip` and `SpaceShip` named `PlanetSystem` as a type;
+GDScript then leaks both scripts and a headless run segfaults as it quits (exit 139, after every
+check passed). `SpaceShip` takes the system untyped now.
+
+Not yet: the ship collides with nothing but its planet's ground (buildings, stations, other
+ships); no damage to it; no landing gear or docking; the pilot is the walker (the pawn gets out
+as the walker; F for the pawn); one ship.

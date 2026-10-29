@@ -24,6 +24,16 @@ const CREST_MARGIN := 60.0
 const PX_FROM := 1.5
 const PX_FULL := 4.0
 const BEACON_PX := 2.5
+## From space (Planets.md 11.12): over ORBIT_FROM..ORBIT_FULL of altitude every
+## far box comes in, its footprint at least ORBIT_PX across on screen (a town a
+## grey patch on the sphere); they go as the planet shrinks on screen, its
+## radius from PLANET_PX_ALL to PLANET_PX_GONE pixels (~260 to ~590 km off a
+## 10 km planet at 720p and 75 degrees).
+const ORBIT_FROM := 1200.0
+const ORBIT_FULL := 3000.0
+const ORBIT_PX := 1.5
+const PLANET_PX_ALL := 18.0
+const PLANET_PX_GONE := 8.0
 
 class Site:
 	var dir: Vector3            # planet-local unit direction of its centre
@@ -62,6 +72,8 @@ class Site:
 	# Toppled whole (D2 step 4): its bricks are a piece now; it is no building
 	# any more -- no shell, no far box, never bricked again.
 	var toppled := false
+	# Its far box widened from space (far_tier), 1 as built.
+	var grow := 1.0
 
 var planet: PlanetBody
 var sites: Array[Site] = []
@@ -226,7 +238,9 @@ func finish() -> void:
 	far.material_override = _far_mat
 	far.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	far.extra_cull_margin = planet.data.radius
-	add_child(far)
+	# With the planet's far look (PlanetBody.look): drawn where scaled space
+	# draws the planet.
+	planet.look.add_child(far)
 	# Beacons: a small lit quad over each landmark, sized every frame.
 	var q := QuadMesh.new()
 	q.size = Vector2.ONE
@@ -245,7 +259,7 @@ func finish() -> void:
 	beacons.material_override = bmat
 	beacons.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	beacons.extra_cull_margin = planet.data.radius
-	add_child(beacons)
+	planet.look.add_child(beacons)
 
 
 ## The pads the ground needs for these sites: one a town, from its sites'
@@ -257,6 +271,17 @@ static func town_pad(data: PlanetData, dir: Vector3, flat: float, blend: float) 
 
 func _process(delta: float) -> void:
 	_time += delta
+	far_tier()
+	var cam := get_viewport().get_camera_3d()
+	if cam == null or far == null:
+		return
+	_brick_step(cam.global_position)
+	_damage_step()
+
+
+## The far tier and the beacons, for the camera now. Also called while the
+## planet sleeps (PlanetSystem: its _process is off), so it is seen from space.
+func far_tier() -> void:
 	var cam := get_viewport().get_camera_3d()
 	if cam == null or far == null:
 		return
@@ -268,6 +293,10 @@ func _process(delta: float) -> void:
 	var vp := cam.get_viewport().get_visible_rect().size
 	var px_per_rad: float = (vp.y * 0.5) / tan(deg_to_rad(cam.fov) * 0.5)
 	var mm := far.multimesh
+	# From space: how much every box is in, and how wide at least (m at 1 m off).
+	var seen := smoothstep(PLANET_PX_GONE, PLANET_PX_ALL, r * px_per_rad / maxf(eye.distance_to(centre), 1.0))
+	var orbit := smoothstep(ORBIT_FROM, ORBIT_FULL, h_eye) * seen
+	var min_rad := ORBIT_PX / px_per_rad
 	near_count = 0
 	far_count = 0
 	for i in sites.size():
@@ -302,6 +331,22 @@ func _process(delta: float) -> void:
 			if s.landmark:
 				a = 1.0
 			a *= smoothstep(NEAR_M - NEAR_FADE, NEAR_M + NEAR_FADE, dist)
+		var w0 := s.fx * BrickWorld.get_stud_metres()
+		var d0 := s.fz * BrickWorld.get_stud_metres()
+		a *= seen
+		if orbit > 0.0:
+			a = maxf(a, orbit) if not s.landmark else a
+			# Widened to its minimum on screen, as far as it is in.
+			var grow := maxf(min_rad * dist / maxf(w0, d0), 1.0)
+			grow = lerpf(1.0, grow, orbit)
+			if absf(grow - s.grow) > 0.02 * s.grow:
+				s.grow = grow
+				var g := Vector3(w0 * grow, s.height, d0 * grow)
+				mm.set_instance_transform(i, s.frame * Transform3D(Basis(), Vector3(w0, 0.0, d0) * 0.5)
+						* Transform3D(Basis.from_scale(g), -Vector3(g.x, 0.0, g.z) * 0.5))
+		elif s.grow != 1.0:
+			s.grow = 1.0
+			mm.set_instance_transform(i, s.frame * Transform3D(Basis.from_scale(Vector3(w0, s.height, d0)), Vector3.ZERO))
 		if a > 0.0 and s.shown_at < 0.0:
 			s.shown_at = _time
 		# A pop: a jump in the far tier's fade while the top is in plain sight
@@ -318,15 +363,13 @@ func _process(delta: float) -> void:
 			mm.set_instance_custom_data(i, Color(a, w, s.height, dd))
 		if a > 0.0:
 			far_count += 1
-	_brick_step(eye)
-	_damage_step()
 	# Beacons a few pixels across, on each landmark's top.
 	var bmm := beacons.multimesh
 	for k in _landmarks.size():
 		var s := sites[_landmarks[k]]
 		var top := s.frame * Vector3(s.fx * 0.175, s.height + 2.0, s.fz * 0.175)
 		var dist := eye.distance_to(centre + top)
-		var size := maxf(BEACON_PX * dist / px_per_rad, 1.5)
+		var size := maxf(BEACON_PX * dist / px_per_rad, 1.5) * seen
 		# Only past the near tier, and only from the air or over the horizon line.
 		var show := dist > NEAR_M and dist < horizon + sqrt(s.top_alt * (2.0 * r + s.top_alt)) + CREST_MARGIN
 		bmm.set_instance_transform(k, Transform3D(Basis.from_scale(Vector3.ONE * (size if show else 0.0)), top))

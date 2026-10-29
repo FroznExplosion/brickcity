@@ -74,6 +74,9 @@ var frozen := false
 var anchor: PlanetBody = null
 ## The station the player is on, or null.
 var station: SpaceStation = null
+## Ships (step 3), and the one the player is aboard in space, or null.
+var ships: Array[SpaceShip] = []
+var ship: SpaceShip = null
 ## Where the star truly is (its node); `star_look` draws it.
 var star: Node3D
 var star_look: MeshInstance3D
@@ -136,7 +139,29 @@ func index_of(b: PlanetBody) -> int:
 
 ## The frame the player is in: its station, its planet, or null (space).
 func frame_node() -> Node3D:
+	if ship != null:
+		return ship
 	return station if station != null else anchor
+
+
+## A ship into the system, in planet `ref`'s frame (null: the star's) at `rel`.
+func add_ship(d: OrbitalData, ref: PlanetBody, rel: Transform3D) -> SpaceShip:
+	var s := SpaceShip.new()
+	add_child(s)
+	s.setup_ship(d)
+	s.ref = ref
+	s.rel = rel
+	s.landed = ref != null
+	ships.append(s)
+	_place()
+	return s
+
+
+## Frame `n`'s transform, space frame, now.
+func _frame_xform(n: Node3D) -> Transform3D:
+	if n is SpaceShip:
+		return (n as SpaceShip).space_xform(self)
+	return sys.frame_xform(_fi(n), t)
 
 
 ## A frame's index in StarSystem's frames.
@@ -158,7 +183,7 @@ static func name_of(n: Node3D) -> String:
 func space_to_world() -> Transform3D:
 	var f := frame_node()
 	if f != null:
-		return Transform3D(Basis(), f.global_position) * sys.frame_xform(_fi(f), t).affine_inverse()
+		return Transform3D(Basis(), f.global_position) * _frame_xform(f).affine_inverse()
 	return Transform3D(_space_basis, star.global_position)
 
 
@@ -206,18 +231,26 @@ func hour_at(p: Vector3) -> float:
 	return fposmod(12.0 - here.signed_angle_to(s, axis) * 12.0 / PI, 24.0)
 
 
-## The floating origin moved the scene: a station's bricks follow.
+## The floating origin moved the scene: a station's or ship's bricks follow.
 func on_origin_shift() -> void:
 	if station != null:
 		station.on_origin_shift()
+	for s in ships:
+		s.on_origin_shift()
 
 
 func _process(delta: float) -> void:
 	if not frozen:
 		t += delta * time_scale
+	for s in ships:
+		s.fly(self, delta)
+	_ship_refs()
+	# Where everything is this frame before asking which frame the player is in.
+	_place()
 	if observer.is_valid():
 		_choose_anchor(observer.call())
 		_prepare_near(observer.call())
+		_ship_bricks(observer.call())
 	_place()
 	_gravity()
 	if eye.is_valid():
@@ -249,14 +282,18 @@ func _place() -> void:
 	for k in stations.size():
 		if stations[k] != f:
 			stations[k].global_transform = s2w * sys.orbital_xform(k, t)
+	for s in ships:
+		if s != f:
+			s.global_transform = s2w * s.space_xform(self)
 	for b in bodies:
 		b.set_sun(b.global_basis.inverse() * (star.global_position - b.global_position).normalized())
 
 
 func _gravity() -> void:
-	if station != null:
-		Gravity.planet = station.gravity_centre
-		Gravity.planet_strength = station.data.gravity
+	var on := frame_node()
+	if on is SpaceStation:
+		Gravity.planet = (on as SpaceStation).gravity_centre
+		Gravity.planet_strength = (on as SpaceStation).data.gravity
 		Gravity.planet_radius = SpaceStation.DEPTH
 		return
 	var g := anchor
@@ -271,10 +308,18 @@ func _gravity() -> void:
 
 ## A station's field first (it is in its planet's shell), then the planets'.
 func _choose_anchor(p: Vector3) -> void:
-	if station != null and (p - station.global_position).length() < SpaceStation.FIELD * SHELL_OUT:
+	# A ship in open space first: aboard it, it is the frame.
+	if ship != null and ship.ref == null and (p - ship.global_position).length() < ship.field * SHELL_OUT:
+		return
+	for s in ships:
+		if s.ref == null and (p - s.global_position).length() < s.field:
+			if s != frame_node():
+				_switch(s, p)
+			return
+	if station != null and (p - station.global_position).length() < station.field * SHELL_OUT:
 		return
 	for st in stations:
-		if st.is_station() and (p - st.global_position).length() < SpaceStation.FIELD:
+		if st.is_station() and (p - st.global_position).length() < st.field:
 			if st != frame_node():
 				_switch(st, p)
 			return
@@ -305,17 +350,20 @@ func _switch(next: Node3D, p: Vector3) -> void:
 		star.global_position = s2w.origin
 		anchor = null
 		station = null
+		ship = null
 		_sleep(old)
 	var s2w_new := space_to_world()
 	if next != null:
 		# `next` is turned to the identity where it is seen from the player:
 		# the world turns about the player, who stays put.
-		var tx := sys.frame_xform(_fi(next), t)
+		var tx := _frame_xform(next)
 		var at := p - tx.basis.inverse() * (x - tx.origin)
 		s2w_new = Transform3D(Basis(), at) * tx.affine_inverse()
 		var m := s2w_new * s2w.affine_inverse()
 		next.global_transform = Transform3D(Basis(), at)
-		if next is SpaceStation:
+		if next is SpaceShip:
+			ship = next
+		elif next is SpaceStation:
 			station = next
 		else:
 			anchor = next
@@ -332,9 +380,48 @@ func _switch(next: Node3D, p: Vector3) -> void:
 ## The space-frame velocity of frame `n` at space point `x` (0: the star's
 ## frame, or the clock stopped).
 func _frame_velocity(n: Node3D, x: Vector3) -> Vector3:
+	if n is SpaceShip:
+		return (n as SpaceShip).frame_velocity(self, x)
 	if n == null or frozen:
 		return Vector3.ZERO
 	return sys.frame_velocity_of(_fi(n), t, x)
+
+
+## Each ship's reference: a planet's frame inside its shell, the star's out of
+## every shell; its place and velocity carried over unchanged in space.
+func _ship_refs() -> void:
+	for s in ships:
+		var x := s.space_xform(self)
+		var nb := s.ref
+		if s.ref == null:
+			for b in bodies:
+				if (x.origin - sys.pos(index_of(b), t)).length() < b.data.radius * SHELL:
+					nb = b
+					break
+		elif (x.origin - sys.pos(index_of(s.ref), t)).length() > s.ref.data.radius * SHELL * SHELL_OUT:
+			nb = null
+		if nb == s.ref:
+			continue
+		var v := s.frame_velocity(self, x.origin)
+		var bx := sys.xform(index_of(nb), t) if nb != null else Transform3D()
+		s.rel = bx.affine_inverse() * x
+		s.vel = bx.basis.inverse() * (v - (_frame_velocity(nb, x.origin) if nb != null else Vector3.ZERO))
+		print("[system] %s: from %s's frame into %s's at %.0f m/s" % [s.data.orbital_name, name_of(s.ref), name_of(nb), s.vel.length()])
+		s.ref = nb
+		s.landed = false
+
+
+## A ship's bricks while it is the frame, or sits landed on the planet the
+## player is on with the player near and nobody at its controls.
+func _ship_bricks(p: Vector3) -> void:
+	for s in ships:
+		var want := s == ship or (s.ref != null and s.ref == anchor and s.landed and not s.piloted
+				and (p - s.global_position).length() < s.field)
+		if want and s.chunk < 0:
+			s.process_mode = Node.PROCESS_MODE_INHERIT
+			s.activate()
+		elif not want and s.chunk >= 0 and s != frame_node():
+			s.deactivate()
 
 
 ## The scene's top-level 3D nodes but the system's own, the bodies and the sun.
@@ -434,6 +521,8 @@ func _scaled_space(e: Vector3) -> void:
 			b.ocean.visible = near or b == anchor
 	for st in stations:
 		_draw_at(st.look, st.global_transform, e)
+	for s in ships:
+		_draw_at(s.look, s.global_transform, e)
 	_draw_at(star_look, star.global_transform, e)
 
 

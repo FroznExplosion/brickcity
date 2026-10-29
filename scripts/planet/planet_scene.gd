@@ -67,6 +67,11 @@ var _travel_gate := false
 var _far_gate := false
 var _drive_gate := false
 var _system_gate := false
+var _ship_gate := false
+## The ship parked by the spawn (11.12 step 3), and whether the player flies it.
+var ship: SpaceShip
+var piloting := false
+var _mouse_steer := Vector2.ZERO
 ## The star system round the planet (Planets.md 11.12); null with --no-system.
 var system: PlanetSystem
 var sun: DirectionalLight3D
@@ -106,7 +111,8 @@ func _ready() -> void:
 	_far_gate = "--gate=far" in OS.get_cmdline_user_args()
 	_drive_gate = "--gate=drive" in OS.get_cmdline_user_args()
 	_system_gate = "--gate=system" in OS.get_cmdline_user_args()
-	_gate = _gate or _system_gate or _pawn_gate or _mech_gate or _tank_gate or _soldier_gate or _squad_gate or _travel_gate or _far_gate or _drive_gate or _trees_gate or _bricks_gate or _damage_gate or _fall_gate or _hits_gate or _topple_gate or _pieces_ai_gate or _storey_gate
+	_ship_gate = "--gate=ship" in OS.get_cmdline_user_args()
+	_gate = _gate or _system_gate or _ship_gate or _pawn_gate or _mech_gate or _tank_gate or _soldier_gate or _squad_gate or _travel_gate or _far_gate or _drive_gate or _trees_gate or _bricks_gate or _damage_gate or _fall_gate or _hits_gate or _topple_gate or _pieces_ai_gate or _storey_gate
 	data = PlanetData.new()
 	data.planet_name = "proto"
 	# Towns and landmarks: their pads go into the ground before it is built.
@@ -207,6 +213,8 @@ func _ready() -> void:
 			_run_drive_gate()
 		elif _system_gate:
 			_run_system_gate()
+		elif _ship_gate:
+			_run_ship_gate()
 		else:
 			_run_gate()
 
@@ -312,6 +320,17 @@ func _set_on_foot(on: bool) -> void:
 
 
 func _unhandled_input(event: InputEvent) -> void:
+	if ship != null and not _gate:
+		if event is InputEventKey and event.pressed and not event.echo and event.keycode == KEY_E:
+			if piloting:
+				unboard()
+			elif (_anchor() - ship.global_transform * ship.seat()).length() < 8.0:
+				board()
+			get_viewport().set_input_as_handled()
+			return
+		if piloting and event is InputEventMouseMotion and Input.mouse_mode == Input.MOUSE_MODE_CAPTURED:
+			_mouse_steer += event.relative
+			return
 	if pawn == null or _gate:
 		return
 	if event is InputEventKey and event.pressed and not event.echo and event.keycode == KEY_F:
@@ -321,11 +340,55 @@ func _unhandled_input(event: InputEvent) -> void:
 
 ## Who the origin, the streaming and the sky follow.
 func _anchor() -> Vector3:
+	# At the controls: the seat, where the ship is this frame (not where the
+	# walker was put last frame -- 340 m back at 20 km/s).
+	if piloting:
+		return ship.global_transform * ship.seat()
 	return pawn.body.global_position if on_foot else walker.global_position
 
 
 func _eye() -> Vector3:
+	if piloting:
+		return ship.camera.global_position
 	return cam.global_position if on_foot else walker.camera.global_position
+
+
+## Into the ship's seat (11.12 step 3): the walker frozen in it, its chase camera.
+func board() -> void:
+	if on_foot:
+		_set_on_foot(false)
+	piloting = true
+	walker.frozen = true
+	walker.flying = false
+	walker.inertia = Vector3.ZERO
+	ship.piloted = true
+	ship.landed = false
+	ship.camera.current = true
+
+
+## Out of the seat, standing on the ship's floor.
+func unboard() -> void:
+	piloting = false
+	ship.piloted = false
+	ship.thrust = Vector3.ZERO
+	ship.steer = Vector3.ZERO
+	ship.boost = false
+	walker.place(ship.global_transform * ship.seat() + ship.global_basis.y * 0.1, -ship.global_basis.z)
+	walker.frozen = false
+	walker.flying = false
+	walker.camera.current = true
+
+
+## The pilot's keys and mouse: W/S ahead and back, A/D aside, Space/Ctrl up and
+## down, the mouse to turn, Z/C to roll, Shift to cruise.
+func _pilot_input() -> void:
+	ship.thrust = Vector3(float(Input.is_key_pressed(KEY_D)) - float(Input.is_key_pressed(KEY_A)),
+			float(Input.is_key_pressed(KEY_SPACE)) - float(Input.is_key_pressed(KEY_CTRL)),
+			float(Input.is_key_pressed(KEY_W)) - float(Input.is_key_pressed(KEY_S)))
+	ship.steer = Vector3(clampf(-_mouse_steer.x * 0.05, -1.0, 1.0), clampf(-_mouse_steer.y * 0.05, -1.0, 1.0),
+			float(Input.is_key_pressed(KEY_C)) - float(Input.is_key_pressed(KEY_Z)))
+	_mouse_steer = Vector2.ZERO
+	ship.boost = Input.is_key_pressed(KEY_SHIFT)
 
 
 ## Cameras reach this far; what is further is drawn nearer (PlanetSystem's
@@ -345,6 +408,18 @@ func _build_system() -> void:
 	system.frozen = _gate and not _system_gate
 	system.anchor_changed.connect(_on_anchor_changed)
 	system.woke.connect(_on_woke)
+	# A ship parked 45 m behind the spawn (not in the other gates' way).
+	if not _gate or _ship_gate:
+		var sd := OrbitalData.new()
+		sd.kind = "ship"
+		sd.orbital_name = "ship"
+		sd.fx = 24
+		sd.fz = 36
+		sd.courses = 6
+		var east := spawn_dir.cross(Vector3.FORWARD).normalized()
+		var at := _round_dir(spawn_dir, -east, 45.0)
+		var x := (-east - at * (-east).dot(at)).normalized()
+		ship = system.add_ship(sd, planet, Transform3D(Basis(at.cross(x), at, x), data.surface_point(at) + at * SpaceShip.CLEARANCE))
 	print("[planet] system %s: %d bodies, the planet at %.0f km, a %.0f min day, a %.0f min year" % [
 			sys.system_name, sys.bodies.size(), data.orbit_radius / 1000.0, data.day / 60.0, data.orbit_period / 60.0])
 
@@ -444,6 +519,14 @@ func _process(_delta: float) -> void:
 	if system != null:
 		walker.match_velocity = system.match_velocity(walker.global_position)
 		walker.reach = body.altitude_of(walker.global_position)
+		# Asleep, the home planet's far tier is still what space sees of its towns.
+		if not _home_awake():
+			buildings.far_tier()
+	if piloting:
+		walker.global_position = ship.global_transform * ship.seat()
+		walker.inertia = Vector3.ZERO
+		if not _gate:
+			_pilot_input()
 	# Stream the voxel ground to the horizon and the peaks behind it, no further.
 	var want := body.horizon_reach(cam_pos, body.data.peak()) + VIEW_MARGIN
 	var q := clampi(int(ceil(want / VIEW_STEP)) * VIEW_STEP, VIEW_MIN, VIEW_MAX)
@@ -472,7 +555,7 @@ func _process(_delta: float) -> void:
 	# Hold the walker until the ground under it has streamed (and has a
 	# collider) and the trees' cards are baked; then, unless this is the
 	# walker's own gate, the pawn stands on it.
-	if walker.frozen and pawn == null and trees.prebaked and _ground_hit(walker.global_position) != Vector3.INF:
+	if walker.frozen and not piloting and pawn == null and trees.prebaked and _ground_hit(walker.global_position) != Vector3.INF:
 		walker.frozen = false
 		if not _gate or _pawn_gate or _mech_gate or _tank_gate or _soldier_gate or _squad_gate or _travel_gate or _far_gate or _drive_gate or _trees_gate or _bricks_gate or _damage_gate or _fall_gate or _hits_gate or _topple_gate or _pieces_ai_gate or _storey_gate:
 			_spawn_player(_ground_hit(walker.global_position), -walker.global_transform.basis.z)
@@ -483,7 +566,12 @@ func _process(_delta: float) -> void:
 				"on foot (F flies)" if on_foot else ("FLY %.0f m/s (F lands)" % walker.fly_speed if walker.flying else "walk"), alt,
 				Engine.get_frames_per_second(), walker.viewer.view_distance, PlanetFrame.shifts,
 				PlanetFrame.last_us / 1000.0, buildings.near_count, buildings.far_count,
-				"(waiting for ground)" if walker.frozen else ""]
+				"(waiting for ground)" if walker.frozen and not piloting else ""]
+		if piloting:
+			hud.text += "\nSHIP  %.0f m/s  %.0f m over the ground  (E leaves the seat; WASD, Space/Ctrl, mouse, Z/C roll, Shift cruise)" % [
+					ship.vel.length(), ship.altitude]
+		elif ship != null and (_anchor() - ship.global_transform * ship.seat()).length() < 8.0:
+			hud.text += "\nE: take the ship's controls"
 		if system != null:
 			var h := system.hour_at(_anchor())
 			hud.text += "\n%s  %s  %02d:%02d  sun %.0f%%  t %.0f s%s" % [system.sys.system_name,
@@ -1702,6 +1790,142 @@ func _system_cross(b: PlanetBody, dir: Vector3) -> bool:
 	walker.frozen = false
 	await get_tree().create_timer(3.0).timeout
 	return true
+
+
+# The ship's gate (11.12 step 3): the parked ship in bricks, into its seat, up
+# and out of the home planet's shell, a walk on its deck in open space, home
+# watched shrinking (its towns on the sphere, then gone), across to the nearest
+# other planet, down onto it, out and standing on its ground.
+
+func _run_ship_gate() -> void:
+	var t0 := Time.get_ticks_msec()
+	while walker.frozen and Time.get_ticks_msec() - t0 < 60000:
+		await _frames(1)
+	await get_tree().create_timer(1.0).timeout
+	_check("a ship parked by the spawn, on the home planet", ship != null and ship.landed and ship.ref == planet)
+	t0 = Time.get_ticks_msec()
+	while not ship.bricked and Time.get_ticks_msec() - t0 < 20000:
+		await _frames(1)
+	_check("parked near the player: its bricks laid and solid", ship.bricked, "template %.1f ms, laid %.1f ms" % [ship.template_ms, ship.lay_ms])
+	await _shot("ship_gate_parked")
+	board()
+	ship.thrust = Vector3(0.0, 1.0, 0.0)
+	await get_tree().create_timer(4.0).timeout
+	_check("it lifts off", ship.altitude > 20.0 and not ship.landed, "%.0f m up" % ship.altitude)
+	await _shot("ship_gate_liftoff")
+	# Up and out, cruising, the home planet watched from behind.
+	ship.boost = true
+	var marks := [2000.0, 20000.0]
+	t0 = Time.get_ticks_msec()
+	while system.frame_node() != ship and Time.get_ticks_msec() - t0 < 90000:
+		await _frames(1)
+		if not marks.is_empty() and ship.altitude > marks[0]:
+			await _look_back(planet, "ship_gate_back_%dkm" % int(marks[0] / 1000.0))
+			marks.pop_front()
+	ship.thrust = Vector3.ZERO
+	ship.boost = false
+	_check("out of the home planet's shell: the ship is the frame", system.frame_node() == ship and ship.ref == null,
+			"%.0f km up" % (planet.altitude_of(ship.global_position) / 1000.0))
+	await get_tree().create_timer(2.0).timeout
+	# A walk on its deck in open space.
+	unboard()
+	await get_tree().create_timer(3.0).timeout
+	var up := Gravity.up_at(walker.global_position)
+	_check("out of the seat in open space: standing on its floor, down through its deck",
+			walker.is_on_floor() and up.dot(ship.global_basis.y) > 0.999, "%.2f deg" % rad_to_deg(acos(clampf(up.dot(ship.global_basis.y), -1.0, 1.0))))
+	await _shot("ship_gate_deck")
+	# Across the deck (the seat is by the door, the staircase aft of it).
+	walker.wish = Vector2(1, 0)
+	await get_tree().create_timer(1.5).timeout
+	walker.wish = Vector2.ZERO
+	await get_tree().create_timer(1.0).timeout
+	var moved := (ship.global_transform.affine_inverse() * walker.global_position - ship.seat()).length()
+	_check("and walks about on it", walker.is_on_floor() and moved > 1.5, "%.1f m from the seat" % moved)
+	walker.global_position = ship.global_transform * ship.seat()
+	board()
+	# Across to the nearest other planet, home watched shrinking.
+	var target: PlanetBody = null
+	for b in system.bodies:
+		if b != planet and (target == null or (b.global_position - ship.global_position).length()
+				< (target.global_position - ship.global_position).length()):
+			target = b
+	var ti := system.index_of(target)
+	var far_marks := [100000.0, 300000.0]
+	var far_seen := []
+	ship.boost = true
+	t0 = Time.get_ticks_msec()
+	while ship.ref != target and Time.get_ticks_msec() - t0 < 120000:
+		if ship.ref == null:
+			ship.aim(system.sys.pos(ti, system.t) - ship.rel.origin, ship.rel.basis.y)
+		ship.thrust = Vector3(0.0, 0.0, 1.0)
+		await _frames(1)
+		var dh := (ship.global_position - planet.global_position).length()
+		if not far_marks.is_empty() and dh > far_marks[0]:
+			ship.thrust = Vector3.ZERO
+			await _look_back(planet, "ship_gate_home_%dkm" % int(far_marks[0] / 1000.0))
+			far_seen.append(buildings.far_count)
+			print("[planet] ship gate: home %.0f km off, %d of its buildings drawn" % [dh / 1000.0, buildings.far_count])
+			far_marks.pop_front()
+	await _frames(2)
+	var dh_end := (ship.global_position - planet.global_position).length()
+	await _look_back(planet, "ship_gate_home_from_there")
+	far_seen.append(buildings.far_count)
+	# By size on screen: a headless viewport has none to speak of.
+	if DisplayServer.get_name() != "headless":
+		_check("from space the towns are on the sphere, then gone when really far",
+			far_seen.size() == 3 and far_seen[0] > 10 and far_seen[1] > 10 and far_seen[2] == 0,
+			"%s drawn at 100 km, 300 km, %.0f km" % [str(far_seen), dh_end / 1000.0])
+	_check("into %s's shell: its frame, the planet the anchor" % target.data.planet_name,
+			ship.ref == target and system.anchor == target and target.terrain != null)
+	# Down: nose to the centre, then level and settle.
+	t0 = Time.get_ticks_msec()
+	while not ship.landed and Time.get_ticks_msec() - t0 < 120000:
+		var r := ship.rel.origin
+		var down := -r.normalized()
+		if ship.altitude > 3000.0:
+			ship.aim(down, ship.rel.basis.y)
+			ship.thrust = Vector3(0.0, 0.0, 1.0)
+		else:
+			var along := (ship.rel.basis.z - down * ship.rel.basis.z.dot(down)).normalized()
+			ship.aim(-along, -down)
+			ship.thrust = Vector3(0.0, -1.0, 0.0)
+		ship.boost = ship.altitude > 20000.0
+		await _frames(1)
+	ship.thrust = Vector3.ZERO
+	ship.boost = false
+	_check("it sets down on %s" % target.data.planet_name, ship.landed and ship.ref == target, "%.1f m over its ground" % ship.altitude)
+	await get_tree().create_timer(2.0).timeout
+	await _shot("ship_gate_landed")
+	unboard()
+	t0 = Time.get_ticks_msec()
+	while not ship.bricked and Time.get_ticks_msec() - t0 < 20000:
+		await _frames(1)
+	await get_tree().create_timer(2.0).timeout
+	_check("out of the seat on the other planet: standing in the landed ship, its bricks solid",
+			walker.is_on_floor() and ship.bricked and system.anchor == target)
+	await _shot("ship_gate_out")
+	print("[planet] ship gate: %d handoffs; frames: worst %.1f ms; over 40 ms in play: %d %s" % [
+			system.handoffs, _worst_ms, _play_hitches.size(), _play_hitches])
+	print("[planet] gate: %d ok, %d FAIL" % [_ok, _fail])
+	get_tree().quit(1 if _fail > 0 else 0)
+
+
+## A shot from the camera's place looking back at `b`.
+func _look_back(b: PlanetBody, name: String) -> void:
+	var c := Camera3D.new()
+	c.far = PlanetSystem.SEE_FAR
+	c.fov = 60.0
+	add_child(c)
+	var from := _eye()
+	c.look_at_from_position(from, b.look.global_position, Gravity.up_at(from) if absf(Gravity.up_at(from).dot((b.look.global_position - from).normalized())) < 0.99 else Vector3.FORWARD)
+	c.current = true
+	await _frames(4)
+	await _shot(name)
+	c.queue_free()
+	if piloting:
+		ship.camera.current = true
+	else:
+		walker.camera.current = true
 
 
 # The drive gate (11.8): an AI tank, crewed, on the player's side, sent 200 m out
