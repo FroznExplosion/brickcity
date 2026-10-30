@@ -2143,3 +2143,39 @@ check passed). `SpaceShip` takes the system untyped now.
 Not yet: the ship collides with nothing but its planet's ground (buildings, stations, other
 ships); no damage to it; no landing gear or docking; the pilot is the walker (the pawn gets out
 as the walker; F for the pawn); one ship.
+
+#### Plan, step 3b (2026-10-30): hits, collisions, docking
+
+- **Hits on a station's or ship's bricks** as a planet building's (`DamageLog.apply_entry`, crumbs,
+  shapes off, bands drawn again). What comes loose (`solve_structure`'s groups) is thrown as crumbs
+  round the deck's gravity centre: rigid pieces drifting in space are step 6.
+- **The record:** the dead ids kept when its bricks are freed and killed again in the next laying
+  (template ids hold), so a station left and come back to is as it was left.
+- **The hull swept** (`cast_motion`, the shell's box, STRUCTURE) wherever the ship moves in the
+  world: buildings and stations stop it; a ram over 8 m/s blasts what it hit.
+- **Docking:** within 3 km of a station the ship holds the station's velocity at neutral and its
+  speed cap falls with the distance to it (a quarter of it a second, at least 10 m/s).
+- Gate: `--gate=dock`, the clock running.
+
+**Step 3b built (2026-10-30).** `SpaceStation.damage` / `_damage_step` / `_solve` (the ship has them
+too); the scene's `_structure_hit` asks the ships and the station first. `SpaceShip._sweep`:
+`cast_motion` of the hull's box against STRUCTURE from where it is drawn to where it is going
+(not while it is the frame); a stop leaves it at the station's velocity if a station is near, or
+still; over 8 m/s `rammed` blasts the spot (radius 0.15 of the speed, 1.5-5 m). `PlanetSystem.
+ship_match` holds the station's velocity at neutral within 6 km, the cap a quarter of the distance a
+second, at least 10 m/s.
+
+`--gate=dock` 7/7, windowed and headless, the clock running: the ship rams the nearest tall tower
+(stopped 13.1 m from its centre, 176 bricks blasted, thrown as crumbs and falling as pieces as any
+hit's), round the planet at the station's height (it is often on the far side), its 141 m/s against
+the ground frame matched; into the hull, stopped by it and holding 13.1 m from its centre; a blast
+at the wall (1536 -> 1453 bricks, what it left loose gone with it); left, its bricks freed; back,
+laid again with 1453. Windowed no errors, nothing over 40 ms in play, peak 90 C, not held back.
+
+Found on the way: a ram set the ship's velocity to zero in the PLANET's frame, so beside a station
+it fell behind at 141 m/s (the gate's first version passed that: its limit was the field, 250 m;
+it is 40 m now).
+
+Not yet: rams do not hurt the ship; a damaged hull's shell still draws whole from afar (the shell
+has a `damage` profile to take it, as the city's); no docking port or locked landing on a station:
+at neutral it holds where it stopped; worn and scorched bricks are not kept, only dead ones.

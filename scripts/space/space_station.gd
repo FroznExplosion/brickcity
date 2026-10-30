@@ -41,6 +41,15 @@ var _brick_node: Node3D
 var _band_next := 0
 var _band_jobs: Array = []
 var _collision: BuildingCollision
+## Hits (step 3b): the host's commands, the bands to draw again, the structure
+## to ask, and the dead ids kept while its bricks are freed.
+var damage_log := DamageLog.new()
+var crumbs: PlanetCrumbs
+var bricks_killed := 0
+var _band_nodes := {}
+var _remesh := PackedInt32Array()
+var _solve_due := false
+var _dead := PackedInt32Array()
 var _stud_arrays: Array = []
 var _template := -1
 var lay_ms := 0.0
@@ -175,6 +184,9 @@ func activate() -> void:
 	var t0 := Time.get_ticks_usec()
 	chunk = bricks.create_chunk(Vector3i.ZERO, TowerRecipe.chunk_dims(data.fx, data.fz, data.courses))
 	bricks.load_template(_template, chunk)
+	# As it was left.
+	if not _dead.is_empty():
+		bricks.kill_blocks(chunk, _dead)
 	bricks.set_chunk_anchored(chunk, true)
 	bricks.set_tension_per_stud(chunk, BrickStrength.tension())
 	bricks.set_chunk_section_plates(chunk, SECTION_PLATES)
@@ -184,6 +196,9 @@ func activate() -> void:
 	_brick_node.name = "Bricks"
 	_brick_node.transform = frame
 	add_child(_brick_node)
+	crumbs = PlanetCrumbs.new()
+	add_child(crumbs)
+	crumbs.setup(gravity_centre)
 	_band_next = 0
 	bricks.bake_chunk_async(chunk)
 	lay_ms = (Time.get_ticks_usec() - t0) / 1000.0
@@ -203,6 +218,13 @@ func deactivate() -> void:
 	if _brick_node != null:
 		_brick_node.queue_free()
 		_brick_node = null
+	if crumbs != null:
+		crumbs.queue_free()
+		crumbs = null
+	_band_nodes.clear()
+	_remesh = PackedInt32Array()
+	_solve_due = false
+	_dead = bricks.get_dead_blocks(chunk)
 	bricks.release_chunk(chunk)
 	chunk = -1
 	bricked = false
@@ -220,8 +242,80 @@ func on_origin_shift() -> void:
 		_collision = BuildingCollision.new(bricks, chunk, get_world_3d().space, global_transform * frame, true)
 
 
+## A round or a blast at world `point` (StructuralDamage.for_shot's record), as
+## a planet building's bricks take one. False if its bricks are not there.
+func damage(point: Vector3, shot: Dictionary) -> bool:
+	if not bricked or not holds(point):
+		return false
+	var blast := bool(shot.get("blast", false))
+	var radius := float(shot.get("radius", 0.0))
+	var e := damage_log.record(0, DamageLog.Kind.BLAST if blast else DamageLog.Kind.CHIP, chunk,
+			point, radius, Vector3.ZERO, int(shot.get("hp", 0)))
+	var killed := DamageLog.apply_entry(bricks, chunk, e)
+	if killed.is_empty():
+		return true
+	crumbs.throw(bricks, chunk, killed, Vector3.ZERO, point, radius * IslandManager.BLAST_CORE if blast else 0.0)
+	_after_kill(killed)
+	return true
+
+
+## World `p` is inside its module's box.
+func holds(p: Vector3) -> bool:
+	var stud := BrickWorld.get_stud_metres()
+	var l := (global_transform * frame).affine_inverse() * p
+	return l.x > -0.5 and l.z > -0.5 and l.y > -0.5 and l.x < data.fx * stud + 0.5 \
+			and l.z < data.fz * stud + 0.5 and l.y < height + 0.5
+
+
+func _after_kill(killed: PackedInt32Array) -> void:
+	bricks_killed += killed.size()
+	_collision.disable(killed)
+	for b in _collision.bands_of(killed):
+		if not _remesh.has(b):
+			_remesh.append(b)
+	bricks.bake_chunk_async(chunk)
+	_solve_due = true
+
+
+## What the hit left joined to nothing goes, as crumbs (rigid pieces drifting
+## are for zero-g, step 6).
+func _solve() -> void:
+	_solve_due = false
+	var solve: Dictionary = bricks.solve_structure(chunk, 48, 3.0)
+	var groups: Array = solve.groups
+	if groups.is_empty():
+		return
+	var all := PackedInt32Array()
+	for g in groups:
+		all.append_array(g as PackedInt32Array)
+	crumbs.throw(bricks, chunk, all)
+	bricks.kill_blocks(chunk, all)
+	_after_kill(all)
+
+
+func _damage_step() -> void:
+	if _solve_due:
+		_solve()
+	if _collision.any_stale():
+		_collision.flush(2)
+	if not _remesh.is_empty():
+		if not bricks.bake_ready(chunk):
+			if not bricks.bake_pending(chunk):
+				bricks.bake_chunk_async(chunk)
+			return
+		_harvest()
+		for b in _remesh:
+			_draw_band(b)
+		_remesh = PackedInt32Array()
+	elif not _band_jobs.is_empty():
+		_harvest()
+
+
 func _process(_delta: float) -> void:
-	if chunk < 0 or bricked:
+	if chunk < 0:
+		return
+	if bricked:
+		_damage_step()
 		return
 	if not bricks.bake_ready(chunk):
 		if not bricks.bake_pending(chunk):
@@ -265,7 +359,7 @@ func _draw_band(band: int) -> void:
 			var m := ArrayMesh.new()
 			m.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, out, [], {}, IslandManager.UPLOAD_COMPRESS)
 			holder[0] = m, false, "station band")
-	_band_jobs.append([task, holder])
+	_band_jobs.append([task, holder, band])
 
 
 func _harvest() -> void:
@@ -278,12 +372,21 @@ func _harvest() -> void:
 		WorkerThreadPool.wait_for_task_completion(int(job[0]))
 		_band_jobs.remove_at(k)
 		var mesh: ArrayMesh = (job[1] as Array)[0]
-		if mesh == null or _brick_node == null:
+		var band: int = job[2]
+		if _brick_node == null:
+			continue
+		# A band drawn again (a hit) replaces the one it was.
+		var old: Node = _band_nodes.get(band)
+		if old != null:
+			old.queue_free()
+			_band_nodes.erase(band)
+		if mesh == null:
 			continue
 		var mi := MeshInstance3D.new()
 		mi.mesh = mesh
 		mi.material_override = brick_material
 		_brick_node.add_child(mi)
+		_band_nodes[band] = mi
 
 
 ## As PlanetBuildings._staircase: the city's staircase on the lattice inside.

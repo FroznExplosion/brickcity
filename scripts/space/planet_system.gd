@@ -57,7 +57,7 @@ signal anchor_changed(old_frame: Node3D, new_frame: Node3D, kick: Vector3)
 signal woke(frame: Node3D, offset: Vector3)
 
 ## A station nearer than this is the velocity flight matches (docking).
-const MATCH_STATION := 3000.0
+const MATCH_STATION := 6000.0
 
 var sys: StarSystem
 ## By index in sys.bodies; home's is the scene's own PlanetBody.
@@ -385,6 +385,29 @@ func _frame_velocity(n: Node3D, x: Vector3) -> Vector3:
 	if n == null or frozen:
 		return Vector3.ZERO
 	return sys.frame_velocity_of(_fi(n), t, x)
+
+
+## For ship `s`, by a station within MATCH_STATION: [its velocity in the ship's
+## reference frame, its distance]; else [zero, -1].
+func ship_match(s: SpaceShip) -> Array:
+	var x := s.space_xform(self).origin
+	for k in stations.size():
+		if not stations[k].is_station():
+			continue
+		var d := (sys.orbital_xform(k, t).origin - x).length()
+		if d < MATCH_STATION:
+			var v := _frame_velocity(stations[k], x)
+			if s.ref == null:
+				return [v, d]
+			var i := index_of(s.ref)
+			return [sys.spin(i, t).inverse() * (v - _frame_velocity(s.ref, x)), d]
+	return [Vector3.ZERO, -1.0]
+
+
+## Ship `s` in the space frame, were it at `at` in its reference frame.
+func ship_xform_at(s: SpaceShip, at: Vector3) -> Transform3D:
+	var l := Transform3D(s.rel.basis, at)
+	return l if s.ref == null else sys.xform(index_of(s.ref), t) * l
 
 
 ## Each ship's reference: a planet's frame inside its shell, the star's out of

@@ -35,6 +35,11 @@ const LEVEL_BELOW := 120.0
 ## names this class, and a class cycle leaks both scripts at exit and crashes
 ## a headless run as it quits (the system is `ps`, untyped).
 const SEE_FAR := 250000.0
+## A ram over this (m/s) blasts what it hit.
+const RAM_SPEED := 8.0
+
+## It ran into a building or a station, at world `point`, at `speed`.
+signal rammed(point: Vector3, speed: float)
 
 var ref: PlanetBody = null
 var rel := Transform3D()
@@ -49,6 +54,8 @@ var boost := false
 ## Over the ground (m), this frame.
 var altitude := 0.0
 var camera: Camera3D
+var rams := 0
+var _hull: BoxShape3D
 
 
 func setup_ship(d: OrbitalData) -> void:
@@ -85,6 +92,8 @@ func setup_ship(d: OrbitalData) -> void:
 		f.rotation = Vector3(PI * 0.5, 0.0, 0.0)
 		f.position = Vector3(side * w * 0.3, height * 0.5, dd * 0.5 + 5.05)
 		look.add_child(f)
+	_hull = BoxShape3D.new()
+	_hull.size = Vector3(w, height, dd)
 	camera = Camera3D.new()
 	camera.name = "ChaseCamera"
 	camera.fov = 75.0
@@ -149,10 +158,14 @@ func fly(ps, dt: float) -> void:
 	var cap := clampf(altitude * 0.5, SPEED_LOW, SPEED_SPACE)
 	if boost:
 		cap = maxf(cap, minf(altitude * CRUISE, CRUISE_MAX))
+	# By a station: its speed held at neutral, the cap down as it nears (docking).
+	var dock: Array = ps.ship_match(self)
+	if dock[1] >= 0.0:
+		cap = minf(cap, maxf(float(dock[1]) * 0.25, 10.0))
 	var hands := thrust if piloted else Vector3.ZERO
 	if hands.length_squared() > 1.0:
 		hands = hands.normalized()
-	var target := rel.basis * Vector3(hands.x, hands.y, -hands.z) * cap
+	var target: Vector3 = rel.basis * Vector3(hands.x, hands.y, -hands.z) * cap + dock[0]
 	if ref == null:
 		# Stopped is stopped beside the nearest body (a flight computer).
 		var best := 0
@@ -177,4 +190,36 @@ func fly(ps, dt: float) -> void:
 			var level := (Basis(Quaternion(b.y.normalized(), n_up)) * b).orthonormalized()
 			rel.basis = b.slerp(level, clampf(dt * 1.5, 0.0, 1.0)).orthonormalized()
 		landed = next.length() < g + CLEARANCE + 0.05 and vel.length() < 0.5 and hands.y <= 0.0
+	if ps.frame_node() != self:
+		next = _sweep(ps, next)
 	rel.origin = next
+
+
+## The hull swept from where it is drawn to `next` (in its reference frame):
+## buildings and stations stop it. Returns where it may go.
+func _sweep(ps, next: Vector3) -> Vector3:
+	var to: Transform3D = ps.space_to_world() * ps.ship_xform_at(self, next)
+	var motion := to.origin - global_position
+	if motion.length_squared() < 1e-8:
+		return next
+	var q := PhysicsShapeQueryParameters3D.new()
+	q.shape = _hull
+	q.transform = global_transform * Transform3D(Basis(), Vector3(0.0, height * 0.5, 0.0))
+	q.motion = motion
+	q.collision_mask = Layers.STRUCTURE
+	q.exclude = [shell_body.get_rid()]
+	var space := get_world_3d().direct_space_state
+	var cast := space.cast_motion(q)
+	if cast[0] >= 1.0 or cast[1] <= 0.0:
+		# Clear, or starting inside something: not held.
+		return next
+	var speed := motion.length() / maxf(get_process_delta_time(), 0.001)
+	q.transform.origin += motion * cast[1]
+	var rest := space.get_rest_info(q)
+	var at: Vector3 = rest.get("point", q.transform.origin + motion.normalized() * _hull.size.length() * 0.5)
+	rams += 1
+	# Stopped against it: moving as it moves, if it is a station.
+	vel = ps.ship_match(self)[0]
+	if speed > RAM_SPEED:
+		rammed.emit(at, speed)
+	return rel.origin.lerp(next, cast[0])
