@@ -13,6 +13,11 @@ extends Node3D
 ##   P / shift P             a point (spawn, loot, cover) where the cursor is, or
 ##                           take it away; shift: which kind P puts
 ##
+## What a click marks is chosen on the rail (`mark`, Docs/RoomModules.md 2):
+## rooms (as above), an opening's link (auto, off, start, finish), points,
+## stair links up and down, facade spots (window, balcony, hang). A module's
+## rules are recipe.meta["module"] (module()).
+##
 ## Kept in recipe.meta["structure"] (StructureSpaces), so it is saved with the
 ## build. Every room is found again from where it was clicked a moment after the
 ## bricks stop changing, and an opening's kind set by hand stays on it. Only the
@@ -26,6 +31,18 @@ const ROOM := Color(0.35, 0.9, 1.0)
 const ROOM_SELECTED := Color(1.0, 0.85, 0.2)
 const ROOM_LOST := Color(1.0, 0.25, 0.25)
 const POINT := Color(1.0, 0.4, 1.0)
+## Connectors by link, stair links, facade spots (Docs/RoomModules.md 2).
+const LINK_COLOURS := {"auto": Color(0.95, 0.95, 0.95), "start": Color(0.2, 1.0, 0.3),
+		"finish": Color(1.0, 0.3, 0.25)}
+const STAIR := Color(1.0, 0.6, 0.15)
+const FACADE := Color(0.85, 0.45, 1.0)
+## What a click marks (the rail's choice): [id, what the rail says].
+const MARK_MODES := [["rooms", "rooms, and an opening's kind"],
+		["link", "link: auto, off, start, finish"], ["point", "points: spawn, loot, cover"],
+		["stair_up", "stair link up (under a ceiling)"], ["stair_down", "stair link down (on a floor)"],
+		["window", "facade: window"], ["balcony", "facade: balcony"], ["hang", "facade: a room may hang here"]]
+const MODULE_ROLES := ["room", "corridor", "stair", "start", "finish"]
+const MODULE_STOREYS := ["any", "ground", "upper", "top"]
 ## How long the bricks must be still before the rooms are found again: a held
 ## click lays a brick a frame, and each one would find every room again.
 const REFIND_AFTER_MS := 200
@@ -34,6 +51,7 @@ var ws   ## the workshop, untyped: it is the one that makes this
 var active := false
 var kind := "office"         ## what the next room found is
 var point_kind := "loot"
+var mark := "rooms"          ## what a click marks (MARK_MODES)
 var selected := -1           ## index into the record's spaces
 var message := ""
 var _dirty := false
@@ -120,11 +138,24 @@ func refind() -> void:
 		s.columns = made[0].columns
 		kept.append_array(made[1])
 	rec.openings = kept
+	_connect()
 	if active:
 		draw()
 
 
 func click(from: Vector3, dir: Vector3) -> void:
+	match mark:
+		"point":
+			toggle_point(from, dir)
+			return
+		"link":
+			link_click(from, dir)
+			return
+		"rooms":
+			pass
+		_:
+			toggle_mark(from, dir, mark)
+			return
 	var aim := _aim(from, dir)
 	var oi := _opening_hit(from, dir, float(aim[2]) if not aim.is_empty() else 120.0)
 	var rec := record()
@@ -176,6 +207,7 @@ func right_click(from: Vector3, dir: Vector3) -> void:
 	var id := int(rec.spaces[si].id)
 	rec.spaces.remove_at(si)
 	rec.openings = (rec.openings as Array).filter(func(o) -> bool: return int(o.space) != id)
+	rec.marks = (rec.get("marks", []) as Array).filter(func(m) -> bool: return int(m.space) != id)
 	selected = -1
 	message = "room forgotten"
 	_changed()
@@ -212,6 +244,74 @@ func toggle_point(from: Vector3, dir: Vector3) -> void:
 	_changed()
 
 
+## Link mode: a click on an opening turns its link round: auto, off, start,
+## finish (Docs/RoomModules.md 2.1).
+func link_click(from: Vector3, dir: Vector3) -> void:
+	var aim := _aim(from, dir)
+	var oi := _opening_hit(from, dir, float(aim[2]) if not aim.is_empty() else 120.0)
+	if oi < 0:
+		message = "no opening there"
+		return
+	var o: Dictionary = record().openings[oi]
+	StructureSpaces.cycle_link(o)
+	message = "%s: link %s" % [o.kind, o.link]
+	_changed()
+
+
+## A stair link or a facade spot where the cursor is, in the room it is in, or
+## the one there taken away (Docs/RoomModules.md 2.2, 2.4). A stair link down
+## goes on the floor clicked, up under the ceiling clicked; a facade spot on the
+## wall clicked from inside, facing out through it.
+func toggle_mark(from: Vector3, dir: Vector3, what: String) -> void:
+	var aim := _aim(from, dir)
+	if aim.is_empty():
+		message = "nothing there"
+		return
+	var at: Vector3i = aim[0]
+	var rec := record()
+	if not rec.has("marks"):
+		rec.marks = []
+	var si := StructureSpaces.space_at(rec, at)
+	if si < 0:
+		message = "find the room first (rooms), then mark it"
+		return
+	var s: Dictionary = rec.spaces[si]
+	var facing := -1
+	if what == "stair_down":
+		at.y = int(s.floor_y) + 1
+	elif what == "stair_up":
+		at.y = int(s.ceil_y) - 1
+	else:
+		var xf: Transform3D = ws.world.get_chunk_transform(ws.asm.frames[0])
+		facing = StructureSpaces.facing_of(xf.basis.inverse() * dir)
+		at = aim[1]
+	for i in (rec.marks as Array).size():
+		var m: Dictionary = rec.marks[i]
+		if String(m.kind) == what and _v3(m.at) == at:
+			rec.marks.remove_at(i)
+			message = "%s taken away" % what
+			_changed()
+			return
+	rec.marks.append({"kind": what, "space": int(s.id), "at": [at.x, at.y, at.z], "facing": facing})
+	message = "%s marked in the %s" % [what, s.kind]
+	_changed()
+
+
+## The module's rules (Docs/RoomModules.md 1), made the first time they are
+## asked for. The generator uses a build only with `on`.
+func module() -> Dictionary:
+	if not ws.recipe.meta.has("module"):
+		ws.recipe.meta["module"] = {"on": false, "role": "room", "min": 0, "max": -1,
+				"weight": 1.0, "storeys": "any"}
+	return ws.recipe.meta["module"]
+
+
+func set_rule(key: String, value) -> void:
+	module()[key] = value
+	ws._dirty = true
+	message = "module %s: %s" % [key, str(value)]
+
+
 func cycle_point_kind() -> void:
 	var i := StructureSpaces.POINT_KINDS.find(point_kind)
 	point_kind = StructureSpaces.POINT_KINDS[posmod(i + 1, StructureSpaces.POINT_KINDS.size())]
@@ -224,16 +324,27 @@ func status() -> String:
 	if selected >= 0 and selected < rec.spaces.size():
 		var s: Dictionary = rec.spaces[selected]
 		sel = "   selected: %s%s" % [s.kind, ("  [lost: %s]" % s.lost) if s.has("lost") else ""]
-	return "SPACES (O) -- LMB: find a room, select it, or turn an opening's kind   K: kind (next: %s)   RMB: forget   P: %s point (shift P)\n%d room(s), %d opening(s), %d point(s)%s   %s" % [
-			kind, point_kind, (rec.spaces as Array).size(), (rec.openings as Array).size(),
-			(rec.points as Array).size(), sel, message]
+	var mod: Dictionary = ws.recipe.meta.get("module", {})
+	return "SPACES (O) -- LMB marks: %s   K: kind (next: %s)   RMB: forget   P: %s point (shift P)\n%d room(s), %d opening(s), %d point(s), %d connector(s), %d mark(s)%s%s   %s" % [
+			mark, kind, point_kind, (rec.spaces as Array).size(), (rec.openings as Array).size(),
+			(rec.points as Array).size(), (rec.get("connectors", []) as Array).size(),
+			(rec.get("marks", []) as Array).size(), sel,
+			("   MODULE: %s" % mod.role) if bool(mod.get("on", false)) else "", message]
 
 
 # ---------------------------------------------------------------------------
 
 func _changed() -> void:
 	ws._dirty = true
+	_connect()
 	draw()
+
+
+## The connectors worked out again from the openings and the stair marks.
+func _connect() -> void:
+	var rec := record()
+	var b := _bounds()
+	rec.connectors = StructureSpaces.connectors(rec, _cell_kind, b[0], b[1])
 
 
 func _next_id() -> int:
@@ -244,10 +355,15 @@ func _next_id() -> int:
 
 
 func _find(start: Vector3i) -> Dictionary:
+	var b := _bounds()
+	return StructureSpaces.find_space(start, _cell_kind, b[0], b[1])
+
+
+## The upright grid's cells: [lo, hi), hi exclusive.
+func _bounds() -> Array:
 	var f: int = ws.asm.frames[0]
 	var lo: Vector3i = ws.world.get_chunk_origin(f)
-	var hi: Vector3i = lo + ws.world.get_chunk_dims(f)
-	return StructureSpaces.find_space(start, _cell_kind, lo, hi)
+	return [lo, lo + ws.world.get_chunk_dims(f)]
 
 
 ## What the finder sees in a cell of the upright grid -- from the bricks of
@@ -372,7 +488,7 @@ func draw() -> void:
 	var rec := record()
 	var im := ImmediateMesh.new()
 	var any := not (rec.spaces as Array).is_empty() or not (rec.openings as Array).is_empty() \
-			or not (rec.points as Array).is_empty()
+			or not (rec.points as Array).is_empty() or not (rec.get("marks", []) as Array).is_empty()
 	if not any:
 		_mesh.mesh = null
 		return
@@ -425,6 +541,7 @@ func draw() -> void:
 			im.surface_set_color(POINT)
 			im.surface_add_vertex(c + d)
 		any = true
+	_draw_marks(im, rec)
 	if any:
 		im.surface_end()
 		_mesh.mesh = im
@@ -438,3 +555,60 @@ func _line(im: ImmediateMesh, a: Vector3i, b: Vector3i, col: Color) -> void:
 	im.surface_add_vertex(BrickWorld.grid_to_world(a))
 	im.surface_set_color(col)
 	im.surface_add_vertex(BrickWorld.grid_to_world(b))
+
+
+## Connectors as an arrow out of the room from the middle of their outer face
+## (white auto, green start, red finish), with START / FINISH over them; stair
+## links an orange arrow up or down; facade spots a violet box with a tick out.
+func _draw_marks(im: ImmediateMesh, rec: Dictionary) -> void:
+	var cs := Vector3(BrickPalette.STUD_M, BrickPalette.PLATE_M, BrickPalette.STUD_M)
+	for c: Dictionary in rec.get("connectors", []):
+		var at := _v3(c.at)
+		var p := BrickWorld.grid_to_world(at) + Vector3(cs.x, 0.0, cs.z) * 0.5
+		if StructureSpaces.STAIR_MARKS.has(String(c.kind)):
+			var up := 1.0 if String(c.kind) == "stair_up" else -1.0
+			var tip := p + Vector3(0, cs.y + up * 0.6, 0)
+			_seg(im, p + Vector3(0, cs.y, 0), tip, STAIR)
+			_seg(im, tip - Vector3(0.1, up * 0.15, 0), tip, STAIR)
+			_seg(im, tip - Vector3(-0.1, up * 0.15, 0), tip, STAIR)
+			continue
+		var d: Vector2i = StructureSpaces.FACINGS[int(c.facing)]
+		var across := Vector3(absi(d.y), 0, absi(d.x))
+		var out := Vector3(d.x, 0, d.y)
+		var w := float(c.size[0])
+		var h := float(c.size[1])
+		# The face: the cell's near side, so a doorway's arrow starts at the wall.
+		var face := p - out * cs.x * 0.5 + across * cs.x * (w - 1.0) * 0.5
+		var col: Color = LINK_COLOURS.get(String(c.link), LINK_COLOURS.auto)
+		var mid := face + Vector3(0, h * cs.y * 0.5, 0)
+		_seg(im, mid, mid + out * 0.5, col)
+		_seg(im, mid + out * 0.5, mid + out * 0.35 + across * 0.1, col)
+		_seg(im, mid + out * 0.5, mid + out * 0.35 - across * 0.1, col)
+		var half := across * cs.x * w * 0.5
+		_seg(im, face - half, face + half, col)
+		_seg(im, face - half + Vector3(0, h * cs.y, 0), face + half + Vector3(0, h * cs.y, 0), col)
+		if String(c.link) == "start" or String(c.link) == "finish":
+			var l := Label3D.new()
+			l.text = String(c.link).to_upper()
+			l.billboard = BaseMaterial3D.BILLBOARD_ENABLED
+			l.no_depth_test = true
+			l.pixel_size = 0.004
+			l.modulate = col
+			l.position = mid + out * 0.6 + Vector3(0, 0.2, 0)
+			_mesh.add_child(l)
+			_labels.append(l)
+	for m: Dictionary in rec.get("marks", []):
+		if StructureSpaces.STAIR_MARKS.has(String(m.kind)):
+			continue
+		var c := BrickWorld.grid_to_world(_v3(m.at)) + cs * 0.5
+		ws._wire_box(im, c, cs * 1.1, FACADE)
+		if int(m.facing) >= 0:
+			var d: Vector2i = StructureSpaces.FACINGS[int(m.facing)]
+			_seg(im, c, c + Vector3(d.x, 0, d.y) * 0.4, FACADE)
+
+
+func _seg(im: ImmediateMesh, a: Vector3, b: Vector3, col: Color) -> void:
+	im.surface_set_color(col)
+	im.surface_add_vertex(a)
+	im.surface_set_color(col)
+	im.surface_add_vertex(b)

@@ -204,6 +204,7 @@ what hangs off the side, far meshes.
 | **Spaces**: rooms, halls, corridors, stairwells, with a kind | build mode (spaces tool) or the generator | interiors, visibility, AI, the procedural fill (4.3) |
 | **Openings**: doorway, door, window, glass, arch, open side | found, then set by hand where wrong | the faked room behind glass, what is seen into, AI routes |
 | **Points** (optional): spawn, loot, cover | build mode | play: cover and spawn are the AI's (`BuildingMarks`, AI.md 3.3.1) |
+| **Connectors, stair links, facade spots, module rules** | found from openings / build mode | the grow generator (Docs/RoomModules.md) |
 | **Materials** | per brick -- built (`set_block_material`) | strength, the span rule, glass |
 
 ### 3.1 The record — built 2026-10-16

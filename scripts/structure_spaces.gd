@@ -21,6 +21,18 @@ const KINDS := ["office", "corridor", "hall", "stairwell", "storeroom", "kitchen
 ## open is a side of the room with no wall at all.
 const OPENING_KINDS := ["doorway", "door", "window", "glass", "arch", "open"]
 const POINT_KINDS := ["spawn", "loot", "cover"]
+## What an opening is to the grow generator (Docs/RoomModules.md 2.1): auto, a
+## connector when it leads out of the module; off, never; start, the building's
+## entrance; finish, its way out or its goal.
+const LINKS := ["auto", "off", "start", "finish"]
+## The openings a connector can be made of: a way through, not a window.
+const CONNECTOR_OPENINGS := ["doorway", "door", "arch", "open"]
+## Markers placed by hand (Docs/RoomModules.md 2.2, 2.4): stair links, and
+## facade spots on an outside wall.
+const MARK_KINDS := ["stair_up", "stair_down", "window", "balcony", "hang"]
+const STAIR_MARKS := ["stair_up", "stair_down"]
+## A connector's facing, by index: out of the room along +X, +Z, -X, -Z.
+const FACINGS := [Vector2i(1, 0), Vector2i(0, 1), Vector2i(-1, 0), Vector2i(0, -1)]
 
 ## What find_space asks of a cell.
 enum Cell { AIR, SOLID, GLASS, DOOR }
@@ -425,7 +437,8 @@ static func _free_cell(room: Room, origin: Vector3i, kind: Callable) -> Vector3i
 ## generated building's record has them from the generator; a build's are
 ## empty until they are found in its bricks (Structures.md 2.4).
 static func empty() -> Dictionary:
-	return {"spaces": [], "openings": [], "points": [], "floors": [], "columns": [], "core": []}
+	return {"spaces": [], "openings": [], "points": [], "floors": [], "columns": [], "core": [],
+			"marks": [], "connectors": []}
 
 
 # ---------------------------------------------------------------------------
@@ -530,20 +543,142 @@ static func record_space(id: int, kind: String, frame: int, start: Vector3i, fou
 	for c: Vector2i in found.columns:
 		(space.columns as Array).append([c.x, c.y])
 	var set_by_hand := {}
+	var linked := {}   # cell -> the link set by hand (Docs/RoomModules.md 2.1)
 	for o: Dictionary in old_openings:
-		if bool(o.get("set", false)):
-			for c in o.cells:
-				set_by_hand[Vector3i(int(c[0]), int(c[1]), int(c[2]))] = String(o.kind)
+		var link := String(o.get("link", "auto"))
+		for c in o.cells:
+			var v := Vector3i(int(c[0]), int(c[1]), int(c[2]))
+			if bool(o.get("set", false)):
+				set_by_hand[v] = String(o.kind)
+			if link != "auto":
+				linked[v] = link
 	var openings := []
 	for o: Dictionary in found.openings:
-		var rec := {"kind": o.kind, "space": id, "cells": [], "set": false}
+		var rec := {"kind": o.kind, "space": id, "cells": [], "set": false, "link": "auto"}
 		for c: Vector3i in o.cells:
 			(rec.cells as Array).append([c.x, c.y, c.z])
 			if set_by_hand.has(c) and not rec.set:
 				rec.kind = set_by_hand[c]
 				rec.set = true
+			if linked.has(c) and rec.link == "auto":
+				rec.link = linked[c]
 		openings.append(rec)
 	return [space, openings]
+
+
+## The next link of an opening, cycling: auto, off, start, finish.
+static func cycle_link(o: Dictionary, step := 1) -> void:
+	var i := LINKS.find(String(o.get("link", "auto")))
+	o.link = LINKS[posmod(i + step, LINKS.size())]
+
+
+# ---------------------------------------------------------------------------
+# Connectors (Docs/RoomModules.md 2.1, 2.2): where a module joins another.
+
+## The record's connectors, worked out again from its openings and its stair
+## marks. `cell_kind`, `lo`, `hi` as find_space has them: a doorway's connector
+## is on the module's outer face, past the wall, and the wall's thickness is
+## read from the bricks beside the hole.
+##
+## A door connector: {kind "door", space, at: the low corner of the opening's
+## bottom row on the outer face, facing 0..3 (FACINGS), size [studs across,
+## plates up], link}. Two join where their `at`s and sizes are the same and
+## their facings opposite. An opening shared with another room of the same
+## build is inside the module and is no connector; a window or glass never is.
+static func connectors(rec: Dictionary, cell_kind: Callable, lo: Vector3i, hi: Vector3i) -> Array:
+	var out := []
+	var spaces := {}
+	for s: Dictionary in rec.get("spaces", []):
+		var cols := {}
+		for c in s.columns:
+			cols[Vector2i(int(c[0]), int(c[1]))] = true
+		spaces[int(s.id)] = cols
+	# Cell -> how many rooms' openings hold it: two is a hole between two rooms.
+	var shared := {}
+	for o: Dictionary in rec.get("openings", []):
+		for c in o.cells:
+			var v := Vector3i(int(c[0]), int(c[1]), int(c[2]))
+			shared[v] = int(shared.get(v, 0)) + 1
+	for o: Dictionary in rec.get("openings", []):
+		var link := String(o.get("link", "auto"))
+		if link == "off" or not spaces.has(int(o.space)):
+			continue
+		if link == "auto" and not CONNECTOR_OPENINGS.has(String(o.kind)):
+			continue
+		var inside := false
+		for c in o.cells:
+			if int(shared.get(Vector3i(int(c[0]), int(c[1]), int(c[2])), 0)) > 1:
+				inside = true
+				break
+		if inside and link == "auto":
+			continue
+		var c := door_connector(o, spaces[int(o.space)], cell_kind, lo, hi)
+		if not c.is_empty():
+			c.link = link
+			out.append(c)
+	for m: Dictionary in rec.get("marks", []):
+		if STAIR_MARKS.has(String(m.kind)):
+			out.append({"kind": String(m.kind), "space": int(m.get("space", -1)),
+					"at": (m.at as Array).duplicate(), "facing": -1, "size": [1, 1], "link": "auto"})
+	return out
+
+
+## One opening as a connector (connectors), or {} when no side of it faces the room.
+static func door_connector(o: Dictionary, room: Dictionary, cell_kind: Callable,
+		lo: Vector3i, hi: Vector3i) -> Dictionary:
+	var votes := [0, 0, 0, 0]
+	var y0 := 1000000000
+	var y1 := -1000000000
+	var cols := {}
+	for c in o.cells:
+		var v := Vector3i(int(c[0]), int(c[1]), int(c[2]))
+		y0 = mini(y0, v.y)
+		y1 = maxi(y1, v.y)
+		cols[Vector2i(v.x, v.z)] = true
+		for f in 4:
+			if room.has(Vector2i(v.x, v.z) - (FACINGS[f] as Vector2i)):
+				votes[f] += 1
+	var facing := 0
+	for f in 4:
+		if votes[f] > votes[facing]:
+			facing = f
+	if votes[facing] == 0:
+		return {}
+	var d: Vector2i = FACINGS[facing]
+	var across := Vector2i(absi(d.y), absi(d.x))   # along the wall
+	# The low corner along the wall.
+	var low := Vector2i.ZERO
+	var first := true
+	for c: Vector2i in cols:
+		if first or c.x * across.x + c.y * across.y < low.x * across.x + low.y * across.y:
+			low = c
+			first = false
+	var width := 0
+	for c: Vector2i in cols:
+		width = maxi(width, (c.x - low.x) * across.x + (c.y - low.y) * across.y + 1)
+	# Through the wall: as far as the jamb beside the hole is solid. An open
+	# side has no wall: its cells are already past it.
+	var depth := 0
+	if String(o.kind) != "open":
+		var jamb := low - across
+		if int(cell_kind.call(Vector3i(jamb.x, y0, jamb.y))) == Cell.AIR:
+			jamb = low + across * width
+		var solid := func(t: int) -> bool:
+			var at := Vector3i(jamb.x + d.x * t, y0, jamb.y + d.y * t)
+			return _in(at, lo, hi) and int(cell_kind.call(at)) != Cell.AIR
+		while depth <= MAX_WALL and solid.call(depth):
+			depth += 1
+		depth = maxi(depth, 1)
+	var face := low + d * depth
+	return {"kind": "door", "space": int(o.space), "at": [face.x, y0, face.y], "facing": facing,
+			"size": [width, y1 - y0 + 1], "link": "auto"}
+
+
+## The facing (FACINGS index) nearest a horizontal direction.
+static func facing_of(dir: Vector3) -> int:
+	if absf(dir.x) >= absf(dir.z):
+		return 0 if dir.x >= 0.0 else 2
+	return 1 if dir.z >= 0.0 else 3
 
 
 ## The next kind of an opening, cycling, and marked as set by hand.
