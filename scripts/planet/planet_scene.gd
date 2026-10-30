@@ -68,6 +68,7 @@ var _far_gate := false
 var _drive_gate := false
 var _system_gate := false
 var _ship_gate := false
+var _dock_gate := false
 ## The ship parked by the spawn (11.12 step 3), and whether the player flies it.
 var ship: SpaceShip
 var piloting := false
@@ -112,7 +113,8 @@ func _ready() -> void:
 	_drive_gate = "--gate=drive" in OS.get_cmdline_user_args()
 	_system_gate = "--gate=system" in OS.get_cmdline_user_args()
 	_ship_gate = "--gate=ship" in OS.get_cmdline_user_args()
-	_gate = _gate or _system_gate or _ship_gate or _pawn_gate or _mech_gate or _tank_gate or _soldier_gate or _squad_gate or _travel_gate or _far_gate or _drive_gate or _trees_gate or _bricks_gate or _damage_gate or _fall_gate or _hits_gate or _topple_gate or _pieces_ai_gate or _storey_gate
+	_dock_gate = "--gate=dock" in OS.get_cmdline_user_args()
+	_gate = _gate or _system_gate or _ship_gate or _dock_gate or _pawn_gate or _mech_gate or _tank_gate or _soldier_gate or _squad_gate or _travel_gate or _far_gate or _drive_gate or _trees_gate or _bricks_gate or _damage_gate or _fall_gate or _hits_gate or _topple_gate or _pieces_ai_gate or _storey_gate
 	data = PlanetData.new()
 	data.planet_name = "proto"
 	# Towns and landmarks: their pads go into the ground before it is built.
@@ -215,6 +217,8 @@ func _ready() -> void:
 			_run_system_gate()
 		elif _ship_gate:
 			_run_ship_gate()
+		elif _dock_gate:
+			_run_dock_gate()
 		else:
 			_run_gate()
 
@@ -222,6 +226,21 @@ func _ready() -> void:
 ## A round or a blast at a building's bricks (GunController.on_structure_hit):
 ## the planet's buildings take it (11.11 D1).
 func _structure_hit(point: Vector3, _dir: Vector3, shot: Dictionary) -> void:
+	if system != null:
+		# A station's or ship's bricks first: the planet's are asleep under them.
+		for s in system.ships:
+			if s.damage(point, shot):
+				return
+		if system.station != null and system.station.damage(point, shot):
+			return
+	buildings.damage(point, shot)
+
+
+## The ship ran into something at speed: it is blasted there.
+func _on_rammed(point: Vector3, speed: float) -> void:
+	var shot := {"blast": true, "radius": clampf(speed * 0.15, 1.5, 5.0), "hp": 0}
+	if system.station != null and system.station.damage(point, shot):
+		return
 	buildings.damage(point, shot)
 
 
@@ -405,11 +424,11 @@ func _build_system() -> void:
 	system = PlanetSystem.new()
 	add_child(system)
 	system.setup(sys, planet)
-	system.frozen = _gate and not _system_gate
+	system.frozen = _gate and not (_system_gate or _dock_gate)
 	system.anchor_changed.connect(_on_anchor_changed)
 	system.woke.connect(_on_woke)
 	# A ship parked 45 m behind the spawn (not in the other gates' way).
-	if not _gate or _ship_gate:
+	if not _gate or _ship_gate or _dock_gate:
 		var sd := OrbitalData.new()
 		sd.kind = "ship"
 		sd.orbital_name = "ship"
@@ -420,6 +439,7 @@ func _build_system() -> void:
 		var at := _round_dir(spawn_dir, -east, 45.0)
 		var x := (-east - at * (-east).dot(at)).normalized()
 		ship = system.add_ship(sd, planet, Transform3D(Basis(at.cross(x), at, x), data.surface_point(at) + at * SpaceShip.CLEARANCE))
+		ship.rammed.connect(_on_rammed)
 	print("[planet] system %s: %d bodies, the planet at %.0f km, a %.0f min day, a %.0f min year" % [
 			sys.system_name, sys.bodies.size(), data.orbit_radius / 1000.0, data.day / 60.0, data.orbit_period / 60.0])
 
@@ -1790,6 +1810,130 @@ func _system_cross(b: PlanetBody, dir: Vector3) -> bool:
 	walker.frozen = false
 	await get_tree().create_timer(3.0).timeout
 	return true
+
+
+# The docking gate (11.12 step 3b), the clock running: the ship rammed into a
+# tower of the town (it stops, the tower is blasted), up to the home planet's
+# station, its speed matched, stopped by its hull; the station's bricks shot,
+# what came loose gone; left and come back to, as it was left.
+
+func _run_dock_gate() -> void:
+	var t0 := Time.get_ticks_msec()
+	while walker.frozen and Time.get_ticks_msec() - t0 < 60000:
+		await _frames(1)
+	await get_tree().create_timer(1.0).timeout
+	board()
+	# Up a little, then at the nearest tower of the town.
+	ship.thrust = Vector3(0.0, 1.0, 0.0)
+	await get_tree().create_timer(1.0).timeout
+	var best := -1
+	var best_d := INF
+	for i in buildings.sites.size():
+		var s = buildings.sites[i]
+		var d: float = (s.frame.origin + planet.global_position).distance_to(ship.global_position)
+		if not s.landmark and s.courses > 30 and d < best_d:
+			best_d = d
+			best = i
+	var site = buildings.sites[best]
+	var killed0: int = buildings.bricks_killed
+	t0 = Time.get_ticks_msec()
+	while ship.rams == 0 and Time.get_ticks_msec() - t0 < 30000:
+		var c: Vector3 = site.frame * Vector3(site.fx * 0.175, 6.0, site.fz * 0.175)
+		var to := c - ship.rel.origin
+		var up := ship.rel.origin.normalized()
+		ship.aim(to, up)
+		ship.thrust = Vector3(0.0, 0.0, 1.0)
+		await _frames(1)
+	ship.thrust = Vector3.ZERO
+	await get_tree().create_timer(1.0).timeout
+	var c2: Vector3 = site.frame * Vector3(site.fx * 0.175, 6.0, site.fz * 0.175)
+	_check("the ship rams a tower: stopped by it, not through it", ship.rams > 0
+			and (c2 - ship.rel.origin).length() > site.fx * 0.175, "%d rams, %.1f m from its centre" % [ship.rams, (c2 - ship.rel.origin).length()])
+	_check("and the tower is blasted where it hit", buildings.bricks_killed > killed0, "%d bricks" % (buildings.bricks_killed - killed0))
+	await _shot("dock_gate_ram")
+	# Up to the home planet's station.
+	var st: SpaceStation = null
+	var k_st := -1
+	for k in system.stations.size():
+		if system.stations[k].is_station() and system.stations[k].data.parent == system.index_of(planet):
+			st = system.stations[k]
+			k_st = k
+	var pi := system.index_of(planet)
+	t0 = Time.get_ticks_msec()
+	var matched := false
+	var worst_rel := 0.0
+	while system.station != st and Time.get_ticks_msec() - t0 < 120000:
+		var at := system.sys.xform(pi, system.t).affine_inverse() * system.sys.orbital_xform(k_st, system.t).origin
+		# Round the planet at the station's height, not through it.
+		var a := ship.rel.origin.normalized()
+		var b := at.normalized()
+		var ang := a.angle_to(b)
+		var goal := at if ang < 0.3 else a.slerp(b, 0.3 / ang) * at.length()
+		var to := goal - ship.rel.origin
+		if ship.altitude < 400.0:
+			ship.thrust = Vector3(0.0, 1.0, 0.0)
+		else:
+			ship.aim(to, a)
+			ship.thrust = Vector3(0.0, 0.0, 1.0)
+		await _frames(1)
+		var dock: Array = system.ship_match(ship)
+		if float(dock[1]) >= 0.0:
+			matched = true
+			worst_rel = maxf(worst_rel, (ship.vel - dock[0]).length())
+	ship.boost = false
+	_check("up to the station, on its frame, its speed matched by the ship", system.station == st and matched,
+			"station at %.0f m/s against the ground frame" % (system.ship_match(ship)[0] as Vector3).length())
+	var alive := func() -> int: return st.bricks.get_alive_block_count(st.chunk)
+	t0 = Time.get_ticks_msec()
+	while not st.bricked and Time.get_ticks_msec() - t0 < 20000:
+		await _frames(1)
+	# Into its hull: stopped by it.
+	var rams0 := ship.rams
+	t0 = Time.get_ticks_msec()
+	while ship.rams == rams0 and Time.get_ticks_msec() - t0 < 40000:
+		var to := st.global_position + st.global_basis.y * st.height * 0.5 - ship.global_position
+		ship.aim(system.sys.xform(pi, system.t).basis.inverse() * system.space_to_world().basis.inverse() * to, ship.rel.origin.normalized())
+		ship.thrust = Vector3(0.0, 0.0, 1.0)
+		await _frames(1)
+	ship.thrust = Vector3.ZERO
+	await get_tree().create_timer(2.0).timeout
+	var gap := st.to_local(ship.global_position).length()
+	_check("its hull stops the ship, and it holds there beside it", ship.rams > rams0 and gap > 5.0 and gap < 40.0,
+			"%.1f m from its centre" % gap)
+	await _shot("dock_gate_docked")
+	# Shots at its wall.
+	var n0: int = alive.call()
+	var wall := st.global_transform * (st.frame * Vector3(st.data.fx * 0.175, st.height * 0.5, 0.2))
+	_structure_hit(wall, Vector3.ZERO, {"blast": true, "radius": 3.0, "hp": 0})
+	await get_tree().create_timer(1.5).timeout
+	var n1: int = alive.call()
+	_check("a blast at the station's wall takes bricks out, what it left loose gone too", n1 < n0 and st.bricks_killed > 0,
+			"%d -> %d, %d killed" % [n0, n1, st.bricks_killed])
+	await _shot("dock_gate_hole")
+	# Away and back: as it was left.
+	ship.aim(ship.rel.origin.normalized(), ship.rel.basis.z)
+	ship.thrust = Vector3(0.0, 0.0, 1.0)
+	t0 = Time.get_ticks_msec()
+	while system.station == st and Time.get_ticks_msec() - t0 < 30000:
+		await _frames(1)
+	ship.thrust = Vector3.ZERO
+	_check("left: its bricks are freed", system.station == null and st.chunk < 0)
+	t0 = Time.get_ticks_msec()
+	while system.station != st and Time.get_ticks_msec() - t0 < 30000:
+		var at := system.sys.xform(pi, system.t).affine_inverse() * system.sys.orbital_xform(k_st, system.t).origin
+		ship.aim(at - ship.rel.origin, ship.rel.origin.normalized())
+		ship.thrust = Vector3(0.0, 0.0, 1.0)
+		await _frames(1)
+	ship.thrust = Vector3.ZERO
+	t0 = Time.get_ticks_msec()
+	while not st.bricked and Time.get_ticks_msec() - t0 < 20000:
+		await _frames(1)
+	var n2: int = alive.call() if st.chunk >= 0 else -1
+	_check("back: laid again as it was left", n2 == n1, "%d bricks" % n2)
+	print("[planet] dock gate: %d handoffs; frames: worst %.1f ms; over 40 ms in play: %d %s" % [
+			system.handoffs, _worst_ms, _play_hitches.size(), _play_hitches])
+	print("[planet] gate: %d ok, %d FAIL" % [_ok, _fail])
+	get_tree().quit(1 if _fail > 0 else 0)
 
 
 # The ship's gate (11.12 step 3): the parked ship in bricks, into its seat, up
