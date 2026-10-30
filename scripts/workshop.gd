@@ -1714,10 +1714,7 @@ func _spaces_input(e: InputEvent) -> bool:
 		var ray := _mouse_ray()
 		match e.button_index:
 			MOUSE_BUTTON_LEFT:
-				if _tools != null and _tools.room_points:
-					_spaces.toggle_point(ray[0], ray[1])
-				else:
-					_spaces.click(ray[0], ray[1])
+				_spaces.click(ray[0], ray[1])   # what it marks: _spaces.mark
 				return true
 			MOUSE_BUTTON_RIGHT:
 				_spaces.right_click(ray[0], ray[1])

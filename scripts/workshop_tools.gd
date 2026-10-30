@@ -113,8 +113,6 @@ var _stair_from := NO_CELL
 ## Roof: gable or hip, and how far it reaches past the walls (studs).
 var roof_style := "gable"
 var roof_overhang := 1
-## Rooms: a click marks an opening point (P) instead of finding a room.
-var room_points := false
 ## Sketch: the pen (the asset workshop's), its brush, and the plane a stroke is on --
 ## {lie, at} while one is drawn, else empty.
 var pen := SketchPen.new()
@@ -189,6 +187,13 @@ var _builds_box: VBoxContainer
 var _builds_label: Label
 var _rooms_box: VBoxContainer
 var _rooms_label: Label
+## The module's rules on the rooms panel (Docs/RoomModules.md 1).
+var _module_on: CheckBox
+var _module_role: OptionButton
+var _module_storeys: OptionButton
+var _module_min: SpinBox
+var _module_max: SpinBox
+var _module_weight: SpinBox
 var _slope_cache := {}
 var _repeat_label: Label
 var _rep_lo_spin: SpinBox
@@ -1217,12 +1222,28 @@ func _build_options() -> void:
 	_rooms_box.add_child(rrow)
 	_button(rrow, "< kind", func() -> void: ws._spaces.cycle_kind(-1))
 	_button(rrow, "kind >", func() -> void: ws._spaces.cycle_kind(1))
-	_button(_rooms_box, "Opening point kind (shift P)", func() -> void: ws._spaces.cycle_point_kind())
-	var rp := CheckBox.new()
-	rp.text = "click marks an opening point (P)"
-	rp.focus_mode = Control.FOCUS_NONE
-	rp.toggled.connect(func(on: bool) -> void: room_points = on)
-	_rooms_box.add_child(rp)
+	_button(_rooms_box, "Point kind (shift P)", func() -> void: ws._spaces.cycle_point_kind())
+	# What a click marks, and the module's rules (Docs/RoomModules.md).
+	_choice(_rooms_box, "click marks", WorkshopSpaces.MARK_MODES,
+			func(i: int) -> void: ws._spaces.mark = WorkshopSpaces.MARK_MODES[i][0])
+	_module_on = CheckBox.new()
+	_module_on.text = "Module: the generator may use it"
+	_module_on.focus_mode = Control.FOCUS_NONE
+	_module_on.toggled.connect(func(on: bool) -> void: ws._spaces.set_rule("on", on))
+	_rooms_box.add_child(_module_on)
+	var roles := WorkshopSpaces.MODULE_ROLES.map(func(r) -> Array: return [r, r])
+	_module_role = _choice(_rooms_box, "module is a", roles,
+			func(i: int) -> void: ws._spaces.set_rule("role", WorkshopSpaces.MODULE_ROLES[i]))
+	var storeys := WorkshopSpaces.MODULE_STOREYS.map(func(r) -> Array: return [r, "storeys: " + r])
+	_module_storeys = _choice(_rooms_box, "where", storeys,
+			func(i: int) -> void: ws._spaces.set_rule("storeys", WorkshopSpaces.MODULE_STOREYS[i]))
+	_module_min = _spin(_rooms_box, "at least", 0, 99, 0,
+			func(v: float) -> void: ws._spaces.set_rule("min", int(v)))
+	_module_max = _spin(_rooms_box, "at most (-1 any)", -1, 99, -1,
+			func(v: float) -> void: ws._spaces.set_rule("max", int(v)))
+	_module_weight = _spin(_rooms_box, "weight", 0, 100, 1,
+			func(v: float) -> void: ws._spaces.set_rule("weight", v))
+	_module_weight.step = 0.1
 
 	_cut_box = VBoxContainer.new()
 	rail.options.add_child(_cut_box)
@@ -2160,6 +2181,14 @@ func process() -> void:
 	_rooms_box.visible = on == "rooms"
 	if on == "rooms":
 		_rooms_label.text = "next room: %s   point: %s" % [ws._spaces.kind, ws._spaces.point_kind]
+		# The loaded build's module rules, without setting them.
+		var mod: Dictionary = ws.recipe.meta.get("module", {})
+		_module_on.set_pressed_no_signal(bool(mod.get("on", false)))
+		_module_role.select(maxi(WorkshopSpaces.MODULE_ROLES.find(String(mod.get("role", "room"))), 0))
+		_module_storeys.select(maxi(WorkshopSpaces.MODULE_STOREYS.find(String(mod.get("storeys", "any"))), 0))
+		_module_min.set_value_no_signal(int(mod.get("min", 0)))
+		_module_max.set_value_no_signal(int(mod.get("max", -1)))
+		_module_weight.set_value_no_signal(float(mod.get("weight", 1.0)))
 	_shape_box.visible = on in ["shape", "sketch", "walls", "floor"]
 	_sketch_box.visible = on == "sketch"
 	_plan_box.visible = lie == "flat"
