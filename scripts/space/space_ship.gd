@@ -43,6 +43,10 @@ signal rammed(point: Vector3, speed: float)
 
 var ref: PlanetBody = null
 var rel := Transform3D()
+## What `rel.origin` could not hold of its place: in open space it is millions of
+## metres from the star, where a float32 is good to half a metre and a slow ship
+## would not move at all.
+var fine := Vector3.ZERO
 var vel := Vector3.ZERO
 var piloted := false
 var landed := false
@@ -169,16 +173,20 @@ func fly(ps, dt: float) -> void:
 		hands = hands.normalized()
 	var target: Vector3 = rel.basis * Vector3(hands.x, hands.y, -hands.z) * cap + dock[0]
 	if ref == null:
-		# Stopped is stopped beside the nearest body (a flight computer).
-		var best := 0
-		for i in ps.bodies.size():
-			if (rel.origin - ps.sys.pos(i, ps.t)).length() < (rel.origin - ps.sys.pos(best, ps.t)).length():
-				best = i
-		target += ps.sys.vel(best, ps.t)
+		# Stopped is stopped beside the nearest body (a flight computer), or among a
+		# belt's rocks.
+		if not ps.in_belt(rel.origin):
+			var best := 0
+			for i in ps.bodies.size():
+				if (rel.origin - ps.sys.pos(i, ps.t)).length() < (rel.origin - ps.sys.pos(best, ps.t)).length():
+					best = i
+			target += ps.sys.vel(best, ps.t)
 	# Braking goes by the speed it has, not the cap, which falls as it nears:
 	# at a low frame rate it reached a planet at 279 km/s.
 	vel = vel.move_toward(target, maxf(ACCEL, maxf(cap, vel.length()) * 0.8) * dt)
-	var next := rel.origin + vel * dt
+	var step := fine + vel * dt
+	var next := rel.origin + step
+	var free := next
 	if ref != null:
 		# Kept off the ground (the planet's own heights, as the voxels have them).
 		var n_up := next.normalized()
@@ -200,6 +208,7 @@ func fly(ps, dt: float) -> void:
 		rams += 1
 		vel = ps.ship_match(self)[0]
 		next = rel.origin
+	fine = step - (next - rel.origin) if next == free else Vector3.ZERO
 	rel.origin = next
 
 

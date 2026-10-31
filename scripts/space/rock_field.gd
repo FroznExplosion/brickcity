@@ -23,6 +23,8 @@ var outer := 0.0
 var half_thick := 150.0
 var field_seed := 1
 var colour := Color(0.5, 0.46, 0.42)
+## Its near rocks are placed from outside (`hold_near`), every frame: a belt's.
+var held := false
 var drawn := 0
 var _mmi: MultiMeshInstance3D
 var _rng := RandomNumberGenerator.new()
@@ -74,6 +76,17 @@ func blocked(p: Vector3, radius: float) -> bool:
 	return false
 
 
+## Where the near rocks are drawn from, field-local.
+func mid() -> Vector3:
+	return Vector3(_at) * CELL
+
+
+## The near rocks' place in the world, for a field that is `held`.
+func hold_near(xf: Transform3D) -> void:
+	if _mmi != null:
+		_mmi.global_transform = xf
+
+
 ## Whether local `p` is near enough the field to draw any of it.
 func near(p: Vector3) -> bool:
 	var r := Vector2(p.x, p.z).length()
@@ -110,7 +123,8 @@ func refresh(p: Vector3, dt: float) -> void:
 	# From the middle cell, so the transforms are small numbers (a belt's are
 	# millions of metres out).
 	var mid := Vector3(c) * CELL
-	_mmi.position = mid
+	if not held:
+		_mmi.position = mid
 	for i in drawn:
 		var e: Array = list[i]
 		var p0: Vector3 = e[0]
@@ -141,6 +155,8 @@ func _build_near() -> void:
 	_mmi.material_override = mat
 	_mmi.extra_cull_margin = CELL * SPAN
 	_mmi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	_mmi.top_level = held
+	_mmi.physics_interpolation_mode = Node.PHYSICS_INTERPOLATION_MODE_OFF
 	add_child(_mmi)
 
 
