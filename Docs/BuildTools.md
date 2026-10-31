@@ -409,3 +409,52 @@ Merged; `tools/build_tools_probe.gd` 148 checks.
   (Repeat a storey, or place them again).
 * The level is a plate number; the grid drawn is the level's, a stud apart, over the plate.
   Plans are on the upright grid only.
+
+## 10. Simpler: two cameras, a pop-out, draw then drag everywhere (2026-10-31)
+
+Asked: suggestions for a simpler UI, and: a pop-out beside the rail showing all of a tool's
+shapes; clicking back into the scene must not fire the tool; an FPS camera and a 360 orbit
+camera with the cursor, as in Godot's viewport; a swap key that is not Esc (Esc is the pause
+menu); walls that meet at a corner and interlock; floor-plan walls 1-3 studs thick; every
+tool able to use only the held brick, or to fill gaps with others; Cut as in Fusion 360 --
+draw a shape, drag the depth -- and most tools the same.
+
+### Being built
+
+* **Two cameras** (`WorkshopView`, `scripts/workshop_view.gd`). **Orbit** (the default): the
+  cursor is free and tools work where it points. MMB drag orbits round what is under the
+  cursor, Shift + MMB pans, the wheel zooms toward the cursor (Shift + wheel: the toolbar), RMB
+  held and moved looks round (WASD flies, as Godot's viewport); a plain RMB click and a plain
+  MMB click do what they did (take away, pick). **FPS**: the mouse looks, tools work at the
+  dot. **Y** or the rail's FPS button swaps them. In FPS, **hold Alt** for the cursor (to use
+  the rail); let go and it is FPS again -- a click in the scene never fires a tool by
+  grabbing the mouse.
+* **Esc** cancels what is being drawn; otherwise it is the pause menu (as the city's).
+* **Pop-out**: a tool's options leave the rail for a panel beside it. Choices are buttons with
+  pictures, not dropdowns: every shape, cut, way of drawing, bond.
+* **Bricks**: every brick-laying tool has "fill gaps with smaller bricks" or "only this brick"
+  (as many as fit; the rest left empty, and it says how many).
+* **Wall thickness**: Walls and Sketch's walls: the brick's width, or 1, 2 or 3 studs.
+* **Walls meet**: a wall's ends snap to the walls near them, and one drawn to meet another at
+  the same height (a corner, or a T) joins it -- one shape, so the courses interlock. Its
+  height starts at, and sticks to, the wall it meets.
+* **Cut as Fusion 360**: press on a face, drag the profile, let go; click at once to cut
+  through the wall, or drag for a depth first. Door and window stay one click. **Shapes** the
+  same way: pressed on a wall's face, the shape is drawn on that face and drags out of it.
+
+### More suggestions, not built -- pick what you want
+
+1. **One Draw tool instead of four.** Shapes, Walls, Floor and Sketch are now the same thing:
+   draw a base, drag it. One Draw tool whose pop-out has the outlines (line, rectangle, circle,
+   ring, triangle, freehand, polygon) and "makes" (solid, walls, floor, building). Rail: 14
+   tools down to about 9.
+2. **Pick, Paint and Place as one hand**; **Builds into Select** (click anything: a shape or
+   an inserted build). Rail down to about 7.
+3. **Hand / Edit / View out of the rail**, into a thin bar across the top: the rail is then only
+   tools, and never scrolls.
+4. **The numbers at the cursor**: size and height beside the cursor while drawing, not in the
+   rail. Type a number while dragging for an exact size, as Fusion does.
+5. **Push-pull afterwards**: hover a placed shape's top and drag it to change its height; drag
+   a wall sideways to move it. Select's numbers go.
+6. **Draw on any face in Sketch** too, and draw cuts with the pen (a freehand hole).
+7. **Windows stay with a building**: raise it later and new storeys get them.

@@ -490,8 +490,10 @@ static func _v2(q: Variant) -> Vector2i:
 ## footprints, for where less than a brick's height is left. Each both ways round, as
 ## [variant name, size], biggest first. `palette`: name -> archetype, so only parts the
 ## workshop has.
-static func parts_for(held: String, palette: Dictionary) -> Array:
+static func parts_for(held: String, palette: Dictionary, strict: bool = false) -> Array:
 	var part := BrickPalette.part_of(held)
+	if part == "":
+		part = held
 	var hs := BrickPalette.part_size(part)
 	var fam := BrickPalette.family_of(part)
 	var foot := Vector2i(mini(hs.x, hs.z), maxi(hs.x, hs.z))
@@ -505,7 +507,8 @@ static func parts_for(held: String, palette: Dictionary) -> Array:
 			continue
 		var same: bool = BrickPalette.family_of(String(p)) == fam and ps.y == hs.y
 		var plate: bool = hs.y > 1 and String(p).begins_with("plate_") and ps.y == 1
-		if same or plate:
+		# `strict`: this brick and no other (as many as fit; the rest stays empty).
+		if (same or plate) and (not strict or String(p) == part):
 			names.append(String(p))
 	var out := []
 	var seen := {}
@@ -538,9 +541,10 @@ static func parts_for(held: String, palette: Dictionary) -> Array:
 ##
 ## `taken`: cells already built in (Vector3i -> true) -- the courses go round them.
 ## `base`: the layer the courses count from (default the lowest cell's). `starts`: if given,
-## the layers bricks may start on (`course_starts`), counted as courses in order.
+## the layers bricks may start on (`course_starts`), counted as courses in order. `strict`:
+## only the held brick, so a staggered course's start is a gap, not a half brick.
 static func pack_courses(cells: Dictionary, parts: Array, staggered: bool = true,
-		taken: Dictionary = {}, base: int = 1 << 30, starts: Dictionary = {}) -> Array:
+		taken: Dictionary = {}, base: int = 1 << 30, starts: Dictionary = {}, strict: bool = false) -> Array:
 	var out := []
 	var left := {}
 	var ys := {}
@@ -594,6 +598,12 @@ static func pack_courses(cells: Dictionary, parts: Array, staggered: bool = true
 				var row: int = floori(float(c.z if run_x else c.x) / wide)
 				if posmod(course + row, 2) == 1:
 					half = maxi(1, long >> 1)
+					if strict:
+						# No half brick to start with: the gap, and the run goes on after it.
+						for k in half:
+							for dy in tall:
+								left.erase(c + dir * k + Vector3i(0, dy, 0))
+						continue
 			var pick := _best(left, c, parts, run_x, half, on_course)
 			if pick.is_empty():
 				continue

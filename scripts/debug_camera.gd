@@ -87,6 +87,11 @@ var allow_walk := false
 ## drives this camera with synthesised keys and must not steal the cursor to do
 ## it -- the `--walk` gate is the only caller.
 var drive_uncaptured := false
+## A click takes the mouse. The building workshop says no: its WorkshopView takes and gives
+## the mouse, so a click only ever does what the tool in hand does.
+var click_captures := true
+## CTRL is "down" when flying. Off where it is a chord's key with the cursor free.
+var ctrl_descends := true
 ## Whether E climbs as well as SPACE. The workshop turns it off: there, holding E
 ## locks the build plane, and a camera drifting upward while you do it would move
 ## the very thing you are aiming at.
@@ -245,7 +250,7 @@ func _unhandled_input(event: InputEvent) -> void:
 	# A CLICK takes the mouse, not the wheel: scrolling a menu past its end
 	# used to fall through to here, capture the mouse and hide the cursor with
 	# the menu still open.
-	if event is InputEventMouseButton and event.pressed and not _captured \
+	if event is InputEventMouseButton and event.pressed and not _captured and click_captures \
 			and event.button_index in [MOUSE_BUTTON_LEFT, MOUSE_BUTTON_RIGHT]:
 		_set_captured(true)
 	elif event is InputEventKey and event.pressed and not event.echo:
@@ -371,7 +376,7 @@ func _fly(delta: float) -> void:
 	if Input.is_key_pressed(KEY_D): dir += basis.x
 	var up := Gravity.up_at(global_position)   # +Y off a planet
 	if (e_climbs and Input.is_key_pressed(KEY_E)) or Input.is_key_pressed(KEY_SPACE): dir += up
-	if Input.is_key_pressed(KEY_Q) or Input.is_key_pressed(KEY_CTRL): dir -= up
+	if Input.is_key_pressed(KEY_Q) or (ctrl_descends and Input.is_key_pressed(KEY_CTRL)): dir -= up
 
 	var speed := SPEED
 	if Input.is_key_pressed(KEY_SHIFT):

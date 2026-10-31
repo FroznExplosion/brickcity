@@ -33,6 +33,30 @@ const ICONS := {
 	"wall": '<rect x="3" y="5" width="18" height="14"/><path d="M3 9.7h18M3 14.3h18M9 5v4.7M15 5v4.7M6 9.7v4.6M12 9.7v4.6M18 9.7v4.6M9 14.3V19M15 14.3V19"/>',
 	"cut": '<path d="M6 20V9a6 6 0 0 1 12 0v11"/><path d="M3 20h18"/>',
 	"repeat": '<rect x="4" y="13" width="16" height="7"/><rect x="4" y="4" width="16" height="7" stroke-dasharray="3 2"/>',
+	"k_rect": '<rect x="4" y="6" width="16" height="12"/>',
+	"k_hollow": '<rect x="3" y="5" width="18" height="14"/><rect x="8" y="10" width="8" height="4"/>',
+	"k_circle": '<circle cx="12" cy="12" r="8"/>',
+	"k_ring": '<circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="4"/>',
+	"k_triangle": '<path d="M12 4l9 16H3z"/>',
+	"k_line": '<path d="M4 19L20 5"/>',
+	"k_arch": '<path d="M5 20V11a7 7 0 0 1 14 0v9"/><path d="M3 20h18"/>',
+	"k_stairs": '<path d="M3 20h5v-5h5v-5h5V5h3"/>',
+	"k_door": '<rect x="7" y="3" width="10" height="18"/><circle cx="14" cy="12" r="1"/>',
+	"k_window": '<rect x="5" y="5" width="14" height="14"/><path d="M12 5v14M5 12h14"/>',
+	"k_free": '<path d="M4 16c3-9 6-9 8-4s5 5 8-5"/>',
+	"k_brush": '<circle cx="8" cy="16" r="4"/><path d="M11 13l9-9"/>',
+	"k_poly": '<path d="M5 18L4 8l9-4 7 8-6 8z"/>',
+	"m_solid": '<path d="M12 3l8 4.5v9L12 21l-8-4.5v-9z"/><path d="M4 7.5L12 12l8-4.5M12 12v9"/>',
+	"m_walls": '<rect x="4" y="4" width="16" height="16"/><rect x="7" y="7" width="10" height="10"/>',
+	"m_building": '<rect x="5" y="3" width="14" height="18"/><path d="M5 9h14M5 15h14M9 5v2M15 5v2M9 11v2M15 11v2M9 17v2M15 17v2"/>',
+	"b_stagger": '<rect x="3" y="5" width="18" height="14"/><path d="M3 12h18M12 5v7M7 12v7M17 12v7"/>',
+	"b_align": '<rect x="3" y="5" width="18" height="14"/><path d="M3 12h18M12 5v14"/>',
+	"l_flat": '<path d="M3 15l9-5 9 5-9 5z"/>',
+	"l_stand": '<rect x="8" y="3" width="8" height="18"/><path d="M3 21h18"/>',
+	"t_gable": '<path d="M2 18L12 6l10 12z"/>',
+	"t_hip": '<path d="M2 18L8 8h8l6 10z"/>',
+	"f_here": '<path d="M3 15l9-5 9 5-9 5z"/><path d="M3 15V9M21 15V9"/>',
+	"f_top": '<path d="M3 9l9-5 9 5-9 5z"/><path d="M3 9v8M21 9v8M12 14v7"/>',
 	"pick": '<path d="M14 4l6 6-9 9H5v-6z"/><path d="M12 6l6 6"/>',
 	"walls": '<path d="M4 20V8h8v6h8v6"/><path d="M4 8V4M12 8V4"/>',
 	"floor": '<path d="M3 15l9-5 9 5-9 5z"/><path d="M3 15v2l9 5 9-5v-2"/>',
@@ -55,6 +79,9 @@ var _box: VBoxContainer
 var _actions: VBoxContainer
 var _outer: VBoxContainer
 var _scroll: ScrollContainer
+## The pop-out beside the rail the options live in, once `pop_out` made it.
+var flyout: PanelContainer
+var _fly_scroll: ScrollContainer
 var _width := 184.0
 
 
@@ -90,6 +117,82 @@ func _init(width: float = 184.0, scroll: bool = false) -> void:
 	options.add_theme_constant_override("separation", 2)
 	options.visible = false
 	outer.add_child(options)
+
+
+## Move the options out of the rail into a panel beside it: `layer` holds it. It shows
+## when something in it shows; `place_flyout` puts it.
+func pop_out(layer: CanvasLayer, width: float) -> void:
+	flyout = PanelContainer.new()
+	flyout.name = "ToolPopOut"
+	flyout.add_theme_stylebox_override("panel", get_theme_stylebox("panel"))
+	flyout.custom_minimum_size.x = width
+	layer.add_child(flyout)
+	_fly_scroll = ScrollContainer.new()
+	_fly_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	flyout.add_child(_fly_scroll)
+	options.get_parent().remove_child(options)
+	options.custom_minimum_size.x = width - 14.0
+	_fly_scroll.add_child(options)
+	options.visible = true
+
+
+## The pop-out beside the rail, level with `y` if it fits above `bottom`, else moved up.
+func place_flyout(y: float, bottom: float) -> void:
+	if flyout == null:
+		return
+	var show := false
+	for c in options.get_children():
+		show = show or (c as Control).visible
+	flyout.visible = show
+	if not show:
+		return
+	var h := minf(options.get_combined_minimum_size().y, bottom - position.y)
+	_fly_scroll.custom_minimum_size = Vector2(flyout.custom_minimum_size.x - 12.0, h)
+	flyout.size = Vector2.ZERO
+	flyout.position = Vector2(position.x + size.x + 4.0, clampf(y, position.y, maxf(position.y, bottom - h - 12.0)))
+
+
+## A row of picture buttons, one lit: `items` is [[id, name, icon id or ""], ...]. A press
+## calls `picked` with the id. Returns id -> Button (`light` puts one on).
+func pictures(box: Container, label: String, items: Array, picked: Callable, on: String, columns: int = 3) -> Dictionary:
+	if label != "":
+		var l := Label.new()
+		l.text = label
+		l.add_theme_font_size_override("font_size", 11)
+		box.add_child(l)
+	var grid := GridContainer.new()
+	grid.columns = columns
+	grid.add_theme_constant_override("h_separation", 2)
+	grid.add_theme_constant_override("v_separation", 2)
+	box.add_child(grid)
+	var group := ButtonGroup.new()
+	var out := {}
+	for it in items:
+		var b := Button.new()
+		b.text = String(it[1])
+		b.tooltip_text = String(it[1])
+		b.add_theme_font_size_override("font_size", 10)
+		var ic := String(it[2]) if it.size() > 2 else ""
+		if ic != "":
+			b.icon = icon(ic)
+			b.icon_alignment = HORIZONTAL_ALIGNMENT_CENTER
+			b.vertical_icon_alignment = VERTICAL_ALIGNMENT_TOP
+		b.custom_minimum_size.x = (flyout.custom_minimum_size.x if flyout != null else _width) / columns - 6.0
+		b.clip_text = true
+		b.toggle_mode = true
+		b.button_group = group
+		b.button_pressed = String(it[0]) == on
+		b.focus_mode = Control.FOCUS_NONE
+		b.pressed.connect(picked.bind(String(it[0])))
+		grid.add_child(b)
+		out[String(it[0])] = b
+	return out
+
+
+## Light `id` in a row of `pictures`.
+static func light(row: Dictionary, id: String) -> void:
+	for k in row:
+		(row[k] as Button).set_pressed_no_signal(k == id)
 
 
 ## An icon, drawn once.
@@ -231,4 +334,7 @@ func show_active(on: String, rows: Array = []) -> void:
 
 ## True while the cursor is over the rail: the wheel there scrolls nothing else.
 func has_mouse() -> bool:
-	return is_visible_in_tree() and get_global_rect().has_point(get_global_mouse_position())
+	if is_visible_in_tree() and get_global_rect().has_point(get_global_mouse_position()):
+		return true
+	return flyout != null and flyout.is_visible_in_tree() \
+			and flyout.get_global_rect().has_point(flyout.get_global_mouse_position())

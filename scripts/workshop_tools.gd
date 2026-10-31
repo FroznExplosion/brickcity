@@ -15,7 +15,7 @@ extends Node
 ## the rest of the wall's bricks where they are.
 
 const TOOLS := [
-	["place", "Place", "Esc", "Click to put the brick in hand on the stud you aim at; hold and move to lay a run (one undo). RMB takes one away."],
+	["place", "Place", "", "Click to put the brick in hand on the stud you aim at; hold and move to lay a run (one undo). RMB takes one away."],
 	["pick", "Pick", "MMB", "Click a brick to hold its part, colour and material."],
 	["paint", "Paint", "B", "Click or drag over bricks to give them the colour in hand."],
 	["shape", "Shapes", "K", "Press and drag the shape's outline on the floor (or a wall facing you), let go; then move the cursor up for its height and click to place. Right-click or Esc cancels."],
@@ -52,27 +52,39 @@ const ACTIONS := [
 		["cancel", "Cancel", "Esc", "Drop what is being drawn (a drag, a sketch, a wall line, a stair's first click)."],
 	]],
 	["View", [
+		["fps", "FPS", "Y", "Swap the camera: FPS (the mouse looks, tools work at the dot; hold Alt for the cursor), or orbit (the cursor is free: MMB orbits, Shift MMB pans, the wheel zooms, RMB held looks round).", true],
 		["grid", "Grid", "G", "Show the grid.", true],
 		["stress", "Stress", "H", "Show how hard each brick is working.", true],
 		["keys", "Keys", "F1", "Show every key.", true],
 		["guide", "Guide", "U", "Room guide: a room template's size; again for the next."],
 	]],
 ]
-const LIE_NAMES := [["flat", "flat (floor, or walls round it)"], ["wall", "standing wall"]]
-const CUT_KINDS := [["rect", "rectangle (drag)"], ["arch", "arch (drag)"], ["circle", "circle (drag)"],
-		["door", "door (click)"], ["window", "window (click)"]]
+## The pop-out's pictures: [id, name, icon].
+const SHAPE_PICS := [["rect", "Box", "k_rect"], ["hollow", "Hollow", "k_hollow"], ["circle", "Circle", "k_circle"],
+		["ring", "Ring", "k_ring"], ["triangle", "Triangle", "k_triangle"], ["line", "Line", "k_line"],
+		["arch", "Arch", "k_arch"], ["stairs", "Stairs", "k_stairs"]]
+const LIE_PICS := [["flat", "Flat", "l_flat"], ["wall", "Standing", "l_stand"]]
+const BOND_PICS := [["stagger", "Staggered", "b_stagger"], ["align", "Aligned", "b_align"]]
+const DRAW_PICS := [["outline", "Freehand", "k_free"], ["brush", "Brush", "k_brush"], ["rect", "Box", "k_rect"],
+		["ellipse", "Ellipse", "k_circle"], ["polygon", "Corners", "k_poly"]]
+const MAKE_PICS := [["solid", "Solid", "m_solid"], ["walls", "Walls", "m_walls"], ["building", "Building", "m_building"]]
+const CUT_PICS := [["rect", "Box", "k_rect"], ["arch", "Arch", "k_arch"], ["circle", "Circle", "k_circle"],
+		["triangle", "Triangle", "k_triangle"], ["door", "Door", "k_door"], ["window", "Window", "k_window"]]
+const ROOF_PICS := [["gable", "Gable", "t_gable"], ["hip", "Hip", "t_hip"]]
+const FILL_PICS := [["here", "Inside", "f_here"], ["top", "Over walls", "f_top"]]
+const BRICK_PICS := [["fill", "Fill gaps"], ["only", "Only this"]]
+const THICK_PICS := [["0", "Brick"], ["1", "1"], ["2", "2"], ["3", "3"]]
+const POPOUT_W := 204.0
 ## A door and a window cut by one click, to start: studs across, plates up; a window's sill
 ## is where it is clicked, a door stands on the floor of the wall.
 const DOOR := Vector2i(4, 18)
 const WINDOW := Vector2i(4, 9)
-## What a raised plan makes (Docs/BuildTools.md section 9).
-const SKETCH_MAKES := [["solid", "a solid shape (filled)"], ["walls", "walls along its outline"],
-		["building", "a building: walls, a floor each storey"]]
-const REPEAT_WHAT := [["shape", "the picked shape"], ["storey", "a storey (from / to)"]]
-const REPEAT_DIRS := [["up", "up"], ["x", "along X"], ["z", "along Z"]]
+const REPEAT_WHAT := [["shape", "Picked shape"], ["storey", "A storey"]]
+const REPEAT_DIRS := [["up", "Up"], ["x", "Along X"], ["z", "Along Z"]]
 
 var ws    ## the workshop (workshop.gd)
 var rail: ToolRail
+var view: WorkshopView
 var tool := "place"
 
 ## Shapes options.
@@ -83,6 +95,11 @@ var thick := 1       # studs, a wall's depth
 var rim := 1         # studs, a hollow rectangle's or a ring's
 var staggered := true
 var cut_kind := "rect"
+## Every laying tool (section 10): only the held brick, as many as fit -- or smaller ones
+## of its kind fill the gaps. A wall's thickness in studs, 0 the held brick's width.
+var only_held := false
+var wall_thick := 0
+var _plan_gaps := 0
 ## Doors and windows (Docs/BuildTools.md section 6): their size, and whether they get a
 ## frame (the held brick and colour) and, windows, glass.
 var door_size := DOOR
@@ -129,7 +146,9 @@ var flat_roof := true
 var every_floor := true
 var _draft := {}
 var _last_plan := -1
-var _drawon_pick: OptionButton
+var _drawon_row := {}
+var _kind_row := {}
+var _lie_row := {}
 var _level_row: HBoxContainer
 var _level_spin: SpinBox
 var _storey_box: VBoxContainer
@@ -166,9 +185,12 @@ var _cut_box: VBoxContainer
 var _select_box: VBoxContainer
 var _sketch_box: VBoxContainer
 var _select_label: Label
-var _kind_pick: OptionButton
-var _lie_pick: OptionButton
-var _bond_pick: OptionButton
+var _kind_box: VBoxContainer
+var _brush_row: Control
+var _brush_sq: CheckBox
+var _lie_box: VBoxContainer
+var _bricks_box: VBoxContainer
+var _thick_box: VBoxContainer
 var _sel_depth: SpinBox
 var _sel_rim: SpinBox
 var _sel_bond: OptionButton
@@ -216,6 +238,8 @@ func setup(workshop, layer: CanvasLayer) -> void:
 	rail.fill("Build", TOOLS, pick, [], 2)
 	rail.actions(ACTIONS, act)
 	_build_options()
+	view = WorkshopView.new()
+	view.setup(ws)
 	_im = ImmediateMesh.new()
 	_lines = MeshInstance3D.new()
 	_lines.mesh = _im
@@ -357,12 +381,18 @@ func _new_shape(k: String, l: String, a: Vector2i, b: Vector2i, at: int, points:
 	var sh := {
 		"id": _next_id(), "kind": k, "lie": l, "a": [a.x, a.y], "b": [b.x, b.y], "at": at,
 		"depth": tall if l == "flat" else thick, "rim": held_width(), "bond": "stagger" if staggered else "align",
+		"strict": only_held,
 		"part": BrickPalette.part_of(ws._archetype_name()), "colour": ws._colour, "mat": ws._mat,
 		"role": ws._role, "cuts": [], "bricks": [],
 	}
 	if (points is Array and not (points as Array).is_empty()) or points is Dictionary:
 		sh.points = points
 	return sh
+
+
+## A wall's thickness: as chosen, else the held brick's width.
+func wall_rim() -> int:
+	return wall_thick if wall_thick > 0 else held_width()
 
 
 ## The held brick's width (its narrow side, in studs): a wall's thickness, a ring's rim.
@@ -797,7 +827,7 @@ func _lay(sh: Dictionary, near: AABB = AABB()) -> void:
 	for c in cells:
 		if _rid_at(c) >= 0:
 			taken[c] = true
-	var parts := BrickShapes.parts_for(_fill_part(String(sh.part)), ws.palette)
+	var parts := BrickShapes.parts_for(_fill_part(String(sh.part)), ws.palette, bool(sh.get("strict", false)))
 	var base := _base_layer(sh)
 	var laid := keep.duplicate()
 	if roof:
@@ -834,7 +864,8 @@ func _lay(sh: Dictionary, near: AABB = AABB()) -> void:
 								taken[at + Vector3i(dx, dy, dz)] = true
 					break
 	var starts := BrickShapes.course_starts(sh, height_step("flat"))
-	for pc in BrickShapes.pack_courses(cells, parts, String(sh.bond) != "align", taken, base, starts):
+	for pc in BrickShapes.pack_courses(cells, parts, String(sh.bond) != "align", taken, base, starts,
+			bool(sh.get("strict", false))):
 		if ws.lay_part(String(pc[0]), pc[1], int(sh.colour), int(sh.mat), int(sh.get("role", 0))):
 			laid.append([pc[0], _plain(pc[1])])
 	ws._batch = false
@@ -1034,6 +1065,7 @@ func act(id: String) -> void:
 		"colour_back": ws._hotbar.set_colour(ws._colour - 1)
 		"colour_on": ws._hotbar.set_colour(ws._colour + 1)
 		"parts": ws._hotbar.toggle_browser()
+		"fps": view.toggle()
 		"undo": ws._undo()
 		"redo": ws.redo_last()
 		"cancel": cancel()
@@ -1057,7 +1089,7 @@ func _step_level(d: int) -> void:
 	if not _draft.is_empty():
 		_draft.at = sketch_level
 	_level_spin.set_value_no_signal(sketch_level)
-	_drawon_pick.select(1)
+	ToolRail.light(_drawon_row, "level")
 
 
 ## Say something on the rail for a few seconds (a fill refused, the next click wanted).
@@ -1082,16 +1114,18 @@ func dragging() -> bool:
 
 
 func _build_options() -> void:
-	rail.options.visible = true
-	rail.options.add_child(HSeparator.new())
+	rail.pop_out(ws._hud_layer, POPOUT_W)
 	_status = Label.new()
 	_status.add_theme_color_override("font_color", Color(1.0, 0.88, 0.5))
 	_status.visible = false
 	rail.options.add_child(_status)
+	_kind_box = VBoxContainer.new()
+	rail.options.add_child(_kind_box)
+	_kind_row = rail.pictures(_kind_box, "Shape", SHAPE_PICS, func(id: String) -> void: kind = id, kind, 4)
 	_lay_box = VBoxContainer.new()
 	rail.options.add_child(_lay_box)
-	_choice(_lay_box, "a drag (or a stroke)", [["lay", "lays bricks"], ["cut", "cuts them out (as RMB)"]],
-			func(i: int) -> void: cut_mode = i == 1)
+	rail.pictures(_lay_box, "", [["lay", "Lay bricks"], ["cut", "Cut out"]],
+			func(id: String) -> void: cut_mode = id == "cut", "lay", 2)
 	var kr := CheckBox.new()
 	kr.text = "keep circles round (Shift)"
 	kr.focus_mode = Control.FOCUS_NONE
@@ -1099,35 +1133,39 @@ func _build_options() -> void:
 	_lay_box.add_child(kr)
 	_shape_box = VBoxContainer.new()
 	rail.options.add_child(_shape_box)
-	_kind_pick = _choice(_shape_box, "shape", BrickShapes.KINDS, func(i: int) -> void:
-		kind = BrickShapes.KINDS[i][0])
-	_lie_pick = _choice(_shape_box, "lies", LIE_NAMES, func(i: int) -> void:
-		lie = LIE_NAMES[i][0])
-	_bond_pick = _choice(_shape_box, "bond", [["stagger", "staggered (running bond)"], ["align", "aligned (stack bond)"]],
-			func(i: int) -> void: staggered = i == 0)
+	_lie_box = VBoxContainer.new()
+	_shape_box.add_child(_lie_box)
+	_lie_row = rail.pictures(_lie_box, "Lies", LIE_PICS, func(id: String) -> void: lie = id, lie, 2)
+	rail.pictures(_shape_box, "Bond", BOND_PICS, func(id: String) -> void: staggered = id == "stagger", "stagger", 2)
+	_thick_box = VBoxContainer.new()
+	_shape_box.add_child(_thick_box)
+	rail.pictures(_thick_box, "Wall thickness (studs)", THICK_PICS, func(id: String) -> void: wall_thick = int(id), "0", 4)
+	_bricks_box = VBoxContainer.new()
+	_shape_box.add_child(_bricks_box)
+	rail.pictures(_bricks_box, "Bricks", BRICK_PICS, func(id: String) -> void: only_held = id == "only", "fill", 2)
 
 	_sketch_box = VBoxContainer.new()
 	rail.options.add_child(_sketch_box)
 	rail.options.move_child(_sketch_box, _shape_box.get_index())
-	_choice(_sketch_box, "draw with", SketchPen.DRAWS, func(i: int) -> void:
-		pen.draw = SketchPen.DRAWS[i][0]
+	rail.pictures(_sketch_box, "Draw with", DRAW_PICS, func(id: String) -> void:
+		pen.draw = id
 		pen.points.clear()
-		_sk = {})
-	_spin(_sketch_box, "brush (studs)", 0, 8, brush_size, func(v: float) -> void: brush_size = int(v))
-	var sq := CheckBox.new()
-	sq.text = "square brush"
-	sq.focus_mode = Control.FOCUS_NONE
-	sq.toggled.connect(func(on: bool) -> void: brush_square = on)
-	_sketch_box.add_child(sq)
+		_sk = {}, pen.draw, 3)
+	_brush_row = _spin(_sketch_box, "brush (studs)", 0, 8, brush_size, func(v: float) -> void: brush_size = int(v)).get_parent()
+	_brush_sq = CheckBox.new()
+	_brush_sq.text = "square brush"
+	_brush_sq.focus_mode = Control.FOCUS_NONE
+	_brush_sq.toggled.connect(func(on: bool) -> void: brush_square = on)
+	_sketch_box.add_child(_brush_sq)
 
 	_plan_box = VBoxContainer.new()
 	_sketch_box.add_child(_plan_box)
-	_drawon_pick = _choice(_plan_box, "draw on", [["aim", "where you aim"], ["level", "a set level (plate)"]],
-			func(i: int) -> void:
-				sketch_level = -1 if i == 0 else maxi(0, int(_draft.get("at", ws._cell.y)))
+	_drawon_row = rail.pictures(_plan_box, "Draw on", [["aim", "Where I aim"], ["level", "A set level"]],
+			func(id: String) -> void:
+				sketch_level = -1 if id == "aim" else maxi(0, int(_draft.get("at", ws._cell.y)))
 				if not _draft.is_empty() and sketch_level >= 0:
 					_draft.at = sketch_level
-				_level_spin.set_value_no_signal(maxi(0, sketch_level)))
+				_level_spin.set_value_no_signal(maxi(0, sketch_level)), "aim", 2)
 	_level_row = HBoxContainer.new()
 	_plan_box.add_child(_level_row)
 	_button(_level_row, "v", func() -> void: _step_level(-1))
@@ -1142,7 +1180,7 @@ func _build_options() -> void:
 	_button(_level_row, "^", func() -> void: _step_level(1))
 	_button(_plan_box, "On top of the last building", func() -> void: plan_on_top(false))
 	_button(_plan_box, "... starting from its plan", func() -> void: plan_on_top(true))
-	_choice(_plan_box, "raising it makes", SKETCH_MAKES, func(i: int) -> void: sketch_makes = SKETCH_MAKES[i][0])
+	rail.pictures(_plan_box, "Raising it makes", MAKE_PICS, func(id: String) -> void: sketch_makes = id, sketch_makes, 3)
 	_storey_box = VBoxContainer.new()
 	_plan_box.add_child(_storey_box)
 	_spin(_storey_box, "storey (courses of wall)", 1, 40, storey_courses, func(v: float) -> void: storey_courses = int(v))
@@ -1183,14 +1221,10 @@ func _build_options() -> void:
 	st.focus_mode = Control.FOCUS_NONE
 	st.toggled.connect(func(on: bool) -> void: wall_straight = on)
 	_walls_box.add_child(st)
-	var wl := Label.new()
-	wl.text = "As thick as the held brick is wide."
-	_walls_box.add_child(wl)
 
 	_floor_box = VBoxContainer.new()
 	rail.options.add_child(_floor_box)
-	_choice(_floor_box, "a click (no drag) fills", [["here", "the floor inside the walls"], ["top", "over the walls' tops"]],
-			func(i: int) -> void: floor_on_top = i == 1)
+	rail.pictures(_floor_box, "A click (no drag) fills", FILL_PICS, func(id: String) -> void: floor_on_top = id == "top", "here", 2)
 
 	_stairs_box = VBoxContainer.new()
 	rail.options.add_child(_stairs_box)
@@ -1198,8 +1232,7 @@ func _build_options() -> void:
 
 	_roof_box = VBoxContainer.new()
 	rail.options.add_child(_roof_box)
-	_choice(_roof_box, "roof", [["gable", "gable (two sides slope)"], ["hip", "hip (all four slope)"]],
-			func(i: int) -> void: roof_style = "gable" if i == 0 else "hip")
+	rail.pictures(_roof_box, "Roof", ROOF_PICS, func(id: String) -> void: roof_style = id, roof_style, 2)
 	_spin(_roof_box, "overhang (studs)", 0, 4, roof_overhang, func(v: float) -> void: roof_overhang = int(v))
 
 	_paint_box = VBoxContainer.new()
@@ -1297,7 +1330,7 @@ func _build_options() -> void:
 
 	_cut_box = VBoxContainer.new()
 	rail.options.add_child(_cut_box)
-	_choice(_cut_box, "cut", CUT_KINDS, func(i: int) -> void: cut_kind = CUT_KINDS[i][0])
+	rail.pictures(_cut_box, "Cut", CUT_PICS, func(id: String) -> void: cut_kind = id, cut_kind, 3)
 	_door_box = VBoxContainer.new()
 	_cut_box.add_child(_door_box)
 	_spin(_door_box, "door wide (studs)", 1, 32, door_size.x, func(v: float) -> void: door_size.x = int(v))
@@ -1332,10 +1365,10 @@ func _build_options() -> void:
 	rail.options.add_child(_repeat_box)
 	_repeat_label = Label.new()
 	_repeat_box.add_child(_repeat_label)
-	_choice(_repeat_box, "repeat", REPEAT_WHAT, func(i: int) -> void: rep_what = REPEAT_WHAT[i][0])
+	rail.pictures(_repeat_box, "Repeat", REPEAT_WHAT, func(id: String) -> void: rep_what = id, rep_what, 2)
 	_rep_lo_spin = _spin(_repeat_box, "storey from (plate)", 0, 2000, rep_lo, func(v: float) -> void: rep_lo = int(v))
 	_rep_hi_spin = _spin(_repeat_box, "to (plate)", 0, 2000, rep_hi, func(v: float) -> void: rep_hi = int(v))
-	_choice(_repeat_box, "which way", REPEAT_DIRS, func(i: int) -> void: rep_dir = REPEAT_DIRS[i][0])
+	rail.pictures(_repeat_box, "Which way", REPEAT_DIRS, func(id: String) -> void: rep_dir = id, rep_dir, 3)
 	_spin(_repeat_box, "times", 1, 50, rep_times, func(v: float) -> void: rep_times = int(v))
 	_spin(_repeat_box, "gap (studs, or plates up)", 0, 100, rep_gap, func(v: float) -> void: rep_gap = int(v))
 	_button(_repeat_box, "Repeat", func() -> void: repeat(rep_dir, rep_times, rep_gap))
@@ -1429,6 +1462,8 @@ func _fit(n: Node) -> void:
 
 
 func _rail_right() -> float:
+	if rail.flyout != null and rail.flyout.visible:
+		return rail.flyout.position.x + rail.flyout.size.x + 12.0
 	return rail.position.x + rail.size.x + 12.0
 
 
@@ -1465,11 +1500,12 @@ func input(e: InputEvent) -> bool:
 				pick("place" if tool == "repeat" else "repeat")
 				return true
 			KEY_ESCAPE:
-				if tool != "place" and not dragging() and _stair_from == NO_CELL:
-					pick("place")
-				else:
+				if dragging() or _stair_from != NO_CELL or not pen.points.is_empty():
 					cancel()
-				return false   # Esc still frees the mouse
+					say("")
+					ws.get_viewport().set_input_as_handled()
+					return true
+				return false   # the pause menu's
 			KEY_ENTER, KEY_KP_ENTER:
 				if _drag.get("phase", "") == "height":
 					commit_pending()
@@ -1624,6 +1660,7 @@ func raise_plan() -> void:
 		hi = hi.max(c)
 	var rec := _new_shape("plan", "flat", lo, hi, int(_draft.at), pts)
 	rec.fill = sketch_makes == "solid"
+	rec.rim = wall_rim()
 	if sketch_makes == "building":
 		rec.storey = storey_courses * height_step("flat")
 		rec.floor = 1
@@ -1649,7 +1686,7 @@ func plan_on_top(with_plan: bool) -> void:
 		_draft.subs = (sh.points.subs as Array).duplicate(true)
 	if _level_spin != null:
 		_level_spin.set_value_no_signal(sketch_level)
-		_drawon_pick.select(1)
+		ToolRail.light(_drawon_row, "level")
 	say("On top, at plate %d. Draw%s, then Raise." % [sketch_level, " onto its plan" if with_plan else ""])
 
 
@@ -1723,6 +1760,7 @@ func _base_record(d: Dictionary) -> Dictionary:
 			rec = _new_shape("polyline", "flat", Vector2i(mini(a.x, b.x), mini(a.y, b.y)),
 					Vector2i(maxi(a.x, b.x), maxi(a.y, b.y)), int(d.at),
 					{"pts": [[a.x, a.y], [b.x, b.y]], "closed": false})
+			rec.rim = wall_rim()
 		"floor":
 			if a == b:
 				rec = floor_record(Vector3i(a.x, int(d.at), a.y), floor_on_top)
@@ -1804,6 +1842,7 @@ func _pull_height() -> void:
 		bricks = " (%d course%s)" % [rec.depth / step, "" if rec.depth / step == 1 else "s"]
 	say(("%d plate%s tall%s" % [rec.depth, "" if rec.depth == 1 else "s", bricks] if l == "flat"
 			else "%d stud%s thick" % [rec.depth, "" if rec.depth == 1 else "s"])
+			+ (" (%d cells left empty)" % _plan_gaps if rec.get("strict", false) and _plan_gaps > 0 else "")
 			+ ". Click to place; right-click or Esc cancels.")
 
 
@@ -1868,9 +1907,9 @@ func _commit_wall(rec: Dictionary) -> int:
 ## The bricks a shape will lay, worked out as it would lay them (cached while it does not
 ## change): [[part, cell], ...].
 func _plan_for(rec: Dictionary) -> Array:
-	var key := "%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s" % [rec.kind, rec.lie, rec.a, rec.b, rec.at, rec.depth,
+	var key := "%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s" % [rec.kind, rec.lie, rec.a, rec.b, rec.at, rec.depth,
 			rec.get("rim", 1), rec.part, str(rec.get("points", [])).hash(), rec.get("fill", false),
-			rec.get("storey", 0), rec.get("roof", false)]
+			rec.get("storey", 0), rec.get("roof", false), rec.get("strict", false)]
 	if key == _plan_key:
 		return _plan
 	_plan_key = key
@@ -1882,9 +1921,15 @@ func _plan_for(rec: Dictionary) -> Array:
 	for c in cells:
 		if ws.world.is_solid(ws.asm.frames[0], c):
 			taken[c] = true
-	var parts := BrickShapes.parts_for(_fill_part(String(rec.part)), ws.palette)
+	var strict := bool(rec.get("strict", false))
+	var parts := BrickShapes.parts_for(_fill_part(String(rec.part)), ws.palette, strict)
 	_plan = BrickShapes.pack_courses(cells, parts, String(rec.bond) != "align", taken, _base_layer(rec),
-			BrickShapes.course_starts(rec, height_step("flat")))
+			BrickShapes.course_starts(rec, height_step("flat")), strict)
+	var covered := 0
+	for pc in _plan:
+		var size := BrickPalette.size_of(String(pc[0]))
+		covered += size.x * size.y * size.z
+	_plan_gaps = cells.size() - taken.size() - covered
 	return _plan
 
 
@@ -1950,7 +1995,7 @@ func finish_walls(closed: bool) -> int:
 		lo = Vector2i(mini(lo.x, c.x), mini(lo.y, c.y))
 		hi = Vector2i(maxi(hi.x, c.x), maxi(hi.y, c.y))
 	var sh := _new_shape("polyline", "flat", lo, hi, _wall_at, {"pts": pts, "closed": closed and _wall_pts.size() >= 3})
-	sh.rim = held_width()
+	sh.rim = wall_rim()
 	sh.depth = tall
 	_wall_pts.clear()
 	say("")
@@ -2202,13 +2247,14 @@ func _sync_select() -> void:
 # ---------------------------------------------------------------------------
 
 func process() -> void:
+	view.sync()
 	var top: float = 12.0 + (ws._menu.bar_height() if ws._menu != null else 0.0)
 	rail.position = Vector2(12, top)
 	rail.size = Vector2.ZERO
 	var on := active()
 	rail.show_active(on, TOOLS)
 	rail.show_toggles({"lock": ws.plane_locked, "snap": ws._snap_on, "mirror": ws.mirror_on,
-			"grid": ws._grid_on, "stress": ws._overlay_on, "keys": ws._keys_on})
+			"grid": ws._grid_on, "stress": ws._overlay_on, "keys": ws._keys_on, "fps": view.mode == "fps"})
 	rail.set_action_text("layer", ["Structure", "Interior", "Detail"][clampi(ws._role, 0, 2)])
 	rail.set_action_text("mirror_axis", "across X" if ws.mirror_axis == 0 else "across Z")
 	var vh: float = ws.get_viewport().get_visible_rect().size.y
@@ -2239,15 +2285,14 @@ func process() -> void:
 		_module_min.set_value_no_signal(int(mod.get("min", 0)))
 		_module_max.set_value_no_signal(int(mod.get("max", -1)))
 		_module_weight.set_value_no_signal(float(mod.get("weight", 1.0)))
-	_shape_box.visible = on in ["shape", "sketch", "walls", "floor"]
+	_shape_box.visible = on in ["shape", "sketch", "walls", "floor", "stairs", "roof"]
 	_sketch_box.visible = on == "sketch"
 	_plan_box.visible = lie == "flat"
 	_level_row.visible = sketch_level >= 0
 	_storey_box.visible = sketch_makes == "building"
-	_kind_pick.get_parent().get_child(_kind_pick.get_index() - 1).visible = on == "shape"
-	_kind_pick.visible = on == "shape"
-	_sketch_box.get_child(2).visible = pen.draw == "brush"   # the brush's size
-	_sketch_box.get_child(3).visible = pen.draw == "brush"   # and shape
+	_kind_box.visible = on == "shape"
+	_brush_row.visible = pen.draw == "brush"
+	_brush_sq.visible = pen.draw == "brush"
 	_cut_box.visible = on == "cut"
 	_door_box.visible = cut_kind == "door"
 	_window_box.visible = cut_kind == "window"
@@ -2259,12 +2304,15 @@ func process() -> void:
 		_rep_lo_spin.get_parent().visible = rep_what == "storey"
 		_rep_hi_spin.get_parent().visible = rep_what == "storey"
 	_select_box.visible = on == "select"
-	_lie_pick.visible = on in ["shape", "sketch"]
-	_lie_pick.get_parent().get_child(_lie_pick.get_index() - 1).visible = on in ["shape", "sketch"]
+	_lie_box.visible = on in ["shape", "sketch"]
+	_thick_box.visible = on == "walls" or (on == "sketch" and sketch_makes != "solid" and lie == "flat")
+	_bricks_box.visible = true
 	if on == "select" and _shown != Vector2i(selected, _rev):
 		_shown = Vector2i(selected, _rev)
 		_sync_select()
-	# The workshop's readout and the paint palette move over beside the rail.
+	# The tool's pop-out beside its button; the readout and the paint palette beside that.
+	var bt: Button = rail.buttons.get(on)
+	rail.place_flyout(bt.global_position.y if bt != null else top, vh - 100.0)
 	var x := _rail_right()
 	if ws._hud != null:
 		ws._hud.position = Vector2(x, top)
