@@ -52,7 +52,7 @@ uniform bool glass_pass = false;
 // Solid PBR wood, as brick.gdshader's uniforms of the same names.
 uniform float wood_pbr_range = 14.0;
 uniform float wood_far_range = 60.0;
-uniform float wood_bump : hint_range(0.0, 3.0) = 1.0;
+uniform float wood_bump : hint_range(0.0, 4.0) = 2.0;
 
 global uniform float lod_zoom;
 varying vec3 v_local;
