@@ -49,6 +49,8 @@ const MARK_MODES := [["rooms", "rooms, and an opening's kind"],
 const MODULE_ROLES := ["room", "corridor", "stair", "start", "finish", "hang",
 		"core", "node", "pod", "tube", "truss", "dock"]
 const MODULE_STOREYS := ["any", "ground", "upper", "top"]
+## Where in a ship's hull (RoomPack, Docs/RoomModules.md 7.4).
+const MODULE_ZONES := ["any", "fore", "mid", "aft", "core", "hull"]
 ## How long the bricks must be still before the rooms are found again: a held
 ## click lays a brick a frame, and each one would find every room again.
 const REFIND_AFTER_MS := 200
@@ -58,6 +60,7 @@ var active := false
 var kind := "office"         ## what the next room found is
 var point_kind := "loot"
 var mark := "rooms"          ## what a click marks (MARK_MODES)
+var _hull: BuildRecipe = null  ## the hull the last ship interior was made in (RoomPack)
 var _generate_asked_ms := -1  ## when Generate last asked (-1: not asked) before replacing unsaved work
 var selected := -1           ## index into the record's spaces
 var message := ""
@@ -309,7 +312,7 @@ func toggle_mark(from: Vector3, dir: Vector3, what: String) -> void:
 func module() -> Dictionary:
 	if not ws.recipe.meta.has("module"):
 		ws.recipe.meta["module"] = {"on": false, "role": "room", "min": 0, "max": -1,
-				"weight": 1.0, "storeys": "any"}
+				"weight": 1.0, "storeys": "any", "zone": "any"}
 	return ws.recipe.meta["module"]
 
 
@@ -339,12 +342,24 @@ func generate(params: Dictionary) -> Dictionary:
 		params = params.duplicate()
 		params.footprint = RoomShell.footprint_of(ws.recipe)
 	var station := String(params.get("generator", "grow")) == "station"
+	var pack := String(params.get("generator", "grow")) == "pack"
+	if pack:
+		# The build open now is the hull -- or, after an interior, the hull it was made in.
+		var made_here := String(ws.recipe.meta.get("generated", {}).get("generator", "")) == "pack"
+		if not made_here or _hull == null:
+			if ws.recipe.is_empty():
+				message = "no hull: build or open a ship's hull to fill"
+				return {}
+			_hull = BuildRecipe.from_dict(ws.recipe.to_dict())
+		params = params.duplicate()
+		params.hull = _hull
 	var plan := RoomShell.generate(lib, params) if shell \
-			else RoomStation.generate(lib, params) if station else RoomGrow.grow(lib, params)
+			else RoomStation.generate(lib, params) if station \
+			else RoomPack.generate(lib, params) if pack else RoomGrow.grow(lib, params)
 	if not plan.ok:
-		message = "no %s: %s" % ["station" if station else "building", plan.why]
+		message = "no %s: %s" % ["station" if station else "interior" if pack else "building", plan.why]
 		return plan
-	var r: BuildRecipe = plan.recipe if shell or station else RoomGrow.lay(lib, plan, true)
+	var r: BuildRecipe = plan.recipe if shell or station or pack else RoomGrow.lay(lib, plan, true)
 	# A building bigger than the baseplate, or taller than the volume over it,
 	# gets a bigger one (a cube in ticks, as the plate always is:
 	# Workshop.height_plates).
@@ -362,6 +377,12 @@ func generate(params: Dictionary) -> Dictionary:
 	var sm: Dictionary = r.meta.get("sections", {})
 	var cut := "" if sm.is_empty() else ", %d section(s) %s, %d joint(s)" % [(sm.sections as Array).size(),
 			str((sm.sections as Array).map(func(s) -> int: return int(s.bricks))), (sm.joints as Array).size()]
+	if pack:
+		message = "ship interior (seed %d): %d deck(s), fill %.0f%%, %d modules, %d other room(s), %d nook(s), %d bulkhead(s), fore %s%s" % [
+				int(params.get("seed", 1)), st.decks, float(st.fill) * 100.0, st.modules, st.rooms - st.nooks,
+				st.nooks, st.bulkheads, st.fore, ", turned a quarter" if int(st.turned) > 0 else ""] + cut
+		draw()
+		return plan
 	if station:
 		message = "station (seed %d): %d modules, %d dock(s), %d loop(s), %d bridging tube(s), %d wing(s), %d radiator(s), %d cap(s)" % [
 				int(params.get("seed", 1)), st.modules, st.docks, st.loops, st.bridges, st.wings, st.radiators,

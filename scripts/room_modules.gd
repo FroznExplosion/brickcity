@@ -14,7 +14,8 @@ extends RefCounted
 ##   {name, rules, turns: [one per quarter turn, see _turn]}
 
 ## Where a module's rules start (Docs/RoomModules.md 1).
-const RULES := {"on": false, "role": "room", "min": 0, "max": -1, "weight": 1.0, "storeys": "any"}
+const RULES := {"on": false, "role": "room", "min": 0, "max": -1, "weight": 1.0, "storeys": "any",
+		"zone": "any"}
 ## Probes put their own modules here (Engine meta: a scene load resets class
 ## statics) instead of the library folders.
 const META_RECIPES := "room_modules_recipes"

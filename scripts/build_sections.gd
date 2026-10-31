@@ -227,10 +227,21 @@ static func split(r: BuildRecipe) -> Array:
 
 # ---------------------------------------------------------------------------
 
-## The plan's units: a tower's storeys (one over another), else its placements
-## (joined where the plan joined them); the root the ground storey or the start.
+## The plan's units: a ship's stretches between bulkheads (the bulkhead with
+## the stretch aft of it; fore the root), a tower's storeys (one over another),
+## else its placements (joined where the plan joined them); the root the ground
+## storey or the start.
 static func _units(lib: Array, plan: Dictionary, shift: Vector3i) -> Dictionary:
 	var placed: Array = plan.get("placed", [])
+	if String(plan.get("generator", "grow")) == "pack":
+		# A ship: the stretches between its bulkheads, the fore one the root.
+		var segs: Array = plan.segments
+		var n := segs.size() + 1
+		var adj := []
+		for k in n:
+			adj.append(([k - 1] if k > 0 else []) + ([k + 1] if k < n - 1 else []))
+		return {"kind": "bulkhead", "n": n, "segments": segs, "x0": shift.x, "adj": adj,
+				"root": n - 1 if int(plan.get("fore", 1)) > 0 else 0}
 	if String(plan.get("generator", "grow")) == "shell":
 		var n := maxi(int(plan.stats.storeys), 1)
 		var adj := []
@@ -263,6 +274,12 @@ static func _units(lib: Array, plan: Dictionary, shift: Vector3i) -> Dictionary:
 
 
 static func _unit_of(u: Dictionary, c: Vector3i) -> int:
+	if String(u.kind) == "bulkhead":
+		var k := 0
+		for b in u.segments:
+			if int(b) + int(u.x0) < c.x:
+				k += 1
+		return k
 	if String(u.kind) == "storey":
 		@warning_ignore("integer_division")
 		return clampi((c.y - int(u.y0)) / maxi(int(u.pitch), 1), 0, int(u.n) - 1)
