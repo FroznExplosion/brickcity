@@ -29,6 +29,9 @@ func _initialize() -> void:
 	await process_frame
 	_ws._builds_dir = "user://_probe_builds/"
 	_ws._save_path = "user://_probe_quick.json"
+	_ok("Draw starts on a line that makes walls", _ws._tools.outline == "line" and _ws._tools.makes == "walls")
+	_ws._tools.set_outline("box")
+	_ws._tools.makes = "solid"
 	_rail_checks()
 	_run_checks()
 	_kept_checks()
@@ -43,6 +46,7 @@ func _initialize() -> void:
 	_pull_checks()
 	_floor_plan_checks()
 	await _simpler_checks()
+	_draw_checks()
 	print("\n%d passed, %d failed" % [_pass, _fail])
 	quit(1 if _fail > 0 else 0)
 
@@ -228,8 +232,8 @@ func _rail_checks() -> void:
 	_ok("with its tools, each with a pop-up and an icon", t.rail.buttons.size() == WorkshopTools.TOOLS.size()
 			and (t.rail.buttons.values() as Array).all(func(b: Button) -> bool:
 				return b.tooltip_text.length() > 20 and b.icon != null))
-	t.pick("shape")
-	_ok("a tool picked is the one lit", t.active() == "shape")
+	t.pick("draw")
+	_ok("a tool picked is the one lit", t.active() == "draw")
 	t.pick("paint")
 	_ok("Paint is the workshop's own brush", _ws._painting and t.active() == "paint")
 	t.pick("place")
@@ -421,10 +425,11 @@ func _sketch_checks() -> void:
 	var t: WorkshopTools = _ws._tools
 	var f0: int = _ws.asm.frames[0]
 	_hold("brick_1x2")
-	t.pick("sketch")
-	_ok("Sketch is on the rail", t.active() == "sketch" and t.rail.buttons.has("sketch"))
+	t.pick("draw")
+	_ok("Sketch is on the rail", t.active() == "draw" and t.rail.buttons.has("draw"))
 	t.tall = 3
 	t.pen.draw = "polygon"
+	t.combine = true
 	t._sk = {"lie": "flat", "at": 1}
 	for q in [Vector2(4, 4), Vector2(12, 4), Vector2(12, 10)]:
 		t.pen.polygon_click(q, false, false)
@@ -434,9 +439,10 @@ func _sketch_checks() -> void:
 	for q in [Vector2(4, 4), Vector2(12, 4), Vector2(12, 10), Vector2(4, 10)]:
 		t.pen.polygon_click(q, false, false)
 	t._sketch_commit()
-	_ok("a stroke on a level goes into the plan, nothing laid yet", t.shapes().is_empty() and not t._draft.is_empty())
+	_ok("combining: a stroke goes into the plan, nothing laid yet", t.shapes().is_empty() and not t._draft.is_empty())
 	t.raise_plan()
 	t.commit_pending()
+	t.combine = false
 	_ok("raised and placed: a kept shape", t.shapes().size() == 1 and String(t.shapes()[0].kind) == "plan")
 	var cells := BrickShapes.shape_cells(t.shapes()[0])
 	var filled := 0
@@ -576,7 +582,7 @@ func _repeat_checks() -> void:
 	_ok("a window repeated twice along X, a stud between frames: three windows of glass", ok)
 	_ok("its copies cut the wall they land on", (t.shape_of(wall).cuts as Array).size() >= 4)
 	# A sketched brush stroke laid with LMB is a shape too.
-	t.pick("sketch")
+	t.pick("draw")
 	t.pen.draw = "brush"
 	t.brush_size = 1
 	t._sk = {"lie": "flat", "at": 1}
@@ -603,7 +609,7 @@ func _button_checks() -> void:
 	for row in WorkshopTools.TOOLS:
 		var b: Button = t.rail.buttons.get(row[0])
 		tools_ok = tools_ok and b != null and b.icon != null
-	_ok("every tool a button with an icon", tools_ok and t.rail.buttons.size() == 14)
+	_ok("every tool a button with an icon", tools_ok and t.rail.buttons.size() == 11)
 	var yaw: int = _ws._yaw
 	t.act("rotate")
 	_ok("Rotate turns the brick in hand", _ws._yaw == (yaw + 1) % 4)
@@ -775,7 +781,7 @@ func _pull_checks() -> void:
 	_ok("and a wall of it is two studs thick", t.held_width() == 2)
 	_hold("brick_1x2")
 	# Walls: drag a line, let go, pull it up 9 plates, click.
-	t.pick("walls")
+	t.pick("draw")
 	t._drag = {"phase": "base", "tool": "walls", "button": MOUSE_BUTTON_LEFT, "lie": "flat", "at": 1,
 			"a": Vector2i(4, 4), "b": Vector2i(15, 4), "kind": "polyline", "cut": false}
 	var plan := t._plan_for(t._making())
@@ -806,7 +812,7 @@ func _pull_checks() -> void:
 			{"kind": "hollow", "lie": "flat", "a": [4, 4], "b": [15, 11], "at": 1, "depth": 9, "rim": 1}))
 	# Floor: a click (no drag) inside fills it; pulled to 2 plates, of the held plate.
 	_hold("plate_2x2")
-	t.pick("floor")
+	t.pick("draw")
 	t._drag = {"phase": "base", "tool": "floor", "button": MOUSE_BUTTON_LEFT, "lie": "flat", "at": 1,
 			"a": Vector2i(8, 7), "b": Vector2i(8, 7), "kind": "rect", "cut": false}
 	t._to_height()
@@ -818,7 +824,7 @@ func _pull_checks() -> void:
 			and BrickPalette.part_of(String(t.shape_of(f).bricks[0][0])).begins_with("plate_"))
 	# Shapes: a ring footprint, then its height.
 	_hold("brick_1x2")
-	t.pick("shape")
+	t.pick("draw")
 	t.kind = "ring"
 	t._drag = {"phase": "base", "tool": "shape", "button": MOUSE_BUTTON_LEFT, "lie": "flat", "at": 1,
 			"a": Vector2i(24, 24), "b": Vector2i(34, 34), "kind": "ring", "cut": false}
@@ -864,9 +870,10 @@ func _floor_plan_checks() -> void:
 	var t: WorkshopTools = _ws._tools
 	var f0: int = _ws.asm.frames[0]
 	_hold("brick_1x2")
-	t.pick("sketch")
+	t.pick("draw")
 	t.lie = "flat"
 	t.sketch_level = 1
+	t.combine = true
 	# The plan: a rectangle and a wing on its side, two strokes.
 	for poly in [[Vector2(4, 4), Vector2(20, 4), Vector2(20, 16), Vector2(4, 16)],
 			[Vector2(20, 8), Vector2(26, 8), Vector2(26, 12), Vector2(20, 12)]]:
@@ -877,7 +884,7 @@ func _floor_plan_checks() -> void:
 			t.pen.polygon_click(q, false, false)
 		t._sketch_commit()
 	_ok("two strokes, one plan", (t._draft.adds as Array).size() == 2 and t.shapes().is_empty())
-	t.sketch_makes = "building"
+	t.makes = "building"
 	t.storey_courses = 3
 	t.flat_roof = true
 	t.raise_plan()
@@ -932,7 +939,7 @@ func _floor_plan_checks() -> void:
 	_ok("on top of the last building, starting from its plan", int(t._draft.at) == 22
 			and (t._draft.adds as Array).size() == 2)
 	(t._draft.subs as Array).append([[20, 4], [27, 4], [27, 17], [20, 17]])
-	t.sketch_makes = "walls"
+	t.makes = "walls"
 	t.raise_plan()
 	t._drag.rec.depth = 6
 	var top := t.commit_pending()
@@ -944,9 +951,10 @@ func _floor_plan_checks() -> void:
 	for c in BrickShapes.solid_cells(sh):
 		want[c + Vector3i(3, 0, 2)] = true
 	_ok("a plan moved is its cells moved", BrickShapes.solid_cells(moved) == want)
+	t.combine = false
 	t.lie = "flat"
 	t.sketch_level = -1
-	t.sketch_makes = "solid"
+	t.makes = "solid"
 	t.pick("place")
 
 
@@ -982,15 +990,17 @@ func _simpler_checks() -> void:
 	v.zoom(1)
 	_ok("the wheel zooms", cam.global_position.distance_to(p0) > 0.1)
 	await process_frame
-	t.pick("shape")
+	t.pick("draw")
 	await process_frame
 	await process_frame
 	_ok("Shapes: a pop-out beside the rail", t.rail.flyout.visible
 			and t.rail.flyout.position.x >= t.rail.position.x + t.rail.size.x)
-	_ok("with every shape a picture", t._kind_row.size() == 8 and (t._kind_row["ring"] as Button).icon != null)
-	(t._kind_row["ring"] as Button).pressed.emit()
-	_ok("pressing one picks it", t.kind == "ring")
-	(t._kind_row["rect"] as Button).pressed.emit()
+	_ok("with every outline a picture", t._outline_row.size() == 8 and (t._outline_row["circle"] as Button).icon != null)
+	(t._outline_row["circle"] as Button).pressed.emit()
+	_ok("pressing one picks it", t.kind == "circle" and t.outline == "circle")
+	(t._outline_row["free"] as Button).pressed.emit()
+	_ok("the pen's outlines too", t.pen_outline() and t.pen.draw == "outline")
+	(t._outline_row["box"] as Button).pressed.emit()
 	t.pick("place")
 	await process_frame
 	await process_frame
@@ -1017,7 +1027,7 @@ func _simpler_checks() -> void:
 	# Wall thickness.
 	_ws._new_build()
 	_hold("brick_1x2")
-	t.pick("walls")
+	t.pick("draw")
 	t.wall_thick = 2
 	t._drag = {"phase": "base", "tool": "walls", "button": MOUSE_BUTTON_LEFT, "lie": "flat", "at": 1,
 			"a": Vector2i(4, 4), "b": Vector2i(15, 4), "kind": "polyline", "cut": false}
@@ -1029,10 +1039,10 @@ func _simpler_checks() -> void:
 	_ws._new_build()
 	_hold("brick_1x2")
 	t.wall_thick = 3
-	t.pick("sketch")
+	t.pick("draw")
 	t.lie = "flat"
 	t.sketch_level = 1
-	t.sketch_makes = "walls"
+	t.makes = "walls"
 	t.pen.draw = "polygon"
 	t.pen.points.clear()
 	t._sk = {"lie": "flat", "at": 1}
@@ -1045,11 +1055,11 @@ func _simpler_checks() -> void:
 	_ok("a floor plan's walls 3 studs thick", _solid(Vector3i(6, 2, 10)) and not _solid(Vector3i(7, 2, 10)))
 	t.wall_thick = 0
 	t.sketch_level = -1
-	t.sketch_makes = "solid"
+	t.makes = "solid"
 	# Two walls meet at a corner.
 	_ws._new_build()
 	_hold("brick_1x2")
-	t.pick("walls")
+	t.pick("draw")
 	var w1: int = _a_wall(t, Vector2i(4, 4), Vector2i(15, 4), 9)
 	_ok("a wall's end snaps to the corner near it", t._wall_snap(Vector2i(14, 5), 1) == Vector2i(15, 4))
 	_ok("and onto a wall's line", t._wall_snap(Vector2i(9, 5), 1) == Vector2i(9, 4))
@@ -1095,7 +1105,7 @@ func _simpler_checks() -> void:
 	t.commit_pending()
 	_ok("dragged 2 deep: a pocket", not _solid(Vector3i(11, 4, 5)) and _solid(Vector3i(11, 4, 6)))
 	# A shape comes out of a wall's face.
-	t.pick("shape")
+	t.pick("draw")
 	var f3 := t.face_under(Vector3(9.5 * 0.35, 3.5 * 0.14, -3.0), Vector3(0, 0, 1))
 	_hold("brick_1x2")
 	t._begin_on_face(f3, false, MOUSE_BUTTON_LEFT)
@@ -1118,3 +1128,130 @@ func _a_wall(t: WorkshopTools, a: Vector2i, b: Vector2i, depth: int) -> int:
 	_wall_started = int(t._drag.rec.depth)
 	t._drag.rec.depth = depth
 	return t.commit_pending()
+
+
+## A drag as the mouse makes one: the press, the base, let go.
+func _drag_outline(t: WorkshopTools, cell: Vector3i, b: Vector2i) -> void:
+	_ws._cell = cell
+	var press := InputEventMouseButton.new()
+	press.button_index = MOUSE_BUTTON_LEFT
+	press.pressed = true
+	t._make_input(press)
+	t._drag.b = b
+	var up := InputEventMouseButton.new()
+	up.button_index = MOUSE_BUTTON_LEFT
+	t._make_input(up)
+
+
+func _draw_checks() -> void:
+	print("[probe] one Draw tool: an outline and what it makes (section 11)")
+	_ws._new_build()
+	var t: WorkshopTools = _ws._tools
+	var f0: int = _ws.asm.frames[0]
+	_hold("brick_1x2")
+	t.pick("draw")
+	_ok("the rail has Draw, not the four it replaces", t.rail.buttons.has("draw") and not t.rail.buttons.has("shape")
+			and not t.rail.buttons.has("walls") and not t.rail.buttons.has("floor") and not t.rail.buttons.has("sketch"))
+	# A line that makes walls, by the real press and let go.
+	t.set_outline("line")
+	t.makes = "walls"
+	_drag_outline(t, Vector3i(4, 1, 4), Vector2i(15, 4))
+	_ok("press, drag, let go: the height comes next", t._drag.get("phase", "") == "height" and t._drag.rec.kind == "polyline")
+	t._drag.rec.depth = 9
+	var w := t.commit_pending()
+	_ok("a line makes a wall", w >= 0 and _solid(Vector3i(10, 5, 4)))
+	var rmb := InputEventMouseButton.new()
+	rmb.button_index = MOUSE_BUTTON_RIGHT
+	rmb.pressed = true
+	_ok("RMB outside a drawing is the workshop's own", not t._make_input(rmb))
+	# A box that makes walls is a room, and meets the wall.
+	_ws._new_build()
+	t.set_outline("box")
+	_ok("a box making walls goes as walls", t._route() == "walls")
+	_drag_outline(t, Vector3i(4, 1, 4), Vector2i(15, 11))
+	t._drag.rec.depth = 9
+	var room := t.commit_pending()
+	_ok("a box makes a room: its inside open", room >= 0 and _solid(Vector3i(4, 5, 8)) and _solid(Vector3i(15, 5, 8))
+			and not _solid(Vector3i(9, 5, 8)))
+	t.set_outline("line")
+	_drag_outline(t, Vector3i(9, 1, 4), Vector2i(9, 11))
+	_ok("a wall across it starts at its height", int(t._drag.rec.depth) == 9)
+	var inner := t.commit_pending()
+	_ok("and joins it", inner == room and t.shapes().size() == 1 and _solid(Vector3i(9, 5, 8)))
+	# A circle that makes walls is a round tower, a circle solid is a drum.
+	_ws._new_build()
+	t.set_outline("circle")
+	_drag_outline(t, Vector3i(4, 1, 4), Vector2i(20, 20))
+	t._drag.rec.depth = 6
+	var ct := t.commit_pending()
+	_ok("a circle makes round walls", ct >= 0 and String(t.shape_of(ct).kind) == "plan" and _solid(Vector3i(12, 3, 4))
+			and not _solid(Vector3i(12, 3, 12)))
+	t.makes = "solid"
+	_drag_outline(t, Vector3i(26, 1, 26), Vector2i(36, 36))
+	t.commit_pending()
+	_ok("a circle makes a solid", _solid(Vector3i(31, 1, 31)))
+	# A freehand outline that makes a building.
+	_ws._new_build()
+	t.set_outline("corners")
+	t.makes = "building"
+	t.storey_courses = 2
+	t.flat_roof = false
+	t._sk = {"lie": "flat", "at": 1}
+	for q in [Vector2(4, 4), Vector2(24, 4), Vector2(24, 18), Vector2(4, 18)]:
+		t.pen.polygon_click(q, false, false)
+	t._sketch_commit()
+	_ok("corners that make a building: on to its height at once", t._drag.get("phase", "") == "height"
+			and int(t._drag.rec.depth) == 7 and t._draft.is_empty())
+	t._drag.rec.depth = 14
+	t.commit_pending()
+	_ok("two storeys", _solid(Vector3i(10, 1, 10)) and _solid(Vector3i(10, 8, 10)) and not _solid(Vector3i(10, 4, 10)))
+	# A box that makes a building, a floor filling walls.
+	_ws._new_build()
+	t.flat_roof = true
+	t.set_outline("box")
+	_ok("a box making a building is a plan", t._route() == "shape")
+	_drag_outline(t, Vector3i(4, 1, 4), Vector2i(15, 11))
+	_ok("a storey to start", String(t._drag.rec.kind) == "plan" and int(t._drag.rec.depth) == 8, str(t._drag.rec.depth))
+	t.commit_pending()
+	_ok("placed", _solid(Vector3i(9, 1, 8)) and _solid(Vector3i(9, 8, 8)) and not _solid(Vector3i(9, 4, 8)))
+	_ws._new_build()
+	t.makes = "walls"
+	_drag_outline(t, Vector3i(4, 1, 4), Vector2i(15, 11))
+	t._drag.rec.depth = 6
+	t.commit_pending()
+	t.makes = "floor"
+	_hold("plate_2x2")
+	_ok("a floor goes as a floor", t._route() == "floor")
+	_drag_outline(t, Vector3i(8, 1, 7), Vector2i(8, 7))
+	_ok("a click fills the walls round it", String(t._drag.rec.kind) == "cells" and int(t._drag.rec.depth) == 1)
+	t.commit_pending()
+	_ok("laid", _solid(Vector3i(5, 1, 5)) and _solid(Vector3i(14, 1, 10)))
+	# Combined: a box and a circle, one plan; Cut out takes a bite.
+	_ws._new_build()
+	_hold("brick_1x2")
+	t.makes = "walls"
+	t.combine = true
+	t.set_outline("box")
+	_ok("combining, a box waits in the plan", t._route() == "shape")
+	_drag_outline(t, Vector3i(4, 1, 4), Vector2i(15, 11))
+	t.set_outline("circle")
+	_drag_outline(t, Vector3i(12, 1, 8), Vector2i(20, 16))
+	_ok("two outlines, one plan, nothing laid", (t._draft.adds as Array).size() == 2 and t.shapes().is_empty()
+			and t._drag.is_empty())
+	t.set_outline("box")
+	t.cut_mode = true
+	_drag_outline(t, Vector3i(5, 1, 5), Vector2i(7, 7))
+	t.cut_mode = false
+	_ok("Cut out takes area from the plan", (t._draft.subs as Array).size() == 1)
+	_drag_outline(t, Vector3i(10, 1, 8), Vector2i(10, 8))
+	_ok("a click inside raises it", t._drag.get("phase", "") == "height" and t._draft.size() > 0)
+	var plan := t.commit_pending()
+	var region := BrickShapes.plan_region(t.shape_of(plan).points)
+	_ok("laid along the one outline", plan >= 0 and region.has(Vector2i(18, 12)) and region.has(Vector2i(4, 4))
+			and not region.has(Vector2i(6, 6)) and _solid(Vector3i(4, 1, 4)) and not _solid(Vector3i(10, 1, 8)))
+	var moved := BrickShapes.reflected(t.shape_of(plan), 0, 24.0)
+	_ok("a plan of shapes mirrors", BrickShapes.plan_region(moved.points).has(Vector2i(47 - 18, 12)))
+	t.combine = false
+	t.makes = "solid"
+	t.set_outline("box")
+	t.pick("place")
