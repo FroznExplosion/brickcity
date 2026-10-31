@@ -287,6 +287,8 @@ func far_tier() -> void:
 		return
 	var eye := cam.global_position
 	var centre := planet.global_position
+	# Asleep (11.12), a planet is turned; awake, this is the identity at its centre.
+	var pg := planet.global_transform
 	var r := planet.data.radius
 	var h_eye := maxf(planet.altitude_of(eye), 1.0)
 	var horizon := sqrt(h_eye * (2.0 * r + h_eye))
@@ -303,7 +305,7 @@ func far_tier() -> void:
 		var s := sites[i]
 		if s.toppled:
 			continue
-		var base := centre + s.frame * Vector3(s.fx * 0.175, 0.0, s.fz * 0.175)
+		var base := pg * (s.frame * Vector3(s.fx * 0.175, 0.0, s.fz * 0.175))
 		var dist := eye.distance_to(base + (centre - base).normalized() * -s.height * 0.5)
 		# Near: the shell, built on the way in, freed well past the edge.
 		if dist < NEAR_M + NEAR_FADE:
@@ -368,7 +370,7 @@ func far_tier() -> void:
 	for k in _landmarks.size():
 		var s := sites[_landmarks[k]]
 		var top := s.frame * Vector3(s.fx * 0.175, s.height + 2.0, s.fz * 0.175)
-		var dist := eye.distance_to(centre + top)
+		var dist := eye.distance_to(pg * top)
 		var size := maxf(BEACON_PX * dist / px_per_rad, 1.5) * seen
 		# Only past the near tier, and only from the air or over the horizon line.
 		var show := dist > NEAR_M and dist < horizon + sqrt(s.top_alt * (2.0 * r + s.top_alt)) + CREST_MARGIN

@@ -55,6 +55,12 @@ extends Resource
 @export var t_offset := 0.0
 ## An atmosphere: its shell, its sky. Moons have none.
 @export var has_air := true
+## On every biome's colour: a generated world's own cast.
+@export var tint := Color.WHITE
+## Where its towns and landmarks stand (unit, planet-local; their pads are in
+## `pads`). StarSystem settles them; PlanetSystem builds them on the way in.
+@export var towns: Array[Vector3] = []
+@export var landmarks: Array[Vector3] = []
 
 ## Flat pads the ground is levelled to, for buildings to stand on (Planets.md 11.2):
 ## each {dir: Vector3 (unit, planet-local), height: float (over the datum),

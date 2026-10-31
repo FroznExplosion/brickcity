@@ -45,6 +45,10 @@ const BAKE_FULL := Vector2i(512, 256)
 ## than SEE_FAR (a far plane of 5e7 m broke the renderer's light culler).
 const FAR_VIEW := 100000.0
 const SEE_FAR := 250000.0
+## A settled world's buildings are made within POPULATE_AT of the player, and
+## its far tier kept up within FAR_TIER_AT (past it they are gone from the screen).
+const POPULATE_AT := 700000.0
+const FAR_TIER_AT := 1000000.0
 ## Top-level nodes in this group are the player's: they travel, never sleep.
 const RIG := &"player_rig"
 
@@ -77,6 +81,9 @@ var station: SpaceStation = null
 ## Ships (step 3), and the one the player is aboard in space, or null.
 var ships: Array[SpaceShip] = []
 var ship: SpaceShip = null
+## Body -> its PlanetBuildings (the home planet's is the scene's) and PlanetTrees.
+var built := {}
+var trees_of := {}
 ## Where the star truly is (its node); `star_look` draws it.
 var star: Node3D
 var star_look: MeshInstance3D
@@ -231,8 +238,16 @@ func hour_at(p: Vector3) -> float:
 	return fposmod(12.0 - here.signed_angle_to(s, axis) * 12.0 / PI, 24.0)
 
 
-## The floating origin moved the scene: a station's or ship's bricks follow.
+## The buildings of the world the player is on, or null.
+func buildings_here() -> PlanetBuildings:
+	return built.get(anchor) if anchor != null else null
+
+
+## The floating origin moved the scene: a station's or ship's bricks follow,
+## and a generated world's (the scene moves home's, with its AI).
 func on_origin_shift() -> void:
+	if anchor != null and index_of(anchor) != sys.home and built.has(anchor):
+		(built[anchor] as PlanetBuildings).on_origin_shift()
 	if station != null:
 		station.on_origin_shift()
 	for s in ships:
@@ -251,12 +266,46 @@ func _process(delta: float) -> void:
 		_choose_anchor(observer.call())
 		_prepare_near(observer.call())
 		_ship_bricks(observer.call())
+		_populate_near(observer.call())
 	_place()
 	_gravity()
 	if eye.is_valid():
 		_light(eye.call())
 		_scaled_space(eye.call())
+		_far_tiers(eye.call())
 	_bake_service()
+
+
+## One settled world's buildings a frame, once the player is near enough to see them.
+func _populate_near(p: Vector3) -> void:
+	for b in bodies:
+		if not b.data.towns.is_empty() and not built.has(b) \
+				and (b.global_position - p).length() < POPULATE_AT:
+			_populate(b)
+			return
+
+
+func _populate(b: PlanetBody) -> void:
+	var t0 := Time.get_ticks_usec()
+	var rng := RandomNumberGenerator.new()
+	rng.seed = hash(str("build:", b.data.planet_seed))
+	var pb := PlanetBuildings.new()
+	b.add_child(pb)
+	pb.setup(b)
+	for dir in b.data.towns:
+		pb.add_town(dir, rng.randi_range(3, 6), 30.0, rng)
+	for dir in b.data.landmarks:
+		pb.add_landmark(dir, 80, 80, rng.randi_range(400, 900), rng)
+	pb.finish()
+	built[b] = pb
+	print("[system] %s: %d buildings in %.1f ms" % [b.data.planet_name, pb.sites.size(), (Time.get_ticks_usec() - t0) / 1000.0])
+
+
+## A world asleep is still seen from space: its far tier, while it could show.
+func _far_tiers(e: Vector3) -> void:
+	for b in built:
+		if b != anchor and ((b as PlanetBody).global_position - e).length() < FAR_TIER_AT:
+			(built[b] as PlanetBuildings).far_tier()
 
 
 ## A station's template built once the player is within PREPARE_AT of it.
@@ -499,9 +548,19 @@ func _wake(f: Node3D) -> void:
 	WorldFrame.origin = -f.global_position
 	if f is PlanetBody:
 		_full_bake(f)
+		if not (f as PlanetBody).data.towns.is_empty() and not built.has(f):
+			_populate(f)
+		if (f as PlanetBody).data.has_air and index_of(f) != sys.home and not trees_of.has(f):
+			var tr := PlanetTrees.new()
+			f.add_child(tr)
+			tr.setup((f as PlanetBody).data)
+			tr.prebake()
+			trees_of[f] = tr
 	f.call(&"activate")
 	var offset: Vector3 = f.global_position - _left_at.get(f, f.global_position)
 	_left_at.erase(f)
+	if index_of(f as PlanetBody) != sys.home and built.has(f):
+		(built[f] as PlanetBuildings).on_origin_shift()
 	woke.emit(f, offset)
 
 

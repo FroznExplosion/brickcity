@@ -46,6 +46,9 @@ const TREES := [
 	[0.0, []],              # desert
 	[8.0, [3]],             # savanna
 	[170.0, [2, 0]],        # jungle: the bright ones
+	[0.0, []],              # scorched
+	[0.0, []],              # ice
+	[0.0, []],              # barren
 ]
 ## The densest biome's trees a hectare: a cell draws this many candidates a
 ## hectare and each keeps a tree with its own biome's share of it.

@@ -43,7 +43,25 @@ const TABLE := [
 			"t": Vector2(19.0, 100.0), "h": Vector2(0.32, 0.62)},
 	{"name": "jungle", "colour": Color(0.15, 0.35, 0.14), "dry": Color(0.22, 0.40, 0.18),
 			"t": Vector2(19.0, 100.0), "h": Vector2(0.62, 1.0)},
+	# Worlds the home planet is not (Planets.md 11.12 step 4), by biome_index's
+	# own tests before the table's bands; their bands keep the lookup off them.
+	{"name": "scorched", "colour": Color(0.30, 0.20, 0.17), "dry": Color(0.42, 0.25, 0.18),
+			"t": Vector2(1000.0, 1001.0), "h": Vector2(0.0, 1.0)},
+	{"name": "ice", "colour": Color(0.80, 0.86, 0.92), "dry": Color(0.70, 0.78, 0.86),
+			"t": Vector2(1000.0, 1001.0), "h": Vector2(0.0, 1.0)},
+	{"name": "barren", "colour": Color(0.46, 0.45, 0.44), "dry": Color(0.56, 0.54, 0.50),
+			"t": Vector2(1000.0, 1001.0), "h": Vector2(0.0, 1.0)},
 ]
+## TABLE's first row only other worlds have, and those rows.
+const OTHER_WORLDS := 8
+const SCORCHED := 8
+const ICE := 9
+const BARREN := 10
+## Over this it is scorched rock, under this ice, whatever the humidity.
+const T_SCORCHED := 55.0
+const T_ICE := -35.0
+## What an airless world's map says for temperature: no snow on it, it has no air.
+const T_AIRLESS := 10.0
 
 var data: PlanetData
 var axis := Vector3.UP
@@ -100,9 +118,15 @@ func humidity(dir: Vector3) -> float:
 ## a hill's top is the same biome as its foot, only colder -- snow is the
 ## shader's, from the temperature at the height).
 func biome_index(dir: Vector3) -> int:
+	if not data.has_air:
+		return BARREN
 	var p := dir * data.radius
 	var rag := _patch.get_noise_3dv(p)
 	var t := temperature_sea(dir) + rag * RAGGED_T
+	if t >= T_SCORCHED:
+		return SCORCHED
+	if t < T_ICE:
+		return ICE
 	var h := humidity(dir) + rag * RAGGED_H
 	for i in TABLE.size():
 		var e: Dictionary = TABLE[i]
@@ -132,7 +156,7 @@ func colour(dir: Vector3) -> Color:
 func _colour_of(dir: Vector3, index: int) -> Color:
 	var e: Dictionary = TABLE[index]
 	var m := clampf(0.5 + 0.6 * _mot.get_noise_3dv(dir * data.radius) + (0.5 - humidity(dir)) * 0.6, 0.0, 1.0)
-	return (e.colour as Color).lerp(e.dry, m)
+	return (e.colour as Color).lerp(e.dry, m) * data.tint
 
 
 ## The equirect map the ground shader samples: RGB the base colour, A the
@@ -161,5 +185,6 @@ func pixel(dir: Vector3) -> Color:
 func pixel_index(dir: Vector3) -> Array:
 	var i := biome_index(dir)
 	var c := _colour_of(dir, i)
-	c.a = clampf(inverse_lerp(T_RANGE.x, T_RANGE.y, temperature_sea(dir)), 0.0, 1.0)
+	var t := temperature_sea(dir) if data.has_air else T_AIRLESS
+	c.a = clampf(inverse_lerp(T_RANGE.x, T_RANGE.y, t), 0.0, 1.0)
 	return [c, i]

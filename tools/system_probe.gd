@@ -114,6 +114,7 @@ func _run() -> void:
 				cold += int(d.t_offset < 0.0)
 	_check("worlds sunward of home are warmer, outward colder", hot + cold == _planets(hs) - 1)
 	var spawn := Vector3(0.12, 1.0, -0.08).normalized()
+	hs.best_season(hs.home, spawn)
 	home.spin_phase = hs.noon_phase(hs.home, spawn, 0.0)
 	var noon := hs.sun_local(hs.home, 0.0).dot(spawn)
 	var midnight := hs.sun_local(hs.home, home.day * 0.5).dot(spawn)
@@ -165,7 +166,64 @@ func _run() -> void:
 	_check("an orbital's points move at its frame velocity, its +Y away from its planet", worst_o < 1e-3 and radial > 0.9999,
 			"%s, %.5f" % [str(worst_o), radial])
 
+	_worlds(uni)
 	_frames(hs, home)
+
+
+## Step 4: towns on the worlds that should have them, the same every time;
+## biomes by warmth and air.
+func _worlds(uni: Universe) -> void:
+	var settled := 0
+	var fine := true
+	var why := ""
+	for k in range(1, 41):
+		var s := uni.system(k)
+		for d in s.bodies:
+			var want := d.parent < 0 and d.has_air and d.t_offset >= StarSystem.SETTLED.x and d.t_offset <= StarSystem.SETTLED.y
+			if want != (not d.towns.is_empty()) or (want and (d.towns.size() < 2 or d.towns.size() > 5)):
+				fine = false
+				why = "%s: air %s, %.0f C, %d towns" % [d.planet_name, str(d.has_air), d.t_offset, d.towns.size()]
+			if want:
+				settled += 1
+				if d.pads.size() != d.towns.size() + d.landmarks.size():
+					fine = false
+					why = "%s: pads" % d.planet_name
+	print("[system] %d settled worlds in 40 systems" % settled)
+	_check("towns on the worlds with air and a bearable climate, none elsewhere, each with its pad", fine and settled > 10, why)
+	var a := uni.system(2)
+	var b := uni.system(2)
+	var same := true
+	for i in a.bodies.size():
+		same = same and a.bodies[i].towns == b.bodies[i].towns and a.bodies[i].tint == b.bodies[i].tint
+	_check("the same towns every time", same)
+	# By warmth and air.
+	var dirs := []
+	var rng := RandomNumberGenerator.new()
+	rng.seed = 7
+	for k in 400:
+		dirs.append(Vector3(rng.randf_range(-1, 1), rng.randf_range(-1, 1), rng.randf_range(-1, 1)).normalized())
+	var share := func(d: PlanetData, biome: int) -> float:
+		var bio := PlanetBiomes.of(d)
+		var n := 0
+		for v in dirs:
+			n += int(bio.biome_index(v) == biome)
+		return float(n) / dirs.size()
+	var hot := PlanetData.new()
+	hot.t_offset = 90.0
+	var cold := PlanetData.new()
+	cold.t_offset = -80.0
+	var dead := PlanetData.new()
+	dead.has_air = false
+	dead.t_offset = -80.0
+	var h: float = share.call(hot, PlanetBiomes.SCORCHED)
+	var c: float = share.call(cold, PlanetBiomes.ICE)
+	var d: float = share.call(dead, PlanetBiomes.BARREN)
+	_check("a hot world is scorched, a cold one ice, an airless one barren", h > 0.95 and c > 0.95 and d == 1.0, "%.2f %.2f %.2f" % [h, c, d])
+	var px: Color = PlanetBiomes.of(dead).pixel(Vector3.UP)
+	var t_map := lerpf(PlanetBiomes.T_RANGE.x, PlanetBiomes.T_RANGE.y, px.a)
+	_check("no snow on the airless one (its map says above freezing)", t_map > 0.0, "%.1f C" % t_map)
+	_check("no trees on those biomes", float(PlanetTrees.TREES[PlanetBiomes.SCORCHED][0]) == 0.0
+			and float(PlanetTrees.TREES[PlanetBiomes.ICE][0]) == 0.0 and float(PlanetTrees.TREES[PlanetBiomes.BARREN][0]) == 0.0)
 
 
 func _planets(s: StarSystem) -> int:

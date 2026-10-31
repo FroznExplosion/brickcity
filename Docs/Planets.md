@@ -2179,3 +2179,34 @@ it is 40 m now).
 Not yet: rams do not hurt the ship; a damaged hull's shell still draws whole from afar (the shell
 has a `damage` profile to take it, as the city's); no docking port or locked landing on a station:
 at neutral it holds where it stopped; worn and scorched bricks are not kept, only dead ones.
+
+#### Plan, step 4 (2026-10-30): generated worlds with towns and trees
+
+- **Biomes:** `scorched` (over 55 C), `ice` (under -35 C), `barren` (no air: no snow either), no trees
+  on any of them; a tint per generated planet on its biomes' colours; the sky from its air's colour.
+- **Towns** are decided when the system is generated (`PlanetData.towns`, `.landmarks`, their pads in
+  `pads`), so the ground and the impostor have them from the start: worlds with air between -70 and
+  +50 C get 2-5 towns and sometimes a landmark, on land where there is land.
+- **Built lazily** (`PlanetSystem`): a world's `PlanetBuildings` when the player is within 700 km,
+  one world a frame (its far tier shows from space); its `PlanetTrees` on arrival. The far tier is
+  run for any world not the anchor within 1,000 km. Hits go to the buildings of the world the player
+  is on. No AI on them yet.
+- Gate: `--gate=worlds`, on a settled world: its town near, bricks laid, a blast taken; `system_probe`
+  the generator's towns and biomes.
+
+**Step 4 built (2026-10-30).** As the plan, with: settled -70..+50 C (home's system's other airy
+world is -67 C); 44 settled worlds in 40 systems; `PlanetBuildings` on a world made in ~95 ms
+(43 buildings: one long frame, on the way in or on arrival); `StarSystem.best_season` starts the
+home planet in the spawn's summer (noon 0.80, was 0.42 in its winter once a draw moved its tilt).
+
+`system_probe` 27/27 (adds: towns on exactly the worlds that should have them, each with its pad,
+the same every time; hot worlds scorched, cold ice, airless barren, no snow on the airless, no
+trees on any). `--gate=worlds` 9/9 windowed, 8/8 headless: off home, down on Helnox III (r 8.5 km,
+-67 C, five towns, a landmark) 150 m from its sunniest town; standing; 7 of its buildings near and
+in bricks; a blast at a wall taken by that world's bricks (65); its trees set up; from 100 km its
+towns on the sphere (42 drawn). In play over 40 ms windowed: 6 frames, the worst 165 ms, all at
+arrival (the ground, the buildings). Peak 93 C, not held back.
+
+Not yet: AI on generated worlds; town layouts and tower colours are home's generator's, not a
+culture of their own; snow lit by a high sun is near white on screen (exposure); the HUD's building
+counts are the home planet's while in space.
