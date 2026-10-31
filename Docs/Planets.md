@@ -2333,3 +2333,43 @@ timeouts, so the fight has not been seen on screen, nor its frame times taken.
 Not yet: soldiers only rifles, no officers or mechs; one squad a town, however big the town; survivors
 of a town left for another just go; garrisons are not saved, only `cleared` (and that only for the
 session); home has none; a player's down costs nothing.
+
+#### Plan, step 7b (2026-10-31): what the first flight found
+
+- **Space begins at the shell.** 5 radii is where the frame already changes, but nothing said so and
+  gravity went on: past every shell `_gravity` kept the nearest body at full strength. Past the shell
+  nothing pulls now, and the HUD at the controls says how far it is.
+- **The map opens anywhere** (M), and says why no jump can be made. A jump needs open space and the
+  player aboard the ship, in the seat or on its deck; it was the seat only, and M said nothing.
+- **Out of the seat is on foot, wherever the ship is.** It was on foot only if `landed`. In a planet's
+  shell the ship stops and levels itself; its bricks are laid and the pawn waits for them.
+- **The ship's jitter is physics interpolation**, on in the project at 30 ticks a second, with the
+  ship, the bodies, the stations and the star moved in `_process`. It is off for what PlanetSystem
+  places. Measured: the camera's speed, spread over mean, 0.33 at 60 fps and 1.7 at 132 fps.
+- Gate `--gate=seat`.
+
+**Step 7b built (2026-10-31).** `--gate=seat` 12/12 windowed and headless, `--gate=garrison` 17/17
+windowed at last (10.7 s to the first shot, every check as headless) and headless. The rest pass
+headless: `system_probe` 31, ship 9, dock 7, jump 10, worlds 8, rocks 4, debris 8, system 17, pawn
+12, squad 10. Frame times were taken with the editor open: not numbers to go by.
+
+**The jitter had two causes**, each measured alone, as the change in the camera's speed from one drawn
+frame to the next over its mean, at 71 m/s, 283 m up, 60 fps, windowed:
+
+| | |
+|---|---|
+| as it was | 0.50 |
+| interpolation off for what PlanetSystem places | 0.078 |
+| and ships and stations placed off their planet | 0.001 |
+
+The second is the one worth keeping in mind: a ship in a planet's shell was placed through the star's
+frame, `s2w * sys.xform(planet) * rel`, and a planet is 1.6e6 m out there, where a float32 is good to
+0.125 m. On a 1.2 m step a frame that is the 8% left in the table. `ship_world` takes it straight off
+the planet; a station goes off its parent (`StarSystem.orbital_local`). So the player's idea that what a
+planet holds belongs under that planet was right for these, in the numbers if not in the node tree:
+nothing is reparented. For everything else in the shell (pawns, soldiers, buildings) it would change
+nothing: they already live in the anchored planet's frame, which stands still with an identity basis,
+and are reparented under it when it sleeps.
+
+Still through the star's frame: a ship in open space keeps `rel` there, so the rocks of a belt, and
+anything else near it in open space, are good to 0.125 m as it flies. Not measured.

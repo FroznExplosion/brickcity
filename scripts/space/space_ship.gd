@@ -188,8 +188,8 @@ func fly(ps, dt: float) -> void:
 			var into := vel.dot(n_up)
 			if into < 0.0:
 				vel -= n_up * into
-		# Low down it levels itself, its heading kept.
-		if altitude < LEVEL_BELOW:
+		# Low down, or with nobody at the controls, it levels itself, its heading kept.
+		if altitude < LEVEL_BELOW or not piloted:
 			var b := rel.basis.orthonormalized()
 			var level := (Basis(Quaternion(b.y.normalized(), n_up)) * b).orthonormalized()
 			rel.basis = b.slerp(level, clampf(dt * 1.5, 0.0, 1.0)).orthonormalized()
@@ -206,7 +206,7 @@ func fly(ps, dt: float) -> void:
 ## The hull swept from where it is drawn to `next` (in its reference frame):
 ## buildings and stations stop it. Returns where it may go.
 func _sweep(ps, next: Vector3) -> Vector3:
-	var to: Transform3D = ps.space_to_world() * ps.ship_xform_at(self, next)
+	var to: Transform3D = ps.ship_world(self, next)
 	var motion := to.origin - global_position
 	if motion.length_squared() < 1e-8:
 		return next

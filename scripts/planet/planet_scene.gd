@@ -22,6 +22,7 @@ extends Node3D
 ##   (11.10, trees and vehicles).
 ##   -- --gate=squad: a squad on the AI's nav region round the town (11.8 N2)
 ##   -- --gate=garrison: a generated world's own AI and a town's squad (11.12 step 7)
+##   -- --gate=seat: the ship smooth near a planet, out of its seat, the map, open space
 ##   walks to the player round the curve, takes cover, fires.
 ##   -- --gate=travel: a squad ordered 200 m out of the town on the nav net
 ##   (11.8 N4), across the regions' borders.
@@ -60,6 +61,7 @@ var _hits_gate := false
 var _topple_gate := false
 var _pieces_ai_gate := false
 var _garrison_gate := false
+var _seat_gate := false
 var _storey_gate := false
 ## The AI round the fight (Docs/Planets.md 11.8, N2, N4): the nav net round the
 ## player's town; ai_world / ai_nav the region the player is in. Made by setup_ai.
@@ -134,7 +136,8 @@ func _ready() -> void:
 	_debris_gate = "--gate=debris" in OS.get_cmdline_user_args()
 	_rocks_gate = "--gate=rocks" in OS.get_cmdline_user_args()
 	_garrison_gate = "--gate=garrison" in OS.get_cmdline_user_args()
-	_gate = _gate or _system_gate or _ship_gate or _dock_gate or _worlds_gate or _jump_gate or _debris_gate or _rocks_gate or _garrison_gate or _pawn_gate or _mech_gate or _tank_gate or _soldier_gate or _squad_gate or _travel_gate or _far_gate or _drive_gate or _trees_gate or _bricks_gate or _damage_gate or _fall_gate or _hits_gate or _topple_gate or _pieces_ai_gate or _storey_gate
+	_seat_gate = "--gate=seat" in OS.get_cmdline_user_args()
+	_gate = _gate or _system_gate or _ship_gate or _dock_gate or _worlds_gate or _jump_gate or _debris_gate or _rocks_gate or _garrison_gate or _seat_gate or _pawn_gate or _mech_gate or _tank_gate or _soldier_gate or _squad_gate or _travel_gate or _far_gate or _drive_gate or _trees_gate or _bricks_gate or _damage_gate or _fall_gate or _hits_gate or _topple_gate or _pieces_ai_gate or _storey_gate
 	data = PlanetData.new()
 	data.planet_name = "proto"
 	# Towns and landmarks: their pads go into the ground before it is built.
@@ -249,6 +252,8 @@ func _ready() -> void:
 			_run_rocks_gate()
 		elif _garrison_gate:
 			_run_garrison_gate()
+		elif _seat_gate:
+			_run_seat_gate()
 		else:
 			_run_gate()
 
@@ -367,14 +372,14 @@ func _face(facing: Vector3) -> void:
 
 ## On foot (the pawn and its camera) or flying (the walker). The voxel viewer
 ## goes with whichever it is, so the ground streams round the player.
-func _set_on_foot(on: bool) -> void:
+func _set_on_foot(on: bool, stand_at := Vector3.INF) -> void:
 	on_foot = on
 	# The pawn left behind while flying is not there to be shot.
 	if kit != null:
 		kit.present(on)
 	var viewer := walker.viewer
 	if on:
-		var feet := _ground_hit(walker.global_position)
+		var feet := stand_at if stand_at != Vector3.INF else _ground_hit(walker.global_position)
 		if feet == Vector3.INF:
 			feet = walker.global_position
 		var fwd := -walker.camera.global_transform.basis.z
@@ -405,11 +410,13 @@ func _set_on_foot(on: bool) -> void:
 
 ## The map, opened (11.12 step 5).
 func open_map() -> void:
-	map.open(system.universe, system.system_index, system._home_sys)
+	map.open(system.universe, system.system_index, system._home_sys, system.jump_block())
 
 
 ## Jump to the map's pick, the screen white over the swap.
 func map_jump() -> void:
+	if not system.can_jump():
+		return
 	map.visible = false
 	_flash.color.a = 1.0
 	await _frames(2)
@@ -420,33 +427,34 @@ func map_jump() -> void:
 		_flash.color.a = 0.0
 
 
+## The ship's and the map's keys. True if `key` was theirs.
+func _ship_key(key: Key) -> bool:
+	if map.visible:
+		match key:
+			KEY_UP:
+				map.move(-1)
+			KEY_DOWN:
+				map.move(1)
+			KEY_J, KEY_ENTER:
+				map_jump()
+			KEY_M, KEY_ESCAPE:
+				map.visible = false
+		return true
+	if key == KEY_M:
+		open_map()
+		return true
+	if key == KEY_E:
+		if piloting:
+			unboard()
+		elif (_anchor() - ship.global_transform * ship.seat()).length() < 8.0:
+			board()
+		return true
+	return false
+
+
 func _unhandled_input(event: InputEvent) -> void:
-	if ship != null and not _gate and event is InputEventKey and event.pressed and not event.echo:
-		if map.visible:
-			match event.keycode:
-				KEY_UP:
-					map.move(-1)
-				KEY_DOWN:
-					map.move(1)
-				KEY_J, KEY_ENTER:
-					map_jump()
-				KEY_M, KEY_ESCAPE:
-					map.visible = false
-			get_viewport().set_input_as_handled()
-			return
-		if event.keycode == KEY_M and system.can_jump():
-			open_map()
-			get_viewport().set_input_as_handled()
-			return
 	if ship != null and not _gate:
-		if event is InputEventKey and event.pressed and not event.echo and event.keycode == KEY_E:
-			if piloting:
-				var down := ship.landed
-				unboard()
-				if down:
-					_set_on_foot(true)
-			elif (_anchor() - ship.global_transform * ship.seat()).length() < 8.0:
-				board()
+		if event is InputEventKey and event.pressed and not event.echo and _ship_key(event.keycode):
 			get_viewport().set_input_as_handled()
 			return
 		if piloting and event is InputEventMouseMotion and Input.mouse_mode == Input.MOUSE_MODE_CAPTURED:
@@ -457,6 +465,11 @@ func _unhandled_input(event: InputEvent) -> void:
 	if event is InputEventKey and event.pressed and not event.echo and event.keycode == KEY_F:
 		_set_on_foot(not on_foot)
 		get_viewport().set_input_as_handled()
+
+
+## When the pawn left the seat, waiting for the ship's bricks (-1: not waiting).
+var _stepping_out := -1
+const STEP_OUT_WAIT := 2000
 
 
 ## Who the origin, the streaming and the sky follow.
@@ -487,17 +500,27 @@ func board() -> void:
 	ship.camera.current = true
 
 
-## Out of the seat, standing on the ship's floor.
+## Out of the seat, standing on the ship's floor, wherever it is: on foot, once
+## there is a pawn. In a planet's shell the ship stops dead (its deck is not a frame
+## there, nothing carries who stands on it), and it is a solid shell until its
+## bricks are in, so the pawn waits for them (_process).
 func unboard() -> void:
 	piloting = false
 	ship.piloted = false
 	ship.thrust = Vector3.ZERO
 	ship.steer = Vector3.ZERO
 	ship.boost = false
-	walker.place(ship.global_transform * ship.seat() + ship.global_basis.y * 0.1, -ship.global_basis.z)
+	if ship.ref != null:
+		ship.vel = Vector3.ZERO
+	var at := ship.global_transform * ship.seat() + ship.global_basis.y * 0.1
+	walker.place(at, -ship.global_basis.z)
 	walker.frozen = false
 	walker.flying = false
 	walker.camera.current = true
+	if pawn != null:
+		_set_on_foot(true, at)
+		pawn.body.process_mode = Node.PROCESS_MODE_DISABLED
+		_stepping_out = Time.get_ticks_msec()
 
 
 ## The pilot's keys and mouse: W/S ahead and back, A/D aside, Space/Ctrl up and
@@ -535,7 +558,7 @@ func _build_system() -> void:
 	system.woke.connect(_on_woke)
 	system.jumped.connect(_on_jumped)
 	# A ship parked 45 m behind the spawn (not in the other gates' way).
-	if not _gate or _ship_gate or _dock_gate or _jump_gate or _rocks_gate or _garrison_gate:
+	if not _gate or _ship_gate or _dock_gate or _jump_gate or _rocks_gate or _garrison_gate or _seat_gate:
 		var sd := OrbitalData.new()
 		sd.kind = "ship"
 		sd.orbital_name = "ship"
@@ -695,6 +718,10 @@ func _process(_delta: float) -> void:
 	if system != null:
 		walker.match_velocity = system.match_velocity(walker.global_position)
 		walker.reach = body.altitude_of(walker.global_position)
+	if _stepping_out >= 0 and (ship.bricked or Time.get_ticks_msec() - _stepping_out > STEP_OUT_WAIT):
+		_stepping_out = -1
+		pawn.place(ship.global_transform * ship.seat() + ship.global_basis.y * 0.1)
+		pawn.body.process_mode = Node.PROCESS_MODE_INHERIT
 	if piloting:
 		walker.global_position = ship.global_transform * ship.seat()
 		walker.inertia = Vector3.ZERO
@@ -733,7 +760,7 @@ func _process(_delta: float) -> void:
 	# walker's own gate, the pawn stands on it.
 	if walker.frozen and not piloting and pawn == null and trees.prebaked and _ground_hit(walker.global_position) != Vector3.INF:
 		walker.frozen = false
-		if not _gate or _pawn_gate or _mech_gate or _tank_gate or _soldier_gate or _squad_gate or _travel_gate or _far_gate or _drive_gate or _trees_gate or _bricks_gate or _damage_gate or _fall_gate or _hits_gate or _topple_gate or _pieces_ai_gate or _storey_gate or _garrison_gate:
+		if not _gate or _pawn_gate or _mech_gate or _tank_gate or _soldier_gate or _squad_gate or _travel_gate or _far_gate or _drive_gate or _trees_gate or _bricks_gate or _damage_gate or _fall_gate or _hits_gate or _topple_gate or _pieces_ai_gate or _storey_gate or _garrison_gate or _seat_gate:
 			_spawn_player(_ground_hit(walker.global_position), -walker.global_transform.basis.z)
 	if not on_foot:
 		walker.flying = pawn != null or walker.flying
@@ -746,8 +773,9 @@ func _process(_delta: float) -> void:
 				PlanetFrame.last_us / 1000.0, _buildings_here().near_count, _buildings_here().far_count,
 				"(waiting for ground)" if walker.frozen and not piloting else ""]
 		if piloting:
-			hud.text += "\nSHIP  %.0f m/s  %.0f m over the ground  (E leaves the seat; WASD, Space/Ctrl, mouse, Z/C roll, Shift cruise%s)" % [
-					ship.vel.length(), ship.altitude, "; M galaxy map" if system.can_jump() else ""]
+			hud.text += "\nSHIP  %.0f m/s  %.0f m over the ground  (E leaves the seat; WASD, Space/Ctrl, mouse, Z/C roll, Shift cruise; M galaxy map)" % [
+					ship.vel.length(), ship.altitude]
+			hud.text += "\n" + ("Open space: a jump can be made" if system.can_jump() else system.jump_block())
 		elif ship != null and (_anchor() - ship.global_transform * ship.seat()).length() < 8.0:
 			hud.text += "\nE: take the ship's controls"
 		if system != null:
@@ -2263,7 +2291,8 @@ func _ship_down_on(b: PlanetBody, dir := Vector3.ZERO) -> bool:
 			# Round to over `dir`, at height.
 			var goal := r.normalized().slerp(dir, minf(0.2 / ang, 1.0)) * maxf(r.length(), b.data.radius + 4000.0)
 			ship.aim(goal - r, -down)
-			ship.thrust = Vector3(0.0, 0.0, 1.0)
+			# Slowing as it nears: at full speed it goes round the point for good.
+			ship.thrust = Vector3(0.0, 0.0, clampf(ang * r.length() / 2000.0, 0.05, 1.0))
 		elif ship.altitude > 3000.0:
 			ship.aim(down, ship.rel.basis.y)
 			ship.thrust = Vector3(0.0, 0.0, 1.0)
@@ -2277,6 +2306,96 @@ func _ship_down_on(b: PlanetBody, dir := Vector3.ZERO) -> bool:
 	ship.boost = false
 	await get_tree().create_timer(1.0).timeout
 	return ship.landed and ship.ref == b
+
+
+# The seat's gate: how smooth the ship is near a planet; where space begins; out
+# of the seat on foot, wherever it is; the map from anywhere.
+
+## How unevenly the camera moves past the ground: the change in its speed from one
+## drawn frame to the next, over its mean, while the ship cruises level.
+func _ship_judder(frames: int) -> float:
+	var last := ship.camera.get_global_transform_interpolated().origin
+	var speeds: Array[float] = []
+	var step := get_process_delta_time()
+	for k in frames:
+		await get_tree().process_frame
+		# This signal comes before the frame's _process: what moved it was the last step.
+		var at := ship.camera.get_global_transform_interpolated().origin
+		speeds.append(at.distance_to(last) / maxf(step, 1e-4))
+		last = at
+		step = get_process_delta_time()
+	var mean := 0.0
+	for v in speeds:
+		mean += v
+	mean /= speeds.size()
+	# One frame against the next: the speed the cap gives it wanders, slowly, by height.
+	var spread := 0.0
+	for k in range(1, speeds.size()):
+		spread += (speeds[k] - speeds[k - 1]) * (speeds[k] - speeds[k - 1])
+	return sqrt(spread / (speeds.size() - 1)) / maxf(mean, 0.001)
+
+
+func _run_seat_gate() -> void:
+	var t0 := Time.get_ticks_msec()
+	while pawn == null and Time.get_ticks_msec() - t0 < 60000:
+		await _frames(1)
+	await get_tree().create_timer(1.0).timeout
+	var key := func(k: Key) -> void:
+		_ship_key(k)
+		await _frames(2)
+	await key.call(KEY_M)
+	_check("the map opens on the ground, saying why no jump", map.visible and map.note.contains("gravity"), map.note)
+	await key.call(KEY_J)
+	_check("and J does not jump from here", system.system_index == 0 and map.visible)
+	await key.call(KEY_M)
+	# Out to the ship and into its seat, on foot.
+	pawn.place(_ground_hit(ship.global_transform * ship.seat() + ship.global_basis.z * 12.0))
+	await get_tree().create_timer(0.5).timeout
+	board()
+	ship.thrust = Vector3(0.0, 1.0, 0.0)
+	await get_tree().create_timer(5.0).timeout
+	ship.thrust = Vector3(0.0, 0.0, 0.5)
+	await get_tree().create_timer(3.0).timeout
+	var judder: float = await _ship_judder(180)
+	_check("smooth past the ground (the camera's speed even from frame to frame)", judder < 0.05,
+			"%.3f at %.0f m/s, %.0f m up, %.0f fps" % [judder, ship.vel.length(), ship.altitude, Engine.get_frames_per_second()])
+	# Out of the seat in the air: on foot on its floor, not flying, not on its roof.
+	var stand_on_deck := func() -> bool:
+		var since := Time.get_ticks_msec()
+		while (_stepping_out >= 0 or not pawn.is_on_floor()) and Time.get_ticks_msec() - since < 6000:
+			await _frames(1)
+		await get_tree().create_timer(1.0).timeout
+		var y: float = ship.to_local(pawn.feet()).y
+		print("[planet] seat gate: stood at %.2f m in the ship, on the floor %s, on foot %s" % [y, pawn.is_on_floor(), on_foot])
+		return on_foot and pawn.is_on_floor() and y < ship.height * 0.5
+	await key.call(KEY_E)
+	var ok_air: bool = await stand_on_deck.call()
+	_check("out of the seat in the air: on foot, on its floor", ok_air and not walker.flying)
+	_check("it holds there, level", ship.vel.length() < 0.1 and ship.global_basis.y.dot(Gravity.up_at(ship.global_position)) > 0.9,
+			"%.2f m/s" % ship.vel.length())
+	await key.call(KEY_E)
+	_check("and back in the seat", piloting)
+	await _ship_out()
+	_check("open space: the ship is the frame, the jump there to make", system.frame_node() == ship and system.can_jump() and system.jump_block() == "")
+	await key.call(KEY_E)
+	var ok_deck: bool = await stand_on_deck.call()
+	_check("out of the seat in open space: on foot on its deck, its own gravity", ok_deck and Gravity.strength() > 1.0, "%.1f m/s2" % Gravity.strength())
+	await key.call(KEY_M)
+	_check("the map from the deck, nothing against a jump", map.visible and map.note == "")
+	var was := system.system_index
+	await key.call(KEY_DOWN)
+	_ship_key(KEY_J)
+	await get_tree().create_timer(1.0).timeout
+	_check("the jump from the deck", system.system_index != was and system.frame_node() == ship, system.sys.system_name)
+	var ok_after: bool = await stand_on_deck.call()
+	_check("still standing on it", ok_after)
+	# Off the ship: nothing pulls.
+	var away := ship.global_position + ship.global_basis.x * (ship.field * 2.0)
+	pawn.place(away)
+	await get_tree().create_timer(1.0).timeout
+	_check("off the ship in open space, nothing pulls", system.frame_node() == null and Gravity.strength() == 0.0, "%.1f m/s2" % Gravity.strength())
+	print("[planet] gate: %d ok, %d FAIL" % [_ok, _fail])
+	get_tree().quit(1 if _fail > 0 else 0)
 
 
 # The garrison's gate (11.12 step 7): a jump to a settled world, down by a town,
@@ -2325,7 +2444,6 @@ func _run_garrison_gate() -> void:
 	_check("no garrison raised from the seat", not garrisons.has(world) or (garrisons[world] as PlanetGarrison).town < 0)
 	var stand := func() -> void:
 		unboard()
-		_set_on_foot(true)
 		var feet := world.global_transform * world.data.surface_point(edge)
 		var since := Time.get_ticks_msec()
 		while _ground_hit(feet) == Vector3.INF and Time.get_ticks_msec() - since < 30000:
@@ -2448,7 +2566,6 @@ func _run_garrison_gate() -> void:
 	await _ship_down_on(planet)
 	_check("home, on home's AI", ok_back and system.anchor == planet and ai == home_ai and kit.services == home_ai, "ai_of %d" % ai_of.size())
 	unboard()
-	_set_on_foot(true)
 	_check("the player in it", home_ai.pawns.has(pawn) and garrisons.is_empty())
 	print("[planet] garrison gate: put back on the ground %d time(s)" % ground_saves)
 	print("[planet] garrison gate: frames: worst %.1f ms; over 40 ms in play: %d %s" % [_worst_ms, _play_hitches.size(), _play_hitches])

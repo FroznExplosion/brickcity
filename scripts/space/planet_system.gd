@@ -151,6 +151,7 @@ func _build_bodies() -> void:
 			_home_body.visible = true
 			continue
 		var b := PlanetBody.new()
+		b.physics_interpolation_mode = Node.PHYSICS_INTERPOLATION_MODE_OFF
 		add_child(b)
 		b.setup(sys.bodies[i], true)
 		b.process_mode = Node.PROCESS_MODE_DISABLED
@@ -158,6 +159,7 @@ func _build_bodies() -> void:
 		bodies.append(b)
 	for k in sys.orbitals.size():
 		var st := SpaceStation.new()
+		st.physics_interpolation_mode = Node.PHYSICS_INTERPOLATION_MODE_OFF
 		add_child(st)
 		st.setup(sys.orbitals[k])
 		st.drifted.connect(_on_drifted.bind(st))
@@ -170,7 +172,19 @@ func _build_bodies() -> void:
 
 ## At the ship's controls in open space: its jump drive works.
 func can_jump() -> bool:
-	return ship != null and ship.piloted and ship.ref == null
+	return ship != null and ship.ref == null
+
+
+## Why no jump can be made from here, for the player ("": one can).
+func jump_block() -> String:
+	if can_jump():
+		return ""
+	if anchor != null:
+		var left := anchor.data.radius * SHELL * SHELL_OUT - (observer.call() - anchor.global_position).length() as float
+		return "In %s's gravity: open space %.0f km further out" % [anchor.data.planet_name, maxf(left, 0.0) / 1000.0]
+	if station != null:
+		return "Too near %s" % station.data.orbital_name
+	return "Aboard the ship only"
 
 
 ## Swap the system round the ship for system `index` of the universe. All of
@@ -239,6 +253,7 @@ func frame_node() -> Node3D:
 ## A ship into the system, in planet `ref`'s frame (null: the star's) at `rel`.
 func add_ship(d: OrbitalData, ref: PlanetBody, rel: Transform3D) -> SpaceShip:
 	var s := SpaceShip.new()
+	s.physics_interpolation_mode = Node.PHYSICS_INTERPOLATION_MODE_OFF
 	add_child(s)
 	s.setup_ship(d)
 	s.drifted.connect(_on_drifted.bind(s))
@@ -391,6 +406,7 @@ func _on_drifted(arrays: Array, com: Transform3D, local_com: Vector3, count: int
 	e.rate = randf_range(0.05, DRIFT_SPIN)
 	e.node = Node3D.new()
 	e.node.name = "Drift"
+	e.node.physics_interpolation_mode = Node.PHYSICS_INTERPOLATION_MODE_OFF
 	add_child(e.node)
 	e.node.global_transform = com
 	e.material = material
@@ -483,10 +499,12 @@ func _place() -> void:
 			bodies[i].global_transform = s2w * sys.xform(i, t)
 	for k in stations.size():
 		if stations[k] != f:
-			stations[k].global_transform = s2w * sys.orbital_xform(k, t)
+			var l := sys.orbital_local(k, t)
+			stations[k].global_transform = Transform3D(s2w.basis * l.basis,
+					bodies[sys.orbitals[k].parent].global_position + s2w.basis * l.origin)
 	for s in ships:
 		if s != f:
-			s.global_transform = s2w * s.space_xform(self)
+			s.global_transform = ship_world(s, s.rel.origin)
 	for d in drifts:
 		var e: Drift = d
 		var base: Transform3D = e.base if e.frame == null else _frame_xform(e.frame)
@@ -503,12 +521,15 @@ func _gravity() -> void:
 		Gravity.planet_radius = SpaceStation.DEPTH
 		return
 	var g := anchor
+	# Past every shell nothing pulls: the nearest body only says which way is down.
+	var pull := 1.0
 	if g == null and observer.is_valid():
 		g = nearest(observer.call())
+		pull = 0.0
 	if g == null:
 		return
 	Gravity.planet = g
-	Gravity.planet_strength = g.data.gravity_strength
+	Gravity.planet_strength = g.data.gravity_strength * pull
 	Gravity.planet_radius = g.data.radius
 
 
@@ -610,10 +631,12 @@ func ship_match(s: SpaceShip) -> Array:
 	return [Vector3.ZERO, -1.0]
 
 
-## Ship `s` in the space frame, were it at `at` in its reference frame.
-func ship_xform_at(s: SpaceShip, at: Vector3) -> Transform3D:
+## Ship `s` in the world, were it at `at` in its reference frame: in a planet's
+## frame straight off the planet (through the star's it is rounded to 0.125 m,
+## which on a 1 m step a frame is a shake you can see).
+func ship_world(s: SpaceShip, at: Vector3) -> Transform3D:
 	var l := Transform3D(s.rel.basis, at)
-	return l if s.ref == null else sys.xform(index_of(s.ref), t) * l
+	return s.ref.global_transform * l if s.ref != null else space_to_world() * l
 
 
 ## Each ship's reference: a planet's frame inside its shell, the star's out of
@@ -640,11 +663,11 @@ func _ship_refs() -> void:
 		s.landed = false
 
 
-## A ship's bricks while it is the frame, or sits landed on the planet the
-## player is on with the player near and nobody at its controls.
+## A ship's bricks while it is the frame, or over the planet the player is on
+## with the player near and nobody at its controls.
 func _ship_bricks(p: Vector3) -> void:
 	for s in ships:
-		var want := s == ship or (s.ref != null and s.ref == anchor and s.landed and not s.piloted
+		var want := s == ship or (s.ref != null and s.ref == anchor and not s.piloted
 				and (p - s.global_position).length() < s.field)
 		if want and s.chunk < 0:
 			s.process_mode = Node.PROCESS_MODE_INHERIT
@@ -784,6 +807,7 @@ static func _draw_at(look: Node3D, true_xform: Transform3D, e: Vector3) -> bool:
 func _build_star() -> void:
 	star = Node3D.new()
 	star.name = "Star"
+	star.physics_interpolation_mode = Node.PHYSICS_INTERPOLATION_MODE_OFF
 	add_child(star)
 	star_look = MeshInstance3D.new()
 	star_look.name = "Look"

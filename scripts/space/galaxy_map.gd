@@ -14,7 +14,12 @@ var here := 0
 
 
 ## Open at system `index`; `home_sys` stands for system 0 (home's own).
-func open(u: Universe, index: int, home_sys: StarSystem) -> void:
+## Why no jump can be made from here ("": one can).
+var note := ""
+
+
+func open(u: Universe, index: int, home_sys: StarSystem, p_note := "") -> void:
+	note = p_note
 	uni = u
 	here = index
 	rows.clear()
@@ -47,6 +52,8 @@ func _draw() -> void:
 	draw_rect(Rect2(Vector2.ZERO, size_px), Color(0.01, 0.02, 0.05, 0.92))
 	var font := ThemeDB.fallback_font
 	draw_string(font, Vector2(24, 36), "GALAXY  --  Up/Down pick, J jump, M close", HORIZONTAL_ALIGNMENT_LEFT, -1, 16, Color(0.8, 0.85, 0.95))
+	if note != "":
+		draw_string(font, Vector2(24, 60), "No jump from here. " + note, HORIZONTAL_ALIGNMENT_LEFT, -1, 16, Color(1.0, 0.75, 0.3))
 	var c := Vector2(size_px.x * 0.36, size_px.y * 0.54)
 	var from := uni.system_position(here)
 	var reach := 1.0
