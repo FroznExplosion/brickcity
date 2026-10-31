@@ -138,11 +138,20 @@ func frame_velocity_of(f: int, t: float, x: Vector3) -> Vector3:
 
 ## Orbital `k` at time `t`: its +Y away from its body, +X along its way.
 func orbital_xform(k: int, t: float) -> Transform3D:
+	var l := orbital_local(k, t)
+	l.origin += pos(orbitals[k].parent, t)
+	return l
+
+
+## The same round its parent's centre, in space's axes: for placing it from the
+## parent, in small numbers. Through the star's frame a metre is lost in float32
+## (a planet is 1.6e6 m out there, to the nearest 0.125 m).
+func orbital_local(k: int, t: float) -> Transform3D:
 	var o := orbitals[k]
 	var q := Basis(Vector3.UP, o.orbit_node) * Basis(Vector3.RIGHT, o.orbit_inclination)
 	var r := Basis(q.y, o.orbit_phase + TAU * t / o.orbit_period) * q.x
 	var along := q.y.cross(r)
-	return Transform3D(Basis(along, r, along.cross(r)), pos(o.parent, t) + r * o.orbit_radius)
+	return Transform3D(Basis(along, r, along.cross(r)), r * o.orbit_radius)
 
 
 ## The star's direction from body `i`, in its own planet-local frame.
