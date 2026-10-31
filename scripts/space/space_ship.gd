@@ -132,6 +132,9 @@ func frame_velocity(ps, x: Vector3) -> Vector3:
 ## Point its nose (-Z) along `dir` in its reference frame, its up as near `up`
 ## as that allows (an autopilot's hands, for scripted passes).
 func aim(dir: Vector3, up: Vector3) -> void:
+	# No way to point is no turn: a zero here would leave no basis at all.
+	if dir.length_squared() < 1e-6:
+		return
 	var z := -dir.normalized()
 	var x := up.cross(z)
 	if x.length_squared() < 1e-6:

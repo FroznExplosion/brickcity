@@ -27,7 +27,8 @@ func _process(_delta: float) -> void:
 	rows.clear()
 	_colours.clear()
 	var cam := get_viewport().get_camera_3d()
-	if not visible or cam == null or system == null:
+	# A headless run's viewport has no size to mark.
+	if not visible or cam == null or system == null or DisplayServer.get_name() == "headless":
 		return
 	for i in system.bodies.size():
 		var b: PlanetBody = system.bodies[i]
