@@ -4,7 +4,7 @@ extends RefCounted
 ## The set-by-shell generator (Docs/RoomModules.md section 4): a tower's
 ## outside fixed first -- a footprint (a box `width` x `depth`, or any shape:
 ## an outline drawn in the workshop, `footprint`), `storeys` high, stepping in
-## by `setback` studs every `setback_every` storeys -- and its inside split
+## by `setback` studs every `setback_every` storeys on `setback_sides` -- and its inside split
 ## into rooms and filled with modules from the library (RoomModules).
 ##
 ##   var lib := RoomModules.library()
@@ -32,6 +32,9 @@ extends RefCounted
 ## storey is filler rooms -- split where they run past `room_max` either way --
 ## each with a doorway to the corridor, the hall, or a filler room already
 ## reached, so every room is reached. A module's other doors are walled up.
+## A module with a stair link up gets one with a link down over it on the next
+## storey where one fits, the stair between them; a module's window and balcony
+## spots on the outer wall are cut and built.
 ## Windows in the outer wall, one window style a tower; a rail round the roof
 ## and round every terrace a setback leaves. Doors in every doorway
 ## (BuildDoors). The way in: a doorway in the outer wall off the corridor or
@@ -47,11 +50,14 @@ extends RefCounted
 ## chance a gap along the corridor gets a module rather than filler;
 ## `footprint`: [Vector2i] columns the tower stands on (empty: the box);
 ## `setback`, `setback_every`: studs in, every so many storeys (0: straight up);
-## `lift`: a lift shaft by the hall where there is room.
+## `setback_sides`: the sides that step in, of "nsew" (north +Z, east +X);
+## `lift`: a lift shaft by the hall where there is room; `balcony`: the chance
+## a module's balcony spot on the outer wall gets one.
 const PARAMS := {"seed": 1, "width": 44, "depth": 28, "storeys": 4, "pitch": 0, "corridor": 4,
 		"room_max": 12, "window_every": 5, "fill": 0.85, "footprint": [], "setback": 0,
-		"setback_every": 0, "lift": true}
-## The module roles a shell sets along its corridors.
+		"setback_every": 0, "setback_sides": "nsew", "lift": true, "balcony": 0.5}
+## The module roles a shell sets along its corridors (and a stair's, below a
+## storey, where it has a stair link up).
 const ROLES := ["room", "corridor"]
 ## A filler room's doorway and the way in: studs across, plates up.
 const DOORWAY := Vector2i(2, 9)
@@ -89,13 +95,17 @@ var shaft_door := []    ## the two columns of the wall between hall and shaft a 
 var corridor := []      ## per storey: Vector2i -> true
 var walls := []         ## per storey: Vector2i -> true, the shell's inner walls
 var cx_end := []        ## per storey: the corridor's last column
-var placed := []        ## [{m, t, off, door, storey}], as RoomGrow plans have them
+var placed := []        ## [{m, t, off, door, storey, side}], as RoomGrow plans have them
 var mod_cols := []      ## per storey: Vector2i -> true, the columns of its modules
 var holes := {}         ## Vector3i -> true: doorways, windows, the way in, kept open
 var pits := []          ## per storey: Vector2i -> true, the slab cells cut over the flight below
 var adds := []          ## [[part, cell, colour, material]]
 var rooms := []         ## [{kind, seed, cols, floor_y, ceil_y}] the shell's own spaces
 var doors := []         ## [[lo, size]]: every hole a door hangs in (BuildDoors)
+var stacks := []        ## [[lower, upper]]: stair links joined storey to storey (RoomGrow._stair)
+var cuts := {}          ## Vector3i -> true: cut out of the modules' bricks (stairs, facade windows)
+var balconies := 0
+var facade := 0          ## facade windows cut
 var colour := 0         ## the shell's colour: the first module's
 var style := "open"
 var caps := 0
@@ -156,11 +166,14 @@ func _generate(library: Array, params: Dictionary) -> Dictionary:
 	for s in storeys:
 		_corridor(s)
 	for s in storeys:
+		if s > 0:
+			_stack(s)
 		for side in [0, 1]:
 			_fill_side(s, side)
 	if not placed.is_empty():
 		colour = int(lib[placed[0].m].turns[placed[0].t].colour)
 	_caps_and_glass()
+	_stairs_and_facade()
 	for s in storeys:
 		_flight(s)
 	_way_in()
@@ -187,10 +200,12 @@ func _generate(library: Array, params: Dictionary) -> Dictionary:
 	var bb := _box(foot[0])
 	var g_stats := {"modules": placed.size(), "storeys": storeys, "pitch": pitch, "caps": caps,
 			"doors": doors.size(), "rooms": rooms.size(), "width": bb[1].x, "depth": bb[1].y,
-			"lifts": lifts.size()}
+			"lifts": lifts.size(), "stairs": stacks.size(), "balconies": balconies,
+			"windows": facade}
 	var plan := {"ok": true, "why": "", "seed": int(p.seed), "ground_y": 0, "placed": placed,
-			"joins": [], "path": [], "entrance": {}, "exit": {}, "caps": [], "cuts": [], "adds": adds,
-			"window_style": style, "stats": g_stats, "at": Vector3i(1, 0, 1), "doors": doors, "lifts": lifts}
+			"joins": [], "path": [], "entrance": {}, "exit": {}, "caps": [], "cuts": cuts.keys(), "adds": adds,
+			"window_style": style, "stats": g_stats, "at": Vector3i(1, 0, 1), "doors": doors, "lifts": lifts,
+			"stacks": stacks}
 	var r := RoomGrow.lay(lib, plan, true)
 	r.name = "shell %d" % int(p.seed)
 	var rec: Dictionary = r.meta["structure"]
@@ -231,7 +246,7 @@ func _footprints() -> void:
 			if int(p.setback_every) > 0:
 				@warning_ignore("integer_division")
 				k = int(p.setback) * (s / int(p.setback_every))
-			f = _eroded(base, k)
+			f = _eroded(base, k, String(p.setback_sides))
 		foot.append(f)
 		var rg := {}
 		var inn := {}
@@ -249,14 +264,26 @@ func _footprints() -> void:
 		inner.append(inn)
 
 
-func _eroded(f: Dictionary, k: int) -> Dictionary:
+## `f` stepped in `k` studs on `sides` (of "nsew"): a column goes where the
+## outside is next to it on one of those sides (or their corners).
+func _eroded(f: Dictionary, k: int, sides := "nsew") -> Dictionary:
+	var xs := [0]
+	var zs := [0]
+	if sides.contains("e"):
+		xs.append(1)
+	if sides.contains("w"):
+		xs.append(-1)
+	if sides.contains("n"):
+		zs.append(1)
+	if sides.contains("s"):
+		zs.append(-1)
 	var out := f
 	for i in k:
 		var next := {}
 		for c: Vector2i in out:
 			var keep := true
-			for dz in [-1, 0, 1]:
-				for dx in [-1, 0, 1]:
+			for dz in zs:
+				for dx in xs:
 					if not out.has(c + Vector2i(dx, dz)):
 						keep = false
 			if keep:
@@ -402,70 +429,129 @@ func _fill_side(s: int, side: int) -> void:
 		if cands.is_empty():
 			x += 1
 			continue
-		var pick: Array = _weighted(cands)
-		var m: int = pick[0]
-		var t: int = pick[1]
-		var off: Vector3i = pick[2]
-		var td: Dictionary = lib[m].turns[t]
-		placed.append({"m": m, "t": t, "off": off, "door": pick[3], "storey": s})
-		var x1 := x
-		for c: Vector2i in td.cols:
-			var w := Vector2i(c.x + off.x, c.y + off.z)
-			mod_cols[s][w] = true
-			(walls[s] as Dictionary).erase(w)
-			x1 = maxi(x1, w.x)
-		x = x1 + 1
+		x = _put(s, side, _weighted(cands)) + 1
+
+
+## A pick [m, t, off, door, weight] placed on storey s; returns its east column.
+func _put(s: int, side: int, pick: Array) -> int:
+	var off: Vector3i = pick[2]
+	var td: Dictionary = lib[pick[0]].turns[pick[1]]
+	placed.append({"m": pick[0], "t": pick[1], "off": off, "door": pick[3], "storey": s, "side": side})
+	var x1 := -(1 << 30)
+	for c: Vector2i in td.cols:
+		var w := Vector2i(c.x + off.x, c.y + off.z)
+		mod_cols[s][w] = true
+		(walls[s] as Dictionary).erase(w)
+		x1 = maxi(x1, w.x)
+	return x1
+
+
+## Module m may stand on storey s: its role one the shell sets (a stair's only
+## with a storey over it for its link up), its weight, its `max`, its storey rule.
+func _allowed(m: int, s: int, stacked := false) -> bool:
+	var rules: Dictionary = lib[m].rules
+	var role := String(rules.role)
+	if float(rules.weight) <= 0.0:
+		return false
+	if not ROLES.has(role):
+		if role != "stair":
+			return false
+		if not stacked and (s >= storeys - 1 or not _has_link(m, "stair_up")):
+			return false
+	var max_n := int(rules.max)
+	if max_n >= 0 and placed.filter(func(pl) -> bool: return int(pl.m) == m).size() >= max_n:
+		return false
+	match String(rules.storeys):
+		"ground":
+			return s == 0
+		"upper":
+			return s != 0
+		"top":
+			return s == storeys - 1
+	return true
+
+
+func _has_link(m: int, kind: String) -> bool:
+	for c: Dictionary in lib[m].turns[0].conns:
+		if String(c.kind) == kind and String(c.link) != "off":
+			return true
+	return false
 
 
 ## Every module and turn that fits with its west edge on `x`: [[m, t, off,
 ## door index, weight]].
 func _fits_at(s: int, side: int, x: int) -> Array:
 	var out := []
-	var yb := s * pitch
-	var line := _wall_line(side)
-	var want := 1 if side == 0 else 3
 	for m in lib.size():
-		var rules: Dictionary = lib[m].rules
-		if not ROLES.has(String(rules.role)) or float(rules.weight) <= 0.0:
+		if not _allowed(m, s):
 			continue
-		var max_n := int(rules.max)
-		if max_n >= 0 and placed.filter(func(pl) -> bool: return int(pl.m) == m).size() >= max_n:
-			continue
-		match String(rules.storeys):
-			"ground":
-				if s != 0:
-					continue
-			"upper":
-				if s == 0:
-					continue
-			"top":
-				if s != storeys - 1:
-					continue
 		for t in 4:
 			var td: Dictionary = lib[m].turns[t]
 			var lo := Vector2i(1 << 30, 1 << 30)
-			var top := 0
 			for c: Vector2i in td.cols:
 				lo = Vector2i(mini(lo.x, c.x), mini(lo.y, c.y))
-				top = maxi(top, (td.cols[c] as Vector2i).y)
-			if top - int(td.min_y) > pitch:
-				continue
 			for ci in (td.conns as Array).size():
-				var c: Dictionary = td.conns[ci]
-				if String(c.kind) != "door" or int(c.facing) != want or String(c.link) == "off":
-					continue
-				var at: Vector3i = c.at
+				var at: Vector3i = td.conns[ci].at
 				# The door's outer face on the corridor's first row: its wall the line.
-				var off := Vector3i(x - lo.x, yb - int(td.min_y), (zc if side == 0 else line - 1) - at.z)
-				if at.y + off.y != yb + 1:
-					continue
-				var dx := at.x + off.x
-				if dx < hx1 + 2 or dx + (c.size as Vector2i).x - 1 > int(cx_end[s]):
-					continue
-				if not _clear(td, off, s, side, line):
-					continue
-				out.append([m, t, off, ci, float(rules.weight)])
+				var row := zc if side == 0 else _wall_line(side) - 1
+				var off := Vector3i(x - lo.x, s * pitch - int(td.min_y), row - at.z)
+				if _door_fits(td, ci, off, s, side):
+					out.append([m, t, off, ci, float(lib[m].rules.weight)])
 	return out
+
+
+## Door ci of a turned module at `off` opens onto storey s's corridor from
+## `side`, the module no higher than a storey and clear (_clear).
+func _door_fits(td: Dictionary, ci: int, off: Vector3i, s: int, side: int) -> bool:
+	var c: Dictionary = td.conns[ci]
+	var want := 1 if side == 0 else 3
+	if String(c.kind) != "door" or int(c.facing) != want or String(c.link) == "off":
+		return false
+	var top := 0
+	for col: Vector2i in td.cols:
+		top = maxi(top, (td.cols[col] as Vector2i).y)
+	if top - int(td.min_y) > pitch:
+		return false
+	var at: Vector3i = (c.at as Vector3i) + off
+	if at.y != s * pitch + 1 or at.z != (zc if side == 0 else _wall_line(side) - 1):
+		return false
+	if at.x < hx1 + 2 or at.x + (c.size as Vector2i).x - 1 > int(cx_end[s]):
+		return false
+	return _clear(td, off, s, side, _wall_line(side))
+
+
+## Storey s's modules over stairs, set before the rest of it: over each module
+## of the storey below with a stair link up, one with a stair link down in the
+## same column and a door onto the same side's corridor, where one fits.
+func _stack(s: int) -> void:
+	for li in placed.size():
+		var lp: Dictionary = placed[li]
+		if int(lp.storey) != s - 1:
+			continue
+		for uc: Dictionary in lib[lp.m].turns[lp.t].conns:
+			if String(uc.kind) != "stair_up" or String(uc.link) == "off":
+				continue
+			var up_at: Vector3i = (uc.at as Vector3i) + (lp.off as Vector3i)
+			var cands := []
+			for m in lib.size():
+				if not _has_link(m, "stair_down") or not _allowed(m, s, true):
+					continue
+				for t in 4:
+					var td: Dictionary = lib[m].turns[t]
+					for dc: Dictionary in td.conns:
+						if String(dc.kind) != "stair_down" or String(dc.link) == "off":
+							continue
+						var off := Vector3i(up_at.x - (dc.at as Vector3i).x, s * pitch - int(td.min_y),
+								up_at.z - (dc.at as Vector3i).z)
+						for ci in (td.conns as Array).size():
+							if _door_fits(td, ci, off, s, int(lp.side)):
+								cands.append([m, t, off, ci, float(lib[m].rules.weight), int(dc.space)])
+			if cands.is_empty():
+				continue
+			var pick: Array = _weighted(cands)
+			_put(s, int(lp.side), pick)
+			stacks.append([{"p": li, "at": up_at, "space": int(uc.space)},
+					{"p": placed.size() - 1, "space": int(pick[5])}])
 
 
 ## The module inside this storey's footprint, on its side of the corridor,
@@ -493,6 +579,44 @@ func _weighted(cands: Array) -> Array:
 		if r <= 0.0:
 			return c
 	return cands[-1]
+
+
+## The stairs between stacked modules (RoomGrow._stair: the steps in the lower
+## room, the ceiling and floor cut over them); each module's facade spots on
+## the outer wall: a window cut (glazed in the glass style), a balcony by the
+## `balcony` chance where nothing of the tower is under or beside it.
+func _stairs_and_facade() -> void:
+	var g := RoomGrow.new()
+	g.lib = lib
+	g.placed = placed
+	for st: Array in stacks:
+		g._stair(cuts, adds, st[0], st[1])
+	# Balconies only out past the ground storey's footprint (the widest).
+	for c: Vector2i in foot[0]:
+		g.occ[c] = [[-(1 << 30), 1 << 30, -1, false]]
+	var glass := RoomGrow._glass()
+	for pl: Dictionary in placed:
+		var td: Dictionary = lib[pl.m].turns[pl.t]
+		var off: Vector3i = pl.off
+		for mk: Dictionary in td.marks:
+			var at: Vector3i = (mk.at as Vector3i) + off
+			var fd: Vector2i = StructureSpaces.FACINGS[int(mk.facing)]
+			# Its wall the tower's outer wall: outside the storey past it.
+			if (foot[int(pl.storey)] as Dictionary).has(Vector2i(at.x, at.z) + fd * int(mk.depth)):
+				continue
+			match String(mk.kind):
+				"window":
+					g._cut_through(cuts, {"at": at, "facing": int(mk.facing), "depth": int(mk.depth)},
+							RoomGrow.FACADE_WINDOW.x, RoomGrow.FACADE_WINDOW.y, at.y)
+					if style == "glass" and glass >= 0:
+						var across := Vector3i(absi(fd.y), 0, absi(fd.x))
+						for x in RoomGrow.FACADE_WINDOW.x:
+							for y in RoomGrow.FACADE_WINDOW.y:
+								adds.append(["plate_1x1", at + across * x + Vector3i(0, y, 0), 0, glass])
+					facade += 1
+				"balcony":
+					if int(pl.storey) > 0 and rng.randf() < float(p.balcony) and g._balcony(cuts, adds, mk, off, int(td.colour)):
+						balconies += 1
 
 
 ## A module's doors that are not its corridor door, walled up (RoomGrow's caps);
@@ -847,6 +971,9 @@ func _slab(s: int) -> void:
 		cells.erase(c)
 	for c in pits[s]:
 		cells.erase(c)
+	for c in cells.keys():
+		if cuts.has(Vector3i(c.x, y, c.y)):
+			cells.erase(c)
 	if s > 0 and s < storeys:
 		for c in shaft:
 			cells.erase(c)

@@ -26,7 +26,9 @@ extends Node3D
 ## from this, so neither can drift from the other or from `_unhandled_input`.
 ## Rows are [section, key, action, key, action]; "" leaves a cell empty.
 const KEY_ROWS := [
-	["CAMERA", "click", "capture mouse to look", "ESC", "release it"],
+	["CAMERA", "Y", "swap FPS and orbit camera", "ESC", "pause (cancels a drawing)"],
+	["", "orbit", "MMB orbit, shift pan, wheel zoom", "hold RMB", "look round"],
+	["", "fps", "hold ALT for the cursor", "", ""],
 	["", "WASD", "fly", "SPACE", "up"],
 	["", "shift", "fast", "Q / CTRL", "down"],
 	["", "alt", "slow", "", ""],
@@ -617,7 +619,7 @@ func _build_hud() -> void:
 		return _ghost_shape(palette[BrickPalette.variant_name(p, 1, false)])
 	_hotbar.changed.connect(_on_hotbar)
 	_hotbar.browsing_changed.connect(func(on: bool) -> void:
-		if _camera.has_method("_set_captured"):
+		if _tools == null and _camera.has_method("_set_captured"):
 			_camera.call("_set_captured", not on))
 	add_child(_hotbar)
 
@@ -917,6 +919,12 @@ func _repaint(rid: int, colour: int, material: int) -> void:
 		world.set_block_colour(asm.frames[at[0]], at[1], colour)
 	recipe.set_material(rid, material)
 	recipe.set_colour(rid, colour)
+
+
+## Esc opens the pause menu here, as in the city (MenuHost asks) -- never over a scripted
+## pass or a test window.
+func pause_allowed() -> bool:
+	return _tools != null and not DebugCamera.hands_off and not ("--gate" in OS.get_cmdline_user_args())
 
 
 func _place_keys() -> void:
@@ -1633,6 +1641,9 @@ func _unhandled_input(e: InputEvent) -> void:
 	# CTRL chords are the menus' (WorkshopMenu shortcuts); CTRL alone is the
 	# camera's "down". Neither is a build key.
 	if e is InputEventKey and e.ctrl_pressed:
+		return
+	if _tools != null and _tools.view.input(e):
+		get_viewport().set_input_as_handled()
 		return
 	if _furnish != null and _furnish.input(e):
 		return
@@ -3562,6 +3573,9 @@ func _handle_under() -> String:
 func _input(e: InputEvent) -> void:
 	if _run_on and e is InputEventMouseMotion:
 		_run_moved += (e as InputEventMouseMotion).relative.length()
+	if _tools != null and _tools.view.input_motion(e):
+		get_viewport().set_input_as_handled()
+		return
 	if not (e is InputEventMouseButton and e.button_index == MOUSE_BUTTON_LEFT):
 		return
 	if _menu != null and _menu.is_modal():
