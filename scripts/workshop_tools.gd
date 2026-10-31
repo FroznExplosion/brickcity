@@ -15,16 +15,13 @@ extends Node
 ## the rest of the wall's bricks where they are.
 
 const TOOLS := [
-	["place", "Place", "", "Click to put the brick in hand on the stud you aim at; hold and move to lay a run (one undo). RMB takes one away."],
-	["pick", "Pick", "MMB", "Click a brick to hold its part, colour and material."],
-	["paint", "Paint", "B", "Click or drag over bricks to give them the colour in hand."],
+	["hand", "Hand", "B", "Place a brick (click; hold and move lays a run), pick one up (click a brick to hold its part and colour), or paint: the pop-out says which. RMB takes a brick away, R turns it."],
 	["draw", "Draw", "K", "Pick an outline and what it makes. Press and drag it on the floor or on a wall, let go; then drag the height and click to place. Right-click or Esc cancels. A wall that meets another at its height joins it."],
 	["roof", "Roof", "", "Click a shape (a room's walls): a gable or hip roof of slopes on top of it."],
 	["stairs", "Stairs", "", "Click the lower floor, then the upper one: a straight stair between them."],
 	["cut", "Cut", "N", "Press on a wall or a floor, drag a shape on it, let go; click to cut right through, or drag first for a depth. The bricks round it are laid again. Door and window: one click, framed."],
 	["repeat", "Repeat", "J", "Copy the picked shape -- or a storey, everything between two heights -- N times up, or along X or Z. Click a brick here to pick what to repeat; a door or window repeats with its cut."],
-	["select", "Select", "L", "Click a shape's brick to pick the shape: change its height, bond or brick, take its cuts out, delete it, or let it go (keep the bricks)."],
-	["builds", "Builds", "X", "Click an inserted build to pick it, then Move, Copy or Delete it."],
+	["select", "Select", "L", "Click a shape or an inserted build to pick it. A shape: drag its top for its height, its side to move it; change its bond or brick, delete it, or let it go. A build: move, copy or delete it."],
 	["rooms", "Rooms", "O", "Rooms and openings: click a room to find it or an opening to turn its kind; RMB forgets one."],
 ]
 ## Every key's button (Docs/BuildTools.md section 7): [id, label, key, what it does, toggle?].
@@ -73,6 +70,7 @@ const ROOF_PICS := [["gable", "Gable", "t_gable"], ["hip", "Hip", "t_hip"]]
 const FILL_PICS := [["here", "Inside", "f_here"], ["top", "Over walls", "f_top"]]
 const BRICK_PICS := [["fill", "Fill gaps"], ["only", "Only this"]]
 const THICK_PICS := [["0", "Brick"], ["1", "1"], ["2", "2"], ["3", "3"]]
+const HAND_PICS := [["place", "Place", "place"], ["pick", "Pick", "pick"], ["paint", "Paint", "paint"]]
 const POPOUT_W := 204.0
 ## A door and a window cut by one click, to start: studs across, plates up; a window's sill
 ## is where it is clicked, a door stands on the floor of the wall.
@@ -83,6 +81,14 @@ const REPEAT_DIRS := [["up", "Up"], ["x", "Along X"], ["z", "Along Z"]]
 
 var ws    ## the workshop (workshop.gd)
 var rail: ToolRail
+## Hand, Edit and View's buttons, across the screen under the menus.
+var _bar: PanelContainer
+## The numbers beside the cursor, and a height being typed while pulling.
+var _tag: Label
+var typed := ""
+var _hand_row := {}
+var _hand_box: VBoxContainer
+var _last_hand := "place"
 var view: WorkshopView
 var tool := "place"
 
@@ -238,7 +244,28 @@ func setup(workshop, layer: CanvasLayer) -> void:
 	rail.name = "ToolRail"
 	layer.add_child(rail)
 	rail.fill("Build", TOOLS, pick, [], 2)
-	rail.actions(ACTIONS, act)
+	_bar = PanelContainer.new()
+	_bar.name = "ToolBar"
+	_bar.add_theme_stylebox_override("panel", rail.get_theme_stylebox("panel"))
+	layer.add_child(_bar)
+	var flow := HFlowContainer.new()
+	flow.add_theme_constant_override("h_separation", 3)
+	flow.add_theme_constant_override("v_separation", 2)
+	_bar.add_child(flow)
+	rail.actions(ACTIONS, act, flow)
+	_tag = Label.new()
+	_tag.name = "CursorTag"
+	_tag.add_theme_font_size_override("font_size", 14)
+	_tag.add_theme_color_override("font_color", Color(1.0, 0.95, 0.75))
+	_tag.add_theme_color_override("font_outline_color", Color.BLACK)
+	_tag.add_theme_constant_override("outline_size", 5)
+	_tag.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_tag.visible = false
+	layer.add_child(_tag)
+	# The keys panel waits to be asked for: every key has a button now.
+	ws._keys_on = false
+	if ws._keys_panel != null:
+		ws._keys_panel.visible = false
 	_build_options()
 	view = WorkshopView.new()
 	view.setup(ws)
@@ -1016,6 +1043,10 @@ func _apply(rec: Dictionary) -> Dictionary:
 
 ## A rail button or its key: that tool in hand, everything else put down.
 func pick(id: String) -> void:
+	if id == "hand":
+		id = _last_hand
+	if id in ["place", "pick", "paint"]:
+		_last_hand = id
 	cancel()
 	if ws._spaces != null and ws._spaces.active and id != "rooms":
 		ws._spaces.toggle()
@@ -1039,6 +1070,7 @@ func pick(id: String) -> void:
 ## Drop what is being drawn: a drag, a stroke, a wall line, a stair's first click.
 func cancel() -> void:
 	_drag = {}
+	typed = ""
 	_base_key = ""
 	_sk = {}
 	pen.points.clear()
@@ -1100,6 +1132,16 @@ func say(text: String) -> void:
 	_status_left = 6.0
 
 
+## How tall the bar across the top is.
+func bar_height() -> float:
+	return _bar.size.y + 4.0 if _bar != null else 0.0
+
+
+## The rail's button for a tool: Place, Pick and Paint are Hand's.
+static func rail_id(on: String) -> String:
+	return "hand" if on in ["place", "pick", "paint"] else on
+
+
 ## The tool in hand, as the rail lights it.
 func active() -> String:
 	if ws._painting:
@@ -1120,6 +1162,9 @@ func _build_options() -> void:
 	_status.add_theme_color_override("font_color", Color(1.0, 0.88, 0.5))
 	_status.visible = false
 	rail.options.add_child(_status)
+	_hand_box = VBoxContainer.new()
+	rail.options.add_child(_hand_box)
+	_hand_row = rail.pictures(_hand_box, "", HAND_PICS, pick, "place", 3)
 	_kind_box = VBoxContainer.new()
 	rail.options.add_child(_kind_box)
 	_outline_row = rail.pictures(_kind_box, "Outline", OUTLINE_PICS, set_outline, outline, 4)
@@ -1510,6 +1555,8 @@ func input(e: InputEvent) -> bool:
 	if tool == "draw" and pen_outline() and _drag.is_empty() and _sketch_input(e):
 		return true
 	if e is InputEventKey and e.pressed and not e.echo and not e.ctrl_pressed:
+		if _drag.get("phase", "") == "height" and _typed_key(e):
+			return true
 		if e.alt_pressed:
 			if e.keycode == KEY_D:
 				pick("place" if tool == "draw" else "draw")
@@ -1560,11 +1607,7 @@ func input(e: InputEvent) -> bool:
 		"pick":
 			if e.pressed and e.button_index == MOUSE_BUTTON_LEFT:
 				ws._pick_block()
-				return true
-		"builds":
-			if e.pressed and e.button_index == MOUSE_BUTTON_LEFT:
-				var ray := _ray()
-				ws.select_group_ray(ray[0], ray[1])
+				pick("place")
 				return true
 		"stairs":
 			if e.pressed and e.button_index == MOUSE_BUTTON_LEFT:
@@ -2012,10 +2055,12 @@ func _to_height(rec: Dictionary = {}) -> void:
 			_drag.anchor = _local(l, (lo + hi) * 0.5, float(int(face.front) + (0 if into > 0 else 1)))
 			_drag.through = true
 			_drag.from_dir = _ray()[1]
-			say("Click now to cut right through, or drag for a depth first.")
+			typed = ""
+			say("Click now to cut right through, or drag (or type) a depth first.")
 			return
 		_drag.anchor = _local(l, (lo + hi) * 0.5, float(int(rec.at) + (1 if into > 0 else 0)))
-	say("Move the cursor for the height; click to place. Right-click or Esc cancels.")
+	typed = ""
+	say("Move the cursor for the height (or type it); click to place. Right-click or Esc cancels.")
 	if String(rec.kind) == "polyline":
 		var meet := _walls_meeting(rec)
 		if not meet.is_empty():
@@ -2031,8 +2076,8 @@ func _pull_height() -> void:
 	var axis := Vector3.UP if l == "flat" else (Vector3.BACK if l == "wall_x" else Vector3.RIGHT)
 	var unit := BrickPalette.PLATE_M if l == "flat" else BrickPalette.STUD_M
 	var ray := _ray()
-	# Only when the cursor (or the view) moved: a height set stays set.
-	if _drag.get("last_ray") == ray:
+	# Only when the cursor (or the view) moved, and nothing is typed: a height set stays set.
+	if _drag.get("last_ray") == ray or typed != "":
 		return
 	_drag.last_ray = ray
 	var xf: Transform3D = ws.world.get_chunk_transform(ws.asm.frames[0])
@@ -2056,14 +2101,12 @@ func _pull_height() -> void:
 		var d := clampi(int(round(along / unit)) * into, 1, 64)
 		rec.depth = d
 		rec.at = int(_drag.at0) if into > 0 else int(_drag.at0) - d + 1
-		say("%d %s deep. Click to cut; right-click or Esc cancels." % [d, "plates" if l == "flat" else "studs"])
 		return
 	if _drag.has("into"):
 		# A shape coming out of a wall's face.
 		var out_d := maxi(1, int(round(along / unit)) * -int(_drag.into))
 		rec.depth = out_d
 		rec.at = int(_drag.at0) if int(_drag.into) < 0 else int(_drag.at0) - out_d + 1
-		say("%d stud%s out. Click to place; right-click or Esc cancels." % [out_d, "" if out_d == 1 else "s"])
 		return
 	if l == "flat":
 		rec.depth = maxi(step, n) + int(rec.get("extra", 0))
@@ -2075,19 +2118,6 @@ func _pull_height() -> void:
 		# Standing: pulled toward you or away, its thickness.
 		rec.depth = maxi(1, absi(n))
 		rec.at = int(_drag.at0) if n >= 0 else int(_drag.at0) - rec.depth + 1
-	var bricks := ""
-	if int(rec.get("storey", 0)) > 0:
-		var storeys := floori(float(int(rec.depth) - int(rec.get("extra", 0))) / step)
-		bricks = " (%d storey%s%s)" % [storeys, "" if storeys == 1 else "s", ", flat roof" if rec.get("roof", false) else ""]
-	elif l == "flat" and step == 1:
-		bricks = " (%d brick%s and %d plate%s)" % [rec.depth / 3, "" if rec.depth / 3 == 1 else "s",
-				rec.depth % 3, "" if rec.depth % 3 == 1 else "s"]
-	elif l == "flat":
-		bricks = " (%d course%s)" % [rec.depth / step, "" if rec.depth / step == 1 else "s"]
-	say(("%d plate%s tall%s" % [rec.depth, "" if rec.depth == 1 else "s", bricks] if l == "flat"
-			else "%d stud%s thick" % [rec.depth, "" if rec.depth == 1 else "s"])
-			+ (" (%d cells left empty)" % _plan_gaps if rec.get("strict", false) and _plan_gaps > 0 else "")
-			+ ". Click to place; right-click or Esc cancels.")
 
 
 ## Place what is being made, at the height pulled. Returns its id (or -1: a cut, nothing).
@@ -2100,6 +2130,7 @@ func commit_pending() -> int:
 	var d := _drag
 	_drag = {}
 	_base_key = ""
+	typed = ""
 	var rec: Dictionary = d.rec
 	say("")
 	if d.get("cut", false):
@@ -2464,6 +2495,11 @@ func _select_click() -> void:
 	var rid: int = ws._recipe_id_at(0, hit.block)
 	if rid >= 0:
 		selected = owner_of(ws.recipe.part_of(rid), ws.recipe.cell_of(rid))
+	# Not a shape: an inserted build, if it is one of those.
+	if selected < 0:
+		ws.select_group_ray(ray[0], ray[1])
+	else:
+		ws._select_group(-1)
 
 
 func _sync_select() -> void:
@@ -2491,11 +2527,18 @@ func _sync_select() -> void:
 
 func process() -> void:
 	view.sync()
-	var top: float = 12.0 + (ws._menu.bar_height() if ws._menu != null else 0.0)
+	var menu_h: float = ws._menu.bar_height() if ws._menu != null else 0.0
+	var vw: float = ws.get_viewport().get_visible_rect().size.x
+	_bar.position = Vector2(8, menu_h + 4.0)
+	_bar.custom_minimum_size.x = vw - 16.0
+	_bar.size = Vector2(vw - 16.0, 0.0)
+	var top: float = 8.0 + menu_h + bar_height()
 	rail.position = Vector2(12, top)
 	rail.size = Vector2.ZERO
 	var on := active()
-	rail.show_active(on, TOOLS)
+	rail.show_active(rail_id(on), TOOLS)
+	_hand_box.visible = rail_id(on) == "hand"
+	ToolRail.light(_hand_row, on)
 	rail.show_toggles({"lock": ws.plane_locked, "snap": ws._snap_on, "mirror": ws.mirror_on,
 			"grid": ws._grid_on, "stress": ws._overlay_on, "keys": ws._keys_on, "fps": view.mode == "fps"})
 	rail.set_action_text("layer", ["Structure", "Interior", "Detail"][clampi(ws._role, 0, 2)])
@@ -2515,10 +2558,9 @@ func process() -> void:
 	_roof_box.visible = on == "roof"
 	_paint_box.visible = on == "paint"
 	_paint_spin.set_value_no_signal(ws._paint_radius)
-	_builds_box.visible = on == "builds"
-	if on == "builds":
-		_builds_label.text = ("Click an inserted build." if ws._selected < 0
-				else "Picked: %s" % String(ws.recipe.groups[ws._selected].get("name", "a build")))
+	_builds_box.visible = on == "select" and ws._selected >= 0
+	if _builds_box.visible:
+		_builds_label.text = "Picked: %s" % String(ws.recipe.groups[ws._selected].get("name", "a build"))
 	_rooms_box.visible = on == "rooms"
 	if on == "rooms":
 		_rooms_label.text = "next room: %s   point: %s" % [ws._spaces.kind, ws._spaces.point_kind]
@@ -2557,13 +2599,21 @@ func process() -> void:
 		_shown = Vector2i(selected, _rev)
 		_sync_select()
 	# The tool's pop-out beside its button; the readout and the paint palette beside that.
-	var bt: Button = rail.buttons.get(on)
+	var bt: Button = rail.buttons.get(rail_id(on))
 	rail.place_flyout(bt.global_position.y if bt != null else top, vh - 100.0)
 	var x := _rail_right()
 	if ws._hud != null:
 		ws._hud.position = Vector2(x, top)
 	if ws._paint_palette != null:
 		ws._paint_palette.position = Vector2(x, top + 110.0)
+	var said := tag_text() if not _drag.is_empty() else ""
+	_tag.visible = said != ""
+	if said != "":
+		_tag.text = said
+		var at: Vector2 = ws.get_viewport().get_mouse_position() + Vector2(18, 14)
+		if Input.mouse_mode == Input.MOUSE_MODE_CAPTURED:
+			at = ws.get_viewport().get_visible_rect().size * 0.5 + Vector2(18, 14)
+		_tag.position = at
 	if _drag.get("phase", "") == "height":
 		_pull_height()
 		ws._ghost.visible = false
@@ -2574,9 +2624,86 @@ func process() -> void:
 			if wall_straight and String(_drag.kind) == "polyline":
 				_drag.b = _straight(_drag.a, _drag.b)
 		ws._ghost.visible = false
-	elif tool in ["cut", "select", "repeat", "pick", "builds", "roof"] or not _sk.is_empty():
+	elif tool in ["cut", "select", "repeat", "pick", "roof"] or not _sk.is_empty():
 		ws._ghost.visible = false
 	_draw()
+
+
+## The numbers beside the cursor: the size of a base being dragged, the height being pulled
+## (or typed). "" for nothing.
+func tag_text() -> String:
+	var rec := _making()
+	if rec.is_empty():
+		return ""
+	var l := String(rec.lie)
+	if _drag.get("phase", "") == "base":
+		var a := BrickShapes._v2(rec.a)
+		var b := BrickShapes._v2(rec.b)
+		var w := absi(b.x - a.x) + 1
+		var h := absi(b.y - a.y) + 1
+		if String(rec.kind) == "polyline" and not bool(rec.points.get("closed", false)):
+			return "%d stud%s" % [maxi(w, h), "" if maxi(w, h) == 1 else "s"]
+		return "%d x %d %s" % [w, h, "studs" if l == "flat" else "(studs, plates)"]
+	var head := ""
+	if int(rec.get("storey", 0)) > 0:
+		var n := storeys_of(rec)
+		head = "%d storey%s" % [n, "" if n == 1 else "s"]
+	elif _drag.has("into"):
+		head = "%d %s %s" % [rec.depth, "stud" if l != "flat" else "plate", "deep" if _drag.get("cut", false) else "out"]
+	elif l == "flat":
+		head = "%d plates" % int(rec.depth)
+		var c := height_step("flat")
+		if c > 1:
+			head += " (%d courses)" % floori(float(int(rec.depth)) / c)
+	else:
+		head = "%d studs thick" % int(rec.depth)
+	if typed != "":
+		head = "typing: %s   %s" % [typed, head]
+	if rec.get("strict", false) and _plan_gaps > 0:
+		head += "   %d cells empty" % _plan_gaps
+	return head
+
+
+## How many storeys a building's depth is.
+static func storeys_of(rec: Dictionary) -> int:
+	var ft := maxi(1, int(rec.get("floor", 1)))
+	var pitch := int(rec.storey) + ft
+	return floori(float(int(rec.depth) - (ft if rec.get("roof", false) else 0)) / pitch)
+
+
+## While pulling: a digit types the height (plates; storeys for a building; studs for a depth
+## or a thickness), Backspace takes one back. True if the key was this.
+func _typed_key(e: InputEventKey) -> bool:
+	var d := -1
+	if e.keycode >= KEY_0 and e.keycode <= KEY_9:
+		d = e.keycode - KEY_0
+	elif e.keycode >= KEY_KP_0 and e.keycode <= KEY_KP_9:
+		d = e.keycode - KEY_KP_0
+	if d >= 0:
+		typed += str(d)
+	elif e.keycode == KEY_BACKSPACE and typed != "":
+		typed = typed.substr(0, typed.length() - 1)
+	else:
+		return false
+	apply_typed()
+	return true
+
+
+## The typed number as the height.
+func apply_typed() -> void:
+	if typed == "" or _drag.get("phase", "") != "height":
+		return
+	var rec: Dictionary = _drag.rec
+	var n := maxi(1, typed.to_int())
+	if int(rec.get("storey", 0)) > 0:
+		rec.depth = n * int(rec.step) + int(rec.get("extra", 0))
+		return
+	rec.depth = n + int(rec.get("extra", 0))
+	if _drag.has("into"):
+		var into := int(_drag.into)
+		var out := -into if not _drag.get("cut", false) else into
+		rec.at = int(_drag.at0) if out > 0 else int(_drag.at0) - n + 1
+		_drag.through = false
 
 
 ## Where the drag is now, in its plane's cells.

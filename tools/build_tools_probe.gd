@@ -47,6 +47,7 @@ func _initialize() -> void:
 	_floor_plan_checks()
 	await _simpler_checks()
 	_draw_checks()
+	_rest_checks()
 	print("\n%d passed, %d failed" % [_pass, _fail])
 	quit(1 if _fail > 0 else 0)
 
@@ -609,7 +610,7 @@ func _button_checks() -> void:
 	for row in WorkshopTools.TOOLS:
 		var b: Button = t.rail.buttons.get(row[0])
 		tools_ok = tools_ok and b != null and b.icon != null
-	_ok("every tool a button with an icon", tools_ok and t.rail.buttons.size() == 11)
+	_ok("every tool a button with an icon", tools_ok and t.rail.buttons.size() == 8)
 	var yaw: int = _ws._yaw
 	t.act("rotate")
 	_ok("Rotate turns the brick in hand", _ws._yaw == (yaw + 1) % 4)
@@ -1004,7 +1005,8 @@ func _simpler_checks() -> void:
 	t.pick("place")
 	await process_frame
 	await process_frame
-	_ok("Place has none", not t.rail.flyout.visible)
+	_ok("Hand's pop-out says which of Place, Pick, Paint", t.rail.flyout.visible and t._hand_box.visible
+			and t._hand_row.size() == 3)
 	# Only the held brick.
 	var w := BrickWorld.new()
 	var pal := TowerRecipe.bake_palette(w)
@@ -1254,4 +1256,52 @@ func _draw_checks() -> void:
 	t.combine = false
 	t.makes = "solid"
 	t.set_outline("box")
+	t.pick("place")
+
+
+func _key(code: int) -> InputEventKey:
+	var k := InputEventKey.new()
+	k.keycode = code
+	k.pressed = true
+	return k
+
+
+func _rest_checks() -> void:
+	print("[probe] the rest of the list (section 12)")
+	_ws._new_build()
+	var t: WorkshopTools = _ws._tools
+	_hold("brick_1x2")
+	t.pick("hand")
+	_ok("Hand is Place to start", t.active() == "place" and WorkshopTools.rail_id(t.active()) == "hand")
+	t.pick("paint")
+	_ok("Hand's Paint is the brush", _ws._painting and WorkshopTools.rail_id(t.active()) == "hand")
+	t.pick("hand")
+	_ok("Hand comes back to what it was", _ws._painting)
+	t.pick("place")
+	_ok("no Builds tool, a bar across the top", not t.rail.buttons.has("builds") and t._bar.get_parent() != null
+			and t.rail.action_buttons.has("undo") and not t.rail.is_ancestor_of(t.rail.action_buttons["undo"]))
+	# Numbers at the cursor, a typed height.
+	t.pick("draw")
+	t.set_outline("line")
+	t.makes = "walls"
+	_drag_outline(t, Vector3i(4, 1, 4), Vector2i(15, 4))
+	_ok("the height at the cursor", t.tag_text().contains("3 plates"), t.tag_text())
+	t._drag.last_ray = t._ray()
+	t.input(_key(KEY_1))
+	t.input(_key(KEY_2))
+	_ok("typed: 12 plates", int(t._drag.rec.depth) == 12 and t.typed == "12" and t.tag_text().contains("typing: 12"), t.tag_text())
+	t.input(_key(KEY_BACKSPACE))
+	_ok("Backspace takes a digit back", int(t._drag.rec.depth) == 1 and t.typed == "1")
+	t.input(_key(KEY_5))
+	t.input(_key(KEY_ENTER))
+	_ok("Enter places it at 15", t._drag.is_empty() and t.typed == "" and int(t.shapes()[0].depth) == 15)
+	t.set_outline("box")
+	t.makes = "building"
+	t.storey_courses = 2
+	t.flat_roof = true
+	_drag_outline(t, Vector3i(20, 1, 20), Vector2i(30, 30))
+	t.input(_key(KEY_3))
+	_ok("a building takes storeys", int(t._drag.rec.depth) == 3 * 7 + 1 and t.tag_text().contains("3 storeys"), t.tag_text())
+	t.cancel()
+	t.makes = "solid"
 	t.pick("place")
