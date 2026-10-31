@@ -194,6 +194,8 @@ var _module_storeys: OptionButton
 var _module_min: SpinBox
 var _module_max: SpinBox
 var _module_weight: SpinBox
+## What Generate grows (RoomGrow.PARAMS).
+var grow_params := {"seed": 1, "rooms": 10, "path": 3}
 var _slope_cache := {}
 var _repeat_label: Label
 var _rep_lo_spin: SpinBox
@@ -1244,6 +1246,23 @@ func _build_options() -> void:
 	_module_weight = _spin(_rooms_box, "weight", 0, 100, 1,
 			func(v: float) -> void: ws._spaces.set_rule("weight", v))
 	_module_weight.step = 0.1
+	# Grow a building from the saved modules (Docs/RoomModules.md 3).
+	var gl := Label.new()
+	gl.text = "Grow a building from saved modules:"
+	_rooms_box.add_child(gl)
+	var seed_spin := _spin(_rooms_box, "seed", 1, 99999, int(grow_params.seed),
+			func(v: float) -> void: grow_params.seed = int(v))
+	_spin(_rooms_box, "modules", 1, 200, int(grow_params.rooms),
+			func(v: float) -> void: grow_params.rooms = int(v))
+	_spin(_rooms_box, "path length", 0, 50, int(grow_params.path),
+			func(v: float) -> void: grow_params.path = int(v))
+	var grow_row := HBoxContainer.new()
+	_rooms_box.add_child(grow_row)
+	_button(grow_row, "Generate", func() -> void: ws._spaces.generate(grow_params))
+	_button(grow_row, "Next seed", func() -> void:
+			grow_params.seed = int(grow_params.seed) + 1
+			seed_spin.set_value_no_signal(int(grow_params.seed))
+			ws._spaces.generate(grow_params))
 
 	_cut_box = VBoxContainer.new()
 	rail.options.add_child(_cut_box)

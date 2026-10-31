@@ -18,6 +18,11 @@ extends SceneTree
 ##   inside     a second room through the doorway makes it a hole between two
 ##              rooms of the module: no connector, unless set start by hand
 ##   rules      the module's rules, the marks and the links save and load back
+##   generate   Generate on the rail grows a building from the modules (the test
+##              kit's, room_module_kit.gd), asks first over unsaved work, and opens
+##              it with its rooms found again from their seeds
+
+const Kit := preload("res://tools/room_module_kit.gd")
 
 var _ws
 var _frames := 0
@@ -183,3 +188,32 @@ func _run() -> void:
 	_ok("set start by hand, the hole inside is a connector all the same",
 			_of(rec, "door").size() >= 1 and String(_of(rec, "door")[0].link) == "start",
 			str(rec.get("connectors", [])))
+
+	# Generate (Docs/RoomModules.md stage 4).
+	RoomModules.use_recipes(Kit.modules())
+	_ws._dirty = true
+	var asked: Dictionary = sp.generate({"seed": 3, "rooms": 8, "path": 2})
+	var plan: Dictionary = sp.generate({"seed": 3, "rooms": 8, "path": 2})
+	# A building bigger than the baseplate: the plate grows to hold it all.
+	_ws._dirty = false
+	var big: Dictionary = sp.generate({"seed": 11, "rooms": 30, "path": 4})
+	var laid := 0
+	for at in _ws._placed_at:
+		if int(at[1]) >= 0:
+			laid += 1
+	var bb: Array = _ws.recipe.bounds()
+	_ok("a building bigger than the baseplate: the plate grows, every brick laid",
+			bool(big.get("ok", false)) and laid == _ws.recipe.size() and int(_ws.plate_studs) >= maxi(bb[1].x, bb[1].z),
+			"%d of %d bricks, %s studs, plate %d" % [laid, _ws.recipe.size(), str(bb[1]), _ws.plate_studs])
+	_ws._dirty = false
+	plan = sp.generate({"seed": 3, "rooms": 8, "path": 2})
+	RoomModules.use_recipes([])
+	sp._edited_ms -= 1000
+	sp.process()
+	rec = sp.record()
+	var lost := (rec.spaces as Array).filter(func(x) -> bool: return x.has("lost")).size()
+	_ok("Generate asks first over unsaved work, then grows a building and opens it, every room found again",
+			asked.is_empty() and bool(plan.get("ok", false)) and _ws.recipe.size() > 0
+			and _ws.recipe.meta.has("generated") and (rec.spaces as Array).size() == int(plan.stats.modules)
+			and lost == 0,
+			"%s; %d bricks, %d room(s), %d lost" % [sp.message, _ws.recipe.size(), (rec.spaces as Array).size(), lost])

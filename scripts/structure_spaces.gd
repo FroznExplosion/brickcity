@@ -671,7 +671,7 @@ static func door_connector(o: Dictionary, room: Dictionary, cell_kind: Callable,
 		depth = maxi(depth, 1)
 	var face := low + d * depth
 	return {"kind": "door", "space": int(o.space), "at": [face.x, y0, face.y], "facing": facing,
-			"size": [width, y1 - y0 + 1], "link": "auto"}
+			"size": [width, y1 - y0 + 1], "depth": depth, "link": "auto"}
 
 
 ## The facing (FACINGS index) nearest a horizontal direction.
