@@ -2271,3 +2271,65 @@ fade near the camera was written after the last windowed run that counted: it is
 `--gate=rocks` windowed failed twice at 2 fps on its timeouts (headless 4/4). `--gate=far` failed its
 two cover checks once, under load at 98 C, and passed 11/11 on the same code straight after; nothing
 here touches the AI.
+
+#### Plan, step 7 (2026-10-31): AI on generated worlds
+
+Until now the AI only exists on home, and nothing on the planet fires at the player outside a gate.
+
+- **Each world its own AI.** `PlanetScene.ai_of`: PlanetBody -> AIServices, each with its own nav net
+  anchored on the town being fought over, its buildings' bricks, its trees. `ai` is the one of the
+  world the player is on; it sleeps with its world (its soldiers go under the frame as everything
+  else does, and the net is told how far the world moved on waking). The player's kit (aim assist,
+  arsenal, callouts, aggro meter) moves to it: `PlanetPlayerKit.use_services`.
+- **One town at a time.** A net is a lattice round one direction, good for a town and its country, not
+  a planet. Going to another town on the same world drops the old fight, its survivors with it.
+- **Garrisons.** `PlanetGarrison` (a Node3D, so all it holds sleeps with its world): a squad of four at
+  the middle of a settled town, raised when the player is on foot within 250 m, the region built off
+  the frame but the first. It stands until it hears or sees the player, then advances on them. A
+  town wiped out stays clear (`cleared`, kept across jumps). Home has no garrison.
+- **The player can now be shot in play**, so: a downed player gets up after 3 s beside the ship, or
+  where they fell if it is not there. Out of the seat on the ground is on foot with the gun (it was
+  the flying walker), and a player not on foot is out of the fight (the pawn left behind is not a
+  target).
+- Gate `--gate=garrison`: a jump to a settled world, down by a town, out; the world's own AI and the
+  kit on it; the squad raised, on the ground, closing and firing; left and come back to, there and
+  still fighting; wiped out, clear; down and up again; home's AI back on home.
+
+**Step 7 built (2026-10-31).** As the plan: `PlanetScene.ai_of`, `setup_ai(dir, body)`,
+`PlanetGarrison` (scripts/planet/planet_garrison.gd), `PlanetPlayerKit.use_services` and `present`.
+A world's AI costs ~43 ms when the player comes within 250 m of a town (one region; the rest are
+built off the frame), its four soldiers ~35 ms.
+
+`--gate=garrison` 17/17 headless (twice; two more runs passed all but the last two checks and ran
+into the run's own time limit on the way home): a jump to Ordar, down 150 m from a town of Ordar III,
+no garrison raised from the seat; out, on foot, four soldiers on the world's own AI and the kit on it;
+they see the player (50 m), close 15 m and fire; in the seat the player is out of the fight; left, the
+squad sleeps with its world; back, each 0.004 m from where it was, held until the ground was there
+and nobody fell; its paths on the ground (the net followed the world), and it fights on; wiped out,
+the town clear; the player down and up again 11 m from the ship; home on home's AI.
+
+Found on the way:
+- **Bodies far from the player fall through the world.** A woken world's soldiers had no colliders
+  and came out the far side of it; with a viewer of their own they sank 76 m. Far from the player the
+  ground is coarse where it is there at all, and it is swapped under them as the player comes. So a
+  garrison is **held** (process off) with the player over 400 m away, and let go under 200 m with
+  ground under each. A home soldier in the same place would do the same: no home gate has left one.
+- **A planet has no inside.** The player, placed 100 m off by the gate, fell through once in 4 runs:
+  `keep_over_ground` puts a pawn found 3 m under the ground back on it (player every frame, soldiers
+  every half second). It caught nothing in the two runs that counted it; it is there for the one
+  that does, and has not been seen to work.
+- `Squad.center()` of nobody is the origin: the garrison took that for the player being far and held
+  a wiped-out squad instead of counting the town clear. It looks for that first now.
+- One run ended with exit 127 mid-fight, no error, nothing in the Windows log, other chats' probes
+  running at the time. Not seen again in the 8 headless runs after it; cause unknown.
+
+The rest still pass headless: `system_probe` 31, squad 10, far 11, pawn 12, jump 10, worlds 8, ship 9,
+dock 7, debris 8, rocks 4, system 17. The ring's fade (step 6) was seen at last, windowed with the
+display awake: `--gate=rocks` 4/4, rocks round the ship and the ring a thin band far off, no wall.
+
+Not checked: windowed. The one windowed run had the display asleep (6 fps) and failed on the gate's
+timeouts, so the fight has not been seen on screen, nor its frame times taken.
+
+Not yet: soldiers only rifles, no officers or mechs; one squad a town, however big the town; survivors
+of a town left for another just go; garrisons are not saved, only `cleared` (and that only for the
+session); home has none; a player's down costs nothing.

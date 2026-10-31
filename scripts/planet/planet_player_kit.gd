@@ -24,6 +24,10 @@ var aim_assist: AimAssist
 var hud: PlayerHud
 var feedback: CombatFeedback
 var _callouts: CalloutHud
+var _listener: Callouts.Listener
+var _meter: AggroMeter
+## The pawn is in the fight: on foot, not left behind by the one flying.
+var _present := true
 ## A pass or a test window: nothing is loaded from, or saved to, the player's save.
 var scripted := false
 
@@ -69,18 +73,18 @@ func _build() -> void:
 	if camera is DebugCamera:
 		(camera as DebugCamera).assist = aim_assist
 	gun.assist = aim_assist
-	var l := services.callouts.listen(camera, 0, pawn)
+	_listener = services.callouts.listen(camera, 0, pawn)
 	_callouts = CalloutHud.new()
 	_callouts.name = "Callouts"
-	_callouts.setup(services.callouts, l)
+	_callouts.setup(services.callouts, _listener)
 	add_child(_callouts)
 	var aggro_layer := CanvasLayer.new()
 	aggro_layer.name = "Aggro"
 	aggro_layer.layer = 5
-	var meter := AggroMeter.new()
-	meter.table = services.aggro_of(1)
-	meter.position = Vector2(20.0, 180.0)
-	aggro_layer.add_child(meter)
+	_meter = AggroMeter.new()
+	_meter.table = services.aggro_of(1)
+	_meter.position = Vector2(20.0, 180.0)
+	aggro_layer.add_child(_meter)
 	add_child(aggro_layer)
 	arsenal = PlayerArsenal.new()
 	arsenal.name = "Arsenal"
@@ -95,6 +99,34 @@ func _build() -> void:
 	var rng := RandomNumberGenerator.new()
 	rng.seed = 0x1007
 	arsenal.fill_default(rng)
+
+
+## The player has come to the world `s` is the AI of (Docs/Planets.md 11.12 step 7).
+func use_services(s: AIServices) -> void:
+	if s == services:
+		return
+	services.pawns.erase(pawn)
+	for c in gun.fired.get_connections():
+		if (c.callable as Callable).get_object() == services:
+			gun.fired.disconnect(c.callable)
+	services.callouts.listeners.erase(_listener)
+	services = s
+	if _present:
+		s.add_pawn(pawn)
+	aim_assist.services = s
+	arsenal.services = s
+	_listener = s.callouts.listen(camera, 0, pawn)
+	_callouts.setup(s.callouts, _listener)
+	_meter.table = s.aggro_of(1)
+
+
+## In the fight or out of it: nobody hunts the pawn left behind by one flying.
+func present(on: bool) -> void:
+	_present = on
+	if on:
+		services.add_pawn(pawn)
+	else:
+		services.pawns.erase(pawn)
 
 
 ## The level and the kit into the character save, as the firefight keeps them.

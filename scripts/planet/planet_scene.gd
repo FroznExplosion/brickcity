@@ -21,6 +21,7 @@ extends Node3D
 ##   -- --gate=trees: a tank knocks a tree down; a truck is stopped by one
 ##   (11.10, trees and vehicles).
 ##   -- --gate=squad: a squad on the AI's nav region round the town (11.8 N2)
+##   -- --gate=garrison: a generated world's own AI and a town's squad (11.12 step 7)
 ##   walks to the player round the curve, takes cover, fires.
 ##   -- --gate=travel: a squad ordered 200 m out of the town on the nav net
 ##   (11.8 N4), across the regions' borders.
@@ -58,10 +59,18 @@ var _fall_gate := false
 var _hits_gate := false
 var _topple_gate := false
 var _pieces_ai_gate := false
+var _garrison_gate := false
 var _storey_gate := false
 ## The AI round the fight (Docs/Planets.md 11.8, N2, N4): the nav net round the
 ## player's town; ai_world / ai_nav the region the player is in. Made by setup_ai.
 var ai: AIServices
+## Each world's AI (11.12 step 7): PlanetBody -> AIServices. `ai` is the one of the
+## world the player is on, or was last on.
+var ai_of := {}
+## Each settled generated world's PlanetGarrison, made when it is first come to.
+var garrisons := {}
+## The towns wiped out (PlanetGarrison), across jumps.
+var cleared := {}
 var nav_region: PlanetNavRegion
 var _travel_gate := false
 var _far_gate := false
@@ -124,7 +133,8 @@ func _ready() -> void:
 	_jump_gate = "--gate=jump" in OS.get_cmdline_user_args()
 	_debris_gate = "--gate=debris" in OS.get_cmdline_user_args()
 	_rocks_gate = "--gate=rocks" in OS.get_cmdline_user_args()
-	_gate = _gate or _system_gate or _ship_gate or _dock_gate or _worlds_gate or _jump_gate or _debris_gate or _rocks_gate or _pawn_gate or _mech_gate or _tank_gate or _soldier_gate or _squad_gate or _travel_gate or _far_gate or _drive_gate or _trees_gate or _bricks_gate or _damage_gate or _fall_gate or _hits_gate or _topple_gate or _pieces_ai_gate or _storey_gate
+	_garrison_gate = "--gate=garrison" in OS.get_cmdline_user_args()
+	_gate = _gate or _system_gate or _ship_gate or _dock_gate or _worlds_gate or _jump_gate or _debris_gate or _rocks_gate or _garrison_gate or _pawn_gate or _mech_gate or _tank_gate or _soldier_gate or _squad_gate or _travel_gate or _far_gate or _drive_gate or _trees_gate or _bricks_gate or _damage_gate or _fall_gate or _hits_gate or _topple_gate or _pieces_ai_gate or _storey_gate
 	data = PlanetData.new()
 	data.planet_name = "proto"
 	# Towns and landmarks: their pads go into the ground before it is built.
@@ -237,6 +247,8 @@ func _ready() -> void:
 			_run_debris_gate()
 		elif _rocks_gate:
 			_run_rocks_gate()
+		elif _garrison_gate:
+			_run_garrison_gate()
 		else:
 			_run_gate()
 
@@ -317,6 +329,32 @@ func _spawn_player(feet: Vector3, facing: Vector3) -> void:
 		s.world3d = get_world_3d()
 	kit = PlanetPlayerKit.attach(self, player, cam, gun, view, s, _gate)
 	kit.add_to_group(PlanetSystem.RIG)
+	pawn.health.died.connect(_on_player_down)
+
+
+## The player is down: up again in a moment, beside the ship if it is on the same
+## ground, or where they fell.
+func _on_player_down() -> void:
+	await get_tree().create_timer(DOWN_FOR).timeout
+	var at := pawn.feet()
+	if ship != null and ship.landed and ship.ref == system.anchor:
+		var beside := ship.global_transform * Vector3(BESIDE_SHIP, 2.0, 0.0)
+		var ground := _ground_hit(beside)
+		if ground != Vector3.INF:
+			at = ground
+	pawn.health.reset()
+	pawn.place(at + Gravity.up_at(at) * 0.05)
+
+
+## Colliders can go from under a body as the ground streams, and a planet has no
+## inside to land on: a pawn found under body `b`'s ground is put back on it.
+func keep_over_ground(p: Pawn, b: PlanetBody) -> void:
+	var f := p.feet()
+	var dir := b.dir_of(f)
+	if b.altitude_of(f) < b.data.height(dir) - UNDER_GROUND:
+		var at := b.global_transform * b.data.surface_point(dir)
+		p.place(at + Gravity.up_at(at) * 0.5)
+		ground_saves += 1
 
 
 ## Turn the camera, in the pawn's frame, to look along `facing`.
@@ -331,6 +369,9 @@ func _face(facing: Vector3) -> void:
 ## goes with whichever it is, so the ground streams round the player.
 func _set_on_foot(on: bool) -> void:
 	on_foot = on
+	# The pawn left behind while flying is not there to be shot.
+	if kit != null:
+		kit.present(on)
 	var viewer := walker.viewer
 	if on:
 		var feet := _ground_hit(walker.global_position)
@@ -400,7 +441,10 @@ func _unhandled_input(event: InputEvent) -> void:
 	if ship != null and not _gate:
 		if event is InputEventKey and event.pressed and not event.echo and event.keycode == KEY_E:
 			if piloting:
+				var down := ship.landed
 				unboard()
+				if down:
+					_set_on_foot(true)
 			elif (_anchor() - ship.global_transform * ship.seat()).length() < 8.0:
 				board()
 			get_viewport().set_input_as_handled()
@@ -489,8 +533,9 @@ func _build_system() -> void:
 	system.frozen = _gate and not (_system_gate or _dock_gate)
 	system.anchor_changed.connect(_on_anchor_changed)
 	system.woke.connect(_on_woke)
+	system.jumped.connect(_on_jumped)
 	# A ship parked 45 m behind the spawn (not in the other gates' way).
-	if not _gate or _ship_gate or _dock_gate or _jump_gate or _rocks_gate:
+	if not _gate or _ship_gate or _dock_gate or _jump_gate or _rocks_gate or _garrison_gate:
 		var sd := OrbitalData.new()
 		sd.kind = "ship"
 		sd.orbital_name = "ship"
@@ -502,6 +547,8 @@ func _build_system() -> void:
 		var x := (-east - at * (-east).dot(at)).normalized()
 		ship = system.add_ship(sd, planet, Transform3D(Basis(at.cross(x), at, x), data.surface_point(at) + at * SpaceShip.CLEARANCE))
 		ship.rammed.connect(_on_rammed)
+		# Colliders where it sets down, to step out onto.
+		PlanetBody.track(ship)
 	print("[planet] system %s: %d bodies, the planet at %.0f km, a %.0f min day, a %.0f min year" % [
 			sys.system_name, sys.bodies.size(), data.orbit_radius / 1000.0, data.day / 60.0, data.orbit_period / 60.0])
 
@@ -518,6 +565,21 @@ func _home_awake() -> bool:
 	return system == null or system.anchor == planet
 
 
+## The AI is the world the player is on's: it runs, its nav follows the origin.
+func _ai_awake() -> bool:
+	return ai != null and (system == null or ai_of.get(system.anchor) == ai)
+
+
+## The player takes up the AI of world `b`, if it has one.
+func _ai_follow(b: Node3D) -> void:
+	var s: AIServices = ai_of.get(b)
+	if s == null:
+		return
+	ai = s
+	if kit != null:
+		kit.use_services(s)
+
+
 func _on_anchor_changed(_old: Node3D, _new: Node3D, kick: Vector3) -> void:
 	if walker.flying:
 		walker.inertia += kick
@@ -528,11 +590,30 @@ func _on_anchor_changed(_old: Node3D, _new: Node3D, kick: Vector3) -> void:
 
 
 func _on_woke(body: Node3D, offset: Vector3) -> void:
-	if body != planet:
-		return
-	buildings.on_origin_shift()
-	if ai != null:
-		(ai.nav_net as PlanetNavNet).shift_origin(offset)
+	if body == planet:
+		buildings.on_origin_shift()
+	var s: AIServices = ai_of.get(body)
+	if s != null:
+		(s.nav_net as PlanetNavNet).shift_origin(offset)
+	_ai_follow(body)
+	if garrisons.has(body):
+		(garrisons[body] as PlanetGarrison).hold()
+	elif body is PlanetBody and body != planet and not (body as PlanetBody).data.towns.is_empty():
+		var g := PlanetGarrison.new()
+		g.name = "Garrison"
+		g.setup(self, body, cleared)
+		add_child(g)
+		garrisons[body] = g
+
+
+## What was left in the last system went with it.
+func _on_jumped(_index: int) -> void:
+	for b in ai_of.keys():
+		if b != planet:
+			ai_of.erase(b)
+	garrisons.clear()
+	ai = ai_of.get(planet)
+	_ai_follow(planet)
 
 
 func _build_light() -> void:
@@ -607,8 +688,8 @@ func _process(_delta: float) -> void:
 		var offset := PlanetFrame.recentre(self, _anchor())
 		if _home_awake():
 			buildings.on_origin_shift()
-			if ai != null:
-				(ai.nav_net as PlanetNavNet).shift_origin(offset)
+		if _ai_awake():
+			(ai.nav_net as PlanetNavNet).shift_origin(offset)
 		if system != null:
 			system.on_origin_shift()
 	if system != null:
@@ -652,10 +733,12 @@ func _process(_delta: float) -> void:
 	# walker's own gate, the pawn stands on it.
 	if walker.frozen and not piloting and pawn == null and trees.prebaked and _ground_hit(walker.global_position) != Vector3.INF:
 		walker.frozen = false
-		if not _gate or _pawn_gate or _mech_gate or _tank_gate or _soldier_gate or _squad_gate or _travel_gate or _far_gate or _drive_gate or _trees_gate or _bricks_gate or _damage_gate or _fall_gate or _hits_gate or _topple_gate or _pieces_ai_gate or _storey_gate:
+		if not _gate or _pawn_gate or _mech_gate or _tank_gate or _soldier_gate or _squad_gate or _travel_gate or _far_gate or _drive_gate or _trees_gate or _bricks_gate or _damage_gate or _fall_gate or _hits_gate or _topple_gate or _pieces_ai_gate or _storey_gate or _garrison_gate:
 			_spawn_player(_ground_hit(walker.global_position), -walker.global_transform.basis.z)
 	if not on_foot:
 		walker.flying = pawn != null or walker.flying
+	elif pawn != null:
+		keep_over_ground(pawn, body)
 	if hud != null:
 		hud.text = "%s  alt %.0f m  %.0f fps  view %d  shifts %d (last %.1f ms)  buildings %d near, %d far  %s" % [
 				"on foot (F flies)" if on_foot else ("FLY %.0f m/s (F lands)" % walker.fly_speed if walker.flying else "walk"), alt,
@@ -1255,6 +1338,12 @@ func _run_soldier_gate() -> void:
 # ---------------------------------------------------------------------------
 # The AI on the planet (Docs/Planets.md 11.8, N2 and N4): nav regions round the fight.
 
+## Metres under the ground that a pawn is put back from, and how many times.
+const UNDER_GROUND := 3.0
+var ground_saves := 0
+## Seconds a downed player stays down, and metres from the ship's middle they get up.
+const DOWN_FOR := 3.0
+const BESIDE_SHIP := 10.0
 ## Regions are kept round everybody fighting within this (PlanetNavNet.keep_around).
 const AI_KEEP_M := 60.0
 ## How often the regions round the fight are looked at again, seconds.
@@ -1272,37 +1361,45 @@ var ai_worst_parts: Array = []
 ## solid to walk round, bricks to hide behind (their own bricks in the AI's
 ## world are later work, 11.8 "Not here"). ai_world and ai_nav are the region
 ## the player is in; a soldier's paths go through the net, across regions. The
-## floating origin moves every region's frame with the scene (_process).
-func setup_ai(dir: Vector3) -> void:
+## floating origin moves every region's frame with the scene (_process). Of body
+## `b`: home by default, or a generated world the player is on, whose first
+## region is the only one built in the call (home's load has the time).
+func setup_ai(dir: Vector3, b: PlanetBody = planet) -> void:
 	var t0 := Time.get_ticks_usec()
 	var stud := BrickWorld.get_stud_metres()
 	var sites: Array = []
-	for s in buildings.sites:
+	var pb: PlanetBuildings = buildings if b == planet else system.built[b]
+	var tr: PlanetTrees = trees if b == planet else system.trees_of.get(b)
+	for s in pb.sites:
 		var size := Vector3(s.fx * stud, s.height, s.fz * stud)
 		sites.append([s.frame * Transform3D(Basis(), size * 0.5), size])
-	var net := PlanetNavNet.make(data, dir, planet)
+	var net := PlanetNavNet.make(b.data, dir, b)
 	net.set_sites(sites)
 	# The buildings' bricks (11.11): the regions read them, a site's box goes
 	# while its bricks stand.
-	net.bricks = buildings.bricks
-	buildings.site_bricks.connect(func(i: int, on: bool) -> void: net.set_site_bricks(i, on, buildings.site_box(i)))
-	for i in buildings.sites.size():
-		if buildings.sites[i].bricked:
-			net.set_site_bricks(i, true, buildings.site_box(i))
+	net.bricks = pb.bricks
+	pb.site_bricks.connect(func(i: int, on: bool) -> void: net.set_site_bricks(i, on, pb.site_box(i)))
+	for i in pb.sites.size():
+		if pb.sites[i].bricked:
+			net.set_site_bricks(i, true, pb.site_box(i))
 	# The trees' trunks too: walked round, and cover; one knocked down goes (11.10).
-	net.tree_source = trees.trees_near
-	trees.tree_knocked.connect(net.remove_tree)
+	if tr != null:
+		net.tree_source = tr.trees_near
+		tr.tree_knocked.connect(net.remove_tree)
 	# What breaks the buildings' bricks (11.11 D1): a soldier's rounds, a squad's
 	# breaching charge; the maps forget where bricks went.
-	buildings.site_damaged.connect(func(_i: int, box: AABB) -> void: net.invalidate_box(box))
+	pb.site_damaged.connect(func(_i: int, box: AABB) -> void: net.invalidate_box(box))
 	# A piece settled, woke, was hit or went (D2 step 5): the regions' worlds
 	# take its chunk where it is now, and the maps forget the box.
-	buildings.pieces.ground_changed.connect(func(box: AABB) -> void:
+	pb.pieces.ground_changed.connect(func(box: AABB) -> void:
 		for r in net.regions.values():
 			r.world.sync()
 		net.invalidate_box(box.grow(1.0)))
-	var at := planet.global_transform * data.surface_point(dir)
-	net.keep_around([at], AI_KEEP_M, 99)
+	var at := b.global_transform * b.data.surface_point(dir)
+	if b == planet:
+		net.keep_around([at], AI_KEEP_M, 99)
+	else:
+		net.ensure(net.key_at(at))
 	# From here on regions' grids are built on worker threads, off the frame.
 	net.threaded = true
 	var r := net.region_at(at)
@@ -1316,13 +1413,19 @@ func setup_ai(dir: Vector3) -> void:
 	ai.world3d = get_world_3d()
 	ai.rng.seed = 0x9A7E7
 	ai.on_structure_hit = _structure_hit
-	ai.on_breach = func(p: Vector3, r: float) -> void: buildings.damage(p, {"blast": true, "radius": r, "hp": 0})
+	ai.on_breach = func(p: Vector3, r: float) -> void: pb.damage(p, {"blast": true, "radius": r, "hp": 0})
+	ai_of[b] = ai
+	if b != planet:
+		_ai_follow(b)
+		# As soldier_probe: the cover mechanics, not the engage decision's dice.
+		if _garrison_gate:
+			ai.policy = CombatPolicy.new()
 	print("[planet] AI nav net over the town: %d region(s) in %.0f ms (%.0f ms the one there), %d building(s)" % [
 			net.regions.size(), (Time.get_ticks_usec() - t0) / 1000.0, r.made_ms, sites.size()])
 
 
 func _physics_process(delta: float) -> void:
-	if ai == null or not _home_awake():
+	if not _ai_awake():
 		return
 	var net := ai.nav_net as PlanetNavNet
 	var t_ai := Time.get_ticks_usec()
@@ -2174,6 +2277,183 @@ func _ship_down_on(b: PlanetBody, dir := Vector3.ZERO) -> bool:
 	ship.boost = false
 	await get_tree().create_timer(1.0).timeout
 	return ship.landed and ship.ref == b
+
+
+# The garrison's gate (11.12 step 7): a jump to a settled world, down by a town,
+# out on foot: the world's own AI, the town's squad closing and firing; left and
+# come back to, there and still fighting; wiped out, clear; the player down and
+# up again; home's AI back on home.
+
+func _run_garrison_gate() -> void:
+	var t0 := Time.get_ticks_msec()
+	while pawn == null and Time.get_ticks_msec() - t0 < 60000:
+		await _frames(1)
+	await get_tree().create_timer(1.0).timeout
+	setup_ai(town_dirs[0])
+	kit.use_services(ai)
+	var home_ai := ai
+	pawn.health.layer_configs[0].max_value = 1e7
+	pawn.health.reset()
+	board()
+	await _ship_out()
+	open_map()
+	await _frames(2)
+	for i in map.rows.size():
+		if int(map.rows[i][3]) > 0:
+			map.pick = i
+			break
+	var to := map.chosen()
+	map.visible = false
+	system.jump(to)
+	await _frames(3)
+	var world: PlanetBody = null
+	for b in system.bodies:
+		if world == null and not b.data.towns.is_empty():
+			world = b
+	# Its town nearest the sun.
+	var noon := world.global_basis.inverse() * (system.star.global_position - world.global_position).normalized()
+	var town: Vector3 = world.data.towns[0]
+	for d in world.data.towns:
+		if (d as Vector3).dot(noon) > town.dot(noon):
+			town = d
+	var side := town.cross(Vector3.UP if absf(town.y) < 0.9 else Vector3.RIGHT).normalized()
+	var land := town.rotated(side, 150.0 / world.data.radius)
+	# Inside a soldier's sight (Soldier.SIGHT_RANGE) of the town's middle.
+	var edge := town.rotated(side, 50.0 / world.data.radius)
+	var ok_land: bool = await _ship_down_on(world, land)
+	_check("down by a town of %s" % world.data.planet_name, ok_land and system.anchor == world, "%.1f m" % ship.altitude)
+	_check("no garrison raised from the seat", not garrisons.has(world) or (garrisons[world] as PlanetGarrison).town < 0)
+	var stand := func() -> void:
+		unboard()
+		_set_on_foot(true)
+		var feet := world.global_transform * world.data.surface_point(edge)
+		var since := Time.get_ticks_msec()
+		while _ground_hit(feet) == Vector3.INF and Time.get_ticks_msec() - since < 30000:
+			await _frames(1)
+			feet = world.global_transform * world.data.surface_point(edge)
+		await get_tree().create_timer(1.0).timeout
+		feet = world.global_transform * world.data.surface_point(edge)
+		pawn.place(feet + Gravity.up_at(feet) * 0.3)
+		_face(Gravity.flat(world.global_transform * world.data.surface_point(town) - feet, Gravity.up_at(feet)).normalized())
+	await stand.call()
+	var g: PlanetGarrison = garrisons.get(world)
+	t0 = Time.get_ticks_msec()
+	while (g == null or g.squad == null) and Time.get_ticks_msec() - t0 < 40000:
+		await _frames(1)
+		g = garrisons.get(world)
+	_check("the town's squad is raised, four strong", g != null and g.squad != null and g.squad.alive().size() == 4)
+	_check("on the world's own AI, the player's kit with it", ai_of.get(world) == ai and ai != home_ai and kit.services == ai
+			and ai.pawns.has(pawn) and not home_ai.pawns.has(pawn))
+	var q := g.squad
+	var start := INF
+	for m in q.alive():
+		start = minf(start, m.pawn.feet().distance_to(pawn.feet()))
+	var nearest := start
+	var fired_at := -1.0
+	var body_ticks := 0
+	var floor_ticks := 0
+	var sunk := 0.0
+	t0 = Time.get_ticks_msec()
+	while Time.get_ticks_msec() - t0 < 60000:
+		await get_tree().physics_frame
+		var shots := 0
+		for m in q.alive():
+			var f := m.pawn.feet()
+			nearest = minf(nearest, f.distance_to(pawn.feet()))
+			body_ticks += 1
+			floor_ticks += 1 if m.pawn.body.is_on_floor() else 0
+			sunk = minf(sunk, world.altitude_of(f) - world.data.height(world.dir_of(f)))
+			shots += m.shots
+		if shots > 0 and fired_at < 0.0:
+			fired_at = (Time.get_ticks_msec() - t0) / 1000.0
+		if start - nearest >= 15.0 and fired_at >= 0.0:
+			break
+	await _shot("garrison_gate_fight")
+	var states := {}
+	for m in q.alive():
+		states[m.state] = int(states.get(m.state, 0)) + 1
+	print("[planet] garrison: %s; play %s; %d alive" % [states, q.play, q.alive().size()])
+	_check("it sees the player and closes on them (>= 15 m)", start - nearest >= 15.0, "%.1f m -> %.1f m" % [start, nearest])
+	_check("it fires", fired_at >= 0.0, "first at %.1f s" % fired_at)
+	_check("on the ground, nobody through it", floor_ticks > body_ticks * 0.9 and sunk > -0.5, "%d of %d on the floor, %.2f m" % [floor_ticks, body_ticks, sunk])
+	# Left: it sleeps where it was, and is where it was on waking.
+	board()
+	_check("in the seat the player is out of the fight", not ai.pawns.has(pawn))
+	await _ship_out()
+	var keep := {}
+	for m in q.alive():
+		keep[m] = world.to_local(m.pawn.body.global_position)
+	var off := [INF]
+	system.woke.connect(func(b: Node3D, _o: Vector3) -> void:
+		if b == world and off[0] == INF:
+			off[0] = 0.0
+			for m in keep:
+				off[0] = maxf(off[0], world.to_local(m.pawn.body.global_position).distance_to(keep[m])))
+	_check("left, it sleeps with its world", system.anchor != world and g.process_mode == Node.PROCESS_MODE_DISABLED and g.get_parent() == world)
+	await _ship_down_on(world, land)
+	_check("back, each where it was", off[0] < 0.01 and g.get_parent() == self and kit.services == ai_of[world], "%.4f m off" % off[0])
+	await stand.call()
+	t0 = Time.get_ticks_msec()
+	while g._held and Time.get_ticks_msec() - t0 < 30000:
+		await _frames(1)
+	var low := INF
+	for m in q.alive():
+		low = minf(low, world.altitude_of(m.pawn.feet()) - world.data.height(world.dir_of(m.pawn.feet())))
+	_check("held till the ground was there: nobody fell", not g._held and absf(low) < 1.5, "lowest %.2f m" % low)
+	var shots0 := 0
+	for m in q.alive():
+		shots0 += m.shots
+	var net := ai.nav_net as PlanetNavNet
+	var path := PackedVector3Array()
+	t0 = Time.get_ticks_msec()
+	while path.is_empty() and Time.get_ticks_msec() - t0 < 10000:
+		await get_tree().create_timer(0.5).timeout
+		path = net.find_path(q.alive()[0].pawn.feet(), pawn.feet(), 200000)
+	var worst := 0.0
+	for k in path:
+		worst = maxf(worst, absf(world.altitude_of(k) - world.data.height(world.dir_of(k))))
+	_check("its paths still lie on the ground (the net followed the world)", path.size() > 2 and worst < 2.0, "%d points, %.2f m" % [path.size(), worst])
+	t0 = Time.get_ticks_msec()
+	var shots1 := shots0
+	while shots1 == shots0 and Time.get_ticks_msec() - t0 < 30000:
+		await _frames(5)
+		shots1 = 0
+		for m in q.alive():
+			shots1 += m.shots
+	_check("and it fights on", shots1 > shots0, "%d rounds more" % (shots1 - shots0))
+	# Wiped out.
+	for m in q.alive():
+		m.pawn.health.apply_impact(1e6, &"")
+	t0 = Time.get_ticks_msec()
+	while g.squad != null and Time.get_ticks_msec() - t0 < 8000:
+		await _frames(1)
+	await get_tree().create_timer(1.0).timeout
+	_check("wiped out, the town is clear and stays so", g.squad == null and cleared.size() == 1 and g.soldiers.size() == 4)
+	# The player down.
+	pawn.health.layer_configs[0].max_value = 100.0
+	pawn.health.reset()
+	var fell := 0.0
+	while not pawn.health.is_dead() and fell < 1e8:
+		pawn.health.apply_impact(1e6, &"")
+		fell += 1e6
+	var was_dead := pawn.health.is_dead()
+	await get_tree().create_timer(DOWN_FOR + 0.5).timeout
+	var to_ship := pawn.feet().distance_to(ship.global_position)
+	_check("down, and up again beside the ship", was_dead and not pawn.health.is_dead() and to_ship < BESIDE_SHIP * 2.0, "%.1f m from it" % to_ship)
+	# Home.
+	board()
+	await _ship_out()
+	var ok_back := system.jump(0)
+	await _frames(3)
+	await _ship_down_on(planet)
+	_check("home, on home's AI", ok_back and system.anchor == planet and ai == home_ai and kit.services == home_ai, "ai_of %d" % ai_of.size())
+	unboard()
+	_set_on_foot(true)
+	_check("the player in it", home_ai.pawns.has(pawn) and garrisons.is_empty())
+	print("[planet] garrison gate: put back on the ground %d time(s)" % ground_saves)
+	print("[planet] garrison gate: frames: worst %.1f ms; over 40 ms in play: %d %s" % [_worst_ms, _play_hitches.size(), _play_hitches])
+	print("[planet] gate: %d ok, %d FAIL" % [_ok, _fail])
+	get_tree().quit(1 if _fail > 0 else 0)
 
 
 # The worlds' gate (11.12 step 4): down onto a generated world with towns, its
