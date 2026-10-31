@@ -41,7 +41,7 @@ const MARK_MODES := [["rooms", "rooms, and an opening's kind"],
 		["link", "link: auto, off, start, finish"], ["point", "points: spawn, loot, cover"],
 		["stair_up", "stair link up (under a ceiling)"], ["stair_down", "stair link down (on a floor)"],
 		["window", "facade: window"], ["balcony", "facade: balcony"], ["hang", "facade: a room may hang here"]]
-const MODULE_ROLES := ["room", "corridor", "stair", "start", "finish"]
+const MODULE_ROLES := ["room", "corridor", "stair", "start", "finish", "hang"]
 const MODULE_STOREYS := ["any", "ground", "upper", "top"]
 ## How long the bricks must be still before the rooms are found again: a held
 ## click lays a brick a frame, and each one would find every room again.
@@ -324,15 +324,18 @@ func generate(params: Dictionary) -> Dictionary:
 		return {}
 	_generate_asked_ms = -1
 	var lib := RoomModules.library()
-	var plan := RoomGrow.grow(lib, params)
+	var shell := String(params.get("generator", "grow")) == "shell"
+	var plan := RoomShell.generate(lib, params) if shell else RoomGrow.grow(lib, params)
 	if not plan.ok:
 		message = "no building: %s" % plan.why
 		return plan
-	var r := RoomGrow.lay(lib, plan, true)
-	# A building bigger than the baseplate gets a bigger one (a cube in ticks,
-	# as the plate always is: Workshop.height_plates).
+	var r: BuildRecipe = plan.recipe if shell else RoomGrow.lay(lib, plan, true)
+	# A building bigger than the baseplate, or taller than the volume over it,
+	# gets a bigger one (a cube in ticks, as the plate always is:
+	# Workshop.height_plates).
 	var b := r.bounds()
-	var need := maxi((b[1] as Vector3i).x, (b[1] as Vector3i).z) + 2
+	var need := maxi(maxi((b[1] as Vector3i).x, (b[1] as Vector3i).z) + 2,
+			ceili(((b[0] as Vector3i).y + (b[1] as Vector3i).y + 2) * 2.0 / 5.0))
 	if need > ws.plate_studs:
 		ws.plate_studs = ceili(need / 4.0) * 4
 		@warning_ignore("integer_division")
@@ -341,6 +344,11 @@ func generate(params: Dictionary) -> Dictionary:
 	if not active:
 		toggle()
 	var st: Dictionary = plan.stats
+	if shell:
+		message = "tower (seed %d): %d x %d studs, %d storeys of %d plates, %d modules, %d other room(s), %d cap(s), windows %s" % [
+				int(params.get("seed", 1)), st.width, st.depth, st.storeys, st.pitch, st.modules, st.rooms,
+				st.caps, plan.window_style]
+		return plan
 	message = "grown (seed %d): %d modules, %d on the path, %d loop(s), %d cap(s), %d balcony(ies), windows %s" % [
 			int(plan.seed), st.modules, st.path, st.loops, st.caps, st.balconies, plan.window_style]
 	return plan

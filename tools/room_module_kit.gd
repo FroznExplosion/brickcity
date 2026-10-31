@@ -70,4 +70,5 @@ static func modules() -> Array:
 				[["stair_down", [8, 1, 5], -1]]),
 		box("tower", 8, 8, {"role": "room"}, [[2, 3, "auto"]], [],
 				[["hang", [4, 5, 9], 1], ["balcony", [4, 5, 0], 3]]),
+		box("nook", 4, 4, {"role": "hang"}, [[2, 1, "auto"]]),
 	]

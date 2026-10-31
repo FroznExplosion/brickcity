@@ -31,6 +31,13 @@ const FACADE_WINDOW := Vector2i(2, 6)
 const BALCONY := Vector2i(4, 3)
 ## Headroom over a stair's step before the ceiling over it is cut, in plates.
 const HEADROOM := 15
+## A stair's rise a step, in plates, the ones it tries in order: two plates
+## (StaircaseRecipe.STEP_PLATES, the workshop's own stairs), a brick where the
+## room has no floor for the longer flight.
+const STEP_RISES := [2, 3]
+## The bricks a cap is laid in, longest first: a course of them along the
+## doorway, every other course started with a short one (a running bond).
+const CAP_RUNS := [6, 4, 2, 1]
 
 var lib: Array
 var p: Dictionary
@@ -47,6 +54,7 @@ var entrance := -1      ## open index of the start's way in
 var exit := -1          ## open index of the finish's way out
 var _starts := []       ## modules that can start a building (role or link)
 var _finishes := []     ## and finish one
+var _hangers := false   ## the library has modules made to hang off a wall (role hang)
 
 
 ## A plan: {ok, why, placed, joins: [{a: [placement, kind, at...]}], path,
@@ -67,6 +75,7 @@ func _grow(library: Array, params: Dictionary) -> Dictionary:
 		return {"ok": false, "why": "no modules: turn Module on for a build with its rooms found, and save it"}
 	_starts = _with_role("start")
 	_finishes = _with_role("finish")
+	_hangers = not _with_role("hang").is_empty()
 	var starts := _starts.duplicate()
 	if starts.is_empty():
 		starts = range(lib.size())
@@ -145,7 +154,7 @@ func _conn(idx: int, c: Dictionary, off: Vector3i) -> Dictionary:
 	return {"p": idx, "kind": String(c.kind), "at": (c.at as Vector3i) + off, "facing": int(c.facing),
 			"size": c.size, "link": String(c.link), "depth": int(c.depth), "space": int(c.space),
 			"base": int(c.get("base", 0)) + off.y, "top": int(c.get("top", 0)) + off.y,
-			"used": false, "dead": false}
+			"wall": c.get("wall", []), "used": false, "dead": false}
 
 
 ## A hang spot as an open connector: its outer face at the room's floor row, any
@@ -405,7 +414,10 @@ func _branches() -> void:
 		var pool: Array = hangs if not hangs.is_empty() and (rest.is_empty() or rng.randf() < float(p.hang)) else rest
 		var oi: int = pool[rng.randi_range(0, pool.size() - 1)]
 		var ok := false
-		for cand in _shuffled(_candidates(oi, ["room", "corridor", "stair"])):
+		var roles := ["room", "corridor", "stair"]
+		if String(open[oi].kind) == "hang":
+			roles = ["hang"] if _hangers else ["room"]
+		for cand in _shuffled(_candidates(oi, roles)):
 			if _attach(oi, cand) >= 0:
 				ok = true
 				break
@@ -527,26 +539,39 @@ func _plain(c: Dictionary) -> Dictionary:
 
 
 ## A doorway left open, walled up: its cells through the wall (an open side:
-## a wall one stud thick on its outer face), in the module's own colour.
+## a wall one stud thick on its outer face), in the wall's own brick -- the
+## colour and material beside the doorway -- courses of bricks along it in a
+## running bond, plates where a brick's three no longer fit under the lintel.
 func _cap(c: Dictionary) -> Array:
 	var out := []
 	var fd: Vector2i = StructureSpaces.FACINGS[int(c.facing)]
 	var d := Vector3i(fd.x, 0, fd.y)
 	var across := Vector3i(absi(fd.y), 0, absi(fd.x))
-	var colour := int(lib[placed[int(c.p)].m].turns[placed[int(c.p)].t].colour)
+	var axis := "x" if across.x == 1 else "z"
+	var wall: Array = c.get("wall", [])
+	if wall.is_empty():
+		wall = [int(lib[placed[int(c.p)].m].turns[placed[int(c.p)].t].colour), 0]
 	var depth := int(c.depth)
 	var size: Vector2i = c.size
 	for k in (range(1, depth + 1) if depth > 0 else [0]):
-		for x in size.x:
-			var base: Vector3i = (c.at as Vector3i) - d * int(k) + across * x
-			var y := 0
-			# Bricks where three plates fit, plates over them.
-			while y + 3 <= size.y:
-				out.append(["brick_1x1", base + Vector3i(0, y, 0), colour, 0])
-				y += 3
-			while y < size.y:
-				out.append(["plate_1x1", base + Vector3i(0, y, 0), colour, 0])
-				y += 1
+		var base: Vector3i = (c.at as Vector3i) - d * int(k)
+		var y := 0
+		var course := 0
+		while y < size.y:
+			var kind := "brick" if y + 3 <= size.y else "plate"
+			var x := 0
+			while x < size.x:
+				var n := 1
+				for run: int in CAP_RUNS:
+					# Every other course starts with a short one: the joints stagger.
+					if run <= size.x - x and not (course % 2 == 1 and x == 0 and run > 1):
+						n = run
+						break
+				var part := "%s_1x1" % kind if n == 1 else "%s_1x%d_%s" % [kind, n, axis]
+				out.append([part, base + across * x + Vector3i(0, y, 0), int(wall[0]), int(wall[1])])
+				x += n
+			y += 3 if kind == "brick" else 1
+			course += 1
 	return out
 
 
@@ -575,8 +600,9 @@ func _cut_through(cuts: Dictionary, wall: Dictionary, w: int, h: int, y0: int) -
 
 
 ## A straight stair from the lower room's floor up to the upper's, two studs
-## wide, ending at the stair link; the slabs over it cut where a step would
-## have under HEADROOM. It runs the way the lower room has the floor for it.
+## wide, ending at the stair link, a stud of tread a step; the slab cells over
+## it cut where a step would have under HEADROOM. Each step's rise the first of
+## STEP_RISES whose flight the lower room has the floor for, the way it has it.
 func _stair(cuts: Dictionary, adds: Array, lower: Dictionary, upper: Dictionary) -> void:
 	var lp: Dictionary = placed[int(lower.p)]
 	var up: Dictionary = placed[int(upper.p)]
@@ -591,36 +617,37 @@ func _stair(cuts: Dictionary, adds: Array, lower: Dictionary, upper: Dictionary)
 	var h := floor_up - floor_lo
 	if h <= 0:
 		return
-	var n := ceili(h / 3.0)
 	var link: Vector3i = lower.at
 	var colour := int(lib[lp.m].turns[lp.t].colour)
-	for f in 4:
-		var fd: Vector2i = StructureSpaces.FACINGS[f]
-		var across := Vector2i(absi(fd.y), absi(fd.x))
-		var fits := true
-		for i in n:
-			for x in 2:
-				var c := Vector2i(link.x, link.z) - fd * i + across * x - Vector2i(loff.x, loff.z)
-				if not (ls.cols as Dictionary).has(c):
-					fits = false
-		if not fits:
-			continue
-		for i in n:
-			# Step i counts down from the link: the link's step is the top one.
-			var rise := h - int(floor(float(h) * i / n))
-			for x in 2:
-				var c2 := Vector2i(link.x, link.z) - fd * i + across * x
-				var y := 0
-				while y + 3 <= rise:
-					adds.append(["brick_1x1", Vector3i(c2.x, floor_lo + 1 + y, c2.y), colour, 0])
-					y += 3
-				while y < rise:
-					adds.append(["plate_1x1", Vector3i(c2.x, floor_lo + 1 + y, c2.y), colour, 0])
-					y += 1
-				if floor_lo + 1 + rise + HEADROOM > ceil_lo:
-					for cy in range(ceil_lo, floor_up + 1):
-						cuts[Vector3i(c2.x, cy, c2.y)] = true
-		return
+	for step: int in STEP_RISES:
+		var n := ceili(float(h) / step)
+		for f in 4:
+			var fd: Vector2i = StructureSpaces.FACINGS[f]
+			var across := Vector2i(absi(fd.y), absi(fd.x))
+			var fits := true
+			for i in n:
+				for x in 2:
+					var c := Vector2i(link.x, link.z) - fd * i + across * x - Vector2i(loff.x, loff.z)
+					if not (ls.cols as Dictionary).has(c):
+						fits = false
+			if not fits:
+				continue
+			for i in n:
+				# Step i counts down from the link: the link's step is the top one.
+				var rise := maxi(h - step * i, 1)
+				for x in 2:
+					var c2 := Vector2i(link.x, link.z) - fd * i + across * x
+					var y := 0
+					while y + 3 <= rise:
+						adds.append(["brick_1x1", Vector3i(c2.x, floor_lo + 1 + y, c2.y), colour, 0])
+						y += 3
+					while y < rise:
+						adds.append(["plate_1x1", Vector3i(c2.x, floor_lo + 1 + y, c2.y), colour, 0])
+						y += 1
+					if floor_lo + 1 + rise + HEADROOM > ceil_lo:
+						for cy in range(ceil_lo, floor_up + 1):
+							cuts[Vector3i(c2.x, cy, c2.y)] = true
+			return
 
 
 ## A balcony on its spot, if nothing is where it goes: a slab at the room's floor
@@ -688,6 +715,8 @@ static func lay(library: Array, plan: Dictionary, on_ground := false) -> BuildRe
 			for c: Vector2i in library[pl.m].turns[pl.t].cols:
 				lo = Vector2i(mini(lo.x, c.x + pl.off.x), mini(lo.y, c.y + pl.off.z))
 		shift = Vector3i(1 - lo.x, -int(plan.ground_y), 1 - lo.y)
+		if plan.has("at"):
+			shift = plan.at    # a plan that says where it stands (RoomShell)
 	var cuts := {}
 	for c in plan.cuts:
 		cuts[(c as Vector3i) + shift] = true
@@ -699,15 +728,21 @@ static func lay(library: Array, plan: Dictionary, on_ground := false) -> BuildRe
 			var c := tr.cell_of(i) + off
 			var s := BuildRecipe.part_size(tr.part_of(i))
 			var cells := []
-			var skip := false
+			var cut := false
+			var taken := false
 			for y in s.y:
 				for z in s.z:
 					for x in s.x:
 						var at := c + Vector3i(x, y, z)
-						if cuts.has(at) or filled.has(at):
-							skip = true
+						cut = cut or cuts.has(at)
+						taken = taken or filled.has(at)
 						cells.append(at)
-			if skip or (on_ground and c.y < 1):
+			if taken or (on_ground and c.y < 1):
+				continue
+			if cut:
+				# A box brick partly in a cut: what is left of it, column by column.
+				if _boxy(tr.part_of(i)):
+					_lay_left(out, filled, cuts, c, s, tr.colour_of(i), tr.role_of(i), tr.material_of(i))
 				continue
 			for at in cells:
 				filled[at] = true
@@ -716,6 +751,11 @@ static func lay(library: Array, plan: Dictionary, on_ground := false) -> BuildRe
 			var f := tr.fixture_at(i)
 			out.add_fixture(f.kind, (f.cell as Vector3i) + off, f.params, f.role)
 		for a in tr.placements:
+			var in_cut := false
+			for at in AssetPlacements.cells_of(str(a.asset), int(a.get("turn", 0)), BuildRecipe.cell_from(a.cell) + off):
+				in_cut = in_cut or cuts.has(at)
+			if in_cut:
+				continue    # furniture where a stair or a doorway was cut: left out
 			out.placements.append(AssetPlacements.make(str(a.asset), BuildRecipe.cell_from(a.cell) + off,
 					int(a.get("turn", 0))))
 	for a in plan.adds:
@@ -723,14 +763,15 @@ static func lay(library: Array, plan: Dictionary, on_ground := false) -> BuildRe
 		if on_ground and c.y < 1:
 			continue
 		var s := BuildRecipe.part_size(String(a[0]))
-		var free := true
+		var cells := []
 		for y in s.y:
-			if filled.has(c + Vector3i(0, y, 0)):
-				free = false
-		if not free:
+			for z in s.z:
+				for x in s.x:
+					cells.append(c + Vector3i(x, y, z))
+		if cells.any(func(at) -> bool: return filled.has(at)):
 			continue
-		for y in s.y:
-			filled[c + Vector3i(0, y, 0)] = true
+		for at in cells:
+			filled[at] = true
 		out.add(String(a[0]), c, int(a[2]), 0, BuildRecipe.Role.STRUCTURE, int(a[3]))
 	# The rooms, so the spaces tool, interiors and the AI have them: each
 	# module's spaces moved to where it is, found again from their seeds.
@@ -742,6 +783,13 @@ static func lay(library: Array, plan: Dictionary, on_ground := false) -> BuildRe
 			var cols := []
 			for c: Vector2i in sp.cols:
 				cols.append([c.x + off.x, c.y + off.z])
+			# A seed a stair or a cap now stands on: the room's first free cell instead.
+			if filled.has(s):
+				for c in cols:
+					var v := Vector3i(int(c[0]), int(sp.floor_y) + off.y + 1, int(c[1]))
+					if not filled.has(v):
+						s = v
+						break
 			(rec.spaces as Array).append({"id": (rec.spaces as Array).size(), "kind": String(sp.kind),
 					"frame": 0, "seed": [s.x, s.y, s.z], "floor_y": int(sp.floor_y) + off.y,
 					"ceil_y": int(sp.ceil_y) + off.y, "columns": cols})
@@ -750,3 +798,31 @@ static func lay(library: Array, plan: Dictionary, on_ground := false) -> BuildRe
 			"modules": plan.placed.map(func(pl) -> String: return String(library[pl.m].name)),
 			"window_style": plan.window_style}
 	return out
+
+
+## A plain plate or brick: a box of cells, so what a cut leaves of it can be laid
+## again in 1x1s. A slope, a round or a custom piece is left out whole.
+static func _boxy(part: String) -> bool:
+	return part.begins_with("plate_") or part.begins_with("brick_")
+
+
+## What a cut leaves of a box brick at `c`, size `s`: each column's cells out of
+## the cut, as bricks (three plates) and plates, in the brick's colour.
+static func _lay_left(out: BuildRecipe, filled: Dictionary, cuts: Dictionary, c: Vector3i, s: Vector3i,
+		colour: int, role: int, material: int) -> void:
+	for z in s.z:
+		for x in s.x:
+			var y := 0
+			while y < s.y:
+				var at := c + Vector3i(x, y, z)
+				if cuts.has(at):
+					y += 1
+					continue
+				var brick := y + 3 <= s.y
+				for k in range(1, 3):
+					brick = brick and not cuts.has(at + Vector3i(0, k, 0))
+				var n := 3 if brick else 1
+				for k in n:
+					filled[at + Vector3i(0, k, 0)] = true
+				out.add("brick_1x1" if brick else "plate_1x1", at, colour, 0, role, material)
+				y += n

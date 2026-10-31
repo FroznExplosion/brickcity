@@ -21,6 +21,8 @@ extends SceneTree
 ##   generate   Generate on the rail grows a building from the modules (the test
 ##              kit's, room_module_kit.gd), asks first over unsaved work, and opens
 ##              it with its rooms found again from their seeds
+##   tower      Generate tower sets a tower by its shell (stage 6), the volume over
+##              the plate grown for its height
 
 const Kit := preload("res://tools/room_module_kit.gd")
 
@@ -207,6 +209,20 @@ func _run() -> void:
 			"%d of %d bricks, %s studs, plate %d" % [laid, _ws.recipe.size(), str(bb[1]), _ws.plate_studs])
 	_ws._dirty = false
 	plan = sp.generate({"seed": 3, "rooms": 8, "path": 2})
+	# Generate tower: a tall one grows the volume over the plate too.
+	_ws._dirty = false
+	var tower: Dictionary = sp.generate({"generator": "shell", "seed": 2, "width": 44, "depth": 28, "storeys": 12})
+	var tb: Array = _ws.recipe.bounds()
+	var tlaid := 0
+	for at in _ws._placed_at:
+		if int(at[1]) >= 0:
+			tlaid += 1
+	_ok("Generate tower opens a tower of 12 storeys, the volume grown for its height, every brick laid",
+			bool(tower.get("ok", false)) and String(_ws.recipe.meta.generated.generator) == "shell"
+			and int(_ws.height_plates) >= (tb[0] as Vector3i).y + (tb[1] as Vector3i).y and tlaid == _ws.recipe.size(),
+			"%s; %d of %d bricks, height %d plates" % [sp.message, tlaid, _ws.recipe.size(), _ws.height_plates])
+	_ws._dirty = false
+	plan = sp.generate({"seed": 3, "rooms": 8, "path": 2})
 	RoomModules.use_recipes([])
 	sp._edited_ms -= 1000
 	sp.process()
@@ -216,4 +232,4 @@ func _run() -> void:
 			asked.is_empty() and bool(plan.get("ok", false)) and _ws.recipe.size() > 0
 			and _ws.recipe.meta.has("generated") and (rec.spaces as Array).size() == int(plan.stats.modules)
 			and lost == 0,
-			"%s; %d bricks, %d room(s), %d lost" % [sp.message, _ws.recipe.size(), (rec.spaces as Array).size(), lost])
+			"%s; %d bricks, %d room(s), %d lost %s %s" % [sp.message, _ws.recipe.size(), (rec.spaces as Array).size(), lost, str((rec.spaces as Array).filter(func(x) -> bool: return x.has("lost")).map(func(x): return [x.lost, x.seed, x.kind])), str(_ws.recipe.meta.generated.modules)])
