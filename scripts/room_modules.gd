@@ -86,37 +86,7 @@ static func with_floor(r: BuildRecipe) -> BuildRecipe:
 	var size: Vector3i = b[1]
 	if lo.y != 1:
 		return r
-	var foot := {}
-	for i in r.size():
-		if r.role_of(i) != BuildRecipe.Role.STRUCTURE:
-			continue
-		var c := r.cell_of(i)
-		var s := BuildRecipe.part_size(r.part_of(i))
-		for z in s.z:
-			for x in s.x:
-				foot[Vector2i(c.x + x, c.z + z)] = true
-	# Outside: what a flood from the ring round the box reaches without
-	# crossing a brick. Everything else is under the build.
-	var x0 := lo.x - 1
-	var z0 := lo.z - 1
-	var x1 := lo.x + size.x
-	var z1 := lo.z + size.z
-	var outside := {}
-	var todo: Array[Vector2i] = [Vector2i(x0, z0)]
-	outside[todo[0]] = true
-	while not todo.is_empty():
-		var c: Vector2i = todo.pop_back()
-		for d in [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]:
-			var n: Vector2i = c + d
-			if n.x < x0 or n.y < z0 or n.x > x1 or n.y > z1 or outside.has(n) or foot.has(n):
-				continue
-			outside[n] = true
-			todo.append(n)
-	var under := {}
-	for z in range(lo.z, lo.z + size.z):
-		for x in range(lo.x, lo.x + size.x):
-			if not outside.has(Vector2i(x, z)):
-				under[Vector2i(x, z)] = true
+	var under := footprint(r)
 	var out := r.turned(0)
 	var colour := 0
 	for i in r.size():
@@ -139,6 +109,47 @@ static func with_floor(r: BuildRecipe) -> BuildRecipe:
 						under.erase(Vector2i(x + dx, z + dz))
 				out.add("plate_%dx%d" % [n, n], Vector3i(x, 0, z), colour)
 	return out
+
+
+## The columns a build stands on: every column its structure bricks are in and
+## every column they close round (what a flood from outside its box does not
+## reach without crossing a brick). Vector2i -> true. An outline drawn with
+## Sketch or Walls gives the floor plan inside it.
+static func footprint(r: BuildRecipe) -> Dictionary:
+	var b := r.bounds()
+	var lo: Vector3i = b[0]
+	var size: Vector3i = b[1]
+	var foot := {}
+	for i in r.size():
+		if r.role_of(i) != BuildRecipe.Role.STRUCTURE:
+			continue
+		var c := r.cell_of(i)
+		var s := BuildRecipe.part_size(r.part_of(i))
+		for z in s.z:
+			for x in s.x:
+				foot[Vector2i(c.x + x, c.z + z)] = true
+	var x0 := lo.x - 1
+	var z0 := lo.z - 1
+	var x1 := lo.x + size.x
+	var z1 := lo.z + size.z
+	var outside := {}
+	var todo: Array[Vector2i] = [Vector2i(x0, z0)]
+	outside[todo[0]] = true
+	while not todo.is_empty():
+		var c: Vector2i = todo.pop_back()
+		for d in [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]:
+			var n: Vector2i = c + d
+			if n.x < x0 or n.y < z0 or n.x > x1 or n.y > z1 or outside.has(n) or foot.has(n):
+				continue
+			outside[n] = true
+			todo.append(n)
+	var under := {}
+	for z in range(lo.z, lo.z + size.z):
+		for x in range(lo.x, lo.x + size.x):
+			if not outside.has(Vector2i(x, z)):
+				under[Vector2i(x, z)] = true
+	return under
+
 
 ## The build's structure as the space finder sees it: Vector3i -> Cell (SOLID,
 ## GLASS, DOOR) for every cell a structure brick of the upright grid fills.

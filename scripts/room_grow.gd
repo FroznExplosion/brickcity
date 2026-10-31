@@ -21,8 +21,10 @@ extends RefCounted
 ## The grow's defaults. `path`: modules between the start and the finish;
 ## `rooms`: modules in all; `tries`: how many fits it may try before it gives up;
 ## `balcony`: the chance a balcony spot gets one; `hang`: the chance a branch
-## grows off a hang spot rather than a door.
-const PARAMS := {"seed": 1, "rooms": 10, "path": 3, "tries": 4000, "balcony": 0.5, "hang": 0.3}
+## grows off a hang spot rather than a door; `doors`: the chance a joined doorway
+## (and the way in and out) gets a door (BuildDoors).
+const PARAMS := {"seed": 1, "rooms": 10, "path": 3, "tries": 4000, "balcony": 0.5, "hang": 0.3,
+		"doors": 1.0}
 ## Window styles, one per building: what the window holes of every module are.
 const WINDOW_STYLES := ["open", "glass"]
 ## A cut facade window: studs across, plates up.
@@ -509,6 +511,21 @@ func _finish(loops: int) -> Dictionary:
 				"balcony":
 					if rng.randf() < float(p.balcony) and _balcony(cuts, adds, mk, off, int(td.colour)):
 						balconies += 1
+	# Doors: in the first wall of each joined doorway, a hung room's, the way in and out.
+	var doors := []
+	for j: Dictionary in joins:
+		var a: Dictionary = open[j.a]
+		var b: Dictionary = open[j.b]
+		if rng.randf() >= float(p.doors):
+			continue
+		if String(a.kind) == "door":
+			doors.append(BuildDoors.hole(a.at, int(a.facing), (a.size as Vector2i).x, (a.size as Vector2i).y, int(a.depth)))
+		elif String(a.kind) == "hang":
+			doors.append(BuildDoors.hole(a.at, int(a.facing), (b.size as Vector2i).x, (b.size as Vector2i).y, int(a.depth)))
+	for i in [entrance, exit]:
+		if i >= 0 and String(open[i].kind) == "door" and rng.randf() < float(p.doors):
+			var c: Dictionary = open[i]
+			doors.append(BuildDoors.hole(c.at, int(c.facing), (c.size as Vector2i).x, (c.size as Vector2i).y, int(c.depth)))
 	var cut_cells := []
 	for c in cuts:
 		cut_cells.append(c)
@@ -520,9 +537,9 @@ func _finish(loops: int) -> Dictionary:
 			"entrance": _plain(open[entrance]) if entrance >= 0 else {},
 			"exit": _plain(open[exit]) if exit >= 0 else {},
 			"caps": caps.map(func(i) -> Dictionary: return _plain(open[i])),
-			"cuts": cut_cells, "adds": adds, "window_style": style,
+			"cuts": cut_cells, "adds": adds, "window_style": style, "doors": doors,
 			"stats": {"modules": placed.size(), "path": path.size(), "joins": joins.size(),
-				"loops": loops, "caps": caps.size(), "balconies": balconies,
+				"loops": loops, "caps": caps.size(), "balconies": balconies, "doors": doors.size(),
 				"tries": int(p.tries) - budget}}
 
 
@@ -794,6 +811,19 @@ static func lay(library: Array, plan: Dictionary, on_ground := false) -> BuildRe
 					"frame": 0, "seed": [s.x, s.y, s.z], "floor_y": int(sp.floor_y) + off.y,
 					"ceil_y": int(sp.ceil_y) + off.y, "columns": cols})
 	out.meta["structure"] = rec
+	var doors := []
+	for dr: Array in plan.get("doors", []):
+		var lo: Vector3i = (dr[0] as Vector3i) + shift
+		if not on_ground or lo.y >= 1:
+			doors.append(BuildDoors.record(lo, dr[1]))
+	if not doors.is_empty():
+		out.meta["doors"] = doors
+	var lifts := []
+	for lf: Dictionary in plan.get("lifts", []):
+		var lo: Vector3i = (lf.lo as Vector3i) + shift
+		lifts.append(BuildLifts.record(lo, lf.size, (lf.stops as Array).map(func(y) -> int: return int(y) + shift.y)))
+	if not lifts.is_empty():
+		out.meta["lifts"] = lifts
 	out.meta["generated"] = {"generator": "grow", "seed": int(plan.seed), "stats": plan.stats,
 			"modules": plan.placed.map(func(pl) -> String: return String(library[pl.m].name)),
 			"window_style": plan.window_style}

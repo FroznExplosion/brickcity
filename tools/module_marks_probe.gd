@@ -22,7 +22,8 @@ extends SceneTree
 ##              kit's, room_module_kit.gd), asks first over unsaved work, and opens
 ##              it with its rooms found again from their seeds
 ##   tower      Generate tower sets a tower by its shell (stage 6), the volume over
-##              the plate grown for its height
+##              the plate grown for its height; with the outline ticked, in the
+##              outline the build open is
 
 const Kit := preload("res://tools/room_module_kit.gd")
 
@@ -221,6 +222,31 @@ func _run() -> void:
 			bool(tower.get("ok", false)) and String(_ws.recipe.meta.generated.generator) == "shell"
 			and int(_ws.height_plates) >= (tb[0] as Vector3i).y + (tb[1] as Vector3i).y and tlaid == _ws.recipe.size(),
 			"%s; %d of %d bricks, height %d plates" % [sp.message, tlaid, _ws.recipe.size(), _ws.height_plates])
+	# An outline drawn in the workshop -- an L of one-plate walls -- as the footprint.
+	var ol := BuildRecipe.new()
+	var in_l := func(x: int, z: int) -> bool:
+		return x >= 0 and z >= 0 and x < 40 and z < 30 and not (x >= 24 and z >= 18)
+	var cols := {}
+	for z in range(-1, 31):
+		for x in range(-1, 41):
+			if in_l.call(x, z):
+				var edge := false
+				for d in [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]:
+					edge = edge or not in_l.call(x + d.x, z + d.y)
+				if edge:
+					ol.add("plate_1x1", Vector3i(x + 1, 1, z + 1), 0)
+				cols[Vector2i(x + 1, z + 1)] = true
+	_ws._load_recipe(ol)
+	_ws._dirty = false
+	var ot: Dictionary = sp.generate({"generator": "shell", "seed": 1, "storeys": 2, "outline": true})
+	var outside := 0
+	for i in _ws.recipe.size():
+		var oc: Vector3i = _ws.recipe.cell_of(i)
+		if not cols.has(Vector2i(oc.x, oc.z)):
+			outside += 1
+	_ok("Generate tower in a drawn outline (an L): the tower inside it, nothing outside",
+			bool(ot.get("ok", false)) and outside == 0 and _ws.recipe.size() > 0,
+			"%s; %d brick(s) outside" % [sp.message, outside])
 	_ws._dirty = false
 	plan = sp.generate({"seed": 3, "rooms": 8, "path": 2})
 	RoomModules.use_recipes([])
