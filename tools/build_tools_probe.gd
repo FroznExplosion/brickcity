@@ -1303,5 +1303,95 @@ func _rest_checks() -> void:
 	t.input(_key(KEY_3))
 	_ok("a building takes storeys", int(t._drag.rec.depth) == 3 * 7 + 1 and t.tag_text().contains("3 storeys"), t.tag_text())
 	t.cancel()
+	# Select: an inserted build, as X.
+	_ok("Select's pop-out has a shape's options", t._select_box != null and t._builds_box != null)
+	# Push-pull: a room's top.
+	_ws._new_build()
 	t.makes = "solid"
+	t.set_outline("box")
+	_hold("brick_1x2")
+	t.tall = 9
+	var id := t.add_shape("rect", "flat", Vector2i(4, 4), Vector2i(11, 9), 1)
+	t.pick("select")
+	t.selected = id
+	var top := t.face_under(Vector3(7.5 * 0.35, 3.0, 6.5 * 0.35), Vector3(0, -1, 0))
+	t.begin_push_pull(t.shape_of(id), top)
+	_ok("pressed on its top: the height, a course at a time", t._drag.get("tool", "") == "pull" and int(t._drag.rec.step) == 3)
+	t._drag.last_ray = t._ray()
+	t._drag.rec.depth = 15
+	var up := InputEventMouseButton.new()
+	up.button_index = MOUSE_BUTTON_LEFT
+	t._make_input(up)
+	_ok("let go: 15 plates, laid", t._drag.is_empty() and int(t.shape_of(id).depth) == 15 and _solid(Vector3i(7, 15, 6)))
+	_ws._undo()
+	_ok("one undo", int(t.shape_of(id).depth) == 9 and not _solid(Vector3i(7, 15, 6)))
+	# Push-pull: its side moves it.
+	var side := t.face_under(Vector3(7.5 * 0.35, 3.5 * 0.14, -3.0), Vector3(0, 0, 1))
+	t.begin_push_pull(t.shape_of(id), side)
+	_ok("pressed on its side: it moves", t._drag.get("tool", "") == "move")
+	t._drag.last_ray = t._ray()
+	t._drag.by = Vector3i(0, 0, 6)
+	t._make_input(up)
+	_ok("moved 6 studs along", int(t.shape_of(id).a[1]) == 10 and _solid(Vector3i(7, 2, 12)) and not _solid(Vector3i(7, 2, 5)))
+	_ws._undo()
+	_ok("and back", _solid(Vector3i(7, 2, 5)) and not _solid(Vector3i(7, 2, 12)))
+	# A building: windows stay with it.
+	_ws._new_build()
+	t.pick("draw")
+	t.makes = "building"
+	t.storey_courses = 3
+	t.flat_roof = true
+	t.window_size = Vector2i(2, 3)
+	_drag_outline(t, Vector3i(4, 1, 4), Vector2i(19, 15))
+	t.input(_key(KEY_2))
+	var b := t.commit_pending()
+	var face := t.face_under(Vector3(10.5 * 0.35, 5.5 * 0.14, -3.0), Vector3(0, 0, 1))
+	t.every_floor = true
+	t.apply_opening("window", face)
+	var g := WorkshopTools.glass_paint()
+	var f1: int = _ws.asm.frames[0]
+	var glass := func(y: int) -> bool:
+		var bid: int = _ws.world.block_at(f1, Vector3i(10, y, 4))
+		return bid >= 0 and _ws.world.get_block_material(f1, bid) == g.x
+	_ok("kept with the building", (t.shape_of(b).get("openings", []) as Array).size() == 1 and glass.call(6) and glass.call(16))
+	t.resize_shape(b, 4 * 10 + 1)
+	_ok("raised to 4 storeys: the new ones get their windows", glass.call(26) and glass.call(36))
+	_ws._undo()
+	_ok("undone", int(t.shape_of(b).depth) == 21 and not glass.call(26))
+	t.resize_shape(b, 10 + 1)
+	_ok("lowered: the window above goes", not glass.call(16) and glass.call(6))
+	_ws._undo()
+	# Sketch on a face: a freehand hole, and a stroke on a wall's side.
+	_ws._new_build()
+	_hold("brick_1x4")
+	t.tall = 9
+	t.add_shape("rect", "flat", Vector2i(4, 4), Vector2i(15, 7), 1)
+	t.pick("cut")
+	t.cut_kind = "polygon"
+	t.pick("cut")
+	_ok("Cut has the pen", t.cut_pen() and t.pen.draw == "polygon")
+	var cf := t.face_under(Vector3(8.5 * 0.35, 3.5 * 0.14, -3.0), Vector3(0, 0, 1))
+	t._sk = {"lie": String(cf.lie), "at": int(cf.front), "into": int(cf.into), "face": cf}
+	for q in [Vector2(7, 2), Vector2(10, 2), Vector2(10, 6), Vector2(7, 6)]:
+		t.pen.polygon_click(q, true, false)
+	t._sketch_commit()
+	_ok("a hand-drawn hole: through to start", int(t._drag.rec.depth) == 4 and t._drag.get("cut", false))
+	t.commit_pending()
+	_ok("cut", not _solid(Vector3i(8, 4, 4)) and not _solid(Vector3i(8, 4, 7)))
+	t.cut_kind = "rect"
+	t.pick("draw")
+	t.set_outline("free")
+	t.makes = "solid"
+	_hold("brick_1x2")
+	var f4 := t.face_under(Vector3(13.5 * 0.35, 3.5 * 0.14, -3.0), Vector3(0, 0, 1))
+	t._sk = {"lie": String(f4.lie), "at": int(f4.front) - int(f4.into), "into": int(f4.into), "face": f4}
+	t.pen.draw = "outline"
+	t.pen.press(Vector2(12, 2), false)
+	for q in [Vector2(15, 2), Vector2(15, 6), Vector2(12, 6)]:
+		t.pen.move(q, 1)
+	t._sketch_commit()
+	t.commit_pending()
+	_ok("a stroke on a wall's side comes out of it", _solid(Vector3i(13, 3, 3)))
+	t.set_outline("box")
+	t.flat_roof = true
 	t.pick("place")

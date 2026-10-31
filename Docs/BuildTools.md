@@ -538,3 +538,23 @@ Section 10's other suggestions, all of them:
   raised with push-pull, its new storeys get them; lowered, those above go.
 * **Sketch on any face**: with a pen outline (Freehand, Brush, Corners), a press on a wall's
   side draws on that wall, as dragged shapes do; and **Cut** has Freehand and Corners.
+
+### As built (2026-10-31)
+
+All of it, merged; `tools/build_tools_probe.gd` 228 checks.
+
+* `active()` still answers place, pick or paint; `rail_id` folds them into Hand for the rail.
+  B still toggles the brush. Hand remembers which of the three it was on.
+* The top bar is `ToolRail.actions(..., bar)`, in a `PanelContainer` the tools own; the rail,
+  the keys panel and the readout start under it (`bar_height`).
+* A typed number stops the cursor pulling until Backspace empties it; digits only go there while
+  pulling, so 1-9 still pick the toolbar slot otherwise. A cut's or a shape's depth is in
+  studs (plates through a floor).
+* Push-pull is `begin_push_pull`, with `resize_shape` and `move_shape` doing the laying; each
+  is one undo. The top must be the shape's own top layer. A standing shape only moves. A move
+  takes along the frames and glass of the doors and windows cut in it.
+* A building keeps `openings`, each as if on its first storey. `resize_shape` lays them on new
+  storeys and takes off frames and glass above the new top; its cuts stay on the record (harmless
+  above the top).
+* Pen strokes on a face go through `_stroke_plane`; a stroke on a wall's side needs Solid (or Cut
+  out). Cut's Freehand and Corners use the same pen.

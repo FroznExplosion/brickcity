@@ -65,7 +65,8 @@ const BOND_PICS := [["stagger", "Staggered", "b_stagger"], ["align", "Aligned", 
 const MAKE_PICS := [["solid", "Solid", "m_solid"], ["walls", "Walls", "m_walls"], ["floor", "Floor", "f_here"],
 		["building", "Building", "m_building"]]
 const CUT_PICS := [["rect", "Box", "k_rect"], ["arch", "Arch", "k_arch"], ["circle", "Circle", "k_circle"],
-		["triangle", "Triangle", "k_triangle"], ["door", "Door", "k_door"], ["window", "Window", "k_window"]]
+		["triangle", "Triangle", "k_triangle"], ["outline", "Freehand", "k_free"], ["polygon", "Corners", "k_poly"],
+		["door", "Door", "k_door"], ["window", "Window", "k_window"]]
 const ROOF_PICS := [["gable", "Gable", "t_gable"], ["hip", "Hip", "t_hip"]]
 const FILL_PICS := [["here", "Inside", "f_here"], ["top", "Over walls", "f_top"]]
 const BRICK_PICS := [["fill", "Fill gaps"], ["only", "Only this"]]
@@ -199,8 +200,7 @@ var _brush_sq: CheckBox
 var _lie_box: VBoxContainer
 var _bricks_box: VBoxContainer
 var _thick_box: VBoxContainer
-var _sel_depth: SpinBox
-var _sel_rim: SpinBox
+var _sel_thick: VBoxContainer
 var _sel_bond: OptionButton
 var _repeat_box: VBoxContainer
 var _status: Label
@@ -552,6 +552,7 @@ func apply_opening(k: String, face: Dictionary) -> Dictionary:
 	var op := opening_spec(k, face)
 	var rec := _begin()
 	var ops := _every_floor(op, face) if every_floor else [op]
+	var b := _building_at(face.cell) if every_floor else {}
 	for o in ops:
 		_open_into(rec, o)
 		if ws.mirror_on:
@@ -559,6 +560,15 @@ func apply_opening(k: String, face: Dictionary) -> Dictionary:
 			var m := BrickShapes.reflected(o, ws.mirror_axis, plane)
 			if m != o:
 				_open_into(rec, m)
+	# Kept with the building, as if on its first storey: new storeys get it.
+	if not b.is_empty():
+		var pitch := int(b.storey) + maxi(1, int(b.get("floor", 1)))
+		var k0 := floori(float(int(opening_box(op)[0].y) - int(b.at)) / pitch)
+		var now: Dictionary = shape_of(int(b.id)).duplicate(true)
+		var kept: Array = now.get("openings", [])
+		kept.append(BrickShapes.shifted(op, Vector3i(0, -k0 * pitch, 0)))
+		now.openings = kept
+		_store(int(b.id), now)
 	_end(rec)
 	return op
 
@@ -1048,6 +1058,10 @@ func pick(id: String) -> void:
 	if id in ["place", "pick", "paint"]:
 		_last_hand = id
 	cancel()
+	if id == "draw" and pen_outline():
+		pen.draw = OUTLINE_PEN[outline]
+	elif id == "cut" and cut_pen():
+		pen.draw = cut_kind
 	if ws._spaces != null and ws._spaces.active and id != "rooms":
 		ws._spaces.toggle()
 	match id:
@@ -1253,7 +1267,7 @@ func _build_options() -> void:
 	_button(drow, "Clear", func() -> void: _draft = {})
 
 	_poly_box = HBoxContainer.new()
-	_sketch_box.add_child(_poly_box)
+	rail.options.add_child(_poly_box)
 	_button(_poly_box, "Close", func() -> void:
 		if pen.draw == "polygon" and not _sk.is_empty():
 			_sketch_commit())
@@ -1398,7 +1412,12 @@ func _build_options() -> void:
 
 	_cut_box = VBoxContainer.new()
 	rail.options.add_child(_cut_box)
-	rail.pictures(_cut_box, "Cut", CUT_PICS, func(id: String) -> void: cut_kind = id, cut_kind, 3)
+	rail.pictures(_cut_box, "Cut", CUT_PICS, func(id: String) -> void:
+		cut_kind = id
+		if cut_pen():
+			pen.draw = id
+		pen.points.clear()
+		_sk = {}, cut_kind, 4)
 	_door_box = VBoxContainer.new()
 	_cut_box.add_child(_door_box)
 	_spin(_door_box, "door wide (studs)", 1, 32, door_size.x, func(v: float) -> void: door_size.x = int(v))
@@ -1445,12 +1464,11 @@ func _build_options() -> void:
 	rail.options.add_child(_select_box)
 	_select_label = Label.new()
 	_select_box.add_child(_select_label)
-	_sel_depth = _spin(_select_box, "tall / thick", 1, 240, 3, func(v: float) -> void:
-		if not _syncing and selected >= 0:
-			change_shape(selected, {"depth": int(v)}))
-	_sel_rim = _spin(_select_box, "rim (studs)", 1, 16, 1, func(v: float) -> void:
-		if not _syncing and selected >= 0:
-			change_shape(selected, {"rim": int(v)}))
+	_sel_thick = VBoxContainer.new()
+	_select_box.add_child(_sel_thick)
+	rail.pictures(_sel_thick, "Wall thickness (studs)", THICK_PICS.slice(1), func(id: String) -> void:
+		if selected >= 0:
+			change_shape(selected, {"rim": int(id)}), "1", 3)
 	_sel_bond = _choice(_select_box, "bond", [["stagger", "staggered"], ["align", "aligned"]], func(i: int) -> void:
 		if not _syncing and selected >= 0:
 			change_shape(selected, {"bond": "stagger" if i == 0 else "align"}))
@@ -1552,7 +1570,7 @@ func input(e: InputEvent) -> bool:
 	if e is InputEventMouseButton and _drag.get("phase", "") == "height" \
 			and e.button_index in [MOUSE_BUTTON_LEFT, MOUSE_BUTTON_RIGHT]:
 		return _make_input(e)
-	if tool == "draw" and pen_outline() and _drag.is_empty() and _sketch_input(e):
+	if ((tool == "draw" and pen_outline()) or (tool == "cut" and cut_pen())) and _drag.is_empty() and _sketch_input(e):
 		return true
 	if e is InputEventKey and e.pressed and not e.echo and not e.ctrl_pressed:
 		if _drag.get("phase", "") == "height" and _typed_key(e):
@@ -1597,9 +1615,7 @@ func input(e: InputEvent) -> bool:
 		"cut":
 			return _cut_input(e)
 		"select":
-			if e.pressed and e.button_index == MOUSE_BUTTON_LEFT:
-				_select_click()
-				return true
+			return _select_input(e)
 		"repeat":
 			if e.pressed and e.button_index == MOUSE_BUTTON_LEFT:
 				_repeat_click()
@@ -1645,21 +1661,24 @@ func _sketch_input(e: InputEvent) -> bool:
 			if _sk.is_empty():
 				if ws._frame != 0:
 					return true
-				_sk = _plane_at_ghost(lie if makes == "solid" else "flat")
-			var q = _plane_point(String(_sk.lie), int(_sk.at))
+				_sk = _stroke_plane()
+				if _sk.is_empty():
+					return true
+			var q = _plane_point(String(_sk.lie), int(_sk.get("plane_at", _sk.at)))
 			if q == null:
 				return true
+			var cutting: bool = cut_mode or tool == "cut"
 			if pen.draw == "polygon":
-				if pen.polygon_click(q, cut_mode, e.double_click):
+				if pen.polygon_click(q, cutting, e.double_click):
 					_sketch_commit()
 			else:
-				pen.press(q, cut_mode)
+				pen.press(q, cutting)
 		elif pen.draw != "polygon" and not _sk.is_empty():
 			_sketch_commit()
 		return true
 	if e is InputEventMouseMotion and not _sk.is_empty() and pen.draw != "polygon" \
 			and (Input.is_mouse_button_pressed(MOUSE_BUTTON_LEFT) or Input.is_mouse_button_pressed(MOUSE_BUTTON_RIGHT)):
-		var q = _plane_point(String(_sk.lie), int(_sk.at))
+		var q = _plane_point(String(_sk.lie), int(_sk.get("plane_at", _sk.at)))
 		if q != null:
 			pen.move(q, brush_size)
 		return true
@@ -1673,6 +1692,26 @@ func _sketch_input(e: InputEvent) -> bool:
 	return false
 
 
+## The plane a stroke goes on: the face pressed, for a cut or a solid (a wall's side; a cut,
+## any face); else the level. Empty: a cut pressed on nothing.
+func _stroke_plane() -> Dictionary:
+	var cutting: bool = cut_mode or tool == "cut"
+	var face := {}
+	if cutting or (makes == "solid" and lie == "flat"):
+		face = face_under(_ray()[0], _ray()[1])
+	if tool == "cut" and face.is_empty():
+		say("Press on a wall or a floor of the build.")
+		return {}
+	if not face.is_empty() and (cutting or String(face.lie) != "flat"):
+		var into := int(face.into)
+		var sk := {"lie": String(face.lie), "at": int(face.front) if cutting else int(face.front) - into,
+				"into": into, "face": face}
+		if sk.lie == "flat":
+			sk.plane_at = int(face.front) + (1 if into < 0 else 0)
+		return sk
+	return _plane_at_ghost(lie if makes == "solid" else "flat")
+
+
 ## The stroke drawn: on a level, into the plan being drawn (in, or with RMB out of it); a
 ## click inside the plan raises it. Standing -- or RMB with no plan -- it goes on to its
 ## thickness (or depth, cutting) at once, as Shapes.
@@ -1683,7 +1722,7 @@ func _sketch_commit() -> void:
 	var tap: Array = pen.points.duplicate()
 	_sk = {}
 	pen.points.clear()
-	if sk.lie == "flat" and not (remove and _draft.is_empty()):
+	if sk.lie == "flat" and not (remove and _draft.is_empty()) and not sk.has("into"):
 		if entry == null or (pen.draw != "brush" and _spread(tap) < 0.6):
 			# A click, not a stroke: inside the plan, raise it.
 			if not tap.is_empty() and not _draft.is_empty() and BrickShapes.plan_region(_draft).has(
@@ -1717,6 +1756,9 @@ func _sketch_commit() -> void:
 	# Then its height, as Shapes.
 	_drag = {"phase": "base", "tool": "sketch", "button": MOUSE_BUTTON_LEFT, "lie": sk.lie, "at": sk.at,
 			"a": lo, "b": hi, "kind": "outline", "cut": remove}
+	if sk.has("into"):
+		_drag.into = sk.into
+		_drag.face = sk.face
 	_to_height(_new_shape("outline", String(sk.lie), lo, hi, int(sk.at), entry))
 
 
@@ -1779,6 +1821,11 @@ func set_outline(id: String) -> void:
 
 func pen_outline() -> bool:
 	return OUTLINE_PEN.has(outline)
+
+
+## Cut with the pen: its Freehand and Corners.
+func cut_pen() -> bool:
+	return cut_kind in ["outline", "polygon"]
 
 
 ## How a drag in the tool in hand goes: walls joining walls, a floor, a shape, a cut.
@@ -1860,7 +1907,10 @@ func _plane_at_ghost(want: String) -> Dictionary:
 ## out", cut instead.
 func _make_input(e: InputEventMouseButton) -> bool:
 	if _drag.get("phase", "") == "height":
-		if e.pressed:
+		# Push-pull is a drag: letting go lays it.
+		if not e.pressed and e.button_index == MOUSE_BUTTON_LEFT and String(_drag.get("tool", "")) in ["pull", "move"]:
+			commit_pending()
+		elif e.pressed:
 			if e.button_index == MOUSE_BUTTON_LEFT:
 				commit_pending()
 			else:
@@ -2083,12 +2133,22 @@ func _pull_height() -> void:
 	var xf: Transform3D = ws.world.get_chunk_transform(ws.asm.frames[0])
 	var from: Vector3 = xf.affine_inverse() * (ray[0] as Vector3)
 	var dir: Vector3 = (xf.basis.inverse() * (ray[1] as Vector3)).normalized()
+	if _drag.get("tool", "") == "move":
+		axis = Vector3.ZERO
+		axis[int(_drag.axis)] = 1.0
+		unit = BrickPalette.STUD_M
 	var w0: Vector3 = (_drag.anchor as Vector3) - from
 	var b := axis.dot(dir)
 	var den := 1.0 - b * b
 	if absf(den) < 1e-6:
 		return
 	var along := (b * dir.dot(w0) - axis.dot(w0)) / den
+	if _drag.get("tool", "") == "move":
+		var by := Vector3i.ZERO
+		by[int(_drag.axis)] = int(round(along / unit))
+		_drag.by = by
+		_drag.rec = BrickShapes.shifted(_drag.orig, by)
+		return
 	var step := int(rec.get("step", height_step(l)))
 	var n := int(round(along / unit / step)) * step
 	if _drag.get("cut", false) and _drag.has("into"):
@@ -2133,6 +2193,12 @@ func commit_pending() -> int:
 	typed = ""
 	var rec: Dictionary = d.rec
 	say("")
+	if String(d.get("tool", "")) == "pull":
+		resize_shape(int(rec.id), int(rec.depth))
+		return int(rec.id)
+	if String(d.get("tool", "")) == "move":
+		move_shape(int(rec.id), d.get("by", Vector3i.ZERO))
+		return int(rec.id)
 	if d.get("cut", false):
 		var cut := {}
 		for k in ["kind", "lie", "a", "b", "at", "depth", "rim", "points"]:
@@ -2486,6 +2552,111 @@ func preset_cut(k: String, face: Dictionary) -> Dictionary:
 			"at": face.at, "depth": face.depth}
 
 
+## Select: a click picks; pressed on a picked shape's top and dragged, its height follows;
+## on its side, the whole shape moves along that face's way. Letting go lays it.
+func _select_input(e: InputEventMouseButton) -> bool:
+	if e.button_index != MOUSE_BUTTON_LEFT:
+		return false
+	if not e.pressed:
+		return true
+	_select_click()
+	var sh := shape_of(selected)
+	if sh.is_empty():
+		return true
+	var face := face_under(_ray()[0], _ray()[1])
+	if not face.is_empty():
+		begin_push_pull(sh, face)
+	return true
+
+
+## Start dragging a shape by the face pressed: its top (a flat shape): the height; a
+## side: the shape moves. Anything else, nothing.
+func begin_push_pull(sh: Dictionary, face: Dictionary) -> void:
+	var c: Vector3i = face.cell
+	var cell := Vector2(c.x + 0.5, c.z + 0.5)
+	var base := {"phase": "height", "button": MOUSE_BUTTON_LEFT, "lie": sh.lie, "at": sh.at, "a": BrickShapes._v2(sh.a),
+			"b": BrickShapes._v2(sh.b), "kind": sh.kind, "cut": false, "at0": int(sh.at)}
+	if String(face.lie) == "flat":
+		if String(sh.lie) != "flat" or int(face.into) > 0 or c.y != int(sh.at) + int(sh.depth) - 1:
+			return
+		var rec: Dictionary = sh.duplicate(true)
+		rec.bricks = []
+		if int(sh.get("storey", 0)) > 0:
+			rec.step = int(sh.storey) + maxi(1, int(sh.get("floor", 1)))
+			rec.extra = maxi(1, int(sh.get("floor", 1))) if sh.get("roof", false) else 0
+		else:
+			rec.step = maxi(1, BrickPalette.part_size(BrickPalette.part_of(_fill_part(String(sh.part)))).y)
+		_drag = base
+		_drag.tool = "pull"
+		_drag.rec = rec
+		_drag.anchor = _local("flat", cell, float(sh.at))
+		say("Drag the height (or type it), let go to lay it. Right-click or Esc cancels.")
+		return
+	var axis := 2 if String(face.lie) == "wall_x" else 0
+	_drag = base
+	_drag.tool = "move"
+	_drag.rec = BrickShapes.shifted(sh, Vector3i.ZERO)
+	_drag.orig = sh
+	_drag.axis = axis
+	_drag.anchor = Vector3(c) * Vector3(BrickPalette.STUD_M, BrickPalette.PLATE_M, BrickPalette.STUD_M) \
+			+ Vector3(BrickPalette.STUD_M, BrickPalette.PLATE_M, BrickPalette.STUD_M) * 0.5
+	say("Drag to move it, let go to lay it. Right-click or Esc cancels.")
+
+
+## A shape's new height: its bricks laid again; a building's kept doors and windows put on
+## the storeys it gained, and taken off those it lost. One undo.
+func resize_shape(id: int, depth: int) -> void:
+	var old := shape_of(id)
+	if old.is_empty() or int(old.depth) == depth:
+		return
+	var u := _begin()
+	u.before[id] = old
+	_take_up(old)
+	var sh: Dictionary = old.duplicate(true)
+	sh.depth = depth
+	sh.bricks = []
+	_lay(sh)
+	var ops: Array = old.get("openings", [])
+	if int(old.get("storey", 0)) > 0 and not ops.is_empty():
+		var pitch := int(old.storey) + maxi(1, int(old.get("floor", 1)))
+		var was := storeys_of(old)
+		var now := storeys_of(sh)
+		for k in range(was, now):
+			for op in ops:
+				_open_into(u, BrickShapes.shifted(op, Vector3i(0, k * pitch, 0)))
+		if now < was:
+			var top := int(old.at) + depth
+			for o in shapes().duplicate():
+				if o.has("opening") and int(opening_box(o.opening)[0].y) >= top:
+					u.before[int(o.id)] = o
+					_take_up(o)
+					_store(int(o.id), {})
+	_end(u)
+
+
+## Move a shape by `d` cells, with the frames and glass of the doors and windows cut in it.
+## One undo.
+func move_shape(id: int, d: Vector3i) -> void:
+	var old := shape_of(id)
+	if old.is_empty() or d == Vector3i.ZERO:
+		return
+	var moving := [old]
+	for cut in old.get("cuts", []):
+		for o in shapes():
+			if not o.has("opening"):
+				continue
+			var box := opening_box(o.opening)
+			if BrickShapes._v2(cut.a) == box[0] and BrickShapes._v2(cut.b) == box[1] and int(cut.at) == int(o.opening.at):
+				moving.append(o)
+	var u := _begin()
+	for o in moving:
+		u.before[int(o.id)] = o
+		_take_up(o)
+	for o in moving:
+		_lay(BrickShapes.shifted(o, d))
+	_end(u)
+
+
 func _select_click() -> void:
 	var ray := _ray()
 	var hit: Dictionary = ws._first_hit(ray[0], ray[1])
@@ -2506,7 +2677,7 @@ func _sync_select() -> void:
 	var sh := shape_of(selected)
 	_syncing = true
 	if sh.is_empty():
-		_select_label.text = "Click a brick of a shape to pick it."
+		_select_label.text = "Click a shape or an inserted build."
 	else:
 		var names := {}
 		for k in BrickShapes.KINDS:
@@ -2515,8 +2686,6 @@ func _sync_select() -> void:
 				"flat" if sh.lie == "flat" else "a wall", (sh.bricks as Array).size(), sh.part,
 				"" if (sh.cuts as Array).is_empty() else ", %d cut%s" % [(sh.cuts as Array).size(),
 				"" if (sh.cuts as Array).size() == 1 else "s"]]
-		_sel_depth.set_value_no_signal(int(sh.depth))
-		_sel_rim.set_value_no_signal(int(sh.rim))
 		_sel_bond.select(0 if sh.bond != "align" else 1)
 	_syncing = false
 
@@ -2551,7 +2720,7 @@ func process() -> void:
 	var drawing := on == "draw"
 	_lay_box.visible = drawing
 	_round_box.visible = outline in ["box", "circle"]
-	_poly_box.visible = outline == "corners"
+	_poly_box.visible = (drawing and outline == "corners") or (on == "cut" and cut_kind == "polygon")
 	_walls_box.visible = drawing and outline == "line" and makes in ["walls", "building"]
 	_floor_box.visible = drawing and makes == "floor"
 	_stairs_box.visible = on == "stairs"
@@ -2591,7 +2760,8 @@ func process() -> void:
 				else "Picked: %s%s." % [sh.kind, " (a door or window: it repeats with its cut)" if sh.has("opening") else ""])
 		_rep_lo_spin.get_parent().visible = rep_what == "storey"
 		_rep_hi_spin.get_parent().visible = rep_what == "storey"
-	_select_box.visible = on == "select"
+	_select_box.visible = on == "select" and ws._selected < 0
+	_sel_thick.visible = String(shape_of(selected).get("kind", "")) in ["polyline", "plan"]
 	_lie_box.visible = drawing and makes == "solid"
 	_thick_box.visible = drawing and makes in ["walls", "building"]
 	_bricks_box.visible = true
@@ -2636,6 +2806,10 @@ func tag_text() -> String:
 	if rec.is_empty():
 		return ""
 	var l := String(rec.lie)
+	if String(_drag.get("tool", "")) == "move":
+		var by: Vector3i = _drag.get("by", Vector3i.ZERO)
+		var far := absi(by.x) + absi(by.z)
+		return "%d stud%s" % [far, "" if far == 1 else "s"]
 	if _drag.get("phase", "") == "base":
 		var a := BrickShapes._v2(rec.a)
 		var b := BrickShapes._v2(rec.b)
