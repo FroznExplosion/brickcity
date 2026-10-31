@@ -21,6 +21,7 @@ const WORKSHOP := "res://scenes/workshop.tscn"
 ## The scenes the pause menu opens over: the city's, which owns Escape for nothing else. The
 ## workshop and the terrain tools have their own Escape (menus, cancelling a grab).
 const CITY_SCRIPT := "res://scripts/city_scene.gd"
+const WORKSHOP_SCRIPT := "res://scripts/workshop.gd"
 
 ## Options > Video, Sun Shadow Cascades: 4 or 2. Read by the city as it makes its sun, and
 ## put on a city that is up (CityScene._setup_sun_shadows). Two drew a street walk's frame
@@ -74,7 +75,7 @@ func _pause_allowed() -> bool:
 	if tree == null or tree.current_scene == null:
 		return false
 	var scr := tree.current_scene.get_script() as Script
-	if scr == null or scr.resource_path != CITY_SCRIPT:
+	if scr == null or (scr.resource_path != CITY_SCRIPT and scr.resource_path != WORKSHOP_SCRIPT):
 		return false
 	# Not over a scripted pass: CityScene.pause_allowed says why.
 	return tree.current_scene.pause_allowed()
