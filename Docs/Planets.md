@@ -2210,3 +2210,36 @@ arrival (the ground, the buildings). Peak 93 C, not held back.
 Not yet: AI on generated worlds; town layouts and tower colours are home's generator's, not a
 culture of their own; snow lit by a high sun is near white on screen (exposure); the HUD's building
 counts are the home planet's while in space.
+
+#### Plan, steps 5 and 6 (2026-10-31): jumps, the galaxy map, zero-g debris, belts and rings
+
+**Jumps (step 5).** The ship has the jump drive: at its controls, in open space, M opens the galaxy
+map and J jumps. `Universe` is a list of `SYSTEMS` places on a disc; `GalaxyMap` (a Control, no
+mouse needed: the mouse flies) draws the ones round the ship's, lists the nearest ten by distance
+with their stars and planets, Up/Down picks one. A jump swaps the system round the ship: the
+system's bodies and stations are freed but the home planet, which is hidden and kept with all that
+sleeps on it (and its generated `StarSystem`, so it comes back on its own orbit); the new system is
+built, the ship set down short of its first settled world, or its first planet. The screen flashes
+white over the swap. A generated world's damage is not kept across a jump.
+
+**Zero-g debris (step 6, Space.md §4).** A group that comes loose from a station or a ship, large
+enough (over 20 bricks), leaves as one rigid piece instead of crumbs: `split_island`, drawn from
+its own chunk's bake into one mesh, then a **drift record** -- no body, no physics: `p0 + v t` and
+`q0` spun by `w t` in the space frame, from the frame's velocity where it left plus a push from
+the blast. `PlanetSystem.drifts` places them every frame; past 30 km of the player, or over 64 of
+them (oldest first), they go.
+
+**Rings and belts (step 6, STA Docs/15 §3).** `RockField`: an annulus (a planet's ring, a star's
+belt) with a far tier, a shader disc, and a near tier, rocks drawn by a MultiMesh in cells round the
+player, each a pure function of its cell; `blocked` asks the same function whether a point is in a
+rock, so the ship is stopped by them with no bodies at all. Generated: a third of big planets have
+a ring; a third of systems a belt between two orbits.
+
+Gates: `--gate=jump` (the map, a jump, the new star, down on a world there, back home to what was
+left); `--gate=debris`; `--gate=rocks`.
+
+**Step 5 built (2026-10-31).** As the plan. `--gate=jump` 10/10 windowed and headless, no errors,
+peak 86 C: no jump from the ground; out of home's shell the map lists the ten nearest (Ordar at
+2,141 ly); the jump to it (8 bodies in 102 ms, behind the flash) sets the ship down 71 km from Ordar
+III, clear of its shell; down on it, out and standing on a world of another system; back to system
+0 (69 ms), home shown on its own orbit, what was left on it 0.006 m off. `system_probe` 28/28.

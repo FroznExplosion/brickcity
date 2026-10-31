@@ -70,6 +70,9 @@ var _system_gate := false
 var _ship_gate := false
 var _dock_gate := false
 var _worlds_gate := false
+var _jump_gate := false
+var map: GalaxyMap
+var _flash: ColorRect
 ## The ship parked by the spawn (11.12 step 3), and whether the player flies it.
 var ship: SpaceShip
 var piloting := false
@@ -116,7 +119,8 @@ func _ready() -> void:
 	_ship_gate = "--gate=ship" in OS.get_cmdline_user_args()
 	_dock_gate = "--gate=dock" in OS.get_cmdline_user_args()
 	_worlds_gate = "--gate=worlds" in OS.get_cmdline_user_args()
-	_gate = _gate or _system_gate or _ship_gate or _dock_gate or _worlds_gate or _pawn_gate or _mech_gate or _tank_gate or _soldier_gate or _squad_gate or _travel_gate or _far_gate or _drive_gate or _trees_gate or _bricks_gate or _damage_gate or _fall_gate or _hits_gate or _topple_gate or _pieces_ai_gate or _storey_gate
+	_jump_gate = "--gate=jump" in OS.get_cmdline_user_args()
+	_gate = _gate or _system_gate or _ship_gate or _dock_gate or _worlds_gate or _jump_gate or _pawn_gate or _mech_gate or _tank_gate or _soldier_gate or _squad_gate or _travel_gate or _far_gate or _drive_gate or _trees_gate or _bricks_gate or _damage_gate or _fall_gate or _hits_gate or _topple_gate or _pieces_ai_gate or _storey_gate
 	data = PlanetData.new()
 	data.planet_name = "proto"
 	# Towns and landmarks: their pads go into the ground before it is built.
@@ -223,6 +227,8 @@ func _ready() -> void:
 			_run_dock_gate()
 		elif _worlds_gate:
 			_run_worlds_gate()
+		elif _jump_gate:
+			_run_jump_gate()
 		else:
 			_run_gate()
 
@@ -348,7 +354,41 @@ func _set_on_foot(on: bool) -> void:
 		view.rig.visible = false
 
 
+## The map, opened (11.12 step 5).
+func open_map() -> void:
+	map.open(system.universe, system.system_index, system._home_sys)
+
+
+## Jump to the map's pick, the screen white over the swap.
+func map_jump() -> void:
+	map.visible = false
+	_flash.color.a = 1.0
+	await _frames(2)
+	if system.jump(map.chosen()):
+		var tw := create_tween()
+		tw.tween_property(_flash, "color:a", 0.0, 0.6)
+	else:
+		_flash.color.a = 0.0
+
+
 func _unhandled_input(event: InputEvent) -> void:
+	if ship != null and not _gate and event is InputEventKey and event.pressed and not event.echo:
+		if map.visible:
+			match event.keycode:
+				KEY_UP:
+					map.move(-1)
+				KEY_DOWN:
+					map.move(1)
+				KEY_J, KEY_ENTER:
+					map_jump()
+				KEY_M, KEY_ESCAPE:
+					map.visible = false
+			get_viewport().set_input_as_handled()
+			return
+		if event.keycode == KEY_M and system.can_jump():
+			open_map()
+			get_viewport().set_input_as_handled()
+			return
 	if ship != null and not _gate:
 		if event is InputEventKey and event.pressed and not event.echo and event.keycode == KEY_E:
 			if piloting:
@@ -429,18 +469,20 @@ const SEE_FAR := PlanetSystem.SEE_FAR
 ## universe, the planet on its habitable orbit, the spawn at noon in summer. Every gate
 ## but the system's own runs with the clock stopped.
 func _build_system() -> void:
-	var sys := Universe.new(1).system(0, data)
+	var uni := Universe.new(1)
+	var sys := uni.system(0, data)
 	sys.best_season(sys.home, spawn_dir)
 	data.spin_phase = sys.noon_phase(sys.home, spawn_dir, 0.0)
 	system = PlanetSystem.new()
 	add_child(system)
 	system.setup(sys, planet)
+	system.universe = uni
 	system.built[planet] = buildings
 	system.frozen = _gate and not (_system_gate or _dock_gate)
 	system.anchor_changed.connect(_on_anchor_changed)
 	system.woke.connect(_on_woke)
 	# A ship parked 45 m behind the spawn (not in the other gates' way).
-	if not _gate or _ship_gate or _dock_gate:
+	if not _gate or _ship_gate or _dock_gate or _jump_gate:
 		var sd := OrbitalData.new()
 		sd.kind = "ship"
 		sd.orbital_name = "ship"
@@ -523,6 +565,19 @@ func _build_hud() -> void:
 	hud.add_theme_constant_override("outline_size", 4)
 	layer.add_child(hud)
 	add_child(layer)
+	if system != null:
+		var over := CanvasLayer.new()
+		over.layer = 10
+		add_child(over)
+		map = GalaxyMap.new()
+		map.visible = false
+		map.set_anchors_preset(Control.PRESET_FULL_RECT)
+		over.add_child(map)
+		_flash = ColorRect.new()
+		_flash.color = Color(1, 1, 1, 0)
+		_flash.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		_flash.set_anchors_preset(Control.PRESET_FULL_RECT)
+		over.add_child(_flash)
 
 
 func _process(_delta: float) -> void:
@@ -600,8 +655,8 @@ func _process(_delta: float) -> void:
 				PlanetFrame.last_us / 1000.0, _buildings_here().near_count, _buildings_here().far_count,
 				"(waiting for ground)" if walker.frozen and not piloting else ""]
 		if piloting:
-			hud.text += "\nSHIP  %.0f m/s  %.0f m over the ground  (E leaves the seat; WASD, Space/Ctrl, mouse, Z/C roll, Shift cruise)" % [
-					ship.vel.length(), ship.altitude]
+			hud.text += "\nSHIP  %.0f m/s  %.0f m over the ground  (E leaves the seat; WASD, Space/Ctrl, mouse, Z/C roll, Shift cruise%s)" % [
+					ship.vel.length(), ship.altitude, "; M galaxy map" if system.can_jump() else ""]
 		elif ship != null and (_anchor() - ship.global_transform * ship.seat()).length() < 8.0:
 			hud.text += "\nE: take the ship's controls"
 		if system != null:
@@ -1827,6 +1882,123 @@ func _system_cross(b: PlanetBody, dir: Vector3) -> bool:
 	walker.frozen = false
 	await get_tree().create_timer(3.0).timeout
 	return true
+
+
+# The jump gate (11.12 step 5): out of the home planet's shell, the map, a jump
+# to the nearest system with a settled world, down on it, off, and home to what
+# was left there.
+
+func _run_jump_gate() -> void:
+	var t0 := Time.get_ticks_msec()
+	while walker.frozen and Time.get_ticks_msec() - t0 < 60000:
+		await _frames(1)
+	await get_tree().create_timer(1.0).timeout
+	var marker := Node3D.new()
+	marker.name = "JumpGateMarker"
+	add_child(marker)
+	marker.global_transform = Transform3D(Basis(), walker.global_position)
+	var marker_local := planet.global_transform.affine_inverse() * marker.global_transform
+	board()
+	_check("no jump from the ground", not system.can_jump() and not system.jump(5))
+	await _ship_out()
+	_check("in open space the drive works", system.can_jump())
+	open_map()
+	await _frames(3)
+	await _shot("jump_gate_map")
+	_check("the map lists the ten nearest, nearest first", map.rows.size() == 10
+			and float(map.rows[0][5]) <= float(map.rows[1][5]) and float(map.rows[1][5]) <= float(map.rows[9][5]),
+			"%s at %.0f ly" % [map.rows[0][1], map.rows[0][5]])
+	# The nearest with a settled world.
+	for i in map.rows.size():
+		if int(map.rows[i][3]) > 0:
+			map.pick = i
+			break
+	var to := map.chosen()
+	var was: StarSystem = system.sys
+	map.visible = false
+	var ok_jump := system.jump(to)
+	_check("the jump: another system, home hidden, the ship in open space", ok_jump and system.sys != was
+			and system.system_index == to and not planet.visible and system.frame_node() == ship,
+			"%s, %d bodies" % [system.sys.system_name, system.bodies.size()])
+	await _frames(3)
+	await _shot("jump_gate_arrived")
+	var target: PlanetBody = null
+	for b in system.bodies:
+		if target == null and not b.data.towns.is_empty():
+			target = b
+	var off := (ship.global_position - target.global_position).length()
+	_check("set down short of its first settled world, clear of its shell",
+			off > target.data.radius * PlanetSystem.SHELL and off < 400000.0, "%.0f km from %s" % [off / 1000.0, target.data.planet_name])
+	var ok_land: bool = await _ship_down_on(target)
+	_check("down on it", ok_land and ship.landed and system.anchor == target, "%s, %.1f m" % [target.data.planet_name, ship.altitude])
+	await _shot("jump_gate_landed")
+	unboard()
+	await get_tree().create_timer(3.0).timeout
+	_check("out, standing on a world of another system", walker.is_on_floor() and system.anchor == target)
+	board()
+	await _ship_out()
+	var ok_back := system.jump(0)
+	_check("back to the home system: home on its own orbit, shown", ok_back and system.sys == was and planet.visible
+			and system.bodies.has(planet) and system.sys.home >= 0)
+	await _ship_down_on(planet, marker_local.origin.normalized())
+	_check("down on home", ship.landed and system.anchor == planet, "%.1f m" % ship.altitude)
+	unboard()
+	await get_tree().create_timer(3.0).timeout
+	var back := planet.global_transform.affine_inverse() * marker.global_transform
+	_check("what was left there is where it was, on the scene again", marker.get_parent() == self and back.is_equal_approx(marker_local),
+			"%.3f m off" % (back.origin - marker_local.origin).length())
+	print("[planet] jump gate: %d handoffs; frames: worst %.1f ms; over 40 ms in play: %d %s" % [
+			system.handoffs, _worst_ms, _play_hitches.size(), _play_hitches])
+	print("[planet] gate: %d ok, %d FAIL" % [_ok, _fail])
+	get_tree().quit(1 if _fail > 0 else 0)
+
+
+## Straight up and out of the planet's shell, the ship then the frame.
+func _ship_out() -> void:
+	ship.thrust = Vector3(0.0, 1.0, 0.0)
+	ship.boost = true
+	var t0 := Time.get_ticks_msec()
+	while system.frame_node() != ship and Time.get_ticks_msec() - t0 < 90000:
+		await _frames(1)
+	ship.thrust = Vector3.ZERO
+	ship.boost = false
+	await _frames(2)
+
+
+## The ship flown to body `b` and set down on it (near planet-local `dir`, if
+## given): cruising in, round it at height, down level. True when down.
+func _ship_down_on(b: PlanetBody, dir := Vector3.ZERO) -> bool:
+	var i := system.index_of(b)
+	ship.boost = true
+	var t0 := Time.get_ticks_msec()
+	while ship.ref != b and Time.get_ticks_msec() - t0 < 120000:
+		if ship.ref == null:
+			ship.aim(system.sys.pos(i, system.t) - ship.rel.origin, ship.rel.basis.y)
+		ship.thrust = Vector3(0.0, 0.0, 1.0)
+		await _frames(1)
+	t0 = Time.get_ticks_msec()
+	while not ship.landed and Time.get_ticks_msec() - t0 < 120000:
+		var r := ship.rel.origin
+		var down := -r.normalized()
+		var ang := 0.0 if dir == Vector3.ZERO else r.normalized().angle_to(dir)
+		if ang > 0.02:
+			# Round to over `dir`, at height.
+			var goal := r.normalized().slerp(dir, minf(0.2 / ang, 1.0)) * maxf(r.length(), b.data.radius + 4000.0)
+			ship.aim(goal - r, -down)
+			ship.thrust = Vector3(0.0, 0.0, 1.0)
+		elif ship.altitude > 3000.0:
+			ship.aim(down, ship.rel.basis.y)
+			ship.thrust = Vector3(0.0, 0.0, 1.0)
+		else:
+			var along := (ship.rel.basis.z - down * ship.rel.basis.z.dot(down)).normalized()
+			ship.aim(-along, -down)
+			ship.thrust = Vector3(0.0, -1.0, 0.0)
+		ship.boost = ship.altitude > 20000.0
+		await _frames(1)
+	ship.thrust = Vector3.ZERO
+	ship.boost = false
+	await get_tree().create_timer(1.0).timeout
+	return ship.landed and ship.ref == b
 
 
 # The worlds' gate (11.12 step 4): down onto a generated world with towns, its
