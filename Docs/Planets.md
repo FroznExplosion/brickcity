@@ -2396,8 +2396,6 @@ and are reparented under it when it sleeps.
 #### What is not done (2026-10-31, each looked at in the code)
 
 Promised by the plan and not built:
-- **Markers for planets too small to see** (step 5): nothing says where another planet is; it is only
-  found by eye.
 - **Saving**: nothing of the universe is saved: where the player is, which system, the drifts, a generated
   world's damage (lost on a jump), `cleared` (lost on quitting).
 
@@ -2417,7 +2415,6 @@ Ships and space:
 - Still through the star's frame, so good to 0.5 m in open space: a drifting piece from a ship, and
   belt rocks round a player flying with no ship. A belt's far disc turns with the star now and has
   not been looked at from afar.
-- The HUD's first line in space is home's (building counts, "walk", the height).
 
 Not known:
 - Frame times in a fight and at arrival: taken with the editor open or the display asleep; the worst
@@ -2425,3 +2422,11 @@ Not known:
 - The one exit 127 in step 7.
 - Multiplayer has not been thought through for any of this but that orbits and rocks are pure functions
   of the clock and the seed.
+
+#### Step 5's markers (2026-10-31)
+
+`SpaceMarkers` (scripts/space/space_markers.gd), under the map: at the ship's controls or flying, a mark
+on each planet the player is not on, its name and distance, green if it is settled; moons and stations
+inside 300 km; off the screen an arrow at the edge. None on a body wider than 48 px on screen, none on
+foot, none with the map open. The HUD's first line no longer gives home's buildings from elsewhere,
+and says "at the controls". `--gate=seat` checks them.
