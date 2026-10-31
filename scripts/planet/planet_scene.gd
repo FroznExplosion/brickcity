@@ -22,6 +22,7 @@ extends Node3D
 ##   (11.10, trees and vehicles).
 ##   -- --gate=squad: a squad on the AI's nav region round the town (11.8 N2)
 ##   -- --gate=garrison: a generated world's own AI and a town's squad (11.12 step 7)
+##   -- --gate=belt: a star's belt from open space, the ship turned, slow among its rocks
 ##   -- --gate=seat: the ship smooth near a planet, out of its seat, the map, open space
 ##   walks to the player round the curve, takes cover, fires.
 ##   -- --gate=travel: a squad ordered 200 m out of the town on the nav net
@@ -62,6 +63,7 @@ var _topple_gate := false
 var _pieces_ai_gate := false
 var _garrison_gate := false
 var _seat_gate := false
+var _belt_gate := false
 var _storey_gate := false
 ## The AI round the fight (Docs/Planets.md 11.8, N2, N4): the nav net round the
 ## player's town; ai_world / ai_nav the region the player is in. Made by setup_ai.
@@ -137,7 +139,8 @@ func _ready() -> void:
 	_rocks_gate = "--gate=rocks" in OS.get_cmdline_user_args()
 	_garrison_gate = "--gate=garrison" in OS.get_cmdline_user_args()
 	_seat_gate = "--gate=seat" in OS.get_cmdline_user_args()
-	_gate = _gate or _system_gate or _ship_gate or _dock_gate or _worlds_gate or _jump_gate or _debris_gate or _rocks_gate or _garrison_gate or _seat_gate or _pawn_gate or _mech_gate or _tank_gate or _soldier_gate or _squad_gate or _travel_gate or _far_gate or _drive_gate or _trees_gate or _bricks_gate or _damage_gate or _fall_gate or _hits_gate or _topple_gate or _pieces_ai_gate or _storey_gate
+	_belt_gate = "--gate=belt" in OS.get_cmdline_user_args()
+	_gate = _gate or _system_gate or _ship_gate or _dock_gate or _worlds_gate or _jump_gate or _debris_gate or _rocks_gate or _garrison_gate or _seat_gate or _belt_gate or _pawn_gate or _mech_gate or _tank_gate or _soldier_gate or _squad_gate or _travel_gate or _far_gate or _drive_gate or _trees_gate or _bricks_gate or _damage_gate or _fall_gate or _hits_gate or _topple_gate or _pieces_ai_gate or _storey_gate
 	data = PlanetData.new()
 	data.planet_name = "proto"
 	# Towns and landmarks: their pads go into the ground before it is built.
@@ -254,6 +257,8 @@ func _ready() -> void:
 			_run_garrison_gate()
 		elif _seat_gate:
 			_run_seat_gate()
+		elif _belt_gate:
+			_run_belt_gate()
 		else:
 			_run_gate()
 
@@ -558,7 +563,7 @@ func _build_system() -> void:
 	system.woke.connect(_on_woke)
 	system.jumped.connect(_on_jumped)
 	# A ship parked 45 m behind the spawn (not in the other gates' way).
-	if not _gate or _ship_gate or _dock_gate or _jump_gate or _rocks_gate or _garrison_gate or _seat_gate:
+	if not _gate or _ship_gate or _dock_gate or _jump_gate or _rocks_gate or _garrison_gate or _seat_gate or _belt_gate:
 		var sd := OrbitalData.new()
 		sd.kind = "ship"
 		sd.orbital_name = "ship"
@@ -2394,6 +2399,92 @@ func _run_seat_gate() -> void:
 	pawn.place(away)
 	await get_tree().create_timer(1.0).timeout
 	_check("off the ship in open space, nothing pulls", system.frame_node() == null and Gravity.strength() == 0.0, "%.1f m/s2" % Gravity.strength())
+	print("[planet] gate: %d ok, %d FAIL" % [_ok, _fail])
+	get_tree().quit(1 if _fail > 0 else 0)
+
+
+# The belt's gate: a star's belt in open space, the universe turned round a turned
+# ship. The rocks drawn where they stop it; stopped among them is stopped; slow
+# flight smooth, a planet's orbit out in float32.
+
+func _run_belt_gate() -> void:
+	var t0 := Time.get_ticks_msec()
+	while walker.frozen and Time.get_ticks_msec() - t0 < 60000:
+		await _frames(1)
+	await get_tree().create_timer(1.0).timeout
+	board()
+	await _ship_out()
+	var to := -1
+	for i in range(1, Universe.SYSTEMS):
+		if to < 0 and system.universe.system(i).belt_outer > 0.0:
+			to = i
+	system.jump(to)
+	await _frames(3)
+	var f := system.belt
+	_check("a system with a belt", f != null, "%s, %.0f-%.0f km" % [system.sys.system_name, f.inner / 1000.0, f.outer / 1000.0])
+	var dir := Vector3(0.6, 0.0, 0.8)
+	ship.rel = Transform3D(Basis(Vector3(1.0, 2.0, 0.5).normalized(), 1.1), dir * (f.inner + f.outer) * 0.5)
+	ship.vel = Vector3.ZERO
+	await _frames(10)
+	_check("out of every shell, in it, its rocks drawn", ship.ref == null and system.frame_node() == ship and f.drawn > 20, "%d rocks" % f.drawn)
+	await _shot("belt_gate_in")
+	var off := 0.0
+	var mm := f._mmi.multimesh
+	var s2w := system.space_to_world()
+	for i in mini(f.drawn, 40):
+		var inst := mm.get_instance_transform(i).origin
+		off = maxf(off, (f._mmi.global_transform * inst).distance_to(s2w * (inst + f.mid())))
+	_check("each rock drawn where it is (the ship turned)", off < 1.0, "%.1f m out" % off)
+	var at := ship.rel.origin
+	await get_tree().create_timer(3.0).timeout
+	_check("stopped among them is stopped", ship.rel.origin.distance_to(at) < 5.0, "%.1f m in 3 s" % ship.rel.origin.distance_to(at))
+	# Slow, toward the nearest rock: it comes on evenly, and the ship does move.
+	var best := Vector3.ZERO
+	var best_d := INF
+	var c := RockField.cell_of(ship.rel.origin)
+	for x in range(c.x - 2, c.x + 3):
+		for y in range(c.y - 1, c.y + 2):
+			for z in range(c.z - 2, c.z + 3):
+				for e in f.rocks_in(Vector3i(x, y, z)):
+					var d := (e[0] as Vector3).distance_to(ship.rel.origin)
+					if d < best_d and d > 60.0:
+						best_d = d
+						best = e[0]
+	ship.aim(best - ship.rel.origin, ship.rel.basis.y)
+	ship.thrust = Vector3(0.0, 0.0, 0.002)
+	await get_tree().create_timer(2.0).timeout
+	var last := -1.0
+	var step := get_process_delta_time()
+	var steps: Array[float] = []
+	for k in 120:
+		await get_tree().process_frame
+		var d := (f._mmi.global_transform * (best - f.mid())).distance_to(ship.camera.global_position)
+		if last >= 0.0:
+			steps.append(absf(d - last) / maxf(step, 1e-4))
+		last = d
+		step = get_process_delta_time()
+	var mean := 0.0
+	for v in steps:
+		mean += v
+	mean /= steps.size()
+	var spread := 0.0
+	for k in range(1, steps.size()):
+		spread += (steps[k] - steps[k - 1]) * (steps[k] - steps[k - 1])
+	spread = sqrt(spread / (steps.size() - 1))
+	_check("slow past a rock, even (%.2f m/s, the ship at %.0f km)" % [ship.vel.length(), ship.rel.origin.length() / 1000.0], mean > 2.0 and spread / mean < 0.1,
+			"%.2f m/s seen, spread %.2f m/s" % [mean, spread])
+	# Fast at it: stopped by it however big the step.
+	ship.rel.origin = best - (best - ship.rel.origin).normalized() * 900.0
+	ship.aim(best - ship.rel.origin, ship.rel.basis.y)
+	ship.vel = (best - ship.rel.origin).normalized() * 1500.0
+	ship.thrust = Vector3(0.0, 0.0, 1.0)
+	var rams := ship.rams
+	t0 = Time.get_ticks_msec()
+	while ship.rams == rams and Time.get_ticks_msec() - t0 < 4000:
+		await _frames(1)
+	ship.thrust = Vector3.ZERO
+	var gap := ship.rel.origin.distance_to(best)
+	_check("at 1,500 m/s a rock still stops it", ship.rams > rams and gap < 80.0, "%.1f m from its centre" % gap)
 	print("[planet] gate: %d ok, %d FAIL" % [_ok, _fail])
 	get_tree().quit(1 if _fail > 0 else 0)
 
