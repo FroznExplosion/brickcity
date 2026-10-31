@@ -4,7 +4,7 @@ extends SceneTree
 ##
 ##     godot --headless --path . --script res://tools/room_grow_probe.gd
 ##
-## Seven modules, walls of 1x1 plates, rooms 12 plates high with a floor and a
+## Eight modules, walls of 1x1 plates, rooms 12 plates high with a floor and a
 ## ceiling of their own, every doorway 2 x 9:
 ##   hall     the start: a way in (-X, start), doors on its three other sides
 ##   cross    doors on all four sides, a window: rooms that can close a loop
@@ -12,9 +12,11 @@ extends SceneTree
 ##   vault    the finish: a door in (-X), the way out (+X, finish)
 ##   stairs   a door, a stair link up; loft: a stair link down, upper storeys only
 ##   tower    a door, a hang spot and a balcony spot
+##   nook     4 x 4, one door, role hang: the only module a hang spot takes
 ##
 ##   library   every module, every turn: each door connector's outer face is past
-##             the wall, the cell behind it the hole, a jamb beside it solid
+##             the wall, the cell behind it the hole, a jamb beside it solid, the
+##             wall's brick (colour, material) read from it
 ##   grow      20 seeds grow, none with a cell of one module in another's bricks
 ##             or rooms
 ##   path      start first, the finish last, each step joined to the next; the way
@@ -23,9 +25,13 @@ extends SceneTree
 ##   seed      the same seed grows the same building; another, another
 ##   loops     rooms joined at more than one place somewhere in the 20
 ##   rules     the hall (max 1) once; the loft never on the ground
-##   stairs    a loft over a stairs somewhere, its steps laid up to its floor
-##   hang      a room hung off the tower somewhere, its doorway cut
-##   lay       one building laid: no cell twice, the caps in, the way in open
+##   stairs    a loft over a stairs somewhere, its steps laid up to its floor, two
+##             plates a step (the workshop's own stair rise)
+##   hang      a nook hung off the tower somewhere, its doorway cut; no other
+##             module ever on a hang spot
+##   lay       one building laid: no cell twice, the caps in in the wall's colour
+##             with bricks longer than a stud, the way in open
+##   cut       a cut through a long brick leaves the rest of it, as 1x1s
 ##   facade    balconies laid, windows glazed somewhere
 ##   baseplate a module built on the workshop's baseplate (no floor of its own)
 ##             gets one, and its room and doors are found
@@ -77,11 +83,11 @@ func _run() -> void:
 				var at: Vector3i = c.at
 				var ok: bool = not td.solid.has(at) and not td.solid.has(at - dv) \
 						and (td.solid.has(at - dv - across) or td.solid.has(at - dv + across * (c.size as Vector2i).x)) \
-						and c.size == DOOR and int(c.depth) == 1
+						and c.size == DOOR and int(c.depth) == 1 and c.wall == [2, 0]
 				if not ok:
 					bad.append("%s t%d %s" % [m.name, t, str(c)])
-	_ok("library: 7 modules, every door of every turn on the outer face, the hole behind, a jamb beside",
-			lib.size() == 7 and bad.is_empty() and doors == 4 * 15,
+	_ok("library: 8 modules, every door of every turn on the outer face, the hole behind, a jamb beside, its brick",
+			lib.size() == 8 and bad.is_empty() and doors == 4 * 16,
 			"%s, %d door(s) in all turns, %d ms%s" % [str(names), doors, lib_ms,
 				("  BAD " + str(bad.slice(0, 3))) if not bad.is_empty() else ""])
 
@@ -171,8 +177,10 @@ func _run() -> void:
 				stairs += 1
 			if String(j.a.kind) == "hang":
 				hangs += 1
+				if String(lib[pl.placed[int(j.b.p)].m].name) != "nook":
+					rule_bad.append("seed %d: %s on a hang spot" % [pl.seed, lib[pl.placed[int(j.b.p)].m].name])
 	_ok("rooms joined at more than one place (loops) somewhere in the 20", loops > 0, "%d loop(s)" % loops)
-	_ok("the rules: one hall (max 1), the loft never on the ground", rule_bad.is_empty(), str(rule_bad.slice(0, 3)))
+	_ok("the rules: one hall (max 1), the loft never on the ground, only the nook hung", rule_bad.is_empty(), str(rule_bad.slice(0, 3)))
 
 	# A stair, laid: steps up to the loft's floor.
 	var sp: Dictionary = {}
@@ -199,10 +207,20 @@ func _run() -> void:
 				top += 1
 			var upper: Dictionary = j.b if low == j.a else j.a
 			var uplace: Dictionary = sp.placed[int(upper.p)]
-			stair_ok = top == int(uplace.off.y) and not cells.has(Vector3i(at.x, top + 1, at.z))
-			stair_detail = "seed %d: top step's top row %d, the loft's floor row %d" % [sp.seed, top, int(uplace.off.y)]
+			# The step below the top one: two plates lower, beside it.
+			var below := -1
+			for d in [Vector3i(1, 0, 0), Vector3i(-1, 0, 0), Vector3i(0, 0, 1), Vector3i(0, 0, -1)]:
+				var n: Vector3i = at + d
+				var t2 := floor_lo
+				while cells.has(Vector3i(n.x, t2 + 1, n.z)):
+					t2 += 1
+				if t2 == top - 2 and t2 > floor_lo:
+					below = t2
+			stair_ok = top == int(uplace.off.y) and not cells.has(Vector3i(at.x, top + 1, at.z)) and below >= 0
+			stair_detail = "seed %d: top step's top row %d, the loft's floor row %d, the step below %d" % [
+					sp.seed, top, int(uplace.off.y), below]
 			break
-	_ok("a loft over a stairs somewhere, its steps laid up to its floor and the slab over them cut",
+	_ok("a loft over a stairs somewhere, its steps two plates each up to its floor and the slab over them cut",
 			stairs > 0 and stair_ok, "%d stair join(s); %s" % [stairs, stair_detail])
 
 	var hp: Dictionary = {}
@@ -219,7 +237,7 @@ func _run() -> void:
 				var fd: Vector2i = StructureSpaces.FACINGS[int(j.a.facing)]
 				var wall: Vector3i = (j.a.at as Vector3i) - Vector3i(fd.x, 0, fd.y)
 				hang_ok = not cells.has(wall) and not cells.has(wall + Vector3i(0, 5, 0))
-	_ok("a room hung off the tower somewhere, a doorway cut through its wall", hangs > 0 and hang_ok,
+	_ok("a nook hung off the tower somewhere, a doorway cut through its wall", hangs > 0 and hang_ok,
 			"%d hang join(s)" % hangs)
 
 	var pl3: Dictionary = oks[2]
@@ -243,12 +261,19 @@ func _run() -> void:
 		var fd: Vector2i = StructureSpaces.FACINGS[int(e.facing)]
 		if not cells3.has((e.at as Vector3i) - Vector3i(fd.x, 0, fd.y) + Vector3i(0, 2, 0)):
 			caps_in = false
+	# The caps' bricks: the wall's colour (2), longer than a stud along the doorway.
+	var cap_long := 0
+	for i in out3.size():
+		if out3.part_of(i).begins_with("brick_1x2_") and out3.colour_of(i) == 2:
+			cap_long += 1
+	caps_in = caps_in and (pl3.caps.is_empty() or cap_long > 0)
 	var ef: Vector2i = StructureSpaces.FACINGS[int(pl3.entrance.facing)]
 	var way_in := not cells3.has((pl3.entrance.at as Vector3i) - Vector3i(ef.x, 0, ef.y) + Vector3i(0, 2, 0))
-	_ok("one building laid: no cell twice, every cap in its doorway, the way in open",
+	_ok("one building laid: no cell twice, every cap in its doorway in the wall's bricks, the way in open",
 			out3.size() > 0 and twice == 0 and caps_in and way_in,
-			"%d bricks, %d cell(s) twice, %d cap(s), caps in %s, way in open %s, %d ms" % [out3.size(), twice,
-				pl3.caps.size(), str(caps_in), str(way_in), lay_ms])
+			"%d bricks, %d cell(s) twice, %d cap(s) (%d 1x2s), caps in %s, way in open %s, %d ms" % [out3.size(),
+				twice, pl3.caps.size(), cap_long, str(caps_in), str(way_in), lay_ms])
+	_cut_check()
 
 	var glass_laid := false
 	for pl in oks:
@@ -332,3 +357,20 @@ func _baseplate_check() -> void:
 	_ok("a module built on the baseplate gets a floor of its own; its room and both doors are found",
 			not m.is_empty() and floor_n == 100 and doors == 2,
 			"%d of 100 floor cells, %d door(s)" % [floor_n, doors])
+
+
+## A cut through part of a brick 2 x 4 leaves the rest of it as 1x1s: a whole
+## column of it and one cell of another gone, every other cell laid once.
+func _cut_check() -> void:
+	var out := BuildRecipe.new()
+	var cuts := {}
+	for y in 3:
+		cuts[Vector3i(0, y, 0)] = true
+	cuts[Vector3i(1, 1, 2)] = true
+	var filled := {}
+	RoomGrow._lay_left(out, filled, cuts, Vector3i.ZERO, BuildRecipe.part_size("brick_2x4"), 4, 0, 0)
+	var cells := _cells(out)
+	var bad := cells.keys().filter(func(c) -> bool: return cuts.has(c))
+	_ok("a cut through a brick 2 x 4 leaves the rest of it as 1x1s, the cut cells empty",
+			cells.size() == 24 - 4 and bad.is_empty() and filled.size() == 20,
+			"%d cell(s) laid in %d piece(s), %d in the cut" % [cells.size(), out.size(), bad.size()])

@@ -7,7 +7,7 @@ generators for several purposes:
 * **Grow by connectors** (first): start at an entrance room, snap rooms on door to door, never a
   room inside another, rooms may meet at more than one place, and the whole building has a
   **start** and a **finish** with a path through it. Castles, bunkers, compounds, any shape.
-* **Set by shell** (later): a drawn outer shell (Sketch, Walls) whose inside is split into rooms
+* **Set by shell** (stage 6, section 4): an outer shell (Sketch, Walls) whose inside is split into rooms
   and filled. Skyscrapers and other buildings whose outside is fixed.
 
 The markers live where the rooms already do: the spaces tool's record (Docs/Structures.md 3.1,
@@ -25,7 +25,7 @@ The rules on the module itself (`recipe.meta["module"]`, set on the rail):
 | field | | |
 |---|---|---|
 | `on` | bool | the generator may use it |
-| `role` | `room`, `corridor`, `stair`, `start`, `finish` | what the generator asks it for; `start` and `finish` are where the path begins and ends |
+| `role` | `room`, `corridor`, `stair`, `start`, `finish`, `hang` | what the generator asks it for; `start` and `finish` are where the path begins and ends; `hang` a small room made to hang off a wall (the only kind a hang spot takes when the library has one) |
 | `min`, `max` | int | how many of it a building has at least / at most (`max` -1: no limit) |
 | `weight` | float | how often it is picked among those that fit |
 | `storeys` | `any`, `ground`, `upper`, `top` | where it may go |
@@ -131,19 +131,24 @@ no column span of it in one already placed, the `max` not passed, the storey rul
 lowest row the start's; `upper`: above it; `top`: nothing over it ever). Stair links join up to
 down, the upper module's lowest brick in that column on the lower one's highest. A hang spot is
 an open connector any doorway as high as the room fits; a branch takes one with the chance
-`hang`. About 4 ms a 12-module building.
+`hang`, and puts a `hang`-role module there (a room-role one when the library has none). About 4 ms a 12-module building.
 
 **The facade** (stage 5): one window style a building (`open` or `glass`: every window hole of
 every module glazed); a window spot cuts a 2 x 6 window through the wall there (glazed in the
 glass style); a balcony spot, with the chance `balcony` and where nothing is, a 4 x 3 slab at the
 room's floor with a rail a brick high and a doorway out to it; a hang spot, used, a doorway cut
 for the room hung there. A stair join lays a straight stair two studs wide in the lower room
-ending at the link, a brick a step, and cuts the slabs over the steps that would have less than
-15 plates of headroom.
+ending at the link, a stud of tread and two plates of rise a step (the workshop's own stair rise,
+`StaircaseRecipe.STEP_PLATES`; a brick a step where the room has no floor for the longer flight),
+and cuts the slab cells over the steps that would have less than 15 plates of headroom.
 
 **Laying** (`RoomGrow.lay(lib, plan, on_ground)`): every placement's bricks -- furniture and
-detail too, fixtures, placed furniture -- turned and moved, the cut ones left out; then caps
-(bricks and plates in the module's colour), steps, balconies and glass where nothing is. Its
+detail too, fixtures, placed furniture -- turned and moved; a plain brick or plate partly in a
+cut laid again as 1x1s of what is left (a slope or custom piece left out whole), furniture with a
+cell in a cut left out; then caps, steps, balconies and glass where nothing is. A cap is the
+wall's own brick -- the colour and material beside the doorway (`wall` on the connector) -- in
+courses of 1x6/1x4/1x2 along it in a running bond, plates under the lintel. A room's seed a step
+or a cap now stands on moves to a free cell of that room. Its
 rooms go in `meta["structure"]` (each module's, moved), so the spaces tool, interiors and AI see
 them; `meta["generated"]` says the seed, the modules and the counts. `on_ground` moves it to the
 plate's corner and leaves the ground row (the ground floors) to the ground, as a workshop build
@@ -155,13 +160,46 @@ as a new build (a build with unsaved changes asks first: press again within 4 s)
 wider than the baseplate makes the plate bigger. **Enter** places it in the city as any build
 (the city takes builds whole: `BuildingRegistry.register_build`).
 
-Not yet: the room a module may hang is any room-role module; furniture in a cut is left whole;
-a stair cut takes whole slab bricks over it, not cells; the steps are a brick each; no doors put
-in joined doorways; a cap is plain bricks.
+Not yet: no doors put in joined doorways -- the game has no door piece (a part or fixture that
+opens) to put; the finder already reads any brick whose name has "door" as one.
 
-## 4. Set by shell
-Later. A shell (Sketch, Walls, a floor each storey) split into rooms; modules whose rules say
-they fit are put in the pieces; the stairwell a stair-role module.
+## 4. Set by shell (stage 6, built 2026-10-31)
+
+`scripts/room_shell.gd`, `RoomShell.generate(lib, {seed, width, depth, storeys, pitch, corridor,
+room_max, window_every, fill})` -> `{ok, why, recipe, plan, stats}`. The outside first: a box
+`width` x `depth` studs, `storeys` high, `pitch` plates a storey (0: the height most room-role
+modules have, `pitch_of`; 14 for a floor plate, twelve plates of room and a ceiling). Every
+storey the same plan:
+
+* **The stair hall** at the west end, the full depth: one straight flight a storey, two studs wide,
+  two plates a step, in two lanes of the corridor's width so each flight starts beside the cut
+  over the one below; the top flight comes up through the roof (the finish). The way in: a
+  doorway in the hall's south wall on the ground.
+* **The corridor** `corridor` studs wide (at least 4: the two lanes) down the middle to the east
+  wall.
+* **Each side** filled west to east: a room- or corridor-role module, turned so a door faces the
+  corridor, its door's outer face on the corridor's first row and its own wall standing in the
+  corridor wall's line, inside the footprint, no higher than the pitch, its storey rule and `max`
+  kept, picked by weight -- with the chance `fill`, else a stud on. Its other doors are walled up
+  (the grow's caps).
+* **Filler rooms**: what of a side no module has, split by a wall every `room_max` studs, each with
+  a doorway off the corridor (the middle two cells it has on the corridor wall); a pocket with no
+  corridor wall stays closed.
+* **The shell's walls** -- the outer ring, the hall's wall, the corridor walls where no module
+  stands, the splits -- in courses of 1x4/1x2/1x1 in a running bond, never in a module's columns.
+  Floors in the biggest square plates, but not in a module's columns or over a flight. Windows
+  2 x 6 every `window_every` studs in the shell's own outer wall, one style a tower (open or
+  glazed, the modules' windows too). A parapet a brick high round the roof.
+
+Laid by `RoomGrow.lay` (the plan says where it stands, `at`); the record gets the modules' rooms
+and the shell's own (a corridor with its hall a storey, the filler rooms); `meta["generated"]`
+says `generator: "shell"`. In the workshop: under the grow on the rooms panel, *Set a tower by its
+shell*: seed, width, depth, storeys, **Generate tower**, **Next seed** (the plate and the volume
+over it grow to hold a tall one). `tools/room_shell_probe.gd` (9).
+
+Not yet: a box only -- a drawn footprint (Sketch, Walls) and setbacks storey to storey are
+next; one stair hall, no lift; modules whose rooms have stair links are not stacked through the
+storeys; facade spots of a module in the shell are not used.
 
 ## 5. Markers in the workshop (stage 1, built)
 
@@ -188,4 +226,5 @@ Code: `StructureSpaces.connectors` / `door_connector` / `cycle_link` (record sid
 | 3 | grow: path start to finish, branches, loops, caps, no overlap; seeded; `room_grow_probe` (12) | built 2026-10-30 |
 | 4 | lay a plan in bricks: Generate on the workshop rail; Enter puts it in the city; `module_marks_probe` (11) | built 2026-10-30 |
 | 5 | facade spots filled (window styles, balconies, hanging rooms), stairs laid | built 2026-10-30 |
-| 6 | set by shell | |
+| 6 | set by shell: a box tower, stair hall, corridor, modules on it, filler rooms, windows; Generate tower; `room_shell_probe` (9) | built 2026-10-31 |
+| -- | the grow's "not yet": hang role, two-plate steps, stair and doorway cuts by the cell, caps in the wall's brick in a bond | built 2026-10-31 |

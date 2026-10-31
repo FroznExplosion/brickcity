@@ -196,6 +196,8 @@ var _module_max: SpinBox
 var _module_weight: SpinBox
 ## What Generate grows (RoomGrow.PARAMS).
 var grow_params := {"seed": 1, "rooms": 10, "path": 3}
+## What Generate tower sets out (RoomShell.PARAMS).
+var shell_params := {"generator": "shell", "seed": 1, "width": 44, "depth": 28, "storeys": 4}
 var _slope_cache := {}
 var _repeat_label: Label
 var _rep_lo_spin: SpinBox
@@ -1263,6 +1265,25 @@ func _build_options() -> void:
 			grow_params.seed = int(grow_params.seed) + 1
 			seed_spin.set_value_no_signal(int(grow_params.seed))
 			ws._spaces.generate(grow_params))
+	# Set by shell: a tower's box, its inside split and filled (Docs/RoomModules.md 4).
+	var tl := Label.new()
+	tl.text = "Set a tower by its shell:"
+	_rooms_box.add_child(tl)
+	var shell_seed := _spin(_rooms_box, "seed", 1, 99999, int(shell_params.seed),
+			func(v: float) -> void: shell_params.seed = int(v))
+	_spin(_rooms_box, "width (studs)", 18, 400, int(shell_params.width),
+			func(v: float) -> void: shell_params.width = int(v))
+	_spin(_rooms_box, "depth (studs)", 14, 400, int(shell_params.depth),
+			func(v: float) -> void: shell_params.depth = int(v))
+	_spin(_rooms_box, "storeys", 1, 60, int(shell_params.storeys),
+			func(v: float) -> void: shell_params.storeys = int(v))
+	var shell_row := HBoxContainer.new()
+	_rooms_box.add_child(shell_row)
+	_button(shell_row, "Generate tower", func() -> void: ws._spaces.generate(shell_params))
+	_button(shell_row, "Next seed", func() -> void:
+			shell_params.seed = int(shell_params.seed) + 1
+			shell_seed.set_value_no_signal(int(shell_params.seed))
+			ws._spaces.generate(shell_params))
 
 	_cut_box = VBoxContainer.new()
 	rail.options.add_child(_cut_box)

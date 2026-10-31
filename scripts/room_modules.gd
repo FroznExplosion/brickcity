@@ -226,7 +226,8 @@ static func turn_cell(c: Vector3i, k: int, lo: Vector3i, d: Vector3i) -> Vector3
 ##   min_y      its lowest cell
 ##   conns      its connectors: {kind, at: Vector3i, facing, size: Vector2i,
 ##              link, depth (the wall's thickness; 0 an open side), space,
-##              base, top (a stair link's column's y0 and y1)}
+##              base, top (a stair link's column's y0 and y1), wall: [colour,
+##              material] of the brick beside a doorway (what its cap is laid in)}
 ##   marks      its facade spots: {kind, at: Vector3i (the wall's inside cell),
 ##              facing, depth, floor_y, ceil_y, space}
 ##   windows    its window and glass openings: [{kind, cells: [Vector3i]}]
@@ -236,6 +237,7 @@ static func _turn(r: BuildRecipe, tr: BuildRecipe, rec: Dictionary, k: int,
 		lo: Vector3i, d: Vector3i) -> Dictionary:
 	var solid := cells_of(tr)
 	var cols := {}
+	var brick_of := {}
 	var add_span := func(c: Vector2i, y0: int, y1: int) -> void:
 		var s: Vector2i = cols.get(c, Vector2i(y0, y1))
 		cols[c] = Vector2i(mini(s.x, y0), maxi(s.y, y1))
@@ -245,6 +247,9 @@ static func _turn(r: BuildRecipe, tr: BuildRecipe, rec: Dictionary, k: int,
 		for z in s.z:
 			for x in s.x:
 				add_span.call(Vector2i(c.x + x, c.z + z), c.y, c.y + s.y)
+				if tr.role_of(i) == BuildRecipe.Role.STRUCTURE:
+					for y in s.y:
+						brick_of[c + Vector3i(x, y, z)] = i
 	var spaces := {}
 	for sp: Dictionary in rec.spaces:
 		var sc := {}
@@ -274,7 +279,8 @@ static func _turn(r: BuildRecipe, tr: BuildRecipe, rec: Dictionary, k: int,
 		var far := turn_cell(Vector3i(int(c.at[0]), int(c.at[1]), int(c.at[2])) + across * (w - 1), k, lo, d)
 		var low := Vector3i(mini(at.x, far.x), at.y, mini(at.z, far.z))
 		conns.append({"kind": "door", "at": low, "facing": (f + k) % 4, "size": Vector2i(w, int(c.size[1])),
-				"link": String(c.link), "space": int(c.space), "depth": int(c.get("depth", 1))})
+				"link": String(c.link), "space": int(c.space), "depth": int(c.get("depth", 1)),
+				"wall": _jamb(tr, brick_of, low, (f + k) % 4, w)})
 	var marks := []
 	for m: Dictionary in rec.get("marks", []):
 		if StructureSpaces.STAIR_MARKS.has(String(m.kind)) or not spaces.has(int(m.space)):
@@ -301,5 +307,23 @@ static func _turn(r: BuildRecipe, tr: BuildRecipe, rec: Dictionary, k: int,
 		if tr.role_of(i) == BuildRecipe.Role.STRUCTURE:
 			colour = tr.colour_of(i)
 			break
+	for c: Dictionary in conns:
+		if c.has("wall") and (c.wall as Array).is_empty():
+			c.wall = [colour, 0]
 	return {"recipe": tr, "solid": solid, "cols": cols, "min_y": min_y, "conns": conns,
 			"marks": marks, "windows": windows, "spaces": spaces, "colour": colour}
+
+
+## The colour and material of the wall a doorway goes through: the brick beside
+## it (a jamb, either side, a course up), or [] when none is found.
+static func _jamb(tr: BuildRecipe, brick_of: Dictionary, at: Vector3i, facing: int, w: int) -> Array:
+	var fd: Vector2i = StructureSpaces.FACINGS[facing]
+	var d := Vector3i(fd.x, 0, fd.y)
+	var across := Vector3i(absi(fd.y), 0, absi(fd.x))
+	for y in [1, 0, 2]:
+		for side in [-1, w]:
+			var c: Vector3i = at - d + across * side + Vector3i(0, y, 0)
+			if brick_of.has(c):
+				var i: int = brick_of[c]
+				return [tr.colour_of(i), tr.material_of(i)]
+	return []
