@@ -43,8 +43,11 @@ const SECTION_COLOURS := [Color(1.0, 0.9, 0.2), Color(0.3, 0.8, 1.0), Color(1.0,
 const MARK_MODES := [["rooms", "rooms, and an opening's kind"],
 		["link", "link: auto, off, start, finish"], ["point", "points: spawn, loot, cover"],
 		["stair_up", "stair link up (under a ceiling)"], ["stair_down", "stair link down (on a floor)"],
-		["window", "facade: window"], ["balcony", "facade: balcony"], ["hang", "facade: a room may hang here"]]
-const MODULE_ROLES := ["room", "corridor", "stair", "start", "finish", "hang"]
+		["window", "facade: window"], ["balcony", "facade: balcony"], ["hang", "facade: a room may hang here"],
+		["panel", "station: a solar wing"], ["radiator", "station: a radiator"]]
+## Building roles, then a station's (Docs/RoomModules.md 7.2).
+const MODULE_ROLES := ["room", "corridor", "stair", "start", "finish", "hang",
+		"core", "node", "pod", "tube", "truss", "dock"]
 const MODULE_STOREYS := ["any", "ground", "upper", "top"]
 ## How long the bricks must be still before the rooms are found again: a held
 ## click lays a brick a frame, and each one would find every room again.
@@ -335,11 +338,13 @@ func generate(params: Dictionary) -> Dictionary:
 			return {}
 		params = params.duplicate()
 		params.footprint = RoomShell.footprint_of(ws.recipe)
-	var plan := RoomShell.generate(lib, params) if shell else RoomGrow.grow(lib, params)
+	var station := String(params.get("generator", "grow")) == "station"
+	var plan := RoomShell.generate(lib, params) if shell \
+			else RoomStation.generate(lib, params) if station else RoomGrow.grow(lib, params)
 	if not plan.ok:
-		message = "no building: %s" % plan.why
+		message = "no %s: %s" % ["station" if station else "building", plan.why]
 		return plan
-	var r: BuildRecipe = plan.recipe if shell else RoomGrow.lay(lib, plan, true)
+	var r: BuildRecipe = plan.recipe if shell or station else RoomGrow.lay(lib, plan, true)
 	# A building bigger than the baseplate, or taller than the volume over it,
 	# gets a bigger one (a cube in ticks, as the plate always is:
 	# Workshop.height_plates).
@@ -357,6 +362,12 @@ func generate(params: Dictionary) -> Dictionary:
 	var sm: Dictionary = r.meta.get("sections", {})
 	var cut := "" if sm.is_empty() else ", %d section(s) %s, %d joint(s)" % [(sm.sections as Array).size(),
 			str((sm.sections as Array).map(func(s) -> int: return int(s.bricks))), (sm.joints as Array).size()]
+	if station:
+		message = "station (seed %d): %d modules, %d dock(s), %d loop(s), %d bridging tube(s), %d wing(s), %d radiator(s), %d cap(s)" % [
+				int(params.get("seed", 1)), st.modules, st.docks, st.loops, st.bridges, st.wings, st.radiators,
+				st.caps] + cut
+		draw()
+		return plan
 	if shell:
 		message = "tower (seed %d): %d x %d studs, %d storeys of %d plates, %d modules, %d other room(s), %d cap(s), windows %s" % [
 				int(params.get("seed", 1)), st.width, st.depth, st.storeys, st.pitch, st.modules, st.rooms,

@@ -58,6 +58,13 @@ var exit := -1          ## open index of the finish's way out
 var _starts := []       ## modules that can start a building (role or link)
 var _finishes := []     ## and finish one
 var _hangers := false   ## the library has modules made to hang off a wall (role hang)
+## The roles a generator grows with (RoomStation sets its own): the path's
+## modules, the branches', what starts and what finishes a building.
+var path_roles := ["room", "corridor", "stair"]
+var branch_roles := ["room", "corridor", "stair"]
+var start_role := "start"
+var finish_role := "finish"
+var keep := []          ## open indices left open with a door, as the way in and out (a station's docks)
 
 
 ## A plan: {ok, why, placed, joins: [{a: [placement, kind, at...]}], path,
@@ -76,8 +83,8 @@ func _grow(library: Array, params: Dictionary) -> Dictionary:
 	budget = int(p.tries)
 	if lib.is_empty():
 		return {"ok": false, "why": "no modules: turn Module on for a build with its rooms found, and save it"}
-	_starts = _with_role("start")
-	_finishes = _with_role("finish")
+	_starts = _with_role(start_role)
+	_finishes = _with_role(finish_role)
 	_hangers = not _with_role("hang").is_empty()
 	var starts := _starts.duplicate()
 	if starts.is_empty():
@@ -100,6 +107,7 @@ func _grow(library: Array, params: Dictionary) -> Dictionary:
 	path = range(placed.size())
 	_mins()
 	_branches()
+	_more()
 	var loops := _loops()
 	return _finish(loops)
 
@@ -354,7 +362,7 @@ func _extend(depth: int, want: int) -> bool:
 					return false
 		return false
 	for oi in exits:
-		for cand in _shuffled(_candidates(oi, ["room", "corridor", "stair"])):
+		for cand in _shuffled(_candidates(oi, path_roles)):
 			var idx := _attach(oi, cand)
 			if idx < 0:
 				if budget <= 0:
@@ -417,7 +425,7 @@ func _branches() -> void:
 		var pool: Array = hangs if not hangs.is_empty() and (rest.is_empty() or rng.randf() < float(p.hang)) else rest
 		var oi: int = pool[rng.randi_range(0, pool.size() - 1)]
 		var ok := false
-		var roles := ["room", "corridor", "stair"]
+		var roles := branch_roles
 		if String(open[oi].kind) == "hang":
 			roles = ["hang"] if _hangers else ["room"]
 		for cand in _shuffled(_candidates(oi, roles)):
@@ -428,6 +436,16 @@ func _branches() -> void:
 				return
 		if not ok:
 			open[oi].dead = true
+
+
+## What a generator grows after the branches, before the loops (none here).
+func _more() -> void:
+	pass
+
+
+## A facade spot of a kind the grow does not know, dressed (none here): whether it was.
+func _dress(_cuts: Dictionary, _adds: Array, _mk: Dictionary, _off: Vector3i, _td: Dictionary) -> bool:
+	return false
 
 
 ## Open doors that meet now -- the same cells, facing each other, the same size
@@ -468,7 +486,7 @@ func _finish(loops: int) -> Dictionary:
 	# apart -- a start or finish link on any other module is capped too.
 	for i in open.size():
 		var c: Dictionary = open[i]
-		if String(c.kind) != "door" or i == entrance or i == exit:
+		if String(c.kind) != "door" or i == entrance or i == exit or keep.has(i):
 			continue
 		if bool(c.used) and _joined(i):
 			continue
@@ -512,6 +530,8 @@ func _finish(loops: int) -> Dictionary:
 				"balcony":
 					if rng.randf() < float(p.balcony) and _balcony(cuts, adds, mk, off, int(td.colour)):
 						balconies += 1
+				_:
+					_dress(cuts, adds, mk, off, td)
 	# Doors: in the first wall of each joined doorway, a hung room's, the way in and out.
 	var doors := []
 	for j: Dictionary in joins:
@@ -523,7 +543,7 @@ func _finish(loops: int) -> Dictionary:
 			doors.append(BuildDoors.hole(a.at, int(a.facing), (a.size as Vector2i).x, (a.size as Vector2i).y, int(a.depth)))
 		elif String(a.kind) == "hang":
 			doors.append(BuildDoors.hole(a.at, int(a.facing), (b.size as Vector2i).x, (b.size as Vector2i).y, int(a.depth)))
-	for i in [entrance, exit]:
+	for i in [entrance, exit] + keep:
 		if i >= 0 and String(open[i].kind) == "door" and rng.randf() < float(p.doors):
 			var c: Dictionary = open[i]
 			doors.append(BuildDoors.hole(c.at, int(c.facing), (c.size as Vector2i).x, (c.size as Vector2i).y, int(c.depth)))

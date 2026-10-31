@@ -226,6 +226,7 @@ var _module_max: SpinBox
 var _module_weight: SpinBox
 ## What Generate grows (RoomGrow.PARAMS).
 var grow_params := {"seed": 1, "rooms": 10, "path": 3}
+var station_params := {"generator": "station", "seed": 1, "modules": 16, "spine": 4, "docks": 2, "bridges": 4}
 ## What Generate tower sets out (RoomShell.PARAMS).
 var shell_params := {"generator": "shell", "seed": 1, "width": 44, "depth": 28, "storeys": 4,
 		"setback": 0, "setback_every": 0, "setback_sides": "nsew", "outline": false}
@@ -1365,7 +1366,29 @@ func _build_options() -> void:
 	_spin(_rooms_box, "section (most bricks)", 500, 100000, int(grow_params.get("section_bricks", BuildSections.BUDGET)),
 			func(v: float) -> void:
 				grow_params.section_bricks = int(v)
-				shell_params.section_bricks = int(v))
+				shell_params.section_bricks = int(v)
+				station_params.section_bricks = int(v))
+	# A station (Docs/RoomModules.md 7.2): grown from a core module, docks, tubes, wings.
+	var stl := Label.new()
+	stl.text = "Grow a station (modules with station roles):"
+	_rooms_box.add_child(stl)
+	var station_seed := _spin(_rooms_box, "seed", 1, 99999, int(station_params.seed),
+			func(v: float) -> void: station_params.seed = int(v))
+	_spin(_rooms_box, "modules", 2, 300, int(station_params.modules),
+			func(v: float) -> void: station_params.modules = int(v))
+	_spin(_rooms_box, "spine (core to dock)", 0, 40, int(station_params.spine),
+			func(v: float) -> void: station_params.spine = int(v))
+	_spin(_rooms_box, "docks", 1, 12, int(station_params.docks),
+			func(v: float) -> void: station_params.docks = int(v))
+	_spin(_rooms_box, "bridging tubes", 0, 40, int(station_params.bridges),
+			func(v: float) -> void: station_params.bridges = int(v))
+	var station_row := HBoxContainer.new()
+	_rooms_box.add_child(station_row)
+	_button(station_row, "Generate station", func() -> void: ws._spaces.generate(station_params))
+	_button(station_row, "Next seed", func() -> void:
+			station_params.seed = int(station_params.seed) + 1
+			station_seed.set_value_no_signal(int(station_params.seed))
+			ws._spaces.generate(station_params))
 	# Set by shell: a tower's box, its inside split and filled (Docs/RoomModules.md 4).
 	var tl := Label.new()
 	tl.text = "Set a tower by its shell:"
