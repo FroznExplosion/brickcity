@@ -342,3 +342,11 @@ lod_zoom={
 "type": "float",
 "value": 1.0
 }
+wood_albedo_rough={
+"type": "sampler2D",
+"value": "res://textures/wood/wood049_albedo_rough.png"
+}
+wood_normal={
+"type": "sampler2D",
+"value": "res://textures/wood/wood049_normal.png"
+}

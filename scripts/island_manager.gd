@@ -1441,6 +1441,7 @@ func spawn(source: int, block_ids: PackedInt32Array,
 	else:
 		isl.mesh = MeshInstance3D.new()
 		isl.mesh.material_override = brick_material
+		BrickMaterials.set_grain_origin(isl.mesh, world, isl.chunk)
 		# Interpolation is for things that MOVE. This instance sits at a fixed
 		# offset under its body -- the body is what gets interpolated -- and its
 		# geometry is rewritten in place by index patches, which is exactly what
@@ -2592,6 +2593,7 @@ func adopt(chunk: int, mesh_node: MeshInstance3D, carried_mesh: ArrayMesh,
 		# node spawn makes.
 		isl.mesh = MeshInstance3D.new()
 		isl.mesh.material_override = brick_material
+		BrickMaterials.set_grain_origin(isl.mesh, world, isl.chunk)
 		isl.mesh.physics_interpolation_mode = Node.PHYSICS_INTERPOLATION_MODE_OFF
 		isl.mesh.position = -isl.local_com
 		isl.body.add_child(isl.mesh)
@@ -4580,6 +4582,7 @@ func _fill_band_holes() -> void:
 		var live := mesh.get_surface_count() > 0
 		var node := MeshInstance3D.new()
 		node.material_override = brick_material
+		BrickMaterials.set_grain_origin(node, world, isl.chunk)
 		node.physics_interpolation_mode = Node.PHYSICS_INTERPOLATION_MODE_OFF
 		node.mesh = mesh if live else null
 		# In the piece's own node's space, as its other bands are.

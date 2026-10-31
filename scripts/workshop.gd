@@ -481,6 +481,7 @@ func _run_gate() -> void:
 	get_viewport().get_texture().get_image().save_png("res://shots/workshop_stair.png")
 	print("[workshop] shot written: workshop_stair.png")
 	await RenderingServer.frame_post_draw
+	await _gate_wood()
 
 	# And the whole thing still goes into a city.
 	_place_in_city()
@@ -488,6 +489,50 @@ func _run_gate() -> void:
 
 	print("\n%d passed, %d failed" % [_gate_pass, _gate_fail])
 	get_tree().quit(1 if _gate_fail > 0 else 0)
+
+
+## Wood, placed as the player places it: two boards stacked and one turned,
+## drawn with their grain axis in the mesh (Docs/PbrWood.md), and a close
+## picture of the grain running round their edges and from board to board.
+func _gate_wood() -> void:
+	var wood := -1
+	for m in BrickWorld.get_material_count():
+		if BrickWorld.get_material_name(m) == "Wood":
+			wood = m
+	var was := _mat
+	_mat = wood
+	_part_index = BrickPalette.parts().find("brick_2x4")
+	_flip = false
+	_frame = 0
+	chunk = asm.frames[0]
+	for at in [[Vector3i(20, 1, 4), 0], [Vector3i(20, 4, 4), 0], [Vector3i(26, 1, 2), 1]]:
+		_cell = at[0]
+		_yaw = at[1]
+		_valid = true
+		_snapped = {}
+		_place()
+	_mat = was
+	_remesh()
+	var mi: MeshInstance3D = _frame_meshes.get(asm.frames[0])
+	var arrays: Array = mi.mesh.surface_get_arrays(0) \
+			if mi != null and mi.mesh.get_surface_count() > 0 else []
+	var axes := {}
+	if not arrays.is_empty():
+		for c in arrays[Mesh.ARRAY_COLOR]:
+			var code := roundi((1.0 - (c as Color).a) * 255.0)
+			if code & 31 == wood:
+				axes[(code >> 5) & 3] = true
+	_gate_ok("wood bricks carry their grain: along X and, turned, along Z",
+			wood >= 0 and axes.has(0) and axes.has(1), "material %d, axes %s" % [wood, axes.keys()])
+	_gate_ok("and the frame knows where it lies on the grid",
+			mi != null and mi.get_instance_shader_parameter("grain_origin") != null)
+	var look := Vector3(22.0 * 0.35, 0.6, 5.0 * 0.35)
+	_camera.global_position = look + Vector3(-1.6, 1.3, -2.0)
+	_camera.look_at(look, Vector3.UP)
+	for i in 4:
+		await RenderingServer.frame_post_draw
+	get_viewport().get_texture().get_image().save_png("res://shots/workshop_wood.png")
+	print("[workshop] shot written: workshop_wood.png")
 
 
 ## Create every build grid up front, all covering the same volume.
@@ -2337,6 +2382,8 @@ func _remesh() -> void:
 			m.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
 		mi.mesh = m
 		mi.set_instance_shader_parameter("geo_bevel", 1.0 if chamfered else 0.0)
+		# Frames are chunks of their own: wood's grain is the grid's across them.
+		BrickMaterials.set_grain_origin(mi, world, f)
 		_restud(f, mi)
 
 
