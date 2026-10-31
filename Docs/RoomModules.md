@@ -275,7 +275,8 @@ Code: `StructureSpaces.connectors` / `door_connector` / `cycle_link` (record sid
 | -- | the shell's "not yet": stair modules stacked, module facade spots, setbacks by side; `room_shell_probe` (15) | built 2026-10-31 |
 | 8 | sections: generated builds cut into parts with joints, split into builds of their own, shown in the workshop; `build_sections_probe` (7) | built 2026-10-31 |
 | 9 | the station grower: core, spine, docks, bridging tubes, solar wings, radiators; Generate station; `room_station_probe` (8) | built 2026-10-31 |
-| 10-12 | stations in space, ship interiors, ships flying them (section 7) | planned |
+| 11 | ship interiors packed into a hull: decks, spine, well, bulkheads as sections, zones, shared walls, nooks; Generate interior; `room_pack_probe` (9) | built 2026-10-31 |
+| 10, 12 | stations in space, ships flying their rooms (section 7, the planets area's files) | planned |
 
 ## 7. Plan: stations in space and ship interiors (2026-10-31)
 
@@ -390,29 +391,56 @@ station stays the story's until the user says.
 This is in `scripts/space/` (the planets area): its work, or small changes merged soon, agreed
 first.
 
-### 7.4 Ship interiors: as much of the hull as rooms (stage 11)
+### 7.4 Ship interiors: as much of the hull as rooms (stage 11, built 2026-10-31)
 
 The shell's idea turned inside out: the **hull is the outside**, given, and rooms are packed into
-it. `RoomShell` gets a `hull` mode (or a sibling, `RoomPack`):
+it. `scripts/room_pack.gd`, `RoomPack.generate(lib, {seed, hull, pitch, corridor, room_max,
+section_studs, passes, fore})` -> `{ok, why, recipe, plan, stats}`; `RoomPack` extends
+`RoomShell`, which gained a base row (`_yb`) and hooks for it (`_before_fill`, `_prelay`,
+`_plan_at`, `_kind`, `_plan_more`, `_door_x_ok`, `_sealed`, `_shares`, `_outside_ok`, `nooks`).
 
-* **The hull's inside**: a ship build's bricks (a hull made in the workshop or by the converter)
-  -> per deck, the columns inside the hull at that deck's height (the hull's cross-section, as
-  `RoomModules.footprint` finds an outline); decks `pitch` apart where the hull is tall enough.
-  So every deck has its own footprint, as setbacks give storeys theirs.
-* **A spine, not a hall**: one corridor fore to aft down each deck's middle (it bends with the
-  hull), a ladder well and a lift where the decks overlap most, a hatch to the bridge.
-* **Zones** in the module rules: `zone` = fore / mid / aft / core / hull / any, `min`: a bridge
-  fore (its `seat` spot is the pilot's seat), an engine room aft (its `engine` spots where the
-  engines mount), a reactor at the core, then quarters, galley, med bay, cargo, airlock by weight.
-  Required ones first, biggest first.
-* **Using the space** -- the goal, and a number to probe: `stats.fill` = room air cells / the
-  hull's inside cells, aimed at 85% or more. Modules are tried at every stud along the spine (not
-  only west to east once), each seed tries its fits largest first and keeps the best of a few
-  passes; what is left goes to filler rooms as now, then to **storage nooks and crawlways**
-  (pieces under 4 columns become lockers or ducts, not dead space). Walls one stud, shared.
-* **Bulkheads are the sections**: across the hull every `section_studs` (about a building's
-  length, 24-40 studs), a wall with a pressure door at the spine; no module straddles one. Each
-  section a chunk, the bulkheads its joints; the bridge's section the root.
+* **The hull** is a build's bricks (in the workshop: the build open). Turned a quarter first if it
+  is longer along Z (`stats.turned`; the made build is in that frame). **Decks** `pitch` apart up
+  from its lowest row while one has 60 columns: a deck's footprint is the columns the hull closes
+  round (a row's cells not reached from outside its bounds) at every row of the deck, its floor
+  and ceiling rows inside or the hull's own. Its bricks are kept whole; nothing is laid outside.
+* **Fore** is the narrower end of the lowest deck (`fore`: "+x", "-x" or "auto").
+* **The well amidships**: a stair hall where every deck has it, its walls and the spine's band,
+  nearest the middle; flights deck to deck (none through the roof). **The spine**: one corridor
+  through the well both ways, as far as each deck has its band, a wall across each end.
+* **Bulkheads** every `section_studs` (32) from the aft end, moved clear of the well: a wall
+  across every deck with a doorway and a door at the spine; no module across one, no filler
+  doorway through one. Each stretch between them is a **section** (7.1, kind "bulkhead"), the
+  fore one the root.
+* **Zones**: a module's `zone` rule (the rooms panel's *zone*: any, fore, mid, aft, core, hull) --
+  fore/mid/aft the thirds of the length, core the middle third not touching the hull, hull
+  touching it. Modules with a `min` go first, biggest first, wherever their zone has room
+  (`stats.short` counts those that found none); then each side of each deck is packed fore and aft
+  along the spine, at every stud **the biggest module that fits** (after the first pass a quarter
+  of the time one by weight).
+* **Walls shared**: two modules side by side share a wall (a column solid from the floor to the
+  top in both); a module's solid wall may stand in the hull's (the module's bricks there cut, the
+  hull's kept; `stats.in_hull`).
+* **The rest**: filler rooms off the spine as the shell's (split every `room_max`, 10); what is too
+  small for a doorway or never reached is a closed **storage nook** (`kind` storage).
+* **Using the space**: `stats.fill` = columns in a room (modules', the spine and well, filler,
+  nooks) over the decks' footprint columns; `passes` (4) runs, the best kept.
+* Workshop: *Fill this build as a ship's hull* on the rooms panel: seed, passes, bulkhead every,
+  **Generate interior** (the build open is the hull; after one, **Next seed** fills the same
+  hull again), and a *zone* choice in the module rules.
+
+Measured (`tools/room_pack_probe.gd`, 9): a 96 x 28 hull 43 plates high narrowing fore -- three
+decks, nothing outside it, the hull whole; bridge fore, engine room aft, reactor at the core; fill
+**75.7%** with the probe's box modules; every room but the nooks reached from the well; two
+bulkheads with doors on every deck, three sections, the bridge's the root; more passes never
+worse, same seed same ship; a hull along Z turned; no hull says so. ~0.7 s a pass.
+`module_marks_probe` (16): Generate interior, then the same hull again.
+
+**Why not 85% yet**: every room has its own walls a stud thick; in a 25-stud deck with a 4-stud
+spine, rooms 8 deep lose a quarter of each side to walls. The fill rises with modules sized to the
+deck (as deep as the band, the hull for their back wall: the probe's cabin) and with walls shared.
+Not yet: a lift (`lift` off), portholes in the hull, an airlock to the outside, decks of their own
+pitch.
 
 ### 7.5 The ship flies its rooms (stage 12, with the planets area)
 

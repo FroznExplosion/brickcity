@@ -111,11 +111,18 @@ var facade := 0          ## facade windows cut
 var colour := 0         ## the shell's colour: the first module's
 var style := "open"
 var caps := 0
+var base := 0           ## the ground storey's floor row (a ship's lowest deck: RoomPack)
+var nooks := ""         ## a kind for pieces too small for a doorway or never reached ("": left closed)
 
 
 static func generate(library: Array, params := {}) -> Dictionary:
 	var g := RoomShell.new()
 	return g._generate(library, params)
+
+
+## Storey s's floor row.
+func _yb(s: int) -> int:
+	return base + s * pitch
 
 
 ## The storey height most room modules have (their lowest row to their
@@ -167,6 +174,7 @@ func _generate(library: Array, params: Dictionary) -> Dictionary:
 		pits.append({})
 	for s in storeys:
 		_corridor(s)
+	_before_fill()
 	for s in storeys:
 		if s > 0:
 			_stack(s)
@@ -197,29 +205,55 @@ func _generate(library: Array, params: Dictionary) -> Dictionary:
 			lo = Vector2i(mini(lo.x, c.x), mini(lo.y, c.y))
 		var stops := []
 		for s in storeys:
-			stops.append(s * pitch)
+			stops.append(_yb(s))
 		lifts.append({"lo": Vector3i(lo.x, 0, lo.y), "size": Vector2i(SHAFT, SHAFT), "stops": stops})
 	var bb := _box(foot[0])
 	var g_stats := {"modules": placed.size(), "storeys": storeys, "pitch": pitch, "caps": caps,
 			"doors": doors.size(), "rooms": rooms.size(), "width": bb[1].x, "depth": bb[1].y,
 			"lifts": lifts.size(), "stairs": stacks.size(), "balconies": balconies,
 			"windows": facade}
+	_prelay()
+	var at := _plan_at()
 	var plan := {"ok": true, "why": "", "seed": int(p.seed), "ground_y": 0, "placed": placed,
 			"joins": [], "path": [], "entrance": {}, "exit": {}, "caps": [], "cuts": cuts.keys(), "adds": adds,
-			"window_style": style, "stats": g_stats, "at": Vector3i(1, 0, 1), "doors": doors, "lifts": lifts,
-			"stacks": stacks, "generator": "shell", "section_bricks": int(p.section_bricks)}
+			"window_style": style, "stats": g_stats, "at": at, "doors": doors, "lifts": lifts,
+			"stacks": stacks, "generator": _kind(), "section_bricks": int(p.section_bricks)}
+	_plan_more(plan)
 	var r := RoomGrow.lay(lib, plan, true)
-	r.name = "shell %d" % int(p.seed)
+	r.name = "%s %d" % [_kind(), int(p.seed)]
 	var rec: Dictionary = r.meta["structure"]
 	for room: Dictionary in rooms:
-		var sd: Vector3i = (room.seed as Vector3i) + Vector3i(1, 0, 1)
+		var sd: Vector3i = (room.seed as Vector3i) + at
 		(rec.spaces as Array).append({"id": (rec.spaces as Array).size(), "kind": String(room.kind),
 				"frame": 0, "seed": [sd.x, sd.y, sd.z], "floor_y": int(room.floor_y),
 				"ceil_y": int(room.ceil_y),
-				"columns": (room.cols as Array).map(func(c) -> Array: return [c.x + 1, c.y + 1])})
-	r.meta["generated"] = {"generator": "shell", "seed": int(p.seed), "stats": g_stats,
+				"columns": (room.cols as Array).map(func(c) -> Array: return [c.x + at.x, c.y + at.z])})
+	r.meta["generated"] = {"generator": _kind(), "seed": int(p.seed), "stats": g_stats,
 			"modules": placed.map(func(pl) -> String: return String(lib[pl.m].name)), "window_style": style}
 	return {"ok": true, "why": "", "recipe": r, "plan": plan, "stats": g_stats, "window_style": style}
+
+
+## Hooks for a generator built on the shell (RoomPack): before the storeys are
+## filled; before the plan is laid; where the plan stands; its generator's
+## name; anything more in the plan.
+func _before_fill() -> void:
+	pass
+
+
+func _prelay() -> void:
+	pass
+
+
+func _plan_at() -> Vector3i:
+	return Vector3i(1, 0, 1)
+
+
+func _kind() -> String:
+	return "shell"
+
+
+func _plan_more(_plan: Dictionary) -> void:
+	pass
 
 
 # ---------------------------------------------------------------------------
@@ -496,7 +530,7 @@ func _fits_at(s: int, side: int, x: int) -> Array:
 				var at: Vector3i = td.conns[ci].at
 				# The door's outer face on the corridor's first row: its wall the line.
 				var row := zc if side == 0 else _wall_line(side) - 1
-				var off := Vector3i(x - lo.x, s * pitch - int(td.min_y), row - at.z)
+				var off := Vector3i(x - lo.x, _yb(s) - int(td.min_y), row - at.z)
 				if _door_fits(td, ci, off, s, side):
 					out.append([m, t, off, ci, float(lib[m].rules.weight)])
 	return out
@@ -509,17 +543,25 @@ func _door_fits(td: Dictionary, ci: int, off: Vector3i, s: int, side: int) -> bo
 	var want := 1 if side == 0 else 3
 	if String(c.kind) != "door" or int(c.facing) != want or String(c.link) == "off":
 		return false
-	var top := 0
-	for col: Vector2i in td.cols:
-		top = maxi(top, (td.cols[col] as Vector2i).y)
-	if top - int(td.min_y) > pitch:
-		return false
 	var at: Vector3i = (c.at as Vector3i) + off
-	if at.y != s * pitch + 1 or at.z != (zc if side == 0 else _wall_line(side) - 1):
+	if at.y != _yb(s) + 1 or at.z != (zc if side == 0 else _wall_line(side) - 1):
 		return false
-	if at.x < hx1 + 2 or at.x + (c.size as Vector2i).x - 1 > int(cx_end[s]):
+	if not _door_x_ok(s, at.x, at.x + (c.size as Vector2i).x - 1):
+		return false
+	if int(td.get("top", -1)) < 0:
+		var top := 0
+		for col: Vector2i in td.cols:
+			top = maxi(top, (td.cols[col] as Vector2i).y)
+		td["top"] = top
+	if int(td.top) - int(td.min_y) > pitch:
 		return false
 	return _clear(td, off, s, side, _wall_line(side))
+
+
+## A module's corridor door from column x0 to x1 on storey s's corridor: east of
+## the hall, up to the corridor's end.
+func _door_x_ok(s: int, x0: int, x1: int) -> bool:
+	return x0 >= hx1 + 2 and x1 <= int(cx_end[s])
 
 
 ## Storey s's modules over stairs, set before the rest of it: over each module
@@ -543,7 +585,7 @@ func _stack(s: int) -> void:
 					for dc: Dictionary in td.conns:
 						if String(dc.kind) != "stair_down" or String(dc.link) == "off":
 							continue
-						var off := Vector3i(up_at.x - (dc.at as Vector3i).x, s * pitch - int(td.min_y),
+						var off := Vector3i(up_at.x - (dc.at as Vector3i).x, _yb(s) - int(td.min_y),
 								up_at.z - (dc.at as Vector3i).z)
 						for ci in (td.conns as Array).size():
 							if _door_fits(td, ci, off, s, int(lp.side)):
@@ -562,13 +604,27 @@ func _clear(td: Dictionary, off: Vector3i, s: int, side: int, line: int) -> bool
 	var f: Dictionary = foot[s]
 	for c: Vector2i in td.cols:
 		var w := Vector2i(c.x + off.x, c.y + off.z)
-		if not f.has(w) or (mod_cols[s] as Dictionary).has(w) or (corridor[s] as Dictionary).has(w):
+		if (corridor[s] as Dictionary).has(w) or not f.has(w) and not _outside_ok(td, c, off, w):
+			return false
+		if (mod_cols[s] as Dictionary).has(w) and not _shares(td, c, s, w):
 			return false
 		if hall_cells.has(w) or hall_ring.has(w) or shaft.has(w) or shaft_ring.has(w):
 			return false
 		if (side == 0 and w.y > line) or (side == 1 and w.y < line):
 			return false
 	return true
+
+
+## A module's column c may stand in column w outside the storey (none here:
+## RoomPack lets a solid wall stand in the hull's).
+func _outside_ok(_td: Dictionary, _c: Vector2i, _off: Vector3i, _w: Vector2i) -> bool:
+	return false
+
+
+## A module's column c may stand in column w a module of storey s already has
+## (none here: RoomPack lets two solid walls be one).
+func _shares(_td: Dictionary, _c: Vector2i, _s: int, _w: Vector2i) -> bool:
+	return false
 
 
 func _weighted(cands: Array) -> Array:
@@ -655,7 +711,7 @@ func _caps_and_glass() -> void:
 ## storeys in the corridor's south lane, west on odd ones in its north lane;
 ## the slab over it (the next storey's floor, or the roof) cut.
 func _flight(s: int) -> void:
-	var yb := s * pitch
+	var yb := _yb(s)
 	var n := ceili(float(pitch) / STEP)
 	var lane := zc if s % 2 == 0 else zc + corr - 2
 	for i in n:
@@ -704,8 +760,8 @@ func _way_in() -> void:
 		for s in storeys:
 			for c: Vector2i in shaft_door:
 				for y in h:
-					holes[Vector3i(c.x, s * pitch + 1 + y, c.y)] = true
-			doors.append(_door_box(shaft_door[0], shaft_door[1], s * pitch, h))
+					holes[Vector3i(c.x, _yb(s) + 1 + y, c.y)] = true
+			doors.append(_door_box(shaft_door[0], shaft_door[1], _yb(s), h))
 
 
 func _door_box(a: Vector2i, b: Vector2i, yb: int, h: int) -> Array:
@@ -720,7 +776,7 @@ func _door_box(a: Vector2i, b: Vector2i, yb: int, h: int) -> Array:
 ## module, hall, lift or corridor has, split where it runs past `room_max`
 ## either way, each with a doorway to what is already reached.
 func _rooms_of(s: int) -> void:
-	var yb := s * pitch
+	var yb := _yb(s)
 	var wl: Dictionary = walls[s]
 	var cols := []
 	for c in hall_cells:
@@ -774,6 +830,13 @@ func _rooms_of(s: int) -> void:
 					"floor_y": yb, "ceil_y": yb + pitch})
 			todo.erase(pc)
 			progress = true
+	# What is left -- too small for a doorway, or never reached -- a closed nook.
+	if nooks != "":
+		for pc: Array in pieces:
+			if pc.is_empty() or reached.has(pc[0]):
+				continue
+			rooms.append({"kind": nooks, "seed": Vector3i(pc[0].x, yb + 1, pc[0].y), "cols": pc,
+					"floor_y": yb, "ceil_y": yb + pitch})
 
 
 func _cell_set(cells: Array) -> Dictionary:
@@ -789,12 +852,12 @@ func _cell_set(cells: Array) -> Dictionary:
 func _doorway(piece: Dictionary, reached: Dictionary, wl: Dictionary, s: int) -> Array:
 	var pairs := []
 	for c: Vector2i in wl:
-		if (ring[s] as Dictionary).has(c) or shaft_ring.has(c):
+		if (ring[s] as Dictionary).has(c) or shaft_ring.has(c) or _sealed(c):
 			continue
 		for dv: Vector2i in [Vector2i(1, 0), Vector2i(0, 1)]:
 			var along := Vector2i(dv.y, dv.x)
 			var e := c + along
-			if not wl.has(e) or (ring[s] as Dictionary).has(e) or shaft_ring.has(e):
+			if not wl.has(e) or (ring[s] as Dictionary).has(e) or shaft_ring.has(e) or _sealed(e):
 				continue
 			for sg in [1, -1]:
 				var a: Vector2i = dv * sg
@@ -805,6 +868,11 @@ func _doorway(piece: Dictionary, reached: Dictionary, wl: Dictionary, s: int) ->
 	pairs.sort_custom(func(x, y) -> bool: return x[0].x < y[0].x or (x[0].x == y[0].x and x[0].y < y[0].y))
 	@warning_ignore("integer_division")
 	return pairs[pairs.size() / 2]
+
+
+## A wall column no filler room's doorway goes through (a ship's bulkhead: RoomPack).
+func _sealed(_c: Vector2i) -> bool:
+	return false
 
 
 func _components(cells: Dictionary) -> Array:
@@ -868,7 +936,7 @@ static func _runs(cells: Dictionary) -> Array:
 ## Windows in the outer wall: along each straight face every `window_every`
 ## studs, not at its ends, not where a module stands.
 func _windows(s: int) -> void:
-	var yb := s * pitch
+	var yb := _yb(s)
 	var y0 := yb + 1 + SILL
 	var h := mini(WINDOW.y, pitch - 2 - SILL)
 	if h < 2:
@@ -921,7 +989,7 @@ func _walls(s: int) -> void:
 ## One line of wall up a storey: courses of bricks in a running bond over the
 ## cells that are free all three plates, plates where they are not.
 func _course_line(s: int, cells: Array, axis: String) -> void:
-	var yb := s * pitch
+	var yb := _yb(s)
 	var free := func(c: Vector2i, y: int) -> bool:
 		return not holes.has(Vector3i(c.x, y, c.y))
 	var y := yb + 1
@@ -962,7 +1030,7 @@ func _course_line(s: int, cells: Array, axis: String) -> void:
 ## the lift shaft between the ground and the top -- in the biggest square
 ## plates that fit.
 func _slab(s: int) -> void:
-	var y := s * pitch
+	var y := _yb(s)
 	var cells := {}
 	for c in foot[s]:
 		cells[c] = true
@@ -1001,7 +1069,7 @@ func _slab(s: int) -> void:
 ## the outer wall of the storey below where the storey above does not stand.
 func _rails() -> void:
 	for s in range(1, storeys + 1):
-		var y := s * pitch + 1
+		var y := _yb(s) + 1
 		var over: Dictionary = foot[s]
 		for c: Vector2i in ring[s - 1]:
 			if not over.has(c):

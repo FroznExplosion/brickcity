@@ -221,11 +221,13 @@ var _rooms_label: Label
 var _module_on: CheckBox
 var _module_role: OptionButton
 var _module_storeys: OptionButton
+var _module_zone: OptionButton
 var _module_min: SpinBox
 var _module_max: SpinBox
 var _module_weight: SpinBox
 ## What Generate grows (RoomGrow.PARAMS).
 var grow_params := {"seed": 1, "rooms": 10, "path": 3}
+var pack_params := {"generator": "pack", "seed": 1, "passes": 4, "section_studs": 32}
 var station_params := {"generator": "station", "seed": 1, "modules": 16, "spine": 4, "docks": 2, "bridges": 4}
 ## What Generate tower sets out (RoomShell.PARAMS).
 var shell_params := {"generator": "shell", "seed": 1, "width": 44, "depth": 28, "storeys": 4,
@@ -1338,6 +1340,9 @@ func _build_options() -> void:
 	var storeys := WorkshopSpaces.MODULE_STOREYS.map(func(r) -> Array: return [r, "storeys: " + r])
 	_module_storeys = _choice(_rooms_box, "where", storeys,
 			func(i: int) -> void: ws._spaces.set_rule("storeys", WorkshopSpaces.MODULE_STOREYS[i]))
+	var zones := WorkshopSpaces.MODULE_ZONES.map(func(r) -> Array: return [r, "in a ship: " + r])
+	_module_zone = _choice(_rooms_box, "zone", zones,
+			func(i: int) -> void: ws._spaces.set_rule("zone", WorkshopSpaces.MODULE_ZONES[i]))
 	_module_min = _spin(_rooms_box, "at least", 0, 99, 0,
 			func(v: float) -> void: ws._spaces.set_rule("min", int(v)))
 	_module_max = _spin(_rooms_box, "at most (-1 any)", -1, 99, -1,
@@ -1368,6 +1373,23 @@ func _build_options() -> void:
 				grow_params.section_bricks = int(v)
 				shell_params.section_bricks = int(v)
 				station_params.section_bricks = int(v))
+	# A ship's inside (Docs/RoomModules.md 7.4): the build open is the hull.
+	var ptl := Label.new()
+	ptl.text = "Fill this build as a ship's hull:"
+	_rooms_box.add_child(ptl)
+	var pack_seed := _spin(_rooms_box, "seed", 1, 99999, int(pack_params.seed),
+			func(v: float) -> void: pack_params.seed = int(v))
+	_spin(_rooms_box, "passes (best kept)", 1, 16, int(pack_params.passes),
+			func(v: float) -> void: pack_params.passes = int(v))
+	_spin(_rooms_box, "bulkhead every (studs)", 12, 200, int(pack_params.section_studs),
+			func(v: float) -> void: pack_params.section_studs = int(v))
+	var pack_row := HBoxContainer.new()
+	_rooms_box.add_child(pack_row)
+	_button(pack_row, "Generate interior", func() -> void: ws._spaces.generate(pack_params))
+	_button(pack_row, "Next seed", func() -> void:
+			pack_params.seed = int(pack_params.seed) + 1
+			pack_seed.set_value_no_signal(int(pack_params.seed))
+			ws._spaces.generate(pack_params))
 	# A station (Docs/RoomModules.md 7.2): grown from a core module, docks, tubes, wings.
 	var stl := Label.new()
 	stl.text = "Grow a station (modules with station roles):"
@@ -2761,6 +2783,7 @@ func process() -> void:
 		_module_on.set_pressed_no_signal(bool(mod.get("on", false)))
 		_module_role.select(maxi(WorkshopSpaces.MODULE_ROLES.find(String(mod.get("role", "room"))), 0))
 		_module_storeys.select(maxi(WorkshopSpaces.MODULE_STOREYS.find(String(mod.get("storeys", "any"))), 0))
+		_module_zone.select(maxi(WorkshopSpaces.MODULE_ZONES.find(String(mod.get("zone", "any"))), 0))
 		_module_min.set_value_no_signal(int(mod.get("min", 0)))
 		_module_max.set_value_no_signal(int(mod.get("max", -1)))
 		_module_weight.set_value_no_signal(float(mod.get("weight", 1.0)))
