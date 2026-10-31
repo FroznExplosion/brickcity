@@ -48,6 +48,8 @@ const SEE_FAR := 400000.0
 ## Pieces drifting (step 6): at most this many, gone past `drift_reach` of the
 ## player; a tumble and a push at random up to these.
 const DRIFT_CAP := 64
+## The most places a ship's step is looked at for rocks, a frame.
+const ROCK_STEPS := 12
 const DRIFT_PUSH := 3.0
 const DRIFT_SPIN := 0.4
 ## A settled world's buildings are made within POPULATE_AT of the player, and
@@ -233,6 +235,7 @@ func jump(index: int) -> bool:
 	var off := sys.bodies[at].radius * SHELL * 1.3 + 30000.0
 	ship.rel = Transform3D(ship.rel.basis, p * (1.0 - off / p.length()))
 	ship.vel = sys.vel(at, t)
+	ship.fine = Vector3.ZERO
 	_place()
 	print("[system] jumped to %s (%d): %d bodies in %.1f ms" % [sys.system_name, index, bodies.size(), (Time.get_ticks_usec() - t0) / 1000.0])
 	jumped.emit(index)
@@ -319,7 +322,7 @@ func match_velocity(p: Vector3) -> Vector3:
 	for st in stations:
 		if st.is_station() and st != station and (st.global_position - p).length() < MATCH_STATION:
 			return s2w.basis * (_frame_velocity(st, x) - here)
-	if frame_node() != null:
+	if frame_node() != null or in_belt(x):
 		return Vector3.ZERO
 	return s2w.basis * sys.vel(index_of(nearest(p)), t)
 
@@ -493,7 +496,7 @@ func _prepare_near(p: Vector3) -> void:
 func _place() -> void:
 	var s2w := space_to_world()
 	var f := frame_node()
-	star.global_position = s2w.origin
+	star.global_transform = s2w
 	for i in bodies.size():
 		if bodies[i] != f:
 			bodies[i].global_transform = s2w * sys.xform(i, t)
@@ -511,6 +514,7 @@ func _place() -> void:
 		e.node.global_transform = s2w * base * e.at(_drift_clock)
 	for b in bodies:
 		b.set_sun(b.global_basis.inverse() * (star.global_position - b.global_position).normalized())
+	_belt_near(s2w)
 
 
 func _gravity() -> void:
@@ -574,7 +578,7 @@ func _switch(next: Node3D, p: Vector3) -> void:
 	if old != null:
 		# Into the star's frame, at the turn the world has now.
 		_space_basis = s2w.basis
-		star.global_position = s2w.origin
+		star.global_transform = s2w
 		anchor = null
 		station = null
 		ship = null
@@ -658,6 +662,7 @@ func _ship_refs() -> void:
 		var bx := sys.xform(index_of(nb), t) if nb != null else Transform3D()
 		s.rel = bx.affine_inverse() * x
 		s.vel = bx.basis.inverse() * (v - (_frame_velocity(nb, x.origin) if nb != null else Vector3.ZERO))
+		s.fine = Vector3.ZERO
 		print("[system] %s: from %s's frame into %s's at %.0f m/s" % [s.data.orbital_name, name_of(s.ref), name_of(nb), s.vel.length()])
 		s.ref = nb
 		s.landed = false
@@ -836,8 +841,27 @@ func _build_belt() -> void:
 		return
 	belt = RockField.new()
 	belt.setup(sys.belt_inner, sys.belt_outer, sys.system_seed, Color(0.48, 0.44, 0.40))
+	belt.held = true
 	star.add_child(belt)
 	_belt_disc = belt.build_far(star_look, 0.35)
+
+
+## The belt's near rocks, straight off the ship when it is the frame: millions of
+## metres from the star a float32 is good to half a metre, and rocks going by would
+## shake. The sum is exact, the ship's and the cell's numbers being that size alike.
+func _belt_near(s2w: Transform3D) -> void:
+	if belt == null:
+		return
+	if ship != null:
+		belt.hold_near(Transform3D(s2w.basis, ship.global_position + s2w.basis * (belt.mid() - ship.rel.origin - ship.fine)))
+	else:
+		belt.hold_near(s2w * Transform3D(Basis(), belt.mid()))
+
+
+## Whether space point `x` is among the belt's rocks, which hold still in the star's
+## frame: stopped there is stopped by them, not going round with the nearest body.
+func in_belt(x: Vector3) -> bool:
+	return belt != null and belt.near(x)
 
 
 ## Rocks near the player drawn, its ring's and the belt's.
@@ -849,12 +873,22 @@ func _rocks(p: Vector3, dt: float) -> void:
 		belt.refresh(belt.to_local(p), dt)
 
 
-## Whether ship `s`, at `at` in its reference frame, runs into a rock.
+## Whether ship `s`, going to `at` in its reference frame, runs into a rock on
+## the way: looked for along the step, or a fast ship steps over them.
 func rock_block(s: SpaceShip, at: Vector3) -> bool:
+	var f: RockField = belt if s.ref == null else s.ref.ring
+	if f == null:
+		return false
+	var from := s.rel.origin if s.ref == null else f.transform.affine_inverse() * s.rel.origin
+	var to := at if s.ref == null else f.transform.affine_inverse() * at
+	if not f.near(from) and not f.near(to):
+		return false
 	var r := s._hull.size.length() * 0.5
-	if s.ref != null:
-		return s.ref.ring != null and s.ref.ring.blocked(s.ref.ring.transform.affine_inverse() * at, r)
-	return belt != null and belt.blocked(at, r)
+	var steps := clampi(ceili(from.distance_to(to) / (r + RockField.ROCK_MIN)), 1, ROCK_STEPS)
+	for k in range(1, steps + 1):
+		if f.blocked(from.lerp(to, float(k) / steps), r):
+			return true
+	return false
 
 
 # --- impostor bakes on a worker ------------------------------------------------------

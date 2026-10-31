@@ -2371,5 +2371,52 @@ nothing is reparented. For everything else in the shell (pawns, soldiers, buildi
 nothing: they already live in the anchored planet's frame, which stands still with an identity basis,
 and are reparented under it when it sleeps.
 
-Still through the star's frame: a ship in open space keeps `rel` there, so the rocks of a belt, and
-anything else near it in open space, are good to 0.125 m as it flies. Not measured.
+#### Step 7c built (2026-10-31): belts, which no gate had flown
+
+`--gate=belt` 6/6 windowed and headless; `system_probe` 31 and rocks 4, jump 10, ship 9, dock 7, seat
+12, debris 8, system 17 headless. In its first run it found what step 6 had left wrong:
+
+- **A turned ship saw no belt at all** (0 rocks). `_place` gave the star a position, never a basis, so
+  a belt under it did not turn with the universe round the ship: its rocks were looked for, drawn and
+  collided with in different places. `star.global_transform = s2w` (167 rocks, each within a metre).
+- **Stopped among the rocks went at 200 m/s.** Stopped means the nearest body's orbital speed, and a
+  belt's rocks hold still in the star's frame. In a belt (`in_belt`) stopped is stopped by them.
+- **Float32 in open space.** Belts are 2-6 million metres out, where it is good to 0.25-0.5 m, and a ship
+  slower than 15-30 m/s against the star would not have moved. `SpaceShip.fine` holds what `rel.origin`
+  cannot, and a belt's near rocks are placed straight off the ship (`RockField.held`, `hold_near`):
+  the difference of two numbers of the same size is exact. 4 m/s at 5,262 km: 3.99 m/s seen, spread 0.00.
+- **Rocks are looked for along a ship's step** (`rock_block`, up to `ROCK_STEPS` places a frame), so 500
+  m/s no longer steps over them: stopped at 1,500 m/s.
+
+#### What is not done (2026-10-31, each looked at in the code)
+
+Promised by the plan and not built:
+- **Markers for planets too small to see** (step 5): nothing says where another planet is; it is only
+  found by eye.
+- **Saving**: nothing of the universe is saved: where the player is, which system, the drifts, a generated
+  world's damage (lost on a jump), `cleared` (lost on quitting).
+
+The game on planets:
+- **No fight outside a generated world's town.** Home has no enemies; no mech, tank or truck is ever
+  in play on a planet, only in gates. The firefight director is the city's. Soldiers are rifles only,
+  one squad a town, and being downed costs nothing.
+- Town layouts and tower colours are home's generator's on every world; snow under a high sun is near
+  white.
+- Bodies far from the player fall through coarse ground: a garrison is held for it, and nothing else
+  is (a soldier left on home, anything loose). `keep_over_ground` has not been seen to fire.
+
+Ships and space:
+- Rams do not hurt the ship; a damaged hull draws whole from afar; no docking port or locked landing;
+  worn and scorched bricks are not kept. One ship, nobody else flying.
+- Rocks and drifting pieces cannot be shot or mined; rocks do not go round; no planet's shadow on a ring.
+- Still through the star's frame, so good to 0.5 m in open space: a drifting piece from a ship, and
+  belt rocks round a player flying with no ship. A belt's far disc turns with the star now and has
+  not been looked at from afar.
+- The HUD's first line in space is home's (building counts, "walk", the height).
+
+Not known:
+- Frame times in a fight and at arrival: taken with the editor open or the display asleep; the worst
+  seen is 165-315 ms at arrival.
+- The one exit 127 in step 7.
+- Multiplayer has not been thought through for any of this but that orbits and rocks are pure functions
+  of the clock and the seed.

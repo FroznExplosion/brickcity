@@ -25,11 +25,13 @@ extends SceneTree
 ##              the plate grown for its height; with the outline ticked, in the
 ##              outline the build open is
 ##   station    Generate station grows a station from the station kit (7.2)
+##   interior   Generate interior fills the open build as a ship's hull (7.4)
 ##   sections   the tower cut in sections (BuildSections): a box and a label
 ##              round each, their bricks in the message
 
 const Kit := preload("res://tools/room_module_kit.gd")
 const StationKit := preload("res://tools/station_module_kit.gd")
+const PackProbe := preload("res://tools/room_pack_probe.gd")
 
 var _ws
 var _frames := 0
@@ -273,6 +275,19 @@ func _run() -> void:
 			"%s; %d of %d bricks" % [sp.message, slaid, _ws.recipe.size()])
 	RoomModules.use_recipes(Kit.modules())
 	_ws._dirty = false
+	# Generate interior: the test hull open, filled; Next seed fills the same hull again.
+	_ws._load_recipe(PackProbe.hull())
+	_ws._dirty = false
+	var hull_n: int = _ws.recipe.size()
+	var shp: Dictionary = sp.generate({"generator": "pack", "seed": 1, "passes": 1})
+	var first_n: int = _ws.recipe.size()
+	_ws._dirty = false
+	var shp2: Dictionary = sp.generate({"generator": "pack", "seed": 2, "passes": 1})
+	_ok("Generate interior fills the open hull with decks of rooms; the next seed fills the same hull",
+			bool(shp.get("ok", false)) and bool(shp2.get("ok", false)) and int(shp.stats.decks) == 3
+			and first_n > hull_n and String(sp.message).begins_with("ship interior")
+			and int(shp2.stats.inside) == int(shp.stats.inside),
+			"%s; hull %d bricks, with rooms %d" % [sp.message, hull_n, first_n])
 	plan = sp.generate({"seed": 3, "rooms": 8, "path": 2})
 	RoomModules.use_recipes([])
 	sp._edited_ms -= 1000
