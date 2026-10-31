@@ -22,9 +22,10 @@ extends RefCounted
 ## `rooms`: modules in all; `tries`: how many fits it may try before it gives up;
 ## `balcony`: the chance a balcony spot gets one; `hang`: the chance a branch
 ## grows off a hang spot rather than a door; `doors`: the chance a joined doorway
-## (and the way in and out) gets a door (BuildDoors).
+## (and the way in and out) gets a door (BuildDoors); `section_bricks`: the
+## most bricks a section has (BuildSections, Docs/RoomModules.md 7.1).
 const PARAMS := {"seed": 1, "rooms": 10, "path": 3, "tries": 4000, "balcony": 0.5, "hang": 0.3,
-		"doors": 1.0}
+		"doors": 1.0, "section_bricks": BuildSections.BUDGET}
 ## Window styles, one per building: what the window holes of every module are.
 const WINDOW_STYLES := ["open", "glass"]
 ## A cut facade window: studs across, plates up.
@@ -538,6 +539,7 @@ func _finish(loops: int) -> Dictionary:
 			"exit": _plain(open[exit]) if exit >= 0 else {},
 			"caps": caps.map(func(i) -> Dictionary: return _plain(open[i])),
 			"cuts": cut_cells, "adds": adds, "window_style": style, "doors": doors,
+			"section_bricks": int(p.section_bricks),
 			"stats": {"modules": placed.size(), "path": path.size(), "joins": joins.size(),
 				"loops": loops, "caps": caps.size(), "balconies": balconies, "doors": doors.size(),
 				"tries": int(p.tries) - budget}}
@@ -827,7 +829,16 @@ static func lay(library: Array, plan: Dictionary, on_ground := false) -> BuildRe
 	out.meta["generated"] = {"generator": "grow", "seed": int(plan.seed), "stats": plan.stats,
 			"modules": plan.placed.map(func(pl) -> String: return String(library[pl.m].name)),
 			"window_style": plan.window_style}
+	var cut := BuildSections.of_plan(library, plan, out, shift,
+			int(plan.get("section_bricks", BuildSections.BUDGET)))
+	out.meta["sections"] = BuildSections.record(cut, out.size())
 	return out
+
+
+## A plan laid as its sections (Docs/RoomModules.md 7.1): BuildSections.split
+## of `lay`, [{id, root, recipe, offset}].
+static func lay_sections(library: Array, plan: Dictionary, on_ground := false) -> Array:
+	return BuildSections.split(lay(library, plan, on_ground))
 
 
 ## A plain plate or brick: a box of cells, so what a cut leaves of it can be laid

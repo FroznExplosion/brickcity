@@ -1296,6 +1296,11 @@ func _build_options() -> void:
 			grow_params.seed = int(grow_params.seed) + 1
 			seed_spin.set_value_no_signal(int(grow_params.seed))
 			ws._spaces.generate(grow_params))
+	# Sections (Docs/RoomModules.md 7.1): the most bricks a part of either has.
+	_spin(_rooms_box, "section (most bricks)", 500, 100000, int(grow_params.get("section_bricks", BuildSections.BUDGET)),
+			func(v: float) -> void:
+				grow_params.section_bricks = int(v)
+				shell_params.section_bricks = int(v))
 	# Set by shell: a tower's box, its inside split and filled (Docs/RoomModules.md 4).
 	var tl := Label.new()
 	tl.text = "Set a tower by its shell:"

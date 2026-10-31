@@ -24,6 +24,8 @@ extends SceneTree
 ##   tower      Generate tower sets a tower by its shell (stage 6), the volume over
 ##              the plate grown for its height; with the outline ticked, in the
 ##              outline the build open is
+##   sections   the tower cut in sections (BuildSections): a box and a label
+##              round each, their bricks in the message
 
 const Kit := preload("res://tools/room_module_kit.gd")
 
@@ -222,6 +224,14 @@ func _run() -> void:
 			bool(tower.get("ok", false)) and String(_ws.recipe.meta.generated.generator) == "shell"
 			and int(_ws.height_plates) >= (tb[0] as Vector3i).y + (tb[1] as Vector3i).y and tlaid == _ws.recipe.size(),
 			"%s; %d of %d bricks, height %d plates" % [sp.message, tlaid, _ws.recipe.size(), _ws.height_plates])
+	var shown: Array = sp._sections()
+	var labels := 0
+	for l in sp._labels:
+		if String(l.text).begins_with("section "):
+			labels += 1
+	_ok("the tower's sections shown: a box and a label round each, counted in the message",
+			shown.size() > 1 and labels == shown.size() and String(sp.message).contains("section(s)"),
+			"%d section(s), %d label(s)" % [shown.size(), labels])
 	# An outline drawn in the workshop -- an L of one-plate walls -- as the footprint.
 	var ol := BuildRecipe.new()
 	var in_l := func(x: int, z: int) -> bool:

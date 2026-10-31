@@ -36,6 +36,9 @@ const LINK_COLOURS := {"auto": Color(0.95, 0.95, 0.95), "start": Color(0.2, 1.0,
 		"finish": Color(1.0, 0.3, 0.25)}
 const STAIR := Color(1.0, 0.6, 0.15)
 const FACADE := Color(0.85, 0.45, 1.0)
+## A generated build's sections (BuildSections): a box round each, the root's first.
+const SECTION_COLOURS := [Color(1.0, 0.9, 0.2), Color(0.3, 0.8, 1.0), Color(1.0, 0.45, 0.3),
+		Color(0.5, 1.0, 0.4), Color(0.8, 0.5, 1.0), Color(1.0, 0.6, 0.85)]
 ## What a click marks (the rail's choice): [id, what the rail says].
 const MARK_MODES := [["rooms", "rooms, and an opening's kind"],
 		["link", "link: auto, off, start, finish"], ["point", "points: spawn, loot, cover"],
@@ -351,13 +354,18 @@ func generate(params: Dictionary) -> Dictionary:
 	if not active:
 		toggle()
 	var st: Dictionary = plan.stats
+	var sm: Dictionary = r.meta.get("sections", {})
+	var cut := "" if sm.is_empty() else ", %d section(s) %s, %d joint(s)" % [(sm.sections as Array).size(),
+			str((sm.sections as Array).map(func(s) -> int: return int(s.bricks))), (sm.joints as Array).size()]
 	if shell:
 		message = "tower (seed %d): %d x %d studs, %d storeys of %d plates, %d modules, %d other room(s), %d cap(s), windows %s" % [
 				int(params.get("seed", 1)), st.width, st.depth, st.storeys, st.pitch, st.modules, st.rooms,
-				st.caps, plan.window_style]
+				st.caps, plan.window_style] + cut
+		draw()
 		return plan
 	message = "grown (seed %d): %d modules, %d on the path, %d loop(s), %d cap(s), %d balcony(ies), windows %s" % [
-			int(plan.seed), st.modules, st.path, st.loops, st.caps, st.balconies, plan.window_style]
+			int(plan.seed), st.modules, st.path, st.loops, st.caps, st.balconies, plan.window_style] + cut
+	draw()
 	return plan
 
 
@@ -536,8 +544,10 @@ func draw() -> void:
 	_labels.clear()
 	var rec := record()
 	var im := ImmediateMesh.new()
+	var secs := _sections()
 	var any := not (rec.spaces as Array).is_empty() or not (rec.openings as Array).is_empty() \
-			or not (rec.points as Array).is_empty() or not (rec.get("marks", []) as Array).is_empty()
+			or not (rec.points as Array).is_empty() or not (rec.get("marks", []) as Array).is_empty() \
+			or not secs.is_empty()
 	if not any:
 		_mesh.mesh = null
 		return
@@ -591,6 +601,7 @@ func draw() -> void:
 			im.surface_add_vertex(c + d)
 		any = true
 	_draw_marks(im, rec)
+	_draw_sections(im, secs)
 	if any:
 		im.surface_end()
 		_mesh.mesh = im
@@ -654,6 +665,34 @@ func _draw_marks(im: ImmediateMesh, rec: Dictionary) -> void:
 		if int(m.facing) >= 0:
 			var d: Vector2i = StructureSpaces.FACINGS[int(m.facing)]
 			_seg(im, c, c + Vector3(d.x, 0, d.y) * 0.4, FACADE)
+
+
+## The build's sections while its bricks are the ones cut ([] for none or stale).
+func _sections() -> Array:
+	var m: Dictionary = ws.recipe.meta.get("sections", {})
+	if m.is_empty() or int(m.size) != ws.recipe.size() or (m.sections as Array).size() < 2:
+		return []
+	return m.sections
+
+
+## A box round each section, a little apart so they show where they meet, its
+## number and bricks over it (ROOT on the root's).
+func _draw_sections(im: ImmediateMesh, secs: Array) -> void:
+	var cs := Vector3(BrickPalette.STUD_M, BrickPalette.PLATE_M, BrickPalette.STUD_M)
+	for s: Dictionary in secs:
+		var lo := BrickWorld.grid_to_world(_v3(s.lo))
+		var hi := BrickWorld.grid_to_world(_v3(s.hi)) + cs
+		var col: Color = SECTION_COLOURS[int(s.id) % SECTION_COLOURS.size()]
+		ws._wire_box(im, (lo + hi) * 0.5, hi - lo - Vector3.ONE * 0.04 * (int(s.id) % 3), col)
+		var l := Label3D.new()
+		l.text = "section %d%s  %d bricks" % [int(s.id), "  ROOT" if bool(s.root) else "", int(s.bricks)]
+		l.billboard = BaseMaterial3D.BILLBOARD_ENABLED
+		l.no_depth_test = true
+		l.pixel_size = 0.006
+		l.modulate = col
+		l.position = Vector3((lo.x + hi.x) * 0.5, hi.y + 0.3, (lo.z + hi.z) * 0.5)
+		_mesh.add_child(l)
+		_labels.append(l)
 
 
 func _seg(im: ImmediateMesh, a: Vector3, b: Vector3, col: Color) -> void:
