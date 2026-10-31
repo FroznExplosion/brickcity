@@ -2430,3 +2430,11 @@ on each planet the player is not on, its name and distance, green if it is settl
 inside 300 km; off the screen an arrow at the edge. None on a body wider than 48 px on screen, none on
 foot, none with the map open. The HUD's first line no longer gives home's buildings from elsewhere,
 and says "at the controls". `--gate=seat` checks them.
+
+Found on the way: every stuck landing of the gates (1.8-2.5 km up, seen since step 7) was the gates' own
+autopilot: nose straight down, its "along the ground" came to nothing, `aim` made a singular basis of
+it and each physics call on the ship failed from there. Only in `aim`, which only gates call. The first
+marker build flooded headless runs with errors (no viewport size) with the same effect: marks are
+windowed only. `--gate=jump` 5/5 after both, `--gate=garrison` 17/17, `--gate=seat` 13/13 headless and 16/16
+windowed before the guard (a windowed run after it, at 4 fps with the display asleep, had 12 ok and no
+failure when its time ran out).

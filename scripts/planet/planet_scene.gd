@@ -2294,6 +2294,9 @@ func _ship_out() -> void:
 ## given): cruising in, round it at height, down level. True when down.
 func _ship_down_on(b: PlanetBody, dir := Vector3.ZERO) -> bool:
 	var i := system.index_of(b)
+	# Over the point once, it goes down: going round again from low down it climbs
+	# back to height.
+	var over := dir == Vector3.ZERO
 	ship.boost = true
 	var t0 := Time.get_ticks_msec()
 	while ship.ref != b and Time.get_ticks_msec() - t0 < 120000:
@@ -2305,8 +2308,9 @@ func _ship_down_on(b: PlanetBody, dir := Vector3.ZERO) -> bool:
 	while not ship.landed and Time.get_ticks_msec() - t0 < 120000:
 		var r := ship.rel.origin
 		var down := -r.normalized()
-		var ang := 0.0 if dir == Vector3.ZERO else r.normalized().angle_to(dir)
-		if ang > 0.02:
+		var ang := 0.0 if over else r.normalized().angle_to(dir)
+		over = over or ang <= 0.02
+		if not over:
 			# Round to over `dir`, at height.
 			var goal := r.normalized().slerp(dir, minf(0.2 / ang, 1.0)) * maxf(r.length(), b.data.radius + 4000.0)
 			ship.aim(goal - r, -down)
@@ -2316,8 +2320,11 @@ func _ship_down_on(b: PlanetBody, dir := Vector3.ZERO) -> bool:
 			ship.aim(down, ship.rel.basis.y)
 			ship.thrust = Vector3(0.0, 0.0, 1.0)
 		else:
-			var along := (ship.rel.basis.z - down * ship.rel.basis.z.dot(down)).normalized()
-			ship.aim(-along, -down)
+			# Along the ground from however it points: its tail, or, nose down, its back.
+			var along := ship.rel.basis.z - down * ship.rel.basis.z.dot(down)
+			if along.length_squared() < 0.01:
+				along = ship.rel.basis.y - down * ship.rel.basis.y.dot(down)
+			ship.aim(-along.normalized(), -down)
 			ship.thrust = Vector3(0.0, -1.0, 0.0)
 		ship.boost = ship.altitude > 20000.0
 		await _frames(1)
@@ -2407,20 +2414,22 @@ func _run_seat_gate() -> void:
 			if e[0] == system.bodies[i].data.planet_name:
 				return e
 		return []
-	var all_marked := markers.visible
-	for i in far:
-		all_marked = all_marked and not named.call(i).is_empty()
-	_check("the other planets marked, by name and distance", all_marked and not far.is_empty(), "%d marked" % markers.rows.size())
-	ship.aim(system.sys.pos(far[0], system.t) - ship.rel.origin, ship.rel.basis.y)
-	await _frames(3)
-	var ahead: Array = named.call(far[0])
-	_check("turned to one, its mark is on the screen", not ahead.is_empty() and ahead[3], str(ahead))
-	await _shot("seat_gate_markers")
-	ship.aim(ship.rel.origin - system.sys.pos(far[0], system.t), ship.rel.basis.y)
-	await _frames(3)
-	var behind: Array = named.call(far[0])
-	_check("turned away, an arrow at the edge of the screen", not behind.is_empty() and not behind[3], str(behind))
-	await _shot("seat_gate_markers_behind")
+	# Windowed only: headless, the viewport has no size to mark.
+	if DisplayServer.get_name() != "headless":
+		var all_marked := markers.visible
+		for i in far:
+			all_marked = all_marked and not named.call(i).is_empty()
+		_check("the other planets marked, by name and distance", all_marked and not far.is_empty(), "%d marked" % markers.rows.size())
+		ship.aim(system.sys.pos(far[0], system.t) - ship.rel.origin, ship.rel.basis.y)
+		await _frames(3)
+		var ahead: Array = named.call(far[0])
+		_check("turned to one, its mark is on the screen", not ahead.is_empty() and ahead[3], str(ahead))
+		await _shot("seat_gate_markers")
+		ship.aim(ship.rel.origin - system.sys.pos(far[0], system.t), ship.rel.basis.y)
+		await _frames(3)
+		var behind: Array = named.call(far[0])
+		_check("turned away, an arrow at the edge of the screen", not behind.is_empty() and not behind[3], str(behind))
+		await _shot("seat_gate_markers_behind")
 	await key.call(KEY_E)
 	var ok_deck: bool = await stand_on_deck.call()
 	_check("out of the seat in open space: on foot on its deck, its own gravity", ok_deck and Gravity.strength() > 1.0, "%.1f m/s2" % Gravity.strength())
@@ -2989,8 +2998,11 @@ func _run_ship_gate() -> void:
 			ship.aim(down, ship.rel.basis.y)
 			ship.thrust = Vector3(0.0, 0.0, 1.0)
 		else:
-			var along := (ship.rel.basis.z - down * ship.rel.basis.z.dot(down)).normalized()
-			ship.aim(-along, -down)
+			# Along the ground from however it points: its tail, or, nose down, its back.
+			var along := ship.rel.basis.z - down * ship.rel.basis.z.dot(down)
+			if along.length_squared() < 0.01:
+				along = ship.rel.basis.y - down * ship.rel.basis.y.dot(down)
+			ship.aim(-along.normalized(), -down)
 			ship.thrust = Vector3(0.0, -1.0, 0.0)
 		ship.boost = ship.altitude > 20000.0
 		await _frames(1)
