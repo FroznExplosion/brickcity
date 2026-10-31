@@ -2225,9 +2225,10 @@ white over the swap. A generated world's damage is not kept across a jump.
 **Zero-g debris (step 6, Space.md §4).** A group that comes loose from a station or a ship, large
 enough (over 20 bricks), leaves as one rigid piece instead of crumbs: `split_island`, drawn from
 its own chunk's bake into one mesh, then a **drift record** -- no body, no physics: `p0 + v t` and
-`q0` spun by `w t` in the space frame, from the frame's velocity where it left plus a push from
-the blast. `PlanetSystem.drifts` places them every frame; past 30 km of the player, or over 64 of
-them (oldest first), they go.
+`q0` spun by `w t`, in the frame it left: a station's (it co-orbits, as debris does), or for a ship
+the star's frame at the turn the ship had, with the ship's velocity (the space frame's own
+coordinates are metres apart in float32: a slow piece would stutter). `PlanetSystem.drifts` places
+them every frame; past 30 km of the player, or over 64 of them (oldest first), they go.
 
 **Rings and belts (step 6, STA Docs/15 §3).** `RockField`: an annulus (a planet's ring, a star's
 belt) with a far tier, a shader disc, and a near tier, rocks drawn by a MultiMesh in cells round the
@@ -2243,3 +2244,30 @@ peak 86 C: no jump from the ground; out of home's shell the map lists the ten ne
 2,141 ly); the jump to it (8 bodies in 102 ms, behind the flash) sets the ship down 71 km from Ordar
 III, clear of its shell; down on it, out and standing on a world of another system; back to system
 0 (69 ms), home shown on its own orbit, what was left on it 0.006 m off. `system_probe` 28/28.
+
+**Step 6 built (2026-10-31): zero-g debris.** `Drift` (scripts/space/drift.gd), `PlanetSystem.drifts`,
+`SpaceStation.drifted`. `--gate=debris` 8/8: a storey blown out through the station (a blast every
+2 m), the 302 bricks above it left as one rigid piece with no body, 9.1 m and 35 degrees in 3 s,
+the station keeping the rest (1,536 -> 589); left and come back to, laid as it was (589), what
+drifted off still gone; out of reach, the piece gone. Not yet: a drifting piece cannot be shot or
+hit; a drift is not saved; a piece of a station keeps its orbit with it, for good.
+
+**Rings and belts.** `RockField` (scripts/space/rock_field.gd), `shaders/rock_disc.gdshader`:
+57 rings and 22 belts over 60 systems. Cells of 300 m, 0-3 rocks each, 3-34 m, drawn 11 x 11 x 5
+cells round the player; hidden over 2.5 km/s. `system_probe` 31/31 (the same every time, inside
+the annulus, `blocked` in a rock and not far out of the field). `--gate=rocks` 4/4 windowed, no
+errors, peak 88 C: a jump to Ordar, whose fourth planet has a ring at 18-23 km; seen from afar; in
+it, 188 rocks round the ship; flown at the nearest, stopped 12.6 m from its centre. The far disc
+fades out within 1.5-6 km of the camera (it read as a wall from inside). Far plane now 400 km.
+
+Not yet: the rocks hold still in the frame of what they ring (they do not go round); endpoint test
+only, so a ship over ~500 m/s can pass through a rock; rocks cannot be shot or mined; no shadow of
+the planet on its ring; belts are in no gate (the same class as rings).
+
+Found at the end: on a run with the display asleep (5 min idle: 2 fps at the spawn, before anything
+of this) the ship reached a planet at 279 km/s, its braking going by the cap, which falls as it
+nears. It goes by its own speed now, and no frame's step is over a quarter of the height. The ring's
+fade near the camera was written after the last windowed run that counted: it is unseen, and
+`--gate=rocks` windowed failed twice at 2 fps on its timeouts (headless 4/4). `--gate=far` failed its
+two cover checks once, under load at 98 C, and passed 11/11 on the same code straight after; nothing
+here touches the AI.

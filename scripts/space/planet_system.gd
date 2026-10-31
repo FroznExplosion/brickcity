@@ -44,7 +44,12 @@ const BAKE_FULL := Vector2i(512, 256)
 ## behind), shrunk to the same size on screen. Cameras need not reach further
 ## than SEE_FAR (a far plane of 5e7 m broke the renderer's light culler).
 const FAR_VIEW := 100000.0
-const SEE_FAR := 250000.0
+const SEE_FAR := 400000.0
+## Pieces drifting (step 6): at most this many, gone past `drift_reach` of the
+## player; a tumble and a push at random up to these.
+const DRIFT_CAP := 64
+const DRIFT_PUSH := 3.0
+const DRIFT_SPIN := 0.4
 ## A settled world's buildings are made within POPULATE_AT of the player, and
 ## its far tier kept up within FAR_TIER_AT (past it they are gone from the screen).
 const POPULATE_AT := 700000.0
@@ -91,9 +96,16 @@ var ship: SpaceShip = null
 ## Body -> its PlanetBuildings (the home planet's is the scene's) and PlanetTrees.
 var built := {}
 var trees_of := {}
+## Each a Drift: no body, no physics, a place worked out from its age.
+var drifts: Array = []
+var drift_reach := 30000.0
+var _drift_clock := 0.0
 ## Where the star truly is (its node); `star_look` draws it.
 var star: Node3D
 var star_look: MeshInstance3D
+## This system's belt, or null, and its far disc.
+var belt: RockField
+var _belt_disc: MeshInstance3D
 var sun: DirectionalLight3D
 var sun_energy := 1.1
 var observer: Callable
@@ -148,6 +160,7 @@ func _build_bodies() -> void:
 		var st := SpaceStation.new()
 		add_child(st)
 		st.setup(sys.orbitals[k])
+		st.drifted.connect(_on_drifted.bind(st))
 		st.process_mode = Node.PROCESS_MODE_DISABLED
 		stations.append(st)
 		# Home's stations' bricks while the scene loads.
@@ -184,6 +197,9 @@ func jump(index: int) -> bool:
 			b.queue_free()
 	for st in stations:
 		st.queue_free()
+	for f in drifts:
+		(f as Drift).node.queue_free()
+	drifts.clear()
 	bodies.clear()
 	stations.clear()
 	trees_of.clear()
@@ -193,6 +209,7 @@ func jump(index: int) -> bool:
 	(star_look.mesh as SphereMesh).radius = sys.star_radius
 	(star_look.mesh as SphereMesh).height = sys.star_radius * 2.0
 	(star_look.material_override as StandardMaterial3D).albedo_color = sys.star_color
+	_build_belt()
 	var at := 0
 	for i in sys.bodies.size():
 		if sys.bodies[i].parent < 0 and (not sys.bodies[i].towns.is_empty() or i == sys.home):
@@ -224,6 +241,7 @@ func add_ship(d: OrbitalData, ref: PlanetBody, rel: Transform3D) -> SpaceShip:
 	var s := SpaceShip.new()
 	add_child(s)
 	s.setup_ship(d)
+	s.drifted.connect(_on_drifted.bind(s))
 	s.ref = ref
 	s.rel = rel
 	s.landed = ref != null
@@ -328,6 +346,7 @@ func _process(delta: float) -> void:
 	for s in ships:
 		s.fly(self, delta)
 	_ship_refs()
+	_drift_clock += delta
 	# Where everything is this frame before asking which frame the player is in.
 	_place()
 	if observer.is_valid():
@@ -335,6 +354,8 @@ func _process(delta: float) -> void:
 		_prepare_near(observer.call())
 		_ship_bricks(observer.call())
 		_populate_near(observer.call())
+		_drift_keep(observer.call())
+		_rocks(observer.call(), delta)
 	_place()
 	_gravity()
 	if eye.is_valid():
@@ -342,6 +363,70 @@ func _process(delta: float) -> void:
 		_scaled_space(eye.call())
 		_far_tiers(eye.call())
 	_bake_service()
+
+
+## A piece that left `from`: a record in its frame -- a station's, which it
+## goes on orbiting with; for a ship, the star's frame where it left, at the
+## ship's velocity -- with a push from `from`'s middle and a tumble.
+func _on_drifted(arrays: Array, com: Transform3D, local_com: Vector3, count: int, material: Material, from: SpaceStation) -> void:
+	var s2w := space_to_world()
+	var e := Drift.new()
+	e.bricks = count
+	e.born = _drift_clock
+	var carried := Vector3.ZERO
+	if from is SpaceShip:
+		e.base = s2w.affine_inverse() * from.global_transform
+		carried = e.base.basis.inverse() * (from as SpaceShip).frame_velocity(self, e.base.origin)
+	else:
+		e.frame = from
+		e.base = _frame_xform(from)
+	var to_base := (s2w * e.base).affine_inverse()
+	var here := to_base * com
+	e.p0 = here.origin
+	e.q0 = here.basis
+	var away := here.origin
+	away = away.normalized() if away.length_squared() > 0.01 else Vector3.UP
+	e.v = carried + (away + Vector3(randf_range(-0.5, 0.5), randf_range(-0.5, 0.5), randf_range(-0.5, 0.5))) * randf_range(1.0, DRIFT_PUSH)
+	e.axis = Vector3(randf_range(-1, 1), randf_range(-1, 1), randf_range(-1, 1)).normalized()
+	e.rate = randf_range(0.05, DRIFT_SPIN)
+	e.node = Node3D.new()
+	e.node.name = "Drift"
+	add_child(e.node)
+	e.node.global_transform = com
+	e.material = material
+	e.draw_at = -local_com
+	# The mesh made on a worker, as a band's: on the main thread it is 10-25 ms.
+	var holder := [null]
+	e.task = WorkerThreadPool.add_task(func() -> void:
+			if arrays.is_empty():
+				return
+			var m := ArrayMesh.new()
+			m.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays, [], {}, IslandManager.UPLOAD_COMPRESS)
+			holder[0] = m, false, "drift piece")
+	e.holder = holder
+	drifts.append(e)
+	print("[system] %d bricks of %s drift off" % [count, name_of(from)])
+
+
+## Meshes in, pieces out of reach gone, the oldest over the cap.
+func _drift_keep(p: Vector3) -> void:
+	var k := drifts.size() - 1
+	while k >= 0:
+		var e: Drift = drifts[k]
+		if e.task >= 0 and WorkerThreadPool.is_task_completed(e.task):
+			WorkerThreadPool.wait_for_task_completion(e.task)
+			e.task = -1
+			var mesh: ArrayMesh = e.holder[0]
+			if mesh != null:
+				var mi := MeshInstance3D.new()
+				mi.mesh = mesh
+				mi.material_override = e.material
+				mi.position = e.draw_at
+				e.node.add_child(mi)
+		if e.task < 0 and ((e.node.global_position - p).length() > drift_reach or drifts.size() > DRIFT_CAP and k == 0):
+			e.node.queue_free()
+			drifts.remove_at(k)
+		k -= 1
 
 
 ## One settled world's buildings a frame, once the player is near enough to see them.
@@ -402,6 +487,10 @@ func _place() -> void:
 	for s in ships:
 		if s != f:
 			s.global_transform = s2w * s.space_xform(self)
+	for d in drifts:
+		var e: Drift = d
+		var base: Transform3D = e.base if e.frame == null else _frame_xform(e.frame)
+		e.node.global_transform = s2w * base * e.at(_drift_clock)
 	for b in bodies:
 		b.set_sun(b.global_basis.inverse() * (star.global_position - b.global_position).normalized())
 
@@ -710,6 +799,38 @@ func _build_star() -> void:
 	star_look.material_override = mat
 	star_look.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	star.add_child(star_look)
+	_build_belt()
+
+
+## This system's belt, for the last one's.
+func _build_belt() -> void:
+	if belt != null:
+		belt.queue_free()
+		_belt_disc.queue_free()
+		belt = null
+	if sys.belt_outer <= 0.0:
+		return
+	belt = RockField.new()
+	belt.setup(sys.belt_inner, sys.belt_outer, sys.system_seed, Color(0.48, 0.44, 0.40))
+	star.add_child(belt)
+	_belt_disc = belt.build_far(star_look, 0.35)
+
+
+## Rocks near the player drawn, its ring's and the belt's.
+func _rocks(p: Vector3, dt: float) -> void:
+	for b in bodies:
+		if b.ring != null:
+			b.ring.refresh(b.ring.to_local(p), dt)
+	if belt != null:
+		belt.refresh(belt.to_local(p), dt)
+
+
+## Whether ship `s`, at `at` in its reference frame, runs into a rock.
+func rock_block(s: SpaceShip, at: Vector3) -> bool:
+	var r := s._hull.size.length() * 0.5
+	if s.ref != null:
+		return s.ref.ring != null and s.ref.ring.blocked(s.ref.ring.transform.affine_inverse() * at, r)
+	return belt != null and belt.blocked(at, r)
 
 
 # --- impostor bakes on a worker ------------------------------------------------------
@@ -781,3 +902,7 @@ func _exit_tree() -> void:
 	if _bake_task >= 0:
 		WorkerThreadPool.wait_for_task_completion(_bake_task)
 		_bake_task = -1
+	for e in drifts:
+		if (e as Drift).task >= 0:
+			WorkerThreadPool.wait_for_task_completion((e as Drift).task)
+			(e as Drift).task = -1

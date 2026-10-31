@@ -25,6 +25,9 @@ var bodies: Array[PlanetData] = []
 var orbitals: Array[OrbitalData] = []
 ## The home planet's index, or -1.
 var home := -1
+## A belt of rocks between two orbits (0: none); round the star's Y.
+var belt_inner := 0.0
+var belt_outer := 0.0
 
 ## STA's orbital speeds (solar_system.gd: "orbital velocities ~170/190/196
 ## m/s", the moon ~440 m/s at 2.8 R): the innermost planet at V_IN, the rest
@@ -245,7 +248,34 @@ static func generate(p_seed: int, home_data: PlanetData = null) -> StarSystem:
 			mo *= rng.randf_range(1.3, 1.6)
 	_add_orbitals(s)
 	_settle(s)
+	_add_rocks(s)
 	return s
+
+
+## A third of the big planets have a ring, a third of the systems a belt in
+## their widest gap. From a generator of their own: the rest of a system stands
+## as it was.
+static func _add_rocks(s: StarSystem) -> void:
+	var rng := RandomNumberGenerator.new()
+	rng.seed = hash(str("rocks:", s.system_seed))
+	var gaps := []
+	var last := 0.0
+	for i in s.bodies.size():
+		var d := s.bodies[i]
+		if d.parent >= 0:
+			continue
+		if last > 0.0:
+			gaps.append([d.orbit_radius - last, last, d.orbit_radius])
+		last = d.orbit_radius
+		if i != s.home and d.radius > 9000.0 and rng.randf() < 0.34:
+			d.ring_inner = d.radius * rng.randf_range(1.5, 1.9)
+			d.ring_outer = d.ring_inner * rng.randf_range(1.2, 1.6)
+			d.ring_colour = Color(0.72, 0.66, 0.58).lerp(Color.from_hsv(rng.randf(), 0.3, 0.8), 0.3)
+	if not gaps.is_empty() and rng.randf() < 0.34:
+		gaps.sort_custom(func(a: Array, b: Array) -> bool: return a[0] > b[0])
+		var g: Array = gaps[0]
+		s.belt_inner = lerpf(g[1], g[2], 0.3)
+		s.belt_outer = lerpf(g[1], g[2], 0.7)
 
 
 ## Worlds with air, neither boiling nor frozen through, have towns: 2-5 and

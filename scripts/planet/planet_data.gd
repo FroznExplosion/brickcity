@@ -59,6 +59,10 @@ extends Resource
 @export var tint := Color.WHITE
 ## Where its towns and landmarks stand (unit, planet-local; their pads are in
 ## `pads`). StarSystem settles them; PlanetSystem builds them on the way in.
+## A ring: inner and outer radius, metres from the centre (0: none).
+@export var ring_inner := 0.0
+@export var ring_outer := 0.0
+@export var ring_colour := Color(0.6, 0.55, 0.5)
 @export var towns: Array[Vector3] = []
 @export var landmarks: Array[Vector3] = []
 

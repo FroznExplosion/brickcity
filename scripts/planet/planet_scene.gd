@@ -71,6 +71,8 @@ var _ship_gate := false
 var _dock_gate := false
 var _worlds_gate := false
 var _jump_gate := false
+var _debris_gate := false
+var _rocks_gate := false
 var map: GalaxyMap
 var _flash: ColorRect
 ## The ship parked by the spawn (11.12 step 3), and whether the player flies it.
@@ -120,7 +122,9 @@ func _ready() -> void:
 	_dock_gate = "--gate=dock" in OS.get_cmdline_user_args()
 	_worlds_gate = "--gate=worlds" in OS.get_cmdline_user_args()
 	_jump_gate = "--gate=jump" in OS.get_cmdline_user_args()
-	_gate = _gate or _system_gate or _ship_gate or _dock_gate or _worlds_gate or _jump_gate or _pawn_gate or _mech_gate or _tank_gate or _soldier_gate or _squad_gate or _travel_gate or _far_gate or _drive_gate or _trees_gate or _bricks_gate or _damage_gate or _fall_gate or _hits_gate or _topple_gate or _pieces_ai_gate or _storey_gate
+	_debris_gate = "--gate=debris" in OS.get_cmdline_user_args()
+	_rocks_gate = "--gate=rocks" in OS.get_cmdline_user_args()
+	_gate = _gate or _system_gate or _ship_gate or _dock_gate or _worlds_gate or _jump_gate or _debris_gate or _rocks_gate or _pawn_gate or _mech_gate or _tank_gate or _soldier_gate or _squad_gate or _travel_gate or _far_gate or _drive_gate or _trees_gate or _bricks_gate or _damage_gate or _fall_gate or _hits_gate or _topple_gate or _pieces_ai_gate or _storey_gate
 	data = PlanetData.new()
 	data.planet_name = "proto"
 	# Towns and landmarks: their pads go into the ground before it is built.
@@ -229,6 +233,10 @@ func _ready() -> void:
 			_run_worlds_gate()
 		elif _jump_gate:
 			_run_jump_gate()
+		elif _debris_gate:
+			_run_debris_gate()
+		elif _rocks_gate:
+			_run_rocks_gate()
 		else:
 			_run_gate()
 
@@ -482,7 +490,7 @@ func _build_system() -> void:
 	system.anchor_changed.connect(_on_anchor_changed)
 	system.woke.connect(_on_woke)
 	# A ship parked 45 m behind the spawn (not in the other gates' way).
-	if not _gate or _ship_gate or _dock_gate or _jump_gate:
+	if not _gate or _ship_gate or _dock_gate or _jump_gate or _rocks_gate:
 		var sd := OrbitalData.new()
 		sd.kind = "ship"
 		sd.orbital_name = "ship"
@@ -1828,10 +1836,18 @@ func _station_cross(st: SpaceStation) -> bool:
 	var t0 := Time.get_ticks_msec()
 	while Time.get_ticks_msec() - t0 < 120000:
 		var goal := st.global_transform * Vector3(0.0, st.height + 3.0, 0.0)
-		var to := goal - walker.global_position
-		if to.length() < 1.0:
+		var left := (goal - walker.global_position).length()
+		if left < 1.0:
 			break
-		var stride := clampf(to.length() * 0.04, 1.0, 100000.0)
+		# Round the planet at height, not through it.
+		var b := system.nearest(walker.global_position)
+		var here := walker.global_position - b.global_position
+		var there := goal - b.global_position
+		var ang := here.angle_to(there)
+		if ang > 0.4:
+			goal = b.global_position + here.normalized().slerp(there.normalized(), 0.4 / ang) * maxf(here.length(), b.data.radius + 3000.0)
+		var to := goal - walker.global_position
+		var stride := clampf(left * 0.04, 1.0, 100000.0)
 		walker.global_position += to.normalized() * minf(stride, to.length())
 		await get_tree().physics_frame
 	if system.station != st:
@@ -1882,6 +1898,165 @@ func _system_cross(b: PlanetBody, dir: Vector3) -> bool:
 	walker.frozen = false
 	await get_tree().create_timer(3.0).timeout
 	return true
+
+
+# The rocks gate (11.12 step 6): a jump to the nearest system with a ringed
+# planet, the ring seen from afar, into it, its rocks drawn round the ship, and
+# flown at one: stopped by it.
+
+func _run_rocks_gate() -> void:
+	var t0 := Time.get_ticks_msec()
+	while walker.frozen and Time.get_ticks_msec() - t0 < 60000:
+		await _frames(1)
+	await get_tree().create_timer(1.0).timeout
+	board()
+	await _ship_out()
+	var to := -1
+	for k in system.universe.nearest(0, 40):
+		for d in system.universe.system(k).bodies:
+			if d.ring_outer > 0.0 and to < 0:
+				to = k
+	_check("a ringed planet among the 40 nearest systems", to >= 0)
+	system.jump(to)
+	await _frames(3)
+	var world: PlanetBody = null
+	for b in system.bodies:
+		if b.ring != null and world == null:
+			world = b
+	print("[planet] rocks gate: %s of %s, ring %.0f-%.0f km; belt %s" % [world.data.planet_name, system.sys.system_name,
+			world.data.ring_inner / 1000.0, world.data.ring_outer / 1000.0, str(system.belt != null)])
+	var i := system.index_of(world)
+	# Cruise to its shell, watching it.
+	ship.boost = true
+	t0 = Time.get_ticks_msec()
+	var seen := false
+	while ship.ref != world and Time.get_ticks_msec() - t0 < 60000:
+		ship.aim(system.sys.pos(i, system.t) - ship.rel.origin, ship.rel.basis.y)
+		ship.thrust = Vector3(0.0, 0.0, 1.0)
+		await _frames(1)
+		if not seen and (ship.global_position - world.global_position).length() < 300000.0:
+			seen = true
+			ship.thrust = Vector3.ZERO
+			await _look_back(world, "rocks_gate_far")
+	ship.boost = false
+	_check("in its shell", ship.ref == world and system.anchor == world)
+	# Into the ring.
+	var f := world.ring
+	var mid := (f.inner + f.outer) * 0.5
+	# Its nearest point, not one round the far side of the planet.
+	var in_plane := f.transform.affine_inverse() * ship.rel.origin
+	in_plane.y = 0.0
+	var goal := f.transform * (in_plane.normalized() * mid)
+	t0 = Time.get_ticks_msec()
+	while Time.get_ticks_msec() - t0 < 60000:
+		var to_g := goal - ship.rel.origin
+		if to_g.length() < 200.0:
+			break
+		ship.aim(to_g, ship.rel.basis.y)
+		ship.thrust = Vector3(0.0, 0.0, clampf(to_g.length() / 8000.0, 0.03, 1.0))
+		await _frames(1)
+	ship.thrust = Vector3.ZERO
+	await get_tree().create_timer(2.0).timeout
+	f.refresh(f.transform.affine_inverse() * ship.rel.origin, 1.0)
+	_check("in the ring: its rocks drawn round the ship", f.drawn > 20, "%d rocks" % f.drawn)
+	await _shot("rocks_gate_in")
+	if f.drawn == 0:
+		print("[planet] gate: %d ok, %d FAIL" % [_ok, _fail + 1])
+		get_tree().quit(1)
+		return
+	# At the nearest rock.
+	var at := f.transform.affine_inverse() * ship.rel.origin
+	var best := Vector3.INF
+	var c := RockField.cell_of(at)
+	for x in range(c.x - 3, c.x + 4):
+		for y in range(c.y - 2, c.y + 3):
+			for z in range(c.z - 3, c.z + 4):
+				for e in f.rocks_in(Vector3i(x, y, z)):
+					if (e[0] as Vector3).distance_to(at) < best.distance_to(at):
+						best = e[0]
+	var rams0 := ship.rams
+	t0 = Time.get_ticks_msec()
+	while ship.rams == rams0 and Time.get_ticks_msec() - t0 < 40000:
+		ship.aim(f.transform * best - ship.rel.origin, ship.rel.basis.y)
+		ship.thrust = Vector3(0.0, 0.0, 0.02)
+		await _frames(1)
+	ship.thrust = Vector3.ZERO
+	var gap := (f.transform.affine_inverse() * ship.rel.origin).distance_to(best)
+	_check("a rock stops the ship", ship.rams > rams0 and gap > 5.0, "%.1f m from its centre" % gap)
+	await _shot("rocks_gate_rock")
+	print("[planet] rocks gate: frames: worst %.1f ms; over 40 ms in play: %d %s" % [_worst_ms, _play_hitches.size(), _play_hitches])
+	print("[planet] gate: %d ok, %d FAIL" % [_ok, _fail])
+	get_tree().quit(1 if _fail > 0 else 0)
+
+
+# The debris gate (11.12 step 6): the top of the station cut off with blasts
+# through a whole storey; it leaves in one rigid piece, drifting and turning with
+# no body; the clock stopped or not, it goes on; out of reach, it is gone.
+
+func _run_debris_gate() -> void:
+	var t0 := Time.get_ticks_msec()
+	while walker.frozen and Time.get_ticks_msec() - t0 < 60000:
+		await _frames(1)
+	await get_tree().create_timer(1.0).timeout
+	var st: SpaceStation = null
+	for o in system.stations:
+		if o.is_station() and o.data.parent == system.index_of(planet):
+			st = o
+	var ok_st: bool = await _station_cross(st)
+	_check("on the station, its bricks solid", ok_st and st.bricked)
+	walker.frozen = true
+	walker.global_position = st.global_transform * Vector3(0.0, st.height + 60.0, 0.0)
+	var stud := BrickWorld.get_stud_metres()
+	var n0 := st.bricks.get_alive_block_count(st.chunk)
+	await _shot("debris_gate_before")
+	# A storey blown out all through, its walls and the stairs up the middle.
+	var y := st.height * 0.62
+	var x := 0.0
+	while x <= st.data.fx * stud:
+		var z := 0.0
+		while z <= st.data.fz * stud:
+			_structure_hit(st.global_transform * (st.frame * Vector3(x, y, z)), Vector3.ZERO, {"blast": true, "radius": 2.5, "hp": 0})
+			z += 2.0
+		x += 2.0
+	t0 = Time.get_ticks_msec()
+	while system.drifts.is_empty() and Time.get_ticks_msec() - t0 < 15000:
+		await _frames(1)
+	_check("what was above leaves whole, a rigid piece with no body", not system.drifts.is_empty(), "%d piece(s), the largest %d bricks" % [
+			system.drifts.size(), 0 if system.drifts.is_empty() else (system.drifts[0] as Drift).bricks])
+	if system.drifts.is_empty():
+		print("[planet] gate: %d ok, %d FAIL" % [_ok, _fail])
+		get_tree().quit(1)
+		return
+	await get_tree().create_timer(0.5).timeout
+	var d: Drift = system.drifts[0]
+	_check("it is drawn, as its bricks", d.node.get_child_count() > 0, "%d" % d.node.get_child_count())
+	var p0 := d.node.global_position
+	var b0 := d.node.global_basis
+	await _shot("debris_gate_cut")
+	await get_tree().create_timer(3.0).timeout
+	var moved := d.node.global_position.distance_to(p0)
+	var turned := rad_to_deg(b0.get_rotation_quaternion().angle_to(d.node.global_basis.get_rotation_quaternion()))
+	_check("it drifts off and turns", moved > 1.0 and turned > 1.0, "%.1f m, %.1f deg in 3 s" % [moved, turned])
+	await _shot("debris_gate_drift")
+	var n1 := st.bricks.get_alive_block_count(st.chunk)
+	_check("the station keeps the rest", n1 < n0 and n1 > 0, "%d -> %d" % [n0, n1])
+	# Away and back: laid as it was left, what went not laid again.
+	walker.global_position = st.global_transform * Vector3(0.0, st.height + 400.0, 0.0)
+	await _frames(5)
+	_check("left: its bricks freed", system.station != st and st.chunk < 0)
+	walker.global_position = st.global_transform * Vector3(0.0, st.height + 60.0, 0.0)
+	t0 = Time.get_ticks_msec()
+	while not st.bricked and Time.get_ticks_msec() - t0 < 20000:
+		await _frames(1)
+	var n2 := st.bricks.get_alive_block_count(st.chunk) if st.chunk >= 0 else -1
+	_check("back: laid as it was left, what drifted off still gone", n2 == n1, "%d" % n2)
+	# Out of reach.
+	system.drift_reach = 20.0
+	await _frames(5)
+	_check("out of reach it is gone", system.drifts.is_empty())
+	print("[planet] debris gate: frames: worst %.1f ms; over 40 ms in play: %d %s" % [_worst_ms, _play_hitches.size(), _play_hitches])
+	print("[planet] gate: %d ok, %d FAIL" % [_ok, _fail])
+	get_tree().quit(1 if _fail > 0 else 0)
 
 
 # The jump gate (11.12 step 5): out of the home planet's shell, the map, a jump
