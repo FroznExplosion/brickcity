@@ -167,6 +167,7 @@ func _run() -> void:
 			"%s, %.5f" % [str(worst_o), radial])
 
 	_worlds(uni)
+	_rocks(uni)
 	var near := uni.nearest(0, 10)
 	var d0 := uni.system_position(near[0]).length()
 	var d9 := uni.system_position(near[9]).length()
@@ -229,6 +230,49 @@ func _worlds(uni: Universe) -> void:
 	_check("no snow on the airless one (its map says above freezing)", t_map > 0.0, "%.1f C" % t_map)
 	_check("no trees on those biomes", float(PlanetTrees.TREES[PlanetBiomes.SCORCHED][0]) == 0.0
 			and float(PlanetTrees.TREES[PlanetBiomes.ICE][0]) == 0.0 and float(PlanetTrees.TREES[PlanetBiomes.BARREN][0]) == 0.0)
+
+
+## Step 6: rings and belts generated; a field's rocks a pure function of their
+## cell, inside its annulus; `blocked` true in a rock, false well out of one.
+func _rocks(uni: Universe) -> void:
+	var rings := 0
+	var belts := 0
+	var sane := true
+	for k in range(1, 61):
+		var s := uni.system(k)
+		belts += int(s.belt_outer > 0.0)
+		if s.belt_outer > 0.0 and s.belt_inner >= s.belt_outer:
+			sane = false
+		for d in s.bodies:
+			if d.ring_outer > 0.0:
+				rings += 1
+				if d.ring_inner < d.radius * 1.4 or d.ring_outer <= d.ring_inner or d.parent >= 0:
+					sane = false
+	print("[system] over 60 systems: %d rings, %d belts" % [rings, belts])
+	_check("rings on some big planets, belts in some systems", rings > 5 and belts > 5 and sane)
+	var f := RockField.new()
+	f.setup(15000.0, 21000.0, 77, Color.GRAY)
+	var n := 0
+	var inside := true
+	var same := true
+	var one := Vector3.ZERO
+	var size := 0.0
+	for x in range(40, 60):
+		for z in range(-10, 10):
+			var c := Vector3i(x, 0, z)
+			var a := f.rocks_in(c)
+			same = same and a == f.rocks_in(c)
+			for e in a:
+				n += 1
+				var p: Vector3 = e[0]
+				var r := Vector2(p.x, p.z).length()
+				inside = inside and r >= f.inner and r <= f.outer and absf(p.y) <= f.half_thick
+				one = p
+				size = e[1]
+	_check("a field's rocks are the same every time, inside its annulus", n > 50 and same and inside, "%d rocks" % n)
+	_check("blocked in a rock, not far out of the field", f.blocked(one, 1.0) and not f.blocked(Vector3(40000.0, 0.0, 0.0), 10.0),
+			"radius %.1f m" % size)
+	f.free()
 
 
 func _planets(s: StarSystem) -> int:

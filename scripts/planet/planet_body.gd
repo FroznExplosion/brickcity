@@ -23,6 +23,8 @@ var ocean: MeshInstance3D
 ## reach (PlanetSystem's scaled space, Planets.md 11.12). The body's own node
 ## stays where it truly is.
 var look: Node3D
+## Its ring (Planets.md 11.12 step 6), in the plane of its equator, or null.
+var ring: RockField
 var active := false
 var bake_ms := 0
 
@@ -69,6 +71,12 @@ func setup(p_data: PlanetData, far := false) -> void:
 		apply_bake(PlanetImpostorBake.bake(data))
 	if data.has_air:
 		_build_atmosphere()
+	if data.ring_outer > 0.0:
+		ring = RockField.new()
+		ring.setup(data.ring_inner, data.ring_outer, data.planet_seed, data.ring_colour)
+		ring.transform.basis = Basis(Quaternion(Vector3.UP, data.climate_axis.normalized()))
+		add_child(ring)
+		ring.build_far(look)
 	if not is_nan(data.sea_level):
 		_build_ocean()
 		if far:

@@ -34,7 +34,7 @@ const LEVEL_BELOW := 120.0
 ## PlanetSystem.SEE_FAR. The system is never named here by type: PlanetSystem
 ## names this class, and a class cycle leaks both scripts at exit and crashes
 ## a headless run as it quits (the system is `ps`, untyped).
-const SEE_FAR := 250000.0
+const SEE_FAR := 400000.0
 ## A ram over this (m/s) blasts what it hit.
 const RAM_SPEED := 8.0
 
@@ -158,6 +158,8 @@ func fly(ps, dt: float) -> void:
 	var cap := clampf(altitude * 0.5, SPEED_LOW, SPEED_SPACE)
 	if boost:
 		cap = maxf(cap, minf(altitude * CRUISE, CRUISE_MAX))
+	# Never a quarter of the way to the ground in one frame, whatever the frame.
+	cap = minf(cap, maxf(altitude * 0.25 / maxf(dt, 0.001), SPEED_LOW))
 	# By a station: its speed held at neutral, the cap down as it nears (docking).
 	var dock: Array = ps.ship_match(self)
 	if dock[1] >= 0.0:
@@ -173,7 +175,9 @@ func fly(ps, dt: float) -> void:
 			if (rel.origin - ps.sys.pos(i, ps.t)).length() < (rel.origin - ps.sys.pos(best, ps.t)).length():
 				best = i
 		target += ps.sys.vel(best, ps.t)
-	vel = vel.move_toward(target, maxf(ACCEL, cap * 0.8) * dt)
+	# Braking goes by the speed it has, not the cap, which falls as it nears:
+	# at a low frame rate it reached a planet at 279 km/s.
+	vel = vel.move_toward(target, maxf(ACCEL, maxf(cap, vel.length()) * 0.8) * dt)
 	var next := rel.origin + vel * dt
 	if ref != null:
 		# Kept off the ground (the planet's own heights, as the voxels have them).
@@ -192,6 +196,10 @@ func fly(ps, dt: float) -> void:
 		landed = next.length() < g + CLEARANCE + 0.05 and vel.length() < 0.5 and hands.y <= 0.0
 	if ps.frame_node() != self:
 		next = _sweep(ps, next)
+	if ps.rock_block(self, next):
+		rams += 1
+		vel = ps.ship_match(self)[0]
+		next = rel.origin
 	rel.origin = next
 
 

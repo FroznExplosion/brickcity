@@ -20,6 +20,13 @@ const FIELD := 250.0
 const DEPTH := 3000.0
 const SECTION_PLATES := 24
 const SECTION_STUDS := 32
+## A loose group over this many bricks leaves whole, as a drifting piece
+## (Planets.md 11.12 step 6); smaller, crumbs.
+const DRIFT_MIN := 20
+
+## A loose group left: its mesh `arrays`, drawn from `local_com` back; the world
+## transform of its centre of mass; how many bricks.
+signal drifted(arrays: Array, com: Transform3D, local_com: Vector3, count: int, material: Material)
 
 var data: OrbitalData
 ## Inside this of its node the player is on it (a ship's is smaller).
@@ -224,7 +231,9 @@ func deactivate() -> void:
 	_band_nodes.clear()
 	_remesh = PackedInt32Array()
 	_solve_due = false
+	# Thrown as crumbs or gone as pieces, all gone from what is laid next.
 	_dead = bricks.get_dead_blocks(chunk)
+	_dead.append_array(bricks.get_detached_blocks(chunk))
 	bricks.release_chunk(chunk)
 	chunk = -1
 	bricked = false
@@ -277,8 +286,8 @@ func _after_kill(killed: PackedInt32Array) -> void:
 	_solve_due = true
 
 
-## What the hit left joined to nothing goes, as crumbs (rigid pieces drifting
-## are for zero-g, step 6).
+## What the hit left joined to nothing goes: a small group as crumbs, a large
+## one as a rigid piece, drifting (step 6).
 func _solve() -> void:
 	_solve_due = false
 	var solve: Dictionary = bricks.solve_structure(chunk, 48, 3.0)
@@ -287,9 +296,20 @@ func _solve() -> void:
 		return
 	var all := PackedInt32Array()
 	for g in groups:
-		all.append_array(g as PackedInt32Array)
-	crumbs.throw(bricks, chunk, all)
-	bricks.kill_blocks(chunk, all)
+		var ids: PackedInt32Array = g
+		all.append_array(ids)
+		if ids.size() <= DRIFT_MIN:
+			crumbs.throw(bricks, chunk, ids)
+			bricks.kill_blocks(chunk, ids)
+			continue
+		var split: Dictionary = bricks.split_island(chunk, ids)
+		if split.is_empty():
+			continue
+		var c := int(split.chunk)
+		var arrays: Array = bricks.build_chunk_mesh(c)
+		var com: Vector3 = split.local_com
+		drifted.emit(arrays, bricks.get_chunk_transform(c) * Transform3D(Basis(), com), com, ids.size(), brick_material)
+		bricks.release_chunk(c)
 	_after_kill(all)
 
 
