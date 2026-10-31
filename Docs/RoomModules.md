@@ -276,7 +276,8 @@ Code: `StructureSpaces.connectors` / `door_connector` / `cycle_link` (record sid
 | 8 | sections: generated builds cut into parts with joints, split into builds of their own, shown in the workshop; `build_sections_probe` (7) | built 2026-10-31 |
 | 9 | the station grower: core, spine, docks, bridging tubes, solar wings, radiators; Generate station; `room_station_probe` (8) | built 2026-10-31 |
 | 11 | ship interiors packed into a hull: decks, spine, well, bulkheads as sections, zones, shared walls, nooks; Generate interior; `room_pack_probe` (9) | built 2026-10-31 |
-| 10, 12 | stations in space, ships flying their rooms (section 7, the planets area's files) | planned |
+| 10 | stations in space: a kit and ties so a station holds by its studs, a keel its anchor; generated stations for every station but home's, a section shot off drifting whole; `station_sections_probe` (5), `room_station_probe` (10) | built 2026-10-31 |
+| 12 | ships flying their rooms (section 7.5, the planets area's files) | planned |
 
 ## 7. Plan: stations in space and ship interiors (2026-10-31)
 
@@ -377,19 +378,47 @@ lowest row 1; sections with the core's the root; same seed same station; no core
 Not yet: tubes bridge on one level only (no ramp or ladder between levels); the abstract look is
 the modules' own (round pods where the user builds them round); no station colour band.
 
-### 7.3 Stations in space (stage 10, with the planets area)
+### 7.3 Stations in space (stage 10, built 2026-10-31)
 
-`SpaceStation` lays a generated station instead of a tower's recipe: **one chunk a section**
-(each from its own template, so laying stays ~1-3 ms), placed by the section transforms; the
-shell boxes and the far look (`look`) made from the section boxes. Hits as now, per section. A
-joint's bricks are tracked: when a hit leaves a section joined to the root through no joint, the
-section **leaves whole** -- the `drifted` path, as one rigid piece with its bricks, rooms, doors
-and anyone inside riding its frame; under the budget it can break again brick by brick (Space.md
-3.2-3.3). Generated systems get generated stations (seeded from the orbital's seed); home's
-station stays the story's until the user says.
+**Held by its studs.** In space nothing stands on the ground, so a generated station has to
+hold together by stud joints alone (`solve_grounded` walks studs only). Built that way:
 
-This is in `scripts/space/` (the planets area): its work, or small changes merged soon, agreed
-first.
+* **The kit** (`scripts/station_kit.gd`, `StationKit`, the game's own station modules; the
+  player's station modules are used instead when they have a core): floors and ceilings two
+  plate layers, the upper a stud in so every seam of the lower is bridged; walls brick columns
+  on the floor's rim under the ceiling's. Core, node, tube, short tube, pod (a window, a radiator
+  spot), truss (a panel spot), dock. `tools/station_module_kit.gd` is now this kit.
+* **Ties**: under every seam where two modules meet door to door, a 2x2 plate under both walls
+  (plates stacked under the higher one down to it); a bridging tube is two plate layers for its
+  floor and its ceiling (staggered across when it is only two studs long), brick walls, and tied
+  under each end where the module has its wall.
+* **Wings and radiators** lie flat on the module's roof at the wall and out past it: a boom two
+  studs wide in two layers a stud apart, its last plate over the panel's first row, the panel two
+  staggered layers.
+* **The keel**: a stack of 2x2 plates under the core's middle, two rows below anything else --
+  the station's lowest row and its only anchor (its foundation, row 0 when laid).
+
+**In space.** `OrbitalData.layout` "generated" (`StarSystem` gives every station but home's: home's
+stays the story's tower): `SpaceStation.prepare` grows it from `orbital_seed` (12-23 modules, a
+spine of 3-5; ~0.25 s, so there, ahead of arrival, not at load) and builds its template (~0.35 s);
+its box, frame, shell and shell collision become a box round each of its sections
+(`SECTION_BRICKS` 2000); `activate` lays it from the template (~3 ms) with its foundation at the
+keel. A hit's solve for a generated station is by studs alone (`find_detached_groups`; in orbit
+nothing weighs on it, Space.md 3.2): what a hit leaves joined to nothing that reaches the keel
+comes away -- small as crumbs, a section cut off at its joints whole, drifting (`drifted`, step 6's
+rigid pieces). The home station and ships keep the stress solve.
+
+`tools/room_station_probe.gd` (10): adds laid in a brick world with only the keel on the
+foundation row nothing is loose, and a leaf section's joint killed sends that section away whole.
+`tools/station_sections_probe.gd` (5): home's station a tower and the rest generated (5 systems);
+prepare grows the same station for the seed, a shell box a section; laid frame by frame, nothing
+loose; a leaf section's joint shot away -- it drifts off as one piece. `system_probe` 31/31 as
+before. The workshop's *Generate station* uses the shipped kit when the player has no core.
+
+Not yet: doors and lifts are not hung in a station in space (its doorways are open); the people
+and furniture of a drifting section are not carried with it; a station's damage is kept as
+before (dead ids) but sections are not; no windowed pass has looked at one (`--gate=system`
+visits home's, a tower).
 
 ### 7.4 Ship interiors: as much of the hull as rooms (stage 11, built 2026-10-31)
 

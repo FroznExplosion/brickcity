@@ -2091,6 +2091,11 @@ Not yet: hits on a station's bricks (`_structure_hit` goes to the planet's build
 kept when it is left (its bricks are freed and laid fresh), anything inside (rooms, furniture,
 AI), a station's own lights (its door is black inside), gravity off in space for loose things.
 
+Generated stations (2026-10-31, the room-modules chat): every station but home's is grown from a
+station kit by its seed, held by its studs to a keel under its core, and a section shot off at its
+joints drifts away whole -- Docs/RoomModules.md 7.3 (`OrbitalData.layout`, `SpaceStation.
+_prepare_generated`, `tools/station_sections_probe.gd`).
+
 #### Step 3 built (2026-10-29): a ship to fly; the planet from space
 
 The user: fly off the planet into space, see it become a sphere with its buildings on it at their
