@@ -230,11 +230,18 @@ static func plan_region(points: Variant) -> Dictionary:
 	if not (points is Dictionary):
 		return res
 	for e in points.get("adds", []):
-		res.merge(SketchPen.region_cells(e))
+		res.merge(_entry_cells(e))
 	for e in points.get("subs", []):
-		for c in SketchPen.region_cells(e):
+		for c in _entry_cells(e):
 			res.erase(c)
 	return res
+
+
+## A stroke's cells, or a drawn shape's: {kind, a, b, rim} in a plan is a shape on the grid.
+static func _entry_cells(e: Variant) -> Dictionary:
+	if e is Dictionary and e.has("kind"):
+		return cells_2d(String(e.kind), _v2(e.a), _v2(e.b), int(e.get("rim", 1)))
+	return SketchPen.region_cells(e)
 
 
 ## The cells of `region` within `rim` cells of its outside (corners too): walls along its
@@ -435,7 +442,13 @@ static func map_plan(points: Dictionary, f: Callable) -> Dictionary:
 	for k in ["adds", "subs"]:
 		var list := []
 		for e in points.get(k, []):
-			if e is Dictionary:
+			if e is Dictionary and e.has("kind"):
+				var c: Dictionary = e.duplicate(true)
+				for end in ["a", "b"]:
+					var w: Vector2 = f.call(Vector2(float(c[end][0]) + 0.5, float(c[end][1]) + 0.5)) - Vector2(0.5, 0.5)
+					c[end] = [int(round(w.x)), int(round(w.y))]
+				list.append(c)
+			elif e is Dictionary:
 				var d: Dictionary = e.duplicate(true)
 				d.brush = (d.brush as Array).map(func(q: Array) -> Array:
 					var v: Vector2 = f.call(Vector2(float(q[0]), float(q[1])))

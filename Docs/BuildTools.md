@@ -478,3 +478,42 @@ draw a shape, drag the depth -- and most tools the same.
   stays its own, and its bricks go round the other's. Off while the mirror is on.
 * `face_under` also gives `front` and `into`. Cut, a Shapes "Cut out" and a Shape pressed on a
   wall's side all start from `_begin_on_face`.
+
+## 11. One Draw tool (2026-10-31)
+
+Asked: Shapes, Walls, Floor and Sketch as one tool (section 10, suggestion 1). They had become
+the same thing: draw a base, drag it up, click.
+
+**Draw** (K, Alt D) has two rows of pictures in its pop-out:
+
+* **Outline**: Line, Box, Circle, Triangle, Arch, Freehand, Brush, Corners.
+* **Makes**: **Solid** (filled), **Walls** (along the outline, the thickness set), **Floor** (filled,
+  and a click with no drag fills the walls round it), **Building** (walls and a floor each storey).
+
+Any outline makes any of them: a Circle that makes Walls is a round tower (the old ring); a Box
+that makes Walls is a room (the old hollow rectangle) and joins walls it meets; a Line that makes
+Walls is a wall. Hollow and Ring leave the list for that reason, and Stairs (the Stairs tool
+does it). It starts on Line and Walls. Old saves' shapes still lay.
+
+Everything else is as it was: press, drag, let go, pull the height, click. "Draw on" (a set
+level) now works for every outline. **Combine outlines**, ticked, keeps outlines of any kind in
+one plan until Raise (or a click inside it); "Cut out" then takes area from the plan.
+
+An RMB outside a drawing is now always the workshop's own (takes a brick away); cutting while
+drawing is the "Cut out" button, or the Cut tool.
+
+The rail: Place, Pick, Paint, Draw, Roof, Stairs, Cut, Repeat, Select, Builds, Rooms: 11 tools.
+
+### As built (2026-10-31)
+
+Merged; `tools/build_tools_probe.gd` 204 checks. Pick, Paint and Place, and the other section
+10 suggestions, are still open.
+
+* `set_outline` and `makes` are the tool's whole state; `_route` says how a drag goes (walls,
+  floor, shape, cut). `_plan_record` is the one way from outlines to a `plan` shape, and a plan
+  can now hold grid shapes as well as pen strokes (`BrickShapes._entry_cells`, `map_plan`).
+* A Box that makes Walls is a closed `polyline`, so it joins walls it meets. Combined, it goes
+  into the plan instead (a plan's walls do not join other walls).
+* A Line that makes a Building is a wall: a line has no inside to floor.
+* The level's grid is drawn for a set level or a plan being drawn, not while aiming.
+* Hollow, Ring and Stairs are still kinds (old saves, `add_shape`), just not on the pop-out.
