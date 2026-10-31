@@ -83,7 +83,8 @@ func _build() -> void:
 	aggro_layer.layer = 5
 	_meter = AggroMeter.new()
 	_meter.table = services.aggro_of(1)
-	_meter.position = Vector2(20.0, 180.0)
+	# Under the scene's status lines (PlanetScene._build_hud).
+	_meter.position = Vector2(20.0, 214.0)
 	aggro_layer.add_child(_meter)
 	add_child(aggro_layer)
 	arsenal = PlayerArsenal.new()

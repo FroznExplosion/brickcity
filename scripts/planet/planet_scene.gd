@@ -87,6 +87,7 @@ var _jump_gate := false
 var _debris_gate := false
 var _rocks_gate := false
 var map: GalaxyMap
+var markers: SpaceMarkers
 var _flash: ColorRect
 ## The ship parked by the spawn (11.12 step 3), and whether the player flies it.
 var ship: SpaceShip
@@ -686,6 +687,11 @@ func _build_hud() -> void:
 		var over := CanvasLayer.new()
 		over.layer = 10
 		add_child(over)
+		markers = SpaceMarkers.new()
+		markers.system = system
+		markers.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		markers.set_anchors_preset(Control.PRESET_FULL_RECT)
+		over.add_child(markers)
 		map = GalaxyMap.new()
 		map.visible = false
 		map.set_anchors_preset(Control.PRESET_FULL_RECT)
@@ -771,11 +777,19 @@ func _process(_delta: float) -> void:
 		walker.flying = pawn != null or walker.flying
 	elif pawn != null:
 		keep_over_ground(pawn, body)
+	# Not while standing about on a world, or looking at the map.
+	if markers != null:
+		markers.visible = (piloting or not on_foot) and not map.visible
+	# The gun's HUD is for the one holding it.
+	if kit != null:
+		kit.hud.visible = not piloting
 	if hud != null:
-		hud.text = "%s  alt %.0f m  %.0f fps  view %d  shifts %d (last %.1f ms)  buildings %d near, %d far  %s" % [
-				"on foot (F flies)" if on_foot else ("FLY %.0f m/s (F lands)" % walker.fly_speed if walker.flying else "walk"), alt,
+		var mode := "on foot (F flies)" if on_foot else ("FLY %.0f m/s (F lands)" % walker.fly_speed if walker.flying else "walk")
+		var here := "" if system != null and system.buildings_here() == null else "  buildings %d near, %d far" % [_buildings_here().near_count, _buildings_here().far_count]
+		hud.text = "%s  alt %.0f m  %.0f fps  view %d  shifts %d (last %.1f ms)%s  %s" % [
+				"at the controls" if piloting else mode, alt,
 				Engine.get_frames_per_second(), walker.viewer.view_distance, PlanetFrame.shifts,
-				PlanetFrame.last_us / 1000.0, _buildings_here().near_count, _buildings_here().far_count,
+				PlanetFrame.last_us / 1000.0, here,
 				"(waiting for ground)" if walker.frozen and not piloting else ""]
 		if piloting:
 			hud.text += "\nSHIP  %.0f m/s  %.0f m over the ground  (E leaves the seat; WASD, Space/Ctrl, mouse, Z/C roll, Shift cruise; M galaxy map)" % [
@@ -2382,6 +2396,31 @@ func _run_seat_gate() -> void:
 	_check("and back in the seat", piloting)
 	await _ship_out()
 	_check("open space: the ship is the frame, the jump there to make", system.frame_node() == ship and system.can_jump() and system.jump_block() == "")
+	# Every other planet marked; turned to one, it is on the screen, turned away, an arrow.
+	await _frames(3)
+	var far: Array = []
+	for i in system.bodies.size():
+		if system.sys.bodies[i].parent < 0 and system.bodies[i] != planet:
+			far.append(i)
+	var named := func(i: int) -> Array:
+		for e in markers.rows:
+			if e[0] == system.bodies[i].data.planet_name:
+				return e
+		return []
+	var all_marked := markers.visible
+	for i in far:
+		all_marked = all_marked and not named.call(i).is_empty()
+	_check("the other planets marked, by name and distance", all_marked and not far.is_empty(), "%d marked" % markers.rows.size())
+	ship.aim(system.sys.pos(far[0], system.t) - ship.rel.origin, ship.rel.basis.y)
+	await _frames(3)
+	var ahead: Array = named.call(far[0])
+	_check("turned to one, its mark is on the screen", not ahead.is_empty() and ahead[3], str(ahead))
+	await _shot("seat_gate_markers")
+	ship.aim(ship.rel.origin - system.sys.pos(far[0], system.t), ship.rel.basis.y)
+	await _frames(3)
+	var behind: Array = named.call(far[0])
+	_check("turned away, an arrow at the edge of the screen", not behind.is_empty() and not behind[3], str(behind))
+	await _shot("seat_gate_markers_behind")
 	await key.call(KEY_E)
 	var ok_deck: bool = await stand_on_deck.call()
 	_check("out of the seat in open space: on foot on its deck, its own gravity", ok_deck and Gravity.strength() > 1.0, "%.1f m/s2" % Gravity.strength())
@@ -2399,6 +2438,7 @@ func _run_seat_gate() -> void:
 	pawn.place(away)
 	await get_tree().create_timer(1.0).timeout
 	_check("off the ship in open space, nothing pulls", system.frame_node() == null and Gravity.strength() == 0.0, "%.1f m/s2" % Gravity.strength())
+	_check("on foot, no marks", not markers.visible)
 	print("[planet] gate: %d ok, %d FAIL" % [_ok, _fail])
 	get_tree().quit(1 if _fail > 0 else 0)
 
