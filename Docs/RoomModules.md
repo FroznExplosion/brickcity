@@ -48,8 +48,9 @@ between two rooms of the same module is inside it, not a connector. A window is 
 
 * `at`: the low corner of the opening's bottom row (lowest X or Z along the wall) on the
   module's **outer face** -- the first cell past the wall, its thickness read from the bricks
-  beside the hole. Two modules join where their connectors' `at` is the same cell and their `facing`s
-  are opposite: walls back to back, the doorway through both.
+  beside the hole (`depth`; 0 for an open side). Two modules join where the second's `at` is
+  the first's last wall cell (`b.at == a.at - a's facing`), their `facing`s opposite: walls back
+  to back, the doorway through both.
 * `facing`: out of the room, 0 +X, 1 +Z, 2 -X, 3 -Z.
 * `size`: the opening's width in studs and height in plates. Two connectors join only when the
   sizes are the same.
@@ -98,7 +99,7 @@ worked out again from the openings and the stair links whenever the rooms are fo
    `finish` module. A dead end steps back (backtracking, a limit on tries).
 3. **Branches**: rooms on the path's open connectors until the building's room budget, the
    modules' `min`s met first, their `max`s never passed.
-4. **Loops**: any two open connectors that now meet (the same cell, facing each other, the same
+4. **Loops**: any two open connectors that now meet (back to back, facing each other, the same
    size) are joined -- rooms meeting at more than one place.
 5. **Caps**: every connector left open is walled up (its opening filled with the module's own
    wall brick), except the start's and the finish's.
@@ -107,11 +108,62 @@ worked out again from the openings and the stair links whenever the rooms are fo
 The result is a **plan**: `[{module, at: Vector3i, turn}]`, the joins and the caps. Laying it in
 bricks is a separate step (in the workshop as a preview, in the city as a building).
 
+### 3.1 As built (stages 2-5, 2026-10-30)
+
+**The library** (`scripts/room_modules.gd`, `RoomModules`): `library()` reads every build in the
+building and room libraries with its module on; `make(recipe)` gives `{name, rules, turns[4]}`.
+Each build's rooms are found again from its bricks (`refresh`: the record's seeds, its links,
+kinds and marks kept), so an old save still has the right connectors. A turn holds the turned
+recipe (`BuildRecipe.turned`), its structure cells, its columns as 2.5D spans (bricks and room
+air), connectors and facade spots turned with it (facing + turns), windows, rooms (kind, seed,
+columns). A build in more than one grid is not a module yet (no sideways turn).
+
+*A module built on the workshop's baseplate* has no floor in its recipe -- the baseplate is its
+floor. `with_floor` gives it one on row 0 under every column it has bricks in or closes round
+(plates 4x4, 2x2, 1x1), so it is a whole room on the ground or up a stair.
+
+**The grow** (`scripts/room_grow.gd`, `RoomGrow.grow(lib, {seed, rooms, path, tries, balcony,
+hang})`): a start module (role `start` or a `start` link; any module when there is none) at the
+origin, turned at random; the path grown from it by backtracking, `path` modules then a finish
+module (role or link; with none, the path ends at its last room), shorter if the tries run out;
+the `min`s; branches until `rooms`, a connector nothing fits marked dead; loops; caps. A fit is:
+no column span of it in one already placed, the `max` not passed, the storey rule (`ground`: its
+lowest row the start's; `upper`: above it; `top`: nothing over it ever). Stair links join up to
+down, the upper module's lowest brick in that column on the lower one's highest. A hang spot is
+an open connector any doorway as high as the room fits; a branch takes one with the chance
+`hang`. About 4 ms a 12-module building.
+
+**The facade** (stage 5): one window style a building (`open` or `glass`: every window hole of
+every module glazed); a window spot cuts a 2 x 6 window through the wall there (glazed in the
+glass style); a balcony spot, with the chance `balcony` and where nothing is, a 4 x 3 slab at the
+room's floor with a rail a brick high and a doorway out to it; a hang spot, used, a doorway cut
+for the room hung there. A stair join lays a straight stair two studs wide in the lower room
+ending at the link, a brick a step, and cuts the slabs over the steps that would have less than
+15 plates of headroom.
+
+**Laying** (`RoomGrow.lay(lib, plan, on_ground)`): every placement's bricks -- furniture and
+detail too, fixtures, placed furniture -- turned and moved, the cut ones left out; then caps
+(bricks and plates in the module's colour), steps, balconies and glass where nothing is. Its
+rooms go in `meta["structure"]` (each module's, moved), so the spaces tool, interiors and AI see
+them; `meta["generated"]` says the seed, the modules and the counts. `on_ground` moves it to the
+plate's corner and leaves the ground row (the ground floors) to the ground, as a workshop build
+stands.
+
+**In the workshop** (stage 4): under the module's rules on the rooms panel, *Grow a building from
+saved modules*: seed, modules, path length, **Generate** and **Next seed**. It opens the building
+as a new build (a build with unsaved changes asks first: press again within 4 s); a building
+wider than the baseplate makes the plate bigger. **Enter** places it in the city as any build
+(the city takes builds whole: `BuildingRegistry.register_build`).
+
+Not yet: the room a module may hang is any room-role module; furniture in a cut is left whole;
+a stair cut takes whole slab bricks over it, not cells; the steps are a brick each; no doors put
+in joined doorways; a cap is plain bricks.
+
 ## 4. Set by shell
 Later. A shell (Sketch, Walls, a floor each storey) split into rooms; modules whose rules say
 they fit are put in the pieces; the stairwell a stair-role module.
 
-## 5. In the workshop (stage 1, built)
+## 5. Markers in the workshop (stage 1, built)
 
 Rail, the rooms tool (O): **click marks** picks what a click does -- *rooms* (as before: find a
 room, select it, turn an opening's kind), *link* (an opening's link round: auto, off, start,
@@ -131,9 +183,9 @@ Code: `StructureSpaces.connectors` / `door_connector` / `cycle_link` (record sid
 
 | # | what | status |
 |---|---|---|
-| 1 | markers: connectors from openings (link by hand), stair links, facade spots, module rules on the rail; saved; `module_marks_probe` (9) | built 2026-10-30 |
-| 2 | the library: modules read, cells, connectors, turned four ways | |
-| 3 | grow: path start to finish, branches, loops, caps, no overlap; seeded; probe | |
-| 4 | lay a plan in bricks: Generate on the workshop rail (a preview build); then the city | |
-| 5 | facade spots filled (window styles, balconies, hanging rooms) | |
+| 1 | markers: connectors from openings (link by hand), stair links, facade spots, module rules on the rail; saved; `module_marks_probe` | built 2026-10-30 |
+| 2 | the library: modules read, cells, connectors, turned four ways (3.1) | built 2026-10-30 |
+| 3 | grow: path start to finish, branches, loops, caps, no overlap; seeded; `room_grow_probe` (12) | built 2026-10-30 |
+| 4 | lay a plan in bricks: Generate on the workshop rail; Enter puts it in the city; `module_marks_probe` (11) | built 2026-10-30 |
+| 5 | facade spots filled (window styles, balconies, hanging rooms), stairs laid | built 2026-10-30 |
 | 6 | set by shell | |

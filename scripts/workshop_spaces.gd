@@ -52,6 +52,7 @@ var active := false
 var kind := "office"         ## what the next room found is
 var point_kind := "loot"
 var mark := "rooms"          ## what a click marks (MARK_MODES)
+var _generate_asked_ms := -1  ## when Generate last asked (-1: not asked) before replacing unsaved work
 var selected := -1           ## index into the record's spaces
 var message := ""
 var _dirty := false
@@ -310,6 +311,39 @@ func set_rule(key: String, value) -> void:
 	module()[key] = value
 	ws._dirty = true
 	message = "module %s: %s" % [key, str(value)]
+
+
+## Grow a building from the saved modules (RoomGrow, Docs/RoomModules.md 3)
+## and open it in the workshop as a new build. A build with unsaved changes is
+## asked about first: a second press within a few seconds replaces it.
+## Returns the plan.
+func generate(params: Dictionary) -> Dictionary:
+	if ws._dirty and (_generate_asked_ms < 0 or Time.get_ticks_msec() - _generate_asked_ms > 4000):
+		_generate_asked_ms = Time.get_ticks_msec()
+		message = "this build has unsaved changes: press Generate again to replace it"
+		return {}
+	_generate_asked_ms = -1
+	var lib := RoomModules.library()
+	var plan := RoomGrow.grow(lib, params)
+	if not plan.ok:
+		message = "no building: %s" % plan.why
+		return plan
+	var r := RoomGrow.lay(lib, plan, true)
+	# A building bigger than the baseplate gets a bigger one (a cube in ticks,
+	# as the plate always is: Workshop.height_plates).
+	var b := r.bounds()
+	var need := maxi((b[1] as Vector3i).x, (b[1] as Vector3i).z) + 2
+	if need > ws.plate_studs:
+		ws.plate_studs = ceili(need / 4.0) * 4
+		@warning_ignore("integer_division")
+		ws.height_plates = ws.plate_studs * 5 / 2
+	ws._load_recipe(r)
+	if not active:
+		toggle()
+	var st: Dictionary = plan.stats
+	message = "grown (seed %d): %d modules, %d on the path, %d loop(s), %d cap(s), %d balcony(ies), windows %s" % [
+			int(plan.seed), st.modules, st.path, st.loops, st.caps, st.balconies, plan.window_style]
+	return plan
 
 
 func cycle_point_kind() -> void:
