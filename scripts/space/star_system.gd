@@ -344,6 +344,8 @@ static func _add_orbitals(s: StarSystem) -> void:
 			o.fz = 32 + 4 * rng.randi_range(0, 4)
 			o.courses = [12, 18, 24][rng.randi() % 3]
 			o.colour = Color(0.82, 0.83, 0.86).lerp(Color.from_hsv(rng.randf(), 0.5, 0.8), 0.25)
+			# Home's station is the story's; every other a generated one (RoomModules.md 7.3).
+			o.layout = "tower" if i == s.home else "generated"
 			s.orbitals.append(o)
 
 

@@ -149,7 +149,7 @@ uniform bool glass_pass = false;
 group_uniforms wood;
 uniform float wood_pbr_range = 14.0;
 uniform float wood_far_range = 60.0;
-uniform float wood_bump : hint_range(0.0, 3.0) = 1.0;
+uniform float wood_bump : hint_range(0.0, 4.0) = 2.0;
 // The chunk's place on the grid, metres, modulo WOOD_PERIOD
 // (BrickMaterials.set_grain_origin): what makes a piece broken off a wall, a
 // chunk of its own, keep the grain it had in the wall. 0 is right for any

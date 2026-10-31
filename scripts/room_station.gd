@@ -9,6 +9,12 @@ extends RoomGrow
 ## each `radiator` spot. One "down" for the whole station (its deck's gravity):
 ## vertical ports are stair links, as a building's.
 ##
+## Built to hold in space, where nothing stands on the ground: every seam
+## between two modules tied under their walls by a plate, tubes and wings in
+## two plate layers, and a keel of plates under the core the lowest thing of
+## all -- the station's one anchor (its foundation row), so a part a hit cuts
+## off from the core comes away whole (Docs/RoomModules.md 7.3).
+##
 ##   var made := RoomStation.generate(RoomModules.library(), {"seed": 4, "modules": 20})
 ##   made.recipe   # the station as one build, its lowest row at 1, in sections
 ##
@@ -29,6 +35,7 @@ const RADIATOR := Vector2i(4, 8)
 const GAP := 24
 ## The furthest aside a bridged port may be of the other, studs.
 const SHIFT := 8
+const NONE := 1 << 30
 
 var wings := 0
 var radiators := 0
@@ -37,7 +44,8 @@ var docks := 0
 var _wing_colour := -1
 var _radiator_colour := -1
 var _boom_colour := -1
-var _tubes := []        ## the bridging tubes' bricks, added to the plan's
+var _tubes := []        ## the bridging tubes' and the ties' bricks, added to the plan's
+var keel_row := 0       ## the keel's lowest row, before the plan is moved (`_at`)
 
 
 ## {ok, why, recipe, plan, stats}: as RoomShell.generate.
@@ -64,8 +72,11 @@ func _station(library: Array, params: Dictionary) -> Dictionary:
 	if not bool(plan.ok):
 		return {"ok": false, "why": String(plan.why)}
 	docks = (1 if exit >= 0 else 0) + keep.size()
+	_ties()
 	(plan.adds as Array).append_array(_tubes)
+	_keel(plan)
 	plan.stats.merge({"docks": docks, "bridges": bridges, "wings": wings, "radiators": radiators}, true)
+	plan.keel = keel_row
 	plan.generator = "station"
 	plan.at = _at(plan)
 	var r := RoomGrow.lay(lib, plan, true)
@@ -103,11 +114,10 @@ func _docks() -> void:
 
 ## A tube cut to fit between two open ports that face each other across a
 ## clear gap (up to GAP studs along, SHIFT aside): rooms reached two ways, as
-## the ISS's are. Wide enough for both doorways, a stud of wall, floor and
-## ceiling round it, in the first port's wall brick; the two ports joined
-## through it.
+## the ISS's are. Wide enough for both doorways; a floor and a ceiling of two
+## plate layers (each seam bridged), walls of bricks on the floor's edge, tied
+## to both modules under their walls; the two ports joined through it.
 func _bridges() -> void:
-	var tube_adds := []
 	for i in open.size():
 		if bridges >= int(p.bridges):
 			break
@@ -130,22 +140,13 @@ func _bridges() -> void:
 			if not _free(cells):
 				continue
 			for c: Vector3i in cells:
-				var w := Vector2i(c.x, c.z)
-				if not occ.has(w):
-					occ[w] = []
-				(occ[w] as Array).append([c.y, c.y + 1, -1, false])
-			var wall: Array = a.get("wall", [])
-			var colour := int(wall[0]) if not wall.is_empty() else int(lib[placed[int(a.p)].m].turns[0].colour)
-			var material := int(wall[1]) if not wall.is_empty() else 0
-			for c: Vector3i in cells:
-				if _shell_of(a, d, span, c):
-					tube_adds.append(["plate_1x1", c, colour, material])
+				_occupy(c)
+			_tube(a, b, d, g.x, span)
 			a.used = true
 			b.used = true
 			joins.append({"a": i, "b": k, "loop": true})
 			bridges += 1
 			break
-	_tubes = tube_adds
 
 
 ## (free cells from a's outer face to b's along d, b's doorway aside of a's
@@ -160,24 +161,122 @@ func _gap(a_at: Vector3i, b_at: Vector3i, d: Vector3i) -> Vector2i:
 	return Vector2i(along + 1, aside)
 
 
-## The tube's cells: `span` across (from a's doorway's low side) by the
-## doorway's height, a stud of wall round it, `gap` long.
+## The tube's cells: `span` across (from a's doorway's low side) and a stud of
+## wall each side, from two plates under the doorway (its floor) to two over it
+## (its ceiling), `gap` long.
 func _tube_cells(a: Dictionary, d: Vector3i, gap: int, span: Vector2i) -> Array:
 	var across := Vector3i(absi(d.z), 0, absi(d.x))
 	var h := (a.size as Vector2i).y
 	var out := []
 	for k in gap:
 		for x in range(span.x - 1, span.y + 1):
-			for y in range(-1, h + 1):
+			for y in range(-2, h + 2):
 				out.append((a.at as Vector3i) + d * k + across * x + Vector3i(0, y, 0))
 	return out
 
 
-func _shell_of(a: Dictionary, d: Vector3i, span: Vector2i, c: Vector3i) -> bool:
+## The tube's bricks: its floor, walls and ceiling, and a tie at each end.
+func _tube(a: Dictionary, b: Dictionary, d: Vector3i, gap: int, span: Vector2i) -> void:
 	var across := Vector3i(absi(d.z), 0, absi(d.x))
-	var v: Vector3i = c - (a.at as Vector3i)
-	var x := v.x * across.x + v.z * across.z
-	return x < span.x or x >= span.y or v.y < 0 or v.y >= (a.size as Vector2i).y
+	var h := (a.size as Vector2i).y
+	var at: Vector3i = a.at
+	var wall: Array = a.get("wall", [])
+	var colour := int(wall[0]) if not wall.is_empty() else int(lib[placed[int(a.p)].m].turns[0].colour)
+	var material := int(wall[1]) if not wall.is_empty() else 0
+	# The tube in its own frame: o along d (0 .. gap - 1), x across (span.x - 1 .. span.y).
+	var cell := func(o: int, x: int, y: int) -> Vector3i:
+		return at + d * o + across * x + Vector3i(0, y, 0)
+	var w := span.y - span.x + 2
+	for layer in 2:
+		var y := -2 + layer
+		_slab_adds(_tubes, func(o: int, x: int) -> Vector3i: return cell.call(o, span.x - 1 + x, y),
+				gap, w, layer, colour, material)
+		_slab_adds(_tubes, func(o: int, x: int) -> Vector3i: return cell.call(o, span.x - 1 + x, h + layer),
+				gap, w, layer, colour, material)
+	for o in gap:
+		for x in [span.x - 1, span.y]:
+			_wall_column(_tubes, cell.call(o, x, 0), h, colour, material)
+	# Ties: under a's wall and the tube's first stud, under b's and its last.
+	# (Only where the module has its wall under the tube's end: a doorway aside
+	# of the other is tied under its own part of the end.)
+	for x in range(span.x, span.y, 2):
+		var ac: Vector3i = cell.call(-1, x, 0)
+		var lo_a := mini(_low_of(int(a.p), ac), _low_of(int(a.p), ac + across))
+		if lo_a != NONE:
+			_tie(ac, lo_a, cell.call(0, x, 0), at.y - 2, Vector3i.ZERO, d, colour, material)
+		var bt: Vector3i = cell.call(gap - 1, x, 0)
+		var lo_b := mini(_low_of(int(b.p), bt + d), _low_of(int(b.p), bt + d + across))
+		if lo_b != NONE:
+			_tie(bt + d, lo_b, bt, at.y - 2, Vector3i.ZERO, d, colour, material)
+
+
+## One layer of a two-layer slab `n_o` x `n_x` studs, `cell(o, x)` placing a
+## stud of it: layer 0 in 2x2 plates from its corner; layer 1 a stud in, 1x1s
+## round its rim -- every seam of one bridged by the other (StationKit.slab).
+func _slab_adds(out: Array, cell: Callable, n_o: int, n_x: int, layer: int, colour: int, material: int) -> void:
+	# The upper layer is a stud in both ways -- only across when it is too short
+	# along to be (a two-stud tube), where its plates still bridge every seam.
+	var so := layer if n_o > 2 else 0
+	var sx := layer
+	var o_end := n_o - so
+	var x_end := n_x - sx
+	for o in range(so, o_end, 2):
+		for x in range(sx, x_end, 2):
+			if o + 1 < o_end and x + 1 < x_end:
+				var lo: Vector3i = (cell.call(o, x) as Vector3i).min(cell.call(o + 1, x + 1))
+				out.append(["plate_2x2", lo, colour, material])
+				continue
+			for do in mini(2, o_end - o):
+				for dx in mini(2, x_end - x):
+					out.append(["plate_1x1", cell.call(o + do, x + dx), colour, material])
+	if layer == 1:
+		for o in n_o:
+			for x in n_x:
+				if (so > 0 and (o == 0 or o == n_o - 1)) or x == 0 or x == n_x - 1:
+					out.append(["plate_1x1", cell.call(o, x), colour, material])
+
+
+## A wall column `h` plates up from `at`: bricks, a plate where three no longer fit.
+func _wall_column(out: Array, at: Vector3i, h: int, colour: int, material: int) -> void:
+	var y := 0
+	while y < h:
+		var brick := y + 3 <= h
+		out.append(["brick_1x1" if brick else "plate_1x1", at + Vector3i(0, y, 0), colour, material])
+		y += 3 if brick else 1
+
+
+## A 2x2 plate under the seam between column `a` (its lowest brick at row
+## `lo_a`) and column `b` (at `lo_b`), across +`side` and one more: one plate
+## under the lower of the two, plates stacked under the other down to it.
+func _tie(a: Vector3i, lo_a: int, b: Vector3i, lo_b: int, side: Vector3i, d: Vector3i, colour: int,
+		material: int) -> void:
+	var u := mini(lo_a, lo_b) - 1
+	var across := Vector3i(absi(d.z), 0, absi(d.x))
+	for pair in [[a, lo_a], [b, lo_b]]:
+		var col: Vector3i = pair[0]
+		for y in range(u + 1, int(pair[1])):
+			for x in 2:
+				_tubes.append(["plate_1x1", Vector3i(col.x, y, col.z) + side + across * x, colour, material])
+	var lo := (a + side).min(b + side)
+	_tubes.append(["plate_2x2", Vector3i(lo.x, u, lo.z), colour, material])
+
+
+## The lowest row of placement `pi` in world column `col` (NONE: not its column).
+func _low_of(pi: int, col: Vector3i) -> int:
+	var pl: Dictionary = placed[pi]
+	var td: Dictionary = lib[pl.m].turns[pl.t]
+	var off: Vector3i = pl.off
+	var span = td.cols.get(Vector2i(col.x - off.x, col.z - off.z))
+	if span == null:
+		return NONE
+	return (span as Vector2i).x + off.y
+
+
+func _occupy(c: Vector3i) -> void:
+	var w := Vector2i(c.x, c.z)
+	if not occ.has(w):
+		occ[w] = []
+	(occ[w] as Array).append([c.y, c.y + 1, -1, false])
 
 
 func _free(cells: Array) -> bool:
@@ -188,8 +287,60 @@ func _free(cells: Array) -> bool:
 	return true
 
 
-## A wing or a radiator out from its spot, if nothing is where it goes.
-func _dress(_cuts: Dictionary, adds: Array, mk: Dictionary, off: Vector3i, _td: Dictionary) -> bool:
+## Every door join's seam tied under its two walls (a station holds by its
+## studs: nothing in space stands on the ground).
+func _ties() -> void:
+	for j: Dictionary in joins:
+		var a: Dictionary = open[j.a]
+		var b: Dictionary = open[j.b]
+		if String(a.kind) != "door":
+			continue
+		var fd: Vector2i = StructureSpaces.FACINGS[int(a.facing)]
+		var d := Vector3i(fd.x, 0, fd.y)
+		if b.at != (a.at as Vector3i) - d:
+			continue    # a bridging tube: tied by _tube
+		var wall: Array = a.get("wall", [])
+		var colour := int(wall[0]) if not wall.is_empty() else 0
+		var across := Vector3i(absi(d.z), 0, absi(d.x))
+		var at: Vector3i = a.at
+		for x in range(0, maxi((a.size as Vector2i).x - 1, 1), 2):
+			var la := _low_of(int(a.p), at - d + across * x)
+			var lb := _low_of(int(b.p), at + across * x)
+			if la != NONE and lb != NONE:
+				_tie(at - d, la, at, lb, across * x, d, colour, 0)
+
+
+## Under the core, the lowest thing of all: a keel of plates, the only bricks
+## at the station's lowest row -- in space its one anchor (the foundation), so
+## what a hit leaves joined to nothing that reaches the core comes away.
+func _keel(plan: Dictionary) -> void:
+	var core: Dictionary = placed[int(path[0])]
+	var td: Dictionary = lib[core.m].turns[core.t]
+	var off: Vector3i = core.off
+	var lo := Vector2i(1 << 30, 1 << 30)
+	var hi := -lo
+	for c: Vector2i in td.cols:
+		lo = Vector2i(mini(lo.x, c.x), mini(lo.y, c.y))
+		hi = Vector2i(maxi(hi.x, c.x), maxi(hi.y, c.y))
+	@warning_ignore("integer_division")
+	var mid := Vector2i((lo.x + hi.x) / 2, (lo.y + hi.y) / 2)
+	var core_low := int(td.min_y) + off.y
+	var g := core_low
+	for pl: Dictionary in placed:
+		g = mini(g, int(lib[pl.m].turns[pl.t].min_y) + (pl.off as Vector3i).y)
+	for a in plan.adds:
+		g = mini(g, (a[1] as Vector3i).y)
+	var colour := int(td.colour)
+	for y in range(g - 2, core_low):
+		plan.adds.append(["plate_2x2", Vector3i(mid.x + off.x, y, mid.y + off.z), colour, 0])
+	keel_row = g - 2
+
+
+## A wing or a radiator on its spot: flat on the module's roof at the wall and
+## out past it -- a boom two studs wide BOOM long, then the panel -- in two
+## plate layers, the upper a stud along so each seam is bridged and the whole
+## holds to the wall's top by its studs. If nothing is where it goes.
+func _dress(_cuts: Dictionary, adds: Array, mk: Dictionary, off: Vector3i, td: Dictionary) -> bool:
 	var kind := String(mk.kind)
 	if kind != "panel" and kind != "radiator":
 		return false
@@ -200,34 +351,40 @@ func _dress(_cuts: Dictionary, adds: Array, mk: Dictionary, off: Vector3i, _td: 
 	var d := Vector3i(fd.x, 0, fd.y)
 	var across := Vector3i(absi(fd.y), 0, absi(fd.x))
 	var at: Vector3i = (mk.at as Vector3i) + off
+	var top = td.cols.get(Vector2i((mk.at as Vector3i).x, (mk.at as Vector3i).z))
+	if top == null:
+		return false
+	var row: int = (top as Vector2i).y + off.y
+	# o along d from the wall's outer stud (-1), x across.
 	var face := at + d * int(mk.depth)
-	var boom := []
-	for o in BOOM:
-		boom.append(face + d * o)
-	# The panel in 2x2 tiles, flat, past the boom: each tile's low corner.
-	var tiles := []
+	face.y = 0
+	var cell := func(o: int, x: int, y: int) -> Vector3i:
+		return face + d * o + across * x + Vector3i(0, y, 0)
+	var parts := []
+	var colour := _wing_colour if kind == "panel" else _radiator_colour
 	@warning_ignore("integer_division")
-	for x in range(-size.x / 2, size.x / 2, 2):
-		for o in range(BOOM, BOOM + size.y, 2):
-			tiles.append((face + d * o).min(face + d * (o + 1)) + across * x)
-	var cells := boom.duplicate()
-	for t: Vector3i in tiles:
-		for dz in 2:
-			for dx in 2:
-				cells.append(t + Vector3i(dx, 0, dz))
+	var x0 := -size.x / 2
+	# The boom: plates two studs wide along it, the upper layer a stud on from the
+	# lower, its last one over the panel's first row.
+	for o in range(-1, BOOM, 2):
+		parts.append(["plate_2x2", (cell.call(o, 0, row) as Vector3i).min(cell.call(o + 1, 1, row)), _boom_colour, 0])
+	for o in range(0, BOOM + 1, 2):
+		parts.append(["plate_2x2", (cell.call(o, 0, row + 1) as Vector3i).min(cell.call(o + 1, 1, row + 1)),
+				_boom_colour, 0])
+	for layer in 2:
+		_slab_adds(parts, func(o: int, x: int) -> Vector3i: return cell.call(BOOM + o, x0 + x, row + layer),
+				size.y, size.x, layer, colour, 0)
+	var cells := []
+	for a in parts:
+		var sz := BuildRecipe.part_size(String(a[0]))
+		for z in sz.z:
+			for x in sz.x:
+				cells.append((a[1] as Vector3i) + Vector3i(x, 0, z))
+	if not _free(cells):
+		return false
 	for c: Vector3i in cells:
-		for s in occ.get(Vector2i(c.x, c.z), []):
-			if c.y < int(s[1]) and int(s[0]) <= c.y:
-				return false
-	for c: Vector3i in cells:
-		var w := Vector2i(c.x, c.z)
-		if not occ.has(w):
-			occ[w] = []
-		(occ[w] as Array).append([c.y, c.y + 1, -1, false])
-	for c: Vector3i in boom:
-		adds.append(["plate_1x1", c, _boom_colour, 0])
-	for t: Vector3i in tiles:
-		adds.append(["plate_2x2", t, _wing_colour if kind == "panel" else _radiator_colour, 0])
+		_occupy(c)
+	adds.append_array(parts)
 	if kind == "panel":
 		wings += 1
 	else:

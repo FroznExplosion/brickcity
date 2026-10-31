@@ -17,6 +17,11 @@ extends Resource
 @export var orbit_phase := 0.0
 @export var orbit_inclination := 0.0
 @export var orbit_node := 0.0
+## A station's module: "tower" -- a tower's (TowerRecipe), footprint in studs,
+## courses -- or "generated": grown from the station kit by RoomStation from
+## `orbital_seed` (Docs/RoomModules.md 7.3), fx/fz/courses then only its box
+## until it is grown.
+@export var layout := "tower"
 ## A station's module, as a tower's (TowerRecipe): footprint in studs, courses.
 @export var fx := 40
 @export var fz := 40

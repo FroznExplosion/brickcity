@@ -20,6 +20,8 @@ const FIELD := 250.0
 const DEPTH := 3000.0
 const SECTION_PLATES := 24
 const SECTION_STUDS := 32
+## A generated station's sections (BuildSections): its far shell a box round each.
+const SECTION_BRICKS := 2000
 ## A loose group over this many bricks leaves whole, as a drifting piece
 ## (Planets.md 11.12 step 6); smaller, crumbs.
 const DRIFT_MIN := 20
@@ -61,6 +63,10 @@ var _stud_arrays: Array = []
 var _template := -1
 var lay_ms := 0.0
 var template_ms := 0.0
+## A generated station's module (data.layout "generated"): the grown build, and
+## how long growing it took.
+var recipe: BuildRecipe
+var grow_ms := 0.0
 
 
 func setup(d: OrbitalData) -> void:
@@ -86,7 +92,7 @@ func setup(d: OrbitalData) -> void:
 	shell.material_override = brick_material
 	shell.transform = frame
 	look.add_child(shell)
-	if d.kind == "station":
+	if d.kind == "station" and d.layout != "generated":
 		_panels(w * 0.5, height * 0.5, maxf(w, dd) * 1.1, height * 0.7)
 	shell_body = StaticBody3D.new()
 	shell_body.name = "ShellBody"
@@ -171,6 +177,10 @@ func prepare() -> void:
 		bricks = BrickWorld.new()
 		_palette = TowerRecipe.bake_palette(bricks)
 		_stud_arrays = PieceMeshes.stud().surface_get_arrays(0)
+	if data.layout == "generated":
+		_prepare_generated()
+		template_ms = (Time.get_ticks_usec() - t0) / 1000.0
+		return
 	var c := bricks.create_chunk(Vector3i.ZERO, TowerRecipe.chunk_dims(data.fx, data.fz, data.courses))
 	var stair := _staircase()
 	TowerRecipe.build(bricks, c, _palette, data.fx, data.fz, data.courses, [stair.footprint()] if stair != null else [])
@@ -189,8 +199,12 @@ func activate() -> void:
 		return
 	prepare()
 	var t0 := Time.get_ticks_usec()
-	chunk = bricks.create_chunk(Vector3i.ZERO, TowerRecipe.chunk_dims(data.fx, data.fz, data.courses))
+	chunk = bricks.create_chunk(Vector3i.ZERO, recipe.chunk_dims() if recipe != null
+			else TowerRecipe.chunk_dims(data.fx, data.fz, data.courses))
 	bricks.load_template(_template, chunk)
+	if recipe != null:
+		# Its keel is its foundation: what a hit cuts off from the core comes away.
+		bricks.set_foundation_level(chunk, 0)
 	# As it was left.
 	if not _dead.is_empty():
 		bricks.kill_blocks(chunk, _dead)
@@ -290,8 +304,10 @@ func _after_kill(killed: PackedInt32Array) -> void:
 ## one as a rigid piece, drifting (step 6).
 func _solve() -> void:
 	_solve_due = false
-	var solve: Dictionary = bricks.solve_structure(chunk, 48, 3.0)
-	var groups: Array = solve.groups
+	# A generated station: by its studs alone (in orbit nothing weighs on it --
+	# Docs/Space.md 3.2), so a part cut off from the keel's comes away whole.
+	var groups: Array = bricks.find_detached_groups(chunk) if recipe != null \
+			else (bricks.solve_structure(chunk, 48, 3.0).groups as Array)
 	if groups.is_empty():
 		return
 	var all := PackedInt32Array()
@@ -436,6 +452,73 @@ func _cut_door(c: int) -> void:
 				if b >= 0 and not gone.has(b):
 					gone[b] = true
 					bricks.remove_block(c, b)
+
+
+# --- a generated station (Docs/RoomModules.md 7.3) ------------------------------
+
+## Grown from the station kit by its seed (~0.2 s, so here, ahead of arrival, not
+## at load), its template built; its box, its shell and its frame made to fit.
+func _prepare_generated() -> void:
+	var t0 := Time.get_ticks_usec()
+	var made := RoomStation.generate(StationKit.library(), {"seed": data.orbital_seed,
+			"modules": 12 + data.orbital_seed % 12, "spine": 3 + data.orbital_seed % 3, "section_bricks": SECTION_BRICKS})
+	grow_ms = (Time.get_ticks_usec() - t0) / 1000.0
+	if not bool(made.ok):
+		push_warning("[station] %s: %s -- a tower instead" % [data.orbital_name, made.why])
+		data.layout = "tower"
+		prepare()
+		return
+	recipe = made.recipe
+	var size: Vector3i = recipe.bounds()[1]
+	data.fx = size.x
+	data.fz = size.z
+	var stud := BrickWorld.get_stud_metres()
+	height = size.y * BrickWorld.get_plate_metres()
+	frame = Transform3D(Basis(), Vector3(-size.x * stud * 0.5, 0.0, -size.z * stud * 0.5))
+	var c := bricks.create_chunk(Vector3i.ZERO, recipe.chunk_dims())
+	recipe.build(bricks, c, _palette)
+	_template = bricks.save_template(c)
+	bricks.release_chunk(c)
+	_generated_shell()
+	print("[station] %s grown: %d modules, %d bricks, %d section(s) in %.0f ms" % [data.orbital_name,
+			int(made.stats.modules), recipe.size(), (recipe.meta.sections.sections as Array).size(), grow_ms])
+
+
+## Its shell from afar and its boxes until its bricks are solid: a box round each
+## section (BuildSections), in place of the tower's.
+func _generated_shell() -> void:
+	var cell := Vector3(BrickWorld.get_stud_metres(), BrickWorld.get_plate_metres(), BrickWorld.get_stud_metres())
+	var org := recipe.origin()
+	var boxes := []
+	for s: Dictionary in recipe.meta.sections.sections:
+		var lo := Vector3(BuildRecipe.cell_from(s.lo) - org) * cell
+		var hi := Vector3(BuildRecipe.cell_from(s.hi) - org + Vector3i.ONE) * cell
+		boxes.append(AABB(lo, hi - lo))
+	var im := ArrayMesh.new()
+	for b: AABB in boxes:
+		var bm := BoxMesh.new()
+		bm.size = b.size
+		var arrays := bm.get_mesh_arrays()
+		var v: PackedVector3Array = arrays[Mesh.ARRAY_VERTEX]
+		for i in v.size():
+			v[i] += b.get_center()
+		arrays[Mesh.ARRAY_VERTEX] = v
+		im.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
+	var mat := StandardMaterial3D.new()
+	mat.albedo_color = data.colour
+	shell.mesh = im
+	shell.material_override = mat
+	shell.transform = frame
+	for n in shell_body.get_children():
+		n.queue_free()
+	for b: AABB in boxes:
+		var cs := CollisionShape3D.new()
+		var shape := BoxShape3D.new()
+		shape.size = b.size
+		cs.shape = shape
+		cs.position = b.get_center()
+		shell_body.add_child(cs)
+	shell_body.transform = frame
 
 
 func _exit_tree() -> void:
