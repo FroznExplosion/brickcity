@@ -3740,6 +3740,7 @@ func _dress(id: int, chunk: int, solve: bool) -> void:
 	# A standing building never moves; its mesh is rewritten in place instead.
 	# See IslandManager.spawn for why that and interpolation do not mix.
 	mi.physics_interpolation_mode = Node.PHYSICS_INTERPOLATION_MODE_OFF
+	BrickMaterials.set_grain_origin(mi, world, registry.get_building(id).chunk)
 	add_child(mi)
 	_brick_nodes[id] = mi
 	_pending_bricks.append(id)
@@ -4615,6 +4616,8 @@ func _apply_band(id: int, at: int, mesh: ArrayMesh, arrays: Array) -> void:
 		node.set_instance_shader_parameter("weather_sway", _sway_of(id))
 		# A tree's crown takes a cap of snow; a building gets real cover.
 		node.set_instance_shader_parameter("weather_snowcap", 1.0 if _is_tree(id) else 0.0)
+		node.set_instance_shader_parameter("grain_origin",
+				(_brick_nodes[id] as MeshInstance3D).get_instance_shader_parameter("grain_origin"))
 		# In the parent's space, which already carries the chunk transform.
 		node.physics_interpolation_mode = Node.PHYSICS_INTERPOLATION_MODE_OFF
 		# Casting as the building does: a shadow shell may be standing in
@@ -14157,6 +14160,8 @@ func _far_coarse_show(id: int, mesh: ArrayMesh) -> void:
 	node.material_override = brick_material
 	node.set_instance_shader_parameter("weather_sway", _sway_of(id))
 	node.set_instance_shader_parameter("weather_snowcap", 1.0 if _is_tree(id) else 0.0)
+	node.set_instance_shader_parameter("grain_origin",
+			(parent as MeshInstance3D).get_instance_shader_parameter("grain_origin"))
 	node.physics_interpolation_mode = Node.PHYSICS_INTERPOLATION_MODE_OFF
 	node.cast_shadow = (parent as MeshInstance3D).cast_shadow
 	(parent as Node3D).add_child(node)
@@ -14261,6 +14266,7 @@ func _remesh_bricks(id: int) -> void:
 	mi.material_override = brick_material
 	mi.transform = b.xform
 	mi.physics_interpolation_mode = Node.PHYSICS_INTERPOLATION_MODE_OFF
+	BrickMaterials.set_grain_origin(mi, world, b.chunk)
 	add_child(mi)
 	_brick_nodes[id] = mi
 	if not _pending_bricks.has(id):

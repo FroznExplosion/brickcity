@@ -39,7 +39,7 @@ change in another area is that area's job.
 
 | Area | Owns |
 |---|---|
-| Build mode | `scripts/workshop*.gd`, `city_placer.gd`, `brick_palette.gd`, `shaped_parts.gd`, `build_recipe.gd`, `build_shell.gd`, `staircase_recipe.gd`, materials (`brick_materials.gd`, `shaders/brick*.gdshader*`, the material tables in `brick_grid.h`), `Docs/Parts/`, `builds/` |
+| Build mode | `scripts/workshop*.gd`, `city_placer.gd`, `brick_palette.gd`, `shaped_parts.gd`, `build_recipe.gd`, `build_shell.gd`, `staircase_recipe.gd`, materials (`brick_materials.gd`, `shaders/brick*.gdshader*`, the material tables in `brick_grid.h`, `textures/`), `Docs/Parts/`, `builds/` |
 | Terrain and water | `brick_terrain.*`, `terrain_*.gd`, `water_*.gd`, `underwater.gd`, `heightfield_*`, `shaders/terrain*`, `shaders/water*` |
 | Weapons and effects | `weapons/`, `fx/`, `autoload/`, `loot/` |
 | Disasters | `scripts/disasters/`, `shaders/disaster_*`, `tools/disaster_probe.gd`, `Docs/Disasters.md` |
@@ -63,7 +63,8 @@ The engine library is **not committed**; each worktree builds its own.
 
 - Console Godot: `C:\Users\lbaun\Downloads\godot_bin_tmp\Godot_v4.6.2-stable_win64_console.exe`.
 - Probes: `--headless --path . --script res://tools/<name>_probe.gd` (build mode:
-  `place_probe`, `city_place_probe`, `palette_probe`, `shaped_probe`, `scale_probe`;
+  `place_probe`, `city_place_probe`, `palette_probe`, `shaped_probe`, `scale_probe`,
+  `wood_probe` (materials; Docs/PbrWood.md);
   the workshop gate: `--path . res://scenes/workshop.tscn -- --gate`).
 - The brick mesher or its near tier (`bake_faces_into`, `chamfer_faces_into`,
   `brick_near.gd`, `brick.gdshader`): `brick_bevel_probe`, `brick_bevel_gap_probe`

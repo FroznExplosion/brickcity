@@ -918,8 +918,14 @@ PackedFloat32Array BrickWorld::chunk_studs(int chunk_id, int section, bool furni
         }
         const Archetype &a = archetypes[b.archetype];
         const Vector3i base = b.cell - c.origin;
-        const Color col = block_rgba(b.material, b.colour);
         const bool turn = stud_turn(a.size, base);
+        // The grain in the STUD's frame (printed_core.gdshaderinc reads it
+        // there): a turned stud's X is the chunk's Z.
+        GrainAxis grain = grain_axis(a.size, b.cell);
+        if (turn && grain != GRAIN_Y) {
+            grain = grain == GRAIN_X ? GRAIN_Z : GRAIN_X;
+        }
+        const Color col = block_rgba_grain(b.material, b.colour, grain);
 
         for (const Archetype::SurfaceCell &sc : a.top_cells) {
             if (a.up_at(sc.x, sc.z) != FACE_STUD) {
@@ -1402,7 +1408,8 @@ static void bake_faces_into(const Chunk &c, const std::vector<Archetype> &parts,
         }
         const Archetype &a = parts[b.archetype];
         const Vector3i base = b.cell - c.origin;
-        const Color col = block_rgba(b.material, b.colour);
+        // The grain axis rides in alpha (brick_grid.h grain_axis).
+        const Color col = block_rgba_grain(b.material, b.colour, grain_axis(a.size, b.cell));
         const Vector3 block_origin(base.x * cs.x, base.y * cs.y, base.z * cs.z);
         const int asize[3] = { a.size.x, a.size.y, a.size.z };
 
@@ -4776,7 +4783,7 @@ Array BrickWorld::build_mesh_internal(Chunk &c, MeshStats &st,
 
         const Vector3i asize = archetypes[b.archetype].size;
         const Vector3i base = b.cell - c.origin;
-        const Color col = block_rgba(b.material, b.colour);
+        const Color col = block_rgba_grain(b.material, b.colour, grain_axis(asize, b.cell));
 
         // Where this block starts, in chunk-local metres. Every face vertex is
         // written relative to it so the shader can find the BLOCK's outline --

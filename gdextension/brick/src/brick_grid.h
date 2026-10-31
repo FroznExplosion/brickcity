@@ -333,6 +333,45 @@ inline Color block_rgba(int material, int colour) {
     return Color(e.r, e.g, e.b, 1.0f - (float)m / 255.0f);
 }
 
+// The alpha byte has room to spare: the material takes its low five bits
+// (brick_material_id in brick_materials.gdshaderinc masks them), and the two
+// above say which way the brick's GRAIN runs -- the axis a wood brick was cut
+// along (Docs/PbrWood.md): 0 along X, 1 along Z, 2 up Y. Whatever only wants
+// the material reads past them.
+constexpr int BRICK_MATERIAL_ID_BITS = 5;
+static_assert(BRICK_MATERIAL_COUNT <= (1 << BRICK_MATERIAL_ID_BITS),
+        "materials outgrew alpha's five bits: widen BRICK_MATERIAL_ID_BITS here "
+        "and the mask in brick_materials.gdshaderinc");
+
+enum GrainAxis { GRAIN_X = 0, GRAIN_Z = 1, GRAIN_Y = 2 };
+
+/// Which way a part of `size` cells, its corner at grid `cell`, was cut: along
+/// its long side on plan, or upright when it stands more than twice as tall as
+/// it is long (a post). A square part says nothing, so its cell's hash picks --
+/// the GRID cell, not the chunk's, so a piece broken off keeps its grain.
+inline GrainAxis grain_axis(const Vector3i &size, const Vector3i &cell) {
+    const Vector3 cs = cell_size();
+    const float lx = (float)size.x * cs.x;
+    const float lz = (float)size.z * cs.z;
+    const float ly = (float)size.y * cs.y;
+    if (ly > 2.0f * (lx > lz ? lx : lz)) {
+        return GRAIN_Y;
+    }
+    if (size.x != size.z) {
+        return size.z > size.x ? GRAIN_Z : GRAIN_X;
+    }
+    const uint32_t h = ((uint32_t)cell.x * 73856093u) ^ ((uint32_t)cell.z * 19349663u);
+    return ((h >> 4) & 1u) != 0 ? GRAIN_Z : GRAIN_X;
+}
+
+/// block_rgba with the grain axis in alpha's spare bits.
+inline Color block_rgba_grain(int material, int colour, GrainAxis grain) {
+    const NamedColour &e = brick_material_colour_entry(material, colour);
+    const int m = (material >= 0 && material < BRICK_MATERIAL_COUNT) ? material : 0;
+    const int code = m | ((int)grain << BRICK_MATERIAL_ID_BITS);
+    return Color(e.r, e.g, e.b, 1.0f - (float)code / 255.0f);
+}
+
 } // namespace brick
 
 #endif // BRICK_GRID_H

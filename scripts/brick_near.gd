@@ -673,7 +673,7 @@ func _show_near(band: Band, mesh: ArrayMesh) -> void:
 	near.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	near.physics_interpolation_mode = Node.PHYSICS_INTERPOLATION_MODE_OFF
 	near.set_instance_shader_parameter("geo_bevel", 1.0)
-	for param in [&"weather_sway", &"weather_snowcap"]:
+	for param in [&"weather_sway", &"weather_snowcap", &"grain_origin"]:
 		var v: Variant = node.get_instance_shader_parameter(param)
 		if v != null:
 			near.set_instance_shader_parameter(param, v)

@@ -140,12 +140,30 @@ uniform float surface_rim : hint_range(0.0, 1.0) = 0.35;
 // second pass (brick_glass.gdshader) for see-through bricks.
 uniform bool glass_pass = false;
 
+// Solid PBR wood (brick_materials.gdshaderinc bm_wood_pbr; Docs/PbrWood.md).
+// Inside `wood_pbr_range` the full set -- colour, roughness and the normal
+// map; past it to `wood_far_range` colour and roughness alone, one texture
+// read; past that the brick's flat colour, which is the texture's mean. The
+// ranges are the cost knobs: the normal map is the second read and the frame.
+// 14 m is BrickNear.radius, where the bricks have their real bevels.
+group_uniforms wood;
+uniform float wood_pbr_range = 14.0;
+uniform float wood_far_range = 60.0;
+uniform float wood_bump : hint_range(0.0, 3.0) = 1.0;
+// The chunk's place on the grid, metres, modulo WOOD_PERIOD
+// (BrickMaterials.set_grain_origin): what makes a piece broken off a wall, a
+// chunk of its own, keep the grain it had in the wall. 0 is right for any
+// chunk alone.
+instance uniform vec3 grain_origin = vec3(0.0);
+
 varying vec2 v_uv;
 varying vec2 v_face;
 varying vec3 v_local;
 varying vec3 v_local_normal;
 // The object's up, world (weather_snow_model_up).
 varying vec3 v_model_up;
+// Which way the brick was cut (brick_grain_axis).
+varying flat int v_grain;
 
 void vertex() {
     v_uv = UV;
@@ -153,6 +171,7 @@ void vertex() {
     v_local = VERTEX;
     v_local_normal = normalize(NORMAL);
     v_model_up = MODEL_MATRIX[1].xyz;
+    v_grain = brick_grain_axis(COLOR.a);
     // Wind (weather.gdshaderinc): only what has a sway height set -- a tree, a
     // standing building -- and after v_local, so the print lines ride along.
     VERTEX = weather_sway_vertex(VERTEX, MODEL_MATRIX, TIME);
@@ -619,7 +638,15 @@ void fragment() {
     // --- the material's own surface ---------------------------------------
     int tex = MAT_TEX[mat];
     vec3 emission = vec3(0.0);
-    if (tex != 0 && v_face.x > 0.0 && v_face.y > 0.0) {
+    if (tex == 1 && dist < wood_far_range) {
+        // Solid wood, on every surface the brick has -- its faces, its real
+        // bevels, an authored part's -- since the block is 3D.
+        vec2 t = bm_wood_coords(v_local + grain_origin, v_grain);
+        float colour_w = 1.0 - smoothstep(wood_far_range * 0.75, wood_far_range, dist);
+        float bump = wood_bump * (1.0 - smoothstep(wood_pbr_range * 0.7, wood_pbr_range, dist));
+        bm_wood_pbr(t, dFdx(t), dFdy(t), dFdx(VERTEX), dFdy(VERTEX), colour_w, bump,
+                albedo, roughness, NORMAL);
+    } else if (tex > 1 && v_face.x > 0.0 && v_face.y > 0.0) {
         // Along the grain = along this face's longer side, which on a brick
         // is its length: a 1x6 of oak is a board, not end grain. An authored
         // face has no sides to go by: the part's own coordinates, as a stud's.
@@ -628,9 +655,7 @@ void fragment() {
             p = abs(v_local_normal.y) > 0.7 ? v_local.xz : vec2(v_local.x + v_local.z, v_local.y);
         }
         float tfade = 1.0 - smoothstep(print_fade_begin, print_fade_end * 2.0, dist);
-        if (tex == 1) {
-            albedo = bm_wood(albedo, p, seed, tfade, roughness);
-        } else if (tex == 2) {
+        if (tex == 2) {
             albedo = bm_metal(albedo, p, seed, tfade, roughness);
         } else if (tex == 3) {
             albedo = bm_stone(albedo, p, seed, tfade, roughness);

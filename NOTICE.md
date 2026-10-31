@@ -65,6 +65,12 @@ grants no trademark rights (§7(e)), and none are granted here — see §4 below
   its licence is `addons/limboai/LICENSE.md` and its logo's `LOGO_LICENSE.md`. The prebuilt
   Windows and Linux x86_64 libraries are included as published. Nothing here relicenses it.
 
+### Third-party textures
+
+- **Wood049** from [ambientCG](https://ambientcg.com/a/Wood049) (`textures/wood/`) — CC0 1.0,
+  public domain; credited here, not required. Its colour and roughness maps are packed into one
+  image and its normal map kept as published (Docs/PbrWood.md).
+
 ---
 
 ## 3. What is NOT licensed

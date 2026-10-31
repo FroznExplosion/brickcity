@@ -49,18 +49,24 @@ uniform float surface_rim : hint_range(0.0, 1.0) = 0.35;
 // Set by BrickMaterials.add_glass, with printed_glass.gdshader as the second
 // pass that draws see-through studs.
 uniform bool glass_pass = false;
+// Solid PBR wood, as brick.gdshader's uniforms of the same names.
+uniform float wood_pbr_range = 14.0;
+uniform float wood_far_range = 60.0;
+uniform float wood_bump : hint_range(0.0, 3.0) = 1.0;
 
 global uniform float lod_zoom;
 varying vec3 v_local;
 varying vec3 v_colour;
 varying vec3 v_flat_normal;
 varying flat int v_mat;
+varying flat int v_grain;
 
 void vertex() {
     v_local = VERTEX;
     v_colour = COLOR.rgb * tint.rgb;
     v_flat_normal = normalize(NORMAL);
     v_mat = brick_material_id(COLOR.a);
+    v_grain = brick_grain_axis(COLOR.a);
     // A stud's corners are softened in the shading (stud_round): each
     // vertex's normal leans out from the axis, so across a flat face the
     // interpolated normal turns a little the way a cylinder's does. The
@@ -172,7 +178,17 @@ void fragment() {
         vec2 p = abs(v_flat_normal.y) > 0.7 ? v_local.xz : vec2(v_local.x + v_local.z, v_local.y);
         float tfade = 1.0 - smoothstep(print_fade_begin, print_fade_end * 2.0, dist);
         if (tex == 1) {
-            albedo = bm_wood(albedo, p, 0.0, tfade, roughness);
+            // The same block of wood, cut the same way as its brick -- in the
+            // stud's own frame (a stud is one shared mesh, and does not know
+            // where it stands in the brick), so the grain runs the brick's way
+            // but does not continue it.
+            if (dist < wood_far_range) {
+                vec2 t = bm_wood_coords(v_local, v_grain);
+                float colour_w = 1.0 - smoothstep(wood_far_range * 0.75, wood_far_range, dist);
+                float bump = wood_bump * (1.0 - smoothstep(wood_pbr_range * 0.7, wood_pbr_range, dist));
+                bm_wood_pbr(t, dFdx(t), dFdy(t), dFdx(VERTEX), dFdy(VERTEX), colour_w, bump,
+                        albedo, roughness, NORMAL);
+            }
         } else if (tex == 2) {
             albedo = bm_metal(albedo, p, 0.0, tfade, roughness);
         } else if (tex == 3) {
