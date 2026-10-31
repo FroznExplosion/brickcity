@@ -167,6 +167,11 @@ func _run() -> void:
 			"%s, %.5f" % [str(worst_o), radial])
 
 	_worlds(uni)
+	var near := uni.nearest(0, 10)
+	var d0 := uni.system_position(near[0]).length()
+	var d9 := uni.system_position(near[9]).length()
+	_check("the nearest systems, nearest first, the same every time", near.size() == 10 and d0 <= d9
+			and near == uni.nearest(0, 10) and not near.has(0), "%.0f to %.0f ly" % [d0, d9])
 	_frames(hs, home)
 
 

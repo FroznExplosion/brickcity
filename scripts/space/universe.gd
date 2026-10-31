@@ -10,6 +10,8 @@ extends RefCounted
 ## the map and for jumps (step 5), in light years on a disc.
 const DISC_LY := 40000.0
 const THICK_LY := 600.0
+## How many systems there are to go to.
+const SYSTEMS := 400
 
 var universe_seed := 1
 
@@ -31,6 +33,20 @@ func system_position(i: int) -> Vector3:
 	var r := DISC_LY * sqrt(rng.randf())
 	var a := rng.randf() * TAU
 	return Vector3(r * cos(a), rng.randfn(0.0, THICK_LY / 3.0), r * sin(a))
+
+
+## The `n` systems nearest system `i`, nearest first.
+func nearest(i: int, n: int) -> Array[int]:
+	var from := system_position(i)
+	var d := []
+	for k in SYSTEMS:
+		if k != i:
+			d.append([from.distance_squared_to(system_position(k)), k])
+	d.sort_custom(func(a: Array, b: Array) -> bool: return a[0] < b[0])
+	var out: Array[int] = []
+	for e in d.slice(0, n):
+		out.append(int(e[1]))
+	return out
 
 
 ## System `i`; `home_data` the home planet, for system 0.

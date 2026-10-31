@@ -60,10 +60,17 @@ signal anchor_changed(old_frame: Node3D, new_frame: Node3D, kick: Vector3)
 ## shifted while it slept, takes `offset`.
 signal woke(frame: Node3D, offset: Vector3)
 
+## The system is another now (step 5): nothing of the last is left but home.
+signal jumped(index: int)
+
 ## A station nearer than this is the velocity flight matches (docking).
 const MATCH_STATION := 6000.0
 
 var sys: StarSystem
+var universe: Universe
+var system_index := 0
+var _home_sys: StarSystem
+var _home_body: PlanetBody
 ## By index in sys.bodies; home's is the scene's own PlanetBody.
 var bodies: Array[PlanetBody] = []
 ## By index in sys.orbitals.
@@ -115,9 +122,21 @@ func setup(p_sys: StarSystem, home_body: PlanetBody = null) -> void:
 	sys = p_sys
 	name = "System_" + sys.system_name
 	process_priority = -1
+	_home_sys = p_sys
+	_home_body = home_body
+	_build_bodies()
+	if home_body != null:
+		anchor = home_body
+	_build_star()
+	_place()
+
+
+## The bodies, stations and satellites of `sys`.
+func _build_bodies() -> void:
 	for i in sys.bodies.size():
-		if i == sys.home and home_body != null:
-			bodies.append(home_body)
+		if i == sys.home and _home_body != null:
+			bodies.append(_home_body)
+			_home_body.visible = true
 			continue
 		var b := PlanetBody.new()
 		add_child(b)
@@ -132,12 +151,61 @@ func setup(p_sys: StarSystem, home_body: PlanetBody = null) -> void:
 		st.process_mode = Node.PROCESS_MODE_DISABLED
 		stations.append(st)
 		# Home's stations' bricks while the scene loads.
-		if sys.orbitals[k].parent == sys.home and home_body != null:
+		if sys.orbitals[k].parent == sys.home and _home_body != null:
 			st.prepare()
-	if home_body != null:
-		anchor = home_body
-	_build_star()
+
+
+## At the ship's controls in open space: its jump drive works.
+func can_jump() -> bool:
+	return ship != null and ship.piloted and ship.ref == null
+
+
+## Swap the system round the ship for system `index` of the universe. All of
+## this one goes but the home planet: hidden, with all that sleeps on it, and
+## kept with its StarSystem, so it comes back on its own orbit. The ship is set
+## down short of the new system's first settled world (else its first planet),
+## on the sun's side.
+func jump(index: int) -> bool:
+	if not can_jump() or index == system_index:
+		return false
+	var t0 := Time.get_ticks_usec()
+	if _bake_task >= 0:
+		WorkerThreadPool.wait_for_task_completion(_bake_task)
+		_bake_task = -1
+		_bake_result = {}
+	_bake_body = null
+	for b in bodies:
+		if b == _home_body:
+			b.visible = false
+		else:
+			built.erase(b)
+			_sleepers.erase(b)
+			_left_at.erase(b)
+			b.queue_free()
+	for st in stations:
+		st.queue_free()
+	bodies.clear()
+	stations.clear()
+	trees_of.clear()
+	system_index = index
+	sys = _home_sys if index == 0 else universe.system(index)
+	_build_bodies()
+	(star_look.mesh as SphereMesh).radius = sys.star_radius
+	(star_look.mesh as SphereMesh).height = sys.star_radius * 2.0
+	(star_look.material_override as StandardMaterial3D).albedo_color = sys.star_color
+	var at := 0
+	for i in sys.bodies.size():
+		if sys.bodies[i].parent < 0 and (not sys.bodies[i].towns.is_empty() or i == sys.home):
+			at = i
+			break
+	var p := sys.pos(at, t)
+	var off := sys.bodies[at].radius * SHELL * 1.3 + 30000.0
+	ship.rel = Transform3D(ship.rel.basis, p * (1.0 - off / p.length()))
+	ship.vel = sys.vel(at, t)
 	_place()
+	print("[system] jumped to %s (%d): %d bodies in %.1f ms" % [sys.system_name, index, bodies.size(), (Time.get_ticks_usec() - t0) / 1000.0])
+	jumped.emit(index)
+	return true
 
 
 func index_of(b: PlanetBody) -> int:
@@ -304,7 +372,7 @@ func _populate(b: PlanetBody) -> void:
 ## A world asleep is still seen from space: its far tier, while it could show.
 func _far_tiers(e: Vector3) -> void:
 	for b in built:
-		if b != anchor and ((b as PlanetBody).global_position - e).length() < FAR_TIER_AT:
+		if b != anchor and b in bodies and ((b as PlanetBody).global_position - e).length() < FAR_TIER_AT:
 			(built[b] as PlanetBuildings).far_tier()
 
 
