@@ -40,6 +40,8 @@ const HABITABLE := 2000000.0
 ## Sea-level temperature a world at the habitable orbit has (K), for the
 ## warmth of the rest: T ~ (L / a^2)^(1/4).
 const T_HOME_K := 288.0
+## Worlds with towns: temperature offset, C.
+const SETTLED := Vector2(-70.0, 50.0)
 
 
 # --- where things are --------------------------------------------------------
@@ -145,6 +147,23 @@ func sun_local(i: int, t: float) -> Vector3:
 	return spin(i, t).inverse() * (-pos(i, t)).normalized()
 
 
+## The orbit phase that starts body `i` in `dir`'s summer: its pole toward the
+## star at time 0, on `dir`'s side (planet-local).
+func best_season(i: int, dir: Vector3) -> void:
+	var d := bodies[i]
+	var axis := d.tilt * d.climate_axis.normalized()
+	var side := signf(dir.dot(d.climate_axis.normalized()))
+	var best := d.orbit_phase
+	var best_dot := -2.0
+	for k in 48:
+		d.orbit_phase = TAU * k / 48.0
+		var c := (-pos(i, 0.0)).normalized().dot(axis) * side
+		if c > best_dot:
+			best_dot = c
+			best = d.orbit_phase
+	d.orbit_phase = best
+
+
 ## The spin phase that puts the sun straight over planet-local `dir` of body
 ## `i` at time `t` (noon there), keeping its day.
 func noon_phase(i: int, dir: Vector3, t: float) -> float:
@@ -225,7 +244,38 @@ static func generate(p_seed: int, home_data: PlanetData = null) -> StarSystem:
 			s.bodies.append(_moon(s, rng, pi, mo))
 			mo *= rng.randf_range(1.3, 1.6)
 	_add_orbitals(s)
+	_settle(s)
 	return s
+
+
+## Worlds with air, neither boiling nor frozen through, have towns: 2-5 and
+## sometimes a landmark, on land where there is land. Their pads go into the
+## data now: the ground and the impostor are made from it.
+static func _settle(s: StarSystem) -> void:
+	for i in s.bodies.size():
+		var d := s.bodies[i]
+		if i == s.home or d.parent >= 0 or not d.has_air or d.t_offset < SETTLED.x or d.t_offset > SETTLED.y:
+			continue
+		var rng := RandomNumberGenerator.new()
+		rng.seed = hash(str("towns:", d.planet_seed))
+		for k in rng.randi_range(2, 5):
+			var dir := _land(d, rng)
+			d.towns.append(dir)
+			d.pads.append(PlanetBuildings.town_pad(d, dir, 95.0, 70.0))
+		if rng.randf() < 0.5:
+			var dir := _land(d, rng)
+			d.landmarks.append(dir)
+			d.pads.append(PlanetBuildings.town_pad(d, dir, 30.0, 40.0))
+
+
+## A direction over the sea, if a few tries find one.
+static func _land(d: PlanetData, rng: RandomNumberGenerator) -> Vector3:
+	var dir := _random_dir(rng)
+	for _k in 12:
+		if is_nan(d.sea_level) or d.relief(dir) > d.sea_level + 2.0:
+			break
+		dir = _random_dir(rng)
+	return dir
 
 
 ## Stations and satellites round the planets with air (home: one station,
@@ -274,6 +324,7 @@ static func _planet(s: StarSystem, rng: RandomNumberGenerator, k: int) -> Planet
 			rng.randf_range(0.35, 0.7), 1.0)
 	d.has_air = rng.randf() < 0.8
 	d.sea_level = rng.randf_range(-25.0, 5.0) if d.has_air else NAN
+	d.tint = Color.WHITE.lerp(Color.from_hsv(rng.randf(), 0.5, 1.0), rng.randf_range(0.1, 0.4))
 	return d
 
 
@@ -301,6 +352,7 @@ static func _moon(s: StarSystem, rng: RandomNumberGenerator, parent: int, a: flo
 	# Tidally locked: one turn an orbit, about the orbit's own axis, so the same
 	# face is always to its planet.
 	d.day = d.orbit_period
+	d.tint = Color.WHITE.lerp(Color.from_hsv(rng.randf(), 0.25, 1.0), rng.randf_range(0.2, 0.6))
 	d.climate_axis = Vector3.UP
 	d.tilt = _plane(d)
 	d.spin_phase = d.orbit_phase

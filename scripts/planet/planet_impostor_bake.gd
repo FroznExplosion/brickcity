@@ -32,7 +32,8 @@ static func bake(data: PlanetData, width := 512, height_px := 256, textures := t
 	# only; the ground on foot has the trees themselves (11.10).
 	var canopy := [Color(0.0, 0.0, 0.0), Color(0.07, 0.15, 0.09), Color(0.20, 0.24, 0.10),
 			Color(0.11, 0.22, 0.09), Color(0.15, 0.25, 0.10), Color(0.0, 0.0, 0.0),
-			Color(0.22, 0.24, 0.10), Color(0.09, 0.25, 0.08)]
+			Color(0.22, 0.24, 0.10), Color(0.09, 0.25, 0.08),
+			Color(0.0, 0.0, 0.0), Color(0.0, 0.0, 0.0), Color(0.0, 0.0, 0.0)]
 	var t0 := Time.get_ticks_msec()
 	for y in height_px:
 		for x in width:

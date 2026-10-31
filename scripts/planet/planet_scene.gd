@@ -69,6 +69,7 @@ var _drive_gate := false
 var _system_gate := false
 var _ship_gate := false
 var _dock_gate := false
+var _worlds_gate := false
 ## The ship parked by the spawn (11.12 step 3), and whether the player flies it.
 var ship: SpaceShip
 var piloting := false
@@ -114,7 +115,8 @@ func _ready() -> void:
 	_system_gate = "--gate=system" in OS.get_cmdline_user_args()
 	_ship_gate = "--gate=ship" in OS.get_cmdline_user_args()
 	_dock_gate = "--gate=dock" in OS.get_cmdline_user_args()
-	_gate = _gate or _system_gate or _ship_gate or _dock_gate or _pawn_gate or _mech_gate or _tank_gate or _soldier_gate or _squad_gate or _travel_gate or _far_gate or _drive_gate or _trees_gate or _bricks_gate or _damage_gate or _fall_gate or _hits_gate or _topple_gate or _pieces_ai_gate or _storey_gate
+	_worlds_gate = "--gate=worlds" in OS.get_cmdline_user_args()
+	_gate = _gate or _system_gate or _ship_gate or _dock_gate or _worlds_gate or _pawn_gate or _mech_gate or _tank_gate or _soldier_gate or _squad_gate or _travel_gate or _far_gate or _drive_gate or _trees_gate or _bricks_gate or _damage_gate or _fall_gate or _hits_gate or _topple_gate or _pieces_ai_gate or _storey_gate
 	data = PlanetData.new()
 	data.planet_name = "proto"
 	# Towns and landmarks: their pads go into the ground before it is built.
@@ -219,6 +221,8 @@ func _ready() -> void:
 			_run_ship_gate()
 		elif _dock_gate:
 			_run_dock_gate()
+		elif _worlds_gate:
+			_run_worlds_gate()
 		else:
 			_run_gate()
 
@@ -233,7 +237,13 @@ func _structure_hit(point: Vector3, _dir: Vector3, shot: Dictionary) -> void:
 				return
 		if system.station != null and system.station.damage(point, shot):
 			return
-	buildings.damage(point, shot)
+	_buildings_here().damage(point, shot)
+
+
+## The buildings of the world the player is on.
+func _buildings_here() -> PlanetBuildings:
+	var b := system.buildings_here() if system != null else null
+	return b if b != null else buildings
 
 
 ## The ship ran into something at speed: it is blasted there.
@@ -241,7 +251,7 @@ func _on_rammed(point: Vector3, speed: float) -> void:
 	var shot := {"blast": true, "radius": clampf(speed * 0.15, 1.5, 5.0), "hp": 0}
 	if system.station != null and system.station.damage(point, shot):
 		return
-	buildings.damage(point, shot)
+	_buildings_here().damage(point, shot)
 
 
 ## The pawn, its controller, camera, gun and arms, standing at `feet`, looking
@@ -416,14 +426,16 @@ const SEE_FAR := PlanetSystem.SEE_FAR
 
 
 ## The star system round the planet (Planets.md 11.12): system 0 of the
-## universe, the planet on its habitable orbit, the spawn at noon. Every gate
+## universe, the planet on its habitable orbit, the spawn at noon in summer. Every gate
 ## but the system's own runs with the clock stopped.
 func _build_system() -> void:
 	var sys := Universe.new(1).system(0, data)
+	sys.best_season(sys.home, spawn_dir)
 	data.spin_phase = sys.noon_phase(sys.home, spawn_dir, 0.0)
 	system = PlanetSystem.new()
 	add_child(system)
 	system.setup(sys, planet)
+	system.built[planet] = buildings
 	system.frozen = _gate and not (_system_gate or _dock_gate)
 	system.anchor_changed.connect(_on_anchor_changed)
 	system.woke.connect(_on_woke)
@@ -539,9 +551,6 @@ func _process(_delta: float) -> void:
 	if system != null:
 		walker.match_velocity = system.match_velocity(walker.global_position)
 		walker.reach = body.altitude_of(walker.global_position)
-		# Asleep, the home planet's far tier is still what space sees of its towns.
-		if not _home_awake():
-			buildings.far_tier()
 	if piloting:
 		walker.global_position = ship.global_transform * ship.seat()
 		walker.inertia = Vector3.ZERO
@@ -561,8 +570,11 @@ func _process(_delta: float) -> void:
 		day = smoothstep(-0.18, 0.12, system.sun_height) if air > 0.0 else system.sunlight
 	var night := Color(0.03, 0.04, 0.08)
 	var dusk := (1.0 - absf(day * 2.0 - 1.0)) * 0.5
-	var haze := Color(0.70, 0.77, 0.84).lerp(Color(0.85, 0.45, 0.25), dusk).lerp(night, 1.0 - day) * air
-	sky_mat.sky_top_color = Color(0.36, 0.53, 0.78).lerp(night, 1.0 - day) * air
+	# Its own air's colour, against the home planet's.
+	var ac := body.data.atmosphere_color
+	var cast := Color(ac.r / 0.45, ac.g / 0.65, ac.b)
+	var haze := (Color(0.70, 0.77, 0.84) * cast).lerp(Color(0.85, 0.45, 0.25), dusk).lerp(night, 1.0 - day) * air
+	sky_mat.sky_top_color = (Color(0.36, 0.53, 0.78) * cast).lerp(night, 1.0 - day) * air
 	sky_mat.sky_horizon_color = haze
 	# Under the horizon only a sliver of sky ever shows past the ground: haze.
 	sky_mat.ground_horizon_color = haze
@@ -585,7 +597,7 @@ func _process(_delta: float) -> void:
 		hud.text = "%s  alt %.0f m  %.0f fps  view %d  shifts %d (last %.1f ms)  buildings %d near, %d far  %s" % [
 				"on foot (F flies)" if on_foot else ("FLY %.0f m/s (F lands)" % walker.fly_speed if walker.flying else "walk"), alt,
 				Engine.get_frames_per_second(), walker.viewer.view_distance, PlanetFrame.shifts,
-				PlanetFrame.last_us / 1000.0, buildings.near_count, buildings.far_count,
+				PlanetFrame.last_us / 1000.0, _buildings_here().near_count, _buildings_here().far_count,
 				"(waiting for ground)" if walker.frozen and not piloting else ""]
 		if piloting:
 			hud.text += "\nSHIP  %.0f m/s  %.0f m over the ground  (E leaves the seat; WASD, Space/Ctrl, mouse, Z/C roll, Shift cruise)" % [
@@ -1791,6 +1803,11 @@ func _system_cross(b: PlanetBody, dir: Vector3) -> bool:
 	while Time.get_ticks_msec() - t0 < 120000:
 		var d := dir if dir != Vector3.ZERO else b.dir_of(walker.global_position)
 		var goal := b.global_transform * (d * (b.data.radius + b.data.height(d) + 40.0))
+		# Round the planet, not through it.
+		var here := b.global_transform.affine_inverse() * walker.global_position
+		var ang := here.normalized().angle_to(d)
+		if ang > 0.4 and here.length() < b.data.radius * 6.0:
+			goal = b.global_transform * (here.normalized().slerp(d, 0.4 / ang) * maxf(here.length(), b.data.radius + 3000.0))
 		var to := goal - walker.global_position
 		if to.length() < 5.0:
 			break
@@ -1810,6 +1827,73 @@ func _system_cross(b: PlanetBody, dir: Vector3) -> bool:
 	walker.frozen = false
 	await get_tree().create_timer(3.0).timeout
 	return true
+
+
+# The worlds' gate (11.12 step 4): down onto a generated world with towns, its
+# buildings near, in bricks, solid and hit; trees where its biomes have them;
+# off again, its towns still on the sphere from space.
+
+func _run_worlds_gate() -> void:
+	var t0 := Time.get_ticks_msec()
+	while walker.frozen and Time.get_ticks_msec() - t0 < 60000:
+		await _frames(1)
+	await get_tree().create_timer(1.0).timeout
+	var world: PlanetBody = null
+	for b in system.bodies:
+		if b != planet and not b.data.towns.is_empty() and world == null:
+			world = b
+	_check("a generated world with towns in the home system", world != null)
+	print("[planet] worlds gate: %s, r %.0f m, %+.0f C, %d towns, %d landmarks, %d pads" % [world.data.planet_name,
+			world.data.radius, world.data.t_offset, world.data.towns.size(), world.data.landmarks.size(), world.data.pads.size()])
+	# Off home, to its town nearest the sun, 90 m from its middle.
+	var noon := world.global_basis.inverse() * (system.star.global_position - world.global_position).normalized()
+	var town: Vector3 = world.data.towns[0]
+	for d in world.data.towns:
+		if (d as Vector3).dot(noon) > town.dot(noon):
+			town = d
+	var side := town.cross(Vector3.UP if absf(town.y) < 0.9 else Vector3.RIGHT).normalized()
+	var at := town.rotated(side, 150.0 / world.data.radius)
+	walker.flying = true
+	walker.pitch = 0.0
+	var ok_there: bool = await _system_cross(world, at)
+	_check("down on %s: its anchor, its ground" % world.data.planet_name, ok_there and system.anchor == world and world.terrain != null)
+	var over := world.altitude_of(walker.global_position) - world.data.height(world.dir_of(walker.global_position))
+	_check("standing on it", walker.is_on_floor() and absf(over) < 0.6, "%.2f m, g %.1f" % [over, Gravity.strength()])
+	var pb := system.buildings_here()
+	_check("its buildings are made, its town's shells near", pb != null and pb.sites.size() > 0 and pb != buildings and pb.near_count > 0,
+			"%d sites, %d near" % [pb.sites.size() if pb != null else 0, pb.near_count if pb != null else 0])
+	t0 = Time.get_ticks_msec()
+	while pb.bricked_count == 0 and Time.get_ticks_msec() - t0 < 30000:
+		await _frames(1)
+	_check("the nearest in bricks and solid", pb.bricked_count > 0, "%d bricked" % pb.bricked_count)
+	await _shot("worlds_gate_town")
+	var near := -1
+	for i in pb.sites.size():
+		if pb.sites[i].bricked:
+			near = i
+			break
+	var s = pb.sites[near]
+	var wall: Vector3 = world.global_transform * (s.frame * Vector3(s.fx * 0.175, 3.0, 0.2))
+	_structure_hit(wall, Vector3.ZERO, {"blast": true, "radius": 3.0, "hp": 0})
+	await get_tree().create_timer(1.0).timeout
+	_check("a blast at a wall of it is taken by that world's bricks", pb.bricks_killed > 0, "%d bricks" % pb.bricks_killed)
+	await _shot("worlds_gate_hit")
+	_check("its trees are set up (none where its biomes have none)", system.trees_of.has(world))
+	# Off again: the towns still on the sphere.
+	var up := Gravity.up_at(walker.global_position)
+	walker.frozen = true
+	t0 = Time.get_ticks_msec()
+	while world.altitude_of(walker.global_position) < 100000.0 and Time.get_ticks_msec() - t0 < 30000:
+		walker.global_position += up * maxf(world.altitude_of(walker.global_position) * 0.05, 5.0)
+		await get_tree().physics_frame
+	await _look_back(world, "worlds_gate_from_space")
+	_check("from 100 km it sleeps", system.anchor != world)
+	if DisplayServer.get_name() != "headless":
+		_check("and its towns are still on it", pb.far_count > 5, "%d drawn" % pb.far_count)
+	print("[planet] worlds gate: %d handoffs; frames: worst %.1f ms; over 40 ms in play: %d %s" % [
+			system.handoffs, _worst_ms, _play_hitches.size(), _play_hitches])
+	print("[planet] gate: %d ok, %d FAIL" % [_ok, _fail])
+	get_tree().quit(1 if _fail > 0 else 0)
 
 
 # The docking gate (11.12 step 3b), the clock running: the ship rammed into a

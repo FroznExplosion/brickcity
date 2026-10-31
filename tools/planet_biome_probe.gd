@@ -115,10 +115,10 @@ func _run() -> void:
 		line.append("%s %.1f%%" % [PlanetBiomes.TABLE[i].name, 100.0 * int(count.get(i, 0)) / n])
 	print("[biomes] share of the ground: " + ", ".join(line))
 	var absent := []
-	for i in PlanetBiomes.TABLE.size():
+	for i in PlanetBiomes.OTHER_WORLDS:
 		if int(count.get(i, 0)) < n * 0.005:
 			absent.append(PlanetBiomes.TABLE[i].name)
-	_check("every biome turns up (>= 0.5% of the planet)", absent.is_empty(), "rare: %s" % ", ".join(absent))
+	_check("every biome of a world like this turns up (>= 0.5% of the planet)", absent.is_empty(), "rare: %s" % ", ".join(absent))
 	# Colder poleward: the mean temperature in bands of latitude about the axis.
 	var ax := data.climate_axis.normalized()
 	var x0 := ax.cross(Vector3.FORWARD).normalized()
