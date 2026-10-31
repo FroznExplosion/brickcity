@@ -15,7 +15,10 @@ extends SceneTree
 ##             the outer wall (glazed in a glass tower)
 ##   reach     every room of the tower -- the shell's and the modules' -- reached
 ##             through the air inside from the way in, and the roof
-##   bare      no module: each side split into rooms room_max long, all reached
+##   bare      no module: the storeys split into rooms room_max long at most, all reached
+##   L         a drawn footprint (an L): nothing laid outside it, every room reached
+##   setback   3 studs in every 2 storeys, a rail round each terrace, every room reached
+##   lift      a shaft beside the hall, a stop a storey, open ground to top
 ##   seed      the same seed the same tower; another, another
 ##   small     a shell too small for its hall and corridor says so
 
@@ -160,7 +163,7 @@ func _run() -> void:
 	var reach_bad := []
 	for m in oks:
 		var cells := _cells(m.recipe)
-		var seen := _flood(cells, Vector3i(6, 2, 2), 44, 28, 4 * pitch + 1)
+		var seen := _flood(cells, Vector3i(10, 2, 14), _inside_box(44, 28, 4 * pitch + 1))
 		var lost := 0
 		for sp in m.recipe.meta.structure.spaces:
 			if not seen.has(Vector3i(int(sp.seed[0]), int(sp.seed[1]), int(sp.seed[2]))):
@@ -180,20 +183,112 @@ func _run() -> void:
 			str(again.plan.placed) == str(made[2].plan.placed) and str(made[2].plan.placed) != str(made[3].plan.placed)
 			and again.recipe.size() == made[2].recipe.size())
 
-	# No modules at all: each side split into rooms of room_max, each reached.
+	# No modules at all: the storey split into rooms no longer than room_max
+	# (and the wall) either way, each reached.
 	var bare := RoomShell.generate(lib, {"seed": 2, "width": 44, "depth": 28, "storeys": 4, "fill": 0.0})
-	var bare_cells := _cells(bare.recipe)
-	var bare_seen := _flood(bare_cells, Vector3i(6, 2, 2), 44, 28, 4 * pitch + 1)
+	var bare_seen := _flood(_cells(bare.recipe), Vector3i(10, 2, 14), _inside_box(44, 28, 4 * pitch + 1))
 	var offices := 0
 	var bare_lost := 0
+	var too_long := 0
 	for sp in bare.recipe.meta.structure.spaces:
 		if String(sp.kind) == "office":
 			offices += 1
+			var lo := Vector2i(1 << 30, 1 << 30)
+			var hi := -lo
+			for c in sp.columns:
+				lo = Vector2i(mini(lo.x, int(c[0])), mini(lo.y, int(c[1])))
+				hi = Vector2i(maxi(hi.x, int(c[0])), maxi(hi.y, int(c[1])))
+			if hi.x - lo.x + 1 > 14 or hi.y - lo.y + 1 > 14:
+				too_long += 1
 		if not bare_seen.has(Vector3i(int(sp.seed[0]), int(sp.seed[1]), int(sp.seed[2]))):
 			bare_lost += 1
-	_ok("no module fits: each side split into rooms (3 a side here), each with its doorway, all reached",
-			bare.ok and bare.plan.placed.is_empty() and offices == 4 * 2 * 3 and bare_lost == 0,
-			"%d room(s), %d not reached" % [offices, bare_lost])
+	_ok("no module fits: the storeys split into rooms no longer than room_max either way, all reached",
+			bare.ok and bare.plan.placed.is_empty() and offices >= 4 * 6 and too_long == 0 and bare_lost == 0,
+			"%d room(s), %d too long, %d not reached" % [offices, too_long, bare_lost])
+
+	# A drawn footprint: an L (the box with its north-east quarter gone).
+	var ell := []
+	for z in 28:
+		for x in 44:
+			if not (x >= 26 and z >= 16):
+				ell.append(Vector2i(x, z))
+	var el := RoomShell.generate(lib, {"seed": 5, "footprint": ell, "storeys": 3})
+	var el_bad := []
+	var el_lost := 0
+	if el.ok:
+		var cells := _cells(el.recipe)
+		var foot := {}
+		for c: Vector2i in ell:
+			foot[c + Vector2i(1, 1)] = true
+		for c: Vector3i in cells:
+			if not foot.has(Vector2i(c.x, c.z)):
+				el_bad.append(c)
+		var inside := func(c: Vector3i) -> bool:
+			var f := Vector2i(c.x, c.z) - Vector2i(1, 1)
+			if c.y < 1 or c.y > 3 * pitch + 1:
+				return false
+			for dz in [-1, 0, 1]:
+				for dx in [-1, 0, 1]:
+					if not (ell.has(f + Vector2i(dx, dz))):
+						return false
+			return true
+		var seen := _flood(cells, Vector3i(10, 2, 14), inside)
+		for sp in el.recipe.meta.structure.spaces:
+			if not seen.has(Vector3i(int(sp.seed[0]), int(sp.seed[1]), int(sp.seed[2]))):
+				el_lost += 1
+	_ok("a drawn L footprint: a tower with nothing outside it, every room reached inside it",
+			bool(el.ok) and el_bad.is_empty() and el_lost == 0 and int(el.stats.modules) > 0,
+			"%s, %d brick cell(s) outside, %d room(s) not reached" % [
+				str(el.get("stats", el.get("why", ""))), el_bad.size(), el_lost])
+
+	# Setbacks: 3 studs in every 2 storeys; a rail round each terrace.
+	var sb := RoomShell.generate(lib, {"seed": 4, "width": 44, "depth": 36, "storeys": 6, "setback": 3,
+			"setback_every": 2})
+	var sb_bad := []
+	if sb.ok:
+		var cells := _cells(sb.recipe)
+		for s in 6:
+			@warning_ignore("integer_division")
+			var k := 3 * (s / 2)
+			var y := s * pitch + 5
+			# Its west wall at x = k (laid k + 1), nothing west of it.
+			if not cells.has(Vector3i(k + 1, y, 18)) or cells.has(Vector3i(k, y, 18)) and k > 0:
+				sb_bad.append("storey %d: west wall not at %d" % [s, k])
+		for s in [2, 4]:
+			@warning_ignore("integer_division")
+			var k: int = 3 * ((int(s) - 1) / 2)
+			if not cells.has(Vector3i(k + 1, s * pitch + 1, 18)):
+				sb_bad.append("no rail round the terrace at storey %d" % s)
+		var inside := func(c: Vector3i) -> bool:
+			if c.y < 1 or c.y > 6 * pitch + 1:
+				return false
+			@warning_ignore("integer_division")
+			var k := 3 * (mini(c.y / pitch, 5) / 2)
+			if c.y % pitch == 0 and c.y > 0:
+				@warning_ignore("integer_division")
+				k = maxi(k, 3 * (mini(c.y / pitch - 1, 5) / 2))
+			return c.x >= k + 2 and c.x <= 44 - k - 1 and c.z >= k + 2 and c.z <= 36 - k - 1
+		var seen := _flood(cells, Vector3i(10 + 6, 2, 18), inside)
+		for sp in sb.recipe.meta.structure.spaces:
+			if not seen.has(Vector3i(int(sp.seed[0]), int(sp.seed[1]), int(sp.seed[2]))):
+				sb_bad.append("room %s not reached" % str(sp.seed))
+	_ok("setbacks: each pair of storeys 3 studs in, a rail round each terrace, every room reached",
+			bool(sb.ok) and sb_bad.is_empty(), str(sb.get("why", "")) + str(sb_bad.slice(0, 4)))
+
+	# The lift: a shaft beside the hall, open from the ground to the top storey.
+	var lifts: Array = made[0].recipe.meta.get("lifts", [])
+	var shaft_bad := 0
+	if lifts.size() == 1:
+		var cells := _cells(made[0].recipe)
+		var lo := BuildRecipe.cell_from(lifts[0].lo)
+		for y in range(1, 3 * pitch + 1):
+			for z in 4:
+				for x in 4:
+					if cells.has(Vector3i(lo.x + x, y, lo.z + z)):
+						shaft_bad += 1
+	_ok("a lift shaft beside the hall, a stop each storey, open from the ground to the top storey",
+			lifts.size() == 1 and (lifts[0].stops as Array).size() == 4 and shaft_bad == 0,
+			"%s, %d cell(s) in the shaft" % [str(lifts), shaft_bad])
 
 	var small := RoomShell.generate(lib, {"seed": 1, "width": 16, "depth": 12, "storeys": 2})
 	_ok("a shell too small says so", not bool(small.ok) and String(small.why) != "", String(small.why))
@@ -211,9 +306,14 @@ func _from_module(m: Dictionary, sp: Dictionary) -> bool:
 	return int(sp.id) < m.recipe.meta.structure.spaces.size() - m.stats.rooms
 
 
-## Air inside the footprint (inside the outer walls) reached from `start`, and
-## the row over the roof.
-func _flood(cells: Dictionary, start: Vector3i, w: int, d: int, top: int) -> Dictionary:
+func _inside_box(w: int, d: int, top: int) -> Callable:
+	return func(c: Vector3i) -> bool:
+		return c.x >= 2 and c.z >= 2 and c.x <= w - 1 and c.z <= d - 1 and c.y >= 1 and c.y <= top
+
+
+## Air inside the footprint (inside the outer walls, `inside` says) reached
+## from `start`, and the row over the roof.
+func _flood(cells: Dictionary, start: Vector3i, inside: Callable) -> Dictionary:
 	var seen := {start: true}
 	var todo: Array[Vector3i] = [start]
 	var dirs := [Vector3i(1, 0, 0), Vector3i(-1, 0, 0), Vector3i(0, 1, 0), Vector3i(0, -1, 0),
@@ -222,9 +322,7 @@ func _flood(cells: Dictionary, start: Vector3i, w: int, d: int, top: int) -> Dic
 		var c: Vector3i = todo.pop_back()
 		for dv in dirs:
 			var n: Vector3i = c + dv
-			if n.x < 2 or n.z < 2 or n.x > w - 1 or n.z > d - 1 or n.y < 1 or n.y > top:
-				continue
-			if seen.has(n) or cells.has(n):
+			if seen.has(n) or cells.has(n) or not inside.call(n):
 				continue
 			seen[n] = true
 			todo.append(n)

@@ -334,6 +334,13 @@ func _ready() -> void:
 		_tools.setup(self, _hud_layer)
 	_spaces = WorkshopSpaces.new()
 	add_child(_spaces)
+	# The build's doors and lifts, as the city has them (BuildDoors, BuildLifts).
+	var this_build := func() -> Array:
+		if asm == null or asm.frames.is_empty():
+			return []
+		return [[0, asm.frames[0], recipe, Vector3i.ZERO]]
+	add_child(BuildDoors.new(world, this_build))
+	add_child(BuildLifts.new(world, this_build))
 	_spaces.setup(self)
 	_furnish = FurnishTool.new()
 	_furnish.name = "Furnish"

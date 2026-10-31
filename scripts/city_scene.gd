@@ -1093,6 +1093,10 @@ func _ready() -> void:
 	# Storey units (Docs/Space.md 5.3a); --whole lays every building whole, as
 	# it always was -- the storeys gate's "today".
 	registry.storey_units = not _whole_mode
+	# Doors in the builds' doorways, swung by whoever comes near, and lifts in their
+	# shafts (Docs/RoomModules.md 3.2, 4).
+	add_child(BuildDoors.new(world, BuildDoors.from_registry(registry)))
+	add_child(BuildLifts.new(world, BuildDoors.from_registry(registry)))
 
 	islands = IslandManager.new()
 	islands.small_live_max = debris_small_max

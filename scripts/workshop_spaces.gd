@@ -325,6 +325,13 @@ func generate(params: Dictionary) -> Dictionary:
 	_generate_asked_ms = -1
 	var lib := RoomModules.library()
 	var shell := String(params.get("generator", "grow")) == "shell"
+	if shell and bool(params.get("outline", false)):
+		# The build open now is the outline (Sketch, Walls): what it closes round.
+		if ws.recipe.is_empty():
+			message = "no outline: draw one (Sketch, Walls) to set a tower in, or untick the outline"
+			return {}
+		params = params.duplicate()
+		params.footprint = RoomShell.footprint_of(ws.recipe)
 	var plan := RoomShell.generate(lib, params) if shell else RoomGrow.grow(lib, params)
 	if not plan.ok:
 		message = "no building: %s" % plan.why

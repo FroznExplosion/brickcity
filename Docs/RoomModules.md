@@ -160,46 +160,76 @@ as a new build (a build with unsaved changes asks first: press again within 4 s)
 wider than the baseplate makes the plate bigger. **Enter** places it in the city as any build
 (the city takes builds whole: `BuildingRegistry.register_build`).
 
-Not yet: no doors put in joined doorways -- the game has no door piece (a part or fixture that
-opens) to put; the finder already reads any brick whose name has "door" as one.
+### 3.2 Doors (built 2026-10-31)
+
+A door is the one thing in a building that moves, so it is not a brick in the grid (a staircase
+fixture is): `scripts/build_doors.gd`, `BuildDoors`, a node in the city and in the workshop that
+hangs a leaf in each door hole of every build that is bricks, follows its chunk, swings it open
+(a quarter turn) when a figure -- any CharacterBody3D -- comes within 1.6 m of the doorway and
+shuts it when they have gone. A shut leaf stops what a body stops. While the brick over the
+middle of the doorway is gone (shot away, or a storey not laid yet) the door is not there.
+
+Where the doors are is the recipe's: `meta["doors"]` = `[{"lo", "size", "colour", "material"}]`,
+the hole's box in the build's cells (`BuildDoors.hole` from a connector), and any opening set to
+kind *door* by hand in the spaces tool (its cells' box). The leaf runs along the longer flat side
+of the box, hinged at its low end, a plate short of the hole, brown unless said. The grow puts
+one in the first wall of every joined doorway, a hung room's and the way in and out (with the
+chance `doors`, 1); the shell in every doorway it has. `tools/build_doors_probe.gd` (10, doors
+and lifts).
 
 ## 4. Set by shell (stage 6, built 2026-10-31)
 
-`scripts/room_shell.gd`, `RoomShell.generate(lib, {seed, width, depth, storeys, pitch, corridor,
-room_max, window_every, fill})` -> `{ok, why, recipe, plan, stats}`. The outside first: a box
-`width` x `depth` studs, `storeys` high, `pitch` plates a storey (0: the height most room-role
-modules have, `pitch_of`; 14 for a floor plate, twelve plates of room and a ceiling). Every
-storey the same plan:
+`scripts/room_shell.gd`, `RoomShell.generate(lib, {seed, width, depth, footprint, storeys, pitch,
+setback, setback_every, corridor, room_max, window_every, fill, lift})` -> `{ok, why, recipe,
+plan, stats}`. The outside first: a **footprint** -- the box `width` x `depth`, or any shape,
+`footprint` the columns it stands on (in the workshop: the outline the open build closes round,
+drawn with Sketch or Walls, `RoomShell.footprint_of` / `RoomModules.footprint`) -- `storeys`
+high, `pitch` plates a storey (0: the height most room-role modules have, `pitch_of`; 14 for a
+floor plate, twelve plates of room and a ceiling), stepped in by `setback` studs on every side
+every `setback_every` storeys. A storey's outer wall is its footprint's edge (corners too); the
+rest is inside.
 
-* **The stair hall** at the west end, the full depth: one straight flight a storey, two studs wide,
-  two plates a step, in two lanes of the corridor's width so each flight starts beside the cut
-  over the one below; the top flight comes up through the roof (the finish). The way in: a
-  doorway in the hall's south wall on the ground.
-* **The corridor** `corridor` studs wide (at least 4: the two lanes) down the middle to the east
-  wall.
+* **The stair hall** where the top storey has room for it and six studs of corridor east of it,
+  its band as near the middle as it fits, then as far west: the corridor's width and a stud each
+  side, the same place every storey. One straight flight a storey, two studs wide, two plates a
+  step, in two lanes so each flight starts beside the cut over the one below; the top flight comes
+  up through the roof (the finish).
+* **The lift** (`lift`, where it fits): a 4 x 4 shaft past the hall's north wall (else its south),
+  a doorway to the hall each storey, no slab in it between the ground and the top storey, a stop
+  a storey. `scripts/build_lifts.gd`, `BuildLifts`, a node as doors are: a platform a plate thick
+  in the shaft; stood on 0.8 s it rides a storey up (down from the top) at 2 m/s; stood by on
+  another storey (within 3 studs of the shaft) with nobody on it, it comes there.
+  `meta["lifts"]` = `[{"lo", "size", "stops"}]`.
+* **The corridor** `corridor` studs wide (at least 4: the two lanes) east from the hall as far as
+  the storey has its whole band, a wall across its end.
 * **Each side** filled west to east: a room- or corridor-role module, turned so a door faces the
   corridor, its door's outer face on the corridor's first row and its own wall standing in the
-  corridor wall's line, inside the footprint, no higher than the pitch, its storey rule and `max`
-  kept, picked by weight -- with the chance `fill`, else a stud on. Its other doors are walled up
-  (the grow's caps).
-* **Filler rooms**: what of a side no module has, split by a wall every `room_max` studs, each with
-  a doorway off the corridor (the middle two cells it has on the corridor wall); a pocket with no
-  corridor wall stays closed.
-* **The shell's walls** -- the outer ring, the hall's wall, the corridor walls where no module
-  stands, the splits -- in courses of 1x4/1x2/1x1 in a running bond, never in a module's columns.
-  Floors in the biggest square plates, but not in a module's columns or over a flight. Windows
-  2 x 6 every `window_every` studs in the shell's own outer wall, one style a tower (open or
-  glazed, the modules' windows too). A parapet a brick high round the roof.
+  corridor wall's line, inside the storey's footprint, clear of the hall and the lift, no higher
+  than the pitch, its storey rule and `max` kept, picked by weight -- with the chance `fill`, else
+  a stud on. Its other doors are walled up (the grow's caps).
+* **Filler rooms**: whatever of the storey is left, split by a wall every `room_max` studs either
+  way, each given a doorway (two columns) to the corridor, the hall or a filler room already
+  reached, round by round, so every room is reached; a piece under 4 columns stays closed.
+* **The way in**: a doorway in the ground storey's outer wall with the corridor or the hall
+  inside, the furthest east first.
+* **The shell's walls** -- the outer wall and the inner ones (hall, lift, corridor, splits) -- in
+  straight runs, courses of 1x4/1x2/1x1 in a running bond, never in a module's columns. Floors in
+  the biggest square plates over the storey's footprint and the one under it (a terrace is the
+  storey below's roof), not in a module's columns, over a flight or in the lift shaft. Windows
+  2 x 6 every `window_every` studs along each straight face of the outer wall, not at its ends,
+  one style a tower (open or glazed, the modules' windows too). A rail a brick high round the roof
+  and round each terrace. A door in every doorway (3.2).
 
 Laid by `RoomGrow.lay` (the plan says where it stands, `at`); the record gets the modules' rooms
 and the shell's own (a corridor with its hall a storey, the filler rooms); `meta["generated"]`
 says `generator: "shell"`. In the workshop: under the grow on the rooms panel, *Set a tower by its
-shell*: seed, width, depth, storeys, **Generate tower**, **Next seed** (the plate and the volume
-over it grow to hold a tall one). `tools/room_shell_probe.gd` (9).
+shell*: seed, width, depth, storeys, setback, every, *this build's outline as the footprint*,
+**Generate tower**, **Next seed** (the plate and the volume over it grow to hold a tall one).
+`tools/room_shell_probe.gd` (12).
 
-Not yet: a box only -- a drawn footprint (Sketch, Walls) and setbacks storey to storey are
-next; one stair hall, no lift; modules whose rooms have stair links are not stacked through the
-storeys; facade spots of a module in the shell are not used.
+Not yet: modules whose rooms have stair links are not stacked through the storeys (the hall and
+the lift are the way up); facade spots of a module in the shell are not used; a setback is the
+same on every side.
 
 ## 5. Markers in the workshop (stage 1, built)
 
@@ -228,3 +258,4 @@ Code: `StructureSpaces.connectors` / `door_connector` / `cycle_link` (record sid
 | 5 | facade spots filled (window styles, balconies, hanging rooms), stairs laid | built 2026-10-30 |
 | 6 | set by shell: a box tower, stair hall, corridor, modules on it, filler rooms, windows; Generate tower; `room_shell_probe` (9) | built 2026-10-31 |
 | -- | the grow's "not yet": hang role, two-plate steps, stair and doorway cuts by the cell, caps in the wall's brick in a bond | built 2026-10-31 |
+| 7 | doors in doorways (BuildDoors); towers in a drawn outline, setbacks, a lift (BuildLifts); `build_doors_probe` (10) | built 2026-10-31 |
