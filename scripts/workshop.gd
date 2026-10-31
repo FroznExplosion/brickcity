@@ -934,6 +934,8 @@ func _place_keys() -> void:
 	# Top right: the toolbar owns the bottom of the screen now.
 	var w: float = get_viewport().get_visible_rect().size.x
 	var top := 12.0 + (_menu.bar_height() if _menu != null else 0.0)
+	if _tools != null:
+		top += _tools.bar_height()
 	_keys_panel.position = Vector2(w - _keys_panel.size.x - 12, top)
 
 

@@ -517,3 +517,44 @@ Merged; `tools/build_tools_probe.gd` 204 checks. Pick, Paint and Place, and the 
 * A Line that makes a Building is a wall: a line has no inside to floor.
 * The level's grid is drawn for a set level or a plan being drawn, not while aiming.
 * Hollow, Ring and Stairs are still kinds (old saves, `add_shape`), just not on the pop-out.
+
+## 12. The rest of the list (2026-10-31)
+
+Section 10's other suggestions, all of them:
+
+* **Hand**: Place, Pick and Paint are one tool; its pop-out says which. Pick goes back to
+  Place after a click.
+* **Select takes inserted builds too**: click one, and Move, Copy, Delete are there. The Builds
+  tool goes. Rail: Hand, Draw, Roof, Stairs, Cut, Repeat, Select, Rooms: 8.
+* **A top bar** holds Hand, Edit and View's buttons, across the screen under the menus; the
+  rail is only tools. The keys panel starts hidden (Keys shows it).
+* **Numbers at the cursor**: the size while dragging a base, the height while pulling. While
+  pulling, type a number for an exact height (plates; storeys for a building; studs for a depth);
+  Backspace takes a digit back, Enter or a click places.
+* **Push-pull** (Select): press on a kept shape's top and drag: its height follows, and letting
+  go lays it. Press on its side and drag: the whole shape moves along that face's way. Select
+  loses its height and rim numbers.
+* **Windows stay with a building**: windows and doors "on every floor" are kept with the building;
+  raised with push-pull, its new storeys get them; lowered, those above go.
+* **Sketch on any face**: with a pen outline (Freehand, Brush, Corners), a press on a wall's
+  side draws on that wall, as dragged shapes do; and **Cut** has Freehand and Corners.
+
+### As built (2026-10-31)
+
+All of it, merged; `tools/build_tools_probe.gd` 228 checks.
+
+* `active()` still answers place, pick or paint; `rail_id` folds them into Hand for the rail.
+  B still toggles the brush. Hand remembers which of the three it was on.
+* The top bar is `ToolRail.actions(..., bar)`, in a `PanelContainer` the tools own; the rail,
+  the keys panel and the readout start under it (`bar_height`).
+* A typed number stops the cursor pulling until Backspace empties it; digits only go there while
+  pulling, so 1-9 still pick the toolbar slot otherwise. A cut's or a shape's depth is in
+  studs (plates through a floor).
+* Push-pull is `begin_push_pull`, with `resize_shape` and `move_shape` doing the laying; each
+  is one undo. The top must be the shape's own top layer. A standing shape only moves. A move
+  takes along the frames and glass of the doors and windows cut in it.
+* A building keeps `openings`, each as if on its first storey. `resize_shape` lays them on new
+  storeys and takes off frames and glass above the new top; its cuts stay on the record (harmless
+  above the top).
+* Pen strokes on a face go through `_stroke_plane`; a stroke on a wall's side needs Solid (or Cut
+  out). Cut's Freehand and Corners use the same pen.

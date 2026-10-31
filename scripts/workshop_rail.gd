@@ -57,6 +57,7 @@ const ICONS := {
 	"t_hip": '<path d="M2 18L8 8h8l6 10z"/>',
 	"f_here": '<path d="M3 15l9-5 9 5-9 5z"/><path d="M3 15V9M21 15V9"/>',
 	"f_top": '<path d="M3 9l9-5 9 5-9 5z"/><path d="M3 9v8M21 9v8M12 14v7"/>',
+	"hand": '<path d="M8 13V5a1.5 1.5 0 0 1 3 0v6M11 11V4a1.5 1.5 0 0 1 3 0v7M14 11V6a1.5 1.5 0 0 1 3 0v8c0 4-3 7-6 7s-5-2-6-4l-2-4a1.5 1.5 0 0 1 2.5-1.5L8 14"/>',
 	"pick": '<path d="M14 4l6 6-9 9H5v-6z"/><path d="M12 6l6 6"/>',
 	"walls": '<path d="M4 20V8h8v6h8v6"/><path d="M4 8V4M12 8V4"/>',
 	"floor": '<path d="M3 15l9-5 9 5-9 5z"/><path d="M3 15v2l9 5 9-5v-2"/>',
@@ -263,32 +264,37 @@ func fill(title_text: String, rows: Array, picked: Callable, skip: Array = [], c
 
 ## Buttons for actions, under the tools: `sections` is [[title, rows], ...], a row [id,
 ## label, key, what it does, toggle?]. A toggle stays lit while its thing is on
-## (`show_toggles`). A press calls `picked` with the id. Three to a row, small.
-func actions(sections: Array, picked: Callable) -> void:
+## (`show_toggles`). A press calls `picked` with the id. Three to a row, small; or with `bar`,
+## all in that container (a bar across the screen).
+func actions(sections: Array, picked: Callable, bar: Container = null) -> void:
 	for c in _actions.get_children():
 		_actions.remove_child(c)
 		c.queue_free()
 	action_buttons.clear()
-	_actions.visible = not sections.is_empty()
+	_actions.visible = not sections.is_empty() and bar == null
 	for sec in sections:
 		var l := Label.new()
 		l.text = String(sec[0])
 		l.add_theme_font_size_override("font_size", 11)
 		l.add_theme_color_override("font_color", Color(0.62, 0.68, 0.76))
-		_actions.add_child(l)
-		var grid := GridContainer.new()
-		grid.columns = 3
-		grid.add_theme_constant_override("h_separation", 2)
-		grid.add_theme_constant_override("v_separation", 2)
-		_actions.add_child(grid)
+		(_actions if bar == null else bar).add_child(l)
+		var grid: Container = bar
+		if bar == null:
+			var g := GridContainer.new()
+			g.columns = 3
+			g.add_theme_constant_override("h_separation", 2)
+			g.add_theme_constant_override("v_separation", 2)
+			_actions.add_child(g)
+			grid = g
 		for t in sec[1]:
 			var id := String(t[0])
 			var key := String(t[2])
 			var b := Button.new()
 			b.text = String(t[1])
 			b.add_theme_font_size_override("font_size", 11)
-			b.custom_minimum_size.x = (_width - 18.0) / 3.0 - 2.0
-			b.clip_text = true
+			if bar == null:
+				b.custom_minimum_size.x = (_width - 18.0) / 3.0 - 2.0
+				b.clip_text = true
 			b.focus_mode = Control.FOCUS_NONE
 			b.toggle_mode = t.size() > 4 and bool(t[4])
 			b.tooltip_text = "%s%s\n%s" % [t[1], ("  (%s)" % key) if key != "" else "", t[3]]
