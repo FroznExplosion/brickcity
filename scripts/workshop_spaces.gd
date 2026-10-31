@@ -354,7 +354,7 @@ func generate(params: Dictionary) -> Dictionary:
 		params = params.duplicate()
 		params.hull = _hull
 	var plan := RoomShell.generate(lib, params) if shell \
-			else RoomStation.generate(lib, params) if station \
+			else RoomStation.generate(StationKit.library(), params) if station \
 			else RoomPack.generate(lib, params) if pack else RoomGrow.grow(lib, params)
 	if not plan.ok:
 		message = "no %s: %s" % ["station" if station else "interior" if pack else "building", plan.why]

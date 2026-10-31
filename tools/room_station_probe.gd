@@ -12,6 +12,11 @@ extends SceneTree
 ##   stands    laid with its lowest row at 1, nothing under it
 ##   sections  under a small budget, sections with the core's the root
 ##   seed      the same seed the same station; another, another
+##   holds     laid in a brick world with its keel the only thing on the
+##             foundation row, nothing comes loose: every module, tie, tube and
+##             wing held to the core by its studs
+##   cut       a hit taking every brick where a leaf section meets the rest: that
+##             section comes away whole (Docs/RoomModules.md 7.3)
 ##   none      a library with no core says so
 
 const Kit := preload("res://tools/station_module_kit.gd")
@@ -136,6 +141,64 @@ func _run() -> void:
 	var again := RoomStation.generate(lib, {"seed": 1, "modules": 18})
 	_ok("the same seed the same station; another, another",
 			_bag(again.recipe) == _bag(ok_made[0].recipe) and _bag(ok_made[0].recipe) != _bag(ok_made[1].recipe))
+
+	# Holds: built into a brick world, the keel's row the foundation.
+	var held_bad := []
+	var cut_ok := 0
+	var cut_tried := 0
+	for m: Dictionary in ok_made.slice(0, 5):
+		var r: BuildRecipe = m.recipe
+		var w := BrickWorld.new()
+		var pal := TowerRecipe.bake_palette(w)
+		var c := w.create_chunk(Vector3i.ZERO, r.chunk_dims())
+		var laid := r.build(w, c, pal)
+		var org := r.origin()
+		var on_floor := 0
+		for i in r.size():
+			if r.cell_of(i).y == org.y:
+				on_floor += 1
+		var loose: Array = w.find_detached_groups(c)
+		var n_loose := 0
+		for g in loose:
+			n_loose += (g as PackedInt32Array).size()
+		if laid != r.size() or n_loose > 0:
+			held_bad.append("seed %d: %d of %d laid, %d loose in %d group(s), %d on the keel row" % [
+					int(m.plan.seed), laid, r.size(), n_loose, loose.size(), on_floor])
+		# Cut a leaf section off: every brick at its one joint.
+		var cut := BuildSections.of_plan(lib, m.plan, r, m.plan.at, 2500)
+		var touch := {}
+		for j: Dictionary in cut.joints:
+			touch[int(j.a)] = int(touch.get(int(j.a), 0)) + 1
+			touch[int(j.b)] = int(touch.get(int(j.b), 0)) + 1
+		var leaf := -1
+		for k in touch:
+			if int(k) != 0 and int(touch[k]) == 1:
+				leaf = int(k)
+				break
+		if leaf < 0:
+			continue
+		cut_tried += 1
+		for j: Dictionary in cut.joints:
+			if int(j.a) == leaf or int(j.b) == leaf:
+				for cell: Vector3i in j.cells:
+					var b := w.block_at(c, cell - org)
+					if b >= 0:
+						w.kill_block(c, cell - org)
+		var size_leaf := 0
+		for k in (cut.of as PackedInt32Array).size():
+			if int(cut.of[k]) == leaf:
+				size_leaf += 1
+		var away: Array = w.find_detached_groups(c)
+		var biggest: int = (away[0] as PackedInt32Array).size() if not away.is_empty() else 0
+		if biggest >= size_leaf * 0.6:
+			cut_ok += 1
+		else:
+			held_bad.append("seed %d: section %d (%d bricks) cut off, biggest loose group %d" % [
+					int(m.plan.seed), leaf, size_leaf, biggest])
+	_ok("laid with only its keel on the foundation row, nothing loose: all held to the core by studs",
+			held_bad.filter(func(x) -> bool: return String(x).contains("loose")).is_empty(), str(held_bad.slice(0, 3)))
+	_ok("every brick where a leaf section meets the rest gone: the section comes away whole",
+			cut_tried > 0 and cut_ok == cut_tried, "%d of %d %s" % [cut_ok, cut_tried, str(held_bad.slice(0, 3))])
 
 	var none := RoomStation.generate(RoomModules.from_recipes(Kit.modules().slice(1)), {"seed": 1})
 	_ok("a library with no core says so", not bool(none.ok) and String(none.why) != "", String(none.why))
