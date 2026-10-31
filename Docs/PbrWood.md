@@ -11,7 +11,7 @@ layer lines included.
 
 | Piece | Where |
 |---|---|
-| The texture set | `textures/wood/`: ambientCG **Wood049** (CC0), 1K. `wood049_albedo_rough.png` is the colour with roughness packed into alpha (BC7); `wood049_normal.png` the OpenGL normal map (BC5). Mipmapped. ~2.8 MB of video memory for both |
+| The texture set | `textures/wood/`: ambientCG **Wood049** (CC0), 2K (1K read soft from under a metre). `wood049_albedo_rough.png` is the colour with roughness packed into alpha (BC7); `wood049_normal.png` the OpenGL normal map (BC5). Mipmapped. ~11 MB of video memory for both |
 | Bound | as **global** shader uniforms (`project.godot` `[shader_globals]`: `wood_albedo_rough`, `wood_normal`), so every brick material made anywhere has them without being told |
 | The field | `bm_wood_coords` in `brick_materials.gdshaderinc` |
 | Sampling, the normal map | `bm_wood_pbr`, same file; called from `brick.gdshader` and `printed_core.gdshaderinc` (studs) |
@@ -35,7 +35,9 @@ round, an arch is one more cut through the block and needs nothing of its own.
 
 **Colour** is the photo over its own mean (`WOOD_MEAN`), times the brick's colour: oak, walnut
 and cherry are three woods from one set, and a wood brick's average colour is what it was
-before. **Roughness** moves by the photo's alpha about its mean. **The normal map** is bent in
+before. **Roughness** moves by the photo's alpha about its mean, scaled up (`WOOD_ROUGH_GAIN`
+2.5: the map's own spread is 0.08, too little to see) over a glossier base (`MAT_ROUGH` 0.42), so
+the grain shows as a sheen that moves with the eye and the sun. **The normal map** is bent in
 through a tangent frame from screen derivatives (Schueler's cotangent frame), as the bevel's is:
 the mesher writes no tangents, and a piece can lie at any angle once it falls.
 
@@ -67,7 +69,7 @@ stud does not know where in the brick it stands.
 |---|---|---|
 | `wood_pbr_range` | 14 m | colour, roughness and the normal map: two texture reads and the frame |
 | `wood_far_range` | 60 m | colour and roughness: one read. Past it the flat colour, which is the photo's mean |
-| `wood_bump` | 1.0 | normal map strength |
+| `wood_bump` | 2.0 | normal map strength. At 1.0 the photo's own baked shading drowned it: a face lit across the grain changed by ~7 levels in 255 with it on, under a low or frontal sun by under one |
 
 14 m is `BrickNear.radius`, where the bricks already have real bevels. Only pixels on the screen
 are shaded (and the depth pre-pass drops hidden ones), so "only in the player's view" is free;
@@ -91,12 +93,21 @@ All inside the round-to-round drift (~0.5 ms): a screen full of PBR wood costs n
 screen of plastic or of the old noise. The 4-octave noise it replaced was about as many
 instructions as two texture reads. The ranges stay as knobs for a weaker machine.
 
+Again with the 2K set, `wood_bump` 2 and the roughness gain (same day; two other chats' headless
+runs started part way through, so take it as rough): PLA 4.41, 4.39; wood full 4.45, 4.33; colour
+only 4.07, 4.10; flat 3.75, 3.92; the old procedural wood 4.04, 4.12. Full PBR wood costs about
+what plastic does, and some 0.3-0.5 ms over flat colour with a whole screen of it.
+
 ## 5. Gates
 
 * `tools/wood_probe.gd` -- headless: the alpha carries material and grain in the flat mesh, the
   chamfered mesh and the studs; a turned board says Z, a post Y; a PLA brick still reads as PLA
   past its grain bits; a square brick's grain is its grid cell's wherever its chunk starts.
-  Windowed it also leaves `shots/wood_*.png`.
+  Windowed it also leaves `shots/wood_*.png`, and checks the normal map is LIGHTING: the stacked
+  pair's side under a sun raking down across the grain, relief off and at its default, must
+  differ by more than 4 levels in 255 (11.2 at 2.0). Relief shows when light rakes across it; a
+  sun behind the face, or square on to it, shows little -- the first version of the check lit
+  the back of the bricks and measured nothing at all.
 * `scenes/workshop.tscn -- --gate` -- places two boards stacked and one turned through the
   workshop's own placement, checks the frame mesh's grain axes and `grain_origin`, and leaves
   `shots/workshop_wood.png`.

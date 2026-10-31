@@ -28,6 +28,8 @@ var _failed := 0
 var _view: SubViewport
 var _cam: Camera3D
 var _holder: Node3D
+var _sun: DirectionalLight3D
+var _mat: ShaderMaterial
 
 
 func _initialize() -> void:
@@ -176,7 +178,9 @@ func _stage() -> void:
 	env.background_color = Color(0.55, 0.62, 0.7)
 	env.ambient_light_source = Environment.AMBIENT_SOURCE_COLOR
 	env.ambient_light_color = Color(0.7, 0.72, 0.76)
-	env.ambient_light_energy = 0.5
+	# Dim enough that light oak in full sun is not clipped white: a clipped
+	# face shows no relief at all, whatever the normal map does.
+	env.ambient_light_energy = 0.3
 	env.tonemap_mode = Environment.TONE_MAPPER_FILMIC
 	var we := WorldEnvironment.new()
 	we.environment = env
@@ -184,7 +188,9 @@ func _stage() -> void:
 	var sun := DirectionalLight3D.new()
 	sun.rotation_degrees = Vector3(-38, 28, 0)
 	sun.shadow_enabled = true
+	sun.light_energy = 0.75
 	_view.add_child(sun)
+	_sun = sun
 	_cam = Camera3D.new()
 	_cam.fov = 60.0
 	_cam.near = 0.02
@@ -199,6 +205,7 @@ func _show(w: BrickWorld, c: int) -> void:
 	var sm := ShaderMaterial.new()
 	sm.shader = load("res://shaders/brick.gdshader")
 	var mat := BrickMaterials.add_glass(sm)
+	_mat = mat
 	var mesh := ArrayMesh.new()
 	mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, w.build_chunk_chamfer_mesh(c, BEVEL))
 	var mi := MeshInstance3D.new()
@@ -265,5 +272,48 @@ func _run() -> void:
 	await _shot("slopes", Vector3(16 * s, 12 * p, -1.0), Vector3(16 * s, 4 * p, 5 * s))
 	await _shot("mid_25m", Vector3(6 * s, 8.0, -24.0), Vector3(6 * s, 0.5, 2 * s))
 	await _shot("far_70m", Vector3(6 * s, 20.0, -66.0), Vector3(6 * s, 0.5, 2 * s))
+	await _check_relief(Vector3(2 * s, 3 * p, -1.6), Vector3(2 * s, 3 * p, s))
 	print("\nwood probe: %d passed, %d failed" % [_passed, _failed])
 	quit(1 if _failed > 0 else 0)
+
+
+## Luminance, 0-255, of the middle of the view: the side of the stacked pair.
+func _luma(tag: String) -> PackedFloat32Array:
+	for i in 4:
+		await process_frame
+	await RenderingServer.frame_post_draw
+	var img := _view.get_texture().get_image()
+	img.save_png("res://shots/wood_relief_%s.png" % tag)
+	var out := PackedFloat32Array()
+	for y in range(240, 480, 2):
+		for x in range(420, 860, 2):
+			out.append(img.get_pixel(x, y).get_luminance() * 255.0)
+	return out
+
+
+static func _diff(a: PackedFloat32Array, b: PackedFloat32Array) -> float:
+	var d := 0.0
+	for i in a.size():
+		d += absf(a[i] - b[i])
+	return d / maxf(a.size(), 1)
+
+
+## The normal map is LIGHTING, not paint: the same face under the same sun
+## with the relief off and at its default should differ by more than a shade
+## -- grooves turned from the light, ridges to it. The sun is high, raking
+## down across the grain, as relief shows best (a sun behind the face lights
+## none of it: the first version of this check put it there and measured
+## nothing; one square on, or along the grain, shows little, as on real wood).
+## And it must still show from a metre: shots/wood_close.png.
+func _check_relief(eye: Vector3, at: Vector3) -> void:
+	_cam.look_at_from_position(eye, at)
+	_sun.rotation_degrees = Vector3(-62, 195, 0)
+	_mat.set_shader_parameter("wood_bump", 0.0)
+	var off := await _luma("off")
+	_mat.set_shader_parameter("wood_bump", null)
+	var on := await _luma("on")
+	var d := _diff(off, on)
+	_ok("the normal map lights the grain", d > 4.0,
+			"%.1f levels in 255 between relief off and on" % d)
+	await _shot("close", at + (eye - at).normalized() * 0.6 + Vector3(0, 0.15, 0), at)
+	_sun.rotation_degrees = Vector3(-38, 28, 0)

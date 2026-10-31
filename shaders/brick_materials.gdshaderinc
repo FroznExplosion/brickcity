@@ -36,7 +36,7 @@
 
 const int MAT_COUNT = 14;
 const float MAT_PRINTED[14] = float[](1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 0.0, 0.0, 0.0, 0.0);
-const float MAT_ROUGH[14]   = float[](0.42, 0.80, 0.22, 0.30, 0.16, 0.86, 0.70, 0.50, 0.58, 0.62, 0.55, 0.30, 0.72, 0.78);
+const float MAT_ROUGH[14]   = float[](0.42, 0.80, 0.22, 0.30, 0.16, 0.86, 0.70, 0.50, 0.58, 0.62, 0.42, 0.30, 0.72, 0.78);
 const float MAT_SPEC[14]    = float[](0.55, 0.28, 0.80, 0.60, 0.72, 0.18, 0.32, 0.50, 0.40, 0.35, 0.40, 0.50, 0.32, 0.22);
 // Metal at 0.8, not 1.0: a fully metallic surface is exactly as bright as
 // what it reflects, and brass and copper came out dull brown wherever the
@@ -202,6 +202,10 @@ global uniform sampler2D wood_normal : filter_linear_mipmap_anisotropic, repeat_
 
 const vec3 WOOD_MEAN = vec3(0.2019, 0.1272, 0.0773);   // the colour's mean, linear
 const float WOOD_ROUGH_MEAN = 0.504;
+// The roughness map is subtle (spread 0.08); scaled up so the grain shows as
+// a sheen that moves with the light and the eye, which is most of what says
+// "lit wood" rather than "a photo of wood" (Docs/PbrWood.md 2).
+const float WOOD_ROUGH_GAIN = 2.5;
 // Metres one repeat of the texture covers: along the grain, and across it in
 // ring units. The field repeats every 6 m on every axis with these (2 along,
 // 3 and 1 across), so a chunk's grid origin can be passed modulo
@@ -239,7 +243,7 @@ void bm_wood_pbr(vec2 t, vec2 dtx, vec2 dty, vec3 dpx, vec3 dpy, float colour_w,
     vec4 ar = textureGrad(wood_albedo_rough, f, dtx, dty);
     vec3 c = pow(ar.rgb, vec3(2.2));
     albedo = mix(albedo, clamp(albedo * c / WOOD_MEAN, 0.0, 1.0), colour_w);
-    rough = clamp(rough + (ar.a - WOOD_ROUGH_MEAN) * colour_w, 0.04, 1.0);
+    rough = clamp(rough + (ar.a - WOOD_ROUGH_MEAN) * WOOD_ROUGH_GAIN * colour_w, 0.04, 1.0);
     if (bump > 0.0) {
         vec2 nxy = textureGrad(wood_normal, f, dtx, dty).xy * 2.0 - 1.0;
         nxy.y = -nxy.y;   // OpenGL green is up the image; t.y runs down it
