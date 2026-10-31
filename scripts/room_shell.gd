@@ -52,10 +52,12 @@ extends RefCounted
 ## `setback`, `setback_every`: studs in, every so many storeys (0: straight up);
 ## `setback_sides`: the sides that step in, of "nsew" (north +Z, east +X);
 ## `lift`: a lift shaft by the hall where there is room; `balcony`: the chance
-## a module's balcony spot on the outer wall gets one.
+## a module's balcony spot on the outer wall gets one; `section_bricks`: the
+## most bricks a section (a band of storeys) has (BuildSections).
 const PARAMS := {"seed": 1, "width": 44, "depth": 28, "storeys": 4, "pitch": 0, "corridor": 4,
 		"room_max": 12, "window_every": 5, "fill": 0.85, "footprint": [], "setback": 0,
-		"setback_every": 0, "setback_sides": "nsew", "lift": true, "balcony": 0.5}
+		"setback_every": 0, "setback_sides": "nsew", "lift": true, "balcony": 0.5,
+		"section_bricks": BuildSections.BUDGET}
 ## The module roles a shell sets along its corridors (and a stair's, below a
 ## storey, where it has a stair link up).
 const ROLES := ["room", "corridor"]
@@ -205,7 +207,7 @@ func _generate(library: Array, params: Dictionary) -> Dictionary:
 	var plan := {"ok": true, "why": "", "seed": int(p.seed), "ground_y": 0, "placed": placed,
 			"joins": [], "path": [], "entrance": {}, "exit": {}, "caps": [], "cuts": cuts.keys(), "adds": adds,
 			"window_style": style, "stats": g_stats, "at": Vector3i(1, 0, 1), "doors": doors, "lifts": lifts,
-			"stacks": stacks}
+			"stacks": stacks, "generator": "shell", "section_bricks": int(p.section_bricks)}
 	var r := RoomGrow.lay(lib, plan, true)
 	r.name = "shell %d" % int(p.seed)
 	var rec: Dictionary = r.meta["structure"]

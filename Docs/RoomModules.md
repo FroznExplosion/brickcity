@@ -273,7 +273,8 @@ Code: `StructureSpaces.connectors` / `door_connector` / `cycle_link` (record sid
 | -- | the grow's "not yet": hang role, two-plate steps, stair and doorway cuts by the cell, caps in the wall's brick in a bond | built 2026-10-31 |
 | 7 | doors in doorways (BuildDoors); towers in a drawn outline, setbacks, a lift (BuildLifts); `build_doors_probe` (10) | built 2026-10-31 |
 | -- | the shell's "not yet": stair modules stacked, module facade spots, setbacks by side; `room_shell_probe` (15) | built 2026-10-31 |
-| 8-12 | stations and ship interiors (section 7) | planned |
+| 8 | sections: generated builds cut into parts with joints, split into builds of their own, shown in the workshop; `build_sections_probe` (7) | built 2026-10-31 |
+| 9-12 | station grower, stations in space, ship interiors, ships flying them (section 7) | planned |
 
 ## 7. Plan: stations in space and ship interiors (2026-10-31)
 
@@ -291,24 +292,42 @@ centre under the deck; Docs/Space.md 3.2: a big ship or station is **sections**,
 city building (5-15k bricks), joined by **joints** with hit points, the section that holds the
 bridge or core the **root**; a section cut off from the root leaves whole.
 
-### 7.1 Sections: one generated build in parts (stage 8)
+### 7.1 Sections: one generated build in parts (stage 8, built 2026-10-31)
 
-Both generators learn to cut what they make into sections, because stations and ships both need
-it and it can be probed in the workshop before anything flies.
+Both generators cut what they make into sections, because stations and ships both need it and it
+can be seen in the workshop before anything flies. `scripts/build_sections.gd`, `BuildSections`:
 
-* A **section** is a set of whole placements (a module is never split) plus the shell bricks
-  between them; `plan.sections` = `[{id, placements, root}]`, `plan.joints` = `[{a, b, cells,
-  kind}]` -- the bricks where two sections meet (a tube's collar, a bulkhead), each joint's own
-  hit points to come.
-* Cut where the plan is thinnest: the grow cuts at joins whose two sides are each over a brick
-  budget (`section_bricks`, default 8000) -- a corridor or tube between clusters; the shell
-  (ships) cuts at bulkheads, below.
-* `RoomGrow.lay_sections(lib, plan)` -> one `BuildRecipe` per section, each with its own rooms,
-  doors and lifts, and the transform that puts it back with the others; `lay` stays the one-build
-  form. A door or lift never crosses a joint (it goes in one section's bricks).
-* Workshop: the preview tints each section; the status line counts sections, joints, bricks a
-  section. Probe: no placement in two sections; each section's bricks under the budget; the
-  sections laid together are the same bricks as `lay`.
+* **Units** a section is made of: a grown building's placements (a module is never split), a
+  tower's storeys. Every brick goes with the unit its cell is in -- a module's columns, its rows
+  -- or the nearest one within 6 cells (a cap, a step, a balcony); a tower's by its row.
+* **Cut**: from the root unit (the grow's start, the tower's ground storey) outward along the
+  plan's joins (storey to storey), each section filled to an even share of the bricks -- as few
+  sections as `section_bricks` (both generators' parameter, default 8000) allows -- then the
+  smallest section joined to the smallest one it touches while the two stay under it. A unit
+  over the budget alone is a section of its own. Section 0 is the root.
+* **Joints**: where two sections' bricks touch, the cells on both sides (`of_plan`); the build
+  keeps how many.
+* `RoomGrow.lay` writes `meta["sections"]` = `{budget, kind ("join" | "storey"), size, sections:
+  [{id, root, bricks, lo, hi}], joints: [{a, b, cells}], of: [[section, run]...]}` -- each brick's
+  section, run-length, read back by `BuildSections.of_build`; a build whose bricks changed since
+  (`size`) has none (stale).
+* `BuildSections.split(r)` / `RoomGrow.lay_sections(lib, plan)` -> `[{id, root, recipe, offset}]`:
+  each section a build of its own, moved to start at 0, `offset` puts it back; its rooms, doors,
+  fixtures and furniture with it (the section of their cell, or nearest: its own row first); a
+  lift split into one a section, with that section's stops (two at least).
+* Workshop: the rooms panel's *section (most bricks)* sets the budget for both generators; a
+  generated build with two sections or more shows a box round each and *section N (ROOT) bricks*
+  over it; the message counts sections, their bricks and joints.
+* Costs: a 4-storey tower's generate 120 -> ~175 ms (the joints walk every cell); a 14-module
+  grown building ~75 ms with the lay.
+
+`tools/build_sections_probe.gd` (7): several sections under a small budget, the start's the root;
+no module in two sections; every section touching another; split and moved back the same bricks,
+every room and door in one; a tower in bands of whole storeys, a lift in each; the meta read back
+and stale once edited; the default budget (a 12-storey tower: six sections of ~7k).
+`module_marks_probe` (14): the sections shown.
+
+Not yet: joints have no hit points (stage 10); the city and the workshop still lay a build whole.
 
 ### 7.2 The station grower (stage 9)
 
