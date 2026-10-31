@@ -18,12 +18,12 @@ const TOOLS := [
 	["place", "Place", "", "Click to put the brick in hand on the stud you aim at; hold and move to lay a run (one undo). RMB takes one away."],
 	["pick", "Pick", "MMB", "Click a brick to hold its part, colour and material."],
 	["paint", "Paint", "B", "Click or drag over bricks to give them the colour in hand."],
-	["shape", "Shapes", "K", "Press and drag the shape's outline on the floor (or a wall facing you), let go; then move the cursor up for its height and click to place. Right-click or Esc cancels."],
-	["walls", "Walls", "", "Press and drag a line on the floor, let go; then move the cursor up for the wall's height and click to place. A wall drawn from where the last one ended joins it."],
+	["shape", "Shapes", "K", "Press and drag the shape on the floor -- or on a wall's face, and it comes out of the wall -- let go; then drag its height and click to place. Right-click or Esc cancels."],
+	["walls", "Walls", "", "Press and drag a line on the floor, let go; then move the cursor up for the wall's height and click to place. A wall that meets another at the same height joins it: the corner interlocks."],
 	["floor", "Floor", "", "Press and drag the floor's rectangle, let go -- or just click inside closed walls to fill them; then move the cursor up for its thickness and click to place."],
 	["roof", "Roof", "", "Click a shape (a room's walls): a gable or hip roof of slopes on top of it."],
 	["stairs", "Stairs", "", "Click the lower floor, then the upper one: a straight stair between them."],
-	["cut", "Cut", "N", "Drag a doorway, window or any shape on a wall: the wall is laid again round it. Door and window: one click, framed."],
+	["cut", "Cut", "N", "Press on a wall or a floor, drag a shape on it, let go; click to cut right through, or drag first for a depth. The bricks round it are laid again. Door and window: one click, framed."],
 	["sketch", "Sketch", "Alt D", "Draw a plan on a level -- freehand, brush, rectangles, ellipses, clicked corners, as many as you like (RMB takes area away); then Raise (or click inside it), move the cursor up and click: a solid, walls along its outline, or a building with a floor each storey."],
 	["repeat", "Repeat", "J", "Copy the picked shape -- or a storey, everything between two heights -- N times up, or along X or Z. Click a brick here to pick what to repeat; a door or window repeats with its cut."],
 	["select", "Select", "L", "Click a shape's brick to pick the shape: change its height, bond or brick, take its cuts out, delete it, or let it go (keep the bricks)."],
@@ -92,7 +92,6 @@ var kind := "rect"
 var lie := "flat"
 var tall := 3        # plates, flat
 var thick := 1       # studs, a wall's depth
-var rim := 1         # studs, a hollow rectangle's or a ring's
 var staggered := true
 var cut_kind := "rect"
 ## Every laying tool (section 10): only the held brick, as many as fit -- or smaller ones
@@ -153,8 +152,6 @@ var _level_row: HBoxContainer
 var _level_spin: SpinBox
 var _storey_box: VBoxContainer
 var _plan_box: VBoxContainer
-## The wall the last Walls drag made: the next one, drawn from its end, joins it.
-var _last_wall := -1
 ## The bricks a shape in the making will lay, shown: its key, and [[part, cell], ...].
 var _plan_key := ""
 var _plan := []
@@ -1445,6 +1442,8 @@ func _fit(n: Node) -> void:
 			(c as Label).autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 			(c as Label).custom_minimum_size.x = 168
 			(c as Label).add_theme_font_size_override("font_size", 11)
+		elif c is CheckBox:
+			(c as CheckBox).add_theme_font_size_override("font_size", 11)
 		elif c is OptionButton:
 			(c as OptionButton).clip_text = true
 			(c as OptionButton).custom_minimum_size.x = 168
@@ -1729,14 +1728,27 @@ func _make_input(e: InputEventMouseButton) -> bool:
 		# RMB outside a drag is the workshop's own (it takes a brick away), but in Shapes.
 		if e.button_index == MOUSE_BUTTON_RIGHT and tool != "shape":
 			return false
+		var cutting: bool = tool == "cut" or (tool == "shape" and (e.button_index == MOUSE_BUTTON_RIGHT or cut_mode))
+		# On a face: a cut goes in from it; a shape, on a wall's side, comes out of it.
+		var face := {}
+		if cutting or (tool == "shape" and lie == "flat"):
+			face = face_under(_ray()[0], _ray()[1])
+		if tool == "cut" and face.is_empty():
+			say("Press on a wall or a floor of the build.")
+			return true
+		if not face.is_empty() and (cutting or String(face.lie) != "flat"):
+			_begin_on_face(face, cutting, e.button_index)
+			return true
 		var pl := _plane_at_ghost(lie if tool == "shape" else "flat")
 		var a: Vector2i = pl.a
+		if tool == "walls":
+			a = _wall_snap(a, int(pl.at))
 		var k := kind
 		match tool:
 			"walls": k = "polyline"
 			"floor": k = "rect"
 		_drag = {"phase": "base", "tool": tool, "button": e.button_index, "lie": pl.lie, "at": pl.at,
-				"a": a, "b": a, "kind": k, "cut": tool == "shape" and (e.button_index == MOUSE_BUTTON_RIGHT or cut_mode)}
+				"a": a, "b": a, "kind": k, "cut": cutting}
 		say("Drag, then let go." if tool != "floor" else "Drag a rectangle, or let go here to fill the walls round it.")
 		return true
 	if _drag.is_empty() or e.button_index != int(_drag.get("button", -1)):
@@ -1745,13 +1757,87 @@ func _make_input(e: InputEventMouseButton) -> bool:
 	return true
 
 
+## Draw on a face of the build: a cut's shape, or a shape to come out of a wall.
+func _begin_on_face(face: Dictionary, cutting: bool, button: int) -> void:
+	var l := String(face.lie)
+	var uvw := BrickShapes.from_3d(l, face.cell)
+	var a := Vector2i(uvw.x, uvw.y)
+	var into := int(face.into)
+	var at: int = int(face.front) if cutting else int(face.front) - into
+	_drag = {"phase": "base", "tool": tool, "button": button, "lie": l, "at": at, "a": a, "b": a,
+			"kind": cut_kind if tool == "cut" else kind, "cut": cutting, "into": into, "face": face}
+	# A floor's top: the plane is the top of the layer hit, not its bottom.
+	if l == "flat":
+		_drag.plane_at = int(face.front) + (1 if into < 0 else 0)
+	say("Drag the shape, then let go.")
+
+
+## The wall ends and lines near `c` on layer `at`: a corner of a wall within two cells, else
+## the nearest cell of a wall's straight line within one -- so a wall drawn to meet another
+## meets it.
+func _wall_snap(c: Vector2i, at: int) -> Vector2i:
+	var best := c
+	var near := 3
+	for sh in shapes():
+		if String(sh.kind) != "polyline" or int(sh.at) != at:
+			continue
+		for line in _wall_lines(sh):
+			for q in line:
+				var v := BrickShapes._v2(q)
+				var d := maxi(absi(v.x - c.x), absi(v.y - c.y))
+				if d < near:
+					near = d
+					best = v
+	if near < 3:
+		return best
+	for sh in shapes():
+		if String(sh.kind) != "polyline" or int(sh.at) != at:
+			continue
+		for line in _wall_lines(sh):
+			for i in (line as Array).size() - 1:
+				var p := BrickShapes._v2(line[i])
+				var r := BrickShapes._v2(line[i + 1])
+				if p.x == r.x and absi(c.x - p.x) <= 1 and c.y >= mini(p.y, r.y) and c.y <= maxi(p.y, r.y):
+					return Vector2i(p.x, c.y)
+				if p.y == r.y and absi(c.y - p.y) <= 1 and c.x >= mini(p.x, r.x) and c.x <= maxi(p.x, r.x):
+					return Vector2i(c.x, p.y)
+	return c
+
+
+## A wall shape's lines: its first and each joined one; a closed one comes back to its start.
+static func _wall_lines(sh: Dictionary) -> Array:
+	var first: Array = (sh.points.pts as Array).duplicate()
+	if bool(sh.points.get("closed", false)) and first.size() > 2:
+		first.append(first[0])
+	return [first] + (sh.points.get("more", []) as Array)
+
+
+## The kept walls a new wall `rec` touches at its layer, the same brick and bond: if it is
+## as tall, it joins them.
+func _walls_meeting(rec: Dictionary) -> Array:
+	var mine := BrickShapes.cells_2d("polyline", Vector2i.ZERO, Vector2i.ZERO, int(rec.rim), 1.0, rec.points)
+	var out := []
+	for sh in shapes():
+		if String(sh.kind) != "polyline" or int(sh.at) != int(rec.at) or int(sh.rim) != int(rec.rim) \
+				or String(sh.part) != String(rec.part) or String(sh.bond) != String(rec.bond) \
+				or int(sh.colour) != int(rec.colour) or int(sh.mat) != int(rec.mat):
+			continue
+		var theirs := BrickShapes.cells_2d("polyline", Vector2i.ZERO, Vector2i.ZERO, int(sh.rim), 1.0, sh.points)
+		for c in mine:
+			if theirs.has(c) or theirs.has(c + Vector2i(1, 0)) or theirs.has(c - Vector2i(1, 0)) \
+					or theirs.has(c + Vector2i(0, 1)) or theirs.has(c - Vector2i(0, 1)):
+				out.append(sh)
+				break
+	return out
+
+
 ## The record the base drawn so far makes (its depth one step), or empty.
 func _base_record(d: Dictionary) -> Dictionary:
 	if d.has("rec"):
 		return d.rec
 	var a: Vector2i = d.a
 	var b: Vector2i = d.b
-	var key := "%s|%s|%s|%s|%s|%s|%s" % [d.tool, d.kind, d.lie, d.at, a, b, ws._archetype_name()]
+	var key := "%s|%s|%s|%s|%s|%s|%s|%s|%s" % [d.tool, d.kind, d.lie, d.at, a, b, ws._archetype_name(), wall_rim(), only_held]
 	if key == _base_key:
 		return _base_rec
 	var rec := {}
@@ -1798,7 +1884,26 @@ func _to_height(rec: Dictionary = {}) -> void:
 	_drag.rec = rec
 	_drag.at0 = int(rec.at)
 	_drag.anchor = _local(l, (lo + hi) * 0.5, float(rec.at))
-	say("Move the cursor up for the height; click to place. Right-click or Esc cancels.")
+	if _drag.has("into"):
+		var into := int(_drag.into)
+		if _drag.get("cut", false):
+			# In from the face; to start with, right through.
+			var face: Dictionary = _drag.face
+			rec.at = int(face.at)
+			rec.depth = int(face.depth)
+			_drag.at0 = int(face.front)
+			_drag.anchor = _local(l, (lo + hi) * 0.5, float(int(face.front) + (0 if into > 0 else 1)))
+			_drag.through = true
+			_drag.from_dir = _ray()[1]
+			say("Click now to cut right through, or drag for a depth first.")
+			return
+		_drag.anchor = _local(l, (lo + hi) * 0.5, float(int(rec.at) + (1 if into > 0 else 0)))
+	say("Move the cursor for the height; click to place. Right-click or Esc cancels.")
+	if String(_drag.get("tool", "")) == "walls":
+		var meet := _walls_meeting(rec)
+		if not meet.is_empty():
+			rec.depth = int(meet[0].depth)
+			_drag.stick = int(meet[0].depth)
 
 
 ## The height under the cursor: where the ray passes closest to the line straight up (or,
@@ -1824,9 +1929,31 @@ func _pull_height() -> void:
 	var along := (b * dir.dot(w0) - axis.dot(w0)) / den
 	var step := int(rec.get("step", height_step(l)))
 	var n := int(round(along / unit / step)) * step
+	if _drag.get("cut", false) and _drag.has("into"):
+		# A cut: right through until the cursor moves, then as deep as it is dragged.
+		if bool(_drag.through):
+			if dir.dot(_drag.from_dir) > 0.9997:
+				return
+			_drag.through = false
+		var into := int(_drag.into)
+		var d := clampi(int(round(along / unit)) * into, 1, 64)
+		rec.depth = d
+		rec.at = int(_drag.at0) if into > 0 else int(_drag.at0) - d + 1
+		say("%d %s deep. Click to cut; right-click or Esc cancels." % [d, "plates" if l == "flat" else "studs"])
+		return
+	if _drag.has("into"):
+		# A shape coming out of a wall's face.
+		var out_d := maxi(1, int(round(along / unit)) * -int(_drag.into))
+		rec.depth = out_d
+		rec.at = int(_drag.at0) if int(_drag.into) < 0 else int(_drag.at0) - out_d + 1
+		say("%d stud%s out. Click to place; right-click or Esc cancels." % [out_d, "" if out_d == 1 else "s"])
+		return
 	if l == "flat":
 		rec.depth = maxi(step, n) + int(rec.get("extra", 0))
 		rec.at = int(_drag.at0)
+		# Walls stick to the height of the wall they meet, so they join it.
+		if _drag.has("stick") and absi(int(rec.depth) - int(_drag.stick)) <= step:
+			rec.depth = int(_drag.stick)
 	else:
 		# Standing: pulled toward you or away, its thickness.
 		rec.depth = maxi(1, absi(n))
@@ -1875,33 +2002,40 @@ func commit_pending() -> int:
 	return create(rec)
 
 
-## A wall line: drawn from where the last one ended, at its height, it joins it (and on its
-## first corner it closes it), so the corners interlock.
+## A wall: one that meets others at their height (a corner, a T) joins them -- one shape,
+## laid again whole, so the courses interlock.
 func _commit_wall(rec: Dictionary) -> int:
-	var last := shape_of(_last_wall)
-	var pts: Array = rec.points.pts
-	var a := BrickShapes._v2(pts[0])
-	var b := BrickShapes._v2(pts[1])
-	if not last.is_empty() and String(last.kind) == "polyline" and int(last.at) == int(rec.at) \
-			and int(last.depth) == int(rec.depth) and String(last.part) == String(rec.part) \
-			and not bool(last.points.get("closed", false)) and not ws.mirror_on:
-		var lp: Array = (last.points.pts as Array).duplicate(true)
-		if BrickShapes._v2(lp.back()) == a:
-			var closes := lp.size() >= 3 and BrickShapes._v2(lp[0]) == b
-			if not closes:
-				lp.append([b.x, b.y])
-			var lo := Vector2i(1 << 30, 1 << 30)
-			var hi := -lo
-			for q in lp:
-				lo = lo.min(BrickShapes._v2(q))
-				hi = hi.max(BrickShapes._v2(q))
-			change_shape(_last_wall, {"points": {"pts": lp, "closed": closes}, "a": [lo.x, lo.y], "b": [hi.x, hi.y]})
-			var id := _last_wall
-			if closes:
-				_last_wall = -1
-			return id
-	_last_wall = create(rec)
-	return _last_wall
+	if ws.mirror_on:
+		return create(rec)
+	var meet := _walls_meeting(rec).filter(func(sh: Dictionary) -> bool: return int(sh.depth) == int(rec.depth))
+	if meet.is_empty():
+		return create(rec)
+	var first: Dictionary = meet[0]
+	var joined: Dictionary = first.duplicate(true)
+	var more: Array = joined.points.get("more", [])
+	more.append(rec.points.pts)
+	var u := _begin()
+	u.before[int(first.id)] = first
+	_take_up(first)
+	for i in range(1, meet.size()):
+		var o: Dictionary = meet[i]
+		more.append_array(_wall_lines(o))
+		u.before[int(o.id)] = o
+		_take_up(o)
+		_store(int(o.id), {})
+	joined.points.more = more
+	var lo := Vector2i(1 << 30, 1 << 30)
+	var hi := -lo
+	for line in _wall_lines(joined):
+		for q in line:
+			lo = lo.min(BrickShapes._v2(q))
+			hi = hi.max(BrickShapes._v2(q))
+	joined.a = [lo.x, lo.y]
+	joined.b = [hi.x, hi.y]
+	joined.bricks = []
+	_lay(joined)
+	_end(u)
+	return int(first.id)
 
 
 ## The bricks a shape will lay, worked out as it would lay them (cached while it does not
@@ -2116,36 +2250,26 @@ func roof_on(id: int) -> int:
 	return create(r)
 
 
-## Cut: press on a face of the build, drag on its plane, let go; a door or a window is
-## one click.
+## Cut: a door or a window is one click; any other shape is drawn on the face pressed, then
+## dragged in for a depth (the same way as everything else: `_make_input`).
 func _cut_input(e: InputEventMouseButton) -> bool:
-	if e.button_index != MOUSE_BUTTON_LEFT:
-		return false
-	if e.pressed:
+	if _drag.is_empty() and e.button_index == MOUSE_BUTTON_LEFT and e.pressed and cut_kind in ["door", "window"]:
 		var face := face_under(_ray()[0], _ray()[1])
 		if face.is_empty():
-			return true
-		var uvw := BrickShapes.from_3d(String(face.lie), face.cell)
-		var a := Vector2i(uvw.x, uvw.y)
-		if cut_kind in ["door", "window"]:
+			say("Press on a wall of the build.")
+		else:
 			apply_opening(cut_kind, face)
-			return true
-		_drag = {"button": MOUSE_BUTTON_LEFT, "lie": face.lie, "at": face.at, "a": a, "b": a,
-				"depth": face.depth, "kind": cut_kind, "cut": true}
 		return true
-	if _drag.is_empty():
-		return true
-	var d := _drag
-	_drag = {}
-	apply_cut({"kind": d.kind, "lie": d.lie, "a": [d.a.x, d.a.y], "b": [d.b.x, d.b.y],
-			"at": d.at, "depth": d.depth})
-	return true
+	if cut_kind in ["door", "window"] and _drag.is_empty():
+		return e.button_index == MOUSE_BUTTON_LEFT
+	return _make_input(e)
 
 
-## The face of the build under a ray: {cell, lie, at, depth} -- the cell hit, the plane
-## of the face (a side facing Z is wall_x, facing X wall_z, a top or bottom flat), and how
-## deep the build is behind it there: a cut goes that far in, through the wall and no
-## further. Empty if the ray hits nothing of the upright grid.
+## The face of the build under a ray: {cell, lie, at, depth, front, into} -- the cell hit,
+## the plane of the face (a side facing Z is wall_x, facing X wall_z, a top or bottom flat),
+## how deep the build is behind it there (`at` its lowest layer): a cut goes that far in,
+## through the wall and no further; `front` the layer the face is on, `into` +1 or -1 the
+## way in. Empty if the ray hits nothing of the upright grid.
 func face_under(from: Vector3, dir: Vector3) -> Dictionary:
 	var hit: Dictionary = ws._first_hit(from, dir)
 	if hit.is_empty() or hit.frame != ws.asm.frames[0]:
@@ -2184,7 +2308,8 @@ func face_under(from: Vector3, dir: Vector3) -> Dictionary:
 		p += step
 	var first := c[axis]
 	var last := c[axis] + step[axis] * (depth - 1)
-	return {"cell": c, "lie": l, "at": mini(first, last), "depth": maxi(1, depth)}
+	return {"cell": c, "lie": l, "at": mini(first, last), "depth": maxi(1, depth), "front": first,
+			"into": step[axis]}
 
 
 ## A door or a window where a face was clicked: a door stands on the lowest brick of the
@@ -2261,7 +2386,7 @@ func process() -> void:
 	rail.fit_height(vh - top - 104.0)
 	if _status_left > 0.0:
 		_status_left -= ws.get_process_delta_time()
-		_status.visible = _status_left > 0.0
+		_status.visible = _status_left > 0.0 and _status.text != ""
 	_lay_box.visible = on in ["shape", "sketch"]
 	_poly_box.visible = pen.draw == "polygon"
 	_walls_box.visible = on == "walls"
@@ -2323,8 +2448,10 @@ func process() -> void:
 		ws._ghost.visible = false
 	elif not _drag.is_empty():
 		_drag.b = _drag_point()
-		if _drag.get("tool", "") == "walls" and wall_straight:
-			_drag.b = _straight(_drag.a, _drag.b)
+		if _drag.get("tool", "") == "walls":
+			_drag.b = _wall_snap(_drag.b, int(_drag.at))
+			if wall_straight:
+				_drag.b = _straight(_drag.a, _drag.b)
 		ws._ghost.visible = false
 	elif tool in ["cut", "select", "repeat", "pick", "builds", "roof"] or not _sk.is_empty():
 		ws._ghost.visible = false
@@ -2334,7 +2461,7 @@ func process() -> void:
 ## Where the drag is now, in its plane's cells.
 func _drag_point() -> Vector2i:
 	var l := String(_drag.lie)
-	var q = _plane_point(l, int(_drag.at))
+	var q = _plane_point(l, int(_drag.get("plane_at", _drag.at)))
 	if q == null:
 		return _drag.b
 	var b := Vector2i(int(floor(q.x)), int(floor(q.y)))
@@ -2387,14 +2514,6 @@ func _draw() -> void:
 	if not _making().is_empty():
 		var col := Color(1.0, 0.4, 0.3) if _drag.get("cut", false) else Color(0.4, 0.95, 1.0)
 		any = _outline(_making(), col, any)
-	elif not _drag.is_empty():
-		var d := _drag.duplicate()
-		d.a = [d.a.x, d.a.y]
-		d.b = [d.b.x, d.b.y]
-		d.rim = rim
-		var col := Color(1.0, 0.4, 0.3) if d.get("cut", false) or d.button == MOUSE_BUTTON_RIGHT \
-				else Color(0.4, 0.95, 1.0)
-		any = _outline(d, col, any)
 	if not _sk.is_empty():
 		var l := String(_sk.lie)
 		var q = _plane_point(l, int(_sk.at))

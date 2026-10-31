@@ -42,6 +42,7 @@ func _initialize() -> void:
 	_house_checks()
 	_pull_checks()
 	_floor_plan_checks()
+	await _simpler_checks()
 	print("\n%d passed, %d failed" % [_pass, _fail])
 	quit(1 if _fail > 0 else 0)
 
@@ -273,7 +274,6 @@ func _kept_checks() -> void:
 	var t: WorkshopTools = _ws._tools
 	_hold("brick_1x4")
 	t.tall = 9
-	t.rim = 1
 	t.staggered = true
 	var f0: int = _ws.asm.frames[0]
 	# A room: four walls, 12 x 8 studs, 3 bricks high, on the baseplate.
@@ -469,7 +469,6 @@ func _room() -> int:
 	_hold("brick_1x4")
 	_ws._colour = 2
 	t.tall = 24
-	t.rim = 1
 	t.staggered = true
 	return t.add_shape("hollow", "flat", Vector2i(4, 4), Vector2i(19, 13), 1)
 
@@ -690,7 +689,6 @@ func _small_room() -> int:
 	var t: WorkshopTools = _ws._tools
 	_hold("brick_1x2")
 	t.tall = 12
-	t.rim = 1
 	return t.add_shape("hollow", "flat", Vector2i(4, 4), Vector2i(15, 11), 1)
 
 
@@ -803,8 +801,7 @@ func _pull_checks() -> void:
 		t._drag.rec.depth = 9
 		t.commit_pending()
 	var w := t.shape_of(w1)
-	_ok("walls drawn end to end are one wall line, closed", t.shapes().size() == 1 and (w.points.pts as Array).size() == 4
-			and bool(w.points.closed))
+	_ok("walls drawn end to end are one wall shape", t.shapes().size() == 1)
 	_ok("its cells a hollow rectangle's: the corners joined", BrickShapes.shape_cells(w) == BrickShapes.shape_cells(
 			{"kind": "hollow", "lie": "flat", "a": [4, 4], "b": [15, 11], "at": 1, "depth": 9, "rim": 1}))
 	# Floor: a click (no drag) inside fills it; pulled to 2 plates, of the held plate.
@@ -951,3 +948,173 @@ func _floor_plan_checks() -> void:
 	t.sketch_level = -1
 	t.sketch_makes = "solid"
 	t.pick("place")
+
+
+func _simpler_checks() -> void:
+	print("[probe] two cameras, the pop-out, draw then drag (section 10)")
+	_ws._new_build()
+	var t: WorkshopTools = _ws._tools
+	current_scene = _ws
+	_ok("Esc is the pause menu here", root.get_node("/root/MenuManager").can_pause())
+	current_scene = null
+	var v: WorkshopView = t.view
+	var cam = _ws._camera
+	_ok("orbit to start: the cursor is free, a click does not take the mouse", v.mode == "orbit" and v.wants_cursor()
+			and not cam.click_captures and not cam._captured)
+	t.act("fps")
+	_ok("FPS: the mouse looks", v.mode == "fps" and cam._captured and not v.wants_cursor())
+	var click := InputEventMouseButton.new()
+	click.button_index = MOUSE_BUTTON_LEFT
+	click.pressed = true
+	_ok("a click there is the tool's", not v.input(click))
+	cam._captured = false
+	_ok("with the cursor out, the scene takes no click", v.input(click))
+	cam._captured = true
+	t.act("fps")
+	_ok("and back to orbit", v.mode == "orbit" and not cam._captured)
+	v._pivot = Vector3(8, 0, 8)
+	var d0: float = cam.global_position.distance_to(v._pivot)
+	var f0: Vector3 = -cam.global_transform.basis.z
+	v.orbit(Vector2(40, 10))
+	_ok("orbit turns round the pivot, at the same distance", absf(cam.global_position.distance_to(v._pivot) - d0) < 0.001
+			and (-cam.global_transform.basis.z).dot(f0) < 0.999)
+	var p0: Vector3 = cam.global_position
+	v.zoom(1)
+	_ok("the wheel zooms", cam.global_position.distance_to(p0) > 0.1)
+	await process_frame
+	t.pick("shape")
+	await process_frame
+	await process_frame
+	_ok("Shapes: a pop-out beside the rail", t.rail.flyout.visible
+			and t.rail.flyout.position.x >= t.rail.position.x + t.rail.size.x)
+	_ok("with every shape a picture", t._kind_row.size() == 8 and (t._kind_row["ring"] as Button).icon != null)
+	(t._kind_row["ring"] as Button).pressed.emit()
+	_ok("pressing one picks it", t.kind == "ring")
+	(t._kind_row["rect"] as Button).pressed.emit()
+	t.pick("place")
+	await process_frame
+	await process_frame
+	_ok("Place has none", not t.rail.flyout.visible)
+	# Only the held brick.
+	var w := BrickWorld.new()
+	var pal := TowerRecipe.bake_palette(w)
+	var only := BrickShapes.parts_for("brick_1x4_x", pal, true)
+	var fam := true
+	for pp in only:
+		fam = fam and BrickPalette.part_of(String(pp[0])) == "brick_1x4"
+	_ok("only this brick: no smaller ones", fam and only.size() >= 1)
+	_hold("brick_1x4")
+	t.only_held = true
+	t.tall = 9
+	var sid := t.add_shape("rect", "flat", Vector2i(4, 20), Vector2i(13, 20), 1)
+	var all_held := true
+	var covered := 0
+	for b in t.shape_of(sid).bricks:
+		all_held = all_held and BrickPalette.part_of(String(b[0])) == "brick_1x4"
+		covered += 12
+	_ok("a wall of only 1x4s: as many as fit, gaps left", all_held and covered > 0 and covered < 90, "%d of 90" % covered)
+	t.only_held = false
+	# Wall thickness.
+	_ws._new_build()
+	_hold("brick_1x2")
+	t.pick("walls")
+	t.wall_thick = 2
+	t._drag = {"phase": "base", "tool": "walls", "button": MOUSE_BUTTON_LEFT, "lie": "flat", "at": 1,
+			"a": Vector2i(4, 4), "b": Vector2i(15, 4), "kind": "polyline", "cut": false}
+	t._to_height()
+	t._drag.rec.depth = 6
+	t.commit_pending()
+	_ok("a wall two studs thick, with a 1-wide brick", _solid(Vector3i(8, 2, 4)) and _solid(Vector3i(8, 2, 5)) and not _solid(Vector3i(8, 2, 6)))
+	t.wall_thick = 0
+	_ws._new_build()
+	_hold("brick_1x2")
+	t.wall_thick = 3
+	t.pick("sketch")
+	t.lie = "flat"
+	t.sketch_level = 1
+	t.sketch_makes = "walls"
+	t.pen.draw = "polygon"
+	t.pen.points.clear()
+	t._sk = {"lie": "flat", "at": 1}
+	for q in [Vector2(4, 4), Vector2(24, 4), Vector2(24, 18), Vector2(4, 18)]:
+		t.pen.polygon_click(q, false, false)
+	t._sketch_commit()
+	t.raise_plan()
+	t._drag.rec.depth = 6
+	t.commit_pending()
+	_ok("a floor plan's walls 3 studs thick", _solid(Vector3i(6, 2, 10)) and not _solid(Vector3i(7, 2, 10)))
+	t.wall_thick = 0
+	t.sketch_level = -1
+	t.sketch_makes = "solid"
+	# Two walls meet at a corner.
+	_ws._new_build()
+	_hold("brick_1x2")
+	t.pick("walls")
+	var w1: int = _a_wall(t, Vector2i(4, 4), Vector2i(15, 4), 9)
+	_ok("a wall's end snaps to the corner near it", t._wall_snap(Vector2i(14, 5), 1) == Vector2i(15, 4))
+	_ok("and onto a wall's line", t._wall_snap(Vector2i(9, 5), 1) == Vector2i(9, 4))
+	var w2: int = _a_wall(t, Vector2i(15, 4), Vector2i(15, 13), 9)
+	_ok("the second wall starts at the height of the one it meets", _wall_started == 9)
+	_ok("walls that meet are one shape", w2 == w1 and t.shapes().size() == 1)
+	var along := []
+	for y in [1, 4, 7]:
+		for b in t.shape_of(w1).bricks:
+			var c := BuildRecipe.cell_from(b[1])
+			var size := BrickPalette.size_of(String(b[0]))
+			if c.y <= y and y < c.y + size.y and c.x <= 15 and 15 < c.x + size.x and c.z <= 4 and 4 < c.z + size.z:
+				along.append("x" if size.x > size.z else "z")
+	_ok("the corner's courses take turns: interlocked", along.size() == 3 and along[0] != along[1] and along[1] != along[2], str(along))
+	var w3: int = _a_wall(t, Vector2i(9, 4), Vector2i(9, 13), 9)
+	_ok("a T joins too", w3 == w1 and t.shapes().size() == 1 and _solid(Vector3i(9, 4, 9)))
+	var w4: int = _a_wall(t, Vector2i(4, 4), Vector2i(4, 13), 6)
+	_ok("a different height stays its own wall", w4 != w1 and t.shapes().size() == 2)
+	_ws._undo()
+	_ws._undo()
+	_ok("undo takes a joined wall back out", t.shapes().size() == 1 and not _solid(Vector3i(9, 4, 9)) and _solid(Vector3i(15, 4, 9)))
+	# Cut: draw on a face, click through or drag a depth.
+	_ws._new_build()
+	_hold("brick_1x4")
+	t.tall = 9
+	t.add_shape("rect", "flat", Vector2i(4, 4), Vector2i(15, 7), 1)
+	t.pick("cut")
+	var face := t.face_under(Vector3(6.5 * 0.35, 3.5 * 0.14, -3.0), Vector3(0, 0, 1))
+	_ok("the face knows its way in", int(face.front) == 4 and int(face.into) == 1 and int(face.depth) == 4)
+	t._begin_on_face(face, true, MOUSE_BUTTON_LEFT)
+	t._drag.b = Vector2i(7, 5)
+	t._to_height()
+	_ok("let go: right through to start", int(t._drag.rec.depth) == 4 and int(t._drag.rec.at) == 4)
+	t.commit_pending()
+	_ok("a click cuts through", not _solid(Vector3i(6, 4, 4)) and not _solid(Vector3i(6, 4, 7)))
+	var f2 := t.face_under(Vector3(11.5 * 0.35, 3.5 * 0.14, -3.0), Vector3(0, 0, 1))
+	t._begin_on_face(f2, true, MOUSE_BUTTON_LEFT)
+	t._drag.b = Vector2i(12, 5)
+	t._to_height()
+	t._drag.through = false
+	t._drag.rec.depth = 2
+	t._drag.rec.at = 4
+	t.commit_pending()
+	_ok("dragged 2 deep: a pocket", not _solid(Vector3i(11, 4, 5)) and _solid(Vector3i(11, 4, 6)))
+	# A shape comes out of a wall's face.
+	t.pick("shape")
+	var f3 := t.face_under(Vector3(9.5 * 0.35, 3.5 * 0.14, -3.0), Vector3(0, 0, 1))
+	_hold("brick_1x2")
+	t._begin_on_face(f3, false, MOUSE_BUTTON_LEFT)
+	t._drag.b = Vector2i(10, 6)
+	t._to_height()
+	t.commit_pending()
+	_ok("a shape on a face comes out of it", _solid(Vector3i(9, 4, 3)) and not _solid(Vector3i(9, 4, 2)))
+	t.kind = "rect"
+	t.pick("place")
+
+
+var _wall_started := 0
+
+
+## A wall as the mouse makes one: the base, the height, the click.
+func _a_wall(t: WorkshopTools, a: Vector2i, b: Vector2i, depth: int) -> int:
+	t._drag = {"phase": "base", "tool": "walls", "button": MOUSE_BUTTON_LEFT, "lie": "flat", "at": 1,
+			"a": a, "b": b, "kind": "polyline", "cut": false}
+	t._to_height()
+	_wall_started = int(t._drag.rec.depth)
+	t._drag.rec.depth = depth
+	return t.commit_pending()

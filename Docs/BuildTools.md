@@ -458,3 +458,23 @@ draw a shape, drag the depth -- and most tools the same.
    a wall sideways to move it. Select's numbers go.
 6. **Draw on any face in Sketch** too, and draw cuts with the pen (a freehand hole).
 7. **Windows stay with a building**: raise it later and new storeys get them.
+
+### As built (2026-10-31)
+
+"Being built" above, all of it, merged; `tools/build_tools_probe.gd` 178 checks.
+
+* `WorkshopView` owns the mouse in the building workshop: the camera's click-to-capture is off
+  there (`click_captures`, `ctrl_descends`). The asset workshop's camera is as it was, and so is
+  its Esc. Esc pauses through `workshop.gd`'s `pause_allowed`, never over a test window or a gate.
+* An RMB in orbit waits to see if it moves: moved, it looks round; a plain click is replayed to
+  the tools on release. So Shapes' RMB-drag cut needs Cut or "Cut out" in orbit. With a drawing
+  under way RMB cancels at once, as before.
+* The pop-out is `ToolRail.pop_out` / `pictures`, only the building workshop's so far. Lists
+  that are long or data-driven (Rooms' module rules) stay dropdowns.
+* "Only this" is `strict` on a shape: `parts_for` gives just the held brick; a staggered course
+  starts with a gap, not a half brick. The status line says how many cells stay empty.
+* Walls join through `_commit_wall`: a joined wall is `points.more`, more lines in one shape.
+  They must match in height, thickness, brick, colour, material and bond; a wall that differs
+  stays its own, and its bricks go round the other's. Off while the mirror is on.
+* `face_under` also gives `front` and `into`. Cut, a Shapes "Cut out" and a Shape pressed on a
+  wall's side all start from `_begin_on_face`.

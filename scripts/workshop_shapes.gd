@@ -9,7 +9,8 @@ extends RefCounted
 ##
 ##   kind    rect, hollow, circle, ring, triangle, line, arch, stairs, jamb (a hollow
 ##           rectangle with no bottom: a door's frame), outline (`points`: drawn), polyline
-##           (`points` {pts, closed}: a wall line), cells (`points`: the cells themselves, a
+##           (`points` {pts, closed, more}: a wall line, `more` the lines joined to it),
+##           cells (`points`: the cells themselves, a
 ##           floor), roof (its own: `roof_plan`), or plan (a floor plan: `points`
 ##           {adds, subs} of strokes; filled, walls along its outline, or a building with a
 ##           floor each storey -- `plan_cells`)
@@ -139,13 +140,17 @@ static func _stair_has(u: int, v: int, a: Vector2i, b: Vector2i) -> bool:
 	return k >= from and k <= to
 
 
-## A wall line's cells: each segment of `points` ({pts: [[u, v], ...], closed}) `rim` wide.
-## A segment along u or v is a band, grown past its ends by the same so corners close;
-## any other is every cell within half the rim of it.
+## A wall line's cells: each segment of `points` ({pts: [[u, v], ...], closed, more}) `rim`
+## wide, and of each line in `more` (walls joined to it at a corner or a T). A segment along
+## u or v is a band, grown past its ends by the same so corners close; any other is every
+## cell within half the rim of it.
 static func polyline_cells(points: Variant, r: int, asp: float = 1.0) -> Dictionary:
 	var pts: Array = points.get("pts", []) if points is Dictionary else points
 	var closed: bool = points is Dictionary and bool(points.get("closed", false))
 	var res := {}
+	if points is Dictionary:
+		for line in points.get("more", []):
+			res.merge(polyline_cells({"pts": line}, r, asp))
 	var n := pts.size()
 	if n == 0:
 		return res
@@ -411,6 +416,8 @@ static func reflected(sh: Dictionary, axis: int, plane: float) -> Dictionary:
 				pts.brush = (pts.brush as Array).map(flip)
 			elif pts is Dictionary and pts.has("pts"):
 				pts.pts = (pts.pts as Array).map(flip)
+				if pts.has("more"):
+					pts.more = (pts.more as Array).map(func(line: Array) -> Array: return line.map(flip))
 			else:
 				out.points = (pts as Array).map(flip)
 	if out.has("cuts"):
@@ -461,7 +468,10 @@ static func shifted(sh: Dictionary, d: Vector3i) -> Dictionary:
 		if pts is Dictionary and pts.has("brush"):
 			pts.brush = (pts.brush as Array).map(func(q: Array) -> Array: return [float(q[0]) + m.x, float(q[1]) + m.y])
 		elif pts is Dictionary and pts.has("pts"):
-			pts.pts = (pts.pts as Array).map(func(q: Array) -> Array: return [int(q[0]) + m.x, int(q[1]) + m.y])
+			var mv2 := func(q: Array) -> Array: return [int(q[0]) + m.x, int(q[1]) + m.y]
+			pts.pts = (pts.pts as Array).map(mv2)
+			if pts.has("more"):
+				pts.more = (pts.more as Array).map(func(line: Array) -> Array: return line.map(mv2))
 		else:
 			out.points = (pts as Array).map(func(q: Variant) -> Array:
 				var v := q as Vector2 if q is Vector2 else Vector2(float(q[0]), float(q[1]))

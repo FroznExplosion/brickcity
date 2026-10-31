@@ -140,11 +140,11 @@ func pop_out(layer: CanvasLayer, width: float) -> void:
 func place_flyout(y: float, bottom: float) -> void:
 	if flyout == null:
 		return
-	var show := false
+	var any := false
 	for c in options.get_children():
-		show = show or (c as Control).visible
-	flyout.visible = show
-	if not show:
+		any = any or (c as Control).visible
+	flyout.visible = any
+	if not any:
 		return
 	var h := minf(options.get_combined_minimum_size().y, bottom - position.y)
 	_fly_scroll.custom_minimum_size = Vector2(flyout.custom_minimum_size.x - 12.0, h)
@@ -178,7 +178,6 @@ func pictures(box: Container, label: String, items: Array, picked: Callable, on:
 			b.icon_alignment = HORIZONTAL_ALIGNMENT_CENTER
 			b.vertical_icon_alignment = VERTICAL_ALIGNMENT_TOP
 		b.custom_minimum_size.x = (flyout.custom_minimum_size.x if flyout != null else _width) / columns - 6.0
-		b.clip_text = true
 		b.toggle_mode = true
 		b.button_group = group
 		b.button_pressed = String(it[0]) == on
