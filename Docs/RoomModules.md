@@ -180,13 +180,14 @@ and lifts).
 ## 4. Set by shell (stage 6, built 2026-10-31)
 
 `scripts/room_shell.gd`, `RoomShell.generate(lib, {seed, width, depth, footprint, storeys, pitch,
-setback, setback_every, corridor, room_max, window_every, fill, lift})` -> `{ok, why, recipe,
-plan, stats}`. The outside first: a **footprint** -- the box `width` x `depth`, or any shape,
+setback, setback_every, setback_sides, corridor, room_max, window_every, fill, lift, balcony})` ->
+`{ok, why, recipe, plan, stats}`. The outside first: a **footprint** -- the box `width` x `depth`, or any shape,
 `footprint` the columns it stands on (in the workshop: the outline the open build closes round,
 drawn with Sketch or Walls, `RoomShell.footprint_of` / `RoomModules.footprint`) -- `storeys`
 high, `pitch` plates a storey (0: the height most room-role modules have, `pitch_of`; 14 for a
-floor plate, twelve plates of room and a ceiling), stepped in by `setback` studs on every side
-every `setback_every` storeys. A storey's outer wall is its footprint's edge (corners too); the
+floor plate, twelve plates of room and a ceiling), stepped in by `setback` studs every
+`setback_every` storeys on the sides `setback_sides` names (of "nsew", north +Z, east +X; all
+four unless said). A storey's outer wall is its footprint's edge (corners too); the
 rest is inside.
 
 * **The stair hall** where the top storey has room for it and six studs of corridor east of it,
@@ -206,7 +207,19 @@ rest is inside.
   corridor, its door's outer face on the corridor's first row and its own wall standing in the
   corridor wall's line, inside the storey's footprint, clear of the hall and the lift, no higher
   than the pitch, its storey rule and `max` kept, picked by weight -- with the chance `fill`, else
-  a stud on. Its other doors are walled up (the grow's caps).
+  a stud on. Its other doors are walled up (the grow's caps). A stair-role module too, below the
+  top storey, when it has a stair link up.
+* **Stairs between modules** (built 2026-10-31): before the rest of a storey is filled, over each
+  module of the storey below with a stair link up, a module with a stair link down in the same
+  column whose door opens onto the same side's corridor, where one fits (any of the room,
+  corridor and stair roles, weighted). Joined as the grow joins them (`RoomGrow._stair`: the steps
+  in the room below, the ceiling and the floor over them cut); the shell's slab is not laid in a
+  cut. `stats.stairs`, `plan.stacks`.
+* **Module facade spots** (built 2026-10-31) where the module's wall is the tower's outer wall
+  (outside the storey past it): a window spot cut 2 x 6 (glazed in a glass tower), a balcony spot
+  built out (the grow's balcony) with the chance `balcony` above the ground storey, where nothing
+  of the ground storey's footprint is under it. `stats.windows`, `stats.balconies`. Hang spots
+  are not used in a tower.
 * **Filler rooms**: whatever of the storey is left, split by a wall every `room_max` studs either
   way, each given a doorway (two columns) to the corridor, the hall or a filler room already
   reached, round by round, so every room is reached; a piece under 4 columns stays closed.
@@ -223,13 +236,13 @@ rest is inside.
 Laid by `RoomGrow.lay` (the plan says where it stands, `at`); the record gets the modules' rooms
 and the shell's own (a corridor with its hall a storey, the filler rooms); `meta["generated"]`
 says `generator: "shell"`. In the workshop: under the grow on the rooms panel, *Set a tower by its
-shell*: seed, width, depth, storeys, setback, every, *this build's outline as the footprint*,
-**Generate tower**, **Next seed** (the plate and the volume over it grow to hold a tall one).
-`tools/room_shell_probe.gd` (12).
+shell*: seed, width, depth, storeys, setback, every, *sides in* N S E W, *this build's outline
+as the footprint*, **Generate tower**, **Next seed** (the plate and the volume over it grow to hold
+a tall one). `tools/room_shell_probe.gd` (15: adds a north-only setback, stacked stair modules
+open room to room, facade windows and balconies).
 
-Not yet: modules whose rooms have stair links are not stacked through the storeys (the hall and
-the lift are the way up); facade spots of a module in the shell are not used; a setback is the
-same on every side.
+Not yet: hang spots in a tower; a cap and a facade window on the same wall cells (a module made
+so) leaves the cap.
 
 ## 5. Markers in the workshop (stage 1, built)
 
@@ -259,3 +272,127 @@ Code: `StructureSpaces.connectors` / `door_connector` / `cycle_link` (record sid
 | 6 | set by shell: a box tower, stair hall, corridor, modules on it, filler rooms, windows; Generate tower; `room_shell_probe` (9) | built 2026-10-31 |
 | -- | the grow's "not yet": hang role, two-plate steps, stair and doorway cuts by the cell, caps in the wall's brick in a bond | built 2026-10-31 |
 | 7 | doors in doorways (BuildDoors); towers in a drawn outline, setbacks, a lift (BuildLifts); `build_doors_probe` (10) | built 2026-10-31 |
+| -- | the shell's "not yet": stair modules stacked, module facade spots, setbacks by side; `room_shell_probe` (15) | built 2026-10-31 |
+| 8-12 | stations and ship interiors (section 7) | planned |
+
+## 7. Plan: stations in space and ship interiors (2026-10-31)
+
+The user: the generated structures should also make **space stations**, fully generated in
+space -- abstract, ISS-like, many rooms and passageways joined up; later the same system fills
+**ships** with rooms, using as much of a confined hull as it can, the rooms part of a flyable ship
+(planet.tscn's `SpaceShip`). Ships are in parts and break brick by brick a section at a time;
+stations follow that.
+
+What exists to build on: the grow (3) and the shell (4) over one library of hand-built modules;
+doors and lifts as nodes following a chunk (3.2, 4); `SpaceStation` / `SpaceShip`
+(Docs/Planets.md 11.12 steps 2, 3, 3b): one chunk from a template, hits (`DamageLog`), what comes
+loose solved (`solve_structure`), big loose groups drifting (`drifted`), down toward a virtual
+centre under the deck; Docs/Space.md 3.2: a big ship or station is **sections**, each about a
+city building (5-15k bricks), joined by **joints** with hit points, the section that holds the
+bridge or core the **root**; a section cut off from the root leaves whole.
+
+### 7.1 Sections: one generated build in parts (stage 8)
+
+Both generators learn to cut what they make into sections, because stations and ships both need
+it and it can be probed in the workshop before anything flies.
+
+* A **section** is a set of whole placements (a module is never split) plus the shell bricks
+  between them; `plan.sections` = `[{id, placements, root}]`, `plan.joints` = `[{a, b, cells,
+  kind}]` -- the bricks where two sections meet (a tube's collar, a bulkhead), each joint's own
+  hit points to come.
+* Cut where the plan is thinnest: the grow cuts at joins whose two sides are each over a brick
+  budget (`section_bricks`, default 8000) -- a corridor or tube between clusters; the shell
+  (ships) cuts at bulkheads, below.
+* `RoomGrow.lay_sections(lib, plan)` -> one `BuildRecipe` per section, each with its own rooms,
+  doors and lifts, and the transform that puts it back with the others; `lay` stays the one-build
+  form. A door or lift never crosses a joint (it goes in one section's bricks).
+* Workshop: the preview tints each section; the status line counts sections, joints, bricks a
+  section. Probe: no placement in two sections; each section's bricks under the budget; the
+  sections laid together are the same bricks as `lay`.
+
+### 7.2 The station grower (stage 9)
+
+A third generator, `RoomStation` (`scripts/room_station.gd`), the grow's rules in all three
+directions, with station roles in the module rules:
+
+| role | what (built by hand in the workshop as now, a kit to start) |
+|---|---|
+| `node` | a hub: a short box or round room with **ports** on up to six faces |
+| `pod` | a pressurised module: a long room (lab, quarters, galley, storage), ports at its ends, windows |
+| `tube` | a passageway: 4 x 4 inside, 4-20 studs, a port each end -- the station's corridors |
+| `core` | the root: control, power; one a station (`min` 1, `max` 1); its section is the root |
+| `truss` | open lattice (no room), carries `panel` and `radiator` spots; not pressurised |
+| `dock` | a port to the outside with a docking ring: where the ship holds (step 3b's docking) |
+
+* **Ports** are the grow's door connectors (a doorway, its size, a facing) plus **up and down**:
+  a vertical port is a pair of stair links with a ladder or a lift (BuildLifts) -- one "down"
+  for the whole station as now (the deck's gravity), so pods lie flat and the station spreads
+  mostly in a plane, the ISS's shape, with a few levels.
+* **Grown from the core**: the path is replaced by a **spine** (core -> nodes -> a dock at each
+  end), then branches (pods off nodes, tubes to new nodes) and loops (two nodes whose ports face
+  across a gap a tube fits get the tube: the "many interconnected passageways"). The grow's
+  checks hold: no module in another, every room reached, same seed same station.
+* **The abstract look** comes from the kit and the dressing, not the grower: pods in white and
+  light grey with a colour band a station, round modules where the part library has the rounds;
+  trusses as long open frames sticking out of nodes with `panel` spots filled by **solar wings**
+  (flat plate arrays, 2-4 per truss) and `radiator` spots by fins; windows on pods by the grow's
+  facade spots, a cupola by a `window` spot on a node's down face.
+* Sections (7.1): a node with its pods is a section; a tube between two is a joint. The core's
+  section is the root.
+* Workshop: *Grow a station* on the rooms panel (seed, modules, loops, solar wings); in the city
+  it is just another generated build until stage 10.
+
+### 7.3 Stations in space (stage 10, with the planets area)
+
+`SpaceStation` lays a generated station instead of a tower's recipe: **one chunk a section**
+(each from its own template, so laying stays ~1-3 ms), placed by the section transforms; the
+shell boxes and the far look (`look`) made from the section boxes. Hits as now, per section. A
+joint's bricks are tracked: when a hit leaves a section joined to the root through no joint, the
+section **leaves whole** -- the `drifted` path, as one rigid piece with its bricks, rooms, doors
+and anyone inside riding its frame; under the budget it can break again brick by brick (Space.md
+3.2-3.3). Generated systems get generated stations (seeded from the orbital's seed); home's
+station stays the story's until the user says.
+
+This is in `scripts/space/` (the planets area): its work, or small changes merged soon, agreed
+first.
+
+### 7.4 Ship interiors: as much of the hull as rooms (stage 11)
+
+The shell's idea turned inside out: the **hull is the outside**, given, and rooms are packed into
+it. `RoomShell` gets a `hull` mode (or a sibling, `RoomPack`):
+
+* **The hull's inside**: a ship build's bricks (a hull made in the workshop or by the converter)
+  -> per deck, the columns inside the hull at that deck's height (the hull's cross-section, as
+  `RoomModules.footprint` finds an outline); decks `pitch` apart where the hull is tall enough.
+  So every deck has its own footprint, as setbacks give storeys theirs.
+* **A spine, not a hall**: one corridor fore to aft down each deck's middle (it bends with the
+  hull), a ladder well and a lift where the decks overlap most, a hatch to the bridge.
+* **Zones** in the module rules: `zone` = fore / mid / aft / core / hull / any, `min`: a bridge
+  fore (its `seat` spot is the pilot's seat), an engine room aft (its `engine` spots where the
+  engines mount), a reactor at the core, then quarters, galley, med bay, cargo, airlock by weight.
+  Required ones first, biggest first.
+* **Using the space** -- the goal, and a number to probe: `stats.fill` = room air cells / the
+  hull's inside cells, aimed at 85% or more. Modules are tried at every stud along the spine (not
+  only west to east once), each seed tries its fits largest first and keeps the best of a few
+  passes; what is left goes to filler rooms as now, then to **storage nooks and crawlways**
+  (pieces under 4 columns become lockers or ducts, not dead space). Walls one stud, shared.
+* **Bulkheads are the sections**: across the hull every `section_studs` (about a building's
+  length, 24-40 studs), a wall with a pressure door at the spine; no module straddles one. Each
+  section a chunk, the bulkheads its joints; the bridge's section the root.
+
+### 7.5 The ship flies its rooms (stage 12, with the planets area)
+
+`SpaceShip` builds from a generated hull and interior instead of its 24 x 36 tower module: the
+bridge's `seat` spot is `seat()`, the engines on the engine room's spots, its hull box from the
+sections' boxes; sections as stations' (7.3): a section shot off its joints leaves whole and can
+then be broken brick by brick, the rest still flies. planet.tscn's parked ship the first one.
+
+### 7.6 Order and choices
+
+Stage 8 (sections) first: everything after leans on it and it is all in this area. Then 9 (the
+station grower, workshop only), then 11 (ship interiors, workshop only), and 10 and 12 with the
+planets area's chat. Each stage merged with its probe, as stages 1-7.
+
+Defaults taken unless the user says otherwise: a station keeps one "down" (its deck's gravity),
+not zero-g inside; pods are box-shaped with round parts where the part library has them;
+`section_bricks` 8000.

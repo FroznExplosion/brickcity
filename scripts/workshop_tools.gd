@@ -198,7 +198,7 @@ var _module_weight: SpinBox
 var grow_params := {"seed": 1, "rooms": 10, "path": 3}
 ## What Generate tower sets out (RoomShell.PARAMS).
 var shell_params := {"generator": "shell", "seed": 1, "width": 44, "depth": 28, "storeys": 4,
-		"setback": 0, "setback_every": 0, "outline": false}
+		"setback": 0, "setback_every": 0, "setback_sides": "nsew", "outline": false}
 var _slope_cache := {}
 var _repeat_label: Label
 var _rep_lo_spin: SpinBox
@@ -1282,6 +1282,21 @@ func _build_options() -> void:
 			func(v: float) -> void: shell_params.setback = int(v))
 	_spin(_rooms_box, "every (storeys, 0 none)", 0, 30, int(shell_params.setback_every),
 			func(v: float) -> void: shell_params.setback_every = int(v))
+	# The sides that step in: north +Z, south -Z, east +X, west -X.
+	var sides_row := HBoxContainer.new()
+	_rooms_box.add_child(sides_row)
+	var sl := Label.new()
+	sl.text = "sides in:"
+	sides_row.add_child(sl)
+	for side in ["n", "s", "e", "w"]:
+		var sb := CheckBox.new()
+		sb.text = side.to_upper()
+		sb.focus_mode = Control.FOCUS_NONE
+		sb.button_pressed = String(shell_params.setback_sides).contains(side)
+		sb.toggled.connect(func(on: bool) -> void:
+				var now := String(shell_params.setback_sides).replace(side, "")
+				shell_params.setback_sides = now + side if on else now)
+		sides_row.add_child(sb)
 	var outline := CheckBox.new()
 	outline.text = "this build's outline as the footprint"
 	outline.focus_mode = Control.FOCUS_NONE

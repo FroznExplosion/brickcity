@@ -19,6 +19,11 @@ extends SceneTree
 ##   L         a drawn footprint (an L): nothing laid outside it, every room reached
 ##   setback   3 studs in every 2 storeys, a rail round each terrace, every room reached
 ##   lift      a shaft beside the hall, a stop a storey, open ground to top
+##   sides     a setback on the north side only: the other walls straight up
+##   stacked   modules with a stair link up get one with a link down over them
+##             on the next storey, the room below open to the room above
+##   facade    a module's window spots on the outer wall cut (or glazed), its
+##             balcony spots built out past the tower
 ##   seed      the same seed the same tower; another, another
 ##   small     a shell too small for its hall and corridor says so
 
@@ -289,6 +294,95 @@ func _run() -> void:
 	_ok("a lift shaft beside the hall, a stop each storey, open from the ground to the top storey",
 			lifts.size() == 1 and (lifts[0].stops as Array).size() == 4 and shaft_bad == 0,
 			"%s, %d cell(s) in the shaft" % [str(lifts), shaft_bad])
+
+	# A setback on one side: north (+Z) 4 studs every 2 storeys, the rest straight.
+	var ns := RoomShell.generate(lib, {"seed": 3, "width": 44, "depth": 36, "storeys": 4, "setback": 4,
+			"setback_every": 2, "setback_sides": "n"})
+	var ns_bad := []
+	if ns.ok:
+		var cells := _cells(ns.recipe)
+		for st in 4:
+			var y := st * pitch + 2
+			var north := 36 - (4 if st >= 2 else 0)
+			if not cells.has(Vector3i(1, y, 20)):
+				ns_bad.append("storey %d: no west wall at 1" % st)
+			if not cells.has(Vector3i(44, y, 20)):
+				ns_bad.append("storey %d: no east wall at 44" % st)
+			if not cells.has(Vector3i(30, y, 1)):
+				ns_bad.append("storey %d: no south wall at 1" % st)
+			if not cells.has(Vector3i(30, y, north)) or cells.has(Vector3i(30, y, north + 1)):
+				ns_bad.append("storey %d: north wall not at %d" % [st, north])
+	_ok("a setback on the north side only: that wall steps in, the others go straight up",
+			bool(ns.ok) and ns_bad.is_empty(), str(ns.get("why", "")) + str(ns_bad))
+
+	# Stair links and facade spots: modules made for them, weighted up.
+	var recs := Kit.modules()
+	recs.append(Kit.box("stair_lo", 10, 10, {"role": "room", "weight": 4.0}, [[1, 4, "auto"], [3, 4, "auto"]],
+			[], [["stair_up", [8, Kit.H, 5], -1]]))
+	recs.append(Kit.box("stair_hi", 10, 10, {"role": "room", "storeys": "upper", "weight": 4.0},
+			[[1, 4, "auto"], [3, 4, "auto"]], [], [["stair_down", [8, 1, 5], -1]]))
+	recs.append(Kit.box("bay", 10, 10, {"role": "room", "weight": 3.0}, [[1, 4, "auto"], [3, 4, "auto"]],
+			[], [["window", [7, 4, 0], 3], ["balcony", [1, 5, 0], 3]]))
+	var slib := RoomModules.from_recipes(recs)
+	var stacked := 0
+	var stack_bad := []
+	var balconies := 0
+	var facade_n := 0
+	var shut := 0
+	var glass_m := RoomGrow._glass()
+	for sd in range(1, 7):
+		var t := RoomShell.generate(slib, {"seed": sd, "width": 44, "depth": 28, "storeys": 4, "balcony": 1.0})
+		if not t.ok:
+			stack_bad.append("seed %d: %s" % [sd, t.why])
+			continue
+		stacked += int(t.stats.stairs)
+		balconies += int(t.stats.balconies)
+		facade_n += int(t.stats.windows)
+		var cells := _cells(t.recipe)
+		var at: Vector3i = t.plan.at
+		var stair_cols := {}
+		for st: Array in t.plan.stacks:
+			var lo: Dictionary = t.plan.placed[int(st[0].p)]
+			var hi: Dictionary = t.plan.placed[int(st[1].p)]
+			var ls: Dictionary = slib[lo.m].turns[lo.t].spaces[int(st[0].space)]
+			var us: Dictionary = slib[hi.m].turns[hi.t].spaces[int(st[1].space)]
+			var lo_off: Vector3i = (lo.off as Vector3i) + at
+			var hi_off: Vector3i = (hi.off as Vector3i) + at
+			var cols := {}
+			for c: Vector2i in ls.cols:
+				cols[Vector2i(c.x + lo_off.x, c.y + lo_off.z)] = true
+				stair_cols[Vector2i(c.x + lo_off.x, c.y + lo_off.z)] = true
+			for c: Vector2i in us.cols:
+				cols[Vector2i(c.x + hi_off.x, c.y + hi_off.z)] = true
+			var y0 := int(ls.floor_y) + lo_off.y
+			var y1 := int(us.ceil_y) + hi_off.y
+			var inside := func(c: Vector3i) -> bool:
+				return c.y > y0 and c.y < y1 and cols.has(Vector2i(c.x, c.z))
+			var start := Vector3i(int(ls.seed.x) + lo_off.x, y0 + 1, int(ls.seed.z) + lo_off.z)
+			var goal := Vector3i(int(us.seed.x) + hi_off.x, int(us.floor_y) + hi_off.y + 1, int(us.seed.z) + hi_off.z)
+			# Only through the two rooms' own columns: up the stair's hole.
+			if not _flood(cells, start, inside).has(goal):
+				stack_bad.append("seed %d: room over %s not open to the one under it" % [sd, str(st[0].at)])
+		# Facade windows: cut cells hold glass or nothing (stair steps apart).
+		var solid := {}
+		for i in t.recipe.size():
+			if t.recipe.material_of(i) == glass_m and glass_m >= 0:
+				continue
+			var c: Vector3i = t.recipe.cell_of(i)
+			var sz: Vector3i = BuildRecipe.part_size(t.recipe.part_of(i))
+			for y in sz.y:
+				for z in sz.z:
+					for x in sz.x:
+						solid[c + Vector3i(x, y, z)] = true
+		for c: Vector3i in t.plan.cuts:
+			var w := c + at
+			if solid.has(w) and not stair_cols.has(Vector2i(w.x, w.z)):
+				shut += 1
+	_ok("stair links stacked: a module with a link down over each one with a link up it could, the room below open to the room above",
+			stacked > 0 and stack_bad.is_empty(), "%d stair(s) in 6 towers %s" % [stacked, str(stack_bad.slice(0, 3))])
+	_ok("module facade spots on the outer wall: windows cut (or glazed), balconies built out",
+			facade_n > 0 and balconies > 0 and shut == 0,
+			"%d window(s), %d balcony(ies), %d cut cell(s) still solid" % [facade_n, balconies, shut])
 
 	var small := RoomShell.generate(lib, {"seed": 1, "width": 16, "depth": 12, "storeys": 2})
 	_ok("a shell too small says so", not bool(small.ok) and String(small.why) != "", String(small.why))
