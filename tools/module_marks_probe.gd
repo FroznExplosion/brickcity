@@ -24,10 +24,12 @@ extends SceneTree
 ##   tower      Generate tower sets a tower by its shell (stage 6), the volume over
 ##              the plate grown for its height; with the outline ticked, in the
 ##              outline the build open is
+##   station    Generate station grows a station from the station kit (7.2)
 ##   sections   the tower cut in sections (BuildSections): a box and a label
 ##              round each, their bricks in the message
 
 const Kit := preload("res://tools/room_module_kit.gd")
+const StationKit := preload("res://tools/station_module_kit.gd")
 
 var _ws
 var _frames := 0
@@ -257,6 +259,19 @@ func _run() -> void:
 	_ok("Generate tower in a drawn outline (an L): the tower inside it, nothing outside",
 			bool(ot.get("ok", false)) and outside == 0 and _ws.recipe.size() > 0,
 			"%s; %d brick(s) outside" % [sp.message, outside])
+	# Generate station: the station kit's modules, a station open on the plate.
+	RoomModules.use_recipes(StationKit.modules())
+	_ws._dirty = false
+	var sta: Dictionary = sp.generate({"generator": "station", "seed": 2, "modules": 14})
+	var slaid := 0
+	for at in _ws._placed_at:
+		if int(at[1]) >= 0:
+			slaid += 1
+	_ok("Generate station opens a station grown from the core, every brick laid",
+			bool(sta.get("ok", false)) and String(_ws.recipe.meta.generated.generator) == "station"
+			and slaid == _ws.recipe.size() and String(sp.message).begins_with("station"),
+			"%s; %d of %d bricks" % [sp.message, slaid, _ws.recipe.size()])
+	RoomModules.use_recipes(Kit.modules())
 	_ws._dirty = false
 	plan = sp.generate({"seed": 3, "rooms": 8, "path": 2})
 	RoomModules.use_recipes([])

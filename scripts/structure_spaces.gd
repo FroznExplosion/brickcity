@@ -29,7 +29,7 @@ const LINKS := ["auto", "off", "start", "finish"]
 const CONNECTOR_OPENINGS := ["doorway", "door", "arch", "open"]
 ## Markers placed by hand (Docs/RoomModules.md 2.2, 2.4): stair links, and
 ## facade spots on an outside wall.
-const MARK_KINDS := ["stair_up", "stair_down", "window", "balcony", "hang"]
+const MARK_KINDS := ["stair_up", "stair_down", "window", "balcony", "hang", "panel", "radiator"]
 const STAIR_MARKS := ["stair_up", "stair_down"]
 ## A connector's facing, by index: out of the room along +X, +Z, -X, -Z.
 const FACINGS := [Vector2i(1, 0), Vector2i(0, 1), Vector2i(-1, 0), Vector2i(0, -1)]

@@ -274,7 +274,8 @@ Code: `StructureSpaces.connectors` / `door_connector` / `cycle_link` (record sid
 | 7 | doors in doorways (BuildDoors); towers in a drawn outline, setbacks, a lift (BuildLifts); `build_doors_probe` (10) | built 2026-10-31 |
 | -- | the shell's "not yet": stair modules stacked, module facade spots, setbacks by side; `room_shell_probe` (15) | built 2026-10-31 |
 | 8 | sections: generated builds cut into parts with joints, split into builds of their own, shown in the workshop; `build_sections_probe` (7) | built 2026-10-31 |
-| 9-12 | station grower, stations in space, ship interiors, ships flying them (section 7) | planned |
+| 9 | the station grower: core, spine, docks, bridging tubes, solar wings, radiators; Generate station; `room_station_probe` (8) | built 2026-10-31 |
+| 10-12 | stations in space, ship interiors, ships flying them (section 7) | planned |
 
 ## 7. Plan: stations in space and ship interiors (2026-10-31)
 
@@ -329,37 +330,51 @@ and stale once edited; the default budget (a 12-storey tower: six sections of ~7
 
 Not yet: joints have no hit points (stage 10); the city and the workshop still lay a build whole.
 
-### 7.2 The station grower (stage 9)
+### 7.2 The station grower (stage 9, built 2026-10-31)
 
-A third generator, `RoomStation` (`scripts/room_station.gd`), the grow's rules in all three
-directions, with station roles in the module rules:
+`scripts/room_station.gd`, `RoomStation.generate(lib, {seed, modules, spine, docks, bridges, wings,
+section_bricks})` -> `{ok, why, recipe, plan, stats}`: the grow (3) with a station's roles --
+`RoomStation` extends `RoomGrow`, which now names its roles in variables (`path_roles`,
+`branch_roles`, `start_role`, `finish_role`) and has two hooks, `_more` (after the branches) and
+`_dress` (a facade spot of a kind it does not know).
 
-| role | what (built by hand in the workshop as now, a kit to start) |
+| role | what (built by hand in the workshop; `tools/station_module_kit.gd` for the probes) |
 |---|---|
-| `node` | a hub: a short box or round room with **ports** on up to six faces |
-| `pod` | a pressurised module: a long room (lab, quarters, galley, storage), ports at its ends, windows |
-| `tube` | a passageway: 4 x 4 inside, 4-20 studs, a port each end -- the station's corridors |
-| `core` | the root: control, power; one a station (`min` 1, `max` 1); its section is the root |
-| `truss` | open lattice (no room), carries `panel` and `radiator` spots; not pressurised |
-| `dock` | a port to the outside with a docking ring: where the ship holds (step 3b's docking) |
+| `core` | the root: the station grows from it (no core in the library: says so); its section is the root |
+| `node` | a hub: a short room with ports on several faces |
+| `tube` | a passageway: a port each end -- the spine's and the branches' corridors |
+| `pod` | a pressurised room off a node: lab, quarters, galley; windows, radiator spots |
+| `truss` | a frame out from a node with `panel` spots (a room in the kit; any build with a port) |
+| `dock` | a port to the outside, linked *finish*: the docking ring |
 
-* **Ports** are the grow's door connectors (a doorway, its size, a facing) plus **up and down**:
-  a vertical port is a pair of stair links with a ladder or a lift (BuildLifts) -- one "down"
-  for the whole station as now (the deck's gravity), so pods lie flat and the station spreads
-  mostly in a plane, the ISS's shape, with a few levels.
-* **Grown from the core**: the path is replaced by a **spine** (core -> nodes -> a dock at each
-  end), then branches (pods off nodes, tubes to new nodes) and loops (two nodes whose ports face
-  across a gap a tube fits get the tube: the "many interconnected passageways"). The grow's
-  checks hold: no module in another, every room reached, same seed same station.
-* **The abstract look** comes from the kit and the dressing, not the grower: pods in white and
-  light grey with a colour band a station, round modules where the part library has the rounds;
-  trusses as long open frames sticking out of nodes with `panel` spots filled by **solar wings**
-  (flat plate arrays, 2-4 per truss) and `radiator` spots by fins; windows on pods by the grow's
-  facade spots, a cupola by a `window` spot on a node's down face.
-* Sections (7.1): a node with its pods is a section; a tube between two is a joint. The core's
-  section is the root.
-* Workshop: *Grow a station* on the rooms panel (seed, modules, loops, solar wings); in the city
-  it is just another generated build until stage 10.
+* **Ports** are the grow's door connectors; up and down are stair links (one "down" for the
+  station: its deck's gravity, so it spreads mostly flat, the ISS's way).
+* **Grown**: the core, a **spine** of tubes and nodes `spine` long ending in a dock (the grow's
+  path), branches of pods, nodes, tubes and trusses to `modules`, more **docks** on the open ports
+  furthest from the core till there are `docks` (their outer ports left open with a door, not
+  capped: `keep`), then **bridging tubes** (`bridges` at most): two open ports facing each other
+  across a clear gap up to 24 studs along and 8 aside get a tube cut to fit -- wide enough for
+  both doorways, a stud of wall, floor and ceiling round it in the first port's wall brick -- and
+  are joined through it (a loop: rooms reached two ways). Then the grow's loops, caps, facade.
+* **Dressing**: a `panel` spot gets a **solar wing** (a 3-stud boom, then 8 x 16 studs of 2x2
+  tiles, dark blue), a `radiator` spot a radiator (4 x 8, white), flat out from the wall where
+  nothing is (`wings`, the chance). New facade spot kinds in the rooms tool's click marks:
+  *station: a solar wing*, *station: a radiator*; new module roles on the rail: core, node, pod,
+  tube, truss, dock.
+* Laid with its lowest row at 1 (a station has no ground row); `meta["generated"]` says
+  `generator: "station"`; in sections (7.1) by its placements, the core's the root.
+* Workshop: *Grow a station* on the rooms panel: seed, modules, spine, docks, bridging tubes,
+  **Generate station**, **Next seed**; the message counts docks, loops, tubes, wings, radiators,
+  caps and sections.
+
+`tools/room_station_probe.gd` (8): 10 seeds each a station with one core and two docks, no module
+in another, all joined to the core (~90 ms a station of 19 modules); bridging tubes in most, each
+open through both doorways; docks open with a door; wings and radiators clear of every module;
+lowest row 1; sections with the core's the root; same seed same station; no core says so.
+`module_marks_probe` (15): Generate station.
+
+Not yet: tubes bridge on one level only (no ramp or ladder between levels); the abstract look is
+the modules' own (round pods where the user builds them round); no station colour band.
 
 ### 7.3 Stations in space (stage 10, with the planets area)
 
