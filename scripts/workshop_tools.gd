@@ -2843,6 +2843,7 @@ func process() -> void:
 	rail.place_flyout(bt.global_position.y if bt != null else top, vh - 100.0, show_fly)
 	if not show_fly and rid in POPOUT_HIDES and rail.hint != null:
 		rail.hint.text += "  (Point at the tool for its options.)"
+		rail.fit_height(vh - top - 104.0)   # the hint is longer now
 	bricks_button.set_pressed_no_signal(ws._hotbar.is_browsing())
 	# The readout stays put; the pop-out comes and goes over it. The paint palette is beside it.
 	if ws._hud != null:
