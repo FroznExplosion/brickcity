@@ -67,6 +67,15 @@ var template_ms := 0.0
 ## how long growing it took.
 var recipe: BuildRecipe
 var grow_ms := 0.0
+## A generated ship's (ShipBuild): the pilot's cell, the decks' floor rows (its
+## anchors, chunk rows), and its bulkheads as joints: [{a, b, ids, n}] -- the
+## bricks of sections a and b that meet there, how many when whole.
+var seat_cell := Vector3i(-1, -1, -1)
+var deck_rows := PackedInt32Array()
+var joints := []
+var _cut := {}
+## A joint holds while this share of its bricks is left (Docs/Space.md 3.2).
+const JOINT_HOLD := 0.35
 
 
 func setup(d: OrbitalData) -> void:
@@ -203,8 +212,10 @@ func activate() -> void:
 			else TowerRecipe.chunk_dims(data.fx, data.fz, data.courses))
 	bricks.load_template(_template, chunk)
 	if recipe != null:
-		# Its keel is its foundation: what a hit cuts off from the core comes away.
+		# Its keel (a ship's floor) is its foundation; a ship's decks hold too.
 		bricks.set_foundation_level(chunk, 0)
+		if not deck_rows.is_empty():
+			bricks.set_anchor_levels(chunk, deck_rows)
 	# As it was left.
 	if not _dead.is_empty():
 		bricks.kill_blocks(chunk, _dead)
@@ -309,6 +320,8 @@ func _solve() -> void:
 	var groups: Array = bricks.find_detached_groups(chunk) if recipe != null \
 			else (bricks.solve_structure(chunk, 48, 3.0).groups as Array)
 	if groups.is_empty():
+		if not joints.is_empty():
+			_joints_step()
 		return
 	var all := PackedInt32Array()
 	for g in groups:
@@ -327,6 +340,8 @@ func _solve() -> void:
 		drifted.emit(arrays, bricks.get_chunk_transform(c) * Transform3D(Basis(), com), com, ids.size(), brick_material)
 		bricks.release_chunk(c)
 	_after_kill(all)
+	if not joints.is_empty():
+		_joints_step()
 
 
 func _damage_step() -> void:
@@ -460,8 +475,10 @@ func _cut_door(c: int) -> void:
 ## at load), its template built; its box, its shell and its frame made to fit.
 func _prepare_generated() -> void:
 	var t0 := Time.get_ticks_usec()
-	var made := RoomStation.generate(StationKit.library(), {"seed": data.orbital_seed,
-			"modules": 12 + data.orbital_seed % 12, "spine": 3 + data.orbital_seed % 3, "section_bricks": SECTION_BRICKS})
+	var ship := data.kind == "ship"
+	var made := ShipBuild.make(data.orbital_seed) if ship else RoomStation.generate(StationKit.library(),
+			{"seed": data.orbital_seed, "modules": 12 + data.orbital_seed % 12, "spine": 3 + data.orbital_seed % 3,
+			"section_bricks": SECTION_BRICKS})
 	grow_ms = (Time.get_ticks_usec() - t0) / 1000.0
 	if not bool(made.ok):
 		push_warning("[station] %s: %s -- a tower instead" % [data.orbital_name, made.why])
@@ -475,6 +492,16 @@ func _prepare_generated() -> void:
 	var stud := BrickWorld.get_stud_metres()
 	height = size.y * BrickWorld.get_plate_metres()
 	frame = Transform3D(Basis(), Vector3(-size.x * stud * 0.5, 0.0, -size.z * stud * 0.5))
+	if ship:
+		# Its bow (+X in the build) is the ship's nose (-Z).
+		var turn := Basis(Vector3.UP, PI * 0.5)
+		frame = Transform3D(turn, turn * Vector3(-size.x * stud * 0.5, 0.0, -size.z * stud * 0.5))
+		var org := recipe.origin()
+		seat_cell = (made.seat as Vector3i) - org if (made.seat as Vector3i).x >= 0 else Vector3i(size.x / 2, 1, size.z / 2)
+		deck_rows = PackedInt32Array()
+		for s in range(1, int(made.decks)):
+			deck_rows.append(s * ShipBuild.PITCH)
+		_joints_of()
 	var c := bricks.create_chunk(Vector3i.ZERO, recipe.chunk_dims())
 	recipe.build(bricks, c, _palette)
 	_template = bricks.save_template(c)
@@ -519,6 +546,90 @@ func _generated_shell() -> void:
 		cs.position = b.get_center()
 		shell_body.add_child(cs)
 	shell_body.transform = frame
+
+
+## A ship's bulkheads as joints: where the bricks of two sections touch.
+func _joints_of() -> void:
+	joints = []
+	var of := BuildSections.of_build(recipe)
+	if of.is_empty():
+		return
+	var at := {}
+	for i in recipe.size():
+		var c := recipe.cell_of(i)
+		var sz := BuildRecipe.part_size(recipe.part_of(i))
+		for y in sz.y:
+			for z in sz.z:
+				for x in sz.x:
+					at[c + Vector3i(x, y, z)] = i
+	var by := {}
+	for c: Vector3i in at:
+		var i: int = at[c]
+		for d in [Vector3i(1, 0, 0), Vector3i(0, 1, 0), Vector3i(0, 0, 1)]:
+			var n: int = at.get(c + d, -1)
+			if n < 0 or of[n] == of[i]:
+				continue
+			var key := Vector2i(mini(of[i], of[n]), maxi(of[i], of[n]))
+			if not by.has(key):
+				by[key] = {}
+			by[key][i] = true
+			by[key][n] = true
+	for k: Vector2i in by:
+		var ids := PackedInt32Array((by[k] as Dictionary).keys())
+		joints.append({"a": k.x, "b": k.y, "ids": ids, "n": ids.size()})
+
+
+## After a hit's solve, a ship's joints: one with under JOINT_HOLD of its bricks
+## left is broken, and what no unbroken joint joins to the root section (the
+## bridge's) leaves whole, drifting, as a loose group does.
+func _joints_step() -> void:
+	if joints.is_empty():
+		return
+	var gone := {}
+	for b in bricks.get_dead_blocks(chunk):
+		gone[b] = true
+	for b in bricks.get_detached_blocks(chunk):
+		gone[b] = true
+	var adj := {}
+	for j: Dictionary in joints:
+		var left := 0
+		for b in j.ids:
+			if not gone.has(b):
+				left += 1
+		if float(left) < float(j.n) * JOINT_HOLD:
+			continue
+		for pair in [[j.a, j.b], [j.b, j.a]]:
+			if not adj.has(pair[0]):
+				adj[pair[0]] = []
+			adj[pair[0]].append(pair[1])
+	var held := {0: true}
+	var todo := [0]
+	while not todo.is_empty():
+		var s: int = todo.pop_back()
+		for t in adj.get(s, []):
+			if not held.has(t):
+				held[t] = true
+				todo.append(t)
+	var of := BuildSections.of_build(recipe)
+	var off := PackedInt32Array()
+	var sections := {}
+	for i in of.size():
+		if not held.has(of[i]) and not _cut.has(of[i]) and not gone.has(i):
+			off.append(i)
+			sections[of[i]] = true
+	if off.is_empty():
+		return
+	for s in sections:
+		_cut[s] = true
+	var split: Dictionary = bricks.split_island(chunk, off)
+	if split.is_empty():
+		return
+	var c := int(split.chunk)
+	var arrays: Array = bricks.build_chunk_mesh(c)
+	var com: Vector3 = split.local_com
+	drifted.emit(arrays, bricks.get_chunk_transform(c) * Transform3D(Basis(), com), com, off.size(), brick_material)
+	bricks.release_chunk(c)
+	_after_kill(off)
 
 
 func _exit_tree() -> void:

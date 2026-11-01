@@ -776,10 +776,11 @@ static func lay(library: Array, plan: Dictionary, on_ground := false) -> BuildRe
 						cut = cut or cuts.has(at)
 						taken = taken or filled.has(at)
 						cells.append(at)
-			if taken or (on_ground and c.y < 1):
+			if on_ground and c.y < 1:
 				continue
-			if cut:
-				# A box brick partly in a cut: what is left of it, column by column.
+			if taken or cut:
+				# Partly over a brick laid already (a wall two modules share) or in a
+				# cut: what is left of a box brick, column by column.
 				if _boxy(tr.part_of(i)):
 					_lay_left(out, filled, cuts, c, s, tr.colour_of(i), tr.role_of(i), tr.material_of(i))
 				continue
@@ -808,6 +809,8 @@ static func lay(library: Array, plan: Dictionary, on_ground := false) -> BuildRe
 				for x in s.x:
 					cells.append(c + Vector3i(x, y, z))
 		if cells.any(func(at) -> bool: return filled.has(at)):
+			if _boxy(String(a[0])):
+				_lay_left(out, filled, {}, c, s, int(a[2]), BuildRecipe.Role.STRUCTURE, int(a[3]))
 			continue
 		for at in cells:
 			filled[at] = true
@@ -867,8 +870,8 @@ static func _boxy(part: String) -> bool:
 	return part.begins_with("plate_") or part.begins_with("brick_")
 
 
-## What a cut leaves of a box brick at `c`, size `s`: each column's cells out of
-## the cut, as bricks (three plates) and plates, in the brick's colour.
+## What a cut, or a brick laid already, leaves of a box brick at `c`, size `s`:
+## each column's free cells, as bricks (three plates) and plates, in its colour.
 static func _lay_left(out: BuildRecipe, filled: Dictionary, cuts: Dictionary, c: Vector3i, s: Vector3i,
 		colour: int, role: int, material: int) -> void:
 	for z in s.z:
@@ -876,12 +879,13 @@ static func _lay_left(out: BuildRecipe, filled: Dictionary, cuts: Dictionary, c:
 			var y := 0
 			while y < s.y:
 				var at := c + Vector3i(x, y, z)
-				if cuts.has(at):
+				if cuts.has(at) or filled.has(at):
 					y += 1
 					continue
 				var brick := y + 3 <= s.y
 				for k in range(1, 3):
-					brick = brick and not cuts.has(at + Vector3i(0, k, 0))
+					var up := at + Vector3i(0, k, 0)
+					brick = brick and not cuts.has(up) and not filled.has(up)
 				var n := 3 if brick else 1
 				for k in n:
 					filled[at + Vector3i(0, k, 0)] = true
