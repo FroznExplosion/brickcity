@@ -71,6 +71,8 @@ var grow_ms := 0.0
 ## anchors, chunk rows), and its bulkheads as joints: [{a, b, ids, n}] -- the
 ## bricks of sections a and b that meet there, how many when whole.
 var seat_cell := Vector3i(-1, -1, -1)
+## A generated ship's airlock doorway, its low cell (RoomPack), if it has one.
+var airlock_cell := Vector3i(-1, -1, -1)
 var deck_rows := PackedInt32Array()
 var joints := []
 var _cut := {}
@@ -498,6 +500,8 @@ func _prepare_generated() -> void:
 		frame = Transform3D(turn, turn * Vector3(-size.x * stud * 0.5, 0.0, -size.z * stud * 0.5))
 		var org := recipe.origin()
 		seat_cell = (made.seat as Vector3i) - org if (made.seat as Vector3i).x >= 0 else Vector3i(size.x / 2, 1, size.z / 2)
+		var lock: Vector3i = made.stats.get("airlock", Vector3i(-1, -1, -1))
+		airlock_cell = lock - org if lock.x >= 0 else lock
 		deck_rows = PackedInt32Array()
 		for s in range(1, int(made.decks)):
 			deck_rows.append(s * ShipBuild.PITCH)
@@ -546,6 +550,19 @@ func _generated_shell() -> void:
 		cs.position = b.get_center()
 		shell_body.add_child(cs)
 	shell_body.transform = frame
+
+
+## Build cell `c`'s bottom middle, in its own space (a generated one's).
+func cell_point(c: Vector3i) -> Vector3:
+	var stud := BrickWorld.get_stud_metres()
+	return frame * Vector3((c.x + 0.5) * stud, c.y * BrickWorld.get_plate_metres(), (c.z + 0.5) * stud)
+
+
+## World point `p` in build cells (fractional): the inverse of cell_point's frame.
+func cell_at(p: Vector3) -> Vector3:
+	var l := (global_transform * frame).affine_inverse() * p
+	var stud := BrickWorld.get_stud_metres()
+	return Vector3(l.x / stud, l.y / BrickWorld.get_plate_metres(), l.z / stud)
 
 
 ## A ship's bulkheads as joints: where the bricks of two sections touch.
