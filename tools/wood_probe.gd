@@ -20,6 +20,12 @@ extends SceneTree
 ## one board to the one stacked on it. Then the same build in metal, stone
 ## and leaves (shots/wood_<material>_*.png), and for every set with a normal
 ## map, that it is lighting (_check_relief).
+##
+## Each variant has a set of its own (walnut a walnut photo, slate a rock):
+## the shader finds it by the vertex colour (bm_pbr_set), so its lists must
+## be the engine's, every variant must come back as itself through eight bits,
+## and every slice it names must be in the arrays (_check_sets). Not headless,
+## a wall of every variant per material: shots/wood_variants_<material>.png.
 
 const BEVEL := 0.013
 const WOOD := 10
@@ -280,11 +286,97 @@ func _shot(name: String, eye: Vector3, at: Vector3) -> void:
 	_ok("picture %s shows bricks" % name, lit > 20, "%d samples" % lit)
 
 
+## The shader's per-variant tables (brick_materials.gdshaderinc) against the
+## engine's variant lists and the texture arrays.
+func _check_sets() -> void:
+	print("every variant finds its set")
+	var src := FileAccess.get_file_as_string("res://shaders/brick_materials.gdshaderinc")
+	var layers := {}
+	for m in ["wood", "metal", "stone", "leaf"]:
+		for kind in ["albedo_rough", "normal"]:
+			var t: TextureLayered = load("res://textures/pbr/%s_%s.webp" % [m, kind])
+			layers["%s_%s" % [m, kind]] = t.get_layers() if t != null else 0
+	var kind_l := _ints(src, "PBR_KIND")
+	var layer_l := _ints(src, "PBR_LAYER")
+	var nlayer_l := _ints(src, "PBR_NLAYER")
+	var names := ["wood", "metal", "stone", "leaf"]
+	var bad := []
+	for i in kind_l.size():
+		var m: String = names[kind_l[i]]
+		if layer_l[i] >= layers[m + "_albedo_rough"] or nlayer_l[i] >= layers[m + "_normal"]:
+			bad.append(i)
+	_ok("every set's slices are in its material's arrays", bad.is_empty() and kind_l.size() > 0
+			and kind_l.size() == layer_l.size() and kind_l.size() == nlayer_l.size(),
+			"%d sets, arrays %s, out of range %s" % [kind_l.size(), layers, bad])
+	for row in [[WOOD, "WOOD", 0], [METAL, "METAL", 1], [STONE, "STONE", 2]]:
+		var rgb := _vec3s(src, row[1] + "_RGB")
+		var sets := _ints(src, row[1] + "_SET")
+		var n := BrickWorld.get_material_colour_count(row[0])
+		var same := rgb.size() == n and sets.size() == n
+		var back := true
+		var kinds := true
+		for i in mini(n, rgb.size()):
+			var c: Color = BrickWorld.get_material_colour(row[0], i)
+			same = same and Vector3(c.r, c.g, c.b).distance_to(rgb[i]) < 1e-4
+			# Through the cut to eight bits, the nearest is still itself.
+			var q := Vector3(roundi(c.r * 255) / 255.0, roundi(c.g * 255) / 255.0, roundi(c.b * 255) / 255.0)
+			var best := -1
+			var bd := INF
+			for j in rgb.size():
+				if q.distance_squared_to(rgb[j]) < bd:
+					bd = q.distance_squared_to(rgb[j])
+					best = j
+			back = back and best == i
+			kinds = kinds and i < sets.size() and sets[i] < kind_l.size() and kind_l[sets[i]] == row[2]
+		_ok("%s: the shader's variant list is the engine's (%d)" % [row[1].to_lower(), n], same)
+		_ok("%s: every variant comes back as itself, and names a set of its own material" % row[1].to_lower(),
+				back and kinds)
+
+
+static func _block(src: String, name: String) -> String:
+	var re := RegEx.create_from_string("const \\w+ " + name + "\\[\\d+\\]\\s*=\\s*\\w+\\[\\]\\(([^;]*)\\);")
+	var m := re.search(src)
+	return m.get_string(1) if m != null else ""
+
+
+static func _ints(src: String, name: String) -> PackedInt32Array:
+	var out := PackedInt32Array()
+	for t in _block(src, name).split(","):
+		if t.strip_edges() != "":
+			out.append(int(t.strip_edges()))
+	return out
+
+
+static func _vec3s(src: String, name: String) -> Array[Vector3]:
+	var out: Array[Vector3] = []
+	var re := RegEx.create_from_string("vec3\\(([-\\d.]+),\\s*([-\\d.]+),\\s*([-\\d.]+)\\)")
+	for m in re.search_all(_block(src, name)):
+		out.append(Vector3(float(m.get_string(1)), float(m.get_string(2)), float(m.get_string(3))))
+	return out
+
+
+## Every variant of `mat` as a 2x4 board, in rows of seven, first at the bottom left.
+func _variants(w: BrickWorld, pal: Dictionary, mat: int, tag: String) -> void:
+	var n := BrickWorld.get_material_colour_count(mat)
+	var c := w.create_chunk(Vector3i.ZERO, Vector3i(40, 12, 8))
+	for i in n:
+		@warning_ignore("integer_division")
+		var b := w.place_block(c, Vector3i((i % 7) * 5, (i / 7) * 5, 0), int(pal["brick_2x4_x"]), i)
+		if b >= 0:
+			w.set_block_material(c, b, mat)
+	_show(w, c)
+	var s := BrickWorld.get_stud_metres()
+	var p := BrickWorld.get_plate_metres()
+	var mid := Vector3(17 * s, 4 * p, s)
+	await _shot("variants_" + tag, mid + Vector3(0, 6 * s, 17 * s), mid)
+
+
 func _run() -> void:
 	print("wood probe")
 	var w := BrickWorld.new()
 	var pal := BrickPalette.bake(w)
 	_check_numbers(w, pal)
+	_check_sets()
 	if DisplayServer.get_name() == "headless":
 		print("\n(headless: no pictures)")
 		print("\nwood probe: %d passed, %d failed" % [_passed, _failed])
@@ -321,6 +413,8 @@ func _run() -> void:
 		await _shot("%s_turned" % m[1], Vector3(6 * s, 9 * p, -1.4), Vector3(7 * s, 3 * p, 2 * s))
 		if m[2] > 0.0:
 			await _check_relief(m[1], Vector3(2 * s, 3 * p, -1.6), Vector3(2 * s, 3 * p, s), m[2])
+	for m in [[WOOD, "wood"], [METAL, "metal"], [STONE, "stone"]]:
+		await _variants(w, pal, m[0], m[1])
 	print("\nwood probe: %d passed, %d failed" % [_passed, _failed])
 	quit(1 if _failed > 0 else 0)
 

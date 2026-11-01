@@ -60,6 +60,7 @@ varying vec3 v_colour;
 varying vec3 v_flat_normal;
 varying flat int v_mat;
 varying flat int v_grain;
+varying flat int v_set;
 
 void vertex() {
     v_local = VERTEX;
@@ -67,6 +68,7 @@ void vertex() {
     v_flat_normal = normalize(NORMAL);
     v_mat = brick_material_id(COLOR.a);
     v_grain = brick_grain_axis(COLOR.a);
+    v_set = bm_pbr_set(MAT_TEX[v_mat], v_colour);
     // A stud's corners are softened in the shading (stud_round): each
     // vertex's normal leans out from the axis, so across a flat face the
     // interpolated normal turns a little the way a cylinder's does. The
@@ -174,15 +176,16 @@ void fragment() {
     // wrapped around by x+z against height.
     int tex = MAT_TEX[mat];
     vec3 emission = vec3(0.0);
-    if (bm_is_pbr(tex)) {
+    if (v_set >= 0) {
         // The same set as its brick, cut the same way -- in the stud's own
         // frame (a stud is one shared mesh, and does not know where it stands
         // in the brick), so the grain runs the brick's way but does not
         // continue its figure.
+        roughness = clamp(roughness + PBR_ROUGH_SHIFT[v_set], 0.04, 1.0);
         if (dist < pbr_far_range) {
             float colour_w = 1.0 - smoothstep(pbr_far_range * 0.75, pbr_far_range, dist);
             float bump = pbr_bump * (1.0 - smoothstep(pbr_range * 0.7, pbr_range, dist));
-            bm_pbr(tex, v_local, v_flat_normal, v_grain, dFdx(VERTEX), dFdy(VERTEX), colour_w, bump,
+            bm_pbr(v_set, v_local, v_flat_normal, v_grain, dFdx(VERTEX), dFdy(VERTEX), colour_w, bump,
                     albedo, roughness, NORMAL);
         }
     } else if (tex != 0) {
@@ -217,10 +220,11 @@ void fragment() {
     ALBEDO = albedo;
     ROUGHNESS = out_rough;
     SPECULAR = out_spec;
-    METALLIC = MAT_METAL[mat];
+    float metal = MAT_METAL[mat] * (v_set >= 0 ? PBR_METAL[v_set] : 1.0);
+    METALLIC = metal;
     ps_tangent_frame(NORMAL, aniso_dir, TANGENT, BINORMAL);
     ANISOTROPY = aniso;
     EMISSION = emission;
-    RIM = surface_rim * (1.0 - MAT_METAL[mat]);
+    RIM = surface_rim * (1.0 - metal);
     RIM_TINT = 0.4;
 }

@@ -165,6 +165,8 @@ varying vec3 v_local_normal;
 varying vec3 v_model_up;
 // Which way the brick was cut (brick_grain_axis).
 varying flat int v_grain;
+// Its texture set, by variant (bm_pbr_set); -1 none.
+varying flat int v_set;
 
 void vertex() {
     v_uv = UV;
@@ -173,6 +175,7 @@ void vertex() {
     v_local_normal = normalize(NORMAL);
     v_model_up = MODEL_MATRIX[1].xyz;
     v_grain = brick_grain_axis(COLOR.a);
+    v_set = bm_pbr_set(MAT_TEX[brick_material_id(COLOR.a)], COLOR.rgb);
     // Wind (weather.gdshaderinc): only what has a sway height set -- a tree, a
     // standing building -- and after v_local, so the print lines ride along.
     VERTEX = weather_sway_vertex(VERTEX, MODEL_MATRIX, TIME);
@@ -639,14 +642,16 @@ void fragment() {
     // --- the material's own surface ---------------------------------------
     int tex = MAT_TEX[mat];
     vec3 emission = vec3(0.0);
-    if (bm_is_pbr(tex)) {
+    if (v_set >= 0) {
         // A texture set, on every surface the brick has -- its faces, its
         // real bevels, an authored part's -- since the block is 3D. Past
-        // pbr_far_range, the flat colour: nothing to work out.
+        // pbr_far_range, the flat colour: nothing to work out. The set's own
+        // roughness holds at any distance.
+        roughness = clamp(roughness + PBR_ROUGH_SHIFT[v_set], 0.04, 1.0);
         if (dist < pbr_far_range) {
             float colour_w = 1.0 - smoothstep(pbr_far_range * 0.75, pbr_far_range, dist);
             float bump = pbr_bump * (1.0 - smoothstep(pbr_range * 0.7, pbr_range, dist));
-            bm_pbr(tex, v_local + grain_origin, v_local_normal, v_grain, dFdx(VERTEX), dFdy(VERTEX),
+            bm_pbr(v_set, v_local + grain_origin, v_local_normal, v_grain, dFdx(VERTEX), dFdy(VERTEX),
                     colour_w, bump, albedo, roughness, NORMAL);
         }
     } else if (tex > 1 && v_face.x > 0.0 && v_face.y > 0.0) {
@@ -716,12 +721,13 @@ void fragment() {
     ALBEDO = albedo;
     ROUGHNESS = out_rough;
     SPECULAR = out_spec;
-    METALLIC = MAT_METAL[mat];
+    float metal = MAT_METAL[mat] * (v_set >= 0 ? PBR_METAL[v_set] : 1.0);
+    METALLIC = metal;
     // The layers' anisotropy, set after the rain has had the normal.
     ps_tangent_frame(NORMAL, aniso_dir, TANGENT, BINORMAL);
     ANISOTROPY = aniso;
     EMISSION = emission;
-    RIM = surface_rim * (1.0 - MAT_METAL[mat]);
+    RIM = surface_rim * (1.0 - metal);
     RIM_TINT = 0.4;
     AO = occlusion;
     AO_LIGHT_AFFECT = 0.0;

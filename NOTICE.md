@@ -67,12 +67,13 @@ grants no trademark rights (§7(e)), and none are granted here — see §4 below
 
 ### Third-party textures
 
-- **Wood049** from [ambientCG](https://ambientcg.com/a/Wood049) (`textures/wood/`) — CC0 1.0,
-  public domain; credited here, not required. Its colour and roughness maps are packed into one
-  image and its normal map kept as published (Docs/PbrWood.md).
-- **Metal009**, **Marble012** and **ScatteredLeaves008** from [ambientCG](https://ambientcg.com)
-  (`textures/metal/`, `textures/stone/`, `textures/leaf/`) — CC0 1.0, packed the same way; the
-  leaves' colour three quarters greyed.
+- Texture sets from [ambientCG](https://ambientcg.com) (`textures/pbr/`), all CC0 1.0, public
+  domain; credited here, not required. Each set's colour and roughness maps are packed into one
+  image and its normal map kept as published, the sets of a material side by side in one image
+  (Docs/PbrWood.md): **Wood049, Wood051, Wood062, Wood066, Wood095, Wood096; Metal009,
+  Metal047A, Metal053B, Metal055A, Metal058C; Marble012, Marble016, Granite002A, Rock058,
+  Travertine004, Travertine009, Concrete030, Clay005; ScatteredLeaves008** (the leaves' colour
+  three quarters greyed).
 
 ---
 
