@@ -140,17 +140,18 @@ uniform float surface_rim : hint_range(0.0, 1.0) = 0.35;
 // second pass (brick_glass.gdshader) for see-through bricks.
 uniform bool glass_pass = false;
 
-// Solid PBR wood (brick_materials.gdshaderinc bm_wood_pbr; Docs/PbrWood.md).
-// Inside `wood_pbr_range` the full set -- colour, roughness and the normal
-// map; past it to `wood_far_range` colour and roughness alone, one texture
-// read; past that the brick's flat colour, which is the texture's mean. The
-// ranges are the cost knobs: the normal map is the second read and the frame.
-// 14 m is BrickNear.radius, where the bricks have their real bevels.
-group_uniforms wood;
-uniform float wood_pbr_range = 14.0;
-uniform float wood_far_range = 60.0;
-uniform float wood_bump : hint_range(0.0, 4.0) = 2.0;
-// The chunk's place on the grid, metres, modulo WOOD_PERIOD
+// PBR texture sets: wood, metal, stone, leaves (brick_materials.gdshaderinc
+// bm_pbr; Docs/PbrWood.md). Inside `pbr_range` the full set -- colour,
+// roughness and the normal map; past it to `pbr_far_range` colour and
+// roughness alone, one texture read; past that the brick's flat colour, which
+// is the texture's mean. The ranges are the cost knobs: the normal map is the
+// second read and the frame. 14 m is BrickNear.radius, where the bricks have
+// their real bevels. `pbr_bump` scales every set's own strength (PBR_BUMP).
+group_uniforms pbr;
+uniform float pbr_range = 14.0;
+uniform float pbr_far_range = 60.0;
+uniform float pbr_bump : hint_range(0.0, 3.0) = 1.0;
+// The chunk's place on the grid, metres, modulo PBR_PERIOD
 // (BrickMaterials.set_grain_origin): what makes a piece broken off a wall, a
 // chunk of its own, keep the grain it had in the wall. 0 is right for any
 // chunk alone.
@@ -638,14 +639,16 @@ void fragment() {
     // --- the material's own surface ---------------------------------------
     int tex = MAT_TEX[mat];
     vec3 emission = vec3(0.0);
-    if (tex == 1 && dist < wood_far_range) {
-        // Solid wood, on every surface the brick has -- its faces, its real
-        // bevels, an authored part's -- since the block is 3D.
-        vec2 t = bm_wood_coords(v_local + grain_origin, v_grain);
-        float colour_w = 1.0 - smoothstep(wood_far_range * 0.75, wood_far_range, dist);
-        float bump = wood_bump * (1.0 - smoothstep(wood_pbr_range * 0.7, wood_pbr_range, dist));
-        bm_wood_pbr(t, dFdx(t), dFdy(t), dFdx(VERTEX), dFdy(VERTEX), colour_w, bump,
-                albedo, roughness, NORMAL);
+    if (bm_is_pbr(tex)) {
+        // A texture set, on every surface the brick has -- its faces, its
+        // real bevels, an authored part's -- since the block is 3D. Past
+        // pbr_far_range, the flat colour: nothing to work out.
+        if (dist < pbr_far_range) {
+            float colour_w = 1.0 - smoothstep(pbr_far_range * 0.75, pbr_far_range, dist);
+            float bump = pbr_bump * (1.0 - smoothstep(pbr_range * 0.7, pbr_range, dist));
+            bm_pbr(tex, v_local + grain_origin, v_local_normal, v_grain, dFdx(VERTEX), dFdy(VERTEX),
+                    colour_w, bump, albedo, roughness, NORMAL);
+        }
     } else if (tex > 1 && v_face.x > 0.0 && v_face.y > 0.0) {
         // Along the grain = along this face's longer side, which on a brick
         // is its length: a 1x6 of oak is a board, not end grain. An authored
@@ -655,11 +658,7 @@ void fragment() {
             p = abs(v_local_normal.y) > 0.7 ? v_local.xz : vec2(v_local.x + v_local.z, v_local.y);
         }
         float tfade = 1.0 - smoothstep(print_fade_begin, print_fade_end * 2.0, dist);
-        if (tex == 2) {
-            albedo = bm_metal(albedo, p, seed, tfade, roughness);
-        } else if (tex == 3) {
-            albedo = bm_stone(albedo, p, seed, tfade, roughness);
-        } else if (tex == 4) {
+        if (tex == 4) {
             albedo = bm_carbon(albedo, p, tfade);
         } else if (tex == 5) {
             emission = albedo * 0.85;

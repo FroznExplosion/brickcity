@@ -365,11 +365,17 @@ inline GrainAxis grain_axis(const Vector3i &size, const Vector3i &cell) {
 }
 
 /// block_rgba with the grain axis in alpha's spare bits.
+///
+/// A quarter of a step inside its byte, not on it: the mesh is stored with the
+/// colour cut to eight bits, and from code 65 up every odd code's exact value
+/// came out a hair under its byte and was cut to the next code -- a metal
+/// post (75) drew as stone (76). A quarter in lands on the byte whether the
+/// cut truncates or rounds, and still reads back as the code.
 inline Color block_rgba_grain(int material, int colour, GrainAxis grain) {
     const NamedColour &e = brick_material_colour_entry(material, colour);
     const int m = (material >= 0 && material < BRICK_MATERIAL_COUNT) ? material : 0;
     const int code = m | ((int)grain << BRICK_MATERIAL_ID_BITS);
-    return Color(e.r, e.g, e.b, 1.0f - (float)code / 255.0f);
+    return Color(e.r, e.g, e.b, 1.0f - ((float)code - 0.25f) / 255.0f);
 }
 
 } // namespace brick

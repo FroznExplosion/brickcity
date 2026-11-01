@@ -1,6 +1,6 @@
 extends SceneTree
 
-## Solid PBR wood (Docs/PbrWood.md).
+## PBR texture sets: wood, metal, stone, leaves (Docs/PbrWood.md).
 ##
 ##     godot --headless --path . --script res://tools/wood_probe.gd       numbers only
 ##     godot --path . --script res://tools/wood_probe.gd                  and pictures
@@ -17,10 +17,15 @@ extends SceneTree
 ## stacked and a turned one beside them, a post, a slope and a round, each
 ## from a metre or two, and the lot from 25 m (colour only) and 70 m (flat).
 ## What to look for: the grain runs on round every edge of a brick, and from
-## one board to the one stacked on it.
+## one board to the one stacked on it. Then the same build in metal, stone
+## and leaves (shots/wood_<material>_*.png), and for every set with a normal
+## map, that it is lighting (_check_relief).
 
 const BEVEL := 0.013
 const WOOD := 10
+const METAL := 11
+const STONE := 12
+const LEAF := 13
 const SIZE := Vector2i(1280, 720)
 
 var _passed := 0
@@ -76,7 +81,8 @@ static func _pairs_in(arrays: Array, box: AABB) -> Dictionary:
 
 
 func _place(w: BrickWorld, c: int, pal: Dictionary, part: String, cell: Vector3i, mat: int) -> int:
-	var b := w.place_block(c, cell, int(pal[part]), 0)
+	# Leaves take filament colours, whose first is white: green (7) for them.
+	var b := w.place_block(c, cell, int(pal[part]), 7 if mat == LEAF else 0)
 	if b >= 0:
 		w.set_block_material(c, b, mat)
 	return b
@@ -85,21 +91,21 @@ func _place(w: BrickWorld, c: int, pal: Dictionary, part: String, cell: Vector3i
 ## The test build: chunk cells, a stud across and a plate up.
 ##   two 2x4 boards along X, stacked; a 4x2 turned beside them; a post; a
 ##   slope and a round; and a PLA brick for the masks.
-func _build(w: BrickWorld, pal: Dictionary, origin: Vector3i) -> Dictionary:
+func _build(w: BrickWorld, pal: Dictionary, origin: Vector3i, mat := WOOD) -> Dictionary:
 	var c := w.create_chunk(origin, Vector3i(24, 24, 12))
 	var o := origin
 	var parts := {
-		"low": _place(w, c, pal, "brick_2x4_x", o + Vector3i(0, 0, 0), WOOD),
-		"high": _place(w, c, pal, "brick_2x4_x", o + Vector3i(0, 3, 0), WOOD),
-		"turned": _place(w, c, pal, "brick_2x4_z", o + Vector3i(5, 0, 0), WOOD),
-		"square": _place(w, c, pal, "brick_2x2", o + Vector3i(5, 3, 0), WOOD),
-		"post": _place(w, c, pal, "column_1x1", o + Vector3i(9, 0, 1), WOOD),
+		"low": _place(w, c, pal, "brick_2x4_x", o + Vector3i(0, 0, 0), mat),
+		"high": _place(w, c, pal, "brick_2x4_x", o + Vector3i(0, 3, 0), mat),
+		"turned": _place(w, c, pal, "brick_2x4_z", o + Vector3i(5, 0, 0), mat),
+		"square": _place(w, c, pal, "brick_2x2", o + Vector3i(5, 3, 0), mat),
+		"post": _place(w, c, pal, "column_1x1", o + Vector3i(9, 0, 1), mat),
 		# Turned, so its grain bits are not zero.
 		"pla": _place(w, c, pal, "brick_2x4_z", o + Vector3i(12, 0, 0), 0),
 	}
 	for part in ["slope_2x2", "slope_2x2_x", "slope_2x4_x", "round_2x2"]:
 		if pal.has(part):
-			parts[part] = _place(w, c, pal, part, o + Vector3i(12 + (parts.size() - 6) * 3, 3, 4), WOOD)
+			parts[part] = _place(w, c, pal, part, o + Vector3i(12 + (parts.size() - 6) * 3, 3, 4), mat)
 	return {"chunk": c, "blocks": parts}
 
 
@@ -131,6 +137,26 @@ func _check_numbers(w: BrickWorld, pal: Dictionary) -> void:
 	var pla := _pairs_in(flat, _box(w, c, int(blocks["pla"])))
 	_ok("a PLA brick still reads as PLA past its grain bits", pla.keys() == [Vector2i(0, 1)],
 			"%s" % [pla.keys()])
+
+	# Every material, every grain, through the cut to eight bits the renderer
+	# makes of a vertex colour -- truncated or rounded. Exact codes came out a
+	# hair under their byte from 65 up, and a metal post (75) drew as stone.
+	var cut_ok := true
+	var cut_bad := []
+	for m in BrickWorld.get_material_count():
+		var cm := w.create_chunk(Vector3i.ZERO, Vector3i(16, 24, 8))
+		for part in [["brick_2x4_x", Vector3i(0, 0, 0)], ["brick_2x4_z", Vector3i(5, 0, 0)],
+				["column_1x1", Vector3i(9, 0, 1)]]:
+			_place(w, cm, pal, part[0], part[1], m)
+		for col in w.build_chunk_chamfer_mesh(cm, BEVEL)[Mesh.ARRAY_COLOR]:
+			var a: float = (col as Color).a
+			var exact := _code(a)
+			for byte in [floori(a * 255.0), roundi(a * 255.0)]:
+				if ((255 - byte) & 31) != m or (255 - byte) != exact:
+					cut_ok = false
+					if cut_bad.size() < 6:
+						cut_bad.append([m, exact, 255 - byte])
+	_ok("every material and grain survives the cut to eight bits", cut_ok, "%s" % [cut_bad])
 
 	# Studs: the grain in the stud's own frame. A board along X has studs
 	# unturned and grain X; the turned board's studs are turned a quarter, so
@@ -181,6 +207,12 @@ func _stage() -> void:
 	# Dim enough that light oak in full sun is not clipped white: a clipped
 	# face shows no relief at all, whatever the normal map does.
 	env.ambient_light_energy = 0.3
+	# Something to reflect: a metal is lit mostly by what it mirrors, and a flat
+	# background colour gave it nothing -- dark, and its relief invisible.
+	var sky := Sky.new()
+	sky.sky_material = ProceduralSkyMaterial.new()
+	env.sky = sky
+	env.reflected_light_source = Environment.REFLECTION_SOURCE_SKY
 	env.tonemap_mode = Environment.TONE_MAPPER_FILMIC
 	var we := WorldEnvironment.new()
 	we.environment = env
@@ -202,6 +234,8 @@ func _stage() -> void:
 
 
 func _show(w: BrickWorld, c: int) -> void:
+	for n in _holder.get_children():
+		n.free()
 	var sm := ShaderMaterial.new()
 	sm.shader = load("res://shaders/brick.gdshader")
 	var mat := BrickMaterials.add_glass(sm)
@@ -272,7 +306,21 @@ func _run() -> void:
 	await _shot("slopes", Vector3(16 * s, 12 * p, -1.0), Vector3(16 * s, 4 * p, 5 * s))
 	await _shot("mid_25m", Vector3(6 * s, 8.0, -24.0), Vector3(6 * s, 0.5, 2 * s))
 	await _shot("far_70m", Vector3(6 * s, 20.0, -66.0), Vector3(6 * s, 0.5, 2 * s))
-	await _check_relief(Vector3(2 * s, 3 * p, -1.6), Vector3(2 * s, 3 * p, s))
+	await _check_relief("wood", Vector3(2 * s, 3 * p, -1.6), Vector3(2 * s, 3 * p, s), 4.0)
+
+	# The other sets, the same build. Stone is polished: its set has no
+	# normal map to light. The last number is how much the relief must show:
+	# brushed steel's is fine streaks (its map's spread is 0.06 across them,
+	# 0.01 along) and it is lit mostly by what it mirrors, so a little; wood's
+	# and the leaves' are grooves and edges, so more.
+	for m in [[METAL, "metal", 1.0], [STONE, "stone", 0.0], [LEAF, "leaf", 3.0]]:
+		var b := _build(w, pal, Vector3i.ZERO, m[0])
+		_show(w, b.chunk)
+		await _shot("%s_corner" % m[1], corner + Vector3(-1.1, 1.0, -1.2),
+				corner + Vector3(1.0 * s, -1.0 * p, 0.8 * s))
+		await _shot("%s_turned" % m[1], Vector3(6 * s, 9 * p, -1.4), Vector3(7 * s, 3 * p, 2 * s))
+		if m[2] > 0.0:
+			await _check_relief(m[1], Vector3(2 * s, 3 * p, -1.6), Vector3(2 * s, 3 * p, s), m[2])
 	print("\nwood probe: %d passed, %d failed" % [_passed, _failed])
 	quit(1 if _failed > 0 else 0)
 
@@ -304,16 +352,16 @@ static func _diff(a: PackedFloat32Array, b: PackedFloat32Array) -> float:
 ## down across the grain, as relief shows best (a sun behind the face lights
 ## none of it: the first version of this check put it there and measured
 ## nothing; one square on, or along the grain, shows little, as on real wood).
-## And it must still show from a metre: shots/wood_close.png.
-func _check_relief(eye: Vector3, at: Vector3) -> void:
+## And it must still show from under a metre: shots/wood_<what>_close.png.
+func _check_relief(what: String, eye: Vector3, at: Vector3, least: float) -> void:
 	_cam.look_at_from_position(eye, at)
 	_sun.rotation_degrees = Vector3(-62, 195, 0)
-	_mat.set_shader_parameter("wood_bump", 0.0)
-	var off := await _luma("off")
-	_mat.set_shader_parameter("wood_bump", null)
-	var on := await _luma("on")
+	_mat.set_shader_parameter("pbr_bump", 0.0)
+	var off := await _luma("%s_off" % what)
+	_mat.set_shader_parameter("pbr_bump", null)
+	var on := await _luma("%s_on" % what)
 	var d := _diff(off, on)
-	_ok("the normal map lights the grain", d > 4.0,
+	_ok("%s: the normal map is lighting" % what, d > least,
 			"%.1f levels in 255 between relief off and on" % d)
-	await _shot("close", at + (eye - at).normalized() * 0.6 + Vector3(0, 0.15, 0), at)
+	await _shot("%s_close" % what, at + (eye - at).normalized() * 0.6 + Vector3(0, 0.15, 0), at)
 	_sun.rotation_degrees = Vector3(-38, 28, 0)

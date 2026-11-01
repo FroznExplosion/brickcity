@@ -350,3 +350,23 @@ wood_normal={
 "type": "sampler2D",
 "value": "res://textures/wood/wood049_normal.png"
 }
+metal_albedo_rough={
+"type": "sampler2D",
+"value": "res://textures/metal/metal009_albedo_rough.png"
+}
+metal_normal={
+"type": "sampler2D",
+"value": "res://textures/metal/metal009_normal.png"
+}
+stone_albedo_rough={
+"type": "sampler2D",
+"value": "res://textures/stone/marble012_albedo_rough.png"
+}
+leaf_albedo_rough={
+"type": "sampler2D",
+"value": "res://textures/leaf/leaves008_albedo_rough.png"
+}
+leaf_normal={
+"type": "sampler2D",
+"value": "res://textures/leaf/leaves008_normal.png"
+}
