@@ -65,6 +65,8 @@ var _held := false
 var _hunting := false
 ## Where they are set down, planet-local.
 var _dir := Vector3.UP
+## Who was left when it was saved: [[planet-local, health]], for when it is raised.
+var _left: Array = []
 var _look := 0.0
 var _raising := false
 
@@ -129,6 +131,24 @@ func _physics_process(delta: float) -> void:
 		_raise(i)
 	elif i >= 0 and waves and squad == null and Time.get_ticks_msec() / 1000.0 >= next_wave:
 		_raise(i)
+
+
+## What a save keeps of it.
+func to_save() -> Dictionary:
+	var left := []
+	if squad != null:
+		for m in squad.alive():
+			left.append([body.to_local(m.pawn.feet()), m.pawn.health.total_current()])
+	return {"town": town, "wave": wave, "left": left, "ai_town": ai_town,
+			"next_in": maxf(next_wave - Time.get_ticks_msec() / 1000.0, 0.0)}
+
+
+## As a save left it: those left come back when it is raised again.
+func restore(d: Dictionary) -> void:
+	wave = d.wave
+	_left = d.left
+	town = -1 if not _left.is_empty() else int(d.town)
+	next_wave = Time.get_ticks_msec() / 1000.0 + float(d.next_in)
 
 
 ## A line for the HUD, while there is a fight ("": none).
@@ -197,8 +217,11 @@ func _raise(i: int) -> void:
 		scene.setup_ai(body.data.towns[i], body)
 		ai_town = i
 		print("[garrison] %s: town %d, its AI in %.1f ms" % [body.data.planet_name, i, (Time.get_ticks_usec() - t0) / 1000.0])
-	wave = wave + 1 if again else 1
-	_dir = _arrival(i)
+	if _left.is_empty():
+		wave = wave + 1 if again else 1
+		_dir = _arrival(i)
+	else:
+		_dir = (_left[0][0] as Vector3).normalized()
 	# The ground's colliders where they are set down, first.
 	_ground.global_position = _middle()
 	var waited := Time.get_ticks_msec()
@@ -241,13 +264,20 @@ func _spawn() -> void:
 	var rng := RandomNumberGenerator.new()
 	rng.seed = hash(_key(town))
 	var count := mini(SQUAD_SIZE + WAVE_GROWS * (wave - 1), WAVE_MOST)
+	if not _left.is_empty():
+		count = _left.size()
 	var net := s.nav_net as PlanetNavNet
 	for k in count:
 		var p := net.snap(at + side * (k - (count - 1) * 0.5) * SPACING + up * 0.3)
+		if not _left.is_empty():
+			p = body.global_transform * (_left[k][0] as Vector3)
 		var gun := GunInstance.from_result(GunGenerator.generate(lib, rng.randi_range(1, 9999), WeaponClass.builtin(&"rifle"), 1))
 		var so := Soldier.spawn(s, _troops, p + Gravity.up_at(p) * 0.1, 1, gun)
 		PlanetBody.track(so.pawn.body)
 		soldiers.append(so)
+		if not _left.is_empty():
+			so.pawn.health.apply_impact(so.pawn.health.total_current() - float(_left[k][1]), &"")
 	squad = Squad.make(s, _troops, soldiers, 1)
-	_hunting = wave > 1
+	_hunting = wave > 1 or not _left.is_empty()
+	_left = []
 	print("[garrison] %s: %d soldiers at town %d in %.1f ms" % [body.data.planet_name, soldiers.size(), town, (Time.get_ticks_usec() - t0) / 1000.0])

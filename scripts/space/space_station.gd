@@ -266,6 +266,20 @@ func deactivate() -> void:
 	shell_body.collision_layer = Layers.STRUCTURE
 
 
+## The bricks it has lost.
+func gone() -> PackedInt32Array:
+	if chunk < 0:
+		return _dead
+	var out := bricks.get_dead_blocks(chunk)
+	out.append_array(bricks.get_detached_blocks(chunk))
+	return out
+
+
+## As a save left it, before its bricks are laid.
+func restore_gone(ids: PackedInt32Array) -> void:
+	_dead = ids
+
+
 ## The floating origin moved it: its bricks' transform and collision follow.
 func on_origin_shift() -> void:
 	if chunk < 0:

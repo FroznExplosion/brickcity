@@ -74,6 +74,9 @@ class Site:
 	var toppled := false
 	# Its far box widened from space (far_tier), 1 as built.
 	var grow := 1.0
+	# Its bricks gone, kept while it has none laid: it does not heal behind the
+	# player, and it is what a save keeps of it.
+	var dead := PackedInt32Array()
 
 var planet: PlanetBody
 var sites: Array[Site] = []
@@ -507,6 +510,8 @@ func _idle_template(eye: Vector3) -> void:
 func _start_bricks(s: Site) -> void:
 	s.chunk = bricks.create_chunk(Vector3i.ZERO, TowerRecipe.chunk_dims(s.fx, s.fz, s.courses))
 	bricks.load_template(_template(s.fx, s.fz, s.courses), s.chunk)
+	if not s.dead.is_empty():
+		bricks.kill_blocks(s.chunk, s.dead)
 	bricks.set_chunk_anchored(s.chunk, true)
 	# What a stud holds, as the city's (CityScene._promote): the engine's default
 	# is ten times it, and the storey check weighs tipping against it (D2 step 6).
@@ -657,6 +662,7 @@ func _free_bricks(i: int) -> void:
 		_brick_site = -1
 	if s.chunk < 0:
 		return
+	s.dead = site_gone(i)
 	if s.bricked:
 		bricked_count -= 1
 	s.bricked = false
@@ -985,6 +991,28 @@ func site_box(i: int) -> AABB:
 	var s := sites[i]
 	var stud := BrickWorld.get_stud_metres()
 	return (planet.global_transform * s.frame) * AABB(Vector3.ZERO, Vector3(s.fx * stud, s.height, s.fz * stud))
+
+
+## The bricks site `i` has lost.
+func site_gone(i: int) -> PackedInt32Array:
+	var s := sites[i]
+	if s.chunk < 0:
+		return s.dead
+	var gone := bricks.get_dead_blocks(s.chunk)
+	gone.append_array(bricks.get_detached_blocks(s.chunk))
+	return gone
+
+
+## As a save left it: its bricks gone, or toppled and no building any more. Before
+## its bricks are laid.
+func restore_site(i: int, gone: PackedInt32Array, p_toppled: bool) -> void:
+	var s := sites[i]
+	s.dead = gone
+	if p_toppled and not s.toppled:
+		s.toppled = true
+		if s.shell != null:
+			_free_near(s)
+		far.multimesh.set_instance_custom_data(i, Color(0.0, 0.0, 0.0, 0.0))
 
 
 func _free_near(s: Site) -> void:

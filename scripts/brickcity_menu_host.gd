@@ -64,6 +64,8 @@ func _goto(path: String) -> void:
 	var tree := Engine.get_main_loop() as SceneTree
 	if tree != null:
 		tree.paused = false
+		if tree.current_scene != null and tree.current_scene.has_method(&"before_leaving"):
+			tree.current_scene.call(&"before_leaving")
 		tree.change_scene_to_file(path)
 
 

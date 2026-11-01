@@ -2398,8 +2398,6 @@ and are reparented under it when it sleeps.
 #### What is not done (2026-10-31, each looked at in the code)
 
 Promised by the plan and not built:
-- **Saving**: nothing of the universe is saved: where the player is, which system, the drifts, a generated
-  world's damage (lost on a jump), `cleared` (lost on quitting).
 
 The game on planets:
 - No mech, tank or truck is ever in play on a planet, only in gates; soldiers are rifles only, and being
@@ -2414,6 +2412,7 @@ Ships and space:
 - Rams do not hurt the ship; a damaged hull draws whole from afar; no docking port or locked landing;
   worn and scorched bricks are not kept. One ship, nobody else flying.
 - Rocks and drifting pieces cannot be shot or mined; rocks do not go round; no planet's shadow on a ring.
+- Not saved: fallen pieces and drifting pieces (see "saving").
 - Still through the star's frame, so good to 0.5 m in open space: a drifting piece from a ship, and
   belt rocks round a player flying with no ship. A belt's far disc turns with the star now and has
   not been looked at from afar.
@@ -2466,3 +2465,44 @@ from its first contact (a wave from the start): with no order and no contact it 
 First shot back on the world: 0-3 s in 3 runs of 3; it had been none in 30 s.
 
 The first wave's soldiers cost 138 ms (the gun parts' library, built each time); later ones 40-50 ms.
+
+#### Plan, saving (2026-11-01)
+
+As zylanntest (its Docs/save_format_and_data_longevity.md, future_features_save_guide.md): the **universe**
+is the save; a stable id, `user://saves/<universe_id>/`, a file for the universe and one for each world
+in it, `format_version` on every file. **Definitions are not saved, instances are**: a world, its towns
+and its trees come from the seed; what is saved is what happened to them, with the world it happened on.
+
+- `universe.dat`: id, name, seed, the clock, the system, where the player is (in the frame of what
+  holds them, so it holds however the universe has moved), the ship, the towns cleared.
+- `s<system>_b<body>.dat`, one per world, written only once it has been touched: each site's gone bricks,
+  what has toppled, the trees down, the garrison (its wave, each soldier where it stood and its
+  health), the stations round it.
+- Written whole to a `.tmp`, then renamed over the old file (the PC does go off). Every 30 s, on each
+  change of frame, on closing the window, before changing universe.
+- A site's gone bricks are kept when its bricks are let go: until now a building healed when the
+  player walked away.
+- Coming back in, the scene starts as it does and is then taken where the player was, behind a dark
+  screen, by what a player would have done: out to open space, the jump, the frames' handoff.
+- Universes: M then U lists them, N makes one with a new seed; each is a folder. Gates never touch the
+  player's saves (`user://saves_test/`).
+- Not saved: fallen pieces, which are in-memory templates to the engine (their bricks stay gone from
+  the building), drifting pieces, bullets, what a soldier was thinking.
+- Gate `--gate=save`, two runs of it, the second finding what the first left.
+
+**Built (2026-11-01).** As the plan. `UniverseSave` (scripts/space/universe_save.gd), `PlanetSaver`
+(scripts/planet/planet_saver.gd), `UniversePanel`. A save is 4.7 ms. `--gate=save`, stages run as separate
+processes: 1, 2 ok; 2, 9 ok headless and windowed; 3, 6 ok. Stage 2 finds what 1 left: the clock (777 s), the
+player 0.03 m off, the ship, 3 of the squad of 4 with the hurt one at its health, the wall's 83 bricks in
+the file and in the bricks laid, the tree down. Stage 3, a new process, comes back to another system
+(386, Ordar III) by way of the ship and the jump, 0.50 m off, its wall's 99 bricks gone, and flies home to
+home's 83 still gone. Stage 4, in the same process, makes a new universe and reloads the scene: its
+own seed, nothing come back, two universes listed. Regressions headless: `system_probe` 31, bricks 9,
+damage 12, fall 7, hits 8, topple 6, storey 12, jump 10, home 9.
+
+Found on the way: a building healed when the player walked away from it, in play, with no save involved:
+`_free_bricks` let its bricks go, damage and all. `Site.dead` keeps them.
+
+Not saved, as planned: fallen pieces (their bricks stay gone from the building, the rubble goes) and drifting
+pieces. Every universe has the same home world, its seed moves only what is round it. Stopping the game
+from the editor gives no notice: what is lost is back to the last 30 s write.
