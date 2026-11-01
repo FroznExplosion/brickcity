@@ -38,7 +38,6 @@ const ACTIONS := [
 		["mirror_here", "Set plane", "", "Mirror plane here: through the middle of the ghost."],
 		["colour_back", "< Colour", ",", "The colour before, in the slot in hand."],
 		["colour_on", "Colour >", ".", "The next colour, in the slot in hand."],
-		["parts", "All parts", "Tab", "Open the parts browser."],
 	]],
 	["Edit", [
 		["undo", "Undo", "Z", "Take back the last edit: a brick, a run, a shape."],
@@ -73,6 +72,8 @@ const BRICK_PICS := [["fill", "Fill gaps"], ["only", "Only this"]]
 const THICK_PICS := [["0", "Brick"], ["1", "1"], ["2", "2"], ["3", "3"]]
 const HAND_PICS := [["place", "Place", "place"], ["pick", "Pick", "pick"], ["paint", "Paint", "paint"]]
 const POPOUT_W := 204.0
+## Tools that place: their pop-out leaves the screen to the build while they work.
+const POPOUT_HIDES := ["hand", "draw", "roof", "stairs", "cut"]
 ## A door and a window cut by one click, to start: studs across, plates up; a window's sill
 ## is where it is clicked, a door stands on the floor of the wall.
 const DOOR := Vector2i(4, 18)
@@ -84,6 +85,11 @@ var ws    ## the workshop (workshop.gd)
 var rail: ToolRail
 ## Hand, Edit and View's buttons, across the screen under the menus.
 var _bar: PanelContainer
+## The button under the tools for the brick menu.
+var bricks_button: Button
+## The pop-out is out: it goes when the cursor moves into the scene (POPOUT_HIDES), and comes
+## back on the tool's button.
+var _fly_open := true
 ## The numbers beside the cursor, and a height being typed while pulling.
 var _tag: Label
 var typed := ""
@@ -247,6 +253,8 @@ func setup(workshop, layer: CanvasLayer) -> void:
 	rail.name = "ToolRail"
 	layer.add_child(rail)
 	rail.fill("Build", TOOLS, pick, [], 2)
+	bricks_button = rail.add_under_tools("Bricks   Tab", "place", "Bricks  (Tab)\nOpen or close the menu of every brick.",
+			func() -> void: act("parts"))
 	_bar = PanelContainer.new()
 	_bar.name = "ToolBar"
 	_bar.add_theme_stylebox_override("panel", rail.get_theme_stylebox("panel"))
@@ -1056,6 +1064,7 @@ func _apply(rec: Dictionary) -> Dictionary:
 
 ## A rail button or its key: that tool in hand, everything else put down.
 func pick(id: String) -> void:
+	_fly_open = true
 	if id == "hand":
 		id = _last_hand
 	if id in ["place", "pick", "paint"]:
@@ -1176,9 +1185,13 @@ func dragging() -> bool:
 func _build_options() -> void:
 	rail.pop_out(ws._hud_layer, POPOUT_W)
 	_status = Label.new()
+	_status.add_theme_font_size_override("font_size", 14)
 	_status.add_theme_color_override("font_color", Color(1.0, 0.88, 0.5))
+	_status.add_theme_color_override("font_outline_color", Color.BLACK)
+	_status.add_theme_constant_override("outline_size", 5)
+	_status.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_status.visible = false
-	rail.options.add_child(_status)
+	ws._hud_layer.add_child(_status)
 	_hand_box = VBoxContainer.new()
 	rail.options.add_child(_hand_box)
 	_hand_row = rail.pictures(_hand_box, "", HAND_PICS, pick, "place", 3)
@@ -1610,6 +1623,8 @@ func _rail_right() -> float:
 
 ## The tools' share of the input. True when it was theirs.
 func input(e: InputEvent) -> bool:
+	if e is InputEventMouseMotion and not rail.near_mouse(14.0):
+		_fly_open = false
 	if e is InputEventMouseButton and rail.has_mouse():
 		return true
 	if e is InputEventMouseButton and _drag.get("phase", "") == "height" \
@@ -2762,6 +2777,9 @@ func process() -> void:
 	if _status_left > 0.0:
 		_status_left -= ws.get_process_delta_time()
 		_status.visible = _status_left > 0.0 and _status.text != ""
+	if _status.visible:
+		_status.reset_size()
+		_status.position = Vector2((vw - _status.size.x) * 0.5, vh - 128.0)
 	var drawing := on == "draw"
 	_lay_box.visible = drawing
 	_round_box.visible = outline in ["box", "circle"]
@@ -2815,13 +2833,22 @@ func process() -> void:
 		_shown = Vector2i(selected, _rev)
 		_sync_select()
 	# The tool's pop-out beside its button; the readout and the paint palette beside that.
-	var bt: Button = rail.buttons.get(rail_id(on))
-	rail.place_flyout(bt.global_position.y if bt != null else top, vh - 100.0)
-	var x := _rail_right()
+	var rid := rail_id(on)
+	var bt: Button = rail.buttons.get(rid)
+	if bt != null and bt.is_hovered():
+		_fly_open = true
+	var show_fly := _fly_open or not (rid in POPOUT_HIDES)
+	if dragging() or (Input.mouse_mode == Input.MOUSE_MODE_CAPTURED and rid in POPOUT_HIDES):
+		show_fly = false
+	rail.place_flyout(bt.global_position.y if bt != null else top, vh - 100.0, show_fly)
+	if not show_fly and rid in POPOUT_HIDES and rail.hint != null:
+		rail.hint.text += "  (Point at the tool for its options.)"
+	bricks_button.set_pressed_no_signal(ws._hotbar.is_browsing())
+	# The readout stays put; the pop-out comes and goes over it. The paint palette is beside it.
 	if ws._hud != null:
-		ws._hud.position = Vector2(x, top)
+		ws._hud.position = Vector2(rail.position.x + rail.size.x + 12.0, top)
 	if ws._paint_palette != null:
-		ws._paint_palette.position = Vector2(x, top + 110.0)
+		ws._paint_palette.position = Vector2(_rail_right(), top + 110.0)
 	var said := tag_text() if not _drag.is_empty() else ""
 	_tag.visible = said != ""
 	if said != "":

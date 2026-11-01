@@ -137,15 +137,33 @@ func pop_out(layer: CanvasLayer, width: float) -> void:
 	options.visible = true
 
 
+## A full-width button under the tools, above the hint (`fill` first). A toggle: the owner
+## lights it.
+func add_under_tools(text: String, icon_id: String, tip: String, pressed: Callable) -> Button:
+	var b := Button.new()
+	b.text = text
+	b.icon = icon(icon_id)
+	b.alignment = HORIZONTAL_ALIGNMENT_LEFT
+	b.add_theme_font_size_override("font_size", 12)
+	b.focus_mode = Control.FOCUS_NONE
+	b.toggle_mode = true
+	b.tooltip_text = tip
+	b.pressed.connect(pressed)
+	_box.add_child(b)
+	_box.move_child(b, hint.get_index())
+	return b
+
+
 ## The pop-out beside the rail, level with `y` if it fits above `bottom`, else moved up.
-func place_flyout(y: float, bottom: float) -> void:
+## `open` false: gone for now.
+func place_flyout(y: float, bottom: float, open: bool = true) -> void:
 	if flyout == null:
 		return
 	var any := false
 	for c in options.get_children():
 		any = any or (c as Control).visible
-	flyout.visible = any
-	if not any:
+	flyout.visible = any and open
+	if not flyout.visible:
 		return
 	var h := minf(options.get_combined_minimum_size().y, bottom - position.y)
 	_fly_scroll.custom_minimum_size = Vector2(flyout.custom_minimum_size.x - 12.0, h)
@@ -335,6 +353,14 @@ func show_active(on: String, rows: Array = []) -> void:
 			if t[0] == on:
 				text = t[3]
 		hint.text = text
+
+
+## True while the cursor is on or within `margin` of the rail or its pop-out.
+func near_mouse(margin: float) -> bool:
+	if is_visible_in_tree() and get_global_rect().grow(margin).has_point(get_global_mouse_position()):
+		return true
+	return flyout != null and flyout.is_visible_in_tree() \
+			and flyout.get_global_rect().grow(margin).has_point(flyout.get_global_mouse_position())
 
 
 ## True while the cursor is over the rail: the wheel there scrolls nothing else.

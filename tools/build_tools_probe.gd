@@ -48,6 +48,7 @@ func _initialize() -> void:
 	await _simpler_checks()
 	_draw_checks()
 	_rest_checks()
+	await _out_of_the_way_checks()
 	print("\n%d passed, %d failed" % [_pass, _fail])
 	quit(1 if _fail > 0 else 0)
 
@@ -1394,4 +1395,51 @@ func _rest_checks() -> void:
 	_ok("a stroke on a wall's side comes out of it", _solid(Vector3i(13, 3, 3)))
 	t.set_outline("box")
 	t.flat_roof = true
+	t.pick("place")
+
+
+func _out_of_the_way_checks() -> void:
+	print("[probe] out of the way while placing (section 13)")
+	_ws._new_build()
+	var t: WorkshopTools = _ws._tools
+	_ok("a Bricks button under the tools, All parts gone from the bar", t.bricks_button != null
+			and t.rail.is_ancestor_of(t.bricks_button) and not t.rail.action_buttons.has("parts"))
+	t.bricks_button.pressed.emit()
+	_ok("it opens the brick menu", _ws._hotbar.is_browsing())
+	await process_frame
+	_ok("and is lit while it is open", t.bricks_button.button_pressed)
+	t.bricks_button.pressed.emit()
+	await process_frame
+	_ok("and closes it", not _ws._hotbar.is_browsing() and not t.bricks_button.button_pressed)
+	t.pick("draw")
+	await process_frame
+	await process_frame
+	_ok("picked, Draw's pop-out is out", t.rail.flyout.visible)
+	var m := InputEventMouseMotion.new()
+	m.relative = Vector2(5, 0)
+	t.input(m)
+	await process_frame
+	_ok("the cursor out in the scene: it goes", not t.rail.flyout.visible)
+	t.pick("draw")
+	await process_frame
+	_ok("picked again, it is back", t.rail.flyout.visible)
+	t.makes = "walls"
+	t.set_outline("line")
+	_ws._cell = Vector3i(4, 1, 4)
+	t._drag = {"phase": "base", "tool": "walls", "button": MOUSE_BUTTON_LEFT, "lie": "flat", "at": 1,
+			"a": Vector2i(4, 4), "b": Vector2i(9, 4), "kind": "polyline", "cut": false}
+	await process_frame
+	_ok("gone while drawing", not t.rail.flyout.visible)
+	t.say("a message")
+	await process_frame
+	_ok("what the tools say stays on the screen", t._status.visible and not t.rail.options.is_ancestor_of(t._status))
+	t.cancel()
+	t.say("")
+	t.pick("repeat")
+	await process_frame
+	t.input(m)
+	await process_frame
+	_ok("Repeat keeps its options", t.rail.flyout.visible)
+	t.makes = "solid"
+	t.set_outline("box")
 	t.pick("place")

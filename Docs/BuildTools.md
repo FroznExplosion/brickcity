@@ -558,3 +558,17 @@ All of it, merged; `tools/build_tools_probe.gd` 228 checks.
   above the top).
 * Pen strokes on a face go through `_stroke_plane`; a stroke on a wall's side needs Solid (or Cut
   out). Cut's Freehand and Corners use the same pen.
+
+## 13. Out of the way while placing (2026-10-31)
+
+Asked: a button under the tools for the brick menu (Tab); and the pop-out takes too much of the
+screen while placing.
+
+* **Bricks** is a button under the tools, lit while the brick menu is open: it opens and
+  closes it, as Tab does. All parts leaves the top bar.
+* **The pop-out gets out of the way.** With a tool that places (Hand, Draw, Roof, Stairs, Cut) it
+  shows when the tool is picked, goes as soon as the cursor moves out into the scene, stays gone
+  while anything is drawn or pulled and in FPS, and comes back when the cursor points at the
+  tool's button. Select, Repeat and Rooms keep theirs: their options are what they are for.
+* What the tools say (the status line) lived in the pop-out; it is now a line over the toolbar
+  at the bottom, so it stays when the pop-out goes.
