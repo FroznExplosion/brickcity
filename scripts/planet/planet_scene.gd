@@ -22,6 +22,7 @@ extends Node3D
 ##   (11.10, trees and vehicles).
 ##   -- --gate=squad: a squad on the AI's nav region round the town (11.8 N2)
 ##   -- --gate=garrison: a generated world's own AI and a town's squad (11.12 step 7)
+##   -- --gate=home: home's town: quiet at the spawn, a fight walked into, its waves
 ##   -- --gate=belt: a star's belt from open space, the ship turned, slow among its rocks
 ##   -- --gate=seat: the ship smooth near a planet, out of its seat, the map, open space
 ##   walks to the player round the curve, takes cover, fires.
@@ -64,6 +65,7 @@ var _pieces_ai_gate := false
 var _garrison_gate := false
 var _seat_gate := false
 var _belt_gate := false
+var _home_gate := false
 var _storey_gate := false
 ## The AI round the fight (Docs/Planets.md 11.8, N2, N4): the nav net round the
 ## player's town; ai_world / ai_nav the region the player is in. Made by setup_ai.
@@ -141,7 +143,8 @@ func _ready() -> void:
 	_garrison_gate = "--gate=garrison" in OS.get_cmdline_user_args()
 	_seat_gate = "--gate=seat" in OS.get_cmdline_user_args()
 	_belt_gate = "--gate=belt" in OS.get_cmdline_user_args()
-	_gate = _gate or _system_gate or _ship_gate or _dock_gate or _worlds_gate or _jump_gate or _debris_gate or _rocks_gate or _garrison_gate or _seat_gate or _belt_gate or _pawn_gate or _mech_gate or _tank_gate or _soldier_gate or _squad_gate or _travel_gate or _far_gate or _drive_gate or _trees_gate or _bricks_gate or _damage_gate or _fall_gate or _hits_gate or _topple_gate or _pieces_ai_gate or _storey_gate
+	_home_gate = "--gate=home" in OS.get_cmdline_user_args()
+	_gate = _gate or _system_gate or _ship_gate or _dock_gate or _worlds_gate or _jump_gate or _debris_gate or _rocks_gate or _garrison_gate or _seat_gate or _belt_gate or _home_gate or _pawn_gate or _mech_gate or _tank_gate or _soldier_gate or _squad_gate or _travel_gate or _far_gate or _drive_gate or _trees_gate or _bricks_gate or _damage_gate or _fall_gate or _hits_gate or _topple_gate or _pieces_ai_gate or _storey_gate
 	data = PlanetData.new()
 	data.planet_name = "proto"
 	# Towns and landmarks: their pads go into the ground before it is built.
@@ -258,6 +261,8 @@ func _ready() -> void:
 			_run_garrison_gate()
 		elif _seat_gate:
 			_run_seat_gate()
+		elif _home_gate:
+			_run_home_gate()
 		elif _belt_gate:
 			_run_belt_gate()
 		else:
@@ -334,6 +339,7 @@ func _spawn_player(feet: Vector3, facing: Vector3) -> void:
 	# The AI it fights: the town's region (11.8 N2), unless a gate sets up its own.
 	if ai == null and not _gate:
 		setup_ai(town_dirs[0])
+		_home_garrison()
 	var s := ai
 	if s == null:
 		s = AIServices.new()
@@ -355,6 +361,19 @@ func _on_player_down() -> void:
 			at = ground
 	pawn.health.reset()
 	pawn.place(at + Gravity.up_at(at) * 0.05)
+
+
+## Home's town holds soldiers too, who come back in waves. It wakes nearer than a
+## generated world's, so that the spawn stays quiet (the town is 220 m from it).
+func _home_garrison() -> void:
+	var g := PlanetGarrison.new()
+	g.name = "Garrison"
+	g.setup(self, planet, cleared)
+	g.raise_at = HOME_RAISE_AT
+	g.waves = true
+	g.ai_town = 0
+	add_child(g)
+	garrisons[planet] = g
 
 
 ## Colliders can go from under a body as the ground streams, and a planet has no
@@ -560,6 +579,8 @@ func _build_system() -> void:
 	system.universe = uni
 	system.built[planet] = buildings
 	system.frozen = _gate and not (_system_gate or _dock_gate)
+	# Set here, not before: home is not one of the generated worlds to settle.
+	data.towns.assign(town_dirs)
 	system.anchor_changed.connect(_on_anchor_changed)
 	system.woke.connect(_on_woke)
 	system.jumped.connect(_on_jumped)
@@ -640,7 +661,9 @@ func _on_jumped(_index: int) -> void:
 	for b in ai_of.keys():
 		if b != planet:
 			ai_of.erase(b)
-	garrisons.clear()
+	for b in garrisons.keys():
+		if b != planet:
+			garrisons.erase(b)
 	ai = ai_of.get(planet)
 	_ai_follow(planet)
 
@@ -771,7 +794,7 @@ func _process(_delta: float) -> void:
 	# walker's own gate, the pawn stands on it.
 	if walker.frozen and not piloting and pawn == null and trees.prebaked and _ground_hit(walker.global_position) != Vector3.INF:
 		walker.frozen = false
-		if not _gate or _pawn_gate or _mech_gate or _tank_gate or _soldier_gate or _squad_gate or _travel_gate or _far_gate or _drive_gate or _trees_gate or _bricks_gate or _damage_gate or _fall_gate or _hits_gate or _topple_gate or _pieces_ai_gate or _storey_gate or _garrison_gate or _seat_gate:
+		if not _gate or _pawn_gate or _mech_gate or _tank_gate or _soldier_gate or _squad_gate or _travel_gate or _far_gate or _drive_gate or _trees_gate or _bricks_gate or _damage_gate or _fall_gate or _hits_gate or _topple_gate or _pieces_ai_gate or _storey_gate or _garrison_gate or _seat_gate or _home_gate:
 			_spawn_player(_ground_hit(walker.global_position), -walker.global_transform.basis.z)
 	if not on_foot:
 		walker.flying = pawn != null or walker.flying
@@ -798,6 +821,9 @@ func _process(_delta: float) -> void:
 		elif ship != null and (_anchor() - ship.global_transform * ship.seat()).length() < 8.0:
 			hud.text += "\nE: take the ship's controls"
 		if system != null:
+			var g: PlanetGarrison = garrisons.get(system.anchor)
+			if g != null and g.status() != "":
+				hud.text += "\n" + g.status()
 			var h := system.hour_at(_anchor())
 			hud.text += "\n%s  %s  %02d:%02d  sun %.0f%%  t %.0f s%s" % [system.sys.system_name,
 					PlanetSystem.name_of(system.frame_node()) if system.frame_node() != null else "space, near " + body.data.planet_name,
@@ -1385,6 +1411,8 @@ func _run_soldier_gate() -> void:
 # ---------------------------------------------------------------------------
 # The AI on the planet (Docs/Planets.md 11.8, N2 and N4): nav regions round the fight.
 
+## Metres from the middle of home's town at which its fight starts.
+const HOME_RAISE_AT := 130.0
 ## Metres under the ground that a pawn is put back from, and how many times.
 const UNDER_GROUND := 3.0
 var ground_saves := 0
@@ -2538,6 +2566,82 @@ func _run_belt_gate() -> void:
 	get_tree().quit(1 if _fail > 0 else 0)
 
 
+# Home's gate: quiet at the spawn; home's town walked into, the fight on home's own
+# AI; wave after wave, each bigger, none on the player's head, and it stops at the most.
+
+func _run_home_gate() -> void:
+	var t0 := Time.get_ticks_msec()
+	while pawn == null and Time.get_ticks_msec() - t0 < 60000:
+		await _frames(1)
+	await get_tree().create_timer(1.0).timeout
+	setup_ai(town_dirs[0])
+	ai.policy = CombatPolicy.new()
+	kit.use_services(ai)
+	_home_garrison()
+	var g: PlanetGarrison = garrisons[planet]
+	var home_ai := ai
+	pawn.health.layer_configs[0].max_value = 1e7
+	pawn.health.reset()
+	await get_tree().create_timer(2.0).timeout
+	_check("quiet at the spawn, 220 m off", g.squad == null and g.wave == 0, "%.0f m" % pawn.feet().distance_to(_surface(town_dirs[0])))
+	var town: Vector3 = town_dirs[0]
+	var feet := _surface(_round_dir(town, spawn_dir, 50.0))
+	t0 = Time.get_ticks_msec()
+	while _ground_hit(feet) == Vector3.INF and Time.get_ticks_msec() - t0 < 30000:
+		await _frames(1)
+	pawn.place(feet + Gravity.up_at(feet) * 0.3)
+	_face(Gravity.flat(_surface(town) - feet, Gravity.up_at(feet)).normalized())
+	var raised := func(n: int) -> void:
+		var since := Time.get_ticks_msec()
+		while (g.squad == null or g.wave != n) and Time.get_ticks_msec() - since < 40000:
+			await _frames(1)
+	await raised.call(1)
+	_check("walked into, its first squad, four strong", g.squad != null and g.squad.alive().size() == 4)
+	_check("on home's own AI, no other made", ai == home_ai and ai_of[planet] == home_ai and kit.services == home_ai)
+	var q := g.squad
+	var fired := false
+	t0 = Time.get_ticks_msec()
+	while not fired and Time.get_ticks_msec() - t0 < 40000:
+		await _frames(2)
+		for m in q.alive():
+			fired = fired or m.shots > 0
+	_check("it fights", fired, g.status())
+	await _shot("home_gate_fight")
+	var sizes: Array[int] = []
+	var nearest := INF
+	for n in range(2, 5):
+		for m in g.squad.alive():
+			m.pawn.health.apply_impact(1e6, &"")
+		t0 = Time.get_ticks_msec()
+		while g.squad != null and Time.get_ticks_msec() - t0 < 8000:
+			await _frames(1)
+		if n == 2:
+			_check("between waves it says when the next is", g.status().contains("wave 2 in"), g.status())
+		g.next_wave = 0.0
+		await raised.call(n)
+		if g.squad == null:
+			break
+		sizes.append(g.squad.alive().size())
+		for m in g.squad.alive():
+			nearest = minf(nearest, m.pawn.feet().distance_to(pawn.feet()))
+	_check("each wave bigger, to the most", str(sizes) == "[6, 8, 8]", str(sizes))
+	_check("none on the player's head", nearest > 40.0, "%.0f m" % nearest)
+	var came := nearest
+	t0 = Time.get_ticks_msec()
+	while came > nearest - 15.0 and Time.get_ticks_msec() - t0 < 40000:
+		await _frames(2)
+		for m in g.squad.alive():
+			came = minf(came, m.pawn.feet().distance_to(pawn.feet()))
+	_check("and it comes for them, unseen", came <= nearest - 15.0, "%.0f m -> %.0f m" % [nearest, came])
+	await get_tree().create_timer(2.0).timeout
+	var low := INF
+	for m in g.squad.alive():
+		low = minf(low, _over_ground(m.pawn.feet()))
+	_check("on the ground where it came in", absf(low) < 1.5, "%.2f m" % low)
+	print("[planet] gate: %d ok, %d FAIL" % [_ok, _fail])
+	get_tree().quit(1 if _fail > 0 else 0)
+
+
 # The garrison's gate (11.12 step 7): a jump to a settled world, down by a town,
 # out on foot: the world's own AI, the town's squad closing and firing; left and
 # come back to, there and still fighting; wiped out, clear; the player down and
@@ -2678,7 +2782,12 @@ func _run_garrison_gate() -> void:
 		shots1 = 0
 		for m in q.alive():
 			shots1 += m.shots
-	_check("and it fights on", shots1 > shots0, "%d rounds more" % (shots1 - shots0))
+	_check("and it fights on", shots1 > shots0, "a round in %.1f s; %s" % [(Time.get_ticks_msec() - t0) / 1000.0, g.status()])
+	if shots1 == shots0:
+		var what := {}
+		for m in q.alive():
+			what[m.state] = int(what.get(m.state, 0)) + 1
+		print("[planet] garrison: %s, play %s, order %s, nearest %.1f m" % [what, q.play, q.order != null, q.alive()[0].pawn.feet().distance_to(pawn.feet())])
 	# Wiped out.
 	for m in q.alive():
 		m.pawn.health.apply_impact(1e6, &"")

@@ -2400,9 +2400,9 @@ Promised by the plan and not built:
   world's damage (lost on a jump), `cleared` (lost on quitting).
 
 The game on planets:
-- **No fight outside a generated world's town.** Home has no enemies; no mech, tank or truck is ever
-  in play on a planet, only in gates. The firefight director is the city's. Soldiers are rifles only,
-  one squad a town, and being downed costs nothing.
+- No mech, tank or truck is ever in play on a planet, only in gates; soldiers are rifles only, and being
+  downed costs nothing. The firefight director's game (rounds, lives, score, armour, your own mech) is
+  the city's.
 - Town layouts and tower colours are home's generator's on every world; snow under a high sun is near
   white.
 - Bodies far from the player fall through coarse ground: a garrison is held for it, and nothing else
@@ -2438,3 +2438,29 @@ marker build flooded headless runs with errors (no viewport size) with the same 
 windowed only. `--gate=jump` 5/5 after both, `--gate=garrison` 17/17, `--gate=seat` 13/13 headless and 16/16
 windowed before the guard (a windowed run after it, at 4 fps with the display asleep, had 12 ok and no
 failure when its time ran out).
+
+#### Plan, a fight on home (2026-11-01)
+
+The city's `FirefightDirector` is not the way: it is its ring, barrier and drop zones, 1,100 lines
+that want a `CityScene`. `PlanetGarrison` stands in, on home's town and its AI as they are:
+- `data.towns` holds home's town now, so a garrison can use it. It wakes at 130 m: the spawn is 220 m
+  from the town and stays quiet until the player walks in.
+- **Waves** (`waves`, home only): a squad wiped out is followed after 20 s, while the player stays, by
+  one two bigger (4, 6, 8), from 70 m past the town's middle on the far side from the player. Other
+  worlds' towns stay clear. The HUD says the wave and who is left.
+- Gate `--gate=home`.
+
+**Built (2026-11-01).** As the plan. `--gate=home` 9/9 headless, 8/8 windowed (60 fps, before the last
+two changes below): quiet at the spawn, 222 m off; walked into, four on home's own AI with no other
+made; it fires; between waves the HUD gives the time; waves of 6, 8, 8, each 120 m from the player.
+Regressions headless: garrison 17, jump 10, squad 10, far 11; before the last change worlds 8, `system_probe`
+31.
+
+Found on the way: **a squad that lost the player stood there for good.** Back on a world, 36 m from them
+and quiet, a garrison was idle with no order, 2 runs in 3: ADVANCE fails at once with nobody known, so
+an order alone does nothing, and a wave past the town would have stood out of sight. A squad now hunts
+from its first contact (a wave from the start): with no order and no contact it is told by ear
+(`AIServices.noise`), as a soldier comes to know of anything it cannot see, and advances from that.
+First shot back on the world: 0-3 s in 3 runs of 3; it had been none in 30 s.
+
+The first wave's soldiers cost 138 ms (the gun parts' library, built each time); later ones 40-50 ms.
