@@ -507,7 +507,17 @@ SpaceShip -- its seat forward of the middle, its hull box long along Z; laid fra
 nothing loose; a bulkhead of the bridge's section shot through -- the part beyond (324 bricks)
 drifts off whole, the bridge stays.
 
-Not yet: no windowed pass has flown one (the gates use the plain ship); a section that drifts off
+**Boarded.** A generated ship's sill can stand metres over the ground (it is long and parks
+level over a slope: 4.4 m at seed 7's stern), and E boards only within 8 m of the seat, deep in
+the bridge -- so on foot at its airlock, **E steps through it** (`PlanetScene._through_airlock`):
+in onto the deck, or out onto the ground. `SpaceStation.airlock_cell`, `cell_point`, `cell_at`.
+
+`planet.tscn -- --gate=hull` (windowed, 8 checks, 2026-11-01): the parked ship generated, laid with
+the player by it, nothing loose; in through the airlock onto its deck and 16 studs on along the
+spine; into the bridge's seat, flown 270 m up; out of the seat on the bridge's floor, laid again
+round its pilot with nothing loose. Shots `hull_gate_*`.
+
+Not yet: a section that drifts off
 takes no one with it; doors and lifts are not hung in a ship; the hull is a box with a bow, no
 fins or engine nacelles in bricks (the engines are the old meshes).
 

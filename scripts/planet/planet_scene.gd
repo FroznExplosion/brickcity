@@ -25,6 +25,8 @@ extends Node3D
 ##   -- --gate=home: home's town: quiet at the spawn, a fight walked into, its waves
 ##   -- --gate=belt: a star's belt from open space, the ship turned, slow among its rocks
 ##   -- --gate=seat: the ship smooth near a planet, out of its seat, the map, open space
+##   -- --gate=hull: the generated ship (Docs/RoomModules.md 7.5): laid in bricks,
+##   into it through its airlock (E there), flown from the bridge's seat, stood in
 ##   walks to the player round the curve, takes cover, fires.
 ##   -- --gate=travel: a squad ordered 200 m out of the town on the nav net
 ##   (11.8 N4), across the regions' borders.
@@ -64,6 +66,7 @@ var _topple_gate := false
 var _pieces_ai_gate := false
 var _garrison_gate := false
 var _seat_gate := false
+var _hull_gate := false
 var _belt_gate := false
 var _home_gate := false
 var _storey_gate := false
@@ -142,9 +145,10 @@ func _ready() -> void:
 	_rocks_gate = "--gate=rocks" in OS.get_cmdline_user_args()
 	_garrison_gate = "--gate=garrison" in OS.get_cmdline_user_args()
 	_seat_gate = "--gate=seat" in OS.get_cmdline_user_args()
+	_hull_gate = "--gate=hull" in OS.get_cmdline_user_args()
 	_belt_gate = "--gate=belt" in OS.get_cmdline_user_args()
 	_home_gate = "--gate=home" in OS.get_cmdline_user_args()
-	_gate = _gate or _system_gate or _ship_gate or _dock_gate or _worlds_gate or _jump_gate or _debris_gate or _rocks_gate or _garrison_gate or _seat_gate or _belt_gate or _home_gate or _pawn_gate or _mech_gate or _tank_gate or _soldier_gate or _squad_gate or _travel_gate or _far_gate or _drive_gate or _trees_gate or _bricks_gate or _damage_gate or _fall_gate or _hits_gate or _topple_gate or _pieces_ai_gate or _storey_gate
+	_gate = _gate or _system_gate or _ship_gate or _dock_gate or _worlds_gate or _jump_gate or _debris_gate or _rocks_gate or _garrison_gate or _seat_gate or _hull_gate or _belt_gate or _home_gate or _pawn_gate or _mech_gate or _tank_gate or _soldier_gate or _squad_gate or _travel_gate or _far_gate or _drive_gate or _trees_gate or _bricks_gate or _damage_gate or _fall_gate or _hits_gate or _topple_gate or _pieces_ai_gate or _storey_gate
 	data = PlanetData.new()
 	data.planet_name = "proto"
 	# Towns and landmarks: their pads go into the ground before it is built.
@@ -261,6 +265,8 @@ func _ready() -> void:
 			_run_garrison_gate()
 		elif _seat_gate:
 			_run_seat_gate()
+		elif _hull_gate:
+			_run_hull_gate()
 		elif _home_gate:
 			_run_home_gate()
 		elif _belt_gate:
@@ -473,8 +479,35 @@ func _ship_key(key: Key) -> bool:
 			unboard()
 		elif (_anchor() - ship.global_transform * ship.seat()).length() < 8.0:
 			board()
+		elif on_foot and pawn != null:
+			_through_airlock()
 		return true
 	return false
+
+
+## On foot at a generated ship's airlock (its sill can stand metres over the
+## ground): E steps through it, in onto the deck or out onto the ground.
+func _through_airlock() -> void:
+	var lock := ship.airlock_cell
+	if lock.x < 0 or not ship.bricked:
+		return
+	var door := ship.global_transform * ((ship.cell_point(lock) + ship.cell_point(lock + Vector3i(0, 0, 1))) * 0.5)
+	var inside := ship.global_transform * ((ship.cell_point(lock + Vector3i(3, 0, 0)) + ship.cell_point(lock + Vector3i(3, 0, 1))) * 0.5)
+	var outward := (door - inside).normalized()
+	var feet := pawn.feet()
+	var rel := feet - door
+	var up := Gravity.up_at(door)
+	var aside := (rel - outward * rel.dot(outward) - up * rel.dot(up)).length()
+	if aside > 2.5 or rel.dot(up) > 1.0 or rel.dot(up) < -8.0 or absf(rel.dot(outward)) > 4.0:
+		return
+	if rel.dot(outward) > 0.0:
+		pawn.place(inside + up * 0.05)
+		_face(Gravity.flat(-outward, up).normalized())
+	else:
+		var out := _ground_hit(door + outward * 2.5)
+		if out != Vector3.INF:
+			pawn.place(out + up * 0.05)
+			_face(Gravity.flat(outward, up).normalized())
 
 
 func _unhandled_input(event: InputEvent) -> void:
@@ -585,7 +618,7 @@ func _build_system() -> void:
 	system.woke.connect(_on_woke)
 	system.jumped.connect(_on_jumped)
 	# A ship parked 45 m behind the spawn (not in the other gates' way).
-	if not _gate or _ship_gate or _dock_gate or _jump_gate or _rocks_gate or _garrison_gate or _seat_gate or _belt_gate:
+	if not _gate or _ship_gate or _dock_gate or _jump_gate or _rocks_gate or _garrison_gate or _seat_gate or _belt_gate or _hull_gate:
 		var sd := OrbitalData.new()
 		sd.kind = "ship"
 		sd.orbital_name = "ship"
@@ -594,7 +627,7 @@ func _build_system() -> void:
 		sd.courses = 6
 		# In play a generated ship: a hull with its rooms (Docs/RoomModules.md 7.5);
 		# the gates keep the plain one they were written round.
-		if not _gate:
+		if not _gate or _hull_gate:
 			sd.layout = "generated"
 			sd.orbital_seed = 7
 		var east := spawn_dir.cross(Vector3.FORWARD).normalized()
@@ -799,7 +832,7 @@ func _process(_delta: float) -> void:
 	# walker's own gate, the pawn stands on it.
 	if walker.frozen and not piloting and pawn == null and trees.prebaked and _ground_hit(walker.global_position) != Vector3.INF:
 		walker.frozen = false
-		if not _gate or _pawn_gate or _mech_gate or _tank_gate or _soldier_gate or _squad_gate or _travel_gate or _far_gate or _drive_gate or _trees_gate or _bricks_gate or _damage_gate or _fall_gate or _hits_gate or _topple_gate or _pieces_ai_gate or _storey_gate or _garrison_gate or _seat_gate or _home_gate:
+		if not _gate or _pawn_gate or _mech_gate or _tank_gate or _soldier_gate or _squad_gate or _travel_gate or _far_gate or _drive_gate or _trees_gate or _bricks_gate or _damage_gate or _fall_gate or _hits_gate or _topple_gate or _pieces_ai_gate or _storey_gate or _garrison_gate or _seat_gate or _home_gate or _hull_gate:
 			_spawn_player(_ground_hit(walker.global_position), -walker.global_transform.basis.z)
 	if not on_foot:
 		walker.flying = pawn != null or walker.flying
@@ -2481,6 +2514,84 @@ func _run_seat_gate() -> void:
 	await get_tree().create_timer(1.0).timeout
 	_check("off the ship in open space, nothing pulls", system.frame_node() == null and Gravity.strength() == 0.0, "%.1f m/s2" % Gravity.strength())
 	_check("on foot, no marks", not markers.visible)
+	print("[planet] gate: %d ok, %d FAIL" % [_ok, _fail])
+	get_tree().quit(1 if _fail > 0 else 0)
+
+
+# The hull's gate: the parked ship generated (ShipBuild, Docs/RoomModules.md
+# 7.5) -- its bricks laid with nothing loose, walked into through its airlock,
+# flown from the bridge's seat with nothing shaken loose, stood in on its floor.
+
+func _run_hull_gate() -> void:
+	var t0 := Time.get_ticks_msec()
+	while pawn == null and Time.get_ticks_msec() - t0 < 60000:
+		await _frames(1)
+	await get_tree().create_timer(1.0).timeout
+	_check("the parked ship is a generated one, with an airlock", ship.recipe != null and ship.airlock_cell.x >= 0,
+			"%d bricks, grown in %.0f ms" % [ship.recipe.size() if ship.recipe else 0, ship.grow_ms])
+	if ship.recipe == null or ship.airlock_cell.x < 0:
+		get_tree().quit(1)
+		return
+	# Outside its stern, facing the airlock (between the doorway's two cells).
+	var lock := ship.airlock_cell
+	var door := ship.global_transform * ((ship.cell_point(lock) + ship.cell_point(lock + Vector3i(0, 0, 1))) * 0.5)
+	var inside := ship.global_transform * ((ship.cell_point(lock + Vector3i(4, 0, 0)) + ship.cell_point(lock + Vector3i(4, 0, 1))) * 0.5)
+	var out := door + (door - inside).normalized() * 4.0
+	pawn.place(_ground_hit(out))
+	await get_tree().create_timer(0.5).timeout
+	_face(Gravity.flat(inside - out, Gravity.up_at(out)).normalized())
+	var t1 := Time.get_ticks_msec()
+	while not ship.bricked and Time.get_ticks_msec() - t1 < 30000:
+		await _frames(1)
+	var loose: Array = ship.bricks.find_detached_groups(ship.chunk) if ship.chunk >= 0 else []
+	var laid := ship.bricks.get_alive_block_count(ship.chunk) if ship.chunk >= 0 else 0
+	_check("laid in bricks with the player by it, every brick, nothing loose", ship.bricked and laid == ship.recipe.size() and loose.is_empty(),
+			"%d of %d in %.1f s, %d loose group(s)" % [laid, ship.recipe.size(), (Time.get_ticks_msec() - t1) / 1000.0, loose.size()])
+	await get_tree().create_timer(1.0).timeout
+	print("[planet] hull gate: the airlock's floor %.2f m over the pawn's feet" % (door - pawn.feet()).dot(Gravity.up_at(door)))
+	await _shot("hull_gate_stern")
+	# In through the airlock (E at it: its sill stands over the ground), then on along the spine.
+	_ship_key(KEY_E)
+	await get_tree().create_timer(1.0).timeout
+	var c := ship.cell_at(pawn.feet())
+	_check("in through the airlock, standing on its deck", c.x > lock.x + 1.0 and pawn.is_on_floor() and absf(c.y - lock.y) < 3.0,
+			"at cell %s, the airlock %s" % [str(c.snapped(Vector3(0.1, 0.1, 0.1))), str(lock)])
+	await _hold(&"move_forward", 2.0)
+	await get_tree().create_timer(0.5).timeout
+	var c2 := ship.cell_at(pawn.feet())
+	_check("and on along its spine", c2.x > c.x + 4.0 and pawn.is_on_floor() and absf(c2.y - lock.y) < 3.0,
+			"at cell %s" % str(c2.snapped(Vector3(0.1, 0.1, 0.1))))
+	await _shot("hull_gate_inside")
+	# The bridge's seat: up and ahead (its bricks put away while it is flown over the planet).
+	pawn.place(ship.global_transform * ship.seat() + ship.global_basis.z * 2.0)
+	await get_tree().create_timer(0.5).timeout
+	_ship_key(KEY_E)
+	_check("into the seat from the bridge's floor", piloting)
+	var alt0 := ship.altitude
+	ship.thrust = Vector3(0.0, 1.0, 0.0)
+	await get_tree().create_timer(5.0).timeout
+	ship.thrust = Vector3(0.0, 0.0, 0.5)
+	await get_tree().create_timer(3.0).timeout
+	ship.thrust = Vector3.ZERO
+	_check("flown from the bridge's seat: up and away", ship.altitude > alt0 + 10.0,
+			"%.0f m up from %.0f, %.0f m/s" % [ship.altitude, alt0, ship.vel.length()])
+	await _shot("hull_gate_flying")
+	# Out of the seat: on its bridge's floor.
+	_ship_key(KEY_E)
+	var since := Time.get_ticks_msec()
+	while (_stepping_out >= 0 or not pawn.is_on_floor()) and Time.get_ticks_msec() - since < 6000:
+		await _frames(1)
+	await get_tree().create_timer(1.0).timeout
+	c = ship.cell_at(pawn.feet())
+	var seat := Vector3(ship.seat_cell)
+	_check("out of the seat: on foot on the bridge's floor", on_foot and pawn.is_on_floor()
+			and Vector2(c.x - seat.x - 0.5, c.z - seat.z - 0.5).length() < 4.0 and absf(c.y - seat.y) < 2.0,
+			"at cell %s, the seat %s" % [str(c.snapped(Vector3(0.1, 0.1, 0.1))), str(ship.seat_cell)])
+	loose = ship.bricks.find_detached_groups(ship.chunk) if ship.chunk >= 0 else []
+	_check("laid again round its pilot in the air, every brick, nothing loose", ship.chunk >= 0
+			and ship.bricks.get_alive_block_count(ship.chunk) == laid and loose.is_empty(),
+			"%d loose group(s)" % loose.size())
+	await _shot("hull_gate_bridge")
 	print("[planet] gate: %d ok, %d FAIL" % [_ok, _fail])
 	get_tree().quit(1 if _fail > 0 else 0)
 
