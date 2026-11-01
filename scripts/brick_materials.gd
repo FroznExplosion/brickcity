@@ -54,9 +54,9 @@ static func toughness(material: int) -> float:
 	return BrickWorld.get_material_toughness(material)
 
 
-## Repeat of the solid-wood field, metres (brick_materials.gdshaderinc
-## WOOD_PERIOD): a chunk's grid origin is passed modulo this and stays exact.
-const WOOD_PERIOD := 96.0
+## Repeat of every texture set's field, metres (brick_materials.gdshaderinc
+## PBR_PERIOD): a chunk's grid origin is passed modulo this and stays exact.
+const PBR_PERIOD := 96.0
 
 
 ## Tell a node drawing `chunk`'s bricks where the chunk lies on the grid, so its
@@ -69,7 +69,7 @@ static func set_grain_origin(node: GeometryInstance3D, world: BrickWorld, chunk:
 		return
 	var o := Vector3(world.get_chunk_origin(chunk)) * BrickWorld.get_cell_size()
 	node.set_instance_shader_parameter("grain_origin", Vector3(
-			fposmod(o.x, WOOD_PERIOD), fposmod(o.y, WOOD_PERIOD), fposmod(o.z, WOOD_PERIOD)))
+			fposmod(o.x, PBR_PERIOD), fposmod(o.y, PBR_PERIOD), fposmod(o.z, PBR_PERIOD)))
 
 
 ## Give a brick or stud material its see-through pass: PETG bricks are then

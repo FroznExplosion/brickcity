@@ -1,11 +1,11 @@
-# Solid PBR wood
+# PBR materials: wood, metal, stone, leaves
 
-Wood bricks (material 10, `Wood`) drawn from a real texture set -- colour, roughness and a
-normal map -- as a SOLID: every face of a brick is a cut through one block of wood, so the grain
-runs on round its edges, and bricks stacked or laid end to end with their grain the same way
-continue one another, as if cut from one plank. Written 2026-10-31. The first material off the
-procedural looks (`brick_materials.gdshaderinc`); the plan is all of them, the printed plastic's
-layer lines included.
+The natural materials drawn from real texture sets -- colour, roughness and a normal map -- as
+SOLIDS: every face of a brick is a cut through one block of the stuff, so a pattern runs on
+round its edges, and bricks side by side continue one another. Wood came first (2026-10-31) and
+has the most of its own (a grain field, sections 2-3); metal, stone and leaves followed the same
+day on the same machinery (section 1.1). The printed filaments are still procedural
+(`brick_materials.gdshaderinc`); the plan is all of them, the plastic's layer lines included.
 
 ## 1. What draws it
 
@@ -14,9 +14,37 @@ layer lines included.
 | The texture set | `textures/wood/`: ambientCG **Wood049** (CC0), 2K (1K read soft from under a metre). `wood049_albedo_rough.png` is the colour with roughness packed into alpha (BC7); `wood049_normal.png` the OpenGL normal map (BC5). Mipmapped. ~11 MB of video memory for both |
 | Bound | as **global** shader uniforms (`project.godot` `[shader_globals]`: `wood_albedo_rough`, `wood_normal`), so every brick material made anywhere has them without being told |
 | The field | `bm_wood_coords` in `brick_materials.gdshaderinc` |
-| Sampling, the normal map | `bm_wood_pbr`, same file; called from `brick.gdshader` and `printed_core.gdshaderinc` (studs) |
+| Sampling, the normal map | `bm_pbr`, same file, every set; called from `brick.gdshader` and `printed_core.gdshaderinc` (studs) |
 | Which way a brick was cut | `brick_grid.h` `grain_axis`, written into the vertex colour's alpha by the mesher |
 | Where a chunk lies | instance uniform `grain_origin`, set by `BrickMaterials.set_grain_origin` |
+
+## 1.1 The other sets
+
+| Material | Set (ambientCG, CC0) | Size | Mapped | Normal map |
+|---|---|---|---|---|
+| 11 Metal | **Metal009**, brushed steel | 2K | box (below), streaks along the grain axis | yes, `PBR_BUMP` 1.5 |
+| 12 Stone | **Marble012**, polished veined marble | 2K | box | none: polished stone's map is flat (spread 0.004), so its read is skipped |
+| 13 Leaf | **ScatteredLeaves008**, three quarters greyed so the brick's green is the colour | 1K | box | yes, 1.5 |
+
+`textures/<material>/`, packed and imported as wood's (BC7 colour + roughness, BC5 normal,
+mipmapped). Video memory: wood ~11 MB, metal ~11, stone ~5.6, leaves ~2.8 -- about 30 MB.
+
+**Box mapping** (`bm_box_coords`): each surface samples the plane of the axis its normal is
+nearest -- a top the X-Z plane, a side X-Y or Z-Y -- in the same chunk-plus-grid metres as
+wood, so neighbours continue and the pattern meets itself at an edge along the axis the two
+planes share. Where the grain axis lies in the plane it goes first, so a metal piece is brushed
+along its length (a post upright); an end face takes its other two axes. One projection, not a
+blend of three: a brick's faces are square to an axis, and a bevel's seam is a millimetre wide.
+A 45-degree slope picks Y every pixel (a small bias), never a coin toss on rounding.
+
+Per set (`brick_materials.gdshaderinc`): the colour's linear mean and the roughness map's mean
+(the colour is the photo over its mean, times the brick's variant colour, as wood's), how far
+the roughness map is spread (`PBR_ROUGH_GAIN`), the normal map's strength (`PBR_BUMP`, times
+the material's `pbr_bump`) and the metres one repeat covers (`PBR_TILE`, each dividing
+`PBR_PERIOD`). The means come from the packing script: Image.histogram through the sRGB curve.
+
+Metal is lit mostly by what it mirrors (`MAT_METAL` 0.8): under a flat background colour it
+reads dark and flat, and its relief barely shows -- give it a sky.
 
 ## 2. The block of wood
 
@@ -42,9 +70,9 @@ through a tangent frame from screen derivatives (Schueler's cotangent frame), as
 the mesher writes no tangents, and a piece can lie at any angle once it falls.
 
 **Repeat**: the field is periodic every 6 m on every axis (2 m along, 3 and 1 across), so the
-chunk origin can be passed modulo `WOOD_PERIOD` (96 m) and stay exact far from the world's
-origin, where a float holds a texel no longer. Change `WOOD_TILE` and keep `WOOD_PERIOD` a
-multiple of `2 * WOOD_TILE.x` and `3 * WOOD_TILE.y`.
+chunk origin can be passed modulo `PBR_PERIOD` (96 m) and stay exact far from the world's
+origin, where a float holds a texel no longer. Change `WOOD_TILE` and keep `PBR_PERIOD` a
+multiple of `2 * WOOD_TILE.x` and `3 * WOOD_TILE.y` (and of every `PBR_TILE`).
 
 ## 3. The grain axis, in alpha
 
@@ -52,6 +80,14 @@ The alpha byte held the material (`1 - id/255`) and only fourteen of its values 
 low five bits are now the material and the two above them the grain axis (0 X, 1 Z, 2 Y):
 `block_rgba_grain`. `brick_material_id` masks, so every shader that only wants the material
 reads past it, and a static_assert says when materials outgrow five bits.
+
+**A quarter step inside the byte.** The renderer stores a vertex colour cut to eight bits, and
+the exact value `1 - code/255` came out a hair under its byte for every odd code from 65 up:
+cut, it read as the next code. Codes under 64 -- every brick before the grain bits -- happened
+to survive, but an upright piece of an odd material did not: a metal post (75) drew as stone
+(76), a leaf post (77) as 78, which the clamp hid. `block_rgba_grain` writes
+`1 - (code - 0.25)/255`, which lands on the byte whether the cut truncates or rounds and still
+reads back as the code; `wood_probe` checks every material in every grain through both cuts.
 
 `grain_axis`: along the part's long side on plan; upright when it stands more than twice as tall
 as it is long (a `column_1x1` is a post); a square part by a hash of its GRID cell, so a piece
@@ -67,9 +103,11 @@ stud does not know where in the brick it stands.
 
 | Uniform (`brick.gdshader`, and the same names on the stud material) | Default | Inside it |
 |---|---|---|
-| `wood_pbr_range` | 14 m | colour, roughness and the normal map: two texture reads and the frame |
-| `wood_far_range` | 60 m | colour and roughness: one read. Past it the flat colour, which is the photo's mean |
-| `wood_bump` | 2.0 | normal map strength. At 1.0 the photo's own baked shading drowned it: a face lit across the grain changed by ~7 levels in 255 with it on, under a low or frontal sun by under one |
+| `pbr_range` | 14 m | colour, roughness and the normal map: two texture reads and the frame |
+| `pbr_far_range` | 60 m | colour and roughness: one read. Past it the flat colour, which is the photo's mean |
+| `pbr_bump` | 1.0 | scales every set's own `PBR_BUMP` (wood 2.0: at 1.0 the photo's baked shading drowned it -- a face lit across the grain changed by ~7 levels in 255, under a low or frontal sun by under one) |
+
+(They were `wood_pbr_range`, `wood_far_range` and `wood_bump` while wood was the only set.)
 
 14 m is `BrickNear.radius`, where the bricks already have real bevels. Only pixels on the screen
 are shaded (and the depth pre-pass drops hidden ones), so "only in the player's view" is free;
@@ -85,8 +123,8 @@ back: a wall of chamfered 2x4s filling 1280x720 from 3 m, the renderer's own GPU
 |---|---|
 | PLA (layer lines and all) | 4.29, 4.76 |
 | wood, full set | 4.19, 4.80 |
-| wood, colour only (`wood_pbr_range` 0) | 4.30, 4.58 |
-| wood, flat (`wood_far_range` 0) | 4.25, 4.21 |
+| wood, colour only (`pbr_range` 0) | 4.30, 4.58 |
+| wood, flat (`pbr_far_range` 0) | 4.25, 4.21 |
 | the procedural wood it replaced (main's shaders in `shots/legacy/`) | 4.43, 4.40 |
 
 All inside the round-to-round drift (~0.5 ms): a screen full of PBR wood costs no more than a
@@ -107,7 +145,11 @@ what plastic does, and some 0.3-0.5 ms over flat colour with a whole screen of i
   pair's side under a sun raking down across the grain, relief off and at its default, must
   differ by more than 4 levels in 255 (11.2 at 2.0). Relief shows when light rakes across it; a
   sun behind the face, or square on to it, shows little -- the first version of the check lit
-  the back of the bricks and measured nothing at all.
+  the back of the bricks and measured nothing at all. Then the same build in metal, stone and
+  leaves (`shots/wood_<material>_*.png`), each set with a normal map checked the same way at a
+  threshold of its own: wood 4 (11.3), leaves 3 (6.4), metal 1 (1.9: brushed steel's relief is
+  fine streaks, spread 0.06 across them and 0.01 along, and it is lit by what it mirrors).
+  Headless or not: every material in every grain survives the renderer's cut to eight bits.
 * `scenes/workshop.tscn -- --gate` -- places two boards stacked and one turned through the
   workshop's own placement, checks the frame mesh's grain axes and `grain_origin`, and leaves
   `shots/workshop_wood.png`.
@@ -118,10 +160,14 @@ what plastic does, and some 0.3-0.5 ms over flat colour with a whole screen of i
 * **Per-brick wood** ("each brick its own piece") as a choice beside "one log": needs each
   brick's origin in the vertex data, which alpha has no room for.
 * **Studs continuing the brick's figure**: needs the stud's place in its brick.
-* **More woods**: a second set wants a texture array (or a second pair of globals) and a
-  variant -> set table.
-* **Other materials** -- stone, metal, then the printed plastic's layer lines as a bead texture
-  sampled by layer height, its tops' toolpaths as a tile turned with `ps_top_turned`.
+* **A set per variant**: one set a material today -- granite, slate and sandstone are marble
+  tinted, copper and gold are steel tinted. More sets want a texture array (or more globals)
+  and a variant -> set table; mind the memory (section 1.1).
+* **The printed plastic** -- its layer lines as a bead texture sampled by layer height, its tops'
+  toolpaths as a tile turned with `ps_top_turned`.
+* **Texture streaming** (Godot 4.8's mip streaming, in beta as of 2026-10-31): not needed at
+  ~30 MB; worth a look once there are many sets. Whether it reaches textures bound as global
+  shader uniforms and sampled with `textureGrad` is untested.
 * **Generated sets**: a set could be baked by our own generator (Blender headless, as the
   printable bricks are) instead of downloaded -- needed for the printed plastic, whose look is
   measured from our own sliced G-code (Docs/PrintLook.md) and has no photo to download.

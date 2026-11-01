@@ -49,10 +49,10 @@ uniform float surface_rim : hint_range(0.0, 1.0) = 0.35;
 // Set by BrickMaterials.add_glass, with printed_glass.gdshader as the second
 // pass that draws see-through studs.
 uniform bool glass_pass = false;
-// Solid PBR wood, as brick.gdshader's uniforms of the same names.
-uniform float wood_pbr_range = 14.0;
-uniform float wood_far_range = 60.0;
-uniform float wood_bump : hint_range(0.0, 4.0) = 2.0;
+// PBR texture sets, as brick.gdshader's uniforms of the same names.
+uniform float pbr_range = 14.0;
+uniform float pbr_far_range = 60.0;
+uniform float pbr_bump : hint_range(0.0, 3.0) = 1.0;
 
 global uniform float lod_zoom;
 varying vec3 v_local;
@@ -174,26 +174,21 @@ void fragment() {
     // wrapped around by x+z against height.
     int tex = MAT_TEX[mat];
     vec3 emission = vec3(0.0);
-    if (tex != 0) {
+    if (bm_is_pbr(tex)) {
+        // The same set as its brick, cut the same way -- in the stud's own
+        // frame (a stud is one shared mesh, and does not know where it stands
+        // in the brick), so the grain runs the brick's way but does not
+        // continue its figure.
+        if (dist < pbr_far_range) {
+            float colour_w = 1.0 - smoothstep(pbr_far_range * 0.75, pbr_far_range, dist);
+            float bump = pbr_bump * (1.0 - smoothstep(pbr_range * 0.7, pbr_range, dist));
+            bm_pbr(tex, v_local, v_flat_normal, v_grain, dFdx(VERTEX), dFdy(VERTEX), colour_w, bump,
+                    albedo, roughness, NORMAL);
+        }
+    } else if (tex != 0) {
         vec2 p = abs(v_flat_normal.y) > 0.7 ? v_local.xz : vec2(v_local.x + v_local.z, v_local.y);
         float tfade = 1.0 - smoothstep(print_fade_begin, print_fade_end * 2.0, dist);
-        if (tex == 1) {
-            // The same block of wood, cut the same way as its brick -- in the
-            // stud's own frame (a stud is one shared mesh, and does not know
-            // where it stands in the brick), so the grain runs the brick's way
-            // but does not continue it.
-            if (dist < wood_far_range) {
-                vec2 t = bm_wood_coords(v_local, v_grain);
-                float colour_w = 1.0 - smoothstep(wood_far_range * 0.75, wood_far_range, dist);
-                float bump = wood_bump * (1.0 - smoothstep(wood_pbr_range * 0.7, wood_pbr_range, dist));
-                bm_wood_pbr(t, dFdx(t), dFdy(t), dFdx(VERTEX), dFdy(VERTEX), colour_w, bump,
-                        albedo, roughness, NORMAL);
-            }
-        } else if (tex == 2) {
-            albedo = bm_metal(albedo, p, 0.0, tfade, roughness);
-        } else if (tex == 3) {
-            albedo = bm_stone(albedo, p, 0.0, tfade, roughness);
-        } else if (tex == 4) {
+        if (tex == 4) {
             albedo = bm_carbon(albedo, p, tfade);
         } else if (tex == 5) {
             emission = albedo * 0.85;

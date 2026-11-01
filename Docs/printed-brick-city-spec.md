@@ -29,7 +29,7 @@ A city-sized, fully destructible open world where every object — guns, vehicle
 | Bottom edges | 45° chamfer | Printers handle chamfers; rounded bottoms droop |
 | Top edges | Small rounded fillet | Distinct silhouette |
 | Underside | Straight rib grid | Prints well; distinct from round tubes |
-| Surfaces | Flat filament colors; PBR texture sets for natural materials, wood first (Docs/PbrWood.md) | Matches real prints; a 2K set is ~11 MB, drawn near only |
+| Surfaces | Flat filament colors; PBR texture sets for the natural materials -- wood, metal, stone, leaves (Docs/PbrWood.md) | Matches real prints; ~30 MB for the four, drawn near only |
 | Branding | None on parts | IP safety |
 
 ### Layer lines

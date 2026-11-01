@@ -70,6 +70,9 @@ grants no trademark rights (§7(e)), and none are granted here — see §4 below
 - **Wood049** from [ambientCG](https://ambientcg.com/a/Wood049) (`textures/wood/`) — CC0 1.0,
   public domain; credited here, not required. Its colour and roughness maps are packed into one
   image and its normal map kept as published (Docs/PbrWood.md).
+- **Metal009**, **Marble012** and **ScatteredLeaves008** from [ambientCG](https://ambientcg.com)
+  (`textures/metal/`, `textures/stone/`, `textures/leaf/`) — CC0 1.0, packed the same way; the
+  leaves' colour three quarters greyed.
 
 ---
 
