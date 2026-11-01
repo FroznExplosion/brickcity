@@ -186,52 +186,151 @@ vec3 bm_wood_fill(vec3 base, vec2 p, float layer_t, float seed, float fade) {
 // bricks side by side are cut from one block, and a piece broken off keeps
 // its pattern.
 //
-// Each set is ambientCG (CC0; textures/<material>/): colour with roughness in
-// alpha, and an OpenGL normal map, bound as global uniforms so every brick
-// material has them. Colour is the photo over its own mean, times the brick's
-// colour: the variants (oak, walnut; steel, brass; marble, slate; the greens)
-// are many looks from one set, and a brick's average colour is its own.
+// Each material has a texture ARRAY, one slice per set (ambientCG, CC0;
+// textures/pbr/): colour with roughness in alpha, and a second array of
+// OpenGL normal maps for the sets that have relief. Each variant picks a set
+// (the tables below): walnut is a walnut photo, slate a rock, verdigris a
+// patina. Colour is still the photo over its own mean, times the variant's
+// colour, so a brick's average colour is its swatch's, and two variants on
+// one set (oak and ash; copper and brass) differ by it.
 //
-//   wood    Wood049, a solid field: rings round an axis along the grain
+//   wood    a solid field: rings round an axis along the grain
 //           (bm_wood_coords), so the grain runs on round every edge
-//   metal   Metal009, brushed: each face the plane it faces (bm_box_coords),
-//           its streaks along the piece's long side
-//   stone   Marble012, polished: as metal, no grain. Polished stone has no
-//           relief to speak of (its map is flat), so no normal read
+//   metal   each face the plane it faces (bm_box_coords), brushing along the
+//           piece's long side
+//   stone   as metal. Polished stone has no relief (its map is flat), so
+//           only the rough ones have a normal slice
 //   leaf    ScatteredLeaves008, three quarters greyed so the brick's green
-//           is the colour: as stone, with relief
+//           is the colour; one set for every filament colour
 
-global uniform sampler2D wood_albedo_rough : filter_linear_mipmap_anisotropic, repeat_enable;
-global uniform sampler2D wood_normal : filter_linear_mipmap_anisotropic, repeat_enable;
-global uniform sampler2D metal_albedo_rough : filter_linear_mipmap_anisotropic, repeat_enable;
-global uniform sampler2D metal_normal : filter_linear_mipmap_anisotropic, repeat_enable;
-global uniform sampler2D stone_albedo_rough : filter_linear_mipmap_anisotropic, repeat_enable;
-global uniform sampler2D leaf_albedo_rough : filter_linear_mipmap_anisotropic, repeat_enable;
-global uniform sampler2D leaf_normal : filter_linear_mipmap_anisotropic, repeat_enable;
+global uniform sampler2DArray wood_albedo_rough : filter_linear_mipmap_anisotropic, repeat_enable;
+global uniform sampler2DArray wood_normal : filter_linear_mipmap_anisotropic, repeat_enable;
+global uniform sampler2DArray metal_albedo_rough : filter_linear_mipmap_anisotropic, repeat_enable;
+global uniform sampler2DArray metal_normal : filter_linear_mipmap_anisotropic, repeat_enable;
+global uniform sampler2DArray stone_albedo_rough : filter_linear_mipmap_anisotropic, repeat_enable;
+global uniform sampler2DArray stone_normal : filter_linear_mipmap_anisotropic, repeat_enable;
+global uniform sampler2DArray leaf_albedo_rough : filter_linear_mipmap_anisotropic, repeat_enable;
+global uniform sampler2DArray leaf_normal : filter_linear_mipmap_anisotropic, repeat_enable;
 
-// Per set, by MAT_TEX (1 wood, 2 metal, 3 stone, 9 leaf): the colour's
-// linear mean and the roughness map's mean (tools: pack_sets in the doc);
-// how far the roughness map is spread (the maps are subtle -- wood's spread is
-// 0.08 -- and the spread is what shows as a sheen moving with the light); and
-// the normal map's strength (times the material's pbr_bump).
 bool bm_is_pbr(int tex) {
     return tex == 1 || tex == 2 || tex == 3 || tex == 9;
 }
 
-const vec3 WOOD_MEAN = vec3(0.2019, 0.1272, 0.0773);
-const vec3 METAL_MEAN = vec3(0.2886, 0.2994, 0.3105);
-const vec3 STONE_MEAN = vec3(0.4210, 0.4271, 0.4753);
-const vec3 LEAF_MEAN = vec3(0.2526, 0.2267, 0.1295);
-const vec4 PBR_ROUGH_MEAN = vec4(0.504, 0.469, 0.066, 0.523);   // wood, metal, stone, leaf
-const vec4 PBR_ROUGH_GAIN = vec4(2.5, 2.0, 2.0, 1.5);
-const vec4 PBR_BUMP = vec4(2.0, 1.5, 0.0, 1.5);
-// Metres one repeat covers (metal, stone, leaf; wood's is WOOD_TILE). Every
-// one divides PBR_PERIOD, so a chunk's grid origin can be passed modulo it and
-// stay exact (BrickMaterials.set_grain_origin).
-const vec3 PBR_TILE = vec3(1.0, 2.0, 1.5);
+// The sets, all materials in one numbering. Per set: its material (0 wood,
+// 1 metal, 2 stone, 3 leaf) and slice in that material's arrays (-1: none --
+// polished metal is its colour, mirror-smooth; a flat-relief set has no
+// normal slice); the colour's linear mean and the roughness map's mean (the
+// packing script prints both, Docs/PbrWood.md); how far the roughness map is
+// spread (the spread is what shows as a sheen moving with the light); the
+// normal map's strength (times the material's pbr_bump); the metres one
+// repeat covers (box-mapped sets; wood's is WOOD_TILE), each dividing
+// PBR_PERIOD; how much rougher than the material's own MAT_ROUGH the stuff is
+// (concrete is not marble); how metallic, of the material's MAT_METAL (rust
+// and patina are not bare metal); and how much of the photo's own hue to keep
+// (PBR_HUE).
+//
+//    0 Wood049   oak, teak, ash, cedar      11 polished  chrome, gold, silver
+//    1 Wood051   walnut, ebony              12 Marble012 white marble
+//    2 Wood066   cherry, mahogany           13 Marble016 black, green marble
+//    3 Wood095   birch, maple, bamboo       14 Granite002A grey, pink granite
+//    4 Wood096   pine (knots)               15 Rock058   slate, basalt
+//    5 Wood062   weathered, driftwood       16 Travertine009 limestone, travertine
+//    6 Metal009  steel, stainless, alu, Ti  17 Travertine004 sandstone
+//    7 Metal055A iron, gunmetal             18 Concrete030 concrete
+//    8 Metal053B rusted iron                19 Clay005   terracotta
+//    9 Metal047A copper, brass, bronze      20 ScatteredLeaves008 every leaf
+//   10 Metal058C verdigris
+const int PBR_KIND[21]   = int[](0, 0, 0, 0, 0, 0,  1, 1, 1, 1, 1, 1,  2, 2, 2, 2, 2, 2, 2, 2,  3);
+const int PBR_LAYER[21]  = int[](0, 1, 2, 3, 4, 5,  0, 1, 2, 3, 4, -1,  0, 1, 2, 3, 4, 5, 6, 7,  0);
+const int PBR_NLAYER[21] = int[](0, 1, 2, 3, 4, 5,  0, -1, -1, -1, -1, -1,  -1, -1, -1, 0, -1, -1, 1, 2,  0);
+const vec3 PBR_MEAN[21] = vec3[](
+    vec3(0.2023, 0.1275, 0.0775), vec3(0.0550, 0.0352, 0.0282), vec3(0.1113, 0.0380, 0.0078),
+    vec3(0.6105, 0.3352, 0.1589), vec3(0.4571, 0.3417, 0.2363), vec3(0.1299, 0.0918, 0.0729),
+    vec3(0.2886, 0.2994, 0.3105), vec3(0.5169, 0.5160, 0.5158), vec3(0.4955, 0.4785, 0.4615),
+    vec3(0.5954, 0.2315, 0.1082), vec3(0.2840, 0.4786, 0.4074), vec3(1.0000, 1.0000, 1.0000),
+    vec3(0.4210, 0.4271, 0.4753), vec3(0.0539, 0.0585, 0.0558), vec3(0.4927, 0.4703, 0.4466),
+    vec3(0.0807, 0.0918, 0.1052), vec3(0.7411, 0.6012, 0.4154), vec3(0.3728, 0.3063, 0.2410),
+    vec3(0.1263, 0.1172, 0.1089), vec3(0.3447, 0.1882, 0.1076), vec3(0.2526, 0.2267, 0.1295));
+const float PBR_ROUGH_MEAN[21] = float[](
+        0.504, 0.543, 0.329, 0.567, 0.670, 0.677, 0.469, 0.274, 0.291, 0.263, 0.453, 0.000,
+        0.066, 0.114, 0.023, 0.650, 0.037, 0.033, 0.728, 0.490, 0.523);
+const float PBR_ROUGH_GAIN[21] = float[](2.5, 2.5, 2.5, 2.5, 2.5, 2.0,  2.0, 2.0, 1.0, 2.5, 2.0, 0.0,
+        2.0, 2.0, 2.0, 1.0, 2.0, 2.0, 2.0, 2.0,  1.5);
+const float PBR_BUMP[21] = float[](2.0, 2.0, 3.0, 2.0, 2.5, 1.0,  1.5, 0.0, 0.0, 0.0, 0.0, 0.0,
+        0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.2, 1.0,  1.5);
+const float PBR_TILE[21] = float[](0.0, 0.0, 0.0, 0.0, 0.0, 0.0,  1.0, 1.5, 2.0, 1.0, 2.0, 1.0,
+        2.0, 2.0, 1.0, 3.0, 2.0, 2.0, 2.0, 1.5,  1.5);
+const float PBR_ROUGH_SHIFT[21] = float[](0.0, 0.0, -0.08, 0.0, 0.15, 0.3,  0.0, 0.1, 0.3, -0.05, 0.35, -0.22,
+        -0.45, -0.45, -0.4, 0.0, -0.3, 0.1, 0.1, 0.05,  0.0);
+const float PBR_METAL[21] = float[](1.0, 1.0, 1.0, 1.0, 1.0, 1.0,  1.0, 1.0, 0.35, 1.0, 0.2, 1.0,
+        1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0,  1.0);
+// Colour is the photo over its mean channel by channel at 1 -- rust's orange
+// and patina's green stay where they are on any variant -- and by brightness
+// alone at 0. A strongly coloured photo wants less: cherry's blue mean is
+// 0.008, and blue over it is noise, not figure.
+const float PBR_HUE[21] = float[](1.0, 0.5, 0.3, 0.5, 0.6, 0.6,  1.0, 1.0, 1.0, 0.3, 1.0, 1.0,
+        1.0, 1.0, 1.0, 1.0, 0.5, 0.6, 1.0, 0.4,  1.0);
+const int PBR_LEAF_SET = 20;
+
+// Which set a variant is. The colours are brick_grid.h's WOOD_VARIANTS,
+// METAL_VARIANTS and STONE_VARIANTS in order -- the vertex colour IS the
+// variant, so the nearest of its material's list says which one (eight bits
+// a channel cannot blur two of them: wood_probe checks every variant comes
+// back as itself, and that these lists match the engine's).
+const vec3 WOOD_RGB[14] = vec3[](
+    vec3(0.72, 0.54, 0.33), vec3(0.36, 0.24, 0.16), vec3(0.62, 0.33, 0.21), vec3(0.86, 0.70, 0.47),
+    vec3(0.90, 0.81, 0.64), vec3(0.45, 0.20, 0.13), vec3(0.88, 0.74, 0.54), vec3(0.60, 0.42, 0.24),
+    vec3(0.13, 0.10, 0.09), vec3(0.80, 0.72, 0.58), vec3(0.70, 0.42, 0.28), vec3(0.86, 0.76, 0.50),
+    vec3(0.58, 0.56, 0.52), vec3(0.72, 0.68, 0.60));
+// oak walnut cherry pine birch mahogany maple teak ebony ash cedar bamboo weathered driftwood
+const int WOOD_SET[14] = int[](0, 1, 2, 4, 3, 2, 3, 0, 1, 0, 0, 3, 5, 5);
+const vec3 METAL_RGB[14] = vec3[](
+    vec3(0.62, 0.63, 0.65), vec3(0.76, 0.77, 0.78), vec3(0.85, 0.86, 0.88), vec3(0.93, 0.94, 0.96),
+    vec3(0.36, 0.35, 0.34), vec3(0.48, 0.26, 0.14), vec3(0.86, 0.50, 0.34), vec3(0.88, 0.73, 0.38),
+    vec3(0.72, 0.50, 0.26), vec3(1.00, 0.80, 0.36), vec3(0.92, 0.92, 0.93), vec3(0.55, 0.56, 0.60),
+    vec3(0.25, 0.27, 0.30), vec3(0.36, 0.62, 0.52));
+// steel stainless aluminium chrome iron rusted copper brass bronze gold silver titanium gunmetal verdigris
+const int METAL_SET[14] = int[](6, 6, 6, 11, 7, 8, 9, 9, 9, 11, 11, 6, 7, 10);
+const vec3 STONE_RGB[12] = vec3[](
+    vec3(0.92, 0.91, 0.88), vec3(0.12, 0.12, 0.13), vec3(0.52, 0.52, 0.53), vec3(0.72, 0.55, 0.52),
+    vec3(0.28, 0.31, 0.34), vec3(0.82, 0.68, 0.48), vec3(0.84, 0.81, 0.72), vec3(0.20, 0.20, 0.21),
+    vec3(0.72, 0.38, 0.25), vec3(0.62, 0.61, 0.58), vec3(0.24, 0.40, 0.32), vec3(0.86, 0.78, 0.64));
+// white marble, black marble, grey granite, pink granite, slate, sandstone,
+// limestone, basalt, terracotta, concrete, green marble, travertine
+const int STONE_SET[12] = int[](12, 13, 14, 14, 15, 17, 16, 15, 19, 18, 13, 16);
+
+/// The set a vertex of material look `tex` and colour `c` takes; -1 not a
+/// texture set. Per vertex (flat), so the search is nothing per pixel.
+int bm_pbr_set(int tex, vec3 c) {
+    if (tex == 9) {
+        return PBR_LEAF_SET;
+    }
+    int best = -1;
+    float bd = 1e9;
+    if (tex == 1) {
+        for (int i = 0; i < 14; i++) {
+            vec3 d = c - WOOD_RGB[i];
+            if (dot(d, d) < bd) { bd = dot(d, d); best = WOOD_SET[i]; }
+        }
+    } else if (tex == 2) {
+        for (int i = 0; i < 14; i++) {
+            vec3 d = c - METAL_RGB[i];
+            if (dot(d, d) < bd) { bd = dot(d, d); best = METAL_SET[i]; }
+        }
+    } else if (tex == 3) {
+        for (int i = 0; i < 12; i++) {
+            vec3 d = c - STONE_RGB[i];
+            if (dot(d, d) < bd) { bd = dot(d, d); best = STONE_SET[i]; }
+        }
+    }
+    return best;
+}
+
 // Metres along the grain, and across it in ring units. Wood's field repeats
 // every 6 m on every axis with these (2 along, 3 and 1 across). Change them
-// and keep PBR_PERIOD a multiple of 2 * WOOD_TILE.x and 3 * WOOD_TILE.y.
+// and keep PBR_PERIOD a multiple of 2 * WOOD_TILE.x and 3 * WOOD_TILE.y (and
+// of every PBR_TILE), so a chunk's grid origin can be passed modulo it and
+// stay exact (BrickMaterials.set_grain_origin).
 const vec2 WOOD_TILE = vec2(2.0, 1.0);
 const float PBR_PERIOD = 96.0;
 
@@ -275,47 +374,53 @@ vec2 bm_box_coords(vec3 p, vec3 n, int axis) {
     return vec2(bm_comp(p, g), bm_comp(p, 3 - k - g));
 }
 
-/// The set `tex` at chunk point `p` (normal `n`, grain `axis`) onto albedo
-/// and roughness; and with `bump` above 0 its normal map, bent into `normal`
-/// through a tangent frame from the screen derivatives (any face, at any
-/// angle, as it falls). `dpx`/`dpy`: the view-space position's derivatives.
-void bm_pbr(int tex, vec3 p, vec3 n, int axis, vec3 dpx, vec3 dpy, float colour_w,
+/// Set `s` (bm_pbr_set) at chunk point `p` (normal `n`, grain `axis`) onto
+/// albedo and roughness; and with `bump` above 0 its normal map, bent into
+/// `normal` through a tangent frame from the screen derivatives (any face, at
+/// any angle, as it falls). `dpx`/`dpy`: the view-space position's
+/// derivatives. The set's roughness shift and metalness are the caller's
+/// (they hold at any distance; this is only the near detail).
+void bm_pbr(int s, vec3 p, vec3 n, int axis, vec3 dpx, vec3 dpy, float colour_w,
         float bump, inout vec3 albedo, inout float rough, inout vec3 normal) {
-    int k = tex == 1 ? 0 : (tex == 2 ? 1 : (tex == 3 ? 2 : 3));
-    vec2 t = tex == 1 ? bm_wood_coords(p, axis)
-            : bm_box_coords(p, n, axis) / (tex == 2 ? PBR_TILE.x : (tex == 3 ? PBR_TILE.y : PBR_TILE.z));
+    int k = PBR_KIND[s];
+    int layer = PBR_LAYER[s];
+    if (layer < 0) {
+        return;
+    }
+    vec2 t = k == 0 ? bm_wood_coords(p, axis) : bm_box_coords(p, n, axis) / PBR_TILE[s];
     // fract and explicit gradients: the gradients of the unwrapped t keep the
     // mip steady across the wrap.
     vec2 dtx = dFdx(t);
     vec2 dty = dFdy(t);
-    vec2 f = fract(t);
+    vec3 f = vec3(fract(t), float(layer));
     vec4 ar;
-    vec3 mean;
     if (k == 0) {
         ar = textureGrad(wood_albedo_rough, f, dtx, dty);
-        mean = WOOD_MEAN;
     } else if (k == 1) {
         ar = textureGrad(metal_albedo_rough, f, dtx, dty);
-        mean = METAL_MEAN;
     } else if (k == 2) {
         ar = textureGrad(stone_albedo_rough, f, dtx, dty);
-        mean = STONE_MEAN;
     } else {
         ar = textureGrad(leaf_albedo_rough, f, dtx, dty);
-        mean = LEAF_MEAN;
     }
     vec3 c = pow(ar.rgb, vec3(2.2));
-    albedo = mix(albedo, clamp(albedo * c / mean, 0.0, 1.0), colour_w);
-    rough = clamp(rough + (ar.a - PBR_ROUGH_MEAN[k]) * PBR_ROUGH_GAIN[k] * colour_w, 0.04, 1.0);
-    bump *= PBR_BUMP[k];
-    if (bump > 0.0) {
+    const vec3 LUM = vec3(0.2126, 0.7152, 0.0722);
+    vec3 ratio = mix(vec3(dot(c, LUM) / dot(PBR_MEAN[s], LUM)), c / PBR_MEAN[s], PBR_HUE[s]);
+    albedo = mix(albedo, clamp(albedo * min(ratio, vec3(4.0)), 0.0, 1.0), colour_w);
+    rough = clamp(rough + (ar.a - PBR_ROUGH_MEAN[s]) * PBR_ROUGH_GAIN[s] * colour_w, 0.04, 1.0);
+    bump *= PBR_BUMP[s];
+    int nl = PBR_NLAYER[s];
+    if (bump > 0.0 && nl >= 0) {
+        vec3 fn = vec3(f.xy, float(nl));
         vec2 nxy;
         if (k == 0) {
-            nxy = textureGrad(wood_normal, f, dtx, dty).xy;
+            nxy = textureGrad(wood_normal, fn, dtx, dty).xy;
         } else if (k == 1) {
-            nxy = textureGrad(metal_normal, f, dtx, dty).xy;
+            nxy = textureGrad(metal_normal, fn, dtx, dty).xy;
+        } else if (k == 2) {
+            nxy = textureGrad(stone_normal, fn, dtx, dty).xy;
         } else {
-            nxy = textureGrad(leaf_normal, f, dtx, dty).xy;
+            nxy = textureGrad(leaf_normal, fn, dtx, dty).xy;
         }
         nxy = nxy * 2.0 - 1.0;
         nxy.y = -nxy.y;   // OpenGL green is up the image; t.y runs down it

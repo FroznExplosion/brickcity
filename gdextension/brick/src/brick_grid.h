@@ -178,6 +178,9 @@ inline const NamedColour FILAMENT_PALETTE[] = {
 };
 constexpr int FILAMENT_PALETTE_SIZE = (int)(sizeof(FILAMENT_PALETTE) / sizeof(FILAMENT_PALETTE[0]));
 
+// The shader keeps a copy of the wood, metal and stone lists, each variant
+// with its texture set (brick_materials.gdshaderinc WOOD_RGB ...; it finds a
+// vertex's set by its colour): change one, change both. wood_probe checks.
 inline const NamedColour WOOD_VARIANTS[] = {
     {"oak", 0.72f, 0.54f, 0.33f},
     {"walnut", 0.36f, 0.24f, 0.16f},

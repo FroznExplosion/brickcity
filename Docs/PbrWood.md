@@ -4,30 +4,80 @@ The natural materials drawn from real texture sets -- colour, roughness and a no
 SOLIDS: every face of a brick is a cut through one block of the stuff, so a pattern runs on
 round its edges, and bricks side by side continue one another. Wood came first (2026-10-31) and
 has the most of its own (a grain field, sections 2-3); metal, stone and leaves followed the same
-day on the same machinery (section 1.1). The printed filaments are still procedural
+day on the same machinery (section 1.1), and on 2026-11-01 each variant got a set of its own
+(walnut a walnut photo, slate a rock, verdigris a patina; section 1.2). The printed filaments are still procedural
 (`brick_materials.gdshaderinc`); the plan is all of them, the plastic's layer lines included.
 
 ## 1. What draws it
 
 | Piece | Where |
 |---|---|
-| The texture set | `textures/wood/`: ambientCG **Wood049** (CC0), 2K (1K read soft from under a metre). `wood049_albedo_rough.png` is the colour with roughness packed into alpha (BC7); `wood049_normal.png` the OpenGL normal map (BC5). Mipmapped. ~11 MB of video memory for both |
-| Bound | as **global** shader uniforms (`project.godot` `[shader_globals]`: `wood_albedo_rough`, `wood_normal`), so every brick material made anywhere has them without being told |
+| The texture sets | `textures/pbr/<material>_albedo_rough.webp`: one 2K slice per set (leaves 1K; 1K read soft from under a metre), colour with roughness packed into alpha; `<material>_normal.webp` the OpenGL normal maps of the sets with relief. Imported as **Texture2DArray** (`2d_array_texture`, slices laid side by side, BC7, mipmapped) |
+| Bound | as **global** shader uniforms (`project.godot` `[shader_globals]`, `sampler2DArray`: `wood_albedo_rough`, `wood_normal`, the same for metal, stone, leaf), so every brick material made anywhere has them without being told |
+| Which set | `bm_pbr_set` in the vertex shader, from the vertex colour (section 1.2) |
 | The field | `bm_wood_coords` in `brick_materials.gdshaderinc` |
 | Sampling, the normal map | `bm_pbr`, same file, every set; called from `brick.gdshader` and `printed_core.gdshaderinc` (studs) |
 | Which way a brick was cut | `brick_grid.h` `grain_axis`, written into the vertex colour's alpha by the mesher |
 | Where a chunk lies | instance uniform `grain_origin`, set by `BrickMaterials.set_grain_origin` |
 
-## 1.1 The other sets
+## 1.1 The other materials
 
-| Material | Set (ambientCG, CC0) | Size | Mapped | Normal map |
-|---|---|---|---|---|
-| 11 Metal | **Metal009**, brushed steel | 2K | box (below), streaks along the grain axis | yes, `PBR_BUMP` 1.5 |
-| 12 Stone | **Marble012**, polished veined marble | 2K | box | none: polished stone's map is flat (spread 0.004), so its read is skipped |
-| 13 Leaf | **ScatteredLeaves008**, three quarters greyed so the brick's green is the colour | 1K | box | yes, 1.5 |
+Metal and stone are box-mapped (below), wood a solid field (section 2), leaves box-mapped. Metal's
+brushing runs along the grain axis. Polished stone's normal map is flat (spread 0.004), so those
+sets have no normal slice and skip the read.
 
-`textures/<material>/`, packed and imported as wood's (BC7 colour + roughness, BC5 normal,
-mipmapped). Video memory: wood ~11 MB, metal ~11, stone ~5.6, leaves ~2.8 -- about 30 MB.
+## 1.2 A set per variant
+
+| # | Set (ambientCG, CC0) | Variants | Normal |
+|---|---|---|---|
+| 0 | Wood049 | oak, teak, ash, cedar | yes |
+| 1 | Wood051 | walnut, ebony | yes |
+| 2 | Wood066 | cherry, mahogany | yes |
+| 3 | Wood095 (2048x1024, stacked twice) | birch, maple, bamboo | yes |
+| 4 | Wood096 (grain ran down it: turned a quarter, normal map recomposed) | pine | yes |
+| 5 | Wood062 | weathered, driftwood | yes |
+| 6 | Metal009, brushed | steel, stainless, aluminium, titanium | yes |
+| 7 | Metal055A | iron, gunmetal | -- |
+| 8 | Metal053B, rust patches | rusted iron | -- |
+| 9 | Metal047A | copper, brass, bronze | -- |
+| 10 | Metal058C, patina | verdigris | -- |
+| 11 | none: polished, its colour and low roughness | chrome, gold, silver | -- |
+| 12 | Marble012 | white marble | -- |
+| 13 | Marble016 | black marble, green marble | -- |
+| 14 | Granite002A | grey granite, pink granite | -- |
+| 15 | Rock058 | slate, basalt | yes |
+| 16 | Travertine009 | limestone, travertine | -- |
+| 17 | Travertine004, banded | sandstone | -- |
+| 18 | Concrete030 | concrete | yes |
+| 19 | Clay005 | terracotta | yes |
+| 20 | ScatteredLeaves008, three quarters greyed | every leaf colour | yes |
+
+**How a vertex finds its set.** Alpha has one spare bit, not four, and the mesh is unchanged:
+the vertex colour IS the variant (`block_rgba` writes the variant's RGB), so `bm_pbr_set`, in
+the vertex shader, takes the nearest colour on its material's list (`WOOD_RGB`, `METAL_RGB`,
+`STONE_RGB`, brick_grid.h's lists in order) and its set (`WOOD_SET` ...), flat, so nothing is
+searched per pixel. `wood_probe` checks the lists match the engine's and every variant comes
+back as itself through eight bits. **Add a variant: add it to brick_grid.h AND the shader's
+list, with its set.**
+
+Per set (`PBR_*` tables): its material's array and slice, normal slice or -1, colour mean,
+roughness mean and gain, bump, tile, and three that hold at any distance: `PBR_ROUGH_SHIFT`
+(rougher or glossier than the material's `MAT_ROUGH` -- concrete is not marble),
+`PBR_METAL` (of `MAT_METAL`: rust 0.35, patina 0.2) and `PBR_HUE` -- how much of the photo's
+own hue survives: 1 is the photo over its mean channel by channel (rust stays orange on any
+metal), 0 by brightness alone. A strongly coloured photo wants less: cherry's blue mean is
+0.008, and blue over it is noise.
+
+**Packing** (`tools/pack_pbr_sets.py`: the downloads, `python tools/pack_pbr_sets.py <downloads> textures/pbr`): each set's colour and
+roughness merged into RGBA, normals as published, resized to the slice size, laid side by side
+in rows (no blank slices -- an empty slice is memory), WebP (lossy 92 colour, 95 normals;
+WebP stops at 16383 px a side). It prints each set's linear colour mean and roughness mean and
+spread for the tables. Add a set: a slice in its material's arrays (`slices/horizontal`,
+`slices/vertical` in the `.import`), a row in every `PBR_*` table.
+
+**Memory.** Video: wood 33.5 + 33.5 MB, metal 28 + 5.6, stone 44.7 + 16.8, leaves 1.4 + 1.4 --
+about 165 MB (it was ~30 with one set a material). Repo: 72 MB of WebP. Halving a slice to 1K
+quarters its share; that, or mip streaming (section 6), is the lever if memory gets tight.
 
 **Box mapping** (`bm_box_coords`): each surface samples the plane of the axis its normal is
 nearest -- a top the X-Z plane, a side X-Y or Z-Y -- in the same chunk-plus-grid metres as
@@ -37,11 +87,11 @@ along its length (a post upright); an end face takes its other two axes. One pro
 blend of three: a brick's faces are square to an axis, and a bevel's seam is a millimetre wide.
 A 45-degree slope picks Y every pixel (a small bias), never a coin toss on rounding.
 
-Per set (`brick_materials.gdshaderinc`): the colour's linear mean and the roughness map's mean
-(the colour is the photo over its mean, times the brick's variant colour, as wood's), how far
-the roughness map is spread (`PBR_ROUGH_GAIN`), the normal map's strength (`PBR_BUMP`, times
-the material's `pbr_bump`) and the metres one repeat covers (`PBR_TILE`, each dividing
-`PBR_PERIOD`). The means come from the packing script: Image.histogram through the sRGB curve.
+Per set (section 1.2): the colour is the photo over its mean, times the brick's variant
+colour, so a brick's average colour is its swatch's; the roughness map's spread
+(`PBR_ROUGH_GAIN`), the normal map's strength (`PBR_BUMP`, times the material's `pbr_bump`) and
+the metres one repeat covers (`PBR_TILE`, each dividing `PBR_PERIOD`). The means come from the
+packing script: Image.histogram through the sRGB curve.
 
 Metal is lit mostly by what it mirrors (`MAT_METAL` 0.8): under a flat background colour it
 reads dark and flat, and its relief barely shows -- give it a sky.
@@ -149,7 +199,10 @@ what plastic does, and some 0.3-0.5 ms over flat colour with a whole screen of i
   leaves (`shots/wood_<material>_*.png`), each set with a normal map checked the same way at a
   threshold of its own: wood 4 (11.3), leaves 3 (6.4), metal 1 (1.9: brushed steel's relief is
   fine streaks, spread 0.06 across them and 0.01 along, and it is lit by what it mirrors).
-  Headless or not: every material in every grain survives the renderer's cut to eight bits.
+  Headless or not: every material in every grain survives the renderer's cut to eight bits;
+  the shader's variant lists are the engine's, every variant finds itself through eight bits
+  and names a set of its own material, and every slice a set names is in its arrays. Windowed,
+  a wall of every variant per material: `shots/wood_variants_<material>.png`.
 * `scenes/workshop.tscn -- --gate` -- places two boards stacked and one turned through the
   workshop's own placement, checks the frame mesh's grain axes and `grain_origin`, and leaves
   `shots/workshop_wood.png`.
@@ -160,14 +213,13 @@ what plastic does, and some 0.3-0.5 ms over flat colour with a whole screen of i
 * **Per-brick wood** ("each brick its own piece") as a choice beside "one log": needs each
   brick's origin in the vertex data, which alpha has no room for.
 * **Studs continuing the brick's figure**: needs the stud's place in its brick.
-* **A set per variant**: one set a material today -- granite, slate and sandstone are marble
-  tinted, copper and gold are steel tinted. More sets want a texture array (or more globals)
-  and a variant -> set table; mind the memory (section 1.1).
+* **Leaves by colour**: one set for every filament colour; a second (needles, hedge) would
+  want its own key, since leaves take the filament palette, not variants.
 * **The printed plastic** -- its layer lines as a bead texture sampled by layer height, its tops'
   toolpaths as a tile turned with `ps_top_turned`.
-* **Texture streaming** (Godot 4.8's mip streaming, in beta as of 2026-10-31): not needed at
-  ~30 MB; worth a look once there are many sets. Whether it reaches textures bound as global
-  shader uniforms and sampled with `textureGrad` is untested.
+* **Texture streaming** (Godot 4.8's mip streaming, in beta as of 2026-10-31): with a set per
+  variant the sets are ~165 MB, so now worth a look once 4.8 is stable. Whether it reaches
+  texture ARRAYS bound as global shader uniforms and sampled with `textureGrad` is untested.
 * **Generated sets**: a set could be baked by our own generator (Blender headless, as the
   printable bricks are) instead of downloaded -- needed for the printed plastic, whose look is
   measured from our own sliced G-code (Docs/PrintLook.md) and has no photo to download.
