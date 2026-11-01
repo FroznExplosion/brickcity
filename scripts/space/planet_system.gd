@@ -69,6 +69,8 @@ signal woke(frame: Node3D, offset: Vector3)
 
 ## The system is another now (step 5): nothing of the last is left but home.
 signal jumped(index: int)
+## World `b`'s buildings are made.
+signal populated(b: PlanetBody)
 
 ## A station nearer than this is the velocity flight matches (docking).
 const MATCH_STATION := 6000.0
@@ -470,6 +472,7 @@ func _populate(b: PlanetBody) -> void:
 		pb.add_landmark(dir, 80, 80, rng.randi_range(400, 900), rng)
 	pb.finish()
 	built[b] = pb
+	populated.emit(b)
 	print("[system] %s: %d buildings in %.1f ms" % [b.data.planet_name, pb.sites.size(), (Time.get_ticks_usec() - t0) / 1000.0])
 
 

@@ -13,6 +13,8 @@ const THICK_LY := 600.0
 ## How many systems there are to go to.
 const SYSTEMS := 400
 
+## More bodies than any system has: how far to look for a system's world files.
+const MOST_BODIES := 40
 var universe_seed := 1
 
 

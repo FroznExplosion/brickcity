@@ -388,6 +388,19 @@ func knock(key: Vector3i, index: int, push: Vector3) -> bool:
 	return true
 
 
+## The trees down, as a save keeps them: cell key -> {index: how it lies}.
+func knocked() -> Dictionary:
+	return _knocked
+
+
+## As a save left them, before their cells are made.
+func restore_knocked(d: Dictionary) -> void:
+	_knocked = d
+	knocked_count = 0
+	for key in d:
+		knocked_count += (d[key] as Dictionary).size()
+
+
 ## Every tree within `radius` metres (on the datum) of planet-local unit `dir`,
 ## whether its cell is built or not: [{key, index, at, basis, variant}]. The
 ## same every call (trees_of is seeded by the cell); for the AI's world

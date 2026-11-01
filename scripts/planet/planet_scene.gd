@@ -22,6 +22,7 @@ extends Node3D
 ##   (11.10, trees and vehicles).
 ##   -- --gate=squad: a squad on the AI's nav region round the town (11.8 N2)
 ##   -- --gate=garrison: a generated world's own AI and a town's squad (11.12 step 7)
+##   -- --gate=save --stage=1|2|3: the universe saved and come back to, run by run
 ##   -- --gate=home: home's town: quiet at the spawn, a fight walked into, its waves
 ##   -- --gate=belt: a star's belt from open space, the ship turned, slow among its rocks
 ##   -- --gate=seat: the ship smooth near a planet, out of its seat, the map, open space
@@ -69,6 +70,7 @@ var _seat_gate := false
 var _hull_gate := false
 var _belt_gate := false
 var _home_gate := false
+var _save_gate := false
 var _storey_gate := false
 ## The AI round the fight (Docs/Planets.md 11.8, N2, N4): the nav net round the
 ## player's town; ai_world / ai_nav the region the player is in. Made by setup_ai.
@@ -93,6 +95,8 @@ var _debris_gate := false
 var _rocks_gate := false
 var map: GalaxyMap
 var markers: SpaceMarkers
+var saver: PlanetSaver
+var universes: UniversePanel
 var _flash: ColorRect
 ## The ship parked by the spawn (11.12 step 3), and whether the player flies it.
 var ship: SpaceShip
@@ -148,7 +152,9 @@ func _ready() -> void:
 	_hull_gate = "--gate=hull" in OS.get_cmdline_user_args()
 	_belt_gate = "--gate=belt" in OS.get_cmdline_user_args()
 	_home_gate = "--gate=home" in OS.get_cmdline_user_args()
-	_gate = _gate or _system_gate or _ship_gate or _dock_gate or _worlds_gate or _jump_gate or _debris_gate or _rocks_gate or _garrison_gate or _seat_gate or _hull_gate or _belt_gate or _home_gate or _pawn_gate or _mech_gate or _tank_gate or _soldier_gate or _squad_gate or _travel_gate or _far_gate or _drive_gate or _trees_gate or _bricks_gate or _damage_gate or _fall_gate or _hits_gate or _topple_gate or _pieces_ai_gate or _storey_gate
+	_save_gate = "--gate=save" in OS.get_cmdline_user_args()
+	WorldFrame.origin = Vector3.ZERO
+	_gate = _gate or _system_gate or _ship_gate or _dock_gate or _worlds_gate or _jump_gate or _debris_gate or _rocks_gate or _garrison_gate or _seat_gate or _hull_gate or _belt_gate or _home_gate or _save_gate or _pawn_gate or _mech_gate or _tank_gate or _soldier_gate or _squad_gate or _travel_gate or _far_gate or _drive_gate or _trees_gate or _bricks_gate or _damage_gate or _fall_gate or _hits_gate or _topple_gate or _pieces_ai_gate or _storey_gate
 	data = PlanetData.new()
 	data.planet_name = "proto"
 	# Towns and landmarks: their pads go into the ground before it is built.
@@ -269,6 +275,8 @@ func _ready() -> void:
 			_run_hull_gate()
 		elif _home_gate:
 			_run_home_gate()
+		elif _save_gate:
+			_run_save_gate()
 		elif _belt_gate:
 			_run_belt_gate()
 		else:
@@ -380,6 +388,8 @@ func _home_garrison() -> void:
 	g.ai_town = 0
 	add_child(g)
 	garrisons[planet] = g
+	if saver != null:
+		saver.apply_garrison(planet, g)
 
 
 ## Colliders can go from under a body as the ground streams, and a planet has no
@@ -444,6 +454,27 @@ func open_map() -> void:
 	map.open(system.universe, system.system_index, system._home_sys, system.jump_block())
 
 
+## The scene again, in universe `id`, this one saved first.
+func _play_universe(id: String) -> void:
+	universes.visible = false
+	if saver == null or id == saver.save.universe_id or id == "":
+		return
+	saver.save_now()
+	UniverseSave.active_id = id
+	get_tree().reload_current_scene()
+
+
+## Saved before a menu takes the scene away (BrickcityMenuHost).
+func before_leaving() -> void:
+	if saver != null:
+		saver.save_now()
+
+
+## A dark screen over coming back to where the save was.
+func veil(on: bool) -> void:
+	_flash.color = Color(0, 0, 0, 1) if on else Color(1, 1, 1, 0)
+
+
 ## Jump to the map's pick, the screen white over the swap.
 func map_jump() -> void:
 	if not system.can_jump():
@@ -460,7 +491,24 @@ func map_jump() -> void:
 
 ## The ship's and the map's keys. True if `key` was theirs.
 func _ship_key(key: Key) -> bool:
+	if universes.visible:
+		match key:
+			KEY_UP:
+				universes.move(-1)
+			KEY_DOWN:
+				universes.move(1)
+			KEY_ENTER:
+				_play_universe(universes.chosen())
+			KEY_N:
+				_play_universe(universes.new_universe())
+			KEY_U, KEY_ESCAPE:
+				universes.visible = false
+		return true
 	if map.visible:
+		if key == KEY_U and saver != null:
+			map.visible = false
+			universes.open(saver.save.universe_id, saver.save.root)
+			return true
 		match key:
 			KEY_UP:
 				map.move(-1)
@@ -558,16 +606,29 @@ func board() -> void:
 	ship.camera.current = true
 
 
-## Out of the seat, standing on the ship's floor, wherever it is: on foot, once
-## there is a pawn. In a planet's shell the ship stops dead (its deck is not a frame
-## there, nothing carries who stands on it), and it is a solid shell until its
-## bricks are in, so the pawn waits for them (_process).
-func unboard() -> void:
+func _clear_seat() -> void:
 	piloting = false
 	ship.piloted = false
 	ship.thrust = Vector3.ZERO
 	ship.steer = Vector3.ZERO
 	ship.boost = false
+
+
+## Off the pawn and out of the seat, the walker's: a save being gone back to.
+func step_off() -> void:
+	if piloting:
+		_clear_seat()
+		walker.camera.current = true
+	if on_foot:
+		_set_on_foot(false)
+
+
+## Out of the seat, standing on the ship's floor, wherever it is: on foot, once
+## there is a pawn. In a planet's shell the ship stops dead (its deck is not a frame
+## there, nothing carries who stands on it), and it is a solid shell until its
+## bricks are in, so the pawn waits for them (_process).
+func unboard() -> void:
+	_clear_seat()
 	if ship.ref != null:
 		ship.vel = Vector3.ZERO
 	var at := ship.global_transform * ship.seat() + ship.global_basis.y * 0.1
@@ -602,7 +663,12 @@ const SEE_FAR := PlanetSystem.SEE_FAR
 ## universe, the planet on its habitable orbit, the spawn at noon in summer. Every gate
 ## but the system's own runs with the clock stopped.
 func _build_system() -> void:
-	var uni := Universe.new(1)
+	var save: UniverseSave = null
+	if _save_gate and "--stage=1" in OS.get_cmdline_user_args():
+		UniverseSave.wipe(UniverseSave.TEST_ROOT)
+	if _save_gate or not _gate:
+		save = UniverseSave.current(UniverseSave.TEST_ROOT if _save_gate else UniverseSave.ROOT)
+	var uni := Universe.new(save.seed_value if save != null else 1)
 	var sys := uni.system(0, data)
 	sys.best_season(sys.home, spawn_dir)
 	data.spin_phase = sys.noon_phase(sys.home, spawn_dir, 0.0)
@@ -618,7 +684,7 @@ func _build_system() -> void:
 	system.woke.connect(_on_woke)
 	system.jumped.connect(_on_jumped)
 	# A ship parked 45 m behind the spawn (not in the other gates' way).
-	if not _gate or _ship_gate or _dock_gate or _jump_gate or _rocks_gate or _garrison_gate or _seat_gate or _belt_gate or _hull_gate:
+	if not _gate or _ship_gate or _dock_gate or _jump_gate or _rocks_gate or _garrison_gate or _seat_gate or _belt_gate or _hull_gate or _save_gate:
 		var sd := OrbitalData.new()
 		sd.kind = "ship"
 		sd.orbital_name = "ship"
@@ -637,6 +703,12 @@ func _build_system() -> void:
 		ship.rammed.connect(_on_rammed)
 		# Colliders where it sets down, to step out onto.
 		PlanetBody.track(ship)
+	if save != null:
+		saver = PlanetSaver.new()
+		saver.name = "Saver"
+		add_child(saver)
+		saver.setup(self, save)
+		saver.apply_trees(planet, trees)
 	print("[planet] system %s: %d bodies, the planet at %.0f km, a %.0f min day, a %.0f min year" % [
 			sys.system_name, sys.bodies.size(), data.orbit_radius / 1000.0, data.day / 60.0, data.orbit_period / 60.0])
 
@@ -692,6 +764,10 @@ func _on_woke(body: Node3D, offset: Vector3) -> void:
 		g.setup(self, body, cleared)
 		add_child(g)
 		garrisons[body] = g
+		if saver != null:
+			saver.apply_garrison(body, g)
+	if saver != null and body is PlanetBody and body != planet and system.trees_of.has(body):
+		saver.apply_trees(body, system.trees_of[body])
 
 
 ## What was left in the last system went with it.
@@ -753,6 +829,10 @@ func _build_hud() -> void:
 		markers.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		markers.set_anchors_preset(Control.PRESET_FULL_RECT)
 		over.add_child(markers)
+		universes = UniversePanel.new()
+		universes.visible = false
+		universes.set_anchors_preset(Control.PRESET_FULL_RECT)
+		over.add_child(universes)
 		map = GalaxyMap.new()
 		map.visible = false
 		map.set_anchors_preset(Control.PRESET_FULL_RECT)
@@ -832,8 +912,10 @@ func _process(_delta: float) -> void:
 	# walker's own gate, the pawn stands on it.
 	if walker.frozen and not piloting and pawn == null and trees.prebaked and _ground_hit(walker.global_position) != Vector3.INF:
 		walker.frozen = false
-		if not _gate or _pawn_gate or _mech_gate or _tank_gate or _soldier_gate or _squad_gate or _travel_gate or _far_gate or _drive_gate or _trees_gate or _bricks_gate or _damage_gate or _fall_gate or _hits_gate or _topple_gate or _pieces_ai_gate or _storey_gate or _garrison_gate or _seat_gate or _home_gate or _hull_gate:
+		if not _gate or _pawn_gate or _mech_gate or _tank_gate or _soldier_gate or _squad_gate or _travel_gate or _far_gate or _drive_gate or _trees_gate or _bricks_gate or _damage_gate or _fall_gate or _hits_gate or _topple_gate or _pieces_ai_gate or _storey_gate or _garrison_gate or _seat_gate or _home_gate or _hull_gate or _save_gate:
 			_spawn_player(_ground_hit(walker.global_position), -walker.global_transform.basis.z)
+			if saver != null:
+				saver.resume()
 	if not on_foot:
 		walker.flying = pawn != null or walker.flying
 	elif pawn != null:
@@ -2680,6 +2762,172 @@ func _run_belt_gate() -> void:
 	_check("at 1,500 m/s a rock still stops it", ship.rams > rams and gap < 80.0, "%.1f m from its centre" % gap)
 	print("[planet] gate: %d ok, %d FAIL" % [_ok, _fail])
 	get_tree().quit(1 if _fail > 0 else 0)
+
+
+# The save's gate, three runs, each finding what the last left: 1 home's town fought
+# in, a wall blown, a tree down, a soldier hurt; 2 all of it as it was, then a jump
+# to a world, down, a wall blown there; 3 back on that world, then home by the
+# ship, home's wall still blown, and a new universe with nothing in it.
+
+const GATE_NOTES := UniverseSave.TEST_ROOT + "gate_notes.dat"
+static var _save_stage := 0
+
+
+func _run_save_gate() -> void:
+	if _save_stage == 0:
+		for a in OS.get_cmdline_user_args():
+			if a.begins_with("--stage="):
+				_save_stage = int(a.get_slice("=", 1))
+	var t0 := Time.get_ticks_msec()
+	while (pawn == null or saver == null or not saver.live) and Time.get_ticks_msec() - t0 < 90000:
+		await _frames(1)
+	await get_tree().create_timer(1.0).timeout
+	var notes := UniverseSave._read(GATE_NOTES)
+	var town: Vector3 = town_dirs[0]
+	var near := func() -> int:
+		for i in buildings.sites.size():
+			if buildings.sites[i].bricked:
+				return i
+		return -1
+	var wall := func(pb: PlanetBuildings, b: PlanetBody, i: int) -> void:
+		var site = pb.sites[i]
+		_structure_hit(b.global_transform * (site.frame * Vector3(site.fx * 0.175, 3.0, 0.2)), Vector3.ZERO, {"blast": true, "radius": 3.0, "hp": 0})
+	var wait_bricked := func(pb: PlanetBuildings) -> void:
+		var since := Time.get_ticks_msec()
+		while pb.bricked_count == 0 and Time.get_ticks_msec() - since < 30000:
+			await _frames(1)
+	if _save_stage == 1:
+		_check("a first start: nothing to come back to", saver.state.get("at") == null)
+		setup_ai(town)
+		ai.policy = CombatPolicy.new()
+		kit.use_services(ai)
+		_home_garrison()
+		var g: PlanetGarrison = garrisons[planet]
+		pawn.health.layer_configs[0].max_value = 1e7
+		pawn.health.reset()
+		var feet := _surface(_round_dir(town, spawn_dir, 50.0))
+		t0 = Time.get_ticks_msec()
+		while _ground_hit(feet) == Vector3.INF and Time.get_ticks_msec() - t0 < 30000:
+			await _frames(1)
+		pawn.place(feet + Gravity.up_at(feet) * 0.3)
+		t0 = Time.get_ticks_msec()
+		while g.squad == null and Time.get_ticks_msec() - t0 < 40000:
+			await _frames(1)
+		await wait_bricked.call(buildings)
+		var i: int = near.call()
+		wall.call(buildings, planet, i)
+		await get_tree().create_timer(1.0).timeout
+		var gone := buildings.site_gone(i).size()
+		var t_near: Array = trees.trees_near(spawn_dir, 400.0)
+		var tree_cell: Vector3i = t_near[0].key
+		var tree_i: int = t_near[0].index
+		_structure_hit(planet.global_transform * (t_near[0].at as Vector3), Vector3.ZERO, {"blast": true, "radius": 1.0, "hp": 0})
+		if not trees.knock(tree_cell, tree_i, Vector3.RIGHT) and trees.knocked_count == 0:
+			print("[planet] save gate: the tree's cell is not built")
+		var q := g.squad
+		q.alive()[0].pawn.health.apply_impact(1e6, &"")
+		q.alive()[0].pawn.health.apply_impact(60.0, &"")
+		await get_tree().create_timer(1.0).timeout
+		system.t = 777.0
+		var hurt: float = q.alive()[0].pawn.health.total_current()
+		saver.save_now()
+		var keep := {"site": i, "gone": gone, "trees": trees.knocked_count, "left": q.alive().size(), "hurt": hurt,
+				"at": planet.to_local(pawn.feet()), "ship": ship.rel}
+		UniverseSave._write(GATE_NOTES, keep)
+		_check("the fight written, in place", gone > 0 and FileAccess.file_exists(saver.save.dir() + "s0_b%d.dat" % system.index_of(planet)),
+				"%d bricks gone, %d trees, %d soldiers, in %.1f ms" % [gone, trees.knocked_count, q.alive().size(), saver.write_us / 1000.0])
+	elif _save_stage == 2:
+		_check("the clock as it was", is_equal_approx(system.t, 777.0), "%.0f s" % system.t)
+		var off := planet.to_local(pawn.feet()).distance_to(notes.at)
+		_check("the player where they were, on foot", on_foot and off < 1.0, "%.2f m off" % off)
+		_check("the ship where it was", ship.rel.is_equal_approx(notes.ship) and ship.landed)
+		setup_ai(town)
+		ai.policy = CombatPolicy.new()
+		kit.use_services(ai)
+		_home_garrison()
+		pawn.health.layer_configs[0].max_value = 1e7
+		pawn.health.reset()
+		var g: PlanetGarrison = garrisons[planet]
+		t0 = Time.get_ticks_msec()
+		while g.squad == null and Time.get_ticks_msec() - t0 < 30000:
+			await _frames(1)
+		_check("those left of the squad, as they were, the same wave", g.squad != null and g.squad.alive().size() == int(notes.left) and g.wave == 1,
+				"%d left" % (g.squad.alive().size() if g.squad != null else 0))
+		_check("the hurt one still hurt", g.squad != null and absf(g.squad.alive()[0].pawn.health.total_current() - float(notes.hurt)) < 1.0)
+		var i: int = notes.site
+		_check("its wall's bricks gone again", buildings.site_gone(i).size() == int(notes.gone), "%d" % buildings.site_gone(i).size())
+		await wait_bricked.call(buildings)
+		_check("in the bricks laid too", buildings.sites[i].chunk >= 0 and bricks_gone(buildings, i) >= int(notes.gone), "%d" % bricks_gone(buildings, i))
+		_check("the tree still down", trees.knocked_count == int(notes.trees), "%d" % trees.knocked_count)
+		board()
+		await _ship_out()
+		open_map()
+		await _frames(2)
+		for k in map.rows.size():
+			if int(map.rows[k][3]) > 0:
+				map.pick = k
+				break
+		var to := map.chosen()
+		map.visible = false
+		system.jump(to)
+		await _frames(3)
+		var world: PlanetBody = null
+		for b in system.bodies:
+			if world == null and not b.data.towns.is_empty():
+				world = b
+		await _ship_down_on(world)
+		unboard()
+		await get_tree().create_timer(2.0).timeout
+		var pb: PlanetBuildings = system.built[world]
+		var side: Vector3 = (world.data.towns[0] as Vector3).cross(Vector3.UP).normalized()
+		var spot: Vector3 = world.global_transform * world.data.surface_point((world.data.towns[0] as Vector3).rotated(side, 40.0 / world.data.radius))
+		pawn.place(spot + Gravity.up_at(spot) * 0.3)
+		await wait_bricked.call(pb)
+		var w_site := -1
+		for k in pb.sites.size():
+			if w_site < 0 and pb.sites[k].bricked:
+				w_site = k
+		wall.call(pb, world, w_site)
+		await get_tree().create_timer(1.0).timeout
+		saver.save_now()
+		notes["world"] = system.index_of(world)
+		notes["w_site"] = w_site
+		notes["w_gone"] = pb.site_gone(w_site).size()
+		notes["system"] = to
+		notes["w_at"] = world.to_local(pawn.feet())
+		UniverseSave._write(GATE_NOTES, notes)
+		_check("on a world of another system, a wall blown, written", int(notes.w_gone) > 0, "%s, %d bricks" % [world.data.planet_name, notes.w_gone])
+	elif _save_stage == 3:
+		_check("back in that system, on that world", system.system_index == int(notes.system) and system.anchor == system.bodies[int(notes.world)],
+				"system %d" % system.system_index)
+		var world: PlanetBody = system.anchor
+		var off := world.to_local(pawn.feet()).distance_to(notes.w_at)
+		_check("the player where they were, on foot, the ship down", on_foot and off < 1.5 and ship.landed and ship.ref == world, "%.2f m off" % off)
+		var pb: PlanetBuildings = system.built[world]
+		_check("its wall's bricks gone", pb.site_gone(int(notes.w_site)).size() == int(notes.w_gone), "%d" % pb.site_gone(int(notes.w_site)).size())
+		board()
+		await _ship_out()
+		system.jump(0)
+		await _frames(3)
+		await _ship_down_on(planet, spawn_dir)
+		unboard()
+		await get_tree().create_timer(1.0).timeout
+		_check("home again, its wall's bricks still gone", buildings.site_gone(int(notes.site)).size() == int(notes.gone), "%d" % buildings.site_gone(int(notes.site)).size())
+		var n := universes
+		n.open(saver.save.universe_id, saver.save.root)
+		_save_stage = 4
+		_play_universe(n.new_universe())
+		return
+	elif _save_stage == 4:
+		_check("a new universe: its own seed, nothing come back", saver.save.seed_value != 1 and saver.state.get("at") == null and buildings.site_gone(int(notes.site)).is_empty(),
+				"%s, seed %d" % [saver.save.display_name, saver.save.seed_value])
+		_check("and two universes on disk", UniverseSave.list(UniverseSave.TEST_ROOT).size() == 2)
+	print("[planet] gate: %d ok, %d FAIL" % [_ok, _fail])
+	get_tree().quit(1 if _fail > 0 else 0)
+
+
+func bricks_gone(pb: PlanetBuildings, i: int) -> int:
+	return pb.bricks.get_dead_blocks(pb.sites[i].chunk).size() + pb.bricks.get_detached_blocks(pb.sites[i].chunk).size()
 
 
 # Home's gate: quiet at the spawn; home's town walked into, the fight on home's own
