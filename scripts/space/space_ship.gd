@@ -68,6 +68,12 @@ func setup_ship(d: OrbitalData) -> void:
 	var stud := BrickWorld.get_stud_metres()
 	var w := d.fx * stud
 	var dd := d.fz * stud
+	if d.layout == "generated":
+		# Grown now (ShipBuild, ~0.6 s): its seat and its hull box are wanted at once.
+		prepare()
+		if recipe != null:
+			w = d.fz * stud    # the build's beam is its width, its length its depth
+			dd = d.fx * stud
 	var mat := StandardMaterial3D.new()
 	mat.albedo_color = Color(0.35, 0.36, 0.40)
 	mat.metallic = 0.7
@@ -110,6 +116,10 @@ func setup_ship(d: OrbitalData) -> void:
 ## Where the pilot sits: on its floor, a third of the way back from the nose.
 func seat() -> Vector3:
 	var stud := BrickWorld.get_stud_metres()
+	if recipe != null and seat_cell.x >= 0:
+		# On the bridge's floor (ShipBuild), its middle.
+		return frame * Vector3((seat_cell.x + 0.5) * stud, seat_cell.y * BrickWorld.get_plate_metres() + 0.05,
+				(seat_cell.z + 0.5) * stud)
 	var floor_y := TowerRecipe.SLAB_PLATES * BrickWorld.get_plate_metres()
 	return frame * Vector3(data.fx * stud * 0.5, floor_y + 0.05, data.fz * stud * 0.35)
 

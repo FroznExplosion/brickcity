@@ -12,8 +12,8 @@ extends SceneTree
 ##
 ##   pla          the house plastic, layer lines and all
 ##   wood_pbr     wood, the full set: colour, roughness, normal map
-##   wood_colour  wood past wood_pbr_range: colour and roughness, one read
-##   wood_flat    wood past wood_far_range: the flat colour
+##   wood_colour  wood past pbr_range: colour and roughness, one read
+##   wood_flat    wood past pbr_far_range: the flat colour
 ##   legacy       the procedural wood this replaced, if shots/legacy/ holds
 ##                main's brick shaders from before (tools note in the doc)
 ##
@@ -109,8 +109,8 @@ func _run() -> void:
 	var configs := {
 		"pla": [pla, current, {}],
 		"wood_pbr": [wood, current, {}],
-		"wood_colour": [wood, current, {"wood_pbr_range": 0.0}],
-		"wood_flat": [wood, current, {"wood_far_range": 0.0}],
+		"wood_colour": [wood, current, {"pbr_range": 0.0}],
+		"wood_flat": [wood, current, {"pbr_far_range": 0.0}],
 	}
 	if FileAccess.file_exists("res://shots/legacy/brick.gdshader"):
 		configs["legacy"] = [wood, _material("res://shots/legacy/brick.gdshader"), {}]

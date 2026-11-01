@@ -8,11 +8,11 @@
 // RGB is already the resolved colour: a filament's, or the material's own
 // variant (oak, brass, slate). This file only decides how the SURFACE reads.
 //
-// Every look but wood's is PROCEDURAL, from the face's own coordinates in
-// metres. Each face hashes its own corner into a seed, so two stone bricks
-// side by side are two pieces of stone, not one texture stamped twice. Wood
-// is a texture set read as a solid block (bm_wood_pbr, at the end; Docs/
-// PbrWood.md) -- the first of the looks to go that way.
+// The natural materials -- wood, metal, stone, leaves -- are texture sets
+// read as SOLIDS (bm_pbr, at the end; Docs/PbrWood.md): a point's look comes
+// from where it is in the block, not from which face it lies on. The
+// printed filaments' looks are still PROCEDURAL, from the face's own
+// coordinates in metres, each face hashing its corner into a seed.
 //
 // The order of the tables below is brick_grid.h's BRICK_MATERIALS order, and
 // both are append-only.
@@ -29,10 +29,10 @@
 //    8  Carbon PLA   yes      dark, with a fine twill of fibre
 //    9  Wood PLA     yes      layers, plus the streaky banding of wood fill
 //   10  Wood         no       solid PBR wood: a texture set, cut as a block
-//                             along the piece's grain axis (bm_wood_pbr)
-//   11  Metal        no       metallic, brushed along the long side
-//   12  Stone        no       mottled, with veins
-//   13  Leaf         no       vegetation: flat, soft, matte
+//                             along the piece's grain axis (bm_pbr)
+//   11  Metal        no       PBR brushed steel, streaks along the long side
+//   12  Stone        no       PBR polished veined stone
+//   13  Leaf         no       PBR leaves, for a tree's crown
 
 const int MAT_COUNT = 14;
 const float MAT_PRINTED[14] = float[](1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 0.0, 0.0, 0.0, 0.0);
@@ -54,8 +54,9 @@ const float MAT_GROOVE[14]  = float[](1.0, 0.8, 0.6, 1.0, 0.5, 0.7, 0.9, 1.0, 1.
 // ones printed thick. Not printed: 0.
 const int MAT_WALLS[14]     = int[](2, 2, 2, 2, 2, 2, 3, 2, 3, 2, 0, 0, 0, 0);
 // 0 none, 1 wood, 2 brushed metal, 3 stone, 4 carbon twill, 5 glow, 6 silk,
-// 7 nylon fibre, 8 wood-fill banding.
-const int MAT_TEX[14]       = int[](0, 0, 6, 0, 0, 0, 7, 5, 4, 8, 1, 2, 3, 0);
+// 7 nylon fibre, 8 wood-fill banding, 9 leaves. 1, 2, 3 and 9 are texture
+// sets (bm_pbr, at the end); the rest procedural.
+const int MAT_TEX[14]       = int[](0, 0, 6, 0, 0, 0, 7, 5, 4, 8, 1, 2, 3, 9);
 // Light passes through (brick_grid.h `translucent`). With a glass pass on the
 // material these are drawn there instead; without one -- a material nobody
 // gave a second pass -- they draw here, glossy and solid.
@@ -177,45 +178,69 @@ vec3 bm_wood_fill(vec3 base, vec2 p, float layer_t, float seed, float fade) {
     return col * mix(1.0, 0.95 + 0.08 * fleck, fade);
 }
 
-// --- solid wood, PBR (Docs/PbrWood.md) ---------------------------------------
+// --- PBR texture sets (Docs/PbrWood.md) -------------------------------------
 //
-// Wood is a SOLID, not a wallpaper: a point's colour comes from where it is in
-// a block of wood, not from which face it lies on. Every face of a brick -- top,
-// sides, bottom, its bevels, a slope's or a round's surface -- is a cut
-// through the same block, so the grain runs on round an edge; and the block is
-// the chunk's (plus `grain_origin`, the chunk's place on the grid), so two
-// bricks stacked or laid end to end with their grain the same way continue
-// one another, as if cut from one plank.
+// A natural material is a SOLID, not a wallpaper: a point's look comes from
+// where it is in a block of the stuff, not from which face it lies on. The
+// block is the chunk's (plus `grain_origin`, the chunk's place on the grid), so
+// bricks side by side are cut from one block, and a piece broken off keeps
+// its pattern.
 //
-// The texture set (ambientCG Wood049, CC0; textures/wood/) is a photograph of
-// side grain: along its x the fibres run, along its y the growth rings
-// stripe across. The field maps a point to (along the grain, ring), so a side
-// samples the photo as it is, a top a wider cut through the same rings, and
-// an end -- where "along" stands still -- a column of the photo swept across
-// the end as its rings.
+// Each set is ambientCG (CC0; textures/<material>/): colour with roughness in
+// alpha, and an OpenGL normal map, bound as global uniforms so every brick
+// material has them. Colour is the photo over its own mean, times the brick's
+// colour: the variants (oak, walnut; steel, brass; marble, slate; the greens)
+// are many looks from one set, and a brick's average colour is its own.
 //
-// Colour: the photo divided by its own mean, onto the brick's colour, so oak,
-// walnut and cherry (the variants' RGB) are three woods from one set.
+//   wood    Wood049, a solid field: rings round an axis along the grain
+//           (bm_wood_coords), so the grain runs on round every edge
+//   metal   Metal009, brushed: each face the plane it faces (bm_box_coords),
+//           its streaks along the piece's long side
+//   stone   Marble012, polished: as metal, no grain. Polished stone has no
+//           relief to speak of (its map is flat), so no normal read
+//   leaf    ScatteredLeaves008, three quarters greyed so the brick's green
+//           is the colour: as stone, with relief
 
-global uniform sampler2D wood_albedo_rough : filter_linear_mipmap_anisotropic, repeat_enable;// RGB colour (sRGB), A roughness
-global uniform sampler2D wood_normal : filter_linear_mipmap_anisotropic, repeat_enable;// normal map, OpenGL green
+global uniform sampler2D wood_albedo_rough : filter_linear_mipmap_anisotropic, repeat_enable;
+global uniform sampler2D wood_normal : filter_linear_mipmap_anisotropic, repeat_enable;
+global uniform sampler2D metal_albedo_rough : filter_linear_mipmap_anisotropic, repeat_enable;
+global uniform sampler2D metal_normal : filter_linear_mipmap_anisotropic, repeat_enable;
+global uniform sampler2D stone_albedo_rough : filter_linear_mipmap_anisotropic, repeat_enable;
+global uniform sampler2D leaf_albedo_rough : filter_linear_mipmap_anisotropic, repeat_enable;
+global uniform sampler2D leaf_normal : filter_linear_mipmap_anisotropic, repeat_enable;
 
-const vec3 WOOD_MEAN = vec3(0.2019, 0.1272, 0.0773);   // the colour's mean, linear
-const float WOOD_ROUGH_MEAN = 0.504;
-// The roughness map is subtle (spread 0.08); scaled up so the grain shows as
-// a sheen that moves with the light and the eye, which is most of what says
-// "lit wood" rather than "a photo of wood" (Docs/PbrWood.md 2).
-const float WOOD_ROUGH_GAIN = 2.5;
-// Metres one repeat of the texture covers: along the grain, and across it in
-// ring units. The field repeats every 6 m on every axis with these (2 along,
-// 3 and 1 across), so a chunk's grid origin can be passed modulo
-// WOOD_PERIOD and stay exact (BrickMaterials.grain_origin). Change them and
-// keep WOOD_PERIOD a multiple of 2 * WOOD_TILE.x and 3 * WOOD_TILE.y.
+// Per set, by MAT_TEX (1 wood, 2 metal, 3 stone, 9 leaf): the colour's
+// linear mean and the roughness map's mean (tools: pack_sets in the doc);
+// how far the roughness map is spread (the maps are subtle -- wood's spread is
+// 0.08 -- and the spread is what shows as a sheen moving with the light); and
+// the normal map's strength (times the material's pbr_bump).
+bool bm_is_pbr(int tex) {
+    return tex == 1 || tex == 2 || tex == 3 || tex == 9;
+}
+
+const vec3 WOOD_MEAN = vec3(0.2019, 0.1272, 0.0773);
+const vec3 METAL_MEAN = vec3(0.2886, 0.2994, 0.3105);
+const vec3 STONE_MEAN = vec3(0.4210, 0.4271, 0.4753);
+const vec3 LEAF_MEAN = vec3(0.2526, 0.2267, 0.1295);
+const vec4 PBR_ROUGH_MEAN = vec4(0.504, 0.469, 0.066, 0.523);   // wood, metal, stone, leaf
+const vec4 PBR_ROUGH_GAIN = vec4(2.5, 2.0, 2.0, 1.5);
+const vec4 PBR_BUMP = vec4(2.0, 1.5, 0.0, 1.5);
+// Metres one repeat covers (metal, stone, leaf; wood's is WOOD_TILE). Every
+// one divides PBR_PERIOD, so a chunk's grid origin can be passed modulo it and
+// stay exact (BrickMaterials.set_grain_origin).
+const vec3 PBR_TILE = vec3(1.0, 2.0, 1.5);
+// Metres along the grain, and across it in ring units. Wood's field repeats
+// every 6 m on every axis with these (2 along, 3 and 1 across). Change them
+// and keep PBR_PERIOD a multiple of 2 * WOOD_TILE.x and 3 * WOOD_TILE.y.
 const vec2 WOOD_TILE = vec2(2.0, 1.0);
-const float WOOD_PERIOD = 96.0;
+const float PBR_PERIOD = 96.0;
 
 /// Where `p` (chunk metres) lies in the block of wood, in texture repeats:
 /// x along the grain, y across the rings.
+///
+/// The photo is side grain: fibres along its x, rings striping down its y. A
+/// side samples it as it is, a top a wider cut through the same rings, and an
+/// end -- where "along" stands still -- a column of it swept across the end.
 vec2 bm_wood_coords(vec3 p, int axis) {
     // q.x along the grain; q.y and q.z across it, q.z the one a horizontal
     // board's sides stand in.
@@ -229,23 +254,70 @@ vec2 bm_wood_coords(vec3 p, int axis) {
     return vec2(q.x / WOOD_TILE.x, s / WOOD_TILE.y);
 }
 
-/// The texture set at `t` (bm_wood_coords), onto albedo and roughness; and
-/// with `bump` above 0 the normal map, bent into `normal` through a tangent
-/// frame from the screen derivatives (any face, at any angle, as it falls).
-/// `dtx`/`dty` are t's screen derivatives and `dpx`/`dpy` the position's
-/// (view space), taken by the caller.
-void bm_wood_pbr(vec2 t, vec2 dtx, vec2 dty, vec3 dpx, vec3 dpy, float colour_w,
+float bm_comp(vec3 v, int i) {
+    return i == 0 ? v.x : (i == 1 ? v.y : v.z);
+}
+
+/// A face's own plane of the block, metres: the projection square to the axis
+/// its normal is nearest (`n`, chunk space). Along the grain first where the
+/// grain lies in that plane, so brushing runs the piece's length; an end face
+/// takes its other two axes. One projection, not a blend of three: a brick's
+/// faces are square to an axis, and a bevel's seam is a millimetre wide.
+vec2 bm_box_coords(vec3 p, vec3 n, int axis) {
+    // A 45-degree slope or bevel picks the same plane every pixel: Y first,
+    // then X, never a coin toss on rounding.
+    vec3 a = abs(n) + vec3(0.01, 0.02, 0.0);
+    int k = a.x >= a.y && a.x >= a.z ? 0 : (a.y >= a.z ? 1 : 2);
+    int g = axis == 0 ? 0 : (axis == 1 ? 2 : 1);
+    if (k == g) {
+        return vec2(bm_comp(p, k == 0 ? 2 : 0), bm_comp(p, k == 1 ? 2 : 1));
+    }
+    return vec2(bm_comp(p, g), bm_comp(p, 3 - k - g));
+}
+
+/// The set `tex` at chunk point `p` (normal `n`, grain `axis`) onto albedo
+/// and roughness; and with `bump` above 0 its normal map, bent into `normal`
+/// through a tangent frame from the screen derivatives (any face, at any
+/// angle, as it falls). `dpx`/`dpy`: the view-space position's derivatives.
+void bm_pbr(int tex, vec3 p, vec3 n, int axis, vec3 dpx, vec3 dpy, float colour_w,
         float bump, inout vec3 albedo, inout float rough, inout vec3 normal) {
-    // fract and explicit gradients: a global sampler's wrap is not ours to
-    // set, and the gradients of the unwrapped t keep the mip steady across
-    // the wrap.
+    int k = tex == 1 ? 0 : (tex == 2 ? 1 : (tex == 3 ? 2 : 3));
+    vec2 t = tex == 1 ? bm_wood_coords(p, axis)
+            : bm_box_coords(p, n, axis) / (tex == 2 ? PBR_TILE.x : (tex == 3 ? PBR_TILE.y : PBR_TILE.z));
+    // fract and explicit gradients: the gradients of the unwrapped t keep the
+    // mip steady across the wrap.
+    vec2 dtx = dFdx(t);
+    vec2 dty = dFdy(t);
     vec2 f = fract(t);
-    vec4 ar = textureGrad(wood_albedo_rough, f, dtx, dty);
+    vec4 ar;
+    vec3 mean;
+    if (k == 0) {
+        ar = textureGrad(wood_albedo_rough, f, dtx, dty);
+        mean = WOOD_MEAN;
+    } else if (k == 1) {
+        ar = textureGrad(metal_albedo_rough, f, dtx, dty);
+        mean = METAL_MEAN;
+    } else if (k == 2) {
+        ar = textureGrad(stone_albedo_rough, f, dtx, dty);
+        mean = STONE_MEAN;
+    } else {
+        ar = textureGrad(leaf_albedo_rough, f, dtx, dty);
+        mean = LEAF_MEAN;
+    }
     vec3 c = pow(ar.rgb, vec3(2.2));
-    albedo = mix(albedo, clamp(albedo * c / WOOD_MEAN, 0.0, 1.0), colour_w);
-    rough = clamp(rough + (ar.a - WOOD_ROUGH_MEAN) * WOOD_ROUGH_GAIN * colour_w, 0.04, 1.0);
+    albedo = mix(albedo, clamp(albedo * c / mean, 0.0, 1.0), colour_w);
+    rough = clamp(rough + (ar.a - PBR_ROUGH_MEAN[k]) * PBR_ROUGH_GAIN[k] * colour_w, 0.04, 1.0);
+    bump *= PBR_BUMP[k];
     if (bump > 0.0) {
-        vec2 nxy = textureGrad(wood_normal, f, dtx, dty).xy * 2.0 - 1.0;
+        vec2 nxy;
+        if (k == 0) {
+            nxy = textureGrad(wood_normal, f, dtx, dty).xy;
+        } else if (k == 1) {
+            nxy = textureGrad(metal_normal, f, dtx, dty).xy;
+        } else {
+            nxy = textureGrad(leaf_normal, f, dtx, dty).xy;
+        }
+        nxy = nxy * 2.0 - 1.0;
         nxy.y = -nxy.y;   // OpenGL green is up the image; t.y runs down it
         // Cotangent frame (Schueler): the directions t.x and t.y grow in,
         // across this surface.

@@ -592,6 +592,11 @@ func _build_system() -> void:
 		sd.fx = 24
 		sd.fz = 36
 		sd.courses = 6
+		# In play a generated ship: a hull with its rooms (Docs/RoomModules.md 7.5);
+		# the gates keep the plain one they were written round.
+		if not _gate:
+			sd.layout = "generated"
+			sd.orbital_seed = 7
 		var east := spawn_dir.cross(Vector3.FORWARD).normalized()
 		var at := _round_dir(spawn_dir, -east, 45.0)
 		var x := (-east - at * (-east).dot(at)).normalized()

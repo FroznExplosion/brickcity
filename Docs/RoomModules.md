@@ -277,7 +277,7 @@ Code: `StructureSpaces.connectors` / `door_connector` / `cycle_link` (record sid
 | 9 | the station grower: core, spine, docks, bridging tubes, solar wings, radiators; Generate station; `room_station_probe` (8) | built 2026-10-31 |
 | 11 | ship interiors packed into a hull: decks, spine, well, bulkheads as sections, zones, shared walls, nooks; Generate interior; `room_pack_probe` (9) | built 2026-10-31 |
 | 10 | stations in space: a kit and ties so a station holds by its studs, a keel its anchor; generated stations for every station but home's, a section shot off drifting whole; `station_sections_probe` (5), `room_station_probe` (10) | built 2026-10-31 |
-| 12 | ships flying their rooms (section 7.5, the planets area's files) | planned |
+| 12 | ships: ShipBuild (hull, ship rooms, airlock), flown as a SpaceShip -- the bridge's seat, decks anchored, bulkheads joints with hit points; the parked ship generated in play; `ship_build_probe` (4) | built 2026-10-31 |
 
 ## 7. Plan: stations in space and ship interiors (2026-10-31)
 
@@ -471,12 +471,45 @@ deck (as deep as the band, the hull for their back wall: the probe's cabin) and 
 Not yet: a lift (`lift` off), portholes in the hull, an airlock to the outside, decks of their own
 pitch.
 
-### 7.5 The ship flies its rooms (stage 12, with the planets area)
+### 7.5 The ship flies its rooms (stage 12, built 2026-10-31)
 
-`SpaceShip` builds from a generated hull and interior instead of its 24 x 36 tower module: the
-bridge's `seat` spot is `seat()`, the engines on the engine room's spots, its hull box from the
-sections' boxes; sections as stations' (7.3): a section shot off its joints leaves whole and can
-then be broken brick by brick, the rest still flies. planet.tscn's parked ship the first one.
+`scripts/ship_build.gd`, `ShipBuild.make(seed)` -> RoomPack's result with `seat` and `decks`:
+
+* **The hull** from the seed: 56-96 studs long along +X, 26-30 across, 1-3 decks `PITCH` (15)
+  apart, its half-beam falling over the fore quarter to a third at the bow; a floor of plates on
+  row 1, brick side walls, a roof of two plate layers (each seam bridged).
+* **The rooms** (`ShipBuild.modules`, or the player's when one of theirs is a bridge): bridge
+  (fore, one), engine room (aft, one), reactor (core, one), quarters, galley, med bay, cargo
+  (hull), cabin -- a floor of plates, brick walls, two ceiling layers, a door each long side.
+  Packed by RoomPack (7.4) with `airlock`: a doorway and a door through the stern where the spine
+  meets it on the lowest deck. Bulkheads every 24-32 studs; the **root section is the bridge's**
+  (`plan.root_x`, RoomPack names its required fore module's).
+* `seat`: the middle of the bridge's room, on its floor.
+
+**Flown.** `OrbitalData.layout` "generated" on a ship: `SpaceShip.setup_ship` grows it at once
+(~0.5 s, and its template ~0.6 s: its seat and hull box are wanted before anything else); its
+frame turns the build so its bow is the ship's nose (-Z) and centres it; `seat()` is the bridge's;
+its hull box and engines from its size. Laid with its floor (row 0) the foundation and every deck's
+floor row an anchor (`set_anchor_levels`), so nothing hangs loose. **Bulkheads are joints with hit
+points** (Space.md 3.2): the bricks where two sections touch; after a hit's solve, a joint with
+under `JOINT_HOLD` (35%) of them left is broken, and whatever no unbroken joint joins to the
+bridge's section leaves whole -- split off and drifting (`drifted`), its bricks then as any
+piece's. The rest still flies. The parked ship in planet.tscn is a generated one (seed 7) in
+play; the gates keep the plain one they were written round.
+
+Also: `RoomGrow.lay` lays what is left of a box brick that overlaps one already laid (a wall two
+modules share) column by column, as it did for a cut -- the floors and ceilings of modules with a
+shared wall had holes, and in a ship those plates hung loose.
+
+`tools/ship_build_probe.gd` (4): 8 seeds -- 1-3 decks, the bridge's seat on its floor in the fore
+third, the engine room aft, an airlock open onto the spine, fill 76-78%, sections; a generated
+SpaceShip -- its seat forward of the middle, its hull box long along Z; laid frame by frame with
+nothing loose; a bulkhead of the bridge's section shot through -- the part beyond (324 bricks)
+drifts off whole, the bridge stays.
+
+Not yet: no windowed pass has flown one (the gates use the plain ship); a section that drifts off
+takes no one with it; doors and lifts are not hung in a ship; the hull is a box with a bow, no
+fins or engine nacelles in bricks (the engines are the old meshes).
 
 ### 7.6 Order and choices
 

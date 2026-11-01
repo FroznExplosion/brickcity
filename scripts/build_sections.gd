@@ -234,14 +234,19 @@ static func split(r: BuildRecipe) -> Array:
 static func _units(lib: Array, plan: Dictionary, shift: Vector3i) -> Dictionary:
 	var placed: Array = plan.get("placed", [])
 	if String(plan.get("generator", "grow")) == "pack":
-		# A ship: the stretches between its bulkheads, the fore one the root.
+		# A ship: the stretches between its bulkheads, the bridge's (plan.root_x) the root.
 		var segs: Array = plan.segments
 		var n := segs.size() + 1
 		var adj := []
 		for k in n:
 			adj.append(([k - 1] if k > 0 else []) + ([k + 1] if k < n - 1 else []))
-		return {"kind": "bulkhead", "n": n, "segments": segs, "x0": shift.x, "adj": adj,
-				"root": n - 1 if int(plan.get("fore", 1)) > 0 else 0}
+		var root := n - 1 if int(plan.get("fore", 1)) > 0 else 0
+		if plan.has("root_x"):
+			root = 0
+			for b in segs:
+				if int(b) < int(plan.root_x):
+					root += 1
+		return {"kind": "bulkhead", "n": n, "segments": segs, "x0": shift.x, "adj": adj, "root": root}
 	if String(plan.get("generator", "grow")) == "shell":
 		var n := maxi(int(plan.stats.storeys), 1)
 		var adj := []
