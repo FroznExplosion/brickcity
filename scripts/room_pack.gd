@@ -23,6 +23,7 @@ extends RoomShell
 const PACK_PARAMS := {"seed": 1, "hull": null, "pitch": 0, "corridor": 4, "room_max": 10,
 		"section_studs": 32, "passes": 4, "fore": "auto", "fill": 1.0, "lift": false, "balcony": 0.0,
 		"window_every": 1000}
+## `airlock`: a doorway with a door through the hull's aft wall at the spine.
 ## A deck needs at least this many columns.
 const MIN_DECK := 60
 ## The share of the length at each end compared to say which end is fore.
@@ -39,6 +40,7 @@ var x_hi := 0
 var cx_start := []      ## per deck: the spine's west end
 var mins_short := 0
 var in_hull := 0        ## module wall columns standing in the hull's wall
+var airlock := Vector3i(-1, -1, -1)  ## the airlock doorway's low cell, if one was cut
 var solid := []         ## per deck: Vector2i -> true, module columns solid all the way up
 
 
@@ -88,6 +90,7 @@ func _pack(library: Array, pp: Dictionary, k: int) -> Dictionary:
 	made.stats.bulkheads = segments.size()
 	made.stats.short = mins_short
 	made.stats.in_hull = in_hull
+	made.stats.airlock = airlock
 	made.recipe.meta.generated.stats = made.stats
 	made.recipe.meta.generated.seed = int(pp.seed)
 	made.recipe.name = "ship interior %d" % int(pp.seed)
@@ -105,15 +108,49 @@ func _plan_at() -> Vector3i:
 func _plan_more(plan: Dictionary) -> void:
 	plan.segments = segments.duplicate()
 	plan.fore = fore
+	# The root section: the one with the required fore module (the bridge), else the bow's.
+	plan.root_x = x_hi if fore > 0 else x_lo
+	for pl: Dictionary in placed:
+		var rules: Dictionary = lib[pl.m].rules
+		if String(rules.get("zone", "any")) == "fore" and int(rules.min) > 0:
+			var lo := 1 << 30
+			var hi := -(1 << 30)
+			for c: Vector2i in lib[pl.m].turns[pl.t].cols:
+				lo = mini(lo, c.x + (pl.off as Vector3i).x)
+				hi = maxi(hi, c.x + (pl.off as Vector3i).x)
+			@warning_ignore("integer_division")
+			plan.root_x = (lo + hi) / 2
+			break
 	# Each stretch between bulkheads a section of its own.
 	plan.section_bricks = 1
 
 
 ## The hull's bricks first, so nothing of the rooms is laid in them.
+## The hull's bricks first, so nothing of the rooms is laid in them -- but not in
+## the airlock (`airlock`): a doorway through the hull's aft wall where the spine
+## meets it on the lowest deck, a door in it.
 func _prelay() -> void:
+	var hole := {}
+	if bool(p.get("airlock", false)) and storeys > 0:
+		var x := int(cx_start[0]) - 1 if fore > 0 else int(cx_end[0]) + 1
+		var h := mini(DOORWAY.y, pitch - 3)
+		for z in range(zc + 1, zc + 3):
+			for y in h:
+				hole[Vector3i(x, base + 1 + y, z)] = true
+		if hull_cells.has(Vector3i(x, base + 1, zc + 1)):
+			doors.append(_door_box(Vector2i(x, zc + 1), Vector2i(x, zc + 2), base, h))
+			airlock = Vector3i(x, base + 1, zc + 1)
 	var hb := []
 	for i in hull.size():
-		hb.append([hull.part_of(i), hull.cell_of(i), hull.colour_of(i), hull.material_of(i)])
+		var c := hull.cell_of(i)
+		var sz := BuildRecipe.part_size(hull.part_of(i))
+		var cut := false
+		for y in sz.y:
+			for z in sz.z:
+				for x in sz.x:
+					cut = cut or hole.has(c + Vector3i(x, y, z))
+		if not cut:
+			hb.append([hull.part_of(i), c, hull.colour_of(i), hull.material_of(i)])
 	adds = hb + adds
 
 
