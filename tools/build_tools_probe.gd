@@ -49,6 +49,7 @@ func _initialize() -> void:
 	_draw_checks()
 	_rest_checks()
 	await _out_of_the_way_checks()
+	_repeat_building_checks()
 	print("\n%d passed, %d failed" % [_pass, _fail])
 	quit(1 if _fail > 0 else 0)
 
@@ -549,6 +550,7 @@ func _repeat_checks() -> void:
 	var shapes0 := t.shapes().size()
 	var n0: int = _ws.recipe.size()
 	t.rep_what = "storey"
+	t.selected = -1
 	t.rep_lo = 1
 	t.rep_hi = 24
 	var made := t.repeat("up", 2, 0)
@@ -1443,3 +1445,103 @@ func _out_of_the_way_checks() -> void:
 	t.makes = "solid"
 	t.set_outline("box")
 	t.pick("place")
+
+
+func _repeat_building_checks() -> void:
+	print("[probe] Repeat a building, edits and all (section 14)")
+	_ws._new_build()
+	var t: WorkshopTools = _ws._tools
+	var g := WorkshopTools.glass_paint()
+	var f0: int = _ws.asm.frames[0]
+	var glass := func(x: int, y: int) -> bool:
+		var bid: int = _ws.world.block_at(f0, Vector3i(x, y, 4))
+		return bid >= 0 and _ws.world.get_block_material(f0, bid) == g.x
+	_hold("brick_1x2")
+	t.pick("draw")
+	t.set_outline("box")
+	t.makes = "building"
+	t.storey_courses = 3
+	t.flat_roof = true
+	t.window_size = Vector2i(2, 3)
+	_drag_outline(t, Vector3i(4, 1, 4), Vector2i(19, 15))
+	t.input(_key(KEY_3))
+	var b := t.commit_pending()
+	_ok("a building of 3 storeys", WorkshopTools.storeys_of(t.shape_of(b)) == 3)
+	# Decorate only the first storey: a window (not every floor), a loose brick, furniture, a room.
+	t.every_floor = false
+	t.apply_opening("window", t.face_under(Vector3(10.5 * 0.35, 5.5 * 0.14, -3.0), Vector3(0, 0, 1)))
+	t.every_floor = true
+	_hold("plate_1x1")
+	_ws._cell = Vector3i(9, 2, 9)
+	_ws._update_ghost()
+	_ws._place()
+	_hold("brick_1x2")
+	t.stair_wide = 2
+	var stair := t.stairs_between(Vector3i(14, 2, 8), Vector3i(17, 11, 8))
+	_ws.recipe.placements.append(AssetPlacements.make("a_chair", Vector3i(7, 2, 7), 1))
+	var room: Dictionary = _ws._spaces.record()
+	(room.spaces as Array).append({"id": 0, "kind": "office", "frame": 0, "seed": [8, 2, 8], "floor_y": 1, "ceil_y": 10,
+			"columns": [[8, 8]]})
+	t.roof_style = "gable"
+	var roof := t.roof_on(b)
+	var bricks0: int = _ws.recipe.size()
+	var shapes0 := t.shapes().size()
+	# Pick it by a window's frame, as a hand would click anything on it.
+	t.pick("repeat")
+	t.rep_what = "building"
+	t.rep_dir = "up"
+	t.rep_times = 1
+	t.rep_gap = 0
+	t.selected = -1
+	t._repeat_pick(Vector3i(9, 3, 4))
+	_ok("any brick on it picks the building", t.selected == b)
+	t._repeat_preview()
+	_ok("it says what will happen", t._rep_says.contains("3 storeys to 6"), t._rep_says)
+	_ok("and a box shows where it lands, on top", t._rep_boxes.size() == 1 and (t._rep_boxes[0][0] as Vector3i).y == 31,
+			str(t._rep_boxes))
+	var made := t.repeat("up", 1, 0)
+	var sh := t.shape_of(b)
+	_ok("3 storeys repeated: one building of 6", made > 0 and WorkshopTools.storeys_of(sh) == 6, str(sh.depth))
+	_ok("the window and its frame copied", glass.call(10, 6) and glass.call(10, 36) and (t.shapes() as Array).filter(
+			func(o: Dictionary) -> bool: return o.has("opening")).size() == 4)
+	_ok("the loose brick copied", _solid(Vector3i(9, 2, 9)) and _solid(Vector3i(9, 32, 9)))
+	_ok("the stairs copied", _solid(Vector3i(14, 2, 8)) and _solid(Vector3i(14, 32, 8)))
+	_ok("the furniture copied", (_ws.recipe.placements as Array).size() == 2
+			and BuildRecipe.cell_from(_ws.recipe.placements[1].cell) == Vector3i(7, 32, 7))
+	_ok("the room copied", (_ws._spaces.record().spaces as Array).size() == 2)
+	_ok("a floor where the roof was, the flat roof on top, open between", _solid(Vector3i(8, 31, 8))
+			and _solid(Vector3i(8, 61, 8)) and not _solid(Vector3i(8, 50, 8)))
+	_ok("the gable rose with it", int(t.shape_of(roof).at) == 62, str(t.shape_of(roof).get("at")))
+	_ws._undo()
+	_ok("one undo takes it all back", WorkshopTools.storeys_of(t.shape_of(b)) == 3 and _ws.recipe.size() == bricks0
+			and t.shapes().size() == shapes0 and (_ws.recipe.placements as Array).size() == 1
+			and (_ws._spaces.record().spaces as Array).size() == 1 and int(t.shape_of(roof).at) == 32,
+			"%d of %d bricks, %d of %d shapes" % [_ws.recipe.size(), bricks0, t.shapes().size(), shapes0])
+	_ws.redo_last()
+	_ok("redo puts it all back", WorkshopTools.storeys_of(t.shape_of(b)) == 6 and (_ws.recipe.placements as Array).size() == 2)
+	var six: int = (_ws.recipe.placements as Array).size()
+	t.selected = b
+	t.repeat("up", 1, 0)
+	_ok("picked again it copies all 6", WorkshopTools.storeys_of(t.shape_of(b)) == 12 and (_ws.recipe.placements as Array).size() == six * 2)
+	_ws._undo()
+	_ws._undo()
+	# One storey, the middle one: it goes on top, with what is in that storey only.
+	t.rep_what = "storey"
+	t.selected = -1
+	t._repeat_pick(Vector3i(4, 3, 8))
+	_ok("One storey picks the building and that storey", t.selected == b and t._rep_y == 3)
+	t.repeat("up", 1, 0)
+	_ok("copied to the top", WorkshopTools.storeys_of(t.shape_of(b)) == 4 and glass.call(10, 36) and not glass.call(10, 26))
+	_ws._undo()
+	# Along X: a separate copy.
+	t.rep_what = "building"
+	t.selected = b
+	var along := t.repeat("x", 1, 2)
+	_ok("along X, a building beside it", along > 0 and WorkshopTools.storeys_of(t.shape_of(b)) == 3
+			and (t.shapes() as Array).filter(func(o: Dictionary) -> bool: return String(o.kind) == "plan").size() == 2)
+	_ws._undo()
+	t.makes = "solid"
+	t.rep_what = "building"
+	t.selected = -1
+	t.pick("place")
+	_ok("a stair was laid", stair >= 0)

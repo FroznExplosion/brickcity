@@ -20,7 +20,7 @@ const TOOLS := [
 	["roof", "Roof", "", "Click a shape (a room's walls): a gable or hip roof of slopes on top of it."],
 	["stairs", "Stairs", "", "Click the lower floor, then the upper one: a straight stair between them."],
 	["cut", "Cut", "N", "Press on a wall or a floor, drag a shape on it, let go; click to cut right through, or drag first for a depth. The bricks round it are laid again. Door and window: one click, framed."],
-	["repeat", "Repeat", "J", "Copy the picked shape -- or a storey, everything between two heights -- N times up, or along X or Z. Click a brick here to pick what to repeat; a door or window repeats with its cut."],
+	["repeat", "Repeat", "J", "Click a building and copy it, or one storey, with everything on it: windows, stairs, furniture, rooms, every brick. Up, it lands on top and stays one building. A box shows where it will go."],
 	["select", "Select", "L", "Click a shape or an inserted build to pick it. A shape: drag its top for its height, its side to move it; change its bond or brick, delete it, or let it go. A build: move, copy or delete it."],
 	["rooms", "Rooms", "O", "Rooms and openings: click a room to find it or an opening to turn its kind; RMB forgets one."],
 ]
@@ -78,7 +78,7 @@ const POPOUT_HIDES := ["hand", "draw", "roof", "stairs", "cut"]
 ## is where it is clicked, a door stands on the floor of the wall.
 const DOOR := Vector2i(4, 18)
 const WINDOW := Vector2i(4, 9)
-const REPEAT_WHAT := [["shape", "Picked shape"], ["storey", "A storey"]]
+const REPEAT_WHAT := [["building", "Building"], ["storey", "One storey"], ["shape", "One shape"]]
 const REPEAT_DIRS := [["up", "Up"], ["x", "Along X"], ["z", "Along Z"]]
 
 var ws    ## the workshop (workshop.gd)
@@ -123,7 +123,11 @@ var window_size := WINDOW
 var frame_on := true
 var glass_on := true
 ## Repeat: what, which way, how many, the gap between copies, and a storey's plates.
-var rep_what := "shape"
+var rep_what := "building"
+var _rep_y := 0        # the layer clicked: which storey One storey means
+var _rep_key := ""     # what the boxes below are for
+var _rep_boxes := []   # where the copies will land: [lo, hi] of each, cells
+var _rep_says := ""
 var rep_dir := "up"
 var rep_times := 1
 var rep_gap := 0
@@ -241,6 +245,7 @@ var shell_params := {"generator": "shell", "seed": 1, "width": 44, "depth": 28, 
 var _slope_cache := {}
 var _repeat_label: Label
 var _rep_lo_spin: SpinBox
+var _rep_gap_row: Control
 var _rep_hi_spin: SpinBox
 var _door_box: VBoxContainer
 var _window_box: VBoxContainer
@@ -708,24 +713,35 @@ static func glass_paint() -> Vector2i:
 # Repeat: storeys and bays (Docs/BuildTools.md section 6)
 # ---------------------------------------------------------------------------
 
-## Copy what Repeat has (`rep_what`: the picked shape, or the storey rep_lo..rep_hi) `times`
-## times `dir` ("up", "x", "z"), `gap` cells apart. One undo. Returns how many copies of
-## shapes, openings and plain bricks were made.
+## Copy what Repeat has (`rep_what`: a building, a storey of it, a shape) `times` times `dir`
+## ("up", "x", "z"), `gap` cells apart. Up, a building stays one building, taller, and what
+## stands on it rises. One undo. Returns how many things were copied.
 func repeat(dir: String, times: int, gap: int) -> int:
-	var g := _repeat_group()
+	var g := _repeat_group(dir)
 	if g.is_empty() or times < 1:
 		return 0
 	var axis := 1 if dir == "up" else (0 if dir == "x" else 2)
 	var lo: Vector3i = g.lo
 	var hi: Vector3i = g.hi
+	var plan: Dictionary = g.get("plan", {})
 	var span := hi[axis] - lo[axis] + 1 + gap
+	var first := span
+	if not plan.is_empty():
+		span = int(g.band)
+		first = int(g.next) - lo.y
 	var rec := _begin()
 	rec.laid = []
+	rec.places = (ws.recipe.placements as Array).duplicate(true)
+	rec.struct = (ws._spaces.record() as Dictionary).duplicate(true)
 	var n := 0
+	var skipped := 0
 	ws._batch = true
-	for k in range(1, times + 1):
+	if not plan.is_empty():
+		_raise_building(rec, g, first, span, times)
+		n += 1
+	for k in times:
 		var d := Vector3i.ZERO
-		d[axis] = span * k
+		d[axis] = first + span * k
 		for sh in g.shapes:
 			_add_into(rec, BrickShapes.shifted(sh, d))
 			n += 1
@@ -733,67 +749,221 @@ func repeat(dir: String, times: int, gap: int) -> int:
 			_open_into(rec, BrickShapes.shifted(op, d))
 			n += 1
 		ws._batch = true
-		for b in g.bricks:
-			var at: Vector3i = b[1] + d
-			if ws.lay_part(String(b[0]), at, int(b[2]), int(b[3]), int(b[4])):
-				rec.laid.append([b[0], _plain(at), b[2], b[3], b[4]])
-				n += 1
+		var got := _copy_bricks(rec, g, d)
+		n += int(got.x)
+		skipped += int(got.y)
+		for p in g.places:
+			ws.recipe.placements.append(AssetPlacements.make(str(p.asset), BuildRecipe.cell_from(p.cell) + d,
+					int(p.get("turn", 0))))
+			n += 1
+		_copy_rooms(g.rooms, d)
 	ws._batch = false
 	_end(rec)
+	ws._spaces.edited()
+	say("%d sideways brick%s left out: the move misses their stud grid." % [skipped, "" if skipped == 1 else "s"]
+			if skipped > 0 else "")
+	_rep_key = ""
 	return n
 
 
-## What Repeat copies: {shapes, openings, bricks ([part, cell, colour, mat, role]), lo, hi
-## (the box round it all, in cells)}, or empty for nothing.
-func _repeat_group() -> Dictionary:
-	var g := {"shapes": [], "openings": [], "bricks": [], "lo": Vector3i(1 << 30, 1 << 30, 1 << 30),
-			"hi": -Vector3i(1 << 30, 1 << 30, 1 << 30)}
+## A building made taller: its plan deeper, the cuts in what is copied made again in each new
+## storey, and what stands on top lifted clear.
+func _raise_building(rec: Dictionary, g: Dictionary, first: int, span: int, times: int) -> void:
+	var plan: Dictionary = g.plan
+	var rise := span * times
+	var up := Vector3i(0, rise, 0)
+	for o in g.above:
+		rec.before[int(o.id)] = o
+		_take_up(o)
+	for b in g.above_bricks:
+		var rid: int = ws.find_brick(String(b[0]), b[1])
+		if rid >= 0:
+			rec.hand.append([b[0], _plain(b[1]), b[2], b[3], b[4]])
+			ws._remove_rid(rid)
+	rec.before[int(plan.id)] = plan
+	_take_up(plan)
+	var next: Dictionary = plan.duplicate(true)
+	next.depth = int(plan.depth) + rise
+	next.bricks = []
+	var cuts: Array = next.cuts
+	for k in times:
+		for cut in plan.cuts:
+			var ys := BrickShapes.solid_cells(cut).keys()
+			if ys.is_empty():
+				continue
+			var low: int = (ys.reduce(func(m: Vector3i, c: Vector3i) -> Vector3i: return c if c.y < m.y else m) as Vector3i).y
+			if low >= int(g.lo.y) and low <= int(g.hi.y):
+				cuts.append(BrickShapes.shifted(cut, Vector3i(0, first + span * k, 0)))
+	_lay(next)
+	ws._batch = true
+	for o in g.above:
+		_lay(BrickShapes.shifted(o, up))
+	ws._batch = true
+	for b in g.above_bricks:
+		var at: Vector3i = b[1] + up
+		if ws.lay_part(String(b[0]), at, int(b[2]), int(b[3]), int(b[4])):
+			rec.laid.append([b[0], _plain(at), b[2], b[3], b[4], 0])
+
+
+## A copy of the group's plain bricks, `d` on, welds and all. Returns (laid, left out).
+func _copy_bricks(rec: Dictionary, g: Dictionary, d: Vector3i) -> Vector2i:
+	var fo: Dictionary = ws._frame_offsets(ws.recipe, d)
+	var made := {}
+	var left := 0
+	var list: Array = g.bricks
+	for i in list.size():
+		var b: Array = list[i]
+		var rf := int(b[5])
+		var af := 0
+		var move := d
+		if rf != 0:
+			af = ws._asm_frame_for(ws.recipe.frame_rotation(rf), ws.recipe.frame_ticks(rf))
+			if not fo.has(rf) or af < 0:
+				left += 1
+				continue
+			move = fo[rf]
+		var at: Vector3i = b[1] + move
+		if ws.lay_part(String(b[0]), at, int(b[2]), int(b[3]), int(b[4]), af):
+			rec.laid.append([b[0], _plain(at), b[2], b[3], b[4], af])
+			made[i] = ws.recipe.size() - 1
+	for w in g.welds:
+		if made.has(w[0]) and made.has(w[1]):
+			ws.weld_rids(made[w[0]], made[w[1]])
+	return Vector2i(made.size(), left)
+
+
+## Rooms marked in what is copied, marked in the copy: the rooms are found again from the
+## bricks once they settle.
+func _copy_rooms(rooms: Array, d: Vector3i) -> void:
+	var rec: Dictionary = ws._spaces.record()
+	for r in rooms:
+		var c: Dictionary = (r as Dictionary).duplicate(true)
+		c.id = ws._spaces._next_id()
+		c.seed = _plain(BuildRecipe.cell_from(r.seed) + d)
+		c.floor_y = int(r.floor_y) + d.y
+		c.ceil_y = int(r.ceil_y) + d.y
+		c.columns = (r.columns as Array).map(func(q: Array) -> Array: return [int(q[0]) + d.x, int(q[1]) + d.z])
+		c.erase("lost")
+		(rec.spaces as Array).append(c)
+
+
+## What Repeat copies, or empty for nothing: {shapes, openings, bricks ([part, cell, colour,
+## mat, role, recipe frame]), welds (pairs into bricks), places, rooms, lo, hi (the box round
+## it all, in cells)}; for a building going up, {plan, band (plates a copy adds), next (the
+## layer the next storey starts on), above, above_bricks} too.
+func _repeat_group(dir: String = "up") -> Dictionary:
+	var g := {"shapes": [], "openings": [], "bricks": [], "welds": [], "places": [], "rooms": [], "above": [],
+			"above_bricks": [], "lo": Vector3i(1 << 30, 1 << 30, 1 << 30), "hi": -Vector3i(1 << 30, 1 << 30, 1 << 30)}
+	var sh := shape_of(selected)
 	if rep_what == "shape":
-		var sh := shape_of(selected)
 		if sh.is_empty():
 			return {}
 		if sh.has("opening"):
 			var op: Dictionary = sh.opening
 			g.openings.append(op)
-			var box := opening_box(op)
-			_grow(g, BrickShapes.solid_cells({"kind": "rect", "lie": op.lie, "a": [box[0].x, box[0].y],
-					"b": [box[1].x, box[1].y], "at": op.at, "depth": op.depth}))
+			var ob := opening_box(op)
+			_grow(g, BrickShapes.solid_cells({"kind": "rect", "lie": op.lie, "a": [ob[0].x, ob[0].y],
+					"b": [ob[1].x, ob[1].y], "at": op.at, "depth": op.depth}))
 		else:
 			g.shapes.append(sh)
 			_grow(g, BrickShapes.solid_cells(sh))
 		return g
-	# A storey: the shapes wholly inside it, and every other brick inside it.
-	var lo := mini(rep_lo, rep_hi)
-	var hi := maxi(rep_lo, rep_hi)
+	var all := Rect2i(-(1 << 20), -(1 << 20), 1 << 21, 1 << 21)
+	if sh.is_empty():
+		# Nothing picked: a storey by its plates, across the whole build.
+		if rep_what == "building":
+			return {}
+		return _gather(g, mini(rep_lo, rep_hi), maxi(rep_lo, rep_hi), all, -1, 1 << 30)
+	var box := {"lo": Vector3i(1 << 30, 1 << 30, 1 << 30), "hi": -Vector3i(1 << 30, 1 << 30, 1 << 30)}
+	_grow(box, BrickShapes.solid_cells(sh))
+	var y0: int = box.lo.y
+	var y1: int = box.hi.y
+	var area := Rect2i(box.lo.x - 3, box.lo.z - 3, box.hi.x - box.lo.x + 7, box.hi.z - box.lo.z + 7)
+	if String(sh.kind) == "plan" and int(sh.get("storey", 0)) > 0:
+		var pitch := int(sh.storey) + maxi(1, int(sh.get("floor", 1)))
+		var storeys := storeys_of(sh)
+		var at := int(sh.at)
+		if dir == "up":
+			y1 = at + storeys * pitch - 1
+			if rep_what == "storey":
+				y0 = at + clampi(floori(float(_rep_y - at) / pitch), 0, storeys - 1) * pitch
+				y1 = y0 + pitch - 1
+			g.plan = sh
+			g.band = y1 - y0 + 1
+			g.next = at + storeys * pitch
+			return _gather(g, y0, y1, area, int(sh.id), at + storeys * pitch)
+		if rep_what == "storey":
+			y0 = at + clampi(floori(float(_rep_y - at) / pitch), 0, storeys - 1) * pitch
+			y1 = y0 + pitch - 1
+	elif rep_what == "storey":
+		y0 = mini(rep_lo, rep_hi)
+		y1 = maxi(rep_lo, rep_hi)
+	return _gather(g, y0, y1, area, -1, 1 << 30)
+
+
+## Fill `g` with what lies between layers y0 and y1 within `area` (x, z): the shapes wholly in
+## it, every other brick, furniture, rooms. `skip`: a shape stood in for (the building being
+## raised). From layer `top` up, what stands on it goes to `above` instead.
+func _gather(g: Dictionary, y0: int, y1: int, area: Rect2i, skip: int, top: int) -> Dictionary:
 	var copied := {}
+	var hit := func(x: int, z: int) -> bool: return area.has_point(Vector2i(x, z))
 	for sh in shapes():
-		var cells := BrickShapes.solid_cells(sh)
-		var inside := true
-		for c in cells:
-			if c.y < lo or c.y > hi:
-				inside = false
-				break
-		if inside and not cells.is_empty():
+		if int(sh.id) == skip:
+			continue
+		var box := {"lo": Vector3i(1 << 30, 1 << 30, 1 << 30), "hi": -Vector3i(1 << 30, 1 << 30, 1 << 30)}
+		_grow(box, BrickShapes.solid_cells(sh))
+		if not hit.call(box.lo.x, box.lo.z) or not hit.call(box.hi.x, box.hi.z):
+			continue
+		if box.lo.y >= top:
+			g.above.append(sh)
+			copied[int(sh.id)] = true
+		elif box.lo.y >= y0 and box.hi.y <= y1:
 			g.shapes.append(sh)
 			copied[int(sh.id)] = true
+			_grow(g, BrickShapes.solid_cells(sh))
+	var index := {}
 	for i in ws.recipe.size():
-		if ws.recipe.frame_of(i) != 0:
-			continue
+		var part: String = ws.recipe.part_of(i)
 		var c: Vector3i = ws.recipe.cell_of(i)
-		var size := BrickPalette.size_of(ws.recipe.part_of(i))
-		if c.y < lo or c.y + size.y - 1 > hi:
+		var rf: int = ws.recipe.frame_of(i)
+		var size := BrickPalette.size_of(part)
+		var at := c
+		if rf != 0:
+			# Sideways: where it is on the upright grid.
+			var af: int = ws._asm_frame_for(ws.recipe.frame_rotation(rf), ws.recipe.frame_ticks(rf))
+			if af < 0:
+				continue
+			at = ws._cell_in(ws.asm.frames[0], ws.world.get_chunk_transform(ws.asm.frames[af]) * BrickWorld.grid_to_world(c))
+			size = Vector3i.ONE
+		var entry := [part, c, ws.recipe.colour_of(i), ws.recipe.material_of(i), ws.recipe.role_of(i), rf]
+		if not hit.call(at.x, at.z):
 			continue
-		if copied.has(owner_of(ws.recipe.part_of(i), c)):
+		var who := owner_of(part, c) if rf == 0 else -1
+		if (who == skip and skip >= 0) or copied.has(who):
 			continue
-		g.bricks.append([ws.recipe.part_of(i), c, ws.recipe.colour_of(i), ws.recipe.material_of(i), ws.recipe.role_of(i)])
-		_grow(g, {c: true, c + size - Vector3i.ONE: true})
-	for sh in g.shapes:
-		_grow(g, BrickShapes.solid_cells(sh))
-	if g.shapes.is_empty() and g.bricks.is_empty():
+		if at.y >= top and rf == 0:
+			g.above_bricks.append(entry)
+		elif at.y >= y0 and at.y + size.y - 1 <= y1:
+			index[i] = (g.bricks as Array).size()
+			g.bricks.append(entry)
+			_grow(g, {at: true, at + size - Vector3i.ONE: true})
+	for k in ws.recipe.weld_count():
+		var w: Vector2i = ws.recipe.weld_blocks(k)
+		if index.has(w.x) and index.has(w.y):
+			g.welds.append([index[w.x], index[w.y]])
+	for p in ws.recipe.placements:
+		var c := BuildRecipe.cell_from(p.cell)
+		if hit.call(c.x, c.z) and c.y >= y0 and c.y <= y1:
+			g.places.append(p)
+	for r in ws._spaces.record().spaces:
+		var c := BuildRecipe.cell_from(r.seed)
+		if hit.call(c.x, c.z) and c.y >= y0 and c.y <= y1:
+			g.rooms.append(r)
+	if (g.shapes as Array).is_empty() and (g.bricks as Array).is_empty() and not g.has("plan"):
 		return {}
-	# Up, a storey is its own height, whatever is built in it.
-	g.lo.y = lo
-	g.hi.y = hi
+	# A storey is its own height, whatever is built in it.
+	g.lo = Vector3i(g.lo.x if g.lo.x < 1 << 29 else area.position.x + 3, y0, g.lo.z if g.lo.z < 1 << 29 else area.position.y + 3)
+	g.hi = Vector3i(g.hi.x if g.hi.x > -(1 << 29) else area.end.x - 4, y1, g.hi.z if g.hi.z > -(1 << 29) else area.end.y - 4)
 	return g
 
 
@@ -803,29 +973,85 @@ static func _grow(g: Dictionary, cells: Dictionary) -> void:
 		g.hi = Vector3i(maxi(g.hi.x, c.x), maxi(g.hi.y, c.y), maxi(g.hi.z, c.z))
 
 
-## Repeat: a click picks the shape under it, and sets the storey to its height (or a
-## plain brick's own).
+## Repeat: a click picks what is under it. Any brick of a building picks the building
+## (not with One shape), and the storey clicked; else its shape, or a plain brick's course.
 func _repeat_click() -> void:
 	_select_click()
-	var sh := shape_of(selected)
 	var ray := _ray()
 	var hit: Dictionary = ws._first_hit(ray[0], ray[1])
+	if hit.is_empty() or hit.frame != ws.asm.frames[0]:
+		return
+	var c: Vector3i = ws._cell_in(ws.asm.frames[0], hit.point)
+	_repeat_pick(c)
+
+
+## What a click on cell `c` picks.
+func _repeat_pick(c: Vector3i) -> void:
+	_rep_y = c.y
+	if rep_what != "shape":
+		for sh in shapes():
+			if String(sh.kind) != "plan" or int(sh.get("storey", 0)) <= 0:
+				continue
+			var a := BrickShapes._v2(sh.a)
+			var b := BrickShapes._v2(sh.b)
+			if c.x >= mini(a.x, b.x) - 2 and c.x <= maxi(a.x, b.x) + 2 and c.z >= mini(a.y, b.y) - 2 \
+					and c.z <= maxi(a.y, b.y) + 2 and c.y >= int(sh.at) and c.y < int(sh.at) + int(sh.depth):
+				selected = int(sh.id)
+				break
+	var sh := shape_of(selected)
 	if not sh.is_empty():
-		var cells := BrickShapes.solid_cells(sh)
 		var lo := 1 << 30
 		var hi := -(1 << 30)
-		for c in cells:
-			lo = mini(lo, c.y)
-			hi = maxi(hi, c.y)
+		for k in BrickShapes.solid_cells(sh):
+			lo = mini(lo, k.y)
+			hi = maxi(hi, k.y)
 		rep_lo = lo
 		rep_hi = hi
-	elif not hit.is_empty() and hit.frame == ws.asm.frames[0]:
-		var rid: int = ws._recipe_id_at(0, hit.block)
+	else:
+		var rid := _rid_at(c)
 		if rid >= 0:
 			rep_lo = ws.recipe.cell_of(rid).y
 			rep_hi = rep_lo + BrickPalette.size_of(ws.recipe.part_of(rid)).y - 1
 	_rep_lo_spin.set_value_no_signal(rep_lo)
 	_rep_hi_spin.set_value_no_signal(rep_hi)
+
+
+## Where the copies will land, and what to say about them: worked out again when anything
+## about them changes.
+func _repeat_preview() -> void:
+	var key := "%s|%s|%s|%s|%s|%s|%s|%s|%s" % [selected, rep_what, rep_dir, rep_times, rep_gap, rep_lo, rep_hi, _rev,
+			ws.recipe.size()]
+	if key == _rep_key:
+		return
+	_rep_key = key
+	_rep_boxes = []
+	var g := _repeat_group(rep_dir)
+	if g.is_empty():
+		_rep_says = "Click a building, or any brick of what to repeat."
+		return
+	var axis := 1 if rep_dir == "up" else (0 if rep_dir == "x" else 2)
+	var lo: Vector3i = g.lo
+	var hi: Vector3i = g.hi
+	var plan: Dictionary = g.get("plan", {})
+	var span := hi[axis] - lo[axis] + 1 + rep_gap
+	var first := span
+	if not plan.is_empty():
+		span = int(g.band)
+		first = int(g.next) - lo.y
+		hi.y = lo.y + span - 1
+	for k in rep_times:
+		var d := Vector3i.ZERO
+		d[axis] = first + span * k
+		_rep_boxes.append([lo + d, hi + d])
+	if plan.is_empty():
+		_rep_says = "Copies %d brick%s and %d shape%s, %d time%s." % [(g.bricks as Array).size(),
+				"" if (g.bricks as Array).size() == 1 else "s", (g.shapes as Array).size(),
+				"" if (g.shapes as Array).size() == 1 else "s", rep_times, "" if rep_times == 1 else "s"]
+		return
+	var pitch := int(plan.storey) + maxi(1, int(plan.get("floor", 1)))
+	var each := floori(float(span) / pitch)
+	_rep_says = "%d storey%s to %d: its windows, stairs, furniture and all." % [each * rep_times,
+			"" if each * rep_times == 1 else "s", storeys_of(plan) + each * rep_times]
 
 
 func _rid_at(c: Vector3i) -> int:
@@ -975,8 +1201,8 @@ func _take_up(sh: Dictionary) -> void:
 		_take_part(String(b[0]), BuildRecipe.cell_from(b[1]))
 
 
-func _take_part(part: String, cell: Vector3i) -> bool:
-	var rid: int = ws.find_brick(part, cell)
+func _take_part(part: String, cell: Vector3i, af: int = 0) -> bool:
+	var rid: int = ws.find_brick(part, cell, af)
 	if rid < 0:
 		return false
 	# A shape's bricks have no edit of their own: the shape's undo puts them back.
@@ -1024,6 +1250,13 @@ func _apply(rec: Dictionary) -> Dictionary:
 	var kept: bool = rec.get("kept", false)
 	var inv := {"before": {}, "hand": (rec.get("laid", []) as Array).duplicate(true),
 			"laid": (rec.get("hand", []) as Array).duplicate(true), "kept": kept}
+	# A repeat's furniture and rooms: the lists as they were, swapped.
+	if rec.has("places"):
+		inv.places = (ws.recipe.placements as Array).duplicate(true)
+		ws.recipe.placements = (rec.places as Array).duplicate(true)
+	if rec.has("struct"):
+		inv.struct = (ws._spaces.record() as Dictionary).duplicate(true)
+		ws.recipe.meta["structure"] = (rec.struct as Dictionary).duplicate(true)
 	for id in rec.before:
 		var now := shape_of(int(id))
 		if now.is_empty():
@@ -1034,7 +1267,7 @@ func _apply(rec: Dictionary) -> Dictionary:
 	# Everything the edit laid comes up first, then what was there goes back: a door's frame
 	# stands where its wall's bricks will go.
 	for b in rec.get("laid", []):
-		_take_part(String(b[0]), BuildRecipe.cell_from(b[1]))
+		_take_part(String(b[0]), BuildRecipe.cell_from(b[1]), int(b[5]) if (b as Array).size() > 5 else 0)
 	for id in rec.before:
 		var now := shape_of(int(id))
 		if not now.is_empty() and not kept:
@@ -1050,7 +1283,8 @@ func _apply(rec: Dictionary) -> Dictionary:
 		for b in was.bricks:
 			ws.lay_part(String(b[0]), BuildRecipe.cell_from(b[1]), int(was.colour), int(was.mat), int(was.get("role", 0)))
 	for h in rec.get("hand", []):
-		ws.lay_part(String(h[0]), BuildRecipe.cell_from(h[1]), int(h[2]), int(h[3]), int(h[4]))
+		ws.lay_part(String(h[0]), BuildRecipe.cell_from(h[1]), int(h[2]), int(h[3]), int(h[4]),
+				int(h[5]) if (h as Array).size() > 5 else 0)
 	ws._batch = false
 	ws._after_edit()
 	if selected >= 0 and shape_of(selected).is_empty():
@@ -1510,12 +1744,12 @@ func _build_options() -> void:
 	rail.options.add_child(_repeat_box)
 	_repeat_label = Label.new()
 	_repeat_box.add_child(_repeat_label)
-	rail.pictures(_repeat_box, "Repeat", REPEAT_WHAT, func(id: String) -> void: rep_what = id, rep_what, 2)
+	rail.pictures(_repeat_box, "Repeat", REPEAT_WHAT, func(id: String) -> void: rep_what = id, rep_what, 3)
 	_rep_lo_spin = _spin(_repeat_box, "storey from (plate)", 0, 2000, rep_lo, func(v: float) -> void: rep_lo = int(v))
 	_rep_hi_spin = _spin(_repeat_box, "to (plate)", 0, 2000, rep_hi, func(v: float) -> void: rep_hi = int(v))
 	rail.pictures(_repeat_box, "Which way", REPEAT_DIRS, func(id: String) -> void: rep_dir = id, rep_dir, 3)
 	_spin(_repeat_box, "times", 1, 50, rep_times, func(v: float) -> void: rep_times = int(v))
-	_spin(_repeat_box, "gap (studs, or plates up)", 0, 100, rep_gap, func(v: float) -> void: rep_gap = int(v))
+	_rep_gap_row = _spin(_repeat_box, "gap (studs, or plates up)", 0, 100, rep_gap, func(v: float) -> void: rep_gap = int(v)).get_parent()
 	_button(_repeat_box, "Repeat", func() -> void: repeat(rep_dir, rep_times, rep_gap))
 
 	_select_box = VBoxContainer.new()
@@ -2819,11 +3053,13 @@ func process() -> void:
 	_window_box.visible = cut_kind == "window"
 	_repeat_box.visible = on == "repeat"
 	if on == "repeat":
-		var sh := shape_of(selected)
-		_repeat_label.text = ("Click a brick to pick what to repeat." if sh.is_empty()
-				else "Picked: %s%s." % [sh.kind, " (a door or window: it repeats with its cut)" if sh.has("opening") else ""])
-		_rep_lo_spin.get_parent().visible = rep_what == "storey"
-		_rep_hi_spin.get_parent().visible = rep_what == "storey"
+		_repeat_preview()
+		_repeat_label.text = _rep_says
+		var plain: bool = rep_what == "storey" and String(shape_of(selected).get("kind", "")) != "plan"
+		_rep_lo_spin.get_parent().visible = plain
+		# A building going up lands on its own top: no gap to set.
+		_rep_gap_row.visible = not (rep_dir == "up" and String(shape_of(selected).get("kind", "")) == "plan")
+		_rep_hi_spin.get_parent().visible = plain
 	_select_box.visible = on == "select" and ws._selected < 0
 	_sel_thick.visible = String(shape_of(selected).get("kind", "")) in ["polyline", "plan"]
 	_lie_box.visible = drawing and makes == "solid"
@@ -3066,6 +3302,12 @@ func _draw() -> void:
 	# A set level's grid, and a plan being drawn; aiming, the workshop's own grid says it.
 	if tool == "draw" and (sketch_level >= 0 or not _draft.is_empty()):
 		any = _draw_level(any)
+	if tool == "repeat" and not _rep_boxes.is_empty():
+		if not any:
+			_im.surface_begin(Mesh.PRIMITIVE_LINES)
+			any = true
+		for box in _rep_boxes:
+			_wire(box[0], box[1])
 	if tool in ["select", "repeat"] and selected >= 0:
 		var sh := shape_of(selected)
 		if not sh.is_empty():
@@ -3075,6 +3317,21 @@ func _draw() -> void:
 	if any:
 		_im.surface_end()
 	_lines.transform = ws.world.get_chunk_transform(ws.asm.frames[0])
+
+
+## A box of cells in lines: where a copy will land.
+func _wire(lo: Vector3i, hi: Vector3i) -> void:
+	var unit := Vector3(BrickPalette.STUD_M, BrickPalette.PLATE_M, BrickPalette.STUD_M)
+	var a := Vector3(lo) * unit
+	var b := Vector3(hi + Vector3i.ONE) * unit
+	var col := Color(0.5, 1.0, 0.55, 0.85)
+	var c := [Vector3(a.x, a.y, a.z), Vector3(b.x, a.y, a.z), Vector3(b.x, a.y, b.z), Vector3(a.x, a.y, b.z),
+			Vector3(a.x, b.y, a.z), Vector3(b.x, b.y, a.z), Vector3(b.x, b.y, b.z), Vector3(a.x, b.y, b.z)]
+	for e in [[0, 1], [1, 2], [2, 3], [3, 0], [4, 5], [5, 6], [6, 7], [7, 4], [0, 4], [1, 5], [2, 6], [3, 7]]:
+		_im.surface_set_color(col)
+		_im.surface_add_vertex(c[e[0]])
+		_im.surface_set_color(col)
+		_im.surface_add_vertex(c[e[1]])
 
 
 ## Sketch on a level: that level's grid, faint, and the plan drawn so far.
