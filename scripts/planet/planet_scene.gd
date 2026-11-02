@@ -2346,12 +2346,14 @@ func _run_debris_gate() -> void:
 	walker.global_position = st.global_transform * Vector3(0.0, st.height + 400.0, 0.0)
 	await _frames(5)
 	_check("left: its bricks freed", system.station != st and st.chunk < 0)
+	_check("and from afar it looks it: what it last drew, not its whole shell", st.wreck != null and not st.shell.visible)
 	walker.global_position = st.global_transform * Vector3(0.0, st.height + 60.0, 0.0)
 	t0 = Time.get_ticks_msec()
 	while not st.bricked and Time.get_ticks_msec() - t0 < 20000:
 		await _frames(1)
 	var n2 := st.bricks.get_alive_block_count(st.chunk) if st.chunk >= 0 else -1
 	_check("back: laid as it was left, what drifted off still gone", n2 == n1, "%d" % n2)
+	_check("its far look gone once its bricks are in", st.wreck == null and not st.shell.visible)
 	# Far off it shrinks rather than pops, and grows back the same way.
 	var off := d.node.global_position.distance_to(_anchor())
 	var seen := system.drift_seen
@@ -2373,6 +2375,18 @@ func _run_debris_gate() -> void:
 	system.drift_home = 0.0
 	await _frames(5)
 	_check("out of reach it is gone", system.drifts.is_empty())
+	# As a save leaves it: damage known, nothing laid this run.
+	walker.global_position = st.global_transform * Vector3(0.0, st.height + 400.0, 0.0)
+	await _frames(5)
+	st.wreck.free()
+	st.wreck = null
+	st.shell.visible = true
+	st.process_mode = Node.PROCESS_MODE_INHERIT
+	t0 = Time.get_ticks_msec()
+	while st.wreck == null and Time.get_ticks_msec() - t0 < 20000:
+		await _frames(1)
+	_check("a save's damage: laid once on the way in, for its far look", st.wreck != null and not st.shell.visible and st.chunk < 0,
+			"%.1f s" % ((Time.get_ticks_msec() - t0) / 1000.0))
 	print("[planet] debris gate: frames: worst %.1f ms; over 40 ms in play: %d %s" % [_worst_ms, _play_hitches.size(), _play_hitches])
 	print("[planet] gate: %d ok, %d FAIL" % [_ok, _fail])
 	get_tree().quit(1 if _fail > 0 else 0)

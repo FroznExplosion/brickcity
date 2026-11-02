@@ -511,6 +511,8 @@ func _prepare_near(p: Vector3) -> void:
 			st.prepare()
 			print("[system] %s prepared on the way in: %.1f ms" % [st.data.orbital_name, st.template_ms])
 			return
+		if st.is_station() and st._template >= 0 and (st.global_position - p).length() < PREPARE_AT:
+			st.lay_wreck()
 
 
 ## Every frame but the player's, and the star, where the clock has them.

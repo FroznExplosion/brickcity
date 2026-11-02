@@ -34,6 +34,10 @@ var data: OrbitalData
 ## Inside this of its node the player is on it (a ship's is smaller).
 var field := FIELD
 var look: Node3D
+## Damaged, its far look: the bands it last drew, in place of its whole shell.
+var wreck: Node3D
+## Laying its bricks only to leave `wreck` (lay_wreck).
+var _wreck_only := false
 var gravity_centre: Node3D
 var brick_material: ShaderMaterial
 ## The module's corner, in the station's frame: its floor at y 0, centred.
@@ -211,6 +215,7 @@ func prepare() -> void:
 ## The player is on it: its module laid in bricks (drawn a band a frame, then
 ## solid), the shell's boxes standing in until then.
 func activate() -> void:
+	_wreck_only = false
 	if not is_station() or chunk >= 0:
 		return
 	prepare()
@@ -255,8 +260,16 @@ func deactivate() -> void:
 	if _collision != null:
 		_collision.free_bodies()
 		_collision = null
+	# Thrown as crumbs or gone as pieces, all gone from what is laid next.
+	_dead = bricks.get_dead_blocks(chunk)
+	_dead.append_array(bricks.get_detached_blocks(chunk))
 	if _brick_node != null:
-		_brick_node.queue_free()
+		if bricked and not _dead.is_empty():
+			_drop_wreck()
+			wreck = _brick_node
+			wreck.reparent(look, false)
+		else:
+			_brick_node.queue_free()
 		_brick_node = null
 	if crumbs != null:
 		crumbs.queue_free()
@@ -264,13 +277,10 @@ func deactivate() -> void:
 	_band_nodes.clear()
 	_remesh = PackedInt32Array()
 	_solve_due = false
-	# Thrown as crumbs or gone as pieces, all gone from what is laid next.
-	_dead = bricks.get_dead_blocks(chunk)
-	_dead.append_array(bricks.get_detached_blocks(chunk))
 	bricks.release_chunk(chunk)
 	chunk = -1
 	bricked = false
-	shell.visible = true
+	shell.visible = wreck == null
 	shell_body.collision_layer = Layers.STRUCTURE
 
 
@@ -281,6 +291,20 @@ func gone() -> PackedInt32Array:
 	var out := bricks.get_dead_blocks(chunk)
 	out.append_array(bricks.get_detached_blocks(chunk))
 	return out
+
+
+func _drop_wreck() -> void:
+	if wreck != null:
+		wreck.queue_free()
+		wreck = null
+
+
+## A save's damage, never laid this run: its bricks laid once, for `wreck`.
+func lay_wreck() -> void:
+	if _dead.is_empty() or wreck != null or chunk >= 0 or not can_process():
+		return
+	activate()
+	_wreck_only = true
 
 
 ## As a save left it, before its bricks are laid.
@@ -422,8 +446,13 @@ func _process(_delta: float) -> void:
 		_draw_band(_band_next)
 		_band_next += 1
 	elif _band_jobs.is_empty():
-		_collision = BuildingCollision.new(bricks, chunk, get_world_3d().space, global_transform * frame, true)
 		bricked = true
+		if _wreck_only:
+			_wreck_only = false
+			deactivate()
+			return
+		_collision = BuildingCollision.new(bricks, chunk, get_world_3d().space, global_transform * frame, true)
+		_drop_wreck()
 		shell.visible = false
 		shell_body.collision_layer = 0
 
