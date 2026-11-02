@@ -139,7 +139,7 @@ func aim_ray(from: Vector3, dir: Vector3) -> void:
 	var hit: Dictionary = ws._first_hit(from, dir)
 	if not hit.is_empty() and int(hit.frame) == ws.chunk:
 		var c: Vector3i = ws._cell_in(ws.chunk, hit.point)
-		var y := c.y
+		var y: int = 1 if hit.has("floor") else c.y
 		while y < c.y + 400 and ws.world.is_solid(ws.chunk, Vector3i(c.x, y, c.z)):
 			y += 1
 		target = Vector3i(c.x, y, c.z)

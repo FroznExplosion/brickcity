@@ -182,7 +182,7 @@ func zoom(d: int) -> void:
 	var ray: Array = ws._mouse_ray()
 	var at := _under_cursor()
 	var far: float = (ray[0] as Vector3).distance_to(at)
-	_cam.global_position = _cam.global_position + (ray[1] as Vector3) * d * clampf(far * 0.14, 0.25, 8.0)
+	_cam.global_position = _cam.global_position + (ray[1] as Vector3) * d * clampf(far * 0.14, 0.25, 60.0)
 
 
 ## What the cursor is on: the build, else the floor, else ten metres out.
