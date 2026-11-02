@@ -82,12 +82,12 @@ uniform float print_fade_end = 20.0;
 // distance: sub-pixel lines are exactly what anisotropy stands in for.
 uniform float print_anisotropy : hint_range(0.0, 0.9) = 0.55;
 
-// The layers as a TEXTURE (print_bead, tools/make_print_beads.gd; Docs/PbrWood.md
-// 7): each layer's own relief, shade and finish, every one different, and
-// each wandering along its length the way an extruded line does. For the
-// filaments that have a slice (PS_BEAD_SLICE: PLA today), on their sides;
-// the rest, and every top, are drawn by the rules below. Off: PLA's sides
-// too. `bead_tex_relief` scales the baked slopes (1 is the surface's own
+// The beads as a TEXTURE (print_bead, tools/make_print_beads.gd; Docs/PbrWood.md
+// 7): each layer or line its own relief, shade and finish, every one
+// different, and each wandering along its length the way an extruded line
+// does. For the filaments that have slices (PS_BEAD_SLICE: PLA today) -- a
+// side's layers, a top's lines, a bottom's first layer, walls and infill
+// alike; the rest are drawn by the rules below. Off: PLA's too. `bead_tex_relief` scales the baked slopes (1 is the surface's own
 // tilt), `bead_tex_shade` the baked shading.
 uniform bool print_bead_texture = true;
 uniform float bead_tex_relief : hint_range(0.0, 2.0) = 0.45;
@@ -239,30 +239,37 @@ vec2 ps_face_k(int face) {
     return vec2(0.05, 0.05);
 }
 
-// The baked layers: one slice a filament, 32 layers tall and 64 long, the
-// channels as tools/make_print_beads.gd writes them (slope along, slope
-// across, shade, roughness). These constants are its.
+// The baked beads: three slices a filament (side, top, bottom), 32 beads tall
+// and 64 long, the channels as tools/make_print_beads.gd writes them (slope
+// along, slope across, shade, roughness). These constants are its.
 global uniform sampler2DArray print_bead : filter_linear_mipmap_anisotropic, repeat_enable;
 const float PS_BEAD_LONG = 64.0;
 const float PS_BEAD_TALL = 32.0;
 const float PS_BEAD_SLOPE = 1.5;
 const float PS_BEAD_SHADE = 0.8;
-// Which slice each material's sides read, -1 the drawn rules (MAT_ order).
+// Each material's first slice -- its side; its top the next, its bottom the
+// one after -- or -1, the drawn rules (MAT_ order).
 const int PS_BEAD_SLICE[14] = int[](0, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1);
 
-// A side's layers from the baked slice. `t` counts layers up the face (t_d
-// as ps_beads), `u` metres along it; `across` is the view-space way up the
-// layers. The face's seed moves it to its own place in the tile -- by whole
-// layers up, so a groove stays at every whole t, where a brick's layers
-// start and stop.
-void ps_bead_tex(int slice, float t, float t_d, float u, int mat, float seed, float fade,
-        vec3 dpx, vec3 dpy, vec3 across, float k_rough,
+// Beads from the baked slice. `t` counts them across the face (t_d as
+// ps_beads), `u` metres along them; `across` is the view-space way t grows.
+// A slice has a groove at every whole bead: a side's layers start and stop
+// there (a brick's base), a top's or bottom's lines are CENTRED there (the
+// rules': the first wall loop runs round the edge at t 0), so those are
+// moved half a bead. The face's seed moves it to its own place in the tile,
+// by whole beads across. A bottom's slice is drawn as on smooth PEI; the
+// other beds scale it by their own share of the bead (ps_face_k).
+void ps_bead_tex(int slice, int face, float t, float t_d, float u, int mat, float seed, float fade,
+        vec3 dpx, vec3 dpy, vec3 across, float k_rough, float junction, vec2 fk,
         inout vec3 albedo, inout vec3 normal, inout float rough) {
-    float lh = ps_layer(mat);
-    vec2 qd = vec2(u / (lh * PS_BEAD_LONG), t_d / PS_BEAD_TALL);
-    vec2 q = vec2(qd.x + fract(seed * 7.31), (t + floor(seed * PS_BEAD_TALL)) / PS_BEAD_TALL);
-    vec4 b = textureGrad(print_bead, vec3(q, float(slice)), dFdx(qd), dFdy(qd));
-    albedo *= mix(1.0, b.b / PS_BEAD_SHADE, fade * bead_tex_shade);
+    float bw = face == 0 ? ps_layer(mat) : ps_bead(face, mat);
+    float shift = face == 0 ? 0.0 : 0.5;
+    vec2 bed = face == 2 ? fk / vec2(0.35, 0.25) : vec2(1.0);
+    vec2 qd = vec2(u / (bw * PS_BEAD_LONG), t_d / PS_BEAD_TALL);
+    vec2 q = vec2(qd.x + fract(seed * 7.31),
+            (t + shift + floor(seed * PS_BEAD_TALL)) / PS_BEAD_TALL);
+    vec4 b = textureGrad(print_bead, vec3(q, float(slice + face)), dFdx(qd), dFdy(qd));
+    albedo *= mix(1.0, b.b / PS_BEAD_SHADE, fade * bead_tex_shade * bed.x);
     // Below a pixel a layer's relief only sparkles (ps_beads): the normal
     // gives up early, squared, and roughness takes what it drops.
     float aa = max(fwidth(t_d), 1e-5);
@@ -274,8 +281,11 @@ void ps_bead_tex(int slice, float t, float t_d, float u, int mat, float seed, fl
     float al = length(along);
     along = al > 1e-8 ? along / al : vec3(0.0);
     normal = normalize(normal - (across * slope.y + along * slope.x)
-            * bead_tex_relief * MAT_RELIEF[mat] * fade * relief_k);
-    rough += (b.a - 0.5) * fade + (1.0 - relief_k) * fade * k_rough;
+            * bead_tex_relief * MAT_RELIEF[mat] * fade * relief_k * bed.y);
+    rough += ((b.a - 0.5) * bed.y + (1.0 - relief_k) * k_rough) * fade;
+    // Where the infill meets the walls they never quite fuse: the rules'
+    // fine dark line (ps_beads).
+    albedo *= mix(1.0, layer_darken, junction * resolved * fade * MAT_GROOVE[mat] * fk.x);
 }
 
 // The beads. `t` counts them: fract(t) is where across a bead this is.
@@ -283,8 +293,8 @@ void ps_bead_tex(int slice, float t, float t_d, float u, int mat, float seed, fl
 // and the filter come from its screen-space gradient, so a spiral, whose `t`
 // steps by one where it wraps, passes the unwrapped version here (a step of
 // one changes nothing in fract, but everything in fwidth). Usually t again.
-// `u` is metres ALONG the beads, for the baked layers (ps_bead_tex; a side's
-// only, so anything on a top or bottom). `vertex` is view-space VERTEX;
+// `u` is metres ALONG the beads, for the baked ones (ps_bead_tex): continuous
+// where it can be, since its derivatives pick the texture's mip. `vertex` is view-space VERTEX;
 // `seed` is 0..1 per face, for the layer
 // wobble; `junction` 0..1 darkens where the infill meets the walls; `join`
 // 0..1 removes the groove where two beads are one path turning round.
@@ -307,9 +317,9 @@ void ps_beads(float t, float t_d, float u, int face, int mat, float dist, vec3 v
     if (fade <= 0.0) {
         return;
     }
-    if (face == 0 && print_bead_texture && PS_BEAD_SLICE[mat] >= 0 && glen > 1e-8) {
-        ps_bead_tex(PS_BEAD_SLICE[mat], t, t_d, u, mat, seed, fade, dpx, dpy, aniso_dir,
-                layer_relief * 0.5 * fk.y, albedo, normal, rough);
+    if (print_bead_texture && PS_BEAD_SLICE[mat] >= 0 && glen > 1e-8) {
+        ps_bead_tex(PS_BEAD_SLICE[mat], face, t, t_d, u, mat, seed, fade, dpx, dpy, aniso_dir,
+                layer_relief * 0.5 * fk.y, junction, fk, albedo, normal, rough);
         return;
     }
     float ph = fract(t);

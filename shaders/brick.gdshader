@@ -357,6 +357,13 @@ void fragment() {
     // layers, so they line up with the faces either side.
     if (print_lines_enabled && ps_printed(mat) && (facet || (v_face.x > 0.0 && v_face.y > 0.0))) {
         float t;
+        // Metres ALONG the beads, for the baked ones (ps_bead_tex): a box's
+        // side by its UV; a top's diagonals across their own direction; a
+        // loop round an outline by x + y, which runs along every edge and is
+        // continuous round the corners. Wrapped as t is where it is world
+        // metres.
+        float wrap_u = PS_PLATE * 64.0;
+        float u = mod(v_local.x + v_local.z, wrap_u);
         float junction = 0.0;
         float join = 0.0;
         float gap = 0.0;
@@ -391,7 +398,9 @@ void fragment() {
                 if (d < wall && print_near) {
                     t = d / bw;
                 } else {
-                    t = dot(v_local.xz, ps_top_normal(v_face.y > 350.0)) / bw;
+                    vec2 tn = ps_top_normal(v_face.y > 350.0);
+                    t = dot(v_local.xz, tn) / bw;
+                    u = mod(dot(v_local.xz, vec2(-tn.y, tn.x)), wrap_u);
                 }
                 if (wall > 0.0 && print_near) {
                     float jw = 0.18 * bw + fwidth(d);
@@ -416,6 +425,7 @@ void fragment() {
             // round the rim and the ribs, and the hollow between them.
             vec2 us = ps_underside(cell, fsize);
             solid = us.x;
+            u = cell.x + cell.y;
             // The rim's loops only where the edge is real (see below).
             t = geo_bevel > 0.5 ? us.y : 0.0;
         } else if (face != 0) {
@@ -448,6 +458,7 @@ void fragment() {
             // detail that follows an edge goes with the edge: out there a
             // top or bottom is its colour and finish.
             bool real_edge = geo_bevel > 0.5;
+            u = cell.x + cell.y;
             if (d2 < 0.0 || !real_edge) {
                 t = 0.0;
             } else if (d2 < wall && print_near) {
@@ -461,6 +472,7 @@ void fragment() {
                     n.y = -n.y;
                 }
                 t = dot(cell, n) / bw;
+                u = dot(cell, vec2(-n.y, n.x));
                 if (print_near) {
                     float e = d2 - wall;
                     vec2 zz = ps_zigzag(cell, vec2(wall + PS_BEVEL),
@@ -468,6 +480,7 @@ void fragment() {
                     if (zz.x > 0.5) {
                         // On a connector: one bead along the wall, a bead wide.
                         t = e / bw + 0.5;
+                        u = cell.x + cell.y;
                     }
                     gap = zz.y;
                 }
@@ -489,11 +502,8 @@ void fragment() {
             // fwidth came back larger than a bead -- the pattern filtered
             // itself away completely.
             t = v_uv.y / ps_layer(mat);
+            u = v_uv.x;
         }
-        // Along the layers, for the baked ones: a box's side has its UV;
-        // an authored face or a facet runs along x + z, wrapped as its t.
-        float u = (facet || authored)
-                ? mod(v_local.x + v_local.z, PS_PLATE * 64.0) : v_uv.x;
         ps_beads(t, t, u, bead_face, mat, dist, VERTEX, seed, junction, join,
                 albedo, NORMAL, print_rough, aniso_dir, aniso);
         if (stairs > 0.0 && print_near) {
