@@ -16,6 +16,8 @@ var rate := 0.0
 var born := 0.0
 var bricks := 0
 var node: Node3D
+## Its mesh once made, sized by how far the player is (PlanetSystem._drift_keep).
+var look: MeshInstance3D
 ## Its mesh while a worker makes it, drawn so its centre of mass is at `node`.
 var task := -1
 var holder: Array = []

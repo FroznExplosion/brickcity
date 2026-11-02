@@ -2485,6 +2485,23 @@ in small numbers: 0.018 m (`--gate=dock`, "and steady against it"). And an angle
 float32: unwrapped, a station's path over its planet was off by 2.2 m a frame at t = 60,000 s and 17.7 m at
 600,000 s. `StarSystem._turn` keeps it within a turn: 2-3 cm at any t (`system_probe`).
 
+#### Plan, debris seen and kept (2026-11-02, the user's)
+
+1. **Pieces come and go by size.** Full size within 2.5 km of the player, shrinking to nothing at 5 km,
+   growing back the same way, so nothing pops. (The bricks' material is opaque: no fade without a change to
+   `brick.gdshader`, so size alone for now.) A piece goes only when it is out of sight **and** 3 km from where
+   it left: the player's distance keeps a piece they follow; where it left keeps a wreck's pieces round the
+   wreck for the player's return. The cap of 64 stands.
+2. **A damaged station looks damaged from afar.** Its shell boxes are the whole station; with bricks gone,
+   the bands it last drew stay as its far look on `deactivate`; on a save's `_dead`, those bands are laid once
+   from the template when it is prepared.
+3. **A piece falling to a planet.** Today a piece never falls: it keeps its straight line in the station's
+   frame. Into a planet's air it should go, unless the player is near; then it becomes a `PlanetPieces` body
+   under that planet, and lands. Needs its own plan with the user.
+
+**Step 1 built (2026-11-02).** As planned: `_drift_keep`, `drift_seen`, `drift_hidden`, `drift_reach`,
+`drift_home`. `--gate=debris` 10/10 headless; not yet seen on screen.
+
 #### Plan, saving (2026-11-01)
 
 As zylanntest (its Docs/save_format_and_data_longevity.md, future_features_save_guide.md): the **universe**
