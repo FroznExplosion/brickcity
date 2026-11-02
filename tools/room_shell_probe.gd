@@ -190,6 +190,20 @@ func _run() -> void:
 
 	# No modules at all: the storey split into rooms no longer than room_max
 	# (and the wall) either way, each reached.
+	# The shell's own doorways (the hall's, the lift's) as tall as the storey lets,
+	# up to `doorway` (14: the pawn is 12): 11 in these 14-plate storeys; 14 asked
+	# of 19-plate ones.
+	var tallest := func(m: Dictionary) -> int:
+		var t := 0
+		for d: Array in m.plan.doors:
+			t = maxi(t, (d[1] as Vector3i).y)
+		return t
+	var tall_lib := RoomModules.from_recipes(ShipBuild.modules())
+	var tall := RoomShell.generate(tall_lib, {"seed": 3, "width": 44, "depth": 28, "storeys": 2, "pitch": ShipBuild.PITCH})
+	_ok("its doorways as tall as the storey lets, up to 14 plates (the pawn walks through)",
+			int(tallest.call(again)) == pitch - 3 and bool(tall.ok) and int(tallest.call(tall)) == 14,
+			"%d in %d-plate storeys, %d in %d-plate ones" % [tallest.call(again), pitch,
+				tallest.call(tall) if tall.ok else -1, ShipBuild.PITCH])
 	var bare := RoomShell.generate(lib, {"seed": 2, "width": 44, "depth": 28, "storeys": 4, "fill": 0.0})
 	var bare_seen := _flood(_cells(bare.recipe), Vector3i(10, 2, 14), _inside_box(44, 28, 4 * pitch + 1))
 	var offices := 0

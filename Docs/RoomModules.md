@@ -517,8 +517,11 @@ step, a child of the ship. Taken up when it is flown.
 **The pawn's height.** The pawn is 12 plates tall (9 crouched). Rooms of 12 plates and doorways of
 9 (RoomShell's `DOORWAY`, the kits' first sizes) were too low to walk through, crouched or not.
 Ship rooms (`ShipBuild.H`) and station kit rooms (`StationKit.H`) are now 16 plates inside, their
-doors 14 (a tower's are 15); RoomShell and RoomPack take `doorway` (plates; 9 unless given), and
-ShipBuild gives 14.
+doors 14 (a tower's are 15). RoomShell and RoomPack take `doorway` (plates, default 14), cut
+as tall as the storey lets (`pitch - 3`; 9 the least a storey takes); RoomShell's storey when no
+module says is 19 plates (was 14). A tower grown from modules 14 plates high still gets
+11-plate doorways and 12-plate rooms -- the modules' own height: build them 17+ for the pawn.
+`room_shell_probe` (16) checks the doorways: 11 in 14-plate storeys, 14 in 19-plate ones.
 
 **Boarded.** A generated ship's sill can stand metres over the ground (it is long and parks
 level over a slope: 4.4 m at seed 7's stern), and E boards only within 8 m of the seat, deep in
