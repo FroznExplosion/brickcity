@@ -17,6 +17,7 @@ after.
 | [sta.md](sta.md) | `C:\Users\lbaun\Documents\sta` | Planet sandbox: SDF and blocky cubed-sphere terrain, the native water solver, and the **cellular-automaton blocky water** design (mass per cell, active set, trapped air, LOD) |
 | [zylanntest.md](zylanntest.md) | `C:\Users\lbaun\Documents\zylanntest` | Voxel planets on Zylann's Voxel Tools: the **curvature vertex shader** (a flat world that looks like a planet), toroidal world wrapping, planet size tiers |
 | [lego-worlds.md](lego-worlds.md) | LEGO Worlds (TT Games) screenshots and wiki | How brick terrain uses slopes, curves and corners |
+| [brick-games.md](brick-games.md) | Sink My Bricks!, Brickadia, Teardown, Instruments of Destruction (public pages, 2026-11-02) | Brickadia's local-edit collision index and render batching; ship flooding, hand patching, ship-as-respawn, limbs-as-health; a ranked list of what we could take |
 | [external.md](external.md) | Research in both projects | Third-party addons with verdicts, published techniques, and Godot engine landmines |
 
 All four source projects are Godot 4.6 · Jolt — the same stack as this one. Code lifts, not
