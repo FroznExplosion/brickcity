@@ -2664,6 +2664,10 @@ func _run_hull_gate() -> void:
 			"%d of %d in %.1f s, %d loose group(s)" % [laid, ship.recipe.size(), (Time.get_ticks_msec() - t1) / 1000.0, loose.size()])
 	var reach := ship.gangway_steps * SpaceShip.GANG_TREAD * BrickWorld.get_stud_metres()
 	var foot := _ground_hit(door + outward * (reach + 2.5))
+	await get_tree().create_timer(BuildDoors.RESYNC + 0.2).timeout
+	_check("its doors hung in its doorways (its recipe's)", ship.doors != null and ship.doors.count() > 0
+			and ship.doors.count() == BuildDoors.of(ship.recipe).size(),
+			"%d of %d" % [ship.doors.count() if ship.doors else 0, BuildDoors.of(ship.recipe).size()])
 	_check("a gangway of bricks down from its airlock to the ground", ship.gangway != null and ship.gangway_steps > 0,
 			"%d step(s), the sill %.2f m over the ground at its foot" % [ship.gangway_steps, (door - foot).dot(Gravity.up_at(door))])
 	# A look at it from off its stern quarter: the housings and the fin on its roof.

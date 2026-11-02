@@ -59,6 +59,10 @@ var _collision: BuildingCollision
 ## collision (world-placed) is put away and its shell box stands in, nothing
 ## damaged. `ride` / `unride`.
 var riding := false
+## A generated one's doors and lifts (its recipe's meta), hung once its bricks
+## are solid, following its chunk (Docs/RoomModules.md 7.3).
+var doors: BuildDoors = null
+var lifts: BuildLifts = null
 ## Hits (step 3b): the host's commands, the bands to draw again, the structure
 ## to ask, and the dead ids kept while its bricks are freed.
 var damage_log := DamageLog.new()
@@ -240,6 +244,13 @@ func activate() -> void:
 	_brick_node.name = "Bricks"
 	_brick_node.transform = frame
 	add_child(_brick_node)
+	if recipe != null:
+		var src := func() -> Array:
+			return [[0, chunk, recipe, recipe.origin()]] if bricked and chunk >= 0 else []
+		doors = BuildDoors.new(bricks, src)
+		add_child(doors)
+		lifts = BuildLifts.new(bricks, src)
+		add_child(lifts)
 	crumbs = PlanetCrumbs.new()
 	add_child(crumbs)
 	crumbs.setup(gravity_centre)
@@ -274,6 +285,11 @@ func deactivate() -> void:
 	if crumbs != null:
 		crumbs.queue_free()
 		crumbs = null
+	for n in [doors, lifts]:
+		if n != null:
+			n.queue_free()
+	doors = null
+	lifts = null
 	_band_nodes.clear()
 	_remesh = PackedInt32Array()
 	_solve_due = false
@@ -436,6 +452,9 @@ func _process(_delta: float) -> void:
 	if bricked:
 		if not riding:
 			_damage_step()
+		else:
+			# Its doors and lifts follow its chunk; flown, the chunk follows it.
+			bricks.set_chunk_transform(chunk, global_transform * frame)
 		return
 	if not bricks.bake_ready(chunk):
 		if not bricks.bake_pending(chunk):

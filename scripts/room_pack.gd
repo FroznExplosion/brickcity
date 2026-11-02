@@ -151,6 +151,15 @@ func _prelay() -> void:
 					cut = cut or hole.has(c + Vector3i(x, y, z))
 		if not cut:
 			hb.append([hull.part_of(i), c, hull.colour_of(i), hull.material_of(i)])
+			continue
+		# What of it the doorway leaves, in plates: a brick over the hole's top
+		# row would leave a gap under the next one, the door's lintel.
+		for y in sz.y:
+			for z in sz.z:
+				for x in sz.x:
+					var v := c + Vector3i(x, y, z)
+					if not hole.has(v):
+						hb.append(["plate_1x1", v, hull.colour_of(i), hull.material_of(i)])
 	adds = hb + adds
 
 
