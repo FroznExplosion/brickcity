@@ -485,6 +485,11 @@ pitch.
   meets it on the lowest deck. Bulkheads every 24-32 studs; the **root section is the bridge's**
   (`plan.root_x`, RoomPack names its required fore module's).
 * `seat`: the middle of the bridge's room, on its floor.
+* **Engines and a fin** on the roof aft (`ShipBuild._engines`): two housings 4 studs across, three
+  courses of 2x2 bricks in a running bond (1x1s where a course falls short), a quarter of its
+  length, hanging 2 studs out past the stern; a fin of 1x1 columns on the middle line stepping
+  down forward. `meta.engines` is each housing's back: SpaceShip puts its glow there (the old
+  engine meshes only on the plain ship).
 
 **Flown.** `OrbitalData.layout` "generated" on a ship: `SpaceShip.setup_ship` grows it at once
 (~0.5 s, and its template ~0.6 s: its seat and hull box are wanted before anything else); its
@@ -541,8 +546,8 @@ in through the airlock onto its deck and 16 studs on along the spine; its gangwa
 round its pilot with nothing loose. Shots `hull_gate_*`.
 
 Not yet: a section that drifts off
-takes no one with it; doors and lifts are not hung in a ship; the hull is a box with a bow, no
-fins or engine nacelles in bricks (the engines are the old meshes).
+takes no one with it; doors and lifts are not hung in a ship; the hull is a box with a bow and
+its engines on the roof (no wings, no windows).
 
 ### 7.6 Order and choices
 

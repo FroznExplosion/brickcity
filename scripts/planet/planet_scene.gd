@@ -2631,6 +2631,15 @@ func _run_hull_gate() -> void:
 	var foot := _ground_hit(door + outward * (reach + 2.5))
 	_check("a gangway of bricks down from its airlock to the ground", ship.gangway != null and ship.gangway_steps > 0,
 			"%d step(s), the sill %.2f m over the ground at its foot" % [ship.gangway_steps, (door - foot).dot(Gravity.up_at(door))])
+	# A look at it from off its stern quarter: the housings and the fin on its roof.
+	var aside := Gravity.flat(ship.global_basis.x, Gravity.up_at(door)).normalized()
+	var off := _ground_hit(door + outward * 28.0 + aside * 18.0)
+	if off != Vector3.INF:
+		pawn.place(off)
+		await get_tree().create_timer(0.5).timeout
+		_face(Gravity.flat(ship.global_position - off, Gravity.up_at(off)).normalized())
+		await get_tree().create_timer(0.5).timeout
+		await _shot("hull_gate_outside")
 	# From its foot, up it and in.
 	pawn.place(foot)
 	await get_tree().create_timer(0.5).timeout
