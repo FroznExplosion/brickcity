@@ -237,6 +237,8 @@ func finish() -> void:
 		mm.set_instance_custom_data(i, Color(0.0, w, s.height, dd))
 	far = MultiMeshInstance3D.new()
 	far.name = "Far"
+	# Their instances move in _process (far_tier).
+	far.physics_interpolation_mode = Node.PHYSICS_INTERPOLATION_MODE_OFF
 	far.multimesh = mm
 	far.material_override = _far_mat
 	far.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
@@ -253,6 +255,7 @@ func finish() -> void:
 	bm.instance_count = _landmarks.size()
 	beacons = MultiMeshInstance3D.new()
 	beacons.name = "Beacons"
+	beacons.physics_interpolation_mode = Node.PHYSICS_INTERPOLATION_MODE_OFF
 	beacons.multimesh = bm
 	var bmat := StandardMaterial3D.new()
 	bmat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
@@ -584,7 +587,8 @@ func _draw_band(s: Site, band: int) -> void:
 			if not keep.is_empty():
 				merge.add_instances(stud, Transform3D.IDENTITY, keep)
 			var out := merge.commit()
-			if out.is_empty():
+			# Every brick of the band gone: its vertices are still baked, no triangle is.
+			if out.is_empty() or (out[Mesh.ARRAY_INDEX] as PackedInt32Array).is_empty():
 				return
 			var m := ArrayMesh.new()
 			m.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, out, [], {}, IslandManager.UPLOAD_COMPRESS)

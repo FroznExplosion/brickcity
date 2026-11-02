@@ -337,6 +337,17 @@ func regions_building() -> int:
 	return _building.size()
 
 
+## Is the region round world point `p` made? If not its grid is started on a
+## worker: ask each frame until it is, and `snap` there builds nothing itself.
+func region_made(p: Vector3) -> bool:
+	var k := key_at(p)
+	if k.x == 1 << 30 or regions.has(k):
+		return true
+	_start_build(k)
+	_collect_builds(1)
+	return regions.has(k)
+
+
 ## The region round a grid built: its framed world, its proxies, its nav.
 ## The trees a region's grid stands under (tree_source), or [] with none.
 func _trees_for(nr: PlanetNavRegion) -> Array:

@@ -233,6 +233,15 @@ func _raise(i: int) -> void:
 			_raising = false
 			return
 		_ground.global_position = _middle()
+	# The nav there, on a worker: it is dropped behind the player, and _spawn's
+	# snap would make it on its own frame (100+ ms).
+	var net := scene.ai_of[body].nav_net as PlanetNavNet
+	while not net.region_made(_middle()) and Time.get_ticks_msec() - waited < GROUND_WAIT:
+		await get_tree().process_frame
+		if not is_inside_tree() or scene.system.anchor != body:
+			town = -1
+			_raising = false
+			return
 	_spawn()
 	_raising = false
 
@@ -260,7 +269,7 @@ func _spawn() -> void:
 	var at := _middle()
 	var up := Gravity.up_at(at)
 	var side := up.cross(Vector3.RIGHT if absf(up.x) < 0.9 else Vector3.FORWARD).normalized()
-	var lib := GunPlaceholderParts.build_library()
+	var lib: GunPartLibrary = scene.kit.arsenal.library
 	var rng := RandomNumberGenerator.new()
 	rng.seed = hash(_key(town))
 	var count := mini(SQUAD_SIZE + WAVE_GROWS * (wave - 1), WAVE_MOST)

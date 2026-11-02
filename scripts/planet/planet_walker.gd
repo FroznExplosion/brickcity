@@ -42,6 +42,9 @@ const CRUISE_MAX := 300000.0
 ## Held off the ground until the ground under it has streamed in.
 var frozen := true
 var pitch := 0.0
+## The mouse's yaw since the last physics step, turned there as pitch is: the
+## body and its camera are interpolated, and must not move between steps.
+var _turn := 0.0
 var up := Vector3.UP
 ## Scripted input, for passes: x strafe, y forward (-1..1); yaw rad/s; rise
 ## (-1..1) in fly mode; jump once.
@@ -95,7 +98,7 @@ func _unhandled_input(event: InputEvent) -> void:
 		elif event.button_index == MOUSE_BUTTON_WHEEL_DOWN:
 			fly_speed = maxf(fly_speed / 1.25, 2.0)
 	elif event is InputEventMouseMotion and Input.mouse_mode == Input.MOUSE_MODE_CAPTURED:
-		_yaw_by(-event.relative.x * 0.003)
+		_turn -= event.relative.x * 0.003
 		pitch = clampf(pitch - event.relative.y * 0.003, -1.5, 1.5)
 	elif event is InputEventKey and event.pressed and not event.echo:
 		if event.keycode == KEY_ESCAPE:
@@ -105,11 +108,6 @@ func _unhandled_input(event: InputEvent) -> void:
 			velocity = Vector3.ZERO
 
 
-func _yaw_by(a: float) -> void:
-	var b := global_transform.basis
-	global_transform.basis = Basis(up, a) * b
-
-
 func _physics_process(delta: float) -> void:
 	up = Gravity.up_at(global_position)
 	var f := -global_transform.basis.z
@@ -117,8 +115,10 @@ func _physics_process(delta: float) -> void:
 	if f.length_squared() < 1e-8:
 		f = global_transform.basis.y
 	f = f.normalized()
-	if yaw_rate != 0.0:
-		f = f.rotated(up, yaw_rate * delta)
+	var turn := _turn + yaw_rate * delta
+	_turn = 0.0
+	if turn != 0.0:
+		f = f.rotated(up, turn)
 	var r := f.cross(up)
 	global_transform.basis = Basis(r, up, -f).orthonormalized()
 	camera.rotation = Vector3(pitch, 0.0, 0.0)
