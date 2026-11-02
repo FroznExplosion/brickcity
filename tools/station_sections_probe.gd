@@ -11,6 +11,7 @@ extends SceneTree
 ##             built, its shell a box round each section, its box its own
 ##   laid      activate lays every brick of it, nothing loose: its keel the
 ##             foundation
+##   doors     its recipe's doors hung (BuildDoors), following its chunk
 ##   drift     every brick where a section (its fewest joints) meets the rest killed: the solve
 ##             sends the section off whole (`drifted`, one rigid piece)
 
@@ -116,6 +117,10 @@ func _after_laid() -> void:
 	var loose: Array = st.bricks.find_detached_groups(st.chunk)
 	_ok("activate lays every brick, nothing loose: the keel its foundation",
 			alive == r.size() and loose.is_empty(), "%d of %d alive, %d loose group(s)" % [alive, r.size(), loose.size()])
+	st.doors.resync()
+	var want := BuildDoors.of(r).size()
+	_ok("its doors hung in its doorways, once its bricks are solid", want > 0 and st.doors.count() == want,
+			"%d of %d" % [st.doors.count(), want])
 
 	# A leaf section's joint shot away.
 	var lib := StationKit.library()

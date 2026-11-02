@@ -415,7 +415,7 @@ prepare grows the same station for the seed, a shell box a section; laid frame b
 loose; a leaf section's joint shot away -- it drifts off as one piece. `system_probe` 31/31 as
 before. The workshop's *Generate station* uses the shipped kit when the player has no core.
 
-Not yet: doors and lifts are not hung in a station in space (its doorways are open); the people
+Not yet: the people
 and furniture of a drifting section are not carried with it; a station's damage is kept as
 before (dead ids) but sections are not; no windowed pass has looked at one (`--gate=system`
 visits home's, a tower).
@@ -549,8 +549,18 @@ the player by it, nothing loose; its gangway down (11 steps, the sill 4.7 m up);
 in through the airlock onto its deck and 16 studs on along the spine; its gangway taken up when flown; into the bridge's seat, flown 270 m up in its bricks (riding); out of the seat on the bridge's floor, laid again
 round its pilot with nothing loose. Shots `hull_gate_*`.
 
+**Doors and lifts** (2026-11-02): a generated station or ship hangs its recipe's doors and lifts
+(`meta.doors`, `meta.lifts`) once its bricks are solid -- a BuildDoors and a BuildLifts of its own,
+their source its one chunk (`SpaceStation.doors`, `lifts`), dropped when its bricks are put away.
+A flown (riding) ship keeps its chunk's transform on itself each frame so they go with it.
+RoomPack's airlock cut a hull wall brick over the doorway's top row whole, leaving a one-plate gap
+under the next: no lintel, no door; what a cut brick leaves outside the hole is now kept as 1x1
+plates. `ship_build_probe` checks every door has its lintel on 8 seeds; `station_sections_probe`
+(6) that a station hangs all its doors (21 of 21); `--gate=hull` (11) all of the ship's (41) and
+walks in through the airlock's.
+
 Not yet: a section that drifts off
-takes no one with it; doors and lifts are not hung in a ship; the hull is a box with a bow and
+takes no one with it; the hull is a box with a bow and
 its engines and wings on the roof (no windows).
 
 ### 7.6 Order and choices

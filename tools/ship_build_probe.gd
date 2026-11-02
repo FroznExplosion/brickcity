@@ -9,7 +9,7 @@ extends SceneTree
 ##             the fore third, an engine room in the aft third, an airlock through
 ##             the stern onto the spine, most of the inside rooms, sections at the
 ##             bulkheads, two engine housings of bricks on the roof aft, wings;
-##             each laid with nothing loose
+##             each laid with nothing loose, every door under its lintel
 ##   flown     a SpaceShip of layout "generated": grown at setup, its seat the
 ##             bridge's -- forward of its middle (-Z), on a floor, under a roof --
 ##             its hull box long along Z
@@ -109,6 +109,13 @@ func _run() -> void:
 		if not rows.is_empty():
 			w.set_anchor_levels(ch, rows)
 		var loose: Array = w.find_detached_groups(ch)
+		# Every door under a lintel (BuildDoors hangs none without one).
+		var bare := 0
+		for dr: Dictionary in BuildDoors.of(r):
+			if not w.is_solid(ch, (dr.lo as Vector3i) + Vector3i(0, (dr.size as Vector3i).y, 0) - r.origin()):
+				bare += 1
+		if bare > 0 or BuildDoors.of(r).is_empty():
+			bad.append("seed %d: %d of %d door(s) without a lintel" % [sd, bare, BuildDoors.of(r).size()])
 		w.release_chunk(ch)
 		if not loose.is_empty():
 			bad.append("seed %d: %d loose group(s)" % [sd, loose.size()])
@@ -119,7 +126,7 @@ func _run() -> void:
 				or (r.meta.sections.sections as Array).size() < 2:
 			bad.append("seed %d: %d deck(s), fill %.2f, %d section(s)" % [sd, m.decks, m.stats.fill,
 					(r.meta.sections.sections as Array).size()])
-	_ok("8 seeds: hulls of 1-3 decks, the bridge's seat on its floor fore, the engine room aft, an airlock aft onto the spine, mostly rooms, sections, engine housings, nothing loose",
+	_ok("8 seeds: hulls of 1-3 decks, the bridge's seat on its floor fore, the engine room aft, an airlock aft onto the spine, mostly rooms, sections, engine housings, nothing loose, every door under a lintel",
 			bad.is_empty(), "fill %s %s" % [str(fills), str(bad.slice(0, 4))])
 
 	var d := OrbitalData.new()
