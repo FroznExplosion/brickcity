@@ -512,9 +512,16 @@ level over a slope: 4.4 m at seed 7's stern), and E boards only within 8 m of th
 the bridge -- so on foot at its airlock, **E steps through it** (`PlanetScene._through_airlock`):
 in onto the deck, or out onto the ground. `SpaceStation.airlock_cell`, `cell_point`, `cell_at`.
 
+**Flown in its bricks.** Over a planet a flown ship moves in the planet's frame, and its brick
+collision is placed in the world, so the plain ship puts its bricks away while flown. A generated
+one **rides** instead (`SpaceStation.ride` / `unride`, from `PlanetSystem._ship_bricks`): its band
+meshes, its own children, stay drawn and move with it; its brick collision is put away and its
+shell box stands in; nothing on it is damaged meanwhile. Stopped (out of its seat, or the frame in
+open space) its bricks' transform is set where it is and their collision is built again.
+
 `planet.tscn -- --gate=hull` (windowed, 8 checks, 2026-11-01): the parked ship generated, laid with
 the player by it, nothing loose; in through the airlock onto its deck and 16 studs on along the
-spine; into the bridge's seat, flown 270 m up; out of the seat on the bridge's floor, laid again
+spine; into the bridge's seat, flown 270 m up in its bricks (riding); out of the seat on the bridge's floor, laid again
 round its pilot with nothing loose. Shots `hull_gate_*`.
 
 Not yet: a section that drifts off

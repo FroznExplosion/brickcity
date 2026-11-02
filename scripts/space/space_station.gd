@@ -50,6 +50,11 @@ var _brick_node: Node3D
 var _band_next := 0
 var _band_jobs: Array = []
 var _collision: BuildingCollision
+## Flown with its bricks drawn (a generated ship piloted over a planet, where it
+## moves in the planet's frame): its meshes ride along as its children, its brick
+## collision (world-placed) is put away and its shell box stands in, nothing
+## damaged. `ride` / `unride`.
+var riding := false
 ## Hits (step 3b): the host's commands, the bands to draw again, the structure
 ## to ask, and the dead ids kept while its bricks are freed.
 var damage_log := DamageLog.new()
@@ -243,6 +248,7 @@ func activate() -> void:
 func deactivate() -> void:
 	if chunk < 0:
 		return
+	riding = false
 	for job in _band_jobs:
 		WorkerThreadPool.wait_for_task_completion(int(job[0]))
 	_band_jobs.clear()
@@ -282,6 +288,28 @@ func restore_gone(ids: PackedInt32Array) -> void:
 	_dead = ids
 
 
+## Flown over a planet: its bricks stay drawn, moving with it; their collision
+## (world-placed, it would stay behind) put away, its shell box's back.
+func ride() -> void:
+	if riding or not bricked:
+		return
+	riding = true
+	if _collision != null:
+		_collision.free_bodies()
+		_collision = null
+	shell_body.collision_layer = Layers.STRUCTURE
+
+
+## Stopped riding: its bricks' transform where it now is, their collision back.
+func unride() -> void:
+	if not riding:
+		return
+	riding = false
+	bricks.set_chunk_transform(chunk, global_transform * frame)
+	_collision = BuildingCollision.new(bricks, chunk, get_world_3d().space, global_transform * frame, true)
+	shell_body.collision_layer = 0
+
+
 ## The floating origin moved it: its bricks' transform and collision follow.
 func on_origin_shift() -> void:
 	if chunk < 0:
@@ -295,7 +323,7 @@ func on_origin_shift() -> void:
 ## A round or a blast at world `point` (StructuralDamage.for_shot's record), as
 ## a planet building's bricks take one. False if its bricks are not there.
 func damage(point: Vector3, shot: Dictionary) -> bool:
-	if not bricked or not holds(point):
+	if not bricked or riding or not holds(point):
 		return false
 	var blast := bool(shot.get("blast", false))
 	var radius := float(shot.get("radius", 0.0))
@@ -382,7 +410,8 @@ func _process(_delta: float) -> void:
 	if chunk < 0:
 		return
 	if bricked:
-		_damage_step()
+		if not riding:
+			_damage_step()
 		return
 	if not bricks.bake_ready(chunk):
 		if not bricks.bake_pending(chunk):

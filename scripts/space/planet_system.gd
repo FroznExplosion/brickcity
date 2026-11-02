@@ -677,9 +677,15 @@ func _ship_bricks(p: Vector3) -> void:
 	for s in ships:
 		var want := s == ship or (s.ref != null and s.ref == anchor and not s.piloted
 				and (p - s.global_position).length() < s.field)
+		# A generated ship flown over the planet keeps its bricks drawn (riding).
+		var ride := s.recipe != null and s.piloted and s.ref != null and s != ship
 		if want and s.chunk < 0:
 			s.process_mode = Node.PROCESS_MODE_INHERIT
 			s.activate()
+		elif want and s.riding:
+			s.unride()
+		elif ride and s.chunk >= 0:
+			s.ride()
 		elif not want and s.chunk >= 0 and s != frame_node():
 			s.deactivate()
 

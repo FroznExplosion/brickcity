@@ -2644,7 +2644,7 @@ func _run_hull_gate() -> void:
 	_check("and on along its spine", c2.x > c.x + 4.0 and pawn.is_on_floor() and absf(c2.y - lock.y) < 3.0,
 			"at cell %s" % str(c2.snapped(Vector3(0.1, 0.1, 0.1))))
 	await _shot("hull_gate_inside")
-	# The bridge's seat: up and ahead (its bricks put away while it is flown over the planet).
+	# The bridge's seat: up and ahead, its bricks drawn as it flies (riding).
 	pawn.place(ship.global_transform * ship.seat() + ship.global_basis.z * 2.0)
 	await get_tree().create_timer(0.5).timeout
 	_ship_key(KEY_E)
@@ -2655,8 +2655,9 @@ func _run_hull_gate() -> void:
 	ship.thrust = Vector3(0.0, 0.0, 0.5)
 	await get_tree().create_timer(3.0).timeout
 	ship.thrust = Vector3.ZERO
-	_check("flown from the bridge's seat: up and away", ship.altitude > alt0 + 10.0,
-			"%.0f m up from %.0f, %.0f m/s" % [ship.altitude, alt0, ship.vel.length()])
+	_check("flown from the bridge's seat: up and away, its bricks drawn on it", ship.altitude > alt0 + 10.0
+			and ship.riding and ship.chunk >= 0 and not ship.shell.visible,
+			"%.0f m up from %.0f, %.0f m/s, riding %s" % [ship.altitude, alt0, ship.vel.length(), ship.riding])
 	await _shot("hull_gate_flying")
 	# Out of the seat: on its bridge's floor.
 	_ship_key(KEY_E)
@@ -2670,7 +2671,7 @@ func _run_hull_gate() -> void:
 			and Vector2(c.x - seat.x - 0.5, c.z - seat.z - 0.5).length() < 4.0 and absf(c.y - seat.y) < 2.0,
 			"at cell %s, the seat %s" % [str(c.snapped(Vector3(0.1, 0.1, 0.1))), str(ship.seat_cell)])
 	loose = ship.bricks.find_detached_groups(ship.chunk) if ship.chunk >= 0 else []
-	_check("laid again round its pilot in the air, every brick, nothing loose", ship.chunk >= 0
+	_check("its bricks solid again round its pilot in the air, every brick, nothing loose", ship.chunk >= 0 and not ship.riding
 			and ship.bricks.get_alive_block_count(ship.chunk) == laid and loose.is_empty(),
 			"%d loose group(s)" % loose.size())
 	await _shot("hull_gate_bridge")
