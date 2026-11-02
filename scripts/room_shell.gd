@@ -57,12 +57,13 @@ extends RefCounted
 const PARAMS := {"seed": 1, "width": 44, "depth": 28, "storeys": 4, "pitch": 0, "corridor": 4,
 		"room_max": 12, "window_every": 5, "fill": 0.85, "footprint": [], "setback": 0,
 		"setback_every": 0, "setback_sides": "nsew", "lift": true, "balcony": 0.5,
-		"section_bricks": BuildSections.BUDGET, "doorway": 9}
+		"section_bricks": BuildSections.BUDGET, "doorway": 14}
 ## The module roles a shell sets along its corridors (and a stair's, below a
 ## storey, where it has a stair link up).
 const ROLES := ["room", "corridor"]
-## A filler room's doorway and the way in: studs across, plates up (`doorway`
-## sets the height: a ship's are the pawn's height and more, ShipBuild).
+## A filler room's doorway and the way in: studs across, plates up -- the least a
+## storey takes (the pawn crouched). `doorway` (14: the pawn, 12, walks through;
+## a tower's are 15) is the height wanted, as the storey allows (pitch - 3).
 const DOORWAY := Vector2i(2, 9)
 ## A window in the shell's outer wall, and how far over its floor it starts.
 const WINDOW := Vector2i(2, 6)
@@ -71,8 +72,9 @@ const SILL := 3
 const STEP := 2
 ## Bricks a wall course is laid in, longest first, in a running bond.
 const WALL_RUNS := [4, 2, 1]
-## The pitch when no module says: a floor plate, twelve plates of room, a ceiling.
-const PITCH := 14
+## The pitch when no module says: a floor plate, sixteen plates of room (the
+## pawn is twelve), two ceiling layers.
+const PITCH := 19
 ## A lift shaft's inside, studs.
 const SHAFT := 4
 const DIRS := [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]
@@ -165,8 +167,8 @@ func _generate(library: Array, params: Dictionary) -> Dictionary:
 	pitch = int(p.pitch) if int(p.pitch) > 0 else pitch_of(lib)
 	hall = ceili(float(pitch) / STEP) + 2
 	door_h = maxi(int(p.doorway), 1)
-	if pitch < door_h + 3:
-		return {"ok": false, "why": "a storey needs %d plates at least" % (door_h + 3)}
+	if pitch < DOORWAY.y + 3:
+		return {"ok": false, "why": "a storey needs %d plates at least" % (DOORWAY.y + 3)}
 	_footprints()
 	if not _place_hall():
 		return {"ok": false, "why": "the shell is too small: its top storey has no room for a stair hall %d x %d and a corridor" % [
