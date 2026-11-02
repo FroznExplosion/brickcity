@@ -4,8 +4,8 @@ Research done 2026-11-02, from public pages only. Nothing here is a decision for
 a menu of features we could take, each with where it would land in our code.
 
 **Sources and their limits.** *Sink My Bricks!* (the closest game to ours) publishes its
-development only as short TikTok / YouTube videos with no written text, so its *techniques* are
-not known -- only its features. The technique notes come from games that write things down:
+development as short TikTok / YouTube videos. Five shorts' transcripts were read (§1.1); the rest
+of its techniques are not known -- only its features. The technique notes come from games that write things down:
 Brickadia's devlogs (Unreal, millions of bricks), Teardown, and Red Faction Guerrilla's designer's
 newer game, Instruments of Destruction. Items marked *(general knowledge)* were not re-read for
 this page.
@@ -30,6 +30,16 @@ Dev videos past 10 M views, 50k+ followers.
 | Ship building | modify template ships or build from scratch; modules anywhere; paint sails; draw your own skin |
 | Meta | unlocks between runs: weapons, ship modules, parts, rule-changing artifacts -- never permanent stat boosts |
 | Minimum PC | i5-8400, 8 GB, GTX 1050 Ti (4 GB), DX12. No performance numbers published |
+
+### 1.1 What its dev shorts say (transcripts, 2026-11-02)
+
+| Short | What they do | Us |
+|---|---|---|
+| [Ocean that follows you](https://www.youtube.com/shorts/BrtSAGVzesU) | the ocean's detail moves with the camera so you never reach its edge: three rings -- small bricks, larger bricks, then a flat surface with a water material | **the same**: tier 0 pieces snapped round the camera, the coarse ring, the sheet (Water.md 3) |
+| [Voxel ocean](https://www.youtube.com/shorts/alkBYN1nI70) | FFT waves (wave spectrum + inverse FFT, as Sea of Thieves and Black Flag) give a displacement map that also moves points sideways; rigid bricks moved sideways overlap and leave holes; moving them only up and down loses the choppiness ("rolling hills"). **Fix:** each brick stays in its column and finds its height by *inverting* the sideways shift -- start at the brick's own position, see where that point is carried, step back by the miss, repeat 2-3 times -- then read height and foam there | **different.** We chose a vertical-only sine sum (Water.md 1.1), partly because sideways displacement "shears the stud grid". Their trick keeps every brick on the grid *and* gets sharp crests. Worth a look by the water area; FFT itself is harder for us (the CPU has to give the same heights for buoyancy, Water.md 1), but the inversion works on a Gerstner sum too |
+| [Ghost ships](https://www.youtube.com/shorts/eFA2LoEvL-g) | every ship (and character) has a **ghost double**: a still copy of the ship's collision far away; a character who boards walks on the ghost, and the camera stays on the real ship at the same ship-local position. No jitter, no collision rebuilt as the ship moves, a walk map baked once. Rejected: Unreal's moving-base movement (laggy) and plain ship-local movement (fixes jitter, not collision or walk maps) | **adopted into the plan** ([../Hulls.md](../Hulls.md) 7b). Today a moving ship puts its brick collision away, so nobody can walk inside one while it moves |
+| [Mesh to bricks](https://www.youtube.com/shorts/vLCg_JG9omE) | voxelise the mesh's shell; each voxel's nearest polygons' normal picks a brick, slope or tile by its angle to the horizon; colour = the nearest palette colour by **CIE76** (distance in Lab colour space, because the eye does not see RGB evenly) | **mostly the same** (our converter fits slopes and wedges). Check the converter matches colour in a perceptual space (Lab / Oklab) rather than RGB -- the converter's job (bc-convert) |
+| [Octrees](https://www.youtube.com/shorts/WmRWPGaMmxY) | a general explainer: collision found by walking a tree instead of testing everything | nothing new; Jolt does this, and Brickadia's index (§2.1) is the brick-specific version |
 
 ## 2. Brickadia -- the technique source
 
