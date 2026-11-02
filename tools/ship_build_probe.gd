@@ -8,7 +8,8 @@ extends SceneTree
 ##   ships     8 seeds: a hull 1-3 decks, a bridge (its seat on its floor) in
 ##             the fore third, an engine room in the aft third, an airlock through
 ##             the stern onto the spine, most of the inside rooms, sections at the
-##             bulkheads, two engine housings of bricks on the roof aft
+##             bulkheads, two engine housings of bricks on the roof aft, wings;
+##             each laid with nothing loose
 ##   flown     a SpaceShip of layout "generated": grown at setup, its seat the
 ##             bridge's -- forward of its middle (-Z), on a floor, under a roof --
 ##             its hull box long along Z
@@ -60,6 +61,8 @@ func _ok(what: String, cond: bool, detail := "") -> void:
 func _run() -> void:
 	var bad := []
 	var fills := []
+	var w := BrickWorld.new()
+	var pal := TowerRecipe.bake_palette(w)
 	for sd in range(1, 9):
 		var m := ShipBuild.make(sd)
 		if not m.ok:
@@ -95,6 +98,20 @@ func _run() -> void:
 			housed = housed and back.x < 0 and cells.has(back) and cells.has(back + Vector3i(4, 0, 0))
 		if not housed:
 			bad.append("seed %d: engines %s" % [sd, str(eng)])
+		# Laid with its floor the foundation and its decks anchors: nothing loose
+		# (the housings, the fin and the wings hold by their studs).
+		var ch := w.create_chunk(Vector3i.ZERO, r.chunk_dims())
+		r.build(w, ch, pal)
+		w.set_foundation_level(ch, 0)
+		var rows := PackedInt32Array()
+		for s in range(1, int(m.decks)):
+			rows.append(s * ShipBuild.PITCH)
+		if not rows.is_empty():
+			w.set_anchor_levels(ch, rows)
+		var loose: Array = w.find_detached_groups(ch)
+		w.release_chunk(ch)
+		if not loose.is_empty():
+			bad.append("seed %d: %d loose group(s)" % [sd, loose.size()])
 		var lock: Vector3i = m.stats.airlock
 		if lock.x < 0 or cells.has(lock) or cells.has(lock + Vector3i(0, 0, 1)) or cells.has(lock + Vector3i(1, 0, 0)):
 			bad.append("seed %d: no airlock open at %s" % [sd, str(lock)])
@@ -102,7 +119,7 @@ func _run() -> void:
 				or (r.meta.sections.sections as Array).size() < 2:
 			bad.append("seed %d: %d deck(s), fill %.2f, %d section(s)" % [sd, m.decks, m.stats.fill,
 					(r.meta.sections.sections as Array).size()])
-	_ok("8 seeds: hulls of 1-3 decks, the bridge's seat on its floor fore, the engine room aft, an airlock aft onto the spine, mostly rooms, sections, engine housings",
+	_ok("8 seeds: hulls of 1-3 decks, the bridge's seat on its floor fore, the engine room aft, an airlock aft onto the spine, mostly rooms, sections, engine housings, nothing loose",
 			bad.is_empty(), "fill %s %s" % [str(fills), str(bad.slice(0, 4))])
 
 	var d := OrbitalData.new()

@@ -490,6 +490,10 @@ pitch.
   length, hanging 2 studs out past the stern; a fin of 1x1 columns on the middle line stepping
   down forward. `meta.engines` is each housing's back: SpaceShip puts its glow there (the old
   engine meshes only on the plain ship).
+* **Swept wings** (`ShipBuild._wings`) over its middle and aft: two plate layers a stud apart on
+  the roof's sides, their roots 4 studs in over the roof, out a quarter of its beam at the trailing
+  edge and a third of that at the leading; on the 2-stud grid, so the lower layer is all 2x2s and
+  no 1x1 sits on a 1x1 (a pair of them holds nothing -- six loose groups before).
 
 **Flown.** `OrbitalData.layout` "generated" on a ship: `SpaceShip.setup_ship` grows it at once
 (~0.5 s, and its template ~0.6 s: its seat and hull box are wanted before anything else); its
@@ -547,7 +551,7 @@ round its pilot with nothing loose. Shots `hull_gate_*`.
 
 Not yet: a section that drifts off
 takes no one with it; doors and lifts are not hung in a ship; the hull is a box with a bow and
-its engines on the roof (no wings, no windows).
+its engines and wings on the roof (no windows).
 
 ### 7.6 Order and choices
 
