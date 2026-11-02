@@ -2502,6 +2502,12 @@ float32: unwrapped, a station's path over its planet was off by 2.2 m a frame at
 **Step 1 built (2026-11-02).** As planned: `_drift_keep`, `drift_seen`, `drift_hidden`, `drift_reach`,
 `drift_home`. `--gate=debris` 10/10 headless; not yet seen on screen.
 
+**Step 2 built (2026-11-02).** `SpaceStation.wreck`, under `look`: on `deactivate` a damaged station keeps
+the bands it last drew and hides its shell; they go when its bricks are drawn again. `lay_wreck`, from
+`_prepare_near`, lays a save's damage once inside 20 km (0.1 s in the gate); farther off a station from a save
+is still its whole shell. A ship keeps its bands the same way, but a ship's damage from a save is not laid
+for its far look. `--gate=debris` 13/13, dock 8, hull 10, ship 9, headless; not yet seen on screen.
+
 #### Plan, saving (2026-11-01)
 
 As zylanntest (its Docs/save_format_and_data_longevity.md, future_features_save_guide.md): the **universe**
