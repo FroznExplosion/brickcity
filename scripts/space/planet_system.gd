@@ -102,7 +102,13 @@ var built := {}
 var trees_of := {}
 ## Each a Drift: no body, no physics, a place worked out from its age.
 var drifts: Array = []
-var drift_reach := 30000.0
+var drift_reach := 5000.0
+## ... and past this from where it left, so a wreck's pieces wait round it.
+var drift_home := 3000.0
+## A piece is its full size inside `drift_seen` of the player, nothing at
+## `drift_hidden`: out and back by size, its material being opaque.
+var drift_seen := 2500.0
+var drift_hidden := 5000.0
 var _drift_clock := 0.0
 ## Where the star truly is (its node); `star_look` draws it.
 var star: Node3D
@@ -444,7 +450,19 @@ func _drift_keep(p: Vector3) -> void:
 				mi.material_override = e.material
 				mi.position = e.draw_at
 				e.node.add_child(mi)
-		if e.task < 0 and ((e.node.global_position - p).length() > drift_reach or drifts.size() > DRIFT_CAP and k == 0):
+				e.look = mi
+		if e.task >= 0:
+			k -= 1
+			continue
+		var off := (e.node.global_position - p).length()
+		if e.look != null:
+			var size := 1.0 - smoothstep(drift_seen, drift_hidden, off)
+			e.look.visible = size > 0.0
+			if size > 0.0 and size != e.look.scale.x:
+				e.look.scale = Vector3.ONE * size
+				e.look.position = e.draw_at * size
+		var left := (e.v * (_drift_clock - e.born)).length()
+		if off > drift_reach and left > drift_home or drifts.size() > DRIFT_CAP and k == 0:
 			e.node.queue_free()
 			drifts.remove_at(k)
 		k -= 1

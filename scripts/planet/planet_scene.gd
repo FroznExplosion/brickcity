@@ -2352,8 +2352,25 @@ func _run_debris_gate() -> void:
 		await _frames(1)
 	var n2 := st.bricks.get_alive_block_count(st.chunk) if st.chunk >= 0 else -1
 	_check("back: laid as it was left, what drifted off still gone", n2 == n1, "%d" % n2)
-	# Out of reach.
+	# Far off it shrinks rather than pops, and grows back the same way.
+	var off := d.node.global_position.distance_to(_anchor())
+	var seen := system.drift_seen
+	var hidden := system.drift_hidden
+	system.drift_seen = off * 0.5
+	system.drift_hidden = off * 2.0
+	await _frames(3)
+	var small := d.look.scale.x
+	system.drift_seen = seen
+	system.drift_hidden = hidden
+	await _frames(3)
+	_check("far off it shrinks, not pops; near again, its own size", small > 0.0 and small < 1.0 and d.look.scale.x == 1.0,
+			"%.2f, then %.2f, %.0f m off" % [small, d.look.scale.x, off])
+	# A wreck's pieces stay round it while the player is away.
 	system.drift_reach = 20.0
+	await _frames(5)
+	_check("out of reach, but near where it left: it waits", not system.drifts.is_empty())
+	# Out of reach, and gone from where it left.
+	system.drift_home = 0.0
 	await _frames(5)
 	_check("out of reach it is gone", system.drifts.is_empty())
 	print("[planet] debris gate: frames: worst %.1f ms; over 40 ms in play: %d %s" % [_worst_ms, _play_hitches.size(), _play_hitches])
