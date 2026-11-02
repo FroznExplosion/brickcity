@@ -715,6 +715,15 @@ struct Chunk {
         return section_layers() * section_tiles_x() * section_tiles_z();
     }
 
+    // Each block as take_changed_sections last saw it: its stamp, and the box
+    // it stood in, so a block that moved or went marks where it was too.
+    struct SectionSeen {
+        uint64_t stamp = 0;
+        Vector3i lo;
+        Vector3i hi;
+    };
+    std::vector<SectionSeen> section_seen;
+
     Occupancy occupancy; // dims.x * occ_dy * dims.z, -1 = empty; write with set()
     // The plates the occupancy grid holds: local y in [occ_y0, occ_y0 + occ_dy).
     // Every chunk's is its whole height (create_chunk) except a building laid

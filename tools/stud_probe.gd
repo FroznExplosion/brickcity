@@ -142,8 +142,12 @@ func _check_workshop() -> void:
 	_ok("undo takes them away", _ws._stud_count == base, "%d" % _ws._stud_count)
 
 	var f0: int = _ws.asm.frames[0]
-	var mmi: MultiMeshInstance3D = _ws._frame_studs.get(f0)
-	_ok("they hang off the frame's own mesh, so a rotated frame turns them",
-			mmi != null and mmi.get_parent() == _ws._frame_meshes.get(f0))
+	_ws._place()
+	var mmi: MultiMeshInstance3D = null
+	for key in _ws._frame_studs:
+		if key is Vector2i and key.x == f0:
+			mmi = _ws._frame_studs[key]
+	_ok("they hang off a section under the frame's own mesh, so a rotated frame turns them",
+			mmi != null and mmi.get_parent().get_parent() == _ws._frame_meshes.get(f0))
 	_ok("and they cast no shadow",
 			mmi != null and mmi.cast_shadow == GeometryInstance3D.SHADOW_CASTING_SETTING_OFF)

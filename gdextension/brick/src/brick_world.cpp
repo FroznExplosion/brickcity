@@ -12,6 +12,7 @@
 
 #include <algorithm>
 #include <queue>
+#include <set>
 #include <chrono>
 #if defined(_MSC_VER)
 #include <intrin.h>
@@ -798,6 +799,10 @@ PackedFloat32Array BrickWorld::get_chunk_studs_section(int chunk_id, int section
     return chunk_studs(chunk_id, section, false);
 }
 
+PackedFloat32Array BrickWorld::get_section_studs(int chunk_id, int section) const {
+    return chunk_studs(chunk_id, section, true);
+}
+
 PackedByteArray BrickWorld::get_chunk_studs_open(int chunk_id, int section) const {
     std::vector<uint8_t> open;
     chunk_studs(chunk_id, section, false, &open);
@@ -1360,8 +1365,12 @@ Vector2i BrickWorld::get_block_index_range(int chunk_id, int block_id) const {
 // quad covering four cells still carries one brick outline, not four.
 // `cancel`: a worker's bake stops at the next block once it is set, and leaves
 // `fb` invalid (BrickWorld::join_chunk_readers).
+// `only`: bake these blocks and no others, as one section. A block's faces are
+// worked out from the cells round it, not from the faces before it, so they are
+// the faces a bake of the whole chunk would give it.
 static void bake_faces_into(const Chunk &c, const std::vector<Archetype> &parts,
-        FaceBake &fb, const std::atomic<bool> *cancel = nullptr) {
+        FaceBake &fb, const std::atomic<bool> *cancel = nullptr,
+        const std::vector<int32_t> *only = nullptr) {
     const auto t0 = std::chrono::steady_clock::now();
     fb.clear();
 
@@ -1380,14 +1389,18 @@ static void bake_faces_into(const Chunk &c, const std::vector<Archetype> &parts,
     // FaceBake::section_first -- a section's faces, and therefore its vertices,
     // have to be ONE contiguous range or a section mesh is a gather rather than
     // a slice.
-    const int section_n = c.sections();
+    const int section_n = only != nullptr ? 1 : c.sections();
     std::vector<std::vector<int32_t>> by_section((size_t)section_n);
-    for (size_t i = 0; i < c.blocks.size(); ++i) {
-        const Block &b = c.blocks[i];
-        if (b.removed || b.decorative) {
-            continue;
+    if (only != nullptr) {
+        by_section[0] = *only;
+    } else {
+        for (size_t i = 0; i < c.blocks.size(); ++i) {
+            const Block &b = c.blocks[i];
+            if (b.removed || b.decorative) {
+                continue;
+            }
+            by_section[(size_t)c.section_of(b.cell)].push_back((int32_t)i);
         }
-        by_section[(size_t)c.section_of(b.cell)].push_back((int32_t)i);
     }
     fb.section_first.assign((size_t)section_n, 0);
     fb.section_faces.assign((size_t)section_n, 0);
@@ -4160,6 +4173,114 @@ Array BrickWorld::build_chunk_chamfer_mesh(int chunk_id, double bevel) {
     last_chamfer_tris = quads * 2;
     last_chamfer_ms = out.ms;
     return arrays;
+}
+
+Array BrickWorld::build_section_chamfer_mesh(int chunk_id, int section, double bevel) {
+    if (!valid_chunk(chunk_id)) {
+        return Array();
+    }
+    Chunk &c = chunks[chunk_id];
+    std::vector<int32_t> ids;
+    for (size_t i = 0; i < c.blocks.size(); ++i) {
+        const Block &b = c.blocks[i];
+        if (!b.removed && !b.decorative && c.section_of(b.cell) == section) {
+            ids.push_back((int32_t)i);
+        }
+    }
+    if (ids.empty()) {
+        return Array();
+    }
+    // The chunk's own bake stands aside: the chamfer reads the chunk's, and a
+    // bake of one section is not a bake of the chunk.
+    FaceBake whole;
+    std::swap(whole, c.bake);
+    bake_faces_into(c, archetypes, c.bake, nullptr, &ids);
+    Array arrays = build_chunk_chamfer_mesh(chunk_id, bevel);
+    std::swap(whole, c.bake);
+    return arrays;
+}
+
+PackedInt32Array BrickWorld::take_changed_sections(int chunk_id, int margin) {
+    PackedInt32Array out;
+    if (!valid_chunk(chunk_id)) {
+        return out;
+    }
+    Chunk &c = chunks[chunk_id];
+    const int nx = c.section_tiles_x();
+    const int nz = c.section_tiles_z();
+    std::set<int> marked;
+    const auto mark = [&](const Vector3i &lo, const Vector3i &hi) {
+        const int y0 = c.section_of_y(lo.y - margin);
+        const int y1 = c.section_of_y(hi.y - 1 + margin);
+        const int s = c.section_studs;
+        const int x0 = s <= 0 ? 0 : std::clamp((lo.x - margin - c.origin.x) / s, 0, nx - 1);
+        const int x1 = s <= 0 ? 0 : std::clamp((hi.x - 1 + margin - c.origin.x) / s, 0, nx - 1);
+        const int z0 = s <= 0 ? 0 : std::clamp((lo.z - margin - c.origin.z) / s, 0, nz - 1);
+        const int z1 = s <= 0 ? 0 : std::clamp((hi.z - 1 + margin - c.origin.z) / s, 0, nz - 1);
+        for (int y = y0; y <= y1; ++y) {
+            for (int z = z0; z <= z1; ++z) {
+                for (int x = x0; x <= x1; ++x) {
+                    marked.insert((y * nz + z) * nx + x);
+                }
+            }
+        }
+    };
+    // Blocks the chunk no longer has at all.
+    for (size_t i = c.blocks.size(); i < c.section_seen.size(); ++i) {
+        mark(c.section_seen[i].lo, c.section_seen[i].hi);
+    }
+    c.section_seen.resize(c.blocks.size());
+    for (size_t i = 0; i < c.blocks.size(); ++i) {
+        const Block &b = c.blocks[i];
+        Chunk::SectionSeen &seen = c.section_seen[i];
+        const bool here = !b.removed && b.alive;
+        // Never 0: that is a block not seen yet, and one that is not here and
+        // never was has nothing to say.
+        uint64_t stamp = 0;
+        if (here) {
+            stamp = 0xcbf29ce484222325ull;
+            const int64_t parts[8] = { b.cell.x, b.cell.y, b.cell.z, b.archetype, b.colour,
+                    b.material, b.decorative ? 1 : 0, b.scorched ? 1 : 0 };
+            for (const int64_t v : parts) {
+                stamp = (stamp ^ (uint64_t)v) * 0x100000001b3ull;
+            }
+            stamp |= 1ull;
+        }
+        if (stamp == seen.stamp) {
+            continue;
+        }
+        if (seen.stamp != 0) {
+            mark(seen.lo, seen.hi);
+        }
+        seen.stamp = stamp;
+        if (here) {
+            seen.lo = b.cell;
+            seen.hi = b.cell + archetypes[b.archetype].size;
+            mark(seen.lo, seen.hi);
+        }
+    }
+    out.resize((int64_t)marked.size());
+    int32_t *w = out.ptrw();
+    for (const int s : marked) {
+        *w++ = s;
+    }
+    return out;
+}
+
+PackedInt32Array BrickWorld::get_section_side_stud_blocks(int chunk_id, int section) const {
+    PackedInt32Array out;
+    if (!valid_chunk(chunk_id)) {
+        return out;
+    }
+    const Chunk &c = chunks[chunk_id];
+    for (size_t i = 0; i < c.blocks.size(); ++i) {
+        const Block &b = c.blocks[i];
+        if (!b.removed && b.alive && !archetypes[b.archetype].side_studs.empty()
+                && c.section_of(b.cell) == section) {
+            out.push_back((int32_t)i);
+        }
+    }
+    return out;
 }
 
 bool BrickWorld::chamfer_pending(int chunk_id, int section) const {
@@ -10551,6 +10672,14 @@ void BrickWorld::_bind_methods() {
             &BrickWorld::get_chunk_studs_and_open);
     ClassDB::bind_static_method("BrickWorld", D_METHOD("split_studs", "buffer", "eye", "rings",
             "open", "closed_rings"), &BrickWorld::split_studs, DEFVAL(PackedByteArray()), DEFVAL(0));
+    ClassDB::bind_method(D_METHOD("get_section_studs", "chunk_id", "section"),
+            &BrickWorld::get_section_studs);
+    ClassDB::bind_method(D_METHOD("build_section_chamfer_mesh", "chunk_id", "section", "bevel"),
+            &BrickWorld::build_section_chamfer_mesh);
+    ClassDB::bind_method(D_METHOD("take_changed_sections", "chunk_id", "margin"),
+            &BrickWorld::take_changed_sections);
+    ClassDB::bind_method(D_METHOD("get_section_side_stud_blocks", "chunk_id", "section"),
+            &BrickWorld::get_section_side_stud_blocks);
     ClassDB::bind_method(D_METHOD("build_chunk_chamfer_mesh", "chunk_id", "bevel"),
             &BrickWorld::build_chunk_chamfer_mesh);
     ClassDB::bind_method(D_METHOD("chamfer_section_async", "chunk_id", "section", "bevel"),
