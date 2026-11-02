@@ -842,6 +842,10 @@ func _build_hud() -> void:
 		_flash.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		_flash.set_anchors_preset(Control.PRESET_FULL_RECT)
 		over.add_child(_flash)
+		# A saved game opens dark until PlanetSaver.resume has the player back:
+		# the spawn is only where the scene starts, not where they are.
+		if saver != null and saver.state.get("at") != null:
+			veil(true)
 
 
 func _process(_delta: float) -> void:
@@ -2801,9 +2805,14 @@ func _run_save_gate() -> void:
 		for a in OS.get_cmdline_user_args():
 			if a.begins_with("--stage="):
 				_save_stage = int(a.get_slice("=", 1))
+	var saved: bool = saver.state.get("at") != null
+	if saved:
+		_check("a saved game opens dark, the spawn never on screen", _flash.color == Color(0, 0, 0, 1))
 	var t0 := Time.get_ticks_msec()
 	while (pawn == null or saver == null or not saver.live) and Time.get_ticks_msec() - t0 < 90000:
 		await _frames(1)
+	if saved:
+		_check("and light once the player is back", saver.live and _flash.color.a == 0.0, "after %.1f s" % ((Time.get_ticks_msec() - t0) / 1000.0))
 	await get_tree().create_timer(1.0).timeout
 	var notes := UniverseSave._read(GATE_NOTES)
 	var town: Vector3 = town_dirs[0]
