@@ -214,9 +214,30 @@ jitter-free because the ground really is still.
 - Network: a pawn aboard sends ship-local positions -- small numbers, nothing to correct as the
   ship moves.
 
+**Travel: planet, space, another planet.** Today every frame change rebases each top-level node
+(`PlanetSystem`: `m * transform`, velocities turned) and a sleeping planet reparents what stands on
+it. With the ghost only the **ship** is handed over: riders live in ship-local coordinates and are
+drawn from the ship's transform, so reparenting the ship any number of times moves nothing in the
+ghost. Origin shifts never touch it. Getting off is a pawn's only handoff, into whatever world the
+ship is in then (ship velocity + its deck velocity turned into the world); docking with another
+ship is the same handoff, ghost to ghost.
+- **One shared ghost space** for all ships, each ship's ghost in its own slot ~10 km from the
+  next -- not a Jolt space per ship (each reserves its own memory, and two independent spaces are
+  untested, Planets.md). Per-ship spaces only if a test shows them cheap.
+- **Owned by something that lasts** (the system / an autoload), never by one planet's `World3D`,
+  so it survives a scene unloading.
+- **Gravity aboard is per ship, ship-local:** artificial gravity in flight; parked or low over a
+  planet, the planet's radial pull turned into the ship's frame each tick. Pawns apply their own
+  gravity already; loose bricks in the ghost need it per body (the space's one gravity cannot be
+  everyone's).
+- **A ship parked on a planet that goes to sleep:** reparented as now, its ghost slot switched off,
+  its crew asleep with it; woken with the planet.
+
 **Gate:** `ghost_hull_probe` (headless): a pawn walks the deck of a rocking, turning ship for 60 s
 -- no drift relative to the deck, collision built once, no rebuild on an origin shift; boarding and
-getting off keep its velocity; a shot fired aboard hits the wall it was aimed at.
+getting off keep its velocity; a shot fired aboard hits the wall it was aimed at; the ship flown planet -> space -> a second planet with a pawn walking the whole way: no drift, the
+ghost never rebuilt, the pawn's world velocity right when it steps off; a parked ship's crew
+sleeps and wakes with its planet.
 
 ## 8. Water drawn inside
 
