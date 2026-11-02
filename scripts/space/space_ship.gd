@@ -90,26 +90,30 @@ func setup_ship(d: OrbitalData) -> void:
 	var glow := StandardMaterial3D.new()
 	glow.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	glow.albedo_color = Color(0.55, 0.8, 1.0)
+	# A generated ship's sized to its hull (a deck is ~2.7 m) and clear of the
+	# airlock amidships at its stern.
+	var k := 1.0 if recipe == null else clampf(height * 0.3 / 1.8, 0.35, 1.0)
+	var ex := w * 0.3 if recipe == null else maxf(w * 0.3, 1.8 * k + 1.2)
 	for side in [-1.0, 1.0]:
 		var e := MeshInstance3D.new()
 		var cm := CylinderMesh.new()
-		cm.top_radius = 1.4
-		cm.bottom_radius = 1.8
-		cm.height = 5.0
+		cm.top_radius = 1.4 * k
+		cm.bottom_radius = 1.8 * k
+		cm.height = 5.0 * k
 		e.mesh = cm
 		e.material_override = mat
 		e.rotation = Vector3(PI * 0.5, 0.0, 0.0)
-		e.position = Vector3(side * w * 0.3, height * 0.5, dd * 0.5 + 2.5)
+		e.position = Vector3(side * ex, height * 0.5, dd * 0.5 + 2.5 * k)
 		look.add_child(e)
 		var f := MeshInstance3D.new()
 		var fm := CylinderMesh.new()
-		fm.top_radius = 1.3
-		fm.bottom_radius = 1.3
+		fm.top_radius = 1.3 * k
+		fm.bottom_radius = 1.3 * k
 		fm.height = 0.2
 		f.mesh = fm
 		f.material_override = glow
 		f.rotation = Vector3(PI * 0.5, 0.0, 0.0)
-		f.position = Vector3(side * w * 0.3, height * 0.5, dd * 0.5 + 5.05)
+		f.position = Vector3(side * ex, height * 0.5, dd * 0.5 + 5.0 * k + 0.05)
 		look.add_child(f)
 	_hull = BoxShape3D.new()
 	_hull.size = Vector3(w, height, dd)
