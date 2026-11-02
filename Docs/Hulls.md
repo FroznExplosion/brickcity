@@ -82,6 +82,26 @@ A **breach** is a gone hull cell that joins an `INSIDE` cell to an `OUTSIDE` one
 shot through the side breaches exactly that compartment; opening a bulkhead merges two; a repair
 seals it. Ships of every seed checked, as `88b5bc6` did for loose bricks.
 
+### 3.1 Built (2026-11-02): `HullAir`
+
+`scripts/hull_air.gd`, gate `tools/hull_air_probe.gd` (headless, 8 ok).
+
+- Baked from the laid recipe: one `get_solid_cells` call, doors from `BuildDoors.of(recipe)` as
+  walls to the fill, an outside fill from the chunk's faces, then inside air labelled into
+  compartments (union-find, so merges are cheap).
+- **Compartments are rooms and corridor runs**, split by closed doors: seed 1 is 75,210 inside
+  cells in 90 compartments for 28 placed rooms (sizes 36 cells -- voids in walls -- to 6,296).
+  An open door links two (`links()`); the airlock is the one door onto the outside, and opening
+  it breaches what it opens onto.
+- Hits are followed from the removed blocks' cells (block id = the recipe's frame-0 order, checked
+  against the block count). A shot through the hull breaches exactly its room in 0.06 ms; a wall
+  between two rooms merges them; a patched hole seals, and the inner part of a patched thick wall
+  goes back to inside air (`_pocket_from`, at most 4,096 cells followed).
+- **Bake is 130-300 ms in GDScript** (seeds 1-8). Fine once at generation; it moves to C++ with
+  the flooding (§5) or onto a worker.
+- **No revive yet:** a killed block keeps its cell, so the probe patches by `remove_block` and a
+  new `place_block` (`cells_added`). The repair step (§9) needs a real revive.
+
 ## 4. Venting in space
 
 Air moves fast; it does not need to flow brick by brick. **One pressure per compartment.**
