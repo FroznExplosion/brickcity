@@ -80,6 +80,12 @@ const SMALL_BUILD_PLATES := 240
 const START_VIEW_M := 8.4
 ## How much of the area the grid is drawn over, round the ghost.
 const GRID_STUDS := 120
+## A grid drawn a section at a time (Docs/BuildTools.md section 16): how big a section is,
+## and how far from a changed brick the bricks round it change too (a brick's faces and
+## bevels look a couple of cells out).
+const SECTION_STUDS := 48
+const SECTION_PLATES := 60
+const SECTION_MARGIN := 3
 
 ## Build area size in studs, along and across.
 ## A variable rather than a constant so a scene built on this one can have its own
@@ -128,7 +134,11 @@ var chunk: int:
 		return asm.frames[_frame] if asm != null and asm.frames.size() > 0 else -1
 
 var _frame_meshes := {}     ## chunk id -> MeshInstance3D
-var _frame_studs := {}      ## chunk id -> MultiMeshInstance3D, child of the mesh
+## chunk id, or Vector2i(chunk id, section) on a grid in sections -> MultiMeshInstance3D,
+## child of the mesh
+var _frame_studs := {}
+var _sections := {}         ## chunk id -> {section -> MeshInstance3D}, children of its mesh
+var _frame_boxes := {}      ## chunk id -> AABB of those, in the grid's own space
 var _stud_count := 0        ## studs drawn, all frames, after the last remesh
 var _ghost: MeshInstance3D
 var _ghost_studs: MultiMeshInstance3D   ## child of _ghost
@@ -533,19 +543,21 @@ func _gate_wood() -> void:
 		_place()
 	_mat = was
 	_remesh()
-	var mi: MeshInstance3D = _frame_meshes.get(asm.frames[0])
-	var arrays: Array = mi.mesh.surface_get_arrays(0) \
-			if mi != null and mi.mesh.get_surface_count() > 0 else []
+	var nodes: Array = _sections.get(asm.frames[0], {}).values()
+	if nodes.is_empty():
+		nodes = [_frame_meshes.get(asm.frames[0])]
 	var axes := {}
-	if not arrays.is_empty():
-		for c in arrays[Mesh.ARRAY_COLOR]:
+	for mi: MeshInstance3D in nodes:
+		if mi == null or mi.mesh == null or mi.mesh.get_surface_count() == 0:
+			continue
+		for c in mi.mesh.surface_get_arrays(0)[Mesh.ARRAY_COLOR]:
 			var code := roundi((1.0 - (c as Color).a) * 255.0)
 			if code & 31 == wood:
 				axes[(code >> 5) & 3] = true
 	_gate_ok("wood bricks carry their grain: along X and, turned, along Z",
 			wood >= 0 and axes.has(0) and axes.has(1), "material %d, axes %s" % [wood, axes.keys()])
 	_gate_ok("and the frame knows where it lies on the grid",
-			mi != null and mi.get_instance_shader_parameter("grain_origin") != null)
+			nodes[0] != null and nodes[0].get_instance_shader_parameter("grain_origin") != null)
 	var look := Vector3(22.0 * 0.35, 0.6, 5.0 * 0.35)
 	_camera.global_position = look + Vector3(-1.6, 1.3, -2.0)
 	_camera.look_at(look, Vector3.UP)
@@ -1219,10 +1231,10 @@ func _first_hit(from: Vector3, dir: Vector3) -> Dictionary:
 	var t := INF
 	var end := 0.0
 	for f in asm.frames:
-		var mi: MeshInstance3D = _frame_meshes.get(f)
-		if mi == null or mi.mesh == null or (mi.mesh as ArrayMesh).get_surface_count() == 0:
+		var box := _frame_box(f)
+		if not box.has_volume():
 			continue
-		var s := _ray_through(from, dir, (mi.transform * mi.mesh.get_aabb()).grow(0.2))
+		var s := _ray_through(from, dir, (world.get_chunk_transform(f) * box).grow(0.2))
 		if s.x <= s.y:
 			spans.append([f, s.x, s.y])
 			t = minf(t, s.x)
@@ -1242,6 +1254,14 @@ func _first_hit(from: Vector3, dir: Vector3) -> Dictionary:
 		return {"t": to_floor, "frame": asm.frames[0], "block": -1, "floor": true,
 				"point": from + dir * to_floor}
 	return {}
+
+
+## What a grid's bricks fill, in its own space.
+func _frame_box(f: int) -> AABB:
+	if _frame_boxes.has(f):
+		return _frame_boxes[f]
+	var mi: MeshInstance3D = _frame_meshes.get(f)
+	return mi.mesh.get_aabb() if mi != null and mi.mesh != null else AABB()
 
 
 ## How far along a ray the floor is, INF if it misses. Just inside it: a hit's point is in
@@ -2479,6 +2499,7 @@ func _after_edit() -> void:
 ## brick is a frame rather than a rotated block.
 func _remesh() -> void:
 	_stud_count = 0
+	var sectioned := _draws_sections()
 	for i in asm.frames.size():
 		var f: int = asm.frames[i]
 		var mi: MeshInstance3D = _frame_meshes.get(f)
@@ -2488,21 +2509,77 @@ func _remesh() -> void:
 			add_child(mi)
 			_frame_meshes[f] = mi
 		mi.transform = world.get_chunk_transform(f)
+		if sectioned:
+			_remesh_sections(f, mi)
+			continue
 		# Chamfered, all of it: a workshop is a few hundred bricks an arm's
-		# length away, rebuilt whole on every edit, so there is no far tier to
-		# keep and nothing to patch (Docs/BrickBevel.md). The shader is told, so
-		# its drawn seam and shaded bevel stand down up close (geo_bevel).
+		# length away, so there is no far tier to keep and nothing to patch
+		# (Docs/BrickBevel.md). The shader is told, so its drawn seam and shaded
+		# bevel stand down up close (geo_bevel).
 		var chamfered := BrickNear.enabled
-		var arrays := world.build_chunk_chamfer_mesh(f, BrickNear.BEVEL) if chamfered \
-				else world.build_chunk_mesh(f)
-		var m := ArrayMesh.new()
-		if arrays.size() > 0 and not (arrays[Mesh.ARRAY_VERTEX] as PackedVector3Array).is_empty():
-			m.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
-		mi.mesh = m
-		mi.set_instance_shader_parameter("geo_bevel", 1.0 if chamfered else 0.0)
-		# Frames are chunks of their own: wood's grain is the grid's across them.
-		BrickMaterials.set_grain_origin(mi, world, f)
+		_show_bricks(mi, f, world.build_chunk_chamfer_mesh(f, BrickNear.BEVEL) if chamfered \
+				else world.build_chunk_mesh(f))
 		_restud(f, mi)
+	if sectioned:
+		_stud_count = 0
+		for key in _frame_studs:
+			var held: Variant = _frame_studs[key]
+			if is_instance_valid(held):
+				_stud_count += (held as MultiMeshInstance3D).multimesh.instance_count
+
+
+## The building workshop's builds can be far too big to rebuild whole for each brick. An
+## old brick library has no way to do less.
+func _draws_sections() -> bool:
+	return _wants_tools() and ClassDB.class_has_method("BrickWorld", "take_changed_sections")
+
+
+func _show_bricks(mi: MeshInstance3D, f: int, arrays: Array) -> void:
+	var m := ArrayMesh.new()
+	if arrays.size() > 0 and not (arrays[Mesh.ARRAY_VERTEX] as PackedVector3Array).is_empty():
+		m.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
+	mi.mesh = m
+	mi.set_instance_shader_parameter("geo_bevel", 1.0 if BrickNear.enabled else 0.0)
+	# Frames are chunks of their own: wood's grain is the grid's across them.
+	BrickMaterials.set_grain_origin(mi, world, f)
+
+
+## Mesh again the sections of a grid the engine says have changed, and only those.
+func _remesh_sections(f: int, frame_node: MeshInstance3D) -> void:
+	world.set_chunk_section_studs(f, SECTION_STUDS)
+	world.set_chunk_section_plates(f, SECTION_PLATES)
+	var changed: PackedInt32Array = world.take_changed_sections(f, SECTION_MARGIN)
+	if changed.is_empty():
+		return
+	var held: Dictionary = _sections.get_or_add(f, {})
+	for s in changed:
+		var arrays: Array = world.build_section_chamfer_mesh(f, s, BrickNear.BEVEL if BrickNear.enabled else 0.0)
+		var studs: PackedFloat32Array = world.get_section_studs(f, s)
+		var key := Vector2i(f, s)
+		var mi: MeshInstance3D = held.get(s)
+		if arrays.is_empty() and studs.is_empty():
+			if mi != null:
+				mi.queue_free()
+				held.erase(s)
+				_frame_studs.erase(key)
+			continue
+		if mi == null:
+			mi = MeshInstance3D.new()
+			mi.material_override = _material
+			frame_node.add_child(mi)
+			held[s] = mi
+		_show_bricks(mi, f, arrays)
+		var inv := world.get_chunk_transform(f).affine_inverse()
+		for id in world.get_section_side_stud_blocks(f, s):
+			var col := BrickWorld.get_material_colour(world.get_block_material(f, id), world.get_block_colour(f, id))
+			studs.append_array(_side_stud_floats(f, id, inv, col))
+		_fill_studs(key, mi, studs)
+	var box := AABB()
+	for s in held:
+		var part: AABB = (held[s] as MeshInstance3D).get_aabb()
+		if part.has_volume():
+			box = part if not box.has_volume() else box.merge(part)
+	_frame_boxes[f] = box
 
 
 ## Studs for one frame: the same instanced stud and the same printed material
@@ -2569,7 +2646,13 @@ func _stud_lod() -> void:
 
 
 func _restud(frame: int, parent: MeshInstance3D) -> void:
-	var mmi: MultiMeshInstance3D = _frame_studs.get(frame)
+	var buffer: PackedFloat32Array = world.get_chunk_studs(frame)
+	buffer.append_array(_side_stud_instances(frame))
+	_fill_studs(frame, parent, buffer)
+
+
+func _fill_studs(key: Variant, parent: MeshInstance3D, buffer: PackedFloat32Array) -> void:
+	var mmi: MultiMeshInstance3D = _frame_studs.get(key)
 	if mmi == null:
 		mmi = MultiMeshInstance3D.new()
 		mmi.name = "Studs"
@@ -2579,9 +2662,7 @@ func _restud(frame: int, parent: MeshInstance3D) -> void:
 		# instead.
 		mmi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 		parent.add_child(mmi)
-		_frame_studs[frame] = mmi
-	var buffer: PackedFloat32Array = world.get_chunk_studs(frame)
-	buffer.append_array(_side_stud_instances(frame))
+		_frame_studs[key] = mmi
 	@warning_ignore("integer_division")
 	var count := buffer.size() / 16
 	var mm := MultiMesh.new()
@@ -2772,10 +2853,9 @@ func grid_window() -> Rect2i:
 ## The upright grid's bricks seen from above, a stud round them, in studs. Past this there
 ## is nothing to walk into.
 func built_area() -> Rect2i:
-	var mi: MeshInstance3D = _frame_meshes.get(asm.frames[0])
-	if mi == null or mi.mesh == null:
+	var box := _frame_box(asm.frames[0])
+	if not box.has_volume():
 		return Rect2i()
-	var box: AABB = mi.mesh.get_aabb()
 	var lo := Vector2i(floori(box.position.x / BrickPalette.STUD_M), floori(box.position.z / BrickPalette.STUD_M))
 	var hi := Vector2i(ceili(box.end.x / BrickPalette.STUD_M), ceili(box.end.z / BrickPalette.STUD_M))
 	return Rect2i(lo, hi - lo).grow(1)
@@ -2855,6 +2935,9 @@ func _reset_space() -> void:
 		if mi != null:
 			mi.queue_free()
 	_frame_meshes.clear()
+	_frame_studs.clear()
+	_sections.clear()
+	_frame_boxes.clear()
 	_clear_fixtures()
 	_edits.clear()
 	_paints.clear()

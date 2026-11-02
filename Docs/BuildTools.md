@@ -659,4 +659,48 @@ Merged; `tools/build_tools_probe.gd` 274 checks, workshop gate 19.
   headless, other runs possibly going: 11,900 bricks 240 ms a brick, 89,000 bricks (a 20-storey block
   80 studs wide) 2 to 4 s a brick, of which a remesh is 2 s (the chamfer mesh 0.7 s, the rest mostly
   building the ArrayMesh). Laying a whole shape is one remesh, so it is hand placing that suffers.
-  A tall building needs its grid meshed in sections, so an edit rebuilds only the section it touched.
+  Section 16 is the answer.
+
+## 16. Edits that cost what they touch
+
+Asked 2026-11-02, after section 15's timings: a brick placed on a big building should not take
+seconds. Every edit rebuilt every grid: at 89,000 bricks the bake 0.7 s, the chamfer 0.7 s, the
+ArrayMesh 0.5 s, and side studs walked the whole build six times.
+
+The engine can already cut a chunk into sections, tiles of `section_studs` by `section_plates`,
+and the city draws a mesh a section. That is not enough here: a section's mesh is a slice of a bake
+of the whole chunk, and any new brick throws that bake away. So:
+
+* **A bake of one section.** `bake_faces_into` takes the blocks to bake. A block's faces depend on
+  the cells round it, not on the other faces, so this is the same faces as a slice would be.
+  `build_section_chamfer_mesh` bakes the section's blocks, chamfers them, and leaves the chunk's
+  own bake alone.
+* **The engine says what changed.** `take_changed_sections(chunk, margin)` stamps every block
+  (place, part, colour, material, alive) and compares with the stamps it kept last time, so no
+  edit path has to remember to report itself. A change marks the sections its box touches, grown by
+  `margin`: a brick changes the faces and bevels of the bricks round it, and those may be in the
+  next section. A block is drawn by the section its lowest cell is in.
+* **Script.** A grid's node keeps its transform and holds a child mesh, with its studs, for each
+  section that has bricks: `_remesh` rebuilds only what the engine names. Sections are 48 studs by
+  60 plates, so a tall building is a few hundred meshes, and a section out of view is not drawn.
+* **Old library.** Without these calls the workshop meshes whole as before. The asset workshop
+  stays whole too: its builds are small and it reads the meshes in other ways.
+
+### As built (2026-11-02)
+
+Merged; `tools/build_tools_probe.gd` 291 checks. Its `_sections_match_whole` compares what the
+sections draw with one mesh of the whole grid, vertex and colour, after each kind of edit and across
+section lines.
+
+Rough timings on one 89,061-brick building (headless, 63 sections): a brick against it 30 to 43 ms,
+was 2 to 4 s; a brick off on its own 4 ms; undo 34 ms. Laying the whole building at once is still
+about 15 s, nearly all of it in GDScript working out and laying the bricks, not in meshing.
+
+Other things to know:
+
+* A grid's node (`_frame_meshes`) has no mesh of its own now, only children. Ask `_frame_box(f)`
+  for what a grid fills and `_sections[f]` for its meshes.
+* `_frame_studs` is keyed by `Vector2i(chunk, section)` here and by chunk id in the asset workshop.
+* The workshop no longer makes `chunk.bake` at all, so `update_chamfer_regions` and the like have
+  nothing to read in it. Nothing here wants them: `take_changed_sections` is its way of patching.
+* The library has to be rebuilt for this; without it the workshop falls back to meshing whole.

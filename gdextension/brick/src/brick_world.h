@@ -220,6 +220,11 @@ public:
     /// draws -- so none of furniture's, which no band does (FurnitureMesh). A
     /// building's studs are drawn band by band, near the camera only.
     PackedFloat32Array get_chunk_studs_section(int chunk_id, int section) const;
+    /// One section's studs, furniture's as well (as get_chunk_studs does).
+    PackedFloat32Array get_section_studs(int chunk_id, int section) const;
+    /// The blocks of a section with side studs, for a grid drawn a section at a
+    /// time: a build rarely has any, and asking every brick is not cheap.
+    PackedInt32Array get_section_side_stud_blocks(int chunk_id, int section) const;
     /// One byte a stud, in get_chunk_studs_section's order: 1 when nothing in
     /// the chunk is over it -- a top stud with no live brick anywhere above it
     /// in its column, a bottom stud with none below. A roof, a ledge, a floor
@@ -363,6 +368,15 @@ public:
     /// nothing kept. For what is small and rebuilt whole on every change -- a
     /// workshop frame, a placement ghost.
     Array build_chunk_chamfer_mesh(int chunk_id, double bevel);
+    /// The chamfered mesh of one section, baked just for this call: its own
+    /// blocks, none of the chunk's. A chunk edited all the time would throw a
+    /// bake of the whole of it away with every brick. Docs/BuildTools.md 16.
+    Array build_section_chamfer_mesh(int chunk_id, int section, double bevel);
+    /// The sections to mesh again since the last call: every block is stamped
+    /// and compared, so no edit has to report itself. A change marks the
+    /// sections its box touches, grown by `margin` cells: it changes the faces
+    /// of what is round it. The first call names every section with bricks.
+    PackedInt32Array take_changed_sections(int chunk_id, int margin);
     /// One band's chamfered mesh, on a worker -- or the whole chunk's as one,
     /// with section < 0, for a chunk drawn as one mesh (build_chunk_mesh).
     /// Needs the bake (bake_ready); ask chamfer_ready, then

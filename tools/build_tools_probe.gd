@@ -51,6 +51,7 @@ func _initialize() -> void:
 	await _out_of_the_way_checks()
 	_repeat_building_checks()
 	_area_checks()
+	_section_checks()
 	print("\n%d passed, %d failed" % [_pass, _fail])
 	quit(1 if _fail > 0 else 0)
 
@@ -1548,6 +1549,139 @@ func _area_checks() -> void:
 	_ok("and the view goes to the build, not the middle of the area",
 			_ws._camera.global_position.distance_to(BrickWorld.grid_to_world(Vector3i(10, 1, 10))) < 40.0,
 			str(_ws._camera.global_position))
+
+
+## What the sections draw between them against one mesh of the whole grid: as many
+## vertices, in the same places, the same colours.
+func _sections_match_whole(what: String) -> void:
+	var f0: int = _ws.asm.frames[0]
+	var total := 0
+	var sum := 0.0
+	var hue := 0.0
+	for mi: MeshInstance3D in _ws._sections.get(f0, {}).values():
+		if mi.is_queued_for_deletion() or mi.mesh == null or mi.mesh.get_surface_count() == 0:
+			continue
+		var a: Array = mi.mesh.surface_get_arrays(0)
+		total += (a[Mesh.ARRAY_VERTEX] as PackedVector3Array).size()
+		for v in a[Mesh.ARRAY_VERTEX]:
+			sum += v.x + v.y * 2.0 + v.z * 3.0
+		for c in a[Mesh.ARRAY_COLOR]:
+			hue += c.r + c.g * 2.0 + c.a * 3.0
+	# Through a mesh as well: a surface keeps its colours in eight bits.
+	var whole := ArrayMesh.new()
+	var raw: Array = _ws.world.build_chunk_chamfer_mesh(f0, BrickNear.BEVEL if BrickNear.enabled else 0.0)
+	var w_total := 0
+	var w_sum := 0.0
+	var w_hue := 0.0
+	if not raw.is_empty():
+		whole.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, raw)
+		var a: Array = whole.surface_get_arrays(0)
+		w_total = (a[Mesh.ARRAY_VERTEX] as PackedVector3Array).size()
+		for v in a[Mesh.ARRAY_VERTEX]:
+			w_sum += v.x + v.y * 2.0 + v.z * 3.0
+		for c in a[Mesh.ARRAY_COLOR]:
+			w_hue += c.r + c.g * 2.0 + c.a * 3.0
+	_ok("%s: the sections draw what the whole grid would" % what, total == w_total
+			and absf(sum - w_sum) < 0.01 and absf(hue - w_hue) < 0.01,
+			"%d vs %d verts, %f vs %f, colour %f vs %f" % [total, w_total, sum, w_sum, hue, w_hue])
+
+
+func _section_checks() -> void:
+	print("[probe] edits cost what they touch (section 16)")
+	_ws._new_build()
+	var t: WorkshopTools = _ws._tools
+	var f0: int = _ws.asm.frames[0]
+	t.flat_roof = true
+	t.storey_courses = 6
+	t.door_size = WorkshopTools.DOOR
+	_hold("brick_1x2")
+	t.pick("draw")
+	t.set_outline("box")
+	t.makes = "building"
+	# Across the section lines: x and z 48, and y 60 between the third storey and the fourth.
+	_drag_outline(t, Vector3i(36, 1, 40), Vector2i(60, 58))
+	t.input(_key(KEY_4))
+	t.commit_pending()
+	t.every_floor = false
+	t.apply_opening("door", t.face_under(Vector3(48.5 * BrickPalette.STUD_M, 5.5 * BrickPalette.PLATE_M, -3.0), Vector3(0, 0, 1)))
+	t.every_floor = true
+	t.pick("hand")
+	_ok("the building is several sections", (_ws._sections.get(f0, {}) as Dictionary).size() > 4,
+			str((_ws._sections.get(f0, {}) as Dictionary).size()))
+	_ok("the grid's own node draws none of it", _ws._frame_meshes[f0].mesh == null)
+	_sections_match_whole("a building with a door")
+
+	var held: Dictionary = _ws._sections[f0]
+	var meshes := {}
+	for s in held:
+		meshes[s] = held[s].mesh
+	_hold("brick_2x4")
+	_ws._axis_z = false
+	_ws._cell = Vector3i(47, 1, 100)
+	_ws._update_ghost()
+	_ws._place()
+	var redrawn := 0
+	for s in meshes:
+		if held[s].mesh != meshes[s]:
+			redrawn += 1
+	_ok("a brick well away redraws none of the building", redrawn == 0, "%d of %d" % [redrawn, meshes.size()])
+	_sections_match_whole("a brick on a section line")
+
+	for s in held:
+		meshes[s] = held[s].mesh
+	_ws._cell = Vector3i(47, 78, 39)
+	_ws._update_ghost()
+	_ws._place()
+	redrawn = 0
+	for s in meshes:
+		if held[s].mesh != meshes[s]:
+			redrawn += 1
+	_ok("a brick against the building redraws only what it touches", redrawn > 0 and redrawn <= 8,
+			"%d of %d" % [redrawn, meshes.size()])
+	_sections_match_whole("a brick against the building")
+
+	var hit: Dictionary = _ws._first_hit(BrickWorld.grid_to_world(Vector3i(47, 1, 100)) + Vector3(0.1, 20.0, 0.1), Vector3.DOWN)
+	_ok("a ray finds a brick drawn by a section", int(hit.get("block", -1)) >= 0, str(hit))
+	_ok("walls still close across sections", not t.floor_record(Vector3i(45, 21, 45), false).is_empty())
+
+	_ws._undo()
+	_sections_match_whole("undone")
+	_ws._undo()
+	_sections_match_whole("undone again")
+	var bid: int = _ws.world.block_at(f0, Vector3i(47, 2, 40))
+	_ws.world.set_block_material(f0, bid, 1)
+	_ws._remesh()
+	_sections_match_whole("a brick painted")
+	_ws.world.set_block_colour(f0, bid, 4)
+	_ws._remesh()
+	_sections_match_whole("a brick coloured")
+
+	# One brick alone in its section, taken away: the section goes, and its studs with it.
+	_hold("brick_2x4")
+	_ws._cell = Vector3i(300, 1, 300)
+	_ws._update_ghost()
+	var studs: int = _ws._stud_count
+	var count: int = held.size()
+	_ws._place()
+	_ok("a section of its own", held.size() == count + 1 and _ws._stud_count == studs + 8,
+			"%d, %d studs" % [held.size(), _ws._stud_count])
+	_ws._undo()
+	_ok("gone with its brick", held.size() == count and _ws._stud_count == studs,
+			"%d, %d studs" % [held.size(), _ws._stud_count])
+
+	var f1: int = _ws.asm.frames[1]
+	_ws.world.place_block(f1, Vector3i(10, 1, 10), _ws.palette[_ws._archetype_name()], 3)
+	_ws._remesh()
+	_ok("a sideways grid is drawn in sections too", (_ws._sections.get(f1, {}) as Dictionary).size() == 1
+			and _ws._frame_box(f1).has_volume())
+
+	var r := BuildRecipe.new()
+	_ws._part_index = BrickPalette.parts().find("brick_2x4")
+	r.add(_ws._archetype_name(), Vector3i(100, 1, 100), 3)
+	_ws._load_recipe(r)
+	var f: int = _ws.asm.frames[0]
+	_ok("a load starts afresh", (_ws._sections.get(f, {}) as Dictionary).size() == 1 and _ws._stud_count == 8,
+			"%d sections, %d studs" % [(_ws._sections.get(f, {}) as Dictionary).size(), _ws._stud_count])
 
 
 func _repeat_building_checks() -> void:
