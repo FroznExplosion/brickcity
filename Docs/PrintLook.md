@@ -82,8 +82,8 @@ its height and stair-step on slopes (above).
 
 ## 3. What it costs
 
-Nothing new to hold but one texture: PLA's side layers are baked (Docs/PbrWood.md 7, ~2.7 MB);
-no vertex data. The stud's turn is in the instance transform it
+Nothing new to hold but one texture: PLA's beads -- sides, tops, bottoms -- are baked
+(Docs/PbrWood.md 7, ~8 MB); no vertex data. The stud's turn is in the instance transform it
 already had. The underside is a handful of arithmetic on bottom faces only, plus three distance
 evaluations within 25 m in the hollow; the stairs are a normal blend on authored faces only; the
 stud top lost an `atan`. Not timed.
@@ -98,8 +98,9 @@ walls, zigzag, voids, stairs and Z seam past `print_fade_end`, the hollow's roof
 * The first layer's elephant's foot (a slight flare at the bed).
 * An authored part's flat bottom is open at the rim only: its ribs and pins need the footprint,
   which a triangle does not know. No Z seam on authored parts. Their bevel is shaded, not built.
-* PLA's side layers are a baked texture now (Docs/PbrWood.md 7); the other filaments and every
-  top are still the drawn rules here. A baked
+* PLA's beads are a baked texture now (Docs/PbrWood.md 7): where the rules here put a bead
+  (which way, which loop, where a connector runs) still decides it, the texture only how each
+  bead looks. The other filaments are still drawn by the rules. A baked
   per-footprint toolpath map, straight from G-code, is the next step if the drawn rules are not
   enough -- a few MB, one texture read a pixel.
 

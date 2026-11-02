@@ -6,8 +6,8 @@ round its edges, and bricks side by side continue one another. Wood came first (
 has the most of its own (a grain field, sections 2-3); metal, stone and leaves followed the same
 day on the same machinery (section 1.1), and on 2026-11-01 each variant got a set of its own
 (walnut a walnut photo, slate a rock, verdigris a patina; section 1.2). On 2026-11-02 PLA's
-layer lines became a baked texture of our own (section 7); the other filaments, and every
-printed top, are still drawn by rules (`print_surface.gdshaderinc`).
+layer lines, top lines and first layer became a baked texture of our own (section 7); the other
+filaments are still drawn by rules (`print_surface.gdshaderinc`).
 
 ## 1. What draws it
 
@@ -216,9 +216,8 @@ what plastic does, and some 0.3-0.5 ms over flat colour with a whole screen of i
 * **Studs continuing the brick's figure**: needs the stud's place in its brick.
 * **Leaves by colour**: one set for every filament colour; a second (needles, hedge) would
   want its own key, since leaves take the filament palette, not variants.
-* **The rest of the printed plastic** (section 7): the other filaments' sides (a slice each in
-  `print_bead`: ABS finer, TPU wide soft beads, carbon, nylon, wood fill), and the tops' toolpaths
-  as a tile turned with `ps_top_turned`.
+* **The rest of the printed plastic** (section 7): the other filaments (three slices each in
+  `print_bead`: ABS finer, TPU wide soft beads, carbon, nylon, wood fill).
 * **The PLA layers' frame time**: not timed yet (the editor was open on 2026-11-02). One
   texture read in place of the drawn bead's arithmetic, so expected about even.
 * **Texture streaming** (Godot 4.8's mip streaming, in beta as of 2026-10-31): with a set per
@@ -228,22 +227,25 @@ what plastic does, and some 0.3-0.5 ms over flat colour with a whole screen of i
   printable bricks are) instead of downloaded -- needed for the printed plastic, whose look is
   measured from our own sliced G-code (Docs/PrintLook.md) and has no photo to download.
 
-## 7. The printed layers, baked (PLA)
+## 7. The printed beads, baked (PLA)
 
-A printed side's layers are a texture since 2026-11-02, generated rather than downloaded: there
-is no photo of a 1:43.75 print. `tools/make_print_beads.gd` (headless, a few seconds) bakes
-`textures/pbr/print_bead.webp`, a Texture2DArray with one slice a filament -- PLA's today --
-bound as the global `print_bead`.
+A printed part's beads are a texture since 2026-11-02 -- a side's layers, a top's lines, a
+bottom's first layer -- generated rather than downloaded: there is no photo of a 1:43.75 print.
+`tools/make_print_beads.gd` (headless, ~20 s) bakes `textures/pbr/print_bead.webp`, a
+Texture2DArray with three slices a filament (side, top, bottom; PLA's today), bound as the
+global `print_bead`.
 
 | | |
 |---|---|
-| A slice | 32 layers tall, 64 layers long, 32 px a layer (2048x1024), tiles both ways; ~2.7 MB of video memory with mips (BC7) |
-| R, G | the surface's slope along and across the layers, in layer heights (a slope is its own tilt), +-1.5 |
-| B | shade, mean 1: deep in a groove darker (it sees less sky), and each layer a shade of its own |
+| A slice | 32 beads tall, 64 beads long, 32 px a bead (2048x1024), tiles both ways; ~2.7 MB of video memory each with mips (BC7), ~8 MB for PLA's three. A bead is a layer (8.75 mm) on a side, a line (18 mm top, 20 mm bottom) on a top or bottom |
+| R, G | the surface's slope along and across the beads, in beads (a slope is its own tilt), +-1.5 |
+| B | shade, mean 1: deep in a groove darker (it sees less sky), and each bead a shade of its own |
 | A | roughness offset, mean 0: a groove duller than a crest |
-| What is in it | each layer a squashed half-cylinder with a narrow V to the next (`DEPTH` 0.25 of a layer); each layer a little prouder or not (`PROUD`), the line swelling along its length (`SWELL`), the seam between two layers wandering (`WANDER`), a fine grain (`MICRO`) |
-| Read by | `ps_bead_tex` (print_surface.gdshaderinc), from `ps_beads`, on a side (`face` 0) of a material whose `PS_BEAD_SLICE` is a slice: bricks, facets, authored parts and studs |
-| Placed | up by the layer count `t`, so a groove sits at every whole layer, where a brick starts and stops; along by metres (`u`: a box side's UV, else x + z); the face's seed moves it whole layers up and anywhere along, so no two faces show the same stretch |
+| Side | each layer a squashed half-cylinder with a narrow V to the next (depth 0.25 of a layer); each layer a little prouder or not, the line swelling along its length, the seam between two layers wandering, a fine grain |
+| Top | lines pressed flat by the nozzle, flat across the middle and rounding into a shallow V (depth 0.14 of a line, squash 3.5), a fine ripple across each where the extruder pulsed; less shade between lines than a side's layers. Finer than the drawn rules' lines, which read as corrugated |
+| Bottom | the first layer, squashed into the bed: hairline seams (depth 0.025), next to no relief, a little duller in the seams. Drawn as on smooth PEI; glass and textured PEI scale it by their share of the bead (`ps_face_k`), and textured PEI keeps its powder-coat grain on top (`ps_bed_grain`) |
+| Read by | `ps_bead_tex` (print_surface.gdshaderinc), from `ps_beads`, for a material whose `PS_BEAD_SLICE` is its first slice: bricks, facets, authored parts and studs; side, top, bottom, wall loops, infill, connectors and an open underside's rim loops alike. The wall-infill junction line is kept |
+| Placed | across by the bead count `t`. A side's groove sits at every whole layer, where a brick starts and stops; a top's and bottom's lines are CENTRED on whole t (the first wall loop runs round the edge at t 0), so their slices are read half a bead over. Along by metres (`u`): a box side's UV; a top's diagonals across their own direction; a loop round an outline x + y (runs along every edge, continuous round the corners, so no seam in the filtering); an authored face or a facet x + z. The face's seed moves it whole beads across and anywhere along, so no two faces show the same stretch |
 | Knobs | `print_bead_texture` (off: the drawn rules, for A/B), `bead_tex_relief` 0.45, `bead_tex_shade` 1 |
 
 What a texture does better than the rules: every layer is its own, and wanders along its
@@ -253,5 +255,5 @@ against the pixels (moire on a wall at 10 m), the baked one fades to its mean. T
 fade is kept: the relief gives up squared as a layer nears a pixel and roughness takes what it
 drops (ps_beads), since a filtered normal still sparkles.
 
-Pictures: `tools/print_look_shot.gd -- --out=<dir> --views=side,stud,corner,wall` with and
-without `--no-bead-tex`.
+Pictures: `tools/print_look_shot.gd -- --out=<dir> --looks=glass,pei
+--views=side,stud,corner,wall,top,tops_close,skin,bottom,under` with and without `--no-bead-tex`.

@@ -125,6 +125,11 @@ void fragment() {
     if (print_lines_enabled && ps_printed(mat)) {
         float t;
         float t_d;
+        // Metres along the beads (ps_bead_tex): x + z round a loop and up a
+        // side -- on the two side facets that face along x - z it stands
+        // still, and their layers show no wander along them, still each
+        // layer its own -- and across a top's diagonals their own way.
+        float u = v_local.x + v_local.z;
         float junction = 0.0;
         if (face != 0) {
             float bw = ps_bead(face, mat);
@@ -139,6 +144,7 @@ void fragment() {
                     t = depth / bw;
                 } else {
                     t = dot(v_local.xz, vec2(0.7071, 0.7071)) / bw;
+                    u = dot(v_local.xz, vec2(-0.7071, 0.7071));
                 }
                 t_d = t;
                 // Where the lines meet the inner wall, the fine dark line
@@ -150,6 +156,7 @@ void fragment() {
             } else {
                 t = dot(v_local.xz, vec2(0.7071, face == 2 ? -0.7071 : 0.7071)) / bw;
                 t_d = t;
+                u = dot(v_local.xz, vec2(face == 2 ? 0.7071 : -0.7071, 0.7071));
             }
         } else if (top_mode == 1) {
             // A stud's own layers, on top of the brick's: nine.
@@ -162,10 +169,7 @@ void fragment() {
             t_d = t;
         }
         // A stud is one shared mesh: one seed for all of them.
-        // Along a stud's side for the baked layers (ps_bead_tex): x + z. On
-        // the two facets that face along x - z it stands still, and their
-        // layers show no wander along them -- still each layer its own.
-        ps_beads(t, t_d, v_local.x + v_local.z, face, mat, dist, VERTEX, 0.0, junction, 0.0,
+        ps_beads(t, t_d, u, face, mat, dist, VERTEX, 0.0, junction, 0.0,
                 albedo, NORMAL, print_rough, aniso_dir, aniso);
         if (face == 2) {
             vec3 ax_u = normalize(mat3(VIEW_MATRIX) * MODEL_MATRIX[0].xyz);
