@@ -94,7 +94,21 @@ func setup_ship(d: OrbitalData) -> void:
 	# airlock amidships at its stern.
 	var k := 1.0 if recipe == null else clampf(height * 0.3 / 1.8, 0.35, 1.0)
 	var ex := w * 0.3 if recipe == null else maxf(w * 0.3, 1.8 * k + 1.2)
-	for side in [-1.0, 1.0]:
+	var bricked_engines: Array = recipe.meta.get("engines", []) if recipe != null else []
+	# A generated ship's engines are its bricks (ShipBuild): a glow on each one's back.
+	for at: Array in bricked_engines:
+		var org := recipe.origin()
+		var g := MeshInstance3D.new()
+		var gm := CylinderMesh.new()
+		gm.top_radius = ShipBuild.NACELLE.x * stud * 0.38
+		gm.bottom_radius = gm.top_radius
+		gm.height = 0.1
+		g.mesh = gm
+		g.material_override = glow
+		g.transform = frame * Transform3D(Basis(Vector3.BACK, PI * 0.5), Vector3((float(at[0]) - org.x) * stud - 0.06,
+				(float(at[1]) - org.y) * BrickWorld.get_plate_metres(), (float(at[2]) - org.z) * stud))
+		look.add_child(g)
+	for side in ([] if not bricked_engines.is_empty() else [-1.0, 1.0]):
 		var e := MeshInstance3D.new()
 		var cm := CylinderMesh.new()
 		cm.top_radius = 1.4 * k
