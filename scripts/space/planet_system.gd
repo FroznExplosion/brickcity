@@ -500,8 +500,18 @@ func _place() -> void:
 	var s2w := space_to_world()
 	var f := frame_node()
 	star.global_transform = s2w
+	# On a station's frame its planet comes off the station, not through the star's
+	# frame: a ship flying there is placed off the planet, and would shake by 0.5 m.
+	var held := -1
+	var held_at := Vector3.ZERO
+	if f is SpaceStation and not f is SpaceShip:
+		var at := stations.find(f)
+		held = sys.orbitals[at].parent
+		held_at = f.global_position - s2w.basis * sys.orbital_local(at, t).origin
 	for i in bodies.size():
-		if bodies[i] != f:
+		if i == held:
+			bodies[i].global_transform = Transform3D(s2w.basis * sys.spin(i, t), held_at)
+		elif bodies[i] != f:
 			bodies[i].global_transform = s2w * sys.xform(i, t)
 	for k in stations.size():
 		if stations[k] != f:

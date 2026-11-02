@@ -168,6 +168,7 @@ func _run() -> void:
 
 	_worlds(uni)
 	_rocks(uni)
+	_steady(hs)
 	var near := uni.nearest(0, 10)
 	var d0 := uni.system_position(near[0]).length()
 	var d9 := uni.system_position(near[9]).length()
@@ -273,6 +274,24 @@ func _rocks(uni: Universe) -> void:
 	_check("blocked in a rock, not far out of the field", f.blocked(one, 1.0) and not f.blocked(Vector3(40000.0, 0.0, 0.0), 10.0),
 			"radius %.1f m" % size)
 	f.free()
+
+
+## Seen from its planet's still ground (PlanetSystem._place), a station moves
+## evenly, late in a long game as early: an angle handed to Basis() is float32,
+## so an unwrapped one rounds the orbit into visible steps as the clock runs.
+func _steady(s: StarSystem) -> void:
+	var dt := 1.0 / 60.0
+	for t0: float in [600.0, 60000.0, 600000.0]:
+		var worst := 0.0
+		for k in s.orbitals.size():
+			var i := s.orbitals[k].parent
+			var at := []
+			for n in 180:
+				var t := t0 + n * dt
+				at.append(s.spin(i, t).inverse() * s.orbital_local(k, t).origin)
+			for n in range(2, at.size()):
+				worst = maxf(worst, ((at[n] as Vector3) - 2.0 * (at[n - 1] as Vector3) + (at[n - 2] as Vector3)).length())
+		_check("a station's path over its planet is smooth at t = %.0f s" % t0, worst < 0.05, "worst step off by %.3f m" % worst)
 
 
 func _planets(s: StarSystem) -> int:

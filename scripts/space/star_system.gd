@@ -49,6 +49,12 @@ const SETTLED := Vector2(-70.0, 50.0)
 
 # --- where things are --------------------------------------------------------
 
+## An angle for Basis(), one turn at most: Basis() is float32, and an angle left to
+## grow with the clock rounds an orbit into steps of metres (2 m at t = 60,000 s).
+static func _turn(a: float) -> float:
+	return fmod(a, TAU)
+
+
 ## The plane a body orbits in: its normal and the direction at phase 0.
 static func _plane(d: PlanetData) -> Basis:
 	return Basis(Vector3.UP, d.orbit_node) * Basis(Vector3.RIGHT, d.orbit_inclination)
@@ -61,7 +67,7 @@ func orbit_offset(i: int, t: float) -> Vector3:
 		return Vector3.ZERO
 	var q := _plane(d)
 	var a := d.orbit_phase + (TAU * t / d.orbit_period if d.orbit_period > 0.0 else 0.0)
-	return Basis(q.y, a) * q.x * d.orbit_radius
+	return Basis(q.y, _turn(a)) * q.x * d.orbit_radius
 
 
 ## Body `i`'s place at time `t`, space frame (a moon's adds its parent's).
@@ -94,7 +100,7 @@ func vel(i: int, t: float) -> Vector3:
 func spin(i: int, t: float) -> Basis:
 	var d := bodies[i]
 	var a := d.spin_phase + (TAU * t / d.day if d.day > 0.0 else 0.0)
-	return d.tilt * Basis(d.climate_axis.normalized(), a)
+	return d.tilt * Basis(d.climate_axis.normalized(), _turn(a))
 
 
 ## Body `i`'s angular velocity, space frame (rad/s along its axis).
@@ -149,7 +155,7 @@ func orbital_xform(k: int, t: float) -> Transform3D:
 func orbital_local(k: int, t: float) -> Transform3D:
 	var o := orbitals[k]
 	var q := Basis(Vector3.UP, o.orbit_node) * Basis(Vector3.RIGHT, o.orbit_inclination)
-	var r := Basis(q.y, o.orbit_phase + TAU * t / o.orbit_period) * q.x
+	var r := Basis(q.y, _turn(o.orbit_phase + TAU * t / o.orbit_period)) * q.x
 	var along := q.y.cross(r)
 	return Transform3D(Basis(along, r, along.cross(r)), r * o.orbit_radius)
 
