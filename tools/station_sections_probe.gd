@@ -11,7 +11,7 @@ extends SceneTree
 ##             built, its shell a box round each section, its box its own
 ##   laid      activate lays every brick of it, nothing loose: its keel the
 ##             foundation
-##   drift     every brick where a leaf section meets the rest killed: the solve
+##   drift     every brick where a section (its fewest joints) meets the rest killed: the solve
 ##             sends the section off whole (`drifted`, one rigid piece)
 
 var _pass := 0
@@ -125,9 +125,11 @@ func _after_laid() -> void:
 	for j: Dictionary in cut.joints:
 		touch[int(j.a)] = int(touch.get(int(j.a), 0)) + 1
 		touch[int(j.b)] = int(touch.get(int(j.b), 0)) + 1
+	# The section with the fewest joints (a leaf, where there is one; bridges can
+	# close every section into a loop): all its joints are killed, so it is cut off.
 	var leaf := -1
 	for k in touch:
-		if int(k) != 0 and int(touch[k]) == 1:
+		if int(k) != 0 and (leaf < 0 or int(touch[k]) < int(touch[leaf])):
 			leaf = int(k)
 	var size_leaf := 0
 	for k in (cut.of as PackedInt32Array).size():
@@ -146,7 +148,7 @@ func _after_laid() -> void:
 	var biggest := 0
 	for n: int in _drifts:
 		biggest = maxi(biggest, n)
-	_ok("a leaf section's joint shot away: the section drifts off whole",
+	_ok("a section's joints shot away: the section drifts off whole",
 			leaf > 0 and biggest >= size_leaf * 0.6,
 			"section %d of %d bricks, %d killed at its joint, drifted %s" % [leaf, size_leaf, killed.size(), str(_drifts)])
 	st.deactivate()

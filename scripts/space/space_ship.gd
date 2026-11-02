@@ -60,6 +60,15 @@ var altitude := 0.0
 var camera: Camera3D
 var rams := 0
 var _hull: BoxShape3D
+## A generated ship parked on a planet: a stair of bricks hung from its airlock
+## to the ground (its sill can stand metres up), taken up when it is flown.
+var gangway: Node3D = null
+var gangway_steps := 0
+var _gang_body: StaticBody3D = null
+## A step: one brick up (what the pawn steps), two studs deep, four across.
+const GANG_RISE := 3
+const GANG_TREAD := 2
+const GANG_STEPS := 24
 
 
 func setup_ship(d: OrbitalData) -> void:
@@ -225,6 +234,90 @@ func fly(ps, dt: float) -> void:
 	rel.origin = next
 
 
+## Lowered while it is parked in its bricks on a planet, nobody at its controls;
+## taken up otherwise (PlanetSystem, each frame).
+func gangway_step() -> void:
+	var want := recipe != null and airlock_cell.x >= 0 and bricked and not riding and landed \
+			and not piloted and ref != null
+	if want and gangway == null:
+		_lower_gangway()
+	elif not want and gangway != null:
+		gangway.queue_free()
+		gangway = null
+		_gang_body = null
+		gangway_steps = 0
+
+
+## Its own point `p` over the ground under it (the planet's heights, as it lands by).
+func _over_ground(p: Vector3) -> float:
+	var at := rel * p
+	return at.length() - (ref.data.radius + ref.data.height(at.normalized()))
+
+
+func _lower_gangway() -> void:
+	gangway = Node3D.new()
+	gangway.name = "Gangway"
+	add_child(gangway)
+	var stud := BrickWorld.get_stud_metres()
+	var plate := BrickWorld.get_plate_metres()
+	var lock := airlock_cell
+	if _over_ground(cell_point(lock)) < GANG_RISE * plate:
+		return
+	var r := BuildRecipe.new()
+	r.name = "gangway"
+	var colour := StationKit._colour(ShipBuild.HULL_COLOUR)
+	_gang_body = StaticBody3D.new()
+	_gang_body.collision_layer = Layers.STRUCTURE
+	_gang_body.collision_mask = 0
+	gangway.add_child(_gang_body)
+	# The top step level with the deck outside the doorway: the doorway is the
+	# pawn's height, no step up under it.
+	for k in GANG_STEPS:
+		var top := lock.y - GANG_RISE * k
+		var x0 := lock.x - GANG_TREAD * (k + 1)
+		for x in GANG_TREAD:
+			for z in range(lock.z - 1, lock.z + 3):
+				r.add("brick_1x1", Vector3i(x0 + x, top - GANG_RISE, z), colour)
+		var cs := CollisionShape3D.new()
+		var box := BoxShape3D.new()
+		box.size = Vector3(GANG_TREAD * stud, GANG_RISE * plate, 4 * stud)
+		cs.shape = box
+		cs.transform = frame * Transform3D(Basis(), Vector3((x0 + GANG_TREAD * 0.5) * stud,
+				(top - GANG_RISE * 0.5) * plate, (lock.z + 1) * stud))
+		_gang_body.add_child(cs)
+		gangway_steps = k + 1
+		if _over_ground(cell_point(Vector3i(x0, top, lock.z))) < GANG_RISE * plate:
+			break
+	var c := bricks.create_chunk(Vector3i.ZERO, r.chunk_dims())
+	r.build(bricks, c, _palette)
+	var merge := MeshMerge.new()
+	for band in bricks.get_chunk_sections(c):
+		var arrays: Array = bricks.build_chunk_mesh_section(c, band)
+		if not arrays.is_empty():
+			merge.add_surface(arrays, Transform3D.IDENTITY, Color(-1, 0, 0))
+		var got: Array = bricks.get_chunk_studs_and_open(c, band)
+		var buf: PackedFloat32Array = got[0]
+		var open: PackedByteArray = got[1]
+		var keep := PackedFloat32Array()
+		for i in open.size():
+			if open[i] != 0:
+				keep.append_array(buf.slice(i * 16, i * 16 + 16))
+		if not keep.is_empty():
+			merge.add_instances(_stud_arrays, Transform3D.IDENTITY, keep)
+	bricks.release_chunk(c)
+	var out := merge.commit()
+	if out.is_empty():
+		return
+	var m := ArrayMesh.new()
+	m.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, out)
+	var mi := MeshInstance3D.new()
+	mi.mesh = m
+	mi.material_override = brick_material
+	var org := r.origin()
+	mi.transform = frame * Transform3D(Basis(), Vector3(org.x * stud, org.y * plate, org.z * stud))
+	gangway.add_child(mi)
+
+
 ## The hull swept from where it is drawn to `next` (in its reference frame):
 ## buildings and stations stop it. Returns where it may go.
 func _sweep(ps, next: Vector3) -> Vector3:
@@ -237,7 +330,7 @@ func _sweep(ps, next: Vector3) -> Vector3:
 	q.transform = global_transform * Transform3D(Basis(), Vector3(0.0, height * 0.5, 0.0))
 	q.motion = motion
 	q.collision_mask = Layers.STRUCTURE
-	q.exclude = [shell_body.get_rid()]
+	q.exclude = [shell_body.get_rid()] if _gang_body == null else [shell_body.get_rid(), _gang_body.get_rid()]
 	var space := get_world_3d().direct_space_state
 	var cast := space.cast_motion(q)
 	if cast[0] >= 1.0 or cast[1] <= 0.0:

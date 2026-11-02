@@ -57,11 +57,12 @@ extends RefCounted
 const PARAMS := {"seed": 1, "width": 44, "depth": 28, "storeys": 4, "pitch": 0, "corridor": 4,
 		"room_max": 12, "window_every": 5, "fill": 0.85, "footprint": [], "setback": 0,
 		"setback_every": 0, "setback_sides": "nsew", "lift": true, "balcony": 0.5,
-		"section_bricks": BuildSections.BUDGET}
+		"section_bricks": BuildSections.BUDGET, "doorway": 9}
 ## The module roles a shell sets along its corridors (and a stair's, below a
 ## storey, where it has a stair link up).
 const ROLES := ["room", "corridor"]
-## A filler room's doorway and the way in: studs across, plates up.
+## A filler room's doorway and the way in: studs across, plates up (`doorway`
+## sets the height: a ship's are the pawn's height and more, ShipBuild).
 const DOORWAY := Vector2i(2, 9)
 ## A window in the shell's outer wall, and how far over its floor it starts.
 const WINDOW := Vector2i(2, 6)
@@ -81,6 +82,7 @@ var p: Dictionary
 var rng := RandomNumberGenerator.new()
 var storeys := 0
 var pitch := 0
+var door_h := DOORWAY.y  ## a doorway's height, plates (`doorway`)
 var corr := 0
 var zc := 0             ## the corridor's south row
 var hall := 0           ## the stair hall's inside length along x
@@ -162,8 +164,9 @@ func _generate(library: Array, params: Dictionary) -> Dictionary:
 	corr = maxi(int(p.corridor), 4)
 	pitch = int(p.pitch) if int(p.pitch) > 0 else pitch_of(lib)
 	hall = ceili(float(pitch) / STEP) + 2
-	if pitch < DOORWAY.y + 3:
-		return {"ok": false, "why": "a storey needs %d plates at least" % (DOORWAY.y + 3)}
+	door_h = maxi(int(p.doorway), 1)
+	if pitch < door_h + 3:
+		return {"ok": false, "why": "a storey needs %d plates at least" % (door_h + 3)}
 	_footprints()
 	if not _place_hall():
 		return {"ok": false, "why": "the shell is too small: its top storey has no room for a stair hall %d x %d and a corridor" % [
@@ -751,7 +754,7 @@ func _way_in() -> void:
 				best_x = c.x
 	if best.is_empty():
 		return
-	var h := mini(DOORWAY.y, pitch - 3)
+	var h := mini(door_h, pitch - 3)
 	for c: Vector2i in best:
 		for y in h:
 			holes[Vector3i(c.x, 1 + y, c.y)] = true
@@ -811,7 +814,7 @@ func _rooms_of(s: int) -> void:
 	var reached := {}
 	for c in cols:
 		reached[c] = true
-	var h := mini(DOORWAY.y, pitch - 3)
+	var h := mini(door_h, pitch - 3)
 	var todo := pieces.filter(func(pc) -> bool: return (pc as Array).size() >= 4)
 	var progress := true
 	while progress and not todo.is_empty():
