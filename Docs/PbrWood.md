@@ -5,8 +5,9 @@ SOLIDS: every face of a brick is a cut through one block of the stuff, so a patt
 round its edges, and bricks side by side continue one another. Wood came first (2026-10-31) and
 has the most of its own (a grain field, sections 2-3); metal, stone and leaves followed the same
 day on the same machinery (section 1.1), and on 2026-11-01 each variant got a set of its own
-(walnut a walnut photo, slate a rock, verdigris a patina; section 1.2). The printed filaments are still procedural
-(`brick_materials.gdshaderinc`); the plan is all of them, the plastic's layer lines included.
+(walnut a walnut photo, slate a rock, verdigris a patina; section 1.2). On 2026-11-02 PLA's
+layer lines became a baked texture of our own (section 7); the other filaments, and every
+printed top, are still drawn by rules (`print_surface.gdshaderinc`).
 
 ## 1. What draws it
 
@@ -215,11 +216,42 @@ what plastic does, and some 0.3-0.5 ms over flat colour with a whole screen of i
 * **Studs continuing the brick's figure**: needs the stud's place in its brick.
 * **Leaves by colour**: one set for every filament colour; a second (needles, hedge) would
   want its own key, since leaves take the filament palette, not variants.
-* **The printed plastic** -- its layer lines as a bead texture sampled by layer height, its tops'
-  toolpaths as a tile turned with `ps_top_turned`.
+* **The rest of the printed plastic** (section 7): the other filaments' sides (a slice each in
+  `print_bead`: ABS finer, TPU wide soft beads, carbon, nylon, wood fill), and the tops' toolpaths
+  as a tile turned with `ps_top_turned`.
+* **The PLA layers' frame time**: not timed yet (the editor was open on 2026-11-02). One
+  texture read in place of the drawn bead's arithmetic, so expected about even.
 * **Texture streaming** (Godot 4.8's mip streaming, in beta as of 2026-10-31): with a set per
   variant the sets are ~165 MB, so now worth a look once 4.8 is stable. Whether it reaches
   texture ARRAYS bound as global shader uniforms and sampled with `textureGrad` is untested.
 * **Generated sets**: a set could be baked by our own generator (Blender headless, as the
   printable bricks are) instead of downloaded -- needed for the printed plastic, whose look is
   measured from our own sliced G-code (Docs/PrintLook.md) and has no photo to download.
+
+## 7. The printed layers, baked (PLA)
+
+A printed side's layers are a texture since 2026-11-02, generated rather than downloaded: there
+is no photo of a 1:43.75 print. `tools/make_print_beads.gd` (headless, a few seconds) bakes
+`textures/pbr/print_bead.webp`, a Texture2DArray with one slice a filament -- PLA's today --
+bound as the global `print_bead`.
+
+| | |
+|---|---|
+| A slice | 32 layers tall, 64 layers long, 32 px a layer (2048x1024), tiles both ways; ~2.7 MB of video memory with mips (BC7) |
+| R, G | the surface's slope along and across the layers, in layer heights (a slope is its own tilt), +-1.5 |
+| B | shade, mean 1: deep in a groove darker (it sees less sky), and each layer a shade of its own |
+| A | roughness offset, mean 0: a groove duller than a crest |
+| What is in it | each layer a squashed half-cylinder with a narrow V to the next (`DEPTH` 0.25 of a layer); each layer a little prouder or not (`PROUD`), the line swelling along its length (`SWELL`), the seam between two layers wandering (`WANDER`), a fine grain (`MICRO`) |
+| Read by | `ps_bead_tex` (print_surface.gdshaderinc), from `ps_beads`, on a side (`face` 0) of a material whose `PS_BEAD_SLICE` is a slice: bricks, facets, authored parts and studs |
+| Placed | up by the layer count `t`, so a groove sits at every whole layer, where a brick starts and stops; along by metres (`u`: a box side's UV, else x + z); the face's seed moves it whole layers up and anywhere along, so no two faces show the same stretch |
+| Knobs | `print_bead_texture` (off: the drawn rules, for A/B), `bead_tex_relief` 0.45, `bead_tex_shade` 1 |
+
+What a texture does better than the rules: every layer is its own, and wanders along its
+length (the drawn ones are ruled lines); the profile is a real bead's, a squashed round with
+sharp grooves, not a sine; and the MIPS filter it -- far off the drawn bead pattern beat
+against the pixels (moire on a wall at 10 m), the baked one fades to its mean. The rules' own
+fade is kept: the relief gives up squared as a layer nears a pixel and roughness takes what it
+drops (ps_beads), since a filtered normal still sparkles.
+
+Pictures: `tools/print_look_shot.gd -- --out=<dir> --views=side,stud,corner,wall` with and
+without `--no-bead-tex`.

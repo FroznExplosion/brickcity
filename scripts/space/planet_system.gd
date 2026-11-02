@@ -688,6 +688,7 @@ func _ship_bricks(p: Vector3) -> void:
 			s.ride()
 		elif not want and s.chunk >= 0 and s != frame_node():
 			s.deactivate()
+		s.gangway_step()
 
 
 ## The scene's top-level 3D nodes but the system's own, the bodies and the sun.

@@ -57,11 +57,13 @@ extends RefCounted
 const PARAMS := {"seed": 1, "width": 44, "depth": 28, "storeys": 4, "pitch": 0, "corridor": 4,
 		"room_max": 12, "window_every": 5, "fill": 0.85, "footprint": [], "setback": 0,
 		"setback_every": 0, "setback_sides": "nsew", "lift": true, "balcony": 0.5,
-		"section_bricks": BuildSections.BUDGET}
+		"section_bricks": BuildSections.BUDGET, "doorway": 14}
 ## The module roles a shell sets along its corridors (and a stair's, below a
 ## storey, where it has a stair link up).
 const ROLES := ["room", "corridor"]
-## A filler room's doorway and the way in: studs across, plates up.
+## A filler room's doorway and the way in: studs across, plates up -- the least a
+## storey takes (the pawn crouched). `doorway` (14: the pawn, 12, walks through;
+## a tower's are 15) is the height wanted, as the storey allows (pitch - 3).
 const DOORWAY := Vector2i(2, 9)
 ## A window in the shell's outer wall, and how far over its floor it starts.
 const WINDOW := Vector2i(2, 6)
@@ -70,8 +72,9 @@ const SILL := 3
 const STEP := 2
 ## Bricks a wall course is laid in, longest first, in a running bond.
 const WALL_RUNS := [4, 2, 1]
-## The pitch when no module says: a floor plate, twelve plates of room, a ceiling.
-const PITCH := 14
+## The pitch when no module says: a floor plate, sixteen plates of room (the
+## pawn is twelve), two ceiling layers.
+const PITCH := 19
 ## A lift shaft's inside, studs.
 const SHAFT := 4
 const DIRS := [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]
@@ -81,6 +84,7 @@ var p: Dictionary
 var rng := RandomNumberGenerator.new()
 var storeys := 0
 var pitch := 0
+var door_h := DOORWAY.y  ## a doorway's height, plates (`doorway`)
 var corr := 0
 var zc := 0             ## the corridor's south row
 var hall := 0           ## the stair hall's inside length along x
@@ -162,6 +166,7 @@ func _generate(library: Array, params: Dictionary) -> Dictionary:
 	corr = maxi(int(p.corridor), 4)
 	pitch = int(p.pitch) if int(p.pitch) > 0 else pitch_of(lib)
 	hall = ceili(float(pitch) / STEP) + 2
+	door_h = maxi(int(p.doorway), 1)
 	if pitch < DOORWAY.y + 3:
 		return {"ok": false, "why": "a storey needs %d plates at least" % (DOORWAY.y + 3)}
 	_footprints()
@@ -751,7 +756,7 @@ func _way_in() -> void:
 				best_x = c.x
 	if best.is_empty():
 		return
-	var h := mini(DOORWAY.y, pitch - 3)
+	var h := mini(door_h, pitch - 3)
 	for c: Vector2i in best:
 		for y in h:
 			holes[Vector3i(c.x, 1 + y, c.y)] = true
@@ -811,7 +816,7 @@ func _rooms_of(s: int) -> void:
 	var reached := {}
 	for c in cols:
 		reached[c] = true
-	var h := mini(DOORWAY.y, pitch - 3)
+	var h := mini(door_h, pitch - 3)
 	var todo := pieces.filter(func(pc) -> bool: return (pc as Array).size() >= 4)
 	var progress := true
 	while progress and not todo.is_empty():

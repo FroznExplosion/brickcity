@@ -9,11 +9,12 @@ extends RefCounted
 ## the floor's edge under the ceiling's. A player's own station modules (the
 ## rooms tool, a station role) are used instead when the library has a core.
 ##
-## Inside a box module: floor rows 0 and 1, room rows 2 to 13 (a door 2 x 9
-## from row 2), ceiling rows 14 and 15.
+## Inside a box module: floor rows 0 and 1, room rows 2 to 17 (a door 2 x 14
+## from row 2), ceiling rows 18 and 19 -- the pawn is 12 plates, it stands and
+## walks through.
 
-const H := 12
-const DOOR := Vector2i(2, 9)
+const H := 16
+const DOOR := Vector2i(2, 14)
 const FLOOR := 2
 ## White hull, a grey for nodes, a colour band on pods.
 const COLOURS := {"core": "white", "node": "light bluish gray", "tube": "white", "pod": "white",

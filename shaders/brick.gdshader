@@ -490,7 +490,11 @@ void fragment() {
             // itself away completely.
             t = v_uv.y / ps_layer(mat);
         }
-        ps_beads(t, t, bead_face, mat, dist, VERTEX, seed, junction, join,
+        // Along the layers, for the baked ones: a box's side has its UV;
+        // an authored face or a facet runs along x + z, wrapped as its t.
+        float u = (facet || authored)
+                ? mod(v_local.x + v_local.z, PS_PLATE * 64.0) : v_uv.x;
+        ps_beads(t, t, u, bead_face, mat, dist, VERTEX, seed, junction, join,
                 albedo, NORMAL, print_rough, aniso_dir, aniso);
         if (stairs > 0.0 && print_near) {
             float aa = max(fwidth(t), 1e-5);
