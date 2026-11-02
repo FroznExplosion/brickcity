@@ -141,7 +141,7 @@ spread it across threads, as Brickadia did.
 
 ### B. Gameplay (from Sink My Bricks)
 
-**B1. Hull breach and flooding** -- *medium to large; needs water.* A hole in a ship's hull floods
+**B1. Hull breach and flooding** (planned in [../Hulls.md](../Hulls.md)) -- *medium to large; needs water.* A hole in a ship's hull floods
 the compartment behind it; water rises at a rate set by the hole's size; the ship lists and sinks
 when enough compartments fill. Compartments found by a flood fill of the hull's inside air when
 the ship is built (`ship_build.gd`), re-run only for the compartments a hit opens. Works for
@@ -176,8 +176,10 @@ star systems and worlds; this is a game-structure decision, not a system.
   ([../Multiplayer.md](../Multiplayer.md)), no transport or server yet. Brickadia's lessons for
   when it is built: never poll sleeping objects; don't run animation on the server for unseen
   players; predict melee on the client.
-- **Water:** theirs is brick, breakable, and floats ships. Ours is the design in
-  [../Water.md](../Water.md) plus a surface and a collider.
+- **Water:** theirs is brick, breakable, and floats ships. Ours is further than first written
+  here: real brick pieces near the camera, swimming, and flowing pools (`BrickPools`,
+  [../Water.md](../Water.md) 12.7) -- but nothing floats a ship or floods a hull yet. That plan is
+  [../Hulls.md](../Hulls.md).
 - **Raw brick count:** Brickadia draws millions of live bricks; we hold tens of thousands live and
   keep the rest as recipes. Fine for play, as long as a busy fight does not have to materialise
   more than the budget.
