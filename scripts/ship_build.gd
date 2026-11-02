@@ -22,6 +22,8 @@ const ENGINE_COLOUR := "dark bluish gray"
 ## An engine housing on the roof aft: studs across, courses high, studs it
 ## hangs out past the stern.
 const NACELLE := Vector3i(4, 3, 2)
+## How far a wing's root reaches in over the roof, studs.
+const WING_ROOT := 4
 
 
 ## {ok, why, recipe, plan, stats, seat: Vector3i, decks}.
@@ -129,7 +131,8 @@ static func room(name: String, w: int, d: int, rules: Dictionary, doors: Array, 
 ## over the fore quarter to a third of it at the bow; a floor of plates (row 1:
 ## row 0 is the ground's when a build is laid), brick side walls, a roof of two
 ## plate layers over the top deck; on the roof aft two engine housings and a
-## fin (`meta.engines`: each housing's back, its middle, for its glow).
+## fin (`meta.engines`: each housing's back, its middle, for its glow), and
+## swept wings on its sides.
 static func hull(length: int, beam: int, decks: int) -> BuildRecipe:
 	var r := BuildRecipe.new()
 	r.name = "hull"
@@ -158,7 +161,34 @@ static func hull(length: int, beam: int, decks: int) -> BuildRecipe:
 		if edge:
 			StationKit._column(r, Vector3i(c.x, 2, c.y), top - 2, {}, colour)
 	_engines(r, length, half, top + 2)
+	_wings(r, length, half, top + 2)
 	return r
+
+
+## Swept wings on the roof's sides over its middle and aft: two plate layers a
+## stud apart (each seam of one bridged by the other), their roots WING_ROOT studs
+## in over the roof so they hold by its studs, `span` out at the trailing edge,
+## a third of that at the leading.
+static func _wings(r: BuildRecipe, length: int, half: int, y0: int) -> void:
+	var dark := StationKit._colour(ENGINE_COLOUR)
+	# On the 2-stud grid, so the lower layer is 2x2s throughout and every 1x1 at
+	# the upper layer's edge sits on one (two 1x1s on each other hold nothing).
+	@warning_ignore("integer_division")
+	var x0 := length / 5 / 2 * 2
+	@warning_ignore("integer_division")
+	var x1 := length * 11 / 20 / 2 * 2
+	@warning_ignore("integer_division")
+	var span := clampi(half / 2, 6, 10) / 2 * 2
+	var cells := {}
+	for x in range(x0, x1):
+		var xp := x - (x - x0) % 2
+		var out := span - int(round((span - span / 3.0) * float(xp - x0) / float(maxi(x1 - x0 - 2, 1))))
+		out = maxi(out / 2 * 2, 2)
+		for z in range(-out, WING_ROOT):
+			cells[Vector2i(x, z)] = true
+			cells[Vector2i(x, 2 * half - 1 - z)] = true
+	_layer(r, cells, y0, Vector2i.ZERO, dark)
+	_layer(r, cells, y0 + 1, Vector2i.ONE, dark)
 
 
 ## Two engine housings on the roof aft, a quarter of its length, hanging out past
