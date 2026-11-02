@@ -86,7 +86,9 @@ player's saves.
 
 - **The user has not played saving.** Press the keys: leave, come back, change universe. The panel has
   only been driven by the gate, never by keys.
-- `save --stage=3` has not run since the merge with `--gate=hull` (only that gate's flag lines changed).
+- `save --stage=3` is two-valued on one build: the player comes back 0.50 m or exactly 2.90 m off (limit
+  1.5), on the far world with the blown wall. 3 runs on 2026-11-02: 2.90, 2.90, 0.50; once with this day's
+  fixes reverted: 0.50, so those are not cleared. A landing on two different surfaces? Not looked into.
 - Home's soldiers hunting a player they have lost, on screen: headless only.
 - Frame times in a fight and on arrival: every number so far had the editor open or the display asleep.
   Close to 165-315 ms at arrival. CLAUDE.md's rule applies.
