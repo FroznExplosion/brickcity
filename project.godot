@@ -374,3 +374,7 @@ leaf_normal={
 "type": "sampler2DArray",
 "value": "res://textures/pbr/leaf_normal.webp"
 }
+print_bead={
+"type": "sampler2DArray",
+"value": "res://textures/pbr/print_bead.webp"
+}
