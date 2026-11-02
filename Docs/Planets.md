@@ -2464,7 +2464,19 @@ from its first contact (a wave from the start): with no order and no contact it 
 (`AIServices.noise`), as a soldier comes to know of anything it cannot see, and advances from that.
 First shot back on the world: 0-3 s in 3 runs of 3; it had been none in 30 s.
 
-The first wave's soldiers cost 138 ms (the gun parts' library, built each time); later ones 40-50 ms.
+The first wave's soldiers cost 138 ms; later ones 40-50 ms. (*2026-11-02:* the library was only 32-48 ms of
+that, every wave. The rest of the first wave's was its first `snap`, 104 ms: `keep_around` had dropped the
+region behind a player 220 m away, and `snap` built it on the spot. Now `PlanetGarrison._raise` waits for
+`PlanetNavNet.region_made`, built on a worker (3-7 ms on the main thread to finish it), and the garrison
+takes the arsenal's library. `_spawn`: 9-14 ms, every wave. Headless with the editor open, so the ratio
+holds and the numbers do not.)
+
+Found by the user flying (same day): a band whose bricks are **all** gone (a hit, or `_dead` on arrival)
+keeps its baked vertices with every triangle degenerate, `MeshMerge.append` drops those, and
+`add_surface_from_arrays` failed on the empty index array, four errors a band, on a worker. No band is the
+right answer: `_harvest` already takes the old one away. `SpaceStation` and `PlanetBuildings` both.
+Mouse yaw now turns the walker in its physics step, as pitch always did: `_unhandled_input` was moving an
+interpolated body between steps. Its yaw is one physics tick later than it was; pitch always was.
 
 #### Plan, saving (2026-11-01)
 

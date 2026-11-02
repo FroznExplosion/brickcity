@@ -97,12 +97,11 @@ player's saves.
 
 The user chooses. In the order I would take them:
 
-1. **First wave's 138 ms hitch**: `PlanetGarrison._spawn` builds the gun parts' library every time. Keep one.
-2. **Rubble in saves**: needs the engine to write a chunk out (`save_template` only returns an in-memory id).
+1. **Rubble in saves**: needs the engine to write a chunk out (`save_template` only returns an in-memory id).
    C++, so plan it with the user; fallen pieces and drifts are what "everything saves" still leaves out.
-3. **Something on a planet besides rifles**: UnitCatalog kinds in the waves; then a tank or a mech in play
+2. **Something on a planet besides rifles**: UnitCatalog kinds in the waves; then a tank or a mech in play
    (all are only in gates). `FirefightDirector` is the city's and was left there on purpose: 1,100 lines
    round a ring and a `CityScene`.
-4. **Ship damage**: rams hurting it, its damage showing from afar.
+3. **Ship damage**: rams hurting it, its damage showing from afar.
 
 The full list is Planets.md, "What is not done".
