@@ -2478,6 +2478,13 @@ right answer: `_harvest` already takes the old one away. `SpaceStation` and `Pla
 Mouse yaw now turns the walker in its physics step, as pitch always did: `_unhandled_input` was moving an
 interpolated body between steps. Its yaw is one physics tick later than it was; pitch always was.
 
+Stations shaking as the player neared (user, same day). Two causes. Inside `FIELD` the station is the frame,
+but a ship stays in its planet's frame and the planet came through the star's: rounded at 1.6e6 m, the ship
+shook against the station by 0.52 m a frame. `_place` now puts the frame station's planet off the station,
+in small numbers: 0.018 m (`--gate=dock`, "and steady against it"). And an angle given to `Basis()` is
+float32: unwrapped, a station's path over its planet was off by 2.2 m a frame at t = 60,000 s and 17.7 m at
+600,000 s. `StarSystem._turn` keeps it within a turn: 2-3 cm at any t (`system_probe`).
+
 #### Plan, saving (2026-11-01)
 
 As zylanntest (its Docs/save_format_and_data_longevity.md, future_features_save_guide.md): the **universe**

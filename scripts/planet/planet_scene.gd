@@ -3338,6 +3338,17 @@ func _run_dock_gate() -> void:
 	ship.boost = false
 	_check("up to the station, on its frame, its speed matched by the ship", system.station == st and matched,
 			"station at %.0f m/s against the ground frame" % (system.ship_match(ship)[0] as Vector3).length())
+	# On the station's frame the ship is still placed off its planet: it must not
+	# shake against the station (through the star's frame it did, by 0.125 m steps).
+	ship.thrust = Vector3.ZERO
+	var near := []
+	for n in 90:
+		await _frames(1)
+		near.append(st.global_transform.affine_inverse() * ship.global_position)
+	var shake := 0.0
+	for n in range(2, near.size()):
+		shake = maxf(shake, ((near[n] as Vector3) - 2.0 * (near[n - 1] as Vector3) + (near[n - 2] as Vector3)).length())
+	_check("and steady against it", shake < 0.05, "worst step off by %.3f m" % shake)
 	var alive := func() -> int: return st.bricks.get_alive_block_count(st.chunk)
 	t0 = Time.get_ticks_msec()
 	while not st.bricked and Time.get_ticks_msec() - t0 < 20000:
