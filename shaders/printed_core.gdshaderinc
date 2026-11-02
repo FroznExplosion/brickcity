@@ -162,7 +162,10 @@ void fragment() {
             t_d = t;
         }
         // A stud is one shared mesh: one seed for all of them.
-        ps_beads(t, t_d, face, mat, dist, VERTEX, 0.0, junction, 0.0,
+        // Along a stud's side for the baked layers (ps_bead_tex): x + z. On
+        // the two facets that face along x - z it stands still, and their
+        // layers show no wander along them -- still each layer its own.
+        ps_beads(t, t_d, v_local.x + v_local.z, face, mat, dist, VERTEX, 0.0, junction, 0.0,
                 albedo, NORMAL, print_rough, aniso_dir, aniso);
         if (face == 2) {
             vec3 ax_u = normalize(mat3(VIEW_MATRIX) * MODEL_MATRIX[0].xyz);

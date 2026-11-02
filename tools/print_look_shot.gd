@@ -6,6 +6,7 @@ extends SceneTree
 ## checks: look at them.
 ##
 ##     godot --path . --script res://tools/print_look_shot.gd -- --out=<dir> [--looks=glass,pei]
+##         [--views=side,stud] [--no-bead-tex]
 ##
 ## Not headless (it renders; the test window draws at 1280x720 -- no
 ## --resolution). Writes <dir>/print_look_<look>_<view>.png. The bricks are the
@@ -93,6 +94,7 @@ var _out := "user://"
 var _looks := ["glass"]
 var _views: Array = []   ## only these (all when empty)
 var _tiers := false      ## --tiers: brick.gdshader's tier_debug tint
+var _bead_tex := true     ## --no-bead-tex: PLA's layers drawn, not baked (A/B)
 var _shots: Array = []
 var _frame := 0
 var _cam: Camera3D
@@ -107,6 +109,8 @@ func _init() -> void:
 			_looks = Array(a.substr(8).split(","))
 		elif a == "--tiers":
 			_tiers = true
+		elif a == "--no-bead-tex":
+			_bead_tex = false
 		elif a.begins_with("--views="):
 			_views = Array(a.substr(8).split(","))
 	BrickMaterials.load_look()
@@ -186,6 +190,7 @@ func _build() -> void:
 	mat.shader = load("res://shaders/brick.gdshader")
 	BrickMaterials.add_glass(mat)
 	mat.set_shader_parameter("tier_debug", _tiers)
+	mat.set_shader_parameter("print_bead_texture", _bead_tex)
 	var arrays: Array = w.build_chunk_chamfer_mesh(c, BrickNear.BEVEL)
 	var mesh := ArrayMesh.new()
 	mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
@@ -198,6 +203,7 @@ func _build() -> void:
 	var stud_mat := ShaderMaterial.new()
 	stud_mat.shader = load("res://shaders/printed.gdshader")
 	stud_mat.set_shader_parameter("top_mode", 1)
+	stud_mat.set_shader_parameter("print_bead_texture", _bead_tex)
 	stud_mat.set_shader_parameter("contour_sides", PieceMeshes.SIDES)
 	stud_mat.set_shader_parameter("contour_radius", PieceMeshes.STUD_R * PieceMeshes.STUD_TAPER)
 	var buffer: PackedFloat32Array = w.get_chunk_studs(c)
