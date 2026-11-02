@@ -13,9 +13,10 @@ extends RefCounted
 ##   made.seat     # the pilot's cell: on the bridge's floor, its middle
 
 ## A room's inside height; a module is a floor plate, the room, two ceiling layers.
-const H := 12
+## The pawn is 12 plates (BODY_HEIGHT): rooms 16, doors 14, as a tower's 15.
+const H := 16
 const PITCH := H + 3
-const DOOR := Vector2i(2, 9)
+const DOOR := Vector2i(2, 14)
 const HULL_COLOUR := "light bluish gray"
 
 
@@ -29,7 +30,7 @@ static func make(seed: int, passes := 1) -> Dictionary:
 	var h := hull(length, beam, decks)
 	var lib0 := library()
 	var made := RoomPack.generate(lib0, {"seed": seed, "hull": h, "passes": passes, "fore": "+x",
-			"section_studs": 24 + 4 * rng.randi_range(0, 2), "pitch": PITCH, "airlock": true})
+			"section_studs": 24 + 4 * rng.randi_range(0, 2), "pitch": PITCH, "airlock": true, "doorway": DOOR.y})
 	if not bool(made.ok):
 		return made
 	made.lib = lib0

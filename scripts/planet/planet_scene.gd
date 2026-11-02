@@ -27,7 +27,7 @@ extends Node3D
 ##   -- --gate=belt: a star's belt from open space, the ship turned, slow among its rocks
 ##   -- --gate=seat: the ship smooth near a planet, out of its seat, the map, open space
 ##   -- --gate=hull: the generated ship (Docs/RoomModules.md 7.5): laid in bricks,
-##   into it through its airlock (E there), flown from the bridge's seat, stood in
+##   up its gangway and in by its airlock, flown from the bridge's seat, stood in
 ##   walks to the player round the curve, takes cover, fires.
 ##   -- --gate=travel: a squad ordered 200 m out of the town on the nav net
 ##   (11.8 N4), across the regions' borders.
@@ -2614,30 +2614,41 @@ func _run_hull_gate() -> void:
 	if ship.recipe == null or ship.airlock_cell.x < 0:
 		get_tree().quit(1)
 		return
-	# Outside its stern, facing the airlock (between the doorway's two cells).
+	# Its bricks laid with the player by it, its gangway down from the airlock.
 	var lock := ship.airlock_cell
 	var door := ship.global_transform * ((ship.cell_point(lock) + ship.cell_point(lock + Vector3i(0, 0, 1))) * 0.5)
 	var inside := ship.global_transform * ((ship.cell_point(lock + Vector3i(4, 0, 0)) + ship.cell_point(lock + Vector3i(4, 0, 1))) * 0.5)
-	var out := door + (door - inside).normalized() * 4.0
-	pawn.place(_ground_hit(out))
-	await get_tree().create_timer(0.5).timeout
-	_face(Gravity.flat(inside - out, Gravity.up_at(out)).normalized())
+	var outward := (door - inside).normalized()
+	pawn.place(_ground_hit(door + outward * 4.0))
 	var t1 := Time.get_ticks_msec()
-	while not ship.bricked and Time.get_ticks_msec() - t1 < 30000:
+	while (not ship.bricked or ship.gangway == null) and Time.get_ticks_msec() - t1 < 30000:
 		await _frames(1)
 	var loose: Array = ship.bricks.find_detached_groups(ship.chunk) if ship.chunk >= 0 else []
 	var laid := ship.bricks.get_alive_block_count(ship.chunk) if ship.chunk >= 0 else 0
 	_check("laid in bricks with the player by it, every brick, nothing loose", ship.bricked and laid == ship.recipe.size() and loose.is_empty(),
 			"%d of %d in %.1f s, %d loose group(s)" % [laid, ship.recipe.size(), (Time.get_ticks_msec() - t1) / 1000.0, loose.size()])
-	await get_tree().create_timer(1.0).timeout
-	print("[planet] hull gate: the airlock's floor %.2f m over the pawn's feet" % (door - pawn.feet()).dot(Gravity.up_at(door)))
+	var reach := ship.gangway_steps * SpaceShip.GANG_TREAD * BrickWorld.get_stud_metres()
+	var foot := _ground_hit(door + outward * (reach + 2.5))
+	_check("a gangway of bricks down from its airlock to the ground", ship.gangway != null and ship.gangway_steps > 0,
+			"%d step(s), the sill %.2f m over the ground at its foot" % [ship.gangway_steps, (door - foot).dot(Gravity.up_at(door))])
+	# From its foot, up it and in.
+	pawn.place(foot)
+	await get_tree().create_timer(0.5).timeout
+	_face(Gravity.flat(inside - foot, Gravity.up_at(foot)).normalized())
+	await get_tree().create_timer(0.5).timeout
 	await _shot("hull_gate_stern")
-	# In through the airlock (E at it: its sill stands over the ground), then on along the spine.
-	_ship_key(KEY_E)
-	await get_tree().create_timer(1.0).timeout
+	Input.action_press(&"move_forward")
+	var t2 := Time.get_ticks_msec()
 	var c := ship.cell_at(pawn.feet())
-	_check("in through the airlock, standing on its deck", c.x > lock.x + 1.0 and pawn.is_on_floor() and absf(c.y - lock.y) < 3.0,
-			"at cell %s, the airlock %s" % [str(c.snapped(Vector3(0.1, 0.1, 0.1))), str(lock)])
+	while Time.get_ticks_msec() - t2 < 10000 and c.x < lock.x + 3.0:
+		await get_tree().physics_frame
+		c = ship.cell_at(pawn.feet())
+	Input.action_release(&"move_forward")
+	await get_tree().create_timer(1.0).timeout
+	c = ship.cell_at(pawn.feet())
+	_check("walked up the gangway and in through the airlock, standing on its deck", c.x > lock.x + 1.0
+			and pawn.is_on_floor() and absf(c.y - lock.y) < 3.0,
+			"at cell %s, the airlock %s, %.1f s" % [str(c.snapped(Vector3(0.1, 0.1, 0.1))), str(lock), (Time.get_ticks_msec() - t2) / 1000.0])
 	await _hold(&"move_forward", 2.0)
 	await get_tree().create_timer(0.5).timeout
 	var c2 := ship.cell_at(pawn.feet())
@@ -2649,6 +2660,8 @@ func _run_hull_gate() -> void:
 	await get_tree().create_timer(0.5).timeout
 	_ship_key(KEY_E)
 	_check("into the seat from the bridge's floor", piloting)
+	await _frames(2)
+	_check("its gangway taken up", ship.gangway == null)
 	var alt0 := ship.altitude
 	ship.thrust = Vector3(0.0, 1.0, 0.0)
 	await get_tree().create_timer(5.0).timeout

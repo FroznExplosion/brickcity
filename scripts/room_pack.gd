@@ -133,7 +133,7 @@ func _prelay() -> void:
 	var hole := {}
 	if bool(p.get("airlock", false)) and storeys > 0:
 		var x := int(cx_start[0]) - 1 if fore > 0 else int(cx_end[0]) + 1
-		var h := mini(DOORWAY.y, pitch - 3)
+		var h := mini(door_h, pitch - 3)
 		for z in range(zc + 1, zc + 3):
 			for y in h:
 				hole[Vector3i(x, base + 1 + y, z)] = true
@@ -346,7 +346,7 @@ func _corridor(s: int) -> void:
 	for k in hall_ring:
 		wl[k] = true
 	var yb := _yb(s)
-	var h := mini(DOORWAY.y, pitch - 3)
+	var h := mini(door_h, pitch - 3)
 	for bx: int in segments:
 		var across := []
 		for col: Vector2i in inn:
