@@ -572,3 +572,44 @@ screen while placing.
   tool's button. Select, Repeat and Rooms keep theirs: their options are what they are for.
 * What the tools say (the status line) lived in the pop-out; it is now a line over the toolbar
   at the bottom, so it stays when the pop-out goes.
+
+## 14. Repeat copies a building, edits and all (2026-11-02)
+
+Asked: a building should be drawn, decorated, then copied up with everything on it; a 3-storey
+start raises by 3 storeys. Repeat "doesn't seem to repeat edits": should it be fixed, or a
+Buildings tool added? **Fixed**: a Buildings tool would be Draw and Repeat again under a second name.
+
+What it missed: its default, "the picked shape", copied only that shape (a building's holes, not
+its frames, glass, stairs or hand-laid bricks). "A storey" asked for plate numbers. Neither
+copied furniture or rooms.
+
+* **What**: **Whole building** (the default), **One storey**, or **One shape**. A click on any
+  brick of a building picks the building.
+* **Everything goes with it**: its window and door cuts, frames and glass, stairs, floors, every
+  hand-laid brick, inserted builds, furniture, and the rooms marked in it.
+* **Up, it lands on top**: a building of 3 storeys, repeated once, is 6. It stays one building, so
+  picking it again copies all 6 (a Times of 1 gives 12). One storey copies to the top, whichever
+  storey it was. A flat roof goes to the new top, and what stands on the building (a roof, a
+  setback) rises with it.
+* Along X or Z it is a separate copy, a gap apart.
+* **You see where it goes**: a box for each copy, and the numbers, before you press Repeat.
+* One undo for all of it, and redo.
+* Sideways bricks (on a bracket) only copy when the move lands on their own stud grid; the rest
+  are left out, and it says how many.
+
+### As built (2026-11-02)
+
+Merged; `tools/build_tools_probe.gd` 257 checks.
+
+* `_repeat_group(dir)` gathers; `_gather` takes what lies between two layers inside the picked
+  thing's footprint, three studs round it, so a second building beside it is left alone.
+* Up, a plan is not copied: `_raise_building` deepens it and copies the cuts in the band, so it
+  stays one shape and Select's push-pull and Repeat go on working on all of it.
+* A building's picked by any brick within two studs of its plan; One shape picks just that.
+* Walls with no plan (Draw's Walls, not Building) copy as separate shapes on top, a storey being
+  their own height; the shapes and bricks inside their footprint go with them.
+* A shape only partly in the band (a building's walls, for One storey along X or Z) is copied as
+  plain bricks. Going up it stays part of the building.
+* Rooms copied are seeded in the copy and found again from the bricks, so a door's kind set by
+  hand in a room comes back as what the bricks say. Marks and points are not copied.
+* Later edits do not follow: a copy is a copy. Edit first, then Repeat.

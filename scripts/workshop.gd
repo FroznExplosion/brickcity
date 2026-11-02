@@ -1907,10 +1907,10 @@ func _place_one() -> void:
 ## Lay a part (a palette variant name) at a cell of the upright grid, in a colour and a
 ## material, as a click would but with no edit of its own: a kept shape's bricks undo with
 ## the shape (Docs/BuildTools.md). False if it does not fit there.
-func lay_part(arch: String, cell: Vector3i, colour: int, mat: int, role: int = -1) -> bool:
-	if not palette.has(arch):
+func lay_part(arch: String, cell: Vector3i, colour: int, mat: int, role: int = -1, af: int = 0) -> bool:
+	if not palette.has(arch) or af < 0 or af >= asm.frames.size():
 		return false
-	var f: int = asm.frames[0]
+	var f: int = asm.frames[af]
 	var id: int = palette[arch]
 	if world.would_connect(f, cell, id) < 0 or not asm.can_place(f, cell, id):
 		return false
@@ -1919,23 +1919,31 @@ func lay_part(arch: String, cell: Vector3i, colour: int, mat: int, role: int = -
 		return false
 	if mat != 0:
 		world.set_block_material(f, placed, mat)
-	recipe.add(arch, cell, colour, _recipe_frame_for(0), _role if role < 0 else role, mat)
-	_placed_at.append([0, placed])
+	recipe.add(arch, cell, colour, _recipe_frame_for(af), _role if role < 0 else role, mat)
+	_placed_at.append([af, placed])
 	_after_edit()
 	return true
 
 
-## The upright-grid brick of this part at this cell, by recipe index, or -1. Found
-## through the world's own cell lookup, not by walking the recipe.
-func find_brick(arch: String, cell: Vector3i) -> int:
+## Weld two recipe blocks, in the recipe and the world.
+func weld_rids(a: int, b: int) -> void:
+	var pa: Array = _placed_at[a]
+	var pb: Array = _placed_at[b]
+	asm.weld(asm.frames[pa[0]], pa[1], asm.frames[pb[0]], pb[1])
+	recipe.add_weld(a, b)
+
+
+## The brick of this part at this cell of grid `af` (0 upright), by recipe index, or -1.
+## Found through the world's own cell lookup, not by walking the recipe.
+func find_brick(arch: String, cell: Vector3i, af: int = 0) -> int:
 	var size := BrickPalette.size_of(arch)
 	for dx in size.x:
 		for dy in size.y:
 			for dz in size.z:
-				var block := world.block_at(asm.frames[0], cell + Vector3i(dx, dy, dz))
+				var block := world.block_at(asm.frames[af], cell + Vector3i(dx, dy, dz))
 				if block < 0:
 					continue
-				var i := _recipe_id_at(0, block)
+				var i := _recipe_id_at(af, block)
 				if i >= 0 and recipe.cell_of(i) == cell and recipe.part_of(i) == arch:
 					return i
 	return -1

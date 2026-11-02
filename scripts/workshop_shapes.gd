@@ -493,6 +493,8 @@ static func shifted(sh: Dictionary, d: Vector3i) -> Dictionary:
 		out.cuts = (out.cuts as Array).map(func(c: Dictionary) -> Dictionary: return shifted(c, d))
 	if out.has("opening"):
 		out.opening = shifted(out.opening, d)
+	if out.has("openings"):
+		out.openings = (out.openings as Array).map(func(c: Dictionary) -> Dictionary: return shifted(c, d))
 	if out.has("bricks"):
 		out.bricks = []
 	return out
