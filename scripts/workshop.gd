@@ -69,19 +69,30 @@ static func _keys_text() -> String:
 
 
 
-## Baseplate size in studs. Big enough for a house, small enough that the whole
-## thing is on screen from the default camera.
-## A variable rather than a constant so a scene built on this one can make the
-## plate bigger before `_ready` (the asset workshop: a rifle is 62 studs long).
-var plate_studs := 48
-## Head room above the baseplate, in plates.
+## The build area: 1000 bricks tall, and as wide as that is in ticks (Docs/BuildTools.md
+## section 15).
+const BUILD_STUDS := 1200
+const BUILD_PLATES := 3000
+## What a brick library that cannot page a chunk gets: the big area would be allocated whole.
+const SMALL_BUILD_STUDS := 96
+const SMALL_BUILD_PLATES := 240
+## How wide the view of a new build is: the plate it used to start on.
+const START_VIEW_M := 8.4
+## How much of the area the grid is drawn over, round the ghost.
+const GRID_STUDS := 120
+
+## Build area size in studs, along and across.
+## A variable rather than a constant so a scene built on this one can have its own
+## before `_ready` (the asset workshop).
+var plate_studs := BUILD_STUDS
+## Head room over the floor, in plates.
 ##
-## 48 studs is 240 ticks and 120 plates is 240 ticks, so the build volume is a
+## 1200 studs is 6000 ticks and 3000 plates is 6000 ticks, so the build volume is a
 ## CUBE in tick space. That is not a coincidence worth losing: it means all six
 ## build grids cover exactly the same region whichever way they are turned, so
 ## switching grids never moves you somewhere else.
 ## Kept with `plate_studs` so the build volume stays a cube in tick space.
-var height_plates := 120
+var height_plates := BUILD_PLATES
 
 ## The six build grids, by which world axis the grid's own "up" points along.
 ## Docs/BuildMode.md section 2 -- a sideways brick is a rotated FRAME, so
@@ -124,6 +135,8 @@ var _ghost_studs: MultiMeshInstance3D   ## child of _ghost
 ## archetype id -> [ArrayMesh, MultiMesh]: the held part's real shape and studs.
 var _ghost_shapes := {}
 var _grid: MeshInstance3D
+var _grid_drawn := Rect2i()   ## the studs it was last drawn over: grid_window()
+var _floor: MeshInstance3D
 var _overlay: MeshInstance3D
 var _camera: Camera3D
 var _hud: Label
@@ -283,6 +296,14 @@ var _material: Material
 var _ghost_material: StandardMaterial3D
 
 
+func _init() -> void:
+	if not ClassDB.class_has_method("BrickWorld", "paged_chunk_cells"):
+		push_warning("[workshop] this brick library cannot page a chunk: build area %d studs, not %d (rebuild the extension)"
+				% [SMALL_BUILD_STUDS, BUILD_STUDS])
+		plate_studs = SMALL_BUILD_STUDS
+		height_plates = SMALL_BUILD_PLATES
+
+
 func _ready() -> void:
 	world = BrickWorld.new()
 	world.set_seed(1)
@@ -293,10 +314,9 @@ func _ready() -> void:
 
 	asm = Assembly.new(world, palette)
 	_build_frames()
-	# The baseplate is a real course of bricks, not scenery: it is what a build
-	# is grounded to, so the stress solve has something to call the foundation.
 	_lay_baseplate()
-	world.set_foundation_level(chunk, 0)
+	@warning_ignore("integer_division")
+	_cell = Vector3i(plate_studs / 2, 1, plate_studs / 2)
 
 	# The city's brick shader, not a plain material: seams, printed layers and
 	# the MATERIALS (wood, metal, TPU ...) all live there, and a workshop that
@@ -593,13 +613,29 @@ func _origin_for(rot: int, dims: Vector3i) -> Vector3i:
 		int(round(-minf(0.0, far.z))))
 
 
-## A one-plate floor of 4x4 plates. Every build starts clipped to this, which is
-## what makes "is it grounded" a real question in the workshop as well as the city.
+## The floor: one plate thick, the whole area, and not bricks (Docs/BuildTools.md section
+## 15). The bottom course is the foundation, which keeps "is it grounded" a real question.
 func _lay_baseplate() -> void:
-	var p: int = palette["plate_4x4"]
-	for x in range(0, plate_studs, 4):
-		for z in range(0, plate_studs, 4):
-			world.place_block(chunk, Vector3i(x, 0, z), p, 2)
+	world.set_foundation_level(chunk, 1)
+	if _floor != null:
+		return
+	_floor = MeshInstance3D.new()
+	_floor.name = "Floor"
+	var area := plate_studs * BrickPalette.STUD_M
+	var quad := PlaneMesh.new()
+	quad.size = Vector2(area, area)
+	_floor.mesh = quad
+	_floor.position = Vector3(area * 0.5, BrickPalette.PLATE_M, area * 0.5)
+	var mat := ShaderMaterial.new()
+	mat.shader = load("res://shaders/workshop_floor.gdshader")
+	_floor.material_override = mat
+	_floor.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	add_child(_floor)
+
+
+## Whether a brick here would sit on the floor. It clips to that as to a plate.
+func _on_floor(cell: Vector3i) -> bool:
+	return chunk == asm.frames[0] and cell.y == 1
 
 
 func _build_lights() -> void:
@@ -635,15 +671,38 @@ func _build_lights() -> void:
 func _build_camera() -> void:
 	_camera = Camera3D.new()
 	_camera.set_script(load("res://scripts/debug_camera.gd"))
-	_camera.far = 400.0
+	_camera.far = 2500.0
 	_camera.set("e_climbs", false)   # E is the plane lock here; SPACE still climbs
-	var mid := plate_studs * BrickPalette.STUD_M * 0.5
-	var centre := Vector3(mid, 0.0, mid)
-	_camera.position = centre + Vector3(-mid * 0.9, mid * 0.75, mid * 1.35)
 	add_child(_camera)
+	_look_at(area_middle(), START_VIEW_M)
+
+
+## The floor at the middle of the area, in metres.
+func area_middle() -> Vector3:
+	var mid := plate_studs * BrickPalette.STUD_M * 0.5
+	return Vector3(mid, 0.0, mid)
+
+
+## Stand back from this point, from the same side whatever the size.
+func _look_at(centre: Vector3, radius: float) -> void:
+	_camera.position = centre + Vector3(-radius * 0.9, radius * 0.75, radius * 1.35)
 	# look_at needs the node in the tree, and the debug camera reads its own
 	# rotation on the first frame, so set it before anything else runs.
-	_camera.look_at(centre + Vector3(0.0, mid * 0.25, 0.0), Vector3.UP)
+	_camera.look_at(centre + Vector3(0.0, radius * 0.25, 0.0), Vector3.UP)
+
+
+## The view of what is built, wherever in the area it is; of the middle when nothing is.
+func frame_build() -> void:
+	if _camera == null:
+		return
+	if not recipe.has_content():
+		_look_at(area_middle(), START_VIEW_M)
+		return
+	var b := recipe.bounds()
+	var lo: Vector3 = BrickWorld.grid_to_world(b[0])
+	var size: Vector3 = BrickWorld.grid_to_world(b[1])
+	var mid := lo + size * 0.5
+	_look_at(Vector3(mid.x, lo.y, mid.z), maxf(size.length() * 0.6, START_VIEW_M))
 
 
 ## The building tools' rail: the building workshop's. A workshop built on this one with a
@@ -813,7 +872,7 @@ func _pick_block() -> void:
 ## else -- the part in hand stays the part in hand.
 func _pick_paint_ray(from: Vector3, dir: Vector3) -> void:
 	var hit := _first_hit(from, dir)
-	if hit.is_empty():
+	if hit.is_empty() or hit.block < 0:
 		return
 	_hotbar.set_material(world.get_block_material(hit.frame, hit.block))
 	_hotbar.set_colour(world.get_block_colour(hit.frame, hit.block))
@@ -822,7 +881,7 @@ func _pick_paint_ray(from: Vector3, dir: Vector3) -> void:
 ## The same for any ray, so a probe can aim it exactly.
 func _pick_ray(from: Vector3, dir: Vector3) -> void:
 	var hit := _first_hit(from, dir)
-	if hit.is_empty():
+	if hit.is_empty() or hit.block < 0:
 		return
 	var arch: int = world.get_block_archetype(hit.frame, hit.block)
 	if _arch_names.is_empty():
@@ -1059,7 +1118,7 @@ func _process(_dt: float) -> void:
 	if _keys_panel != null and _keys_panel.visible:
 		_place_keys()
 	# The grid follows the plane the ghost is on.
-	if _grid_on and (_cell.y != _grid_plane or chunk != _grid_frame):
+	if _grid_on and (_cell.y != _grid_plane or chunk != _grid_frame or grid_window() != _grid_drawn):
 		_grid_plane = _cell.y
 		_grid_frame = chunk
 		_build_grid()
@@ -1151,17 +1210,65 @@ func _plane_distance(frame_chunk: int, y: int, from: Vector3, dir: Vector3) -> f
 
 
 ## March for the first solid cell in any grid. Returns {t, frame, block, point}.
+##
+## Only where a grid holds bricks: the whole area at this step would be a hundred thousand
+## cells for every ray.
 func _first_hit(from: Vector3, dir: Vector3) -> Dictionary:
 	var step := BrickPalette.PLATE_M * 0.34
-	var t := 0.0
-	while t < 120.0:
+	var spans := []
+	var t := INF
+	var end := 0.0
+	for f in asm.frames:
+		var mi: MeshInstance3D = _frame_meshes.get(f)
+		if mi == null or mi.mesh == null or (mi.mesh as ArrayMesh).get_surface_count() == 0:
+			continue
+		var s := _ray_through(from, dir, (mi.transform * mi.mesh.get_aabb()).grow(0.2))
+		if s.x <= s.y:
+			spans.append([f, s.x, s.y])
+			t = minf(t, s.x)
+			end = maxf(end, s.y)
+	var to_floor := _floor_t(from, dir)
+	while t <= end and t < to_floor:
 		var p := from + dir * t
-		for f in asm.frames:
+		for s in spans:
+			if t < s[1] or t > s[2]:
+				continue
+			var f: int = s[0]
 			var bid := world.block_at(f, _cell_in(f, p))
 			if bid >= 0 and world.is_solid(f, _cell_in(f, p)):
 				return {"t": t, "frame": f, "block": bid, "point": p}
 		t += step
+	if to_floor < INF:
+		return {"t": to_floor, "frame": asm.frames[0], "block": -1, "floor": true,
+				"point": from + dir * to_floor}
 	return {}
+
+
+## How far along a ray the floor is, INF if it misses. Just inside it: a hit's point is in
+## the course under the bricks, as it was in a plate.
+func _floor_t(from: Vector3, dir: Vector3) -> float:
+	if _floor == null or dir.y >= 0.0 or from.y <= BrickPalette.PLATE_M:
+		return INF
+	var t := (BrickPalette.PLATE_M - 0.001 - from.y) / dir.y
+	var p := from + dir * t
+	var area := plate_studs * BrickPalette.STUD_M
+	return t if p.x >= 0.0 and p.z >= 0.0 and p.x < area and p.z < area else INF
+
+
+## Where a ray is inside a box: (in, out), in past out when it misses.
+static func _ray_through(from: Vector3, dir: Vector3, box: AABB) -> Vector2:
+	var near := 0.0
+	var far := INF
+	for a in 3:
+		if absf(dir[a]) < 0.000001:
+			if from[a] < box.position[a] or from[a] > box.end[a]:
+				return Vector2(1.0, 0.0)
+			continue
+		var t0: float = (box.position[a] - from[a]) / dir[a]
+		var t1: float = (box.end[a] - from[a]) / dir[a]
+		near = maxf(near, minf(t0, t1))
+		far = minf(far, maxf(t0, t1))
+	return Vector2(near, far)
 
 
 ## The face of the block that was hit, as something to build on.
@@ -1181,12 +1288,19 @@ func _first_hit(from: Vector3, dir: Vector3) -> Dictionary:
 ## than a threshold, which needed a special case for looking straight down at a
 ## bracket; the entry face has no such case to get wrong.
 func _face_for(hit: Dictionary, dir: Vector3) -> Dictionary:
+	var up: Vector3i = _round_axis(world.get_chunk_transform(hit.frame).basis.y)
+	if hit.block < 0:
+		# The floor: the stud aimed at.
+		var c := _cell_in(hit.frame, hit.point)
+		var ts := BrickWorld.ticks_per_stud()
+		var floor_lo := Vector3i(c.x * ts, 0, c.z * ts)
+		return {"lo": floor_lo, "hi": floor_lo + Vector3i(ts, BrickWorld.ticks_per_plate(), ts),
+				"dir": up, "frame": hit.frame, "block": -1, "top": true}
 	var box: Array = world.get_block_ticks(hit.frame, hit.block)
 	if box.is_empty():
 		return {}
 	var lo: Vector3i = box[0]
 	var hi: Vector3i = lo + (box[1] as Vector3i)
-	var up: Vector3i = _round_axis(world.get_chunk_transform(hit.frame).basis.y)
 	var from: Vector3 = hit.point - dir * hit.t
 	var entry := _entry_normal(lo, hi, from, dir)
 
@@ -1582,6 +1696,8 @@ func _ghost_shape(arch: int) -> Array:
 func _update_ghost() -> void:
 	var arch := _archetype()
 	_joints = world.would_connect(chunk, _cell, arch)
+	if _joints == 0 and _on_floor(_cell):
+		_joints = 1
 	# Occupancy is per chunk, so `would_connect` cannot see another frame at all.
 	# A sideways brick dropped inside an upright one would place happily without
 	# this (Docs/BuildMode.md section 2.3).
@@ -1823,9 +1939,9 @@ func mirrored_x(x: int, width: int) -> int:
 func set_mirror(on: bool) -> void:
 	mirror_on = on
 	if on and mirror_z == 0.0:
-		mirror_z = plate_studs * 0.5
+		mirror_z = float(_cell.z)
 	if on and mirror_x == 0.0:
-		mirror_x = plate_studs * 0.5
+		mirror_x = float(_cell.x)
 
 
 ## Put the plane down the middle of the ghost.
@@ -1986,7 +2102,7 @@ func run_step() -> void:
 ## Which recipe block is this (frame, block) in the world? -1 for anything the
 ## recipe does not own, which in practice means the baseplate.
 func _recipe_id_at(frame_index: int, block: int) -> int:
-	if frame_index < 0:
+	if frame_index < 0 or block < 0:
 		return -1
 	for i in range(_placed_at.size() - 1, -1, -1):
 		var at: Array = _placed_at[i]
@@ -2235,12 +2351,6 @@ func _drop_edit(kind: String, n: int) -> void:
 			_edits.remove_at(i)
 			return
 		n -= 1
-
-
-func _baseplate_blocks() -> int:
-	@warning_ignore("integer_division")
-	var n: int = (plate_studs / 4) * (plate_studs / 4)
-	return n
 
 
 ## Swap which layer the next brick goes in.
@@ -2554,7 +2664,7 @@ func _refresh_overlay() -> void:
 		world.solve_grounded(chunk)
 		world.solve_stress(chunk)
 		_stress.clear()
-		for i in range(_baseplate_blocks(), world.get_block_count(chunk)):
+		for i in world.get_block_count(chunk):
 			var cap := world.get_block_capacity(chunk, i)
 			if cap > 0.0:
 				_stress[i] = world.get_block_load(chunk, i) / cap
@@ -2627,19 +2737,48 @@ func _build_grid() -> void:
 	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
 	im.surface_begin(Mesh.PRIMITIVE_LINES, mat)
 	var s := BrickPalette.STUD_M
-	var span := plate_studs * s
+	_grid_drawn = grid_window()
+	var lo := _grid_drawn.position
+	var hi := _grid_drawn.end
 	# Just above the plane itself, so it does not z-fight with the brick tops.
 	var y := 0.002
-	for i in plate_studs + 1:
+	for i in _grid_drawn.size.x + 1:
 		# Faint: a rotated grid's plane can sit right across the view, and it is
 		# an orientation cue rather than something to read.
-		var col := Color(1, 1, 1, 0.13 if i % 4 == 0 else 0.04)
-		im.surface_set_color(col); im.surface_add_vertex(Vector3(i * s, y, 0))
-		im.surface_set_color(col); im.surface_add_vertex(Vector3(i * s, y, span))
-		im.surface_set_color(col); im.surface_add_vertex(Vector3(0, y, i * s))
-		im.surface_set_color(col); im.surface_add_vertex(Vector3(span, y, i * s))
+		var u := (lo.x + i) * s
+		var v := (lo.y + i) * s
+		var col := Color(1, 1, 1, 0.13 if (lo.x + i) % 4 == 0 else 0.04)
+		im.surface_set_color(col); im.surface_add_vertex(Vector3(u, y, lo.y * s))
+		im.surface_set_color(col); im.surface_add_vertex(Vector3(u, y, hi.y * s))
+		im.surface_set_color(col); im.surface_add_vertex(Vector3(lo.x * s, y, v))
+		im.surface_set_color(col); im.surface_add_vertex(Vector3(hi.x * s, y, v))
 	im.surface_end()
 	_grid.mesh = im
+
+
+## The studs the grid is drawn over: round the ghost, moving a quarter of itself at a time
+## so it is not redrawn for every stud walked, and a square in the area.
+func grid_window() -> Rect2i:
+	var side := mini(GRID_STUDS, plate_studs)
+	@warning_ignore("integer_division")
+	var q := side / 4
+	@warning_ignore("integer_division")
+	var x := clampi(snappedi(_cell.x, q) - side / 2, 0, plate_studs - side)
+	@warning_ignore("integer_division")
+	var z := clampi(snappedi(_cell.z, q) - side / 2, 0, plate_studs - side)
+	return Rect2i(x, z, side, side)
+
+
+## The upright grid's bricks seen from above, a stud round them, in studs. Past this there
+## is nothing to walk into.
+func built_area() -> Rect2i:
+	var mi: MeshInstance3D = _frame_meshes.get(asm.frames[0])
+	if mi == null or mi.mesh == null:
+		return Rect2i()
+	var box: AABB = mi.mesh.get_aabb()
+	var lo := Vector2i(floori(box.position.x / BrickPalette.STUD_M), floori(box.position.z / BrickPalette.STUD_M))
+	var hi := Vector2i(ceili(box.end.x / BrickPalette.STUD_M), ceili(box.end.z / BrickPalette.STUD_M))
+	return Rect2i(lo, hi - lo).grow(1)
 
 
 # ---------------------------------------------------------------------------
@@ -2729,7 +2868,6 @@ func _reset_space() -> void:
 	_frame = 0
 	_recipe_frames.clear()
 	_lay_baseplate()
-	world.set_foundation_level(chunk, 0)
 	recipe = BuildRecipe.new()
 	if _tools != null:
 		_tools.recipe_changed()
@@ -2752,6 +2890,12 @@ func _load_recipe(r: BuildRecipe) -> void:
 	for i in recipe.size():
 		var rf: int = recipe.frame_of(i)
 		var af := _asm_frame_for(recipe.frame_rotation(rf), recipe.frame_ticks(rf))
+		if af < 0 and rf != 0:
+			# A sideways grid from when the volume was smaller, which put them elsewhere:
+			# any grid holds bricks, so stand one where it was.
+			if asm.add_frame(Vector3i(plate_studs, height_plates, plate_studs),
+					recipe.frame_rotation(rf), recipe.frame_ticks(rf)) >= 0:
+				af = asm.frames.size() - 1
 		if af < 0:
 			# A frame this workshop cannot represent -- built somewhere else, or
 			# at an offset none of the six standing grids sits at. The BLOCK IS
@@ -2792,6 +2936,8 @@ func _load_recipe(r: BuildRecipe) -> void:
 		_menu.set_kind(recipe.kind)
 	_after_edit()
 	_dirty = false
+	if _tools != null:
+		frame_build()
 
 
 ## Which standing grid matches this (rotation, origin). -1 if none does, which
@@ -2918,6 +3064,7 @@ func _new_build() -> void:
 	_current_path = ""
 	_after_edit()
 	_dirty = false
+	frame_build()
 	print("[workshop] new %s" % kind)
 
 
@@ -3178,9 +3325,10 @@ func stamp_target(from: Vector3, dir: Vector3) -> Vector3i:
 	var p: Vector3
 	var y := 1
 	if not hit.is_empty():
-		var b: Array = world.get_block_ticks(hit.frame, hit.block)
-		@warning_ignore("integer_division")
-		y = ((b[0] as Vector3i).y + (b[1] as Vector3i).y) / BrickWorld.ticks_per_plate()
+		if hit.block >= 0:
+			var b: Array = world.get_block_ticks(hit.frame, hit.block)
+			@warning_ignore("integer_division")
+			y = ((b[0] as Vector3i).y + (b[1] as Vector3i).y) / BrickWorld.ticks_per_plate()
 		p = hit.point
 	else:
 		var t := _plane_distance(asm.frames[0], 1, from, dir)

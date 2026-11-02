@@ -122,25 +122,24 @@ func _check_layout() -> void:
 func _check_workshop() -> void:
 	print("\nthe workshop draws them")
 	var base: int = _ws._stud_count
-	_ok("the baseplate alone has its full 48 x 48", base == 48 * 48, "%d" % base)
+	_ok("the floor is not bricks: no studs yet", base == 0, "%d" % base)
 
 	_ws._part_index = BrickPalette.parts().find("brick_2x4")
 	_ws._axis_z = false
 	_ws._cell = Vector3i(10, 1, 10)
 	_ws._update_ghost()
 	_ws._place()
-	_ok("a 2x4 on the baseplate buries eight and shows eight -- no change",
-			_ws._stud_count == base, "%d vs %d" % [_ws._stud_count, base])
+	_ok("a 2x4 on the floor shows its eight", _ws._stud_count == base + 8, "%d vs %d" % [_ws._stud_count, base + 8])
 
 	_ws._part_index = BrickPalette.parts().find("tile_2x2")
 	_ws._cell = Vector3i(20, 1, 20)
 	_ws._update_ghost()
 	_ws._place()
-	_ok("a tile on the baseplate buries four and shows none",
-			_ws._stud_count == base - 4, "%d vs %d" % [_ws._stud_count, base - 4])
+	_ok("a tile on the floor shows none", _ws._stud_count == base + 8, "%d vs %d" % [_ws._stud_count, base + 8])
 
 	_ws._undo()
-	_ok("undo puts them back", _ws._stud_count == base, "%d" % _ws._stud_count)
+	_ws._undo()
+	_ok("undo takes them away", _ws._stud_count == base, "%d" % _ws._stud_count)
 
 	var f0: int = _ws.asm.frames[0]
 	var mmi: MultiMeshInstance3D = _ws._frame_studs.get(f0)

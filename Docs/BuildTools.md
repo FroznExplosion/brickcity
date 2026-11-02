@@ -613,3 +613,37 @@ Merged; `tools/build_tools_probe.gd` 257 checks.
 * Rooms copied are seeded in the copy and found again from the bricks, so a door's kind set by
   hand in a room comes back as what the bricks say. Marks and points are not copied.
 * Later edits do not follow: a copy is a copy. Edit first, then Repeat.
+
+## 15. Six-brick storeys and a build area of a thousand bricks
+
+Asked 2026-11-02: a storey is 6 bricks tall, not 4; the workshop 1000 bricks tall and 1000 x 1000
+wide.
+
+**Storey.** A storey's wall band is 6 bricks (18 plates), whatever is held: a plate in the hotbar
+used to make it 4 plates. The floor stays one plate on top, so floors are 19 plates apart. That
+matches the city's towers, whose floors stand six bricks apart. A door was 18 plates plus a 3-plate
+head, which no longer leaves a wall in the band: it is 15 now, so head and door fill the band.
+
+**Area.** 1200 x 1200 studs by 3000 plates (1000 bricks), up from 48 x 48 by 120. Not 1000 wide:
+the six grids are one volume, and that only holds for a cube in ticks (Workshop.height_plates), so
+wide follows tall. 350 m would leave a sideways grid short of the top.
+
+What the size breaks, and the answer to each:
+
+* **Memory.** Six dense grids of 4.3 billion cells cannot be allocated. They page, as the asset
+  workshop's do (Docs/AssetWorkshop.md); an old brick library falls back to 96 studs with a warning.
+* **The floor.** Every edit remeshes every grid whole, so a floor of real plates (14,400 of the
+  biggest, 1.4 million studs) would slow each brick. The floor is one quad with drawn studs, not
+  bricks: a brick on the bottom course counts as clipped to it, and the stress solve's foundation
+  is that course.
+* **The grid.** A line per stud at this size draws nothing but a grey square: it is a window of
+  120 studs round the ghost, redrawn as the ghost walks.
+* **Rays.** `_first_hit` marched 120 m through six grids a step at a time. It marches only through
+  the boxes of the grids that hold bricks, as far as they go.
+* **The camera.** Far plane 2500 m. A new build starts in the middle of the area, framed as the old
+  plate was; loading a build frames the build, since old ones sit in the corner. The wheel's step
+  grows with the distance.
+* **Old builds.** Upright bricks keep their cells. A sideways grid in an old save sits where the
+  small volume put it, so loading adds a grid there rather than losing its bricks.
+* **Walls that close.** The flood that finds a floor stops at the build's box: past that it is open
+  ground, so it no longer needs a cell limit that a big building would hit.

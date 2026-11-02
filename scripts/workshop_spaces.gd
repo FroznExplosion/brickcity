@@ -460,6 +460,8 @@ func _bounds() -> Array:
 ## are air (a room is not walled by its desks); see-through bricks are glass;
 ## a door part is a door.
 func _cell_kind(c: Vector3i) -> int:
+	if c.y == 0 and ws._floor != null:
+		return StructureSpaces.Cell.SOLID
 	if not _reader.is_valid():
 		_collect_decor()
 	var at: Vector2i = _reader.call(c)

@@ -3888,11 +3888,11 @@ func _draw_work_plane() -> void:
 
 ## No floor here: a build floats, and starts from one brick.
 func _lay_baseplate() -> void:
-	pass
+	world.set_foundation_level(chunk, 0)
 
 
-func _baseplate_blocks() -> int:
-	return 0
+func _on_floor(_cell_at: Vector3i) -> bool:
+	return false
 
 
 ## The brick a build starts from: a 1x4 along the gun on the mirror plane, mid-air.

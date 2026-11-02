@@ -76,7 +76,7 @@ const POPOUT_W := 204.0
 const POPOUT_HIDES := ["hand", "draw", "roof", "stairs", "cut"]
 ## A door and a window cut by one click, to start: studs across, plates up; a window's sill
 ## is where it is clicked, a door stands on the floor of the wall.
-const DOOR := Vector2i(4, 18)
+const DOOR := Vector2i(4, 15)
 const WINDOW := Vector2i(4, 9)
 const REPEAT_WHAT := [["building", "Building"], ["storey", "One storey"], ["shape", "One shape"]]
 const REPEAT_DIRS := [["up", "Up"], ["x", "Along X"], ["z", "Along Z"]]
@@ -160,7 +160,7 @@ var _sk := {}
 ## it makes, a building's storey (courses of wall) and flat roof; the plan being drawn
 ## ({at, adds, subs}); the last plan raised. Cut: a window on a building on every floor.
 var sketch_level := -1
-var storey_courses := 4
+var storey_courses := 6
 var flat_roof := true
 var every_floor := true
 var _draft := {}
@@ -1489,7 +1489,7 @@ func _build_options() -> void:
 	_button(_plan_box, "... starting from its plan", func() -> void: plan_on_top(true))
 	_storey_box = VBoxContainer.new()
 	_plan_box.add_child(_storey_box)
-	_spin(_storey_box, "storey (courses of wall)", 1, 40, storey_courses, func(v: float) -> void: storey_courses = int(v))
+	_spin(_storey_box, "storey (bricks tall)", 1, 40, storey_courses, func(v: float) -> void: storey_courses = int(v))
 	var fr := CheckBox.new()
 	fr.text = "flat roof on top"
 	fr.button_pressed = flat_roof
@@ -2094,7 +2094,7 @@ func _plan_record(points: Dictionary, at: int) -> Dictionary:
 	rec.fill = makes in ["solid", "floor"]
 	rec.rim = wall_rim()
 	if makes == "building":
-		rec.storey = storey_courses * height_step("flat")
+		rec.storey = storey_courses * BrickPalette.PLATES_PER_BRICK
 		rec.floor = 1
 		rec.roof = flat_roof
 		rec.step = int(rec.storey) + 1
@@ -2667,10 +2667,10 @@ func floor_record(c: Vector3i, on_top: bool) -> Dictionary:
 	var edge := {}
 	var todo: Array[Vector2i] = [Vector2i(c.x, c.z)]
 	region[todo[0]] = true
-	var n: int = ws.plate_studs
+	var box: Rect2i = ws.built_area()
 	while not todo.is_empty():
 		var p: Vector2i = todo.pop_back()
-		if p.x <= 0 or p.y <= 0 or p.x >= n - 1 or p.y >= n - 1 or region.size() > 20000:
+		if not box.has_point(p):
 			say("Those walls do not close: the floor would run out of the plate.")
 			return {}
 		for d in [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]:
@@ -3339,13 +3339,15 @@ func _draw_level(begun: bool) -> bool:
 	var at := int(_draft.get("at", sketch_level if sketch_level >= 0 else int(ws._cell.y)))
 	if not begun:
 		_im.surface_begin(Mesh.PRIMITIVE_LINES)
-	var n := float(ws.plate_studs)
 	var y := at * BrickPalette.PLATE_M + 0.004
 	var col := Color(0.55, 0.75, 1.0, 0.22)
-	for i in int(n) + 1:
-		var t := i * BrickPalette.STUD_M
-		for seg in [[Vector3(t, y, 0), Vector3(t, y, n * BrickPalette.STUD_M)],
-				[Vector3(0, y, t), Vector3(n * BrickPalette.STUD_M, y, t)]]:
+	var win: Rect2i = ws.grid_window()
+	var s := BrickPalette.STUD_M
+	for i in win.size.x + 1:
+		var u := (win.position.x + i) * s
+		var v := (win.position.y + i) * s
+		for seg in [[Vector3(u, y, win.position.y * s), Vector3(u, y, win.end.y * s)],
+				[Vector3(win.position.x * s, y, v), Vector3(win.end.x * s, y, v)]]:
 			_im.surface_set_color(col)
 			_im.surface_add_vertex(seg[0])
 			_im.surface_set_color(col)

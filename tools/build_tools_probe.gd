@@ -50,6 +50,7 @@ func _initialize() -> void:
 	_rest_checks()
 	await _out_of_the_way_checks()
 	_repeat_building_checks()
+	_area_checks()
 	print("\n%d passed, %d failed" % [_pass, _fail])
 	quit(1 if _fail > 0 else 0)
 
@@ -1445,6 +1446,108 @@ func _out_of_the_way_checks() -> void:
 	t.makes = "solid"
 	t.set_outline("box")
 	t.pick("place")
+
+
+func _area_checks() -> void:
+	print("[probe] six-brick storeys and a thousand-brick area (section 15)")
+	_ws._new_build()
+	var t: WorkshopTools = _ws._tools
+	var fresh := WorkshopTools.new()
+	_ok("a storey is six bricks", fresh.storey_courses == 6, str(fresh.storey_courses))
+	fresh.free()
+	t.storey_courses = 6
+	t.flat_roof = false
+	_hold("plate_1x2")
+	t.pick("draw")
+	t.set_outline("box")
+	t.makes = "building"
+	_drag_outline(t, Vector3i(600, 1, 600), Vector2i(619, 615))
+	t.input(_key(KEY_1))
+	var b := t.commit_pending()
+	_ok("whatever is held: 18 plates of wall, a plate held", int(t.shape_of(b).get("storey", 0)) == 18,
+			str(t.shape_of(b).get("storey", 0)))
+
+	_ws._new_build()
+	_hold("brick_1x2")
+	t.pick("draw")
+	t.set_outline("box")
+	t.makes = "building"
+	_drag_outline(t, Vector3i(600, 1, 600), Vector2i(619, 615))
+	t.input(_key(KEY_1))
+	b = t.commit_pending()
+	var at := 610.5 * BrickPalette.STUD_M
+	t.door_size = WorkshopTools.DOOR
+	t.apply_opening("door", t.face_under(Vector3(at, 5.5 * BrickPalette.PLATE_M, 590.0 * BrickPalette.STUD_M), Vector3(0, 0, 1)))
+	_ok("a door fits a storey: open to its top, a head over it", not _solid(Vector3i(610, 2, 600))
+			and not _solid(Vector3i(610, 16, 600)) and _solid(Vector3i(610, 17, 600)) and _solid(Vector3i(610, 19, 600)),
+			"%s %s %s %s" % [_solid(Vector3i(610, 2, 600)), _solid(Vector3i(610, 16, 600)), _solid(Vector3i(610, 17, 600)),
+					_solid(Vector3i(610, 19, 600))])
+
+	_ws._new_build()
+	_ok("1000 bricks tall", _ws.height_plates == 1000 * BrickPalette.PLATES_PER_BRICK, str(_ws.height_plates))
+	_ok("and a cube in ticks, so the six grids are one volume",
+			_ws.plate_studs * BrickWorld.ticks_per_stud() == _ws.height_plates * BrickWorld.ticks_per_plate()
+			and _ws.plate_studs >= 1000, str(_ws.plate_studs))
+	var f0: int = _ws.asm.frames[0]
+	_hold("brick_2x4")
+	_ws._axis_z = false
+	var far_up := Vector3i(1190, 2990, 1190)
+	_ws._cell = far_up
+	_ws._update_ghost()
+	_ws._place()
+	_ok("a brick in the far top corner", _ws.world.block_at(f0, far_up) >= 0 and _ws.recipe.size() == 1,
+			"valid %s joints %d size %d cell %s" % [_ws._valid, _ws._joints, _ws.recipe.size(), _ws._cell])
+	var over: Vector3 = BrickWorld.grid_to_world(far_up) + Vector3(0.2, 30.0, 0.2)
+	var hit: Dictionary = _ws._first_hit(over, Vector3.DOWN)
+	_ok("a ray finds it", int(hit.get("block", -1)) >= 0, str(hit))
+	hit = _ws._first_hit(Vector3(10.0, 60.0, 10.0), Vector3.DOWN)
+	_ok("a ray under nothing finds the floor, not a brick", hit.has("floor") and int(hit.block) == -1, str(hit))
+	_ok("and the floor ends with the area", _ws._first_hit(Vector3(-10.0, 60.0, 10.0), Vector3.DOWN).is_empty())
+	var dir := Vector3(1.0, -0.02, 1.0).normalized()
+	var began := Time.get_ticks_usec()
+	for i in 100:
+		_ws._first_hit(Vector3(1.0, 300.0, 1.0), dir)
+	var us := Time.get_ticks_usec() - began
+	_ok("a hundred rays across the area are nothing", us < 5000, "%d us" % us)
+
+	_ws._cell = Vector3i(900, 1, 900)
+	_ws._update_ghost()
+	_ok("on the floor a brick is clipped", _ws._joints > 0, str(_ws._joints))
+	_ws._cell = Vector3i(900, 2, 900)
+	_ws._update_ghost()
+	_ok("a plate over it is not", _ws._joints == 0, str(_ws._joints))
+	_ws._cell = Vector3i(1190, 1, 10)
+	var win: Rect2i = _ws.grid_window()
+	_ok("the grid is a window at the ghost, inside the area", win.size.x == _ws.GRID_STUDS
+			and win.end.x == _ws.plate_studs and win.position.y == 0, str(win))
+
+	# A courtyard wider than the flood's old limit of 20,000 cells.
+	_ws._new_build()
+	t.pick("draw")
+	t.set_outline("box")
+	t.makes = "walls"
+	_drag_outline(t, Vector3i(500, 1, 500), Vector2i(799, 799))
+	t.commit_pending()
+	began = Time.get_ticks_usec()
+	var inside: Dictionary = t.floor_record(Vector3i(650, 1, 650), false)
+	_ok("walls 300 studs across close", not inside.is_empty(), "%d us" % (Time.get_ticks_usec() - began))
+	began = Time.get_ticks_usec()
+	_ok("outside them it is open ground, and quickly said", t.floor_record(Vector3i(100, 1, 100), false).is_empty()
+			and Time.get_ticks_usec() - began < 20000, "%d us" % (Time.get_ticks_usec() - began))
+
+	# Builds saved before the area grew: a sideways grid where the small volume stood it.
+	var r := BuildRecipe.new()
+	_ws._part_index = BrickPalette.parts().find("brick_2x4")
+	var part: String = _ws._archetype_name()
+	r.add(part, Vector3i(10, 1, 10), 3)
+	var rot: int = _ws.world.get_chunk_rotation(_ws.asm.frames[1])
+	var fi := r.add_frame(rot, Vector3i(240, 0, 0))
+	r.add(part, Vector3i(10, 1, 10), 3, fi)
+	_ws._load_recipe(r)
+	_ok("an old sideways grid keeps its bricks", _ws._placed_at.size() == 2 and int(_ws._placed_at[1][1]) >= 0, str(_ws._placed_at))
+	_ok("and the view goes to the build, not the middle of the area",
+			_ws._camera.global_position.distance_to(BrickWorld.grid_to_world(Vector3i(10, 1, 10))) < 40.0,
+			str(_ws._camera.global_position))
 
 
 func _repeat_building_checks() -> void:
