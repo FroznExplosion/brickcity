@@ -647,3 +647,16 @@ What the size breaks, and the answer to each:
   small volume put it, so loading adds a grid there rather than losing its bricks.
 * **Walls that close.** The flood that finds a floor stops at the build's box: past that it is open
   ground, so it no longer needs a cell limit that a big building would hit.
+
+### As built (2026-11-02)
+
+Merged; `tools/build_tools_probe.gd` 274 checks, workshop gate 19.
+
+* A floor hit is `{floor: true, block: -1}` in frame 0: ask `hit.block >= 0` before asking the world
+  about it. Its point is just inside the floor, as a hit's was in a plate. The room finder sees
+  y = 0 as solid.
+* Space is no longer the limit; edits are. Every edit remeshes every grid whole. Rough timings,
+  headless, other runs possibly going: 11,900 bricks 240 ms a brick, 89,000 bricks (a 20-storey block
+  80 studs wide) 2 to 4 s a brick, of which a remesh is 2 s (the chamfer mesh 0.7 s, the rest mostly
+  building the ArrayMesh). Laying a whole shape is one remesh, so it is hand placing that suffers.
+  A tall building needs its grid meshed in sections, so an edit rebuilds only the section it touched.
