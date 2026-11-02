@@ -18,6 +18,10 @@ const H := 16
 const PITCH := H + 3
 const DOOR := Vector2i(2, 14)
 const HULL_COLOUR := "light bluish gray"
+const ENGINE_COLOUR := "dark bluish gray"
+## An engine housing on the roof aft: studs across, courses high, studs it
+## hangs out past the stern.
+const NACELLE := Vector3i(4, 3, 2)
 
 
 ## {ok, why, recipe, plan, stats, seat: Vector3i, decks}.
@@ -34,6 +38,7 @@ static func make(seed: int, passes := 1) -> Dictionary:
 	if not bool(made.ok):
 		return made
 	made.lib = lib0
+	made.recipe.meta["engines"] = h.meta.get("engines", [])
 	made.decks = int(made.stats.decks)
 	made.seat = Vector3i(-1, -1, -1)
 	var lib: Array = made.lib
@@ -123,7 +128,8 @@ static func room(name: String, w: int, d: int, rules: Dictionary, doors: Array, 
 ## A hull `length` along +X, `beam` across, `decks` high: its half-beam falling
 ## over the fore quarter to a third of it at the bow; a floor of plates (row 1:
 ## row 0 is the ground's when a build is laid), brick side walls, a roof of two
-## plate layers over the top deck.
+## plate layers over the top deck; on the roof aft two engine housings and a
+## fin (`meta.engines`: each housing's back, its middle, for its glow).
 static func hull(length: int, beam: int, decks: int) -> BuildRecipe:
 	var r := BuildRecipe.new()
 	r.name = "hull"
@@ -151,7 +157,47 @@ static func hull(length: int, beam: int, decks: int) -> BuildRecipe:
 				edge = true
 		if edge:
 			StationKit._column(r, Vector3i(c.x, 2, c.y), top - 2, {}, colour)
+	_engines(r, length, half, top + 2)
 	return r
+
+
+## Two engine housings on the roof aft, a quarter of its length, hanging out past
+## the stern: 2x2 bricks in a running bond (each course a stud on, so every brick
+## holds two below it), 1x1s where a course's ends fall short; a fin between them
+## on the middle line, stepping down forward.
+static func _engines(r: BuildRecipe, length: int, half: int, y0: int) -> void:
+	var dark := StationKit._colour(ENGINE_COLOUR)
+	var colour := StationKit._colour(HULL_COLOUR)
+	var x_lo := -NACELLE.z
+	@warning_ignore("integer_division")
+	var x_hi := maxi(length / 4, 8) / 2 * 2 - 1
+	@warning_ignore("integer_division")
+	var off := maxi(4, half / 2) / 2 * 2
+	var engines := []
+	for side in [-1, 1]:
+		var z0: int = half + side * off - NACELLE.x / 2
+		for course in NACELLE.y:
+			var y := y0 + course * 3
+			var x := x_lo + course % 2
+			if x > x_lo:
+				for z in NACELLE.x:
+					r.add("brick_1x1", Vector3i(x_lo, y, z0 + z), dark)
+			while x + 1 <= x_hi:
+				for z in range(0, NACELLE.x, 2):
+					r.add("brick_2x2", Vector3i(x, y, z0 + z), dark)
+				x += 2
+			if x == x_hi:
+				for z in NACELLE.x:
+					r.add("brick_1x1", Vector3i(x_hi, y, z0 + z), dark)
+		engines.append([x_lo, y0 + NACELLE.y * 3 / 2.0, z0 + NACELLE.x / 2.0])
+	r.meta["engines"] = engines
+	# The fin: 1x1 columns, a course more than the housings at the stern.
+	@warning_ignore("integer_division")
+	var fin := maxi(length / 5, 6)
+	for x in fin:
+		var h := 1 + (NACELLE.y + 1) * (fin - x) / fin
+		for course in h:
+			r.add("brick_1x1", Vector3i(x, y0 + course * 3, half), colour)
 
 
 ## One plate layer over `cells` at row y: 2x2 plates on the grid from `shift`

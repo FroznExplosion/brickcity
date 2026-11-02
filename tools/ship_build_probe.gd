@@ -8,7 +8,7 @@ extends SceneTree
 ##   ships     8 seeds: a hull 1-3 decks, a bridge (its seat on its floor) in
 ##             the fore third, an engine room in the aft third, an airlock through
 ##             the stern onto the spine, most of the inside rooms, sections at the
-##             bulkheads
+##             bulkheads, two engine housings of bricks on the roof aft
 ##   flown     a SpaceShip of layout "generated": grown at setup, its seat the
 ##             bridge's -- forward of its middle (-Z), on a floor, under a roof --
 ##             its hull box long along Z
@@ -87,6 +87,14 @@ func _run() -> void:
 				engine_x = float((pl.off as Vector3i).x)
 		if engine_x < 0 or engine_x > size.x / 3.0:
 			bad.append("seed %d: engine room at %.0f of %d" % [sd, engine_x, size.x])
+		# Two engine housings on the roof aft, their backs out past the stern.
+		var eng: Array = r.meta.get("engines", [])
+		var housed := eng.size() == 2
+		for e: Array in eng:
+			var back := Vector3i(int(e[0]), int(e[1]), int(e[2]))
+			housed = housed and back.x < 0 and cells.has(back) and cells.has(back + Vector3i(4, 0, 0))
+		if not housed:
+			bad.append("seed %d: engines %s" % [sd, str(eng)])
 		var lock: Vector3i = m.stats.airlock
 		if lock.x < 0 or cells.has(lock) or cells.has(lock + Vector3i(0, 0, 1)) or cells.has(lock + Vector3i(1, 0, 0)):
 			bad.append("seed %d: no airlock open at %s" % [sd, str(lock)])
@@ -94,7 +102,7 @@ func _run() -> void:
 				or (r.meta.sections.sections as Array).size() < 2:
 			bad.append("seed %d: %d deck(s), fill %.2f, %d section(s)" % [sd, m.decks, m.stats.fill,
 					(r.meta.sections.sections as Array).size()])
-	_ok("8 seeds: hulls of 1-3 decks, the bridge's seat on its floor fore, the engine room aft, an airlock aft onto the spine, mostly rooms, sections",
+	_ok("8 seeds: hulls of 1-3 decks, the bridge's seat on its floor fore, the engine room aft, an airlock aft onto the spine, mostly rooms, sections, engine housings",
 			bad.is_empty(), "fill %s %s" % [str(fills), str(bad.slice(0, 4))])
 
 	var d := OrbitalData.new()
