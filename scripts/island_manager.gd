@@ -6072,6 +6072,25 @@ static func _distance_to_box(box: AABB, point: Vector3) -> float:
 
 
 ## Bytes the dormant tier is holding, and what it is standing in for.
+## What the debris caps count right now, as _enforce_debris_cap counts it:
+## settled pieces, small and large (landmarks), and the falling ones it leaves
+## alone. For the stats (CityScene._caps_hud_line).
+func cap_counts() -> Dictionary:
+	var small_n := 0
+	var large_n := 0
+	var falling := 0
+	for isl in islands:
+		if not isl.is_valid() or isl.capturing or isl.fade_since > 0:
+			continue
+		if not isl.settled:
+			falling += 1
+		elif isl.landmark:
+			large_n += 1
+		else:
+			small_n += 1
+	return {"small": small_n, "large": large_n, "falling": falling}
+
+
 func dormant_report() -> Dictionary:
 	var bytes := 0
 	var blocks := 0
