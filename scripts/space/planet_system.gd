@@ -23,9 +23,11 @@ extends Node3D
 ## `woke` gives what holds world positions for it the offset to take.
 ##
 ## The scene says where the player is (`observer`) and the camera (`eye`), and
-## owns the sun light (`sun`); this aims it from the star and says how much of
-## the star's disc the camera sees (`sunlight`: night, a planet's shadow, an
-## eclipse) and how high it stands there (`sun_height`).
+## owns the light (`rig`, Docs/Lighting.md); this aims its sun from the star and
+## says how much of the star's disc the camera sees (`sunlight`: night, a
+## planet's shadow, an eclipse), how high it stands there (`sun_height`), its
+## size and brightness by distance, the fill from the brightest body in the
+## sky, and each body's shadows from the others.
 
 ## Inside SHELL radii of a body's centre the player is ON it (STA's
 ## active_shell_radius_mult is 3; 5 keeps the walker gate's 30 km climb on the
@@ -126,8 +128,11 @@ var star_look: MeshInstance3D
 ## This system's belt, or null, and its far disc.
 var belt: RockField
 var _belt_disc: MeshInstance3D
-var sun: DirectionalLight3D
-var sun_energy := 1.1
+var rig: LightRig
+## The star's light at home (luminosity / distance^2), for the sun's brightness.
+var _flux_home := 0.0
+## The most bodies whose shadows a body's far look takes.
+const SHADOWERS := 4
 var observer: Callable
 var eye: Callable
 ## How much of the star's disc the camera sees, 0..1.
@@ -160,6 +165,9 @@ func setup(p_sys: StarSystem, home_body: PlanetBody = null) -> void:
 	if home_body != null:
 		anchor = home_body
 	_build_star()
+	var hd: PlanetData = _home_sys.bodies[_home_sys.home] if _home_sys.home >= 0 else null
+	var hr: float = hd.orbit_radius if hd != null and hd.orbit_radius > 0.0 else StarSystem.HABITABLE
+	_flux_home = _home_sys.luminosity / (hr * hr)
 	_place()
 
 
@@ -674,7 +682,40 @@ func _place() -> void:
 		e.node.global_transform = s2w * base * e.at(_drift_clock)
 	for b in bodies:
 		b.set_sun(b.global_basis.inverse() * (star.global_position - b.global_position).normalized())
+		_shadows_on(b)
 	_belt_near(s2w)
+
+
+## Body `b`'s far look takes the shadows of the bodies between it and the star
+## (Lighting.md 2a): each as a sphere in its own frame, in its radii.
+func _shadows_on(b: PlanetBody) -> void:
+	var to_s := star.global_position - b.global_position
+	var ds := to_s.length()
+	var sd := to_s / ds
+	var inv := b.global_basis.orthonormalized().inverse()
+	var r := b.data.radius
+	var found: Array = []
+	for o in bodies:
+		if o == b:
+			continue
+		var to_o := o.global_position - b.global_position
+		var along := to_o.dot(sd)
+		if along <= 0.0 or along > ds:
+			continue
+		# How near the sun's line it passes, against how big it and its
+		# penumbra are there: past both it shadows nothing on b.
+		var miss := (to_o - sd * along).length()
+		var reach := o.data.radius + r + along * sys.star_radius / ds
+		if miss > reach:
+			continue
+		found.append([miss / reach, Vector4(0, 0, 0, 0)])
+		var l := inv * to_o / r
+		found[-1][1] = Vector4(l.x, l.y, l.z, o.data.radius / r)
+	found.sort_custom(func(x, y): return x[0] < y[0])
+	var list := PackedVector4Array()
+	for k in mini(found.size(), SHADOWERS):
+		list.append(found[k][1])
+	b.set_shadowers(list, asin(clampf(sys.star_radius / ds, 0.0, 1.0)), rig.star_colour if rig != null else sys.star_color)
 
 
 func _gravity() -> void:
@@ -848,11 +889,11 @@ func _ship_bricks(p: Vector3) -> void:
 		s.gangway_step()
 
 
-## The scene's top-level 3D nodes but the system's own, the bodies and the sun.
+## The scene's top-level 3D nodes but the system's own, the bodies and the light.
 func _top_level() -> Array[Node3D]:
 	var out: Array[Node3D] = []
 	for c in get_parent().get_children():
-		if c is Node3D and c != self and not c is PlanetBody and c != sun:
+		if c is Node3D and c != self and not c is PlanetBody and c != rig:
 			out.append(c)
 	return out
 
@@ -919,7 +960,8 @@ func _wake(f: Node3D) -> void:
 # --- the light -----------------------------------------------------------------
 
 ## Aim the sun from the star at the camera; how much of the star's disc the
-## bodies leave it.
+## bodies leave it; its size and brightness from where the camera is
+## (Lighting.md 2); the fill from the brightest body in the sky (5).
 func _light(e: Vector3) -> void:
 	var to_s := star.global_position - e
 	var ds := to_s.length()
@@ -937,14 +979,50 @@ func _light(e: Vector3) -> void:
 	sunlight = seen
 	var near := nearest(e)
 	sun_height = (e - near.global_position).normalized().dot(sd) if near != null else 1.0
-	if sun == null:
+	if rig == null:
 		return
-	if _sun_dir == Vector3.ZERO or _sun_dir.angle_to(-sd) > SUN_STEP:
-		_sun_dir = -sd
-		var up := Vector3.UP if absf(sd.y) < 0.99 else Vector3.FORWARD
-		sun.global_basis = Basis.looking_at(_sun_dir, up)
-	sun.light_energy = sun_energy * seen
-	sun.visible = seen > 0.0
+	rig.star_colour = sys.star_color
+	var flux := sys.luminosity / (ds * ds)
+	rig.set_sun(sd, seen, a_s, flux / _flux_home if _flux_home > 0.0 else 1.0, SUN_STEP)
+	_fill(e, sd, near, seen)
+
+
+## The brightest body in the sky by the light it sends back: albedo x its solid
+## angle / pi x how much of the face toward the camera is lit; under the near
+## body's horizon it sends none.
+func _fill(e: Vector3, sd: Vector3, near: PlanetBody, seen: float) -> void:
+	var best: PlanetBody = null
+	var best_score := 0.0
+	var best_dir := Vector3.ZERO
+	var best_ang := 0.0
+	var best_over := 0.0
+	var up := (e - near.global_position).normalized() if near != null else Vector3.ZERO
+	var near_in := near != null and (e - near.global_position).length() < near.data.radius * 1.5
+	for b in bodies:
+		if b == near and near_in:
+			continue
+		var to_b := b.global_position - e
+		var db := to_b.length()
+		var dir := to_b / db
+		var over := 1.0
+		if near_in:
+			over = smoothstep(-0.05, 0.1, dir.dot(up))
+			if over <= 0.0:
+				continue
+		var ang := asin(clampf(b.data.radius / db, 0.0, 1.0))
+		var omega := 2.0 * (1.0 - cos(ang))   # its solid angle / pi
+		# The lit part of its face toward the camera: (1 + cos phase) / 2, the
+		# phase the angle at the body between the star and the camera.
+		var to_star := (star.global_position - b.global_position).normalized()
+		var lit := (1.0 + to_star.dot(-dir)) * 0.5
+		var score := LightRig.FILL_ALBEDO * omega * lit
+		if score * over > best_score * best_over or best == null:
+			best = b
+			best_score = score
+			best_dir = dir
+			best_ang = ang
+			best_over = over
+	rig.set_fill(best, best_dir, best_score, best_ang, best_over, seen)
 
 
 ## Each body's look, and the star's, where the camera at `e` can draw it.
