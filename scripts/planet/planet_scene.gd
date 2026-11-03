@@ -87,6 +87,7 @@ var _travel_gate := false
 var _far_gate := false
 var _drive_gate := false
 var _system_gate := false
+var _light_gate := false
 var _ship_gate := false
 var _dock_gate := false
 var _worlds_gate := false
@@ -106,6 +107,11 @@ var _mouse_steer := Vector2.ZERO
 ## The star system round the planet (Planets.md 11.12); null with --no-system.
 var system: PlanetSystem
 var sun: DirectionalLight3D
+## The light (Docs/Lighting.md): sun, fill, sky, exposure, ambient boxes.
+var light: LightRig
+## Ambient boxes made, by building site or module; when last looked for.
+var _box_of := {}
+var _boxes_at := 0
 var sky_mat: ProceduralSkyMaterial
 var env: Environment
 var hud: Label
@@ -142,6 +148,7 @@ func _ready() -> void:
 	_far_gate = "--gate=far" in OS.get_cmdline_user_args()
 	_drive_gate = "--gate=drive" in OS.get_cmdline_user_args()
 	_system_gate = "--gate=system" in OS.get_cmdline_user_args()
+	_light_gate = "--gate=light" in OS.get_cmdline_user_args()
 	_ship_gate = "--gate=ship" in OS.get_cmdline_user_args()
 	_dock_gate = "--gate=dock" in OS.get_cmdline_user_args()
 	_worlds_gate = "--gate=worlds" in OS.get_cmdline_user_args()
@@ -156,7 +163,7 @@ func _ready() -> void:
 	_home_gate = "--gate=home" in OS.get_cmdline_user_args()
 	_save_gate = "--gate=save" in OS.get_cmdline_user_args()
 	WorldFrame.origin = Vector3.ZERO
-	_gate = _gate or _system_gate or _ship_gate or _dock_gate or _worlds_gate or _jump_gate or _debris_gate or _falling_gate or _rocks_gate or _garrison_gate or _seat_gate or _hull_gate or _belt_gate or _home_gate or _save_gate or _pawn_gate or _mech_gate or _tank_gate or _soldier_gate or _squad_gate or _travel_gate or _far_gate or _drive_gate or _trees_gate or _bricks_gate or _damage_gate or _fall_gate or _hits_gate or _topple_gate or _pieces_ai_gate or _storey_gate
+	_gate = _gate or _light_gate or _system_gate or _ship_gate or _dock_gate or _worlds_gate or _jump_gate or _debris_gate or _falling_gate or _rocks_gate or _garrison_gate or _seat_gate or _hull_gate or _belt_gate or _home_gate or _save_gate or _pawn_gate or _mech_gate or _tank_gate or _soldier_gate or _squad_gate or _travel_gate or _far_gate or _drive_gate or _trees_gate or _bricks_gate or _damage_gate or _fall_gate or _hits_gate or _topple_gate or _pieces_ai_gate or _storey_gate
 	data = PlanetData.new()
 	data.planet_name = "proto"
 	# Towns and landmarks: their pads go into the ground before it is built.
@@ -206,8 +213,7 @@ func _ready() -> void:
 	walker.camera.far = SEE_FAR
 	add_child(walker)
 	if system != null:
-		system.sun = sun
-		system.sun_energy = sun.light_energy
+		system.rig = light
 		system.observer = _anchor
 		system.eye = _eye
 	walker.camera.current = true
@@ -255,6 +261,8 @@ func _ready() -> void:
 			_run_far_gate()
 		elif _drive_gate:
 			_run_drive_gate()
+		elif _light_gate:
+			_run_light_gate()
 		elif _system_gate:
 			_run_system_gate()
 		elif _ship_gate:
@@ -787,30 +795,55 @@ func _on_jumped(_index: int) -> void:
 
 
 func _build_light() -> void:
-	sun = DirectionalLight3D.new()
-	sun.light_energy = 1.1
-	sun.shadow_enabled = true
-	sun.directional_shadow_max_distance = 400.0
-	add_child(sun)
+	light = LightRig.new()
+	light.build(self, system != null)
+	sun = light.sun
+	env = light.env
+	sky_mat = light.sky_mat
 	sun.look_at_from_position(Vector3.ZERO, -planet.sun_dir, Vector3.UP if absf(planet.sun_dir.y) < 0.99 else Vector3.FORWARD)
-	env = Environment.new()
-	env.background_mode = Environment.BG_SKY
-	var sky := Sky.new()
-	sky_mat = ProceduralSkyMaterial.new()
-	sky_mat.sky_top_color = Color(0.36, 0.53, 0.78)
-	sky_mat.sky_horizon_color = Color(0.70, 0.77, 0.84)
-	sky_mat.ground_bottom_color = Color(0.25, 0.27, 0.24)
-	sky_mat.ground_horizon_color = Color(0.70, 0.77, 0.84)
-	if system != null:
-		# The star is the sun's disc; the sky's own would not sit on it.
-		sky_mat.sun_angle_max = 0.5
-	sky.sky_material = sky_mat
-	env.sky = sky
-	env.ambient_light_source = Environment.AMBIENT_SOURCE_SKY
-	env.ambient_light_energy = 0.6
-	var we := WorldEnvironment.new()
-	we.environment = env
-	add_child(we)
+
+
+## Ambient boxes (Docs/Lighting.md 6.2), twice a second: one inside each
+## building laid in bricks here, and in each station or ship module laid; a
+## toppled building's goes.
+func _ambient_boxes() -> void:
+	var now := Time.get_ticks_msec()
+	if now - _boxes_at < 500:
+		return
+	_boxes_at = now
+	for key in _box_of.keys():
+		var p = _box_of[key]
+		if not is_instance_valid(p):
+			_box_of.erase(key)
+	var pb := _buildings_here()
+	if pb != null:
+		var stud := BrickPalette.STUD_M
+		for i in pb.sites.size():
+			var st = pb.sites[i]
+			var key := "%d:%d" % [pb.get_instance_id(), i]
+			if st.toppled:
+				if _box_of.has(key):
+					(_box_of[key] as Node).queue_free()
+					_box_of.erase(key)
+				continue
+			if st.bricked and st.brick_node != null and not _box_of.has(key):
+				_box_of[key] = light.add_box(st.brick_node, Vector3.ZERO,
+						Vector3(st.fx * stud, st.height, st.fz * stud), "room")
+	if system == null:
+		return
+	var mods: Array = []
+	mods.append_array(system.stations)
+	mods.append_array(system.ships)
+	for m in mods:
+		var st := m as SpaceStation
+		if st == null or not is_instance_valid(st) or st.chunk < 0:
+			continue
+		var bn := st.get_node_or_null("Bricks") as Node3D
+		var key := "m%d" % st.get_instance_id()
+		if bn != null and not _box_of.has(key):
+			var stud := BrickWorld.get_stud_metres()
+			_box_of[key] = light.add_box(bn, Vector3.ZERO,
+					Vector3(st.data.fx * stud, st.height, st.data.fz * stud), "cabin")
 
 
 func _build_hud() -> void:
@@ -895,32 +928,22 @@ func _process(_delta: float) -> void:
 	# The sky goes to black as the air thins (to ~the impostor's band).
 	var air := 1.0 - clampf(alt / (body.data.radius * 0.12), 0.0, 1.0) if body.data.has_air else 0.0
 	# Day and night (11.12): the sky by the sun's height, with twilight; the
-	# ambient down to starlight.
+	# ambient down to starlight. Its own air's colour, tamed (Docs/Lighting.md 3).
 	var day := 1.0
+	var sun_h := 1.0
 	if system != null:
 		day = smoothstep(-0.18, 0.12, system.sun_height) if air > 0.0 else system.sunlight
-	var night := Color(0.03, 0.04, 0.08)
-	var dusk := (1.0 - absf(day * 2.0 - 1.0)) * 0.5
-	# Its own air's colour, against the home planet's.
-	var ac := body.data.atmosphere_color
-	var cast := Color(ac.r / 0.45, ac.g / 0.65, ac.b)
-	var haze := (Color(0.70, 0.77, 0.84) * cast).lerp(Color(0.85, 0.45, 0.25), dusk).lerp(night, 1.0 - day) * air
-	sky_mat.sky_top_color = (Color(0.36, 0.53, 0.78) * cast).lerp(night, 1.0 - day) * air
-	sky_mat.sky_horizon_color = haze
-	# Under the horizon only a sliver of sky ever shows past the ground: haze.
-	sky_mat.ground_horizon_color = haze
-	sky_mat.ground_bottom_color = Color(0.62, 0.68, 0.74).lerp(night, 1.0 - day) * air
-	sky_mat.sky_energy_multiplier = maxf(air * maxf(day, 0.1), 0.02)
-	env.ambient_light_energy = 0.04 + (0.11 + 0.45 * air) * day
-	# The sky's up is the local up: a procedural sky's horizon is its own XZ
-	# plane, and the world's Y is the local up only at the pole.
-	env.sky_rotation = Quaternion(Vector3.UP, Gravity.up_at(cam_pos)).get_euler()
+		sun_h = system.sun_height
+	light.set_sky(day, air, body.data.atmosphere_color, sun_h, Gravity.up_at(cam_pos))
+	_ambient_boxes()
+	var viewer := get_viewport().get_camera_3d()
+	light.expose(viewer.global_position if viewer != null else cam_pos, get_process_delta_time())
 	# Hold the walker until the ground under it has streamed (and has a
 	# collider) and the trees' cards are baked; then, unless this is the
 	# walker's own gate, the pawn stands on it.
 	if walker.frozen and not piloting and pawn == null and trees.prebaked and _ground_hit(walker.global_position) != Vector3.INF:
 		walker.frozen = false
-		if not _gate or _pawn_gate or _mech_gate or _tank_gate or _soldier_gate or _squad_gate or _travel_gate or _far_gate or _drive_gate or _trees_gate or _bricks_gate or _damage_gate or _fall_gate or _hits_gate or _topple_gate or _pieces_ai_gate or _storey_gate or _garrison_gate or _seat_gate or _home_gate or _hull_gate or _save_gate:
+		if not _gate or _pawn_gate or _mech_gate or _tank_gate or _soldier_gate or _squad_gate or _travel_gate or _far_gate or _drive_gate or _trees_gate or _bricks_gate or _damage_gate or _fall_gate or _hits_gate or _topple_gate or _pieces_ai_gate or _storey_gate or _garrison_gate or _seat_gate or _home_gate or _hull_gate or _save_gate or _light_gate:
 			_spawn_player(_ground_hit(walker.global_position), -walker.global_transform.basis.z)
 			if saver != null:
 				saver.resume()
@@ -986,6 +1009,18 @@ func _check(what: String, cond: bool, detail := "") -> void:
 	else:
 		_fail += 1
 	print("  %s %s%s" % ["ok  " if cond else "FAIL", what, (" -- " + detail) if detail else ""])
+
+
+## The mean luminance of the picture on screen now (windowed only).
+func _screen_mean() -> float:
+	await RenderingServer.frame_post_draw
+	var img := get_viewport().get_texture().get_image()
+	img.resize(64, 36, Image.INTERPOLATE_BILINEAR)
+	var sum := 0.0
+	for y in 36:
+		for x in 64:
+			sum += img.get_pixel(x, y).get_luminance()
+	return sum / (64.0 * 36.0)
 
 
 func _frames(n: int) -> void:
@@ -2019,6 +2054,166 @@ func _run_far_gate() -> void:
 	print("[planet] AI tick: worst %.1f ms" % (ai_worst_us / 1000.0))
 	print("[planet] far gate: %d ok, %d FAIL" % [_ok, _fail])
 	get_tree().quit(0 if _fail == 0 else 1)
+
+
+# The light's gate (Docs/Lighting.md 8): the colour rules on every body of the
+# system, the sun's size and brightness by distance, sunset, the fill at night,
+# a moon's shadow on its planet, and the ambient boxes in the town's buildings;
+# pictures at noon, dawn, night, inside and outside a building.
+
+func _run_light_gate() -> void:
+	var t0 := Time.get_ticks_msec()
+	while (walker.frozen or pawn == null) and Time.get_ticks_msec() - t0 < 60000:
+		await _frames(1)
+	await get_tree().create_timer(1.0).timeout
+	# 1. Colour: no world's air paints the ambient; the ground's tint small.
+	var worst := 0.0
+	var worst_tint := 0.0
+	for b in system.bodies:
+		var c := LightRig.sky_cast(b.data.atmosphere_color)
+		worst = maxf(worst, maxf(absf(c.r - 1.0), maxf(absf(c.g - 1.0), absf(c.b - 1.0))))
+		var t := b.data.tint
+		worst_tint = maxf(worst_tint, maxf(1.0 - t.r, maxf(1.0 - t.g, 1.0 - t.b)))
+	_check("every body's sky cast within %.2f of none" % LightRig.SKY_CAST_DEV, worst <= LightRig.SKY_CAST_DEV + 0.001, "worst %.3f" % worst)
+	var red := LightRig.sky_cast(Color(1.0, 0.3, 0.3))
+	_check("a red air's cast held (was 2.2, 0.46, 0.3)", red.r <= 1.0 + LightRig.SKY_CAST_DEV + 0.001 and red.b >= 1.0 - LightRig.SKY_CAST_DEV - 0.001,
+			"%.2f %.2f %.2f" % [red.r, red.g, red.b])
+	_check("every body's ground tint small (under 0.09 a channel)", worst_tint < 0.09, "worst %.3f" % worst_tint)
+	_check("the ambient mostly neutral", env.ambient_light_sky_contribution <= LightRig.AMBIENT_SKY + 0.001 and env.ambient_light_color.s < 0.05,
+			"sky %.2f, neutral's saturation %.3f" % [env.ambient_light_sky_contribution, env.ambient_light_color.s])
+	_check("AgX; daylight's exposure as is", env.tonemap_mode == Environment.TONE_MAPPER_AGX and absf(light.exposure - 1.0) < 0.05,
+			"exposure %.2f, light %.2f" % [light.exposure, light.light_here])
+	_check("the noon sun near white (saturation < 0.2)", sun.light_color.s < 0.2, "%s" % sun.light_color)
+	# 2. Distance: the sun's size and brightness from where the camera is.
+	var ds := (system.star.global_position - _eye()).length()
+	var want := minf(rad_to_deg(2.0 * asin(system.sys.star_radius / ds)), LightRig.SUN_ANGLE_MAX)
+	_check("the sun's size is the star's from here", absf(light.sun_angle - want) < LightRig.ANGLE_STEP + 0.001
+			and is_equal_approx(sun.light_angular_distance, light.sun_angle), "%.2f deg against %.2f" % [light.sun_angle, want])
+	_check("home's brightness is home's", absf(light.gain - 1.0) < 0.05, "gain %.3f" % light.gain)
+	_check("brighter near a star, dimmer far, held", LightRig.sun_gain(4.0) > 1.4 and LightRig.sun_gain(0.25) < 0.7
+			and LightRig.sun_gain(100.0) == LightRig.GAIN_MAX and LightRig.sun_gain(0.0001) == LightRig.GAIN_MIN)
+	var low := LightRig.sunlight_colour(system.sys.star_color, 0.03, 1.0)
+	var high := LightRig.sunlight_colour(system.sys.star_color, 1.0, 1.0)
+	_check("a low sun through air is redder", low.b / low.r < 0.6 * high.b / high.r, "b/r %.2f against %.2f" % [low.b / low.r, high.b / high.r])
+	_check("no air, no sunset", LightRig.sunlight_colour(system.sys.star_color, 0.03, 0.0) == LightRig.sunlight_colour(system.sys.star_color, 1.0, 0.0))
+	await _shot("light_gate_noon")
+	# 3. Night: the fill from the brightest body over the horizon.
+	var day := data.day
+	system.t += day * 0.5
+	await get_tree().create_timer(2.5).timeout
+	_check("midnight: the sun off", sun.light_energy < 0.01)
+	_check("the night opens the eye, but only so far", light.exposure > 1.3 and light.exposure <= LightRig.EXPOSE_MAX,
+			"exposure %.2f, light %.3f" % [light.exposure, light.light_here])
+	print("[light] night fill: %s, energy %.3f, shadows %s" % [light.fill_from.data.planet_name if light.fill_from != null else "none",
+			light.fill_energy, light.fill.shadow_enabled])
+	if light.fill.visible:
+		_check("a fill this bright with the sun gone casts shadows", light.fill.shadow_enabled == (light.fill_energy > LightRig.FILL_SHADOW_AT))
+	await _shot("light_gate_night")
+	system.t += day * 0.25
+	await get_tree().create_timer(2.5).timeout
+	_check("dawn: the sunlight redder than noon's", sun.light_color.b / sun.light_color.r < high.b / high.r * 0.9,
+			"b/r %.2f" % (sun.light_color.b / sun.light_color.r))
+	await _shot("light_gate_dawn")
+	system.t += day * 0.25
+	await _frames(4)
+	# A body between a planet and the star shadows its far look.
+	var moon_i := -1
+	for i in system.sys.bodies.size():
+		if system.sys.bodies[i].parent >= 0 and moon_i < 0:
+			moon_i = i
+	if moon_i >= 0:
+		var m := system.bodies[moon_i]
+		var pl := system.bodies[system.sys.bodies[moon_i].parent]
+		var to_s := (system.star.global_position - pl.global_position).normalized()
+		m.global_position = pl.global_position + to_s * pl.data.radius * 3.0
+		system._shadows_on(pl)
+		_check("a moon between its planet and the star shadows the planet's far look", pl.shadows_now > 0, "%d" % pl.shadows_now)
+		m.global_position = pl.global_position - to_s * pl.data.radius * 3.0
+		system._shadows_on(pl)
+		_check("behind it, none", pl.shadows_now == 0, "%d" % pl.shadows_now)
+		var found := -1.0
+		var tt := system.t
+		for k in 800:
+			system.t = tt + system.sys.bodies[moon_i].orbit_period * k / 800.0
+			system._place()
+			if pl.shadows_now > 0:
+				found = system.t - tt
+				break
+		system.t = tt
+		system._place()
+		print("[light] %s's shadow first on %s %.0f s on (of an orbit of %.0f s)" % [m.data.planet_name, pl.data.planet_name,
+				found, system.sys.bodies[moon_i].orbit_period])
+	# 4. Ambient boxes in the town's buildings.
+	var pb := _buildings_here()
+	t0 = Time.get_ticks_msec()
+	while pb.bricked_count == 0 and Time.get_ticks_msec() - t0 < 30000:
+		await _frames(1)
+	await get_tree().create_timer(1.0).timeout
+	_check("a box in every building laid in bricks", light.box_count() >= pb.bricked_count and pb.bricked_count > 0,
+			"%d boxes, %d bricked" % [light.box_count(), pb.bricked_count])
+	var near := -1
+	var best := INF
+	for i in pb.sites.size():
+		var s = pb.sites[i]
+		if s.bricked and s.brick_node != null:
+			var d: float = (s.brick_node.global_position - _eye()).length()
+			if d < best:
+				best = d
+				near = i
+	if near >= 0:
+		var s = pb.sites[near]
+		var stud := BrickPalette.STUD_M
+		var probe: ReflectionProbe = null
+		for c in s.brick_node.get_children():
+			if c is ReflectionProbe:
+				probe = c
+		var inside: Vector3 = s.brick_node.global_transform * Vector3(s.fx * stud * 0.5, 1.6, s.fz * stud * 0.5)
+		var outside: Vector3 = s.brick_node.global_transform * Vector3(-1.0, 1.6, s.fz * stud * 0.5)
+		var wall: Vector3 = s.brick_node.global_transform * Vector3(0.0, 1.6, s.fz * stud * 0.5)
+		var holds := func(pt: Vector3) -> bool:
+			var l := probe.global_transform.affine_inverse() * pt
+			return absf(l.x) <= probe.size.x * 0.5 and absf(l.y) <= probe.size.y * 0.5 and absf(l.z) <= probe.size.z * 0.5
+		_check("its box holds the inside, not the outside or the wall's face", probe != null and holds.call(inside)
+				and not holds.call(outside) and not holds.call(wall))
+		_check("inside darker than outside by day", probe != null and probe.ambient_color_energy * probe.ambient_color.get_luminance()
+				< env.ambient_light_energy * env.ambient_light_color.get_luminance() * 0.7, "%.3f against %.3f" % [
+				probe.ambient_color_energy * probe.ambient_color.get_luminance(), env.ambient_light_energy * env.ambient_light_color.get_luminance()])
+		var c := Camera3D.new()
+		c.far = PlanetSystem.SEE_FAR
+		c.fov = 70.0
+		add_child(c)
+		var up := Gravity.up_at(inside)
+		c.look_at_from_position(inside, s.brick_node.global_transform * Vector3(s.fx * stud, 1.4, s.fz * stud * 0.5), up)
+		c.current = true
+		await get_tree().create_timer(2.5).timeout
+		_check("inside, the eye opens", light.inside and light.exposure > 1.2, "exposure %.2f, light %.3f" % [light.exposure, light.light_here])
+		await _shot("light_gate_inside")
+		if DisplayServer.get_name() != "headless":
+			# What the picture shows: the box and the eye, each against without.
+			light.hold_exposure = true
+			var with_all := await _screen_mean()
+			probe.visible = false
+			await _frames(3)
+			var no_box := await _screen_mean()
+			probe.visible = true
+			light.attributes.exposure_multiplier = 1.0
+			await _frames(3)
+			var no_eye := await _screen_mean()
+			light.attributes.exposure_multiplier = light.exposure
+			light.hold_exposure = false
+			print("[light] inside, mean of the picture: %.3f; the box off %.3f; the eye shut %.3f" % [with_all, no_box, no_eye])
+			_check("the box darkens the inside", with_all < no_box * 0.9, "%.3f against %.3f" % [with_all, no_box])
+			_check("the eye brightens it again (AgX squeezes it)", with_all > no_eye * 1.1, "%.3f against %.3f" % [with_all, no_eye])
+		var from: Vector3 = outside + (outside - inside).normalized() * 12.0 + up * 4.0
+		c.look_at_from_position(from, inside, up)
+		await get_tree().create_timer(2.5).timeout
+		_check("out again, daylight's", not light.inside and light.exposure < 1.1, "exposure %.2f" % light.exposure)
+		await _shot("light_gate_outside")
+		c.queue_free()
+		cam.current = true
+	print("[light] frames: worst %.1f ms" % _worst_ms)
+	print("[planet] gate: %d ok, %d FAIL" % [_ok, _fail])
+	get_tree().quit(1 if _fail > 0 else 0)
 
 
 # The system's gate (11.12): day and night at the spawn, off the home planet

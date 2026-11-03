@@ -9,6 +9,8 @@ uniform vec3 sun_dir = vec3(0.4, 0.6, 0.3);   // planet-local
 uniform float density = 1.3;
 uniform float falloff = 3.0;
 
+#include "res://shaders/body_shadow.gdshaderinc"
+
 varying vec3 v_dir;
 
 void vertex() {
@@ -17,7 +19,8 @@ void vertex() {
 
 void fragment() {
 	float rim = pow(1.0 - clamp(dot(normalize(VIEW), normalize(NORMAL)), 0.0, 1.0), falloff);
-	float day = clamp(dot(v_dir, normalize(sun_dir)) * 0.8 + 0.4, 0.0, 1.0);
+	vec3 sd = normalize(sun_dir);
+	float day = clamp(dot(v_dir, sd) * 0.8 + 0.4, 0.0, 1.0) * mix(0.15, 1.0, body_shadow(v_dir, sd));
 	ALBEDO = atmo_color * day;
 	ALPHA = clamp(rim * density, 0.0, 1.0);
 }
