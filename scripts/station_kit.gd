@@ -19,6 +19,9 @@ const FLOOR := 2
 ## White hull, a grey for nodes, a colour band on pods.
 const COLOURS := {"core": "white", "node": "light bluish gray", "tube": "white", "pod": "white",
 		"truss": "dark bluish gray", "dock": "light bluish gray"}
+## A module's space kind by its role: what KitFurnish furnishes it as (a pod one
+## of its mixed rooms; ways through left empty).
+const SPACE_KINDS := {"core": "living", "pod": "office", "dock": "hall"}
 
 
 ## The station library: the player's station modules when they have a core,
@@ -79,7 +82,8 @@ static func box(name: String, w: int, d: int, rules: Dictionary, doors: Array, w
 				_column(r, Vector3i(x, FLOOR, z), H, hole, colour)
 	var rec := StructureSpaces.empty()
 	@warning_ignore("integer_division")
-	rec.spaces = [{"id": 0, "kind": "office", "frame": 0, "seed": [w / 2, FLOOR, d / 2]}]
+	rec.spaces = [{"id": 0, "kind": String(SPACE_KINDS.get(String(rules.get("role", "")), "corridor")), "frame": 0,
+			"seed": [w / 2, FLOOR, d / 2]}]
 	r.meta["structure"] = rec
 	r.meta["module"] = rules.merged({"on": true})
 	rec = RoomModules.refresh(r)
