@@ -114,6 +114,8 @@ var light: LightRig
 ## Ambient boxes made, by building site or module; when last looked for.
 var _box_of := {}
 var _boxes_at := 0
+## The light on the brick grid in the buildings here (Lighting.md 6.1).
+var grid_light := BrickGridLight.new()
 var sky_mat: ProceduralSkyMaterial
 var env: Environment
 var hud: Label
@@ -825,9 +827,16 @@ func _ambient_boxes() -> void:
 	var pb := _buildings_here()
 	if pb != null:
 		var stud := BrickPalette.STUD_M
+		if not pb.brick_material.has_meta(&"grid_light"):
+			pb.brick_material.set_meta(&"grid_light", true)
+			grid_light.bind(pb.brick_material)
 		for i in pb.sites.size():
 			var st = pb.sites[i]
 			var key := "%d:%d" % [pb.get_instance_id(), i]
+			if st.toppled or not st.bricked or st.brick_node == null:
+				grid_light.release(key)
+			elif not grid_light.tracked(key):
+				grid_light.track(key, pb.bricks, st.chunk, st.brick_node)
 			if st.toppled:
 				if _box_of.has(key):
 					(_box_of[key] as Node).queue_free()
@@ -967,9 +976,13 @@ func _process(_delta: float) -> void:
 	if system != null:
 		day = smoothstep(-0.18, 0.12, system.sun_height) if air > 0.0 else system.sunlight
 		sun_h = system.sun_height
+	var viewer := get_viewport().get_camera_3d()
+	grid_light.step()
+	var open := grid_light.at(viewer.global_position if viewer != null else cam_pos).x
+	light.room_open = open if open < 0.0 or light.room_open < 0.0 else lerpf(light.room_open, open,
+			clampf(get_process_delta_time() * 4.0, 0.0, 1.0))
 	light.set_sky(day, air, body.data.atmosphere_color, sun_h, Gravity.up_at(cam_pos))
 	_ambient_boxes()
-	var viewer := get_viewport().get_camera_3d()
 	light.expose(viewer.global_position if viewer != null else cam_pos, get_process_delta_time())
 	# Hold the walker until the ground under it has streamed (and has a
 	# collider) and the trees' cards are baked; then, unless this is the
@@ -2200,7 +2213,27 @@ func _run_light_gate() -> void:
 		for c in s.brick_node.get_children():
 			if c is ReflectionProbe:
 				probe = c
+		# Inside: the darkest air at eye height the grid knows (6.1) -- a
+		# tower's open windows light the rooms along its walls.
 		var inside: Vector3 = s.brick_node.global_transform * Vector3(s.fx * stud * 0.5, 1.6, s.fz * stud * 0.5)
+		var darkest := 2.0
+		var wt0 := TowerRecipe.WALL_THICK
+		var py0 := int(1.0 / BrickWorld.get_plate_metres())
+		var py1 := int(2.0 / BrickWorld.get_plate_metres())
+		for x in range(wt0 + 1, s.fx - wt0 - 1):
+			for z in range(wt0 + 1, s.fz - wt0 - 1):
+				var air := true
+				for y in range(py0, py1 + 1):
+					if pb.bricks.block_at(s.chunk, Vector3i(x, y, z)) >= 0:
+						air = false
+						break
+				if not air:
+					continue
+				var w: Vector3 = s.brick_node.global_transform * Vector3((x + 0.5) * stud, 1.6, (z + 0.5) * stud)
+				var g := grid_light.at(w).x
+				if g >= 0.0 and g < darkest:
+					darkest = g
+					inside = w
 		var outside: Vector3 = s.brick_node.global_transform * Vector3(-1.0, 1.6, s.fz * stud * 0.5)
 		var wall: Vector3 = s.brick_node.global_transform * Vector3(0.0, 1.6, s.fz * stud * 0.5)
 		var holds := func(pt: Vector3) -> bool:
@@ -2225,23 +2258,94 @@ func _run_light_gate() -> void:
 			# What the picture shows: the box and the eye, each against without.
 			light.hold_exposure = true
 			var with_all := await _screen_mean()
-			probe.visible = false
+			pb.brick_material.set_shader_parameter("grid_sky_floor", 1.0)
 			await _frames(3)
 			var no_box := await _screen_mean()
-			probe.visible = true
+			pb.brick_material.set_shader_parameter("grid_sky_floor", 0.1)
 			light.attributes.exposure_multiplier = 1.0
 			await _frames(3)
 			var no_eye := await _screen_mean()
 			light.attributes.exposure_multiplier = light.exposure
 			light.hold_exposure = false
-			print("[light] inside, mean of the picture: %.3f; the box off %.3f; the eye shut %.3f" % [with_all, no_box, no_eye])
-			_check("the box darkens the inside", with_all < no_box * 0.9, "%.3f against %.3f" % [with_all, no_box])
+			print("[light] inside, mean of the picture: %.3f; the grid off %.3f; the eye shut %.3f" % [with_all, no_box, no_eye])
+			_check("the grid darkens the inside", with_all < no_box * 0.9, "%.3f against %.3f" % [with_all, no_box])
 			_check("the eye brightens it again (AgX squeezes it)", with_all > no_eye * 1.1, "%.3f against %.3f" % [with_all, no_eye])
 		var from: Vector3 = outside + (outside - inside).normalized() * 12.0 + up * 4.0
 		c.look_at_from_position(from, inside, up)
 		await get_tree().create_timer(2.5).timeout
 		_check("out again, daylight's", not light.inside and light.exposure < 1.1, "exposure %.2f" % light.exposure)
 		await _shot("light_gate_outside")
+		# 6.1: the grid. Its bricks are lit by it, not by the box; inside is
+		# shut off from the sky, outside is open; a hole in the wall lets the
+		# sky in.
+		var key := "%d:%d" % [pb.get_instance_id(), near]
+		grid_light.step()
+		var band: GeometryInstance3D = null
+		for ch in s.brick_node.get_children():
+			if ch is MeshInstance3D:
+				band = ch
+		_check("the grid lights its bricks, the box does not", grid_light.tracked(key) and band != null
+				and band.layers == BrickGridLight.RENDER_LAYER and (band.get_instance_shader_parameter(&"grid_light") as Vector4).x >= 0.0
+				and probe.reflection_mask & BrickGridLight.RENDER_LAYER == 0)
+		var in_sky := grid_light.at(inside).x
+		_check("inside, the grid's sky is low; outside there is no grid", in_sky >= 0.0 and in_sky < 0.3
+				and grid_light.at(outside).x < 0.0, "inside %.2f" % in_sky)
+		print("[light] grid: %d update(s), the last %.2f ms" % [grid_light.updates, grid_light.last_ms])
+		_check("lighting a building takes under 8 ms", grid_light.last_ms < 8.0, "%.2f ms" % grid_light.last_ms)
+		# A hole through the +X wall, three courses tall and four studs wide,
+		# at eye height, where a room is right behind it: the air just in from
+		# it is three steps from the open (two of wall, one in).
+		var wt := TowerRecipe.WALL_THICK
+		var y0 := int(1.0 / BrickWorld.get_plate_metres())
+		var ids := {}
+		var hz := -1
+		var eye_plate := int(1.6 / BrickWorld.get_plate_metres())
+		# Where the wall is whole and a room is right behind it.
+		for z0 in range(wt + 1, s.fz - wt - 5):
+			var solid := true
+			for z in range(z0, z0 + 4):
+				for y in range(y0, y0 + 9):
+					if pb.bricks.block_at(s.chunk, Vector3i(s.fx - 1, y, z)) < 0:
+						solid = false
+				if pb.bricks.block_at(s.chunk, Vector3i(s.fx - wt - 1, eye_plate, z)) >= 0:
+					solid = false
+			if solid:
+				hz = z0
+				break
+		for x in range(s.fx - wt, s.fx):
+			for z in range(hz, hz + 4):
+				for y in range(y0, y0 + 9):
+					var b := pb.bricks.block_at(s.chunk, Vector3i(x, y, z))
+					if b >= 0:
+						ids[b] = true
+		var hx: int = s.fx - wt - 1
+		var by_hole: Vector3 = s.brick_node.global_transform * Vector3((hx + 0.5) * stud, 1.6, (hz + 2.5) * stud)
+		var before := grid_light.at(by_hole).x
+		pb.bricks.kill_blocks(s.chunk, PackedInt32Array(ids.keys()))
+		var n0 := grid_light.updates
+		grid_light.step()
+		var after := grid_light.at(by_hole).x
+		_check("a hole in the wall lets the sky in", hz >= 0 and grid_light.updates > n0 and after > before + 0.05
+				and after >= 1.0 - 3.0 * BrickGridLight.SKY_STEP / 255.0 - 0.01,
+				"%d bricks out at z %d; %.2f -> %.2f" % [ids.size(), hz, before, after])
+		# A lamp: the floor under `inside` made Glow lights the room round it.
+		var il: Vector3 = s.brick_node.global_transform.affine_inverse() * inside
+		var floor_b := -1
+		for y in range(int(il.y / BrickWorld.get_plate_metres()), -1, -1):
+			floor_b = pb.bricks.block_at(s.chunk, Vector3i(int(il.x / stud), y, int(il.z / stud)))
+			if floor_b >= 0:
+				break
+		var lamp0 := grid_light.at(inside).y
+		var glow := -1
+		for m in BrickWorld.get_material_count():
+			if BrickWorld.get_material_name(m) == "Glow PLA":
+				glow = m
+		if floor_b >= 0 and glow >= 0:
+			pb.bricks.set_block_material(s.chunk, floor_b, glow)
+			grid_light.relight(key)
+		var lamp1 := grid_light.at(inside).y
+		_check("a Glow brick lights the room round it", floor_b >= 0 and glow >= 0 and lamp0 < 0.05 and lamp1 > 0.4,
+				"lamp %.2f -> %.2f" % [lamp0, lamp1])
 		if DisplayServer.get_name() != "headless":
 			# What the soft shadows cost (Lighting.md 2): the GPU's draw time
 			# with the sun's size, without, and with again. A report, not a

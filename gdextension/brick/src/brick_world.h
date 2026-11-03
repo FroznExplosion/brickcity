@@ -308,6 +308,17 @@ public:
     // The same for rows `ys` only (one x-z plane each, in that order, x fastest
     // then z) and only the columns within `ring` of a face; the rest read 0.
     PackedByteArray get_solid_cells_at(int chunk_id, PackedInt32Array ys, int ring) const;
+    // The chunk's light grid (Docs/Lighting.md 6.1): one cell a stud across
+    // and `cell_plates` plates up, with a cell of open air all round (ground
+    // under it). Sky: 255 open to the sky, `sky_step` less each cell further
+    // in (three times that through a see-through block); lamp: from Glow
+    // blocks, `lamp_step` less a cell. Its size in cells, margin included:
+    Vector3i chunk_light_dims(int chunk_id, int cell_plates) const;
+    // ...and the grid itself, two bytes a cell (sky, lamp), each y layer an
+    // x-by-z tile, tiles left to right then down a `width` x `height` image
+    // (RG8). Empty when it does not fit.
+    PackedByteArray chunk_light_tiles(int chunk_id, int cell_plates, int width, int height,
+            int sky_step, int lamp_step) const;
     int block_at(int chunk_id, Vector3i cell) const;
 
     int get_block_count(int chunk_id) const;
