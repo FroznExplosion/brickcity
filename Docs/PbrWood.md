@@ -218,8 +218,6 @@ what plastic does, and some 0.3-0.5 ms over flat colour with a whole screen of i
   want its own key, since leaves take the filament palette, not variants.
 * **The rest of the printed plastic** (section 7): the other filaments (three slices each in
   `print_bead`: ABS finer, TPU wide soft beads, carbon, nylon, wood fill).
-* **The PLA layers' frame time**: not timed yet (the editor was open on 2026-11-02). One
-  texture read in place of the drawn bead's arithmetic, so expected about even.
 * **Texture streaming** (Godot 4.8's mip streaming, in beta as of 2026-10-31): with a set per
   variant the sets are ~165 MB, so now worth a look once 4.8 is stable. Whether it reaches
   texture ARRAYS bound as global shader uniforms and sampled with `textureGrad` is untested.
@@ -254,6 +252,21 @@ sharp grooves, not a sine; and the MIPS filter it -- far off the drawn bead patt
 against the pixels (moire on a wall at 10 m), the baked one fades to its mean. The rules' own
 fade is kept: the relief gives up squared as a layer nears a pixel and roughness takes what it
 drops (ps_beads), since a filtered normal still sparkles.
+
+**Cost** (`tools/wood_cost_probe.gd`, 2026-11-02 evening, editor closed, peak 89 C, not held
+back; another chat's headless probe overlapped part of both runs, so take it as rough). GPU ms a
+frame, 1280x720 filled, two runs of two rounds:
+
+| | run 1 | run 2 |
+|---|---|---|
+| PLA wall (sides), baked | 4.33, 4.32 | 4.30, 4.31 |
+| the same, drawn by the rules | 4.28, 4.49 | 4.24, 4.27 |
+| PLA floor from above (tops), baked | 4.01, 3.97 | 3.96, 3.99 |
+| the same, drawn | 3.90, 3.88 | 3.90, 3.92 |
+
+About 0.05 ms dearer either way, inside the round-to-round drift: one texture read costs about
+what the drawn bead's arithmetic did. (The probe's old `legacy` case, the procedural wood from
+before section 1, no longer compiled and is gone.)
 
 Pictures: `tools/print_look_shot.gd -- --out=<dir> --looks=glass,pei
 --views=side,stud,corner,wall,top,tops_close,skin,bottom,under` with and without `--no-bead-tex`.

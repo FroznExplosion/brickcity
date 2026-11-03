@@ -10,12 +10,13 @@ extends SceneTree
 ## (viewport_get_measured_render_time_gpu; a test window's frame is pinned at
 ## 16.6 ms) is read over FRAMES frames, the median kept, for:
 ##
-##   pla          the house plastic, layer lines and all
+##   pla          the house plastic, layer lines and all (baked, Docs/PbrWood.md 7)
+##   pla_drawn    the same, its layers drawn by the rules (print_bead_texture off)
+##   pla_top      a floor of 2x4s from above: tops and studs, baked lines
+##   pla_top_drawn  the same, drawn
 ##   wood_pbr     wood, the full set: colour, roughness, normal map
 ##   wood_colour  wood past pbr_range: colour and roughness, one read
 ##   wood_flat    wood past pbr_far_range: the flat colour
-##   legacy       the procedural wood this replaced, if shots/legacy/ holds
-##                main's brick shaders from before (tools note in the doc)
 ##
 ## Each is measured twice, interleaved, so drift shows.
 
@@ -70,6 +71,19 @@ func _wall(w: BrickWorld, pal: Dictionary, mat: int) -> Mesh:
 	return mesh
 
 
+## A floor of 2x4s one course deep, seen from above: every pixel a top (the
+## studs are instanced elsewhere in the game, and not drawn here). A world of
+## its own, so it overlaps nothing of the wall's.
+func _floor(w: BrickWorld, pal: Dictionary) -> Mesh:
+	var c := w.create_chunk(Vector3i.ZERO, Vector3i(48, 3, 48))
+	for row in 22:
+		for k in 11:
+			w.place_block(c, Vector3i(k * 4 + (row % 2) * 2, 0, row * 2), int(pal["brick_2x4_x"]), 0)
+	var mesh := ArrayMesh.new()
+	mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, w.build_chunk_chamfer_mesh(c, BEVEL))
+	return mesh
+
+
 func _material(path: String) -> ShaderMaterial:
 	var sm := ShaderMaterial.new()
 	sm.shader = load(path)
@@ -98,9 +112,14 @@ func _run() -> void:
 	var pal := BrickPalette.bake(w)
 	var pla := _wall(w, pal, 0)
 	var wood := _wall(w, pal, 10)
+	var fw := BrickWorld.new()
+	var floor_mesh := _floor(fw, BrickPalette.bake(fw))
 	var s := BrickWorld.get_stud_metres()
 	var p := BrickWorld.get_plate_metres()
-	_cam.look_at_from_position(Vector3(19 * s, 50 * p, -3.0), Vector3(19 * s, 50 * p, 0))
+	var wall_eye := [Vector3(19 * s, 50 * p, -3.0), Vector3(19 * s, 50 * p, 0)]
+	# The floor's middle, from 3 m above and a little back.
+	var mid := Vector3(22 * s, 3 * p, 22 * s)
+	var floor_eye := [mid + Vector3(0, 3.0, -1.2), mid]
 	_mi = MeshInstance3D.new()
 	_mi.set_instance_shader_parameter("geo_bevel", 1.0)
 	_view.add_child(_mi)
@@ -108,12 +127,13 @@ func _run() -> void:
 	var current := _material("res://shaders/brick.gdshader")
 	var configs := {
 		"pla": [pla, current, {}],
+		"pla_drawn": [pla, current, {"print_bead_texture": false}],
+		"pla_top": [floor_mesh, current, {}, true],
+		"pla_top_drawn": [floor_mesh, current, {"print_bead_texture": false}, true],
 		"wood_pbr": [wood, current, {}],
 		"wood_colour": [wood, current, {"pbr_range": 0.0}],
 		"wood_flat": [wood, current, {"pbr_far_range": 0.0}],
 	}
-	if FileAccess.file_exists("res://shots/legacy/brick.gdshader"):
-		configs["legacy"] = [wood, _material("res://shots/legacy/brick.gdshader"), {}]
 	var got := {}
 	for round_ in 2:
 		for key in configs:
@@ -121,6 +141,8 @@ func _run() -> void:
 			var mat: ShaderMaterial = (cfg[1] as ShaderMaterial).duplicate()
 			for k in cfg[2]:
 				mat.set_shader_parameter(k, cfg[2][k])
+			var eye: Array = floor_eye if cfg.size() > 3 else wall_eye
+			_cam.look_at_from_position(eye[0], eye[1])
 			_mi.mesh = cfg[0]
 			_mi.material_override = mat
 			var ms: float = await _measure()
