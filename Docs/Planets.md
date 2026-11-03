@@ -2529,6 +2529,44 @@ frozen), and is put back on the ground if it ever gets under it (`_over_ground`,
 4/4 twice: in at 68 m/s, it lands 98 m on, never under the ground, never put back. debris 13, dock 8,
 hull 13. The box collider stands for any shape: an L-shaped piece lies like its box.
 
+#### Plan, rubble in saves (2026-11-03, for the user to choose)
+
+What a save leaves out today: fallen pieces on a planet (`PlanetPieces`: rigid bodies, each its own chunk
+of the planet's `BrickWorld`), drifting pieces (`Drift`: a mesh only, its chunk let go when it was made)
+and pieces fallen from space (`fallen`: a mesh and a box). Buildings and stations already save, as the
+ids of their dead bricks against what the seed lays again; a piece has no seed to be laid from, so its
+bricks themselves must be written.
+
+The engine has no way to: `save_template` keeps a chunk's bricks (`ChunkTemplate`: origin, dims, its
+`Block`s, joints) in memory and returns an id. There is no getter for a brick's cell, so script cannot
+read a chunk out either.
+
+- **A. Bricks (C++, ~60 lines).** `template_bytes(id) -> PackedByteArray` and `template_from_bytes(bytes)
+  -> id`: a `Block` is plain data (cell, archetype, colour, material, hp, alive, scorched, ...). A piece is
+  then written as its bricks (a 200-brick piece is ~5 KB) with where it lies, and laid again on load: the
+  same piece, shootable and breakable again. A drift keeps its chunk's template when it is made, for this.
+  Needs the DLL built in the main folder with the editor closed.
+- **B. Looks only (no C++).** A piece is written as its mesh and box: it comes back where it lay and
+  stops the player, but it cannot be hit or broken again, and a mesh is ~50x the bytes (a 200-brick piece
+  ~250 KB; 64 drifts could be 15 MB).
+
+Recommended: A. Either way, in order: fallen pieces on the world the player is on (written with the
+world, `s<system>_b<body>.dat`), then drifts and pieces from space, then the gate (`save` stages:
+a piece knocked loose, saved, back where it lay).
+
+**The user chose A (2026-11-03), and it needed no C++ after all:** `ChunkRecord` (scripts/chunk_record.gd,
+the city's sleeping-rubble record) already captures a chunk's standing bricks in one engine call
+(`capture_blocks`: cell, part, colour, furniture, cut joints, wear; parts by name), and lays them again
+(`place_blocks`). The handoff's "needs the engine" was wrong.
+
+**Step 1 built: rubble on a world.** `PlanetPieces.to_save` (a record and its chunk's place on the planet,
+for each piece, still or moving) into the world's file under `pieces`; `restore`, from
+`PlanetSaver.apply_sites` after the buildings, lays each again and settles it where it lay. `save` stage 1
+knocks 19 bricks off a roof and lets them land; stage 2: "its rubble back where it lay, settled, brick for
+brick" (1 of 1, 19 of 19, 0.00 m off) and "and it breaks again" (a blast on one of its bricks: 3). Stage 3's
+two-valued landing showed again (2.52 m); its rubble is not looked at there. A generated world's rubble goes
+the same way and is not tested.
+
 #### Plan, saving (2026-11-01)
 
 As zylanntest (its Docs/save_format_and_data_longevity.md, future_features_save_guide.md): the **universe**

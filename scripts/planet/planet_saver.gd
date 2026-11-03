@@ -80,6 +80,7 @@ func apply_sites(b: PlanetBody) -> void:
 		pb.restore_site(k, d.sites[k], false)
 	for k in d.get("toppled", []):
 		pb.restore_site(k, PackedInt32Array(), true)
+	pb.pieces.restore(d.get("pieces", []))
 
 
 ## World `b`'s trees are made.
@@ -152,6 +153,7 @@ func _write_world(i: int) -> void:
 					sites[k] = gone
 		d["sites"] = sites
 		d["toppled"] = toppled
+		d["pieces"] = pb.pieces.to_save()
 	var tr: PlanetTrees = scene.trees if b == scene.planet else system.trees_of.get(b)
 	if tr != null:
 		d["trees"] = tr.knocked()

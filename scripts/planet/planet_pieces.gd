@@ -106,6 +106,8 @@ var hits := 0
 var hit_killed := 0
 var woken := 0
 var toppled := 0
+## Laid again from a save (restore).
+var restored := 0
 
 
 func setup(world: BrickWorld, p: Node3D, material: Material) -> void:
@@ -563,6 +565,40 @@ func _settle(p: Piece) -> void:
 	p.settled = true
 	settled_count += 1
 	ground_changed.emit(world_box(p))
+
+
+## What a save keeps of them: each piece's standing bricks (ChunkRecord, parts
+## by name) and where its chunk lies on the planet. One still moving is kept as
+## it is now, and comes back settled there.
+func to_save() -> Array:
+	var out := []
+	var inv := planet.global_transform.affine_inverse()
+	for p in pieces:
+		if p.chunk < 0 or not is_instance_valid(p.body) or p.fading_since != 0:
+			continue
+		var r := ChunkRecord.capture(bricks, p.chunk)
+		if r.block_count() == 0:
+			continue
+		out.append({"record": r.to_data(bricks), "at": inv * bricks.get_chunk_transform(p.chunk)})
+	return out
+
+
+## Back from to_save: each laid again from its bricks where it lay, settled and
+## breakable as before. After the buildings, whose parts the records name.
+func restore(saved: Array) -> void:
+	for d in saved:
+		var r := ChunkRecord.from_data(bricks, (d as Dictionary).record)
+		if r == null:
+			continue
+		r.xform = planet.global_transform * (d.at as Transform3D)
+		var c := r.restore(bricks)
+		if c < 0:
+			continue
+		var p := adopt(c, null)
+		toppled -= 1
+		_start_mesh(p)
+		_settle(p)
+		restored += 1
 
 
 ## The floating origin moved the scene: a moving body is where the physics
