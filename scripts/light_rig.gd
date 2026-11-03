@@ -104,6 +104,50 @@ var _boxes := {}
 var _sun_dir := Vector3.ZERO
 
 
+## Options > Video, Global Illumination (Lighting.md 7): GI_OFF; GI_SCREEN,
+## screen-space contact shadow and bounce (SSAO + SSIL); GI_SDFGI, that and
+## SDFGI. Every rig up takes it at once (set_gi).
+enum { GI_OFF, GI_SCREEN, GI_SDFGI }
+static var gi_level := GI_OFF
+static var _live: Array = []
+
+
+## The GI level for every rig up now and every one built after.
+static func set_gi(level: int) -> void:
+	gi_level = clampi(level, GI_OFF, GI_SDFGI)
+	for r in _live:
+		if is_instance_valid(r):
+			(r as LightRig).apply_gi()
+
+
+func apply_gi() -> void:
+	var screen := gi_level >= GI_SCREEN
+	env.ssao_enabled = screen
+	env.ssil_enabled = screen
+	if screen:
+		# Contact shadow under and between bricks, not a grey halo round them.
+		env.ssao_radius = 0.8
+		env.ssao_intensity = 2.5
+		# The bounce: a lit floor warms the wall over it.
+		env.ssil_radius = 3.0
+		env.ssil_intensity = 0.8
+	var sdf := gi_level >= GI_SDFGI
+	env.sdfgi_enabled = sdf
+	if sdf:
+		env.sdfgi_use_occlusion = true
+		env.sdfgi_cascades = 4
+		env.sdfgi_min_cell_size = 0.2
+		env.sdfgi_bounce_feedback = 0.4
+	# SDFGI shuts rooms off from the sky itself: the grid's sky on top of it
+	# made them black. The grid keeps its lamps.
+	BrickGridLight.set_sky_shade(not sdf)
+
+
+func _notification(what: int) -> void:
+	if what == NOTIFICATION_PREDELETE:
+		_live.erase(self)
+
+
 ## Build the lights and the environment under `parent`; `space_star`: the star
 ## is drawn by the scene (no sky sun disc).
 func build(parent: Node, space_star := false) -> void:
@@ -149,6 +193,8 @@ func build(parent: Node, space_star := false) -> void:
 	attributes.exposure_multiplier = 1.0
 	world_env.camera_attributes = attributes
 	add_child(world_env)
+	_live.append(self)
+	apply_gi()
 
 
 ## A fixed day for the scenes without a star system (city, heightfield,

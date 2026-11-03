@@ -28,6 +28,11 @@ const LAMP_STEP := 24
 const RENDER_LAYER := 1 << 10
 
 var texture: Texture2DArray
+## Every material bound to a grid, and whether the grid's sky shades it (off
+## under SDFGI, which shades rooms itself: LightRig.apply_gi).
+static var _materials: Array = []
+static var _sky_shade := true
+const SKY_FLOOR := 0.1
 ## Last one lit, for gates and the HUD (ms).
 var last_ms := 0.0
 var updates := 0
@@ -59,10 +64,23 @@ func _init() -> void:
 
 ## A material drawing bricks reads this grid.
 func bind(mat: ShaderMaterial) -> void:
+	if not _materials.has(mat):
+		_materials.append(mat)
+	mat.set_shader_parameter("grid_sky_floor", SKY_FLOOR if _sky_shade else 1.0)
 	mat.set_shader_parameter("grid_light_tex", texture)
 	mat.set_shader_parameter("grid_light_size", float(SIZE))
 	mat.set_shader_parameter("grid_cell", Vector3(BrickWorld.get_stud_metres(), BrickWorld.get_plate_metres() * CELL_PLATES,
 			BrickWorld.get_stud_metres()))
+
+
+static func set_sky_shade(on: bool) -> void:
+	_sky_shade = on
+	for i in range(_materials.size() - 1, -1, -1):
+		var m = _materials[i]
+		if not is_instance_valid(m):
+			_materials.remove_at(i)
+			continue
+		(m as ShaderMaterial).set_shader_parameter("grid_sky_floor", SKY_FLOOR if on else 1.0)
 
 
 ## Light `chunk` of `bricks`, whose bands hang under `node` (chunk-local).
