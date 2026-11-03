@@ -22,6 +22,8 @@ const GAIN_MAX := 1.6
 const STAR_MIX := 0.25
 ## The sun's size for shadow softness (degrees across); bigger is held here.
 const SUN_ANGLE_MAX := 3.0
+## Home's sun across (degrees), as PlanetSystem gives it: the fixed-day scenes.
+const DAY_SUN_ANGLE := 2.29
 ## The sun turns its size only when it changes this much (degrees).
 const ANGLE_STEP := 0.05
 ## The sky's cast from its air colour: no channel further than this from 1.
@@ -144,6 +146,24 @@ func build(parent: Node, space_star := false) -> void:
 	attributes.exposure_multiplier = 1.0
 	world_env.camera_attributes = attributes
 	add_child(world_env)
+
+
+## A fixed day for the scenes without a star system (city, heightfield,
+## terrain, sandbox; Lighting.md 9): built as `build`, the sun at `sun_deg`
+## (rotation in degrees) and `energy`, home's sun size and colour, home's sky,
+## and `ambient` for the ambient's energy (what the scene used to set).
+## The sun's shadow distance is Godot's default; a scene sets its own after.
+func build_day(parent: Node, sun_deg: Vector3, energy := SUN_ENERGY, ambient := 0.6) -> void:
+	build(parent)
+	sun.directional_shadow_max_distance = 100.0
+	sun.rotation_degrees = sun_deg
+	sun.light_energy = energy
+	sun_angle = DAY_SUN_ANGLE
+	sun.light_angular_distance = DAY_SUN_ANGLE
+	# basis.z points at the sun: its y is how high the sun stands.
+	set_sky(1.0, 1.0, HOME_ATMO, clampf(sun.basis.z.y, 0.0, 1.0), Vector3.UP)
+	env.ambient_light_energy = ambient
+	env.sky_rotation = Vector3.ZERO
 
 
 # --- the sun ----------------------------------------------------------------

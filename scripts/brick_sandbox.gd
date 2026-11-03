@@ -741,27 +741,8 @@ func _save(shot_name: String) -> void:
 # ---------------------------------------------------------------------------
 
 func _build_scenery() -> void:
-	var env := Environment.new()
-	env.background_mode = Environment.BG_SKY
-	var sky := Sky.new()
-	var sky_mat := ProceduralSkyMaterial.new()
-	sky_mat.sky_top_color = Color(0.38, 0.55, 0.78)
-	sky_mat.sky_horizon_color = Color(0.72, 0.78, 0.83)
-	sky_mat.ground_bottom_color = Color(0.30, 0.31, 0.29)
-	sky_mat.ground_horizon_color = Color(0.72, 0.78, 0.83)
-	sky.sky_material = sky_mat
-	env.sky = sky
-	env.ambient_light_source = Environment.AMBIENT_SOURCE_SKY
-	env.ambient_light_energy = 0.6
-	var we := WorldEnvironment.new()
-	we.environment = env
-	add_child(we)
-
-	var sun := DirectionalLight3D.new()
-	sun.rotation_degrees = Vector3(-52, -40, 0)
-	sun.light_energy = 1.1
-	sun.shadow_enabled = true
-	add_child(sun)
+	# The shared light (Docs/Lighting.md): sky, ambient, AgX, the sun's size.
+	LightRig.new().build_day(self, Vector3(-52, -40, 0), 1.1, 0.6)
 
 	var ground := StaticBody3D.new()
 	ground.collision_layer = Layers.WORLD

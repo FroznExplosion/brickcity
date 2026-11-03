@@ -18832,32 +18832,14 @@ func _save(shot_name: String) -> void:
 # ---------------------------------------------------------------------------
 
 func _build_scenery() -> void:
-	var env := Environment.new()
-	env.background_mode = Environment.BG_SKY
-	var sky := Sky.new()
-	var sky_mat := ProceduralSkyMaterial.new()
-	sky_mat.sky_top_color = Color(0.38, 0.55, 0.78)
-	sky_mat.sky_horizon_color = Color(0.72, 0.78, 0.83)
-	sky_mat.ground_bottom_color = Color(0.30, 0.31, 0.29)
-	sky_mat.ground_horizon_color = Color(0.72, 0.78, 0.83)
-	sky.sky_material = sky_mat
-	env.sky = sky
-	env.ambient_light_source = Environment.AMBIENT_SOURCE_SKY
-	env.ambient_light_energy = 0.6
-	var we := WorldEnvironment.new()
-	we.environment = env
-	add_child(we)
-
-	var sun := DirectionalLight3D.new()
+	# The shared light (Docs/Lighting.md): sky, ambient, AgX, the sun's size.
 	# A raking sun in terrain mode: at 50 degrees nothing on the ground is in
 	# shadow, because the steepest slope the field makes is 42, and the baked
 	# shadow is a no-op that reads as flat lighting (Docs/Terrain.md §19.7).
-	sun.rotation_degrees = Vector3(-30 if _terrain_mode else -50, -35, 0)
-	sun.light_energy = 1.1
-	sun.shadow_enabled = true
-	_setup_sun_shadows(sun)
-	add_child(sun)
-	_sun = sun
+	var rig := LightRig.new()
+	rig.build_day(self, Vector3(-30 if _terrain_mode else -50, -35, 0), 1.1, 0.6)
+	_setup_sun_shadows(rig.sun)
+	_sun = rig.sun
 
 	if not _terrain_mode:
 		var ground := StaticBody3D.new()

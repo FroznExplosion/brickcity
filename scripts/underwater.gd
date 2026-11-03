@@ -26,6 +26,9 @@ const TINT := Color(0.09, 0.34, 0.42)
 const AMBIENT := Color(0.34, 0.60, 0.70)
 
 var _on := false
+## The air's ambient colour, put back on the way out (the light rig mixes a
+## neutral colour into the sky's, Lighting.md 3).
+var _dry_colour := Color.WHITE
 
 
 ## `dry_ambient_energy` is what the scene set for air, restored on the way out.
@@ -43,6 +46,7 @@ func set_submerged(env: Environment, on: bool, dry_ambient_energy := 0.55) -> bo
 		# the horizon, and the horizon is the tell.
 		env.fog_sky_affect = 1.0
 		env.fog_sun_scatter = 0.35
+		_dry_colour = env.ambient_light_color
 		env.ambient_light_source = Environment.AMBIENT_SOURCE_COLOR
 		env.ambient_light_color = AMBIENT
 		env.ambient_light_energy = dry_ambient_energy * 1.35
@@ -52,6 +56,7 @@ func set_submerged(env: Environment, on: bool, dry_ambient_energy := 0.55) -> bo
 	else:
 		env.fog_enabled = false
 		env.ambient_light_source = Environment.AMBIENT_SOURCE_SKY
+		env.ambient_light_color = _dry_colour
 		env.ambient_light_energy = dry_ambient_energy
 		env.adjustment_enabled = false
 	return true
