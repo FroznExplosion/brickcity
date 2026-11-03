@@ -261,6 +261,10 @@ func activate() -> void:
 	crumbs = PlanetCrumbs.new()
 	add_child(crumbs)
 	crumbs.setup(gravity_centre)
+	if air != null:
+		# Crumbs inside drawn out of a hole with the air (Docs/Hulls.md 4).
+		crumbs.wind = func(p: Vector3) -> Vector3:
+			return air_at(p, true).get("pull", Vector3.ZERO)
 	_band_next = 0
 	bricks.bake_chunk_async(chunk)
 	lay_ms = (Time.get_ticks_usec() - t0) / 1000.0
@@ -669,14 +673,29 @@ func _air_step(dt: float) -> void:
 	air.step(dt, outside_pressure)
 
 
+## Cells next to one, nearest first, then up (what lies on a floor is under its air).
+const _NEAR := [Vector3i(0, 1, 0), Vector3i(1, 0, 0), Vector3i(-1, 0, 0), Vector3i(0, 0, 1), Vector3i(0, 0, -1),
+		Vector3i(1, 1, 0), Vector3i(-1, 1, 0), Vector3i(0, 1, 1), Vector3i(0, 1, -1), Vector3i(0, 2, 0),
+		Vector3i(1, 0, 1), Vector3i(-1, 0, 1), Vector3i(1, 0, -1), Vector3i(-1, 0, -1), Vector3i(0, -1, 0)]
+
+
 ## The air at world point `p` (Docs/Hulls.md 4): {pressure (atmospheres), pull (the
 ## rush toward a hole, world m/s^2), breached, venting (air going out now)}; empty
 ## where `p` is not in its air.
-func air_at(p: Vector3) -> Dictionary:
+## `near`: a point in a brick or on its face (a crumb lying by a wall, feet on a floor)
+## takes the air of a cell next to it.
+func air_at(p: Vector3, near := false) -> Dictionary:
 	if air == null or chunk < 0 or not bricked or not holds(p):
 		return {}
 	var c := cell_at(p)
-	var ci := air.compartment_at(Vector3i(c.floor()))
+	var at := Vector3i(c.floor())
+	var ci := air.compartment_at(at)
+	if ci < 0 and near:
+		for o in _NEAR:
+			ci = air.compartment_at(at + o)
+			if ci >= 0:
+				c = Vector3(at + o) + Vector3(0.5, 0.5, 0.5)
+				break
 	if ci < 0:
 		return {}
 	var pull := air.pull_at(c, BrickWorld.get_cell_size())

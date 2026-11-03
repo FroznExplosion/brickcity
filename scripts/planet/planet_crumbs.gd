@@ -58,6 +58,11 @@ class Set:
 
 var planet: Node3D
 var _sets := {}
+## A push on every crumb, world m/s^2 at a world point -- the air rushing out of a
+## breached hull (SpaceStation, Docs/Hulls.md 4) -- or none. One strong enough
+## lifts a crumb that lay down.
+var wind := Callable()
+const WIND_LIFT := 2.0
 var thrown := 0
 var alive := 0
 
@@ -167,11 +172,25 @@ func _physics_process(delta: float) -> void:
 	var now := Time.get_ticks_msec()
 	var g := Gravity.strength() * PlanetPieces.GRAVITY_SCALE
 	var to_here := global_transform.affine_inverse() * planet.global_transform
+	var blow := wind.is_valid()
+	var pxf := planet.global_transform
+	var to_local := pxf.basis.inverse()
 	for key in _sets:
 		var st: Set = _sets[key]
 		var i := st.pos.size() - 1
 		while i >= 0:
 			var gone := false
+			if blow:
+				var a: Vector3 = wind.call(pxf * st.pos[i])
+				if a != Vector3.ZERO:
+					var al := to_local * a
+					if st.landed[i] != 0 and al.length() > WIND_LIFT:
+						# Picked up off the floor: a hop, so it is carried, not dragged.
+						st.landed[i] = 0
+						st.born[i] = now
+						st.vel[i] = al * 0.15 + st.pos[i].normalized() * 0.6
+					if st.landed[i] == 0:
+						st.vel[i] += al * delta
 			if st.landed[i] == 0:
 				var p := st.pos[i]
 				var up := p.normalized()

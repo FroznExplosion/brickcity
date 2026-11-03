@@ -868,7 +868,7 @@ func _build_hud() -> void:
 ## The air where the player is (a ship's or station's, Docs/Hulls.md 4): pulled toward a
 ## hole while it rushes out, warned when it runs low.
 func _air_tick() -> void:
-	var a := system.air_at(walker.global_position + walker.up * 1.0)
+	var a := system.air_at(walker.global_position + walker.up * 1.0, true)
 	walker.push = a.get("pull", Vector3.ZERO)
 	if air_warn == null:
 		return

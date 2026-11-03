@@ -143,11 +143,20 @@ stops when sealed, and the next compartment over (bulkhead closed) does not chan
   the planet scene shows **HULL BREACH air N %** while the room the player is in is losing air,
   **LOW AIR N %** under 50 %.
 - Gates: `hull_air_probe` 13 (the expected rate after 1 s, no other room changes, the rush toward
-  the hole, sealed stops and refills, an open door evens two rooms out); `ship_vent_probe` 9
-  (a real ship: baked, doors lined up, a hull brick killed through the hit path, air_at, a far
-  room untouched, sealed, a world's air lets nothing out). planet `--gate=hull` 11 ok.
-- **Not yet:** loose pieces and crumbs drawn out of the hole (only the player is pulled); dust
-  drawn at the hole; what low air does to a player (suit, damage -- §10).
+  the hole, sealed stops and refills, an open door evens two rooms out); `ship_vent_probe` 10
+  (a real ship: baked, doors lined up, a hole of five hull bricks killed through the hit path,
+  air_at, crumbs on its floor drawn out, a far room untouched, sealed, a world's air lets
+  nothing out). planet `--gate=hull` 11 ok.
+- **Crumbs drawn out:** `PlanetCrumbs.wind` (a ship's or station's sets it to its `air_at`):
+  every crumb is pushed by the rush; one lying down is picked up (a hop) once the rush passes
+  WIND_LIFT 2 m/s^2, so a room's broken bits fly out of the hole and away. A point in a brick or on
+  its face (a crumb by a wall, the player's feet) takes the air of the cell next to it
+  (`air_at(p, near)`).
+- How strong it is: a one-brick hole in a 2000-cell room loses ~4 % a second and barely stirs
+  anything (1 m/s^2 by it); five bricks out, ~25 % a second, 6-7 m/s^2: crumbs go out, the player
+  is dragged.
+- **Not yet:** large loose pieces (PlanetPieces rigid bodies) pushed too; dust drawn at the hole;
+  what low air does to a player (suit, damage -- §10).
 
 ## 5. Flooding: water brick by brick
 
