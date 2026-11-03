@@ -2567,6 +2567,16 @@ brick" (1 of 1, 19 of 19, 0.00 m off) and "and it breaks again" (a blast on one 
 two-valued landing showed again (2.52 m); its rubble is not looked at there. A generated world's rubble goes
 the same way and is not tested.
 
+**Step 2 built: pieces adrift and fallen from space.** A station or ship sending a piece off keeps it as a
+`ChunkRecord` (`SpaceStation.drift_record`, taken with the riders); a `Drift` and a fallen body carry it and
+who made it. `PlanetSystem.drifts_to_save` (bricks, maker, record of motion, age) goes in the universe's state
+and comes back in its system once (`restore_drifts`); `fallen_to_save(b)` (the still ones, where they lie)
+goes in each world's file and comes back with its system (`restore_fallen`). The mesh is made again from the
+bricks, laid in the maker's world, whose parts they name. A piece is ~6 KB. Riders and pieces going (shrinking
+away) are not kept. Tried through bytes, not files: `--gate=debris` "saved and back" (1 of 1, 0.04 m off),
+`--gate=falling` "a ship's piece lies still, and is saved and back" (0.000 m off); save stages 1 and 2, hull,
+dock unchanged. That the saver writes and reads them in a real save is not tried.
+
 #### Plan, saving (2026-11-01)
 
 As zylanntest (its Docs/save_format_and_data_longevity.md, future_features_save_guide.md): the **universe**

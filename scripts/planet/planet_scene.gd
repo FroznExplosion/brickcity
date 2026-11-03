@@ -2609,6 +2609,42 @@ func _run_falling_gate() -> void:
 			went = fast.global_position.distance_to(start)
 	_check("at a station's speed it lands, not through the ground", is_instance_valid(fast) and fast.freeze and under > -1.0,
 			"in at %.0f m/s, %.0f m on, lowest %.1f m over the ground, put back %d time(s)" % [speed, went, under, system.under_ground_saves])
+	# Twenty bricks off the parked ship's top, by its own way of sending a piece
+	# off: they fall, lie still, and are saved and back where they lie.
+	t0 = Time.get_ticks_msec()
+	while ship.chunk < 0 and Time.get_ticks_msec() - t0 < 15000:
+		await _frames(1)
+	var n0 := system.fallen.size()
+	if ship.chunk >= 0:
+		var tops: Array = ship.bricks.get_block_boxes(ship.chunk)
+		tops.sort_custom(func(a: Dictionary, b2: Dictionary) -> bool: return (a.pos as Vector3).y > (b2.pos as Vector3).y)
+		var ids := PackedInt32Array()
+		for bx: Dictionary in tops:
+			if not ids.has(int(bx.block)):
+				ids.append(int(bx.block))
+			if ids.size() >= 20:
+				break
+		ship._send_off(ship.bricks.split_island(ship.chunk, ids), ids.size(), [])
+	t0 = Time.get_ticks_msec()
+	while (system.fallen.size() <= n0 or not system.fallen[-1].freeze) and Time.get_ticks_msec() - t0 < 20000:
+		await _frames(1)
+	var lying: RigidBody3D = system.fallen[-1] if system.fallen.size() > n0 else null
+	var where := planet.to_local(lying.global_position) if lying != null else Vector3.INF
+	var saved_fallen: Array = bytes_to_var(var_to_bytes(system.fallen_to_save(planet)))
+	for f in system.fallen:
+		if is_instance_valid(f):
+			f.queue_free()
+	system.fallen.clear()
+	system.restore_fallen(planet, saved_fallen)
+	var near_off := INF
+	var drawn := false
+	for f in system.fallen:
+		near_off = minf(near_off, planet.to_local(f.global_position).distance_to(where))
+		drawn = drawn or not f.find_children("*", "MeshInstance3D", false, false).is_empty()
+	_check("a ship's piece lies still, and is saved and back where it lies", lying != null and lying.freeze
+			and not saved_fallen.is_empty() and system.fallen.size() == saved_fallen.size() and near_off < 0.05 and drawn,
+			"%d saved, %d back, %.3f m off" % [saved_fallen.size(), system.fallen.size(), near_off])
+	body = system.fallen[0] if not system.fallen.is_empty() else null
 	# The first one in the picture, where it lies.
 	if is_instance_valid(body):
 		var to := body.global_position - walker.camera.global_position
@@ -2801,6 +2837,23 @@ func _run_debris_gate() -> void:
 	var n2 := st.bricks.get_alive_block_count(st.chunk) if st.chunk >= 0 else -1
 	_check("back: laid as it was left, what drifted off still gone", n2 == n1, "%d" % n2)
 	_check("its far look gone once its bricks are in", st.wreck == null and not st.shell.visible)
+	# Saved and back (PlanetSystem.drifts_to_save, through bytes as a file has it).
+	var was_at := d.node.global_position
+	var was_n := system.drifts.size()
+	var saved_drifts: Array = bytes_to_var(var_to_bytes(system.drifts_to_save()))
+	for e: Drift in system.drifts:
+		system._drop_body(e)
+		e.node.queue_free()
+	system.drifts.clear()
+	system.restore_drifts(saved_drifts)
+	await _frames(4)
+	var back_off := INF
+	for e: Drift in system.drifts:
+		back_off = minf(back_off, e.node.global_position.distance_to(was_at))
+	_check("saved and back: each piece adrift, drawn, on its way", system.drifts.size() == was_n and back_off < 1.0
+			and (system.drifts[0] as Drift).look != null, "%d of %d, %.2f m off, %d bytes" % [system.drifts.size(), was_n, back_off,
+			var_to_bytes(saved_drifts).size()])
+	d = system.drifts[0]
 	# Far off it shrinks rather than pops, and grows back the same way.
 	var off := d.node.global_position.distance_to(_anchor())
 	var seen := system.drift_seen

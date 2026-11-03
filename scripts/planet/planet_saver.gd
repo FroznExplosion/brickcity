@@ -30,6 +30,10 @@ var worlds := {}
 var _timer := 0.0
 
 
+## The save's drifting pieces are put back once, in its system (_apply_system).
+var _drifts_back := false
+
+
 func setup(p_scene, p_save: UniverseSave) -> void:
 	scene = p_scene
 	system = p_scene.system
@@ -61,6 +65,13 @@ func _apply_system() -> void:
 			system.stations[k].restore_gone(worlds[i].stations[k])
 	for b in system.built:
 		apply_sites(b)
+	for i in worlds:
+		if i < system.bodies.size():
+			system.restore_fallen(system.bodies[i], (worlds[i] as Dictionary).get("fallen", []))
+	# Adrift where the save was made, once.
+	if not _drifts_back and int(state.get("system", -1)) == system.system_index:
+		_drifts_back = true
+		system.restore_drifts(state.get("drifts", []))
 
 
 func _on_jumped(_index: int) -> void:
@@ -154,6 +165,7 @@ func _write_world(i: int) -> void:
 		d["sites"] = sites
 		d["toppled"] = toppled
 		d["pieces"] = pb.pieces.to_save()
+	d["fallen"] = system.fallen_to_save(b)
 	var tr: PlanetTrees = scene.trees if b == scene.planet else system.trees_of.get(b)
 	if tr != null:
 		d["trees"] = tr.knocked()
@@ -191,7 +203,7 @@ func _state() -> Dictionary:
 	var s: SpaceShip = scene.ship
 	return {"t": system.t, "system": system.system_index, "cleared": scene.cleared,
 			"kind": kind, "index": index, "at": inv * at, "look": inv.basis * look,
-			"piloting": scene.piloting, "on_foot": scene.on_foot,
+			"piloting": scene.piloting, "on_foot": scene.on_foot, "drifts": system.drifts_to_save(),
 			"ship": {"ref": system.index_of(s.ref) if s.ref != null else -1, "rel": s.rel, "fine": s.fine,
 					"vel": s.vel, "landed": s.landed, "gone": s.gone()}}
 

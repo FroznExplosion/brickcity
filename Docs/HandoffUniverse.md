@@ -49,7 +49,7 @@ building (check its date against the last C++ commit), `--import`, then:
 | `home` | 9: the waves | 200 s |
 | `garrison` | 17: a world's AI, sleep and wake, down and up | 280 s (170 stops it on the flight home) |
 | `jump` 10, `ship` 9, `dock` 8, `worlds` 8, `rocks` 4, `debris` 8, `system` 17 | | 280 s |
-| `falling` 4, `squad` 10, `far` 11, `pawn` 12 | the AI and the pawn on a planet | 240 s |
+| `falling` 5, `squad` 10, `far` 11, `pawn` 12 | the AI and the pawn on a planet | 240 s |
 | `bricks` 9, `damage` 12, `fall` 7, `hits` 8, `topple` 6, `storey` 12 | buildings; run these if `PlanetBuildings` changes | 240 s |
 | `save --stage=1`, then `2`, then `3` | separate processes, in order; 1 wipes `user://saves_test/`; 3 runs on into stage 4 | 250 s each |
 
@@ -99,8 +99,8 @@ player's saves.
 
 The user chooses. In the order I would take them:
 
-1. **Rubble in saves**: step 1 done (rubble on a world, `ChunkRecord`, no C++). Next: drifting pieces and
-   pieces fallen from space (Planets.md, "Plan, rubble in saves").
+1. **Rubble in saves**: done (rubble on a world, pieces adrift and fallen from space; `ChunkRecord`, no
+   C++). Not tried: a real save and load with pieces adrift (the gates go through bytes).
 2. **Something on a planet besides rifles**: UnitCatalog kinds in the waves; then a tank or a mech in play
    (all are only in gates). `FirefightDirector` is the city's and was left there on purpose: 1,100 lines
    round a ring and a `CityScene`.
