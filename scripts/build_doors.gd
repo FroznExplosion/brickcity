@@ -169,6 +169,16 @@ func resync() -> void:
 			lf.open = up and _near(lf)
 
 
+## Build `key`'s doors, in `of`'s order: open (swung, or its leaf gone with the wall
+## over it -- a doorway with no door), for the air (HullAir.set_door). Empty when
+## it has none hung.
+func open_states(key) -> Array:
+	var out := []
+	for lf: Dictionary in _builds.get(key, {}).get("leaves", []):
+		out.append(bool(lf.open) or not (lf.frame as Node3D).visible)
+	return out
+
+
 ## Doors hung and standing (not hidden under a missing lintel).
 func count() -> int:
 	var n := 0
