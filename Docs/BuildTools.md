@@ -673,7 +673,7 @@ of the whole chunk, and any new brick throws that bake away. So:
 
 * **A bake of one section.** `bake_faces_into` takes the blocks to bake. A block's faces depend on
   the cells round it, not on the other faces, so this is the same faces as a slice would be.
-  `build_section_chamfer_mesh` bakes the section's blocks, chamfers them, and leaves the chunk's
+  `build_sections_chamfer_mesh` bakes the sections' blocks, chamfers them, and leaves the chunk's
   own bake alone.
 * **The engine says what changed.** `take_changed_sections(chunk, margin)` stamps every block
   (place, part, colour, material, alive) and compares with the stamps it kept last time, so no
@@ -704,3 +704,80 @@ Other things to know:
 * The workshop no longer makes `chunk.bake` at all, so `update_chamfer_regions` and the like have
   nothing to read in it. Nothing here wants them: `take_changed_sections` is its way of patching.
 * The library has to be rebuilt for this; without it the workshop falls back to meshing whole.
+
+## 17. Whole buildings as fast as bricks
+
+Asked 2026-11-02: laying whole buildings, placing prebuilt ones and adding storeys should be quick.
+Measured on a 29,000-brick block (six storeys, 80 studs wide), section 16 in:
+
+| | |
+|---|---|
+| Lay it | 3 s: the packer 1.5 s, meshing 0.6 s, placing the bricks only 0.17 s |
+| Undo that | 103 s |
+| Add its height again with Repeat | 85 s |
+
+Undo and storeys are quadratic, so at 89,000 bricks they are many minutes. Three causes:
+
+* **Finding a brick walks the build.** `_recipe_id_at` is a scan of `_placed_at`, and taking a shape
+  up asks it once per brick. It becomes a map, kept up to a watermark: an append needs nothing, a
+  removal lowers the watermark and the next look-up mends only what moved.
+* **Taking a brick up shifts everything after it.** `remove_rids` takes many at once in one pass,
+  in `_placed_at` and in the recipe (`remove_many`).
+* **The packer walks every cell left for every layer**, and sorts in script. It buckets by layer
+  once and sorts numbers. A cell's runs were counted to 64 cells each way, when what is asked of them
+  is only whether they pass two brick widths: they stop there, with the same answer.
+
+And work that need not be done at all:
+
+* **Adding storeys keeps the storeys already there.** `_lay` with `near` already knew how to leave
+  a shape's other bricks alone, for cuts. Repeat and push-pull lay from just under the old top. A
+  course's bricks depend only on its layer and the cells round it, so what stands is what a fresh lay
+  would give; a probe compares the two.
+* **Undo keeps what both versions share**, and only moves the difference.
+* **A door on every floor is one cut, not one a floor**: one `_lay` over the column they stand in.
+  `shape_cells_in` works out a shape's cells inside a box, so a cut in a big building does not pay
+  for the whole building. Records stop deep-copying `bricks` when nothing changes them.
+
+The packer's output must not change: it is checked against what it gave before, shape by shape.
+
+Meshing is what is left, so it goes side by side: baking and chamfering a section read the chunk and
+write only their own bake, so `build_sections_chamfer_mesh` hands sections to up to eight threads.
+A saved file over 5,000 bricks has no indents: a number a line was most of the time saving took.
+Undoing a stamp, and deleting a group, take their bricks up at once: one at a time, each was an edit.
+A stamp whose box is clear of every grid's bricks fits without asking about each brick, and a big one
+is carried as a plain ghost.
+
+### As built (2026-11-02)
+
+Merged; `tools/build_tools_probe.gd` 323 checks. `_books_agree` holds the recipe against the world
+brick by brick after each big edit; made taller is compared with the same building made that tall at
+once. The packer's output was compared with the old one on twelve shapes, and is identical.
+
+Rough timings on the 89,061-brick block, headless, on the thread count of a Legion Go:
+
+| | Section 16 | Now |
+|---|---|---|
+| Lay it | 15 s | 2.5 s |
+| Undo that | many minutes (103 s at 29,000 bricks) | 0.55 s |
+| Redo that | | 1.2 s |
+| A storey more, push-pull | many minutes | 0.5 s |
+| A window on every floor | | 0.85 s |
+| Copy it along, Repeat (94,000 bricks, 85 shapes) | | 3.6 s |
+| Save | 11 s | 0.35 s |
+| Open a saved one | | 1.6 s |
+| Drop it from the hand (a stamp) | | 2.3 s |
+| Undo the drop | never finished | 0.15 s |
+
+What is left of laying is the packer, about 1.2 s of it, in script. Moving it to the engine would
+halve laying, at the price of keeping two copies of it while old libraries are about.
+
+Other things to know:
+
+* `shifted` empties a shape's `bricks`: a copy gets them from `_add_copy`, which lays what the source
+  has and only packs if something is in the way. A copy is the same bricks, so a phase that depends on
+  where it stands (`pack_courses`, a run's first half brick) is the source's until it is cut.
+* Undoing a stamp no longer leaves its bricks on the redo list: undoing a stamp was always meant to
+  forget (`_undo_step`).
+* `_recipe_id_at` is a map now, mended up to `_rid_synced`. Anything that takes from `_placed_at`
+  lowers it; appending needs nothing.
+* A saved file of 5,000 bricks or more has no indents.

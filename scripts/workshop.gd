@@ -259,6 +259,10 @@ var _rot_for_up := {}
 ## after one undo every later mapping is off by one. It presented as undo and
 ## rotate-in-place silently doing nothing the second time.
 var _placed_at := []
+## What `_placed_at` says the other way: (grid << 32 | block) -> recipe id. Good for the first
+## `_rid_synced` of it: an append needs nothing, a removal lowers the mark, a look-up catches up.
+var _rid_map := {}
+var _rid_synced := 0
 ## What the last edits were, newest last: "brick" or "fixture". Undo asks this
 ## rather than assuming, because a fixture is not a block and popping the wrong
 ## list would take a brick out from under a staircase.
@@ -2124,11 +2128,17 @@ func run_step() -> void:
 func _recipe_id_at(frame_index: int, block: int) -> int:
 	if frame_index < 0 or block < 0:
 		return -1
-	for i in range(_placed_at.size() - 1, -1, -1):
-		var at: Array = _placed_at[i]
-		if int(at[0]) == frame_index and int(at[1]) == block:
-			return i
-	return -1
+	for rid in range(_rid_synced, _placed_at.size()):
+		var at: Array = _placed_at[rid]
+		_rid_map[int(at[0]) << 32 | int(at[1])] = rid
+	_rid_synced = _placed_at.size()
+	var rid: int = _rid_map.get(frame_index << 32 | block, -1)
+	if rid < 0 or rid >= _placed_at.size():
+		return -1
+	# A brick gone since leaves its entry: the block id is never used again, but its old
+	# recipe id is.
+	var at: Array = _placed_at[rid]
+	return rid if int(at[0]) == frame_index and int(at[1]) == block else -1
 
 
 ## Add a fixture to the recipe and build its preview, as one undoable edit.
@@ -2256,6 +2266,7 @@ func _undo_brick() -> bool:
 	if int(at[0]) >= 0 and not world.remove_block(asm.frames[at[0]], at[1]):
 		return false
 	_placed_at.remove_at(_placed_at.size() - 1)
+	_rid_synced = mini(_rid_synced, _placed_at.size())
 	recipe.pop()
 	if not _edits.is_empty():
 		_edits.pop_back()
@@ -2334,6 +2345,7 @@ func _delete_ray(from: Vector3, dir: Vector3) -> bool:
 		if shaped:
 			_tools.forget_brick(recipe.part_of(rid), recipe.cell_of(rid))
 		_placed_at.remove_at(rid)
+		_rid_synced = mini(_rid_synced, rid)
 		recipe.remove_at(rid)
 		if not shaped:
 			_drop_edit("brick", rid)
@@ -2371,6 +2383,22 @@ func _drop_edit(kind: String, n: int) -> void:
 			_edits.remove_at(i)
 			return
 		n -= 1
+
+
+## `_drop_edit("brick", n)` for each of these, sorted.
+func _drop_bricks(ns: PackedInt32Array) -> void:
+	var kept := []
+	var n := 0
+	var g := 0
+	for e in _edits:
+		if e == "brick":
+			var going := g < ns.size() and ns[g] == n
+			n += 1
+			if going:
+				g += 1
+				continue
+		kept.append(e)
+	_edits.assign(kept)
 
 
 ## Swap which layer the next brick goes in.
@@ -2531,7 +2559,7 @@ func _remesh() -> void:
 ## The building workshop's builds can be far too big to rebuild whole for each brick. An
 ## old brick library has no way to do less.
 func _draws_sections() -> bool:
-	return _wants_tools() and ClassDB.class_has_method("BrickWorld", "take_changed_sections")
+	return _wants_tools() and ClassDB.class_has_method("BrickWorld", "build_sections_chamfer_mesh")
 
 
 func _show_bricks(mi: MeshInstance3D, f: int, arrays: Array) -> void:
@@ -2552,8 +2580,10 @@ func _remesh_sections(f: int, frame_node: MeshInstance3D) -> void:
 	if changed.is_empty():
 		return
 	var held: Dictionary = _sections.get_or_add(f, {})
-	for s in changed:
-		var arrays: Array = world.build_section_chamfer_mesh(f, s, BrickNear.BEVEL if BrickNear.enabled else 0.0)
+	var meshes: Array = world.build_sections_chamfer_mesh(f, changed, BrickNear.BEVEL if BrickNear.enabled else 0.0)
+	for i in changed.size():
+		var s := changed[i]
+		var arrays: Array = meshes[i]
 		var studs: PackedFloat32Array = world.get_section_studs(f, s)
 		var key := Vector2i(f, s)
 		var mi: MeshInstance3D = held.get(s)
@@ -2946,6 +2976,8 @@ func _reset_space() -> void:
 	# new recipe's entries went on after the old ones, and every id read back
 	# from it -- undo, delete, turn, the newel aim -- was off by the old count.
 	_placed_at.clear()
+	_rid_map.clear()
+	_rid_synced = 0
 	asm = Assembly.new(world, palette)
 	_build_frames()
 	_frame = 0
@@ -3251,6 +3283,7 @@ var _stamp_label := ""
 var _stamp_turn := 0
 var _stamp_at := Vector3i(-1, -1, -1)  ## where its box's min corner goes
 var _stamp_ok := false
+const STAMP_BEVELS_TO := 5000
 var _stamp_ghost: MeshInstance3D
 var _stamp_material: StandardMaterial3D
 ## One per stamp (and per bake): what undo has to take back.
@@ -3363,7 +3396,9 @@ func _make_stamp_ghost() -> void:
 		return
 	var c := world.create_chunk(Vector3i.ZERO, _stamp.chunk_dims())
 	_stamp.build(world, c, palette, true)
-	var arrays := world.build_chunk_chamfer_mesh(c, BrickNear.BEVEL) if BrickNear.enabled \
+	# Plain for a whole building: a see-through ghost has no use for bevels, and picking it up
+	# should not take seconds.
+	var arrays := world.build_chunk_chamfer_mesh(c, BrickNear.BEVEL) if BrickNear.enabled and _stamp.size() < STAMP_BEVELS_TO \
 			else world.build_chunk_mesh(c)
 	world.release_chunk(c)
 	var m := ArrayMesh.new()
@@ -3455,6 +3490,37 @@ func _stamp_fits(at: Vector3i) -> bool:
 	var fo := _frame_offsets(_stamp, off)
 	if _stamp.frame_count() > 1 and fo.is_empty():
 		return false
+	if _stamp.frame_count() > 1 or not _stamp_clear(at):
+		if not _stamp_bricks_fit(off, fo):
+			return false
+	for t in _stamp.towers:
+		var c := BuildRecipe.cell_from(t.cell) + off
+		var d := TowerBlockout.dims(TowerBlockout.normalised(t.params))
+		if c.x < 0 or c.z < 0 or c.x + d.x > plate_studs or c.z + d.z > plate_studs \
+				or c.y + d.y > height_plates:
+			return false
+	return true
+
+
+## Whether the stamp's box at `at` is inside the area and clear of every grid's bricks. The
+## usual case for a whole building in hand, and it saves asking about each of its bricks
+## each time the cursor crosses a stud.
+func _stamp_clear(at: Vector3i) -> bool:
+	var box := stamp_box(_stamp)
+	var d: Vector3i = box[1]
+	if at.x < 0 or at.y < 0 or at.z < 0 or at.x + d.x > plate_studs or at.z + d.z > plate_studs \
+			or at.y + d.y > height_plates:
+		return false
+	var size := Vector3(BrickPalette.STUD_M, BrickPalette.PLATE_M, BrickPalette.STUD_M)
+	var mine := AABB(Vector3(at) * size, Vector3(d) * size)
+	for f in asm.frames:
+		var held := _frame_box(f)
+		if held.has_volume() and mine.intersects((world.get_chunk_transform(f) * held).grow(0.05)):
+			return false
+	return true
+
+
+func _stamp_bricks_fit(off: Vector3i, fo: Dictionary) -> bool:
 	for i in _stamp.size():
 		var rf := _stamp.frame_of(i)
 		var af := 0 if rf == 0 else _asm_frame_for(_stamp.frame_rotation(rf), _stamp.frame_ticks(rf))
@@ -3463,12 +3529,6 @@ func _stamp_fits(at: Vector3i) -> bool:
 			return false
 		var move: Vector3i = off if rf == 0 else fo[rf]
 		if not asm.can_place(asm.frames[af], _stamp.cell_of(i) + move, palette[pname]):
-			return false
-	for t in _stamp.towers:
-		var c := BuildRecipe.cell_from(t.cell) + off
-		var d := TowerBlockout.dims(TowerBlockout.normalised(t.params))
-		if c.x < 0 or c.z < 0 or c.x + d.x > plate_studs or c.z + d.z > plate_studs \
-				or c.y + d.y > height_plates:
 			return false
 	return true
 
@@ -3546,9 +3606,12 @@ func _undo_stamp() -> bool:
 	while not _edits.is_empty() and _edits[_edits.size() - 1] == "fixture" \
 			and recipe.fixture_count() > int(m.fixtures):
 		_undo()
-	while not _edits.is_empty() and _edits[_edits.size() - 1] == "brick" \
-			and recipe.size() > int(m.first):
-		_undo()
+	# Its bricks all at once. One at a time, each is an edit: a remesh of what it touched.
+	var n := 0
+	while n < _edits.size() and _edits[_edits.size() - 1 - n] == "brick" and recipe.size() - n > int(m.first):
+		n += 1
+	_edits.resize(_edits.size() - n)
+	remove_rids(PackedInt32Array(range(recipe.size() - n, recipe.size())))
 	if m.has("placements"):
 		recipe.placements.resize(mini(recipe.placements.size(), int(m.placements)))
 	var respawn := false
@@ -4039,9 +4102,8 @@ func _lift_group(g: int) -> BuildRecipe:
 	var sub := recipe.extract(first, count)
 	sub.name = str(gr.get("name", "group"))
 	_batch = true
-	for rid in range(first + count - 1, first - 1, -1):
-		_remove_rid(rid)
-	# remove_at dropped the group with its last brick; make sure.
+	remove_rids(PackedInt32Array(range(first, first + count)), true)
+	# remove_many dropped the group with its last brick; make sure.
 	for k in range(recipe.groups.size() - 1, -1, -1):
 		if int(recipe.groups[k].count) <= 0:
 			recipe.groups.remove_at(k)
@@ -4062,6 +4124,7 @@ func _remove_rid(rid: int, drop: bool = true) -> void:
 	if int(at[0]) >= 0:
 		world.remove_block(asm.frames[at[0]], at[1])
 	_placed_at.remove_at(rid)
+	_rid_synced = mini(_rid_synced, rid)
 	recipe.remove_at(rid)
 	if drop:
 		_drop_edit("brick", rid)
@@ -4071,6 +4134,40 @@ func _remove_rid(rid: int, drop: bool = true) -> void:
 				e[0] = -1
 			elif int(e[0]) > rid:
 				e[0] = int(e[0]) - 1
+
+
+## `_remove_rid` for many at once, any order. One pass, not one for each: a building is
+## tens of thousands. `drop` as there: without it, a shape's bricks, with no edits of their own.
+func remove_rids(rids: PackedInt32Array, drop: bool = false) -> void:
+	if rids.is_empty():
+		return
+	var ids := rids.duplicate()
+	ids.sort()
+	var kept := []
+	var unique := PackedInt32Array()
+	var g := 0
+	for i in _placed_at.size():
+		if g >= ids.size() or ids[g] != i:
+			kept.append(_placed_at[i])
+			continue
+		var at: Array = _placed_at[i]
+		if int(at[0]) >= 0:
+			world.remove_block(asm.frames[at[0]], at[1])
+		unique.push_back(i)
+		while g < ids.size() and ids[g] == i:
+			g += 1
+	_placed_at = kept
+	_rid_synced = mini(_rid_synced, ids[0])
+	recipe.remove_many(unique)
+	if drop:
+		_drop_bricks(unique)
+	for stroke in _paints:
+		for e in stroke:
+			var rid := int(e[0])
+			if rid < 0:
+				continue
+			var below := unique.bsearch(rid)
+			e[0] = -1 if below < unique.size() and unique[below] == rid else rid - below
 
 
 ## Undo of a delete (or of the lifting half of a move): the bricks go back

@@ -77,6 +77,10 @@ const POPOUT_HIDES := ["hand", "draw", "roof", "stairs", "cut"]
 ## A door and a window cut by one click, to start: studs across, plates up; a window's sill
 ## is where it is clicked, a door stands on the floor of the wall.
 const DOOR := Vector2i(4, 15)
+## How far a course's runs look (BrickShapes.pack_courses: two brick widths, and more than
+## the widest brick asks), and the tallest brick there is, in plates.
+const RUNS_READ := 24.0
+const MAX_BRICK_PLATES := 12
 const WINDOW := Vector2i(4, 9)
 const REPEAT_WHAT := [["building", "Building"], ["storey", "One storey"], ["shape", "One shape"]]
 const REPEAT_DIRS := [["up", "Up"], ["x", "Along X"], ["z", "Along Z"]]
@@ -464,6 +468,27 @@ func _add_into(rec: Dictionary, sh: Dictionary) -> int:
 	return int(sh.id)
 
 
+## A shape copied `d` on, its bricks known: laid as they are, not worked out again. If
+## something stands in the way it is laid the usual way, round what is there.
+func _add_copy(rec: Dictionary, sh: Dictionary, d: Vector3i) -> void:
+	var out := BrickShapes.shifted(sh, d)
+	if not shape_of(int(out.id)).is_empty():
+		out.id = _next_id()
+	rec.before[int(out.id)] = null
+	ws._batch = true
+	var laid := []
+	for b in sh.bricks:
+		var at: Vector3i = BuildRecipe.cell_from(b[1]) + d
+		if ws.lay_part(String(b[0]), at, int(sh.colour), int(sh.mat), int(sh.get("role", 0))):
+			laid.append([b[0], _plain(at)])
+	ws._batch = false
+	out.bricks = laid
+	if laid.size() == (sh.bricks as Array).size():
+		_store(int(out.id), out)
+	else:
+		_lay(out)
+
+
 ## Change a kept shape -- `change` merged into it -- and lay it again whole. One undo.
 func change_shape(id: int, change: Dictionary) -> void:
 	var old := shape_of(id)
@@ -522,24 +547,41 @@ func apply_cut(cut: Dictionary) -> int:
 
 ## A cut, as part of an undo record. Returns how many shapes and hand bricks it cut.
 func _cut_into(rec: Dictionary, cut: Dictionary) -> int:
-	var cells := BrickShapes.solid_cells(cut)
+	return _cuts_into(rec, [cut])
+
+
+## Cuts lying the same way (a door on every floor), all at once: one laying over what they
+## reach, not one for each.
+func _cuts_into(rec: Dictionary, cuts: Array) -> int:
+	var per_cut := []
+	var cells := {}
+	for cut in cuts:
+		per_cut.append(BrickShapes.solid_cells(cut))
+		cells.merge(per_cut[per_cut.size() - 1])
 	if cells.is_empty():
 		return 0
+	var lo := Vector3i(1 << 30, 1 << 30, 1 << 30)
+	var hi := -lo
+	for c in cells:
+		lo = Vector3i(mini(lo.x, c.x), mini(lo.y, c.y), mini(lo.z, c.z))
+		hi = Vector3i(maxi(hi.x, c.x), maxi(hi.y, c.y), maxi(hi.z, c.z))
+	var box := AABB(Vector3(lo), Vector3(hi - lo + Vector3i.ONE))
 	var n := 0
 	for sh in shapes().duplicate():
-		var mine := BrickShapes.shape_cells(sh)
-		var hit := false
-		for c in cells:
-			if mine.has(c):
-				hit = true
-				break
-		if not hit:
+		var mine := BrickShapes.shape_cells_in(sh, box)
+		var hits := []
+		for i in cuts.size():
+			for c in per_cut[i]:
+				if mine.has(c):
+					hits.append(cuts[i].duplicate(true))
+					break
+		if hits.is_empty():
 			continue
-		var next: Dictionary = sh.duplicate(true)
-		(next.cuts as Array).append(cut.duplicate(true))
+		var next := _with_bricks(sh, sh.bricks)
+		(next.cuts as Array).append_array(hits)
 		if not rec.before.has(int(sh.id)):
 			rec.before[int(sh.id)] = sh
-		_lay(next, _near_box(cells, sh, String(cut.get("lie", ""))))
+		_lay(next, _near_box(cells, sh, String(cuts[0].get("lie", ""))))
 		n += 1
 	# Hand-laid bricks in the cut go too: the hole is a hole.
 	var hand := {}
@@ -569,13 +611,15 @@ func apply_opening(k: String, face: Dictionary) -> Dictionary:
 	var rec := _begin()
 	var ops := _every_floor(op, face) if every_floor else [op]
 	var b := _building_at(face.cell) if every_floor else {}
-	for o in ops:
-		_open_into(rec, o)
-		if ws.mirror_on:
-			var plane: float = ws.mirror_x if ws.mirror_axis == 0 else ws.mirror_z
+	_open_all(rec, ops)
+	if ws.mirror_on:
+		var plane: float = ws.mirror_x if ws.mirror_axis == 0 else ws.mirror_z
+		var seen := []
+		for o in ops:
 			var m := BrickShapes.reflected(o, ws.mirror_axis, plane)
 			if m != o:
-				_open_into(rec, m)
+				seen.append(m)
+		_open_all(rec, seen)
 	# Kept with the building, as if on its first storey: new storeys get it.
 	if not b.is_empty():
 		var pitch := int(b.storey) + maxi(1, int(b.get("floor", 1)))
@@ -663,10 +707,27 @@ static func opening_box(op: Dictionary) -> Array:
 
 
 func _open_into(rec: Dictionary, op: Dictionary) -> void:
+	_open_all(rec, [op])
+
+
+## Openings the same way up a building, cut in one go.
+func _open_all(rec: Dictionary, ops: Array) -> void:
+	if ops.is_empty():
+		return
+	var cuts := []
+	for op in ops:
+		var box := opening_box(op)
+		cuts.append({"kind": "rect", "lie": String(op.lie), "a": [box[0].x, box[0].y], "b": [box[1].x, box[1].y],
+				"at": op.at, "depth": op.depth})
+	_cuts_into(rec, cuts)
+	for op in ops:
+		_frame_opening(rec, op)
+
+
+## An opening's frame and glass, shapes of their own.
+func _frame_opening(rec: Dictionary, op: Dictionary) -> void:
 	var box := opening_box(op)
 	var l := String(op.lie)
-	_cut_into(rec, {"kind": "rect", "lie": l, "a": [box[0].x, box[0].y], "b": [box[1].x, box[1].y],
-			"at": op.at, "depth": op.depth})
 	if bool(op.frame):
 		var fr := _new_shape("jamb" if op.kind == "door" else "hollow", l, box[0], box[1], int(op.at))
 		fr.depth = int(op.depth)
@@ -743,11 +804,13 @@ func repeat(dir: String, times: int, gap: int) -> int:
 		var d := Vector3i.ZERO
 		d[axis] = first + span * k
 		for sh in g.shapes:
-			_add_into(rec, BrickShapes.shifted(sh, d))
+			_add_copy(rec, sh, d)
 			n += 1
+		var moved := []
 		for op in g.openings:
-			_open_into(rec, BrickShapes.shifted(op, d))
+			moved.append(BrickShapes.shifted(op, d))
 			n += 1
+		_open_all(rec, moved)
 		ws._batch = true
 		var got := _copy_bricks(rec, g, d)
 		n += int(got.x)
@@ -781,10 +844,8 @@ func _raise_building(rec: Dictionary, g: Dictionary, first: int, span: int, time
 			rec.hand.append([b[0], _plain(b[1]), b[2], b[3], b[4]])
 			ws._remove_rid(rid)
 	rec.before[int(plan.id)] = plan
-	_take_up(plan)
-	var next: Dictionary = plan.duplicate(true)
+	var next := _with_bricks(plan, plan.bricks)
 	next.depth = int(plan.depth) + rise
-	next.bricks = []
 	var cuts: Array = next.cuts
 	for k in times:
 		for cut in plan.cuts:
@@ -794,7 +855,7 @@ func _raise_building(rec: Dictionary, g: Dictionary, first: int, span: int, time
 			var low: int = (ys.reduce(func(m: Vector3i, c: Vector3i) -> Vector3i: return c if c.y < m.y else m) as Vector3i).y
 			if low >= int(g.lo.y) and low <= int(g.hi.y):
 				cuts.append(BrickShapes.shifted(cut, Vector3i(0, first + span * k, 0)))
-	_lay(next)
+	_lay(next, _top_box(plan, int(next.depth)))
 	ws._batch = true
 	for o in g.above:
 		_lay(BrickShapes.shifted(o, up))
@@ -1081,24 +1142,58 @@ func _near_box(cells: Dictionary, sh: Dictionary, cut_lie: String = "") -> AABB:
 	return AABB(Vector3(lo - g), Vector3(hi - lo + g * 2 + Vector3i.ONE))
 
 
+## A shape's record with these bricks: a copy of the rest of it, but not of a building's
+## worth of bricks that nothing will change.
+static func _with_bricks(sh: Dictionary, bricks: Array) -> Dictionary:
+	var out := {}
+	for k in sh:
+		var v: Variant = sh[k]
+		if k == "bricks":
+			out[k] = bricks
+		elif v is Array or v is Dictionary:
+			out[k] = v.duplicate(true)
+		else:
+			out[k] = v
+	return out
+
+
+## What changes when a flat shape goes from its depth to `depth`, for `_lay`: from a little
+## under its old top, or new one, to the higher of them. What is under that stands: a
+## course's bricks come from its own layer, so taller changes nothing lower down.
+func _top_box(sh: Dictionary, depth: int) -> AABB:
+	var low := int(sh.at) + mini(int(sh.depth), depth) - 2 * BrickPalette.PLATES_PER_BRICK
+	var top := int(sh.at) + maxi(int(sh.depth), depth)
+	return AABB(Vector3(0, low, 0), Vector3(ws.plate_studs, top - low, ws.plate_studs))
+
+
 ## Lay a shape's bricks and store it. `near`: only the bricks touching it are taken up and
 ## laid again (the rest of the shape stays as it was); without it, all of them.
 func _lay(sh: Dictionary, near: AABB = AABB()) -> void:
-	var cells := BrickShapes.shape_cells(sh)
 	var keep := []
 	ws._batch = true
 	var roof := String(sh.kind) == "roof"
+	var cells: Dictionary
 	if near.size == Vector3.ZERO or roof:
 		_take_up(sh)
+		cells = BrickShapes.shape_cells(sh)
 	else:
+		# The cells a little further out as well: a course's runs read what is round them.
+		cells = BrickShapes.shape_cells_in(sh, near.grow(RUNS_READ))
+		var up := []
+		var y0 := floori(near.position.y)
+		var y1 := ceili(near.end.y)
 		for b in sh.bricks:
 			var at := BuildRecipe.cell_from(b[1])
+			# Most of a tall building, told by its layer alone.
+			if at.y >= y1 or at.y + MAX_BRICK_PLATES <= y0:
+				keep.append(b)
+				continue
 			var size := BrickPalette.size_of(String(b[0]))
-			var box := AABB(Vector3(at), Vector3(size))
-			if box.intersects(near):
-				_take_part(String(b[0]), at)
+			if AABB(Vector3(at), Vector3(size)).intersects(near):
+				up.append(b)
 			else:
 				keep.append(b)
+		_take_list(up)
 	var taken := {}
 	for c in cells:
 		if _rid_at(c) >= 0:
@@ -1145,9 +1240,7 @@ func _lay(sh: Dictionary, near: AABB = AABB()) -> void:
 		if ws.lay_part(String(pc[0]), pc[1], int(sh.colour), int(sh.mat), int(sh.get("role", 0))):
 			laid.append([pc[0], _plain(pc[1])])
 	ws._batch = false
-	var out := sh.duplicate(true)
-	out.bricks = laid
-	_store(int(sh.id), out)
+	_store(int(sh.id), _with_bricks(sh, laid))
 
 
 ## `part` turned to face `dir`, or "" if the palette has no such turn of it.
@@ -1195,10 +1288,36 @@ func _base_layer(sh: Dictionary) -> int:
 	return mini(int(sh.a[1]), int(sh.b[1]))
 
 
+## A shape's bricks by cell, to compare two versions of it.
+static func _bricks_by_cell(list: Array) -> Dictionary:
+	var out := {}
+	for b in list:
+		out[BuildRecipe.cell_from(b[1])] = String(b[0])
+	return out
+
+
+## The bricks of `list` that `other` (`_bricks_by_cell`) does not have.
+static func _not_in(list: Array, other: Dictionary) -> Array:
+	var out := []
+	for b in list:
+		if other.get(BuildRecipe.cell_from(b[1]), "") != String(b[0]):
+			out.append(b)
+	return out
+
+
 ## Take up a shape's bricks. The caller redraws (`_end`): taking up does not.
 func _take_up(sh: Dictionary) -> void:
-	for b in sh.bricks:
-		_take_part(String(b[0]), BuildRecipe.cell_from(b[1]))
+	_take_list(sh.bricks)
+
+
+## Take up bricks listed as a shape keeps them.
+func _take_list(list: Array) -> void:
+	var rids := PackedInt32Array()
+	for b in list:
+		var rid: int = ws.find_brick(String(b[0]), BuildRecipe.cell_from(b[1]))
+		if rid >= 0:
+			rids.push_back(rid)
+	ws.remove_rids(rids)
 
 
 func _take_part(part: String, cell: Vector3i, af: int = 0) -> bool:
@@ -1266,12 +1385,30 @@ func _apply(rec: Dictionary) -> Dictionary:
 	ws._batch = true
 	# Everything the edit laid comes up first, then what was there goes back: a door's frame
 	# stands where its wall's bricks will go.
+	var rids := PackedInt32Array()
 	for b in rec.get("laid", []):
-		_take_part(String(b[0]), BuildRecipe.cell_from(b[1]), int(b[5]) if (b as Array).size() > 5 else 0)
+		var rid: int = ws.find_brick(String(b[0]), BuildRecipe.cell_from(b[1]), int(b[5]) if (b as Array).size() > 5 else 0)
+		if rid >= 0:
+			rids.push_back(rid)
+	ws.remove_rids(rids)
+	# Bricks both versions have stay where they are: only the difference moves.
+	var back := {}
 	for id in rec.before:
 		var now := shape_of(int(id))
-		if not now.is_empty() and not kept:
-			_take_up(now)
+		var was = rec.before[id]
+		if kept:
+			continue
+		if now.is_empty():
+			if was != null:
+				back[id] = was.bricks
+			continue
+		var same: bool = was != null and int(was.colour) == int(now.colour) and int(was.mat) == int(now.mat) \
+				and int(was.get("role", 0)) == int(now.get("role", 0))
+		var old_at := _bricks_by_cell(was.bricks) if same else {}
+		var now_at := _bricks_by_cell(now.bricks) if same else {}
+		_take_list(_not_in(now.bricks, old_at))
+		if was != null:
+			back[id] = _not_in(was.bricks, now_at)
 	for id in rec.before:
 		var was = rec.before[id]
 		if was == null:
@@ -1280,7 +1417,7 @@ func _apply(rec: Dictionary) -> Dictionary:
 		_store(int(id), was)
 		if kept:
 			continue
-		for b in was.bricks:
+		for b in back.get(id, []):
 			ws.lay_part(String(b[0]), BuildRecipe.cell_from(b[1]), int(was.colour), int(was.mat), int(was.get("role", 0)))
 	for h in rec.get("hand", []):
 		ws.lay_part(String(h[0]), BuildRecipe.cell_from(h[1]), int(h[2]), int(h[3]), int(h[4]),
@@ -2905,19 +3042,24 @@ func resize_shape(id: int, depth: int) -> void:
 		return
 	var u := _begin()
 	u.before[id] = old
-	_take_up(old)
-	var sh: Dictionary = old.duplicate(true)
+	var sh := _with_bricks(old, old.bricks)
 	sh.depth = depth
-	sh.bricks = []
-	_lay(sh)
+	if String(old.lie) == "flat":
+		_lay(sh, _top_box(old, depth))
+	else:
+		_take_up(old)
+		sh.bricks = []
+		_lay(sh)
 	var ops: Array = old.get("openings", [])
 	if int(old.get("storey", 0)) > 0 and not ops.is_empty():
 		var pitch := int(old.storey) + maxi(1, int(old.get("floor", 1)))
 		var was := storeys_of(old)
 		var now := storeys_of(sh)
+		var new_ops := []
 		for k in range(was, now):
 			for op in ops:
-				_open_into(u, BrickShapes.shifted(op, Vector3i(0, k * pitch, 0)))
+				new_ops.append(BrickShapes.shifted(op, Vector3i(0, k * pitch, 0)))
+		_open_all(u, new_ops)
 		if now < was:
 			var top := int(old.at) + depth
 			for o in shapes().duplicate():

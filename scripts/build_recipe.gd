@@ -93,6 +93,9 @@ var parts := PackedStringArray()
 var _frame_rot := PackedInt32Array()    ## one per frame beyond 0
 var _frame_ticks := PackedInt32Array()  ## 3 ints per frame beyond 0
 
+## From this many bricks a saved file is written without indents.
+const COMPACT_FROM := 5000
+
 # Parallel arrays, one entry per block, in placement order.
 var _cells := PackedInt32Array()   ## 3 ints per block: x, y, z
 var _parts := PackedInt32Array()   ## index into `parts`
@@ -548,6 +551,53 @@ func remove_at(id: int) -> bool:
 			still.append(g)
 	groups = still
 	return true
+
+
+## `remove_at` for many blocks at once. `ids`: sorted, none twice.
+func remove_many(ids: PackedInt32Array) -> void:
+	if ids.is_empty():
+		return
+	_shape_changed()
+	var n := _parts.size()
+	var to := ids[0]
+	var gone := 0
+	for i in range(ids[0], n):
+		if gone < ids.size() and ids[gone] == i:
+			gone += 1
+			continue
+		_cells[to * 3] = _cells[i * 3]
+		_cells[to * 3 + 1] = _cells[i * 3 + 1]
+		_cells[to * 3 + 2] = _cells[i * 3 + 2]
+		_parts[to] = _parts[i]
+		_colours[to] = _colours[i]
+		_frames[to] = _frames[i]
+		_decor[to] = _decor[i]
+		_materials[to] = _materials[i]
+		to += 1
+	_cells.resize(to * 3)
+	_parts.resize(to)
+	_colours.resize(to)
+	_frames.resize(to)
+	_decor.resize(to)
+	_materials.resize(to)
+	var kept := PackedInt32Array()
+	for i in weld_count():
+		var w := weld_blocks(i)
+		var below_x := ids.bsearch(w.x)
+		var below_y := ids.bsearch(w.y)
+		if (below_x < ids.size() and ids[below_x] == w.x) or (below_y < ids.size() and ids[below_y] == w.y):
+			continue
+		kept.push_back(w.x - below_x)
+		kept.push_back(w.y - below_y)
+	_welds = kept
+	var still := []
+	for g in groups:
+		var before := ids.bsearch(int(g.first))
+		g.count = int(g.count) - (ids.bsearch(int(g.first) + int(g.count)) - before)
+		g.first = int(g.first) - before
+		if int(g.count) > 0:
+			still.append(g)
+	groups = still
 
 
 func cell_of(id: int) -> Vector3i:
@@ -1057,7 +1107,9 @@ func save_to(path: String) -> Error:
 	var f := FileAccess.open(path, FileAccess.WRITE)
 	if f == null:
 		return FileAccess.get_open_error()
-	f.store_string(JSON.stringify(to_dict(), "\t"))
+	# A number a line reads well in a diff, and is seconds of work and a hundred megabytes
+	# for a big building.
+	f.store_string(JSON.stringify(to_dict(), "\t" if size() < COMPACT_FROM else ""))
 	return OK
 
 

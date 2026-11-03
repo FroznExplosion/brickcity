@@ -368,10 +368,11 @@ public:
     /// nothing kept. For what is small and rebuilt whole on every change -- a
     /// workshop frame, a placement ghost.
     Array build_chunk_chamfer_mesh(int chunk_id, double bevel);
-    /// The chamfered mesh of one section, baked just for this call: its own
-    /// blocks, none of the chunk's. A chunk edited all the time would throw a
-    /// bake of the whole of it away with every brick. Docs/BuildTools.md 16.
-    Array build_section_chamfer_mesh(int chunk_id, int section, double bevel);
+    /// Each of these sections' chamfered meshes, in their order (empty for one
+    /// with nothing in it), baked just for this call: their own blocks, none of
+    /// the chunk's. A chunk edited all the time would throw a bake of the whole
+    /// of it away with every brick. Built side by side. Docs/BuildTools.md 16, 17.
+    Array build_sections_chamfer_mesh(int chunk_id, const PackedInt32Array &sections, double bevel);
     /// The sections to mesh again since the last call: every block is stamped
     /// and compared, so no edit has to report itself. A change marks the
     /// sections its box touches, grown by `margin` cells: it changes the faces
@@ -1584,13 +1585,17 @@ private:
     /// A chamfered band's indices for the bricks alive now: six a quad, zeros
     /// for a face not drawn, so the length never changes.
     /// Which faces of a run belong to plain boxes (ChamferIn::box).
-    void chamfer_box_flags(const brick::Chunk &c, int first, int faces,
+    void chamfer_box_flags(const brick::Chunk &c, const brick::FaceBake &bake, int first, int faces,
             std::vector<uint8_t> &out) const;
     /// The corner posts of a run's boxes (Docs/BrickBevel.md 2.6), carried by
     /// the faces `box` marks as carriers.
-    void chamfer_posts(const brick::Chunk &c, int first, int faces, float bevel,
-            const std::vector<uint8_t> &box, std::vector<float> &posts,
+    void chamfer_posts(const brick::Chunk &c, const brick::FaceBake &bake, int first, int faces,
+            float bevel, const std::vector<uint8_t> &box, std::vector<float> &posts,
             std::vector<int32_t> &post_at) const;
+    /// The chamfered mesh of a bake of this chunk, whole. Writes to nothing but
+    /// its answer, so it can run on a worker.
+    Array chamfer_mesh_of(const brick::Chunk &c, const brick::FaceBake &bake, double bevel,
+            int &quads_out, double &ms_out) const;
     static void chamfer_indices(const brick::Chunk &c, int section,
             const std::vector<int32_t> &quad_first, PackedInt32Array &out,
             const std::vector<uint8_t> &carrier = {});
