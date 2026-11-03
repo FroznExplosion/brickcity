@@ -99,8 +99,8 @@ player's saves.
 
 The user chooses. In the order I would take them:
 
-1. **Rubble in saves**: needs the engine to write a chunk out (`save_template` only returns an in-memory id).
-   C++, so plan it with the user; fallen pieces and drifts are what "everything saves" still leaves out.
+1. **Rubble in saves**: step 1 done (rubble on a world, `ChunkRecord`, no C++). Next: drifting pieces and
+   pieces fallen from space (Planets.md, "Plan, rubble in saves").
 2. **Something on a planet besides rifles**: UnitCatalog kinds in the waves; then a tank or a mech in play
    (all are only in gates). `FirefightDirector` is the city's and was left there on purpose: 1,100 lines
    round a ring and a `CityScene`.

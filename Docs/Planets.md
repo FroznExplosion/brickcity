@@ -2554,6 +2554,19 @@ Recommended: A. Either way, in order: fallen pieces on the world the player is o
 world, `s<system>_b<body>.dat`), then drifts and pieces from space, then the gate (`save` stages:
 a piece knocked loose, saved, back where it lay).
 
+**The user chose A (2026-11-03), and it needed no C++ after all:** `ChunkRecord` (scripts/chunk_record.gd,
+the city's sleeping-rubble record) already captures a chunk's standing bricks in one engine call
+(`capture_blocks`: cell, part, colour, furniture, cut joints, wear; parts by name), and lays them again
+(`place_blocks`). The handoff's "needs the engine" was wrong.
+
+**Step 1 built: rubble on a world.** `PlanetPieces.to_save` (a record and its chunk's place on the planet,
+for each piece, still or moving) into the world's file under `pieces`; `restore`, from
+`PlanetSaver.apply_sites` after the buildings, lays each again and settles it where it lay. `save` stage 1
+knocks 19 bricks off a roof and lets them land; stage 2: "its rubble back where it lay, settled, brick for
+brick" (1 of 1, 19 of 19, 0.00 m off) and "and it breaks again" (a blast on one of its bricks: 3). Stage 3's
+two-valued landing showed again (2.52 m); its rubble is not looked at there. A generated world's rubble goes
+the same way and is not tested.
+
 #### Plan, saving (2026-11-01)
 
 As zylanntest (its Docs/save_format_and_data_longevity.md, future_features_save_guide.md): the **universe**

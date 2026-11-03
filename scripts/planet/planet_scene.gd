@@ -3405,12 +3405,48 @@ func _run_save_gate() -> void:
 		var q := g.squad
 		q.alive()[0].pawn.health.apply_impact(1e6, &"")
 		q.alive()[0].pawn.health.apply_impact(60.0, &"")
+		# A piece knocked off the top of that building, left where it lands: the
+		# rubble a save keeps.
+		var s = buildings.sites[i]
+		var top := PackedInt32Array()
+		var dims: Vector3i = buildings.bricks.get_chunk_dims(s.chunk)
+		for yc in range(dims.y - 1, -1, -1):
+			for zc in dims.z:
+				for xc in dims.x:
+					var bid: int = buildings.bricks.block_at(s.chunk, Vector3i(xc, yc, zc))
+					if bid >= 0 and not buildings.bricks.is_block_absent(s.chunk, bid) and not top.has(bid):
+						top.append(bid)
+			if top.size() >= 20:
+				break
+		top = top.slice(0, 20)
+		s.collision.disable(top)
+		for b in s.collision.bands_of(top):
+			if not s.remesh.has(b):
+				s.remesh.append(b)
+		var pc := buildings.pieces
+		pc.shed(s.chunk, [top])
+		buildings.bricks.bake_chunk_async(s.chunk)
+		t0 = Time.get_ticks_msec()
+		while (pc.pieces.is_empty() or pc.moving() > 0) and Time.get_ticks_msec() - t0 < 20000:
+			await _frames(1)
+		var kept := 0
+		var kept_bricks := 0
+		var piece_at := Vector3.INF
+		for p in pc.pieces:
+			if is_instance_valid(p.body) and p.fading_since == 0:
+				kept += 1
+				kept_bricks += buildings.bricks.get_alive_block_count(p.chunk)
+				piece_at = planet.to_local(p.body.global_position)
+		_check("rubble lies about, settled", kept > 0 and pc.moving() == 0, "%d piece(s), %d bricks" % [kept, kept_bricks])
+		# Its bricks left the wall too: what is gone from it now.
+		gone = buildings.site_gone(i).size()
 		await get_tree().create_timer(1.0).timeout
 		system.t = 777.0
 		var hurt: float = q.alive()[0].pawn.health.total_current()
 		saver.save_now()
 		var keep := {"site": i, "gone": gone, "trees": trees.knocked_count, "left": q.alive().size(), "hurt": hurt,
-				"at": planet.to_local(pawn.feet()), "ship": ship.rel}
+				"at": planet.to_local(pawn.feet()), "ship": ship.rel,
+				"pieces": kept, "piece_bricks": kept_bricks, "piece_at": piece_at}
 		UniverseSave._write(GATE_NOTES, keep)
 		_check("the fight written, in place", gone > 0 and FileAccess.file_exists(saver.save.dir() + "s0_b%d.dat" % system.index_of(planet)),
 				"%d bricks gone, %d trees, %d soldiers, in %.1f ms" % [gone, trees.knocked_count, q.alive().size(), saver.write_us / 1000.0])
@@ -3419,6 +3455,25 @@ func _run_save_gate() -> void:
 		var off := planet.to_local(pawn.feet()).distance_to(notes.at)
 		_check("the player where they were, on foot", on_foot and off < 1.0, "%.2f m off" % off)
 		_check("the ship where it was", ship.rel.is_equal_approx(notes.ship) and ship.landed)
+		var pc := buildings.pieces
+		var back := 0
+		var back_bricks := 0
+		var off_piece := INF
+		for p in pc.pieces:
+			if is_instance_valid(p.body) and p.settled:
+				back += 1
+				back_bricks += buildings.bricks.get_alive_block_count(p.chunk)
+				off_piece = minf(off_piece, planet.to_local(p.body.global_position).distance_to(notes.piece_at))
+		_check("its rubble back where it lay, settled, brick for brick", back == int(notes.pieces) and back_bricks == int(notes.piece_bricks)
+				and off_piece < 0.5, "%d piece(s) of %d, %d bricks of %d, %.2f m off" % [back, int(notes.pieces), back_bricks, int(notes.piece_bricks), off_piece])
+		var hit0 := pc.hit_killed
+		if not pc.pieces.is_empty():
+			# On one of its bricks: its centre of mass may be air.
+			var p0 = pc.pieces[0]
+			var boxes: Array = buildings.bricks.get_block_boxes(p0.chunk)
+			var aim: Vector3 = buildings.bricks.get_chunk_transform(p0.chunk) * (boxes[0].pos as Vector3) if not boxes.is_empty() else p0.body.global_position
+			pc.damage(p0, aim, {"blast": true, "radius": 1.5, "hp": 0})
+		_check("and it breaks again", pc.hit_killed > hit0, "%d bricks" % (pc.hit_killed - hit0))
 		setup_ai(town)
 		ai.policy = CombatPolicy.new()
 		kit.use_services(ai)
