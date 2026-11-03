@@ -186,9 +186,8 @@ func _crumbs() -> Array:
 	var im = city.islands
 	if not ("_crumbs" in im):
 		return out
-	for cr in im._crumbs.values():
-		for q in cr.pos:
-			out.append(q)
+	for c in im.crumb_states():
+		out.append(c[0])
 	return out
 
 

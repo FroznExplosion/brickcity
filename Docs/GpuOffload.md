@@ -24,6 +24,35 @@ wide, uniform and needs no answer back on the CPU the same frame.
 
 ### 2.1 Crumbs: a falling path worked out in the vertex shader
 
+**Built for the city's crumbs, 2026-11-02** (`IslandManager`, `shaders/crumb.gdshader`). Each
+crumb is written when something happens to it -- thrown, bounced, landed, its floor asked or
+gone -- with where that stretch of its fall starts, its velocity and the tick; the shader steps
+it on from there with the CPU's own sums (semi-implicit Euler in closed form), so where the CPU
+says it is and where it is drawn agree at every tick, and between ticks it now moves smoothly
+(it moved a tick at a time). It spins from when it came loose to when it stops; its spin is kept
+in 8 bits each way, the same on both sides, so a crumb laid in the heap lies as it was drawn.
+The clock is a global (`crumb_clock`: physics ticks and the fraction since the last). Probes
+read where a crumb is now from `crumb_states()`. `blast_ring_probe -- --shots=<dir>` shows them
+(windowed; its checks are for headless).
+
+Barrage probe, headless, before and after (one run each; the barrage is not the same twice):
+
+| | moving crumbs, all told | of it, laying the stopped ones in the heap | worst tick |
+|---|---|---|---|
+| before | 1404 ms | 695 | 141.7 ms |
+| after | 815-1135 ms | 378-610 | 4-71 ms |
+
+What is left is per EVENT (35,000 in a barrage of ~800 at a time over 1,860 ticks): the floor
+asked again on landing (a ray), a bounce, laying in the heap -- the same work as before. The
+step and the two renderer calls per crumb per tick are gone; headless those calls cost next to
+nothing, so in a window the saving is larger than this table shows.
+
+Not done: the planets' crumbs (`PlanetCrumbs`), which fall toward the planet's centre and are
+written planet-local every tick as the planet turns -- the same shader with the down taken from
+the crumb's place, in the planets' area.
+
+What it was:
+
 **Now.** A small piece is not a body but crumbs: each brick drawn in a MultiMesh, falling with
 a kick, a scatter and a spin to the floor one ray found when it broke, lying there, then
 shrinking away (`IslandManager` CRUMB_*, scripts/island_manager.gd; `PlanetCrumbs`,
