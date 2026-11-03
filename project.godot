@@ -342,6 +342,10 @@ lod_zoom={
 "type": "float",
 "value": 1.0
 }
+crumb_clock={
+"type": "float",
+"value": 0.0
+}
 wood_albedo_rough={
 "type": "sampler2DArray",
 "value": "res://textures/pbr/wood_albedo_rough.webp"

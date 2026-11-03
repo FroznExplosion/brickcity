@@ -39,6 +39,8 @@ var tier2 := 1500.0
 var sun_dir := Vector3(0.4, 0.6, 0.3).normalized()   # planet-local, surface -> sun
 
 var _impostor_mat: ShaderMaterial
+## How many bodies shadow this one's far look now (set_shadowers).
+var shadows_now := 0
 var _atmo_mat: ShaderMaterial
 var _ocean_mat: ShaderMaterial
 var _ground_mat: ShaderMaterial
@@ -205,6 +207,22 @@ func set_sun(dir_local: Vector3) -> void:
 	for m in [_impostor_mat, _atmo_mat]:
 		if m != null:
 			m.set_shader_parameter("sun_dir", sun_dir)
+
+
+## The bodies between this one and the star, for its far look and halo
+## (Docs/Lighting.md 2a): each (centre, radius) in its frame, in its radii; the
+## star's angular radius from here (rad) and its light's colour.
+func set_shadowers(list: PackedVector4Array, star_ang: float, star_colour: Color) -> void:
+	shadows_now = list.size()
+	var sun_c := Color.WHITE.lerp(star_colour, LightRig.STAR_MIX)
+	for m in [_impostor_mat, _atmo_mat]:
+		if m != null:
+			m.set_shader_parameter("shadower_count", list.size())
+			if not list.is_empty():
+				m.set_shader_parameter("shadowers", list)
+			m.set_shader_parameter("star_ang", star_ang)
+	if _impostor_mat != null:
+		_impostor_mat.set_shader_parameter("sun_color", sun_c)
 
 
 func _ground_material() -> ShaderMaterial:

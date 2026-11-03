@@ -1,7 +1,8 @@
 # Lighting
 
 Plan for lighting across the game, the planet scene first: simpler, cheaper, and
-right indoors. Written 2026-11-02. Nothing here is built yet.
+right indoors. Written 2026-11-02. Steps 1-4 are built in the planet scene
+(9, "Built"); section 1 is what there was before them.
 
 ## 1. What there is now
 
@@ -70,6 +71,49 @@ Across the 400 m of shadows the true direction changes by 400 m / 2,000 km =
 The same holds for light off a moon or planet (5): direction from that body,
 size from its radius and distance, brightness from how much of it is lit.
 
+**Built (step 2):** `LightRig.set_sun` takes the star's angular radius and its
+flux at the camera against home's, from `PlanetSystem._light`;
+`light_angular_distance` = the star's size (held at 3 deg), energy
+`1.1 x gain x seen`. Home reads 2.29 deg and gain 1.00.
+
+### 2a. Planets and moons shadow each other
+
+A body between a planet and the star must darken that planet, wherever the
+player is.
+
+- **On the ground** (the player in the shadow): `PlanetSystem._light` already
+  measures how much of the star's disc every body leaves the camera (`seen`)
+  and scales the sun by it -- an eclipse dims the whole scene, with the
+  penumbra's soft edge. Unchanged.
+- **From space or another body** (built): each body's far look (the impostor)
+  and its halo take up to 4 shadowing bodies (`PlanetSystem._shadows_on`, each
+  frame in `_place`): those between it and the star, near enough the sun's
+  line. The shaders (`shaders/body_shadow.gdshaderinc`) do the same disc
+  arithmetic per pixel, so a moon's shadow is a soft round spot that moves
+  across its planet, a planet's shadow can swallow its moon, and the halo
+  dims in it.
+- **The voxel ground near the camera** is lit by the real sun, so the shadow
+  there is the camera's `seen` -- one value for the whole view. Only a few km
+  of ground are voxels and an umbra is hundreds of km across, so the edge of a
+  moon's shadow on the near ground is not drawn; from high up the impostor
+  shows it.
+- **Rings** do not shadow yet.
+
+### 2b. Clouds (later)
+
+There are no clouds yet. When they come, their shadows are faked, not
+shadow-mapped:
+
+- One cloud-cover function (noise in the planet's frame, drifting with the
+  wind), shared by the cloud layer and a **global shader uniform** set.
+- Shaders that take the sun (brick, ground, trees, the gun) multiply the sun's
+  light by the cover, sampled where the sun's ray from that pixel meets the
+  cloud height. On the voxel ground and bricks: a texture lookup a pixel.
+- The impostor takes the same function from space; `seen` at the camera dims
+  the whole view under thick cover, as the sun does in an eclipse.
+- Godot's `DirectionalLight3D` has no light cookie, so this is shader work, in
+  the rig's include alongside `body_shadow`.
+
 ## 3. Colour that does not paint the player
 
 Goal: worlds still differ, but a gun, a figure, a brick wall look like
@@ -86,8 +130,10 @@ themselves on every one.
   dusk, white at noon, none on airless worlds. This is the "depends where the
   player stands" part: it follows `sun_height` at the camera.
 - **Ground tint** capped at ~15%.
-- **Auto exposure** (`CameraAttributesPractical`) so stepping indoors and out
-  adapts rather than going black or blown out.
+- **Exposure** that adapts stepping indoors and out rather than going black
+  or blown out. Built as the rig's own (9), from the light it knows is at the
+  camera: Godot's auto exposure measures the picture a few frames late and
+  its limits are in ISO, hard to hold to "a room is darker than noon".
 
 ## 4. One light rig
 
@@ -173,12 +219,41 @@ light on all bricks, ships included -> optional SSAO/SSIL -> SDFGI experiment.
 
 | # | Step | Size | Test |
 |---|---|---|---|
-| 1 | `LightRig`; AgX; capped sky cast and ground tint; neutral ambient; sun colour from star and air; auto exposure | small, GDScript | screenshots on 6 generated worlds (red, green, airless, near/far star) + a gun close up; existing planet gates |
-| 2 | Sun size (`light_angular_distance`) and distance brightness (2) | small | shadow softness shot; frame cost, editor closed |
-| 3 | Moon/planet light (5) | small | night shots; a moon world under its planet |
-| 4 | Ambient boxes in rooms and ships (6.2) | small-medium | walk in/out of a building and a ship; probe count |
+| 1 | `LightRig`; AgX; capped sky cast and ground tint; neutral ambient; sun colour from star and air; auto exposure | small, GDScript | **built** (planet scene) |
+| 2 | Distance (2): **the sun's size** from the star's radius and distance (`light_angular_distance`, soft shadows); **its brightness** from the star's light at the camera against home's (`gain`) | small | **built**; frame cost of the soft shadows still to time, editor closed |
+| 2a | Planets and moons shadow each other: on the ground by `seen`; from space on impostors and halos (2a) | small | **built** |
+| 3 | Moon/planet light (5) | small | **built** |
+| 4 | Ambient boxes in buildings, stations and ships (6.2) | small-medium | **built** |
+| 4b | Clouds and their faked shadows (2b) | medium | when clouds come |
 | 5 | Grid skylight and lamp light (6.1) | large, C++ with Build mode | sealed room dark, blown wall lit, ship flying; mesh time per chunk |
 | 6 | SSAO/SSIL High, SDFGI Ultra (7) | small to try | GPU ms, editor closed, heat log after |
 
-Area: new, Lighting -- `light_rig.gd`, this doc; the planet and city scenes call
-the rig (small changes to theirs).
+Area: new, Lighting -- `light_rig.gd`, `shaders/body_shadow.gdshaderinc`, this
+doc; the planet and city scenes call the rig (small changes to theirs).
+
+## 9. Built (2026-11-02)
+
+In the planet scene only; the city, heightfield, terrain and sandbox scenes
+still build their own light (next: move them onto the rig).
+
+| Part | What | Where |
+|---|---|---|
+| Rig | sun, fill, environment, sky, exposure, ambient boxes | `scripts/light_rig.gd` (`LightRig`); `planet_scene._build_light` |
+| Sky cast | hue kept, luminance 1, no channel past 0.45 from 1: a red air was (2.2, 0.46, 0.3), now (1.45, 0.88, 0.83) | `LightRig.sky_cast` |
+| Ambient | 35% sky, 65% a neutral grey as bright as the sky; never under starlight (0.6 x a cool grey (0.4, 0.45, 0.6)) so a moonless night is dark but playable | `LightRig.set_sky` |
+| Ground tint | worlds 5-15% (was 10-40%), moons 15-35% (was 20-60%) of a hue | `star_system.gd` |
+| Tonemap | AgX | `LightRig.build` |
+| Sunlight | 25% the star's colour; air mass by `sun_height` reddens it (blue/red 0.87 at noon, 0.24 on the horizon); none without air | `LightRig.sunlight_colour` |
+| Exposure | the rig's own, not Godot's auto exposure: from the light at the camera (ambient, or a box's; the sun, a tenth of it inside a box), `sqrt(0.8 / light)`, 1 to 2, half-way in 0.5 s. Daylight 1.0, a room 1.9, night 2.0 | `LightRig.expose` |
+| Sun size, brightness | 2: home 2.29 deg, gain 1.00 | `LightRig.set_sun`, `PlanetSystem._light` |
+| Shadows between bodies | 2a: ground by `seen`; impostor and halo per pixel | `PlanetSystem._shadows_on`, `PlanetBody.set_shadowers`, `body_shadow.gdshaderinc` |
+| Fill | 5: brightest body over the horizon, `0.6 x sqrt(score)`, at most 0.35 of the sun; shadows at night above 0.02 | `PlanetSystem._fill`, `LightRig.set_fill` |
+| Ambient boxes | 6.2: every building laid in bricks ("room": 25% of outdoor ambient + 0.02), every station or ship module laid ("cabin": its own lights, 0.3); walls (0.45 m) left outside; reflections black inside; a toppled building's goes | `planet_scene._ambient_boxes`, `LightRig.add_box` |
+
+Gate: `res://scenes/planet.tscn -- --gate=light` (headless for the numbers;
+windowed adds pictures `shots/light_gate_*.png` and checks that the box
+darkens the picture and the exposure brightens it again).
+
+Known limits: a box does not know a blown wall (6.1 will); the fill at home's
+midnight is often none (its moon under the horizon); the soft shadows' frame
+cost is not timed yet (editor closed needed).

@@ -96,6 +96,11 @@ var airlock_cell := Vector3i(-1, -1, -1)
 var deck_rows := PackedInt32Array()
 var joints := []
 var _cut := {}
+## The air inside a generated one (Docs/Hulls.md 2-4): baked once from its recipe,
+## followed through every hit, let out through the holes.
+var air: HullAir
+## The pressure outside, atmospheres: 0 in space (1 parked on a world with air).
+var outside_pressure := 0.0
 ## A joint holds while this share of its bricks is left (Docs/Space.md 3.2).
 const JOINT_HOLD := 0.35
 
@@ -242,6 +247,8 @@ func activate() -> void:
 	# As it was left.
 	if not _dead.is_empty():
 		bricks.kill_blocks(chunk, _dead)
+		if air != null:
+			air.blocks_removed(bricks, chunk, _dead)
 	bricks.set_chunk_anchored(chunk, true)
 	bricks.set_tension_per_stud(chunk, BrickStrength.tension())
 	bricks.set_chunk_section_plates(chunk, SECTION_PLATES)
@@ -261,6 +268,10 @@ func activate() -> void:
 	crumbs = PlanetCrumbs.new()
 	add_child(crumbs)
 	crumbs.setup(gravity_centre)
+	if air != null:
+		# Crumbs inside drawn out of a hole with the air (Docs/Hulls.md 4).
+		crumbs.wind = func(p: Vector3) -> Vector3:
+			return air_at(p, true).get("pull", Vector3.ZERO)
 	_band_next = 0
 	bricks.bake_chunk_async(chunk)
 	lay_ms = (Time.get_ticks_usec() - t0) / 1000.0
@@ -394,6 +405,8 @@ func holds(p: Vector3) -> bool:
 
 func _after_kill(killed: PackedInt32Array) -> void:
 	bricks_killed += killed.size()
+	if air != null:
+		air.blocks_removed(bricks, chunk, killed)
 	_collision.disable(killed)
 	for b in _collision.bands_of(killed):
 		if not _remesh.has(b):
@@ -454,6 +467,7 @@ func _process(_delta: float) -> void:
 	if chunk < 0:
 		return
 	if bricked:
+		_air_step(_delta)
 		if not riding:
 			_damage_step()
 		else:
@@ -606,6 +620,9 @@ func _prepare_generated() -> void:
 		_joints_of()
 	var c := bricks.create_chunk(Vector3i.ZERO, recipe.chunk_dims())
 	recipe.build(bricks, c, _palette)
+	air = HullAir.bake(bricks, c, recipe)
+	print("[station] %s: %d cells of air in %d room(s), baked in %.0f ms" % [data.orbital_name,
+			air.inside_cells(), air.compartments().size(), air.bake_ms])
 	_template = bricks.save_template(c)
 	bricks.release_chunk(c)
 	_generated_shell()
@@ -648,6 +665,48 @@ func _generated_shell() -> void:
 		cs.position = b.get_center()
 		shell_body.add_child(cs)
 	shell_body.transform = frame
+
+
+## The air's tick: its doors as they stand (an open one links two rooms, the airlock
+## open is a hole), then out through the holes.
+func _air_step(dt: float) -> void:
+	if air == null:
+		return
+	if doors != null:
+		var st := doors.open_states(0)
+		for i in mini(st.size(), air.doors.size()):
+			air.set_door(i, bool(st[i]))
+	air.step(dt, outside_pressure)
+
+
+## Cells next to one, nearest first, then up (what lies on a floor is under its air).
+const _NEAR := [Vector3i(0, 1, 0), Vector3i(1, 0, 0), Vector3i(-1, 0, 0), Vector3i(0, 0, 1), Vector3i(0, 0, -1),
+		Vector3i(1, 1, 0), Vector3i(-1, 1, 0), Vector3i(0, 1, 1), Vector3i(0, 1, -1), Vector3i(0, 2, 0),
+		Vector3i(1, 0, 1), Vector3i(-1, 0, 1), Vector3i(1, 0, -1), Vector3i(-1, 0, -1), Vector3i(0, -1, 0)]
+
+
+## The air at world point `p` (Docs/Hulls.md 4): {pressure (atmospheres), pull (the
+## rush toward a hole, world m/s^2), breached, venting (air going out now)}; empty
+## where `p` is not in its air.
+## `near`: a point in a brick or on its face (a crumb lying by a wall, feet on a floor)
+## takes the air of a cell next to it.
+func air_at(p: Vector3, near := false) -> Dictionary:
+	if air == null or chunk < 0 or not bricked or not holds(p):
+		return {}
+	var c := cell_at(p)
+	var at := Vector3i(c.floor())
+	var ci := air.compartment_at(at)
+	if ci < 0 and near:
+		for o in _NEAR:
+			ci = air.compartment_at(at + o)
+			if ci >= 0:
+				c = Vector3(at + o) + Vector3(0.5, 0.5, 0.5)
+				break
+	if ci < 0:
+		return {}
+	var pull := air.pull_at(c, BrickWorld.get_cell_size())
+	return {"pressure": air.pressure(ci), "pull": (global_transform * frame).basis * pull,
+			"breached": air.is_breached(ci), "venting": air.vent_rate(ci) > 0.001}
 
 
 ## Build cell `c`'s bottom middle, in its own space (a generated one's).
