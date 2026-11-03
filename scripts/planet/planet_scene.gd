@@ -21,6 +21,7 @@ extends Node3D
 ##   -- --gate=trees: a tank knocks a tree down; a truck is stopped by one
 ##   (11.10, trees and vehicles).
 ##   -- --gate=squad: a squad on the AI's nav region round the town (11.8 N2)
+##   walks to the player round the curve, takes cover, fires.
 ##   -- --gate=garrison: a generated world's own AI and a town's squad (11.12 step 7)
 ##   -- --gate=save --stage=1|2|3: the universe saved and come back to, run by run
 ##   -- --gate=home: home's town: quiet at the spawn, a fight walked into, its waves
@@ -28,7 +29,7 @@ extends Node3D
 ##   -- --gate=seat: the ship smooth near a planet, out of its seat, the map, open space
 ##   -- --gate=hull: the generated ship (Docs/RoomModules.md 7.5): laid in bricks,
 ##   up its gangway and in by its airlock, flown from the bridge's seat, stood in
-##   walks to the player round the curve, takes cover, fires.
+##   its bridge, its rooms furnished (KitFurnish).
 ##   -- --gate=travel: a squad ordered 200 m out of the town on the nav net
 ##   (11.8 N4), across the regions' borders.
 ##   -- --gate=far: two squads fight on the far side of the town, in a region
@@ -2785,6 +2786,46 @@ func _run_hull_gate() -> void:
 			and ship.bricks.get_alive_block_count(ship.chunk) == laid and loose.is_empty(),
 			"%d loose group(s)" % loose.size())
 	await _shot("hull_gate_bridge")
+	# Its rooms furnished (KitFurnish): looking aft across the bridge from the seat.
+	var from := int((ship.recipe.meta.get("furniture", {}) as Dictionary).get("from", ship.recipe.size()))
+	var furnished := ship.recipe.size() - from
+	_check("its rooms furnished, in bricks", furnished > 0, "%d furniture brick(s)" % furnished)
+	# Stood in the middle of its most furnished room (kept clear), facing its furniture.
+	var best := {}
+	var best_n := 0
+	var toward := Vector3.ZERO
+	for sp: Dictionary in ship.recipe.meta.structure.spaces:
+		var cols := {}
+		for cc in sp.get("columns", []):
+			cols[Vector2i(int(cc[0]), int(cc[1]))] = true
+		var n := 0
+		var sum := Vector3.ZERO
+		for i in ship.recipe.size():
+			var at := ship.recipe.cell_of(i)
+			if i >= from and cols.has(Vector2i(at.x, at.z)) and at.y > int(sp.floor_y) and at.y < int(sp.ceil_y):
+				n += 1
+				sum += Vector3(at)
+		if n > best_n:
+			best_n = n
+			best = sp
+			toward = sum / n
+	if best_n > 0:
+		var lo := Vector2i(1 << 30, 1 << 30)
+		var hi := -lo
+		for cc in best.columns:
+			lo = Vector2i(mini(lo.x, int(cc[0])), mini(lo.y, int(cc[1])))
+			hi = Vector2i(maxi(hi.x, int(cc[0])), maxi(hi.y, int(cc[1])))
+		var org := ship.recipe.origin()
+		var mid := Vector3i((lo.x + hi.x) / 2, int(best.floor_y) + 1, (lo.y + hi.y) / 2)
+		var stand := ship.global_transform * ship.cell_point(mid - org)
+		pawn.place(stand)
+		await get_tree().create_timer(0.5).timeout
+		var look := ship.global_transform * ship.cell_point(Vector3i(toward) - org) - stand
+		_face(Gravity.flat(look, Gravity.up_at(stand)).normalized())
+		cam.global_transform.basis = cam.global_transform.basis * Basis(Vector3.RIGHT, -0.6)
+		await get_tree().create_timer(0.3).timeout
+		print("[planet] hull_gate_room: %s, %d furniture brick(s)" % [String(best.kind), best_n])
+	await _shot("hull_gate_room")
 	print("[planet] gate: %d ok, %d FAIL" % [_ok, _fail])
 	get_tree().quit(1 if _fail > 0 else 0)
 

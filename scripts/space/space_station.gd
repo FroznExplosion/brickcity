@@ -580,6 +580,8 @@ func _prepare_generated() -> void:
 		prepare()
 		return
 	recipe = made.recipe
+	if not ship:
+		made.stats["furniture"] = KitFurnish.furnish(recipe, data.orbital_seed)
 	var size: Vector3i = recipe.bounds()[1]
 	data.fx = size.x
 	data.fz = size.z
