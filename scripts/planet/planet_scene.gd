@@ -109,6 +109,8 @@ var sun: DirectionalLight3D
 var sky_mat: ProceduralSkyMaterial
 var env: Environment
 var hud: Label
+## Low air in a ship or station (Docs/Hulls.md 4): a warning in the middle at the top.
+var air_warn: Label
 
 const VIEW_MIN := 1536
 const VIEW_MAX := 6144
@@ -823,6 +825,17 @@ func _build_hud() -> void:
 	hud.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.8))
 	hud.add_theme_constant_override("outline_size", 4)
 	layer.add_child(hud)
+	air_warn = Label.new()
+	air_warn.set_anchors_preset(Control.PRESET_CENTER_TOP)
+	air_warn.position = Vector2(-160, 60)
+	air_warn.size = Vector2(320, 30)
+	air_warn.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	air_warn.add_theme_font_size_override("font_size", 22)
+	air_warn.add_theme_color_override("font_color", Color(1.0, 0.35, 0.25))
+	air_warn.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.9))
+	air_warn.add_theme_constant_override("outline_size", 6)
+	air_warn.visible = false
+	layer.add_child(air_warn)
 	add_child(layer)
 	if system != null:
 		var over := CanvasLayer.new()
@@ -852,6 +865,20 @@ func _build_hud() -> void:
 			veil(true)
 
 
+## The air where the player is (a ship's or station's, Docs/Hulls.md 4): pulled toward a
+## hole while it rushes out, warned when it runs low.
+func _air_tick() -> void:
+	var a := system.air_at(walker.global_position + walker.up * 1.0)
+	walker.push = a.get("pull", Vector3.ZERO)
+	if air_warn == null:
+		return
+	var p := float(a.get("pressure", 1.0))
+	var venting := bool(a.get("venting", false))
+	air_warn.visible = not a.is_empty() and (p < HullAir.LOW or venting)
+	if air_warn.visible:
+		air_warn.text = ("HULL BREACH  air %d%%" if venting else "LOW AIR  %d%%") % roundi(p * 100.0)
+
+
 func _process(_delta: float) -> void:
 	var now := Time.get_ticks_usec()
 	if _last_us > 0:
@@ -877,6 +904,7 @@ func _process(_delta: float) -> void:
 			system.on_origin_shift()
 	if system != null:
 		walker.match_velocity = system.match_velocity(walker.global_position)
+		_air_tick()
 		walker.reach = body.altitude_of(walker.global_position)
 	if _stepping_out >= 0 and (ship.bricked or Time.get_ticks_msec() - _stepping_out > STEP_OUT_WAIT):
 		_stepping_out = -1

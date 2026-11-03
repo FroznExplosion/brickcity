@@ -361,6 +361,36 @@ func hour_at(p: Vector3) -> float:
 
 
 ## The buildings of the world the player is on, or null.
+## How high a world's air reaches, as a share of its radius (its sky's shell is at
+## 1.08): full to AIR_FULL, thinning to none at AIR_TOP.
+const AIR_FULL := 0.04
+const AIR_TOP := 0.08
+
+
+## Each ship's and station's outside pressure (Docs/Hulls.md 4): a world's air
+## where it is in it -- parked, its airlock open lets nothing out -- else space's none.
+func _outside_air() -> void:
+	for st in stations:
+		if st.air == null:
+			continue
+		var b := nearest(st.global_position)
+		var p := 0.0
+		if b != null and b.data.has_air:
+			var h := b.altitude_of(st.global_position) / maxf(b.data.radius, 1.0)
+			p = clampf((AIR_TOP - h) / (AIR_TOP - AIR_FULL), 0.0, 1.0)
+		st.outside_pressure = p
+
+
+## The air at world point `p` inside a ship or station (SpaceStation.air_at): {pressure,
+## pull, breached}, or empty when `p` is in none.
+func air_at(p: Vector3) -> Dictionary:
+	for st in stations:
+		var a := st.air_at(p)
+		if not a.is_empty():
+			return a
+	return {}
+
+
 func buildings_here() -> PlanetBuildings:
 	return built.get(anchor) if anchor != null else null
 
@@ -379,6 +409,7 @@ func on_origin_shift() -> void:
 func _process(delta: float) -> void:
 	if not frozen:
 		t += delta * time_scale
+	_outside_air()
 	for s in ships:
 		s.fly(self, delta)
 	_ship_refs()

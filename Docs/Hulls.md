@@ -120,6 +120,35 @@ Air moves fast; it does not need to flow brick by brick. **One pressure per comp
 **Gate:** in `hull_air_probe`: pressure in a breached compartment falls at the expected rate,
 stops when sealed, and the next compartment over (bulkhead closed) does not change.
 
+### 4.1 Built: venting (2026-11-02)
+
+- **HullAir keeps an amount of air per compartment** (cells x atmospheres), so pressure is
+  air / cells: two rooms joined add theirs, freed cells joining a room thin it, a patched pocket
+  comes in empty. `step(dt, outside)`: a breached room `p -> outside + (p - outside) e^(-k dt)`,
+  `k = VENT_K * holes / cells` (VENT_K 30: a 180-cell room with a one-cell hole is at 85 % after
+  a second; a big wall gone empties a cabin in about one); open doors between rooms even them out
+  (no air lost); a sealed room is topped up by the ship's SUPPLY (2 % a second).
+- **The rush:** `pull_at(cell, cell_m)` -- toward the room's nearest hole, up to PULL 30 m/s^2,
+  falling off past 3 m, scaled by how fast the air is going and how much is left. The player's
+  walker takes it as a drift (`PlanetWalker.push`): the floor takes it back off in a quarter of a
+  second, the air slowly, so standing by a hole drags you to it and off your feet you go.
+- **Wired into generated ships and stations** (`SpaceStation.air`): baked in `prepare` with the
+  template (~265 ms for seed 1, once), every hit followed in `_after_kill` (the bricks killed and
+  what the solve sends off), the doors' states each tick (`BuildDoors.open_states`: swung open,
+  or the leaf gone with its lintel), stepped while bricked, flown or not.
+- **Outside air:** `PlanetSystem` sets each ship's `outside_pressure` -- 1 in a world's air
+  (to 4 % of its radius up), thinning to 0 at 8 % -- so a ship parked on a planet with its
+  airlock open loses nothing.
+- **HUD:** `PlanetSystem.air_at(p)` / `SpaceStation.air_at` (pressure, pull, breached, venting);
+  the planet scene shows **HULL BREACH air N %** while the room the player is in is losing air,
+  **LOW AIR N %** under 50 %.
+- Gates: `hull_air_probe` 13 (the expected rate after 1 s, no other room changes, the rush toward
+  the hole, sealed stops and refills, an open door evens two rooms out); `ship_vent_probe` 9
+  (a real ship: baked, doors lined up, a hull brick killed through the hit path, air_at, a far
+  room untouched, sealed, a world's air lets nothing out). planet `--gate=hull` 11 ok.
+- **Not yet:** loose pieces and crumbs drawn out of the hole (only the player is pulled); dust
+  drawn at the hole; what low air does to a player (suit, damage -- §10).
+
 ## 5. Flooding: water brick by brick
 
 Inside the hull, water is the **3D cell automaton** Water.md 12.1 already designed after STA,

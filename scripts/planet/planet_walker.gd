@@ -35,6 +35,12 @@ const FAST_FLY := 500.0
 ## approach slows itself.
 var inertia := Vector3.ZERO
 var match_velocity := Vector3.ZERO
+## Pushed from outside, m/s^2 -- air rushing out of a hole in a hull (Docs/Hulls.md
+## 4): it builds a drift that the floor takes back off fast and the air slowly.
+var push := Vector3.ZERO
+var _drift := Vector3.ZERO
+const DRIFT_FLOOR := 0.25
+const DRIFT_AIR := 3.0
 var reach := 0.0
 const MATCH_TIME := 3.0
 const CRUISE := 0.5
@@ -124,7 +130,10 @@ func _physics_process(delta: float) -> void:
 	camera.rotation = Vector3(pitch, 0.0, 0.0)
 	if frozen:
 		velocity = Vector3.ZERO
+		_drift = Vector3.ZERO
 		return
+	_drift += push * delta
+	_drift *= exp(-delta / (DRIFT_FLOOR if is_on_floor() and not flying else DRIFT_AIR))
 	var w := wish
 	var run := false
 	var rise_in := rise
@@ -143,7 +152,7 @@ func _physics_process(delta: float) -> void:
 			v = v.normalized()
 		var fast := maxf(maxf(FAST_FLY, fly_speed * 10.0), minf(reach * CRUISE, CRUISE_MAX))
 		inertia = inertia.lerp(match_velocity, 1.0 - exp(-delta / MATCH_TIME))
-		velocity = v * (fast if run else fly_speed) + inertia
+		velocity = v * (fast if run else fly_speed) + inertia + _drift
 		up_direction = up
 		move_and_slide()
 		return
@@ -159,6 +168,6 @@ func _physics_process(delta: float) -> void:
 	var across := r * w.x + f * w.y
 	if across.length_squared() > 1.0:
 		across = across.normalized()
-	velocity = across * (RUN_SPEED if run else WALK_SPEED) + up * v_up
+	velocity = across * (RUN_SPEED if run else WALK_SPEED) + up * v_up + _drift
 	up_direction = up
 	move_and_slide()
