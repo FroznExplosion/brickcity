@@ -107,6 +107,7 @@ func _tick() -> void:
 	_round9()
 	_round10()
 	_one_place()
+	_colours()
 	_form()
 	_resize()
 	_curves()
@@ -1157,6 +1158,85 @@ func _round9() -> void:
 ## Everything in one place (2026-10-24): a block-out outside the build area is not
 ## converted to nothing; a mirror plane far from the build is moved onto it and its
 ## images outside the area are not drawn; the gizmo only in "pick and move".
+## A model's colours reach the bricks, and come back through Bricks to clay
+## (Docs/AssetWorkshop.md, "Colour from model to bricks").
+func _colours() -> void:
+	print("[probe] colours: model to clay to bricks and back")
+	_ws._reset_space()
+	_ws.rail_pick("sculpt")
+	_ws.convert_mirror = false
+	# In PLA (the probe's earlier rounds leave the hotbar on another material).
+	var keep_mat: int = _ws._mat
+	_ws._mat = 0
+	var red := ColourMatch.nearest(Color(0.9, 0.1, 0.1))
+	var blue := ColourMatch.nearest(Color(0.1, 0.2, 0.85))
+	var lo: Vector3 = _ws.sculpt.to_sample(Vector3(500, 4, 500) * STUD)
+	lo = lo.floor()
+	var hi := lo + Vector3(40, 20, 40)
+	var mid := (lo.y + hi.y) * 0.5
+	var v := PackedVector3Array()
+	var c := PackedColorArray()
+	var quads := [
+		[Vector3(lo.x, hi.y, lo.z), Vector3(lo.x, hi.y, hi.z), Vector3(hi.x, hi.y, hi.z), Vector3(hi.x, hi.y, lo.z), true],
+		[Vector3(lo.x, lo.y, lo.z), Vector3(hi.x, lo.y, lo.z), Vector3(hi.x, lo.y, hi.z), Vector3(lo.x, lo.y, hi.z), false]]
+	for half in [[mid, hi.y, true], [lo.y, mid, false]]:
+		var y0: float = half[0]
+		var y1: float = half[1]
+		quads.append([Vector3(lo.x, y0, lo.z), Vector3(lo.x, y1, lo.z), Vector3(hi.x, y1, lo.z), Vector3(hi.x, y0, lo.z), half[2]])
+		quads.append([Vector3(lo.x, y0, hi.z), Vector3(hi.x, y0, hi.z), Vector3(hi.x, y1, hi.z), Vector3(lo.x, y1, hi.z), half[2]])
+		quads.append([Vector3(lo.x, y0, lo.z), Vector3(lo.x, y0, hi.z), Vector3(lo.x, y1, hi.z), Vector3(lo.x, y1, lo.z), half[2]])
+		quads.append([Vector3(hi.x, y0, lo.z), Vector3(hi.x, y1, lo.z), Vector3(hi.x, y1, hi.z), Vector3(hi.x, y0, hi.z), half[2]])
+	for q in quads:
+		for t in [[0, 1, 2], [0, 2, 3]]:
+			for j in t:
+				v.append(q[j])
+				c.append(Color(0.9, 0.1, 0.1) if q[4] else Color(0.1, 0.2, 0.85))
+	var idx := PackedInt32Array()
+	for i in v.size():
+		idx.append(i)
+	_ws.sculpt.form.begin_edit()
+	_ws.sculpt.form.stamp_mesh(SdfForm.ADD, v, idx, _ws.part_sel + 1, c)
+	_ws._sculpt_record(_ws.sculpt.form.end_edit())
+	_ws.sculpt_convert()
+	var counts := _colour_counts()
+	# Matched in the material the bricks were laid in (the part's).
+	var lm: int = _ws.recipe.material_of(0) if _ws.recipe.size() > 0 else 0
+	red = ColourMatch.nearest(Color(0.9, 0.1, 0.1), lm)
+	blue = ColourMatch.nearest(Color(0.1, 0.2, 0.85), lm)
+	_ok("Make bricks: the model's red top and blue bottom", _ws.sculpt_state == "bricks"
+			and counts.get(red, 0) > 0 and counts.get(blue, 0) > 0 and counts.size() == 2,
+			"%s, material %d: red %d blue %d" % [counts, lm, red, blue])
+	_ws.sculpt_to_sdf()
+	_ws.sculpt_convert()
+	var again := _colour_counts()
+	_ok("Bricks to clay and back: the same colours", again == counts, "%s -> %s" % [counts, again])
+	# In metal: the same clay matched to metal's own colours, none of them filament.
+	_ws._reset_space()
+	_ws.rail_pick("sculpt")
+	_ws._mat = keep_mat
+	_ws.sculpt.form.begin_edit()
+	_ws.sculpt.form.stamp_mesh(SdfForm.ADD, v, idx, _ws.part_sel + 1, c)
+	_ws._sculpt_record(_ws.sculpt.form.end_edit())
+	_ws.sculpt_convert()
+	var mc := _colour_counts()
+	var in_mat := true
+	for k in mc:
+		in_mat = in_mat and k < BrickWorld.get_material_colour_count(keep_mat)
+	_ok("Make bricks in material %d: its own colours" % keep_mat, mc.size() >= 1 and in_mat, str(mc))
+	_ws._mat = keep_mat
+	_ws._reset_space()
+
+
+## Bricks' colour index -> how many cells they cover.
+func _colour_counts() -> Dictionary:
+	var out := {}
+	for i in _ws.recipe.size():
+		var sz := BrickPalette.size_of(_ws.recipe.part_of(i))
+		var k: int = _ws.recipe.colour_of(i)
+		out[k] = int(out.get(k, 0)) + sz.x * sz.y * sz.z
+	return out
+
+
 func _one_place() -> void:
 	print("[probe] one place: the area, the mirror, the gizmo")
 	_ws._reset_space()

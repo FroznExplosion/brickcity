@@ -4519,25 +4519,38 @@ func _picked_guide() -> int:
 	return guides.size() - 1
 
 
-## A mesh's surfaces as one triangle soup [vertices, index]: a model split by material
-## into surfaces is still one closed solid, and the stamp tells inside from outside by
-## counting crossings through all of it at once.
+## A mesh's surfaces as one triangle soup [vertices, index, colours]: a model split by
+## material into surfaces is still one closed solid, and the stamp tells inside from
+## outside by counting crossings through all of it at once. Colours one a vertex (ModelMesh
+## gives each surface its material's), empty when no surface has any; a surface without
+## them gets none (alpha 0: its part's colour).
 static func _mesh_soup(mesh: Mesh) -> Array:
 	var v := PackedVector3Array()
 	var idx := PackedInt32Array()
+	var cols := PackedColorArray()
+	var any_col := false
 	for si in mesh.get_surface_count():
 		var arr := mesh.surface_get_arrays(si)
 		var sv: PackedVector3Array = arr[Mesh.ARRAY_VERTEX]
 		var si_idx = arr[Mesh.ARRAY_INDEX]
 		var base := v.size()
 		v.append_array(sv)
+		var sc = arr[Mesh.ARRAY_COLOR]
+		if sc != null and (sc as PackedColorArray).size() == sv.size():
+			cols.append_array(sc)
+			any_col = true
+		else:
+			var none := PackedColorArray()
+			none.resize(sv.size())
+			none.fill(Color(0, 0, 0, 0))
+			cols.append_array(none)
 		if si_idx == null or (si_idx as PackedInt32Array).is_empty():
 			for k in sv.size():
 				idx.append(base + k)
 		else:
 			for k in (si_idx as PackedInt32Array):
 				idx.append(base + k)
-	return [v, idx]
+	return [v, idx, cols if any_col else PackedColorArray()]
 
 
 ## A soup into the current part's field, placed by `xf` (global). Inside an edit.
@@ -4546,7 +4559,7 @@ func _stamp_soup(soup: Array, xf: Transform3D, op: int) -> void:
 	var v: PackedVector3Array = (soup[0] as PackedVector3Array).duplicate()
 	for i in v.size():
 		v[i] = to_s * v[i]
-	sculpt.form.stamp_mesh(op, v, soup[1], part_sel + 1)
+	sculpt.form.stamp_mesh(op, v, soup[1], part_sel + 1, soup[2] if soup.size() > 2 else PackedColorArray())
 
 
 ## Size and smoothness of the whole block-out, each one undo.
@@ -5101,6 +5114,42 @@ func _brick_cell_list() -> PackedInt32Array:
 	return out
 
 
+## Each cell's brick's colour, one for each cell of `list` (as `_brick_cell_list` gives it),
+## for `sync_cells`: the clay keeps the bricks' colours, so Make bricks gives them back
+## (Docs/AssetWorkshop.md, "Colour from model to bricks"). Alpha 0 where no brick is.
+func _brick_colours(list: PackedInt32Array) -> PackedColorArray:
+	var at := {}
+	for i in recipe.size():
+		if _brick_frame(i) != 0:
+			continue
+		var c := recipe.cell_of(i)
+		var size := BrickPalette.size_of(recipe.part_of(i))
+		var col := BrickWorld.get_material_colour(recipe.material_of(i), recipe.colour_of(i))
+		col.a = 1.0
+		for dx in size.x:
+			for dy in size.y:
+				for dz in size.z:
+					at[c + Vector3i(dx, dy, dz)] = col
+	var out := PackedColorArray()
+	out.resize(list.size() / 5)
+	for j in range(0, list.size() - list.size() % 5, 5):
+		out[j / 5] = at.get(Vector3i(list[j], list[j + 1], list[j + 2]), Color(0, 0, 0, 0))
+	return out
+
+
+## Each solid cell's own colour as a colour index of `material` (a filament one within
+## `convert_palette`; wood, metal and stone their own variants), from the clay's colours:
+## cells -> index. Empty when the clay has none (all drawn by brush).
+func _cell_colour_map(cells: PackedInt32Array, material: int = 0) -> Dictionary:
+	var idx := ColourMatch.indices(material, convert_palette)
+	var got := sculpt.form.cell_colours(ColourMatch.colours(material, idx))
+	var out := {}
+	for i in got.size():
+		if got[i] >= 0:
+			out[Vector3i(cells[i * 5], cells[i * 5 + 1], cells[i * 5 + 2])] = idx[got[i]]
+	return out
+
+
 ## What Convert and Edit as SDF change besides bricks and the field, for undo.
 func _sculpt_state() -> Dictionary:
 	return {"state": sculpt_state, "cells": _sdf_cells.duplicate(), "stash": _sdf_stash.duplicate(true),
@@ -5140,7 +5189,7 @@ func _bricks_into_field(before: PackedInt32Array, shell_cells := PackedInt32Arra
 	for i in range(0, shell_cells.size(), 5):
 		if not have.has(Vector3i(shell_cells[i], shell_cells[i + 1], shell_cells[i + 2])):
 			after.append_array(shell_cells.slice(i, i + 5))
-	sculpt.form.sync_cells(before, after)
+	sculpt.form.sync_cells(before, after, _brick_colours(after))
 	# Each part's colour, as most of its bricks had it: Make bricks gives it back.
 	var tally := {}
 	for i in recipe.size():
@@ -5223,6 +5272,11 @@ func sculpt_convert() -> void:
 	for m in models:
 		sculpt.form.combine((m.node as AssetSculpt).form, int(m.op), _model_labels(m))
 	var cells := sculpt.form.cells()
+	# The clay's own colours (a model's), one a cell: a brick takes its cell's, else its
+	# part's (Docs/AssetWorkshop.md, "Colour from model to bricks"). Matched to the
+	# material each part is laid in, once a material (`own_mat`).
+	var own_col := _cell_colour_map(cells)
+	var own_mat := {0: own_col}
 	var label_of := {}
 	var zone := {}
 	for i in range(0, cells.size(), 5):
@@ -5244,14 +5298,14 @@ func sculpt_convert() -> void:
 	# plane on a stud line.
 	var sym := convert_mirror
 	var pz := 0
+	var near_n := 0
+	var far_n := 0
 	if sym:
 		if not is_equal_approx(mirror_z, roundf(mirror_z)):
 			set_mirror_z(ceilf(mirror_z))
 			_show_sculpt_note(true, "The mirror was on a stud's middle: moved half a stud to a stud line, "
 					+ "so the two halves can be joined. Centre on mirror lines the model up with it.")
 		pz = int(roundf(mirror_z))
-		var near_n := 0
-		var far_n := 0
 		for c in label_of:
 			if c.z < pz:
 				near_n += 1
@@ -5261,9 +5315,12 @@ func sculpt_convert() -> void:
 			label_of = _flipped_z(label_of, pz)
 			zone = _flipped_z(zone, pz)
 			brick_at = _flipped_z(brick_at, pz)
+			own_col = _flipped_z(own_col, pz)
+		own_mat[0] = own_col
 		_symmetric(label_of, pz)
 		_symmetric(zone, pz)
 		_symmetric(brick_at, pz)
+		_symmetric(own_col, pz)
 		_sdf_shell = PackedInt32Array()
 		for c in label_of:
 			if not brick_at.has(c):
@@ -5318,14 +5375,30 @@ func sculpt_convert() -> void:
 				best = t[cm]
 				part_col[label] = cm
 	_sdf_stash = []
+	# Packed apart by part and by colour: a brick is one colour, the cell's own matched to
+	# the colours of the material its part is laid in.
 	var by_part := {}
 	for c in brick_at:
 		if not used.has(c) and in_area(c):
-			(by_part.get_or_add(maxi(1, int(label_of[c])), {}) as Dictionary)[c] = true
-	for label in by_part:
-		part_sel = clampi(int(label) - 1, 0, part_names.size() - 1)
+			var lab := maxi(1, int(label_of[c]))
+			var pm: int = (part_col.get(lab, [-1, -1]) as Array)[1]
+			pm = pm if pm >= 0 else _mat
+			if not own_mat.has(pm):
+				var mm := _cell_colour_map(cells, pm)
+				if sym:
+					if far_n > near_n:
+						mm = _flipped_z(mm, pz)
+					_symmetric(mm, pz)
+				own_mat[pm] = mm
+			var oc: int = (own_mat[pm] as Dictionary).get(c, -1)
+			(by_part.get_or_add(Vector2i(lab, oc), {}) as Dictionary)[c] = true
+	for group in by_part:
+		var label: int = group.x
+		part_sel = clampi(label - 1, 0, part_names.size() - 1)
 		var col: Array = part_col.get(part_sel + 1, [-1, -1])
-		var left: Dictionary = by_part[label]
+		if group.y >= 0:
+			col = [group.y, col[1]]
+		var left: Dictionary = by_part[group]
 		var mirror := false
 		if sym:
 			# The two columns either side of the plane first, bricks two studs across on it:
@@ -5381,10 +5454,34 @@ func sculpt_convert() -> void:
 	for c in label_of:
 		if not zone.has(c):
 			smooth_parts_now[part_names[clampi(int(label_of[c]) - 1, 0, part_names.size() - 1)]] = true
+	# A custom piece is one colour: the one most of its own clay has, when the clay has
+	# colours (a model's), else its first brick's.
+	var piece_tally := {}   # part name -> {colour: cells}
+	for i in range(0, _sdf_shell.size(), 5):
+		var c := Vector3i(_sdf_shell[i], _sdf_shell[i + 1], _sdf_shell[i + 2])
+		var pname: String = part_names[clampi(_sdf_shell[i + 3] - 1, 0, part_names.size() - 1)]
+		var pm: int = (part_col.get(_sdf_shell[i + 3], [-1, -1]) as Array)[1]
+		pm = pm if pm >= 0 else _mat
+		if not own_mat.has(pm):
+			var mm := _cell_colour_map(cells, pm)
+			if sym:
+				if far_n > near_n:
+					mm = _flipped_z(mm, pz)
+				_symmetric(mm, pz)
+			own_mat[pm] = mm
+		var oc: int = (own_mat[pm] as Dictionary).get(c, -1)
+		if oc >= 0:
+			var pt: Dictionary = piece_tally.get_or_add(pname, {})
+			pt[[oc, pm]] = int(pt.get([oc, pm], 0)) + 1
 	for part in smooth_parts_now:
 		part_bricks[part] = laid.get(part, [])
 		var st: Dictionary = shells.get(part, {})
 		var col: Array = colour_of.get(part, [int(st.get("colour", 0)), int(st.get("mat", 0))])
+		var most := 0
+		for cm in piece_tally.get(part, {}):
+			if piece_tally[part][cm] > most:
+				most = piece_tally[part][cm]
+				col = cm
 		shells[part] = {"sdf": true, "thick": 0.0, "res": 1, "tris": int(st.get("tris", SDF_PIECE_TRIS)),
 				"colour": col[0], "mat": col[1]}
 	# Only the cells that could become bricks: what the custom pieces and Bricks to clay read.
@@ -6732,6 +6829,10 @@ var _sdf_stash := []
 var clay_bricks := {}
 ## Make bricks mirrors one half onto the other only when this is ticked; off, as drawn.
 var convert_mirror := false
+## The filament colours Make bricks may give a brick from the clay's own colours (an area's
+## palette, AreaPalette); empty: all of them (Docs/AssetWorkshop.md, "Colour from model to
+## bricks").
+var convert_palette := PackedInt32Array()
 ## The clay's size for the readout, worked out when the clay changes.
 var _clay_size_text := ""
 ## Each part's colour as its bricks had it most when they were turned into clay (label ->
@@ -10789,6 +10890,9 @@ func _colour_model(m: Dictionary) -> void:
 			col = col.lerp(Color.WHITE, 0.5)
 		pal.append(col)
 	node.palette = pal
+	# Its own colours, as the model has them -- but a model that carves shows red, and a
+	# piece picked with the mouse in its part's colour, lighter.
+	node.own_colours = int(m.op) != SdfForm.REMOVE and int(m.get("piece", -1)) < 0
 	node.remesh_all()
 
 
@@ -10804,7 +10908,7 @@ func _stamp_model(m: Dictionary) -> void:
 		var v: PackedVector3Array = (soup[0] as PackedVector3Array).duplicate()
 		for i in v.size():
 			v[i] = to_s * v[i]
-		node.form.stamp_mesh(SdfForm.ADD, v, soup[1], k + 1)
+		node.form.stamp_mesh(SdfForm.ADD, v, soup[1], k + 1, soup[2] if soup.size() > 2 else PackedColorArray())
 	node.remesh_all()
 
 
@@ -11104,7 +11208,7 @@ func clay_part(i: int) -> int:
 	_begin_gather()
 	var was := _sculpt_state()
 	sculpt.form.begin_edit()
-	sculpt.form.sync_cells(PackedInt32Array(), back)
+	sculpt.form.sync_cells(PackedInt32Array(), back, _brick_colours(back))
 	var rec := sculpt.form.end_edit()
 	sculpt.remesh()
 	_batch = true
