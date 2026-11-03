@@ -223,6 +223,49 @@ static func shape_cells(sh: Dictionary) -> Dictionary:
 	return out
 
 
+## `shape_cells`, only inside `box`: a big building's cells are many and a cut reaches few.
+static func shape_cells_in(sh: Dictionary, box: AABB) -> Dictionary:
+	var lo := Vector3i(box.position.floor())
+	var hi := Vector3i(box.end.ceil())
+	var out := {}
+	if String(sh.get("kind", "")) == "plan":
+		var region := plan_region(sh.get("points", {}))
+		var walls := region if bool(sh.get("fill", false)) else ring(region, int(sh.get("rim", 1)))
+		var near_floor := []
+		var near_wall := []
+		for c in region:
+			if c.x >= lo.x and c.x < hi.x and c.y >= lo.z and c.y < hi.z:
+				near_floor.append(c)
+				if walls.has(c):
+					near_wall.append(c)
+		var at := int(sh.get("at", 0))
+		for y in range(maxi(at, lo.y), mini(at + maxi(1, int(sh.get("depth", 1))), hi.y)):
+			for c in near_floor if plan_band(sh, y) == "floor" else near_wall:
+				out[Vector3i(c.x, y, c.y)] = true
+	else:
+		for c in solid_cells(sh):
+			if c.x >= lo.x and c.y >= lo.y and c.z >= lo.z and c.x < hi.x and c.y < hi.y and c.z < hi.z:
+				out[c] = true
+	for cut in sh.get("cuts", []):
+		if _misses(cut, lo, hi):
+			continue
+		for c in solid_cells(cut):
+			out.erase(c)
+	return out
+
+
+## True for a rect cut clear of this box, told without working out its cells.
+static func _misses(cut: Dictionary, lo: Vector3i, hi: Vector3i) -> bool:
+	if String(cut.get("kind", "")) != "rect":
+		return false
+	var l := String(cut.get("lie", "flat"))
+	var at := int(cut.get("at", 0))
+	var a := to_3d(l, _v2(cut.a), at)
+	var b := to_3d(l, _v2(cut.b), at + maxi(1, int(cut.get("depth", 1))) - 1)
+	return mini(a.x, b.x) >= hi.x or maxi(a.x, b.x) < lo.x or mini(a.y, b.y) >= hi.y or maxi(a.y, b.y) < lo.y \
+			or mini(a.z, b.z) >= hi.z or maxi(a.z, b.z) < lo.z
+
+
 ## A floor plan's area: every stroke drawn into it (`points.adds`: outlines and brush
 ## strokes, as the sketch pen gives them) less every one drawn out (`points.subs`).
 static func plan_region(points: Variant) -> Dictionary:
@@ -572,14 +615,14 @@ static func pack_courses(cells: Dictionary, parts: Array, staggered: bool = true
 		taken: Dictionary = {}, base: int = 1 << 30, starts: Dictionary = {}, strict: bool = false) -> Array:
 	var out := []
 	var left := {}
-	var ys := {}
+	var by_y := {}
 	for c in cells:
 		if not taken.has(c):
 			left[c] = true
-			ys[c.y] = true
+			(by_y.get_or_add(c.y, []) as Array).append(c)
 	if left.is_empty() or parts.is_empty():
 		return out
-	var layers := ys.keys()
+	var layers := by_y.keys()
 	layers.sort()
 	if base == 1 << 30:
 		base = int(layers[0])
@@ -590,6 +633,8 @@ static func pack_courses(cells: Dictionary, parts: Array, staggered: bool = true
 		tall = maxi(tall, p[1].y)
 		long = maxi(long, maxi(p[1].x, p[1].z))
 		wide = maxi(wide, mini(p[1].x, p[1].z))
+	# All a run is asked is whether it passes two widths, and which way is longer.
+	var run_cap := 2 * wide + 1
 	var start_list := starts.keys()
 	start_list.sort()
 	for y in layers:
@@ -599,20 +644,11 @@ static func pack_courses(cells: Dictionary, parts: Array, staggered: bool = true
 			on_course = starts.has(y)
 			course = start_list.bsearch(y, false) - 1 if not on_course else start_list.find(y)
 		var along_x: bool = not staggered or course % 2 == 0
-		var here := []
-		for c in left:
-			if c.y == y:
-				here.append(c)
-		# Row by row along the course's own way, from the low corner.
-		here.sort_custom(func(p: Vector3i, q: Vector3i) -> bool:
-			if along_x:
-				return p.z < q.z if p.z != q.z else p.x < q.x
-			return p.x < q.x if p.x != q.x else p.z < q.z)
-		for c in here:
+		for c in _row_order(by_y[y], along_x):
 			if not left.has(c):
 				continue
-			var nx := _run(cells, c, Vector3i(1, 0, 0))
-			var nz := _run(cells, c, Vector3i(0, 0, 1))
+			var nx := _run(cells, c, Vector3i(1, 0, 0), run_cap)
+			var nz := _run(cells, c, Vector3i(0, 0, 1), run_cap)
 			# Long both ways (a corner, a floor): the course says which way; else the
 			# shape's own way through the cell.
 			var run_x := along_x if mini(nx, nz) > 2 * wide else nx > nz
@@ -641,15 +677,40 @@ static func pack_courses(cells: Dictionary, parts: Array, staggered: bool = true
 	return out
 
 
-## How many cells of the shape run through `c` along `dir`, both ways.
-static func _run(cells: Dictionary, c: Vector3i, dir: Vector3i) -> int:
+## One layer's cells row by row along the course's own way, from the low corner. Sorted as
+## numbers: a floor is thousands of cells, and a comparison in script is slow.
+static func _row_order(list: Array, along_x: bool) -> Array:
+	const OFF := 1 << 20
+	var y: int = (list[0] as Vector3i).y
+	var keys := PackedInt64Array()
+	keys.resize(list.size())
+	var i := 0
+	for c: Vector3i in list:
+		var row := c.z if along_x else c.x
+		var at := c.x if along_x else c.z
+		keys[i] = (row + OFF) << 24 | (at + OFF)
+		i += 1
+	keys.sort()
+	var out := []
+	out.resize(keys.size())
+	i = 0
+	for k in keys:
+		var row := (k >> 24) - OFF
+		var at := (k & 0xFFFFFF) - OFF
+		out[i] = Vector3i(at, y, row) if along_x else Vector3i(row, y, at)
+		i += 1
+	return out
+
+
+## How many cells of the shape run through `c` along `dir`, both ways: up to `cap`.
+static func _run(cells: Dictionary, c: Vector3i, dir: Vector3i, cap: int) -> int:
 	var n := 1
 	var p := c + dir
-	while cells.has(p) and n < 64:
+	while n < cap and cells.has(p):
 		n += 1
 		p += dir
 	p = c - dir
-	while cells.has(p) and n < 128:
+	while n < cap and cells.has(p):
 		n += 1
 		p -= dir
 	return n

@@ -52,6 +52,7 @@ func _initialize() -> void:
 	_repeat_building_checks()
 	_area_checks()
 	_section_checks()
+	_big_edit_checks()
 	print("\n%d passed, %d failed" % [_pass, _fail])
 	quit(1 if _fail > 0 else 0)
 
@@ -1549,6 +1550,168 @@ func _area_checks() -> void:
 	_ok("and the view goes to the build, not the middle of the area",
 			_ws._camera.global_position.distance_to(BrickWorld.grid_to_world(Vector3i(10, 1, 10))) < 40.0,
 			str(_ws._camera.global_position))
+
+
+## Every recipe brick against the world: where the recipe says, of the part it says, and
+## found again from its block.
+func _books_agree(what: String) -> void:
+	var bad := 0
+	for rid in _ws.recipe.size():
+		var at: Array = _ws._placed_at[rid]
+		var f: int = _ws.asm.frames[at[0]]
+		if _ws._recipe_id_at(int(at[0]), int(at[1])) != rid \
+				or _ws.world.block_at(f, _ws.recipe.cell_of(rid)) != int(at[1]) \
+				or _ws.world.get_block_archetype(f, int(at[1])) != int(_ws.palette[_ws.recipe.part_of(rid)]):
+			bad += 1
+	_ok("%s: the recipe and the world agree, brick by brick" % what, bad == 0 and _ws._placed_at.size() == _ws.recipe.size(),
+			"%d bad of %d" % [bad, _ws.recipe.size()])
+
+
+## Every brick as (cell, part), sorted.
+func _brick_list() -> Array:
+	var out := []
+	for rid in _ws.recipe.size():
+		out.append("%s %s" % [_ws.recipe.cell_of(rid), _ws.recipe.part_of(rid)])
+	out.sort()
+	return out
+
+
+func _a_building(storeys: int, a := Vector2i(100, 100), b := Vector2i(130, 124)) -> int:
+	var t: WorkshopTools = _ws._tools
+	_hold("brick_1x2")
+	t.pick("draw")
+	t.set_outline("box")
+	t.makes = "building"
+	_drag_outline(t, Vector3i(a.x, 1, a.y), b)
+	t.input(_key(KEY_0 + storeys))
+	return t.commit_pending()
+
+
+func _big_edit_checks() -> void:
+	print("[probe] whole buildings as fast as bricks (section 17)")
+	var t: WorkshopTools = _ws._tools
+	t.storey_courses = 6
+	t.flat_roof = true
+	t.window_size = Vector2i(4, 9)
+	t.every_floor = true
+
+	# The same building, made at its full height and made taller after.
+	_ws._new_build()
+	_a_building(5)
+	var fresh := _brick_list()
+	_ws._new_build()
+	var b := _a_building(2)
+	var low: int = _ws.world.block_at(_ws.asm.frames[0], Vector3i(100, 2, 100))
+	var depth := int(t.shape_of(b).depth)
+	var low_list := _brick_list()
+	t.resize_shape(b, depth + 3 * 19)
+	_ok("taller is the same bricks as built that tall", _brick_list() == fresh, "%d vs %d" % [_brick_list().size(), fresh.size()])
+	_ok("and the storeys below stood", _ws.world.block_at(_ws.asm.frames[0], Vector3i(100, 2, 100)) == low)
+	_books_agree("made taller")
+	_sections_match_whole("made taller")
+	_ws._undo()
+	_ok("undone, the bricks it had", _brick_list() == low_list and int(t.shape_of(b).depth) == depth)
+	_ok("and those still stood", _ws.world.block_at(_ws.asm.frames[0], Vector3i(100, 2, 100)) == low)
+	_books_agree("undone")
+	_ws.redo_last()
+	_ok("redone", _brick_list() == fresh)
+	_books_agree("redone")
+
+	# With a window on every floor, and a door on one: new storeys take the windows.
+	_ws._new_build()
+	b = _a_building(2)
+	t.every_floor = true
+	t.apply_opening("window", t.face_under(Vector3(110.5 * 0.35, 6.5 * 0.14, 90.0 * 0.35), Vector3(0, 0, 1)))
+	t.every_floor = false
+	t.apply_opening("door", t.face_under(Vector3(120.5 * 0.35, 6.5 * 0.14, 90.0 * 0.35), Vector3(0, 0, 1)))
+	t.every_floor = true
+	var windows := 0
+	for sh in t.shapes():
+		if sh.has("opening") and String(sh.opening.kind) == "window" and String(sh.kind) == "hollow":
+			windows += 1
+	_ok("a window on every floor is laid in one go", windows == 2, str(windows))
+	_books_agree("openings")
+	_sections_match_whole("openings")
+	t.resize_shape(b, int(t.shape_of(b).depth) + 19)
+	windows = 0
+	var doors := 0
+	for sh in t.shapes():
+		if sh.has("opening") and String(sh.kind) == "hollow":
+			windows += 1
+		elif sh.has("opening") and String(sh.kind) == "jamb":
+			doors += 1
+	_ok("a new storey has the window, not the door", windows == 3 and doors == 1, "%d %d" % [windows, doors])
+	_books_agree("a new storey")
+
+	# Shorter, and Repeat up on a building, and everything back.
+	_ws._new_build()
+	b = _a_building(4)
+	var four := _brick_list()
+	depth = int(t.shape_of(b).depth)
+	t.resize_shape(b, depth - 2 * 19)
+	_books_agree("made shorter")
+	_ws._undo()
+	_ok("shorter undone", _brick_list() == four)
+	t.pick("repeat")
+	t.rep_what = "building"
+	t.selected = b
+	t.repeat("up", 1, 0)
+	_ok("repeat doubles it, one plan", WorkshopTools.storeys_of(t.shape_of(b)) == 8, str(WorkshopTools.storeys_of(t.shape_of(b))))
+	_books_agree("repeated up")
+	_sections_match_whole("repeated up")
+	_ws._undo()
+	_ok("repeat undone", _brick_list() == four)
+	_books_agree("repeat undone")
+
+	# A copy along: the same bricks, moved, and it undoes.
+	_ws._new_build()
+	b = _a_building(2)
+	var one: int = _ws.recipe.size()
+	t.pick("repeat")
+	t.rep_what = "building"
+	t.selected = b
+	t.repeat("x", 1, 5)
+	_ok("a copy along has every brick", _ws.recipe.size() == one * 2, "%d of %d" % [_ws.recipe.size(), one * 2])
+	var kept := 0
+	for sh in t.shapes():
+		kept += (sh.bricks as Array).size()
+	_ok("and keeps them as a shape", kept == one * 2 and t.shapes().size() == 2, "%d, %d shapes" % [kept, t.shapes().size()])
+	_books_agree("a copy along")
+	_sections_match_whole("a copy along")
+	_ws._undo()
+	_ok("a copy along undone", _ws.recipe.size() == one)
+	# Something in its way: it goes round it.
+	_hold("brick_2x4")
+	_ws._axis_z = false
+	_ws._cell = Vector3i(150, 1, 100)
+	_ws._update_ghost()
+	_ws._place()
+	t.pick("repeat")
+	t.selected = b
+	t.repeat("x", 1, 5)
+	_ok("a copy with a brick in the way goes round it", _ws.recipe.size() > one and _ws.recipe.size() <= one * 2 + 1,
+			"%d, one is %d" % [_ws.recipe.size(), one])
+	_books_agree("round a brick")
+
+	# Many taken up at once, with hand bricks, a weld, a group and a painted stroke around them.
+	_ws._new_build()
+	_hold("brick_2x4")
+	_ws._axis_z = false
+	for x in [10, 20, 30, 40]:
+		_ws._cell = Vector3i(x, 1, 10)
+		_ws._update_ghost()
+		_ws._place()
+	_ws.weld_rids(1, 3)
+	_ws.recipe.groups.append({"source": "", "name": "", "first": 1, "count": 3})
+	var moved: int = _ws._placed_at[3][1]
+	_ws.remove_rids(PackedInt32Array([2, 0, 2]))
+	var w: Vector2i = _ws.recipe.weld_blocks(0)
+	_ok("taken up at once: the rest close up", _ws.recipe.size() == 2 and _ws.recipe.cell_of(1).x == 40
+			and _ws._recipe_id_at(0, moved) == 1)
+	_ok("a weld follows its bricks down", _ws.recipe.weld_count() == 1 and w == Vector2i(0, 1), str(w))
+	var gr: Dictionary = _ws.recipe.groups[0]
+	_ok("and a group", int(gr.first) == 0 and int(gr.count) == 2, str(gr))
+	_books_agree("taken up at once")
 
 
 ## What the sections draw between them against one mesh of the whole grid: as many

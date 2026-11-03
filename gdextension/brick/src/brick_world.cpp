@@ -3909,19 +3909,19 @@ Array BrickWorld::chamfer_arrays(const ChamferOut &o) {
     return arrays;
 }
 
-void BrickWorld::chamfer_box_flags(const Chunk &c, int first, int faces,
+void BrickWorld::chamfer_box_flags(const Chunk &c, const FaceBake &bake, int first, int faces,
         std::vector<uint8_t> &out) const {
     out.assign((size_t)faces, 0);
     for (int f = 0; f < faces; ++f) {
-        const int32_t owner = c.bake.owner[(size_t)(first + f)];
+        const int32_t owner = bake.owner[(size_t)(first + f)];
         const Block &b = c.blocks[owner];
         out[(size_t)f] = (uint8_t)(valid_archetype(b.archetype)
                 && archetypes[b.archetype].is_full_box()
-                && (c.bake.edge[(size_t)(first + f)] & brick::EDGE_RAW) == 0);
+                && (bake.edge[(size_t)(first + f)] & brick::EDGE_RAW) == 0);
     }
 }
 
-void BrickWorld::chamfer_posts(const Chunk &c, int first, int faces, float bevel,
+void BrickWorld::chamfer_posts(const Chunk &c, const FaceBake &bake, int first, int faces, float bevel,
         const std::vector<uint8_t> &box, std::vector<float> &posts,
         std::vector<int32_t> &post_at) const {
     posts.clear();
@@ -4001,8 +4001,8 @@ void BrickWorld::chamfer_posts(const Chunk &c, int first, int faces, float bevel
     };
     for (int f = 0; f < faces; ++f) {
         post_at[(size_t)f] = (int32_t)(posts.size() / POST_FLOATS);
-        const int32_t owner = c.bake.owner[(size_t)(first + f)];
-        if (box[(size_t)f] == 0 || (f > 0 && c.bake.owner[(size_t)(first + f - 1)] == owner)) {
+        const int32_t owner = bake.owner[(size_t)(first + f)];
+        if (box[(size_t)f] == 0 || (f > 0 && bake.owner[(size_t)(first + f - 1)] == owner)) {
             continue;   // not its block's carrier
         }
         const Block &b = c.blocks[(size_t)owner];
@@ -4112,40 +4112,52 @@ Array BrickWorld::build_chunk_chamfer_mesh(int chunk_id, double bevel) {
         bake_chunk_faces(c);
         stats[chunk_id].bake_ms = c.bake.bake_ms;
     }
-    const int faces = c.bake.face_count();
+    int quads = 0;
+    double ms = 0.0;
+    Array arrays = chamfer_mesh_of(c, c.bake, bevel, quads, ms);
+    if (!arrays.is_empty()) {
+        last_chamfer_tris = quads * 2;
+        last_chamfer_ms = ms;
+    }
+    return arrays;
+}
+
+Array BrickWorld::chamfer_mesh_of(const Chunk &c, const FaceBake &bake, double bevel,
+        int &quads_out, double &ms_out) const {
+    const int faces = bake.face_count();
     if (faces == 0) {
         return Array();
     }
     // With no bevel there is nothing to build boxes for: the flat faces.
     std::vector<uint8_t> box;
-    chamfer_box_flags(c, 0, bevel > 0.0 ? faces : 0, box);
+    chamfer_box_flags(c, bake, 0, bevel > 0.0 ? faces : 0, box);
     box.resize((size_t)faces, 0);
     std::vector<uint8_t> drawn((size_t)faces, 0);
     for (int f = 0; f < faces; ++f) {
-        const int32_t owner = c.bake.owner[(size_t)f];
-        const int32_t other = c.bake.other[(size_t)f];
+        const int32_t owner = bake.owner[(size_t)f];
+        const int32_t other = bake.other[(size_t)f];
         drawn[(size_t)f] = c.blocks[owner].alive
                 && (box[(size_t)f] != 0 || other < 0 || !c.blocks[other].alive);
     }
     std::vector<float> posts;
     std::vector<int32_t> post_at;
-    chamfer_posts(c, 0, faces, (float)std::max(0.0, bevel), box, posts, post_at);
+    chamfer_posts(c, bake, 0, faces, (float)std::max(0.0, bevel), box, posts, post_at);
     ChamferIn in;
-    in.owner = c.bake.owner.data();
-    in.other = c.bake.other.data();
+    in.owner = bake.owner.data();
+    in.other = bake.other.data();
     in.box = box.data();
     in.posts = posts.data();
     in.post_at = post_at.data();
-    in.verts = c.bake.verts.ptr();
-    in.normals = c.bake.normals.ptr();
-    in.colours = c.bake.colours.ptr();
-    in.uvs = c.bake.uvs.ptr();
-    in.uv2s = c.bake.uv2s.ptr();
-    in.edge = c.bake.edge.data();
-    in.corner = c.bake.corner.data();
+    in.verts = bake.verts.ptr();
+    in.normals = bake.normals.ptr();
+    in.colours = bake.colours.ptr();
+    in.uvs = bake.uvs.ptr();
+    in.uv2s = bake.uv2s.ptr();
+    in.edge = bake.edge.data();
+    in.corner = bake.corner.data();
     in.drawn = drawn.data();
-    in.floors = c.bake.floors.data();
-    in.floor_count = (int)c.bake.floors.size();
+    in.floors = bake.floors.data();
+    in.floor_count = (int)bake.floors.size();
     in.faces = faces;
     in.bevel = (float)std::max(0.0, bevel);
     ChamferOut out;
@@ -4170,34 +4182,66 @@ Array BrickWorld::build_chunk_chamfer_mesh(int chunk_id, double bevel) {
         at[5] = b + 2;
     }
     arrays[Mesh::ARRAY_INDEX] = idx;
-    last_chamfer_tris = quads * 2;
-    last_chamfer_ms = out.ms;
+    quads_out = quads;
+    ms_out = out.ms;
     return arrays;
 }
 
-Array BrickWorld::build_section_chamfer_mesh(int chunk_id, int section, double bevel) {
-    if (!valid_chunk(chunk_id)) {
-        return Array();
+Array BrickWorld::build_sections_chamfer_mesh(int chunk_id, const PackedInt32Array &sections,
+        double bevel) {
+    Array out;
+    out.resize(sections.size());
+    if (!valid_chunk(chunk_id) || sections.is_empty()) {
+        return out;
     }
-    Chunk &c = chunks[chunk_id];
-    std::vector<int32_t> ids;
-    for (size_t i = 0; i < c.blocks.size(); ++i) {
-        const Block &b = c.blocks[i];
-        if (!b.removed && !b.decorative && c.section_of(b.cell) == section) {
-            ids.push_back((int32_t)i);
+    const Chunk &c = chunks[chunk_id];
+    const int n = (int)sections.size();
+    std::vector<int32_t> slot((size_t)c.sections(), -1);
+    for (int i = 0; i < n; ++i) {
+        if (sections[i] >= 0 && sections[i] < (int32_t)slot.size()) {
+            slot[(size_t)sections[i]] = i;
         }
     }
-    if (ids.empty()) {
-        return Array();
+    std::vector<std::vector<int32_t>> ids((size_t)n);
+    for (size_t i = 0; i < c.blocks.size(); ++i) {
+        const Block &b = c.blocks[i];
+        if (b.removed || b.decorative) {
+            continue;
+        }
+        const int32_t at = slot[(size_t)c.section_of(b.cell)];
+        if (at >= 0) {
+            ids[(size_t)at].push_back((int32_t)i);
+        }
     }
-    // The chunk's own bake stands aside: the chamfer reads the chunk's, and a
-    // bake of one section is not a bake of the chunk.
-    FaceBake whole;
-    std::swap(whole, c.bake);
-    bake_faces_into(c, archetypes, c.bake, nullptr, &ids);
-    Array arrays = build_chunk_chamfer_mesh(chunk_id, bevel);
-    std::swap(whole, c.bake);
-    return arrays;
+    // A bake of one section is its own, not the chunk's. Nothing here writes to
+    // the chunk, so sections can go side by side: a whole building is many.
+    std::vector<Array> meshes((size_t)n);
+    std::atomic<int> next{ 0 };
+    const auto work = [&]() {
+        for (int i = next.fetch_add(1); i < n; i = next.fetch_add(1)) {
+            if (ids[(size_t)i].empty()) {
+                continue;
+            }
+            FaceBake bake;
+            bake_faces_into(c, archetypes, bake, nullptr, &ids[(size_t)i]);
+            int quads = 0;
+            double ms = 0.0;
+            meshes[(size_t)i] = chamfer_mesh_of(c, bake, bevel, quads, ms);
+        }
+    };
+    const int helpers = std::min(n, std::min(8, std::max(1, (int)std::thread::hardware_concurrency()))) - 1;
+    std::vector<std::thread> crew;
+    for (int i = 0; i < helpers; ++i) {
+        crew.emplace_back(work);
+    }
+    work();
+    for (std::thread &t : crew) {
+        t.join();
+    }
+    for (int i = 0; i < n; ++i) {
+        out[i] = meshes[(size_t)i];
+    }
+    return out;
 }
 
 PackedInt32Array BrickWorld::take_changed_sections(int chunk_id, int margin) {
@@ -4334,11 +4378,11 @@ void BrickWorld::chamfer_section_async(int chunk_id, int section, double bevel) 
     job->in.corner = job->corner.data();
     job->owner.assign(c.bake.owner.begin() + first, c.bake.owner.begin() + first + faces);
     job->other.assign(c.bake.other.begin() + first, c.bake.other.begin() + first + faces);
-    chamfer_box_flags(c, first, faces, job->box);
+    chamfer_box_flags(c, c.bake, first, faces, job->box);
     job->in.owner = job->owner.data();
     job->in.other = job->other.data();
     job->in.box = job->box.data();
-    chamfer_posts(c, first, faces, (float)std::max(0.0, bevel), job->box, job->posts,
+    chamfer_posts(c, c.bake, first, faces, (float)std::max(0.0, bevel), job->box, job->posts,
             job->post_at);
     job->in.posts = job->posts.data();
     job->in.post_at = job->post_at.data();
@@ -10674,8 +10718,8 @@ void BrickWorld::_bind_methods() {
             "open", "closed_rings"), &BrickWorld::split_studs, DEFVAL(PackedByteArray()), DEFVAL(0));
     ClassDB::bind_method(D_METHOD("get_section_studs", "chunk_id", "section"),
             &BrickWorld::get_section_studs);
-    ClassDB::bind_method(D_METHOD("build_section_chamfer_mesh", "chunk_id", "section", "bevel"),
-            &BrickWorld::build_section_chamfer_mesh);
+    ClassDB::bind_method(D_METHOD("build_sections_chamfer_mesh", "chunk_id", "sections", "bevel"),
+            &BrickWorld::build_sections_chamfer_mesh);
     ClassDB::bind_method(D_METHOD("take_changed_sections", "chunk_id", "margin"),
             &BrickWorld::take_changed_sections);
     ClassDB::bind_method(D_METHOD("get_section_side_stud_blocks", "chunk_id", "section"),
