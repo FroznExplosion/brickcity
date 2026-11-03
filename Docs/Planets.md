@@ -2519,6 +2519,16 @@ frozen 0.5 m over the ground in 5.2 s; one 3 km off shrinks away. Only tested at
 parked ship): a station's piece reaching the air comes in at its orbital speed (150 m/s or so), not tried.
 Not saved; not yet seen on screen.
 
+**At a station's speed (2026-11-03).** Tried, and it went through the ground: a piece is caught its first
+frame, before a last position to take a speed from, so it fell from rest (the gate's clock was stopped
+too, and the gate had no ship: its "ship" piece came from nowhere). The speed is now worked out from the
+record and its frame (`_drift_velocity`). Then at 70 m/s it went 1.7 km under the ground: past a few
+hundred metres of the player there is no fine collider. Now a falling piece has continuous collision,
+drag in air (`FALLEN_DRAG`, 0.5/s), its own ground colliders (`PlanetBody.track`, freed once it is
+frozen), and is put back on the ground if it ever gets under it (`_over_ground`, counted). `--gate=falling`
+4/4 twice: in at 68 m/s, it lands 98 m on, never under the ground, never put back. debris 13, dock 8,
+hull 13. The box collider stands for any shape: an L-shaped piece lies like its box.
+
 #### Plan, saving (2026-11-01)
 
 As zylanntest (its Docs/save_format_and_data_longevity.md, future_features_save_guide.md): the **universe**

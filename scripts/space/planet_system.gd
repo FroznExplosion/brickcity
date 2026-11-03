@@ -64,6 +64,9 @@ const DRIFT_DIE := 1.0
 ## Fallen pieces lying about at most; still this long, a fallen one is frozen.
 const FALLEN_CAP := 32
 const FALLEN_STILL := 1.0
+## In air a fallen piece slows (1/s): one come in at a station's 70-150 m/s
+## lands within a few hundred metres instead of skating away.
+const FALLEN_DRAG := 0.5
 ## A settled world's buildings are made within POPULATE_AT of the player, and
 ## its far tier kept up within FAR_TIER_AT (past it they are gone from the screen).
 const POPULATE_AT := 700000.0
@@ -117,6 +120,8 @@ var drifts: Array = []
 var drift_reach := 5000.0
 ## Pieces fallen to a planet: bodies under it (_fall).
 var fallen: Array[RigidBody3D] = []
+## Times a fallen piece was put back on the ground (_over_ground).
+var under_ground_saves := 0
 ## ... and past this from where it left, so a wreck's pieces wait round it.
 var drift_home := 3000.0
 ## A piece is its full size inside `drift_seen` of the player, nothing at
@@ -529,8 +534,6 @@ func _drift_keep(p: Vector3) -> void:
 				continue
 			if not ridden:
 				e.dying = _drift_clock
-		e.was = at
-		e.was_us = Time.get_ticks_usec()
 		var dead := e.dying >= 0.0 and _drift_clock - e.dying >= DRIFT_DIE
 		if e.look != null:
 			var size := 1.0 - smoothstep(drift_seen, drift_hidden, off)
@@ -576,6 +579,32 @@ func _drop_body(e: Drift) -> void:
 	e.body = RID()
 
 
+## Its colliders not in yet (it outran them), a fallen piece under the ground
+## is put back on it, its fall stopped (PlanetScene.keep_over_ground).
+func _over_ground(body: RigidBody3D) -> void:
+	var b := body.get_parent() as PlanetBody
+	var dir := b.dir_of(body.global_position)
+	if b.altitude_of(body.global_position) < b.data.height(dir) - 1.0:
+		var at := b.global_transform * b.data.surface_point(dir)
+		var up := Gravity.up_at(at)
+		body.global_position = at + up * 1.0
+		var v := body.linear_velocity
+		body.linear_velocity = v - up * minf(v.dot(up), 0.0)
+		under_ground_saves += 1
+
+
+## Piece `e`'s velocity over the anchored ground, world axes: from its record
+## and its frame's motion, so a piece caught the frame it is made has it too.
+func _drift_velocity(e: Drift) -> Vector3:
+	var s2w := space_to_world()
+	var x := s2w.affine_inverse() * e.node.global_position
+	var base: Transform3D = e.base if e.frame == null else _frame_xform(e.frame)
+	var v := base.basis * e.v
+	if e.frame != null:
+		v += _frame_velocity(e.frame, x)
+	return s2w.basis * (v - _frame_velocity(anchor, x))
+
+
 ## The body whose ground a world point is within FALL_AT of, or null.
 func _falling_to(at: Vector3) -> PlanetBody:
 	for b in bodies:
@@ -588,7 +617,6 @@ func _falling_to(at: Vector3) -> PlanetBody:
 ## mesh and a box round it, at the speed it had.
 func _fall(e: Drift, b: PlanetBody) -> void:
 	var now := e.node.global_transform
-	var dt := (Time.get_ticks_usec() - e.was_us) / 1000000.0
 	var body := RigidBody3D.new()
 	body.name = "Fallen"
 	body.mass = maxf(float(e.bricks), 1.0)
@@ -596,6 +624,11 @@ func _fall(e: Drift, b: PlanetBody) -> void:
 	body.collision_layer = Layers.FALLING
 	body.collision_mask = Layers.FALLING_MASK
 	body.physics_interpolation_mode = Node.PHYSICS_INTERPOLATION_MODE_OFF
+	# Metres a physics step at those speeds: a plain body goes through the ground.
+	body.continuous_cd = true
+	if b.data.has_air:
+		body.linear_damp = FALLEN_DRAG
+		body.angular_damp = FALLEN_DRAG
 	var box := e.look.mesh.get_aabb()
 	var cs := CollisionShape3D.new()
 	var shape := BoxShape3D.new()
@@ -605,12 +638,14 @@ func _fall(e: Drift, b: PlanetBody) -> void:
 	body.add_child(cs)
 	b.add_child(body)
 	body.global_transform = now
+	# Ground colliders round it while it falls: past a few hundred metres of the
+	# player there are none, and it would fall through.
+	PlanetBody.track(body)
 	e.look.reparent(body, false)
 	e.look.scale = Vector3.ONE
 	e.look.position = e.draw_at
 	e.look.visible = true
-	if e.was_us > 0 and dt > 0.0 and dt < 0.5:
-		body.linear_velocity = (now.origin - e.was) / dt
+	body.linear_velocity = _drift_velocity(e)
 	var turn := now.basis * e.at(_drift_clock).basis.inverse()
 	body.angular_velocity = turn * e.axis * e.rate
 	body.set_meta(&"still", 0.0)
@@ -639,12 +674,16 @@ func _fallen_step(p: Vector3) -> void:
 				fallen.remove_at(k)
 			else:
 				body.constant_force = Gravity.down_at(body.global_position) * Gravity.strength() * PlanetPieces.GRAVITY_SCALE * body.mass
+				_over_ground(body)
 				var still := float(body.get_meta(&"still"))
 				still = still + dt if body.linear_velocity.length() < 0.3 and body.angular_velocity.length() < 0.3 else 0.0
 				body.set_meta(&"still", still)
 				if still >= FALLEN_STILL:
 					body.constant_force = Vector3.ZERO
 					body.freeze = true
+					var gv := body.get_node_or_null(^"GroundViewer")
+					if gv != null:
+						gv.queue_free()
 		k -= 1
 
 
