@@ -12,7 +12,9 @@ extends RefCounted
 ##
 ## A lane from each door to the room's middle, and the middle itself, are kept
 ## clear (a way through a hub, a bridge's seat), and nothing goes where a brick
-## already is or without a floor brick under it.
+## already is or without a floor brick under it. A room that already holds
+## furniture (a player's module built with its own: interior bricks) is left
+## as it is -- its furniture made plain bricks too, so it is drawn.
 ##
 ##   var n := KitFurnish.furnish(made.recipe, seed)
 
@@ -37,13 +39,19 @@ static func furnish(r: BuildRecipe, seed: int) -> int:
 		return 0
 	var of := BuildSections.of_build(r)
 	var cells := {}
+	var held := {}
 	for i in r.size():
 		var c := r.cell_of(i)
 		var s := BuildRecipe.part_size(r.part_of(i))
+		var inner := r.is_interior(i)
+		if inner:
+			r.set_role(i, BuildRecipe.Role.STRUCTURE)
 		for y in s.y:
 			for z in s.z:
 				for x in s.x:
 					cells[c + Vector3i(x, y, z)] = i
+					if inner:
+						held[c + Vector3i(x, y, z)] = true
 	var doors: Array = r.meta.get("doors", [])
 	var filaments := BrickWorld.get_filament_count()
 	var laid := 0
@@ -61,6 +69,8 @@ static func furnish(r: BuildRecipe, seed: int) -> int:
 			lo = Vector2i(mini(lo.x, v.x), mini(lo.y, v.y))
 			hi = Vector2i(maxi(hi.x, v.x), maxi(hi.y, v.y))
 		var floor_y := int(sp.floor_y)
+		if _holds(held, cols, floor_y, int(sp.ceil_y)):
+			continue
 		var room := Room.new()
 		room.kind = kind
 		room.room_seed = RoomManifest.hash3(seed, int(sp.id), 41)
@@ -80,6 +90,17 @@ static func furnish(r: BuildRecipe, seed: int) -> int:
 		BuildSections.rerecord(r, of)
 	r.meta["furniture"] = {"from": first, "items": laid}
 	return laid
+
+
+## Has the room furniture of its own (an interior brick over its floor)?
+static func _holds(held: Dictionary, cols: Dictionary, floor_y: int, ceil_y: int) -> bool:
+	if held.is_empty():
+		return false
+	for v: Vector2i in cols:
+		for y in range(floor_y + 1, ceil_y):
+			if held.has(Vector3i(v.x, y, v.y)):
+				return true
+	return false
 
 
 static func _kind_of(kind: String, seed: int, id: int) -> String:

@@ -532,6 +532,7 @@ func _finish(loops: int) -> Dictionary:
 						balconies += 1
 				_:
 					_dress(cuts, adds, mk, off, td)
+	_uncap(adds, cuts)
 	# Doors: in the first wall of each joined doorway, a hung room's, the way in and out.
 	var doors := []
 	for j: Dictionary in joins:
@@ -607,11 +608,36 @@ func _cap(c: Dictionary) -> Array:
 						n = run
 						break
 				var part := "%s_1x1" % kind if n == 1 else "%s_1x%d_%s" % [kind, n, axis]
-				out.append([part, base + across * x + Vector3i(0, y, 0), int(wall[0]), int(wall[1])])
+				out.append([part, base + across * x + Vector3i(0, y, 0), int(wall[0]), int(wall[1]), "cap"])
 				x += n
 			y += 3 if kind == "brick" else 1
 			course += 1
 	return out
+
+
+## A cap's bricks (`_cap`'s rows, "cap") that a later cut crosses -- a facade
+## window on a walled-up doorway's cells -- laid again as plates round the hole,
+## so the cut wins. Other adds in a cut stay (a stair's top steps are in its own).
+static func _uncap(adds: Array, cuts: Dictionary) -> void:
+	var k := adds.size() - 1
+	while k >= 0:
+		var a: Array = adds[k]
+		if a.size() > 4 and String(a[4]) == "cap":
+			var s := BuildRecipe.part_size(String(a[0]))
+			var cells := []
+			var crossed := false
+			for y in s.y:
+				for z in s.z:
+					for x in s.x:
+						var c: Vector3i = (a[1] as Vector3i) + Vector3i(x, y, z)
+						cells.append(c)
+						crossed = crossed or cuts.has(c)
+			if crossed:
+				adds.remove_at(k)
+				for c: Vector3i in cells:
+					if not cuts.has(c):
+						adds.append(["plate_1x1", c, a[2], a[3]])
+		k -= 1
 
 
 ## Cut a doorway `w` x `h` through the wall behind an outer face (a hang spot).

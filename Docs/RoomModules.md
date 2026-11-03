@@ -218,8 +218,13 @@ rest is inside.
 * **Module facade spots** (built 2026-10-31) where the module's wall is the tower's outer wall
   (outside the storey past it): a window spot cut 2 x 6 (glazed in a glass tower), a balcony spot
   built out (the grow's balcony) with the chance `balcony` above the ground storey, where nothing
-  of the ground storey's footprint is under it. `stats.windows`, `stats.balconies`. Hang spots
-  are not used in a tower.
+  of the ground storey's footprint is under it. `stats.windows`, `stats.balconies`.
+* **Hung rooms** (built 2026-11-03): a module's hang spot on the outer wall, above the ground
+  storey, with the chance `hang` (0.5): a room hung there as the grow hangs one (a hang-role
+  module, a room-role one when the library has none, its door against the spot), out past the
+  ground storey's footprint and clear of anything hung already, its other doors walled up, a
+  doorway cut through the wall to it; the placement says `from` (the module it hangs off).
+  `stats.hung`. A ship's packer (RoomPack, 7.4) never hangs one: nothing goes outside its hull.
 * **Filler rooms**: whatever of the storey is left, split by a wall every `room_max` studs either
   way, each given a doorway (two columns) to the corridor, the hall or a filler room already
   reached, round by round, so every room is reached; a piece under 4 columns stays closed.
@@ -241,8 +246,12 @@ as the footprint*, **Generate tower**, **Next seed** (the plate and the volume o
 a tall one). `tools/room_shell_probe.gd` (15: adds a north-only setback, stacked stair modules
 open room to room, facade windows and balconies).
 
-Not yet: hang spots in a tower; a cap and a facade window on the same wall cells (a module made
-so) leaves the cap.
+A cap and a facade window on the same wall cells (a module made so: a window spot on a door that
+the outer wall walls up) used to leave the cap; now the window wins, in the grow and the shell
+(`RoomGrow._uncap`: a cap brick a later cut crosses is laid again as plates round the hole).
+`room_shell_probe` (17): a module with a hang spot -- rooms hung, clear of every module, open to
+their rooms (the reach check counts a hung room's columns as inside) -- and one with a window on
+its door's cells (no cut cell left solid; 24 were without the fix).
 
 ## 5. Markers in the workshop (stage 1, built)
 
@@ -376,7 +385,7 @@ lowest row 1; sections with the core's the root; same seed same station; no core
 `module_marks_probe` (15): Generate station.
 
 Not yet: tubes bridge on one level only (no ramp or ladder between levels); the abstract look is
-the modules' own (round pods where the user builds them round); no station colour band.
+the modules' own (round pods where the user builds them round). A colour band: 7.10.
 
 ### 7.3 Stations in space (stage 10, built 2026-10-31)
 
@@ -467,8 +476,8 @@ worse, same seed same ship; a hull along Z turned; no hull says so. ~0.7 s a pas
 **Why not 85% yet**: every room has its own walls a stud thick; in a 25-stud deck with a 4-stud
 spine, rooms 8 deep lose a quarter of each side to walls. The fill rises with modules sized to the
 deck (as deep as the band, the hull for their back wall: the probe's cabin) and with walls shared.
-Not yet: a lift (`lift` off), portholes in the hull, an airlock to the outside, decks of their own
-pitch.
+Not yet: a lift (`lift` off), decks of their own pitch. (Since built: the airlock, 7.5; windows
+in the hull, 7.9.)
 
 ### 7.5 The ship flies its rooms (stage 12, built 2026-10-31)
 
@@ -597,9 +606,12 @@ lanes off it finds 9-17 such cells a seed), nothing loose, every brick in a sect
 241 furniture bricks; shot `hull_gate_room` from the middle of its most furnished room (cargo:
 crates). A station of 16 spaces got 8 items (its core and two pods).
 
+A room that already holds furniture -- a player's module built with its own, interior bricks --
+is left as it is (2026-11-03), and its furniture made plain bricks so a station or ship draws it
+(their meshes leave interior bricks out). `tools/kit_furnish_probe.gd` (3).
+
 Not yet: items stand square (the manifest's `yaw` is not used, as in the city); a bridge 6 x 6 is
-mostly lane and middle, so it gets little; the player's own modules are furnished as well when
-their spaces have a city kind, beside what they hold.
+mostly lane and middle, so it gets little.
 
 ### 7.8 Aboard a piece that leaves (built 2026-11-02)
 
@@ -644,3 +656,14 @@ doorway; sides only (the bow's slant and the stern are left whole).
 `ship_build_probe`: 16-46 windows on 8 seeds, nothing loose, every door's lintel, every brick in a
 section. `--gate=hull` (13): 488 glass plates; shot `hull_gate_window` stood on a room's floor four
 studs in from a pane, the ground seen through it.
+
+### 7.10 A station's colour band (built 2026-11-03)
+
+Every kit station module but the truss has a band: one brick course round its walls (rows
+`StationKit.BAND_ROW` to +2, over a pod's windows, cut by the doors), laid in `BAND_MARK`. A
+generated station built from the shipped kit (`StationKit.is_kit`: the player has no core of
+their own) is painted by its seed (`paint_band`, before its furniture): every band brick one of
+`BANDS` (red, orange, royal blue, teal, gold yellow, dark green, purple, azure), so stations differ
+and a station's modules match. A player's own station modules are never repainted.
+`kit_furnish_probe`: every kit module but the truss banded; six seeds, six band colours, each
+station one.
