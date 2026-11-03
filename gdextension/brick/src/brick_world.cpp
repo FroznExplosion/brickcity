@@ -1267,6 +1267,176 @@ PackedByteArray BrickWorld::get_solid_cells(int chunk_id) const {
     return out;
 }
 
+Vector3i BrickWorld::chunk_light_dims(int chunk_id, int cell_plates) const {
+    if (!valid_chunk(chunk_id) || cell_plates < 1) {
+        return Vector3i();
+    }
+    const Vector3i d = chunks[chunk_id].dims;
+    return Vector3i(d.x + 2, (d.y + cell_plates - 1) / cell_plates + 2, d.z + 2);
+}
+
+PackedByteArray BrickWorld::chunk_light_tiles(int chunk_id, int cell_plates, int width, int height,
+        int sky_step, int lamp_step) const {
+    PackedByteArray out;
+    const Vector3i n = chunk_light_dims(chunk_id, cell_plates);
+    if (n.x <= 0 || width < n.x) {
+        return out;
+    }
+    const int per_row = width / n.x;
+    const int rows = (n.y + per_row - 1) / per_row;
+    if (rows * n.z > height) {
+        return out;
+    }
+    const Chunk &c = chunks[chunk_id];
+    const Vector3i d = c.dims;
+    const int64_t total = (int64_t)n.x * n.y * n.z;
+    // x fastest, then z, then y: a y layer is one tile.
+    auto at = [&](int x, int y, int z) -> int64_t {
+        return (int64_t)x + (int64_t)n.x * ((int64_t)z + (int64_t)n.z * y);
+    };
+    // 0 air, 1 opaque, 2 see-through, 3 glow (opaque, and a lamp).
+    std::vector<uint8_t> kind((size_t)total, 0);
+    int glow_material = -1;
+    for (int m = 0; m < BRICK_MATERIAL_COUNT; ++m) {
+        if (std::strcmp(BRICK_MATERIALS[m].name, "Glow PLA") == 0) {
+            glow_material = m;
+        }
+    }
+    // Per block first, as get_solid_cells: a Block is big.
+    std::vector<uint8_t> what(c.blocks.size(), 0);
+    for (size_t i = 0; i < c.blocks.size(); ++i) {
+        const Block &b = c.blocks[i];
+        if (!b.alive) {
+            continue;
+        }
+        what[i] = (int)b.material == glow_material ? 3 : (brick_material_translucent(b.material) ? 2 : 1);
+    }
+    for (int z = 0; z < d.z; ++z) {
+        for (int y = 0; y < d.y; ++y) {
+            const int64_t row = c.index_of(Vector3i(0, y, z));
+            if (row < 0) {
+                continue; // outside a band chunk's window: nothing there
+            }
+            const int ly = y / cell_plates + 1;
+            for (int x = 0; x < d.x; ++x) {
+                const int32_t blk = c.occupancy[row + x];
+                if (blk < 0) {
+                    continue;
+                }
+                const uint8_t w = what[(size_t)blk];
+                uint8_t &k = kind[(size_t)at(x + 1, ly, z + 1)];
+                // Any opaque plate makes the cell opaque; glow wins.
+                if (w == 3 || (w == 1 && k != 3) || (w == 2 && k == 0)) {
+                    k = w;
+                }
+            }
+        }
+    }
+    // The ground: the margin under the chunk.
+    for (int z = 0; z < n.z; ++z) {
+        for (int x = 0; x < n.x; ++x) {
+            kind[(size_t)at(x, 0, z)] = 1;
+        }
+    }
+    std::vector<uint8_t> sky((size_t)total, 0);
+    std::vector<uint8_t> lamp((size_t)total, 0);
+    std::vector<int64_t> queue;
+    queue.reserve((size_t)total / 4);
+    // Straight down from the top until anything stands in the way, a quarter
+    // step less a cell: down a shaft (a stairwell, a courtyard) the sky seen
+    // narrows the deeper it goes.
+    const int fall = std::max(1, sky_step / 4);
+    for (int z = 0; z < n.z; ++z) {
+        for (int x = 0; x < n.x; ++x) {
+            int v = 255;
+            for (int y = n.y - 1; y >= 0 && v > 0; --y) {
+                const int64_t i = at(x, y, z);
+                if (kind[(size_t)i] != 0) {
+                    break;
+                }
+                sky[(size_t)i] = (uint8_t)v;
+                queue.push_back(i);
+                if (y < n.y - 1) {
+                    v -= fall;
+                }
+            }
+        }
+    }
+    // The open sides: the margin all round is outdoors.
+    for (int y = 1; y < n.y; ++y) {
+        for (int z = 0; z < n.z; ++z) {
+            for (int x = 0; x < n.x; ++x) {
+                if (x != 0 && z != 0 && x != n.x - 1 && z != n.z - 1) {
+                    continue;
+                }
+                const int64_t i = at(x, y, z);
+                if (kind[(size_t)i] == 0 && sky[(size_t)i] != 255) {
+                    sky[(size_t)i] = 255;
+                    queue.push_back(i);
+                }
+            }
+        }
+    }
+    const int64_t step_z = n.x;
+    const int64_t step_y = (int64_t)n.x * n.z;
+    // Breadth first, each cell keeping the most that reaches it.
+    auto flood = [&](std::vector<uint8_t> &v, int step) {
+        size_t head = 0;
+        while (head < queue.size()) {
+            const int64_t i = queue[head++];
+            const int x = (int)(i % n.x);
+            const int z = (int)((i / n.x) % n.z);
+            const int y = (int)(i / step_y);
+            const int here = v[(size_t)i];
+            const int64_t nb[6] = {
+                x > 0 ? i - 1 : -1, x < n.x - 1 ? i + 1 : -1,
+                z > 0 ? i - step_z : -1, z < n.z - 1 ? i + step_z : -1,
+                y > 0 ? i - step_y : -1, y < n.y - 1 ? i + step_y : -1};
+            for (int k = 0; k < 6; ++k) {
+                const int64_t j = nb[k];
+                if (j < 0) {
+                    continue;
+                }
+                const uint8_t kj = kind[(size_t)j];
+                if (kj == 1 || kj == 3) {
+                    continue;
+                }
+                const int nv = here - (kj == 2 ? step * 3 : step);
+                if (nv > (int)v[(size_t)j]) {
+                    v[(size_t)j] = (uint8_t)nv;
+                    queue.push_back(j);
+                }
+            }
+        }
+    };
+    flood(sky, std::max(1, sky_step));
+    // Lamps: from every Glow cell into the air round it.
+    queue.clear();
+    for (int64_t i = 0; i < total; ++i) {
+        if (kind[(size_t)i] == 3) {
+            lamp[(size_t)i] = 255;
+            queue.push_back(i);
+        }
+    }
+    flood(lamp, std::max(1, lamp_step));
+    out.resize((int64_t)width * height * 2);
+    uint8_t *w = out.ptrw();
+    memset(w, 0, (size_t)out.size());
+    for (int y = 0; y < n.y; ++y) {
+        const int tx = (y % per_row) * n.x;
+        const int tz = (y / per_row) * n.z;
+        for (int z = 0; z < n.z; ++z) {
+            uint8_t *o = w + ((int64_t)(tz + z) * width + tx) * 2;
+            for (int x = 0; x < n.x; ++x) {
+                const int64_t i = at(x, y, z);
+                o[x * 2] = sky[(size_t)i];
+                o[x * 2 + 1] = lamp[(size_t)i];
+            }
+        }
+    }
+    return out;
+}
+
 PackedByteArray BrickWorld::get_solid_cells_at(int chunk_id, PackedInt32Array ys, int ring) const {
     PackedByteArray out;
     if (!valid_chunk(chunk_id)) {
@@ -10877,6 +11047,9 @@ void BrickWorld::_bind_methods() {
     ClassDB::bind_method(D_METHOD("get_chunk_count"), &BrickWorld::get_chunk_count);
     ClassDB::bind_method(D_METHOD("get_chunk_origin", "chunk_id"), &BrickWorld::get_chunk_origin);
     ClassDB::bind_method(D_METHOD("get_chunk_dims", "chunk_id"), &BrickWorld::get_chunk_dims);
+    ClassDB::bind_method(D_METHOD("chunk_light_dims", "chunk_id", "cell_plates"), &BrickWorld::chunk_light_dims);
+    ClassDB::bind_method(D_METHOD("chunk_light_tiles", "chunk_id", "cell_plates", "width", "height", "sky_step", "lamp_step"),
+            &BrickWorld::chunk_light_tiles);
 
     ClassDB::bind_method(D_METHOD("place_block", "chunk_id", "cell", "archetype_id", "colour",
                     "decorative"),

@@ -179,6 +179,39 @@ The brick game's own answer, as voxel games do it: light values in the grid.
 - Owner: the grid and mesher are Build mode's (`brick_grid.h`, `bake_faces_into`);
   this needs that area to agree or do the C++ side.
 
+**As built (2026-11-03)** -- not in the vertices: the mesher bakes a chunk
+once and a hit only patches its indices, so per-vertex light would mean a
+re-bake (50-80 ms a tower) per hit. A grid beside the mesh instead:
+
+- `BrickWorld.chunk_light_tiles` (C++): a cell a stud across and a brick (3
+  plates) up, with a cell of open air all round and ground under. Any opaque
+  plate makes a cell opaque; see-through costs three steps; Glow PLA is a
+  lamp. Sky: straight down from the top (a quarter step less a cell, so a
+  stairwell or courtyard dims with depth), then breadth first from every lit
+  cell and the open sides, `SKY_STEP` 16 of 255 less a cell (about 5.6 m into
+  a room from a wide hole). Lamp: the same from Glow cells, 24 a cell. Two
+  bytes a cell, each y layer a tile of a 512 x 512 RG8 image. 0.7-0.9 ms a
+  town tower.
+- `BrickGridLight` (GDScript): one `Texture2DArray`, a layer (slot) a
+  building, 16 at once; a building too big for a layer is drawn as before.
+  Each band gets its slot by the instance uniform `grid_light` (slot, cells
+  x, y, z), so the one brick material stays shared; bands made later (a hit's
+  redraw) get it on `child_entered_tree`. A building is lit again when its
+  count of live bricks changes (one a frame), or by `relight`.
+- `brick.gdshader`: half a cell out from the face (the air it looks into),
+  bilinear in a layer, mixed between two; `AO *= mix(0.1, 1, sky)` (ambient
+  and reflections only -- the sun is the shadows' job) and warm emission
+  from lamp light. Nothing happens without a slot: every other scene draws as
+  before.
+- The room's ambient box no longer lights the bricks (`reflection_mask`
+  leaves out `BrickGridLight.RENDER_LAYER`, the layer the grid's bricks are
+  on); it lights what is in the room -- figures, the gun -- at the grid's sky
+  where the camera is (`LightRig.room_open`), so they match the walls, and
+  the exposure follows it.
+- Not yet: ships and stations (their cabin box still stands for their own
+  lights; `space_station.gd` was being changed elsewhere), the city scene,
+  furniture lamps (only Glow bricks are lamps), the sun past the shadow range.
+
 ### 6.2 Quick stand-in: ambient boxes
 
 Before 6.1: a `ReflectionProbe` per room module and per ship hull, its
@@ -225,7 +258,7 @@ light on all bricks, ships included -> optional SSAO/SSIL -> SDFGI experiment.
 | 3 | Moon/planet light (5) | small | **built** |
 | 4 | Ambient boxes in buildings, stations and ships (6.2) | small-medium | **built** |
 | 4b | Clouds and their faked shadows (2b) | medium | when clouds come |
-| 5 | Grid skylight and lamp light (6.1) | large, C++ with Build mode | sealed room dark, blown wall lit, ship flying; mesh time per chunk |
+| 5 | Grid skylight and lamp light (6.1) | large, C++ with Build mode | **built** for the planet's buildings (9); ships and the city next |
 | 6 | SSAO/SSIL High, SDFGI Ultra (7) | small to try | GPU ms, editor closed, heat log after |
 
 Area: new, Lighting -- `light_rig.gd`, `shaders/body_shadow.gdshaderinc`, this
@@ -254,11 +287,19 @@ back on surfacing (the rig's neutral colour counts now).
 | Fill | 5: brightest body over the horizon, `0.6 x sqrt(score)`, at most 0.35 of the sun; shadows at night above 0.02 | `PlanetSystem._fill`, `LightRig.set_fill` |
 | Ambient boxes | 6.2: every building laid in bricks ("room": 25% of outdoor ambient + 0.02), every station or ship module laid ("cabin": its own lights, 0.3); walls (0.45 m) left outside; reflections black inside; a toppled building's goes | `planet_scene._ambient_boxes`, `LightRig.add_box` |
 
+| Grid light | 6.1: sky and lamp on the brick grid of every building laid here; a hole lets the sky in, Glow bricks light rooms; the box lights only what is in it | `BrickWorld.chunk_light_tiles`, `scripts/brick_grid_light.gd`, `brick.gdshader` (`grid_light`), `planet_scene._ambient_boxes` |
+
 Gate: `res://scenes/planet.tscn -- --gate=light` (headless for the numbers;
 windowed adds pictures `shots/light_gate_*.png` and checks that the box
 darkens the picture and the exposure brightens it again).
 
-Known limits: a box does not know a blown wall (6.1 will); the fill at home's
+Grid numbers (2026-11-03): the gate's darkest air at eye height in a town
+tower 0.12 sky; a hole knocked in a solid wall takes the air behind it from
+0.69 (the windows nearby) to 0.81 (three steps from the open); a Glow floor
+brick puts 0.72 lamp at eye height over it; the inside picture's mean 0.435
+with the grid, 0.563 without.
+
+Known limits: the fill at home's
 midnight is often none (its moon under the horizon).
 
 Soft shadows' cost (2026-11-03, editor closed, no other runs, the gate's

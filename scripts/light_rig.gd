@@ -95,6 +95,9 @@ var exposure := 1.0
 var inside := false
 ## Held: expose() leaves the exposure as it is (a gate's comparisons).
 var hold_exposure := false
+## The grid's sky where the camera is (0 shut in .. 1 open; Lighting.md
+## 6.1), or under 0 outside every building: a room's box follows it.
+var room_open := -1.0
 
 # Box -> "room" or "cabin".
 var _boxes := {}
@@ -313,6 +316,10 @@ func add_box(owner_node: Node3D, lo: Vector3, hi: Vector3, kind := "room") -> Re
 	p.update_mode = ReflectionProbe.UPDATE_ONCE
 	p.ambient_mode = ReflectionProbe.AMBIENT_COLOR
 	p.blend_distance = BOX_BLEND
+	# A building's bricks are lit by the grid (BrickGridLight); its box is
+	# for what is in it: figures, the gun, pieces.
+	if kind == "room":
+		p.reflection_mask = 0xFFFFF & ~BrickGridLight.RENDER_LAYER
 	var a := lo + Vector3(WALL, 0.05, WALL)
 	var b := hi - Vector3(WALL, WALL, WALL)
 	p.size = (b - a).max(Vector3(0.2, 0.2, 0.2))
@@ -346,4 +353,6 @@ func _style_box(p: ReflectionProbe, kind: String) -> void:
 		p.ambient_color_energy = CABIN_ENERGY
 	else:
 		p.ambient_color = ROOM_COLOUR
-		p.ambient_color_energy = ROOM_FLOOR + env.ambient_light_energy * ROOM_SHARE
+		var shut := ROOM_FLOOR + env.ambient_light_energy * ROOM_SHARE
+		# As open to the sky as the grid says where the camera is.
+		p.ambient_color_energy = lerpf(shut, env.ambient_light_energy, room_open) if room_open >= 0.0 else shut
