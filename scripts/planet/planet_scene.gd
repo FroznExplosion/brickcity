@@ -92,6 +92,7 @@ var _dock_gate := false
 var _worlds_gate := false
 var _jump_gate := false
 var _debris_gate := false
+var _falling_gate := false
 var _rocks_gate := false
 var map: GalaxyMap
 var markers: SpaceMarkers
@@ -146,6 +147,7 @@ func _ready() -> void:
 	_worlds_gate = "--gate=worlds" in OS.get_cmdline_user_args()
 	_jump_gate = "--gate=jump" in OS.get_cmdline_user_args()
 	_debris_gate = "--gate=debris" in OS.get_cmdline_user_args()
+	_falling_gate = "--gate=falling" in OS.get_cmdline_user_args()
 	_rocks_gate = "--gate=rocks" in OS.get_cmdline_user_args()
 	_garrison_gate = "--gate=garrison" in OS.get_cmdline_user_args()
 	_seat_gate = "--gate=seat" in OS.get_cmdline_user_args()
@@ -154,7 +156,7 @@ func _ready() -> void:
 	_home_gate = "--gate=home" in OS.get_cmdline_user_args()
 	_save_gate = "--gate=save" in OS.get_cmdline_user_args()
 	WorldFrame.origin = Vector3.ZERO
-	_gate = _gate or _system_gate or _ship_gate or _dock_gate or _worlds_gate or _jump_gate or _debris_gate or _rocks_gate or _garrison_gate or _seat_gate or _hull_gate or _belt_gate or _home_gate or _save_gate or _pawn_gate or _mech_gate or _tank_gate or _soldier_gate or _squad_gate or _travel_gate or _far_gate or _drive_gate or _trees_gate or _bricks_gate or _damage_gate or _fall_gate or _hits_gate or _topple_gate or _pieces_ai_gate or _storey_gate
+	_gate = _gate or _system_gate or _ship_gate or _dock_gate or _worlds_gate or _jump_gate or _debris_gate or _falling_gate or _rocks_gate or _garrison_gate or _seat_gate or _hull_gate or _belt_gate or _home_gate or _save_gate or _pawn_gate or _mech_gate or _tank_gate or _soldier_gate or _squad_gate or _travel_gate or _far_gate or _drive_gate or _trees_gate or _bricks_gate or _damage_gate or _fall_gate or _hits_gate or _topple_gate or _pieces_ai_gate or _storey_gate
 	data = PlanetData.new()
 	data.planet_name = "proto"
 	# Towns and landmarks: their pads go into the ground before it is built.
@@ -265,6 +267,8 @@ func _ready() -> void:
 			_run_jump_gate()
 		elif _debris_gate:
 			_run_debris_gate()
+		elif _falling_gate:
+			_run_falling_gate()
 		elif _rocks_gate:
 			_run_rocks_gate()
 		elif _garrison_gate:
@@ -2294,6 +2298,51 @@ func _run_rocks_gate() -> void:
 # The debris gate (11.12 step 6): the top of the station cut off with blasts
 # through a whole storey; it leaves in one rigid piece, drifting and turning with
 # no body; the clock stopped or not, it goes on; out of reach, it is gone.
+
+## Debris plan step 3: a piece near the ground falls to it; near the player a
+## body that lands, far off it goes.
+func _run_falling_gate() -> void:
+	var t0 := Time.get_ticks_msec()
+	while walker.frozen and Time.get_ticks_msec() - t0 < 60000:
+		await _frames(1)
+	await get_tree().create_timer(1.0).timeout
+	var up := Gravity.up_at(walker.global_position)
+	var side := up.cross(Vector3.RIGHT if absf(up.x) < 0.9 else Vector3.FORWARD).normalized()
+	var arrays := BoxMesh.new().get_mesh_arrays()
+	var at := walker.global_position + side * 12.0 + up * 30.0
+	system._on_drifted(arrays, Transform3D(Basis(), at), Vector3.ZERO, 30, buildings.brick_material, ship)
+	t0 = Time.get_ticks_msec()
+	while system.fallen.is_empty() and Time.get_ticks_msec() - t0 < 5000:
+		await _frames(1)
+	_check("near the ground and the player, a piece falls: a body under the planet", system.fallen.size() == 1
+			and system.drifts.is_empty() and system.fallen[0].get_parent() == planet)
+	if system.fallen.is_empty():
+		print("[planet] gate: %d ok, %d FAIL" % [_ok, _fail])
+		get_tree().quit(1)
+		return
+	var body := system.fallen[0]
+	t0 = Time.get_ticks_msec()
+	while not body.freeze and Time.get_ticks_msec() - t0 < 20000:
+		await _frames(1)
+	var ground := _ground_hit(body.global_position)
+	var above := body.global_position.distance_to(ground) if ground != Vector3.INF else INF
+	_check("it lands and lies still on the ground", body.freeze and above < 3.0,
+			"%.1f m over it, %.1f s" % [above, (Time.get_ticks_msec() - t0) / 1000.0])
+	# Far from the player: it goes, shrinking.
+	var far := walker.global_position + side * 3000.0 + up * 30.0
+	system._on_drifted(arrays, Transform3D(Basis(), far), Vector3.ZERO, 30, buildings.brick_material, ship)
+	t0 = Time.get_ticks_msec()
+	while system.drifts.is_empty() and Time.get_ticks_msec() - t0 < 5000:
+		await _frames(1)
+	var made := not system.drifts.is_empty()
+	await get_tree().create_timer(0.5).timeout
+	var going := not system.drifts.is_empty() and (system.drifts[0] as Drift).dying >= 0.0
+	await get_tree().create_timer(1.5).timeout
+	_check("far from the player it shrinks away instead", made and going and system.drifts.is_empty() and system.fallen.size() == 1)
+	await _shot("falling_gate")
+	print("[planet] gate: %d ok, %d FAIL" % [_ok, _fail])
+	get_tree().quit(1 if _fail > 0 else 0)
+
 
 func _run_debris_gate() -> void:
 	var t0 := Time.get_ticks_msec()

@@ -23,6 +23,11 @@ var task := -1
 var holder: Array = []
 var material: Material
 var draw_at := Vector3.ZERO
+## Falling where nobody is: when it began to shrink away (-1: not).
+var dying := -1.0
+## Where it was drawn last, and when (usec): its speed, should it fall.
+var was := Vector3.ZERO
+var was_us := 0
 
 
 ## Its place in its frame at clock `now`.

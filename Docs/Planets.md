@@ -2495,9 +2495,14 @@ float32: unwrapped, a station's path over its planet was off by 2.2 m a frame at
 2. **A damaged station looks damaged from afar.** Its shell boxes are the whole station; with bricks gone,
    the bands it last drew stay as its far look on `deactivate`; on a save's `_dead`, those bands are laid once
    from the template when it is prepared.
-3. **A piece falling to a planet.** Today a piece never falls: it keeps its straight line in the station's
-   frame. Into a planet's air it should go, unless the player is near; then it becomes a `PlanetPieces` body
-   under that planet, and lands. Needs its own plan with the user.
+3. **A piece falling to a planet** (the user chose: only what comes near the ground falls). A piece keeps
+   its straight line in the frame it left; within 2 km of a planet's ground it is falling to it. Then, if
+   that planet is the player's (only it has ground to land on) and the player is within 1.5 km, it becomes
+   a body under the planet: its mesh, a box round it, pulled to the planet's centre as `PlanetPieces` pulls
+   its own, its speed what it had; still for 1 s, it is frozen where it lies. Otherwise it shrinks away in 1 s.
+   A falling one the player leaves 3 km behind goes (far off the ground is coarse, and it would fall
+   through). At most 32 lie about, the oldest going first. `PlanetPieces` itself is not used: its pieces
+   are brick chunks, a drift is only a mesh. Gate `--gate=falling`.
 
 **Step 1 built (2026-11-02).** As planned: `_drift_keep`, `drift_seen`, `drift_hidden`, `drift_reach`,
 `drift_home`. `--gate=debris` 10/10 headless; not yet seen on screen.
@@ -2507,6 +2512,12 @@ the bands it last drew and hides its shell; they go when its bricks are drawn ag
 `_prepare_near`, lays a save's damage once inside 20 km (0.1 s in the gate); farther off a station from a save
 is still its whole shell. A ship keeps its bands the same way, but a ship's damage from a save is not laid
 for its far look. `--gate=debris` 13/13, dock 8, hull 10, ship 9, headless; not yet seen on screen.
+
+**Step 3 built (2026-11-02).** As planned: `PlanetSystem._falling_to`, `_fall`, `_fallen_step`, `fallen`.
+`--gate=falling` 3/3 headless: a piece 30 m up beside the player is a body under the planet, lands and is
+frozen 0.5 m over the ground in 5.2 s; one 3 km off shrinks away. Only tested at rest (dropped by the
+parked ship): a station's piece reaching the air comes in at its orbital speed (150 m/s or so), not tried.
+Not saved; not yet seen on screen.
 
 #### Plan, saving (2026-11-01)
 
