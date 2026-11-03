@@ -248,6 +248,21 @@ override it inside their boxes. As the base everywhere, no:
 Mix chosen: sun + moon/planet light (shadowed) -> grid skylight and lamp
 light on all bricks, ships included -> optional SSAO/SSIL -> SDFGI experiment.
 
+**As built (2026-11-03):** Options > Video, **Global Illumination**: Off
+(default), Screen-Space (SSAO radius 0.8 intensity 1.6, SSIL radius 3
+intensity 0.8), SDFGI (Ultra: that and SDFGI, 4 cascades from 0.2 m cells,
+occlusion on, bounce 0.4). `LightRig.set_gi` puts it on every rig up and
+every one built after (all scenes use the rig). The windowed light gate
+times each level outside and inside and takes `light_gate_gi<n>_out/_in`.
+
+Measured (planet town, noon, 1280x720, editor closed, no other runs; the
+chip warm, 92-97 C peaks, so +-1 ms): GPU draw off 14.8 out / 13.0-13.6 in;
+screen-space 16.0 / 16.7 (+1-3 ms), its look subtle; SDFGI 21.4 / 21.0
+(+7 ms), and it looked wrong -- rooms dark orange, windows black from
+outside, with the grid's sky shade off under it or not. **SDFGI is not in the
+menu**; the level stays in `LightRig` for later trials (VoxelGI on a ship is
+the other one to try). Screen-space is offered, default off.
+
 ## 8. Steps
 
 | # | Step | Size | Test |
@@ -259,7 +274,7 @@ light on all bricks, ships included -> optional SSAO/SSIL -> SDFGI experiment.
 | 4 | Ambient boxes in buildings, stations and ships (6.2) | small-medium | **built** |
 | 4b | Clouds and their faked shadows (2b) | medium | when clouds come |
 | 5 | Grid skylight and lamp light (6.1) | large, C++ with Build mode | **built** for the planet's buildings (9); ships and the city next |
-| 6 | SSAO/SSIL High, SDFGI Ultra (7) | small to try | GPU ms, editor closed, heat log after |
+| 6 | SSAO/SSIL High, SDFGI Ultra (7) | small to try | **built**: screen-space offered (+1-3 ms); SDFGI tried, not offered (7) |
 
 Area: new, Lighting -- `light_rig.gd`, `shaders/body_shadow.gdshaderinc`, this
 doc; the planet and city scenes call the rig (small changes to theirs).

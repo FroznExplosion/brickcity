@@ -2261,7 +2261,7 @@ func _run_light_gate() -> void:
 			pb.brick_material.set_shader_parameter("grid_sky_floor", 1.0)
 			await _frames(3)
 			var no_box := await _screen_mean()
-			pb.brick_material.set_shader_parameter("grid_sky_floor", 0.1)
+			pb.brick_material.set_shader_parameter("grid_sky_floor", BrickGridLight.SKY_FLOOR)
 			light.attributes.exposure_multiplier = 1.0
 			await _frames(3)
 			var no_eye := await _screen_mean()
@@ -2364,6 +2364,32 @@ func _run_light_gate() -> void:
 				ms.append(sum / 120.0)
 			sun.light_angular_distance = size
 			print("[light] GPU draw, sun %.2f deg soft: %.2f / %.2f ms; hard: %.2f / %.2f ms" % [size, ms[0], ms[2], ms[1], ms[3]])
+			# 7: what each GI level costs and looks like, outside and in
+			# (shots light_gate_gi<level>_out / _in; inside, the Glow floor
+			# above is lit). Off again at the end.
+			var gi_names := ["off", "screen", "sdfgi"]
+			var gi_ms := {}
+			for lvl in [LightRig.GI_OFF, LightRig.GI_SCREEN, LightRig.GI_SDFGI, LightRig.GI_OFF]:
+				LightRig.set_gi(lvl)
+				var floor_now: float = pb.brick_material.get_shader_parameter("grid_sky_floor")
+				_check("GI %s set on the environment (the grid's sky off under SDFGI)" % gi_names[lvl], env.ssao_enabled == (lvl >= LightRig.GI_SCREEN)
+						and env.ssil_enabled == (lvl >= LightRig.GI_SCREEN) and env.sdfgi_enabled == (lvl == LightRig.GI_SDFGI)
+						and is_equal_approx(floor_now, 1.0 if lvl == LightRig.GI_SDFGI else BrickGridLight.SKY_FLOOR))
+				for where in ["out", "in"]:
+					if where == "out":
+						c.look_at_from_position(from, inside, up)
+					else:
+						c.look_at_from_position(inside, s.brick_node.global_transform * Vector3(s.fx * stud, 1.4, s.fz * stud * 0.5), up)
+					# SDFGI gathers its cascades over many frames.
+					await _frames(90)
+					var sum := 0.0
+					for k in 120:
+						await _frames(1)
+						sum += RenderingServer.viewport_get_measured_render_time_gpu(vp)
+					var gk := "%s_%s" % [gi_names[lvl], where]
+					gi_ms[gk] = ("%.2f" % (sum / 120.0)) if not gi_ms.has(gk) else ("%s / %.2f" % [gi_ms[gk], sum / 120.0])
+					await _shot("light_gate_gi%d_%s" % [lvl, where])
+			print("[light] GPU draw by GI (ms): %s" % gi_ms)
 		c.queue_free()
 		cam.current = true
 	print("[light] frames: worst %.1f ms" % _worst_ms)
