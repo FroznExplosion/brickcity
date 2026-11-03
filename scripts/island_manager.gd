@@ -2154,7 +2154,7 @@ func _crumb_push(cr: Crumbs, p: Vector3, v: Vector3, base: Basis, axis: Vector3,
 		count_brick := true) -> void:
 	if crumb_count == 0 or not _crumb_constants_set:
 		_crumb_constants()
-	var spin := _crumb_pack_spin(axis.normalized() if axis.length() > 0.01 else Vector3.UP, rate)
+	var spin := crumb_pack_spin(axis.normalized() if axis.length() > 0.01 else Vector3.UP, rate)
 	cr.pos.append(p)
 	cr.vel.append(v)
 	cr.base.append(base)
@@ -2220,7 +2220,8 @@ func _crumb_plan(cr: Crumbs, i: int, now: int) -> void:
 		return
 	var hit := gone_at
 	if is_finite(fl):
-		hit = mini(cr.t0[i] + _crumb_ticks_to_floor(cr.pos[i].y - cr.half_h[i] - fl, cr.vel[i].y), gone_at)
+		hit = mini(cr.t0[i] + ticks_to_floor(cr.pos[i].y - cr.half_h[i] - fl, cr.vel[i].y,
+				_crumb_g, _crumb_dt), gone_at)
 	cr.t_end[i] = hit
 	cr.next[i] = maxi(hit, now + 1) if hit > now else now + 1
 	if hit <= now:
@@ -2229,10 +2230,10 @@ func _crumb_plan(cr: Crumbs, i: int, now: int) -> void:
 
 
 ## Ticks from a foot `h` metres over its floor, going up at `vy`, until the
-## step that puts it at or under the floor (at least 1).
-func _crumb_ticks_to_floor(h: float, vy: float) -> int:
-	var dt := _crumb_dt
-	var a := _crumb_g * dt * dt * 0.5
+## step that puts it at or under the floor (at least 1), falling at `g` in
+## ticks of `dt` (PlanetCrumbs too).
+static func ticks_to_floor(h: float, vy: float, g: float, dt: float) -> int:
+	var a := g * dt * dt * 0.5
 	var f := func(n: float) -> float: return h + vy * dt * n - a * n * (n + 1.0)
 	var n := 1
 	if a > 0.0:
@@ -2268,7 +2269,7 @@ func _crumb_write(cr: Crumbs, i: int) -> void:
 
 ## [packed, the axis it decodes to, the rate it decodes to]: an axis
 ## octahedral in 8 + 8 bits, a rate in 8 over +-CRUMB_SPIN.
-static func _crumb_pack_spin(axis: Vector3, rate: float) -> Array:
+static func crumb_pack_spin(axis: Vector3, rate: float) -> Array:
 	var n := axis / (absf(axis.x) + absf(axis.y) + absf(axis.z))
 	var e := Vector2(n.x, n.y)
 	if n.z < 0.0:
@@ -2361,8 +2362,8 @@ func _crumb_constants() -> void:
 
 
 ## The shader's clock: physics ticks, and the fraction of the next, once a
-## frame whichever manager gets there first.
-func _crumb_clock() -> void:
+## frame by whichever crumbs get there first (a manager, PlanetCrumbs).
+static func crumb_clock() -> void:
 	var f := Engine.get_process_frames()
 	if f == _crumb_clock_frame:
 		return
@@ -4895,7 +4896,7 @@ func _island_aabb(isl: BrickIsland) -> AABB:
 
 func _process(_delta: float) -> void:
 	if crumb_count > 0:
-		_crumb_clock()
+		crumb_clock()
 	var now := Engine.get_process_frames()
 	overlap_peak = maxi(overlap_peak, _ghosts.size() + _held.size())
 	var gi := _ghosts.size() - 1

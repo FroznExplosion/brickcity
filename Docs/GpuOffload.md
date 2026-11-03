@@ -1,8 +1,9 @@
 # Moving work to the GPU
 
 What the game does on the CPU that the GPU could do instead, what is not worth moving, and what
-texture streaming would and would not change. Written 2026-11-02; nothing here is built yet.
-Each item names the area that owns it (CLAUDE.md, Areas).
+texture streaming would and would not change. Written 2026-11-02. Built: the crumbs (2.1, city
+2026-11-02 and planets 2026-11-03) and the particles (2.2, 2026-11-03). Each item names the
+area that owns it (CLAUDE.md, Areas).
 
 ## 1. Why GPU time still matters
 
@@ -47,9 +48,18 @@ asked again on landing (a ray), a bounce, laying in the heap -- the same work as
 step and the two renderer calls per crumb per tick are gone; headless those calls cost next to
 nothing, so in a window the saving is larger than this table shows.
 
-Not done: the planets' crumbs (`PlanetCrumbs`), which fall toward the planet's centre and are
-written planet-local every tick as the planet turns -- the same shader with the down taken from
-the crumb's place, in the planets' area.
+**The planets' crumbs, 2026-11-03** (`PlanetCrumbs`): the same shader with `radial` set. They
+are written planet-local and drawn through the planet's transform (the uniform `frame`, the
+MultiMesh's own too, set once a frame), so a turning planet or the floating origin's shift
+moves nothing; down is toward the centre from where a stretch starts, a straight line over a
+few metres of fall (the CPU's sums use the same line, `_pos`). `fade_from_stop` counts the lie
+and the shrink from when a crumb lands. A crumb is written when thrown, when it lands (put on
+its floor, as turned) and when it goes. A wind (a breached hull, Docs/Hulls.md 4) still writes
+the crumbs it pushes every tick: each push starts a new stretch. Probes read
+`PlanetCrumbs.positions()`; `--gate=fall` 7/7 and ship_vent_probe 10/10 headless.
+`tools/planet_crumbs_look.gd` (windowed) throws sixteen off a planet turned out of true and
+draws where the CPU says each is as a red box: lying they cover the drawn crumbs exactly,
+falling the drawn ones lead by up to a tick (the clock's fraction; physics is 30 ticks a second).
 
 What it was:
 
@@ -77,6 +87,22 @@ writes a crumb when it is thrown and frees its slot when it is gone; between, no
   biggest win here. It is also the "small pieces as particles" the break-lag list asks for.
 
 ### 2.2 CPU particles to GPU particles
+
+**Built 2026-11-03.** All of the game's CPUParticles3D are GPUParticles3D now, with the same
+settings in a ParticleProcessMaterial: CombatFeedback's death bursts (eight, reused, the kill's
+colour the material's), MaterialFx's hit debris (32 emitters made once and taken in turn, room
+for 24 particles each and fewer thrown by `amount_ratio`, so a hit makes no node and no
+buffer; it was a node made and freed per hit), CollapseDust, the torch's flame and core, and a
+wrecked tank's or truck's smoke. The first burst and debris emitter are made at setup, and the
+city warms a dust puff (`_warm_shaders`), so their process shaders are built at load.
+The one-shot ones emit in local space (an emitter is still while its particles fly): moved to a
+hit and restarted in world space, a burst came out displaced toward where it had been. The
+torch stays world space (its fire is left behind as it swings) and is placed before it is lit.
+A death burst now shows the kill's colour as it is: a CPUParticles3D colour reached the
+material unconverted and drew paler. Pictures: `tools/gpu_fx_look.gd` (bursts, debris, dust;
+`--out=` to compare) and `tools/torch_look.gd`.
+
+What it was:
 
 **Now.** Dust, bursts and flames are CPUParticles3D, simulated on the main thread:
 `CollapseDust` (collapse_dust.gd, a placeholder by its own note), `MaterialFx` bursts,
@@ -130,6 +156,16 @@ PerfCaps.md 5). An impostor -- a few pictures of the building rendered on the GP
 texture, drawn on a card (Docs/Impostors.md) -- moves the building of it to the GPU and cuts
 triangles further. Owner: city and buildings. Only if the far tier's build time shows up.
 
+### 2.6 Shots: tracers and muzzle flashes
+
+`GunInstance` can make a scene per shot for a trail and a flash (`GunBarrelDef.bullet_trail_scene`,
+`muzzle_flash_scene`, capped by `_make_room`), but no barrel sets either today: a shot draws
+neither. Bullet marks are Decals (MaterialFx, 96, recycled; VfxPool's 16): already the GPU's,
+the CPU places each once. Explosions and fires are VfxPool's GPUParticles3D. If tracers are
+wanted, they should not be a scene a shot: one MultiMesh of streaks, each written once with
+its start, end and the tick it was fired, moved and faded by its vertex shader the way the
+crumbs are -- a firefight's tracers then cost one instance write each.
+
 ## 3. What is not worth moving
 
 | | Why it stays on the CPU |
@@ -169,9 +205,8 @@ size: 1K instead of 2K quarters its memory (Docs/PbrWood.md 1.2).
 
 ## 5. Order, if this is taken up
 
-1. Crumbs in the vertex shader (2.1): biggest main-thread saving in the frames that hitch,
-   small change.
-2. CPU particles to GPU particles (2.2), with the effects area.
+1. ~~Crumbs in the vertex shader (2.1)~~ -- built, city and planets.
+2. ~~CPU particles to GPU particles (2.2)~~ -- built.
 3. After 4.8 stable: test streaming on the texture arrays (4).
 4. Terrain noise on the GPU (2.3) and scatter (2.4), only if tile streaming is found to stall.
 5. Impostors (2.5), only if the far tier's build time shows up.

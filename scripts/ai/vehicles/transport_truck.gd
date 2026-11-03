@@ -154,7 +154,7 @@ var stuck_on: Array[String] = []
 var road := ""
 ## Its body (VehicleBricks): zones of bricks.
 var bricks: VehicleBricks
-var _smoke: CPUParticles3D
+var _smoke: GPUParticles3D
 
 var _path := PackedVector3Array()
 var _path_id := -1
@@ -682,15 +682,20 @@ func _on_zone_lost(zone: StringName) -> void:
 func _smoke_from(at: Vector3) -> void:
 	if _smoke != null:
 		return
-	var s := CPUParticles3D.new()
+	# GPU particles (Docs/GpuOffload.md 2.2): a wreck smokes for good, and
+	# CPUParticles3D stepped every puff of every wreck on the main thread.
+	var s := GPUParticles3D.new()
 	s.name = "Smoke"
 	s.amount = 20
 	s.lifetime = 2.5
-	s.direction = Vector3.UP
-	s.spread = 12.0
-	s.initial_velocity_min = 1.0
-	s.initial_velocity_max = 2.0
-	s.gravity = Gravity.up_at(global_position) * 0.4
+	s.visibility_aabb = AABB(Vector3(-6, -2, -6), Vector3(12, 14, 12))
+	var pm := ParticleProcessMaterial.new()
+	pm.direction = Vector3.UP
+	pm.spread = 12.0
+	pm.initial_velocity_min = 1.0
+	pm.initial_velocity_max = 2.0
+	pm.gravity = Gravity.up_at(global_position) * 0.4
+	s.process_material = pm
 	var m := SphereMesh.new()
 	m.radius = 0.3
 	m.height = 0.6
@@ -699,7 +704,7 @@ func _smoke_from(at: Vector3) -> void:
 	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
 	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	m.material = mat
-	s.mesh = m
+	s.draw_pass_1 = m
 	s.position = at
 	add_child(s)
 	_smoke = s
