@@ -82,6 +82,26 @@ A **breach** is a gone hull cell that joins an `INSIDE` cell to an `OUTSIDE` one
 shot through the side breaches exactly that compartment; opening a bulkhead merges two; a repair
 seals it. Ships of every seed checked, as `88b5bc6` did for loose bricks.
 
+### 3.1 Built (2026-11-02): `HullAir`
+
+`scripts/hull_air.gd`, gate `tools/hull_air_probe.gd` (headless, 8 ok).
+
+- Baked from the laid recipe: one `get_solid_cells` call, doors from `BuildDoors.of(recipe)` as
+  walls to the fill, an outside fill from the chunk's faces, then inside air labelled into
+  compartments (union-find, so merges are cheap).
+- **Compartments are rooms and corridor runs**, split by closed doors: seed 1 is 75,210 inside
+  cells in 90 compartments for 28 placed rooms (sizes 36 cells -- voids in walls -- to 6,296).
+  An open door links two (`links()`); the airlock is the one door onto the outside, and opening
+  it breaches what it opens onto.
+- Hits are followed from the removed blocks' cells (block id = the recipe's frame-0 order, checked
+  against the block count). A shot through the hull breaches exactly its room in 0.06 ms; a wall
+  between two rooms merges them; a patched hole seals, and the inner part of a patched thick wall
+  goes back to inside air (`_pocket_from`, at most 4,096 cells followed).
+- **Bake is 130-300 ms in GDScript** (seeds 1-8). Fine once at generation; it moves to C++ with
+  the flooding (§5) or onto a worker.
+- **No revive yet:** a killed block keeps its cell, so the probe patches by `remove_block` and a
+  new `place_block` (`cells_added`). The repair step (§9) needs a real revive.
+
 ## 4. Venting in space
 
 Air moves fast; it does not need to flow brick by brick. **One pressure per compartment.**
@@ -173,6 +193,72 @@ bricks. And a flooded hold: inside water drawn, no doubled surface.
 **Gate:** a boat floats level at its designed waterline; flooding one side lists it that way;
 flooding enough sinks it; patching and pumping out lets it rise.
 
+## 7b. Walking inside a moving hull: the ghost hull
+
+From Sink My Bricks' "Ghost ships" short (Reference/brick-games.md 1.1). **This changes the plan.**
+
+**The problem we already have.** A ship that moves puts its brick collision away and keeps only a
+shell box (`SpaceStation.ride`: "their collision (world-placed, it would stay behind) put
+away"), and a floating-origin shift rebuilds the collision (`on_origin_shift`). So nobody can walk
+the decks of a ship while it moves, and a rocking boat would have to rebuild or move thousands of
+brick shapes every tick. Walking on a moving platform also jitters as small errors pile up, and an
+AI walk map baked for the ship goes stale the moment it moves.
+
+**Their answer.** Every ship has a **ghost double**: a copy of its collision that never moves. A
+character who boards is moved onto the ghost, walks there on still ground, and is **drawn** on the
+real ship at the same ship-local position: `real = ship.global_transform * ghost_local`. Their
+characters have ghosts too. Collision and walk maps are built once and never touched; movement is
+jitter-free because the ground really is still.
+
+**Ours:**
+- The ghost is the hull's `BuildingCollision` in its **own physics space**
+  (`PhysicsServer3D.space_create`), at the identity transform -- not "far across the map" as they
+  do it (that needs room in the world and fights our floating origin). Built once at promotion;
+  never rebuilt when the ship moves or the origin shifts; edited only by damage and repair, as a
+  standing building's bands are.
+- A pawn aboard has its body moved into the ghost space; its node is drawn at
+  `ship.global_transform * ghost_local` each frame, and the camera follows the drawn one. The
+  ship's motion reaches it as a felt force only where wanted (a lurch when the ship is hit, a lean
+  in a hard turn), not by moving the floor under it.
+- **AI walk map baked once** in ship space (§10's crew, boarding parties).
+- **The air grid (§2) and the flooding (§5) live in the same frame**, so water, air and the people
+  wading through it share one still coordinate system. Water drawn inside (§8) is drawn at the
+  real ship; its "down" is the real ship's tilt (§5).
+- The **real** ship keeps its outside collision on its moving rigid body (shell box or a few boxes
+  per section, Space.md 3.2) for everything outside: cannonballs, other ships, the sea, debris.
+- **Crossing over** is the new work: boarding and getting off (move the body between spaces,
+  carry velocity, as the STA frame handoff does); falling overboard through a hole; shots fired
+  aboard (ray in the ghost space; a ray that leaves the hull through a gap continues in the world);
+  shots from outside that enter through a hole (hit the real hull, then continue in the ghost);
+  loose bricks broken off inside (they belong to the ghost until they leave the hull).
+- Network: a pawn aboard sends ship-local positions -- small numbers, nothing to correct as the
+  ship moves.
+
+**Travel: planet, space, another planet.** Today every frame change rebases each top-level node
+(`PlanetSystem`: `m * transform`, velocities turned) and a sleeping planet reparents what stands on
+it. With the ghost only the **ship** is handed over: riders live in ship-local coordinates and are
+drawn from the ship's transform, so reparenting the ship any number of times moves nothing in the
+ghost. Origin shifts never touch it. Getting off is a pawn's only handoff, into whatever world the
+ship is in then (ship velocity + its deck velocity turned into the world); docking with another
+ship is the same handoff, ghost to ghost.
+- **One shared ghost space** for all ships, each ship's ghost in its own slot ~10 km from the
+  next -- not a Jolt space per ship (each reserves its own memory, and two independent spaces are
+  untested, Planets.md). Per-ship spaces only if a test shows them cheap.
+- **Owned by something that lasts** (the system / an autoload), never by one planet's `World3D`,
+  so it survives a scene unloading.
+- **Gravity aboard is per ship, ship-local:** artificial gravity in flight; parked or low over a
+  planet, the planet's radial pull turned into the ship's frame each tick. Pawns apply their own
+  gravity already; loose bricks in the ghost need it per body (the space's one gravity cannot be
+  everyone's).
+- **A ship parked on a planet that goes to sleep:** reparented as now, its ghost slot switched off,
+  its crew asleep with it; woken with the planet.
+
+**Gate:** `ghost_hull_probe` (headless): a pawn walks the deck of a rocking, turning ship for 60 s
+-- no drift relative to the deck, collision built once, no rebuild on an origin shift; boarding and
+getting off keep its velocity; a shot fired aboard hits the wall it was aimed at; the ship flown planet -> space -> a second planet with a pawn walking the whole way: no drift, the
+ghost never rebuilt, the pawn's world velocity right when it steps off; a parked ship's crew
+sleeps and wakes with its planet.
+
 ## 8. Water drawn inside
 
 The same drawing as pools (`water_pools.gd`, `water_pool.gdshader`), in the ship's frame and
@@ -256,13 +342,16 @@ Each step lands on `main` on its own, with its gate.
    Gate: `hull_air_probe`.
 4. **Venting** in space (§4): pressure, the pull toward the hole, a HUD warning.
 5. **Repair core + restore tool** (§9 B). Gate: `repair_probe`. Breaches seal.
-6. **A boat**, floating by buoyancy (§7) with no flooding yet. Gate: floats level.
-7. **The sea cut out of the hull** (§6), with the terrain and water area. Gate: the shot.
-8. **Flooding** (§5) + water drawn inside (§8) + listing and sinking (§7).
+6. **The ghost hull** (§7b) on the generated spaceship: walk its decks while it flies.
+   Gate: `ghost_hull_probe`.
+7. **A boat**, floating by buoyancy (§7) with no flooding yet, crew aboard on its ghost.
+   Gate: floats level.
+8. **The sea cut out of the hull** (§6), with the terrain and water area. Gate: the shot.
+9. **Flooding** (§5) + water drawn inside (§8) + listing and sinking (§7).
    Gates: `hull_flood_probe`, the boat lists and sinks.
-9. **Brick-by-brick patching** (§9 A) on the same core.
-10. **E3, E4, E5** as measurements call for them.
-11. **Respawn** (§10) when the user decides.
+10. **Brick-by-brick patching** (§9 A) on the same core.
+11. **E3, E4, E5** as measurements call for them.
+12. **Respawn** (§10) when the user decides.
 
 ## 13. Open questions
 
@@ -272,5 +361,9 @@ Each step lands on `main` on its own, with its gate.
 - Pumps and bailing: a module, a tool, or nothing?
 - Do buildings get the air grid too (flooded basements, sealed bunkers)?
 - Ships bigger than ~60 m: sparse grid blocks from the start, or when needed?
-- Sink My Bricks' dev shorts ("Voxel Ocean", "Ghost ships", "This tool has saved me dozens of
-  hours", "Trees in video games") -- transcripts not read yet; their ocean approach may change §5-§6.
+- Waves: keep the vertical-only sine sum, or take Sink My Bricks' inverted-displacement trick
+  for choppier crests (Reference/brick-games.md 1.1)? The water area decides. Either way §5 and §7
+  read heights only through `BrickWave.sample_heights`, so this plan does not change.
+- The ghost hull (§7b): a pawn's body moved to another physics space while its node stays in the
+  scene -- prototype first; if Godot fights it, fall back to their way (the ghost placed far off in
+  the same world).

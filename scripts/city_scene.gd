@@ -635,6 +635,9 @@ var _full_rebuilds := 0
 var _show_grids := false
 var _grid_count := 0
 var _grid_view: MeshInstance3D
+## What the physics sees (Shift+G): band boxes, pieces' shapes and centres of
+## mass by sleep state (PhysicsView, Docs/Hulls.md 11 E1). Made on first use.
+var _physics_view: PhysicsView
 ## How wide the next shot hits, in metres. The wheel sets it; the reticle draws
 ## it at the range it is actually pointing at, because a radius in metres means
 ## nothing to the eye until it is a circle over the wall it is about to remove.
@@ -1341,6 +1344,8 @@ func _ready() -> void:
 		_run_groups_pass()
 	elif _view_mode:
 		_run_view_pass()
+	elif "--physview" in OS.get_cmdline_user_args():
+		_run_physview_pass()
 	elif _squad_mode:
 		_run_squad_pass()
 	elif _mechfall_mode:
@@ -10971,6 +10976,74 @@ func _run_groups_pass() -> void:
 	get_tree().quit(1 if _gate_fail > 0 else 0)
 
 
+## The physics view's check (PhysicsView, Docs/Hulls.md 11 E1).
+##
+##     godot --headless --path . scenes/city.tscn -- --physview
+##
+## A tower in bricks, blasted: the view draws its bands' boxes and the pieces
+## that come off, each piece's centre of mass, and counts what is awake; off
+## again, it draws nothing and the boxes are all still there.
+func _run_physview_pass() -> void:
+	print("[physview] what the physics sees")
+	respawn_buildings = false
+	var picks := _groups_pick(1)
+	_gate_ok("a tower to blast", picks.size() == 1)
+	if picks.is_empty():
+		print("[physview] %d ok, %d FAIL" % [_gate_pass, _gate_fail])
+		get_tree().quit(1)
+		return
+	var b: BuildingRegistry.Building = picks[0][0]
+	var face: Vector3 = picks[0][1]
+	_promote(b.id)
+	for t in 600:
+		await get_tree().physics_frame
+		if _brick_nodes.has(b.id) and not _bands_building(b.id):
+			break
+	_gate_ok("its collision is built", _brick_cols.has(b.id))
+	# Wide shots, as a player's widest (_run_bigbreak_pass): enough to cut
+	# pieces loose, not only a hole.
+	for shot in [[0.0, 8.0], [-4.0, 10.0], [4.0, 10.0]]:
+		_blast(face + Vector3(0.0, float(shot[0]), 0.0), float(shot[1]))
+		for t in 20:
+			await get_tree().physics_frame
+	for t in 30:
+		await get_tree().physics_frame
+	_toggle_physics_view()
+	var v := _physics_view
+	print("  %s" % v.hud_line())
+	_gate_ok("bands drawn", v.bands > 0 and v.band_boxes > 0, "%d bands %d boxes" % [v.bands, v.band_boxes])
+	_gate_ok("pieces drawn with their shapes", v.pieces > 0 and v.piece_boxes > 0,
+			"%d pieces %d boxes" % [v.pieces, v.piece_boxes])
+	var lines := (v.mesh as ImmediateMesh).get_surface_count()
+	_gate_ok("something to see", lines == 1)
+	# Long enough for a piece that will not settle to show red.
+	var t0 := Time.get_ticks_msec()
+	while Time.get_ticks_msec() - t0 < PhysicsView.NEVER_SLEEPS_MS + 1500:
+		await get_tree().physics_frame
+	v.redraw(_brick_cols, islands)
+	print("  after %.1f s: %s" % [(Time.get_ticks_msec() - t0) / 1000.0, v.hud_line()])
+	print("  %s" % _caps_hud_line())
+	var shapes0 := _physview_shapes()
+	v.redraw(_brick_cols, islands)
+	_toggle_physics_view()
+	_gate_ok("off: nothing drawn", not v.visible)
+	var shapes1 := _physview_shapes()
+	_gate_ok("drawing changed no shape", shapes0 == shapes1, "%d then %d" % [shapes0, shapes1])
+	print("[physview] %d ok, %d FAIL" % [_gate_pass, _gate_fail])
+	get_tree().quit(1 if _gate_fail > 0 else 0)
+
+
+## Every band's and every piece's shape count, summed (_run_physview_pass).
+func _physview_shapes() -> int:
+	var n := 0
+	for id in _brick_cols:
+		n += (_brick_cols[id] as BuildingCollision).shape_count()
+	for isl in islands.islands:
+		if isl.is_valid() and isl.body != null:
+			n += PhysicsServer3D.body_get_shape_count(isl.body.get_rid())
+	return n
+
+
 ## The view switches' gate (DebugView).
 ##
 ##     godot --path . --resolution 1280x720 scenes/city.tscn -- --view --big
@@ -14580,6 +14653,8 @@ func _follow_spaces_view() -> void:
 
 
 func _process(delta: float) -> void:
+	if _physics_view != null:
+		_physics_view.tick(_brick_cols, islands)
 	# Frozen (F10), the detail square and the coarse tier's hiding hold still
 	# for where the camera WAS, as in the heightfield test.
 	if _terrain_streamer != null and not _lod_frozen:
@@ -14709,6 +14784,8 @@ func _update_hud() -> void:
 		"rooms         %d  (%d with a diff, %d piece(s) laid as bricks)" % [
 			rooms.rooms, rooms.changed, rooms.laid],
 		_hud_cache.groups,
+		_caps_hud_line(),
+		_physics_view.hud_line() if _physics_view != null else "physics view  off (shift+G)",
 		_view_hud_line(),
 		"",
 		("%s  %d/%d%s   %s (SPACE SPACE)" % [_gun.gun.gun_name, _gun.ammo, _gun.mag_size(),
@@ -14717,12 +14794,20 @@ func _update_hud() -> void:
 			else "blast %.1f m (wheel)   %s (SPACE SPACE)" % [
 				_blast_radius, _mode_word()],
 		"1 gun · 2 blast · T next gun · R reload · V on foot · K soldier · U squad · Y enemy mech · F mech order" + (" · H disasters (shift: end)" if disasters != null else ""),
-		"LMB fire · X big blast · P place a saved build · WASD move · shift fast · G grids · B bevel · J overlap"
+		"LMB fire · X big blast · P place a saved build · WASD move · shift fast · G grids (shift: physics) · B bevel · J overlap"
 			+ "
 F1 stats · F2 profiler · F3 reset worst · F4 AI · F5 save · F9 load · F10 terrain dev menu · F11 terrain edit · N respawn
 7 structure solid/see-through/hidden · 8 interior pieces · 9 items  (what is hidden is still there)"
 			+ ("" if respawn_buildings else "\nRESPAWN OFF (N) — buildings keep their bricks once promoted"),
 	])
+
+
+## The debris caps against what holds them (IslandManager.cap_counts).
+func _caps_hud_line() -> String:
+	var c := islands.cap_counts()
+	return "caps          settled small %d/%d · large %d/%d · total %d/%d · %d falling" % [
+		c.small, islands.small_live_max, c.large, islands.large_live_max,
+		c.small + c.large, islands.total_live_max, c.falling]
 
 
 ## One of the view switches (DebugView): 7, 8 and 9 in play.
@@ -15233,11 +15318,26 @@ func _unhandled_input(event: InputEvent) -> void:
 		KEY_P:
 			_placer.toggle(_build_path if _build_path != "" else BuildRecipe.QUICK_SAVE)
 		KEY_G:
+			if event.shift_pressed:
+				_toggle_physics_view()
+				return
 			_show_grids = not _show_grids
 			if _grid_view != null:
 				_grid_view.visible = _show_grids
 			if _show_grids:
 				_draw_grids()
+
+
+## Shift+G: the physics view on or off (PhysicsView).
+func _toggle_physics_view() -> void:
+	if _physics_view == null:
+		_physics_view = PhysicsView.new()
+		add_child(_physics_view)
+	_physics_view.visible = not _physics_view.visible
+	if _physics_view.visible:
+		_physics_view.redraw(_brick_cols, islands)
+	print("[city] physics view %s" % ("ON" if _physics_view.visible else "off"))
+	_update_hud()
 
 
 ## Every live chunk as a wireframe box: where its grid is, how big it is, and
