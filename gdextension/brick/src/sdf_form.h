@@ -2,6 +2,7 @@
 
 #include <godot_cpp/classes/ref_counted.hpp>
 #include <godot_cpp/variant/aabb.hpp>
+#include <godot_cpp/variant/color.hpp>
 #include <godot_cpp/variant/array.hpp>
 #include <godot_cpp/variant/packed_byte_array.hpp>
 #include <godot_cpp/variant/packed_color_array.hpp>
@@ -17,6 +18,7 @@
 #include <cstdint>
 #include <memory>
 #include <unordered_map>
+#include <vector>
 
 using namespace godot;
 
@@ -43,6 +45,13 @@ using namespace godot;
 /// the cells that changed -- a brick added is a box unioned, a brick taken a box
 /// carved -- so the smooth surface stays smooth wherever the bricks were not
 /// touched, and `cells` gives back exactly the bricks that were synced.
+///
+/// Colour (Docs/AssetWorkshop.md, "Colour from model to bricks"): every sample also
+/// keeps a colour, none until something gives it one. A model stamped with its
+/// vertex colours gives each sample the colour of the model's surface nearest it;
+/// a brush gives `set_colour`'s (none by default); COLOUR repaints. The surface is
+/// drawn in it; `cell_colours` votes each brick cell's colour from a palette (in
+/// Oklab, as the eye sees colour), and `sync_cells` gives bricks' colours back.
 class SdfForm : public RefCounted {
     GDCLASS(SdfForm, RefCounted)
 
@@ -53,14 +62,19 @@ public:
     static constexpr int STUD = 5;          // samples a stud
     static constexpr int PLATE = 2;         // samples a plate
 
-    enum Op { ADD = 0, REMOVE = 1, SMOOTH = 2, PAINT = 3, MARK = 4, UNMARK = 5, GROW = 6 };
+    enum Op { ADD = 0, REMOVE = 1, SMOOTH = 2, PAINT = 3, MARK = 4, UNMARK = 5, GROW = 6, COLOUR = 7 };
     enum Shape { SHAPE_BOX = 0, SHAPE_CONE = 1 };
 
     struct Block {
         float d[B3];
         uint8_t part[B3];
         uint8_t flag[B3];
+        // RGBA8 (r in the high byte); 0: no colour of its own (drawn in its part's).
+        // Last, so an older save's blocks (without it) read as the leading bytes.
+        uint32_t col[B3];
     };
+    /// A block's size before colours (the "SDF1" saves).
+    static constexpr int64_t BLOCK_V1 = (int64_t)B3 * (sizeof(float) + 2);
 
 protected:
     static void _bind_methods();
@@ -72,6 +86,12 @@ private:
     bool recording = false;
     std::unordered_map<int64_t, std::unique_ptr<Block>> undo;
     std::unordered_map<int64_t, bool> dirty;
+    // What ADD, GROW, flatten and COLOUR give a sample (0: none).
+    uint32_t brush_col = 0;
+    // While a stamp_mesh with colours runs: each dense sample's colour.
+    struct StampCol { const std::vector<uint32_t> *col; Vector3i lo, D; };
+    const StampCol *stamp_col = nullptr;
+    uint32_t add_col(const Vector3i &s) const;
 
     static int64_t key(int bx, int by, int bz);
     static Vector3i unkey(int64_t k);
@@ -80,6 +100,11 @@ private:
     float d_at(int i, int j, int k) const;
     uint8_t part_at(int i, int j, int k) const;
     uint8_t flag_at(int i, int j, int k) const;
+    uint32_t col_at(int i, int j, int k) const;
+    // The colour of the inside sample nearest `p` among the eight round it (0: none).
+    uint32_t col_near(const Vector3 &p) const;
+    struct Cell { int x, y, z, part, flag; };
+    std::vector<Cell> cell_list() const;
     float trilinear(const Vector3 &p) const;
 
     // Calls fn(block, index, sample) for every sample in [lo, hi], creating blocks
@@ -116,8 +141,11 @@ public:
     void flatten(const Vector3 &center, float radius, const Vector3 &normal, const Vector3 &point,
             float strength, int part);
     /// A closed mesh (triangles `index` into `verts`, samples) as a solid: inside by
-    /// ray parity along x, distance to its nearest triangle.
-    void stamp_mesh(int op, const PackedVector3Array &verts, const PackedInt32Array &index, int part);
+    /// ray parity along x, distance to its nearest triangle. `colours` (one a vertex,
+    /// optional): with ADD each sample takes the colour of the surface nearest it,
+    /// blended across its triangle.
+    void stamp_mesh(int op, const PackedVector3Array &verts, const PackedInt32Array &index, int part,
+            const PackedColorArray &colours = PackedColorArray());
     /// A lathe: `profile` (out from the axis, along it; samples) closed down to the axis
     /// at both ends and turned about the local y axis, placed by `xform`.
     void lathe(int op, const Transform3D &xform, const PackedVector2Array &profile, float blend, int part);
@@ -156,8 +184,23 @@ public:
     /// The solid brick cells: x, y, z, part, flag for each.
     PackedInt32Array cells() const;
     /// Writes back the cells that differ between `before` and `after` (both as
-    /// `cells` gives them; flags ignored).
-    void sync_cells(const PackedInt32Array &before, const PackedInt32Array &after);
+    /// `cells` gives them; flags ignored). `colours` (optional, one a cell of `after`;
+    /// alpha 0: none): the colour each cell added or relabelled takes.
+    void sync_cells(const PackedInt32Array &before, const PackedInt32Array &after,
+            const PackedColorArray &colours = PackedColorArray());
+
+    /// The colour new clay takes from ADD, GROW and flatten, and COLOUR paints (alpha
+    /// 0: none, drawn in its part's colour). None by default.
+    void set_colour(const Color &c);
+    Color get_colour() const;
+    /// The colour at sample `p` (the inside sample nearest it; alpha 0: none).
+    Color colour_at(const Vector3 &p) const;
+    /// Each cell's colour, one for each cell in `cells`' order: the index into
+    /// `palette` that most of the cell's coloured samples are nearest to (in Oklab,
+    /// samples near the surface counting most -- the colour that is seen), -1 when no
+    /// sample has one. A cell with none takes the nearest coloured cell's, through the
+    /// solid, so the inside of a model is its surface's colour, not its part's.
+    PackedInt32Array cell_colours(const PackedColorArray &palette) const;
 
     /// Undo: start recording; end gives the blocks as they were before, and
     /// `swap_blocks` puts such a record back and gives the record of what it replaced.
@@ -169,9 +212,9 @@ public:
     Array take_dirty();
     Array block_keys() const;
     /// The surface in block `b` (surface nets, normals from the field), in samples
-    /// from the grid's corner: ArrayMesh arrays with COLOR from `palette[part]` (lighter
-    /// where marked smooth), or empty.
-    Array mesh_block(const Vector3i &b, const PackedColorArray &palette) const;
+    /// from the grid's corner: ArrayMesh arrays with COLOR from the samples' own colour
+    /// (with `own_colours`) else `palette[part]` (lighter where marked smooth), or empty.
+    Array mesh_block(const Vector3i &b, const PackedColorArray &palette, bool own_colours = true) const;
 
     /// The first surface point along a ray (samples), or null.
     Variant raycast(const Vector3 &from, const Vector3 &dir, float max_dist) const;

@@ -66,6 +66,31 @@ void new_block(SdfForm::Block &b) {
     std::fill(std::begin(b.d), std::end(b.d), SdfForm::BAND);
     std::memset(b.part, 0, sizeof(b.part));
     std::memset(b.flag, 0, sizeof(b.flag));
+    std::memset(b.col, 0, sizeof(b.col));
+}
+
+inline uint32_t pack_col(const Color &c) {
+    if (c.a <= 0.0f) return 0;
+    auto ch = [](float v) { return (uint32_t)std::lround(std::clamp(v, 0.0f, 1.0f) * 255.0f); };
+    return (ch(c.r) << 24) | (ch(c.g) << 16) | (ch(c.b) << 8) | 0xffu;
+}
+
+inline Color unpack_col(uint32_t v) {
+    if (v == 0) return Color(0, 0, 0, 0);
+    return Color(((v >> 24) & 0xff) / 255.0f, ((v >> 16) & 0xff) / 255.0f, ((v >> 8) & 0xff) / 255.0f, 1.0f);
+}
+
+// Oklab (Bjorn Ottosson, 2020) of an sRGB colour: distances in it follow what the eye
+// sees, as CIE Lab's do (Sink My Bricks matches by CIE76), and it is cheaper.
+inline Vector3 oklab(const Color &c) {
+    auto lin = [](float v) { return v <= 0.04045f ? v / 12.92f : std::pow((v + 0.055f) / 1.055f, 2.4f); };
+    const float r = lin(c.r), g = lin(c.g), b = lin(c.b);
+    const float l = std::cbrt(0.4122214708f * r + 0.5363325363f * g + 0.0514459929f * b);
+    const float m = std::cbrt(0.2119034982f * r + 0.6806995451f * g + 0.1073969566f * b);
+    const float s = std::cbrt(0.0883024619f * r + 0.2817188376f * g + 0.6299787005f * b);
+    return Vector3(0.2104542553f * l + 0.7936177850f * m - 0.0040720468f * s,
+            1.9779984951f * l - 2.4285922050f * m + 0.4505937099f * s,
+            0.0259040371f * l + 0.7827717662f * m - 0.8086757660f * s);
 }
 
 template <typename T>
@@ -91,7 +116,8 @@ void SdfForm::_bind_methods() {
     ClassDB::bind_method(D_METHOD("shape", "op", "kind", "xform", "size", "blend", "part"), &SdfForm::shape);
     ClassDB::bind_method(D_METHOD("flatten", "center", "radius", "normal", "point", "strength", "part"),
             &SdfForm::flatten);
-    ClassDB::bind_method(D_METHOD("stamp_mesh", "op", "verts", "index", "part"), &SdfForm::stamp_mesh);
+    ClassDB::bind_method(D_METHOD("stamp_mesh", "op", "verts", "index", "part", "colours"), &SdfForm::stamp_mesh,
+            DEFVAL(PackedColorArray()));
     ClassDB::bind_method(D_METHOD("lathe", "op", "xform", "profile", "blend", "part"), &SdfForm::lathe);
     ClassDB::bind_method(D_METHOD("fit_pieces", "cells", "pieces", "min_gain"), &SdfForm::fit_pieces);
     ClassDB::bind_method(D_METHOD("scale", "factor", "pivot"), &SdfForm::scale);
@@ -102,13 +128,18 @@ void SdfForm::_bind_methods() {
     ClassDB::bind_method(D_METHOD("blur", "passes"), &SdfForm::blur);
     ClassDB::bind_method(D_METHOD("clear"), &SdfForm::clear);
     ClassDB::bind_method(D_METHOD("cells"), &SdfForm::cells);
-    ClassDB::bind_method(D_METHOD("sync_cells", "before", "after"), &SdfForm::sync_cells);
+    ClassDB::bind_method(D_METHOD("sync_cells", "before", "after", "colours"), &SdfForm::sync_cells,
+            DEFVAL(PackedColorArray()));
+    ClassDB::bind_method(D_METHOD("set_colour", "colour"), &SdfForm::set_colour);
+    ClassDB::bind_method(D_METHOD("get_colour"), &SdfForm::get_colour);
+    ClassDB::bind_method(D_METHOD("colour_at", "p"), &SdfForm::colour_at);
+    ClassDB::bind_method(D_METHOD("cell_colours", "palette"), &SdfForm::cell_colours);
     ClassDB::bind_method(D_METHOD("begin_edit"), &SdfForm::begin_edit);
     ClassDB::bind_method(D_METHOD("end_edit"), &SdfForm::end_edit);
     ClassDB::bind_method(D_METHOD("swap_blocks", "record"), &SdfForm::swap_blocks);
     ClassDB::bind_method(D_METHOD("take_dirty"), &SdfForm::take_dirty);
     ClassDB::bind_method(D_METHOD("block_keys"), &SdfForm::block_keys);
-    ClassDB::bind_method(D_METHOD("mesh_block", "b", "palette"), &SdfForm::mesh_block);
+    ClassDB::bind_method(D_METHOD("mesh_block", "b", "palette", "own_colours"), &SdfForm::mesh_block, DEFVAL(true));
     ClassDB::bind_method(D_METHOD("raycast", "from", "dir", "max_dist"), &SdfForm::raycast);
     ClassDB::bind_method(D_METHOD("sample", "p"), &SdfForm::sample);
     ClassDB::bind_method(D_METHOD("part_near", "p"), &SdfForm::part_near);
@@ -124,6 +155,7 @@ void SdfForm::_bind_methods() {
     BIND_CONSTANT(MARK);
     BIND_CONSTANT(UNMARK);
     BIND_CONSTANT(GROW);
+    BIND_CONSTANT(COLOUR);
     BIND_CONSTANT(SHAPE_BOX);
     BIND_CONSTANT(SHAPE_CONE);
 }
@@ -181,6 +213,49 @@ uint8_t SdfForm::flag_at(int i, int j, int k) const {
     return b ? b->flag[sidx(fmod_pos(i, B), fmod_pos(j, B), fmod_pos(k, B))] : 0;
 }
 
+uint32_t SdfForm::col_at(int i, int j, int k) const {
+    const Block *b = find(key(fdiv(i, B), fdiv(j, B), fdiv(k, B)));
+    return b ? b->col[sidx(fmod_pos(i, B), fmod_pos(j, B), fmod_pos(k, B))] : 0;
+}
+
+uint32_t SdfForm::col_near(const Vector3 &p) const {
+    // Sample centres are at whole + 0.5: the eight round p.
+    const Vector3 q = p - Vector3(0.5f, 0.5f, 0.5f);
+    const int x0 = (int)std::floor(q.x), y0 = (int)std::floor(q.y), z0 = (int)std::floor(q.z);
+    uint32_t best = 0, any = 0;
+    float bd = 1e30f;
+    for (int c = 0; c < 8; ++c) {
+        const int x = x0 + (c & 1), y = y0 + ((c >> 1) & 1), z = z0 + ((c >> 2) & 1);
+        const uint32_t v = col_at(x, y, z);
+        if (v == 0) continue;
+        any = v;
+        if (d_at(x, y, z) >= 0.0f) continue;
+        const float dd = (Vector3(x + 0.5f, y + 0.5f, z + 0.5f) - p).length_squared();
+        if (dd < bd) {
+            bd = dd;
+            best = v;
+        }
+    }
+    return best ? best : any;
+}
+
+uint32_t SdfForm::add_col(const Vector3i &s) const {
+    if (stamp_col) {
+        const Vector3i l = s - stamp_col->lo;
+        const Vector3i &D = stamp_col->D;
+        if (l.x >= 0 && l.y >= 0 && l.z >= 0 && l.x < D.x && l.y < D.y && l.z < D.z)
+            return (*stamp_col->col)[(size_t)l.x + (size_t)D.x * ((size_t)l.y + (size_t)D.y * l.z)];
+        return 0;
+    }
+    return brush_col;
+}
+
+void SdfForm::set_colour(const Color &c) { brush_col = pack_col(c); }
+
+Color SdfForm::get_colour() const { return unpack_col(brush_col); }
+
+Color SdfForm::colour_at(const Vector3 &p) const { return unpack_col(col_near(p)); }
+
 float SdfForm::trilinear(const Vector3 &p) const {
     const Vector3 q = p - Vector3(0.5f, 0.5f, 0.5f);
     const int x = (int)std::floor(q.x), y = (int)std::floor(q.y), z = (int)std::floor(q.z);
@@ -227,6 +302,7 @@ void SdfForm::apply_shape(int op, const Vector3i &lo, const Vector3i &hi, float 
                 const float nd = blend > 0.0f ? smin(old, v, blend) : std::min(old, v);
                 if (v < old) {
                     b->part[i] = label;
+                    b->col[i] = add_col(s);
                 }
                 b->d[i] = clampb(nd);
             });
@@ -260,9 +336,11 @@ void SdfForm::apply_shape(int op, const Vector3i &lo, const Vector3i &hi, float 
         case PAINT:
         case MARK:
         case UNMARK:
+        case COLOUR:
             each(lo, hi, false, [&](Block *b, int i, const Vector3i &s) {
                 if (at(s) >= 0.0f) return;
                 if (op == PAINT) b->part[i] = label;
+                else if (op == COLOUR) b->col[i] = brush_col;
                 else b->flag[i] = op == MARK ? 1 : 0;
             });
             break;
@@ -351,7 +429,10 @@ void SdfForm::grow(const Vector3 &a, const Vector3 &b, float radius, float amoun
         if (w <= 0.0f) return;
         const float old = blk->d[i];
         const float nd = clampb(old - amount * w);
-        if (nd < 0.0f && old >= 0.0f) blk->part[i] = label;
+        if (nd < 0.0f && old >= 0.0f) {
+            blk->part[i] = label;
+            blk->col[i] = brush_col;
+        }
         blk->d[i] = nd;
     });
 }
@@ -369,7 +450,10 @@ void SdfForm::flatten(const Vector3 &center, float radius, const Vector3 &normal
         if (w <= 0.0f) return;
         const float old = blk->d[i];
         const float nd = clampb(old + (n.dot(p - point) - old) * w);
-        if (nd < 0.0f && old >= 0.0f) blk->part[i] = label;
+        if (nd < 0.0f && old >= 0.0f) {
+            blk->part[i] = label;
+            blk->col[i] = brush_col;
+        }
         blk->d[i] = nd;
     });
 }
@@ -380,7 +464,8 @@ void SdfForm::cell_box(const Vector3i &c, int op, int part) {
     box(op, lo + half, half, 0.0f, part);
 }
 
-void SdfForm::stamp_mesh(int op, const PackedVector3Array &verts, const PackedInt32Array &index, int part) {
+void SdfForm::stamp_mesh(int op, const PackedVector3Array &verts, const PackedInt32Array &index, int part,
+        const PackedColorArray &colours) {
     const int64_t nt = index.size() / 3;
     if (nt == 0 || verts.is_empty()) {
         return;
@@ -400,6 +485,10 @@ void SdfForm::stamp_mesh(int op, const PackedVector3Array &verts, const PackedIn
     auto didx = [&](int x, int y, int z) { return (int64_t)x + (int64_t)D.x * ((int64_t)y + (int64_t)D.y * z); };
     std::vector<float> ud((size_t)n, BAND);
     std::vector<std::vector<float>> rows((size_t)D.y * D.z);
+    // With colours: each sample's nearest triangle, for its colour.
+    const bool coloured = op == ADD && colours.size() == verts.size();
+    std::vector<int32_t> near_t;
+    if (coloured) near_t.assign((size_t)n, -1);
     const Vector3 *v = verts.ptr();
     const int32_t *ix = index.ptr();
     for (int64_t t = 0; t < nt; ++t) {
@@ -415,8 +504,12 @@ void SdfForm::stamp_mesh(int op, const PackedVector3Array &verts, const PackedIn
                 for (int x = std::max(0, tlo.x); x <= std::min(D.x - 1, thi.x); ++x) {
                     const Vector3 p((float)(x + lo.x) + 0.5f, (float)(y + lo.y) + 0.5f, (float)(z + lo.z) + 0.5f);
                     const float d = (p - closest_on_tri(p, a, b, c)).length();
-                    float &u = ud[(size_t)didx(x, y, z)];
-                    u = std::min(u, d);
+                    const size_t ui = (size_t)didx(x, y, z);
+                    float &u = ud[ui];
+                    if (d < u) {
+                        u = d;
+                        if (coloured) near_t[ui] = (int32_t)t;
+                    }
                 }
         // Inside: where a row of samples along x crosses the triangle (nudged off
         // sample centres so a row never runs exactly through an edge).
@@ -449,6 +542,41 @@ void SdfForm::stamp_mesh(int op, const PackedVector3Array &verts, const PackedIn
                 sd[(size_t)i] = (at & 1) ? -ud[(size_t)i] : ud[(size_t)i];
             }
         }
+    // Each sample's colour: its nearest triangle's, blended by where on it the nearest
+    // point is.
+    std::vector<uint32_t> sc;
+    if (coloured) {
+        sc.assign((size_t)n, 0);
+        const Color *cp = colours.ptr();
+        for (int z = 0; z < D.z; ++z)
+            for (int y = 0; y < D.y; ++y)
+                for (int x = 0; x < D.x; ++x) {
+                    const size_t i = (size_t)didx(x, y, z);
+                    const int32_t t = near_t[i];
+                    if (t < 0) continue;
+                    const int32_t i0 = ix[t * 3], i1 = ix[t * 3 + 1], i2 = ix[t * 3 + 2];
+                    const Vector3 a = v[i0], b = v[i1], c = v[i2];
+                    const Vector3 p((float)(x + lo.x) + 0.5f, (float)(y + lo.y) + 0.5f, (float)(z + lo.z) + 0.5f);
+                    const Vector3 q = closest_on_tri(p, a, b, c);
+                    // Barycentric of q (Ericson, Real-Time Collision Detection 3.4).
+                    const Vector3 e0 = b - a, e1 = c - a, e2 = q - a;
+                    const float d00 = e0.dot(e0), d01 = e0.dot(e1), d11 = e1.dot(e1);
+                    const float d20 = e2.dot(e0), d21 = e2.dot(e1);
+                    const float den = d00 * d11 - d01 * d01;
+                    float wb = 0.0f, wc = 0.0f;
+                    if (std::abs(den) > 1e-12f) {
+                        wb = std::clamp((d11 * d20 - d01 * d21) / den, 0.0f, 1.0f);
+                        wc = std::clamp((d00 * d21 - d01 * d20) / den, 0.0f, 1.0f - wb);
+                    }
+                    const float wa = 1.0f - wb - wc;
+                    const Color ca = cp[i0], cb = cp[i1], cc = cp[i2];
+                    Color m(ca.r * wa + cb.r * wb + cc.r * wc, ca.g * wa + cb.g * wb + cc.g * wc,
+                            ca.b * wa + cb.b * wb + cc.b * wc, 1.0f);
+                    if (ca.a <= 0.0f && cb.a <= 0.0f && cc.a <= 0.0f) m.a = 0.0f;
+                    sc[i] = pack_col(m);
+                }
+    }
+    const StampCol stc{&sc, lo, D};
     struct Ctx { const std::vector<float> *sd; Vector3i lo, D; };
     const Ctx ctx{&sd, lo, D};
     auto fn = [](const Vector3 &p, const void *c) -> float {
@@ -457,7 +585,12 @@ void SdfForm::stamp_mesh(int op, const PackedVector3Array &verts, const PackedIn
         if (x < 0 || y < 0 || z < 0 || x >= k->D.x || y >= k->D.y || z >= k->D.z) return SdfForm::BAND;
         return (*k->sd)[(size_t)x + (size_t)k->D.x * ((size_t)y + (size_t)k->D.y * z)];
     };
+    const uint32_t keep = brush_col;
+    if (coloured) stamp_col = &stc;
+    else if (op == ADD) brush_col = 0; // a model without colours: its part's
     apply_shape(op, lo, hi, 0.0f, part, fn, &ctx);
+    stamp_col = nullptr;
+    brush_col = keep;
 }
 
 namespace {
@@ -703,6 +836,7 @@ void SdfForm::combine(const Ref<SdfForm> &other, int op, const PackedInt32Array 
                         const int l = ob->part[i];
                         b->part[i] = (uint8_t)(l < labels.size() ? labels[l] : l);
                         b->flag[i] = ob->flag[i];
+                        b->col[i] = ob->col[i];
                     }
                 }
             } else if (op == REMOVE) {
@@ -758,6 +892,7 @@ void SdfForm::remap(const Transform3D &xf) {
                     nb->d[i] = d;
                     nb->part[i] = part_at(s.x, s.y, s.z);
                     nb->flag[i] = flag_at(s.x, s.y, s.z);
+                    nb->col[i] = col_at(s.x, s.y, s.z);
                     near = near || d < BAND;
                 }
         if (near) out[w.first] = std::move(nb);
@@ -808,8 +943,8 @@ void SdfForm::clear() {
     blocks.clear();
 }
 
-PackedInt32Array SdfForm::cells() const {
-    struct C { int x, y, z, part, flag; };
+std::vector<SdfForm::Cell> SdfForm::cell_list() const {
+    using C = Cell;
     std::vector<C> out;
     for (const auto &kv : blocks) {
         const Vector3i o = unkey(kv.first) * B;
@@ -831,6 +966,11 @@ PackedInt32Array SdfForm::cells() const {
         if (a.z != b.z) return a.z < b.z;
         return a.x < b.x;
     });
+    return out;
+}
+
+PackedInt32Array SdfForm::cells() const {
+    const std::vector<Cell> out = cell_list();
     PackedInt32Array r;
     r.resize((int64_t)out.size() * 5);
     int32_t *w = r.ptrw();
@@ -844,28 +984,128 @@ PackedInt32Array SdfForm::cells() const {
     return r;
 }
 
-void SdfForm::sync_cells(const PackedInt32Array &before, const PackedInt32Array &after) {
+PackedInt32Array SdfForm::cell_colours(const PackedColorArray &palette) const {
+    const std::vector<Cell> cl = cell_list();
+    PackedInt32Array r;
+    r.resize((int64_t)cl.size());
+    int32_t *w = r.ptrw();
+    const int np = (int)palette.size();
+    std::vector<Vector3> pl((size_t)np);
+    for (int i = 0; i < np; ++i) pl[(size_t)i] = oklab(palette[i]);
+    std::unordered_map<uint32_t, int> memo;
+    auto nearest = [&](uint32_t v) {
+        auto it = memo.find(v);
+        if (it != memo.end()) return it->second;
+        const Vector3 q = oklab(unpack_col(v));
+        int best = -1;
+        float bd = 1e30f;
+        for (int i = 0; i < np; ++i) {
+            const float d = (pl[(size_t)i] - q).length_squared();
+            if (d < bd) {
+                bd = d;
+                best = i;
+            }
+        }
+        memo[v] = best;
+        return best;
+    };
+    std::unordered_map<int64_t, size_t> at;
+    std::vector<float> vote((size_t)std::max(np, 1));
+    for (size_t c = 0; c < cl.size(); ++c) {
+        const Cell &k = cl[c];
+        at[key(k.x, k.y, k.z)] = c;
+        w[c] = -1;
+        if (np == 0) continue;
+        std::fill(vote.begin(), vote.end(), 0.0f);
+        bool any = false;
+        for (int z = 0; z < STUD; ++z)
+            for (int y = 0; y < PLATE; ++y)
+                for (int x = 0; x < STUD; ++x) {
+                    const int i = k.x * STUD + x, j = k.y * PLATE + y, kk = k.z * STUD + z;
+                    const uint32_t v = col_at(i, j, kk);
+                    if (v == 0) continue;
+                    const float d = d_at(i, j, kk);
+                    if (d >= 0.0f) continue;
+                    // The skin counts most: the colour seen is the surface's.
+                    vote[(size_t)nearest(v)] += 1.0f / (1.0f + std::abs(d));
+                    any = true;
+                }
+        if (!any) {
+            // Deep inside (every sample past the band): a stamped model's middle, which
+            // the fill below gives its surface's colour. Clay drawn without a colour is
+            // not deep near its surface, and keeps none (its part's).
+            bool deep = true;
+            for (int z = 0; z < STUD && deep; ++z)
+                for (int y = 0; y < PLATE && deep; ++y)
+                    for (int x = 0; x < STUD && deep; ++x)
+                        deep = d_at(k.x * STUD + x, k.y * PLATE + y, k.z * STUD + z) < -(BAND - 1.0f);
+            if (!deep) w[c] = -2;
+            continue;
+        }
+        int best = 0;
+        for (int i = 1; i < np; ++i)
+            if (vote[(size_t)i] > vote[(size_t)best]) best = i;
+        w[c] = best;
+    }
+    // A cell with no colour: the nearest coloured cell's, through the solid (breadth
+    // first from every coloured cell).
+    std::vector<size_t> front;
+    for (size_t c = 0; c < cl.size(); ++c)
+        if (w[c] >= 0) front.push_back(c);
+    static const int N6[6][3] = {{1, 0, 0}, {-1, 0, 0}, {0, 1, 0}, {0, -1, 0}, {0, 0, 1}, {0, 0, -1}};
+    while (!front.empty()) {
+        std::vector<size_t> next;
+        for (const size_t c : front) {
+            const Cell &k = cl[c];
+            for (const auto &o : N6) {
+                auto it = at.find(key(k.x + o[0], k.y + o[1], k.z + o[2]));
+                if (it == at.end() || w[it->second] != -1) continue;
+                w[it->second] = w[c];
+                next.push_back(it->second);
+            }
+        }
+        front.swap(next);
+    }
+    for (size_t c = 0; c < cl.size(); ++c)
+        if (w[c] < 0) w[c] = -1;
+    return r;
+}
+
+void SdfForm::sync_cells(const PackedInt32Array &before, const PackedInt32Array &after,
+        const PackedColorArray &colours) {
     auto ck = [](int x, int y, int z) { return key(x, y, z); }; // cells fit the same packing
     std::unordered_map<int64_t, int> a, b;
     for (int64_t i = 0; i + 4 < before.size(); i += 5)
         a[ck(before[i], before[i + 1], before[i + 2])] = before[i + 3];
-    for (int64_t i = 0; i + 4 < after.size(); i += 5)
-        b[ck(after[i], after[i + 1], after[i + 2])] = after[i + 3];
+    std::unordered_map<int64_t, uint32_t> bc;
+    for (int64_t i = 0; i + 4 < after.size(); i += 5) {
+        const int64_t k = ck(after[i], after[i + 1], after[i + 2]);
+        b[k] = after[i + 3];
+        if (i / 5 < colours.size()) bc[k] = pack_col(colours[i / 5]);
+    }
+    const uint32_t keep = brush_col;
     for (const auto &kv : a) {
         if (b.find(kv.first) == b.end()) cell_box(unkey(kv.first), REMOVE, 0);
     }
     for (const auto &kv : b) {
         auto it = a.find(kv.first);
+        auto ci = bc.find(kv.first);
+        const bool has_col = ci != bc.end();
         if (it == a.end()) {
+            brush_col = has_col ? ci->second : 0;
             cell_box(unkey(kv.first), ADD, kv.second);
-        } else if (it->second != kv.second) {
+        } else if (it->second != kv.second || has_col) {
             const Vector3i c = unkey(kv.first);
             const Vector3i lo(c.x * STUD, c.y * PLATE, c.z * STUD);
             const uint8_t label = (uint8_t)std::clamp(kv.second, 0, 255);
-            each(lo, lo + Vector3i(STUD - 1, PLATE - 1, STUD - 1), false,
-                    [&](Block *blk, int i, const Vector3i &) { blk->part[i] = label; });
+            const uint32_t col = has_col ? ci->second : 0;
+            each(lo, lo + Vector3i(STUD - 1, PLATE - 1, STUD - 1), false, [&](Block *blk, int i, const Vector3i &) {
+                blk->part[i] = label;
+                if (has_col) blk->col[i] = col;
+            });
         }
     }
+    brush_col = keep;
 }
 
 void SdfForm::begin_edit() {
@@ -950,7 +1190,7 @@ Array SdfForm::block_keys() const {
     return out;
 }
 
-Array SdfForm::mesh_block(const Vector3i &bc, const PackedColorArray &palette) const {
+Array SdfForm::mesh_block(const Vector3i &bc, const PackedColorArray &palette, bool own_colours) const {
     // Samples [-1, B] of the block each way; cubes [0, B] of those (cube c has samples
     // c and c + 1); a quad across every edge whose lower sample is the block's own --
     // so each edge is meshed by exactly one block and the blocks meet without a crack.
@@ -1052,6 +1292,10 @@ Array SdfForm::mesh_block(const Vector3i &bc, const PackedColorArray &palette) c
         const Vector3i s = floor3(p);
         const int part = part_at(s.x, s.y, s.z);
         Color col = part < palette.size() ? palette[part] : Color(1, 1, 1);
+        if (own_colours) {
+            const uint32_t own = col_near(p);
+            if (own) col = unpack_col(own);
+        }
         // Marked smooth: lighter, so the areas that will be custom pieces stand out.
         if (flag_at(s.x, s.y, s.z)) col = col.lerp(Color(1, 1, 1), 0.45f);
         colors.set(i, col);
@@ -1134,7 +1378,7 @@ PackedFloat32Array SdfForm::part_field(int part, const Vector3i &lo, const Vecto
 
 PackedByteArray SdfForm::to_bytes() const {
     PackedByteArray out;
-    bput<uint32_t>(out, 0x31464453u); // "SDF1"
+    bput<uint32_t>(out, 0x32464453u); // "SDF2": blocks with colours
     bput<int32_t>(out, (int32_t)blocks.size());
     for (const auto &kv : blocks) {
         bput<int64_t>(out, kv.first);
@@ -1149,14 +1393,18 @@ bool SdfForm::from_bytes(const PackedByteArray &bytes) {
     int64_t at = 0;
     uint32_t magic = 0;
     int32_t n = 0;
-    if (!bget(bytes, at, magic) || magic != 0x31464453u || !bget(bytes, at, n) || n < 0) return false;
+    if (!bget(bytes, at, magic) || (magic != 0x31464453u && magic != 0x32464453u) || !bget(bytes, at, n) || n < 0)
+        return false;
+    // "SDF1" (before colours): the same blocks without their colours.
+    const int64_t bs = magic == 0x31464453u ? BLOCK_V1 : (int64_t)sizeof(Block);
     std::unordered_map<int64_t, std::unique_ptr<Block>> in;
     for (int32_t e = 0; e < n; ++e) {
         int64_t k = 0;
-        if (!bget(bytes, at, k) || at + (int64_t)sizeof(Block) > bytes.size()) return false;
+        if (!bget(bytes, at, k) || at + bs > bytes.size()) return false;
         auto b = std::make_unique<Block>();
-        std::memcpy(b.get(), bytes.ptr() + at, sizeof(Block));
-        at += (int64_t)sizeof(Block);
+        std::memset(b->col, 0, sizeof(b->col));
+        std::memcpy(b.get(), bytes.ptr() + at, (size_t)bs);
+        at += bs;
         in[k] = std::move(b);
     }
     clear();

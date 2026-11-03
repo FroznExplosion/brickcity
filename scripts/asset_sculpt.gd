@@ -9,6 +9,9 @@ extends Node3D
 var form := SdfForm.new()
 ## A colour a part label (0: none).
 var palette := PackedColorArray([Color(0.8, 0.8, 0.8)])
+## Drawn in the clay's own colours where it has them (a model's, Docs/AssetWorkshop.md
+## "Colour from model to bricks"); off: in its parts' (a model that carves shows red).
+var own_colours := true
 var _meshes := {}   # Vector3i block -> MeshInstance3D
 var _mat := StandardMaterial3D.new()
 var _cursor := MeshInstance3D.new()
@@ -109,7 +112,7 @@ func remesh_all() -> void:
 
 
 func _mesh(b: Vector3i) -> void:
-	var arrays: Array = form.mesh_block(b, palette)
+	var arrays: Array = form.mesh_block(b, palette, own_colours)
 	var mi: MeshInstance3D = _meshes.get(b)
 	if arrays.is_empty():
 		if mi != null:
