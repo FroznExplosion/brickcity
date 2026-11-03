@@ -138,6 +138,24 @@ static func record(cut: Dictionary, size: int) -> Dictionary:
 			"of": runs}
 
 
+## The build's sections' record again after its bricks changed: `of` each
+## brick's section now (as `of_build` gave it, kept in step with the change).
+static func rerecord(r: BuildRecipe, of: PackedInt32Array) -> void:
+	var m: Dictionary = r.meta.sections
+	var runs := []
+	var count := {}
+	for i in of.size():
+		count[of[i]] = int(count.get(of[i], 0)) + 1
+		if not runs.is_empty() and int(runs[-1][0]) == of[i]:
+			runs[-1][1] = int(runs[-1][1]) + 1
+		else:
+			runs.append([of[i], 1])
+	m.of = runs
+	m.size = r.size()
+	for s: Dictionary in m.sections:
+		s.bricks = int(count.get(int(s.id), 0))
+
+
 ## Each brick's section from a build's meta (empty when it has none, or its
 ## bricks changed since it was cut).
 static func of_build(r: BuildRecipe) -> PackedInt32Array:

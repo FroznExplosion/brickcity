@@ -59,6 +59,13 @@ var _collision: BuildingCollision
 ## collision (world-placed) is put away and its shell box stands in, nothing
 ## damaged. `ride` / `unride`.
 var riding := false
+## Who stood on the piece being sent off (`drifted`), and a body of its bricks
+## for them to stand on: the drift handler takes both (PlanetSystem), else the
+## body is freed once the signal is out.
+var drift_riders: Array = []
+var drift_body := RID()
+## How far under a figure's origin its floor is looked for, plates.
+const RIDE_DROP := 16
 ## A generated one's doors and lifts (its recipe's meta), hung once its bricks
 ## are solid, following its chunk (Docs/RoomModules.md 7.3).
 var doors: BuildDoors = null
@@ -415,14 +422,11 @@ func _solve() -> void:
 			crumbs.throw(bricks, chunk, ids)
 			bricks.kill_blocks(chunk, ids)
 			continue
+		var riders := _riders(ids)
 		var split: Dictionary = bricks.split_island(chunk, ids)
 		if split.is_empty():
 			continue
-		var c := int(split.chunk)
-		var arrays: Array = bricks.build_chunk_mesh(c)
-		var com: Vector3 = split.local_com
-		drifted.emit(arrays, bricks.get_chunk_transform(c) * Transform3D(Basis(), com), com, ids.size(), brick_material)
-		bricks.release_chunk(c)
+		_send_off(split, ids.size(), riders)
 	_after_kill(all)
 	if not joints.is_empty():
 		_joints_step()
@@ -732,15 +736,58 @@ func _joints_step() -> void:
 		return
 	for s in sections:
 		_cut[s] = true
+	var riders := _riders(off)
 	var split: Dictionary = bricks.split_island(chunk, off)
 	if split.is_empty():
 		return
+	_send_off(split, off.size(), riders)
+	_after_kill(off)
+
+
+## A piece split off (`split_island`'s) sent drifting: its mesh, and when
+## anyone stood on it, a body of its bricks round its centre of mass that they
+## ride on (PlanetSystem moves it with the piece).
+func _send_off(split: Dictionary, count: int, riders: Array) -> void:
 	var c := int(split.chunk)
 	var arrays: Array = bricks.build_chunk_mesh(c)
 	var com: Vector3 = split.local_com
-	drifted.emit(arrays, bricks.get_chunk_transform(c) * Transform3D(Basis(), com), com, off.size(), brick_material)
+	drift_riders = riders
+	if not riders.is_empty():
+		drift_body = PhysicsServer3D.body_create()
+		PhysicsServer3D.body_set_mode(drift_body, PhysicsServer3D.BODY_MODE_STATIC)
+		PhysicsServer3D.body_set_collision_layer(drift_body, Layers.STRUCTURE)
+		PhysicsServer3D.body_set_collision_mask(drift_body, Layers.STRUCTURE_MASK)
+		bricks.add_chunk_shapes(drift_body, c, com, true, true)
+	drifted.emit(arrays, bricks.get_chunk_transform(c) * Transform3D(Basis(), com), com, count, brick_material)
+	if drift_body.is_valid():
+		PhysicsServer3D.free_rid(drift_body)
+	drift_body = RID()
+	drift_riders = []
 	bricks.release_chunk(c)
-	_after_kill(off)
+
+
+## The figures (any CharacterBody3D near it) whose floor is a brick among `ids`:
+## the first brick under each, within RIDE_DROP plates.
+func _riders(ids: PackedInt32Array) -> Array:
+	var on := {}
+	for i in ids:
+		on[i] = true
+	var out := []
+	var inv := bricks.get_chunk_transform(chunk).affine_inverse()
+	var cs := BrickWorld.get_cell_size()
+	for n in get_tree().root.find_children("*", "CharacterBody3D", true, false):
+		var b := n as CharacterBody3D
+		if (b.global_position - global_position).length() > field:
+			continue
+		var l := inv * b.global_position
+		var c := Vector3i(floori(l.x / cs.x), floori(l.y / cs.y), floori(l.z / cs.z))
+		for k in RIDE_DROP:
+			var id := bricks.block_at(chunk, c - Vector3i(0, k, 0))
+			if id >= 0:
+				if on.has(id):
+					out.append(b)
+				break
+	return out
 
 
 func _exit_tree() -> void:

@@ -11,7 +11,7 @@ extends SceneTree
 ##             bulkheads, two engine housings of bricks on the roof aft, wings;
 ##             each laid with nothing loose, every door under its lintel;
 ##             furnished (KitFurnish): items in its rooms, none in a doorway or
-##             beside one, every brick still in a section
+##             beside one, every brick still in a section; windows in its sides
 ##   flown     a SpaceShip of layout "generated": grown at setup, its seat the
 ##             bridge's -- forward of its middle (-Z), on a floor, under a roof --
 ##             its hull box long along Z
@@ -64,6 +64,7 @@ func _run() -> void:
 	var bad := []
 	var fills := []
 	var items := []
+	var wins := []
 	var w := BrickWorld.new()
 	var pal := TowerRecipe.bake_palette(w)
 	for sd in range(1, 9):
@@ -99,6 +100,9 @@ func _run() -> void:
 			bad.append("seed %d: %d item(s), %d cell(s) by a door taken, sections of %d of %d bricks" % [sd,
 					int(m.stats.get("furniture", 0)), blocked, BuildSections.of_build(r).size(), r.size()])
 		items.append(int(m.stats.get("furniture", 0)))
+		wins.append(int(m.stats.get("windows", 0)))
+		if int(m.stats.get("windows", 0)) < 4:
+			bad.append("seed %d: %d window(s)" % [sd, int(m.stats.get("windows", 0))])
 		var seat: Vector3i = m.seat
 		if seat.x < 0 or cells.has(seat) or not cells.has(seat - Vector3i(0, 1, 0)):
 			bad.append("seed %d: seat %s not on a floor" % [sd, str(seat)])
@@ -146,8 +150,8 @@ func _run() -> void:
 				or (r.meta.sections.sections as Array).size() < 2:
 			bad.append("seed %d: %d deck(s), fill %.2f, %d section(s)" % [sd, m.decks, m.stats.fill,
 					(r.meta.sections.sections as Array).size()])
-	_ok("8 seeds: hulls of 1-3 decks, the bridge's seat on its floor fore, the engine room aft, an airlock aft onto the spine, mostly rooms, sections, engine housings, furnished with its doorways clear, nothing loose, every door under a lintel",
-			bad.is_empty(), "fill %s, items %s %s" % [str(fills), str(items), str(bad.slice(0, 4))])
+	_ok("8 seeds: hulls of 1-3 decks, the bridge's seat on its floor fore, the engine room aft, an airlock aft onto the spine, mostly rooms, sections, engine housings, furnished with its doorways clear, windows, nothing loose, every door under a lintel",
+			bad.is_empty(), "fill %s, items %s, windows %s %s" % [str(fills), str(items), str(wins), str(bad.slice(0, 4))])
 
 	var d := OrbitalData.new()
 	d.kind = "ship"

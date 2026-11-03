@@ -24,6 +24,14 @@ const ENGINE_COLOUR := "dark bluish gray"
 const NACELLE := Vector3i(4, 3, 2)
 ## How far a wing's root reaches in over the roof, studs.
 const WING_ROOT := 4
+## A window in the hull's side: studs along it, plates high, its sill plates over
+## the room's floor (the pawn's eyes are about 11 up), one every WINDOW_EVERY
+## studs of a room's run along the side.
+const WINDOW := Vector2i(2, 8)
+const WINDOW_SILL := 4
+const WINDOW_EVERY := 6
+## How far in from a room's wall the hull may stand (its wall, a gap, the hull).
+const WINDOW_REACH := 4
 
 
 ## {ok, why, recipe, plan, stats, seat: Vector3i, decks}.
@@ -59,7 +67,125 @@ static func make(seed: int, passes := 1) -> Dictionary:
 			var off: Vector3i = pl.off
 			made.seat = Vector3i(mid.x + off.x, int(sp.floor_y) + off.y + 1, mid.y + off.z)
 			break
+	made.stats["windows"] = _windows(made.recipe, h)
 	made.stats["furniture"] = KitFurnish.furnish(made.recipe, seed)
+	return made
+
+
+## Windows in the hull's sides (Docs/RoomModules.md 7.9): for each room against
+## a side, WINDOW panes along its run there, one every WINDOW_EVERY studs; the
+## hull's cells glazed (glass plates), a room's own wall and any gap between cut
+## open, what a cut brick leaves kept as plates. Each new brick is in the section
+## of the brick it was cut from. How many it made.
+static func _windows(r: BuildRecipe, h: BuildRecipe) -> int:
+	var glass := RoomGrow._glass()
+	var hull := {}
+	for i in h.size():
+		var c := h.cell_of(i)
+		var s := BuildRecipe.part_size(h.part_of(i))
+		for y in s.y:
+			for z in s.z:
+				for x in s.x:
+					hull[c + Vector3i(x, y, z)] = true
+	var cells := {}
+	for i in r.size():
+		var c := r.cell_of(i)
+		var s := BuildRecipe.part_size(r.part_of(i))
+		for y in s.y:
+			for z in s.z:
+				for x in s.x:
+					cells[c + Vector3i(x, y, z)] = i
+	var in_door := {}
+	for d: Dictionary in BuildDoors.of(r):
+		var lo: Vector3i = d.lo
+		var ds: Vector3i = d.size
+		for z in range(lo.z - 1, lo.z + ds.z + 1):
+			for x in range(lo.x - 1, lo.x + ds.x + 1):
+				in_door[Vector2i(x, z)] = true
+	var cut := {}
+	var glazed := {}
+	var made := 0
+	for sp: Dictionary in (r.meta.get("structure", {}) as Dictionary).get("spaces", []):
+		if String(sp.kind) == "storage" or (sp.get("columns", []) as Array).is_empty():
+			continue
+		var y0 := int(sp.floor_y) + 1 + WINDOW_SILL
+		var cols := {}
+		for c in sp.columns:
+			cols[Vector2i(int(c[0]), int(c[1]))] = true
+		for dz in [-1, 1]:
+			# Each column on that side: how far out the hull is (0: not against it).
+			var reach := {}
+			for v: Vector2i in cols:
+				if cols.has(v + Vector2i(0, dz)) or in_door.has(v + Vector2i(0, dz)):
+					continue
+				for k in range(1, WINDOW_REACH + 1):
+					var w := Vector3i(v.x, y0, v.y + dz * k)
+					if hull.has(w):
+						if not cells.has(w + Vector3i(0, 0, dz)):
+							reach[v.x] = [k, v.y]
+						break
+			var xs := reach.keys()
+			xs.sort()
+			var k0 := 0
+			while k0 < xs.size():
+				# A run: neighbouring columns with the hull as far out.
+				var k1 := k0
+				while k1 + 1 < xs.size() and int(xs[k1 + 1]) == int(xs[k1]) + 1 \
+						and reach[xs[k1 + 1]] == reach[xs[k0]]:
+					k1 += 1
+				var run := k1 - k0 + 1
+				var depth := int(reach[xs[k0]][0])
+				var z0 := int(reach[xs[k0]][1])
+				@warning_ignore("integer_division")
+				var n := run / WINDOW_EVERY if run >= WINDOW_EVERY else (1 if run >= WINDOW.x + 2 else 0)
+				for wi in n:
+					var x0 := int(xs[k0]) + int(float(run) * (wi + 0.5) / n) - WINDOW.x / 2
+					for x in range(x0, x0 + WINDOW.x):
+						for y in range(y0, y0 + WINDOW.y):
+							for j in range(1, depth + 1):
+								var w := Vector3i(x, y, z0 + dz * j)
+								cut[w] = true
+								if j == depth:
+									glazed[w] = true
+					made += 1
+				k0 = k1 + 1
+	if made == 0:
+		return 0
+	var of := BuildSections.of_build(r)
+	var gone := {}
+	for w: Vector3i in cut:
+		if cells.has(w):
+			gone[int(cells[w])] = true
+	var ids := PackedInt32Array(gone.keys())
+	ids.sort()
+	var adds := []
+	for i in ids:
+		var c := r.cell_of(i)
+		var s := BuildRecipe.part_size(r.part_of(i))
+		var sec := of[i] if not of.is_empty() else 0
+		for y in s.y:
+			for z in s.z:
+				for x in s.x:
+					var v := c + Vector3i(x, y, z)
+					if not cut.has(v):
+						adds.append(["plate_1x1", v, r.colour_of(i), r.material_of(i), sec])
+					elif glazed.has(v) and glass >= 0:
+						adds.append(["plate_1x1", v, r.colour_of(i), glass, sec])
+	var kept := PackedInt32Array()
+	if not of.is_empty():
+		var k := 0
+		for i in of.size():
+			if k < ids.size() and ids[k] == i:
+				k += 1
+				continue
+			kept.append(of[i])
+	r.remove_many(ids)
+	for a: Array in adds:
+		r.add(String(a[0]), a[1], int(a[2]), 0, BuildRecipe.Role.STRUCTURE, int(a[3]))
+		if not of.is_empty():
+			kept.append(int(a[4]))
+	if not of.is_empty() and r.meta.has("sections"):
+		BuildSections.rerecord(r, kept)
 	return made
 
 
