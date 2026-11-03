@@ -781,3 +781,33 @@ Other things to know:
 * `_recipe_id_at` is a map now, mended up to `_rid_synced`. Anything that takes from `_placed_at`
   lowers it; appending needs nothing.
 * A saved file of 5,000 bricks or more has no indents.
+
+## 18. The packer in the engine
+
+Asked 2026-11-03 ("please continue", after section 17 named it as what was left): the packer is
+about 1.2 s of the 2.5 s it takes to lay the 89,000-brick block, in script.
+
+* `BrickWorld.pack_courses` is `BrickShapes.pack_courses` in C++, line for line: the same buckets,
+  runs, half-brick starts and scores, the same order, so the same bricks.
+* `BrickShapes.pack_courses` calls it when the library has it, and `pack_courses_script` (the old
+  body) when it does not. Two copies of one rule is the price; `build_tools_probe` pays it down by
+  packing a spread of shapes both ways and asking for the same bricks, so they cannot drift apart
+  unnoticed.
+
+And a fix found on the way: `world` is typed `BrickWorld`, so a call to a method an older library
+lacks does not fall back, it fails to compile. Section 16's calls go through an untyped handle, and
+the packer through `ClassDB.class_call_static`, so a stale library meshes whole and packs in script as
+section 16 said it would.
+
+### As built (2026-11-03)
+
+Merged; `tools/build_tools_probe.gd` 325 checks. Its packer check lays twelve shapes both ways and
+gets the same bricks in the same order; they are also the bricks the packer gave before section 17.
+
+On the 89,061-brick block's 252,981 cells, three runs: the script 721 to 765 ms, the engine 229 to
+264 ms. Whole operations were not timed again: another chat was running a planet gate and probes and
+the chip reached 99 C, so they would say more about the machine than the change.
+
+The fallback for an older library could not be run: no older library is left that has section 15's
+paging but not these calls. It rests on the calls being untyped or through `class_call_static`, which
+compile either way.

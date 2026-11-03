@@ -13,6 +13,8 @@
 #include <algorithm>
 #include <queue>
 #include <set>
+#include <unordered_set>
+#include <map>
 #include <chrono>
 #if defined(_MSC_VER)
 #include <intrin.h>
@@ -4307,6 +4309,186 @@ PackedInt32Array BrickWorld::take_changed_sections(int chunk_id, int margin) {
     int32_t *w = out.ptrw();
     for (const int s : marked) {
         *w++ = s;
+    }
+    return out;
+}
+
+namespace {
+
+// A cell as one number, for the packer's sets: 21 bits an axis, centred.
+inline uint64_t pack_key(const Vector3i &c) {
+    constexpr int64_t OFF = int64_t(1) << 20;
+    return ((uint64_t)(c.x + OFF) << 42) | ((uint64_t)(c.y + OFF) << 21) | (uint64_t)(c.z + OFF);
+}
+
+inline int floor_div(int a, int b) {
+    const int q = a / b;
+    return (a % b != 0 && ((a < 0) != (b < 0))) ? q - 1 : q;
+}
+
+inline int pos_mod(int a, int b) {
+    const int m = a % b;
+    return m < 0 ? m + b : m;
+}
+
+} // namespace
+
+PackedInt32Array BrickWorld::pack_courses(const Dictionary &cells, const PackedInt32Array &sizes,
+        bool staggered, const Dictionary &taken, int base, const Dictionary &starts, bool strict) {
+    PackedInt32Array out;
+    const int np = (int)(sizes.size() / 3);
+    std::vector<Vector3i> parts((size_t)np);
+    for (int i = 0; i < np; ++i) {
+        parts[(size_t)i] = Vector3i(sizes[i * 3], sizes[i * 3 + 1], sizes[i * 3 + 2]);
+    }
+    std::unordered_set<uint64_t> all;
+    std::unordered_set<uint64_t> left;
+    std::map<int, std::vector<Vector3i>> by_y;
+    const Array keys = cells.keys();
+    all.reserve((size_t)keys.size() * 2);
+    left.reserve((size_t)keys.size() * 2);
+    for (int64_t i = 0; i < keys.size(); ++i) {
+        const Vector3i c = keys[i];
+        all.insert(pack_key(c));
+        if (!taken.has(c)) {
+            left.insert(pack_key(c));
+            by_y[c.y].push_back(c);
+        }
+    }
+    if (left.empty() || np == 0) {
+        return out;
+    }
+    if (base == (1 << 30)) {
+        base = by_y.begin()->first;
+    }
+    int tall = 1;
+    int long_ = 1;
+    int wide = 1;
+    for (const Vector3i &p : parts) {
+        tall = std::max(tall, p.y);
+        long_ = std::max(long_, std::max(p.x, p.z));
+        wide = std::max(wide, std::min(p.x, p.z));
+    }
+    // All a run is asked is whether it passes two widths, and which way is longer.
+    const int cap = 2 * wide + 1;
+    std::vector<int> start_list;
+    const Array start_keys = starts.keys();
+    for (int64_t i = 0; i < start_keys.size(); ++i) {
+        start_list.push_back((int)start_keys[i]);
+    }
+    std::sort(start_list.begin(), start_list.end());
+    const auto run = [&](const Vector3i &c, const Vector3i &dir) {
+        int n = 1;
+        Vector3i p = c + dir;
+        while (n < cap && all.count(pack_key(p))) {
+            ++n;
+            p += dir;
+        }
+        p = c - dir;
+        while (n < cap && all.count(pack_key(p))) {
+            ++n;
+            p -= dir;
+        }
+        return n;
+    };
+    const auto fits = [&](const Vector3i &at, const Vector3i &size) {
+        for (int dx = 0; dx < size.x; ++dx) {
+            for (int dy = 0; dy < size.y; ++dy) {
+                for (int dz = 0; dz < size.z; ++dz) {
+                    if (!left.count(pack_key(at + Vector3i(dx, dy, dz)))) {
+                        return false;
+                    }
+                }
+            }
+        }
+        return true;
+    };
+    for (auto &layer : by_y) {
+        const int y = layer.first;
+        int course = floor_div(y - base, tall);
+        bool on_course = pos_mod(y - base, tall) == 0;
+        if (!start_list.empty()) {
+            const auto lo = std::lower_bound(start_list.begin(), start_list.end(), y);
+            on_course = lo != start_list.end() && *lo == y;
+            course = on_course ? (int)(lo - start_list.begin())
+                    : (int)(std::upper_bound(start_list.begin(), start_list.end(), y) - start_list.begin()) - 1;
+        }
+        const bool along_x = !staggered || course % 2 == 0;
+        // Row by row along the course's own way, from the low corner.
+        std::vector<Vector3i> &here = layer.second;
+        std::sort(here.begin(), here.end(), [along_x](const Vector3i &p, const Vector3i &q) {
+            if (along_x) {
+                return p.z != q.z ? p.z < q.z : p.x < q.x;
+            }
+            return p.x != q.x ? p.x < q.x : p.z < q.z;
+        });
+        for (const Vector3i &c : here) {
+            if (!left.count(pack_key(c))) {
+                continue;
+            }
+            const int nx = run(c, Vector3i(1, 0, 0));
+            const int nz = run(c, Vector3i(0, 0, 1));
+            const bool run_x = std::min(nx, nz) > 2 * wide ? along_x : nx > nz;
+            const Vector3i dir = run_x ? Vector3i(1, 0, 0) : Vector3i(0, 0, 1);
+            // A run's first cell, on an odd phase: start with half a brick.
+            int half = 0;
+            if (staggered && !all.count(pack_key(c - dir))) {
+                const int row = floor_div(run_x ? c.z : c.x, wide);
+                if (pos_mod(course + row, 2) == 1) {
+                    half = std::max(1, long_ >> 1);
+                    if (strict) {
+                        for (int k = 0; k < half; ++k) {
+                            for (int dy = 0; dy < tall; ++dy) {
+                                left.erase(pack_key(c + dir * k + Vector3i(0, dy, 0)));
+                            }
+                        }
+                        continue;
+                    }
+                }
+            }
+            int best = -1;
+            double score = -std::numeric_limits<double>::infinity();
+            for (int pi = 0; pi < np; ++pi) {
+                const Vector3i &size = parts[(size_t)pi];
+                if (size.y > 1 && !on_course) {
+                    continue;
+                }
+                if (!fits(c, size)) {
+                    continue;
+                }
+                const int along = run_x ? size.x : size.z;
+                const int across = run_x ? size.z : size.x;
+                double s = 0.0;
+                if (along < across) {
+                    s -= 1000.0; // turned across the run: only if nothing else fits
+                }
+                if (half > 0) {
+                    s -= std::abs(along - half) * 100.0;
+                } else {
+                    s += along * 100.0;
+                }
+                s += across * 10.0 + size.y;
+                if (s > score) {
+                    score = s;
+                    best = pi;
+                }
+            }
+            if (best < 0) {
+                continue;
+            }
+            const Vector3i size = parts[(size_t)best];
+            for (int dx = 0; dx < size.x; ++dx) {
+                for (int dy = 0; dy < size.y; ++dy) {
+                    for (int dz = 0; dz < size.z; ++dz) {
+                        left.erase(pack_key(c + Vector3i(dx, dy, dz)));
+                    }
+                }
+            }
+            out.push_back(best);
+            out.push_back(c.x);
+            out.push_back(c.y);
+            out.push_back(c.z);
+        }
     }
     return out;
 }
@@ -10724,6 +10906,8 @@ void BrickWorld::_bind_methods() {
             &BrickWorld::take_changed_sections);
     ClassDB::bind_method(D_METHOD("get_section_side_stud_blocks", "chunk_id", "section"),
             &BrickWorld::get_section_side_stud_blocks);
+    ClassDB::bind_static_method("BrickWorld", D_METHOD("pack_courses", "cells", "sizes", "staggered", "taken",
+            "base", "starts", "strict"), &BrickWorld::pack_courses);
     ClassDB::bind_method(D_METHOD("build_chunk_chamfer_mesh", "chunk_id", "bevel"),
             &BrickWorld::build_chunk_chamfer_mesh);
     ClassDB::bind_method(D_METHOD("chamfer_section_async", "chunk_id", "section", "bevel"),
