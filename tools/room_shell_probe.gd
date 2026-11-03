@@ -168,7 +168,19 @@ func _run() -> void:
 	var reach_bad := []
 	for m in oks:
 		var cells := _cells(m.recipe)
-		var seen := _flood(cells, Vector3i(10, 2, 14), _inside_box(44, 28, 4 * pitch + 1))
+		# Inside: the footprint's box, and any room hung off its wall (past it).
+		var box := _inside_box(44, 28, 4 * pitch + 1)
+		var hung_cols := {}
+		var at0: Vector3i = m.plan.at
+		for hp: Dictionary in m.plan.placed:
+			if hp.has("from"):
+				for c: Vector2i in lib[hp.m].turns[hp.t].cols:
+					hung_cols[Vector2i(c.x + hp.off.x + at0.x, c.y + hp.off.z + at0.z)] = true
+		var inside := func(c: Vector3i) -> bool:
+			return box.call(c) or (c.y > 0 and c.y <= 4 * pitch + 1 and (hung_cols.has(Vector2i(c.x, c.z))
+					or hung_cols.has(Vector2i(c.x + 1, c.z)) or hung_cols.has(Vector2i(c.x - 1, c.z))
+					or hung_cols.has(Vector2i(c.x, c.z + 1)) or hung_cols.has(Vector2i(c.x, c.z - 1))))
+		var seen := _flood(cells, Vector3i(10, 2, 14), inside)
 		var lost := 0
 		for sp in m.recipe.meta.structure.spaces:
 			if not seen.has(Vector3i(int(sp.seed[0]), int(sp.seed[1]), int(sp.seed[2]))):
@@ -231,7 +243,8 @@ func _run() -> void:
 		for x in 44:
 			if not (x >= 26 and z >= 16):
 				ell.append(Vector2i(x, z))
-	var el := RoomShell.generate(lib, {"seed": 5, "footprint": ell, "storeys": 3})
+	# Nothing hung off it: a hung room stands past the footprint by design.
+	var el := RoomShell.generate(lib, {"seed": 5, "footprint": ell, "storeys": 3, "hang": 0.0})
 	var el_bad := []
 	var el_lost := 0
 	if el.ok:
@@ -337,7 +350,14 @@ func _run() -> void:
 			[[1, 4, "auto"], [3, 4, "auto"]], [], [["stair_down", [8, 1, 5], -1]]))
 	recs.append(Kit.box("bay", 10, 10, {"role": "room", "weight": 3.0}, [[1, 4, "auto"], [3, 4, "auto"]],
 			[], [["window", [7, 4, 0], 3], ["balcony", [1, 5, 0], 3]]))
+	recs.append(Kit.box("perch", 10, 10, {"role": "room", "weight": 3.0}, [[1, 4, "auto"], [3, 4, "auto"]],
+			[], [["hang", [7, 5, 0], 3]]))
+	# A window spot on a door's cells: on the outer wall the door is walled up, and the window cut through the cap.
+	recs.append(Kit.box("hatch", 10, 10, {"role": "room", "weight": 3.0}, [[1, 4, "auto"], [3, 4, "auto"]],
+			[], [["window", [4, 4, 0], 3]]))
 	var slib := RoomModules.from_recipes(recs)
+	var hung := 0
+	var hang_bad := []
 	var stacked := 0
 	var stack_bad := []
 	var balconies := 0
@@ -345,7 +365,7 @@ func _run() -> void:
 	var shut := 0
 	var glass_m := RoomGrow._glass()
 	for sd in range(1, 7):
-		var t := RoomShell.generate(slib, {"seed": sd, "width": 44, "depth": 28, "storeys": 4, "balcony": 1.0})
+		var t := RoomShell.generate(slib, {"seed": sd, "width": 44, "depth": 28, "storeys": 4, "balcony": 1.0, "hang": 1.0})
 		if not t.ok:
 			stack_bad.append("seed %d: %s" % [sd, t.why])
 			continue
@@ -354,6 +374,55 @@ func _run() -> void:
 		facade_n += int(t.stats.windows)
 		var cells := _cells(t.recipe)
 		var at: Vector3i = t.plan.at
+		# Rooms hung at hang spots: clear of every other module, open to the room they hang from.
+		for hi in (t.plan.placed as Array).size():
+			var hp: Dictionary = t.plan.placed[hi]
+			if not hp.has("from"):
+				continue
+			hung += 1
+			var htd: Dictionary = slib[hp.m].turns[hp.t]
+			for oi in (t.plan.placed as Array).size():
+				var op: Dictionary = t.plan.placed[oi]
+				if oi == hi:
+					continue
+				var otd: Dictionary = slib[op.m].turns[op.t]
+				for c: Vector2i in htd.cols:
+					var w := Vector2i(c.x + hp.off.x, c.y + hp.off.z)
+					var oc := w - Vector2i(op.off.x, op.off.z)
+					if otd.cols.has(oc):
+						var a: Vector2i = htd.cols[c]
+						var b: Vector2i = otd.cols[oc]
+						if a.x + hp.off.y < b.y + op.off.y and b.x + op.off.y < a.y + hp.off.y:
+							hang_bad.append("seed %d: hung room %d in module %d" % [sd, hi, oi])
+							break
+			var fp: Dictionary = t.plan.placed[int(hp.from)]
+			var fs: Dictionary = slib[fp.m].turns[fp.t].spaces.values()[0]
+			var hs: Dictionary = htd.spaces.values()[0]
+			var f_off: Vector3i = (fp.off as Vector3i) + at
+			var h_off: Vector3i = (hp.off as Vector3i) + at
+			var two := {}
+			for c: Vector2i in fs.cols:
+				two[Vector2i(c.x + f_off.x, c.y + f_off.z)] = true
+			for c: Vector2i in hs.cols:
+				two[Vector2i(c.x + h_off.x, c.y + h_off.z)] = true
+			# The doorway between them: the wall cells the hole goes through.
+			var y_lo := mini(int(fs.floor_y) + f_off.y, int(hs.floor_y) + h_off.y)
+			var y_hi := maxi(int(fs.ceil_y) + f_off.y, int(hs.ceil_y) + h_off.y)
+			var near := func(c: Vector3i) -> bool:
+				if c.y <= y_lo or c.y >= y_hi:
+					return false
+				var v := Vector2i(c.x, c.z)
+				if two.has(v):
+					return true
+				for d in [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]:
+					# The tower's wall and the hung room's own: two cells thick.
+					if two.has(v + d) and (two.has(v - d) or two.has(v - d * 2)):
+						return true
+				return false
+			var start := Vector3i(int(fs.seed.x) + f_off.x, int(fs.floor_y) + f_off.y + 1, int(fs.seed.z) + f_off.z)
+			var goal := Vector3i(int(hs.seed.x) + h_off.x, int(hs.floor_y) + h_off.y + 1, int(hs.seed.z) + h_off.z)
+			if not _flood(cells, start, near).has(goal):
+				hang_bad.append("seed %d: hung room %d not open to its room" % [sd, hi])
 		var stair_cols := {}
 		for st: Array in t.plan.stacks:
 			var lo: Dictionary = t.plan.placed[int(st[0].p)]
@@ -394,6 +463,8 @@ func _run() -> void:
 				shut += 1
 	_ok("stair links stacked: a module with a link down over each one with a link up it could, the room below open to the room above",
 			stacked > 0 and stack_bad.is_empty(), "%d stair(s) in 6 towers %s" % [stacked, str(stack_bad.slice(0, 3))])
+	_ok("hang spots on the outer wall: a room hung there, clear of every module, open to its room",
+			hung > 0 and hang_bad.is_empty(), "%d hung in 6 towers %s" % [hung, str(hang_bad.slice(0, 3))])
 	_ok("module facade spots on the outer wall: windows cut (or glazed), balconies built out",
 			facade_n > 0 and balconies > 0 and shut == 0,
 			"%d window(s), %d balcony(ies), %d cut cell(s) still solid" % [facade_n, balconies, shut])

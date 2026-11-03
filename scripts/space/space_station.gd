@@ -599,6 +599,9 @@ func _prepare_generated() -> void:
 		return
 	recipe = made.recipe
 	if not ship:
+		var lib := StationKit.library()
+		if StationKit.is_kit(lib):
+			made.stats["band"] = StationKit.paint_band(recipe, data.orbital_seed)
 		made.stats["furniture"] = KitFurnish.furnish(recipe, data.orbital_seed)
 	var size: Vector3i = recipe.bounds()[1]
 	data.fx = size.x
