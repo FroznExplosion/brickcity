@@ -6,9 +6,9 @@ extends SceneTree
 ##
 ##   baked     prepare bakes its air: every room full, hits followed
 ##   doors     its doors' open states line up with the air's doors
-##   shot      a hull brick killed by the hit path (_after_kill): its room breached,
-##             after a second its pressure down, the rush toward the hole, the HUD's
-##             "breached"; a room far from it untouched
+##   shot      a hole of hull bricks killed by the hit path (_after_kill): its room
+##             breached, after a second its pressure down, the rush toward the hole,
+##             the HUD's "venting"; crumbs on its floor drawn out; a far room untouched
 ##   sealed    the hole's brick back: the room stops losing air and fills again
 
 var _pass := 0
@@ -88,20 +88,27 @@ func _process(delta: float) -> bool:
 			var p := air.pressure(_room)
 			var far_p := air.pressure(_far) if _far >= 0 else 1.0
 			_ok("shot: its room breached, the air going", air.is_breached(_room) and p < 0.999 and p > 0.0,
-					"%.3f after %.2f s" % [p, _t])
+					"%d brick(s) shot out: %.3f after %.2f s" % [_holes, p, _t])
 			_ok("air_at inside it: its pressure, breached, the rush toward the hole", not a.is_empty()
 					and bool(a.breached) and bool(a.venting) and absf(float(a.pressure) - p) < 1e-4
 					and (a.pull as Vector3).dot(_hole - _inside) > 0.0,
 					"%s, pull %.2f m/s2" % [str(a.get("pressure")), (a.get("pull", Vector3.ZERO) as Vector3).length()])
 			_ok("a room away from it untouched", _far >= 0 and absf(far_p - 1.0) < 1e-4, "%.4f" % far_p)
-			# Sealed: the hole's brick laid back.
+			var d1 := _crumb_dist()
+			var out := _crumbs_out()
+			_ok("crumbs inside drawn to the hole, or out of it", _crumbs > 0 and (d1 < _crumb_d0 - 0.1 or out > 0),
+					"%d crumb(s): %.2f m -> %.2f m from it, %d out of the hull" % [_crumbs, _crumb_d0, d1, out])
+			# Sealed: the hole's bricks laid back.
 			var r := _st.recipe
-			var ri: int = air._block_recipe[_block]
-			_st.bricks.remove_block(_st.chunk, _block)
-			var nb := _st.bricks.place_block(_st.chunk, r.cell_of(ri) - r.origin(), _st._palette[r.part_of(ri)], r.colour_of(ri))
+			var nb := 0
 			var cells: Array[Vector3i] = []
-			for i in air._block_cells(_block):
-				cells.append(air._cell(i))
+			for b in _hole_ids:
+				var ri: int = air._block_recipe[b]
+				_st.bricks.remove_block(_st.chunk, b)
+				if _st.bricks.place_block(_st.chunk, r.cell_of(ri) - r.origin(), _st._palette[r.part_of(ri)], r.colour_of(ri)) < 0:
+					nb = -1
+				for i in air._block_cells(b):
+					cells.append(air._cell(i))
 			air.cells_added(_st.bricks, _st.chunk, cells)
 			_ok("the brick back: sealed", nb >= 0 and not air.is_breached(_room))
 			# Parked on a world with air: a hole lets nothing out.
@@ -130,9 +137,42 @@ func _process(delta: float) -> bool:
 
 
 var _room_p := 0.0
+var _crumbs := 0
+var _holes := 0
+var _hole_ids := PackedInt32Array()
+## How far round the first brick the hole reaches, cells.
+const HOLE := 6.0
+var _crumb_d0 := 0.0
 
 
-## A hull brick (beside a room and the outside) killed through the hit path.
+## Crumbs out in the open: past the ship's box, or in its outside air.
+func _crumbs_out() -> int:
+	var n := 0
+	var pxf := _st.crumbs.planet.global_transform
+	for key in _st.crumbs._sets:
+		for q in _st.crumbs._sets[key].pos:
+			var wp: Vector3 = pxf * q
+			var c := Vector3i(_st.cell_at(wp).floor())
+			if not _st.holds(wp) or (_st.air._in(c) and _st.air.state[_st.air._idx(c)] == HullAir.OUTSIDE):
+				n += 1
+	return n
+
+
+## The crumbs' mean distance from the hole, metres.
+func _crumb_dist() -> float:
+	var sum := 0.0
+	var n := 0
+	var pxf := _st.crumbs.planet.global_transform
+	for key in _st.crumbs._sets:
+		var st = _st.crumbs._sets[key]
+		for q in st.pos:
+			sum += (pxf * q).distance_to(_hole)
+			n += 1
+	return sum / n if n > 0 else 0.0
+
+
+## A hull brick (beside a room -- a real one, not a gap in a wall -- and the outside)
+## killed through the hit path.
 func _shoot() -> void:
 	var air := _st.air
 	for b in _st.bricks.get_block_count(_st.chunk):
@@ -144,7 +184,7 @@ func _shoot() -> void:
 					ins[air._root(air.comp[j])] = j
 				elif air.state[j] == HullAir.OUTSIDE:
 					out = true
-		if out and ins.size() == 1:
+		if out and ins.size() == 1 and air._cells[air._root(ins.keys()[0])] > 1000:
 			_block = b
 			_room = ins.keys()[0]
 			var cell := air._cell(ins[_room])
@@ -157,5 +197,46 @@ func _shoot() -> void:
 		if c.id != air._root(_room) and int(c.cells) > 50 and int(c.breaches) == 0:
 			_far = c.id
 	_ok("a hull brick to shoot", _block >= 0)
-	_st.bricks.kill_blocks(_st.chunk, PackedInt32Array([_block]))
-	_st._after_kill(PackedInt32Array([_block]))
+	# Crumbs of a brick of the room's floor near the hole, thrown as a hit would.
+	var near_b := -1
+	var nd := INF
+	var hc := Vector3(air._cell(air._block_cells(_block)[0]))
+	for b in _st.bricks.get_block_count(_st.chunk):
+		if b == _block:
+			continue
+		var cs := air._block_cells(b)
+		if cs.is_empty():
+			continue
+		# A floor brick: the room's air right over it.
+		var under_room := false
+		for i in cs:
+			var c := air._cell(i) + Vector3i(0, 1, 0)
+			under_room = under_room or (air._in(c) and air.state[air._idx(c)] == HullAir.INSIDE
+					and air._root(air.comp[air._idx(c)]) == air._root(_room))
+		if under_room:
+			var d := (Vector3(air._cell(cs[0])) - hc).length()
+			if d < nd:
+				nd = d
+				near_b = b
+	_crumbs = _st.crumbs.throw(_st.bricks, _st.chunk, PackedInt32Array([near_b])) if near_b >= 0 else 0
+	_crumb_d0 = _crumb_dist()
+	# A real hole: every hull brick of that room within HOLE cells of the first.
+	var hole := PackedInt32Array([_block])
+	for b in _st.bricks.get_block_count(_st.chunk):
+		if b == _block or b == near_b:
+			continue
+		var cs := air._block_cells(b)
+		if cs.is_empty() or (Vector3(air._cell(cs[0])) - hc).length() > HOLE:
+			continue
+		var by_room := false
+		var by_out := false
+		for i in cs:
+			for j in air._neighbours(i):
+				by_room = by_room or (air.state[j] == HullAir.INSIDE and air._root(air.comp[j]) == air._root(_room))
+				by_out = by_out or air.state[j] == HullAir.OUTSIDE
+		if by_room and by_out:
+			hole.append(b)
+	_holes = hole.size()
+	_hole_ids = hole
+	_st.bricks.kill_blocks(_st.chunk, hole)
+	_st._after_kill(hole)

@@ -383,9 +383,9 @@ func _outside_air() -> void:
 
 ## The air at world point `p` inside a ship or station (SpaceStation.air_at): {pressure,
 ## pull, breached}, or empty when `p` is in none.
-func air_at(p: Vector3) -> Dictionary:
+func air_at(p: Vector3, near := false) -> Dictionary:
 	for st in stations:
-		var a := st.air_at(p)
+		var a := st.air_at(p, near)
 		if not a.is_empty():
 			return a
 	return {}
