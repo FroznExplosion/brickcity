@@ -54,6 +54,8 @@ const DRIFT_CAP := 64
 const ROCK_STEPS := 12
 const DRIFT_PUSH := 3.0
 const DRIFT_SPIN := 0.4
+## A piece with someone aboard leaves at this share of the push, turning a tenth of that.
+const DRIFT_RIDDEN := 0.25
 ## Within FALL_AT of a planet's ground a piece is falling to it: near the player
 ## (DRIFT_CATCH) a body under it that lands, else gone in DRIFT_DIE seconds.
 const FALL_AT := 2000.0
@@ -240,6 +242,7 @@ func jump(index: int) -> bool:
 	for st in stations:
 		st.queue_free()
 	for f in drifts:
+		_drop_body(f)
 		(f as Drift).node.queue_free()
 	drifts.clear()
 	bodies.clear()
@@ -464,6 +467,15 @@ func _on_drifted(arrays: Array, com: Transform3D, local_com: Vector3, count: int
 	e.v = carried + (away + Vector3(randf_range(-0.5, 0.5), randf_range(-0.5, 0.5), randf_range(-0.5, 0.5))) * randf_range(1.0, DRIFT_PUSH)
 	e.axis = Vector3(randf_range(-1, 1), randf_range(-1, 1), randf_range(-1, 1)).normalized()
 	e.rate = randf_range(0.05, DRIFT_SPIN)
+	if from != null and from.drift_body.is_valid():
+		# Someone aboard: its bricks to stand on, and it leaves gently, barely turning.
+		e.body = from.drift_body
+		from.drift_body = RID()
+		e.riders = from.drift_riders.duplicate()
+		e.v = carried + (e.v - carried) * DRIFT_RIDDEN
+		e.rate *= DRIFT_RIDDEN * 0.1
+		PhysicsServer3D.body_set_state(e.body, PhysicsServer3D.BODY_STATE_TRANSFORM, com)
+		PhysicsServer3D.body_set_space(e.body, get_world_3d().space)
 	e.node = Node3D.new()
 	e.node.name = "Drift"
 	e.node.physics_interpolation_mode = Node.PHYSICS_INTERPOLATION_MODE_OFF
@@ -481,7 +493,8 @@ func _on_drifted(arrays: Array, com: Transform3D, local_com: Vector3, count: int
 			holder[0] = m, false, "drift piece")
 	e.holder = holder
 	drifts.append(e)
-	print("[system] %d bricks of %s drift off" % [count, name_of(from)])
+	print("[system] %d bricks of %s drift off%s" % [count, name_of(from),
+			"" if e.riders.is_empty() else ", %d aboard" % e.riders.size()])
 
 
 ## Meshes in, pieces out of reach gone, the oldest over the cap.
@@ -505,14 +518,17 @@ func _drift_keep(p: Vector3) -> void:
 			continue
 		var at := e.node.global_position
 		var off := (at - p).length()
+		var ridden := _ridden(e)
 		var over := _falling_to(at)
 		if over != null and e.dying < 0.0:
+			# Ridden, it falls just the same (they stand on its box); it never fades.
 			if over == anchor and off < DRIFT_CATCH and e.look != null:
 				_fall(e, over)
 				drifts.remove_at(k)
 				k -= 1
 				continue
-			e.dying = _drift_clock
+			if not ridden:
+				e.dying = _drift_clock
 		e.was = at
 		e.was_us = Time.get_ticks_usec()
 		var dead := e.dying >= 0.0 and _drift_clock - e.dying >= DRIFT_DIE
@@ -525,11 +541,39 @@ func _drift_keep(p: Vector3) -> void:
 				e.look.scale = Vector3.ONE * size
 				e.look.position = e.draw_at * size
 		var left := (e.v * (_drift_clock - e.born)).length()
-		if dead or off > drift_reach and left > drift_home or drifts.size() > DRIFT_CAP and k == 0:
+		if not ridden and (dead or off > drift_reach and left > drift_home or drifts.size() > DRIFT_CAP and k == 0):
+			_drop_body(e)
 			e.node.queue_free()
 			drifts.remove_at(k)
 		k -= 1
 	_fallen_step(p)
+
+
+## Is anyone still on piece `e`: a rider it left with, near it (within its
+## mesh's box and a couple of metres)?
+func _ridden(e: Drift) -> bool:
+	if not e.body.is_valid():
+		return false
+	var k := e.riders.size() - 1
+	while k >= 0:
+		if not is_instance_valid(e.riders[k]):
+			e.riders.remove_at(k)
+		k -= 1
+	if e.look == null:
+		return not e.riders.is_empty()
+	var box := e.look.mesh.get_aabb()
+	box.position += e.draw_at
+	box = box.grow(2.0)
+	for r: Node3D in e.riders:
+		if box.has_point(e.node.global_transform.affine_inverse() * r.global_position):
+			return true
+	return false
+
+
+func _drop_body(e: Drift) -> void:
+	if e.body.is_valid():
+		PhysicsServer3D.free_rid(e.body)
+	e.body = RID()
 
 
 ## The body whose ground a world point is within FALL_AT of, or null.
@@ -570,6 +614,7 @@ func _fall(e: Drift, b: PlanetBody) -> void:
 	var turn := now.basis * e.at(_drift_clock).basis.inverse()
 	body.angular_velocity = turn * e.axis * e.rate
 	body.set_meta(&"still", 0.0)
+	_drop_body(e)
 	e.node.queue_free()
 	fallen.append(body)
 	while fallen.size() > FALLEN_CAP:
@@ -680,6 +725,13 @@ func _place() -> void:
 		var e: Drift = d
 		var base: Transform3D = e.base if e.frame == null else _frame_xform(e.frame)
 		e.node.global_transform = s2w * base * e.at(_drift_clock)
+		if e.body.is_valid():
+			# Moved where it is drawn, its velocity its own (not the frame's step
+			# or an origin shift): what carries a figure standing on it.
+			var turn := (s2w * base).basis
+			PhysicsServer3D.body_set_state(e.body, PhysicsServer3D.BODY_STATE_TRANSFORM, e.node.global_transform)
+			PhysicsServer3D.body_set_state(e.body, PhysicsServer3D.BODY_STATE_LINEAR_VELOCITY, turn * e.v)
+			PhysicsServer3D.body_set_state(e.body, PhysicsServer3D.BODY_STATE_ANGULAR_VELOCITY, turn * e.axis * e.rate)
 	for b in bodies:
 		b.set_sun(b.global_basis.inverse() * (star.global_position - b.global_position).normalized())
 		_shadows_on(b)
@@ -1206,6 +1258,7 @@ func _exit_tree() -> void:
 		WorkerThreadPool.wait_for_task_completion(_bake_task)
 		_bake_task = -1
 	for e in drifts:
+		_drop_body(e)
 		if (e as Drift).task >= 0:
 			WorkerThreadPool.wait_for_task_completion((e as Drift).task)
 			(e as Drift).task = -1

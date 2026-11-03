@@ -415,7 +415,7 @@ prepare grows the same station for the seed, a shell box a section; laid frame b
 loose; a leaf section's joint shot away -- it drifts off as one piece. `system_probe` 31/31 as
 before. The workshop's *Generate station* uses the shipped kit when the player has no core.
 
-Not yet: the people of a drifting section are not carried with it (its furniture is, 7.7); a station's damage is kept as
+A drifting section takes its furniture (7.7) and whoever stands on it (7.8); a station's damage is kept as
 before (dead ids) but sections are not; no windowed pass has looked at one (`--gate=system`
 visits home's, a tower).
 
@@ -558,9 +558,8 @@ plates. `ship_build_probe` checks every door has its lintel on 8 seeds; `station
 (6) that a station hangs all its doors (21 of 21); `--gate=hull` (11) all of the ship's (41) and
 walks in through the airlock's.
 
-Not yet: a section that drifts off
-takes no one with it (its furniture goes, 7.7); the hull is a box with a bow and
-its engines and wings on the roof (no windows).
+A section that drifts off takes its furniture (7.7) and whoever stands on it (7.8); the hull has
+windows in its sides (7.9).
 
 ### 7.6 Order and choices
 
@@ -601,3 +600,47 @@ crates). A station of 16 spaces got 8 items (its core and two pods).
 Not yet: items stand square (the manifest's `yaw` is not used, as in the city); a bridge 6 x 6 is
 mostly lane and middle, so it gets little; the player's own modules are furnished as well when
 their spaces have a city kind, beside what they hold.
+
+### 7.8 Aboard a piece that leaves (built 2026-11-02)
+
+A piece a station or ship sends drifting (a section cut off at its joints, or any loose group
+over `DRIFT_MIN`) used to be a mesh and nothing else: whoever stood on it was left standing on air.
+Now, before the split, `SpaceStation._riders` finds every figure (any CharacterBody3D within its
+field) whose floor -- the first brick under it, within `RIDE_DROP` plates -- is among the bricks
+leaving. If anyone is, the piece gets a body of its own bricks (`add_chunk_shapes` round its centre
+of mass, a static body with no node), handed with the riders to PlanetSystem's drift handler
+(`drift_body`, `drift_riders`; freed if nobody takes it).
+
+PlanetSystem moves that body with the piece each frame and gives it the piece's own velocity
+(linear and turning, in the world's axes) -- not the step it was moved by, which an origin shift
+or the frame would spoil. A figure on it is carried as on any moving floor (move_and_slide's
+platform velocity), walks on it, and can step off. A piece with someone aboard leaves gently
+(`DRIFT_RIDDEN`: a quarter of the push, turning a fortieth as fast), is never faded out, capped or
+left behind while one of them is still on or by it (`_ridden`: within its box and 2 m), and near a
+planet's ground still falls as any piece does (they stand on its box). The body goes with the piece.
+
+`planet.tscn -- --gate=adrift` (windowed): to the nearest generated station; the walker stood on
+top of its section with the fewest joints (not the keel's), those joints shot away; the section
+leaves with the walker aboard, a body under them; 5 s later it has drifted and the walker is where
+they were on it, still standing. (On home's station, a tower, a storey's rows cut through freed a
+few hundred bricks but not the roof the walker stood on.) Shots `adrift_gate_*` (the station is on the night side: dark). Home's station is grown as a
+generated one for the gate, its system having only the tower.
+
+Not yet: gravity stays the station's (its down, toward its centre) -- a piece turned far enough
+tips its riders off; figures on a piece not anyone's frame of reference far from the station.
+
+### 7.9 Windows in the hull (built 2026-11-02)
+
+`ShipBuild._windows`: for each room (not a closed nook) against a side of the hull, panes
+`WINDOW` (2 studs x 8 plates) with the sill `WINDOW_SILL` (4) plates over its floor -- the pawn's
+eyes are about 11 up -- one every `WINDOW_EVERY` (6) studs of its run along the side (one for a
+run of 4 or 5). The hull's cells are glazed (`plate_1x1` in the translucent material,
+`RoomGrow._glass`, as a tower's facade windows); the room's own wall and any gap between it and
+the hull (up to `WINDOW_REACH` cells) are cut open, so you look out through a short recess. What a
+cut brick leaves above or below is kept as plates, so the columns stay held by their studs; every
+new brick goes in the section of the brick it was cut from (`BuildSections.rerecord`). Not beside a
+doorway; sides only (the bow's slant and the stern are left whole).
+
+`ship_build_probe`: 16-46 windows on 8 seeds, nothing loose, every door's lintel, every brick in a
+section. `--gate=hull` (13): 488 glass plates; shot `hull_gate_window` stood on a room's floor four
+studs in from a pane, the ground seen through it.

@@ -77,7 +77,7 @@ static func furnish(r: BuildRecipe, seed: int) -> int:
 			if _lay(r, item, room, cols, keep, cells, of, colour, filaments):
 				laid += 1
 	if of.size() == r.size() and r.meta.has("sections"):
-		_record(r, of)
+		BuildSections.rerecord(r, of)
 	r.meta["furniture"] = {"from": first, "items": laid}
 	return laid
 
@@ -164,19 +164,3 @@ static func _lay(r: BuildRecipe, item: Dictionary, room: Room, cols: Dictionary,
 			of.append(of[under])
 	return true
 
-
-## The sections' record with the new bricks in it.
-static func _record(r: BuildRecipe, of: PackedInt32Array) -> void:
-	var m: Dictionary = r.meta.sections
-	var runs := []
-	var count := {}
-	for i in of.size():
-		count[of[i]] = int(count.get(of[i], 0)) + 1
-		if not runs.is_empty() and int(runs[-1][0]) == of[i]:
-			runs[-1][1] = int(runs[-1][1]) + 1
-		else:
-			runs.append([of[i], 1])
-	m.of = runs
-	m.size = r.size()
-	for s: Dictionary in m.sections:
-		s.bricks = int(count.get(int(s.id), 0))

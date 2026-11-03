@@ -190,12 +190,13 @@ func _hits(w: BrickWorld, ch: int, r: BuildRecipe, air: HullAir, pal: Dictionary
 	var sealed := air.cells_added(w, ch, cells)
 	_ok("patched: the room sealed again", nb >= 0 and not air.is_breached(room_ci),
 			"new block %d, sealed %s, breach cells left %d" % [nb, str(sealed), air.breach_cells(room_ci).size()])
-	# Sealed: no more goes; the supply tops it up.
+	# Sealed: no more goes; the supply tops it up (to full at most: a small hole,
+	# a window's glass plate, leaves it nearly full).
 	var p0 := air.pressure(room_ci)
 	air.step(1.0)
 	var p1 := air.pressure(room_ci)
 	_ok("sealed: the air stops going, the supply tops it up", air.vent_rate(room_ci) == 0.0
-			and p1 > p0 and absf(p1 - p0 - HullAir.SUPPLY) < 0.002,
+			and p1 > p0 and absf(p1 - p0 - minf(HullAir.SUPPLY, 1.0 - p0)) < 0.002,
 			"%.3f -> %.3f (left at %.3f)" % [p0, p1, kept])
 	# An open door between two rooms evens them out.
 	var dj := -1

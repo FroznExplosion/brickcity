@@ -94,6 +94,7 @@ var _dock_gate := false
 var _worlds_gate := false
 var _jump_gate := false
 var _debris_gate := false
+var _adrift_gate := false
 var _falling_gate := false
 var _rocks_gate := false
 var map: GalaxyMap
@@ -157,6 +158,7 @@ func _ready() -> void:
 	_worlds_gate = "--gate=worlds" in OS.get_cmdline_user_args()
 	_jump_gate = "--gate=jump" in OS.get_cmdline_user_args()
 	_debris_gate = "--gate=debris" in OS.get_cmdline_user_args()
+	_adrift_gate = "--gate=adrift" in OS.get_cmdline_user_args()
 	_falling_gate = "--gate=falling" in OS.get_cmdline_user_args()
 	_rocks_gate = "--gate=rocks" in OS.get_cmdline_user_args()
 	_garrison_gate = "--gate=garrison" in OS.get_cmdline_user_args()
@@ -166,7 +168,7 @@ func _ready() -> void:
 	_home_gate = "--gate=home" in OS.get_cmdline_user_args()
 	_save_gate = "--gate=save" in OS.get_cmdline_user_args()
 	WorldFrame.origin = Vector3.ZERO
-	_gate = _gate or _light_gate or _system_gate or _ship_gate or _dock_gate or _worlds_gate or _jump_gate or _debris_gate or _falling_gate or _rocks_gate or _garrison_gate or _seat_gate or _hull_gate or _belt_gate or _home_gate or _save_gate or _pawn_gate or _mech_gate or _tank_gate or _soldier_gate or _squad_gate or _travel_gate or _far_gate or _drive_gate or _trees_gate or _bricks_gate or _damage_gate or _fall_gate or _hits_gate or _topple_gate or _pieces_ai_gate or _storey_gate
+	_gate = _gate or _light_gate or _system_gate or _ship_gate or _dock_gate or _worlds_gate or _jump_gate or _debris_gate or _adrift_gate or _falling_gate or _rocks_gate or _garrison_gate or _seat_gate or _hull_gate or _belt_gate or _home_gate or _save_gate or _pawn_gate or _mech_gate or _tank_gate or _soldier_gate or _squad_gate or _travel_gate or _far_gate or _drive_gate or _trees_gate or _bricks_gate or _damage_gate or _fall_gate or _hits_gate or _topple_gate or _pieces_ai_gate or _storey_gate
 	data = PlanetData.new()
 	data.planet_name = "proto"
 	# Towns and landmarks: their pads go into the ground before it is built.
@@ -278,6 +280,8 @@ func _ready() -> void:
 			_run_jump_gate()
 		elif _debris_gate:
 			_run_debris_gate()
+		elif _adrift_gate:
+			_run_adrift_gate()
 		elif _falling_gate:
 			_run_falling_gate()
 		elif _rocks_gate:
@@ -2568,6 +2572,128 @@ func _run_falling_gate() -> void:
 	get_tree().quit(1 if _fail > 0 else 0)
 
 
+## Someone on a piece that leaves (Docs/RoomModules.md 7.8): the walker on top
+## of a generated station's section, its joints shot away; the section leaves
+## with the walker on it, a body of its bricks under them, and they go with it,
+## still standing.
+func _run_adrift_gate() -> void:
+	var t0 := Time.get_ticks_msec()
+	while walker.frozen and Time.get_ticks_msec() - t0 < 60000:
+		await _frames(1)
+	await get_tree().create_timer(1.0).timeout
+	# A generated station (its sections cut off at their joints, 7.3).
+	var st: SpaceStation = null
+	for o in system.stations:
+		if o.is_station() and o.recipe != null and (st == null or o.global_position.distance_to(walker.global_position)
+				< st.global_position.distance_to(walker.global_position)):
+			st = o
+	if st == null:
+		for o in system.stations:
+			if o.is_station() and o.data.layout == "generated":
+				st = o
+	if st == null:
+		# Home's system has only its tower: home's station grown as any other is.
+		for o in system.stations:
+			if o.is_station() and o.data.parent == system.index_of(planet):
+				st = o
+		if st != null:
+			if st.chunk >= 0:
+				st.deactivate()
+			st._template = -1
+			st.data.layout = "generated"
+			st.prepare()
+	if st == null or st.recipe == null:
+		_check("a generated station", false, str(system.stations.map(func(o) -> String: return "%s %s %s" % [o.data.orbital_name, o.data.kind, o.data.layout])))
+		print("[planet] gate: %d ok, %d FAIL" % [_ok, _fail])
+		get_tree().quit(1)
+		return
+	# Its section with the fewest joints (not the keel's), the walker stood on its top.
+	var r := st.recipe
+	var of := BuildSections.of_build(r)
+	var joints := BuildSections._joints(BuildSections._cells(r, of))
+	var touch := {}
+	for j: Dictionary in joints:
+		touch[int(j.a)] = int(touch.get(int(j.a), 0)) + 1
+		touch[int(j.b)] = int(touch.get(int(j.b), 0)) + 1
+	var size := {}
+	for i in of.size():
+		size[of[i]] = int(size.get(of[i], 0)) + 1
+	var leaf := -1
+	for k in touch:
+		if int(k) != 0 and (leaf < 0 or int(touch[k]) < int(touch[leaf])
+				or int(touch[k]) == int(touch[leaf]) and int(size[k]) > int(size[leaf])):
+			leaf = int(k)
+	var top := Vector3i(0, -1, 0)
+	var n_leaf := 0
+	var sum := Vector3.ZERO
+	for i in r.size():
+		if of[i] == leaf:
+			n_leaf += 1
+			sum += Vector3(r.cell_of(i))
+	var mid := sum / maxf(n_leaf, 1)
+	for i in r.size():
+		var c := r.cell_of(i)
+		if of[i] == leaf and absf(c.x - mid.x) < 2.0 and absf(c.z - mid.z) < 2.0:
+			var ty := c.y + BuildRecipe.part_size(r.part_of(i)).y
+			if ty > top.y:
+				top = Vector3i(c.x, ty, c.z)
+	var org := r.origin()
+	# Over its top, held there (frozen) until it is the frame and its bricks are in; then down onto it.
+	walker.frozen = true
+	walker.flying = false
+	var over := st.cell_point(top - org) + Vector3(0.0, 3.0, 0.0)
+	t0 = Time.get_ticks_msec()
+	while not (system.station == st and st.bricked) and Time.get_ticks_msec() - t0 < 60000:
+		walker.global_position = st.global_transform * over
+		await get_tree().physics_frame
+	var g := _ground_hit(st.global_transform * over)
+	var ok_st := system.station == st and st.bricked and g != Vector3.INF
+	if ok_st:
+		walker.place(g + Gravity.up_at(g) * 0.3, st.global_basis.x)
+		walker.frozen = false
+		await get_tree().create_timer(2.0).timeout
+	_check("on a generated station, its bricks solid", ok_st, st.data.orbital_name)
+	_check("standing on top of one of its sections", leaf > 0 and top.y >= 0 and walker.is_on_floor(),
+			"section %d of %d bricks, %d joint(s), its top %s" % [leaf, n_leaf, int(touch.get(leaf, 0)), str(top)])
+	await _shot("adrift_gate_before")
+	# Its joints shot away: the section cut off, the walker on it.
+	var ids := PackedInt32Array()
+	for j: Dictionary in joints:
+		if int(j.a) == leaf or int(j.b) == leaf:
+			for cell: Vector3i in j.cells:
+				var b := st.bricks.block_at(st.chunk, cell - org)
+				if b >= 0 and not ids.has(b):
+					ids.append(b)
+	st.bricks.kill_blocks(st.chunk, ids)
+	st._after_kill(ids)
+	# Pieces leave over several frames: the one the walker is on.
+	var d: Drift = null
+	t0 = Time.get_ticks_msec()
+	while d == null and Time.get_ticks_msec() - t0 < 15000:
+		await _frames(1)
+		for e: Drift in system.drifts:
+			if e.riders.has(walker):
+				d = e
+	_check("the section leaves whole with the walker aboard, a body of its bricks under them", d != null and d.body.is_valid(),
+			"%d piece(s) of %s bricks" % [system.drifts.size(), str(system.drifts.map(func(e) -> int: return (e as Drift).bricks))])
+	if d == null:
+		print("[planet] gate: %d ok, %d FAIL" % [_ok, _fail])
+		get_tree().quit(1)
+		return
+	await get_tree().create_timer(0.5).timeout
+	var p0 := d.node.global_position
+	var l0 := d.node.global_transform.affine_inverse() * walker.global_position
+	await get_tree().create_timer(5.0).timeout
+	var moved := d.node.global_position.distance_to(p0)
+	var l1 := d.node.global_transform.affine_inverse() * walker.global_position
+	_check("it drifts off, the walker carried with it, still standing on it", moved > 0.5 and l1.distance_to(l0) < 0.5
+			and walker.is_on_floor() and d.body.is_valid(),
+			"it %.1f m in 5 s, the walker %.2f m on it, on the floor %s" % [moved, l1.distance_to(l0), walker.is_on_floor()])
+	await _shot("adrift_gate_aboard")
+	print("[planet] gate: %d ok, %d FAIL" % [_ok, _fail])
+	get_tree().quit(1 if _fail > 0 else 0)
+
+
 func _run_debris_gate() -> void:
 	var t0 := Time.get_ticks_msec()
 	while walker.frozen and Time.get_ticks_msec() - t0 < 60000:
@@ -3049,6 +3175,30 @@ func _run_hull_gate() -> void:
 		await get_tree().create_timer(0.3).timeout
 		print("[planet] hull_gate_room: %s, %d furniture brick(s)" % [String(best.kind), best_n])
 	await _shot("hull_gate_room")
+	# A window in its side (ShipBuild._windows): stood four studs in from a pane, facing it.
+	var glass := RoomGrow._glass()
+	var panes := 0
+	var pane := Vector3i(0, -1, 0)
+	# The hull's middle line: the bridge's seat's (the wings widen its bounds).
+	var mid_z := float(ship.seat_cell.z + ship.recipe.origin().z)
+	for i in ship.recipe.size():
+		if ship.recipe.material_of(i) == glass:
+			panes += 1
+			var pc := ship.recipe.cell_of(i)
+			if pane.y < 0 or pc.y < pane.y or pc.y == pane.y and absf(pc.x - ship.seat_cell.x) < absf(pane.x - ship.seat_cell.x):
+				pane = pc
+	_check("windows in its sides, glazed", panes > 0, "%d glass plate(s)" % panes)
+	if pane.y >= 0:
+		var org2 := ship.recipe.origin()
+		var inward := 1 if pane.z < mid_z else -1
+		# Its lowest row is WINDOW_SILL over the room's floor: stood on that floor.
+		var g := ship.global_transform * ship.cell_point(pane - org2 + Vector3i(0, -ShipBuild.WINDOW_SILL, 4 * inward))
+		pawn.place(g)
+		await get_tree().create_timer(0.5).timeout
+		var to := ship.global_transform * ship.cell_point(pane - org2) - g
+		_face(Gravity.flat(to, Gravity.up_at(g)).normalized())
+		await get_tree().create_timer(0.3).timeout
+	await _shot("hull_gate_window")
 	print("[planet] gate: %d ok, %d FAIL" % [_ok, _fail])
 	get_tree().quit(1 if _fail > 0 else 0)
 
