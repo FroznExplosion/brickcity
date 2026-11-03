@@ -2,7 +2,7 @@
 
 What the game does on the CPU that the GPU could do instead, what is not worth moving, and what
 texture streaming would and would not change. Written 2026-11-02. Built: the crumbs (2.1, city
-2026-11-02 and planets 2026-11-03) and the particles (2.2, 2026-11-03). Each item names the
+2026-11-02 and planets 2026-11-03) the particles (2.2, 2026-11-03) and the ice shards (2.7, 2026-11-03). Each item names the
 area that owns it (CLAUDE.md, Areas).
 
 ## 1. Why GPU time still matters
@@ -166,6 +166,21 @@ wanted, they should not be a scene a shot: one MultiMesh of streaks, each writte
 its start, end and the tick it was fired, moved and faded by its vertex shader the way the
 crumbs are -- a firefight's tracers then cost one instance write each.
 
+### 2.7 Ice shards (built 2026-11-03)
+
+A frozen enemy killed bursts into 24-80 shards (`VfxPool.spawn_shatter`). They were stepped on
+the CPU every frame -- fall, bounce on the enemy's floor, spin, fade, two renderer calls a
+shard -- and drawn with `shard_mesh`, which nothing set: the CPU did the work and nothing
+showed. Now each shard is written once when the burst starts (where, how big, its velocity,
+its spin) and `fx/shaders/ice_shard.gdshader` works out the rest from the burst's age, the one
+value set each frame: the fall in closed form, up to six bounces (keeping 0.35 of the upward
+speed and 0.7 of all of it, as before), then lying still, shrinking away over the last 40%.
+With no `shard_mesh` set, the pool makes a small cut-crystal chunk, so frozen kills now show
+their shards. Checked by `tools/shatter_look.gd` (not headless): it draws where the old
+per-frame step puts each shard as a red box, and the drawn shards sit in them rising,
+bouncing and lying; the shader's path is within 5 mm of a fine CPU step over 8000 samples.
+Owner: weapons and effects.
+
 ## 3. What is not worth moving
 
 | | Why it stays on the CPU |
@@ -207,6 +222,7 @@ size: 1K instead of 2K quarters its memory (Docs/PbrWood.md 1.2).
 
 1. ~~Crumbs in the vertex shader (2.1)~~ -- built, city and planets.
 2. ~~CPU particles to GPU particles (2.2)~~ -- built.
+   ~~Ice shards (2.7)~~ -- built. Tracers (2.6) only if wanted.
 3. After 4.8 stable: test streaming on the texture arrays (4).
 4. Terrain noise on the GPU (2.3) and scatter (2.4), only if tile streaming is found to stall.
 5. Impostors (2.5), only if the far tier's build time shows up.
