@@ -2591,6 +2591,12 @@ func _run_falling_gate() -> void:
 			went = fast.global_position.distance_to(start)
 	_check("at a station's speed it lands, not through the ground", is_instance_valid(fast) and fast.freeze and under > -1.0,
 			"in at %.0f m/s, %.0f m on, lowest %.1f m over the ground, put back %d time(s)" % [speed, went, under, system.under_ground_saves])
+	# The first one in the picture, where it lies.
+	if is_instance_valid(body):
+		var to := body.global_position - walker.camera.global_position
+		walker.place(walker.global_position, to)
+		walker.pitch = asin(clampf(to.normalized().dot(Gravity.up_at(walker.global_position)), -1.0, 1.0))
+		await _frames(4)
 	await _shot("falling_gate")
 	print("[planet] gate: %d ok, %d FAIL" % [_ok, _fail])
 	get_tree().quit(1 if _fail > 0 else 0)
