@@ -59,6 +59,7 @@ static func make(seed: int, passes := 1) -> Dictionary:
 			var off: Vector3i = pl.off
 			made.seat = Vector3i(mid.x + off.x, int(sp.floor_y) + off.y + 1, mid.y + off.z)
 			break
+	made.stats["furniture"] = KitFurnish.furnish(made.recipe, seed)
 	return made
 
 

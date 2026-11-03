@@ -9,7 +9,9 @@ extends SceneTree
 ##             the fore third, an engine room in the aft third, an airlock through
 ##             the stern onto the spine, most of the inside rooms, sections at the
 ##             bulkheads, two engine housings of bricks on the roof aft, wings;
-##             each laid with nothing loose, every door under its lintel
+##             each laid with nothing loose, every door under its lintel;
+##             furnished (KitFurnish): items in its rooms, none in a doorway or
+##             beside one, every brick still in a section
 ##   flown     a SpaceShip of layout "generated": grown at setup, its seat the
 ##             bridge's -- forward of its middle (-Z), on a floor, under a roof --
 ##             its hull box long along Z
@@ -61,6 +63,7 @@ func _ok(what: String, cond: bool, detail := "") -> void:
 func _run() -> void:
 	var bad := []
 	var fills := []
+	var items := []
 	var w := BrickWorld.new()
 	var pal := TowerRecipe.bake_palette(w)
 	for sd in range(1, 9):
@@ -72,6 +75,8 @@ func _run() -> void:
 		var size: Vector3i = r.bounds()[1]
 		fills.append(snappedf(float(m.stats.fill), 0.01))
 		var cells := {}
+		var inner := {}
+		var from := int((r.meta.get("furniture", {}) as Dictionary).get("from", r.size()))
 		for i in r.size():
 			var c := r.cell_of(i)
 			var s := BuildRecipe.part_size(r.part_of(i))
@@ -79,6 +84,21 @@ func _run() -> void:
 				for z in s.z:
 					for x in s.x:
 						cells[c + Vector3i(x, y, z)] = true
+						if i >= from:
+							inner[c + Vector3i(x, y, z)] = true
+		# Furnished, its doorways and the cells beside them clear.
+		var blocked := 0
+		for dr: Dictionary in BuildDoors.of(r):
+			var lo: Vector3i = dr.lo
+			var ds: Vector3i = dr.size
+			for z in range(lo.z - 1, lo.z + ds.z + 1):
+				for x in range(lo.x - 1, lo.x + ds.x + 1):
+					if inner.has(Vector3i(x, lo.y, z)):
+						blocked += 1
+		if int(m.stats.get("furniture", 0)) < 10 or blocked > 0 or BuildSections.of_build(r).size() != r.size():
+			bad.append("seed %d: %d item(s), %d cell(s) by a door taken, sections of %d of %d bricks" % [sd,
+					int(m.stats.get("furniture", 0)), blocked, BuildSections.of_build(r).size(), r.size()])
+		items.append(int(m.stats.get("furniture", 0)))
 		var seat: Vector3i = m.seat
 		if seat.x < 0 or cells.has(seat) or not cells.has(seat - Vector3i(0, 1, 0)):
 			bad.append("seed %d: seat %s not on a floor" % [sd, str(seat)])
@@ -126,8 +146,8 @@ func _run() -> void:
 				or (r.meta.sections.sections as Array).size() < 2:
 			bad.append("seed %d: %d deck(s), fill %.2f, %d section(s)" % [sd, m.decks, m.stats.fill,
 					(r.meta.sections.sections as Array).size()])
-	_ok("8 seeds: hulls of 1-3 decks, the bridge's seat on its floor fore, the engine room aft, an airlock aft onto the spine, mostly rooms, sections, engine housings, nothing loose, every door under a lintel",
-			bad.is_empty(), "fill %s %s" % [str(fills), str(bad.slice(0, 4))])
+	_ok("8 seeds: hulls of 1-3 decks, the bridge's seat on its floor fore, the engine room aft, an airlock aft onto the spine, mostly rooms, sections, engine housings, furnished with its doorways clear, nothing loose, every door under a lintel",
+			bad.is_empty(), "fill %s, items %s %s" % [str(fills), str(items), str(bad.slice(0, 4))])
 
 	var d := OrbitalData.new()
 	d.kind = "ship"

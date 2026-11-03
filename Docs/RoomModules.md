@@ -415,8 +415,7 @@ prepare grows the same station for the seed, a shell box a section; laid frame b
 loose; a leaf section's joint shot away -- it drifts off as one piece. `system_probe` 31/31 as
 before. The workshop's *Generate station* uses the shipped kit when the player has no core.
 
-Not yet: the people
-and furniture of a drifting section are not carried with it; a station's damage is kept as
+Not yet: the people of a drifting section are not carried with it (its furniture is, 7.7); a station's damage is kept as
 before (dead ids) but sections are not; no windowed pass has looked at one (`--gate=system`
 visits home's, a tower).
 
@@ -560,7 +559,7 @@ plates. `ship_build_probe` checks every door has its lintel on 8 seeds; `station
 walks in through the airlock's.
 
 Not yet: a section that drifts off
-takes no one with it; the hull is a box with a bow and
+takes no one with it (its furniture goes, 7.7); the hull is a box with a bow and
 its engines and wings on the roof (no windows).
 
 ### 7.6 Order and choices
@@ -572,3 +571,33 @@ planets area's chat. Each stage merged with its probe, as stages 1-7.
 Defaults taken unless the user says otherwise: a station keeps one "down" (its deck's gravity),
 not zero-g inside; pods are box-shaped with round parts where the part library has them;
 `section_bricks` 8000.
+
+### 7.7 Furnished rooms (built 2026-11-02)
+
+A generated station's and ship's rooms are furnished (`KitFurnish.furnish(recipe, seed)`; ShipBuild.make,
+SpaceStation's prepare for a station): each the city's way -- `RoomManifest.items_for` on a `Room`
+made from the space (its columns' box, the cells outside them posts), so two to five built-in
+items of its kind, or an authored room template of that kind, and authored items tagged for it.
+A ship room's name gives its kind (bridge office, engine room / reactor / med bay lab, quarters and
+cabins bedroom, galley kitchen, cargo storeroom); a plain room (`office`: RoomPack's fillers, a
+station's pods) is one of office, bedroom, lab, storeroom, kitchen, living by its seed. A station
+module's space kind is now its role's (core living, pod office, dock hall, the rest corridor);
+corridors, halls and closed nooks (`storage`) are left empty.
+
+Kept clear: a lane a stud either side from each door to the room's middle, and two studs round the
+middle (a hub's way through, the bridge's seat). An item is laid all or none, every cell free and in
+the room, a floor brick under it. The items are **plain bricks** at the end of the build
+(`meta.furniture` {from, items}), not the interior role: a station's and a ship's meshes are their
+face bake, which leaves interior bricks out (the city draws those apart, FurnitureMesh). So they are
+drawn with studs, hold by them, collide, and go with their section -- a section that drifts off
+takes its furniture; each new brick is in the section of the floor under it (`meta.sections`).
+
+`ship_build_probe` (4): on 8 seeds 44-107 items, none in a doorway or the cells beside one (with the
+lanes off it finds 9-17 such cells a seed), nothing loose, every brick in a section.
+`station_sections_probe` (6) as before, the station regrown with its furniture. `--gate=hull` (12):
+241 furniture bricks; shot `hull_gate_room` from the middle of its most furnished room (cargo:
+crates). A station of 16 spaces got 8 items (its core and two pods).
+
+Not yet: items stand square (the manifest's `yaw` is not used, as in the city); a bridge 6 x 6 is
+mostly lane and middle, so it gets little; the player's own modules are furnished as well when
+their spaces have a city kind, beside what they hold.

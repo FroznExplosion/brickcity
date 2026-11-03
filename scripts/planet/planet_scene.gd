@@ -21,6 +21,7 @@ extends Node3D
 ##   -- --gate=trees: a tank knocks a tree down; a truck is stopped by one
 ##   (11.10, trees and vehicles).
 ##   -- --gate=squad: a squad on the AI's nav region round the town (11.8 N2)
+##   walks to the player round the curve, takes cover, fires.
 ##   -- --gate=garrison: a generated world's own AI and a town's squad (11.12 step 7)
 ##   -- --gate=save --stage=1|2|3: the universe saved and come back to, run by run
 ##   -- --gate=home: home's town: quiet at the spawn, a fight walked into, its waves
@@ -28,7 +29,7 @@ extends Node3D
 ##   -- --gate=seat: the ship smooth near a planet, out of its seat, the map, open space
 ##   -- --gate=hull: the generated ship (Docs/RoomModules.md 7.5): laid in bricks,
 ##   up its gangway and in by its airlock, flown from the bridge's seat, stood in
-##   walks to the player round the curve, takes cover, fires.
+##   its bridge, its rooms furnished (KitFurnish).
 ##   -- --gate=travel: a squad ordered 200 m out of the town on the nav net
 ##   (11.8 N4), across the regions' borders.
 ##   -- --gate=far: two squads fight on the far side of the town, in a region
@@ -115,6 +116,8 @@ var _boxes_at := 0
 var sky_mat: ProceduralSkyMaterial
 var env: Environment
 var hud: Label
+## Low air in a ship or station (Docs/Hulls.md 4): a warning in the middle at the top.
+var air_warn: Label
 
 const VIEW_MIN := 1536
 const VIEW_MAX := 6144
@@ -856,6 +859,17 @@ func _build_hud() -> void:
 	hud.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.8))
 	hud.add_theme_constant_override("outline_size", 4)
 	layer.add_child(hud)
+	air_warn = Label.new()
+	air_warn.set_anchors_preset(Control.PRESET_CENTER_TOP)
+	air_warn.position = Vector2(-160, 60)
+	air_warn.size = Vector2(320, 30)
+	air_warn.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	air_warn.add_theme_font_size_override("font_size", 22)
+	air_warn.add_theme_color_override("font_color", Color(1.0, 0.35, 0.25))
+	air_warn.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.9))
+	air_warn.add_theme_constant_override("outline_size", 6)
+	air_warn.visible = false
+	layer.add_child(air_warn)
 	add_child(layer)
 	if system != null:
 		var over := CanvasLayer.new()
@@ -885,6 +899,20 @@ func _build_hud() -> void:
 			veil(true)
 
 
+## The air where the player is (a ship's or station's, Docs/Hulls.md 4): pulled toward a
+## hole while it rushes out, warned when it runs low.
+func _air_tick() -> void:
+	var a := system.air_at(walker.global_position + walker.up * 1.0, true)
+	walker.push = a.get("pull", Vector3.ZERO)
+	if air_warn == null:
+		return
+	var p := float(a.get("pressure", 1.0))
+	var venting := bool(a.get("venting", false))
+	air_warn.visible = not a.is_empty() and (p < HullAir.LOW or venting)
+	if air_warn.visible:
+		air_warn.text = ("HULL BREACH  air %d%%" if venting else "LOW AIR  %d%%") % roundi(p * 100.0)
+
+
 func _process(_delta: float) -> void:
 	var now := Time.get_ticks_usec()
 	if _last_us > 0:
@@ -910,6 +938,7 @@ func _process(_delta: float) -> void:
 			system.on_origin_shift()
 	if system != null:
 		walker.match_velocity = system.match_velocity(walker.global_position)
+		_air_tick()
 		walker.reach = body.altitude_of(walker.global_position)
 	if _stepping_out >= 0 and (ship.bricked or Time.get_ticks_msec() - _stepping_out > STEP_OUT_WAIT):
 		_stepping_out = -1
@@ -2980,6 +3009,46 @@ func _run_hull_gate() -> void:
 			and ship.bricks.get_alive_block_count(ship.chunk) == laid and loose.is_empty(),
 			"%d loose group(s)" % loose.size())
 	await _shot("hull_gate_bridge")
+	# Its rooms furnished (KitFurnish): looking aft across the bridge from the seat.
+	var from := int((ship.recipe.meta.get("furniture", {}) as Dictionary).get("from", ship.recipe.size()))
+	var furnished := ship.recipe.size() - from
+	_check("its rooms furnished, in bricks", furnished > 0, "%d furniture brick(s)" % furnished)
+	# Stood in the middle of its most furnished room (kept clear), facing its furniture.
+	var best := {}
+	var best_n := 0
+	var toward := Vector3.ZERO
+	for sp: Dictionary in ship.recipe.meta.structure.spaces:
+		var cols := {}
+		for cc in sp.get("columns", []):
+			cols[Vector2i(int(cc[0]), int(cc[1]))] = true
+		var n := 0
+		var sum := Vector3.ZERO
+		for i in ship.recipe.size():
+			var at := ship.recipe.cell_of(i)
+			if i >= from and cols.has(Vector2i(at.x, at.z)) and at.y > int(sp.floor_y) and at.y < int(sp.ceil_y):
+				n += 1
+				sum += Vector3(at)
+		if n > best_n:
+			best_n = n
+			best = sp
+			toward = sum / n
+	if best_n > 0:
+		var lo := Vector2i(1 << 30, 1 << 30)
+		var hi := -lo
+		for cc in best.columns:
+			lo = Vector2i(mini(lo.x, int(cc[0])), mini(lo.y, int(cc[1])))
+			hi = Vector2i(maxi(hi.x, int(cc[0])), maxi(hi.y, int(cc[1])))
+		var org := ship.recipe.origin()
+		var mid := Vector3i((lo.x + hi.x) / 2, int(best.floor_y) + 1, (lo.y + hi.y) / 2)
+		var stand := ship.global_transform * ship.cell_point(mid - org)
+		pawn.place(stand)
+		await get_tree().create_timer(0.5).timeout
+		var look := ship.global_transform * ship.cell_point(Vector3i(toward) - org) - stand
+		_face(Gravity.flat(look, Gravity.up_at(stand)).normalized())
+		cam.global_transform.basis = cam.global_transform.basis * Basis(Vector3.RIGHT, -0.6)
+		await get_tree().create_timer(0.3).timeout
+		print("[planet] hull_gate_room: %s, %d furniture brick(s)" % [String(best.kind), best_n])
+	await _shot("hull_gate_room")
 	print("[planet] gate: %d ok, %d FAIL" % [_ok, _fail])
 	get_tree().quit(1 if _fail > 0 else 0)
 
