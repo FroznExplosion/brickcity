@@ -696,14 +696,14 @@ func _build_system() -> void:
 	system.setup(sys, planet)
 	system.universe = uni
 	system.built[planet] = buildings
-	system.frozen = _gate and not (_system_gate or _dock_gate)
+	system.frozen = _gate and not (_system_gate or _dock_gate or _falling_gate)
 	# Set here, not before: home is not one of the generated worlds to settle.
 	data.towns.assign(town_dirs)
 	system.anchor_changed.connect(_on_anchor_changed)
 	system.woke.connect(_on_woke)
 	system.jumped.connect(_on_jumped)
 	# A ship parked 45 m behind the spawn (not in the other gates' way).
-	if not _gate or _ship_gate or _dock_gate or _jump_gate or _rocks_gate or _garrison_gate or _seat_gate or _belt_gate or _hull_gate or _save_gate:
+	if not _gate or _ship_gate or _dock_gate or _jump_gate or _rocks_gate or _garrison_gate or _seat_gate or _belt_gate or _hull_gate or _save_gate or _falling_gate:
 		var sd := OrbitalData.new()
 		sd.kind = "ship"
 		sd.orbital_name = "ship"
@@ -2567,6 +2567,30 @@ func _run_falling_gate() -> void:
 	var going := not system.drifts.is_empty() and (system.drifts[0] as Drift).dying >= 0.0
 	await get_tree().create_timer(1.5).timeout
 	_check("far from the player it shrinks away instead", made and going and system.drifts.is_empty() and system.fallen.size() == 1)
+	# A station's piece: it comes in at the station's speed over the ground.
+	var st: SpaceStation = null
+	for o in system.stations:
+		if o.is_station() and o.data.parent == system.index_of(planet):
+			st = o
+	system._on_drifted(arrays, Transform3D(Basis(), walker.global_position - side * 12.0 + up * 30.0), Vector3.ZERO, 30,
+			buildings.brick_material, st)
+	t0 = Time.get_ticks_msec()
+	while system.fallen.size() < 2 and Time.get_ticks_msec() - t0 < 5000:
+		await _frames(1)
+	var fast: RigidBody3D = system.fallen[-1] if system.fallen.size() == 2 else null
+	var speed := fast.linear_velocity.length() if fast != null else 0.0
+	var under := INF
+	var went := 0.0
+	var start := fast.global_position if fast != null else Vector3.ZERO
+	t0 = Time.get_ticks_msec()
+	while is_instance_valid(fast) and not fast.freeze and Time.get_ticks_msec() - t0 < 20000:
+		await _frames(1)
+		if is_instance_valid(fast):
+			var dir := planet.to_local(fast.global_position).normalized()
+			under = minf(under, planet.to_local(fast.global_position).length() - data.surface_point(dir).length())
+			went = fast.global_position.distance_to(start)
+	_check("at a station's speed it lands, not through the ground", is_instance_valid(fast) and fast.freeze and under > -1.0,
+			"in at %.0f m/s, %.0f m on, lowest %.1f m over the ground, put back %d time(s)" % [speed, went, under, system.under_ground_saves])
 	await _shot("falling_gate")
 	print("[planet] gate: %d ok, %d FAIL" % [_ok, _fail])
 	get_tree().quit(1 if _fail > 0 else 0)
