@@ -2576,15 +2576,18 @@ func _show_bricks(mi: MeshInstance3D, f: int, arrays: Array) -> void:
 func _remesh_sections(f: int, frame_node: MeshInstance3D) -> void:
 	world.set_chunk_section_studs(f, SECTION_STUDS)
 	world.set_chunk_section_plates(f, SECTION_PLATES)
-	var changed: PackedInt32Array = world.take_changed_sections(f, SECTION_MARGIN)
+	# Untyped: these calls are newer than some libraries, and a typed call to a method the
+	# library lacks does not compile. `_draws_sections` has said they are there.
+	var engine: Variant = world
+	var changed: PackedInt32Array = engine.take_changed_sections(f, SECTION_MARGIN)
 	if changed.is_empty():
 		return
 	var held: Dictionary = _sections.get_or_add(f, {})
-	var meshes: Array = world.build_sections_chamfer_mesh(f, changed, BrickNear.BEVEL if BrickNear.enabled else 0.0)
+	var meshes: Array = engine.build_sections_chamfer_mesh(f, changed, BrickNear.BEVEL if BrickNear.enabled else 0.0)
 	for i in changed.size():
 		var s := changed[i]
 		var arrays: Array = meshes[i]
-		var studs: PackedFloat32Array = world.get_section_studs(f, s)
+		var studs: PackedFloat32Array = engine.get_section_studs(f, s)
 		var key := Vector2i(f, s)
 		var mi: MeshInstance3D = held.get(s)
 		if arrays.is_empty() and studs.is_empty():
@@ -2600,7 +2603,7 @@ func _remesh_sections(f: int, frame_node: MeshInstance3D) -> void:
 			held[s] = mi
 		_show_bricks(mi, f, arrays)
 		var inv := world.get_chunk_transform(f).affine_inverse()
-		for id in world.get_section_side_stud_blocks(f, s):
+		for id in engine.get_section_side_stud_blocks(f, s):
 			var col := BrickWorld.get_material_colour(world.get_block_material(f, id), world.get_block_colour(f, id))
 			studs.append_array(_side_stud_floats(f, id, inv, col))
 		_fill_studs(key, mi, studs)

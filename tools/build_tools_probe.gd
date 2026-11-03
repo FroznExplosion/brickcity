@@ -53,6 +53,7 @@ func _initialize() -> void:
 	_area_checks()
 	_section_checks()
 	_big_edit_checks()
+	_packer_checks()
 	print("\n%d passed, %d failed" % [_pass, _fail])
 	quit(1 if _fail > 0 else 0)
 
@@ -1585,6 +1586,65 @@ func _a_building(storeys: int, a := Vector2i(100, 100), b := Vector2i(130, 124))
 	_drag_outline(t, Vector3i(a.x, 1, a.y), b)
 	t.input(_key(KEY_0 + storeys))
 	return t.commit_pending()
+
+
+## The engine's packer against the script's, on a spread of shapes: the same bricks, in the same
+## order (Docs/BuildTools.md section 18).
+func _packer_checks() -> void:
+	print("[probe] the packer in the engine (section 18)")
+	if not ClassDB.class_has_method("BrickWorld", "pack_courses"):
+		_ok("this library packs in the engine", false, "rebuild the extension")
+		return
+	var t: WorkshopTools = _ws._tools
+	var plan := {"adds": [{"kind": "rect", "a": [10, 10], "b": [40, 30], "rim": 1},
+			{"kind": "circle", "a": [30, 20], "b": [50, 40], "rim": 1}], "subs": []}
+	var base := {"id": 0, "kind": "rect", "lie": "flat", "a": [0, 0], "b": [30, 20], "at": 1, "depth": 12,
+			"rim": 1, "bond": "stagger", "strict": false, "part": "brick_1x2", "colour": 2, "mat": 0, "cuts": [],
+			"bricks": [], "points": []}
+	var cases := [
+		{},
+		{"kind": "hollow", "a": [3, 3], "b": [40, 27], "depth": 24, "rim": 2},
+		{"kind": "circle", "a": [5, 5], "b": [35, 35], "depth": 9},
+		{"kind": "ring", "a": [5, 5], "b": [45, 45], "depth": 18, "rim": 3},
+		{"kind": "triangle", "a": [-20, -9], "b": [20, 13], "depth": 7},
+		{"kind": "hollow", "b": [25, 25], "depth": 15, "bond": "align"},
+		{"kind": "hollow", "b": [25, 25], "depth": 15, "strict": true, "part": "brick_1x4"},
+		{"b": [50, 30], "depth": 6, "part": "brick_2x4"},
+		{"b": [30, 30], "depth": 4, "part": "plate_2x4"},
+		{"a": [0, 1], "b": [40, 30], "depth": 2, "lie": "wall_x"},
+		{"kind": "plan", "a": [10, 10], "b": [50, 40], "depth": 58, "points": plan, "storey": 18, "floor": 1, "roof": true},
+		{"kind": "hollow", "b": [30, 30], "depth": 21, "cuts": [{"kind": "rect", "lie": "wall_x", "a": [10, 2], "b": [14, 17], "at": 0, "depth": 1}]},
+	]
+	var same := 0
+	var bricks := 0
+	var slow := 0
+	var fast := 0
+	for k in cases.size():
+		var sh: Dictionary = base.duplicate(true)
+		sh.merge(cases[k], true)
+		var cells := BrickShapes.shape_cells(sh)
+		var parts := BrickShapes.parts_for(WorkshopTools._fill_part(String(sh.part)), _ws.palette, bool(sh.strict))
+		var starts := BrickShapes.course_starts(sh, t.height_step("flat"))
+		var taken := {}
+		var i := 0
+		for c in cells:
+			i += 1
+			if k == 2 and i % 7 == 0:
+				taken[c] = true
+		var began := Time.get_ticks_usec()
+		var a := BrickShapes.pack_courses_script(cells, parts, String(sh.bond) != "align", taken, t._base_layer(sh), starts, bool(sh.strict))
+		slow += Time.get_ticks_usec() - began
+		began = Time.get_ticks_usec()
+		var b := BrickShapes.pack_courses(cells, parts, String(sh.bond) != "align", taken, t._base_layer(sh), starts, bool(sh.strict))
+		fast += Time.get_ticks_usec() - began
+		bricks += a.size()
+		if str(a) == str(b):
+			same += 1
+		else:
+			print("    differ: case %d, %d against %d bricks" % [k, a.size(), b.size()])
+	_ok("the engine lays the same bricks as the script, shape after shape", same == cases.size() and bricks > 5000,
+			"%d of %d, %d bricks" % [same, cases.size(), bricks])
+	_ok("and faster", fast * 3 < slow, "%d us against %d" % [fast, slow])
 
 
 func _big_edit_checks() -> void:

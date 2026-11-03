@@ -378,6 +378,12 @@ public:
     /// sections its box touches, grown by `margin` cells: it changes the faces
     /// of what is round it. The first call names every section with bricks.
     PackedInt32Array take_changed_sections(int chunk_id, int margin);
+    /// BrickShapes.pack_courses (workshop_shapes.gd), line for line: `cells` and
+    /// `taken` keyed by Vector3i, `sizes` three ints a part in the parts' order,
+    /// `starts` keyed by layer. Four ints a brick laid: part, x, y, z.
+    /// Docs/BuildTools.md section 18.
+    static PackedInt32Array pack_courses(const Dictionary &cells, const PackedInt32Array &sizes,
+            bool staggered, const Dictionary &taken, int base, const Dictionary &starts, bool strict);
     /// One band's chamfered mesh, on a worker -- or the whole chunk's as one,
     /// with section < 0, for a chunk drawn as one mesh (build_chunk_mesh).
     /// Needs the bake (bake_ready); ask chamfer_ready, then

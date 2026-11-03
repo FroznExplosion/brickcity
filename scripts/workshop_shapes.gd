@@ -613,6 +613,27 @@ static func parts_for(held: String, palette: Dictionary, strict: bool = false) -
 ## only the held brick, so a staggered course's start is a gap, not a half brick.
 static func pack_courses(cells: Dictionary, parts: Array, staggered: bool = true,
 		taken: Dictionary = {}, base: int = 1 << 30, starts: Dictionary = {}, strict: bool = false) -> Array:
+	if parts.is_empty() or not ClassDB.class_has_method("BrickWorld", "pack_courses"):
+		return pack_courses_script(cells, parts, staggered, taken, base, starts, strict)
+	# In the engine (Docs/BuildTools.md section 18): the same rule as below, line for line.
+	var sizes := PackedInt32Array()
+	for p in parts:
+		var size: Vector3i = p[1]
+		sizes.append_array([size.x, size.y, size.z])
+	var got: PackedInt32Array = ClassDB.class_call_static("BrickWorld", "pack_courses", cells, sizes, staggered,
+			taken, base, starts, strict)
+	var out := []
+	@warning_ignore("integer_division")
+	out.resize(got.size() / 4)
+	for i in out.size():
+		out[i] = [parts[got[i * 4]][0], Vector3i(got[i * 4 + 1], got[i * 4 + 2], got[i * 4 + 3])]
+	return out
+
+
+## `pack_courses` in script: what a library without `BrickWorld.pack_courses` uses, and what a
+## probe holds the engine's to.
+static func pack_courses_script(cells: Dictionary, parts: Array, staggered: bool = true,
+		taken: Dictionary = {}, base: int = 1 << 30, starts: Dictionary = {}, strict: bool = false) -> Array:
 	var out := []
 	var left := {}
 	var by_y := {}
