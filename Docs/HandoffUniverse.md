@@ -49,7 +49,7 @@ building (check its date against the last C++ commit), `--import`, then:
 | `home` | 9: the waves | 200 s |
 | `garrison` | 17: a world's AI, sleep and wake, down and up | 280 s (170 stops it on the flight home) |
 | `jump` 10, `ship` 9, `dock` 8, `worlds` 8, `rocks` 4, `debris` 8, `system` 17 | | 280 s |
-| `squad` 10, `far` 11, `pawn` 12 | the AI and the pawn on a planet | 240 s |
+| `falling` 3, `squad` 10, `far` 11, `pawn` 12 | the AI and the pawn on a planet | 240 s |
 | `bricks` 9, `damage` 12, `fall` 7, `hits` 8, `topple` 6, `storey` 12 | buildings; run these if `PlanetBuildings` changes | 240 s |
 | `save --stage=1`, then `2`, then `3` | separate processes, in order; 1 wipes `user://saves_test/`; 3 runs on into stage 4 | 250 s each |
 

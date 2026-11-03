@@ -52,6 +52,14 @@ const DRIFT_CAP := 64
 const ROCK_STEPS := 12
 const DRIFT_PUSH := 3.0
 const DRIFT_SPIN := 0.4
+## Within FALL_AT of a planet's ground a piece is falling to it: near the player
+## (DRIFT_CATCH) a body under it that lands, else gone in DRIFT_DIE seconds.
+const FALL_AT := 2000.0
+const DRIFT_CATCH := 1500.0
+const DRIFT_DIE := 1.0
+## Fallen pieces lying about at most; still this long, a fallen one is frozen.
+const FALLEN_CAP := 32
+const FALLEN_STILL := 1.0
 ## A settled world's buildings are made within POPULATE_AT of the player, and
 ## its far tier kept up within FAR_TIER_AT (past it they are gone from the screen).
 const POPULATE_AT := 700000.0
@@ -103,6 +111,8 @@ var trees_of := {}
 ## Each a Drift: no body, no physics, a place worked out from its age.
 var drifts: Array = []
 var drift_reach := 5000.0
+## Pieces fallen to a planet: bodies under it (_fall).
+var fallen: Array[RigidBody3D] = []
 ## ... and past this from where it left, so a wreck's pieces wait round it.
 var drift_home := 3000.0
 ## A piece is its full size inside `drift_seen` of the player, nothing at
@@ -454,17 +464,103 @@ func _drift_keep(p: Vector3) -> void:
 		if e.task >= 0:
 			k -= 1
 			continue
-		var off := (e.node.global_position - p).length()
+		var at := e.node.global_position
+		var off := (at - p).length()
+		var over := _falling_to(at)
+		if over != null and e.dying < 0.0:
+			if over == anchor and off < DRIFT_CATCH and e.look != null:
+				_fall(e, over)
+				drifts.remove_at(k)
+				k -= 1
+				continue
+			e.dying = _drift_clock
+		e.was = at
+		e.was_us = Time.get_ticks_usec()
+		var dead := e.dying >= 0.0 and _drift_clock - e.dying >= DRIFT_DIE
 		if e.look != null:
 			var size := 1.0 - smoothstep(drift_seen, drift_hidden, off)
+			if e.dying >= 0.0:
+				size *= 1.0 - clampf((_drift_clock - e.dying) / DRIFT_DIE, 0.0, 1.0)
 			e.look.visible = size > 0.0
 			if size > 0.0 and size != e.look.scale.x:
 				e.look.scale = Vector3.ONE * size
 				e.look.position = e.draw_at * size
 		var left := (e.v * (_drift_clock - e.born)).length()
-		if off > drift_reach and left > drift_home or drifts.size() > DRIFT_CAP and k == 0:
+		if dead or off > drift_reach and left > drift_home or drifts.size() > DRIFT_CAP and k == 0:
 			e.node.queue_free()
 			drifts.remove_at(k)
+		k -= 1
+	_fallen_step(p)
+
+
+## The body whose ground a world point is within FALL_AT of, or null.
+func _falling_to(at: Vector3) -> PlanetBody:
+	for b in bodies:
+		if (at - b.global_position).length() - b.data.radius < FALL_AT:
+			return b
+	return null
+
+
+## Piece `e` falling to the player's world, near them: a body under it, its
+## mesh and a box round it, at the speed it had.
+func _fall(e: Drift, b: PlanetBody) -> void:
+	var now := e.node.global_transform
+	var dt := (Time.get_ticks_usec() - e.was_us) / 1000000.0
+	var body := RigidBody3D.new()
+	body.name = "Fallen"
+	body.mass = maxf(float(e.bricks), 1.0)
+	body.gravity_scale = 0.0
+	body.collision_layer = Layers.FALLING
+	body.collision_mask = Layers.FALLING_MASK
+	body.physics_interpolation_mode = Node.PHYSICS_INTERPOLATION_MODE_OFF
+	var box := e.look.mesh.get_aabb()
+	var cs := CollisionShape3D.new()
+	var shape := BoxShape3D.new()
+	shape.size = box.size.max(Vector3.ONE * 0.2)
+	cs.shape = shape
+	cs.position = e.draw_at + box.get_center()
+	body.add_child(cs)
+	b.add_child(body)
+	body.global_transform = now
+	e.look.reparent(body, false)
+	e.look.scale = Vector3.ONE
+	e.look.position = e.draw_at
+	e.look.visible = true
+	if e.was_us > 0 and dt > 0.0 and dt < 0.5:
+		body.linear_velocity = (now.origin - e.was) / dt
+	var turn := now.basis * e.at(_drift_clock).basis.inverse()
+	body.angular_velocity = turn * e.axis * e.rate
+	body.set_meta(&"still", 0.0)
+	e.node.queue_free()
+	fallen.append(body)
+	while fallen.size() > FALLEN_CAP:
+		if is_instance_valid(fallen[0]):
+			fallen[0].queue_free()
+		fallen.remove_at(0)
+	print("[system] %d bricks fall to %s at %.0f m/s" % [e.bricks, b.data.planet_name, body.linear_velocity.length()])
+
+
+## The fallen: pulled down as PlanetPieces pulls its own, frozen once still, gone
+## if left behind while falling (the ground far off is coarse).
+func _fallen_step(p: Vector3) -> void:
+	var dt := get_process_delta_time()
+	var k := fallen.size() - 1
+	while k >= 0:
+		var body := fallen[k]
+		if not is_instance_valid(body):
+			fallen.remove_at(k)
+		elif not body.freeze and body.can_process():
+			if (body.global_position - p).length() > DRIFT_CATCH * 2.0:
+				body.queue_free()
+				fallen.remove_at(k)
+			else:
+				body.constant_force = Gravity.down_at(body.global_position) * Gravity.strength() * PlanetPieces.GRAVITY_SCALE * body.mass
+				var still := float(body.get_meta(&"still"))
+				still = still + dt if body.linear_velocity.length() < 0.3 and body.angular_velocity.length() < 0.3 else 0.0
+				body.set_meta(&"still", still)
+				if still >= FALLEN_STILL:
+					body.constant_force = Vector3.ZERO
+					body.freeze = true
 		k -= 1
 
 
