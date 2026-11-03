@@ -233,8 +233,12 @@ doc; the planet and city scenes call the rig (small changes to theirs).
 
 ## 9. Built (2026-11-02)
 
-In the planet scene only; the city, heightfield, terrain and sandbox scenes
-still build their own light (next: move them onto the rig).
+The planet scene runs the whole rig. The city, heightfield, terrain and
+sandbox scenes use its fixed day (`LightRig.build_day`, 2026-11-03): the same
+sky, neutral ambient, AgX, home's sun size (2.29 deg) and sunset-free sun
+colour, each scene's own sun angle and energy; no exposure changes, no fill,
+no ambient boxes there. Underwater keeps the air's ambient colour and puts it
+back on surfacing (the rig's neutral colour counts now).
 
 | Part | What | Where |
 |---|---|---|

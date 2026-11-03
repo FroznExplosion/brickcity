@@ -652,7 +652,10 @@ func sky_base() -> Dictionary:
 
 
 func _sky_material() -> ProceduralSkyMaterial:
-	for c in city.get_children():
+	# The sky sits beside the sun, under the light rig (Docs/Lighting.md).
+	var sun: Node = city._sun
+	var under: Array = sun.get_parent().get_children() if sun != null and sun.get_parent() != null else city.get_children()
+	for c in under:
 		if c is WorldEnvironment and c.environment != null and c.environment.sky != null:
 			return c.environment.sky.sky_material as ProceduralSkyMaterial
 	return null

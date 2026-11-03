@@ -83,29 +83,11 @@ func _ready() -> void:
 
 
 func _build_scenery() -> void:
-	var env := Environment.new()
-	env.background_mode = Environment.BG_SKY
-	var sky := Sky.new()
-	var sky_mat := ProceduralSkyMaterial.new()
-	sky_mat.sky_top_color = Color(0.36, 0.54, 0.78)
-	sky_mat.sky_horizon_color = Color(0.74, 0.80, 0.84)
-	sky_mat.ground_bottom_color = Color(0.28, 0.30, 0.28)
-	sky_mat.ground_horizon_color = Color(0.74, 0.80, 0.84)
-	sky.sky_material = sky_mat
-	env.sky = sky
-	env.ambient_light_source = Environment.AMBIENT_SOURCE_SKY
-	env.ambient_light_energy = DRY_AMBIENT
-	env.ssao_enabled = false
-	_env = env
-	var we := WorldEnvironment.new()
-	we.environment = env
-	add_child(we)
-
-	_sun = DirectionalLight3D.new()
-	_sun.rotation_degrees = Vector3(-42, -38, 0)
-	_sun.light_energy = 1.15
-	_sun.shadow_enabled = true
-	add_child(_sun)
+	# The shared light (Docs/Lighting.md): sky, ambient, AgX, the sun's size.
+	var rig := LightRig.new()
+	rig.build_day(self, Vector3(-42, -38, 0), 1.15, DRY_AMBIENT)
+	_env = rig.env
+	_sun = rig.sun
 
 	_camera = DebugCamera.new()
 	_camera.name = "DebugCamera"
