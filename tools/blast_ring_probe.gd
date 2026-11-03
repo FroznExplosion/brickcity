@@ -5,6 +5,12 @@ extends SceneTree
 ## not vanish).
 ##
 ##     godot --headless --path . --script tools/blast_ring_probe.gd
+##     godot --path . --script tools/blast_ring_probe.gd -- --shots=<dir>
+##
+## With --shots (windowed), pictures of the first blast's crumbs as they are
+## thrown, a third of a second on, and settled: <dir>/blast_crumbs_<when>.png.
+## They are drawn by shaders/crumb.gdshader from what they were thrown with
+## (Docs/GpuOffload.md 2.1), so this is where to see that they still are.
 ##
 ## IslandManager.throw_killed: of the bricks a blast has killed, those whose
 ## middle is within BLAST_CORE of its radius are gone, and the ring round them
@@ -28,6 +34,7 @@ var _palette: Dictionary
 var _m: IslandManager
 var _camera: Camera3D
 var _tower := -1
+var _shots := ""
 
 
 func _init() -> void:
@@ -53,7 +60,32 @@ func _init() -> void:
 	root.add_child(_m)
 	_m.setup(_w, null, _camera)
 	_m.interest = func() -> PackedVector3Array: return PackedVector3Array([Vector3(0, 1, 0)])
+	for a in OS.get_cmdline_user_args():
+		if a.begins_with("--shots="):
+			_shots = a.substr(8)
+	if _shots != "":
+		var sun := DirectionalLight3D.new()
+		sun.rotation_degrees = Vector3(-40, 30, 0)
+		root.add_child(sun)
+		var env := Environment.new()
+		env.background_mode = Environment.BG_COLOR
+		env.background_color = Color(0.55, 0.6, 0.68)
+		env.ambient_light_source = Environment.AMBIENT_SOURCE_COLOR
+		env.ambient_light_color = Color(0.7, 0.72, 0.76)
+		env.ambient_light_energy = 0.6
+		var we := WorldEnvironment.new()
+		we.environment = env
+		root.add_child(we)
 	physics_frame.connect(_run)
+
+
+## A picture, with --shots: the frame drawn after this one.
+func _snap(when: String) -> void:
+	if _shots == "" or DisplayServer.get_name() == "headless":
+		return
+	await RenderingServer.frame_post_draw
+	DirAccess.make_dir_recursive_absolute(_shots)
+	root.get_texture().get_image().save_png("%s/blast_crumbs_%s.png" % [_shots, when])
 
 
 func _ok(what: String, cond: bool, detail := "") -> void:
@@ -108,14 +140,10 @@ func _split(chunk: int, killed: PackedInt32Array, at: Vector3, radius: float) ->
 	return [core, ring]
 
 
-## Every crumb there is: [where, how fast].
+## Every crumb there is: [where, how fast] now (the shader draws them from
+## what they were thrown with; IslandManager.crumb_states works it out).
 func _crumbs() -> Array:
-	var out := []
-	for key in _m._crumbs:
-		var cr = _m._crumbs[key]
-		for i in cr.pos.size():
-			out.append([cr.pos[i], cr.vel[i]])
-	return out
+	return _m.crumb_states()
 
 
 ## The front face of the tower (z = 0), `along` of the way across and `up` metres.
@@ -145,6 +173,7 @@ func _run() -> void:
 			_w.get_alive_block_count(_tower) == alive0)
 	_ok("every brick of the ring is a crumb, and none of the core",
 			_m.crumb_count == int(parts[1]), "%d crumb(s)" % _m.crumb_count)
+	await _snap("thrown")
 	var crumbs := _crumbs()
 	var nearest := INF
 	var farthest := 0.0
@@ -170,6 +199,7 @@ func _run() -> void:
 			_m.blast_census == [int(parts[0]) + int(parts[1]), int(parts[0]), int(parts[1]), 0, 0, 0, 0],
 			str(_m.blast_census))
 	await _ticks(20)
+	await _snap("falling")
 	var fell := 0.0
 	var lowest := INF
 	for c in _crumbs():
@@ -178,6 +208,7 @@ func _run() -> void:
 	_ok("a third of a second on they are falling", fell < 0.0 and lowest < at.y,
 			"lowest at %.2f m" % lowest)
 	await _settled_crumbs()
+	await _snap("settled")
 	_ok("and soon none is falling: what came down lies where it stopped (BrickHeap)",
 			_m.crumb_count == 0 and _m.heap.count > 0,
 			"%d left" % _m.crumb_count)

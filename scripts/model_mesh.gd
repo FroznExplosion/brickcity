@@ -107,7 +107,90 @@ static func _add_one(mi: MeshInstance3D, root: Node, out: ArrayMesh) -> void:
 			s[Mesh.ARRAY_VERTEX] = v
 			if arr[Mesh.ARRAY_INDEX] != null and not (arr[Mesh.ARRAY_INDEX] as PackedInt32Array).is_empty():
 				s[Mesh.ARRAY_INDEX] = arr[Mesh.ARRAY_INDEX]
+			_add_colours(s, arr, mi.get_active_material(si))
 			out.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, s)
+
+
+## The surface's colours as vertex colours (Docs/AssetWorkshop.md, "Colour from model to
+## bricks"), into `s` (the surface being built from `arr`): the material's albedo times
+## its texture at each corner's UV times the vertex colour where the material uses it.
+## With a texture each triangle gets corners of its own (the index dropped), each read a
+## little in toward the triangle's middle: a low-poly model's palette texture gives every
+## face one swatch, and a corner shared with the next face would blend the two.
+static func _add_colours(s: Array, arr: Array, mat: Material) -> void:
+	var albedo := Color.WHITE
+	var tex: Texture2D = null
+	var use_vc := true
+	if mat is BaseMaterial3D:
+		var bm := mat as BaseMaterial3D
+		albedo = bm.albedo_color
+		tex = bm.albedo_texture
+		use_vc = bm.vertex_color_use_as_albedo
+	elif mat is ShaderMaterial:
+		for n in ["albedo", "albedo_color", "base_color", "color"]:
+			var p = (mat as ShaderMaterial).get_shader_parameter(n)
+			if p is Color:
+				albedo = p
+				break
+		for n in ["albedo_texture", "texture_albedo", "base_texture", "main_texture"]:
+			var t = (mat as ShaderMaterial).get_shader_parameter(n)
+			if t is Texture2D:
+				tex = t
+				break
+	var vc = arr[Mesh.ARRAY_COLOR] if use_vc else null
+	var uv = arr[Mesh.ARRAY_TEX_UV]
+	var img := _image_of(tex)
+	var v: PackedVector3Array = s[Mesh.ARRAY_VERTEX]
+	if img == null or uv == null or (uv as PackedVector2Array).size() != v.size():
+		if mat == null and (vc == null or (vc as PackedColorArray).size() != v.size()):
+			return   # nothing to say: the model has no colour of its own
+		var cols := PackedColorArray()
+		cols.resize(v.size())
+		for i in v.size():
+			var c := albedo
+			if vc != null and i < (vc as PackedColorArray).size():
+				c *= (vc as PackedColorArray)[i]
+			c.a = 1.0
+			cols[i] = c
+		s[Mesh.ARRAY_COLOR] = cols
+		return
+	var idx: PackedInt32Array = s[Mesh.ARRAY_INDEX] if s[Mesh.ARRAY_INDEX] != null else PackedInt32Array()
+	if idx.is_empty():
+		for i in v.size() - v.size() % 3:
+			idx.append(i)
+	var nv := PackedVector3Array()
+	var cols := PackedColorArray()
+	var uvs: PackedVector2Array = uv
+	var size := Vector2(img.get_width(), img.get_height())
+	for t in range(0, idx.size() - idx.size() % 3, 3):
+		var mid := (uvs[idx[t]] + uvs[idx[t + 1]] + uvs[idx[t + 2]]) / 3.0
+		for k in 3:
+			var i := idx[t + k]
+			var at := uvs[i].lerp(mid, 0.3)
+			var px := Vector2i(int(fposmod(at.x, 1.0) * size.x), int(fposmod(at.y, 1.0) * size.y))
+			var c := img.get_pixelv(px.clamp(Vector2i.ZERO, Vector2i(size) - Vector2i.ONE)) * albedo
+			if vc != null and i < (vc as PackedColorArray).size():
+				c *= (vc as PackedColorArray)[i]
+			c.a = 1.0
+			nv.append(v[i])
+			cols.append(c)
+	s[Mesh.ARRAY_VERTEX] = nv
+	s[Mesh.ARRAY_INDEX] = null
+	s[Mesh.ARRAY_COLOR] = cols
+
+
+## A texture's pixels on the CPU, decompressed; null when it has none to give.
+static func _image_of(tex: Texture2D) -> Image:
+	if tex == null:
+		return null
+	var img := tex.get_image()
+	if img == null or img.is_empty():
+		return null
+	if img.is_compressed():
+		img = img.duplicate() as Image
+		if img.decompress() != OK:
+			return null
+	return img
 
 
 ## [vertices, index] as a mesh; null when empty.

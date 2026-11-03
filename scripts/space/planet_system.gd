@@ -23,9 +23,11 @@ extends Node3D
 ## `woke` gives what holds world positions for it the offset to take.
 ##
 ## The scene says where the player is (`observer`) and the camera (`eye`), and
-## owns the sun light (`sun`); this aims it from the star and says how much of
-## the star's disc the camera sees (`sunlight`: night, a planet's shadow, an
-## eclipse) and how high it stands there (`sun_height`).
+## owns the light (`rig`, Docs/Lighting.md); this aims its sun from the star and
+## says how much of the star's disc the camera sees (`sunlight`: night, a
+## planet's shadow, an eclipse), how high it stands there (`sun_height`), its
+## size and brightness by distance, the fill from the brightest body in the
+## sky, and each body's shadows from the others.
 
 ## Inside SHELL radii of a body's centre the player is ON it (STA's
 ## active_shell_radius_mult is 3; 5 keeps the walker gate's 30 km climb on the
@@ -52,6 +54,8 @@ const DRIFT_CAP := 64
 const ROCK_STEPS := 12
 const DRIFT_PUSH := 3.0
 const DRIFT_SPIN := 0.4
+## A piece with someone aboard leaves at this share of the push, turning a tenth of that.
+const DRIFT_RIDDEN := 0.25
 ## Within FALL_AT of a planet's ground a piece is falling to it: near the player
 ## (DRIFT_CATCH) a body under it that lands, else gone in DRIFT_DIE seconds.
 const FALL_AT := 2000.0
@@ -126,8 +130,11 @@ var star_look: MeshInstance3D
 ## This system's belt, or null, and its far disc.
 var belt: RockField
 var _belt_disc: MeshInstance3D
-var sun: DirectionalLight3D
-var sun_energy := 1.1
+var rig: LightRig
+## The star's light at home (luminosity / distance^2), for the sun's brightness.
+var _flux_home := 0.0
+## The most bodies whose shadows a body's far look takes.
+const SHADOWERS := 4
 var observer: Callable
 var eye: Callable
 ## How much of the star's disc the camera sees, 0..1.
@@ -160,6 +167,9 @@ func setup(p_sys: StarSystem, home_body: PlanetBody = null) -> void:
 	if home_body != null:
 		anchor = home_body
 	_build_star()
+	var hd: PlanetData = _home_sys.bodies[_home_sys.home] if _home_sys.home >= 0 else null
+	var hr: float = hd.orbit_radius if hd != null and hd.orbit_radius > 0.0 else StarSystem.HABITABLE
+	_flux_home = _home_sys.luminosity / (hr * hr)
 	_place()
 
 
@@ -232,6 +242,7 @@ func jump(index: int) -> bool:
 	for st in stations:
 		st.queue_free()
 	for f in drifts:
+		_drop_body(f)
 		(f as Drift).node.queue_free()
 	drifts.clear()
 	bodies.clear()
@@ -361,6 +372,36 @@ func hour_at(p: Vector3) -> float:
 
 
 ## The buildings of the world the player is on, or null.
+## How high a world's air reaches, as a share of its radius (its sky's shell is at
+## 1.08): full to AIR_FULL, thinning to none at AIR_TOP.
+const AIR_FULL := 0.04
+const AIR_TOP := 0.08
+
+
+## Each ship's and station's outside pressure (Docs/Hulls.md 4): a world's air
+## where it is in it -- parked, its airlock open lets nothing out -- else space's none.
+func _outside_air() -> void:
+	for st in stations:
+		if st.air == null:
+			continue
+		var b := nearest(st.global_position)
+		var p := 0.0
+		if b != null and b.data.has_air:
+			var h := b.altitude_of(st.global_position) / maxf(b.data.radius, 1.0)
+			p = clampf((AIR_TOP - h) / (AIR_TOP - AIR_FULL), 0.0, 1.0)
+		st.outside_pressure = p
+
+
+## The air at world point `p` inside a ship or station (SpaceStation.air_at): {pressure,
+## pull, breached}, or empty when `p` is in none.
+func air_at(p: Vector3, near := false) -> Dictionary:
+	for st in stations:
+		var a := st.air_at(p, near)
+		if not a.is_empty():
+			return a
+	return {}
+
+
 func buildings_here() -> PlanetBuildings:
 	return built.get(anchor) if anchor != null else null
 
@@ -379,6 +420,7 @@ func on_origin_shift() -> void:
 func _process(delta: float) -> void:
 	if not frozen:
 		t += delta * time_scale
+	_outside_air()
 	for s in ships:
 		s.fly(self, delta)
 	_ship_refs()
@@ -425,6 +467,15 @@ func _on_drifted(arrays: Array, com: Transform3D, local_com: Vector3, count: int
 	e.v = carried + (away + Vector3(randf_range(-0.5, 0.5), randf_range(-0.5, 0.5), randf_range(-0.5, 0.5))) * randf_range(1.0, DRIFT_PUSH)
 	e.axis = Vector3(randf_range(-1, 1), randf_range(-1, 1), randf_range(-1, 1)).normalized()
 	e.rate = randf_range(0.05, DRIFT_SPIN)
+	if from != null and from.drift_body.is_valid():
+		# Someone aboard: its bricks to stand on, and it leaves gently, barely turning.
+		e.body = from.drift_body
+		from.drift_body = RID()
+		e.riders = from.drift_riders.duplicate()
+		e.v = carried + (e.v - carried) * DRIFT_RIDDEN
+		e.rate *= DRIFT_RIDDEN * 0.1
+		PhysicsServer3D.body_set_state(e.body, PhysicsServer3D.BODY_STATE_TRANSFORM, com)
+		PhysicsServer3D.body_set_space(e.body, get_world_3d().space)
 	e.node = Node3D.new()
 	e.node.name = "Drift"
 	e.node.physics_interpolation_mode = Node.PHYSICS_INTERPOLATION_MODE_OFF
@@ -442,7 +493,8 @@ func _on_drifted(arrays: Array, com: Transform3D, local_com: Vector3, count: int
 			holder[0] = m, false, "drift piece")
 	e.holder = holder
 	drifts.append(e)
-	print("[system] %d bricks of %s drift off" % [count, name_of(from)])
+	print("[system] %d bricks of %s drift off%s" % [count, name_of(from),
+			"" if e.riders.is_empty() else ", %d aboard" % e.riders.size()])
 
 
 ## Meshes in, pieces out of reach gone, the oldest over the cap.
@@ -466,14 +518,17 @@ func _drift_keep(p: Vector3) -> void:
 			continue
 		var at := e.node.global_position
 		var off := (at - p).length()
+		var ridden := _ridden(e)
 		var over := _falling_to(at)
 		if over != null and e.dying < 0.0:
+			# Ridden, it falls just the same (they stand on its box); it never fades.
 			if over == anchor and off < DRIFT_CATCH and e.look != null:
 				_fall(e, over)
 				drifts.remove_at(k)
 				k -= 1
 				continue
-			e.dying = _drift_clock
+			if not ridden:
+				e.dying = _drift_clock
 		e.was = at
 		e.was_us = Time.get_ticks_usec()
 		var dead := e.dying >= 0.0 and _drift_clock - e.dying >= DRIFT_DIE
@@ -486,11 +541,39 @@ func _drift_keep(p: Vector3) -> void:
 				e.look.scale = Vector3.ONE * size
 				e.look.position = e.draw_at * size
 		var left := (e.v * (_drift_clock - e.born)).length()
-		if dead or off > drift_reach and left > drift_home or drifts.size() > DRIFT_CAP and k == 0:
+		if not ridden and (dead or off > drift_reach and left > drift_home or drifts.size() > DRIFT_CAP and k == 0):
+			_drop_body(e)
 			e.node.queue_free()
 			drifts.remove_at(k)
 		k -= 1
 	_fallen_step(p)
+
+
+## Is anyone still on piece `e`: a rider it left with, near it (within its
+## mesh's box and a couple of metres)?
+func _ridden(e: Drift) -> bool:
+	if not e.body.is_valid():
+		return false
+	var k := e.riders.size() - 1
+	while k >= 0:
+		if not is_instance_valid(e.riders[k]):
+			e.riders.remove_at(k)
+		k -= 1
+	if e.look == null:
+		return not e.riders.is_empty()
+	var box := e.look.mesh.get_aabb()
+	box.position += e.draw_at
+	box = box.grow(2.0)
+	for r: Node3D in e.riders:
+		if box.has_point(e.node.global_transform.affine_inverse() * r.global_position):
+			return true
+	return false
+
+
+func _drop_body(e: Drift) -> void:
+	if e.body.is_valid():
+		PhysicsServer3D.free_rid(e.body)
+	e.body = RID()
 
 
 ## The body whose ground a world point is within FALL_AT of, or null.
@@ -531,6 +614,7 @@ func _fall(e: Drift, b: PlanetBody) -> void:
 	var turn := now.basis * e.at(_drift_clock).basis.inverse()
 	body.angular_velocity = turn * e.axis * e.rate
 	body.set_meta(&"still", 0.0)
+	_drop_body(e)
 	e.node.queue_free()
 	fallen.append(body)
 	while fallen.size() > FALLEN_CAP:
@@ -641,9 +725,49 @@ func _place() -> void:
 		var e: Drift = d
 		var base: Transform3D = e.base if e.frame == null else _frame_xform(e.frame)
 		e.node.global_transform = s2w * base * e.at(_drift_clock)
+		if e.body.is_valid():
+			# Moved where it is drawn, its velocity its own (not the frame's step
+			# or an origin shift): what carries a figure standing on it.
+			var turn := (s2w * base).basis
+			PhysicsServer3D.body_set_state(e.body, PhysicsServer3D.BODY_STATE_TRANSFORM, e.node.global_transform)
+			PhysicsServer3D.body_set_state(e.body, PhysicsServer3D.BODY_STATE_LINEAR_VELOCITY, turn * e.v)
+			PhysicsServer3D.body_set_state(e.body, PhysicsServer3D.BODY_STATE_ANGULAR_VELOCITY, turn * e.axis * e.rate)
 	for b in bodies:
 		b.set_sun(b.global_basis.inverse() * (star.global_position - b.global_position).normalized())
+		_shadows_on(b)
 	_belt_near(s2w)
+
+
+## Body `b`'s far look takes the shadows of the bodies between it and the star
+## (Lighting.md 2a): each as a sphere in its own frame, in its radii.
+func _shadows_on(b: PlanetBody) -> void:
+	var to_s := star.global_position - b.global_position
+	var ds := to_s.length()
+	var sd := to_s / ds
+	var inv := b.global_basis.orthonormalized().inverse()
+	var r := b.data.radius
+	var found: Array = []
+	for o in bodies:
+		if o == b:
+			continue
+		var to_o := o.global_position - b.global_position
+		var along := to_o.dot(sd)
+		if along <= 0.0 or along > ds:
+			continue
+		# How near the sun's line it passes, against how big it and its
+		# penumbra are there: past both it shadows nothing on b.
+		var miss := (to_o - sd * along).length()
+		var reach := o.data.radius + r + along * sys.star_radius / ds
+		if miss > reach:
+			continue
+		found.append([miss / reach, Vector4(0, 0, 0, 0)])
+		var l := inv * to_o / r
+		found[-1][1] = Vector4(l.x, l.y, l.z, o.data.radius / r)
+	found.sort_custom(func(x, y): return x[0] < y[0])
+	var list := PackedVector4Array()
+	for k in mini(found.size(), SHADOWERS):
+		list.append(found[k][1])
+	b.set_shadowers(list, asin(clampf(sys.star_radius / ds, 0.0, 1.0)), rig.star_colour if rig != null else sys.star_color)
 
 
 func _gravity() -> void:
@@ -817,11 +941,11 @@ func _ship_bricks(p: Vector3) -> void:
 		s.gangway_step()
 
 
-## The scene's top-level 3D nodes but the system's own, the bodies and the sun.
+## The scene's top-level 3D nodes but the system's own, the bodies and the light.
 func _top_level() -> Array[Node3D]:
 	var out: Array[Node3D] = []
 	for c in get_parent().get_children():
-		if c is Node3D and c != self and not c is PlanetBody and c != sun:
+		if c is Node3D and c != self and not c is PlanetBody and c != rig:
 			out.append(c)
 	return out
 
@@ -888,7 +1012,8 @@ func _wake(f: Node3D) -> void:
 # --- the light -----------------------------------------------------------------
 
 ## Aim the sun from the star at the camera; how much of the star's disc the
-## bodies leave it.
+## bodies leave it; its size and brightness from where the camera is
+## (Lighting.md 2); the fill from the brightest body in the sky (5).
 func _light(e: Vector3) -> void:
 	var to_s := star.global_position - e
 	var ds := to_s.length()
@@ -906,14 +1031,50 @@ func _light(e: Vector3) -> void:
 	sunlight = seen
 	var near := nearest(e)
 	sun_height = (e - near.global_position).normalized().dot(sd) if near != null else 1.0
-	if sun == null:
+	if rig == null:
 		return
-	if _sun_dir == Vector3.ZERO or _sun_dir.angle_to(-sd) > SUN_STEP:
-		_sun_dir = -sd
-		var up := Vector3.UP if absf(sd.y) < 0.99 else Vector3.FORWARD
-		sun.global_basis = Basis.looking_at(_sun_dir, up)
-	sun.light_energy = sun_energy * seen
-	sun.visible = seen > 0.0
+	rig.star_colour = sys.star_color
+	var flux := sys.luminosity / (ds * ds)
+	rig.set_sun(sd, seen, a_s, flux / _flux_home if _flux_home > 0.0 else 1.0, SUN_STEP)
+	_fill(e, sd, near, seen)
+
+
+## The brightest body in the sky by the light it sends back: albedo x its solid
+## angle / pi x how much of the face toward the camera is lit; under the near
+## body's horizon it sends none.
+func _fill(e: Vector3, sd: Vector3, near: PlanetBody, seen: float) -> void:
+	var best: PlanetBody = null
+	var best_score := 0.0
+	var best_dir := Vector3.ZERO
+	var best_ang := 0.0
+	var best_over := 0.0
+	var up := (e - near.global_position).normalized() if near != null else Vector3.ZERO
+	var near_in := near != null and (e - near.global_position).length() < near.data.radius * 1.5
+	for b in bodies:
+		if b == near and near_in:
+			continue
+		var to_b := b.global_position - e
+		var db := to_b.length()
+		var dir := to_b / db
+		var over := 1.0
+		if near_in:
+			over = smoothstep(-0.05, 0.1, dir.dot(up))
+			if over <= 0.0:
+				continue
+		var ang := asin(clampf(b.data.radius / db, 0.0, 1.0))
+		var omega := 2.0 * (1.0 - cos(ang))   # its solid angle / pi
+		# The lit part of its face toward the camera: (1 + cos phase) / 2, the
+		# phase the angle at the body between the star and the camera.
+		var to_star := (star.global_position - b.global_position).normalized()
+		var lit := (1.0 + to_star.dot(-dir)) * 0.5
+		var score := LightRig.FILL_ALBEDO * omega * lit
+		if score * over > best_score * best_over or best == null:
+			best = b
+			best_score = score
+			best_dir = dir
+			best_ang = ang
+			best_over = over
+	rig.set_fill(best, best_dir, best_score, best_ang, best_over, seen)
 
 
 ## Each body's look, and the star's, where the camera at `e` can draw it.
@@ -1097,6 +1258,7 @@ func _exit_tree() -> void:
 		WorkerThreadPool.wait_for_task_completion(_bake_task)
 		_bake_task = -1
 	for e in drifts:
+		_drop_body(e)
 		if (e as Drift).task >= 0:
 			WorkerThreadPool.wait_for_task_completion((e as Drift).task)
 			(e as Drift).task = -1

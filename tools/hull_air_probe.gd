@@ -129,6 +129,49 @@ func _hits(w: BrickWorld, ch: int, r: BuildRecipe, air: HullAir, pal: Dictionary
 		near = near or (c - hb_cell).abs() <= Vector3i(4, 4, 4)
 	_ok("the breach is where the brick was", near)
 
+	# Venting (Docs/Hulls.md 4): the breached room's air goes at the expected rate;
+	# every other room (doors shut) keeps all of its.
+	var room := air._root(room_ci)
+	var v := float(air._cells[room])
+	var holes := air.breach_cells(room).size()
+	var p_before := {}
+	for c in air.compartments():
+		p_before[c.id] = float(c.pressure)
+	air.supply = true
+	var steps := 60
+	for i in steps:
+		air.step(1.0 / steps)
+	var want := exp(-HullAir.VENT_K * holes / v)
+	var got := air.pressure(room)
+	var still := 0
+	for c in air.compartments():
+		if c.id != room and absf(float(c.pressure) - float(p_before.get(c.id, 1.0))) > 1e-5:
+			still += 1
+	_ok("venting: 1 s through the hole leaves the expected air", absf(got - want) < 0.01 * maxf(want, 0.01),
+			"%d holes, %d cells: %.3f, expected %.3f" % [holes, int(v), got, want])
+	_ok("venting: no other room changes", still == 0, "%d changed" % still)
+	# The rush: toward the hole, strongest by it.
+	var cm := BrickWorld.get_cell_size()
+	var hole_c := Vector3(air.breach_cells(room)[0]) + Vector3(0.5, 0.5, 0.5)
+	var by := Vector3.ZERO
+	var by_at := Vector3.ZERO
+	for i in range(air.dims.x * air.dims.y * air.dims.z):
+		if air.state[i] == HullAir.INSIDE and air._root(air.comp[i]) == room:
+			var c := Vector3(air._cell(i)) + Vector3(0.5, 0.5, 0.5)
+			if by == Vector3.ZERO or (c - hole_c).length() < (by - hole_c).length():
+				by = c
+	var far := by
+	for i in range(air.dims.x * air.dims.y * air.dims.z):
+		if air.state[i] == HullAir.INSIDE and air._root(air.comp[i]) == room:
+			var c := Vector3(air._cell(i)) + Vector3(0.5, 0.5, 0.5)
+			if (c - hole_c).length() > (far - hole_c).length():
+				far = c
+	var pn := air.pull_at(by, cm)
+	var pf := air.pull_at(far, cm)
+	_ok("the rush: toward the hole, stronger by it", pn.length() > pf.length() and pn.length() > 0.0
+			and pn.dot((hole_c - by) * cm) > 0.0, "%.1f by it, %.1f across the room" % [pn.length(), pf.length()])
+	var kept := air.pressure(room)
+
 	# A wall between two rooms.
 	w.kill_blocks(ch, PackedInt32Array([wall_b]))
 	air.blocks_removed(w, ch, PackedInt32Array([wall_b]))
@@ -147,6 +190,40 @@ func _hits(w: BrickWorld, ch: int, r: BuildRecipe, air: HullAir, pal: Dictionary
 	var sealed := air.cells_added(w, ch, cells)
 	_ok("patched: the room sealed again", nb >= 0 and not air.is_breached(room_ci),
 			"new block %d, sealed %s, breach cells left %d" % [nb, str(sealed), air.breach_cells(room_ci).size()])
+	# Sealed: no more goes; the supply tops it up (to full at most: a small hole,
+	# a window's glass plate, leaves it nearly full).
+	var p0 := air.pressure(room_ci)
+	air.step(1.0)
+	var p1 := air.pressure(room_ci)
+	_ok("sealed: the air stops going, the supply tops it up", air.vent_rate(room_ci) == 0.0
+			and p1 > p0 and absf(p1 - p0 - minf(HullAir.SUPPLY, 1.0 - p0)) < 0.002,
+			"%.3f -> %.3f (left at %.3f)" % [p0, p1, kept])
+	# An open door between two rooms evens them out.
+	var dj := -1
+	for i in air.doors.size():
+		if not bool(air.doors[i].outside) and air._door_rooms(air.doors[i]).size() >= 2:
+			dj = i
+			break
+	if dj >= 0:
+		var rs: Array = air._door_rooms(air.doors[dj])
+		var ra: int = rs[0]
+		var rb: int = rs[1]
+		air.supply = false
+		air._air[ra] = 0.2 * air._cells[ra]
+		air._air[rb] = 1.0 * air._cells[rb]
+		var total: float = air._air[ra] + air._air[rb]
+		air.set_door(dj, true)
+		for i in 300:
+			air.step(1.0 / 30.0)
+		air.set_door(dj, false)
+		var pe := total / (air._cells[ra] + air._cells[rb])
+		_ok("an open door evens two rooms out, no air lost", absf(air.pressure(ra) - pe) < 0.02
+				and absf(air.pressure(rb) - pe) < 0.02
+				and absf(air._air[ra] + air._air[rb] - total) < 0.5,
+				"%.3f / %.3f, shared %.3f" % [air.pressure(ra), air.pressure(rb), pe])
+		air.supply = true
+	else:
+		_ok("a door between two rooms", false)
 
 	# The airlock.
 	var di := -1

@@ -28,6 +28,11 @@ var dying := -1.0
 ## Where it was drawn last, and when (usec): its speed, should it fall.
 var was := Vector3.ZERO
 var was_us := 0
+## Who stood on it when it left, and the body of its bricks they ride on (a
+## static body moved with it, its velocity its own, so a figure on it is
+## carried); none for a piece nobody was on.
+var riders: Array = []
+var body := RID()
 
 
 ## Its place in its frame at clock `now`.

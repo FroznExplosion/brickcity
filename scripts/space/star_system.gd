@@ -371,7 +371,7 @@ static func _planet(s: StarSystem, rng: RandomNumberGenerator, k: int) -> Planet
 			rng.randf_range(0.35, 0.7), 1.0)
 	d.has_air = rng.randf() < 0.8
 	d.sea_level = rng.randf_range(-25.0, 5.0) if d.has_air else NAN
-	d.tint = Color.WHITE.lerp(Color.from_hsv(rng.randf(), 0.5, 1.0), rng.randf_range(0.1, 0.4))
+	d.tint = Color.WHITE.lerp(Color.from_hsv(rng.randf(), 0.5, 1.0), rng.randf_range(0.05, 0.15))
 	return d
 
 
@@ -399,7 +399,7 @@ static func _moon(s: StarSystem, rng: RandomNumberGenerator, parent: int, a: flo
 	# Tidally locked: one turn an orbit, about the orbit's own axis, so the same
 	# face is always to its planet.
 	d.day = d.orbit_period
-	d.tint = Color.WHITE.lerp(Color.from_hsv(rng.randf(), 0.25, 1.0), rng.randf_range(0.2, 0.6))
+	d.tint = Color.WHITE.lerp(Color.from_hsv(rng.randf(), 0.25, 1.0), rng.randf_range(0.15, 0.35))
 	d.climate_axis = Vector3.UP
 	d.tilt = _plane(d)
 	d.spin_phase = d.orbit_phase
