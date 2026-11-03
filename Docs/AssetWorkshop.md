@@ -1114,7 +1114,7 @@ box stamped and voted, deep cells, brush colours and repaint, drawing, bricks ba
 palette, saves old and new); asset_workshop_probe 343 (3 new: a coloured model through Make
 bricks, Bricks to clay and back, the same in metal).
 
-### Planned: a palette per area (the user's idea, 2026-11-02; not built)
+### Planned: a palette per solar system (the user's idea, 2026-11-02; not built)
 
 Everything in an area -- a star system, or a whole universe -- uses that area's colours, so
 each place has a look of its own and the same asset fits in wherever it is built.
@@ -1134,9 +1134,23 @@ each place has a look of its own and the same asset fits in wherever it is built
      made once an area) -- the saved build is unchanged, so one asset looks native in every
      system.
   3. **Generated things** (towns, stations, ships, terrain props) pick their colours from it.
-- **Open:** a palette per system, per planet, or per universe with systems choosing from it?
-  Does a hand-built build the player places also remap, or only converted and generated ones?
-  Does a team or faction colour stay outside the palette?
+- **Decided by the user (2026-11-02):**
+  - **One palette a solar system.** Everything inside the system takes it.
+  - **Per player.** It is how a player's game *draws* the world, not what is saved: two
+    players in one system can see it in different palettes.
+  - **A setting overrides it:** lock to one palette so it never changes from system to
+    system; and any palette can be picked at any time.
+  - **Unchanged by a palette:** the HUD, markers, inventory, menus and all other UI.
+- **So it is a drawing remap, not a data change.** Bricks keep their saved colour index; the
+  player's current palette is a 64-entry table (each filament colour -> the nearest of the
+  palette's, `ColourMatch.nearest`) applied where world bricks are coloured for drawing (the
+  meshers' `block_rgba` / the brick shaders), never where UI reads a colour. Switching palette
+  = a new table and the world's brick materials told; no rebuild of builds, no network traffic.
+  Item 2 above (remap at build time) is dropped for this; Make bricks' `convert_palette` stays
+  an option for converting into one palette for good.
+- **Open:** does a team or faction colour stay outside the palette (drawn as saved)? Which
+  colours every palette keeps (black, white, greys)? Wood, metal and stone variants: remapped
+  too, or left as they are?
 
 ### Furniture and items (2026-10-23)
 
