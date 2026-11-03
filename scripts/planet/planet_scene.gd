@@ -2242,6 +2242,24 @@ func _run_light_gate() -> void:
 		await get_tree().create_timer(2.5).timeout
 		_check("out again, daylight's", not light.inside and light.exposure < 1.1, "exposure %.2f" % light.exposure)
 		await _shot("light_gate_outside")
+		if DisplayServer.get_name() != "headless":
+			# What the soft shadows cost (Lighting.md 2): the GPU's draw time
+			# with the sun's size, without, and with again. A report, not a
+			# check -- only trustworthy with the editor closed.
+			var vp := get_viewport().get_viewport_rid()
+			RenderingServer.viewport_set_measure_render_time(vp, true)
+			var size := sun.light_angular_distance
+			var ms := []
+			for a in [size, 0.0, size, 0.0]:
+				sun.light_angular_distance = a
+				await _frames(20)
+				var sum := 0.0
+				for k in 120:
+					await _frames(1)
+					sum += RenderingServer.viewport_get_measured_render_time_gpu(vp)
+				ms.append(sum / 120.0)
+			sun.light_angular_distance = size
+			print("[light] GPU draw, sun %.2f deg soft: %.2f / %.2f ms; hard: %.2f / %.2f ms" % [size, ms[0], ms[2], ms[1], ms[3]])
 		c.queue_free()
 		cam.current = true
 	print("[light] frames: worst %.1f ms" % _worst_ms)

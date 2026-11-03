@@ -220,7 +220,7 @@ light on all bricks, ships included -> optional SSAO/SSIL -> SDFGI experiment.
 | # | Step | Size | Test |
 |---|---|---|---|
 | 1 | `LightRig`; AgX; capped sky cast and ground tint; neutral ambient; sun colour from star and air; auto exposure | small, GDScript | **built** (planet scene) |
-| 2 | Distance (2): **the sun's size** from the star's radius and distance (`light_angular_distance`, soft shadows); **its brightness** from the star's light at the camera against home's (`gain`) | small | **built**; frame cost of the soft shadows still to time, editor closed |
+| 2 | Distance (2): **the sun's size** from the star's radius and distance (`light_angular_distance`, soft shadows); **its brightness** from the star's light at the camera against home's (`gain`) | small | **built**; soft shadows cost nothing measurable (9) |
 | 2a | Planets and moons shadow each other: on the ground by `seen`; from space on impostors and halos (2a) | small | **built** |
 | 3 | Moon/planet light (5) | small | **built** |
 | 4 | Ambient boxes in buildings, stations and ships (6.2) | small-medium | **built** |
@@ -259,5 +259,9 @@ windowed adds pictures `shots/light_gate_*.png` and checks that the box
 darkens the picture and the exposure brightens it again).
 
 Known limits: a box does not know a blown wall (6.1 will); the fill at home's
-midnight is often none (its moon under the horizon); the soft shadows' frame
-cost is not timed yet (editor closed needed).
+midnight is often none (its moon under the horizon).
+
+Soft shadows' cost (2026-11-03, editor closed, no other runs, the gate's
+outdoor view at noon, 1280x720): GPU draw 15.65 / 15.55 ms with the sun at
+2.29 deg, 15.59 / 16.28 ms hard -- no cost above the noise. The windowed
+gate prints it again each run ("GPU draw").
