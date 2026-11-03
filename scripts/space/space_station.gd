@@ -63,6 +63,9 @@ var riding := false
 ## for them to stand on: the drift handler takes both (PlanetSystem), else the
 ## body is freed once the signal is out.
 var drift_riders: Array = []
+## The piece being sent off, as its bricks (ChunkRecord.to_data), for a save:
+## PlanetSystem takes it with the riders.
+var drift_record := {}
 var drift_body := RID()
 ## How far under a figure's origin its floor is looked for, plates.
 const RIDE_DROP := 16
@@ -817,7 +820,9 @@ func _send_off(split: Dictionary, count: int, riders: Array) -> void:
 		PhysicsServer3D.body_set_collision_layer(drift_body, Layers.STRUCTURE)
 		PhysicsServer3D.body_set_collision_mask(drift_body, Layers.STRUCTURE_MASK)
 		bricks.add_chunk_shapes(drift_body, c, com, true, true)
+	drift_record = ChunkRecord.capture(bricks, c).to_data(bricks)
 	drifted.emit(arrays, bricks.get_chunk_transform(c) * Transform3D(Basis(), com), com, count, brick_material)
+	drift_record = {}
 	if drift_body.is_valid():
 		PhysicsServer3D.free_rid(drift_body)
 	drift_body = RID()

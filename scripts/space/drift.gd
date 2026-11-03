@@ -30,6 +30,10 @@ var dying := -1.0
 ## carried); none for a piece nobody was on.
 var riders: Array = []
 var body := RID()
+## Its bricks (ChunkRecord.to_data) and who made it, whose world names its
+## parts: what a save keeps of it (PlanetSystem.drifts_to_save).
+var record := {}
+var source: Node3D
 
 
 ## Its place in its frame at clock `now`.

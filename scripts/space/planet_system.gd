@@ -481,14 +481,24 @@ func _on_drifted(arrays: Array, com: Transform3D, local_com: Vector3, count: int
 		e.rate *= DRIFT_RIDDEN * 0.1
 		PhysicsServer3D.body_set_state(e.body, PhysicsServer3D.BODY_STATE_TRANSFORM, com)
 		PhysicsServer3D.body_set_space(e.body, get_world_3d().space)
+	if from != null:
+		e.record = from.drift_record
+		e.source = from
+	e.material = material
+	e.draw_at = -local_com
+	_drift_node(e, arrays, com)
+	print("[system] %d bricks of %s drift off%s" % [count, name_of(from),
+			"" if e.riders.is_empty() else ", %d aboard" % e.riders.size()])
+
+
+## Piece `e`'s node at `at` (world), and its mesh made from `arrays` on a
+## worker, as a band's: on the main thread it is 10-25 ms.
+func _drift_node(e: Drift, arrays: Array, at: Transform3D) -> void:
 	e.node = Node3D.new()
 	e.node.name = "Drift"
 	e.node.physics_interpolation_mode = Node.PHYSICS_INTERPOLATION_MODE_OFF
 	add_child(e.node)
-	e.node.global_transform = com
-	e.material = material
-	e.draw_at = -local_com
-	# The mesh made on a worker, as a band's: on the main thread it is 10-25 ms.
+	e.node.global_transform = at
 	var holder := [null]
 	e.task = WorkerThreadPool.add_task(func() -> void:
 			if arrays.is_empty():
@@ -498,8 +508,6 @@ func _on_drifted(arrays: Array, com: Transform3D, local_com: Vector3, count: int
 			holder[0] = m, false, "drift piece")
 	e.holder = holder
 	drifts.append(e)
-	print("[system] %d bricks of %s drift off%s" % [count, name_of(from),
-			"" if e.riders.is_empty() else ", %d aboard" % e.riders.size()])
 
 
 ## Meshes in, pieces out of reach gone, the oldest over the cap.
@@ -617,9 +625,32 @@ func _falling_to(at: Vector3) -> PlanetBody:
 ## mesh and a box round it, at the speed it had.
 func _fall(e: Drift, b: PlanetBody) -> void:
 	var now := e.node.global_transform
+	var body := _fallen_body(b, now, e.bricks)
+	# Ground colliders round it while it falls: past a few hundred metres of the
+	# player there are none, and it would fall through.
+	PlanetBody.track(body)
+	e.look.reparent(body, false)
+	e.look.scale = Vector3.ONE
+	e.look.position = e.draw_at
+	e.look.visible = true
+	_fallen_box(body, e.look, e.draw_at)
+	body.linear_velocity = _drift_velocity(e)
+	var turn := now.basis * e.at(_drift_clock).basis.inverse()
+	body.angular_velocity = turn * e.axis * e.rate
+	body.set_meta(&"record", e.record)
+	body.set_meta(&"from", _source_of(e.source))
+	body.set_meta(&"draw_at", e.draw_at)
+	_drop_body(e)
+	e.node.queue_free()
+	print("[system] %d bricks fall to %s at %.0f m/s" % [e.bricks, b.data.planet_name, body.linear_velocity.length()])
+
+
+## A fallen piece's body under `b` at `at` (world), counted in `fallen`, the
+## oldest going over FALLEN_CAP. Its look and box are the caller's.
+func _fallen_body(b: PlanetBody, at: Transform3D, count: int) -> RigidBody3D:
 	var body := RigidBody3D.new()
 	body.name = "Fallen"
-	body.mass = maxf(float(e.bricks), 1.0)
+	body.mass = maxf(float(count), 1.0)
 	body.gravity_scale = 0.0
 	body.collision_layer = Layers.FALLING
 	body.collision_mask = Layers.FALLING_MASK
@@ -629,34 +660,144 @@ func _fall(e: Drift, b: PlanetBody) -> void:
 	if b.data.has_air:
 		body.linear_damp = FALLEN_DRAG
 		body.angular_damp = FALLEN_DRAG
-	var box := e.look.mesh.get_aabb()
-	var cs := CollisionShape3D.new()
-	var shape := BoxShape3D.new()
-	shape.size = box.size.max(Vector3.ONE * 0.2)
-	cs.shape = shape
-	cs.position = e.draw_at + box.get_center()
-	body.add_child(cs)
-	b.add_child(body)
-	body.global_transform = now
-	# Ground colliders round it while it falls: past a few hundred metres of the
-	# player there are none, and it would fall through.
-	PlanetBody.track(body)
-	e.look.reparent(body, false)
-	e.look.scale = Vector3.ONE
-	e.look.position = e.draw_at
-	e.look.visible = true
-	body.linear_velocity = _drift_velocity(e)
-	var turn := now.basis * e.at(_drift_clock).basis.inverse()
-	body.angular_velocity = turn * e.axis * e.rate
 	body.set_meta(&"still", 0.0)
-	_drop_body(e)
-	e.node.queue_free()
+	body.set_meta(&"bricks", count)
+	b.add_child(body)
+	body.global_transform = at
 	fallen.append(body)
 	while fallen.size() > FALLEN_CAP:
 		if is_instance_valid(fallen[0]):
 			fallen[0].queue_free()
 		fallen.remove_at(0)
-	print("[system] %d bricks fall to %s at %.0f m/s" % [e.bricks, b.data.planet_name, body.linear_velocity.length()])
+	return body
+
+
+## A box round `look` (drawn at `draw_at`) for `body` to land on.
+func _fallen_box(body: RigidBody3D, look: MeshInstance3D, draw_at: Vector3) -> void:
+	var box := look.mesh.get_aabb()
+	var cs := CollisionShape3D.new()
+	var shape := BoxShape3D.new()
+	shape.size = box.size.max(Vector3.ONE * 0.2)
+	cs.shape = shape
+	cs.position = draw_at + box.get_center()
+	body.add_child(cs)
+
+
+# --- saved (Docs/Planets.md, "Plan, rubble in saves") ---------------------------
+
+## Who made a piece, as a save names it: a station by its index, a ship as
+## -2 - its index; -1 nobody known.
+func _source_of(n: Node3D) -> int:
+	if n is SpaceShip:
+		var j := ships.find(n)
+		return -2 - j if j >= 0 else -1
+	if n is SpaceStation:
+		return stations.find(n)
+	return -1
+
+
+func _source_node(i: int) -> SpaceStation:
+	if i >= 0 and i < stations.size():
+		return stations[i]
+	if i <= -2 and -2 - i < ships.size():
+		return ships[-2 - i]
+	return null
+
+
+## A saved piece's mesh again: its bricks laid in its maker's world (whose
+## parts they name), meshed, and let go. [] if that cannot be.
+func _record_arrays(rec: Dictionary, src: SpaceStation) -> Array:
+	if src == null or rec.is_empty():
+		return []
+	if src.bricks == null:
+		src.prepare()
+	if src.bricks == null:
+		return []
+	var r := ChunkRecord.from_data(src.bricks, rec)
+	if r == null:
+		return []
+	var c := r.restore(src.bricks)
+	if c < 0:
+		return []
+	var arrays: Array = src.bricks.build_chunk_mesh(c)
+	src.bricks.release_chunk(c)
+	return arrays
+
+
+## What a save keeps of the pieces adrift in this system: each one's bricks, its
+## maker, its record of motion and its age. Not riders, nor one going.
+func drifts_to_save() -> Array:
+	var out := []
+	for e: Drift in drifts:
+		if e.record.is_empty() or e.dying >= 0.0:
+			continue
+		out.append({"record": e.record, "from": _source_of(e.source),
+				"frame": stations.find(e.frame) if e.frame != null else -1, "base": e.base,
+				"p0": e.p0, "q0": e.q0, "v": e.v, "axis": e.axis, "rate": e.rate,
+				"age": _drift_clock - e.born, "bricks": e.bricks, "draw_at": e.draw_at})
+	return out
+
+
+## Back from drifts_to_save, each on its way where its age has it now.
+func restore_drifts(saved: Array) -> void:
+	for d: Dictionary in saved:
+		var src := _source_node(int(d.from))
+		var arrays := _record_arrays(d.record, src)
+		if arrays.is_empty():
+			continue
+		var e := Drift.new()
+		e.record = d.record
+		e.source = src
+		e.material = src.brick_material
+		var k := int(d.frame)
+		e.frame = stations[k] if k >= 0 and k < stations.size() else null
+		e.base = d.base
+		e.p0 = d.p0
+		e.q0 = d.q0
+		e.v = d.v
+		e.axis = d.axis
+		e.rate = float(d.rate)
+		e.born = _drift_clock - float(d.age)
+		e.bricks = int(d.bricks)
+		e.draw_at = d.draw_at
+		var base: Transform3D = e.base if e.frame == null else _frame_xform(e.frame)
+		_drift_node(e, arrays, space_to_world() * base * e.at(_drift_clock))
+
+
+## What a save keeps of the pieces fallen on `b` from space: the still ones,
+## their bricks and where they lie on it.
+func fallen_to_save(b: PlanetBody) -> Array:
+	var out := []
+	var inv := b.global_transform.affine_inverse()
+	for body in fallen:
+		if is_instance_valid(body) and body.freeze and body.get_parent() == b and body.has_meta(&"record") \
+				and not (body.get_meta(&"record") as Dictionary).is_empty():
+			out.append({"record": body.get_meta(&"record"), "from": int(body.get_meta(&"from")),
+					"at": inv * body.global_transform, "draw_at": body.get_meta(&"draw_at"),
+					"bricks": int(body.get_meta(&"bricks"))})
+	return out
+
+
+## Back from fallen_to_save: each lying still where it lay.
+func restore_fallen(b: PlanetBody, saved: Array) -> void:
+	for d: Dictionary in saved:
+		var src := _source_node(int(d.from))
+		var arrays := _record_arrays(d.record, src)
+		if arrays.is_empty():
+			continue
+		var mesh := ArrayMesh.new()
+		mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays, [], {}, IslandManager.UPLOAD_COMPRESS)
+		var look := MeshInstance3D.new()
+		look.mesh = mesh
+		look.material_override = src.brick_material
+		look.position = d.draw_at
+		var body := _fallen_body(b, b.global_transform * (d.at as Transform3D), int(d.bricks))
+		body.add_child(look)
+		_fallen_box(body, look, d.draw_at)
+		body.set_meta(&"record", d.record)
+		body.set_meta(&"from", int(d.from))
+		body.set_meta(&"draw_at", d.draw_at)
+		body.freeze = true
 
 
 ## The fallen: pulled down as PlanetPieces pulls its own, frozen once still, gone
