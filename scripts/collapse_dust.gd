@@ -4,7 +4,8 @@ extends RefCounted
 ## A cloud of dust where a big building gives way (CollapseDirector). A
 ## placeholder: the effects area owns how destruction looks, and this is here so
 ## a collapse across the city reads as one before that lands. Presentation only,
-## each machine its own, one draw call a cloud.
+## each machine its own, one draw call a cloud, simulated on the GPU
+## (Docs/GpuOffload.md 2.2; it was CPUParticles3D, on the main thread).
 
 const LIFETIME := 3.5
 
@@ -15,32 +16,47 @@ static var _mesh: QuadMesh
 static func puff(parent: Node, at: Vector3, size: float) -> void:
 	if parent == null or not parent.is_inside_tree():
 		return
-	var p := CPUParticles3D.new()
+	var p := GPUParticles3D.new()
 	p.one_shot = true
 	p.explosiveness = 0.85
 	p.amount = 24
 	p.lifetime = LIFETIME
-	p.mesh = _quad()
-	p.emission_shape = CPUParticles3D.EMISSION_SHAPE_SPHERE
-	p.emission_sphere_radius = maxf(size * 0.5, 1.0)
-	p.direction = Vector3.UP
-	p.spread = 70.0
-	p.initial_velocity_min = 0.5
-	p.initial_velocity_max = 2.5
-	p.gravity = Vector3(0.0, -0.4, 0.0)
-	p.damping_min = 0.6
-	p.damping_max = 1.2
-	p.scale_amount_min = clampf(size * 0.4, 2.0, 6.0)
-	p.scale_amount_max = clampf(size * 0.8, 3.0, 12.0)
-	var ramp := Gradient.new()
-	ramp.set_color(0, Color(0.62, 0.59, 0.55, 0.55))
-	ramp.set_color(1, Color(0.62, 0.59, 0.55, 0.0))
-	p.color_ramp = ramp
+	p.local_coords = true   # it never moves
+	p.draw_pass_1 = _quad()
+	var reach := maxf(size, 2.0) + 12.0
+	p.visibility_aabb = AABB(-Vector3.ONE * reach, Vector3.ONE * reach * 2.0)
+	var pm := ParticleProcessMaterial.new()
+	pm.emission_shape = ParticleProcessMaterial.EMISSION_SHAPE_SPHERE
+	pm.emission_sphere_radius = maxf(size * 0.5, 1.0)
+	pm.direction = Vector3.UP
+	pm.spread = 70.0
+	pm.initial_velocity_min = 0.5
+	pm.initial_velocity_max = 2.5
+	pm.gravity = Vector3(0.0, -0.4, 0.0)
+	pm.damping_min = 0.6
+	pm.damping_max = 1.2
+	pm.scale_min = clampf(size * 0.4, 2.0, 6.0)
+	pm.scale_max = clampf(size * 0.8, 3.0, 12.0)
+	pm.color_ramp = _ramp()
+	p.process_material = pm
 	p.physics_interpolation_mode = Node.PHYSICS_INTERPOLATION_MODE_OFF
 	parent.add_child(p)
 	p.global_position = at
 	p.emitting = true
 	parent.get_tree().create_timer(LIFETIME + 0.5).timeout.connect(p.queue_free)
+
+
+static var _fade: GradientTexture1D
+
+
+static func _ramp() -> GradientTexture1D:
+	if _fade == null:
+		var ramp := Gradient.new()
+		ramp.set_color(0, Color(0.62, 0.59, 0.55, 0.55))
+		ramp.set_color(1, Color(0.62, 0.59, 0.55, 0.0))
+		_fade = GradientTexture1D.new()
+		_fade.gradient = ramp
+	return _fade
 
 
 static func _quad() -> QuadMesh:

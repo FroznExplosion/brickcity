@@ -28,6 +28,7 @@ const PELLET_NUMBERS := 5
 const MAX_NUMBERS := 16
 ## Death bursts at once, reused: each was a new CPUParticles3D, box and
 ## material per kill, and an air strike or a collapse kills several together.
+## GPU particles (Docs/GpuOffload.md 2.2): nothing on the main thread per brick.
 const MAX_BURSTS := 8
 const BURST_LIFETIME := 1.1
 
@@ -49,7 +50,7 @@ var _spare_labels: Array[Label3D] = []
 ## Labels made and numbers that took over an older one, for gates.
 var labels_made := 0
 var numbers_recycled := 0
-var _bursts: Array[CPUParticles3D] = []
+var _bursts: Array[GPUParticles3D] = []
 var _burst_cursor := 0
 var _flashes := {}         # MeshInstance3D -> [material it had, until]
 var _flash_mat: StandardMaterial3D
@@ -83,6 +84,9 @@ func setup(p_city: Node3D) -> void:
 	_flash_mat.emission_enabled = true
 	_flash_mat.emission = Color(1.0, 0.95, 0.85)
 	_flash_mat.emission_energy_multiplier = 2.0
+	# The first burst now: its particle shader is built at load, not in the
+	# frame of the first kill.
+	_bursts.append(_new_burst())
 
 
 ## A round of the player's gun: `info` is GunController.fired's.
@@ -153,37 +157,41 @@ func burst(where: Vector3, colour: Color) -> void:
 	if not is_instance_valid(p):
 		p = _new_burst()
 		_bursts[at] = p
-	p.color = colour
+	(p.process_material as ParticleProcessMaterial).color = colour
 	p.global_position = where + Vector3.UP * 0.8
 	p.visible = true
 	p.restart()
 
 
-func _new_burst() -> CPUParticles3D:
-	var p := CPUParticles3D.new()
+func _new_burst() -> GPUParticles3D:
+	var p := GPUParticles3D.new()
 	var cube := BoxMesh.new()
 	cube.size = Vector3(0.14, 0.12, 0.14)
 	# One material for every burst; the kill's colour is the particles' own.
 	var mat := StandardMaterial3D.new()
 	mat.vertex_color_use_as_albedo = true
 	cube.material = mat
-	p.mesh = cube
+	p.draw_pass_1 = cube
 	p.amount = 28
 	p.one_shot = true
 	p.emitting = false
 	p.explosiveness = 0.95
 	p.lifetime = BURST_LIFETIME
-	p.emission_shape = CPUParticles3D.EMISSION_SHAPE_BOX
-	p.emission_box_extents = Vector3(0.25, 0.8, 0.25)
-	p.direction = Vector3.UP
-	p.spread = 70.0
-	p.initial_velocity_min = 2.0
-	p.initial_velocity_max = 5.0
-	p.gravity = Vector3(0.0, -14.0, 0.0)
-	p.angular_velocity_min = -360.0
-	p.angular_velocity_max = 360.0
-	p.scale_amount_min = 0.7
-	p.scale_amount_max = 1.3
+	p.local_coords = true   # moved only to start again
+	p.visibility_aabb = AABB(Vector3(-5, -6, -5), Vector3(10, 10, 10))
+	var pm := ParticleProcessMaterial.new()
+	pm.emission_shape = ParticleProcessMaterial.EMISSION_SHAPE_BOX
+	pm.emission_box_extents = Vector3(0.25, 0.8, 0.25)
+	pm.direction = Vector3.UP
+	pm.spread = 70.0
+	pm.initial_velocity_min = 2.0
+	pm.initial_velocity_max = 5.0
+	pm.gravity = Vector3(0.0, -14.0, 0.0)
+	pm.angular_velocity_min = -360.0
+	pm.angular_velocity_max = 360.0
+	pm.scale_min = 0.7
+	pm.scale_max = 1.3
+	p.process_material = pm
 	city.add_child(p)
 	return p
 

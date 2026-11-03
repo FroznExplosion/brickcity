@@ -23,7 +23,13 @@ const MARK_SIZE := 0.24
 ## oldest cut short for a new one -- a long burst of fire into a wall was a new
 ## particle system every hit, with no limit -- and none past DEBRIS_RANGE of the
 ## camera, where a burst is a few pixels. The mark and the sound are still made.
+## GPU particles (Docs/GpuOffload.md 2.2), made once and taken in turn: each
+## was a CPUParticles3D, stepped on the main thread, made and freed per hit.
 const MAX_DEBRIS := 32
+## Particles an emitter has room for: the most any family throws
+## (BrickMaterials.debris); fewer are thrown by `amount_ratio`, which needs no
+## new buffers.
+const DEBRIS_ROOM := 24
 const DEBRIS_RANGE := 60.0
 ## A stride, in metres of the walker's horizontal travel.
 const STRIDE := 0.62
@@ -35,7 +41,8 @@ var registry: BuildingRegistry
 var walker: Node = null
 
 var _marks: Array[Decal] = []
-var _bursts: Array[CPUParticles3D] = []
+var _bursts: Array[GPUParticles3D] = []
+var _burst_next := 0
 ## One mesh (and its material) per material family and colour, shared by every
 ## burst of it: was a new mesh and material per hit.
 var _debris_meshes := {}
@@ -56,6 +63,9 @@ func setup(brick_world: BrickWorld, building_registry: BuildingRegistry, who_wal
 		p.max_distance = 60.0
 		add_child(p)
 		_players.append(p)
+	# The first debris emitter now: its particle shader is built at load, not
+	# in the tick of the first hit.
+	_bursts.append(_new_burst())
 
 
 # ---------------------------------------------------------------------------
@@ -102,31 +112,41 @@ func _debris(point: Vector3, normal: Vector3, fam: String, brick_colour: Color) 
 	var cam := get_viewport().get_camera_3d()
 	if cam != null and cam.global_position.distance_to(point) > DEBRIS_RANGE:
 		return
-	while not _bursts.is_empty() and not is_instance_valid(_bursts[0]):
-		_bursts.pop_front()
-	if _bursts.size() >= MAX_DEBRIS:
-		_bursts.pop_front().queue_free()
 	var spec := BrickMaterials.debris(fam, brick_colour)
-	var p := CPUParticles3D.new()
+	# The oldest is cut short for a new one.
+	if _bursts.size() < MAX_DEBRIS:
+		_bursts.append(_new_burst())
+	var p := _bursts[_burst_next]
+	_burst_next = (_burst_next + 1) % MAX_DEBRIS
+	var pm := p.process_material as ParticleProcessMaterial
+	pm.direction = normal
+	pm.initial_velocity_min = float(spec.speed) * 0.5
+	pm.initial_velocity_max = float(spec.speed)
+	pm.gravity = Vector3(0, -float(spec.gravity), 0)
+	p.amount_ratio = clampf(float(spec.count) / DEBRIS_ROOM, 0.0, 1.0)
+	p.lifetime = float(spec.life)
+	p.draw_pass_1 = _debris_mesh(fam, spec)
+	p.global_position = point + normal * 0.02
+	p.restart()
+
+
+func _new_burst() -> GPUParticles3D:
+	var p := GPUParticles3D.new()
 	p.one_shot = true
 	p.emitting = false
-	p.amount = int(spec.count)
-	p.lifetime = float(spec.life)
+	p.amount = DEBRIS_ROOM
 	p.explosiveness = 1.0
-	p.direction = normal
-	p.spread = 45.0
-	p.initial_velocity_min = float(spec.speed) * 0.5
-	p.initial_velocity_max = float(spec.speed)
-	p.gravity = Vector3(0, -float(spec.gravity), 0)
-	p.scale_amount_min = 0.6
-	p.scale_amount_max = 1.2
-	p.mesh = _debris_mesh(fam, spec)
+	# It stays put while its particles fly, and is moved only to start again:
+	# local is the world, turned by nothing.
+	p.local_coords = true
+	p.visibility_aabb = AABB(Vector3(-4, -4, -4), Vector3(8, 8, 8))
+	var pm := ParticleProcessMaterial.new()
+	pm.spread = 45.0
+	pm.scale_min = 0.6
+	pm.scale_max = 1.2
+	p.process_material = pm
 	add_child(p)
-	p.global_position = point + normal * 0.02
-	p.emitting = true
-	# One shot, then gone: finished is emitted when the last particle dies.
-	p.finished.connect(p.queue_free)
-	_bursts.append(p)
+	return p
 
 
 func _debris_mesh(fam: String, spec: Dictionary) -> BoxMesh:

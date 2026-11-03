@@ -65,13 +65,13 @@ func _initialize() -> void:
 	print("death bursts")
 	for i in 25:
 		fb.burst(Vector3(i, 0.0, 0.0), Color(randf(), randf(), randf()))
-	var bursts := city.get_children().filter(func(c): return c is CPUParticles3D)
+	var bursts := city.get_children().filter(func(c): return c is GPUParticles3D)
 	_ok("twenty-five kills keep to %d bursts" % CombatFeedback.MAX_BURSTS,
 			bursts.size() == CombatFeedback.MAX_BURSTS, "%d" % bursts.size())
-	_ok("each takes its kill's colour", (bursts[0] as CPUParticles3D).color != Color.WHITE
-			and ((bursts[0] as CPUParticles3D).mesh.surface_get_material(0) as StandardMaterial3D)
-			.vertex_color_use_as_albedo)
-	_ok("the last is emitting where it was asked", (bursts[(25 - 1) % 8] as CPUParticles3D).emitting)
+	var b0 := bursts[0] as GPUParticles3D
+	_ok("each takes its kill's colour", (b0.process_material as ParticleProcessMaterial).color != Color.WHITE
+			and (b0.draw_pass_1.surface_get_material(0) as StandardMaterial3D).vertex_color_use_as_albedo)
+	_ok("the last is emitting where it was asked", (bursts[(25 - 1) % 8] as GPUParticles3D).emitting)
 
 	print("gun flashes and trails")
 	var live: Array[Node] = []

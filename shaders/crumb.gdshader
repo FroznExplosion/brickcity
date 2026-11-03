@@ -18,6 +18,13 @@ shader_type spatial;
 //                       waits for the CPU to say what happens next
 //                    a: the tick it came loose
 // All whole numbers under 2^24, exact in a float. Ticks are physics ticks.
+//
+// A planet's crumbs (PlanetCrumbs) set `radial`: the instances are written
+// planet-local and drawn through the planet (`frame`, its world transform, the
+// MultiMesh's own too), the velocity and spin axis turned by it, and down is
+// toward its centre from where the stretch starts -- over a few metres of fall,
+// a straight line. And `fade_from_stop`: a crumb lies `full` ticks from when it
+// stops, then shrinks away by `life`, however long it fell.
 render_mode skip_vertex_transform;
 
 // Physics ticks since the start, with the fraction since the last one
@@ -36,6 +43,9 @@ uniform float full = 21.0;
 uniform float fall_max = 360.0;
 uniform float fade = 36.0;
 uniform float roughness_v = 0.85;
+uniform bool radial = false;
+uniform mat4 frame = mat4(1.0);
+uniform bool fade_from_stop = false;
 
 varying vec3 v_colour;
 
@@ -70,7 +80,8 @@ mat3 axis_angle(vec3 a, float ang) {
 }
 
 void vertex() {
-	vec3 v0 = INSTANCE_CUSTOM.xyz;
+	mat3 turn = mat3(frame);
+	vec3 v0 = turn * INSTANCE_CUSTOM.xyz;
 	float t0 = INSTANCE_CUSTOM.w;
 	float t_end = COLOR.b;
 	float born = COLOR.a;
@@ -78,12 +89,13 @@ void vertex() {
 	// moves it on.
 	float n = clamp(crumb_clock - t0, 0.0, max(t_end - t0, 0.0));
 	vec3 p0 = MODEL_MATRIX[3].xyz;
+	vec3 down = radial ? normalize(frame[3].xyz - p0) : vec3(0.0, -1.0, 0.0);
 	vec3 p = p0 + v0 * (n * tick_s);
-	p.y -= gravity * tick_s * tick_s * n * (n + 1.0) * 0.5;
+	p += down * (gravity * tick_s * tick_s * n * (n + 1.0) * 0.5);
 	// It turns from when it came loose until it stops.
 	float turned = clamp(crumb_clock, born, max(t_end, born)) - born;
-	mat3 spin = axis_angle(crumb_axis(COLOR.g), crumb_rate(COLOR.g) * turned * tick_s);
-	float age = crumb_clock - born;
+	mat3 spin = axis_angle(turn * crumb_axis(COLOR.g), crumb_rate(COLOR.g) * turned * tick_s);
+	float age = crumb_clock - (fade_from_stop ? t_end : born);
 	float s = 1.0;
 	if (keep) {
 		if (age > fall_max - fade) {

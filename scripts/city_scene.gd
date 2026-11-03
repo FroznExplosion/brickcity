@@ -2965,6 +2965,8 @@ func _warm_shaders() -> void:
 		mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 		add_child(mi)
 		get_tree().create_timer(1.0).timeout.connect(mi.queue_free)
+	# A collapse's dust is GPU particles, whose process shader is its own.
+	CollapseDust.puff(self, Vector3(0.0, -2000.0, 0.0), 1.0)
 
 
 ## A recipe building's shell mesh. An undamaged one is the same mesh for every
