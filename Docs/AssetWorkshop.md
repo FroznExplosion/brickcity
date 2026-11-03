@@ -1070,6 +1070,74 @@ a 100-stud model, each its own undo (92 after 90 steps). Now:
 
 asset_workshop_probe 340 (4 new).
 
+### Colour from model to bricks (2026-11-02)
+
+Asked by the user: an imported model's colours go into the clay, and from the clay into the
+bricks. Before this the clay had no colour, only a part label; a model's colours were dropped
+when it was stamped, and every brick took its part's colour.
+
+**The model.** `ModelMesh` (`_add_colours`) gives every surface vertex colours: its material's
+albedo, times its albedo texture at the UV, times the vertex colour where the material uses it.
+StandardMaterial3D and the usual ShaderMaterial parameter names (`albedo`, `albedo_texture`...)
+are read. With a texture, each triangle gets corners of its own, read 30 % in toward the
+triangle's middle: a low-poly model's palette texture (one swatch a face) gives each face its
+swatch, not a blend with the next face's. A surface with no material and no vertex colours has
+no colour (its part's). OBJ and STL carry none yet (an OBJ's `.mtl` `Kd` would be the next step).
+
+**The clay.** Every SdfForm sample keeps a colour (RGBA8; 0 = none, drawn in its part's).
+- `stamp_mesh(op, verts, index, part, colours)`: each sample takes the colour of the model's
+  surface nearest it (its nearest triangle, blended across it).
+- Brushes give `set_colour`'s colour (none by default); the `COLOUR` op repaints. Move, size,
+  turn, take a part out and combine carry colours; the surface is drawn in them
+  (`mesh_block(..., own_colours)`; a model that carves still shows red, a picked piece its
+  part's colour).
+- Saves are "SDF2"; an "SDF1" save (before colours) loads with no colours.
+
+**The bricks.** `SdfForm.cell_colours(palette)` votes each brick cell's colour: every coloured
+sample inside the cell votes for its nearest palette colour **in Oklab** (as the eye sees colour:
+Sink My Bricks matches by CIE76, Reference/brick-games.md 1.1), samples near the surface counting
+most -- the colour seen. A cell deep inside a model (no sample near a face) takes the nearest
+coloured cell's through the solid; clay drawn without a colour keeps none. Make bricks packs
+bricks apart by part **and colour** (a brick is one colour), matched to the colours of the
+material the part is laid in (filament colours for the plastics; wood, metal and stone their own
+variants). A custom piece takes the colour most of its own clay has. Cells with no colour of their
+own take the part's colour as before.
+
+**And back.** Bricks to clay gives every brick's colour to its cells
+(`sync_cells(before, after, colours)`), so Make bricks after it lays the same colours.
+
+`ColourMatch` (scripts/colour_match.gd): Oklab, `difference`, `nearest`, and the palette to vote
+from -- a material's colours, or a list of them (`indices(material, allowed)`).
+
+Checks: `tools/sdf_colour_probe.gd` (14: Oklab, model colours to the mesh, a red-top blue-bottom
+box stamped and voted, deep cells, brush colours and repaint, drawing, bricks back, an area's
+palette, saves old and new); asset_workshop_probe 343 (3 new: a coloured model through Make
+bricks, Bricks to clay and back, the same in metal).
+
+### Planned: a palette per area (the user's idea, 2026-11-02; not built)
+
+Everything in an area -- a star system, or a whole universe -- uses that area's colours, so
+each place has a look of its own and the same asset fits in wherever it is built.
+
+- **What a palette is:** a list of colour indices of the filament palette (perhaps 12-20 of the
+  64), with a name. Wood, metal and stone keep their own variants (an area could list which of
+  them it has too).
+- **Where it comes from:** generated from the system's seed (`StarSystem`, Planets.md 11.12) --
+  for example hues round the star's colour, warm under a red dwarf, cool and pale under a blue
+  star, plus a few neutrals every palette keeps (black, white, greys) -- or written by hand for
+  a system that matters.
+- **Where it is used:**
+  1. **Make bricks** matches to it: `convert_palette` (built; empty = all 64) takes the
+     area's list. An asset converted for an area is in its colours from the start.
+  2. **Building an asset in an area:** a recipe's colours remapped at build time to the
+     nearest of the area's (`ColourMatch.nearest(colour, material, allowed)`, a 64-entry table
+     made once an area) -- the saved build is unchanged, so one asset looks native in every
+     system.
+  3. **Generated things** (towns, stations, ships, terrain props) pick their colours from it.
+- **Open:** a palette per system, per planet, or per universe with systems choosing from it?
+  Does a hand-built build the player places also remap, or only converted and generated ones?
+  Does a team or faction colour stay outside the palette?
+
 ### Furniture and items (2026-10-23)
 
 The user (2026-10-23): build furniture and household items here, since the tools are better for
