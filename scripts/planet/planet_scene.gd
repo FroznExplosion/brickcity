@@ -3821,6 +3821,21 @@ func _run_home_gate() -> void:
 	for m in g.squad.alive():
 		low = minf(low, _over_ground(m.pawn.feet()))
 	_check("on the ground where it came in", absf(low) < 1.5, "%.2f m" % low)
+	# Wave 4 brought a tank: crewed, and it comes for the player -- at the pace of
+	# the squad it screens (TankBrain.escort), as the city's does.
+	var tk := g.tank
+	var tank_from := tk.feet().distance_to(pawn.feet()) if is_instance_valid(tk) else INF
+	var tank_low := INF
+	t0 = Time.get_ticks_msec()
+	while Time.get_ticks_msec() - t0 < 20000:
+		await _frames(1)
+		if is_instance_valid(tk):
+			tank_low = minf(tank_low, _over_ground(tk.feet()))
+	var tank_to := tk.feet().distance_to(pawn.feet()) if is_instance_valid(tk) else INF
+	_check("wave 4 brings a tank, crewed, and it comes for the player", is_instance_valid(tk) and tk.crew_count() == 2
+			and not tk.is_wrecked() and tank_to < tank_from - 3.0 and tank_low > -1.0 and g.status().contains("a tank"),
+			"%.0f m -> %.0f m in 20 s, lowest %.2f m over the ground, %s" % [tank_from, tank_to, tank_low, g.status()])
+	await _shot("home_gate_tank")
 	print("[planet] gate: %d ok, %d FAIL" % [_ok, _fail])
 	get_tree().quit(1 if _fail > 0 else 0)
 

@@ -2593,6 +2593,15 @@ dock unchanged. That the saver writes and reads them in a real save is not tried
 garrison 17, save stages 1 and 2 pass; that a saved survivor comes back as its own kind is not checked.
 Not seen on screen.
 
+**Step 2 built (2026-11-04): a tank in home's waves.** The user had no preference; the tank was the smallest
+step (built, and the city's commander already buys it). From wave 4 (`TANK_FROM`) a wave brings one beside
+its squad, as `CityScene._spawn_tank` makes it: a rocket gun and a machine gun, a driver and a gunner, on the
+nav net's vehicle map (`TankBrain`), screening the squad (`escort`) and sent at the player, again each time
+they move 20 m. A wave is clear when its squad is down and its tank wrecked; the HUD says "a tank". Not
+saved: a wave loaded from a save comes back without its tank. `--gate=home` 11/11: crewed, 86 m -> 80 m in
+20 s (the squad's pace), never under the ground. garrison 17. Not seen on screen; whether the player has
+what it takes to wreck it is not tried.
+
 #### Plan, saving (2026-11-01)
 
 As zylanntest (its Docs/save_format_and_data_longevity.md, future_features_save_guide.md): the **universe**
