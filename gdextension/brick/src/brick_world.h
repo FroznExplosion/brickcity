@@ -1507,6 +1507,9 @@ private:
     struct CoarseJob {
         int chunk_id = -1;
         CoarseOut out;
+        /// `out` as the mesh's arrays, made on the worker too: copying them
+        /// was 2-5 ms of the main thread a stand-in (take_coarse_mesh).
+        Array arrays;
         std::shared_ptr<const std::vector<brick::Archetype>> parts; // as a BakeJob's
         std::atomic<bool> done{false};
         std::thread worker;
@@ -1587,6 +1590,9 @@ private:
         std::vector<int32_t> post_at;
         ChamferIn in;
         ChamferOut out;
+        /// `out`'s vertices as the mesh's arrays, made on the worker (as a
+        /// CoarseJob's): the copy is the main thread's no more.
+        Array arrays;
         std::atomic<bool> done{false};
         std::thread worker;
     };
