@@ -336,6 +336,10 @@ jolt_physics_3d/limits/max_body_pairs=131072
 jolt_physics_3d/limits/max_contact_constraints=40960
 common/physics_interpolation=true
 
+[rendering]
+
+limits/global_shader_variables/buffer_size=262144
+
 [shader_globals]
 
 lod_zoom={
