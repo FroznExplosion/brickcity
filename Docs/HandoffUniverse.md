@@ -46,7 +46,7 @@ building (check its date against the last C++ commit), `--import`, then:
 |---|---|---|
 | `seat` | 16 windowed, 13 headless: jitter, leaving the seat, map, gravity, markers | 200 s |
 | `belt` | 6: a belt from a turned ship, slow flight, rocks at speed | 170 s |
-| `home` | 9: the waves | 200 s |
+| `home` | 10: the waves, their kinds | 200 s |
 | `garrison` | 17: a world's AI, sleep and wake, down and up | 280 s (170 stops it on the flight home) |
 | `jump` 10, `ship` 9, `dock` 8, `worlds` 8, `rocks` 4, `debris` 8, `system` 17 | | 280 s |
 | `falling` 5, `squad` 10, `far` 11, `pawn` 12 | the AI and the pawn on a planet | 240 s |

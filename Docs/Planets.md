@@ -2577,6 +2577,22 @@ away) are not kept. Tried through bytes, not files: `--gate=debris` "saved and b
 `--gate=falling` "a ship's piece lies still, and is saved and back" (0.000 m off); save stages 1 and 2, hull,
 dock unchanged. That the saver writes and reads them in a real save is not tried.
 
+#### Plan, more than rifles on a planet (2026-11-03)
+
+1. **Mixed waves.** A garrison's soldiers are the city's foot units that are built (`UnitCatalog`:
+   rifleman, assault, breacher, veteran, marksman), each with its own weapon class and armour
+   (`UnitCatalog.apply_health`, `Soldier.set_type`), as `WaveDirector._field_allies` makes them. Home's first
+   wave is riflemen; each wave after it draws from a wider mix (rifles and assault; then breachers and
+   veterans; then marksmen). A generated town's one squad is the second mix. A save keeps each one's kind.
+   `--gate=home`: later waves bring at least three kinds.
+2. **A vehicle in play** (a tank, then a mech): only in gates today. Its own plan after step 1, with the
+   user: which, when, and what the player has against it.
+
+**Step 1 built (2026-11-03).** `PlanetGarrison.WAVE_KINDS`; each soldier's kind in its meta and in the save.
+`--gate=home` 10/10 headless: waves of 6, 8, 8 brought assault, rifleman, veteran, breacher, marksman.
+garrison 17, save stages 1 and 2 pass; that a saved survivor comes back as its own kind is not checked.
+Not seen on screen.
+
 #### Plan, saving (2026-11-01)
 
 As zylanntest (its Docs/save_format_and_data_longevity.md, future_features_save_guide.md): the **universe**
