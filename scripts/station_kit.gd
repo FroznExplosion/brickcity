@@ -52,6 +52,13 @@ static func modules() -> Array:
 				[["radiator", [7, 6, 7], 1]]),
 		box("truss", 10, 2, {"role": "truss"}, [[2, 1, "auto"]], [], [["panel", [11, 6, 1], 0]]),
 		box("dock", 6, 6, {"role": "dock"}, [[2, 2, "auto"], [0, 2, "finish"]]),
+		# A second level: a node with a stair up inside it (along its middle to
+		# its +X end) and a deck that sits on it, its doors all round. Their doors
+		# stand off the stair's hole: a lintel by it would hold to nothing.
+		box("stair node", 12, 10, {"role": "node", "max": 1, "weight": 0.5}, [[1, 8, "auto"], [3, 8, "auto"]],
+				[], [["stair_up", [11, FLOOR + H - 1, 5], -1]]),
+		box("deck", 12, 10, {"role": "node", "storeys": "upper", "weight": 1.0}, all4.call(8), [],
+				[["stair_down", [11, FLOOR, 5], -1]]),
 	]
 
 

@@ -384,8 +384,30 @@ open through both doorways; docks open with a door; wings and radiators clear of
 lowest row 1; sections with the core's the root; same seed same station; no core says so.
 `module_marks_probe` (15): Generate station.
 
-Not yet: tubes bridge on one level only (no ramp or ladder between levels); the abstract look is
-the modules' own (round pods where the user builds them round). A colour band: 7.10.
+**Levels** (built 2026-11-03). The kit has a *stair node* (12 x 10, a stair link up under its
+ceiling at its +X end, its doors off the stair's line; at most one, weight 0.5) and a *deck* (12 x
+10, `storeys: upper`, a stair link down over it, doors all round): a kit station grows a second
+level about one time in three, its rooms branching off the deck. The grow takes a stair join only
+when the stair's flight lies under the upper module's room (`RoomGrow._stair_under`, any library:
+an upper module turned another way round the link stood a wall over the steps). A door seam over a
+module below is tied by a 2x2 tile on the two walls' sills (`stats.sills`), where the tie under
+the walls would land in the lower module's ceiling and be dropped (1653 bricks came loose on one
+seed before it).
+
+A **bridging tube may join two levels**: ports up to `RISE` (24) plates apart in height. It is as
+tall as both doorways' rows; on its floor a stair of brick columns, a stud of tread a step, each
+step's rise the first of `STEPS` (2 plates, else 3 -- the pawn's step) the gap has the length for
+with two studs of landing at the top; a lintel hung from its ceiling over the lower doorway. At
+the higher end its tie is right under that module's wall, inside the top step, which stands on it
+and over it. `stats.stairs`. They are rare: ports at two heights mostly face each other 3-6 studs
+apart, too short for 20 plates of stair (one station in 30-40).
+
+`room_station_probe` (11): *levels* -- every stair join of the 10 seeds (4) and a stair tube
+(searched for in seeds 11-40) walked by a figure 12 plates tall stepping at most a brick up; the
+wings check keeps every stacked module of a column.
+
+Not yet: a ladder (a short gap between levels; nothing climbs one); the abstract look is the
+modules' own (round pods where the user builds them round). A colour band: 7.10.
 
 ### 7.3 Stations in space (stage 10, built 2026-10-31)
 
@@ -602,7 +624,7 @@ takes its furniture; each new brick is in the section of the floor under it (`me
 
 `ship_build_probe` (4): on 8 seeds 44-107 items, none in a doorway or the cells beside one (with the
 lanes off it finds 9-17 such cells a seed), nothing loose, every brick in a section.
-`station_sections_probe` (6) as before, the station regrown with its furniture. `--gate=hull` (12):
+`station_sections_probe` (6) as before, the station regrown with its furniture. `--gate=hull` (12, now 14 with the consoles and windows):
 241 furniture bricks; shot `hull_gate_room` from the middle of its most furnished room (cargo:
 crates). A station of 16 spaces got 8 items (its core and two pods).
 
@@ -610,8 +632,12 @@ A room that already holds furniture -- a player's module built with its own, int
 is left as it is (2026-11-03), and its furniture made plain bricks so a station or ship draws it
 (their meshes leave interior bricks out). `tools/kit_furnish_probe.gd` (3).
 
-Not yet: items stand square (the manifest's `yaw` is not used, as in the city); a bridge 6 x 6 is
-mostly lane and middle, so it gets little.
+Each item stands turned by the manifest's `yaw` (2026-11-03): its parts turned in the box they fill
+(`KitFurnish.turned`, as `BuildRecipe.turned` turns a block and its name), its min corner kept; the
+next quarter turn that fits when that one does not. `meta.furniture.turned`; `kit_furnish_probe`
+(4): a bed turned fills its box turned, four turns are none, 14 of 20 items stood turned.
+
+The bridge has consoles of its own: 7.11.
 
 ### 7.8 Aboard a piece that leaves (built 2026-11-02)
 
@@ -638,8 +664,16 @@ they were on it, still standing. (On home's station, a tower, a storey's rows cu
 few hundred bricks but not the roof the walker stood on.) Shots `adrift_gate_*` (the station is on the night side: dark). Home's station is grown as a
 generated one for the gate, its system having only the tower.
 
-Not yet: gravity stays the station's (its down, toward its centre) -- a piece turned far enough
-tips its riders off; figures on a piece not anyone's frame of reference far from the station.
+**Its own down** (built 2026-11-03): a ridden piece takes a gravity centre of its own (`Drift.grav`,
+a child of its node, put where the station's was when it left, its pull the station's), so it turns
+as the piece turns. While the player is on a piece (`_on_piece`: within its box and 2 m)
+`PlanetSystem._gravity` makes that the down -- before the frame's -- and the walker stands on the
+piece however it turns. The gate turns the piece over (about an axis across it, 0.12 rad/s): 34
+degrees in 5 s, the walker's up 0.1 degrees off the piece's, still where they stood (with the
+station's down instead: 34 degrees off).
+
+Not yet: figures on a piece not anyone's frame of reference far from the station; a figure other
+than the player takes the piece's down only as the player does (Gravity is one down for all).
 
 ### 7.9 Windows in the hull (built 2026-11-02)
 
@@ -667,3 +701,17 @@ their own) is painted by its seed (`paint_band`, before its furniture): every ba
 and a station's modules match. A player's own station modules are never repainted.
 `kit_furnish_probe`: every kit module but the truss banded; six seeds, six band colours, each
 station one.
+
+### 7.11 The bridge and its consoles (built 2026-11-03)
+
+A generated ship's bridge is 10 x 8 inside (`ShipBuild.BRIDGES`), or 6 x 6 when the packer fits no
+bigger one fore (a narrow bow: two seeds of the probe's eight). After the windows, `_consoles`
+fits it out facing the seat from fore (+X): along its fore edge a panel `CONSOLE_BACK` courses high
+and a desk before it `CONSOLE_DESK` high, along its side edges fore of the seat side desks; each a
+column of 1x1 bricks in dark bluish grey topped with a black tile (a screen). Never in a doorway or
+two studs beside one, nor on the seat's column; each brick in its floor's section; `meta.consoles`
+{from, bricks}, `stats.consoles` (the columns). A bridge with furniture of its own (a player's:
+interior bricks over its floor) gets none. KitFurnish still furnishes the rest of it (an office).
+
+`ship_build_probe` (4): eight console columns or more on every seed (8-20), all fore of the seat,
+the seat's cell and the one three plates over it clear, none by a doorway.

@@ -7,6 +7,9 @@ extends SceneTree
 ##   empty     a room with nothing in it is furnished, its bricks plain (drawn)
 ##   held      a room with furniture of its own (interior bricks) gets none
 ##             more, and its own is made plain bricks, so a station draws it
+##   turned    an item's parts turned a quarter fill its box turned (x and z
+##             swapped), four turns are none; rooms furnished over a few seeds
+##             have items standing turned
 ##   band      every kit module but the truss has its band course in the mark
 ##             colour; painting a station by its seed gives it one band colour,
 ##             the same each time, not every seed the same
@@ -61,6 +64,25 @@ func _run() -> void:
 	var more := KitFurnish.furnish(held, 3)
 	_ok("held: a room with its own furniture gets none more, its own drawn (plain bricks)",
 			more == 0 and held.size() == n1 and not held.is_interior(own), "%d item(s)" % more)
+
+	var bed := RoomManifest.parts_of("bed")
+	var box := func(parts: Array) -> Vector3i:
+		var d := Vector3i.ZERO
+		for part: Array in parts:
+			d = d.max((part[1] as Vector3i) + BuildRecipe.part_size(String(part[0])))
+		return d
+	var b0: Vector3i = box.call(bed)
+	var b1: Vector3i = box.call(KitFurnish.turned(bed, 1))
+	var back := KitFurnish.turned(KitFurnish.turned(bed, 1), 3)
+	var turns := 0
+	var laid_n := 0
+	for sd in 6:
+		var room := _room("bedroom")
+		laid_n += KitFurnish.furnish(room, sd)
+		turns += int(room.meta.furniture.turned)
+	_ok("turned: a bed turned a quarter fills its box turned, four turns none; items stand turned",
+			b1 == Vector3i(b0.z, b0.y, b0.x) and str(back) == str(bed) and turns > 0,
+			"box %s -> %s, %d of %d item(s) turned" % [str(b0), str(b1), turns, laid_n])
 
 	var mark := StationKit._colour(StationKit.BAND_MARK)
 	var bad := []
