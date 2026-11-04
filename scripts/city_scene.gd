@@ -17999,26 +17999,49 @@ func _run_light_pass() -> void:
 	await _ticks(60)
 	var near_ok := 0
 	var near_all := 0
+	var studs_ok := 0
+	var studs_all := 0
 	for band in node.get_children():
 		for k in band.get_children():
+			var lit := false
 			if k is MeshInstance3D and k.name.begins_with("Chamfered"):
 				near_all += 1
-				var v: Variant = (k as MeshInstance3D).get_instance_shader_parameter(&"grid_light")
-				if v is Vector4 and (v as Vector4).x >= 0.0:
+				lit = true
+			# Its studs as geometry (BrickNear.grid_stud_material), not the cards.
+			elif k is MultiMeshInstance3D and k.material_override == BrickNear.grid_stud_material():
+				studs_all += 1
+				lit = true
+			if not lit:
+				continue
+			var v: Variant = (k as GeometryInstance3D).get_instance_shader_parameter(&"grid_light")
+			if v is Vector4 and (v as Vector4).x >= 0.0:
+				if k is MultiMeshInstance3D:
+					studs_ok += 1
+				else:
 					near_ok += 1
 	# Headless, the near tier makes nothing.
 	if DisplayServer.get_name() != "headless":
 		_gate_ok("the near tier's bricks carry the grid", near_all > 0 and near_ok == near_all,
 				"%d of %d" % [near_ok, near_all])
+		_gate_ok("the near tier's studs carry the grid", studs_all > 0 and studs_ok == studs_all,
+				"%d of %d" % [studs_ok, studs_all])
 	if DisplayServer.get_name() != "headless":
 		await _ticks(10)
 		var on := _mean_of(get_viewport().get_texture().get_image())
 		await _save("city_light_on")
+		# The studs alone without it: the floor's studs bright on a dark floor.
+		BrickNear.grid_stud_material().set_shader_parameter("grid_sky_floor", 1.0)
+		await _ticks(4)
+		var no_studs := _mean_of(get_viewport().get_texture().get_image())
+		await _save("city_light_studs_off")
+		print("[light] mean of the picture: grid %.3f, studs not on it %.3f" % [on, no_studs])
+		_gate_ok("the grid darkens the studs", on < no_studs * 0.98, "%.3f against %.3f" % [on, no_studs])
 		brick_material.set_shader_parameter("grid_sky_floor", 1.0)
 		await _ticks(4)
 		var off := _mean_of(get_viewport().get_texture().get_image())
 		await _save("city_light_off")
 		brick_material.set_shader_parameter("grid_sky_floor", BrickGridLight.SKY_FLOOR)
+		BrickNear.grid_stud_material().set_shader_parameter("grid_sky_floor", BrickGridLight.SKY_FLOOR)
 		print("[light] mean of the picture: grid %.3f, none %.3f" % [on, off])
 		_gate_ok("the grid darkens the inside", on < off * 0.9, "%.3f against %.3f" % [on, off])
 	# A hole through an outer wall (x = 0 side or the far one), where it is
@@ -19047,6 +19070,7 @@ func _build_scenery() -> void:
 		brick_material.set_shader_parameter(key, _shader_toggles[key])
 	grid_light.use_layer = false
 	grid_light.bind(brick_material)
+	grid_light.bind(BrickNear.grid_stud_material())
 
 	camera = DebugCamera.new()
 	camera.name = "DebugCamera"

@@ -202,6 +202,10 @@ func _apply(e: Entry, c: Node) -> void:
 	var g := c as GeometryInstance3D
 	if g == null:
 		return
+	if g is MultiMeshInstance3D:
+		# A band's studs (BrickNear), when the band is the node itself.
+		BrickNear.grid_studs(g, e.param, g.get_parent() as Node3D)
+		return
 	g.set_instance_shader_parameter(&"grid_light", e.param)
 	if use_layer:
 		g.layers = RENDER_LAYER if e.param.x >= 0.0 else 1
@@ -212,3 +216,5 @@ func _apply(e: Entry, c: Node) -> void:
 			var n := k as GeometryInstance3D
 			if n != null and n.material_override == g.material_override:
 				n.set_instance_shader_parameter(&"grid_light", e.param)
+			elif n is MultiMeshInstance3D:
+				BrickNear.grid_studs(n, e.param, g)
