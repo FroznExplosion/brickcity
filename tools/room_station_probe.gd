@@ -81,21 +81,24 @@ func _run() -> void:
 			"%d of %d with a loop, bridges %s" % [loops, ok_made.size(),
 				str(ok_made.map(func(m) -> int: return int(m.stats.bridges)))])
 
-	var walked := {"stair": 0, "tube": 0}
+	var walked := {"stair": 0, "tube": 0, "ladder": 0, "tube_ladder": 0}
 	var stair_bad := []
 	for m: Dictionary in ok_made:
 		stair_bad.append_array(_levels_walked(lib, m, walked))
 	# A tube between two levels takes two ports facing across a long enough gap
-	# at two heights: one station in thirty or forty.
-	for sd in range(11, 41):
-		if int(walked.tube) > 0:
+	# at two heights: one station in thirty or forty; one with a ladder (a gap too
+	# short for a stair), rarer.
+	for sd in range(11, 81):
+		if int(walked.tube) > 0 and int(walked.tube_ladder) > 0:
 			break
 		var m := RoomStation.generate(lib, {"seed": sd, "modules": 18})
 		if m.ok and int(m.stats.stairs) > 0:
 			stair_bad.append_array(_levels_walked(lib, m, walked))
-	_ok("levels: a stair node's stair up to its deck, tubes between two levels, each walked a step at most a brick up",
-			int(walked.stair) > 0 and int(walked.tube) > 0 and stair_bad.is_empty(),
-			"%d stair(s), %d stair tube(s) walked %s" % [int(walked.stair), int(walked.tube), str(stair_bad.slice(0, 3))])
+	_ok("levels: a stair node's stair up to its deck, tubes between two levels, each walked a step at most a brick up or climbed by its ladder",
+			int(walked.stair) > 0 and int(walked.tube) > 0 and int(walked.ladder) > 0 and int(walked.tube_ladder) > 0
+			and stair_bad.is_empty(),
+			"%d stair join(s), %d tube(s) between levels walked; %d by a ladder, %d of them in a tube %s" % [
+				int(walked.stair), int(walked.tube), int(walked.ladder), int(walked.tube_ladder), str(stair_bad.slice(0, 3))])
 
 	# Docks: each dock's finish port open with a door, every other open port capped.
 	var dock_bad := 0
@@ -136,10 +139,21 @@ func _run() -> void:
 				if not cols.has(w):
 					cols[w] = []
 				(cols[w] as Array).append([s.x + pl.off.y, s.y + pl.off.y])
+		# A ladder's rungs (RoomGrow.ladder_adds) stand in its module: not a wing.
+		var rungs := {}
+		for ld: Dictionary in m.plan.get("ladders", []):
+			var fd: Vector2i = StructureSpaces.FACINGS[int(ld.facing)]
+			var across := Vector2i(absi(fd.y), absi(fd.x))
+			var foot := BuildRecipe.cell_from(ld.at)
+			for x in int(ld.w):
+				for k in [0, -1]:
+					rungs[Vector2i(foot.x, foot.z) + across * x + fd * k] = true
 		for a in m.plan.adds:
 			if String(a[0]) != "plate_2x2":
 				continue
 			var c: Vector3i = a[1]
+			if rungs.has(Vector2i(c.x, c.z)):
+				continue
 			for dz in 2:
 				for dx in 2:
 					for s in cols.get(Vector2i(c.x + dx, c.z + dz), []):
@@ -230,7 +244,10 @@ func _run() -> void:
 ## Each way between two levels -- a stair join (the lower module's floor to the
 ## upper's) and a bridging tube between two levels (a's doorway to b's): a figure
 ## PAWN plates tall, stepping at most CLIMB plates up (the pawn's step, a brick)
-## and any way down, walks it. The ones it does not; `walked` counts the rest.
+## and any way down, walks it -- and climbs a ladder (Docs/RoomModules.md 7.13):
+## from its climb room's foot, the room clear all the way up for the figure, to
+## where its top lands, its rails standing behind it. The ones it does not;
+## `walked` counts the rest, and the ladders taken.
 const PAWN := 12
 const CLIMB := 3
 func _levels_walked(lib: Array, m: Dictionary, walked: Dictionary) -> Array:
@@ -252,6 +269,27 @@ func _levels_walked(lib: Array, m: Dictionary, walked: Dictionary) -> Array:
 				return false
 		return true
 	var at: Vector3i = m.plan.at
+	# Each ladder: its foot's climb-room cells -> where its top lands.
+	var climbs := {}
+	for ld: Dictionary in m.plan.get("ladders", []):
+		var fd: Vector2i = StructureSpaces.FACINGS[int(ld.facing)]
+		var lo_out := Vector3i(fd.x, 0, fd.y)
+		var across := Vector3i(absi(fd.y), 0, absi(fd.x))
+		var foot := BuildRecipe.cell_from(ld.at) + at
+		var h := int(ld.h)
+		var ok := true
+		var rail := 0
+		for x in int(ld.w):
+			for y in h:
+				rail += 1 if cells.has(foot - lo_out + across * x + Vector3i(0, y, 0)) else 0
+			for k in range(1, RoomGrow.LADDER_ROOM + 1):
+				for y in h + PAWN:
+					ok = ok and not cells.has(foot + lo_out * k + across * x + Vector3i(0, y, 0))
+		if not ok or rail * 2 < h * int(ld.w):
+			continue
+		for x in int(ld.w):
+			for k in range(1, RoomGrow.LADDER_ROOM + 1):
+				climbs[foot + lo_out * k + across * x] = foot - lo_out * 2 + across * x + Vector3i(0, h, 0)
 	var floor_of := func(pi: int) -> Vector3i:
 		var pl: Dictionary = m.plan.placed[pi]
 		var sp: Dictionary = lib[pl.m].turns[pl.t].spaces.values()[0]
@@ -269,13 +307,27 @@ func _levels_walked(lib: Array, m: Dictionary, walked: Dictionary) -> Array:
 			b = (j.b.at as Vector3i) + at
 		else:
 			continue
+		if a.y > b.y:
+			# Up from the lower, which only a stair or a ladder does.
+			var t := a
+			a = b
+			b = t
 		var lo := a.min(b) - Vector3i(14, 4, 14)
 		var hi := a.max(b) + Vector3i(14, 4, 14)
 		var seen := {a: true}
 		var todo := [a]
 		var got := false
+		var laddered := false
 		while not todo.is_empty() and not got:
 			var c: Vector3i = todo.pop_back()
+			if climbs.has(c):
+				var v: Vector3i = climbs[c]
+				if not seen.has(v) and stands.call(v):
+					seen[v] = true
+					todo.append(v)
+					laddered = true
+					if absi(v.x - b.x) + absi(v.z - b.z) <= 1 and absi(v.y - b.y) <= 1:
+						got = true
 			for n: Vector3i in [Vector3i(1, 0, 0), Vector3i(-1, 0, 0), Vector3i(0, 0, 1), Vector3i(0, 0, -1)]:
 				for dy in range(CLIMB, -PAWN, -1):
 					var v := c + n + Vector3i(0, dy, 0)
@@ -298,17 +350,22 @@ func _levels_walked(lib: Array, m: Dictionary, walked: Dictionary) -> Array:
 			out.append("seed %d: %s %s to %s" % [int(m.recipe.meta.generated.seed), kind, str(a), str(b)])
 		else:
 			walked[kind] = int(walked[kind]) + 1
+			walked.ladder = int(walked.ladder) + (1 if laddered else 0)
+			if kind == "tube" and laddered:
+				walked.tube_ladder = int(walked.tube_ladder) + 1
 	return out
 
 
 ## Every bridging tube's join between two ports facing across a gap, the gap
-## open through the doorway (no brick in it), walled round.
+## open through the doorway (no brick in it but a sill's tile), walled round.
 func _bridged(lib: Array, ok_made: Array) -> bool:
 	for m: Dictionary in ok_made:
 		var cells := {}
 		var r: BuildRecipe = m.recipe
 		for i in r.size():
-			cells[r.cell_of(i)] = true
+			# A sill's tile (a seam tied over a module below, 7.2) is a plate's step.
+			if not r.part_of(i).begins_with("tile_"):
+				cells[r.cell_of(i)] = true
 		for j: Dictionary in m.plan.joins:
 			if not bool(j.loop):
 				continue

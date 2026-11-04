@@ -55,10 +55,14 @@ static func modules() -> Array:
 		# A second level: a node with a stair up inside it (along its middle to
 		# its +X end) and a deck that sits on it, its doors all round. Their doors
 		# stand off the stair's hole: a lintel by it would hold to nothing.
-		box("stair node", 12, 10, {"role": "node", "max": 1, "weight": 0.5}, [[1, 8, "auto"], [3, 8, "auto"]],
+		box("stair node", 12, 10, {"role": "node", "max": 1, "weight": 0.25}, [[1, 8, "auto"], [3, 8, "auto"]],
 				[], [["stair_up", [11, FLOOR + H - 1, 5], -1]]),
 		box("deck", 12, 10, {"role": "node", "storeys": "upper", "weight": 1.0}, all4.call(8), [],
 				[["stair_down", [11, FLOOR, 5], -1]]),
+		# A node too small for a stair's flight: a ladder up to a deck instead
+		# (RoomGrow.ladder_adds), through a hole by it.
+		box("ladder node", 6, 6, {"role": "node", "max": 1, "weight": 0.25}, all4.call(2),
+				[], [["stair_up", [3, FLOOR + H - 1, 3], -1]]),
 	]
 
 

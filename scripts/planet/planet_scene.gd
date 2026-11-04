@@ -543,6 +543,12 @@ func _ship_key(key: Key) -> bool:
 	if key == KEY_M:
 		open_map()
 		return true
+	if key == KEY_G and system != null:
+		# The gravity generator of the ship or station the player is in (7.12).
+		var gen := system.generator_at(_anchor())
+		if gen != null:
+			gen.set_gravity(not gen.data.gravity_on)
+			return true
 	if key == KEY_E:
 		if piloting:
 			unboard()
@@ -1011,6 +1017,13 @@ func _process(_delta: float) -> void:
 				Engine.get_frames_per_second(), walker.viewer.view_distance, PlanetFrame.shifts,
 				PlanetFrame.last_us / 1000.0, here,
 				"(waiting for ground)" if walker.frozen and not piloting else ""]
+		var gen := system.generator_at(_anchor()) if system != null else null
+		if gen != null and not piloting:
+			hud.text += "
+GRAVITY %s  (G turns it %s)" % ["on" if gen.pulls() else "off", "off" if gen.data.gravity_on else "on"]
+		elif system != null and not piloting and not Gravity.pulls_at(_anchor()):
+			hud.text += "
+NOTHING PULLS  (WASD, Space/Ctrl: the suit's thrust)"
 		if piloting:
 			hud.text += "\nSHIP  %.0f m/s  %.0f m over the ground  (E leaves the seat; WASD, Space/Ctrl, mouse, Z/C roll, Shift cruise; M galaxy map)" % [
 					ship.vel.length(), ship.altitude]
@@ -2788,9 +2801,10 @@ func _run_falling_gate() -> void:
 
 ## Someone on a piece that leaves (Docs/RoomModules.md 7.8): the walker on top
 ## of a generated station's section, its joints shot away; the section leaves
-## with the walker on it, a body of its bricks under them, and they go with it,
-## still standing; turned over, its own down turns with it and the walker stays
-## standing where it stood.
+## with the walker on it, a body of its bricks under them. Broken off, it has no
+## generator: nothing pulls on it (7.12), and the walker floats, its up its own,
+## falling nowhere. Put back in the station's field head over heels, the walker
+## comes into its down over a moment (not in a tick) and lands on its feet.
 func _run_adrift_gate() -> void:
 	var t0 := Time.get_ticks_msec()
 	while walker.frozen and Time.get_ticks_msec() - t0 < 60000:
@@ -2895,37 +2909,58 @@ func _run_adrift_gate() -> void:
 		print("[planet] gate: %d ok, %d FAIL" % [_ok, _fail])
 		get_tree().quit(1)
 		return
+	# Broken off, no generator: nothing pulls on it. The walker floats where it
+	# was let go, its up its own -- not pulled down after the station's down.
 	await get_tree().create_timer(0.5).timeout
-	var p0 := d.node.global_position
-	var l0 := d.node.global_transform.affine_inverse() * walker.global_position
-	await get_tree().create_timer(5.0).timeout
-	var moved := d.node.global_position.distance_to(p0)
-	var l1 := d.node.global_transform.affine_inverse() * walker.global_position
-	_check("it drifts off, the walker carried with it, still standing on it", moved > 0.5 and l1.distance_to(l0) < 0.5
-			and walker.is_on_floor() and d.body.is_valid(),
-			"it %.1f m in 5 s, the walker %.2f m on it, on the floor %s" % [moved, l1.distance_to(l0), walker.is_on_floor()])
+	var up0 := walker.global_transform.basis.y
+	var w0 := walker.global_position
+	var down0 := Gravity.down_at(st.global_position)
+	await get_tree().create_timer(3.0).timeout
+	var fell := (walker.global_position - w0).dot(st.global_basis * Vector3.DOWN)
+	_check("on it nothing pulls, no generator: the walker floats, its up its own",
+			Gravity.pull_at(walker.global_position) == 0.0 and walker.floating and fell < 1.0
+			and walker.velocity.length() < 1.5 and walker.global_transform.basis.y.angle_to(up0) < 0.05,
+			"pull %.1f, floating %s, fell %.2f m in 3 s, %.2f m/s, up turned %.1f deg (down %s)" % [
+				Gravity.pull_at(walker.global_position), walker.floating, fell, walker.velocity.length(),
+				rad_to_deg(walker.global_transform.basis.y.angle_to(up0)), str(down0)])
 	await _shot("adrift_gate_aboard")
-	# Turned over (from here on, about an axis across it): its own down turns with
-	# it, and the walker with that, still standing where it stood.
-	var now := system._drift_clock
-	var here := d.at(now)
-	d.p0 = here.origin
-	d.q0 = here.basis
-	d.born = now
-	d.axis = (d.q0 * Vector3(1.0, 0.0, 0.3)).normalized()
-	d.rate = 0.12
-	var up0 := d.node.global_basis.inverse() * walker.up
-	l0 = d.node.global_transform.affine_inverse() * walker.global_position
-	await get_tree().create_timer(5.0).timeout
-	var piece_up := d.node.global_basis * up0
-	var turned := rad_to_deg(d.rate * (system._drift_clock - now))
-	var off_up := rad_to_deg(piece_up.angle_to(walker.up))
-	l1 = d.node.global_transform.affine_inverse() * walker.global_position
-	_check("turned over, its down turns with it: the walker's up the piece's, still standing on it",
-			d.grav != null and Gravity.planet == d.grav and turned > 20.0 and off_up < 5.0
-			and l1.distance_to(l0) < 1.0 and walker.is_on_floor(),
-			"turned %.0f deg, the walker's up %.1f deg off the piece's, %.2f m from where it stood, on the floor %s" % [
-				turned, off_up, l1.distance_to(l0), walker.is_on_floor()])
+	# Back in the station's field over its deck, head over heels: its down again,
+	# the walker righted over a moment (zylanntest's turn, 4 rad/s), on its feet.
+	# Over the top of its first section (the core's: it stays), clear of the piece.
+	var top0 := Vector3i(0, -1, 0)
+	var sum0 := Vector3.ZERO
+	var n0 := 0
+	for i in r.size():
+		if of[i] == 0:
+			n0 += 1
+			sum0 += Vector3(r.cell_of(i))
+	var mid0 := sum0 / maxf(n0, 1)
+	for i in r.size():
+		var c := r.cell_of(i)
+		if of[i] == 0 and absf(c.x - mid0.x) < 2.0 and absf(c.z - mid0.z) < 2.0:
+			var ty := c.y + BuildRecipe.part_size(r.part_of(i)).y
+			if ty > top0.y:
+				top0 = Vector3i(c.x, ty, c.z)
+	# In its field (2 m over its bricks), the walker's head a hair over the roof.
+	var deck := st.cell_point(top0 - org) + Vector3(0.0, 1.9, 0.0)
+	await get_tree().physics_frame
+	walker.global_position = st.global_transform * deck
+	walker.global_basis = st.global_basis * Basis(Vector3.RIGHT, PI * 0.9)
+	walker.velocity = Vector3.ZERO
+	walker.reset_physics_interpolation()
+	await get_tree().physics_frame
+	await get_tree().physics_frame
+	var st_up := st.global_basis.y
+	var early := rad_to_deg(walker.global_transform.basis.y.angle_to(st_up))
+	t0 = Time.get_ticks_msec()
+	while Time.get_ticks_msec() - t0 < 3000 and not (walker.is_on_floor() and walker.global_transform.basis.y.angle_to(st_up) < 0.02):
+		await get_tree().physics_frame
+	var late := rad_to_deg(walker.global_transform.basis.y.angle_to(st_up))
+	_check("back in the station's field head over heels: righted over a moment, not a tick, and on its feet",
+			Gravity.pull_at(walker.global_position) > 1.0 and not walker.floating and early > 120.0
+			and late < 2.0 and walker.is_on_floor(),
+			"%.0f deg off its up two ticks in, %.1f deg at %.1f s, on the floor %s" % [early, late,
+				(Time.get_ticks_msec() - t0) / 1000.0, walker.is_on_floor()])
 	await _shot("adrift_gate_turned")
 	print("[planet] gate: %d ok, %d FAIL" % [_ok, _fail])
 	get_tree().quit(1 if _fail > 0 else 0)
@@ -3269,6 +3304,17 @@ func _run_seat_gate() -> void:
 	await key.call(KEY_E)
 	var ok_deck: bool = await stand_on_deck.call()
 	_check("out of the seat in open space: on foot on its deck, its own gravity", ok_deck and Gravity.strength() > 1.0, "%.1f m/s2" % Gravity.strength())
+	# Its generator off (G): nothing pulls on its deck; on again, its gravity and the deck (7.12).
+	await key.call(KEY_G)
+	await get_tree().create_timer(0.5).timeout
+	var off_ok := not ship.data.gravity_on and Gravity.pull_at(pawn.feet()) == 0.0 and pawn.floating
+	await key.call(KEY_G)
+	t0 = Time.get_ticks_msec()
+	while Time.get_ticks_msec() - t0 < 4000 and not pawn.is_on_floor():
+		await get_tree().physics_frame
+	_check("its generator off, nothing pulls on its deck; on again, its gravity, on its deck",
+			off_ok and ship.data.gravity_on and Gravity.pull_at(pawn.feet()) > 1.0 and pawn.is_on_floor(),
+			"off: floating %s; on: %.1f m/s2, on the floor %s" % [off_ok, Gravity.pull_at(pawn.feet()), pawn.is_on_floor()])
 	await key.call(KEY_M)
 	_check("the map from the deck, nothing against a jump", map.visible and map.note == "")
 	var was := system.system_index
@@ -3355,6 +3401,11 @@ func _run_hull_gate() -> void:
 	var c2 := ship.cell_at(pawn.feet())
 	_check("and on along its spine", c2.x > c.x + 4.0 and pawn.is_on_floor() and absf(c2.y - lock.y) < 3.0,
 			"at cell %s" % str(c2.snapped(Vector3(0.1, 0.1, 0.1))))
+	# Parked on a world, its generator's gravity inside it over the world's (7.12).
+	var gf := ship.gravity_field()
+	_check("inside it its own gravity, over the world's", gf != null and Gravity.field_at(pawn.feet()) == gf
+			and Gravity.field_at(ship.global_transform * ship.seat() + ship.global_basis.z * 80.0) == null,
+			"%s inside, %.1f m/s2" % ["its field" if gf != null and Gravity.field_at(pawn.feet()) == gf else "not its field", Gravity.pull_at(pawn.feet())])
 	await _shot("hull_gate_inside")
 	# The bridge's seat: up and ahead, its bricks drawn as it flies (riding).
 	pawn.place(ship.global_transform * ship.seat() + ship.global_basis.z * 2.0)

@@ -47,6 +47,10 @@ const GRAVITY := 20.0
 ## and a body that stops dead on any of them cannot cross its own debris -- so a
 ## step up to one course is walked over rather than jumped.
 const STEP_HEIGHT := BRICK_M + 0.03
+## Coming into a new down (Docs/RoomModules.md 7.12) the body rights itself at
+## this many rad/s, crouched REORIENT_CROUCH times faster (zylanntest's player).
+const REORIENT_RATE := 4.0
+const REORIENT_CROUCH := 4.0
 
 signal landed
 ## A melee was thrown (intents.melee). `info` is MeleeStrike.strike's: {} on a whiff.
@@ -137,8 +141,15 @@ var _placed := false
 ## How far the last landing dropped, for the probe.
 var last_fall := 0.0
 ## Up where the body stands (Gravity.up_at; +Y in the flat game), refreshed
-## every tick. The body is carried so its own Y is this (Docs/Planets.md 11.7).
+## every tick. The body is carried so its own Y is this (Docs/Planets.md 11.7),
+## at REORIENT_RATE when it changes by more than a tick's worth. Where nothing
+## pulls, the body's own Y.
 var up := Vector3.UP
+## Nothing pulls where it is (Gravity.pulls_at): it floats (PawnMoves) or drifts.
+var floating := false
+## The gravity field it was in last tick (Gravity.field_at), to start a fall over
+## when it changes: heights in two fields are over two datums.
+var _field: Gravity.Field
 
 
 ## A standing pawn with its feet at `feet`, under `parent`. Returns the pawn;
@@ -228,11 +239,12 @@ func place(at_feet: Vector3) -> void:
 	# Put here, not fallen here: the drop to the first floor below is free.
 	_placed = true
 	up = Gravity.up_at(at_feet)
+	floating = not Gravity.pulls_at(at_feet)
 	# Before the tree is running (a probe's _init) there is no global transform
 	# yet; the parent is then taken to sit at the origin.
 	if body.is_inside_tree():
 		body.global_position = at_feet + up * _height * 0.5
-		_stand_up()
+		_stand_up(INF)
 	else:
 		body.position = at_feet + up * _height * 0.5
 	body.velocity = Vector3.ZERO
@@ -317,15 +329,31 @@ func _physics_process(delta: float) -> void:
 	if body == null or not body.is_inside_tree():
 		return
 	stagger_left = maxf(stagger_left - delta, 0.0)
-	up = Gravity.up_at(body.global_position)
-	_stand_up()
+	var at := body.global_position
+	floating = not Gravity.pulls_at(at)
+	var f := Gravity.field_at(at) if not Gravity.fields.is_empty() else null
+	if floating:
+		up = body.global_transform.basis.y.normalized()
+	else:
+		up = Gravity.up_at(at)
+		var rate := REORIENT_RATE * (REORIENT_CROUCH if intents.crouch else 1.0)
+		_stand_up(rate * delta)
 	if is_held():
 		intents.move = Vector3.ZERO
 		intents.jump = false
 		intents.fire = false
 		intents.melee = false
 		intents.reload = false
+	# One down and one datum for the whole move: at a field's edge two points
+	# a step apart are in two (a gangway up into a ship), and heights over two
+	# datums do not compare.
+	Gravity.pin(at)
+	if f != _field:
+		_field = f
+		_fall_from = Gravity.height_of(feet())
+		_jump_gain = 0.0
 	step(delta)
+	Gravity.unpin()
 	if eye != null:
 		eye.position = Vector3.UP * eye_offset()
 		if not is_held():
@@ -342,11 +370,12 @@ func _physics_process(delta: float) -> void:
 	intents.reload = false
 
 
-## The body's Y along `up`: carried by the least turn (Gravity.carry), and its
-## floor taken along it. Nothing at all in the flat game, where up never moves.
-func _stand_up() -> void:
+## The body's Y along `up`: carried by the least turn (Gravity.carry), at most
+## `max_turn` radians of it, and its floor taken along it. Nothing at all in the
+## flat game, where up never moves.
+func _stand_up(max_turn: float) -> void:
 	var b := body.global_transform.basis
-	var nb := Gravity.carry(b, up)
+	var nb := Gravity.carry_toward(b, up, max_turn)
 	if nb != b:
 		body.global_transform.basis = nb
 	body.up_direction = up
@@ -456,7 +485,7 @@ func _walk(delta: float, wish: Vector3, speed: float) -> void:
 		v_up = shove_up
 	elif body.is_on_floor() and v_up <= Gravity.floor_rise():
 		v_up = Gravity.standing_vert()
-	else:
+	elif not floating:
 		v_up -= GRAVITY * delta
 	body.velocity = wish * speed + Gravity.flat(shove, up) + up * v_up
 	shove *= exp(-SHOVE_DECAY * delta)
@@ -478,6 +507,10 @@ func _track_fall() -> void:
 	var feet_y := Gravity.height_of(feet())
 	if on_floor and _was_on_floor:
 		_placed = false   # placed standing: the next fall is a real one
+	if floating:
+		# Nothing pulls: no fall to start, none to land from.
+		_fall_from = feet_y
+		_jump_gain = 0.0
 	if _was_on_floor and not on_floor:
 		_fall_from = feet_y
 		_jump_gain = 0.0

@@ -363,7 +363,9 @@ static func _cells(r: BuildRecipe, of: PackedInt32Array) -> Dictionary:
 
 
 ## Where two sections' bricks touch: [{a, b, cells}], a < b, each cell of a
-## touching b and of b touching a.
+## touching b and of b touching a side by side; one standing on the other, only
+## the cell under -- a section stacked on another (a deck on a node, 7.2) keeps
+## its floor's two layers when the joint goes, and leaves whole.
 static func _joints(cells: Dictionary) -> Array:
 	var by := {}
 	for c: Vector3i in cells:
@@ -376,8 +378,11 @@ static func _joints(cells: Dictionary) -> Array:
 			var key := Vector2i(mini(s, t), maxi(s, t))
 			if not by.has(key):
 				by[key] = {}
-			by[key][c] = true
-			by[key][n] = true
+			if d.y == 0:
+				by[key][c] = true
+				by[key][n] = true
+			else:
+				by[key][c if d.y > 0 else n] = true
 	var out := []
 	var keys := by.keys()
 	keys.sort()

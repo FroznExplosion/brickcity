@@ -38,15 +38,20 @@ const SHIFT := 8
 ## The furthest above or below a bridged port may be of the other, plates: a
 ## tube between two levels holds a stair (a stud of tread a step, two studs of
 ## landing at its top), each step's rise the first of STEPS its gap has the
-## length for (two plates, the workshop's stair; a brick, the pawn's step).
+## length for (two plates, the workshop's stair; a brick, the pawn's step); too
+## short for any, a ladder (RoomGrow.ladder_adds) up to the higher doorway, when
+## the gap has LADDER_GAP for its rails, rungs, the climb's room and the lintel
+## over the lower doorway.
 const RISE := 24
 const STEPS := [2, 3]
+const LADDER_GAP := 3 + RoomGrow.LADDER_ROOM
 const NONE := 1 << 30
 
 var wings := 0
 var radiators := 0
 var bridges := 0
 var stairs := 0          ## bridging tubes between two levels, a stair in each
+var tube_ladders := 0    ## those of them with a ladder for a stair
 var sills := 0           ## door seams tied by a tile on their sills (over a module below)
 var docks := 0
 var _wing_colour := -1
@@ -84,7 +89,8 @@ func _station(library: Array, params: Dictionary) -> Dictionary:
 	(plan.adds as Array).append_array(_tubes)
 	_keel(plan)
 	plan.stats.merge({"docks": docks, "bridges": bridges, "stairs": stairs, "sills": sills, "wings": wings,
-			"radiators": radiators}, true)
+			"radiators": radiators, "tube_ladders": tube_ladders, "ladders": ladders.size()}, true)
+	plan.ladders = ladders
 	plan.keel = keel_row
 	plan.generator = "station"
 	plan.at = _at(plan)
@@ -146,7 +152,7 @@ func _bridges() -> void:
 			var g := _gap(a.at, b.at, d)
 			var rise := (b.at as Vector3i).y - (a.at as Vector3i).y
 			if g.x < 1 or g.x > GAP or absi(g.y) > SHIFT or absi(rise) > RISE \
-					or rise != 0 and _step_for(g.x, absi(rise)) == 0:
+					or rise != 0 and _step_for(g.x, absi(rise)) == 0 and g.x < LADDER_GAP:
 				continue
 			var span := Vector2i(mini(0, g.y), maxi(0, g.y) + (a.size as Vector2i).x)
 			var cells := _tube_cells(a, d, g.x, span, rise)
@@ -160,6 +166,7 @@ func _bridges() -> void:
 			joins.append({"a": i, "b": k, "loop": true})
 			bridges += 1
 			stairs += 1 if rise != 0 else 0
+			tube_ladders += 1 if rise != 0 and _step_for(g.x, absi(rise)) == 0 else 0
 			break
 
 
@@ -232,8 +239,11 @@ func _tube(a: Dictionary, b: Dictionary, d: Vector3i, gap: int, span: Vector2i) 
 	# stair the tie is right under that module's wall, in the stair's top step,
 	# which stands on it and under it (`held`: the step's row it takes).
 	var held := {}
+	# Each doorway's first column across: a's 0, b's aside of it by the shift.
+	var door_w := (a.size as Vector2i).x
+	var b_x0 := span.x if span.x < 0 else span.y - door_w
 	for x in range(span.x, span.y, 2):
-		for end in [[int(a.p), -1, 0, rise < 0], [int(b.p), gap, gap - 1, rise > 0]]:
+		for end in [[int(a.p), -1, 0, rise < 0, 0], [int(b.p), gap, gap - 1, rise > 0, b_x0]]:
 			var mc: Vector3i = cell.call(end[1], x, 0)
 			var tc: Vector3i = cell.call(end[2], x, 0)
 			var lo := mini(_low_of(end[0], mc), _low_of(end[0], mc + across))
@@ -243,15 +253,22 @@ func _tube(a: Dictionary, b: Dictionary, d: Vector3i, gap: int, span: Vector2i) 
 				_tie(mc, lo, tc, lo, Vector3i.ZERO, d, colour, material)
 				held[Vector2i(end[2], x)] = lo - 1 - at.y
 				held[Vector2i(end[2], x + 1)] = lo - 1 - at.y
-			else:
+			elif _free([Vector3i(mc.x, mini(lo, at.y - 2) - 1, mc.z), Vector3i(tc.x, mini(lo, at.y - 2) - 1, tc.z)]):
 				_tie(mc, lo, tc, at.y - 2, Vector3i.ZERO, d, colour, material)
+			elif x >= int(end[4]) and x + 1 < int(end[4]) + door_w:
+				# A module under the end, its ceiling the tie's row: tied on the
+				# doorway's sill instead, a tile over the tube's floor and the module's.
+				_tubes.append(["tile_2x2", mc.min(tc), colour, 0])
+				sills += 1
 	if rise == 0:
 		return
 	# The stair: k studs from the higher doorway, a column of bricks on the floor
 	# up to its step; two studs of landing at the top.
 	var top := absi(rise)
 	var each := _step_for(gap, top)
-	for o in gap:
+	if each == 0:
+		_tube_ladder(cell, d, gap, rise, span, (a.size as Vector2i).x, held, colour, material)
+	for o in (gap if each > 0 else 0):
 		var k := gap - 1 - o if rise > 0 else o
 		var step := clampi(top - each * (k - 1), 0, top)
 		for x in range(span.x, span.y):
@@ -266,29 +283,64 @@ func _tube(a: Dictionary, b: Dictionary, d: Vector3i, gap: int, span: Vector2i) 
 		_wall_column(_tubes, cell.call(low, x, door_h), top, colour, material)
 
 
+## A tube too short for a stair's: a ladder under the higher doorway, its rails
+## against that module's wall, up to the doorway's sill (Docs/RoomModules.md
+## 7.13). The tie in the rails (`held`) stands in for a rail's plate.
+func _tube_ladder(cell: Callable, d: Vector3i, gap: int, rise: int, span: Vector2i, door_w: int,
+		held: Dictionary, colour: int, material: int) -> void:
+	var o_rail := gap - 1 if rise > 0 else 0
+	var o_rung := o_rail - 1 if rise > 0 else o_rail + 1
+	var out := -d if rise > 0 else d
+	# The higher doorway's columns: a's from 0, b's aside of them by the gap's
+	# shift (span.x when that is negative, else span.y less a doorway).
+	var x0 := 0
+	if rise > 0:
+		x0 = span.x if span.x < 0 else span.y - door_w
+	var facing := StructureSpaces.FACINGS.find(Vector2i(out.x, out.z))
+	var skip := {}
+	for x in range(x0, x0 + door_w):
+		if held.has(Vector2i(o_rail, x)):
+			skip[cell.call(o_rail, x, int(held[Vector2i(o_rail, x)]))] = true
+	var foot: Vector3i = cell.call(o_rung, x0, 0)
+	var top := absi(rise)
+	RoomGrow.ladder_adds(_tubes, foot, facing, door_w, top, colour, material, skip)
+	ladders.append({"at": [foot.x, foot.y, foot.z], "facing": facing, "w": door_w, "h": top})
+
+
 ## One layer of a two-layer slab `n_o` x `n_x` studs, `cell(o, x)` placing a
 ## stud of it: layer 0 in 2x2 plates from its corner; layer 1 a stud in, 1x1s
 ## round its rim -- every seam of one bridged by the other (StationKit.slab).
 func _slab_adds(out: Array, cell: Callable, n_o: int, n_x: int, layer: int, colour: int, material: int) -> void:
 	# The upper layer is a stud in both ways -- only across when it is too short
 	# along to be (a two-stud tube), where its plates still bridge every seam.
+	# An odd length's upper layer runs to the far edge, its last plate over the
+	# lower layer's last seam (the lower's last row a single stud).
 	var so := layer if n_o > 2 else 0
 	var sx := layer
-	var o_end := n_o - so
-	var x_end := n_x - sx
+	var o_end := n_o - so if n_o % 2 == 0 else n_o
+	var x_end := n_x - sx if n_x % 2 == 0 else n_x
 	for o in range(so, o_end, 2):
 		for x in range(sx, x_end, 2):
 			if o + 1 < o_end and x + 1 < x_end:
 				var lo: Vector3i = (cell.call(o, x) as Vector3i).min(cell.call(o + 1, x + 1))
 				out.append(["plate_2x2", lo, colour, material])
 				continue
-			for do in mini(2, o_end - o):
-				for dx in mini(2, x_end - x):
-					out.append(["plate_1x1", cell.call(o + do, x + dx), colour, material])
+			# A single row or column at an odd edge: 1x2s across it, so its studs
+			# are held by the next row's plates over and under (a 1x1 there stood
+			# alone, a wall on it loose).
+			var two_o := o + 1 < o_end
+			var two_x := x + 1 < x_end
+			if two_o or two_x:
+				var a0: Vector3i = cell.call(o, x)
+				var a1: Vector3i = cell.call(o + 1, x) if two_o else cell.call(o, x + 1)
+				var name := "plate_1x2" if a1.x == a0.x else BrickPalette.turn("plate_1x2")
+				out.append([name, a0.min(a1), colour, material])
+				continue
+			out.append(["plate_1x1", cell.call(o, x), colour, material])
 	if layer == 1:
 		for o in n_o:
 			for x in n_x:
-				if (so > 0 and (o == 0 or o == n_o - 1)) or x == 0 or x == n_x - 1:
+				if (so > 0 and (o == 0 or o == n_o - 1 and n_o % 2 == 0)) or x == 0 or x == n_x - 1 and n_x % 2 == 0:
 					out.append(["plate_1x1", cell.call(o, x), colour, material])
 
 

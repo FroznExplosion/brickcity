@@ -14,6 +14,10 @@ extends RefCounted
 ##                             corners, up or down to the next lip, climb, drop,
 ##                             leap off
 ##   a wall too tall for both  STICK to it when flying in, slide down it, jump off
+##   a ladder pushed into      CLIMB it: forward up, back down, over its top on to
+##                             what it leads to; jump springs off, crouch lets go
+##   nothing pulling           FLOAT: the suit's thrust along the move, jump up and
+##                             crouch down; jump against a surface pushes off it
 ##
 ## A climb -- mantle or pull-up -- sweeps the body where it will land: standing
 ## room climbs standing, only crouching room climbs DUCKED (crouched from the
@@ -28,7 +32,7 @@ extends RefCounted
 ## sprinted at 11 m/s; this one is four bricks tall and runs 13.3 courses a second,
 ## so every speed here is a multiple of the pawn's own.
 
-enum State { WALK, SLIDE, WALL_RUN, MANTLE, GRAPPLE, HANG, WALL_STICK }
+enum State { WALK, SLIDE, WALL_RUN, MANTLE, GRAPPLE, HANG, WALL_STICK, LADDER }
 
 ## Ground: how fast the legs get to the asked speed, and stop without asking.
 const GROUND_ACCEL := 40.0
@@ -138,6 +142,26 @@ const GRAPPLE_GRAVITY := 0.0
 const GRAPPLE_TUCK := Pawn.BRICK_M * 2.0
 ## Tucked a moment longer after letting go, to carry through the opening.
 const GRAPPLE_TUCK_AFTER := 0.3
+
+## Ladder (Docs/RoomModules.md 7.13): up or down it at this, m/s; held this far
+## out of its face (the capsule's radius and a hair; its rungs stand out of the
+## rails by a stud, and its face is theirs); a jump off it this fast
+## out, and up; a moment before the same ladder takes the body again.
+const LADDER_SPEED := Pawn.WALK_SPEED * 0.7
+const LADDER_HOLD := Pawn.BODY_RADIUS + 0.06
+## Over its top the feet land this far past its face: over the ladder, a hair on.
+const LADDER_OVER := 0.85
+const LADDER_OFF := 3.0
+const LADDER_COOLDOWN := 0.4
+
+## Nothing pulling (Pawn.floating; Docs/RoomModules.md 7.12): a suit's thrust,
+## m/s^2, up to FLOAT_SPEED and never taking away speed above it; with no input it
+## steadies itself at FLOAT_DAMP a second. A jump at a floor or a wall pushes off
+## it at FLOAT_PUSH.
+const FLOAT_ACCEL := 4.0
+const FLOAT_SPEED := Pawn.WALK_SPEED
+const FLOAT_DAMP := 0.5
+const FLOAT_PUSH := 3.0
 const GRAPPLE_STEER := 6.0
 const GRAPPLE_MAX_TIME := 2.2
 const GRAPPLE_ARRIVE := 1.3
@@ -214,6 +238,8 @@ var _stick_t := 0.0
 var _stick_dur := 0.5
 var _stick_fast := false
 var _stick_pos := Vector3.ZERO
+var _ladder: Ladder
+var _ladder_cd := 0.0
 
 
 func _init(p: Pawn) -> void:
@@ -259,6 +285,14 @@ func is_grappling() -> bool:
 	return state == State.GRAPPLE
 
 
+func is_climbing() -> bool:
+	return state == State.LADDER
+
+
+func is_floating() -> bool:
+	return pawn.floating and state != State.LADDER and state != State.MANTLE and state != State.GRAPPLE
+
+
 ## 0 when the line is ready, 1 just after it was used.
 func grapple_cooldown() -> float:
 	return clampf(_grapple_cd * cooldown_speed / GRAPPLE_COOLDOWN, 0.0, 1.0)
@@ -278,6 +312,7 @@ func step(delta: float, wish: Vector3, speed: float) -> void:
 	_ledge_cd = maxf(_ledge_cd - delta, 0.0)
 	_corner_cd = maxf(_corner_cd - delta, 0.0)
 	_climb_cd = maxf(_climb_cd - delta, 0.0)
+	_ladder_cd = maxf(_ladder_cd - delta, 0.0)
 	if it.jump:
 		it.jump = false
 		_buffer = JUMP_BUFFER
@@ -300,6 +335,15 @@ func step(delta: float, wish: Vector3, speed: float) -> void:
 
 	if state == State.MANTLE:
 		_mantle_tick(delta)
+		return
+	if (state == State.WALK or state == State.WALL_STICK) and _try_ladder(wish):
+		pawn.rising_jump = false
+	if state == State.LADDER:
+		_ladder_tick(delta, wish, crouch_edge)
+		return
+	if pawn.floating and state != State.GRAPPLE and not grapple_edge:
+		state = State.WALK
+		_float_tick(delta, wish)
 		return
 	if grapple_edge and state != State.GRAPPLE:
 		_try_grapple()
@@ -419,6 +463,107 @@ func _move(delta: float, wish: Vector3, speed: float) -> void:
 		var moved := b.global_position - before
 		if Gravity.flat(moved, pawn.up).length() < Gravity.flat(wanted, pawn.up).length() * 0.5:
 			pawn._step_over(wanted)
+
+
+# --- ladder -------------------------------------------------------------------
+
+## A ladder at the feet, pushed into: take it.
+func _try_ladder(wish: Vector3) -> bool:
+	if _ladder_cd > 0.0:
+		return false
+	var l := Ladder.at(pawn.body.get_tree(), pawn.feet())
+	if l == null:
+		return false
+	var into := -l.global_basis.z
+	# Pushed into, along the ground (a ladder stands up its down), or in the air at it.
+	var push := wish.dot(into)
+	if push < 0.5:
+		return false
+	# At its top, stepping on to it from over it: that is walking, not climbing.
+	if l.local(pawn.feet()).y > l.height - 0.15:
+		return false
+	_ladder = l
+	state = State.LADDER
+	pawn.rising_jump = false
+	_buffer = 0.0
+	return true
+
+
+## On the ladder: forward climbs, back climbs down, held to its face; over its top
+## on to what it leads to (a mantle); off its foot on to the floor; jump springs
+## off it, crouch lets go.
+func _ladder_tick(delta: float, wish: Vector3, crouch_edge: bool) -> void:
+	var b := pawn.body
+	var l := _ladder
+	if l == null or not is_instance_valid(l) or not l.is_inside_tree():
+		_leave_ladder()
+		return
+	var lb := l.global_basis
+	var into := -lb.z
+	var p := l.local(pawn.feet())
+	if _buffer > 0.0:
+		_buffer = 0.0
+		_leave_ladder()
+		b.velocity = lb.z * LADDER_OFF + lb.y * LADDER_OFF * 0.5
+		b.move_and_slide()
+		return
+	if crouch_edge or absf(p.x) > l.width * 0.5 + 0.3 or p.z > Ladder.REACH + 0.3:
+		_leave_ladder()
+		return
+	var climb := clampf(wish.dot(into) * 2.0, -1.0, 1.0)
+	if p.y >= l.height - 0.05 and climb > 0.0:
+		# Over the top: on to its top and a body's width past its face.
+		var land := l.global_transform * Vector3(0.0, l.height, -LADDER_OVER)
+		if _climb(land, into, Pawn.WALK_SPEED * 0.5):
+			_ladder = null
+			_ladder_cd = LADDER_COOLDOWN
+			return
+		climb = 0.0
+	if climb < 0.0 and b.is_on_floor() and p.y < 0.2:
+		_leave_ladder()
+		return
+	# Up and down it, held out of its face and across its middle.
+	var v := lb.y * climb * LADDER_SPEED
+	v += lb.z * (LADDER_HOLD - p.z) * 10.0
+	v -= lb.x * p.x * 6.0
+	if p.y >= l.height - 0.05 and climb >= 0.0:
+		v -= lb.y * maxf(Gravity.vert(v, lb.y), 0.0)
+	b.velocity = v
+	b.move_and_slide()
+
+
+func _leave_ladder() -> void:
+	_ladder = null
+	_ladder_cd = LADDER_COOLDOWN
+	if state == State.LADDER:
+		state = State.WALK
+
+
+# --- floating -----------------------------------------------------------------
+
+## Nothing pulling: the move's thrust along the body's ground, jump up its Y and
+## crouch down it; no input steadies it; a jump against a surface pushes off.
+func _float_tick(delta: float, wish: Vector3) -> void:
+	var b := pawn.body
+	var it := pawn.intents
+	var v := b.velocity
+	if _buffer > 0.0 and b.get_slide_collision_count() > 0:
+		_buffer = 0.0
+		v += b.get_slide_collision(0).get_normal() * FLOAT_PUSH
+	var rise := (1.0 if it.jump_held else 0.0) - (1.0 if it.crouch else 0.0)
+	var want := wish + pawn.up * rise
+	if want.length() > 1.0:
+		want = want.normalized()
+	if want == Vector3.ZERO:
+		v *= exp(-FLOAT_DAMP * delta)
+	else:
+		var nv := v + want * FLOAT_ACCEL * delta
+		var cap := maxf(v.length(), FLOAT_SPEED)
+		if nv.length() > cap:
+			nv = nv.normalized() * cap
+		v = nv
+	b.velocity = v
+	b.move_and_slide()
 
 
 # --- slide --------------------------------------------------------------------
