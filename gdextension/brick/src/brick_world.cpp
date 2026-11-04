@@ -4755,6 +4755,13 @@ void BrickWorld::chamfer_section_async(int chunk_id, int section, double bevel) 
     ChamferJob *raw = job.get();
     raw->worker = std::thread([raw]() {
         chamfer_faces_into(raw->in, raw->out);
+        raw->arrays = chamfer_arrays(raw->out);
+        // Copied: the vertices go; the faces' quads stay for the band.
+        std::vector<Vector3>().swap(raw->out.vv);
+        std::vector<Vector3>().swap(raw->out.nn);
+        std::vector<Color>().swap(raw->out.cc);
+        std::vector<Vector2>().swap(raw->out.uu);
+        std::vector<Vector2>().swap(raw->out.u2);
         raw->done.store(true, std::memory_order_release);
     });
     chamfer_jobs.push_back(std::move(job));
@@ -4774,7 +4781,7 @@ Array BrickWorld::take_chamfer_section(int chunk_id, int section) {
         // faces afresh, and these quads would be drawn by the wrong bricks.
         if (valid_chunk(chunk_id) && chunks[chunk_id].bake.valid
                 && chunks[chunk_id].bake.serial == job->serial) {
-            arrays = chamfer_arrays(job->out);
+            arrays = job->arrays;
         }
         if (!arrays.is_empty()) {
             ChamferBand &band = chamfer_bands[std::make_pair(chunk_id, section)];
@@ -5215,6 +5222,10 @@ void BrickWorld::coarse_chunk_async(int chunk_id) {
     const Chunk *cp = &chunks[chunk_id]; // stable: chunks is a deque
     raw->worker = std::thread([raw, cp]() {
         coarse_faces_into(*cp, *raw->parts, raw->out);
+        raw->arrays = coarse_arrays(raw->out);
+        const double ms = raw->out.ms;
+        raw->out = CoarseOut();
+        raw->out.ms = ms;
         raw->done.store(true, std::memory_order_release);
     });
     coarse_jobs.push_back(std::move(job));
@@ -5239,7 +5250,7 @@ Array BrickWorld::take_coarse_mesh(int chunk_id) {
             job->worker.join();
         }
         last_coarse_ms = job->out.ms;
-        const Array arrays = coarse_arrays(job->out);
+        const Array arrays = job->arrays;
         coarse_jobs.erase(coarse_jobs.begin() + (long)i);
         return arrays;
     }
