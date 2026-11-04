@@ -5,6 +5,9 @@ texture streaming would and would not change. Written 2026-11-02. Built: the cru
 2026-11-02 and planets 2026-11-03) the particles (2.2, 2026-11-03) and the ice shards (2.7, 2026-11-03). Each item names the
 area that owns it (CLAUDE.md, Areas).
 
+Where every system runs -- main thread, workers, GPU -- and the large threading jobs kept for
+later: [WhereWorkRuns.md](WhereWorkRuns.md).
+
 ## 1. Why GPU time still matters
 
 Most of the hitches are the CPU's -- physics ticks, mesh uploads, the AI (Docs/PerfCaps.md 4) --
