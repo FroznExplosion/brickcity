@@ -1826,6 +1826,9 @@ halves' `split_island`, and the big half's mesh arrays 14 ms, on the main thread
 fall over 64 ms headless, none over 60 ms windowed. The gates' worst frames (350-690 ms) are the
 scene's load, as every planet gate's. The other planet gates unchanged (hits 8, fall 7, damage 12,
 bricks 9, trees 7, squad 10, pawn 12).
+*2026-11-03:* a new piece's faces are baked on a worker (`PlanetPieces._start_mesh`, the city's
+rule: never bake on the main thread) and drawn a tick or two later: the shed on the first landing's
+break 11-13 -> 4-8 ms headless (`--gate=topple`; topple 6, fall 7, hits 8 unchanged).
 
 **Plan, D2 step 5 (2026-10-28): the AI knows where pieces lie.** The nav regions' AIWorlds already
 index every live chunk -- pieces too -- with the transform it had at their last `sync`, and read
