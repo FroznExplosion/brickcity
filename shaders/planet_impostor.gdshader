@@ -42,7 +42,7 @@ void fragment() {
 	vec3 base = texture(color_map, dir_to_equirect(normalize(v_dir))).rgb;
 	vec3 sd = normalize(sun_dir);
 	float ndl = max(dot(normalize(v_dir), sd), 0.0);
-	if (ndl > 0.0) ndl *= body_shadow(normalize(v_dir), sd);
+	if (ndl > 0.0) ndl *= body_shadow(normalize(v_dir), sd) * ring_shadow(normalize(v_dir), sd);
 	vec3 lit = base * (ndl * sun_color + ambient);
 	float rim = pow(1.0 - clamp(dot(normalize(VIEW), NORMAL), 0.0, 1.0), 4.0);
 	ALBEDO = lit + atmo_color * rim * 0.5 * (0.3 + ndl);

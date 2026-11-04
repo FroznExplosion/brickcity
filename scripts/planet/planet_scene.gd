@@ -2171,6 +2171,35 @@ func _run_light_gate() -> void:
 	var high := LightRig.sunlight_colour(system.sys.star_color, 1.0, 1.0)
 	_check("a low sun through air is redder", low.b / low.r < 0.6 * high.b / high.r, "b/r %.2f against %.2f" % [low.b / low.r, high.b / high.r])
 	_check("no air, no sunset", LightRig.sunlight_colour(system.sys.star_color, 0.03, 0.0) == LightRig.sunlight_colour(system.sys.star_color, 1.0, 0.0))
+	# 2a. A ring's shadow (Lighting.md 2a): a point a km sunward-under the
+	# ring's thickest band loses most of the sun; one off its plane's shadow
+	# none; the far look and the disc are told.
+	# A ring of its own here, 20-60 km round a point 100 km off.
+	var rg := RockField.new()
+	rg.setup(20000.0, 60000.0, 7, Color(0.6, 0.55, 0.5))
+	add_child(rg)
+	rg.global_position = _eye() + Vector3(100000.0, 0.0, 0.0)
+	var disc_parent := Node3D.new()
+	add_child(disc_parent)
+	rg.build_far(disc_parent)
+	var sdw := Vector3(0.3, 0.8, 0.2).normalized()
+	var best_r := 0.0
+	var best_a := 0.0
+	for k in 200:
+		var rr := lerpf(rg.inner / rg.outer, 1.0, k / 200.0)
+		var a := RockField.alpha_at(rr, rg.inner / rg.outer, rg.far_density, rg.grain())
+		if a > best_a:
+			best_a = a
+			best_r = rr
+	var on_ring := rg.global_position + Vector3.RIGHT * best_r * rg.outer
+	var l_under := rg.light_at(on_ring - sdw * 1000.0, sdw)
+	var l_over := rg.light_at(on_ring + sdw * 1000.0, sdw)
+	var l_hole := rg.light_at(rg.global_position - sdw * 1000.0, sdw)
+	_check("a ring's shadow: under its thickest band the sun mostly gone; over it, and through its middle, all there",
+			l_under < 1.0 - 0.6 * best_a * RockField.SHADE and is_equal_approx(l_over, 1.0) and is_equal_approx(l_hole, 1.0),
+			"%.2f under (cover %.2f), %.2f over, %.2f through the middle" % [l_under, best_a, l_over, l_hole])
+	rg.queue_free()
+	disc_parent.queue_free()
 	await _shot("light_gate_noon")
 	# 3. Night: the fill from the brightest body over the horizon.
 	var day := data.day
