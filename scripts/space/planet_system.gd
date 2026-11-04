@@ -487,6 +487,12 @@ func _on_drifted(arrays: Array, com: Transform3D, local_com: Vector3, count: int
 	e.material = material
 	e.draw_at = -local_com
 	_drift_node(e, arrays, com)
+	if e.body.is_valid() and from.gravity_centre != null:
+		e.grav = Node3D.new()
+		e.grav.name = "Down"
+		e.node.add_child(e.grav)
+		e.grav.position = com.affine_inverse() * from.gravity_centre.global_position
+		e.pull = from.data.gravity
 	print("[system] %d bricks of %s drift off%s" % [count, name_of(from),
 			"" if e.riders.is_empty() else ", %d aboard" % e.riders.size()])
 
@@ -572,13 +578,20 @@ func _ridden(e: Drift) -> bool:
 		k -= 1
 	if e.look == null:
 		return not e.riders.is_empty()
-	var box := e.look.mesh.get_aabb()
-	box.position += e.draw_at
-	box = box.grow(2.0)
 	for r: Node3D in e.riders:
-		if box.has_point(e.node.global_transform.affine_inverse() * r.global_position):
+		if _on_piece(e, r.global_position):
 			return true
 	return false
+
+
+## Is world point `p` on piece `e`: in its mesh's box and a couple of metres
+## (before its mesh is in, within a few metres of its middle)?
+func _on_piece(e: Drift, p: Vector3) -> bool:
+	if e.look == null:
+		return e.node.global_position.distance_to(p) < 6.0
+	var box := e.look.mesh.get_aabb()
+	box.position += e.draw_at
+	return box.grow(2.0).has_point(e.node.global_transform.affine_inverse() * p)
 
 
 func _drop_body(e: Drift) -> void:
@@ -951,6 +964,15 @@ func _shadows_on(b: PlanetBody) -> void:
 
 
 func _gravity() -> void:
+	# On a piece adrift that someone rode off on: its own down, turning with it.
+	if observer.is_valid() and not drifts.is_empty():
+		var p: Vector3 = observer.call()
+		for e: Drift in drifts:
+			if e.grav != null and e.body.is_valid() and _on_piece(e, p):
+				Gravity.planet = e.grav
+				Gravity.planet_strength = e.pull
+				Gravity.planet_radius = SpaceStation.DEPTH
+				return
 	var on := frame_node()
 	if on is SpaceStation:
 		Gravity.planet = (on as SpaceStation).gravity_centre

@@ -2789,7 +2789,8 @@ func _run_falling_gate() -> void:
 ## Someone on a piece that leaves (Docs/RoomModules.md 7.8): the walker on top
 ## of a generated station's section, its joints shot away; the section leaves
 ## with the walker on it, a body of its bricks under them, and they go with it,
-## still standing.
+## still standing; turned over, its own down turns with it and the walker stays
+## standing where it stood.
 func _run_adrift_gate() -> void:
 	var t0 := Time.get_ticks_msec()
 	while walker.frozen and Time.get_ticks_msec() - t0 < 60000:
@@ -2904,6 +2905,28 @@ func _run_adrift_gate() -> void:
 			and walker.is_on_floor() and d.body.is_valid(),
 			"it %.1f m in 5 s, the walker %.2f m on it, on the floor %s" % [moved, l1.distance_to(l0), walker.is_on_floor()])
 	await _shot("adrift_gate_aboard")
+	# Turned over (from here on, about an axis across it): its own down turns with
+	# it, and the walker with that, still standing where it stood.
+	var now := system._drift_clock
+	var here := d.at(now)
+	d.p0 = here.origin
+	d.q0 = here.basis
+	d.born = now
+	d.axis = (d.q0 * Vector3(1.0, 0.0, 0.3)).normalized()
+	d.rate = 0.12
+	var up0 := d.node.global_basis.inverse() * walker.up
+	l0 = d.node.global_transform.affine_inverse() * walker.global_position
+	await get_tree().create_timer(5.0).timeout
+	var piece_up := d.node.global_basis * up0
+	var turned := rad_to_deg(d.rate * (system._drift_clock - now))
+	var off_up := rad_to_deg(piece_up.angle_to(walker.up))
+	l1 = d.node.global_transform.affine_inverse() * walker.global_position
+	_check("turned over, its down turns with it: the walker's up the piece's, still standing on it",
+			d.grav != null and Gravity.planet == d.grav and turned > 20.0 and off_up < 5.0
+			and l1.distance_to(l0) < 1.0 and walker.is_on_floor(),
+			"turned %.0f deg, the walker's up %.1f deg off the piece's, %.2f m from where it stood, on the floor %s" % [
+				turned, off_up, l1.distance_to(l0), walker.is_on_floor()])
+	await _shot("adrift_gate_turned")
 	print("[planet] gate: %d ok, %d FAIL" % [_ok, _fail])
 	get_tree().quit(1 if _fail > 0 else 0)
 
