@@ -818,6 +818,10 @@ func _build_light() -> void:
 	sun.look_at_from_position(Vector3.ZERO, -planet.sun_dir, Vector3.UP if absf(planet.sun_dir.y) < 0.99 else Vector3.FORWARD)
 
 
+## A ship or station this near the camera is on the brick grid (its lamps).
+const SHIP_GRID_NEAR := 300.0
+
+
 ## Ambient boxes (Docs/Lighting.md 6.2), twice a second: one inside each
 ## building laid in bricks here, and in each station or ship module laid; a
 ## toppled building's goes.
@@ -853,6 +857,8 @@ func _ambient_boxes() -> void:
 						Vector3(st.fx * stud, st.height, st.fz * stud), "room")
 	if system == null:
 		return
+	var viewer := get_viewport().get_camera_3d()
+	var cam_at := viewer.global_position if viewer != null else Vector3.ZERO
 	var mods: Array = []
 	mods.append_array(system.stations)
 	mods.append_array(system.ships)
@@ -862,6 +868,16 @@ func _ambient_boxes() -> void:
 			continue
 		var bn := st.get_node_or_null("Bricks") as Node3D
 		var key := "m%d" % st.get_instance_id()
+		# Its Glow bricks light it (the grid's lamps, BrickGridLight); its
+		# sky is left alone: the cabin box stands for its own lights.
+		if bn != null and st.brick_material != null and bn.global_position.distance_to(cam_at) < SHIP_GRID_NEAR:
+			if not st.brick_material.has_meta(&"grid_light"):
+				st.brick_material.set_meta(&"grid_light", true)
+				grid_light.bind(st.brick_material, false)
+			if not grid_light.tracked(key):
+				grid_light.track(key, st.bricks, st.chunk, bn)
+		else:
+			grid_light.release(key)
 		if bn != null and not _box_of.has(key):
 			var stud := BrickWorld.get_stud_metres()
 			_box_of[key] = light.add_box(bn, Vector3.ZERO,
@@ -2359,6 +2375,18 @@ func _run_light_gate() -> void:
 		var lamp1 := grid_light.at(inside).y
 		_check("a Glow brick lights the room round it", floor_b >= 0 and glow >= 0 and lamp0 < 0.05 and lamp1 > 0.4,
 				"lamp %.2f -> %.2f" % [lamp0, lamp1])
+		# And a real light there (Lighting.md 6.3) for what moves, leaving the
+		# bricks to the grid.
+		var lamp_near := false
+		var lamp_mask_ok := true
+		for kid in s.brick_node.get_children():
+			var l := kid as OmniLight3D
+			if l != null and l.name.begins_with("GlowLamp"):
+				lamp_mask_ok = lamp_mask_ok and (l.light_cull_mask & BrickGridLight.RENDER_LAYER) == 0 						and not l.shadow_enabled
+				if l.global_position.distance_to(inside) < BrickGridLight.LAMP_RANGE * 0.75:
+					lamp_near = true
+		_check("the Glow brick hangs an unshadowed light for what moves", lamp_near and lamp_mask_ok,
+				"%d lamp(s) in all" % grid_light.lamp_count())
 		if DisplayServer.get_name() != "headless":
 			# What the soft shadows cost (Lighting.md 2): the GPU's draw time
 			# with the sun's size, without, and with again. A report, not a
@@ -3369,6 +3397,13 @@ func _run_hull_gate() -> void:
 			"%d of %d" % [ship.doors.count() if ship.doors else 0, BuildDoors.of(ship.recipe).size()])
 	_check("a gangway of bricks down from its airlock to the ground", ship.gangway != null and ship.gangway_steps > 0,
 			"%d step(s), the sill %.2f m over the ground at its foot" % [ship.gangway_steps, (door - foot).dot(Gravity.up_at(door))])
+	# On the brick grid for its Glow bricks' light, its sky left alone: the
+	# cabin box stands for its own lights (Docs/Lighting.md 6.1).
+	_boxes_at = 0
+	_ambient_boxes()
+	var floor_v: Variant = ship.brick_material.get_shader_parameter("grid_sky_floor") if ship.brick_material else null
+	_check("on the brick grid for its lamps, its sky left alone", grid_light.tracked("m%d" % ship.get_instance_id())
+			and floor_v != null and is_equal_approx(float(floor_v), 1.0), "sky floor %s" % str(floor_v))
 	# A look at it from off its stern quarter: the housings and the fin on its roof.
 	var aside := Gravity.flat(ship.global_basis.x, Gravity.up_at(door)).normalized()
 	var off := _ground_hit(door + outward * 28.0 + aside * 18.0)

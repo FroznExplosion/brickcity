@@ -317,6 +317,9 @@ public:
     // ...and the grid itself, two bytes a cell (sky, lamp), each y layer an
     // x-by-z tile, tiles left to right then down a `width` x `height` image
     // (RG8). Empty when it does not fit.
+    // The centres of `chunk_id`'s live Glow PLA blocks, chunk-local metres:
+    // where BrickGridLight hangs its lamps (Docs/Lighting.md 6.3).
+    PackedVector3Array chunk_glow_points(int chunk_id) const;
     PackedByteArray chunk_light_tiles(int chunk_id, int cell_plates, int width, int height,
             int sky_step, int lamp_step) const;
     int block_at(int chunk_id, Vector3i cell) const;
