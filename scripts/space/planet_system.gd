@@ -1265,6 +1265,9 @@ func _light(e: Vector3) -> void:
 		var a_b := asin(clampf(b.data.radius / db, 0.0, 1.0))
 		var theta := acos(clampf(to_b.dot(sd) / db, -1.0, 1.0))
 		seen = minf(seen, clampf((theta - (a_b - a_s)) / (2.0 * a_s), 0.0, 1.0))
+		# Under a ring's shadow (Docs/Lighting.md 2a).
+		if b.ring != null and db < b.ring.outer * 4.0:
+			seen *= b.ring.light_at(e, sd)
 	sunlight = seen
 	var near := nearest(e)
 	sun_height = (e - near.global_position).normalized().dot(sd) if near != null else 1.0

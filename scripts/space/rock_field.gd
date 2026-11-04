@@ -160,9 +160,47 @@ func _build_near() -> void:
 	add_child(_mmi)
 
 
+## How much of the sun the thickest of the ring takes (body_shadow's RING_SHADE).
+const SHADE := 0.85
+## The far disc's density (build_far), and the disc.
+var far_density := 0.7
+var disc: MeshInstance3D
+
+
+## The bands' frequency, as the disc draws them.
+func grain() -> float:
+	return float(field_seed % 97) + 40.0
+
+
+## The ring's cover at `r` (of the outer radius): ring_band.gdshaderinc's.
+static func alpha_at(r: float, inner_frac: float, density: float, grain_f: float) -> float:
+	if r > 1.0 or r < inner_frac:
+		return 0.0
+	var t := (r - inner_frac) / (1.0 - inner_frac)
+	var edge := smoothstep(0.0, 0.04, t) * smoothstep(1.0, 0.96, t)
+	var band := 0.6 + 0.25 * sin(r * grain_f) + 0.15 * sin(r * grain_f * 2.7 + 1.3)
+	return clampf(density * band * edge, 0.0, 1.0)
+
+
+## The sun left at `world` through this ring, toward `sd` (world): its shadow
+## on the ground (Docs/Lighting.md 2a).
+func light_at(world: Vector3, sd: Vector3) -> float:
+	var inv := global_basis.orthonormalized().inverse()
+	var p := inv * (world - global_position)
+	var s := inv * sd
+	if absf(s.y) < 1e-4:
+		return 1.0
+	var t := -p.y / s.y
+	if t <= 0.0:
+		return 1.0
+	var q := p + s * t
+	return 1.0 - SHADE * alpha_at(Vector2(q.x, q.z).length() / outer, inner / outer, far_density, grain())
+
+
 ## The far look: a disc under `parent` (a look node, so scaled space draws it),
 ## turned as this field is.
 func build_far(parent: Node3D, density := 0.7) -> MeshInstance3D:
+	far_density = density
 	var pm := PlaneMesh.new()
 	pm.size = Vector2.ONE * outer * 2.0
 	var mi := MeshInstance3D.new()
@@ -173,10 +211,12 @@ func build_far(parent: Node3D, density := 0.7) -> MeshInstance3D:
 	mat.set_shader_parameter("inner", inner / outer)
 	mat.set_shader_parameter("tint", colour)
 	mat.set_shader_parameter("density", density)
-	mat.set_shader_parameter("grain", float(field_seed % 97) + 40.0)
+	mat.set_shader_parameter("grain", grain())
+	mat.set_shader_parameter("outer_m", outer)
 	mi.material_override = mat
 	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	mi.extra_cull_margin = outer
 	mi.transform = transform
 	parent.add_child(mi)
+	disc = mi
 	return mi

@@ -79,6 +79,14 @@ func setup(p_data: PlanetData, far := false) -> void:
 		ring.transform.basis = Basis(Quaternion(Vector3.UP, data.climate_axis.normalized()))
 		add_child(ring)
 		ring.build_far(look)
+		# Its shadow on the planet's far look, and the planet's across it
+		# (Docs/Lighting.md 2a).
+		(ring.disc.material_override as ShaderMaterial).set_shader_parameter("body_r", data.radius / ring.outer)
+		if _impostor_mat != null:
+			_impostor_mat.set_shader_parameter("ring_axis", ring.transform.basis.y.normalized())
+			_impostor_mat.set_shader_parameter("ring_span", Vector2(ring.inner, ring.outer) / data.radius)
+			_impostor_mat.set_shader_parameter("ring_density", ring.far_density)
+			_impostor_mat.set_shader_parameter("ring_grain", ring.grain())
 	if not is_nan(data.sea_level):
 		_build_ocean()
 		if far:
@@ -207,6 +215,9 @@ func set_sun(dir_local: Vector3) -> void:
 	for m in [_impostor_mat, _atmo_mat]:
 		if m != null:
 			m.set_shader_parameter("sun_dir", sun_dir)
+	if ring != null and ring.disc != null:
+		(ring.disc.material_override as ShaderMaterial).set_shader_parameter("sun_local",
+				(ring.transform.basis.inverse() * sun_dir).normalized())
 
 
 ## The bodies between this one and the star, for its far look and halo
