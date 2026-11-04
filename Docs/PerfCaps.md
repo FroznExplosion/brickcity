@@ -167,6 +167,12 @@ Left, and why it is left:
   resource is finalised off the render thread at exit. The code assumes the default model (worker
   uploads, waits on them, reads back); making it pay would mean reworking those first, which is
   not a setting.
+* **The walk again, 2026-11-04** (default thread model, quiet machine, 2 GB free RAM): the first
+  run after a cache refresh 49 frames over 25 ms, worst 366 (cold); the next two **23 and 20**, worst
+  50 and 75 ms, mean 16.8-16.9. The two worst of the last run are the walk's first frames; the
+  rest mostly ticks of 2-7 ms with the GPU at 8-16 (the pinned-window effect above), and
+  `st_rooms` 2-3 ms is new since 10-23. One tick of `sd_coarse` 17 ms in one run: a far stand-in
+  swapping in (`_tend_far_coarse`), the renderer's share of an upload again.
 
 ## 5. A look out over the city (2026-10-23)
 
