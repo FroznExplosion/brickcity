@@ -64,7 +64,7 @@ class Entry:
 	var alive := -1
 	var bytes := PackedByteArray()
 	var param := Vector4(-1.0, 0.0, 0.0, 0.0)
-	var lamps: Array[OmniLight3D] = []
+	var lamps: Array = []
 
 var _entries := {}
 var _free: Array[int] = []
@@ -228,9 +228,10 @@ func _hang_lamps(e: Entry, points: PackedVector3Array) -> void:
 	groups = groups.slice(0, LAMPS_MAX)
 	var valid := is_instance_valid(e.node)
 	while e.lamps.size() > groups.size() or (not valid and not e.lamps.is_empty()):
-		var l: OmniLight3D = e.lamps.pop_back()
+		# Untyped: freed with the building's node, it cannot be held as one.
+		var l: Variant = e.lamps.pop_back()
 		if is_instance_valid(l):
-			l.queue_free()
+			(l as Node).queue_free()
 	if not valid:
 		return
 	for i in groups.size():
@@ -244,7 +245,7 @@ func _hang_lamps(e: Entry, points: PackedVector3Array) -> void:
 			l.light_cull_mask = 0xFFFFF & ~RENDER_LAYER
 			e.node.add_child(l)
 			e.lamps.append(l)
-		var lamp := e.lamps[i]
+		var lamp := e.lamps[i] as OmniLight3D
 		lamp.position = groups[i][0] / groups[i][1]
 		# A lone brick a glow; a wall of them a lamp.
 		lamp.light_energy = LAMP_ENERGY * minf(1.0 + 0.25 * (groups[i][1] - 1), 3.0)

@@ -97,7 +97,18 @@ player is.
   of ground are voxels and an umbra is hundreds of km across, so the edge of a
   moon's shadow on the near ground is not drawn; from high up the impostor
   shows it.
-- **Rings** do not shadow yet.
+- **Rings** (built 2026-11-04): `shaders/ring_band.gdshaderinc` is a ring's
+  cover by radius, shared by its far disc (`rock_disc.gdshader`) and
+  `body_shadow`'s `ring_shadow`, mirrored by `RockField.alpha_at`. The
+  planet's far look takes the ring's shadow (`ring_axis`, `ring_span` set
+  once, `PlanetBody`); the disc darkens where its planet hides the sun
+  (`sun_local`, `body_r`); `PlanetSystem._light` multiplies `seen` at the
+  camera by `RockField.light_at`, so the ground under a ring's shadow dims
+  as in an eclipse (up to 85% under the thickest band). Light gate: a test
+  ring takes 59% of the sun under its thickest band (cover 0.69), none over
+  it or through its middle. Not seen in a picture: the windowed `--gate=rocks`
+  (the flight to a ringed world) fails on main as it is (in its shell, no
+  rocks drawn; passes headless).
 
 ### 2b. Clouds (later)
 
@@ -230,9 +241,28 @@ re-bake (50-80 ms a tower) per hit. A grid beside the mesh instead:
   band mesh. Cards stay flat (only open studs get one: under the sky).
   Pass: the city `--light` checks the studs carry it and the picture is
   darker with them on it.
-- Not yet: ships and stations (their cabin box stands for their own lights;
-  a breach opens onto space, darker anyway), furniture lamps (only Glow
-  bricks are lamps), the sun past the shadow range.
+- **Ships and stations** (2026-11-04): those within 300 m of the camera
+  (`PlanetScene.SHIP_GRID_NEAR`) are tracked, their material bound sky-less
+  (`bind(mat, false)`: floor 1.0): their Glow bricks light them; their sky
+  is left alone, the cabin box standing for the ship's own lights.
+  `--gate=hull` checks the parked ship.
+- **Only bound materials** get the parameter (`_apply`): a parameter set on
+  anything else (a ladder) costs it 16 slots of the renderer's instance
+  buffer for nothing. (That buffer: every mesh with an instance parameter
+  set, or in its shader, takes 16 slots until freed; `project.godot` has
+  262,144 slots, 16,384 meshes, after "Too many instances using shader
+  instance variables" at Godot's 65,536. `tools/instance_buffer_probe.gd`,
+  `tools/instance_uniform_count.gd`.)
+- **The sun past the shadow range**: not needed. Shadows reach 400 m on
+  the planet (`LightRig.build`) and in the city (`SUN_SHADOW_DISTANCE`);
+  neither draws a building in bricks that far (far boxes; the city's
+  shells, a building demoted before the camera is 420 m off). Tried:
+  the grid's sky taking the sun past the end, in the shader; both pictures
+  the same, the building gone. Needed if the shadow range is ever cut below
+  where bricks are drawn (a Low shadows setting): then that, faded in over
+  the last fifth.
+- Not yet: real lamps in the content (no build has a Glow brick; ships have
+  no strip lights): Room modules' to place.
 
 ### 6.2 Quick stand-in: ambient boxes
 
@@ -246,6 +276,16 @@ destruction (could lerp toward outdoors by the room's open wall area).
 Unshadowed `OmniLight3D` is cheap in Forward+ (clustered): fixtures from the
 asset placer's lamps, ship strip lights. Shadowed ones only the 2-4 nearest the
 player, from a budget in the rig.
+
+**Built (2026-11-04): Glow bricks hang lights.** `BrickWorld.chunk_glow_points`
+(the live Glow blocks' centres); `BrickGridLight._hang_lamps` merges them
+within 1.2 m, at most 8 a building, an unshadowed `OmniLight3D` each (range
+4 m, warm, brighter for a bigger group) under the building's node, so it
+rides with a ship. Its `light_cull_mask` leaves out `RENDER_LAYER`: figures,
+the gun and pieces get it; the bricks keep the grid's lamp term, which stops
+at walls where an unshadowed light would not. Only with `use_layer` (the
+planet, its ships): in the city bricks would be lit twice. Light gate: the
+Glow floor hangs one, unshadowed, bricks left out.
 
 ## 7. SDFGI and the other GI
 
@@ -295,7 +335,9 @@ the other one to try). Screen-space is offered, default off.
 | 3 | Moon/planet light (5) | small | **built** |
 | 4 | Ambient boxes in buildings, stations and ships (6.2) | small-medium | **built** |
 | 4b | Clouds and their faked shadows (2b) | medium | when clouds come |
-| 5 | Grid skylight and lamp light (6.1) | large, C++ with Build mode | **built** for the planet's buildings (9); ships and the city next |
+| 5 | Grid skylight and lamp light (6.1) | large, C++ with Build mode | **built**: planet, city, near-tier studs, ships and stations (lamps only) |
+| 5b | Glow bricks as real lights (6.3) | small, C++ query | **built** |
+| 5c | Rings' shadows (2a) | small | **built** |
 | 6 | SSAO/SSIL High, SDFGI Ultra (7) | small to try | **built**: screen-space offered (+1-3 ms); SDFGI tried, not offered (7) |
 
 Area: new, Lighting -- `light_rig.gd`, `shaders/body_shadow.gdshaderinc`, this
