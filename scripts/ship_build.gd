@@ -32,6 +32,17 @@ const WINDOW_SILL := 4
 const WINDOW_EVERY := 6
 ## How far in from a room's wall the hull may stand (its wall, a gap, the hull).
 const WINDOW_REACH := 4
+## The bridge's consoles (Docs/RoomModules.md 7.11): a panel along its fore wall
+## CONSOLE_BACK courses high, a desk in front of it CONSOLE_DESK high topped with
+## dark screens, and side stations along its side walls fore of the seat; studs
+## either side of a doorway kept clear.
+const CONSOLE_BACK := 2
+const CONSOLE_DESK := 1
+const CONSOLE_COLOUR := "dark bluish gray"
+const SCREEN_COLOUR := "black"
+## The bridge's inside, studs: the first that the packer fits fore (a narrow bow
+## takes only the last).
+const BRIDGES := [Vector2i(10, 8), Vector2i(6, 6)]
 
 
 ## {ok, why, recipe, plan, stats, seat: Vector3i, decks}.
@@ -42,15 +53,24 @@ static func make(seed: int, passes := 1) -> Dictionary:
 	var beam := 26 + 2 * rng.randi_range(0, 2)
 	var decks := rng.randi_range(1, 3)
 	var h := hull(length, beam, decks)
-	var lib0 := library()
-	var made := RoomPack.generate(lib0, {"seed": seed, "hull": h, "passes": passes, "fore": "+x",
-			"section_studs": 24 + 4 * rng.randi_range(0, 2), "pitch": PITCH, "airlock": true, "doorway": DOOR.y})
+	var section := 24 + 4 * rng.randi_range(0, 2)
+	var made := {}
+	var lib0 := []
+	for b: Vector2i in BRIDGES:
+		lib0 = library(b)
+		made = RoomPack.generate(lib0, {"seed": seed, "hull": h, "passes": passes, "fore": "+x",
+				"section_studs": section, "pitch": PITCH, "airlock": true, "doorway": DOOR.y})
+		if not bool(made.ok) or (made.plan.placed as Array).any(func(pl) -> bool:
+				return String(lib0[pl.m].name) == "bridge"):
+			break
 	if not bool(made.ok):
 		return made
 	made.lib = lib0
 	made.recipe.meta["engines"] = h.meta.get("engines", [])
 	made.decks = int(made.stats.decks)
 	made.seat = Vector3i(-1, -1, -1)
+	var bridge := {}
+	var bridge_floor := 0
 	var lib: Array = made.lib
 	for pl: Dictionary in made.plan.placed:
 		if String(lib[pl.m].name) != "bridge":
@@ -66,8 +86,12 @@ static func make(seed: int, passes := 1) -> Dictionary:
 			var mid := Vector2i((lo.x + hi.x) / 2, (lo.y + hi.y) / 2)
 			var off: Vector3i = pl.off
 			made.seat = Vector3i(mid.x + off.x, int(sp.floor_y) + off.y + 1, mid.y + off.z)
+			bridge_floor = int(sp.floor_y) + off.y
+			for c: Vector2i in sp.cols:
+				bridge[Vector2i(c.x + off.x, c.y + off.z)] = true
 			break
 	made.stats["windows"] = _windows(made.recipe, h)
+	made.stats["consoles"] = _consoles(made.recipe, bridge, bridge_floor, made.seat)
 	made.stats["furniture"] = KitFurnish.furnish(made.recipe, seed)
 	return made
 
@@ -189,19 +213,85 @@ static func _windows(r: BuildRecipe, h: BuildRecipe) -> int:
 	return made
 
 
+## The bridge's consoles (Docs/RoomModules.md 7.11), facing the seat from fore
+## (+X): along the room's fore edge a panel and a desk before it, and along its
+## two side edges, fore of the seat, side desks; never in a doorway
+## or beside one, nor on the seat's column. Each brick in its floor's section;
+## `meta.consoles` {from, bricks}. A bridge with furniture of its own (a
+## player's: interior bricks) gets none. How many columns it laid.
+static func _consoles(r: BuildRecipe, cols: Dictionary, floor_y: int, seat: Vector3i) -> int:
+	if cols.is_empty():
+		return 0
+	var cells := {}
+	for i in r.size():
+		var c := r.cell_of(i)
+		var s := BuildRecipe.part_size(r.part_of(i))
+		for y in s.y:
+			for z in s.z:
+				for x in s.x:
+					var v := c + Vector3i(x, y, z)
+					cells[v] = i
+					if r.is_interior(i) and cols.has(Vector2i(v.x, v.z)) and v.y > floor_y:
+						return 0
+	var near_door := {}
+	for d: Dictionary in BuildDoors.of(r):
+		var lo: Vector3i = d.lo
+		var ds: Vector3i = d.size
+		for z in range(lo.z - 2, lo.z + ds.z + 2):
+			for x in range(lo.x - 2, lo.x + ds.x + 2):
+				near_door[Vector2i(x, z)] = true
+	# Each column's place: 2 the fore edge (the panel), 1 a desk.
+	var place := {}
+	for v: Vector2i in cols:
+		if near_door.has(v) or v == Vector2i(seat.x, seat.z):
+			continue
+		if not cols.has(v + Vector2i(1, 0)):
+			place[v] = 2
+			if cols.has(v - Vector2i(1, 0)) and not near_door.has(v - Vector2i(1, 0)):
+				place[v - Vector2i(1, 0)] = maxi(int(place.get(v - Vector2i(1, 0), 0)), 1)
+		elif v.x > seat.x + 1 and (not cols.has(v + Vector2i(0, 1)) or not cols.has(v - Vector2i(0, 1))):
+			place[v] = maxi(int(place.get(v, 0)), 1)
+	var of := BuildSections.of_build(r)
+	var body := StationKit._colour(CONSOLE_COLOUR)
+	var screen := StationKit._colour(SCREEN_COLOUR)
+	var first := r.size()
+	var laid := 0
+	for v: Vector2i in place:
+		var under: Vector3i = Vector3i(v.x, floor_y, v.y)
+		if not cells.has(under):
+			continue
+		var high := (CONSOLE_BACK if int(place[v]) == 2 else CONSOLE_DESK) * 3
+		var free := true
+		for y in high + 1:
+			free = free and not cells.has(Vector3i(v.x, floor_y + 1 + y, v.y))
+		if not free:
+			continue
+		for k in range(0, high, 3):
+			r.add("brick_1x1", Vector3i(v.x, floor_y + 1 + k, v.y), body, 0, BuildRecipe.Role.STRUCTURE)
+		r.add("tile_1x1", Vector3i(v.x, floor_y + 1 + high, v.y), screen, 0, BuildRecipe.Role.STRUCTURE)
+		if not of.is_empty():
+			for k in range(0, high + 1, 3):
+				of.append(of[int(cells[under])])
+		laid += 1
+	if of.size() == r.size() and r.meta.has("sections"):
+		BuildSections.rerecord(r, of)
+	r.meta["consoles"] = {"from": first, "bricks": r.size() - first}
+	return laid
+
+
 ## The ship rooms: the player's modules with a zone when one is a bridge, else these.
-static func library() -> Array:
+static func library(bridge: Vector2i = BRIDGES[0]) -> Array:
 	var mine := RoomModules.library().filter(func(m) -> bool:
 			return String(m.rules.get("zone", "any")) != "any" or String(m.name) == "bridge")
 	if mine.any(func(m) -> bool: return String(m.name) == "bridge"):
 		return RoomModules.library()
-	return RoomModules.from_recipes(modules())
+	return RoomModules.from_recipes(modules(bridge))
 
 
-static func modules() -> Array:
+static func modules(bridge: Vector2i = BRIDGES[0]) -> Array:
 	var two := [[1, 3, "auto"], [3, 3, "auto"]]
 	return [
-		room("bridge", 6, 6, {"zone": "fore", "min": 1, "max": 1}, two, "white"),
+		room("bridge", bridge.x, bridge.y, {"zone": "fore", "min": 1, "max": 1}, two, "white"),
 		room("engine room", 12, 8, {"zone": "aft", "min": 1, "max": 1}, two, "dark bluish gray"),
 		room("reactor", 6, 6, {"zone": "core", "min": 1, "max": 1}, two, "yellow"),
 		room("quarters", 6, 8, {"weight": 3.0}, two, "white"),

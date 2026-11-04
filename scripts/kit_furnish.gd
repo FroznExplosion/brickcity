@@ -8,7 +8,11 @@ extends RefCounted
 ## section like the walls round it. Not in the interior role: a station's and a
 ## ship's meshes are their face bake, which leaves interior bricks out (the
 ## city draws those apart, FurnitureMesh). `meta.furniture`: {"from": the first
-## furniture brick (they are the build's last), "items"}.
+## furniture brick (they are the build's last), "items", "turned": how many of
+## them stand turned}.
+##
+## Each item stands turned by the manifest's `yaw` (quarter turns about +Y, its
+## box's min corner kept), or the next turn that fits when that one does not.
 ##
 ## A lane from each door to the room's middle, and the middle itself, are kept
 ## clear (a way through a hub, a bridge's seat), and nothing goes where a brick
@@ -55,6 +59,7 @@ static func furnish(r: BuildRecipe, seed: int) -> int:
 	var doors: Array = r.meta.get("doors", [])
 	var filaments := BrickWorld.get_filament_count()
 	var laid := 0
+	var turns := 0
 	var first := r.size()
 	for sp: Dictionary in spaces:
 		var kind := _kind_of(String(sp.kind), seed, int(sp.id))
@@ -84,11 +89,16 @@ static func furnish(r: BuildRecipe, seed: int) -> int:
 					room.posts.append(Rect2i(x, z, 1, 1))
 		var colour := posmod(RoomManifest.hash3(room.room_seed, 5, 1), filaments)
 		for item: Dictionary in RoomManifest.items_for(room):
-			if _lay(r, item, room, cols, keep, cells, of, colour, filaments):
-				laid += 1
+			var parts := RoomManifest.parts_of(String(item.type))
+			for q in 4:
+				if _lay(r, item.cell, turned(parts, int(item.get("yaw", 0)) + q), room, cols, keep, cells, of,
+						colour, filaments):
+					laid += 1
+					turns += 1 if posmod(int(item.get("yaw", 0)) + q, 4) != 0 else 0
+					break
 	if of.size() == r.size() and r.meta.has("sections"):
 		BuildSections.rerecord(r, of)
-	r.meta["furniture"] = {"from": first, "items": laid}
+	r.meta["furniture"] = {"from": first, "items": laid, "turned": turns}
 	return laid
 
 
@@ -145,14 +155,36 @@ static func _keep_clear(cols: Dictionary, lo: Vector2i, hi: Vector2i, y: int, do
 	return keep
 
 
+## An item's parts (RoomManifest's rows) turned `k` quarter turns about +Y in
+## the box they fill, its min corner kept: each part's cell as BuildRecipe.turned
+## moves a block, its name turned as the palette turns it.
+static func turned(parts: Array, k: int) -> Array:
+	k = posmod(k, 4)
+	if k == 0 or parts.is_empty():
+		return parts
+	var d := Vector3i.ZERO
+	for part: Array in parts:
+		d = d.max((part[1] as Vector3i) + BuildRecipe.part_size(String(part[0])))
+	var out := []
+	for part: Array in parts:
+		var n := String(part[0])
+		var at := BuildRecipe._turn_box(part[1], BuildRecipe.part_size(n), d, k)
+		for q in k:
+			var t := BrickPalette.turn(n)
+			n = t if t != "" else n
+		var row := part.duplicate()
+		row[0] = n
+		row[1] = at
+		out.append(row)
+	return out
+
+
 ## One item's bricks, all or none: every cell free and in the room, kept clear
 ## of the lanes, and a floor brick under it to hold it.
-static func _lay(r: BuildRecipe, item: Dictionary, room: Room, cols: Dictionary, keep: Dictionary,
+static func _lay(r: BuildRecipe, at: Vector3i, parts: Array, room: Room, cols: Dictionary, keep: Dictionary,
 		cells: Dictionary, of: PackedInt32Array, colour: int, filaments: int) -> bool:
-	var parts := RoomManifest.parts_of(String(item.type))
 	if parts.is_empty():
 		return false
-	var at: Vector3i = item.cell
 	var under := -1
 	var want := {}
 	for part: Array in parts:
