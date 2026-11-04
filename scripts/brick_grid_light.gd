@@ -28,6 +28,10 @@ const LAMP_STEP := 24
 const RENDER_LAYER := 1 << 10
 
 var texture: Texture2DArray
+## Put the lit bricks on RENDER_LAYER (where ambient boxes stand, so the box
+## leaves them to the grid). The city has no boxes, and its near tier hides a
+## band by its layers: it leaves layers alone.
+var use_layer := true
 ## Every material bound to a grid, and whether the grid's sky shades it (off
 ## under SDFGI, which shades rooms itself: LightRig.apply_gi).
 static var _materials: Array = []
@@ -49,6 +53,7 @@ class Entry:
 
 var _entries := {}
 var _free: Array[int] = []
+var _turn := -1
 
 
 func _init() -> void:
@@ -122,17 +127,21 @@ func release(key) -> void:
 		_apply_all(e)
 
 
-## Once a frame: drop what has gone; light again the first one changed.
+## Once a frame: drop what has gone; ask one building in turn whether its
+## bricks changed (counting them walks every block: all sixteen a frame was
+## too much in a city), and light it again if they did.
 func step() -> void:
 	for key in _entries.keys():
 		var e: Entry = _entries[key]
 		if not is_instance_valid(e.node) or not e.node.is_inside_tree():
 			release(key)
-	for key in _entries:
-		var e: Entry = _entries[key]
-		if e.bricks.get_alive_block_count(e.chunk) != e.alive:
-			_light(e)
-			return
+	if _entries.is_empty():
+		return
+	var keys := _entries.keys()
+	_turn = (_turn + 1) % keys.size()
+	var e: Entry = _entries[keys[_turn]]
+	if e.bricks.get_alive_block_count(e.chunk) != e.alive:
+		_light(e)
 
 
 ## Sky and lamp (0..1 each) at world point `at`, from the nearest cell of the
@@ -180,6 +189,7 @@ func _light(e: Entry) -> void:
 
 
 func _apply_all(e: Entry) -> void:
+	_apply(e, e.node)
 	for c in e.node.get_children():
 		_apply(e, c)
 
@@ -193,4 +203,12 @@ func _apply(e: Entry, c: Node) -> void:
 	if g == null:
 		return
 	g.set_instance_shader_parameter(&"grid_light", e.param)
-	g.layers = RENDER_LAYER if e.param.x >= 0.0 else 1
+	if use_layer:
+		g.layers = RENDER_LAYER if e.param.x >= 0.0 else 1
+	# What stands in for a band close up (BrickNear's chamfered mesh) is its
+	# child, with the band's material.
+	if g != e.node:
+		for k in g.get_children():
+			var n := k as GeometryInstance3D
+			if n != null and n.material_override == g.material_override:
+				n.set_instance_shader_parameter(&"grid_light", e.param)
