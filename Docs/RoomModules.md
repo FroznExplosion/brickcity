@@ -624,7 +624,7 @@ takes its furniture; each new brick is in the section of the floor under it (`me
 
 `ship_build_probe` (4): on 8 seeds 44-107 items, none in a doorway or the cells beside one (with the
 lanes off it finds 9-17 such cells a seed), nothing loose, every brick in a section.
-`station_sections_probe` (6) as before, the station regrown with its furniture. `--gate=hull` (12):
+`station_sections_probe` (6) as before, the station regrown with its furniture. `--gate=hull` (12, now 14 with the consoles and windows):
 241 furniture bricks; shot `hull_gate_room` from the middle of its most furnished room (cargo:
 crates). A station of 16 spaces got 8 items (its core and two pods).
 

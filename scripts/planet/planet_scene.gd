@@ -3388,6 +3388,17 @@ func _run_hull_gate() -> void:
 	_check("its bricks solid again round its pilot in the air, every brick, nothing loose", ship.chunk >= 0 and not ship.riding
 			and ship.bricks.get_alive_block_count(ship.chunk) == laid and loose.is_empty(),
 			"%d loose group(s)" % loose.size())
+	# The bridge's consoles (ShipBuild._consoles, Docs/RoomModules.md 7.11): looked at
+	# from the seat, fore (the recipe's +X).
+	var con: Dictionary = ship.recipe.meta.get("consoles", {})
+	_check("the bridge's consoles, fore of the seat", int(con.get("bricks", 0)) > 0,
+			"%d console brick(s)" % int(con.get("bricks", 0)))
+	var s_org := ship.recipe.origin()
+	var s_at := ship.global_transform * ship.cell_point(ship.seat_cell - s_org)
+	var fore := ship.global_transform * ship.cell_point(ship.seat_cell + Vector3i(6, 0, 0) - s_org) - s_at
+	_face(Gravity.flat(fore, Gravity.up_at(s_at)).normalized())
+	cam.global_transform.basis = cam.global_transform.basis * Basis(Vector3.RIGHT, -0.3)
+	await get_tree().create_timer(0.3).timeout
 	await _shot("hull_gate_bridge")
 	# Its rooms furnished (KitFurnish): looking aft across the bridge from the seat.
 	var from := int((ship.recipe.meta.get("furniture", {}) as Dictionary).get("from", ship.recipe.size()))
