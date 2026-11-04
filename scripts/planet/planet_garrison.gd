@@ -29,6 +29,15 @@ const WAVE_FROM := 70.0
 const HEARD_PAST := 15.0
 ## Metres between soldiers as they are set down.
 const SPACING := 1.4
+## Who comes, by wave (UnitCatalog's built foot units, as the city's waves field
+## them): the first all rifles, each after it a wider mix. A generated town's
+## one squad is the second.
+const WAVE_KINDS := [
+	[&"rifleman"],
+	[&"rifleman", &"rifleman", &"assault"],
+	[&"rifleman", &"assault", &"breacher", &"veteran"],
+	[&"rifleman", &"assault", &"breacher", &"veteran", &"marksman"],
+]
 ## How long to wait for the ground under them, milliseconds.
 const GROUND_WAIT := 30000
 const LOOK_EVERY := 0.5
@@ -138,7 +147,7 @@ func to_save() -> Dictionary:
 	var left := []
 	if squad != null:
 		for m in squad.alive():
-			left.append([body.to_local(m.pawn.feet()), m.pawn.health.total_current()])
+			left.append([body.to_local(m.pawn.feet()), m.pawn.health.total_current(), str(m.get_meta(&"unit", &"rifleman"))])
 	return {"town": town, "wave": wave, "left": left, "ai_town": ai_town,
 			"next_in": maxf(next_wave - Time.get_ticks_msec() / 1000.0, 0.0)}
 
@@ -276,12 +285,20 @@ func _spawn() -> void:
 	if not _left.is_empty():
 		count = _left.size()
 	var net := s.nav_net as PlanetNavNet
+	var mix: Array = WAVE_KINDS[mini(wave - 1 if waves else 1, WAVE_KINDS.size() - 1)]
 	for k in count:
 		var p := net.snap(at + side * (k - (count - 1) * 0.5) * SPACING + up * 0.3)
+		var kind: StringName = mix[rng.randi() % mix.size()]
 		if not _left.is_empty():
 			p = body.global_transform * (_left[k][0] as Vector3)
-		var gun := GunInstance.from_result(GunGenerator.generate(lib, rng.randi_range(1, 9999), WeaponClass.builtin(&"rifle"), 1))
+			kind = StringName(_left[k][2]) if (_left[k] as Array).size() > 2 else &"rifleman"
+		var unit := UnitCatalog.get_unit(kind)
+		var gun := GunInstance.from_result(GunGenerator.generate(lib, rng.randi_range(1, 9999),
+				WeaponClass.builtin(StringName(unit.weapon)), 1))
 		var so := Soldier.spawn(s, _troops, p + Gravity.up_at(p) * 0.1, 1, gun)
+		so.set_meta(&"unit", kind)
+		so.max_health = UnitCatalog.apply_health(so.pawn.health, kind, 1)
+		so.set_type(str(unit.get("recipe", "")), Roster.shared())
 		PlanetBody.track(so.pawn.body)
 		soldiers.append(so)
 		if not _left.is_empty():

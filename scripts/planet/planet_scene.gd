@@ -3789,6 +3789,7 @@ func _run_home_gate() -> void:
 	await _shot("home_gate_fight")
 	var sizes: Array[int] = []
 	var nearest := INF
+	var kinds := {}
 	for n in range(2, 5):
 		for m in g.squad.alive():
 			m.pawn.health.apply_impact(1e6, &"")
@@ -3804,7 +3805,9 @@ func _run_home_gate() -> void:
 		sizes.append(g.squad.alive().size())
 		for m in g.squad.alive():
 			nearest = minf(nearest, m.pawn.feet().distance_to(pawn.feet()))
+			kinds[m.get_meta(&"unit", &"")] = true
 	_check("each wave bigger, to the most", str(sizes) == "[6, 8, 8]", str(sizes))
+	_check("later waves bring more than rifles", kinds.size() >= 3, ", ".join(kinds.keys()))
 	_check("none on the player's head", nearest > 40.0, "%.0f m" % nearest)
 	var came := nearest
 	t0 = Time.get_ticks_msec()
