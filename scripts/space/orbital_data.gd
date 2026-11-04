@@ -27,5 +27,7 @@ extends Resource
 @export var fz := 40
 @export var courses := 18
 @export var colour := Color(0.8, 0.8, 0.82)
-## Down on its deck, m/s^2 (artificial gravity).
+## Down on its deck, m/s^2 (artificial gravity), while its generator is on.
 @export var gravity := 9.8
+## Its gravity generator on (Docs/RoomModules.md 7.12): off, nothing pulls in it.
+@export var gravity_on := true

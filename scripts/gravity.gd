@@ -20,7 +20,97 @@ static var planet: Node3D = null
 static var planet_strength := 9.8
 
 
-## The project's gravity, m/s^2 (physics/3d/default_gravity); the planet's on one.
+# --- fields of their own (Docs/RoomModules.md 7.12) -------------------------
+#
+# A working ship's or station's generator pulls inside its own boxes, toward a
+# centre of its own, over whatever is outside -- a planet's, or nothing in open
+# space. A piece broken off one is a field where nothing pulls. The first field
+# that holds a point is its gravity; outside them all, the planet's. PlanetSystem
+# sets them every tick; none in the flat game or a planet without its system.
+
+## A field: boxes in `space`'s frame (`local` of it), pulling `pull` m/s^2
+## toward `centre`, `radius` under which is its datum (height_of). No centre:
+## nothing pulls in it.
+class Field:
+	var space: Node3D
+	var local := Transform3D()
+	var boxes: Array[AABB] = []
+	var centre: Node3D
+	var pull := 0.0
+	var radius := 0.0
+
+	func holds(p: Vector3) -> bool:
+		if space == null or not is_instance_valid(space):
+			return false
+		var l := (space.global_transform * local).affine_inverse() * p
+		for b: AABB in boxes:
+			if b.has_point(l):
+				return true
+		return false
+
+	func pulls() -> bool:
+		return centre != null and is_instance_valid(centre) and pull > 0.0
+
+
+static var fields: Array[Field] = []
+## What pulls outside every field, m/s^2; below zero, `strength()` does.
+static var outside_pull := -1.0
+
+
+## The field world point `p` is in; null outside them all.
+static func field_at(p: Vector3) -> Field:
+	for f: Field in fields:
+		if f.holds(p):
+			return f
+	return null
+
+
+## How hard gravity pulls at world point `p`, m/s^2: its field's, else what pulls
+## outside them. 0: nothing does (open space, a piece broken off, a generator off).
+static func pull_at(p: Vector3) -> float:
+	var f := field_at(p)
+	if f != null:
+		return f.pull if f.pulls() else 0.0
+	return outside_pull if outside_pull >= 0.0 else strength()
+
+
+## Anything pulling at `p`. In the flat game, always.
+static func pulls_at(p: Vector3) -> bool:
+	return pull_at(p) > 0.0
+
+
+## While pinned (`pin`), the frame every down, up and height is taken in.
+static var _pinned: Array = []
+
+
+## Take every down, up and height in the frame at `p` until `unpin`: a body's
+## move compares points a step apart, which at a field's edge are in two frames
+## whose heights are over two datums. Only the down's frame -- what pulls is
+## still each point's own.
+static func pin(p: Vector3) -> void:
+	_pinned = []
+	_pinned = _centre_at(p)
+
+
+static func unpin() -> void:
+	_pinned = []
+
+
+## The node `p`'s down points to and its datum's radius: its field's centre, or
+## the planet's. [null, 0] for the flat game's -Y.
+static func _centre_at(p: Vector3) -> Array:
+	if not _pinned.is_empty():
+		return _pinned
+	var f := field_at(p) if not fields.is_empty() else null
+	if f != null and f.pulls():
+		return [f.centre, f.radius]
+	if planet != null and is_instance_valid(planet):
+		return [planet, planet_radius]
+	return [null, 0.0]
+
+
+## The project's gravity, m/s^2 (physics/3d/default_gravity); the planet's on one
+## -- where the player is (PlanetSystem): a ship's own inside it.
 static func strength() -> float:
 	if planet != null:
 		return planet_strength
@@ -29,10 +119,12 @@ static func strength() -> float:
 	return _strength
 
 
-## Unit vector down at a world point: toward the planet's centre on one.
+## Unit vector down at a world point: toward the planet's centre on one, its
+## field's inside one.
 static func down_at(p: Vector3) -> Vector3:
-	if planet != null and is_instance_valid(planet):
-		var d := planet.global_position - p
+	var c: Node3D = _centre_at(p)[0]
+	if c != null:
+		var d := c.global_position - p
 		if d.length_squared() > 1e-6:
 			return d.normalized()
 	return Vector3.DOWN
@@ -40,9 +132,7 @@ static func down_at(p: Vector3) -> Vector3:
 
 ## Unit vector up at a world point: away from the ground.
 static func up_at(p: Vector3) -> Vector3:
-	if planet != null and is_instance_valid(planet):
-		return -down_at(p)
-	return Vector3.UP
+	return -down_at(p)
 
 
 # --- one up, everywhere (Docs/Planets.md 11.7) ------------------------------
@@ -91,14 +181,15 @@ static var planet_radius := 0.0
 
 
 static func height_of(p: Vector3) -> float:
-	if planet != null and is_instance_valid(planet):
-		return (p - planet.global_position).length() - planet_radius
+	var c: Array = _centre_at(p)
+	if c[0] != null:
+		return (p - (c[0] as Node3D).global_position).length() - float(c[1])
 	return p.y
 
 
 ## `p` moved along its up to stand at height `h` (was `Vector3(p.x, h, p.z)`).
 static func lift_to(p: Vector3, h: float) -> Vector3:
-	if planet != null and is_instance_valid(planet):
+	if _centre_at(p)[0] != null:
 		return p + up_at(p) * (h - height_of(p))
 	return Vector3(p.x, h, p.z)
 
@@ -106,6 +197,8 @@ static func lift_to(p: Vector3, h: float) -> Vector3:
 ## How high the GROUND stands under a world point, over the datum: the
 ## planet's own height field. NAN off a planet (there the AI asks its grid).
 static func ground_height(p: Vector3) -> float:
+	if not fields.is_empty() and field_at(p) != null:
+		return NAN
 	if planet != null and is_instance_valid(planet) and planet.has_method(&"ground_height"):
 		return planet.call(&"ground_height", p)
 	return NAN
@@ -131,6 +224,22 @@ static func carry(b: Basis, up: Vector3) -> Basis:
 	if y.is_equal_approx(up):
 		return b
 	return Basis(Quaternion(y, up)) * b
+
+
+## `carry`, turning at most `max_angle` (radians) of the way: a body coming
+## into a new down -- off a ship's deck into a planet's air -- rights itself
+## over a moment instead of in a tick (zylanntest's PlayerController
+## _orient_toward). Exactly `carry` once within `max_angle`.
+static func carry_toward(b: Basis, up: Vector3, max_angle: float) -> Basis:
+	var y := b.y.normalized()
+	var ang := y.angle_to(up)
+	if ang <= max_angle:
+		return carry(b, up)
+	var axis := y.cross(up)
+	if axis.length_squared() < 1e-8:
+		# Head down: over the body's own right.
+		axis = b.x.normalized()
+	return Basis(axis.normalized(), max_angle) * b
 
 
 ## The project's gravity as a vector at a world point.

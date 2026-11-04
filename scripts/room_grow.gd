@@ -41,6 +41,12 @@ const STEP_RISES := [2, 3]
 ## The bricks a cap is laid in, longest first: a course of them along the
 ## doorway, every other course started with a short one (a running bond).
 const CAP_RUNS := [6, 4, 2, 1]
+## A ladder (Docs/RoomModules.md 7.13), where a stair's flight has no floor: studs
+## across; the climb's room in front of it, studs out (cut through the slab over
+## it); a rung every LADDER_EVERY plates.
+const LADDER_W := 2
+const LADDER_ROOM := 2
+const LADDER_EVERY := 4
 
 var lib: Array
 var p: Dictionary
@@ -58,6 +64,7 @@ var exit := -1          ## open index of the finish's way out
 var _starts := []       ## modules that can start a building (role or link)
 var _finishes := []     ## and finish one
 var _hangers := false   ## the library has modules made to hang off a wall (role hang)
+var ladders := []       ## [{at, facing, w, h}] (Ladder): the plan's, world cells
 ## The roles a generator grows with (RoomStation sets its own): the path's
 ## modules, the branches', what starts and what finishes a building.
 var path_roles := ["room", "corridor", "stair"]
@@ -559,7 +566,7 @@ func _finish(loops: int) -> Dictionary:
 			"entrance": _plain(open[entrance]) if entrance >= 0 else {},
 			"exit": _plain(open[exit]) if exit >= 0 else {},
 			"caps": caps.map(func(i) -> Dictionary: return _plain(open[i])),
-			"cuts": cut_cells, "adds": adds, "window_style": style, "doors": doors,
+			"cuts": cut_cells, "adds": adds, "window_style": style, "doors": doors, "ladders": ladders,
 			"section_bricks": int(p.section_bricks),
 			"stats": {"modules": placed.size(), "path": path.size(), "joins": joins.size(),
 				"loops": loops, "caps": caps.size(), "balconies": balconies, "doors": doors.size(),
@@ -682,9 +689,11 @@ func _stair_under(oi: int, m: int, t: int, ci: int, off: Vector3i) -> bool:
 	var upper := [sb, off] if String(a.kind) == "stair_up" else [sa, pa.off]
 	var h := int(upper[0].floor_y) + (upper[1] as Vector3i).y - int(lower[0].floor_y) - (lower[1] as Vector3i).y
 	var flight := _flight(lower[0], lower[1], lower[2], h)
-	if flight.is_empty():
-		return true
 	var u_off: Vector3i = upper[1]
+	if flight.is_empty():
+		# No floor for a flight: a ladder, when one fits under the upper room.
+		var lad := _ladder_way(lower[0], lower[1], lower[2])
+		return lad.is_empty() or _ladder_under(lad, upper[0], u_off)
 	for c: Vector2i in flight[1]:
 		if not (upper[0].cols as Dictionary).has(c - Vector2i(u_off.x, u_off.z)):
 			return false
@@ -732,6 +741,24 @@ func _stair(cuts: Dictionary, adds: Array, lower: Dictionary, upper: Dictionary)
 		return
 	var link: Vector3i = lower.at
 	var colour := int(lib[lp.m].turns[lp.t].colour)
+	if _flight(ls, loff, link, h).is_empty():
+		# No floor for a flight: a ladder up through a hole in front of it.
+		var lad := _ladder_way(ls, loff, link)
+		if lad.is_empty() or not _ladder_under(lad, us, up.off):
+			return
+		var f := int(lad[0])
+		var fd: Vector2i = StructureSpaces.FACINGS[f]
+		var out := Vector3i(fd.x, 0, fd.y)
+		var across := Vector3i(absi(fd.y), 0, absi(fd.x))
+		var foot := Vector3i(link.x, floor_lo + 1, link.z)
+		ladder_adds(adds, foot, f, LADDER_W, ceil_lo - floor_lo - 1, colour)
+		ladders.append({"at": [foot.x, foot.y, foot.z], "facing": f, "w": LADDER_W, "h": h})
+		for k in range(1, LADDER_ROOM + 1):
+			for x in LADDER_W:
+				var c := foot + out * k + across * x
+				for cy in range(ceil_lo, floor_up + 1):
+					cuts[Vector3i(c.x, cy, c.z)] = true
+		return
 	for step: int in STEP_RISES:
 		var n := ceili(float(h) / step)
 		for f in 4:
@@ -761,6 +788,82 @@ func _stair(cuts: Dictionary, adds: Array, lower: Dictionary, upper: Dictionary)
 						for cy in range(ceil_lo, floor_up + 1):
 							cuts[Vector3i(c2.x, cy, c2.y)] = true
 			return
+
+
+## A ladder from lower space `ls` (its module at `loff`) at the link `link`: the
+## first facing its rungs (at the link), rails (a stud behind), climb room
+## (LADDER_ROOM out) and the stud behind the rails (where its top lands) all
+## stand on the lower room's floor. [facing, world columns of the climb room,
+## world columns behind it] or [] for none.
+func _ladder_way(ls: Dictionary, loff: Vector3i, link: Vector3i) -> Array:
+	for f in 4:
+		var fd: Vector2i = StructureSpaces.FACINGS[f]
+		var across := Vector2i(absi(fd.y), absi(fd.x))
+		var room := []
+		var rest := []
+		for x in LADDER_W:
+			var c := Vector2i(link.x, link.z) + across * x
+			for k in range(1, LADDER_ROOM + 1):
+				room.append(c + fd * k)
+			for k in range(-2, 1):
+				rest.append(c + fd * k)
+		if (room + rest).all(func(c: Vector2i) -> bool:
+				return (ls.cols as Dictionary).has(c - Vector2i(loff.x, loff.z))):
+			return [f, room, rest]
+	return []
+
+
+## The ladder `lad` (_ladder_way) opens into upper space `us` (at `uoff`): its
+## climb room under the upper room, and the floor its top lands on.
+func _ladder_under(lad: Array, us: Dictionary, uoff: Vector3i) -> bool:
+	for c: Vector2i in (lad[1] as Array) + (lad[2] as Array):
+		if not (us.cols as Dictionary).has(c - Vector2i(uoff.x, uoff.z)):
+			return false
+	return true
+
+
+## A ladder's bricks into `adds` (Docs/RoomModules.md 7.13): its rungs' row `w`
+## studs across from `foot` (the face's first column at its foot), rails of 1x1
+## bricks a stud behind it (against `facing`), `h` plates up; every LADDER_EVERY
+## plates down from its top a rung -- plates two studs deep over the rails and
+## out of them -- so each rung is held by the rails, the rails by the rungs and
+## the floor. `skip`: rail cells something else stands in (a tie), left out.
+static func ladder_adds(adds: Array, foot: Vector3i, facing: int, w: int, h: int, colour: int, material := 0,
+		skip := {}) -> void:
+	var fd: Vector2i = StructureSpaces.FACINGS[facing]
+	var out := Vector3i(fd.x, 0, fd.y)
+	var across := Vector3i(absi(fd.y), 0, absi(fd.x))
+	var back := foot - out
+	var deep := "plate_1x2" if fd.x == 0 else BrickPalette.turn("plate_1x2")
+	var rung := {}
+	var y := h - 1
+	while y >= 0:
+		rung[y] = true
+		y -= LADDER_EVERY
+	for x in w:
+		var rail := back + across * x
+		y = 0
+		while y < h:
+			if rung.has(y) or skip.has(rail + Vector3i(0, y, 0)):
+				y += 1
+				continue
+			var run := 0
+			while y + run < h and not rung.has(y + run) and not skip.has(rail + Vector3i(0, y + run, 0)):
+				run += 1
+			var brick := run >= 3
+			adds.append(["brick_1x1" if brick else "plate_1x1", rail + Vector3i(0, y, 0), colour, material])
+			y += 3 if brick else 1
+	for ry: int in rung:
+		var x := 0
+		while x < w:
+			var a := back + across * x + Vector3i(0, ry, 0)
+			var b := foot + across * x + Vector3i(0, ry, 0)
+			if x + 1 < w:
+				adds.append(["plate_2x2", a.min(b + across), colour, material])
+				x += 2
+			else:
+				adds.append([deep, a.min(b), colour, material])
+				x += 1
 
 
 ## A balcony on its spot, if nothing is where it goes: a slab at the room's floor
@@ -923,6 +1026,12 @@ static func lay(library: Array, plan: Dictionary, on_ground := false) -> BuildRe
 		lifts.append(BuildLifts.record(lo, lf.size, (lf.stops as Array).map(func(y) -> int: return int(y) + shift.y)))
 	if not lifts.is_empty():
 		out.meta["lifts"] = lifts
+	var lads := []
+	for ld: Dictionary in plan.get("ladders", []):
+		var at := BuildRecipe.cell_from(ld.at) + shift
+		lads.append({"at": [at.x, at.y, at.z], "facing": int(ld.facing), "w": int(ld.w), "h": int(ld.h)})
+	if not lads.is_empty():
+		out.meta["ladders"] = lads
 	out.meta["generated"] = {"generator": "grow", "seed": int(plan.seed), "stats": plan.stats,
 			"modules": plan.placed.map(func(pl) -> String: return String(library[pl.m].name)),
 			"window_style": plan.window_style}

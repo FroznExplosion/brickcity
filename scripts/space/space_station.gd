@@ -25,6 +25,9 @@ const SECTION_BRICKS := 2000
 ## A loose group over this many bricks leaves whole, as a drifting piece
 ## (Planets.md 11.12 step 6); smaller, crumbs.
 const DRIFT_MIN := 20
+## Its gravity's boxes grown this much past its bricks, m: a jump off its roof
+## (the pawn's held jump clears four bricks, 1.7 m) still comes back down on it.
+const FIELD_GROW := 2.0
 
 ## A loose group left: its mesh `arrays`, drawn from `local_com` back; the world
 ## transform of its centre of mass; how many bricks.
@@ -39,6 +42,8 @@ var wreck: Node3D
 ## Laying its bricks only to leave `wreck` (lay_wreck).
 var _wreck_only := false
 var gravity_centre: Node3D
+## Its generator's field (Gravity.Field; Docs/RoomModules.md 7.12), made once.
+var _field: Gravity.Field
 var brick_material: ShaderMaterial
 ## The module's corner, in the station's frame: its floor at y 0, centred.
 var frame := Transform3D()
@@ -157,6 +162,47 @@ func is_station() -> bool:
 	return data.kind != "satellite"
 
 
+## Its own gravity pulls (Docs/RoomModules.md 7.12): a working station or ship --
+## not a satellite, not a wreck -- with its generator on.
+func pulls() -> bool:
+	return is_station() and data.gravity_on and data.gravity > 0.0 and wreck == null
+
+
+## Its generator on or off.
+func set_gravity(on: bool) -> void:
+	data.gravity_on = on
+	print("[station] %s: gravity generator %s" % [data.orbital_name, "on" if on else "off"])
+
+
+## Its field: its gravity inside its boxes -- a box round each section of a
+## generated one (BuildSections), its module's box for a tower's -- grown by
+## FIELD_GROW, so standing on its floor, its roof or in a doorway, or jumping
+## off its roof, is in it.
+## Null while it does not pull.
+func gravity_field() -> Gravity.Field:
+	if not pulls() or gravity_centre == null:
+		return null
+	if _field == null:
+		_field = Gravity.Field.new()
+		_field.space = self
+		_field.centre = gravity_centre
+		_field.radius = DEPTH
+	if _field.boxes.is_empty() or _field.local != frame:
+		_field.local = frame
+		_field.boxes.clear()
+		var cell := Vector3(BrickWorld.get_stud_metres(), BrickWorld.get_plate_metres(), BrickWorld.get_stud_metres())
+		if recipe != null and recipe.meta.has("sections"):
+			var org := recipe.origin()
+			for s: Dictionary in recipe.meta.sections.sections:
+				var lo := Vector3(BuildRecipe.cell_from(s.lo) - org) * cell
+				var hi := Vector3(BuildRecipe.cell_from(s.hi) - org + Vector3i.ONE) * cell
+				_field.boxes.append(AABB(lo, hi - lo).grow(FIELD_GROW))
+		else:
+			_field.boxes.append(AABB(Vector3.ZERO, Vector3(data.fx * cell.x, height, data.fz * cell.z)).grow(FIELD_GROW))
+	_field.pull = data.gravity
+	return _field
+
+
 ## Two solar wings, either side along X, `span` long, from `x0` out.
 func _panels(x0: float, y: float, span: float, wide: float) -> void:
 	var mat := StandardMaterial3D.new()
@@ -268,6 +314,8 @@ func activate() -> void:
 		add_child(doors)
 		lifts = BuildLifts.new(bricks, src)
 		add_child(lifts)
+		# Its ladders to climb (Ladder), in its bricks' frame.
+		Ladder.place(_brick_node, recipe)
 	crumbs = PlanetCrumbs.new()
 	add_child(crumbs)
 	crumbs.setup(gravity_centre)

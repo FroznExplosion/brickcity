@@ -30,11 +30,9 @@ var dying := -1.0
 ## carried); none for a piece nobody was on.
 var riders: Array = []
 var body := RID()
-## Its own down for whoever stands on it (Docs/RoomModules.md 7.8): the station's
-## gravity centre where it was when the piece left, a child of `node`, so it
-## turns as the piece does; its pull the station's. Null for a piece nobody was on.
-var grav: Node3D
-var pull := 0.0
+## Nothing pulls on it (Docs/RoomModules.md 7.8, 7.12): broken off, it has no
+## generator. Its box as a Gravity.Field with no centre, made once.
+var void_field: Gravity.Field
 ## Its bricks (ChunkRecord.to_data) and who made it, whose world names its
 ## parts: what a save keeps of it (PlanetSystem.drifts_to_save).
 var record := {}

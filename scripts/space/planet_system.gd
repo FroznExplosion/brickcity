@@ -487,12 +487,6 @@ func _on_drifted(arrays: Array, com: Transform3D, local_com: Vector3, count: int
 	e.material = material
 	e.draw_at = -local_com
 	_drift_node(e, arrays, com)
-	if e.body.is_valid() and from.gravity_centre != null:
-		e.grav = Node3D.new()
-		e.grav.name = "Down"
-		e.node.add_child(e.grav)
-		e.grav.position = com.affine_inverse() * from.gravity_centre.global_position
-		e.pull = from.data.gravity
 	print("[system] %d bricks of %s drift off%s" % [count, name_of(from),
 			"" if e.riders.is_empty() else ", %d aboard" % e.riders.size()])
 
@@ -963,33 +957,74 @@ func _shadows_on(b: PlanetBody) -> void:
 	b.set_shadowers(list, asin(clampf(sys.star_radius / ds, 0.0, 1.0)), rig.star_colour if rig != null else sys.star_color)
 
 
+## Which way is down and how hard (Docs/RoomModules.md 7.12). A working ship's
+## or station's generator pulls inside it, over its planet's (a ship parked on
+## one) or nothing (open space, round a station); a piece broken off one pulls
+## nothing, whoever stands on it. Outside every field: the planet whose shell
+## this is, else nothing -- the nearest body only says which way is down.
+## Gravity.strength() is what pulls where the player is.
 func _gravity() -> void:
-	# On a piece adrift that someone rode off on: its own down, turning with it.
-	if observer.is_valid() and not drifts.is_empty():
-		var p: Vector3 = observer.call()
+	var p: Variant = observer.call() if observer.is_valid() else null
+	var fs: Array[Gravity.Field] = []
+	if p != null:
 		for e: Drift in drifts:
-			if e.grav != null and e.body.is_valid() and _on_piece(e, p):
-				Gravity.planet = e.grav
-				Gravity.planet_strength = e.pull
-				Gravity.planet_radius = SpaceStation.DEPTH
-				return
+			if e.node != null and _on_piece(e, p):
+				fs.append(_void_of(e))
+	for s: SpaceStation in _builds():
+		var f := s.gravity_field() if s.chunk >= 0 or s == frame_node() else null
+		if f != null:
+			fs.append(f)
+	Gravity.fields = fs
 	var on := frame_node()
 	if on is SpaceStation:
+		# Round a station or a ship in open space, outside it: nothing.
 		Gravity.planet = (on as SpaceStation).gravity_centre
-		Gravity.planet_strength = (on as SpaceStation).data.gravity
 		Gravity.planet_radius = SpaceStation.DEPTH
-		return
-	var g := anchor
-	# Past every shell nothing pulls: the nearest body only says which way is down.
-	var pull := 1.0
-	if g == null and observer.is_valid():
-		g = nearest(observer.call())
-		pull = 0.0
-	if g == null:
-		return
-	Gravity.planet = g
-	Gravity.planet_strength = g.data.gravity_strength * pull
-	Gravity.planet_radius = g.data.radius
+		Gravity.outside_pull = 0.0
+	else:
+		var g := anchor
+		var pull := 1.0
+		if g == null and p != null:
+			g = nearest(p)
+			pull = 0.0
+		if g == null:
+			return
+		Gravity.planet = g
+		Gravity.planet_radius = g.data.radius
+		Gravity.outside_pull = g.data.gravity_strength * pull
+	Gravity.planet_strength = Gravity.pull_at(p) if p != null else Gravity.outside_pull
+
+
+## Every ship and station of the system.
+func _builds() -> Array[SpaceStation]:
+	var out: Array[SpaceStation] = []
+	out.append_array(ships)
+	out.append_array(stations)
+	return out
+
+
+## A piece adrift as a field where nothing pulls: its box, grown as _on_piece's.
+func _void_of(e: Drift) -> Gravity.Field:
+	if e.void_field == null:
+		e.void_field = Gravity.Field.new()
+		e.void_field.space = e.node
+	e.void_field.boxes.clear()
+	if e.look == null:
+		e.void_field.boxes.append(AABB(-Vector3.ONE * 6.0, Vector3.ONE * 12.0))
+	else:
+		var box := e.look.mesh.get_aabb()
+		box.position += e.draw_at
+		e.void_field.boxes.append(box.grow(2.0))
+	return e.void_field
+
+
+## The ship or station whose generator works where world `p` is (on or off),
+## null for none: G turns it on and off.
+func generator_at(p: Vector3) -> SpaceStation:
+	for s: SpaceStation in _builds():
+		if s.is_station() and s.wreck == null and (s.chunk >= 0 or s == frame_node()) and s.holds(p):
+			return s
+	return null
 
 
 ## A station's field first (it is in its planet's shell), then the planets'.

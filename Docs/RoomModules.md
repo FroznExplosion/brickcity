@@ -402,12 +402,35 @@ the higher end its tie is right under that module's wall, inside the top step, w
 and over it. `stats.stairs`. They are rare: ports at two heights mostly face each other 3-6 studs
 apart, too short for 20 plates of stair (one station in 30-40).
 
-`room_station_probe` (11): *levels* -- every stair join of the 10 seeds (4) and a stair tube
-(searched for in seeds 11-40) walked by a figure 12 plates tall stepping at most a brick up; the
-wings check keeps every stacked module of a column.
+**Ladders** (built 2026-11-04, 7.13). The kit has a *ladder node* too (6 x 6, doors all round, a
+stair link up at its middle; at most one, weight 0.25 -- the stair node's now as well, so a second
+level is still about one station in two, and loops as common as before): too small for a stair's
+flight, it gets a ladder up through a hole to the deck on it. Any stair join whose lower room has no
+floor for a flight takes a ladder the same way (`RoomGrow._ladder_way`: two studs across at the
+link, its rails a stud behind, two studs of climb room in front, cut through the slab over it; the
+upper room over the climb room and over the stud behind the rails, where its top lands -- checked
+before the join, as a stair's flight is, `_ladder_under`). A bridging tube between two levels too
+short for a stair's flight but `LADDER_GAP` (5) long or more has a ladder under the higher doorway,
+its rails against that module's wall, its top rung the doorway's sill (`stats.tube_ladders`; the
+tie in its rails, `held`, stands in for a rail's plate). `meta.ladders`, `stats.ladders`.
 
-Not yet: a ladder (a short gap between levels; nothing climbs one); the abstract look is the
-modules' own (round pods where the user builds them round). A colour band: 7.10.
+Found on the way, in layouts the new modules made: a tube's end over a module below is tied on
+its doorway's sill (a 2x2 tile over the tube's floor and the module's) where the tie under would
+land in the module's ceiling (`stats.sills`); an odd length of a tube's two-layer slab ran its
+upper layer short and left its last row a column of 1x1 plates, held by nothing (the walls on it
+came loose) -- the upper layer now runs to the far edge and a single row is 1x2s; and a section
+stacked on another (a deck on a node) shares a joint only in the cells under it (BuildSections
+`_joints`), so cut off it keeps its floor's two layers and leaves whole.
+
+`room_station_probe` (11): *levels* -- every stair join of the 10 seeds (7, six by a ladder) and a
+tube between two levels, one with a ladder (searched for in seeds 11-80), walked from the lower end
+by a figure 12 plates tall stepping at most a brick up, or climbing a ladder (its climb room clear
+for the figure all the way up, its rails there, its top landing on a floor); the wings check keeps
+every stacked module of a column and leaves a ladder's rungs out; the bridging check takes a sill's
+tile as the step it is.
+
+The abstract look is the modules' own (round pods where the user builds them round). A colour
+band: 7.10.
 
 ### 7.3 Stations in space (stage 10, built 2026-10-31)
 
@@ -664,16 +687,15 @@ they were on it, still standing. (On home's station, a tower, a storey's rows cu
 few hundred bricks but not the roof the walker stood on.) Shots `adrift_gate_*` (the station is on the night side: dark). Home's station is grown as a
 generated one for the gate, its system having only the tower.
 
-**Its own down** (built 2026-11-03): a ridden piece takes a gravity centre of its own (`Drift.grav`,
-a child of its node, put where the station's was when it left, its pull the station's), so it turns
-as the piece turns. While the player is on a piece (`_on_piece`: within its box and 2 m)
-`PlanetSystem._gravity` makes that the down -- before the frame's -- and the walker stands on the
-piece however it turns. The gate turns the piece over (about an axis across it, 0.12 rad/s): 34
-degrees in 5 s, the walker's up 0.1 degrees off the piece's, still where they stood (with the
-station's down instead: 34 degrees off).
+**Nothing pulls on it** (2026-11-04, 7.12; it had a down of its own, turning with it, from
+2026-11-03): a piece broken off has no generator. Its box (`_on_piece`'s: grown 2 m) is a field
+where nothing pulls, first of all the fields, so whoever is on it floats (PawnMoves FLOAT); the
+piece drifts on from under them. The gate: on the piece nothing pulls, the walker floats, its up
+its own, falling nowhere (0.5 m in 3 s, at rest); then put back in the station's field over its
+roof head over heels (162 degrees off), it comes into the station's down over a moment -- still
+147 degrees off two ticks in, upright on the roof 0.7 s later -- and lands on its feet.
 
-Not yet: figures on a piece not anyone's frame of reference far from the station; a figure other
-than the player takes the piece's down only as the player does (Gravity is one down for all).
+Not yet: figures on a piece not anyone's frame of reference far from the station.
 
 ### 7.9 Windows in the hull (built 2026-11-02)
 
@@ -715,3 +737,69 @@ interior bricks over its floor) gets none. KitFurnish still furnishes the rest o
 
 `ship_build_probe` (4): eight console columns or more on every seed (8-20), all fore of the seat,
 the seat's cell and the one three plates over it clear, none by a doorway.
+
+### 7.12 Gravity of their own (built 2026-11-04)
+
+Only a working station or ship pulls, and only while its generator is on (`OrbitalData.gravity_on`,
+`SpaceStation.pulls`: a station or ship -- not a satellite, not a wreck). Where it pulls it is
+**local**: inside its boxes -- one round each of its sections (BuildSections; a tower's module box
+for the others), grown `FIELD_GROW` (2 m) so its floor, its roof, its doorways and a jump off its roof are in it --
+toward its own gravity centre, over whatever pulls outside: a planet's when it is parked on one,
+nothing in open space or round a station.
+
+* `Gravity.Field` {space, local, boxes, centre, pull, radius}; `Gravity.fields`, the first that
+  holds a point is its gravity: `down_at`, `up_at`, `height_of`, `lift_to` take its centre and
+  datum, `ground_height` is NAN in one; `pull_at(p)`, `pulls_at(p)`: its pull, else what pulls
+  outside (`outside_pull`: the planet whose shell it is, 0 in open space or a station's frame). A
+  field with no centre pulls nothing (a piece broken off, 7.8). `strength()` is what pulls where
+  the player is, as before (debris, crumbs, the AI's falls).
+* `PlanetSystem._gravity` sets them every tick: the pieces by the player first, then every laid
+  ship and station that pulls (`gravity_field`, made once). `generator_at(p)`: the ship or station
+  whose boxes hold `p`. In play **G** turns its generator on and off; the HUD says which, or that
+  nothing pulls (and how to move then).
+* **Into a new down** (after zylanntest's PlayerController `_orient_toward`): the pawn's body and
+  the walker's turn their up toward the down where they are at `Pawn.REORIENT_RATE` (4 rad/s,
+  four times that crouched) -- `Gravity.carry_toward`, the least turn, at most a tick's worth -- so
+  jumping off a ship's deck into a planet's air, or drifting into a field upside down, rights the
+  body in the air over a moment instead of a tick; within a tick's worth it is exactly `carry`, so
+  walking on a planet does not change. A fall starts over when the field under the feet changes
+  (heights in two fields are over two datums).
+* **Nothing pulling** (`Pawn.floating`): no gravity, the body's up kept; the move is a suit's
+  thrust (`FLOAT_ACCEL` 4 m/s^2, up to `FLOAT_SPEED`, the walk's, never taking away speed above
+  it), jump up the body's Y and crouch down it, a jump against a surface pushes off it
+  (`FLOAT_PUSH`), no input steadies it (`FLOAT_DAMP` 0.5/s). No fall damage. The walker the same.
+
+`gravity_probe` (13, also ladders: 7.13): a field's own down and pull inside it, the world's
+outside, none in a field with no centre; into a down 90 degrees round in the air, 75 degrees off
+two ticks in, upright in 0.43 s and on its feet on the field's floor; where nothing pulls it falls
+0 m in 1 s, thrusts to FLOAT_SPEED and no more, and steadies when let go. `--gate=seat`: on the
+deck in open space G off -- nothing pulls, floating -- and on again, back on the deck. `--gate=hull`:
+inside the parked ship its own field, outside it the world's. `--gate=adrift`: 7.8.
+
+Not yet: Gravity is still one down for whoever asks at a point, but one strength for the rest
+(`strength()`); a generator is the whole ship's or station's, not a part of it that can be shot
+out; G is not saved.
+
+### 7.13 Ladders (built 2026-11-04)
+
+A **ladder** is bricks and a node. Its bricks (`RoomGrow.ladder_adds`): two rails of 1x1 bricks and,
+every `LADDER_EVERY` (4) plates down from its top, a rung -- plates two studs deep over the rails
+and a stud out of them -- so each rung is held by the rails, the rails by the rungs and the floor.
+Its node (`Ladder`, group `ladder`): at the foot of its rungs' face, Y up it, +Z out of it, `width`
+and `height` (to where its top lands), placed from `meta.ladders` [{at, facing, w, h}] under the
+bricks' node when a station or ship is laid (`Ladder.place`).
+
+PawnMoves climbs one (`State.LADDER`): pushed into (within `Ladder.REACH`, 0.8 m, of its face),
+the body is held `LADDER_HOLD` out of its face and across its middle; forward climbs at
+`LADDER_SPEED` (0.7 of the walk), back climbs down and, at its foot, steps off on to the floor;
+forward at its top goes over it on to what it leads to (a mantle, `_climb`, to `LADDER_OVER` past
+its face); jump springs off it, out and up (`LADDER_OFF`); crouch lets go. It goes up the
+ladder's own Y, whatever pulls, or nothing.
+
+`gravity_probe`: walking into a ladder climbs it, up 2.8 m and over its top, standing on it; back
+from half way climbs down and lets go at the floor; jump springs off (1.1 m out); the same wall
+with no ladder is not climbed. `room_station_probe`: 7.2.
+
+Not yet: the city and the workshop lay a generated tower's ladder's bricks (a player's module
+whose stair has no floor) but put no node for it: there it is not climbed; soldiers do not climb
+(the nav has no ladder edges); a ship's decks still go by its stair well.
