@@ -208,9 +208,21 @@ re-bake (50-80 ms a tower) per hit. A grid beside the mesh instead:
   on); it lights what is in the room -- figures, the gun -- at the grid's sky
   where the camera is (`LightRig.room_open`), so they match the walls, and
   the exposure follows it.
-- Not yet: ships and stations (their cabin box still stands for their own
-  lights; `space_station.gd` was being changed elsewhere), the city scene,
-  furniture lamps (only Glow bricks are lamps), the sun past the shadow range.
+- **City** (2026-11-03): the 16 buildings in bricks nearest the camera
+  (`CityScene._tend_grid_light`, twice a second, two new a pass). No render
+  layer there (no boxes; the near tier hides a band by its layers):
+  `use_layer = false`. The near tier's chamfered mesh copies `grid_light`
+  from its band (`BrickNear`), and a relight reaches it. Pass:
+  `res://scenes/city.tscn -- --light` (shaded inside, the near tier carries
+  it, the picture 0.359 with the grid against 0.477 without, a hole lets the
+  sky in). Pictures `city_light_on/off`.
+- Which building changed is asked one a frame in turn (`step`): counting a
+  building's live bricks walks all its blocks.
+- Not yet: ships and stations (their cabin box stands for their own lights;
+  a breach opens onto space, darker anyway), studs drawn by the near tier
+  and the planet's own stud meshes (their own material: a little bright on a
+  dark floor), furniture lamps (only Glow bricks are lamps), the sun past
+  the shadow range.
 
 ### 6.2 Quick stand-in: ambient boxes
 

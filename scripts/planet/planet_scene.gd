@@ -2323,7 +2323,7 @@ func _run_light_gate() -> void:
 		var before := grid_light.at(by_hole).x
 		pb.bricks.kill_blocks(s.chunk, PackedInt32Array(ids.keys()))
 		var n0 := grid_light.updates
-		grid_light.step()
+		grid_light.relight(key)
 		var after := grid_light.at(by_hole).x
 		_check("a hole in the wall lets the sky in", hz >= 0 and grid_light.updates > n0 and after > before + 0.05
 				and after >= 1.0 - 3.0 * BrickGridLight.SKY_STEP / 255.0 - 0.01,
