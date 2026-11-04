@@ -36,7 +36,21 @@ var use_layer := true
 ## under SDFGI, which shades rooms itself: LightRig.apply_gi).
 static var _materials: Array = []
 static var _sky_shade := true
+## Bound for lamp light only: a ship's or station's bricks (their cabin box
+## stands for the ship's own lights; a sealed hull is not a dark room).
+static var _skyless: Array = []
 const SKY_FLOOR := 0.1
+## Real lights at the Glow bricks (Docs/Lighting.md 6.3): unshadowed omni
+## lights for what moves -- figures, the gun, pieces -- which the grid does
+## not reach; the grid's own lamp term lights the bricks (it stops at walls,
+## an unshadowed light would not), so the lights leave RENDER_LAYER out. Only
+## with `use_layer`: without it bricks would be lit twice.
+const LAMP_RANGE := 4.0
+const LAMP_ENERGY := 1.2
+const LAMP_COLOUR := Color(1.0, 0.78, 0.52)
+## Glow bricks closer than this share a light; at most so many a building.
+const LAMP_MERGE := 1.2
+const LAMPS_MAX := 8
 ## Last one lit, for gates and the HUD (ms).
 var last_ms := 0.0
 var updates := 0
@@ -50,6 +64,7 @@ class Entry:
 	var alive := -1
 	var bytes := PackedByteArray()
 	var param := Vector4(-1.0, 0.0, 0.0, 0.0)
+	var lamps: Array[OmniLight3D] = []
 
 var _entries := {}
 var _free: Array[int] = []
@@ -67,11 +82,13 @@ func _init() -> void:
 	texture.create_from_images(images)
 
 
-## A material drawing bricks reads this grid.
-func bind(mat: ShaderMaterial) -> void:
+## A material drawing bricks reads this grid; `sky` false: its lamps only.
+func bind(mat: ShaderMaterial, sky := true) -> void:
 	if not _materials.has(mat):
 		_materials.append(mat)
-	mat.set_shader_parameter("grid_sky_floor", SKY_FLOOR if _sky_shade else 1.0)
+	if not sky and not _skyless.has(mat):
+		_skyless.append(mat)
+	mat.set_shader_parameter("grid_sky_floor", SKY_FLOOR if _sky_shade and sky else 1.0)
 	mat.set_shader_parameter("grid_light_tex", texture)
 	mat.set_shader_parameter("grid_light_size", float(SIZE))
 	mat.set_shader_parameter("grid_cell", Vector3(BrickWorld.get_stud_metres(), BrickWorld.get_plate_metres() * CELL_PLATES,
@@ -85,7 +102,8 @@ static func set_sky_shade(on: bool) -> void:
 		if not is_instance_valid(m):
 			_materials.remove_at(i)
 			continue
-		(m as ShaderMaterial).set_shader_parameter("grid_sky_floor", SKY_FLOOR if on else 1.0)
+		(m as ShaderMaterial).set_shader_parameter("grid_sky_floor",
+				SKY_FLOOR if on and not _skyless.has(m) else 1.0)
 
 
 ## Light `chunk` of `bricks`, whose bands hang under `node` (chunk-local).
@@ -125,6 +143,7 @@ func release(key) -> void:
 			e.node.child_entered_tree.disconnect(_on_child)
 		e.param = Vector4(-1.0, 0.0, 0.0, 0.0)
 		_apply_all(e)
+	_hang_lamps(e, PackedVector3Array())
 
 
 ## Once a frame: drop what has gone; ask one building in turn whether its
@@ -184,8 +203,58 @@ func _light(e: Entry) -> void:
 		RenderingServer.texture_2d_update(texture.get_rid(), img, e.slot)
 		e.param = Vector4(e.slot, e.dims.x, e.dims.y, e.dims.z)
 	_apply_all(e)
+	_hang_lamps(e, e.bricks.chunk_glow_points(e.chunk) if use_layer else PackedVector3Array())
 	updates += 1
 	last_ms = (Time.get_ticks_usec() - t0) / 1000.0
+
+
+## Glow bricks' lights: `points` (chunk-local) merged within LAMP_MERGE,
+## the biggest groups first, at most LAMPS_MAX; children of the building's
+## node, so they ride with a ship.
+func _hang_lamps(e: Entry, points: PackedVector3Array) -> void:
+	var groups: Array = []   # [sum, count]
+	for p in points:
+		var best := -1
+		for i in groups.size():
+			if (groups[i][0] / groups[i][1]).distance_to(p) < LAMP_MERGE:
+				best = i
+				break
+		if best < 0:
+			groups.append([p, 1])
+		else:
+			groups[best][0] += p
+			groups[best][1] += 1
+	groups.sort_custom(func(a, b): return a[1] > b[1])
+	groups = groups.slice(0, LAMPS_MAX)
+	var valid := is_instance_valid(e.node)
+	while e.lamps.size() > groups.size() or (not valid and not e.lamps.is_empty()):
+		var l: OmniLight3D = e.lamps.pop_back()
+		if is_instance_valid(l):
+			l.queue_free()
+	if not valid:
+		return
+	for i in groups.size():
+		if i >= e.lamps.size():
+			var l := OmniLight3D.new()
+			l.name = "GlowLamp"
+			l.shadow_enabled = false
+			l.light_color = LAMP_COLOUR
+			l.omni_range = LAMP_RANGE
+			l.omni_attenuation = 1.0
+			l.light_cull_mask = 0xFFFFF & ~RENDER_LAYER
+			e.node.add_child(l)
+			e.lamps.append(l)
+		var lamp := e.lamps[i]
+		lamp.position = groups[i][0] / groups[i][1]
+		# A lone brick a glow; a wall of them a lamp.
+		lamp.light_energy = LAMP_ENERGY * minf(1.0 + 0.25 * (groups[i][1] - 1), 3.0)
+
+
+func lamp_count() -> int:
+	var n := 0
+	for key in _entries:
+		n += (_entries[key] as Entry).lamps.size()
+	return n
 
 
 func _apply_all(e: Entry) -> void:
@@ -205,6 +274,11 @@ func _apply(e: Entry, c: Node) -> void:
 	if g is MultiMeshInstance3D:
 		# A band's studs (BrickNear), when the band is the node itself.
 		BrickNear.grid_studs(g, e.param, g.get_parent() as Node3D)
+		return
+	# Only what draws with a grid's material: an instance parameter set on
+	# anything else (a ladder) costs it 16 slots of the renderer's buffer
+	# for nothing (Godot's InstanceUniforms keeps it).
+	if not _materials.has(g.material_override):
 		return
 	g.set_instance_shader_parameter(&"grid_light", e.param)
 	if use_layer:

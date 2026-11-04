@@ -1275,6 +1275,35 @@ Vector3i BrickWorld::chunk_light_dims(int chunk_id, int cell_plates) const {
     return Vector3i(d.x + 2, (d.y + cell_plates - 1) / cell_plates + 2, d.z + 2);
 }
 
+PackedVector3Array BrickWorld::chunk_glow_points(int chunk_id) const {
+    PackedVector3Array out;
+    if (!valid_chunk(chunk_id)) {
+        return out;
+    }
+    int glow_material = -1;
+    for (int m = 0; m < BRICK_MATERIAL_COUNT; ++m) {
+        if (std::strcmp(BRICK_MATERIALS[m].name, "Glow PLA") == 0) {
+            glow_material = m;
+        }
+    }
+    if (glow_material < 0) {
+        return out;
+    }
+    const Chunk &c = chunks[chunk_id];
+    const Vector3 cs = cell_size();
+    for (size_t i = 0; i < c.blocks.size(); ++i) {
+        const Block &b = c.blocks[i];
+        if (!b.alive || b.removed || (int)b.material != glow_material || b.archetype < 0) {
+            continue;
+        }
+        const Vector3i base = b.cell - c.origin;
+        const Vector3i sz = archetypes[b.archetype].size;
+        out.push_back(Vector3((base.x + sz.x * 0.5f) * cs.x, (base.y + sz.y * 0.5f) * cs.y,
+                (base.z + sz.z * 0.5f) * cs.z));
+    }
+    return out;
+}
+
 PackedByteArray BrickWorld::chunk_light_tiles(int chunk_id, int cell_plates, int width, int height,
         int sky_step, int lamp_step) const {
     PackedByteArray out;
@@ -11059,6 +11088,7 @@ void BrickWorld::_bind_methods() {
     ClassDB::bind_method(D_METHOD("get_chunk_origin", "chunk_id"), &BrickWorld::get_chunk_origin);
     ClassDB::bind_method(D_METHOD("get_chunk_dims", "chunk_id"), &BrickWorld::get_chunk_dims);
     ClassDB::bind_method(D_METHOD("chunk_light_dims", "chunk_id", "cell_plates"), &BrickWorld::chunk_light_dims);
+    ClassDB::bind_method(D_METHOD("chunk_glow_points", "chunk_id"), &BrickWorld::chunk_glow_points);
     ClassDB::bind_method(D_METHOD("chunk_light_tiles", "chunk_id", "cell_plates", "width", "height", "sky_step", "lamp_step"),
             &BrickWorld::chunk_light_tiles);
 
