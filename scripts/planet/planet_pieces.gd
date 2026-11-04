@@ -71,7 +71,8 @@ class Piece:
 	var slow_since := 0
 	var settled := false
 	var born_ms := 0
-	## Its mesh, made on a worker: [task id, [mesh]], empty once hung.
+	## Its mesh, made on a worker: [task id, [mesh]], empty once hung;
+	## [-1] while its bake is on a worker (_start_mesh).
 	var job: Array = []
 	## What draws it: its own mesh, or a toppled building's bands (a Node3D).
 	var mesh_node: Node3D = null
@@ -242,8 +243,16 @@ func _cap() -> void:
 
 
 ## Its arrays here, its GPU mesh on a worker -- the planet's bands' way
-## (PlanetBuildings._draw_band): a mesh made on the main thread is ~9 ms.
+## (PlanetBuildings._draw_band): a mesh made on the main thread is ~9 ms. A
+## chunk not baked yet (a fresh split) is baked on a worker first, as the
+## city's islands are (IslandManager: never bake on the main thread) -- here
+## that was the big half's 14 ms on a landing's break -- and `_hang_mesh`
+## comes back for the arrays when it is ready.
 func _start_mesh(p: Piece) -> void:
+	if not bricks.bake_ready(p.chunk):
+		bricks.bake_chunk_async(p.chunk)
+		p.job = [-1]
+		return
 	var arrays: Array = bricks.build_chunk_mesh(p.chunk)
 	if arrays.is_empty():
 		return
@@ -256,6 +265,11 @@ func _start_mesh(p: Piece) -> void:
 
 
 func _hang_mesh(p: Piece) -> void:
+	if not p.job.is_empty() and int(p.job[0]) < 0:
+		if bricks.bake_ready(p.chunk):
+			p.job = []
+			_start_mesh(p)
+		return
 	if p.job.is_empty() or not WorkerThreadPool.is_task_completed(int(p.job[0])):
 		return
 	WorkerThreadPool.wait_for_task_completion(int(p.job[0]))
@@ -623,9 +637,9 @@ func moving() -> int:
 func _exit_tree() -> void:
 	# Meshes still being made: waited for, or the pool tears down under them.
 	for p in pieces:
-		if not p.job.is_empty():
+		if not p.job.is_empty() and int(p.job[0]) >= 0:
 			WorkerThreadPool.wait_for_task_completion(int(p.job[0]))
-			p.job = []
+		p.job = []
 
 
 ## Where piece `p`'s grid is, in the world.
