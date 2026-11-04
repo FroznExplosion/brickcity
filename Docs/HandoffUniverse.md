@@ -46,7 +46,7 @@ building (check its date against the last C++ commit), `--import`, then:
 |---|---|---|
 | `seat` | 16 windowed, 13 headless: jitter, leaving the seat, map, gravity, markers | 200 s |
 | `belt` | 6: a belt from a turned ship, slow flight, rocks at speed | 170 s |
-| `home` | 10: the waves, their kinds | 200 s |
+| `home` | 11: the waves, their kinds, wave 4's tank | 240 s |
 | `garrison` | 17: a world's AI, sleep and wake, down and up | 280 s (170 stops it on the flight home) |
 | `jump` 10, `ship` 9, `dock` 8, `worlds` 8, `rocks` 4, `debris` 8, `system` 17 | | 280 s |
 | `falling` 5, `squad` 10, `far` 11, `pawn` 12 | the AI and the pawn on a planet | 240 s |
@@ -101,9 +101,8 @@ The user chooses. In the order I would take them:
 
 1. **Rubble in saves**: done (rubble on a world, pieces adrift and fallen from space; `ChunkRecord`, no
    C++). Not tried: a real save and load with pieces adrift (the gates go through bytes).
-2. **Something on a planet besides rifles**: UnitCatalog kinds in the waves; then a tank or a mech in play
-   (all are only in gates). `FirefightDirector` is the city's and was left there on purpose: 1,100 lines
-   round a ring and a `CityScene`.
+2. **Something on a planet besides rifles**: done for home's waves (five foot kinds, a tank from wave 4).
+   Open: a mech; generated towns' squads are rifles and assault only; a wave's tank is not saved.
 3. **Ship damage**: rams hurting it, its damage showing from afar.
 
 The full list is Planets.md, "What is not done".

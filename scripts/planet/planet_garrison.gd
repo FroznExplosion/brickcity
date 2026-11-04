@@ -32,6 +32,11 @@ const SPACING := 1.4
 ## Who comes, by wave (UnitCatalog's built foot units, as the city's waves field
 ## them): the first all rifles, each after it a wider mix. A generated town's
 ## one squad is the second.
+## From this wave home's waves bring a tank (UnitCatalog's built heavy armour),
+## crewed, beside the squad; a wave is clear when it is wrecked too.
+const TANK_FROM := 4
+## The tank is sent at the player again once they have moved this far.
+const TANK_RESEND := 20.0
 const WAVE_KINDS := [
 	[&"rifleman"],
 	[&"rifleman", &"rifleman", &"assault"],
@@ -64,6 +69,11 @@ var next_wave := 0.0
 var ai_town := -1
 var squad: Squad
 var soldiers: Array[Soldier] = []
+## This wave's tank, if it brought one, and the pawns it put on the AI (its
+## target, its crew), taken off again with the wave.
+var tank: Tank
+var _tank_pawns: Array[Pawn] = []
+var _tank_goal := Vector3.INF
 ## Holds the soldiers and the squad; off while they are held.
 var _troops: Node3D
 ## Streams the ground where they are, whoever else is there.
@@ -116,14 +126,17 @@ func _physics_process(delta: float) -> void:
 	if _look > 0.0 or _raising:
 		return
 	_look = LOOK_EVERY
-	if squad != null and squad.alive().is_empty():
+	if _tank_up() and _tank_goal.distance_to(scene.pawn.feet()) > TANK_RESEND:
+		_tank_goal = scene.pawn.feet()
+		(tank.get_node(^"TankBrain") as TankBrain).send(_tank_goal)
+	if squad != null and squad.alive().is_empty() and not _tank_up():
 		print("[garrison] %s: town %d clear (wave %d)" % [body.data.planet_name, town, wave])
 		squad = null
 		if waves:
 			next_wave = Time.get_ticks_msec() / 1000.0 + WAVE_BREAK
 		else:
 			cleared[_key(town)] = true
-	if squad != null:
+	if squad != null and not squad.alive().is_empty():
 		var at := squad.center()
 		_ground.global_position = at
 		var off: float = (scene._anchor() as Vector3).distance_to(at)
@@ -160,10 +173,42 @@ func restore(d: Dictionary) -> void:
 	next_wave = Time.get_ticks_msec() / 1000.0 + float(d.next_in)
 
 
+## Is this wave's tank still fighting?
+func _tank_up() -> bool:
+	return tank != null and is_instance_valid(tank) and not tank.is_wrecked()
+
+
+## The wave's tank, as the city's (CityScene._spawn_tank, WaveDirector._field_tank):
+## a rocket gun and a machine gun, a driver and a gunner, on the vehicle map,
+## screening the squad and sent at the player.
+func _field_tank(s: AIServices, at: Vector3, side: Vector3, lib: GunPartLibrary, rng: RandomNumberGenerator) -> void:
+	var p: Vector3 = s.vehicle_nav(&"tank").snap(at - side * (SPACING * WAVE_MOST * 0.5 + 8.0))
+	var up := Gravity.up_at(p)
+	var main := GunInstance.from_result(GunGenerator.generate(lib, rng.randi_range(1, 9999), WeaponClass.builtin(&"rocket_launcher"), 1))
+	var mg := GunInstance.from_result(GunGenerator.generate(lib, rng.randi_range(1, 9999), WeaponClass.builtin(&"lmg"), 1))
+	var to := Gravity.flat(scene.pawn.feet() - p, up)
+	tank = Tank.make(s, _troops, p + up * 0.3, atan2(-to.x, -to.z), 1, main, mg, s.on_structure_hit, s.rng)
+	PlanetBody.track(tank)
+	var target := tank.make_target()
+	s.add_pawn(target)
+	_tank_pawns = [target]
+	var br := TankBrain.attach(s, tank)
+	for seat in [Tank.Seat.DRIVER, Tank.Seat.GUNNER]:
+		var so := Soldier.spawn(s, _troops, p + up * 0.3 + side * 5.0, 1,
+				GunInstance.from_result(GunGenerator.generate(lib, rng.randi_range(1, 9999), WeaponClass.builtin(&"rifle"), 1)))
+		PlanetBody.track(so.pawn.body)
+		tank.board(so.pawn, seat, true)
+		_tank_pawns.append(so.pawn)
+	br.escort = squad
+	_tank_goal = scene.pawn.feet()
+	br.send(_tank_goal)
+	print("[garrison] %s: a tank with wave %d, %d aboard" % [body.data.planet_name, wave, tank.crew_count()])
+
+
 ## A line for the HUD, while there is a fight ("": none).
 func status() -> String:
 	if squad != null:
-		return "%s: wave %d, %d left" % [body.data.planet_name, wave, squad.alive().size()] if waves \
+		return "%s: wave %d, %d left%s" % [body.data.planet_name, wave, squad.alive().size(), ", a tank" if _tank_up() else ""] if waves \
 				else "%s: %d soldiers left" % [body.data.planet_name, squad.alive().size()]
 	if waves and wave > 0:
 		return "%s: wave %d clear, wave %d in %.0f s" % [body.data.planet_name, wave, wave + 1,
@@ -209,6 +254,11 @@ func _drop() -> void:
 	for so in soldiers:
 		if s != null and is_instance_valid(so):
 			s.pawns.erase(so.pawn)
+	for p in _tank_pawns:
+		if s != null and is_instance_valid(p):
+			s.pawns.erase(p)
+	_tank_pawns.clear()
+	tank = null
 	for c in _troops.get_children():
 		c.queue_free()
 	soldiers.clear()
@@ -304,6 +354,8 @@ func _spawn() -> void:
 		if not _left.is_empty():
 			so.pawn.health.apply_impact(so.pawn.health.total_current() - float(_left[k][1]), &"")
 	squad = Squad.make(s, _troops, soldiers, 1)
+	if waves and wave >= TANK_FROM and _left.is_empty():
+		_field_tank(s, at, side, lib, rng)
 	_hunting = wave > 1 or not _left.is_empty()
 	_left = []
 	print("[garrison] %s: %d soldiers at town %d in %.1f ms" % [body.data.planet_name, soldiers.size(), town, (Time.get_ticks_usec() - t0) / 1000.0])

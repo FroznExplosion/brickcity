@@ -218,11 +218,21 @@ re-bake (50-80 ms a tower) per hit. A grid beside the mesh instead:
   sky in). Pictures `city_light_on/off`.
 - Which building changed is asked one a frame in turn (`step`): counting a
   building's live bricks walks all its blocks.
+- **Studs** (2026-11-04): the grid code is one include,
+  `shaders/grid_light.gdshaderinc` (`grid_light_shade`), in `brick.gdshader`
+  and, under `GRID_LIGHT`, in `printed_core.gdshaderinc`. The near tier's
+  geometry studs draw with `BrickNear.grid_stud_material`
+  (`printed_grid.gdshader`, the terrain's stud material with the grid);
+  a stud's VERTEX is its own, so the shader is handed world-to-chunk (the
+  band's inverse) as three instance rows (`BrickNear.grid_studs`, set on a
+  new studs MultiMesh and by every relight). The terrain's studs are
+  untouched. The planet's open studs were already grid-lit: merged into the
+  band mesh. Cards stay flat (only open studs get one: under the sky).
+  Pass: the city `--light` checks the studs carry it and the picture is
+  darker with them on it.
 - Not yet: ships and stations (their cabin box stands for their own lights;
-  a breach opens onto space, darker anyway), studs drawn by the near tier
-  and the planet's own stud meshes (their own material: a little bright on a
-  dark floor), furniture lamps (only Glow bricks are lamps), the sun past
-  the shadow range.
+  a breach opens onto space, darker anyway), furniture lamps (only Glow
+  bricks are lamps), the sun past the shadow range.
 
 ### 6.2 Quick stand-in: ambient boxes
 
