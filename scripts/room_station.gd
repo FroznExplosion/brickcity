@@ -35,11 +35,19 @@ const RADIATOR := Vector2i(4, 8)
 const GAP := 24
 ## The furthest aside a bridged port may be of the other, studs.
 const SHIFT := 8
+## The furthest above or below a bridged port may be of the other, plates: a
+## tube between two levels holds a stair (a stud of tread a step, two studs of
+## landing at its top), each step's rise the first of STEPS its gap has the
+## length for (two plates, the workshop's stair; a brick, the pawn's step).
+const RISE := 24
+const STEPS := [2, 3]
 const NONE := 1 << 30
 
 var wings := 0
 var radiators := 0
 var bridges := 0
+var stairs := 0          ## bridging tubes between two levels, a stair in each
+var sills := 0           ## door seams tied by a tile on their sills (over a module below)
 var docks := 0
 var _wing_colour := -1
 var _radiator_colour := -1
@@ -75,7 +83,8 @@ func _station(library: Array, params: Dictionary) -> Dictionary:
 	_ties()
 	(plan.adds as Array).append_array(_tubes)
 	_keel(plan)
-	plan.stats.merge({"docks": docks, "bridges": bridges, "wings": wings, "radiators": radiators}, true)
+	plan.stats.merge({"docks": docks, "bridges": bridges, "stairs": stairs, "sills": sills, "wings": wings,
+			"radiators": radiators}, true)
 	plan.keel = keel_row
 	plan.generator = "station"
 	plan.at = _at(plan)
@@ -113,10 +122,12 @@ func _docks() -> void:
 
 
 ## A tube cut to fit between two open ports that face each other across a
-## clear gap (up to GAP studs along, SHIFT aside): rooms reached two ways, as
-## the ISS's are. Wide enough for both doorways; a floor and a ceiling of two
-## plate layers (each seam bridged), walls of bricks on the floor's edge, tied
-## to both modules under their walls; the two ports joined through it.
+## clear gap (up to GAP studs along, SHIFT aside, RISE plates up or down): rooms
+## reached two ways, as the ISS's are. Wide enough for both doorways; a floor
+## and a ceiling of two plate layers (each seam bridged), walls of bricks on the
+## floor's edge, tied to both modules under their walls; the two ports joined
+## through it. Between two levels it is as tall as both doorways' rows, a stair
+## of bricks on its floor up to the higher doorway and a lintel over the lower.
 func _bridges() -> void:
 	for i in open.size():
 		if bridges >= int(p.bridges):
@@ -133,10 +144,12 @@ func _bridges() -> void:
 			if int(b.p) == int(a.p) or int(b.facing) != (int(a.facing) + 2) % 4 or b.size != a.size:
 				continue
 			var g := _gap(a.at, b.at, d)
-			if g.x < 1 or g.x > GAP or absi(g.y) > SHIFT:
+			var rise := (b.at as Vector3i).y - (a.at as Vector3i).y
+			if g.x < 1 or g.x > GAP or absi(g.y) > SHIFT or absi(rise) > RISE \
+					or rise != 0 and _step_for(g.x, absi(rise)) == 0:
 				continue
 			var span := Vector2i(mini(0, g.y), maxi(0, g.y) + (a.size as Vector2i).x)
-			var cells := _tube_cells(a, d, g.x, span)
+			var cells := _tube_cells(a, d, g.x, span, rise)
 			if not _free(cells):
 				continue
 			for c: Vector3i in cells:
@@ -146,40 +159,57 @@ func _bridges() -> void:
 			b.used = true
 			joins.append({"a": i, "b": k, "loop": true})
 			bridges += 1
+			stairs += 1 if rise != 0 else 0
 			break
 
 
+## A stair's rise a step up `rise` plates in a tube `gap` studs long: the first
+## of STEPS whose flight and landing it has the length for; 0, none.
+func _step_for(gap: int, rise: int) -> int:
+	for s: int in STEPS:
+		if ceili(float(rise) / s) + 2 <= gap:
+			return s
+	return 0
+
+
 ## (free cells from a's outer face to b's along d, b's doorway aside of a's
-## across): b.at = a.at + d (gap - 1) + across shift. x < 0 when they do not face.
+## across): b.at = a.at + d (gap - 1) + across shift (+ up or down). x < 0 when
+## they do not face.
 func _gap(a_at: Vector3i, b_at: Vector3i, d: Vector3i) -> Vector2i:
 	var across := Vector3i(absi(d.z), 0, absi(d.x))
 	var v := b_at - a_at
+	v.y = 0
 	var along := v.x * d.x + v.z * d.z
 	var aside := v.x * across.x + v.z * across.z
-	if v.y != 0 or v != d * along + across * aside:
+	if v != d * along + across * aside:
 		return Vector2i(-1, 0)
 	return Vector2i(along + 1, aside)
 
 
 ## The tube's cells: `span` across (from a's doorway's low side) and a stud of
-## wall each side, from two plates under the doorway (its floor) to two over it
-## (its ceiling), `gap` long.
-func _tube_cells(a: Dictionary, d: Vector3i, gap: int, span: Vector2i) -> Array:
+## wall each side, from two plates under the lower doorway (its floor) to two
+## over the higher (its ceiling), `gap` long.
+func _tube_cells(a: Dictionary, d: Vector3i, gap: int, span: Vector2i, rise := 0) -> Array:
 	var across := Vector3i(absi(d.z), 0, absi(d.x))
-	var h := (a.size as Vector2i).y
+	var h := (a.size as Vector2i).y + absi(rise)
+	var at: Vector3i = (a.at as Vector3i) + Vector3i(0, mini(rise, 0), 0)
 	var out := []
 	for k in gap:
 		for x in range(span.x - 1, span.y + 1):
 			for y in range(-2, h + 2):
-				out.append((a.at as Vector3i) + d * k + across * x + Vector3i(0, y, 0))
+				out.append(at + d * k + across * x + Vector3i(0, y, 0))
 	return out
 
 
-## The tube's bricks: its floor, walls and ceiling, and a tie at each end.
+## The tube's bricks: its floor, walls and ceiling, and a tie at each end;
+## between two levels, its stair and the lintel over the lower doorway.
 func _tube(a: Dictionary, b: Dictionary, d: Vector3i, gap: int, span: Vector2i) -> void:
 	var across := Vector3i(absi(d.z), 0, absi(d.x))
-	var h := (a.size as Vector2i).y
-	var at: Vector3i = a.at
+	var rise := (b.at as Vector3i).y - (a.at as Vector3i).y
+	var door_h := (a.size as Vector2i).y
+	var h := door_h + absi(rise)
+	# Its frame's row 0 the lower doorway's bottom row.
+	var at: Vector3i = (a.at as Vector3i) + Vector3i(0, mini(rise, 0), 0)
 	var wall: Array = a.get("wall", [])
 	var colour := int(wall[0]) if not wall.is_empty() else int(lib[placed[int(a.p)].m].turns[0].colour)
 	var material := int(wall[1]) if not wall.is_empty() else 0
@@ -198,16 +228,42 @@ func _tube(a: Dictionary, b: Dictionary, d: Vector3i, gap: int, span: Vector2i) 
 			_wall_column(_tubes, cell.call(o, x, 0), h, colour, material)
 	# Ties: under a's wall and the tube's first stud, under b's and its last.
 	# (Only where the module has its wall under the tube's end: a doorway aside
-	# of the other is tied under its own part of the end.)
+	# of the other is tied under its own part of the end.) At the higher end of a
+	# stair the tie is right under that module's wall, in the stair's top step,
+	# which stands on it and under it (`held`: the step's row it takes).
+	var held := {}
 	for x in range(span.x, span.y, 2):
-		var ac: Vector3i = cell.call(-1, x, 0)
-		var lo_a := mini(_low_of(int(a.p), ac), _low_of(int(a.p), ac + across))
-		if lo_a != NONE:
-			_tie(ac, lo_a, cell.call(0, x, 0), at.y - 2, Vector3i.ZERO, d, colour, material)
-		var bt: Vector3i = cell.call(gap - 1, x, 0)
-		var lo_b := mini(_low_of(int(b.p), bt + d), _low_of(int(b.p), bt + d + across))
-		if lo_b != NONE:
-			_tie(bt + d, lo_b, bt, at.y - 2, Vector3i.ZERO, d, colour, material)
+		for end in [[int(a.p), -1, 0, rise < 0], [int(b.p), gap, gap - 1, rise > 0]]:
+			var mc: Vector3i = cell.call(end[1], x, 0)
+			var tc: Vector3i = cell.call(end[2], x, 0)
+			var lo := mini(_low_of(end[0], mc), _low_of(end[0], mc + across))
+			if lo == NONE:
+				continue
+			if bool(end[3]) and lo - 1 >= at.y:
+				_tie(mc, lo, tc, lo, Vector3i.ZERO, d, colour, material)
+				held[Vector2i(end[2], x)] = lo - 1 - at.y
+				held[Vector2i(end[2], x + 1)] = lo - 1 - at.y
+			else:
+				_tie(mc, lo, tc, at.y - 2, Vector3i.ZERO, d, colour, material)
+	if rise == 0:
+		return
+	# The stair: k studs from the higher doorway, a column of bricks on the floor
+	# up to its step; two studs of landing at the top.
+	var top := absi(rise)
+	var each := _step_for(gap, top)
+	for o in gap:
+		var k := gap - 1 - o if rise > 0 else o
+		var step := clampi(top - each * (k - 1), 0, top)
+		for x in range(span.x, span.y):
+			var tie_row := int(held.get(Vector2i(o, x), step))
+			_wall_column(_tubes, cell.call(o, x, 0), mini(step, tie_row), colour, material)
+			if tie_row < step:
+				_wall_column(_tubes, cell.call(o, x, tie_row + 1), step - tie_row - 1, colour, material)
+	# Over the lower doorway, where the module's wall may not reach: a lintel
+	# hung from the ceiling.
+	var low := 0 if rise > 0 else gap - 1
+	for x in range(span.x, span.y):
+		_wall_column(_tubes, cell.call(low, x, door_h), top, colour, material)
 
 
 ## One layer of a two-layer slab `n_o` x `n_x` studs, `cell(o, x)` placing a
@@ -306,8 +362,21 @@ func _ties() -> void:
 		for x in range(0, maxi((a.size as Vector2i).x - 1, 1), 2):
 			var la := _low_of(int(a.p), at - d + across * x)
 			var lb := _low_of(int(b.p), at + across * x)
-			if la != NONE and lb != NONE:
+			if la == NONE or lb == NONE:
+				continue
+			# Over a module below (a level up), the tie's place is that module's
+			# ceiling: a tile across the doorway's sills holds the two instead.
+			var u := mini(la, lb) - 1
+			var under := []
+			for c: Vector3i in [at - d, at]:
+				for k in 2:
+					for y in range(u, maxi(la, lb)):
+						under.append(Vector3i(c.x, y, c.z) + across * (x + k))
+			if _free(under):
 				_tie(at - d, la, at, lb, across * x, d, colour, 0)
+			else:
+				_tubes.append(["tile_2x2", (at - d).min(at) + across * x, colour, 0])
+				sills += 1
 
 
 ## Under the core, the lowest thing of all: a keel of plates, the only bricks

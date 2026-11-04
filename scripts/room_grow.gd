@@ -295,7 +295,7 @@ func _attach(oi: int, cand: Array) -> int:
 	var m: int = cand[0]
 	var t: int = cand[1]
 	var off := _offset(oi, m, t, cand[2])
-	if not _fits(m, t, off):
+	if not _fits(m, t, off) or not _stair_under(oi, m, t, cand[2], off):
 		return -1
 	var first := open.size()
 	var idx := _place(m, t, off)
@@ -662,6 +662,54 @@ func _cut_through(cuts: Dictionary, wall: Dictionary, w: int, h: int, y0: int) -
 			for y in h:
 				var at := (wall.at as Vector3i) + d * k + across * x
 				cuts[Vector3i(at.x, y0 + y, at.z)] = true
+
+
+## A stair join to open connector `oi` (module m turned t at `off`): its
+## flight lies under the upper module's room, so the hole over it opens into
+## that room and not into a wall of it (an upper module turned another way
+## round the link than the lower). True for any other join.
+func _stair_under(oi: int, m: int, t: int, ci: int, off: Vector3i) -> bool:
+	var a: Dictionary = open[oi]
+	if String(a.kind) != "stair_up" and String(a.kind) != "stair_down":
+		return true
+	var b: Dictionary = lib[m].turns[t].conns[ci]
+	var pa: Dictionary = placed[int(a.p)]
+	var sa: Dictionary = lib[pa.m].turns[pa.t].spaces.get(int(a.space), {})
+	var sb: Dictionary = lib[m].turns[t].spaces.get(int(b.space), {})
+	if sa.is_empty() or sb.is_empty():
+		return true
+	var lower := [sa, pa.off, a.at] if String(a.kind) == "stair_up" else [sb, off, (b.at as Vector3i) + off]
+	var upper := [sb, off] if String(a.kind) == "stair_up" else [sa, pa.off]
+	var h := int(upper[0].floor_y) + (upper[1] as Vector3i).y - int(lower[0].floor_y) - (lower[1] as Vector3i).y
+	var flight := _flight(lower[0], lower[1], lower[2], h)
+	if flight.is_empty():
+		return true
+	var u_off: Vector3i = upper[1]
+	for c: Vector2i in flight[1]:
+		if not (upper[0].cols as Dictionary).has(c - Vector2i(u_off.x, u_off.z)):
+			return false
+	return true
+
+
+## The flight a stair up `h` plates from lower space `ls` (its module at `loff`)
+## to the link at `link` takes: [step rise, its world columns step by step from
+## the link (two a step), facing]; [] when none fits.
+func _flight(ls: Dictionary, loff: Vector3i, link: Vector3i, h: int) -> Array:
+	if h <= 0:
+		return []
+	for step: int in STEP_RISES:
+		var n := ceili(float(h) / step)
+		for f in 4:
+			var fd: Vector2i = StructureSpaces.FACINGS[f]
+			var across := Vector2i(absi(fd.y), absi(fd.x))
+			var cols := []
+			for i in n:
+				for x in 2:
+					cols.append(Vector2i(link.x, link.z) - fd * i + across * x)
+			if cols.all(func(c: Vector2i) -> bool:
+					return (ls.cols as Dictionary).has(c - Vector2i(loff.x, loff.z))):
+				return [step, cols, f]
+	return []
 
 
 ## A straight stair from the lower room's floor up to the upper's, two studs
