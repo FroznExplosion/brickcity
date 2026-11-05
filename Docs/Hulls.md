@@ -343,17 +343,53 @@ sleeps and wakes with its planet.
   * The planet `--gate=hull` adds 2 checks (18 ok). Up from the seat at 66 m/s: on the
     ghost, 0.000 m along the deck while the ship went 17 m. At rest: off the ghost onto the
     solid bricks.
-* **Not built yet** (the crossing list above):
-  * **Shots fired aboard.** The gun's ray is the camera's, in the world, where a riding ship
-    has only its shell box.
-  * **Shots from outside entering through a hole.**
-  * **Loose bricks inside the ghost.**
-  * **AI and enemies seeing a pawn aboard.** Its body is not in the world.
-  * **Repairs while riding.** Still refused.
-  * **Docking, ghost to ghost.**
-  * **A parked ship's crew asleep with its planet.**
-  * **The 60 s and planet-to-planet runs of the gate.** The probe holds for 6 s.
-  * **Boats (step 7).** They will use the same ghost.
+### 7b.2 Built (2026-11-05): the crossings
+
+* **`ShipRays.cast(space, query)`** stands in for `intersect_ray` on every gun ray
+  (`GunController`, 6 sites) and the AI's sight lines (`Soldier`, its shelter test,
+  `Callouts`).
+  * Where a ray crosses a riding ship's box (`SpaceStation.box_span`), that stretch is traced
+    in the ship's ghost. Its shell box is never hit.
+  * It meets the wall it was aimed at: the ship's shell body as the collider, so
+    `_structure_hit` routes it to `damage`. Or it meets a crew member standing there: their
+    body. Or it goes on through a hole.
+  * The result is the nearest hit along the ray, in world terms.
+  * This one change covers shots fired aboard, shots and looks from outside coming in
+    through a hole, and walls hiding the crew.
+* **Hits and repairs while riding** (the ghost is its collision then). `damage`,
+  `restorable` and `restore` are refused only for a riding ship with no ghost. `_damage_step`
+  runs while riding, with the world collision absent. The restore tool aims through
+  `ShipRays`.
+* **Enemies aim at the crew where they really are.** `Pawn.feet()` and `chest()` are world
+  positions, through `Pawn.to_world()`. The pawn's own movement uses `feet_here()`, its
+  body's frame.
+* **Loose bricks inside**: in a riding ship, a group that comes loose with no outside air
+  beside it (`_inside_hull`) is thrown as crumbs. Those ride with the ship, in its frame,
+  instead of drifting out through the wall as a piece.
+* **The ghost lasts the ship's life.** `deactivate` keeps it, and `activate` points it at
+  the new chunk (the same block ids, from the same template).
+  * **Asleep:** a planet going to sleep switches its parked ships' ghosts off
+    (`ghost_switch`: the bodies leave the space), and whoever walks one sleeps with it.
+    Both come back on wake.
+  * **Docked:** `_ghost_tick` boards from one ship's ghost straight onto another's
+    (ghost to ghost).
+* **Gate**: `ghost_hull_probe`, 15 checks:
+  * 60 s on the deck of a ship rocking, turning and flying (it went 18 km): drift 0.0000 m.
+  * Shot aboard: the wall it was aimed at, as structure.
+  * A wall hides the crew; hit in flight, the hole is in the ghost too; a shot from
+    outside through it meets the crew.
+  * Repair in flight.
+  * Inside versus hull bricks.
+  * Three frames of travel with the origin recentred each time: the ghost never rebuilt,
+    the body 1.4 mm from its place on the ship.
+  * Asleep and awake; docked ghost to ghost; getting off.
+* **Other gates:** planet `--gate=hull` 18 ok, `--gate=seat` 17 ok. Gravity 13, moves 39,
+  pawn 7, repair 7, vent 10, air 13, AI moves 7, soldier 8, callouts 9.
+* **Still open:**
+  * **Ladders** can't be climbed on a riding ship's ghost (they are found in the world).
+  * **Flying planet to planet in play with someone walking aboard** needs someone at the
+    controls (a second player or an autopilot).
+  * **Boats** (step 7) will use the same ghost.
 
 ## 8. Water drawn inside
 

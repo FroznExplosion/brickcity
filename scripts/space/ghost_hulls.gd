@@ -61,7 +61,7 @@ static func board(body: CharacterBody3D, st: SpaceStation) -> void:
 	var g := r2g * xf.origin
 	var v := body.velocity - st.deck_velocity(g)
 	PhysicsServer3D.body_set_space(body.get_rid(), st.ghosts.space)
-	body.set_meta(&"ghosted", true)
+	body.set_meta(&"ghosted", st)
 	body.global_transform = r2g * xf
 	body.velocity = r2g.basis * v
 	body.reset_physics_interpolation()

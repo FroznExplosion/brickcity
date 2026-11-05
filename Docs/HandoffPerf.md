@@ -99,3 +99,43 @@ main thread).
   `brick_bevel_probe` (windowed); planet `--gate=topple|bricks|fall|light`.
 - After a C++ merge, rebuild main's DLL (`python -m SCons` in main's `gdextension/brick`, editor
   closed) and `--import` in main.
+
+## 6. Section 4 item 1, first measurements (2026-11-04, later chat, worktree `C:\Users\lbaun\bc-perf`)
+
+- **Godot's TIME_PHYSICS_PROCESS / TIME_PROCESS monitors are the worst frame of the last
+  second**, set once a second -- not "this frame". The census's "physics N ms this frame" and the
+  live profiler's "solver ~" (physics minus script) are not what they say. New
+  `scripts/frame_clock.gd` (FrameClock) splits each frame by the wall clock (city tick, other
+  scripts, physics step, idle, draw, sync/wait) plus the GPU's own time; a pass prints it as
+  `[prof] frames by the clock` / `[prof] slow frames`. Screenshots and censuses are left out.
+- `big_city.tscn -- --shot` (1280x720 test window, one headless probe of another chat running):
+  frame 19.9 ms mean = city tick 5.1, Jolt step 1.3, idle 1.7, draw 10.9; **GPU 15.4 ms mean**.
+  108 slow frames (43 ms mean): **GPU 24.4 mean** (33-62 in the worst), city tick 18.3; biggest
+  part draw 56 times, city tick 46. Jolt is NOT the problem (3.8 ms on slow frames).
+- `city.tscn -- --shot` for comparison: 17.0 ms mean, GPU 10.9, city tick 1.6; 7 slow frames.
+- So the big-city lag is two things: (a) GPU-bound collapse frames -- ~60 moving pieces, 200k
+  bricks loose; next: what the GPU draws then (shadow casters of moving pieces, overdraw, piece
+  meshes un-culled) -- try `--render-thread` off, shadows off A/B, count draw calls; (b) city tick
+  spikes 40-70 ms (`dmg_rooms` 59, `bd_pieces` 55, shell-piece spawn split 23 ms for 24k bricks,
+  main-thread mesh bake 31 ms) -- see the `[prof] N tick(s) over 25 ms` list.
+
+### 6.1 Piece shadows from stand-ins (2026-11-05)
+
+- FrameClock now also counts what the renderer drew: main pass and shadow passes apart
+  (`draws_k`, `tris_M`, `sh_draws_k`, `sh_tris_M`). Draw calls are few (~200); triangles are the
+  cost. Big-city collapse: **shadow passes 13-18 M triangles a frame, the main pass 4-5 M**.
+- Loose pieces cast with their full bricks (and their bands) at any distance, into all four sun
+  cascades; buildings already had shadow shells. A/B with pieces casting nothing: shadow
+  triangles 13.1 M -> 0.9 M, GPU 44 -> 17 ms. So pieces were ~93% of the shadow work.
+- Fix (merged): a big piece (radius > `SMALL_ISLAND_RADIUS`) further than `BRICK_SHADOW_RANGE`
+  (15 m) casts its coarse stand-in, shadows only (`IslandManager.want_shadow_proxy`, built on a
+  worker with `coarse_chunk_async`, uploaded on another, rebuilt at most every
+  `COARSE_REBUILD_TICKS` when it lost bricks). Its bricks and bands cast until the first is hung.
+  Close up nothing changed. Result: shadow triangles 13.1 M -> 3.6 M a frame; invisible pieces
+  no worse (worst 17 ticks).
+- **The times in these runs are not trustworthy**: they were taken past midnight with the
+  display asleep (frames ~93 ms, draw stalls -- see the display-sleep note) and one other chat's
+  headless gate going. Triangle counts are. **Next: re-measure GPU ms awake, editor closed**
+  (`big_city.tscn -- --shot`, read `[prof] frames by the clock`), then the city-tick spikes.
+- Gates: solve, collapse, replay, storey, storey_unit, hang probes pass; `--light` passes;
+  `--chamfer` failed "the picture is the same either way" once (1.01% vs 1%), then passed 2 of 2.

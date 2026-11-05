@@ -314,6 +314,11 @@ func activate() -> void:
 		bricks.kill_blocks(chunk, _dead)
 		if air != null:
 			air.blocks_removed(bricks, chunk, _dead)
+	if ghost != null:
+		# Laid again: its ghost, kept, follows the new chunk (the same block ids,
+		# from the same template, so what it has switched off still holds).
+		ghost.chunk = chunk
+		ghost.world = bricks
 	bricks.set_chunk_anchored(chunk, true)
 	bricks.set_tension_per_stud(chunk, BrickStrength.tension())
 	bricks.set_chunk_section_plates(chunk, SECTION_PLATES)
@@ -356,7 +361,9 @@ func deactivate() -> void:
 	if _collision != null:
 		_collision.free_bodies()
 		_collision = null
-	_free_ghost()
+	# Its ghost stays (Docs/Hulls.md 7b: built once, for the ship's life): a crew on
+	# it goes on standing on it while its bricks are put away; laid again, it
+	# follows the new chunk (activate).
 	# Thrown as crumbs or gone as pieces, all gone from what is laid next.
 	_dead = bricks.get_dead_blocks(chunk)
 	_dead.append_array(bricks.get_detached_blocks(chunk))
@@ -449,8 +456,12 @@ func on_origin_shift() -> void:
 ## A round or a blast at world `point` (StructuralDamage.for_shot's record), as
 ## a planet building's bricks take one. False if its bricks are not there.
 func damage(point: Vector3, shot: Dictionary) -> bool:
-	if not bricked or riding or not holds(point):
+	# Riding too: its ghost is its bricks' collision then (Docs/Hulls.md 7b), and a
+	# ray reaches its bricks through it (ShipRays).
+	if not bricked or not holds(point) or (riding and ghost == null):
 		return false
+	if riding:
+		bricks.set_chunk_transform(chunk, global_transform * frame)
 	var blast := bool(shot.get("blast", false))
 	var radius := float(shot.get("radius", 0.0))
 	var e := damage_log.record(0, DamageLog.Kind.BLAST if blast else DamageLog.Kind.CHIP, chunk,
@@ -470,7 +481,7 @@ func damage(point: Vector3, shot: Dictionary) -> bool:
 ## generated one (its recipe and air know every brick); empty while its bricks
 ## are not laid.
 func restorable(point: Vector3, radius: float, edge_first := true) -> PackedInt32Array:
-	if not bricked or riding or chunk < 0 or recipe == null or air == null:
+	if not bricked or (riding and ghost == null) or chunk < 0 or recipe == null or air == null:
 		return PackedInt32Array()
 	var here := cell_at(point)
 	var stud := BrickWorld.get_stud_metres()
@@ -516,7 +527,7 @@ func restorable(point: Vector3, radius: float, edge_first := true) -> PackedInt3
 ## refused then too -- its bricks' collision is put away; the ghost hull, step 6,
 ## is what lets a crew work on it in flight). Returns the bricks brought back.
 func restore(ids: PackedInt32Array, point := Vector3.ZERO, radius := 0.0) -> PackedInt32Array:
-	if not bricked or riding or chunk < 0 or ids.is_empty():
+	if not bricked or (riding and ghost == null) or chunk < 0 or ids.is_empty():
 		return PackedInt32Array()
 	var e := DamageLog.Entry.new()
 	e.kind = DamageLog.Kind.RESTORE
@@ -539,9 +550,9 @@ func _after_restore(back: PackedInt32Array) -> void:
 		ghost.enable(back)
 	if _collision != null:
 		_collision.enable(back)
-		for b in _collision.bands_of(back):
-			if not _remesh.has(b):
-				_remesh.append(b)
+	for b in _bands_of(back):
+		if not _remesh.has(b):
+			_remesh.append(b)
 	bricks.bake_chunk_async(chunk)
 
 
@@ -557,10 +568,11 @@ func _after_kill(killed: PackedInt32Array) -> void:
 	bricks_killed += killed.size()
 	if air != null:
 		air.blocks_removed(bricks, chunk, killed)
-	_collision.disable(killed)
+	if _collision != null:
+		_collision.disable(killed)
 	if ghost != null:
 		ghost.disable(killed)
-	for b in _collision.bands_of(killed):
+	for b in _bands_of(killed):
 		if not _remesh.has(b):
 			_remesh.append(b)
 	bricks.bake_chunk_async(chunk)
@@ -583,7 +595,10 @@ func _solve() -> void:
 	for g in groups:
 		var ids: PackedInt32Array = g
 		all.append_array(ids)
-		if ids.size() <= DRIFT_MIN:
+		# Flown with crew on its ghost (Docs/Hulls.md 7b), a group come loose INSIDE
+		# its hull stays in it: as crumbs, which ride with the ship (its frame),
+		# never as a piece drifting off through the wall.
+		if ids.size() <= DRIFT_MIN or (riding and _inside_hull(ids)):
 			crumbs.throw(bricks, chunk, ids)
 			bricks.kill_blocks(chunk, ids)
 			continue
@@ -600,7 +615,7 @@ func _solve() -> void:
 func _damage_step() -> void:
 	if _solve_due:
 		_solve()
-	if _collision.any_stale():
+	if _collision != null and _collision.any_stale():
 		_collision.flush(2)
 	if ghost != null and ghost.any_stale():
 		ghost.flush(2)
@@ -626,11 +641,10 @@ func _process(_delta: float) -> void:
 		_g2r_last = ghost_to_real()
 		_g2r_dt = _delta
 		_air_step(_delta)
-		if not riding:
-			_damage_step()
-		else:
+		if riding:
 			# Its doors and lifts follow its chunk; flown, the chunk follows it.
 			bricks.set_chunk_transform(chunk, global_transform * frame)
+		_damage_step()
 		return
 	if not bricks.bake_ready(chunk):
 		if not bricks.bake_pending(chunk):
@@ -1050,6 +1064,19 @@ func _free_ghost() -> void:
 		ghosts.release(self)
 
 
+## Its ghost switched off (a planet it is parked on gone to sleep, Docs/Hulls.md 7b)
+## or back on: its bodies out of the ghost space and back, nothing rebuilt.
+var ghost_on := true
+
+
+func ghost_switch(on: bool) -> void:
+	if ghost == null or on == ghost_on:
+		return
+	ghost_on = on
+	for b in ghost.bodies:
+		PhysicsServer3D.body_set_space(b, ghosts.space if on else RID())
+
+
 ## Ghost-space points to the world, now: the real ship's transform over its slot.
 func ghost_to_real() -> Transform3D:
 	return global_transform * ghost_slot.affine_inverse()
@@ -1072,6 +1099,52 @@ func deck_velocity(g: Vector3) -> Vector3:
 	if _g2r_dt <= 0.0:
 		return Vector3.ZERO
 	return (_g2r_last * g - _g2r_prev * g) / _g2r_dt
+
+
+## No cell of these blocks borders the outside: they are inside its hull.
+func _inside_hull(ids: PackedInt32Array) -> bool:
+	if air == null:
+		return false
+	for b in ids:
+		for i in air._block_cells(b):
+			for j in air._neighbours(i):
+				if air.state[j] == HullAir.OUTSIDE:
+					return false
+	return true
+
+
+## Its bricks' bands these blocks are in (BuildingCollision.bands_of, without one).
+func _bands_of(ids: PackedInt32Array) -> PackedInt32Array:
+	if _collision != null:
+		return _collision.bands_of(ids)
+	var out := PackedInt32Array()
+	for si in bricks.get_block_sections(chunk, ids, true):
+		if si >= 0 and not out.has(si):
+			out.append(si)
+	return out
+
+
+## Where the segment `from` -> `to` (world) is inside its module's box (holds'):
+## (t in, t out) as shares of the segment, in > out when it misses.
+func box_span(from: Vector3, to: Vector3) -> Vector2:
+	var stud := BrickWorld.get_stud_metres()
+	var inv := (global_transform * frame).affine_inverse()
+	var a := inv * from
+	var d := inv * to - a
+	var lo := Vector3(-0.5, -0.5, -0.5)
+	var hi := Vector3(data.fx * stud + 0.5, height + 0.5, data.fz * stud + 0.5)
+	var t0 := 0.0
+	var t1 := 1.0
+	for k in 3:
+		if absf(d[k]) < 1e-9:
+			if a[k] < lo[k] or a[k] > hi[k]:
+				return Vector2(1.0, 0.0)
+			continue
+		var u := (lo[k] - a[k]) / d[k]
+		var v := (hi[k] - a[k]) / d[k]
+		t0 = maxf(t0, minf(u, v))
+		t1 = minf(t1, maxf(u, v))
+	return Vector2(t0, t1)
 
 
 ## Ghost point `g` is inside its module's box (holds, in the ghost).

@@ -529,7 +529,7 @@ func can_see(h: Pawn) -> bool:
 			return false
 	var q := PhysicsRayQueryParameters3D.create(eye, aim_at, Layers.HITSCAN_MASK,
 			[pawn.body.get_rid(), h.body.get_rid()] as Array[RID])
-	if not services.world3d.direct_space_state.intersect_ray(q).is_empty():
+	if not ShipRays.cast(services.world3d.direct_space_state, q).is_empty():
 		return false
 	# The ground has colliders only where the terrain's detail tier is; the
 	# field is everywhere, so a hill out past the city still hides a body

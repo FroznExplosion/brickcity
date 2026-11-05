@@ -478,7 +478,7 @@ func _fire_pellets(from: Vector3, dir: Vector3, aim_basis: Basis, mult: float) -
 		var rad := sqrt(r.randf()) * cone
 		var th := r.randf() * TAU
 		var pd := (dir + aim_basis.x * cos(th) * rad + aim_basis.y * sin(th) * rad).normalized()
-		var hit := space.intersect_ray(PhysicsRayQueryParameters3D.create(from, from + pd * range_m,
+		var hit := ShipRays.cast(space, PhysicsRayQueryParameters3D.create(from, from + pd * range_m,
 				collision_mask, exclude))
 		if hit.is_empty():
 			continue
@@ -578,7 +578,7 @@ func _fire_one(mult := 1.0) -> void:
 		_fire_pellets(from, dir, aim_basis, mult)
 		return
 	var q := PhysicsRayQueryParameters3D.create(from, from + dir * range_m, collision_mask, exclude)
-	var hit := get_world_3d().direct_space_state.intersect_ray(q)
+	var hit := ShipRays.cast(get_world_3d().direct_space_state, q)
 	if hit.is_empty():
 		fired.emit({})
 		if gun.is_inside_tree():
@@ -718,7 +718,7 @@ func _living_near(at: Vector3, radius: float) -> Array[Node]:
 			continue
 		var los := PhysicsRayQueryParameters3D.create(at, (n as Node3D).global_position,
 				Layers.HITSCAN_MASK)
-		if not space.intersect_ray(los).is_empty():
+		if not ShipRays.cast(space, los).is_empty():
 			continue
 		out.append(n)
 	return out
@@ -966,7 +966,7 @@ func _fire_charge() -> bool:
 	var dir := -b.z
 	var from := aim.global_position
 	var q := PhysicsRayQueryParameters3D.create(from, from + dir * range_m, collision_mask, exclude)
-	var hit := get_world_3d().direct_space_state.intersect_ray(q)
+	var hit := ShipRays.cast(get_world_3d().direct_space_state, q)
 	if hit.is_empty():
 		if gun.is_inside_tree():
 			gun.play_shot_effects(from + dir * range_m)
@@ -1014,7 +1014,7 @@ func _arc_down_aim(amount: float, jumps: int, jump_range: float, falloff: float,
 	var dir := -b.z
 	var from := aim.global_position
 	var q := PhysicsRayQueryParameters3D.create(from, from + dir * ARC_REACH, collision_mask, exclude)
-	var hit := get_world_3d().direct_space_state.intersect_ray(q)
+	var hit := ShipRays.cast(get_world_3d().direct_space_state, q)
 	var end: Vector3 = from + dir * ARC_REACH if hit.is_empty() else hit.position
 	var points := PackedVector3Array([from + dir * 0.6 - b.y * 0.15, end])
 	var cur: Node = null
@@ -1167,7 +1167,7 @@ func _aimed_at_shield() -> bool:
 	var from := aim.global_position
 	var q := PhysicsRayQueryParameters3D.create(from, from - aim.global_transform.basis.z * range_m,
 			collision_mask, exclude)
-	var hit := get_world_3d().direct_space_state.intersect_ray(q)
+	var hit := ShipRays.cast(get_world_3d().direct_space_state, q)
 	if hit.is_empty():
 		return false
 	var target := _living(hit.collider)

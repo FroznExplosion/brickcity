@@ -198,7 +198,7 @@ static func can_see(l: Listener, speaker: Pawn, world3d: World3D, ai_world: AIWo
 	var from := cam.global_position
 	for at in [head, speaker.chest()]:
 		var q := PhysicsRayQueryParameters3D.create(from, at, Layers.HITSCAN_MASK, ex)
-		if world3d.direct_space_state.intersect_ray(q).is_empty() \
+		if ShipRays.cast(world3d.direct_space_state, q).is_empty() \
 				and (ai_world == null or not ai_world.smoke_blocks(from, at)):
 			return true
 	return false
