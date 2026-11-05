@@ -79,8 +79,17 @@ static func for_planet(p_rig: LightRig, p_body: Node3D, planet_radius: float, pe
 	c.radius = p.radius
 	c.cover = p.cover
 	c._drift = p.drift
+	# From where its far look's clouds have blown to.
+	var was = p_body.get("cloud_drift")
+	if was is Vector3 and was != Vector3.INF:
+		c._drift = was
 	p_body.add_child(c)
 	return c
+
+
+## Is the live layer `b`'s (drifting its far look's clouds itself)?
+static func drifts(b: Node3D) -> bool:
+	return _live != null and is_instance_valid(_live) and _live.body == b
 
 
 ## The cover now: its own, or the weather's when that is more.
@@ -136,8 +145,11 @@ func _exit_tree() -> void:
 		RenderingServer.global_shader_parameter_set(&"cloud_sun", Vector4.ZERO)
 		RenderingServer.global_shader_parameter_set(&"cloud_here", 1.0)
 		_dim_sun(1.0)
-	# Its world's far look keeps its clouds when this goes.
+	# Its world's far look keeps its clouds when this goes, blown on from
+	# where they are.
 	if body != null and is_instance_valid(body):
+		if body.get("cloud_drift") != null:
+			body.set("cloud_drift", _drift)
 		var imp = body.get("_impostor_mat")
 		if imp is ShaderMaterial:
 			(imp as ShaderMaterial).set_shader_parameter("cloud_show", 1.0)
