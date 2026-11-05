@@ -364,6 +364,22 @@ Timing runs need the editor closed (CLAUDE.md).
 | E5 | **Nearest-first ray order** in our own C++ brick ray tests | small | ray test counts |
 | E6 | **Batched, threaded buoyancy** for all floating things (§7 uses it) | small | -- |
 
+**E2 measured (2026-11-04, `city.tscn -- --piececost`, editor closed, no other runs, but
+under 1 GB of RAM free -- paging may add noise):** 6 towers blasted gave 24 large pieces
+(0 small: the cap was not reached). Each piece has its own mesh (24 distinct), so a
+`MultiMesh` has nothing to share. Drawn vs hidden, averaged over 180 frames:
+
+| | render CPU | GPU | draw calls |
+|---|---|---|---|
+| drawn | 0.870 ms | 11.20 ms | 752 |
+| hidden | 0.795 ms | 6.82 ms | 615 |
+| **the pieces** | **0.07 ms** | **4.36 ms** | **137** |
+
+The cost is triangles on the GPU, not draw calls or CPU: 856k triangles in 24 pieces
+(~36k each, ~0.18 ms GPU each). Batching (E2 as written) would not help, so it is not
+done. What would: a cheaper mesh for a loose piece -- inner faces culled, or a far
+tier past a few metres. That is a mesher change (brick mesher area), noted for later.
+
 E4 is only done if E1 and the measurements show band rebuilds still matter. The full Brickadia
 answer (one custom collision shape with an index inside) needs a Jolt shape Godot does not
 expose -- out of scope unless E4's cheap steps are not enough.
@@ -376,6 +392,7 @@ Each step lands on `main` on its own, with its gate.
 
 1. **E1 debug views.** Helps every step after.
 2. **E2 measure, then batch** loose pieces' drawing if the numbers say so (editor closed).
+   Measured: GPU triangles, not draw calls -- batching skipped (§11).
 3. **Air grid, compartments, breaches** (§2-§3) on the generated spaceship, headless.
    Gate: `hull_air_probe`.
 4. **Venting** in space (§4): pressure, the pull toward the hole, a HUD warning.
