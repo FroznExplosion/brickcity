@@ -73,6 +73,16 @@ func setup(p_data: PlanetData, far := false) -> void:
 		apply_bake(PlanetImpostorBake.bake(data))
 	if data.has_air:
 		_build_atmosphere()
+		# Its clouds on its far look (Docs/Lighting.md 2b): the shell's own
+		# (CloudLayer.params); CloudLayer drifts them while it is the live one.
+		if _impostor_mat != null:
+			var cp := CloudLayer.params(data.radius, data.peak(), data.planet_seed)
+			_impostor_mat.set_shader_parameter("cloud_show", 1.0)
+			_impostor_mat.set_shader_parameter("cloud_r", cp.radius)
+			_impostor_mat.set_shader_parameter("planet_r", data.radius)
+			_impostor_mat.set_shader_parameter("cloud_cover", cp.cover)
+			_impostor_mat.set_shader_parameter("cloud_size", CloudLayer.CLOUD_SIZE)
+			_impostor_mat.set_shader_parameter("cloud_drift_p", cp.drift)
 	if data.ring_outer > 0.0:
 		ring = RockField.new()
 		ring.setup(data.ring_inner, data.ring_outer, data.planet_seed, data.ring_colour)

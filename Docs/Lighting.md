@@ -144,10 +144,24 @@ project.godot) set each frame by `CloudLayer` (`scripts/cloud_layer.gd`).
   (`city_far`, `impostor`): through `weather.gdshaderinc`, which includes it.
   The albedo, not the sun: without a `light()` of its own a shader cannot
   take the sun alone, so the ambient under a cloud dims too.
-- Not: figures, the gun, loose pieces and the city's plain ground plane
-  (`StandardMaterial3D`s, no shader to put it in); the planet's far look from
-  space (the shell is drawn there, the impostor has no clouds of its own);
-  `seen` at the camera.
+- **What moves** (2026-11-05): the sun itself is dimmed by what reaches the
+  camera (`cloud_here`; `CloudLayer._dim_sun`, after whatever set the sun
+  that frame: `process_priority` 1000, the setter's new value taken as the
+  new base), so figures, the gun and pieces darken under a cloud; the
+  shaders take their own share against it (`cloud_shade` = own / here,
+  at most 1.5: a sunlit wall seen from a cloud's shadow is lifted back,
+  its ambient a little with it). Not the city's plain ground plane.
+- **Weather** (2026-11-05): rain or snow (WeatherFx) brings the cover to
+  0.92 at 0.05 a second, and lets it go again; the clouds' undersides grey
+  with it (`storm`); WeatherFx's wind blows them (14 m/s per unit).
+- **From space** (2026-11-05): `planet_impostor.gdshader` draws the same
+  clouds (`cloud_density_of`, `CloudLayer.params`: one layer radius, cover
+  and drift for both) and their shadows on its ground. A world's far look has
+  them from the start (`PlanetBody.setup`); the live layer drifts them and
+  hands over: the shell fades out between 0.4 and 3 km over it as the far
+  look's fade in (`shell_fade`, `cloud_show`). Far worlds' clouds stand
+  still. The noise has a swell six clouds across: fronts with clear sky
+  between. Picture `light_gate_clouds_space`.
 - Scripted passes and gates hold the clouds still (`CloudLayer.still`), so
   pictures do not drift between shots.
 - Light gate: the world's layer is there, overcast takes a full cloud's
@@ -291,8 +305,14 @@ re-bake (50-80 ms a tower) per hit. A grid beside the mesh instead:
   the same, the building gone. Needed if the shadow range is ever cut below
   where bricks are drawn (a Low shadows setting): then that, faded in over
   the last fifth.
-- Not yet: real lamps in the content (no build has a Glow brick; ships have
-  no strip lights): Room modules' to place.
+- **Lamps in the content** (2026-11-05): a generated ship's or station's
+  every space gets Lamp under-tiles under its ceiling, a bar every 9 studs
+  (`KitFurnish.light`: warm in rooms, white in corridors and halls; a test
+  ship 58); a planet town's towers likewise under every ceiling over a
+  room-high space (`CeilingLights.hang`, on the template; 30 in the gate's
+  tower). Not the city's towers. With lights in every room, a building's
+  8 real lights are the 8 nearest the camera, picked again each turn of
+  `step()` (`_place_lamps`).
 
 ### 6.2 Quick stand-in: ambient boxes
 

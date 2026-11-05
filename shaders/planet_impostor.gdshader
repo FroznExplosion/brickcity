@@ -17,6 +17,17 @@ uniform float ambient = 0.16;
 uniform float fade = 1.0;
 
 #include "res://shaders/body_shadow.gdshaderinc"
+#include "res://shaders/clouds.gdshaderinc"
+
+// Its clouds (Docs/Lighting.md 2b; CloudLayer.params): the layer's radius
+// and the planet's (m), cover, a cloud's size, the drift; how much of them
+// to draw (0 none: no air, or the shell is drawn instead, close in).
+uniform float cloud_show = 0.0;
+uniform float cloud_r = 11000.0;
+uniform float planet_r = 10000.0;
+uniform float cloud_cover = 0.0;
+uniform float cloud_size = 650.0;
+uniform vec3 cloud_drift_p = vec3(0.0);
 
 varying vec3 v_dir;
 
@@ -43,7 +54,17 @@ void fragment() {
 	vec3 sd = normalize(sun_dir);
 	float ndl = max(dot(normalize(v_dir), sd), 0.0);
 	if (ndl > 0.0) ndl *= body_shadow(normalize(v_dir), sd) * ring_shadow(normalize(v_dir), sd);
+	vec3 dn = normalize(v_dir);
+	float top = 0.0;
+	if (cloud_show > 0.0 && cloud_cover > 0.0) {
+		// Its shadow on the ground under the sun's ray, and the cloud over it.
+		vec3 hit = cloud_sphere_exit(dn * planet_r, sd, cloud_r);
+		ndl *= 1.0 - 0.45 * cloud_density_of(hit, cloud_drift_p, cloud_cover, cloud_size);
+		top = cloud_density_of(dn * cloud_r, cloud_drift_p, cloud_cover, cloud_size) * cloud_show;
+	}
 	vec3 lit = base * (ndl * sun_color + ambient);
+	float sun_top = max(dot(dn, sd), 0.0);
+	lit = mix(lit, vec3(0.95) * (sun_top * sun_color + ambient), top * 0.9);
 	float rim = pow(1.0 - clamp(dot(normalize(VIEW), NORMAL), 0.0, 1.0), 4.0);
 	ALBEDO = lit + atmo_color * rim * 0.5 * (0.3 + ndl);
 }
