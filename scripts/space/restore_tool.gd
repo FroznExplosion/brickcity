@@ -39,7 +39,8 @@ func tick(dt: float, holding: bool, from: Vector3, dir: Vector3, structures: Arr
 		return 0
 	for s in structures:
 		var st := s as SpaceStation
-		if st == null or not st.bricked or st.riding:
+		# Flown, it is worked on through its ghost (Docs/Hulls.md 7b).
+		if st == null or not st.bricked or (st.riding and st.ghost == null):
 			continue
 		var ids := st.restorable(at, RADIUS)
 		if ids.is_empty():
@@ -65,9 +66,10 @@ func tick(dt: float, holding: bool, from: Vector3, dir: Vector3, structures: Arr
 static func aim_point(from: Vector3, dir: Vector3, space: PhysicsDirectSpaceState3D) -> Vector3:
 	var to := from + dir.normalized() * RANGE
 	if space != null:
-		# Bricks only: never the pawn the view is in.
+		# Bricks only: never the pawn the view is in. Through a flown ship's ghost,
+		# never its shell box (ShipRays).
 		var q := PhysicsRayQueryParameters3D.create(from, to, Layers.STRUCTURE)
-		var hit := space.intersect_ray(q)
+		var hit := ShipRays.cast(space, q)
 		if not hit.is_empty():
 			return hit.position
 	return to

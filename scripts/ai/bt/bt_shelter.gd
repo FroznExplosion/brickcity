@@ -56,7 +56,7 @@ static func covered(s: AIServices, feet: Vector3) -> bool:
 	var from := feet + Gravity.up_at(feet) * (Pawn.BODY_HEIGHT + 0.05)
 	var q := PhysicsRayQueryParameters3D.create(from, from + Gravity.up_at(from) * ROOF_WITHIN)
 	q.collision_mask = Layers.STRUCTURE | Layers.DEBRIS
-	return not s.world3d.direct_space_state.intersect_ray(q).is_empty()
+	return not ShipRays.cast(s.world3d.direct_space_state, q).is_empty()
 
 
 ## The nearest place in reach with a roof over it: rings of sixteen, nearest

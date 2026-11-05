@@ -224,7 +224,7 @@ func _ready() -> void:
 func resize(height: float, radius: float) -> void:
 	if body == null:
 		body = get_parent() as CharacterBody3D
-	var at := feet() if body.is_inside_tree() else body.position - Vector3.UP * _height * 0.5
+	var at := feet_here() if body.is_inside_tree() else body.position - Vector3.UP * _height * 0.5
 	stand_height = height
 	crouch_height = maxf(height - BRICK_M, height * 0.6)
 	_height = height
@@ -282,14 +282,31 @@ func look_dir() -> Vector3:
 	return f if Gravity.planet == null or b == Basis.IDENTITY else b.orthonormalized() * f
 
 
-## The middle of the body: what somebody aiming at this pawn aims at.
+## The middle of the body: what somebody aiming at this pawn aims at. In the world,
+## always -- aboard a ship's ghost hull too (Docs/Hulls.md 7b), where the body is
+## not: what an enemy aims at, a hit lands on, a pickup is near.
 func chest() -> Vector3:
 	# Six tenths of the way up, standing or crouched.
-	return feet() + up * _height * 0.62
+	return to_world() * (feet_here() + up * _height * 0.62)
 
 
+## Its feet in the world (see chest).
 func feet() -> Vector3:
+	return to_world() * feet_here()
+
+
+## Its feet where its body is: the world's, or its ghost's aboard one. What its own
+## movement works in (PawnMoves), never what anyone else should be given.
+func feet_here() -> Vector3:
 	return body.global_position - up * _height * 0.5
+
+
+## From its body's space to the world: nothing, but aboard a ghost hull the real
+## ship's transform over its slot.
+func to_world() -> Transform3D:
+	if ghost != null and is_instance_valid(ghost):
+		return ghost.ghost_to_real()
+	return Transform3D.IDENTITY
 
 
 ## Body centre (a capsule's origin) up to the eye: the middle of the head,
@@ -359,7 +376,7 @@ func _physics_process(delta: float) -> void:
 		Gravity.pin(at)
 	if f != _field:
 		_field = f
-		_fall_from = Gravity.height_of(feet())
+		_fall_from = Gravity.height_of(feet_here())
 		_jump_gain = 0.0
 	step(delta)
 	Gravity.unpin()
@@ -513,7 +530,7 @@ func _walk(delta: float, wish: Vector3, speed: float) -> void:
 func _track_fall() -> void:
 	var on_floor := body.is_on_floor()
 	# Where a fall started: the highest the feet were since they left a floor.
-	var feet_y := Gravity.height_of(feet())
+	var feet_y := Gravity.height_of(feet_here())
 	if on_floor and _was_on_floor:
 		_placed = false   # placed standing: the next fall is a real one
 	if floating:
