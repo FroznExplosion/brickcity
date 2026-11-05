@@ -2500,6 +2500,16 @@ func _run_light_gate() -> void:
 			floor_b = pb.bricks.block_at(s.chunk, Vector3i(int(il.x / stud), y, int(il.z / stud)))
 			if floor_b >= 0:
 				break
+		# The real lights hung are the ones nearest the camera
+		# (BrickGridLight._place_lamps): the eye in the room for these.
+		var was_eye := get_viewport().get_camera_3d()
+		var eye := Camera3D.new()
+		add_child(eye)
+		eye.global_position = inside
+		eye.make_current()
+		# Its own lights (CeilingLights, under every ceiling over a room).
+		var own: int = (grid_light._entries[key] as BrickGridLight.Entry).groups.size()
+		_check("the tower has lights under its ceilings", own >= 3, "%d" % own)
 		var lamp0 := grid_light.at(inside).y
 		var glow := -1
 		for m in BrickWorld.get_material_count():
@@ -2578,6 +2588,9 @@ func _run_light_gate() -> void:
 					- s.brick_node.global_basis.z.normalized() * 1.2, bar_at, up)
 			await get_tree().create_timer(1.5).timeout
 			await _shot("light_gate_lamp")
+		if was_eye != null:
+			was_eye.make_current()
+		eye.queue_free()
 		# Clouds (Lighting.md 2b): the world's layer is there, and its shadow
 		# takes the sun where it stands -- overcast, a full cloud's share; clear,
 		# none. The shader's sum is CloudLayer.shade_at's.
@@ -6029,3 +6042,4 @@ func _run_storey_gate() -> void:
 	await _shot("planet_storey_crush")
 	print("[planet] storey gate: %d ok, %d FAIL" % [_ok, _fail])
 	get_tree().quit(0 if _fail == 0 else 1)
+
