@@ -738,6 +738,8 @@ void fragment() {
         }
     }
     occlusion *= grid_light_shade(v_local, v_local_normal, albedo, emission);
+    // Under a cloud, less sun (clouds.gdshaderinc; Docs/Lighting.md 2b).
+    albedo *= cloud_shade((INV_VIEW_MATRIX * vec4(VERTEX, 1.0)).xyz);
     ALBEDO = albedo;
     ROUGHNESS = out_rough;
     SPECULAR = out_spec;

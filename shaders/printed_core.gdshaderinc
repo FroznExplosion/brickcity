@@ -249,6 +249,8 @@ void fragment() {
 #ifdef GRID_LIGHT
     AO = grid_light_shade(v_grid_p, v_grid_n, albedo, emission);
 #endif
+    // Under a cloud, less sun (clouds.gdshaderinc; Docs/Lighting.md 2b).
+    albedo *= cloud_shade((INV_VIEW_MATRIX * vec4(VERTEX, 1.0)).xyz);
     ALBEDO = albedo;
     ROUGHNESS = out_rough;
     SPECULAR = out_spec;

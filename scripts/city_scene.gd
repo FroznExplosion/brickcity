@@ -1380,6 +1380,8 @@ func _ready() -> void:
 	# as its gate.
 	if (_arena_mode or _firefight_mode) and not ("--gate" in args):
 		_scripted = false
+	# A pass's clouds held still: its pictures do not drift between shots.
+	CloudLayer.still = _scripted
 	if _scripted:
 		# A pass clicks for itself (--play, --mech), and a click is what takes
 		# the mouse: never the real one.
@@ -1399,6 +1401,7 @@ func _ready() -> void:
 ## the chain at the end of _ready started. It runs in a window nobody is at,
 ## on a machine somebody is using.
 var _scripted := false
+var clouds: CloudLayer
 
 
 ## May the pause menu open over this scene? (BrickcityMenuHost asks.)
@@ -19143,6 +19146,8 @@ func _build_scenery() -> void:
 	rig.build_day(self, Vector3(-30 if _terrain_mode else -50, -35, 0), 1.1, 0.6)
 	_setup_sun_shadows(rig.sun)
 	_sun = rig.sun
+	# Clouds and their shadows (Docs/Lighting.md 2b).
+	clouds = CloudLayer.for_city(rig, self)
 
 	if not _terrain_mode:
 		var ground := StaticBody3D.new()

@@ -110,10 +110,9 @@ player is.
   (the flight to a ringed world) fails on main as it is (in its shell, no
   rocks drawn; passes headless).
 
-### 2b. Clouds (later)
+### 2b. Clouds
 
-There are no clouds yet. When they come, their shadows are faked, not
-shadow-mapped:
+Their shadows are faked, not shadow-mapped:
 
 - One cloud-cover function (noise in the planet's frame, drifting with the
   wind), shared by the cloud layer and a **global shader uniform** set.
@@ -124,6 +123,37 @@ shadow-mapped:
   the whole view under thick cover, as the sun does in an eclipse.
 - Godot's `DirectionalLight3D` has no light cookie, so this is shader work, in
   the rig's include alongside `body_shadow`.
+
+**Built (2026-11-04).** `shaders/clouds.gdshaderinc`: four octaves of 3D
+value noise in the clouds' frame (a planet's own, its centre the origin; the
+city's world), drifting with the wind, the cover moving the threshold; four
+globals (`cloud_from_world`, `cloud_sun`, `cloud_shape`, `cloud_drift`,
+project.godot) set each frame by `CloudLayer` (`scripts/cloud_layer.gd`).
+
+- The layer: a planet with air has a shell 0.9 km over its peaks
+  (`CloudLayer.for_planet`, made by `PlanetScene._clouds_for` for the world
+  the camera is on; its cover from its seed, 0.3-0.62); the city a plane
+  1.2 km up following the camera (`for_city`). `clouds.gdshader`, lit by
+  hand from the rig's sun and sky: white on top, greyer under a thick one,
+  dark at night.
+- The shadows: `cloud_shade(world)` follows the sun's ray to the layer
+  (a sphere from inside, or the plane) and takes up to 45% of the albedo
+  under a full cloud (`CloudLayer.SHADE`), none with the sun down. On the
+  bricks and their studs (`brick.gdshader`, `printed_core`), the ground
+  (`terrain.gdshader`, `planet_ground.gdshader`), the far city
+  (`city_far`, `impostor`): through `weather.gdshaderinc`, which includes it.
+  The albedo, not the sun: without a `light()` of its own a shader cannot
+  take the sun alone, so the ambient under a cloud dims too.
+- Not: figures, the gun, loose pieces and the city's plain ground plane
+  (`StandardMaterial3D`s, no shader to put it in); the planet's far look from
+  space (the shell is drawn there, the impostor has no clouds of its own);
+  `seen` at the camera.
+- Scripted passes and gates hold the clouds still (`CloudLayer.still`), so
+  pictures do not drift between shots.
+- Light gate: the world's layer is there, overcast takes a full cloud's
+  share of the sun (0.55 left at noon), clear none; pictures
+  `light_gate_clouds_up` and `_down`; and their cost on the GPU, on and off
+  (2026-11-04: no difference within noise, 14.6 / 15.0 ms both).
 
 ## 3. Colour that does not paint the player
 
@@ -287,6 +317,35 @@ at walls where an unshadowed light would not. Only with `use_layer` (the
 planet, its ships): in the city bricks would be lit twice. Light gate: the
 Glow floor hangs one, unshadowed, bricks left out.
 
+**Built (2026-11-04): Lamp bricks, light bars, under-tiles.** A material,
+`Lamp` (brick_grid.h, 14; append-only): any filament colour, which is the
+colour of its light; drawn as a diffuser lit from behind (`bm_lamp`,
+brick_materials.gdshaderinc: its colour at full strength, x2.4). Which way it
+shines comes from its part (`BrickWorld` `lamp_mode`): smooth on top only --
+a tile, i.e. a **light bar** -- up; smooth underneath only -- the new
+**under-tile** (`undertile_1x1`..`1x8`, `2x2`, `2x4`: studs on top, nothing
+underneath, so it clips under a ceiling by its studs) -- down; anything
+else, and Glow PLA, all round. (A flipped tile is smooth underneath too,
+but its sockets on top do not take a ceiling's.) New tiles `tile_1x3`,
+`tile_1x8` and their plates `plate_1x3`, `plate_1x8`.
+
+- The grid is RGBA8 now: sky, then the lamps' light as r, g, b (colour
+  times how much reaches the cell). Each cell keeps whose light it has, so
+  a red bar lights its room red, and the shader's lamp term is that colour
+  times its brightest channel (the square of how much, as before;
+  `grid_lamp_colour` is a tint, white). A one-way lamp does not shut its
+  cell (a plate in a cell three plates tall) and lights it and the cell on
+  its lit side; an all-round one is opaque and lights all six.
+- `BrickWorld.chunk_lamps` (eight floats a lamp: where it shines from, which
+  way, colour, power -- Glow 1, Lamp 2.5) replaces `chunk_glow_points` for
+  the hung lights: a one-way group hangs a `SpotLight3D` (65 degrees, 6 m)
+  pointed its way, the rest an omni; merged only with lamps shining the
+  same way; in their colour.
+- `tools/lamp_probe.gd` (14 checks); light gate: a red under-tile under the
+  ceiling over the room lights red under it and hangs a spot down (picture
+  `light_gate_lamp`).
+- Build with it: pick a tile (or an under-tile) and the Lamp material.
+
 ## 7. SDFGI and the other GI
 
 Godot can mix: SDFGI in the environment, and `ReflectionProbe` / `VoxelGI`
@@ -334,9 +393,10 @@ the other one to try). Screen-space is offered, default off.
 | 2a | Planets and moons shadow each other: on the ground by `seen`; from space on impostors and halos (2a) | small | **built** |
 | 3 | Moon/planet light (5) | small | **built** |
 | 4 | Ambient boxes in buildings, stations and ships (6.2) | small-medium | **built** |
-| 4b | Clouds and their faked shadows (2b) | medium | when clouds come |
+| 4b | Clouds and their faked shadows (2b) | medium | **built** |
 | 5 | Grid skylight and lamp light (6.1) | large, C++ with Build mode | **built**: planet, city, near-tier studs, ships and stations (lamps only) |
 | 5b | Glow bricks as real lights (6.3) | small, C++ query | **built** |
+| 5d | Lamp material, light bars, under-tiles, coloured lamp light (6.3) | medium, C++ | **built** |
 | 5c | Rings' shadows (2a) | small | **built** |
 | 6 | SSAO/SSIL High, SDFGI Ultra (7) | small to try | **built**: screen-space offered (+1-3 ms); SDFGI tried, not offered (7) |
 

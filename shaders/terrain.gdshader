@@ -589,6 +589,8 @@ void fragment() {
     weather_snow_surface(albedo, out_rough, out_spec, NORMAL, INV_VIEW_MATRIX, 1.0);
     vec3 burn_glow = weather_burn_surface(albedo, out_rough, v_world, TIME);
     EMISSION += burn_glow;
+    // Under a cloud, less sun (clouds.gdshaderinc; Docs/Lighting.md 2b).
+    albedo *= cloud_shade(v_world);
     ALBEDO = albedo;
     ROUGHNESS = out_rough;
     SPECULAR = out_spec;

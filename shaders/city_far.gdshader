@@ -223,6 +223,8 @@ void fragment() {
             VIEW_MATRIX, 0.14, 0.25, TIME);
     NORMAL = wet_normal;
     weather_snow_surface(col, out_rough, out_spec, NORMAL, INV_VIEW_MATRIX, 1.0);
+    // Under a cloud, less sun (clouds.gdshaderinc; Docs/Lighting.md 2b).
+    col *= cloud_shade((INV_VIEW_MATRIX * vec4(VERTEX, 1.0)).xyz);
     ALBEDO = col;
     ALPHA = gone ? 0.0 : 1.0;
     ALPHA_SCISSOR_THRESHOLD = 0.5;
