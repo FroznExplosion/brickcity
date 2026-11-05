@@ -375,10 +375,34 @@ under 1 GB of RAM free -- paging may add noise):** 6 towers blasted gave 24 larg
 | hidden | 0.795 ms | 6.82 ms | 615 |
 | **the pieces** | **0.07 ms** | **4.36 ms** | **137** |
 
-The cost is triangles on the GPU, not draw calls or CPU: 856k triangles in 24 pieces
-(~36k each, ~0.18 ms GPU each). Batching (E2 as written) would not help, so it is not
-done. What would: a cheaper mesh for a loose piece -- inner faces culled, or a far
-tier past a few metres. That is a mesher change (brick mesher area), noted for later.
+The cost is GPU work, not draw calls or CPU. Batching (E2 as written) would not help, so it
+is not done.
+
+**What the triangles are (same day, the pass now breaks them down per piece):**
+
+* **91% of the 856k were dead slots.** A loose piece keeps the face bake of the building it
+  came from: every face of every brick it was ever part of, the dead patched to (0,0,0) so
+  a hit is an index patch and never an upload. One 398-brick piece carried a 121k-slot
+  bake. Only 72k triangles were drawn, about 6 a brick.
+* **Half of those 72k were 25 stair steps.** The spiral staircase's steps
+  (`StaircaseRecipe.step_mesh`, archetypes 288-294) are 1,444 triangles each, against
+  about 6 for a wall brick. That is the stair step's studs and curve. It belongs to the
+  build-mode area: a lighter step is theirs to make.
+* **Coarse stand-ins** of the same pieces: 17.7k triangles, GPU 0.7-1.1 ms against
+  3.3-4.2 ms. Bringing the stand-in range (`ISLAND_MESH_RANGE`, 120 m) closer would be a
+  visible change (no studs nearer than that), so it is a design call, not done.
+
+**Done: settled pieces are baked again without their dead** (`IslandManager._compact_due`,
+C++ `BrickWorld.set_chunk_bake_skips_dead`). A piece that has settled, is drawn as bricks
+and has over twice as many slots as drawn triangles (and at least 6,000 slots) is baked
+again on the bake thread from its live bricks only. Its old mesh draws until the new one is
+up, and later hits patch it as before. In the pass, 13 of 24 pieces were baked again, and
+the slots went from 856k to 129k with the same faces drawn. The GPU time barely moved
+(dead slots are cheap to draw: 3.3 ms, within the noise). The gain is memory: the bake on
+the CPU (224 bytes a face) and the vertex buffer in the GPU's memory, which on this machine
+is the same RAM. That is about 80 MB for those 24 pieces. Gate:
+`tools/compact_bake_probe.gd`. A brick brought back alive in such a chunk has no faces to
+patch in. Revive (§9, step 5) must bake the chunk again.
 
 E4 is only done if E1 and the measurements show band rebuilds still matter. The full Brickadia
 answer (one custom collision shape with an index inside) needs a Jolt shape Godot does not
@@ -392,7 +416,8 @@ Each step lands on `main` on its own, with its gate.
 
 1. **E1 debug views.** Helps every step after.
 2. **E2 measure, then batch** loose pieces' drawing if the numbers say so (editor closed).
-   Measured: GPU triangles, not draw calls -- batching skipped (§11).
+   Measured: GPU triangles, not draw calls -- batching skipped. Settled pieces now drop
+   their dead bricks' faces (§11).
 3. **Air grid, compartments, breaches** (§2-§3) on the generated spaceship, headless.
    Gate: `hull_air_probe`.
 4. **Venting** in space (§4): pressure, the pull toward the hole, a HUD warning.
