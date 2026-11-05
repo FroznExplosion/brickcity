@@ -37,6 +37,9 @@ static func recentre(root: Node, point: Vector3) -> Vector3:
 static func _collect(n: Node, out: Array[Node3D], under3d: bool) -> void:
 	for c in n.get_children():
 		var is3d := c is Node3D
+		# Aboard a ghost hull (Docs/Hulls.md 7b): not in the world, nothing to shift.
+		if is3d and c.has_meta(&"ghosted"):
+			continue
 		if is3d and (not under3d or (c as Node3D).top_level):
 			out.append(c)
 		_collect(c, out, under3d or is3d)

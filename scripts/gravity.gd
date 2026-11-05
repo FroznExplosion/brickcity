@@ -89,11 +89,25 @@ static var _pinned: Array = []
 ## still each point's own.
 static func pin(p: Vector3) -> void:
 	_pinned = []
+	_pin_up = Vector3.ZERO
 	_pinned = _centre_at(p)
 
 
 static func unpin() -> void:
 	_pinned = []
+	_pin_up = Vector3.ZERO
+
+
+## While set (`pin_up`): one fixed up for every down, up and height -- a ghost
+## hull's (Docs/Hulls.md 7b), whose points are not the world's, so no field or
+## planet can say where down is there. Heights are along it, from the space's
+## origin.
+static var _pin_up := Vector3.ZERO
+
+
+static func pin_up(up: Vector3) -> void:
+	_pinned = []
+	_pin_up = up.normalized()
 
 
 ## The node `p`'s down points to and its datum's radius: its field's centre, or
@@ -122,6 +136,8 @@ static func strength() -> float:
 ## Unit vector down at a world point: toward the planet's centre on one, its
 ## field's inside one.
 static func down_at(p: Vector3) -> Vector3:
+	if _pin_up != Vector3.ZERO:
+		return -_pin_up
 	var c: Node3D = _centre_at(p)[0]
 	if c != null:
 		var d := c.global_position - p
@@ -181,6 +197,8 @@ static var planet_radius := 0.0
 
 
 static func height_of(p: Vector3) -> float:
+	if _pin_up != Vector3.ZERO:
+		return p.dot(_pin_up)
 	var c: Array = _centre_at(p)
 	if c[0] != null:
 		return (p - (c[0] as Node3D).global_position).length() - float(c[1])

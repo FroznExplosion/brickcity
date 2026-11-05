@@ -111,6 +111,10 @@ var anchor: PlanetBody = null
 var station: SpaceStation = null
 ## Ships (step 3), and the one the player is aboard in space, or null.
 var ships: Array[SpaceShip] = []
+## The ghost hulls' space (Docs/Hulls.md 7b): every generated ship's still copy of
+## its collision, for whoever walks it while it moves. The system's, so it lasts
+## through a planet's sleep.
+var ghosts := GhostHulls.new()
 var ship: SpaceShip = null
 ## Body -> its PlanetBuildings (the home planet's is the scene's) and PlanetTrees.
 var built := {}
@@ -195,6 +199,7 @@ func _build_bodies() -> void:
 	for k in sys.orbitals.size():
 		var st := SpaceStation.new()
 		st.physics_interpolation_mode = Node.PHYSICS_INTERPOLATION_MODE_OFF
+		st.ghosts = ghosts
 		add_child(st)
 		st.setup(sys.orbitals[k])
 		st.drifted.connect(_on_drifted.bind(st))
@@ -291,6 +296,7 @@ func frame_node() -> Node3D:
 func add_ship(d: OrbitalData, ref: PlanetBody, rel: Transform3D) -> SpaceShip:
 	var s := SpaceShip.new()
 	s.physics_interpolation_mode = Node.PHYSICS_INTERPOLATION_MODE_OFF
+	s.ghosts = ghosts
 	add_child(s)
 	s.setup_ship(d)
 	s.drifted.connect(_on_drifted.bind(s))
@@ -1158,18 +1164,26 @@ func _ship_refs() -> void:
 		s.landed = false
 
 
+## Under this a ship with nobody at its controls is at rest, m/s: its bricks'
+## collision back in the world (unride), whoever walked its ghost off it.
+const COAST_STILL := 0.3
+
+
 ## A ship's bricks while it is the frame, or over the planet the player is on
 ## with the player near and nobody at its controls.
 func _ship_bricks(p: Vector3) -> void:
 	for s in ships:
 		var want := s == ship or (s.ref != null and s.ref == anchor and not s.piloted
 				and (p - s.global_position).length() < s.field)
-		# A generated ship flown over the planet keeps its bricks drawn (riding).
-		var ride := s.recipe != null and s.piloted and s.ref != null and s != ship
+		# A generated ship flown over the planet keeps its bricks drawn (riding) --
+		# and, its pilot up and walking its ghost (Docs/Hulls.md 7b), until it has
+		# come to rest: its bricks' collision comes back only once it is still.
+		var moving := s.vel.length() > COAST_STILL
+		var ride := s.recipe != null and s.ref != null and s != ship and (s.piloted or (s.riding and moving))
 		if want and s.chunk < 0:
 			s.process_mode = Node.PROCESS_MODE_INHERIT
 			s.activate()
-		elif want and s.riding:
+		elif want and s.riding and not moving:
 			s.unride()
 		elif ride and s.chunk >= 0:
 			s.ride()
@@ -1182,7 +1196,9 @@ func _ship_bricks(p: Vector3) -> void:
 func _top_level() -> Array[Node3D]:
 	var out: Array[Node3D] = []
 	for c in get_parent().get_children():
-		if c is Node3D and c != self and not c is PlanetBody and c != rig:
+		# One aboard a ghost hull (Docs/Hulls.md 7b) is not in the world: only its
+		# ship travels, and it with it.
+		if c is Node3D and c != self and not c is PlanetBody and c != rig and not c.has_meta(&"ghosted"):
 			out.append(c)
 	return out
 
@@ -1494,6 +1510,8 @@ func _full_bake(b: PlanetBody) -> void:
 
 
 func _exit_tree() -> void:
+	if is_queued_for_deletion():
+		ghosts.free_space()
 	if _bake_task >= 0:
 		WorkerThreadPool.wait_for_task_completion(_bake_task)
 		_bake_task = -1

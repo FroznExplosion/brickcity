@@ -85,6 +85,20 @@ var crumbs: PlanetCrumbs
 var bricks_killed := 0
 ## Bricks brought back by repair (Docs/Hulls.md 9).
 var bricks_restored := 0
+## Its ghost hull (Docs/Hulls.md 7b): its brick collision standing still in
+## `ghosts`' space, at `ghost_slot`, for whoever walks it while it moves. Built
+## once, when its bricks are first in; edited by damage and repair; never by a
+## turn, a ride or an origin shift. `ghosts` is set by whoever owns the space.
+## A GhostHulls -- untyped: it names SpaceStation, and two class_name scripts
+## typing each other leak and crash the quit.
+var ghosts = null
+var ghost: BuildingCollision = null
+var ghost_slot := Transform3D()
+var ghost_builds := 0
+## Last frame's ghost_to_real and how long ago, for the deck's velocity.
+var _g2r_prev := Transform3D()
+var _g2r_last := Transform3D()
+var _g2r_dt := 0.0
 var _band_nodes := {}
 var _remesh := PackedInt32Array()
 var _solve_due := false
@@ -342,6 +356,7 @@ func deactivate() -> void:
 	if _collision != null:
 		_collision.free_bodies()
 		_collision = null
+	_free_ghost()
 	# Thrown as crumbs or gone as pieces, all gone from what is laid next.
 	_dead = bricks.get_dead_blocks(chunk)
 	_dead.append_array(bricks.get_detached_blocks(chunk))
@@ -520,6 +535,8 @@ func _after_restore(back: PackedInt32Array) -> void:
 	bricks_restored += back.size()
 	if air != null:
 		air.blocks_added(bricks, chunk, back)
+	if ghost != null:
+		ghost.enable(back)
 	if _collision != null:
 		_collision.enable(back)
 		for b in _collision.bands_of(back):
@@ -541,6 +558,8 @@ func _after_kill(killed: PackedInt32Array) -> void:
 	if air != null:
 		air.blocks_removed(bricks, chunk, killed)
 	_collision.disable(killed)
+	if ghost != null:
+		ghost.disable(killed)
 	for b in _collision.bands_of(killed):
 		if not _remesh.has(b):
 			_remesh.append(b)
@@ -583,6 +602,8 @@ func _damage_step() -> void:
 		_solve()
 	if _collision.any_stale():
 		_collision.flush(2)
+	if ghost != null and ghost.any_stale():
+		ghost.flush(2)
 	if not _remesh.is_empty():
 		if not bricks.bake_ready(chunk):
 			if not bricks.bake_pending(chunk):
@@ -600,6 +621,10 @@ func _process(_delta: float) -> void:
 	if chunk < 0:
 		return
 	if bricked:
+		# The ship has moved for this frame already (PlanetSystem flies it first).
+		_g2r_prev = _g2r_last
+		_g2r_last = ghost_to_real()
+		_g2r_dt = _delta
 		_air_step(_delta)
 		if not riding:
 			_damage_step()
@@ -622,6 +647,7 @@ func _process(_delta: float) -> void:
 			deactivate()
 			return
 		_collision = BuildingCollision.new(bricks, chunk, get_world_3d().space, global_transform * frame, true)
+		_build_ghost()
 		_drop_wreck()
 		shell.visible = false
 		shell_body.collision_layer = 0
@@ -994,3 +1020,60 @@ func _exit_tree() -> void:
 	if _collision != null:
 		_collision.free_bodies()
 		_collision = null
+
+
+## Its ghost goes with it, and only then: a reparent (a planet asleep, a jump)
+## leaves and enters the tree, and the ghost is what must not notice.
+func _notification(what: int) -> void:
+	if what == NOTIFICATION_PREDELETE:
+		_free_ghost()
+
+
+# --- the ghost hull (Docs/Hulls.md 7b) ----------------------------------------
+
+func _build_ghost() -> void:
+	if ghosts == null or recipe == null or ghost != null or chunk < 0:
+		return
+	ghost_slot = ghosts.slot_of(self)
+	ghost = BuildingCollision.new(bricks, chunk, ghosts.space, ghost_slot * frame, true)
+	ghost_builds += 1
+	_g2r_prev = ghost_to_real()
+	_g2r_last = _g2r_prev
+	_g2r_dt = 0.0
+
+
+func _free_ghost() -> void:
+	if ghost != null:
+		ghost.free_bodies()
+		ghost = null
+	if ghosts != null:
+		ghosts.release(self)
+
+
+## Ghost-space points to the world, now: the real ship's transform over its slot.
+func ghost_to_real() -> Transform3D:
+	return global_transform * ghost_slot.affine_inverse()
+
+
+## Its gravity pulls aboard (generator on): who walks its ghost falls toward its
+## decks; off, they float.
+func ghost_pulls() -> bool:
+	return gravity_field() != null
+
+
+## Up on its ghost's decks (its bricks' frame in the slot).
+func ghost_up() -> Vector3:
+	return (ghost_slot * frame).basis.y.normalized()
+
+
+## Ghost point `g` held fixed on the real ship: its velocity in the world, m/s,
+## over the last frame (its flight and its turn both).
+func deck_velocity(g: Vector3) -> Vector3:
+	if _g2r_dt <= 0.0:
+		return Vector3.ZERO
+	return (_g2r_last * g - _g2r_prev * g) / _g2r_dt
+
+
+## Ghost point `g` is inside its module's box (holds, in the ghost).
+func ghost_holds(g: Vector3) -> bool:
+	return holds(ghost_to_real() * g)

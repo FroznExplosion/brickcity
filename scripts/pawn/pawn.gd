@@ -145,6 +145,11 @@ var last_fall := 0.0
 ## at REORIENT_RATE when it changes by more than a tick's worth. Where nothing
 ## pulls, the body's own Y.
 var up := Vector3.UP
+## Aboard a ship's ghost hull (Docs/Hulls.md 7b, GhostHulls.board): that ship (a
+## SpaceStation -- untyped, so the pawn does not name the space scripts). Its
+## body is in the ghost's physics space then, its positions the ghost's: up is
+## the ship's deck up, never a planet's or a field's at those points.
+var ghost = null
 ## Nothing pulls where it is (Gravity.pulls_at): it floats (PawnMoves) or drifts.
 var floating := false
 ## The gravity field it was in last tick (Gravity.field_at), to start a fall over
@@ -330,12 +335,13 @@ func _physics_process(delta: float) -> void:
 		return
 	stagger_left = maxf(stagger_left - delta, 0.0)
 	var at := body.global_position
-	floating = not Gravity.pulls_at(at)
-	var f := Gravity.field_at(at) if not Gravity.fields.is_empty() else null
+	var aboard: bool = ghost != null and is_instance_valid(ghost)
+	floating = not ghost.ghost_pulls() if aboard else not Gravity.pulls_at(at)
+	var f := Gravity.field_at(at) if not aboard and not Gravity.fields.is_empty() else null
 	if floating:
 		up = body.global_transform.basis.y.normalized()
 	else:
-		up = Gravity.up_at(at)
+		up = ghost.ghost_up() if aboard else Gravity.up_at(at)
 		var rate := REORIENT_RATE * (REORIENT_CROUCH if intents.crouch else 1.0)
 		_stand_up(rate * delta)
 	if is_held():
@@ -347,7 +353,10 @@ func _physics_process(delta: float) -> void:
 	# One down and one datum for the whole move: at a field's edge two points
 	# a step apart are in two (a gangway up into a ship), and heights over two
 	# datums do not compare.
-	Gravity.pin(at)
+	if aboard:
+		Gravity.pin_up(up)
+	else:
+		Gravity.pin(at)
 	if f != _field:
 		_field = f
 		_fall_from = Gravity.height_of(feet())
