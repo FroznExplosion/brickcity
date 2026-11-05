@@ -266,6 +266,11 @@ inline const BrickMaterialDef BRICK_MATERIALS[] = {
     // Vegetation: a tree's leaves. Filament colours (the greens), soft, and the
     // fastest thing in the world to burn (BrickWorld fire tables).
     {"Leaf", nullptr, 0, 0.6f, false},
+    // A lamp: a diffuser lit from behind, in any filament colour, which is
+    // the colour of its light (Docs/Lighting.md 6.3). A part of it with one
+    // smooth face shines out of that face only: a tile up, an under-tile down
+    // (BrickWorld lamp_mode).
+    {"Lamp", nullptr, 0, 0.8f, false},
 };
 constexpr int BRICK_MATERIAL_COUNT = (int)(sizeof(BRICK_MATERIALS) / sizeof(BRICK_MATERIALS[0]));
 

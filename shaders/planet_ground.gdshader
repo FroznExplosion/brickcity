@@ -7,6 +7,8 @@ shader_type spatial;
 // object space is the block's, not the planet's).
 render_mode cull_disabled;
 
+#include "res://shaders/clouds.gdshaderinc"
+
 // Set by the voxel engine: which of the block's 6 sides border a coarser LOD.
 uniform int u_transition_mask;
 
@@ -79,7 +81,8 @@ void fragment() {
 	// Snow where it is below freezing at this height, not on steep faces.
 	float temp = mix(t_range.x, t_range.y, bm.a) - lapse * max(h, 0.0);
 	c = mix(c, snow, smoothstep(1.5, -1.5, temp) * (1.0 - smoothstep(40.0, 55.0, slope)));
-	ALBEDO = c;
+	// Under a cloud, less sun (clouds.gdshaderinc; Docs/Lighting.md 2b).
+	ALBEDO = c * cloud_shade((INV_VIEW_MATRIX * vec4(VERTEX, 1.0)).xyz);
 	NORMAL = n_view;
 	ROUGHNESS = 0.95;
 }

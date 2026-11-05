@@ -117,8 +117,10 @@ const _PARTS := {
 	# --- plates, one plate tall -----------------------------------------
 	"plate_1x1": Vector3i(1, 1, 1),   # one stud. the smallest part there is
 	"plate_1x2": Vector3i(1, 1, 2),
+	"plate_1x3": Vector3i(1, 1, 3),
 	"plate_1x4": Vector3i(1, 1, 4),
 	"plate_1x6": Vector3i(1, 1, 6),
+	"plate_1x8": Vector3i(1, 1, 8),
 	"plate_2x2": Vector3i(2, 1, 2),
 	"plate_2x4": Vector3i(2, 1, 4),
 	"plate_4x4": Vector3i(4, 1, 4),
@@ -170,11 +172,28 @@ const _PARTS := {
 	# not just a plate by another name.
 	"tile_1x1": Vector3i(1, 1, 1),
 	"tile_1x2": Vector3i(1, 1, 2),
+	"tile_1x3": Vector3i(1, 1, 3),
 	"tile_1x4": Vector3i(1, 1, 4),
 	"tile_1x6": Vector3i(1, 1, 6),
+	"tile_1x8": Vector3i(1, 1, 8),
 	"tile_2x2": Vector3i(2, 1, 2),
 	"tile_2x4": Vector3i(2, 1, 4),
 	"tile_4x4": Vector3i(4, 1, 4),
+
+	# --- under-tiles, a tile the other way up ----------------------------
+	# Studs on top, smooth underneath: it clips UNDER a ceiling (the
+	# ceiling's sockets take its studs) and nothing clips under it. In the
+	# Lamp material it is a ceiling light shining down, as a Lamp tile is a
+	# light bar shining up (Docs/Lighting.md 6.3). Not the flipped tile:
+	# that has sockets on top, which a ceiling's sockets do not take.
+	"undertile_1x1": Vector3i(1, 1, 1),
+	"undertile_1x2": Vector3i(1, 1, 2),
+	"undertile_1x3": Vector3i(1, 1, 3),
+	"undertile_1x4": Vector3i(1, 1, 4),
+	"undertile_1x6": Vector3i(1, 1, 6),
+	"undertile_1x8": Vector3i(1, 1, 8),
+	"undertile_2x2": Vector3i(2, 1, 2),
+	"undertile_2x4": Vector3i(2, 1, 4),
 
 	# --- brackets, a brick with studs on one SIDE ------------------------
 	# The part that makes sideways building reachable. A rotated frame steps
@@ -286,6 +305,11 @@ static func bake(world: BrickWorld) -> Dictionary:
 		var base := -1
 		if is_shaped(part):
 			base = _bake_shaped(world, part, size)
+		elif is_undertile(part):
+			# Studs all the way across the top, nothing underneath.
+			base = world.bake_faced_archetype(part + "#base", size, mass_of(size),
+					PackedByteArray(), _fill(size.x * size.z, FACE_STUD),
+					_fill(size.x * size.z, FACE_NONE))
 		elif has_studs(part):
 			base = world.bake_archetype(part + "#base", size, mass_of(size))
 		else:
@@ -339,6 +363,17 @@ const FACE_SOCKET := 2
 ## strip, but it has them.)
 static func has_studs(part: String) -> bool:
 	return not part.begins_with("tile_") and not part.begins_with("curve_") 			and not part.begins_with("cheese_")
+
+
+## An under-tile: studs on top, smooth underneath. Two stacked do not join
+## (no sockets to take the lower one's studs).
+static func is_undertile(part: String) -> bool:
+	return part.begins_with("undertile_")
+
+
+## Does this part take studs underneath? Everything but an under-tile.
+static func has_sockets(part: String) -> bool:
+	return not is_undertile(part)
 
 
 ## Is this part a shape rather than a box?
@@ -405,7 +440,7 @@ static func _side_studs_for(size: Vector3i) -> PackedInt32Array:
 const CATEGORIES := [
 	["Bricks", ["brick"]],
 	["Plates", ["plate"]],
-	["Tiles", ["tile"]],
+	["Tiles", ["tile", "undertile"]],
 	["Slopes", ["slope", "slopecorner", "curve", "cheese", "wedge", "wedgeplate"]],
 	["Round", ["round"]],
 	["Arches", ["arch"]],

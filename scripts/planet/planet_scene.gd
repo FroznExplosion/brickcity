@@ -111,6 +111,8 @@ var system: PlanetSystem
 var sun: DirectionalLight3D
 ## The light (Docs/Lighting.md): sun, fill, sky, exposure, ambient boxes.
 var light: LightRig
+## The clouds of the world the camera is on (Docs/Lighting.md 2b).
+var clouds: CloudLayer
 ## Ambient boxes made, by building site or module; when last looked for.
 var _box_of := {}
 var _boxes_at := 0
@@ -825,6 +827,20 @@ func _build_light() -> void:
 const SHIP_GRID_NEAR := 300.0
 
 
+## The clouds of `body` (Docs/Lighting.md 2b): a world with air has a layer,
+## made when the camera comes to it; one without, none. Gates hold them still.
+func _clouds_for(body: PlanetBody) -> void:
+	CloudLayer.still = _gate
+	if clouds != null and is_instance_valid(clouds) and clouds.body == body:
+		return
+	if clouds != null and is_instance_valid(clouds):
+		clouds.queue_free()
+	clouds = null
+	if body != null and body.data.has_air:
+		clouds = CloudLayer.for_planet(light, body, body.data.radius, body.data.peak(),
+				body.data.planet_seed)
+
+
 ## Ambient boxes (Docs/Lighting.md 6.2), twice a second: one inside each
 ## building laid in bricks here, and in each station or ship module laid; a
 ## toppled building's goes.
@@ -1021,6 +1037,7 @@ func _process(_delta: float) -> void:
 	light.room_open = open if open < 0.0 or light.room_open < 0.0 else lerpf(light.room_open, open,
 			clampf(get_process_delta_time() * 4.0, 0.0, 1.0))
 	light.set_sky(day, air, body.data.atmosphere_color, sun_h, Gravity.up_at(cam_pos))
+	_clouds_for(body)
 	_ambient_boxes()
 	light.expose(viewer.global_position if viewer != null else cam_pos, get_process_delta_time())
 	# Hold the walker until the ground under it has streamed (and has a
@@ -2218,6 +2235,27 @@ func _run_light_gate() -> void:
 	rg.queue_free()
 	disc_parent.queue_free()
 	await _shot("light_gate_noon")
+	if DisplayServer.get_name() != "headless" and clouds != null:
+		# The clouds (Lighting.md 2b), seen: up at them from the ground, and
+		# down from 400 m on the ground their shadows lie on.
+		var was_cam := get_viewport().get_camera_3d()
+		var up := Gravity.up_at(was_cam.global_position)
+		var side := up.cross(Vector3.FORWARD if absf(up.dot(Vector3.FORWARD)) < 0.9 else Vector3.RIGHT).normalized()
+		var look := Camera3D.new()
+		look.far = 40000.0
+		add_child(look)
+		look.global_position = was_cam.global_position + up * 2.0
+		look.look_at(look.global_position + (side + up * 0.6).normalized() * 100.0, up)
+		look.make_current()
+		await _frames(6)
+		await _shot("light_gate_clouds_up")
+		look.global_position = was_cam.global_position + up * 400.0
+		look.look_at(was_cam.global_position + side * 900.0, up)
+		await _frames(6)
+		await _shot("light_gate_clouds_down")
+		was_cam.make_current()
+		look.queue_free()
+		await _frames(2)
 	# 3. Night: the fill from the brightest body over the horizon.
 	var day := data.day
 	system.t += day * 0.5
@@ -2433,6 +2471,82 @@ func _run_light_gate() -> void:
 					lamp_near = true
 		_check("the Glow brick hangs an unshadowed light for what moves", lamp_near and lamp_mask_ok,
 				"%d lamp(s) in all" % grid_light.lamp_count())
+		# A light bar under the ceiling over `inside` (Lighting.md 6.3): a red
+		# Lamp under-tile, clipped on by its studs, shining down -- red on the
+		# grid under it, and a spot light down for what moves. In the inside
+		# picture.
+		var under_a: int = pb._palette.get("undertile_1x4_z", -1)
+		var lamp_m := -1
+		var bar_red := 0
+		for m in BrickWorld.get_material_count():
+			if BrickWorld.get_material_name(m) == "Lamp":
+				lamp_m = m
+		for cc in BrickWorld.get_material_colour_count(maxi(lamp_m, 0)):
+			if BrickWorld.get_material_colour_name(maxi(lamp_m, 0), cc) == "red":
+				bar_red = cc
+		var ceil_y := -1
+		for y in range(int(il.y / BrickWorld.get_plate_metres()), int(il.y / BrickWorld.get_plate_metres()) + 60):
+			if pb.bricks.block_at(s.chunk, Vector3i(int(il.x / stud), y, int(il.z / stud))) >= 0:
+				ceil_y = y
+				break
+		var bar := -1
+		var bar_cell := Vector3i.ZERO
+		if under_a >= 0 and lamp_m >= 0 and ceil_y > 0:
+			# Where it fits, near over `inside` (furniture, a wall may be there).
+			for d in [Vector2i(0, -1), Vector2i(0, 0), Vector2i(0, -3), Vector2i(1, -1), Vector2i(-1, -1),
+					Vector2i(1, -3), Vector2i(-1, -3), Vector2i(0, -2)]:
+				bar_cell = Vector3i(int(il.x / stud) + d.x, ceil_y - 1, int(il.z / stud) + d.y)
+				bar = pb.bricks.place_block(s.chunk, bar_cell, under_a, bar_red)
+				if bar >= 0:
+					break
+			if bar >= 0:
+				pb.bricks.set_block_material(s.chunk, bar, lamp_m)
+				grid_light.relight(key)
+				# Drawn: its band made again from the chunk's bake (as a hit's).
+				for band_i in s.collision.bands_of(PackedInt32Array([bar])):
+					if not s.remesh.has(band_i):
+						s.remesh.append(band_i)
+				pb.bricks.bake_chunk_async(s.chunk)
+		var under_bar: Vector3 = s.brick_node.global_transform * Vector3((bar_cell.x + 0.5) * stud,
+				(ceil_y - 4) * BrickWorld.get_plate_metres(), (bar_cell.z + 2.0) * stud)
+		var lit := grid_light.at_colour(under_bar)
+		var spot_down := false
+		for kid in s.brick_node.get_children():
+			var sp := kid as SpotLight3D
+			if sp != null and (-sp.global_basis.z).dot(s.brick_node.global_basis.y.normalized()) < -0.95 and sp.light_color.r > 0.9 and sp.light_color.g < 0.4:
+				spot_down = true
+		_check("a red light bar under the ceiling lights red under it, and hangs a spot light down",
+				bar >= 0 and lit.g > 0.5 and lit.g > 2.5 * lit.b and spot_down,
+				"bar %d (part %d, Lamp %d) at plate %d; under it %.2f %.2f %.2f" % [bar, under_a, lamp_m, ceil_y - 1, lit.g, lit.b, lit.a])
+		if DisplayServer.get_name() != "headless" and bar >= 0:
+			var bar_at: Vector3 = s.brick_node.global_transform * Vector3((bar_cell.x + 0.5) * stud,
+					(ceil_y - 1) * BrickWorld.get_plate_metres(), (bar_cell.z + 2.0) * stud)
+			# From under it, a step to one side, looking up at it.
+			c.look_at_from_position(bar_at - up * 1.5 + s.brick_node.global_basis.x.normalized() * 0.9
+					- s.brick_node.global_basis.z.normalized() * 1.2, bar_at, up)
+			await get_tree().create_timer(1.5).timeout
+			await _shot("light_gate_lamp")
+		# Clouds (Lighting.md 2b): the world's layer is there, and its shadow
+		# takes the sun where it stands -- overcast, a full cloud's share; clear,
+		# none. The shader's sum is CloudLayer.shade_at's.
+		var had := clouds.cover if clouds != null else 0.0
+		var sun_up := 0.0
+		var dark := 1.0
+		var clear := 0.0
+		if clouds != null:
+			clouds.cover = 1.0
+			clouds._push()
+			dark = clouds.shade_at(inside)
+			sun_up = clouds._strength()
+			clouds.cover = 0.0
+			clouds._push()
+			clear = clouds.shade_at(inside)
+			clouds.cover = had
+			clouds._push()
+		_check("the world's clouds shade the sun where they stand", clouds != null
+				and is_equal_approx(clear, 1.0) and absf(dark - (1.0 - sun_up)) < 0.02
+				and (sun_up <= 0.0 or dark < 0.7),
+				"cover %.2f; overcast %.2f (a cloud takes %.2f), clear %.2f" % [had, dark, sun_up, clear])
 		if DisplayServer.get_name() != "headless":
 			# What the soft shadows cost (Lighting.md 2): the GPU's draw time
 			# with the sun's size, without, and with again. A report, not a
@@ -2451,6 +2565,21 @@ func _run_light_gate() -> void:
 				ms.append(sum / 120.0)
 			sun.light_angular_distance = size
 			print("[light] GPU draw, sun %.2f deg soft: %.2f / %.2f ms; hard: %.2f / %.2f ms" % [size, ms[0], ms[2], ms[1], ms[3]])
+			# And the clouds (Lighting.md 2b): their layer and every surface's
+			# shade, on and off. A report, as above.
+			if clouds != null:
+				var cover := clouds.cover
+				var cms := []
+				for cv in [cover, 0.0, cover, 0.0]:
+					clouds.cover = cv
+					await _frames(20)
+					var sum := 0.0
+					for k in 120:
+						await _frames(1)
+						sum += RenderingServer.viewport_get_measured_render_time_gpu(vp)
+					cms.append(sum / 120.0)
+				clouds.cover = cover
+				print("[light] GPU draw, clouds on: %.2f / %.2f ms; off: %.2f / %.2f ms" % [cms[0], cms[2], cms[1], cms[3]])
 			# 7: what each GI level costs and looks like, outside and in
 			# (shots light_gate_gi<level>_out / _in; inside, the Glow floor
 			# above is lit). Off again at the end.

@@ -172,6 +172,8 @@ void fragment() {
     } else {
         weather_snow_surface(albedo, out_rough, out_spec, NORMAL, INV_VIEW_MATRIX, 1.0);
     }
+    // Under a cloud, less sun (clouds.gdshaderinc; Docs/Lighting.md 2b).
+    albedo *= cloud_shade((INV_VIEW_MATRIX * vec4(VERTEX, 1.0)).xyz);
     ALBEDO = albedo;
     ALPHA = cover;
     ALPHA_SCISSOR_THRESHOLD = 0.5;

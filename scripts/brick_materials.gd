@@ -26,7 +26,7 @@ class_name BrickMaterials
 
 const FAMILY_OF := {
 	"PLA": "plastic", "PLA matte": "plastic", "PLA silk": "plastic", "ABS": "plastic",
-	"PETG": "plastic", "Glow PLA": "plastic", "Carbon PLA": "plastic", "Wood PLA": "plastic",
+	"PETG": "plastic", "Glow PLA": "plastic", "Carbon PLA": "plastic", "Wood PLA": "plastic", "Lamp": "plastic",
 	"TPU": "soft", "Nylon": "soft",
 	"Wood": "wood", "Metal": "metal", "Stone": "stone",
 	"Leaf": "soft",
