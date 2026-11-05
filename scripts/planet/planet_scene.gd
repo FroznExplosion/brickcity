@@ -142,6 +142,12 @@ var _play_hitches: Array = []
 var _last_us := 0
 
 
+## The planet's gravity is this scene's: off with it, so the next scene (the
+## city, the menu) is not pulled toward a freed planet (Gravity.reset).
+func _exit_tree() -> void:
+	Gravity.reset()
+
+
 func _ready() -> void:
 	_gate = "--gate" in OS.get_cmdline_user_args()
 	_pawn_gate = "--gate=pawn" in OS.get_cmdline_user_args()
