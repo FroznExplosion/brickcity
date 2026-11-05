@@ -320,7 +320,7 @@ Glow floor hangs one, unshadowed, bricks left out.
 **Built (2026-11-04): Lamp bricks, light bars, under-tiles.** A material,
 `Lamp` (brick_grid.h, 14; append-only): any filament colour, which is the
 colour of its light; drawn as a diffuser lit from behind (`bm_lamp`,
-brick_materials.gdshaderinc: its colour at full strength, x2.4). Which way it
+brick_materials.gdshaderinc: its colour at full strength, x1.4: brighter washes to white once the eye opens indoors). Which way it
 shines comes from its part (`BrickWorld` `lamp_mode`): smooth on top only --
 a tile, i.e. a **light bar** -- up; smooth underneath only -- the new
 **under-tile** (`undertile_1x1`..`1x8`, `2x2`, `2x4`: studs on top, nothing

@@ -65,7 +65,7 @@ const float MAT_TRANSLUCENT[15] = float[](0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0
 
 // A Lamp (MAT_TEX 10): a diffuser lit from behind shines its colour at full
 // strength, whatever the light round it (Docs/Lighting.md 6.3).
-const float LAMP_GLOW = 2.4;
+const float LAMP_GLOW = 1.4;
 vec3 bm_lamp(vec3 albedo) {
     return albedo / max(max(albedo.r, albedo.g), max(albedo.b, 0.05)) * LAMP_GLOW;
 }
