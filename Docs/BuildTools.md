@@ -811,3 +811,47 @@ the chip reached 99 C, so they would say more about the machine than the change.
 The fallback for an older library could not be run: no older library is left that has section 15's
 paging but not these calls. It rests on the calls being untyped or through `class_call_static`, which
 compile either way.
+
+## 19. Far away, laid over frames, and the loose ends
+
+Asked 2026-11-05: the five things section 18 left open are all to be done.
+
+* **Floors two plates, as the city's.** A building's floor (and its flat roof) is
+  `TowerRecipe.SLAB_PLATES` thick, so a storey is 18 plates of wall over 2 of floor and storeys are 20
+  plates apart, as the city's towers. The Floor tool starts at two plates too.
+* **The asset workshop draws in sections too.** `_draws_sections` no longer asks for the building
+  workshop's tools.
+* **A big change is drawn over frames, nearest the camera first.** The engine names the sections
+  that changed; they go in a queue, and each frame meshes as many as there are threads (8). Edits
+  that reach no more than that are drawn at once, as before. A ray still finds bricks not drawn yet:
+  a grid's box takes in the queued sections. Off headless, where a probe looks straight after an
+  edit (`mesh_over_frames`).
+* **Far sections are cheap.** As the city does it (BrickNear): a section within `BrickNear.radius` of
+  the camera is chamfered, past it flat with the seams drawn by the shader (`geo_bevel` 0); studs are
+  drawn to `STUD_RANGE`. A section that crosses the line goes back in the queue to be meshed the
+  other way, with the city's margin so it does not flicker. Off headless (`draw_far_flat`).
+* **The fallback for an older library, run.** A build of this library without its newer calls bound,
+  and the probes on it: the workshop must load, draw whole and pack in script.
+
+### As built (2026-11-05)
+
+Merged; `tools/build_tools_probe.gd` 338 checks, workshop gate 19, asset workshop probe 343.
+
+* **Far away.** Three 20-storey blocks 80 studs wide (476,406 bricks, 147 sections) seen from across
+  the area, the renderer's own clock, twice each way, other chats' headless runs going:
+
+  | | GPU a frame | Primitives |
+  |---|---|---|
+  | Every section chamfered, every stud drawn | 771-781 ms | 203 million |
+  | Far sections flat, studs to 40 m | 16-34 ms | 7.6 million |
+
+* **Stud culling no longer asks the renderer.** `_stud_lod` read each MultiMesh's box, a renderer
+  read-back every frame (Docs/WhereWorkRuns.md), and empty headless. It uses the boxes kept here, and
+  only looks again when the camera has moved or studs were made.
+* **The stud count went to nought** whenever a remesh found nothing changed; it is counted after
+  every one now.
+* **Floors.** `WorkshopTools.floor_plates`, the city's two. The older probe checks set one: their
+  heights were written for it, and they test what they test either way.
+* **The old library, run.** This library built without its five newer calls bound: the workshop
+  loads, meshes whole and packs in script; building, storeys, undo and the asset workshop pass, and
+  only the checks about sections fail, with one line saying to rebuild.

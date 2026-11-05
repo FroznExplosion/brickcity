@@ -145,7 +145,9 @@ var wall_straight := true
 var _wall_pts: Array[Vector2i] = []
 var _wall_at := 0
 ## Floor: how thick (plates), and on the floor clicked or on top of the walls round it.
-var floor_tall := 1
+var floor_tall := TowerRecipe.SLAB_PLATES
+## A building's floors and flat roof, in plates: the city's slab (Docs/BuildTools.md section 19).
+var floor_plates := TowerRecipe.SLAB_PLATES
 var floor_on_top := false
 ## Stairs: how wide (studs); the first click (the lower floor), or NO_CELL.
 const NO_CELL := Vector3i(-1048576, 0, 0)
@@ -2232,10 +2234,11 @@ func _plan_record(points: Dictionary, at: int) -> Dictionary:
 	rec.rim = wall_rim()
 	if makes == "building":
 		rec.storey = storey_courses * BrickPalette.PLATES_PER_BRICK
-		rec.floor = 1
+		# The city's slab: a storey here is a storey there (Docs/BuildTools.md section 19).
+		rec.floor = floor_plates
 		rec.roof = flat_roof
-		rec.step = int(rec.storey) + 1
-		rec.extra = 1 if flat_roof else 0
+		rec.step = int(rec.storey) + floor_plates
+		rec.extra = floor_plates if flat_roof else 0
 	return rec
 
 
