@@ -86,6 +86,11 @@ The engine library is **not committed**; each worktree builds its own.
   `brick_near.gd`, `brick.gdshader`): `brick_bevel_probe`, `brick_bevel_gap_probe`
   (not headless) and `--path . res://scenes/city.tscn -- --chamfer`
   (Docs/BrickBevel.md).
+- City scene passes (`res://scenes/city.tscn -- --<pass>`) live in
+  `tools/city_passes.gd`, not in `city_scene.gd`: the city reads the flag and
+  calls `_pass_runner()._run_<x>_pass()`. A pass reaches the city through
+  `city.` (typed, so a missing name is a parse error). New passes and their
+  helpers go there too. They need a window: headless they hang after setup.
 - Run the probes your change could affect before merging.
 
 ### Open issue: the PC crashes and shuts itself off
