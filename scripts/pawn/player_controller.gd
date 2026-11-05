@@ -110,7 +110,7 @@ func _process(delta: float) -> void:
 	# On a planet the look is measured in the pawn's carried frame: the camera
 	# turns with the ground (Docs/Planets.md 11.7). Never set in the flat game.
 	if Gravity.planet != null and camera is DebugCamera:
-		(camera as DebugCamera).set_frame(pawn.body.global_transform.basis.orthonormalized())
+		(camera as DebugCamera).set_frame(_to_view().basis * pawn.body.global_transform.basis.orthonormalized())
 	_sync_look()
 	if _active():
 		var basis := Basis(Vector3.UP, it.look_yaw)
@@ -161,4 +161,13 @@ func _follow(delta: float) -> void:
 	var h := pawn.eye_height()
 	_eye_h += pawn.take_eye_snap()
 	_eye_h = h if delta <= 0.0 else lerpf(_eye_h, h, 1.0 - exp(-EYE_EASE * delta))
-	camera.global_position = pawn.feet_interpolated() + pawn.up * _eye_h
+	camera.global_position = _to_view() * (pawn.feet_interpolated() + pawn.up * _eye_h)
+
+
+## From where the pawn's body is to where it is seen: nothing, but aboard a ship's
+## ghost hull (Docs/Hulls.md 7b) the real ship's transform over its slot -- the
+## body walks the still ghost, the camera rides the ship.
+func _to_view() -> Transform3D:
+	if pawn.ghost != null and is_instance_valid(pawn.ghost):
+		return pawn.ghost.ghost_to_real()
+	return Transform3D.IDENTITY

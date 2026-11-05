@@ -440,6 +440,8 @@ func _face(facing: Vector3) -> void:
 ## On foot (the pawn and its camera) or flying (the walker). The voxel viewer
 ## goes with whichever it is, so the ground streams round the player.
 func _set_on_foot(on: bool, stand_at := Vector3.INF) -> void:
+	if not on and pawn != null and pawn.ghost != null:
+		_ghost_off()
 	on_foot = on
 	# The pawn left behind while flying is not there to be shot.
 	if kit != null:
@@ -616,7 +618,51 @@ func _anchor() -> Vector3:
 	# walker was put last frame -- 340 m back at 20 km/s).
 	if piloting:
 		return ship.global_transform * ship.seat()
-	return pawn.body.global_position if on_foot else walker.global_position
+	return _pawn_real() if on_foot else walker.global_position
+
+
+## Where the pawn really is: its body's place, or, aboard a ghost hull, the real
+## ship's place for it (Docs/Hulls.md 7b).
+func _pawn_real() -> Vector3:
+	if pawn.ghost != null and is_instance_valid(pawn.ghost):
+		return (pawn.ghost as SpaceStation).ghost_to_real() * pawn.body.global_position
+	return pawn.body.global_position
+
+
+## The ghost hull (Docs/Hulls.md 7b): on foot in a generated ship flown over a
+## world (riding: its bricks have no collision of their own), the pawn walks its
+## ghost; off it when the ship is at rest again (its bricks solid) or the pawn has
+## left it (out through a hole, off the deck).
+func _ghost_tick() -> void:
+	var st := pawn.ghost as SpaceStation
+	if st != null and is_instance_valid(st):
+		if not st.riding or st.chunk < 0 or st.ghost == null or not st.ghost_holds(pawn.body.global_position):
+			_ghost_off()
+		return
+	var feet := pawn.feet()
+	for s in system.ships:
+		if s.riding and s.ghost != null and s.holds(feet):
+			_ghost_on(s)
+			return
+
+
+func _ghost_on(s: SpaceStation) -> void:
+	GhostHulls.board(pawn.body, s)
+	pawn.ghost = s
+	# The ground streams round the real ship, not round the ghost's slot.
+	walker.viewer.reparent(cam, false)
+	walker.viewer.position = Vector3.ZERO
+	print("[ghost] aboard %s's ghost" % s.data.orbital_name)
+
+
+func _ghost_off() -> void:
+	var st := pawn.ghost as SpaceStation
+	pawn.ghost = null
+	if st != null and is_instance_valid(st):
+		GhostHulls.get_off(pawn.body, st, get_world_3d().space)
+		print("[ghost] off %s's ghost at %.1f m/s" % [st.data.orbital_name, pawn.body.velocity.length()])
+	walker.viewer.reparent(pawn.body, false)
+	walker.viewer.position = Vector3.ZERO
 
 
 func _eye() -> Vector3:
@@ -627,6 +673,8 @@ func _eye() -> Vector3:
 
 ## Into the ship's seat (11.12 step 3): the walker frozen in it, its chase camera.
 func board() -> void:
+	if pawn != null and pawn.ghost != null:
+		_ghost_off()
 	if on_foot:
 		_set_on_foot(false)
 	piloting = true
@@ -661,7 +709,9 @@ func step_off() -> void:
 ## bricks are in, so the pawn waits for them (_process).
 func unboard() -> void:
 	_clear_seat()
-	if ship.ref != null:
+	# Over a world, a ship with no ghost stops dead (nothing would carry who stands
+	# on it); one with its ghost glides to rest under them (Docs/Hulls.md 7b).
+	if ship.ref != null and (ship.ghost == null or not ship.riding):
 		ship.vel = Vector3.ZERO
 	var at := ship.global_transform * ship.seat() + ship.global_basis.y * 0.1
 	walker.place(at, -ship.global_basis.z)
@@ -1012,6 +1062,8 @@ func _process(_delta: float) -> void:
 		_stepping_out = -1
 		pawn.place(ship.global_transform * ship.seat() + ship.global_basis.y * 0.1)
 		pawn.body.process_mode = Node.PROCESS_MODE_INHERIT
+	if system != null and pawn != null and on_foot:
+		_ghost_tick()
 	if piloting:
 		walker.global_position = ship.global_transform * ship.seat()
 		walker.inertia = Vector3.ZERO
@@ -3634,8 +3686,30 @@ func _run_hull_gate() -> void:
 			and ship.riding and ship.chunk >= 0 and not ship.shell.visible,
 			"%.0f m up from %.0f, %.0f m/s, riding %s" % [ship.altitude, alt0, ship.vel.length(), ship.riding])
 	await _shot("hull_gate_flying")
-	# Out of the seat: on its bridge's floor.
+	# Up out of the seat while it still flies (Docs/Hulls.md 7b): onto its ghost, the
+	# ship gliding to rest under the pawn, its bricks drawn and riding all the way.
+	ship.thrust = Vector3(0.0, 0.0, 0.5)
+	await get_tree().create_timer(1.0).timeout
 	_ship_key(KEY_E)
+	await _frames(3)
+	var ghosted: bool = pawn.ghost == ship
+	var glide := ship.vel.length()
+	var g0 := pawn.body.global_position
+	var r0 := ship.global_position
+	await get_tree().create_timer(0.4).timeout
+	# Along the deck: it was put a little over the floor, and settles onto it.
+	var slid := Gravity.flat(pawn.body.global_position - g0, ship.ghost_up()).length()
+	_check("up from the seat in flight: on its ghost, standing still on it as it glides", ghosted
+			and glide > 1.0 and pawn.ghost == ship and slid < 0.05,
+			"%.1f m/s, the ship %.1f m on, the pawn %.3f m along its deck" % [glide,
+			(ship.global_position - r0).length(), slid])
+	var glided := Time.get_ticks_msec()
+	while (ship.riding or pawn.ghost != null) and Time.get_ticks_msec() - glided < 8000:
+		await _frames(1)
+	_check("at rest: its bricks solid again, the pawn off its ghost onto them", not ship.riding
+			and pawn.ghost == null and not GhostHulls.is_ghosted(pawn.body),
+			"%.1f s, %d ghost build(s)" % [(Time.get_ticks_msec() - glided) / 1000.0, ship.ghost_builds])
+	# Out of the seat: on its bridge's floor.
 	var since := Time.get_ticks_msec()
 	while (_stepping_out >= 0 or not pawn.is_on_floor()) and Time.get_ticks_msec() - since < 6000:
 		await _frames(1)

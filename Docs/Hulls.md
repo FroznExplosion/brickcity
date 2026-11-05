@@ -297,6 +297,64 @@ getting off keep its velocity; a shot fired aboard hits the wall it was aimed at
 ghost never rebuilt, the pawn's world velocity right when it steps off; a parked ship's crew
 sleeps and wakes with its planet.
 
+### 7b.1 Built (2026-11-04): the ghost hull, first cut
+
+* **`GhostHulls`** (scripts/space/ghost_hulls.gd) is one physics space of its own
+  (`space_create`). Each generated ship gets a slot 2 km from the next along X, near the
+  space's origin so floats keep millimetres. Owned by the `PlanetSystem`: it lasts through a
+  planet's sleep and is freed with the system. Jolt runs the two spaces side by side with no
+  trouble.
+* **A ship's ghost**: `SpaceStation.ghost`, a `BuildingCollision` of its bricks in the
+  ghost space at `ghost_slot * frame`.
+  * Built once, when its bricks are first in. Hits disable bricks in it and repairs enable
+    them, as in its world collision.
+  * Never touched by `ride`, `unride`, an origin shift or a reparent. It is freed only on
+    `deactivate` or when the ship itself is deleted; `_exit_tree` no longer frees it, since a
+    reparent leaves the tree.
+  * `ghost_to_real()` maps ghost points to the world, `ghost_up()` is up on its decks,
+    `deck_velocity(g)` is a deck point's world velocity over the last frame, and
+    `ghost_holds(g)` says whether a ghost point is inside the ship's box.
+* **Crossing**: `GhostHulls.board(body, ship)` and `get_off(body, ship, world_space)` move a
+  character's body between the spaces. Same place on the ship; velocity is the deck's plus
+  its own, turned into the right frame. Boarding marks the body `ghosted`, so
+  `PlanetFrame.recentre` and `PlanetSystem._travel` leave it alone: only its ship travels.
+* **The pawn aboard**:
+  * `Pawn.ghost` holds its ship. Its up is the ship's deck up, held for the whole move by
+    the new `Gravity.pin_up`, since no field or planet can say where down is at ghost points.
+    With the ship's generator off, it floats.
+  * `PawnMoves`' rays and shape tests ask the space the body is in.
+  * `PlayerController` draws the camera, and its look frame, through the ship's
+    `ghost_to_real`.
+  * `PlanetScene._ghost_tick` boards the pawn when it stands in a riding ship. It gets off
+    when the ship stops riding (at rest, its bricks' collision back), or when the pawn
+    leaves the ship's box (out through a hole).
+  * The terrain streaming viewer goes to the camera while aboard, so the ground streams round
+    the real ship. `_anchor()` uses the real place.
+* **In play**: standing up from the seat over a world no longer stops the ship dead. It
+  glides to rest under you, at the unpiloted ship's own braking of about 40-50 m/s², its
+  bricks drawn and riding the whole way. Its collision comes back in the world once it is
+  slower than `PlanetSystem.COAST_STILL` (0.3 m/s), and you step off the ghost onto it.
+* **Gates**:
+  * `tools/ghost_hull_probe.gd`, 10 checks. Its ghost is built once in its own space. A body
+    boards at the same place. 6 s of rocking, turning and 300 m/s flight: drift 0.0000 m,
+    drawn on the real ship 0.0000 m off. It walks the distance it walked. A ray aboard meets
+    a real wall. A hole and its repair show in the ghost. A reparent and an origin shift
+    never rebuild the ghost. Getting off keeps the velocity.
+  * The planet `--gate=hull` adds 2 checks (18 ok). Up from the seat at 66 m/s: on the
+    ghost, 0.000 m along the deck while the ship went 17 m. At rest: off the ghost onto the
+    solid bricks.
+* **Not built yet** (the crossing list above):
+  * **Shots fired aboard.** The gun's ray is the camera's, in the world, where a riding ship
+    has only its shell box.
+  * **Shots from outside entering through a hole.**
+  * **Loose bricks inside the ghost.**
+  * **AI and enemies seeing a pawn aboard.** Its body is not in the world.
+  * **Repairs while riding.** Still refused.
+  * **Docking, ghost to ghost.**
+  * **A parked ship's crew asleep with its planet.**
+  * **The 60 s and planet-to-planet runs of the gate.** The probe holds for 6 s.
+  * **Boats (step 7).** They will use the same ghost.
+
 ## 8. Water drawn inside
 
 The same drawing as pools (`water_pools.gd`, `water_pool.gdshader`), in the ship's frame and
@@ -463,7 +521,8 @@ Each step lands on `main` on its own, with its gate.
 5. **Repair core + restore tool** (§9 B). Gate: `repair_probe`. Breaches seal.
    Built 2026-11-04 (§9.1).
 6. **The ghost hull** (§7b) on the generated spaceship: walk its decks while it flies.
-   Gate: `ghost_hull_probe`.
+   Gate: `ghost_hull_probe`. First cut built 2026-11-04 (§7b.1): walking, boarding,
+   getting off, damage and repair in the ghost; shots aboard and AI still to come.
 7. **A boat**, floating by buoyancy (§7) with no flooding yet, crew aboard on its ghost.
    Gate: floats level.
 8. **The sea cut out of the hull** (§6), with the terrain and water area. Gate: the shot.

@@ -1331,7 +1331,12 @@ func _look_flat() -> Vector3:
 
 func _ray(from: Vector3, to: Vector3, mask := Layers.PAWN_MASK) -> Dictionary:
 	var q := PhysicsRayQueryParameters3D.create(from, to, mask, [pawn.body.get_rid()])
-	return pawn.body.get_world_3d().direct_space_state.intersect_ray(q)
+	return _space().intersect_ray(q)
+
+
+## The space the body is in: the world's, or a ghost hull's (Docs/Hulls.md 7b).
+func _space() -> PhysicsDirectSpaceState3D:
+	return PhysicsServer3D.space_get_direct_state(PhysicsServer3D.body_get_space(pawn.body.get_rid()))
 
 
 ## Would a body `h` tall stand with its feet at `feet` without touching anything?
@@ -1345,4 +1350,4 @@ func _fits_at(feet: Vector3, h: float) -> bool:
 	q.transform = Transform3D(pawn.body.global_transform.basis, feet + pawn.up * (h * 0.5 + 0.03))
 	q.collision_mask = Layers.PAWN_MASK
 	q.exclude = [pawn.body.get_rid()]
-	return pawn.body.get_world_3d().direct_space_state.intersect_shape(q, 1).is_empty()
+	return _space().intersect_shape(q, 1).is_empty()
