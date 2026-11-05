@@ -998,6 +998,11 @@ var _phys_sum := 0.0
 var _proc_sum := 0.0
 ## The frame split by the clock, while a pass samples (FrameClock).
 var _clock: FrameClock
+## The render phase's worst flushes and what the workers had handed over for
+## each (UploadLedger), and all that landed over the pass.
+const RENDER_SPIKE_MS := 8.0
+var _render_spikes: Array = []
+var _render_landed := {}
 var _phases := {}
 ## Per-phase microseconds for the current physics tick, and the breakdown of
 ## the single worst frame seen. Guessing which phase owns a spike has been wrong
@@ -2939,7 +2944,8 @@ func _submit_glass(owed: Array) -> void:
 		var arrays := BuildingShell.window_arrays(fx, fz, courses, room_seed, layout,
 				lattice, damage, program, standing)
 		if not arrays.is_empty():
-			holder[0] = BuildingShell.window_mesh_of(arrays) if on_worker else (arrays as Variant),
+			holder[0] = BuildingShell.window_mesh_of(arrays) if on_worker else (arrays as Variant)
+			UploadLedger.note("glass", UploadLedger.verts_of(arrays)),
 			true, "shell glass")
 	glass_built += 1
 	_glass_jobs.append([task, holder, owed[0], id, owed[3]])
@@ -4718,6 +4724,7 @@ func _submit_band_job(id: int, at: int, arrays: Array) -> void:
 		m.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays, [], {},
 				IslandManager.UPLOAD_COMPRESS)
 		holder[0] = m
+		UploadLedger.note("band", UploadLedger.verts_of(arrays))
 	_band_jobs.append([id, at, IslandManager.JOB_NOT_STARTED, holder, arrays,
 			int(_band_pass.get(id, 0)), work])
 
@@ -12937,6 +12944,19 @@ func _physics_process(_delta: float) -> void:
 	# would wait for the frame it is drawing.
 	if _one_thread:
 		RenderingServer.mesh_get_surface_count(_flush_mesh.get_rid())
+	var landed := UploadLedger.take()
+	if _sampling:
+		var flush_ms := float(Time.get_ticks_usec() - t) / 1000.0
+		if flush_ms > RENDER_SPIKE_MS:
+			_render_spikes.append([flush_ms, Engine.get_physics_frames(), UploadLedger.line(landed)])
+			_render_spikes.sort_custom(func(a: Array, b: Array) -> bool: return a[0] > b[0])
+			if _render_spikes.size() > 10:
+				_render_spikes.resize(10)
+		for k in landed:
+			var row: Array = _render_landed.get(k, [0, 0])
+			row[0] += int(landed[k][0])
+			row[1] += int(landed[k][1])
+			_render_landed[k] = row
 	t = _mark("render", t)
 	if not _span_owed.is_empty():
 		_pay_span_owed()
@@ -13945,6 +13965,7 @@ func _make_shadow_proxy(b: BuildingRegistry.Building) -> bool:
 	var holder := [null]
 	var work := func() -> void:
 		holder[0] = BuildingShell.build_mesh(fx, fz, courses, profile, layout)
+		UploadLedger.note("building shadow", -1)
 	var task := WorkerThreadPool.add_task(work, false, "shadow proxy")
 	_shadow_jobs[b.id] = [task, holder, world.get_alive_block_count(b.chunk), false]
 	return true
@@ -14475,7 +14496,8 @@ func _tend_brick_panes() -> void:
 		var arrays := BuildingShell.window_arrays(fx, fz, courses, room_seed, layout, lattice,
 				{}, program, standing)
 		if not arrays.is_empty():
-			holder[0] = BuildingShell.window_mesh_of(arrays) if on_worker else (arrays as Variant),
+			holder[0] = BuildingShell.window_mesh_of(arrays) if on_worker else (arrays as Variant)
+			UploadLedger.note("panes", UploadLedger.verts_of(arrays)),
 			true, "brick panes")
 	_pane_job = [task, holder, best]
 	brick_panes_built += 1
@@ -14550,6 +14572,7 @@ func _tend_far_coarse() -> void:
 			job[1] = WorkerThreadPool.add_task(func() -> void:
 				var m := ArrayMesh.new()
 				m.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
+				UploadLedger.note("far building", UploadLedger.verts_of(arrays))
 				holder[0] = m, false, "far coarse building")
 		job[2] = holder
 	# Which go coarse, and which come back. At most one asked for a pass.
@@ -16599,6 +16622,9 @@ func _report_profile() -> void:
 	if _clock != null:
 		for line in _clock.report_lines():
 			print("[prof] " + line)
+	print("[prof] uploads from workers over the pass: " + UploadLedger.line(_render_landed))
+	for r: Array in _render_spikes:
+		print("[prof]   render flush %.1f ms at tick %d: %s" % [r[0], r[1], r[2]])
 	print("[prof] worst script tick %.1f ms  (%d islands)" % [
 			_prof_worst_ms, int(_prof_worst.get("island_count", 0))])
 	if _glass_ticks > 0:
