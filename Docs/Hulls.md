@@ -385,11 +385,48 @@ sleeps and wakes with its planet.
   * Asleep and awake; docked ghost to ghost; getting off.
 * **Other gates:** planet `--gate=hull` 18 ok, `--gate=seat` 17 ok. Gravity 13, moves 39,
   pawn 7, repair 7, vent 10, air 13, AI moves 7, soldier 8, callouts 9.
-* **Still open:**
-  * **Ladders** can't be climbed on a riding ship's ghost (they are found in the world).
-  * **Flying planet to planet in play with someone walking aboard** needs someone at the
-    controls (a second player or an autopilot).
-  * **Boats** (step 7) will use the same ghost.
+### 7b.3 Built (2026-11-05): carried by what it stands on
+
+**The rule (the user's, 2026-11-05):** whatever touches a vehicle, a planet or a station
+becomes its child until it touches something else or moves far enough away. It is carried
+by it and drawn with it, and never left behind by the frame it stands in.
+
+Where it holds now:
+
+| What | How it is carried |
+|---|---|
+| The player, and every other pawn (AI soldiers, crew) | On a riding ship's ghost (`GhostHulls.tick`, the same crossing for all; `PlanetSystem._crew_tick` for every pawn but the player's). An AI's world-frame move is turned into the ghost's (`Pawn._physics_process`). A gun held on a ghost fires from the real ship (`GunController._aim_xf`). |
+| Doors | Children of the ship in its frame (`BuildDoors.follow_parent`, `local_frame`), with a twin box in its ghost (`ghost_space`, `ghost_frame`) swung with the leaf. They open for crew on the ghost (`figures`: `SpaceStation._crew_points`). **The bug fixed:** the leaves were placed in the world from the chunk's transform, which a parked or flown ship does not keep up, so they did not turn with the ship. |
+| Ladders | Children of its bricks' node already. Climbing now works on the ghost: the pawn takes the ladder's transform into its body's frame (`PawnMoves._ladder_xf`). |
+| Crumbs | In its frame (its `PlanetCrumbs`). |
+| Riders on drifting pieces | `drift_riders`, as before. |
+| Everything on a planet when it sleeps | Reparented onto it (`PlanetSystem._sleep`), as before. A ship the player is still aboard is never put to sleep when the frame moves on (`_switch`). |
+
+Not yet under the rule: loose rigid things on a flown ship's deck (dropped loot, small
+debris pieces as bodies). They would need a body in the ghost with their ship's gravity of
+their own. They are the next case if it matters in play.
+
+**The autopilot (`SpaceShip.autopilot`, `auto_target`).**
+* In the seat, **H** turns it on for the planet the nose points at most nearly. Press H
+  again, or a pilot taking the seat, turns it off.
+* With nobody at the controls it flies there at cruise: up and away from the world it
+  leaves first, turned at the pilot's TURN rate. It lets go `AUTO_ARRIVE` (400 m) over its
+  target and glides to rest.
+* So the crew walks its decks the whole way: planet shell, space (the ship as the frame),
+  the other planet's shell. A riding ship with the autopilot on keeps riding
+  (`_ship_bricks`).
+* **Gate:** planet `--gate=autopilot`, the hull gate and then the flight, 21 ok. Proto to
+  proto c in 24 s, top speed 20.7 km/s, through space, the pawn aboard every one of 1,385
+  frames; at rest over it, on its bricks.
+
+**Gates:**
+* `ghost_hull_probe`: 16 ok. New: an AI pawn on the ghost, moving along its world-frame
+  move (0.95 along it), aimed at in the world.
+* The hull gate's new door check: 40 doors where its frame says, worst 0.000 m off, 40
+  ghost twins.
+* Pawn 7, moves 39, gravity 13, repair 7, callouts 9, soldier 8. The soldier probe's AI
+  budget check is flaky with the machine busy: 2.0 / 2.5 / 18.8 ms worst over 3 runs, mean
+  0.18 ms each time.
 
 ## 8. Water drawn inside
 

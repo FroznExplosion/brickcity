@@ -453,6 +453,25 @@ func _process(delta: float) -> void:
 		_scaled_space(eye.call())
 		_far_tiers(eye.call())
 	_bake_service()
+	_crew_tick()
+
+
+## Every pawn but the player's on or off a riding ship's ghost (Docs/Hulls.md 7b,
+## GhostHulls.tick): an AI soldier aboard a ship in flight walks it as the player
+## does. Nothing to do while no ship rides.
+func _crew_tick() -> void:
+	var any := false
+	for s in ships:
+		if s.riding and s.ghost != null:
+			any = true
+			break
+	var space := get_world_3d().space
+	for n in get_tree().get_nodes_in_group(Pawn.GROUP):
+		var p := n as Pawn
+		if p == null or p == player_pawn or p.body == null or not p.body.is_inside_tree():
+			continue
+		if any or p.ghost != null:
+			GhostHulls.tick(p, ships, space)
 
 
 ## A piece that left `from`: a record in its frame -- a station's, which it
@@ -1079,7 +1098,11 @@ func _switch(next: Node3D, p: Vector3) -> void:
 		anchor = null
 		station = null
 		ship = null
-		_sleep(old)
+		# A ship the player is still aboard (its crew walking it, its autopilot
+		# flying it into a planet's shell, Docs/Hulls.md 7b) is not left behind:
+		# it goes on, awake, in the new frame.
+		if not (old is SpaceShip and (old as SpaceShip).holds(p)):
+			_sleep(old)
 	var s2w_new := space_to_world()
 	if next != null:
 		# `next` is turned to the identity where it is seen from the player:
@@ -1168,6 +1191,9 @@ func _ship_refs() -> void:
 ## Under this a ship with nobody at its controls is at rest, m/s: its bricks'
 ## collision back in the world (unride), whoever walked its ghost off it.
 const COAST_STILL := 0.3
+## The player's pawn: its crossing is the scene's (it moves the viewer too); every
+## other pawn's is here (_crew_tick).
+var player_pawn: Node = null
 ## Whoever walked a ghost hull asleep with a planet: [node, its process mode, planet].
 var _ghost_sleepers: Array = []
 
@@ -1182,11 +1208,11 @@ func _ship_bricks(p: Vector3) -> void:
 		# and, its pilot up and walking its ghost (Docs/Hulls.md 7b), until it has
 		# come to rest: its bricks' collision comes back only once it is still.
 		var moving := s.vel.length() > COAST_STILL
-		var ride := s.recipe != null and s.ref != null and s != ship and (s.piloted or (s.riding and moving))
+		var ride := s.recipe != null and s.ref != null and s != ship and (s.piloted or s.autopilot or (s.riding and moving))
 		if want and s.chunk < 0:
 			s.process_mode = Node.PROCESS_MODE_INHERIT
 			s.activate()
-		elif want and s.riding and not moving:
+		elif want and s.riding and not moving and not s.autopilot:
 			s.unride()
 		elif ride and s.chunk >= 0:
 			s.ride()

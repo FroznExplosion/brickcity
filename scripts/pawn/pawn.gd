@@ -150,6 +150,8 @@ var up := Vector3.UP
 ## body is in the ghost's physics space then, its positions the ghost's: up is
 ## the ship's deck up, never a planet's or a field's at those points.
 var ghost = null
+## Every pawn, for whoever carries them (the ghost hulls, Docs/Hulls.md 7b).
+const GROUP := &"pawns"
 ## Nothing pulls where it is (Gravity.pulls_at): it floats (PawnMoves) or drifts.
 var floating := false
 ## The gravity field it was in last tick (Gravity.field_at), to start a fall over
@@ -205,6 +207,7 @@ static func spawn(parent: Node, at_feet: Vector3, p_team := 0, with_health := tr
 	# snapped onto it and rode away on its head.
 	p.place(at_feet)
 	parent.add_child(b)
+	p.add_to_group(GROUP)
 	p.place(at_feet)
 	return p
 
@@ -378,7 +381,14 @@ func _physics_process(delta: float) -> void:
 		_field = f
 		_fall_from = Gravity.height_of(feet_here())
 		_jump_gain = 0.0
+	# An AI's move is the world's (its nav, its target); aboard a ghost the body
+	# walks the ghost's frame. The player's is its body's already (PlayerController).
+	var world_move := intents.move
+	if aboard and not is_player:
+		intents.move = to_world().basis.inverse() * world_move
 	step(delta)
+	if aboard and not is_player:
+		intents.move = world_move
 	Gravity.unpin()
 	if eye != null:
 		eye.position = Vector3.UP * eye_offset()
