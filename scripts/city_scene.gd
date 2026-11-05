@@ -329,6 +329,12 @@ var _band_verts_now := 0
 ## A mesh with nothing in it, to ask the renderer something cheap. See
 ## _physics_process.
 var _flush_mesh := ArrayMesh.new()
+## The renderer is on this thread (the default thread model). With it on a
+## thread of its own (--render-thread separate) a renderer getter waits for it
+## to catch up, so the tick's flush below is skipped and the walk reads its
+## render times every RENDER_SAMPLE_EVERY frames (Docs/WhereWorkRuns.md 3.1 c).
+var _one_thread := RenderingServer.is_on_render_thread()
+const RENDER_SAMPLE_EVERY := 15
 ## building id -> which rebuild of its bands is current. A job from an older
 ## pass is thrown away when it lands, not attached over a newer band.
 var _band_pass := {}
@@ -12922,7 +12928,10 @@ func _physics_process(_delta: float) -> void:
 	# 7-12 ms, a small piece's mesh at 8. Any call that answers flushes the
 	# renderer's queue; asking a tiny mesh its surface count is the cheapest.
 	# See IslandManager.UPLOAD_VERTS_PER_TICK.
-	RenderingServer.mesh_get_surface_count(_flush_mesh.get_rid())
+	# With the renderer on its own thread the uploads are its to make, and this
+	# would wait for the frame it is drawing.
+	if _one_thread:
+		RenderingServer.mesh_get_surface_count(_flush_mesh.get_rid())
 	t = _mark("render", t)
 	if not _span_owed.is_empty():
 		_pay_span_owed()
@@ -18048,6 +18057,7 @@ func _run_chamfer_street() -> void:
 	var studs_max := 0
 	var last := Time.get_ticks_usec()
 	var rows := []   # per frame: what was in it (the long frames, below)
+	var render_at := [0.0, 0.0]   # the last render times read (_one_thread)
 	var pf_last := Engine.get_physics_frames()
 	for i in frames:
 		var t := float(i) / float(frames)
@@ -18063,10 +18073,11 @@ func _run_chamfer_street() -> void:
 		near_worst = maxf(near_worst, brick_near.worst_step_ms)
 		brick_near.worst_step_ms = maxf(w0, brick_near.worst_step_ms)
 		var now := Time.get_ticks_usec()
-		times.append([float(now - last) / 1000.0,
-				RenderingServer.viewport_get_measured_render_time_cpu(view)
-				+ RenderingServer.get_frame_setup_time_cpu(),
-				RenderingServer.viewport_get_measured_render_time_gpu(view)])
+		if _one_thread or i % RENDER_SAMPLE_EVERY == 0:
+			render_at = [RenderingServer.viewport_get_measured_render_time_cpu(view)
+					+ RenderingServer.get_frame_setup_time_cpu(),
+					RenderingServer.viewport_get_measured_render_time_gpu(view)]
+		times.append([float(now - last) / 1000.0, render_at[0], render_at[1]])
 		last = now
 		var pf := Engine.get_physics_frames()
 		var top := ""

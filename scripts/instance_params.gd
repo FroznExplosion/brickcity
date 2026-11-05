@@ -17,7 +17,9 @@ static func put(node: GeometryInstance3D, param: StringName, value: Variant) -> 
 
 ## What put last set on the node, or null if it never did.
 static func of(node: GeometryInstance3D, param: StringName) -> Variant:
-	return node.get_meta(_key(param), null)
+	# Not get_meta(key, null): a null default counts as none, and it errors.
+	var key := _key(param)
+	return node.get_meta(key) if node.has_meta(key) else null
 
 
 static func _key(param: StringName) -> StringName:
