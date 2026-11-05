@@ -1099,7 +1099,8 @@ func _forget(key: int) -> void:
 	if band == null:
 		return
 	if band.state == UPLOADING:
-		WorkerThreadPool.wait_for_task_completion(band.task)
+		# Its mesh is not wanted: left to finish rather than waited for.
+		TaskReaper.drop(band.task)
 		band.holder = []
 		world.drop_chamfer(band.chunk, band.section)
 	elif band.state == PENDING:
