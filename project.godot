@@ -391,3 +391,19 @@ print_bead={
 "type": "sampler2DArray",
 "value": "res://textures/pbr/print_bead.webp"
 }
+cloud_from_world={
+"type": "mat4",
+"value": Projection(1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1)
+}
+cloud_sun={
+"type": "vec4",
+"value": Vector4(0, 1, 0, 0)
+}
+cloud_shape={
+"type": "vec4",
+"value": Vector4(0, 1200, 0, 650)
+}
+cloud_drift={
+"type": "vec3",
+"value": Vector3(0, 0, 0)
+}

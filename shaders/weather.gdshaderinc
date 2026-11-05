@@ -1,4 +1,6 @@
 // Weather on surfaces (Docs/Disasters.md 19): wet in rain, and swaying in wind.
+// Clouds' shadows come with it (cloud_shade; Docs/Lighting.md 2b).
+#include "res://shaders/clouds.gdshaderinc"
 //
 // Every uniform defaults to "no weather", so a shader that includes this and a
 // material nobody sets draw exactly as they did. scripts/weather_fx.gd pushes

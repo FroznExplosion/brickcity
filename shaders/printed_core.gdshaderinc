@@ -231,6 +231,9 @@ void fragment() {
             albedo = bm_wood_fill(albedo, p, v_local.y / 0.020, 0.0, tfade);
         }
     }
+    if (tex == 10) {
+        emission = bm_lamp(albedo);
+    }
 
     float out_rough = clamp(roughness + print_rough, 0.0, 1.0);
     float out_spec = clamp(MAT_SPEC[mat] + (surface_specular - MAT_SPEC[0]), 0.0, 1.0);
@@ -246,6 +249,8 @@ void fragment() {
 #ifdef GRID_LIGHT
     AO = grid_light_shade(v_grid_p, v_grid_n, albedo, emission);
 #endif
+    // Under a cloud, less sun (clouds.gdshaderinc; Docs/Lighting.md 2b).
+    albedo *= cloud_shade((INV_VIEW_MATRIX * vec4(VERTEX, 1.0)).xyz);
     ALBEDO = albedo;
     ROUGHNESS = out_rough;
     SPECULAR = out_spec;

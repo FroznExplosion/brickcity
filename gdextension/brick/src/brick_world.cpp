@@ -1349,6 +1349,97 @@ Vector3i BrickWorld::chunk_light_dims(int chunk_id, int cell_plates) const {
     return Vector3i(d.x + 2, (d.y + cell_plates - 1) / cell_plates + 2, d.z + 2);
 }
 
+namespace {
+int material_named(const char *name) {
+    for (int m = 0; m < BRICK_MATERIAL_COUNT; ++m) {
+        if (std::strcmp(BRICK_MATERIALS[m].name, name) == 0) {
+            return m;
+        }
+    }
+    return -1;
+}
+
+// The light a block gives (Docs/Lighting.md 6.3): 0 none; 1 all round (Glow
+// PLA, and a Lamp block with studs or sockets both ways, or smooth both
+// ways); 2 up (a Lamp part smooth on top: a tile, a light bar); 3 down (a
+// Lamp part smooth underneath: an under-tile, mounted to a ceiling by its
+// studs). An inverted tile is smooth underneath, so it shines down too.
+int lamp_mode(int material, const Archetype &a) {
+    static const int glow = material_named("Glow PLA");
+    static const int lamp = material_named("Lamp");
+    if (material < 0) {
+        return 0;
+    }
+    if (material == glow) {
+        return 1;
+    }
+    if (material != lamp) {
+        return 0;
+    }
+    bool up_smooth = true;
+    bool down_smooth = true;
+    for (int z = 0; z < a.size.z; ++z) {
+        for (int x = 0; x < a.size.x; ++x) {
+            up_smooth = up_smooth && a.up_at(x, z) == FACE_NONE;
+            down_smooth = down_smooth && a.down_at(x, z) == FACE_NONE;
+        }
+    }
+    if (up_smooth == down_smooth) {
+        return 1;
+    }
+    return up_smooth ? 2 : 3;
+}
+
+// A light's colour: its block's, brightest channel 1 (a dark filament gives
+// a dim-looking but still full-strength light of its hue).
+Color lamp_colour(int material, int colour) {
+    const NamedColour &e = brick_material_colour_entry(material, colour);
+    const float top = std::max(std::max(e.r, e.g), std::max(e.b, 0.05f));
+    return Color(e.r / top, e.g / top, e.b / top);
+}
+} // namespace
+
+PackedFloat32Array BrickWorld::chunk_lamps(int chunk_id) const {
+    PackedFloat32Array out;
+    if (!valid_chunk(chunk_id)) {
+        return out;
+    }
+    static const int glow = material_named("Glow PLA");
+    const Chunk &c = chunks[chunk_id];
+    const Vector3 cs = cell_size();
+    for (size_t i = 0; i < c.blocks.size(); ++i) {
+        const Block &b = c.blocks[i];
+        if (!b.alive || b.removed || b.archetype < 0) {
+            continue;
+        }
+        const Archetype &a = archetypes[b.archetype];
+        const int mode = lamp_mode(b.material, a);
+        if (mode == 0) {
+            continue;
+        }
+        const Vector3i base = b.cell - c.origin;
+        float y = (base.y + a.size.y * 0.5f) * cs.y;
+        float dir = 0.0f;
+        if (mode == 2) {
+            y = (base.y + a.size.y) * cs.y;
+            dir = 1.0f;
+        } else if (mode == 3) {
+            y = base.y * cs.y;
+            dir = -1.0f;
+        }
+        const Color col = lamp_colour(b.material, b.colour);
+        out.push_back((base.x + a.size.x * 0.5f) * cs.x);
+        out.push_back(y);
+        out.push_back((base.z + a.size.z * 0.5f) * cs.z);
+        out.push_back(dir);
+        out.push_back(col.r);
+        out.push_back(col.g);
+        out.push_back(col.b);
+        out.push_back((int)b.material == glow ? 1.0f : 2.5f);
+    }
+    return out;
+}
+
 PackedVector3Array BrickWorld::chunk_glow_points(int chunk_id) const {
     PackedVector3Array out;
     if (!valid_chunk(chunk_id)) {
@@ -1397,23 +1488,26 @@ PackedByteArray BrickWorld::chunk_light_tiles(int chunk_id, int cell_plates, int
     auto at = [&](int x, int y, int z) -> int64_t {
         return (int64_t)x + (int64_t)n.x * ((int64_t)z + (int64_t)n.z * y);
     };
-    // 0 air, 1 opaque, 2 see-through, 3 glow (opaque, and a lamp).
+    // 0 air, 1 opaque, 2 see-through, 3 a lamp all round (opaque, and a
+    // source). A lamp shining one way (lamp_mode 2, 3: a light bar, an
+    // under-tile) is 4 for its block: it does not shut its cell (a plate in a
+    // cell three tall), and lights it and the cell on its lit side.
     std::vector<uint8_t> kind((size_t)total, 0);
-    int glow_material = -1;
-    for (int m = 0; m < BRICK_MATERIAL_COUNT; ++m) {
-        if (std::strcmp(BRICK_MATERIALS[m].name, "Glow PLA") == 0) {
-            glow_material = m;
-        }
-    }
     // Per block first, as get_solid_cells: a Block is big.
     std::vector<uint8_t> what(c.blocks.size(), 0);
+    std::vector<uint8_t> mode(c.blocks.size(), 0);
     for (size_t i = 0; i < c.blocks.size(); ++i) {
         const Block &b = c.blocks[i];
-        if (!b.alive) {
+        if (!b.alive || b.archetype < 0) {
             continue;
         }
-        what[i] = (int)b.material == glow_material ? 3 : (brick_material_translucent(b.material) ? 2 : 1);
+        mode[i] = (uint8_t)lamp_mode(b.material, archetypes[b.archetype]);
+        what[i] = mode[i] == 1 ? 3 : (mode[i] != 0 ? 4 : (brick_material_translucent(b.material) ? 2 : 1));
     }
+    // Which block's light a cell has (-1 none): its colour.
+    std::vector<int32_t> src((size_t)total, -1);
+    std::vector<int64_t> beams; // directional seeds: cell, then block
+
     for (int z = 0; z < d.z; ++z) {
         for (int y = 0; y < d.y; ++y) {
             const int64_t row = c.index_of(Vector3i(0, y, z));
@@ -1427,10 +1521,26 @@ PackedByteArray BrickWorld::chunk_light_tiles(int chunk_id, int cell_plates, int
                     continue;
                 }
                 const uint8_t w = what[(size_t)blk];
-                uint8_t &k = kind[(size_t)at(x + 1, ly, z + 1)];
-                // Any opaque plate makes the cell opaque; glow wins.
+                const int64_t here = at(x + 1, ly, z + 1);
+                if (w == 4) {
+                    // Its own cell, and the one its face looks into.
+                    const int dy = mode[(size_t)blk] == 2 ? 1 : -1;
+                    beams.push_back(here);
+                    beams.push_back(blk);
+                    const int ny = ly + dy;
+                    if (ny >= 0 && ny < n.y) {
+                        beams.push_back(at(x + 1, ny, z + 1));
+                        beams.push_back(blk);
+                    }
+                    continue;
+                }
+                uint8_t &k = kind[(size_t)here];
+                // Any opaque plate makes the cell opaque; a lamp wins.
                 if (w == 3 || (w == 1 && k != 3) || (w == 2 && k == 0)) {
                     k = w;
+                    if (w == 3) {
+                        src[(size_t)here] = blk;
+                    }
                 }
             }
         }
@@ -1482,8 +1592,9 @@ PackedByteArray BrickWorld::chunk_light_tiles(int chunk_id, int cell_plates, int
     }
     const int64_t step_z = n.x;
     const int64_t step_y = (int64_t)n.x * n.z;
-    // Breadth first, each cell keeping the most that reaches it.
-    auto flood = [&](std::vector<uint8_t> &v, int step) {
+    // Breadth first, each cell keeping the most that reaches it (and, for
+    // the lamps, whose light that is).
+    auto flood = [&](std::vector<uint8_t> &v, int step, std::vector<int32_t> *from) {
         size_t head = 0;
         while (head < queue.size()) {
             const int64_t i = queue[head++];
@@ -1507,13 +1618,17 @@ PackedByteArray BrickWorld::chunk_light_tiles(int chunk_id, int cell_plates, int
                 const int nv = here - (kj == 2 ? step * 3 : step);
                 if (nv > (int)v[(size_t)j]) {
                     v[(size_t)j] = (uint8_t)nv;
+                    if (from != nullptr) {
+                        (*from)[(size_t)j] = (*from)[(size_t)i];
+                    }
                     queue.push_back(j);
                 }
             }
         }
     };
-    flood(sky, std::max(1, sky_step));
-    // Lamps: from every Glow cell into the air round it.
+    flood(sky, std::max(1, sky_step), nullptr);
+    // Lamps: from every lamp cell into the air round it; a one-way lamp
+    // from its cell and the next on its lit side, where nothing shuts them.
     queue.clear();
     for (int64_t i = 0; i < total; ++i) {
         if (kind[(size_t)i] == 3) {
@@ -1521,19 +1636,41 @@ PackedByteArray BrickWorld::chunk_light_tiles(int chunk_id, int cell_plates, int
             queue.push_back(i);
         }
     }
-    flood(lamp, std::max(1, lamp_step));
-    out.resize((int64_t)width * height * 2);
+    for (size_t k = 0; k + 1 < beams.size(); k += 2) {
+        const int64_t i = beams[k];
+        const uint8_t ki = kind[(size_t)i];
+        if (ki == 1 || ki == 3 || lamp[(size_t)i] == 255) {
+            continue;
+        }
+        lamp[(size_t)i] = 255;
+        src[(size_t)i] = (int32_t)beams[k + 1];
+        queue.push_back(i);
+    }
+    flood(lamp, std::max(1, lamp_step), &src);
+    // Each source's colour, once.
+    std::vector<Color> tint(c.blocks.size(), Color(1, 1, 1));
+    for (size_t i = 0; i < c.blocks.size(); ++i) {
+        if (mode[i] != 0) {
+            tint[i] = lamp_colour(c.blocks[i].material, c.blocks[i].colour);
+        }
+    }
+    out.resize((int64_t)width * height * 4);
     uint8_t *w = out.ptrw();
     memset(w, 0, (size_t)out.size());
     for (int y = 0; y < n.y; ++y) {
         const int tx = (y % per_row) * n.x;
         const int tz = (y / per_row) * n.z;
         for (int z = 0; z < n.z; ++z) {
-            uint8_t *o = w + ((int64_t)(tz + z) * width + tx) * 2;
+            uint8_t *o = w + ((int64_t)(tz + z) * width + tx) * 4;
             for (int x = 0; x < n.x; ++x) {
                 const int64_t i = at(x, y, z);
-                o[x * 2] = sky[(size_t)i];
-                o[x * 2 + 1] = lamp[(size_t)i];
+                o[x * 4] = sky[(size_t)i];
+                const int s = src[(size_t)i];
+                const Color t = s >= 0 ? tint[(size_t)s] : Color(1, 1, 1);
+                const float l = (float)lamp[(size_t)i];
+                o[x * 4 + 1] = (uint8_t)std::lround(l * t.r);
+                o[x * 4 + 2] = (uint8_t)std::lround(l * t.g);
+                o[x * 4 + 3] = (uint8_t)std::lround(l * t.b);
             }
         }
     }
@@ -8225,14 +8362,14 @@ void BrickWorld::set_scorched_blocks(int chunk_id, const PackedInt32Array &ids) 
 //          leaves flash.
 //   FLAME  how hard it heats what is round it while it burns.
 // PLA, PLA matte, PLA silk, ABS, PETG, TPU, Nylon, Glow PLA, Carbon PLA,
-// Wood PLA, Wood, Metal, Stone, Leaf.
+// Wood PLA, Wood, Metal, Stone, Leaf, Lamp.
 namespace {
 constexpr float FIRE_TAKE[] = {0.55f, 0.55f, 0.55f, 0.5f, 0.45f, 0.4f, 0.35f, 0.55f, 0.45f,
-        0.8f, 1.0f, 0.25f, 0.2f, 1.6f};
+        0.8f, 1.0f, 0.25f, 0.2f, 1.6f, 0.5f};
 constexpr float FIRE_BURN[] = {7.0f, 7.0f, 7.0f, 8.0f, 8.0f, 10.0f, 10.0f, 7.0f, 8.0f,
-        9.0f, 26.0f, 0.0f, 0.0f, 3.0f};
+        9.0f, 26.0f, 0.0f, 0.0f, 3.0f, 7.0f};
 constexpr float FIRE_FLAME[] = {0.7f, 0.7f, 0.7f, 0.8f, 0.6f, 0.6f, 0.6f, 0.7f, 0.7f,
-        0.8f, 1.0f, 0.0f, 0.0f, 0.9f};
+        0.8f, 1.0f, 0.0f, 0.0f, 0.9f, 0.7f};
 constexpr int FIRE_TABLE = (int)(sizeof(FIRE_TAKE) / sizeof(FIRE_TAKE[0]));
 
 float fire_take(int m) { return (m >= 0 && m < FIRE_TABLE) ? FIRE_TAKE[m] : FIRE_TAKE[0]; }
@@ -11356,6 +11493,7 @@ void BrickWorld::_bind_methods() {
     ClassDB::bind_method(D_METHOD("get_chunk_dims", "chunk_id"), &BrickWorld::get_chunk_dims);
     ClassDB::bind_method(D_METHOD("chunk_light_dims", "chunk_id", "cell_plates"), &BrickWorld::chunk_light_dims);
     ClassDB::bind_method(D_METHOD("chunk_glow_points", "chunk_id"), &BrickWorld::chunk_glow_points);
+    ClassDB::bind_method(D_METHOD("chunk_lamps", "chunk_id"), &BrickWorld::chunk_lamps);
     ClassDB::bind_method(D_METHOD("chunk_light_tiles", "chunk_id", "cell_plates", "width", "height", "sky_step", "lamp_step"),
             &BrickWorld::chunk_light_tiles);
 
