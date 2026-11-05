@@ -620,6 +620,11 @@ var _cascade_rounds := 0   ## stress rounds that failed something, all told
 var _cascade_worst := 0    ## the most in one solve
 var _solve_worst := [0.0, 0, 0, false]
 var _solve_batches := 0
+## Buildings whose next solve is running on a worker (_start_solves), id ->
+## chunk, and how those went: [taken, stale (solved again in the tick),
+## dropped (the building was no longer waiting to be solved)].
+var _solving := {}
+var _solve_async := [0, 0, 0]
 var _solve_batch_worst := 0.0
 ## Buildings whose furniture has to be redrawn at the end of the tick.
 var _furniture_due := {}
@@ -12741,6 +12746,60 @@ func _mark(phase: String, t0: int) -> int:
 	return now
 
 
+## The next tick's structure solves, started now on workers
+## (BrickWorld.solve_structure_async): they run while the physics steps and the
+## frames draw, and the tick takes their answers where it would have solved
+## (_take_solve) -- 3-6 ms of a 22,000-brick tower off the tick, and up to 15.
+## The buildings first in line, as many as the tick will solve. Anything that
+## touches one of their chunks meanwhile waits for its solve first; a write to
+## its structure (a hit, a brick laid) makes the answer stale, and the tick
+## solves that building again itself. Only the host decides (as below).
+## Docs/WhereWorkRuns.md 3.3.
+func _start_solves() -> void:
+	# A building no longer waiting -- given back, or its turn taken some other
+	# way -- has its answer thrown away, or its slot would stay taken.
+	for id in _solving.keys():
+		if not _dirty.has(id):
+			world.take_solve(_solving[id])
+			_solving.erase(id)
+			_solve_async[2] += 1
+	if not authority.may_decide():
+		return
+	for k in mini(SOLVES_PER_TICK, _dirty.size()):
+		var id: int = _dirty[k]
+		if _solving.has(id):
+			continue
+		var b := registry.get_building(id)
+		if b == null or not b.is_materialised():
+			continue
+		if b.banded:
+			registry.set_storey_bounds(b)
+		if world.solve_structure_async(b.chunk, CASCADE_ROUNDS, CASCADE_BUDGET_MS):
+			_solving[id] = b.chunk
+
+
+## A solve _start_solves began for this building, if there is one and it still
+## holds: {} otherwise, and the tick solves it as before. A stale one has
+## already failed what it failed in the chunk, so that is logged for a replay
+## (as the solve below logs its own) before the building is solved again.
+func _take_solve(id: int, b: BuildingRegistry.Building) -> Dictionary:
+	if not _solving.has(id):
+		return {}
+	var got: Dictionary = world.take_solve(_solving[id])
+	_solving.erase(id)
+	if got.is_empty() or b == null or not b.is_materialised():
+		return {}
+	_solve_async[0] += 1
+	if not bool(got.get("stale", false)):
+		return got
+	_solve_async[1] += 1
+	var res: Dictionary = got.get("stress", {})
+	if int(res.get("failures", 0)) > 0 or int(res.get("reattached", 0)) > 0:
+		authority.commit(Engine.get_physics_frames(), DamageLog.Kind.SOLVE,
+				b.id, Vector3.ZERO, 0.0, Vector3(1.0, 0.0, 0.0), int(res.get("rounds", 0)))
+	return {}
+
+
 func _physics_process(_delta: float) -> void:
 	if _stud_times != BrickStrength.times:
 		_restud()
@@ -12781,6 +12840,8 @@ func _physics_process(_delta: float) -> void:
 		var ids: Array[int] = []
 		var chunks := PackedInt32Array()
 		for k in mini(decide_limit, _dirty.size()):
+			if _solving.has(_dirty[k]):
+				continue
 			var ab := registry.get_building(_dirty[k])
 			if ab != null and ab.is_materialised():
 				if ab.banded:
@@ -12810,6 +12871,7 @@ func _physics_process(_delta: float) -> void:
 		solved_now[id] = true
 		solved += 1
 		var b := registry.get_building(id)
+		var early := _take_solve(id, b)
 		if b == null or not b.is_materialised():
 			continue
 		if not b.fixtures.is_empty():
@@ -12820,7 +12882,9 @@ func _physics_process(_delta: float) -> void:
 		# three times, and answers exactly as they did (BrickWorld.solve_structure,
 		# tools/solve_probe.gd).
 		var solve: Dictionary
-		if ahead.has(id):
+		if not early.is_empty():
+			solve = early
+		elif ahead.has(id):
 			solve = ahead[id]
 			ahead.erase(id)
 		else:
@@ -13215,6 +13279,9 @@ func _physics_process(_delta: float) -> void:
 	var tick_total := float(Time.get_ticks_usec() - t_tick) / 1000.0
 	_prof["script_total"] = tick_total
 	_ai_tick(tick_total)
+	# After the AI, which reads the buildings (cover, sight) and would only
+	# wait for these: from here they run while the physics steps.
+	_start_solves()
 	if _sampling:
 		_tick_samples += 1
 		for k in _prof:
@@ -16420,6 +16487,10 @@ func _report_profile() -> void:
 	print("[prof] solves: worst single %.1f ms (%d bricks, %d groups, collapsing %s); mega buildings solved alone %d time(s), %.0f ms; %d batch(es) solved at once, worst %.1f ms" % [
 			float(_solve_worst[0]), int(_solve_worst[1]), int(_solve_worst[2]), _solve_worst[3],
 			int(_solve_mega[0]), float(_solve_mega[1]), _solve_batches, _solve_batch_worst])
+	var sa: Dictionary = world.get_solve_async_stats()
+	print("[prof] solves on workers: %d taken, %d stale (solved again), %d dropped; %d busy (no slot); the main thread waited for %d, %.1f ms in all" % [
+			int(_solve_async[0]), int(_solve_async[1]), int(_solve_async[2]), int(sa.busy),
+			int(sa.waited), float(sa.wait_ms)])
 	print("[prof] cascades: %d round(s) that failed something, at most %d in one solve; %d small group(s) held on by their own studs; %d second solve(s) in a tick put off" % [
 			_cascade_rounds, _cascade_worst, _held_groups, _resolves_put_off])
 	var sw: Array = islands.spawn_worst

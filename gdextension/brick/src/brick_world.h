@@ -723,6 +723,23 @@ public:
     /// exactly what calling solve_structure on each in turn gives.
     Array solve_structures(const PackedInt32Array &chunk_ids, int max_rounds = 1,
             double budget_ms = 0.0);
+    /// solve_structure on a worker, for take_solve to collect later -- the
+    /// city starts a tick's solves at the end of the tick before, so they run
+    /// while the physics steps and the frames draw. Until it is taken, any
+    /// call on the main thread that touches the chunk waits for it first
+    /// (valid_chunk), and one that changes its structure (structural_write)
+    /// marks the answer stale. False if the chunk is invalid, already being
+    /// solved, or every worker slot is busy: solve it in the tick as before.
+    bool solve_structure_async(int chunk_id, int max_rounds = 1, double budget_ms = 0.0);
+    /// Whether a solve_structure_async for the chunk is waiting to be taken.
+    bool solve_pending(int chunk_id) const;
+    /// The answer of solve_structure_async (waiting for it if it has not
+    /// finished), with "stale": true if the chunk's structure changed after
+    /// it started, and "ms" the worker's time; {} if none was started.
+    Dictionary take_solve(int chunk_id);
+    /// How the async solves have gone: {started, waited (joined by a main
+    /// thread call before they finished), wait_ms, stale, busy (no slot)}.
+    Dictionary get_solve_async_stats() const;
     /// What a SOLVE command replays: `rounds` stress solves, then the groups
     /// that came loose held where their own studs hold them
     /// (reattach_held_groups) -- exactly what solve_structure did to the
@@ -1301,7 +1318,10 @@ private:
     std::shared_ptr<const std::vector<brick::Archetype>> parts_snapshot;
     std::shared_ptr<const std::vector<brick::Archetype>> palette_snapshot();
     /// Every change to `archetypes` calls this: the next job copies afresh.
-    void palette_changed() { parts_snapshot.reset(); }
+    void palette_changed() {
+        parts_snapshot.reset();
+        join_solves(); // a solve on a worker reads the archetypes
+    }
     // A deque, not a vector, for one reason: the face bake runs on a worker
     // thread holding a reference to its chunk, and creating another chunk
     // meanwhile must not move the one being baked. deque never invalidates
@@ -1646,6 +1666,31 @@ private:
     };
     std::vector<std::unique_ptr<BakeJob>> bake_jobs;
     int64_t join_wait_usec = 0;
+
+    // A building's structure solve on a worker (solve_structure_async). It
+    // reads and writes its own chunk and reads the archetypes and the
+    // per-chunk tables, so the main thread waits for it before touching that
+    // chunk (wait_solve, from valid_chunk), and for all of them before
+    // growing a table (join_solves: create_chunk, palette_changed).
+    struct SolveJob {
+        int chunk_id = -1;
+        int slot = 0;          ///< scratch slot, 1..SOLVE_SLOTS-1 (0 is the main thread's)
+        std::thread worker;
+        std::atomic<bool> done{false};
+        bool stale = false;    ///< its structure was written after the solve began
+        double ms = 0.0;
+        Dictionary result;
+    };
+    mutable std::vector<std::unique_ptr<SolveJob>> solve_jobs;
+    std::atomic<int> solves_live{0}; ///< solve_jobs.size(), readable from any thread
+    std::thread::id main_thread = std::this_thread::get_id();
+    mutable int64_t solve_started = 0, solve_waited = 0, solve_wait_usec = 0,
+            solve_stale = 0, solve_busy = 0;
+    void wait_solve(int chunk_id) const;
+    void join_solves() const;
+    /// A write that changes what a solve would answer: waits for (valid_chunk
+    /// already has) and marks stale any solve of the chunk in flight.
+    void structural_write(int chunk_id);
     /// Chunks whose bake was cancelled by a write: bake_ready starts it again
     /// when next asked, once the writes of the tick are over.
     std::unordered_set<int> bake_restart;
