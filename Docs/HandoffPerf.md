@@ -118,3 +118,24 @@ main thread).
   meshes un-culled) -- try `--render-thread` off, shadows off A/B, count draw calls; (b) city tick
   spikes 40-70 ms (`dmg_rooms` 59, `bd_pieces` 55, shell-piece spawn split 23 ms for 24k bricks,
   main-thread mesh bake 31 ms) -- see the `[prof] N tick(s) over 25 ms` list.
+
+### 6.1 Piece shadows from stand-ins (2026-11-05)
+
+- FrameClock now also counts what the renderer drew: main pass and shadow passes apart
+  (`draws_k`, `tris_M`, `sh_draws_k`, `sh_tris_M`). Draw calls are few (~200); triangles are the
+  cost. Big-city collapse: **shadow passes 13-18 M triangles a frame, the main pass 4-5 M**.
+- Loose pieces cast with their full bricks (and their bands) at any distance, into all four sun
+  cascades; buildings already had shadow shells. A/B with pieces casting nothing: shadow
+  triangles 13.1 M -> 0.9 M, GPU 44 -> 17 ms. So pieces were ~93% of the shadow work.
+- Fix (merged): a big piece (radius > `SMALL_ISLAND_RADIUS`) further than `BRICK_SHADOW_RANGE`
+  (15 m) casts its coarse stand-in, shadows only (`IslandManager.want_shadow_proxy`, built on a
+  worker with `coarse_chunk_async`, uploaded on another, rebuilt at most every
+  `COARSE_REBUILD_TICKS` when it lost bricks). Its bricks and bands cast until the first is hung.
+  Close up nothing changed. Result: shadow triangles 13.1 M -> 3.6 M a frame; invisible pieces
+  no worse (worst 17 ticks).
+- **The times in these runs are not trustworthy**: they were taken past midnight with the
+  display asleep (frames ~93 ms, draw stalls -- see the display-sleep note) and one other chat's
+  headless gate going. Triangle counts are. **Next: re-measure GPU ms awake, editor closed**
+  (`big_city.tscn -- --shot`, read `[prof] frames by the clock`), then the city-tick spikes.
+- Gates: solve, collapse, replay, storey, storey_unit, hang probes pass; `--light` passes;
+  `--chamfer` failed "the picture is the same either way" once (1.01% vs 1%), then passed 2 of 2.

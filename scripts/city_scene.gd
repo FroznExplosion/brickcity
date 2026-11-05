@@ -13843,19 +13843,35 @@ func _stream_shadows() -> void:
 		casting += _set_brick_shadows_near(id, here)
 		_part("sp_near", t_sp)
 	var quiet := 0
+	var proxied := 0
 	for isl in islands.islands:
 		if isl == null or not is_instance_valid(isl.mesh):
 			continue
+		var dist := isl.mesh.global_position.distance_to(here)
 		var cast := isl.radius > SMALL_ISLAND_RADIUS \
-				or isl.mesh.global_position.distance_to(here) < SMALL_SHADOW_RANGE + isl.radius
-		var mode := (GeometryInstance3D.SHADOW_CASTING_SETTING_ON if cast
+				or dist < SMALL_SHADOW_RANGE + isl.radius
+		# A big piece further off casts its coarse stand-in instead of its
+		# bricks once it has one (IslandManager.want_shadow_proxy).
+		var proxy := false
+		if cast and not isl.coarse and isl.radius > SMALL_ISLAND_RADIUS \
+				and dist > BRICK_SHADOW_RANGE + isl.radius:
+			islands.want_shadow_proxy(isl)
+			proxy = islands.has_shadow_proxy(isl)
+		var mode := (GeometryInstance3D.SHADOW_CASTING_SETTING_ON if cast and not proxy
 				else GeometryInstance3D.SHADOW_CASTING_SETTING_OFF)
 		if isl.mesh.cast_shadow != mode:
 			isl.mesh.cast_shadow = mode
+		for band in isl.bands:
+			if is_instance_valid(band) and (band as GeometryInstance3D).cast_shadow != mode:
+				(band as GeometryInstance3D).cast_shadow = mode
+		if is_instance_valid(isl.shadow_mesh) and isl.shadow_mesh.visible != proxy:
+			isl.shadow_mesh.visible = proxy
+		if proxy:
+			proxied += 1
 		if not cast:
 			quiet += 1
 	_shadow_stats = {"proxies": _shadow_proxy.size(), "bricks_casting": casting,
-			"small_quiet": quiet}
+			"small_quiet": quiet, "pieces_proxied": proxied}
 
 
 ## Which of a building's bricks cast. Without a shadow shell, all of them.
@@ -15958,6 +15974,9 @@ func _run_shot_pass() -> void:
 	# the worker, and asked for again.
 	print("[city]   stand-ins: %d built; %d started on a worker; the slowest on the main thread %.1f ms (of any, %.1f)" % [
 			islands.coarse_built, islands.coarse_async, islands.coarse_main_worst_ms, islands.coarse_worst_ms])
+	print("[city]   piece shadows from stand-ins: %d asked for, %d hung; %d piece(s) casting one now" % [
+			islands.shadow_proxies_asked, islands.shadow_proxies_built,
+			int(_shadow_stats.get("pieces_proxied", 0))])
 	print("[city]   collapse director: %d mega round(s) turned %d group(s) into %d chunk(s) (%d round(s) held); %d breakage group(s); %d furniture brick(s) written off; %d building(s) came down big" % [
 			director.rounds, director.groups_in, director.chunks_out, director.held_rounds,
 			director.breakage_out, director.furniture_out, director.collapsing.size()])

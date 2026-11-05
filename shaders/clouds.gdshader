@@ -14,6 +14,11 @@ uniform vec3 sky_colour : source_color = vec3(0.55, 0.62, 0.72);
 uniform bool shell = true;
 // Flat: fade out to this far from the camera (the plane ends).
 uniform float fade_far = 9000.0;
+// The shell's share (0..1): it gives way to the planet's far look's clouds
+// as the camera climbs past it (CloudLayer).
+uniform float shell_fade = 1.0;
+// Rain and snow cloud: greyer underneath (WeatherFx).
+uniform float storm = 0.0;
 
 varying vec3 v_world;
 
@@ -30,11 +35,11 @@ void fragment() {
     vec3 cam = (cloud_from_world * vec4(CAMERA_POSITION_WORLD, 1.0)).xyz;
     float below = shell ? step(length(cam), length(q)) : step(cam.y, q.y);
     float sun_up = clamp(dot(up, s) * 3.0 + 0.3, 0.0, 1.0);
-    float lit = mix(1.0, mix(0.95, 0.55, d), below);
+    float lit = mix(1.0, mix(0.95, 0.55, d), below) * mix(1.0, 0.5, storm * below);
     vec3 col = sun_colour * lit * sun_up + sky_colour * 0.45;
     // Thin at a grazing look along the layer (the horizon): a haze, not a wall.
     float dist = length(CAMERA_POSITION_WORLD - v_world);
-    float fade = shell ? 1.0 : 1.0 - smoothstep(fade_far * 0.6, fade_far, dist);
+    float fade = shell ? shell_fade : 1.0 - smoothstep(fade_far * 0.6, fade_far, dist);
     ALBEDO = col;
     ALPHA = clamp(d * 0.92 * fade, 0.0, 1.0);
 }

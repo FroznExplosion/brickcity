@@ -75,6 +75,14 @@ func _on_process_frame() -> void:
 	script_ms = 0.0
 
 
+func _info(type: int, info: int) -> float:
+	return float(RenderingServer.viewport_get_render_info(_vp, type, info))
+
+
+## Not parts of the frame's sum: read beside it.
+const BESIDE := ["gpu", "draws_k", "tris_M", "sh_draws_k", "sh_tris_M"]
+
+
 func spoil() -> void:
 	_spoiled = 2
 
@@ -93,7 +101,17 @@ func _close(ms: float) -> void:
 			# After drawing until the first tick's scripts: the physics sync and
 			# its callbacks, and the wait for the frame's turn (vsync, the cap).
 			"sync": float(_frame.get("between", 0.0)),
-			"gpu": RenderingServer.viewport_get_measured_render_time_gpu(_vp)}
+			"gpu": RenderingServer.viewport_get_measured_render_time_gpu(_vp),
+			# What it drew, the main pass and the shadow passes apart: thousands
+			# of draws (k) and millions of triangles (M).
+			"draws_k": _info(RenderingServer.VIEWPORT_RENDER_INFO_TYPE_VISIBLE,
+					RenderingServer.VIEWPORT_RENDER_INFO_DRAW_CALLS_IN_FRAME) / 1000.0,
+			"tris_M": _info(RenderingServer.VIEWPORT_RENDER_INFO_TYPE_VISIBLE,
+					RenderingServer.VIEWPORT_RENDER_INFO_PRIMITIVES_IN_FRAME) / 1.0e6,
+			"sh_draws_k": _info(RenderingServer.VIEWPORT_RENDER_INFO_TYPE_SHADOW,
+					RenderingServer.VIEWPORT_RENDER_INFO_DRAW_CALLS_IN_FRAME) / 1000.0,
+			"sh_tris_M": _info(RenderingServer.VIEWPORT_RENDER_INFO_TYPE_SHADOW,
+					RenderingServer.VIEWPORT_RENDER_INFO_PRIMITIVES_IN_FRAME) / 1.0e6}
 	frames += 1
 	all_ms += ms
 	for k in parts:
@@ -104,8 +122,8 @@ func _close(ms: float) -> void:
 	slow.ms += ms
 	var top := ""
 	for k in parts:
-		slow[k] += float(parts[k])
-		if k == "gpu":
+		slow[k] = float(slow.get(k, 0.0)) + float(parts[k])
+		if k in BESIDE:
 			continue   # beside draw, not a part of the frame's sum
 		if top == "" or float(parts[k]) > float(parts[top]):
 			top = k
@@ -121,12 +139,13 @@ func report_lines() -> Array[String]:
 	var out: Array[String] = []
 	if frames == 0:
 		return out
-	var keys := ["city", "scripts", "step", "process", "draw", "sync", "gpu"]
+	var keys := ["city", "scripts", "step", "process", "draw", "sync", "gpu",
+			"draws_k", "tris_M", "sh_draws_k", "sh_tris_M"]
 	var line := "frames by the clock: %d (%d left out for the pass's own work), %.1f ms mean =" % [
 			frames, spoiled_frames, all_ms / frames]
 	for k in keys:
 		line += " %s %.1f" % [k, float(all.get(k, 0.0)) / frames]
-	out.append(line + "  (city = this script's tick, scripts = the other nodes', step = the physics step, process = idle, draw = the renderer, sync = the physics sync and the wait for the frame; gpu = the GPU's time, beside draw)")
+	out.append(line + "  (city = this script's tick, scripts = the other nodes', step = the physics step, process = idle, draw = the renderer, sync = the physics sync and the wait for the frame; gpu = the GPU's time, beside draw; draws_k / tris_M = the main pass's draws and triangles, sh_ the shadow passes')")
 	if int(slow.n) == 0:
 		return out
 	var n := float(slow.n)

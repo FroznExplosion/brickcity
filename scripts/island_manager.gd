@@ -3154,6 +3154,100 @@ func _build_coarse(isl: BrickIsland) -> void:
 			float(_t1 - _t0) / 1000.0, world.get_last_coarse_ms(), _finish_split]
 
 
+## A big piece's shadow, past CityScene.BRICK_SHADOW_RANGE, is its coarse
+## stand-in's (shadows only): its bricks drawn into four cascades were 93% of
+## the shadow passes' triangles in the big city's collapse -- 13 million a
+## frame, against 0.9 million without, and the GPU's 45 ms frame 17
+## (`big_city.tscn -- --shot`, FrameClock, 2026-11-05). Up close its bricks cast
+## as they did; studs' shadows are not seen further off.
+##
+## Built as a stand-in is, on a worker (BrickWorld.coarse_chunk_async), and
+## uploaded on another; again when it has lost bricks, at most every
+## COARSE_REBUILD_TICKS -- a shadow a moment behind a piece still coming apart
+## is the same slack a building's shadow shell has. Until the first is hung the
+## bricks cast, so nothing goes without one.
+var _shadow_wait: Array[BrickIsland] = []
+var _shadow_uploads: Array = []   ## [piece, task, [mesh], alive bricks]
+var shadow_proxies_built := 0
+var shadow_proxies_asked := 0
+
+
+func want_shadow_proxy(isl: BrickIsland) -> void:
+	if isl.coarse or _shadow_wait.has(isl) or _coarse_jobs.has(isl):
+		return
+	for job in _shadow_uploads:
+		if job[0] == isl:
+			return
+	var alive := world.get_alive_block_count(isl.chunk)
+	if is_instance_valid(isl.shadow_mesh) and isl.shadow_alive == alive:
+		return
+	var now := Engine.get_physics_frames()
+	if now - isl.shadow_tick < COARSE_REBUILD_TICKS:
+		return
+	isl.shadow_tick = now
+	if not world.coarse_pending(isl.chunk):
+		world.coarse_chunk_async(isl.chunk)
+	_shadow_wait.append(isl)
+	shadow_proxies_asked += 1
+
+
+func has_shadow_proxy(isl: BrickIsland) -> bool:
+	return is_instance_valid(isl.shadow_mesh) and isl.shadow_mesh.mesh != null
+
+
+func _harvest_shadow_proxies() -> void:
+	for i in range(_shadow_wait.size() - 1, -1, -1):
+		var isl: BrickIsland = _shadow_wait[i]
+		# Gone, or far enough off to be drawn by its stand-in (whose own
+		# harvest takes the arrays).
+		if not isl.is_valid() or isl.coarse:
+			_shadow_wait.remove_at(i)
+			continue
+		if not world.coarse_ready(isl.chunk):
+			# Settled by a change to it: asked for again on a later pass.
+			if not world.coarse_pending(isl.chunk):
+				_shadow_wait.remove_at(i)
+			continue
+		_shadow_wait.remove_at(i)
+		var alive := world.get_alive_block_count(isl.chunk)
+		var arrays: Array = world.take_coarse_mesh(isl.chunk)
+		if arrays.is_empty() or not mesh_arrays_ok(arrays, "island %d (shadow)" % isl.chunk):
+			continue
+		var holder := [null]
+		var work := func() -> void:
+			var m := ArrayMesh.new()
+			m.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays, [], {},
+					UPLOAD_COMPRESS)
+			holder[0] = m
+		var task := WorkerThreadPool.add_task(work, true, "piece shadow")
+		_shadow_uploads.append([isl, task, holder, alive])
+	for i in range(_shadow_uploads.size() - 1, -1, -1):
+		var job: Array = _shadow_uploads[i]
+		if not WorkerThreadPool.is_task_completed(int(job[1])):
+			continue
+		WorkerThreadPool.wait_for_task_completion(int(job[1]))
+		_shadow_uploads.remove_at(i)
+		var isl: BrickIsland = job[0]
+		var mesh: ArrayMesh = job[2][0]
+		if not isl.is_valid() or not is_instance_valid(isl.mesh) or mesh == null:
+			continue
+		var mi := isl.shadow_mesh
+		if not is_instance_valid(mi):
+			mi = MeshInstance3D.new()
+			mi.name = "CoarseShadow"
+			mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_SHADOWS_ONLY
+			mi.physics_interpolation_mode = Node.PHYSICS_INTERPOLATION_MODE_OFF
+			# Hidden until the city's next shadow pass turns it on and the
+			# bricks off, together.
+			mi.visible = false
+			isl.mesh.add_child(mi)
+			isl.shadow_mesh = mi
+		mi.material_override = isl.mesh.material_override
+		mi.mesh = mesh
+		isl.shadow_alive = int(job[3])
+		shadow_proxies_built += 1
+
+
 ## Where the time of the last stand-in built on the main thread went, for the
 ## mesh queue's slowest (_note_mesh_drain): one of 76 bricks took 216.6 ms in a
 ## --big --shot (2026-10-23), its build 1.1 ms at most.
@@ -3325,6 +3419,10 @@ func _exit_tree() -> void:
 			WorkerThreadPool.wait_for_task_completion(int(job[1]))
 		(job[2] as Array)[0] = null
 	_mesh_jobs.clear()
+	for job in _shadow_uploads:
+		WorkerThreadPool.wait_for_task_completion(int(job[1]))
+		(job[2] as Array)[0] = null
+	_shadow_uploads.clear()
 	_upload_waiting.clear()
 	# And the rubble field's merges, the same way (it crashed on quit without).
 	for key in _field:
@@ -5175,6 +5273,7 @@ func tick() -> void:
 	var _r0 := Time.get_ticks_usec()
 	_harvest_coarse_jobs()
 	_harvest_mesh_jobs()
+	_harvest_shadow_proxies()
 	var _r1 := Time.get_ticks_usec()
 	_drain_upload_waiting()
 	var _r2 := Time.get_ticks_usec()

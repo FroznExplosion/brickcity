@@ -39,6 +39,9 @@ var tier2 := 1500.0
 var sun_dir := Vector3(0.4, 0.6, 0.3).normalized()   # planet-local, surface -> sun
 
 var _impostor_mat: ShaderMaterial
+## Its clouds' drift on its far look (CloudLayer.params): blown on here while
+## no live layer is its own (the live one drifts them then, and hands back).
+var cloud_drift := Vector3.INF
 ## How many bodies shadow this one's far look now (set_shadowers).
 var shadows_now := 0
 var _atmo_mat: ShaderMaterial
@@ -73,6 +76,17 @@ func setup(p_data: PlanetData, far := false) -> void:
 		apply_bake(PlanetImpostorBake.bake(data))
 	if data.has_air:
 		_build_atmosphere()
+		# Its clouds on its far look (Docs/Lighting.md 2b): the shell's own
+		# (CloudLayer.params); CloudLayer drifts them while it is the live one.
+		if _impostor_mat != null:
+			var cp := CloudLayer.params(data.radius, data.peak(), data.planet_seed)
+			_impostor_mat.set_shader_parameter("cloud_show", 1.0)
+			_impostor_mat.set_shader_parameter("cloud_r", cp.radius)
+			_impostor_mat.set_shader_parameter("planet_r", data.radius)
+			_impostor_mat.set_shader_parameter("cloud_cover", cp.cover)
+			_impostor_mat.set_shader_parameter("cloud_size", CloudLayer.CLOUD_SIZE)
+			_impostor_mat.set_shader_parameter("cloud_drift_p", cp.drift)
+			cloud_drift = cp.drift
 	if data.ring_outer > 0.0:
 		ring = RockField.new()
 		ring.setup(data.ring_inner, data.ring_outer, data.planet_seed, data.ring_colour)
@@ -184,6 +198,9 @@ func ground_under(world: Vector3) -> Vector3:
 
 func _process(delta: float) -> void:
 	_time += delta
+	if cloud_drift != Vector3.INF and not CloudLayer.still and not CloudLayer.drifts(self):
+		cloud_drift += CloudLayer.WIND * delta
+		_impostor_mat.set_shader_parameter("cloud_drift_p", cloud_drift)
 	if _ocean_mat != null:
 		_ocean_mat.set_shader_parameter("time_s", _time)
 	if _ground_mat != null:
