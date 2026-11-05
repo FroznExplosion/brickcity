@@ -793,6 +793,68 @@ void BrickWorld::kill_blocks(int chunk_id, const PackedInt32Array &ids) {
     }
 }
 
+PackedInt32Array BrickWorld::revive_blocks(int chunk_id, const PackedInt32Array &ids) {
+    PackedInt32Array out;
+    if (!valid_chunk(chunk_id)) {
+        return out;
+    }
+    Chunk &c = chunks[chunk_id];
+    for (int i = 0; i < ids.size(); ++i) {
+        const int32_t bid = ids[i];
+        if (bid < 0 || bid >= (int32_t)c.blocks.size() || c.is_absent(bid)) {
+            continue;
+        }
+        Block &b = c.blocks[bid];
+        if (b.alive || b.removed || b.decorative) {
+            continue;
+        }
+        // Its cells still its own: a dead block keeps them (you cannot build
+        // into a crater), so this only fails for a record something else has
+        // been laid over.
+        const Archetype &a = archetypes[b.archetype];
+        const Vector3i base = b.cell - c.origin;
+        bool own = true;
+        for (int x = 0; x < a.size.x && own; ++x) {
+            for (int y = 0; y < a.size.y && own; ++y) {
+                for (int z = 0; z < a.size.z && own; ++z) {
+                    if (!a.solid_at(x, y, z)) {
+                        continue;
+                    }
+                    const Vector3i l(base.x + x, base.y + y, base.z + z);
+                    own = c.in_bounds(l) && c.index_of(l) >= 0 && c.occupancy[c.index_of(l)] == bid;
+                }
+            }
+        }
+        if (!own) {
+            continue;
+        }
+        b.alive = true;
+        b.hp = 255;
+        b.detached = false;
+        b.support_broken = false;
+        b.bottom_broken = false;
+        b.strained = false;
+        b.held = false;
+        conn_touch(chunk_id, bid);
+        out.push_back(bid);
+    }
+    if (!out.is_empty()) {
+        // Its faces are in the bake (dead ones keep their slots) and come back
+        // with the next index patch -- unless the bake left the dead out
+        // (Chunk::bake_skips_dead): then it is baked again.
+        if (c.bake_skips_dead) {
+            c.bake.valid = false;
+            if (bake_pending(chunk_id)) {
+                settle_bake_job(chunk_id, false);
+            }
+        }
+        if (!coarse_jobs.empty()) {
+            settle_coarse_job(chunk_id);
+        }
+    }
+    return out;
+}
+
 PackedFloat32Array BrickWorld::get_chunk_studs(int chunk_id) const {
     return chunk_studs(chunk_id, -1, true);
 }
@@ -11127,6 +11189,7 @@ void BrickWorld::_bind_methods() {
             &BrickWorld::would_connect);
     ClassDB::bind_method(D_METHOD("kill_block", "chunk_id", "cell"), &BrickWorld::kill_block);
     ClassDB::bind_method(D_METHOD("kill_blocks", "chunk_id", "ids"), &BrickWorld::kill_blocks);
+    ClassDB::bind_method(D_METHOD("revive_blocks", "chunk_id", "ids"), &BrickWorld::revive_blocks);
     ClassDB::bind_method(D_METHOD("get_chunk_studs", "chunk_id"), &BrickWorld::get_chunk_studs);
     ClassDB::bind_method(D_METHOD("get_chunk_studs_section", "chunk_id", "section"),
             &BrickWorld::get_chunk_studs_section);

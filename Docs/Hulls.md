@@ -334,6 +334,45 @@ picks.
 breach seals its compartment; a restore inside a falling piece is refused; the same commands in
 the same order give the same result twice.
 
+### 9.1 Built (2026-11-04): the core and the restore tool
+
+* **C++ `BrickWorld.revive_blocks(chunk, ids)`.** It brings a block back in its own cells:
+  destroyed, or `detached` (gone on a piece). A dead block still holds its cells, so nothing
+  can have been laid there. It comes back as a new brick: hp 255, and its joint damage
+  (`support_broken`, `bottom_broken`, `strained`, `held`) cleared. **Ids stay**, so the
+  damage record, the collision shape map and HullAir's block map all hold. Removed (edited
+  away), decorative and band-chunk absent blocks are left alone. Its faces are still in the
+  bake (dead blocks keep their slots), so the next index patch draws it. A chunk baked
+  without its dead (§11 E2, `bake_skips_dead`) is baked again.
+* **`DamageLog.Kind.RESTORE`**: `blocks` as ids, as BURN's are, because which bricks a
+  restore reaches is the host's choice. `StructureReplayer` applies it like the other
+  building kinds.
+* **`SpaceStation.restorable(point, radius)`** lists the lost bricks within `radius`. The
+  rim comes first: bricks beside one that is still there, nearest the point first. So a hole
+  closes from its edge inward and a breach seals soonest.
+* **`SpaceStation.restore(ids, point, radius)`** records the command and applies it. Then
+  the air takes the bricks back (`HullAir.blocks_added`: the breach seals, the supply
+  refills), the collision bands are rebuilt at the next flush (`BuildingCollision.enable`),
+  and the bands are redrawn.
+* **Refused while the ship `riding`** (flown over a world). A hit is refused then too: its
+  bricks' collision is put away. Working on a hull in flight comes with the ghost hull
+  (step 6).
+* **`RestoreTool`** (front end B): hold `restore` (the **middle mouse button**; every letter
+  key was taken, rebindable in Options > Controls) on a ship's or station's hull. The lost
+  bricks within RADIUS 2.5 m of where you point (RANGE 6 m along the view) come back, RATE
+  8 a second, rim first. Wired in `PlanetScene._restore_tick`.
+* **Not decided, left open:**
+  * **What a brick costs.** `RestoreTool.cost` is how many it may still lay; -1, no limit,
+    for now.
+  * **Bricks that left on a piece come back as new ones.** The drifting piece stays as
+    debris. Pulling the debris back in (§9 B, optional) is not built.
+  * **No HUD or effect for the tool yet**: the bricks reappearing is the only feedback.
+  * Front end A (brick by brick, step 10) can use the same `restore`.
+* **Gate: `tools/repair_probe.gd`, 7 checks:** the shot, the rim first, the tool's rate,
+  refused while riding, every brick exactly as built (part, colour, full hp, same id), the
+  breach sealed and filling, and the replay. The ship's commands replayed on a fresh ship
+  give the same bricks after the shot and at the end.
+
 ## 10. Health, limbs, respawn (decisions)
 
 - **Health: a health bar** (the user's choice). The Borderlands-style layers already exist
@@ -422,6 +461,7 @@ Each step lands on `main` on its own, with its gate.
    Gate: `hull_air_probe`.
 4. **Venting** in space (§4): pressure, the pull toward the hole, a HUD warning.
 5. **Repair core + restore tool** (§9 B). Gate: `repair_probe`. Breaches seal.
+   Built 2026-11-04 (§9.1).
 6. **The ghost hull** (§7b) on the generated spaceship: walk its decks while it flies.
    Gate: `ghost_hull_probe`.
 7. **A boat**, floating by buoyancy (§7) with no flooding yet, crew aboard on its ghost.
@@ -435,7 +475,8 @@ Each step lands on `main` on its own, with its gate.
 
 ## 13. Open questions
 
-- Repair front end: A, B or both (§9)? What does a repair cost?
+- Repair front end: A, B or both (§9)? B is built (§9.1). What does a repair cost? Should the
+  tool pull its debris back? Which key or slot is it on?
 - Respawn rule (§10)?
 - Low pressure: warn, hurt, or need a suit?
 - Pumps and bailing: a module, a tool, or nothing?
