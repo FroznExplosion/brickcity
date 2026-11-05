@@ -159,8 +159,9 @@ project.godot) set each frame by `CloudLayer` (`scripts/cloud_layer.gd`).
   and drift for both) and their shadows on its ground. A world's far look has
   them from the start (`PlanetBody.setup`); the live layer drifts them and
   hands over: the shell fades out between 0.4 and 3 km over it as the far
-  look's fade in (`shell_fade`, `cloud_show`). Far worlds' clouds stand
-  still. The noise has a swell six clouds across: fronts with clear sky
+  look's fade in (`shell_fade`, `cloud_show`). Far worlds' clouds drift
+  too (`PlanetBody.cloud_drift`, blown on while no live layer is theirs; the
+  layer takes it up and hands it back, so nothing jumps). The noise has a swell six clouds across: fronts with clear sky
   between. Picture `light_gate_clouds_space`.
 - Scripted passes and gates hold the clouds still (`CloudLayer.still`), so
   pictures do not drift between shots.
@@ -310,7 +311,11 @@ re-bake (50-80 ms a tower) per hit. A grid beside the mesh instead:
   (`KitFurnish.light`: warm in rooms, white in corridors and halls; a test
   ship 58); a planet town's towers likewise under every ceiling over a
   room-high space (`CeilingLights.hang`, on the template; 30 in the gate's
-  tower). Not the city's towers. With lights in every room, a building's
+  tower). Not the city's towers: tried 2026-11-05, in the template and then
+  laid with each storey (a light hangs from the storey over it), and storey
+  units (`storey_unit_probe`) failed both ways -- they know a tower's dead
+  bricks by block id, and the lights' ids moved them. Needs the storey-unit
+  owner: lights given ids after every storey's, or kept apart from them. With lights in every room, a building's
   8 real lights are the 8 nearest the camera, picked again each turn of
   `step()` (`_place_lamps`).
 
