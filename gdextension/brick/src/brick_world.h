@@ -192,6 +192,14 @@ public:
     /// then the ones that were gone are made gone again. Requires the recipe to
     /// be deterministic, so id N always means the same brick.
     void kill_blocks(int chunk_id, const PackedInt32Array &ids);
+    /// Bring blocks back as they were laid (Docs/Hulls.md 9, the repair core):
+    /// destroyed ones, and ones that left on a piece (`detached`), each in its
+    /// own cells, which a dead block still holds. A new brick: full hp, its
+    /// joint damage gone. Ids stay, so the damage record, the shape map and
+    /// HullAir's block map hold. Removed (edited away), decorative and absent
+    /// blocks are left alone, and so is one whose cells are not its own any
+    /// more. Returns the ids brought back.
+    PackedInt32Array revive_blocks(int chunk_id, const PackedInt32Array &ids);
 
     /// Which XZ columns still hold anything alive between two grid heights.
     ///

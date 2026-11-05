@@ -111,6 +111,12 @@ enum Kind {
 	## brick piece at the transform in `points` (PIECE_REST's form). Its id is
 	## piece_id(seq), as a DETACH's piece's is.
 	SHELL_BRICKS,
+	## Repair (Docs/Hulls.md 9): `blocks` of building `target` laid back as they
+	## were built (BrickWorld.revive_blocks) -- destroyed or gone on a piece, in
+	## their own cells, full hp. Ids, as BURN's are: which bricks a restore
+	## reaches is the host's choice (where the tool points, how long it is held).
+	## `point` and `radius` are where, for whoever has to know what changed.
+	RESTORE,
 }
 
 ## SHEAR / PIECE_SHEAR: sever only the underside of the struck region.
@@ -336,6 +342,8 @@ static func apply_entry(world: BrickWorld, chunk: int, e: Entry) -> PackedInt32A
 		Kind.BURN:
 			world.kill_blocks(chunk, e.blocks)
 			return e.blocks
+		Kind.RESTORE:
+			return world.revive_blocks(chunk, e.blocks)
 		Kind.PIECE_BLAST, Kind.PIECE_SHEAR, Kind.PIECE_SNAP, Kind.PIECE_SOLVE, Kind.PIECE_CHIP:
 			return _apply_local(world, chunk, e)
 		Kind.PIECE_REST:

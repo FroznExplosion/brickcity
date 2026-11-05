@@ -222,6 +222,14 @@ func disable(ids: PackedInt32Array) -> void:
 			PhysicsServer3D.body_set_space(body, was_space)
 
 
+## Bricks `ids` are back (a repair, Docs/Hulls.md 9): their bands are built again
+## at flush(), merged, with them in. A band a box a brick left a dead brick out
+## altogether (skip_dead), so there is no shape to switch back on.
+func enable(ids: PackedInt32Array) -> void:
+	for si in bands_of(ids):
+		stale[si] = true
+
+
 ## Merge again up to `budget` of the bands that have lost bricks since they
 ## were built, and park the rest (see `parked`). Once a tick, after everything
 ## that can take bricks out of them, before the physics steps: by then what came

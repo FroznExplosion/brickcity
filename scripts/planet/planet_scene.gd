@@ -121,6 +121,9 @@ var env: Environment
 var hud: Label
 ## Low air in a ship or station (Docs/Hulls.md 4): a warning in the middle at the top.
 var air_warn: Label
+## Repair (Docs/Hulls.md 9): held ("restore", the middle mouse button) on a ship's or
+## station's hull, its lost bricks come back.
+var restore_tool := RestoreTool.new()
 
 const VIEW_MIN := 1536
 const VIEW_MAX := 6144
@@ -948,6 +951,19 @@ func _air_tick() -> void:
 		air_warn.text = ("HULL BREACH  air %d%%" if venting else "LOW AIR  %d%%") % roundi(p * 100.0)
 
 
+## The restore tool, held: what the view points at on a ship or station.
+func _restore_tick(dt: float) -> void:
+	var holding := InputMap.has_action(&"restore") and Input.is_action_pressed(&"restore") 			and not walker.frozen and cam != null
+	if not holding and restore_tool.target == null:
+		return
+	var sts: Array = system.stations.duplicate()
+	for s in system.ships:
+		if not sts.has(s):
+			sts.append(s)
+	restore_tool.tick(dt, holding, cam.global_position, -cam.global_basis.z, sts,
+			get_world_3d().direct_space_state)
+
+
 func _process(_delta: float) -> void:
 	var now := Time.get_ticks_usec()
 	if _last_us > 0:
@@ -974,6 +990,7 @@ func _process(_delta: float) -> void:
 	if system != null:
 		walker.match_velocity = system.match_velocity(walker.global_position)
 		_air_tick()
+		_restore_tick(_delta)
 		walker.reach = body.altitude_of(walker.global_position)
 	if _stepping_out >= 0 and (ship.bricked or Time.get_ticks_msec() - _stepping_out > STEP_OUT_WAIT):
 		_stepping_out = -1
