@@ -1354,6 +1354,8 @@ func _ready() -> void:
 		_run_view_pass()
 	elif "--physview" in OS.get_cmdline_user_args():
 		_run_physview_pass()
+	elif "--piececost" in OS.get_cmdline_user_args():
+		_run_piececost_pass()
 	elif _squad_mode:
 		_run_squad_pass()
 	elif _mechfall_mode:
@@ -11075,6 +11077,106 @@ func _run_physview_pass() -> void:
 	_gate_ok("drawing changed no shape", shapes0 == shapes1, "%d then %d" % [shapes0, shapes1])
 	print("[physview] %d ok, %d FAIL" % [_gate_pass, _gate_fail])
 	get_tree().quit(1 if _gate_fail > 0 else 0)
+
+
+## What loose pieces cost to draw (Docs/Hulls.md 11, E2: measure before batching).
+## A timing pass: editor closed, no other runs (CLAUDE.md).
+##
+##     godot --path . scenes/city.tscn -- --piececost
+##
+## Towers blasted until the debris caps are full (or the towers run out), left to
+## settle, then the frame measured three ways, PIECE_FRAMES frames each: pieces
+## drawn, their meshes hidden, drawn again. Prints CPU and GPU render time, draw
+## calls and the frame's process time; the difference is what the pieces cost.
+## Also how many pieces share a mesh -- a MultiMesh only batches shared ones.
+const PIECE_FRAMES := 180
+
+func _run_piececost_pass() -> void:
+	print("[piececost] what loose pieces cost to draw")
+	respawn_buildings = false
+	var picks := _groups_pick(6)
+	if picks.is_empty():
+		print("[piececost] no tower to blast")
+		get_tree().quit(1)
+		return
+	var first: Vector3 = picks[0][1]
+	var dir0: Vector3 = picks[0][2]
+	camera.position = first + dir0 * 45.0 + Vector3(0, 18, 0)
+	camera.look_at(first + Vector3(0, 10, 0))
+	for pk in picks:
+		var b: BuildingRegistry.Building = pk[0]
+		var face: Vector3 = pk[1]
+		_promote(b.id)
+		for t in 600:
+			await get_tree().physics_frame
+			if _brick_nodes.has(b.id) and not _bands_building(b.id):
+				break
+		for shot in [[0.0, 8.0], [-4.0, 10.0], [4.0, 10.0], [8.0, 9.0], [12.0, 9.0]]:
+			_blast(face + Vector3(0.0, float(shot[0]), 0.0), float(shot[1]))
+			for t in 15:
+				await get_tree().physics_frame
+		var caps := islands.cap_counts()
+		print("[piececost] after %s: %s" % [b.id, str(caps)])
+		if int(caps.small) + int(caps.large) >= 90:
+			break
+	# Settled: the caps' work done, what lies about is what is drawn.
+	for t in 240:
+		await get_tree().physics_frame
+	var vp := get_viewport().get_viewport_rid()
+	RenderingServer.viewport_set_measure_render_time(vp, true)
+	var meshes := {}
+	var shown := 0
+	var tris := 0
+	for isl in islands.islands:
+		if isl.is_valid() and isl.mesh != null and is_instance_valid(isl.mesh) and isl.mesh.mesh != null:
+			shown += 1
+			meshes[isl.mesh.mesh.get_rid()] = true
+			for si in isl.mesh.mesh.get_surface_count():
+				var arr := isl.mesh.mesh.surface_get_arrays(si)
+				var idx = arr[Mesh.ARRAY_INDEX]
+				tris += ((idx as PackedInt32Array).size() if idx != null else (arr[Mesh.ARRAY_VERTEX] as PackedVector3Array).size()) / 3
+	print("[piececost] %d pieces drawn, %d distinct mesh(es), %d triangles; caps %s" % [
+			shown, meshes.size(), tris, str(islands.cap_counts())])
+	var a := await _piececost_measure(vp, "drawn")
+	_piece_meshes_visible(false)
+	var h := await _piececost_measure(vp, "hidden")
+	_piece_meshes_visible(true)
+	var a2 := await _piececost_measure(vp, "drawn again")
+	var cpu: float = (a.cpu + a2.cpu) * 0.5 - h.cpu
+	var gpu: float = (a.gpu + a2.gpu) * 0.5 - h.gpu
+	var calls: float = (a.calls + a2.calls) * 0.5 - h.calls
+	print("[piececost] the pieces cost: render CPU %.3f ms, GPU %.3f ms, %.0f draw calls a frame (%d pieces)" % [
+			cpu, gpu, calls, shown])
+	get_tree().quit(0)
+
+
+func _piece_meshes_visible(on: bool) -> void:
+	for isl in islands.islands:
+		if isl.is_valid() and isl.mesh != null and is_instance_valid(isl.mesh):
+			isl.mesh.visible = on
+
+
+func _piececost_measure(vp: RID, what: String) -> Dictionary:
+	for t in 20:
+		await get_tree().process_frame
+	var cpu := 0.0
+	var gpu := 0.0
+	var calls := 0.0
+	var proc := 0.0
+	var worst := 0.0
+	for t in PIECE_FRAMES:
+		await get_tree().process_frame
+		var g := RenderingServer.viewport_get_measured_render_time_gpu(vp)
+		cpu += RenderingServer.viewport_get_measured_render_time_cpu(vp)
+		gpu += g
+		worst = maxf(worst, g)
+		calls += Performance.get_monitor(Performance.RENDER_TOTAL_DRAW_CALLS_IN_FRAME)
+		proc += Performance.get_monitor(Performance.TIME_PROCESS) * 1000.0
+	var n := float(PIECE_FRAMES)
+	var out := {"cpu": cpu / n, "gpu": gpu / n, "calls": calls / n, "proc": proc / n}
+	print("[piececost] %-12s render CPU %.3f ms  GPU %.3f ms (worst %.3f)  %.0f draw calls  process %.2f ms" % [
+			what, out.cpu, out.gpu, worst, out.calls, out.proc])
+	return out
 
 
 ## Every band's and every piece's shape count, summed (_run_physview_pass).
