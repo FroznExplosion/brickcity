@@ -11127,27 +11127,134 @@ func _run_piececost_pass() -> void:
 	var meshes := {}
 	var shown := 0
 	var tris := 0
+	var bricks := 0
+	var coarse_tris := 0
+	var live_tris := 0
+	# Each piece's coarse stand-in (what it is drawn as past ISLAND_MESH_RANGE),
+	# hung beside it hidden: what the same pieces would cost as stand-ins. Test
+	# only -- the read-backs and main-thread builds here are not for play.
+	var stand := []
+	var compact := []   ## [piece node, its mesh, the same with dead faces left out]
 	for isl in islands.islands:
 		if isl.is_valid() and isl.mesh != null and is_instance_valid(isl.mesh) and isl.mesh.mesh != null:
 			shown += 1
 			meshes[isl.mesh.mesh.get_rid()] = true
-			for si in isl.mesh.mesh.get_surface_count():
-				var arr := isl.mesh.mesh.surface_get_arrays(si)
-				var idx = arr[Mesh.ARRAY_INDEX]
-				tris += ((idx as PackedInt32Array).size() if idx != null else (arr[Mesh.ARRAY_VERTEX] as PackedVector3Array).size()) / 3
-	print("[piececost] %d pieces drawn, %d distinct mesh(es), %d triangles; caps %s" % [
-			shown, meshes.size(), tris, str(islands.cap_counts())])
+			var tl := _mesh_tris(isl.mesh.mesh)
+			var t: int = tl[0]
+			live_tris += tl[1]
+			var nb := islands.world.get_alive_block_count(isl.chunk)
+			tris += t
+			bricks += nb
+			var ca: Array = islands.world.build_chunk_coarse_mesh(isl.chunk)
+			var ct := 0
+			if not ca.is_empty():
+				var cm := ArrayMesh.new()
+				cm.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, ca)
+				ct = _mesh_tris(cm)[0]
+				# Beside the piece's node, not under it: hiding the piece hides it.
+				var mi := MeshInstance3D.new()
+				mi.mesh = cm
+				mi.material_override = isl.mesh.material_override
+				mi.visible = false
+				isl.mesh.get_parent().add_child(mi)
+				mi.transform = isl.mesh.transform
+				stand.append(mi)
+			coarse_tris += ct
+			compact.append([isl.mesh, isl.mesh.mesh, _live_only(isl.mesh.mesh)])
+			if tl[1] * 2 < t:
+				# Mostly dead: what the bake says, and what a rebuild from it would hold.
+				var ms := islands.world.get_mesh_stats(isl.chunk)
+				var ra: Array = islands.world.build_chunk_mesh(isl.chunk)
+				@warning_ignore("integer_division")
+				var rt: int = (ra[Mesh.ARRAY_INDEX] as PackedInt32Array).size() / 3 if not ra.is_empty() else 0
+				print("[piececost]     mostly dead: stats %d drawn / %d slots, bake valid %s; a rebuild holds %d triangles" % [
+						int(ms.triangles), int(ms.index_slots) / 3, str(islands.world.bake_ready(isl.chunk)), rt])
+			if tl[1] > 50 * maxi(1, nb):
+				var w := islands.world
+				for bi in w.get_block_count(isl.chunk):
+					if w.get_block_hp(isl.chunk, bi) > 0:
+						var r := w.get_block_index_range(isl.chunk, bi)
+						@warning_ignore("integer_division")
+						print("[piececost]     block %d: archetype %d, material %d, %d triangles" % [
+								bi, w.get_block_archetype(isl.chunk, bi), w.get_block_material(isl.chunk, bi), r.y / 3])
+			print("[piececost]   piece %d: %d bricks, %d triangles (%d live, %.1f a brick), %d band(s), %s, %.0f m off; stand-in %d triangles" % [
+					isl.chunk, nb, t, tl[1], float(tl[1]) / maxf(1.0, nb), isl.bands.size(),
+					"coarse" if isl.coarse_drawn else "bricks",
+					isl.mesh.global_position.distance_to(camera.global_position), ct])
+	print("[piececost] %d settled piece(s) baked again to drop dead faces" % islands.compacted)
+	print("[piececost] %d pieces drawn, %d distinct mesh(es), %d bricks, %d triangles (%d live, %.1f a brick); as stand-ins %d; caps %s" % [
+			shown, meshes.size(), bricks, tris, live_tris, float(live_tris) / maxf(1.0, bricks), coarse_tris,
+			str(islands.cap_counts())])
 	var a := await _piececost_measure(vp, "drawn")
 	_piece_meshes_visible(false)
 	var h := await _piececost_measure(vp, "hidden")
+	for mi in stand:
+		mi.visible = true
+	var s := await _piececost_measure(vp, "stand-ins")
+	for mi in stand:
+		mi.visible = false
 	_piece_meshes_visible(true)
+	for c in compact:
+		(c[0] as MeshInstance3D).mesh = c[2]
+	var k := await _piececost_measure(vp, "compacted")
+	for c in compact:
+		(c[0] as MeshInstance3D).mesh = c[1]
 	var a2 := await _piececost_measure(vp, "drawn again")
 	var cpu: float = (a.cpu + a2.cpu) * 0.5 - h.cpu
 	var gpu: float = (a.gpu + a2.gpu) * 0.5 - h.gpu
 	var calls: float = (a.calls + a2.calls) * 0.5 - h.calls
 	print("[piececost] the pieces cost: render CPU %.3f ms, GPU %.3f ms, %.0f draw calls a frame (%d pieces)" % [
 			cpu, gpu, calls, shown])
+	print("[piececost] as stand-ins: render CPU %.3f ms, GPU %.3f ms, %.0f draw calls a frame" % [
+			s.cpu - h.cpu, s.gpu - h.gpu, s.calls - h.calls])
+	print("[piececost] compacted (dead faces out): render CPU %.3f ms, GPU %.3f ms, %.0f draw calls a frame" % [
+			k.cpu - h.cpu, k.gpu - h.gpu, k.calls - h.calls])
 	get_tree().quit(0)
+
+
+## `m` with its patched-out faces left out of the index buffer (test only).
+func _live_only(m: Mesh) -> Mesh:
+	var out := ArrayMesh.new()
+	for si in m.get_surface_count():
+		var arr := m.surface_get_arrays(si)
+		var idx = arr[Mesh.ARRAY_INDEX]
+		if idx != null:
+			var ix := idx as PackedInt32Array
+			var live := PackedInt32Array()
+			for i in range(0, ix.size() - 2, 3):
+				if ix[i] != ix[i + 1] or ix[i] != ix[i + 2]:
+					live.append(ix[i])
+					live.append(ix[i + 1])
+					live.append(ix[i + 2])
+			if live.is_empty():
+				continue
+			arr[Mesh.ARRAY_INDEX] = live
+		out.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arr)
+	return out
+
+
+## A mesh's triangles, from its arrays (a read-back: test passes only): [all, live]
+## -- live leaves out the ones patched out of the index buffer (all three corners
+## the same vertex: a dead brick's faces, BrickWorld.update_index_region).
+func _mesh_tris(m: Mesh) -> Array:
+	var n := 0
+	var live := 0
+	for si in m.get_surface_count():
+		var arr := m.surface_get_arrays(si)
+		var idx = arr[Mesh.ARRAY_INDEX]
+		if idx == null:
+			@warning_ignore("integer_division")
+			var k := (arr[Mesh.ARRAY_VERTEX] as PackedVector3Array).size() / 3
+			n += k
+			live += k
+			continue
+		var ix := idx as PackedInt32Array
+		@warning_ignore("integer_division")
+		n += ix.size() / 3
+		for i in range(0, ix.size() - 2, 3):
+			if ix[i] != ix[i + 1] or ix[i] != ix[i + 2]:
+				live += 1
+	return [n, live]
 
 
 func _piece_meshes_visible(on: bool) -> void:

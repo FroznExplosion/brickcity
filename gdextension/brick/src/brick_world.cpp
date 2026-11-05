@@ -1620,6 +1620,9 @@ static void bake_faces_into(const Chunk &c, const std::vector<Archetype> &parts,
         if (b.decorative) {
             continue; // bucketed out above; see FurnitureMesh
         }
+        if (c.bake_skips_dead && !b.alive) {
+            continue; // Chunk::bake_skips_dead
+        }
         const Archetype &a = parts[b.archetype];
         const Vector3i base = b.cell - c.origin;
         // The grain axis rides in alpha (brick_grid.h grain_axis).
@@ -2399,6 +2402,19 @@ void BrickWorld::join_chunk_readers(int chunk_id) {
     }
 }
 
+void BrickWorld::set_chunk_bake_skips_dead(int chunk_id, bool on) {
+    if (!valid_chunk(chunk_id)) {
+        return;
+    }
+    // A bake in flight read the old rule; it is worthless now.
+    settle_bake_job(chunk_id, false);
+    chunks[chunk_id].bake_skips_dead = on;
+}
+
+bool BrickWorld::get_chunk_bake_skips_dead(int chunk_id) const {
+    return valid_chunk(chunk_id) && chunks[chunk_id].bake_skips_dead;
+}
+
 void BrickWorld::drop_chunk_bake(int chunk_id) {
     if (!valid_chunk(chunk_id)) {
         return;
@@ -2980,6 +2996,14 @@ void BrickWorld::fill_indices(Chunk &c, MeshStats &st, PackedInt32Array &out) {
     const int faces = fb.face_count();
     out.resize((int64_t)faces * 6);
     int32_t *w = out.ptrw();
+    if (c.bake_skips_dead) {
+        // Blocks left out of the bake own no range in it (the loop below only
+        // sets the ones that have faces).
+        for (Block &b : c.blocks) {
+            b.index_start = 0;
+            b.index_count = 0;
+        }
+    }
 
     // Faces were baked block by block, so a block's faces are contiguous here,
     // which keeps the per-block index range meaningful.
@@ -11210,6 +11234,10 @@ void BrickWorld::_bind_methods() {
     ClassDB::bind_method(D_METHOD("bake_ready", "chunk_id"), &BrickWorld::bake_ready);
     ClassDB::bind_method(D_METHOD("bake_pending", "chunk_id"), &BrickWorld::bake_pending);
     ClassDB::bind_method(D_METHOD("drop_chunk_bake", "chunk_id"), &BrickWorld::drop_chunk_bake);
+    ClassDB::bind_method(D_METHOD("set_chunk_bake_skips_dead", "chunk_id", "on"),
+            &BrickWorld::set_chunk_bake_skips_dead);
+    ClassDB::bind_method(D_METHOD("get_chunk_bake_skips_dead", "chunk_id"),
+            &BrickWorld::get_chunk_bake_skips_dead);
     ClassDB::bind_method(D_METHOD("bakes_in_flight"), &BrickWorld::bakes_in_flight);
     ClassDB::bind_method(D_METHOD("get_join_wait_usec"), &BrickWorld::get_join_wait_usec);
     ClassDB::bind_method(D_METHOD("get_chunk_mass", "chunk_id"), &BrickWorld::get_chunk_mass);

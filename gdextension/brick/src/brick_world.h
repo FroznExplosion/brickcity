@@ -1137,6 +1137,11 @@ public:
     /// and wreckage nobody is near has no use for it; bake_chunk_async builds it
     /// again when it matters.
     void drop_chunk_bake(int chunk_id);
+    /// Bake only the blocks alive now (Chunk::bake_skips_dead): a settled loose
+    /// piece sheds the faces of the building it came from. Takes effect at the
+    /// next bake (drop_chunk_bake, then bake_chunk_async).
+    void set_chunk_bake_skips_dead(int chunk_id, bool on);
+    bool get_chunk_bake_skips_dead(int chunk_id) const;
     int bakes_in_flight() const;
     /// Microseconds the main thread has waited in join_chunk_readers, all told:
     /// a write to a chunk a worker was still reading.
