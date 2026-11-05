@@ -45,6 +45,22 @@ change in another area is that area's job.
 | Disasters | `scripts/disasters/`, `shaders/disaster_*`, `tools/disaster_probe.gd`, `Docs/Disasters.md` |
 | City and buildings (shared) | `city_scene.gd`, `building_registry.gd`, `tower_recipe.gd`, `room*.gd`, `island_manager.gd` — small changes by anyone, merged soon |
 
+## Where new code runs
+
+Docs/WhereWorkRuns.md says where each kind of work belongs. Two rules there
+matter for every change, because one day the renderer moves off the main
+thread (its section 3.1) and each break of them is one more place to rework:
+
+- **No renderer read-backs during play.** No `get_image()`,
+  `surface_get_arrays()`, `get_instance_shader_parameter()`, or other
+  `RenderingServer` getters in a tick, a frame, or anything a hit or a spawn
+  runs. Keep what you need on the CPU side (the arrays you built, the values
+  you set). Probes, screenshots and load-time are fine.
+- **No waiting on a worker during play.** Do not call
+  `WorkerThreadPool.wait_for_task_completion` on a job that may not be done:
+  check `is_task_completed` and come back next tick. Textures are updated
+  from the main thread, never from a worker.
+
 ## Building
 
 The engine library is **not committed**; each worktree builds its own.

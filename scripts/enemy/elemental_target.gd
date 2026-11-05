@@ -96,12 +96,12 @@ func begin_dissolve() -> void:
 	if _saved_base_material == null:
 		_saved_base_material = body_mesh.mesh.surface_get_material(0)
 	body_mesh.set_surface_override_material(0, ElementalManager.dissolve_material)
-	body_mesh.set_instance_shader_parameter("dissolve_amount", 0.0)
+	InstanceParams.put(body_mesh, &"dissolve_amount", 0.0)
 	if skeleton_mesh:
 		skeleton_mesh.visible = true
 
 func set_dissolve(amount: float) -> void:
-	body_mesh.set_instance_shader_parameter("dissolve_amount", amount)
+	InstanceParams.put(body_mesh, &"dissolve_amount", amount)
 
 func end_dissolve() -> void:
 	if _saved_base_material == null:

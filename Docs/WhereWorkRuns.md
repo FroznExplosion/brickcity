@@ -27,6 +27,9 @@ the same power budget). More threads busy at once is more heat (CLAUDE.md, the c
   `Encounter.BUDGET_MS`, one stand-in / one snow square / one shadow proxy a pass.
 * **Things that move without being decided are the GPU's**: crumbs, particles and ice shards
   are written once and moved by their shaders (GpuOffload.md 2.1, 2.2, 2.7).
+* **No renderer read-backs and no waits on a worker during play** (since 2026-11-04, for
+  new code; CLAUDE.md "Where new code runs"). Each one is a place 3.1 has to rework; the list
+  of the ones already there is in 3.1.
 * **Nodes, bodies and shapes are made on the main thread.** The scene tree and the physics
   space are not thread-safe; Godot allows building a body's shapes before it joins the space,
   and the code does that (`add_chunk_shapes` before `add_child`).
@@ -45,7 +48,7 @@ it), **could move** (worth it if the number says so), or **moved** (done, with w
 | Far stand-ins (coarse) | C++ thread + worker upload | show 0.1-0.5 ms, one spike 35 ms (renderer wait) | moved 2026-11-04 (array copy); renderer share is 3.1 |
 | Chamfered near bands | C++ thread + worker upload | -- | moved 2026-11-04 (array copy) |
 | Structure solve, several buildings in a tick | a thread each (`solve_structures`) | -- | right |
-| Structure solve, one building | **main** (`solve_structure`) | 3-6 ms worst for a 22,000-brick tower | could move: 3.3 |
+| Structure solve, one building | **worker** in the city (`solve_structure_async`, started at the end of the tick before); main on planets and stations | 3-6 ms of a big tower, off the tick | moved: 3.3 |
 | Damage applied to bricks (`DamageLog.apply_entry`) | main (C++) | sub-ms | right: it is the write everything else reads |
 | Shadow proxy damage profile | **main** (C++ walk) | 2-7 ms logged 10-23; walk since 0.12 ms mean | measure first: 3.4 |
 | Shadow casting switch (`_set_brick_shadows_near`) | main, renderer calls | 33 ms once on the walk (a renderer wait) | right; the wait is 3.1 |
@@ -131,6 +134,21 @@ flush in `CityScene._physics_process`), every renderer read-back (`get_image`,
 **Measure first:** how much of a collapse's worst frames is renderer waits (the `render` mark
 and the stalls above) against real work (`spawn`, `fracture`).
 
+**Started 2026-11-04.** Step 1, stop it growing: the rule in CLAUDE.md ("Where new code runs").
+Step 2, the work list -- every place in play code that breaks it today (probes, gates,
+screenshots, `_exit_tree` and load-time waits left out; those are fine):
+
+| # | Kind | Where | What to do |
+|---|---|---|---|
+| a | **done 2026-11-04** (`InstanceParams.put` / `of`) instance parameter read-back | `BrickNear._chamfer_node` (copies `weather_sway`, `weather_snowcap`, `grain_origin`, `grid_light` from the flat band), `BrickNear` studs (`grid_light`), `CityScene` stand-ins x2 (`grain_origin`), `PlanetScene` grid check (`grid_light`), `AcidEffect` (`dissolve_amount`) | keep the values set on the CPU side (a dictionary or node meta written where they are set) and copy from there |
+| b | **done 2026-11-04 where the result is thrown away** (`TaskReaper.drop`: `BrickNear._forget`, `PlanetBuildings._free_bricks` / `_topple`). Left, each for a reason: `CityScene._take_bands` (a piece carrying the bands away needs them landed), `PlanetSystem._full_bake` (needs the maps now), `PlanetSystem.jump` (its worker writes `_bake_result`, which the next bake reuses), `SpaceStation.deactivate` (the station may be freed while the worker runs; rare). `IslandManager._field_finish` only runs once done. -- wait on a job that may still run | `CityScene._harvest_band_jobs(wait_for)`, `BrickNear._forget` (UPLOADING), `IslandManager._field_finish`, `PlanetBuildings._free_bricks` and `_topple`, `SpaceStation.deactivate`, `PlanetSystem.jump` / `_full_bake` | leave the job to finish and throw its result away when harvested (a "dropped" flag), instead of waiting |
+| c | the tick's deliberate flush | `CityScene._physics_process`: `mesh_get_surface_count(_flush_mesh)` | pays the uploads at a known point today; under a render thread it would wait for the frame. Drop it when switching, measure again |
+| d | textures written from workers | the `_texture_2d_update` errors of the 2026-11-04 try | find which worker writes a texture (`ImageTexture.update`, `texture_2d_update` inside a task) and hand the image to the main thread |
+| e | the switch itself | `rendering/driver/threads/thread_model` | after a-d: `--render-thread separate`, the street walk, `--big --shot`, the gates |
+
+Steps a and b help today too (a read-back costs a renderer round trip even on one thread; a
+wait stalls the tick); c-e only pay off at the switch.
+
 **Smaller ways at the same cost** if 3.1 is never done: fewer, larger uploads (a building's
 bands merged), uploads only between ticks, and renderer calls batched to one point a tick
 after the flush.
@@ -146,15 +164,36 @@ on a worker as data (`add_chunk_shapes` reads only the chunk) and hand them over
 storey lines (the storey-units work already does part). **Measure:** `--big --shot`'s `[prof]`
 report, ticks over `SPIKE_MS`.
 
-### 3.3 A single building's structure solve on a worker
+### 3.3 A single building's structure solve on a worker -- DONE 2026-11-04 (city)
 
-**What:** `solve_structure` for one building runs in the tick, 3-6 ms for a 22,000-brick tower.
-Several in a tick already run a thread each.
+**What:** `solve_structure` for one building ran in the tick, 3-6 ms for a 22,000-brick tower
+(15 ms worst seen).
 
-**What it would take:** start the solve on a worker against a snapshot of the chunk (the solver
-already has per-thread scratch slots) and apply the answer next tick. A tick of delay before a
-building starts to fall. Damage written to that chunk meanwhile must cancel or redo the solve
-(`join_chunk_readers` does this for bakes). **Measure:** the solve's share of collapse ticks.
+**Done:** `BrickWorld.solve_structure_async` / `take_solve`. `CityScene._start_solves` starts
+the next tick's solves (the buildings first in `_dirty`, up to `SOLVES_PER_TICK`) at the very end
+of the tick, after `_ai_tick`; the tick takes them where it used to solve (`_take_solve`). So
+they run while the physics steps and the frames draw. Seven worker slots (`SOLVE_SLOTS` less
+the main thread's); with none free the tick solves in place, as before.
+
+- **Safety:** a main-thread call that touches a chunk being solved waits for its solve first
+  (`valid_chunk`, which nearly every call goes through); growing a per-chunk table or the
+  palette waits for all (`create_chunk`, `palette_changed`, `solve_structures`). A structural
+  write meanwhile (`remove_block`, `place_block(s)`, `apply_hit`, `split_island`, `set_load`, the
+  anchors, joints and gravity setters -- `structural_write`) marks the answer stale: the tick
+  logs the stale solve's SOLVE (what it failed is in the chunk) and solves the building again.
+- **Where it waited:** started at the end of the tick but before `_ai_tick`, the AI's reads of
+  the buildings waited for 383 of 416 solves. Started after it: 1 wait in 194 solves, 0.2 ms.
+- **Measured** (`--big --shot`, other chats' runs going, so the frame means are noise): solves
+  on the main thread 0.2 ms in a run, against 87 ms for the mega buildings alone (and a 4-way
+  batch at 64 ms worst) solving in the tick. 4 stale in 855 taken.
+- **Checks:** `solve_probe` (the worker's answer and loads are the tick's, a read while it runs
+  waits, a write marks it stale, no slot gives false), `collapse_probe`, `replay_probe`,
+  `storey_probe`, `storey_unit_probe`, `hang_probe`.
+- **Netcode:** a stale solve's SOLVE is logged at the tick that takes it, after the write
+  that made it stale; on the host the failures happened before it. Four in 855; if replays ever
+  disagree there, solve a stale building's answer again from a replay of its own (Multiplayer.md).
+- **Not moved:** planets (`PlanetBuildings._solve_site`) and stations solve in their tick as
+  before; the same two calls would move them.
 
 ### 3.4 The shadow proxy damage profile off the main thread
 
@@ -199,7 +238,7 @@ once Godot 4.8 is stable, tracers if wanted) are ranked in GpuOffload.md section
 |---|---|---|---|
 | 1 | 3.1 renderer off the main thread | the shared cause of most remaining spikes (renderer waits 4-35 ms) | days; tried as a setting, failed |
 | 2 | 3.2 cheaper spawn / fracture | the worst collapse frames | large |
-| 3 | 3.3 single solve on a worker | 3-6 ms a big building's solve | medium |
+| 3 | 3.3 single solve on a worker | 3-6 ms a big building's solve | **done 2026-11-04** (city) |
 | 4 | 3.6 ground snow | 2.4 ms a tick while snow fills in | small-medium |
 | 5 | 3.4 shadow proxy profile | 0.1-7 ms, measure first | medium |
 | 6 | 3.5 planet far tier fade | tenths of a ms a frame, measure first | medium |
