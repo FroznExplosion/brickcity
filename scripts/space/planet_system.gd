@@ -298,6 +298,7 @@ func add_ship(d: OrbitalData, ref: PlanetBody, rel: Transform3D) -> SpaceShip:
 	s.physics_interpolation_mode = Node.PHYSICS_INTERPOLATION_MODE_OFF
 	s.ghosts = ghosts
 	add_child(s)
+	ShipRays.ships.append(s)
 	s.setup_ship(d)
 	s.drifted.connect(_on_drifted.bind(s))
 	s.ref = ref
@@ -1167,6 +1168,8 @@ func _ship_refs() -> void:
 ## Under this a ship with nobody at its controls is at rest, m/s: its bricks'
 ## collision back in the world (unride), whoever walked its ghost off it.
 const COAST_STILL := 0.3
+## Whoever walked a ghost hull asleep with a planet: [node, its process mode, planet].
+var _ghost_sleepers: Array = []
 
 
 ## A ship's bricks while it is the frame, or over the planet the player is on
@@ -1223,6 +1226,20 @@ func _sleep(f: Node3D) -> void:
 		if n.is_in_group(RIG):
 			continue
 		list.append([n, n.process_mode])
+	# Ships parked on it: their ghosts switched off (Docs/Hulls.md 7b), and whoever
+	# walks one asleep with it -- left where they are in the ghost, which nothing
+	# moves, and woken with it.
+	for e in list.duplicate():
+		if e[0] is SpaceStation:
+			(e[0] as SpaceStation).ghost_switch(false)
+	for c in get_parent().get_children():
+		if c is Node3D and c.has_meta(&"ghosted"):
+			var on: Variant = c.get_meta(&"ghosted")
+			for e in list:
+				if e[0] == on:
+					_ghost_sleepers.append([c, c.process_mode, f])
+					c.process_mode = Node.PROCESS_MODE_DISABLED
+					break
 	for e in list:
 		var n: Node3D = e[0]
 		n.process_mode = Node.PROCESS_MODE_DISABLED
@@ -1242,6 +1259,17 @@ func _wake(f: Node3D) -> void:
 			n.reparent(get_parent(), true)
 			n.process_mode = e[1]
 			n.reset_physics_interpolation()
+			if n is SpaceStation:
+				(n as SpaceStation).ghost_switch(true)
+	var k := 0
+	while k < _ghost_sleepers.size():
+		var g: Array = _ghost_sleepers[k]
+		if g[2] == f:
+			if is_instance_valid(g[0]):
+				(g[0] as Node).process_mode = g[1]
+			_ghost_sleepers.remove_at(k)
+			continue
+		k += 1
 	_sleepers.erase(f)
 	WorldFrame.origin = -f.global_position
 	if f is PlanetBody:
@@ -1512,6 +1540,7 @@ func _full_bake(b: PlanetBody) -> void:
 func _exit_tree() -> void:
 	if is_queued_for_deletion():
 		ghosts.free_space()
+		ShipRays.ships.clear()
 	if _bake_task >= 0:
 		WorkerThreadPool.wait_for_task_completion(_bake_task)
 		_bake_task = -1

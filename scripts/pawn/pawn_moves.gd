@@ -471,7 +471,7 @@ func _move(delta: float, wish: Vector3, speed: float) -> void:
 func _try_ladder(wish: Vector3) -> bool:
 	if _ladder_cd > 0.0:
 		return false
-	var l := Ladder.at(pawn.body.get_tree(), pawn.feet())
+	var l := Ladder.at(pawn.body.get_tree(), pawn.feet_here())
 	if l == null:
 		return false
 	var into := -l.global_basis.z
@@ -480,7 +480,7 @@ func _try_ladder(wish: Vector3) -> bool:
 	if push < 0.5:
 		return false
 	# At its top, stepping on to it from over it: that is walking, not climbing.
-	if l.local(pawn.feet()).y > l.height - 0.15:
+	if l.local(pawn.feet_here()).y > l.height - 0.15:
 		return false
 	_ladder = l
 	state = State.LADDER
@@ -500,7 +500,7 @@ func _ladder_tick(delta: float, wish: Vector3, crouch_edge: bool) -> void:
 		return
 	var lb := l.global_basis
 	var into := -lb.z
-	var p := l.local(pawn.feet())
+	var p := l.local(pawn.feet_here())
 	if _buffer > 0.0:
 		_buffer = 0.0
 		_leave_ladder()
@@ -721,7 +721,7 @@ func _try_mantle(wish: Vector3, jumped: bool) -> bool:
 	var fwd := wish.normalized() if wish != Vector3.ZERO else _look_flat()
 	if fwd == Vector3.ZERO or (not jumped and wish == Vector3.ZERO):
 		return false
-	var feet := pawn.feet()
+	var feet := pawn.feet_here()
 	# Just over a kerb: anything taller than a step is found at this height.
 	var low := feet + pawn.up * (Pawn.STEP_HEIGHT + 0.05)
 	var face := _ray(low, low + fwd * (Pawn.BODY_RADIUS + 0.45))
@@ -843,7 +843,7 @@ func _try_grab(wish: Vector3, jumped: bool) -> bool:
 	if _ledge_cd > 0.0:
 		return false
 	var b := pawn.body
-	var feet := pawn.feet()
+	var feet := pawn.feet_here()
 	var hv := Gravity.flat(b.velocity, pawn.up)
 	var dirs: Array[Vector3] = []
 	if wish != Vector3.ZERO:
@@ -1174,7 +1174,7 @@ func _try_stick(wish: Vector3) -> bool:
 
 ## A lip on this wall within reach -- the grab's or the mantle's, not the stick's.
 func _lip_in_reach(n: Vector3) -> bool:
-	var feet := pawn.feet()
+	var feet := pawn.feet_here()
 	var o := feet + pawn.up * 1.0
 	var wh := _ray(o, o - n * (Pawn.BODY_RADIUS + 0.5))
 	if wh.is_empty():
@@ -1319,7 +1319,7 @@ func _hspeed() -> float:
 
 
 func _chest() -> Vector3:
-	return pawn.feet() + pawn.up * pawn._height * 0.6
+	return pawn.feet_here() + pawn.up * pawn._height * 0.6
 
 
 ## Where the eye looks, flattened; the look yaw when the eye is straight down.

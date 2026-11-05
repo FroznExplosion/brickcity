@@ -636,12 +636,14 @@ func _pawn_real() -> Vector3:
 func _ghost_tick() -> void:
 	var st := pawn.ghost as SpaceStation
 	if st != null and is_instance_valid(st):
-		if not st.riding or st.chunk < 0 or st.ghost == null or not st.ghost_holds(pawn.body.global_position):
-			_ghost_off()
-		return
+		if st.riding and st.chunk >= 0 and st.ghost != null and st.ghost_holds(pawn.body.global_position):
+			return
+		_ghost_off()
+	# Onto a riding ship's ghost -- from the world, or straight from another's (two
+	# docked: ghost to ghost, Docs/Hulls.md 7b).
 	var feet := pawn.feet()
 	for s in system.ships:
-		if s.riding and s.ghost != null and s.holds(feet):
+		if s != st and s.riding and s.ghost != null and s.holds(feet):
 			_ghost_on(s)
 			return
 

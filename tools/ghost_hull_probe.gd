@@ -1,27 +1,33 @@
 extends SceneTree
 ## The ghost hull (Docs/Hulls.md 7b): a generated ship's brick collision standing
 ## still in a physics space of its own (GhostHulls), walked on while the real ship
-## rocks, turns and flies.
+## rocks, turns and flies; shots, sight lines, damage, repair, docking and sleep
+## through it.
 ##
 ##     godot --headless --path . --script res://tools/ghost_hull_probe.gd
 ##
-##   built     its ghost built once when its bricks are in, in the ghost space, not
-##             the world's
-##   board     a body standing on its deck taken into the ghost: the same place on
-##             the ship, its velocity turned into the deck's
-##   stands    WAIT seconds of the ship rocking, turning and flying fast: the body
-##             stands where it was on the deck (no drift), drawn there on the real ship
-##   walks     walked along the deck: the distance it was walked, whatever the ship did
-##   moves     the ship moved to another frame and the origin shifted under it: the
-##             ghost never rebuilt, the body where it was
-##   shot      a ray fired aboard (in the ghost) meets the wall it was aimed at -- a
-##             brick of the real ship there
-##   damage    a hole shot in the hull: the ghost's wall has the hole too
-##   repair    the bricks back: so is the ghost's
-##   get off   back in the world: at the real ship's place, its velocity the deck's
-##             plus its own, as it was before it boarded
+##   built     its ghost built once when its bricks are in, in the ghost space
+##   board     a body on its deck taken into the ghost: the same place on the ship,
+##             its velocity turned into the deck's
+##   stands    WAIT (60) s of the ship rocking, turning and flying fast: the body
+##             stands where it was on the deck, drawn there on the real ship
+##   walks     walked along the deck: the distance it walked, whatever the ship did
+##   shot      fired aboard (ShipRays, as every gun casts): the wall it was aimed at,
+##             a brick of the real ship, as structure
+##   sight     a wall between hides the crew; a hole shot in it while it flies (the
+##             ghost has it too) lets a shot from outside in, onto the crew
+##   repair    while it flies, its bricks back in the ghost
+##   loose     a brick with no outside to it counts as inside the hull (a group come
+##             loose there stays in it, as crumbs riding with the ship)
+##   moves     three frames of travel (planet, space, another planet), the origin
+##             recentred each time: the ghost never rebuilt, the body where it was
+##   asleep    its ghost switched off and on with its planet, never rebuilt
+##   docked    from one ship's ghost straight onto another's, the same place
+##   get off   back in the world at the real ship's place, the deck's velocity plus
+##             its own
 
-const WAIT := 6.0
+## The doc's gate: a minute on the deck of a ship rocking, turning and flying.
+const WAIT := 60.0
 const WALK := 3.0
 const WALK_SPEED := 2.0
 const GRAVITY := 9.8
@@ -29,6 +35,7 @@ const GRAVITY := 9.8
 var _pass := 0
 var _fail := 0
 var _st: SpaceStation
+var _st2: SpaceStation
 var _ghosts: GhostHulls
 var _body: CharacterBody3D
 var _frames := 0
@@ -38,8 +45,8 @@ var _start := Vector3.ZERO
 var _home := Transform3D()
 var _ship_t := 0.0
 var _walk := Vector3.ZERO
+var _walk_time := WALK
 var _drift_worst := 0.0
-var _real_worst := 0.0
 var _v0 := Vector3.ZERO
 
 
@@ -53,14 +60,32 @@ func _ok(what: String, cond: bool, detail := "") -> void:
 
 
 func _finish() -> void:
+	ShipRays.ships.clear()
 	if _body != null:
 		_body.queue_free()
+	if _st2 != null:
+		_st2.deactivate()
+		_st2.queue_free()
 	if _st != null:
 		_st.deactivate()
-	if _ghosts != null:
-		_ghosts.free_space()
+		_st.queue_free()
 	print("\n%d passed, %d failed" % [_pass, _fail])
 	quit(1 if _fail > 0 else 0)
+
+
+func _ship(sd: int, title: String) -> SpaceStation:
+	var d := OrbitalData.new()
+	d.kind = "ship"
+	d.layout = "generated"
+	d.orbital_name = title
+	d.orbital_seed = sd
+	var st := SpaceStation.new()
+	root.add_child(st)
+	st.ghosts = _ghosts
+	st.setup(d)
+	st.prepare()
+	st.activate()
+	return st
 
 
 func _physics_process(delta: float) -> bool:
@@ -69,17 +94,7 @@ func _physics_process(delta: float) -> bool:
 		0:
 			print("ghost hull probe")
 			_ghosts = GhostHulls.new()
-			var d := OrbitalData.new()
-			d.kind = "ship"
-			d.layout = "generated"
-			d.orbital_name = "ghost ship"
-			d.orbital_seed = 1
-			_st = SpaceStation.new()
-			root.add_child(_st)
-			_st.ghosts = _ghosts
-			_st.setup(d)
-			_st.prepare()
-			_st.activate()
+			_st = _ship(1, "ghost ship")
 			_home = _st.global_transform
 			_stage = 1
 		1:
@@ -95,20 +110,23 @@ func _physics_process(delta: float) -> bool:
 					and _ghosts.space != _st.get_world_3d().space,
 					"%d band bod(ies), slot %s" % [_st.ghost.bodies.size() if _st.ghost != null else 0,
 					str(_st.ghost_slot.origin)])
+			# Flown over a world: its bricks' world collision put away, only the ghost
+			# to walk and to shoot.
+			_st.ride()
+			ShipRays.ships.clear()
+			ShipRays.ships.append(_st)
 			_board()
 			_stage = 2
 		2:
 			_ship_move(delta)
 			_gravity_step(delta, Vector3.ZERO)
 			_t += delta
-			var drift := (_body.global_position - _start).length()
-			_drift_worst = maxf(_drift_worst, drift)
+			_drift_worst = maxf(_drift_worst, (_body.global_position - _start).length())
 			if _t < WAIT:
 				return false
 			_ok("stands: the ship rocking, turning, flying -- the body where it stood on the deck",
 					_drift_worst < 0.02 and _body.is_on_floor(),
-					"drift %.4f m worst over %.1f s, on the floor %s" % [_drift_worst, WAIT, _body.is_on_floor()])
-			# Where it stood on the ship, in the ship's own frame, against where it is.
+					"drift %.4f m worst over %.0f s, on the floor %s" % [_drift_worst, WAIT, _body.is_on_floor()])
 			var on_ship := _st.ghost_slot.affine_inverse() * _start
 			var real := _st.ghost_to_real() * _body.global_position
 			var want := _st.global_transform * on_ship
@@ -131,6 +149,20 @@ func _physics_process(delta: float) -> bool:
 					moved, _walk_time, _walk_time * WALK_SPEED])
 			_shot_checks()
 			_moves_check()
+			_sleep_check()
+			_st2 = _ship(2, "ghost ship 2")
+			_frames = 0
+			_stage = 4
+		4:
+			if not _st2.bricked:
+				if _frames > 1800:
+					_ok("a second ship's bricks laid", false)
+					_finish()
+					return true
+				return false
+			_st2.global_transform = _st.global_transform
+			_st2.ride()
+			_dock_check()
 			_get_off_check()
 			_finish()
 			return true
@@ -172,6 +204,7 @@ func _board() -> void:
 	cs.position = Vector3(0, 0.85, 0)
 	_body.add_child(cs)
 	_body.collision_mask = Layers.STRUCTURE | Layers.WORLD
+	_body.collision_layer = Layers.PAWN
 	root.add_child(_body)
 	# The bridge's seat (SpaceShip.seat), on its floor.
 	var at := _st.global_transform * _st.cell_point(_st.seat_cell) + _st.global_basis.y * 0.05
@@ -186,13 +219,9 @@ func _board() -> void:
 			and (back - at).length() < 1e-3 and (_body.velocity - _st.ghost_to_real().basis.inverse() * _v0).length() < 1e-3,
 			"ghost %s" % str(g))
 	_body.velocity = Vector3.ZERO
-	# Settle onto the floor before the watch starts.
 	for i in 30:
 		_gravity_step(1.0 / 60.0, Vector3.ZERO)
 	_start = _body.global_position
-
-
-var _walk_time := WALK
 
 
 ## The clearest way along the deck from where it stands (in the ghost: a ray at
@@ -214,58 +243,123 @@ func _clear_way() -> Vector3:
 	return best
 
 
-func _moves_check() -> void:
-	var g := _body.global_position
-	var bodies := _st.ghost.bodies.duplicate()
-	# Another frame: reparented under a moved node (a planet asleep, a jump), and
-	# the origin shifted (its world collision rebuilt, as on_origin_shift does).
-	var holder := Node3D.new()
-	root.add_child(holder)
-	holder.global_transform = Transform3D(Basis(Vector3.UP, 1.0), Vector3(5000, -300, 12000))
-	_st.reparent(holder, true)
-	_st.global_position += Vector3(-4000, 0, 900)
-	_st.on_origin_shift()
-	_ok("moves: another frame, an origin shift -- the ghost never rebuilt, the body where it was",
-			_st.ghost_builds == 1 and _st.ghost.bodies == bodies and (_body.global_position - g).length() < 1e-4,
-			"%d build(s)" % _st.ghost_builds)
+## The world's rays, as every gun and sight line casts them (ShipRays.cast).
+func _cast(from: Vector3, to: Vector3, ex: Array[RID] = []) -> Dictionary:
+	return ShipRays.cast(_st.get_world_3d().direct_space_state,
+			PhysicsRayQueryParameters3D.create(from, to, Layers.GUN_MASK, ex))
 
 
 func _shot_checks() -> void:
-	var space := _ghosts.state()
+	var g2r := _st.ghost_to_real()
 	var up := _st.ghost_up()
-	var from := _body.global_position + up * 1.5
-	var dir := (_st.ghost_slot * _st.frame).basis.z.normalized()
+	var me: Array[RID] = [_body.get_rid()]
+	# Fired aboard, from the eye (the camera is in the world, on the real ship).
+	var eye: Vector3 = g2r * (_body.global_position + up * 1.5)
+	var dir := g2r.basis * (_st.ghost_slot * _st.frame).basis.z.normalized()
 	var hit := {}
 	for k in 8:
-		var d := Basis(up, TAU * k / 8.0) * dir
-		var q := PhysicsRayQueryParameters3D.create(from, from + d * 60.0)
-		hit = space.intersect_ray(q)
+		var d := Basis((g2r.basis * up).normalized(), TAU * k / 8.0) * dir
+		hit = _cast(eye, eye + d * 60.0, me)
 		if not hit.is_empty():
 			dir = d
 			break
 	var real_ok := false
 	if not hit.is_empty():
-		var real: Vector3 = _st.ghost_to_real() * (hit.position - dir * 0.05)
-		var cell := Vector3i((_st.cell_at(real + _st.ghost_to_real().basis * dir * 0.1)).floor())
+		var cell := Vector3i((_st.cell_at(hit.position + dir * 0.1)).floor())
 		real_ok = _st.bricks.is_solid(_st.chunk, cell)
-	_ok("shot: a ray aboard meets the wall it was aimed at, a brick of the real ship",
-			not hit.is_empty() and real_ok, "%s" % (str(hit.get("position")) if not hit.is_empty() else "nothing"))
+	_ok("shot aboard: the gun's ray meets the wall it was aimed at, a brick of the real ship, as structure",
+			not hit.is_empty() and real_ok and hit.get("ship") == _st and hit.get("collider") == _st.shell_body,
+			"%s" % (str(hit.get("position")) if not hit.is_empty() else "nothing"))
 	if hit.is_empty():
 		return
-	# A hole: the bricks round where the ray met the wall, through the hit path.
-	_st.riding = false
-	var wall: Vector3 = _st.ghost_to_real() * hit.position
-	_st.bricks.set_chunk_transform(_st.chunk, _st.global_transform * _st.frame)
-	_st.damage(wall, {"blast": true, "radius": 1.0, "hp": 0})
+	var wall: Vector3 = hit.position
+	# Who looks through that wall from the far side sees the wall, not the crew.
+	var far := wall + dir * 1.5
+	var chest: Vector3 = g2r * (_body.global_position + up * 1.0)
+	var seen := _cast(far, chest)
+	_ok("sight: a wall between hides the crew", seen.get("collider") != _body,
+			"meets %s" % str(seen.get("collider")))
+	# A hole there, by the hit path, while it flies.
+	var lost0 := _st.gone().size()
+	_st.damage(wall + dir * GunController.INTO_SURFACE, {"blast": true, "radius": 1.0, "hp": 0})
 	_st._damage_step()
-	var q2 := PhysicsRayQueryParameters3D.create(from, hit.position + dir * 0.4)
-	var again := space.intersect_ray(q2)
-	_ok("damage: the ghost's wall has the hole too", again.is_empty(),
-			"%d brick(s) lost" % _st.gone().size())
+	var again := _cast(eye, wall + dir * 0.4, me)
+	_ok("hit while it flies: bricks lost, and the ghost's wall has the hole too",
+			_st.gone().size() > lost0 and (again.is_empty() or (again.position - eye).length() > (wall - eye).length() + 0.3),
+			"%d brick(s) lost" % (_st.gone().size() - lost0))
+	# From the far side, in through the hole: the shot (and the sight line) meets
+	# the crew member standing there, in the ghost.
+	seen = _cast(far, chest)
+	_ok("in through the hole: a shot or a look from outside meets the crew inside", seen.get("collider") == _body,
+			"meets %s" % str(seen.get("collider")))
 	_st.restore(_st.restorable(wall, 30.0), wall, 30.0)
 	_st._damage_step()
-	again = space.intersect_ray(q2)
-	_ok("repair: and its bricks are back in it", not again.is_empty() and _st.gone().is_empty())
+	again = _cast(eye, wall + dir * 0.4, me)
+	_ok("repair while it flies: its bricks back in the ghost", not again.is_empty() and _st.gone().size() == lost0,
+			"%d gone" % _st.gone().size())
+	var inner := -1
+	var outer := -1
+	for b in _st.bricks.get_block_count(_st.chunk):
+		var ins := _st._inside_hull(PackedInt32Array([b]))
+		if ins and inner < 0:
+			inner = b
+		elif not ins and outer < 0:
+			outer = b
+		if inner >= 0 and outer >= 0:
+			break
+	_ok("loose inside: a brick with no outside to it is inside the hull, a hull brick is not",
+			inner >= 0 and outer >= 0, "inner %d, outer %d" % [inner, outer])
+
+
+func _moves_check() -> void:
+	var g := _body.global_position
+	var bodies := _st.ghost.bodies.duplicate()
+	var holder := Node3D.new()
+	root.add_child(holder)
+	_st.reparent(holder, true)
+	var on_ship := _st.global_transform.affine_inverse() * (_st.ghost_to_real() * g)
+	# Planet -> space -> a second planet: three frames' worth of travel, each a rigid
+	# move of everything in the world (PlanetSystem._travel), and the origin
+	# recentred after each (PlanetFrame.recentre) -- the ghosted body is skipped.
+	for m: Transform3D in [Transform3D(Basis(Vector3.UP, 0.7), Vector3(9000, 0, -300)),
+			Transform3D(Basis(Vector3.RIGHT, 1.2), Vector3(-2e5, 4e4, 0)),
+			Transform3D(Basis(Vector3.BACK, -0.4), Vector3(5000, -7000, 3e5))]:
+		holder.global_transform = m * holder.global_transform
+		PlanetFrame.recentre(root, _st.global_position)
+		_st.on_origin_shift()
+	var real1 := _st.ghost_to_real() * _body.global_position
+	var off := (real1 - _st.global_transform * on_ship).length()
+	_ok("moves: three frames, the origin recentred each time -- the ghost never rebuilt, the body where it was on the ship",
+			_st.ghost_builds == 1 and _st.ghost.bodies == bodies and (_body.global_position - g).length() < 1e-4
+			and off < 0.01, "%d build(s), %.4f m off its place on the ship" % [_st.ghost_builds, off])
+
+
+## Its planet asleep: the ghost switched off (out of the space) and on again,
+## nothing rebuilt; whoever stood on it where they were.
+func _sleep_check() -> void:
+	var g := _body.global_position
+	var up := _st.ghost_up()
+	var down := PhysicsRayQueryParameters3D.create(g + up * 0.5, g - up * 2.0, Layers.STRUCTURE)
+	_st.ghost_switch(false)
+	var off := _ghosts.state().intersect_ray(down).is_empty()
+	_st.ghost_switch(true)
+	var on := not _ghosts.state().intersect_ray(down).is_empty()
+	_ok("asleep: its ghost switched off and on with its planet, never rebuilt", off and on
+			and _st.ghost_builds == 1 and (_body.global_position - g).length() < 1e-4)
+
+
+## Docked: off one ship's ghost straight onto the other's, at the same place in the
+## world, in a slot of its own.
+func _dock_check() -> void:
+	var real := _st.ghost_to_real() * _body.global_position
+	GhostHulls.get_off(_body, _st, _st.get_world_3d().space)
+	GhostHulls.board(_body, _st2)
+	var back := _st2.ghost_to_real() * _body.global_position
+	_ok("docked: ghost to ghost, the same place in the world, its own slot", (back - real).length() < 1e-3
+			and _body.get_meta(&"ghosted") == _st2 and _st2.ghost_slot.origin != _st.ghost_slot.origin,
+			"slots %s / %s" % [str(_st.ghost_slot.origin), str(_st2.ghost_slot.origin)])
+	GhostHulls.get_off(_body, _st2, _st.get_world_3d().space)
+	GhostHulls.board(_body, _st)
 
 
 func _get_off_check() -> void:
