@@ -72,6 +72,9 @@ class Entry:
 	var bytes := PackedByteArray()
 	var param := Vector4(-1.0, 0.0, 0.0, 0.0)
 	var lamps: Array = []
+	## Every merged lamp ([position sum, count, dir, colour sum, power
+	## sum]); the LAMPS_MAX nearest the camera are hung (_place_lamps).
+	var groups: Array = []
 
 var _entries := {}
 var _free: Array[int] = []
@@ -168,6 +171,8 @@ func step() -> void:
 	var e: Entry = _entries[keys[_turn]]
 	if e.bricks.get_alive_block_count(e.chunk) != e.alive:
 		_light(e)
+	elif e.groups.size() > LAMPS_MAX:
+		_place_lamps(e)
 
 
 ## Sky and lamp (0..1 each; the lamp's brightest channel) at world point
@@ -246,9 +251,27 @@ func _hang_lamps(e: Entry, lamps: PackedFloat32Array) -> void:
 			groups[best][1] += 1
 			groups[best][3] += col
 			groups[best][4] += lamps[k + 7]
-	groups.sort_custom(func(a, b): return a[1] > b[1])
-	groups = groups.slice(0, LAMPS_MAX)
+	e.groups = groups
+	_place_lamps(e)
+
+
+## Hang the LAMPS_MAX of `e`'s lamps nearest the camera (the biggest first
+## without one): a building with a light in every room lights what moves
+## near the player, not wherever its first eight are. Again each turn of
+## step(), so they follow the player through it.
+func _place_lamps(e: Entry) -> void:
+	var groups: Array = e.groups
 	var valid := is_instance_valid(e.node)
+	if groups.size() > LAMPS_MAX and valid:
+		var cam := (Engine.get_main_loop() as SceneTree).root.get_viewport().get_camera_3d()
+		if cam != null and e.node.is_inside_tree():
+			var eye := e.node.global_transform.affine_inverse() * cam.global_position
+			groups = groups.duplicate()
+			groups.sort_custom(func(a, b): return (a[0] / a[1]).distance_squared_to(eye) < (b[0] / b[1]).distance_squared_to(eye))
+		else:
+			groups = groups.duplicate()
+			groups.sort_custom(func(a, b): return a[1] > b[1])
+	groups = groups.slice(0, LAMPS_MAX)
 	while e.lamps.size() > groups.size() or (not valid and not e.lamps.is_empty()):
 		# Untyped: freed with the building's node, it cannot be held as one.
 		var l: Variant = e.lamps.pop_back()

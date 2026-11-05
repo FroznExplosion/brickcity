@@ -476,6 +476,8 @@ func _template(fx: int, fz: int, courses: int) -> int:
 	if stair != null:
 		stair.build_into(bricks, c, _stair_parts)
 	_cut_door(c, fx)
+	# Lights under its ceilings (Docs/Lighting.md 6.3).
+	CeilingLights.hang(bricks, c, _palette)
 	_templates[key] = bricks.save_template(c)
 	bricks.release_chunk(c)
 	return _templates[key]
