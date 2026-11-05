@@ -332,6 +332,14 @@ func activate() -> void:
 		var src := func() -> Array:
 			return [[0, chunk, recipe, recipe.origin()]] if bricked and chunk >= 0 else []
 		doors = BuildDoors.new(bricks, src)
+		# Its doors are its own (its children, in its frame): they turn and fly with
+		# it, and have twins in its ghost for the crew walking that.
+		doors.follow_parent = true
+		doors.local_frame = frame
+		if ghost != null or (ghosts != null and recipe != null):
+			doors.ghost_space = ghosts.space
+			doors.ghost_frame = ghosts.slot_of(self) * frame
+		doors.figures = _crew_points
 		add_child(doors)
 		lifts = BuildLifts.new(bricks, src)
 		add_child(lifts)
@@ -760,8 +768,10 @@ func _cut_door(c: int) -> void:
 ## at load), its template built; its box, its shell and its frame made to fit.
 func _prepare_generated() -> void:
 	var t0 := Time.get_ticks_usec()
-	var ship := data.kind == "ship"
-	var made := ShipBuild.make(data.orbital_seed) if ship else RoomStation.generate(StationKit.library(),
+	# A boat (Docs/Hulls.md 7) is laid as a ship is: a build, its bow its nose.
+	var ship := data.kind == "ship" or data.kind == "boat"
+	var made := BoatBuild.make(data.orbital_seed) if data.kind == "boat" \
+			else ShipBuild.make(data.orbital_seed) if ship else RoomStation.generate(StationKit.library(),
 			{"seed": data.orbital_seed, "modules": 12 + data.orbital_seed % 12, "spine": 3 + data.orbital_seed % 3,
 			"section_bricks": SECTION_BRICKS})
 	grow_ms = (Time.get_ticks_usec() - t0) / 1000.0
@@ -1075,6 +1085,18 @@ func ghost_switch(on: bool) -> void:
 	ghost_on = on
 	for b in ghost.bodies:
 		PhysicsServer3D.body_set_space(b, ghosts.space if on else RID())
+
+
+## Where whoever walks its ghost really is (world points): a door opens for them.
+func _crew_points() -> PackedVector3Array:
+	var out := PackedVector3Array()
+	if ghost == null or not is_inside_tree():
+		return out
+	var g2r := ghost_to_real()
+	for n in get_tree().get_nodes_in_group(GhostHulls.CREW):
+		if n is Node3D and n.get_meta(&"ghosted", null) == self:
+			out.append(g2r * (n as Node3D).global_position)
+	return out
 
 
 ## Ghost-space points to the world, now: the real ship's transform over its slot.

@@ -231,6 +231,46 @@ bricks. And a flooded hold: inside water drawn, no doubled surface.
 **Gate:** a boat floats level at its designed waterline; flooding one side lists it that way;
 flooding enough sinks it; patching and pumping out lets it rise.
 
+### 7.1 Built (2026-11-05, step 7): a boat that floats, crew aboard
+
+* **`BoatBuild.make(seed, length, beam)`** (scripts/hulls/boat_build.gd), 40 x 14 studs by
+  default:
+  * a keel of two plate layers crossed a stud, so every plate clicks to the next;
+  * brick sides round a tapered bow (its last 12 studs) and a square stern;
+  * a closed deck of two plate layers over a sealed hold, and a bulwark.
+  It returns what `ShipBuild.make` does, so `SpaceStation._prepare_generated` lays a
+  `kind = "boat"` as it lays a ship: bricks, `HullAir` (the hold is one INSIDE room, 3,564
+  cells), bands and ghost.
+* **`Boat`** (scripts/hulls/boat.gd) extends `SpaceStation`; `Boat.launch(parent, seed, at,
+  ghosts)` makes one. It has no Jolt body: it integrates its own rigid motion each physics
+  tick.
+  * **Mass:** its solid cells at `HULL_DENSITY` 350 kg/m³ (hollow ABS), at their centre,
+    with their inertia.
+  * **Lift:** each 2 x 2 stud column under the keel is lifted by the part of its envelope
+    (bricks plus dry INSIDE air) below the surface there. The surface comes from one batched
+    `BrickWave.sample_heights` a tick, and is pushed up at the column's submerged middle.
+  * **Drag:** a wet column's share of the mass is damped at `DRAG`, and the turning at
+    `ANG_DRAG`.
+  * It is always `riding` afloat, so its bricks' collision is its ghost.
+  * On the ghost, up is the world's up turned into its frame (`ghost_up`), so the crew feel
+    it roll.
+* **Gate: `tools/boat_probe.gd`, 4 ok.**
+  * 1,012 bricks, 18,344 kg, hull envelope 113.5 m³.
+  * Dropped onto a calm sea: after 20 s it is level within 0.03°, at 0.002 m/s, its keel
+    0.310 m under for a predicted 0.307 m.
+  * A pawn on deck boards its ghost.
+  * 12 s of swell: it rolls and pitches up to 13.5° and stays afloat, the crew on its deck
+    every frame.
+* **Found:** `BrickWave.sample_heights` returns NaN at a wave gain of exactly 0. This is in
+  the terrain and water area's C++. The boat treats NaN as the calm sea.
+* **Not yet:**
+  * **No boat in a scene you can play yet.** The city's sea (or a planet's) needs to launch
+    one, own a `GhostHulls`, and run the player's crossing (`GhostHulls.tick`), as the
+    planet scene does.
+  * **No flooding** (step 9).
+  * **No outside collision boxes that move with the swell** for other things to hit; only
+    its shell boxes.
+
 ## 7b. Walking inside a moving hull: the ghost hull
 
 From Sink My Bricks' "Ghost ships" short (Reference/brick-games.md 1.1). **This changes the plan.**
@@ -385,11 +425,48 @@ sleeps and wakes with its planet.
   * Asleep and awake; docked ghost to ghost; getting off.
 * **Other gates:** planet `--gate=hull` 18 ok, `--gate=seat` 17 ok. Gravity 13, moves 39,
   pawn 7, repair 7, vent 10, air 13, AI moves 7, soldier 8, callouts 9.
-* **Still open:**
-  * **Ladders** can't be climbed on a riding ship's ghost (they are found in the world).
-  * **Flying planet to planet in play with someone walking aboard** needs someone at the
-    controls (a second player or an autopilot).
-  * **Boats** (step 7) will use the same ghost.
+### 7b.3 Built (2026-11-05): carried by what it stands on
+
+**The rule (the user's, 2026-11-05):** whatever touches a vehicle, a planet or a station
+becomes its child until it touches something else or moves far enough away. It is carried
+by it and drawn with it, and never left behind by the frame it stands in.
+
+Where it holds now:
+
+| What | How it is carried |
+|---|---|
+| The player, and every other pawn (AI soldiers, crew) | On a riding ship's ghost (`GhostHulls.tick`, the same crossing for all; `PlanetSystem._crew_tick` for every pawn but the player's). An AI's world-frame move is turned into the ghost's (`Pawn._physics_process`). A gun held on a ghost fires from the real ship (`GunController._aim_xf`). |
+| Doors | Children of the ship in its frame (`BuildDoors.follow_parent`, `local_frame`), with a twin box in its ghost (`ghost_space`, `ghost_frame`) swung with the leaf. They open for crew on the ghost (`figures`: `SpaceStation._crew_points`). **The bug fixed:** the leaves were placed in the world from the chunk's transform, which a parked or flown ship does not keep up, so they did not turn with the ship. |
+| Ladders | Children of its bricks' node already. Climbing now works on the ghost: the pawn takes the ladder's transform into its body's frame (`PawnMoves._ladder_xf`). |
+| Crumbs | In its frame (its `PlanetCrumbs`). |
+| Riders on drifting pieces | `drift_riders`, as before. |
+| Everything on a planet when it sleeps | Reparented onto it (`PlanetSystem._sleep`), as before. A ship the player is still aboard is never put to sleep when the frame moves on (`_switch`). |
+
+Not yet under the rule: loose rigid things on a flown ship's deck (dropped loot, small
+debris pieces as bodies). They would need a body in the ghost with their ship's gravity of
+their own. They are the next case if it matters in play.
+
+**The autopilot (`SpaceShip.autopilot`, `auto_target`).**
+* In the seat, **H** turns it on for the planet the nose points at most nearly. Press H
+  again, or a pilot taking the seat, turns it off.
+* With nobody at the controls it flies there at cruise: up and away from the world it
+  leaves first, turned at the pilot's TURN rate. It lets go `AUTO_ARRIVE` (400 m) over its
+  target and glides to rest.
+* So the crew walks its decks the whole way: planet shell, space (the ship as the frame),
+  the other planet's shell. A riding ship with the autopilot on keeps riding
+  (`_ship_bricks`).
+* **Gate:** planet `--gate=autopilot`, the hull gate and then the flight, 21 ok. Proto to
+  proto c in 24 s, top speed 20.7 km/s, through space, the pawn aboard every one of 1,385
+  frames; at rest over it, on its bricks.
+
+**Gates:**
+* `ghost_hull_probe`: 16 ok. New: an AI pawn on the ghost, moving along its world-frame
+  move (0.95 along it), aimed at in the world.
+* The hull gate's new door check: 40 doors where its frame says, worst 0.000 m off, 40
+  ghost twins.
+* Pawn 7, moves 39, gravity 13, repair 7, callouts 9, soldier 8. The soldier probe's AI
+  budget check is flaky with the machine busy: 2.0 / 2.5 / 18.8 ms worst over 3 runs, mean
+  0.18 ms each time.
 
 ## 8. Water drawn inside
 
@@ -560,7 +637,8 @@ Each step lands on `main` on its own, with its gate.
    Gate: `ghost_hull_probe`. First cut built 2026-11-04 (§7b.1): walking, boarding,
    getting off, damage and repair in the ghost; shots aboard and AI still to come.
 7. **A boat**, floating by buoyancy (§7) with no flooding yet, crew aboard on its ghost.
-   Gate: floats level.
+   Gate: floats level. Built 2026-11-05 (§7.1): `boat_probe`. Not yet launched in a
+   playable scene.
 8. **The sea cut out of the hull** (§6), with the terrain and water area. Gate: the shot.
 9. **Flooding** (§5) + water drawn inside (§8) + listing and sinking (§7).
    Gates: `hull_flood_probe`, the boat lists and sinks.

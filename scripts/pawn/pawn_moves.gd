@@ -471,16 +471,17 @@ func _move(delta: float, wish: Vector3, speed: float) -> void:
 func _try_ladder(wish: Vector3) -> bool:
 	if _ladder_cd > 0.0:
 		return false
-	var l := Ladder.at(pawn.body.get_tree(), pawn.feet_here())
+	# Found where the pawn really is (a ladder is a node of its build, in the world).
+	var l := Ladder.at(pawn.body.get_tree(), pawn.feet())
 	if l == null:
 		return false
-	var into := -l.global_basis.z
+	var into := -_ladder_xf(l).basis.z
 	# Pushed into, along the ground (a ladder stands up its down), or in the air at it.
 	var push := wish.dot(into)
 	if push < 0.5:
 		return false
 	# At its top, stepping on to it from over it: that is walking, not climbing.
-	if l.local(pawn.feet_here()).y > l.height - 0.15:
+	if (_ladder_xf(l).affine_inverse() * pawn.feet_here()).y > l.height - 0.15:
 		return false
 	_ladder = l
 	state = State.LADDER
@@ -498,9 +499,10 @@ func _ladder_tick(delta: float, wish: Vector3, crouch_edge: bool) -> void:
 	if l == null or not is_instance_valid(l) or not l.is_inside_tree():
 		_leave_ladder()
 		return
-	var lb := l.global_basis
+	var lx := _ladder_xf(l)
+	var lb := lx.basis
 	var into := -lb.z
-	var p := l.local(pawn.feet_here())
+	var p := lx.affine_inverse() * pawn.feet_here()
 	if _buffer > 0.0:
 		_buffer = 0.0
 		_leave_ladder()
@@ -513,7 +515,7 @@ func _ladder_tick(delta: float, wish: Vector3, crouch_edge: bool) -> void:
 	var climb := clampf(wish.dot(into) * 2.0, -1.0, 1.0)
 	if p.y >= l.height - 0.05 and climb > 0.0:
 		# Over the top: on to its top and a body's width past its face.
-		var land := l.global_transform * Vector3(0.0, l.height, -LADDER_OVER)
+		var land := lx * Vector3(0.0, l.height, -LADDER_OVER)
 		if _climb(land, into, Pawn.WALK_SPEED * 0.5):
 			_ladder = null
 			_ladder_cd = LADDER_COOLDOWN
@@ -530,6 +532,13 @@ func _ladder_tick(delta: float, wish: Vector3, crouch_edge: bool) -> void:
 		v -= lb.y * maxf(Gravity.vert(v, lb.y), 0.0)
 	b.velocity = v
 	b.move_and_slide()
+
+
+## Ladder `l`'s transform in the space the body moves in: the world's, or aboard a
+## ghost hull (Docs/Hulls.md 7b) the ghost's -- the ladder rides the real ship, the
+## body climbs its still copy.
+func _ladder_xf(l: Ladder) -> Transform3D:
+	return pawn.to_world().affine_inverse() * l.global_transform
 
 
 func _leave_ladder() -> void:
