@@ -58,6 +58,8 @@ static func furnish(r: BuildRecipe, seed: int) -> int:
 						held[c + Vector3i(x, y, z)] = true
 	var doors: Array = r.meta.get("doors", [])
 	var filaments := BrickWorld.get_filament_count()
+	# Ceiling lights first: they are fittings, not furniture (`from` below).
+	r.meta["lights"] = light(r, spaces, cells, of)
 	var laid := 0
 	var turns := 0
 	var first := r.size()
@@ -100,6 +102,89 @@ static func furnish(r: BuildRecipe, seed: int) -> int:
 		BuildSections.rerecord(r, of)
 	r.meta["furniture"] = {"from": first, "items": laid, "turned": turns}
 	return laid
+
+
+## Lights (Docs/Lighting.md 6.3): every space -- a room, a corridor, a hall --
+## gets Lamp under-tiles clipped under its ceiling, shining down: a bar
+## along its long side every LIGHT_EVERY studs, in the middle across it;
+## warm in a room, white in a way through. A space with no ceiling over the
+## place, or something already there, gets the bar moved a stud or none.
+## How many it laid. Their sections are the ceiling's above them (`of`;
+## furnish records them).
+const LIGHT_EVERY := 9
+const LIGHT_WARM := "cream"
+const LIGHT_COOL := "white"
+
+static func light(r: BuildRecipe, spaces: Array, cells: Dictionary, of: PackedInt32Array) -> int:
+	var lamp := -1
+	for m in BrickWorld.get_material_count():
+		if BrickWorld.get_material_name(m) == "Lamp":
+			lamp = m
+	if lamp < 0:
+		return 0
+	var warm := 0
+	var cool := 0
+	for c in BrickWorld.get_material_colour_count(lamp):
+		var n := BrickWorld.get_material_colour_name(lamp, c)
+		if n == LIGHT_WARM:
+			warm = c
+		elif n == LIGHT_COOL:
+			cool = c
+	var laid := 0
+	for sp: Dictionary in spaces:
+		var columns: Array = sp.get("columns", [])
+		if columns.is_empty():
+			continue
+		var cols := {}
+		var lo := Vector2i(1 << 30, 1 << 30)
+		var hi := -lo
+		for c in columns:
+			var v := Vector2i(int(c[0]), int(c[1]))
+			cols[v] = true
+			lo = Vector2i(mini(lo.x, v.x), mini(lo.y, v.y))
+			hi = Vector2i(maxi(hi.x, v.x), maxi(hi.y, v.y))
+		var y := int(sp.ceil_y) - 1
+		if y <= int(sp.floor_y) + 2:
+			continue   # too low a space to hang one in
+		var along_x := hi.x - lo.x >= hi.y - lo.y
+		var length := (hi.x - lo.x + 1) if along_x else (hi.y - lo.y + 1)
+		var width := (hi.y - lo.y + 1) if along_x else (hi.x - lo.x + 1)
+		var bar := 4 if length >= 6 else (2 if length >= 3 else 1)
+		var part := "undertile_1x%d" % bar
+		if bar > 1:
+			part += "_x" if along_x else "_z"
+		var n := maxi(1, roundi(float(length) / LIGHT_EVERY))
+		var colour := cool if SKIP.has(String(sp.kind)) else warm
+		var across := (lo.y + hi.y) >> 1 if along_x else (lo.x + hi.x) >> 1
+		for k in n:
+			var start := (lo.x if along_x else lo.y) + int((k + 0.5) * length / n) - (bar >> 1)
+			for nudge in [0, 1, -1, 2, -2]:
+				var at := Vector3i(start + nudge, y, across) if along_x else Vector3i(across, y, start + nudge)
+				if _hang(r, part, at, bar, along_x, cols, cells, of, colour, lamp):
+					laid += 1
+					break
+	return laid
+
+
+## One light bar at `at` if it fits: every cell free, in the space's plan,
+## with ceiling over it to clip to.
+static func _hang(r: BuildRecipe, part: String, at: Vector3i, bar: int, along_x: bool, cols: Dictionary,
+		cells: Dictionary, of: PackedInt32Array, colour: int, lamp: int) -> bool:
+	var step := Vector3i(1, 0, 0) if along_x else Vector3i(0, 0, 1)
+	var over := -1
+	for i in bar:
+		var v := at + step * i
+		var above := v + Vector3i(0, 1, 0)
+		if cells.has(v) or not cols.has(Vector2i(v.x, v.z)) or not cells.has(above):
+			return false
+		if over < 0:
+			over = int(cells[above])
+	var id := r.add(part, at, colour, 0, BuildRecipe.Role.STRUCTURE, lamp)
+	for i in bar:
+		cells[at + step * i] = id
+	if not of.is_empty():
+		of.append(of[over])
+	return true
 
 
 ## Has the room furniture of its own (an interior brick over its floor)?

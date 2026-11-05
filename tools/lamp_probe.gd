@@ -122,6 +122,35 @@ func _init() -> void:
 	grid.release("room")
 	root.free()
 
+	# The content's lights (KitFurnish.light): a generated ship's spaces get
+	# Lamp under-tiles under their ceilings, each with ceiling over it.
+	var made := ShipBuild.make(7)
+	var r: BuildRecipe = made.recipe
+	var solid := {}
+	for i in r.size():
+		var sz := BuildRecipe.part_size(r.part_of(i))
+		for y in sz.y:
+			for z in sz.z:
+				for x in sz.x:
+					solid[r.cell_of(i) + Vector3i(x, y, z)] = i
+	var lights := 0
+	var hung := 0
+	for i in r.size():
+		if not r.part_of(i).begins_with("undertile_") or r.material_of(i) != lamp:
+			continue
+		lights += 1
+		var sz := BuildRecipe.part_size(r.part_of(i))
+		var clipped := true
+		for z in sz.z:
+			for x in sz.x:
+				clipped = clipped and solid.has(r.cell_of(i) + Vector3i(x, 1, z))
+		hung += 1 if clipped else 0
+	var spaces: Array = (r.meta.get("structure", {}) as Dictionary).get("spaces", [])
+	print("  ship 7: %d lights in %d spaces" % [lights, spaces.size()])
+	_ok("a generated ship's spaces have ceiling lights, each clipped under a ceiling",
+			lights >= spaces.size() / 2 and hung == lights and int(r.meta.get("lights", 0)) == lights,
+			"%d lights in %d spaces, %d clipped" % [lights, spaces.size(), hung])
+
 	print("\n%d passed, %d failed" % [_pass, _fail])
 	quit(1 if _fail > 0 else 0)
 
