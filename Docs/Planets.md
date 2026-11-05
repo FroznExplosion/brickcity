@@ -1944,6 +1944,36 @@ Y -- every plane at a weak seam or a storey line, none torn as a band -- and eve
 rest; a wall panel dropped 8 m (as the fall gate) is long across, not up: it cracks across along
 the bond, no band torn, and comes to rest. The storey gate's crush logs its crumbs as a DETACH.
 
+**D2 step 7 built (2026-11-05): where a landing snaps a piece; step 6's crumbs logged.** As
+planned. `PlanetPieces._snap_across` takes the city's axis, `_weak_seam` / `_floor_line` along Y
+and `_weak_crack` across, the city's constants (`SEAM_PREFERS_FLOOR`, `SEAM_REACH`,
+`CRACK_REACH`); a crack is kept on the piece and the landing parts it with `crack_components`.
+Every piece carries its building's storey lines (`Piece.lines`, from `PlanetBuildings.
+floor_lines`, worked out with the shape's template: `TowerRecipe.frame`'s first call was 16 ms at
+the first piece). The census is the city's (`snap_census_line`), plus snaps along Y at neither a
+weak seam nor a storey line (`plain_breaks`). The crushed storey's crumbs are a `DETACH`
+(`FLAG_GONE`) after the `SEVER`.
+Gate `--gate=snap` 8/8 (headless x3, windowed x1): the nearest tower toppled (36 courses, 89-90
+degrees, 3-6 landings) snaps along its height twice, both times at the weakest seam in reach --
+not a storey line: a row of windows holds with about three fifths of what a storey line does, as
+the city found -- none at neither, none torn as a band; the halves, short in Y now, crack across
+(1-5); 5-8 pieces, all at rest. A 14-brick wall panel (0.7 x 2.1 x 6.3 m) dropped 8 m cracks
+across along the bond, no band torn, and lies at rest. `--gate=storey` 13/13 (the DETACH, 318
+bricks gone).
+Two gates changed with it:
+- *`--gate=fall`'s "comes apart"* is now "the landing breaks it: sheared where it touched, snapped
+  or cracked across". Its 15-brick panel cracks at stud 4 of 20, and every one of its 8-stud
+  bricks has its middle on one side of that -- so by the city's rule nothing parts. It passed
+  before on the band the old snap tore across the panel: the gravel the city's crack replaced
+  (Docs/CollapseNext.md item 18). Landings that break pieces apart are the topple and snap gates'.
+- *`--gate=pieces_ai`'s sample* skips bricks that broke off the piece (detached or dead: they stay
+  in its chunk's data). It counted them where the piece lies, which is what step 5's "the rest,
+  where the piece crosses into a region it was not synced into" was: 1558 of 1558 solid now (the
+  new snaps broke more off the big piece, 1215 bricks, and the old sample fell to 73%).
+Other planet gates unchanged: topple 6, hits 8, damage 12, bricks 9, trees 7, squad 10, pawn 12;
+`--gate=save` stages 1-3 as main (stage 3's "the player where they were" fails on main too, 2.9 m
+off; not this work).
+
 Not yet: furniture, materialising for a fight far from the camera.
 
 ### 11.12 Plan: the universe -- star systems, orbits, spinning planets (2026-10-28)
