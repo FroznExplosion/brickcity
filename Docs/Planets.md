@@ -2468,7 +2468,8 @@ The game on planets:
   is (a soldier left on home, anything loose). `keep_over_ground` has not been seen to fire.
 
 Ships and space:
-- Rams do not hurt the ship; a damaged hull draws whole from afar; no docking port or locked landing;
+- Rams hurt the ship (2026-11-05; rocks do not); a damaged hull draws whole from afar until it has been
+  laid this run; no docking port or locked landing;
   worn and scorched bricks are not kept. One ship, nobody else flying.
 - Rocks and drifting pieces cannot be shot or mined; rocks do not go round; no planet's shadow on a ring.
 - Not saved: fallen pieces and drifting pieces (see "saving").
@@ -2660,6 +2661,16 @@ they move 20 m. A wave is clear when its squad is down and its tank wrecked; the
 saved: a wave loaded from a save comes back without its tank. `--gate=home` 11/11: crewed, 86 m -> 80 m in
 20 s (the squad's pace), never under the ground. garrison 17. Not seen on screen; whether the player has
 what it takes to wreck it is not tried.
+
+#### Rams hurt the ship (2026-11-05)
+
+A ram over 8 m/s blasted what the ship hit and never the ship. `PlanetScene._on_rammed` now also gives the
+ship's own hull the blast, at `RAM_SHIP_SHARE` (0.6) of the radius, through `SpaceStation.take_ram`: as
+`damage`, but taken whatever its bricks are doing. Riding with no ghost (Docs/Hulls.md 7b: `damage` refuses
+then, since no round can reach them) it goes on the chunk as it is; not laid at all, the bricks it would lay
+are laid for the hit and let go, so what died is in `_dead` and is gone when it is next laid, and in a save.
+`--gate=dock` 9/9: ramming a tower took 125 bricks of the tower and 20 of the ship. The riding path and the
+ship laid again afterwards with its holes are not tried. Rocks still only stop it.
 
 #### Plan, saving (2026-11-01)
 
