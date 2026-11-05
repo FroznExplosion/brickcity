@@ -620,6 +620,11 @@ var _cascade_rounds := 0   ## stress rounds that failed something, all told
 var _cascade_worst := 0    ## the most in one solve
 var _solve_worst := [0.0, 0, 0, false]
 var _solve_batches := 0
+## Buildings whose next solve is running on a worker (_start_solves), id ->
+## chunk, and how those went: [taken, stale (solved again in the tick),
+## dropped (the building was no longer waiting to be solved)].
+var _solving := {}
+var _solve_async := [0, 0, 0]
 var _solve_batch_worst := 0.0
 ## Buildings whose furniture has to be redrawn at the end of the tick.
 var _furniture_due := {}
@@ -4667,11 +4672,11 @@ func _apply_band(id: int, at: int, mesh: ArrayMesh, arrays: Array) -> void:
 		node = MeshInstance3D.new()
 		node.material_override = brick_material
 		# It sways in the wind, a little (weather.gdshaderinc); a tree more.
-		node.set_instance_shader_parameter("weather_sway", _sway_of(id))
+		InstanceParams.put(node, &"weather_sway", _sway_of(id))
 		# A tree's crown takes a cap of snow; a building gets real cover.
-		node.set_instance_shader_parameter("weather_snowcap", 1.0 if _is_tree(id) else 0.0)
-		node.set_instance_shader_parameter("grain_origin",
-				(_brick_nodes[id] as MeshInstance3D).get_instance_shader_parameter("grain_origin"))
+		InstanceParams.put(node, &"weather_snowcap", 1.0 if _is_tree(id) else 0.0)
+		InstanceParams.put(node, &"grain_origin",
+				InstanceParams.of(_brick_nodes[id] as MeshInstance3D, &"grain_origin"))
 		# In the parent's space, which already carries the chunk transform.
 		node.physics_interpolation_mode = Node.PHYSICS_INTERPOLATION_MODE_OFF
 		# Casting as the building does: a shadow shell may be standing in
@@ -11130,27 +11135,134 @@ func _run_piececost_pass() -> void:
 	var meshes := {}
 	var shown := 0
 	var tris := 0
+	var bricks := 0
+	var coarse_tris := 0
+	var live_tris := 0
+	# Each piece's coarse stand-in (what it is drawn as past ISLAND_MESH_RANGE),
+	# hung beside it hidden: what the same pieces would cost as stand-ins. Test
+	# only -- the read-backs and main-thread builds here are not for play.
+	var stand := []
+	var compact := []   ## [piece node, its mesh, the same with dead faces left out]
 	for isl in islands.islands:
 		if isl.is_valid() and isl.mesh != null and is_instance_valid(isl.mesh) and isl.mesh.mesh != null:
 			shown += 1
 			meshes[isl.mesh.mesh.get_rid()] = true
-			for si in isl.mesh.mesh.get_surface_count():
-				var arr := isl.mesh.mesh.surface_get_arrays(si)
-				var idx = arr[Mesh.ARRAY_INDEX]
-				tris += ((idx as PackedInt32Array).size() if idx != null else (arr[Mesh.ARRAY_VERTEX] as PackedVector3Array).size()) / 3
-	print("[piececost] %d pieces drawn, %d distinct mesh(es), %d triangles; caps %s" % [
-			shown, meshes.size(), tris, str(islands.cap_counts())])
+			var tl := _mesh_tris(isl.mesh.mesh)
+			var t: int = tl[0]
+			live_tris += tl[1]
+			var nb := islands.world.get_alive_block_count(isl.chunk)
+			tris += t
+			bricks += nb
+			var ca: Array = islands.world.build_chunk_coarse_mesh(isl.chunk)
+			var ct := 0
+			if not ca.is_empty():
+				var cm := ArrayMesh.new()
+				cm.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, ca)
+				ct = _mesh_tris(cm)[0]
+				# Beside the piece's node, not under it: hiding the piece hides it.
+				var mi := MeshInstance3D.new()
+				mi.mesh = cm
+				mi.material_override = isl.mesh.material_override
+				mi.visible = false
+				isl.mesh.get_parent().add_child(mi)
+				mi.transform = isl.mesh.transform
+				stand.append(mi)
+			coarse_tris += ct
+			compact.append([isl.mesh, isl.mesh.mesh, _live_only(isl.mesh.mesh)])
+			if tl[1] * 2 < t:
+				# Mostly dead: what the bake says, and what a rebuild from it would hold.
+				var ms := islands.world.get_mesh_stats(isl.chunk)
+				var ra: Array = islands.world.build_chunk_mesh(isl.chunk)
+				@warning_ignore("integer_division")
+				var rt: int = (ra[Mesh.ARRAY_INDEX] as PackedInt32Array).size() / 3 if not ra.is_empty() else 0
+				print("[piececost]     mostly dead: stats %d drawn / %d slots, bake valid %s; a rebuild holds %d triangles" % [
+						int(ms.triangles), int(ms.index_slots) / 3, str(islands.world.bake_ready(isl.chunk)), rt])
+			if tl[1] > 50 * maxi(1, nb):
+				var w := islands.world
+				for bi in w.get_block_count(isl.chunk):
+					if w.get_block_hp(isl.chunk, bi) > 0:
+						var r := w.get_block_index_range(isl.chunk, bi)
+						@warning_ignore("integer_division")
+						print("[piececost]     block %d: archetype %d, material %d, %d triangles" % [
+								bi, w.get_block_archetype(isl.chunk, bi), w.get_block_material(isl.chunk, bi), r.y / 3])
+			print("[piececost]   piece %d: %d bricks, %d triangles (%d live, %.1f a brick), %d band(s), %s, %.0f m off; stand-in %d triangles" % [
+					isl.chunk, nb, t, tl[1], float(tl[1]) / maxf(1.0, nb), isl.bands.size(),
+					"coarse" if isl.coarse_drawn else "bricks",
+					isl.mesh.global_position.distance_to(camera.global_position), ct])
+	print("[piececost] %d settled piece(s) baked again to drop dead faces" % islands.compacted)
+	print("[piececost] %d pieces drawn, %d distinct mesh(es), %d bricks, %d triangles (%d live, %.1f a brick); as stand-ins %d; caps %s" % [
+			shown, meshes.size(), bricks, tris, live_tris, float(live_tris) / maxf(1.0, bricks), coarse_tris,
+			str(islands.cap_counts())])
 	var a := await _piececost_measure(vp, "drawn")
 	_piece_meshes_visible(false)
 	var h := await _piececost_measure(vp, "hidden")
+	for mi in stand:
+		mi.visible = true
+	var s := await _piececost_measure(vp, "stand-ins")
+	for mi in stand:
+		mi.visible = false
 	_piece_meshes_visible(true)
+	for c in compact:
+		(c[0] as MeshInstance3D).mesh = c[2]
+	var k := await _piececost_measure(vp, "compacted")
+	for c in compact:
+		(c[0] as MeshInstance3D).mesh = c[1]
 	var a2 := await _piececost_measure(vp, "drawn again")
 	var cpu: float = (a.cpu + a2.cpu) * 0.5 - h.cpu
 	var gpu: float = (a.gpu + a2.gpu) * 0.5 - h.gpu
 	var calls: float = (a.calls + a2.calls) * 0.5 - h.calls
 	print("[piececost] the pieces cost: render CPU %.3f ms, GPU %.3f ms, %.0f draw calls a frame (%d pieces)" % [
 			cpu, gpu, calls, shown])
+	print("[piececost] as stand-ins: render CPU %.3f ms, GPU %.3f ms, %.0f draw calls a frame" % [
+			s.cpu - h.cpu, s.gpu - h.gpu, s.calls - h.calls])
+	print("[piececost] compacted (dead faces out): render CPU %.3f ms, GPU %.3f ms, %.0f draw calls a frame" % [
+			k.cpu - h.cpu, k.gpu - h.gpu, k.calls - h.calls])
 	get_tree().quit(0)
+
+
+## `m` with its patched-out faces left out of the index buffer (test only).
+func _live_only(m: Mesh) -> Mesh:
+	var out := ArrayMesh.new()
+	for si in m.get_surface_count():
+		var arr := m.surface_get_arrays(si)
+		var idx = arr[Mesh.ARRAY_INDEX]
+		if idx != null:
+			var ix := idx as PackedInt32Array
+			var live := PackedInt32Array()
+			for i in range(0, ix.size() - 2, 3):
+				if ix[i] != ix[i + 1] or ix[i] != ix[i + 2]:
+					live.append(ix[i])
+					live.append(ix[i + 1])
+					live.append(ix[i + 2])
+			if live.is_empty():
+				continue
+			arr[Mesh.ARRAY_INDEX] = live
+		out.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arr)
+	return out
+
+
+## A mesh's triangles, from its arrays (a read-back: test passes only): [all, live]
+## -- live leaves out the ones patched out of the index buffer (all three corners
+## the same vertex: a dead brick's faces, BrickWorld.update_index_region).
+func _mesh_tris(m: Mesh) -> Array:
+	var n := 0
+	var live := 0
+	for si in m.get_surface_count():
+		var arr := m.surface_get_arrays(si)
+		var idx = arr[Mesh.ARRAY_INDEX]
+		if idx == null:
+			@warning_ignore("integer_division")
+			var k := (arr[Mesh.ARRAY_VERTEX] as PackedVector3Array).size() / 3
+			n += k
+			live += k
+			continue
+		var ix := idx as PackedInt32Array
+		@warning_ignore("integer_division")
+		n += ix.size() / 3
+		for i in range(0, ix.size() - 2, 3):
+			if ix[i] != ix[i + 1] or ix[i] != ix[i + 2]:
+				live += 1
+	return [n, live]
 
 
 func _piece_meshes_visible(on: bool) -> void:
@@ -12744,6 +12856,60 @@ func _mark(phase: String, t0: int) -> int:
 	return now
 
 
+## The next tick's structure solves, started now on workers
+## (BrickWorld.solve_structure_async): they run while the physics steps and the
+## frames draw, and the tick takes their answers where it would have solved
+## (_take_solve) -- 3-6 ms of a 22,000-brick tower off the tick, and up to 15.
+## The buildings first in line, as many as the tick will solve. Anything that
+## touches one of their chunks meanwhile waits for its solve first; a write to
+## its structure (a hit, a brick laid) makes the answer stale, and the tick
+## solves that building again itself. Only the host decides (as below).
+## Docs/WhereWorkRuns.md 3.3.
+func _start_solves() -> void:
+	# A building no longer waiting -- given back, or its turn taken some other
+	# way -- has its answer thrown away, or its slot would stay taken.
+	for id in _solving.keys():
+		if not _dirty.has(id):
+			world.take_solve(_solving[id])
+			_solving.erase(id)
+			_solve_async[2] += 1
+	if not authority.may_decide():
+		return
+	for k in mini(SOLVES_PER_TICK, _dirty.size()):
+		var id: int = _dirty[k]
+		if _solving.has(id):
+			continue
+		var b := registry.get_building(id)
+		if b == null or not b.is_materialised():
+			continue
+		if b.banded:
+			registry.set_storey_bounds(b)
+		if world.solve_structure_async(b.chunk, CASCADE_ROUNDS, CASCADE_BUDGET_MS):
+			_solving[id] = b.chunk
+
+
+## A solve _start_solves began for this building, if there is one and it still
+## holds: {} otherwise, and the tick solves it as before. A stale one has
+## already failed what it failed in the chunk, so that is logged for a replay
+## (as the solve below logs its own) before the building is solved again.
+func _take_solve(id: int, b: BuildingRegistry.Building) -> Dictionary:
+	if not _solving.has(id):
+		return {}
+	var got: Dictionary = world.take_solve(_solving[id])
+	_solving.erase(id)
+	if got.is_empty() or b == null or not b.is_materialised():
+		return {}
+	_solve_async[0] += 1
+	if not bool(got.get("stale", false)):
+		return got
+	_solve_async[1] += 1
+	var res: Dictionary = got.get("stress", {})
+	if int(res.get("failures", 0)) > 0 or int(res.get("reattached", 0)) > 0:
+		authority.commit(Engine.get_physics_frames(), DamageLog.Kind.SOLVE,
+				b.id, Vector3.ZERO, 0.0, Vector3(1.0, 0.0, 0.0), int(res.get("rounds", 0)))
+	return {}
+
+
 func _physics_process(_delta: float) -> void:
 	if _stud_times != BrickStrength.times:
 		_restud()
@@ -12784,6 +12950,8 @@ func _physics_process(_delta: float) -> void:
 		var ids: Array[int] = []
 		var chunks := PackedInt32Array()
 		for k in mini(decide_limit, _dirty.size()):
+			if _solving.has(_dirty[k]):
+				continue
 			var ab := registry.get_building(_dirty[k])
 			if ab != null and ab.is_materialised():
 				if ab.banded:
@@ -12813,6 +12981,7 @@ func _physics_process(_delta: float) -> void:
 		solved_now[id] = true
 		solved += 1
 		var b := registry.get_building(id)
+		var early := _take_solve(id, b)
 		if b == null or not b.is_materialised():
 			continue
 		if not b.fixtures.is_empty():
@@ -12823,7 +12992,9 @@ func _physics_process(_delta: float) -> void:
 		# three times, and answers exactly as they did (BrickWorld.solve_structure,
 		# tools/solve_probe.gd).
 		var solve: Dictionary
-		if ahead.has(id):
+		if not early.is_empty():
+			solve = early
+		elif ahead.has(id):
 			solve = ahead[id]
 			ahead.erase(id)
 		else:
@@ -13218,6 +13389,9 @@ func _physics_process(_delta: float) -> void:
 	var tick_total := float(Time.get_ticks_usec() - t_tick) / 1000.0
 	_prof["script_total"] = tick_total
 	_ai_tick(tick_total)
+	# After the AI, which reads the buildings (cover, sight) and would only
+	# wait for these: from here they run while the physics steps.
+	_start_solves()
 	if _sampling:
 		_tick_samples += 1
 		for k in _prof:
@@ -14380,10 +14554,10 @@ func _far_coarse_show(id: int, mesh: ArrayMesh) -> void:
 	node.name = "FarCoarse"
 	node.mesh = mesh
 	node.material_override = brick_material
-	node.set_instance_shader_parameter("weather_sway", _sway_of(id))
-	node.set_instance_shader_parameter("weather_snowcap", 1.0 if _is_tree(id) else 0.0)
-	node.set_instance_shader_parameter("grain_origin",
-			(parent as MeshInstance3D).get_instance_shader_parameter("grain_origin"))
+	InstanceParams.put(node, &"weather_sway", _sway_of(id))
+	InstanceParams.put(node, &"weather_snowcap", 1.0 if _is_tree(id) else 0.0)
+	InstanceParams.put(node, &"grain_origin",
+			InstanceParams.of(parent as MeshInstance3D, &"grain_origin"))
 	node.physics_interpolation_mode = Node.PHYSICS_INTERPOLATION_MODE_OFF
 	node.cast_shadow = (parent as MeshInstance3D).cast_shadow
 	(parent as Node3D).add_child(node)
@@ -16423,6 +16597,10 @@ func _report_profile() -> void:
 	print("[prof] solves: worst single %.1f ms (%d bricks, %d groups, collapsing %s); mega buildings solved alone %d time(s), %.0f ms; %d batch(es) solved at once, worst %.1f ms" % [
 			float(_solve_worst[0]), int(_solve_worst[1]), int(_solve_worst[2]), _solve_worst[3],
 			int(_solve_mega[0]), float(_solve_mega[1]), _solve_batches, _solve_batch_worst])
+	var sa: Dictionary = world.get_solve_async_stats()
+	print("[prof] solves on workers: %d taken, %d stale (solved again), %d dropped; %d busy (no slot); the main thread waited for %d, %.1f ms in all" % [
+			int(_solve_async[0]), int(_solve_async[1]), int(_solve_async[2]), int(sa.busy),
+			int(sa.waited), float(sa.wait_ms)])
 	print("[prof] cascades: %d round(s) that failed something, at most %d in one solve; %d small group(s) held on by their own studs; %d second solve(s) in a tick put off" % [
 			_cascade_rounds, _cascade_worst, _held_groups, _resolves_put_off])
 	var sw: Array = islands.spawn_worst

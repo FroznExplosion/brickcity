@@ -32,6 +32,7 @@ func _init() -> void:
 		_check_same(c)
 	_check_template()
 	_check_parallel()
+	_check_async()
 	_check_joints_kept()
 	if args.has("--time"):
 		_time()
@@ -232,6 +233,76 @@ func _check_parallel() -> void:
 	for id in wb.get_block_count(cb[0]):
 		cap = maxf(cap, wb.get_block_capacity(cb[0], id))
 	_ok("a solve on this thread can still be read back (get_block_capacity)", cap > 0.0)
+
+
+## solve_structure_async is the city's: a building's solve started on a worker
+## at the end of one tick and taken at the next. Its answer has to be the one
+## solving in the tick gives; a call that reads the chunk while it runs has to
+## wait for it (not read it half solved); and a structural write in between
+## has to mark the answer stale, which the city solves again.
+func _check_async() -> void:
+	print("
+solve_structure_async is solve_structure, on a worker")
+	var wa := BrickWorld.new()
+	var wb := BrickWorld.new()
+	var pa := TowerRecipe.bake_palette(wa)
+	var pb := TowerRecipe.bake_palette(wb)
+	var ca := PackedInt32Array()
+	var cb := PackedInt32Array()
+	# Seven worker slots (SOLVE_SLOTS less the main thread's): an eighth waits.
+	var cases := _cases().slice(0, 8)
+	for c in cases:
+		ca.append(_build_into(wa, pa, c))
+		cb.append(_build_into(wb, pb, c))
+	var spare := cb[cb.size() - 1]
+	ca.resize(ca.size() - 1)
+	cb.resize(cb.size() - 1)
+	for round in 2:
+		var started := true
+		for chunk in cb:
+			started = wb.solve_structure_async(chunk, 4, 0.0) and started
+		_ok("round %d: every solve started (a slot each)" % (round + 1), started)
+		_ok("round %d: an eighth at once is refused (no slot)" % (round + 1),
+				not wb.solve_structure_async(spare, 4, 0.0))
+		_ok("round %d: a second start of the same chunk is refused" % (round + 1),
+				not wb.solve_structure_async(cb[0], 4, 0.0))
+		var same := true
+		var loads := true
+		var first := ""
+		var fresh := true
+		for k in ca.size():
+			var a: Dictionary = wa.solve_structure(ca[k], 4, 0.0)
+			# Read before it is taken: waits for the worker, then reads.
+			var lb := _loads(wb, cb[k])
+			var b: Dictionary = wb.take_solve(cb[k])
+			fresh = fresh and not bool(b.get("stale", true))
+			b.erase("stale")
+			b.erase("ms")
+			(a.stress as Dictionary).erase("solve_ms")
+			(b.stress as Dictionary).erase("solve_ms")
+			if str(a) != str(b):
+				same = false
+				if first.is_empty():
+					first = cases[k].name
+			if _loads(wa, ca[k]) != lb:
+				loads = false
+			for g in a.groups:
+				wa.kill_blocks(ca[k], g)
+			for g in b.groups:
+				wb.kill_blocks(cb[k], g)
+		_ok("round %d: the same answers" % (round + 1), same, "first differs: %s" % first)
+		_ok("round %d: the same loads, read while it ran" % (round + 1), loads)
+		_ok("round %d: none stale" % (round + 1), fresh)
+		_ok("round %d: nothing left to take" % (round + 1), not wb.solve_pending(cb[0]))
+	wb.solve_structure_async(cb[1], 4, 0.0)
+	wb.remove_block(cb[1], 0)
+	var t: Dictionary = wb.take_solve(cb[1])
+	_ok("a block removed while it ran marks it stale", bool(t.get("stale", false)))
+	_ok("nothing taken twice", wb.take_solve(cb[1]).is_empty())
+	var st: Dictionary = wb.get_solve_async_stats()
+	_ok("the stats count them", int(st.started) == 2 * cb.size() + 1 and int(st.stale) == 1
+			and int(st.busy) == 2,
+			str(st))
 
 
 func _separately(w: BrickWorld, chunk: int) -> Dictionary:

@@ -739,6 +739,13 @@ struct Chunk {
     // lives in these bits and its own hp / scorched / colour (lay_band).
     std::vector<uint8_t> absent;
     FaceBake bake;
+    // Bake only the blocks alive now: dead ones get no face slots at all. A
+    // settled loose piece carries the bake of the building it came from -- every
+    // face of every block it was part of, the dead patched to nothing -- and
+    // this is how it sheds them (BrickWorld.set_chunk_bake_skips_dead,
+    // Docs/Hulls.md 11 E2). A block brought back alive in such a chunk has no
+    // faces to patch in: whatever revives one must bake the chunk again.
+    bool bake_skips_dead = false;
 
     // The index buffer currently on the GPU. FIXED length -- six entries per
     // baked face, always -- with hidden faces written as degenerate triangles

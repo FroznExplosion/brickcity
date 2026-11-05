@@ -934,6 +934,7 @@ var sleep_worst := [0.0, 0]
 var _resolve_parts: Array = []
 var _sync_meshes := 0
 var dropped := 0     ## settled pieces put to the coarse stand-in for distance
+var compacted := 0   ## settled pieces baked again to leave their dead faces out
 var coarse_built := 0      ## coarse stand-ins built (build_chunk_coarse_mesh)
 var coarse_worst_ms := 0.0 ## the slowest of them
 var coarse_verts := 0      ## their vertices, all told
@@ -5303,6 +5304,38 @@ func _stream_island_meshes() -> void:
 				_mesh_queue.append(isl)
 			dropped += 1
 			budget -= 1
+		elif _compact_due(isl):
+			# Baked again from what is left of it: the old mesh draws until the
+			# new one is up (the mesh queue, a worker's upload).
+			isl.compact_slots = int(world.get_mesh_stats(isl.chunk).get("index_slots", 0))
+			world.set_chunk_bake_skips_dead(isl.chunk, true)
+			world.drop_chunk_bake(isl.chunk)
+			world.bake_chunk_async(isl.chunk)
+			if not _mesh_queue.has(isl):
+				_mesh_queue.append(isl)
+			compacted += 1
+			budget -= 1
+
+
+## A settled piece drawing mostly dead faces (Docs/Hulls.md 11, E2): a piece keeps
+## the bake it came loose with -- every face of the building or section it was part
+## of, the ones it no longer has patched out to nothing. Measured 2026-11-04 in
+## `city.tscn -- --piececost`: 24 settled pieces held 776k triangle slots for 72k
+## drawn (one 398-brick piece carried a 121k-slot bake). Patching those out costs
+## no upload, which is why a falling piece keeps them; once it has settled and is
+## left alone it is baked again from its live bricks only
+## (BrickWorld.set_chunk_bake_skips_dead). COMPACT_SLACK: only when the dead are
+## most of it and many.
+const COMPACT_SLACK := 2.0
+const COMPACT_MIN_SLOTS := 6000
+func _compact_due(isl: BrickIsland) -> bool:
+	if not isl.settled or isl.coarse or isl.coarse_drawn or isl.mesh_job != -1 			or isl.upload_waiting or isl.array_mesh == null or not world.bake_ready(isl.chunk):
+		return false
+	var st := world.get_mesh_stats(isl.chunk)
+	@warning_ignore("integer_division")
+	var slots: int = int(st.get("index_slots", 0)) / 3
+	var drawn: int = int(st.get("triangles", 0))
+	return slots >= COMPACT_MIN_SLOTS and float(slots) > COMPACT_SLACK * float(drawn) 			and int(st.get("index_slots", 0)) != isl.compact_slots
 
 
 ## Turn finished bakes into meshes. The expensive part -- baking the faces --

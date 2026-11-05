@@ -83,6 +83,8 @@ var lifts: BuildLifts = null
 var damage_log := DamageLog.new()
 var crumbs: PlanetCrumbs
 var bricks_killed := 0
+## Bricks brought back by repair (Docs/Hulls.md 9).
+var bricks_restored := 0
 var _band_nodes := {}
 var _remesh := PackedInt32Array()
 var _solve_due := false
@@ -444,6 +446,86 @@ func damage(point: Vector3, shot: Dictionary) -> bool:
 	crumbs.throw(bricks, chunk, killed, Vector3.ZERO, point, radius * IslandManager.BLAST_CORE if blast else 0.0)
 	_after_kill(killed)
 	return true
+
+
+## Repair (Docs/Hulls.md 9, the core): the bricks it has lost -- destroyed, or gone
+## on a piece -- within `radius` metres of world `point`. With `edge_first`, the
+## ones beside a brick that is there come first (a hole closes from its rim
+## inward, so a breach seals soonest), nearest `point` first within each. Only a
+## generated one (its recipe and air know every brick); empty while its bricks
+## are not laid.
+func restorable(point: Vector3, radius: float, edge_first := true) -> PackedInt32Array:
+	if not bricked or riding or chunk < 0 or recipe == null or air == null:
+		return PackedInt32Array()
+	var here := cell_at(point)
+	var stud := BrickWorld.get_stud_metres()
+	var plate := BrickWorld.get_plate_metres()
+	var rim: Array = []
+	var inner: Array = []
+	for b in gone():
+		var cells := air._block_cells(b)
+		if cells.is_empty():
+			continue
+		var mid := Vector3.ZERO
+		for i in cells:
+			mid += Vector3(air._cell(i))
+		mid = mid / float(cells.size()) + Vector3(0.5, 0.5, 0.5)
+		var d := Vector3((mid.x - here.x) * stud, (mid.y - here.y) * plate, (mid.z - here.z) * stud).length()
+		if d > radius:
+			continue
+		var edge := false
+		if edge_first:
+			var own := {}
+			for i in cells:
+				own[i] = true
+			for i in cells:
+				for j in air._neighbours(i):
+					if air.state[j] == HullAir.SOLID and not own.has(j):
+						edge = true
+						break
+				if edge:
+					break
+		(rim if edge or not edge_first else inner).append([d, b])
+	rim.sort_custom(func(x, y): return x[0] < y[0] or (x[0] == y[0] and x[1] < y[1]))
+	inner.sort_custom(func(x, y): return x[0] < y[0] or (x[0] == y[0] and x[1] < y[1]))
+	var out := PackedInt32Array()
+	for e in rim + inner:
+		out.append(int(e[1]))
+	return out
+
+
+## Lay `ids` back as built (Docs/Hulls.md 9): a RESTORE command, recorded and applied
+## as a hit is, then what follows a brick's return -- its air sealed, its shapes
+## and bands back. `point` and `radius` are where, for the record. Refused while
+## its bricks are not laid, and while it flies over a world (`riding`: a hit is
+## refused then too -- its bricks' collision is put away; the ghost hull, step 6,
+## is what lets a crew work on it in flight). Returns the bricks brought back.
+func restore(ids: PackedInt32Array, point := Vector3.ZERO, radius := 0.0) -> PackedInt32Array:
+	if not bricked or riding or chunk < 0 or ids.is_empty():
+		return PackedInt32Array()
+	var e := DamageLog.Entry.new()
+	e.kind = DamageLog.Kind.RESTORE
+	e.target = 0
+	e.point = point
+	e.radius = radius
+	e.blocks = ids
+	damage_log.add(e)
+	var back := DamageLog.apply_entry(bricks, chunk, e)
+	if not back.is_empty():
+		_after_restore(back)
+	return back
+
+
+func _after_restore(back: PackedInt32Array) -> void:
+	bricks_restored += back.size()
+	if air != null:
+		air.blocks_added(bricks, chunk, back)
+	if _collision != null:
+		_collision.enable(back)
+		for b in _collision.bands_of(back):
+			if not _remesh.has(b):
+				_remesh.append(b)
+	bricks.bake_chunk_async(chunk)
 
 
 ## World `p` is inside its module's box.
