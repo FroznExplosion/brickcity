@@ -4669,11 +4669,11 @@ func _apply_band(id: int, at: int, mesh: ArrayMesh, arrays: Array) -> void:
 		node = MeshInstance3D.new()
 		node.material_override = brick_material
 		# It sways in the wind, a little (weather.gdshaderinc); a tree more.
-		node.set_instance_shader_parameter("weather_sway", _sway_of(id))
+		InstanceParams.put(node, &"weather_sway", _sway_of(id))
 		# A tree's crown takes a cap of snow; a building gets real cover.
-		node.set_instance_shader_parameter("weather_snowcap", 1.0 if _is_tree(id) else 0.0)
-		node.set_instance_shader_parameter("grain_origin",
-				(_brick_nodes[id] as MeshInstance3D).get_instance_shader_parameter("grain_origin"))
+		InstanceParams.put(node, &"weather_snowcap", 1.0 if _is_tree(id) else 0.0)
+		InstanceParams.put(node, &"grain_origin",
+				InstanceParams.of(_brick_nodes[id] as MeshInstance3D, &"grain_origin"))
 		# In the parent's space, which already carries the chunk transform.
 		node.physics_interpolation_mode = Node.PHYSICS_INTERPOLATION_MODE_OFF
 		# Casting as the building does: a shadow shell may be standing in
@@ -14551,10 +14551,10 @@ func _far_coarse_show(id: int, mesh: ArrayMesh) -> void:
 	node.name = "FarCoarse"
 	node.mesh = mesh
 	node.material_override = brick_material
-	node.set_instance_shader_parameter("weather_sway", _sway_of(id))
-	node.set_instance_shader_parameter("weather_snowcap", 1.0 if _is_tree(id) else 0.0)
-	node.set_instance_shader_parameter("grain_origin",
-			(parent as MeshInstance3D).get_instance_shader_parameter("grain_origin"))
+	InstanceParams.put(node, &"weather_sway", _sway_of(id))
+	InstanceParams.put(node, &"weather_snowcap", 1.0 if _is_tree(id) else 0.0)
+	InstanceParams.put(node, &"grain_origin",
+			InstanceParams.of(parent as MeshInstance3D, &"grain_origin"))
 	node.physics_interpolation_mode = Node.PHYSICS_INTERPOLATION_MODE_OFF
 	node.cast_shadow = (parent as MeshInstance3D).cast_shadow
 	(parent as Node3D).add_child(node)

@@ -670,8 +670,9 @@ func _free_bricks(i: int) -> void:
 	if s.bricked:
 		bricked_count -= 1
 	s.bricked = false
+	# Their meshes are not wanted: left to finish rather than waited for.
 	for job in s.band_jobs:
-		WorkerThreadPool.wait_for_task_completion(int(job[0]))
+		TaskReaper.drop(int(job[0]))
 	s.band_jobs.clear()
 	if s.collision != null:
 		s.collision.free_bodies()
@@ -932,8 +933,9 @@ func _topple(i: int) -> void:
 	if i == _brick_site:
 		_brick_site = -1
 	_brick_queue.erase(i)
+	# Their meshes are not wanted: left to finish rather than waited for.
 	for job in s.band_jobs:
-		WorkerThreadPool.wait_for_task_completion(int(job[0]))
+		TaskReaper.drop(int(job[0]))
 	s.band_jobs.clear()
 	if s.collision != null:
 		s.collision.free_bodies()

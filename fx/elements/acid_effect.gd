@@ -31,6 +31,6 @@ static func _on_target_died(t: ElementalTarget) -> void:
 	# Tween the shared instance uniform to 1: flesh fully gone -> skeleton pose.
 	var tw := t.create_tween()
 	tw.tween_method(t.set_dissolve,
-		t.body_mesh.get_instance_shader_parameter("dissolve_amount"),
+		InstanceParams.of(t.body_mesh, &"dissolve_amount"),
 		1.0, DEATH_DISSOLVE_TIME)
 	# Then sink/fade the skeleton however your corpse cleanup works.

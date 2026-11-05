@@ -281,7 +281,7 @@ func _apply(e: Entry, c: Node) -> void:
 	# for nothing (Godot's InstanceUniforms keeps it).
 	if not _materials.has(g.material_override):
 		return
-	g.set_instance_shader_parameter(&"grid_light", e.param)
+	InstanceParams.put(g, &"grid_light", e.param)
 	if use_layer:
 		g.layers = RENDER_LAYER if e.param.x >= 0.0 else 1
 	# What stands in for a band close up (BrickNear's chamfered mesh) is its
@@ -290,6 +290,6 @@ func _apply(e: Entry, c: Node) -> void:
 		for k in g.get_children():
 			var n := k as GeometryInstance3D
 			if n != null and n.material_override == g.material_override:
-				n.set_instance_shader_parameter(&"grid_light", e.param)
+				InstanceParams.put(n, &"grid_light", e.param)
 			elif n is MultiMeshInstance3D:
 				BrickNear.grid_studs(n, e.param, g)
