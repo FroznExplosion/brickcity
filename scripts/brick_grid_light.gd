@@ -2,7 +2,8 @@ class_name BrickGridLight
 extends RefCounted
 
 ## The light on the brick grid (Docs/Lighting.md 6.1): how open each cell of a
-## building is to the sky, and how much lamp light (Glow bricks) reaches it,
+## building is to the sky, and how much lamp light (Glow and Lamp bricks, in
+## their colours) reaches it,
 ## flood-filled in the engine (BrickWorld.chunk_light_tiles) and read by the
 ## brick shader. A hole blown in a wall lets daylight in; a sealed room goes
 ## dark; nothing extra each frame on the GPU.
@@ -21,7 +22,7 @@ const SLOTS := 16
 ## How much sky (of 255) a cell loses a step in from the open; three times
 ## through glass. 16: about 5.6 m into a room from a wide hole.
 const SKY_STEP := 16
-## The same for a Glow brick's light: about 3.7 m.
+## The same for a lamp's light: about 3.7 m.
 const LAMP_STEP := 24
 ## The render layer of bricks lit by the grid: the ambient boxes leave them
 ## alone (ReflectionProbe.reflection_mask), the grid has them.
@@ -40,15 +41,21 @@ static var _sky_shade := true
 ## stands for the ship's own lights; a sealed hull is not a dark room).
 static var _skyless: Array = []
 const SKY_FLOOR := 0.1
-## Real lights at the Glow bricks (Docs/Lighting.md 6.3): unshadowed omni
-## lights for what moves -- figures, the gun, pieces -- which the grid does
-## not reach; the grid's own lamp term lights the bricks (it stops at walls,
-## an unshadowed light would not), so the lights leave RENDER_LAYER out. Only
-## with `use_layer`: without it bricks would be lit twice.
+## Real lights at the lamps (Docs/Lighting.md 6.3): unshadowed lights for
+## what moves -- figures, the gun, pieces -- which the grid does not reach;
+## the grid's own lamp term lights the bricks (it stops at walls, an
+## unshadowed light would not), so the lights leave RENDER_LAYER out. Only
+## with `use_layer`: without it bricks would be lit twice. A lamp shining all
+## round (a Glow brick, a Lamp brick) hangs an omni light; one shining one
+## way (a light bar: a Lamp tile; an under-tile on a ceiling) a spot light
+## that way, in the lamp's own colour.
 const LAMP_RANGE := 4.0
 const LAMP_ENERGY := 1.2
-const LAMP_COLOUR := Color(1.0, 0.78, 0.52)
-## Glow bricks closer than this share a light; at most so many a building.
+## A one-way lamp's cone: its half angle and its reach.
+const SPOT_ANGLE := 65.0
+const SPOT_RANGE := 6.0
+## Lamps closer than this (shining the same way) share a light; at most so
+## many a building.
 const LAMP_MERGE := 1.2
 const LAMPS_MAX := 8
 ## Last one lit, for gates and the HUD (ms).
@@ -74,8 +81,8 @@ var _turn := -1
 func _init() -> void:
 	var images: Array[Image] = []
 	for i in SLOTS:
-		var img := Image.create_empty(SIZE, SIZE, false, Image.FORMAT_RG8)
-		img.fill(Color(1, 0, 0))
+		var img := Image.create_empty(SIZE, SIZE, false, Image.FORMAT_RGBA8)
+		img.fill(Color(1, 0, 0, 0))
 		images.append(img)
 		_free.append(SLOTS - 1 - i)
 	texture = Texture2DArray.new()
@@ -143,7 +150,7 @@ func release(key) -> void:
 			e.node.child_entered_tree.disconnect(_on_child)
 		e.param = Vector4(-1.0, 0.0, 0.0, 0.0)
 		_apply_all(e)
-	_hang_lamps(e, PackedVector3Array())
+	_hang_lamps(e, PackedFloat32Array())
 
 
 ## Once a frame: drop what has gone; ask one building in turn whether its
@@ -163,9 +170,17 @@ func step() -> void:
 		_light(e)
 
 
-## Sky and lamp (0..1 each) at world point `at`, from the nearest cell of the
-## building it is in; Vector2(-1, 0) outside them all.
+## Sky and lamp (0..1 each; the lamp's brightest channel) at world point
+## `at`, from the nearest cell of the building it is in; Vector2(-1, 0)
+## outside them all.
 func at(pos: Vector3) -> Vector2:
+	var c := at_colour(pos)
+	return Vector2(c.r, maxf(c.g, maxf(c.b, c.a)) if c.r >= 0.0 else 0.0)
+
+
+## The grid's cell at `pos` as it is stored: sky in r, the lamps' light (its
+## colour times how much) in g, b, a; r -1 outside every building.
+func at_colour(pos: Vector3) -> Color:
 	for key in _entries:
 		var e: Entry = _entries[key]
 		if e.slot < 0 or e.bytes.is_empty() or not is_instance_valid(e.node):
@@ -179,9 +194,10 @@ func at(pos: Vector3) -> Vector2:
 		var per_row := SIZE / e.dims.x
 		var px := (c.y % per_row) * e.dims.x + c.x
 		var py := (c.y / per_row) * e.dims.z + c.z
-		var i := (py * SIZE + px) * 2
-		return Vector2(e.bytes[i] / 255.0, e.bytes[i + 1] / 255.0)
-	return Vector2(-1.0, 0.0)
+		var i := (py * SIZE + px) * 4
+		return Color(e.bytes[i] / 255.0, e.bytes[i + 1] / 255.0, e.bytes[i + 2] / 255.0,
+				e.bytes[i + 3] / 255.0)
+	return Color(-1.0, 0.0, 0.0, 0.0)
 
 
 func _light(e: Entry) -> void:
@@ -199,31 +215,37 @@ func _light(e: Entry) -> void:
 		e.slot = -1
 		e.param = Vector4(-1.0, 0.0, 0.0, 0.0)
 	else:
-		var img := Image.create_from_data(SIZE, SIZE, false, Image.FORMAT_RG8, e.bytes)
+		var img := Image.create_from_data(SIZE, SIZE, false, Image.FORMAT_RGBA8, e.bytes)
 		RenderingServer.texture_2d_update(texture.get_rid(), img, e.slot)
 		e.param = Vector4(e.slot, e.dims.x, e.dims.y, e.dims.z)
 	_apply_all(e)
-	_hang_lamps(e, e.bricks.chunk_glow_points(e.chunk) if use_layer else PackedVector3Array())
+	_hang_lamps(e, e.bricks.chunk_lamps(e.chunk) if use_layer else PackedFloat32Array())
 	updates += 1
 	last_ms = (Time.get_ticks_usec() - t0) / 1000.0
 
 
-## Glow bricks' lights: `points` (chunk-local) merged within LAMP_MERGE,
-## the biggest groups first, at most LAMPS_MAX; children of the building's
-## node, so they ride with a ship.
-func _hang_lamps(e: Entry, points: PackedVector3Array) -> void:
-	var groups: Array = []   # [sum, count]
-	for p in points:
+## The lamps' lights: `lamps` (BrickWorld.chunk_lamps, eight floats each)
+## merged within LAMP_MERGE when they shine the same way, the biggest groups
+## first, at most LAMPS_MAX; children of the building's node, so they ride
+## with a ship.
+func _hang_lamps(e: Entry, lamps: PackedFloat32Array) -> void:
+	var groups: Array = []   # [position sum, count, dir, colour sum, power sum]
+	for k in range(0, lamps.size() - 7, 8):
+		var p := Vector3(lamps[k], lamps[k + 1], lamps[k + 2])
+		var dir := int(lamps[k + 3])
+		var col := Color(lamps[k + 4], lamps[k + 5], lamps[k + 6])
 		var best := -1
 		for i in groups.size():
-			if (groups[i][0] / groups[i][1]).distance_to(p) < LAMP_MERGE:
+			if groups[i][2] == dir and (groups[i][0] / groups[i][1]).distance_to(p) < LAMP_MERGE:
 				best = i
 				break
 		if best < 0:
-			groups.append([p, 1])
+			groups.append([p, 1, dir, col, lamps[k + 7]])
 		else:
 			groups[best][0] += p
 			groups[best][1] += 1
+			groups[best][3] += col
+			groups[best][4] += lamps[k + 7]
 	groups.sort_custom(func(a, b): return a[1] > b[1])
 	groups = groups.slice(0, LAMPS_MAX)
 	var valid := is_instance_valid(e.node)
@@ -235,20 +257,46 @@ func _hang_lamps(e: Entry, points: PackedVector3Array) -> void:
 	if not valid:
 		return
 	for i in groups.size():
-		if i >= e.lamps.size():
-			var l := OmniLight3D.new()
-			l.name = "GlowLamp"
+		var dir: int = groups[i][2]
+		var want_spot := dir != 0
+		if i < e.lamps.size() and (e.lamps[i] is SpotLight3D) != want_spot:
+			(e.lamps[i] as Node).queue_free()
+			e.lamps[i] = null
+		if i >= e.lamps.size() or e.lamps[i] == null:
+			var l: Light3D
+			if want_spot:
+				var s := SpotLight3D.new()
+				s.name = "LampSpot"
+				s.spot_angle = SPOT_ANGLE
+				s.spot_range = SPOT_RANGE
+				s.spot_attenuation = 1.0
+				l = s
+			else:
+				var o := OmniLight3D.new()
+				o.name = "GlowLamp"
+				o.omni_range = LAMP_RANGE
+				o.omni_attenuation = 1.0
+				l = o
 			l.shadow_enabled = false
-			l.light_color = LAMP_COLOUR
-			l.omni_range = LAMP_RANGE
-			l.omni_attenuation = 1.0
 			l.light_cull_mask = 0xFFFFF & ~RENDER_LAYER
 			e.node.add_child(l)
-			e.lamps.append(l)
-		var lamp := e.lamps[i] as OmniLight3D
-		lamp.position = groups[i][0] / groups[i][1]
-		# A lone brick a glow; a wall of them a lamp.
-		lamp.light_energy = LAMP_ENERGY * minf(1.0 + 0.25 * (groups[i][1] - 1), 3.0)
+			if i < e.lamps.size():
+				e.lamps[i] = l
+			else:
+				e.lamps.append(l)
+		var lamp := e.lamps[i] as Light3D
+		var n: int = groups[i][1]
+		lamp.position = groups[i][0] / n
+		if want_spot:
+			# A spot looks down its -Z: turned to face the lamp's way, and a
+			# hair out of its face.
+			lamp.rotation = Vector3(-PI / 2.0 if dir < 0 else PI / 2.0, 0.0, 0.0)
+			lamp.position.y += 0.03 * dir
+		lamp.light_color = groups[i][3] / n
+		# A lone brick a glow; a wall of them a lamp. A Lamp brick is
+		# brighter than a Glow one (its power).
+		lamp.light_energy = LAMP_ENERGY * (groups[i][4] / n) \
+				* minf(1.0 + 0.25 * (n - 1), 3.0)
 
 
 func lamp_count() -> int:

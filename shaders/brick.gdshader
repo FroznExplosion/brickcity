@@ -696,6 +696,9 @@ void fragment() {
             albedo = bm_wood_fill(albedo, p, v_uv.y / 0.020, seed, tfade);
         }
     }
+    if (tex == 10) {
+        emission = bm_lamp(albedo);
+    }
 
     float out_rough = clamp(roughness + print_rough, 0.0, 1.0);
     float out_spec = clamp(MAT_SPEC[mat] + (surface_specular - MAT_SPEC[0]), 0.0, 1.0);

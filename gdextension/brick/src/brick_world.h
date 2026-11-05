@@ -314,12 +314,18 @@ public:
     // in (three times that through a see-through block); lamp: from Glow
     // blocks, `lamp_step` less a cell. Its size in cells, margin included:
     Vector3i chunk_light_dims(int chunk_id, int cell_plates) const;
-    // ...and the grid itself, two bytes a cell (sky, lamp), each y layer an
-    // x-by-z tile, tiles left to right then down a `width` x `height` image
-    // (RG8). Empty when it does not fit.
+    // ...and the grid itself, four bytes a cell (sky; the lamps' light as
+    // r, g, b, each its colour times how much reaches the cell), each y layer
+    // an x-by-z tile, tiles left to right then down a `width` x `height`
+    // image (RGBA8). Empty when it does not fit.
     // The centres of `chunk_id`'s live Glow PLA blocks, chunk-local metres:
     // where BrickGridLight hangs its lamps (Docs/Lighting.md 6.3).
     PackedVector3Array chunk_glow_points(int chunk_id) const;
+    // Every live block that gives light (Glow PLA, Lamp), eight floats each:
+    // where it shines from (chunk-local metres: its centre, or the middle of
+    // its lit face), which way (0 all round, 1 up, -1 down), its light's
+    // colour (r, g, b) and its power (Glow 1, Lamp 2.5).
+    PackedFloat32Array chunk_lamps(int chunk_id) const;
     PackedByteArray chunk_light_tiles(int chunk_id, int cell_plates, int width, int height,
             int sky_step, int lamp_step) const;
     int block_at(int chunk_id, Vector3i cell) const;

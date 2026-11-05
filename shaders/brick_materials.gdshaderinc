@@ -33,34 +33,42 @@
 //   11  Metal        no       PBR brushed steel, streaks along the long side
 //   12  Stone        no       PBR polished veined stone
 //   13  Leaf         no       PBR leaves, for a tree's crown
+//   14  Lamp         yes      a diffuser lit from behind: its colour, bright
 
-const int MAT_COUNT = 14;
-const float MAT_PRINTED[14] = float[](1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 0.0, 0.0, 0.0, 0.0);
-const float MAT_ROUGH[14]   = float[](0.42, 0.80, 0.22, 0.30, 0.16, 0.86, 0.70, 0.50, 0.58, 0.62, 0.42, 0.30, 0.72, 0.78);
-const float MAT_SPEC[14]    = float[](0.55, 0.28, 0.80, 0.60, 0.72, 0.18, 0.32, 0.50, 0.40, 0.35, 0.40, 0.50, 0.32, 0.22);
+const int MAT_COUNT = 15;
+const float MAT_PRINTED[15] = float[](1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0);
+const float MAT_ROUGH[15]   = float[](0.42, 0.80, 0.22, 0.30, 0.16, 0.86, 0.70, 0.50, 0.58, 0.62, 0.42, 0.30, 0.72, 0.78, 0.55);
+const float MAT_SPEC[15]    = float[](0.55, 0.28, 0.80, 0.60, 0.72, 0.18, 0.32, 0.50, 0.40, 0.35, 0.40, 0.50, 0.32, 0.22, 0.40);
 // Metal at 0.8, not 1.0: a fully metallic surface is exactly as bright as
 // what it reflects, and brass and copper came out dull brown wherever the
 // surroundings were plain. A fifth of diffuse keeps the metal's own colour.
-const float MAT_METAL[14]   = float[](0.0, 0.0, 0.35, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.8, 0.0, 0.0);
+const float MAT_METAL[15]   = float[](0.0, 0.0, 0.35, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.8, 0.0, 0.0, 0.0);
 // Multipliers on the bead: layer height and width, how proud a bead stands,
 // and how dark the groove between two reads.
-const float MAT_LAYER[14]   = float[](1.0, 1.0, 1.0, 0.8, 1.0, 1.6, 1.0, 1.0, 1.0, 1.2, 1.0, 1.0, 1.0, 1.0);
-const float MAT_RELIEF[14]  = float[](1.0, 1.1, 0.6, 0.8, 0.45, 0.7, 0.9, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0);
-const float MAT_GROOVE[14]  = float[](1.0, 0.8, 0.6, 1.0, 0.5, 0.7, 0.9, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0);
+const float MAT_LAYER[15]   = float[](1.0, 1.0, 1.0, 0.8, 1.0, 1.6, 1.0, 1.0, 1.0, 1.2, 1.0, 1.0, 1.0, 1.0, 1.0);
+const float MAT_RELIEF[15]  = float[](1.0, 1.1, 0.6, 0.8, 0.45, 0.7, 0.9, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 0.4);
+const float MAT_GROOVE[15]  = float[](1.0, 0.8, 0.6, 1.0, 0.5, 0.7, 0.9, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 0.5);
 // Walls: how many loops a slicer walks round the outline before it fills the
 // inside, seen on a top or bottom face (print_surface.gdshaderinc). Two is
 // the ordinary print -- what a real brick's top shows under its studs -- and
 // three on the tough engineering filaments (nylon, carbon), which are the
 // ones printed thick. Not printed: 0.
-const int MAT_WALLS[14]     = int[](2, 2, 2, 2, 2, 2, 3, 2, 3, 2, 0, 0, 0, 0);
+const int MAT_WALLS[15]     = int[](2, 2, 2, 2, 2, 2, 3, 2, 3, 2, 0, 0, 0, 0, 2);
 // 0 none, 1 wood, 2 brushed metal, 3 stone, 4 carbon twill, 5 glow, 6 silk,
-// 7 nylon fibre, 8 wood-fill banding, 9 leaves. 1, 2, 3 and 9 are texture
-// sets (bm_pbr, at the end); the rest procedural.
-const int MAT_TEX[14]       = int[](0, 0, 6, 0, 0, 0, 7, 5, 4, 8, 1, 2, 3, 9);
+// 7 nylon fibre, 8 wood-fill banding, 9 leaves, 10 lamp. 1, 2, 3 and 9 are
+// texture sets (bm_pbr, at the end); the rest procedural.
+const int MAT_TEX[15]       = int[](0, 0, 6, 0, 0, 0, 7, 5, 4, 8, 1, 2, 3, 9, 10);
 // Light passes through (brick_grid.h `translucent`). With a glass pass on the
 // material these are drawn there instead; without one -- a material nobody
 // gave a second pass -- they draw here, glossy and solid.
-const float MAT_TRANSLUCENT[14] = float[](0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0);
+const float MAT_TRANSLUCENT[15] = float[](0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0);
+
+// A Lamp (MAT_TEX 10): a diffuser lit from behind shines its colour at full
+// strength, whatever the light round it (Docs/Lighting.md 6.3).
+const float LAMP_GLOW = 2.4;
+vec3 bm_lamp(vec3 albedo) {
+    return albedo / max(max(albedo.r, albedo.g), max(albedo.b, 0.05)) * LAMP_GLOW;
+}
 
 // The alpha byte's low five bits are the material; the two above them the
 // brick's grain axis (brick_grid.h grain_axis; Docs/PbrWood.md).

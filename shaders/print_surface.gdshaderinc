@@ -249,7 +249,7 @@ const float PS_BEAD_SLOPE = 1.5;
 const float PS_BEAD_SHADE = 0.8;
 // Each material's first slice -- its side; its top the next, its bottom the
 // one after -- or -1, the drawn rules (MAT_ order).
-const int PS_BEAD_SLICE[14] = int[](0, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1);
+const int PS_BEAD_SLICE[15] = int[](0, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1);
 
 // Beads from the baked slice. `t` counts them across the face (t_d as
 // ps_beads), `u` metres along them; `across` is the view-space way t grows.
