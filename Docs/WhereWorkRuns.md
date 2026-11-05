@@ -142,9 +142,29 @@ screenshots, `_exit_tree` and load-time waits left out; those are fine):
 |---|---|---|---|
 | a | **done 2026-11-04** (`InstanceParams.put` / `of`) instance parameter read-back | `BrickNear._chamfer_node` (copies `weather_sway`, `weather_snowcap`, `grain_origin`, `grid_light` from the flat band), `BrickNear` studs (`grid_light`), `CityScene` stand-ins x2 (`grain_origin`), `PlanetScene` grid check (`grid_light`), `AcidEffect` (`dissolve_amount`) | keep the values set on the CPU side (a dictionary or node meta written where they are set) and copy from there |
 | b | **done 2026-11-04 where the result is thrown away** (`TaskReaper.drop`: `BrickNear._forget`, `PlanetBuildings._free_bricks` / `_topple`). Left, each for a reason: `CityScene._take_bands` (a piece carrying the bands away needs them landed), `PlanetSystem._full_bake` (needs the maps now), `PlanetSystem.jump` (its worker writes `_bake_result`, which the next bake reuses), `SpaceStation.deactivate` (the station may be freed while the worker runs; rare). `IslandManager._field_finish` only runs once done. -- wait on a job that may still run | `CityScene._harvest_band_jobs(wait_for)`, `BrickNear._forget` (UPLOADING), `IslandManager._field_finish`, `PlanetBuildings._free_bricks` and `_topple`, `SpaceStation.deactivate`, `PlanetSystem.jump` / `_full_bake` | leave the job to finish and throw its result away when harvested (a "dropped" flag), instead of waiting |
-| c | the tick's deliberate flush | `CityScene._physics_process`: `mesh_get_surface_count(_flush_mesh)` | pays the uploads at a known point today; under a render thread it would wait for the frame. Drop it when switching, measure again |
-| d | textures written from workers | the `_texture_2d_update` errors of the 2026-11-04 try | find which worker writes a texture (`ImageTexture.update`, `texture_2d_update` inside a task) and hand the image to the main thread |
-| e | the switch itself | `rendering/driver/threads/thread_model` | after a-d: `--render-thread separate`, the street walk, `--big --shot`, the gates |
+| c | **done 2026-11-04** (`CityScene._one_thread`: the flush only with the renderer on the main thread; the street walk reads render times every 15th frame in the other mode) -- the tick's deliberate flush | `CityScene._physics_process`: `mesh_get_surface_count(_flush_mesh)` | pays the uploads at a known point today; under a render thread it would wait for the frame. Drop it when switching, measure again |
+| d | **looked at 2026-11-04, left**: 2-6 `_texture_2d_update` "p_image is empty" errors at start, a different count each run, none with a script stack (they are the render thread's); not the dust or torch gradients (drawing those by hand changed nothing), no visible gap in the gates' pictures. One "finalize" at exit. -- textures written from workers | the `_texture_2d_update` errors of the 2026-11-04 try | find which worker writes a texture (`ImageTexture.update`, `texture_2d_update` inside a task) and hand the image to the main thread |
+| e | **measured 2026-11-04, not switched** (below) -- the switch itself | `rendering/driver/threads/thread_model` | after a-d: `--render-thread separate`, the street walk, `--big --shot`, the gates |
+
+**Measured after a-c** (2026-11-04, editor closed, `--render-thread separate` against the default,
+alternated; one default collapse run overlapped another chat's headless probe):
+
+| Run | Default | Separate |
+|---|---|---|
+| street walk `--long`, mean / worst / frames over 25 ms | 17.0 / 36 / 27; 16.7 / 52 / 15 | 16.8 / 98 / 15; 16.7 / 43 / 21 |
+| before a-c (same walk) | 19.2 / 366 / 49 | 58.7 / 1059 / 210 |
+| `--big --shot`, ticks over 25 ms | 8, 17, 17 | 20, 4, 7 |
+| `--big --shot`, worst tick ms | 323, 328, 69 | 122, 37, 72 |
+| `--big --shot`, spawning's mesh step ms in all | 72, 77, 106 | 65, 39, 23 |
+
+The street walk is the same either way (it is held at the 16.6 ms frame anyway). Collapses
+leaning better on a thread of its own -- the tick's `render` waits (24-25 ms spikes) and most of
+spawning's mesh cost leave the main thread -- but the runs do not break the same amount, so it
+is a lean, not a number. Gates with it: `--chamfer` 14/14, `--light` 7/7, `brick_bevel_probe`
+26/26. **Not switched:** Godot still calls the separate thread model experimental ("can lead
+to project crashes"), and this machine already has unexplained power-offs (CLAUDE.md). To try
+it: launch with `--render-thread separate`; to switch, `rendering/driver/threads/thread_model`
+= 2 in project.godot.
 
 Steps a and b help today too (a read-back costs a renderer round trip even on one thread; a
 wait stalls the tick); c-e only pay off at the switch.
