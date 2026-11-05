@@ -93,6 +93,10 @@ BrickWorld::BrickWorld() {
 
 
 bool BrickWorld::valid_chunk(int chunk_id) const {
+    // Workers call this too, so not solve_jobs.empty(): the main thread grows it.
+    if (solves_live.load(std::memory_order_relaxed) > 0) {
+        wait_solve(chunk_id);
+    }
     return chunk_id >= 0 && chunk_id < (int)chunks.size() && chunk_live[chunk_id] != 0;
 }
 
@@ -469,6 +473,8 @@ String BrickWorld::get_archetype_name(int archetype_id) const {
 // --- chunks ----------------------------------------------------------------
 
 int BrickWorld::create_chunk(Vector3i origin, Vector3i dims) {
+    // Every per-chunk table grows below; a solve on a worker indexes them.
+    join_solves();
     if (dims.x < 1 || dims.y < 1 || dims.z < 1) {
         UtilityFunctions::push_error("BrickWorld: chunk dims must be positive");
         return -1;
@@ -508,6 +514,9 @@ Vector3i BrickWorld::get_chunk_dims(int chunk_id) const {
 
 int BrickWorld::place_block(int chunk_id, Vector3i cell, int archetype_id, int colour,
         bool decorative) {
+    if (solves_live.load(std::memory_order_relaxed) > 0) {
+        structural_write(chunk_id);
+    }
     if (!valid_chunk(chunk_id) || !valid_archetype(archetype_id)) {
         return -1;
     }
@@ -605,6 +614,9 @@ int BrickWorld::place_block(int chunk_id, Vector3i cell, int archetype_id, int c
 // ---------------------------------------------------------------------------
 
 bool BrickWorld::remove_block(int chunk_id, int block_id) {
+    if (solves_live.load(std::memory_order_relaxed) > 0) {
+        structural_write(chunk_id);
+    }
     if (!valid_chunk(chunk_id)) {
         return false;
     }
@@ -2458,6 +2470,9 @@ bool BrickWorld::bake_ready(int chunk_id) {
 }
 
 void BrickWorld::set_chunk_gravity(int chunk_id, Vector3i down) {
+    if (solves_live.load(std::memory_order_relaxed) > 0) {
+        structural_write(chunk_id);
+    }
     if (!valid_chunk(chunk_id)) {
         return;
     }
@@ -2947,6 +2962,7 @@ float BrickWorld::get_chunk_mass(int chunk_id) const {
 }
 
 BrickWorld::~BrickWorld() {
+    join_solves();
     for (auto &j : bake_jobs) {
         if (j->worker.joinable()) {
             j->worker.join();
@@ -3279,6 +3295,9 @@ Dictionary BrickWorld::update_index_region(int chunk_id, int index_bytes) {
 }
 
 void BrickWorld::set_chunk_section_plates(int chunk_id, int plates) {
+    if (solves_live.load(std::memory_order_relaxed) > 0) {
+        structural_write(chunk_id);
+    }
     if (!valid_chunk(chunk_id)) {
         return;
     }
@@ -3297,6 +3316,9 @@ void BrickWorld::set_chunk_section_plates(int chunk_id, int plates) {
 }
 
 void BrickWorld::set_chunk_section_studs(int chunk_id, int studs) {
+    if (solves_live.load(std::memory_order_relaxed) > 0) {
+        structural_write(chunk_id);
+    }
     if (!valid_chunk(chunk_id)) {
         return;
     }
@@ -5873,12 +5895,18 @@ Array BrickWorld::detached_groups_of(int chunk_id, const uint8_t *grounded) {
 }
 
 void BrickWorld::set_foundation_level(int chunk_id, int grid_y) {
+    if (solves_live.load(std::memory_order_relaxed) > 0) {
+        structural_write(chunk_id);
+    }
     if (valid_chunk(chunk_id)) {
         foundation_level[chunk_id] = grid_y;
     }
 }
 
 void BrickWorld::set_anchor_levels(int chunk_id, const PackedInt32Array &grid_ys) {
+    if (solves_live.load(std::memory_order_relaxed) > 0) {
+        structural_write(chunk_id);
+    }
     if (!valid_chunk(chunk_id)) {
         return;
     }
@@ -5918,6 +5946,9 @@ Dictionary BrickWorld::get_solve_stats(int chunk_id) const {
 // before it received anything.
 
 void BrickWorld::set_load(int chunk_id, int owner, const PackedInt32Array &block_ids, float mass_each) {
+    if (solves_live.load(std::memory_order_relaxed) > 0) {
+        structural_write(chunk_id);
+    }
     if (!valid_chunk(chunk_id)) {
         return;
     }
@@ -5935,6 +5966,9 @@ void BrickWorld::set_load(int chunk_id, int owner, const PackedInt32Array &block
 }
 
 void BrickWorld::clear_load(int chunk_id, int owner) {
+    if (solves_live.load(std::memory_order_relaxed) > 0) {
+        structural_write(chunk_id);
+    }
     if (valid_chunk(chunk_id)) {
         stress[chunk_id].loads.erase(owner);
     }
@@ -6683,6 +6717,9 @@ Array BrickWorld::build_snow_cover_tops(const PackedInt32Array &tops, int w, int
 }
 
 int BrickWorld::set_blocks_decorative(int chunk_id, const PackedInt32Array &block_ids, bool on) {
+    if (solves_live.load(std::memory_order_relaxed) > 0) {
+        structural_write(chunk_id);
+    }
     if (!valid_chunk(chunk_id)) {
         return 0;
     }
@@ -6730,6 +6767,9 @@ PackedInt32Array BrickWorld::get_decorative_blocks(int chunk_id) const {
 }
 
 void BrickWorld::set_tension_per_stud(int chunk_id, float capacity) {
+    if (solves_live.load(std::memory_order_relaxed) > 0) {
+        structural_write(chunk_id);
+    }
     if (valid_chunk(chunk_id)) {
         stress[chunk_id].tension_per_stud = std::max(capacity, 0.0001f);
     }
@@ -6798,6 +6838,9 @@ int BrickWorld::get_block_joints(int chunk_id, int block_id) const {
 }
 
 void BrickWorld::set_block_joints(int chunk_id, int block_id, int joints) {
+    if (solves_live.load(std::memory_order_relaxed) > 0) {
+        structural_write(chunk_id);
+    }
     if (!valid_chunk(chunk_id)) {
         return;
     }
@@ -7112,6 +7155,7 @@ Dictionary BrickWorld::solve_rounds(int chunk_id, int rounds) {
 
 Array BrickWorld::solve_structures(const PackedInt32Array &chunk_ids, int max_rounds,
         double budget_ms) {
+    join_solves(); // its threads take slots 1.. too
     const int n = (int)chunk_ids.size();
     std::vector<Dictionary> results((size_t)n);
     // The first on this thread, in slot 0 like any other solve here; each of
@@ -7142,9 +7186,128 @@ Array BrickWorld::solve_structures(const PackedInt32Array &chunk_ids, int max_ro
     return out;
 }
 
+void BrickWorld::wait_solve(int chunk_id) const {
+    if (std::this_thread::get_id() != main_thread) {
+        return;
+    }
+    for (auto &j : solve_jobs) {
+        if (j->chunk_id != chunk_id || !j->worker.joinable()) {
+            continue;
+        }
+        if (!j->done.load(std::memory_order_acquire)) {
+            const auto t0 = std::chrono::steady_clock::now();
+            j->worker.join();
+            ++solve_waited;
+            solve_wait_usec += std::chrono::duration_cast<std::chrono::microseconds>(
+                    std::chrono::steady_clock::now() - t0).count();
+        } else {
+            j->worker.join();
+        }
+    }
+}
+
+void BrickWorld::join_solves() const {
+    if (std::this_thread::get_id() != main_thread) {
+        return;
+    }
+    for (auto &j : solve_jobs) {
+        if (j->worker.joinable()) {
+            j->worker.join();
+        }
+    }
+}
+
+void BrickWorld::structural_write(int chunk_id) {
+    if (std::this_thread::get_id() != main_thread) {
+        return;
+    }
+    for (auto &j : solve_jobs) {
+        if (j->chunk_id == chunk_id && !j->stale) {
+            j->stale = true;
+            ++solve_stale;
+        }
+    }
+}
+
+bool BrickWorld::solve_structure_async(int chunk_id, int max_rounds, double budget_ms) {
+    if (!valid_chunk(chunk_id) || solve_pending(chunk_id)) {
+        return false;
+    }
+    bool used[SOLVE_SLOTS] = {};
+    for (auto &j : solve_jobs) {
+        used[j->slot] = true;
+    }
+    int slot = 0;
+    for (int s = 1; s < SOLVE_SLOTS; ++s) {
+        if (!used[s]) {
+            slot = s;
+            break;
+        }
+    }
+    if (slot == 0) {
+        ++solve_busy;
+        return false;
+    }
+    auto job = std::make_unique<SolveJob>();
+    job->chunk_id = chunk_id;
+    job->slot = slot;
+    SolveJob *raw = job.get();
+    raw->worker = std::thread([this, raw, chunk_id, max_rounds, budget_ms]() {
+        scratch_slot = raw->slot;
+        const auto t0 = std::chrono::steady_clock::now();
+        raw->result = solve_structure(chunk_id, max_rounds, budget_ms);
+        raw->ms = std::chrono::duration<double, std::milli>(
+                std::chrono::steady_clock::now() - t0).count();
+        raw->done.store(true, std::memory_order_release);
+    });
+    solve_jobs.push_back(std::move(job));
+    solves_live.store((int)solve_jobs.size(), std::memory_order_relaxed);
+    ++solve_started;
+    return true;
+}
+
+bool BrickWorld::solve_pending(int chunk_id) const {
+    for (auto &j : solve_jobs) {
+        if (j->chunk_id == chunk_id) {
+            return true;
+        }
+    }
+    return false;
+}
+
+Dictionary BrickWorld::take_solve(int chunk_id) {
+    for (size_t i = 0; i < solve_jobs.size(); ++i) {
+        SolveJob *j = solve_jobs[i].get();
+        if (j->chunk_id != chunk_id) {
+            continue;
+        }
+        wait_solve(chunk_id);
+        Dictionary out = j->result;
+        out["stale"] = j->stale;
+        out["ms"] = j->ms;
+        solve_jobs.erase(solve_jobs.begin() + (long)i);
+        solves_live.store((int)solve_jobs.size(), std::memory_order_relaxed);
+        return out;
+    }
+    return Dictionary();
+}
+
+Dictionary BrickWorld::get_solve_async_stats() const {
+    Dictionary d;
+    d["started"] = solve_started;
+    d["waited"] = solve_waited;
+    d["wait_ms"] = (double)solve_wait_usec / 1000.0;
+    d["stale"] = solve_stale;
+    d["busy"] = solve_busy;
+    return d;
+}
+
 PackedInt32Array BrickWorld::place_blocks(int chunk_id, Vector3i origin,
         const PackedInt32Array &cells, const PackedInt32Array &archetype_ids,
         const PackedByteArray &colours) {
+    if (solves_live.load(std::memory_order_relaxed) > 0) {
+        structural_write(chunk_id);
+    }
     PackedInt32Array out;
     const int64_t n = archetype_ids.size();
     if (!valid_chunk(chunk_id) || cells.size() < n * 3 || colours.size() < n) {
@@ -7661,6 +7824,9 @@ Dictionary BrickWorld::stability_of_grounding(int chunk_id) {
 // --- damage ----------------------------------------------------------------
 
 PackedInt32Array BrickWorld::apply_hit(int chunk_id, Vector3 world_point, float radius_m) {
+    if (solves_live.load(std::memory_order_relaxed) > 0) {
+        structural_write(chunk_id);
+    }
     PackedInt32Array killed;
     if (!valid_chunk(chunk_id) || radius_m <= 0.0f) {
         return killed;
@@ -8914,6 +9080,9 @@ bool BrickWorld::is_chunk_anchored(int chunk_id) const {
 }
 
 void BrickWorld::set_chunk_anchored(int chunk_id, bool anchored) {
+    if (solves_live.load(std::memory_order_relaxed) > 0) {
+        structural_write(chunk_id);
+    }
     if (valid_chunk(chunk_id)) {
         chunks[chunk_id].anchored = anchored;
     }
@@ -9123,6 +9292,9 @@ static inline void for_each_run_raw(const brick::JointCache &jc, int32_t bid, F 
 }
 
 PackedInt32Array BrickWorld::cut_spans(int chunk_id, float reach_studs, bool apply) {
+    if (solves_live.load(std::memory_order_relaxed) > 0) {
+        structural_write(chunk_id);
+    }
     if (!valid_chunk(chunk_id) || chunk_down[chunk_id] != Vector3i(0, -1, 0)) {
         return PackedInt32Array();
     }
@@ -9131,6 +9303,9 @@ PackedInt32Array BrickWorld::cut_spans(int chunk_id, float reach_studs, bool app
 
 PackedInt32Array BrickWorld::cut_spans_resting(int piece_chunk, const Transform3D &piece_xform,
         const PackedInt32Array &building_chunks, float ground_y, float reach_studs, bool apply) {
+    if (solves_live.load(std::memory_order_relaxed) > 0) {
+        structural_write(piece_chunk);
+    }
     if (!valid_chunk(piece_chunk)) {
         return PackedInt32Array();
     }
@@ -9613,6 +9788,9 @@ Array BrickWorld::get_components_near(int chunk_id) {
 }
 
 void BrickWorld::mark_chunk_whole(int chunk_id) {
+    if (solves_live.load(std::memory_order_relaxed) > 0) {
+        structural_write(chunk_id);
+    }
     if (!valid_chunk(chunk_id)) {
         return;
     }
@@ -9854,6 +10032,9 @@ Array BrickWorld::crack_components(int chunk_id, const PackedInt32Array &planes_
 }
 
 Dictionary BrickWorld::split_island(int chunk_id, const PackedInt32Array &block_ids) {
+    if (solves_live.load(std::memory_order_relaxed) > 0) {
+        structural_write(chunk_id);
+    }
     Dictionary out;
     if (!valid_chunk(chunk_id) || block_ids.is_empty()) {
         return out;
@@ -11222,6 +11403,11 @@ void BrickWorld::_bind_methods() {
             &BrickWorld::get_chunk_authored_tris);
     ClassDB::bind_method(D_METHOD("get_blocks_box", "chunk_id", "block_ids"),
             &BrickWorld::get_blocks_box);
+    ClassDB::bind_method(D_METHOD("solve_structure_async", "chunk_id", "max_rounds", "budget_ms"),
+            &BrickWorld::solve_structure_async, DEFVAL(1), DEFVAL(0.0));
+    ClassDB::bind_method(D_METHOD("solve_pending", "chunk_id"), &BrickWorld::solve_pending);
+    ClassDB::bind_method(D_METHOD("take_solve", "chunk_id"), &BrickWorld::take_solve);
+    ClassDB::bind_method(D_METHOD("get_solve_async_stats"), &BrickWorld::get_solve_async_stats);
     ClassDB::bind_method(D_METHOD("solve_structures", "chunk_ids", "max_rounds", "budget_ms"),
             &BrickWorld::solve_structures, DEFVAL(1), DEFVAL(0.0));
     ClassDB::bind_method(D_METHOD("solve_rounds", "chunk_id", "rounds"), &BrickWorld::solve_rounds);
