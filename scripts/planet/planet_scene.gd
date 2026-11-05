@@ -2305,6 +2305,12 @@ func _run_light_gate() -> void:
 		look.look_at(was_cam.global_position + side * 900.0, up)
 		await _frames(6)
 		await _shot("light_gate_clouds_down")
+		# And from space: the far look's clouds and their shadows.
+		var bd := _body()
+		look.global_position = bd.global_position + up * bd.data.radius * 2.4 + side * bd.data.radius * 0.6
+		look.look_at(bd.global_position, up.cross(side).normalized())
+		await get_tree().create_timer(1.0).timeout
+		await _shot("light_gate_clouds_space")
 		was_cam.make_current()
 		look.queue_free()
 		await _frames(2)
@@ -2612,6 +2618,37 @@ func _run_light_gate() -> void:
 				and is_equal_approx(clear, 1.0) and absf(dark - (1.0 - sun_up)) < 0.02
 				and (sun_up <= 0.0 or dark < 0.7),
 				"cover %.2f; overcast %.2f (a cloud takes %.2f), clear %.2f" % [had, dark, sun_up, clear])
+		if clouds != null:
+			# Weather: rain brings overcast, and it clears again after.
+			var was_rain := WeatherFx.rain
+			WeatherFx.rain = 1.0
+			clouds._process(30.0)
+			var wet_cover := clouds.now_cover()
+			WeatherFx.rain = 0.0
+			clouds._process(30.0)
+			var dry_cover := clouds.now_cover()
+			WeatherFx.rain = was_rain
+			_check("rain thickens the clouds to overcast, and they clear after",
+					wet_cover >= CloudLayer.STORM_COVER - 0.01 and is_equal_approx(dry_cover, had),
+					"%.2f in rain, %.2f after" % [wet_cover, dry_cover])
+			# The sun itself takes what reaches the camera (for what has no
+			# shader of its own to darken).
+			clouds.cover = 1.0
+			clouds._process(0.0)
+			var base_e := clouds._base_energy
+			var dimmed := sun.light_energy
+			var here_now := clouds.here
+			clouds.cover = had
+			clouds._process(0.0)
+			_check("under a cloud the sun itself is dimmed by it, and given back",
+					here_now < 1.0 - 0.5 * sun_up and absf(dimmed - base_e * here_now) < 0.01
+					and absf(sun.light_energy - base_e * clouds.here) < 0.01,
+					"here %.2f: sun %.2f of %.2f" % [here_now, dimmed, base_e])
+			# The far look carries the same clouds.
+			var imp: ShaderMaterial = _body()._impostor_mat
+			_check("the far look has the world's clouds", imp != null
+					and float(imp.get_shader_parameter("cloud_cover")) > 0.0
+					and is_equal_approx(float(imp.get_shader_parameter("cloud_r")), clouds.radius))
 		if DisplayServer.get_name() != "headless":
 			# What the soft shadows cost (Lighting.md 2): the GPU's draw time
 			# with the sun's size, without, and with again. A report, not a

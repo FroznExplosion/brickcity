@@ -407,3 +407,7 @@ cloud_drift={
 "type": "vec3",
 "value": Vector3(0, 0, 0)
 }
+cloud_here={
+"type": "float",
+"value": 1.0
+}
