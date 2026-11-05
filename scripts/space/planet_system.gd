@@ -1567,6 +1567,8 @@ func _exit_tree() -> void:
 	if is_queued_for_deletion():
 		ghosts.free_space()
 		ShipRays.ships.clear()
+		# The fields and pulls set every tick (_gravity) are this system's.
+		Gravity.reset()
 	if _bake_task >= 0:
 		WorkerThreadPool.wait_for_task_completion(_bake_task)
 		_bake_task = -1
