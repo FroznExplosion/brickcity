@@ -996,6 +996,8 @@ var _live_label: Label
 var _phase := ""
 var _phys_sum := 0.0
 var _proc_sum := 0.0
+## The frame split by the clock, while a pass samples (FrameClock).
+var _clock: FrameClock
 var _phases := {}
 ## Per-phase microseconds for the current physics tick, and the breakdown of
 ## the single worst frame seen. Guessing which phase owns a spike has been wrong
@@ -13397,6 +13399,11 @@ func _physics_process(_delta: float) -> void:
 
 	var tick_total := float(Time.get_ticks_usec() - t_tick) / 1000.0
 	_prof["script_total"] = tick_total
+	if _sampling:
+		if _clock == null:
+			_clock = FrameClock.new()
+			add_child(_clock)
+		_clock.script_ms += tick_total
 	_ai_tick(tick_total)
 	# After the AI, which reads the buildings (cover, sight) and would only
 	# wait for these: from here they run while the physics steps.
@@ -16570,6 +16577,9 @@ func _report_profile() -> void:
 	if _frame_samples > 0:
 		print("[prof] mean frame: %.1f ms physics (solver + this script), %.1f ms idle process" % [
 				_phys_sum / _frame_samples, _proc_sum / _frame_samples])
+	if _clock != null:
+		for line in _clock.report_lines():
+			print("[prof] " + line)
 	print("[prof] worst script tick %.1f ms  (%d islands)" % [
 			_prof_worst_ms, int(_prof_worst.get("island_count", 0))])
 	if _glass_ticks > 0:
@@ -18215,6 +18225,8 @@ func _physics_census(label: String) -> void:
 	var rows := []
 	for i in names.size():
 		rows.append({"moving": 0, "settled": 0, "mbox": 0, "sbox": 0, "bricks": 0})
+	if _clock != null:
+		_clock.spoil()
 	for isl in islands.islands:
 		if not isl.is_valid():
 			continue
@@ -19317,6 +19329,8 @@ func _frames(n: int) -> void:
 func _save(shot_name: String) -> void:
 	var was := _sampling
 	_sampling = false
+	if _clock != null:
+		_clock.spoil()
 	var img := get_viewport().get_texture().get_image()
 	img.save_png("res://shots/%s.png" % shot_name)
 	print("[city] shot written: %s.png" % shot_name)
