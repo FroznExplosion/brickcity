@@ -1917,8 +1917,34 @@ fall 7, damage 12, bricks 9, trees 7, squad 10, pawn 12).
 Not done: a crush, TIP or region cut is in the planet's `damage_log`, the crumbs' kill is not
 (no netcode or replay on the planet yet).
 
-Not yet: the city's snap preferences; furniture, materialising for a fight far from
-the camera.
+**Plan, D2 step 7 (2026-11-05): where a landing snaps a piece, and step 6's crumbs logged.**
+- *Step 6's crumbs in the log.* The crushed storey's bricks, killed as crumbs, are recorded after
+  its `SEVER` as the city records a group nobody keeps a body of: a `DETACH` of those blocks with
+  `FLAG_GONE`. (The planet logs no DETACH for the pieces it sheds yet; that waits for its netcode.)
+- *The city's snap preferences* (`IslandManager._snap_across`, `_weak_seam`, `_floor_line`,
+  `_weak_crack`; Docs/CollapseNext.md 1.10 (5) and item 18), in `PlanetPieces._snap_across`, which
+  today snaps along the piece's longest grid axis at the contact, and tears a band where that axis
+  is X or Z (no joints run that way: the panel lands on its side and turns to gravel).
+  - *Its axis as the city's:* the grid's Y whenever the piece is BREAK_MIN_LENGTH long that way
+    (only Y has seams); X or Z only when Y is short.
+  - *Along Y, the weakest seam in reach* (`BrickWorld.seam_studs`): the course boundary near the
+    contact that lets go of the fewest studs -- a row of windows before a solid course -- within half
+    a storey either way; a storey line instead unless the weakest is clearly weaker
+    (`SEAM_PREFERS_FLOOR` 0.75); where no boundary in reach is a seam, the nearest storey line.
+  - *Across X or Z, a crack along the bond* (`crack_studs`): the plane in reach (`CRACK_REACH`)
+    with the fewest studs across it, each brick going with the side its middle is on. A crack
+    loosens nothing: the piece is parted along it (`crack_components`) where it now asks
+    `get_components_near`, and the crack is forgotten once it has.
+  - *A piece knows its building's storey lines* -- `TowerRecipe.frame(...).floors`, as the city's
+    `BuildingRegistry.floor_lines` gives them, in the building's grid, which `split_island` keeps.
+    Handed on `shed` / `adopt`, and from a piece to what breaks off it.
+  - Counted as the city's: snaps at the weakest seam, on a storey line, cracked, torn as a band.
+Gate `--gate=snap` (headless): a building toppled (as the topple gate) lands and snaps along its
+Y -- every plane at a weak seam or a storey line, none torn as a band -- and every piece ends at
+rest; a wall panel dropped 8 m (as the fall gate) is long across, not up: it cracks across along
+the bond, no band torn, and comes to rest. The storey gate's crush logs its crumbs as a DETACH.
+
+Not yet: furniture, materialising for a fight far from the camera.
 
 ### 11.12 Plan: the universe -- star systems, orbits, spinning planets (2026-10-28)
 
