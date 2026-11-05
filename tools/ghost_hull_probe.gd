@@ -63,6 +63,8 @@ func _finish() -> void:
 	ShipRays.ships.clear()
 	if _body != null:
 		_body.queue_free()
+	if _ai != null:
+		_ai.body.queue_free()
 	if _st2 != null:
 		_st2.deactivate()
 		_st2.queue_free()
@@ -164,9 +166,40 @@ func _physics_process(delta: float) -> bool:
 			_st2.ride()
 			_dock_check()
 			_get_off_check()
+			_ai_start()
+			_t = 0.0
+			_stage = 5
+		5:
+			# An AI pawn (any pawn but the player's) aboard: carried by the same
+			# crossing, its world-frame move turned into the ghost's.
+			_ai.intents.move = _ai_dir
+			_t += delta
+			if _t < 1.5:
+				return false
+			var moved := _st.ghost_to_real() * _ai.body.global_position - _ai_from
+			_ok("an AI pawn: on the ghost by the same crossing, walking where its world move says, aimed at in the world",
+					_ai_boarded and _ai.ghost == _st and moved.length() > 1.0
+					and moved.normalized().dot(_ai_dir) > 0.8 and (_ai.feet() - (_st.ghost_to_real() * _ai.feet_here())).length() < 1e-3,
+					"%.2f m, %.2f along its move" % [moved.length(), moved.normalized().dot(_ai_dir)])
 			_finish()
 			return true
 	return false
+
+
+var _ai: Pawn
+var _ai_dir := Vector3.ZERO
+var _ai_from := Vector3.ZERO
+var _ai_boarded := false
+
+
+func _ai_start() -> void:
+	var at := _st.global_transform * _st.cell_point(_st.seat_cell) + _st.global_basis.y * 0.05
+	_ai = Pawn.spawn(root, at, 1)
+	var ships: Array = [_st]
+	_ai_boarded = GhostHulls.tick(_ai, ships, _st.get_world_3d().space) == 1
+	# Along the clear way the body walked, in the world.
+	_ai_dir = Gravity.flat(_st.ghost_to_real().basis * _walk, _st.global_basis.y).normalized()
+	_ai_from = _st.ghost_to_real() * _ai.body.global_position
 
 
 ## The ship's motion: a rock, a turn and a fast flight, as a boat in a swell or
@@ -256,17 +289,21 @@ func _shot_checks() -> void:
 	# Fired aboard, from the eye (the camera is in the world, on the real ship).
 	var eye: Vector3 = g2r * (_body.global_position + up * 1.5)
 	var dir := g2r.basis * (_st.ghost_slot * _st.frame).basis.z.normalized()
+	# The first way round that meets bricks (a shut door's twin in the ghost is a
+	# wall too, but not a brick to shoot a hole in).
 	var hit := {}
-	for k in 8:
-		var d := Basis((g2r.basis * up).normalized(), TAU * k / 8.0) * dir
-		hit = _cast(eye, eye + d * 60.0, me)
-		if not hit.is_empty():
-			dir = d
-			break
 	var real_ok := false
-	if not hit.is_empty():
-		var cell := Vector3i((_st.cell_at(hit.position + dir * 0.1)).floor())
-		real_ok = _st.bricks.is_solid(_st.chunk, cell)
+	for k in 16:
+		var d := Basis((g2r.basis * up).normalized(), TAU * k / 16.0) * dir
+		var h := _cast(eye, eye + d * 60.0, me)
+		if h.is_empty():
+			continue
+		var cell := Vector3i((_st.cell_at(h.position + d * 0.1)).floor())
+		if _st.bricks.is_solid(_st.chunk, cell):
+			hit = h
+			dir = d
+			real_ok = true
+			break
 	_ok("shot aboard: the gun's ray meets the wall it was aimed at, a brick of the real ship, as structure",
 			not hit.is_empty() and real_ok and hit.get("ship") == _st and hit.get("collider") == _st.shell_body,
 			"%s" % (str(hit.get("position")) if not hit.is_empty() else "nothing"))

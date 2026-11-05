@@ -69,6 +69,8 @@ var _pieces_ai_gate := false
 var _garrison_gate := false
 var _seat_gate := false
 var _hull_gate := false
+## The hull gate, then the autopilot's flight to another planet (Docs/Hulls.md 7b).
+var _auto_gate := false
 var _belt_gate := false
 var _home_gate := false
 var _save_gate := false
@@ -170,7 +172,8 @@ func _ready() -> void:
 	_rocks_gate = "--gate=rocks" in OS.get_cmdline_user_args()
 	_garrison_gate = "--gate=garrison" in OS.get_cmdline_user_args()
 	_seat_gate = "--gate=seat" in OS.get_cmdline_user_args()
-	_hull_gate = "--gate=hull" in OS.get_cmdline_user_args()
+	_auto_gate = "--gate=autopilot" in OS.get_cmdline_user_args()
+	_hull_gate = "--gate=hull" in OS.get_cmdline_user_args() or _auto_gate
 	_belt_gate = "--gate=belt" in OS.get_cmdline_user_args()
 	_home_gate = "--gate=home" in OS.get_cmdline_user_args()
 	_save_gate = "--gate=save" in OS.get_cmdline_user_args()
@@ -556,6 +559,13 @@ func _ship_key(key: Key) -> bool:
 		if gen != null:
 			gen.set_gravity(not gen.data.gravity_on)
 			return true
+	if key == KEY_H and piloting and system != null:
+		# The autopilot (Docs/Hulls.md 7b): on for the planet ahead, or off.
+		if ship.autopilot:
+			ship.autopilot = false
+		else:
+			ship.autopilot_on(system)
+		return true
 	if key == KEY_E:
 		if piloting:
 			unboard()
@@ -634,18 +644,15 @@ func _pawn_real() -> Vector3:
 ## ghost; off it when the ship is at rest again (its bricks solid) or the pawn has
 ## left it (out through a hole, off the deck).
 func _ghost_tick() -> void:
-	var st := pawn.ghost as SpaceStation
-	if st != null and is_instance_valid(st):
-		if st.riding and st.chunk >= 0 and st.ghost != null and st.ghost_holds(pawn.body.global_position):
-			return
-		_ghost_off()
-	# Onto a riding ship's ghost -- from the world, or straight from another's (two
-	# docked: ghost to ghost, Docs/Hulls.md 7b).
-	var feet := pawn.feet()
-	for s in system.ships:
-		if s != st and s.riding and s.ghost != null and s.holds(feet):
-			_ghost_on(s)
-			return
+	system.player_pawn = pawn
+	var was = pawn.ghost
+	var r := GhostHulls.tick(pawn, system.ships, get_world_3d().space)
+	if r != 0 or pawn.ghost != was:
+		# The ground streams round the real ship, not round the ghost's slot.
+		walker.viewer.reparent(cam if pawn.ghost != null else pawn.body, false)
+		walker.viewer.position = Vector3.ZERO
+		print("[ghost] %s" % ("aboard %s's ghost" % pawn.ghost.data.orbital_name if pawn.ghost != null
+				else "off its ghost at %.1f m/s" % pawn.body.velocity.length()))
 
 
 func _ghost_on(s: SpaceStation) -> void:
@@ -680,6 +687,8 @@ func board() -> void:
 	if on_foot:
 		_set_on_foot(false)
 	piloting = true
+	# A pilot in the seat takes it over from the autopilot.
+	ship.autopilot = false
 	walker.frozen = true
 	walker.flying = false
 	walker.inertia = Vector3.ZERO
@@ -713,7 +722,7 @@ func unboard() -> void:
 	_clear_seat()
 	# Over a world, a ship with no ghost stops dead (nothing would carry who stands
 	# on it); one with its ghost glides to rest under them (Docs/Hulls.md 7b).
-	if ship.ref != null and (ship.ghost == null or not ship.riding):
+	if ship.ref != null and (ship.ghost == null or not ship.riding) and not ship.autopilot:
 		ship.vel = Vector3.ZERO
 	var at := ship.global_transform * ship.seat() + ship.global_basis.y * 0.1
 	walker.place(at, -ship.global_basis.z)
@@ -3701,6 +3710,18 @@ func _run_hull_gate() -> void:
 			and ship.riding and ship.chunk >= 0 and not ship.shell.visible,
 			"%.0f m up from %.0f, %.0f m/s, riding %s" % [ship.altitude, alt0, ship.vel.length(), ship.riding])
 	await _shot("hull_gate_flying")
+	# Its doors are its own: where its frame says, turned and flown with it, each
+	# with a twin in its ghost (BuildDoors.follow_parent, Docs/Hulls.md 7b).
+	var worst := 0.0
+	var twins := 0
+	for lf: Dictionary in (ship.doors._builds.get(0, {}) as Dictionary).get("leaves", []):
+		var want_at: Vector3 = (ship.global_transform * ship.frame * (lf.at as Transform3D)).origin
+		worst = maxf(worst, ((lf.frame as Node3D).global_position - want_at).length())
+		if (lf.get("ghost", RID()) as RID).is_valid():
+			twins += 1
+	_check("its doors fly with it: each where its frame says, a twin in its ghost", worst < 0.05
+			and twins == ship.doors.count() and twins > 0,
+			"%d door(s), worst %.3f m off, %d twin(s)" % [ship.doors.count(), worst, twins])
 	# Up out of the seat while it still flies (Docs/Hulls.md 7b): onto its ghost, the
 	# ship gliding to rest under the pawn, its bricks drawn and riding all the way.
 	ship.thrust = Vector3(0.0, 0.0, 0.5)
@@ -3814,8 +3835,62 @@ func _run_hull_gate() -> void:
 		_face(Gravity.flat(to, Gravity.up_at(g)).normalized())
 		await get_tree().create_timer(0.3).timeout
 	await _shot("hull_gate_window")
+	if _auto_gate:
+		await _autopilot_run()
 	print("[planet] gate: %d ok, %d FAIL" % [_ok, _fail])
 	get_tree().quit(1 if _fail > 0 else 0)
+
+
+## The autopilot (Docs/Hulls.md 7b): in the seat, on for the nearest other body;
+## out of the seat, standing on its deck, the whole way there -- out of the
+## planet's shell, through space, into the other's -- on its ghost or its bricks,
+## never off the ship; let go over the other, at rest, the pawn on its bricks.
+func _autopilot_run() -> void:
+	pawn.place(ship.global_transform * ship.seat() + ship.global_basis.z * 2.0)
+	await get_tree().create_timer(0.5).timeout
+	_ship_key(KEY_E)
+	await _frames(2)
+	var best: PlanetBody = null
+	var bd := INF
+	var here := ship.space_xform(system).origin
+	for b in system.bodies:
+		if b == ship.ref:
+			continue
+		var d := (system.sys.pos(system.index_of(b), system.t) - here).length() - b.data.radius
+		if d < bd:
+			bd = d
+			best = b
+	if best == null:
+		_check("another body to fly to", false)
+		return
+	ship.auto_target = best
+	ship.autopilot = true
+	var from := ship.ref
+	await get_tree().create_timer(1.0).timeout
+	_ship_key(KEY_E)
+	await _frames(3)
+	var t0 := Time.get_ticks_msec()
+	var off_ship := 0
+	var frames := 0
+	var refs := {}
+	var top := 0.0
+	while ship.autopilot and Time.get_ticks_msec() - t0 < 300000:
+		await _frames(1)
+		frames += 1
+		refs[ship.ref] = true
+		top = maxf(top, ship.vel.length())
+		if not ship.holds(_pawn_real()):
+			off_ship += 1
+	var secs := (Time.get_ticks_msec() - t0) / 1000.0
+	_check("autopilot: from %s to %s, the pawn aboard the whole way" % [PlanetSystem.name_of(from), PlanetSystem.name_of(best)],
+			not ship.autopilot and ship.ref == best and off_ship == 0 and refs.has(null),
+			"%.0f s, top %.0f m/s, through space %s, %d frame(s) off the ship of %d" % [secs, top, refs.has(null),
+			off_ship, frames])
+	var t1 := Time.get_ticks_msec()
+	while (ship.riding or pawn.ghost != null) and Time.get_ticks_msec() - t1 < 10000:
+		await _frames(1)
+	_check("arrived: at rest over it, the pawn off its ghost on its bricks", not ship.riding and pawn.ghost == null
+			and ship.holds(_pawn_real()), "%.1f s" % ((Time.get_ticks_msec() - t1) / 1000.0))
 
 
 # The belt's gate: a star's belt in open space, the universe turned round a turned

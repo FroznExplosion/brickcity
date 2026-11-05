@@ -12,6 +12,8 @@ extends RefCounted
 ## Between two ships' slots, metres along X: far past any ship's size, near enough
 ## to the space's origin that a float keeps millimetres.
 const SLOT := 2000.0
+## Whoever is on a ghost now (its body): doors look for them (BuildDoors.figures).
+const CREW := &"ghost_crew"
 
 var space := RID()
 var _slots := {}   ## station -> slot index
@@ -62,6 +64,7 @@ static func board(body: CharacterBody3D, st: SpaceStation) -> void:
 	var v := body.velocity - st.deck_velocity(g)
 	PhysicsServer3D.body_set_space(body.get_rid(), st.ghosts.space)
 	body.set_meta(&"ghosted", st)
+	body.add_to_group(CREW)
 	body.global_transform = r2g * xf
 	body.velocity = r2g.basis * v
 	body.reset_physics_interpolation()
@@ -75,9 +78,33 @@ static func get_off(body: CharacterBody3D, st: SpaceStation, world_space: RID) -
 	var v := g2r.basis * body.velocity + st.deck_velocity(g)
 	PhysicsServer3D.body_set_space(body.get_rid(), world_space)
 	body.remove_meta(&"ghosted")
+	body.remove_from_group(CREW)
 	body.global_transform = g2r * body.global_transform
 	body.velocity = v
 	body.reset_physics_interpolation()
+
+
+## One pawn's crossing, each frame (Docs/Hulls.md 7b): on a riding ship's ghost
+## while it stands in that ship, off it when the ship is at rest again or it has
+## left (out through a hole, onto another ship's ghost when docked). Every pawn
+## goes by it -- the player's (PlanetScene._ghost_tick) and the AI's
+## (PlanetSystem). Returns 1 boarded, -1 got off, 0 neither.
+static func tick(pawn: Pawn, ships: Array, world_space: RID) -> int:
+	var st: SpaceStation = pawn.ghost if pawn.ghost != null and is_instance_valid(pawn.ghost) else null
+	var out := 0
+	if st != null:
+		if st.riding and st.chunk >= 0 and st.ghost != null and st.ghost_holds(pawn.body.global_position):
+			return 0
+		get_off(pawn.body, st, world_space)
+		pawn.ghost = null
+		out = -1
+	var feet := pawn.feet()
+	for s in ships:
+		if s != st and s.riding and s.ghost != null and s.holds(feet):
+			board(pawn.body, s)
+			pawn.ghost = s
+			return 1
+	return out
 
 
 static func is_ghosted(n: Node) -> bool:

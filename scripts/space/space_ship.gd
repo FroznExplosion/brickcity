@@ -49,6 +49,13 @@ var rel := Transform3D()
 var fine := Vector3.ZERO
 var vel := Vector3.ZERO
 var piloted := false
+## The autopilot (Docs/Hulls.md 7b): with nobody at the controls, it flies on toward
+## `auto_target` (a PlanetBody of its system), nose on, at cruise, and lets go
+## AUTO_ARRIVE metres over it -- so its crew can walk its decks (its ghost) the
+## whole way, planet to space to planet. Off: an empty seat brakes to rest.
+var autopilot := false
+var auto_target: Node3D = null
+const AUTO_ARRIVE := 400.0
 var landed := false
 ## The pilot's hands: x strafe right, y up, z forward (-1..1); yaw left, pitch
 ## up, roll right (-1..1); boost.
@@ -192,9 +199,12 @@ func fly(ps, dt: float) -> void:
 		altitude = INF
 		for i in ps.bodies.size():
 			altitude = minf(altitude, (rel.origin - ps.sys.pos(i, ps.t)).length() - ps.bodies[i].data.radius)
-	if landed and not piloted:
+	var flown := piloted or autopilot
+	if landed and not flown:
 		vel = Vector3.ZERO
 		return
+	if autopilot and not piloted:
+		_auto_steer(ps)
 	if piloted:
 		var turn := steer * TURN * dt
 		rel.basis = (rel.basis * Basis(Vector3.UP, turn.x) * Basis(Vector3.RIGHT, turn.y)
@@ -208,7 +218,9 @@ func fly(ps, dt: float) -> void:
 	var dock: Array = ps.ship_match(self)
 	if dock[1] >= 0.0:
 		cap = minf(cap, maxf(float(dock[1]) * 0.25, 10.0))
-	var hands := thrust if piloted else Vector3.ZERO
+	var hands := thrust if piloted else (Vector3(0.0, 0.0, 1.0) if autopilot else Vector3.ZERO)
+	if autopilot and not piloted:
+		cap = maxf(cap, minf(altitude * CRUISE, CRUISE_MAX))
 	if hands.length_squared() > 1.0:
 		hands = hands.normalized()
 	var target: Vector3 = rel.basis * Vector3(hands.x, hands.y, -hands.z) * cap + dock[0]
@@ -237,7 +249,7 @@ func fly(ps, dt: float) -> void:
 			if into < 0.0:
 				vel -= n_up * into
 		# Low down, or with nobody at the controls, it levels itself, its heading kept.
-		if altitude < LEVEL_BELOW or not piloted:
+		if (altitude < LEVEL_BELOW or not piloted) and not autopilot:
 			var b := rel.basis.orthonormalized()
 			var level := (Basis(Quaternion(b.y.normalized(), n_up)) * b).orthonormalized()
 			rel.basis = b.slerp(level, clampf(dt * 1.5, 0.0, 1.0)).orthonormalized()
@@ -250,6 +262,59 @@ func fly(ps, dt: float) -> void:
 		next = rel.origin
 	fine = step - (next - rel.origin) if next == free else Vector3.ZERO
 	rel.origin = next
+
+
+## The autopilot's hands: the nose turned toward its target (ship's reference
+## frame), and off once it is there.
+func _auto_steer(ps) -> void:
+	if auto_target == null or not is_instance_valid(auto_target):
+		autopilot = false
+		return
+	var i: int = ps.index_of(auto_target)
+	if i < 0:
+		autopilot = false
+		return
+	var target: Vector3 = ps.sys.pos(i, ps.t)
+	var here := space_xform(ps).origin
+	if ref == auto_target and altitude < AUTO_ARRIVE:
+		autopilot = false
+		print("[ship] %s: autopilot -- arrived over %s" % [data.orbital_name, ps.name_of(auto_target)])
+		return
+	var to_space := target - here
+	var bx: Transform3D = ps.sys.xform(ps.index_of(ref), ps.t) if ref != null else Transform3D()
+	var dir := bx.basis.inverse() * to_space
+	var up := rel.origin.normalized() if ref != null else rel.basis.y
+	var d := dir.normalized()
+	# Over a world it is leaving: up and away first (its target may be behind the
+	# world), then on toward it.
+	if ref != null and ref != auto_target and d.dot(up) < 0.5:
+		d = (d + up * 1.5).normalized()
+	# Turned at TURN, as a pilot can, not snapped.
+	var want := -d
+	var z := rel.basis.z.normalized()
+	var turned := z.slerp(want, clampf(TURN * 0.016 / maxf(z.angle_to(want), 0.001), 0.0, 1.0))
+	aim(-turned, up)
+
+
+## Toward the body its nose points at most nearly (not the one it is over):
+## engage the autopilot. Null: none ahead.
+func autopilot_on(ps) -> Node3D:
+	var here := space_xform(ps)
+	var nose := -here.basis.z
+	var best: Node3D = null
+	var best_d := 0.5
+	for b in ps.bodies:
+		if b == ref:
+			continue
+		var d: float = nose.dot((ps.sys.pos(ps.index_of(b), ps.t) - here.origin).normalized())
+		if d > best_d:
+			best_d = d
+			best = b
+	auto_target = best
+	autopilot = best != null
+	if best != null:
+		print("[ship] %s: autopilot on, for %s" % [data.orbital_name, ps.name_of(best)])
+	return best
 
 
 ## Lowered while it is parked in its bricks on a planet, nobody at its controls;

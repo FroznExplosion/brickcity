@@ -35,6 +35,21 @@ const RESYNC := 0.5
 
 var world: BrickWorld
 var sources: Callable
+## On a vehicle (a ship, SpaceStation): its doors are its children, not the world's.
+## Set, each leaf hangs at `local_frame` * its place, under this node -- which is
+## the vehicle's child -- so it turns and flies with it, drawn with it every frame,
+## and is never placed from the chunk's transform (which a parked or flown ship
+## does not keep up to date). Unset (the city, the workshop): from the chunk.
+var follow_parent := false
+var local_frame := Transform3D()
+## Its ghost hull (Docs/Hulls.md 7b): each leaf has a twin box in `ghost_space` at
+## `ghost_frame` * its place, swung with it, so whoever walks the ghost meets a shut
+## door as a wall. RID() for none.
+var ghost_space := RID()
+var ghost_frame := Transform3D()
+## World points of figures the areas cannot see (crew on the ghost, whose bodies
+## are not in the world): a door opens for them too. Optional.
+var figures := Callable()
 ## key -> {chunk, sig, leaves: [{frame: Node3D, hinge, area, at, angle, open, lintel: Vector3i}]}
 var _builds := {}
 var _since := 0.0
@@ -128,8 +143,12 @@ func _physics_process(delta: float) -> void:
 		for lf: Dictionary in e.leaves:
 			var want := SWING if bool(lf.open) else 0.0
 			lf.angle = move_toward(float(lf.angle), want, SPEED * delta)
-			(lf.frame as Node3D).global_transform = xf * (lf.at as Transform3D)
+			if follow_parent:
+				(lf.frame as Node3D).transform = local_frame * (lf.at as Transform3D)
+			else:
+				(lf.frame as Node3D).global_transform = xf * (lf.at as Transform3D)
 			(lf.hinge as Node3D).transform = Transform3D(Basis(Vector3.UP, float(lf.angle)))
+			_ghost_place(lf)
 
 
 ## The builds looked at again: doors hung in builds that came, taken out of
@@ -166,6 +185,9 @@ func resync() -> void:
 			if frame.visible != up:
 				frame.visible = up
 				frame.process_mode = Node.PROCESS_MODE_INHERIT if up else Node.PROCESS_MODE_DISABLED
+				var gb: RID = lf.get("ghost", RID())
+				if gb.is_valid():
+					PhysicsServer3D.body_set_shape_disabled(gb, 0, not up)
 			lf.open = up and _near(lf)
 
 
@@ -194,7 +216,31 @@ func _drop(key) -> void:
 		return
 	for lf: Dictionary in _builds[key].leaves:
 		(lf.frame as Node).queue_free()
+		_ghost_free(lf)
 	_builds.erase(key)
+
+
+func _exit_tree() -> void:
+	for key in _builds:
+		for lf: Dictionary in _builds[key].leaves:
+			_ghost_free(lf)
+
+
+## A leaf's twin in the ghost, where it stands and how far it is swung.
+func _ghost_place(lf: Dictionary) -> void:
+	var gb: RID = lf.get("ghost", RID())
+	if not gb.is_valid():
+		return
+	PhysicsServer3D.body_set_state(gb, PhysicsServer3D.BODY_STATE_TRANSFORM,
+			ghost_frame * (lf.at as Transform3D) * Transform3D(Basis(Vector3.UP, float(lf.angle))))
+
+
+func _ghost_free(lf: Dictionary) -> void:
+	var gb: RID = lf.get("ghost", RID())
+	if gb.is_valid():
+		PhysicsServer3D.free_rid(gb)
+		PhysicsServer3D.free_rid(lf.ghost_shape)
+		lf.ghost = RID()
 
 
 ## A figure (any CharacterBody3D) near the door's middle.
@@ -203,6 +249,12 @@ func _near(lf: Dictionary) -> bool:
 	for b in area.get_overlapping_bodies():
 		if b is CharacterBody3D:
 			return true
+	if figures.is_valid():
+		var inv := (lf.frame as Node3D).global_transform.affine_inverse()
+		var box: AABB = lf.reach
+		for p: Vector3 in figures.call():
+			if box.has_point(inv * p):
+				return true
 	return false
 
 
@@ -225,7 +277,10 @@ func _hang(d: Dictionary, rebase: Vector3i, xf: Transform3D) -> Dictionary:
 	var at := Transform3D(Basis() if along_x else Basis(Vector3.UP, -PI * 0.5), base)
 	var frame := Node3D.new()
 	add_child(frame)
-	frame.global_transform = xf * at
+	if follow_parent:
+		frame.transform = local_frame * at
+	else:
+		frame.global_transform = xf * at
 	var hinge := Node3D.new()
 	frame.add_child(hinge)
 	var body := AnimatableBody3D.new()
@@ -261,5 +316,18 @@ func _hang(d: Dictionary, rebase: Vector3i, xf: Transform3D) -> Dictionary:
 	@warning_ignore("integer_division")
 	var mid := (size.x if along_x else size.z) / 2
 	var lintel := lo + Vector3i(mid if along_x else 0, size.y, 0 if along_x else mid)
-	return {"frame": frame, "hinge": hinge, "area": area, "at": at, "angle": 0.0, "open": false,
-			"lintel": lintel}
+	var out := {"frame": frame, "hinge": hinge, "area": area, "at": at, "angle": 0.0, "open": false,
+			"lintel": lintel, "reach": AABB(acs.position - ab.size * 0.5, ab.size)}
+	if ghost_space.is_valid():
+		var gb := PhysicsServer3D.body_create()
+		PhysicsServer3D.body_set_mode(gb, PhysicsServer3D.BODY_MODE_KINEMATIC)
+		PhysicsServer3D.body_set_collision_layer(gb, body.collision_layer)
+		PhysicsServer3D.body_set_collision_mask(gb, 0)
+		var gs := PhysicsServer3D.box_shape_create()
+		PhysicsServer3D.shape_set_data(gs, shape.size * 0.5)
+		PhysicsServer3D.body_add_shape(gb, gs, Transform3D(Basis(), cs.position))
+		PhysicsServer3D.body_set_space(gb, ghost_space)
+		out.ghost = gb
+		out.ghost_shape = gs
+		_ghost_place(out)
+	return out

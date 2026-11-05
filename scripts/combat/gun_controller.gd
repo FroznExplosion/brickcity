@@ -456,6 +456,21 @@ func hold_charge_progress() -> float:
 
 
 ## How the gun in hand fires (GunFireMode), empty for the old way.
+## Where it aims from, in the world: its aim node's place -- but for a gun held on a
+## ship's ghost hull (Docs/Hulls.md 7b: its holder's body is there, not in the
+## world), through that ship's ghost_to_real, so the round leaves from the real ship.
+func _aim_xf() -> Transform3D:
+	var n: Node = aim
+	while n != null:
+		if n.has_meta(&"ghosted"):
+			var st = n.get_meta(&"ghosted")
+			if st != null and is_instance_valid(st):
+				return st.ghost_to_real() * aim.global_transform
+			break
+		n = n.get_parent()
+	return aim.global_transform
+
+
 func fire_mode() -> Dictionary:
 	return _fm
 
@@ -560,8 +575,8 @@ func _fire_one(mult := 1.0) -> void:
 		_arc_down_aim(_stat(&"damage", 1.0) * damage_mult * mult, ARC_CASTER_JUMPS, ARC_CASTER_RANGE,
 				ARC_CASTER_FALLOFF, ARC_CASTER_SLOW)
 		return
-	var aim_basis := aim.global_transform.basis
-	var from := aim.global_position
+	var aim_basis := _aim_xf().basis
+	var from := _aim_xf().origin
 	var forward := -aim_basis.z
 	if assist != null and is_instance_valid(assist):
 		forward = assist.bend(from, forward)
@@ -896,11 +911,11 @@ func _fire_dart() -> bool:
 	ammo -= 1
 	_alt_cool = DART_COOLDOWN / maxf(alt_mult, 0.1)
 	_mark = {}
-	var b := aim.global_transform.basis
-	var dart := TrackingDart.launch(self, _effects_parent(), aim.global_position, -b.z)
+	var b := _aim_xf().basis
+	var dart := TrackingDart.launch(self, _effects_parent(), _aim_xf().origin, -b.z)
 	_mark = {"dart": dart, "target": null, "spot": &"", "left": 0.0}
 	if gun.is_inside_tree():
-		gun.play_shot_effects(aim.global_position - b.z * 2.0)
+		gun.play_shot_effects(_aim_xf().origin - b.z * 2.0)
 	return true
 
 
@@ -962,9 +977,9 @@ func _fire_charge() -> bool:
 		alt_refused.emit("Not enough ammo to charge")
 		return false
 	ammo -= cost
-	var b := aim.global_transform.basis
+	var b := _aim_xf().basis
 	var dir := -b.z
-	var from := aim.global_position
+	var from := _aim_xf().origin
 	var q := PhysicsRayQueryParameters3D.create(from, from + dir * range_m, collision_mask, exclude)
 	var hit := ShipRays.cast(get_world_3d().direct_space_state, q)
 	if hit.is_empty():
@@ -1010,9 +1025,9 @@ func _fire_arc() -> void:
 func _arc_down_aim(amount: float, jumps: int, jump_range: float, falloff: float, slow: float) -> int:
 	if aim == null or not aim.is_inside_tree():
 		return 0
-	var b := aim.global_transform.basis
+	var b := _aim_xf().basis
 	var dir := -b.z
-	var from := aim.global_position
+	var from := _aim_xf().origin
 	var q := PhysicsRayQueryParameters3D.create(from, from + dir * ARC_REACH, collision_mask, exclude)
 	var hit := ShipRays.cast(get_world_3d().direct_space_state, q)
 	var end: Vector3 = from + dir * ARC_REACH if hit.is_empty() else hit.position
@@ -1045,11 +1060,11 @@ func _fire_tube() -> bool:
 	if aim == null or not aim.is_inside_tree() or _alt_cool > 0.0:
 		return false
 	_alt_cool = TUBE_COOLDOWN / maxf(alt_mult, 0.1)
-	var b := aim.global_transform.basis
-	TubeGrenade.launch(self, _effects_parent(), aim.global_position - b.z * 0.5 - b.y * 0.1,
+	var b := _aim_xf().basis
+	TubeGrenade.launch(self, _effects_parent(), _aim_xf().origin - b.z * 0.5 - b.y * 0.1,
 			(-b.z + b.y * 0.08).normalized())
 	if gun.is_inside_tree():
-		gun.play_shot_effects(aim.global_position - b.z * 2.0)
+		gun.play_shot_effects(_aim_xf().origin - b.z * 2.0)
 	return true
 
 
@@ -1108,10 +1123,10 @@ func _flame_on(on: bool) -> void:
 	if _flame == null:
 		_flame = TorchFlame.make()
 		add_child(_flame)
-	var from := aim.global_position - aim.global_transform.basis.z * 0.6
+	var from := _aim_xf().origin - _aim_xf().basis.z * 0.6
 	if gun != null and gun.is_inside_tree() and gun.get_muzzle_point() != null:
 		from = gun.get_muzzle_point().global_position
-	_flame.burn(true, from, aim.global_transform.basis)
+	_flame.burn(true, from, _aim_xf().basis)
 
 
 ## One tick of the torch: everything alive in its cone, in clear line, not the holder's
@@ -1119,8 +1134,8 @@ func _flame_on(on: bool) -> void:
 func _burn_cone(seconds: float) -> int:
 	if aim == null or not aim.is_inside_tree():
 		return 0
-	var from := aim.global_position
-	var fwd := -aim.global_transform.basis.z
+	var from := _aim_xf().origin
+	var fwd := -_aim_xf().basis.z
 	var n := 0
 	for target in _living_near(from, TORCH_RANGE):
 		var at := (target as Node3D).global_position
@@ -1164,8 +1179,8 @@ func _ai_alt() -> bool:
 func _aimed_at_shield() -> bool:
 	if aim == null or not aim.is_inside_tree():
 		return false
-	var from := aim.global_position
-	var q := PhysicsRayQueryParameters3D.create(from, from - aim.global_transform.basis.z * range_m,
+	var from := _aim_xf().origin
+	var q := PhysicsRayQueryParameters3D.create(from, from - _aim_xf().basis.z * range_m,
 			collision_mask, exclude)
 	var hit := ShipRays.cast(get_world_3d().direct_space_state, q)
 	if hit.is_empty():
