@@ -208,24 +208,11 @@ func _ready() -> void:
 
 
 func _build_scenery() -> void:
-	var env := Environment.new()
-	env.background_mode = Environment.BG_SKY
-	var sky := Sky.new()
-	var sky_mat := ProceduralSkyMaterial.new()
-	sky_mat.sky_top_color = Color(0.36, 0.54, 0.78)
-	sky_mat.sky_horizon_color = Color(0.74, 0.80, 0.84)
-	sky_mat.ground_bottom_color = Color(0.28, 0.30, 0.28)
-	sky_mat.ground_horizon_color = Color(0.74, 0.80, 0.84)
-	sky.sky_material = sky_mat
-	env.sky = sky
-	env.ambient_light_source = Environment.AMBIENT_SOURCE_SKY
-	env.ambient_light_energy = DRY_AMBIENT
-	_env = env
-	var we := WorldEnvironment.new()
-	we.environment = env
-	add_child(we)
-
-	_sun = DirectionalLight3D.new()
+	# The shared light (Docs/Lighting.md): sky, ambient, AgX, the sun's size.
+	var rig := LightRig.new()
+	rig.build_day(self, Vector3(-30, -36, 0), 1.15, DRY_AMBIENT)
+	_env = rig.env
+	_sun = rig.sun
 	# 30 degrees, not 44.
 	#
 	# Measured against this terrain: at 44 degrees the sun clears everything
@@ -233,12 +220,9 @@ func _build_scenery() -> void:
 	# so the baked shadow was a no-op and the hills read as flat lighting.
 	# At 30 it is 8% of columns, at 12 it is 26%. A raking sun is also what
 	# makes a brick surface read as brick.
-	_sun.rotation_degrees = Vector3(-30, -36, 0)
-	_sun.light_energy = 1.15
-	# The GROUND bakes its own sun shadow, so it never casts — but the light
-	# still needs a shadow map for everything that stands ON the ground.
-	_sun.shadow_enabled = true
-	add_child(_sun)
+	# (The rig sets -30 above.) The GROUND bakes its own sun shadow, so it
+	# never casts — but the light still needs a shadow map for everything
+	# that stands ON the ground.
 
 	_camera = DebugCamera.new()
 	_camera.name = "DebugCamera"

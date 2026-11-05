@@ -11,6 +11,17 @@
 // Layer lines, toolpaths, the finish of each face: the same printer as the
 // bricks (see there; its uniforms are this material's).
 #include "res://shaders/print_surface.gdshaderinc"
+#ifdef GRID_LIGHT
+// The brick grid's light (grid_light.gdshaderinc) on the near tier's studs
+// (printed_grid.gdshader). A stud's VERTEX is its own; the grid is the
+// chunk's: world to chunk is the band's inverse, by rows (BrickGridLight).
+#include "res://shaders/grid_light.gdshaderinc"
+instance uniform vec4 grid_from_world_x = vec4(1.0, 0.0, 0.0, 0.0);
+instance uniform vec4 grid_from_world_y = vec4(0.0, 1.0, 0.0, 0.0);
+instance uniform vec4 grid_from_world_z = vec4(0.0, 0.0, 1.0, 0.0);
+varying vec3 v_grid_p;
+varying vec3 v_grid_n;
+#endif
 
 group_uniforms top_paths;
 // 0: a 45-degree raster, what a slicer does on a flat top by default.
@@ -64,6 +75,14 @@ varying flat int v_set;
 
 void vertex() {
     v_local = VERTEX;
+#ifdef GRID_LIGHT
+    if (grid_light.x >= 0.0) {
+        mat4 to_chunk = transpose(mat4(grid_from_world_x, grid_from_world_y,
+                grid_from_world_z, vec4(0.0, 0.0, 0.0, 1.0))) * MODEL_MATRIX;
+        v_grid_p = (to_chunk * vec4(VERTEX, 1.0)).xyz;
+        v_grid_n = normalize(mat3(to_chunk) * NORMAL);
+    }
+#endif
     v_colour = COLOR.rgb * tint.rgb;
     v_flat_normal = normalize(NORMAL);
     v_mat = brick_material_id(COLOR.a);
@@ -224,6 +243,9 @@ void fragment() {
     vec3 burn_glow = weather_burn_surface(albedo, out_rough,
             (INV_VIEW_MATRIX * vec4(VERTEX, 1.0)).xyz, TIME);
     emission += burn_glow;
+#ifdef GRID_LIGHT
+    AO = grid_light_shade(v_grid_p, v_grid_n, albedo, emission);
+#endif
     ALBEDO = albedo;
     ROUGHNESS = out_rough;
     SPECULAR = out_spec;

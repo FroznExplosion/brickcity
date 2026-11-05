@@ -167,6 +167,8 @@ func _apply_setting(id: StringName, value: Variant) -> void:
 			var city := _city()
 			if city != null and city.get("_sun") is DirectionalLight3D:
 				city.call("_setup_sun_shadows", city.get("_sun"))
+		&"gi_level":
+			LightRig.set_gi(int(value))
 		&"aa_mouse":
 			AimAssist.mouse_level = int(value)
 		&"aa_pad":
@@ -254,6 +256,13 @@ func _setting_defs() -> Array:
 			"label": "Sun Shadow Cascades", "default": 0, "choices": ["4 (Sharp)", "2 (Faster)"],
 			"hint": "How many slices the sun's shadow is drawn in. Two is faster; shadows past "
 			+ "about ten metres are softer."},
+		{"id": &"gi_level", "tab": "video", "type": MENU_SETTINGS.T_ENUM,
+			"label": "Global Illumination", "default": 0,
+			# SDFGI (LightRig.GI_SDFGI) is not offered: tried 2026-11-03, rooms
+			# went dark orange and windows black, for ~7 ms (Lighting.md 7).
+			"choices": ["Off", "Screen-Space (SSAO + SSIL)"],
+			"hint": "Light bounced off what is round you, from what is on screen: shadow where "
+			+ "bricks meet and a little colour off lit floors and walls. About 1-3 ms."},
 	] + AIM_ASSIST_DEFS + AIM_ASSIST_ADVANCED
 
 

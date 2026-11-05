@@ -25,9 +25,18 @@ var material: Material
 var draw_at := Vector3.ZERO
 ## Falling where nobody is: when it began to shrink away (-1: not).
 var dying := -1.0
-## Where it was drawn last, and when (usec): its speed, should it fall.
-var was := Vector3.ZERO
-var was_us := 0
+## Who stood on it when it left, and the body of its bricks they ride on (a
+## static body moved with it, its velocity its own, so a figure on it is
+## carried); none for a piece nobody was on.
+var riders: Array = []
+var body := RID()
+## Nothing pulls on it (Docs/RoomModules.md 7.8, 7.12): broken off, it has no
+## generator. Its box as a Gravity.Field with no centre, made once.
+var void_field: Gravity.Field
+## Its bricks (ChunkRecord.to_data) and who made it, whose world names its
+## parts: what a save keeps of it (PlanetSystem.drifts_to_save).
+var record := {}
+var source: Node3D
 
 
 ## Its place in its frame at clock `now`.

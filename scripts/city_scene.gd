@@ -236,6 +236,10 @@ var _shells := {}          ## building id -> MeshInstance3D
 var _shell_stale := {}
 var _shell_bodies := {}    ## building id -> RID
 var _brick_nodes := {}     ## building id -> MeshInstance3D
+## The light on the brick grid (Docs/Lighting.md 6.1): the nearest buildings
+## in bricks, shut rooms dark and blown walls letting the sky in.
+var grid_light := BrickGridLight.new()
+var _grid_at := 0
 ## chunk id -> the MultiMeshInstance3D drawing that chunk's interiors, parented
 ## to the building's own mesh so it inherits the chunk's transform.
 var _furniture := {}
@@ -758,6 +762,7 @@ var _build_mode := false
 var _fixture_mode := false
 var _dormant_mode := false
 var _windows_mode := false
+var _light_mode := false
 ## Set by the interiors pass. The streamers and the collision merge run on a
 ## timer and would rebuild the body underneath a measurement -- which they did,
 ## 30 merges and 28 un-merges deep into the first run of it.
@@ -1017,6 +1022,7 @@ func _ready() -> void:
 	_fixture_mode = "--fixture" in args
 	_dormant_mode = "--dormant" in args
 	_windows_mode = "--windows" in args
+	_light_mode = "--light" in args
 	# The scene's settings first, the command line over the top of them.
 	_big = big_shapes or "--big" in args
 	_wide = _big and not "--no-wide" in args and not combat_arena and not firefight
@@ -1290,6 +1296,8 @@ func _ready() -> void:
 		_run_dormant_pass()
 	elif _windows_mode:
 		_run_windows_pass()
+	elif _light_mode:
+		_run_light_pass()
 	elif _chamfer_mode:
 		_run_chamfer_pass()
 	elif _checkpoint_mode:
@@ -2967,6 +2975,8 @@ func _warm_shaders() -> void:
 		mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 		add_child(mi)
 		get_tree().create_timer(1.0).timeout.connect(mi.queue_free)
+	# A collapse's dust is GPU particles, whose process shader is its own.
+	CollapseDust.puff(self, Vector3(0.0, -2000.0, 0.0), 1.0)
 
 
 ## A recipe building's shell mesh. An undamaged one is the same mesh for every
@@ -4604,6 +4614,40 @@ func _sway_of(id: int) -> Vector3:
 	if Trees.is_tree(b):
 		return WeatherFx.sway_tree(h)
 	return WeatherFx.sway_building(h)
+
+
+## The grid's light on the buildings in bricks nearest the camera (as many as
+## it has layers), twice a second; between, a building lit again when its
+## bricks change (BrickGridLight.step).
+func _tend_grid_light() -> void:
+	grid_light.step()
+	var now := Time.get_ticks_msec()
+	if now - _grid_at < 500:
+		return
+	_grid_at = now
+	var eye := camera.global_position
+	var near: Array = []
+	for id in _brick_nodes:
+		var node := _brick_nodes[id] as Node3D
+		var b := registry.get_building(id)
+		if b == null or b.chunk < 0 or not is_instance_valid(node):
+			continue
+		var d := Vector3(world.get_chunk_dims(b.chunk)) * Vector3(BrickWorld.get_stud_metres(),
+				BrickWorld.get_plate_metres(), BrickWorld.get_stud_metres())
+		near.append([eye.distance_to(node.global_transform * (d * 0.5)), id])
+	near.sort_custom(func(x, y): return x[0] < y[0])
+	var keep := {}
+	for k in mini(near.size(), BrickGridLight.SLOTS):
+		keep[near[k][1]] = true
+	for id in _brick_nodes:
+		if not keep.has(id):
+			grid_light.release(id)
+	# Two new a pass: each is a flood and a layer's upload (~1 ms).
+	var added := 0
+	for id in keep:
+		if not grid_light.tracked(id) and added < 2:
+			grid_light.track(id, world, registry.get_building(id).chunk, _brick_nodes[id])
+			added += 1
 
 
 ## Hang a finished band mesh in its slot.
@@ -14779,6 +14823,7 @@ func _process(delta: float) -> void:
 		brick_near.uploads = _band_jobs.size() + islands.mesh_jobs() + _shadow_jobs.size() \
 				+ _glass_jobs.size() + (0 if _pane_job.is_empty() else 1)
 		brick_near.step(camera.global_position, zoom_in, -camera.global_basis.z)
+	_tend_grid_light()
 	if _spaces_view != null:
 		_follow_spaces_view()
 	if _sea != null:
@@ -18007,6 +18052,164 @@ func _physics_census(label: String) -> void:
 				% [names[i], r.moving, r.mbox, r.settled, r.sbox, r.bricks])
 
 
+## The grid's light in a city building (Docs/Lighting.md 6.1):
+##
+##     godot --path . res://scenes/city.tscn -- --light
+##
+## Building 0 in bricks; the camera at the darkest air at eye height in it.
+## The grid lights its bands and the near tier's chamfered meshes; the
+## picture is darker with it than without; a hole lets the sky in.
+## Pictures city_light_on / city_light_off.
+func _run_light_pass() -> void:
+	print("[light] the grid in a city building")
+	var b := registry.get_building(0)
+	var chunk := _promote(0)
+	var t0 := Time.get_ticks_msec()
+	while not grid_light.tracked(0) and Time.get_ticks_msec() - t0 < 20000:
+		await _ticks(1)
+	_gate_ok("building 0 is in bricks and lit by the grid", chunk >= 0 and grid_light.tracked(0))
+	var node := _brick_nodes.get(0) as Node3D
+	var dims := world.get_chunk_dims(chunk)
+	var stud := BrickWorld.get_stud_metres()
+	var plate := BrickWorld.get_plate_metres()
+	var p0 := int(1.0 / plate)
+	var p1 := int(2.0 / plate)
+	var best := 2.0
+	var at := Vector3.ZERO
+	var cell := Vector3i(-1, -1, -1)
+	for x in range(2, dims.x - 2):
+		for z in range(2, dims.z - 2):
+			var air := true
+			for y in range(p0, p1 + 1):
+				if world.block_at(chunk, world.get_chunk_origin(chunk) + Vector3i(x, y, z)) >= 0:
+					air = false
+					break
+			if not air:
+				continue
+			var w := node.global_transform * Vector3((x + 0.5) * stud, 1.6, (z + 0.5) * stud)
+			var g := grid_light.at(w).x
+			if g >= 0.0 and g < best:
+				best = g
+				at = w
+				cell = Vector3i(x, 0, z)
+	# A city tower has wide openings: half the sky is already a room in shade.
+	_gate_ok("somewhere inside is shaded from the sky", best < 0.5, "darkest %.2f" % best)
+	# Looking along the longer way across it.
+	var across := node.global_transform.basis * (Vector3(1, 0, 0) if cell.x < dims.x / 2 else Vector3(-1, 0, 0))
+	camera.global_position = at
+	camera.look_at(at + across * 5.0 - Vector3.UP * 0.4, Vector3.UP)
+	await _ticks(60)
+	var near_ok := 0
+	var near_all := 0
+	var studs_ok := 0
+	var studs_all := 0
+	for band in node.get_children():
+		for k in band.get_children():
+			var lit := false
+			if k is MeshInstance3D and k.name.begins_with("Chamfered"):
+				near_all += 1
+				lit = true
+			# Its studs as geometry (BrickNear.grid_stud_material), not the cards.
+			elif k is MultiMeshInstance3D and k.material_override == BrickNear.grid_stud_material():
+				studs_all += 1
+				lit = true
+			if not lit:
+				continue
+			var v: Variant = (k as GeometryInstance3D).get_instance_shader_parameter(&"grid_light")
+			if v is Vector4 and (v as Vector4).x >= 0.0:
+				if k is MultiMeshInstance3D:
+					studs_ok += 1
+				else:
+					near_ok += 1
+	# Headless, the near tier makes nothing.
+	if DisplayServer.get_name() != "headless":
+		_gate_ok("the near tier's bricks carry the grid", near_all > 0 and near_ok == near_all,
+				"%d of %d" % [near_ok, near_all])
+		_gate_ok("the near tier's studs carry the grid", studs_all > 0 and studs_ok == studs_all,
+				"%d of %d" % [studs_ok, studs_all])
+	if DisplayServer.get_name() != "headless":
+		await _ticks(10)
+		var on := _mean_of(get_viewport().get_texture().get_image())
+		await _save("city_light_on")
+		# The studs alone without it: the floor's studs bright on a dark floor.
+		BrickNear.grid_stud_material().set_shader_parameter("grid_sky_floor", 1.0)
+		await _ticks(4)
+		var no_studs := _mean_of(get_viewport().get_texture().get_image())
+		await _save("city_light_studs_off")
+		print("[light] mean of the picture: grid %.3f, studs not on it %.3f" % [on, no_studs])
+		_gate_ok("the grid darkens the studs", on < no_studs * 0.98, "%.3f against %.3f" % [on, no_studs])
+		brick_material.set_shader_parameter("grid_sky_floor", 1.0)
+		await _ticks(4)
+		var off := _mean_of(get_viewport().get_texture().get_image())
+		await _save("city_light_off")
+		brick_material.set_shader_parameter("grid_sky_floor", BrickGridLight.SKY_FLOOR)
+		BrickNear.grid_stud_material().set_shader_parameter("grid_sky_floor", BrickGridLight.SKY_FLOOR)
+		print("[light] mean of the picture: grid %.3f, none %.3f" % [on, off])
+		_gate_ok("the grid darkens the inside", on < off * 0.9, "%.3f against %.3f" % [on, off])
+	# A hole through an outer wall (x = 0 side or the far one), where it is
+	# whole for 4 studs across and 1-2 m up and a room is right behind it; the
+	# air just in reads at least three steps from the open.
+	var hole := {}
+	var by := Vector3i(-1, -1, -1)
+	var org := world.get_chunk_origin(chunk)
+	var eye_p := int(1.6 / plate)
+	for side in [0, dims.x - 1]:
+		var inward: int = 1 if side == 0 else -1
+		for z0 in range(2, dims.z - 6):
+			var ok := true
+			for z in range(z0, z0 + 4):
+				for y in range(p0, p1 + 1):
+					if world.block_at(chunk, org + Vector3i(side, y, z)) < 0:
+						ok = false
+			if not ok:
+				continue
+			# Through the wall: the first air in, at eye height, in the middle.
+			var x: int = side
+			while x != side + inward * 6 and world.block_at(chunk, org + Vector3i(x, eye_p, z0 + 2)) >= 0:
+				x += inward
+			if world.block_at(chunk, org + Vector3i(x, eye_p, z0 + 2)) >= 0:
+				continue
+			for xx in range(side, x, inward):
+				for z in range(z0, z0 + 4):
+					for y in range(p0, p1 + 1):
+						var bk := world.block_at(chunk, org + Vector3i(xx, y, z))
+						if bk >= 0:
+							hole[bk] = true
+			by = Vector3i(x, eye_p, z0 + 2)
+			break
+		if by.x >= 0:
+			break
+	var by_w := node.global_transform * Vector3((by.x + 0.5) * stud, 1.6, (by.z + 0.5) * stud)
+	var before := grid_light.at(by_w).x
+	world.kill_blocks(chunk, PackedInt32Array(hole.keys()))
+	grid_light.relight(0)
+	var after := grid_light.at(by_w).x
+	var steps := absi(by.x - (0 if by.x < dims.x / 2 else dims.x - 1)) + 2
+	_gate_ok("a hole in the wall lets the sky in", by.x >= 0 and after > before + 0.05
+			and after >= 1.0 - steps * BrickGridLight.SKY_STEP / 255.0 - 0.01,
+			"%d bricks out at %s; %.2f -> %.2f" % [hole.size(), by, before, after])
+	print("[light] grid: %d update(s), the last %.2f ms" % [grid_light.updates, grid_light.last_ms])
+	print("[light] city light pass: %d ok, %d FAIL" % [_gate_pass, _gate_fail])
+	get_tree().quit(1 if _gate_fail > 0 else 0)
+
+
+## Frames by the main loop's tick: a headless city draws none, so
+## frame_post_draw never comes (_frames waits for ever there).
+func _ticks(n: int) -> void:
+	for i in n:
+		await get_tree().process_frame
+
+
+static func _mean_of(img: Image) -> float:
+	var small := img.duplicate() as Image
+	small.resize(64, 36)
+	var sum := 0.0
+	for y in 36:
+		for x in 64:
+			sum += small.get_pixel(x, y).get_luminance()
+	return sum / (64.0 * 36.0)
+
+
 ## What a far building's windows look like: a shell, close up.
 ##
 ##     godot --path . --resolution 1280x720 res://scenes/city.tscn -- --windows
@@ -18932,32 +19135,14 @@ func _save(shot_name: String) -> void:
 # ---------------------------------------------------------------------------
 
 func _build_scenery() -> void:
-	var env := Environment.new()
-	env.background_mode = Environment.BG_SKY
-	var sky := Sky.new()
-	var sky_mat := ProceduralSkyMaterial.new()
-	sky_mat.sky_top_color = Color(0.38, 0.55, 0.78)
-	sky_mat.sky_horizon_color = Color(0.72, 0.78, 0.83)
-	sky_mat.ground_bottom_color = Color(0.30, 0.31, 0.29)
-	sky_mat.ground_horizon_color = Color(0.72, 0.78, 0.83)
-	sky.sky_material = sky_mat
-	env.sky = sky
-	env.ambient_light_source = Environment.AMBIENT_SOURCE_SKY
-	env.ambient_light_energy = 0.6
-	var we := WorldEnvironment.new()
-	we.environment = env
-	add_child(we)
-
-	var sun := DirectionalLight3D.new()
+	# The shared light (Docs/Lighting.md): sky, ambient, AgX, the sun's size.
 	# A raking sun in terrain mode: at 50 degrees nothing on the ground is in
 	# shadow, because the steepest slope the field makes is 42, and the baked
 	# shadow is a no-op that reads as flat lighting (Docs/Terrain.md §19.7).
-	sun.rotation_degrees = Vector3(-30 if _terrain_mode else -50, -35, 0)
-	sun.light_energy = 1.1
-	sun.shadow_enabled = true
-	_setup_sun_shadows(sun)
-	add_child(sun)
-	_sun = sun
+	var rig := LightRig.new()
+	rig.build_day(self, Vector3(-30 if _terrain_mode else -50, -35, 0), 1.1, 0.6)
+	_setup_sun_shadows(rig.sun)
+	_sun = rig.sun
 
 	if not _terrain_mode:
 		var ground := StaticBody3D.new()
@@ -18985,6 +19170,9 @@ func _build_scenery() -> void:
 	WeatherFx.register(brick_material)
 	for key in _shader_toggles:
 		brick_material.set_shader_parameter(key, _shader_toggles[key])
+	grid_light.use_layer = false
+	grid_light.bind(brick_material)
+	grid_light.bind(BrickNear.grid_stud_material())
 
 	camera = DebugCamera.new()
 	camera.name = "DebugCamera"
@@ -18994,7 +19182,7 @@ func _build_scenery() -> void:
 	camera.capture_mouse = not (_shot_mode or _stress_mode or _reach_mode or _far_mode or _tree_mode or _lod_mode
 			or _walk_mode or _build_mode or _fixture_mode or _dormant_mode
 			or _chamfer_mode
-			or _windows_mode)
+			or _windows_mode or _light_mode)
 	# A scripted pass puts the camera where it wants it and must not be able to
 	# fall out of the sky halfway through a capture.
 	camera.allow_walk = camera.capture_mouse

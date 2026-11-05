@@ -21,6 +21,7 @@ extends Node3D
 ##   -- --gate=trees: a tank knocks a tree down; a truck is stopped by one
 ##   (11.10, trees and vehicles).
 ##   -- --gate=squad: a squad on the AI's nav region round the town (11.8 N2)
+##   walks to the player round the curve, takes cover, fires.
 ##   -- --gate=garrison: a generated world's own AI and a town's squad (11.12 step 7)
 ##   -- --gate=save --stage=1|2|3: the universe saved and come back to, run by run
 ##   -- --gate=home: home's town: quiet at the spawn, a fight walked into, its waves
@@ -28,7 +29,7 @@ extends Node3D
 ##   -- --gate=seat: the ship smooth near a planet, out of its seat, the map, open space
 ##   -- --gate=hull: the generated ship (Docs/RoomModules.md 7.5): laid in bricks,
 ##   up its gangway and in by its airlock, flown from the bridge's seat, stood in
-##   walks to the player round the curve, takes cover, fires.
+##   its bridge, its rooms furnished (KitFurnish).
 ##   -- --gate=travel: a squad ordered 200 m out of the town on the nav net
 ##   (11.8 N4), across the regions' borders.
 ##   -- --gate=far: two squads fight on the far side of the town, in a region
@@ -87,11 +88,13 @@ var _travel_gate := false
 var _far_gate := false
 var _drive_gate := false
 var _system_gate := false
+var _light_gate := false
 var _ship_gate := false
 var _dock_gate := false
 var _worlds_gate := false
 var _jump_gate := false
 var _debris_gate := false
+var _adrift_gate := false
 var _falling_gate := false
 var _rocks_gate := false
 var map: GalaxyMap
@@ -106,6 +109,13 @@ var _mouse_steer := Vector2.ZERO
 ## The star system round the planet (Planets.md 11.12); null with --no-system.
 var system: PlanetSystem
 var sun: DirectionalLight3D
+## The light (Docs/Lighting.md): sun, fill, sky, exposure, ambient boxes.
+var light: LightRig
+## Ambient boxes made, by building site or module; when last looked for.
+var _box_of := {}
+var _boxes_at := 0
+## The light on the brick grid in the buildings here (Lighting.md 6.1).
+var grid_light := BrickGridLight.new()
 var sky_mat: ProceduralSkyMaterial
 var env: Environment
 var hud: Label
@@ -144,11 +154,13 @@ func _ready() -> void:
 	_far_gate = "--gate=far" in OS.get_cmdline_user_args()
 	_drive_gate = "--gate=drive" in OS.get_cmdline_user_args()
 	_system_gate = "--gate=system" in OS.get_cmdline_user_args()
+	_light_gate = "--gate=light" in OS.get_cmdline_user_args()
 	_ship_gate = "--gate=ship" in OS.get_cmdline_user_args()
 	_dock_gate = "--gate=dock" in OS.get_cmdline_user_args()
 	_worlds_gate = "--gate=worlds" in OS.get_cmdline_user_args()
 	_jump_gate = "--gate=jump" in OS.get_cmdline_user_args()
 	_debris_gate = "--gate=debris" in OS.get_cmdline_user_args()
+	_adrift_gate = "--gate=adrift" in OS.get_cmdline_user_args()
 	_falling_gate = "--gate=falling" in OS.get_cmdline_user_args()
 	_rocks_gate = "--gate=rocks" in OS.get_cmdline_user_args()
 	_garrison_gate = "--gate=garrison" in OS.get_cmdline_user_args()
@@ -158,7 +170,7 @@ func _ready() -> void:
 	_home_gate = "--gate=home" in OS.get_cmdline_user_args()
 	_save_gate = "--gate=save" in OS.get_cmdline_user_args()
 	WorldFrame.origin = Vector3.ZERO
-	_gate = _gate or _system_gate or _ship_gate or _dock_gate or _worlds_gate or _jump_gate or _debris_gate or _falling_gate or _rocks_gate or _garrison_gate or _seat_gate or _hull_gate or _belt_gate or _home_gate or _save_gate or _pawn_gate or _mech_gate or _tank_gate or _soldier_gate or _squad_gate or _travel_gate or _far_gate or _drive_gate or _trees_gate or _bricks_gate or _damage_gate or _fall_gate or _hits_gate or _topple_gate or _pieces_ai_gate or _storey_gate
+	_gate = _gate or _light_gate or _system_gate or _ship_gate or _dock_gate or _worlds_gate or _jump_gate or _debris_gate or _adrift_gate or _falling_gate or _rocks_gate or _garrison_gate or _seat_gate or _hull_gate or _belt_gate or _home_gate or _save_gate or _pawn_gate or _mech_gate or _tank_gate or _soldier_gate or _squad_gate or _travel_gate or _far_gate or _drive_gate or _trees_gate or _bricks_gate or _damage_gate or _fall_gate or _hits_gate or _topple_gate or _pieces_ai_gate or _storey_gate
 	data = PlanetData.new()
 	data.planet_name = "proto"
 	# Towns and landmarks: their pads go into the ground before it is built.
@@ -208,8 +220,7 @@ func _ready() -> void:
 	walker.camera.far = SEE_FAR
 	add_child(walker)
 	if system != null:
-		system.sun = sun
-		system.sun_energy = sun.light_energy
+		system.rig = light
 		system.observer = _anchor
 		system.eye = _eye
 	walker.camera.current = true
@@ -257,6 +268,8 @@ func _ready() -> void:
 			_run_far_gate()
 		elif _drive_gate:
 			_run_drive_gate()
+		elif _light_gate:
+			_run_light_gate()
 		elif _system_gate:
 			_run_system_gate()
 		elif _ship_gate:
@@ -269,6 +282,8 @@ func _ready() -> void:
 			_run_jump_gate()
 		elif _debris_gate:
 			_run_debris_gate()
+		elif _adrift_gate:
+			_run_adrift_gate()
 		elif _falling_gate:
 			_run_falling_gate()
 		elif _rocks_gate:
@@ -528,6 +543,12 @@ func _ship_key(key: Key) -> bool:
 	if key == KEY_M:
 		open_map()
 		return true
+	if key == KEY_G and system != null:
+		# The gravity generator of the ship or station the player is in (7.12).
+		var gen := system.generator_at(_anchor())
+		if gen != null:
+			gen.set_gravity(not gen.data.gravity_on)
+			return true
 	if key == KEY_E:
 		if piloting:
 			unboard()
@@ -683,14 +704,14 @@ func _build_system() -> void:
 	system.setup(sys, planet)
 	system.universe = uni
 	system.built[planet] = buildings
-	system.frozen = _gate and not (_system_gate or _dock_gate)
+	system.frozen = _gate and not (_system_gate or _dock_gate or _falling_gate)
 	# Set here, not before: home is not one of the generated worlds to settle.
 	data.towns.assign(town_dirs)
 	system.anchor_changed.connect(_on_anchor_changed)
 	system.woke.connect(_on_woke)
 	system.jumped.connect(_on_jumped)
 	# A ship parked 45 m behind the spawn (not in the other gates' way).
-	if not _gate or _ship_gate or _dock_gate or _jump_gate or _rocks_gate or _garrison_gate or _seat_gate or _belt_gate or _hull_gate or _save_gate:
+	if not _gate or _ship_gate or _dock_gate or _jump_gate or _rocks_gate or _garrison_gate or _seat_gate or _belt_gate or _hull_gate or _save_gate or _falling_gate:
 		var sd := OrbitalData.new()
 		sd.kind = "ship"
 		sd.orbital_name = "ship"
@@ -789,30 +810,78 @@ func _on_jumped(_index: int) -> void:
 
 
 func _build_light() -> void:
-	sun = DirectionalLight3D.new()
-	sun.light_energy = 1.1
-	sun.shadow_enabled = true
-	sun.directional_shadow_max_distance = 400.0
-	add_child(sun)
+	light = LightRig.new()
+	light.build(self, system != null)
+	sun = light.sun
+	env = light.env
+	sky_mat = light.sky_mat
 	sun.look_at_from_position(Vector3.ZERO, -planet.sun_dir, Vector3.UP if absf(planet.sun_dir.y) < 0.99 else Vector3.FORWARD)
-	env = Environment.new()
-	env.background_mode = Environment.BG_SKY
-	var sky := Sky.new()
-	sky_mat = ProceduralSkyMaterial.new()
-	sky_mat.sky_top_color = Color(0.36, 0.53, 0.78)
-	sky_mat.sky_horizon_color = Color(0.70, 0.77, 0.84)
-	sky_mat.ground_bottom_color = Color(0.25, 0.27, 0.24)
-	sky_mat.ground_horizon_color = Color(0.70, 0.77, 0.84)
-	if system != null:
-		# The star is the sun's disc; the sky's own would not sit on it.
-		sky_mat.sun_angle_max = 0.5
-	sky.sky_material = sky_mat
-	env.sky = sky
-	env.ambient_light_source = Environment.AMBIENT_SOURCE_SKY
-	env.ambient_light_energy = 0.6
-	var we := WorldEnvironment.new()
-	we.environment = env
-	add_child(we)
+
+
+## A ship or station this near the camera is on the brick grid (its lamps).
+const SHIP_GRID_NEAR := 300.0
+
+
+## Ambient boxes (Docs/Lighting.md 6.2), twice a second: one inside each
+## building laid in bricks here, and in each station or ship module laid; a
+## toppled building's goes.
+func _ambient_boxes() -> void:
+	var now := Time.get_ticks_msec()
+	if now - _boxes_at < 500:
+		return
+	_boxes_at = now
+	for key in _box_of.keys():
+		var p = _box_of[key]
+		if not is_instance_valid(p):
+			_box_of.erase(key)
+	var pb := _buildings_here()
+	if pb != null:
+		var stud := BrickPalette.STUD_M
+		if not pb.brick_material.has_meta(&"grid_light"):
+			pb.brick_material.set_meta(&"grid_light", true)
+			grid_light.bind(pb.brick_material)
+		for i in pb.sites.size():
+			var st = pb.sites[i]
+			var key := "%d:%d" % [pb.get_instance_id(), i]
+			if st.toppled or not st.bricked or st.brick_node == null:
+				grid_light.release(key)
+			elif not grid_light.tracked(key):
+				grid_light.track(key, pb.bricks, st.chunk, st.brick_node)
+			if st.toppled:
+				if _box_of.has(key):
+					(_box_of[key] as Node).queue_free()
+					_box_of.erase(key)
+				continue
+			if st.bricked and st.brick_node != null and not _box_of.has(key):
+				_box_of[key] = light.add_box(st.brick_node, Vector3.ZERO,
+						Vector3(st.fx * stud, st.height, st.fz * stud), "room")
+	if system == null:
+		return
+	var viewer := get_viewport().get_camera_3d()
+	var cam_at := viewer.global_position if viewer != null else Vector3.ZERO
+	var mods: Array = []
+	mods.append_array(system.stations)
+	mods.append_array(system.ships)
+	for m in mods:
+		var st := m as SpaceStation
+		if st == null or not is_instance_valid(st) or st.chunk < 0:
+			continue
+		var bn := st.get_node_or_null("Bricks") as Node3D
+		var key := "m%d" % st.get_instance_id()
+		# Its Glow bricks light it (the grid's lamps, BrickGridLight); its
+		# sky is left alone: the cabin box stands for its own lights.
+		if bn != null and st.brick_material != null and bn.global_position.distance_to(cam_at) < SHIP_GRID_NEAR:
+			if not st.brick_material.has_meta(&"grid_light"):
+				st.brick_material.set_meta(&"grid_light", true)
+				grid_light.bind(st.brick_material, false)
+			if not grid_light.tracked(key):
+				grid_light.track(key, st.bricks, st.chunk, bn)
+		else:
+			grid_light.release(key)
+		if bn != null and not _box_of.has(key):
+			var stud := BrickWorld.get_stud_metres()
+			_box_of[key] = light.add_box(bn, Vector3.ZERO,
+					Vector3(st.data.fx * stud, st.height, st.data.fz * stud), "cabin")
 
 
 func _build_hud() -> void:
@@ -923,32 +992,26 @@ func _process(_delta: float) -> void:
 	# The sky goes to black as the air thins (to ~the impostor's band).
 	var air := 1.0 - clampf(alt / (body.data.radius * 0.12), 0.0, 1.0) if body.data.has_air else 0.0
 	# Day and night (11.12): the sky by the sun's height, with twilight; the
-	# ambient down to starlight.
+	# ambient down to starlight. Its own air's colour, tamed (Docs/Lighting.md 3).
 	var day := 1.0
+	var sun_h := 1.0
 	if system != null:
 		day = smoothstep(-0.18, 0.12, system.sun_height) if air > 0.0 else system.sunlight
-	var night := Color(0.03, 0.04, 0.08)
-	var dusk := (1.0 - absf(day * 2.0 - 1.0)) * 0.5
-	# Its own air's colour, against the home planet's.
-	var ac := body.data.atmosphere_color
-	var cast := Color(ac.r / 0.45, ac.g / 0.65, ac.b)
-	var haze := (Color(0.70, 0.77, 0.84) * cast).lerp(Color(0.85, 0.45, 0.25), dusk).lerp(night, 1.0 - day) * air
-	sky_mat.sky_top_color = (Color(0.36, 0.53, 0.78) * cast).lerp(night, 1.0 - day) * air
-	sky_mat.sky_horizon_color = haze
-	# Under the horizon only a sliver of sky ever shows past the ground: haze.
-	sky_mat.ground_horizon_color = haze
-	sky_mat.ground_bottom_color = Color(0.62, 0.68, 0.74).lerp(night, 1.0 - day) * air
-	sky_mat.sky_energy_multiplier = maxf(air * maxf(day, 0.1), 0.02)
-	env.ambient_light_energy = 0.04 + (0.11 + 0.45 * air) * day
-	# The sky's up is the local up: a procedural sky's horizon is its own XZ
-	# plane, and the world's Y is the local up only at the pole.
-	env.sky_rotation = Quaternion(Vector3.UP, Gravity.up_at(cam_pos)).get_euler()
+		sun_h = system.sun_height
+	var viewer := get_viewport().get_camera_3d()
+	grid_light.step()
+	var open := grid_light.at(viewer.global_position if viewer != null else cam_pos).x
+	light.room_open = open if open < 0.0 or light.room_open < 0.0 else lerpf(light.room_open, open,
+			clampf(get_process_delta_time() * 4.0, 0.0, 1.0))
+	light.set_sky(day, air, body.data.atmosphere_color, sun_h, Gravity.up_at(cam_pos))
+	_ambient_boxes()
+	light.expose(viewer.global_position if viewer != null else cam_pos, get_process_delta_time())
 	# Hold the walker until the ground under it has streamed (and has a
 	# collider) and the trees' cards are baked; then, unless this is the
 	# walker's own gate, the pawn stands on it.
 	if walker.frozen and not piloting and pawn == null and trees.prebaked and _ground_hit(walker.global_position) != Vector3.INF:
 		walker.frozen = false
-		if not _gate or _pawn_gate or _mech_gate or _tank_gate or _soldier_gate or _squad_gate or _travel_gate or _far_gate or _drive_gate or _trees_gate or _bricks_gate or _damage_gate or _fall_gate or _hits_gate or _topple_gate or _pieces_ai_gate or _storey_gate or _garrison_gate or _seat_gate or _home_gate or _hull_gate or _save_gate:
+		if not _gate or _pawn_gate or _mech_gate or _tank_gate or _soldier_gate or _squad_gate or _travel_gate or _far_gate or _drive_gate or _trees_gate or _bricks_gate or _damage_gate or _fall_gate or _hits_gate or _topple_gate or _pieces_ai_gate or _storey_gate or _garrison_gate or _seat_gate or _home_gate or _hull_gate or _save_gate or _light_gate:
 			_spawn_player(_ground_hit(walker.global_position), -walker.global_transform.basis.z)
 			if saver != null:
 				saver.resume()
@@ -970,6 +1033,13 @@ func _process(_delta: float) -> void:
 				Engine.get_frames_per_second(), walker.viewer.view_distance, PlanetFrame.shifts,
 				PlanetFrame.last_us / 1000.0, here,
 				"(waiting for ground)" if walker.frozen and not piloting else ""]
+		var gen := system.generator_at(_anchor()) if system != null else null
+		if gen != null and not piloting:
+			hud.text += "
+GRAVITY %s  (G turns it %s)" % ["on" if gen.pulls() else "off", "off" if gen.data.gravity_on else "on"]
+		elif system != null and not piloting and not Gravity.pulls_at(_anchor()):
+			hud.text += "
+NOTHING PULLS  (WASD, Space/Ctrl: the suit's thrust)"
 		if piloting:
 			hud.text += "\nSHIP  %.0f m/s  %.0f m over the ground  (E leaves the seat; WASD, Space/Ctrl, mouse, Z/C roll, Shift cruise; M galaxy map)" % [
 					ship.vel.length(), ship.altitude]
@@ -1014,6 +1084,18 @@ func _check(what: String, cond: bool, detail := "") -> void:
 	else:
 		_fail += 1
 	print("  %s %s%s" % ["ok  " if cond else "FAIL", what, (" -- " + detail) if detail else ""])
+
+
+## The mean luminance of the picture on screen now (windowed only).
+func _screen_mean() -> float:
+	await RenderingServer.frame_post_draw
+	var img := get_viewport().get_texture().get_image()
+	img.resize(64, 36, Image.INTERPOLATE_BILINEAR)
+	var sum := 0.0
+	for y in 36:
+		for x in 64:
+			sum += img.get_pixel(x, y).get_luminance()
+	return sum / (64.0 * 36.0)
 
 
 func _frames(n: int) -> void:
@@ -2049,6 +2131,342 @@ func _run_far_gate() -> void:
 	get_tree().quit(0 if _fail == 0 else 1)
 
 
+# The light's gate (Docs/Lighting.md 8): the colour rules on every body of the
+# system, the sun's size and brightness by distance, sunset, the fill at night,
+# a moon's shadow on its planet, and the ambient boxes in the town's buildings;
+# pictures at noon, dawn, night, inside and outside a building.
+
+func _run_light_gate() -> void:
+	var t0 := Time.get_ticks_msec()
+	while (walker.frozen or pawn == null) and Time.get_ticks_msec() - t0 < 60000:
+		await _frames(1)
+	await get_tree().create_timer(1.0).timeout
+	# 1. Colour: no world's air paints the ambient; the ground's tint small.
+	var worst := 0.0
+	var worst_tint := 0.0
+	for b in system.bodies:
+		var c := LightRig.sky_cast(b.data.atmosphere_color)
+		worst = maxf(worst, maxf(absf(c.r - 1.0), maxf(absf(c.g - 1.0), absf(c.b - 1.0))))
+		var t := b.data.tint
+		worst_tint = maxf(worst_tint, maxf(1.0 - t.r, maxf(1.0 - t.g, 1.0 - t.b)))
+	_check("every body's sky cast within %.2f of none" % LightRig.SKY_CAST_DEV, worst <= LightRig.SKY_CAST_DEV + 0.001, "worst %.3f" % worst)
+	var red := LightRig.sky_cast(Color(1.0, 0.3, 0.3))
+	_check("a red air's cast held (was 2.2, 0.46, 0.3)", red.r <= 1.0 + LightRig.SKY_CAST_DEV + 0.001 and red.b >= 1.0 - LightRig.SKY_CAST_DEV - 0.001,
+			"%.2f %.2f %.2f" % [red.r, red.g, red.b])
+	_check("every body's ground tint small (under 0.09 a channel)", worst_tint < 0.09, "worst %.3f" % worst_tint)
+	_check("the ambient mostly neutral", env.ambient_light_sky_contribution <= LightRig.AMBIENT_SKY + 0.001 and env.ambient_light_color.s < 0.05,
+			"sky %.2f, neutral's saturation %.3f" % [env.ambient_light_sky_contribution, env.ambient_light_color.s])
+	_check("AgX; daylight's exposure as is", env.tonemap_mode == Environment.TONE_MAPPER_AGX and absf(light.exposure - 1.0) < 0.05,
+			"exposure %.2f, light %.2f" % [light.exposure, light.light_here])
+	_check("the noon sun near white (saturation < 0.2)", sun.light_color.s < 0.2, "%s" % sun.light_color)
+	# 2. Distance: the sun's size and brightness from where the camera is.
+	var ds := (system.star.global_position - _eye()).length()
+	var want := minf(rad_to_deg(2.0 * asin(system.sys.star_radius / ds)), LightRig.SUN_ANGLE_MAX)
+	_check("the sun's size is the star's from here", absf(light.sun_angle - want) < LightRig.ANGLE_STEP + 0.001
+			and is_equal_approx(sun.light_angular_distance, light.sun_angle), "%.2f deg against %.2f" % [light.sun_angle, want])
+	_check("home's brightness is home's", absf(light.gain - 1.0) < 0.05, "gain %.3f" % light.gain)
+	_check("brighter near a star, dimmer far, held", LightRig.sun_gain(4.0) > 1.4 and LightRig.sun_gain(0.25) < 0.7
+			and LightRig.sun_gain(100.0) == LightRig.GAIN_MAX and LightRig.sun_gain(0.0001) == LightRig.GAIN_MIN)
+	var low := LightRig.sunlight_colour(system.sys.star_color, 0.03, 1.0)
+	var high := LightRig.sunlight_colour(system.sys.star_color, 1.0, 1.0)
+	_check("a low sun through air is redder", low.b / low.r < 0.6 * high.b / high.r, "b/r %.2f against %.2f" % [low.b / low.r, high.b / high.r])
+	_check("no air, no sunset", LightRig.sunlight_colour(system.sys.star_color, 0.03, 0.0) == LightRig.sunlight_colour(system.sys.star_color, 1.0, 0.0))
+	# 2a. A ring's shadow (Lighting.md 2a): a point a km sunward-under the
+	# ring's thickest band loses most of the sun; one off its plane's shadow
+	# none; the far look and the disc are told.
+	# A ring of its own here, 20-60 km round a point 100 km off.
+	var rg := RockField.new()
+	rg.setup(20000.0, 60000.0, 7, Color(0.6, 0.55, 0.5))
+	add_child(rg)
+	rg.global_position = _eye() + Vector3(100000.0, 0.0, 0.0)
+	var disc_parent := Node3D.new()
+	add_child(disc_parent)
+	rg.build_far(disc_parent)
+	var sdw := Vector3(0.3, 0.8, 0.2).normalized()
+	var best_r := 0.0
+	var best_a := 0.0
+	for k in 200:
+		var rr := lerpf(rg.inner / rg.outer, 1.0, k / 200.0)
+		var a := RockField.alpha_at(rr, rg.inner / rg.outer, rg.far_density, rg.grain())
+		if a > best_a:
+			best_a = a
+			best_r = rr
+	var on_ring := rg.global_position + Vector3.RIGHT * best_r * rg.outer
+	var l_under := rg.light_at(on_ring - sdw * 1000.0, sdw)
+	var l_over := rg.light_at(on_ring + sdw * 1000.0, sdw)
+	var l_hole := rg.light_at(rg.global_position - sdw * 1000.0, sdw)
+	_check("a ring's shadow: under its thickest band the sun mostly gone; over it, and through its middle, all there",
+			l_under < 1.0 - 0.6 * best_a * RockField.SHADE and is_equal_approx(l_over, 1.0) and is_equal_approx(l_hole, 1.0),
+			"%.2f under (cover %.2f), %.2f over, %.2f through the middle" % [l_under, best_a, l_over, l_hole])
+	rg.queue_free()
+	disc_parent.queue_free()
+	await _shot("light_gate_noon")
+	# 3. Night: the fill from the brightest body over the horizon.
+	var day := data.day
+	system.t += day * 0.5
+	await get_tree().create_timer(2.5).timeout
+	_check("midnight: the sun off", sun.light_energy < 0.01)
+	_check("the night opens the eye, but only so far", light.exposure > 1.3 and light.exposure <= LightRig.EXPOSE_MAX,
+			"exposure %.2f, light %.3f" % [light.exposure, light.light_here])
+	print("[light] night fill: %s, energy %.3f, shadows %s" % [light.fill_from.data.planet_name if light.fill_from != null else "none",
+			light.fill_energy, light.fill.shadow_enabled])
+	if light.fill.visible:
+		_check("a fill this bright with the sun gone casts shadows", light.fill.shadow_enabled == (light.fill_energy > LightRig.FILL_SHADOW_AT))
+	await _shot("light_gate_night")
+	system.t += day * 0.25
+	await get_tree().create_timer(2.5).timeout
+	_check("dawn: the sunlight redder than noon's", sun.light_color.b / sun.light_color.r < high.b / high.r * 0.9,
+			"b/r %.2f" % (sun.light_color.b / sun.light_color.r))
+	await _shot("light_gate_dawn")
+	system.t += day * 0.25
+	await _frames(4)
+	# A body between a planet and the star shadows its far look.
+	var moon_i := -1
+	for i in system.sys.bodies.size():
+		if system.sys.bodies[i].parent >= 0 and moon_i < 0:
+			moon_i = i
+	if moon_i >= 0:
+		var m := system.bodies[moon_i]
+		var pl := system.bodies[system.sys.bodies[moon_i].parent]
+		var to_s := (system.star.global_position - pl.global_position).normalized()
+		m.global_position = pl.global_position + to_s * pl.data.radius * 3.0
+		system._shadows_on(pl)
+		_check("a moon between its planet and the star shadows the planet's far look", pl.shadows_now > 0, "%d" % pl.shadows_now)
+		m.global_position = pl.global_position - to_s * pl.data.radius * 3.0
+		system._shadows_on(pl)
+		_check("behind it, none", pl.shadows_now == 0, "%d" % pl.shadows_now)
+		var found := -1.0
+		var tt := system.t
+		for k in 800:
+			system.t = tt + system.sys.bodies[moon_i].orbit_period * k / 800.0
+			system._place()
+			if pl.shadows_now > 0:
+				found = system.t - tt
+				break
+		system.t = tt
+		system._place()
+		print("[light] %s's shadow first on %s %.0f s on (of an orbit of %.0f s)" % [m.data.planet_name, pl.data.planet_name,
+				found, system.sys.bodies[moon_i].orbit_period])
+	# 4. Ambient boxes in the town's buildings.
+	var pb := _buildings_here()
+	t0 = Time.get_ticks_msec()
+	while pb.bricked_count == 0 and Time.get_ticks_msec() - t0 < 30000:
+		await _frames(1)
+	await get_tree().create_timer(1.0).timeout
+	_check("a box in every building laid in bricks", light.box_count() >= pb.bricked_count and pb.bricked_count > 0,
+			"%d boxes, %d bricked" % [light.box_count(), pb.bricked_count])
+	var near := -1
+	var best := INF
+	for i in pb.sites.size():
+		var s = pb.sites[i]
+		if s.bricked and s.brick_node != null:
+			var d: float = (s.brick_node.global_position - _eye()).length()
+			if d < best:
+				best = d
+				near = i
+	if near >= 0:
+		var s = pb.sites[near]
+		var stud := BrickPalette.STUD_M
+		var probe: ReflectionProbe = null
+		for c in s.brick_node.get_children():
+			if c is ReflectionProbe:
+				probe = c
+		# Inside: the darkest air at eye height the grid knows (6.1) -- a
+		# tower's open windows light the rooms along its walls.
+		var inside: Vector3 = s.brick_node.global_transform * Vector3(s.fx * stud * 0.5, 1.6, s.fz * stud * 0.5)
+		var darkest := 2.0
+		var wt0 := TowerRecipe.WALL_THICK
+		var py0 := int(1.0 / BrickWorld.get_plate_metres())
+		var py1 := int(2.0 / BrickWorld.get_plate_metres())
+		for x in range(wt0 + 1, s.fx - wt0 - 1):
+			for z in range(wt0 + 1, s.fz - wt0 - 1):
+				var air := true
+				for y in range(py0, py1 + 1):
+					if pb.bricks.block_at(s.chunk, Vector3i(x, y, z)) >= 0:
+						air = false
+						break
+				if not air:
+					continue
+				var w: Vector3 = s.brick_node.global_transform * Vector3((x + 0.5) * stud, 1.6, (z + 0.5) * stud)
+				var g := grid_light.at(w).x
+				if g >= 0.0 and g < darkest:
+					darkest = g
+					inside = w
+		var outside: Vector3 = s.brick_node.global_transform * Vector3(-1.0, 1.6, s.fz * stud * 0.5)
+		var wall: Vector3 = s.brick_node.global_transform * Vector3(0.0, 1.6, s.fz * stud * 0.5)
+		var holds := func(pt: Vector3) -> bool:
+			var l := probe.global_transform.affine_inverse() * pt
+			return absf(l.x) <= probe.size.x * 0.5 and absf(l.y) <= probe.size.y * 0.5 and absf(l.z) <= probe.size.z * 0.5
+		_check("its box holds the inside, not the outside or the wall's face", probe != null and holds.call(inside)
+				and not holds.call(outside) and not holds.call(wall))
+		_check("inside darker than outside by day", probe != null and probe.ambient_color_energy * probe.ambient_color.get_luminance()
+				< env.ambient_light_energy * env.ambient_light_color.get_luminance() * 0.7, "%.3f against %.3f" % [
+				probe.ambient_color_energy * probe.ambient_color.get_luminance(), env.ambient_light_energy * env.ambient_light_color.get_luminance()])
+		var c := Camera3D.new()
+		c.far = PlanetSystem.SEE_FAR
+		c.fov = 70.0
+		add_child(c)
+		var up := Gravity.up_at(inside)
+		c.look_at_from_position(inside, s.brick_node.global_transform * Vector3(s.fx * stud, 1.4, s.fz * stud * 0.5), up)
+		c.current = true
+		await get_tree().create_timer(2.5).timeout
+		_check("inside, the eye opens", light.inside and light.exposure > 1.2, "exposure %.2f, light %.3f" % [light.exposure, light.light_here])
+		await _shot("light_gate_inside")
+		if DisplayServer.get_name() != "headless":
+			# What the picture shows: the box and the eye, each against without.
+			light.hold_exposure = true
+			var with_all := await _screen_mean()
+			pb.brick_material.set_shader_parameter("grid_sky_floor", 1.0)
+			await _frames(3)
+			var no_box := await _screen_mean()
+			pb.brick_material.set_shader_parameter("grid_sky_floor", BrickGridLight.SKY_FLOOR)
+			light.attributes.exposure_multiplier = 1.0
+			await _frames(3)
+			var no_eye := await _screen_mean()
+			light.attributes.exposure_multiplier = light.exposure
+			light.hold_exposure = false
+			print("[light] inside, mean of the picture: %.3f; the grid off %.3f; the eye shut %.3f" % [with_all, no_box, no_eye])
+			_check("the grid darkens the inside", with_all < no_box * 0.9, "%.3f against %.3f" % [with_all, no_box])
+			_check("the eye brightens it again (AgX squeezes it)", with_all > no_eye * 1.1, "%.3f against %.3f" % [with_all, no_eye])
+		var from: Vector3 = outside + (outside - inside).normalized() * 12.0 + up * 4.0
+		c.look_at_from_position(from, inside, up)
+		await get_tree().create_timer(2.5).timeout
+		_check("out again, daylight's", not light.inside and light.exposure < 1.1, "exposure %.2f" % light.exposure)
+		await _shot("light_gate_outside")
+		# 6.1: the grid. Its bricks are lit by it, not by the box; inside is
+		# shut off from the sky, outside is open; a hole in the wall lets the
+		# sky in.
+		var key := "%d:%d" % [pb.get_instance_id(), near]
+		grid_light.step()
+		var band: GeometryInstance3D = null
+		for ch in s.brick_node.get_children():
+			if ch is MeshInstance3D:
+				band = ch
+		_check("the grid lights its bricks, the box does not", grid_light.tracked(key) and band != null
+				and band.layers == BrickGridLight.RENDER_LAYER and (band.get_instance_shader_parameter(&"grid_light") as Vector4).x >= 0.0
+				and probe.reflection_mask & BrickGridLight.RENDER_LAYER == 0)
+		var in_sky := grid_light.at(inside).x
+		_check("inside, the grid's sky is low; outside there is no grid", in_sky >= 0.0 and in_sky < 0.3
+				and grid_light.at(outside).x < 0.0, "inside %.2f" % in_sky)
+		print("[light] grid: %d update(s), the last %.2f ms" % [grid_light.updates, grid_light.last_ms])
+		_check("lighting a building takes under 8 ms", grid_light.last_ms < 8.0, "%.2f ms" % grid_light.last_ms)
+		# A hole through the +X wall, three courses tall and four studs wide,
+		# at eye height, where a room is right behind it: the air just in from
+		# it is three steps from the open (two of wall, one in).
+		var wt := TowerRecipe.WALL_THICK
+		var y0 := int(1.0 / BrickWorld.get_plate_metres())
+		var ids := {}
+		var hz := -1
+		var eye_plate := int(1.6 / BrickWorld.get_plate_metres())
+		# Where the wall is whole and a room is right behind it.
+		for z0 in range(wt + 1, s.fz - wt - 5):
+			var solid := true
+			for z in range(z0, z0 + 4):
+				for y in range(y0, y0 + 9):
+					if pb.bricks.block_at(s.chunk, Vector3i(s.fx - 1, y, z)) < 0:
+						solid = false
+				if pb.bricks.block_at(s.chunk, Vector3i(s.fx - wt - 1, eye_plate, z)) >= 0:
+					solid = false
+			if solid:
+				hz = z0
+				break
+		for x in range(s.fx - wt, s.fx):
+			for z in range(hz, hz + 4):
+				for y in range(y0, y0 + 9):
+					var b := pb.bricks.block_at(s.chunk, Vector3i(x, y, z))
+					if b >= 0:
+						ids[b] = true
+		var hx: int = s.fx - wt - 1
+		var by_hole: Vector3 = s.brick_node.global_transform * Vector3((hx + 0.5) * stud, 1.6, (hz + 2.5) * stud)
+		var before := grid_light.at(by_hole).x
+		pb.bricks.kill_blocks(s.chunk, PackedInt32Array(ids.keys()))
+		var n0 := grid_light.updates
+		grid_light.relight(key)
+		var after := grid_light.at(by_hole).x
+		_check("a hole in the wall lets the sky in", hz >= 0 and grid_light.updates > n0 and after > before + 0.05
+				and after >= 1.0 - 3.0 * BrickGridLight.SKY_STEP / 255.0 - 0.01,
+				"%d bricks out at z %d; %.2f -> %.2f" % [ids.size(), hz, before, after])
+		# A lamp: the floor under `inside` made Glow lights the room round it.
+		var il: Vector3 = s.brick_node.global_transform.affine_inverse() * inside
+		var floor_b := -1
+		for y in range(int(il.y / BrickWorld.get_plate_metres()), -1, -1):
+			floor_b = pb.bricks.block_at(s.chunk, Vector3i(int(il.x / stud), y, int(il.z / stud)))
+			if floor_b >= 0:
+				break
+		var lamp0 := grid_light.at(inside).y
+		var glow := -1
+		for m in BrickWorld.get_material_count():
+			if BrickWorld.get_material_name(m) == "Glow PLA":
+				glow = m
+		if floor_b >= 0 and glow >= 0:
+			pb.bricks.set_block_material(s.chunk, floor_b, glow)
+			grid_light.relight(key)
+		var lamp1 := grid_light.at(inside).y
+		_check("a Glow brick lights the room round it", floor_b >= 0 and glow >= 0 and lamp0 < 0.05 and lamp1 > 0.4,
+				"lamp %.2f -> %.2f" % [lamp0, lamp1])
+		# And a real light there (Lighting.md 6.3) for what moves, leaving the
+		# bricks to the grid.
+		var lamp_near := false
+		var lamp_mask_ok := true
+		for kid in s.brick_node.get_children():
+			var l := kid as OmniLight3D
+			if l != null and l.name.begins_with("GlowLamp"):
+				lamp_mask_ok = lamp_mask_ok and (l.light_cull_mask & BrickGridLight.RENDER_LAYER) == 0 						and not l.shadow_enabled
+				if l.global_position.distance_to(inside) < BrickGridLight.LAMP_RANGE * 0.75:
+					lamp_near = true
+		_check("the Glow brick hangs an unshadowed light for what moves", lamp_near and lamp_mask_ok,
+				"%d lamp(s) in all" % grid_light.lamp_count())
+		if DisplayServer.get_name() != "headless":
+			# What the soft shadows cost (Lighting.md 2): the GPU's draw time
+			# with the sun's size, without, and with again. A report, not a
+			# check -- only trustworthy with the editor closed.
+			var vp := get_viewport().get_viewport_rid()
+			RenderingServer.viewport_set_measure_render_time(vp, true)
+			var size := sun.light_angular_distance
+			var ms := []
+			for a in [size, 0.0, size, 0.0]:
+				sun.light_angular_distance = a
+				await _frames(20)
+				var sum := 0.0
+				for k in 120:
+					await _frames(1)
+					sum += RenderingServer.viewport_get_measured_render_time_gpu(vp)
+				ms.append(sum / 120.0)
+			sun.light_angular_distance = size
+			print("[light] GPU draw, sun %.2f deg soft: %.2f / %.2f ms; hard: %.2f / %.2f ms" % [size, ms[0], ms[2], ms[1], ms[3]])
+			# 7: what each GI level costs and looks like, outside and in
+			# (shots light_gate_gi<level>_out / _in; inside, the Glow floor
+			# above is lit). Off again at the end.
+			var gi_names := ["off", "screen", "sdfgi"]
+			var gi_ms := {}
+			for lvl in [LightRig.GI_OFF, LightRig.GI_SCREEN, LightRig.GI_SDFGI, LightRig.GI_OFF]:
+				LightRig.set_gi(lvl)
+				var floor_now: float = pb.brick_material.get_shader_parameter("grid_sky_floor")
+				_check("GI %s set on the environment (the grid's sky off under SDFGI)" % gi_names[lvl], env.ssao_enabled == (lvl >= LightRig.GI_SCREEN)
+						and env.ssil_enabled == (lvl >= LightRig.GI_SCREEN) and env.sdfgi_enabled == (lvl == LightRig.GI_SDFGI)
+						and is_equal_approx(floor_now, 1.0 if lvl == LightRig.GI_SDFGI else BrickGridLight.SKY_FLOOR))
+				for where in ["out", "in"]:
+					if where == "out":
+						c.look_at_from_position(from, inside, up)
+					else:
+						c.look_at_from_position(inside, s.brick_node.global_transform * Vector3(s.fx * stud, 1.4, s.fz * stud * 0.5), up)
+					# SDFGI gathers its cascades over many frames.
+					await _frames(90)
+					var sum := 0.0
+					for k in 120:
+						await _frames(1)
+						sum += RenderingServer.viewport_get_measured_render_time_gpu(vp)
+					var gk := "%s_%s" % [gi_names[lvl], where]
+					gi_ms[gk] = ("%.2f" % (sum / 120.0)) if not gi_ms.has(gk) else ("%s / %.2f" % [gi_ms[gk], sum / 120.0])
+					await _shot("light_gate_gi%d_%s" % [lvl, where])
+			print("[light] GPU draw by GI (ms): %s" % gi_ms)
+		c.queue_free()
+		cam.current = true
+	print("[light] frames: worst %.1f ms" % _worst_ms)
+	print("[planet] gate: %d ok, %d FAIL" % [_ok, _fail])
+	get_tree().quit(1 if _fail > 0 else 0)
+
+
 # The system's gate (11.12): day and night at the spawn, off the home planet
 # through a handoff, across to the nearest other body, onto its ground, and
 # home again to what was left there. The clock runs.
@@ -2367,7 +2785,240 @@ func _run_falling_gate() -> void:
 	var going := not system.drifts.is_empty() and (system.drifts[0] as Drift).dying >= 0.0
 	await get_tree().create_timer(1.5).timeout
 	_check("far from the player it shrinks away instead", made and going and system.drifts.is_empty() and system.fallen.size() == 1)
+	# A station's piece: it comes in at the station's speed over the ground.
+	var st: SpaceStation = null
+	for o in system.stations:
+		if o.is_station() and o.data.parent == system.index_of(planet):
+			st = o
+	system._on_drifted(arrays, Transform3D(Basis(), walker.global_position - side * 12.0 + up * 30.0), Vector3.ZERO, 30,
+			buildings.brick_material, st)
+	t0 = Time.get_ticks_msec()
+	while system.fallen.size() < 2 and Time.get_ticks_msec() - t0 < 5000:
+		await _frames(1)
+	var fast: RigidBody3D = system.fallen[-1] if system.fallen.size() == 2 else null
+	var speed := fast.linear_velocity.length() if fast != null else 0.0
+	var under := INF
+	var went := 0.0
+	var start := fast.global_position if fast != null else Vector3.ZERO
+	t0 = Time.get_ticks_msec()
+	while is_instance_valid(fast) and not fast.freeze and Time.get_ticks_msec() - t0 < 20000:
+		await _frames(1)
+		if is_instance_valid(fast):
+			var dir := planet.to_local(fast.global_position).normalized()
+			under = minf(under, planet.to_local(fast.global_position).length() - data.surface_point(dir).length())
+			went = fast.global_position.distance_to(start)
+	_check("at a station's speed it lands, not through the ground", is_instance_valid(fast) and fast.freeze and under > -1.0,
+			"in at %.0f m/s, %.0f m on, lowest %.1f m over the ground, put back %d time(s)" % [speed, went, under, system.under_ground_saves])
+	# Twenty bricks off the parked ship's top, by its own way of sending a piece
+	# off: they fall, lie still, and are saved and back where they lie.
+	t0 = Time.get_ticks_msec()
+	while ship.chunk < 0 and Time.get_ticks_msec() - t0 < 15000:
+		await _frames(1)
+	var n0 := system.fallen.size()
+	if ship.chunk >= 0:
+		var tops: Array = ship.bricks.get_block_boxes(ship.chunk)
+		tops.sort_custom(func(a: Dictionary, b2: Dictionary) -> bool: return (a.pos as Vector3).y > (b2.pos as Vector3).y)
+		var ids := PackedInt32Array()
+		for bx: Dictionary in tops:
+			if not ids.has(int(bx.block)):
+				ids.append(int(bx.block))
+			if ids.size() >= 20:
+				break
+		ship._send_off(ship.bricks.split_island(ship.chunk, ids), ids.size(), [])
+	t0 = Time.get_ticks_msec()
+	while (system.fallen.size() <= n0 or not system.fallen[-1].freeze) and Time.get_ticks_msec() - t0 < 20000:
+		await _frames(1)
+	var lying: RigidBody3D = system.fallen[-1] if system.fallen.size() > n0 else null
+	var where := planet.to_local(lying.global_position) if lying != null else Vector3.INF
+	var saved_fallen: Array = bytes_to_var(var_to_bytes(system.fallen_to_save(planet)))
+	for f in system.fallen:
+		if is_instance_valid(f):
+			f.queue_free()
+	system.fallen.clear()
+	system.restore_fallen(planet, saved_fallen)
+	var near_off := INF
+	var drawn := false
+	for f in system.fallen:
+		near_off = minf(near_off, planet.to_local(f.global_position).distance_to(where))
+		drawn = drawn or not f.find_children("*", "MeshInstance3D", false, false).is_empty()
+	_check("a ship's piece lies still, and is saved and back where it lies", lying != null and lying.freeze
+			and not saved_fallen.is_empty() and system.fallen.size() == saved_fallen.size() and near_off < 0.05 and drawn,
+			"%d saved, %d back, %.3f m off" % [saved_fallen.size(), system.fallen.size(), near_off])
+	body = system.fallen[0] if not system.fallen.is_empty() else null
+	# The first one in the picture, where it lies.
+	if is_instance_valid(body):
+		var to := body.global_position - walker.camera.global_position
+		walker.place(walker.global_position, to)
+		walker.pitch = asin(clampf(to.normalized().dot(Gravity.up_at(walker.global_position)), -1.0, 1.0))
+		await _frames(4)
 	await _shot("falling_gate")
+	print("[planet] gate: %d ok, %d FAIL" % [_ok, _fail])
+	get_tree().quit(1 if _fail > 0 else 0)
+
+
+## Someone on a piece that leaves (Docs/RoomModules.md 7.8): the walker on top
+## of a generated station's section, its joints shot away; the section leaves
+## with the walker on it, a body of its bricks under them. Broken off, it has no
+## generator: nothing pulls on it (7.12), and the walker floats, its up its own,
+## falling nowhere. Put back in the station's field head over heels, the walker
+## comes into its down over a moment (not in a tick) and lands on its feet.
+func _run_adrift_gate() -> void:
+	var t0 := Time.get_ticks_msec()
+	while walker.frozen and Time.get_ticks_msec() - t0 < 60000:
+		await _frames(1)
+	await get_tree().create_timer(1.0).timeout
+	# A generated station (its sections cut off at their joints, 7.3).
+	var st: SpaceStation = null
+	for o in system.stations:
+		if o.is_station() and o.recipe != null and (st == null or o.global_position.distance_to(walker.global_position)
+				< st.global_position.distance_to(walker.global_position)):
+			st = o
+	if st == null:
+		for o in system.stations:
+			if o.is_station() and o.data.layout == "generated":
+				st = o
+	if st == null:
+		# Home's system has only its tower: home's station grown as any other is.
+		for o in system.stations:
+			if o.is_station() and o.data.parent == system.index_of(planet):
+				st = o
+		if st != null:
+			if st.chunk >= 0:
+				st.deactivate()
+			st._template = -1
+			st.data.layout = "generated"
+			st.prepare()
+	if st == null or st.recipe == null:
+		_check("a generated station", false, str(system.stations.map(func(o) -> String: return "%s %s %s" % [o.data.orbital_name, o.data.kind, o.data.layout])))
+		print("[planet] gate: %d ok, %d FAIL" % [_ok, _fail])
+		get_tree().quit(1)
+		return
+	# Its section with the fewest joints (not the keel's), the walker stood on its top.
+	var r := st.recipe
+	var of := BuildSections.of_build(r)
+	var joints := BuildSections._joints(BuildSections._cells(r, of))
+	var touch := {}
+	for j: Dictionary in joints:
+		touch[int(j.a)] = int(touch.get(int(j.a), 0)) + 1
+		touch[int(j.b)] = int(touch.get(int(j.b), 0)) + 1
+	var size := {}
+	for i in of.size():
+		size[of[i]] = int(size.get(of[i], 0)) + 1
+	var leaf := -1
+	for k in touch:
+		if int(k) != 0 and (leaf < 0 or int(touch[k]) < int(touch[leaf])
+				or int(touch[k]) == int(touch[leaf]) and int(size[k]) > int(size[leaf])):
+			leaf = int(k)
+	var top := Vector3i(0, -1, 0)
+	var n_leaf := 0
+	var sum := Vector3.ZERO
+	for i in r.size():
+		if of[i] == leaf:
+			n_leaf += 1
+			sum += Vector3(r.cell_of(i))
+	var mid := sum / maxf(n_leaf, 1)
+	for i in r.size():
+		var c := r.cell_of(i)
+		if of[i] == leaf and absf(c.x - mid.x) < 2.0 and absf(c.z - mid.z) < 2.0:
+			var ty := c.y + BuildRecipe.part_size(r.part_of(i)).y
+			if ty > top.y:
+				top = Vector3i(c.x, ty, c.z)
+	var org := r.origin()
+	# Over its top, held there (frozen) until it is the frame and its bricks are in; then down onto it.
+	walker.frozen = true
+	walker.flying = false
+	var over := st.cell_point(top - org) + Vector3(0.0, 3.0, 0.0)
+	t0 = Time.get_ticks_msec()
+	while not (system.station == st and st.bricked) and Time.get_ticks_msec() - t0 < 60000:
+		walker.global_position = st.global_transform * over
+		await get_tree().physics_frame
+	var g := _ground_hit(st.global_transform * over)
+	var ok_st := system.station == st and st.bricked and g != Vector3.INF
+	if ok_st:
+		walker.place(g + Gravity.up_at(g) * 0.3, st.global_basis.x)
+		walker.frozen = false
+		await get_tree().create_timer(2.0).timeout
+	_check("on a generated station, its bricks solid", ok_st, st.data.orbital_name)
+	_check("standing on top of one of its sections", leaf > 0 and top.y >= 0 and walker.is_on_floor(),
+			"section %d of %d bricks, %d joint(s), its top %s" % [leaf, n_leaf, int(touch.get(leaf, 0)), str(top)])
+	await _shot("adrift_gate_before")
+	# Its joints shot away: the section cut off, the walker on it.
+	var ids := PackedInt32Array()
+	for j: Dictionary in joints:
+		if int(j.a) == leaf or int(j.b) == leaf:
+			for cell: Vector3i in j.cells:
+				var b := st.bricks.block_at(st.chunk, cell - org)
+				if b >= 0 and not ids.has(b):
+					ids.append(b)
+	st.bricks.kill_blocks(st.chunk, ids)
+	st._after_kill(ids)
+	# Pieces leave over several frames: the one the walker is on.
+	var d: Drift = null
+	t0 = Time.get_ticks_msec()
+	while d == null and Time.get_ticks_msec() - t0 < 15000:
+		await _frames(1)
+		for e: Drift in system.drifts:
+			if e.riders.has(walker):
+				d = e
+	_check("the section leaves whole with the walker aboard, a body of its bricks under them", d != null and d.body.is_valid(),
+			"%d piece(s) of %s bricks" % [system.drifts.size(), str(system.drifts.map(func(e) -> int: return (e as Drift).bricks))])
+	if d == null:
+		print("[planet] gate: %d ok, %d FAIL" % [_ok, _fail])
+		get_tree().quit(1)
+		return
+	# Broken off, no generator: nothing pulls on it. The walker floats where it
+	# was let go, its up its own -- not pulled down after the station's down.
+	await get_tree().create_timer(0.5).timeout
+	var up0 := walker.global_transform.basis.y
+	var w0 := walker.global_position
+	var down0 := Gravity.down_at(st.global_position)
+	await get_tree().create_timer(3.0).timeout
+	var fell := (walker.global_position - w0).dot(st.global_basis * Vector3.DOWN)
+	_check("on it nothing pulls, no generator: the walker floats, its up its own",
+			Gravity.pull_at(walker.global_position) == 0.0 and walker.floating and fell < 1.0
+			and walker.velocity.length() < 1.5 and walker.global_transform.basis.y.angle_to(up0) < 0.05,
+			"pull %.1f, floating %s, fell %.2f m in 3 s, %.2f m/s, up turned %.1f deg (down %s)" % [
+				Gravity.pull_at(walker.global_position), walker.floating, fell, walker.velocity.length(),
+				rad_to_deg(walker.global_transform.basis.y.angle_to(up0)), str(down0)])
+	await _shot("adrift_gate_aboard")
+	# Back in the station's field over its deck, head over heels: its down again,
+	# the walker righted over a moment (zylanntest's turn, 4 rad/s), on its feet.
+	# Over the top of its first section (the core's: it stays), clear of the piece.
+	var top0 := Vector3i(0, -1, 0)
+	var sum0 := Vector3.ZERO
+	var n0 := 0
+	for i in r.size():
+		if of[i] == 0:
+			n0 += 1
+			sum0 += Vector3(r.cell_of(i))
+	var mid0 := sum0 / maxf(n0, 1)
+	for i in r.size():
+		var c := r.cell_of(i)
+		if of[i] == 0 and absf(c.x - mid0.x) < 2.0 and absf(c.z - mid0.z) < 2.0:
+			var ty := c.y + BuildRecipe.part_size(r.part_of(i)).y
+			if ty > top0.y:
+				top0 = Vector3i(c.x, ty, c.z)
+	# In its field (2 m over its bricks), the walker's head a hair over the roof.
+	var deck := st.cell_point(top0 - org) + Vector3(0.0, 1.9, 0.0)
+	await get_tree().physics_frame
+	walker.global_position = st.global_transform * deck
+	walker.global_basis = st.global_basis * Basis(Vector3.RIGHT, PI * 0.9)
+	walker.velocity = Vector3.ZERO
+	walker.reset_physics_interpolation()
+	await get_tree().physics_frame
+	await get_tree().physics_frame
+	var st_up := st.global_basis.y
+	var early := rad_to_deg(walker.global_transform.basis.y.angle_to(st_up))
+	t0 = Time.get_ticks_msec()
+	while Time.get_ticks_msec() - t0 < 3000 and not (walker.is_on_floor() and walker.global_transform.basis.y.angle_to(st_up) < 0.02):
+		await get_tree().physics_frame
+	var late := rad_to_deg(walker.global_transform.basis.y.angle_to(st_up))
+	_check("back in the station's field head over heels: righted over a moment, not a tick, and on its feet",
+			Gravity.pull_at(walker.global_position) > 1.0 and not walker.floating and early > 120.0
+			and late < 2.0 and walker.is_on_floor(),
+			"%.0f deg off its up two ticks in, %.1f deg at %.1f s, on the floor %s" % [early, late,
+				(Time.get_ticks_msec() - t0) / 1000.0, walker.is_on_floor()])
+	await _shot("adrift_gate_turned")
 	print("[planet] gate: %d ok, %d FAIL" % [_ok, _fail])
 	get_tree().quit(1 if _fail > 0 else 0)
 
@@ -2431,6 +3082,23 @@ func _run_debris_gate() -> void:
 	var n2 := st.bricks.get_alive_block_count(st.chunk) if st.chunk >= 0 else -1
 	_check("back: laid as it was left, what drifted off still gone", n2 == n1, "%d" % n2)
 	_check("its far look gone once its bricks are in", st.wreck == null and not st.shell.visible)
+	# Saved and back (PlanetSystem.drifts_to_save, through bytes as a file has it).
+	var was_at := d.node.global_position
+	var was_n := system.drifts.size()
+	var saved_drifts: Array = bytes_to_var(var_to_bytes(system.drifts_to_save()))
+	for e: Drift in system.drifts:
+		system._drop_body(e)
+		e.node.queue_free()
+	system.drifts.clear()
+	system.restore_drifts(saved_drifts)
+	await _frames(4)
+	var back_off := INF
+	for e: Drift in system.drifts:
+		back_off = minf(back_off, e.node.global_position.distance_to(was_at))
+	_check("saved and back: each piece adrift, drawn, on its way", system.drifts.size() == was_n and back_off < 1.0
+			and (system.drifts[0] as Drift).look != null, "%d of %d, %.2f m off, %d bytes" % [system.drifts.size(), was_n, back_off,
+			var_to_bytes(saved_drifts).size()])
+	d = system.drifts[0]
 	# Far off it shrinks rather than pops, and grows back the same way.
 	var off := d.node.global_position.distance_to(_anchor())
 	var seen := system.drift_seen
@@ -2693,6 +3361,17 @@ func _run_seat_gate() -> void:
 	await key.call(KEY_E)
 	var ok_deck: bool = await stand_on_deck.call()
 	_check("out of the seat in open space: on foot on its deck, its own gravity", ok_deck and Gravity.strength() > 1.0, "%.1f m/s2" % Gravity.strength())
+	# Its generator off (G): nothing pulls on its deck; on again, its gravity and the deck (7.12).
+	await key.call(KEY_G)
+	await get_tree().create_timer(0.5).timeout
+	var off_ok := not ship.data.gravity_on and Gravity.pull_at(pawn.feet()) == 0.0 and pawn.floating
+	await key.call(KEY_G)
+	t0 = Time.get_ticks_msec()
+	while Time.get_ticks_msec() - t0 < 4000 and not pawn.is_on_floor():
+		await get_tree().physics_frame
+	_check("its generator off, nothing pulls on its deck; on again, its gravity, on its deck",
+			off_ok and ship.data.gravity_on and Gravity.pull_at(pawn.feet()) > 1.0 and pawn.is_on_floor(),
+			"off: floating %s; on: %.1f m/s2, on the floor %s" % [off_ok, Gravity.pull_at(pawn.feet()), pawn.is_on_floor()])
 	await key.call(KEY_M)
 	_check("the map from the deck, nothing against a jump", map.visible and map.note == "")
 	var was := system.system_index
@@ -2747,6 +3426,13 @@ func _run_hull_gate() -> void:
 			"%d of %d" % [ship.doors.count() if ship.doors else 0, BuildDoors.of(ship.recipe).size()])
 	_check("a gangway of bricks down from its airlock to the ground", ship.gangway != null and ship.gangway_steps > 0,
 			"%d step(s), the sill %.2f m over the ground at its foot" % [ship.gangway_steps, (door - foot).dot(Gravity.up_at(door))])
+	# On the brick grid for its Glow bricks' light, its sky left alone: the
+	# cabin box stands for its own lights (Docs/Lighting.md 6.1).
+	_boxes_at = 0
+	_ambient_boxes()
+	var floor_v: Variant = ship.brick_material.get_shader_parameter("grid_sky_floor") if ship.brick_material else null
+	_check("on the brick grid for its lamps, its sky left alone", grid_light.tracked("m%d" % ship.get_instance_id())
+			and floor_v != null and is_equal_approx(float(floor_v), 1.0), "sky floor %s" % str(floor_v))
 	# A look at it from off its stern quarter: the housings and the fin on its roof.
 	var aside := Gravity.flat(ship.global_basis.x, Gravity.up_at(door)).normalized()
 	var off := _ground_hit(door + outward * 28.0 + aside * 18.0)
@@ -2779,6 +3465,11 @@ func _run_hull_gate() -> void:
 	var c2 := ship.cell_at(pawn.feet())
 	_check("and on along its spine", c2.x > c.x + 4.0 and pawn.is_on_floor() and absf(c2.y - lock.y) < 3.0,
 			"at cell %s" % str(c2.snapped(Vector3(0.1, 0.1, 0.1))))
+	# Parked on a world, its generator's gravity inside it over the world's (7.12).
+	var gf := ship.gravity_field()
+	_check("inside it its own gravity, over the world's", gf != null and Gravity.field_at(pawn.feet()) == gf
+			and Gravity.field_at(ship.global_transform * ship.seat() + ship.global_basis.z * 80.0) == null,
+			"%s inside, %.1f m/s2" % ["its field" if gf != null and Gravity.field_at(pawn.feet()) == gf else "not its field", Gravity.pull_at(pawn.feet())])
 	await _shot("hull_gate_inside")
 	# The bridge's seat: up and ahead, its bricks drawn as it flies (riding).
 	pawn.place(ship.global_transform * ship.seat() + ship.global_basis.z * 2.0)
@@ -2812,7 +3503,82 @@ func _run_hull_gate() -> void:
 	_check("its bricks solid again round its pilot in the air, every brick, nothing loose", ship.chunk >= 0 and not ship.riding
 			and ship.bricks.get_alive_block_count(ship.chunk) == laid and loose.is_empty(),
 			"%d loose group(s)" % loose.size())
+	# The bridge's consoles (ShipBuild._consoles, Docs/RoomModules.md 7.11): looked at
+	# from the seat, fore (the recipe's +X).
+	var con: Dictionary = ship.recipe.meta.get("consoles", {})
+	_check("the bridge's consoles, fore of the seat", int(con.get("bricks", 0)) > 0,
+			"%d console brick(s)" % int(con.get("bricks", 0)))
+	var s_org := ship.recipe.origin()
+	var s_at := ship.global_transform * ship.cell_point(ship.seat_cell - s_org)
+	var fore := ship.global_transform * ship.cell_point(ship.seat_cell + Vector3i(6, 0, 0) - s_org) - s_at
+	_face(Gravity.flat(fore, Gravity.up_at(s_at)).normalized())
+	cam.global_transform.basis = cam.global_transform.basis * Basis(Vector3.RIGHT, -0.3)
+	await get_tree().create_timer(0.3).timeout
 	await _shot("hull_gate_bridge")
+	# Its rooms furnished (KitFurnish): looking aft across the bridge from the seat.
+	var from := int((ship.recipe.meta.get("furniture", {}) as Dictionary).get("from", ship.recipe.size()))
+	var furnished := ship.recipe.size() - from
+	_check("its rooms furnished, in bricks", furnished > 0, "%d furniture brick(s)" % furnished)
+	# Stood in the middle of its most furnished room (kept clear), facing its furniture.
+	var best := {}
+	var best_n := 0
+	var toward := Vector3.ZERO
+	for sp: Dictionary in ship.recipe.meta.structure.spaces:
+		var cols := {}
+		for cc in sp.get("columns", []):
+			cols[Vector2i(int(cc[0]), int(cc[1]))] = true
+		var n := 0
+		var sum := Vector3.ZERO
+		for i in ship.recipe.size():
+			var at := ship.recipe.cell_of(i)
+			if i >= from and cols.has(Vector2i(at.x, at.z)) and at.y > int(sp.floor_y) and at.y < int(sp.ceil_y):
+				n += 1
+				sum += Vector3(at)
+		if n > best_n:
+			best_n = n
+			best = sp
+			toward = sum / n
+	if best_n > 0:
+		var lo := Vector2i(1 << 30, 1 << 30)
+		var hi := -lo
+		for cc in best.columns:
+			lo = Vector2i(mini(lo.x, int(cc[0])), mini(lo.y, int(cc[1])))
+			hi = Vector2i(maxi(hi.x, int(cc[0])), maxi(hi.y, int(cc[1])))
+		var org := ship.recipe.origin()
+		var mid := Vector3i((lo.x + hi.x) / 2, int(best.floor_y) + 1, (lo.y + hi.y) / 2)
+		var stand := ship.global_transform * ship.cell_point(mid - org)
+		pawn.place(stand)
+		await get_tree().create_timer(0.5).timeout
+		var look := ship.global_transform * ship.cell_point(Vector3i(toward) - org) - stand
+		_face(Gravity.flat(look, Gravity.up_at(stand)).normalized())
+		cam.global_transform.basis = cam.global_transform.basis * Basis(Vector3.RIGHT, -0.6)
+		await get_tree().create_timer(0.3).timeout
+		print("[planet] hull_gate_room: %s, %d furniture brick(s)" % [String(best.kind), best_n])
+	await _shot("hull_gate_room")
+	# A window in its side (ShipBuild._windows): stood four studs in from a pane, facing it.
+	var glass := RoomGrow._glass()
+	var panes := 0
+	var pane := Vector3i(0, -1, 0)
+	# The hull's middle line: the bridge's seat's (the wings widen its bounds).
+	var mid_z := float(ship.seat_cell.z + ship.recipe.origin().z)
+	for i in ship.recipe.size():
+		if ship.recipe.material_of(i) == glass:
+			panes += 1
+			var pc := ship.recipe.cell_of(i)
+			if pane.y < 0 or pc.y < pane.y or pc.y == pane.y and absf(pc.x - ship.seat_cell.x) < absf(pane.x - ship.seat_cell.x):
+				pane = pc
+	_check("windows in its sides, glazed", panes > 0, "%d glass plate(s)" % panes)
+	if pane.y >= 0:
+		var org2 := ship.recipe.origin()
+		var inward := 1 if pane.z < mid_z else -1
+		# Its lowest row is WINDOW_SILL over the room's floor: stood on that floor.
+		var g := ship.global_transform * ship.cell_point(pane - org2 + Vector3i(0, -ShipBuild.WINDOW_SILL, 4 * inward))
+		pawn.place(g)
+		await get_tree().create_timer(0.5).timeout
+		var to := ship.global_transform * ship.cell_point(pane - org2) - g
+		_face(Gravity.flat(to, Gravity.up_at(g)).normalized())
+		await get_tree().create_timer(0.3).timeout
+	await _shot("hull_gate_window")
 	print("[planet] gate: %d ok, %d FAIL" % [_ok, _fail])
 	get_tree().quit(1 if _fail > 0 else 0)
 
@@ -2971,12 +3737,48 @@ func _run_save_gate() -> void:
 		var q := g.squad
 		q.alive()[0].pawn.health.apply_impact(1e6, &"")
 		q.alive()[0].pawn.health.apply_impact(60.0, &"")
+		# A piece knocked off the top of that building, left where it lands: the
+		# rubble a save keeps.
+		var s = buildings.sites[i]
+		var top := PackedInt32Array()
+		var dims: Vector3i = buildings.bricks.get_chunk_dims(s.chunk)
+		for yc in range(dims.y - 1, -1, -1):
+			for zc in dims.z:
+				for xc in dims.x:
+					var bid: int = buildings.bricks.block_at(s.chunk, Vector3i(xc, yc, zc))
+					if bid >= 0 and not buildings.bricks.is_block_absent(s.chunk, bid) and not top.has(bid):
+						top.append(bid)
+			if top.size() >= 20:
+				break
+		top = top.slice(0, 20)
+		s.collision.disable(top)
+		for b in s.collision.bands_of(top):
+			if not s.remesh.has(b):
+				s.remesh.append(b)
+		var pc := buildings.pieces
+		pc.shed(s.chunk, [top])
+		buildings.bricks.bake_chunk_async(s.chunk)
+		t0 = Time.get_ticks_msec()
+		while (pc.pieces.is_empty() or pc.moving() > 0) and Time.get_ticks_msec() - t0 < 20000:
+			await _frames(1)
+		var kept := 0
+		var kept_bricks := 0
+		var piece_at := Vector3.INF
+		for p in pc.pieces:
+			if is_instance_valid(p.body) and p.fading_since == 0:
+				kept += 1
+				kept_bricks += buildings.bricks.get_alive_block_count(p.chunk)
+				piece_at = planet.to_local(p.body.global_position)
+		_check("rubble lies about, settled", kept > 0 and pc.moving() == 0, "%d piece(s), %d bricks" % [kept, kept_bricks])
+		# Its bricks left the wall too: what is gone from it now.
+		gone = buildings.site_gone(i).size()
 		await get_tree().create_timer(1.0).timeout
 		system.t = 777.0
 		var hurt: float = q.alive()[0].pawn.health.total_current()
 		saver.save_now()
 		var keep := {"site": i, "gone": gone, "trees": trees.knocked_count, "left": q.alive().size(), "hurt": hurt,
-				"at": planet.to_local(pawn.feet()), "ship": ship.rel}
+				"at": planet.to_local(pawn.feet()), "ship": ship.rel,
+				"pieces": kept, "piece_bricks": kept_bricks, "piece_at": piece_at}
 		UniverseSave._write(GATE_NOTES, keep)
 		_check("the fight written, in place", gone > 0 and FileAccess.file_exists(saver.save.dir() + "s0_b%d.dat" % system.index_of(planet)),
 				"%d bricks gone, %d trees, %d soldiers, in %.1f ms" % [gone, trees.knocked_count, q.alive().size(), saver.write_us / 1000.0])
@@ -2985,6 +3787,25 @@ func _run_save_gate() -> void:
 		var off := planet.to_local(pawn.feet()).distance_to(notes.at)
 		_check("the player where they were, on foot", on_foot and off < 1.0, "%.2f m off" % off)
 		_check("the ship where it was", ship.rel.is_equal_approx(notes.ship) and ship.landed)
+		var pc := buildings.pieces
+		var back := 0
+		var back_bricks := 0
+		var off_piece := INF
+		for p in pc.pieces:
+			if is_instance_valid(p.body) and p.settled:
+				back += 1
+				back_bricks += buildings.bricks.get_alive_block_count(p.chunk)
+				off_piece = minf(off_piece, planet.to_local(p.body.global_position).distance_to(notes.piece_at))
+		_check("its rubble back where it lay, settled, brick for brick", back == int(notes.pieces) and back_bricks == int(notes.piece_bricks)
+				and off_piece < 0.5, "%d piece(s) of %d, %d bricks of %d, %.2f m off" % [back, int(notes.pieces), back_bricks, int(notes.piece_bricks), off_piece])
+		var hit0 := pc.hit_killed
+		if not pc.pieces.is_empty():
+			# On one of its bricks: its centre of mass may be air.
+			var p0 = pc.pieces[0]
+			var boxes: Array = buildings.bricks.get_block_boxes(p0.chunk)
+			var aim: Vector3 = buildings.bricks.get_chunk_transform(p0.chunk) * (boxes[0].pos as Vector3) if not boxes.is_empty() else p0.body.global_position
+			pc.damage(p0, aim, {"blast": true, "radius": 1.5, "hp": 0})
+		_check("and it breaks again", pc.hit_killed > hit0, "%d bricks" % (pc.hit_killed - hit0))
 		setup_ai(town)
 		ai.policy = CombatPolicy.new()
 		kit.use_services(ai)
@@ -3117,6 +3938,7 @@ func _run_home_gate() -> void:
 	await _shot("home_gate_fight")
 	var sizes: Array[int] = []
 	var nearest := INF
+	var kinds := {}
 	for n in range(2, 5):
 		for m in g.squad.alive():
 			m.pawn.health.apply_impact(1e6, &"")
@@ -3132,7 +3954,9 @@ func _run_home_gate() -> void:
 		sizes.append(g.squad.alive().size())
 		for m in g.squad.alive():
 			nearest = minf(nearest, m.pawn.feet().distance_to(pawn.feet()))
+			kinds[m.get_meta(&"unit", &"")] = true
 	_check("each wave bigger, to the most", str(sizes) == "[6, 8, 8]", str(sizes))
+	_check("later waves bring more than rifles", kinds.size() >= 3, ", ".join(kinds.keys()))
 	_check("none on the player's head", nearest > 40.0, "%.0f m" % nearest)
 	var came := nearest
 	t0 = Time.get_ticks_msec()
@@ -3146,6 +3970,21 @@ func _run_home_gate() -> void:
 	for m in g.squad.alive():
 		low = minf(low, _over_ground(m.pawn.feet()))
 	_check("on the ground where it came in", absf(low) < 1.5, "%.2f m" % low)
+	# Wave 4 brought a tank: crewed, and it comes for the player -- at the pace of
+	# the squad it screens (TankBrain.escort), as the city's does.
+	var tk := g.tank
+	var tank_from := tk.feet().distance_to(pawn.feet()) if is_instance_valid(tk) else INF
+	var tank_low := INF
+	t0 = Time.get_ticks_msec()
+	while Time.get_ticks_msec() - t0 < 20000:
+		await _frames(1)
+		if is_instance_valid(tk):
+			tank_low = minf(tank_low, _over_ground(tk.feet()))
+	var tank_to := tk.feet().distance_to(pawn.feet()) if is_instance_valid(tk) else INF
+	_check("wave 4 brings a tank, crewed, and it comes for the player", is_instance_valid(tk) and tk.crew_count() == 2
+			and not tk.is_wrecked() and tank_to < tank_from - 3.0 and tank_low > -1.0 and g.status().contains("a tank"),
+			"%.0f m -> %.0f m in 20 s, lowest %.2f m over the ground, %s" % [tank_from, tank_to, tank_low, g.status()])
+	await _shot("home_gate_tank")
 	print("[planet] gate: %d ok, %d FAIL" % [_ok, _fail])
 	get_tree().quit(1 if _fail > 0 else 0)
 

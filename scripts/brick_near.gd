@@ -253,8 +253,38 @@ func _init(w: BrickWorld) -> void:
 	PieceMeshes.stud_plain()
 	PieceMeshes.stud_square()
 	PieceMeshes.stud_card()
-	TerrainTile.stud_material()
+	grid_stud_material()
 	PieceMeshes.stud_card_material()
+
+
+static var _grid_stud_material: ShaderMaterial = null
+
+
+## The studs' material with the brick grid's light (printed_grid.gdshader;
+## Docs/Lighting.md 6.1): a stud on a shut room's floor as dark as the floor.
+## The terrain's own studs keep TerrainTile.stud_material. Cards stay flat:
+## only open studs get one, and those are out under the sky.
+static func grid_stud_material() -> ShaderMaterial:
+	if _grid_stud_material == null:
+		_grid_stud_material = TerrainTile.stud_material().duplicate() as ShaderMaterial
+		_grid_stud_material.shader = load("res://shaders/printed_grid.gdshader")
+		WeatherFx.register(_grid_stud_material)
+	return _grid_stud_material
+
+
+## A band's studs lit by its grid (`param`, BrickGridLight's `grid_light`):
+## their shader is handed world to chunk, the band's inverse, as rows.
+static func grid_studs(mmi: GeometryInstance3D, param: Variant, band: Node3D) -> void:
+	if mmi.material_override != _grid_stud_material or param == null:
+		return
+	mmi.set_instance_shader_parameter(&"grid_light", param)
+	var t := band.global_transform.affine_inverse()
+	mmi.set_instance_shader_parameter(&"grid_from_world_x",
+			Vector4(t.basis.x.x, t.basis.y.x, t.basis.z.x, t.origin.x))
+	mmi.set_instance_shader_parameter(&"grid_from_world_y",
+			Vector4(t.basis.x.y, t.basis.y.y, t.basis.z.y, t.origin.y))
+	mmi.set_instance_shader_parameter(&"grid_from_world_z",
+			Vector4(t.basis.x.z, t.basis.y.z, t.basis.z.z, t.origin.z))
 
 
 ## A band of `chunk` is drawn by `node` from here on (again: its mesh was
@@ -673,7 +703,7 @@ func _show_near(band: Band, mesh: ArrayMesh) -> void:
 	near.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	near.physics_interpolation_mode = Node.PHYSICS_INTERPOLATION_MODE_OFF
 	near.set_instance_shader_parameter("geo_bevel", 1.0)
-	for param in [&"weather_sway", &"weather_snowcap", &"grain_origin"]:
+	for param in [&"weather_sway", &"weather_snowcap", &"grain_origin", &"grid_light"]:
 		var v: Variant = node.get_instance_shader_parameter(param)
 		if v != null:
 			near.set_instance_shader_parameter(param, v)
@@ -822,7 +852,7 @@ func _sort_studs(band: Band, local_eye: Vector3) -> void:
 			var mmi := MultiMeshInstance3D.new()
 			mmi.name = "Studs"
 			mmi.material_override = PieceMeshes.stud_card_material() \
-					if mesh == PieceMeshes.stud_card() else TerrainTile.stud_material()
+					if mesh == PieceMeshes.stud_card() else grid_stud_material()
 			# Studs never cast (Terrain.md 7.4).
 			mmi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 			mmi.physics_interpolation_mode = Node.PHYSICS_INTERPOLATION_MODE_OFF
@@ -834,6 +864,7 @@ func _sort_studs(band: Band, local_eye: Vector3) -> void:
 			mmi.multimesh = mm
 			band.node.add_child(mmi)
 			band.studs.append(mmi)
+			grid_studs(mmi, band.node.get_instance_shader_parameter(&"grid_light"), band.node)
 		_carded[band.key] = true
 		_admit_cards = INF
 	band.stud_eye = local_eye

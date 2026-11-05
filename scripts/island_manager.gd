@@ -1550,7 +1550,9 @@ const CRUMB_SCATTER := 0.6
 ## rad/s at most.
 const CRUMB_SPIN := 5.0
 ## Bricks drawn as crumbs at once. Past it a piece just goes, as one out of
-## view does: the update is about a microsecond a brick, on the main thread.
+## view does. The fall is the shader's (shaders/crumb.gdshader); the main
+## thread pays per thing that happens to a crumb -- landing, a bounce -- not
+## per tick (it was about a microsecond a brick a tick).
 ## 600 was for pieces of eight; what comes off a piece crumbles up to
 ## LANDMARK_COUNT (_crumbles_off_a_piece).
 const CRUMBS_MAX := 1500
@@ -1606,10 +1608,21 @@ var blast_census := [0, 0, 0, 0, 0, 0, 0]
 ## What throwing them cost: ms all told, and the worst blast.
 var blast_throw_ms := [0.0, 0.0]
 
+## A size of crumb: its MultiMesh, and per crumb what it was thrown with.
+## Drawn by shaders/crumb.gdshader, which works out where each is from these
+## (Docs/GpuOffload.md 2.1): `pos` and `vel` are where and how fast THIS
+## STRETCH of its fall began, at tick `t0` -- thrown, or bounced, or landed --
+## not where it is now (_crumb_pos, _crumb_vel, crumb_states). Nothing is
+## written per tick: only when something happens to a crumb, at its `next`.
 class Crumbs:
 	var mmi: MultiMeshInstance3D
 	var pos := PackedVector3Array()
 	var vel := PackedVector3Array()
+	var t0 := PackedInt64Array()          ## the tick this stretch began
+	var t_end := PackedInt64Array()       ## the tick it stops: lands, or reaches its floor
+	var next := PackedInt64Array()        ## the tick something happens to it next
+	var spin := PackedFloat32Array()      ## axis and rate, packed for the shader
+	var soonest := 0                      ## the least of `next`
 	var base: Array[Basis] = []
 	var axis := PackedVector3Array()
 	var rate := PackedFloat32Array()
@@ -1629,6 +1642,10 @@ class Crumbs:
 		if i != last:
 			pos[i] = pos[last]
 			vel[i] = vel[last]
+			t0[i] = t0[last]
+			t_end[i] = t_end[last]
+			next[i] = next[last]
+			spin[i] = spin[last]
 			base[i] = base[last]
 			axis[i] = axis[last]
 			rate[i] = rate[last]
@@ -1640,6 +1657,10 @@ class Crumbs:
 			on_ground[i] = on_ground[last]
 		pos.resize(last)
 		vel.resize(last)
+		t0.resize(last)
+		t_end.resize(last)
+		next.resize(last)
+		spin.resize(last)
 		base.resize(last)
 		axis.resize(last)
 		rate.resize(last)
@@ -1670,6 +1691,9 @@ var crumb_bricks := 0        ## bricks that were drawn as crumbs
 var crumbs_over := 0         ## bricks not drawn for CRUMBS_MAX
 var crumb_worst_ms := 0.0    ## the slowest tick of _update_crumbs
 var crumb_update_ms := 0.0   ## _update_crumbs, all told
+var crumb_events := 0        ## of that, things that happened to a crumb (_crumb_event)
+var crumb_scanned := 0       ## crumbs looked at to find them
+var crumb_ticks := 0         ## ticks with crumbs
 var lay_us := 0              ## of that, laying crumbs that stopped in the heap (BrickHeap)
 var crumb_peak := 0          ## the most drawn at once
 var crumble_worst_ms := 0.0  ## the slowest single _crumble
@@ -1873,20 +1897,10 @@ func throw_rows(rows: PackedFloat32Array, xf: Transform3D, at: Vector3, speed: f
 		var away := p - at
 		away = away.normalized() if away.length() > 0.01 else Vector3.UP
 		var axis := Vector3(randf() - 0.5, randf() - 0.5, randf() - 0.5)
-		cr.pos.append(p)
-		cr.vel.append(away * speed * randf_range(0.3, 1.0) + Vector3(randf_range(-1.0, 1.0),
-				randf_range(0.0, 1.0), randf_range(-1.0, 1.0)) * CRUMB_SCATTER)
-		cr.base.append(frame_basis)
-		cr.axis.append(axis.normalized() if axis.length() > 0.01 else Vector3.UP)
-		cr.rate.append(randf_range(-CRUMB_SPIN, CRUMB_SPIN))
-		cr.born.append(now)
-		cr.landed.append(0)
-		cr.floor_y.append(floor_y)
-		cr.half_h.append(size.y * 0.5)
-		cr.colour.append(Color(rows[k + 12], rows[k + 13], rows[k + 14], rows[k + 15]))
-		cr.on_ground.append(fixed)
-		crumb_count += 1
-		crumb_bricks += 1
+		_crumb_push(cr, p, away * speed * randf_range(0.3, 1.0) + Vector3(randf_range(-1.0, 1.0),
+				randf_range(0.0, 1.0), randf_range(-1.0, 1.0)) * CRUMB_SCATTER,
+				frame_basis, axis, randf_range(-CRUMB_SPIN, CRUMB_SPIN), now, floor_y,
+				size.y * 0.5, Color(rows[k + 12], rows[k + 13], rows[k + 14], rows[k + 15]), fixed)
 	furniture_broken[1] += n
 	return n
 
@@ -1898,8 +1912,9 @@ func blast_census_line() -> String:
 
 
 func crumb_cost_line() -> String:
-	return "crumbs of every kind: %d at once at the most, moving them %.1f ms all told (laying the ones that stopped %.1f), %.2f the worst tick" % [
-			crumb_peak, crumb_update_ms, float(lay_us) / 1000.0, crumb_worst_ms]
+	return "crumbs of every kind: %d at once at the most, moving them %.1f ms all told (laying the ones that stopped %.1f), %.2f the worst tick; %d ticks, %d events, %d looked at" % [
+			crumb_peak, crumb_update_ms, float(lay_us) / 1000.0, crumb_worst_ms, crumb_ticks,
+			crumb_events, crumb_scanned]
 
 
 ## `burst` and `throw`: thrown from a blast at `burst` (throw_killed) -- `throw`
@@ -1979,19 +1994,9 @@ func _add_crumbs(source: int, block_ids: PackedInt32Array, box: AABB, linear: Ve
 				if foot > floor_y - CRUMB_SILL:
 					lands_on = floor_past
 					lands_fixed = fixed_past
-		cr.pos.append(at)
-		cr.vel.append(vel)
-		cr.base.append(frame_basis)
-		cr.axis.append(axis.normalized() if axis.length() > 0.01 else Vector3.UP)
-		cr.rate.append(randf_range(-CRUMB_SPIN, CRUMB_SPIN))
-		cr.born.append(now)
-		cr.landed.append(0)
-		cr.floor_y.append(lands_on)
-		cr.half_h.append(size.y * 0.5)
-		cr.colour.append(BrickWorld.get_filament_colour(world.get_block_colour(source, id)))
-		cr.on_ground.append(lands_fixed)
-		crumb_count += 1
-		crumb_bricks += 1
+		_crumb_push(cr, at, vel, frame_basis, axis, randf_range(-CRUMB_SPIN, CRUMB_SPIN), now,
+				lands_on, size.y * 0.5,
+				BrickWorld.get_filament_colour(world.get_block_colour(source, id)), lands_fixed)
 
 
 ## The first thing under `from` a crumb stops on, or -INF. Whether that was
@@ -2043,89 +2048,328 @@ func _crumb_set(key: Vector3) -> Crumbs:
 	var mm := MultiMesh.new()
 	mm.transform_format = MultiMesh.TRANSFORM_3D
 	mm.use_colors = true
+	mm.use_custom_data = true
 	mm.mesh = PieceMeshes.chamfered_box(key)
+	# Where a crumb is drawn is the shader's: the instance transforms are where
+	# each began, so the box they make says nothing about where they are now.
+	mm.custom_aabb = AABB(Vector3(-1e5, -1e5, -1e5), Vector3(2e5, 2e5, 2e5))
 	mmi.multimesh = mm
-	var mat := StandardMaterial3D.new()
-	mat.vertex_color_use_as_albedo = true
-	mat.roughness = 0.85
-	mmi.material_override = mat
+	mmi.material_override = _crumb_material()
 	add_child(mmi)
 	cr.mmi = mmi
 	_crumbs[key] = cr
 	return cr
 
 
-## Fall, stop on the floor, shrink, go. Once a tick, after the pieces.
+## Fall, stop on the floor, shrink, go. Once a tick, after the pieces -- but
+## only for the crumbs something happens to this tick (`next`): the falling
+## itself is drawn by the shader (shaders/crumb.gdshader, Docs/GpuOffload.md
+## 2.1). It was a step of every crumb and its transform written every tick,
+## about a microsecond a brick on the main thread.
 func _update_crumbs() -> void:
 	if _crumbs.is_empty():
 		return
 	var t0 := Time.get_ticks_usec()
 	var now := Engine.get_physics_frames()
-	var tps := float(Engine.physics_ticks_per_second)
-	var dt := 1.0 / tps
-	var life := int(CRUMB_LIFE_MS * tps / 1000.0)
-	var full := int(CRUMB_FULL_MS * tps / 1000.0)
-	var g := Gravity.strength() * DEBRIS_GRAVITY
-	var keep := heap != null and BrickHeap.enabled()
-	var fall_max := int(CRUMB_FALL_MAX_MS * tps / 1000.0)
-	var fade := maxi(int(CRUMB_FADE_MS * tps / 1000.0), 1)
+	_crumb_constants()
+	crumb_ticks += 1
 	for key in _crumbs:
 		var cr: Crumbs = _crumbs[key]
+		if cr.pos.is_empty() or cr.soonest > now:
+			continue
+		var soonest := 9223372036854775807
 		var i := 0
+		crumb_scanned += cr.pos.size()
 		while i < cr.pos.size():
-			var age := now - cr.born[i]
-			# Come to rest: it lies where it stopped, for good (BrickHeap).
-			if keep and cr.landed[i] > 0:
-				var t_lay := Time.get_ticks_usec()
-				_lay_crumb(cr, i, key, dt)
-				lay_us += Time.get_ticks_usec() - t_lay
-				cr.remove(i)
-				crumb_count -= 1
-				continue
-			if age >= (fall_max if keep else life):
-				cr.remove(i)
-				crumb_count -= 1
-				continue
-			# Handed back by the heap: its floor is asked once what took the old
-			# one has had its tick to go (_heap_support_gone).
-			if is_nan(cr.floor_y[i]) and age >= 2:
-				cr.floor_y[i] = _crumb_floor(cr.pos[i])
-				cr.on_ground[i] = 1 if _floor_on_ground else 0
-			if cr.landed[i] == 0:
-				var v := cr.vel[i]
-				v.y -= g * dt
-				var p := cr.pos[i] + v * dt
-				if p.y - cr.half_h[i] <= cr.floor_y[i] and not _crumb_floor_gone(cr, i, p):
-					p.y = cr.floor_y[i] + cr.half_h[i]
-					if -v.y * crumb_bounce > CRUMB_REST_SPEED:
-						v = Vector3(v.x * CRUMB_SLIDE, -v.y * crumb_bounce, v.z * CRUMB_SLIDE)
-						crumb_bounces += 1
-					else:
-						cr.landed[i] = now
-				cr.pos[i] = p
-				cr.vel[i] = v
+			if cr.next[i] <= now:
+				crumb_events += 1
+			if cr.next[i] <= now and _crumb_event(cr, i, key, now):
+				continue   # gone: the last one is in its place now
+			soonest = mini(soonest, cr.next[i])
 			i += 1
-		var mm := cr.mmi.multimesh
-		var count := cr.pos.size()
-		if mm.instance_count != count:
-			mm.instance_count = count
-		for j in count:
-			var age := now - cr.born[j]
-			var s := 1.0
-			if keep:
-				if age > fall_max - fade:
-					s = maxf(float(fall_max - age) / float(fade), 0.01)
-			elif age > full:
-				s = maxf(1.0 - float(age - full) / float(life - full), 0.01)
-			# It stops turning when it stops falling.
-			var turned := (cr.landed[j] if cr.landed[j] > 0 else now) - cr.born[j]
-			var b := Basis(cr.axis[j], cr.rate[j] * float(turned) * dt) * cr.base[j]
-			mm.set_instance_transform(j, Transform3D(b.scaled(Vector3(s, s, s)), cr.pos[j]))
-			mm.set_instance_color(j, cr.colour[j])
+		cr.soonest = soonest
+		cr.mmi.multimesh.visible_instance_count = cr.pos.size()
 	var ms := float(Time.get_ticks_usec() - t0) / 1000.0
 	crumb_worst_ms = maxf(crumb_worst_ms, ms)
 	crumb_update_ms += ms
 	crumb_peak = maxi(crumb_peak, crumb_count)
+
+
+## What happens to crumb `i` at tick `now`: laid in the heap, gone, its floor
+## found, or it reached its floor -- bounces, lands, or the floor had gone.
+## True when it was taken out.
+func _crumb_event(cr: Crumbs, i: int, key: Vector3, now: int) -> bool:
+	var age := now - cr.born[i]
+	# Come to rest: it lies where it stopped, for good (BrickHeap).
+	if _crumb_keep and cr.landed[i] > 0:
+		var t_lay := Time.get_ticks_usec()
+		_lay_crumb(cr, i, key, _crumb_dt)
+		lay_us += Time.get_ticks_usec() - t_lay
+		_crumb_remove(cr, i)
+		return true
+	if age >= (_crumb_fall_max if _crumb_keep else _crumb_life):
+		_crumb_remove(cr, i)
+		return true
+	# Handed back by the heap: its floor is asked once what took the old one
+	# has had its tick to go (_heap_support_gone).
+	if is_nan(cr.floor_y[i]):
+		if age >= 2:
+			cr.floor_y[i] = _crumb_floor(_crumb_pos(cr, i, now))
+			cr.on_ground[i] = 1 if _floor_on_ground else 0
+		_crumb_plan(cr, i, now)
+		_crumb_write(cr, i)
+		return false
+	if cr.landed[i] == 0 and now >= cr.t_end[i]:
+		var p := _crumb_pos(cr, i, now)
+		var v := _crumb_vel(cr, i, now)
+		if p.y - cr.half_h[i] <= cr.floor_y[i] and not _crumb_floor_gone(cr, i, p):
+			p.y = cr.floor_y[i] + cr.half_h[i]
+			if -v.y * crumb_bounce > CRUMB_REST_SPEED:
+				v = Vector3(v.x * CRUMB_SLIDE, -v.y * crumb_bounce, v.z * CRUMB_SLIDE)
+				crumb_bounces += 1
+			else:
+				v = Vector3.ZERO
+				cr.landed[i] = now
+			cr.pos[i] = p
+			cr.vel[i] = v
+			cr.t0[i] = now
+	_crumb_plan(cr, i, now)
+	_crumb_write(cr, i)
+	return false
+
+
+func _crumb_remove(cr: Crumbs, i: int) -> void:
+	cr.remove(i)
+	crumb_count -= 1
+	if i < cr.pos.size():
+		_crumb_write(cr, i)
+
+
+## A new crumb in `cr`: thrown from `p` at `v`, turned `base`, spinning
+## round `axis` at `rate` rad/s, onto `floor_y` (-INF none, NAN asked later).
+## Its spin is kept as the shader reads it (8 bits each way), so where the CPU
+## lays it and how it was drawn agree.
+func _crumb_push(cr: Crumbs, p: Vector3, v: Vector3, base: Basis, axis: Vector3, rate: float,
+		now: int, floor_y: float, half_h: float, colour: Color, on_ground: int,
+		count_brick := true) -> void:
+	if crumb_count == 0 or not _crumb_constants_set:
+		_crumb_constants()
+	var spin := crumb_pack_spin(axis.normalized() if axis.length() > 0.01 else Vector3.UP, rate)
+	cr.pos.append(p)
+	cr.vel.append(v)
+	cr.base.append(base)
+	cr.axis.append(spin[1])
+	cr.rate.append(spin[2])
+	cr.spin.append(spin[0])
+	cr.born.append(now)
+	cr.landed.append(0)
+	cr.floor_y.append(floor_y)
+	cr.half_h.append(half_h)
+	cr.colour.append(colour)
+	cr.on_ground.append(on_ground)
+	cr.t0.append(now)
+	cr.t_end.append(now)
+	cr.next.append(now)
+	var i := cr.pos.size() - 1
+	_crumb_plan(cr, i, now)
+	var mm := cr.mmi.multimesh
+	if mm.instance_count < cr.pos.size():
+		# Growing a MultiMesh clears it: every crumb written again.
+		mm.instance_count = maxi(cr.pos.size() * 2, 16)
+		for j in cr.pos.size():
+			_crumb_write(cr, j)
+	else:
+		_crumb_write(cr, i)
+	mm.visible_instance_count = cr.pos.size()
+	cr.soonest = mini(cr.soonest, cr.next[i]) if i > 0 else cr.next[i]
+	crumb_count += 1
+	if count_brick:
+		crumb_bricks += 1
+
+
+## Where crumb `i` is at tick `now`, and how fast: its stretch's start stepped
+## on as _update_crumbs stepped it, a tick at a time (v -= g dt, then p += v dt),
+## in closed form -- the same sums the shader does.
+func _crumb_pos(cr: Crumbs, i: int, now: int) -> Vector3:
+	var n := float(clampi(now, cr.t0[i], maxi(cr.t_end[i], cr.t0[i])) - cr.t0[i])
+	var p := cr.pos[i] + cr.vel[i] * (n * _crumb_dt)
+	p.y -= _crumb_g * _crumb_dt * _crumb_dt * n * (n + 1.0) * 0.5
+	return p
+
+
+func _crumb_vel(cr: Crumbs, i: int, now: int) -> Vector3:
+	if cr.landed[i] > 0:
+		return Vector3.ZERO
+	var n := float(clampi(now, cr.t0[i], maxi(cr.t_end[i], cr.t0[i])) - cr.t0[i])
+	return cr.vel[i] - Vector3(0.0, _crumb_g * _crumb_dt * n, 0.0)
+
+
+## When crumb `i` next needs the CPU: it reaches its floor (the first tick its
+## foot is at or under it), its floor is to be asked, it is to be laid, or it
+## is done. `t_end` is when the shader holds it still: landed, or at its floor.
+func _crumb_plan(cr: Crumbs, i: int, now: int) -> void:
+	var gone_at := cr.born[i] + (_crumb_fall_max if _crumb_keep else _crumb_life)
+	if cr.landed[i] > 0:
+		cr.t_end[i] = cr.landed[i]
+		cr.next[i] = cr.landed[i] + 1 if _crumb_keep else gone_at
+		return
+	var fl := cr.floor_y[i]
+	if is_nan(fl):
+		cr.t_end[i] = gone_at
+		cr.next[i] = mini(maxi(cr.born[i] + 2, now + 1), gone_at)
+		return
+	var hit := gone_at
+	if is_finite(fl):
+		hit = mini(cr.t0[i] + ticks_to_floor(cr.pos[i].y - cr.half_h[i] - fl, cr.vel[i].y,
+				_crumb_g, _crumb_dt), gone_at)
+	cr.t_end[i] = hit
+	cr.next[i] = maxi(hit, now + 1) if hit > now else now + 1
+	if hit <= now:
+		# Already at or under it (a floor found late, or lowered): next tick.
+		cr.t_end[i] = now + 1
+
+
+## Ticks from a foot `h` metres over its floor, going up at `vy`, until the
+## step that puts it at or under the floor (at least 1), falling at `g` in
+## ticks of `dt` (PlanetCrumbs too).
+static func ticks_to_floor(h: float, vy: float, g: float, dt: float) -> int:
+	var a := g * dt * dt * 0.5
+	var f := func(n: float) -> float: return h + vy * dt * n - a * n * (n + 1.0)
+	var n := 1
+	if a > 0.0:
+		var b := vy * dt - a
+		var disc := b * b + 4.0 * a * h
+		if disc > 0.0:
+			n = maxi(int(ceil((b + sqrt(disc)) / (2.0 * a) - 1e-6)), 1)
+	elif vy < 0.0:
+		n = maxi(int(ceil(h / (-vy * dt))), 1)
+	else:
+		return 1 << 40
+	var guard := 0
+	while n > 1 and f.call(float(n - 1)) <= 0.0 and guard < 8:
+		n -= 1
+		guard += 1
+	while f.call(float(n)) > 0.0 and guard < 16:
+		n += 1
+		guard += 1
+	return n
+
+
+## Crumb `i` as the shader reads it (shaders/crumb.gdshader, its header).
+func _crumb_write(cr: Crumbs, i: int) -> void:
+	var mm := cr.mmi.multimesh
+	mm.set_instance_transform(i, Transform3D(cr.base[i], cr.pos[i]))
+	var c := cr.colour[i]
+	var rgb := float((clampi(int(round(c.r * 255.0)), 0, 255) << 16)
+			| (clampi(int(round(c.g * 255.0)), 0, 255) << 8) | clampi(int(round(c.b * 255.0)), 0, 255))
+	mm.set_instance_color(i, Color(rgb, cr.spin[i], float(cr.t_end[i]), float(cr.born[i])))
+	var v := cr.vel[i]
+	mm.set_instance_custom_data(i, Color(v.x, v.y, v.z, float(cr.t0[i])))
+
+
+## [packed, the axis it decodes to, the rate it decodes to]: an axis
+## octahedral in 8 + 8 bits, a rate in 8 over +-CRUMB_SPIN.
+static func crumb_pack_spin(axis: Vector3, rate: float) -> Array:
+	var n := axis / (absf(axis.x) + absf(axis.y) + absf(axis.z))
+	var e := Vector2(n.x, n.y)
+	if n.z < 0.0:
+		e = Vector2((1.0 - absf(n.y)) * signf(n.x) if n.x != 0.0 else (1.0 - absf(n.y)),
+				(1.0 - absf(n.x)) * signf(n.y) if n.y != 0.0 else (1.0 - absf(n.x)))
+	var ex := clampi(int(round((e.x * 0.5 + 0.5) * 255.0)), 0, 255)
+	var ey := clampi(int(round((e.y * 0.5 + 0.5) * 255.0)), 0, 255)
+	var er := clampi(int(round((clampf(rate / CRUMB_SPIN, -1.0, 1.0) * 0.5 + 0.5) * 255.0)), 0, 255)
+	# Back as the shader reads it.
+	var d := Vector2(ex, ey) / 255.0 * 2.0 - Vector2.ONE
+	var v := Vector3(d.x, d.y, 1.0 - absf(d.x) - absf(d.y))
+	var t := maxf(-v.z, 0.0)
+	v.x += -t if v.x >= 0.0 else t
+	v.y += -t if v.y >= 0.0 else t
+	var r := (float(er) / 255.0 * 2.0 - 1.0) * CRUMB_SPIN
+	return [float((ex << 16) | (ey << 8) | er), v.normalized(), r]
+
+
+## Every crumb there is, as [where it is now, how fast], for probes.
+func crumb_states() -> Array:
+	var out := []
+	var now := Engine.get_physics_frames()
+	for key in _crumbs:
+		var cr: Crumbs = _crumbs[key]
+		for i in cr.pos.size():
+			out.append([_crumb_pos(cr, i, now), _crumb_vel(cr, i, now)])
+	return out
+
+
+var _crumb_mat: ShaderMaterial
+var _crumb_dt := 1.0 / 60.0
+var _crumb_g := 9.8
+var _crumb_keep := false
+var _crumb_life := 84
+var _crumb_full := 21
+var _crumb_fall_max := 360
+var _crumb_fade := 36
+var _crumb_constants_set := false
+static var _crumb_clock_frame := -1
+
+
+func _crumb_material() -> ShaderMaterial:
+	if _crumb_mat == null:
+		_crumb_mat = ShaderMaterial.new()
+		_crumb_mat.shader = load("res://shaders/crumb.gdshader")
+		_crumb_mat.set_shader_parameter("spin_max", CRUMB_SPIN)
+		_crumb_constants_set = false
+		_crumb_constants()
+	return _crumb_mat
+
+
+## The tick, gravity, and how crumbs go away -- the shader's copies kept with
+## them. A change of whether bricks are kept re-plans every crumb.
+func _crumb_constants() -> void:
+	var tps := float(Engine.physics_ticks_per_second)
+	var dt := 1.0 / tps
+	var g := Gravity.strength() * DEBRIS_GRAVITY
+	var keep := heap != null and BrickHeap.enabled()
+	var life := int(CRUMB_LIFE_MS * tps / 1000.0)
+	var full := int(CRUMB_FULL_MS * tps / 1000.0)
+	var fall_max := int(CRUMB_FALL_MAX_MS * tps / 1000.0)
+	var fade := maxi(int(CRUMB_FADE_MS * tps / 1000.0), 1)
+	if _crumb_constants_set and dt == _crumb_dt and g == _crumb_g and keep == _crumb_keep:
+		return
+	var replan := _crumb_constants_set and keep != _crumb_keep
+	_crumb_dt = dt
+	_crumb_g = g
+	_crumb_keep = keep
+	_crumb_life = life
+	_crumb_full = full
+	_crumb_fall_max = fall_max
+	_crumb_fade = fade
+	_crumb_constants_set = true
+	var m := _crumb_material()
+	m.set_shader_parameter("tick_s", dt)
+	m.set_shader_parameter("gravity", g)
+	m.set_shader_parameter("keep", keep)
+	m.set_shader_parameter("life", float(life))
+	m.set_shader_parameter("full", float(full))
+	m.set_shader_parameter("fall_max", float(fall_max))
+	m.set_shader_parameter("fade", float(fade))
+	if replan:
+		var now := Engine.get_physics_frames()
+		for key in _crumbs:
+			var cr: Crumbs = _crumbs[key]
+			for i in cr.pos.size():
+				_crumb_plan(cr, i, now)
+				_crumb_write(cr, i)
+			cr.soonest = now
+
+
+## The shader's clock: physics ticks, and the fraction of the next, once a
+## frame by whichever crumbs get there first (a manager, PlanetCrumbs).
+static func crumb_clock() -> void:
+	var f := Engine.get_process_frames()
+	if f == _crumb_clock_frame:
+		return
+	_crumb_clock_frame = f
+	RenderingServer.global_shader_parameter_set("crumb_clock",
+			float(Engine.get_physics_frames()) + Engine.get_physics_interpolation_fraction())
 
 
 ## A crumb that has come to rest, laid in the heap: flat on whichever of its
@@ -2209,18 +2453,10 @@ func _heap_support_gone(box: AABB) -> void:
 		var b := xf.basis
 		var cr := _crumb_set(size)
 		var axis := Vector3(randf() - 0.5, randf() - 0.5, randf() - 0.5)
-		cr.pos.append(xf.origin)
-		cr.vel.append(Vector3(randf_range(-0.3, 0.3), 0.0, randf_range(-0.3, 0.3)))
-		cr.base.append(b)
-		cr.axis.append(axis.normalized() if axis.length() > 0.01 else Vector3.UP)
-		cr.rate.append(randf_range(-1.5, 1.5))
-		cr.born.append(now)
-		cr.landed.append(0)
-		cr.floor_y.append(NAN)
-		cr.on_ground.append(0)
-		cr.half_h.append(0.5 * (absf(b.x.y) * size.x + absf(b.y.y) * size.y + absf(b.z.y) * size.z))
-		cr.colour.append(lying[k][2])
-		crumb_count += 1
+		_crumb_push(cr, xf.origin, Vector3(randf_range(-0.3, 0.3), 0.0, randf_range(-0.3, 0.3)),
+				b, axis, randf_range(-1.5, 1.5), now, NAN,
+				0.5 * (absf(b.x.y) * size.x + absf(b.y.y) * size.y + absf(b.z.y) * size.z),
+				lying[k][2], 0, false)
 
 
 ## Should this piece never become a body at all? Decided BEFORE anything is
@@ -4659,6 +4895,8 @@ func _island_aabb(isl: BrickIsland) -> AABB:
 # ---------------------------------------------------------------------------
 
 func _process(_delta: float) -> void:
+	if crumb_count > 0:
+		crumb_clock()
 	var now := Engine.get_process_frames()
 	overlap_peak = maxi(overlap_peak, _ghosts.size() + _held.size())
 	var gi := _ghosts.size() - 1

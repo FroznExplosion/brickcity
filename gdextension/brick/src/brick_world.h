@@ -308,6 +308,20 @@ public:
     // The same for rows `ys` only (one x-z plane each, in that order, x fastest
     // then z) and only the columns within `ring` of a face; the rest read 0.
     PackedByteArray get_solid_cells_at(int chunk_id, PackedInt32Array ys, int ring) const;
+    // The chunk's light grid (Docs/Lighting.md 6.1): one cell a stud across
+    // and `cell_plates` plates up, with a cell of open air all round (ground
+    // under it). Sky: 255 open to the sky, `sky_step` less each cell further
+    // in (three times that through a see-through block); lamp: from Glow
+    // blocks, `lamp_step` less a cell. Its size in cells, margin included:
+    Vector3i chunk_light_dims(int chunk_id, int cell_plates) const;
+    // ...and the grid itself, two bytes a cell (sky, lamp), each y layer an
+    // x-by-z tile, tiles left to right then down a `width` x `height` image
+    // (RG8). Empty when it does not fit.
+    // The centres of `chunk_id`'s live Glow PLA blocks, chunk-local metres:
+    // where BrickGridLight hangs its lamps (Docs/Lighting.md 6.3).
+    PackedVector3Array chunk_glow_points(int chunk_id) const;
+    PackedByteArray chunk_light_tiles(int chunk_id, int cell_plates, int width, int height,
+            int sky_step, int lamp_step) const;
     int block_at(int chunk_id, Vector3i cell) const;
 
     int get_block_count(int chunk_id) const;
@@ -378,6 +392,12 @@ public:
     /// sections its box touches, grown by `margin` cells: it changes the faces
     /// of what is round it. The first call names every section with bricks.
     PackedInt32Array take_changed_sections(int chunk_id, int margin);
+    /// BrickShapes.pack_courses (workshop_shapes.gd), line for line: `cells` and
+    /// `taken` keyed by Vector3i, `sizes` three ints a part in the parts' order,
+    /// `starts` keyed by layer. Four ints a brick laid: part, x, y, z.
+    /// Docs/BuildTools.md section 18.
+    static PackedInt32Array pack_courses(const Dictionary &cells, const PackedInt32Array &sizes,
+            bool staggered, const Dictionary &taken, int base, const Dictionary &starts, bool strict);
     /// One band's chamfered mesh, on a worker -- or the whole chunk's as one,
     /// with section < 0, for a chunk drawn as one mesh (build_chunk_mesh).
     /// Needs the bake (bake_ready); ask chamfer_ready, then
@@ -1490,6 +1510,9 @@ private:
     struct CoarseJob {
         int chunk_id = -1;
         CoarseOut out;
+        /// `out` as the mesh's arrays, made on the worker too: copying them
+        /// was 2-5 ms of the main thread a stand-in (take_coarse_mesh).
+        Array arrays;
         std::shared_ptr<const std::vector<brick::Archetype>> parts; // as a BakeJob's
         std::atomic<bool> done{false};
         std::thread worker;
@@ -1570,6 +1593,9 @@ private:
         std::vector<int32_t> post_at;
         ChamferIn in;
         ChamferOut out;
+        /// `out`'s vertices as the mesh's arrays, made on the worker (as a
+        /// CoarseJob's): the copy is the main thread's no more.
+        Array arrays;
         std::atomic<bool> done{false};
         std::thread worker;
     };

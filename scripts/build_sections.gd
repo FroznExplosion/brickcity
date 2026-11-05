@@ -138,6 +138,24 @@ static func record(cut: Dictionary, size: int) -> Dictionary:
 			"of": runs}
 
 
+## The build's sections' record again after its bricks changed: `of` each
+## brick's section now (as `of_build` gave it, kept in step with the change).
+static func rerecord(r: BuildRecipe, of: PackedInt32Array) -> void:
+	var m: Dictionary = r.meta.sections
+	var runs := []
+	var count := {}
+	for i in of.size():
+		count[of[i]] = int(count.get(of[i], 0)) + 1
+		if not runs.is_empty() and int(runs[-1][0]) == of[i]:
+			runs[-1][1] = int(runs[-1][1]) + 1
+		else:
+			runs.append([of[i], 1])
+	m.of = runs
+	m.size = r.size()
+	for s: Dictionary in m.sections:
+		s.bricks = int(count.get(int(s.id), 0))
+
+
 ## Each brick's section from a build's meta (empty when it has none, or its
 ## bricks changed since it was cut).
 static func of_build(r: BuildRecipe) -> PackedInt32Array:
@@ -345,7 +363,9 @@ static func _cells(r: BuildRecipe, of: PackedInt32Array) -> Dictionary:
 
 
 ## Where two sections' bricks touch: [{a, b, cells}], a < b, each cell of a
-## touching b and of b touching a.
+## touching b and of b touching a side by side; one standing on the other, only
+## the cell under -- a section stacked on another (a deck on a node, 7.2) keeps
+## its floor's two layers when the joint goes, and leaves whole.
 static func _joints(cells: Dictionary) -> Array:
 	var by := {}
 	for c: Vector3i in cells:
@@ -358,8 +378,11 @@ static func _joints(cells: Dictionary) -> Array:
 			var key := Vector2i(mini(s, t), maxi(s, t))
 			if not by.has(key):
 				by[key] = {}
-			by[key][c] = true
-			by[key][n] = true
+			if d.y == 0:
+				by[key][c] = true
+				by[key][n] = true
+			else:
+				by[key][c if d.y > 0 else n] = true
 	var out := []
 	var keys := by.keys()
 	keys.sort()

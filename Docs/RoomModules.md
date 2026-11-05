@@ -218,8 +218,13 @@ rest is inside.
 * **Module facade spots** (built 2026-10-31) where the module's wall is the tower's outer wall
   (outside the storey past it): a window spot cut 2 x 6 (glazed in a glass tower), a balcony spot
   built out (the grow's balcony) with the chance `balcony` above the ground storey, where nothing
-  of the ground storey's footprint is under it. `stats.windows`, `stats.balconies`. Hang spots
-  are not used in a tower.
+  of the ground storey's footprint is under it. `stats.windows`, `stats.balconies`.
+* **Hung rooms** (built 2026-11-03): a module's hang spot on the outer wall, above the ground
+  storey, with the chance `hang` (0.5): a room hung there as the grow hangs one (a hang-role
+  module, a room-role one when the library has none, its door against the spot), out past the
+  ground storey's footprint and clear of anything hung already, its other doors walled up, a
+  doorway cut through the wall to it; the placement says `from` (the module it hangs off).
+  `stats.hung`. A ship's packer (RoomPack, 7.4) never hangs one: nothing goes outside its hull.
 * **Filler rooms**: whatever of the storey is left, split by a wall every `room_max` studs either
   way, each given a doorway (two columns) to the corridor, the hall or a filler room already
   reached, round by round, so every room is reached; a piece under 4 columns stays closed.
@@ -241,8 +246,12 @@ as the footprint*, **Generate tower**, **Next seed** (the plate and the volume o
 a tall one). `tools/room_shell_probe.gd` (15: adds a north-only setback, stacked stair modules
 open room to room, facade windows and balconies).
 
-Not yet: hang spots in a tower; a cap and a facade window on the same wall cells (a module made
-so) leaves the cap.
+A cap and a facade window on the same wall cells (a module made so: a window spot on a door that
+the outer wall walls up) used to leave the cap; now the window wins, in the grow and the shell
+(`RoomGrow._uncap`: a cap brick a later cut crosses is laid again as plates round the hole).
+`room_shell_probe` (17): a module with a hang spot -- rooms hung, clear of every module, open to
+their rooms (the reach check counts a hung room's columns as inside) -- and one with a window on
+its door's cells (no cut cell left solid; 24 were without the fix).
 
 ## 5. Markers in the workshop (stage 1, built)
 
@@ -375,8 +384,53 @@ open through both doorways; docks open with a door; wings and radiators clear of
 lowest row 1; sections with the core's the root; same seed same station; no core says so.
 `module_marks_probe` (15): Generate station.
 
-Not yet: tubes bridge on one level only (no ramp or ladder between levels); the abstract look is
-the modules' own (round pods where the user builds them round); no station colour band.
+**Levels** (built 2026-11-03). The kit has a *stair node* (12 x 10, a stair link up under its
+ceiling at its +X end, its doors off the stair's line; at most one, weight 0.5) and a *deck* (12 x
+10, `storeys: upper`, a stair link down over it, doors all round): a kit station grows a second
+level about one time in three, its rooms branching off the deck. The grow takes a stair join only
+when the stair's flight lies under the upper module's room (`RoomGrow._stair_under`, any library:
+an upper module turned another way round the link stood a wall over the steps). A door seam over a
+module below is tied by a 2x2 tile on the two walls' sills (`stats.sills`), where the tie under
+the walls would land in the lower module's ceiling and be dropped (1653 bricks came loose on one
+seed before it).
+
+A **bridging tube may join two levels**: ports up to `RISE` (24) plates apart in height. It is as
+tall as both doorways' rows; on its floor a stair of brick columns, a stud of tread a step, each
+step's rise the first of `STEPS` (2 plates, else 3 -- the pawn's step) the gap has the length for
+with two studs of landing at the top; a lintel hung from its ceiling over the lower doorway. At
+the higher end its tie is right under that module's wall, inside the top step, which stands on it
+and over it. `stats.stairs`. They are rare: ports at two heights mostly face each other 3-6 studs
+apart, too short for 20 plates of stair (one station in 30-40).
+
+**Ladders** (built 2026-11-04, 7.13). The kit has a *ladder node* too (6 x 6, doors all round, a
+stair link up at its middle; at most one, weight 0.25 -- the stair node's now as well, so a second
+level is still about one station in two, and loops as common as before): too small for a stair's
+flight, it gets a ladder up through a hole to the deck on it. Any stair join whose lower room has no
+floor for a flight takes a ladder the same way (`RoomGrow._ladder_way`: two studs across at the
+link, its rails a stud behind, two studs of climb room in front, cut through the slab over it; the
+upper room over the climb room and over the stud behind the rails, where its top lands -- checked
+before the join, as a stair's flight is, `_ladder_under`). A bridging tube between two levels too
+short for a stair's flight but `LADDER_GAP` (5) long or more has a ladder under the higher doorway,
+its rails against that module's wall, its top rung the doorway's sill (`stats.tube_ladders`; the
+tie in its rails, `held`, stands in for a rail's plate). `meta.ladders`, `stats.ladders`.
+
+Found on the way, in layouts the new modules made: a tube's end over a module below is tied on
+its doorway's sill (a 2x2 tile over the tube's floor and the module's) where the tie under would
+land in the module's ceiling (`stats.sills`); an odd length of a tube's two-layer slab ran its
+upper layer short and left its last row a column of 1x1 plates, held by nothing (the walls on it
+came loose) -- the upper layer now runs to the far edge and a single row is 1x2s; and a section
+stacked on another (a deck on a node) shares a joint only in the cells under it (BuildSections
+`_joints`), so cut off it keeps its floor's two layers and leaves whole.
+
+`room_station_probe` (11): *levels* -- every stair join of the 10 seeds (7, six by a ladder) and a
+tube between two levels, one with a ladder (searched for in seeds 11-80), walked from the lower end
+by a figure 12 plates tall stepping at most a brick up, or climbing a ladder (its climb room clear
+for the figure all the way up, its rails there, its top landing on a floor); the wings check keeps
+every stacked module of a column and leaves a ladder's rungs out; the bridging check takes a sill's
+tile as the step it is.
+
+The abstract look is the modules' own (round pods where the user builds them round). A colour
+band: 7.10.
 
 ### 7.3 Stations in space (stage 10, built 2026-10-31)
 
@@ -415,8 +469,7 @@ prepare grows the same station for the seed, a shell box a section; laid frame b
 loose; a leaf section's joint shot away -- it drifts off as one piece. `system_probe` 31/31 as
 before. The workshop's *Generate station* uses the shipped kit when the player has no core.
 
-Not yet: the people
-and furniture of a drifting section are not carried with it; a station's damage is kept as
+A drifting section takes its furniture (7.7) and whoever stands on it (7.8); a station's damage is kept as
 before (dead ids) but sections are not; no windowed pass has looked at one (`--gate=system`
 visits home's, a tower).
 
@@ -468,8 +521,8 @@ worse, same seed same ship; a hull along Z turned; no hull says so. ~0.7 s a pas
 **Why not 85% yet**: every room has its own walls a stud thick; in a 25-stud deck with a 4-stud
 spine, rooms 8 deep lose a quarter of each side to walls. The fill rises with modules sized to the
 deck (as deep as the band, the hull for their back wall: the probe's cabin) and with walls shared.
-Not yet: a lift (`lift` off), portholes in the hull, an airlock to the outside, decks of their own
-pitch.
+Not yet: a lift (`lift` off), decks of their own pitch. (Since built: the airlock, 7.5; windows
+in the hull, 7.9.)
 
 ### 7.5 The ship flies its rooms (stage 12, built 2026-10-31)
 
@@ -559,9 +612,8 @@ plates. `ship_build_probe` checks every door has its lintel on 8 seeds; `station
 (6) that a station hangs all its doors (21 of 21); `--gate=hull` (11) all of the ship's (41) and
 walks in through the airlock's.
 
-Not yet: a section that drifts off
-takes no one with it; the hull is a box with a bow and
-its engines and wings on the roof (no windows).
+A section that drifts off takes its furniture (7.7) and whoever stands on it (7.8); the hull has
+windows in its sides (7.9).
 
 ### 7.6 Order and choices
 
@@ -572,3 +624,182 @@ planets area's chat. Each stage merged with its probe, as stages 1-7.
 Defaults taken unless the user says otherwise: a station keeps one "down" (its deck's gravity),
 not zero-g inside; pods are box-shaped with round parts where the part library has them;
 `section_bricks` 8000.
+
+### 7.7 Furnished rooms (built 2026-11-02)
+
+A generated station's and ship's rooms are furnished (`KitFurnish.furnish(recipe, seed)`; ShipBuild.make,
+SpaceStation's prepare for a station): each the city's way -- `RoomManifest.items_for` on a `Room`
+made from the space (its columns' box, the cells outside them posts), so two to five built-in
+items of its kind, or an authored room template of that kind, and authored items tagged for it.
+A ship room's name gives its kind (bridge office, engine room / reactor / med bay lab, quarters and
+cabins bedroom, galley kitchen, cargo storeroom); a plain room (`office`: RoomPack's fillers, a
+station's pods) is one of office, bedroom, lab, storeroom, kitchen, living by its seed. A station
+module's space kind is now its role's (core living, pod office, dock hall, the rest corridor);
+corridors, halls and closed nooks (`storage`) are left empty.
+
+Kept clear: a lane a stud either side from each door to the room's middle, and two studs round the
+middle (a hub's way through, the bridge's seat). An item is laid all or none, every cell free and in
+the room, a floor brick under it. The items are **plain bricks** at the end of the build
+(`meta.furniture` {from, items}), not the interior role: a station's and a ship's meshes are their
+face bake, which leaves interior bricks out (the city draws those apart, FurnitureMesh). So they are
+drawn with studs, hold by them, collide, and go with their section -- a section that drifts off
+takes its furniture; each new brick is in the section of the floor under it (`meta.sections`).
+
+`ship_build_probe` (4): on 8 seeds 44-107 items, none in a doorway or the cells beside one (with the
+lanes off it finds 9-17 such cells a seed), nothing loose, every brick in a section.
+`station_sections_probe` (6) as before, the station regrown with its furniture. `--gate=hull` (12, now 14 with the consoles and windows):
+241 furniture bricks; shot `hull_gate_room` from the middle of its most furnished room (cargo:
+crates). A station of 16 spaces got 8 items (its core and two pods).
+
+A room that already holds furniture -- a player's module built with its own, interior bricks --
+is left as it is (2026-11-03), and its furniture made plain bricks so a station or ship draws it
+(their meshes leave interior bricks out). `tools/kit_furnish_probe.gd` (3).
+
+Each item stands turned by the manifest's `yaw` (2026-11-03): its parts turned in the box they fill
+(`KitFurnish.turned`, as `BuildRecipe.turned` turns a block and its name), its min corner kept; the
+next quarter turn that fits when that one does not. `meta.furniture.turned`; `kit_furnish_probe`
+(4): a bed turned fills its box turned, four turns are none, 14 of 20 items stood turned.
+
+The bridge has consoles of its own: 7.11.
+
+### 7.8 Aboard a piece that leaves (built 2026-11-02)
+
+A piece a station or ship sends drifting (a section cut off at its joints, or any loose group
+over `DRIFT_MIN`) used to be a mesh and nothing else: whoever stood on it was left standing on air.
+Now, before the split, `SpaceStation._riders` finds every figure (any CharacterBody3D within its
+field) whose floor -- the first brick under it, within `RIDE_DROP` plates -- is among the bricks
+leaving. If anyone is, the piece gets a body of its own bricks (`add_chunk_shapes` round its centre
+of mass, a static body with no node), handed with the riders to PlanetSystem's drift handler
+(`drift_body`, `drift_riders`; freed if nobody takes it).
+
+PlanetSystem moves that body with the piece each frame and gives it the piece's own velocity
+(linear and turning, in the world's axes) -- not the step it was moved by, which an origin shift
+or the frame would spoil. A figure on it is carried as on any moving floor (move_and_slide's
+platform velocity), walks on it, and can step off. A piece with someone aboard leaves gently
+(`DRIFT_RIDDEN`: a quarter of the push, turning a fortieth as fast), is never faded out, capped or
+left behind while one of them is still on or by it (`_ridden`: within its box and 2 m), and near a
+planet's ground still falls as any piece does (they stand on its box). The body goes with the piece.
+
+`planet.tscn -- --gate=adrift` (windowed): to the nearest generated station; the walker stood on
+top of its section with the fewest joints (not the keel's), those joints shot away; the section
+leaves with the walker aboard, a body under them; 5 s later it has drifted and the walker is where
+they were on it, still standing. (On home's station, a tower, a storey's rows cut through freed a
+few hundred bricks but not the roof the walker stood on.) Shots `adrift_gate_*` (the station is on the night side: dark). Home's station is grown as a
+generated one for the gate, its system having only the tower.
+
+**Nothing pulls on it** (2026-11-04, 7.12; it had a down of its own, turning with it, from
+2026-11-03): a piece broken off has no generator. Its box (`_on_piece`'s: grown 2 m) is a field
+where nothing pulls, first of all the fields, so whoever is on it floats (PawnMoves FLOAT); the
+piece drifts on from under them. The gate: on the piece nothing pulls, the walker floats, its up
+its own, falling nowhere (0.5 m in 3 s, at rest); then put back in the station's field over its
+roof head over heels (162 degrees off), it comes into the station's down over a moment -- still
+147 degrees off two ticks in, upright on the roof 0.7 s later -- and lands on its feet.
+
+Not yet: figures on a piece not anyone's frame of reference far from the station.
+
+### 7.9 Windows in the hull (built 2026-11-02)
+
+`ShipBuild._windows`: for each room (not a closed nook) against a side of the hull, panes
+`WINDOW` (2 studs x 8 plates) with the sill `WINDOW_SILL` (4) plates over its floor -- the pawn's
+eyes are about 11 up -- one every `WINDOW_EVERY` (6) studs of its run along the side (one for a
+run of 4 or 5). The hull's cells are glazed (`plate_1x1` in the translucent material,
+`RoomGrow._glass`, as a tower's facade windows); the room's own wall and any gap between it and
+the hull (up to `WINDOW_REACH` cells) are cut open, so you look out through a short recess. What a
+cut brick leaves above or below is kept as plates, so the columns stay held by their studs; every
+new brick goes in the section of the brick it was cut from (`BuildSections.rerecord`). Not beside a
+doorway; sides only (the bow's slant and the stern are left whole).
+
+`ship_build_probe`: 16-46 windows on 8 seeds, nothing loose, every door's lintel, every brick in a
+section. `--gate=hull` (13): 488 glass plates; shot `hull_gate_window` stood on a room's floor four
+studs in from a pane, the ground seen through it.
+
+### 7.10 A station's colour band (built 2026-11-03)
+
+Every kit station module but the truss has a band: one brick course round its walls (rows
+`StationKit.BAND_ROW` to +2, over a pod's windows, cut by the doors), laid in `BAND_MARK`. A
+generated station built from the shipped kit (`StationKit.is_kit`: the player has no core of
+their own) is painted by its seed (`paint_band`, before its furniture): every band brick one of
+`BANDS` (red, orange, royal blue, teal, gold yellow, dark green, purple, azure), so stations differ
+and a station's modules match. A player's own station modules are never repainted.
+`kit_furnish_probe`: every kit module but the truss banded; six seeds, six band colours, each
+station one.
+
+### 7.11 The bridge and its consoles (built 2026-11-03)
+
+A generated ship's bridge is 10 x 8 inside (`ShipBuild.BRIDGES`), or 6 x 6 when the packer fits no
+bigger one fore (a narrow bow: two seeds of the probe's eight). After the windows, `_consoles`
+fits it out facing the seat from fore (+X): along its fore edge a panel `CONSOLE_BACK` courses high
+and a desk before it `CONSOLE_DESK` high, along its side edges fore of the seat side desks; each a
+column of 1x1 bricks in dark bluish grey topped with a black tile (a screen). Never in a doorway or
+two studs beside one, nor on the seat's column; each brick in its floor's section; `meta.consoles`
+{from, bricks}, `stats.consoles` (the columns). A bridge with furniture of its own (a player's:
+interior bricks over its floor) gets none. KitFurnish still furnishes the rest of it (an office).
+
+`ship_build_probe` (4): eight console columns or more on every seed (8-20), all fore of the seat,
+the seat's cell and the one three plates over it clear, none by a doorway.
+
+### 7.12 Gravity of their own (built 2026-11-04)
+
+Only a working station or ship pulls, and only while its generator is on (`OrbitalData.gravity_on`,
+`SpaceStation.pulls`: a station or ship -- not a satellite, not a wreck). Where it pulls it is
+**local**: inside its boxes -- one round each of its sections (BuildSections; a tower's module box
+for the others), grown `FIELD_GROW` (2 m) so its floor, its roof, its doorways and a jump off its roof are in it --
+toward its own gravity centre, over whatever pulls outside: a planet's when it is parked on one,
+nothing in open space or round a station.
+
+* `Gravity.Field` {space, local, boxes, centre, pull, radius}; `Gravity.fields`, the first that
+  holds a point is its gravity: `down_at`, `up_at`, `height_of`, `lift_to` take its centre and
+  datum, `ground_height` is NAN in one; `pull_at(p)`, `pulls_at(p)`: its pull, else what pulls
+  outside (`outside_pull`: the planet whose shell it is, 0 in open space or a station's frame). A
+  field with no centre pulls nothing (a piece broken off, 7.8). `strength()` is what pulls where
+  the player is, as before (debris, crumbs, the AI's falls).
+* `PlanetSystem._gravity` sets them every tick: the pieces by the player first, then every laid
+  ship and station that pulls (`gravity_field`, made once). `generator_at(p)`: the ship or station
+  whose boxes hold `p`. In play **G** turns its generator on and off; the HUD says which, or that
+  nothing pulls (and how to move then).
+* **Into a new down** (after zylanntest's PlayerController `_orient_toward`): the pawn's body and
+  the walker's turn their up toward the down where they are at `Pawn.REORIENT_RATE` (4 rad/s,
+  four times that crouched) -- `Gravity.carry_toward`, the least turn, at most a tick's worth -- so
+  jumping off a ship's deck into a planet's air, or drifting into a field upside down, rights the
+  body in the air over a moment instead of a tick; within a tick's worth it is exactly `carry`, so
+  walking on a planet does not change. A fall starts over when the field under the feet changes
+  (heights in two fields are over two datums).
+* **Nothing pulling** (`Pawn.floating`): no gravity, the body's up kept; the move is a suit's
+  thrust (`FLOAT_ACCEL` 4 m/s^2, up to `FLOAT_SPEED`, the walk's, never taking away speed above
+  it), jump up the body's Y and crouch down it, a jump against a surface pushes off it
+  (`FLOAT_PUSH`), no input steadies it (`FLOAT_DAMP` 0.5/s). No fall damage. The walker the same.
+
+`gravity_probe` (13, also ladders: 7.13): a field's own down and pull inside it, the world's
+outside, none in a field with no centre; into a down 90 degrees round in the air, 75 degrees off
+two ticks in, upright in 0.43 s and on its feet on the field's floor; where nothing pulls it falls
+0 m in 1 s, thrusts to FLOAT_SPEED and no more, and steadies when let go. `--gate=seat`: on the
+deck in open space G off -- nothing pulls, floating -- and on again, back on the deck. `--gate=hull`:
+inside the parked ship its own field, outside it the world's. `--gate=adrift`: 7.8.
+
+Not yet: Gravity is still one down for whoever asks at a point, but one strength for the rest
+(`strength()`); a generator is the whole ship's or station's, not a part of it that can be shot
+out; G is not saved.
+
+### 7.13 Ladders (built 2026-11-04)
+
+A **ladder** is bricks and a node. Its bricks (`RoomGrow.ladder_adds`): two rails of 1x1 bricks and,
+every `LADDER_EVERY` (4) plates down from its top, a rung -- plates two studs deep over the rails
+and a stud out of them -- so each rung is held by the rails, the rails by the rungs and the floor.
+Its node (`Ladder`, group `ladder`): at the foot of its rungs' face, Y up it, +Z out of it, `width`
+and `height` (to where its top lands), placed from `meta.ladders` [{at, facing, w, h}] under the
+bricks' node when a station or ship is laid (`Ladder.place`).
+
+PawnMoves climbs one (`State.LADDER`): pushed into (within `Ladder.REACH`, 0.8 m, of its face),
+the body is held `LADDER_HOLD` out of its face and across its middle; forward climbs at
+`LADDER_SPEED` (0.7 of the walk), back climbs down and, at its foot, steps off on to the floor;
+forward at its top goes over it on to what it leads to (a mantle, `_climb`, to `LADDER_OVER` past
+its face); jump springs off it, out and up (`LADDER_OFF`); crouch lets go. It goes up the
+ladder's own Y, whatever pulls, or nothing.
+
+`gravity_probe`: walking into a ladder climbs it, up 2.8 m and over its top, standing on it; back
+from half way climbs down and lets go at the floor; jump springs off (1.1 m out); the same wall
+with no ladder is not climbed. `room_station_probe`: 7.2.
+
+Not yet: the city and the workshop lay a generated tower's ladder's bricks (a player's module
+whose stair has no floor) but put no node for it: there it is not climbed; soldiers do not climb
+(the nav has no ladder edges); a ship's decks still go by its stair well.

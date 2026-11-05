@@ -25,6 +25,9 @@ const SECTION_BRICKS := 2000
 ## A loose group over this many bricks leaves whole, as a drifting piece
 ## (Planets.md 11.12 step 6); smaller, crumbs.
 const DRIFT_MIN := 20
+## Its gravity's boxes grown this much past its bricks, m: a jump off its roof
+## (the pawn's held jump clears four bricks, 1.7 m) still comes back down on it.
+const FIELD_GROW := 2.0
 
 ## A loose group left: its mesh `arrays`, drawn from `local_com` back; the world
 ## transform of its centre of mass; how many bricks.
@@ -39,6 +42,8 @@ var wreck: Node3D
 ## Laying its bricks only to leave `wreck` (lay_wreck).
 var _wreck_only := false
 var gravity_centre: Node3D
+## Its generator's field (Gravity.Field; Docs/RoomModules.md 7.12), made once.
+var _field: Gravity.Field
 var brick_material: ShaderMaterial
 ## The module's corner, in the station's frame: its floor at y 0, centred.
 var frame := Transform3D()
@@ -59,6 +64,16 @@ var _collision: BuildingCollision
 ## collision (world-placed) is put away and its shell box stands in, nothing
 ## damaged. `ride` / `unride`.
 var riding := false
+## Who stood on the piece being sent off (`drifted`), and a body of its bricks
+## for them to stand on: the drift handler takes both (PlanetSystem), else the
+## body is freed once the signal is out.
+var drift_riders: Array = []
+## The piece being sent off, as its bricks (ChunkRecord.to_data), for a save:
+## PlanetSystem takes it with the riders.
+var drift_record := {}
+var drift_body := RID()
+## How far under a figure's origin its floor is looked for, plates.
+const RIDE_DROP := 16
 ## A generated one's doors and lifts (its recipe's meta), hung once its bricks
 ## are solid, following its chunk (Docs/RoomModules.md 7.3).
 var doors: BuildDoors = null
@@ -145,6 +160,47 @@ func setup(d: OrbitalData) -> void:
 ## A frame of its own (a station or a ship), not only seen (a satellite).
 func is_station() -> bool:
 	return data.kind != "satellite"
+
+
+## Its own gravity pulls (Docs/RoomModules.md 7.12): a working station or ship --
+## not a satellite, not a wreck -- with its generator on.
+func pulls() -> bool:
+	return is_station() and data.gravity_on and data.gravity > 0.0 and wreck == null
+
+
+## Its generator on or off.
+func set_gravity(on: bool) -> void:
+	data.gravity_on = on
+	print("[station] %s: gravity generator %s" % [data.orbital_name, "on" if on else "off"])
+
+
+## Its field: its gravity inside its boxes -- a box round each section of a
+## generated one (BuildSections), its module's box for a tower's -- grown by
+## FIELD_GROW, so standing on its floor, its roof or in a doorway, or jumping
+## off its roof, is in it.
+## Null while it does not pull.
+func gravity_field() -> Gravity.Field:
+	if not pulls() or gravity_centre == null:
+		return null
+	if _field == null:
+		_field = Gravity.Field.new()
+		_field.space = self
+		_field.centre = gravity_centre
+		_field.radius = DEPTH
+	if _field.boxes.is_empty() or _field.local != frame:
+		_field.local = frame
+		_field.boxes.clear()
+		var cell := Vector3(BrickWorld.get_stud_metres(), BrickWorld.get_plate_metres(), BrickWorld.get_stud_metres())
+		if recipe != null and recipe.meta.has("sections"):
+			var org := recipe.origin()
+			for s: Dictionary in recipe.meta.sections.sections:
+				var lo := Vector3(BuildRecipe.cell_from(s.lo) - org) * cell
+				var hi := Vector3(BuildRecipe.cell_from(s.hi) - org + Vector3i.ONE) * cell
+				_field.boxes.append(AABB(lo, hi - lo).grow(FIELD_GROW))
+		else:
+			_field.boxes.append(AABB(Vector3.ZERO, Vector3(data.fx * cell.x, height, data.fz * cell.z)).grow(FIELD_GROW))
+	_field.pull = data.gravity
+	return _field
 
 
 ## Two solar wings, either side along X, `span` long, from `x0` out.
@@ -258,6 +314,8 @@ func activate() -> void:
 		add_child(doors)
 		lifts = BuildLifts.new(bricks, src)
 		add_child(lifts)
+		# Its ladders to climb (Ladder), in its bricks' frame.
+		Ladder.place(_brick_node, recipe)
 	crumbs = PlanetCrumbs.new()
 	add_child(crumbs)
 	crumbs.setup(gravity_centre)
@@ -428,14 +486,11 @@ func _solve() -> void:
 			crumbs.throw(bricks, chunk, ids)
 			bricks.kill_blocks(chunk, ids)
 			continue
+		var riders := _riders(ids)
 		var split: Dictionary = bricks.split_island(chunk, ids)
 		if split.is_empty():
 			continue
-		var c := int(split.chunk)
-		var arrays: Array = bricks.build_chunk_mesh(c)
-		var com: Vector3 = split.local_com
-		drifted.emit(arrays, bricks.get_chunk_transform(c) * Transform3D(Basis(), com), com, ids.size(), brick_material)
-		bricks.release_chunk(c)
+		_send_off(split, ids.size(), riders)
 	_after_kill(all)
 	if not joints.is_empty():
 		_joints_step()
@@ -594,6 +649,11 @@ func _prepare_generated() -> void:
 		prepare()
 		return
 	recipe = made.recipe
+	if not ship:
+		var lib := StationKit.library()
+		if StationKit.is_kit(lib):
+			made.stats["band"] = StationKit.paint_band(recipe, data.orbital_seed)
+		made.stats["furniture"] = KitFurnish.furnish(recipe, data.orbital_seed)
 	var size: Vector3i = recipe.bounds()[1]
 	data.fx = size.x
 	data.fz = size.z
@@ -789,15 +849,60 @@ func _joints_step() -> void:
 		return
 	for s in sections:
 		_cut[s] = true
+	var riders := _riders(off)
 	var split: Dictionary = bricks.split_island(chunk, off)
 	if split.is_empty():
 		return
+	_send_off(split, off.size(), riders)
+	_after_kill(off)
+
+
+## A piece split off (`split_island`'s) sent drifting: its mesh, and when
+## anyone stood on it, a body of its bricks round its centre of mass that they
+## ride on (PlanetSystem moves it with the piece).
+func _send_off(split: Dictionary, count: int, riders: Array) -> void:
 	var c := int(split.chunk)
 	var arrays: Array = bricks.build_chunk_mesh(c)
 	var com: Vector3 = split.local_com
-	drifted.emit(arrays, bricks.get_chunk_transform(c) * Transform3D(Basis(), com), com, off.size(), brick_material)
+	drift_riders = riders
+	if not riders.is_empty():
+		drift_body = PhysicsServer3D.body_create()
+		PhysicsServer3D.body_set_mode(drift_body, PhysicsServer3D.BODY_MODE_STATIC)
+		PhysicsServer3D.body_set_collision_layer(drift_body, Layers.STRUCTURE)
+		PhysicsServer3D.body_set_collision_mask(drift_body, Layers.STRUCTURE_MASK)
+		bricks.add_chunk_shapes(drift_body, c, com, true, true)
+	drift_record = ChunkRecord.capture(bricks, c).to_data(bricks)
+	drifted.emit(arrays, bricks.get_chunk_transform(c) * Transform3D(Basis(), com), com, count, brick_material)
+	drift_record = {}
+	if drift_body.is_valid():
+		PhysicsServer3D.free_rid(drift_body)
+	drift_body = RID()
+	drift_riders = []
 	bricks.release_chunk(c)
-	_after_kill(off)
+
+
+## The figures (any CharacterBody3D near it) whose floor is a brick among `ids`:
+## the first brick under each, within RIDE_DROP plates.
+func _riders(ids: PackedInt32Array) -> Array:
+	var on := {}
+	for i in ids:
+		on[i] = true
+	var out := []
+	var inv := bricks.get_chunk_transform(chunk).affine_inverse()
+	var cs := BrickWorld.get_cell_size()
+	for n in get_tree().root.find_children("*", "CharacterBody3D", true, false):
+		var b := n as CharacterBody3D
+		if (b.global_position - global_position).length() > field:
+			continue
+		var l := inv * b.global_position
+		var c := Vector3i(floori(l.x / cs.x), floori(l.y / cs.y), floori(l.z / cs.z))
+		for k in RIDE_DROP:
+			var id := bricks.block_at(chunk, c - Vector3i(0, k, 0))
+			if id >= 0:
+				if on.has(id):
+					out.append(b)
+				break
+	return out
 
 
 func _exit_tree() -> void:

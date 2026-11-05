@@ -19,6 +19,15 @@ const FLOOR := 2
 ## White hull, a grey for nodes, a colour band on pods.
 const COLOURS := {"core": "white", "node": "light bluish gray", "tube": "white", "pod": "white",
 		"truss": "dark bluish gray", "dock": "light bluish gray"}
+## The colour band: one brick course round every module's walls but a truss's
+## (rows BAND_ROW to BAND_ROW + 2, over a pod's windows, cut by the doors), laid
+## in BAND_MARK and painted per station in one of BANDS by its seed (`paint_band`).
+const BAND_ROW := FLOOR + 9
+const BAND_MARK := "red"
+const BANDS := ["red", "orange", "royal blue", "teal", "gold yellow", "dark green", "purple", "azure"]
+## A module's space kind by its role: what KitFurnish furnishes it as (a pod one
+## of its mixed rooms; ways through left empty).
+const SPACE_KINDS := {"core": "living", "pod": "office", "dock": "hall"}
 
 
 ## The station library: the player's station modules when they have a core,
@@ -43,6 +52,17 @@ static func modules() -> Array:
 				[["radiator", [7, 6, 7], 1]]),
 		box("truss", 10, 2, {"role": "truss"}, [[2, 1, "auto"]], [], [["panel", [11, 6, 1], 0]]),
 		box("dock", 6, 6, {"role": "dock"}, [[2, 2, "auto"], [0, 2, "finish"]]),
+		# A second level: a node with a stair up inside it (along its middle to
+		# its +X end) and a deck that sits on it, its doors all round. Their doors
+		# stand off the stair's hole: a lintel by it would hold to nothing.
+		box("stair node", 12, 10, {"role": "node", "max": 1, "weight": 0.25}, [[1, 8, "auto"], [3, 8, "auto"]],
+				[], [["stair_up", [11, FLOOR + H - 1, 5], -1]]),
+		box("deck", 12, 10, {"role": "node", "storeys": "upper", "weight": 1.0}, all4.call(8), [],
+				[["stair_down", [11, FLOOR, 5], -1]]),
+		# A node too small for a stair's flight: a ladder up to a deck instead
+		# (RoomGrow.ladder_adds), through a hole by it.
+		box("ladder node", 6, 6, {"role": "node", "max": 1, "weight": 0.25}, all4.call(2),
+				[], [["stair_up", [3, FLOOR + H - 1, 3], -1]]),
 	]
 
 
@@ -77,9 +97,17 @@ static func box(name: String, w: int, d: int, rules: Dictionary, doors: Array, w
 		for z in d + 2:
 			if x == 0 or z == 0 or x == w + 1 or z == d + 1:
 				_column(r, Vector3i(x, FLOOR, z), H, hole, colour)
+	if String(rules.get("role", "")) != "truss":
+		var mark := _colour(BAND_MARK)
+		for i in r.size():
+			var c := r.cell_of(i)
+			var edge := c.x == 0 or c.z == 0 or c.x == w + 1 or c.z == d + 1
+			if edge and c.y >= BAND_ROW and c.y < BAND_ROW + 3:
+				r.set_colour(i, mark)
 	var rec := StructureSpaces.empty()
 	@warning_ignore("integer_division")
-	rec.spaces = [{"id": 0, "kind": "office", "frame": 0, "seed": [w / 2, FLOOR, d / 2]}]
+	rec.spaces = [{"id": 0, "kind": String(SPACE_KINDS.get(String(rules.get("role", "")), "corridor")), "frame": 0,
+			"seed": [w / 2, FLOOR, d / 2]}]
 	r.meta["structure"] = rec
 	r.meta["module"] = rules.merged({"on": true})
 	rec = RoomModules.refresh(r)
@@ -92,6 +120,25 @@ static func box(name: String, w: int, d: int, rules: Dictionary, doors: Array, w
 		rec.marks.append({"kind": mk[0], "space": 0, "at": mk[1], "facing": mk[2]})
 	r.meta["structure"] = rec
 	return r
+
+
+## Is the station library the shipped kit (the player has no core of their own)?
+static func is_kit(lib: Array) -> bool:
+	return lib.any(func(m) -> bool: return String(m.name) == "core") \
+			and not RoomModules.library().any(func(m) -> bool: return String(m.rules.get("role", "")) == "core")
+
+
+## A kit station's band in its own colour, by its seed: every brick of
+## BAND_MARK repainted. How many.
+static func paint_band(r: BuildRecipe, seed: int) -> int:
+	var mark := _colour(BAND_MARK)
+	var to := _colour(BANDS[posmod(hash("band %d" % seed), BANDS.size())])
+	var n := 0
+	for i in r.size():
+		if r.colour_of(i) == mark:
+			r.set_colour(i, to)
+			n += 1
+	return n
 
 
 ## A floor or a ceiling `size` studs at `lo`: plate_2x2s from the corner, then a

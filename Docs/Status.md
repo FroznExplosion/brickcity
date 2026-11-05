@@ -1409,7 +1409,7 @@ Still open: the solve's joint cache is rebuilt whole when a room lays furniture 
 mega solve); settled wreckage past 145 m is not drawn at all (`ISLAND_MESH_RANGE`, a memory
 trade-off that pops at the range); and the renderer's share of uploads is only bounded, not gone --
 the project's rendering thread model ("Separate") would move it off the main thread entirely, a
-project setting to try deliberately.
+project setting to try deliberately. (Tried 2026-11-04: three times slower and texture updates broken -- PerfCaps.md 4.)
 
 ### Floating wreckage: a piece frozen on something that went
 

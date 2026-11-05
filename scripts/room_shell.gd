@@ -52,11 +52,12 @@ extends RefCounted
 ## `setback`, `setback_every`: studs in, every so many storeys (0: straight up);
 ## `setback_sides`: the sides that step in, of "nsew" (north +Z, east +X);
 ## `lift`: a lift shaft by the hall where there is room; `balcony`: the chance
-## a module's balcony spot on the outer wall gets one; `section_bricks`: the
+## a module's balcony spot on the outer wall gets one; `hang`: the chance a
+## module's hang spot on the outer wall gets a room hung there; `section_bricks`: the
 ## most bricks a section (a band of storeys) has (BuildSections).
 const PARAMS := {"seed": 1, "width": 44, "depth": 28, "storeys": 4, "pitch": 0, "corridor": 4,
 		"room_max": 12, "window_every": 5, "fill": 0.85, "footprint": [], "setback": 0,
-		"setback_every": 0, "setback_sides": "nsew", "lift": true, "balcony": 0.5,
+		"setback_every": 0, "setback_sides": "nsew", "lift": true, "balcony": 0.5, "hang": 0.5,
 		"section_bricks": BuildSections.BUDGET, "doorway": 14}
 ## The module roles a shell sets along its corridors (and a stair's, below a
 ## storey, where it has a stair link up).
@@ -111,6 +112,7 @@ var doors := []         ## [[lo, size]]: every hole a door hangs in (BuildDoors)
 var stacks := []        ## [[lower, upper]]: stair links joined storey to storey (RoomGrow._stair)
 var cuts := {}          ## Vector3i -> true: cut out of the modules' bricks (stairs, facade windows)
 var balconies := 0
+var hung := 0            ## rooms hung off the outer wall at hang spots
 var facade := 0          ## facade windows cut
 var colour := 0         ## the shell's colour: the first module's
 var style := "open"
@@ -216,7 +218,7 @@ func _generate(library: Array, params: Dictionary) -> Dictionary:
 	var g_stats := {"modules": placed.size(), "storeys": storeys, "pitch": pitch, "caps": caps,
 			"doors": doors.size(), "rooms": rooms.size(), "width": bb[1].x, "depth": bb[1].y,
 			"lifts": lifts.size(), "stairs": stacks.size(), "balconies": balconies,
-			"windows": facade}
+			"windows": facade, "hung": hung}
 	_prelay()
 	var at := _plan_at()
 	var plan := {"ok": true, "why": "", "seed": int(p.seed), "ground_y": 0, "placed": placed,
@@ -658,7 +660,9 @@ func _stairs_and_facade() -> void:
 	for c: Vector2i in foot[0]:
 		g.occ[c] = [[-(1 << 30), 1 << 30, -1, false]]
 	var glass := RoomGrow._glass()
-	for pl: Dictionary in placed:
+	# The modules set so far (a room hung below is one more, with no spots of its own here).
+	for idx in placed.size():
+		var pl: Dictionary = placed[idx]
 		var td: Dictionary = lib[pl.m].turns[pl.t]
 		var off: Vector3i = pl.off
 		for mk: Dictionary in td.marks:
@@ -680,6 +684,50 @@ func _stairs_and_facade() -> void:
 				"balcony":
 					if int(pl.storey) > 0 and rng.randf() < float(p.balcony) and g._balcony(cuts, adds, mk, off, int(td.colour)):
 						balconies += 1
+				"hang":
+					if int(pl.storey) > 0 and rng.randf() < float(p.hang) and _hang_room(g, idx, mk):
+						hung += 1
+	RoomGrow._uncap(adds, cuts)
+
+
+## A room hung off the outer wall at module `idx`'s hang spot `mk` (as the
+## grow hangs one: a hang-role module, a room-role one when the library has
+## none, its door against the spot): out past the ground storey's footprint and
+## clear of anything hung or built out already (`g.occ`), its other doors walled
+## up, a doorway cut through the wall to it. Whether one was.
+func _hang_room(g: RoomGrow, idx: int, mk: Dictionary) -> bool:
+	var pl: Dictionary = placed[idx]
+	var a := g._hang(idx, mk, pl.off)
+	var roles := ["hang"] if lib.any(func(m) -> bool: return String(m.rules.role) == "hang") else ["room"]
+	var fd: Vector2i = StructureSpaces.FACINGS[int(a.facing)]
+	var cands := []
+	for m in lib.size():
+		if not roles.has(String(lib[m].rules.role)):
+			continue
+		for t in (lib[m].turns as Array).size():
+			var conns: Array = lib[m].turns[t].conns
+			for ci in conns.size():
+				if g._matches(a, conns[ci]):
+					cands.append([m, t, ci, float(lib[m].rules.get("weight", 1.0))])
+	for cand: Array in g._shuffled(cands) if not cands.is_empty() else []:
+		var m: int = cand[0]
+		var t: int = cand[1]
+		var b: Dictionary = lib[m].turns[t].conns[cand[2]]
+		var off: Vector3i = (a.at as Vector3i) - Vector3i(fd.x, 0, fd.y) - (b.at as Vector3i)
+		if not g._fits(m, t, off):
+			continue
+		placed.append({"m": m, "t": t, "off": off, "door": cand[2], "storey": int(pl.storey), "side": -1, "from": idx})
+		var td: Dictionary = lib[m].turns[t]
+		for c: Vector2i in td.cols:
+			var w := Vector2i(c.x + off.x, c.y + off.z)
+			var s: Vector2i = td.cols[c]
+			if not g.occ.has(w):
+				g.occ[w] = []
+			(g.occ[w] as Array).append([s.x + off.y, s.y + off.y, placed.size() - 1, false])
+		_cap_placement(g, placed.size() - 1)
+		g._cut_wall(cuts, a, (b.size as Vector2i).x, (b.size as Vector2i).y, int(a.at.y))
+		return true
+	return false
 
 
 ## A module's doors that are not its corridor door, walled up (RoomGrow's caps);
@@ -693,20 +741,27 @@ func _caps_and_glass() -> void:
 		var pl: Dictionary = placed[idx]
 		var td: Dictionary = lib[pl.m].turns[pl.t]
 		var off: Vector3i = pl.off
-		for ci in (td.conns as Array).size():
-			var c: Dictionary = td.conns[ci]
-			if String(c.kind) != "door" or ci == int(pl.door):
-				continue
-			var wc := c.duplicate()
-			wc.p = idx
-			wc.at = (c.at as Vector3i) + off
-			adds.append_array(g._cap(wc))
-			caps += 1
+		_cap_placement(g, idx)
 		if style == "glass" and glass >= 0:
 			for wn: Dictionary in td.windows:
 				if String(wn.kind) == "window":
 					for c: Vector3i in wn.cells:
 						adds.append(["plate_1x1", c + off, 0, glass])
+
+
+## Placement idx's doors but its own, walled up (RoomGrow's caps).
+func _cap_placement(g: RoomGrow, idx: int) -> void:
+	var pl: Dictionary = placed[idx]
+	var td: Dictionary = lib[pl.m].turns[pl.t]
+	for ci in (td.conns as Array).size():
+		var c: Dictionary = td.conns[ci]
+		if String(c.kind) != "door" or ci == int(pl.door):
+			continue
+		var wc := c.duplicate()
+		wc.p = idx
+		wc.at = (c.at as Vector3i) + (pl.off as Vector3i)
+		adds.append_array(g._cap(wc))
+		caps += 1
 
 
 # ---------------------------------------------------------------------------

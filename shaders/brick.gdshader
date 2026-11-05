@@ -157,6 +157,8 @@ uniform float pbr_bump : hint_range(0.0, 3.0) = 1.0;
 // chunk alone.
 instance uniform vec3 grain_origin = vec3(0.0);
 
+#include "res://shaders/grid_light.gdshaderinc"
+
 varying vec2 v_uv;
 varying vec2 v_face;
 varying vec3 v_local;
@@ -732,6 +734,7 @@ void fragment() {
             albedo *= 0.35;
         }
     }
+    occlusion *= grid_light_shade(v_local, v_local_normal, albedo, emission);
     ALBEDO = albedo;
     ROUGHNESS = out_rough;
     SPECULAR = out_spec;

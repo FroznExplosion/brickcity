@@ -13,6 +13,8 @@
 #include <algorithm>
 #include <queue>
 #include <set>
+#include <unordered_set>
+#include <map>
 #include <chrono>
 #if defined(_MSC_VER)
 #include <intrin.h>
@@ -1259,6 +1261,205 @@ PackedByteArray BrickWorld::get_solid_cells(int chunk_id) const {
             for (int x = 0; x < d.x; ++x) {
                 const int32_t blk = c.occupancy[row + x];
                 o[x] = (blk >= 0 && alive[(size_t)blk]) ? 1 : 0;
+            }
+        }
+    }
+    return out;
+}
+
+Vector3i BrickWorld::chunk_light_dims(int chunk_id, int cell_plates) const {
+    if (!valid_chunk(chunk_id) || cell_plates < 1) {
+        return Vector3i();
+    }
+    const Vector3i d = chunks[chunk_id].dims;
+    return Vector3i(d.x + 2, (d.y + cell_plates - 1) / cell_plates + 2, d.z + 2);
+}
+
+PackedVector3Array BrickWorld::chunk_glow_points(int chunk_id) const {
+    PackedVector3Array out;
+    if (!valid_chunk(chunk_id)) {
+        return out;
+    }
+    int glow_material = -1;
+    for (int m = 0; m < BRICK_MATERIAL_COUNT; ++m) {
+        if (std::strcmp(BRICK_MATERIALS[m].name, "Glow PLA") == 0) {
+            glow_material = m;
+        }
+    }
+    if (glow_material < 0) {
+        return out;
+    }
+    const Chunk &c = chunks[chunk_id];
+    const Vector3 cs = cell_size();
+    for (size_t i = 0; i < c.blocks.size(); ++i) {
+        const Block &b = c.blocks[i];
+        if (!b.alive || b.removed || (int)b.material != glow_material || b.archetype < 0) {
+            continue;
+        }
+        const Vector3i base = b.cell - c.origin;
+        const Vector3i sz = archetypes[b.archetype].size;
+        out.push_back(Vector3((base.x + sz.x * 0.5f) * cs.x, (base.y + sz.y * 0.5f) * cs.y,
+                (base.z + sz.z * 0.5f) * cs.z));
+    }
+    return out;
+}
+
+PackedByteArray BrickWorld::chunk_light_tiles(int chunk_id, int cell_plates, int width, int height,
+        int sky_step, int lamp_step) const {
+    PackedByteArray out;
+    const Vector3i n = chunk_light_dims(chunk_id, cell_plates);
+    if (n.x <= 0 || width < n.x) {
+        return out;
+    }
+    const int per_row = width / n.x;
+    const int rows = (n.y + per_row - 1) / per_row;
+    if (rows * n.z > height) {
+        return out;
+    }
+    const Chunk &c = chunks[chunk_id];
+    const Vector3i d = c.dims;
+    const int64_t total = (int64_t)n.x * n.y * n.z;
+    // x fastest, then z, then y: a y layer is one tile.
+    auto at = [&](int x, int y, int z) -> int64_t {
+        return (int64_t)x + (int64_t)n.x * ((int64_t)z + (int64_t)n.z * y);
+    };
+    // 0 air, 1 opaque, 2 see-through, 3 glow (opaque, and a lamp).
+    std::vector<uint8_t> kind((size_t)total, 0);
+    int glow_material = -1;
+    for (int m = 0; m < BRICK_MATERIAL_COUNT; ++m) {
+        if (std::strcmp(BRICK_MATERIALS[m].name, "Glow PLA") == 0) {
+            glow_material = m;
+        }
+    }
+    // Per block first, as get_solid_cells: a Block is big.
+    std::vector<uint8_t> what(c.blocks.size(), 0);
+    for (size_t i = 0; i < c.blocks.size(); ++i) {
+        const Block &b = c.blocks[i];
+        if (!b.alive) {
+            continue;
+        }
+        what[i] = (int)b.material == glow_material ? 3 : (brick_material_translucent(b.material) ? 2 : 1);
+    }
+    for (int z = 0; z < d.z; ++z) {
+        for (int y = 0; y < d.y; ++y) {
+            const int64_t row = c.index_of(Vector3i(0, y, z));
+            if (row < 0) {
+                continue; // outside a band chunk's window: nothing there
+            }
+            const int ly = y / cell_plates + 1;
+            for (int x = 0; x < d.x; ++x) {
+                const int32_t blk = c.occupancy[row + x];
+                if (blk < 0) {
+                    continue;
+                }
+                const uint8_t w = what[(size_t)blk];
+                uint8_t &k = kind[(size_t)at(x + 1, ly, z + 1)];
+                // Any opaque plate makes the cell opaque; glow wins.
+                if (w == 3 || (w == 1 && k != 3) || (w == 2 && k == 0)) {
+                    k = w;
+                }
+            }
+        }
+    }
+    // The ground: the margin under the chunk.
+    for (int z = 0; z < n.z; ++z) {
+        for (int x = 0; x < n.x; ++x) {
+            kind[(size_t)at(x, 0, z)] = 1;
+        }
+    }
+    std::vector<uint8_t> sky((size_t)total, 0);
+    std::vector<uint8_t> lamp((size_t)total, 0);
+    std::vector<int64_t> queue;
+    queue.reserve((size_t)total / 4);
+    // Straight down from the top until anything stands in the way, a quarter
+    // step less a cell: down a shaft (a stairwell, a courtyard) the sky seen
+    // narrows the deeper it goes.
+    const int fall = std::max(1, sky_step / 4);
+    for (int z = 0; z < n.z; ++z) {
+        for (int x = 0; x < n.x; ++x) {
+            int v = 255;
+            for (int y = n.y - 1; y >= 0 && v > 0; --y) {
+                const int64_t i = at(x, y, z);
+                if (kind[(size_t)i] != 0) {
+                    break;
+                }
+                sky[(size_t)i] = (uint8_t)v;
+                queue.push_back(i);
+                if (y < n.y - 1) {
+                    v -= fall;
+                }
+            }
+        }
+    }
+    // The open sides: the margin all round is outdoors.
+    for (int y = 1; y < n.y; ++y) {
+        for (int z = 0; z < n.z; ++z) {
+            for (int x = 0; x < n.x; ++x) {
+                if (x != 0 && z != 0 && x != n.x - 1 && z != n.z - 1) {
+                    continue;
+                }
+                const int64_t i = at(x, y, z);
+                if (kind[(size_t)i] == 0 && sky[(size_t)i] != 255) {
+                    sky[(size_t)i] = 255;
+                    queue.push_back(i);
+                }
+            }
+        }
+    }
+    const int64_t step_z = n.x;
+    const int64_t step_y = (int64_t)n.x * n.z;
+    // Breadth first, each cell keeping the most that reaches it.
+    auto flood = [&](std::vector<uint8_t> &v, int step) {
+        size_t head = 0;
+        while (head < queue.size()) {
+            const int64_t i = queue[head++];
+            const int x = (int)(i % n.x);
+            const int z = (int)((i / n.x) % n.z);
+            const int y = (int)(i / step_y);
+            const int here = v[(size_t)i];
+            const int64_t nb[6] = {
+                x > 0 ? i - 1 : -1, x < n.x - 1 ? i + 1 : -1,
+                z > 0 ? i - step_z : -1, z < n.z - 1 ? i + step_z : -1,
+                y > 0 ? i - step_y : -1, y < n.y - 1 ? i + step_y : -1};
+            for (int k = 0; k < 6; ++k) {
+                const int64_t j = nb[k];
+                if (j < 0) {
+                    continue;
+                }
+                const uint8_t kj = kind[(size_t)j];
+                if (kj == 1 || kj == 3) {
+                    continue;
+                }
+                const int nv = here - (kj == 2 ? step * 3 : step);
+                if (nv > (int)v[(size_t)j]) {
+                    v[(size_t)j] = (uint8_t)nv;
+                    queue.push_back(j);
+                }
+            }
+        }
+    };
+    flood(sky, std::max(1, sky_step));
+    // Lamps: from every Glow cell into the air round it.
+    queue.clear();
+    for (int64_t i = 0; i < total; ++i) {
+        if (kind[(size_t)i] == 3) {
+            lamp[(size_t)i] = 255;
+            queue.push_back(i);
+        }
+    }
+    flood(lamp, std::max(1, lamp_step));
+    out.resize((int64_t)width * height * 2);
+    uint8_t *w = out.ptrw();
+    memset(w, 0, (size_t)out.size());
+    for (int y = 0; y < n.y; ++y) {
+        const int tx = (y % per_row) * n.x;
+        const int tz = (y / per_row) * n.z;
+        for (int z = 0; z < n.z; ++z) {
+            uint8_t *o = w + ((int64_t)(tz + z) * width + tx) * 2;
+            for (int x = 0; x < n.x; ++x) {
+                const int64_t i = at(x, y, z);
+                o[x * 2] = sky[(size_t)i];
+                o[x * 2 + 1] = lamp[(size_t)i];
             }
         }
     }
@@ -4311,6 +4512,186 @@ PackedInt32Array BrickWorld::take_changed_sections(int chunk_id, int margin) {
     return out;
 }
 
+namespace {
+
+// A cell as one number, for the packer's sets: 21 bits an axis, centred.
+inline uint64_t pack_key(const Vector3i &c) {
+    constexpr int64_t OFF = int64_t(1) << 20;
+    return ((uint64_t)(c.x + OFF) << 42) | ((uint64_t)(c.y + OFF) << 21) | (uint64_t)(c.z + OFF);
+}
+
+inline int floor_div(int a, int b) {
+    const int q = a / b;
+    return (a % b != 0 && ((a < 0) != (b < 0))) ? q - 1 : q;
+}
+
+inline int pos_mod(int a, int b) {
+    const int m = a % b;
+    return m < 0 ? m + b : m;
+}
+
+} // namespace
+
+PackedInt32Array BrickWorld::pack_courses(const Dictionary &cells, const PackedInt32Array &sizes,
+        bool staggered, const Dictionary &taken, int base, const Dictionary &starts, bool strict) {
+    PackedInt32Array out;
+    const int np = (int)(sizes.size() / 3);
+    std::vector<Vector3i> parts((size_t)np);
+    for (int i = 0; i < np; ++i) {
+        parts[(size_t)i] = Vector3i(sizes[i * 3], sizes[i * 3 + 1], sizes[i * 3 + 2]);
+    }
+    std::unordered_set<uint64_t> all;
+    std::unordered_set<uint64_t> left;
+    std::map<int, std::vector<Vector3i>> by_y;
+    const Array keys = cells.keys();
+    all.reserve((size_t)keys.size() * 2);
+    left.reserve((size_t)keys.size() * 2);
+    for (int64_t i = 0; i < keys.size(); ++i) {
+        const Vector3i c = keys[i];
+        all.insert(pack_key(c));
+        if (!taken.has(c)) {
+            left.insert(pack_key(c));
+            by_y[c.y].push_back(c);
+        }
+    }
+    if (left.empty() || np == 0) {
+        return out;
+    }
+    if (base == (1 << 30)) {
+        base = by_y.begin()->first;
+    }
+    int tall = 1;
+    int long_ = 1;
+    int wide = 1;
+    for (const Vector3i &p : parts) {
+        tall = std::max(tall, p.y);
+        long_ = std::max(long_, std::max(p.x, p.z));
+        wide = std::max(wide, std::min(p.x, p.z));
+    }
+    // All a run is asked is whether it passes two widths, and which way is longer.
+    const int cap = 2 * wide + 1;
+    std::vector<int> start_list;
+    const Array start_keys = starts.keys();
+    for (int64_t i = 0; i < start_keys.size(); ++i) {
+        start_list.push_back((int)start_keys[i]);
+    }
+    std::sort(start_list.begin(), start_list.end());
+    const auto run = [&](const Vector3i &c, const Vector3i &dir) {
+        int n = 1;
+        Vector3i p = c + dir;
+        while (n < cap && all.count(pack_key(p))) {
+            ++n;
+            p += dir;
+        }
+        p = c - dir;
+        while (n < cap && all.count(pack_key(p))) {
+            ++n;
+            p -= dir;
+        }
+        return n;
+    };
+    const auto fits = [&](const Vector3i &at, const Vector3i &size) {
+        for (int dx = 0; dx < size.x; ++dx) {
+            for (int dy = 0; dy < size.y; ++dy) {
+                for (int dz = 0; dz < size.z; ++dz) {
+                    if (!left.count(pack_key(at + Vector3i(dx, dy, dz)))) {
+                        return false;
+                    }
+                }
+            }
+        }
+        return true;
+    };
+    for (auto &layer : by_y) {
+        const int y = layer.first;
+        int course = floor_div(y - base, tall);
+        bool on_course = pos_mod(y - base, tall) == 0;
+        if (!start_list.empty()) {
+            const auto lo = std::lower_bound(start_list.begin(), start_list.end(), y);
+            on_course = lo != start_list.end() && *lo == y;
+            course = on_course ? (int)(lo - start_list.begin())
+                    : (int)(std::upper_bound(start_list.begin(), start_list.end(), y) - start_list.begin()) - 1;
+        }
+        const bool along_x = !staggered || course % 2 == 0;
+        // Row by row along the course's own way, from the low corner.
+        std::vector<Vector3i> &here = layer.second;
+        std::sort(here.begin(), here.end(), [along_x](const Vector3i &p, const Vector3i &q) {
+            if (along_x) {
+                return p.z != q.z ? p.z < q.z : p.x < q.x;
+            }
+            return p.x != q.x ? p.x < q.x : p.z < q.z;
+        });
+        for (const Vector3i &c : here) {
+            if (!left.count(pack_key(c))) {
+                continue;
+            }
+            const int nx = run(c, Vector3i(1, 0, 0));
+            const int nz = run(c, Vector3i(0, 0, 1));
+            const bool run_x = std::min(nx, nz) > 2 * wide ? along_x : nx > nz;
+            const Vector3i dir = run_x ? Vector3i(1, 0, 0) : Vector3i(0, 0, 1);
+            // A run's first cell, on an odd phase: start with half a brick.
+            int half = 0;
+            if (staggered && !all.count(pack_key(c - dir))) {
+                const int row = floor_div(run_x ? c.z : c.x, wide);
+                if (pos_mod(course + row, 2) == 1) {
+                    half = std::max(1, long_ >> 1);
+                    if (strict) {
+                        for (int k = 0; k < half; ++k) {
+                            for (int dy = 0; dy < tall; ++dy) {
+                                left.erase(pack_key(c + dir * k + Vector3i(0, dy, 0)));
+                            }
+                        }
+                        continue;
+                    }
+                }
+            }
+            int best = -1;
+            double score = -std::numeric_limits<double>::infinity();
+            for (int pi = 0; pi < np; ++pi) {
+                const Vector3i &size = parts[(size_t)pi];
+                if (size.y > 1 && !on_course) {
+                    continue;
+                }
+                if (!fits(c, size)) {
+                    continue;
+                }
+                const int along = run_x ? size.x : size.z;
+                const int across = run_x ? size.z : size.x;
+                double s = 0.0;
+                if (along < across) {
+                    s -= 1000.0; // turned across the run: only if nothing else fits
+                }
+                if (half > 0) {
+                    s -= std::abs(along - half) * 100.0;
+                } else {
+                    s += along * 100.0;
+                }
+                s += across * 10.0 + size.y;
+                if (s > score) {
+                    score = s;
+                    best = pi;
+                }
+            }
+            if (best < 0) {
+                continue;
+            }
+            const Vector3i size = parts[(size_t)best];
+            for (int dx = 0; dx < size.x; ++dx) {
+                for (int dy = 0; dy < size.y; ++dy) {
+                    for (int dz = 0; dz < size.z; ++dz) {
+                        left.erase(pack_key(c + Vector3i(dx, dy, dz)));
+                    }
+                }
+            }
+            out.push_back(best);
+            out.push_back(c.x);
+            out.push_back(c.y);
+            out.push_back(c.z);
+        }
+    }
+    return out;
+}
+
 PackedInt32Array BrickWorld::get_section_side_stud_blocks(int chunk_id, int section) const {
     PackedInt32Array out;
     if (!valid_chunk(chunk_id)) {
@@ -4403,6 +4784,13 @@ void BrickWorld::chamfer_section_async(int chunk_id, int section, double bevel) 
     ChamferJob *raw = job.get();
     raw->worker = std::thread([raw]() {
         chamfer_faces_into(raw->in, raw->out);
+        raw->arrays = chamfer_arrays(raw->out);
+        // Copied: the vertices go; the faces' quads stay for the band.
+        std::vector<Vector3>().swap(raw->out.vv);
+        std::vector<Vector3>().swap(raw->out.nn);
+        std::vector<Color>().swap(raw->out.cc);
+        std::vector<Vector2>().swap(raw->out.uu);
+        std::vector<Vector2>().swap(raw->out.u2);
         raw->done.store(true, std::memory_order_release);
     });
     chamfer_jobs.push_back(std::move(job));
@@ -4422,7 +4810,7 @@ Array BrickWorld::take_chamfer_section(int chunk_id, int section) {
         // faces afresh, and these quads would be drawn by the wrong bricks.
         if (valid_chunk(chunk_id) && chunks[chunk_id].bake.valid
                 && chunks[chunk_id].bake.serial == job->serial) {
-            arrays = chamfer_arrays(job->out);
+            arrays = job->arrays;
         }
         if (!arrays.is_empty()) {
             ChamferBand &band = chamfer_bands[std::make_pair(chunk_id, section)];
@@ -4863,6 +5251,10 @@ void BrickWorld::coarse_chunk_async(int chunk_id) {
     const Chunk *cp = &chunks[chunk_id]; // stable: chunks is a deque
     raw->worker = std::thread([raw, cp]() {
         coarse_faces_into(*cp, *raw->parts, raw->out);
+        raw->arrays = coarse_arrays(raw->out);
+        const double ms = raw->out.ms;
+        raw->out = CoarseOut();
+        raw->out.ms = ms;
         raw->done.store(true, std::memory_order_release);
     });
     coarse_jobs.push_back(std::move(job));
@@ -4887,7 +5279,7 @@ Array BrickWorld::take_coarse_mesh(int chunk_id) {
             job->worker.join();
         }
         last_coarse_ms = job->out.ms;
-        const Array arrays = coarse_arrays(job->out);
+        const Array arrays = job->arrays;
         coarse_jobs.erase(coarse_jobs.begin() + (long)i);
         return arrays;
     }
@@ -10695,6 +11087,10 @@ void BrickWorld::_bind_methods() {
     ClassDB::bind_method(D_METHOD("get_chunk_count"), &BrickWorld::get_chunk_count);
     ClassDB::bind_method(D_METHOD("get_chunk_origin", "chunk_id"), &BrickWorld::get_chunk_origin);
     ClassDB::bind_method(D_METHOD("get_chunk_dims", "chunk_id"), &BrickWorld::get_chunk_dims);
+    ClassDB::bind_method(D_METHOD("chunk_light_dims", "chunk_id", "cell_plates"), &BrickWorld::chunk_light_dims);
+    ClassDB::bind_method(D_METHOD("chunk_glow_points", "chunk_id"), &BrickWorld::chunk_glow_points);
+    ClassDB::bind_method(D_METHOD("chunk_light_tiles", "chunk_id", "cell_plates", "width", "height", "sky_step", "lamp_step"),
+            &BrickWorld::chunk_light_tiles);
 
     ClassDB::bind_method(D_METHOD("place_block", "chunk_id", "cell", "archetype_id", "colour",
                     "decorative"),
@@ -10724,6 +11120,8 @@ void BrickWorld::_bind_methods() {
             &BrickWorld::take_changed_sections);
     ClassDB::bind_method(D_METHOD("get_section_side_stud_blocks", "chunk_id", "section"),
             &BrickWorld::get_section_side_stud_blocks);
+    ClassDB::bind_static_method("BrickWorld", D_METHOD("pack_courses", "cells", "sizes", "staggered", "taken",
+            "base", "starts", "strict"), &BrickWorld::pack_courses);
     ClassDB::bind_method(D_METHOD("build_chunk_chamfer_mesh", "chunk_id", "bevel"),
             &BrickWorld::build_chunk_chamfer_mesh);
     ClassDB::bind_method(D_METHOD("chamfer_section_async", "chunk_id", "section", "bevel"),

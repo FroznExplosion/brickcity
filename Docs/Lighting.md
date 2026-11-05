@@ -1,7 +1,8 @@
 # Lighting
 
 Plan for lighting across the game, the planet scene first: simpler, cheaper, and
-right indoors. Written 2026-11-02. Nothing here is built yet.
+right indoors. Written 2026-11-02. Steps 1-4 are built in the planet scene
+(9, "Built"); section 1 is what there was before them.
 
 ## 1. What there is now
 
@@ -70,6 +71,60 @@ Across the 400 m of shadows the true direction changes by 400 m / 2,000 km =
 The same holds for light off a moon or planet (5): direction from that body,
 size from its radius and distance, brightness from how much of it is lit.
 
+**Built (step 2):** `LightRig.set_sun` takes the star's angular radius and its
+flux at the camera against home's, from `PlanetSystem._light`;
+`light_angular_distance` = the star's size (held at 3 deg), energy
+`1.1 x gain x seen`. Home reads 2.29 deg and gain 1.00.
+
+### 2a. Planets and moons shadow each other
+
+A body between a planet and the star must darken that planet, wherever the
+player is.
+
+- **On the ground** (the player in the shadow): `PlanetSystem._light` already
+  measures how much of the star's disc every body leaves the camera (`seen`)
+  and scales the sun by it -- an eclipse dims the whole scene, with the
+  penumbra's soft edge. Unchanged.
+- **From space or another body** (built): each body's far look (the impostor)
+  and its halo take up to 4 shadowing bodies (`PlanetSystem._shadows_on`, each
+  frame in `_place`): those between it and the star, near enough the sun's
+  line. The shaders (`shaders/body_shadow.gdshaderinc`) do the same disc
+  arithmetic per pixel, so a moon's shadow is a soft round spot that moves
+  across its planet, a planet's shadow can swallow its moon, and the halo
+  dims in it.
+- **The voxel ground near the camera** is lit by the real sun, so the shadow
+  there is the camera's `seen` -- one value for the whole view. Only a few km
+  of ground are voxels and an umbra is hundreds of km across, so the edge of a
+  moon's shadow on the near ground is not drawn; from high up the impostor
+  shows it.
+- **Rings** (built 2026-11-04): `shaders/ring_band.gdshaderinc` is a ring's
+  cover by radius, shared by its far disc (`rock_disc.gdshader`) and
+  `body_shadow`'s `ring_shadow`, mirrored by `RockField.alpha_at`. The
+  planet's far look takes the ring's shadow (`ring_axis`, `ring_span` set
+  once, `PlanetBody`); the disc darkens where its planet hides the sun
+  (`sun_local`, `body_r`); `PlanetSystem._light` multiplies `seen` at the
+  camera by `RockField.light_at`, so the ground under a ring's shadow dims
+  as in an eclipse (up to 85% under the thickest band). Light gate: a test
+  ring takes 59% of the sun under its thickest band (cover 0.69), none over
+  it or through its middle. Not seen in a picture: the windowed `--gate=rocks`
+  (the flight to a ringed world) fails on main as it is (in its shell, no
+  rocks drawn; passes headless).
+
+### 2b. Clouds (later)
+
+There are no clouds yet. When they come, their shadows are faked, not
+shadow-mapped:
+
+- One cloud-cover function (noise in the planet's frame, drifting with the
+  wind), shared by the cloud layer and a **global shader uniform** set.
+- Shaders that take the sun (brick, ground, trees, the gun) multiply the sun's
+  light by the cover, sampled where the sun's ray from that pixel meets the
+  cloud height. On the voxel ground and bricks: a texture lookup a pixel.
+- The impostor takes the same function from space; `seen` at the camera dims
+  the whole view under thick cover, as the sun does in an eclipse.
+- Godot's `DirectionalLight3D` has no light cookie, so this is shader work, in
+  the rig's include alongside `body_shadow`.
+
 ## 3. Colour that does not paint the player
 
 Goal: worlds still differ, but a gun, a figure, a brick wall look like
@@ -86,8 +141,10 @@ themselves on every one.
   dusk, white at noon, none on airless worlds. This is the "depends where the
   player stands" part: it follows `sun_height` at the camera.
 - **Ground tint** capped at ~15%.
-- **Auto exposure** (`CameraAttributesPractical`) so stepping indoors and out
-  adapts rather than going black or blown out.
+- **Exposure** that adapts stepping indoors and out rather than going black
+  or blown out. Built as the rig's own (9), from the light it knows is at the
+  camera: Godot's auto exposure measures the picture a few frames late and
+  its limits are in ISO, hard to hold to "a room is darker than noon".
 
 ## 4. One light rig
 
@@ -133,6 +190,80 @@ The brick game's own answer, as voxel games do it: light values in the grid.
 - Owner: the grid and mesher are Build mode's (`brick_grid.h`, `bake_faces_into`);
   this needs that area to agree or do the C++ side.
 
+**As built (2026-11-03)** -- not in the vertices: the mesher bakes a chunk
+once and a hit only patches its indices, so per-vertex light would mean a
+re-bake (50-80 ms a tower) per hit. A grid beside the mesh instead:
+
+- `BrickWorld.chunk_light_tiles` (C++): a cell a stud across and a brick (3
+  plates) up, with a cell of open air all round and ground under. Any opaque
+  plate makes a cell opaque; see-through costs three steps; Glow PLA is a
+  lamp. Sky: straight down from the top (a quarter step less a cell, so a
+  stairwell or courtyard dims with depth), then breadth first from every lit
+  cell and the open sides, `SKY_STEP` 16 of 255 less a cell (about 5.6 m into
+  a room from a wide hole). Lamp: the same from Glow cells, 24 a cell. Two
+  bytes a cell, each y layer a tile of a 512 x 512 RG8 image. 0.7-0.9 ms a
+  town tower.
+- `BrickGridLight` (GDScript): one `Texture2DArray`, a layer (slot) a
+  building, 16 at once; a building too big for a layer is drawn as before.
+  Each band gets its slot by the instance uniform `grid_light` (slot, cells
+  x, y, z), so the one brick material stays shared; bands made later (a hit's
+  redraw) get it on `child_entered_tree`. A building is lit again when its
+  count of live bricks changes (one a frame), or by `relight`.
+- `brick.gdshader`: half a cell out from the face (the air it looks into),
+  bilinear in a layer, mixed between two; `AO *= mix(0.1, 1, sky)` (ambient
+  and reflections only -- the sun is the shadows' job) and warm emission
+  from lamp light. Nothing happens without a slot: every other scene draws as
+  before.
+- The room's ambient box no longer lights the bricks (`reflection_mask`
+  leaves out `BrickGridLight.RENDER_LAYER`, the layer the grid's bricks are
+  on); it lights what is in the room -- figures, the gun -- at the grid's sky
+  where the camera is (`LightRig.room_open`), so they match the walls, and
+  the exposure follows it.
+- **City** (2026-11-03): the 16 buildings in bricks nearest the camera
+  (`CityScene._tend_grid_light`, twice a second, two new a pass). No render
+  layer there (no boxes; the near tier hides a band by its layers):
+  `use_layer = false`. The near tier's chamfered mesh copies `grid_light`
+  from its band (`BrickNear`), and a relight reaches it. Pass:
+  `res://scenes/city.tscn -- --light` (shaded inside, the near tier carries
+  it, the picture 0.359 with the grid against 0.477 without, a hole lets the
+  sky in). Pictures `city_light_on/off`.
+- Which building changed is asked one a frame in turn (`step`): counting a
+  building's live bricks walks all its blocks.
+- **Studs** (2026-11-04): the grid code is one include,
+  `shaders/grid_light.gdshaderinc` (`grid_light_shade`), in `brick.gdshader`
+  and, under `GRID_LIGHT`, in `printed_core.gdshaderinc`. The near tier's
+  geometry studs draw with `BrickNear.grid_stud_material`
+  (`printed_grid.gdshader`, the terrain's stud material with the grid);
+  a stud's VERTEX is its own, so the shader is handed world-to-chunk (the
+  band's inverse) as three instance rows (`BrickNear.grid_studs`, set on a
+  new studs MultiMesh and by every relight). The terrain's studs are
+  untouched. The planet's open studs were already grid-lit: merged into the
+  band mesh. Cards stay flat (only open studs get one: under the sky).
+  Pass: the city `--light` checks the studs carry it and the picture is
+  darker with them on it.
+- **Ships and stations** (2026-11-04): those within 300 m of the camera
+  (`PlanetScene.SHIP_GRID_NEAR`) are tracked, their material bound sky-less
+  (`bind(mat, false)`: floor 1.0): their Glow bricks light them; their sky
+  is left alone, the cabin box standing for the ship's own lights.
+  `--gate=hull` checks the parked ship.
+- **Only bound materials** get the parameter (`_apply`): a parameter set on
+  anything else (a ladder) costs it 16 slots of the renderer's instance
+  buffer for nothing. (That buffer: every mesh with an instance parameter
+  set, or in its shader, takes 16 slots until freed; `project.godot` has
+  262,144 slots, 16,384 meshes, after "Too many instances using shader
+  instance variables" at Godot's 65,536. `tools/instance_buffer_probe.gd`,
+  `tools/instance_uniform_count.gd`.)
+- **The sun past the shadow range**: not needed. Shadows reach 400 m on
+  the planet (`LightRig.build`) and in the city (`SUN_SHADOW_DISTANCE`);
+  neither draws a building in bricks that far (far boxes; the city's
+  shells, a building demoted before the camera is 420 m off). Tried:
+  the grid's sky taking the sun past the end, in the shader; both pictures
+  the same, the building gone. Needed if the shadow range is ever cut below
+  where bricks are drawn (a Low shadows setting): then that, faded in over
+  the last fifth.
+- Not yet: real lamps in the content (no build has a Glow brick; ships have
+  no strip lights): Room modules' to place.
+
 ### 6.2 Quick stand-in: ambient boxes
 
 Before 6.1: a `ReflectionProbe` per room module and per ship hull, its
@@ -145,6 +276,16 @@ destruction (could lerp toward outdoors by the room's open wall area).
 Unshadowed `OmniLight3D` is cheap in Forward+ (clustered): fixtures from the
 asset placer's lamps, ship strip lights. Shadowed ones only the 2-4 nearest the
 player, from a budget in the rig.
+
+**Built (2026-11-04): Glow bricks hang lights.** `BrickWorld.chunk_glow_points`
+(the live Glow blocks' centres); `BrickGridLight._hang_lamps` merges them
+within 1.2 m, at most 8 a building, an unshadowed `OmniLight3D` each (range
+4 m, warm, brighter for a bigger group) under the building's node, so it
+rides with a ship. Its `light_cull_mask` leaves out `RENDER_LAYER`: figures,
+the gun and pieces get it; the bricks keep the grid's lamp term, which stops
+at walls where an unshadowed light would not. Only with `use_layer` (the
+planet, its ships): in the city bricks would be lit twice. Light gate: the
+Glow floor hangs one, unshadowed, bricks left out.
 
 ## 7. SDFGI and the other GI
 
@@ -169,16 +310,78 @@ override it inside their boxes. As the base everywhere, no:
 Mix chosen: sun + moon/planet light (shadowed) -> grid skylight and lamp
 light on all bricks, ships included -> optional SSAO/SSIL -> SDFGI experiment.
 
+**As built (2026-11-03):** Options > Video, **Global Illumination**: Off
+(default), Screen-Space (SSAO radius 0.8 intensity 1.6, SSIL radius 3
+intensity 0.8), SDFGI (Ultra: that and SDFGI, 4 cascades from 0.2 m cells,
+occlusion on, bounce 0.4). `LightRig.set_gi` puts it on every rig up and
+every one built after (all scenes use the rig). The windowed light gate
+times each level outside and inside and takes `light_gate_gi<n>_out/_in`.
+
+Measured (planet town, noon, 1280x720, editor closed, no other runs; the
+chip warm, 92-97 C peaks, so +-1 ms): GPU draw off 14.8 out / 13.0-13.6 in;
+screen-space 16.0 / 16.7 (+1-3 ms), its look subtle; SDFGI 21.4 / 21.0
+(+7 ms), and it looked wrong -- rooms dark orange, windows black from
+outside, with the grid's sky shade off under it or not. **SDFGI is not in the
+menu**; the level stays in `LightRig` for later trials (VoxelGI on a ship is
+the other one to try). Screen-space is offered, default off.
+
 ## 8. Steps
 
 | # | Step | Size | Test |
 |---|---|---|---|
-| 1 | `LightRig`; AgX; capped sky cast and ground tint; neutral ambient; sun colour from star and air; auto exposure | small, GDScript | screenshots on 6 generated worlds (red, green, airless, near/far star) + a gun close up; existing planet gates |
-| 2 | Sun size (`light_angular_distance`) and distance brightness (2) | small | shadow softness shot; frame cost, editor closed |
-| 3 | Moon/planet light (5) | small | night shots; a moon world under its planet |
-| 4 | Ambient boxes in rooms and ships (6.2) | small-medium | walk in/out of a building and a ship; probe count |
-| 5 | Grid skylight and lamp light (6.1) | large, C++ with Build mode | sealed room dark, blown wall lit, ship flying; mesh time per chunk |
-| 6 | SSAO/SSIL High, SDFGI Ultra (7) | small to try | GPU ms, editor closed, heat log after |
+| 1 | `LightRig`; AgX; capped sky cast and ground tint; neutral ambient; sun colour from star and air; auto exposure | small, GDScript | **built** (planet scene) |
+| 2 | Distance (2): **the sun's size** from the star's radius and distance (`light_angular_distance`, soft shadows); **its brightness** from the star's light at the camera against home's (`gain`) | small | **built**; soft shadows cost nothing measurable (9) |
+| 2a | Planets and moons shadow each other: on the ground by `seen`; from space on impostors and halos (2a) | small | **built** |
+| 3 | Moon/planet light (5) | small | **built** |
+| 4 | Ambient boxes in buildings, stations and ships (6.2) | small-medium | **built** |
+| 4b | Clouds and their faked shadows (2b) | medium | when clouds come |
+| 5 | Grid skylight and lamp light (6.1) | large, C++ with Build mode | **built**: planet, city, near-tier studs, ships and stations (lamps only) |
+| 5b | Glow bricks as real lights (6.3) | small, C++ query | **built** |
+| 5c | Rings' shadows (2a) | small | **built** |
+| 6 | SSAO/SSIL High, SDFGI Ultra (7) | small to try | **built**: screen-space offered (+1-3 ms); SDFGI tried, not offered (7) |
 
-Area: new, Lighting -- `light_rig.gd`, this doc; the planet and city scenes call
-the rig (small changes to theirs).
+Area: new, Lighting -- `light_rig.gd`, `shaders/body_shadow.gdshaderinc`, this
+doc; the planet and city scenes call the rig (small changes to theirs).
+
+## 9. Built (2026-11-02)
+
+The planet scene runs the whole rig. The city, heightfield, terrain and
+sandbox scenes use its fixed day (`LightRig.build_day`, 2026-11-03): the same
+sky, neutral ambient, AgX, home's sun size (2.29 deg) and sunset-free sun
+colour, each scene's own sun angle and energy; no exposure changes, no fill,
+no ambient boxes there. Underwater keeps the air's ambient colour and puts it
+back on surfacing (the rig's neutral colour counts now).
+
+| Part | What | Where |
+|---|---|---|
+| Rig | sun, fill, environment, sky, exposure, ambient boxes | `scripts/light_rig.gd` (`LightRig`); `planet_scene._build_light` |
+| Sky cast | hue kept, luminance 1, no channel past 0.45 from 1: a red air was (2.2, 0.46, 0.3), now (1.45, 0.88, 0.83) | `LightRig.sky_cast` |
+| Ambient | 35% sky, 65% a neutral grey as bright as the sky; never under starlight (0.6 x a cool grey (0.4, 0.45, 0.6)) so a moonless night is dark but playable | `LightRig.set_sky` |
+| Ground tint | worlds 5-15% (was 10-40%), moons 15-35% (was 20-60%) of a hue | `star_system.gd` |
+| Tonemap | AgX | `LightRig.build` |
+| Sunlight | 25% the star's colour; air mass by `sun_height` reddens it (blue/red 0.87 at noon, 0.24 on the horizon); none without air | `LightRig.sunlight_colour` |
+| Exposure | the rig's own, not Godot's auto exposure: from the light at the camera (ambient, or a box's; the sun, a tenth of it inside a box), `sqrt(0.8 / light)`, 1 to 2, half-way in 0.5 s. Daylight 1.0, a room 1.9, night 2.0 | `LightRig.expose` |
+| Sun size, brightness | 2: home 2.29 deg, gain 1.00 | `LightRig.set_sun`, `PlanetSystem._light` |
+| Shadows between bodies | 2a: ground by `seen`; impostor and halo per pixel | `PlanetSystem._shadows_on`, `PlanetBody.set_shadowers`, `body_shadow.gdshaderinc` |
+| Fill | 5: brightest body over the horizon, `0.6 x sqrt(score)`, at most 0.35 of the sun; shadows at night above 0.02 | `PlanetSystem._fill`, `LightRig.set_fill` |
+| Ambient boxes | 6.2: every building laid in bricks ("room": 25% of outdoor ambient + 0.02), every station or ship module laid ("cabin": its own lights, 0.3); walls (0.45 m) left outside; reflections black inside; a toppled building's goes | `planet_scene._ambient_boxes`, `LightRig.add_box` |
+
+| Grid light | 6.1: sky and lamp on the brick grid of every building laid here; a hole lets the sky in, Glow bricks light rooms; the box lights only what is in it | `BrickWorld.chunk_light_tiles`, `scripts/brick_grid_light.gd`, `brick.gdshader` (`grid_light`), `planet_scene._ambient_boxes` |
+
+Gate: `res://scenes/planet.tscn -- --gate=light` (headless for the numbers;
+windowed adds pictures `shots/light_gate_*.png` and checks that the box
+darkens the picture and the exposure brightens it again).
+
+Grid numbers (2026-11-03): the gate's darkest air at eye height in a town
+tower 0.12 sky; a hole knocked in a solid wall takes the air behind it from
+0.69 (the windows nearby) to 0.81 (three steps from the open); a Glow floor
+brick puts 0.72 lamp at eye height over it; the inside picture's mean 0.435
+with the grid, 0.563 without.
+
+Known limits: the fill at home's
+midnight is often none (its moon under the horizon).
+
+Soft shadows' cost (2026-11-03, editor closed, no other runs, the gate's
+outdoor view at noon, 1280x720): GPU draw 15.65 / 15.55 ms with the sun at
+2.29 deg, 15.59 / 16.28 ms hard -- no cost above the noise. The windowed
+gate prints it again each run ("GPU draw").

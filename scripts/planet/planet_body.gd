@@ -39,6 +39,8 @@ var tier2 := 1500.0
 var sun_dir := Vector3(0.4, 0.6, 0.3).normalized()   # planet-local, surface -> sun
 
 var _impostor_mat: ShaderMaterial
+## How many bodies shadow this one's far look now (set_shadowers).
+var shadows_now := 0
 var _atmo_mat: ShaderMaterial
 var _ocean_mat: ShaderMaterial
 var _ground_mat: ShaderMaterial
@@ -77,6 +79,14 @@ func setup(p_data: PlanetData, far := false) -> void:
 		ring.transform.basis = Basis(Quaternion(Vector3.UP, data.climate_axis.normalized()))
 		add_child(ring)
 		ring.build_far(look)
+		# Its shadow on the planet's far look, and the planet's across it
+		# (Docs/Lighting.md 2a).
+		(ring.disc.material_override as ShaderMaterial).set_shader_parameter("body_r", data.radius / ring.outer)
+		if _impostor_mat != null:
+			_impostor_mat.set_shader_parameter("ring_axis", ring.transform.basis.y.normalized())
+			_impostor_mat.set_shader_parameter("ring_span", Vector2(ring.inner, ring.outer) / data.radius)
+			_impostor_mat.set_shader_parameter("ring_density", ring.far_density)
+			_impostor_mat.set_shader_parameter("ring_grain", ring.grain())
 	if not is_nan(data.sea_level):
 		_build_ocean()
 		if far:
@@ -205,6 +215,25 @@ func set_sun(dir_local: Vector3) -> void:
 	for m in [_impostor_mat, _atmo_mat]:
 		if m != null:
 			m.set_shader_parameter("sun_dir", sun_dir)
+	if ring != null and ring.disc != null:
+		(ring.disc.material_override as ShaderMaterial).set_shader_parameter("sun_local",
+				(ring.transform.basis.inverse() * sun_dir).normalized())
+
+
+## The bodies between this one and the star, for its far look and halo
+## (Docs/Lighting.md 2a): each (centre, radius) in its frame, in its radii; the
+## star's angular radius from here (rad) and its light's colour.
+func set_shadowers(list: PackedVector4Array, star_ang: float, star_colour: Color) -> void:
+	shadows_now = list.size()
+	var sun_c := Color.WHITE.lerp(star_colour, LightRig.STAR_MIX)
+	for m in [_impostor_mat, _atmo_mat]:
+		if m != null:
+			m.set_shader_parameter("shadower_count", list.size())
+			if not list.is_empty():
+				m.set_shader_parameter("shadowers", list)
+			m.set_shader_parameter("star_ang", star_ang)
+	if _impostor_mat != null:
+		_impostor_mat.set_shader_parameter("sun_color", sun_c)
 
 
 func _ground_material() -> ShaderMaterial:

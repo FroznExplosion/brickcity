@@ -25,7 +25,7 @@ extends Node
 @export var max_arcs := 24
 @export var max_shatters := 6
 @export var max_decals := 16
-@export var shard_mesh: Mesh                 # low-poly crystal chunk
+@export var shard_mesh: Mesh                 # low-poly crystal chunk (_shard_mesh when unset)
 @export var arc_ribbon_scene: PackedScene    # QuadMesh strip w/ electric_arc.gdshader
 @export var puddle_material: ShaderMaterial  # puddle_decal.gdshader (shared)
 
@@ -168,18 +168,14 @@ func release_arc(a: Node3D) -> void:
 	_free_arcs.append(a)
 
 # ------------------------------------------------------------- ice shatter
-## Scripted-ballistics shard burst. No RigidBodies: one MultiMesh, transforms
-## written straight to RenderingServer. ~40 shards costs almost nothing.
+## Shard burst drawn by fx/shaders/ice_shard.gdshader: one MultiMesh, each shard
+## written once when the burst starts; the shader flies, bounces and shrinks it
+## from its age, the only thing written after (Docs/GpuOffload.md 2.7).
 class ShatterBurst:
 	var mmi: MultiMeshInstance3D
-	var vel: PackedVector3Array
-	var rot_axis: PackedVector3Array
-	var rot_spd: PackedFloat32Array
-	var pos: PackedVector3Array
-	var basis_arr: Array[Basis]
+	var mat: ShaderMaterial
 	var life := 0.0
 	var max_life := 1.6
-	var floor_y := 0.0
 	var active := false
 
 ## floor_y: pass the enemy's ground height (ElementalTarget sends its
@@ -197,66 +193,71 @@ func spawn_shatter(world_pos: Vector3, aabb_size: Vector3, count := 40,
 	elif _free_shatters.is_empty():
 		b = ShatterBurst.new()
 		b.mmi = MultiMeshInstance3D.new()
+		# Written once, where the burst starts: never eased from the last one.
+		b.mmi.physics_interpolation_mode = Node.PHYSICS_INTERPOLATION_MODE_OFF
 		var mm := MultiMesh.new()
 		mm.transform_format = MultiMesh.TRANSFORM_3D
-		mm.use_custom_data = true       # x = fade
-		mm.mesh = shard_mesh
+		mm.use_colors = true            # spin axis, rate
+		mm.use_custom_data = true       # velocity
+		mm.mesh = shard_mesh if shard_mesh != null else _shard_mesh()
 		mm.instance_count = count
 		b.mmi.multimesh = mm
+		b.mat = ShaderMaterial.new()
+		b.mat.shader = load("res://fx/shaders/ice_shard.gdshader")
+		b.mat.set_shader_parameter("max_life", b.max_life)
+		b.mmi.material_override = b.mat
 		b.mmi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 		add_child(b.mmi)
 		_shatters.append(b)
 	else:
 		b = _free_shatters.pop_back()
-	if b.mmi.multimesh.instance_count != count:
-		b.mmi.multimesh.instance_count = count   # shard count scales with enemy size
-	b.floor_y = floor_y
-	var n := b.mmi.multimesh.instance_count
-	b.vel.resize(n); b.pos.resize(n); b.rot_axis.resize(n); b.rot_spd.resize(n)
-	b.basis_arr.resize(n)
-	var rs_mm := b.mmi.multimesh.get_rid()
-	for i in n:
+	var mm := b.mmi.multimesh
+	if mm.instance_count != count:
+		mm.instance_count = count   # shard count scales with enemy size
+	# Where a shard is drawn is the shader's: room for the farthest flight.
+	mm.custom_aabb = AABB(world_pos - Vector3(10, 10, 10), Vector3(20, 20, 20))
+	b.mat.set_shader_parameter("fall", Gravity.down_at(world_pos) * 9.8 * 1.5)
+	b.mat.set_shader_parameter("floor_y", floor_y + 0.05)
+	b.mat.set_shader_parameter("age", 0.0)
+	var rs_mm := mm.get_rid()
+	for i in mm.instance_count:
 		# Distribute inside the enemy's AABB so the "popsicle" bursts from the body.
 		var local := Vector3(randf() - 0.5, randf(), randf() - 0.5) * aabb_size
-		b.pos[i] = world_pos + local
 		var dir := (local + Vector3.UP * 0.3).normalized()
-		b.vel[i] = dir * randf_range(2.0, 6.0)
-		b.rot_axis[i] = Vector3(randf() - 0.5, randf() - 0.5, randf() - 0.5).normalized()
-		b.rot_spd[i] = randf_range(3.0, 12.0)
-		b.basis_arr[i] = Basis().scaled(Vector3.ONE * randf_range(0.4, 1.1))
-		# Write spawn transforms NOW so a reused burst never flashes stale shards.
-		RenderingServer.multimesh_instance_set_transform(
-			rs_mm, i, Transform3D(b.basis_arr[i], b.pos[i]))
-		RenderingServer.multimesh_instance_set_custom_data(
-			rs_mm, i, Color(1, 0, 0, 0))
+		var vel := dir * randf_range(2.0, 6.0)
+		var axis := Vector3(randf() - 0.5, randf() - 0.5, randf() - 0.5).normalized()
+		RenderingServer.multimesh_instance_set_transform(rs_mm, i, Transform3D(
+				Basis().scaled(Vector3.ONE * randf_range(0.4, 1.1)), world_pos + local))
+		RenderingServer.multimesh_instance_set_custom_data(rs_mm, i, Color(vel.x, vel.y, vel.z, 0.0))
+		RenderingServer.multimesh_instance_set_color(rs_mm, i,
+				Color(axis.x, axis.y, axis.z, randf_range(3.0, 12.0)))
 	b.life = 0.0
 	b.active = true
 	b.mmi.visible = true
 	burst("shatter_puff", world_pos)     # snow-mist poof (smoke, tinted)
 
+
+var _shard: Mesh
+
+## A cut-crystal chunk, about 10 cm across, for when no shard_mesh is set.
+func _shard_mesh() -> Mesh:
+	if _shard == null:
+		var m := SphereMesh.new()
+		m.radius = 0.05
+		m.height = 0.16
+		m.radial_segments = 5
+		m.rings = 2
+		_shard = m
+	return _shard
+
+
 func _process(delta: float) -> void:
 	for b in _shatters:
 		if not b.active: continue
 		b.life += delta
-		var t: float = b.life / b.max_life
-		if t >= 1.0:
+		if b.life >= b.max_life:
 			b.active = false
 			b.mmi.visible = false
 			_free_shatters.append(b)
 			continue
-		var rs_mm := b.mmi.multimesh.get_rid()
-		var n := b.mmi.multimesh.instance_count
-		var fade := 1.0 - smoothstep(0.6, 1.0, t)
-		var fall := Gravity.down_at(b.mmi.global_position) * 9.8 * delta * 1.5
-		for i in n:
-			b.vel[i] += fall
-			b.pos[i] += b.vel[i] * delta
-			if b.pos[i].y < b.floor_y + 0.05:   # bounce on the enemy's floor
-				b.pos[i].y = b.floor_y + 0.05
-				b.vel[i].y *= -0.35
-				b.vel[i] *= 0.7
-			b.basis_arr[i] = b.basis_arr[i].rotated(b.rot_axis[i], b.rot_spd[i] * delta)
-			RenderingServer.multimesh_instance_set_transform(
-				rs_mm, i, Transform3D(b.basis_arr[i], b.pos[i]))
-			RenderingServer.multimesh_instance_set_custom_data(
-				rs_mm, i, Color(fade, 0, 0, 0))
+		b.mat.set_shader_parameter("age", b.life)

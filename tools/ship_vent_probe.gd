@@ -149,12 +149,11 @@ var _crumb_d0 := 0.0
 func _crumbs_out() -> int:
 	var n := 0
 	var pxf := _st.crumbs.planet.global_transform
-	for key in _st.crumbs._sets:
-		for q in _st.crumbs._sets[key].pos:
-			var wp: Vector3 = pxf * q
-			var c := Vector3i(_st.cell_at(wp).floor())
-			if not _st.holds(wp) or (_st.air._in(c) and _st.air.state[_st.air._idx(c)] == HullAir.OUTSIDE):
-				n += 1
+	for q in _st.crumbs.positions():
+		var wp: Vector3 = pxf * q
+		var c := Vector3i(_st.cell_at(wp).floor())
+		if not _st.holds(wp) or (_st.air._in(c) and _st.air.state[_st.air._idx(c)] == HullAir.OUTSIDE):
+			n += 1
 	return n
 
 
@@ -163,11 +162,9 @@ func _crumb_dist() -> float:
 	var sum := 0.0
 	var n := 0
 	var pxf := _st.crumbs.planet.global_transform
-	for key in _st.crumbs._sets:
-		var st = _st.crumbs._sets[key]
-		for q in st.pos:
-			sum += (pxf * q).distance_to(_hole)
-			n += 1
+	for q in _st.crumbs.positions():
+		sum += (pxf * q).distance_to(_hole)
+		n += 1
 	return sum / n if n > 0 else 0.0
 
 

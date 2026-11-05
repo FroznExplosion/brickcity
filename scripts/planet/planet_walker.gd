@@ -8,6 +8,10 @@ extends CharacterBody3D
 ## basis is rebuilt from it every tick (single-axis alignment drifts a strafe);
 ## up_direction is set to it so move_and_slide's floor is radial.
 ##
+## Coming into a new down -- off a ship's deck into a planet's air -- the body
+## rights itself at Pawn.REORIENT_RATE rather than in a tick; where nothing pulls
+## (Gravity.pulls_at) it floats, as the pawn does (Docs/RoomModules.md 7.12).
+##
 ## Stands in for the pawn until the pawn is ported to local down (11.5 step 5).
 ## Mouse look only when the mouse is captured, never in a scripted pass
 ## (DebugCamera.hands_off).
@@ -52,6 +56,8 @@ var pitch := 0.0
 ## body and its camera are interpolated, and must not move between steps.
 var _turn := 0.0
 var up := Vector3.UP
+## Nothing pulls where it is: it drifts, the move a suit's thrust (PawnMoves FLOAT).
+var floating := false
 ## Scripted input, for passes: x strafe, y forward (-1..1); yaw rad/s; rise
 ## (-1..1) in fly mode; jump once.
 var wish := Vector2.ZERO
@@ -115,18 +121,27 @@ func _unhandled_input(event: InputEvent) -> void:
 
 
 func _physics_process(delta: float) -> void:
-	up = Gravity.up_at(global_position)
+	floating = not flying and not Gravity.pulls_at(global_position)
+	# The body's own up: turned toward the down here, a tick's worth at most --
+	# at once flying -- and kept where nothing pulls.
+	var body_up := global_transform.basis.y.normalized()
+	if floating:
+		up = body_up
+	else:
+		up = Gravity.up_at(global_position)
+		var rate := INF if flying or frozen else Pawn.REORIENT_RATE * delta
+		body_up = Gravity.carry_toward(global_transform.basis.orthonormalized(), up, rate).y.normalized()
 	var f := -global_transform.basis.z
-	f = f - up * f.dot(up)
+	f = f - body_up * f.dot(body_up)
 	if f.length_squared() < 1e-8:
 		f = global_transform.basis.y
 	f = f.normalized()
 	var turn := _turn + yaw_rate * delta
 	_turn = 0.0
 	if turn != 0.0:
-		f = f.rotated(up, turn)
-	var r := f.cross(up)
-	global_transform.basis = Basis(r, up, -f).orthonormalized()
+		f = f.rotated(body_up, turn)
+	var r := f.cross(body_up)
+	global_transform.basis = Basis(r, body_up, -f).orthonormalized()
 	camera.rotation = Vector3(pitch, 0.0, 0.0)
 	if frozen:
 		velocity = Vector3.ZERO
@@ -153,6 +168,20 @@ func _physics_process(delta: float) -> void:
 		var fast := maxf(maxf(FAST_FLY, fly_speed * 10.0), minf(reach * CRUISE, CRUISE_MAX))
 		inertia = inertia.lerp(match_velocity, 1.0 - exp(-delta / MATCH_TIME))
 		velocity = v * (fast if run else fly_speed) + inertia + _drift
+		up_direction = up
+		move_and_slide()
+		return
+	if floating:
+		var want := r * w.x + f * w.y + up * rise_in
+		if want.length_squared() > 1.0:
+			want = want.normalized()
+		if want == Vector3.ZERO:
+			velocity *= exp(-PawnMoves.FLOAT_DAMP * delta)
+		else:
+			var nv := velocity + want * PawnMoves.FLOAT_ACCEL * delta
+			var cap := maxf(velocity.length(), PawnMoves.FLOAT_SPEED)
+			velocity = nv.normalized() * cap if nv.length() > cap else nv
+		jump = false
 		up_direction = up
 		move_and_slide()
 		return

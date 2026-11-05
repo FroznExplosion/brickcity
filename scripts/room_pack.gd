@@ -21,7 +21,7 @@ extends RoomShell
 ## quarter turns, the made build in that frame).
 
 const PACK_PARAMS := {"seed": 1, "hull": null, "pitch": 0, "corridor": 4, "room_max": 10,
-		"section_studs": 32, "passes": 4, "fore": "auto", "fill": 1.0, "lift": false, "balcony": 0.0,
+		"section_studs": 32, "passes": 4, "fore": "auto", "fill": 1.0, "lift": false, "balcony": 0.0, "hang": 0.0,
 		"window_every": 1000}
 ## `airlock`: a doorway with a door through the hull's aft wall at the spine.
 ## A deck needs at least this many columns.

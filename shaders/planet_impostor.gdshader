@@ -16,6 +16,8 @@ uniform vec3 sun_dir = vec3(0.4, 0.6, 0.3);   // planet-local, surface -> sun
 uniform float ambient = 0.16;
 uniform float fade = 1.0;
 
+#include "res://shaders/body_shadow.gdshaderinc"
+
 varying vec3 v_dir;
 
 vec2 dir_to_equirect(vec3 d) {
@@ -38,7 +40,9 @@ float bayer4(vec2 p) {
 void fragment() {
 	if (fade < 0.999 && bayer4(FRAGCOORD.xy) > fade) discard;
 	vec3 base = texture(color_map, dir_to_equirect(normalize(v_dir))).rgb;
-	float ndl = max(dot(normalize(v_dir), normalize(sun_dir)), 0.0);
+	vec3 sd = normalize(sun_dir);
+	float ndl = max(dot(normalize(v_dir), sd), 0.0);
+	if (ndl > 0.0) ndl *= body_shadow(normalize(v_dir), sd) * ring_shadow(normalize(v_dir), sd);
 	vec3 lit = base * (ndl * sun_color + ambient);
 	float rim = pow(1.0 - clamp(dot(normalize(VIEW), NORMAL), 0.0, 1.0), 4.0);
 	ALBEDO = lit + atmo_color * rim * 0.5 * (0.3 + ndl);

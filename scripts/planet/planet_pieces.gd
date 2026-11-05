@@ -71,7 +71,8 @@ class Piece:
 	var slow_since := 0
 	var settled := false
 	var born_ms := 0
-	## Its mesh, made on a worker: [task id, [mesh]], empty once hung.
+	## Its mesh, made on a worker: [task id, [mesh]], empty once hung;
+	## [-1] while its bake is on a worker (_start_mesh).
 	var job: Array = []
 	## What draws it: its own mesh, or a toppled building's bands (a Node3D).
 	var mesh_node: Node3D = null
@@ -106,6 +107,8 @@ var hits := 0
 var hit_killed := 0
 var woken := 0
 var toppled := 0
+## Laid again from a save (restore).
+var restored := 0
 
 
 func setup(world: BrickWorld, p: Node3D, material: Material) -> void:
@@ -240,8 +243,16 @@ func _cap() -> void:
 
 
 ## Its arrays here, its GPU mesh on a worker -- the planet's bands' way
-## (PlanetBuildings._draw_band): a mesh made on the main thread is ~9 ms.
+## (PlanetBuildings._draw_band): a mesh made on the main thread is ~9 ms. A
+## chunk not baked yet (a fresh split) is baked on a worker first, as the
+## city's islands are (IslandManager: never bake on the main thread) -- here
+## that was the big half's 14 ms on a landing's break -- and `_hang_mesh`
+## comes back for the arrays when it is ready.
 func _start_mesh(p: Piece) -> void:
+	if not bricks.bake_ready(p.chunk):
+		bricks.bake_chunk_async(p.chunk)
+		p.job = [-1]
+		return
 	var arrays: Array = bricks.build_chunk_mesh(p.chunk)
 	if arrays.is_empty():
 		return
@@ -254,6 +265,11 @@ func _start_mesh(p: Piece) -> void:
 
 
 func _hang_mesh(p: Piece) -> void:
+	if not p.job.is_empty() and int(p.job[0]) < 0:
+		if bricks.bake_ready(p.chunk):
+			p.job = []
+			_start_mesh(p)
+		return
 	if p.job.is_empty() or not WorkerThreadPool.is_task_completed(int(p.job[0])):
 		return
 	WorkerThreadPool.wait_for_task_completion(int(p.job[0]))
@@ -565,6 +581,40 @@ func _settle(p: Piece) -> void:
 	ground_changed.emit(world_box(p))
 
 
+## What a save keeps of them: each piece's standing bricks (ChunkRecord, parts
+## by name) and where its chunk lies on the planet. One still moving is kept as
+## it is now, and comes back settled there.
+func to_save() -> Array:
+	var out := []
+	var inv := planet.global_transform.affine_inverse()
+	for p in pieces:
+		if p.chunk < 0 or not is_instance_valid(p.body) or p.fading_since != 0:
+			continue
+		var r := ChunkRecord.capture(bricks, p.chunk)
+		if r.block_count() == 0:
+			continue
+		out.append({"record": r.to_data(bricks), "at": inv * bricks.get_chunk_transform(p.chunk)})
+	return out
+
+
+## Back from to_save: each laid again from its bricks where it lay, settled and
+## breakable as before. After the buildings, whose parts the records name.
+func restore(saved: Array) -> void:
+	for d in saved:
+		var r := ChunkRecord.from_data(bricks, (d as Dictionary).record)
+		if r == null:
+			continue
+		r.xform = planet.global_transform * (d.at as Transform3D)
+		var c := r.restore(bricks)
+		if c < 0:
+			continue
+		var p := adopt(c, null)
+		toppled -= 1
+		_start_mesh(p)
+		_settle(p)
+		restored += 1
+
+
 ## The floating origin moved the scene: a moving body is where the physics
 ## left it, not where its parent took it -- put back on the planet.
 func on_origin_shift() -> void:
@@ -587,9 +637,9 @@ func moving() -> int:
 func _exit_tree() -> void:
 	# Meshes still being made: waited for, or the pool tears down under them.
 	for p in pieces:
-		if not p.job.is_empty():
+		if not p.job.is_empty() and int(p.job[0]) >= 0:
 			WorkerThreadPool.wait_for_task_completion(int(p.job[0]))
-			p.job = []
+		p.job = []
 
 
 ## Where piece `p`'s grid is, in the world.

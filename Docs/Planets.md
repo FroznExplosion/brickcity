@@ -1826,6 +1826,9 @@ halves' `split_island`, and the big half's mesh arrays 14 ms, on the main thread
 fall over 64 ms headless, none over 60 ms windowed. The gates' worst frames (350-690 ms) are the
 scene's load, as every planet gate's. The other planet gates unchanged (hits 8, fall 7, damage 12,
 bricks 9, trees 7, squad 10, pawn 12).
+*2026-11-03:* a new piece's faces are baked on a worker (`PlanetPieces._start_mesh`, the city's
+rule: never bake on the main thread) and drawn a tick or two later: the shed on the first landing's
+break 11-13 -> 4-8 ms headless (`--gate=topple`; topple 6, fall 7, hits 8 unchanged).
 
 **Plan, D2 step 5 (2026-10-28): the AI knows where pieces lie.** The nav regions' AIWorlds already
 index every live chunk -- pieces too -- with the transform it had at their last `sync`, and read
@@ -2518,6 +2521,89 @@ for its far look. `--gate=debris` 13/13, dock 8, hull 10, ship 9, headless; not 
 frozen 0.5 m over the ground in 5.2 s; one 3 km off shrinks away. Only tested at rest (dropped by the
 parked ship): a station's piece reaching the air comes in at its orbital speed (150 m/s or so), not tried.
 Not saved; not yet seen on screen.
+
+**At a station's speed (2026-11-03).** Tried, and it went through the ground: a piece is caught its first
+frame, before a last position to take a speed from, so it fell from rest (the gate's clock was stopped
+too, and the gate had no ship: its "ship" piece came from nowhere). The speed is now worked out from the
+record and its frame (`_drift_velocity`). Then at 70 m/s it went 1.7 km under the ground: past a few
+hundred metres of the player there is no fine collider. Now a falling piece has continuous collision,
+drag in air (`FALLEN_DRAG`, 0.5/s), its own ground colliders (`PlanetBody.track`, freed once it is
+frozen), and is put back on the ground if it ever gets under it (`_over_ground`, counted). `--gate=falling`
+4/4 twice: in at 68 m/s, it lands 98 m on, never under the ground, never put back. debris 13, dock 8,
+hull 13. The box collider stands for any shape: an L-shaped piece lies like its box.
+
+#### Plan, rubble in saves (2026-11-03, for the user to choose)
+
+What a save leaves out today: fallen pieces on a planet (`PlanetPieces`: rigid bodies, each its own chunk
+of the planet's `BrickWorld`), drifting pieces (`Drift`: a mesh only, its chunk let go when it was made)
+and pieces fallen from space (`fallen`: a mesh and a box). Buildings and stations already save, as the
+ids of their dead bricks against what the seed lays again; a piece has no seed to be laid from, so its
+bricks themselves must be written.
+
+The engine has no way to: `save_template` keeps a chunk's bricks (`ChunkTemplate`: origin, dims, its
+`Block`s, joints) in memory and returns an id. There is no getter for a brick's cell, so script cannot
+read a chunk out either.
+
+- **A. Bricks (C++, ~60 lines).** `template_bytes(id) -> PackedByteArray` and `template_from_bytes(bytes)
+  -> id`: a `Block` is plain data (cell, archetype, colour, material, hp, alive, scorched, ...). A piece is
+  then written as its bricks (a 200-brick piece is ~5 KB) with where it lies, and laid again on load: the
+  same piece, shootable and breakable again. A drift keeps its chunk's template when it is made, for this.
+  Needs the DLL built in the main folder with the editor closed.
+- **B. Looks only (no C++).** A piece is written as its mesh and box: it comes back where it lay and
+  stops the player, but it cannot be hit or broken again, and a mesh is ~50x the bytes (a 200-brick piece
+  ~250 KB; 64 drifts could be 15 MB).
+
+Recommended: A. Either way, in order: fallen pieces on the world the player is on (written with the
+world, `s<system>_b<body>.dat`), then drifts and pieces from space, then the gate (`save` stages:
+a piece knocked loose, saved, back where it lay).
+
+**The user chose A (2026-11-03), and it needed no C++ after all:** `ChunkRecord` (scripts/chunk_record.gd,
+the city's sleeping-rubble record) already captures a chunk's standing bricks in one engine call
+(`capture_blocks`: cell, part, colour, furniture, cut joints, wear; parts by name), and lays them again
+(`place_blocks`). The handoff's "needs the engine" was wrong.
+
+**Step 1 built: rubble on a world.** `PlanetPieces.to_save` (a record and its chunk's place on the planet,
+for each piece, still or moving) into the world's file under `pieces`; `restore`, from
+`PlanetSaver.apply_sites` after the buildings, lays each again and settles it where it lay. `save` stage 1
+knocks 19 bricks off a roof and lets them land; stage 2: "its rubble back where it lay, settled, brick for
+brick" (1 of 1, 19 of 19, 0.00 m off) and "and it breaks again" (a blast on one of its bricks: 3). Stage 3's
+two-valued landing showed again (2.52 m); its rubble is not looked at there. A generated world's rubble goes
+the same way and is not tested.
+
+**Step 2 built: pieces adrift and fallen from space.** A station or ship sending a piece off keeps it as a
+`ChunkRecord` (`SpaceStation.drift_record`, taken with the riders); a `Drift` and a fallen body carry it and
+who made it. `PlanetSystem.drifts_to_save` (bricks, maker, record of motion, age) goes in the universe's state
+and comes back in its system once (`restore_drifts`); `fallen_to_save(b)` (the still ones, where they lie)
+goes in each world's file and comes back with its system (`restore_fallen`). The mesh is made again from the
+bricks, laid in the maker's world, whose parts they name. A piece is ~6 KB. Riders and pieces going (shrinking
+away) are not kept. Tried through bytes, not files: `--gate=debris` "saved and back" (1 of 1, 0.04 m off),
+`--gate=falling` "a ship's piece lies still, and is saved and back" (0.000 m off); save stages 1 and 2, hull,
+dock unchanged. That the saver writes and reads them in a real save is not tried.
+
+#### Plan, more than rifles on a planet (2026-11-03)
+
+1. **Mixed waves.** A garrison's soldiers are the city's foot units that are built (`UnitCatalog`:
+   rifleman, assault, breacher, veteran, marksman), each with its own weapon class and armour
+   (`UnitCatalog.apply_health`, `Soldier.set_type`), as `WaveDirector._field_allies` makes them. Home's first
+   wave is riflemen; each wave after it draws from a wider mix (rifles and assault; then breachers and
+   veterans; then marksmen). A generated town's one squad is the second mix. A save keeps each one's kind.
+   `--gate=home`: later waves bring at least three kinds.
+2. **A vehicle in play** (a tank, then a mech): only in gates today. Its own plan after step 1, with the
+   user: which, when, and what the player has against it.
+
+**Step 1 built (2026-11-03).** `PlanetGarrison.WAVE_KINDS`; each soldier's kind in its meta and in the save.
+`--gate=home` 10/10 headless: waves of 6, 8, 8 brought assault, rifleman, veteran, breacher, marksman.
+garrison 17, save stages 1 and 2 pass; that a saved survivor comes back as its own kind is not checked.
+Not seen on screen.
+
+**Step 2 built (2026-11-04): a tank in home's waves.** The user had no preference; the tank was the smallest
+step (built, and the city's commander already buys it). From wave 4 (`TANK_FROM`) a wave brings one beside
+its squad, as `CityScene._spawn_tank` makes it: a rocket gun and a machine gun, a driver and a gunner, on the
+nav net's vehicle map (`TankBrain`), screening the squad (`escort`) and sent at the player, again each time
+they move 20 m. A wave is clear when its squad is down and its tank wrecked; the HUD says "a tank". Not
+saved: a wave loaded from a save comes back without its tank. `--gate=home` 11/11: crewed, 86 m -> 80 m in
+20 s (the squad's pace), never under the ground. garrison 17. Not seen on screen; whether the player has
+what it takes to wreck it is not tried.
 
 #### Plan, saving (2026-11-01)
 
