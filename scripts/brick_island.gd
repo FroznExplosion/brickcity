@@ -114,6 +114,13 @@ var coarse_arrays: Array = []
 var coarse_tick := -1000000
 ## How long its last stand-in took to build, ms (IslandManager.coarse_wait).
 var coarse_ms := 0.0
+## Its shadow from further off than CityScene.BRICK_SHADOW_RANGE: its coarse
+## stand-in, shadows only, under `mesh` (IslandManager.want_shadow_proxy). Null
+## until the first is built; its bricks cast meanwhile.
+var shadow_mesh: MeshInstance3D
+## Alive bricks the shadow was built from, and the tick it was asked for.
+var shadow_alive := -1
+var shadow_tick := -1000000
 ## The index slots its bake had when it was last baked again to leave dead faces
 ## out (IslandManager._compact_due): never baked again for the same slots.
 var compact_slots := 0
