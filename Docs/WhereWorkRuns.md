@@ -27,6 +27,9 @@ the same power budget). More threads busy at once is more heat (CLAUDE.md, the c
   `Encounter.BUDGET_MS`, one stand-in / one snow square / one shadow proxy a pass.
 * **Things that move without being decided are the GPU's**: crumbs, particles and ice shards
   are written once and moved by their shaders (GpuOffload.md 2.1, 2.2, 2.7).
+* **No renderer read-backs and no waits on a worker during play** (since 2026-11-04, for
+  new code; CLAUDE.md "Where new code runs"). Each one is a place 3.1 has to rework; the list
+  of the ones already there is in 3.1.
 * **Nodes, bodies and shapes are made on the main thread.** The scene tree and the physics
   space are not thread-safe; Godot allows building a body's shapes before it joins the space,
   and the code does that (`add_chunk_shapes` before `add_child`).
@@ -130,6 +133,21 @@ flush in `CityScene._physics_process`), every renderer read-back (`get_image`,
 `--big --shot` and the gates again. Days, across city, islands, the near tier and planets.
 **Measure first:** how much of a collapse's worst frames is renderer waits (the `render` mark
 and the stalls above) against real work (`spawn`, `fracture`).
+
+**Started 2026-11-04.** Step 1, stop it growing: the rule in CLAUDE.md ("Where new code runs").
+Step 2, the work list -- every place in play code that breaks it today (probes, gates,
+screenshots, `_exit_tree` and load-time waits left out; those are fine):
+
+| # | Kind | Where | What to do |
+|---|---|---|---|
+| a | instance parameter read-back | `BrickNear._chamfer_node` (copies `weather_sway`, `weather_snowcap`, `grain_origin`, `grid_light` from the flat band), `BrickNear` studs (`grid_light`), `CityScene` stand-ins x2 (`grain_origin`), `PlanetScene` grid check (`grid_light`), `AcidEffect` (`dissolve_amount`) | keep the values set on the CPU side (a dictionary or node meta written where they are set) and copy from there |
+| b | wait on a job that may still run | `CityScene._harvest_band_jobs(wait_for)`, `BrickNear._forget` (UPLOADING), `IslandManager._field_finish`, `PlanetBuildings._free_bricks` and `_topple`, `SpaceStation.deactivate`, `PlanetSystem.jump` / `_full_bake` | leave the job to finish and throw its result away when harvested (a "dropped" flag), instead of waiting |
+| c | the tick's deliberate flush | `CityScene._physics_process`: `mesh_get_surface_count(_flush_mesh)` | pays the uploads at a known point today; under a render thread it would wait for the frame. Drop it when switching, measure again |
+| d | textures written from workers | the `_texture_2d_update` errors of the 2026-11-04 try | find which worker writes a texture (`ImageTexture.update`, `texture_2d_update` inside a task) and hand the image to the main thread |
+| e | the switch itself | `rendering/driver/threads/thread_model` | after a-d: `--render-thread separate`, the street walk, `--big --shot`, the gates |
+
+Steps a and b help today too (a read-back costs a renderer round trip even on one thread; a
+wait stalls the tick); c-e only pay off at the switch.
 
 **Smaller ways at the same cost** if 3.1 is never done: fewer, larger uploads (a building's
 bands merged), uploads only between ticks, and renderer calls batched to one point a tick
