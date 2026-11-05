@@ -139,3 +139,13 @@ main thread).
   (`big_city.tscn -- --shot`, read `[prof] frames by the clock`), then the city-tick spikes.
 - Gates: solve, collapse, replay, storey, storey_unit, hang probes pass; `--light` passes;
   `--chamfer` failed "the picture is the same either way" once (1.01% vs 1%), then passed 2 of 2.
+- **Measured awake (2026-11-05 10:27-10:29, editor closed, nothing else running),
+  `big_city.tscn -- --shot`, two A/B pairs** (B = pieces casting their bricks, as before):
+
+  | | frame mean | frames over 33 ms | GPU mean | GPU in slow frames | shadow tris (slow frames) |
+  |---|---|---|---|---|---|
+  | A1 / A2 (stand-in shadows) | 18.6 / 17.4 ms | 32 / 23 of 906 | 13.6 / 12.4 ms | 18.6 / 14.4 | 1.2 / 0.9 M |
+  | B1 / B2 (bricks) | 21.2 / 21.1 ms | 71 / 87 of 906 | 15.8 / 16.1 ms | 29.0 / 32.7 | 8.6 / 10.3 M |
+
+  Slow frames cut to about a third; the slow ones' GPU time halved. What is left in them is the
+  city tick (17-19 ms on a slow frame) about as often as draw: section 3 item 1's spikes are next.
