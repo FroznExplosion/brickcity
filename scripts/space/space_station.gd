@@ -572,6 +572,44 @@ func holds(p: Vector3) -> bool:
 			and l.z < data.fz * stud + 0.5 and l.y < height + 0.5
 
 
+## A ram's blow on its own hull at `point` (world; PlanetScene._on_rammed): as
+## `damage`, but taken whatever its bricks are doing. Riding with no ghost (no
+## round can reach them then, but what it flew into still hits), on the chunk as
+## it is; not laid at all, on the bricks it would lay, briefly, so that what dies
+## is in what it keeps (`_dead`). Returns the bricks killed.
+func take_ram(point: Vector3, shot: Dictionary) -> int:
+	if chunk >= 0:
+		if not bricked:
+			return 0
+		if riding:
+			bricks.set_chunk_transform(chunk, global_transform * frame)
+		var radius := float(shot.get("radius", 0.0))
+		var e := damage_log.record(0, DamageLog.Kind.BLAST, chunk, point, radius, Vector3.ZERO, 0)
+		var killed := DamageLog.apply_entry(bricks, chunk, e)
+		if not killed.is_empty():
+			crumbs.throw(bricks, chunk, killed, Vector3.ZERO, point, radius * IslandManager.BLAST_CORE)
+			_after_kill(killed)
+		return killed.size()
+	prepare()
+	if _template < 0:
+		return 0
+	var c := bricks.create_chunk(Vector3i.ZERO, recipe.chunk_dims() if recipe != null
+			else TowerRecipe.chunk_dims(data.fx, data.fz, data.courses))
+	bricks.load_template(_template, c)
+	if not _dead.is_empty():
+		bricks.kill_blocks(c, _dead)
+	bricks.set_chunk_transform(c, global_transform * frame)
+	var hit := bricks.apply_hit(c, point, float(shot.get("radius", 0.0)))
+	if not hit.is_empty():
+		_dead = bricks.get_dead_blocks(c)
+		_dead.append_array(bricks.get_detached_blocks(c))
+		bricks_killed += hit.size()
+		if ghost != null:
+			ghost.disable(hit)
+	bricks.release_chunk(c)
+	return hit.size()
+
+
 func _after_kill(killed: PackedInt32Array) -> void:
 	bricks_killed += killed.size()
 	if air != null:

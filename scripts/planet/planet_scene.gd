@@ -340,9 +340,15 @@ func _buildings_here() -> PlanetBuildings:
 ## The ship ran into something at speed: it is blasted there.
 func _on_rammed(point: Vector3, speed: float) -> void:
 	var shot := {"blast": true, "radius": clampf(speed * 0.15, 1.5, 5.0), "hp": 0}
+	# The ship takes it too, nearer the point: its hull is the smaller thing.
+	ship.take_ram(point, {"blast": true, "radius": float(shot.radius) * RAM_SHIP_SHARE, "hp": 0})
 	if system.station != null and system.station.damage(point, shot):
 		return
 	_buildings_here().damage(point, shot)
+
+
+## How much of a ram's blast radius the ship's own hull takes (_on_rammed).
+const RAM_SHIP_SHARE := 0.6
 
 
 ## The pawn, its controller, camera, gun and arms, standing at `feet`, looking
@@ -4613,6 +4619,8 @@ func _run_dock_gate() -> void:
 			best = i
 	var site = buildings.sites[best]
 	var killed0: int = buildings.bricks_killed
+	var hurt0: int = ship.bricks_killed
+	var gone0 := ship.gone().size()
 	t0 = Time.get_ticks_msec()
 	while ship.rams == 0 and Time.get_ticks_msec() - t0 < 30000:
 		var c: Vector3 = site.frame * Vector3(site.fx * 0.175, 6.0, site.fz * 0.175)
@@ -4627,6 +4635,8 @@ func _run_dock_gate() -> void:
 	_check("the ship rams a tower: stopped by it, not through it", ship.rams > 0
 			and (c2 - ship.rel.origin).length() > site.fx * 0.175, "%d rams, %.1f m from its centre" % [ship.rams, (c2 - ship.rel.origin).length()])
 	_check("and the tower is blasted where it hit", buildings.bricks_killed > killed0, "%d bricks" % (buildings.bricks_killed - killed0))
+	_check("and the ship is hurt where it hit, kept for when its bricks are laid", ship.bricks_killed > hurt0
+			and ship.gone().size() > gone0, "%d bricks" % (ship.bricks_killed - hurt0))
 	await _shot("dock_gate_ram")
 	# Up to the home planet's station.
 	var st: SpaceStation = null
