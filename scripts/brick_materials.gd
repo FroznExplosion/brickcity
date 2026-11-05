@@ -68,7 +68,7 @@ static func set_grain_origin(node: GeometryInstance3D, world: BrickWorld, chunk:
 	if node == null or world == null or chunk < 0:
 		return
 	var o := Vector3(world.get_chunk_origin(chunk)) * BrickWorld.get_cell_size()
-	node.set_instance_shader_parameter("grain_origin", Vector3(
+	InstanceParams.put(node, &"grain_origin", Vector3(
 			fposmod(o.x, PBR_PERIOD), fposmod(o.y, PBR_PERIOD), fposmod(o.z, PBR_PERIOD)))
 
 

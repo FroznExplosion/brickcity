@@ -277,7 +277,7 @@ static func grid_stud_material() -> ShaderMaterial:
 static func grid_studs(mmi: GeometryInstance3D, param: Variant, band: Node3D) -> void:
 	if mmi.material_override != _grid_stud_material or param == null:
 		return
-	mmi.set_instance_shader_parameter(&"grid_light", param)
+	InstanceParams.put(mmi, &"grid_light", param)
 	var t := band.global_transform.affine_inverse()
 	mmi.set_instance_shader_parameter(&"grid_from_world_x",
 			Vector4(t.basis.x.x, t.basis.y.x, t.basis.z.x, t.origin.x))
@@ -704,9 +704,9 @@ func _show_near(band: Band, mesh: ArrayMesh) -> void:
 	near.physics_interpolation_mode = Node.PHYSICS_INTERPOLATION_MODE_OFF
 	near.set_instance_shader_parameter("geo_bevel", 1.0)
 	for param in [&"weather_sway", &"weather_snowcap", &"grain_origin", &"grid_light"]:
-		var v: Variant = node.get_instance_shader_parameter(param)
+		var v: Variant = InstanceParams.of(node, param)
 		if v != null:
-			near.set_instance_shader_parameter(param, v)
+			InstanceParams.put(near, param, v)
 	band.layers = _layers_of(node)
 	near.layers = band.layers
 	node.add_child(near)
@@ -864,7 +864,7 @@ func _sort_studs(band: Band, local_eye: Vector3) -> void:
 			mmi.multimesh = mm
 			band.node.add_child(mmi)
 			band.studs.append(mmi)
-			grid_studs(mmi, band.node.get_instance_shader_parameter(&"grid_light"), band.node)
+			grid_studs(mmi, InstanceParams.of(band.node, &"grid_light"), band.node)
 		_carded[band.key] = true
 		_admit_cards = INF
 	band.stud_eye = local_eye
