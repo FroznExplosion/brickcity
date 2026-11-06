@@ -85,6 +85,17 @@ var crumbs: PlanetCrumbs
 var bricks_killed := 0
 ## Bricks brought back by repair (Docs/Hulls.md 9).
 var bricks_restored := 0
+## Water inside it (Docs/Hulls.md 5, HullWater): every ship's, a spaceship's too --
+## parked in a planet's sea, a hole under the surface floods it.
+var hull_water: HullWater
+## Where the water outside stands: world point -> metres under its surface
+## (below 0: over it; NAN: none -- space, dry land). Set by whoever knows the
+## water: a Boat its sea, PlanetSystem a planet's for a ship on it. Unset: none.
+var water_depth := Callable()
+var water_mesh: MeshInstance3D
+var _water_clock := 0.0
+## The water's ticks a second, and its drawing's.
+const WATER_HZ := 20.0
 ## Its ghost hull (Docs/Hulls.md 7b): its brick collision standing still in
 ## `ghosts`' space, at `ghost_slot`, for whoever walks it while it moves. Built
 ## once, when its bricks are first in; edited by damage and repair; never by a
@@ -554,6 +565,8 @@ func _after_restore(back: PackedInt32Array) -> void:
 	bricks_restored += back.size()
 	if air != null:
 		air.blocks_added(bricks, chunk, back)
+	if hull_water != null:
+		hull_water.grid_changed = true
 	if ghost != null:
 		ghost.enable(back)
 	if _collision != null:
@@ -614,6 +627,8 @@ func _after_kill(killed: PackedInt32Array) -> void:
 	bricks_killed += killed.size()
 	if air != null:
 		air.blocks_removed(bricks, chunk, killed)
+	if hull_water != null:
+		hull_water.grid_changed = true
 	if _collision != null:
 		_collision.disable(killed)
 	if ghost != null:
@@ -687,6 +702,7 @@ func _process(_delta: float) -> void:
 		_g2r_last = ghost_to_real()
 		_g2r_dt = _delta
 		_air_step(_delta)
+		_water_step(_delta)
 		if riding:
 			# Its doors and lifts follow its chunk; flown, the chunk follows it.
 			bricks.set_chunk_transform(chunk, global_transform * frame)
@@ -1182,6 +1198,111 @@ func _bands_of(ids: PackedInt32Array) -> PackedInt32Array:
 		if si >= 0 and not out.has(si):
 			out.append(si)
 	return out
+
+
+# --- water inside (Docs/Hulls.md 5, 8) -----------------------------------------
+
+func _water_step(dt: float) -> void:
+	if air == null:
+		return
+	_water_clock += dt
+	if _water_clock < 1.0 / WATER_HZ:
+		return
+	var t := _water_clock
+	_water_clock = 0.0
+	if hull_water == null:
+		if not water_depth.is_valid():
+			return
+		hull_water = HullWater.on(air)
+	if not water_depth.is_valid() and not hull_water.any():
+		return
+	hull_water.step(t, water_down(), _hole_depth)
+	if hull_water.changed:
+		_draw_water()
+
+
+## Its down in its grid's axes: its own gravity's (its frame's -Y) while it pulls,
+## else the world's where it is, turned into its frame.
+func water_down() -> Vector3:
+	if pulls():
+		return Vector3.DOWN
+	var b := (global_transform * frame).basis.orthonormalized()
+	return (b.inverse() * Gravity.down_at(global_position)).normalized()
+
+
+## A hole cell's depth under the outside water (HullWater's depth_at).
+func _hole_depth(i: int) -> float:
+	if not water_depth.is_valid():
+		return NAN
+	var c := air._cell(i)
+	var p := global_transform * (cell_point(c) + frame.basis * Vector3(0.0, BrickWorld.get_plate_metres() * 0.5, 0.0))
+	return float(water_depth.call(p))
+
+
+## The water in it drawn (Docs/Hulls.md 8): a top on each column of wet cells at its
+## level, stepped by plate, and sides toward dry inside cells -- in its bricks'
+## frame, so it rides with it.
+func _draw_water() -> void:
+	if _brick_node == null:
+		return
+	if water_mesh == null:
+		water_mesh = MeshInstance3D.new()
+		water_mesh.name = "Water"
+		var m := StandardMaterial3D.new()
+		m.albedo_color = Color(0.16, 0.42, 0.62, 0.72)
+		m.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+		m.cull_mode = BaseMaterial3D.CULL_DISABLED
+		m.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+		water_mesh.material_override = m
+		water_mesh.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		_brick_node.add_child(water_mesh)
+	var stud := BrickWorld.get_stud_metres()
+	var plate := BrickWorld.get_plate_metres()
+	var v := PackedVector3Array()
+	var dims := air.dims
+	var sy := dims.x
+	for i: int in hull_water.wet:
+		var w := hull_water.level(i)
+		if w < 0.02:
+			continue
+		var c := air._cell(i)
+		var x0 := c.x * stud
+		var z0 := c.z * stud
+		var y0 := c.y * plate
+		var y1 := y0 + w * plate
+		var above := i + sy
+		if c.y + 1 >= dims.y or hull_water.level(above) < 0.02:
+			v.append_array([Vector3(x0, y1, z0), Vector3(x0 + stud, y1, z0), Vector3(x0 + stud, y1, z0 + stud),
+					Vector3(x0, y1, z0), Vector3(x0 + stud, y1, z0 + stud), Vector3(x0, y1, z0 + stud)])
+		for e: Array in [[Vector3i(1, 0, 0), x0 + stud, true], [Vector3i(-1, 0, 0), x0, true],
+				[Vector3i(0, 0, 1), z0 + stud, false], [Vector3i(0, 0, -1), z0, false]]:
+			var nc: Vector3i = c + (e[0] as Vector3i)
+			if not air._in(nc):
+				continue
+			var ni := air._idx(nc)
+			if not hull_water.passable(ni) or hull_water.level(ni) >= w - 0.02:
+				continue
+			var at: float = e[1]
+			if bool(e[2]):
+				v.append_array([Vector3(at, y0, z0), Vector3(at, y1, z0), Vector3(at, y1, z0 + stud),
+						Vector3(at, y0, z0), Vector3(at, y1, z0 + stud), Vector3(at, y0, z0 + stud)])
+			else:
+				v.append_array([Vector3(x0, y0, at), Vector3(x0, y1, at), Vector3(x0 + stud, y1, at),
+						Vector3(x0, y0, at), Vector3(x0 + stud, y1, at), Vector3(x0 + stud, y0, at)])
+	if v.is_empty():
+		water_mesh.mesh = null
+		return
+	var arrays := []
+	arrays.resize(Mesh.ARRAY_MAX)
+	arrays[Mesh.ARRAY_VERTEX] = v
+	var mesh := ArrayMesh.new()
+	mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
+	water_mesh.mesh = mesh
+
+
+## Water pumped out of it, `cells` a second (HullWater.pump): its crew's pumps.
+func pump(dt: float, cells: float) -> float:
+	return hull_water.pump(dt, cells) if hull_water != null else 0.0
 
 
 ## Where the segment `from` -> `to` (world) is inside its module's box (holds'):

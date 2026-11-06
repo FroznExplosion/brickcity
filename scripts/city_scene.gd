@@ -1380,6 +1380,8 @@ func _ready() -> void:
 		_pass_runner()._run_physview_pass()
 	elif "--piececost" in OS.get_cmdline_user_args():
 		_pass_runner()._run_piececost_pass()
+	elif "--boat" in OS.get_cmdline_user_args():
+		_pass_runner()._run_boat_pass()
 	elif _squad_mode:
 		_pass_runner()._run_squad_pass()
 	elif _mechfall_mode:

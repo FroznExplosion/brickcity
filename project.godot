@@ -347,6 +347,30 @@ limits/global_shader_variables/buffer_size=262144
 
 [shader_globals]
 
+hull_mask_a={
+"type": "sampler3D",
+"value": ""
+}
+hull_xf_a={
+"type": "mat4",
+"value": Projection(1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1)
+}
+hull_dims_a={
+"type": "vec4",
+"value": Vector4(0, 0, 0, 0)
+}
+hull_mask_b={
+"type": "sampler3D",
+"value": ""
+}
+hull_xf_b={
+"type": "mat4",
+"value": Projection(1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1)
+}
+hull_dims_b={
+"type": "vec4",
+"value": Vector4(0, 0, 0, 0)
+}
 lod_zoom={
 "type": "float",
 "value": 1.0

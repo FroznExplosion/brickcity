@@ -1089,6 +1089,9 @@ func _process(_delta: float) -> void:
 		walker.match_velocity = system.match_velocity(walker.global_position)
 		_air_tick()
 		_restore_tick(_delta)
+		# A ship sitting in its planet's sea: the ocean cut out of its dry cells
+		# (Docs/Hulls.md 6).
+		HullMasks.update(system.ships, cam_pos)
 		walker.reach = body.altitude_of(walker.global_position)
 	if _stepping_out >= 0 and (ship.bricked or Time.get_ticks_msec() - _stepping_out > STEP_OUT_WAIT):
 		_stepping_out = -1
