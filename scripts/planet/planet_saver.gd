@@ -63,6 +63,9 @@ func _apply_system() -> void:
 	for i in worlds:
 		for k in (worlds[i] as Dictionary).get("stations", {}):
 			system.stations[k].restore_gone(worlds[i].stations[k])
+		for k in (worlds[i] as Dictionary).get("gravity_off", []):
+			if int(k) < system.stations.size():
+				system.stations[int(k)].data.gravity_on = false
 	for b in system.built:
 		apply_sites(b)
 	for i in worlds:
@@ -173,12 +176,17 @@ func _write_world(i: int) -> void:
 	if g != null:
 		d["garrison"] = g.to_save()
 	var stations := {}
+	var off := []
 	for k in system.stations.size():
 		if system.sys.orbitals[k].parent == i:
 			var gone: PackedInt32Array = system.stations[k].gone()
 			if not gone.is_empty():
 				stations[k] = gone
+			if not system.stations[k].data.gravity_on:
+				off.append(k)
 	d["stations"] = stations
+	# Their gravity generators turned off (G, Docs/RoomModules.md 7.12).
+	d["gravity_off"] = off
 	worlds[i] = d
 	save.write_world(system.system_index, i, d)
 
@@ -207,7 +215,7 @@ func _state() -> Dictionary:
 			"kind": kind, "index": index, "at": inv * at, "look": inv.basis * look,
 			"piloting": scene.piloting, "on_foot": scene.on_foot, "drifts": system.drifts_to_save(),
 			"ship": {"ref": system.index_of(s.ref) if s.ref != null else -1, "rel": s.rel, "fine": s.fine,
-					"vel": s.vel, "landed": s.landed, "gone": s.gone()}}
+					"vel": s.vel, "landed": s.landed, "gone": s.gone(), "gravity_on": s.data.gravity_on}}
 
 
 func _ship_back() -> void:
@@ -216,6 +224,7 @@ func _ship_back() -> void:
 		return
 	var s: SpaceShip = scene.ship
 	s.restore_gone(d.gone)
+	s.data.gravity_on = bool(d.get("gravity_on", true))
 	var i: int = d.ref
 	s.ref = system.bodies[i] if i >= 0 else null
 	s.rel = d.rel

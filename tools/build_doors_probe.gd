@@ -16,6 +16,9 @@ extends SceneTree
 ##             the lift each storey and the way in, the same
 ##   lift      the tower's lift (BuildLifts): a platform at the ground stop; stood
 ##             on, it rides a storey up; waited for on the ground, it comes back
+##   ladder    a build's ladder (BuildLadders, Docs/RoomModules.md 7.13): a Ladder
+##             node at its face, found by a figure stood before it; it goes with
+##             its section when the build is cut (BuildSections)
 
 const Kit := preload("res://tools/room_module_kit.gd")
 
@@ -192,7 +195,51 @@ func _tick() -> void:
 				return
 			_ok("waited for on another storey, it comes", float(lf.at) == float(lf.stops[0]),
 					"at row %.1f, %d ticks" % [float(lf.at), _wait])
+			_ladder()
 			_done()
+
+
+## A ladder up the room's +Z wall inside (meta.ladders), opened in the workshop:
+## its node stands at its face, found from just before it; cut into sections,
+## the ladder goes with the one its foot is in.
+func _ladder() -> void:
+	var r := _room()
+	# Facing -Z (out of the +Z wall, into the room), two studs across, 12 plates up.
+	var lad := {"at": [4, 1, 8], "facing": 3, "w": 2, "h": 12}
+	r.meta["ladders"] = [lad]
+	_ws._load_recipe(r)
+	var bl: BuildLadders = null
+	for n in _ws.get_children():
+		if n is BuildLadders:
+			bl = n
+	bl.resync()
+	var xf: Transform3D = _ws.world.get_chunk_transform(_ws.asm.frames[0])
+	var cell := BrickWorld.get_cell_size()
+	var fd: Vector2i = StructureSpaces.FACINGS[3]
+	# Feet a stud out of the face, between its two columns, a plate up.
+	var feet := xf * ((Vector3(4, 1, 8) - Vector3(r.origin()) + Vector3(1.0, 1.0, 0.5)
+			+ Vector3(fd.x, 0, fd.y) * 1.0) * cell)
+	var found := Ladder.at(self, feet)
+	_ok("a build's ladder: a node at its face, found by a figure stood before it",
+			bl != null and bl.count() == 1 and found != null and absf(found.height - 12 * cell.y) < 0.01,
+			"%d node(s), found %s" % [bl.count() if bl else 0, found != null])
+	# A station with ladders, cut: each ladder in one section, where it stood.
+	var st: BuildRecipe = null
+	for sd in range(1, 30):
+		var made := RoomStation.generate(StationKit.library(), {"seed": sd, "section_bricks": 1})
+		if made.ok and not (made.recipe.meta.get("ladders", []) as Array).is_empty() 				and BuildSections.split(made.recipe).size() > 1:
+			st = made.recipe
+			break
+	var want := {}
+	for ld: Dictionary in st.meta.ladders if st else []:
+		want[BuildRecipe.cell_from(ld.at)] = true
+	var got := 0
+	var parts := BuildSections.split(st) if st else []
+	for o: Dictionary in parts:
+		for ld: Dictionary in (o.recipe as BuildRecipe).meta.get("ladders", []):
+			got += 1 if want.has(BuildRecipe.cell_from(ld.at) + (o.offset as Vector3i)) else 0
+	_ok("cut into sections, each ladder goes with one, where it stood", st != null and parts.size() > 1
+			and got == want.size(), "%d of %d in %d section(s)" % [got, want.size(), parts.size()])
 
 
 ## The generators' doors: each a hole open under a solid lintel.

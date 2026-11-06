@@ -114,6 +114,10 @@ var _band_nodes := {}
 var _remesh := PackedInt32Array()
 var _solve_due := false
 var _dead := PackedInt32Array()
+## generator_out's last look: the physics tick of it, and what it found.
+const GENERATOR_LOOK := 10
+var _generator_at := -1
+var _generator_out := false
 var _stud_arrays: Array = []
 var _template := -1
 var lay_ms := 0.0
@@ -192,13 +196,42 @@ func is_station() -> bool:
 ## Its own gravity pulls (Docs/RoomModules.md 7.12): a working station or ship --
 ## not a satellite, not a wreck -- with its generator on.
 func pulls() -> bool:
-	return is_station() and data.gravity_on and data.gravity > 0.0 and wreck == null
+	return is_station() and data.gravity_on and data.gravity > 0.0 and wreck == null and not generator_out()
 
 
-## Its generator on or off.
-func set_gravity(on: bool) -> void:
+## Its generator on or off. Shot out (generator_out), it stays off; false then.
+func set_gravity(on: bool) -> bool:
+	if on and generator_out():
+		print("[station] %s: its gravity generator is shot out" % data.orbital_name)
+		return false
 	data.gravity_on = on
 	print("[station] %s: gravity generator %s" % [data.orbital_name, "on" if on else "off"])
+	return true
+
+
+## Its gravity generator shot out (GravityGenerator): any of its bricks dead or
+## gone with a piece. One with none (a tower's, a boat's) is never out. Looked at
+## again every GENERATOR_LOOK physics ticks while it is laid.
+func generator_out() -> bool:
+	var ids := GravityGenerator.blocks(recipe)
+	if ids.is_empty():
+		return false
+	if chunk < 0:
+		for i in ids:
+			if _dead.has(i):
+				return true
+		return false
+	var f := Engine.get_physics_frames()
+	if f - _generator_at < GENERATOR_LOOK and _generator_at >= 0:
+		return _generator_out
+	_generator_at = f
+	_generator_out = false
+	var gone := bricks.get_detached_blocks(chunk)
+	for i in ids:
+		if bricks.get_block_hp(chunk, i) <= 0 or gone.has(i):
+			_generator_out = true
+			break
+	return _generator_out
 
 
 ## Its field: its gravity inside its boxes -- a box round each section of a
@@ -828,6 +861,9 @@ func _prepare_generated() -> void:
 			else ShipBuild.make(data.orbital_seed) if ship else RoomStation.generate(StationKit.library(),
 			{"seed": data.orbital_seed, "modules": 12 + data.orbital_seed % 12, "spine": 3 + data.orbital_seed % 3,
 			"section_bricks": SECTION_BRICKS})
+	if not ship and bool(made.ok):
+		# Its gravity generator in its core (7.12), before the furniture.
+		made.stats["generator"] = GravityGenerator.lay(made.recipe, ["living"])
 	grow_ms = (Time.get_ticks_usec() - t0) / 1000.0
 	if not bool(made.ok):
 		push_warning("[station] %s: %s -- a tower instead" % [data.orbital_name, made.why])
