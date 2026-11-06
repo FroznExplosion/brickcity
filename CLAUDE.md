@@ -145,8 +145,9 @@ to do all three, and Escape (their way out) paused the pass.
 - Without the file a scripted pass still never captures the mouse and cannot
   be paused (`CityScene._scripted`), but its window opens mid-screen with the
   keyboard. Copy the file.
-- New code that captures the mouse must not do it when `DebugCamera.hands_off`
-  is set (today `DebugCamera._set_captured` is the only place that captures).
+- New code that captures the mouse must not do it when `PlayerCamera.hands_off`
+  is set (today `PlayerCamera._set_captured` is the only place that captures;
+  DebugCamera, the free camera, extends PlayerCamera).
 - A test window, and any scripted city pass, runs on the settings menu's
   **defaults**, in memory (`TestWindow.use_default_settings`): what the user
   has saved in Options no longer changes a gate's pictures or numbers. So a

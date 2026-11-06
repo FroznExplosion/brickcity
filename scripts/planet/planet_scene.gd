@@ -48,7 +48,7 @@ var town_dirs: Array = []
 var landmark_dirs: Array = []
 var walker: PlanetWalker
 ## The player on foot: the city's own kit (scripts/city_scene.gd _enter_pawn).
-var cam: DebugCamera
+var cam: PlayerCamera
 var pawn: Pawn
 var player: PlayerController
 var gun: GunController
@@ -249,7 +249,7 @@ func _ready() -> void:
 	PlanetFrame.recentre(self, walker.global_position)
 	_build_hud()
 	if _gate:
-		DebugCamera.hands_off = true
+		PlayerCamera.hands_off = true
 		walker.scripted = true
 		var tw := get_node_or_null(^"/root/TestWindow")
 		if tw != null:
@@ -360,14 +360,12 @@ const RAM_SHIP_SHARE := 0.6
 ## The pawn, its controller, camera, gun and arms, standing at `feet`, looking
 ## along `facing` (tangent). Built once; placed again after a flight.
 func _spawn_player(feet: Vector3, facing: Vector3) -> void:
-	cam = DebugCamera.new()
+	cam = PlayerCamera.new()
 	cam.name = "Camera"
 	cam.capture_mouse = false
-	cam.allow_walk = false
 	cam.far = SEE_FAR
 	cam.add_to_group(PlanetSystem.RIG)
 	add_child(cam)
-	cam.set_process(false)
 	pawn = Pawn.spawn(self, feet, 0)
 	pawn.body.add_to_group(PlanetSystem.RIG)
 	pawn.moves = PawnMoves.new(pawn)

@@ -38,7 +38,7 @@ extends Node
 ##     something moves it (MenuSettings, a gate changing its size). It is
 ##     still drawn: a parked window is not a minimised one;
 ##   * it is never fullscreen, whatever the user's own settings say;
-##   * the mouse is never captured (DebugCamera.hands_off).
+##   * the mouse is never captured (PlayerCamera.hands_off).
 ##
 ## Without the setting this does nothing at all.
 
@@ -65,7 +65,7 @@ func _ready() -> void:
 		set_process(false)
 		return
 	_parked = true
-	DebugCamera.hands_off = true
+	PlayerCamera.hands_off = true
 	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
 	_park()
 	# And straight after MenuSettings has had its turn with the window: it puts

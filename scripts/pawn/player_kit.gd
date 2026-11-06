@@ -95,8 +95,8 @@ func enter(p_pawn: Pawn, p_view: PlayerView, tier := 1, shared_feedback: CombatF
 		aim_assist = AimAssist.new()
 		aim_assist.setup(camera, gun, player, services)
 		add_child(aim_assist)
-	if camera is DebugCamera:
-		(camera as DebugCamera).assist = aim_assist
+	if camera is PlayerCamera:
+		(camera as PlayerCamera).assist = aim_assist
 	gun.assist = aim_assist
 	_fight_hud()
 	if hud == null:
