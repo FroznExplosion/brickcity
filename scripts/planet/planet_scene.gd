@@ -3019,6 +3019,23 @@ func _run_rocks_gate() -> void:
 	var gap := (f.transform.affine_inverse() * ship.rel.origin).distance_to(best)
 	_check("a rock stops the ship", ship.rams > rams0 and gap > 5.0, "%.1f m from its centre" % gap)
 	await _shot("rocks_gate_rock")
+	# Back off, then into it hard: a ram, as a wall is.
+	t0 = Time.get_ticks_msec()
+	while Time.get_ticks_msec() - t0 < 4000:
+		ship.aim(ship.rel.origin - f.transform * best, ship.rel.basis.y)
+		ship.thrust = Vector3(0.0, 0.0, 0.3)
+		await _frames(1)
+	var hurt0 := ship.bricks_killed
+	rams0 = ship.rams
+	t0 = Time.get_ticks_msec()
+	while ship.rams == rams0 and Time.get_ticks_msec() - t0 < 30000:
+		ship.aim(f.transform * best - ship.rel.origin, ship.rel.basis.y)
+		ship.thrust = Vector3(0.0, 0.0, 1.0)
+		await _frames(1)
+	ship.thrust = Vector3.ZERO
+	await _frames(2)
+	_check("hit hard, the ship is hurt where it hit", ship.rock_rams > 0 and ship.bricks_killed > hurt0,
+			"%d hard hit(s), %d bricks" % [ship.rock_rams, ship.bricks_killed - hurt0])
 	print("[planet] rocks gate: frames: worst %.1f ms; over 40 ms in play: %d %s" % [_worst_ms, _play_hitches.size(), _play_hitches])
 	print("[planet] gate: %d ok, %d FAIL" % [_ok, _fail])
 	get_tree().quit(1 if _fail > 0 else 0)
@@ -4331,6 +4348,28 @@ func _run_mechwave_gate() -> void:
 			"%.0f m -> %.0f m, %d shot(s), lowest %.2f m over the ground, %.0f s" % [from, to, br.shots if is_instance_valid(br) else 0,
 			low, (Time.get_ticks_msec() - t0) / 1000.0])
 	await _shot("mechwave_gate")
+	# Saved hurt, and back (PlanetGarrison.to_save through bytes): the tank and the
+	# mech where they were, as hurt as they were.
+	g.tank.health.apply_impact(g.tank.health.total_current() * 0.3, &"")
+	br.mech.health.apply_impact(br.mech.health.total_current() * 0.3, &"")
+	var tank_at := planet.to_local(g.tank.feet())
+	var tank_hp := g.tank.health.total_current()
+	var mech_at := planet.to_local(br.mech.feet())
+	var mech_hp := br.mech.health.total_current()
+	var saved: Dictionary = bytes_to_var(var_to_bytes(g.to_save()))
+	g._drop()
+	g.restore(saved)
+	t0 = Time.get_ticks_msec()
+	while (not is_instance_valid(g.tank) or not is_instance_valid(g.mech)) and Time.get_ticks_msec() - t0 < 30000:
+		await _frames(1)
+	var tank_off := planet.to_local(g.tank.feet()).distance_to(tank_at) if is_instance_valid(g.tank) else INF
+	var mech_off := planet.to_local(g.mech.mech.feet()).distance_to(mech_at) if is_instance_valid(g.mech) else INF
+	_check("saved and back: its tank and its mech where they were, as hurt", tank_off < 3.0 and mech_off < 3.0
+			and absf(g.tank.health.total_current() - tank_hp) < 1.0 and absf(g.mech.mech.health.total_current() - mech_hp) < 1.0
+			and g.wave == PlanetGarrison.MECH_FROM,
+			"tank %.1f m off, %.0f of %.0f hp; mech %.1f m off, %.0f of %.0f hp; wave %d" % [tank_off,
+			g.tank.health.total_current() if is_instance_valid(g.tank) else -1.0, tank_hp, mech_off,
+			g.mech.mech.health.total_current() if is_instance_valid(g.mech) else -1.0, mech_hp, g.wave])
 	print("[planet] gate: %d ok, %d FAIL" % [_ok, _fail])
 	get_tree().quit(1 if _fail > 0 else 0)
 
@@ -4715,6 +4754,11 @@ func _run_dock_gate() -> void:
 	_check("and the tower is blasted where it hit", buildings.bricks_killed > killed0, "%d bricks" % (buildings.bricks_killed - killed0))
 	_check("and the ship is hurt where it hit, kept for when its bricks are laid", ship.bricks_killed > hurt0
 			and ship.gone().size() > gone0, "%d bricks" % (ship.bricks_killed - hurt0))
+	t0 = Time.get_ticks_msec()
+	while ship.wreck == null and Time.get_ticks_msec() - t0 < 10000:
+		await _frames(1)
+	_check("and from afar it looks it: its bricks laid once for its far look", ship.wreck != null and not ship.shell.visible,
+			"%.1f s" % ((Time.get_ticks_msec() - t0) / 1000.0))
 	await _shot("dock_gate_ram")
 	# Up to the home planet's station.
 	var st: SpaceStation = null

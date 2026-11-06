@@ -619,6 +619,9 @@ func take_ram(point: Vector3, shot: Dictionary) -> int:
 		bricks_killed += hit.size()
 		if ghost != null:
 			ghost.disable(hit)
+		# Its far look is what it last drew: laid again with the hole (lay_wreck).
+		_drop_wreck()
+		shell.visible = true
 	bricks.release_chunk(c)
 	return hit.size()
 
