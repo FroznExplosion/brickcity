@@ -117,9 +117,10 @@ storey's crumbs are logged as a DETACH. D2's list from the city is done. Furnitu
 furnished in its template as plain bricks, `PlanetBuildings._furnish`; `--gate=bricks` 11/11).
 Bricks where the fight is: built (`PlanetBuildings.set_fights` from `PlanetScene._tell_fights`,
 the AI's pawns twice a second; a hit on a building not yet bricks waits in `Site.pending`;
-`--gate=farfight` 11/11). The planet's buildings list (11.11) is done. Open there: a far hit with no
-fight near bricks a building for one shot and frees it again (its damage kept); fights far away still
-make their bands though nothing draws them.
+`--gate=farfight` 11/11). The planet's buildings list (11.11) is done. Far from the camera a
+building is bricks and collision only, no bands (`Site.draw`); a far hit keeps its building 10 s.
+"Initializing already initialized RID" errors show in the save and garrison gates on main too
+(render resources made on workers): not from this, not fixed.
 A piece's chunk keeps bricks that broke off it (detached) and dead ones: sample a piece through
 `get_detached_blocks` / `get_dead_blocks`, as `--gate=pieces_ai` does now. `BrickWorld.is_solid` takes GRID cells
 (it subtracts the chunk's origin); `block_at` takes chunk-local ones. `get_alive_block_count`

@@ -2054,7 +2054,7 @@ player 200 m out, the town's near side bricks; a soldier 8 m off a building 259 
 it is bricks in 0.1-0.5 s, a ray from the soldier's side meets its bricks, the AI's world is solid
 there, and just inside its front door the nav net can stand -- it could not before, the proxy box
 was there. A charge at a building 153 m from it, not bricks: kept, bricks in 0.2-0.5 s, 136 bricks
-gone. The soldier dead: both freed within a frame or two, the hit one keeping its 136. The player's
+gone. The soldier dead: both freed (the hit one after its 10 s, below), keeping its 136. The player's
 buildings bricks throughout.
 Found by the gate: one run in eight asked the AI's world before its region was built (the bricks
 came in 0.1 s) and then crashed at the quit (signal 11), most likely with that region's build still on
@@ -2062,9 +2062,18 @@ a worker. The gate now waits for the region; five runs after, all clean.
 Other gates unchanged with fights bricking buildings: far 11, travel 10, garrison 17, home 11, squad
 10, bricks 11, damage 12, fall 7, hits 8, topple 6, pieces_ai 4, storey 13, snap 8, trees 7, pawn
 12; save stages 1-3 (3, 13, 8).
-Not done: a far hit on a building with no fight near it bricks it, lands, and the building is freed
-again the next frame (its damage kept): a brick-in for each such shot. Nothing far is drawn
-(`BRICK_DRAW_M`), but its bands are still made.
+Two changes after the first runs, from what they showed:
+- *A building bricked away from the camera is not drawn* (`Site.draw`: false when it is bricked
+  past `BRICK_M`): its bricks and collision only, no bake, no bands -- nothing draws bricks past
+  `BRICK_DRAW_M`, and every band was a GPU mesh made on a worker for nothing. When the camera comes
+  within `BRICK_M` it is freed (damage kept) and bricked again, drawn.
+- *A building a waiting hit bricked stays bricks 10 s* (`HIT_KEEP_MS`): each far round bricked it,
+  landed and freed it the frame after.
+Seen on the way, not from this: "Initializing already initialized RID" errors (render resources
+made on workers and on the main thread at once) in the save and garrison gates -- on main as often
+(garrison x3: main 1, 1, 2 errors; this branch 1, 0, 2). With every band drawn they came more often
+here, which is the other reason far buildings make none. Left for whoever owns the worker meshes
+(Docs/WhereWorkRuns.md).
 
 Not yet on the planet's buildings: nothing on this list. (The city's next things -- its own
 destruction work -- come over as they are built.)
