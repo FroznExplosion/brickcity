@@ -101,6 +101,7 @@ var _jump_gate := false
 var _debris_gate := false
 var _adrift_gate := false
 var _falling_gate := false
+var _mechwave_gate := false
 var _rocks_gate := false
 var map: GalaxyMap
 var markers: SpaceMarkers
@@ -179,6 +180,7 @@ func _ready() -> void:
 	_debris_gate = "--gate=debris" in OS.get_cmdline_user_args()
 	_adrift_gate = "--gate=adrift" in OS.get_cmdline_user_args()
 	_falling_gate = "--gate=falling" in OS.get_cmdline_user_args()
+	_mechwave_gate = "--gate=mechwave" in OS.get_cmdline_user_args()
 	_rocks_gate = "--gate=rocks" in OS.get_cmdline_user_args()
 	_garrison_gate = "--gate=garrison" in OS.get_cmdline_user_args()
 	_seat_gate = "--gate=seat" in OS.get_cmdline_user_args()
@@ -188,7 +190,7 @@ func _ready() -> void:
 	_home_gate = "--gate=home" in OS.get_cmdline_user_args()
 	_save_gate = "--gate=save" in OS.get_cmdline_user_args()
 	WorldFrame.origin = Vector3.ZERO
-	_gate = _gate or _light_gate or _system_gate or _ship_gate or _dock_gate or _worlds_gate or _jump_gate or _debris_gate or _adrift_gate or _falling_gate or _rocks_gate or _garrison_gate or _seat_gate or _hull_gate or _belt_gate or _home_gate or _save_gate or _pawn_gate or _mech_gate or _tank_gate or _soldier_gate or _squad_gate or _travel_gate or _far_gate or _drive_gate or _trees_gate or _bricks_gate or _damage_gate or _fall_gate or _hits_gate or _topple_gate or _pieces_ai_gate or _storey_gate or _snap_gate
+	_gate = _gate or _light_gate or _system_gate or _ship_gate or _dock_gate or _worlds_gate or _jump_gate or _debris_gate or _adrift_gate or _falling_gate or _mechwave_gate or _rocks_gate or _garrison_gate or _seat_gate or _hull_gate or _belt_gate or _home_gate or _save_gate or _pawn_gate or _mech_gate or _tank_gate or _soldier_gate or _squad_gate or _travel_gate or _far_gate or _drive_gate or _trees_gate or _bricks_gate or _damage_gate or _fall_gate or _hits_gate or _topple_gate or _pieces_ai_gate or _storey_gate or _snap_gate
 	data = PlanetData.new()
 	data.planet_name = "proto"
 	# Towns and landmarks: their pads go into the ground before it is built.
@@ -306,6 +308,8 @@ func _ready() -> void:
 			_run_adrift_gate()
 		elif _falling_gate:
 			_run_falling_gate()
+		elif _mechwave_gate:
+			_run_mechwave_gate()
 		elif _rocks_gate:
 			_run_rocks_gate()
 		elif _garrison_gate:
@@ -789,7 +793,7 @@ func _build_system() -> void:
 	system.setup(sys, planet)
 	system.universe = uni
 	system.built[planet] = buildings
-	system.frozen = _gate and not (_system_gate or _dock_gate or _falling_gate)
+	system.frozen = _gate and not (_system_gate or _dock_gate or _falling_gate or _mechwave_gate)
 	# Set here, not before: home is not one of the generated worlds to settle.
 	data.towns.assign(town_dirs)
 	system.anchor_changed.connect(_on_anchor_changed)
@@ -1127,7 +1131,7 @@ func _process(_delta: float) -> void:
 	# walker's own gate, the pawn stands on it.
 	if walker.frozen and not piloting and pawn == null and trees.prebaked and _ground_hit(walker.global_position) != Vector3.INF:
 		walker.frozen = false
-		if not _gate or _pawn_gate or _mech_gate or _tank_gate or _soldier_gate or _squad_gate or _travel_gate or _far_gate or _drive_gate or _trees_gate or _bricks_gate or _damage_gate or _fall_gate or _hits_gate or _topple_gate or _pieces_ai_gate or _storey_gate or _snap_gate or _garrison_gate or _seat_gate or _home_gate or _hull_gate or _save_gate or _light_gate:
+		if not _gate or _pawn_gate or _mech_gate or _tank_gate or _soldier_gate or _squad_gate or _travel_gate or _far_gate or _drive_gate or _trees_gate or _bricks_gate or _damage_gate or _fall_gate or _hits_gate or _topple_gate or _pieces_ai_gate or _storey_gate or _snap_gate or _garrison_gate or _seat_gate or _home_gate or _mechwave_gate or _hull_gate or _save_gate or _light_gate:
 			_spawn_player(_ground_hit(walker.global_position), -walker.global_transform.basis.z)
 			if saver != null:
 				saver.resume()
@@ -4277,6 +4281,58 @@ func bricks_gone(pb: PlanetBuildings, i: int) -> int:
 
 # Home's gate: quiet at the spawn; home's town walked into, the fight on home's own
 # AI; wave after wave, each bigger, none on the player's head, and it stops at the most.
+
+## Home's wave 5 (PlanetGarrison.MECH_FROM): a mech comes with the squad and the
+## tank, piloted, on the mech map, and fights. Starts at wave 5 rather than
+## fighting through four.
+func _run_mechwave_gate() -> void:
+	var t0 := Time.get_ticks_msec()
+	while pawn == null and Time.get_ticks_msec() - t0 < 60000:
+		await _frames(1)
+	await get_tree().create_timer(1.0).timeout
+	setup_ai(town_dirs[0])
+	ai.policy = CombatPolicy.new()
+	kit.use_services(ai)
+	_home_garrison()
+	var g: PlanetGarrison = garrisons[planet]
+	pawn.health.layer_configs[0].max_value = 1e7
+	pawn.health.reset()
+	# As if four waves had gone: the town's next is the fifth.
+	g.town = 0
+	g.wave = PlanetGarrison.MECH_FROM - 1
+	var town: Vector3 = town_dirs[0]
+	var feet := _surface(_round_dir(town, spawn_dir, 50.0))
+	t0 = Time.get_ticks_msec()
+	while _ground_hit(feet) == Vector3.INF and Time.get_ticks_msec() - t0 < 30000:
+		await _frames(1)
+	pawn.place(feet + Gravity.up_at(feet) * 0.3)
+	_face(Gravity.flat(_surface(town) - feet, Gravity.up_at(feet)).normalized())
+	t0 = Time.get_ticks_msec()
+	while (g.squad == null or g.wave != PlanetGarrison.MECH_FROM) and Time.get_ticks_msec() - t0 < 40000:
+		await _frames(1)
+	var br := g.mech
+	_check("wave 5 brings a mech, piloted, with the tank", is_instance_valid(br) and br.mech.pilot_pawn != null
+			and is_instance_valid(g.tank) and g.status().contains("a mech"), g.status())
+	if not is_instance_valid(br):
+		print("[planet] gate: %d ok, %d FAIL" % [_ok, _fail])
+		get_tree().quit(1)
+		return
+	var from := br.mech.feet().distance_to(pawn.feet())
+	var low := INF
+	t0 = Time.get_ticks_msec()
+	while Time.get_ticks_msec() - t0 < 40000 and br.shots == 0:
+		await _frames(1)
+		if is_instance_valid(br):
+			low = minf(low, _over_ground(br.mech.feet()))
+	var to := br.mech.feet().distance_to(pawn.feet()) if is_instance_valid(br) else INF
+	_check("it comes for the player and fires, on the ground", is_instance_valid(br) and not br.is_dead()
+			and (br.shots > 0 or to < from - 10.0) and low > -1.0,
+			"%.0f m -> %.0f m, %d shot(s), lowest %.2f m over the ground, %.0f s" % [from, to, br.shots if is_instance_valid(br) else 0,
+			low, (Time.get_ticks_msec() - t0) / 1000.0])
+	await _shot("mechwave_gate")
+	print("[planet] gate: %d ok, %d FAIL" % [_ok, _fail])
+	get_tree().quit(1 if _fail > 0 else 0)
+
 
 func _run_home_gate() -> void:
 	var t0 := Time.get_ticks_msec()

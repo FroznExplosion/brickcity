@@ -2712,6 +2712,20 @@ are laid for the hit and let go, so what died is in `_dead` and is gone when it 
 `--gate=dock` 9/9: ramming a tower took 125 bricks of the tower and 20 of the ship. The riding path and the
 ship laid again afterwards with its holes are not tried. Rocks still only stop it.
 
+#### A mech in home's waves (2026-11-06)
+
+From wave 5 (`PlanetGarrison.MECH_FROM`) a wave brings a mech as well as the tank, as
+`CityScene._spawn_enemy_mech` makes one: an LMG, a launcher, the enemy tree, the roster's medium gunner, a
+pilot inside; on the nav net's mech map (`AIServices.mech_map`, there since the net and never used until
+now). It knows where the player is as its side does. A wave is clear when its mech is down too; the HUD says
+"a mech". Not saved, as the tank is not.
+
+Found on the way: set down where snap put it, the mech stood on a spot its map would not stand it on
+(`can_stand` false), and every path from there failed at once: it stood still for the wave while a foot
+path from the same spot was found. `_mech_spot` looks out from there in rings for one it can stand on.
+`--gate=mechwave` (starts at wave 5) 2/2, twice: piloted, with the tank; 122 m -> 74 m in 14-15 s, firing,
+never under the ground. home 11. Not seen on screen.
+
 #### Plan, saving (2026-11-01)
 
 As zylanntest (its Docs/save_format_and_data_longevity.md, future_features_save_guide.md): the **universe**
