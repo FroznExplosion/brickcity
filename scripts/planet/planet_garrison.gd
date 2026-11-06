@@ -90,6 +90,10 @@ var _hunting := false
 var _dir := Vector3.UP
 ## Who was left when it was saved: [[planet-local, health]], for when it is raised.
 var _left: Array = []
+## The wave's tank and mech as a save left them, [planet-local feet, health];
+## empty: none (wrecked, or the wave never had one).
+var _left_tank: Array = []
+var _left_mech: Array = []
 var _look := 0.0
 var _raising := false
 
@@ -166,6 +170,8 @@ func to_save() -> Dictionary:
 		for m in squad.alive():
 			left.append([body.to_local(m.pawn.feet()), m.pawn.health.total_current(), str(m.get_meta(&"unit", &"rifleman"))])
 	return {"town": town, "wave": wave, "left": left, "ai_town": ai_town,
+			"tank": [body.to_local(tank.feet()), tank.health.total_current()] if _tank_up() else [],
+			"mech": [body.to_local(mech.mech.feet()), mech.mech.health.total_current()] if _mech_up() else [],
 			"next_in": maxf(next_wave - Time.get_ticks_msec() / 1000.0, 0.0)}
 
 
@@ -173,8 +179,15 @@ func to_save() -> Dictionary:
 func restore(d: Dictionary) -> void:
 	wave = d.wave
 	_left = d.left
-	town = -1 if not _left.is_empty() else int(d.town)
+	_left_tank = d.get("tank", [])
+	_left_mech = d.get("mech", [])
+	town = -1 if _restoring() else int(d.town)
 	next_wave = Time.get_ticks_msec() / 1000.0 + float(d.next_in)
+
+
+## Is a wave a save left to come back (soldiers, its tank or its mech)?
+func _restoring() -> bool:
+	return not _left.is_empty() or not _left_tank.is_empty() or not _left_mech.is_empty()
 
 
 ## Is this wave's tank still fighting?
@@ -185,13 +198,17 @@ func _tank_up() -> bool:
 ## The wave's tank, as the city's (CityScene._spawn_tank, WaveDirector._field_tank):
 ## a rocket gun and a machine gun, a driver and a gunner, on the vehicle map,
 ## screening the squad and sent at the player.
-func _field_tank(s: AIServices, at: Vector3, side: Vector3, lib: GunPartLibrary, rng: RandomNumberGenerator) -> void:
-	var p: Vector3 = s.vehicle_nav(&"tank").snap(at - side * (SPACING * WAVE_MOST * 0.5 + 8.0))
+func _field_tank(s: AIServices, at: Vector3, side: Vector3, lib: GunPartLibrary, rng: RandomNumberGenerator,
+		saved := []) -> void:
+	var p: Vector3 = s.vehicle_nav(&"tank").snap(at - side * (SPACING * WAVE_MOST * 0.5 + 8.0)) if saved.is_empty() \
+			else body.global_transform * (saved[0] as Vector3)
 	var up := Gravity.up_at(p)
 	var main := GunInstance.from_result(GunGenerator.generate(lib, rng.randi_range(1, 9999), WeaponClass.builtin(&"rocket_launcher"), 1))
 	var mg := GunInstance.from_result(GunGenerator.generate(lib, rng.randi_range(1, 9999), WeaponClass.builtin(&"lmg"), 1))
 	var to := Gravity.flat(scene.pawn.feet() - p, up)
 	tank = Tank.make(s, _troops, p + up * 0.3, atan2(-to.x, -to.z), 1, main, mg, s.on_structure_hit, s.rng)
+	if not saved.is_empty():
+		tank.health.apply_impact(tank.health.total_current() - float(saved[1]), &"")
 	PlanetBody.track(tank)
 	var target := tank.make_target()
 	s.add_pawn(target)
@@ -218,9 +235,11 @@ func _mech_up() -> bool:
 ## a launcher for walls, the enemy tree, the roster's medium gunner, a pilot inside;
 ## on the nav net's mech map, on the other side of the squad from the tank. It
 ## knows where the player is as its side does (the squad's contact, or by ear).
-func _field_mech(s: AIServices, at: Vector3, side: Vector3, lib: GunPartLibrary, rng: RandomNumberGenerator) -> void:
+func _field_mech(s: AIServices, at: Vector3, side: Vector3, lib: GunPartLibrary, rng: RandomNumberGenerator,
+		saved := []) -> void:
 	var nav = s.mech_map()
-	var p := _mech_spot(nav, at + side * (SPACING * WAVE_MOST * 0.5 + 10.0))
+	var p := _mech_spot(nav, at + side * (SPACING * WAVE_MOST * 0.5 + 10.0) if saved.is_empty()
+			else body.global_transform * (saved[0] as Vector3))
 	var up := Gravity.up_at(p)
 	var to := Gravity.flat(scene.pawn.feet() - p, up)
 	var m := Mech.spawn(_troops, p + up * 0.2, atan2(-to.x, -to.z), 1)
@@ -233,6 +252,8 @@ func _field_mech(s: AIServices, at: Vector3, side: Vector3, lib: GunPartLibrary,
 	m.gun.on_structure_hit = s.on_structure_hit
 	mech = MechBrain.attach(s, m, nav, MechTree.enemy(), 1)
 	m.set_type("medium_gunner", Roster.shared())
+	if not saved.is_empty():
+		m.health.apply_impact(m.health.total_current() - float(saved[1]), &"")
 	_tank_pawns.append(m.make_target())
 	var pilot := Soldier.spawn(s, _troops, p + up * 0.3, 1,
 			GunInstance.from_result(GunGenerator.generate(lib, rng.randi_range(1, 9999), WeaponClass.builtin(&"rifle"), 1)))
@@ -333,11 +354,12 @@ func _raise(i: int) -> void:
 		scene.setup_ai(body.data.towns[i], body)
 		ai_town = i
 		print("[garrison] %s: town %d, its AI in %.1f ms" % [body.data.planet_name, i, (Time.get_ticks_usec() - t0) / 1000.0])
-	if _left.is_empty():
+	if not _restoring():
 		wave = wave + 1 if again else 1
 		_dir = _arrival(i)
 	else:
-		_dir = (_left[0][0] as Vector3).normalized()
+		var first: Vector3 = _left[0][0] if not _left.is_empty() else (_left_tank[0] if not _left_tank.is_empty() else _left_mech[0])
+		_dir = first.normalized()
 	# The ground's colliders where they are set down, first.
 	_ground.global_position = _middle()
 	var waited := Time.get_ticks_msec()
@@ -389,7 +411,8 @@ func _spawn() -> void:
 	var rng := RandomNumberGenerator.new()
 	rng.seed = hash(_key(town))
 	var count := mini(SQUAD_SIZE + WAVE_GROWS * (wave - 1), WAVE_MOST)
-	if not _left.is_empty():
+	var restoring := _restoring()
+	if restoring:
 		count = _left.size()
 	var net := s.nav_net as PlanetNavNet
 	var mix: Array = WAVE_KINDS[mini(wave - 1 if waves else 1, WAVE_KINDS.size() - 1)]
@@ -411,10 +434,13 @@ func _spawn() -> void:
 		if not _left.is_empty():
 			so.pawn.health.apply_impact(so.pawn.health.total_current() - float(_left[k][1]), &"")
 	squad = Squad.make(s, _troops, soldiers, 1)
-	if waves and wave >= TANK_FROM and _left.is_empty():
-		_field_tank(s, at, side, lib, rng)
-	if waves and wave >= MECH_FROM and _left.is_empty():
-		_field_mech(s, at, side, lib, rng)
-	_hunting = wave > 1 or not _left.is_empty()
+	# A saved wave brings back what it had: its tank, its mech, if they were up.
+	if waves and wave >= TANK_FROM and (not restoring or not _left_tank.is_empty()):
+		_field_tank(s, at, side, lib, rng, _left_tank)
+	if waves and wave >= MECH_FROM and (not restoring or not _left_mech.is_empty()):
+		_field_mech(s, at, side, lib, rng, _left_mech)
+	_hunting = wave > 1 or restoring
+	_left_tank = []
+	_left_mech = []
 	_left = []
 	print("[garrison] %s: %d soldiers at town %d in %.1f ms" % [body.data.planet_name, soldiers.size(), town, (Time.get_ticks_usec() - t0) / 1000.0])

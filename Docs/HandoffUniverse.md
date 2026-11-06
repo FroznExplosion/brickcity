@@ -48,8 +48,8 @@ building (check its date against the last C++ commit), `--import`, then:
 | `belt` | 6: a belt from a turned ship, slow flight, rocks at speed | 170 s |
 | `home` | 11: the waves, their kinds, wave 4's tank | 240 s |
 | `garrison` | 17: a world's AI, sleep and wake, down and up | 280 s (170 stops it on the flight home) |
-| `jump` 10, `ship` 9, `dock` 9, `worlds` 8, `rocks` 4, `debris` 8, `system` 17 | | 280 s |
-| `falling` 5, `mechwave` 2, `squad` 10, `far` 11, `pawn` 12 | the AI and the pawn on a planet | 240 s |
+| `jump` 10, `ship` 9, `dock` 10, `worlds` 8, `rocks` 5, `debris` 8, `system` 17 | | 280 s |
+| `falling` 5, `mechwave` 3, `squad` 10, `far` 11, `pawn` 12 | the AI and the pawn on a planet | 240 s |
 | `bricks` 9, `damage` 12, `fall` 7, `hits` 8, `topple` 6, `storey` 12 | buildings; run these if `PlanetBuildings` changes | 240 s |
 | `save --stage=1`, then `2`, then `3` | separate processes, in order; 1 wipes `user://saves_test/`; 3 runs on into stage 4 | 250 s each |
 
@@ -102,8 +102,8 @@ The user chooses. In the order I would take them:
 1. **Rubble in saves**: done (rubble on a world, pieces adrift and fallen from space; `ChunkRecord`, no
    C++). Not tried: a real save and load with pieces adrift (the gates go through bytes).
 2. **Something on a planet besides rifles**: done for home's waves (five foot kinds, a tank from wave 4).
-   A mech from wave 5 (2026-11-06). Open: generated towns' squads are rifles and assault only; a wave's tank
-   and mech are not saved.
-3. **Ship damage**: rams hurt it now (`take_ram`). Open: rocks, its holes from afar before it is laid.
+   A mech from wave 5 (2026-11-06); the tank and mech are saved. Open: generated towns' squads are rifles
+   and assault only.
+3. **Ship damage**: rams and rocks hurt it (`take_ram`); damaged, it shows its holes from afar (`lay_wreck`).
 
 The full list is Planets.md, "What is not done".
