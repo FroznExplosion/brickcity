@@ -2014,7 +2014,69 @@ display-sleep stall (frames 187 ms); time it again awake and quiet. Other planet
 Every building of a shape has the same furniture (it is the shape's template); a room's kind is not
 the one the city's windows would paint for it (`room_seed_of` is per building).
 
-Not yet: materialising for a fight far from the camera.
+**Plan, bricks where the fight is (2026-11-06).** A building is bricks only near the camera (within
+`BRICK_M`, 160 m; freed past `BRICK_DROP`, 220 m), and has its shell's collision only within the near
+tier (~490 m). A fight away from the player -- a garrison's, a squad's in a region the player is not
+in (the far gate, 11.8) -- meets shells: no doorways, no rooms, hits that do nothing (`damage` acts on
+bricks only); past the near tier it meets nothing at all, and rounds go through the towers. Two
+things change, in `PlanetBuildings`:
+- *Where the fighters are.* The scene hands the buildings the AI's pawns on this world twice a second
+  (`set_fights`: every live `ai.pawns` but the player's). A building within `FIGHT_M` (60 m) of one is
+  bricks as if the camera were there -- queued with the camera's, nearest to either first -- and
+  freed only when it is past `BRICK_DROP` from the camera AND `FIGHT_DROP` (100 m) from every fighter.
+  At most `FIGHT_MAX` (12) bricked for fights at once, those nearest a fighter. Its bricks give the
+  AI's regions their doorways and rooms (`site_bricks`, as now), its collision stops rounds; its
+  bands are drawn as any building's (they show only within `BRICK_DRAW_M` of the camera: past it the
+  far box, or the shell's look inside the near tier).
+- *A hit on a building that is not bricks yet* is kept with it (`Site.pending`, planet-local, at most
+  `PENDING_MAX` 32), the building goes to the front of the queue, and the hits land in order the
+  moment its bricks are in (`_finish_bricks`) -- through `damage`, so they wear, blast, throw crumbs
+  and ask what falls as any hit does. Its damage stays when it is freed (`Site.dead`, as now).
+- A shell made for a building already in bricks (the camera coming near one a fight bricked) is made
+  as `_finish_bricks` leaves one: shadow only, no collision, its look past `BRICK_DRAW_M`.
+Gate `--gate=farfight` (headless): the town in reach, the player at the edge as the other gates;
+a soldier put by a building more than 250 m from the camera (beyond anything the camera bricks), its
+region kept: the building becomes bricks, its collision is there, the AI's world is solid at its
+wall. A charge at another far building, not bricks and with no fighter near: kept, the building
+bricks and the charge lands (its bricks gone). The soldier gone: both are freed, the hit building's
+damage kept. The buildings by the player stay bricks throughout. The other planet gates unchanged.
+
+**Bricks where the fight is, built (2026-11-06).** As planned: `PlanetBuildings.set_fights` (each
+site's distance to the nearest fighter; the `FIGHT_MAX` nearest within `FIGHT_M` wanted, those within
+`FIGHT_DROP` kept), told twice a second by `PlanetScene._tell_fights` for every world with an AI
+(`ai_of`: its live pawns but the player's); `far_tier` queues a site for the camera, a fight or a hit
+waiting, and frees it only when none of the three holds; `_brick_step` takes a hit waiting first, then
+the nearest to the camera or a fighter. A hit with no bricks under it finds its building by box
+(`_site_box_at`) and waits in `Site.pending`; `_finish_bricks` lands them. `_shell_as_look` is what
+`_finish_bricks` and `_make_near` (a shell made for a building already bricks) both do.
+Gate `--gate=farfight` 11/11 (headless x8 -- five in a row after the fix below -- windowed x1): the
+player 200 m out, the town's near side bricks; a soldier 8 m off a building 259 m from the camera:
+it is bricks in 0.1-0.5 s, a ray from the soldier's side meets its bricks, the AI's world is solid
+there, and just inside its front door the nav net can stand -- it could not before, the proxy box
+was there. A charge at a building 153 m from it, not bricks: kept, bricks in 0.2-0.5 s, 136 bricks
+gone. The soldier dead: both freed (the hit one after its 10 s, below), keeping its 136. The player's
+buildings bricks throughout.
+Found by the gate: one run in eight asked the AI's world before its region was built (the bricks
+came in 0.1 s) and then crashed at the quit (signal 11), most likely with that region's build still on
+a worker. The gate now waits for the region; five runs after, all clean.
+Other gates unchanged with fights bricking buildings: far 11, travel 10, garrison 17, home 11, squad
+10, bricks 11, damage 12, fall 7, hits 8, topple 6, pieces_ai 4, storey 13, snap 8, trees 7, pawn
+12; save stages 1-3 (3, 13, 8).
+Two changes after the first runs, from what they showed:
+- *A building bricked away from the camera is not drawn* (`Site.draw`: false when it is bricked
+  past `BRICK_M`): its bricks and collision only, no bake, no bands -- nothing draws bricks past
+  `BRICK_DRAW_M`, and every band was a GPU mesh made on a worker for nothing. When the camera comes
+  within `BRICK_M` it is freed (damage kept) and bricked again, drawn.
+- *A building a waiting hit bricked stays bricks 10 s* (`HIT_KEEP_MS`): each far round bricked it,
+  landed and freed it the frame after.
+Seen on the way, not from this: "Initializing already initialized RID" errors (render resources
+made on workers and on the main thread at once) in the save and garrison gates -- on main as often
+(garrison x3: main 1, 1, 2 errors; this branch 1, 0, 2). With every band drawn they came more often
+here, which is the other reason far buildings make none. Left for whoever owns the worker meshes
+(Docs/WhereWorkRuns.md).
+
+Not yet on the planet's buildings: nothing on this list. (The city's next things -- its own
+destruction work -- come over as they are built.)
 
 ### 11.12 Plan: the universe -- star systems, orbits, spinning planets (2026-10-28)
 

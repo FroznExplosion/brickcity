@@ -77,6 +77,15 @@ class Site:
 	# Its bricks gone, kept while it has none laid: it does not heal behind the
 	# player, and it is what a save keeps of it.
 	var dead := PackedInt32Array()
+	# Hits on it before its bricks were in: [planet-local point, shot], landed
+	# in order once they are (_finish_bricks).
+	var pending: Array = []
+	# Its bricks drawn: false for one bricked past BRICK_M (a fight's, a hit's) --
+	# its bricks and collision only, no bake and no bands (nothing draws past
+	# BRICK_DRAW_M), until the camera comes near and it is bricked again.
+	var draw := true
+	# Kept as bricks until then (ms) whatever else says: a hit landed on it.
+	var keep_until := 0
 
 var planet: PlanetBody
 var sites: Array[Site] = []
@@ -321,10 +330,17 @@ func far_tier() -> void:
 		elif s.shell != null and dist > NEAR_M + NEAR_FADE * 3.0:
 			_free_near(s)
 		# Nearer still, its bricks (not a landmark: a thousand courses).
+		# Or near a fight, or with a hit waiting for them (bricks where the fight is).
 		if not s.landmark and bricks_on:
-			if dist < BRICK_M and s.chunk < 0 and i != _brick_site and not _brick_queue.has(i):
+			# Bricked undrawn far away, and the camera near now: again, drawn
+			# (its damage kept, Site.dead; its shell stands in for a moment).
+			if s.chunk >= 0 and not s.draw and i != _brick_site and dist < BRICK_M - 10.0:
+				_free_bricks(i)
+			var want := dist < BRICK_M or _fight_want.has(i) or not s.pending.is_empty()
+			if want and s.chunk < 0 and i != _brick_site and not _brick_queue.has(i):
 				_brick_queue.append(i)
-			elif dist > BRICK_DROP and (s.chunk >= 0 or _brick_queue.has(i)):
+			elif dist > BRICK_DROP and not _fight_keep.has(i) and s.pending.is_empty() \
+					and Time.get_ticks_msec() > s.keep_until and (s.chunk >= 0 or _brick_queue.has(i)):
 				_brick_queue.erase(i)
 				_free_bricks(i)
 		# Far: only where its top can crest the horizon, by its size on screen,
@@ -410,6 +426,9 @@ func _make_near(s: Site) -> void:
 	add_child(body)
 	body.transform = s.frame
 	s.body = body
+	# Already bricks (a fight bricked it, away from the camera): as they leave one.
+	if s.bricked:
+		_shell_as_look(s)
 
 
 ## One piece of brick work a frame: start the nearest building waiting (its
@@ -426,14 +445,24 @@ func _brick_step(eye: Vector3) -> void:
 		var best := 0
 		var best_d := INF
 		for qi in _brick_queue.size():
-			var d := eye.distance_to(planet.global_position + sites[_brick_queue[qi]].frame.origin)
+			var qs := sites[_brick_queue[qi]]
+			var d := -1.0 if not qs.pending.is_empty() else minf(
+					eye.distance_to(planet.global_position + qs.frame.origin),
+					float(_fight_d.get(_brick_queue[qi], INF)))
 			if d < best_d:
 				best_d = d
 				best = qi
 		_brick_site = _brick_queue[best]
 		_brick_queue.remove_at(best)
-		_start_bricks(sites[_brick_site])
+		var bs := sites[_brick_site]
+		bs.draw = eye.distance_to(planet.global_position + bs.frame.origin) <= BRICK_M
+		_start_bricks(bs)
 		what = "start"
+	elif not sites[_brick_site].draw:
+		# Undrawn: its bricks are in already; its collision now.
+		_finish_bricks(_brick_site)
+		_brick_site = -1
+		what = "finish"
 	else:
 		var s := sites[_brick_site]
 		if not bricks.bake_ready(s.chunk):
@@ -538,7 +567,8 @@ func _start_bricks(s: Site) -> void:
 	s.brick_node.transform = s.frame
 	add_child(s.brick_node)
 	s.band_next = 0
-	bricks.bake_chunk_async(s.chunk)
+	if s.draw:
+		bricks.bake_chunk_async(s.chunk)
 
 
 ## The staircase a shape gets, as the city's buildings get theirs: on the
@@ -691,8 +721,24 @@ func _finish_bricks(i: int) -> void:
 	s.bricked = true
 	bricked_count += 1
 	# The shell and its walls go: the bricks are the building now.
-	if s.shell != null:
-		# Not drawn, but its outline still casts the building's shadow.
+	_shell_as_look(s)
+	site_bricks.emit(i, true)
+	# Hits that came while it was a shell land now, in order.
+	if not s.pending.is_empty():
+		var hits := s.pending
+		s.pending = []
+		for h in hits:
+			damage(planet.global_transform * (h[0] as Vector3), h[1])
+		pending_landed += hits.size()
+		# Kept a while: the next round at it lands on bricks, rather than each
+		# one bricking it and freeing it again the frame after.
+		s.keep_until = Time.get_ticks_msec() + HIT_KEEP_MS
+
+
+## A materialised building's shell: not drawn, its outline still casting the
+## building's shadow; its look past BRICK_DRAW_M; its walls no longer solid.
+func _shell_as_look(s: Site) -> void:
+	if s.shell != null and s.shell_look == null:
 		s.shell.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_SHADOWS_ONLY
 		var look := MeshInstance3D.new()
 		look.mesh = s.shell.mesh
@@ -708,7 +754,6 @@ func _finish_bricks(i: int) -> void:
 		s.shell_look = look
 	if s.body != null:
 		s.body.collision_layer = 0
-	site_bricks.emit(i, true)
 
 
 func _free_bricks(i: int) -> void:
@@ -788,6 +833,74 @@ func site_at(p: Vector3) -> int:
 	return -1
 
 
+## The building, bricks or not (not a landmark, not toppled), whose box world
+## `point` is in, half a metre round; -1 when none.
+func _site_box_at(p: Vector3) -> int:
+	var stud := BrickWorld.get_stud_metres()
+	var lp := planet.global_transform.affine_inverse() * p
+	for i in sites.size():
+		var s := sites[i]
+		if s.landmark or s.toppled or s.frame.origin.distance_to(lp) > 80.0:
+			continue
+		var l := s.frame.affine_inverse() * lp
+		if l.x > -0.5 and l.z > -0.5 and l.y > -0.5 and l.x < s.fx * stud + 0.5 \
+				and l.z < s.fz * stud + 0.5 and l.y < s.height + 0.5:
+			return i
+	return -1
+
+
+# --- bricks where the fight is (Docs/Planets.md 11.11) ---------------------------
+
+## A building this near a fighter is bricks; freed only past FIGHT_DROP from
+## every fighter (and BRICK_DROP from the camera). At most FIGHT_MAX at once.
+const FIGHT_M := 60.0
+const FIGHT_DROP := 100.0
+const FIGHT_MAX := 12
+## Hits kept for a building until its bricks are in.
+const PENDING_MAX := 32
+## A building a waiting hit bricked stays bricks this long after (ms).
+const HIT_KEEP_MS := 10000
+## Site -> metres to the nearest fighter (within FIGHT_DROP); the sites a fight
+## wants bricks for; those it keeps.
+var _fight_d := {}
+var _fight_want := {}
+var _fight_keep := {}
+var fighters := 0
+var pending_kept := 0
+var pending_landed := 0
+
+
+## Where the AI's fighters on this world are now (world points): the scene's,
+## twice a second.
+func set_fights(points: PackedVector3Array) -> void:
+	fighters = points.size()
+	_fight_d.clear()
+	_fight_want.clear()
+	_fight_keep.clear()
+	if points.is_empty():
+		return
+	var stud := BrickWorld.get_stud_metres()
+	var pg := planet.global_transform
+	var near: Array = []
+	for i in sites.size():
+		var s := sites[i]
+		if s.landmark or s.toppled:
+			continue
+		var mid := pg * (s.frame * Vector3(s.fx * stud * 0.5, 0.0, s.fz * stud * 0.5))
+		var reach := Vector2(s.fx, s.fz).length() * stud * 0.5
+		var d := INF
+		for p in points:
+			d = minf(d, maxf(p.distance_to(mid) - reach, 0.0))
+		if d < FIGHT_DROP:
+			_fight_d[i] = d
+			_fight_keep[i] = true
+			if d < FIGHT_M:
+				near.append([d, i])
+	near.sort_custom(func(a, b): return a[0] < b[0])
+	for k in mini(near.size(), FIGHT_MAX):
+		_fight_want[near[k][1]] = true
+
+
 ## A round or a blast at world `point` (StructuralDamage.for_shot's record:
 ## {blast, radius, hp}), as the city's bricks take one: a gun wears them
 ## (chip_hit), ordnance blasts them (apply_hit). The killed bricks' shapes go,
@@ -809,7 +922,15 @@ func damage(point: Vector3, shot: Dictionary) -> bool:
 			return true
 	var i := site_at(point)
 	if i < 0:
-		return on_piece
+		# A building that is not bricks yet: the hit waits for them.
+		var j := _site_box_at(point)
+		if j < 0 or not bricks_on:
+			return on_piece
+		var w := sites[j]
+		if w.pending.size() < PENDING_MAX:
+			w.pending.append([planet.global_transform.affine_inverse() * point, shot])
+			pending_kept += 1
+		return true
 	var s := sites[i]
 	var e := damage_log.record(0, DamageLog.Kind.BLAST if blast else DamageLog.Kind.CHIP, s.chunk,
 			point, radius, Vector3.ZERO, int(shot.get("hp", 0)))
@@ -835,7 +956,8 @@ func after_kill(i: int, killed: PackedInt32Array, box: AABB) -> void:
 		if not s.remesh.has(b):
 			s.remesh.append(b)
 	# The bands are drawn from the chunk's bake: stale now.
-	bricks.bake_chunk_async(s.chunk)
+	if s.draw:
+		bricks.bake_chunk_async(s.chunk)
 	site_damaged.emit(i, box)
 	s.solve_due = true
 
@@ -892,7 +1014,8 @@ func _solve_site(i: int) -> void:
 		if not s.remesh.has(b):
 			s.remesh.append(b)
 	pieces.shed(s.chunk, groups, Vector3.ZERO, floor_lines(s))
-	bricks.bake_chunk_async(s.chunk)
+	if s.draw:
+		bricks.bake_chunk_async(s.chunk)
 	site_damaged.emit(i, (planet.global_transform * s.frame) * box.grow(1.0))
 	s.solve_due = true
 
@@ -1061,6 +1184,9 @@ func _damage_step() -> void:
 			continue
 		if s.collision.any_stale():
 			s.collision.flush(FLUSH_BUDGET)
+		if not s.draw:
+			s.remesh = PackedInt32Array()
+			continue
 		if not s.remesh.is_empty() and i != _brick_site:
 			if not bricks.bake_ready(s.chunk):
 				if not bricks.bake_pending(s.chunk):
