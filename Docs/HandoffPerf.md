@@ -174,7 +174,7 @@ remaining lever. Pieces come out as one section (`get_chunk_sections` 1), so sli
 split in the mesher, not the band scheme as it is.
 
 Also seen: spiral stair pieces are 1,444 drawn triangles a step (722 authored, each stored as a
-quad), so a 200-step piece is 577k vertices (build mode's `spiralcw_10x10`; not changed here). And
+quad), so a 200-brick stair piece is 577k vertices (build mode's `spiralcw_10x10`; not changed here). And
 twice a small piece's mesh built on the main thread at spawn took 44 / 116 ms (146-185 bricks,
 mesh under 30k vertices, so not the stairs); it did not happen in the run after, so the cause is
 not known yet -- time `rebuild_mesh(isl, true, true)` in `spawn` when it comes back.
