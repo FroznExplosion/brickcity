@@ -80,6 +80,10 @@ class Site:
 	# Hits on it before its bricks were in: [planet-local point, shot], landed
 	# in order once they are (_finish_bricks).
 	var pending: Array = []
+	# Its bricks drawn: false for one bricked past BRICK_M (a fight's, a hit's) --
+	# its bricks and collision only, no bake and no bands (nothing draws past
+	# BRICK_DRAW_M), until the camera comes near and it is bricked again.
+	var draw := true
 
 var planet: PlanetBody
 var sites: Array[Site] = []
@@ -326,6 +330,10 @@ func far_tier() -> void:
 		# Nearer still, its bricks (not a landmark: a thousand courses).
 		# Or near a fight, or with a hit waiting for them (bricks where the fight is).
 		if not s.landmark and bricks_on:
+			# Bricked undrawn far away, and the camera near now: again, drawn
+			# (its damage kept, Site.dead; its shell stands in for a moment).
+			if s.chunk >= 0 and not s.draw and i != _brick_site and dist < BRICK_M - 10.0:
+				_free_bricks(i)
 			var want := dist < BRICK_M or _fight_want.has(i) or not s.pending.is_empty()
 			if want and s.chunk < 0 and i != _brick_site and not _brick_queue.has(i):
 				_brick_queue.append(i)
@@ -444,8 +452,15 @@ func _brick_step(eye: Vector3) -> void:
 				best = qi
 		_brick_site = _brick_queue[best]
 		_brick_queue.remove_at(best)
-		_start_bricks(sites[_brick_site])
+		var bs := sites[_brick_site]
+		bs.draw = eye.distance_to(planet.global_position + bs.frame.origin) <= BRICK_M
+		_start_bricks(bs)
 		what = "start"
+	elif not sites[_brick_site].draw:
+		# Undrawn: its bricks are in already; its collision now.
+		_finish_bricks(_brick_site)
+		_brick_site = -1
+		what = "finish"
 	else:
 		var s := sites[_brick_site]
 		if not bricks.bake_ready(s.chunk):
@@ -550,7 +565,8 @@ func _start_bricks(s: Site) -> void:
 	s.brick_node.transform = s.frame
 	add_child(s.brick_node)
 	s.band_next = 0
-	bricks.bake_chunk_async(s.chunk)
+	if s.draw:
+		bricks.bake_chunk_async(s.chunk)
 
 
 ## The staircase a shape gets, as the city's buildings get theirs: on the
@@ -933,7 +949,8 @@ func after_kill(i: int, killed: PackedInt32Array, box: AABB) -> void:
 		if not s.remesh.has(b):
 			s.remesh.append(b)
 	# The bands are drawn from the chunk's bake: stale now.
-	bricks.bake_chunk_async(s.chunk)
+	if s.draw:
+		bricks.bake_chunk_async(s.chunk)
 	site_damaged.emit(i, box)
 	s.solve_due = true
 
@@ -990,7 +1007,8 @@ func _solve_site(i: int) -> void:
 		if not s.remesh.has(b):
 			s.remesh.append(b)
 	pieces.shed(s.chunk, groups, Vector3.ZERO, floor_lines(s))
-	bricks.bake_chunk_async(s.chunk)
+	if s.draw:
+		bricks.bake_chunk_async(s.chunk)
 	site_damaged.emit(i, (planet.global_transform * s.frame) * box.grow(1.0))
 	s.solve_due = true
 
@@ -1159,6 +1177,9 @@ func _damage_step() -> void:
 			continue
 		if s.collision.any_stale():
 			s.collision.flush(FLUSH_BUDGET)
+		if not s.draw:
+			s.remesh = PackedInt32Array()
+			continue
 		if not s.remesh.is_empty() and i != _brick_site:
 			if not bricks.bake_ready(s.chunk):
 				if not bricks.bake_pending(s.chunk):
