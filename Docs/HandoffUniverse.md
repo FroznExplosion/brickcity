@@ -25,7 +25,7 @@ Steps 1-7 of 11.12, then these, each in Planets.md under its own heading:
 - **Open space** is past 5 radii (`SHELL`). Gravity is zero there; aboard, the ship's own.
 - **Debris and rocks**: `Drift` records, `RockField` rings and belts; ships stopped by rocks along their step.
 - **Markers**: `SpaceMarkers`, windowed only. Green settled, white planets, blue moons and stations.
-- **The AI on any world**: `PlanetScene.ai_of`, `setup_ai(dir, body)`, `PlanetPlayerKit.use_services`.
+- **The AI on any world**: `PlanetScene.ai_of`, `setup_ai(dir, body)`, `PlayerKit.use_services`.
 - **Garrisons**: `PlanetGarrison`. Generated towns wake at 250 m and clear for good. Home's town wakes at
   130 m (the spawn is 220 m off) and comes back in waves of 4, 6, 8, 8... with 20 s between.
 - **Saving**: `UniverseSave` (`user://saves/<universe_id>/`, `universe.dat`, `s<system>_b<body>.dat`),

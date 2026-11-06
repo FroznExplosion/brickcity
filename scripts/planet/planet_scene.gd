@@ -53,8 +53,8 @@ var pawn: Pawn
 var player: PlayerController
 var gun: GunController
 var view: PlayerView
-## The firefight's player kit round the pawn: arsenal, HUD, aim assist (PlanetPlayerKit).
-var kit: PlanetPlayerKit
+## The player's kit round the pawn: arsenal, HUD, aim assist -- the city's own (PlayerKit).
+var kit: PlayerKit
 var on_foot := false
 var _pawn_gate := false
 var _mech_gate := false
@@ -405,7 +405,8 @@ func _spawn_player(feet: Vector3, facing: Vector3) -> void:
 	if s == null:
 		s = AIServices.new()
 		s.world3d = get_world_3d()
-	kit = PlanetPlayerKit.attach(self, player, cam, gun, view, s, _gate)
+	kit = PlayerKit.attach(self, player, cam, gun, s, {"scripted": _gate})
+	kit.enter(pawn, view)
 	kit.add_to_group(PlanetSystem.RIG)
 	pawn.health.died.connect(_on_player_down)
 
