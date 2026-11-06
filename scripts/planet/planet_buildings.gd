@@ -84,6 +84,8 @@ class Site:
 	# its bricks and collision only, no bake and no bands (nothing draws past
 	# BRICK_DRAW_M), until the camera comes near and it is bricked again.
 	var draw := true
+	# Kept as bricks until then (ms) whatever else says: a hit landed on it.
+	var keep_until := 0
 
 var planet: PlanetBody
 var sites: Array[Site] = []
@@ -338,7 +340,7 @@ func far_tier() -> void:
 			if want and s.chunk < 0 and i != _brick_site and not _brick_queue.has(i):
 				_brick_queue.append(i)
 			elif dist > BRICK_DROP and not _fight_keep.has(i) and s.pending.is_empty() \
-					and (s.chunk >= 0 or _brick_queue.has(i)):
+					and Time.get_ticks_msec() > s.keep_until and (s.chunk >= 0 or _brick_queue.has(i)):
 				_brick_queue.erase(i)
 				_free_bricks(i)
 		# Far: only where its top can crest the horizon, by its size on screen,
@@ -728,6 +730,9 @@ func _finish_bricks(i: int) -> void:
 		for h in hits:
 			damage(planet.global_transform * (h[0] as Vector3), h[1])
 		pending_landed += hits.size()
+		# Kept a while: the next round at it lands on bricks, rather than each
+		# one bricking it and freeing it again the frame after.
+		s.keep_until = Time.get_ticks_msec() + HIT_KEEP_MS
 
 
 ## A materialised building's shell: not drawn, its outline still casting the
@@ -853,6 +858,8 @@ const FIGHT_DROP := 100.0
 const FIGHT_MAX := 12
 ## Hits kept for a building until its bricks are in.
 const PENDING_MAX := 32
+## A building a waiting hit bricked stays bricks this long after (ms).
+const HIT_KEEP_MS := 10000
 ## Site -> metres to the nearest fighter (within FIGHT_DROP); the sites a fight
 ## wants bricks for; those it keeps.
 var _fight_d := {}
