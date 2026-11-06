@@ -408,7 +408,7 @@ func _drop_mech() -> MechBrain:
 			if not city.mech_nav.can_stand(at) or not in_ring(at, -3.0):
 				continue
 		var to := from - at
-		var br: MechBrain = city._spawn_enemy_mech(at + Gravity.up_at(at) * 0.1, atan2(-to.x, -to.z))
+		var br: MechBrain = city.vehicles.spawn_enemy_mech(at + Gravity.up_at(at) * 0.1, atan2(-to.x, -to.z))
 		feedback.burst(at + Gravity.up_at(at) * 2.0, Color(1.0, 0.55, 0.2))
 		_tip()
 		print("[firefight] enemy mech dropped in at %v" % at)
@@ -880,7 +880,7 @@ func _land_mech() -> void:
 			so.pawn.health.apply_impact(1e9, &"")
 	var p := _player()
 	var to := (p.feet() - at) if p != null else Vector3.FORWARD
-	city._spawn_mech(at + Gravity.up_at(at) * 0.1, atan2(-to.x, -to.z) + PI)
+	city.vehicles.spawn_mech(at + Gravity.up_at(at) * 0.1, atan2(-to.x, -to.z) + PI)
 	feedback.burst(at + Gravity.up_at(at) * 1.5, Color(0.3, 1.0, 0.45))
 	banner("Mech down\nM at its hatch to board", 3.0)
 	print("[firefight] mech landed at %v" % at)

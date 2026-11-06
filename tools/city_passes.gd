@@ -319,8 +319,8 @@ func _run_mech_pass() -> void:
 	var open := Vector3(-70.0, 0.0, -70.0)
 	city.camera.global_position = open + Vector3(0.0, 6.0, 12.0)
 	city.camera.rotation = Vector3.ZERO
-	city._spawn_mech(open, 0.0)
-	city._board_mech()
+	city.vehicles.spawn_mech(open, 0.0)
+	city.vehicles.board_mech()
 	await _frames(60)
 	var m := city._mech
 	_gate_ok("it stands on the ground", m.body.is_on_floor() and absf(m.feet().y) < 0.1,
@@ -411,10 +411,10 @@ func _run_mech_pass() -> void:
 			tall = b
 	var face := tall.xform * Vector3(tall.recipe.footprint_x * 0.5 * City.STUD, 0.0, 0.0)
 	var out := tall.xform.basis * Vector3(0.0, 0.0, -1.0)
-	city._leave_mech()
+	city.vehicles.leave_mech()
 	m.body.global_position = face + out * 6.0 + Vector3.UP * Mech.HEIGHT * 0.5
 	m.body.reset_physics_interpolation()
-	city._board_mech()
+	city.vehicles.board_mech()
 	await _frames(60)
 	var high := face + Vector3.UP * minf(tall.recipe.courses * Mech.COURSE * 0.9, 30.0)
 	print("[mech]   tallest: %d courses; aiming at %.1f m from 6 m out" % [tall.recipe.courses, high.y])
@@ -442,7 +442,7 @@ func _run_mech_pass() -> void:
 	_gate_ok("and its rounds wear the wall high above the cockpit",
 			chips > 0 and top > Mech.COCKPIT_Y + 4.0, "%d CHIP(s), highest %.1f m" % [chips, top])
 
-	city._leave_mech()
+	city.vehicles.leave_mech()
 	await _frames(30)
 	_gate_ok("M leaves: the camera flies and the mech stays parked",
 			city.camera.is_processing() and is_instance_valid(m) and m.motor.planar_speed() < 0.5)
@@ -461,9 +461,9 @@ func _run_mech_pass() -> void:
 	var arm_shots := [0]
 	city._gun.fired.connect(func(_i: Dictionary) -> void: own[0] += 1)
 	m.gun.fired.connect(func(_i: Dictionary) -> void: arm_shots[0] += 1)
-	city._board_mech()
+	city.vehicles.board_mech()
 	await _frames(10)
-	_gate_ok("in from the hatch, on foot", city._pilot.is_piloting() and city._boarded_on_foot)
+	_gate_ok("in from the hatch, on foot", city._pilot.is_piloting() and city.vehicles._boarded_on_foot)
 	_gate_ok("the player's own gun is put away", city._gun.gun == null or not city._gun.gun.visible)
 	city.camera.rotation = Vector3.ZERO
 	click = InputEventMouseButton.new()
@@ -477,7 +477,7 @@ func _run_mech_pass() -> void:
 	await _frames(5)
 	_gate_ok("the left button fires the mech's arm, not the player's gun",
 			own[0] == 0 and arm_shots[0] > 0, "player's %d, arm's %d" % [own[0], arm_shots[0]])
-	city._leave_mech()
+	city.vehicles.leave_mech()
 	await _frames(20)
 	_gate_ok("out again on foot, the gun back in hand and the canopy back on",
 			city._player.is_possessing() and city._gun.gun != null and city._gun.gun.visible and m.canopy.visible
@@ -499,7 +499,7 @@ func _run_vehicles_pass() -> void:
 	city.camera.global_position = open + Vector3(0.0, 6.0, 12.0)
 	city.camera.rotation = Vector3.ZERO
 	var truck_at: Vector3 = city.ai_services.vehicle_nav(&"truck").snap(city._on_ground(open))
-	var truck := city._spawn_truck(truck_at, 0.0, 0, [] as Array[StringName])
+	var truck: TransportTruck = city.vehicles.spawn_truck(truck_at, 0.0, 0, [] as Array[StringName])
 	await _frames(20)
 	city._enter_pawn(truck.mount_point())
 	await _frames(10)
@@ -547,7 +547,7 @@ func _run_vehicles_pass() -> void:
 
 	# An enemy's crewed tank: E beside it climbs on, E held pries the hatch.
 	var tank_at: Vector3 = city.ai_services.vehicle_nav(&"tank").snap(city._on_ground(open + Vector3(25.0, 0.0, 0.0)))
-	var t := city._spawn_tank(tank_at, PI * 0.5, 1, true)
+	var t: Tank = city.vehicles.spawn_tank(tank_at, PI * 0.5, 1, true)
 	(t.get_node(^"TankBrain") as TankBrain).enabled = false
 	await _frames(20)
 	var crew: Array = t.crew.values()
@@ -1190,8 +1190,8 @@ func _run_mechfall_pass() -> void:
 	var n0 := city.authority.commands.size()
 	var feet := Vector3(mid.x, roof + 12.0 * FallRule.BRICK + 0.02, mid.z)
 	var m := Mech.spawn(city, feet, 0.0, 1)
-	city._wire_mech(m)
-	city._loose_mechs.append(m)
+	city.vehicles.wire_mech(m)
+	city.vehicles._loose_mechs.append(m)
 	var t0 := Engine.get_physics_frames()
 	var still := 0
 	while still < 30 and Engine.get_physics_frames() - t0 < 30 * 12:
