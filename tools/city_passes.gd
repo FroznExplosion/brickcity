@@ -298,7 +298,7 @@ func _run_gun_pass() -> void:
 	await _frames(30)
 	# The AI overlay (F4) draws, and says something.
 	city._ai_label.visible = true
-	city._update_ai_label()
+	city.dev_hud.update_ai_label()
 	_gate_ok("the AI overlay reports the AI's world and budget",
 			city._ai_label.text.begins_with("AI (F4)") and city._ai_label.text.contains("chunks"),
 			city._ai_label.text.get_slice("\n", 0))
@@ -925,7 +925,7 @@ func _run_nav_pass() -> void:
 			"%d answered (%d found) in %d tick(s); worst tick %d us against %d" % [
 			answered, found_paths, frames, city._nav_worst_us, City.NAV_BUDGET_US])
 	city._ai_label.visible = true
-	city._update_ai_label()
+	city.dev_hud.update_ai_label()
 	city.camera.position = b.xform * Vector3(fx * 0.5 + 18.0, 20.0, fz + 14.0)
 	city.camera.look_at(b.xform * Vector3(fx * 0.5, 3.0, fz * 0.5), Vector3.UP)
 	await _frames(20)
@@ -4043,7 +4043,7 @@ func _run_physview_pass() -> void:
 		await city.get_tree().physics_frame
 	v.redraw(city._brick_cols, city.islands)
 	print("  after %.1f s: %s" % [(Time.get_ticks_msec() - t0) / 1000.0, v.hud_line()])
-	print("  %s" % city._caps_hud_line())
+	print("  %s" % city.dev_hud.caps_hud_line())
 	var shapes0 := _physview_shapes()
 	v.redraw(city._brick_cols, city.islands)
 	city._toggle_physics_view()
@@ -7486,7 +7486,7 @@ func _run_chamfer_street() -> void:
 			for k in mini(3, ph.size()):
 				top += "%s %.1f " % [ph[k][1], ph[k][0]]
 			if not ph.is_empty():
-				top += "| " + city._spike_parts(ph[0][1])
+				top += "| " + city.dev_hud.spike_parts(ph[0][1])
 		rows.append([float(times[-1][0]), pf - pf_last,
 				Performance.get_monitor(Performance.TIME_PROCESS) * 1000.0,
 				Performance.get_monitor(Performance.TIME_PHYSICS_PROCESS) * 1000.0,

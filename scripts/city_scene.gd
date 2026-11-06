@@ -878,10 +878,6 @@ var _nav_worst_us := 0
 ## `_ai_tick`'s steps this tick, its worst tick and that tick's steps, and the
 ## ticks over AI_SPIKE_MS (`_ai_track_worst`).
 var _ai_steps := {}
-var _ai_worst_ms := 0.0
-var _ai_worst_steps := {}
-var _ai_spikes: Array = []
-const AI_SPIKE_MS := 8.0
 var _nav_mode := false
 ## Fights in progress: their buildings are held materialised (R3).
 var _encounters: Array[Encounter] = []
@@ -1019,7 +1015,15 @@ func _pass_runner() -> Node:
 ## thing in _ready, before anything can ask it for one.
 var vehicles: Node = null
 
+## The developer's overlays and reports -- the stats HUD, the AI overlay, the
+## live profiler, the AI's spike tracking and its exit report:
+## scripts/city/city_dev_hud.gd. Made first thing in _ready.
+var dev_hud: Node = null
+
 func _ready() -> void:
+
+	dev_hud = (load("res://scripts/city/city_dev_hud.gd") as GDScript).new(self)
+	add_child(dev_hud)
 
 	vehicles = (load("res://scripts/city/city_vehicles.gd") as GDScript).new(self)
 	add_child(vehicles)
@@ -1441,7 +1445,7 @@ func pause_allowed() -> bool:
 
 
 func _exit_tree() -> void:
-	_report_ai_profile()
+	dev_hud.report_ai_profile()
 	if ai_services != null and ai_services.tally != null:
 		ai_services.tally.call(&"save")
 	# A band still uploading on a worker at shutdown was a crash on quit, as a
@@ -1535,7 +1539,7 @@ func _build_city() -> void:
 		tris += t
 	print("[city] shells: %d triangles total, %.0f per building" % [
 		tris, float(tris) / maxf(registry.buildings.size(), 1)])
-	_update_hud()
+	dev_hud.update_hud()
 
 
 ## Studs between one building's corner and the next on the street grid.
@@ -1908,7 +1912,7 @@ func _toggle_terrain_edit() -> void:
 	print("[city] terrain edit mode: %s" % ("ON -- the editor's keys, top right; F11 leaves"
 			if _edit_mode else ("off, UNSAVED edits kept (CTRL+S in edit mode writes %s)"
 			% _terrain_world_path if _terrain_editor.is_dirty() else "off")))
-	_update_hud()
+	dev_hud.update_hud()
 
 
 ## What the editing tools are handed (terrain_editor.gd's header).
@@ -6056,7 +6060,7 @@ func _ai_tick(destruction_ms: float) -> void:
 		_next_swarm_refresh = ai_services.now() + 5.0
 		swarm.refresh()
 	ts = _ai_step("swarm_refresh", ts)
-	_ai_track_worst(float(ts - t0) / 1000.0)
+	dev_hud.ai_track_worst(float(ts - t0) / 1000.0)
 	_prof["ai"] = _ai_sync_ms + _ai_run_ms + (swarm.tick_ms() if swarm != null else 0.0)
 	if _phase != "":
 		_ai_phase_level[_phase] = maxi(int(_ai_phase_level.get(_phase, 0)), ai_sched.get_level())
@@ -6064,7 +6068,7 @@ func _ai_tick(destruction_ms: float) -> void:
 		_ai_phase_level[k] = float(_ai_phase_level.get(k, 0.0)) + destruction_ms
 		_ai_phase_level["n:" + _phase] = int(_ai_phase_level.get("n:" + _phase, 0)) + 1
 	if _ai_label != null and _ai_label.visible and Engine.get_physics_frames() % 10 == 0:
-		_update_ai_label()
+		dev_hud.update_ai_label()
 
 
 ## One step of `_ai_tick`, timed into `_ai_steps`. The city's own spike report
@@ -6076,21 +6080,6 @@ func _ai_step(step: String, since: int) -> int:
 	return now
 
 
-## Keep the worst AI tick and its breakdown, and every tick over AI_SPIKE_MS
-## with its three biggest steps. Shown on F4, printed at exit.
-func _ai_track_worst(total_ms: float) -> void:
-	var s: Dictionary = ai_sched.get_stats()
-	for sub in ["perception", "nav", "tactical", "trees", "onnx", "commander"]:
-		_ai_steps["run:" + sub] = float((s[sub] as Dictionary).ms)
-	for k in ai_services.tick_steps:
-		_ai_steps["svc:" + k] = float(ai_services.tick_steps[k])
-	if total_ms > _ai_worst_ms:
-		_ai_worst_ms = total_ms
-		_ai_worst_steps = _ai_steps.duplicate()
-	if total_ms > AI_SPIKE_MS and _ai_spikes.size() < 200:
-		_ai_spikes.append([total_ms, Engine.get_physics_frames(), _ai_top(_ai_steps, 3)])
-
-
 static func _ai_top(steps: Dictionary, n: int) -> String:
 	var all: Array = []
 	for k in steps:
@@ -6100,73 +6089,6 @@ static func _ai_top(steps: Dictionary, n: int) -> String:
 	for i in mini(n, all.size()):
 		out += "%s %.1f  " % [all[i][1], all[i][0]]
 	return out
-
-
-func _report_ai_profile() -> void:
-	if _ai_worst_steps.is_empty():
-		return
-	print("[ai-prof] worst AI tick %.1f ms: %s" % [_ai_worst_ms, _ai_top(_ai_worst_steps, 6)])
-	if _promotions > 0:
-		var pw: Dictionary = _promote_worst[2]
-		var wb := registry.get_building(int(_promote_worst[1])) if registry != null else null
-		print("[ai-prof] promotions %d, %.1f ms each; the worst %.1f ms (building %d, %s, %d bricks): %s" % [
-				_promotions, _promote_ms / _promotions, float(_promote_worst[0]),
-				int(_promote_worst[1]),
-				"" if wb == null else ("build" if wb.is_build() else "%dx%d, %d courses" % [
-					int(wb.recipe.footprint_x), int(wb.recipe.footprint_z), int(wb.recipe.courses)]),
-				0 if wb == null else wb.blocks, _ai_top(pw, 9)])
-		if wb != null and wb.is_build():
-			print("[ai-prof]   that build: %d frame(s), '%s'" % [maxi(wb.frames.size(), 1), wb.build.name])
-		for sl in _promote_slow.slice(0, 8):
-			print("[ai-prof]   slow: %.1f ms, building %d, promotion #%d: %s" % [
-					float(sl[0]), int(sl[1]), int(sl[2]), _ai_top(sl[3], 3)])
-	var spikes := _ai_spikes.duplicate()
-	spikes.sort_custom(func(a: Array, c: Array) -> bool: return a[0] > c[0])
-	print("[ai-prof] %d AI tick(s) over %.0f ms; the worst:" % [_ai_spikes.size(), AI_SPIKE_MS])
-	for k in mini(12, spikes.size()):
-		print("[ai-prof]   %.1f ms at tick %d: %s" % [spikes[k][0], spikes[k][1], spikes[k][2]])
-	if ai_services != null:
-		print("[ai-prof] tactic decisions %d, worst %d us, %d put off to a later think" % [
-				ai_services.decisions_made, ai_services.decide_worst_usec, ai_services.decisions_deferred])
-	var navs: Array = ai_services.all_navs() if ai_services != null else []
-	if mech_nav != null and not navs.has(mech_nav):
-		navs.append(mech_nav)
-	for n in navs:
-		var st: Dictionary = (n as AINav).get_stats()
-		if not st.has("worst_service_us"):
-			continue
-		print("[ai-prof] nav span %d: worst service %d us, hier begin %d, enclosed %d, side edges %d, cluster sides %d, column %d, snap %d, expand %d" % [
-				(n as AINav).get_span(), int(st.worst_service_us), int(st.worst_hier_begin_us), int(st.get("worst_enclosed_us", 0)),
-				int(st.worst_side_edges_us), int(st.worst_cluster_sides_us),
-				int(st.worst_column_us), int(st.worst_snap_us), int(st.worst_expand_us)])
-		print("[ai-prof]   of which one step: search %d us, flow field %d, warming %d" % [
-				int(st.get("worst_search_step_us", 0)), int(st.get("worst_field_step_us", 0)),
-				int(st.get("worst_warm_step_us", 0))])
-
-
-func _update_ai_label() -> void:
-	var w: Dictionary = ai_world.get_stats()
-	var s: Dictionary = ai_sched.get_stats()
-	var lines := [
-		"AI (F4)   level %d of %d   budget %.2f ms   sync %.2f ms   run %.2f ms   city normal %.1f ms" % [
-			ai_sched.get_level(), AIScheduler.LEVEL_MAX, ai_sched.get_budget_ms(),
-			_ai_sync_ms, _ai_run_ms, ai_sched.get_baseline_ms()],
-		"world     %d chunks  %d proxies  %d danger  %d smoke  %d queries, %.2f us mean" % [
-			int(w.indexed_chunks), int(w.proxies), int(w.danger), int(w.smoke),
-			int(w.queries), float(w.mean_usec)],
-		"queue     %d waiting, %d ran last tick, %.2f ms over" % [
-			int(s.queued), int(s.ran), float(s.overrun_ms)],
-		"nav       %d columns  %d pending  %d paths  %d failed  %.1f ms searching  worst tick %d us" % [
-			int(ai_nav.get_stats().columns_cached), int(ai_nav.get_stats().pending),
-			int(ai_nav.get_stats().paths), int(ai_nav.get_stats().failed),
-			float(ai_nav.get_stats().search_ms), _nav_worst_us],
-		"worst     %.1f ms: %s" % [_ai_worst_ms, _ai_top(_ai_worst_steps, 4)],
-	]
-	for sub in ["perception", "nav", "tactical", "trees", "onnx", "commander"]:
-		var d: Dictionary = s[sub]
-		lines.append("  %-11s %5.2f ms  %3d ran  %3d deferred" % [sub, float(d.ms),
-				int(d.ran), int(d.deferred)])
-	_ai_label.text = "\n".join(lines)
 
 
 ## A soldier at `feet`, with a rifle, on the other side (K ahead of the camera).
@@ -6714,27 +6636,6 @@ const _SPIKE_PARTS := {"damage": ["dmg_promote", "dmg_rooms", "dmg_hit", "dmg_pi
 				"bd_pieces"],
 		"disable": ["dis_collision", "dis_rooms"],
 		"promote": ["bricks", "collision", "frames", "furniture", "shell"]}
-
-func _spike_parts(phase: String) -> String:
-	if phase == "islands":
-		var lt: Array = islands.last_tick
-		if lt.size() < 6:
-			return ""
-		return "loop %.1f, resolve %s, landings %.1f, reshapes %.1f, mesh %.1f; slowest mesh so far %s" % [
-				lt[1], str(lt[2]), lt[3], lt[4], lt[5], str(islands.mesh_drain_worst)]
-	var out := ""
-	for k in _SPIKE_PARTS.get(phase, []):
-		var v := float(_prof.get(k, 0.0))
-		if v >= 0.5:
-			out += "%s %.1f  " % [k, v]
-	if phase == "damage" and float(_prof.get("dmg_shell_pieces", 0.0)) >= 0.5:
-		out += "(last shell piece made bricks: %s) " % shell_brick_split
-	if phase == "damage" and _near_at_tick.size() == 5:
-		var dn: Array = islands.damage_near_ms
-		out += "(near: wake %.1f, walk %.1f, hits %.1f, push %.1f, %d call(s); worst unit so far %s)" % [
-				dn[0] - _near_at_tick[0], dn[1] - _near_at_tick[1], dn[2] - _near_at_tick[2],
-				dn[3] - _near_at_tick[3], dn[4] - _near_at_tick[4], str(islands.unit_worst)]
-	return out
 
 
 var _near_at_tick: Array = []   ## islands.damage_near_ms as this tick began
@@ -7292,7 +7193,7 @@ func _physics_process(_delta: float) -> void:
 	# Nobody can read it at 60 Hz, and at 400 islands it was costing more than
 	# the stress solve.
 	if Engine.get_physics_frames() % 10 == 0:
-		_update_hud()
+		dev_hud.update_hud()
 	_mark("hud", t)
 	# Last: the tick's mesh uploads go to the workers now, so they finish
 	# during the frame rather than halfway through this tick (see
@@ -7325,7 +7226,7 @@ func _physics_process(_delta: float) -> void:
 			for k in mini(3, phases.size()):
 				top += "%s %.1f  " % [phases[k][1], phases[k][0]]
 			if not phases.is_empty():
-				top += "| " + _spike_parts(phases[0][1])
+				top += "| " + dev_hud.spike_parts(phases[0][1])
 			_prof_spikes.append([tick_total, Engine.get_physics_frames(), top])
 		if tick_total > _prof_worst_ms:
 			_prof_worst_ms = tick_total
@@ -8948,7 +8849,7 @@ func _process(delta: float) -> void:
 	if ridden != null:
 		ridden.rodeo.planting = InputMap.has_action(&"melee") and Input.is_action_pressed(&"melee")
 	_hop_in()
-	_update_live_prof(delta)
+	dev_hud.update_live_prof(delta)
 	if _view_owed or (DebugView.active() and Engine.get_process_frames() - _view_frame >= 2):
 		_view_sweep()
 	if not _sampling:
@@ -8987,87 +8888,7 @@ func _process(delta: float) -> void:
 
 # ---------------------------------------------------------------------------
 
-## The HUD's counts, each a walk of something big (every building, every
-## room, every island): together 7 ms, six times a second. One of them is
-## brought up to date per refresh, in turn, so each is under a second old
-## and no refresh walks them all; none while the stats are hidden (F1).
-const _HUD_PARTS := ["mem", "rep", "isl", "rooms", "groups"]
 var _hud_cache := {}
-var _hud_turn := 0
-
-
-func _hud_part(key: String) -> Variant:
-	match key:
-		"mem":
-			return world.get_memory_report()
-		"rep":
-			return registry.report()
-		"isl":
-			return islands.report()
-		"rooms":
-			return registry.room_report()
-		_:
-			return _groups_hud_line()
-
-
-func _update_hud() -> void:
-	if stats_label == null or not stats_label.visible:
-		return
-	# Shown or hidden before the city is built (visibility_changed).
-	if registry == null or islands == null or world == null:
-		return
-	if _hud_cache.size() < _HUD_PARTS.size():
-		for key in _HUD_PARTS:
-			_hud_cache[key] = _hud_part(key)
-	else:
-		var key: String = _HUD_PARTS[_hud_turn % _HUD_PARTS.size()]
-		_hud_cache[key] = _hud_part(key)
-		_hud_turn += 1
-	var mem: Dictionary = _hud_cache.mem
-	var rep: Dictionary = _hud_cache.rep
-	var isl: Dictionary = _hud_cache.isl
-	var rooms: Dictionary = _hud_cache.rooms
-	stats_label.text = "\n".join([
-		"buildings     %d  (%d materialised, %d damaged)" % [
-			rep.buildings, rep.materialised, rep.damaged],
-		"bricks        %d live · BrickWorld %.1f MB · %d chunks" % [
-			rep.live_blocks, float(mem.total_bytes) / 1048576.0, mem.chunks],
-		"islands       %d  (%d settled, %d loose, %d blocks)" % [
-			isl.islands, isl.settled, isl.disposable, isl.blocks],
-		"asleep        %d piece(s), %d blocks, %.1f KB  (%d slept, %d woken)" % [
-			isl.dormant, isl.dormant_blocks, float(isl.dormant_bytes) / 1024.0,
-			isl.slept, isl.woken],
-		"debris        %d bricks discarded unseen · %d impact(s) sheared %d joint(s)" % [
-			isl.discarded, isl.impacts, isl.impact_blocks],
-		"promotions    %d in %.0f ms (%.1f ms each), %d queued" % [
-			_promotions, _promote_ms, _promote_ms / maxf(_promotions, 1), _promote_queue.size()],
-		"impact damage %d brick(s) sheared by falling debris" % _impact_damage,
-		"fixtures      %d, built with the buildings that hold them" % rep.fixtures,
-		"rooms         %d  (%d with a diff, %d piece(s) laid as bricks)" % [
-			rooms.rooms, rooms.changed, rooms.laid],
-		_hud_cache.groups,
-		_caps_hud_line(),
-		_physics_view.hud_line() if _physics_view != null else "physics view  off (shift+G)",
-		_view_hud_line(),
-		"",
-		("%s  %d/%d%s   %s (SPACE SPACE)" % [_gun.gun.gun_name, _gun.ammo, _gun.mag_size(),
-				"  reloading" if _gun.is_reloading() else "",
-				_mode_word()]) if _gun_armed and _gun.gun != null
-			else "blast %.1f m (wheel)   %s (SPACE SPACE)" % [
-				_blast_radius, _mode_word()],
-		"1 gun · 2 blast · T next gun · R reload · V on foot · K soldier · U squad · Y enemy mech · F mech order" + (" · H disasters (shift: end)" if disasters != null else ""),
-		"LMB fire · X big blast · P place a saved build · WASD move · shift fast · G grids (shift: physics) · B bevel · J overlap"
-			+ "\nF1 stats · F2 profiler · F3 reset worst · F4 AI · F5 save · F9 load · F10 terrain dev menu · F11 terrain edit · N respawn\n7 structure solid/see-through/hidden · 8 interior pieces · 9 items  (what is hidden is still there)"
-			+ ("" if respawn_buildings else "\nRESPAWN OFF (N) — buildings keep their bricks once promoted"),
-	])
-
-
-## The debris caps against what holds them (IslandManager.cap_counts).
-func _caps_hud_line() -> String:
-	var c := islands.cap_counts()
-	return "caps          settled small %d/%d · large %d/%d · total %d/%d · %d falling" % [
-		c.small, islands.small_live_max, c.large, islands.large_live_max,
-		c.small + c.large, islands.total_live_max, c.falling]
 
 
 ## One of the view switches (DebugView): 7, 8 and 9 in play.
@@ -9075,7 +8896,7 @@ func _view_cycle(kind: int) -> void:
 	DebugView.cycle(kind)
 	_view_owed = true
 	print("[city] view: %s" % DebugView.line())
-	_update_hud()
+	dev_hud.update_hud()
 
 
 ## Make everything the city draws match the view switches.
@@ -9123,95 +8944,6 @@ func _view_sweep() -> void:
 
 
 var _view_pickups: Array = []
-
-
-func _view_hud_line() -> String:
-	if not DebugView.active():
-		return "view          everything shown  (7 structure · 8 interior pieces · 9 items)"
-	var s: Array = DebugView.seen
-	return "view          %s\n              drawn now: %d structure mesh(es), %d interior box(es) in %d drawing(s), %d item(s) in %d" % [
-			DebugView.line(), int(s[0][1]), int(s[1][1]), int(s[1][0]), int(s[2][1]), int(s[2][0])]
-
-
-func _groups_hud_line() -> String:
-	var gr: Dictionary = interior_groups.report()
-	return "interiors     %d storey group(s) in %d building(s): %d piece box(es), %d item box(es); %d piece(s) of wreckage drawn" % [
-			gr.groups, gr.buildings, gr.piece_boxes, gr.item_boxes, gr.piece_drawings]
-
-
-## What the last second of ticks cost, by phase, worst first.
-##
-## Drawn from the same `_prof` the scripted passes read, so a number seen here
-## and a number in a pass summary mean the same thing.
-func _update_live_prof(delta: float) -> void:
-	if _live_label == null:
-		return
-	_live_frame_ms.append(delta * 1000.0)
-	if _live_frame_ms.size() > LIVE_WINDOW:
-		_live_frame_ms.remove_at(0)
-	if not _live_prof or _live_ring.is_empty():
-		return
-	var mean := {}
-	for entry in _live_ring:
-		for k in (entry as Dictionary):
-			mean[k] = float(mean.get(k, 0.0)) + float(entry[k])
-	var n := float(_live_ring.size())
-	var phases: Array = []
-	for k in mean:
-		if k == "script_total":
-			continue
-		phases.append([float(mean[k]) / n, str(k)])
-	phases.sort_custom(func(a, b) -> bool: return float(a[0]) > float(b[0]))
-
-	var frame_mean := 0.0
-	var frame_worst := 0.0
-	for ms in _live_frame_ms:
-		frame_mean += float(ms)
-		frame_worst = maxf(frame_worst, float(ms))
-	frame_mean /= maxf(float(_live_frame_ms.size()), 1.0)
-
-	var lines: Array = []
-	lines.append("frame     %6.2f ms mean   %6.2f worst   (%.0f fps)" % [
-			frame_mean, frame_worst, 1000.0 / maxf(frame_mean, 0.01)])
-	# TIME_PHYSICS_PROCESS includes this script's own tick, so subtracting it
-	# leaves the solver. The PHYSICS_3D_* counters are NOT used anywhere here:
-	# Jolt does not populate them and they read zero whoever asks.
-	var phys := float(Performance.get_monitor(Performance.TIME_PHYSICS_PROCESS)) * 1000.0
-	var script_ms := float(mean.get("script_total", 0.0)) / n
-	lines.append("physics   %6.2f ms   script %6.2f   solver ~%6.2f" % [
-			phys, script_ms, maxf(phys - script_ms, 0.0)])
-	lines.append("")
-	lines.append("per tick, mean of the last %d:" % _live_ring.size())
-	for i in mini(phases.size(), 8):
-		var row: Array = phases[i]
-		lines.append("  %-16s %6.2f ms" % [row[1], row[0]])
-	if _live_worst_ms > 0.0:
-		lines.append("")
-		lines.append("worst tick %.2f ms (F3 resets):" % _live_worst_ms)
-		var worst: Array = []
-		for k in _live_worst:
-			if k != "script_total":
-				worst.append([float(_live_worst[k]), str(k)])
-		worst.sort_custom(func(a, b) -> bool: return float(a[0]) > float(b[0]))
-		for i in mini(worst.size(), 4):
-			var row: Array = worst[i]
-			if float(row[0]) < 0.01:
-				break
-			lines.append("  %-16s %6.2f ms" % [row[1], row[0]])
-	var isl: Dictionary = islands.report()
-	lines.append("")
-	lines.append("islands %d (%d settled, %d loose) · dormant %d" % [
-			isl.islands, isl.settled, isl.islands - int(isl.settled), isl.dormant])
-	lines.append("resident buildings %d · interior pieces laid as bricks %d" % [
-			_materialised.size(), int(registry.room_report().laid)])
-	# The census in one line rather than the full sentence _collision_report
-	# writes: this label is 430 pixels wide.
-	var boxes := 0
-	for bid in _brick_cols:
-		boxes += (_brick_cols[bid] as BuildingCollision).shape_count()
-	lines.append("collision boxes %d standing · %d falling · %d settled" % [
-			boxes, int(isl.get("loose_boxes", 0)), int(isl.get("settled_boxes", 0))])
-	_live_label.text = "\n".join(lines)
 
 
 ## Wind the blast up or down a notch.
@@ -9491,7 +9223,7 @@ func _unhandled_input(event: InputEvent) -> void:
 				_gun.reload()
 		KEY_F4:
 			_ai_label.visible = not _ai_label.visible
-			_update_ai_label()
+			dev_hud.update_ai_label()
 		KEY_F5:
 			save_checkpoint()
 		KEY_7:
@@ -9569,7 +9301,7 @@ func _unhandled_input(event: InputEvent) -> void:
 			respawn_buildings = not respawn_buildings
 			print("[city] buildings give their bricks back and take them again: %s"
 					% ("ON" if respawn_buildings else "OFF -- promoted once, resident for good"))
-			_update_hud()
+			dev_hud.update_hud()
 		KEY_P:
 			_placer.toggle(_build_path if _build_path != "" else BuildRecipe.QUICK_SAVE)
 		KEY_G:
@@ -9592,7 +9324,7 @@ func _toggle_physics_view() -> void:
 	if _physics_view.visible:
 		_physics_view.redraw(_brick_cols, islands)
 	print("[city] physics view %s" % ("ON" if _physics_view.visible else "off"))
-	_update_hud()
+	dev_hud.update_hud()
 
 
 ## Every live chunk as a wireframe box: where its grid is, how big it is, and
@@ -10051,7 +9783,7 @@ func _build_scenery() -> void:
 	camera.position = Vector3(-stand, stand * 0.65, -stand)
 	camera.rotation = Vector3(-0.42, -2.36, 0.0)
 	add_child(camera)
-	camera.mode_changed.connect(func(_walking: bool) -> void: _update_hud())
+	camera.mode_changed.connect(func(_walking: bool) -> void: dev_hud.update_hud())
 
 	var layer := CanvasLayer.new()
 	# The AI overlay, beside F1's stats, off until F4 (AIPlan P2).
@@ -10074,7 +9806,7 @@ func _build_scenery() -> void:
 	# moment it shows, whoever shows it (F1, the menu, a pass ending).
 	stats_label.visibility_changed.connect(func() -> void:
 		_hud_cache.clear()
-		_update_hud())
+		dev_hud.update_hud())
 
 	# The live profiler, top right, off until F2. Monospace, because a column
 	# of numbers that will not line up is a column of numbers nobody reads.
