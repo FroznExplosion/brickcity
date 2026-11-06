@@ -1974,7 +1974,47 @@ Other planet gates unchanged: topple 6, hits 8, damage 12, bricks 9, trees 7, sq
 `--gate=save` stages 1-3 as main (stage 3's "the player where they were" failed on main too, 2.9 m
 off; not this work -- fixed since, 11.12's "Save gate stage 3, fixed").
 
-Not yet: furniture, materialising for a fight far from the camera.
+**Plan, furniture (2026-11-06): the towers' rooms furnished, as bricks.** A planet tower is empty
+inside: its floors, walls, stairs and lights, nothing in its rooms. The city furnishes its towers'
+rooms (`RoomManifest.rooms_for`, `items_for`: two to five things a room, or an authored room of
+its kind) and draws them apart -- decorative bricks, out of the face bake (`FurnitureMesh`,
+`InteriorGroups`), laid as bricks only where a hit or a look reaches (Interiors §8). The planet
+takes the generated ships' and stations' way instead (`KitFurnish`): every room of a shape
+furnished once, when its template is made, as PLAIN bricks -- in the bake, so the bands draw them;
+in the collision; bricks to the AI (cover, a way round); shot, blasted and carried off with the
+floor they stand on like anything else. Nothing to lay later, nothing drawn apart, and it costs
+nothing again once the template is saved.
+- *Rooms:* the city's `RoomManifest.rooms_for(fx, fz, courses, seed)`, the seed the shape's, with the
+  staircase's footprint a post in every room it crosses (`BuildingRegistry.rooms_of` does that for
+  the stairwell: furniture stood on nothing there).
+- *Kept clear:* a lane from the front door into the ground storey (the door's width and a stud each
+  side, 8 studs deep), a post in the rooms it crosses -- the nav net's way in (`--gate=bricks`).
+- *Laid:* `RoomManifest.build_item`, which places decorative bricks, gets `decorative` (default as
+  now, true); the planet passes false. An item refused (something in the way) is skipped whole, as
+  in the city.
+- The furniture's block ids are kept with the shape's template, for the gate.
+Checks in `--gate=bricks` (headless): the building near the player has furniture in its rooms, on
+its floors -- plain bricks, solid (a ray down onto one stops on its top, not the floor); the way in
+through the front door, up the stairs, still walks (its existing checks); its brick steps and the
+shapes' build at load as they were, give or take the furniture's share (measured, said). The other
+planet gates unchanged.
+
+**Furniture built (2026-11-06).** As planned: `PlanetBuildings._furnish`, called from `_template`
+after the ceiling lights (so the lights stay where they were and an item a light is in the way of is
+skipped); `RoomManifest.build_item(..., decorative)`; `furniture_of(i)` for the gate. The tower by
+the player (36 courses) has 199 furniture bricks on 6 storeys, all plain; from its front door the
+rooms show crates, tables and cabinets round the staircase (shots/planet_bricks_room.png).
+`--gate=bricks` 11/11 (headless x3): the way in through the door and up the stairs walks as before;
+its rooms furnished, plain bricks, on its floors; a ray down onto a table top stops on it, 1.12 m
+above the floor. Rough cost (headless, other chats' runs going -- not a measurement): the shapes
+at load 385-414 ms (359-370 without), the worst brick step 4.0-4.1 ms (3.1-3.7). Not timed
+windowed: both windowed runs had other chats' windowed passes going, and the second ran in the
+display-sleep stall (frames 187 ms); time it again awake and quiet. Other planet gates unchanged
+(damage 12, fall 7, hits 8, topple 6, pieces_ai 4, storey 13, snap 8, trees 7, squad 10, pawn 12).
+Every building of a shape has the same furniture (it is the shape's template); a room's kind is not
+the one the city's windows would paint for it (`room_seed_of` is per building).
+
+Not yet: materialising for a fight far from the camera.
 
 ### 11.12 Plan: the universe -- star systems, orbits, spinning planets (2026-10-28)
 
@@ -2671,6 +2711,20 @@ then, since no round can reach them) it goes on the chunk as it is; not laid at 
 are laid for the hit and let go, so what died is in `_dead` and is gone when it is next laid, and in a save.
 `--gate=dock` 9/9: ramming a tower took 125 bricks of the tower and 20 of the ship. The riding path and the
 ship laid again afterwards with its holes are not tried. Rocks still only stop it.
+
+#### A mech in home's waves (2026-11-06)
+
+From wave 5 (`PlanetGarrison.MECH_FROM`) a wave brings a mech as well as the tank, as
+`CityScene._spawn_enemy_mech` makes one: an LMG, a launcher, the enemy tree, the roster's medium gunner, a
+pilot inside; on the nav net's mech map (`AIServices.mech_map`, there since the net and never used until
+now). It knows where the player is as its side does. A wave is clear when its mech is down too; the HUD says
+"a mech". Not saved, as the tank is not.
+
+Found on the way: set down where snap put it, the mech stood on a spot its map would not stand it on
+(`can_stand` false), and every path from there failed at once: it stood still for the wave while a foot
+path from the same spot was found. `_mech_spot` looks out from there in rings for one it can stand on.
+`--gate=mechwave` (starts at wave 5) 2/2, twice: piloted, with the tank; 122 m -> 74 m in 14-15 s, firing,
+never under the ground. home 11. Not seen on screen.
 
 #### Plan, saving (2026-11-01)
 
