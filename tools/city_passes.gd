@@ -7641,6 +7641,13 @@ func _run_light_pass() -> void:
 	while not city.grid_light.tracked(0) and Time.get_ticks_msec() - t0 < 20000:
 		await _ticks(1)
 	_gate_ok("building 0 is in bricks and lit by the grid", chunk >= 0 and city.grid_light.tracked(0))
+	# Its ceiling lights (CeilingLights; Docs/Lighting.md 6.3).
+	var lamps := 0
+	if chunk >= 0:
+		for k in city.world.get_block_count(chunk):
+			if BrickWorld.get_material_name(city.world.get_block_material(chunk, k)) == "Lamp":
+				lamps += 1
+	_gate_ok("the tower has lights under its ceilings", lamps >= 3, "%d" % lamps)
 	var node := city._brick_nodes.get(0) as Node3D
 	var dims := city.world.get_chunk_dims(chunk)
 	var stud := BrickWorld.get_stud_metres()
