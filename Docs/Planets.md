@@ -2014,6 +2014,33 @@ display-sleep stall (frames 187 ms); time it again awake and quiet. Other planet
 Every building of a shape has the same furniture (it is the shape's template); a room's kind is not
 the one the city's windows would paint for it (`room_seed_of` is per building).
 
+**Plan, bricks where the fight is (2026-11-06).** A building is bricks only near the camera (within
+`BRICK_M`, 160 m; freed past `BRICK_DROP`, 220 m), and has its shell's collision only within the near
+tier (~490 m). A fight away from the player -- a garrison's, a squad's in a region the player is not
+in (the far gate, 11.8) -- meets shells: no doorways, no rooms, hits that do nothing (`damage` acts on
+bricks only); past the near tier it meets nothing at all, and rounds go through the towers. Two
+things change, in `PlanetBuildings`:
+- *Where the fighters are.* The scene hands the buildings the AI's pawns on this world twice a second
+  (`set_fights`: every live `ai.pawns` but the player's). A building within `FIGHT_M` (60 m) of one is
+  bricks as if the camera were there -- queued with the camera's, nearest to either first -- and
+  freed only when it is past `BRICK_DROP` from the camera AND `FIGHT_DROP` (100 m) from every fighter.
+  At most `FIGHT_MAX` (12) bricked for fights at once, those nearest a fighter. Its bricks give the
+  AI's regions their doorways and rooms (`site_bricks`, as now), its collision stops rounds; its
+  bands are drawn as any building's (they show only within `BRICK_DRAW_M` of the camera: past it the
+  far box, or the shell's look inside the near tier).
+- *A hit on a building that is not bricks yet* is kept with it (`Site.pending`, planet-local, at most
+  `PENDING_MAX` 32), the building goes to the front of the queue, and the hits land in order the
+  moment its bricks are in (`_finish_bricks`) -- through `damage`, so they wear, blast, throw crumbs
+  and ask what falls as any hit does. Its damage stays when it is freed (`Site.dead`, as now).
+- A shell made for a building already in bricks (the camera coming near one a fight bricked) is made
+  as `_finish_bricks` leaves one: shadow only, no collision, its look past `BRICK_DRAW_M`.
+Gate `--gate=farfight` (headless): the town in reach, the player at the edge as the other gates;
+a soldier put by a building more than 250 m from the camera (beyond anything the camera bricks), its
+region kept: the building becomes bricks, its collision is there, the AI's world is solid at its
+wall. A charge at another far building, not bricks and with no fighter near: kept, the building
+bricks and the charge lands (its bricks gone). The soldier gone: both are freed, the hit building's
+damage kept. The buildings by the player stay bricks throughout. The other planet gates unchanged.
+
 Not yet: materialising for a fight far from the camera.
 
 ### 11.12 Plan: the universe -- star systems, orbits, spinning planets (2026-10-28)
