@@ -649,8 +649,25 @@ the same order give the same result twice.
   and only on release; nothing with cost 0). `--gate=hull`: inside the parked ship a wall is
   shot, the ghost shows, a tap lays that brick, held the rest come back (shots
   `hull_gate_patch`, `hull_gate_patched`).
-* **Not built:** the ghost is a plain box, not the brick's own shape and colour; no sound or
-  effect on placing.
+
+### 9.3 Built (2026-11-06): the ghost as the brick, the snap, the pouch
+
+* **The ghost is the brick itself** (`RestoreTool.shape_of`): its part and colour from the
+  recipe, meshed once per part, colour and material in a scratch world (bevelled as the near
+  tier is, studs as a MultiMesh), see-through, lifted toward pale blue and gently pulsing.
+  `place_of` puts it where the brick goes.
+* **Placing** (`RepairFx`): each brick laid pops in (a copy of it 1.25 times its size,
+  shrinking onto it and fading in 0.2 s) with a **procedural plastic snap** (a 4 ms click of
+  noise and two short high tones, three variants, pitch varied), at the brick, 3D. At most
+  three pops a tick, so the held tool's stream is not a wall of them.
+* **The brick limit (a guess, the user asked for one):** a **pouch of 120 bricks**
+  (`RestoreTool.POUCH`; a tap and the held tool both take from it). **Aboard a ship or
+  station** it fills again from the hull's stores, **4 a second**, once the tool has been
+  idle 2 s. So a crew mends a few holes in a fight from what it carries and tops up between
+  fights. HUD: `BRICKS n / 120` at the bottom middle while there is something to mend in
+  view or the pouch is not full (red at 0). Easy to change: two constants.
+* Gates: `repair_probe` 13 (+3: the ghost's shape where the brick goes, the pouch, the
+  snap); `--gate=hull`'s tap now checks one from the pouch and a snap (shot `hull_gate_pop`).
 
 ## 10. Health, limbs, respawn (decisions)
 
