@@ -375,6 +375,15 @@ but its sockets on top do not take a ceiling's.) New tiles `tile_1x3`,
   `light_gate_lamp`).
 - Build with it: pick a tile (or an under-tile) and the Lamp material.
 
+### 6.4 The player's flashlight
+
+`scripts/flashlight.gd` (`Flashlight`): a `SpotLight3D` on the player's camera
+(city and planet, `Flashlight.mount`), toggled by the `flashlight` action
+(**L**, rebindable in Options > Controls; the developer's Brick Seams key moved
+to F12 for it). 28 m, 24 degrees, warm white, shadows on. It sits 16 cm right
+of and 14 cm below the eye, so its shadows show beside what throws them. Off at
+the start, so no gate's pictures change. `tools/flashlight_probe.gd` (9 checks).
+
 ## 7. SDFGI and the other GI
 
 Godot can mix: SDFGI in the environment, and `ReflectionProbe` / `VoxelGI`

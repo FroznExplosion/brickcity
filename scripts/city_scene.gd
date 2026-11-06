@@ -10,7 +10,7 @@ extends Node3D
 ##
 ## Keys: WASD fly · SPACE/Q up, down · shift fast · SPACE SPACE walk/fly
 ##       LMB fire · WHEEL blast size · X wider blast
-##       1 gun · 2 debug blast · T next gun · R reload · L seams · F1 stats
+##       1 gun · 2 debug blast · T next gun · R reload · F12 seams · F1 stats · L flashlight
 ##       F5 save · F9 load · ESC mouse
 ##       V on foot · K a soldier · U a squad (advances on you when on foot)
 ##       On foot it plays as an FPS (PlayerController): WASD · SHIFT sprint ·
@@ -9593,7 +9593,7 @@ func _update_hud() -> void:
 				_mode_word()]) if _gun_armed and _gun.gun != null
 			else "blast %.1f m (wheel)   %s (SPACE SPACE)" % [
 				_blast_radius, _mode_word()],
-		"1 gun · 2 blast · T next gun · R reload · V on foot · K soldier · U squad · Y enemy mech · F mech order" + (" · H disasters (shift: end)" if disasters != null else ""),
+		"1 gun · 2 blast · T next gun · R reload · V on foot · K soldier · U squad · Y enemy mech · F mech order · L flashlight" + (" · H disasters (shift: end)" if disasters != null else ""),
 		"LMB fire · X big blast · P place a saved build · WASD move · shift fast · G grids (shift: physics) · B bevel · J overlap"
 			+ "\nF1 stats · F2 profiler · F3 reset worst · F4 AI · F5 save · F9 load · F10 terrain dev menu · F11 terrain edit · N respawn\n7 structure solid/see-through/hidden · 8 interior pieces · 9 items  (what is hidden is still there)"
 			+ ("" if respawn_buildings else "\nRESPAWN OFF (N) — buildings keep their bricks once promoted"),
@@ -10582,6 +10582,7 @@ func _build_scenery() -> void:
 	# fall out of the sky halfway through a capture.
 	camera.allow_walk = camera.capture_mouse
 	camera.far = 3000.0
+	Flashlight.mount(camera)
 	# Outside the corner of the city, looking in along the diagonal. Scaled by
 	# the spacing, because --big puts 84 m towers on a 46 m pitch and the fixed
 	# position that was fine for a 13 m one starts INSIDE a building.

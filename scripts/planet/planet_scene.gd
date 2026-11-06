@@ -370,6 +370,7 @@ func _spawn_player(feet: Vector3, facing: Vector3) -> void:
 	cam.far = SEE_FAR
 	cam.add_to_group(PlanetSystem.RIG)
 	add_child(cam)
+	Flashlight.mount(cam)
 	pawn = Pawn.spawn(self, feet, 0)
 	pawn.body.add_to_group(PlanetSystem.RIG)
 	pawn.moves = PawnMoves.new(pawn)
