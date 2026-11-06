@@ -6064,6 +6064,9 @@ func _report_profile() -> void:
 	if city._clock != null:
 		for line in city._clock.report_lines():
 			print("[prof] " + line)
+	print("[prof] uploads from workers over the pass: " + UploadLedger.line(city._render_landed))
+	for r: Array in city._render_spikes:
+		print("[prof]   render flush %.1f ms at tick %d: %s" % [r[0], r[1], r[2]])
 	print("[prof] worst script tick %.1f ms  (%d islands)" % [
 			city._prof_worst_ms, int(city._prof_worst.get("island_count", 0))])
 	if city._glass_ticks > 0:

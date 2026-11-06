@@ -3219,6 +3219,7 @@ func _harvest_shadow_proxies() -> void:
 			m.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays, [], {},
 					UPLOAD_COMPRESS)
 			holder[0] = m
+			UploadLedger.note("piece shadow", UploadLedger.verts_of(arrays))
 		var task := WorkerThreadPool.add_task(work, true, "piece shadow")
 		_shadow_uploads.append([isl, task, holder, alive])
 	for i in range(_shadow_uploads.size() - 1, -1, -1):
@@ -3388,6 +3389,7 @@ func _submit_mesh_job(isl: BrickIsland, arrays: Array, coarse := false) -> void:
 		m.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays, [], {},
 				UPLOAD_COMPRESS)
 		holder[0] = m
+		UploadLedger.note("stand-in" if coarse else "piece", UploadLedger.verts_of(arrays))
 	isl.mesh_job = JOB_NOT_STARTED
 	_mesh_jobs.append([isl, JOB_NOT_STARTED, holder, arrays, work, coarse])
 
@@ -6215,6 +6217,7 @@ func _field_start(key: Vector2i, tile: FieldTile) -> void:
 	tile.job = WorkerThreadPool.add_task(func() -> void:
 		var t := Time.get_ticks_usec()
 		var built := IslandManager._field_build(items)
+		UploadLedger.note("rubble field", -1)
 		holder[0] = built[0]
 		holder[1] = built[1]
 		holder.append(float(Time.get_ticks_usec() - t) / 1000.0), true, "rubble field")
