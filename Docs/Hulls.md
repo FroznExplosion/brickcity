@@ -188,6 +188,50 @@ stops at the outside level; a closed bulkhead holds; an open door lets it on; wa
 outside the hull's inside cells; mass in = mass in the grid; a breach lifted out of the water
 drains.
 
+### 5.1 Built (2026-11-06, step 9): every ship floods
+
+* **On every ship**, spaceships included: `SpaceStation.hull_water` is a `HullWater` on its air
+  grid, stepped at `WATER_HZ` (20) in `_water_step`. The outside water comes from
+  `water_depth`, a callable (world point to metres under the surface; NAN for none):
+  * a `Boat` gives its sea (`BrickWave.sample_heights` at its wave clock);
+  * `PlanetSystem.add_ship` gives a ship its planet's sea (radius plus `sea_level`, radially),
+    so a ship parked or sunk in a planet's sea floods through a hole under the surface;
+  * none in space, where the hull's air vents to vacuum (§4).
+* **Down** is the ship's own: its frame's -Y while its generator pulls, else the world's
+  gravity turned into its frame (`water_down`). A boat's is the world's down, so its water runs
+  to the low side as it rolls.
+* **The automaton** is `HullWater` (scripts/hull_water.gd: holes, pumps, bookkeeping) on
+  `HullFlow` (C++, src/hull_flow.*: the flow passes).
+  * It runs 4 passes a step: down to full, then aside (40% of the difference, weighted
+    downhill), then up when a cell is over full.
+  * Only cells whose water moved are looked at, so a still pool costs nothing. A ship that
+    tips enough wakes every wet cell.
+  * **In through a hole** under the outside water: `INFLOW` (11 cells/s per hole cell at 1 m,
+    as sqrt(2gh) through a stud-by-plate face) up to a head of 1 plus the depth in cells. The
+    up rule spends that head, so a room fills to the outside level and no higher.
+  * **Out through a hole** over the water: from the compartment's top, which stands level,
+    down to the hole (`_drain_top`).
+  * `pump(dt, cells)` takes water out (the crew's pumps).
+  * Counted: `came_in - went_out - dried` (a film under `DRY` dried off) is what the grid holds.
+  * It was GDScript first. A flooded boat's 2,700 wet cells, rolling, cost more than the frame,
+    hence the C++ flow.
+* **The boat (§7)** carries its water: each column's water weighs where it is, so it lists
+  toward a flooded side. Its bricks displace only their plastic (`SOLID_DISPLACE` 0.33; the
+  hollow under a brick floods), so a hull flooded through sinks. Patched and pumped out, it
+  rises.
+* **Gates:**
+  * `tools/hull_flood_probe.gd`, 8 ok, on a generated spaceship held still with a level water
+    plane. A hole in its floor fills the room to 0.77 m against a 1.0 m outside level in 25 s,
+    never over. A shut door holds the next room dry. Opened, 110 cells go through. Water is
+    only ever in inside cells and open doorways. Mass: in 371.0 = out 0 + dried 4.05 + held
+    367.0. Lowered under the hole, 253 cells run out.
+  * `tools/boat_probe.gd`, 7 ok (new: lists, sinks, rises). A 21-brick hole 0.38 m under the
+    water floods 61 t into the hold and it lists 5.2° toward it. Left open, its deck goes
+    under. Patched and pumped at 300 cells/s, its keel comes back from 2.94 m to 0.53 m with
+    no water left.
+* **Still open:** trapped air (a sealed room flooding from below keeps its air pocket), and the
+  waterfall sheet and foam of §8.
+
 ## 6. The sea cut out of the hull, per brick
 
 Near the player the sea is real pieces (tier 0, Water.md 3.0); further out it is the studded tier
@@ -212,6 +256,46 @@ and then the smooth sheet. All of them must leave the **inside of a floating hul
 **Gate:** a scene shot (windowed, one run, heat check after): a boat floating low, camera on deck
 and in the hold -- no sea pieces inside, sea right up to the hull outside, the cut stepped by
 bricks. And a flooded hold: inside water drawn, no doubled surface.
+
+### 6.1 Built (2026-11-06, step 8): the sea cut out of every hull
+
+* **`shaders/hull_mask.gdshaderinc`:** global uniforms for two hulls at once (`hull_mask_a/b`,
+  a 3D byte texture; `hull_xf_a/b`, world to cell; `hull_dims_a/b`, the grid's size with
+  w = 1 while in use; declared in project.godot's `[shader_globals]`). `hull_dry(world)`
+  fetches the cell, unfiltered.
+* **Both sea shaders discard where it is true:** `water.gdshader` (the city's tiers, at
+  `v_world`) and `planet_ocean.gdshader` (a planet's sea). These are two small edits in the
+  terrain and water area's shaders, at the top of each fragment.
+* **`HullMasks`** (scripts/hulls/hull_masks.gd):
+  * `update(hulls, eye)` fills the two slots from the nearest hulls that stand in water,
+    within 400 m.
+  * A cell's byte is 255 for a brick or dry inside air, 0 for flooded or outside air. So
+    flooded water is drawn by the hull (§8), and the sea is never drawn over it.
+  * A mask is rebuilt when the water moved or bricks came or went, at most every 0.25 s.
+  * The planet scene calls `update` each frame for its ships; the city's boat pass calls it
+    for its boat.
+* **Underwater:** `WaterSea.submerged_at` and `WaterSurface.submerged_at` now also ask
+  `HullMasks.dry_at`. A camera in a dry hold under the sea line is not under water.
+* **Gate:** `city.tscn -- --terrain --boat`, windowed, 2 ok.
+  * The boat floats on the city's sea; its hold under the sea line is dry and not "under
+    water".
+  * Holed, the hold floods (783 cells) and the flooded cells are no longer dry.
+  * Shots:
+    * `hull_boat_side`: the sea right up to the hull;
+    * `hull_boat_deck`;
+    * `hull_boat_hold`: no sea inside;
+    * `hull_boat_flooded`: the deck lifted, the water drawn in the hold.
+  * Heat peak 88 °C.
+* **Note:** the first two planet `--gate=hull` runs after the shader change failed on timing
+  (the gangway walk, the ghost glide). They passed on the next three runs. The likely cause is
+  the first run compiling the changed sea shaders.
+
+### 8.1 Built (2026-11-06): water drawn inside
+
+`SpaceStation._draw_water` draws one unshaded, see-through mesh under the bricks' node, so it
+rides with the hull. Each wet column gets a top at its level, stepped by plate, and each wet
+cell gets sides toward a lower neighbour. It is rebuilt only when the water moved. Not yet:
+the pools' shader, foam, the waterfall sheet.
 
 ## 7. Floating, listing, sinking
 
@@ -544,6 +628,47 @@ the same order give the same result twice.
   breach sealed and filling, and the replay. The ship's commands replayed on a fresh ship
   give the same bricks after the shot and at the end.
 
+### 9.2 Built (2026-11-06, step 10): brick by brick
+
+* **One button, both front ends** (`RestoreTool`, "restore", the middle mouse button): a
+  **tap** (released before HOLD 0.25 s) lays one brick; **held** past HOLD it is the
+  restore tool of 9.1, streaming RATE a second.
+* **The ghost**: aimed at a damaged ship or station, the brick a tap would lay is drawn as a
+  translucent box on its own cells (`aimed`, `show_ghost`, looked for every 0.1 s, its box
+  following a flying hull every frame). Hidden while the tool streams.
+* **Which brick**: of the lost bricks within PICK 1 m of the view's ray (never past what the
+  ray meets), only ones **beside a brick still there** (`rim_of`: a brick laid against
+  nothing could not be placed by hand), the nearest along the ray, then nearest to it
+  (score: along + 2 x off). Along the ray, not round the point it meets: aimed into a hole
+  the ray goes on through it, and the hole's own bricks are the ones wanted. The held tool
+  now gathers round that brick too (before, aimed into an outer hull's hole it gathered
+  round a point up to 6 m beyond it and found nothing).
+* **Cost**: a tap costs one of `cost`, as the held tool's bricks do (still -1, no limit).
+* A tap is the same RESTORE command (one id), so it records and replays.
+* **Gates:** `repair_probe` 10 (+3: the ghost is a rim brick on its own cells; a tap lays it
+  and only on release; nothing with cost 0). `--gate=hull`: inside the parked ship a wall is
+  shot, the ghost shows, a tap lays that brick, held the rest come back (shots
+  `hull_gate_patch`, `hull_gate_patched`).
+
+### 9.3 Built (2026-11-06): the ghost as the brick, the snap, the pouch
+
+* **The ghost is the brick itself** (`RestoreTool.shape_of`): its part and colour from the
+  recipe, meshed once per part, colour and material in a scratch world (bevelled as the near
+  tier is, studs as a MultiMesh), see-through, lifted toward pale blue and gently pulsing.
+  `place_of` puts it where the brick goes.
+* **Placing** (`RepairFx`): each brick laid pops in (a copy of it 1.25 times its size,
+  shrinking onto it and fading in 0.2 s) with a **procedural plastic snap** (a 4 ms click of
+  noise and two short high tones, three variants, pitch varied), at the brick, 3D. At most
+  three pops a tick, so the held tool's stream is not a wall of them.
+* **The brick limit (a guess, the user asked for one):** a **pouch of 120 bricks**
+  (`RestoreTool.POUCH`; a tap and the held tool both take from it). **Aboard a ship or
+  station** it fills again from the hull's stores, **4 a second**, once the tool has been
+  idle 2 s. So a crew mends a few holes in a fight from what it carries and tops up between
+  fights. HUD: `BRICKS n / 120` at the bottom middle while there is something to mend in
+  view or the pouch is not full (red at 0). Easy to change: two constants.
+* Gates: `repair_probe` 13 (+3: the ghost's shape where the brick goes, the pouch, the
+  snap); `--gate=hull`'s tap now checks one from the pouch and a snap (shot `hull_gate_pop`).
+
 ## 10. Health, limbs, respawn (decisions)
 
 - **Health: a health bar** (the user's choice). The Borderlands-style layers already exist
@@ -640,9 +765,11 @@ Each step lands on `main` on its own, with its gate.
    Gate: floats level. Built 2026-11-05 (§7.1): `boat_probe`. Not yet launched in a
    playable scene.
 8. **The sea cut out of the hull** (§6), with the terrain and water area. Gate: the shot.
+   Built 2026-11-06 (§6.1): every hull, the city's sea and a planet's.
 9. **Flooding** (§5) + water drawn inside (§8) + listing and sinking (§7).
-   Gates: `hull_flood_probe`, the boat lists and sinks.
-10. **Brick-by-brick patching** (§9 A) on the same core.
+   Gates: `hull_flood_probe`, the boat lists and sinks. Built 2026-11-06 (§5.1, §8.1):
+   every ship, spaceships too.
+10. **Brick-by-brick patching** (§9 A) on the same core. *Built 2026-11-06, §9.2.*
 11. **E3, E4, E5** as measurements call for them.
 12. **Respawn** (§10) when the user decides.
 

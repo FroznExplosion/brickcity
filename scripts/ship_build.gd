@@ -92,6 +92,8 @@ static func make(seed: int, passes := 1) -> Dictionary:
 			break
 	made.stats["windows"] = _windows(made.recipe, h)
 	made.stats["consoles"] = _consoles(made.recipe, bridge, bridge_floor, made.seat)
+	# Its gravity generator aft, in the engine room (Docs/RoomModules.md 7.12).
+	made.stats["generator"] = GravityGenerator.lay(made.recipe, ["engine room", "reactor"])
 	made.stats["furniture"] = KitFurnish.furnish(made.recipe, seed)
 	return made
 

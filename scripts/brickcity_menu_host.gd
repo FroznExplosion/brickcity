@@ -7,7 +7,7 @@ extends MenuHost
 ## Wired by the project setting `menu/host_script`.
 ##
 ## Settings reach the game as STATIC fields on the classes that use them (PlayerView.hfov,
-## DebugCamera.look_mult, PlayerController.toggle_sprint...), not by finding nodes: a setting
+## PlayerCamera.look_mult, PlayerController.toggle_sprint...), not by finding nodes: a setting
 ## changed while nobody is on foot still holds when somebody is, and a probe that never loads
 ## the menu runs on the defaults.
 
@@ -92,7 +92,7 @@ func _pause_closed() -> void:
 	var tree := Engine.get_main_loop() as SceneTree
 	if tree == null or tree.current_scene == null:
 		return
-	var cam := tree.current_scene.get("camera") as DebugCamera
+	var cam := tree.current_scene.get("camera") as PlayerCamera
 	if cam != null and cam.capture_mouse:
 		cam._set_captured(true)
 
@@ -113,11 +113,11 @@ func _apply_setting(id: StringName, value: Variant) -> void:
 		&"fov":
 			PlayerView.hfov = float(value)
 		&"mouse_sensitivity":
-			DebugCamera.look_mult = float(value)
+			PlayerCamera.look_mult = float(value)
 		&"ads_sensitivity":
 			PlayerView.ads_sensitivity = float(value)
 		&"invert_y":
-			DebugCamera.invert_y = MENU_SETTINGS.truthy(value)
+			PlayerCamera.invert_y = MENU_SETTINGS.truthy(value)
 		&"toggle_sprint":
 			PlayerController.toggle_sprint = MENU_SETTINGS.truthy(value)
 		&"toggle_aim":
@@ -323,7 +323,8 @@ const ACTION_NAMES := {
 	"vehicle_seat": "Tank: Driver's / Gunner's Seat",
 	"mech_order": "Order Your Mech (tap: follow / hold; hold + aim: attack there)",
 	"mech_dash": "Mech: Dash", "mech_smoke": "Mech: Electric Smoke (throws off a rider)",
-	"restore": "Restore Tool (hold on a ship's hull: its lost bricks come back)",
+	"flashlight": "Flashlight On / Off",
+	"restore": "Repair (tap: lay the ghosted brick; hold on a hull: its lost bricks come back)",
 	"dev_big_blast": "Big Blast", "dev_disasters": "Disaster Menu (Shift: stop all)",
 	"dev_stats": "Stats Overlay", "dev_gun_out": "Free Camera: Take the Gun Out",
 	"dev_gun_away": "Free Camera: Put the Gun Away", "dev_spawn_soldier": "Spawn a Soldier",
@@ -394,7 +395,7 @@ func _dev_tools() -> Array:
 		["Terrain Settings", func(c: Node) -> void: c._toggle_terrain_dev_menu()],
 		["AI Overlay", func(c: Node) -> void:
 			c._ai_label.visible = not c._ai_label.visible
-			c._update_ai_label()],
+			c.dev_hud.update_ai_label()],
 		["Stats Overlay", func(c: Node) -> void: c.stats_label.visible = not c.stats_label.visible],
 		["Save Checkpoint", func(c: Node) -> void: c.save_checkpoint()],
 		["Load Checkpoint", func(c: Node) -> void: c.load_checkpoint()],

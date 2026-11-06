@@ -362,7 +362,9 @@ func surface_at(p: Vector3) -> float:
 
 
 func submerged_at(p: Vector3) -> bool:
-	return near != null and p.y < surface_at(p)
+	# In a hull's dry cells (a hold under the sea line) is not under water
+	# (Docs/Hulls.md 6).
+	return near != null and p.y < surface_at(p) and not HullMasks.dry_at(p)
 
 
 func triangle_count() -> int:

@@ -496,6 +496,7 @@ int BrickWorld::create_chunk(Vector3i origin, Vector3i dims) {
     stress.push_back(StressState());
     foundation_level.push_back(origin.y); // the chunk's own floor anchors it
     anchor_levels.push_back(std::vector<int>());
+    hang_levels.push_back(std::vector<int>());
     chunk_down.push_back(Vector3i(0, -1, 0));
     return (int)chunks.size() - 1;
 }
@@ -6005,7 +6006,8 @@ PackedByteArray BrickWorld::solve_grounded(int chunk_id) {
     const Vector3i up = -chunk_down[chunk_id];
     for (size_t i = 0; i < n; ++i) {
         const Block &b = c.blocks[i];
-        if (b.alive && !b.support_broken && grounded_at(chunk_id, height_along(b.cell, up))) {
+        if (b.alive && !b.support_broken && (grounded_at(chunk_id, height_along(b.cell, up))
+                || hangs_at(chunk_id, b))) {
             mark[i] = 1;
             scratch_depth[i] = 0;
             scratch_queue.push_back((int32_t)i);
@@ -6124,6 +6126,39 @@ void BrickWorld::set_foundation_level(int chunk_id, int grid_y) {
     if (valid_chunk(chunk_id)) {
         foundation_level[chunk_id] = grid_y;
     }
+}
+
+void BrickWorld::set_hang_levels(int chunk_id, const PackedInt32Array &grid_ys) {
+    if (solves_live.load(std::memory_order_relaxed) > 0) {
+        structural_write(chunk_id);
+    }
+    if (!valid_chunk(chunk_id)) {
+        return;
+    }
+    std::vector<int> &a = hang_levels[(size_t)chunk_id];
+    a.clear();
+    for (int64_t i = 0; i < grid_ys.size(); ++i) {
+        a.push_back(grid_ys[i]);
+    }
+}
+
+bool BrickWorld::hangs_at(int chunk_id, const Block &b) const {
+    const std::vector<int> &a = hang_levels[(size_t)chunk_id];
+    if (a.empty() || b.archetype < 0 || chunk_down[(size_t)chunk_id] != Vector3i(0, -1, 0)) {
+        return false;
+    }
+    const Archetype &ar = archetypes[b.archetype];
+    if (std::find(a.begin(), a.end(), b.cell.y + ar.size.y) == a.end()) {
+        return false;
+    }
+    for (int z = 0; z < ar.size.z; ++z) {
+        for (int x = 0; x < ar.size.x; ++x) {
+            if (ar.down_at(x, z) != FACE_NONE) {
+                return false;
+            }
+        }
+    }
+    return true;
 }
 
 void BrickWorld::set_anchor_levels(int chunk_id, const PackedInt32Array &grid_ys) {
@@ -9426,6 +9461,7 @@ void BrickWorld::release_chunk(int chunk_id) {
     joint_cache[chunk_id] = brick::JointCache();
     conn_watch[(size_t)chunk_id] = ConnWatch();
     anchor_levels[(size_t)chunk_id].clear();
+    hang_levels[(size_t)chunk_id].clear();
 }
 
 // --- islands ---------------------------------------------------------------
@@ -9644,7 +9680,7 @@ PackedInt32Array BrickWorld::spans_from(int chunk_id, float reach_studs, const s
         const Block &b = c.blocks[(size_t)bid];
         const Vector3i sz = archetypes[b.archetype].size;
         const bool ground = seeds != nullptr ? (*seeds)[(size_t)bid] != 0
-                : grounded_at(chunk_id, b.cell.y);
+                : (grounded_at(chunk_id, b.cell.y) || hangs_at(chunk_id, b));
         if (!ground && b.bottom_broken) {
             continue;
         }
@@ -11705,6 +11741,8 @@ void BrickWorld::_bind_methods() {
             &BrickWorld::get_solid_cells_at);
     ClassDB::bind_method(D_METHOD("set_anchor_levels", "chunk_id", "grid_ys"),
             &BrickWorld::set_anchor_levels);
+    ClassDB::bind_method(D_METHOD("set_hang_levels", "chunk_id", "grid_ys"),
+            &BrickWorld::set_hang_levels);
     ClassDB::bind_method(D_METHOD("get_template_count"), &BrickWorld::get_template_count);
     ClassDB::bind_method(D_METHOD("set_tension_per_stud", "chunk_id", "capacity"),
             &BrickWorld::set_tension_per_stud);

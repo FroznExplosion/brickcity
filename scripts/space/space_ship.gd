@@ -66,6 +66,8 @@ var boost := false
 var altitude := 0.0
 var camera: Camera3D
 var rams := 0
+## Of those, rocks hit at over RAM_SPEED (each a `rammed`).
+var rock_rams := 0
 var _hull: BoxShape3D
 ## A generated ship parked on a planet: a stair of bricks hung from its airlock
 ## to the ground (its sill can stand metres up), taken up when it is flown.
@@ -258,6 +260,13 @@ func fly(ps, dt: float) -> void:
 		next = _sweep(ps, next)
 	if ps.rock_block(self, next):
 		rams += 1
+		# A rock at speed is a ram as a wall is (PlanetScene._on_rammed): at the
+		# hull's face toward it. Rocks do not go round: its speed is the ship's.
+		var speed := vel.length()
+		if speed > RAM_SPEED:
+			var ahead: Vector3 = ps.ship_world(self, next).origin - global_position
+			rock_rams += 1
+			rammed.emit(_hull_face(ahead), speed)
 		vel = ps.ship_match(self)[0]
 		next = rel.origin
 	fine = step - (next - rel.origin) if next == free else Vector3.ZERO
@@ -402,6 +411,21 @@ func _lower_gangway() -> void:
 
 
 ## The hull swept from where it is drawn to `next` (in its reference frame):
+## Where its hull box (the one `_sweep` casts) meets the line from its middle
+## along world direction `dir`: where something it flies into strikes it.
+func _hull_face(dir: Vector3) -> Vector3:
+	var centre := global_transform * Vector3(0.0, height * 0.5, 0.0)
+	if dir.length_squared() < 1e-8:
+		return centre
+	var d := global_transform.basis.inverse() * dir.normalized()
+	var half := _hull.size * 0.5
+	var t := INF
+	for i in 3:
+		if absf(d[i]) > 1e-4:
+			t = minf(t, half[i] / absf(d[i]))
+	return centre + global_transform.basis * (d * t)
+
+
 ## buildings and stations stop it. Returns where it may go.
 func _sweep(ps, next: Vector3) -> Vector3:
 	var to: Transform3D = ps.ship_world(self, next)

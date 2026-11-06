@@ -11,6 +11,10 @@ extends SceneTree
 ##   crew      a pawn on its deck taken onto its ghost by the crossing every pawn uses
 ##   swell     the waves on for SWELL seconds: it rolls and pitches, stays afloat,
 ##             the crew standing on its deck all the while
+##   lists     calm again, a hole shot low in one side under the waterline: the hold
+##             floods (HullWater) and it lists toward the hole
+##   sinks     left open, the flooded hull settles until its deck is under
+##   rises     patched (SpaceStation.restore) and pumped out: it comes back up
 
 const CALM := 20.0
 const SWELL := 12.0
@@ -128,6 +132,119 @@ func _physics_process(delta: float) -> bool:
 					_worst_tilt > 0.3 and _min_sub > 0.0 and _worst_off == 0 and _crew.is_on_floor(),
 					"worst tilt %.1f deg, least submerged %.1f m3, %d frame(s) the crew was off it, on the floor %s" % [
 					_worst_tilt, _min_sub, _worst_off, _crew.is_on_floor()])
+			BrickWave.set_wave_gain(0.0001)
+			_crew.body.queue_free()
+			_crew = null
+			_t = 0.0
+			_stage = 4
+		4:
+			# Calm, then the hole.
+			_t += delta
+			if _t < 8.0:
+				return false
+			if not _shoot():
+				_finish()
+				return true
+			_t = 0.0
+			_stage = 5
+		5:
+			_t += delta
+			if _t < LIST:
+				return false
+			var side := _boat.global_transform * _hole_local - _boat.global_transform * _boat.com
+			_ok("lists: the hold floods through the hole and it lists toward it",
+					_boat.water_mass > 100.0 and side.y < _hole_drop0 - 0.05 and _tilt() > 1.0,
+					"%.0f kg of water aboard, tilt %.1f deg, the hole's side %.2f m lower" % [
+					_boat.water_mass, _tilt(), _hole_drop0 - side.y])
+			_t = 0.0
+			_stage = 6
+		6:
+			_t += delta
+			var deck_under := _deck_under()
+			if deck_under < 0.0 and _t < SINK:
+				return false
+			_ok("sinks: left open, the flooded hull goes down until its deck is under",
+					deck_under >= 0.0, "%.0f kg of water aboard, the deck %.2f m under after %.0f s" % [
+					_boat.water_mass, deck_under, _t])
+			# Patched, and pumped.
+			var at: Vector3 = _boat.global_transform * _hole_local
+			_boat.restore(_boat.restorable(at, 6.0), at, 6.0)
+			_sunk = _keel_depth()
+			_t = 0.0
+			_stage = 7
+		7:
+			_t += delta
+			_boat.pump(delta, PUMP)
+			if _t < RISE:
+				return false
+			_ok("rises: patched and pumped out, it comes back up", _boat.gone().is_empty()
+					and _keel_depth() < _sunk - 0.3 and _boat.water_mass < 0.25 * _peak_water,
+					"keel %.2f m under from %.2f, %.0f kg of water left, %d brick(s) still gone" % [
+					_keel_depth(), _sunk, _boat.water_mass, _boat.gone().size()])
 			_finish()
 			return true
+	_peak_water = maxf(_peak_water, _boat.water_mass if _boat != null else 0.0)
 	return false
+
+
+const LIST := 15.0
+const SINK := 90.0
+const RISE := 40.0
+## Its pumps, cells of water a second.
+const PUMP := 300.0
+var _hole_local := Vector3.ZERO
+var _hole_drop0 := 0.0
+var _sunk := 0.0
+var _peak_water := 0.0
+
+
+## How far its deck is under the calm sea (below 0: over it).
+func _deck_under() -> float:
+	var deck_y: int = int(_boat.recipe.meta.boat.deck_y) - _boat.recipe.origin().y
+	var lo := INF
+	for z in [_boat.seat_cell.z - 3, _boat.seat_cell.z, _boat.seat_cell.z + 3]:
+		var p := _boat.global_transform * _boat.cell_point(Vector3i(_boat.seat_cell.x, deck_y, z))
+		lo = minf(lo, p.y)
+	return _boat.sea - lo
+
+
+## A hole low in one side, under the waterline: a blast at a side brick a plate
+## or two over the keel, amidships.
+func _shoot() -> bool:
+	var air := _boat.air
+	var best := -1
+	var best_y := INF
+	var zmin := 1 << 30
+	for b in _boat.bricks.get_block_count(_boat.chunk):
+		var cells := air._block_cells(b)
+		if cells.is_empty():
+			continue
+		var out := false
+		var ins := false
+		for i in cells:
+			# Its grid has no margin: a cell on its edge is beside the outside.
+			out = out or air._on_edge(i)
+			for j in air._neighbours(i):
+				out = out or air.state[j] == HullAir.OUTSIDE
+				ins = ins or air.state[j] == HullAir.INSIDE
+		if not (out and ins):
+			continue
+		var c := air._cell(cells[0])
+		# Its port side (low z), amidships, the lowest such brick.
+		if absi(c.x - _boat.seat_cell.x) > 4:
+			continue
+		if c.z < zmin or (c.z == zmin and c.y < best_y):
+			zmin = c.z
+			best_y = c.y
+			best = b
+	if best < 0:
+		_ok("a side brick to shoot", false)
+		return false
+	var c := air._cell(air._block_cells(best)[0])
+	_hole_local = _boat.cell_point(c)
+	var at: Vector3 = _boat.global_transform * _hole_local
+	_hole_drop0 = (at - _boat.global_transform * _boat.com).y
+	var under := _boat.sea - at.y
+	_boat.damage(at, {"blast": true, "radius": 0.9, "hp": 0})
+	print("  (shot a hole %.2f m under the water, %d brick(s) gone)" % [under, _boat.gone().size()])
+	return true

@@ -20,6 +20,8 @@ extends Node3D
 ##   tower too weak for its own weight is crushed a storey (11.11 D2 step 6).
 ##   -- --gate=snap: a landing snaps a piece where the city's would -- a weak
 ##   seam or a storey line up its Y, a crack along the bond across (D2 step 7).
+##   -- --gate=farfight: bricks where the AI fights, away from the camera; a hit
+##   on a building not yet bricks lands once it is (11.11).
 ##   -- --gate=trees: a tank knocks a tree down; a truck is stopped by one
 ##   (11.10, trees and vehicles).
 ##   -- --gate=squad: a squad on the AI's nav region round the town (11.8 N2)
@@ -48,7 +50,7 @@ var town_dirs: Array = []
 var landmark_dirs: Array = []
 var walker: PlanetWalker
 ## The player on foot: the city's own kit (scripts/city_scene.gd _enter_pawn).
-var cam: DebugCamera
+var cam: PlayerCamera
 var pawn: Pawn
 var player: PlayerController
 var gun: GunController
@@ -78,6 +80,7 @@ var _home_gate := false
 var _save_gate := false
 var _storey_gate := false
 var _snap_gate := false
+var _farfight_gate := false
 ## The AI round the fight (Docs/Planets.md 11.8, N2, N4): the nav net round the
 ## player's town; ai_world / ai_nav the region the player is in. Made by setup_ai.
 var ai: AIServices
@@ -101,6 +104,7 @@ var _jump_gate := false
 var _debris_gate := false
 var _adrift_gate := false
 var _falling_gate := false
+var _mechwave_gate := false
 var _rocks_gate := false
 var map: GalaxyMap
 var markers: SpaceMarkers
@@ -128,9 +132,11 @@ var env: Environment
 var hud: Label
 ## Low air in a ship or station (Docs/Hulls.md 4): a warning in the middle at the top.
 var air_warn: Label
-## Repair (Docs/Hulls.md 9): held ("restore", the middle mouse button) on a ship's or
-## station's hull, its lost bricks come back.
+## Repair (Docs/Hulls.md 9), "restore" (the middle mouse button) on a ship's or
+## station's hull: a tap lays the ghosted brick, held its lost bricks come back.
 var restore_tool := RestoreTool.new()
+## Bricks left in the repair pouch (RestoreTool.cost), bottom middle.
+var brick_count: Label
 
 const VIEW_MIN := 1536
 const VIEW_MAX := 6144
@@ -167,6 +173,7 @@ func _ready() -> void:
 	_pieces_ai_gate = "--gate=pieces_ai" in OS.get_cmdline_user_args()
 	_storey_gate = "--gate=storey" in OS.get_cmdline_user_args()
 	_snap_gate = "--gate=snap" in OS.get_cmdline_user_args()
+	_farfight_gate = "--gate=farfight" in OS.get_cmdline_user_args()
 	_travel_gate = "--gate=travel" in OS.get_cmdline_user_args()
 	_far_gate = "--gate=far" in OS.get_cmdline_user_args()
 	_drive_gate = "--gate=drive" in OS.get_cmdline_user_args()
@@ -179,6 +186,7 @@ func _ready() -> void:
 	_debris_gate = "--gate=debris" in OS.get_cmdline_user_args()
 	_adrift_gate = "--gate=adrift" in OS.get_cmdline_user_args()
 	_falling_gate = "--gate=falling" in OS.get_cmdline_user_args()
+	_mechwave_gate = "--gate=mechwave" in OS.get_cmdline_user_args()
 	_rocks_gate = "--gate=rocks" in OS.get_cmdline_user_args()
 	_garrison_gate = "--gate=garrison" in OS.get_cmdline_user_args()
 	_seat_gate = "--gate=seat" in OS.get_cmdline_user_args()
@@ -188,7 +196,7 @@ func _ready() -> void:
 	_home_gate = "--gate=home" in OS.get_cmdline_user_args()
 	_save_gate = "--gate=save" in OS.get_cmdline_user_args()
 	WorldFrame.origin = Vector3.ZERO
-	_gate = _gate or _light_gate or _system_gate or _ship_gate or _dock_gate or _worlds_gate or _jump_gate or _debris_gate or _adrift_gate or _falling_gate or _rocks_gate or _garrison_gate or _seat_gate or _hull_gate or _belt_gate or _home_gate or _save_gate or _pawn_gate or _mech_gate or _tank_gate or _soldier_gate or _squad_gate or _travel_gate or _far_gate or _drive_gate or _trees_gate or _bricks_gate or _damage_gate or _fall_gate or _hits_gate or _topple_gate or _pieces_ai_gate or _storey_gate or _snap_gate
+	_gate = _gate or _light_gate or _system_gate or _ship_gate or _dock_gate or _worlds_gate or _jump_gate or _debris_gate or _adrift_gate or _falling_gate or _mechwave_gate or _rocks_gate or _garrison_gate or _seat_gate or _hull_gate or _belt_gate or _home_gate or _save_gate or _pawn_gate or _mech_gate or _tank_gate or _soldier_gate or _squad_gate or _travel_gate or _far_gate or _drive_gate or _trees_gate or _bricks_gate or _damage_gate or _fall_gate or _hits_gate or _topple_gate or _pieces_ai_gate or _storey_gate or _snap_gate or _farfight_gate
 	data = PlanetData.new()
 	data.planet_name = "proto"
 	# Towns and landmarks: their pads go into the ground before it is built.
@@ -249,7 +257,7 @@ func _ready() -> void:
 	PlanetFrame.recentre(self, walker.global_position)
 	_build_hud()
 	if _gate:
-		DebugCamera.hands_off = true
+		PlayerCamera.hands_off = true
 		walker.scripted = true
 		var tw := get_node_or_null(^"/root/TestWindow")
 		if tw != null:
@@ -282,6 +290,8 @@ func _ready() -> void:
 			_run_storey_gate()
 		elif _snap_gate:
 			_run_snap_gate()
+		elif _farfight_gate:
+			_run_farfight_gate()
 		elif _travel_gate:
 			_run_travel_gate()
 		elif _far_gate:
@@ -306,6 +316,8 @@ func _ready() -> void:
 			_run_adrift_gate()
 		elif _falling_gate:
 			_run_falling_gate()
+		elif _mechwave_gate:
+			_run_mechwave_gate()
 		elif _rocks_gate:
 			_run_rocks_gate()
 		elif _garrison_gate:
@@ -337,6 +349,24 @@ func _structure_hit(point: Vector3, _dir: Vector3, shot: Dictionary) -> void:
 	_buildings_here().damage(point, shot)
 
 
+## Each world's buildings told where its AI's fighters are (PlanetBuildings.
+## set_fights): bricks where the fight is, not only where the camera is.
+const FIGHTS_EVERY := 0.5
+var _fights_in := 0.0
+
+func _tell_fights() -> void:
+	for b in ai_of:
+		var pb: PlanetBuildings = buildings if b == planet else (system.built.get(b) if system != null else null)
+		var s: AIServices = ai_of[b]
+		if pb == null or s == null:
+			continue
+		var pts := PackedVector3Array()
+		for p in s.pawns:
+			if is_instance_valid(p) and p != pawn and p.is_inside_tree() and not p.health.is_dead():
+				pts.append(p.feet())
+		pb.set_fights(pts)
+
+
 ## The buildings of the world the player is on.
 func _buildings_here() -> PlanetBuildings:
 	var b := system.buildings_here() if system != null else null
@@ -360,14 +390,13 @@ const RAM_SHIP_SHARE := 0.6
 ## The pawn, its controller, camera, gun and arms, standing at `feet`, looking
 ## along `facing` (tangent). Built once; placed again after a flight.
 func _spawn_player(feet: Vector3, facing: Vector3) -> void:
-	cam = DebugCamera.new()
+	cam = PlayerCamera.new()
 	cam.name = "Camera"
 	cam.capture_mouse = false
-	cam.allow_walk = false
 	cam.far = SEE_FAR
 	cam.add_to_group(PlanetSystem.RIG)
 	add_child(cam)
-	cam.set_process(false)
+	Flashlight.mount(cam)
 	pawn = Pawn.spawn(self, feet, 0)
 	pawn.body.add_to_group(PlanetSystem.RIG)
 	pawn.moves = PawnMoves.new(pawn)
@@ -789,7 +818,7 @@ func _build_system() -> void:
 	system.setup(sys, planet)
 	system.universe = uni
 	system.built[planet] = buildings
-	system.frozen = _gate and not (_system_gate or _dock_gate or _falling_gate)
+	system.frozen = _gate and not (_system_gate or _dock_gate or _falling_gate or _mechwave_gate)
 	# Set here, not before: home is not one of the generated worlds to settle.
 	data.towns.assign(town_dirs)
 	system.anchor_changed.connect(_on_anchor_changed)
@@ -1004,6 +1033,16 @@ func _build_hud() -> void:
 	air_warn.add_theme_constant_override("outline_size", 6)
 	air_warn.visible = false
 	layer.add_child(air_warn)
+	brick_count = Label.new()
+	brick_count.set_anchors_preset(Control.PRESET_CENTER_BOTTOM)
+	brick_count.position = Vector2(-120, -96)
+	brick_count.size = Vector2(240, 24)
+	brick_count.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	brick_count.add_theme_font_size_override("font_size", 18)
+	brick_count.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.9))
+	brick_count.add_theme_constant_override("outline_size", 5)
+	brick_count.visible = false
+	layer.add_child(brick_count)
 	add_child(layer)
 	if system != null:
 		var over := CanvasLayer.new()
@@ -1047,20 +1086,51 @@ func _air_tick() -> void:
 		air_warn.text = ("HULL BREACH  air %d%%" if venting else "LOW AIR  %d%%") % roundi(p * 100.0)
 
 
-## The restore tool, held: what the view points at on a ship or station.
+## The player stands in one of `sts` (a ship's or station's box): its stores fill
+## the repair pouch.
+func _aboard_any(sts: Array) -> bool:
+	var at := _pawn_real() if pawn != null and on_foot else _anchor()
+	for s in sts:
+		var st := s as SpaceStation
+		if st != null and is_instance_valid(st) and st.bricked and st.holds(at):
+			return true
+	return false
+
+
+## Repair, both front ends (RestoreTool): the ghost of the brick a tap would lay
+## where the view points on a ship or station, a tap lays it, held it restores.
 func _restore_tick(dt: float) -> void:
-	var holding := InputMap.has_action(&"restore") and Input.is_action_pressed(&"restore") 			and not walker.frozen and cam != null
-	if not holding and restore_tool.target == null:
-		return
+	var can := InputMap.has_action(&"restore") and not walker.frozen and cam != null
+	var holding := can and Input.is_action_pressed(&"restore")
 	var sts: Array = system.stations.duplicate()
 	for s in system.ships:
 		if not sts.has(s):
 			sts.append(s)
-	restore_tool.tick(dt, holding, cam.global_position, -cam.global_basis.z, sts,
-			get_world_3d().direct_space_state)
+	var space := get_world_3d().direct_space_state
+	var from := cam.global_position if cam != null else Vector3.ZERO
+	var dir := -cam.global_basis.z if cam != null else Vector3.FORWARD
+	if restore_tool.fx_parent == null:
+		restore_tool.fx_parent = self
+		restore_tool.cost = RestoreTool.POUCH
+	restore_tool.show_ghost(dt, can, from, dir, sts, space, self)
+	restore_tool.refill(dt, _aboard_any(sts))
+	if brick_count != null:
+		# Shown while there is something to mend in view, or the pouch is not full.
+		brick_count.visible = can and (not restore_tool.aimed.is_empty() or restore_tool.pressed()
+				or restore_tool.cost < RestoreTool.POUCH)
+		brick_count.text = "BRICKS  %d / %d" % [restore_tool.cost, RestoreTool.POUCH]
+		brick_count.add_theme_color_override("font_color", Color(1.0, 0.4, 0.3) if restore_tool.cost == 0
+				else Color(0.75, 0.92, 1.0))
+	if not holding and restore_tool.target == null and not restore_tool.pressed():
+		return
+	restore_tool.tick(dt, holding, from, dir, sts, space)
 
 
-func _process(_delta: float) -> void:
+func _process(delta: float) -> void:
+	_fights_in -= delta
+	if _fights_in <= 0.0:
+		_fights_in = FIGHTS_EVERY
+		_tell_fights()
 	var now := Time.get_ticks_usec()
 	if _last_us > 0:
 		var ms := float(now - _last_us) / 1000.0
@@ -1086,7 +1156,10 @@ func _process(_delta: float) -> void:
 	if system != null:
 		walker.match_velocity = system.match_velocity(walker.global_position)
 		_air_tick()
-		_restore_tick(_delta)
+		_restore_tick(delta)
+		# A ship sitting in its planet's sea: the ocean cut out of its dry cells
+		# (Docs/Hulls.md 6).
+		HullMasks.update(system.ships, cam_pos)
 		walker.reach = body.altitude_of(walker.global_position)
 	if _stepping_out >= 0 and (ship.bricked or Time.get_ticks_msec() - _stepping_out > STEP_OUT_WAIT):
 		_stepping_out = -1
@@ -1127,7 +1200,7 @@ func _process(_delta: float) -> void:
 	# walker's own gate, the pawn stands on it.
 	if walker.frozen and not piloting and pawn == null and trees.prebaked and _ground_hit(walker.global_position) != Vector3.INF:
 		walker.frozen = false
-		if not _gate or _pawn_gate or _mech_gate or _tank_gate or _soldier_gate or _squad_gate or _travel_gate or _far_gate or _drive_gate or _trees_gate or _bricks_gate or _damage_gate or _fall_gate or _hits_gate or _topple_gate or _pieces_ai_gate or _storey_gate or _snap_gate or _garrison_gate or _seat_gate or _home_gate or _hull_gate or _save_gate or _light_gate:
+		if not _gate or _pawn_gate or _mech_gate or _tank_gate or _soldier_gate or _squad_gate or _travel_gate or _far_gate or _drive_gate or _trees_gate or _bricks_gate or _damage_gate or _fall_gate or _hits_gate or _topple_gate or _pieces_ai_gate or _storey_gate or _snap_gate or _farfight_gate or _garrison_gate or _seat_gate or _home_gate or _mechwave_gate or _hull_gate or _save_gate or _light_gate:
 			_spawn_player(_ground_hit(walker.global_position), -walker.global_transform.basis.z)
 			if saver != null:
 				saver.resume()
@@ -1150,12 +1223,13 @@ func _process(_delta: float) -> void:
 				PlanetFrame.last_us / 1000.0, here,
 				"(waiting for ground)" if walker.frozen and not piloting else ""]
 		var gen := system.generator_at(_anchor()) if system != null else null
-		if gen != null and not piloting:
-			hud.text += "
-GRAVITY %s  (G turns it %s)" % ["on" if gen.pulls() else "off", "off" if gen.data.gravity_on else "on"]
+		if gen != null and not piloting and gen.generator_out():
+			hud.text += "\nGRAVITY GENERATOR SHOT OUT" + ("" if Gravity.pulls_at(_anchor())
+					else "  (nothing pulls; WASD, Space/Ctrl: the suit's thrust)")
+		elif gen != null and not piloting:
+			hud.text += "\nGRAVITY %s  (G turns it %s)" % ["on" if gen.pulls() else "off", "off" if gen.data.gravity_on else "on"]
 		elif system != null and not piloting and not Gravity.pulls_at(_anchor()):
-			hud.text += "
-NOTHING PULLS  (WASD, Space/Ctrl: the suit's thrust)"
+			hud.text += "\nNOTHING PULLS  (WASD, Space/Ctrl: the suit's thrust)"
 		if piloting:
 			hud.text += "\nSHIP  %.0f m/s  %.0f m over the ground  (E leaves the seat; WASD, Space/Ctrl, mouse, Z/C roll, Shift cruise; M galaxy map)" % [
 					ship.vel.length(), ship.altitude]
@@ -3014,6 +3088,23 @@ func _run_rocks_gate() -> void:
 	var gap := (f.transform.affine_inverse() * ship.rel.origin).distance_to(best)
 	_check("a rock stops the ship", ship.rams > rams0 and gap > 5.0, "%.1f m from its centre" % gap)
 	await _shot("rocks_gate_rock")
+	# Back off, then into it hard: a ram, as a wall is.
+	t0 = Time.get_ticks_msec()
+	while Time.get_ticks_msec() - t0 < 4000:
+		ship.aim(ship.rel.origin - f.transform * best, ship.rel.basis.y)
+		ship.thrust = Vector3(0.0, 0.0, 0.3)
+		await _frames(1)
+	var hurt0 := ship.bricks_killed
+	rams0 = ship.rams
+	t0 = Time.get_ticks_msec()
+	while ship.rams == rams0 and Time.get_ticks_msec() - t0 < 30000:
+		ship.aim(f.transform * best - ship.rel.origin, ship.rel.basis.y)
+		ship.thrust = Vector3(0.0, 0.0, 1.0)
+		await _frames(1)
+	ship.thrust = Vector3.ZERO
+	await _frames(2)
+	_check("hit hard, the ship is hurt where it hit", ship.rock_rams > 0 and ship.bricks_killed > hurt0,
+			"%d hard hit(s), %d bricks" % [ship.rock_rams, ship.bricks_killed - hurt0])
 	print("[planet] rocks gate: frames: worst %.1f ms; over 40 ms in play: %d %s" % [_worst_ms, _play_hitches.size(), _play_hitches])
 	print("[planet] gate: %d ok, %d FAIL" % [_ok, _fail])
 	get_tree().quit(1 if _fail > 0 else 0)
@@ -3669,6 +3760,54 @@ func _run_seat_gate() -> void:
 	get_tree().quit(1 if _fail > 0 else 0)
 
 
+## Repair, brick by brick (Docs/Hulls.md 9 A), in the parked ship: the nearest wall
+## the player faces shot through; aimed at the hole, the ghost of one of its bricks;
+## a tap of "restore" lays that one; held, the rest come back.
+func _patch_check() -> void:
+	var space := get_world_3d().direct_space_state
+	var eye := cam.global_position
+	var best := {}
+	for dv in [ship.global_basis.x, -ship.global_basis.x, ship.global_basis.z, -ship.global_basis.z]:
+		var q := PhysicsRayQueryParameters3D.create(eye, eye + (dv as Vector3) * 5.0, Layers.STRUCTURE)
+		var h := space.intersect_ray(q)
+		if not h.is_empty() and (best.is_empty() or (h.position - eye).length() < (best.position - eye).length()):
+			best = h
+			best.dir = dv
+	if best.is_empty():
+		_check("repair: a wall within 5 m to shoot", false)
+		return
+	_face(best.dir)
+	await _frames(2)
+	var lost0 := ship.gone().size()
+	ship.damage(best.position, {"blast": true, "radius": 0.6, "hp": 0})
+	await get_tree().create_timer(0.5).timeout
+	var lost := ship.gone().size() - lost0
+	var g := restore_tool._ghost
+	var aimed := restore_tool.aimed
+	_check("repair: aimed at a hole shot in a wall, the ghost of one of its bricks", lost > 0
+			and not aimed.is_empty() and g != null and g.visible and ship.gone().has(int(aimed.id)),
+			"%d brick(s) lost, ghost %s" % [lost, str(aimed.get("id", -1))])
+	await _shot("hull_gate_patch")
+	var r0 := ship.bricks_restored
+	var want := int(aimed.get("id", -1))
+	var pouch0 := restore_tool.cost
+	var snaps0 := restore_tool.fx.played
+	Input.action_press(&"restore")
+	await _frames(3)
+	Input.action_release(&"restore")
+	await _frames(3)
+	_check("repair: a tap lays that brick and no other, one from the pouch, with a snap", ship.bricks_restored - r0 == 1
+			and not ship.gone().has(want) and restore_tool.cost == pouch0 - 1 and restore_tool.fx.played == snaps0 + 1
+			and brick_count.visible, "%d laid, pouch %d -> %d" % [ship.bricks_restored - r0, pouch0, restore_tool.cost])
+	await _frames(4)
+	await _shot("hull_gate_pop")
+	await _hold(&"restore", 3.0)
+	await _frames(3)
+	_check("repair: held, the rest come back", ship.gone().size() == lost0,
+			"%d still lost" % (ship.gone().size() - lost0))
+	await _shot("hull_gate_patched")
+
+
 # The hull's gate: the parked ship generated (ShipBuild, Docs/RoomModules.md
 # 7.5) -- its bricks laid with nothing loose, walked into through its airlock,
 # flown from the bridge's seat with nothing shaken loose, stood in on its floor.
@@ -3749,6 +3888,7 @@ func _run_hull_gate() -> void:
 			and Gravity.field_at(ship.global_transform * ship.seat() + ship.global_basis.z * 80.0) == null,
 			"%s inside, %.1f m/s2" % ["its field" if gf != null and Gravity.field_at(pawn.feet()) == gf else "not its field", Gravity.pull_at(pawn.feet())])
 	await _shot("hull_gate_inside")
+	await _patch_check()
 	# The bridge's seat: up and ahead, its bricks drawn as it flies (riding).
 	pawn.place(ship.global_transform * ship.seat() + ship.global_basis.z * 2.0)
 	await get_tree().create_timer(0.5).timeout
@@ -3891,6 +4031,22 @@ func _run_hull_gate() -> void:
 		_face(Gravity.flat(to, Gravity.up_at(g)).normalized())
 		await get_tree().create_timer(0.3).timeout
 	await _shot("hull_gate_window")
+	# Its gravity generator shot out (GravityGenerator, 7.12): its own gravity gone
+	# from inside it, the world's there instead; G cannot bring it back; the HUD
+	# says so. Last: it takes bricks out of the ship.
+	var gen_ids := GravityGenerator.blocks(ship.recipe)
+	var own := Gravity.field_at(pawn.feet()) == ship.gravity_field()
+	if ship.chunk >= 0:
+		ship.bricks.kill_blocks(ship.chunk, gen_ids)
+	await get_tree().create_timer(1.0).timeout
+	_ship_key(KEY_G)
+	await get_tree().create_timer(0.5).timeout
+	_check("its gravity generator shot out: the world's gravity inside it, G cannot turn its own on",
+			not gen_ids.is_empty() and own and ship.generator_out() and not ship.pulls()
+			and Gravity.field_at(pawn.feet()) == null and Gravity.pull_at(pawn.feet()) > 1.0
+			and hud.text.contains("SHOT OUT"),
+			"%d generator brick(s); its field before %s, after %s, %.1f m/s2" % [gen_ids.size(), own,
+			Gravity.field_at(pawn.feet()) != null, Gravity.pull_at(pawn.feet())])
 	if _auto_gate:
 		await _autopilot_run()
 	print("[planet] gate: %d ok, %d FAIL" % [_ok, _fail])
@@ -4278,6 +4434,80 @@ func bricks_gone(pb: PlanetBuildings, i: int) -> int:
 # Home's gate: quiet at the spawn; home's town walked into, the fight on home's own
 # AI; wave after wave, each bigger, none on the player's head, and it stops at the most.
 
+## Home's wave 5 (PlanetGarrison.MECH_FROM): a mech comes with the squad and the
+## tank, piloted, on the mech map, and fights. Starts at wave 5 rather than
+## fighting through four.
+func _run_mechwave_gate() -> void:
+	var t0 := Time.get_ticks_msec()
+	while pawn == null and Time.get_ticks_msec() - t0 < 60000:
+		await _frames(1)
+	await get_tree().create_timer(1.0).timeout
+	setup_ai(town_dirs[0])
+	ai.policy = CombatPolicy.new()
+	kit.use_services(ai)
+	_home_garrison()
+	var g: PlanetGarrison = garrisons[planet]
+	pawn.health.layer_configs[0].max_value = 1e7
+	pawn.health.reset()
+	# As if four waves had gone: the town's next is the fifth.
+	g.town = 0
+	g.wave = PlanetGarrison.MECH_FROM - 1
+	var town: Vector3 = town_dirs[0]
+	var feet := _surface(_round_dir(town, spawn_dir, 50.0))
+	t0 = Time.get_ticks_msec()
+	while _ground_hit(feet) == Vector3.INF and Time.get_ticks_msec() - t0 < 30000:
+		await _frames(1)
+	pawn.place(feet + Gravity.up_at(feet) * 0.3)
+	_face(Gravity.flat(_surface(town) - feet, Gravity.up_at(feet)).normalized())
+	t0 = Time.get_ticks_msec()
+	while (g.squad == null or g.wave != PlanetGarrison.MECH_FROM) and Time.get_ticks_msec() - t0 < 40000:
+		await _frames(1)
+	var br := g.mech
+	_check("wave 5 brings a mech, piloted, with the tank", is_instance_valid(br) and br.mech.pilot_pawn != null
+			and is_instance_valid(g.tank) and g.status().contains("a mech"), g.status())
+	if not is_instance_valid(br):
+		print("[planet] gate: %d ok, %d FAIL" % [_ok, _fail])
+		get_tree().quit(1)
+		return
+	var from := br.mech.feet().distance_to(pawn.feet())
+	var low := INF
+	t0 = Time.get_ticks_msec()
+	while Time.get_ticks_msec() - t0 < 40000 and br.shots == 0:
+		await _frames(1)
+		if is_instance_valid(br):
+			low = minf(low, _over_ground(br.mech.feet()))
+	var to := br.mech.feet().distance_to(pawn.feet()) if is_instance_valid(br) else INF
+	_check("it comes for the player and fires, on the ground", is_instance_valid(br) and not br.is_dead()
+			and (br.shots > 0 or to < from - 10.0) and low > -1.0,
+			"%.0f m -> %.0f m, %d shot(s), lowest %.2f m over the ground, %.0f s" % [from, to, br.shots if is_instance_valid(br) else 0,
+			low, (Time.get_ticks_msec() - t0) / 1000.0])
+	await _shot("mechwave_gate")
+	# Saved hurt, and back (PlanetGarrison.to_save through bytes): the tank and the
+	# mech where they were, as hurt as they were.
+	g.tank.health.apply_impact(g.tank.health.total_current() * 0.3, &"")
+	br.mech.health.apply_impact(br.mech.health.total_current() * 0.3, &"")
+	var tank_at := planet.to_local(g.tank.feet())
+	var tank_hp := g.tank.health.total_current()
+	var mech_at := planet.to_local(br.mech.feet())
+	var mech_hp := br.mech.health.total_current()
+	var saved: Dictionary = bytes_to_var(var_to_bytes(g.to_save()))
+	g._drop()
+	g.restore(saved)
+	t0 = Time.get_ticks_msec()
+	while (not is_instance_valid(g.tank) or not is_instance_valid(g.mech)) and Time.get_ticks_msec() - t0 < 30000:
+		await _frames(1)
+	var tank_off := planet.to_local(g.tank.feet()).distance_to(tank_at) if is_instance_valid(g.tank) else INF
+	var mech_off := planet.to_local(g.mech.mech.feet()).distance_to(mech_at) if is_instance_valid(g.mech) else INF
+	_check("saved and back: its tank and its mech where they were, as hurt", tank_off < 3.0 and mech_off < 3.0
+			and absf(g.tank.health.total_current() - tank_hp) < 1.0 and absf(g.mech.mech.health.total_current() - mech_hp) < 1.0
+			and g.wave == PlanetGarrison.MECH_FROM,
+			"tank %.1f m off, %.0f of %.0f hp; mech %.1f m off, %.0f of %.0f hp; wave %d" % [tank_off,
+			g.tank.health.total_current() if is_instance_valid(g.tank) else -1.0, tank_hp, mech_off,
+			g.mech.mech.health.total_current() if is_instance_valid(g.mech) else -1.0, mech_hp, g.wave])
+	print("[planet] gate: %d ok, %d FAIL" % [_ok, _fail])
+	get_tree().quit(1 if _fail > 0 else 0)
+
+
 func _run_home_gate() -> void:
 	var t0 := Time.get_ticks_msec()
 	while pawn == null and Time.get_ticks_msec() - t0 < 60000:
@@ -4658,6 +4888,11 @@ func _run_dock_gate() -> void:
 	_check("and the tower is blasted where it hit", buildings.bricks_killed > killed0, "%d bricks" % (buildings.bricks_killed - killed0))
 	_check("and the ship is hurt where it hit, kept for when its bricks are laid", ship.bricks_killed > hurt0
 			and ship.gone().size() > gone0, "%d bricks" % (ship.bricks_killed - hurt0))
+	t0 = Time.get_ticks_msec()
+	while ship.wreck == null and Time.get_ticks_msec() - t0 < 10000:
+		await _frames(1)
+	_check("and from afar it looks it: its bricks laid once for its far look", ship.wreck != null and not ship.shell.visible,
+			"%.1f s" % ((Time.get_ticks_msec() - t0) / 1000.0))
 	await _shot("dock_gate_ram")
 	# Up to the home planet's station.
 	var st: SpaceStation = null
@@ -5225,7 +5460,59 @@ func _run_bricks_gate() -> void:
 		climbed = maxf(climbed, (bxf.affine_inverse() * p).y)
 	_check("a staircase: the nav net walks up to the first floor", up_pt != Vector3.INF and up_path.size() > 2
 			and absf(lu.y - floor1) < 0.5, "%d points, up to %.2f m (the floor %.2f m)" % [up_path.size(), climbed, floor1])
+	# Its rooms furnished (11.11, furniture): plain bricks on its floors, solid.
+	var bw := buildings.bricks
+	var cs := BrickWorld.get_cell_size()
+	var furn := buildings.furniture_of(bi)
+	var plain := 0
+	var on_slab := 0
+	var storeys := {}
+	var top_brick := -1
+	var top_h := 0.0
+	for bid in furn:
+		if bw.is_block_absent(site.chunk, bid):
+			continue
+		if not bw.is_block_decorative(site.chunk, bid):
+			plain += 1
+		var box := bw.get_blocks_box(site.chunk, PackedInt32Array([bid]))
+		var cy := roundi(box.position.y / cs.y)
+		storeys[cy / TowerRecipe.STOREY_PLATES] = true
+		if cy % TowerRecipe.STOREY_PLATES == TowerRecipe.SLAB_PLATES:
+			on_slab += 1
+		# The tallest with nothing on it, its top open, for the ray.
+		var over := Vector3i(floori((box.position.x + cs.x * 0.5) / cs.x), roundi(box.end.y / cs.y),
+				floori((box.position.z + cs.z * 0.5) / cs.z))
+		if box.size.y > top_h and bw.block_at(site.chunk, over) < 0:
+			top_brick = bid
+			top_h = box.size.y
+	var ray_ok := false
+	var ray_at := ""
+	if top_brick >= 0:
+		var tb := bw.get_blocks_box(site.chunk, PackedInt32Array([top_brick]))
+		var c := Vector3(tb.position.x + cs.x * 0.5, tb.end.y, tb.position.z + cs.z * 0.5)
+		var down := space.intersect_ray(PhysicsRayQueryParameters3D.create(bxf * (c + Vector3.UP * 0.6),
+				bxf * (c - Vector3.UP * 1.5), Layers.STRUCTURE))
+		# Its storey's floor: the top of the slab under it.
+		var floor_y := float(roundi(tb.position.y / cs.y) / TowerRecipe.STOREY_PLATES * TowerRecipe.STOREY_PLATES
+				+ TowerRecipe.SLAB_PLATES) * cs.y
+		if not down.is_empty():
+			var ly := (bxf.affine_inverse() * (down.position as Vector3)).y
+			ray_at = "stopped %.2f m above the floor, the brick's top %.2f m" % [ly - floor_y, tb.end.y - floor_y]
+			ray_ok = absf(ly - tb.end.y) < 0.12 and ly - floor_y > 0.2 and site.collision.owns(down.rid)
+	print("[planet] furniture: %d brick(s) in the shape's rooms, %d plain, %d on a floor slab, on %d storey(s); the shapes built at load in %.0f ms" % [
+			furn.size(), plain, on_slab, storeys.size(), buildings.templates_ms])
+	_check("its rooms are furnished, plain bricks, on its floors", furn.size() > 0 and plain == furn.size()
+			and on_slab > 0 and storeys.size() >= mini(2, site.courses / TowerRecipe.COURSES_PER_FLOOR),
+			"%d bricks, %d storeys" % [furn.size(), storeys.size()])
+	_check("and solid: a ray down onto one stops on its top", ray_ok, ray_at if top_brick >= 0 else "none with its top open")
 	await _shot("planet_bricks_town")
+	# And from the front door, looking in (windowed: a picture of the rooms).
+	if DisplayServer.get_name() != "headless":
+		var in_door := bxf * Vector3(w * 0.5, 0.3, 0.8)
+		pawn.place(in_door + Gravity.up_at(in_door) * 0.1)
+		_face(Gravity.flat((bxf.basis * Vector3(0.3, 0.0, 1.0)).normalized(), Gravity.up_at(in_door)).normalized())
+		await get_tree().create_timer(1.0).timeout
+		await _shot("planet_bricks_room")
 	print("[planet] frames: worst %.1f ms; over 40 ms: %s" % [_worst_ms, _hitches])
 	print("[planet] bricks gate: %d ok, %d FAIL" % [_ok, _fail])
 	get_tree().quit(0 if _fail == 0 else 1)
@@ -6366,3 +6653,135 @@ func _run_snap_gate() -> void:
 	print("[planet] snap gate: %d ok, %d FAIL" % [_ok, _fail])
 	get_tree().quit(0 if _fail == 0 else 1)
 
+
+# ---------------------------------------------------------------------------
+# The far-fight gate (Planets.md 11.11, bricks where the fight is): a soldier by
+# a building out of the camera's reach makes it bricks -- solid, the AI's -- and
+# a charge at another far building, a shell then, waits and lands once it is
+# bricks. The soldier gone, both are freed; the hit one keeps its damage.
+
+func _run_farfight_gate() -> void:
+	var t0 := Time.get_ticks_msec()
+	while pawn == null and Time.get_ticks_msec() - t0 < 60000:
+		await _frames(1)
+	var town: Vector3 = town_dirs[0]
+	# Out at 200 m: the town's far side past anything the camera bricks, its near
+	# side still bricks.
+	var p_feet := _surface(_round_dir(town, spawn_dir, 200.0))
+	pawn.place(p_feet + Gravity.up_at(p_feet) * 0.3)
+	pawn.health.layer_configs[0].max_value = 1e7
+	pawn.health.reset()
+	t0 = Time.get_ticks_msec()
+	while _ground_hit(p_feet) == Vector3.INF and Time.get_ticks_msec() - t0 < 30000:
+		await _frames(1)
+	setup_ai(town)
+	var net := ai.nav_net as PlanetNavNet
+	var near_i: int = await _bricked_near()
+	var stud := BrickWorld.get_stud_metres()
+	var mid_of := func(i: int) -> Vector3:
+		var st: PlanetBuildings.Site = buildings.sites[i]
+		return planet.global_transform * (st.frame * Vector3(st.fx * stud * 0.5, 0.0, st.fz * stud * 0.5))
+	# Two buildings out of the camera's reach, far enough apart that a fighter by
+	# one is no reason to brick the other.
+	var eye := _eye()
+	var order: Array = []
+	for i in buildings.sites.size():
+		var st: PlanetBuildings.Site = buildings.sites[i]
+		var d := eye.distance_to(mid_of.call(i))
+		if not st.landmark and d > PlanetBuildings.BRICK_DROP + 30.0 and d < 600.0:
+			order.append([d, i])
+	order.sort_custom(func(a, b): return a[0] < b[0])
+	# The pair furthest apart: the soldier by one must be past FIGHT_DROP from
+	# the other (its footprint's reach and the 8 m it stands off besides).
+	var ai_i := -1
+	var hit_i := -1
+	var apart := 0.0
+	for o1 in order:
+		for o2 in order:
+			var dd: float = (mid_of.call(o1[1]) as Vector3).distance_to(mid_of.call(o2[1]))
+			if dd > apart:
+				apart = dd
+				ai_i = o1[1]
+				hit_i = o2[1]
+	_check("two buildings out of the camera's reach, apart", ai_i >= 0 and apart > PlanetBuildings.FIGHT_DROP + 25.0,
+			"%d candidates, the furthest apart %.0f m" % [order.size(), apart])
+	if ai_i < 0 or hit_i < 0:
+		get_tree().quit(1)
+		return
+	var sa: PlanetBuildings.Site = buildings.sites[ai_i]
+	var sb: PlanetBuildings.Site = buildings.sites[hit_i]
+	_check("neither is bricks", sa.chunk < 0 and sb.chunk < 0)
+	# A soldier 8 m off the first one's front, its region kept.
+	var a_xf := planet.global_transform * sa.frame
+	var spot := a_xf * Vector3(sa.fx * stud * 0.25, 0.0, -8.0)
+	var marker := Node3D.new()
+	add_child(marker)
+	marker.global_position = spot
+	PlanetBody.track(marker)
+	net.keep_around([spot], AI_KEEP_M, 99)
+	t0 = Time.get_ticks_msec()
+	while _ground_hit(spot) == Vector3.INF and Time.get_ticks_msec() - t0 < 30000:
+		await _frames(1)
+	var ground := _ground_hit(spot)
+	# Just inside its front door, in the lane kept clear: the AI's world has the
+	# building's proxy box there while it is a shell, its room once it is bricks.
+	var inside := a_xf * Vector3(sa.fx * stud * 0.5, 0.3, 2.5)
+	await _frames(5)
+	var stood_before := net.can_stand(net.snap(inside))
+	var lib := GunPlaceholderParts.build_library()
+	var g := GunInstance.from_result(GunGenerator.generate(lib, 77, WeaponClass.builtin(&"rifle"), 1))
+	var so := Soldier.spawn(ai, self, ground + Gravity.up_at(ground) * 0.1, 1, g)
+	PlanetBody.track(so.pawn.body)
+	t0 = Time.get_ticks_msec()
+	while not sa.bricked and Time.get_ticks_msec() - t0 < 60000:
+		await _frames(1)
+	var far_m := _eye().distance_to(mid_of.call(ai_i))
+	print("[planet] farfight: building %d %.0f m from the camera, a soldier by it; bricks in %.1f s (fighters %d)" % [
+			ai_i, far_m, (Time.get_ticks_msec() - t0) / 1000.0, buildings.fighters])
+	_check("a soldier by it: it becomes bricks, the camera %.0f m off" % far_m, sa.bricked and far_m > PlanetBuildings.BRICK_DROP
+			and sa.collision != null)
+	# Its bricks, where a ray from the soldier's side meets them.
+	await _frames(5)
+	# Low, under the windows' sills: at a metre it went in at a window and out at
+	# the one behind it.
+	var from := a_xf * Vector3(sa.fx * stud * 0.25, 0.45, -6.0)
+	var into := a_xf * Vector3(sa.fx * stud * 0.25, 0.45, sa.fz * stud * 0.95)
+	var wh := get_world_3d().direct_space_state.intersect_ray(PhysicsRayQueryParameters3D.create(from, into, Layers.STRUCTURE))
+	var wall_pt: Vector3 = (wh.position as Vector3) + (into - from).normalized() * 0.1 if not wh.is_empty() else Vector3.INF
+	# Its region may still be building on a worker (the bricks came in 0.1 s once):
+	# waited for, so it is asked of a finished one -- and not quit under a job.
+	t0 = Time.get_ticks_msec()
+	while not wh.is_empty() and net.world_at(wall_pt) == null and Time.get_ticks_msec() - t0 < 15000:
+		await _frames(1)
+	var aw := net.world_at(wall_pt) if not wh.is_empty() else null
+	_check("solid: a ray from the soldier's side meets its bricks", not wh.is_empty() and sa.collision.owns(wh.rid))
+	var solid := aw != null and aw.solid_at(wall_pt)
+	_check("and the AI's world has them (where the ray met it is solid)", solid,
+			"" if solid else ("no region there" if aw == null else "not solid"))
+	var stands := net.can_stand(net.snap(inside))
+	_check("its rooms are the AI's now: inside the front door it can stand (a proxy box before)",
+			stands and not stood_before, "before %s, now %s" % [stood_before, stands])
+	# A charge at the other: a shell (or nothing) now, no fighter near.
+	var b_xf := planet.global_transform * sb.frame
+	var at := b_xf * Vector3(sb.fx * stud * 0.25, 3.0, 0.2)
+	var kept := buildings.damage(at, {"blast": true, "radius": 3.0, "hp": 0})
+	_check("a charge at the far one, not bricks: kept for it", kept and sb.pending.size() == 1 and not sb.bricked)
+	t0 = Time.get_ticks_msec()
+	while (not sb.bricked or not sb.pending.is_empty()) and Time.get_ticks_msec() - t0 < 60000:
+		await _frames(1)
+	var gone := buildings.site_gone(hit_i).size() if sb.chunk >= 0 else 0
+	print("[planet] farfight: building %d bricks in %.1f s for the charge; %d bricks gone" % [
+			hit_i, (Time.get_ticks_msec() - t0) / 1000.0, gone])
+	_check("it becomes bricks and the charge lands", sb.bricked and gone > 0, "%d bricks gone" % gone)
+	# The soldier gone: both freed, the hit one's damage kept.
+	so.pawn.health.apply_impact(1e6, &"")
+	t0 = Time.get_ticks_msec()
+	while (sa.chunk >= 0 or sb.chunk >= 0) and Time.get_ticks_msec() - t0 < 20000:
+		await _frames(1)
+	print("[planet] farfight: freed in %.1f s; fighters %d; the hit one keeps %d gone" % [
+			(Time.get_ticks_msec() - t0) / 1000.0, buildings.fighters, sb.dead.size()])
+	_check("the soldier dead: both are freed", sa.chunk < 0 and sb.chunk < 0 and buildings.fighters == 0)
+	_check("and the hit one keeps its damage", sb.dead.size() == gone and gone > 0, "%d of %d" % [sb.dead.size(), gone])
+	_check("the buildings by the player stay bricks throughout", buildings.sites[near_i].bricked)
+	print("[planet] farfight gate: %d ok, %d FAIL" % [_ok, _fail])
+	get_tree().quit(0 if _fail == 0 else 1)

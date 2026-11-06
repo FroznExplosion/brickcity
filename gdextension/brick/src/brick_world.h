@@ -509,6 +509,12 @@ public:
     /// (Docs/Space.md 5.3a); the lowest run is the foundation level, the rest
     /// are these. Weight above an anchor is held there, not passed down.
     void set_anchor_levels(int chunk_id, const PackedInt32Array &grid_ys);
+    /// Levels a part HANGS from: a block with nothing underneath (no socket
+    /// in its down face -- an under-tile, a ceiling light) whose TOP is at
+    /// exactly one of these grid Ys is held there, by an intact storey over
+    /// it that is not laid (Docs/Space.md 5.3a; Docs/Lighting.md 6.3). Only
+    /// such parts: a wall topping out there is carried down, not hung.
+    void set_hang_levels(int chunk_id, const PackedInt32Array &grid_ys);
 
     // --- stress (M2) -------------------------------------------------------
 
@@ -1374,6 +1380,10 @@ private:
     std::vector<int> foundation_level;
     /// Per chunk, grid Ys above the foundation that anchor too (set_anchor_levels).
     std::vector<std::vector<int>> anchor_levels;
+    /// Per chunk, grid Ys a socketless part hangs from (set_hang_levels).
+    std::vector<std::vector<int>> hang_levels;
+    /// Is `b` a socketless part hanging from one of `chunk_id`'s hang levels?
+    bool hangs_at(int chunk_id, const brick::Block &b) const;
     /// Is a block whose bottom is at height `h` held by the ground there?
     bool grounded_at(int chunk_id, int h) const {
         if (h <= foundation_level[(size_t)chunk_id]) {

@@ -109,8 +109,8 @@ func _process(delta: float) -> void:
 	var it := pawn.intents
 	# On a planet the look is measured in the pawn's carried frame: the camera
 	# turns with the ground (Docs/Planets.md 11.7). Never set in the flat game.
-	if Gravity.planet != null and camera is DebugCamera:
-		(camera as DebugCamera).set_frame(_to_view().basis * pawn.body.global_transform.basis.orthonormalized())
+	if Gravity.planet != null and camera is PlayerCamera:
+		(camera as PlayerCamera).set_frame(_to_view().basis * pawn.body.global_transform.basis.orthonormalized())
 	_sync_look()
 	if _active():
 		var basis := Basis(Vector3.UP, it.look_yaw)
@@ -151,8 +151,8 @@ func _process(delta: float) -> void:
 
 func _sync_look() -> void:
 	var r := camera.global_rotation
-	if camera is DebugCamera and (camera as DebugCamera).frame != Basis.IDENTITY:
-		r = (camera as DebugCamera).look_angles()
+	if camera is PlayerCamera and (camera as PlayerCamera).frame != Basis.IDENTITY:
+		r = (camera as PlayerCamera).look_angles()
 	pawn.intents.look_yaw = r.y
 	pawn.intents.look_pitch = r.x
 

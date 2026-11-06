@@ -206,7 +206,7 @@ func chunk_count() -> int:
 ## is — a tall column seen from below is a wall of brick sides filling the
 ## view, which is the one real objection to tall water.
 func submerged_at(p: Vector3) -> bool:
-	return p.y < surface_at(p)
+	return p.y < surface_at(p) and not HullMasks.dry_at(p)
 
 
 ## The CONTINUOUS surface at a world point, which is what gameplay asks for.

@@ -384,13 +384,15 @@ func _ready() -> void:
 		_tools.setup(self, _hud_layer)
 	_spaces = WorkshopSpaces.new()
 	add_child(_spaces)
-	# The build's doors and lifts, as the city has them (BuildDoors, BuildLifts).
+	# The build's doors, lifts and ladders, as the city has them (BuildDoors,
+	# BuildLifts, BuildLadders).
 	var this_build := func() -> Array:
 		if asm == null or asm.frames.is_empty():
 			return []
 		return [[0, asm.frames[0], recipe, Vector3i.ZERO]]
 	add_child(BuildDoors.new(world, this_build))
 	add_child(BuildLifts.new(world, this_build))
+	add_child(BuildLadders.new(world, this_build))
 	_spaces.setup(self)
 	_furnish = FurnishTool.new()
 	_furnish.name = "Furnish"
@@ -1058,7 +1060,7 @@ func _repaint(rid: int, colour: int, material: int) -> void:
 ## Esc opens the pause menu here, as in the city (MenuHost asks) -- never over a scripted
 ## pass or a test window.
 func pause_allowed() -> bool:
-	return _tools != null and not DebugCamera.hands_off and not ("--gate" in OS.get_cmdline_user_args())
+	return _tools != null and not PlayerCamera.hands_off and not ("--gate" in OS.get_cmdline_user_args())
 
 
 func _place_keys() -> void:

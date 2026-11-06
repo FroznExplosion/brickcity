@@ -164,7 +164,7 @@ const WALL_LEAN := 0.2
 const SHAKE_DECAY := 1.8
 const SHAKE_MAX := 0.05
 
-var camera: DebugCamera
+var camera: PlayerCamera
 var pawn: Pawn
 var gun: GunController
 ## Hangs off the camera; the gun hangs off it.
@@ -225,7 +225,7 @@ var _fov_was := 75.0
 var _rng := RandomNumberGenerator.new()
 
 
-func setup(cam: DebugCamera, p: Pawn, g: GunController) -> void:
+func setup(cam: PlayerCamera, p: Pawn, g: GunController) -> void:
 	camera = cam
 	pawn = p
 	gun = g

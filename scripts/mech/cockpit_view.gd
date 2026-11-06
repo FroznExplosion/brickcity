@@ -66,8 +66,8 @@ func _process(delta: float) -> void:
 		return
 	# The right stick turns the torso: it leans with how fast the look turns.
 	var gr := camera.global_rotation
-	if camera is DebugCamera and (camera as DebugCamera).frame != Basis.IDENTITY:
-		gr = (camera as DebugCamera).look_angles()
+	if camera is PlayerCamera and (camera as PlayerCamera).frame != Basis.IDENTITY:
+		gr = (camera as PlayerCamera).look_angles()
 	var look := Vector2(gr.y, gr.x)
 	var turn := Vector2.ZERO
 	if _last_look != Vector2.INF and delta > 0.0:
@@ -90,11 +90,11 @@ func _process(delta: float) -> void:
 func _place(delta: float) -> void:
 	# The seat: at the eye, turned with the look's yaw only. In camera space.
 	var gr := camera.global_rotation
-	if camera is DebugCamera and (camera as DebugCamera).frame != Basis.IDENTITY:
-		gr = (camera as DebugCamera).look_angles()
+	if camera is PlayerCamera and (camera as PlayerCamera).frame != Basis.IDENTITY:
+		gr = (camera as PlayerCamera).look_angles()
 	var seat_basis := Basis(Vector3.UP, gr.y)
-	if camera is DebugCamera and (camera as DebugCamera).frame != Basis.IDENTITY:
-		seat_basis = (camera as DebugCamera).frame * seat_basis
+	if camera is PlayerCamera and (camera as PlayerCamera).frame != Basis.IDENTITY:
+		seat_basis = (camera as PlayerCamera).frame * seat_basis
 	var seat_world := Transform3D(seat_basis, camera.global_position)
 	var to_cam := camera.global_transform.affine_inverse() * seat_world
 	var hands: Array[Transform3D] = [Transform3D(), Transform3D()]

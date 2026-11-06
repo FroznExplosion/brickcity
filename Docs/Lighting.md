@@ -311,11 +311,15 @@ re-bake (50-80 ms a tower) per hit. A grid beside the mesh instead:
   (`KitFurnish.light`: warm in rooms, white in corridors and halls; a test
   ship 58); a planet town's towers likewise under every ceiling over a
   room-high space (`CeilingLights.hang`, on the template; 30 in the gate's
-  tower). Not the city's towers: tried 2026-11-05, in the template and then
-  laid with each storey (a light hangs from the storey over it), and storey
-  units (`storey_unit_probe`) failed both ways -- they know a tower's dead
-  bricks by block id, and the lights' ids moved them. Needs the storey-unit
-  owner: lights given ids after every storey's, or kept apart from them. With lights in every room, a building's
+  tower); the city's generated towers too (2026-11-06; `BuildingRegistry
+  .lights`, in the template after its fixtures, so no id before them moves).
+  A storey's lights hang from the slab of the one over it, so laid a storey
+  at a time (Space.md 5.3a) one laid without the storey over it would hang
+  from nothing: `BrickWorld.set_hang_levels` holds a part with nothing
+  underneath (no socket: an under-tile) whose top is at a level whose storey
+  is intact but not laid -- as `set_anchor_levels` holds a run's bottom on
+  the storey under it. Only such parts: a wall topping out there is carried
+  down, as before. `set_storey_bounds` sets them; `storey_unit_probe` 42/42. With lights in every room, a building's
   8 real lights are the 8 nearest the camera, picked again each turn of
   `step()` (`_place_lamps`).
 
@@ -370,6 +374,15 @@ but its sockets on top do not take a ceiling's.) New tiles `tile_1x3`,
   ceiling over the room lights red under it and hangs a spot down (picture
   `light_gate_lamp`).
 - Build with it: pick a tile (or an under-tile) and the Lamp material.
+
+### 6.4 The player's flashlight
+
+`scripts/flashlight.gd` (`Flashlight`): a `SpotLight3D` on the player's camera
+(city and planet, `Flashlight.mount`), toggled by the `flashlight` action
+(**L**, rebindable in Options > Controls; the developer's Brick Seams key moved
+to F12 for it). 28 m, 24 degrees, warm white, shadows on. It sits 16 cm right
+of and 14 cm below the eye, so its shadows show beside what throws them. Off at
+the start, so no gate's pictures change. `tools/flashlight_probe.gd` (9 checks).
 
 ## 7. SDFGI and the other GI
 

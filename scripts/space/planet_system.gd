@@ -299,6 +299,13 @@ func add_ship(d: OrbitalData, ref: PlanetBody, rel: Transform3D) -> SpaceShip:
 	s.ghosts = ghosts
 	add_child(s)
 	ShipRays.ships.append(s)
+	# Every ship floods (Docs/Hulls.md 5): parked or sunk in its planet's sea, a hole
+	# under the surface lets the sea in.
+	s.water_depth = func(p: Vector3) -> float:
+		var b := s.ref
+		if b == null or not is_instance_valid(b) or is_nan(b.data.sea_level):
+			return NAN
+		return b.data.radius + b.data.sea_level - (p - b.global_position).length()
 	s.setup_ship(d)
 	s.drifted.connect(_on_drifted.bind(s))
 	s.ref = ref
@@ -1216,7 +1223,11 @@ func _ship_bricks(p: Vector3) -> void:
 			s.unride()
 		elif ride and s.chunk >= 0:
 			s.ride()
-		elif not want and s.chunk >= 0 and s != frame_node():
+		elif not want and not ride and s.chunk < 0 and s.wreck == null and not s.gone().is_empty():
+			# Damaged and not laid this run (a save's, a ram's): its bricks laid once,
+			# for its far look (SpaceStation.lay_wreck).
+			s.lay_wreck()
+		elif not want and s.chunk >= 0 and s != frame_node() and not s._wreck_only:
 			s.deactivate()
 		s.gangway_step()
 

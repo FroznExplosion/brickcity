@@ -113,8 +113,14 @@ crumbs (left torn in the chunk they held the top up); planet bricks now have the
 strength (`BrickStrength.tension()`, was the engine's 400). Step 7, where a landing snaps a
 piece (the city's weak seam / storey line up Y, crack along the bond across; pieces carry their
 building's storey lines): built (`PlanetPieces._snap_across`, `--gate=snap` 8/8); the crushed
-storey's crumbs are logged as a DETACH. D2's list from the city is done; what is left on the
-planet's buildings is furniture and materialising for a fight far from the camera.
+storey's crumbs are logged as a DETACH. D2's list from the city is done. Furniture: built (each shape's rooms
+furnished in its template as plain bricks, `PlanetBuildings._furnish`; `--gate=bricks` 11/11).
+Bricks where the fight is: built (`PlanetBuildings.set_fights` from `PlanetScene._tell_fights`,
+the AI's pawns twice a second; a hit on a building not yet bricks waits in `Site.pending`;
+`--gate=farfight` 11/11). The planet's buildings list (11.11) is done. Far from the camera a
+building is bricks and collision only, no bands (`Site.draw`); a far hit keeps its building 10 s.
+"Initializing already initialized RID" errors show in the save and garrison gates on main too
+(render resources made on workers): not from this, not fixed.
 A piece's chunk keeps bricks that broke off it (detached) and dead ones: sample a piece through
 `get_detached_blocks` / `get_dead_blocks`, as `--gate=pieces_ai` does now. `BrickWorld.is_solid` takes GRID cells
 (it subtracts the chunk's origin); `block_at` takes chunk-local ones. `get_alive_block_count`

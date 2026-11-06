@@ -298,7 +298,7 @@ func _run_gun_pass() -> void:
 	await _frames(30)
 	# The AI overlay (F4) draws, and says something.
 	city._ai_label.visible = true
-	city._update_ai_label()
+	city.dev_hud.update_ai_label()
 	_gate_ok("the AI overlay reports the AI's world and budget",
 			city._ai_label.text.begins_with("AI (F4)") and city._ai_label.text.contains("chunks"),
 			city._ai_label.text.get_slice("\n", 0))
@@ -319,8 +319,8 @@ func _run_mech_pass() -> void:
 	var open := Vector3(-70.0, 0.0, -70.0)
 	city.camera.global_position = open + Vector3(0.0, 6.0, 12.0)
 	city.camera.rotation = Vector3.ZERO
-	city._spawn_mech(open, 0.0)
-	city._board_mech()
+	city.vehicles.spawn_mech(open, 0.0)
+	city.vehicles.board_mech()
 	await _frames(60)
 	var m := city._mech
 	_gate_ok("it stands on the ground", m.body.is_on_floor() and absf(m.feet().y) < 0.1,
@@ -411,10 +411,10 @@ func _run_mech_pass() -> void:
 			tall = b
 	var face := tall.xform * Vector3(tall.recipe.footprint_x * 0.5 * City.STUD, 0.0, 0.0)
 	var out := tall.xform.basis * Vector3(0.0, 0.0, -1.0)
-	city._leave_mech()
+	city.vehicles.leave_mech()
 	m.body.global_position = face + out * 6.0 + Vector3.UP * Mech.HEIGHT * 0.5
 	m.body.reset_physics_interpolation()
-	city._board_mech()
+	city.vehicles.board_mech()
 	await _frames(60)
 	var high := face + Vector3.UP * minf(tall.recipe.courses * Mech.COURSE * 0.9, 30.0)
 	print("[mech]   tallest: %d courses; aiming at %.1f m from 6 m out" % [tall.recipe.courses, high.y])
@@ -442,7 +442,7 @@ func _run_mech_pass() -> void:
 	_gate_ok("and its rounds wear the wall high above the cockpit",
 			chips > 0 and top > Mech.COCKPIT_Y + 4.0, "%d CHIP(s), highest %.1f m" % [chips, top])
 
-	city._leave_mech()
+	city.vehicles.leave_mech()
 	await _frames(30)
 	_gate_ok("M leaves: the camera flies and the mech stays parked",
 			city.camera.is_processing() and is_instance_valid(m) and m.motor.planar_speed() < 0.5)
@@ -461,9 +461,9 @@ func _run_mech_pass() -> void:
 	var arm_shots := [0]
 	city._gun.fired.connect(func(_i: Dictionary) -> void: own[0] += 1)
 	m.gun.fired.connect(func(_i: Dictionary) -> void: arm_shots[0] += 1)
-	city._board_mech()
+	city.vehicles.board_mech()
 	await _frames(10)
-	_gate_ok("in from the hatch, on foot", city._pilot.is_piloting() and city._boarded_on_foot)
+	_gate_ok("in from the hatch, on foot", city._pilot.is_piloting() and city.vehicles._boarded_on_foot)
 	_gate_ok("the player's own gun is put away", city._gun.gun == null or not city._gun.gun.visible)
 	city.camera.rotation = Vector3.ZERO
 	click = InputEventMouseButton.new()
@@ -477,7 +477,7 @@ func _run_mech_pass() -> void:
 	await _frames(5)
 	_gate_ok("the left button fires the mech's arm, not the player's gun",
 			own[0] == 0 and arm_shots[0] > 0, "player's %d, arm's %d" % [own[0], arm_shots[0]])
-	city._leave_mech()
+	city.vehicles.leave_mech()
 	await _frames(20)
 	_gate_ok("out again on foot, the gun back in hand and the canopy back on",
 			city._player.is_possessing() and city._gun.gun != null and city._gun.gun.visible and m.canopy.visible
@@ -499,7 +499,7 @@ func _run_vehicles_pass() -> void:
 	city.camera.global_position = open + Vector3(0.0, 6.0, 12.0)
 	city.camera.rotation = Vector3.ZERO
 	var truck_at: Vector3 = city.ai_services.vehicle_nav(&"truck").snap(city._on_ground(open))
-	var truck := city._spawn_truck(truck_at, 0.0, 0, [] as Array[StringName])
+	var truck: TransportTruck = city.vehicles.spawn_truck(truck_at, 0.0, 0, [] as Array[StringName])
 	await _frames(20)
 	city._enter_pawn(truck.mount_point())
 	await _frames(10)
@@ -547,7 +547,7 @@ func _run_vehicles_pass() -> void:
 
 	# An enemy's crewed tank: E beside it climbs on, E held pries the hatch.
 	var tank_at: Vector3 = city.ai_services.vehicle_nav(&"tank").snap(city._on_ground(open + Vector3(25.0, 0.0, 0.0)))
-	var t := city._spawn_tank(tank_at, PI * 0.5, 1, true)
+	var t: Tank = city.vehicles.spawn_tank(tank_at, PI * 0.5, 1, true)
 	(t.get_node(^"TankBrain") as TankBrain).enabled = false
 	await _frames(20)
 	var crew: Array = t.crew.values()
@@ -925,7 +925,7 @@ func _run_nav_pass() -> void:
 			"%d answered (%d found) in %d tick(s); worst tick %d us against %d" % [
 			answered, found_paths, frames, city._nav_worst_us, City.NAV_BUDGET_US])
 	city._ai_label.visible = true
-	city._update_ai_label()
+	city.dev_hud.update_ai_label()
 	city.camera.position = b.xform * Vector3(fx * 0.5 + 18.0, 20.0, fz + 14.0)
 	city.camera.look_at(b.xform * Vector3(fx * 0.5, 3.0, fz * 0.5), Vector3.UP)
 	await _frames(20)
@@ -1190,8 +1190,8 @@ func _run_mechfall_pass() -> void:
 	var n0 := city.authority.commands.size()
 	var feet := Vector3(mid.x, roof + 12.0 * FallRule.BRICK + 0.02, mid.z)
 	var m := Mech.spawn(city, feet, 0.0, 1)
-	city._wire_mech(m)
-	city._loose_mechs.append(m)
+	city.vehicles.wire_mech(m)
+	city.vehicles._loose_mechs.append(m)
 	var t0 := Engine.get_physics_frames()
 	var still := 0
 	while still < 30 and Engine.get_physics_frames() - t0 < 30 * 12:
@@ -4043,7 +4043,7 @@ func _run_physview_pass() -> void:
 		await city.get_tree().physics_frame
 	v.redraw(city._brick_cols, city.islands)
 	print("  after %.1f s: %s" % [(Time.get_ticks_msec() - t0) / 1000.0, v.hud_line()])
-	print("  %s" % city._caps_hud_line())
+	print("  %s" % city.dev_hud.caps_hud_line())
 	var shapes0 := _physview_shapes()
 	v.redraw(city._brick_cols, city.islands)
 	city._toggle_physics_view()
@@ -5363,7 +5363,7 @@ func _run_play_pass() -> void:
 	_gate_ok("holding the button fires the pawn's gun into the wall",
 			chips > 0, "%d CHIP(s) from %s" % [chips, city._gun.gun.gun_name])
 	# That was a click, and a click is what takes the mouse. A pass must not:
-	# it runs on a machine somebody is using (DebugCamera.hands_off).
+	# it runs on a machine somebody is using (PlayerCamera.hands_off).
 	_gate_ok("and the pass's own click did not take the real mouse",
 			Input.mouse_mode == Input.MOUSE_MODE_VISIBLE)
 	_gate_ok("and it never shoots its own body", pawn.health.total_current() == hp)
@@ -5398,7 +5398,7 @@ func _run_play_pass() -> void:
 		ms.set_value(&"mouse_sensitivity", 2.0, false)
 		ms.set_value(&"toggle_crouch", true, false)
 		_gate_ok("and so are the mouse and hold-or-toggle",
-				is_equal_approx(DebugCamera.look_mult, 2.0) and PlayerController.toggle_crouch)
+				is_equal_approx(PlayerCamera.look_mult, 2.0) and PlayerController.toggle_crouch)
 		ms.set_value(&"mouse_sensitivity", sens_was, false)
 		ms.set_value(&"toggle_crouch", crouch_was, false)
 	city._leave_pawn()
@@ -7486,7 +7486,7 @@ func _run_chamfer_street() -> void:
 			for k in mini(3, ph.size()):
 				top += "%s %.1f " % [ph[k][1], ph[k][0]]
 			if not ph.is_empty():
-				top += "| " + city._spike_parts(ph[0][1])
+				top += "| " + city.dev_hud.spike_parts(ph[0][1])
 		rows.append([float(times[-1][0]), pf - pf_last,
 				Performance.get_monitor(Performance.TIME_PROCESS) * 1000.0,
 				Performance.get_monitor(Performance.TIME_PHYSICS_PROCESS) * 1000.0,
@@ -7644,6 +7644,13 @@ func _run_light_pass() -> void:
 	while not city.grid_light.tracked(0) and Time.get_ticks_msec() - t0 < 20000:
 		await _ticks(1)
 	_gate_ok("building 0 is in bricks and lit by the grid", chunk >= 0 and city.grid_light.tracked(0))
+	# Its ceiling lights (CeilingLights; Docs/Lighting.md 6.3).
+	var lamps := 0
+	if chunk >= 0:
+		for k in city.world.get_block_count(chunk):
+			if BrickWorld.get_material_name(city.world.get_block_material(chunk, k)) == "Lamp":
+				lamps += 1
+	_gate_ok("the tower has lights under its ceilings", lamps >= 3, "%d" % lamps)
 	var node := city._brick_nodes.get(0) as Node3D
 	var dims := city.world.get_chunk_dims(chunk)
 	var stud := BrickWorld.get_stud_metres()
@@ -7722,6 +7729,21 @@ func _run_light_pass() -> void:
 		BrickNear.grid_stud_material().set_shader_parameter("grid_sky_floor", BrickGridLight.SKY_FLOOR)
 		print("[light] mean of the picture: grid %.3f, none %.3f" % [on, off])
 		_gate_ok("the grid darkens the inside", on < off * 0.9, "%.3f against %.3f" % [on, off])
+		# The player's flashlight (Docs/Lighting.md 6.4): L lights the room ahead.
+		var vp_rid := city.get_viewport().get_viewport_rid()
+		RenderingServer.viewport_set_measure_render_time(vp_rid, true)
+		await _ticks(10)
+		var gpu_off := RenderingServer.viewport_get_measured_render_time_gpu(vp_rid)
+		var torch := Flashlight.mount(city.camera)
+		torch.set_on(true)
+		await _ticks(10)
+		var lit := _mean_of(city.get_viewport().get_texture().get_image())
+		var gpu_on := RenderingServer.viewport_get_measured_render_time_gpu(vp_rid)
+		await _save("city_flashlight")
+		torch.set_on(false)
+		print("[light] flashlight: picture %.3f against %.3f; GPU %.2f ms against %.2f off"
+				% [lit, on, gpu_on, gpu_off])
+		_gate_ok("the flashlight lights the room", lit > on * 1.1, "%.3f against %.3f" % [lit, on])
 	# A hole through an outer wall (x = 0 side or the far one), where it is
 	# whole for 4 studs across and 1-2 m up and a room is right behind it; the
 	# air just in reads at least three steps from the open.
@@ -8648,3 +8670,102 @@ func _save(shot_name: String) -> void:
 	print("[city] shot written: %s.png" % shot_name)
 	await RenderingServer.frame_post_draw
 	city._sampling = was
+
+
+## A boat on the city's sea (Docs/Hulls.md 6-8): the sea cut out of its hull cell by
+## cell, its hold dry under the sea line; then holed, its hold flooding, the water
+## drawn inside it. Shots: hull_boat_side, hull_boat_deck, hull_boat_hold,
+## hull_boat_flooded. Windowed, one run (heat check after).
+func _run_boat_pass() -> void:
+	city.respawn_buildings = false
+	var sea: float = City.TerrainWorldScript.sea_level
+	# The ground in first: the sea is where it is under the sea level.
+	for i in 120:
+		await city.get_tree().process_frame
+	var at := Vector3.INF
+	for r in range(60, 2400, 20):
+		for k in 64:
+			var a := TAU * float(k) / 64.0
+			var p := city._on_ground(Vector3(cos(a) * r, 0.0, sin(a) * r))
+			if p.y < sea - 4.0:
+				at = Vector3(p.x, sea + 0.6, p.z)
+				break
+		if at != Vector3.INF:
+			break
+	if at == Vector3.INF:
+		print("[boat] no open water within 2.4 km (the sea at %.1f m; the ground at the middle %.1f)" % [
+				sea, city._on_ground(Vector3.ZERO).y])
+		city.get_tree().quit(1)
+		return
+	var ghosts := GhostHulls.new()
+	var boat := Boat.launch(city, 1, Transform3D(Basis(Vector3.UP, 0.6), at), ghosts)
+	if city._sea != null and city._sea.near != null:
+		boat.wave_clock = func() -> float: return float(city._sea.near._time)
+	var hulls: Array = [boat]
+	var tick := func() -> void:
+		HullMasks.update(hulls, city.camera.global_position)
+	var t0 := Time.get_ticks_msec()
+	while (not boat.bricked or boat.columns.is_empty()) and Time.get_ticks_msec() - t0 < 30000:
+		await city.get_tree().process_frame
+	for i in 240:
+		tick.call()
+		await city.get_tree().process_frame
+	var tally := [0, 0]
+	var check := func(what: String, c: bool, detail: String) -> void:
+		print("[boat] %s %s  %s" % ["ok  " if c else "FAIL", what, detail])
+		tally[0 if c else 1] += 1
+	var hold_c := Vector3i(boat.seat_cell.x, int(boat.recipe.meta.boat.hold_y) + 2, boat.seat_cell.z)
+	var hold := boat.global_transform * boat.cell_point(hold_c)
+	check.call("its hold dry under the sea line, and not under water", hold.y < sea and HullMasks.dry_at(hold)
+			and not city._sea.submerged_at(hold), "the hold at %.2f m, the sea at %.2f" % [hold.y, sea])
+	# Beside it, low over the water, looking at its side.
+	var side := boat.global_basis.z.normalized()
+	city.camera.global_position = boat.global_position + side * 9.0 + Vector3(0, 1.2, 0)
+	city.camera.look_at(boat.global_position + Vector3(0, 0.3, 0), Vector3.UP)
+	for i in 10:
+		tick.call()
+		await city.get_tree().process_frame
+	await _save("hull_boat_side")
+	# On its deck, looking down into the sea over its side.
+	city.camera.global_position = boat.global_transform * boat.cell_point(boat.seat_cell) + Vector3(0, 1.7, 0)
+	city.camera.look_at(city.camera.global_position + side * 4.0 - Vector3(0, 2.0, 0), Vector3.UP)
+	for i in 10:
+		tick.call()
+		await city.get_tree().process_frame
+	await _save("hull_boat_deck")
+	# In its hold, under the sea line: no sea inside.
+	city.camera.global_position = hold + Vector3(0, 0.1, 0)
+	city.camera.look_at(hold + boat.global_basis.x * 3.0, Vector3.UP)
+	for i in 10:
+		tick.call()
+		await city.get_tree().process_frame
+	await _save("hull_boat_hold")
+	# Holed low on one side: its hold floods, the water drawn in it.
+	var hole := boat.global_transform * boat.cell_point(Vector3i(boat.seat_cell.x, int(boat.recipe.meta.boat.hold_y), 0))
+	boat.damage(hole, {"blast": true, "radius": 0.9, "hp": 0})
+	for i in 300:
+		tick.call()
+		await city.get_tree().process_frame
+	var flooded := boat.hull_water != null and boat.hull_water.total() > 50.0
+	check.call("holed: its hold floods, the flooded cells no longer dry", flooded and boat.water_mesh != null
+			and boat.water_mesh.mesh != null and not HullMasks.dry_at(boat.global_transform * boat.cell_point(
+			Vector3i(boat.seat_cell.x, int(boat.recipe.meta.boat.hold_y), boat.seat_cell.z))),
+			"%.0f cells of water, %.0f kg" % [boat.hull_water.total() if boat.hull_water != null else 0.0, boat.water_mass])
+	city.camera.global_position = boat.global_transform * boat.cell_point(boat.seat_cell) + Vector3(0, 1.7, 0) 			- boat.global_basis.x * 3.0
+	city.camera.look_at(boat.global_transform * boat.cell_point(Vector3i(boat.seat_cell.x, int(boat.recipe.meta.boat.hold_y), 2)), Vector3.UP)
+	# The deck taken off over the hold, to see in.
+	var lid := PackedInt32Array()
+	var deck_y: int = int(boat.recipe.meta.boat.deck_y)
+	for b in boat.bricks.get_block_count(boat.chunk):
+		var c: Vector3i = boat.recipe.cell_of(boat.air._block_recipe[b]) - boat.recipe.origin()
+		if c.y >= deck_y - 2 and c.y < deck_y and absi(c.x - boat.seat_cell.x) < 6 and c.z > 1 and c.z < 12:
+			lid.append(b)
+	boat.bricks.kill_blocks(boat.chunk, lid)
+	boat._after_kill(lid)
+	for i in 30:
+		tick.call()
+		await city.get_tree().process_frame
+	await _save("hull_boat_flooded")
+	print("[boat] %d ok, %d FAIL" % [tally[0], tally[1]])
+	city.get_tree().quit(1 if int(tally[1]) > 0 else 0)
+

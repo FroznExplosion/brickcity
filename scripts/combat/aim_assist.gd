@@ -132,7 +132,7 @@ func _input(event: InputEvent) -> void:
 
 
 ## The look's turn this input, (yaw, pitch) radians, slowed over a target. The camera
-## calls it with every mouse move (DebugCamera.assist).
+## calls it with every mouse move (PlayerCamera.assist).
 func filter_look(d: Vector2) -> Vector2:
 	_look_in += d
 	if not active() or not _target_alive():

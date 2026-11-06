@@ -86,6 +86,7 @@ func _run() -> void:
 	var r: BuildRecipe = st.recipe
 	var again := RoomStation.generate(StationKit.library(), {"seed": 4242, "modules": 12 + 4242 % 12,
 			"spine": 3 + 4242 % 3, "section_bricks": SpaceStation.SECTION_BRICKS})
+	GravityGenerator.lay(again.recipe, ["living"])
 	KitFurnish.furnish(again.recipe, 4242)
 	var secs: Array = r.meta.sections.sections if r != null else []
 	_ok("prepare grows it from its seed (the same each time), its shell a box round each section",

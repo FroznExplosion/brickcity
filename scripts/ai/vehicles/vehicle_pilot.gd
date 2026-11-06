@@ -139,8 +139,8 @@ func _exclude() -> Array[RID]:
 
 func _follow() -> void:
 	# On a planet the look is measured in the vehicle's frame (Planets.md 11.7).
-	if Gravity.planet != null and camera is DebugCamera:
-		(camera as DebugCamera).set_frame(vehicle.get(&"frame"))
+	if Gravity.planet != null and camera is PlayerCamera:
+		(camera as PlayerCamera).set_frame(vehicle.get(&"frame"))
 	var inside: Vector3 = vehicle.eye_interpolated()
 	if not chase or not camera.is_inside_tree():
 		camera.global_position = inside

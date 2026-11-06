@@ -6,6 +6,7 @@ shader_type spatial;
 // apart); colour deepens with the depth of water over the ground, read from the
 // depth buffer; the far side fades to the sky's colour by fresnel.
 render_mode cull_back, depth_draw_always, specular_schlick_ggx;
+#include "res://shaders/hull_mask.gdshaderinc"
 
 uniform float time_s = 0.0;
 uniform vec4 shallow : source_color = vec4(0.18, 0.52, 0.58, 0.55);
@@ -33,6 +34,10 @@ void vertex() {
 }
 
 void fragment() {
+	// Never inside a sunk or parked ship's dry cells (Docs/Hulls.md 6).
+	if (hull_dry((INV_VIEW_MATRIX * vec4(VERTEX, 1.0)).xyz)) {
+		discard;
+	}
 	vec3 up = normalize(v_obj);
 	vec3 n_obj = ripple_normal(v_obj, up, time_s);
 	NORMAL = normalize((VIEW_MATRIX * (MODEL_MATRIX * vec4(n_obj, 0.0))).xyz);
