@@ -1999,6 +1999,21 @@ through the front door, up the stairs, still walks (its existing checks); its br
 shapes' build at load as they were, give or take the furniture's share (measured, said). The other
 planet gates unchanged.
 
+**Furniture built (2026-11-06).** As planned: `PlanetBuildings._furnish`, called from `_template`
+after the ceiling lights (so the lights stay where they were and an item a light is in the way of is
+skipped); `RoomManifest.build_item(..., decorative)`; `furniture_of(i)` for the gate. The tower by
+the player (36 courses) has 199 furniture bricks on 6 storeys, all plain; from its front door the
+rooms show crates, tables and cabinets round the staircase (shots/planet_bricks_room.png).
+`--gate=bricks` 11/11 (headless x3): the way in through the door and up the stairs walks as before;
+its rooms furnished, plain bricks, on its floors; a ray down onto a table top stops on it, 1.12 m
+above the floor. Rough cost (headless, other chats' runs going -- not a measurement): the shapes
+at load 385-414 ms (359-370 without), the worst brick step 4.0-4.1 ms (3.1-3.7). Not timed
+windowed: both windowed runs had other chats' windowed passes going, and the second ran in the
+display-sleep stall (frames 187 ms); time it again awake and quiet. Other planet gates unchanged
+(damage 12, fall 7, hits 8, topple 6, pieces_ai 4, storey 13, snap 8, trees 7, squad 10, pawn 12).
+Every building of a shape has the same furniture (it is the shape's template); a room's kind is not
+the one the city's windows would paint for it (`room_seed_of` is per building).
+
 Not yet: materialising for a fight far from the camera.
 
 ### 11.12 Plan: the universe -- star systems, orbits, spinning planets (2026-10-28)

@@ -5225,7 +5225,59 @@ func _run_bricks_gate() -> void:
 		climbed = maxf(climbed, (bxf.affine_inverse() * p).y)
 	_check("a staircase: the nav net walks up to the first floor", up_pt != Vector3.INF and up_path.size() > 2
 			and absf(lu.y - floor1) < 0.5, "%d points, up to %.2f m (the floor %.2f m)" % [up_path.size(), climbed, floor1])
+	# Its rooms furnished (11.11, furniture): plain bricks on its floors, solid.
+	var bw := buildings.bricks
+	var cs := BrickWorld.get_cell_size()
+	var furn := buildings.furniture_of(bi)
+	var plain := 0
+	var on_slab := 0
+	var storeys := {}
+	var top_brick := -1
+	var top_h := 0.0
+	for bid in furn:
+		if bw.is_block_absent(site.chunk, bid):
+			continue
+		if not bw.is_block_decorative(site.chunk, bid):
+			plain += 1
+		var box := bw.get_blocks_box(site.chunk, PackedInt32Array([bid]))
+		var cy := roundi(box.position.y / cs.y)
+		storeys[cy / TowerRecipe.STOREY_PLATES] = true
+		if cy % TowerRecipe.STOREY_PLATES == TowerRecipe.SLAB_PLATES:
+			on_slab += 1
+		# The tallest with nothing on it, its top open, for the ray.
+		var over := Vector3i(floori((box.position.x + cs.x * 0.5) / cs.x), roundi(box.end.y / cs.y),
+				floori((box.position.z + cs.z * 0.5) / cs.z))
+		if box.size.y > top_h and bw.block_at(site.chunk, over) < 0:
+			top_brick = bid
+			top_h = box.size.y
+	var ray_ok := false
+	var ray_at := ""
+	if top_brick >= 0:
+		var tb := bw.get_blocks_box(site.chunk, PackedInt32Array([top_brick]))
+		var c := Vector3(tb.position.x + cs.x * 0.5, tb.end.y, tb.position.z + cs.z * 0.5)
+		var down := space.intersect_ray(PhysicsRayQueryParameters3D.create(bxf * (c + Vector3.UP * 0.6),
+				bxf * (c - Vector3.UP * 1.5), Layers.STRUCTURE))
+		# Its storey's floor: the top of the slab under it.
+		var floor_y := float(roundi(tb.position.y / cs.y) / TowerRecipe.STOREY_PLATES * TowerRecipe.STOREY_PLATES
+				+ TowerRecipe.SLAB_PLATES) * cs.y
+		if not down.is_empty():
+			var ly := (bxf.affine_inverse() * (down.position as Vector3)).y
+			ray_at = "stopped %.2f m above the floor, the brick's top %.2f m" % [ly - floor_y, tb.end.y - floor_y]
+			ray_ok = absf(ly - tb.end.y) < 0.12 and ly - floor_y > 0.2 and site.collision.owns(down.rid)
+	print("[planet] furniture: %d brick(s) in the shape's rooms, %d plain, %d on a floor slab, on %d storey(s); the shapes built at load in %.0f ms" % [
+			furn.size(), plain, on_slab, storeys.size(), buildings.templates_ms])
+	_check("its rooms are furnished, plain bricks, on its floors", furn.size() > 0 and plain == furn.size()
+			and on_slab > 0 and storeys.size() >= mini(2, site.courses / TowerRecipe.COURSES_PER_FLOOR),
+			"%d bricks, %d storeys" % [furn.size(), storeys.size()])
+	_check("and solid: a ray down onto one stops on its top", ray_ok, ray_at if top_brick >= 0 else "none with its top open")
 	await _shot("planet_bricks_town")
+	# And from the front door, looking in (windowed: a picture of the rooms).
+	if DisplayServer.get_name() != "headless":
+		var in_door := bxf * Vector3(w * 0.5, 0.3, 0.8)
+		pawn.place(in_door + Gravity.up_at(in_door) * 0.1)
+		_face(Gravity.flat((bxf.basis * Vector3(0.3, 0.0, 1.0)).normalized(), Gravity.up_at(in_door)).normalized())
+		await get_tree().create_timer(1.0).timeout
+		await _shot("planet_bricks_room")
 	print("[planet] frames: worst %.1f ms; over 40 ms: %s" % [_worst_ms, _hitches])
 	print("[planet] bricks gate: %d ok, %d FAIL" % [_ok, _fail])
 	get_tree().quit(0 if _fail == 0 else 1)

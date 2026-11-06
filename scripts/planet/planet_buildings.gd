@@ -478,6 +478,8 @@ func _template(fx: int, fz: int, courses: int) -> int:
 	_cut_door(c, fx)
 	# Lights under its ceilings (Docs/Lighting.md 6.3).
 	CeilingLights.hang(bricks, c, _palette)
+	# Its rooms furnished, as plain bricks (11.11, furniture).
+	_furniture[key] = _furnish(c, fx, fz, courses, stair)
 	# Its storey lines now too, not at its first piece (TowerRecipe.frame's
 	# first call was 16 ms).
 	_shape_lines(fx, fz, courses)
@@ -488,12 +490,16 @@ func _template(fx: int, fz: int, courses: int) -> int:
 
 ## Every shape within `radius` of world `p` built now (a scene loading).
 ## Returns milliseconds.
+## What the last prepare_templates took (ms), for the gates.
+var templates_ms := 0.0
+
 func prepare_templates(p: Vector3, radius: float) -> float:
 	var t0 := Time.get_ticks_usec()
 	for s in sites:
 		if not s.landmark and p.distance_to(planet.global_position + s.frame.origin) < radius:
 			_template(s.fx, s.fz, s.courses)
-	return (Time.get_ticks_usec() - t0) / 1000.0
+	templates_ms = (Time.get_ticks_usec() - t0) / 1000.0
+	return templates_ms
 
 
 ## In a frame with no brick work: the nearest shape within this of the camera
@@ -553,6 +559,46 @@ func _staircase(fx: int, fz: int, courses: int) -> Fixture:
 ## DOOR_WIDE x five-course box taken out (remove_block: as never placed), the
 ## lintel course over it left. A city tower has none -- its squads breach --
 ## but a town on a planet is walked into.
+## Furniture (Docs/Planets.md 11.11): every room of a shape furnished once, in
+## its template, the city's way (RoomManifest.rooms_for, items_for) -- but laid
+## as PLAIN bricks, as KitFurnish lays a station's: in the bake, so the bands draw
+## it; solid; bricks to the AI; broken and carried off with its floor. The
+## staircase's footprint is a post in every room it crosses (BuildingRegistry.
+## rooms_of: furniture stood on nothing in the stairwell), and so is a lane from
+## the front door, DOOR_LANE studs in. Shape -> the furniture's block ids.
+var _furniture := {}
+const DOOR_LANE := 8
+
+func _furnish(c: int, fx: int, fz: int, courses: int, stair: Fixture) -> PackedInt32Array:
+	var keep: Array = []
+	if stair != null:
+		keep = TowerRecipe.snap_keepouts([stair.footprint()], fx, fz)
+	var lane := Rect2i(fx / 2 - TowerRecipe.DOOR_WIDE / 2 - 1, 0, TowerRecipe.DOOR_WIDE + 2, DOOR_LANE)
+	var out := PackedInt32Array()
+	var i := 0
+	for room in RoomManifest.rooms_for(fx, fz, courses, hash(Vector3i(fx, fz, courses))):
+		var plan := Rect2i(room.lo.x, room.lo.z, room.size.x, room.size.z)
+		# Copied first: a room's posts are the lattice's own array, shared.
+		var mine: Array[Rect2i] = room.posts.duplicate()
+		for k in keep:
+			if (k as Rect2i).intersects(plan):
+				mine.append(k)
+		if room.lo.y < TowerRecipe.STOREY_PLATES and lane.intersects(plan):
+			mine.append(lane)
+		room.posts = mine
+		for item in RoomManifest.items_for(room):
+			out.append_array(RoomManifest.build_item(bricks, c, _palette, item, 4 + i % 8,
+					Vector3i.ZERO, [], false))
+			i += 1
+	return out
+
+
+## The furniture of site `i`'s shape: block ids in its chunk.
+func furniture_of(i: int) -> PackedInt32Array:
+	var s := sites[i]
+	return _furniture.get(Vector3i(s.fx, s.fz, s.courses), PackedInt32Array())
+
+
 func _cut_door(chunk: int, fx: int) -> void:
 	var x0 := fx / 2 - TowerRecipe.DOOR_WIDE / 2
 	var y0 := TowerRecipe.SLAB_PLATES
