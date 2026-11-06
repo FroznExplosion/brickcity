@@ -628,6 +628,30 @@ the same order give the same result twice.
   breach sealed and filling, and the replay. The ship's commands replayed on a fresh ship
   give the same bricks after the shot and at the end.
 
+### 9.2 Built (2026-11-06, step 10): brick by brick
+
+* **One button, both front ends** (`RestoreTool`, "restore", the middle mouse button): a
+  **tap** (released before HOLD 0.25 s) lays one brick; **held** past HOLD it is the
+  restore tool of 9.1, streaming RATE a second.
+* **The ghost**: aimed at a damaged ship or station, the brick a tap would lay is drawn as a
+  translucent box on its own cells (`aimed`, `show_ghost`, looked for every 0.1 s, its box
+  following a flying hull every frame). Hidden while the tool streams.
+* **Which brick**: of the lost bricks within PICK 1 m of the view's ray (never past what the
+  ray meets), only ones **beside a brick still there** (`rim_of`: a brick laid against
+  nothing could not be placed by hand), the nearest along the ray, then nearest to it
+  (score: along + 2 x off). Along the ray, not round the point it meets: aimed into a hole
+  the ray goes on through it, and the hole's own bricks are the ones wanted. The held tool
+  now gathers round that brick too (before, aimed into an outer hull's hole it gathered
+  round a point up to 6 m beyond it and found nothing).
+* **Cost**: a tap costs one of `cost`, as the held tool's bricks do (still -1, no limit).
+* A tap is the same RESTORE command (one id), so it records and replays.
+* **Gates:** `repair_probe` 10 (+3: the ghost is a rim brick on its own cells; a tap lays it
+  and only on release; nothing with cost 0). `--gate=hull`: inside the parked ship a wall is
+  shot, the ghost shows, a tap lays that brick, held the rest come back (shots
+  `hull_gate_patch`, `hull_gate_patched`).
+* **Not built:** the ghost is a plain box, not the brick's own shape and colour; no sound or
+  effect on placing.
+
 ## 10. Health, limbs, respawn (decisions)
 
 - **Health: a health bar** (the user's choice). The Borderlands-style layers already exist
@@ -728,7 +752,7 @@ Each step lands on `main` on its own, with its gate.
 9. **Flooding** (§5) + water drawn inside (§8) + listing and sinking (§7).
    Gates: `hull_flood_probe`, the boat lists and sinks. Built 2026-11-06 (§5.1, §8.1):
    every ship, spaceships too.
-10. **Brick-by-brick patching** (§9 A) on the same core.
+10. **Brick-by-brick patching** (§9 A) on the same core. *Built 2026-11-06, §9.2.*
 11. **E3, E4, E5** as measurements call for them.
 12. **Respawn** (§10) when the user decides.
 
