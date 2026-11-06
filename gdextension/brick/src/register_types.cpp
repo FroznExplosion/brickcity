@@ -7,6 +7,7 @@
 #include "shaped_sampler.h"
 #include "form_mesher.h"
 #include "sdf_form.h"
+#include "hull_flow.h"
 #include "ai/ai_nav.h"
 #include "ai/ai_scheduler.h"
 #include "ai/ai_world.h"
@@ -40,6 +41,8 @@ void initialize_brick_module(ModuleInitializationLevel p_level) {
     ClassDB::register_class<FormMesher>();
     // The asset workshop's SDF block-out (Docs/AssetWorkshop.md).
     ClassDB::register_class<SdfForm>();
+    // Water inside a hull, its flow (Docs/Hulls.md 5, scripts/hull_water.gd).
+    ClassDB::register_class<HullFlow>();
     // SwarmCore, from BoomerBorder (src/swarm/).
     ClassDB::register_class<SwarmCore>();
     ClassDB::register_class<LaneGraph>();

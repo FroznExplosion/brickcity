@@ -1369,6 +1369,8 @@ func _ready() -> void:
 		_run_physview_pass()
 	elif "--piececost" in OS.get_cmdline_user_args():
 		_run_piececost_pass()
+	elif "--boat" in OS.get_cmdline_user_args():
+		_run_boat_pass()
 	elif _squad_mode:
 		_run_squad_pass()
 	elif _mechfall_mode:
@@ -11106,6 +11108,104 @@ func _run_physview_pass() -> void:
 ## calls and the frame's process time; the difference is what the pieces cost.
 ## Also how many pieces share a mesh -- a MultiMesh only batches shared ones.
 const PIECE_FRAMES := 180
+
+
+## A boat on the city's sea (Docs/Hulls.md 6-8): the sea cut out of its hull cell by
+## cell, its hold dry under the sea line; then holed, its hold flooding, the water
+## drawn inside it. Shots: hull_boat_side, hull_boat_deck, hull_boat_hold,
+## hull_boat_flooded. Windowed, one run (heat check after).
+func _run_boat_pass() -> void:
+	respawn_buildings = false
+	var sea: float = TerrainWorldScript.sea_level
+	# The ground in first: the sea is where it is under the sea level.
+	for i in 120:
+		await get_tree().process_frame
+	var at := Vector3.INF
+	for r in range(60, 2400, 20):
+		for k in 64:
+			var a := TAU * float(k) / 64.0
+			var p := _on_ground(Vector3(cos(a) * r, 0.0, sin(a) * r))
+			if p.y < sea - 4.0:
+				at = Vector3(p.x, sea + 0.6, p.z)
+				break
+		if at != Vector3.INF:
+			break
+	if at == Vector3.INF:
+		print("[boat] no open water within 2.4 km (the sea at %.1f m; the ground at the middle %.1f)" % [
+				sea, _on_ground(Vector3.ZERO).y])
+		get_tree().quit(1)
+		return
+	var ghosts := GhostHulls.new()
+	var boat := Boat.launch(self, 1, Transform3D(Basis(Vector3.UP, 0.6), at), ghosts)
+	if _sea != null and _sea.near != null:
+		boat.wave_clock = func() -> float: return float(_sea.near._time)
+	var hulls: Array = [boat]
+	var tick := func() -> void:
+		HullMasks.update(hulls, camera.global_position)
+	var t0 := Time.get_ticks_msec()
+	while (not boat.bricked or boat.columns.is_empty()) and Time.get_ticks_msec() - t0 < 30000:
+		await get_tree().process_frame
+	for i in 240:
+		tick.call()
+		await get_tree().process_frame
+	var tally := [0, 0]
+	var check := func(what: String, c: bool, detail: String) -> void:
+		print("[boat] %s %s  %s" % ["ok  " if c else "FAIL", what, detail])
+		tally[0 if c else 1] += 1
+	var hold_c := Vector3i(boat.seat_cell.x, int(boat.recipe.meta.boat.hold_y) + 2, boat.seat_cell.z)
+	var hold := boat.global_transform * boat.cell_point(hold_c)
+	check.call("its hold dry under the sea line, and not under water", hold.y < sea and HullMasks.dry_at(hold)
+			and not _sea.submerged_at(hold), "the hold at %.2f m, the sea at %.2f" % [hold.y, sea])
+	# Beside it, low over the water, looking at its side.
+	var side := boat.global_basis.z.normalized()
+	camera.global_position = boat.global_position + side * 9.0 + Vector3(0, 1.2, 0)
+	camera.look_at(boat.global_position + Vector3(0, 0.3, 0), Vector3.UP)
+	for i in 10:
+		tick.call()
+		await get_tree().process_frame
+	await _save("hull_boat_side")
+	# On its deck, looking down into the sea over its side.
+	camera.global_position = boat.global_transform * boat.cell_point(boat.seat_cell) + Vector3(0, 1.7, 0)
+	camera.look_at(camera.global_position + side * 4.0 - Vector3(0, 2.0, 0), Vector3.UP)
+	for i in 10:
+		tick.call()
+		await get_tree().process_frame
+	await _save("hull_boat_deck")
+	# In its hold, under the sea line: no sea inside.
+	camera.global_position = hold + Vector3(0, 0.1, 0)
+	camera.look_at(hold + boat.global_basis.x * 3.0, Vector3.UP)
+	for i in 10:
+		tick.call()
+		await get_tree().process_frame
+	await _save("hull_boat_hold")
+	# Holed low on one side: its hold floods, the water drawn in it.
+	var hole := boat.global_transform * boat.cell_point(Vector3i(boat.seat_cell.x, int(boat.recipe.meta.boat.hold_y), 0))
+	boat.damage(hole, {"blast": true, "radius": 0.9, "hp": 0})
+	for i in 300:
+		tick.call()
+		await get_tree().process_frame
+	var flooded := boat.hull_water != null and boat.hull_water.total() > 50.0
+	check.call("holed: its hold floods, the flooded cells no longer dry", flooded and boat.water_mesh != null
+			and boat.water_mesh.mesh != null and not HullMasks.dry_at(boat.global_transform * boat.cell_point(
+			Vector3i(boat.seat_cell.x, int(boat.recipe.meta.boat.hold_y), boat.seat_cell.z))),
+			"%.0f cells of water, %.0f kg" % [boat.hull_water.total() if boat.hull_water != null else 0.0, boat.water_mass])
+	camera.global_position = boat.global_transform * boat.cell_point(boat.seat_cell) + Vector3(0, 1.7, 0) 			- boat.global_basis.x * 3.0
+	camera.look_at(boat.global_transform * boat.cell_point(Vector3i(boat.seat_cell.x, int(boat.recipe.meta.boat.hold_y), 2)), Vector3.UP)
+	# The deck taken off over the hold, to see in.
+	var lid := PackedInt32Array()
+	var deck_y: int = int(boat.recipe.meta.boat.deck_y)
+	for b in boat.bricks.get_block_count(boat.chunk):
+		var c: Vector3i = boat.recipe.cell_of(boat.air._block_recipe[b]) - boat.recipe.origin()
+		if c.y >= deck_y - 2 and c.y < deck_y and absi(c.x - boat.seat_cell.x) < 6 and c.z > 1 and c.z < 12:
+			lid.append(b)
+	boat.bricks.kill_blocks(boat.chunk, lid)
+	boat._after_kill(lid)
+	for i in 30:
+		tick.call()
+		await get_tree().process_frame
+	await _save("hull_boat_flooded")
+	print("[boat] %d ok, %d FAIL" % [tally[0], tally[1]])
+	get_tree().quit(1 if int(tally[1]) > 0 else 0)
 
 func _run_piececost_pass() -> void:
 	print("[piececost] what loose pieces cost to draw")

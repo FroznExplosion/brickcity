@@ -1,5 +1,6 @@
 shader_type spatial;
 render_mode cull_disabled, diffuse_burley, specular_schlick_ggx;
+#include "res://shaders/hull_mask.gdshaderinc"
 //
 // CULL_DISABLED because the piece mesh has no bottom face: it is a top and
 // four sides, so from underneath the only thing a back-face cull leaves is
@@ -619,6 +620,10 @@ void fragment() {
                 && textureLod(pool_mask, q, 0.0).r > 0.5) {
             discard;
         }
+    }
+    // Never inside a floating hull's dry cells (Docs/Hulls.md 6).
+    if (hull_dry(v_world)) {
+        discard;
     }
     if (sheet_mode && hole_radius > 0.0 && distance(v_world.xz, hole_centre) < hole_radius) {
         discard;

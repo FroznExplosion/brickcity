@@ -299,6 +299,13 @@ func add_ship(d: OrbitalData, ref: PlanetBody, rel: Transform3D) -> SpaceShip:
 	s.ghosts = ghosts
 	add_child(s)
 	ShipRays.ships.append(s)
+	# Every ship floods (Docs/Hulls.md 5): parked or sunk in its planet's sea, a hole
+	# under the surface lets the sea in.
+	s.water_depth = func(p: Vector3) -> float:
+		var b := s.ref
+		if b == null or not is_instance_valid(b) or is_nan(b.data.sea_level):
+			return NAN
+		return b.data.radius + b.data.sea_level - (p - b.global_position).length()
 	s.setup_ship(d)
 	s.drifted.connect(_on_drifted.bind(s))
 	s.ref = ref
