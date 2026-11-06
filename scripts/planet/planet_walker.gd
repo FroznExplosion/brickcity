@@ -14,7 +14,7 @@ extends CharacterBody3D
 ##
 ## Stands in for the pawn until the pawn is ported to local down (11.5 step 5).
 ## Mouse look only when the mouse is captured, never in a scripted pass
-## (DebugCamera.hands_off).
+## (PlayerCamera.hands_off).
 
 const BRICK_M := 0.42
 const WALK_SPEED := BRICK_M * 6.7
@@ -103,7 +103,7 @@ func _unhandled_input(event: InputEvent) -> void:
 	if scripted:
 		return
 	if event is InputEventMouseButton and event.pressed:
-		if event.button_index == MOUSE_BUTTON_LEFT and not DebugCamera.hands_off:
+		if event.button_index == MOUSE_BUTTON_LEFT and not PlayerCamera.hands_off:
 			Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
 		elif event.button_index == MOUSE_BUTTON_WHEEL_UP:
 			fly_speed = minf(fly_speed * 1.25, 4000.0)

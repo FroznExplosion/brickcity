@@ -5363,7 +5363,7 @@ func _run_play_pass() -> void:
 	_gate_ok("holding the button fires the pawn's gun into the wall",
 			chips > 0, "%d CHIP(s) from %s" % [chips, city._gun.gun.gun_name])
 	# That was a click, and a click is what takes the mouse. A pass must not:
-	# it runs on a machine somebody is using (DebugCamera.hands_off).
+	# it runs on a machine somebody is using (PlayerCamera.hands_off).
 	_gate_ok("and the pass's own click did not take the real mouse",
 			Input.mouse_mode == Input.MOUSE_MODE_VISIBLE)
 	_gate_ok("and it never shoots its own body", pawn.health.total_current() == hp)
@@ -5398,7 +5398,7 @@ func _run_play_pass() -> void:
 		ms.set_value(&"mouse_sensitivity", 2.0, false)
 		ms.set_value(&"toggle_crouch", true, false)
 		_gate_ok("and so are the mouse and hold-or-toggle",
-				is_equal_approx(DebugCamera.look_mult, 2.0) and PlayerController.toggle_crouch)
+				is_equal_approx(PlayerCamera.look_mult, 2.0) and PlayerController.toggle_crouch)
 		ms.set_value(&"mouse_sensitivity", sens_was, false)
 		ms.set_value(&"toggle_crouch", crouch_was, false)
 	city._leave_pawn()

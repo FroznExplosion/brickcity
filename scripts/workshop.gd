@@ -1058,7 +1058,7 @@ func _repaint(rid: int, colour: int, material: int) -> void:
 ## Esc opens the pause menu here, as in the city (MenuHost asks) -- never over a scripted
 ## pass or a test window.
 func pause_allowed() -> bool:
-	return _tools != null and not DebugCamera.hands_off and not ("--gate" in OS.get_cmdline_user_args())
+	return _tools != null and not PlayerCamera.hands_off and not ("--gate" in OS.get_cmdline_user_args())
 
 
 func _place_keys() -> void:

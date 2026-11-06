@@ -1409,7 +1409,7 @@ func _ready() -> void:
 	if _scripted:
 		# A pass clicks for itself (--play, --mech), and a click is what takes
 		# the mouse: never the real one.
-		DebugCamera.hands_off = true
+		PlayerCamera.hands_off = true
 		# On the menu's default settings, not whatever the user has set in
 		# Options: a pass's answer must not depend on their brightness.
 		var test_window := get_node_or_null(^"/root/TestWindow")
