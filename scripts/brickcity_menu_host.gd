@@ -395,7 +395,7 @@ func _dev_tools() -> Array:
 		["Terrain Settings", func(c: Node) -> void: c._toggle_terrain_dev_menu()],
 		["AI Overlay", func(c: Node) -> void:
 			c._ai_label.visible = not c._ai_label.visible
-			c._update_ai_label()],
+			c.dev_hud.update_ai_label()],
 		["Stats Overlay", func(c: Node) -> void: c.stats_label.visible = not c.stats_label.visible],
 		["Save Checkpoint", func(c: Node) -> void: c.save_checkpoint()],
 		["Load Checkpoint", func(c: Node) -> void: c.load_checkpoint()],

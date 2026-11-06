@@ -508,7 +508,7 @@ func _field_mech(recipe: StringName) -> MechBrain:
 		print("[arena] no ground for a mech by the fight (looked for %.1f ms)" % took)
 		return null
 	var to := p.feet() - at
-	var br: MechBrain = city._spawn_enemy_mech(at + Gravity.up_at(at) * 0.1, atan2(-to.x, -to.z), String(recipe))
+	var br: MechBrain = city.vehicles.spawn_enemy_mech(at + Gravity.up_at(at) * 0.1, atan2(-to.x, -to.z), String(recipe))
 	if br == null:
 		return null
 	var cost := UnitCatalog.points(recipe)
@@ -544,7 +544,7 @@ func _field_tank() -> bool:
 		print("[arena] no open ground for a tank to start from")
 		return false
 	var to := goal - start
-	tank = city._spawn_tank(start, atan2(-to.x, -to.z), ENEMY_TEAM, true)
+	tank = city.vehicles.spawn_tank(start, atan2(-to.x, -to.z), ENEMY_TEAM, true)
 	var br := tank.get_node(^"TankBrain") as TankBrain
 	br.send(goal)
 	if _wave_squad != null and is_instance_valid(_wave_squad):
@@ -581,7 +581,7 @@ func _set_up_allies() -> void:
 	allies.intent.players = func() -> Array:
 		var p := _player()
 		return [p] if p != null else []
-	allies.intent.mechs = func() -> Array: return city.mech_brains.filter(
+	allies.intent.mechs = func() -> Array: return city.vehicles.mech_brains.filter(
 			func(b): return is_instance_valid(b) and b.team == ALLY_TEAM)
 	allies.decided.connect(func(what: String) -> void: print("[allies] %s" % what))
 	print("[arena] allies: a friendly commander follows the player")
