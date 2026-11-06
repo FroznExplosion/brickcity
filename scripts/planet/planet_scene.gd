@@ -1155,12 +1155,13 @@ func _process(_delta: float) -> void:
 				PlanetFrame.last_us / 1000.0, here,
 				"(waiting for ground)" if walker.frozen and not piloting else ""]
 		var gen := system.generator_at(_anchor()) if system != null else null
-		if gen != null and not piloting:
-			hud.text += "
-GRAVITY %s  (G turns it %s)" % ["on" if gen.pulls() else "off", "off" if gen.data.gravity_on else "on"]
+		if gen != null and not piloting and gen.generator_out():
+			hud.text += "\nGRAVITY GENERATOR SHOT OUT" + ("" if Gravity.pulls_at(_anchor())
+					else "  (nothing pulls; WASD, Space/Ctrl: the suit's thrust)")
+		elif gen != null and not piloting:
+			hud.text += "\nGRAVITY %s  (G turns it %s)" % ["on" if gen.pulls() else "off", "off" if gen.data.gravity_on else "on"]
 		elif system != null and not piloting and not Gravity.pulls_at(_anchor()):
-			hud.text += "
-NOTHING PULLS  (WASD, Space/Ctrl: the suit's thrust)"
+			hud.text += "\nNOTHING PULLS  (WASD, Space/Ctrl: the suit's thrust)"
 		if piloting:
 			hud.text += "\nSHIP  %.0f m/s  %.0f m over the ground  (E leaves the seat; WASD, Space/Ctrl, mouse, Z/C roll, Shift cruise; M galaxy map)" % [
 					ship.vel.length(), ship.altitude]
@@ -3896,6 +3897,22 @@ func _run_hull_gate() -> void:
 		_face(Gravity.flat(to, Gravity.up_at(g)).normalized())
 		await get_tree().create_timer(0.3).timeout
 	await _shot("hull_gate_window")
+	# Its gravity generator shot out (GravityGenerator, 7.12): its own gravity gone
+	# from inside it, the world's there instead; G cannot bring it back; the HUD
+	# says so. Last: it takes bricks out of the ship.
+	var gen_ids := GravityGenerator.blocks(ship.recipe)
+	var own := Gravity.field_at(pawn.feet()) == ship.gravity_field()
+	if ship.chunk >= 0:
+		ship.bricks.kill_blocks(ship.chunk, gen_ids)
+	await get_tree().create_timer(1.0).timeout
+	_ship_key(KEY_G)
+	await get_tree().create_timer(0.5).timeout
+	_check("its gravity generator shot out: the world's gravity inside it, G cannot turn its own on",
+			not gen_ids.is_empty() and own and ship.generator_out() and not ship.pulls()
+			and Gravity.field_at(pawn.feet()) == null and Gravity.pull_at(pawn.feet()) > 1.0
+			and hud.text.contains("SHOT OUT"),
+			"%d generator brick(s); its field before %s, after %s, %.1f m/s2" % [gen_ids.size(), own,
+			Gravity.field_at(pawn.feet()) != null, Gravity.pull_at(pawn.feet())])
 	if _auto_gate:
 		await _autopilot_run()
 	print("[planet] gate: %d ok, %d FAIL" % [_ok, _fail])
