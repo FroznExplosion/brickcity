@@ -8710,21 +8710,21 @@ func _run_boat_pass() -> void:
 	for i in 10:
 		tick.call()
 		await city.get_tree().process_frame
-	await city._save("hull_boat_side")
+	await _save("hull_boat_side")
 	# On its deck, looking down into the sea over its side.
 	city.camera.global_position = boat.global_transform * boat.cell_point(boat.seat_cell) + Vector3(0, 1.7, 0)
 	city.camera.look_at(city.camera.global_position + side * 4.0 - Vector3(0, 2.0, 0), Vector3.UP)
 	for i in 10:
 		tick.call()
 		await city.get_tree().process_frame
-	await city._save("hull_boat_deck")
+	await _save("hull_boat_deck")
 	# In its hold, under the sea line: no sea inside.
 	city.camera.global_position = hold + Vector3(0, 0.1, 0)
 	city.camera.look_at(hold + boat.global_basis.x * 3.0, Vector3.UP)
 	for i in 10:
 		tick.call()
 		await city.get_tree().process_frame
-	await city._save("hull_boat_hold")
+	await _save("hull_boat_hold")
 	# Holed low on one side: its hold floods, the water drawn in it.
 	var hole := boat.global_transform * boat.cell_point(Vector3i(boat.seat_cell.x, int(boat.recipe.meta.boat.hold_y), 0))
 	boat.damage(hole, {"blast": true, "radius": 0.9, "hp": 0})
@@ -8750,7 +8750,7 @@ func _run_boat_pass() -> void:
 	for i in 30:
 		tick.call()
 		await city.get_tree().process_frame
-	await city._save("hull_boat_flooded")
+	await _save("hull_boat_flooded")
 	print("[boat] %d ok, %d FAIL" % [tally[0], tally[1]])
 	city.get_tree().quit(1 if int(tally[1]) > 0 else 0)
 
