@@ -362,6 +362,13 @@ func _end_all() -> void:
 	ctx.source = null
 
 
+## The weather on every surface is the disasters' (DisasterContext sets it each
+## tick): when the scene goes, so does it -- a storm left running would wet,
+## sway and char the next scene's shared materials (WeatherFx.clear).
+func _exit_tree() -> void:
+	WeatherFx.clear()
+
+
 ## The city's key handler hands H here.
 func on_key(shift: bool) -> void:
 	if shift:

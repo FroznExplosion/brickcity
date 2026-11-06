@@ -798,20 +798,20 @@ var _asset_gun := &""
 ## On foot it is an FPS: the gun in the hands, the view's feel, its HUD
 ## (PlayerView, PlayerHud); the debug stats and blast reticle are put away.
 var _view: PlayerView
+## The player's kit round the pawn -- HUD, arsenal, aim assist, hit feedback,
+## callouts, aggro meter -- the same one the planet has (PlayerKit). Made the
+## first time a pawn is entered.
+var _kit: PlayerKit
 ## The player's guns in play: two groups of two, ordnance, grenades, the floor and
-## the backpack (PlayerArsenal; COMBAT_DESIGN 7). Made on first entering the pawn.
+## the backpack (PlayerArsenal; COMBAT_DESIGN 7). The kit's, kept here by name.
 var _arsenal: PlayerArsenal
 ## Loot rolls: their own stream, so a drop never moves the gun's or the fight's.
+## The kit's arsenal fills its default kit from it too (seeded when it is made).
 var _loot_rng := RandomNumberGenerator.new()
-var _fps_hud: PlayerHud
 var _stats_were_visible := false
-## Hitmarkers and numbers outside the arena, which has its own.
-var _feedback: CombatFeedback
 ## M boards a mech (spawning one ahead of the camera if there is none) and M
 ## again climbs out; the mech stays where it was parked.
 var _pilot := MechPilot.new()
-## The player's aim assist on foot (AimAssist): the camera's look and the gun's rounds.
-var _aim_assist: AimAssist
 var _mech: Mech
 ## Tanks (AIRoster.md RO10): Z puts an enemy one ahead with a squad screening it,
 ## SHIFT+Z an empty one of ours; CTRL+Z an empty truck of ours, CTRL+SHIFT+Z an
@@ -901,10 +901,6 @@ var ai_services: AIServices
 var soldiers: Array[Soldier] = []
 ## Squads (AIPlan P6): U spawns one; the --squad gate clears a room with one.
 var squads: Array[Squad] = []
-## The player's callouts and aggro meter, made the first time a pawn is entered.
-var _callout_hud: CalloutHud
-var _aggro_layer: CanvasLayer
-var _aggro_meter: AggroMeter
 ## Pieces hurt the pawns they fall on and push out the ones inside them
 ## (Docs/Collapse.md 4.4).
 var crush := Crush.new()
@@ -995,6 +991,11 @@ var _phys_sum := 0.0
 var _proc_sum := 0.0
 ## The frame split by the clock, while a pass samples (FrameClock).
 var _clock: FrameClock
+## The render phase's worst flushes and what the workers had handed over for
+## each (UploadLedger), and all that landed over the pass.
+const RENDER_SPIKE_MS := 8.0
+var _render_spikes: Array = []
+var _render_landed := {}
 var _phases := {}
 ## Per-phase microseconds for the current physics tick, and the breakdown of
 ## the single worst frame seen. Guessing which phase owns a spike has been wrong
@@ -2892,7 +2893,8 @@ func _submit_glass(owed: Array) -> void:
 		var arrays := BuildingShell.window_arrays(fx, fz, courses, room_seed, layout,
 				lattice, damage, program, standing)
 		if not arrays.is_empty():
-			holder[0] = BuildingShell.window_mesh_of(arrays) if on_worker else (arrays as Variant),
+			holder[0] = BuildingShell.window_mesh_of(arrays) if on_worker else (arrays as Variant)
+			UploadLedger.note("glass", UploadLedger.verts_of(arrays)),
 			true, "shell glass")
 	glass_built += 1
 	_glass_jobs.append([task, holder, owed[0], id, owed[3]])
@@ -4671,6 +4673,7 @@ func _submit_band_job(id: int, at: int, arrays: Array) -> void:
 		m.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays, [], {},
 				IslandManager.UPLOAD_COMPRESS)
 		holder[0] = m
+		UploadLedger.note("band", UploadLedger.verts_of(arrays))
 	_band_jobs.append([id, at, IslandManager.JOB_NOT_STARTED, holder, arrays,
 			int(_band_pass.get(id, 0)), work])
 
@@ -5385,67 +5388,30 @@ func _enter_pawn(feet: Vector3) -> void:
 	_player.possess(_player_pawn, camera)
 	_arm_gun()
 	_player_pawn.gun = _gun
-	# Melee hits at the fight's tier: the arena's level, else tier 1 (COMBAT_DESIGN 4.1).
-	_player_pawn.melee_tier = arena.level if arena != null else 1
 	_player.melee_context = _melee_context
-	# After the gun: add_pawn arms it, so its rounds suppress, are heard and
-	# earn aggro (AIServices).
-	ai_services.add_pawn(_player_pawn)
 	_gun.exclude = [_player_pawn.body.get_rid()] as Array[RID]
-	if _aim_assist == null:
-		_aim_assist = AimAssist.new()
-		_aim_assist.setup(camera, _gun, _player, ai_services)
-		add_child(_aim_assist)
-	camera.assist = _aim_assist
-	_gun.assist = _aim_assist
-	# A splash or a ricochet of the player's rounds spares the player's side.
-	_gun.team = _player_pawn.team
 	if not _player_pawn.has_meta(&"weight"):
 		_player_pawn.set_meta(&"weight", weight.add(_player_pawn.body, _player_pawn.feet,
 				WeightTracker.PERSON))
 	if _mech_cmd != null:
 		_mech_cmd.brain.leader = _player_pawn
-	_player_hud()
 	_fps_on()
-	if _arsenal == null:
-		_arsenal = PlayerArsenal.new()
-		_arsenal.name = "Arsenal"
-		_arsenal.board = _hold_board
-		_arsenal.mech_screen = _mech_screen
-		add_child(_arsenal)
-		_loot_rng.seed = 0x1007
-		_load_progress()
-		if not _scripted:
-			_place_workbench(feet)
-	if _gun_library == null:
-		_gun_library = GunPlaceholderParts.build_library()
-	_arsenal.setup(_player, _gun, _view, ai_services, _gun_library, self,
-			arena.level if arena != null else 1)
-	_load_kit()
-	_arsenal.fill_default(_loot_rng)
+	var first := _kit == null
+	if first:
+		if _gun_library == null:
+			_gun_library = GunPlaceholderParts.build_library()
+		_kit = PlayerKit.attach(self, _player, camera, _gun, ai_services, {
+				"scripted": _scripted, "library": _gun_library, "world": self,
+				"meter_at": Vector2(20.0, 180.0), "rng": _loot_rng,
+				"board": _hold_board, "mech_screen": _mech_screen})
+	# Melee hits and the arsenal's rolls at the fight's tier: the arena's level,
+	# else tier 1 (COMBAT_DESIGN 4.1). The arena marks hits on its own feedback.
+	_kit.enter(_player_pawn, _view, arena.level if arena != null else 1,
+			arena.feedback if arena != null else null)
+	_arsenal = _kit.arsenal
+	if first and not _scripted:
+		_place_workbench(feet)
 	print("[city] playing: pawn at %v" % feet)
-
-
-const TestWindowScript := preload("res://scripts/test_window.gd")
-
-
-## The player's level and skills from the character save, and kept there on every
-## change -- not in a pass or a test window: those never touch the player's save.
-func _load_progress() -> void:
-	if _scripted or TestWindowScript.is_test_window():
-		return
-	_player.progress.take(CharacterSave.load_from().progress_dict())
-	_player.progress.changed.connect(_save_progress)
-
-
-## The player's saved kit (CharacterSave.loadout), made again -- once, the first time
-## the arsenal is set up, and not in a pass or a test window. From then on it is saved
-## whenever it changes (PlayerArsenal.kit_changed).
-func _load_kit() -> void:
-	if _scripted or TestWindowScript.is_test_window() or _arsenal.kit_changed.is_connected(_save_progress):
-		return
-	_arsenal.restore(CharacterSave.load_from().loadout)
-	_arsenal.kit_changed.connect(_save_progress)
 
 
 ## A safehouse workbench by where the player first stands (COMBAT_DESIGN 1.2): a stand-in
@@ -5464,14 +5430,6 @@ func _place_workbench(feet: Vector3) -> void:
 	w.rotation.y = yaw
 
 
-func _save_progress() -> void:
-	var s := CharacterSave.load_from()
-	s.take_progress(_player.progress)
-	if _arsenal != null and not _arsenal.loadout.all_guns().is_empty():
-		s.loadout = _arsenal.kit_dict()
-	s.save()
-
-
 ## The gun into the view's hands, its HUD up, the debug overlays away.
 func _fps_on() -> void:
 	if _view == null:
@@ -5480,24 +5438,6 @@ func _fps_on() -> void:
 		add_child(_view)
 		_view.setup(camera, _player_pawn, _gun)
 	_player.view = _view
-	if _fps_hud == null:
-		_fps_hud = PlayerHud.new()
-		_fps_hud.name = "PlayerHud"
-		add_child(_fps_hud)
-		_fps_hud.setup(_player_pawn, _gun, _view)
-	if _feedback == null and arena == null:
-		_feedback = CombatFeedback.new()
-		_feedback.name = "Feedback"
-		add_child(_feedback)
-		_feedback.setup(self)
-		_gun.fired.connect(_feedback.on_player_shot)
-	# A melee that lands marks like a round (its info is the same shape).
-	var fb: CombatFeedback = arena.feedback if arena != null else _feedback
-	if fb != null and not _player_pawn.meleed.is_connected(fb.on_player_shot):
-		_player_pawn.meleed.connect(fb.on_player_shot)
-	# So does a splash or a ricochet of a modifier (GunController.side_hit).
-	if fb != null and not _gun.side_hit.is_connected(fb.on_player_shot):
-		_gun.side_hit.connect(fb.on_player_shot)
 	if stats_label != null:
 		_stats_were_visible = stats_label.visible
 		stats_label.visible = false
@@ -5511,9 +5451,8 @@ func _fps_off() -> void:
 		_view.teardown()
 		_view.queue_free()
 		_view = null
-	if _fps_hud != null:
-		_fps_hud.queue_free()
-		_fps_hud = null
+	if _kit != null:
+		_kit.leave()
 	if stats_label != null:
 		stats_label.visible = _stats_were_visible
 	if _reticle != null:
@@ -5534,30 +5473,6 @@ func _leave_pawn() -> void:
 	_gun.set_trigger(false)
 	_gun.exclude = [] as Array[RID]
 	_gun.team = -1
-	if _aggro_layer != null:
-		_aggro_layer.visible = false
-
-
-## What the player is shown of the fight (AI.md 6.5, 8): the callouts it can hear
-## -- markers over the speakers it can see, over friendlies always -- and the
-## enemy's aggro meter. Heard from the camera, which is the player's eye.
-func _player_hud() -> void:
-	if _callout_hud == null:
-		var l := ai_services.callouts.listen(camera, 0, _player_pawn)
-		_callout_hud = CalloutHud.new()
-		_callout_hud.name = "Callouts"
-		_callout_hud.setup(ai_services.callouts, l)
-		add_child(_callout_hud)
-		_aggro_layer = CanvasLayer.new()
-		_aggro_layer.name = "Aggro"
-		_aggro_layer.layer = 5
-		_aggro_meter = AggroMeter.new()
-		_aggro_meter.table = ai_services.aggro_of(1)
-		_aggro_meter.position = Vector2(20.0, 180.0)
-		_aggro_layer.add_child(_aggro_meter)
-		add_child(_aggro_layer)
-	_callout_hud.listener.pawn = _player_pawn
-	_aggro_layer.visible = true
 
 
 ## Climb into the mech -- spawning one on the ground ahead of the camera if there
@@ -7448,6 +7363,19 @@ func _physics_process(_delta: float) -> void:
 	# would wait for the frame it is drawing.
 	if _one_thread:
 		RenderingServer.mesh_get_surface_count(_flush_mesh.get_rid())
+	var landed := UploadLedger.take()
+	if _sampling:
+		var flush_ms := float(Time.get_ticks_usec() - t) / 1000.0
+		if flush_ms > RENDER_SPIKE_MS:
+			_render_spikes.append([flush_ms, Engine.get_physics_frames(), UploadLedger.line(landed)])
+			_render_spikes.sort_custom(func(a: Array, b: Array) -> bool: return a[0] > b[0])
+			if _render_spikes.size() > 10:
+				_render_spikes.resize(10)
+		for k in landed:
+			var row: Array = _render_landed.get(k, [0, 0])
+			row[0] += int(landed[k][0])
+			row[1] += int(landed[k][1])
+			_render_landed[k] = row
 	t = _mark("render", t)
 	if not _span_owed.is_empty():
 		_pay_span_owed()
@@ -8456,6 +8384,7 @@ func _make_shadow_proxy(b: BuildingRegistry.Building) -> bool:
 	var holder := [null]
 	var work := func() -> void:
 		holder[0] = BuildingShell.build_mesh(fx, fz, courses, profile, layout)
+		UploadLedger.note("building shadow", -1)
 	var task := WorkerThreadPool.add_task(work, false, "shadow proxy")
 	_shadow_jobs[b.id] = [task, holder, world.get_alive_block_count(b.chunk), false]
 	return true
@@ -8986,7 +8915,8 @@ func _tend_brick_panes() -> void:
 		var arrays := BuildingShell.window_arrays(fx, fz, courses, room_seed, layout, lattice,
 				{}, program, standing)
 		if not arrays.is_empty():
-			holder[0] = BuildingShell.window_mesh_of(arrays) if on_worker else (arrays as Variant),
+			holder[0] = BuildingShell.window_mesh_of(arrays) if on_worker else (arrays as Variant)
+			UploadLedger.note("panes", UploadLedger.verts_of(arrays)),
 			true, "brick panes")
 	_pane_job = [task, holder, best]
 	brick_panes_built += 1
@@ -9061,6 +8991,7 @@ func _tend_far_coarse() -> void:
 			job[1] = WorkerThreadPool.add_task(func() -> void:
 				var m := ArrayMesh.new()
 				m.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
+				UploadLedger.note("far building", UploadLedger.verts_of(arrays))
 				holder[0] = m, false, "far coarse building")
 		job[2] = holder
 	# Which go coarse, and which come back. At most one asked for a pass.

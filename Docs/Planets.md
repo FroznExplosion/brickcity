@@ -1917,8 +1917,64 @@ fall 7, damage 12, bricks 9, trees 7, squad 10, pawn 12).
 Not done: a crush, TIP or region cut is in the planet's `damage_log`, the crumbs' kill is not
 (no netcode or replay on the planet yet).
 
-Not yet: the city's snap preferences; furniture, materialising for a fight far from
-the camera.
+**Plan, D2 step 7 (2026-11-05): where a landing snaps a piece, and step 6's crumbs logged.**
+- *Step 6's crumbs in the log.* The crushed storey's bricks, killed as crumbs, are recorded after
+  its `SEVER` as the city records a group nobody keeps a body of: a `DETACH` of those blocks with
+  `FLAG_GONE`. (The planet logs no DETACH for the pieces it sheds yet; that waits for its netcode.)
+- *The city's snap preferences* (`IslandManager._snap_across`, `_weak_seam`, `_floor_line`,
+  `_weak_crack`; Docs/CollapseNext.md 1.10 (5) and item 18), in `PlanetPieces._snap_across`, which
+  today snaps along the piece's longest grid axis at the contact, and tears a band where that axis
+  is X or Z (no joints run that way: the panel lands on its side and turns to gravel).
+  - *Its axis as the city's:* the grid's Y whenever the piece is BREAK_MIN_LENGTH long that way
+    (only Y has seams); X or Z only when Y is short.
+  - *Along Y, the weakest seam in reach* (`BrickWorld.seam_studs`): the course boundary near the
+    contact that lets go of the fewest studs -- a row of windows before a solid course -- within half
+    a storey either way; a storey line instead unless the weakest is clearly weaker
+    (`SEAM_PREFERS_FLOOR` 0.75); where no boundary in reach is a seam, the nearest storey line.
+  - *Across X or Z, a crack along the bond* (`crack_studs`): the plane in reach (`CRACK_REACH`)
+    with the fewest studs across it, each brick going with the side its middle is on. A crack
+    loosens nothing: the piece is parted along it (`crack_components`) where it now asks
+    `get_components_near`, and the crack is forgotten once it has.
+  - *A piece knows its building's storey lines* -- `TowerRecipe.frame(...).floors`, as the city's
+    `BuildingRegistry.floor_lines` gives them, in the building's grid, which `split_island` keeps.
+    Handed on `shed` / `adopt`, and from a piece to what breaks off it.
+  - Counted as the city's: snaps at the weakest seam, on a storey line, cracked, torn as a band.
+Gate `--gate=snap` (headless): a building toppled (as the topple gate) lands and snaps along its
+Y -- every plane at a weak seam or a storey line, none torn as a band -- and every piece ends at
+rest; a wall panel dropped 8 m (as the fall gate) is long across, not up: it cracks across along
+the bond, no band torn, and comes to rest. The storey gate's crush logs its crumbs as a DETACH.
+
+**D2 step 7 built (2026-11-05): where a landing snaps a piece; step 6's crumbs logged.** As
+planned. `PlanetPieces._snap_across` takes the city's axis, `_weak_seam` / `_floor_line` along Y
+and `_weak_crack` across, the city's constants (`SEAM_PREFERS_FLOOR`, `SEAM_REACH`,
+`CRACK_REACH`); a crack is kept on the piece and the landing parts it with `crack_components`.
+Every piece carries its building's storey lines (`Piece.lines`, from `PlanetBuildings.
+floor_lines`, worked out with the shape's template: `TowerRecipe.frame`'s first call was 16 ms at
+the first piece). The census is the city's (`snap_census_line`), plus snaps along Y at neither a
+weak seam nor a storey line (`plain_breaks`). The crushed storey's crumbs are a `DETACH`
+(`FLAG_GONE`) after the `SEVER`.
+Gate `--gate=snap` 8/8 (headless x3, windowed x1): the nearest tower toppled (36 courses, 89-90
+degrees, 3-6 landings) snaps along its height twice, both times at the weakest seam in reach --
+not a storey line: a row of windows holds with about three fifths of what a storey line does, as
+the city found -- none at neither, none torn as a band; the halves, short in Y now, crack across
+(1-5); 5-8 pieces, all at rest. A 14-brick wall panel (0.7 x 2.1 x 6.3 m) dropped 8 m cracks
+across along the bond, no band torn, and lies at rest. `--gate=storey` 13/13 (the DETACH, 318
+bricks gone).
+Two gates changed with it:
+- *`--gate=fall`'s "comes apart"* is now "the landing breaks it: sheared where it touched, snapped
+  or cracked across". Its 15-brick panel cracks at stud 4 of 20, and every one of its 8-stud
+  bricks has its middle on one side of that -- so by the city's rule nothing parts. It passed
+  before on the band the old snap tore across the panel: the gravel the city's crack replaced
+  (Docs/CollapseNext.md item 18). Landings that break pieces apart are the topple and snap gates'.
+- *`--gate=pieces_ai`'s sample* skips bricks that broke off the piece (detached or dead: they stay
+  in its chunk's data). It counted them where the piece lies, which is what step 5's "the rest,
+  where the piece crosses into a region it was not synced into" was: 1558 of 1558 solid now (the
+  new snaps broke more off the big piece, 1215 bricks, and the old sample fell to 73%).
+Other planet gates unchanged: topple 6, hits 8, damage 12, bricks 9, trees 7, squad 10, pawn 12;
+`--gate=save` stages 1-3 as main (stage 3's "the player where they were" failed on main too, 2.9 m
+off; not this work -- fixed since, 11.12's "Save gate stage 3, fixed").
+
+Not yet: furniture, materialising for a fight far from the camera.
 
 ### 11.12 Plan: the universe -- star systems, orbits, spinning planets (2026-10-28)
 
@@ -2290,7 +2346,7 @@ Until now the AI only exists on home, and nothing on the planet fires at the pla
   anchored on the town being fought over, its buildings' bricks, its trees. `ai` is the one of the
   world the player is on; it sleeps with its world (its soldiers go under the frame as everything
   else does, and the net is told how far the world moved on waking). The player's kit (aim assist,
-  arsenal, callouts, aggro meter) moves to it: `PlanetPlayerKit.use_services`.
+  arsenal, callouts, aggro meter) moves to it: `PlayerKit.use_services`.
 - **One town at a time.** A net is a lattice round one direction, good for a town and its country, not
   a planet. Going to another town on the same world drops the old fight, its survivors with it.
 - **Garrisons.** `PlanetGarrison` (a Node3D, so all it holds sleeps with its world): a squad of four at
@@ -2306,7 +2362,7 @@ Until now the AI only exists on home, and nothing on the planet fires at the pla
   still fighting; wiped out, clear; down and up again; home's AI back on home.
 
 **Step 7 built (2026-10-31).** As the plan: `PlanetScene.ai_of`, `setup_ai(dir, body)`,
-`PlanetGarrison` (scripts/planet/planet_garrison.gd), `PlanetPlayerKit.use_services` and `present`.
+`PlanetGarrison` (scripts/planet/planet_garrison.gd), `PlayerKit.use_services` and `present`.
 A world's AI costs ~43 ms when the player comes within 250 m of a town (one region; the rest are
 built off the frame), its four soldiers ~35 ms.
 
@@ -2652,6 +2708,24 @@ damage 12, fall 7, hits 8, topple 6, storey 12, jump 10, home 9.
 
 Found on the way: a building healed when the player walked away from it, in play, with no save involved:
 `_free_bricks` let its bricks go, damage and all. `Site.dead` keeps them.
+
+**Save gate stage 3, fixed (2026-11-05).** Stage 3 had been failing "the player where they were" by
+2.5-2.9 m, and nobody saw it: three things.
+- *The gate saved a falling player.* Stage 2 put the pawn down on the other system's world before its
+  ground was solid there; it fell through and was written 2 m under the surface at 11 m/s. Coming back,
+  the ground is there, so the pawn stood on it -- 2.9 m from where the note said. Stage 2 now waits for
+  the ground under the spot (`_ground_hit`), as every other gate does. Stage 3: 0.44-0.50 m off (the
+  pawn still settling when written; the check allows 1.5 m).
+- *Every load stood the player 0.84 m high.* `PlanetSaver._state` wrote the anchor -- the pawn's body,
+  its middle -- and `resume` stands the pawn's FEET there. On foot it writes `pawn.feet()` now (its
+  ghost hull's too). Old saves still load, 0.84 m up, as before.
+- *The FAIL never reached the summary or the exit code.* Stage 3 hands over to stage 4 by reloading the
+  scene, which starts `_ok` / `_fail` over; only `_save_stage` was static. Stage 3's counts go across
+  now (`_save_ok`, `_save_fail`): stage 3's summary is 8 checks, was 2.
+Three runs of stages 1-3 headless: 3, 13, 8 ok, every exit 0. Found, not fixed: waiting in stage 2 until
+the pawn is on the floor before writing (a stricter save) made stage 4's quit crash every time (signal 11
+after the summary; a `World3D` with 346 Jolt shapes leaked across the reload, which main's quit does not
+show). The crash is in the reload's leftovers, not in the save; it was left out.
 
 Not saved, as planned: fallen pieces (their bricks stay gone from the building, the rubble goes) and drifting
 pieces. Every universe has the same home world, its seed moves only what is round it. Stopping the game

@@ -688,6 +688,7 @@ func _upload(band: Band, arrays: Array) -> void:
 		var m := ArrayMesh.new()
 		m.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
 		holder[0] = m
+		UploadLedger.note("chamfered", UploadLedger.verts_of(arrays))
 	, false, "chamfered band mesh")
 
 
