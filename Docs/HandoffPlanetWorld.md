@@ -23,7 +23,7 @@ ground (Zylann voxel module, after STA's planets), impostor from orbit, atmosphe
 shader-only sea, towns and landmarks of buildings that crest the horizon and fade in by size,
 a translation-only floating origin at 4 km.
 
-- **Player:** `PlanetPlayerKit` (scripts/planet/planet_player_kit.gd) -- the firefight's kit:
+- **Player:** `PlayerKit` (scripts/pawn/player_kit.gd, shared with the city) -- the firefight's kit:
   PlayerHud, PlayerArsenal (slots 1-4, 5 ordnance, pickups, grenades, skills, the saved kit and
   level), aim assist, hit feedback, callouts, aggro meter. Not yet: brick melee context, mech call,
   workbench. F flies (`PlanetWalker`): 50 m/s, wheel to change, **Shift 500 m/s**.

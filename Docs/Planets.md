@@ -2346,7 +2346,7 @@ Until now the AI only exists on home, and nothing on the planet fires at the pla
   anchored on the town being fought over, its buildings' bricks, its trees. `ai` is the one of the
   world the player is on; it sleeps with its world (its soldiers go under the frame as everything
   else does, and the net is told how far the world moved on waking). The player's kit (aim assist,
-  arsenal, callouts, aggro meter) moves to it: `PlanetPlayerKit.use_services`.
+  arsenal, callouts, aggro meter) moves to it: `PlayerKit.use_services`.
 - **One town at a time.** A net is a lattice round one direction, good for a town and its country, not
   a planet. Going to another town on the same world drops the old fight, its survivors with it.
 - **Garrisons.** `PlanetGarrison` (a Node3D, so all it holds sleeps with its world): a squad of four at
@@ -2362,7 +2362,7 @@ Until now the AI only exists on home, and nothing on the planet fires at the pla
   still fighting; wiped out, clear; down and up again; home's AI back on home.
 
 **Step 7 built (2026-10-31).** As the plan: `PlanetScene.ai_of`, `setup_ai(dir, body)`,
-`PlanetGarrison` (scripts/planet/planet_garrison.gd), `PlanetPlayerKit.use_services` and `present`.
+`PlanetGarrison` (scripts/planet/planet_garrison.gd), `PlayerKit.use_services` and `present`.
 A world's AI costs ~43 ms when the player comes within 250 m of a town (one region; the rest are
 built off the frame), its four soldiers ~35 ms.
 
