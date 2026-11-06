@@ -2779,6 +2779,24 @@ path from the same spot was found. `_mech_spot` looks out from there in rings fo
 `--gate=mechwave` (starts at wave 5) 2/2, twice: piloted, with the tank; 122 m -> 74 m in 14-15 s, firing,
 never under the ground. home 11. Not seen on screen.
 
+#### A wave's tank and mech saved; rocks hurt the ship; a damaged ship's far look (2026-11-06)
+
+- **Saved.** `PlanetGarrison.to_save` keeps the wave's tank and mech while they are up: where they stand
+  (planet-local) and their health. Back, the wave brings them there, as hurt, even when only they were left
+  of it. `--gate=mechwave` 3/3: hurt 30%, saved through bytes and back, 0.3 m and 0.6 m off, health as it was.
+- **Rocks.** A rock hit at over 8 m/s (`RAM_SPEED`) is a ram as a wall is: `rammed` at the hull box's face
+  toward it (`SpaceShip._hull_face`), so `_on_rammed` gives the ship its blast (`take_ram`). A first try put
+  the point at half the hull's diagonal from the ship's origin, outside the hull: no brick died.
+  `--gate=rocks` 5/5: hit hard, 3 bricks. The gate's first approach, "slowly", was over 8 m/s already.
+- **Far look.** A ship damaged but not laid this run (a save's damage, a ram taken unlaid) has its bricks
+  laid once for its far look, as a station's are (`lay_wreck`, from `_ship_bricks`; not torn down again
+  while it lays). A ram taken unlaid drops the old far look, so it is laid again with the new hole.
+  `--gate=dock` 10/10: after the ram its far look is its bricks.
+
+Not seen on screen. `--gate=hull` fails one check on main as it stands, with or without these changes
+("up from the seat in flight: on its ghost, standing still on it as it glides": the pawn 1.313 m along the
+deck): the room-modules chat's.
+
 #### Plan, saving (2026-11-01)
 
 As zylanntest (its Docs/save_format_and_data_longevity.md, future_features_save_guide.md): the **universe**

@@ -141,6 +141,69 @@ func _restore_checks() -> void:
 				rim = rim or (air.state[j] == HullAir.SOLID and not own.has(j))
 	_ok("rim: what is restorable starts at the hole's edge", rim, "%d restorable" % ids.size())
 
+	# Brick by brick (front end A): aimed at the hole, the ghost is one rim brick,
+	# its box on its own cells; a tap lays it and nothing else.
+	var tapper := RestoreTool.new()
+	var up := Vector3.UP
+	var eye := _hole - up * RestoreTool.RANGE
+	var aimed := tapper.aim(eye, up, [_st])
+	var gid: int = int(aimed.get("id", -1))
+	var box_ok := false
+	if gid >= 0:
+		var c := Vector3i(_st.cell_at((aimed.xf as Transform3D).origin).floor())
+		box_ok = _st.air._block_cells(gid).has(_st.air._idx(c)) and RestoreTool.rim_of(_st, gid)
+	_ok("ghost: aimed at the hole, one rim brick shown on its own cells", gid >= 0 and box_ok,
+			"brick %d" % gid)
+	# The ghost is the brick itself: its shape as built, put where the brick goes
+	# (its mesh's box holds the centre of the brick's cells).
+	var shape := RestoreTool.shape_of(_st, gid) if gid >= 0 else []
+	var fits := false
+	if not shape.is_empty():
+		var bb: AABB = RestoreTool.place_of(_st, gid) * (shape[0] as ArrayMesh).get_aabb()
+		var mid: Vector3 = RestoreTool.box_of(_st, gid).origin
+		fits = bb.grow(0.05).has_point(mid) and bb.size.length() > 0.1
+	_ok("ghost: the brick's own shape (part, colour), where the brick goes", fits,
+			"%s" % (str(_st.air._recipe.part_of(_st.air._block_recipe[gid])) if gid >= 0 else "none"))
+	var gone_before := _st.gone().size()
+	var r0 := _st.bricks_restored
+	tapper.tick(0.1, true, eye, up, [_st])
+	var during := _st.bricks_restored - r0
+	var tapped := tapper.tick(0.1, false, eye, up, [_st])
+	_ok("tap: one brick, the ghosted one, and only on release", during == 0 and tapped == 1
+			and _st.bricks_restored - r0 == 1 and _st.gone().size() == gone_before - 1
+			and not _st.gone().has(gid), "%d during, %d on release" % [during, tapped])
+	tapper.cost = 0
+	tapper.tick(0.1, true, eye, up, [_st])
+	_ok("tap: nothing laid with nothing left to lay (cost 0)", tapper.tick(0.1, false, eye, up, [_st]) == 0)
+
+	# The pouch: not while the tool works, not ashore, REFILL a second aboard once idle.
+	var pouch := RestoreTool.new()
+	pouch.cost = 10
+	var ashore := 0
+	for i in 30:
+		ashore += pouch.refill(0.1, false)
+	var busy := 0
+	for i in 10:
+		pouch.tick(0.1, true, eye, up, [])
+		busy += pouch.refill(0.1, true)
+	pouch.tick(0.1, false, eye, up, [])
+	var idle := 0
+	for i in int((RestoreTool.REFILL_AFTER + 1.0) / 0.1):
+		idle += pouch.refill(0.1, true)
+	for i in 400:
+		pouch.refill(0.1, true)
+	_ok("pouch: refills aboard once idle, REFILL a second, never past POUCH", ashore == 0 and busy == 0
+			and idle >= int(RestoreTool.REFILL) - 1 and idle <= int(RestoreTool.REFILL) + 1
+			and pouch.cost == RestoreTool.POUCH, "ashore %d, busy %d, idle %d, full %d" % [ashore, busy, idle, pouch.cost])
+
+	# The snap is made, not loaded: a short sound with something in it.
+	var snap := RepairFx.snap_sound(0)
+	var peak := 0
+	for i in range(0, snap.data.size(), 2):
+		peak = maxi(peak, absi(snap.data.decode_s16(i)))
+	_ok("snap: a made sound, short and audible", snap.data.size() > 1000 and snap.data.size() < 22050 * 2 * 0.2
+			and peak > 8000, "%d bytes, peak %d" % [snap.data.size(), peak])
+
 	# The tool, held on the hole for a second (no physics here: it points RANGE
 	# along the view, at the hole).
 	var tool := RestoreTool.new()
@@ -150,7 +213,7 @@ func _restore_checks() -> void:
 	for i in 10:
 		tool.tick(0.1, true, from, dir, [_st])
 	var by_tool := _st.bricks_restored - before
-	_ok("tool: held a second, about RATE bricks back and no more",
+	_ok("tool: held a second, it streams after HOLD, about RATE bricks a second and no more",
 			by_tool > 0 and by_tool <= int(RestoreTool.RATE) and tool.laid == by_tool,
 			"%d laid" % by_tool)
 	tool.tick(0.1, false, from, dir, [_st])

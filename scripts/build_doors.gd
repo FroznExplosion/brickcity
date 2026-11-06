@@ -118,7 +118,8 @@ static func from_registry(registry: BuildingRegistry) -> Callable:
 		for b in registry.buildings:
 			if b.build == null or b.chunk < 0 or b.toppled or not b.frames.is_empty():
 				continue
-			if not b.build.meta.has("doors") and not b.build.meta.has("structure") 					and not b.build.meta.has("lifts"):
+			if not b.build.meta.has("doors") and not b.build.meta.has("structure") \
+					and not b.build.meta.has("lifts") and not b.build.meta.has("ladders"):
 				continue
 			out.append([b.id, b.chunk, b.build, b.build.origin()])
 		return out

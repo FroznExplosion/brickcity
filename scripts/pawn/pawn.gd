@@ -154,6 +154,11 @@ var ghost = null
 const GROUP := &"pawns"
 ## Nothing pulls where it is (Gravity.pulls_at): it floats (PawnMoves) or drifts.
 var floating := false
+## A ladder the plain walk climbs (no PawnMoves -- a soldier; Docs/RoomModules.md
+## 7.13), and which way: 1 up and over its top, -1 off its top and down to its
+## foot. Its brain sets them (Soldier's ladder leg); the walk lets go at the end.
+var ladder: Ladder = null
+var ladder_way := 0
 ## The gravity field it was in last tick (Gravity.field_at), to start a fall over
 ## when it changes: heights in two fields are over two datums.
 var _field: Gravity.Field
@@ -501,6 +506,8 @@ func step(delta: float) -> void:
 
 	if moves != null:
 		moves.step(delta, wish, speed)
+	elif ladder != null:
+		_ladder_walk()
 	else:
 		_walk(delta, wish, speed)
 	_track_fall()
@@ -536,6 +543,44 @@ func _walk(delta: float, wish: Vector3, speed: float) -> void:
 			_step_over(wanted)
 
 
+## The plain walk on a ladder: held out of its face and across its middle, up
+## it, over its top a body's width on to what it leads to; or out over its top
+## and down it to the floor at its foot. Lets go (ladder = null) at the end, or
+## when the ladder is gone.
+func _ladder_walk() -> void:
+	var l := ladder
+	if not is_instance_valid(l) or not l.is_inside_tree() or ladder_way == 0:
+		ladder = null
+		return
+	var lx := to_world().affine_inverse() * l.global_transform
+	var lb := lx.basis
+	var p := lx.affine_inverse() * feet_here()
+	var hold := PawnMoves.LADDER_HOLD
+	var v: Vector3
+	var held := false
+	if ladder_way > 0:
+		if p.y < l.height + 0.15 and p.z >= hold - 0.1:
+			v = lb.y * PawnMoves.LADDER_SPEED
+			held = true
+		else:
+			# Over its top, clear of the lip: on to what it leads to.
+			v = -lb.z * WALK_SPEED * 0.6
+			if p.z < -PawnMoves.LADDER_OVER:
+				ladder = null
+	elif p.z < hold - 0.05 and p.y > l.height - 0.3:
+		# Still on its top: out over the lip first, a little over it.
+		v = lb.z * WALK_SPEED * 0.6 + lb.y * maxf(l.height + 0.1 - p.y, 0.0) * 4.0
+	else:
+		v = -lb.y * PawnMoves.LADDER_SPEED
+		held = true
+		if body.is_on_floor() and p.y < 0.2:
+			ladder = null
+	if held:
+		v += lb.z * (hold - p.z) * 10.0 - lb.x * p.x * 6.0
+	body.velocity = v
+	body.move_and_slide()
+
+
 ## Where a fall started and what landing from it costs.
 func _track_fall() -> void:
 	var on_floor := body.is_on_floor()
@@ -543,8 +588,8 @@ func _track_fall() -> void:
 	var feet_y := Gravity.height_of(feet_here())
 	if on_floor and _was_on_floor:
 		_placed = false   # placed standing: the next fall is a real one
-	if floating:
-		# Nothing pulls: no fall to start, none to land from.
+	if floating or ladder != null:
+		# Nothing pulls, or holding on: no fall to start, none to land from.
 		_fall_from = feet_y
 		_jump_gain = 0.0
 	if _was_on_floor and not on_floor:
