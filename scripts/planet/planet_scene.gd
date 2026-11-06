@@ -132,6 +132,8 @@ var air_warn: Label
 ## Repair (Docs/Hulls.md 9), "restore" (the middle mouse button) on a ship's or
 ## station's hull: a tap lays the ghosted brick, held its lost bricks come back.
 var restore_tool := RestoreTool.new()
+## Bricks left in the repair pouch (RestoreTool.cost), bottom middle.
+var brick_count: Label
 
 const VIEW_MIN := 1536
 const VIEW_MAX := 6144
@@ -1006,6 +1008,16 @@ func _build_hud() -> void:
 	air_warn.add_theme_constant_override("outline_size", 6)
 	air_warn.visible = false
 	layer.add_child(air_warn)
+	brick_count = Label.new()
+	brick_count.set_anchors_preset(Control.PRESET_CENTER_BOTTOM)
+	brick_count.position = Vector2(-120, -96)
+	brick_count.size = Vector2(240, 24)
+	brick_count.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	brick_count.add_theme_font_size_override("font_size", 18)
+	brick_count.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.9))
+	brick_count.add_theme_constant_override("outline_size", 5)
+	brick_count.visible = false
+	layer.add_child(brick_count)
 	add_child(layer)
 	if system != null:
 		var over := CanvasLayer.new()
@@ -1049,6 +1061,17 @@ func _air_tick() -> void:
 		air_warn.text = ("HULL BREACH  air %d%%" if venting else "LOW AIR  %d%%") % roundi(p * 100.0)
 
 
+## The player stands in one of `sts` (a ship's or station's box): its stores fill
+## the repair pouch.
+func _aboard_any(sts: Array) -> bool:
+	var at := _pawn_real() if pawn != null and on_foot else _anchor()
+	for s in sts:
+		var st := s as SpaceStation
+		if st != null and is_instance_valid(st) and st.bricked and st.holds(at):
+			return true
+	return false
+
+
 ## Repair, both front ends (RestoreTool): the ghost of the brick a tap would lay
 ## where the view points on a ship or station, a tap lays it, held it restores.
 func _restore_tick(dt: float) -> void:
@@ -1061,7 +1084,18 @@ func _restore_tick(dt: float) -> void:
 	var space := get_world_3d().direct_space_state
 	var from := cam.global_position if cam != null else Vector3.ZERO
 	var dir := -cam.global_basis.z if cam != null else Vector3.FORWARD
+	if restore_tool.fx_parent == null:
+		restore_tool.fx_parent = self
+		restore_tool.cost = RestoreTool.POUCH
 	restore_tool.show_ghost(dt, can, from, dir, sts, space, self)
+	restore_tool.refill(dt, _aboard_any(sts))
+	if brick_count != null:
+		# Shown while there is something to mend in view, or the pouch is not full.
+		brick_count.visible = can and (not restore_tool.aimed.is_empty() or restore_tool.pressed()
+				or restore_tool.cost < RestoreTool.POUCH)
+		brick_count.text = "BRICKS  %d / %d" % [restore_tool.cost, RestoreTool.POUCH]
+		brick_count.add_theme_color_override("font_color", Color(1.0, 0.4, 0.3) if restore_tool.cost == 0
+				else Color(0.75, 0.92, 1.0))
 	if not holding and restore_tool.target == null and not restore_tool.pressed():
 		return
 	restore_tool.tick(dt, holding, from, dir, sts, space)
@@ -3709,12 +3743,17 @@ func _patch_check() -> void:
 	await _shot("hull_gate_patch")
 	var r0 := ship.bricks_restored
 	var want := int(aimed.get("id", -1))
+	var pouch0 := restore_tool.cost
+	var snaps0 := restore_tool.fx.played
 	Input.action_press(&"restore")
 	await _frames(3)
 	Input.action_release(&"restore")
 	await _frames(3)
-	_check("repair: a tap lays that brick and no other", ship.bricks_restored - r0 == 1
-			and not ship.gone().has(want), "%d laid" % (ship.bricks_restored - r0))
+	_check("repair: a tap lays that brick and no other, one from the pouch, with a snap", ship.bricks_restored - r0 == 1
+			and not ship.gone().has(want) and restore_tool.cost == pouch0 - 1 and restore_tool.fx.played == snaps0 + 1
+			and brick_count.visible, "%d laid, pouch %d -> %d" % [ship.bricks_restored - r0, pouch0, restore_tool.cost])
+	await _frames(4)
+	await _shot("hull_gate_pop")
 	await _hold(&"restore", 3.0)
 	await _frames(3)
 	_check("repair: held, the rest come back", ship.gone().size() == lost0,
