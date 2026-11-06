@@ -10,7 +10,7 @@ extends Node3D
 ##
 ## Keys: WASD fly · SPACE/Q up, down · shift fast · SPACE SPACE walk/fly
 ##       LMB fire · WHEEL blast size · X wider blast
-##       1 gun · 2 debug blast · T next gun · R reload · L seams · F1 stats
+##       1 gun · 2 debug blast · T next gun · R reload · F12 seams · F1 stats · L flashlight
 ##       F5 save · F9 load · ESC mouse
 ##       V on foot · K a soldier · U a squad (advances on you when on foot)
 ##       On foot it plays as an FPS (PlayerController): WASD · SHIFT sprint ·
@@ -10582,6 +10582,7 @@ func _build_scenery() -> void:
 	# fall out of the sky halfway through a capture.
 	camera.allow_walk = camera.capture_mouse
 	camera.far = 3000.0
+	Flashlight.mount(camera)
 	# Outside the corner of the city, looking in along the diagonal. Scaled by
 	# the spacing, because --big puts 84 m towers on a 46 m pitch and the fixed
 	# position that was fine for a 13 m one starts INSIDE a building.
