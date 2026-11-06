@@ -184,7 +184,9 @@ func _write_world(i: int) -> void:
 
 
 func _state() -> Dictionary:
-	var at: Vector3 = scene._anchor()
+	# On foot, its feet: resume stands the pawn there (_set_on_foot). The anchor
+	# is its body's middle, and every load stood it that much higher (0.84 m).
+	var at: Vector3 = scene.pawn.feet() if scene.on_foot and not scene.piloting else scene._anchor()
 	var look: Vector3 = -(scene.ship.camera if scene.piloting else scene.cam).global_basis.z
 	var f := system.frame_node()
 	var kind := SPACE
