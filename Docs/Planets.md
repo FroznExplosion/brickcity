@@ -1974,7 +1974,32 @@ Other planet gates unchanged: topple 6, hits 8, damage 12, bricks 9, trees 7, sq
 `--gate=save` stages 1-3 as main (stage 3's "the player where they were" failed on main too, 2.9 m
 off; not this work -- fixed since, 11.12's "Save gate stage 3, fixed").
 
-Not yet: furniture, materialising for a fight far from the camera.
+**Plan, furniture (2026-11-06): the towers' rooms furnished, as bricks.** A planet tower is empty
+inside: its floors, walls, stairs and lights, nothing in its rooms. The city furnishes its towers'
+rooms (`RoomManifest.rooms_for`, `items_for`: two to five things a room, or an authored room of
+its kind) and draws them apart -- decorative bricks, out of the face bake (`FurnitureMesh`,
+`InteriorGroups`), laid as bricks only where a hit or a look reaches (Interiors §8). The planet
+takes the generated ships' and stations' way instead (`KitFurnish`): every room of a shape
+furnished once, when its template is made, as PLAIN bricks -- in the bake, so the bands draw them;
+in the collision; bricks to the AI (cover, a way round); shot, blasted and carried off with the
+floor they stand on like anything else. Nothing to lay later, nothing drawn apart, and it costs
+nothing again once the template is saved.
+- *Rooms:* the city's `RoomManifest.rooms_for(fx, fz, courses, seed)`, the seed the shape's, with the
+  staircase's footprint a post in every room it crosses (`BuildingRegistry.rooms_of` does that for
+  the stairwell: furniture stood on nothing there).
+- *Kept clear:* a lane from the front door into the ground storey (the door's width and a stud each
+  side, 8 studs deep), a post in the rooms it crosses -- the nav net's way in (`--gate=bricks`).
+- *Laid:* `RoomManifest.build_item`, which places decorative bricks, gets `decorative` (default as
+  now, true); the planet passes false. An item refused (something in the way) is skipped whole, as
+  in the city.
+- The furniture's block ids are kept with the shape's template, for the gate.
+Checks in `--gate=bricks` (headless): the building near the player has furniture in its rooms, on
+its floors -- plain bricks, solid (a ray down onto one stops on its top, not the floor); the way in
+through the front door, up the stairs, still walks (its existing checks); its brick steps and the
+shapes' build at load as they were, give or take the furniture's share (measured, said). The other
+planet gates unchanged.
+
+Not yet: materialising for a fight far from the camera.
 
 ### 11.12 Plan: the universe -- star systems, orbits, spinning planets (2026-10-28)
 
