@@ -153,6 +153,17 @@ static func set_burn(tex: Texture2D, rect: Vector4) -> void:
 			(m as ShaderMaterial).set_shader_parameter("weather_burn_rect", burn_rect)
 
 
+## Calm and dry, and no burnt ground: what a scene starts with. Static vars
+## outlive a scene, and the brick materials are shared and registered once, so
+## a storm or a wildfire still going when the city was left came into the next
+## scene -- wet, swaying, charred by a map of the old city's ground. Its owner
+## (DisasterDirector) calls this when it leaves. The registry is kept: those
+## shared materials are not registered again.
+static func clear() -> void:
+	set_weather(0.0, Vector3.ZERO, 0.0, 0.0, Color(0.93, 0.95, 0.99))
+	set_burn(null, Vector4.ZERO)
+
+
 ## The instance parameter for a tree `height` metres tall.
 static func sway_tree(height: float) -> Vector3:
 	return Vector3(height, TREE_LEAN, TREE_HZ)

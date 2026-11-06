@@ -57,6 +57,19 @@ static var fields: Array[Field] = []
 static var outside_pull := -1.0
 
 
+## Back to the flat game: no planet, no fields, nothing pinned. Static vars
+## outlive a scene, so whoever set them calls this when its scene goes
+## (PlanetScene, PlanetSystem): a station's 0 m/s^2 outside pull kept into the
+## city left the city with no gravity, and a freed planet node stayed here.
+static func reset() -> void:
+	planet = null
+	planet_strength = 9.8
+	planet_radius = 0.0
+	fields = []
+	outside_pull = -1.0
+	unpin()
+
+
 ## The field world point `p` is in; null outside them all.
 static func field_at(p: Vector3) -> Field:
 	for f: Field in fields:

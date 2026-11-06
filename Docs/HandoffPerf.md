@@ -149,3 +149,17 @@ main thread).
 
   Slow frames cut to about a third; the slow ones' GPU time halved. What is left in them is the
   city tick (17-19 ms on a slow frame) about as often as draw: section 3 item 1's spikes are next.
+
+### 6.2 What still lands on the main thread from mesh building (2026-11-05)
+
+Every mesh is already BUILT on a worker (bakes, arrays, packing). With the renderer on the main
+thread (the default, kept), Godot still makes each mesh's GPU buffers on the main thread at the
+next call into the renderer -- CityScene's "render" phase. `UploadLedger` (scripts/upload_ledger.gd)
+now counts what each worker handed over, and `[prof] render flush` names what a slow flush carried.
+One big-city collapse (editor open, so times are rough): the slow flushes were each ONE piece mesh
+-- 748k vertices 33 ms, 494k 23 ms, 866k 13 ms, 577k 10 ms. Over the pass, pieces uploaded 14.5 M
+vertices in 45 meshes (bands 1.3 M in 160, piece shadows 1.1 M in 103). The island budget
+(UPLOAD_VERTS_PER_TICK, 150k) cannot help: the first mesh of a tick always goes, and a mesh
+cannot be split. Options: (a) cut a big piece's mesh into slices (as a building's bands) uploaded
+a few a tick, the old mesh drawing until all are up; (b) fewer vertices in it (dead faces left
+out, as compaction does after settling); (c) the separate render thread (declined for now).

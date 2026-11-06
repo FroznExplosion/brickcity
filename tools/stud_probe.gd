@@ -145,9 +145,11 @@ func _check_workshop() -> void:
 	_ws._place()
 	var mmi: MultiMeshInstance3D = null
 	for key in _ws._frame_studs:
-		if key is Vector2i and key.x == f0:
+		if (key is Vector2i and key.x == f0) or (key is int and key == f0):
 			mmi = _ws._frame_studs[key]
-	_ok("they hang off a section under the frame's own mesh, so a rotated frame turns them",
-			mmi != null and mmi.get_parent().get_parent() == _ws._frame_meshes.get(f0))
+	# Under a section's mesh, or the frame's own when the library cannot draw in sections.
+	var holder: Node = null if mmi == null else (mmi.get_parent().get_parent() if _ws._draws_sections() else mmi.get_parent())
+	_ok("they hang off the frame's own mesh, so a rotated frame turns them",
+			mmi != null and holder == _ws._frame_meshes.get(f0))
 	_ok("and they cast no shadow",
 			mmi != null and mmi.cast_shadow == GeometryInstance3D.SHADOW_CASTING_SETTING_OFF)

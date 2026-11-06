@@ -686,6 +686,9 @@ func room_report() -> Dictionary:
 ## shape when the city is laid out (prepare_templates), so not even the first
 ## promotion of a shape -- often the one a hit forces, mid-fight -- pays for it.
 var _templates := {}
+## Generated towers get ceiling lights (CeilingLights). Off for a probe that
+## counts a tower's bricks as the recipe lays them.
+var lights := true
 
 
 func _template_key(b: Building) -> String:
@@ -719,6 +722,12 @@ func _lay_tower(b: Building, chunk: int) -> bool:
 	for f in b.fixtures:
 		f.build_into(world, chunk, fixture_parts(f.kind), offset)
 		lists.append(f.blocks.duplicate())
+	# Lights under its ceilings (Docs/Lighting.md 6.3), after the fixtures:
+	# their block ids stay what they were. A storey's hang from the slab of
+	# the one over it: laid without that one, they hang from it as an intact
+	# storey not laid (set_storey_bounds, BrickWorld.set_hang_levels).
+	if lights:
+		CeilingLights.hang(world, chunk, palette)
 	_templates[key] = [world.save_template(chunk), lists]
 	return true
 
@@ -1233,6 +1242,13 @@ func set_storey_bounds(b: Building) -> void:
 	for r in range(1, runs.size()):
 		anchors.append(lines[int(runs[r][0])])
 	world.set_anchor_levels(b.chunk, anchors)
+	# A run's top storey's ceiling lights hang from the slab of the storey over
+	# it; that storey not laid is intact, and holds them.
+	var hangs := PackedInt32Array()
+	for r in runs:
+		if lines[int(r[1])] < top_y:
+			hangs.append(lines[int(r[1])])
+	world.set_hang_levels(b.chunk, hangs)
 	for r in runs.size():
 		var y_top: int = lines[int(runs[r][1])]
 		var ids := world.get_blocks_topping(b.chunk, y_top) if y_top < top_y \

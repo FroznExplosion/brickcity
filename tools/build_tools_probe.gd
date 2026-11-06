@@ -32,6 +32,9 @@ func _initialize() -> void:
 	_ok("Draw starts on a line that makes walls", _ws._tools.outline == "line" and _ws._tools.makes == "walls")
 	_ws._tools.set_outline("box")
 	_ws._tools.makes = "solid"
+	# The checks were written with one-plate floors, and their heights say so; section 19's own
+	# checks use the city's two, which is what a building starts with.
+	_ws._tools.floor_plates = 1
 	_rail_checks()
 	_run_checks()
 	_kept_checks()
@@ -54,6 +57,7 @@ func _initialize() -> void:
 	_section_checks()
 	_big_edit_checks()
 	_packer_checks()
+	_far_checks()
 	print("\n%d passed, %d failed" % [_pass, _fail])
 	quit(1 if _fail > 0 else 0)
 
@@ -301,8 +305,9 @@ func _kept_checks() -> void:
 	var fam := true
 	for i in _ws.recipe.size():
 		var p := BrickPalette.part_of(_ws.recipe.part_of(i))
-		fam = fam and p in ["brick_1x4", "brick_1x2", "brick_1x1", "plate_1x4", "plate_1x2", "plate_1x1"]
-	_ok("of the held brick and smaller ones of its kind", fam)
+		var ps := BrickPalette.part_size(p)
+		fam = fam and BrickPalette.family_of(p) in ["brick", "plate"] and mini(ps.x, ps.z) == 1 and maxi(ps.x, ps.z) <= 4
+	_ok("of the held brick and smaller ones of its kind", fam, str(_ws.recipe.parts))
 	_ok("one undo edit for the whole shape", _ws._edits == ["shape"], str(_ws._edits))
 	# A hand-laid brick inside the doorway-to-be, and one elsewhere.
 	_hold("plate_1x1")
@@ -1457,7 +1462,10 @@ func _area_checks() -> void:
 	var t: WorkshopTools = _ws._tools
 	var fresh := WorkshopTools.new()
 	_ok("a storey is six bricks", fresh.storey_courses == 6, str(fresh.storey_courses))
+	_ok("on a floor two plates thick, as the city's", fresh.floor_plates == TowerRecipe.SLAB_PLATES
+			and fresh.floor_tall == TowerRecipe.SLAB_PLATES and TowerRecipe.SLAB_PLATES == 2)
 	fresh.free()
+	t.floor_plates = TowerRecipe.SLAB_PLATES
 	t.storey_courses = 6
 	t.flat_roof = false
 	_hold("plate_1x2")
@@ -1469,6 +1477,8 @@ func _area_checks() -> void:
 	var b := t.commit_pending()
 	_ok("whatever is held: 18 plates of wall, a plate held", int(t.shape_of(b).get("storey", 0)) == 18,
 			str(t.shape_of(b).get("storey", 0)))
+	_ok("storeys 20 plates apart, as the city's towers", int(t.shape_of(b).get("floor", 0)) + 18 == TowerRecipe.STOREY_PLATES,
+			str(t.shape_of(b).get("floor", 0)))
 
 	_ws._new_build()
 	_hold("brick_1x2")
@@ -1481,10 +1491,12 @@ func _area_checks() -> void:
 	var at := 610.5 * BrickPalette.STUD_M
 	t.door_size = WorkshopTools.DOOR
 	t.apply_opening("door", t.face_under(Vector3(at, 5.5 * BrickPalette.PLATE_M, 590.0 * BrickPalette.STUD_M), Vector3(0, 0, 1)))
-	_ok("a door fits a storey: open to its top, a head over it", not _solid(Vector3i(610, 2, 600))
-			and not _solid(Vector3i(610, 16, 600)) and _solid(Vector3i(610, 17, 600)) and _solid(Vector3i(610, 19, 600)),
-			"%s %s %s %s" % [_solid(Vector3i(610, 2, 600)), _solid(Vector3i(610, 16, 600)), _solid(Vector3i(610, 17, 600)),
-					_solid(Vector3i(610, 19, 600))])
+	# Two plates of floor (the city's slab), then 18 of wall: a door 15 tall and its head 3.
+	_ok("a door fits a storey: open to its top, a head over it", _solid(Vector3i(610, 2, 600))
+			and not _solid(Vector3i(610, 3, 600)) and not _solid(Vector3i(610, 17, 600)) and _solid(Vector3i(610, 18, 600))
+			and _solid(Vector3i(610, 20, 600)),
+			"%s %s %s %s %s" % [_solid(Vector3i(610, 2, 600)), _solid(Vector3i(610, 3, 600)), _solid(Vector3i(610, 17, 600)),
+					_solid(Vector3i(610, 18, 600)), _solid(Vector3i(610, 20, 600))])
 
 	_ws._new_build()
 	_ok("1000 bricks tall", _ws.height_plates == 1000 * BrickPalette.PLATES_PER_BRICK, str(_ws.height_plates))
@@ -1551,6 +1563,76 @@ func _area_checks() -> void:
 	_ok("and the view goes to the build, not the middle of the area",
 			_ws._camera.global_position.distance_to(BrickWorld.grid_to_world(Vector3i(10, 1, 10))) < 40.0,
 			str(_ws._camera.global_position))
+	t.floor_plates = 1
+
+
+## Drawn over frames, nearest first; flat far away (Docs/BuildTools.md section 19).
+func _far_checks() -> void:
+	print("[probe] far away, and laid over frames (section 19)")
+	if not _ws._draws_sections():
+		return   # said once, by _section_checks
+	var t: WorkshopTools = _ws._tools
+	_ws._new_build()
+	_ws.mesh_over_frames = true
+	_ws._camera.global_position = BrickWorld.grid_to_world(Vector3i(100, 30, 80))
+	# Across four tiles of studs and three, two layers up: two dozen sections.
+	var b := _a_building(4, Vector2i(40, 40), Vector2i(160, 140))
+	var f0: int = _ws.asm.frames[0]
+	var waiting: int = _ws._queued.size()
+	var drawn: int = (_ws._sections.get(f0, {}) as Dictionary).size()
+	_ok("a big lay draws a frame's worth at once and queues the rest", drawn == _ws.SECTIONS_AT_ONCE and waiting > 0,
+			"%d drawn, %d waiting" % [drawn, waiting])
+	var hit: Dictionary = _ws._first_hit(BrickWorld.grid_to_world(Vector3i(159, 1, 139)) + Vector3(0.1, 40.0, 0.1), Vector3.DOWN)
+	_ok("a ray finds bricks not drawn yet", int(hit.get("block", -1)) >= 0, str(hit))
+	var frames := 0
+	while not _ws._queued.is_empty() and frames < 50:
+		_ws._section_process()
+		frames += 1
+	_ok("the rest are drawn a frame's worth at a time", _ws._queued.is_empty() and frames == ceili(float(waiting) / _ws.SECTIONS_AT_ONCE),
+			"%d frames for %d" % [frames, waiting])
+	_sections_match_whole("drawn over frames")
+	_books_agree("drawn over frames")
+	_ws.mesh_over_frames = false
+
+	# Far away: flat, its seams drawn; back near: chamfered again.
+	_ws.draw_far_flat = true
+	_ws._camera.global_position = BrickWorld.grid_to_world(Vector3i(600, 200, 600))
+	_ws._section_process()
+	while not _ws._queued.is_empty():
+		_ws._section_process()
+	var flat := 0
+	var verts := 0
+	for mi: MeshInstance3D in _ws._sections[f0].values():
+		if mi.get_instance_shader_parameter("geo_bevel") == 0.0:
+			flat += 1
+		if mi.mesh.get_surface_count() > 0:
+			verts += (mi.mesh.surface_get_arrays(0)[Mesh.ARRAY_VERTEX] as PackedVector3Array).size()
+	var whole: Array = _ws.world.build_chunk_chamfer_mesh(f0, 0.0)
+	_ok("far away every section is flat", flat == (_ws._sections[f0] as Dictionary).size() and _ws._bevelled.is_empty(),
+			"%d of %d" % [flat, (_ws._sections[f0] as Dictionary).size()])
+	_ok("and draws what the flat mesh of the whole grid does", verts == (whole[Mesh.ARRAY_VERTEX] as PackedVector3Array).size(),
+			"%d vs %d" % [verts, (whole[Mesh.ARRAY_VERTEX] as PackedVector3Array).size()])
+	_ws._stud_lod()
+	var shown := 0
+	for key in _ws._frame_studs:
+		if is_instance_valid(_ws._frame_studs[key]) and (_ws._frame_studs[key] as Node3D).visible:
+			shown += 1
+	_ok("and its studs are not drawn", shown == 0, str(shown))
+	_ws._camera.global_position = BrickWorld.grid_to_world(Vector3i(50, 30, 30))
+	_ws._section_process()
+	while not _ws._queued.is_empty():
+		_ws._section_process()
+	_ok("close by, the near sections are chamfered again", not _ws._bevelled.is_empty()
+			and _ws._bevelled.size() < (_ws._sections[f0] as Dictionary).size(), "%d of %d" % [_ws._bevelled.size(), (_ws._sections[f0] as Dictionary).size()])
+	_ws._stud_lod()
+	shown = 0
+	for key in _ws._frame_studs:
+		if is_instance_valid(_ws._frame_studs[key]) and (_ws._frame_studs[key] as Node3D).visible:
+			shown += 1
+	_ok("and their studs drawn", shown > 0)
+	_books_agree("near and far")
+	_ws.draw_far_flat = false
+	_ws._camera.global_position = BrickWorld.grid_to_world(Vector3i(100, 30, 80))
 
 
 ## Every recipe brick against the world: where the recipe says, of the part it says, and
@@ -1777,6 +1859,8 @@ func _big_edit_checks() -> void:
 ## What the sections draw between them against one mesh of the whole grid: as many
 ## vertices, in the same places, the same colours.
 func _sections_match_whole(what: String) -> void:
+	if not _ws._draws_sections():
+		return   # said once, by _section_checks
 	var f0: int = _ws.asm.frames[0]
 	var total := 0
 	var sum := 0.0
@@ -1811,6 +1895,9 @@ func _sections_match_whole(what: String) -> void:
 
 func _section_checks() -> void:
 	print("[probe] edits cost what they touch (section 16)")
+	if not _ws._draws_sections():
+		_ok("this library draws in sections", false, "rebuild the extension: the workshop meshes whole without it")
+		return
 	_ws._new_build()
 	var t: WorkshopTools = _ws._tools
 	var f0: int = _ws.asm.frames[0]

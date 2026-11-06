@@ -86,6 +86,11 @@ const GRID_STUDS := 120
 const SECTION_STUDS := 48
 const SECTION_PLATES := 60
 const SECTION_MARGIN := 3
+## A frame's worth of sections to mesh: one a thread (BrickWorld.build_sections_chamfer_mesh).
+## A change that reaches no more is drawn at once.
+const SECTIONS_AT_ONCE := 8
+## How far studs are drawn. Past it a section's tops are flat; the printed seam stays.
+const STUD_RANGE := 40.0
 
 ## Build area size in studs, along and across.
 ## A variable rather than a constant so a scene built on this one can have its own
@@ -139,6 +144,15 @@ var _frame_meshes := {}     ## chunk id -> MeshInstance3D
 var _frame_studs := {}
 var _sections := {}         ## chunk id -> {section -> MeshInstance3D}, children of its mesh
 var _frame_boxes := {}      ## chunk id -> AABB of those, in the grid's own space
+var _queued := {}           ## Vector2i(chunk, section) -> true: to mesh, nearest first
+var _bevelled := {}         ## Vector2i(chunk, section) -> true while it is drawn chamfered
+var _tiered_from := Vector3(INF, INF, INF)   ## where the camera was when the tiers were last looked at
+var _studs_from := Vector3(INF, INF, INF)    ## and the studs'
+var _studs_changed := false
+## Draw a big change over frames, and far sections flat (Docs/BuildTools.md section 19). Off
+## headless, where a probe asks about the meshes straight after an edit.
+var mesh_over_frames := DisplayServer.get_name() != "headless"
+var draw_far_flat := DisplayServer.get_name() != "headless"
 var _stud_count := 0        ## studs drawn, all frames, after the last remesh
 var _ghost: MeshInstance3D
 var _ghost_studs: MultiMeshInstance3D   ## child of _ghost
@@ -1044,7 +1058,7 @@ func _repaint(rid: int, colour: int, material: int) -> void:
 ## Esc opens the pause menu here, as in the city (MenuHost asks) -- never over a scripted
 ## pass or a test window.
 func pause_allowed() -> bool:
-	return _tools != null and not DebugCamera.hands_off and not ("--gate" in OS.get_cmdline_user_args())
+	return _tools != null and not PlayerCamera.hands_off and not ("--gate" in OS.get_cmdline_user_args())
 
 
 func _place_keys() -> void:
@@ -1104,6 +1118,7 @@ func _archetype() -> int:
 func _process(_dt: float) -> void:
 	_dot.visible = Input.mouse_mode == Input.MOUSE_MODE_CAPTURED
 	_stud_lod()
+	_section_process()
 	if not _drag.is_empty():
 		_drag_process()
 	_place_handles()
@@ -2549,43 +2564,81 @@ func _remesh() -> void:
 				else world.build_chunk_mesh(f))
 		_restud(f, mi)
 	if sectioned:
-		_stud_count = 0
-		for key in _frame_studs:
-			var held: Variant = _frame_studs[key]
-			if is_instance_valid(held):
-				_stud_count += (held as MultiMeshInstance3D).multimesh.instance_count
+		var n := _queued.size()
+		_mesh_queued(n if not mesh_over_frames or n <= SECTIONS_AT_ONCE else SECTIONS_AT_ONCE)
+		_count_studs()
 
 
-## The building workshop's builds can be far too big to rebuild whole for each brick. An
-## old brick library has no way to do less.
+## Builds can be far too big to rebuild whole for each brick. An old brick library has no way
+## to do less.
 func _draws_sections() -> bool:
-	return _wants_tools() and ClassDB.class_has_method("BrickWorld", "build_sections_chamfer_mesh")
+	return ClassDB.class_has_method("BrickWorld", "build_sections_chamfer_mesh")
 
 
-func _show_bricks(mi: MeshInstance3D, f: int, arrays: Array) -> void:
+func _show_bricks(mi: MeshInstance3D, f: int, arrays: Array, bevelled: bool = BrickNear.enabled) -> void:
 	var m := ArrayMesh.new()
 	if arrays.size() > 0 and not (arrays[Mesh.ARRAY_VERTEX] as PackedVector3Array).is_empty():
 		m.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
 	mi.mesh = m
-	mi.set_instance_shader_parameter("geo_bevel", 1.0 if BrickNear.enabled else 0.0)
+	mi.set_instance_shader_parameter("geo_bevel", 1.0 if bevelled else 0.0)
 	# Frames are chunks of their own: wood's grain is the grid's across them.
 	BrickMaterials.set_grain_origin(mi, world, f)
 
 
-## Mesh again the sections of a grid the engine says have changed, and only those.
-func _remesh_sections(f: int, frame_node: MeshInstance3D) -> void:
+## The sections of a grid the engine says have changed, into the queue to be meshed.
+func _remesh_sections(f: int, _frame_node: MeshInstance3D) -> void:
 	world.set_chunk_section_studs(f, SECTION_STUDS)
 	world.set_chunk_section_plates(f, SECTION_PLATES)
 	# Untyped: these calls are newer than some libraries, and a typed call to a method the
 	# library lacks does not compile. `_draws_sections` has said they are there.
 	var engine: Variant = world
 	var changed: PackedInt32Array = engine.take_changed_sections(f, SECTION_MARGIN)
-	if changed.is_empty():
+	for s in changed:
+		_queued[Vector2i(f, s)] = true
+	if not changed.is_empty():
+		_box_frame(f)
+
+
+## Mesh up to `n` queued sections, nearest the camera first, each as near or far as it is.
+func _mesh_queued(n: int) -> void:
+	if _queued.is_empty() or n <= 0:
 		return
+	var eye := _camera.global_position if _camera != null else Vector3.ZERO
+	var keys := _queued.keys()
+	if keys.size() > n:
+		var dist := {}
+		for k in keys:
+			dist[k] = _section_distance(k, eye)
+		keys.sort_custom(func(a: Vector2i, b: Vector2i) -> bool: return float(dist[a]) < float(dist[b]))
+		keys.resize(n)
+	var groups := {}
+	for k: Vector2i in keys:
+		_queued.erase(k)
+		if not _frame_meshes.has(k.x):
+			continue
+		var g := Vector2i(k.x, 1 if _wants_bevel(k, eye) else 0)
+		(groups.get_or_add(g, []) as Array).append(k.y)
+	for g: Vector2i in groups:
+		_mesh_sections(g.x, PackedInt32Array(groups[g]), g.y == 1)
+	_count_studs()
+
+
+func _count_studs() -> void:
+	_stud_count = 0
+	for key in _frame_studs:
+		var held: Variant = _frame_studs[key]
+		if is_instance_valid(held):
+			_stud_count += (held as MultiMeshInstance3D).multimesh.instance_count
+
+
+func _mesh_sections(f: int, list: PackedInt32Array, bevelled: bool) -> void:
+	var engine: Variant = world
+	var frame_node: MeshInstance3D = _frame_meshes[f]
 	var held: Dictionary = _sections.get_or_add(f, {})
-	var meshes: Array = engine.build_sections_chamfer_mesh(f, changed, BrickNear.BEVEL if BrickNear.enabled else 0.0)
-	for i in changed.size():
-		var s := changed[i]
+	var meshes: Array = engine.build_sections_chamfer_mesh(f, list, BrickNear.BEVEL if bevelled else 0.0)
+	var inv := world.get_chunk_transform(f).affine_inverse()
+	for i in list.size():
+		var s := list[i]
 		var arrays: Array = meshes[i]
 		var studs: PackedFloat32Array = engine.get_section_studs(f, s)
 		var key := Vector2i(f, s)
@@ -2595,24 +2648,90 @@ func _remesh_sections(f: int, frame_node: MeshInstance3D) -> void:
 				mi.queue_free()
 				held.erase(s)
 				_frame_studs.erase(key)
+			_bevelled.erase(key)
 			continue
 		if mi == null:
 			mi = MeshInstance3D.new()
 			mi.material_override = _material
 			frame_node.add_child(mi)
 			held[s] = mi
-		_show_bricks(mi, f, arrays)
-		var inv := world.get_chunk_transform(f).affine_inverse()
+		_show_bricks(mi, f, arrays, bevelled)
+		if bevelled:
+			_bevelled[key] = true
+		else:
+			_bevelled.erase(key)
 		for id in engine.get_section_side_stud_blocks(f, s):
 			var col := BrickWorld.get_material_colour(world.get_block_material(f, id), world.get_block_colour(f, id))
 			studs.append_array(_side_stud_floats(f, id, inv, col))
 		_fill_studs(key, mi, studs)
+	_box_frame(f)
+
+
+## What a grid's bricks fill, drawn or queued to be: a ray has to find a brick not drawn yet.
+func _box_frame(f: int) -> void:
 	var box := AABB()
-	for s in held:
-		var part: AABB = (held[s] as MeshInstance3D).get_aabb()
+	for s in _sections.get(f, {}):
+		var part: AABB = (_sections[f][s] as MeshInstance3D).get_aabb()
 		if part.has_volume():
 			box = part if not box.has_volume() else box.merge(part)
+	for k: Vector2i in _queued:
+		if k.x == f:
+			var part := _section_box(k.y)
+			box = part if not box.has_volume() else box.merge(part)
 	_frame_boxes[f] = box
+
+
+## A section's box in its grid's own space, in metres: the cells it draws, and a brick's
+## reach past them (a brick belongs to the section its lowest cell is in).
+func _section_box(s: int) -> AABB:
+	var nx := ceili(float(plate_studs) / SECTION_STUDS)
+	var nz := ceili(float(plate_studs) / SECTION_STUDS)
+	@warning_ignore("integer_division")
+	var layer := s / (nx * nz)
+	var size := Vector3(SECTION_STUDS * BrickPalette.STUD_M, SECTION_PLATES * BrickPalette.PLATE_M,
+			SECTION_STUDS * BrickPalette.STUD_M)
+	@warning_ignore("integer_division")
+	var at := Vector3(s % nx, layer, (s / nx) % nz) * size
+	return AABB(at, size).grow(1.0)
+
+
+## How far the camera is from a section, in metres.
+func _section_distance(k: Vector2i, eye: Vector3) -> float:
+	var mi: MeshInstance3D = _sections.get(k.x, {}).get(k.y)
+	var local := _section_box(k.y)
+	if mi != null and mi.get_aabb().has_volume():
+		local = mi.get_aabb()
+	var box := world.get_chunk_transform(k.x) * local
+	return eye.distance_to(eye.clamp(box.position, box.end))
+
+
+## Chamfered near the camera, flat past it (as the city's BrickNear), with its margin so a
+## section on the line does not flicker between them.
+func _wants_bevel(k: Vector2i, eye: Vector3) -> bool:
+	if not BrickNear.enabled:
+		return false
+	if not draw_far_flat or _camera == null:
+		return true
+	var reach := BrickNear.radius + (BrickNear.MARGIN if _bevelled.has(k) else 0.0)
+	return _section_distance(k, eye) < reach
+
+
+## As the camera moves, the sections that crossed the line go back in the queue, and each
+## frame meshes a frame's worth of the queue.
+func _section_process() -> void:
+	if not _draws_sections():
+		return
+	if draw_far_flat and BrickNear.enabled and _camera != null:
+		var eye := _camera.global_position
+		if eye.distance_to(_tiered_from) > 1.0:
+			_tiered_from = eye
+			for f in _sections:
+				for s in _sections[f]:
+					var k := Vector2i(f, s)
+					if _wants_bevel(k, eye) != _bevelled.has(k):
+						_queued[k] = true
+	if not _queued.is_empty():
+		_mesh_queued(SECTIONS_AT_ONCE)
 
 
 ## Studs for one frame: the same instanced stud and the same printed material
@@ -2661,6 +2780,11 @@ func _stud_lod() -> void:
 	if _camera == null:
 		return
 	var eye := _camera.global_position
+	# Only when the camera has moved or studs were made again: a big build has hundreds of them.
+	if eye.distance_to(_studs_from) < 0.25 and not _studs_changed:
+		return
+	_studs_from = eye
+	_studs_changed = false
 	for frame in _frame_studs:
 		# A frame that emptied was freed with its mesh; its entry stays.
 		var held: Variant = _frame_studs[frame]
@@ -2669,9 +2793,16 @@ func _stud_lod() -> void:
 		var mmi: MultiMeshInstance3D = held
 		if mmi.multimesh == null or mmi.multimesh.instance_count == 0:
 			continue
-		var box := mmi.multimesh.get_aabb()
-		var local := mmi.global_transform.affine_inverse() * eye
-		var dist := local.distance_to(local.clamp(box.position, box.end))
+		# From the boxes kept here, not the MultiMesh's: that is asked of the renderer
+		# (Docs/WhereWorkRuns.md), and is empty headless.
+		var dist: float
+		if frame is Vector2i:
+			dist = _section_distance(frame, eye)
+		else:
+			var box := world.get_chunk_transform(int(frame)) * _frame_box(int(frame))
+			dist = eye.distance_to(eye.clamp(box.position, box.end))
+		# Past this a stud is a pixel or two, and a big build has hundreds of thousands.
+		mmi.visible = not draw_far_flat or dist < STUD_RANGE
 		var plain := mmi.multimesh.mesh == PieceMeshes.stud_plain()
 		var want_plain := dist > BrickNear.stud_bevel_radius + (0.0 if plain else BrickNear.MARGIN)
 		if want_plain != plain:
@@ -2696,6 +2827,7 @@ func _fill_studs(key: Variant, parent: MeshInstance3D, buffer: PackedFloat32Arra
 		mmi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 		parent.add_child(mmi)
 		_frame_studs[key] = mmi
+	_studs_changed = true
 	@warning_ignore("integer_division")
 	var count := buffer.size() / 16
 	var mm := MultiMesh.new()
@@ -2971,6 +3103,8 @@ func _reset_space() -> void:
 	_frame_studs.clear()
 	_sections.clear()
 	_frame_boxes.clear()
+	_queued.clear()
+	_bevelled.clear()
 	_clear_fixtures()
 	_edits.clear()
 	_paints.clear()

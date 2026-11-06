@@ -82,6 +82,13 @@ class Piece:
 	var impacts := 0
 	## Over the cap: shrinking since (ms), 0 while kept.
 	var fading_since := 0
+	## Its building's storey lines, in plates of the building's grid (which
+	## split_island keeps): where a landing prefers to snap it (_snap_across).
+	var lines := PackedInt32Array()
+	## Cracks a landing put across its X or Z (cell planes, chunk-local): it is
+	## parted along them (crack_components), then they are forgotten.
+	var cracks_x := PackedInt32Array()
+	var cracks_z := PackedInt32Array()
 
 ## The ground changed where `box` (world) is: a piece settled there, woke, was
 ## hit or went. The scene's AI syncs its regions and forgets the box (setup_ai).
@@ -97,6 +104,8 @@ var crumbs: PlanetCrumbs
 ## Counters, for the gates: hard landings, the pieces they broke off, the
 ## groups that went to crumbs (small / over the cap), pieces faded off the cap.
 var landings := 0
+## Bricks hard landings sheared loose where they touched (PIECE_SHEAR, peeled).
+var sheared := 0
 var snaps := 0
 var broke_off := 0
 var crumbed_small := 0
@@ -123,7 +132,8 @@ func setup(world: BrickWorld, p: Node3D, material: Material) -> void:
 ## Cut each group of `groups` (block ids of `source`) out into a falling piece,
 ## moving at `linear` (world) -- or into crumbs, when it is small or the cap is
 ## full. Returns how many pieces were made.
-func shed(source: int, groups: Array, linear := Vector3.ZERO) -> int:
+func shed(source: int, groups: Array, linear := Vector3.ZERO,
+		lines := PackedInt32Array()) -> int:
 	var n := 0
 	for g in groups:
 		var ids: PackedInt32Array = g
@@ -144,6 +154,7 @@ func shed(source: int, groups: Array, linear := Vector3.ZERO) -> int:
 		p.local_com = split.local_com
 		p.bricks = ids.size()
 		p.born_ms = Time.get_ticks_msec()
+		p.lines = lines
 		bricks.set_chunk_anchored(p.chunk, false)
 		var body := RigidBody3D.new()
 		body.mass = maxf(float(split.mass) * IslandManager.MASS_SCALE, 0.5)
@@ -178,9 +189,10 @@ func shed(source: int, groups: Array, linear := Vector3.ZERO) -> int:
 ## until the piece is first drawn again, and casts its own shadow meanwhile.
 ## The caller has freed the building's collision FIRST: a body that starts
 ## inside it is thrown by the solver.
-func adopt(chunk: int, carried: Node3D) -> Piece:
+func adopt(chunk: int, carried: Node3D, lines := PackedInt32Array()) -> Piece:
 	var p := Piece.new()
 	p.chunk = chunk
+	p.lines = lines
 	p.local_com = bricks.get_chunk_com(chunk)
 	p.bricks = bricks.get_alive_block_count(chunk)
 	p.born_ms = Time.get_ticks_msec()
@@ -360,18 +372,24 @@ func _break_on_landing(p: Piece, lost: float) -> void:
 		e.limit = SHEAR_MAX_BLOCKS
 		e.flags = DamageLog.FLAG_PEEL
 		loosened += DamageLog.apply_entry(bricks, p.chunk, e).size()
+	sheared += loosened
 	loosened += _snap_across(p, contacts, lost, xf)
 	bricks.set_chunk_transform(p.chunk, xf)
-	if loosened == 0:
+	# A crack loosens nothing: the piece is parted along it.
+	var cracked := not p.cracks_x.is_empty() or not p.cracks_z.is_empty()
+	if loosened == 0 and not cracked:
 		return
-	var comps: Array = bricks.get_components_near(p.chunk)
+	var comps: Array = bricks.crack_components(p.chunk, p.cracks_x, p.cracks_z) if cracked \
+			else bricks.get_components_near(p.chunk)
+	p.cracks_x = PackedInt32Array()
+	p.cracks_z = PackedInt32Array()
 	if comps.size() <= 1:
 		return
 	var off := comps.slice(1)
 	var gone := 0
 	for g in off:
 		gone += (g as PackedInt32Array).size()
-	broke_off += shed(p.chunk, off, b.linear_velocity)
+	broke_off += shed(p.chunk, off, b.linear_velocity, p.lines)
 	bricks.mark_chunk_whole(p.chunk)
 	p.bricks = maxi(p.bricks - gone, 1)
 	_reshape(p)
@@ -444,7 +462,7 @@ func damage(p: Piece, point: Vector3, shot: Dictionary) -> int:
 			var off := comps.slice(1)
 			for g in off:
 				p.bricks = maxi(p.bricks - (g as PackedInt32Array).size(), 0)
-			broke_off += shed(p.chunk, off, linear)
+			broke_off += shed(p.chunk, off, linear, p.lines)
 			bricks.mark_chunk_whole(p.chunk)
 		_reshape(p)
 		_start_mesh(p)
@@ -484,34 +502,72 @@ func _wake(p: Piece) -> void:
 
 
 ## A long piece landing hard snaps across at its contacts: the city's rule
-## (IslandManager._snap_across) -- its long axis, at least BREAK_MIN_LENGTH; the
-## drop it needs less the longer it is; a plane at each contact, never within
-## BREAK_MIN_PIECE of an end nor BREAK_SPACING of another, BREAK_PLANES_MAX at
-## most; one PIECE_SNAP (a seam first, a torn band where there is none). Not yet
-## the city's preferences -- a weak seam, a floor line, a crack -- which read
-## its island's own records. Returns the bricks torn.
+## (IslandManager._snap_across) -- along its grid's Y whenever it is
+## BREAK_MIN_LENGTH long that way (only Y has seams), else its longer X or Z;
+## the drop it needs less the longer it is; never within BREAK_MIN_PIECE of an
+## end nor BREAK_SPACING of another break, BREAK_PLANES_MAX at most. Where:
+## along Y, the weakest seam near the contact or its storey line (_weak_seam,
+## _floor_line), one PIECE_SNAP; across X or Z, a crack along the bond
+## (_weak_crack), which loosens nothing -- the landing parts the piece along it.
+## Returns the bricks torn.
+const SEAM_PREFERS_FLOOR := IslandManager.SEAM_PREFERS_FLOOR
+const SEAM_REACH := IslandManager.SEAM_REACH
+const CRACK_REACH := IslandManager.CRACK_REACH
+## The city's census of it: breaks at the weakest seam in reach, on a storey
+## line, cracked across, torn as a band; and along Y at neither (no seam in
+## reach and no storey line: where it was struck).
+var seam_breaks := 0
+var plain_breaks := 0
+var floor_breaks := 0
+var crack_breaks := 0
+var band_breaks := 0
+
 func _snap_across(p: Piece, contacts: PackedVector3Array, severity: float, xf: Transform3D) -> int:
-	var size := Vector3(bricks.get_chunk_dims(p.chunk)) * BrickWorld.get_cell_size()
+	var cs := BrickWorld.get_cell_size()
+	var size := Vector3(bricks.get_chunk_dims(p.chunk)) * cs
 	var axis := Vector3(0, 1, 0)
 	var length := size.y
-	if size.x > length and size.x >= size.z:
-		axis = Vector3(1, 0, 0)
-		length = size.x
-	elif size.z > length:
-		axis = Vector3(0, 0, 1)
-		length = size.z
+	if length < BREAK_MIN_LENGTH and (size.x > length or size.z > length):
+		if size.x >= size.z:
+			axis = Vector3(1, 0, 0)
+			length = size.x
+		else:
+			axis = Vector3(0, 0, 1)
+			length = size.z
 	if length < BREAK_MIN_LENGTH:
 		return 0
 	if severity < BREAK_MIN_DROP * clampf(BREAK_MIN_LENGTH / length, 0.2, 1.0):
 		return 0
+	var along_y := axis.y > 0.5
+	var cell := cs.y if along_y else (cs.x if axis.x > 0.5 else cs.z)
 	var inv := xf.affine_inverse()
 	var used: Array[float] = []
 	var points := PackedVector3Array()
+	var cracks := PackedInt32Array()
+	var counted := {}   # the piece's seams or planes, counted once a landing
+	var weak_n := 0
+	var floor_n := 0
+	var plain_n := 0
 	for c in contacts:
-		if points.size() >= BREAK_PLANES_MAX:
+		if used.size() >= BREAK_PLANES_MAX:
 			break
 		var local := inv * c
 		var at := local.dot(axis)
+		var seam_at := INF
+		var weak := false
+		if along_y:
+			seam_at = _weak_seam(p, at, 0.0, length, counted)
+			weak = seam_at != INF
+			if not weak:
+				seam_at = _floor_line(p, at, 0.0, length)
+		else:
+			seam_at = _weak_crack(p, 0 if axis.x > 0.5 else 2, at, 0.0, length, counted)
+			if seam_at == INF:
+				continue   # nothing joined across there: nothing to snap
+		if seam_at != INF:
+			at = seam_at
+			if along_y:
+				local.y = seam_at
 		if at < BREAK_MIN_PIECE or length - at < BREAK_MIN_PIECE:
 			continue
 		var crowded := false
@@ -520,7 +576,26 @@ func _snap_across(p: Piece, contacts: PackedVector3Array, severity: float, xf: T
 		if crowded:
 			continue
 		used.append(at)
+		if not along_y:
+			cracks.append(roundi(at / cell))
+			continue
 		points.append(DamageLog.grid_frame(bricks, p.chunk) * local)
+		if seam_at != INF and _is_floor_line(p, seam_at):
+			floor_n += 1
+		if weak:
+			weak_n += 1
+		elif seam_at == INF:
+			plain_n += 1
+	if not along_y:
+		if cracks.is_empty():
+			return 0
+		if axis.x > 0.5:
+			p.cracks_x.append_array(cracks)
+		else:
+			p.cracks_z.append_array(cracks)
+		crack_breaks += cracks.size()
+		snaps += cracks.size()
+		return 0
 	if points.is_empty():
 		return 0
 	var e := DamageLog.Entry.new()
@@ -532,7 +607,126 @@ func _snap_across(p: Piece, contacts: PackedVector3Array, severity: float, xf: T
 	var torn := DamageLog.apply_entry(bricks, p.chunk, e)
 	if not torn.is_empty():
 		snaps += points.size()
+		seam_breaks += weak_n
+		floor_breaks += floor_n
+		plain_breaks += plain_n
+		if e.flags & DamageLog.FLAG_BANDED:
+			band_breaks += points.size()
 	return torn.size()
+
+
+func snap_census_line() -> String:
+	return "landings snapped %d time(s): %d at the weakest seam in reach, %d on a storey line, %d cracked across, %d torn as a band" % [
+			snaps, seam_breaks, floor_breaks, crack_breaks, band_breaks]
+
+
+## Where a piece struck at `at` (metres up its grid's Y, chunk-local) snaps:
+## the course boundary in reach that lets go of the fewest studs
+## (BrickWorld.seam_studs) -- those meeting there and those at the feet of the
+## blocks running through it, which a stepped seam pulls off -- half a storey
+## either way (SEAM_REACH with no storeys); the nearer of two as weak; a storey
+## line before anything not clearly weaker (SEAM_PREFERS_FLOOR);
+## BREAK_MIN_PIECE left either side. INF when nothing in reach is a seam.
+## IslandManager._weak_seam's, on the piece's own storey lines.
+func _weak_seam(p: Piece, at: float, lo: float, hi: float, counted: Dictionary) -> float:
+	var cy: float = BrickWorld.get_cell_size().y
+	var origin_y: int = bricks.get_chunk_origin(p.chunk).y
+	var reach := SEAM_REACH
+	var per := IslandManager._storey_at(p.lines, roundi(at / cy) + origin_y)
+	if per > 0:
+		reach = float(per) * cy * 0.5
+	var first := ceili((lo + BREAK_MIN_PIECE) / cy)
+	var last := floori((hi - BREAK_MIN_PIECE) / cy)
+	var k_at := roundi(at / cy)
+	var k0 := maxi(k_at - ceili(reach / cy), first)
+	var k1 := mini(k_at + ceili(reach / cy), last)
+	if k1 < k0:
+		return INF
+	if not counted.has("studs"):
+		counted["from"] = first
+		counted["studs"] = bricks.seam_studs(p.chunk, first, last)
+	var studs: PackedInt32Array = counted["studs"]
+	var skip: int = k0 - int(counted["from"])
+	var best := -1
+	var best_cost := 0
+	var line := -1
+	var line_cost := 0
+	for i in k1 - k0 + 1:
+		var j := (skip + i) * 3
+		# Where no two blocks meet there is no seam to open, whatever runs through.
+		if studs[j] <= 0:
+			continue
+		var cost := studs[j] + studs[j + 2]
+		var nearer := best < 0 or absi(k0 + i - k_at) < absi(k0 + best - k_at)
+		if best < 0 or cost < best_cost or (cost == best_cost and nearer):
+			best = i
+			best_cost = cost
+		if IslandManager._on_line(p.lines, k0 + i + origin_y) \
+				and (line < 0 or absi(k0 + i - k_at) < absi(k0 + line - k_at)):
+			line = i
+			line_cost = cost
+	if best < 0:
+		return INF
+	if line >= 0 and float(best_cost) >= float(line_cost) * SEAM_PREFERS_FLOOR:
+		best = line
+	return float(k0 + best) * cy
+
+
+## The storey line nearest `at` (up the piece's grid Y, chunk-local metres)
+## that leaves BREAK_MIN_PIECE either side, or INF (IslandManager._floor_line).
+func _floor_line(p: Piece, at: float, lo: float, hi: float) -> float:
+	if p.lines.is_empty():
+		return INF
+	var cy: float = BrickWorld.get_cell_size().y
+	var origin_y: int = bricks.get_chunk_origin(p.chunk).y
+	var plates := at / cy + float(origin_y)
+	var i := p.lines.bsearch(roundi(plates))
+	var near := i
+	if i >= p.lines.size() or (i > 0 and absf(plates - p.lines[i - 1]) < absf(p.lines[i] - plates)):
+		near = i - 1
+	for k in [near, near - 1, near + 1]:
+		if k < 0 or k >= p.lines.size():
+			continue
+		var y := float(p.lines[k] - origin_y) * cy
+		if y - lo >= BREAK_MIN_PIECE and hi - y >= BREAK_MIN_PIECE:
+			return y
+	return INF
+
+
+func _is_floor_line(p: Piece, y: float) -> bool:
+	return IslandManager._on_line(p.lines, roundi(y / BrickWorld.get_cell_size().y)
+			+ bricks.get_chunk_origin(p.chunk).y)
+
+
+## Where a piece struck at `at` (metres along its grid's X, `axis` 0, or Z, 2)
+## cracks: the plane within CRACK_REACH that lets go of the fewest studs, each
+## brick going with the side its middle is on (BrickWorld.crack_studs) -- along
+## the bond, as a snapped slab of bricks does. INF when nothing is joined across
+## any plane in reach. IslandManager._weak_crack's.
+func _weak_crack(p: Piece, axis: int, at: float, lo: float, hi: float, counted: Dictionary) -> float:
+	var cs := BrickWorld.get_cell_size()
+	var cell := cs.x if axis == 0 else cs.z
+	var first := ceili((lo + BREAK_MIN_PIECE) / cell)
+	var last := floori((hi - BREAK_MIN_PIECE) / cell)
+	var k_at := roundi(at / cell)
+	var k0 := maxi(k_at - ceili(CRACK_REACH / cell), first)
+	var k1 := mini(k_at + ceili(CRACK_REACH / cell), last)
+	if k1 < k0:
+		return INF
+	var key := "crack%d" % axis
+	if not counted.has(key):
+		counted[key] = [first, bricks.crack_studs(p.chunk, axis, first, last)]
+	var from: int = counted[key][0]
+	var studs: PackedInt32Array = counted[key][1]
+	var best := -1
+	for k in range(k0, k1 + 1):
+		var n := studs[k - from]
+		if n <= 0:
+			continue
+		if best < 0 or n < studs[best - from] or (n == studs[best - from]
+				and absi(k - k_at) < absi(best - k_at)):
+			best = k
+	return float(best) * cell if best >= 0 else INF
 
 
 ## The piece's shapes from its bricks as they are now -- out of the space

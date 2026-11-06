@@ -23,7 +23,7 @@ ground (Zylann voxel module, after STA's planets), impostor from orbit, atmosphe
 shader-only sea, towns and landmarks of buildings that crest the horizon and fade in by size,
 a translation-only floating origin at 4 km.
 
-- **Player:** `PlanetPlayerKit` (scripts/planet/planet_player_kit.gd) -- the firefight's kit:
+- **Player:** `PlayerKit` (scripts/pawn/player_kit.gd, shared with the city) -- the firefight's kit:
   PlayerHud, PlayerArsenal (slots 1-4, 5 ordnance, pickups, grenades, skills, the saved kit and
   level), aim assist, hit feedback, callouts, aggro meter. Not yet: brick melee context, mech call,
   workbench. F flies (`PlanetWalker`): 50 m/s, wheel to change, **Shift 500 m/s**.
@@ -110,8 +110,14 @@ A/B shows the scene's own per-tick sync already covers it). Step 6, a storey giv
 what is above (the city's TIP / CRUSH): built (`PlanetBuildings._storey_fail`, asked from
 `_solve_site` when nothing is loose; `--gate=storey` 12/12). A crushed storey's bricks are
 crumbs (left torn in the chunk they held the top up); planet bricks now have the city's stud
-strength (`BrickStrength.tension()`, was the engine's 400). Next in D2: the city's snap
-preferences. `BrickWorld.is_solid` takes GRID cells
+strength (`BrickStrength.tension()`, was the engine's 400). Step 7, where a landing snaps a
+piece (the city's weak seam / storey line up Y, crack along the bond across; pieces carry their
+building's storey lines): built (`PlanetPieces._snap_across`, `--gate=snap` 8/8); the crushed
+storey's crumbs are logged as a DETACH. D2's list from the city is done. Furniture: built (each shape's rooms
+furnished in its template as plain bricks, `PlanetBuildings._furnish`; `--gate=bricks` 11/11).
+What is left on the planet's buildings is materialising for a fight far from the camera.
+A piece's chunk keeps bricks that broke off it (detached) and dead ones: sample a piece through
+`get_detached_blocks` / `get_dead_blocks`, as `--gate=pieces_ai` does now. `BrickWorld.is_solid` takes GRID cells
 (it subtracts the chunk's origin); `block_at` takes chunk-local ones. `get_alive_block_count`
 drops when a group is shed; `get_block_boxes`' `alive` counts more (2387 above one storey of a
 1622-brick tower; not chased) -- don't mix the two.

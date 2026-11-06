@@ -550,9 +550,12 @@ static func is_detail(part: Array) -> bool:
 ## `roles`, when given, gets one BuildRecipe.Role per block laid, in order: an
 ## authored item's DETAIL parts are laid here like any other (they are bricks
 ## now) and the caller may want to know which they were.
+##
+## `decorative` false lays plain bricks: in the face bake, drawn with the walls
+## round them (a planet tower's rooms, furnished in its template).
 static func build_item(world: BrickWorld, chunk: int, palette: Dictionary,
 		item: Dictionary, colour: int, offset: Vector3i = Vector3i.ZERO,
-		roles: Array = []) -> PackedInt32Array:
+		roles: Array = [], decorative := true) -> PackedInt32Array:
 	var out := PackedInt32Array()
 	var parts: Array = parts_of(str(item.type))
 	var first_role := roles.size()
@@ -568,7 +571,7 @@ static func build_item(world: BrickWorld, chunk: int, palette: Dictionary,
 		# bake away by then, and re-baking a 50,000-brick building to add a
 		# chair is what made one room cost 225 ms.
 		var id := world.place_block(chunk, at + (part[1] as Vector3i), palette[name],
-				_part_colour(part, colour, BrickWorld.get_filament_count()), true)
+				_part_colour(part, colour, BrickWorld.get_filament_count()), decorative)
 		if id < 0:
 			# All of it or none of it. A part that is refused -- something is
 			# in the way -- takes the rest out with it: a crate whose bricks

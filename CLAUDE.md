@@ -86,6 +86,11 @@ The engine library is **not committed**; each worktree builds its own.
   `brick_near.gd`, `brick.gdshader`): `brick_bevel_probe`, `brick_bevel_gap_probe`
   (not headless) and `--path . res://scenes/city.tscn -- --chamfer`
   (Docs/BrickBevel.md).
+- City scene passes (`res://scenes/city.tscn -- --<pass>`) live in
+  `tools/city_passes.gd`, not in `city_scene.gd`: the city reads the flag and
+  calls `_pass_runner()._run_<x>_pass()`. A pass reaches the city through
+  `city.` (typed, so a missing name is a parse error). New passes and their
+  helpers go there too. They need a window: headless they hang after setup.
 - Run the probes your change could affect before merging.
 
 ### Open issue: the PC crashes and shuts itself off
@@ -140,8 +145,9 @@ to do all three, and Escape (their way out) paused the pass.
 - Without the file a scripted pass still never captures the mouse and cannot
   be paused (`CityScene._scripted`), but its window opens mid-screen with the
   keyboard. Copy the file.
-- New code that captures the mouse must not do it when `DebugCamera.hands_off`
-  is set (today `DebugCamera._set_captured` is the only place that captures).
+- New code that captures the mouse must not do it when `PlayerCamera.hands_off`
+  is set (today `PlayerCamera._set_captured` is the only place that captures;
+  DebugCamera, the free camera, extends PlayerCamera).
 - A test window, and any scripted city pass, runs on the settings menu's
   **defaults**, in memory (`TestWindow.use_default_settings`): what the user
   has saved in Options no longer changes a gate's pictures or numbers. So a

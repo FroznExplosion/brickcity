@@ -76,7 +76,7 @@ func _press(menu: Node, text: String) -> bool:
 func _run() -> void:
 	print("ground tools probe")
 	# A probe's scene must never take the mouse (CLAUDE.md, "Testing").
-	DebugCamera.hands_off = true
+	PlayerCamera.hands_off = true
 	_ok("the geometry chamfer is on without a scene asking", TerrainTile.bevel_enabled)
 
 	await _arena()
