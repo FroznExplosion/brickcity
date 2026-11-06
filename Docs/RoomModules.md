@@ -776,9 +776,24 @@ two ticks in, upright in 0.43 s and on its feet on the field's floor; where noth
 deck in open space G off -- nothing pulls, floating -- and on again, back on the deck. `--gate=hull`:
 inside the parked ship its own field, outside it the world's. `--gate=adrift`: 7.8.
 
+**Its generator** (built 2026-11-06, `GravityGenerator`): a column of bricks -- two 2x2 bricks,
+the upper a light one, and a tile -- in a corner of a station's core (the space of kind `living`)
+or a ship's engine room (else its reactor), on its floor, against the most walls and
+`DOOR_KEEP` (2) studs from any doorway; laid before the furniture, each brick in its floor's
+section. `meta.generator` {from, bricks}. While every one of its bricks stands the station pulls
+(and G turns it on and off); any of them dead or gone with a piece (`generator_out`, looked at
+every 10 physics ticks), nothing pulls there and G cannot bring it back; the HUD says "GRAVITY
+GENERATOR SHOT OUT". A build with none (a tower's, a boat's, a ship the player built) is never out.
+
+**Saved**: a world's save lists its stations whose generator is off (`gravity_off`); the ship's
+state keeps its own (`gravity_on`). A shot-out generator needs nothing more: its bricks' damage is
+saved as the rest is (`gone`).
+
+`--gate=hull` also, last: its generator's bricks shot out -- its own field gone from inside it,
+the world's gravity there instead, G does not turn it on, the HUD says so.
+
 Not yet: Gravity is still one down for whoever asks at a point, but one strength for the rest
-(`strength()`); a generator is the whole ship's or station's, not a part of it that can be shot
-out; G is not saved.
+(`strength()`); a generator cannot be mended.
 
 ### 7.13 Ladders (built 2026-11-04)
 
@@ -800,6 +815,22 @@ ladder's own Y, whatever pulls, or nothing.
 from half way climbs down and lets go at the floor; jump springs off (1.1 m out); the same wall
 with no ladder is not climbed. `room_station_probe`: 7.2.
 
-Not yet: the city and the workshop lay a generated tower's ladder's bricks (a player's module
-whose stair has no floor) but put no node for it: there it is not climbed; soldiers do not climb
-(the nav has no ladder edges); a ship's decks still go by its stair well.
+**In the city and the workshop** (2026-11-06): `BuildLadders`, beside BuildDoors and BuildLifts
+and fed the same builds, puts a node for each of a build's `meta.ladders` and moves it with the
+build's chunk -- a generated tower's ladder (a player's module whose stair has no floor) is
+climbed there as in a station. Cut into sections (`BuildSections.split`), a ladder goes with the
+section its foot is in. `build_doors_probe`: a build's ladder's node at its face, found by a
+figure stood before it; a station cut into 17 sections, its ladder in one, where it stood.
+
+**Soldiers** (2026-11-06). The nav (AINav, the brick grid) has no ladder edges, so a ladder is
+a leg of the soldier's own: when its path to a goal on another level fails, or ends a level
+short, `Soldier._start_ladder_leg` looks for a ladder within `LADDER_LOOK` (40 m) whose foot is
+level with it and top with the goal (`LADDER_LEVEL`, 1 m) -- or the other way round -- the one the
+shortest way, and walks to its foot (or top); there the pawn's plain walk climbs it
+(`Pawn.ladder`, `ladder_way`: held out of its face, up and over its top a body's width past it,
+or out over its top and down to its foot), lets go, and the walk to the goal takes on. One ladder
+a leg; a fall from it is none. `soldier_ladder_probe` (4): a block 3.78 m high (more than the
+nav steps or drops), no way up or down on foot; a soldier sent on top climbs its ladder and gets
+there (6 s), sent back it climbs down unhurt, and with the ladder gone it does not get up.
+
+Not yet: a ship's decks still go by its stair well; a soldier's leg is one ladder, not a chain.

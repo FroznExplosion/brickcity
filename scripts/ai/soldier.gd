@@ -37,6 +37,11 @@ const WAYPOINT_REACHED := 0.35
 ## How far above or below a waypoint still counts as at it: more than a step
 ## up (0.42 m), less than any drop that matters.
 const WAYPOINT_LEVEL := 1.0
+## A ladder looked for when the nav has no way to another level (Docs/RoomModules.md
+## 7.13): this far off at most, m; its foot or top this near level with where the
+## soldier stands and where it goes, m.
+const LADDER_LOOK := 40.0
+const LADDER_LEVEL := 1.0
 const STUCK_SECONDS := 1.6
 ## Bursts: seconds on, seconds off.
 const BURST_ON := 0.5
@@ -262,6 +267,9 @@ var _last_think := 0.0
 var _sense_queued := false
 var _think_queued := false
 var _goal := Vector3.INF
+## A way to another level by a ladder, where the nav has none: {ladder, way (1 up,
+## -1 down), start (its foot or its top), goal, climbed}; empty for none.
+var _ladder_leg := {}
 var _path_id := -1
 var _path := PackedVector3Array()
 var _wp := 0
@@ -893,6 +901,87 @@ func ride_on(v: Node3D, seat := -1) -> void:
 
 
 func move_to(goal: Vector3, run := false) -> int:
+	if not _ladder_leg.is_empty():
+		var r := _ladder_step(goal, run)
+		if r != 2:
+			return r
+	return _move_to(goal, run)
+
+
+## On a ladder leg: to its foot (or top), up (or down) it, then on to the goal.
+## 2 when the leg is over and the walk to the goal takes on.
+func _ladder_step(goal: Vector3, run: bool) -> int:
+	var leg := _ladder_leg
+	var l: Ladder = leg.ladder
+	if pawn.ladder != null:
+		# Climbing: the walk has it till it lets go, wherever it goes next.
+		pawn.intents.move = Vector3.ZERO
+		_stuck_from = pawn.feet()
+		_stuck_at = services.now()
+		return 0
+	if not is_instance_valid(l) or not l.is_inside_tree() or goal.distance_to(leg.goal) > 0.5:
+		_ladder_leg = {}
+		return 2
+	if bool(leg.climbed):
+		_ladder_leg = {}
+		_repath = true
+		return 2
+	var r := _move_to(leg.start, run)
+	var at := pawn.feet()
+	if r == 1 or (Gravity.flat(leg.start - at, pawn.up).length() < WAYPOINT_REACHED
+			and absf(Gravity.height_of(leg.start) - Gravity.height_of(at)) < WAYPOINT_LEVEL):
+		pawn.intents.move = Vector3.ZERO
+		pawn.ladder = l
+		pawn.ladder_way = int(leg.way)
+		leg.climbed = true
+		return 0
+	if r == -1:
+		_ladder_leg = {}
+	return r
+
+
+## The nav has no way to `goal` on another level: a ladder near whose foot is
+## level with the soldier and top with the goal (or the other way round) makes
+## one. Starts the leg; false when there is none.
+func _start_ladder_leg(goal: Vector3) -> bool:
+	# The plain walk climbs (Pawn.ladder); a body PawnMoves walks does not take one so.
+	if not _ladder_leg.is_empty() or pawn.moves != null or pawn.body == null or not pawn.body.is_inside_tree():
+		return false
+	var feet := pawn.feet()
+	var fh := Gravity.height_of(feet)
+	var gh := Gravity.height_of(goal)
+	if absf(gh - fh) < LADDER_LEVEL:
+		return false
+	var best := {}
+	var best_cost := INF
+	for n in pawn.body.get_tree().get_nodes_in_group(Ladder.GROUP):
+		var l := n as Ladder
+		if l == null or not l.is_inside_tree() or l.global_position.distance_to(feet) > LADDER_LOOK:
+			continue
+		var foot := l.global_transform * Vector3(0.0, 0.0, PawnMoves.LADDER_HOLD + 0.1)
+		var top := l.global_transform * Vector3(0.0, l.height, -0.4)
+		var hf := Gravity.height_of(foot)
+		var ht := Gravity.height_of(top)
+		var way := 0
+		if absf(hf - fh) < LADDER_LEVEL and absf(ht - gh) < LADDER_LEVEL:
+			way = 1
+		elif absf(ht - fh) < LADDER_LEVEL and absf(hf - gh) < LADDER_LEVEL:
+			way = -1
+		if way == 0:
+			continue
+		var start := foot if way > 0 else top
+		var end := top if way > 0 else foot
+		var cost := feet.distance_to(start) + end.distance_to(goal)
+		if cost < best_cost:
+			best_cost = cost
+			best = {"ladder": l, "way": way, "start": start, "goal": goal, "climbed": false}
+	if best.is_empty():
+		return false
+	_ladder_leg = best
+	return true
+
+
+func _move_to(goal: Vector3, run := false) -> int:
 	var now := services.now()
 	# Its own way in (breach_way): the breaching map, kept for the path in hand.
 	var want_nav = services.foot_breach_nav() if breach_way and self.nav == null else _nav()
@@ -939,6 +1028,9 @@ func move_to(goal: Vector3, run := false) -> int:
 			return 0
 		if st != AINav.DONE:
 			pawn.intents.move = Vector3.ZERO
+			# No way on foot to another level: a ladder may be one.
+			if _start_ladder_leg(goal):
+				return 0
 			_path_failed(now)
 			return -1
 		_path = nav.get_path(_path_id)
@@ -967,6 +1059,11 @@ func move_to(goal: Vector3, run := false) -> int:
 		# The path is walked but the body is not there: it was put somewhere
 		# else (placed, unstuck, shoved). A path from where it is now.
 		_repath = true
+		pawn.intents.move = Vector3.ZERO
+		return 0
+	if _wp >= _path.size() and absf(Gravity.height_of(goal) - Gravity.height_of(feet)) > LADDER_LEVEL \
+			and _start_ladder_leg(goal):
+		# Walked as far as the nav goes, a level short of the goal: up a ladder.
 		pawn.intents.move = Vector3.ZERO
 		return 0
 	if _wp >= _path.size():

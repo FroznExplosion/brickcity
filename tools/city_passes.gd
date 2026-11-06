@@ -7729,6 +7729,21 @@ func _run_light_pass() -> void:
 		BrickNear.grid_stud_material().set_shader_parameter("grid_sky_floor", BrickGridLight.SKY_FLOOR)
 		print("[light] mean of the picture: grid %.3f, none %.3f" % [on, off])
 		_gate_ok("the grid darkens the inside", on < off * 0.9, "%.3f against %.3f" % [on, off])
+		# The player's flashlight (Docs/Lighting.md 6.4): L lights the room ahead.
+		var vp_rid := city.get_viewport().get_viewport_rid()
+		RenderingServer.viewport_set_measure_render_time(vp_rid, true)
+		await _ticks(10)
+		var gpu_off := RenderingServer.viewport_get_measured_render_time_gpu(vp_rid)
+		var torch := Flashlight.mount(city.camera)
+		torch.set_on(true)
+		await _ticks(10)
+		var lit := _mean_of(city.get_viewport().get_texture().get_image())
+		var gpu_on := RenderingServer.viewport_get_measured_render_time_gpu(vp_rid)
+		await _save("city_flashlight")
+		torch.set_on(false)
+		print("[light] flashlight: picture %.3f against %.3f; GPU %.2f ms against %.2f off"
+				% [lit, on, gpu_on, gpu_off])
+		_gate_ok("the flashlight lights the room", lit > on * 1.1, "%.3f against %.3f" % [lit, on])
 	# A hole through an outer wall (x = 0 side or the far one), where it is
 	# whole for 4 studs across and 1-2 m up and a room is right behind it; the
 	# air just in reads at least three steps from the open.

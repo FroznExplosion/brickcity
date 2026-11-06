@@ -1223,7 +1223,11 @@ func _ship_bricks(p: Vector3) -> void:
 			s.unride()
 		elif ride and s.chunk >= 0:
 			s.ride()
-		elif not want and s.chunk >= 0 and s != frame_node():
+		elif not want and not ride and s.chunk < 0 and s.wreck == null and not s.gone().is_empty():
+			# Damaged and not laid this run (a save's, a ram's): its bricks laid once,
+			# for its far look (SpaceStation.lay_wreck).
+			s.lay_wreck()
+		elif not want and s.chunk >= 0 and s != frame_node() and not s._wreck_only:
 			s.deactivate()
 		s.gangway_step()
 
