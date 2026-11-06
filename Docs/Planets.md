@@ -1971,8 +1971,8 @@ Two gates changed with it:
   where the piece crosses into a region it was not synced into" was: 1558 of 1558 solid now (the
   new snaps broke more off the big piece, 1215 bricks, and the old sample fell to 73%).
 Other planet gates unchanged: topple 6, hits 8, damage 12, bricks 9, trees 7, squad 10, pawn 12;
-`--gate=save` stages 1-3 as main (stage 3's "the player where they were" fails on main too, 2.9 m
-off; not this work).
+`--gate=save` stages 1-3 as main (stage 3's "the player where they were" failed on main too, 2.9 m
+off; not this work -- fixed since, 11.12's "Save gate stage 3, fixed").
 
 Not yet: furniture, materialising for a fight far from the camera.
 
@@ -2708,6 +2708,24 @@ damage 12, fall 7, hits 8, topple 6, storey 12, jump 10, home 9.
 
 Found on the way: a building healed when the player walked away from it, in play, with no save involved:
 `_free_bricks` let its bricks go, damage and all. `Site.dead` keeps them.
+
+**Save gate stage 3, fixed (2026-11-05).** Stage 3 had been failing "the player where they were" by
+2.5-2.9 m, and nobody saw it: three things.
+- *The gate saved a falling player.* Stage 2 put the pawn down on the other system's world before its
+  ground was solid there; it fell through and was written 2 m under the surface at 11 m/s. Coming back,
+  the ground is there, so the pawn stood on it -- 2.9 m from where the note said. Stage 2 now waits for
+  the ground under the spot (`_ground_hit`), as every other gate does. Stage 3: 0.44-0.50 m off (the
+  pawn still settling when written; the check allows 1.5 m).
+- *Every load stood the player 0.84 m high.* `PlanetSaver._state` wrote the anchor -- the pawn's body,
+  its middle -- and `resume` stands the pawn's FEET there. On foot it writes `pawn.feet()` now (its
+  ghost hull's too). Old saves still load, 0.84 m up, as before.
+- *The FAIL never reached the summary or the exit code.* Stage 3 hands over to stage 4 by reloading the
+  scene, which starts `_ok` / `_fail` over; only `_save_stage` was static. Stage 3's counts go across
+  now (`_save_ok`, `_save_fail`): stage 3's summary is 8 checks, was 2.
+Three runs of stages 1-3 headless: 3, 13, 8 ok, every exit 0. Found, not fixed: waiting in stage 2 until
+the pawn is on the floor before writing (a stricter save) made stage 4's quit crash every time (signal 11
+after the summary; a `World3D` with 346 Jolt shapes leaked across the reload, which main's quit does not
+show). The crash is in the reload's leftovers, not in the save; it was left out.
 
 Not saved, as planned: fallen pieces (their bricks stay gone from the building, the rubble goes) and drifting
 pieces. Every universe has the same home world, its seed moves only what is round it. Stopping the game

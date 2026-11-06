@@ -4041,6 +4041,9 @@ func _run_belt_gate() -> void:
 
 const GATE_NOTES := UniverseSave.TEST_ROOT + "gate_notes.dat"
 static var _save_stage := 0
+## Stage 3's ok and FAIL counts, across the reload into stage 4.
+static var _save_ok := 0
+static var _save_fail := 0
 
 
 func _run_save_gate() -> void:
@@ -4211,6 +4214,11 @@ func _run_save_gate() -> void:
 		var pb: PlanetBuildings = system.built[world]
 		var side: Vector3 = (world.data.towns[0] as Vector3).cross(Vector3.UP).normalized()
 		var spot: Vector3 = world.global_transform * world.data.surface_point((world.data.towns[0] as Vector3).rotated(side, 40.0 / world.data.radius))
+		# Its ground first: put down before it is solid, the pawn fell through it
+		# and was saved 2 m under the surface, falling (the 2.9 m stage 3 found).
+		t0 = Time.get_ticks_msec()
+		while _ground_hit(spot) == Vector3.INF and Time.get_ticks_msec() - t0 < 30000:
+			await _frames(1)
 		pawn.place(spot + Gravity.up_at(spot) * 0.3)
 		await wait_bricked.call(pb)
 		var w_site := -1
@@ -4246,12 +4254,18 @@ func _run_save_gate() -> void:
 		var n := universes
 		n.open(saver.save.universe_id, saver.save.root)
 		_save_stage = 4
+		# The scene is loaded again for stage 4: its checks so far go with it,
+		# or stage 3's never reach the summary and the exit code.
+		_save_ok = _ok
+		_save_fail = _fail
 		_play_universe(n.new_universe())
 		return
 	elif _save_stage == 4:
 		_check("a new universe: its own seed, nothing come back", saver.save.seed_value != 1 and saver.state.get("at") == null and buildings.site_gone(int(notes.site)).is_empty(),
 				"%s, seed %d" % [saver.save.display_name, saver.save.seed_value])
 		_check("and two universes on disk", UniverseSave.list(UniverseSave.TEST_ROOT).size() == 2)
+	_ok += _save_ok
+	_fail += _save_fail
 	print("[planet] gate: %d ok, %d FAIL" % [_ok, _fail])
 	get_tree().quit(1 if _fail > 0 else 0)
 
