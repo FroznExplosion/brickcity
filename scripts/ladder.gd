@@ -45,22 +45,27 @@ func local(feet: Vector3) -> Vector3:
 ## build's (cell c at (c - origin) * cell size). Returns how many.
 static func place(parent: Node3D, recipe: BuildRecipe) -> int:
 	var list: Array = recipe.meta.get("ladders", [])
-	var org := recipe.origin()
+	for d: Dictionary in list:
+		parent.add_child(make(d, recipe.origin()))
+	return list.size()
+
+
+## A node for ladder `d` (a `meta.ladders` entry), its transform in the frame
+## where cell c is at (c - rebase) * cell size.
+static func make(d: Dictionary, rebase: Vector3i) -> Ladder:
 	var stud := BrickWorld.get_stud_metres()
 	var plate := BrickWorld.get_plate_metres()
-	for d: Dictionary in list:
-		var fd: Vector2i = StructureSpaces.FACINGS[int(d.facing)]
-		var out := Vector3(fd.x, 0.0, fd.y)
-		var across := Vector3(absi(fd.y), 0.0, absi(fd.x))
-		var c := BuildRecipe.cell_from(d.at) - org
-		var w := int(d.w)
-		# The face's middle, on its out side, at its foot.
-		var foot := (Vector3(c) + Vector3(0.5, 0.0, 0.5) + across * (w - 1) * 0.5 + out * 0.5) \
-				* Vector3(stud, plate, stud)
-		var l := Ladder.new()
-		l.name = "Ladder"
-		l.width = w * stud
-		l.height = int(d.h) * plate
-		l.transform = Transform3D(Basis(out.cross(Vector3.UP).normalized() * -1.0, Vector3.UP, out), foot)
-		parent.add_child(l)
-	return list.size()
+	var fd: Vector2i = StructureSpaces.FACINGS[int(d.facing)]
+	var out := Vector3(fd.x, 0.0, fd.y)
+	var across := Vector3(absi(fd.y), 0.0, absi(fd.x))
+	var c := BuildRecipe.cell_from(d.at) - rebase
+	var w := int(d.w)
+	# The face's middle, on its out side, at its foot.
+	var foot := (Vector3(c) + Vector3(0.5, 0.0, 0.5) + across * (w - 1) * 0.5 + out * 0.5) \
+			* Vector3(stud, plate, stud)
+	var l := Ladder.new()
+	l.name = "Ladder"
+	l.width = w * stud
+	l.height = int(d.h) * plate
+	l.transform = Transform3D(Basis(out.cross(Vector3.UP).normalized() * -1.0, Vector3.UP, out), foot)
+	return l

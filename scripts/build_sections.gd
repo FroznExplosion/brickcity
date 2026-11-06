@@ -235,6 +235,16 @@ static func split(r: BuildRecipe) -> Array:
 				rm["lifts"] = []
 			(rm.lifts as Array).append(BuildLifts.record(lo - off, Vector2i(int(lf.size[0]), int(lf.size[1])),
 					(by[k] as Array).map(func(y) -> int: return y - off.y)))
+	# A ladder goes with the section its foot stands in.
+	for ld: Dictionary in r.meta.get("ladders", []):
+		var at := BuildRecipe.cell_from(ld.at)
+		var o: Dictionary = out[_nearest(cells, at)]
+		var d: Dictionary = ld.duplicate(true)
+		d.at = _arr(at - (o.offset as Vector3i))
+		var rm: Dictionary = o.recipe.meta
+		if not rm.has("ladders"):
+			rm["ladders"] = []
+		(rm.ladders as Array).append(d)
 	for o: Dictionary in out:
 		o.recipe.meta["section"] = {"id": int(o.id), "root": bool(o.root), "offset": _arr(o.offset),
 				"of": r.name}

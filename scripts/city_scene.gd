@@ -1127,9 +1127,10 @@ func _ready() -> void:
 	# it always was -- the storeys gate's "today".
 	registry.storey_units = not _whole_mode
 	# Doors in the builds' doorways, swung by whoever comes near, and lifts in their
-	# shafts (Docs/RoomModules.md 3.2, 4).
+	# shafts, and the ladders up their short stairs (Docs/RoomModules.md 3.2, 4, 7.13).
 	add_child(BuildDoors.new(world, BuildDoors.from_registry(registry)))
 	add_child(BuildLifts.new(world, BuildDoors.from_registry(registry)))
+	add_child(BuildLadders.new(world, BuildDoors.from_registry(registry)))
 
 	islands = IslandManager.new()
 	islands.small_live_max = debris_small_max
