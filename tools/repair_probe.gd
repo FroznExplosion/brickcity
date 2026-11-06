@@ -141,6 +141,31 @@ func _restore_checks() -> void:
 				rim = rim or (air.state[j] == HullAir.SOLID and not own.has(j))
 	_ok("rim: what is restorable starts at the hole's edge", rim, "%d restorable" % ids.size())
 
+	# Brick by brick (front end A): aimed at the hole, the ghost is one rim brick,
+	# its box on its own cells; a tap lays it and nothing else.
+	var tapper := RestoreTool.new()
+	var up := Vector3.UP
+	var eye := _hole - up * RestoreTool.RANGE
+	var aimed := tapper.aim(eye, up, [_st])
+	var gid: int = int(aimed.get("id", -1))
+	var box_ok := false
+	if gid >= 0:
+		var c := Vector3i(_st.cell_at((aimed.xf as Transform3D).origin).floor())
+		box_ok = _st.air._block_cells(gid).has(_st.air._idx(c)) and RestoreTool.rim_of(_st, gid)
+	_ok("ghost: aimed at the hole, one rim brick shown on its own cells", gid >= 0 and box_ok,
+			"brick %d" % gid)
+	var gone_before := _st.gone().size()
+	var r0 := _st.bricks_restored
+	tapper.tick(0.1, true, eye, up, [_st])
+	var during := _st.bricks_restored - r0
+	var tapped := tapper.tick(0.1, false, eye, up, [_st])
+	_ok("tap: one brick, the ghosted one, and only on release", during == 0 and tapped == 1
+			and _st.bricks_restored - r0 == 1 and _st.gone().size() == gone_before - 1
+			and not _st.gone().has(gid), "%d during, %d on release" % [during, tapped])
+	tapper.cost = 0
+	tapper.tick(0.1, true, eye, up, [_st])
+	_ok("tap: nothing laid with nothing left to lay (cost 0)", tapper.tick(0.1, false, eye, up, [_st]) == 0)
+
 	# The tool, held on the hole for a second (no physics here: it points RANGE
 	# along the view, at the hole).
 	var tool := RestoreTool.new()
@@ -150,7 +175,7 @@ func _restore_checks() -> void:
 	for i in 10:
 		tool.tick(0.1, true, from, dir, [_st])
 	var by_tool := _st.bricks_restored - before
-	_ok("tool: held a second, about RATE bricks back and no more",
+	_ok("tool: held a second, it streams after HOLD, about RATE bricks a second and no more",
 			by_tool > 0 and by_tool <= int(RestoreTool.RATE) and tool.laid == by_tool,
 			"%d laid" % by_tool)
 	tool.tick(0.1, false, from, dir, [_st])
