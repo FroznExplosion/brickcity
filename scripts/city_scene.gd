@@ -9593,7 +9593,7 @@ func _update_hud() -> void:
 				_mode_word()]) if _gun_armed and _gun.gun != null
 			else "blast %.1f m (wheel)   %s (SPACE SPACE)" % [
 				_blast_radius, _mode_word()],
-		"1 gun · 2 blast · T next gun · R reload · V on foot · K soldier · U squad · Y enemy mech · F mech order" + (" · H disasters (shift: end)" if disasters != null else ""),
+		"1 gun · 2 blast · T next gun · R reload · V on foot · K soldier · U squad · Y enemy mech · F mech order · L flashlight" + (" · H disasters (shift: end)" if disasters != null else ""),
 		"LMB fire · X big blast · P place a saved build · WASD move · shift fast · G grids (shift: physics) · B bevel · J overlap"
 			+ "\nF1 stats · F2 profiler · F3 reset worst · F4 AI · F5 save · F9 load · F10 terrain dev menu · F11 terrain edit · N respawn\n7 structure solid/see-through/hidden · 8 interior pieces · 9 items  (what is hidden is still there)"
 			+ ("" if respawn_buildings else "\nRESPAWN OFF (N) — buildings keep their bricks once promoted"),
