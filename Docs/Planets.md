@@ -2041,7 +2041,33 @@ wall. A charge at another far building, not bricks and with no fighter near: kep
 bricks and the charge lands (its bricks gone). The soldier gone: both are freed, the hit building's
 damage kept. The buildings by the player stay bricks throughout. The other planet gates unchanged.
 
-Not yet: materialising for a fight far from the camera.
+**Bricks where the fight is, built (2026-11-06).** As planned: `PlanetBuildings.set_fights` (each
+site's distance to the nearest fighter; the `FIGHT_MAX` nearest within `FIGHT_M` wanted, those within
+`FIGHT_DROP` kept), told twice a second by `PlanetScene._tell_fights` for every world with an AI
+(`ai_of`: its live pawns but the player's); `far_tier` queues a site for the camera, a fight or a hit
+waiting, and frees it only when none of the three holds; `_brick_step` takes a hit waiting first, then
+the nearest to the camera or a fighter. A hit with no bricks under it finds its building by box
+(`_site_box_at`) and waits in `Site.pending`; `_finish_bricks` lands them. `_shell_as_look` is what
+`_finish_bricks` and `_make_near` (a shell made for a building already bricks) both do.
+Gate `--gate=farfight` 11/11 (headless x8 -- five in a row after the fix below -- windowed x1): the
+player 200 m out, the town's near side bricks; a soldier 8 m off a building 259 m from the camera:
+it is bricks in 0.1-0.5 s, a ray from the soldier's side meets its bricks, the AI's world is solid
+there, and just inside its front door the nav net can stand -- it could not before, the proxy box
+was there. A charge at a building 153 m from it, not bricks: kept, bricks in 0.2-0.5 s, 136 bricks
+gone. The soldier dead: both freed within a frame or two, the hit one keeping its 136. The player's
+buildings bricks throughout.
+Found by the gate: one run in eight asked the AI's world before its region was built (the bricks
+came in 0.1 s) and then crashed at the quit (signal 11), most likely with that region's build still on
+a worker. The gate now waits for the region; five runs after, all clean.
+Other gates unchanged with fights bricking buildings: far 11, travel 10, garrison 17, home 11, squad
+10, bricks 11, damage 12, fall 7, hits 8, topple 6, pieces_ai 4, storey 13, snap 8, trees 7, pawn
+12; save stages 1-3 (3, 13, 8).
+Not done: a far hit on a building with no fight near it bricks it, lands, and the building is freed
+again the next frame (its damage kept): a brick-in for each such shot. Nothing far is drawn
+(`BRICK_DRAW_M`), but its bands are still made.
+
+Not yet on the planet's buildings: nothing on this list. (The city's next things -- its own
+destruction work -- come over as they are built.)
 
 ### 11.12 Plan: the universe -- star systems, orbits, spinning planets (2026-10-28)
 

@@ -20,6 +20,8 @@ extends Node3D
 ##   tower too weak for its own weight is crushed a storey (11.11 D2 step 6).
 ##   -- --gate=snap: a landing snaps a piece where the city's would -- a weak
 ##   seam or a storey line up its Y, a crack along the bond across (D2 step 7).
+##   -- --gate=farfight: bricks where the AI fights, away from the camera; a hit
+##   on a building not yet bricks lands once it is (11.11).
 ##   -- --gate=trees: a tank knocks a tree down; a truck is stopped by one
 ##   (11.10, trees and vehicles).
 ##   -- --gate=squad: a squad on the AI's nav region round the town (11.8 N2)
@@ -78,6 +80,7 @@ var _home_gate := false
 var _save_gate := false
 var _storey_gate := false
 var _snap_gate := false
+var _farfight_gate := false
 ## The AI round the fight (Docs/Planets.md 11.8, N2, N4): the nav net round the
 ## player's town; ai_world / ai_nav the region the player is in. Made by setup_ai.
 var ai: AIServices
@@ -168,6 +171,7 @@ func _ready() -> void:
 	_pieces_ai_gate = "--gate=pieces_ai" in OS.get_cmdline_user_args()
 	_storey_gate = "--gate=storey" in OS.get_cmdline_user_args()
 	_snap_gate = "--gate=snap" in OS.get_cmdline_user_args()
+	_farfight_gate = "--gate=farfight" in OS.get_cmdline_user_args()
 	_travel_gate = "--gate=travel" in OS.get_cmdline_user_args()
 	_far_gate = "--gate=far" in OS.get_cmdline_user_args()
 	_drive_gate = "--gate=drive" in OS.get_cmdline_user_args()
@@ -190,7 +194,7 @@ func _ready() -> void:
 	_home_gate = "--gate=home" in OS.get_cmdline_user_args()
 	_save_gate = "--gate=save" in OS.get_cmdline_user_args()
 	WorldFrame.origin = Vector3.ZERO
-	_gate = _gate or _light_gate or _system_gate or _ship_gate or _dock_gate or _worlds_gate or _jump_gate or _debris_gate or _adrift_gate or _falling_gate or _mechwave_gate or _rocks_gate or _garrison_gate or _seat_gate or _hull_gate or _belt_gate or _home_gate or _save_gate or _pawn_gate or _mech_gate or _tank_gate or _soldier_gate or _squad_gate or _travel_gate or _far_gate or _drive_gate or _trees_gate or _bricks_gate or _damage_gate or _fall_gate or _hits_gate or _topple_gate or _pieces_ai_gate or _storey_gate or _snap_gate
+	_gate = _gate or _light_gate or _system_gate or _ship_gate or _dock_gate or _worlds_gate or _jump_gate or _debris_gate or _adrift_gate or _falling_gate or _mechwave_gate or _rocks_gate or _garrison_gate or _seat_gate or _hull_gate or _belt_gate or _home_gate or _save_gate or _pawn_gate or _mech_gate or _tank_gate or _soldier_gate or _squad_gate or _travel_gate or _far_gate or _drive_gate or _trees_gate or _bricks_gate or _damage_gate or _fall_gate or _hits_gate or _topple_gate or _pieces_ai_gate or _storey_gate or _snap_gate or _farfight_gate
 	data = PlanetData.new()
 	data.planet_name = "proto"
 	# Towns and landmarks: their pads go into the ground before it is built.
@@ -284,6 +288,8 @@ func _ready() -> void:
 			_run_storey_gate()
 		elif _snap_gate:
 			_run_snap_gate()
+		elif _farfight_gate:
+			_run_farfight_gate()
 		elif _travel_gate:
 			_run_travel_gate()
 		elif _far_gate:
@@ -339,6 +345,24 @@ func _structure_hit(point: Vector3, _dir: Vector3, shot: Dictionary) -> void:
 		if system.station != null and system.station.damage(point, shot):
 			return
 	_buildings_here().damage(point, shot)
+
+
+## Each world's buildings told where its AI's fighters are (PlanetBuildings.
+## set_fights): bricks where the fight is, not only where the camera is.
+const FIGHTS_EVERY := 0.5
+var _fights_in := 0.0
+
+func _tell_fights() -> void:
+	for b in ai_of:
+		var pb: PlanetBuildings = buildings if b == planet else (system.built.get(b) if system != null else null)
+		var s: AIServices = ai_of[b]
+		if pb == null or s == null:
+			continue
+		var pts := PackedVector3Array()
+		for p in s.pawns:
+			if is_instance_valid(p) and p != pawn and p.is_inside_tree() and not p.health.is_dead():
+				pts.append(p.feet())
+		pb.set_fights(pts)
 
 
 ## The buildings of the world the player is on.
@@ -1062,7 +1086,11 @@ func _restore_tick(dt: float) -> void:
 			get_world_3d().direct_space_state)
 
 
-func _process(_delta: float) -> void:
+func _process(delta: float) -> void:
+	_fights_in -= delta
+	if _fights_in <= 0.0:
+		_fights_in = FIGHTS_EVERY
+		_tell_fights()
 	var now := Time.get_ticks_usec()
 	if _last_us > 0:
 		var ms := float(now - _last_us) / 1000.0
@@ -1088,7 +1116,7 @@ func _process(_delta: float) -> void:
 	if system != null:
 		walker.match_velocity = system.match_velocity(walker.global_position)
 		_air_tick()
-		_restore_tick(_delta)
+		_restore_tick(delta)
 		# A ship sitting in its planet's sea: the ocean cut out of its dry cells
 		# (Docs/Hulls.md 6).
 		HullMasks.update(system.ships, cam_pos)
@@ -1132,7 +1160,7 @@ func _process(_delta: float) -> void:
 	# walker's own gate, the pawn stands on it.
 	if walker.frozen and not piloting and pawn == null and trees.prebaked and _ground_hit(walker.global_position) != Vector3.INF:
 		walker.frozen = false
-		if not _gate or _pawn_gate or _mech_gate or _tank_gate or _soldier_gate or _squad_gate or _travel_gate or _far_gate or _drive_gate or _trees_gate or _bricks_gate or _damage_gate or _fall_gate or _hits_gate or _topple_gate or _pieces_ai_gate or _storey_gate or _snap_gate or _garrison_gate or _seat_gate or _home_gate or _mechwave_gate or _hull_gate or _save_gate or _light_gate:
+		if not _gate or _pawn_gate or _mech_gate or _tank_gate or _soldier_gate or _squad_gate or _travel_gate or _far_gate or _drive_gate or _trees_gate or _bricks_gate or _damage_gate or _fall_gate or _hits_gate or _topple_gate or _pieces_ai_gate or _storey_gate or _snap_gate or _farfight_gate or _garrison_gate or _seat_gate or _home_gate or _mechwave_gate or _hull_gate or _save_gate or _light_gate:
 			_spawn_player(_ground_hit(walker.global_position), -walker.global_transform.basis.z)
 			if saver != null:
 				saver.resume()
@@ -6475,3 +6503,135 @@ func _run_snap_gate() -> void:
 	print("[planet] snap gate: %d ok, %d FAIL" % [_ok, _fail])
 	get_tree().quit(0 if _fail == 0 else 1)
 
+
+# ---------------------------------------------------------------------------
+# The far-fight gate (Planets.md 11.11, bricks where the fight is): a soldier by
+# a building out of the camera's reach makes it bricks -- solid, the AI's -- and
+# a charge at another far building, a shell then, waits and lands once it is
+# bricks. The soldier gone, both are freed; the hit one keeps its damage.
+
+func _run_farfight_gate() -> void:
+	var t0 := Time.get_ticks_msec()
+	while pawn == null and Time.get_ticks_msec() - t0 < 60000:
+		await _frames(1)
+	var town: Vector3 = town_dirs[0]
+	# Out at 200 m: the town's far side past anything the camera bricks, its near
+	# side still bricks.
+	var p_feet := _surface(_round_dir(town, spawn_dir, 200.0))
+	pawn.place(p_feet + Gravity.up_at(p_feet) * 0.3)
+	pawn.health.layer_configs[0].max_value = 1e7
+	pawn.health.reset()
+	t0 = Time.get_ticks_msec()
+	while _ground_hit(p_feet) == Vector3.INF and Time.get_ticks_msec() - t0 < 30000:
+		await _frames(1)
+	setup_ai(town)
+	var net := ai.nav_net as PlanetNavNet
+	var near_i: int = await _bricked_near()
+	var stud := BrickWorld.get_stud_metres()
+	var mid_of := func(i: int) -> Vector3:
+		var st: PlanetBuildings.Site = buildings.sites[i]
+		return planet.global_transform * (st.frame * Vector3(st.fx * stud * 0.5, 0.0, st.fz * stud * 0.5))
+	# Two buildings out of the camera's reach, far enough apart that a fighter by
+	# one is no reason to brick the other.
+	var eye := _eye()
+	var order: Array = []
+	for i in buildings.sites.size():
+		var st: PlanetBuildings.Site = buildings.sites[i]
+		var d := eye.distance_to(mid_of.call(i))
+		if not st.landmark and d > PlanetBuildings.BRICK_DROP + 30.0 and d < 600.0:
+			order.append([d, i])
+	order.sort_custom(func(a, b): return a[0] < b[0])
+	# The pair furthest apart: the soldier by one must be past FIGHT_DROP from
+	# the other (its footprint's reach and the 8 m it stands off besides).
+	var ai_i := -1
+	var hit_i := -1
+	var apart := 0.0
+	for o1 in order:
+		for o2 in order:
+			var dd: float = (mid_of.call(o1[1]) as Vector3).distance_to(mid_of.call(o2[1]))
+			if dd > apart:
+				apart = dd
+				ai_i = o1[1]
+				hit_i = o2[1]
+	_check("two buildings out of the camera's reach, apart", ai_i >= 0 and apart > PlanetBuildings.FIGHT_DROP + 25.0,
+			"%d candidates, the furthest apart %.0f m" % [order.size(), apart])
+	if ai_i < 0 or hit_i < 0:
+		get_tree().quit(1)
+		return
+	var sa: PlanetBuildings.Site = buildings.sites[ai_i]
+	var sb: PlanetBuildings.Site = buildings.sites[hit_i]
+	_check("neither is bricks", sa.chunk < 0 and sb.chunk < 0)
+	# A soldier 8 m off the first one's front, its region kept.
+	var a_xf := planet.global_transform * sa.frame
+	var spot := a_xf * Vector3(sa.fx * stud * 0.25, 0.0, -8.0)
+	var marker := Node3D.new()
+	add_child(marker)
+	marker.global_position = spot
+	PlanetBody.track(marker)
+	net.keep_around([spot], AI_KEEP_M, 99)
+	t0 = Time.get_ticks_msec()
+	while _ground_hit(spot) == Vector3.INF and Time.get_ticks_msec() - t0 < 30000:
+		await _frames(1)
+	var ground := _ground_hit(spot)
+	# Just inside its front door, in the lane kept clear: the AI's world has the
+	# building's proxy box there while it is a shell, its room once it is bricks.
+	var inside := a_xf * Vector3(sa.fx * stud * 0.5, 0.3, 2.5)
+	await _frames(5)
+	var stood_before := net.can_stand(net.snap(inside))
+	var lib := GunPlaceholderParts.build_library()
+	var g := GunInstance.from_result(GunGenerator.generate(lib, 77, WeaponClass.builtin(&"rifle"), 1))
+	var so := Soldier.spawn(ai, self, ground + Gravity.up_at(ground) * 0.1, 1, g)
+	PlanetBody.track(so.pawn.body)
+	t0 = Time.get_ticks_msec()
+	while not sa.bricked and Time.get_ticks_msec() - t0 < 60000:
+		await _frames(1)
+	var far_m := _eye().distance_to(mid_of.call(ai_i))
+	print("[planet] farfight: building %d %.0f m from the camera, a soldier by it; bricks in %.1f s (fighters %d)" % [
+			ai_i, far_m, (Time.get_ticks_msec() - t0) / 1000.0, buildings.fighters])
+	_check("a soldier by it: it becomes bricks, the camera %.0f m off" % far_m, sa.bricked and far_m > PlanetBuildings.BRICK_DROP
+			and sa.collision != null)
+	# Its bricks, where a ray from the soldier's side meets them.
+	await _frames(5)
+	# Low, under the windows' sills: at a metre it went in at a window and out at
+	# the one behind it.
+	var from := a_xf * Vector3(sa.fx * stud * 0.25, 0.45, -6.0)
+	var into := a_xf * Vector3(sa.fx * stud * 0.25, 0.45, sa.fz * stud * 0.95)
+	var wh := get_world_3d().direct_space_state.intersect_ray(PhysicsRayQueryParameters3D.create(from, into, Layers.STRUCTURE))
+	var wall_pt: Vector3 = (wh.position as Vector3) + (into - from).normalized() * 0.1 if not wh.is_empty() else Vector3.INF
+	# Its region may still be building on a worker (the bricks came in 0.1 s once):
+	# waited for, so it is asked of a finished one -- and not quit under a job.
+	t0 = Time.get_ticks_msec()
+	while not wh.is_empty() and net.world_at(wall_pt) == null and Time.get_ticks_msec() - t0 < 15000:
+		await _frames(1)
+	var aw := net.world_at(wall_pt) if not wh.is_empty() else null
+	_check("solid: a ray from the soldier's side meets its bricks", not wh.is_empty() and sa.collision.owns(wh.rid))
+	var solid := aw != null and aw.solid_at(wall_pt)
+	_check("and the AI's world has them (where the ray met it is solid)", solid,
+			"" if solid else ("no region there" if aw == null else "not solid"))
+	var stands := net.can_stand(net.snap(inside))
+	_check("its rooms are the AI's now: inside the front door it can stand (a proxy box before)",
+			stands and not stood_before, "before %s, now %s" % [stood_before, stands])
+	# A charge at the other: a shell (or nothing) now, no fighter near.
+	var b_xf := planet.global_transform * sb.frame
+	var at := b_xf * Vector3(sb.fx * stud * 0.25, 3.0, 0.2)
+	var kept := buildings.damage(at, {"blast": true, "radius": 3.0, "hp": 0})
+	_check("a charge at the far one, not bricks: kept for it", kept and sb.pending.size() == 1 and not sb.bricked)
+	t0 = Time.get_ticks_msec()
+	while (not sb.bricked or not sb.pending.is_empty()) and Time.get_ticks_msec() - t0 < 60000:
+		await _frames(1)
+	var gone := buildings.site_gone(hit_i).size() if sb.chunk >= 0 else 0
+	print("[planet] farfight: building %d bricks in %.1f s for the charge; %d bricks gone" % [
+			hit_i, (Time.get_ticks_msec() - t0) / 1000.0, gone])
+	_check("it becomes bricks and the charge lands", sb.bricked and gone > 0, "%d bricks gone" % gone)
+	# The soldier gone: both freed, the hit one's damage kept.
+	so.pawn.health.apply_impact(1e6, &"")
+	t0 = Time.get_ticks_msec()
+	while (sa.chunk >= 0 or sb.chunk >= 0) and Time.get_ticks_msec() - t0 < 20000:
+		await _frames(1)
+	print("[planet] farfight: freed in %.1f s; fighters %d; the hit one keeps %d gone" % [
+			(Time.get_ticks_msec() - t0) / 1000.0, buildings.fighters, sb.dead.size()])
+	_check("the soldier dead: both are freed", sa.chunk < 0 and sb.chunk < 0 and buildings.fighters == 0)
+	_check("and the hit one keeps its damage", sb.dead.size() == gone and gone > 0, "%d of %d" % [sb.dead.size(), gone])
+	_check("the buildings by the player stay bricks throughout", buildings.sites[near_i].bricked)
+	print("[planet] farfight gate: %d ok, %d FAIL" % [_ok, _fail])
+	get_tree().quit(0 if _fail == 0 else 1)
