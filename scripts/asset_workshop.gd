@@ -621,8 +621,8 @@ func _shot() -> void:
 		print("[asset workshop] wrote %s" % ProjectSettings.globalize_path(path))
 	if "--menu" in OS.get_cmdline_user_args():
 		# The Gun menu open, to see the menus.
-		for c in _menu._spacer.get_parent().get_children():
-			if c is MenuButton and (c as MenuButton).text == "Gun":
+		for c in _menu.bar().menus():
+			if (c as MenuButton).text == "Gun":
 				(c as MenuButton).show_popup()
 		for _i in 6:
 			await get_tree().process_frame
