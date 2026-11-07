@@ -45,11 +45,11 @@ func new_universe() -> String:
 func _draw() -> void:
 	var view := get_viewport_rect().size
 	draw_rect(Rect2(Vector2.ZERO, view), Color(0.01, 0.02, 0.05, 0.95))
-	var font := ThemeDB.fallback_font
-	draw_string(font, Vector2(24, 36), "UNIVERSES  --  Up/Down pick, Enter play, N new, U close", HORIZONTAL_ALIGNMENT_LEFT, -1, 16, Color(0.8, 0.85, 0.95))
+	var font := GameUI.font()
+	draw_string(font, Vector2(24, 36), "UNIVERSES  --  Up/Down pick, Enter play, N new, U close", HORIZONTAL_ALIGNMENT_LEFT, -1, GameUI.px(16), Color(0.8, 0.85, 0.95))
 	for i in rows.size():
 		var r: Dictionary = rows[i]
 		var c := Color(1.0, 0.9, 0.5) if i == pick else Color(0.75, 0.8, 0.9)
 		var mark := "> " if i == pick else "  "
 		var text := "%s%s  seed %d%s" % [mark, r.name, r.seed, "  (here)" if r.id == here else ""]
-		draw_string(font, Vector2(24, 72 + i * 22), text, HORIZONTAL_ALIGNMENT_LEFT, -1, 15, c)
+		draw_string(font, Vector2(24, 72 + i * 22), text, HORIZONTAL_ALIGNMENT_LEFT, -1, GameUI.px(15), c)

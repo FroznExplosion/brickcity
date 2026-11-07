@@ -46,11 +46,8 @@ var _smooth_step := 8
 
 func setup(p_host) -> void:
 	host = p_host
-	var style := StyleBoxFlat.new()
-	style.bg_color = Color(0.06, 0.07, 0.10, 0.92)
-	style.set_corner_radius_all(8)
-	style.set_content_margin_all(12)
-	add_theme_stylebox_override("panel", style)
+	add_theme_stylebox_override("panel", GameUI.panel_box())
+	GameUI.style(self)
 	custom_minimum_size = Vector2(440, 0)
 	var scroll := ScrollContainer.new()
 	_scroll = scroll
@@ -159,14 +156,14 @@ func fit(top: float, left := 14.0) -> void:
 func _title(text: String) -> void:
 	var l := Label.new()
 	l.text = text
-	l.add_theme_font_size_override("font_size", 16)
+	l.add_theme_font_size_override("font_size", GameUI.px(16))
 	_rows.add_child(l)
 
 
 func _section(text: String) -> void:
 	var l := Label.new()
 	l.text = text
-	l.add_theme_font_size_override("font_size", 13)
+	l.add_theme_font_size_override("font_size", GameUI.px(13))
 	l.add_theme_color_override("font_color", Color(0.6, 0.8, 1.0))
 	_rows.add_child(l)
 

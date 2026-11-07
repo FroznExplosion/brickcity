@@ -131,7 +131,7 @@ func _draw_all() -> void:
 	if progress == null:
 		return
 	var c := _draw_node
-	var font := ThemeDB.fallback_font
+	var font := GameUI.font()
 	var sz := c.size
 	var w := minf(sz.x - 48.0, 1080.0)
 	var h := minf(sz.y - 40.0, 680.0)
@@ -142,24 +142,24 @@ func _draw_all() -> void:
 	# The header: level, XP, points.
 	var x0 := r.position.x + 18.0
 	c.draw_string(font, Vector2(x0, r.position.y + 30.0), "SKILLS", HORIZONTAL_ALIGNMENT_LEFT, -1,
-			20, Color.WHITE)
+			GameUI.px(20), Color.WHITE)
 	var need := PlayerLevel.xp_to_next(progress.level)
 	var lv := "Level %d" % progress.level
 	var xp_txt := ("XP %d / %d" % [progress.xp, need]) if need > 0 else "Top level"
 	c.draw_string(font, Vector2(x0 + 100.0, r.position.y + 30.0), lv, HORIZONTAL_ALIGNMENT_LEFT, -1,
-			18, Color.WHITE)
+			GameUI.px(18), Color.WHITE)
 	var bar := Rect2(x0 + 190.0, r.position.y + 18.0, 200.0, 8.0)
 	c.draw_rect(bar, Color(1, 1, 1, 0.15))
 	if need > 0:
 		c.draw_rect(Rect2(bar.position, Vector2(bar.size.x * float(progress.xp) / need, bar.size.y)),
 				Color(0.4, 0.85, 1.0))
 	c.draw_string(font, Vector2(bar.position.x, r.position.y + 44.0), xp_txt, HORIZONTAL_ALIGNMENT_LEFT,
-			-1, 12, DIM)
+			-1, GameUI.px(12), DIM)
 	var free := progress.points_free()
 	var pts := "%d point%s to spend   ·   %d spent" % [free, "" if free == 1 else "s", tree.spent()]
-	var pw := font.get_string_size(pts, HORIZONTAL_ALIGNMENT_LEFT, -1, 16).x
+	var pw := font.get_string_size(pts, HORIZONTAL_ALIGNMENT_LEFT, -1, GameUI.px(16)).x
 	c.draw_string(font, Vector2(r.end.x - 18.0 - pw, r.position.y + 30.0), pts, HORIZONTAL_ALIGNMENT_LEFT,
-			-1, 16, Color(1.0, 0.85, 0.4) if free > 0 else DIM)
+			-1, GameUI.px(16), Color(1.0, 0.85, 0.4) if free > 0 else DIM)
 
 	# The tree's grid: a gutter for the tiers, the limbs' names over their columns.
 	var gutter := 86.0
@@ -171,9 +171,9 @@ func _draw_all() -> void:
 	for limb in LIMB_COLUMNS:
 		var info: Array = SkillTree.LIMBS[limb[0]]
 		var name_s := String(info[0]).to_upper()
-		var nw := font.get_string_size(name_s, HORIZONTAL_ALIGNMENT_LEFT, -1, 14).x
+		var nw := font.get_string_size(name_s, HORIZONTAL_ALIGNMENT_LEFT, -1, GameUI.px(14)).x
 		c.draw_string(font, Vector2(area.position.x + (int(limb[1]) + 0.5) * col_w - nw * 0.5,
-				area.position.y - 8.0), name_s, HORIZONTAL_ALIGNMENT_LEFT, -1, 14, info[1])
+				area.position.y - 8.0), name_s, HORIZONTAL_ALIGNMENT_LEFT, -1, GameUI.px(14), info[1])
 	for t in SkillTree.TIERS:
 		var y := area.end.y - (t + 1) * row_h
 		var open := tree.tier_open(t)
@@ -181,10 +181,10 @@ func _draw_all() -> void:
 			c.draw_rect(Rect2(area.position.x, y + 2.0, area.size.x, row_h - 4.0), Color(0, 0, 0, 0.35))
 		var lab := "Tier %d" % t
 		c.draw_string(font, Vector2(r.position.x + 14.0, y + row_h * 0.5), lab, HORIZONTAL_ALIGNMENT_LEFT,
-				-1, 13, Color.WHITE if open else DIM)
+				-1, GameUI.px(13), Color.WHITE if open else DIM)
 		if not open:
 			c.draw_string(font, Vector2(r.position.x + 14.0, y + row_h * 0.5 + 15.0),
-					"%d pts" % SkillTree.tier_gate(t), HORIZONTAL_ALIGNMENT_LEFT, -1, 12, DIM)
+					"%d pts" % SkillTree.tier_gate(t), HORIZONTAL_ALIGNMENT_LEFT, -1, GameUI.px(12), DIM)
 
 	# The limbs: a line from each node to its parents, under the boxes.
 	for n in SkillTree.NODES:
@@ -217,16 +217,16 @@ func _draw_all() -> void:
 		var tc := Color.WHITE if open else DIM
 		var name_s: String = n.name
 		var fs := 12
-		var tw := font.get_string_size(name_s, HORIZONTAL_ALIGNMENT_LEFT, -1, fs).x
+		var tw := font.get_string_size(name_s, HORIZONTAL_ALIGNMENT_LEFT, -1, GameUI.px(fs)).x
 		if tw > bw - 6.0:
 			fs = 10
-			tw = font.get_string_size(name_s, HORIZONTAL_ALIGNMENT_LEFT, -1, fs).x
+			tw = font.get_string_size(name_s, HORIZONTAL_ALIGNMENT_LEFT, -1, GameUI.px(fs)).x
 		c.draw_string(font, Vector2(at.x - tw * 0.5, box.position.y + 16.0), name_s,
-				HORIZONTAL_ALIGNMENT_LEFT, -1, fs, tc)
+				HORIZONTAL_ALIGNMENT_LEFT, -1, GameUI.px(fs), tc)
 		var rs := "%d/%d" % [rk, int(n.ranks)]
-		var rw := font.get_string_size(rs, HORIZONTAL_ALIGNMENT_LEFT, -1, 13).x
+		var rw := font.get_string_size(rs, HORIZONTAL_ALIGNMENT_LEFT, -1, GameUI.px(13)).x
 		c.draw_string(font, Vector2(at.x - rw * 0.5, box.end.y - 6.0), rs, HORIZONTAL_ALIGNMENT_LEFT, -1,
-				13, Color(1.0, 0.85, 0.4) if maxed else tc)
+				GameUI.px(13), Color(1.0, 0.85, 0.4) if maxed else tc)
 
 	# The footer: the node under the cursor, then the keys.
 	var sel := SkillTree.node(cursor)
@@ -235,21 +235,21 @@ func _draw_all() -> void:
 		var limb_info: Array = SkillTree.LIMBS[sel.limb]
 		var head := "%s   %d/%d   ·   %s, tier %d" % [sel.name, tree.rank(cursor), int(sel.ranks),
 				limb_info[0], int(sel.tier)]
-		c.draw_string(font, Vector2(x0, fy), head, HORIZONTAL_ALIGNMENT_LEFT, -1, 16, limb_info[1])
+		c.draw_string(font, Vector2(x0, fy), head, HORIZONTAL_ALIGNMENT_LEFT, -1, GameUI.px(16), limb_info[1])
 		c.draw_string(font, Vector2(x0, fy + 20.0), tree.describe(cursor), HORIZONTAL_ALIGNMENT_LEFT, -1,
-				14, Color.WHITE)
+				GameUI.px(14), Color.WHITE)
 		var why := note if note != "" else tree.why_not(cursor, free)
 		if sel.has("ability") and tree.rank(cursor) > 0 and note == "":
 			why = "In the slot (Q) -- Enter: the grapple instead" if progress.ability() == sel.ability 					else "Enter: into the ability slot (Q)"
 		if why == "":
 			why = "Enter: a point into it"
-		var ww := font.get_string_size(why, HORIZONTAL_ALIGNMENT_LEFT, -1, 14).x
+		var ww := font.get_string_size(why, HORIZONTAL_ALIGNMENT_LEFT, -1, GameUI.px(14)).x
 		c.draw_string(font, Vector2(r.end.x - 18.0 - ww, fy + 20.0), why, HORIZONTAL_ALIGNMENT_LEFT, -1,
-				14, Color(1.0, 0.85, 0.4))
+				GameUI.px(14), Color(1.0, 0.85, 0.4))
 	var keys := "Arrows choose  ·  Enter spend  ·  Backspace twice: every point back  ·  Tab backpack  ·  I close"
 	if DevMode.on:
 		keys += "  ·  + level up (dev)"
-	c.draw_string(font, Vector2(x0, r.end.y - 12.0), keys, HORIZONTAL_ALIGNMENT_LEFT, -1, 12, DIM)
+	c.draw_string(font, Vector2(x0, r.end.y - 12.0), keys, HORIZONTAL_ALIGNMENT_LEFT, -1, GameUI.px(12), DIM)
 
 
 func _centre(area: Rect2, col_w: float, row_h: float, n: Dictionary) -> Vector2:
