@@ -195,7 +195,7 @@ func _tank_up() -> bool:
 	return tank != null and is_instance_valid(tank) and not tank.is_wrecked()
 
 
-## The wave's tank, as the city's (CityScene._spawn_tank, WaveDirector._field_tank):
+## The wave's tank, as the city's (MachineLoadout; CityVehicles.spawn_tank, WaveDirector._field_tank):
 ## a rocket gun and a machine gun, a driver and a gunner, on the vehicle map,
 ## screening the squad and sent at the player.
 func _field_tank(s: AIServices, at: Vector3, side: Vector3, lib: GunPartLibrary, rng: RandomNumberGenerator,
@@ -203,10 +203,9 @@ func _field_tank(s: AIServices, at: Vector3, side: Vector3, lib: GunPartLibrary,
 	var p: Vector3 = s.vehicle_nav(&"tank").snap(at - side * (SPACING * WAVE_MOST * 0.5 + 8.0)) if saved.is_empty() \
 			else body.global_transform * (saved[0] as Vector3)
 	var up := Gravity.up_at(p)
-	var main := GunInstance.from_result(GunGenerator.generate(lib, rng.randi_range(1, 9999), WeaponClass.builtin(&"rocket_launcher"), 1))
-	var mg := GunInstance.from_result(GunGenerator.generate(lib, rng.randi_range(1, 9999), WeaponClass.builtin(&"lmg"), 1))
+	var guns := MachineLoadout.tank_guns(lib, rng.randi_range(1, 9999), rng.randi_range(1, 9999))
 	var to := Gravity.flat(scene.pawn.feet() - p, up)
-	tank = Tank.make(s, _troops, p + up * 0.3, atan2(-to.x, -to.z), 1, main, mg, s.on_structure_hit, s.rng)
+	tank = Tank.make(s, _troops, p + up * 0.3, atan2(-to.x, -to.z), 1, guns[0], guns[1], s.on_structure_hit, s.rng)
 	if not saved.is_empty():
 		tank.health.apply_impact(tank.health.total_current() - float(saved[1]), &"")
 	PlanetBody.track(tank)
@@ -214,12 +213,11 @@ func _field_tank(s: AIServices, at: Vector3, side: Vector3, lib: GunPartLibrary,
 	s.add_pawn(target)
 	_tank_pawns = [target]
 	var br := TankBrain.attach(s, tank)
-	for seat in [Tank.Seat.DRIVER, Tank.Seat.GUNNER]:
+	_tank_pawns.append_array(MachineLoadout.crew_tank(tank, func(_seat: int) -> Pawn:
 		var so := Soldier.spawn(s, _troops, p + up * 0.3 + side * 5.0, 1,
-				GunInstance.from_result(GunGenerator.generate(lib, rng.randi_range(1, 9999), WeaponClass.builtin(&"rifle"), 1)))
+				MachineLoadout.roll(lib, rng.randi_range(1, 9999), &"rifle"))
 		PlanetBody.track(so.pawn.body)
-		tank.board(so.pawn, seat, true)
-		_tank_pawns.append(so.pawn)
+		return so.pawn))
 	br.escort = squad
 	_tank_goal = scene.pawn.feet()
 	br.send(_tank_goal)
@@ -231,7 +229,7 @@ func _mech_up() -> bool:
 	return mech != null and is_instance_valid(mech) and not mech.is_dead()
 
 
-## The wave's mech, as the city's (CityScene._spawn_enemy_mech): an LMG in its hand,
+## The wave's mech, as the city's (MachineLoadout; CityVehicles.spawn_enemy_mech): an LMG in its hand,
 ## a launcher for walls, the enemy tree, the roster's medium gunner, a pilot inside;
 ## on the nav net's mech map, on the other side of the squad from the tank. It
 ## knows where the player is as its side does (the squad's contact, or by ear).
@@ -244,10 +242,7 @@ func _field_mech(s: AIServices, at: Vector3, side: Vector3, lib: GunPartLibrary,
 	var to := Gravity.flat(scene.pawn.feet() - p, up)
 	var m := Mech.spawn(_troops, p + up * 0.2, atan2(-to.x, -to.z), 1)
 	PlanetBody.track(m.body)
-	var gi := GunInstance.from_result(GunGenerator.generate(lib, rng.randi_range(1, 9999), WeaponClass.builtin(&"lmg"), 1))
-	gi.visible = false
-	m.arm.add_child(gi)
-	m.gun.equip(gi)
+	MachineLoadout.arm_mech(m, lib, rng.randi_range(1, 9999))
 	m.gun.rng = s.rng
 	m.gun.on_structure_hit = s.on_structure_hit
 	mech = MechBrain.attach(s, m, nav, MechTree.enemy(), 1)
@@ -260,9 +255,8 @@ func _field_mech(s: AIServices, at: Vector3, side: Vector3, lib: GunPartLibrary,
 	PlanetBody.track(pilot.pawn.body)
 	m.mount(pilot.pawn, true)
 	_tank_pawns.append(pilot.pawn)
-	if not m.no_gun:
-		mech.arm_launcher(GunInstance.from_result(GunGenerator.generate(lib, rng.randi_range(1, 9999),
-				WeaponClass.builtin(&"rocket_launcher"), 1)), s.rng, s.on_structure_hit)
+	MachineLoadout.arm_launcher(mech, m, lib, func() -> int: return rng.randi_range(1, 9999), s.rng,
+			s.on_structure_hit)
 	print("[garrison] %s: a mech with wave %d, %s" % [body.data.planet_name, wave, "piloted" if m.pilot_pawn != null else "empty"])
 
 

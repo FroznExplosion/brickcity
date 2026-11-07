@@ -1770,8 +1770,7 @@ func _send_truck(kinds: Array[StringName], kind := &"truck") -> bool:
 	if kind == &"apc":
 		if city._gun_library == null:
 			city._gun_library = GunPlaceholderParts.build_library()
-		gi = GunInstance.from_result(GunGenerator.generate(city._gun_library, city._combat_rng.randi(),
-				WeaponClass.builtin(&"lmg"), 1))
+		gi = MachineLoadout.roll(city._gun_library, city._combat_rng.randi(), MachineLoadout.APC_GUN)
 	var t := TransportTruck.make(city.ai_services, city, start, atan2(-to.x, -to.z), kind, gi,
 			city._gun.on_structure_hit, city._combat_rng)
 	t.team = ENEMY_TEAM
