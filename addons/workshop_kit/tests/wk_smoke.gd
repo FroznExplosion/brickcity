@@ -23,6 +23,7 @@ func _initialize() -> void:
 	_mirror()
 	await _camera()
 	_grid_and_ghost()
+	_frame()
 	print("wk_smoke: %d passed, %d failed" % [_pass, _fail])
 	quit(0 if _fail == 0 else 1)
 
@@ -444,6 +445,46 @@ func _grid_and_ghost() -> void:
 	g.place(box, Transform3D(Basis(), Vector3(1, 2, 3)))
 	_ok("given a mesh and a place", g.node.mesh == box and g.node.transform.origin == Vector3(1, 2, 3))
 	g.node.free()
+
+
+func _frame() -> void:
+	var bar := WkMenuBar.new()
+	var got := []
+	var file := bar.add_menu("File", [["Open", 1, KEY_MASK_CTRL | KEY_O], [], ["Quit", 2, 0]],
+			func(id: int) -> void: got.append(id))
+	var p := file.get_popup()
+	_ok("a menu from rows: items, a separator, a shortcut", p.item_count == 3 and p.is_item_separator(1)
+			and p.get_item_shortcut(0) != null and p.get_item_shortcut(2) == null)
+	bar.add_menu("View", [["Grid", 5]], func(_id: int) -> void: pass, true)
+	bar.add_menu("File", [["Export", 3]], func(id: int) -> void: got.append(id * 10))
+	_ok("a label already there gets the rows, after a separator", bar.labels() == ["File", "View"]
+			and p.item_count == 5 and p.is_item_separator(3))
+	_ok("checks are radio items", (bar.menu("View") as MenuButton).get_popup().is_item_radio_checkable(0))
+	p.id_pressed.emit(3)
+	_ok("an item calls its menu's handlers with its id", got.has(30))
+	bar.set_title("build — Building")
+	_ok("the title", bar.title() == "build — Building")
+	var f := WkFrame.new()
+	var top := Control.new()
+	top.size = Vector2(800, 30)
+	var band := Control.new()
+	band.custom_minimum_size.y = 40.0   # a band is as tall as what is in it
+	band.size = Vector2(100, 40)
+	var rail := Control.new()
+	rail.size = Vector2(200, 300)
+	f.bar = top
+	f.band = band
+	f.rail = rail
+	f.layout(Vector2(1280, 720))
+	_ok("the band under the bar, across the window less margins", band.position == Vector2(8, 34)
+			and band.custom_minimum_size.x == 1264.0)
+	_ok("the rail under the band, at the left", rail.position == Vector2(12, 34 + 40 + 8), str(rail.position))
+	rail.size = Vector2(200, 300)
+	_ok("the editor's readouts start right of the rail", f.content_left() == 12 + 200 + 8)
+	band.visible = false
+	_ok("no band: the rail a margin under the bar", f.rail_top() == 8 + 30)
+	for n in [bar, top, band, rail]:
+		n.free()
 
 
 ## A pretend editor for the tools.
