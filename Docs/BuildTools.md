@@ -26,7 +26,7 @@ when its last stage lands.
 | **The rail**: icon + name + key buttons, a pop-up for each, a hint line for the tool in hand, the tool's options under it | `ToolRail`, `scripts/workshop_rail.gd` (taken out of `AssetWorkshopUI`) | both |
 | **Shapes on a grid**: rectangle, hollow rectangle, ellipse/circle, ring, triangle, line, and a drawn outline (polygon) as cells on a plane | `BrickShapes`, `scripts/workshop_shapes.gd` (static) | building shapes, building sketch; the asset sketch's outline fill (`region_cells`) moves here |
 | **Courses**: cells to bricks of the held kind, staggered or aligned | `BrickShapes.pack_courses` | building shapes and sketch |
-| **The sketch pen**: freehand outline, rectangle, ellipse, clicked polygon, brush -- the stroke being drawn, and the outline it comes to | `SketchPen`, `scripts/workshop_sketch.gd` | both Sketch tools: the asset's fills its part, the building's makes a kept shape |
+| **The sketch pen and the Sketch tool**: freehand outline, rectangle, ellipse, clicked polygon, brush -- the stroke being drawn, and the outline it comes to | `WkSketchPen` and `WkSketchTool` in the editor kit (`addons/workshop_kit/`, section 20); the workshop answers through `BrickWorkshopContext` | both: the asset workshop's Sketch, the building workshop's Draw (outlines) and Cut |
 
 What a stroke *becomes* stays each workshop's own: in the asset workshop a sketch is a part
 seen from three views with slopes fitted on its edges; in a building it is a kept shape
@@ -978,7 +978,9 @@ Each stage: own branch, merged `--no-ff`, pushed. Every stage passes, as on main
 | Stage | What | Check |
 |---|---|---|
 | 1 ✅ | Kit folder, README, VERSION, `WkCommand`, `WkGroup`, `WkUndoStack`; every undo list in both workshops (`_edits`, `_brick_groups`, `_redo_list`, `_paints`, `_tower_undo`, `_stamp_marks`, `_ungrouped`, `WorkshopTools._undo`, the furnish tool's, and the asset's `_edit_groups`, `_redo`, `_stud_log`, `_deleted`, sketch snapshots) becomes commands on one stack, `ws.undo_stack` | `wk_smoke` (the stack alone); every probe above. Planned as 1a (building) and 1b (asset); done as one, because the asset workshop's undo read and wrote the base's list |
-| 2 | `WkTool`, `WkContext`, `WkToolbox`; `BrickWorkshopContext` for both; **Sketch, Shapes, Paint** moved into kit tools (SketchPen -> `WkSketchPen`, BrickShapes' cells -> `WkShapes`; `pack_courses` stays game-side) | probes; a fake context in `wk_smoke` drives the three tools |
+| 2a ✅ | `WkTool`, `WkContext`, `WkToolbox`; `BrickWorkshopContext` (`scripts/workshop/brick_context.gd`) for both; SketchPen -> `WkSketchPen`, and the stroke handling of both workshops' sketching into **`WkSketchTool`** | probes; `wk_smoke` drives the tool through a pretend context |
+| 2b | **Paint** into a kit tool: the stroke (press, drag, release as one undo), the brush's reach, pick a colour; what a brick's colour is stays the workshop's | probes; `wk_smoke` |
+| 2c | **Shapes**: the grid geometry (`BrickShapes`' rectangle, ellipse, ring, polyline, region cells) into `WkShapes`; packing cells into bricks and kept shapes stay game-side. The Shapes *tool* goes with Draw/Cut/Select in stage 5: the two workshops' gestures differ (asset: drag a box, ball, cylinder or wedge and fill it; building: draw an outline, then pull its height), so one tool needs a design choice first | probes; `wk_smoke` cells checks |
 | 3 | `WkCamera` (WorkshopView's orbit/FPS + the asset's flat views and zoom), `WkMirror` (one plane for both; `mirror_item` in the adapter), `WkGrid`, `WkGhost` | probes; gate pictures as before; camera orbit, pan, zoom, flat views by script |
 | 4a | `WkFrame` + `WkRail` (ToolRail moved) for the building workshop: menu bar, rail, options, hint line, themed by `ctx.theme()` | `workshop_probe`, gate |
 | 4b | The asset workshop's tabs, outliner and actions on `WkFrame` | `asset_ui_probe` |
@@ -1032,3 +1034,22 @@ logic, the command its data. What changed underneath, and the few things that be
 * Gathered edits (`_begin_gather`/`_end_gather`) are a group begun and ended on the stack, flattened
   so the groups made inside it undo as one, in the order they were made, with their sketch
   snapshots after (`WkGroup` tails).
+
+### As built: stage 2a, the tool seam and Sketch (2026-11-07)
+
+Kit 0.2.0: `WkContext` (the seam, every method a neutral default), `WkTool`, `WkToolbox`,
+`WkSketchPen` (was `SketchPen`, `scripts/workshop_sketch.gd`, unchanged inside) and `WkSketchTool`:
+press, drag and release (or click corners of a polygon), RMB to take away or -- with `rmb_cancels`
+-- to give the stroke up. `wk_smoke` 49 checks.
+
+* **One tool, two outcomes, as planned.** Where the stroke lies and what it becomes are asked of
+  the context: `sketch_begin` (the plane, or null to refuse), `sketch_point`, `sketch_removes`,
+  `sketch_commit`, `sketch_cancel`. `BrickWorkshopContext` hands them to `ws._sketch_host()` (as `wk_sketch_begin` ...): the
+  building workshop's tools (a kept shape, a plan, a cut) or the asset workshop itself (a part's
+  sketch).
+* The building workshop has no Sketch tool of its own any more (section 11 folded it into Draw):
+  the kit tool is taken up while Draw is on an outline or Cut is on the pen, and put down
+  otherwise. In the asset workshop it is taken up with Sketch (not its sculpt brush).
+* `WorkshopTools.pen`, `_sk`, `brush_size` and `brush_square` are the tool's, through
+  properties, so the probes and the option buttons read and set them as before. The probes now
+  finish a stroke through the tool (`t.sketch.commit()`), the path a mouse takes.
