@@ -16,12 +16,20 @@ extends RefCounted
 var bar: Control = null
 var band: Control = null
 var rail: Control = null
+## A panel down the right (an outliner): its top is kept under the bar.
+var side: Control = null
 ## Space round the pieces, in pixels.
 var margin := 8.0
 ## The rail's distance from the left edge.
 var rail_left := 12.0
 ## Lay the band across the window (else it keeps its own width).
 var band_wide := true
+## The band's distance from the left edge (< 0: `margin`).
+var band_left := -1.0
+## The band's distance under the bar (< 0: half the margin).
+var band_gap := -1.0
+## The room the band takes above the rail (< 0: its own height).
+var band_space := -1.0
 
 
 ## The menu bar's height (0 with none).
@@ -29,14 +37,16 @@ func bar_height() -> float:
 	return bar.size.y if bar != null and bar.visible else 0.0
 
 
-## The band's height (0 with none).
+## The band's height (0 with none), or `band_space` when it is set.
 func band_height() -> float:
-	return band.size.y if band != null and band.visible else 0.0
+	if band == null or not band.visible:
+		return 0.0
+	return band_space if band_space >= 0.0 else band.size.y
 
 
 ## Where the band goes: under the bar.
 func band_top() -> float:
-	return bar_height() + margin * 0.5
+	return bar_height() + (band_gap if band_gap >= 0.0 else margin * 0.5)
 
 
 ## Where the rail goes: under the bar, and a margin under the band.
@@ -56,10 +66,12 @@ func content_left() -> float:
 ## Place every piece for a window of `view` pixels.
 func layout(view: Vector2) -> void:
 	if band != null:
-		band.position = Vector2(margin, band_top())
+		band.position = Vector2(band_left if band_left >= 0.0 else margin, band_top())
 		if band_wide:
 			band.custom_minimum_size.x = view.x - margin * 2.0
 			band.size = Vector2(view.x - margin * 2.0, 0.0)
 	if rail != null:
 		rail.position = Vector2(rail_left, rail_top())
 		rail.size = Vector2.ZERO
+	if side != null:
+		side.offset_top = bar_height() + (band_gap if band_gap >= 0.0 else margin * 0.5)
