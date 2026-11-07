@@ -5,7 +5,7 @@ extends Node
 ## the asset workshop's own), and the tools that build buildings fast -- Shapes of the held
 ## brick, flat or standing as a wall, staggered or aligned; Cut, for doorways and windows;
 ## Walls, Floor, Roof and Stairs, the parts of a house a click or two each;
-## Sketch, an outline drawn by hand with the asset workshop's own pen (SketchPen); Repeat,
+## Sketch, an outline drawn by hand with the asset workshop's own pen (WkSketchPen); Repeat,
 ## for storeys and rows of windows; Select,
 ## to change or let go of a kept shape. Place, Paint and Rooms are the workshop's
 ## own hand, brush and spaces tool.
@@ -158,10 +158,21 @@ var roof_style := "gable"
 var roof_overhang := 1
 ## Sketch: the pen (the asset workshop's), its brush, and the plane a stroke is on --
 ## {lie, at} while one is drawn, else empty.
-var pen := SketchPen.new()
-var brush_size := 1
-var brush_square := false
-var _sk := {}
+## Draw's and Cut's pen: the kit's Sketch tool (WkSketchTool), drawn through the workshop's
+## context -- which asks `wk_sketch_begin`, `wk_sketch_point`, `wk_sketch_commit` ... below.
+var sketch := WkSketchTool.new()
+var pen: WkSketchPen:
+	get: return sketch.pen
+var brush_size: int:
+	get: return sketch.brush_size
+	set(v): sketch.brush_size = v
+var brush_square: bool:
+	get: return sketch.brush_square
+	set(v): sketch.brush_square = v
+## The plane of the stroke under way, {} between strokes: the sketch tool's.
+var _sk: Dictionary:
+	get: return sketch.plane if sketch.plane != null else {}
+	set(v): sketch.plane = null if v.is_empty() else v
 ## Sketch as a floor plan (section 9): the level drawn on (-1: where you aim), what raising
 ## it makes, a building's storey (courses of wall) and flat roof; the plan being drawn
 ## ({at, adds, subs}); the last plan raised. Cut: a window on a building on every floor.
@@ -257,6 +268,8 @@ var _syncing := false
 
 func setup(workshop, layer: CanvasLayer) -> void:
 	ws = workshop
+	sketch.rmb_cancels = true   # RMB outside a stroke is the workshop's own (it takes a brick up)
+	ws.toolbox.add(sketch)
 	rail = ToolRail.new(210.0, true)
 	rail.name = "ToolRail"
 	layer.add_child(rail)
@@ -1652,7 +1665,7 @@ func _build_options() -> void:
 	rail.options.add_child(_poly_box)
 	_button(_poly_box, "Close", func() -> void:
 		if pen.draw == "polygon" and not _sk.is_empty():
-			_sketch_commit())
+			sketch.commit())
 	_button(_poly_box, "Take back", func() -> void:
 		if not pen.points.is_empty():
 			pen.points.pop_back())
@@ -1996,7 +2009,9 @@ func input(e: InputEvent) -> bool:
 	if e is InputEventMouseButton and _drag.get("phase", "") == "height" \
 			and e.button_index in [MOUSE_BUTTON_LEFT, MOUSE_BUTTON_RIGHT]:
 		return _make_input(e)
-	if ((tool == "draw" and pen_outline()) or (tool == "cut" and cut_pen())) and _drag.is_empty() and _sketch_input(e):
+	var pen_on: bool = (tool == "draw" and pen_outline()) or (tool == "cut" and cut_pen())
+	ws.toolbox.use(&"sketch" if pen_on else &"")
+	if pen_on and _drag.is_empty() and ws.toolbox.input(e):
 		return true
 	if e is InputEventKey and e.pressed and not e.echo and not e.ctrl_pressed:
 		if _drag.get("phase", "") == "height" and _typed_key(e):
@@ -2073,49 +2088,32 @@ func _ray() -> Array:
 ## Sketch: the plane is where the ghost is when the stroke begins (flat on that layer, or
 ## standing through it across the view, as Shapes); the pen draws on it; let go (or close a
 ## polygon) and it is a kept shape of the held brick -- drawn with RMB, a cut.
-func _sketch_input(e: InputEvent) -> bool:
-	if e is InputEventMouseButton and e.button_index == MOUSE_BUTTON_RIGHT:
-		# Outside a stroke RMB is the workshop's own; in one it cancels.
-		if _sk.is_empty():
-			return false
-		if e.pressed:
-			cancel()
-			say("")
-		return true
-	if e is InputEventMouseButton and e.button_index == MOUSE_BUTTON_LEFT:
-		if e.pressed:
-			if _sk.is_empty():
-				if ws._frame != 0:
-					return true
-				_sk = _stroke_plane()
-				if _sk.is_empty():
-					return true
-			var q = _plane_point(String(_sk.lie), int(_sk.get("plane_at", _sk.at)))
-			if q == null:
-				return true
-			var cutting: bool = cut_mode or tool == "cut"
-			if pen.draw == "polygon":
-				if pen.polygon_click(q, cutting, e.double_click):
-					_sketch_commit()
-			else:
-				pen.press(q, cutting)
-		elif pen.draw != "polygon" and not _sk.is_empty():
-			_sketch_commit()
-		return true
-	if e is InputEventMouseMotion and not _sk.is_empty() and pen.draw != "polygon" \
-			and (Input.is_mouse_button_pressed(MOUSE_BUTTON_LEFT) or Input.is_mouse_button_pressed(MOUSE_BUTTON_RIGHT)):
-		var q = _plane_point(String(_sk.lie), int(_sk.get("plane_at", _sk.at)))
-		if q != null:
-			pen.move(q, brush_size)
-		return true
-	if e is InputEventKey and pen.draw == "polygon" and not _sk.is_empty():
-		match pen.polygon_key(e):
-			"commit":
-				_sketch_commit()
-				return true
-			"back":
-				return true
-	return false
+# The kit's Sketch tool asks these, through the workshop's context (BrickWorkshopContext).
+
+## A stroke starts: on the face pressed or the level (`_stroke_plane`); none in a sideways grid.
+func wk_sketch_begin(_remove: bool) -> Variant:
+	if ws._frame != 0:
+		return null
+	var sk := _stroke_plane()
+	return null if sk.is_empty() else sk
+
+
+func wk_sketch_point(plane: Variant) -> Variant:
+	return _plane_point(String(plane.lie), int(plane.get("plane_at", plane.at)))
+
+
+## A stroke in Cut (or cut mode) takes away, whichever button: RMB gives a stroke up here.
+func wk_sketch_removes() -> bool:
+	return cut_mode or tool == "cut"
+
+
+func wk_sketch_commit(plane: Variant, _pen: WkSketchPen) -> void:
+	_sketch_commit(plane)
+
+
+func wk_sketch_cancel() -> void:
+	cancel()
+	say("")
 
 
 ## The plane a stroke goes on: the face pressed, for a cut or a solid (a wall's side; a cut,
@@ -2141,8 +2139,7 @@ func _stroke_plane() -> Dictionary:
 ## The stroke drawn: on a level, into the plan being drawn (in, or with RMB out of it); a
 ## click inside the plan raises it. Standing -- or RMB with no plan -- it goes on to its
 ## thickness (or depth, cutting) at once, as Shapes.
-func _sketch_commit() -> void:
-	var sk := _sk
+func _sketch_commit(sk: Dictionary) -> void:
 	var entry = pen.entry("top" if sk.lie == "flat" else "side", brush_size, brush_square)
 	var remove := pen.out
 	var tap: Array = pen.points.duplicate()
@@ -2171,7 +2168,7 @@ func _sketch_commit() -> void:
 		return
 	if entry == null:
 		return
-	var cells := SketchPen.region_cells(entry)
+	var cells := WkSketchPen.region_cells(entry)
 	if cells.is_empty():
 		return
 	var lo := Vector2i(1 << 30, 1 << 30)

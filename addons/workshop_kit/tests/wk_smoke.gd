@@ -16,6 +16,8 @@ var log_: Array = []
 
 func _init() -> void:
 	_undo_stack()
+	_toolbox()
+	_sketch_tool()
 	print("wk_smoke: %d passed, %d failed" % [_pass, _fail])
 	quit(0 if _fail == 0 else 1)
 
@@ -201,6 +203,110 @@ func _undo_stack() -> void:
 	s.push(_Merging.new())
 	s.push(_Merging.new())
 	_ok("merge folds into the newest", s.size() == 1 and a.n == 3)
+
+
+func _click(button: int, pressed: bool, double := false) -> InputEventMouseButton:
+	var e := InputEventMouseButton.new()
+	e.button_index = button
+	e.pressed = pressed
+	e.double_click = double
+	return e
+
+
+func _toolbox() -> void:
+	var box := WkToolbox.new()
+	var ctx := _Ctx.new()
+	box.ctx = ctx
+	var a := WkTool.new()
+	a.id = &"a"
+	var b := WkTool.new()
+	b.id = &"b"
+	box.add(a)
+	box.add(b)
+	_ok("nothing in hand at first", box.active() == null and not box.input(InputEventKey.new()))
+	box.use(&"a")
+	_ok("use takes a tool up, with the context", box.active_id() == &"a" and a.active and a.ctx == ctx)
+	box.use(&"b")
+	_ok("and puts the one before down", not a.active and b.active and box.tool(&"a") == a)
+	box.use(&"")
+	_ok("none", box.active() == null and not b.active)
+
+
+func _sketch_tool() -> void:
+	var ctx := _Ctx.new()
+	var box := WkToolbox.new()
+	box.ctx = ctx
+	var sk: WkSketchTool = box.add(WkSketchTool.new())
+	box.use(&"sketch")
+	# A click with the freehand pen: one point, handed over on release.
+	ctx.at = Vector2(3, 4)
+	_ok("a press starts a stroke on the editor's plane", box.input(_click(MOUSE_BUTTON_LEFT, true))
+			and sk.drawing() and ctx.begun == 1)
+	box.input(_click(MOUSE_BUTTON_LEFT, false))
+	_ok("release hands it over and clears the pen", ctx.commits.size() == 1 and ctx.commits[0].plane == "top"
+			and (ctx.commits[0].points as Array).size() == 1 and sk.pen.points.is_empty() and not sk.drawing())
+	# A polygon, clicked corner by corner; closed on the first corner.
+	sk.pen.draw = "polygon"
+	for q in [Vector2(0, 0), Vector2(5, 0), Vector2(5, 5), Vector2(0, 5)]:
+		ctx.at = q
+		box.input(_click(MOUSE_BUTTON_LEFT, true))
+		box.input(_click(MOUSE_BUTTON_LEFT, false))
+	_ok("a polygon is not handed over corner by corner", ctx.commits.size() == 1 and sk.pen.points.size() == 4)
+	ctx.at = Vector2(0.2, 0.1)
+	box.input(_click(MOUSE_BUTTON_LEFT, true))
+	_ok("a click on its first corner closes it", ctx.commits.size() == 2
+			and (ctx.commits[1].points as Array).size() == 4 and not ctx.commits[1].out)
+	# RMB takes away, unless it cancels.
+	sk.pen.draw = "outline"
+	box.input(_click(MOUSE_BUTTON_RIGHT, true))
+	box.input(_click(MOUSE_BUTTON_RIGHT, false))
+	_ok("RMB draws a stroke that takes away", ctx.commits.size() == 3 and ctx.commits[2].out)
+	sk.rmb_cancels = true
+	_ok("with rmb_cancels, RMB outside a stroke is not the tool's", not box.input(_click(MOUSE_BUTTON_RIGHT, true)))
+	box.input(_click(MOUSE_BUTTON_LEFT, true))
+	box.input(_click(MOUSE_BUTTON_RIGHT, true))
+	_ok("and in one gives it up", not sk.drawing() and ctx.cancels == 1 and ctx.commits.size() == 3)
+	ctx.removes = true
+	box.input(_click(MOUSE_BUTTON_LEFT, true))
+	box.input(_click(MOUSE_BUTTON_LEFT, false))
+	_ok("the editor can say a stroke takes away (a cut)", ctx.commits.size() == 4 and ctx.commits[3].out)
+	ctx.removes = false
+	# Refused, and off the plane.
+	ctx.refuse = true
+	_ok("a refused stroke is used up, not started", box.input(_click(MOUSE_BUTTON_LEFT, true)) and not sk.drawing())
+	ctx.refuse = false
+	box.input(_click(MOUSE_BUTTON_LEFT, true))
+	box.use(&"")
+	_ok("putting the tool down gives up its stroke", not sk.drawing() and ctx.cancels == 2)
+
+
+## A pretend editor for the tools.
+class _Ctx:
+	extends WkContext
+	var at = Vector2.ZERO
+	var begun := 0
+	var cancels := 0
+	var refuse := false
+	var removes := false
+	var commits := []
+
+	func sketch_begin(_remove: bool) -> Variant:
+		if refuse:
+			return null
+		begun += 1
+		return "top"
+
+	func sketch_point(_plane: Variant) -> Variant:
+		return at
+
+	func sketch_removes() -> bool:
+		return removes
+
+	func sketch_commit(plane: Variant, pen: WkSketchPen) -> void:
+		commits.append({"plane": plane, "points": pen.points.duplicate(), "out": pen.out})
+
+	func sketch_cancel() -> void:
+		cancels += 1
 
 
 ## A command that folds the next one of its kind into itself.

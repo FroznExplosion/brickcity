@@ -1,11 +1,10 @@
-class_name SketchPen
+class_name WkSketchPen
 extends RefCounted
 
-## The Sketch tool's pen, shared by both workshops (Docs/BuildTools.md, section 0): the
+## The sketch pen (workshop_kit; WkSketchTool draws with it): the
 ## stroke being drawn on a plane -- freehand outline, brush, rectangle, ellipse or clicked
 ## polygon -- what it comes to (an outline or a brush stroke), the lines that show it, and
-## the cells inside. What a finished stroke BECOMES is each workshop's own: the asset
-## workshop draws it into a part's sketch, the building workshop makes a kept shape.
+## the cells inside. What a finished stroke BECOMES is the editor's own (WkContext.sketch_commit).
 ##
 ## Points are in the plane's own numbers (across it, up it): cells, as floats.
 

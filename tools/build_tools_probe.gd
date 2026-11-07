@@ -429,9 +429,9 @@ func _wall_checks() -> void:
 
 func _sketch_checks() -> void:
 	print("[probe] sketch: the asset workshop's pen, making kept shapes")
-	var sq := SketchPen.region_cells([[4, 4], [12, 4], [12, 10], [4, 10]])
+	var sq := WkSketchPen.region_cells([[4, 4], [12, 4], [12, 10], [4, 10]])
 	_ok("the pen fills an outline 8 x 6 with 48 cells", sq.size() == 48)
-	_ok("and a brush stroke round its path", SketchPen.region_cells(SketchPen.brush_entry([Vector2(5.5, 5.5)], 1, true, "top")).size() == 9)
+	_ok("and a brush stroke round its path", WkSketchPen.region_cells(WkSketchPen.brush_entry([Vector2(5.5, 5.5)], 1, true, "top")).size() == 9)
 	_ok("BrickShapes fills an outline with the same code", BrickShapes.outline_cells([[4, 4], [12, 4], [12, 10], [4, 10]]) == sq)
 	_ws._new_build()
 	var t: WorkshopTools = _ws._tools
@@ -450,7 +450,7 @@ func _sketch_checks() -> void:
 	t.pen.out = false
 	for q in [Vector2(4, 4), Vector2(12, 4), Vector2(12, 10), Vector2(4, 10)]:
 		t.pen.polygon_click(q, false, false)
-	t._sketch_commit()
+	t.sketch.commit()
 	_ok("combining: a stroke goes into the plan, nothing laid yet", t.shapes().is_empty() and not t._draft.is_empty())
 	t.raise_plan()
 	t.commit_pending()
@@ -468,7 +468,7 @@ func _sketch_checks() -> void:
 	t.brush_square = true
 	t._sk = {"lie": "flat", "at": 1}
 	t.pen.press(Vector2(8.5, 7.5), true)
-	t._sketch_commit()
+	t.sketch.commit()
 	t.commit_pending()
 	_ok("a stroke drawn with RMB cuts the shape", (t.shapes()[0].cuts as Array).size() == 1
 			and not _ws.world.is_solid(f0, Vector3i(8, 2, 7)) and _ws.world.is_solid(f0, Vector3i(4, 2, 4)))
@@ -602,7 +602,7 @@ func _repeat_checks() -> void:
 	t.pen.press(Vector2(30.5, 30.5), false)
 	t.pen.move(Vector2(34.5, 30.5), 1)
 	var before := t.shapes().size()
-	t._sketch_commit()
+	t.sketch.commit()
 	t.raise_plan()
 	t.commit_pending()
 	_ok("a brush stroke drawn with LMB is a kept shape", t.shapes().size() == before + 1 and _solid(Vector3i(32, 1, 30)))
@@ -925,7 +925,7 @@ func _floor_plan_checks() -> void:
 		t._sk = {"lie": "flat", "at": 1}
 		for q in poly:
 			t.pen.polygon_click(q, false, false)
-		t._sketch_commit()
+		t.sketch.commit()
 	_ok("two strokes, one plan", (t._draft.adds as Array).size() == 2 and t.shapes().is_empty())
 	t.makes = "building"
 	t.storey_courses = 3
@@ -1092,7 +1092,7 @@ func _simpler_checks() -> void:
 	t._sk = {"lie": "flat", "at": 1}
 	for q in [Vector2(4, 4), Vector2(24, 4), Vector2(24, 18), Vector2(4, 18)]:
 		t.pen.polygon_click(q, false, false)
-	t._sketch_commit()
+	t.sketch.commit()
 	t.raise_plan()
 	t._drag.rec.depth = 6
 	t.commit_pending()
@@ -1243,7 +1243,7 @@ func _draw_checks() -> void:
 	t._sk = {"lie": "flat", "at": 1}
 	for q in [Vector2(4, 4), Vector2(24, 4), Vector2(24, 18), Vector2(4, 18)]:
 		t.pen.polygon_click(q, false, false)
-	t._sketch_commit()
+	t.sketch.commit()
 	_ok("corners that make a building: on to its height at once", t._drag.get("phase", "") == "height"
 			and int(t._drag.rec.depth) == 7 and t._draft.is_empty())
 	t._drag.rec.depth = 14
@@ -1416,7 +1416,7 @@ func _rest_checks() -> void:
 	t._sk = {"lie": String(cf.lie), "at": int(cf.front), "into": int(cf.into), "face": cf}
 	for q in [Vector2(7, 2), Vector2(10, 2), Vector2(10, 6), Vector2(7, 6)]:
 		t.pen.polygon_click(q, true, false)
-	t._sketch_commit()
+	t.sketch.commit()
 	_ok("a hand-drawn hole: through to start", int(t._drag.rec.depth) == 4 and t._drag.get("cut", false))
 	t.commit_pending()
 	_ok("cut", not _solid(Vector3i(8, 4, 4)) and not _solid(Vector3i(8, 4, 7)))
@@ -1431,7 +1431,7 @@ func _rest_checks() -> void:
 	t.pen.press(Vector2(12, 2), false)
 	for q in [Vector2(15, 2), Vector2(15, 6), Vector2(12, 6)]:
 		t.pen.move(q, 1)
-	t._sketch_commit()
+	t.sketch.commit()
 	t.commit_pending()
 	_ok("a stroke on a wall's side comes out of it", _solid(Vector3i(13, 3, 3)))
 	t.set_outline("box")

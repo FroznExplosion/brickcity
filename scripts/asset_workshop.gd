@@ -196,9 +196,11 @@ var _plane_lines: MeshInstance3D
 var _photo_lines: MeshInstance3D
 var photo_grid := false
 ## A sketch being drawn: points on the side plane, (studs along, plates up).
-## The stroke being drawn is the shared pen's (SketchPen, scripts/workshop_sketch.gd); these
+## The stroke being drawn is the kit's Sketch tool's pen (WkSketchTool, addons/workshop_kit); these
 ## name its parts as this file always has.
-var _pen := SketchPen.new()
+var _sketch_tool := WkSketchTool.new()
+var _pen: WkSketchPen:
+	get: return _sketch_tool.pen
 var _sketch: Array[Vector2]:
 	get: return _pen.points
 var _photo_drag = null
@@ -300,6 +302,7 @@ func _wants_tools() -> bool:
 
 func _ready() -> void:
 	super()
+	toolbox.add(_sketch_tool)
 	# What is made here is a gun (or a mech): File > Save, Save As and Open use their
 	# library (user://guns/), not the buildings'. F5 has its own slot, not the workshop's.
 	_save_path = ASSET_QUICK_SAVE
@@ -2565,6 +2568,7 @@ func set_tool(t: String) -> void:
 	if t == "" :
 		selection.clear()
 	_sketch.clear()
+	toolbox.use(&"sketch" if t == "sketch" else &"")
 	_sketch_box.visible = t == "sketch"
 	if t != "" and _painting:
 		_set_painting(false)
@@ -4031,24 +4035,40 @@ func _sketch_input(e: InputEvent) -> bool:
 		return false
 	if sketch_draw == "sculpt":
 		return _sculpt_input(e)
-	if sketch_draw == "polygon":
-		return _polygon_input(e)
-	if e is InputEventMouseButton and e.button_index in [MOUSE_BUTTON_LEFT, MOUSE_BUTTON_RIGHT]:
-		if e.pressed:
-			var q = _sketch_mouse()
-			if q != null:
-				_pen.press(q, e.button_index == MOUSE_BUTTON_RIGHT)
-			else:
-				_sketch.clear()
-				_sketch_out = e.button_index == MOUSE_BUTTON_RIGHT
-		else:
-			_sketch_commit()
-		return true
-	if e is InputEventMouseMotion and not _sketch.is_empty() and (Input.is_mouse_button_pressed(MOUSE_BUTTON_LEFT)
-			or Input.is_mouse_button_pressed(MOUSE_BUTTON_RIGHT)):
-		_sketch_add()
-		return true
+	# The kit's Sketch tool draws the stroke (WkSketchTool); `sketch_commit` below makes it
+	# into the part's sketch.
+	_pen.draw = sketch_draw
+	_sketch_tool.brush_size = brush_size
+	_sketch_tool.brush_square = brush_shape == "square"
+	toolbox.use(&"sketch")
+	return toolbox.input(e)
+
+
+# The kit's Sketch tool asks these, through the workshop's context (BrickWorkshopContext).
+
+func _sketch_host() -> Object:
+	return self
+
+
+## Every stroke goes on the working plane; RMB draws one that takes area away.
+func wk_sketch_begin(_remove: bool) -> Variant:
+	return work_plane
+
+
+func wk_sketch_point(_plane: Variant) -> Variant:
+	return _sketch_mouse()
+
+
+func wk_sketch_removes() -> bool:
 	return false
+
+
+func wk_sketch_commit(_plane: Variant, _p: WkSketchPen) -> void:
+	_sketch_commit()
+
+
+func wk_sketch_cancel() -> void:
+	pass
 
 
 # ---------------------------------------------------------------------------
@@ -5717,14 +5737,6 @@ func _sketch_mouse() -> Variant:
 	return null if hit == null else sketch_point(hit)
 
 
-func _sketch_add() -> void:
-	var q = _sketch_mouse()
-	if q == null:
-		return
-	_pen.draw = sketch_draw
-	_pen.move(q, brush_size)
-
-
 ## What the stroke under way comes to, into the sketch: an outline, or a brush's path.
 func _sketch_commit() -> void:
 	if sketch_draw == "brush" and not _sketch.is_empty():
@@ -5734,34 +5746,14 @@ func _sketch_commit() -> void:
 	_sketch.clear()
 
 
-## Polygon: each click a corner (the first click's button says in or out); a click on
-## the first corner, a double click or Enter closes it, Backspace takes the last corner.
-func _polygon_input(e: InputEvent) -> bool:
-	if e is InputEventMouseButton and e.pressed and e.button_index in [MOUSE_BUTTON_LEFT, MOUSE_BUTTON_RIGHT]:
-		var q = _sketch_mouse()
-		if q == null:
-			return true
-		if _pen.polygon_click(q, e.button_index == MOUSE_BUTTON_RIGHT, e.double_click):
-			_sketch_commit()
-		return true
-	if e is InputEventKey:
-		match _pen.polygon_key(e):
-			"commit":
-				_sketch_commit()
-				return true
-			"back":
-				return true
-	return false
-
-
 ## A rectangle or an ellipse dragged from corner `a` to corner `b`, as an outline (the pen's).
 static func drag_shape(kind: String, a: Vector2, b: Vector2) -> Array[Vector2]:
-	return SketchPen.drag_shape(kind, a, b)
+	return WkSketchPen.drag_shape(kind, a, b)
 
 
 ## A brush stroke as a sketch entry (the pen's).
 static func brush_entry(path: Array, size: int, square: bool, plane: String) -> Dictionary:
-	return SketchPen.brush_entry(path, size, square, plane)
+	return WkSketchPen.brush_entry(path, size, square, plane)
 
 
 ## A point of the working plane in the sketch's own two numbers: across the plane and up
@@ -6443,12 +6435,12 @@ func solid_cells(solid: Dictionary) -> Dictionary:
 ## The cells an outline or a brush stroke covers (the pen's: shared with the building
 ## workshop's sketch and shapes).
 static func region_cells(poly: Variant) -> Dictionary:
-	return SketchPen.region_cells(poly)
+	return WkSketchPen.region_cells(poly)
 
 
 ## The cells a brush stroke covers (the pen's).
 static func brush_cells(entry: Dictionary) -> Dictionary:
-	return SketchPen.brush_cells(entry)
+	return WkSketchPen.brush_cells(entry)
 
 
 ## How many times an outline goes round a point, counting direction.

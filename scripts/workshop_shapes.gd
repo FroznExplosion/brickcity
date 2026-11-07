@@ -20,7 +20,7 @@ extends RefCounted
 ##   at      the first layer along the stacking axis; `depth` layers from there
 ##   rim     a hollow rectangle's, ring's or line's thickness, in studs
 ##   points  a sketched shape's outline, [[u, v], ...] in cells, or its brush stroke
-##           (SketchPen.brush_entry); its kind is "outline"
+##           (WkSketchPen.brush_entry); its kind is "outline"
 ##
 ## A kept shape has more (tall/thick, bond, part, colour, cuts, bricks): `WorkshopTools`.
 
@@ -189,9 +189,9 @@ static func _segment_dist(p: Vector2, a: Vector2, b: Vector2) -> float:
 
 
 ## The cells inside an outline ([[u, v], ...] or Vector2s), or under a brush stroke: the
-## sketch pen's (SketchPen.region_cells), so both workshops' sketches fill the same.
+## sketch pen's (WkSketchPen.region_cells), so both workshops' sketches fill the same.
 static func outline_cells(points: Variant) -> Dictionary:
-	return SketchPen.region_cells(points)
+	return WkSketchPen.region_cells(points)
 
 
 ## Every grid cell a shape (or a cut) fills, before its cuts: its 2D cells, `depth`
@@ -284,7 +284,7 @@ static func plan_region(points: Variant) -> Dictionary:
 static func _entry_cells(e: Variant) -> Dictionary:
 	if e is Dictionary and e.has("kind"):
 		return cells_2d(String(e.kind), _v2(e.a), _v2(e.b), int(e.get("rim", 1)))
-	return SketchPen.region_cells(e)
+	return WkSketchPen.region_cells(e)
 
 
 ## The cells of `region` within `rim` cells of its outside (corners too): walls along its
