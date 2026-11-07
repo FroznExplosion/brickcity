@@ -87,6 +87,8 @@ const REPEAT_DIRS := [["up", "Up"], ["x", "Along X"], ["z", "Along Z"]]
 
 var ws    ## the workshop (workshop.gd)
 var rail: WkRail
+## Where the menu bar, the tool bar and the rail go (the kit's WkFrame).
+var frame := WkFrame.new()
 ## Hand, Edit and View's buttons, across the screen under the menus.
 var _bar: PanelContainer
 ## The button under the tools for the brick menu.
@@ -276,6 +278,7 @@ func setup(workshop, layer: CanvasLayer) -> void:
 	ws.wk_ctx.style_ui(rail)          # the game's look (GameUI, MenuTheme), through the kit's seam
 	rail.restyle(ws.wk_ctx.panel_box())
 	layer.add_child(rail)
+	frame.rail = rail
 	rail.fill("Build", TOOLS, pick, [], 2)
 	bricks_button = rail.add_under_tools("Bricks   Tab", "place", "Bricks  (Tab)\nOpen or close the menu of every brick.",
 			func() -> void: act("parts"))
@@ -283,6 +286,7 @@ func setup(workshop, layer: CanvasLayer) -> void:
 	_bar.name = "ToolBar"
 	_bar.add_theme_stylebox_override("panel", rail.get_theme_stylebox("panel"))
 	layer.add_child(_bar)
+	frame.band = _bar
 	var flow := HFlowContainer.new()
 	flow.add_theme_constant_override("h_separation", 3)
 	flow.add_theme_constant_override("v_separation", 2)
@@ -3136,14 +3140,10 @@ func _sync_select() -> void:
 
 func process() -> void:
 	view.sync()
-	var menu_h: float = ws._menu.bar_height() if ws._menu != null else 0.0
+	frame.bar = ws._menu.bar() if ws._menu != null else null
 	var vw: float = ws.get_viewport().get_visible_rect().size.x
-	_bar.position = Vector2(8, menu_h + 4.0)
-	_bar.custom_minimum_size.x = vw - 16.0
-	_bar.size = Vector2(vw - 16.0, 0.0)
-	var top: float = 8.0 + menu_h + bar_height()
-	rail.position = Vector2(12, top)
-	rail.size = Vector2.ZERO
+	frame.layout(ws.get_viewport().get_visible_rect().size)
+	var top: float = frame.rail_top()
 	var on := active()
 	rail.show_active(rail_id(on), TOOLS)
 	_hand_box.visible = rail_id(on) == "hand"

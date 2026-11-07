@@ -985,8 +985,8 @@ Each stage: own branch, merged `--no-ff`, pushed. Every stage passes, as on main
 | 3b ✅ | `WkCamera`: WorkshopView's orbit, pan, zoom to the cursor and click-or-drag, and the asset workshop's flat views (side, top, front; orthographic zoom at the cursor). The FPS fly stays the game's camera, behind the context (no new fly code) | probes; gate pictures as before |
 | 3c ✅ | `WkGrid` (the grid overlay) and `WkGhost` (the preview node and its valid/invalid tint; its mesh from the context) | probes; gate |
 | 4a ✅ | `WkRail` (ToolRail moved into the kit) in both workshops, with the game's look through the context (`style_ui`, `panel_box`: `GameUI`, on `MenuTheme`) | probes, gate |
-| 4b | `WkFrame` for the building workshop: the menu bar (`WorkshopMenu`'s menus as data the workshop gives), the rail, the option panel and the hint line, laid out and themed in one place | `workshop_probe`, gate |
-| 4c | The asset workshop's tabs, outliner and actions on `WkFrame` | `asset_ui_probe` |
+| 4b ✅ | `WkFrame` for the building workshop: the menu bar (`WorkshopMenu`'s menus as data the workshop gives), the rail, the option panel and the hint line, laid out and themed in one place | `workshop_probe`, gate |
+| 4c ✅ | The asset workshop's tabs, outliner and actions on `WkFrame` | `asset_ui_probe` |
 | 5 | The rest of the shared tools into the kit, one file each: place/run, erase, select, cut, measure, move, fill/wand; workshop-only tools into `scripts/workshop/tools/` | probes; `wk_smoke` per tool |
 | 6a | Each of the 26 overrides becomes a context call or a tool (the asset still extends) | probes |
 | 6b | **No more `extends workshop.gd`**: the brick world, recipe, frames, save and load in one component both workshops own; each workshop `extends Node3D` and composes the kit | every probe, gate; a scan finds no game class named under `addons/workshop_kit/` |
@@ -1159,3 +1159,37 @@ look).
 * `menu/core/MenuTheme.gd` (`_text_scale`): a settings module with no value yet (a probe run as a
   script, before settings load) gave `float(null)`, an error for every themed panel. It is read
   as the default now. A one-line fix in another area's file.
+
+### As built: stage 4b, the menu bar and the frame (2026-11-07)
+
+Kit 0.9.0: **`WkMenuBar`** -- menus from rows the editor gives (`[label, id, shortcut]`, `[]` a
+separator), a label already there taking more rows after a separator, radio checks, a title on
+the right -- and **`WkFrame`**, which places the pieces each frame: the bar, a band under it across
+the window, the rail a margin under that, and says where the editor's own readouts start
+(`content_left`). `wk_smoke` 99.
+
+* `WorkshopMenu` builds its bar with `WkMenuBar` (both workshops have it: the asset workshop adds
+  its menus with `add_menu`, now the kit bar's); its dialogs and what each item does stay
+  game-side -- they name recipes, kinds, tags and towers.
+* **Not themed, on purpose.** Giving the menu bar and the tool bar the menus' Theme (`style_ui`,
+  as the rail has) made both larger -- the menus' fonts and padded buttons are sized for a
+  menu screen -- and at 1280x720 the tool bar wrapped to two rows, pushing the rail down. They
+  keep their compact look; a compact editor variant of the game's theme would be the way to
+  match them.
+* The building workshop's tools hand their tool bar (the band) and rail to a `WkFrame`, whose
+  `layout` replaces the hand-placed positions in `WorkshopTools.process`, to the pixel.
+* The hint line stays the rail's (`WkRail` has had it since stage 1 of section 5).
+
+### As built: stage 4c, the asset workshop on the frame (2026-11-07)
+
+Kit 0.10.0: `WkFrame` takes a band that is not across the window (`band_wide`, `band_left`), a
+gap under the bar (`band_gap`), a set room for the band (`band_space`) and a panel down the right
+(`side`, its top kept under the bar). `wk_smoke` 100.
+
+* `AssetWorkshopUI` hands its pieces to a `WkFrame` each frame -- the menu bar, the stage tabs
+  (the band: 8 under the bar, 30 high), the tool rail and the outliner -- and its hand-placed
+  positions are gone; the numbers are the ones it had (tabs at bar + 8, rail at bar + 46,
+  outliner from bar + 8).
+* What is in them -- the stages, the tools of each, the outliner's rows, the toast -- stays the
+  asset workshop's: they name parts, models, guides and the sculpt.
+* Both workshops now lay out through the same frame and build their menus on the same bar.

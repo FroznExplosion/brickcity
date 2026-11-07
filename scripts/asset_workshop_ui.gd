@@ -76,6 +76,9 @@ var _tabs: HBoxContainer
 var _tab_buttons := {}
 var _stage_button: Button
 var _tools_panel: WkRail
+## Where the menu bar, the stage tabs, the rail and the outliner go (the kit's WkFrame): the
+## tabs a band 8 under the bar, 30 high, the rail 8 under them, the outliner down the right.
+var frame := WkFrame.new()
 var _tool_buttons := {}
 var _hint: Label
 var _outliner: PanelContainer
@@ -207,6 +210,19 @@ func _stage_step() -> void:
 # ---------------------------------------------------------------------------
 # The tool rail
 # ---------------------------------------------------------------------------
+
+## The frame's pieces: the menu bar, the stage tabs (a band 8 under the bar, its own width, 30
+## high), the rail and the outliner. Set each frame: the menu comes and goes with the workshop.
+func _frame_setup() -> void:
+	frame.bar = ws._menu.bar() if ws._menu != null else null
+	frame.band = _tabs
+	frame.band_wide = false
+	frame.band_left = 12.0
+	frame.band_gap = 8.0
+	frame.band_space = 30.0
+	frame.rail = _tools_panel
+	frame.side = _outliner
+
 
 func _build_tools() -> void:
 	_tools_panel = WkRail.new(ws.RAIL_W, true)
@@ -761,8 +777,9 @@ func sync_kind() -> void:
 
 
 func process(dt: float) -> void:
-	var top: float = 8.0 + (ws._menu.bar_height() if ws._menu != null else 0.0)
-	_tabs.position = Vector2(12, top)
+	_frame_setup()
+	frame.layout(ws.get_viewport().get_visible_rect().size)
+	var top: float = frame.band_top()
 	var clay: bool = ws.sculpt_state == "sdf"
 	_stage_button.text = "Make bricks  >" if clay else "<  Bricks to clay"
 	_stage_button.tooltip_text = ("Turn the clay into bricks and go on to stage 2. The clay that becomes bricks is used up; smooth-marked clay stays." if clay
@@ -773,11 +790,9 @@ func process(dt: float) -> void:
 	# nothing while shaping clay.
 	if ws._hud != null:
 		ws._hud.visible = stage != "blockout"
-	_tools_panel.position = Vector2(12, top + 38)
-	_tools_panel.fit_height(ws.get_viewport().get_visible_rect().size.y - top - 38.0 - 12.0)
+	_tools_panel.fit_height(ws.get_viewport().get_visible_rect().size.y - frame.rail_top() - 12.0)
 	_tools_panel.size = Vector2.ZERO
 	ws.rail_top = _tools_panel.position.y + _tools_panel.size.y + 6.0
-	_outliner.offset_top = top
 	var on := active_tool()
 	for id in _tool_buttons:
 		var b: Button = _tool_buttons[id]

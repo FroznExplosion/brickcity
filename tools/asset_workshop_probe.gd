@@ -1122,8 +1122,7 @@ func _round9() -> void:
 	# are on the rail).
 	var texts := []
 	var items := {}
-	var row: Node = _ws._menu._spacer.get_parent()
-	for c in row.get_children():
+	for c in _ws._menu.bar().menus():
 		if c is MenuButton:
 			var pm := (c as MenuButton).get_popup()
 			for i in pm.item_count:
