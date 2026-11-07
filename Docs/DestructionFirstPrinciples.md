@@ -529,10 +529,18 @@ count (34 of 89 today).
 
 Open:
 
-1. **Cost.** The split search's worst went from 1.4 to 7.7 ms, and a tree landing bakes twice
-   (once to ask, once to cut). Next: keep the landing's groups for the split when nothing
-   changed in between, flatten the bake's hash maps, or bake on a worker. Measured with the
-   editor open and other chats' runs going, so the numbers are high.
+1. ~~**Cost.**~~ The split search's worst went from 1.4 to 7.7 ms, and a tree landing baked
+   twice. **Cut 2026-11-07:** the tree is kept per chunk until something structural changes
+   in it (`ConnWatch.stamp`, moved by every `conn_touch` / `conn_forget` and a role change;
+   `BrickWorld.strength_tree_of`), so the ask and the cut share one bake and a piece that
+   lands again untouched is not baked again; and the bake keeps neighbours in plain vectors,
+   not hash maps (982-brick tower 2.6 -> 1.35 ms). `barrage_probe` with the tree: split
+   searches 90.4 -> 44.8 ms all told, worst 7.66 -> 2.85 (tree off: 57.7, 1.40).
+   `get_strength_tree_stats` counts bakes, cache hits and bake time. Still on the main
+   thread; a worker bake is the next step if big pieces need it. That run's one FAIL --
+   "throwing them is a small part of a blast", 17.2 ms the worst blast (3.4-4.4 in the two
+   runs before) -- is in crumb throwing, which this does not touch; the machine was at 99 C
+   when it started.
 2. **The fallback tore 10 bands** with the tree on (0 with it off): landings the tree did not
    take -- most likely pieces over 3,000 bricks -- went to a storey line and found no seam.
    Worth a look before raising or lowering `TREE_MAX_BLOCKS`.
