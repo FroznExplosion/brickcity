@@ -308,7 +308,7 @@ func _kept_checks() -> void:
 		var ps := BrickPalette.part_size(p)
 		fam = fam and BrickPalette.family_of(p) in ["brick", "plate"] and mini(ps.x, ps.z) == 1 and maxi(ps.x, ps.z) <= 4
 	_ok("of the held brick and smaller ones of its kind", fam, str(_ws.recipe.parts))
-	_ok("one undo edit for the whole shape", _ws._edits == ["shape"], str(_ws._edits))
+	_ok("one undo edit for the whole shape", _ws.undo_stack.kinds() == ["shape"], str(_ws.undo_stack.kinds()))
 	# A hand-laid brick inside the doorway-to-be, and one elsewhere.
 	_hold("plate_1x1")
 	_ws._cell = Vector3i(9, 10, 2)
@@ -370,15 +370,15 @@ func _kept_checks() -> void:
 	_ws._undo()
 	_ok("and undone", String(t.shape_of(id).bond) == "stagger" and _bricks(t.shape_of(id)) == before)
 	# RMB on a shape's brick: no hand brick's undo is lost.
-	var bricks_edits := (_ws._edits as Array).count("brick")
+	var bricks_edits: int = _ws.undo_stack.count(&"brick")
 	var b0: Array = t.shape_of(id).bricks[0]
 	var c0 := BuildRecipe.cell_from(b0[1])
 	var size0 := BrickPalette.size_of(String(b0[0]))
 	var mid := Vector3((c0.x + size0.x * 0.5) * 0.35, (c0.y + size0.y + 3) * 0.14, (c0.z + size0.z * 0.5) * 0.35)
 	_ws._delete_ray(mid, Vector3.DOWN)
 	_ok("RMB on a shape's brick takes it out of the shape, not a hand brick's undo",
-			(_ws._edits as Array).count("brick") == bricks_edits and _bricks(t.shape_of(id)).size() == before.size() - 1,
-			"%d brick edits, %d of %d" % [(_ws._edits as Array).count("brick"), _bricks(t.shape_of(id)).size(), before.size()])
+			_ws.undo_stack.count(&"brick") == bricks_edits and _bricks(t.shape_of(id)).size() == before.size() - 1,
+			"%d brick edits, %d of %d" % [_ws.undo_stack.count(&"brick"), _bricks(t.shape_of(id)).size(), before.size()])
 	# Let go: the bricks stay, the shape is forgotten.
 	var n: int = _ws.recipe.size()
 	t.let_go(id)
@@ -509,7 +509,7 @@ func _opening_checks() -> void:
 	t.glass_on = true
 	var face := t.face_under(Vector3(11.5 * 0.35, 6.5 * 0.14, -3.0), Vector3(0, 0, 1))
 	var op := t.apply_opening("window", face)
-	_ok("one undo for the window, its frame and its glass", (_ws._edits as Array).back() == "shape"
+	_ok("one undo for the window, its frame and its glass", _ws.undo_stack.top_kind() == &"shape"
 			and t.shapes().size() == 3, "%d shapes" % t.shapes().size())
 	var glass := WorkshopTools.glass_paint()
 	_ok("there is a see-through material for glass", BrickWorld.is_material_translucent(glass.x))
@@ -675,7 +675,37 @@ func _redo_checks() -> void:
 	_ws._undo()
 	_ok("and undone again", t.shapes().is_empty())
 	_ws._place()
-	_ok("a new edit clears what redo had", _ws._redo_list.is_empty())
+	_ok("a new edit clears what redo had", not _ws.undo_stack.can_redo())
+
+	# One history (addons/workshop_kit; Docs/BuildTools.md section 20): each Z takes back its
+	# own edit's brick, and an edit whose brick was taken away by hand is skipped, not a Z.
+	_ws._new_build()
+	_hold("plate_1x1")
+	for x in [30, 32, 34]:
+		_ws._cell = Vector3i(x, 1, 20)
+		_ws._update_ghost()
+		_ws._place()
+	var stud: float = BrickPalette.STUD_M
+	_ws._delete_ray(Vector3(32.5 * stud, 3.0, 20.5 * stud), Vector3.DOWN)
+	_ok("RMB takes the middle brick", _ws.recipe.size() == 2 and not _solid(Vector3i(32, 1, 20)))
+	_ws._undo()
+	_ok("Z: the newest brick", _ws.recipe.size() == 1 and not _solid(Vector3i(34, 1, 20)))
+	_ws._undo()
+	_ok("Z again: the first, the deleted one's edit skipped", _ws.recipe.size() == 0
+			and not _ws.undo_stack.can_undo(), "%d left, %d steps" % [_ws.recipe.size(), _ws.undo_stack.size()])
+	_ws.redo_last()
+	_ws.redo_last()
+	_ok("redo lays both back", _ws.recipe.size() == 2 and _solid(Vector3i(30, 1, 20)) and _solid(Vector3i(34, 1, 20)))
+	_hold("plate_1x2")
+	_ws._cell = Vector3i(40, 1, 20)
+	_ws._update_ghost()
+	_ws._place()
+	var part: String = _ws.recipe.part_of(2)
+	_ws._rotate_last()
+	_ok("T turns the brick under its own edit", _ws.recipe.size() == 3 and _ws.recipe.part_of(2) != part
+			and _ws.undo_stack.size() == 3, "%s -> %s, %d steps" % [part, _ws.recipe.part_of(2), _ws.undo_stack.size()])
+	_ws._undo()
+	_ok("and Z takes the turned brick", _ws.recipe.size() == 2)
 
 
 func _mirror_checks() -> void:

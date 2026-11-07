@@ -262,9 +262,13 @@ func _parts() -> void:
 	_ok("a delete takes its own brick's tag", Array(_ws.part_of) == [0, 0], str(_ws.part_of))
 	_ws._undo()
 	_ok("an undo lays the deleted brick back, in its own part", Array(_ws.part_of) == [0, 0, 2], str(_ws.part_of))
+	# The edits before the delete, newest first, each brick with its own tag: the two body
+	# bricks, then the stock's -- its edit found it again where the undo laid it back.
 	_ws._undo()
 	_ws._undo()
-	_ok("and further undos take the last tags", Array(_ws.part_of) == [0], str(_ws.part_of))
+	_ok("further undos take the bricks laid before it, newest first", Array(_ws.part_of) == [2], str(_ws.part_of))
+	_ws._undo()
+	_ok("and the stock's own edit takes the brick laid back", Array(_ws.part_of) == [], str(_ws.part_of))
 	_ws._hotbar.select(0)
 	_ws._hotbar.set_slot("brick_2x4", 3)
 	_ws.select_part(1)
@@ -2065,10 +2069,10 @@ func _placed_model() -> void:
 	bm.size = Vector3(0.2, 0.4, 2.0)
 	var am := ArrayMesh.new()
 	am.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, bm.get_mesh_arrays())
-	var groups: int = _ws._edit_groups.size()
+	var groups: int = _ws.undo_stack.size()
 	var centre: Vector3 = _ws.build_centre()
 	_ok("a model is added, selected, one undo", _ws.place_mesh(am, "box.glb") and not _ws.placed_model().is_empty()
-			and _ws._edit_groups.size() == groups + 1 and _ws._gizmo.visible)
+			and _ws.undo_stack.size() == groups + 1 and _ws._gizmo.visible)
 	var s: Vector3 = _ws.placed_size()
 	_ok("along x, as long as an SMG (53 studs)", absf(s.x - 53.25) < 0.01 and s.z < 6.0, str(s))
 	var bb: AABB = _ws.size_box()
@@ -2086,14 +2090,14 @@ func _placed_model() -> void:
 	_ok("a turn snaps to 15 degrees", is_equal_approx(by, deg_to_rad(15.0)), str(rad_to_deg(by)))
 	var sized: Transform3D = _ws.dragged_xf({"size": 1.234}, false)
 	_ok("a resize snaps to 1%", is_equal_approx(sized.basis.get_scale().x / (_ws._placed.xf as Transform3D).basis.get_scale().x, 1.23))
-	groups = _ws._edit_groups.size()
+	groups = _ws.undo_stack.size()
 	_ws.nudge_whole = true
 	_ws.nudge(Vector3i(1, 0, 0))
 	_ws.nudge(Vector3i(1, 0, 0))
 	_ws.nudge_whole = false
 	var moved := _form_box(node)
 	_ok("moved, its field follows; one undo a move", absf(moved.position.x - own.position.x - 2.0 * STUD) < 0.05
-			and _ws._edit_groups.size() == groups + 2, "%.3f studs" % ((moved.position.x - own.position.x) / STUD))
+			and _ws.undo_stack.size() == groups + 2, "%.3f studs" % ((moved.position.x - own.position.x) / STUD))
 	_ws._undo()
 	_ok("Z moves it back a stud", absf(_form_box(node).position.x - own.position.x - STUD) < 0.05)
 	_ok("undo keeps it picked, the gizmo where it now is", not _ws.placed_model().is_empty() and _ws._gizmo.visible
@@ -2195,7 +2199,7 @@ func _pick_and_move() -> void:
 	var lifted := _cells_by_part(f)
 	_ok("a ray on the block-out lifts the part under it, the gizmo on it", _ws._held_kind() == "part"
 			and int(_ws._placed.label) == 2 and _ws._gizmo.visible and not lifted.values().has(2) and lifted.values().has(1))
-	var groups: int = _ws._edit_groups.size()
+	var groups: int = _ws.undo_stack.size()
 	_ws._gizmo_xf0 = _ws._placed.xf
 	_ws._placed.xf = _ws.dragged_xf({"move": Vector3(2.0 * STUD, 0, 0)}, false)
 	_ws._held_moved([])
@@ -2205,7 +2209,7 @@ func _pick_and_move() -> void:
 	for k in before:
 		want[k + Vector3i(2, 0, 0) if before[k] == 2 else k] = before[k]
 	_ok("moved two studs and put down: one undo, its cells two studs along", moved == want
-			and _ws._edit_groups.size() == groups + 1 and _ws._held_kind() == "", "%d vs %d cells" % [moved.size(), want.size()])
+			and _ws.undo_stack.size() == groups + 1 and _ws._held_kind() == "", "%d vs %d cells" % [moved.size(), want.size()])
 	_ws._undo()
 	_ok("Z puts it back where it was", _cells_by_part(f) == before)
 	_ws.pick_at(top, down)
@@ -2216,7 +2220,7 @@ func _pick_and_move() -> void:
 	esc.keycode = KEY_ESCAPE
 	esc.pressed = true
 	_ok("Escape puts a lifted part back exactly, no undo", _ws._placed_key(esc) and _cells_by_part(f) == before
-			and _ws._edit_groups.size() == groups and _ws._held_kind() == "")
+			and _ws.undo_stack.size() == groups and _ws._held_kind() == "")
 	# A model's piece under the mouse.
 	_ws._reset_space()
 	_ws.rail_pick("sculpt")
@@ -2243,10 +2247,10 @@ func _pick_and_move() -> void:
 			str(_ws._placed.get("piece", "none")))
 	var barrel: int = _ws.part_names.find("barrel")
 	_ws.select_part(barrel)
-	groups = _ws._edit_groups.size()
+	groups = _ws.undo_stack.size()
 	_ws.give_piece_part()
 	_ok("the picked piece given this part, one undo", int(_ws._placed.parts[1]) == barrel and int(_ws._placed.parts[0]) == -1
-			and _ws._edit_groups.size() == groups + 1)
+			and _ws.undo_stack.size() == groups + 1)
 	# A guide: picked, moved by the gizmo, the adjust kept and saved.
 	_ws._reset_space()
 	var obj := "user://_probe_guide_cube.obj"
@@ -2401,11 +2405,11 @@ func _clay_apart() -> void:
 			"%d overlapping cells, %d clay bricks (were %d)" % [overlap, _ws.clay_bricks.size(), made])
 	# The stage tabs change nothing in the build.
 	var n: int = _ws.recipe.size()
-	var groups: int = _ws._edit_groups.size()
+	var groups: int = _ws.undo_stack.size()
 	_ws.set_clay_view(true)
 	_ws.set_clay_view(false)
 	_ws.set_clay_view(true)
-	_ok("the stages show, they do not convert", _ws.recipe.size() == n and _ws._edit_groups.size() == groups
+	_ok("the stages show, they do not convert", _ws.recipe.size() == n and _ws.undo_stack.size() == groups
 			and _ws.sculpt_state == "sdf")
 	# A model rotated a quarter turn, then made bricks: as it stands now.
 	_ws._reset_space()
@@ -2465,14 +2469,14 @@ func _slicer_panel() -> void:
 	var size0: Vector3 = _ws.held_shape()[2]
 	# Without proportions: only y doubles.
 	_ws._xform_keep.button_pressed = false
-	var groups: int = _ws._edit_groups.size()
+	var groups: int = _ws.undo_stack.size()
 	(_ws._xform_size[1] as SpinBox).value = size0.y * 2.0
 	_ws._xform_settle(true)
 	var s1: Vector3 = _ws.held_shape()[2]
 	var box: AABB = (_ws._placed.xf as Transform3D) * (_ws._placed.box as AABB)
 	_ok("a size typed without proportions stretches it along that axis alone, one undo",
 			absf(s1.y - size0.y * 2.0) < 0.05 and absf(s1.x - size0.x) < 0.05 and absf(s1.z - size0.z) < 0.05
-			and absf(box.size.y - size0.y * 2.0 * STUD) < 0.02 and _ws._edit_groups.size() == groups + 1,
+			and absf(box.size.y - size0.y * 2.0 * STUD) < 0.02 and _ws.undo_stack.size() == groups + 1,
 			"%s -> %s" % [size0, s1])
 	# With proportions: x halved halves all three.
 	_ws._xform_keep.button_pressed = true
@@ -2498,7 +2502,7 @@ func _slicer_panel() -> void:
 	_ws.set_gizmo_mode("all")
 	# Many steps quickly: shown at once, stamped once when they settle, one undo (an arrow held
 	# down stamped the model again every step -- up to a second each -- and the user's game crashed).
-	groups = _ws._edit_groups.size()
+	groups = _ws.undo_stack.size()
 	var form_box := _form_box(_ws._placed.node)
 	for k in 20:
 		(_ws._xform_pos[0] as SpinBox).value = (_ws._xform_pos[0] as SpinBox).value + 0.25
@@ -2506,7 +2510,7 @@ func _slicer_panel() -> void:
 	_ws._xform_settle(true)
 	var moved := _form_box(_ws._placed.node).position.x - form_box.position.x
 	_ok("twenty quick steps: stamped once when settled, one undo", unstamped and absf(moved - 5.0 * STUD) < STUD * 0.3
-			and _ws._edit_groups.size() == groups + 1, "%.2f studs, %d undos" % [moved / STUD, _ws._edit_groups.size() - groups])
+			and _ws.undo_stack.size() == groups + 1, "%.2f studs, %d undos" % [moved / STUD, _ws.undo_stack.size() - groups])
 	# Tab frees and takes the mouse, the pick kept; Escape with the mouse looking only frees it.
 	var tab := InputEventKey.new()
 	tab.keycode = KEY_TAB
@@ -2596,12 +2600,12 @@ func _nudges() -> void:
 	_ws.bake_model()
 	var lo: Vector3 = _ws.sculpt.form.bounds().position
 	var n: int = _ws.sculpt.form.cells().size()
-	var groups: int = _ws._edit_groups.size()
+	var groups: int = _ws.undo_stack.size()
 	_ws.nudge_whole = true
 	_ws.nudge(Vector3i(0, 0, -1))
 	_ws.nudge_whole = false
 	_ok("laid, the whole block-out moves a stud back: exact, one undo", _ws.sculpt.form.bounds().position == lo + Vector3(0, 0, -5)
-			and _ws.sculpt.form.cells().size() == n and _ws._edit_groups.size() == groups + 1, str(_ws.sculpt.form.bounds().position - lo))
+			and _ws.sculpt.form.cells().size() == n and _ws.undo_stack.size() == groups + 1, str(_ws.sculpt.form.bounds().position - lo))
 	_ws._undo()
 	_ok("one Z moves it back", _ws.sculpt.form.bounds().position == lo)
 	_ws.move_field(Vector3(1, 3, 2))

@@ -16,6 +16,10 @@ SDF clay and the model converter.
 `workshop.gd` or into a shared file both call, and the asset workshop keeps only what is its
 own (parts, the SDF, photos, guns).
 
+**Being replaced (2026-11-06):** section 20 is the plan for one editor kit both workshops compose
+(`addons/workshop_kit/`), in place of this inheritance. This section is rewritten to describe the kit
+when its last stage lands.
+
 | Shared piece | Where | Who uses it |
 |---|---|---|
 | **The run**: hold LMB and move, a brick at each cell the ghost passes | `workshop.gd` (moved down from `asset_workshop.gd`, same code) | both |
@@ -855,3 +859,176 @@ Merged; `tools/build_tools_probe.gd` 338 checks, workshop gate 19, asset worksho
 * **The old library, run.** This library built without its five newer calls bound: the workshop
   loads, meshes whole and packs in script; building, storeys, undo and the asset workshop pass, and
   only the checks about sections fail, with one line saying to rebuild.
+
+## 20. One editor kit for both workshops (plan, 2026-11-06)
+
+Asked 2026-11-06: turn the two workshops' tools into one shared, modular editor kit that both use,
+and that can be copied into another Godot project and kept in sync. In stages, each merged on its
+own. **This section is the plan; stage 1 is built (see "As built" at the end).**
+
+### Today (main `874edd82`)
+
+* `asset_workshop.gd` (12,399 lines) **extends** `workshop.gd` (4,454) and overrides 26 of its
+  functions (`_ready`, `_process`, `_input`, `_unhandled_input`, `_aim`, `_mouse_ray`, `_place`,
+  `_undo`, `set_mirror`, `mirror_here`, `_after_edit`, `_load_recipe`, `_write`, ...; 17 `super`
+  calls) and reads ~45 of its variables (`recipe` 221 times, `world` 44, `mirror_z` 46, `_camera` 71,
+  `_edits` 30). No tool stands alone: a tool is functions spread over the two classes.
+* `workshop_tools.gd` (3,543) is the building workshop's tools in one class (Draw, Roof, Stairs,
+  Cut, Repeat, Select, Rooms and the actions).
+* Shared already (section 0): `ToolRail`, `SketchPen`, `BrickShapes`, `WorkshopHotbar`,
+  `BrickPalette`, `paint_palette.gd`.
+* **Undo is six stacks.** The base keeps `_edits` (a list of kind names: "brick", "shape", "paint",
+  "stamp", "tower", "ungroup", "furnish", "fixture"), `_brick_groups`, `_redo_list`, `_paints`,
+  `_tower_undo`, `_fixture_blocks`; `WorkshopTools` its own `_undo`; the asset workshop adds
+  `_edit_groups`, `_redo`, `_stud_log`, `_deleted` and sketch snapshots, and calls the base's
+  `_undo` for bricks. One rule holds them together: **a brick is only ever undone from the end**
+  (taking one out of the middle renumbers every block after it). Stamp, tower, fixture and ungroup
+  undo but do not redo. The building workshop's RMB delete is not undoable; the asset's is.
+* **Two of everything else:** mirror (`set_mirror`/`mirror_here` in both, `mirrored_x/z` in the
+  base), camera (`WorkshopView` orbit/FPS in the building workshop; the asset's own flat views
+  `set_view` and `_zoom_input`), selection (kept shapes and groups; the asset's box select and
+  model pick), menus (`WorkshopMenu` vs `AssetWorkshopUI`, neither on `menu/core/MenuTheme.gd`).
+
+### What it becomes
+
+A folder **`addons/workshop_kit/`**, built the way `menu/` is (menu/docs/01_menu_system.md): no game
+class inside, a seam the game fills in, its own docs and test.
+
+```
+addons/workshop_kit/
+  README.md            what it is, port steps, how to keep it in sync
+  VERSION              0.1.0, raised with every change merged here
+  core/
+    wk_undo_stack.gd   WkUndoStack: push / undo / redo, groups, merge, a "can't redo" command
+    wk_command.gd      WkCommand: do(), undo(), merge(next) -> bool, can_redo(), label
+    wk_context.gd      WkContext: THE SEAM -- every game call, each a neutral default
+    wk_tool.gd         WkTool: activate(ctx), deactivate(), input(e) -> bool, process(dt),
+                       options_ui() -> Control, hint() -> String, id / label / key / icon
+    wk_toolbox.gd      WkToolbox: the tool list, which is in hand, input routed to it, keys
+  services/
+    wk_camera.gd       WkCamera: orbit, fly, flat views (side/top/front), zoom to cursor
+    wk_mirror.gd       WkMirror: the plane (axis, offset, on), its gizmo, the toggles
+    wk_grid.gd         WkGrid: the grid overlay on the working plane
+    wk_ghost.gd        WkGhost: the preview node, valid/invalid tint; its mesh from the context
+    wk_shapes.gd       WkShapes: cells of a rectangle, ring, ellipse, polygon... (today BrickShapes'
+                       cell half; packing cells into bricks stays game-side)
+    wk_sketch_pen.gd   WkSketchPen (today SketchPen, unchanged)
+  tools/               one file per shared tool
+    wk_place_tool.gd   place and the held-click run     wk_erase_tool.gd
+    wk_paint_tool.gd   wk_select_tool.gd                 wk_shape_tool.gd  (Draw / Shapes)
+    wk_sketch_tool.gd  wk_cut_tool.gd                    wk_measure_tool.gd
+    wk_move_tool.gd    wk_fill_tool.gd (wand)            ...
+  ui/
+    wk_frame.gd        WkFrame: menu bar, rail, option panel, outliner, hint line
+    wk_rail.gd         WkRail (today ToolRail)
+  tests/
+    wk_smoke.gd/.tscn  headless: undo stack, toolbox routing, a fake context driving each tool
+```
+
+* **The seam is `WkContext`**, as `MenuHost` is for the menus. The kit never names `BrickWorld`,
+  `BuildRecipe`, `BrickPalette`, `PlayerCamera`, `MenuTheme` or any other game class; it calls the
+  context: cell and grid math (`cell_size`, `world_to_cell`, `cell_to_world`), the pick ray and
+  what it hit, the ghost's mesh, `place_cells(cells)` / `remove_cells` / `paint_cells` **in arrays**
+  (one call per edit, never one per cell), the selection, the held item, `mirror_item(item, plane)`
+  (a brick's footprint and turn are the game's), `capture_mouse(on)` (so `PlayerCamera.hands_off`
+  stays the game's rule), and `theme() -> Theme` (this game answers `MenuTheme.theme()`). Each
+  workshop has one adapter: **`BrickWorkshopContext`** in `scripts/workshop/`.
+* **A workshop = a tool list + its adapter + its own tools.** Asset: SDF sculpt, parts, photos,
+  guides, studs, connection points, guns, mech, export. Building: Roof, Stairs, Repeat, Rooms,
+  doors and windows, storeys, generate. Those are `WkTool`s too, one file each, but under
+  `scripts/workshop/tools/` -- they name game classes, so they stay out of the kit.
+* **One tool, two outcomes.** Where both workshops have a tool that does the same drawing and a
+  different result (Shapes, Sketch, Cut, Select), the kit tool does the drawing and hands the
+  result to the context (`ctx.commit_shape(spec)`, `ctx.commit_outline(outline, plane)`): the asset
+  fills its part, the building makes a kept shape -- as `SketchPen` already works.
+* **Undo.** Every edit is one `WkCommand` pushed to the one `WkUndoStack`. A run, a mirrored pair,
+  a fill are a group (`begin_group` / `end_group`) and undo as one. A command whose `can_redo()`
+  is false (stamp, tower, fixture, ungroup today) clears the redo list when undone, as now. The
+  stack is strictly last-in-first-out, which is what keeps the brick-from-the-end rule.
+* **Hot loops stay where they are.** The kit routes input events and one call per frame; brick
+  packing, meshing, the run's per-cell loop and section drawing stay inside the game objects that
+  do them now.
+
+### Keeping it in sync between projects
+
+Recommended: **its own repository, brought in with `git subtree`.** The kit's files are committed
+in this repo as ordinary files under `addons/workshop_kit/` (so every worktree has them, Godot sees
+plain files, nothing to junction -- the godot-cpp submodule's worktree trouble does not come back),
+and the kit's repo is a remote:
+
+```
+git subtree pull --prefix addons/workshop_kit kit main --squash   # take the kit's changes
+git subtree push --prefix addons/workshop_kit kit main            # send ours back
+```
+
+Another project does the same with its own prefix. A submodule would also work but needs
+`git submodule update` in every worktree and clone, and this repo's worktrees already trip on the
+one it has. Until there is a second project, the kit lives here only; the README says how to split
+it out (`git subtree split --prefix addons/workshop_kit`) when that day comes. **VERSION** is raised
+with each change to the kit, so two projects can see which is newer.
+
+### Stages
+
+Each stage: own branch, merged `--no-ff`, pushed. Every stage passes, as on main: the workshop gate
+(`res://scenes/workshop.tscn -- --gate`, windowed: heat log after), `place_probe`,
+`city_place_probe`, `palette_probe`, `shaped_probe`, `scale_probe`, `build_tools_probe`,
+`workshop_probe`, `workshop_spaces_probe`, `asset_workshop_probe`, `asset_ui_probe`,
+`mech_workshop_probe`, and from stage 1 on the kit's `wk_smoke`.
+
+| Stage | What | Check |
+|---|---|---|
+| 1 ✅ | Kit folder, README, VERSION, `WkCommand`, `WkGroup`, `WkUndoStack`; every undo list in both workshops (`_edits`, `_brick_groups`, `_redo_list`, `_paints`, `_tower_undo`, `_stamp_marks`, `_ungrouped`, `WorkshopTools._undo`, the furnish tool's, and the asset's `_edit_groups`, `_redo`, `_stud_log`, `_deleted`, sketch snapshots) becomes commands on one stack, `ws.undo_stack` | `wk_smoke` (the stack alone); every probe above. Planned as 1a (building) and 1b (asset); done as one, because the asset workshop's undo read and wrote the base's list |
+| 2 | `WkTool`, `WkContext`, `WkToolbox`; `BrickWorkshopContext` for both; **Sketch, Shapes, Paint** moved into kit tools (SketchPen -> `WkSketchPen`, BrickShapes' cells -> `WkShapes`; `pack_courses` stays game-side) | probes; a fake context in `wk_smoke` drives the three tools |
+| 3 | `WkCamera` (WorkshopView's orbit/FPS + the asset's flat views and zoom), `WkMirror` (one plane for both; `mirror_item` in the adapter), `WkGrid`, `WkGhost` | probes; gate pictures as before; camera orbit, pan, zoom, flat views by script |
+| 4a | `WkFrame` + `WkRail` (ToolRail moved) for the building workshop: menu bar, rail, options, hint line, themed by `ctx.theme()` | `workshop_probe`, gate |
+| 4b | The asset workshop's tabs, outliner and actions on `WkFrame` | `asset_ui_probe` |
+| 5 | The rest of the shared tools into the kit, one file each: place/run, erase, select, cut, measure, move, fill/wand; workshop-only tools into `scripts/workshop/tools/` | probes; `wk_smoke` per tool |
+| 6a | Each of the 26 overrides becomes a context call or a tool (the asset still extends) | probes |
+| 6b | **No more `extends workshop.gd`**: the brick world, recipe, frames, save and load in one component both workshops own; each workshop `extends Node3D` and composes the kit | every probe, gate; a scan finds no game class named under `addons/workshop_kit/` |
+
+Done when both workshops run on the kit, each shared tool is one file under it, the kit names no
+game class, the probes and gate pass as on main, and section 0 describes the kit.
+
+### Open questions
+
+* **Name.** `addons/workshop_kit/`, classes `Wk...` (short, and no clash with `KitFurnish` or
+  Godot's `Editor...` classes). Another name is a rename now, a long one later.
+* **FPS fly in `WkCamera`.** The building workshop flies on the game's `DebugCamera` today. The kit
+  cannot name it, so `WkCamera` gets its own fly (WASD, Space, Q/Ctrl, Shift fast, Alt slow); it
+  should feel the same but is new code. Alternative: the fly stays the game's, behind the context.
+* **The building workshop's RMB delete** becomes undoable once it is a command (today it cannot:
+  it takes a brick out of the middle). Proposed in stage 5's erase tool, by taking the brick out
+  and putting it back at its old index in one command -- or left as it is.
+
+### As built: stage 1, one undo (2026-11-07)
+
+`addons/workshop_kit/` 0.1.0: `WkCommand`, `WkGroup`, `WkUndoStack`, README (port steps, `git subtree`
+sync), `tests/wk_smoke.gd` (35 checks, headless). Both workshops keep one `undo_stack`; every edit is
+a command on it, made with `WkCommand.make(kind, data, undo_fn, do_fn)` -- the workshop keeps the
+logic, the command its data. What changed underneath, and the few things that behave differently:
+
+* **A brick's edit holds its recipe id**, moved down whenever bricks leave from the middle
+  (`_forget_rids`, called before they go). The old list held only the word "brick", and undo popped
+  the newest brick whoever's it was; it worked by counting, so a brick laid back by an undo (an RMB
+  delete undone, a cut undone, a lifted group put back) went with the next Z whatever that Z was for.
+  Now each Z takes back its own edit's brick.
+* **An edit outlives its brick leaving** (RMB, a cut): it remembers the brick by part and cell, and
+  if an undo lays that brick back, the edit finds it again. An edit with nothing left to take back
+  is skipped (`WkCommand.alive`), so Z never does nothing. *Different:* in the asset workshop, Z
+  after undoing a delete goes on to the edits before it (the old list took the laid-back brick away
+  again first). `asset_workshop_probe`'s check for it now expects that order.
+* **An opened build's bricks have no command each.** The old list held a word per brick of the file
+  so Z could go on into it; a command each would be ~3 µs a brick (1.4 s on a 476,000-brick build)
+  and a scan of them all on every RMB. Instead `undo_stack.on_empty` calls `_undo_opened` once the
+  history runs out: the file's fixtures, then its bricks, newest first, one a Z, as before. The
+  gate's check for it reads `_opened_bricks` and `_opened_fixtures`.
+* **An insert (stamp) or a bake is one command** with where the recipe's lists stood; its bricks
+  have no edits of their own (they had one each, popped together).
+* **T (turn the last brick)** takes it up and lays it again turned under the same edit, rather than
+  going through undo -- which after a run took the whole run back.
+* **Redo** is the stack's for everything that has a `do`: bricks, shapes, deletes, studs, sketch
+  and model changes. Paint, fixtures, inserts, generated buildings, lifted groups and furniture
+  undo but do not redo, as before; undoing one forgets the redo list.
+* Gathered edits (`_begin_gather`/`_end_gather`) are a group begun and ended on the stack, flattened
+  so the groups made inside it undo as one, in the order they were made, with their sketch
+  snapshots after (`WkGroup` tails).

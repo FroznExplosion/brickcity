@@ -32,7 +32,6 @@ var _hud: Label
 var _ghost: Node3D
 var _ghost_material: StandardMaterial3D
 var _drawn: Node3D
-var _undo := []        ## ["add"] or ["remove", index, record]
 
 
 func setup(workshop) -> void:
@@ -221,8 +220,7 @@ func place() -> bool:
 	if held == "" or not has_target or not ok:
 		return false
 	ws.recipe.placements.append(AssetPlacements.make(held, at, turn))
-	_undo.append(["add"])
-	ws._edits.append("furnish")
+	ws.undo_stack.push(WkCommand.make(&"furnish", ["add"], _undo_edit))
 	ws._after_edit()
 	print("[furnish] placed '%s' at %v, turned %d" % [held, at, turn])
 	return true
@@ -236,27 +234,21 @@ func remove_ray(from: Vector3, dir: Vector3) -> bool:
 	var i := int(p.index)
 	var rec: Dictionary = ws.recipe.placements[i]
 	ws.recipe.placements.remove_at(i)
-	_undo.append(["remove", i, rec])
-	ws._edits.append("furnish")
+	ws.undo_stack.push(WkCommand.make(&"furnish", ["remove", i, rec], _undo_edit))
 	ws._after_edit()
 	print("[furnish] took away '%s'" % rec.asset)
 	return true
 
 
-## The workshop's undo for a "furnish" step (it has popped the step).
-func undo() -> void:
-	if _undo.is_empty():
-		return
-	var u: Array = _undo.pop_back()
+## Undo of a "furnish" edit: ["add"] or ["remove", index, record].
+func _undo_edit(c: WkCommand) -> bool:
+	var u: Array = c.data
 	if u[0] == "add":
 		ws.recipe.placements.pop_back()
 	else:
 		ws.recipe.placements.insert(int(u[1]), u[2])
-
-
-## Forget the undo steps (a new or loaded build).
-func reset() -> void:
-	_undo.clear()
+	ws._after_edit()
+	return true
 
 
 ## Draw every placement of the build, in the build's own material.
