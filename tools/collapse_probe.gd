@@ -306,7 +306,7 @@ func _check_interior() -> void:
 	cam.global_position = near_at
 	city._promote(id)
 	await _ticks(20)
-	await city._groups_settle(b)
+	await city._pass_runner()._groups_settle(b)
 	_ok("its storeys are drawn", _groups_shown(id) > 0, "%d group(s)" % _groups_shown(id))
 
 	# Away, out of range; then a floor goes, with nobody there.
@@ -336,9 +336,9 @@ func _check_interior() -> void:
 	if not b.toppled:
 		city._promote(id)
 	await _ticks(20)
-	var took: int = await city._groups_settle(b)
+	var took: int = await city._pass_runner()._groups_settle(b)
 	var standing: bool = b.is_materialised() and not b.toppled
-	var hanging: int = city._groups_hanging(b, -1.0e9) if standing else 0
+	var hanging: int = city._pass_runner()._groups_hanging(b, -1.0e9) if standing else 0
 	_ok("back in range, its storeys are drawn again",
 			not standing or (_groups_shown(id) > 0 and took < 600),
 			"standing %s; %d group(s) after %d tick(s)" % [standing, _groups_shown(id), took])
@@ -468,7 +468,7 @@ func _storey_left(id: int, keep: Array) -> Dictionary:
 	city.camera.look_at_from_position(box.get_center() + Vector3(-40.0, 15.0, -40.0), box.get_center())
 	var chunk: int = city._promote(id)
 	var w := 0
-	while (city._bands_building(id) or w < 30) and w < 30 * 20:
+	while (city.drawing.bands_building(id) or w < 30) and w < 30 * 20:
 		await physics_frame
 		w += 1
 	var y := box.position.y + (TowerRecipe.SLAB_PLATES + TowerRecipe.STOREY_PLATES) * BrickPalette.PLATE_M + 1.2
@@ -608,7 +608,7 @@ func _check_crushdrawn() -> void:
 	city.camera.global_position = Vector3(box.get_center().x, box.position.y + 1.6, box.position.z - 6.0)
 	city.camera.look_at(box.get_center())
 	await _ticks(20)
-	await city._groups_settle(b)
+	await city._pass_runner()._groups_settle(b)
 	# A room with a piece drawn in it, and that piece's box.
 	var rooms: Array = city.registry.rooms_of(id)
 	var room: Room = null
@@ -649,7 +649,7 @@ func _check_crushdrawn() -> void:
 		if piece != null and piece.is_valid() and piece.settled:
 			break
 	await _ticks(2)
-	await city._groups_settle(b)
+	await city._pass_runner()._groups_settle(b)
 	print("  --   piece %s, room %.1f m tall, item top %.2f, piece bottom %.2f" % [
 		piece != null, room.local_box().size.y, (xf * item.end).y, rb.position.y + 0.3])
 	if piece != null and piece.is_valid():
@@ -682,7 +682,7 @@ func _check_farcut() -> void:
 	city.camera.look_at(c)
 	await _ticks(30 * 3)
 	var b = city.registry.get_building(id)
-	_ok("it starts as no shell, only its far box", not city._shells.has(id) and city._far_on.has(id))
+	_ok("it starts as no shell, only its far box", not city._shells.has(id) and city.drawing._far_on.has(id))
 	_undercut(id)
 	var double := 0
 	var blind := 0
@@ -691,7 +691,7 @@ func _check_farcut() -> void:
 		await physics_frame
 		if not b.is_materialised() or b.toppled:
 			continue
-		var building: bool = city._bands_building(id)
+		var building: bool = city.drawing.bands_building(id)
 		# Bricks that left as pieces, or -- laid a storey at a time -- the
 		# storeys over one that gave way, leaving as one shell piece
 		# (Docs/Space.md 5.3a).
@@ -702,7 +702,7 @@ func _check_farcut() -> void:
 		if building and city._handovers.has(id):
 			double += 1
 		# Bands going up and nothing standing in for the rest.
-		if building and not city._far_on.has(id) and not city._shells.has(id):
+		if building and not city.drawing._far_on.has(id) and not city._shells.has(id):
 			blind += 1
 	_ok("pieces left it", left)
 	_ok("none while its bands were still being built", double == 0, "%d tick(s)" % double)
@@ -725,7 +725,7 @@ func _check_farcut() -> void:
 	while (not city._damage_queue.is_empty() or city._remesh_queue.has(id2)) and w < 60:
 		await physics_frame
 		w += 1
-	var mid: bool = city._bands_building(id2) and city._shells.has(id2)
+	var mid: bool = city.drawing.bands_building(id2) and city._shells.has(id2)
 	city._demesh(id2)
 	await _ticks(30 * 3)
 	var box_tier: bool = city._shell_box.has(id2)
@@ -1170,7 +1170,7 @@ func _check_shelter() -> void:
 	city._promote(id)
 	# Its brick collision up, every band of it: the top bands come last.
 	var w := 0
-	while (city._bands_building(id) or w < 30) and w < 30 * 20:
+	while (city.drawing.bands_building(id) or w < 30) and w < 30 * 20:
 		await physics_frame
 		w += 1
 	# The TOP storey: only its roof is over it. (Lower down, any slab above
@@ -1400,7 +1400,7 @@ func _check_tops() -> void:
 		city.camera.look_at_from_position(box.get_center() + Vector3(-40.0, 15.0, -40.0), box.get_center())
 		city._promote(id)
 		var w := 0
-		while (city._bands_building(id) or w < 30) and w < 30 * 20:
+		while (city.drawing.bands_building(id) or w < 30) and w < 30 * 20:
 			await physics_frame
 			w += 1
 		var cut_y := _sever(id, 1)
@@ -1493,7 +1493,7 @@ func _check_inside_topple() -> void:
 	city.camera.look_at_from_position(c + Vector3(-45.0, 20.0, -45.0), c)
 	city._promote(id)
 	var w := 0
-	while (city._bands_building(id) or w < 30) and w < 30 * 20:
+	while (city.drawing.bands_building(id) or w < 30) and w < 30 * 20:
 		await physics_frame
 		w += 1
 	var floor_y := box.position.y + (TowerRecipe.SLAB_PLATES + 2 * TowerRecipe.STOREY_PLATES) * BrickPalette.PLATE_M
