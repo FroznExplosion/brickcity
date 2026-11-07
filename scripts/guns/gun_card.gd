@@ -11,14 +11,6 @@ extends PanelContainer
 ## only, so it must never appear without its effects under it. A score shown alone
 ## is a lie about which gun is better.
 
-const RARITY_COLORS: Array[Color] = [
-	Color(0.82, 0.82, 0.82),   # common
-	Color(0.35, 0.85, 0.35),   # uncommon
-	Color(0.30, 0.60, 1.00),   # rare
-	Color(0.70, 0.35, 0.95),   # unique
-	Color(1.00, 0.60, 0.10),   # legendary
-	Color(0.95, 0.12, 0.12),   # mythic: red (COMBAT_DESIGN 2)
-]
 const KEY_COLOUR := Color(0.68, 0.68, 0.72)
 const TEXT_COLOUR := Color(0.88, 0.88, 0.9)
 const SPECIAL_COLOUR := Color(1.0, 0.85, 0.4)
@@ -44,7 +36,7 @@ func _ready() -> void:
 
 	_name_label = _mk_label(root, 18)
 	_sub_label = _mk_label(root, 12)
-	_sub_label.modulate = Color(0.75, 0.75, 0.78)
+	_sub_label.modulate = MenuTheme.text_dim
 
 	var top := HBoxContainer.new()
 	root.add_child(top)
@@ -82,7 +74,7 @@ func show_gun(res: GunGenerator.Result, compare_score: int = -1,
 		abilities: AbilityLoadout = null) -> void:
 	if res == null:
 		return
-	var col := RARITY_COLORS[clampi(res.rarity - 1, 0, 5)]
+	var col := Rarity.colour(res.rarity)
 
 	_name_label.text = res.gun_name
 	_name_label.modulate = col
@@ -249,12 +241,12 @@ func _stat_row(key: String, value: String, value_colour := TEXT_COLOUR) -> void:
 	var row := HBoxContainer.new()
 	var k := Label.new()
 	k.text = key
-	k.add_theme_font_size_override(&"font_size", 13)
+	k.add_theme_font_size_override(&"font_size", GameUI.px(13))
 	k.modulate = KEY_COLOUR
 	k.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	var v := Label.new()
 	v.text = value
-	v.add_theme_font_size_override(&"font_size", 13)
+	v.add_theme_font_size_override(&"font_size", GameUI.px(13))
 	v.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
 	v.modulate = value_colour
 	row.add_child(k)
@@ -281,16 +273,11 @@ func _special_entry(title: String, body: String, colour: Color) -> void:
 
 func _mk_label(parent: Node, size: int) -> Label:
 	var l := Label.new()
-	l.add_theme_font_size_override(&"font_size", size)
+	l.add_theme_font_size_override(&"font_size", GameUI.px(size))
 	parent.add_child(l)
 	return l
 
 
+## The card's panel: the in-game UI kit's (GameUI.panel_box).
 func _bg() -> StyleBoxFlat:
-	var sb := StyleBoxFlat.new()
-	sb.bg_color = Color(0.06, 0.06, 0.08, 0.92)
-	sb.border_color = Color(0.35, 0.35, 0.40)
-	sb.set_border_width_all(1)
-	sb.set_corner_radius_all(4)
-	sb.set_content_margin_all(10)
-	return sb
+	return GameUI.panel_box()

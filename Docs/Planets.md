@@ -2806,6 +2806,60 @@ Not seen on screen. `--gate=hull` fails one check on main as it stands, with or 
 ("up from the seat in flight: on its ghost, standing still on it as it glides": the pawn 1.313 m along the
 deck): the room-modules chat's.
 
+#### Plan, a generated town's garrison by its size (2026-11-06)
+
+Home's waves already bring the mixes, a tank (wave 4) and a mech (wave 5). A generated town still
+raises one squad of four from the second mix, whatever its size (3x3 to 6x6 blocks, `PlanetSystem._populate`),
+with nobody leading it. As the firefight does (a wave in squads of `Commander.SQUAD_SIZE`, armour with
+the bigger ones), a town's garrison is sized by its buildings:
+
+1. **Size.** `PlanetBuildings.town_sites` keeps how many buildings each `add_town` laid (home's town too).
+   `PlanetGarrison.plan_for(n)`: squads `clamp(round(n / 9), 1, 3)` of four (a 3x3 town ~8 buildings:
+   one; 4x4 ~14 and 5x5 ~21: two; 6x6 ~31: three); a **tank** from 18 buildings, a **mech** from 26,
+   made as home's waves make them (`_field_tank`, `_field_mech`). The first squad stands in the middle
+   as now; the others in the streets round it (the town's own grid, half a block off), so the player
+   meets them from more than one side.
+2. **An officer.** Each generated town has one, as the arena's HQ has (`WaveDirector._set_up_hq`: the
+   `officer` kind, a pistol, gold so he is picked out, HOLD): he holds the town's middle. While he
+   lives he is the squads' radio: a squad that has seen nobody is told where the player is once any
+   squad has (the hunting noise the garrison already gives one squad). Killed, each squad goes on its
+   own contact only. The town is clear when he is down too.
+3. **Saved.** Each survivor's squad (or officer) goes in the save with its kind; back, they come back in
+   their squads.
+4. Home's waves are as they are (one squad a wave, its own mixes); its town is not given an officer here.
+
+Gates: `--gate=garrison` checks the garrison its town's size asks for (the town is whichever the gate
+lands by: rolled) and the officer holding; `--gate=garrison --size=N` makes the town count as N buildings.
+Not in this step: rocketeers (not built), the officer in a building's top floor (planet rooms' floor
+spots), survivors of a town left for another (they still just go).
+
+**Generated towns differ (2026-11-07).** A generated town's squad is drawn from one of the mixes after the
+first, chosen by the town itself (`PlanetGarrison.mix_index`): towns differ, and a town is the same every
+time it is raised. `--gate=garrison` 18/18: its town's mix 3 (rifleman, breacher, marksman); 12 towns spread
+over all 3 mixes.
+
+**Built (2026-11-07): a generated town's garrison by its size.** As the plan, with main's town mixes: the
+first squad is the town's own mix (`mix_index`), the others the mixes after it in turn. The gate's town
+(Ordar III, town 0) has 31 buildings, so `--gate=garrison` raises the whole of it unaided: three squads of
+four, the officer, a tank (crewed) and a mech (piloted), in 33-64 ms. The other squads stood 30 m from the
+first (the street spots); the first closed 50 m -> 35 m and fired in 3-4 s; once it had the player, the
+officer's word had all 3 squads hunting; wiped out (13 raised), clear. 20/20 three times headless;
+`--size=8` (one squad and the officer, no vehicles) 18/18. home 11/11, mechwave 3/3, save stages 1 (3/3)
+and 2 (13/13) unchanged. The save's squad index per survivor is not gate-checked (stage 2 is home's waves,
+one squad). Not seen on screen.
+
+Found on the way, both real in play, not only the gate's:
+- **Seated, the garrison went on thinking.** With the ship landed near the town the troops were not held
+  (`HOLD_AT` goes by the ship), and soldiers who had the player kept after a pawn parked kilometres off
+  in the seat, with the positions of the frame before the world slept: 70 ms a soldier a physics tick.
+  Coming back down to the town, frames were 4 s each for two minutes, the ship's landing timed out
+  (it hung 3-8 m up, `landed` false), and the player then got up where they fell rather than by the ship.
+  Main has it too with its four (its gate's worst frame 1.2 s). The garrison is now held while the player
+  is not on foot, let go only on foot, and gives no orders to a seated player. Worst frame 0.8-1.0 s.
+- **The tank went after the seat.** `_tank_goal` followed the pawn wherever it was; now only on foot.
+- **A mech is doomed before it dies**: its dooming hit spills no further that tick (`MechLayers`), so a gate
+  killing one hits it again each physics tick until it is down.
+
 #### Plan, saving (2026-11-01)
 
 As zylanntest (its Docs/save_format_and_data_longevity.md, future_features_save_guide.md): the **universe**
