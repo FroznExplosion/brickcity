@@ -325,7 +325,7 @@ func _build_outliner() -> void:
 func _signature() -> String:
 	var bits := PackedStringArray([ws.recipe.kind, ws.recipe.name, ws.sculpt_state, str(ws.part_sel),
 			",".join(ws.part_names), str(ws.guides.size()), str(ws.photos.size()), str(ws.recipe.size()),
-			str(ws._edits.size())])
+			str(ws.undo_stack.version)])
 	for m in ws.models:
 		bits.append("%d:%s:%s:%s:%s:%s:%s" % [int(m.id), String(m.path), str(m.parts),
 				str((m.node as Node3D).visible), str(int(m.op)), String(m.get("name", "")), String(m.get("group", ""))])

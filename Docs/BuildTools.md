@@ -864,7 +864,7 @@ Merged; `tools/build_tools_probe.gd` 338 checks, workshop gate 19, asset worksho
 
 Asked 2026-11-06: turn the two workshops' tools into one shared, modular editor kit that both use,
 and that can be copied into another Godot project and kept in sync. In stages, each merged on its
-own. **This section is the plan; nothing has moved yet.**
+own. **This section is the plan; stage 1 is built (see "As built" at the end).**
 
 ### Today (main `874edd82`)
 
@@ -977,8 +977,7 @@ Each stage: own branch, merged `--no-ff`, pushed. Every stage passes, as on main
 
 | Stage | What | Check |
 |---|---|---|
-| 1a | Kit folder, README, VERSION, `WkCommand`, `WkUndoStack`; the building workshop's stacks (`_edits`, `_brick_groups`, `_redo_list`, `_paints`, `_tower_undo`, `WorkshopTools._undo`, furnish) become commands on one stack; the asset's brick undo goes through it unchanged to the eye | `wk_smoke` (the stack alone: groups, merge, can't-redo, redo cleared by a new push); every probe above; the undo/redo checks in `build_tools_probe` unchanged |
-| 1b | The asset's own stacks (`_edit_groups`, `_redo`, `_stud_log`, `_deleted`, sketch snapshots) become commands; `redo_last` and `redo` become one | `asset_workshop_probe`, `mech_workshop_probe` undo checks |
+| 1 ✅ | Kit folder, README, VERSION, `WkCommand`, `WkGroup`, `WkUndoStack`; every undo list in both workshops (`_edits`, `_brick_groups`, `_redo_list`, `_paints`, `_tower_undo`, `_stamp_marks`, `_ungrouped`, `WorkshopTools._undo`, the furnish tool's, and the asset's `_edit_groups`, `_redo`, `_stud_log`, `_deleted`, sketch snapshots) becomes commands on one stack, `ws.undo_stack` | `wk_smoke` (the stack alone); every probe above. Planned as 1a (building) and 1b (asset); done as one, because the asset workshop's undo read and wrote the base's list |
 | 2 | `WkTool`, `WkContext`, `WkToolbox`; `BrickWorkshopContext` for both; **Sketch, Shapes, Paint** moved into kit tools (SketchPen -> `WkSketchPen`, BrickShapes' cells -> `WkShapes`; `pack_courses` stays game-side) | probes; a fake context in `wk_smoke` drives the three tools |
 | 3 | `WkCamera` (WorkshopView's orbit/FPS + the asset's flat views and zoom), `WkMirror` (one plane for both; `mirror_item` in the adapter), `WkGrid`, `WkGhost` | probes; gate pictures as before; camera orbit, pan, zoom, flat views by script |
 | 4a | `WkFrame` + `WkRail` (ToolRail moved) for the building workshop: menu bar, rail, options, hint line, themed by `ctx.theme()` | `workshop_probe`, gate |
@@ -1000,3 +999,36 @@ game class, the probes and gate pass as on main, and section 0 describes the kit
 * **The building workshop's RMB delete** becomes undoable once it is a command (today it cannot:
   it takes a brick out of the middle). Proposed in stage 5's erase tool, by taking the brick out
   and putting it back at its old index in one command -- or left as it is.
+
+### As built: stage 1, one undo (2026-11-07)
+
+`addons/workshop_kit/` 0.1.0: `WkCommand`, `WkGroup`, `WkUndoStack`, README (port steps, `git subtree`
+sync), `tests/wk_smoke.gd` (35 checks, headless). Both workshops keep one `undo_stack`; every edit is
+a command on it, made with `WkCommand.make(kind, data, undo_fn, do_fn)` -- the workshop keeps the
+logic, the command its data. What changed underneath, and the few things that behave differently:
+
+* **A brick's edit holds its recipe id**, moved down whenever bricks leave from the middle
+  (`_forget_rids`, called before they go). The old list held only the word "brick", and undo popped
+  the newest brick whoever's it was; it worked by counting, so a brick laid back by an undo (an RMB
+  delete undone, a cut undone, a lifted group put back) went with the next Z whatever that Z was for.
+  Now each Z takes back its own edit's brick.
+* **An edit outlives its brick leaving** (RMB, a cut): it remembers the brick by part and cell, and
+  if an undo lays that brick back, the edit finds it again. An edit with nothing left to take back
+  is skipped (`WkCommand.alive`), so Z never does nothing. *Different:* in the asset workshop, Z
+  after undoing a delete goes on to the edits before it (the old list took the laid-back brick away
+  again first). `asset_workshop_probe`'s check for it now expects that order.
+* **An opened build's bricks have no command each.** The old list held a word per brick of the file
+  so Z could go on into it; a command each would be ~3 µs a brick (1.4 s on a 476,000-brick build)
+  and a scan of them all on every RMB. Instead `undo_stack.on_empty` calls `_undo_opened` once the
+  history runs out: the file's fixtures, then its bricks, newest first, one a Z, as before. The
+  gate's check for it reads `_opened_bricks` and `_opened_fixtures`.
+* **An insert (stamp) or a bake is one command** with where the recipe's lists stood; its bricks
+  have no edits of their own (they had one each, popped together).
+* **T (turn the last brick)** takes it up and lays it again turned under the same edit, rather than
+  going through undo -- which after a run took the whole run back.
+* **Redo** is the stack's for everything that has a `do`: bricks, shapes, deletes, studs, sketch
+  and model changes. Paint, fixtures, inserts, generated buildings, lifted groups and furniture
+  undo but do not redo, as before; undoing one forgets the redo list.
+* Gathered edits (`_begin_gather`/`_end_gather`) are a group begun and ended on the stack, flattened
+  so the groups made inside it undo as one, in the order they were made, with their sketch
+  snapshots after (`WkGroup` tails).

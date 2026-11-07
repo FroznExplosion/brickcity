@@ -192,9 +192,6 @@ var _bim: ImmediateMesh
 var _drag := {}
 ## The kept shape picked with Select: its id, or -1.
 var selected := -1
-## Undo records, newest last, one for each "shape" edit: {before: {id: shape or null},
-## hand: [[part, [x, y, z], colour, mat, role]]} -- hand-laid bricks a cut took up.
-var _undo := []
 ## "part|x|y|z" -> shape id, for the bricks of kept shapes; rebuilt when stale.
 var _owner := {}
 var _owner_dirty := true
@@ -363,7 +360,6 @@ func _store(id: int, sh: Dictionary) -> void:
 
 ## A new build was opened or begun: its shapes are its own.
 func recipe_changed() -> void:
-	_undo.clear()
 	_draft = {}
 	_last_plan = -1
 	_drag = {}
@@ -1327,7 +1323,7 @@ func _take_part(part: String, cell: Vector3i, af: int = 0) -> bool:
 	if rid < 0:
 		return false
 	# A shape's bricks have no edit of their own: the shape's undo puts them back.
-	ws._remove_rid(rid, false)
+	ws._remove_rid(rid)
 	return true
 
 
@@ -1339,28 +1335,25 @@ func _begin() -> Dictionary:
 	return {"before": {}, "hand": []}
 
 
+## A shape edit, recorded in the workshop's history as one "shape" command. `rec`:
+## {before: {id: shape or null}, hand: [[part, [x, y, z], colour, mat, role]]} -- hand-laid
+## bricks a cut took up.
 func _end(rec: Dictionary) -> void:
-	_undo.append(rec)
-	ws._edits.append("shape")
+	ws.undo_stack.push(WkCommand.make(&"shape", rec, _undo_shape, _redo_shape))
 	ws._after_edit()
 
 
 ## Z on a shape edit: each shape it changed back as it was, its bricks with it; hand-laid
-## bricks a cut took up laid again, plain bricks a repeat laid taken up. What it undid goes
-## on the workshop's redo list.
-func undo() -> bool:
-	if _undo.is_empty():
-		return false
-	var rec: Dictionary = _undo.pop_back()
-	ws._edits.pop_back()
-	ws._redo_list.append({"kind": "shape", "rec": _apply(rec)})
+## bricks a cut took up laid again, plain bricks a repeat laid taken up. The command keeps the
+## record that does the opposite, for redo.
+func _undo_shape(c: WkCommand) -> bool:
+	c.data = _apply(c.data)
 	return true
 
 
-## Redo: a record `undo` gave back, done again (and undoable again).
-func redo(rec: Dictionary) -> bool:
-	_undo.append(_apply(rec))
-	ws._edits.append("shape")
+## Redo: the record undo gave back, done again (and undoable again).
+func _redo_shape(c: WkCommand) -> bool:
+	c.data = _apply(c.data)
 	ws._after_edit()
 	return true
 
