@@ -162,6 +162,8 @@ func _apply_setting(id: StringName, value: Variant) -> void:
 			BrickNear.max_studs = int(value)
 		&"near_cap_cards":
 			BrickNear.max_card_bands = int(value)
+		&"near_lamps":
+			BrickGridLight.near_max = [0, 2, 4, 8][clampi(int(value), 0, 3)]
 		&"sun_cascades":
 			sun_cascades = 2 if int(value) == 1 else 4
 			var city := _city()
@@ -252,6 +254,10 @@ func _setting_defs() -> Array:
 			"hint": "With the cap on: how many pieces of wall and wreckage show their studs at all "
 			+ "(as geometry or as far cards), nearest and in front of you first. Past them, the "
 			+ "tops of the furthest pieces are smooth. Lower helps most after a lot of destruction."},
+		{"id": &"near_lamps", "tab": "video", "type": MENU_SETTINGS.T_ENUM,
+			"label": "Lamp Lights", "default": 2, "choices": ["Off", "2", "4", "8"],
+			"hint": "How many of the lamps nearest you light the room for real, with "
+			+ "shadows. Off: lamps light only by the brick grid (flat, cheapest)."},
 		{"id": &"sun_cascades", "tab": "video", "type": MENU_SETTINGS.T_ENUM,
 			"label": "Sun Shadow Cascades", "default": 0, "choices": ["4 (Sharp)", "2 (Faster)"],
 			"hint": "How many slices the sun's shadow is drawn in. Two is faster; shadows past "
