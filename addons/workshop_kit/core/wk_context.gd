@@ -92,3 +92,73 @@ func paint_step(_step: int) -> void:
 ## The brush's reach changed (- =): show it.
 func paint_radius_changed(_radius: int) -> void:
 	pass
+
+
+# ---------------------------------------------------------------------------
+# Camera (WkCamera)
+# ---------------------------------------------------------------------------
+
+## The editor's camera.
+func camera() -> Camera3D:
+	return null
+
+
+## The ray under the mouse: [from, dir], or [] when there is none.
+func camera_ray() -> Array:
+	return []
+
+
+## Where a ray first meets what the editor shows (a Vector3), or null.
+func camera_hit(_from: Vector3, _dir: Vector3) -> Variant:
+	return null
+
+
+## Whether the mouse is taken (FPS look).
+func camera_captured() -> bool:
+	return false
+
+
+func camera_set_captured(_on: bool) -> void:
+	pass
+
+
+## Whether the movement keys fly the camera while the cursor is free.
+func camera_drive_keys(_on: bool) -> void:
+	pass
+
+
+## A menu, a browser or a dialog has the cursor: the camera keeps its hands off.
+func camera_busy() -> bool:
+	return false
+
+
+## Whether RMB is the camera's to look with now (not while a tool drags with it).
+func camera_rmb_free() -> bool:
+	return true
+
+
+## Whether the wheel is the camera's to zoom with now.
+func camera_wheel_free() -> bool:
+	return true
+
+
+## A plain click of `button` (MMB) that did not become a drag: the editor's (pick a piece).
+func camera_click(_button: int) -> void:
+	pass
+
+
+## A plain RMB click the camera held back while it waited to see if it was a drag: give these
+## events (press, release) to the editor's own input.
+func camera_replay(_events: Array) -> void:
+	pass
+
+
+## Shift + wheel (`step` 1 up, -1 down): the editor's (a toolbar slot).
+func camera_wheel_shift(_step: int) -> void:
+	pass
+
+
+## A flat view starts (true) or ends: the editor's camera should stop (or go back to) taking
+## the mouse itself.
+func camera_flat(_on: bool) -> void:
+	pass

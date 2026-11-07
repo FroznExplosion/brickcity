@@ -982,7 +982,7 @@ Each stage: own branch, merged `--no-ff`, pushed. Every stage passes, as on main
 | 2b ✅ | **Paint** into a kit tool: the stroke (press, drag, release as one undo), the brush's reach, pick a colour; what a brick's colour is stays the workshop's | probes; `wk_smoke` |
 | 2c ✅ | **Shapes**: the grid geometry (`BrickShapes`' rectangle, ellipse, ring, polyline, region cells) into `WkShapes`; packing cells into bricks and kept shapes stay game-side. The Shapes *tool* goes with Draw/Cut/Select in stage 5: the two workshops' gestures differ (asset: drag a box, ball, cylinder or wedge and fill it; building: draw an outline, then pull its height), so one tool needs a design choice first | probes; `wk_smoke` cells checks |
 | 3a ✅ | `WkMirror`: the plane (on, axis, x, z) and its cell arithmetic; both workshops' mirror state is it, through properties | probes; `wk_smoke` |
-| 3b | `WkCamera`: WorkshopView's orbit, pan, zoom to the cursor and click-or-drag, and the asset workshop's flat views (side, top, front; orthographic zoom at the cursor). The FPS fly stays the game's camera, behind the context (no new fly code) | probes; gate pictures as before |
+| 3b ✅ | `WkCamera`: WorkshopView's orbit, pan, zoom to the cursor and click-or-drag, and the asset workshop's flat views (side, top, front; orthographic zoom at the cursor). The FPS fly stays the game's camera, behind the context (no new fly code) | probes; gate pictures as before |
 | 3c | `WkGrid` (the grid overlay) and `WkGhost` (the preview node and its valid/invalid tint; its mesh from the context) | probes; gate |
 | 4a | `WkFrame` + `WkRail` (ToolRail moved) for the building workshop: menu bar, rail, options, hint line, themed by `ctx.theme()` | `workshop_probe`, gate |
 | 4b | The asset workshop's tabs, outliner and actions on `WkFrame` | `asset_ui_probe` |
@@ -1109,3 +1109,22 @@ Kit 0.5.0: **`WkMirror`** -- `on`, `axis` (0 across X, 2 across Z), `x`, `z`, a 
   (`_place_mirrored`), a kept shape reflected (`BrickShapes.reflected`). The drawn plane (the asset
   workshop's sheet, the building workshop's lines) stays each workshop's for now: both are drawn
   round the build's own box.
+
+### As built: stage 3b, the camera (2026-11-07)
+
+Kit 0.6.0: **`WkCamera`** -- `scripts/workshop_view.gd` (WorkshopView) moved into the kit, its
+workshop calls turned into context questions (`camera`, `camera_ray`, `camera_hit`,
+`camera_captured`, `camera_set_captured`, `camera_drive_keys`, `camera_busy`, `camera_rmb_free`,
+`camera_wheel_free`, `camera_click`, `camera_replay`, `camera_wheel_shift`, `camera_flat`), and the
+asset workshop's flat views added: `flat(view, centre)`, `perspective()`, `zoom_flat`, `zoom_at`,
+`ortho_size`. `wk_smoke` 86 checks (a real Camera3D: orbit, zoom, clicks handed back, FPS, flat
+views and back). The smoke test now runs from `_initialize` so a node can be in the tree.
+
+* **The fly stays the game's** (section 20's open question, settled the cheap way): FPS and the
+  keys flying with the cursor free are the workshop's DebugCamera; the kit only says when the
+  mouse is taken and when the keys fly. No new fly code, nothing feels different.
+* The building workshop's tools keep `view` (now a `WkCamera`), set up with the workshop's
+  context; the DebugCamera's `click_captures` and `ctrl_descends` are turned off where it is made.
+* The asset workshop does not take up orbit or FPS (that would change how it handles): its
+  `set_view`, `zoom` and `zoom_at` are `cam_ctl.flat` / `perspective` / `zoom_flat` / `zoom_at`,
+  and `_ortho_size` is the kit camera's, through a property.

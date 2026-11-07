@@ -100,7 +100,8 @@ var typed := ""
 var _hand_row := {}
 var _hand_box: VBoxContainer
 var _last_hand := "place"
-var view: WorkshopView
+## The two cameras (orbit and FPS, Docs/BuildTools.md section 10): the kit's WkCamera.
+var view: WkCamera
 var tool := "place"
 
 ## Shapes options.
@@ -299,8 +300,13 @@ func setup(workshop, layer: CanvasLayer) -> void:
 	if ws._keys_panel != null:
 		ws._keys_panel.visible = false
 	_build_options()
-	view = WorkshopView.new()
-	view.setup(ws)
+	# The mouse is taken and given back by the kit's camera and nowhere else: the workshop
+	# camera's click-to-capture is off, so a click only ever does what the tool does.
+	var dc = ws._camera
+	dc.click_captures = false
+	dc.ctrl_descends = false
+	view = WkCamera.new()
+	view.setup(ws.wk_ctx)
 	_im = ImmediateMesh.new()
 	_lines = MeshInstance3D.new()
 	_lines.mesh = _im
