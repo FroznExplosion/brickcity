@@ -7744,6 +7744,37 @@ func _run_light_pass() -> void:
 		print("[light] flashlight: picture %.3f against %.3f; GPU %.2f ms against %.2f off"
 				% [lit, on, gpu_on, gpu_off])
 		_gate_ok("the flashlight lights the room", lit > on * 1.1, "%.3f against %.3f" % [lit, on])
+		# Near lamps (Docs/Lighting.md 6.5): at night, the lamps nearest the
+		# camera light the room for real, over the grid's flat lamp term.
+		var sun_was := city._sun.visible
+		city._sun.visible = false
+		var wenv := city.get_viewport().find_world_3d().environment
+		var amb := wenv.ambient_light_energy if wenv != null else 0.0
+		var bg := wenv.background_energy_multiplier if wenv != null else 0.0
+		if wenv != null:
+			wenv.ambient_light_energy = amb * 0.08
+			wenv.background_energy_multiplier = bg * 0.08
+		var near_was := BrickGridLight.near_max
+		var shots := {}
+		for n in [0, 4]:
+			BrickGridLight.near_max = n
+			city.grid_light.place_near()
+			await _ticks(12)
+			var m := _mean_of(city.get_viewport().get_texture().get_image())
+			shots[n] = [m, RenderingServer.viewport_get_measured_render_time_gpu(vp_rid),
+					city.grid_light.near_count]
+			await _save("city_lamps_night_%d" % n)
+		print("[light] night, grid lamps only: picture %.3f, GPU %.2f ms; %d near lamp(s): %.3f, GPU %.2f ms"
+				% [shots[0][0], shots[0][1], shots[4][2], shots[4][0], shots[4][1]])
+		_gate_ok("the near lamps light the room at night", shots[4][2] > 0
+				and shots[4][0] > shots[0][0] * 1.05, "%d lamp(s), %.3f against %.3f"
+				% [shots[4][2], shots[4][0], shots[0][0]])
+		BrickGridLight.near_max = near_was
+		city.grid_light.place_near()
+		city._sun.visible = sun_was
+		if wenv != null:
+			wenv.ambient_light_energy = amb
+			wenv.background_energy_multiplier = bg
 	# A hole through an outer wall (x = 0 side or the far one), where it is
 	# whole for 4 studs across and 1-2 m up and a room is right behind it; the
 	# air just in reads at least three steps from the open.

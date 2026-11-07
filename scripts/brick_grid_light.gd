@@ -58,6 +58,21 @@ const SPOT_RANGE := 6.0
 ## many a building.
 const LAMP_MERGE := 1.2
 const LAMPS_MAX := 8
+## Near lamps (Docs/Lighting.md 6.5): the lamps nearest the camera, over every
+## building, also hang a REAL light on the bricks -- per pixel, fading with
+## distance, shining on what faces it, with a shine -- where the grid's own
+## lamp term is flat (one value a stud cell, lit whichever way a face looks).
+## A one-way lamp's (a light bar's) casts shadows, so it stops at the floor
+## and the walls as the grid does; an all-round one (a Glow brick) cannot (it
+## would sit in its own brick's shadow), so it stays small. How many: the
+## Video setting (BrickcityMenuHost), 0 for none.
+static var near_max := 4
+const NEAR_SPOT_ANGLE := 70.0
+const NEAR_SPOT_RANGE := 7.0
+const NEAR_OMNI_RANGE := 3.0
+const NEAR_ENERGY := 1.6
+## Frames between choosing them again (they follow the player).
+const NEAR_EVERY := 12
 ## Last one lit, for gates and the HUD (ms).
 var last_ms := 0.0
 var updates := 0
@@ -79,6 +94,11 @@ class Entry:
 var _entries := {}
 var _free: Array[int] = []
 var _turn := -1
+## The near lamps' lights, and which group each stands for ([entry, index]).
+var _near: Array = []
+var _near_clock := 0
+## Their count now, for gates.
+var near_count := 0
 
 
 func _init() -> void:
@@ -171,8 +191,83 @@ func step() -> void:
 	var e: Entry = _entries[keys[_turn]]
 	if e.bricks.get_alive_block_count(e.chunk) != e.alive:
 		_light(e)
-	elif e.groups.size() > LAMPS_MAX:
+	elif use_layer and e.groups.size() > LAMPS_MAX:
 		_place_lamps(e)
+	_near_clock -= 1
+	if _near_clock <= 0:
+		_near_clock = NEAR_EVERY
+		place_near()
+
+
+## Hang the near lamps' lights now (step() does, every NEAR_EVERY frames).
+func place_near() -> void:
+	var cam := (Engine.get_main_loop() as SceneTree).root.get_viewport().get_camera_3d()
+	var picks: Array = []   # [distance squared, entry, group]
+	if cam != null and near_max > 0:
+		var eye := cam.global_position
+		for key in _entries:
+			var e: Entry = _entries[key]
+			if not is_instance_valid(e.node) or not e.node.is_inside_tree():
+				continue
+			var xf := e.node.global_transform
+			for g in e.groups:
+				var at: Vector3 = xf * (g[0] / g[1])
+				var d2 := at.distance_squared_to(eye)
+				if d2 < 40.0 * 40.0:
+					picks.append([d2, e, g])
+		picks.sort_custom(func(a, b): return a[0] < b[0])
+		picks = picks.slice(0, near_max)
+	while _near.size() > picks.size():
+		var l: Variant = _near.pop_back()
+		if is_instance_valid(l):
+			(l as Node).queue_free()
+	for i in picks.size():
+		var e: Entry = picks[i][1]
+		var g: Array = picks[i][2]
+		var dir: int = g[2]
+		var want_spot := dir != 0
+		var l: Light3D = _near[i] if i < _near.size() and is_instance_valid(_near[i]) else null
+		if l != null and (l is SpotLight3D) != want_spot:
+			l.queue_free()
+			l = null
+		if l == null:
+			if want_spot:
+				var s := SpotLight3D.new()
+				s.name = "NearLampSpot"
+				s.spot_angle = NEAR_SPOT_ANGLE
+				s.spot_range = NEAR_SPOT_RANGE
+				s.spot_attenuation = 1.2
+				s.spot_angle_attenuation = 0.5
+				s.shadow_enabled = true
+				s.shadow_blur = 2.0
+				s.shadow_bias = 0.03
+				s.shadow_normal_bias = 1.0
+				l = s
+			else:
+				var o := OmniLight3D.new()
+				o.name = "NearLampGlow"
+				o.omni_range = NEAR_OMNI_RANGE
+				o.omni_attenuation = 1.4
+				o.shadow_enabled = false
+				l = o
+			l.light_specular = 0.4
+			l.physics_interpolation_mode = Node.PHYSICS_INTERPOLATION_MODE_OFF
+			if i < _near.size():
+				_near[i] = l
+			else:
+				_near.append(l)
+		if l.get_parent() != e.node:
+			if l.get_parent() != null:
+				l.get_parent().remove_child(l)
+			e.node.add_child(l)
+		var n: int = g[1]
+		l.position = g[0] / n
+		if want_spot:
+			l.rotation = Vector3(-PI / 2.0 if dir < 0 else PI / 2.0, 0.0, 0.0)
+			l.position.y += 0.03 * dir
+		l.light_color = g[3] / n
+		l.light_energy = NEAR_ENERGY * (g[4] / n) * minf(1.0 + 0.2 * (n - 1), 2.5)
+	near_count = picks.size()
 
 
 ## Sky and lamp (0..1 each; the lamp's brightest channel) at world point
@@ -224,7 +319,9 @@ func _light(e: Entry) -> void:
 		RenderingServer.texture_2d_update(texture.get_rid(), img, e.slot)
 		e.param = Vector4(e.slot, e.dims.x, e.dims.y, e.dims.z)
 	_apply_all(e)
-	_hang_lamps(e, e.bricks.chunk_lamps(e.chunk) if use_layer else PackedFloat32Array())
+	# Every grid keeps its lamps (the near lamps choose from them); only a
+	# layered one hangs the per-building lights for what moves.
+	_hang_lamps(e, e.bricks.chunk_lamps(e.chunk))
 	updates += 1
 	last_ms = (Time.get_ticks_usec() - t0) / 1000.0
 
@@ -271,7 +368,7 @@ func _place_lamps(e: Entry) -> void:
 		else:
 			groups = groups.duplicate()
 			groups.sort_custom(func(a, b): return a[1] > b[1])
-	groups = groups.slice(0, LAMPS_MAX)
+	groups = groups.slice(0, LAMPS_MAX if use_layer else 0)
 	while e.lamps.size() > groups.size() or (not valid and not e.lamps.is_empty()):
 		# Untyped: freed with the building's node, it cannot be held as one.
 		var l: Variant = e.lamps.pop_back()
