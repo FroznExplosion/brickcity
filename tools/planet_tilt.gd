@@ -186,7 +186,7 @@ func _crumbs() -> Array:
 	var im = city.islands
 	if not ("_crumbs" in im):
 		return out
-	for c in im.crumb_states():
+	for c in im.crumbler.crumb_states():
 		out.append(c[0])
 	return out
 

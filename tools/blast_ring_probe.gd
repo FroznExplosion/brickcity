@@ -143,7 +143,7 @@ func _split(chunk: int, killed: PackedInt32Array, at: Vector3, radius: float) ->
 ## Every crumb there is: [where, how fast] now (the shader draws them from
 ## what they were thrown with; IslandManager.crumb_states works it out).
 func _crumbs() -> Array:
-	return _m.crumb_states()
+	return _m.crumbler.crumb_states()
 
 
 ## The front face of the tower (z = 0), `along` of the way across and `up` metres.
