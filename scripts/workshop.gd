@@ -214,9 +214,15 @@ var _arch_names := {}
 ## that would be painted. A colour is only a vertex attribute and not part of a
 ## brick's identity, so nothing is removed or renumbered.
 var _painting := false
+## The brush is the kit's Paint tool (WkPaintTool, addons/workshop_kit): it takes the strokes,
+## the eyedropper, - = and Page Up/Down, and asks the workshop through its context
+## (`wk_paint_begin` ... below). Docs/BuildTools.md section 20.
+var _paint_tool := WkPaintTool.new()
 ## Studs round the dot the brush reaches: 0 is the one brick under it, more
-## is every brick of the build within that distance -- a wall in one pass.
-var _paint_radius := 0
+## is every brick of the build within that distance -- a wall in one pass. The tool's.
+var _paint_radius: int:
+	get: return _paint_tool.radius
+	set(v): _paint_tool.radius = v
 const PAINT_RADIUS_MAX := 12
 ## What the brush lays, picked in one place (scripts/paint_palette.gd): the
 ## selected slot's material and colour, which is what the brush has always
@@ -293,10 +299,21 @@ var _opened_fixtures := 0
 ## The mirror (Docs/BuildTools.md section 7; moved down from the asset workshop): while on,
 ## a brick placed is placed again across the plane -- across Z at `mirror_z` studs, or with
 ## `mirror_axis` 0 across X at `mirror_x`.
-var mirror_on := false
-var mirror_z := 0.0
-var mirror_x := 0.0
-var mirror_axis := 2
+## The plane and its arithmetic are the editor kit's (WkMirror, addons/workshop_kit); these
+## names stay, as properties on it.
+var mirror := WkMirror.new()
+var mirror_on: bool:
+	get: return mirror.on
+	set(v): mirror.on = v
+var mirror_z: float:
+	get: return mirror.z
+	set(v): mirror.z = v
+var mirror_x: float:
+	get: return mirror.x
+	set(v): mirror.x = v
+var mirror_axis: int:
+	get: return mirror.axis
+	set(v): mirror.axis = v
 ## Lock height as a button: the plane stays as with E held, until it is pressed again.
 var plane_locked := false
 var _run_from := 0
@@ -338,6 +355,8 @@ func _init() -> void:
 func _ready() -> void:
 	wk_ctx = BrickWorkshopContext.new(self)
 	toolbox.ctx = wk_ctx
+	_paint_tool.radius_max = PAINT_RADIUS_MAX
+	toolbox.add(_paint_tool)
 	world = BrickWorld.new()
 	world.set_seed(1)
 	# The generator's palette: the player's parts plus the cornice a generated
@@ -942,14 +961,18 @@ func _set_painting(on: bool) -> void:
 	if _paint_palette != null:
 		_paint_palette.visible = on
 		_paint_palette.show_pick(_mat, _colour)
+	if on:
+		toolbox.use(&"paint")
+	elif toolbox.active_id() == &"paint":
+		toolbox.use(&"")
 	_end_stroke()
 	_ghost_studs.visible = not on
 	_ghost.visible = true
 
 
-## Paint mode, each frame: the ghost boxes the brick under the dot, and a held
-## LMB keeps painting whatever it passes over.
-func _paint_process() -> void:
+## Paint mode, each frame: the ghost boxes the brick under the dot (or, with a reach, a
+## ball round it). A held LMB painting on is the tool's (WkPaintTool.process).
+func _paint_hover() -> void:
 	var ray := _mouse_ray()
 	var hit := _first_hit(ray[0], ray[1])
 	_ghost.visible = not hit.is_empty()
@@ -975,11 +998,40 @@ func _paint_process() -> void:
 		_ghost.transform = Transform3D(Basis(), Vector3(box[0] as Vector3i) * tick + size * 0.5)
 	var c := BrickWorld.get_filament_colour(_colour)
 	_ghost_material.albedo_color = Color(c.r, c.g, c.b, 0.55)
-	if _stroke != null:
-		if Input.is_mouse_button_pressed(MOUSE_BUTTON_LEFT):
-			_paint_ray(ray[0], ray[1])
-		else:
-			_end_stroke()
+
+
+# The kit's Paint tool asks these, through the workshop's context (BrickWorkshopContext).
+
+func wk_paint_begin() -> void:
+	_stroke = []
+
+
+func wk_paint_at(_radius: int) -> bool:
+	var ray := _mouse_ray()
+	return _paint_ray(ray[0], ray[1])
+
+
+func wk_paint_end() -> void:
+	_end_stroke()
+
+
+func wk_paint_hover(_radius: int) -> void:
+	_paint_hover()
+
+
+func wk_paint_pick() -> void:
+	var ray := _mouse_ray()
+	_pick_paint_ray(ray[0], ray[1])
+
+
+func wk_paint_step(step: int) -> void:
+	if _paint_palette != null:
+		_paint_palette.step_material(step)
+
+
+func wk_paint_radius_changed(_radius: int) -> void:
+	if _paint_palette != null:
+		_paint_palette.info = _paint_info()
 
 
 func _begin_stroke() -> void:
@@ -1150,7 +1202,7 @@ func _process(_dt: float) -> void:
 	elif _spaces != null and _spaces.active:
 		_ghost.visible = false
 	elif _painting:
-		_paint_process()
+		toolbox.process(_dt)
 	else:
 		_ghost.visible = true
 		_aim()
@@ -1872,17 +1924,16 @@ func _unhandled_input(e: InputEvent) -> void:
 		return
 	if _tools != null and _tools.input(e):
 		return
+	if _painting and toolbox.active_id() == &"paint" and toolbox.input(e):
+		return
 	if e is InputEventMouseButton and not e.pressed and e.button_index == MOUSE_BUTTON_LEFT:
 		_end_run()
 	if e is InputEventMouseButton and e.pressed:
 		match e.button_index:
 			MOUSE_BUTTON_LEFT:
-				if _painting:
-					_begin_stroke()
-				else:
-					var before := recipe.size()
-					_place()
-					_begin_run(before)
+				var before := recipe.size()
+				_place()
+				_begin_run(before)
 			MOUSE_BUTTON_RIGHT:
 				var ray := _mouse_ray()
 				_delete_ray(ray[0], ray[1])
@@ -1900,14 +1951,6 @@ func _unhandled_input(e: InputEvent) -> void:
 		KEY_BRACKETRIGHT: _hotbar.step(1)
 		KEY_COMMA: _hotbar.set_colour(_colour - 1)
 		KEY_PERIOD: _hotbar.set_colour(_colour + 1)
-		KEY_MINUS, KEY_EQUAL:
-			if _painting:
-				_paint_radius = clampi(_paint_radius + (1 if e.keycode == KEY_EQUAL else -1),
-						0, PAINT_RADIUS_MAX)
-				_paint_palette.info = _paint_info()
-		KEY_PAGEUP, KEY_PAGEDOWN:
-			if _painting:
-				_paint_palette.step_material(1 if e.keycode == KEY_PAGEUP else -1)
 		KEY_R: _yaw = (_yaw + 1) % 4
 		KEY_F: _flip = not _flip
 		KEY_T: _rotate_last()
@@ -1984,29 +2027,24 @@ func _place() -> void:
 
 ## The first stud across of a part `width` studs wide at `z`, mirrored across the plane.
 func mirrored_z(z: int, width: int) -> int:
-	return int(round(2.0 * mirror_z - float(z + width)))
+	return mirror.mirrored_z(z, width)
 
 
 ## The same across X.
 func mirrored_x(x: int, width: int) -> int:
-	return int(round(2.0 * mirror_x - float(x + width)))
+	return mirror.mirrored_x(x, width)
 
 
 func set_mirror(on: bool) -> void:
-	mirror_on = on
-	if on and mirror_z == 0.0:
-		mirror_z = float(_cell.z)
-	if on and mirror_x == 0.0:
-		mirror_x = float(_cell.x)
+	if on:
+		mirror.turn_on(_cell)
+	else:
+		mirror.on = false
 
 
 ## Put the plane down the middle of the ghost.
 func mirror_here() -> void:
-	var size := BrickPalette.size_of(_archetype_name())
-	if mirror_axis == 0:
-		mirror_x = _cell.x + size.x * 0.5
-	else:
-		mirror_z = _cell.z + size.z * 0.5
+	mirror.through(_cell, BrickPalette.size_of(_archetype_name()))
 
 
 ## The brick just placed, again, on the other side of the plane. A part with a front
@@ -2014,19 +2052,13 @@ func mirror_here() -> void:
 ## exactly is its own mirror and is not placed twice. Upright grid only, for now.
 func _place_mirrored() -> void:
 	var arch := _archetype_name()
-	var size := BrickPalette.size_of(arch)
-	var to := _cell
-	if mirror_axis == 0:
-		to.x = mirrored_x(_cell.x, size.x)
-	else:
-		to.z = mirrored_z(_cell.z, size.z)
+	var to := mirror.mirror_cell(_cell, BrickPalette.size_of(arch))
 	if to == _cell:
 		return
 	var keep := [_cell, _yaw, _snapped]
 	var front := BrickPalette.front_of(arch)
 	if front[mirror_axis] != 0:
-		var want := front
-		want[mirror_axis] = -front[mirror_axis]
+		var want := mirror.mirror_dir(front)
 		for y in 4:
 			if BrickPalette.front_of(BrickPalette.variant_name(_part(), y, _flip)) == want:
 				_yaw = y
@@ -2422,6 +2454,73 @@ func _delete_ray(from: Vector3, dir: Vector3) -> bool:
 		_after_edit()
 		return true
 	return false
+
+
+# The kit's camera (WkCamera) asks these, through the workshop's context. The flying is the
+# workshop's DebugCamera's own.
+
+func wk_camera() -> Camera3D:
+	return _camera
+
+
+func wk_camera_ray() -> Array:
+	return _mouse_ray()
+
+
+func wk_camera_hit(from: Vector3, dir: Vector3) -> Variant:
+	var hit := _first_hit(from, dir)
+	return null if hit.is_empty() else hit.point
+
+
+func wk_camera_captured() -> bool:
+	var c = _camera
+	return bool(c._captured)
+
+
+func wk_camera_set_captured(on: bool) -> void:
+	var c = _camera
+	c._set_captured(on)
+
+
+func wk_camera_drive_keys(on: bool) -> void:
+	var c = _camera
+	c.drive_uncaptured = on
+
+
+func wk_camera_busy() -> bool:
+	return _hotbar.is_browsing() or (_menu != null and _menu.is_modal())
+
+
+## RMB looks round unless a tool is dragging with it, a build is in hand or furniture is open.
+func wk_camera_rmb_free() -> bool:
+	return not ((_tools != null and _tools.dragging()) or _stamp != null
+			or (_furnish != null and _furnish.is_open()))
+
+
+func wk_camera_wheel_free() -> bool:
+	return not (_spaces != null and _spaces.active)
+
+
+func wk_camera_click(button: int) -> void:
+	if button == MOUSE_BUTTON_MIDDLE:
+		_pick_block()
+
+
+func wk_camera_replay(events: Array) -> void:
+	for e in events:
+		_unhandled_input(e)
+
+
+func wk_camera_wheel_shift(step: int) -> void:
+	_hotbar.step(-step)
+
+
+## A flat view is built in with the cursor: the camera's own click-to-look is off, and a
+## captured mouse would turn it.
+func wk_camera_flat(on: bool) -> void:
+	_camera.set_process_unhandled_input(not on)
+	if on and _camera.has_method("_set_captured"):
+		_camera.call("_set_captured", false)
 
 
 ## Who answers the kit's Sketch tool (BrickWorkshopContext): the building workshop's tools,

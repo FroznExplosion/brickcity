@@ -14,10 +14,14 @@ var doc: Array = []
 var log_: Array = []
 
 
-func _init() -> void:
+func _initialize() -> void:
 	_undo_stack()
 	_toolbox()
 	_sketch_tool()
+	_paint_tool()
+	_shapes()
+	_mirror()
+	await _camera()
 	print("wk_smoke: %d passed, %d failed" % [_pass, _fail])
 	quit(0 if _fail == 0 else 1)
 
@@ -280,6 +284,150 @@ func _sketch_tool() -> void:
 	_ok("putting the tool down gives up its stroke", not sk.drawing() and ctx.cancels == 2)
 
 
+func _key(code: int) -> InputEventKey:
+	var e := InputEventKey.new()
+	e.keycode = code
+	e.pressed = true
+	return e
+
+
+func _paint_tool() -> void:
+	var ctx := _Ctx.new()
+	var box := WkToolbox.new()
+	box.ctx = ctx
+	var pt: WkPaintTool = box.add(WkPaintTool.new())
+	box.use(&"paint")
+	box.input(_click(MOUSE_BUTTON_LEFT, true))
+	_ok("a press starts a stroke and paints under the cursor", pt.stroking()
+			and ctx.log == ["begin", "at 0"], str(ctx.log))
+	box.input(_click(MOUSE_BUTTON_LEFT, false))
+	_ok("release ends it: one step for the editor", not pt.stroking() and ctx.log.back() == "end")
+	box.input(_key(KEY_EQUAL))
+	box.input(_key(KEY_EQUAL))
+	box.input(_key(KEY_MINUS))
+	_ok("- = the reach, and the editor is told", pt.radius == 1 and ctx.log.back() == "radius 1")
+	pt.radius = 99
+	_ok("the reach is held to its most", pt.radius == pt.radius_max)
+	pt.radius = 0
+	box.input(_click(MOUSE_BUTTON_MIDDLE, true))
+	_ok("MMB takes a paint", ctx.log.back() == "pick")
+	box.input(_key(KEY_PAGEDOWN))
+	_ok("Page Down: the paint before", ctx.log.back() == "step -1")
+	box.process(0.016)
+	_ok("each frame shows the brush; no stroke, no paint", ctx.log.back() == "hover 0")
+	box.input(_click(MOUSE_BUTTON_LEFT, true))
+	box.process(0.016)
+	_ok("a stroke whose button is up (headless) ends on the next frame", not pt.stroking()
+			and ctx.log.slice(-2) == ["hover 0", "end"], str(ctx.log.slice(-3)))
+	box.input(_click(MOUSE_BUTTON_LEFT, true))
+	box.use(&"")
+	_ok("putting the brush down ends its stroke", not pt.stroking() and ctx.log.back() == "end")
+
+
+func _shapes() -> void:
+	var a := Vector2i(0, 0)
+	_ok("a rectangle fills its box, ends included", WkShapes.cells_2d("rect", a, Vector2i(2, 1)).size() == 6)
+	var hollow := WkShapes.cells_2d("hollow", a, Vector2i(4, 4), 1)
+	_ok("a hollow rectangle is its rim", hollow.size() == 16 and not hollow.has(Vector2i(2, 2)))
+	var disc := WkShapes.cells_2d("circle", a, Vector2i(6, 6))
+	var mirrored := true
+	for c in disc:
+		mirrored = mirrored and disc.has(Vector2i(6 - c.x, c.y)) and disc.has(Vector2i(c.x, 6 - c.y))
+	_ok("a circle is round both ways", mirrored and disc.has(Vector2i(3, 3)) and not disc.has(a))
+	var ring := WkShapes.cells_2d("ring", a, Vector2i(8, 8), 1)
+	_ok("a ring has no middle", ring.size() > 0 and not ring.has(Vector2i(4, 4)) and ring.size() < disc.size() * 2)
+	var line := WkShapes.polyline_cells({"pts": [[0, 0], [5, 0], [5, 4]]}, 1)
+	_ok("a wall line: each leg a band, the corner closed", line.has(Vector2i(3, 0)) and line.has(Vector2i(5, 2))
+			and line.has(Vector2i(5, 0)) and not line.has(Vector2i(3, 2)), str(line.size()))
+	var square := [[0, 0], [6, 0], [6, 6], [0, 6]]
+	var region := WkShapes.plan_region({"adds": [square], "subs": [[[2, 2], [4, 2], [4, 4], [2, 4]]]})
+	_ok("a plan: strokes in, less strokes out", region.has(Vector2i(1, 1)) and not region.has(Vector2i(3, 3)))
+	var block := WkShapes.cells_2d("rect", a, Vector2i(4, 4))
+	_ok("ring(): the cells by the outside", WkShapes.ring(block, 1).size() == 16)
+	var round_trip := true
+	for lie in WkShapes.LIES:
+		var c := WkShapes.to_3d(lie, Vector2i(3, 5), 7)
+		round_trip = round_trip and WkShapes.from_3d(lie, c) == Vector3i(3, 5, 7)
+	_ok("to_3d and from_3d undo each other on every lie", round_trip)
+	var stairs := WkShapes.cells_2d("stairs", a, Vector2i(5, 8))
+	_ok("stairs: a step every STAIR_STEP cells up", stairs.has(Vector2i(0, 0)) and stairs.has(Vector2i(5, 8))
+			and not stairs.has(Vector2i(5, 0)))
+	_ok("v2i takes arrays and Vector2i", WkShapes.v2i([2, 3]) == Vector2i(2, 3) and WkShapes.v2i(Vector2i(4, 1)) == Vector2i(4, 1))
+
+
+func _mirror() -> void:
+	var m := WkMirror.new()
+	var told := [0]
+	m.changed.connect(func() -> void: told[0] += 1)
+	m.turn_on(Vector3i(7, 1, 12))
+	_ok("on: a plane never set starts at the cell", m.on and m.z == 12.0 and m.x == 7.0 and told[0] > 0)
+	_ok("a 2-wide thing at 13, across z = 12: its image at 9", m.mirror_cell(Vector3i(3, 1, 13), Vector3i(1, 1, 2))
+			== Vector3i(3, 1, 9))
+	m.z = 12.5
+	_ok("one straddling the plane is its own image", m.mirror_cell(Vector3i(3, 1, 12), Vector3i(1, 1, 1))
+			== Vector3i(3, 1, 12))
+	m.axis = 0
+	_ok("across X: x moves, z stays", m.mirror_cell(Vector3i(9, 1, 4), Vector3i(1, 1, 1)) == Vector3i(4, 1, 4)
+			and m.plane() == 7.0)
+	_ok("a front across the plane turns", m.mirror_dir(Vector3i(1, 0, 1)) == Vector3i(-1, 0, 1))
+	m.through(Vector3i(20, 0, 0), Vector3i(4, 1, 2))
+	_ok("through the middle of a thing", m.x == 22.0)
+	m.axis = 5
+	_ok("any axis but 0 is across Z", m.axis == 2)
+
+
+func _camera() -> void:
+	var ctx := _Ctx.new()
+	var c := Camera3D.new()
+	root.add_child(c)
+	await process_frame   # in the tree: a camera's global transform needs it
+	c.global_position = Vector3(0, 10, 20)
+	c.look_at(Vector3.ZERO, Vector3.UP)
+	ctx.cam = c
+	var k := WkCamera.new()
+	k.setup(ctx)
+	_ok("orbit to start: the cursor free, keys fly", k.mode == "orbit" and k.wants_cursor()
+			and not ctx.captured and ctx.drive)
+	k._pivot = Vector3.ZERO
+	var d0 := c.global_position.length()
+	var f0 := -c.global_transform.basis.z
+	k.orbit(Vector2(40, 10))
+	_ok("orbit turns round the pivot, at the same distance", absf(c.global_position.length() - d0) < 0.001
+			and (-c.global_transform.basis.z).dot(f0) < 0.999)
+	ctx.ray = [c.global_position, -c.global_transform.basis.z]
+	var p0 := c.global_position
+	k.zoom(1)
+	_ok("the wheel zooms in along the ray", c.global_position.length() < p0.length() - 0.1)
+	k.input(_click(MOUSE_BUTTON_MIDDLE, true))
+	k.input(_click(MOUSE_BUTTON_MIDDLE, false))
+	_ok("a plain MMB click is the editor's", ctx.clicks == [MOUSE_BUTTON_MIDDLE])
+	k.input(_click(MOUSE_BUTTON_RIGHT, true))
+	k.input(_click(MOUSE_BUTTON_RIGHT, false))
+	_ok("a plain RMB click is handed back, press and release", ctx.replayed.size() == 2)
+	ctx.rmb_free = false
+	_ok("RMB is not the camera's while the editor drags with it", not k.input(_click(MOUSE_BUTTON_RIGHT, true)))
+	var y := InputEventKey.new()
+	y.keycode = KEY_Y
+	y.pressed = true
+	k.input(y)
+	_ok("Y: FPS, the mouse taken", k.mode == "fps" and ctx.captured and not ctx.drive)
+	ctx.captured = false
+	_ok("FPS with the cursor out: the scene takes no click", k.input(_click(MOUSE_BUTTON_LEFT, true)))
+	k.set_mode("orbit")
+	var persp := c.global_transform
+	k.ortho_size = 10.0
+	k.flat("top", Vector3(1, 0, 2))
+	_ok("a flat view: orthographic, looking straight down at the point", c.projection == Camera3D.PROJECTION_ORTHOGONAL
+			and (-c.global_transform.basis.z).dot(Vector3.DOWN) > 0.999 and ctx.flat_on and c.size == 10.0)
+	k.zoom_flat(1000.0)
+	_ok("its zoom is held to its most", k.ortho_size == k.ortho_max and c.size == k.ortho_max)
+	k.flat("side", Vector3.ZERO)
+	k.perspective()
+	_ok("perspective comes back as it was", c.projection == Camera3D.PROJECTION_PERSPECTIVE
+			and c.global_transform.origin.is_equal_approx(persp.origin) and not ctx.flat_on)
+	c.queue_free()
+
+
 ## A pretend editor for the tools.
 class _Ctx:
 	extends WkContext
@@ -307,6 +455,65 @@ class _Ctx:
 
 	func sketch_cancel() -> void:
 		cancels += 1
+
+	var log := []
+	var cam: Camera3D
+	var ray := []
+	var captured := false
+	var drive := false
+	var rmb_free := true
+	var clicks := []
+	var replayed := []
+	var flat_on := false
+
+	func camera() -> Camera3D:
+		return cam
+
+	func camera_ray() -> Array:
+		return ray
+
+	func camera_captured() -> bool:
+		return captured
+
+	func camera_set_captured(on: bool) -> void:
+		captured = on
+
+	func camera_drive_keys(on: bool) -> void:
+		drive = on
+
+	func camera_rmb_free() -> bool:
+		return rmb_free
+
+	func camera_click(button: int) -> void:
+		clicks.append(button)
+
+	func camera_replay(events: Array) -> void:
+		replayed.append_array(events)
+
+	func camera_flat(on: bool) -> void:
+		flat_on = on
+
+	func paint_begin() -> void:
+		log.append("begin")
+
+	func paint_at(radius: int) -> bool:
+		log.append("at %d" % radius)
+		return true
+
+	func paint_end() -> void:
+		log.append("end")
+
+	func paint_hover(radius: int) -> void:
+		log.append("hover %d" % radius)
+
+	func paint_pick() -> void:
+		log.append("pick")
+
+	func paint_step(step: int) -> void:
+		log.append("step %d" % step)
+
+	func paint_radius_changed(radius: int) -> void:
+		log.append("radius %d" % radius)
 
 
 ## A command that folds the next one of its kind into itself.

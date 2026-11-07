@@ -97,8 +97,12 @@ var measure_points: Array[Vector3] = []
 ## Points clicked while calibrating the selected photo; calibrating while not null.
 var calibrating = null
 
-var _ortho_size := 1.0
-var _persp_xf := Transform3D()
+## The flat views are the editor kit's camera's (WkCamera.flat, zoom_at); the orbit and FPS
+## modes are the building workshop's only. `_ortho_size` is its orthographic size.
+var cam_ctl := WkCamera.new()
+var _ortho_size: float:
+	get: return cam_ctl.ortho_size
+	set(v): cam_ctl.ortho_size = v
 var _ruler: Label
 var _panel: PanelContainer
 var _photo_list: OptionButton
@@ -302,6 +306,7 @@ func _wants_tools() -> bool:
 
 func _ready() -> void:
 	super()
+	cam_ctl.ctx = wk_ctx   # no setup(): this workshop's camera keeps its own mouse ways
 	toolbox.add(_sketch_tool)
 	# What is made here is a gun (or a mech): File > Save, Save As and Open use their
 	# library (user://guns/), not the buildings'. F5 has its own slot, not the workshop's.
@@ -1096,45 +1101,24 @@ func set_view(v: int) -> void:
 		set_game_view(false)
 	if v == view:
 		return
-	if view == 0:
-		_persp_xf = _camera.global_transform
 	view = v
 	if v == 0:
-		_camera.projection = Camera3D.PROJECTION_PERSPECTIVE
-		_camera.global_transform = _persp_xf
-		_camera.set_process_unhandled_input(true)
+		cam_ctl.perspective()
 		_apply_section()
 		return
-	# Looking straight at the build. The camera's own click-to-look is off: a flat view
-	# is built in with the cursor, and a captured mouse would turn it.
-	_camera.set_process_unhandled_input(false)
-	if _camera.has_method("_set_captured"):
-		_camera.call("_set_captured", false)
-	_camera.projection = Camera3D.PROJECTION_ORTHOGONAL
-	_camera.size = _ortho_size
+	# Looking straight at the build (the kit's camera; its click-to-look off, `wk_camera_flat`).
 	work_plane = VIEWS[v]
 	_draw_work_plane()
 	var c := build_centre()
 	if _body():
 		# A body stands up the screen: it sits above the readouts along the bottom.
 		c += Vector3.DOWN * _ortho_size * 0.08
-	match VIEWS[v]:
-		"side":
-			_camera.global_position = c + Vector3.BACK * 60.0
-			_camera.look_at(c, Vector3.UP)
-		"top":
-			_camera.global_position = c + Vector3.UP * 60.0
-			_camera.look_at(c, Vector3.FORWARD)
-		"front":
-			_camera.global_position = c + Vector3.RIGHT * 60.0
-			_camera.look_at(c, Vector3.UP)
+	cam_ctl.flat(VIEWS[v], c)
 	_apply_section()
 
 
 func zoom(by: float) -> void:
-	_ortho_size = clampf(_ortho_size * by, 0.5, 80.0)
-	if view != 0:
-		_camera.size = _ortho_size
+	cam_ctl.zoom_flat(by)
 
 
 ## The middle of what has been built, or of the baseplate before anything is -- or of what
@@ -2568,7 +2552,10 @@ func set_tool(t: String) -> void:
 	if t == "" :
 		selection.clear()
 	_sketch.clear()
-	toolbox.use(&"sketch" if t == "sketch" else &"")
+	if t == "sketch":
+		toolbox.use(&"sketch")
+	elif toolbox.active_id() == &"sketch":
+		toolbox.use(&"")
 	_sketch_box.visible = t == "sketch"
 	if t != "" and _painting:
 		_set_painting(false)
@@ -3969,12 +3956,7 @@ func _zoom_input(e: InputEvent) -> bool:
 ## Zoom a flat view by `by`, keeping the point at `under` (on the camera's own plane)
 ## where it is on the screen.
 func zoom_at(under: Vector3, by: float) -> void:
-	var n := -_camera.global_transform.basis.z
-	var cam := _camera.global_position
-	var d := cam - under
-	var flat := d - n * d.dot(n)
-	zoom(by)
-	_camera.global_position = under + flat * by + n * d.dot(n)
+	cam_ctl.zoom_at(under, by)
 
 
 func _draw_photo_grid() -> void:

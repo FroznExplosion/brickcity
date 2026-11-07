@@ -15,7 +15,8 @@ const LOOK_SENSITIVITY := 0.0022
 
 ## Off for automated screenshot runs, which must not steal the mouse.
 var capture_mouse := true
-## A click takes the mouse. The building workshop says no: its WorkshopView takes and gives
+## A click takes the mouse. The building workshop says no: its camera (the editor kit's
+## WkCamera) takes and gives
 ## the mouse, so a click only ever does what the tool in hand does.
 var click_captures := true
 

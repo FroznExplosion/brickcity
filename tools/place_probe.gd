@@ -531,8 +531,24 @@ func _check_paint_brush() -> void:
 	_ws._pick_paint_ray(Vector3(12.5 * STUD, 20.0, 10.5 * STUD), down)
 	_ok("the eyedropper takes a brick's colour and material, not its part",
 			_ws._colour == 11 and _ws._hotbar.part() == part_before)
+	# The brush is the editor kit's Paint tool (Docs/BuildTools.md section 20): in hand with
+	# B, it takes - = itself, and a stroke it is drawing is one undo.
+	_ok("the brush is the kit's Paint tool, in hand", _ws.toolbox.active_id() == &"paint")
+	var eq := InputEventKey.new()
+	eq.keycode = KEY_EQUAL
+	eq.pressed = true
+	_ws._unhandled_input(eq)
+	_ok("= widens its reach through the tool", _ws._paint_radius == 1 and _ws._paint_tool.radius == 1)
+	_ws._paint_radius = 0
+	var steps: int = _ws.undo_stack.size()
+	_ws._paint_tool.begin_stroke()
+	_ws._paint_ray(Vector3(30.5 * STUD, 20.0, 10.5 * STUD), down)
+	_ws._paint_tool.end_stroke()
+	_ok("a stroke through the tool is one undo step", _ws.undo_stack.size() == steps + 1
+			and _ws.undo_stack.top_kind() == &"paint" and _ws.recipe.colour_of(3) == 11)
 	_ws._set_painting(false)
 	_ok("and the palette goes with the brush", not _ws._paint_palette.visible)
+	_ok("and the tool is put down", _ws.toolbox.active_id() == &"")
 
 
 func _check_hotbar() -> void:

@@ -943,6 +943,8 @@ var breaks := 0      ## times a landing snapped a piece across its width
 var floor_breaks := 0  ## of those, on a storey line (_is_floor_line)
 var seam_breaks := 0   ## of those, at the weakest seam in reach (_weak_seam)
 var crack_breaks := 0  ## of those, cracks across X or Z (_weak_crack)
+var tree_breaks := 0   ## landings the strength tree broke (snap_by_tree), not counted in `breaks`
+var tree_pieces := 0   ## the pieces those made, all told
 ## Studs the weakest seams in reach of landings held with, and the storey
 ## lines beside them -- where there was one of each to count.
 var seam_studs_chosen := 0
@@ -4325,8 +4327,18 @@ func split_if_broken(isl: BrickIsland) -> void:
 	# then.
 	var cracked := not isl.cracks_x.is_empty() or not isl.cracks_z.is_empty()
 	var t0 := Time.get_ticks_usec()
-	var comps: Array = world.crack_components(isl.chunk, isl.cracks_x, isl.cracks_z) \
-			if cracked else world.get_components_near(isl.chunk)
+	var comps: Array
+	if not isl.tree_hit.is_empty():
+		# A landing the strength tree breaks (_snap_across): its pieces, from
+		# the joints as they are now. Asked once; what it leaves is one piece
+		# each, and anything else cut off since comes away with the next search.
+		comps = world.call(&"strength_split", isl.chunk, isl.tree_hit[0], isl.tree_hit[1],
+				isl.tree_hit[2], true)
+		isl.tree_hit = []
+	elif cracked:
+		comps = world.crack_components(isl.chunk, isl.cracks_x, isl.cracks_z)
+	else:
+		comps = world.get_components_near(isl.chunk)
 	var ms := float(Time.get_ticks_usec() - t0) / 1000.0
 	find_ms[0] += ms
 	find_ms[1] = maxf(find_ms[1], ms)
@@ -4474,9 +4486,10 @@ func fracture_on_impact(isl: BrickIsland, severity: float) -> void:
 	if near:
 		var bands0 := band_breaks
 		var cracks0 := crack_breaks
+		var trees0 := tree_breaks
 		loosened.append_array(_snap_across(isl, contacts, severity))
 		banded = band_breaks > bands0
-		cracked = crack_breaks > cracks0
+		cracked = crack_breaks > cracks0 or tree_breaks > trees0
 		_tu = _upart("land: snap", _tu)
 	else:
 		# Counted as a landing all the same, so a piece bouncing in the
@@ -4522,6 +4535,42 @@ func _hand_over(isl: BrickIsland, contacts: Array, severity: float) -> void:
 		for i in mini(contacts.size(), IMPACT_HANDOVERS_MAX):
 			var c: Dictionary = contacts[i]
 			on_impact.call(isl, c.point, severity, c.collider)
+
+
+## **Where a landing breaks a piece: its strength tree** (BrickWorld.strength_split;
+## Docs/DestructionFirstPrinciples.md A5, B6). The piece parts along whatever
+## holds it with the fewest studs for its size -- a wall up its length, a tower
+## at a storey, a part held by one stud first -- into one piece or several by
+## how hard it came down. Off: the seam and crack rules below decide, as before;
+## on, they still do when the tree makes one piece of it (the fallback).
+var snap_by_tree := true
+## Pieces bigger than this are not baked at a landing (about 2.6 ms for 1,000
+## bricks in a debug build, on the main thread): the seams decide.
+const TREE_MAX_BLOCKS := 3000
+## A landing's energy, as a multiple of what the piece's first cut costs from
+## where it touched (BrickWorld.strength_split, relative): at the snap threshold
+## (severity == need) a little over one -- the first cut and no more -- and this
+## much again each time severity / need doubles. Logarithmic: a toppled tower's
+## far end arrives at ten times the threshold or more. Per brick in studs it
+## could not fit both a tower and a cottage, whose joints are twenty times
+## weaker for their size (strength_tree_probe).
+const TREE_FIRST_CUTS := 1.2
+## severity / need is counted up to this: past it a landing makes no more
+## pieces (a probe's 100 m/s made 24 of a 151-brick wall).
+const TREE_RATIO_MAX := 8.0
+## How far from the contact the energy halves, as a share of the piece's
+## length, and the bounds of that in metres.
+const TREE_FALLOFF_SHARE := 0.25
+const TREE_FALLOFF_MIN := 2.0
+const TREE_FALLOFF_MAX := 8.0
+
+
+## [energy (relative: in first cuts), falloff in metres] for a landing of a
+## piece `length` metres long that lost `severity` m/s where `need` snaps it.
+static func tree_landing(severity: float, need: float, length: float) -> Vector2:
+	var r := clampf(severity / maxf(need, 0.01), 1.0, TREE_RATIO_MAX)
+	return Vector2(TREE_FIRST_CUTS * (1.0 + log(r) / log(2.0)),
+			clampf(length * TREE_FALLOFF_SHARE, TREE_FALLOFF_MIN, TREE_FALLOFF_MAX))
 
 
 ## Tear a long piece across its width where it was struck.
@@ -4573,6 +4622,24 @@ func _snap_across(isl: BrickIsland, contacts: Array, severity: float) -> PackedI
 		soft_landings += 1
 		return torn
 	long_landings += 1
+
+	# Asked by name: a library built before strength_split (main's, until it is
+	# rebuilt after this merge) has no such method, and a typed call to it
+	# would not parse -- the seams decide there, as before.
+	if snap_by_tree and not contacts.is_empty() and world.has_method(&"strength_split"):
+		var alive := world.get_alive_block_count(isl.chunk)
+		if alive <= TREE_MAX_BLOCKS:
+			var lp: Vector3 = xf.affine_inverse() * ((contacts[0] as Dictionary).point as Vector3)
+			var ef := tree_landing(severity, need, length)
+			# Asked now, so a landing that would make one piece falls back to
+			# the seams; cut when the piece is split (split_if_broken), from
+			# the joints as they are then.
+			var groups: Array = world.call(&"strength_split", isl.chunk, lp, ef.x, ef.y, true)
+			if groups.size() > 1:
+				isl.tree_hit = [lp, ef.x, ef.y]
+				tree_breaks += 1
+				tree_pieces += groups.size()
+				return torn
 
 	# Offsets are measured in the piece's own space too: a world AABB's corner
 	# is not a point on a rotated axis, so projecting it gave a span that had
@@ -4747,8 +4814,9 @@ func _weak_seam(isl: BrickIsland, at: float, lo: float, hi: float,
 
 
 func snap_census_line() -> String:
-	return "landings snapped %d time(s): %d at the weakest seam in reach, %d of all of them on a storey line, %d cracked across, %d torn as a band; the weakest seams held with %d stud(s) all told, the storey lines beside them with %d" % [
-			breaks, seam_breaks, floor_breaks, crack_breaks, band_breaks, seam_studs_chosen, seam_studs_floor]
+	return "landings snapped %d time(s): %d at the weakest seam in reach, %d of all of them on a storey line, %d cracked across, %d torn as a band; the weakest seams held with %d stud(s) all told, the storey lines beside them with %d; the strength tree broke %d landing(s) into %d piece(s)" % [
+			breaks, seam_breaks, floor_breaks, crack_breaks, band_breaks, seam_studs_chosen, seam_studs_floor,
+			tree_breaks, tree_pieces]
 
 
 ## A cell's size along a piece's own X, Y or Z.
