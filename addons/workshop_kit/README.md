@@ -24,9 +24,10 @@ Version: see `VERSION`. Raise it with every change to this folder.
 | `core/wk_toolbox.gd` | `WkToolbox` — the tools and which one is in hand: `add`, `use(id)`, `input`, `process`. |
 | `services/wk_sketch_pen.gd` | `WkSketchPen` — a stroke on a plane: freehand, brush, rectangle, ellipse, polygon; its outline, brush entry, cells, preview lines. |
 | `tools/wk_sketch_tool.gd` | `WkSketchTool` — Sketch: draws with the pen, asks the context where (`sketch_begin`, `sketch_point`) and hands the stroke over (`sketch_commit`). |
+| `tools/wk_paint_tool.gd` | `WkPaintTool` — Paint: a stroke as one undo, an eyedropper, the brush's reach; asks `paint_begin`, `paint_at`, `paint_end`, `paint_hover`, `paint_pick`, `paint_step`. |
 | `tests/wk_smoke.gd` | Everything above, headless, on a pretend document and a pretend context. |
 
-Coming, in this order (Docs/BuildTools.md §20): Paint, the grid shapes, the rest of the shared
+Coming, in this order (Docs/BuildTools.md §20): the grid shapes, the rest of the shared
 tools one file each, `WkCamera`, `WkMirror`, `WkGrid`, `WkGhost`, `WkFrame`.
 
 ## 1b. A tool in an editor

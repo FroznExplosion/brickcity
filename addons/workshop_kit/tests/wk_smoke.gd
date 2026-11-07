@@ -18,6 +18,7 @@ func _init() -> void:
 	_undo_stack()
 	_toolbox()
 	_sketch_tool()
+	_paint_tool()
 	print("wk_smoke: %d passed, %d failed" % [_pass, _fail])
 	quit(0 if _fail == 0 else 1)
 
@@ -280,6 +281,46 @@ func _sketch_tool() -> void:
 	_ok("putting the tool down gives up its stroke", not sk.drawing() and ctx.cancels == 2)
 
 
+func _key(code: int) -> InputEventKey:
+	var e := InputEventKey.new()
+	e.keycode = code
+	e.pressed = true
+	return e
+
+
+func _paint_tool() -> void:
+	var ctx := _Ctx.new()
+	var box := WkToolbox.new()
+	box.ctx = ctx
+	var pt: WkPaintTool = box.add(WkPaintTool.new())
+	box.use(&"paint")
+	box.input(_click(MOUSE_BUTTON_LEFT, true))
+	_ok("a press starts a stroke and paints under the cursor", pt.stroking()
+			and ctx.log == ["begin", "at 0"], str(ctx.log))
+	box.input(_click(MOUSE_BUTTON_LEFT, false))
+	_ok("release ends it: one step for the editor", not pt.stroking() and ctx.log.back() == "end")
+	box.input(_key(KEY_EQUAL))
+	box.input(_key(KEY_EQUAL))
+	box.input(_key(KEY_MINUS))
+	_ok("- = the reach, and the editor is told", pt.radius == 1 and ctx.log.back() == "radius 1")
+	pt.radius = 99
+	_ok("the reach is held to its most", pt.radius == pt.radius_max)
+	pt.radius = 0
+	box.input(_click(MOUSE_BUTTON_MIDDLE, true))
+	_ok("MMB takes a paint", ctx.log.back() == "pick")
+	box.input(_key(KEY_PAGEDOWN))
+	_ok("Page Down: the paint before", ctx.log.back() == "step -1")
+	box.process(0.016)
+	_ok("each frame shows the brush; no stroke, no paint", ctx.log.back() == "hover 0")
+	box.input(_click(MOUSE_BUTTON_LEFT, true))
+	box.process(0.016)
+	_ok("a stroke whose button is up (headless) ends on the next frame", not pt.stroking()
+			and ctx.log.slice(-2) == ["hover 0", "end"], str(ctx.log.slice(-3)))
+	box.input(_click(MOUSE_BUTTON_LEFT, true))
+	box.use(&"")
+	_ok("putting the brush down ends its stroke", not pt.stroking() and ctx.log.back() == "end")
+
+
 ## A pretend editor for the tools.
 class _Ctx:
 	extends WkContext
@@ -307,6 +348,30 @@ class _Ctx:
 
 	func sketch_cancel() -> void:
 		cancels += 1
+
+	var log := []
+
+	func paint_begin() -> void:
+		log.append("begin")
+
+	func paint_at(radius: int) -> bool:
+		log.append("at %d" % radius)
+		return true
+
+	func paint_end() -> void:
+		log.append("end")
+
+	func paint_hover(radius: int) -> void:
+		log.append("hover %d" % radius)
+
+	func paint_pick() -> void:
+		log.append("pick")
+
+	func paint_step(step: int) -> void:
+		log.append("step %d" % step)
+
+	func paint_radius_changed(radius: int) -> void:
+		log.append("radius %d" % radius)
 
 
 ## A command that folds the next one of its kind into itself.
