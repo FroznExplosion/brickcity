@@ -1061,7 +1061,7 @@ func _ground_under(p: Vector3) -> bool:
 ## said, standing on what it said; a floor shot out from under a spot refuses
 ## it; the focus brought down is left, and the next wave puts nobody in it.
 func run_gate() -> void:
-	var ok: Callable = city._gate_ok
+	var ok: Callable = Callable(city._pass_runner(), &"_gate_ok")
 	print("[arena] gate: waves in and round building %d" % focus)
 	ok.call("a focus building was found and the player stands in its street",
 			focus >= 0 and _player() != null, "focus %d" % focus)
@@ -1178,7 +1178,7 @@ func run_gate() -> void:
 			await get_tree().physics_frame
 			if feedback.hits - marks == 2 and not shot_hit and DirAccess.dir_exists_absolute("res://shots"):
 				shot_hit = true
-				await city._save("arena_hit")
+				await city._pass_runner()._save("arena_hit")
 		_mouse(false)
 		ok.call("the player's gun kills a soldier", feedback.kills_shown > kills0,
 				"%d hit(s) in %.1f s" % [feedback.hits - marks, _now() - t_fire])
@@ -1192,7 +1192,7 @@ func run_gate() -> void:
 				last_dead_id != 0 and instance_from_id(last_dead_id) == null)
 		await _frames(10)
 		if DirAccess.dir_exists_absolute("res://shots"):
-			await city._save("arena_fight")
+			await city._pass_runner()._save("arena_fight")
 	else:
 		ok.call("a soldier comes into the player's sight", false)
 
