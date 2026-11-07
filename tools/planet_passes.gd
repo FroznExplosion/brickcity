@@ -160,7 +160,7 @@ func _shift_test() -> void:
 		# The first frame drawn after it: physics interpolation reset, or a
 		# 2 km smear.
 		if i == 1 and drawn:
-			await city._save(_tag + "_0_c0")
+			await city._pass_runner()._save(_tag + "_0_c0")
 	print("[planet] shift: by %v -- %s" % [offset, r])
 	var deltas: Array = []
 	for i in range(1, stamps.size()):
@@ -349,7 +349,7 @@ func _jitter_at(km: float, spot: Vector3, hit: Dictionary) -> Array:
 	var pics := {}
 	const TURN := 0.002   # rad a frame: 7 degrees over a measurement
 	if drawn:
-		await c._save("planet_jitter_%02dkm_stack" % int(km))
+		await c._pass_runner()._save("planet_jitter_%02dkm_stack" % int(km))
 		var home := func() -> void:
 			pawn.place(spot + Vector3(0.0, 0.2, 0.0))
 			cam.global_rotation = Vector3(-0.12, -PI * 0.5, 0.0)
@@ -401,7 +401,7 @@ func _jitter_at(km: float, spot: Vector3, hit: Dictionary) -> Array:
 		px_err.append(want.distance_to(got))
 		if f == 45 and not shot_done and DisplayServer.get_name() != "headless":
 			shot_done = true
-			await c._save("planet_jitter_%02dkm" % int(km))
+			await c._pass_runner()._save("planet_jitter_%02dkm" % int(km))
 	strafing[0] = false
 	city.get_tree().physics_frame.disconnect(mover)
 	print("[planet] jitter %.0f km: the camera went %.1f mm in the strafe (pawn %s)" % [
@@ -643,7 +643,7 @@ func _look(view: Array, offset: Vector3) -> void:
 func _view_shot(view: Array, offset: Vector3, shot: String) -> void:
 	_look(view, offset)
 	await _frames(12)
-	await city._save(shot)
+	await city._pass_runner()._save(shot)
 
 
 ## Where two shots differ: the share of pixels off by more than 0.06 in any
