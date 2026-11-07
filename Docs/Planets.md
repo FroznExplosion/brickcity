@@ -2806,6 +2806,34 @@ Not seen on screen. `--gate=hull` fails one check on main as it stands, with or 
 ("up from the seat in flight: on its ghost, standing still on it as it glides": the pawn 1.313 m along the
 deck): the room-modules chat's.
 
+#### Plan, a generated town's garrison by its size (2026-11-06)
+
+Home's waves already bring the mixes, a tank (wave 4) and a mech (wave 5). A generated town still
+raises one squad of four from the second mix, whatever its size (3x3 to 6x6 blocks, `PlanetSystem._populate`),
+with nobody leading it. As the firefight does (a wave in squads of `Commander.SQUAD_SIZE`, armour with
+the bigger ones), a town's garrison is sized by its buildings:
+
+1. **Size.** `PlanetBuildings.town_sites` keeps how many buildings each `add_town` laid (home's town too).
+   `PlanetGarrison.plan_for(n)`: squads `clamp(round(n / 9), 1, 3)` of four (a 3x3 town ~8 buildings:
+   one; 4x4 ~14 and 5x5 ~21: two; 6x6 ~31: three); a **tank** from 18 buildings, a **mech** from 26,
+   made as home's waves make them (`_field_tank`, `_field_mech`). The first squad stands in the middle
+   as now; the others in the streets round it (the town's own grid, half a block off), so the player
+   meets them from more than one side.
+2. **An officer.** Each generated town has one, as the arena's HQ has (`WaveDirector._set_up_hq`: the
+   `officer` kind, a pistol, gold so he is picked out, HOLD): he holds the town's middle. While he
+   lives he is the squads' radio: a squad that has seen nobody is told where the player is once any
+   squad has (the hunting noise the garrison already gives one squad). Killed, each squad goes on its
+   own contact only. The town is clear when he is down too.
+3. **Saved.** Each survivor's squad (or officer) goes in the save with its kind; back, they come back in
+   their squads.
+4. Home's waves are as they are (one squad a wave, its own mixes); its town is not given an officer here.
+
+Gates: `--gate=garrison` checks the garrison its town's size asks for (the town is whichever the gate
+lands by: rolled) and the officer holding; `--gate=garrison --big` makes the town count as 31 buildings,
+so three squads, the tank and the mech are raised, close and fire, and are wiped out to clear it.
+Not in this step: rocketeers (not built), the officer in a building's top floor (planet rooms' floor
+spots), survivors of a town left for another (they still just go).
+
 #### Plan, saving (2026-11-01)
 
 As zylanntest (its Docs/save_format_and_data_longevity.md, future_features_save_guide.md): the **universe**
