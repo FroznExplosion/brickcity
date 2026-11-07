@@ -30,10 +30,11 @@ Version: see `VERSION`. Raise it with every change to this folder.
 | `services/wk_mirror.gd` | `WkMirror` — the mirror plane: on, across X or Z, where; a cell's and a direction's mirror image. |
 | `tools/wk_sketch_tool.gd` | `WkSketchTool` — Sketch: draws with the pen, asks the context where (`sketch_begin`, `sketch_point`) and hands the stroke over (`sketch_commit`). |
 | `tools/wk_paint_tool.gd` | `WkPaintTool` — Paint: a stroke as one undo, an eyedropper, the brush's reach; asks `paint_begin`, `paint_at`, `paint_end`, `paint_hover`, `paint_pick`, `paint_step`. |
+| `ui/wk_rail.gd` | `WkRail` — the tool rail: icon + name + key buttons with a pop-up, a line for the tool in hand, action buttons, the tool's options; `restyle` takes the editor's panel box. |
 | `tests/wk_smoke.gd` | Everything above, headless, on a pretend document and a pretend context. |
 
-Coming, in this order (Docs/BuildTools.md §20): `WkFrame` (the menu bar, rail, panels and hint
-line), then the rest of the shared tools one file each.
+Coming, in this order (Docs/BuildTools.md §20): `WkFrame` (the menu bar, panels and hint
+line round the rail), then the rest of the shared tools one file each.
 
 ## 1b. A tool in an editor
 

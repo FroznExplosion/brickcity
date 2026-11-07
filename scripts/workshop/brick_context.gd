@@ -120,3 +120,13 @@ func camera_wheel_shift(step: int) -> void:
 
 func camera_flat(on: bool) -> void:
 	ws.wk_camera_flat(on)
+
+
+# Look: the game's UI kit (ui/core/GameUI.gd, on menu/'s MenuTheme), text scale and all.
+
+func style_ui(root: Control) -> void:
+	GameUI.style(root)
+
+
+func panel_box() -> StyleBox:
+	return GameUI.panel_box(0.96)

@@ -22,6 +22,20 @@ var undo_stack: WkUndoStack = null
 
 
 # ---------------------------------------------------------------------------
+# Look (WkRail, the frame)
+# ---------------------------------------------------------------------------
+
+## Give a kit panel the editor's look (a Theme, fonts, text scale). Default: its own look.
+func style_ui(_root: Control) -> void:
+	pass
+
+
+## The editor's panel box for kit panels, or null to keep theirs.
+func panel_box() -> StyleBox:
+	return null
+
+
+# ---------------------------------------------------------------------------
 # Sketch (WkSketchTool)
 # ---------------------------------------------------------------------------
 

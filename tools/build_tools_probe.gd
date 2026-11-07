@@ -239,7 +239,7 @@ func _hold(part: String) -> void:
 func _rail_checks() -> void:
 	print("[probe] the rail")
 	var t: WorkshopTools = _ws._tools
-	_ok("the building workshop has the rail", t != null and t.rail is ToolRail)
+	_ok("the building workshop has the rail", t != null and t.rail is WkRail)
 	_ok("with its tools, each with a pop-up and an icon", t.rail.buttons.size() == WorkshopTools.TOOLS.size()
 			and (t.rail.buttons.values() as Array).all(func(b: Button) -> bool:
 				return b.tooltip_text.length() > 20 and b.icon != null))
