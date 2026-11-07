@@ -1,7 +1,7 @@
 class_name WorkshopTools
 extends Node
 
-## The building workshop's tools (Docs/BuildTools.md): the rail down the left (`ToolRail`,
+## The building workshop's tools (Docs/BuildTools.md): the rail down the left (`WkRail`,
 ## the asset workshop's own), and the tools that build buildings fast -- Shapes of the held
 ## brick, flat or standing as a wall, staggered or aligned; Cut, for doorways and windows;
 ## Walls, Floor, Roof and Stairs, the parts of a house a click or two each;
@@ -86,7 +86,7 @@ const REPEAT_WHAT := [["building", "Building"], ["storey", "One storey"], ["shap
 const REPEAT_DIRS := [["up", "Up"], ["x", "Along X"], ["z", "Along Z"]]
 
 var ws    ## the workshop (workshop.gd)
-var rail: ToolRail
+var rail: WkRail
 ## Hand, Edit and View's buttons, across the screen under the menus.
 var _bar: PanelContainer
 ## The button under the tools for the brick menu.
@@ -271,8 +271,10 @@ func setup(workshop, layer: CanvasLayer) -> void:
 	ws = workshop
 	sketch.rmb_cancels = true   # RMB outside a stroke is the workshop's own (it takes a brick up)
 	ws.toolbox.add(sketch)
-	rail = ToolRail.new(210.0, true)
+	rail = WkRail.new(210.0, true)
 	rail.name = "ToolRail"
+	ws.wk_ctx.style_ui(rail)          # the game's look (GameUI, MenuTheme), through the kit's seam
+	rail.restyle(ws.wk_ctx.panel_box())
 	layer.add_child(rail)
 	rail.fill("Build", TOOLS, pick, [], 2)
 	bricks_button = rail.add_under_tools("Bricks   Tab", "place", "Bricks  (Tab)\nOpen or close the menu of every brick.",
@@ -1533,7 +1535,7 @@ func _step_level(d: int) -> void:
 	if not _draft.is_empty():
 		_draft.at = sketch_level
 	_level_spin.set_value_no_signal(sketch_level)
-	ToolRail.light(_drawon_row, "level")
+	WkRail.light(_drawon_row, "level")
 
 
 ## Say something on the rail for a few seconds (a fill refused, the next click wanted).
@@ -2305,7 +2307,7 @@ func plan_on_top(with_plan: bool) -> void:
 		_draft.subs = (sh.points.subs as Array).duplicate(true)
 	if _level_spin != null:
 		_level_spin.set_value_no_signal(sketch_level)
-		ToolRail.light(_drawon_row, "level")
+		WkRail.light(_drawon_row, "level")
 	say("On top, at plate %d. Draw%s, then Raise." % [sketch_level, " onto its plan" if with_plan else ""])
 
 
@@ -3145,7 +3147,7 @@ func process() -> void:
 	var on := active()
 	rail.show_active(rail_id(on), TOOLS)
 	_hand_box.visible = rail_id(on) == "hand"
-	ToolRail.light(_hand_row, on)
+	WkRail.light(_hand_row, on)
 	rail.show_toggles({"lock": ws.plane_locked, "snap": ws._snap_on, "mirror": ws.mirror_on,
 			"grid": ws._grid_on, "stress": ws._overlay_on, "keys": ws._keys_on, "fps": view.mode == "fps"})
 	rail.set_action_text("layer", ["Structure", "Interior", "Detail"][clampi(ws._role, 0, 2)])

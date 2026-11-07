@@ -74,7 +74,9 @@ static func _settings() -> Node:
 
 static func _text_scale() -> float:
 	var s := _settings()
-	return float(s.get_value(&"text_scale")) if s != null else 1.0
+	var v = s.get_value(&"text_scale") if s != null else null
+	# No value yet (settings not loaded: a probe run as a script): the default.
+	return float(v) if v != null else 1.0
 
 
 static func _high_contrast() -> bool:
