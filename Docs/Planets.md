@@ -2806,6 +2806,11 @@ Not seen on screen. `--gate=hull` fails one check on main as it stands, with or 
 ("up from the seat in flight: on its ghost, standing still on it as it glides": the pawn 1.313 m along the
 deck): the room-modules chat's.
 
+**Generated towns differ (2026-11-07).** A generated town's squad is drawn from one of the mixes after the
+first, chosen by the town itself (`PlanetGarrison.mix_index`): towns differ, and a town is the same every
+time it is raised. `--gate=garrison` 18/18: its town's mix 3 (rifleman, breacher, marksman); 12 towns spread
+over all 3 mixes.
+
 #### Plan, saving (2026-11-01)
 
 As zylanntest (its Docs/save_format_and_data_longevity.md, future_features_save_guide.md): the **universe**

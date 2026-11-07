@@ -4661,6 +4661,18 @@ func _run_garrison_gate() -> void:
 		await _frames(1)
 		g = garrisons.get(world)
 	_check("the town's squad is raised, four strong", g != null and g.squad != null and g.squad.alive().size() == 4)
+	if g != null and g.squad != null:
+		var mix: Array = PlanetGarrison.WAVE_KINDS[g.mix_index()]
+		var theirs: Array = []
+		var own := true
+		for m in g.squad.alive():
+			theirs.append(m.get_meta(&"unit", &""))
+			own = own and mix.has(m.get_meta(&"unit", &""))
+		var mixes := {}
+		for k in 12:
+			mixes[g.mix_index(k)] = true
+		_check("drawn from its town's own mix; towns differ", own and mixes.size() >= 2,
+				"mix %d: %s; %d mixes over 12 towns" % [g.mix_index(), ", ".join(theirs), mixes.size()])
 	_check("on the world's own AI, the player's kit with it", ai_of.get(world) == ai and ai != home_ai and kit.services == ai
 			and ai.pawns.has(pawn) and not home_ai.pawns.has(pawn))
 	var q := g.squad
