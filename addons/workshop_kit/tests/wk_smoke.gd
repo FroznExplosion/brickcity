@@ -163,6 +163,37 @@ func _undo_stack() -> void:
 	_ok("forget_where takes them from inside groups, empty groups go", gone == 2 and s.size() == 2,
 			"%d gone, %d steps" % [gone, s.size()])
 
+	# on_empty: a document's own records, taken back one per Z with no command each.
+	s.clear()
+	doc = [10, 11]
+	_add(s, 12)
+	s.on_empty = func() -> WkCommand:
+		if doc.size() <= 0:
+			return null
+		var n: int = doc.pop_back()
+		return WkCommand.make(&"opened", n, _unadd, _readd)
+	s.undo()
+	_ok("on_empty waits for the history to run out", doc == [10, 11])
+	s.undo()
+	s.undo()
+	_ok("then takes the document back, one a step", doc.is_empty() and s.redo_size() == 3)
+	_ok("and stops when it has none", not s.undo())
+	s.redo()
+	_ok("what it took comes back with redo", doc == [10])
+	s.on_empty = Callable()
+
+	# alive: an edit whose work went some other way is skipped, not a wasted Z.
+	s.clear()
+	doc.clear()
+	_add(s, 1)
+	_add(s, 2)
+	var vanished := WkCommand.make(&"add", 3, _unadd, Callable(),
+			func(c: WkCommand) -> bool: return doc.has(c.data))
+	doc.append(3)
+	s.push(vanished)
+	doc.erase(3)   # taken away by hand
+	_ok("a command with nothing left is skipped", s.undo() and doc == [1] and s.size() == 1)
+
 	# merge
 	s.clear()
 	var a := _Merging.new()

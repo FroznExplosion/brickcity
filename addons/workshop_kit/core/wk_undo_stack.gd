@@ -14,6 +14,8 @@ extends RefCounted
 ## While a command is being undone or done again `busy` is true and pushes are dropped: the
 ## edit functions a command calls to put things back do not record themselves a second time.
 ##
+## A command that is no longer `alive` (what it made went some other way) is skipped by undo.
+##
 ## A new edit forgets what redo had (`push`, `forget_redo`). Undoing a command that cannot be
 ## redone (`WkCommand.can_redo`) forgets it too, so redo never jumps over a gap.
 
@@ -22,6 +24,11 @@ signal changed
 
 ## True while a command is being undone or redone.
 var busy := false
+## Undo with nothing left calls this, if set: `func() -> WkCommand`, which takes back one more
+## thing that has no command of its own -- the records of a document as it was opened, one per
+## Z, without a command for each -- and returns a command that does it again (or one that
+## cannot be redone), or null when there is nothing more.
+var on_empty := Callable()
 ## Goes up by one with every change: cheap to compare for "has the history moved".
 var version := 0
 
@@ -77,15 +84,21 @@ func group_last(n: int, tail: WkCommand = null, kind: StringName = &"group") -> 
 ## Take back the newest edit. False if there was none or it could not be undone.
 func undo() -> bool:
 	_close_open()
-	if _done.is_empty() or busy:
+	if busy:
 		return false
-	var c: WkCommand = _done.pop_back()
+	while not _done.is_empty() and not (_done.back() as WkCommand).alive():
+		_done.pop_back()   # nothing left to take back: not a step of its own
+	if _done.is_empty():
+		return _undo_beyond()
+	# It stays in the history while it runs, so what it calls (renumbering what the history
+	# keeps, `leaves`) still reaches the commands inside it not undone yet.
+	var c: WkCommand = _done.back()
 	busy = true
 	var ok := c.undo()
 	busy = false
 	if not ok and not c is WkGroup:
-		_done.append(c)   # nothing happened: it is still the newest edit
-		return false
+		return false   # nothing happened: it is still the newest edit
+	_done.erase(c)
 	if c.can_redo():
 		_undone.append(c)
 	else:
@@ -94,17 +107,34 @@ func undo() -> bool:
 	return ok
 
 
+func _undo_beyond() -> bool:
+	if not on_empty.is_valid():
+		return false
+	busy = true
+	var c = on_empty.call()
+	busy = false
+	if c == null:
+		return false
+	if (c as WkCommand).can_redo():
+		_undone.append(c)
+	else:
+		_undone.clear()
+	_changed()
+	return true
+
+
 ## Do the newest undone edit again. Returns it, or null if there was none or it failed.
 func redo() -> WkCommand:
 	_close_open()
 	if _undone.is_empty() or busy:
 		return null
 	var c: WkCommand = _undone.pop_back()
+	_done.append(c)   # in the history while it runs, as for undo
 	busy = true
 	var ok := c.do()
 	busy = false
-	if ok or c is WkGroup:
-		_done.append(c)
+	if not ok and not c is WkGroup:
+		_done.erase(c)
 	_changed()
 	return c if ok else null
 

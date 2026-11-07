@@ -52,6 +52,13 @@ func do() -> bool:
 	return any
 
 
+func alive() -> bool:
+	for c in commands:
+		if (c as WkCommand).alive():
+			return true
+	return false
+
+
 func can_redo() -> bool:
 	for c in commands:
 		if not (c as WkCommand).can_redo():

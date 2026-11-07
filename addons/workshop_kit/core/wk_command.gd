@@ -25,14 +25,19 @@ var tail := false
 
 var _undo_fn := Callable()
 var _do_fn := Callable()
+var _alive_fn := Callable()
 
 
-static func make(p_kind: StringName, p_data: Variant, undo_fn: Callable, do_fn := Callable()) -> WkCommand:
+## `alive_fn` (`func(c: WkCommand) -> bool`), if given: whether the edit still has anything to
+## take back (`alive`).
+static func make(p_kind: StringName, p_data: Variant, undo_fn: Callable, do_fn := Callable(),
+		alive_fn := Callable()) -> WkCommand:
 	var c := WkCommand.new()
 	c.kind = p_kind
 	c.data = p_data
 	c._undo_fn = undo_fn
 	c._do_fn = do_fn
+	c._alive_fn = alive_fn
 	return c
 
 
@@ -44,6 +49,13 @@ func undo() -> bool:
 ## Do the edit again, after an undo. False if it could not be.
 func do() -> bool:
 	return bool(_do_fn.call(self)) if _do_fn.is_valid() else false
+
+
+## Whether there is still anything to take back: what the edit made may have gone some other
+## way since (deleted by hand). Undo drops a command that is not alive and goes on to the next,
+## so Z never does nothing. Default: alive.
+func alive() -> bool:
+	return bool(_alive_fn.call(self)) if _alive_fn.is_valid() else true
 
 
 ## Whether `do` can follow `undo`. Undoing one that cannot forgets everything redo had.

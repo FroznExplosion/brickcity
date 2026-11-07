@@ -48,7 +48,14 @@ func paint(cell, colour):
   `tail`: a snapshot command that must run after the group's edits both ways.
 * **Strictly last in, first out.** An editor whose records are numbered in the order they were
   made can rely on undo never reaching past a newer edit. If something is removed from the
-  middle by other means, `forget_where(pred)` drops the commands that made it.
+  middle by other means, `forget_where(pred)` drops the commands that made it -- or give the
+  command an `alive_fn` (fifth argument of `make`): undo skips a command that is no longer alive,
+  so Z never does nothing, and one whose thing comes back (an undo laid it back) is alive again.
+* **A command keeps its place while it runs**: during its `undo`/`do`, `leaves()` still lists it,
+  so an editor renumbering what the history holds reaches the commands of a group not undone yet.
+* **`on_empty`.** Undo with nothing left calls it, if set, to take back one more thing that has
+  no command of its own -- the records of a document as it was opened, one per Z, without
+  creating thousands of commands on open. It returns a command that redoes it, or null.
 
 ## 3. Porting it into another project
 
