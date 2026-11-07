@@ -178,3 +178,25 @@ quad), so a 200-brick stair piece is 577k vertices (build mode's `spiralcw_10x10
 twice a small piece's mesh built on the main thread at spawn took 44 / 116 ms (146-185 bricks,
 mesh under 30k vertices, so not the stairs); it did not happen in the run after, so the cause is
 not known yet -- time `rebuild_mesh(isl, true, true)` in `spawn` when it comes back.
+
+**(a) written, not yet measured (2026-11-07, `IslandManager.SLICE_VERTS`).** A piece whose mesh
+would be 120k vertices or more (32 a brick, 4 an authored triangle) is cut into sections before
+its first bake -- bands of about 30k (`SLICE_BAND_VERTS`, at most 24). Its full rebuild builds
+them a band at a time within `UPLOAD_VERTS_PER_TICK` (`_advance_slices`), hidden, while what it
+drew goes on drawing, and swaps them in whole (`_swap_slices`); hits patch per band
+(`_patch_bands`). Settled banded pieces now go to stand-ins when far (bands draw until the
+stand-in is up), so do a toppled building's once it has settled and has no band holes. Report
+line: `[city] big pieces in bands`. To check on the first run: render flushes per piece, the
+invisible stretch (a big piece's first mesh now waits for all its bands), draw calls.
+
+**Band patches at the band's own index width (brick_world.cpp `update_index_regions`).** A patch
+was written at one width for the whole chunk -- the width of the LAST band built (CityScene
+`_brick_index_width`) -- so a building with one band over 65,536 vertices and others under got
+garbage patched into the bands at the other width. Each section's width now follows from its
+own faces x 4 vertices, as the chamfered bands' patches already did. The width argument is kept
+and ignored.
+
+Also seen in the last run's ticks: the 118 ms "shed: spawns" tick was the 116 ms main-thread
+spawn mesh above (one event, not two). A shell piece's bricks "laid" 100 ms once for 11,863
+bricks, against 8-21 ms for 7,000-24,000 in the same run -- not the size; next time, time the
+`cut_record` kills apart from `_lay_runs` (BuildingRegistry.shell_piece_chunk).

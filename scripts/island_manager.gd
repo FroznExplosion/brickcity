@@ -625,7 +625,6 @@ var _slicing: Array[BrickIsland] = []   ## pieces whose bands are being built (_
 var slices_built := 0       ## bands built for big pieces
 var slice_swaps := 0        ## big pieces that went over to their new bands
 var slice_restarts := 0     ## band builds dropped and begun again (bake gone, went far)
-var slice_mixed_width := 0  ## pieces whose bands came out at two index widths (patches fail)
 var slice_worst_ms := 0.0   ## the slowest band built on this thread
 var _held: Array = []     ## islands whose mesh update waits for a child to come up
 ## Most overlaps alive at once -- the cost of the fix, measured rather than
@@ -4982,10 +4981,7 @@ func _draws_bands(isl: BrickIsland) -> bool:
 ## when the last is built they replace it at once, so it is never drawn with
 ## holes. A hit afterwards patches the band it landed in (_patch_bands), as on
 ## a toppled building.
-##
-## A band is kept under INDEX16_MAX_VERTS (SLICE_BAND_VERTS): a patch is
-## written at one index width for the whole piece (update_index_regions), so a
-## band built at the other width could not take one.
+## SLICE_BAND_VERTS: about what one band is; a tick's budget is a few.
 const SLICE_VERTS := 120000
 const SLICE_BAND_VERTS := 30000
 const SLICE_MAX_BANDS := 24
@@ -5020,7 +5016,6 @@ func _clear_slices(isl: BrickIsland) -> void:
 			(node as MeshInstance3D).queue_free()
 	isl.slices = []
 	isl.slice_bytes = []
-	isl.slice_widths = PackedInt32Array()
 
 
 ## Build the next bands of the pieces being sliced, oldest first, as far as the
@@ -5071,7 +5066,6 @@ func _advance_slices() -> void:
 		isl.mesh.add_child(node)
 		isl.slices.append(node)
 		isl.slice_bytes.append(index_patch_bytes(arrays) if live else 0)
-		isl.slice_widths.append(index_width(arrays) if live else 0)
 		slices_built += 1
 		slice_worst_ms = maxf(slice_worst_ms, float(Time.get_ticks_usec() - t0) / 1000.0)
 
@@ -5093,22 +5087,8 @@ func _swap_slices(isl: BrickIsland) -> void:
 			(node as MeshInstance3D).queue_free()
 	isl.bands = isl.slices
 	isl.band_bytes = isl.slice_bytes
-	# One width for every patch (2 unless a band is 4): a band at the other
-	# cannot take one, and a hit on it rebuilds the piece (_patch_bands says no).
-	var width := 2
-	for w in isl.slice_widths:
-		width = maxi(width, w)
-	isl.index_width = width
-	var mixed := false
-	for si in isl.slice_widths.size():
-		if isl.slice_widths[si] != 0 and isl.slice_widths[si] != width:
-			isl.band_bytes[si] = 0
-			mixed = true
-	if mixed:
-		slice_mixed_width += 1
 	isl.slices = []
 	isl.slice_bytes = []
-	isl.slice_widths = PackedInt32Array()
 	if near_tier != null:
 		near_tier.untrack(isl.mesh)
 	for si in isl.bands.size():

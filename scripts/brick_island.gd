@@ -111,7 +111,6 @@ var coarse_drawn := false
 var slicing := false
 var slices: Array = []
 var slice_bytes: Array = []
-var slice_widths := PackedInt32Array()
 ## The arrays its coarse mesh was made from, while it is drawn by one: what a
 ## stand-in it leaves is merged from (IslandManager's rubble field). Reading a
 ## mesh back from the renderer instead was the GPU's copy -- 54 ms of a merge on
