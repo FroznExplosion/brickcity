@@ -319,6 +319,23 @@ const COARSE_REBUILD_TICKS := 15
 const COARSE_TICKS_PER_MS := 4.0
 
 
+## Crumbs -- what breaks off small, drawn as crumbs instead of bodies:
+## scripts/islands/island_crumbs.gd. Made in _init, before anything can ask for it.
+var crumbler: Node = null
+
+
+## The rubble field -- far wreckage at rest, drawn tile by tile:
+## scripts/islands/rubble_field.gd. Made in _init, before anything can ask for it.
+var rubble: Node = null
+
+
+func _init() -> void:
+	crumbler = (load("res://scripts/islands/island_crumbs.gd") as GDScript).new(self)
+	add_child(crumbler)
+	rubble = (load("res://scripts/islands/rubble_field.gd") as GDScript).new(self)
+	add_child(rubble)
+
+
 ## How long this piece's stand-in waits before it is built again.
 static func coarse_wait(isl: BrickIsland) -> int:
 	return maxi(COARSE_REBUILD_TICKS, int(isl.coarse_ms * COARSE_TICKS_PER_MS))
@@ -1127,8 +1144,8 @@ func record_detach(building: int, source: BrickIsland, chunk: int,
 		return DamageLog.piece_id(-_local_seq)
 	var gone := _over_the_cap(chunk, ids)
 	var far_small := not gone and _far_and_small(chunk, ids)
-	var crumbs := not gone and not far_small and source != null \
-			and _crumbles_off_a_piece(chunk, ids)
+	var crumbs: bool = not gone and not far_small and source != null \
+			and crumbler.crumbles_off_a_piece(chunk, ids)
 	if gone or crumbs or far_small:
 		e.flags |= DamageLog.FLAG_GONE
 	var pid := DamageLog.piece_id(_record(e))
@@ -1139,24 +1156,6 @@ func record_detach(building: int, source: BrickIsland, chunk: int,
 	if crumbs:
 		_crumbled_pieces[pid] = true
 	return pid
-
-
-## What comes off a PIECE -- shot apart, struck, broken by its own landing -- and
-## is LANDMARK_COUNT bricks or fewer is crumbs, not a body, landmark-sized or
-## not: wreckage coming apart into bricks. They were the most of what a
-## collapse made: 9-48 bricks, 141 bodies in a --big --shot, 91 of them from
-## shots at pieces (body_census, 2026-10-02). The host's decision, and it
-## travels in the DETACH as FLAG_GONE, so nobody keeps a body of it -- a
-## landmark is something every machine has or none does.
-func _crumbles_off_a_piece(chunk: int, ids: PackedInt32Array) -> bool:
-	if not decides or ids.size() > LANDMARK_COUNT or ids.size() <= DEBRIS_MAX_BLOCKS:
-		return false
-	var furniture := true
-	for id in ids:
-		if not world.is_block_decorative(chunk, id):
-			furniture = false
-			break
-	return not furniture and not _in_wind(_group_box(chunk, ids))
 
 
 ## Far from every player, a piece of fewer than FAR_DELETE_BLOCKS bricks is
@@ -1361,7 +1360,7 @@ func spawn(source: int, block_ids: PackedInt32Array,
 	var crumbled_as: int = CRUMB_NOT
 	if _crumbled_pieces.has(piece_id):
 		_crumbled_pieces.erase(piece_id)
-		crumbled_as = _crumble(source, block_ids, inherit_linear, LANDMARK_COUNT)
+		crumbled_as = crumbler.crumble(source, block_ids, inherit_linear, LANDMARK_COUNT)
 		if crumbled_as == CRUMB_NOT:
 			# Its DETACH said gone: out it goes, drawn or not.
 			var cut: Dictionary = world.split_island(source, block_ids)
@@ -1369,7 +1368,7 @@ func spawn(source: int, block_ids: PackedInt32Array,
 				world.release_chunk(int(cut.chunk))
 			crumbled_as = CRUMB_GONE
 	elif not landmark:
-		crumbled_as = _crumble(source, block_ids, inherit_linear)
+		crumbled_as = crumbler.crumble(source, block_ids, inherit_linear)
 	if crumbled_as == CRUMB_DRAWN:
 		spawn_census.crumbled[0] += 1
 		spawn_census.crumbled[1] += block_ids.size()
@@ -1546,10 +1545,6 @@ func spawn(source: int, block_ids: PackedInt32Array,
 ## that), and not inside a tornado's reach (windy): the wind lifts small pieces
 ## and throws them, and a crumb only falls.
 const CRUMB_LIFE_MS := 1400
-## Full size this long, then shrinking to nothing at CRUMB_LIFE_MS.
-const CRUMB_FULL_MS := 350
-## m/s: away from its building, at most -- off the face it came from.
-const CRUMB_KICK := 1.2
 ## m/s: each brick's own on top of that, so a handful comes apart as it falls.
 const CRUMB_SCATTER := 0.6
 ## rad/s at most.
@@ -1561,11 +1556,6 @@ const CRUMB_SPIN := 5.0
 ## 600 was for pieces of eight; what comes off a piece crumbles up to
 ## LANDMARK_COUNT (_crumbles_off_a_piece).
 const CRUMBS_MAX := 1500
-const CRUMB_FLOOR_MASK := Layers.WORLD | Layers.STRUCTURE | Layers.DEBRIS
-## A crumb's floor asked again on landing (_crumb_floor_gone), from this far
-## over where it was; lower by more than the slack, it had gone.
-const CRUMB_FLOOR_RECHECK := 0.3
-const CRUMB_FLOOR_SLACK := 0.05
 ## **Plastic clatters** (Docs/CollapseNext.md 1.10 (4)). A crumb that comes down
 ## faster than CRUMB_REST_SPEED bounces: up at `crumb_bounce` of the speed it came
 ## down at, along at CRUMB_SLIDE of what it had, turning still; slower, it stops
@@ -1576,10 +1566,7 @@ const CRUMB_FLOOR_SLACK := 0.05
 ## Feel numbers: Options > Gameplay, "Brick Bounce (Developer)" (crumb_bounce).
 const CRUMB_BOUNCE := 0.25
 const CRUMB_BOUNCE_MAX := 0.8
-const CRUMB_REST_SPEED := 1.5
-const CRUMB_SLIDE := 0.5
 static var crumb_bounce := CRUMB_BOUNCE
-var crumb_bounces := 0   ## times a crumb bounced
 
 ## **A blast destroys the middle of what it reaches and throws the rest out**
 ## (Docs/CollapseNext.md 1.10 (3); BrickFailure.md 5 -- bricks separate, they do
@@ -1602,10 +1589,6 @@ const BLAST_THROW := 3.0
 const CHIP_THROW := 1.8
 ## Crumbs one blast throws at most: past it, every so-manyth brick of the ring.
 const BLAST_CRUMBS_MAX := 48
-## A thrown brick that is out past the face of the hole before it has dropped
-## this far below what is under the hole comes down outside (_add_crumbs): a
-## course, so the bottom row of a ring leaves over the sill it stood on.
-const CRUMB_SILL := 0.45
 ## Structural bricks blasts and guns have killed: all of them; those in a core;
 ## those thrown as crumbs; and those not drawn -- too far, out of view, in a
 ## wind, no room (CRUMBS_MAX, BLAST_CRUMBS_MAX).
@@ -1684,7 +1667,6 @@ var heap: BrickHeap
 ## it came loose: it falls until it lands, for this long at most, and fades in
 ## the last CRUMB_FADE_MS of that (one that found no floor).
 const CRUMB_FALL_MAX_MS := 6000
-const CRUMB_FADE_MS := 600
 ## What lay on top of something that goes is within this far above it.
 const HEAP_LIFT := 0.8
 ## Bricks one event hands back to fall again; past it the rest are just gone.
@@ -1695,14 +1677,7 @@ var crumbled := 0            ## pieces that went as crumbs
 var crumb_bricks := 0        ## bricks that were drawn as crumbs
 var crumbs_over := 0         ## bricks not drawn for CRUMBS_MAX
 var crumb_worst_ms := 0.0    ## the slowest tick of _update_crumbs
-var crumb_update_ms := 0.0   ## _update_crumbs, all told
-var crumb_events := 0        ## of that, things that happened to a crumb (_crumb_event)
-var crumb_scanned := 0       ## crumbs looked at to find them
-var crumb_ticks := 0         ## ticks with crumbs
-var lay_us := 0              ## of that, laying crumbs that stopped in the heap (BrickHeap)
-var crumb_peak := 0          ## the most drawn at once
 var crumble_worst_ms := 0.0  ## the slowest single _crumble
-var crumble_parts := [0.0, 0.0, 0.0]  ## ms, all told: drawing, cutting out, deciding
 var _wind := {}              ## who -> [centre, radius, until msec]: windy()
 
 
@@ -1733,55 +1708,6 @@ func _in_wind(box: AABB) -> bool:
 ## What _crumble did: nothing (not a small piece), drew it as crumbs, or took
 ## it out with nothing drawn (far, or out of view, or CRUMBS_MAX).
 enum { CRUMB_NOT, CRUMB_DRAWN, CRUMB_GONE }
-
-
-## Crumble a small piece if it is one: out of its source, and drawn as crumbs if
-## it can be seen. CRUMB_NOT, and nothing done, for anything else.
-func _crumble(source: int, block_ids: PackedInt32Array, linear: Vector3,
-		limit := DEBRIS_MAX_BLOCKS) -> int:
-	var n := block_ids.size()
-	if n == 0 or n > limit:
-		return CRUMB_NOT
-	var furniture := true
-	for id in block_ids:
-		if not world.is_block_decorative(source, id):
-			furniture = false
-			break
-	if furniture:
-		return CRUMB_NOT
-	var box := _group_box(source, block_ids)
-	# Decided already when the DETACH said so (_crumbles_off_a_piece): the wind
-	# was asked then, and the blocks have to go now either way.
-	if limit == DEBRIS_MAX_BLOCKS and _in_wind(box):
-		return CRUMB_NOT
-	var t0 := Time.get_ticks_usec()
-	var dist := INF
-	if camera != null and is_instance_valid(camera):
-		dist = _distance_to_box(box, camera.global_position)
-	var far := dist > SMALL_KEEP_RANGE and dist < INF
-	var shown := not far and _box_seen(box)
-	if shown and crumb_count + n > CRUMBS_MAX:
-		crumbs_over += n
-		shown = false
-	var t_add := Time.get_ticks_usec()
-	if shown:
-		_add_crumbs(source, block_ids, box, linear)
-		crumbled += 1
-	elif far:
-		tiny_deleted += n
-	else:
-		discarded += n
-	crumble_parts[0] += float(Time.get_ticks_usec() - t_add) / 1000.0
-	# Out of the source the way every piece goes, and the grid it was given
-	# freed at once (_delete_where_it_is says why not killed in place).
-	var t_cut := Time.get_ticks_usec()
-	var cut: Dictionary = world.split_island(source, block_ids)
-	if not cut.is_empty():
-		world.release_chunk(int(cut.chunk))
-	crumble_parts[1] += float(Time.get_ticks_usec() - t_cut) / 1000.0
-	crumble_parts[2] += float(t_add - t0) / 1000.0
-	crumble_worst_ms = maxf(crumble_worst_ms, float(Time.get_ticks_usec() - t0) / 1000.0)
-	return CRUMB_DRAWN if shown else CRUMB_GONE
 
 
 ## What a blast or a gun has just killed in `source`, thrown out of it
@@ -1855,7 +1781,7 @@ func _throw_killed(source: int, killed: PackedInt32Array, at: Vector3, radius: f
 		crumbs_over += ring.size()
 		blast_census[6] += ring.size()
 		return
-	_add_crumbs(source, ring, box, linear, at, CHIP_THROW if chip else BLAST_THROW)
+	crumbler.add_crumbs(source, ring, box, linear, at, CHIP_THROW if chip else BLAST_THROW)
 	blast_census[2] += ring.size()
 
 
@@ -1890,7 +1816,7 @@ func throw_rows(rows: PackedFloat32Array, xf: Transform3D, at: Vector3, speed: f
 			or crumb_count + n > CRUMBS_MAX:
 		return 0
 	# It stood on a floor: one ray from under its middle finds it.
-	var floor_y := _crumb_floor(Vector3(box.get_center().x, box.position.y, box.get_center().z))
+	var floor_y: float = crumbler.crumb_floor(Vector3(box.get_center().x, box.position.y, box.get_center().z))
 	var fixed := 1 if _floor_on_ground else 0
 	var frame_basis := xf.basis.orthonormalized()
 	var now := Engine.get_physics_frames()
@@ -1898,11 +1824,11 @@ func throw_rows(rows: PackedFloat32Array, xf: Transform3D, at: Vector3, speed: f
 		var k := r * 16
 		var size := Vector3(absf(rows[k]), absf(rows[k + 5]), absf(rows[k + 10]))
 		var p: Vector3 = xf * Vector3(rows[k + 3], rows[k + 7], rows[k + 11])
-		var cr := _crumb_set(size.snapped(Vector3.ONE * 0.001))
+		var cr: Crumbs = crumbler.crumb_set(size.snapped(Vector3.ONE * 0.001))
 		var away := p - at
 		away = away.normalized() if away.length() > 0.01 else Vector3.UP
 		var axis := Vector3(randf() - 0.5, randf() - 0.5, randf() - 0.5)
-		_crumb_push(cr, p, away * speed * randf_range(0.3, 1.0) + Vector3(randf_range(-1.0, 1.0),
+		crumbler.crumb_push(cr, p, away * speed * randf_range(0.3, 1.0) + Vector3(randf_range(-1.0, 1.0),
 				randf_range(0.0, 1.0), randf_range(-1.0, 1.0)) * CRUMB_SCATTER,
 				frame_basis, axis, randf_range(-CRUMB_SPIN, CRUMB_SPIN), now, floor_y,
 				size.y * 0.5, Color(rows[k + 12], rows[k + 13], rows[k + 14], rows[k + 15]), fixed)
@@ -1916,322 +1842,7 @@ func blast_census_line() -> String:
 			blast_census[5], blast_census[6], blast_throw_ms[0], blast_throw_ms[1]]
 
 
-func crumb_cost_line() -> String:
-	return "crumbs of every kind: %d at once at the most, moving them %.1f ms all told (laying the ones that stopped %.1f), %.2f the worst tick; %d ticks, %d events, %d looked at" % [
-			crumb_peak, crumb_update_ms, float(lay_us) / 1000.0, crumb_worst_ms, crumb_ticks,
-			crumb_events, crumb_scanned]
-
-
-## `burst` and `throw`: thrown from a blast at `burst` (throw_killed) -- `throw`
-## m/s off the face at most instead of CRUMB_KICK, and each brick its own way
-## from the middle of the blast as well.
-func _add_crumbs(source: int, block_ids: PackedInt32Array, box: AABB, linear: Vector3,
-		burst := Vector3.ZERO, throw := 0.0) -> void:
-	var xf: Transform3D = world.get_chunk_transform(source)
-	var tick_m: float = BrickWorld.get_cell_size().x / float(BrickWorld.ticks_per_stud())
-	var centre := box.get_center()
-	# Off the face it came from: away from the middle of its source's grid.
-	var mid: Vector3 = xf * (Vector3(world.get_chunk_dims(source)) * BrickWorld.get_cell_size() * 0.5)
-	var out := Vector3(centre.x - mid.x, 0.0, centre.z - mid.z)
-	var out_dir := out.normalized() if out.length() > 0.01 else Vector3.ZERO
-	# A blast's are out of the wall before they have dropped a brick's height:
-	# slower, they sank through the wall under the hole on the way.
-	var kick := out_dir * (randf_range(0.6, 1.0) * throw if throw > 0.0
-			else randf_range(0.3, 1.0) * CRUMB_KICK)
-	# Where it comes down: one ray, from where the kick takes it, down onto the
-	# ground, a building or settled wreckage -- not onto anything still falling.
-	var floor_y := -INF
-	# A blast's ring reaches metres into a building, and is thrown harder: one
-	# floor for all of it had the bricks that cleared the wall lying in the air
-	# beside the hole, at the height of the storey's floor. So two rays: what
-	# is under the hole, and what is under the air a metre past its face. A
-	# brick that is out past the face before it has dropped CRUMB_SILL below
-	# the first comes down on the second.
-	var floor_past := -INF
-	var fixed_y := 0
-	var fixed_past := 0
-	var face := INF
-	var g := 0.0
-	if throw > 0.0:
-		floor_y = _crumb_floor(Vector3(centre.x, box.position.y, centre.z))
-		fixed_y = 1 if _floor_on_ground else 0
-		if out_dir != Vector3.ZERO:
-			var reach := (absf(out_dir.x) * box.size.x + absf(out_dir.z) * box.size.z) * 0.5
-			face = centre.dot(out_dir) + reach
-			floor_past = _crumb_floor(Vector3(centre.x, box.end.y, centre.z) + out_dir * (reach + 1.0))
-			fixed_past = 1 if _floor_on_ground else 0
-		g = Gravity.strength() * DEBRIS_GRAVITY
-	else:
-		floor_y = _crumb_floor(centre + kick * 0.4)
-		fixed_y = 1 if _floor_on_ground else 0
-	var frame_basis := xf.basis.orthonormalized()
-	var now := Engine.get_physics_frames()
-	for id in block_ids:
-		if world.is_block_decorative(source, id):
-			continue
-		var t: Array = world.get_block_ticks(source, id)
-		if t.is_empty():
-			continue
-		var size := Vector3(t[1] as Vector3i) * tick_m
-		var local := (Vector3(t[0] as Vector3i) + Vector3(t[1] as Vector3i) * 0.5) * tick_m
-		var cr := _crumb_set(size.snapped(Vector3.ONE * 0.001))
-		var axis := Vector3(randf() - 0.5, randf() - 0.5, randf() - 0.5)
-		var from_blast := Vector3.ZERO
-		if throw > 0.0:
-			var away: Vector3 = xf * local - burst
-			if away.length() > 0.01:
-				from_blast = away.normalized() * throw * randf_range(0.2, 0.6)
-		var at: Vector3 = xf * local
-		var vel := linear + kick + from_blast + Vector3(randf_range(-1.0, 1.0),
-				randf_range(0.0, 1.0), randf_range(-1.0, 1.0)) * CRUMB_SCATTER
-		var lands_on := floor_y
-		var lands_fixed := fixed_y
-		if face < INF:
-			var speed_out := vel.dot(out_dir)
-			var to_face := face - at.dot(out_dir)
-			if floor_y == -INF or to_face <= 0.0:
-				lands_on = floor_past
-				lands_fixed = fixed_past
-			elif speed_out > 0.05:
-				# How far it has dropped by the time it is out past the face.
-				var clear := to_face / speed_out
-				var foot := at.y - size.y * 0.5 + vel.y * clear - 0.5 * g * clear * clear
-				if foot > floor_y - CRUMB_SILL:
-					lands_on = floor_past
-					lands_fixed = fixed_past
-		_crumb_push(cr, at, vel, frame_basis, axis, randf_range(-CRUMB_SPIN, CRUMB_SPIN), now,
-				lands_on, size.y * 0.5,
-				BrickWorld.get_filament_colour(world.get_block_colour(source, id)), lands_fixed)
-
-
-## The first thing under `from` a crumb stops on, or -INF. Whether that was
-## the ground itself (Layers.WORLD) is left in _floor_on_ground.
-func _crumb_floor(from: Vector3) -> float:
-	_floor_on_ground = false
-	if not is_inside_tree():
-		return -INF
-	var q := PhysicsRayQueryParameters3D.create(from, from + Vector3.DOWN * 300.0,
-			CRUMB_FLOOR_MASK)
-	var hit := get_world_3d().direct_space_state.intersect_ray(q)
-	if hit.is_empty():
-		return -INF
-	_floor_on_ground = hit.collider is CollisionObject3D 			and ((hit.collider as CollisionObject3D).collision_layer & Layers.WORLD) != 0
-	return (hit.position as Vector3).y
-
-
 var _floor_on_ground := false
-var crumb_floors_gone := 0   ## crumbs whose floor had gone when they reached it
-
-
-## A crumb's floor is asked once, when it comes loose, and a fall takes a
-## second or more: what it was going to land on may have gone meanwhile -- the
-## storey a blast's ring came down on breaking off and falling as a section,
-## a settled piece woken. It was laid where that floor had been, in mid-air,
-## and lay there for good (user, 2026-10-17: "single bricks ... settle on a
-## falling part of a building then stay there floating"). So on reaching it the
-## floor is asked again, from a little above: gone or lower, the crumb falls on
-## to the new one. True when it does.
-func _crumb_floor_gone(cr: Crumbs, i: int, p: Vector3) -> bool:
-	var was := cr.floor_y[i]
-	if not is_finite(was):
-		return false
-	var now_y := _crumb_floor(Vector3(p.x, was + CRUMB_FLOOR_RECHECK, p.z))
-	if now_y >= was - CRUMB_FLOOR_SLACK:
-		return false
-	cr.floor_y[i] = now_y
-	cr.on_ground[i] = 1 if _floor_on_ground else 0
-	crumb_floors_gone += 1
-	return true
-
-
-func _crumb_set(key: Vector3) -> Crumbs:
-	if _crumbs.has(key):
-		return _crumbs[key]
-	var cr := Crumbs.new()
-	var mmi := MultiMeshInstance3D.new()
-	mmi.physics_interpolation_mode = Node.PHYSICS_INTERPOLATION_MODE_OFF
-	var mm := MultiMesh.new()
-	mm.transform_format = MultiMesh.TRANSFORM_3D
-	mm.use_colors = true
-	mm.use_custom_data = true
-	mm.mesh = PieceMeshes.chamfered_box(key)
-	# Where a crumb is drawn is the shader's: the instance transforms are where
-	# each began, so the box they make says nothing about where they are now.
-	mm.custom_aabb = AABB(Vector3(-1e5, -1e5, -1e5), Vector3(2e5, 2e5, 2e5))
-	mmi.multimesh = mm
-	mmi.material_override = _crumb_material()
-	add_child(mmi)
-	cr.mmi = mmi
-	_crumbs[key] = cr
-	return cr
-
-
-## Fall, stop on the floor, shrink, go. Once a tick, after the pieces -- but
-## only for the crumbs something happens to this tick (`next`): the falling
-## itself is drawn by the shader (shaders/crumb.gdshader, Docs/GpuOffload.md
-## 2.1). It was a step of every crumb and its transform written every tick,
-## about a microsecond a brick on the main thread.
-func _update_crumbs() -> void:
-	if _crumbs.is_empty():
-		return
-	var t0 := Time.get_ticks_usec()
-	var now := Engine.get_physics_frames()
-	_crumb_constants()
-	crumb_ticks += 1
-	for key in _crumbs:
-		var cr: Crumbs = _crumbs[key]
-		if cr.pos.is_empty() or cr.soonest > now:
-			continue
-		var soonest := 9223372036854775807
-		var i := 0
-		crumb_scanned += cr.pos.size()
-		while i < cr.pos.size():
-			if cr.next[i] <= now:
-				crumb_events += 1
-			if cr.next[i] <= now and _crumb_event(cr, i, key, now):
-				continue   # gone: the last one is in its place now
-			soonest = mini(soonest, cr.next[i])
-			i += 1
-		cr.soonest = soonest
-		cr.mmi.multimesh.visible_instance_count = cr.pos.size()
-	var ms := float(Time.get_ticks_usec() - t0) / 1000.0
-	crumb_worst_ms = maxf(crumb_worst_ms, ms)
-	crumb_update_ms += ms
-	crumb_peak = maxi(crumb_peak, crumb_count)
-
-
-## What happens to crumb `i` at tick `now`: laid in the heap, gone, its floor
-## found, or it reached its floor -- bounces, lands, or the floor had gone.
-## True when it was taken out.
-func _crumb_event(cr: Crumbs, i: int, key: Vector3, now: int) -> bool:
-	var age := now - cr.born[i]
-	# Come to rest: it lies where it stopped, for good (BrickHeap).
-	if _crumb_keep and cr.landed[i] > 0:
-		var t_lay := Time.get_ticks_usec()
-		_lay_crumb(cr, i, key, _crumb_dt)
-		lay_us += Time.get_ticks_usec() - t_lay
-		_crumb_remove(cr, i)
-		return true
-	if age >= (_crumb_fall_max if _crumb_keep else _crumb_life):
-		_crumb_remove(cr, i)
-		return true
-	# Handed back by the heap: its floor is asked once what took the old one
-	# has had its tick to go (_heap_support_gone).
-	if is_nan(cr.floor_y[i]):
-		if age >= 2:
-			cr.floor_y[i] = _crumb_floor(_crumb_pos(cr, i, now))
-			cr.on_ground[i] = 1 if _floor_on_ground else 0
-		_crumb_plan(cr, i, now)
-		_crumb_write(cr, i)
-		return false
-	if cr.landed[i] == 0 and now >= cr.t_end[i]:
-		var p := _crumb_pos(cr, i, now)
-		var v := _crumb_vel(cr, i, now)
-		if p.y - cr.half_h[i] <= cr.floor_y[i] and not _crumb_floor_gone(cr, i, p):
-			p.y = cr.floor_y[i] + cr.half_h[i]
-			if -v.y * crumb_bounce > CRUMB_REST_SPEED:
-				v = Vector3(v.x * CRUMB_SLIDE, -v.y * crumb_bounce, v.z * CRUMB_SLIDE)
-				crumb_bounces += 1
-			else:
-				v = Vector3.ZERO
-				cr.landed[i] = now
-			cr.pos[i] = p
-			cr.vel[i] = v
-			cr.t0[i] = now
-	_crumb_plan(cr, i, now)
-	_crumb_write(cr, i)
-	return false
-
-
-func _crumb_remove(cr: Crumbs, i: int) -> void:
-	cr.remove(i)
-	crumb_count -= 1
-	if i < cr.pos.size():
-		_crumb_write(cr, i)
-
-
-## A new crumb in `cr`: thrown from `p` at `v`, turned `base`, spinning
-## round `axis` at `rate` rad/s, onto `floor_y` (-INF none, NAN asked later).
-## Its spin is kept as the shader reads it (8 bits each way), so where the CPU
-## lays it and how it was drawn agree.
-func _crumb_push(cr: Crumbs, p: Vector3, v: Vector3, base: Basis, axis: Vector3, rate: float,
-		now: int, floor_y: float, half_h: float, colour: Color, on_ground: int,
-		count_brick := true) -> void:
-	if crumb_count == 0 or not _crumb_constants_set:
-		_crumb_constants()
-	var spin := crumb_pack_spin(axis.normalized() if axis.length() > 0.01 else Vector3.UP, rate)
-	cr.pos.append(p)
-	cr.vel.append(v)
-	cr.base.append(base)
-	cr.axis.append(spin[1])
-	cr.rate.append(spin[2])
-	cr.spin.append(spin[0])
-	cr.born.append(now)
-	cr.landed.append(0)
-	cr.floor_y.append(floor_y)
-	cr.half_h.append(half_h)
-	cr.colour.append(colour)
-	cr.on_ground.append(on_ground)
-	cr.t0.append(now)
-	cr.t_end.append(now)
-	cr.next.append(now)
-	var i := cr.pos.size() - 1
-	_crumb_plan(cr, i, now)
-	var mm := cr.mmi.multimesh
-	if mm.instance_count < cr.pos.size():
-		# Growing a MultiMesh clears it: every crumb written again.
-		mm.instance_count = maxi(cr.pos.size() * 2, 16)
-		for j in cr.pos.size():
-			_crumb_write(cr, j)
-	else:
-		_crumb_write(cr, i)
-	mm.visible_instance_count = cr.pos.size()
-	cr.soonest = mini(cr.soonest, cr.next[i]) if i > 0 else cr.next[i]
-	crumb_count += 1
-	if count_brick:
-		crumb_bricks += 1
-
-
-## Where crumb `i` is at tick `now`, and how fast: its stretch's start stepped
-## on as _update_crumbs stepped it, a tick at a time (v -= g dt, then p += v dt),
-## in closed form -- the same sums the shader does.
-func _crumb_pos(cr: Crumbs, i: int, now: int) -> Vector3:
-	var n := float(clampi(now, cr.t0[i], maxi(cr.t_end[i], cr.t0[i])) - cr.t0[i])
-	var p := cr.pos[i] + cr.vel[i] * (n * _crumb_dt)
-	p.y -= _crumb_g * _crumb_dt * _crumb_dt * n * (n + 1.0) * 0.5
-	return p
-
-
-func _crumb_vel(cr: Crumbs, i: int, now: int) -> Vector3:
-	if cr.landed[i] > 0:
-		return Vector3.ZERO
-	var n := float(clampi(now, cr.t0[i], maxi(cr.t_end[i], cr.t0[i])) - cr.t0[i])
-	return cr.vel[i] - Vector3(0.0, _crumb_g * _crumb_dt * n, 0.0)
-
-
-## When crumb `i` next needs the CPU: it reaches its floor (the first tick its
-## foot is at or under it), its floor is to be asked, it is to be laid, or it
-## is done. `t_end` is when the shader holds it still: landed, or at its floor.
-func _crumb_plan(cr: Crumbs, i: int, now: int) -> void:
-	var gone_at := cr.born[i] + (_crumb_fall_max if _crumb_keep else _crumb_life)
-	if cr.landed[i] > 0:
-		cr.t_end[i] = cr.landed[i]
-		cr.next[i] = cr.landed[i] + 1 if _crumb_keep else gone_at
-		return
-	var fl := cr.floor_y[i]
-	if is_nan(fl):
-		cr.t_end[i] = gone_at
-		cr.next[i] = mini(maxi(cr.born[i] + 2, now + 1), gone_at)
-		return
-	var hit := gone_at
-	if is_finite(fl):
-		hit = mini(cr.t0[i] + ticks_to_floor(cr.pos[i].y - cr.half_h[i] - fl, cr.vel[i].y,
-				_crumb_g, _crumb_dt), gone_at)
-	cr.t_end[i] = hit
-	cr.next[i] = maxi(hit, now + 1) if hit > now else now + 1
-	if hit <= now:
-		# Already at or under it (a floor found late, or lowered): next tick.
-		cr.t_end[i] = now + 1
 
 
 ## Ticks from a foot `h` metres over its floor, going up at `vy`, until the
@@ -2260,18 +1871,6 @@ static func ticks_to_floor(h: float, vy: float, g: float, dt: float) -> int:
 	return n
 
 
-## Crumb `i` as the shader reads it (shaders/crumb.gdshader, its header).
-func _crumb_write(cr: Crumbs, i: int) -> void:
-	var mm := cr.mmi.multimesh
-	mm.set_instance_transform(i, Transform3D(cr.base[i], cr.pos[i]))
-	var c := cr.colour[i]
-	var rgb := float((clampi(int(round(c.r * 255.0)), 0, 255) << 16)
-			| (clampi(int(round(c.g * 255.0)), 0, 255) << 8) | clampi(int(round(c.b * 255.0)), 0, 255))
-	mm.set_instance_color(i, Color(rgb, cr.spin[i], float(cr.t_end[i]), float(cr.born[i])))
-	var v := cr.vel[i]
-	mm.set_instance_custom_data(i, Color(v.x, v.y, v.z, float(cr.t0[i])))
-
-
 ## [packed, the axis it decodes to, the rate it decodes to]: an axis
 ## octahedral in 8 + 8 bits, a rate in 8 over +-CRUMB_SPIN.
 static func crumb_pack_spin(axis: Vector3, rate: float) -> Array:
@@ -2293,77 +1892,7 @@ static func crumb_pack_spin(axis: Vector3, rate: float) -> Array:
 	return [float((ex << 16) | (ey << 8) | er), v.normalized(), r]
 
 
-## Every crumb there is, as [where it is now, how fast], for probes.
-func crumb_states() -> Array:
-	var out := []
-	var now := Engine.get_physics_frames()
-	for key in _crumbs:
-		var cr: Crumbs = _crumbs[key]
-		for i in cr.pos.size():
-			out.append([_crumb_pos(cr, i, now), _crumb_vel(cr, i, now)])
-	return out
-
-
-var _crumb_mat: ShaderMaterial
-var _crumb_dt := 1.0 / 60.0
-var _crumb_g := 9.8
-var _crumb_keep := false
-var _crumb_life := 84
-var _crumb_full := 21
-var _crumb_fall_max := 360
-var _crumb_fade := 36
-var _crumb_constants_set := false
 static var _crumb_clock_frame := -1
-
-
-func _crumb_material() -> ShaderMaterial:
-	if _crumb_mat == null:
-		_crumb_mat = ShaderMaterial.new()
-		_crumb_mat.shader = load("res://shaders/crumb.gdshader")
-		_crumb_mat.set_shader_parameter("spin_max", CRUMB_SPIN)
-		_crumb_constants_set = false
-		_crumb_constants()
-	return _crumb_mat
-
-
-## The tick, gravity, and how crumbs go away -- the shader's copies kept with
-## them. A change of whether bricks are kept re-plans every crumb.
-func _crumb_constants() -> void:
-	var tps := float(Engine.physics_ticks_per_second)
-	var dt := 1.0 / tps
-	var g := Gravity.strength() * DEBRIS_GRAVITY
-	var keep := heap != null and BrickHeap.enabled()
-	var life := int(CRUMB_LIFE_MS * tps / 1000.0)
-	var full := int(CRUMB_FULL_MS * tps / 1000.0)
-	var fall_max := int(CRUMB_FALL_MAX_MS * tps / 1000.0)
-	var fade := maxi(int(CRUMB_FADE_MS * tps / 1000.0), 1)
-	if _crumb_constants_set and dt == _crumb_dt and g == _crumb_g and keep == _crumb_keep:
-		return
-	var replan := _crumb_constants_set and keep != _crumb_keep
-	_crumb_dt = dt
-	_crumb_g = g
-	_crumb_keep = keep
-	_crumb_life = life
-	_crumb_full = full
-	_crumb_fall_max = fall_max
-	_crumb_fade = fade
-	_crumb_constants_set = true
-	var m := _crumb_material()
-	m.set_shader_parameter("tick_s", dt)
-	m.set_shader_parameter("gravity", g)
-	m.set_shader_parameter("keep", keep)
-	m.set_shader_parameter("life", float(life))
-	m.set_shader_parameter("full", float(full))
-	m.set_shader_parameter("fall_max", float(fall_max))
-	m.set_shader_parameter("fade", float(fade))
-	if replan:
-		var now := Engine.get_physics_frames()
-		for key in _crumbs:
-			var cr: Crumbs = _crumbs[key]
-			for i in cr.pos.size():
-				_crumb_plan(cr, i, now)
-				_crumb_write(cr, i)
-			cr.soonest = now
 
 
 ## The shader's clock: physics ticks, and the fraction of the next, once a
@@ -2375,65 +1904,6 @@ static func crumb_clock() -> void:
 	_crumb_clock_frame = f
 	RenderingServer.global_shader_parameter_set("crumb_clock",
 			float(Engine.get_physics_frames()) + Engine.get_physics_interpolation_fraction())
-
-
-## A crumb that has come to rest, laid in the heap: flat on whichever of its
-## faces was most nearly down (_lie_flat), on the floor it stopped on.
-func _lay_crumb(cr: Crumbs, i: int, size: Vector3, dt: float) -> void:
-	if not is_finite(cr.floor_y[i]):
-		return
-	var turned := cr.landed[i] - cr.born[i]
-	var b := Basis(cr.axis[i], cr.rate[i] * float(turned) * dt) * cr.base[i]
-	var flat := _lie_flat(b, size)
-	var p := cr.pos[i]
-	# On the floor it came down on, or on what already lies there (a pile).
-	p.y = heap.base_for(size, flat[0] as Basis, p, cr.floor_y[i]) + size[int(flat[1])] * 0.5
-	heap.lay(size, Transform3D(flat[0] as Basis, p), cr.colour[i], cr.floor_y[i],
-			cr.on_ground[i] != 0, _laid_on(p, cr.floor_y[i], size[int(flat[1])] * 0.5) if BrickHeap.track else "")
-
-
-## What a brick laid at `p` came down on, said for BrickHeap.track: the body
-## under it -- a piece, the ground, a body with no node (a building's bricks or
-## its shell) -- and the floor it was laid for.
-func _laid_on(p: Vector3, floor_y: float, half: float) -> String:
-	var q := PhysicsRayQueryParameters3D.create(p, p + Vector3.DOWN * 300.0, CRUMB_FLOOR_MASK)
-	var hit := get_world_3d().direct_space_state.intersect_ray(q)
-	var under := "nothing"
-	if not hit.is_empty():
-		var isl := find_by_body(hit.collider) if hit.collider is Node else null
-		if isl != null:
-			under = "piece of chunk %d (%s)" % [isl.chunk, "settled" if isl.settled else "moving"]
-		elif hit.collider is CollisionObject3D:
-			under = "%s, layer %d" % [(hit.collider as Node).name, (hit.collider as CollisionObject3D).collision_layer]
-		else:
-			under = "a body with no node"
-		under += " %.2f m under its foot" % (p.y - half - (hit.position as Vector3).y)
-	return "on %s; its floor %.2f m under it" % [under, p.y - half - floor_y]
-
-
-## `b` turned to lie on a face: the axis it comes down on made vertical, the
-## next one levelled, which way it pointed kept. [basis, that axis]. Which face:
-## the most nearly down, weighed by how thin the brick is that way -- a brick
-## comes to rest on a broad face, and stands on its end only when it came down
-## very nearly upright (one in five of a heap stood on end, weighed by the
-## angle alone).
-static func _lie_flat(b: Basis, size := Vector3.ONE) -> Array:
-	var cols: Array[Vector3] = [b.x.normalized(), b.y.normalized(), b.z.normalized()]
-	var up := 0
-	var best := -1.0
-	for k in 3:
-		var score := absf(cols[k].y) / maxf(size[k], 0.001)
-		if score > best:
-			best = score
-			up = k
-	var a := (up + 1) % 3
-	var m := (up + 2) % 3
-	cols[up] = Vector3.UP if cols[up].y >= 0.0 else Vector3.DOWN
-	var h := Vector3(cols[a].x, 0.0, cols[a].z)
-	cols[a] = h.normalized() if h.length() > 0.001 else Vector3.RIGHT
-	# Right-handed: the axis after next is this one across the next.
-	cols[m] = cols[up].cross(cols[a])
-	return [Basis(cols[0], cols[1], cols[2]), up]
 
 
 ## What lay on something that has gone falls again: the heap's bricks inside
@@ -2456,9 +1926,9 @@ func _heap_support_gone(box: AABB) -> void:
 		var size: Vector3 = lying[k][0]
 		var xf: Transform3D = lying[k][1]
 		var b := xf.basis
-		var cr := _crumb_set(size)
+		var cr: Crumbs = crumbler.crumb_set(size)
 		var axis := Vector3(randf() - 0.5, randf() - 0.5, randf() - 0.5)
-		_crumb_push(cr, xf.origin, Vector3(randf_range(-0.3, 0.3), 0.0, randf_range(-0.3, 0.3)),
+		crumbler.crumb_push(cr, xf.origin, Vector3(randf_range(-0.3, 0.3), 0.0, randf_range(-0.3, 0.3)),
 				b, axis, randf_range(-1.5, 1.5), now, NAN,
 				0.5 * (absf(b.x.y) * size.x + absf(b.y.y) * size.y + absf(b.z.y) * size.z),
 				lying[k][2], 0, false)
@@ -5103,7 +4573,6 @@ func _process(_delta: float) -> void:
 		hi -= 1
 
 
-
 ## Is a child this piece shed still drawn by nothing? Those that are drawn, or
 ## gone, are dropped from the list.
 func _still_waiting(isl: BrickIsland) -> bool:
@@ -5339,7 +4808,7 @@ func tick() -> void:
 	_advance_sleep_jobs()
 	if not _stand_ins_due.is_empty():
 		build_due_stand_ins()
-	_tend_field()
+	rubble.tend_field()
 	var _tl := Time.get_ticks_usec()
 	tick_prof.loop += float(_tl - _t_loop) / 1000.0
 	tick_prof.pieces += float(_tp - _t_loop) / 1000.0
@@ -5377,7 +4846,7 @@ func tick() -> void:
 	var _tm := Time.get_ticks_usec()
 	tick_prof.mesh += float(_tm - _tf) / 1000.0
 	_update_multimeshes()
-	_update_crumbs()
+	crumbler.update_crumbs()
 	if not defer_job_start:
 		start_mesh_jobs()
 	tick_prof.mm += float(Time.get_ticks_usec() - _tm) / 1000.0
@@ -5871,7 +5340,7 @@ func _commit_sleep(isl: BrickIsland, index: int, record: ChunkRecord, by_cap := 
 	d.stand_in = _leave_stand_in(isl)
 	d.stand_in_arrays = _stand_in_arrays
 	dormant.append(d)
-	_field_add(d)
+	rubble.field_add(d)
 	slept += 1
 	piece_slept.emit(isl.piece_id, record)
 	_retire(isl, index, &"slept")
@@ -6015,7 +5484,7 @@ func _leave_stand_in(isl: BrickIsland) -> MeshInstance3D:
 ## whatever it is -- coarse or the bricks it slept with -- because either way it
 ## is not the new chunk's bake, and must be built again, never patched.
 func _take_stand_in(d: Dormant, isl: BrickIsland) -> bool:
-	_field_remove(d)
+	rubble.field_remove(d)
 	var node := d.stand_in
 	d.stand_in = null
 	if node == null or not is_instance_valid(node):
@@ -6123,7 +5592,7 @@ func build_due_stand_ins(budget_ms := 2.0) -> int:
 		d.stand_in = node
 		d.stand_in_arrays = arrays
 		stand_ins += 1
-		_field_add(d)
+		rubble.field_add(d)
 	return n
 
 
@@ -6131,21 +5600,6 @@ func build_due_stand_ins(budget_ms := 2.0) -> int:
 # THE RUBBLE FIELD (Docs/DestructionLod.md 3.5)
 # ---------------------------------------------------------------------------
 
-## What sleeping wreckage leaves drawn -- its stand-ins (_leave_stand_in) -- is
-## drawn a TILE at a time: every stand-in in one FIELD_TILE_M square merged into
-## one mesh, a surface per material, the stand-ins' own nodes kept (hidden) for
-## the piece to take back when it wakes. And only so many tiles are drawn: the
-## FIELD_MAX_DRAWN that look biggest from where everybody is (apparent_size), so
-## a tall wreck far off -- one seen from round the planet -- is drawn before a
-## low heap nearer (user, 2026-10-25). Ranked every FIELD_RANK_TICKS; merged on
-## workers (FIELD_JOBS at a time) once a tile has been quiet FIELD_QUIET_TICKS.
-##
-## Measured before (--rubble --big): 165 pieces asleep after a big collapse,
-## each its own node and draw call; settled pieces cost the physics step
-## nothing, and drawing them was 62 of 970 draw calls.
-const FIELD_TILE_M := 32.0 * BrickPalette.STUD_M
-const FIELD_MAX_DRAWN := 48
-const FIELD_RANK_TICKS := 30
 
 class FieldTile:
 	var members: Array = []   ## Dormant
@@ -6158,34 +5612,11 @@ class FieldTile:
 	var holder: Array = []      ## what the worker made: [ArrayMesh, AABB]
 	var restart := false        ## changed while the worker ran
 
-## A tile is merged once it has been left alone this long: a collapse puts its
-## pieces to sleep one a tick, and merging on every one was 378 merges for 77
-## tiles. Until then, and while its worker runs, its stand-ins draw themselves.
-const FIELD_QUIET_TICKS := 30
-## Off (--no-field), every stand-in draws itself and none is culled: the A/B.
-var field_enabled := true
-const FIELD_JOBS := 2
-## A stand-in left as its BRICKS -- the cap puts pieces to sleep near as well as
-## far, and 95 of 132 after a big collapse were -- has no arrays to merge from.
-## Past the coarse ladder's range (ISLAND_MESH_RANGE + ISLAND_MESH_HYSTERESIS,
-## where an awake piece would be coarse too) it is made coarse: its record made a
-## chunk again, the coarse mesh built on a worker, the chunk given back, as
-## build_due_stand_ins does for a save's. FIELD_COARSEN_JOBS at a time. Nearer,
-## it keeps its bricks and draws itself.
-const FIELD_COARSEN_JOBS := 2
 var _coarsening: Array = []    ## [Dormant, chunk]
-var field_coarsened := 0
 
 var _field := {}               ## Vector2i -> FieldTile
 var _stand_in_arrays: Array = []   ## what _leave_stand_in drew from, if arrays
-var _field_root: Node3D = null
-var _field_ranked := -1000
 var _field_jobs := 0
-var field_merges := 0          ## tiles merged, all told
-var field_worst_ms := 0.0      ## the slowest worker merge
-var field_main_worst_ms := 0.0 ## the slowest a merge cost the main thread
-var field_drawn := 0           ## tiles drawn at the last ranking
-var field_culled := 0          ## tiles the cap left undrawn at the last ranking
 
 
 ## How big something looks from `distance` metres: its height, and a quarter of
@@ -6193,149 +5624,6 @@ var field_culled := 0          ## tiles the cap left undrawn at the last ranking
 ## skyline, a wide low one does not.
 static func apparent_size(box: AABB, distance: float) -> float:
 	return (box.size.y + 0.25 * maxf(box.size.x, box.size.z)) / maxf(distance, 1.0)
-
-
-func _field_key_of(p: Vector3) -> Vector2i:
-	return Vector2i(floori(p.x / FIELD_TILE_M), floori(p.z / FIELD_TILE_M))
-
-
-func _field_add(d: Dormant) -> void:
-	if not field_enabled or d.in_field or d.stand_in == null or not is_instance_valid(d.stand_in):
-		return
-	if _field_root == null:
-		_field_root = Node3D.new()
-		_field_root.name = "RubbleField"
-		add_child(_field_root)
-	var key := _field_key_of(d.stand_in.global_position)
-	var tile: FieldTile = _field.get(key)
-	if tile == null:
-		tile = FieldTile.new()
-		_field[key] = tile
-	tile.members.append(d)
-	d.field_key = key
-	d.in_field = true
-	_field_touch(tile)
-
-
-## A piece waking takes its stand-in back, out of its tile: the tile draws its
-## stand-ins one by one until it is merged again, so nothing is drawn twice.
-func _field_remove(d: Dormant) -> void:
-	if not d.in_field:
-		return
-	d.in_field = false
-	if d.stand_in != null and is_instance_valid(d.stand_in):
-		d.stand_in.visible = true
-	var tile: FieldTile = _field.get(d.field_key)
-	if tile == null:
-		return
-	tile.members.erase(d)
-	_field_touch(tile)
-
-
-## Changed: drawn piece by piece from now until merged again.
-func _field_touch(tile: FieldTile) -> void:
-	tile.dirty = true
-	tile.changed_tick = Engine.get_physics_frames()
-	if tile.job >= 0:
-		tile.restart = true
-	_field_show(tile)
-
-
-## What draws a tile: its merged mesh when that is up to date, else each of
-## its stand-ins -- and neither when the cap has culled it.
-func _field_show(tile: FieldTile) -> void:
-	var merged := not tile.dirty and tile.node != null and is_instance_valid(tile.node)
-	if tile.node != null and is_instance_valid(tile.node):
-		tile.node.visible = tile.shown and merged
-	for d in tile.members:
-		var dd: Dormant = d
-		if dd.stand_in != null and is_instance_valid(dd.stand_in):
-			dd.stand_in.visible = tile.shown and (not merged or dd.stand_in_arrays.is_empty())
-
-
-func _tend_field() -> void:
-	if _field.is_empty():
-		return
-	var now := Engine.get_physics_frames()
-	for key in _field.keys():
-		var tile: FieldTile = _field[key]
-		if tile.job >= 0:
-			if WorkerThreadPool.is_task_completed(tile.job):
-				_field_finish(tile)
-			continue
-		if tile.dirty and _field_jobs < FIELD_JOBS and now - tile.changed_tick >= FIELD_QUIET_TICKS:
-			_field_start(key, tile)
-	if not _coarsening.is_empty():
-		_field_coarsen_finish()
-	if now - _field_ranked >= FIELD_RANK_TICKS:
-		_field_ranked = now
-		_field_rank()
-		_field_coarsen_start()
-
-
-## Hand a tile's stand-ins to a worker to merge. Members whose piece has woken
-## or gone are dropped here; an empty tile is freed.
-func _field_start(key: Vector2i, tile: FieldTile) -> void:
-	var t0 := Time.get_ticks_usec()
-	var into := _field_root.global_transform.affine_inverse()
-	var items: Array = []
-	for i in range(tile.members.size() - 1, -1, -1):
-		var d: Dormant = tile.members[i]
-		if not dormant.has(d) or d.stand_in == null or not is_instance_valid(d.stand_in) \
-				or d.stand_in.mesh == null:
-			d.in_field = false
-			tile.members.remove_at(i)
-			continue
-		if d.stand_in_arrays.is_empty():
-			continue   # drawn by itself (_field_show)
-		var node := d.stand_in
-		items.append([d.stand_in_arrays, into * node.global_transform,
-				node.material_override if node.material_override != null else brick_material])
-	if tile.members.is_empty():
-		if tile.node != null and is_instance_valid(tile.node):
-			tile.node.queue_free()
-		_field.erase(key)
-		return
-	tile.dirty = false
-	if items.is_empty():
-		_field_show(tile)   # every one of them draws itself
-		return
-	tile.restart = false
-	var holder := [null, AABB()]
-	tile.holder = holder
-	tile.job = WorkerThreadPool.add_task(func() -> void:
-		var t := Time.get_ticks_usec()
-		var built := IslandManager._field_build(items)
-		UploadLedger.note("rubble field", -1)
-		holder[0] = built[0]
-		holder[1] = built[1]
-		holder.append(float(Time.get_ticks_usec() - t) / 1000.0), true, "rubble field")
-	_field_jobs += 1
-	field_main_worst_ms = maxf(field_main_worst_ms, float(Time.get_ticks_usec() - t0) / 1000.0)
-
-
-func _field_finish(tile: FieldTile) -> void:
-	var t0 := Time.get_ticks_usec()
-	WorkerThreadPool.wait_for_task_completion(tile.job)
-	tile.job = -1
-	_field_jobs -= 1
-	var mesh: ArrayMesh = tile.holder[0]
-	if tile.holder.size() > 2:
-		field_worst_ms = maxf(field_worst_ms, float(tile.holder[2]))
-	if tile.restart or mesh == null:
-		# Changed while it was merged: what it made is already out of date.
-		tile.dirty = true
-		_field_show(tile)
-		return
-	if tile.node == null or not is_instance_valid(tile.node):
-		tile.node = MeshInstance3D.new()
-		tile.node.physics_interpolation_mode = Node.PHYSICS_INTERPOLATION_MODE_OFF
-		_field_root.add_child(tile.node)
-	tile.node.mesh = mesh
-	tile.box = _field_root.global_transform * (tile.holder[1] as AABB)
-	field_merges += 1
-	_field_show(tile)
-	field_main_worst_ms = maxf(field_main_worst_ms, float(Time.get_ticks_usec() - t0) / 1000.0)
 
 
 ## On a worker: [mesh, its box] of `items` ([arrays, transform, material]
@@ -6420,95 +5708,6 @@ static func _field_arrays_ok(arrays: Array, verts: int) -> bool:
 			if v.size() != verts * per:
 				return false
 	return true
-
-
-## Start making far stand-ins of bricks coarse (FIELD_COARSEN_JOBS).
-func _field_coarsen_start() -> void:
-	if _coarsening.size() >= FIELD_COARSEN_JOBS:
-		return
-	var points := interest_points()
-	if points.is_empty():
-		return
-	var busy := {}
-	for c in _coarsening:
-		busy[c[0]] = true
-	for d in dormant:
-		if _coarsening.size() >= FIELD_COARSEN_JOBS:
-			return
-		if busy.has(d) or not d.stand_in_arrays.is_empty() or d.stand_in == null \
-				or not is_instance_valid(d.stand_in) or d.record.block_count() <= 1:
-			continue
-		if _distance_to_interest(d.record.box, points) < ISLAND_MESH_RANGE + ISLAND_MESH_HYSTERESIS:
-			continue
-		var chunk := d.record.restore(world)
-		if chunk < 0:
-			continue
-		world.coarse_chunk_async(chunk)
-		_coarsening.append([d, chunk])
-
-
-func _field_coarsen_finish() -> void:
-	for i in range(_coarsening.size() - 1, -1, -1):
-		var d: Dormant = _coarsening[i][0]
-		var chunk: int = _coarsening[i][1]
-		if not world.coarse_ready(chunk):
-			if not world.coarse_pending(chunk):
-				world.coarse_chunk_async(chunk)
-			continue
-		_coarsening.remove_at(i)
-		var arrays: Array = world.take_coarse_mesh(chunk)
-		world.release_chunk(chunk)
-		# Woken meanwhile: it has its own mesh now.
-		if not dormant.has(d) or d.stand_in == null or not is_instance_valid(d.stand_in):
-			continue
-		if arrays.is_empty() or not mesh_arrays_ok(arrays, "coarse stand-in of piece %d" % d.piece_id):
-			continue
-		var mesh := ArrayMesh.new()
-		mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
-		d.stand_in.mesh = mesh
-		d.stand_in.material_override = brick_material
-		d.stand_in.transform = d.record.xform
-		d.stand_in_arrays = arrays
-		field_coarsened += 1
-		var tile: FieldTile = _field.get(d.field_key)
-		if d.in_field and tile != null:
-			_field_touch(tile)
-
-
-## The cap: the FIELD_MAX_DRAWN tiles that look biggest are drawn, the rest
-## are not (still asleep, still there, only unseen). Every tile within the
-## coarse ladder's range is drawn whatever the count -- the cap is for FAR
-## wreckage -- and fills the cap first. A tile not merged yet is ranked by its
-## stand-ins' own boxes.
-func _field_rank() -> void:
-	var points := interest_points()
-	if points.is_empty():
-		return
-	var tiles: Array = []
-	var seen := {}
-	for key in _field:
-		var tile: FieldTile = _field[key]
-		var box := tile.box
-		if box.size == Vector3.ZERO:
-			for d in tile.members:
-				var dd: Dormant = d
-				box = dd.record.box if box.size == Vector3.ZERO else box.merge(dd.record.box)
-		var dist := _distance_to_interest(box, points)
-		# Near wreckage is never culled: it would blink out at somebody's feet.
-		# It is drawn, and counts against the cap.
-		seen[tile] = INF if dist < ISLAND_MESH_RANGE + ISLAND_MESH_HYSTERESIS 				else apparent_size(box, dist)
-		tiles.append(tile)
-	tiles.sort_custom(func(a, c) -> bool: return float(seen[a]) > float(seen[c]))
-	field_drawn = 0
-	field_culled = 0
-	for i in tiles.size():
-		var tile: FieldTile = tiles[i]
-		tile.shown = i < FIELD_MAX_DRAWN or is_inf(float(seen[tile]))
-		_field_show(tile)
-		if tile.shown:
-			field_drawn += 1
-		else:
-			field_culled += 1
 
 
 ## Wake anything dormant that this volume reaches, so that a blast lands on
