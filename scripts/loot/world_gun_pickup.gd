@@ -221,7 +221,7 @@ func _beam(rarity: int) -> MeshInstance3D:
 	mesh.radial_segments = 10
 	mi.mesh = mesh
 
-	var col := GunCard.RARITY_COLORS[clampi(rarity - 1, 0, 5)]
+	var col := Rarity.colour(rarity)
 	var mat := StandardMaterial3D.new()
 	mat.albedo_color = Color(col.r, col.g, col.b, 0.20)
 	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA

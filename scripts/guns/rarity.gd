@@ -20,6 +20,22 @@ const IDS: Array[StringName] = [
 const NAMES: Array[String] = [
 	"Common", "Uncommon", "Rare", "Unique", "Legendary", "Mythic",
 ]
+## The loot colours (COMBAT_DESIGN 2): white, green, blue, purple, orange, red.
+## The one table -- the HUD, the gun card, the placeholder parts' tint, mech pods
+## and their pickups all read it (`colour`).
+const COLOURS: Array[Color] = [
+	Color(0.82, 0.82, 0.82),   # common
+	Color(0.35, 0.85, 0.35),   # uncommon
+	Color(0.30, 0.60, 1.00),   # rare
+	Color(0.70, 0.35, 0.95),   # unique
+	Color(1.00, 0.60, 0.10),   # legendary
+	Color(0.95, 0.12, 0.12),   # mythic
+]
+
+
+## Rarity `rarity_index` (1..6, clamped)'s colour.
+static func colour(rarity_index: int) -> Color:
+	return COLOURS[clampi(rarity_index - 1, 0, COLOURS.size() - 1)]
 ## The combat design's table (Docs/Weapons/COMBAT_DESIGN.md section 2, v2). Rarity
 ## buys MODIFIER SLOTS and modifier quality, and only a small damage step -- felt in the
 ## hand, but not enough to change a shots-to-kill count on its own (section 3). The whole

@@ -67,7 +67,7 @@ static func create(p: PodGenerator.Result) -> WorldPodPickup:
 
 ## A rarity's colour, as the loot beams read (MechLoadoutScreen's list too).
 static func rarity_colour(rarity: int) -> Color:
-	return Color.html(MechLoadoutScreen.RARITY_COLOURS[clampi(rarity, 1, 6) - 1])
+	return Rarity.colour(rarity)
 
 
 func _process(delta: float) -> void:

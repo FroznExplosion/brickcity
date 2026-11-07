@@ -51,6 +51,17 @@ static func font_size(scale: float = 1.0) -> int:
 	return maxi(int(round(BASE_FONT_SIZE * _text_scale() * scale)), 9)
 
 
+## The player's text scale (Options > Accessibility), 1.0 with no settings module.
+## For code outside the menus that sizes its own text (the game's HUD, ui/).
+static func text_scale() -> float:
+	return _text_scale()
+
+
+## The player's high-contrast option, false with no settings module.
+static func high_contrast() -> bool:
+	return _high_contrast()
+
+
 # --------------------------------------------------------------------
 # Settings access, guarded so the module works with no autoload registered
 # --------------------------------------------------------------------
