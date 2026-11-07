@@ -192,18 +192,18 @@ func _run() -> void:
 					risen += 1
 		landed = maxi(landed, now_landed)
 	_ok("bricks thrown off a wall bounce when they hit the street",
-			thrown > 0 and _m.crumb_bounces > 0 and risen > 0,
-			"%d thrown, %d bounce(s)" % [thrown, _m.crumb_bounces])
+			thrown > 0 and _m.crumbler.crumb_bounces > 0 and risen > 0,
+			"%d thrown, %d bounce(s)" % [thrown, _m.crumbler.crumb_bounces])
 	_ok("never sinking into it, and coming to rest on it", under == 0 and landed > 0,
 			"%d at rest at once at the most, %d sample(s) under the street" % [landed, under])
 	await _ticks(30)
-	var bounces0 := _m.crumb_bounces
+	var bounces0: int = _m.crumbler.crumb_bounces
 	IslandManager.crumb_bounce = 0.0
 	at = Vector3(2.8, 2.0, 120.2)
 	killed = _w.apply_hit(tower, at, 1.6)
 	_m.throw_killed(tower, killed, at, 1.6)
 	await _ticks(70)
-	_ok("at 0 on the slider, none bounces", _m.crumb_bounces == bounces0)
+	_ok("at 0 on the slider, none bounces", _m.crumbler.crumb_bounces == bounces0)
 	IslandManager.crumb_bounce = IslandManager.CRUMB_BOUNCE
 
 	print("\n%d passed, %d failed" % [_pass, _fail])

@@ -91,7 +91,7 @@ func _run() -> void:
 	print("  --   %s" % isl.hit_census_line())
 	print("  --   %s" % city.stud_census_line())
 	print("  --   %s" % isl.blast_census_line())
-	print("  --   %s" % isl.crumb_cost_line())
+	print("  --   %s" % isl.crumbler.crumb_cost_line())
 	print("  --   %s" % isl.snap_census_line())
 	print("  --   %s" % isl.push_census_line())
 	print("  --   %s" % isl.shed_census_line())
