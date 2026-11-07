@@ -541,8 +541,13 @@ Open:
    "throwing them is a small part of a blast", 17.2 ms the worst blast (3.4-4.4 in the two
    runs before) -- is in crumb throwing, which this does not touch; the machine was at 99 C
    when it started.
-2. **The fallback tore 10 bands** with the tree on (0 with it off): landings the tree did not
-   take -- most likely pieces over 3,000 bricks -- went to a storey line and found no seam.
-   Worth a look before raising or lowering `TREE_MAX_BLOCKS`.
+2. ~~**The fallback tore 10 bands**~~ with the tree on (0 with it off). **Found and fixed
+   2026-11-07:** counted (`tree_skip_big`, `tree_whole`, `band_sizes` in the snap census),
+   no landing was over `TREE_MAX_BLOCKS`; every band came from a landing the tree made one
+   piece of -- which, with energy in first cuts, is a piece with no joint left to cut
+   (bricks only sheared loose, or one brick) -- and the seams tore it down to its last brick.
+   A brick does not break, so such a landing now snaps nothing. `barrage_probe`: 0 bands, 15
+   landings with nothing to cut, 63 broken by the tree. Pieces a tree landing makes vary
+   from run to run (5.0-7.3 on average over four runs; the physics is not deterministic).
 3. Not looked at in play yet: whether the parts read as "a few big parts" on screen.
 4. `PlanetPieces._snap_across` (planets) is untouched.
