@@ -105,6 +105,13 @@ var coarse := false
 ## bricks it asked for are baking. A stand-in's index buffer is not the bake's,
 ## and is never patched.
 var coarse_drawn := false
+## Bands being built for it a few a tick (IslandManager._advance_slices), while
+## what it drew before goes on drawing; they replace it when the last is built.
+## `slicing` is set from the start of that until the swap.
+var slicing := false
+var slices: Array = []
+var slice_bytes: Array = []
+var slice_widths := PackedInt32Array()
 ## The arrays its coarse mesh was made from, while it is drawn by one: what a
 ## stand-in it leaves is merged from (IslandManager's rubble field). Reading a
 ## mesh back from the renderer instead was the GPU's copy -- 54 ms of a merge on
