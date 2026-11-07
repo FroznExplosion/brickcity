@@ -829,8 +829,14 @@ level with it and top with the goal (`LADDER_LEVEL`, 1 m) -- or the other way ro
 shortest way, and walks to its foot (or top); there the pawn's plain walk climbs it
 (`Pawn.ladder`, `ladder_way`: held out of its face, up and over its top a body's width past it,
 or out over its top and down to its foot), lets go, and the walk to the goal takes on. One ladder
-a leg; a fall from it is none. `soldier_ladder_probe` (4): a block 3.78 m high (more than the
+a leg; with none joining the two levels, one ending a level nearer the goal's (the least height
+left to go), and when that leg is done the path fails again and the next is looked for -- a chain
+(2026-11-06). A fall from it is none. `soldier_ladder_probe` (4): a block 3.78 m high (more than the
 nav steps or drops), no way up or down on foot; a soldier sent on top climbs its ladder and gets
-there (6 s), sent back it climbs down unhurt, and with the ladder gone it does not get up.
+there (6 s), sent back it climbs down unhurt, and with the ladder gone it does not get up; a
+second block on the first, a ladder up each, it climbs both to the top (9 s; 0 climbs before
+the chain).
 
-Not yet: a ship's decks still go by its stair well; a soldier's leg is one ladder, not a chain.
+A ship's decks keep their stair well (RoomPack): all of 40 seeds fit one (13 one deck, 16 two,
+11 three), and a stair is the nav's own way -- a ladder there would take soldiers off the nav for
+nothing.

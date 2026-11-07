@@ -942,7 +942,9 @@ func _ladder_step(goal: Vector3, run: bool) -> int:
 
 ## The nav has no way to `goal` on another level: a ladder near whose foot is
 ## level with the soldier and top with the goal (or the other way round) makes
-## one. Starts the leg; false when there is none.
+## one. With none, one that ends a level nearer the goal's (a chain: when its leg
+## is done the path fails again and the next is looked for), the one leaving the
+## least height still to go. Starts the leg; false when there is none.
 func _start_ladder_leg(goal: Vector3) -> bool:
 	# The plain walk climbs (Pawn.ladder); a body PawnMoves walks does not take one so.
 	if not _ladder_leg.is_empty() or pawn.moves != null or pawn.body == null or not pawn.body.is_inside_tree():
@@ -963,15 +965,21 @@ func _start_ladder_leg(goal: Vector3) -> bool:
 		var hf := Gravity.height_of(foot)
 		var ht := Gravity.height_of(top)
 		var way := 0
-		if absf(hf - fh) < LADDER_LEVEL and absf(ht - gh) < LADDER_LEVEL:
+		if absf(hf - fh) < LADDER_LEVEL:
 			way = 1
-		elif absf(ht - fh) < LADDER_LEVEL and absf(hf - gh) < LADDER_LEVEL:
+		elif absf(ht - fh) < LADDER_LEVEL:
 			way = -1
 		if way == 0:
+			continue
+		# Still to go after it: none, or less than before by a level at least.
+		var left := absf((ht if way > 0 else hf) - gh)
+		if left >= LADDER_LEVEL and left > absf(fh - gh) - LADDER_LEVEL:
 			continue
 		var start := foot if way > 0 else top
 		var end := top if way > 0 else foot
 		var cost := feet.distance_to(start) + end.distance_to(goal)
+		if left >= LADDER_LEVEL:
+			cost += LADDER_LOOK * 4.0 + left * LADDER_LOOK
 		if cost < best_cost:
 			best_cost = cost
 			best = {"ladder": l, "way": way, "start": start, "goal": goal, "climbed": false}
