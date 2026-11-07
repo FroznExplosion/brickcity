@@ -57,7 +57,7 @@ func run() -> void:
 	var drawn := DisplayServer.get_name() != "headless"
 	if drawn:
 		await p._frames(10)
-		await c._save("planet_tilt_%02d_standing" % int(tilt_deg))
+		await c._pass_runner()._save("planet_tilt_%02d_standing" % int(tilt_deg))
 
 	# Promote: does it stand under its own (tilted) weight?
 	var chunk: int = c._promote(b.id)
@@ -90,7 +90,7 @@ func run() -> void:
 	print("[planet] tilt: %d blasts on the ground storey" % blasts)
 	if drawn:
 		await p._ticks(25)
-		await c._save("planet_tilt_%02d_falling" % int(tilt_deg))
+		await c._pass_runner()._save("planet_tilt_%02d_falling" % int(tilt_deg))
 	var t := 0
 	var quiet := 0
 	while t < 1800 and quiet < 90:
@@ -107,12 +107,12 @@ func run() -> void:
 	if drawn:
 		view.call(40.0, 14.0)
 		await p._frames(12)
-		await c._save("planet_tilt_%02d_settled" % int(tilt_deg))
+		await c._pass_runner()._save("planet_tilt_%02d_settled" % int(tilt_deg))
 		cam.global_position = frame * Vector3(-14.0, 3.0, -30.0)
 		cam.look_at(frame * Vector3(4.0, 0.5, 0.0), frame.basis.y)
 		cam.reset_physics_interpolation()
 		await p._frames(12)
-		await c._save("planet_tilt_%02d_low" % int(tilt_deg))
+		await c._pass_runner()._save("planet_tilt_%02d_low" % int(tilt_deg))
 
 
 func _make_pad() -> void:
@@ -346,7 +346,7 @@ func run_sphere() -> void:
 	await p._ticks(30)
 	if drawn:
 		await p._frames(10)
-		await c._save("planet_sphere_standing")
+		await c._pass_runner()._save("planet_sphere_standing")
 	# One at a time, the camera 25 m off each (what is far from every eye is
 	# deleted, not crumbled: IslandManager.far_from_everyone).
 	for t in towers:
@@ -371,7 +371,7 @@ func run_sphere() -> void:
 			x += 2.5
 		if drawn:
 			await p._ticks(25)
-			await c._save("planet_sphere_%02d_falling" % int(t[0]))
+			await c._pass_runner()._save("planet_sphere_%02d_falling" % int(t[0]))
 		await _settle("tower at %.0f deg down" % t[0])
 		# The fallen section broken up where it lies, so pieces scatter over
 		# the curve and come to rest on it at their own angles.
@@ -385,14 +385,14 @@ func run_sphere() -> void:
 		_report_sphere(t[0], t[1], t[2])
 		if drawn:
 			await p._frames(12)
-			await c._save("planet_sphere_%02d_settled" % int(t[0]))
+			await c._pass_runner()._save("planet_sphere_%02d_settled" % int(t[0]))
 	_report_heap_all()
 	if drawn:
 		cam.global_position = SPHERE_AT + Vector3(0.0, 25.0, -110.0)
 		cam.look_at(SPHERE_AT + Vector3(-10.0, 15.0, 0.0), Vector3.UP)
 		cam.reset_physics_interpolation()
 		await p._frames(12)
-		await c._save("planet_sphere_settled")
+		await c._pass_runner()._save("planet_sphere_settled")
 
 
 func _settle(what: String) -> void:
