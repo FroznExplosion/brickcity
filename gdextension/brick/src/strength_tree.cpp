@@ -1,7 +1,7 @@
 #include "strength_tree.h"
 
+#include <algorithm>
 #include <queue>
-#include <unordered_map>
 #include <utility>
 
 using godot::Vector3;
@@ -10,8 +10,9 @@ namespace brick {
 
 namespace {
 
-struct Acc {
-    int64_t studs = 0;
+struct Edge {
+    int32_t nb;
+    int64_t studs;
     Vector3 sum;
 };
 
@@ -40,6 +41,12 @@ struct Below {
 
 } // namespace
 
+// Flat: a cluster's neighbours are a plain vector, not a hash map. A merge
+// takes over the bigger list, finds the smaller's neighbours in it through a
+// slot array stamped per merge, and each neighbour's own list has a and b
+// replaced by c in place. About twice as fast as hash maps on a tower (2.6 ->
+// 1.35 ms, 982 bricks, debug build;
+// strength_tree_probe prints the bake).
 void StrengthTree::bake(int32_t n, const std::vector<StrengthJoint> &joints) {
     left.assign((size_t)n, -1);
     right.assign((size_t)n, -1);
@@ -47,31 +54,50 @@ void StrengthTree::bake(int32_t n, const std::vector<StrengthJoint> &joints) {
     studs.assign((size_t)n, 0);
     cut_sum.assign((size_t)n, Vector3());
     roots.clear();
+    const size_t total = n > 0 ? (size_t)(2 * n - 1) : 0;
+    left.reserve(total);
+    right.reserve(total);
+    size.reserve(total);
+    studs.reserve(total);
+    cut_sum.reserve(total);
     std::vector<int32_t> parent((size_t)n, -1);
-    std::vector<std::unordered_map<int32_t, Acc>> adj((size_t)n);
+    parent.reserve(total);
+    std::vector<std::vector<Edge>> adj((size_t)n);
+    adj.reserve(total);
 
+    // One edge per pair: the joint runs sorted by pair and summed.
+    std::vector<StrengthJoint> js;
+    js.reserve(joints.size());
     for (const StrengthJoint &j : joints) {
         if (j.a == j.b || j.studs <= 0) {
             continue;
         }
-        const Vector3 w = j.at * (float)j.studs;
-        Acc &x = adj[(size_t)j.a][j.b];
-        x.studs += j.studs;
-        x.sum += w;
-        Acc &y = adj[(size_t)j.b][j.a];
-        y.studs += j.studs;
-        y.sum += w;
-    }
-
-    std::priority_queue<Pair, std::vector<Pair>, Below> heap;
-    for (int32_t a = 0; a < n; ++a) {
-        for (const auto &kv : adj[(size_t)a]) {
-            if (a < kv.first) {
-                heap.push(Pair{ kv.second.studs, 1, a, kv.first });
-            }
+        StrengthJoint k = j;
+        if (k.a > k.b) {
+            std::swap(k.a, k.b);
         }
+        js.push_back(k);
+    }
+    std::sort(js.begin(), js.end(), [](const StrengthJoint &x, const StrengthJoint &y) {
+        return x.a != y.a ? x.a < y.a : x.b < y.b;
+    });
+    std::priority_queue<Pair, std::vector<Pair>, Below> heap;
+    for (size_t i = 0; i < js.size();) {
+        const int32_t a = js[i].a;
+        const int32_t b = js[i].b;
+        int64_t st = 0;
+        Vector3 sum;
+        for (; i < js.size() && js[i].a == a && js[i].b == b; ++i) {
+            st += js[i].studs;
+            sum += js[i].at * (float)js[i].studs;
+        }
+        adj[(size_t)a].push_back(Edge{ b, st, sum });
+        adj[(size_t)b].push_back(Edge{ a, st, sum });
+        heap.push(Pair{ st, 1, a, b });
     }
 
+    std::vector<int32_t> slot(total, -1);
+    std::vector<int32_t> slot_stamp(total, -1);
     while (!heap.empty()) {
         const Pair p = heap.top();
         heap.pop();
@@ -80,45 +106,79 @@ void StrengthTree::bake(int32_t n, const std::vector<StrengthJoint> &joints) {
         }
         const int32_t a = p.lo;
         const int32_t b = p.hi;
-        const Acc between = adj[(size_t)a][b];
         const int32_t c = (int32_t)left.size();
+        const bool a_big = adj[(size_t)a].size() >= adj[(size_t)b].size();
+        std::vector<Edge> list = std::move(adj[(size_t)(a_big ? a : b)]);
+        std::vector<Edge> small = std::move(adj[(size_t)(a_big ? b : a)]);
+        adj[(size_t)a].clear();
+        adj[(size_t)a].shrink_to_fit();
+        adj[(size_t)b].clear();
+        adj[(size_t)b].shrink_to_fit();
+
+        // Take a and b out of the bigger list, keeping what lay between them.
+        int64_t between = 0;
+        Vector3 between_sum;
+        size_t w = 0;
+        for (size_t r = 0; r < list.size(); ++r) {
+            if (list[r].nb == a || list[r].nb == b) {
+                between = list[r].studs;
+                between_sum = list[r].sum;
+                continue;
+            }
+            list[w] = list[r];
+            slot[(size_t)list[w].nb] = (int32_t)w;
+            slot_stamp[(size_t)list[w].nb] = c;
+            ++w;
+        }
+        list.resize(w);
+        for (const Edge &e : small) {
+            if (e.nb == a || e.nb == b) {
+                continue;
+            }
+            if (slot_stamp[(size_t)e.nb] == c) {
+                Edge &t = list[(size_t)slot[(size_t)e.nb]];
+                t.studs += e.studs;
+                t.sum += e.sum;
+            } else {
+                slot[(size_t)e.nb] = (int32_t)list.size();
+                slot_stamp[(size_t)e.nb] = c;
+                list.push_back(e);
+            }
+        }
+
         left.push_back(a);
         right.push_back(b);
         size.push_back(size[(size_t)a] + size[(size_t)b]);
-        studs.push_back(between.studs);
-        cut_sum.push_back(between.sum);
+        studs.push_back(between);
+        cut_sum.push_back(between_sum);
         parent.push_back(-1);
         parent[(size_t)a] = c;
         parent[(size_t)b] = c;
 
-        // The bigger map is taken over, the smaller added into it.
-        const bool a_big = adj[(size_t)a].size() >= adj[(size_t)b].size();
-        std::unordered_map<int32_t, Acc> big = std::move(adj[(size_t)(a_big ? a : b)]);
-        std::unordered_map<int32_t, Acc> small = std::move(adj[(size_t)(a_big ? b : a)]);
-        adj[(size_t)a].clear();
-        adj[(size_t)b].clear();
-        big.erase(a);
-        big.erase(b);
-        for (const auto &kv : small) {
-            if (kv.first == a || kv.first == b) {
-                continue;
+        // Each neighbour: a and b become c, in place. Pairs not touching a or
+        // b keep their sizes and so their scores; the ones that did are dead
+        // (parent set) and come back as pairs with c.
+        for (const Edge &e : list) {
+            std::vector<Edge> &nx = adj[(size_t)e.nb];
+            bool put = false;
+            for (size_t r = 0; r < nx.size();) {
+                if (nx[r].nb == a || nx[r].nb == b) {
+                    if (!put) {
+                        nx[r] = Edge{ c, e.studs, e.sum };
+                        put = true;
+                        ++r;
+                    } else {
+                        nx[r] = nx.back();
+                        nx.pop_back();
+                    }
+                } else {
+                    ++r;
+                }
             }
-            Acc &t = big[kv.first];
-            t.studs += kv.second.studs;
-            t.sum += kv.second.sum;
+            heap.push(Pair{ e.studs, (int64_t)size[(size_t)c] * (int64_t)size[(size_t)e.nb],
+                    e.nb < c ? e.nb : c, e.nb < c ? c : e.nb });
         }
-        // Pairs not touching a or b keep their sizes and so their scores; the
-        // ones that did are dead (parent set) and come back as pairs with c.
-        for (const auto &kv : big) {
-            std::unordered_map<int32_t, Acc> &nx = adj[(size_t)kv.first];
-            nx.erase(a);
-            nx.erase(b);
-            nx[c] = kv.second;
-            heap.push(Pair{ kv.second.studs,
-                    (int64_t)size[(size_t)c] * (int64_t)size[(size_t)kv.first],
-                    kv.first < c ? kv.first : c, kv.first < c ? c : kv.first });
-        }
-        adj.push_back(std::move(big));
+        adj.push_back(std::move(list));
     }
 
     for (int32_t i = 0; i < (int32_t)parent.size(); ++i) {

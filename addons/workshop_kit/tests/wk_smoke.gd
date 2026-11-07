@@ -22,6 +22,7 @@ func _initialize() -> void:
 	_shapes()
 	_mirror()
 	await _camera()
+	_grid_and_ghost()
 	print("wk_smoke: %d passed, %d failed" % [_pass, _fail])
 	quit(0 if _fail == 0 else 1)
 
@@ -426,6 +427,23 @@ func _camera() -> void:
 	_ok("perspective comes back as it was", c.projection == Camera3D.PROJECTION_PERSPECTIVE
 			and c.global_transform.origin.is_equal_approx(persp.origin) and not ctx.flat_on)
 	c.queue_free()
+
+
+func _grid_and_ghost() -> void:
+	var im := WkGrid.lines(Rect2i(2, 3, 8, 4), 0.5)
+	var verts := 0
+	for s in im.get_surface_count():
+		verts += (im.surface_get_arrays(s)[Mesh.ARRAY_VERTEX] as PackedVector3Array).size()
+	_ok("grid: a line each side of every cell, both ways", verts == ((8 + 1) + (4 + 1)) * 2, str(verts))
+	var g := WkGhost.new()
+	_ok("ghost: a see-through node with its material", g.node.material_override == g.material
+			and g.material.transparency == BaseMaterial3D.TRANSPARENCY_ALPHA)
+	g.fits(false)
+	_ok("tinted for does-not-fit", g.material.albedo_color == WkGhost.DOES_NOT_FIT)
+	var box := BoxMesh.new()
+	g.place(box, Transform3D(Basis(), Vector3(1, 2, 3)))
+	_ok("given a mesh and a place", g.node.mesh == box and g.node.transform.origin == Vector3(1, 2, 3))
+	g.node.free()
 
 
 ## A pretend editor for the tools.

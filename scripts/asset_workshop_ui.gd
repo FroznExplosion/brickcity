@@ -75,7 +75,7 @@ var _layer: CanvasLayer
 var _tabs: HBoxContainer
 var _tab_buttons := {}
 var _stage_button: Button
-var _tools_panel: ToolRail
+var _tools_panel: WkRail
 var _tool_buttons := {}
 var _hint: Label
 var _outliner: PanelContainer
@@ -132,9 +132,9 @@ func setup(workshop, layer: CanvasLayer) -> void:
 	sync_kind()
 
 
-## A rail icon (the shared rail's, `ToolRail.ICONS`).
+## A rail icon (the shared rail's, `WkRail.ICONS`).
 static func icon(id: String) -> Texture2D:
-	return ToolRail.icon(id)
+	return WkRail.icon(id)
 
 
 ## Ask for a name: `then` gets it.
@@ -209,7 +209,9 @@ func _stage_step() -> void:
 # ---------------------------------------------------------------------------
 
 func _build_tools() -> void:
-	_tools_panel = ToolRail.new(ws.RAIL_W, true)
+	_tools_panel = WkRail.new(ws.RAIL_W, true)
+	ws.wk_ctx.style_ui(_tools_panel)   # the game's look (GameUI, MenuTheme), through the kit's seam
+	_tools_panel.restyle(ws.wk_ctx.panel_box())
 	_layer.add_child(_tools_panel)
 
 

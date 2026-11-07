@@ -6995,7 +6995,11 @@ int BrickWorld::set_blocks_decorative(int chunk_id, const PackedInt32Array &bloc
         ++changed;
     }
     // No bake invalidation: the role changes nothing about the geometry, the
-    // faces or the colours. It is read by the solve and by nothing else.
+    // faces or the colours. It is read by the solve and by nothing else --
+    // and by the strength tree, which leaves decorative blocks out.
+    if (changed > 0) {
+        struct_bump(chunk_id);
+    }
     return changed;
 }
 
@@ -9460,6 +9464,7 @@ void BrickWorld::release_chunk(int chunk_id) {
     fire_clear(chunk_id);
     joint_cache[chunk_id] = brick::JointCache();
     conn_watch[(size_t)chunk_id] = ConnWatch();
+    tree_cache.erase(chunk_id);
     anchor_levels[(size_t)chunk_id].clear();
     hang_levels[(size_t)chunk_id].clear();
 }
@@ -11503,15 +11508,42 @@ int64_t BrickWorld::bake_strength_tree(int chunk_id, brick::StrengthTree &tree,
             std::chrono::steady_clock::now() - t0).count();
 }
 
+const BrickWorld::TreeCache &BrickWorld::strength_tree_of(int chunk_id) {
+    ConnWatch &w = conn_watch[(size_t)chunk_id];
+    if (w.stamp == 0) {
+        struct_bump(chunk_id);   // a stamp of its own, so it can be kept
+    }
+    TreeCache &tc = tree_cache[chunk_id];
+    if (tc.stamp == w.stamp && !tc.leaf_block.empty()) {
+        ++tree_hits;
+        return tc;
+    }
+    const int64_t us = bake_strength_tree(chunk_id, tc.tree, tc.leaf_block);
+    tc.stamp = w.stamp;
+    ++tree_bakes;
+    tree_bake_usec += us;
+    tree_bake_worst_usec = std::max(tree_bake_worst_usec, us);
+    return tc;
+}
+
+PackedInt64Array BrickWorld::get_strength_tree_stats() const {
+    PackedInt64Array a;
+    a.push_back(tree_bakes);
+    a.push_back(tree_hits);
+    a.push_back(tree_bake_usec);
+    a.push_back(tree_bake_worst_usec);
+    return a;
+}
+
 Array BrickWorld::strength_split(int chunk_id, Vector3 point, double energy, double falloff,
         bool relative) {
     Array out;
     if (!valid_chunk(chunk_id)) {
         return out;
     }
-    brick::StrengthTree tree;
-    std::vector<int32_t> leaf_block;
-    bake_strength_tree(chunk_id, tree, leaf_block);
+    const TreeCache &tc = strength_tree_of(chunk_id);
+    const brick::StrengthTree &tree = tc.tree;
+    const std::vector<int32_t> &leaf_block = tc.leaf_block;
     const brick::JointCache &jc = joints_of(chunk_id);
     const Chunk &c = chunks[chunk_id];
     const size_t n = c.blocks.size();
@@ -11597,7 +11629,13 @@ Array BrickWorld::strength_split(int chunk_id, Vector3 point, double energy, dou
                 return a.size() > b.size();
             });
     if (groups.size() > 1) {
-        conn_forget(chunk_id);   // about to be cut: not known to be in one piece
+        // About to be cut: not known to be in one piece. Nothing structural
+        // changed, so the tree just used stays good for the cut itself.
+        const bool kept = tree_cache[chunk_id].stamp == conn_watch[(size_t)chunk_id].stamp;
+        conn_forget(chunk_id);
+        if (kept) {
+            tree_cache[chunk_id].stamp = conn_watch[(size_t)chunk_id].stamp;
+        }
     }
     for (std::vector<int32_t> &g : groups) {
         std::sort(g.begin(), g.end());
@@ -11666,6 +11704,7 @@ void BrickWorld::_bind_methods() {
     ClassDB::bind_method(D_METHOD("strength_split", "chunk_id", "point", "energy", "falloff", "relative"),
             &BrickWorld::strength_split, DEFVAL(false));
     ClassDB::bind_method(D_METHOD("strength_tree_info", "chunk_id"), &BrickWorld::strength_tree_info);
+    ClassDB::bind_method(D_METHOD("get_strength_tree_stats"), &BrickWorld::get_strength_tree_stats);
     ClassDB::bind_method(D_METHOD("crack_components", "chunk_id", "planes_x", "planes_z"),
             &BrickWorld::crack_components);
     ClassDB::bind_method(D_METHOD("release_chunk", "chunk_id"), &BrickWorld::release_chunk);

@@ -983,9 +983,10 @@ Each stage: own branch, merged `--no-ff`, pushed. Every stage passes, as on main
 | 2c ✅ | **Shapes**: the grid geometry (`BrickShapes`' rectangle, ellipse, ring, polyline, region cells) into `WkShapes`; packing cells into bricks and kept shapes stay game-side. The Shapes *tool* goes with Draw/Cut/Select in stage 5: the two workshops' gestures differ (asset: drag a box, ball, cylinder or wedge and fill it; building: draw an outline, then pull its height), so one tool needs a design choice first | probes; `wk_smoke` cells checks |
 | 3a ✅ | `WkMirror`: the plane (on, axis, x, z) and its cell arithmetic; both workshops' mirror state is it, through properties | probes; `wk_smoke` |
 | 3b ✅ | `WkCamera`: WorkshopView's orbit, pan, zoom to the cursor and click-or-drag, and the asset workshop's flat views (side, top, front; orthographic zoom at the cursor). The FPS fly stays the game's camera, behind the context (no new fly code) | probes; gate pictures as before |
-| 3c | `WkGrid` (the grid overlay) and `WkGhost` (the preview node and its valid/invalid tint; its mesh from the context) | probes; gate |
-| 4a | `WkFrame` + `WkRail` (ToolRail moved) for the building workshop: menu bar, rail, options, hint line, themed by `ctx.theme()` | `workshop_probe`, gate |
-| 4b | The asset workshop's tabs, outliner and actions on `WkFrame` | `asset_ui_probe` |
+| 3c ✅ | `WkGrid` (the grid overlay) and `WkGhost` (the preview node and its valid/invalid tint; its mesh from the context) | probes; gate |
+| 4a ✅ | `WkRail` (ToolRail moved into the kit) in both workshops, with the game's look through the context (`style_ui`, `panel_box`: `GameUI`, on `MenuTheme`) | probes, gate |
+| 4b | `WkFrame` for the building workshop: the menu bar (`WorkshopMenu`'s menus as data the workshop gives), the rail, the option panel and the hint line, laid out and themed in one place | `workshop_probe`, gate |
+| 4c | The asset workshop's tabs, outliner and actions on `WkFrame` | `asset_ui_probe` |
 | 5 | The rest of the shared tools into the kit, one file each: place/run, erase, select, cut, measure, move, fill/wand; workshop-only tools into `scripts/workshop/tools/` | probes; `wk_smoke` per tool |
 | 6a | Each of the 26 overrides becomes a context call or a tool (the asset still extends) | probes |
 | 6b | **No more `extends workshop.gd`**: the brick world, recipe, frames, save and load in one component both workshops own; each workshop `extends Node3D` and composes the kit | every probe, gate; a scan finds no game class named under `addons/workshop_kit/` |
@@ -1128,3 +1129,33 @@ views and back). The smoke test now runs from `_initialize` so a node can be in 
 * The asset workshop does not take up orbit or FPS (that would change how it handles): its
   `set_view`, `zoom` and `zoom_at` are `cam_ctl.flat` / `perspective` / `zoom_flat` / `zoom_at`,
   and `_ortho_size` is the kit camera's, through a property.
+
+### As built: stage 3c, grid and ghost (2026-11-07)
+
+Kit 0.7.0: **`WkGrid.lines(window, cell)`** -- the overlay's faint lines and a stronger one every 4
+cells, as an ImmediateMesh in the node's XZ plane -- and **`WkGhost`** -- the see-through preview
+node and its material, `place(mesh, xf)`, `fits(ok)` (the cyan and red), `tint`. `wk_smoke` 90.
+
+* The building workshop's `_build_grid` places the node and draws `WkGrid.lines`. One difference:
+  the stronger lines across were counted from the window's x; each direction now counts from its
+  own edge, so both fall every 4 studs from the build's corner.
+* The workshop's `_ghost` and `_ghost_material` are the kit ghost's node and material, so every
+  place that sets the ghost's mesh, place or colour (both workshops, the furniture tool) is as it
+  was; "does not fit" is `ghost.fits(false)`. The layer tints (structure, interior, detail) and
+  the ghost's studs stay the workshop's.
+* The asset workshop's working plane (its grid in three views, the photo grid) stays its own: it
+  is drawn round the build and the flat view in use, not a window round the ghost.
+
+### As built: stage 4a, the rail (2026-11-07)
+
+Kit 0.8.0: **`WkRail`** -- `scripts/workshop_rail.gd` (ToolRail) moved into the kit unchanged
+inside, plus `restyle(panel)`; `WkContext.style_ui(root)` and `panel_box()` (neutral: the rail's own
+look).
+
+* Both workshops' rails take the game's look: `BrickWorkshopContext` answers with the game's UI
+  kit -- `GameUI.style` (the menus' Theme, put on again when the text scale or high contrast
+  changes) and `GameUI.panel_box` -- so the rails match the menus and follow Options >
+  Accessibility. The kit names neither: the game's context does.
+* `menu/core/MenuTheme.gd` (`_text_scale`): a settings module with no value yet (a probe run as a
+  script, before settings load) gave `float(null)`, an error for every themed panel. It is read
+  as the default now. A one-line fix in another area's file.

@@ -342,6 +342,7 @@ var _stress := {}           ## block id -> load / capacity, for the overlay
 
 var _material: Material
 var _ghost_material: StandardMaterial3D
+var ghost: WkGhost
 
 
 func _init() -> void:
@@ -377,14 +378,11 @@ func _ready() -> void:
 	sm.shader = load("res://shaders/brick.gdshader")
 	_material = BrickMaterials.add_glass(sm)
 
-	_ghost_material = StandardMaterial3D.new()
-	_ghost_material.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	_ghost_material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	_ghost_material.albedo_color = Color(0.4, 0.9, 1.0, 0.45)
-	_ghost_material.cull_mode = BaseMaterial3D.CULL_DISABLED
-
-	_ghost = MeshInstance3D.new()
-	_ghost.material_override = _ghost_material
+	# The ghost is the editor kit's (WkGhost): its node and material; the mesh, the place and
+	# the layer tints are this workshop's.
+	ghost = WkGhost.new()
+	_ghost_material = ghost.material
+	_ghost = ghost.node
 	add_child(_ghost)
 	_ghost_studs = MultiMeshInstance3D.new()
 	_ghost_studs.material_override = _ghost_material
@@ -1830,7 +1828,7 @@ func _update_ghost() -> void:
 	# through a weld, across grids -- so it counts as attached, not mid-air.
 	var held := _joints > 0 or not _snapped.is_empty()
 	if not _valid:
-		_ghost_material.albedo_color = Color(1.0, 0.25, 0.22, 0.45)
+		ghost.fits(false)
 	elif _role == BuildRecipe.Role.DETAIL:
 		_ghost_material.albedo_color = Color(0.9, 0.5, 1.0, 0.42) if held \
 				else Color(0.9, 0.5, 1.0, 0.28)
@@ -3096,30 +3094,10 @@ func _build_grid() -> void:
 	var plane_y: float = _cell.y * BrickPalette.PLATE_M
 	_grid.transform = world.get_chunk_transform(chunk) \
 			* Transform3D(Basis(), Vector3(0.0, plane_y, 0.0))
-	var im := ImmediateMesh.new()
-	var mat := StandardMaterial3D.new()
-	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	mat.vertex_color_use_as_albedo = true
-	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	im.surface_begin(Mesh.PRIMITIVE_LINES, mat)
-	var s := BrickPalette.STUD_M
+	# The lines are the editor kit's (WkGrid): faint, a stronger one every 4 studs -- a rotated
+	# grid's plane can sit right across the view, and it is an orientation cue.
 	_grid_drawn = grid_window()
-	var lo := _grid_drawn.position
-	var hi := _grid_drawn.end
-	# Just above the plane itself, so it does not z-fight with the brick tops.
-	var y := 0.002
-	for i in _grid_drawn.size.x + 1:
-		# Faint: a rotated grid's plane can sit right across the view, and it is
-		# an orientation cue rather than something to read.
-		var u := (lo.x + i) * s
-		var v := (lo.y + i) * s
-		var col := Color(1, 1, 1, 0.13 if (lo.x + i) % 4 == 0 else 0.04)
-		im.surface_set_color(col); im.surface_add_vertex(Vector3(u, y, lo.y * s))
-		im.surface_set_color(col); im.surface_add_vertex(Vector3(u, y, hi.y * s))
-		im.surface_set_color(col); im.surface_add_vertex(Vector3(lo.x * s, y, v))
-		im.surface_set_color(col); im.surface_add_vertex(Vector3(hi.x * s, y, v))
-	im.surface_end()
-	_grid.mesh = im
+	_grid.mesh = WkGrid.lines(_grid_drawn, BrickPalette.STUD_M)
 
 
 ## The studs the grid is drawn over: round the ghost, moving a quarter of itself at a time
