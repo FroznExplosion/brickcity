@@ -31,7 +31,7 @@ const HEARD_PAST := 15.0
 const SPACING := 1.4
 ## Who comes, by wave (UnitCatalog's built foot units, as the city's waves field
 ## them): the first all rifles, each after it a wider mix. A generated town's
-## one squad is the second.
+## one squad is one of the mixes after the first, its own (mix_index).
 ## From this wave home's waves bring a tank (UnitCatalog's built heavy armour),
 ## crewed, beside the squad; a wave is clear when it is wrecked too.
 const TANK_FROM := 4
@@ -305,6 +305,15 @@ func _town_near() -> int:
 	return -1
 
 
+## Which of WAVE_KINDS a squad is drawn from: home's by its wave; a generated
+## town's by the town itself, any mix but the first -- towns differ, and each is
+## the same every time it is raised.
+func mix_index(i := town) -> int:
+	if waves:
+		return mini(wave - 1, WAVE_KINDS.size() - 1)
+	return 1 + absi(hash(_key(i))) % (WAVE_KINDS.size() - 1)
+
+
 func _key(i: int) -> String:
 	return "%d:%d:%d" % [scene.system.system_index, scene.system.index_of(body), i]
 
@@ -415,7 +424,7 @@ func _spawn() -> void:
 	if restoring:
 		count = _left.size()
 	var net := s.nav_net as PlanetNavNet
-	var mix: Array = WAVE_KINDS[mini(wave - 1 if waves else 1, WAVE_KINDS.size() - 1)]
+	var mix: Array = WAVE_KINDS[mix_index()]
 	for k in count:
 		var p := net.snap(at + side * (k - (count - 1) * 0.5) * SPACING + up * 0.3)
 		var kind: StringName = mix[rng.randi() % mix.size()]
