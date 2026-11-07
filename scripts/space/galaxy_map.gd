@@ -50,10 +50,10 @@ func chosen() -> int:
 func _draw() -> void:
 	var size_px := get_viewport_rect().size
 	draw_rect(Rect2(Vector2.ZERO, size_px), Color(0.01, 0.02, 0.05, 0.92))
-	var font := ThemeDB.fallback_font
-	draw_string(font, Vector2(24, 36), "GALAXY  --  Up/Down pick, J jump, U universes, M close", HORIZONTAL_ALIGNMENT_LEFT, -1, 16, Color(0.8, 0.85, 0.95))
+	var font := GameUI.font()
+	draw_string(font, Vector2(24, 36), "GALAXY  --  Up/Down pick, J jump, U universes, M close", HORIZONTAL_ALIGNMENT_LEFT, -1, GameUI.px(16), Color(0.8, 0.85, 0.95))
 	if note != "":
-		draw_string(font, Vector2(24, 60), "No jump from here. " + note, HORIZONTAL_ALIGNMENT_LEFT, -1, 16, Color(1.0, 0.75, 0.3))
+		draw_string(font, Vector2(24, 60), "No jump from here. " + note, HORIZONTAL_ALIGNMENT_LEFT, -1, GameUI.px(16), Color(1.0, 0.75, 0.3))
 	var c := Vector2(size_px.x * 0.36, size_px.y * 0.54)
 	var from := uni.system_position(here)
 	var reach := 1.0
@@ -74,8 +74,8 @@ func _draw() -> void:
 		if i == pick:
 			draw_arc(at, 9.0, 0.0, TAU, 24, Color.WHITE, 1.5)
 			draw_line(c, at, Color(1, 1, 1, 0.35), 1.0)
-		draw_string(font, at + Vector2(8, 4), str(r[1]), HORIZONTAL_ALIGNMENT_LEFT, -1, 11, Color(0.75, 0.8, 0.9))
+		draw_string(font, at + Vector2(8, 4), str(r[1]), HORIZONTAL_ALIGNMENT_LEFT, -1, GameUI.px(11), Color(0.75, 0.8, 0.9))
 		var line := "%s  %.0f ly  %d planets, %d settled" % [r[1], r[5], r[2], r[3]]
 		var y := 72.0 + i * 24.0
-		draw_string(font, Vector2(size_px.x * 0.7, y), ("> " if i == pick else "  ") + line, HORIZONTAL_ALIGNMENT_LEFT, -1, 14,
+		draw_string(font, Vector2(size_px.x * 0.7, y), ("> " if i == pick else "  ") + line, HORIZONTAL_ALIGNMENT_LEFT, -1, GameUI.px(14),
 				Color.WHITE if i == pick else Color(0.7, 0.75, 0.85))

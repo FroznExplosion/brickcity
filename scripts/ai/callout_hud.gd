@@ -52,7 +52,7 @@ func refresh() -> void:
 	while _labels.size() < views.size():
 		var lb := Label.new()
 		lb.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-		lb.add_theme_font_size_override("font_size", 20)
+		lb.add_theme_font_size_override("font_size", GameUI.px(20))
 		lb.add_theme_color_override("font_outline_color", Color.BLACK)
 		lb.add_theme_constant_override("outline_size", 6)
 		_box.add_child(lb)

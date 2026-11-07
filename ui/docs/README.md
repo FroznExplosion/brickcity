@@ -69,8 +69,10 @@ text, the plate behind a bar, warning, ready, panels.
 |---|---|
 | `scripts/pawn/player_hud.gd` (drawn) | on the kit |
 | `scripts/guns/gun_card.gd` (built) | on the kit |
-| `scripts/pawn/player_arsenal.gd`, `scripts/progression/skill_screen.gd`, `scripts/space/galaxy_map.gd`, `scripts/space/universe_panel.gd`, `scripts/space/space_markers.gd`, `scripts/ai/aggro_meter.gd`, `scripts/ai/callout_hud.gd`, `scripts/combat/combat_feedback.gd` (drawn) | to do |
-| `scripts/loot/loot_builder_menu.gd`, `scripts/parts/character_builder.gd`, `scripts/parts/part_catalog_panel.gd`, `scripts/parts/mech_loadout_screen.gd`, `scripts/terrain_dev_menu.gd`, the disaster menu in `scripts/disasters/disaster_director.gd` (built) | to do |
+| `scripts/pawn/player_arsenal.gd`, `scripts/progression/skill_screen.gd`, `scripts/space/galaxy_map.gd`, `scripts/space/universe_panel.gd`, `scripts/space/space_markers.gd`, `scripts/ai/aggro_meter.gd` (drawn) | text scale: font and every size through the kit (steps 1, 4 of the recipe). Their own colours and plates are still hand-written: steps 2-3 when each is next touched |
+| `scripts/loot/loot_builder_menu.gd`, `scripts/terrain_dev_menu.gd`, the disaster menu in `scripts/disasters/disaster_director.gd` (built) | on the kit: panel, theme, sizes (the disaster menu keeps its amber border) |
+| `scripts/ai/callout_hud.gd`, `scripts/parts/character_builder.gd`, `scripts/parts/mech_loadout_screen.gd` (built) | sizes through the kit |
+| `scripts/combat/combat_feedback.gd` | its damage numbers are `Label3D`s in the world, sized in metres: not screen text, left as they are |
+| `scripts/parts/part_catalog_panel.gd` | no style of its own: it wears the asset workshop's |
 
-Each area converts its own screens (repo CLAUDE.md, Areas); `tools/game_ui_probe.gd` checks the
-kit itself.
+`tools/game_ui_probe.gd` checks the kit itself. A new screen starts on the kit.
