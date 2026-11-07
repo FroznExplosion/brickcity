@@ -274,6 +274,36 @@ func _landings(chunk: int, what: String) -> void:
 	_ok("%s: a harder landing makes at least as many pieces" % what, rising, str(counts))
 
 
+## The tree is kept per chunk until something structural changes in it
+## (BrickWorld.strength_tree_of): a landing asks, the split asks again.
+func _cache(chunk: int) -> void:
+	var p := Vector3.ZERO
+	var s0: PackedInt64Array = _w.get_strength_tree_stats()
+	_w.strength_split(chunk, p, 1.0, 2.0, true)
+	var s1: PackedInt64Array = _w.get_strength_tree_stats()
+	_w.strength_split(chunk, p, 1.0, 2.0, true)
+	var s2: PackedInt64Array = _w.get_strength_tree_stats()
+	_ok("asked twice with nothing changed, the tree is baked once", s2[0] == s1[0] and s2[1] == s1[1] + 1,
+			"bakes %d -> %d -> %d, hits %d -> %d -> %d" % [s0[0], s1[0], s2[0], s0[1], s1[1], s2[1]])
+	var groups: Array = _w.strength_split(chunk, p, 1.0, 2.0, true)
+	var victim: int = (groups[0] as PackedInt32Array)[0]
+	var cell := StructureReplayer.block_cell(_w, chunk, victim)
+	_w.kill_block(chunk, cell)
+	var s3: PackedInt64Array = _w.get_strength_tree_stats()
+	var after: Array = _w.strength_split(chunk, p, 1.0, 2.0, true)
+	var s4: PackedInt64Array = _w.get_strength_tree_stats()
+	var has_victim := false
+	for g in after:
+		if (g as PackedInt32Array).has(victim):
+			has_victim = true
+	_ok("a brick shot away: baked again, and the dead brick is in no piece",
+			s4[0] == s3[0] + 1 and not has_victim, "bakes %d -> %d" % [s3[0], s4[0]])
+	_w.set_blocks_decorative(chunk, PackedInt32Array([(after[0] as PackedInt32Array)[0]]), true)
+	_w.strength_split(chunk, p, 1.0, 2.0, true)
+	var s5: PackedInt64Array = _w.get_strength_tree_stats()
+	_ok("a brick made furniture: baked again", s5[0] == s4[0] + 1, "bakes %d -> %d" % [s4[0], s5[0]])
+
+
 # --- builds ---------------------------------------------------------------------
 
 func _two_bricks() -> void:
@@ -358,6 +388,7 @@ func _tower() -> void:
 			str(_w.seam_studs(c, per, per)), window_k, str(_w.seam_studs(c, window_k, window_k))])
 	_hits(t, root, Vector3(0.0, float(per) * 2.0, 0.0), "a corner, second storey")
 	_landings(c, "tower")
+	_cache(c)
 
 
 func _build(path: String) -> void:
