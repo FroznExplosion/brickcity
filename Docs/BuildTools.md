@@ -981,7 +981,9 @@ Each stage: own branch, merged `--no-ff`, pushed. Every stage passes, as on main
 | 2a ✅ | `WkTool`, `WkContext`, `WkToolbox`; `BrickWorkshopContext` (`scripts/workshop/brick_context.gd`) for both; SketchPen -> `WkSketchPen`, and the stroke handling of both workshops' sketching into **`WkSketchTool`** | probes; `wk_smoke` drives the tool through a pretend context |
 | 2b ✅ | **Paint** into a kit tool: the stroke (press, drag, release as one undo), the brush's reach, pick a colour; what a brick's colour is stays the workshop's | probes; `wk_smoke` |
 | 2c ✅ | **Shapes**: the grid geometry (`BrickShapes`' rectangle, ellipse, ring, polyline, region cells) into `WkShapes`; packing cells into bricks and kept shapes stay game-side. The Shapes *tool* goes with Draw/Cut/Select in stage 5: the two workshops' gestures differ (asset: drag a box, ball, cylinder or wedge and fill it; building: draw an outline, then pull its height), so one tool needs a design choice first | probes; `wk_smoke` cells checks |
-| 3 | `WkCamera` (WorkshopView's orbit/FPS + the asset's flat views and zoom), `WkMirror` (one plane for both; `mirror_item` in the adapter), `WkGrid`, `WkGhost` | probes; gate pictures as before; camera orbit, pan, zoom, flat views by script |
+| 3a ✅ | `WkMirror`: the plane (on, axis, x, z) and its cell arithmetic; both workshops' mirror state is it, through properties | probes; `wk_smoke` |
+| 3b | `WkCamera`: WorkshopView's orbit, pan, zoom to the cursor and click-or-drag, and the asset workshop's flat views (side, top, front; orthographic zoom at the cursor). The FPS fly stays the game's camera, behind the context (no new fly code) | probes; gate pictures as before |
+| 3c | `WkGrid` (the grid overlay) and `WkGhost` (the preview node and its valid/invalid tint; its mesh from the context) | probes; gate |
 | 4a | `WkFrame` + `WkRail` (ToolRail moved) for the building workshop: menu bar, rail, options, hint line, themed by `ctx.theme()` | `workshop_probe`, gate |
 | 4b | The asset workshop's tabs, outliner and actions on `WkFrame` | `asset_ui_probe` |
 | 5 | The rest of the shared tools into the kit, one file each: place/run, erase, select, cut, measure, move, fill/wand; workshop-only tools into `scripts/workshop/tools/` | probes; `wk_smoke` per tool |
@@ -1091,3 +1093,19 @@ triangle, line, arch, stairs, outline, cells, polyline, plan), `polyline_cells`,
   plan bands, roofs, reflections, shifts, parts and course packing. `BrickShapes.KINDS` and `LIES`
   are the kit's.
 * The Shapes *tool* is stage 5's, with Draw, Cut and Select.
+
+### As built: stage 3a, the mirror (2026-11-07)
+
+Kit 0.5.0: **`WkMirror`** -- `on`, `axis` (0 across X, 2 across Z), `x`, `z`, a `changed` signal;
+`turn_on(cell)` (a plane never set starts at the cell), `mirror_cell(cell, size)`, `mirror_dir`
+(a front turned across the plane), `through(cell, size)` (the plane through a thing's middle),
+`across` / `mirrored_x` / `mirrored_z`. `wk_smoke` 75 checks.
+
+* The workshop's `mirror_on`, `mirror_z`, `mirror_x`, `mirror_axis` are properties on `ws.mirror`,
+  so the asset workshop's own `set_mirror`, `mirror_here`, `set_mirror_z` and its sheet, and the
+  building workshop's tools and their reflected shapes, read and set them as before.
+  `mirrored_z`/`mirrored_x`, `set_mirror`, `mirror_here` and `_place_mirrored` use it.
+* What a mirror image *is* stays the game's: a brick turned to face the other way
+  (`_place_mirrored`), a kept shape reflected (`BrickShapes.reflected`). The drawn plane (the asset
+  workshop's sheet, the building workshop's lines) stays each workshop's for now: both are drawn
+  round the build's own box.

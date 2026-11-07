@@ -20,6 +20,7 @@ func _init() -> void:
 	_sketch_tool()
 	_paint_tool()
 	_shapes()
+	_mirror()
 	print("wk_smoke: %d passed, %d failed" % [_pass, _fail])
 	quit(0 if _fail == 0 else 1)
 
@@ -351,6 +352,27 @@ func _shapes() -> void:
 	_ok("stairs: a step every STAIR_STEP cells up", stairs.has(Vector2i(0, 0)) and stairs.has(Vector2i(5, 8))
 			and not stairs.has(Vector2i(5, 0)))
 	_ok("v2i takes arrays and Vector2i", WkShapes.v2i([2, 3]) == Vector2i(2, 3) and WkShapes.v2i(Vector2i(4, 1)) == Vector2i(4, 1))
+
+
+func _mirror() -> void:
+	var m := WkMirror.new()
+	var told := [0]
+	m.changed.connect(func() -> void: told[0] += 1)
+	m.turn_on(Vector3i(7, 1, 12))
+	_ok("on: a plane never set starts at the cell", m.on and m.z == 12.0 and m.x == 7.0 and told[0] > 0)
+	_ok("a 2-wide thing at 13, across z = 12: its image at 9", m.mirror_cell(Vector3i(3, 1, 13), Vector3i(1, 1, 2))
+			== Vector3i(3, 1, 9))
+	m.z = 12.5
+	_ok("one straddling the plane is its own image", m.mirror_cell(Vector3i(3, 1, 12), Vector3i(1, 1, 1))
+			== Vector3i(3, 1, 12))
+	m.axis = 0
+	_ok("across X: x moves, z stays", m.mirror_cell(Vector3i(9, 1, 4), Vector3i(1, 1, 1)) == Vector3i(4, 1, 4)
+			and m.plane() == 7.0)
+	_ok("a front across the plane turns", m.mirror_dir(Vector3i(1, 0, 1)) == Vector3i(-1, 0, 1))
+	m.through(Vector3i(20, 0, 0), Vector3i(4, 1, 2))
+	_ok("through the middle of a thing", m.x == 22.0)
+	m.axis = 5
+	_ok("any axis but 0 is across Z", m.axis == 2)
 
 
 ## A pretend editor for the tools.

@@ -299,10 +299,21 @@ var _opened_fixtures := 0
 ## The mirror (Docs/BuildTools.md section 7; moved down from the asset workshop): while on,
 ## a brick placed is placed again across the plane -- across Z at `mirror_z` studs, or with
 ## `mirror_axis` 0 across X at `mirror_x`.
-var mirror_on := false
-var mirror_z := 0.0
-var mirror_x := 0.0
-var mirror_axis := 2
+## The plane and its arithmetic are the editor kit's (WkMirror, addons/workshop_kit); these
+## names stay, as properties on it.
+var mirror := WkMirror.new()
+var mirror_on: bool:
+	get: return mirror.on
+	set(v): mirror.on = v
+var mirror_z: float:
+	get: return mirror.z
+	set(v): mirror.z = v
+var mirror_x: float:
+	get: return mirror.x
+	set(v): mirror.x = v
+var mirror_axis: int:
+	get: return mirror.axis
+	set(v): mirror.axis = v
 ## Lock height as a button: the plane stays as with E held, until it is pressed again.
 var plane_locked := false
 var _run_from := 0
@@ -2016,29 +2027,24 @@ func _place() -> void:
 
 ## The first stud across of a part `width` studs wide at `z`, mirrored across the plane.
 func mirrored_z(z: int, width: int) -> int:
-	return int(round(2.0 * mirror_z - float(z + width)))
+	return mirror.mirrored_z(z, width)
 
 
 ## The same across X.
 func mirrored_x(x: int, width: int) -> int:
-	return int(round(2.0 * mirror_x - float(x + width)))
+	return mirror.mirrored_x(x, width)
 
 
 func set_mirror(on: bool) -> void:
-	mirror_on = on
-	if on and mirror_z == 0.0:
-		mirror_z = float(_cell.z)
-	if on and mirror_x == 0.0:
-		mirror_x = float(_cell.x)
+	if on:
+		mirror.turn_on(_cell)
+	else:
+		mirror.on = false
 
 
 ## Put the plane down the middle of the ghost.
 func mirror_here() -> void:
-	var size := BrickPalette.size_of(_archetype_name())
-	if mirror_axis == 0:
-		mirror_x = _cell.x + size.x * 0.5
-	else:
-		mirror_z = _cell.z + size.z * 0.5
+	mirror.through(_cell, BrickPalette.size_of(_archetype_name()))
 
 
 ## The brick just placed, again, on the other side of the plane. A part with a front
@@ -2046,19 +2052,13 @@ func mirror_here() -> void:
 ## exactly is its own mirror and is not placed twice. Upright grid only, for now.
 func _place_mirrored() -> void:
 	var arch := _archetype_name()
-	var size := BrickPalette.size_of(arch)
-	var to := _cell
-	if mirror_axis == 0:
-		to.x = mirrored_x(_cell.x, size.x)
-	else:
-		to.z = mirrored_z(_cell.z, size.z)
+	var to := mirror.mirror_cell(_cell, BrickPalette.size_of(arch))
 	if to == _cell:
 		return
 	var keep := [_cell, _yaw, _snapped]
 	var front := BrickPalette.front_of(arch)
 	if front[mirror_axis] != 0:
-		var want := front
-		want[mirror_axis] = -front[mirror_axis]
+		var want := mirror.mirror_dir(front)
 		for y in 4:
 			if BrickPalette.front_of(BrickPalette.variant_name(_part(), y, _flip)) == want:
 				_yaw = y
