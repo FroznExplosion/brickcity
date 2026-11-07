@@ -1396,6 +1396,8 @@ func spawn(source: int, block_ids: PackedInt32Array,
 
 	var isl := BrickIsland.new()
 	isl.chunk = island_chunk
+	# Baked from its live bricks only (PIECES_SKIP_DEAD).
+	world.set_chunk_bake_skips_dead(island_chunk, PIECES_SKIP_DEAD)
 	isl.piece_id = piece_id
 	isl.owner = owner_id
 	isl.local_com = split.local_com
@@ -3089,6 +3091,14 @@ func rebuild_mesh(isl: BrickIsland, force_full: bool = false, allow_sync: bool =
 	# the chunk has no valid bake, and for a freshly split 2,000-brick half
 	# that is most of a second -- which no per-tick budget can bound, because
 	# it is one indivisible call. Ask the worker and come back later.
+	# A piece adopted whole (a toppled building, one back from sleep) keeps the
+	# bake it came with, dead bricks and all, until it needs a whole new mesh:
+	# then a bake of its live bricks only (PIECES_SKIP_DEAD). Not set when it is
+	# adopted -- setting it drops a bake in flight, which its band holes may be
+	# waiting on.
+	if PIECES_SKIP_DEAD and not allow_sync and not world.get_chunk_bake_skips_dead(isl.chunk):
+		world.set_chunk_bake_skips_dead(isl.chunk, true)
+		world.drop_chunk_bake(isl.chunk)
 	if not allow_sync and not world.bake_ready(isl.chunk):
 		world.bake_chunk_async(isl.chunk)
 		if not _mesh_queue.has(isl):
@@ -5428,6 +5438,17 @@ func _stream_island_meshes() -> void:
 ## (BrickWorld.set_chunk_bake_skips_dead). COMPACT_SLACK: only when the dead are
 ## most of it and many.
 const COMPACT_SLACK := 2.0
+## A piece is baked from its live bricks from the start, not only once it has
+## settled (_compact_due). A bake keeps a slot for every face of every brick it
+## holds, dead ones too, so a hit is an index patch and not a new bake; a piece
+## off a building held the building's dead with it, and uploading those was
+## half of every big piece's mesh -- 748k vertices for 11,600 live bricks,
+## 368k for the same piece baked live-only (`big_city.tscn -- --shot`,
+## 2026-11-06). Each upload is the renderer making the buffers on the main
+## thread: 10-49 ms for the big ones (UploadLedger). A brick that dies after
+## the bake is still patched out as before; one brought back alive bakes it
+## again (BrickWorld revive).
+const PIECES_SKIP_DEAD := true
 const COMPACT_MIN_SLOTS := 6000
 func _compact_due(isl: BrickIsland) -> bool:
 	if not isl.settled or isl.coarse or isl.coarse_drawn or isl.mesh_job != -1 			or isl.upload_waiting or isl.array_mesh == null or not world.bake_ready(isl.chunk):

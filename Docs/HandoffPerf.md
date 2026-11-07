@@ -163,3 +163,18 @@ vertices in 45 meshes (bands 1.3 M in 160, piece shadows 1.1 M in 103). The isla
 cannot be split. Options: (a) cut a big piece's mesh into slices (as a building's bands) uploaded
 a few a tick, the old mesh drawing until all are up; (b) fewer vertices in it (dead faces left
 out, as compaction does after settling); (c) the separate render thread (declined for now).
+
+**(b) done (2026-11-06, `IslandManager.PIECES_SKIP_DEAD`).** A new piece is baked from its live
+bricks from the start; one adopted whole (a toppled building, one back from sleep) switches at its
+next full rebuild, so a bake its band holes wait on is not dropped. Big building pieces halved:
+11,700 live bricks 748k -> 373k vertices. One quiet run after (big_city --shot, machine 95 C, not
+held back): 66 slow frames (93-256 before), worst flush 24 ms (one 375k piece), worst invisible
+stretch 15 ticks. What is left in the flushes is single pieces of 200-400k vertices -- (a) is the
+remaining lever. Pieces come out as one section (`get_chunk_sections` 1), so slicing needs a new
+split in the mesher, not the band scheme as it is.
+
+Also seen: spiral stair pieces are 1,444 drawn triangles a step (722 authored, each stored as a
+quad), so a 200-brick stair piece is 577k vertices (build mode's `spiralcw_10x10`; not changed here). And
+twice a small piece's mesh built on the main thread at spawn took 44 / 116 ms (146-185 bricks,
+mesh under 30k vertices, so not the stairs); it did not happen in the run after, so the cause is
+not known yet -- time `rebuild_mesh(isl, true, true)` in `spawn` when it comes back.
