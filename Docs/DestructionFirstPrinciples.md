@@ -459,3 +459,43 @@ on a landing). It is a game-feel choice, not a performance one, so it is the use
 Each of these touches `island_manager.gd` / `brick_world.cpp`, which other chats work in
 (struct-bugs, storey units, planet falling): check `git log main` and the handoff docs
 ([HandoffStructBugs.md](HandoffStructBugs.md)) before starting, and land each one small.
+
+## B6. The strength tree, probed (2026-11-07)
+
+`scripts/strength_tree.gd` (`StrengthTree`, a GDScript prototype nothing in the game calls)
+and `tools/strength_tree_probe.gd` (32 checks, all pass). Joint studs come from block boxes
+(footprint overlap of one block on another), which matches `seam_studs` everywhere the probe
+checks and over-counts masked parts.
+
+**How merges are scored decides everything.** The first version scored a merge by studs per
+block of the smaller cluster (as A5.1 suggested). One cluster then swallows single bricks
+first, and the top of the tree peels ends off: a running-bond wall's first cut was 4 bricks
+at its end; the recipe tower's second, 6 bricks. Scored by studs per *pair* of blocks across
+(average linkage, `Score.PRODUCT`, now the default) the top of the tree is balanced parts:
+
+| Build | Bricks | First cut | Notes |
+|---|---|---|---|
+| long wall, running bond, lying | 105 | 52 / 53 on 36 studs, running **up** the wall (y 3-27) | a course boundary across it holds 80; `_weak_seam` has no seam this way and tears it as a band |
+| recipe tower | 982 | 321 / 661 on 160 studs, then 258 / 403 on 156 | cuts step through a storey (y 61-82), cheaper than the storey line (184) or a window row with its columns |
+| cottage | 76 | 33 / 43 on 6 studs | |
+| watchtower | 215 | 42 / 173 on 14 studs | |
+| kiosk | 56 | 4 / 52 on **1** stud, twice | a part on one stud really is the weakest thing in it |
+
+**Energy is shared, not copied.** First version: each child of a cut got all the energy left,
+and a hit went from 1 piece to 28 at one step. Now what is left is shared by size, and a
+rising hit makes a few parts: cottage 1, 2, 4, 9; watchtower 1, 3, 6; tower 1, 3. Pieces
+always partition the part (checked).
+
+**Every node is connected** (checked on 400 nodes a build), so any node can be a piece.
+
+**Bake time** in GDScript: 79 ms for the 982-brick tower, 7 ms for the watchtower. The C++
+bake over `JointCache` would be one to two orders faster, and it runs once per build.
+
+**Not shown yet:** the energy scale (a hit's energy vs studs) is uncalibrated -- the probe
+uses multiples of the root's studs and a 2 m falloff. That gets tuned against `barrage_probe`
+and `--shot` once `_snap_across` can ask the tree.
+
+**Next, if this is wanted:** move the bake into `BrickWorld` (C++, over `JointCache`, baked
+with the chunk and kept valid on damage as A5.3 says), then let `_snap_across` take the tree's
+pieces for a landing, with `_weak_seam` as the fallback, and compare `barrage_probe`'s band
+count (34 of 89 today).
