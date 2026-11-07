@@ -223,9 +223,12 @@ func _physics_process(delta: float) -> void:
 		var at := _center(up)
 		_ground.global_position = at
 		var off: float = (scene._anchor() as Vector3).distance_to(at)
-		if _held and off < RELEASE_AT and _ground_under_all():
+		# Held, too, while the player is in the seat: out of the fight, they went on
+		# thinking about a pawn parked far off and an old frame's positions -- a
+		# second a tick for a big garrison, the ship coming down on its world.
+		if _held and off < RELEASE_AT and scene.on_foot and _ground_under_all():
 			_let_go()
-		elif not _held and off > HOLD_AT:
+		elif not _held and (off > HOLD_AT or not scene.on_foot):
 			hold()
 		if not _held:
 			for m in up:
@@ -402,7 +405,9 @@ func _key(i: int) -> String:
 ## Give each squad the player once it knows of them: by its own contact, or, while
 ## the officer lives, by any squad's.
 func _command() -> void:
-	if scene.pawn == null:
+	# A player in the seat is out of the fight, and their pawn is parked far off
+	# there: told of it, every soldier looked for a way to it (seconds a tick).
+	if scene.pawn == null or not scene.on_foot:
 		return
 	var word := false
 	if _officer_up():

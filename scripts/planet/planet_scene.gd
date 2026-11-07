@@ -27,7 +27,7 @@ extends Node3D
 ##   -- --gate=squad: a squad on the AI's nav region round the town (11.8 N2)
 ##   walks to the player round the curve, takes cover, fires.
 ##   -- --gate=garrison: a generated world's own AI and a town's squad (11.12 step 7);
-##      with --big the town counts as 31 buildings: three squads, an officer, a tank, a mech
+##      with --size=N its town counts as N buildings (PlanetGarrison.plan_for)
 ##   -- --gate=save --stage=1|2|3: the universe saved and come back to, run by run
 ##   -- --gate=home: home's town: quiet at the spawn, a fight walked into, its waves
 ##   -- --gate=belt: a star's belt from open space, the ship turned, slow among its rocks
@@ -4606,8 +4606,9 @@ func _run_home_gate() -> void:
 # up again; home's AI back on home.
 
 func _run_garrison_gate() -> void:
-	if "--big" in OS.get_cmdline_user_args():
-		PlanetGarrison.test_buildings = 31
+	for arg in OS.get_cmdline_user_args():
+		if arg.begins_with("--size="):
+			PlanetGarrison.test_buildings = int(arg.trim_prefix("--size="))
 	var t0 := Time.get_ticks_msec()
 	while pawn == null and Time.get_ticks_msec() - t0 < 60000:
 		await _frames(1)
@@ -4748,8 +4749,6 @@ func _run_garrison_gate() -> void:
 				off[0] = maxf(off[0], world.to_local(m.pawn.body.global_position).distance_to(keep[m])))
 	_check("left, it sleeps with its world", system.anchor != world and g.process_mode == Node.PROCESS_MODE_DISABLED and g.get_parent() == world)
 	await _ship_down_on(world, land)
-	print("[planet] garrison gate: down again, ship landed %s, %.2f m up, the tank %.1f m from it" % [ship.landed, ship.altitude,
-			g.tank.feet().distance_to(ship.global_position) if g._tank_up() else -1.0])
 	_check("back, each where it was", off[0] < 0.01 and g.get_parent() == self and kit.services == ai_of[world], "%.4f m off" % off[0])
 	await stand.call()
 	t0 = Time.get_ticks_msec()
@@ -4827,7 +4826,7 @@ func _run_garrison_gate() -> void:
 	unboard()
 	_check("the player in it", home_ai.pawns.has(pawn) and garrisons.is_empty())
 	print("[planet] garrison gate: put back on the ground %d time(s)" % ground_saves)
-	print("[planet] garrison gate: frames: worst %.1f ms; over 40 ms in play: %d %s" % [_worst_ms, _play_hitches.size(), _play_hitches])
+	print("[planet] garrison gate: frames: worst %.1f ms; over 40 ms in play: %d %s; all: %s" % [_worst_ms, _play_hitches.size(), _play_hitches, _hitches])
 	print("[planet] gate: %d ok, %d FAIL" % [_ok, _fail])
 	get_tree().quit(1 if _fail > 0 else 0)
 
