@@ -5174,18 +5174,17 @@ func _run_drive_gate() -> void:
 	_check("on a planet the tank's map is the nav net's", vn is PlanetNavMap)
 	var at: Vector3 = vn.snap(start)
 	var lib := GunPlaceholderParts.build_library()
-	var main := GunInstance.from_result(GunGenerator.generate(lib, 5, WeaponClass.builtin(&"rocket_launcher"), 1))
-	var mg := GunInstance.from_result(GunGenerator.generate(lib, 6, WeaponClass.builtin(&"lmg"), 1))
+	var guns := MachineLoadout.tank_guns(lib, 5, 6)
 	var face := Gravity.flat(goal - at, Gravity.up_at(at))
-	var tk := Tank.make(ai, self, at + Gravity.up_at(at) * 0.3, 0.0, 0, main, mg, Callable(), ai.rng)
+	var tk := Tank.make(ai, self, at + Gravity.up_at(at) * 0.3, 0.0, 0, guns[0], guns[1], Callable(), ai.rng)
 	PlanetBody.track(tk)
 	ai.add_pawn(tk.make_target())
 	var br := TankBrain.attach(ai, tk)
-	for seat in [Tank.Seat.DRIVER, Tank.Seat.GUNNER]:
+	MachineLoadout.crew_tank(tk, func(seat: int) -> Pawn:
 		var so := Soldier.spawn(ai, self, at + Gravity.up_at(at) * 0.3 + face.normalized().cross(Gravity.up_at(at)) * 5.0,
-				0, GunInstance.from_result(GunGenerator.generate(lib, 60 + seat, WeaponClass.builtin(&"rifle"), 1)))
+				0, MachineLoadout.roll(lib, 60 + seat, &"rifle"))
 		PlanetBody.track(so.pawn.body)
-		tk.board(so.pawn, seat, true)
+		return so.pawn)
 	await get_tree().create_timer(2.0).timeout
 	br.send(goal)
 	var keys := {}
