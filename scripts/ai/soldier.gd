@@ -233,6 +233,8 @@ const TRAP_FAILS := 3
 const TRAP_WINDOW := 10.0
 const TRAP_RETRY := 5.0
 var _fails: Array[float] = []
+## When the path being waited on was asked for (_path_failed chains failures by it).
+var _asked_at := 0.0
 var _trap_retry_at := 0.0
 var _trapped_since := 0.0
 var _duck_until := 0.0
@@ -1021,6 +1023,7 @@ func _move_to(goal: Vector3, run := false) -> int:
 		# twenty thousand nodes to prove it cannot be reached.
 		var budget := clampi(int(pawn.feet().distance_to(goal) * 500.0), 3000, 20000)
 		_path_id = nav.request_path(pawn.feet(), goal, importance, budget)
+		_asked_at = services.now()
 		_path = PackedVector3Array()
 		_wp = 0
 		# Not a reset of the stuck clock: a body pinned in place that keeps
@@ -1234,9 +1237,13 @@ func allies() -> Array[Soldier]:
 ## is and fights from there (the tasks treat -1 as "stay"), and asks for a way
 ## out again every TRAP_RETRY seconds.
 func _path_failed(now: float) -> void:
+	# Failures running: each asked for within TRAP_WINDOW of the one before
+	# failing. Measured from the asking, not the answer -- a far goal with no way
+	# to it spends seconds of the nav's budget failing, and timed by the answers
+	# three of those never fitted in the window: the soldier stood asking forever.
+	if not _fails.is_empty() and _asked_at - _fails[_fails.size() - 1] > TRAP_WINDOW:
+		_fails.clear()
 	_fails.append(now)
-	while not _fails.is_empty() and now - _fails[0] > TRAP_WINDOW:
-		_fails.remove_at(0)
 	if _fails.size() >= TRAP_FAILS:
 		if not trapped:
 			_trapped_since = now
