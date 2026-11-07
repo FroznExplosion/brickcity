@@ -281,6 +281,10 @@ var _rid_synced := 0
 ## command each. Recipe ids it holds are moved down whenever bricks leave from the middle
 ## (`_forget_rids`).
 var undo_stack := WkUndoStack.new()
+## The kit's tools taken up and put down here (WkToolbox), and the seam they ask through
+## (BrickWorkshopContext). Docs/BuildTools.md section 20.
+var toolbox := WkToolbox.new()
+var wk_ctx: BrickWorkshopContext
 ## The bricks and fixtures the build was opened with that undo has not taken back yet: they
 ## have no command each (on a big build that is seconds and megabytes), `_undo_opened` takes
 ## them back once the history runs out, newest first, as Z always could.
@@ -332,6 +336,8 @@ func _init() -> void:
 
 
 func _ready() -> void:
+	wk_ctx = BrickWorkshopContext.new(self)
+	toolbox.ctx = wk_ctx
 	world = BrickWorld.new()
 	world.set_seed(1)
 	# The generator's palette: the player's parts plus the cornice a generated
@@ -2416,6 +2422,12 @@ func _delete_ray(from: Vector3, dir: Vector3) -> bool:
 		_after_edit()
 		return true
 	return false
+
+
+## Who answers the kit's Sketch tool (BrickWorkshopContext): the building workshop's tools,
+## which make kept shapes of a stroke. The asset workshop answers itself.
+func _sketch_host() -> Object:
+	return _tools
 
 
 ## A brick at recipe id `rid` is about to leave from the middle (RMB, a cut, an undo): for a
