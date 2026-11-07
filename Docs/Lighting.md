@@ -384,6 +384,28 @@ to F12 for it). 28 m, 24 degrees, warm white, shadows on. It sits 16 cm right
 of and 14 cm below the eye, so its shadows show beside what throws them. Off at
 the start, so no gate's pictures change. `tools/flashlight_probe.gd` (9 checks).
 
+### 6.5 Near lamps: real light from the nearest lamps
+
+The grid's lamp term (6.1) is one value a stud cell, added as emission: a wall,
+a floor and a ceiling next to a lamp all get the same, and it steps from cell
+to cell. It reads flat. So the lamps nearest the camera, over every building
+(`BrickGridLight.place_near`, every 12 frames, within 40 m), also hang a real
+light that lights the bricks: per pixel, fading, brighter on what faces it,
+with a shine. The grid stays as the fill, further off and round corners.
+
+- A one-way lamp (light bar, under-tile): a shadowed `SpotLight3D`, 70
+  degrees, 7 m. Its shadows stop it at the floor and the walls, as the grid
+  does. Godot redraws a spot's shadow only when something in its reach moves,
+  so a still room costs little after the first frame.
+- An all-round lamp (Glow brick): an unshadowed `OmniLight3D`, 3 m. It would
+  sit in its own brick's shadow, so it stays small instead.
+- How many: Options > Video > Lamp Lights (Off, 2, 4, 8; default 4),
+  `BrickGridLight.near_max`.
+- In the city the grid now keeps its lamps too (`use_layer` off hangs no
+  per-building lights, only the near ones).
+- City `--light` pass: at night, a picture with the grid's lamps alone and
+  with 4 near lamps (`city_lamps_night_0`, `_4`), and their GPU times.
+
 ## 7. SDFGI and the other GI
 
 Godot can mix: SDFGI in the environment, and `ReflectionProbe` / `VoxelGI`
