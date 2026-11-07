@@ -979,7 +979,7 @@ Each stage: own branch, merged `--no-ff`, pushed. Every stage passes, as on main
 |---|---|---|
 | 1 ✅ | Kit folder, README, VERSION, `WkCommand`, `WkGroup`, `WkUndoStack`; every undo list in both workshops (`_edits`, `_brick_groups`, `_redo_list`, `_paints`, `_tower_undo`, `_stamp_marks`, `_ungrouped`, `WorkshopTools._undo`, the furnish tool's, and the asset's `_edit_groups`, `_redo`, `_stud_log`, `_deleted`, sketch snapshots) becomes commands on one stack, `ws.undo_stack` | `wk_smoke` (the stack alone); every probe above. Planned as 1a (building) and 1b (asset); done as one, because the asset workshop's undo read and wrote the base's list |
 | 2a ✅ | `WkTool`, `WkContext`, `WkToolbox`; `BrickWorkshopContext` (`scripts/workshop/brick_context.gd`) for both; SketchPen -> `WkSketchPen`, and the stroke handling of both workshops' sketching into **`WkSketchTool`** | probes; `wk_smoke` drives the tool through a pretend context |
-| 2b | **Paint** into a kit tool: the stroke (press, drag, release as one undo), the brush's reach, pick a colour; what a brick's colour is stays the workshop's | probes; `wk_smoke` |
+| 2b ✅ | **Paint** into a kit tool: the stroke (press, drag, release as one undo), the brush's reach, pick a colour; what a brick's colour is stays the workshop's | probes; `wk_smoke` |
 | 2c | **Shapes**: the grid geometry (`BrickShapes`' rectangle, ellipse, ring, polyline, region cells) into `WkShapes`; packing cells into bricks and kept shapes stay game-side. The Shapes *tool* goes with Draw/Cut/Select in stage 5: the two workshops' gestures differ (asset: drag a box, ball, cylinder or wedge and fill it; building: draw an outline, then pull its height), so one tool needs a design choice first | probes; `wk_smoke` cells checks |
 | 3 | `WkCamera` (WorkshopView's orbit/FPS + the asset's flat views and zoom), `WkMirror` (one plane for both; `mirror_item` in the adapter), `WkGrid`, `WkGhost` | probes; gate pictures as before; camera orbit, pan, zoom, flat views by script |
 | 4a | `WkFrame` + `WkRail` (ToolRail moved) for the building workshop: menu bar, rail, options, hint line, themed by `ctx.theme()` | `workshop_probe`, gate |
@@ -1053,3 +1053,24 @@ press, drag and release (or click corners of a polygon), RMB to take away or -- 
 * `WorkshopTools.pen`, `_sk`, `brush_size` and `brush_square` are the tool's, through
   properties, so the probes and the option buttons read and set them as before. The probes now
   finish a stroke through the tool (`t.sketch.commit()`), the path a mouse takes.
+
+### As built: stage 2b, Paint (2026-11-07)
+
+Kit 0.3.0: **`WkPaintTool`** -- LMB press, drag, release is one stroke; MMB takes a paint; - =
+the brush's reach (`radius`, held to `radius_max`); Page Up/Down the next or previous paint.
+Each frame it asks the context to show the brush (`paint_hover`) and, while LMB is held, to
+paint on (`paint_at`). `wk_smoke` 58 checks.
+
+* The brush is the same in both workshops (the asset workshop inherits it), so
+  `BrickWorkshopContext` sends every paint question to the workshop itself: `wk_paint_begin`
+  (a new stroke), `wk_paint_at` (`_paint_ray` down the mouse ray), `wk_paint_end` (`_end_stroke`,
+  one "paint" command), `wk_paint_hover` (the ghost box or reach ball, was the top half of
+  `_paint_process`), `wk_paint_pick` (the eyedropper), `wk_paint_step` (the palette's next
+  material), `wk_paint_radius_changed`.
+* B (`_set_painting`) takes the tool up and puts it down; `_paint_radius` is the tool's, through
+  a property, so the option spinners and the asset workshop's brush size set it as before. The
+  base input's own LMB-paints, - = and Page Up/Down branches are gone: the tool takes them.
+* The Sketch tool is put down only when it is the one in hand, so taking up one never drops
+  the other mid-stroke.
+* `place_probe` +4: the brush is the tool, = through the workshop's input widens it, a stroke
+  through the tool is one undo, B puts it down.

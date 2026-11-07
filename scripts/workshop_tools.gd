@@ -2010,7 +2010,10 @@ func input(e: InputEvent) -> bool:
 			and e.button_index in [MOUSE_BUTTON_LEFT, MOUSE_BUTTON_RIGHT]:
 		return _make_input(e)
 	var pen_on: bool = (tool == "draw" and pen_outline()) or (tool == "cut" and cut_pen())
-	ws.toolbox.use(&"sketch" if pen_on else &"")
+	if pen_on:
+		ws.toolbox.use(&"sketch")
+	elif ws.toolbox.active_id() == &"sketch":
+		ws.toolbox.use(&"")
 	if pen_on and _drag.is_empty() and ws.toolbox.input(e):
 		return true
 	if e is InputEventKey and e.pressed and not e.echo and not e.ctrl_pressed:

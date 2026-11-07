@@ -36,3 +36,33 @@ func sketch_commit(plane: Variant, pen: WkSketchPen) -> void:
 
 func sketch_cancel() -> void:
 	ws._sketch_host().wk_sketch_cancel()
+
+
+# Paint: the workshop paints its own bricks, in both workshops.
+
+func paint_begin() -> void:
+	ws.wk_paint_begin()
+
+
+func paint_at(radius: int) -> bool:
+	return ws.wk_paint_at(radius)
+
+
+func paint_end() -> void:
+	ws.wk_paint_end()
+
+
+func paint_hover(radius: int) -> void:
+	ws.wk_paint_hover(radius)
+
+
+func paint_pick() -> void:
+	ws.wk_paint_pick()
+
+
+func paint_step(step: int) -> void:
+	ws.wk_paint_step(step)
+
+
+func paint_radius_changed(radius: int) -> void:
+	ws.wk_paint_radius_changed(radius)
