@@ -962,6 +962,11 @@ var seam_breaks := 0   ## of those, at the weakest seam in reach (_weak_seam)
 var crack_breaks := 0  ## of those, cracks across X or Z (_weak_crack)
 var tree_breaks := 0   ## landings the strength tree broke (snap_by_tree), not counted in `breaks`
 var tree_pieces := 0   ## the pieces those made, all told
+var tree_skip_big := 0 ## landings the tree did not take: piece over TREE_MAX_BLOCKS
+var tree_whole := 0    ## landings the tree found nothing to cut in: nothing snapped
+## Bricks in each piece a landing tore as a band, for the census (the band is
+## the fallback the tree is meant to replace).
+var band_sizes := PackedInt32Array()
 ## Studs the weakest seams in reach of landings held with, and the storey
 ## lines beside them -- where there was one of each to count.
 var seam_studs_chosen := 0
@@ -4012,9 +4017,10 @@ func _hand_over(isl: BrickIsland, contacts: Array, severity: float) -> void:
 ## holds it with the fewest studs for its size -- a wall up its length, a tower
 ## at a storey, a part held by one stud first -- into one piece or several by
 ## how hard it came down. Off: the seam and crack rules below decide, as before;
-## on, they still do when the tree makes one piece of it (the fallback).
+## on, they still do for a piece over TREE_MAX_BLOCKS (the fallback). A piece
+## the tree finds nothing to cut in does not snap.
 var snap_by_tree := true
-## Pieces bigger than this are not baked at a landing (about 2.6 ms for 1,000
+## Pieces bigger than this are not baked at a landing (about 1.35 ms for 1,000
 ## bricks in a debug build, on the main thread): the seams decide.
 const TREE_MAX_BLOCKS := 3000
 ## A landing's energy, as a multiple of what the piece's first cut costs from
@@ -4110,6 +4116,15 @@ func _snap_across(isl: BrickIsland, contacts: Array, severity: float) -> PackedI
 				tree_breaks += 1
 				tree_pieces += groups.size()
 				return torn
+			# One piece: with energy counted in first cuts, that is a piece with
+			# no joint left to cut (bricks only sheared loose, or one brick).
+			# A brick does not break, so nothing snaps -- the seams used to tear
+			# such a piece as a band, down to its last brick (barrage_probe:
+			# all five bands, 2026-11-07).
+			tree_whole += 1
+			return torn
+		else:
+			tree_skip_big += 1
 
 	# Offsets are measured in the piece's own space too: a world AABB's corner
 	# is not a point on a rotated axis, so projecting it gave a span that had
@@ -4206,6 +4221,7 @@ func _snap_across(isl: BrickIsland, contacts: Array, severity: float) -> PackedI
 		if not torn.is_empty():
 			_record(e)
 		if e.flags & DamageLog.FLAG_BANDED:
+			band_sizes.append(world.get_alive_block_count(isl.chunk))
 			band_breaks += planes
 		breaks += planes
 	return torn
@@ -4284,9 +4300,9 @@ func _weak_seam(isl: BrickIsland, at: float, lo: float, hi: float,
 
 
 func snap_census_line() -> String:
-	return "landings snapped %d time(s): %d at the weakest seam in reach, %d of all of them on a storey line, %d cracked across, %d torn as a band; the weakest seams held with %d stud(s) all told, the storey lines beside them with %d; the strength tree broke %d landing(s) into %d piece(s)" % [
+	return "landings snapped %d time(s): %d at the weakest seam in reach, %d of all of them on a storey line, %d cracked across, %d torn as a band; the weakest seams held with %d stud(s) all told, the storey lines beside them with %d; the strength tree broke %d landing(s) into %d piece(s), left %d to the seams for size, found nothing to cut in %d; bands tore pieces of %s brick(s)" % [
 			breaks, seam_breaks, floor_breaks, crack_breaks, band_breaks, seam_studs_chosen, seam_studs_floor,
-			tree_breaks, tree_pieces]
+			tree_breaks, tree_pieces, tree_skip_big, tree_whole, str(band_sizes)]
 
 
 ## A cell's size along a piece's own X, Y or Z.
