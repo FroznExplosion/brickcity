@@ -166,7 +166,7 @@ func _apply_setting(id: StringName, value: Variant) -> void:
 			sun_cascades = 2 if int(value) == 1 else 4
 			var city := _city()
 			if city != null and city.get("_sun") is DirectionalLight3D:
-				city.call("_setup_sun_shadows", city.get("_sun"))
+				city.get("drawing").call("setup_sun_shadows", city.get("_sun"))
 		&"gi_level":
 			LightRig.set_gi(int(value))
 		&"aa_mouse":
