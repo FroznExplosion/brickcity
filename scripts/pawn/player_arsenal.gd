@@ -1009,7 +1009,7 @@ class ArsenalHud extends CanvasLayer:
 	func _colour(g: GunInstance) -> Color:
 		if g == null:
 			return Color(1, 1, 1, 0.3)
-		return PlayerHud.RARITY_COLOURS[clampi(g.rarity - 1, 0, PlayerHud.RARITY_COLOURS.size() - 1)]
+		return Rarity.colour(g.rarity)
 
 	func _label(g: GunInstance) -> String:
 		if g == null:
@@ -1055,7 +1055,7 @@ class ArsenalHud extends CanvasLayer:
 			# The card beside it names the gun.
 			var r := arsenal.target_pickup.result
 			prompt = "Hold R  take it  ·  Hold C  try it"
-			pcol = PlayerHud.RARITY_COLOURS[clampi(r.rarity - 1, 0, 5)]
+			pcol = Rarity.colour(r.rarity)
 		elif arsenal.target_bench != null:
 			prompt = "Hold R  workbench: infuse guns to tier %d, break guns down for scrap" \
 					% maxi(arsenal.tier, arsenal.player.progress.story_tier if arsenal.player != null else 1)

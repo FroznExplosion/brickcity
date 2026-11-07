@@ -10,8 +10,6 @@ extends CanvasLayer
 ##
 ## Opened from the backpack: swap weapon steps to it after the skills (PlayerArsenal).
 
-## Common .. mythic, as the loot colours read.
-const RARITY_COLOURS := ["d0d0d0", "5fd35f", "4f9dff", "c070ff", "ffa030", "ff4f6f"]
 
 var pods: MechPods
 ## The pods the player has, not fitted.
@@ -126,7 +124,7 @@ static func pod_line(pod: PodGenerator.Result) -> String:
 		what = ", ".join(bits)
 	else:
 		what = "%.1f s cooldown, x%.2f" % [float(pod.stats.cooldown), float(pod.stats.power)]
-	return "%s  [color=#%s]%s[/color]  %s (%s): %s" % [pod.pod_name, RARITY_COLOURS[pod.rarity - 1],
+	return "%s  [color=#%s]%s[/color]  %s (%s): %s" % [pod.pod_name, Rarity.colour(pod.rarity).to_html(false),
 			GunGenerator.RARITY_NAMES[pod.rarity - 1], k.name, pod.sort.replace("_", " "), what]
 
 
