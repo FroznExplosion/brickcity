@@ -13,6 +13,7 @@
 #include <godot_cpp/variant/vector3i.hpp>
 
 #include "brick_types.h"
+#include "strength_tree.h"
 
 #include <atomic>
 #include <deque>
@@ -998,6 +999,27 @@ public:
     Array crack_components(int chunk_id, const PackedInt32Array &planes_x,
             const PackedInt32Array &planes_z);
 
+    /// The pieces a hit of `energy` (in studs) at `point` (chunk-local metres,
+    /// as get_blocks_box) breaks the chunk into, by its strength tree
+    /// (strength_tree.h; Docs/DestructionFirstPrinciples.md A5, B6): the tree
+    /// baked from the live joints, each connected part walked from its top, a
+    /// cut made where the energy reaching it -- halved at `falloff` metres --
+    /// beats its studs. Every live block is in exactly one group, largest
+    /// first: furniture (decorative) goes with what it stands on, a sheared
+    /// block (support_broken) alone, as get_components has them. One group
+    /// when nothing parts. Nothing in the chunk is changed.
+    ///
+    /// `relative`: `energy` is a multiple of what each part's FIRST cut costs
+    /// from `point` (its studs over the falloff there), not studs. Builds differ
+    /// twenty-fold in how hard their joints are for their size, and pieces come
+    /// out about energy / a typical cut -- so a landing measured this way makes
+    /// as few or as many parts of a cottage as of a tower.
+    Array strength_split(int chunk_id, Vector3 point, double energy, double falloff,
+            bool relative = false);
+    /// The tree strength_split walks, for probes: {left, right, size, studs,
+    /// leaf_block, roots, joints, bake_usec}. Leaves first, then merges in order.
+    Dictionary strength_tree_info(int chunk_id);
+
     // --- detachment --------------------------------------------------------
 
     /// Lift a group of blocks out of the chunk and hand back everything needed
@@ -1507,6 +1529,10 @@ private:
     };
     std::vector<ChunkTemplate> templates;
     const brick::JointCache &joints_of(int chunk_id);
+    /// Bake the chunk's strength tree over its live structural blocks.
+    /// `leaf_block` gets each leaf's block id; returns the bake's microseconds.
+    int64_t bake_strength_tree(int chunk_id, brick::StrengthTree &tree,
+            std::vector<int32_t> &leaf_block, int64_t *joint_count = nullptr);
     /// One block's runs, in the order joints_of lays them: up, then down.
     void block_runs(const brick::Chunk &c, int32_t bid, std::vector<brick::JointRun> &out) const;
     /// Keep a built cache true after `bid` was placed or removed: its runs and

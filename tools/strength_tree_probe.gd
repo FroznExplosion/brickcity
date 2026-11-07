@@ -202,6 +202,76 @@ func _common(chunk: int, t: StrengthTree, what: String) -> void:
 	_ok("%s: the roots cover every structural brick" % what, _covered(t))
 	var bad := _all_connected(t, 400)
 	_ok("%s: every node checked is one connected piece" % what, bad == 0, "%d not" % bad)
+	_cpp(chunk, t, what)
+
+
+## BrickWorld's tree (strength_tree.cpp, over the real joint cache) against
+## this script's: the same leaves, the same merges, the same cuts.
+func _cpp(chunk: int, t: StrengthTree, what: String) -> void:
+	var d: Dictionary = _w.strength_tree_info(chunk)
+	var leaf_block: PackedInt32Array = d.leaf_block
+	var size: PackedInt32Array = d.size
+	var studs: PackedInt32Array = d.studs
+	var left: PackedInt32Array = d.left
+	print("    C++: %d joints, bake %.2f ms" % [d.joints, float(d.bake_usec) / 1000.0])
+	_ok("%s: C++ has the same bricks" % what, leaf_block == t.blocks,
+			"%d vs %d" % [leaf_block.size(), t.blocks.size()])
+	_ok("%s: and the same number of parts and merges" % what,
+			(d.roots as PackedInt32Array).size() == t.roots.size() and size.size() == t.node_count(),
+			"roots %d vs %d, nodes %d vs %d" % [(d.roots as PackedInt32Array).size(),
+			t.roots.size(), size.size(), t.node_count()])
+	# The last merges are the first cuts: compare the top twelve.
+	var same := 0
+	var diff := ""
+	var k := 0
+	var i := size.size() - 1
+	while i >= leaf_block.size() and k < 12:
+		var mine: int = t.node_count() - 1 - k
+		var a := [mini(size[left[i]], size[i] - size[left[i]]), studs[i]]
+		var b := [mini(t.size[t.left[mine]], t.size[t.right[mine]]), t.studs[mine]]
+		if a == b:
+			same += 1
+		elif diff.is_empty():
+			diff = "cut %d: C++ %s, script %s" % [k, a, b]
+		i -= 1
+		k += 1
+	_ok("%s: and the same first cuts (smaller side, studs)" % what, same == k, diff)
+	# A split covers every live brick once; no energy, one group per part.
+	var alive := _w.get_alive_block_count(chunk)
+	var groups: Array = _w.strength_split(chunk, Vector3.ZERO, 0.0, 2.0)
+	var seen := {}
+	var total := 0
+	for g in groups:
+		for id in g:
+			seen[id] = true
+			total += 1
+	_ok("%s: strength_split with no energy: every live brick once, a group a part" % what,
+			total == alive and seen.size() == alive and groups.size() == _w.get_components(chunk).size(),
+			"%d bricks in %d groups, %d alive, %d parts" % [total, groups.size(), alive,
+			_w.get_components(chunk).size()])
+
+
+## What a landing at the snap threshold and harder makes, by the landing rule
+## IslandManager uses (tree_landing), struck at the bottom corner.
+func _landings(chunk: int, what: String) -> void:
+	var box := _w.get_blocks_box(chunk, _w.get_components(chunk)[0])
+	var length := maxf(box.size.x, maxf(box.size.y, box.size.z))
+	var counts := PackedInt32Array()
+	var line := ""
+	for r in [1.0, 2.0, 4.0, 10.0]:
+		var ef := IslandManager.tree_landing(5.0 * r, 5.0, length)
+		var groups: Array = _w.strength_split(chunk, box.position, ef.x, ef.y, true)
+		var sizes := []
+		for g in groups:
+			sizes.append((g as PackedInt32Array).size())
+		counts.append(groups.size())
+		line += "
+      severity x%-4s %3d pieces %s" % [r, groups.size(), str(sizes.slice(0, 6))]
+	print("    landings (%.1f m long):%s" % [length, line])
+	var rising := true
+	for i in range(1, counts.size()):
+		rising = rising and counts[i] >= counts[i - 1]
+	_ok("%s: a harder landing makes at least as many pieces" % what, rising, str(counts))
 
 
 # --- builds ---------------------------------------------------------------------
@@ -287,6 +357,7 @@ func _tower() -> void:
 	print("    seam_studs: storey line y %d %s, window row y %d %s" % [per,
 			str(_w.seam_studs(c, per, per)), window_k, str(_w.seam_studs(c, window_k, window_k))])
 	_hits(t, root, Vector3(0.0, float(per) * 2.0, 0.0), "a corner, second storey")
+	_landings(c, "tower")
 
 
 func _build(path: String) -> void:
@@ -309,3 +380,4 @@ func _build(path: String) -> void:
 	var box := _w.get_blocks_box(c, t.node_blocks(root))
 	var at := box.position / BrickWorld.get_cell_size()
 	_hits(t, root, at, "a bottom corner")
+	_landings(c, path.get_file())
