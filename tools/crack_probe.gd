@@ -41,6 +41,9 @@ func _init() -> void:
 	_m = IslandManager.new()
 	root.add_child(_m)
 	_m.setup(_w, null, null)
+	# What this probe holds is the seam and crack rules, which decide a landing
+	# when the strength tree is off or makes one piece of it (snap_by_tree).
+	_m.snap_by_tree = false
 	_m.interest = func() -> PackedVector3Array: return PackedVector3Array([Vector3(0, 1, 0)])
 	physics_frame.connect(_run)
 

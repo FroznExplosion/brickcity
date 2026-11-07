@@ -11,6 +11,8 @@ extends "res://tools/collapse_probe.gd"
 ##                          "studs at" line
 ##     ... -- --push=N      a blast's push at N times (IslandManager.push_times)
 ##     ... -- --bounce=F    a crumb's bounce (IslandManager.crumb_bounce)
+##     ... -- --tree=0      landings broken by the seam and crack rules only,
+##                          not the strength tree (IslandManager.snap_by_tree)
 ##
 ## A loose piece is a rigid chunk: it parts where a hit disconnects it and
 ## where a landing snaps it, and is never stress-solved. And one at rest that
@@ -43,7 +45,10 @@ func _only(_name: String) -> bool:
 
 func _run() -> void:
 	print("barrage probe: wreckage under fire")
+	var by_tree := true
 	for a in OS.get_cmdline_user_args():
+		if a.begins_with("--tree="):
+			by_tree = a.split("=", true, 1)[1] != "0"
 		if a.begins_with("--stud="):
 			BrickStrength.times = float(a.split("=", true, 1)[1])
 		if a.begins_with("--push="):
@@ -52,6 +57,7 @@ func _run() -> void:
 			IslandManager.crumb_bounce = float(a.split("=", true, 1)[1])
 	city = load("res://scenes/city.tscn").instantiate()
 	root.add_child(city)
+	city.islands.snap_by_tree = by_tree
 	await _ticks(30)
 	city.world.set_components_check(true)
 	city.world.set_index_check(true)

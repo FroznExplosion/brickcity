@@ -499,3 +499,42 @@ and `--shot` once `_snap_across` can ask the tree.
 with the chunk and kept valid on damage as A5.3 says), then let `_snap_across` take the tree's
 pieces for a landing, with `_weak_seam` as the fallback, and compare `barrage_probe`'s band
 count (34 of 89 today).
+
+## B7. In C++, and landings use it (2026-11-07)
+
+- **`gdextension/brick/src/strength_tree.{h,cpp}`**: the bake and the split, pure. Scores
+  compare by int64 cross-multiplication, ties by node id, so the tree is the same on every
+  machine. `strength_tree_probe` holds it to the script prototype: the same bricks, parts,
+  merges and first twelve cuts on every build (61 checks).
+- **`BrickWorld.strength_split(chunk, point, energy, falloff, relative)`**: bakes the tree
+  from the live joint cache (decorative and sheared blocks left out), splits each part, and
+  returns groups covering every live block: furniture goes with what it stands on, a sheared
+  block alone. `strength_tree_info` is the tree, for probes. Bake 2.6 ms for 982 bricks in
+  the debug build.
+- **Energy is relative.** In studs per brick, no number fitted both a tower and a cottage
+  (the cottage's joints are ~20x weaker for its size; one setting left the tower whole and
+  shattered the cottage, the other the reverse). Now energy is a multiple of what each part's
+  first cut costs from the contact: `TREE_FIRST_CUTS` 1.2 at the snap threshold, and that
+  again each time severity / need doubles, counted up to 8x (`TREE_RATIO_MAX`). By rising
+  landing: tower 3, 5, 10 pieces; cottage 2, 5, 8; watchtower 2, 4, 7; kiosk 2, 3, 3.
+- **`IslandManager._snap_across`** (`snap_by_tree`, on): after its gates (length, severity),
+  a piece up to `TREE_MAX_BLOCKS` (3,000) asks the tree; if it makes more than one piece the
+  landing is a tree break (`BrickIsland.tree_hit`) and `split_if_broken` cuts the pieces as
+  the crack path does -- each leaves as a DETACH, which clients and replays take as it is.
+  Otherwise the seam and crack rules decide as before. `seam_probe` and `crack_probe` test
+  those rules with the tree off (23 and 9, pass).
+- **`barrage_probe`, tree on vs `-- --tree=0`** (8 of 8 pass both ways): the tree broke 69
+  landings into 367 pieces; single bricks coming off landings went from 292 to 95, groups of
+  2-8 from 145 to 92, groups of 9+ about the same.
+
+Open:
+
+1. **Cost.** The split search's worst went from 1.4 to 7.7 ms, and a tree landing bakes twice
+   (once to ask, once to cut). Next: keep the landing's groups for the split when nothing
+   changed in between, flatten the bake's hash maps, or bake on a worker. Measured with the
+   editor open and other chats' runs going, so the numbers are high.
+2. **The fallback tore 10 bands** with the tree on (0 with it off): landings the tree did not
+   take -- most likely pieces over 3,000 bricks -- went to a storey line and found no seam.
+   Worth a look before raising or lowering `TREE_MAX_BLOCKS`.
+3. Not looked at in play yet: whether the parts read as "a few big parts" on screen.
+4. `PlanetPieces._snap_across` (planets) is untouched.
