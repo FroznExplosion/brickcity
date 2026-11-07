@@ -32,7 +32,7 @@ Version: see `VERSION`. Raise it with every change to this folder.
 | `tools/wk_paint_tool.gd` | `WkPaintTool` — Paint: a stroke as one undo, an eyedropper, the brush's reach; asks `paint_begin`, `paint_at`, `paint_end`, `paint_hover`, `paint_pick`, `paint_step`. |
 | `ui/wk_rail.gd` | `WkRail` — the tool rail: icon + name + key buttons with a pop-up, a line for the tool in hand, action buttons, the tool's options; `restyle` takes the editor's panel box. |
 | `ui/wk_menu_bar.gd` | `WkMenuBar` — the menu bar: menus from rows (`[label, id, shortcut]`), merged by label, a title. |
-| `ui/wk_frame.gd` | `WkFrame` — where the bar, the band under it and the rail go; where the editor's readouts start. |
+| `ui/wk_frame.gd` | `WkFrame` — where the bar, the band under it (across, or narrow), the rail and a right-hand panel go; where the editor's readouts start. |
 | `tests/wk_smoke.gd` | Everything above, headless, on a pretend document and a pretend context. |
 
 Coming, in this order (Docs/BuildTools.md §20): the rest of the shared tools one file each.

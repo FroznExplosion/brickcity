@@ -483,6 +483,17 @@ func _frame() -> void:
 	_ok("the editor's readouts start right of the rail", f.content_left() == 12 + 200 + 8)
 	band.visible = false
 	_ok("no band: the rail a margin under the bar", f.rail_top() == 8 + 30)
+	band.visible = true
+	var side := Control.new()
+	f.side = side
+	f.band_wide = false
+	f.band_left = 12.0
+	f.band_gap = 8.0
+	f.band_space = 30.0
+	f.layout(Vector2(1280, 720))
+	_ok("a narrow band where it is asked, the rail by its set room", band.position == Vector2(12, 38)
+			and rail.position == Vector2(12, 30 + 8 + 30 + 8) and side.offset_top == 38.0, str(rail.position))
+	side.free()
 	for n in [bar, top, band, rail]:
 		n.free()
 
