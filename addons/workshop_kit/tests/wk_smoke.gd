@@ -19,6 +19,7 @@ func _init() -> void:
 	_toolbox()
 	_sketch_tool()
 	_paint_tool()
+	_shapes()
 	print("wk_smoke: %d passed, %d failed" % [_pass, _fail])
 	quit(0 if _fail == 0 else 1)
 
@@ -319,6 +320,37 @@ func _paint_tool() -> void:
 	box.input(_click(MOUSE_BUTTON_LEFT, true))
 	box.use(&"")
 	_ok("putting the brush down ends its stroke", not pt.stroking() and ctx.log.back() == "end")
+
+
+func _shapes() -> void:
+	var a := Vector2i(0, 0)
+	_ok("a rectangle fills its box, ends included", WkShapes.cells_2d("rect", a, Vector2i(2, 1)).size() == 6)
+	var hollow := WkShapes.cells_2d("hollow", a, Vector2i(4, 4), 1)
+	_ok("a hollow rectangle is its rim", hollow.size() == 16 and not hollow.has(Vector2i(2, 2)))
+	var disc := WkShapes.cells_2d("circle", a, Vector2i(6, 6))
+	var mirrored := true
+	for c in disc:
+		mirrored = mirrored and disc.has(Vector2i(6 - c.x, c.y)) and disc.has(Vector2i(c.x, 6 - c.y))
+	_ok("a circle is round both ways", mirrored and disc.has(Vector2i(3, 3)) and not disc.has(a))
+	var ring := WkShapes.cells_2d("ring", a, Vector2i(8, 8), 1)
+	_ok("a ring has no middle", ring.size() > 0 and not ring.has(Vector2i(4, 4)) and ring.size() < disc.size() * 2)
+	var line := WkShapes.polyline_cells({"pts": [[0, 0], [5, 0], [5, 4]]}, 1)
+	_ok("a wall line: each leg a band, the corner closed", line.has(Vector2i(3, 0)) and line.has(Vector2i(5, 2))
+			and line.has(Vector2i(5, 0)) and not line.has(Vector2i(3, 2)), str(line.size()))
+	var square := [[0, 0], [6, 0], [6, 6], [0, 6]]
+	var region := WkShapes.plan_region({"adds": [square], "subs": [[[2, 2], [4, 2], [4, 4], [2, 4]]]})
+	_ok("a plan: strokes in, less strokes out", region.has(Vector2i(1, 1)) and not region.has(Vector2i(3, 3)))
+	var block := WkShapes.cells_2d("rect", a, Vector2i(4, 4))
+	_ok("ring(): the cells by the outside", WkShapes.ring(block, 1).size() == 16)
+	var round_trip := true
+	for lie in WkShapes.LIES:
+		var c := WkShapes.to_3d(lie, Vector2i(3, 5), 7)
+		round_trip = round_trip and WkShapes.from_3d(lie, c) == Vector3i(3, 5, 7)
+	_ok("to_3d and from_3d undo each other on every lie", round_trip)
+	var stairs := WkShapes.cells_2d("stairs", a, Vector2i(5, 8))
+	_ok("stairs: a step every STAIR_STEP cells up", stairs.has(Vector2i(0, 0)) and stairs.has(Vector2i(5, 8))
+			and not stairs.has(Vector2i(5, 0)))
+	_ok("v2i takes arrays and Vector2i", WkShapes.v2i([2, 3]) == Vector2i(2, 3) and WkShapes.v2i(Vector2i(4, 1)) == Vector2i(4, 1))
 
 
 ## A pretend editor for the tools.
