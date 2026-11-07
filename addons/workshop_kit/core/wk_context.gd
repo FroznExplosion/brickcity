@@ -52,3 +52,43 @@ func sketch_commit(_plane: Variant, _pen: WkSketchPen) -> void:
 ## The stroke under way was given up (RMB, Esc, another tool).
 func sketch_cancel() -> void:
 	pass
+
+
+# ---------------------------------------------------------------------------
+# Paint (WkPaintTool)
+# ---------------------------------------------------------------------------
+
+## A paint stroke starts: everything painted until `paint_end` is one undo step.
+func paint_begin() -> void:
+	pass
+
+
+## Paint what is under the cursor, `radius` cells round it (0: the one thing under it), into
+## the stroke under way. True if anything changed.
+func paint_at(_radius: int) -> bool:
+	return false
+
+
+## The stroke is done: record it (one command on `undo_stack`) if it changed anything.
+func paint_end() -> void:
+	pass
+
+
+## Each frame while painting: show what the brush would paint.
+func paint_hover(_radius: int) -> void:
+	pass
+
+
+## Take the paint of what is under the cursor into the brush.
+func paint_pick() -> void:
+	pass
+
+
+## The next (`step` 1) or the one before (-1) of the editor's paints.
+func paint_step(_step: int) -> void:
+	pass
+
+
+## The brush's reach changed (- =): show it.
+func paint_radius_changed(_radius: int) -> void:
+	pass

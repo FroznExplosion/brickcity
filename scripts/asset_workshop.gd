@@ -2568,7 +2568,10 @@ func set_tool(t: String) -> void:
 	if t == "" :
 		selection.clear()
 	_sketch.clear()
-	toolbox.use(&"sketch" if t == "sketch" else &"")
+	if t == "sketch":
+		toolbox.use(&"sketch")
+	elif toolbox.active_id() == &"sketch":
+		toolbox.use(&"")
 	_sketch_box.visible = t == "sketch"
 	if t != "" and _painting:
 		_set_painting(false)
