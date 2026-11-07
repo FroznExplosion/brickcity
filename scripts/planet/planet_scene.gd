@@ -4680,6 +4680,18 @@ func _run_garrison_gate() -> void:
 		for k in range(1, g.squads.size()):
 			apart = minf(apart, g.squads[k].center().distance_to(g.squad.center()))
 		_check("its other squads stand away from the first", apart > 12.0, "nearest %.1f m" % apart)
+	if g != null and g.squad != null:
+		var mix: Array = PlanetGarrison.WAVE_KINDS[g.mix_index()]
+		var theirs: Array = []
+		var own := true
+		for m in g.squad.alive():
+			theirs.append(m.get_meta(&"unit", &""))
+			own = own and mix.has(m.get_meta(&"unit", &""))
+		var mixes := {}
+		for k in 12:
+			mixes[g.mix_index(k)] = true
+		_check("its first squad drawn from its town's own mix; towns differ", own and mixes.size() >= 2,
+				"mix %d: %s; %d mixes over 12 towns" % [g.mix_index(), ", ".join(theirs), mixes.size()])
 	_check("on the world's own AI, the player's kit with it", ai_of.get(world) == ai and ai != home_ai and kit.services == ai
 			and ai.pawns.has(pawn) and not home_ai.pawns.has(pawn))
 	var q := g.squad
@@ -5203,18 +5215,17 @@ func _run_drive_gate() -> void:
 	_check("on a planet the tank's map is the nav net's", vn is PlanetNavMap)
 	var at: Vector3 = vn.snap(start)
 	var lib := GunPlaceholderParts.build_library()
-	var main := GunInstance.from_result(GunGenerator.generate(lib, 5, WeaponClass.builtin(&"rocket_launcher"), 1))
-	var mg := GunInstance.from_result(GunGenerator.generate(lib, 6, WeaponClass.builtin(&"lmg"), 1))
+	var guns := MachineLoadout.tank_guns(lib, 5, 6)
 	var face := Gravity.flat(goal - at, Gravity.up_at(at))
-	var tk := Tank.make(ai, self, at + Gravity.up_at(at) * 0.3, 0.0, 0, main, mg, Callable(), ai.rng)
+	var tk := Tank.make(ai, self, at + Gravity.up_at(at) * 0.3, 0.0, 0, guns[0], guns[1], Callable(), ai.rng)
 	PlanetBody.track(tk)
 	ai.add_pawn(tk.make_target())
 	var br := TankBrain.attach(ai, tk)
-	for seat in [Tank.Seat.DRIVER, Tank.Seat.GUNNER]:
+	MachineLoadout.crew_tank(tk, func(seat: int) -> Pawn:
 		var so := Soldier.spawn(ai, self, at + Gravity.up_at(at) * 0.3 + face.normalized().cross(Gravity.up_at(at)) * 5.0,
-				0, GunInstance.from_result(GunGenerator.generate(lib, 60 + seat, WeaponClass.builtin(&"rifle"), 1)))
+				0, MachineLoadout.roll(lib, 60 + seat, &"rifle"))
 		PlanetBody.track(so.pawn.body)
-		tk.board(so.pawn, seat, true)
+		return so.pawn)
 	await get_tree().create_timer(2.0).timeout
 	br.send(goal)
 	var keys := {}

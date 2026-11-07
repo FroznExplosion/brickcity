@@ -2834,6 +2834,11 @@ so three squads, the tank and the mech are raised, close and fire, and are wiped
 Not in this step: rocketeers (not built), the officer in a building's top floor (planet rooms' floor
 spots), survivors of a town left for another (they still just go).
 
+**Generated towns differ (2026-11-07).** A generated town's squad is drawn from one of the mixes after the
+first, chosen by the town itself (`PlanetGarrison.mix_index`): towns differ, and a town is the same every
+time it is raised. `--gate=garrison` 18/18: its town's mix 3 (rifleman, breacher, marksman); 12 towns spread
+over all 3 mixes.
+
 #### Plan, saving (2026-11-01)
 
 As zylanntest (its Docs/save_format_and_data_longevity.md, future_features_save_guide.md): the **universe**
