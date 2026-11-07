@@ -2846,7 +2846,9 @@ first (the street spots); the first closed 50 m -> 35 m and fired in 3-4 s; once
 officer's word had all 3 squads hunting; wiped out (13 raised), clear. 20/20 three times headless;
 `--size=8` (one squad and the officer, no vehicles) 18/18. home 11/11, mechwave 3/3, save stages 1 (3/3)
 and 2 (13/13) unchanged. The save's squad index per survivor is not gate-checked (stage 2 is home's waves,
-one squad). Not seen on screen.
+one squad). Windowed (2026-11-07) 20/20: worst frame 4.4 s at home before the flight (not the
+garrison's); in the town 40-200 ms, one 0.7 s; another chat's windowed run overlapped, so the frame times
+are not reliable; peak 97 C, not held back. Not looked at on screen.
 
 Found on the way, both real in play, not only the gate's:
 - **Seated, the garrison went on thinking.** With the ship landed near the town the troops were not held

@@ -483,7 +483,7 @@ func _build_banner() -> void:
 	_banner.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_banner.grow_horizontal = Control.GROW_DIRECTION_BOTH
 	_banner.position.y = 16
-	_banner.add_theme_font_size_override("font_size", 22)
+	_banner.add_theme_font_size_override("font_size", GameUI.px(22))
 	_banner.add_theme_color_override("font_color", Color(1.0, 0.78, 0.35))
 	_banner.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.9))
 	_banner.add_theme_constant_override("outline_size", 6)
@@ -533,20 +533,19 @@ func _build_menu() -> void:
 	_menu.set_anchors_preset(Control.PRESET_CENTER)
 	_menu.position = Vector2(-190, -150)
 	_menu.custom_minimum_size = Vector2(380, 0)
-	var style := StyleBoxFlat.new()
-	style.bg_color = Color(0.08, 0.09, 0.1, 0.9)
+	# The in-game UI kit's panel (GameUI), in the disasters' amber.
+	var style := GameUI.panel_box(0.9)
 	style.border_color = Color(1.0, 0.78, 0.35, 0.8)
 	style.set_border_width_all(2)
-	style.set_corner_radius_all(6)
-	style.set_content_margin_all(14)
 	_menu.add_theme_stylebox_override("panel", style)
+	GameUI.style(_menu)
 	var v := VBoxContainer.new()
 	v.add_theme_constant_override("separation", 10)
 	_menu.add_child(v)
 
 	var head := Label.new()
 	head.text = "DISASTERS"
-	head.add_theme_font_size_override("font_size", 20)
+	head.add_theme_font_size_override("font_size", GameUI.px(20))
 	head.add_theme_color_override("font_color", Color(1.0, 0.78, 0.35))
 	v.add_child(head)
 

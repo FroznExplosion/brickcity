@@ -44,15 +44,15 @@ func reading() -> Dictionary:
 func _draw() -> void:
 	var r := reading()
 	var font := get_theme_default_font()
-	draw_string(font, Vector2(0, 12), "AGGRO", HORIZONTAL_ALIGNMENT_LEFT, -1, 12)
+	draw_string(font, Vector2(0, 12), "AGGRO", HORIZONTAL_ALIGNMENT_LEFT, -1, GameUI.px(12))
 	var y := 18.0
 	for kind in ["pilot", "mech"]:
 		var v := float(r[kind])
 		draw_rect(Rect2(Vector2(46, y), BAR), Color(0, 0, 0, 0.5))
 		var col := Color(1.0, 0.35, 0.25) if r.holder == kind else Color(0.9, 0.75, 0.3)
 		draw_rect(Rect2(Vector2(46, y), Vector2(BAR.x * v, BAR.y)), col)
-		draw_string(font, Vector2(0, y + BAR.y), kind, HORIZONTAL_ALIGNMENT_LEFT, -1, 11)
+		draw_string(font, Vector2(0, y + BAR.y), kind, HORIZONTAL_ALIGNMENT_LEFT, -1, GameUI.px(11))
 		if kind == "mech" and bool(r.exposed):
-			draw_string(font, Vector2(46 + BAR.x + 6, y + BAR.y), "hatch off", HORIZONTAL_ALIGNMENT_LEFT, -1, 11,
+			draw_string(font, Vector2(46 + BAR.x + 6, y + BAR.y), "hatch off", HORIZONTAL_ALIGNMENT_LEFT, -1, GameUI.px(11),
 					Color(1.0, 0.35, 0.25))
 		y += BAR.y + 6.0

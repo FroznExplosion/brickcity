@@ -29,6 +29,7 @@ func setup(abilities: AbilityLoadout) -> void:
 func _build() -> void:
 	custom_minimum_size = Vector2(300, 0)
 	add_theme_stylebox_override(&"panel", _bg())
+	GameUI.style(self)
 
 	var v := VBoxContainer.new()
 	v.add_theme_constant_override(&"separation", 4)
@@ -36,7 +37,7 @@ func _build() -> void:
 
 	var title := Label.new()
 	title.text = "BUILD ITEM"
-	title.add_theme_font_size_override(&"font_size", 16)
+	title.add_theme_font_size_override(&"font_size", GameUI.px(16))
 	v.add_child(title)
 
 	var cat_row := HBoxContainer.new()
@@ -82,7 +83,7 @@ func _build() -> void:
 
 	var hint := Label.new()
 	hint.text = "B closes"
-	hint.add_theme_font_size_override(&"font_size", 10)
+	hint.add_theme_font_size_override(&"font_size", GameUI.px(10))
 	hint.modulate = Color(0.5, 0.5, 0.55)
 	v.add_child(hint)
 
@@ -158,11 +159,6 @@ func sync_abilities() -> void:
 		_refresh_classes()
 
 
+## The panel: the in-game UI kit's (GameUI.panel_box).
 func _bg() -> StyleBoxFlat:
-	var sb := StyleBoxFlat.new()
-	sb.bg_color = Color(0.06, 0.07, 0.10, 0.95)
-	sb.border_color = Color(0.40, 0.55, 0.70)
-	sb.set_border_width_all(1)
-	sb.set_corner_radius_all(4)
-	sb.set_content_margin_all(10)
-	return sb
+	return GameUI.panel_box(0.95)
