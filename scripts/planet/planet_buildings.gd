@@ -96,6 +96,9 @@ var _far_mat: ShaderMaterial
 var _mesh_cache := {}
 var _landmarks: Array[int] = []
 var near_count := 0
+## How many buildings each add_town laid, in the order of the towns (PlanetGarrison sizes a
+## town's garrison by it).
+var town_sites: Array[int] = []
 var far_count := 0
 ## For the gate: fades that jumped in plain sight, and the biggest one-frame step.
 var pops := 0
@@ -171,6 +174,7 @@ func add_town(dir: Vector3, rows: int, spacing: float, rng: RandomNumberGenerato
 	var e1 := up.cross(Vector3.FORWARD if absf(up.z) < 0.9 else Vector3.RIGHT).normalized()
 	var e2 := up.cross(e1)
 	var stud := BrickWorld.get_stud_metres()
+	var before := sites.size()
 	for i in rows:
 		for j in rows:
 			if rng.randf() < 0.15:
@@ -181,6 +185,7 @@ func add_town(dir: Vector3, rows: int, spacing: float, rng: RandomNumberGenerato
 			var fz := 24 + 2 * rng.randi_range(0, 6)
 			var courses := int(rng.randi_range(12, 60) * tall)
 			_add(d, e1, fx, fz, courses, false, rng)
+	town_sites.append(sites.size() - before)
 
 
 ## One very tall building: visible from space.

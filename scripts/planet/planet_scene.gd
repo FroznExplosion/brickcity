@@ -26,7 +26,8 @@ extends Node3D
 ##   (11.10, trees and vehicles).
 ##   -- --gate=squad: a squad on the AI's nav region round the town (11.8 N2)
 ##   walks to the player round the curve, takes cover, fires.
-##   -- --gate=garrison: a generated world's own AI and a town's squad (11.12 step 7)
+##   -- --gate=garrison: a generated world's own AI and a town's squad (11.12 step 7);
+##      with --size=N its town counts as N buildings (PlanetGarrison.plan_for)
 ##   -- --gate=save --stage=1|2|3: the universe saved and come back to, run by run
 ##   -- --gate=home: home's town: quiet at the spawn, a fight walked into, its waves
 ##   -- --gate=belt: a star's belt from open space, the ship turned, slow among its rocks
@@ -4605,6 +4606,9 @@ func _run_home_gate() -> void:
 # up again; home's AI back on home.
 
 func _run_garrison_gate() -> void:
+	for arg in OS.get_cmdline_user_args():
+		if arg.begins_with("--size="):
+			PlanetGarrison.test_buildings = int(arg.trim_prefix("--size="))
 	var t0 := Time.get_ticks_msec()
 	while pawn == null and Time.get_ticks_msec() - t0 < 60000:
 		await _frames(1)
@@ -4660,7 +4664,23 @@ func _run_garrison_gate() -> void:
 	while (g == null or g.squad == null) and Time.get_ticks_msec() - t0 < 40000:
 		await _frames(1)
 		g = garrisons.get(world)
-	_check("the town's squad is raised, four strong", g != null and g.squad != null and g.squad.alive().size() == 4)
+	# As big as its town: squads of four, its officer holding the middle, a tank and a
+	# mech in the biggest (PlanetGarrison.plan_for).
+	var plan := PlanetGarrison.plan_for(g.town_buildings(g.town)) if g != null else {}
+	var fours := g != null and g.squads.size() == int(plan.get("squads", -1))
+	if g != null:
+		for gq in g.squads:
+			fours = fours and gq.alive().size() == 4
+	var lead_holds: bool = g != null and g.officer != null and g.officer.get_meta(&"unit", &"") == &"officer" \
+			and g.officer.assignment != null and g.officer.assignment.task == SquadMsg.Task.HOLD
+	_check("the town's garrison is raised as big as the town", g != null and g.squad != null and fours and lead_holds
+			and g._tank_up() == bool(plan.get("tank", false)) and g._mech_up() == bool(plan.get("mech", false)),
+			"%d buildings: %s; %s" % [g.town_buildings(g.town) if g != null else -1, plan, g.status() if g != null else ""])
+	if g != null and g.squads.size() > 1:
+		var apart := INF
+		for k in range(1, g.squads.size()):
+			apart = minf(apart, g.squads[k].center().distance_to(g.squad.center()))
+		_check("its other squads stand away from the first", apart > 12.0, "nearest %.1f m" % apart)
 	if g != null and g.squad != null:
 		var mix: Array = PlanetGarrison.WAVE_KINDS[g.mix_index()]
 		var theirs: Array = []
@@ -4671,7 +4691,7 @@ func _run_garrison_gate() -> void:
 		var mixes := {}
 		for k in 12:
 			mixes[g.mix_index(k)] = true
-		_check("drawn from its town's own mix; towns differ", own and mixes.size() >= 2,
+		_check("its first squad drawn from its town's own mix; towns differ", own and mixes.size() >= 2,
 				"mix %d: %s; %d mixes over 12 towns" % [g.mix_index(), ", ".join(theirs), mixes.size()])
 	_check("on the world's own AI, the player's kit with it", ai_of.get(world) == ai and ai != home_ai and kit.services == ai
 			and ai.pawns.has(pawn) and not home_ai.pawns.has(pawn))
@@ -4706,6 +4726,13 @@ func _run_garrison_gate() -> void:
 	print("[planet] garrison: %s; play %s; %d alive" % [states, q.play, q.alive().size()])
 	_check("it sees the player and closes on them (>= 15 m)", start - nearest >= 15.0, "%.1f m -> %.1f m" % [start, nearest])
 	_check("it fires", fired_at >= 0.0, "first at %.1f s" % fired_at)
+	if g.squads.size() > 1:
+		# The officer's word: the squads that have seen nobody know of the player too.
+		t0 = Time.get_ticks_msec()
+		while g._hunts.size() < g.squads.size() and Time.get_ticks_msec() - t0 < 10000:
+			await _frames(5)
+		_check("on the officer's word every squad hunts the player", g._hunts.size() == g.squads.size(),
+				"%d of %d" % [g._hunts.size(), g.squads.size()])
 	_check("on the ground, nobody through it", floor_ticks > body_ticks * 0.9 and sunk > -0.5, "%d of %d on the floor, %.2f m" % [floor_ticks, body_ticks, sunk])
 	# Left: it sleeps where it was, and is where it was on waking.
 	board()
@@ -4757,14 +4784,26 @@ func _run_garrison_gate() -> void:
 		for m in q.alive():
 			what[m.state] = int(what.get(m.state, 0)) + 1
 		print("[planet] garrison: %s, play %s, order %s, nearest %.1f m" % [what, q.play, q.order != null, q.alive()[0].pawn.feet().distance_to(pawn.feet())])
-	# Wiped out.
-	for m in q.alive():
+	# Wiped out: every squad, the officer, the tank and the mech.
+	var raised := int(plan.get("squads", 1)) * 4 + 1
+	for m in g.alive():
 		m.pawn.health.apply_impact(1e6, &"")
+	if g._tank_up():
+		g.tank.health.apply_impact(1e9, &"")
+	# A mech is doomed first, and its dooming hit spills no further (MechLayers'
+	# block lasts that tick): hit again on the next until it is down.
+	var mech_hits := 0
+	while g._mech_up() and mech_hits < 20:
+		g.mech.mech.health.apply_impact(1e9, &"")
+		mech_hits += 1
+		await get_tree().physics_frame
 	t0 = Time.get_ticks_msec()
 	while g.squad != null and Time.get_ticks_msec() - t0 < 8000:
 		await _frames(1)
 	await get_tree().create_timer(1.0).timeout
-	_check("wiped out, the town is clear and stays so", g.squad == null and cleared.size() == 1 and g.soldiers.size() == 4)
+	_check("wiped out, the town is clear and stays so", g.squad == null and cleared.size() == 1 and g.soldiers.size() == raised,
+			"%d raised of %d; %d up, tank %s, mech %s, %d cleared" % [g.soldiers.size(), raised, g.alive().size(),
+			g.tank.state if is_instance_valid(g.tank) else "-", g._mech_up(), cleared.size()])
 	# The player down.
 	pawn.health.layer_configs[0].max_value = 100.0
 	pawn.health.reset()
@@ -4775,7 +4814,8 @@ func _run_garrison_gate() -> void:
 	var was_dead := pawn.health.is_dead()
 	await get_tree().create_timer(DOWN_FOR + 0.5).timeout
 	var to_ship := pawn.feet().distance_to(ship.global_position)
-	_check("down, and up again beside the ship", was_dead and not pawn.health.is_dead() and to_ship < BESIDE_SHIP * 2.0, "%.1f m from it" % to_ship)
+	_check("down, and up again beside the ship", was_dead and not pawn.health.is_dead() and to_ship < BESIDE_SHIP * 2.0, "%.1f m from it; ship landed %s (%.2f m/s, %.2f m up), on this world %s" % [to_ship, ship.landed,
+			ship.vel.length(), ship.altitude, ship.ref == system.anchor])
 	# Home.
 	board()
 	await _ship_out()
@@ -4786,7 +4826,7 @@ func _run_garrison_gate() -> void:
 	unboard()
 	_check("the player in it", home_ai.pawns.has(pawn) and garrisons.is_empty())
 	print("[planet] garrison gate: put back on the ground %d time(s)" % ground_saves)
-	print("[planet] garrison gate: frames: worst %.1f ms; over 40 ms in play: %d %s" % [_worst_ms, _play_hitches.size(), _play_hitches])
+	print("[planet] garrison gate: frames: worst %.1f ms; over 40 ms in play: %d %s; all: %s" % [_worst_ms, _play_hitches.size(), _play_hitches, _hitches])
 	print("[planet] gate: %d ok, %d FAIL" % [_ok, _fail])
 	get_tree().quit(1 if _fail > 0 else 0)
 
