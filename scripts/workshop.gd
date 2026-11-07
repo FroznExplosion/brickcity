@@ -2456,6 +2456,73 @@ func _delete_ray(from: Vector3, dir: Vector3) -> bool:
 	return false
 
 
+# The kit's camera (WkCamera) asks these, through the workshop's context. The flying is the
+# workshop's DebugCamera's own.
+
+func wk_camera() -> Camera3D:
+	return _camera
+
+
+func wk_camera_ray() -> Array:
+	return _mouse_ray()
+
+
+func wk_camera_hit(from: Vector3, dir: Vector3) -> Variant:
+	var hit := _first_hit(from, dir)
+	return null if hit.is_empty() else hit.point
+
+
+func wk_camera_captured() -> bool:
+	var c = _camera
+	return bool(c._captured)
+
+
+func wk_camera_set_captured(on: bool) -> void:
+	var c = _camera
+	c._set_captured(on)
+
+
+func wk_camera_drive_keys(on: bool) -> void:
+	var c = _camera
+	c.drive_uncaptured = on
+
+
+func wk_camera_busy() -> bool:
+	return _hotbar.is_browsing() or (_menu != null and _menu.is_modal())
+
+
+## RMB looks round unless a tool is dragging with it, a build is in hand or furniture is open.
+func wk_camera_rmb_free() -> bool:
+	return not ((_tools != null and _tools.dragging()) or _stamp != null
+			or (_furnish != null and _furnish.is_open()))
+
+
+func wk_camera_wheel_free() -> bool:
+	return not (_spaces != null and _spaces.active)
+
+
+func wk_camera_click(button: int) -> void:
+	if button == MOUSE_BUTTON_MIDDLE:
+		_pick_block()
+
+
+func wk_camera_replay(events: Array) -> void:
+	for e in events:
+		_unhandled_input(e)
+
+
+func wk_camera_wheel_shift(step: int) -> void:
+	_hotbar.step(-step)
+
+
+## A flat view is built in with the cursor: the camera's own click-to-look is off, and a
+## captured mouse would turn it.
+func wk_camera_flat(on: bool) -> void:
+	_camera.set_process_unhandled_input(not on)
+	if on and _camera.has_method("_set_captured"):
+		_camera.call("_set_captured", false)
+
+
 ## Who answers the kit's Sketch tool (BrickWorkshopContext): the building workshop's tools,
 ## which make kept shapes of a stroke. The asset workshop answers itself.
 func _sketch_host() -> Object:

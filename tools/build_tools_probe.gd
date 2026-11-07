@@ -1008,7 +1008,7 @@ func _simpler_checks() -> void:
 	current_scene = _ws
 	_ok("Esc is the pause menu here", root.get_node("/root/MenuManager").can_pause())
 	current_scene = null
-	var v: WorkshopView = t.view
+	var v: WkCamera = t.view
 	var cam = _ws._camera
 	_ok("orbit to start: the cursor is free, a click does not take the mouse", v.mode == "orbit" and v.wants_cursor()
 			and not cam.click_captures and not cam._captured)
