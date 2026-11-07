@@ -19,10 +19,32 @@ Version: see `VERSION`. Raise it with every change to this folder.
 | `core/wk_command.gd` | `WkCommand` — one edit: `undo()`, `do()`, `can_redo()`, `merge(next)`, `kind`, `data`. `WkCommand.make(kind, data, undo_fn, do_fn)` for an editor that keeps the logic itself. |
 | `core/wk_group.gd` | `WkGroup` — commands that undo as one; `tail` commands (snapshots) run after the edits both ways. |
 | `core/wk_undo_stack.gd` | `WkUndoStack` — the one history: `push`, `undo`, `redo`, `begin_group` / `end_group`, `group_last(n)`, `forget_where`, `busy`. |
-| `tests/wk_smoke.gd` | Everything above, headless, on a pretend document. |
+| `core/wk_context.gd` | `WkContext` — **the seam**: everything a kit tool asks the editor, each a method with a neutral default. An editor extends it. |
+| `core/wk_tool.gd` | `WkTool` — a tool: `activate(ctx)`, `deactivate()`, `input(e) -> bool`, `process(dt)`, `options_ui()`, `hint()`. |
+| `core/wk_toolbox.gd` | `WkToolbox` — the tools and which one is in hand: `add`, `use(id)`, `input`, `process`. |
+| `services/wk_sketch_pen.gd` | `WkSketchPen` — a stroke on a plane: freehand, brush, rectangle, ellipse, polygon; its outline, brush entry, cells, preview lines. |
+| `tools/wk_sketch_tool.gd` | `WkSketchTool` — Sketch: draws with the pen, asks the context where (`sketch_begin`, `sketch_point`) and hands the stroke over (`sketch_commit`). |
+| `tests/wk_smoke.gd` | Everything above, headless, on a pretend document and a pretend context. |
 
-Coming, in this order (Docs/BuildTools.md §20): `WkTool` + `WkContext` + `WkToolbox`, the
-shared tools one file each, `WkCamera`, `WkMirror`, `WkGrid`, `WkGhost`, `WkFrame`.
+Coming, in this order (Docs/BuildTools.md §20): Paint, the grid shapes, the rest of the shared
+tools one file each, `WkCamera`, `WkMirror`, `WkGrid`, `WkGhost`, `WkFrame`.
+
+## 1b. A tool in an editor
+
+```gdscript
+class_name MyContext
+extends WkContext
+func sketch_begin(_remove): return "top"            # the plane a stroke lies on (null: refuse)
+func sketch_point(_plane): return cursor_on_plane()  # Vector2 in plane cells, or null
+func sketch_commit(_plane, pen): fill(pen.entry("top", 1, false))
+
+var box := WkToolbox.new()
+box.ctx = MyContext.new()
+box.ctx.undo_stack = undo
+box.add(WkSketchTool.new())
+box.use(&"sketch")
+# in _unhandled_input:  if box.input(event): return
+```
 
 ## 2. Undo in five lines
 
