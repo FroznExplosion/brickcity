@@ -14,12 +14,15 @@ var doc: Array = []
 var log_: Array = []
 
 
-func _init() -> void:
+func _initialize() -> void:
 	_undo_stack()
 	_toolbox()
 	_sketch_tool()
 	_paint_tool()
 	_shapes()
+	_mirror()
+	await _camera()
+	_grid_and_ghost()
 	print("wk_smoke: %d passed, %d failed" % [_pass, _fail])
 	quit(0 if _fail == 0 else 1)
 
@@ -353,6 +356,96 @@ func _shapes() -> void:
 	_ok("v2i takes arrays and Vector2i", WkShapes.v2i([2, 3]) == Vector2i(2, 3) and WkShapes.v2i(Vector2i(4, 1)) == Vector2i(4, 1))
 
 
+func _mirror() -> void:
+	var m := WkMirror.new()
+	var told := [0]
+	m.changed.connect(func() -> void: told[0] += 1)
+	m.turn_on(Vector3i(7, 1, 12))
+	_ok("on: a plane never set starts at the cell", m.on and m.z == 12.0 and m.x == 7.0 and told[0] > 0)
+	_ok("a 2-wide thing at 13, across z = 12: its image at 9", m.mirror_cell(Vector3i(3, 1, 13), Vector3i(1, 1, 2))
+			== Vector3i(3, 1, 9))
+	m.z = 12.5
+	_ok("one straddling the plane is its own image", m.mirror_cell(Vector3i(3, 1, 12), Vector3i(1, 1, 1))
+			== Vector3i(3, 1, 12))
+	m.axis = 0
+	_ok("across X: x moves, z stays", m.mirror_cell(Vector3i(9, 1, 4), Vector3i(1, 1, 1)) == Vector3i(4, 1, 4)
+			and m.plane() == 7.0)
+	_ok("a front across the plane turns", m.mirror_dir(Vector3i(1, 0, 1)) == Vector3i(-1, 0, 1))
+	m.through(Vector3i(20, 0, 0), Vector3i(4, 1, 2))
+	_ok("through the middle of a thing", m.x == 22.0)
+	m.axis = 5
+	_ok("any axis but 0 is across Z", m.axis == 2)
+
+
+func _camera() -> void:
+	var ctx := _Ctx.new()
+	var c := Camera3D.new()
+	root.add_child(c)
+	await process_frame   # in the tree: a camera's global transform needs it
+	c.global_position = Vector3(0, 10, 20)
+	c.look_at(Vector3.ZERO, Vector3.UP)
+	ctx.cam = c
+	var k := WkCamera.new()
+	k.setup(ctx)
+	_ok("orbit to start: the cursor free, keys fly", k.mode == "orbit" and k.wants_cursor()
+			and not ctx.captured and ctx.drive)
+	k._pivot = Vector3.ZERO
+	var d0 := c.global_position.length()
+	var f0 := -c.global_transform.basis.z
+	k.orbit(Vector2(40, 10))
+	_ok("orbit turns round the pivot, at the same distance", absf(c.global_position.length() - d0) < 0.001
+			and (-c.global_transform.basis.z).dot(f0) < 0.999)
+	ctx.ray = [c.global_position, -c.global_transform.basis.z]
+	var p0 := c.global_position
+	k.zoom(1)
+	_ok("the wheel zooms in along the ray", c.global_position.length() < p0.length() - 0.1)
+	k.input(_click(MOUSE_BUTTON_MIDDLE, true))
+	k.input(_click(MOUSE_BUTTON_MIDDLE, false))
+	_ok("a plain MMB click is the editor's", ctx.clicks == [MOUSE_BUTTON_MIDDLE])
+	k.input(_click(MOUSE_BUTTON_RIGHT, true))
+	k.input(_click(MOUSE_BUTTON_RIGHT, false))
+	_ok("a plain RMB click is handed back, press and release", ctx.replayed.size() == 2)
+	ctx.rmb_free = false
+	_ok("RMB is not the camera's while the editor drags with it", not k.input(_click(MOUSE_BUTTON_RIGHT, true)))
+	var y := InputEventKey.new()
+	y.keycode = KEY_Y
+	y.pressed = true
+	k.input(y)
+	_ok("Y: FPS, the mouse taken", k.mode == "fps" and ctx.captured and not ctx.drive)
+	ctx.captured = false
+	_ok("FPS with the cursor out: the scene takes no click", k.input(_click(MOUSE_BUTTON_LEFT, true)))
+	k.set_mode("orbit")
+	var persp := c.global_transform
+	k.ortho_size = 10.0
+	k.flat("top", Vector3(1, 0, 2))
+	_ok("a flat view: orthographic, looking straight down at the point", c.projection == Camera3D.PROJECTION_ORTHOGONAL
+			and (-c.global_transform.basis.z).dot(Vector3.DOWN) > 0.999 and ctx.flat_on and c.size == 10.0)
+	k.zoom_flat(1000.0)
+	_ok("its zoom is held to its most", k.ortho_size == k.ortho_max and c.size == k.ortho_max)
+	k.flat("side", Vector3.ZERO)
+	k.perspective()
+	_ok("perspective comes back as it was", c.projection == Camera3D.PROJECTION_PERSPECTIVE
+			and c.global_transform.origin.is_equal_approx(persp.origin) and not ctx.flat_on)
+	c.queue_free()
+
+
+func _grid_and_ghost() -> void:
+	var im := WkGrid.lines(Rect2i(2, 3, 8, 4), 0.5)
+	var verts := 0
+	for s in im.get_surface_count():
+		verts += (im.surface_get_arrays(s)[Mesh.ARRAY_VERTEX] as PackedVector3Array).size()
+	_ok("grid: a line each side of every cell, both ways", verts == ((8 + 1) + (4 + 1)) * 2, str(verts))
+	var g := WkGhost.new()
+	_ok("ghost: a see-through node with its material", g.node.material_override == g.material
+			and g.material.transparency == BaseMaterial3D.TRANSPARENCY_ALPHA)
+	g.fits(false)
+	_ok("tinted for does-not-fit", g.material.albedo_color == WkGhost.DOES_NOT_FIT)
+	var box := BoxMesh.new()
+	g.place(box, Transform3D(Basis(), Vector3(1, 2, 3)))
+	_ok("given a mesh and a place", g.node.mesh == box and g.node.transform.origin == Vector3(1, 2, 3))
+	g.node.free()
+
+
 ## A pretend editor for the tools.
 class _Ctx:
 	extends WkContext
@@ -382,6 +475,41 @@ class _Ctx:
 		cancels += 1
 
 	var log := []
+	var cam: Camera3D
+	var ray := []
+	var captured := false
+	var drive := false
+	var rmb_free := true
+	var clicks := []
+	var replayed := []
+	var flat_on := false
+
+	func camera() -> Camera3D:
+		return cam
+
+	func camera_ray() -> Array:
+		return ray
+
+	func camera_captured() -> bool:
+		return captured
+
+	func camera_set_captured(on: bool) -> void:
+		captured = on
+
+	func camera_drive_keys(on: bool) -> void:
+		drive = on
+
+	func camera_rmb_free() -> bool:
+		return rmb_free
+
+	func camera_click(button: int) -> void:
+		clicks.append(button)
+
+	func camera_replay(events: Array) -> void:
+		replayed.append_array(events)
+
+	func camera_flat(on: bool) -> void:
+		flat_on = on
 
 	func paint_begin() -> void:
 		log.append("begin")

@@ -158,7 +158,7 @@ func _mech_at_hatch(p: Pawn) -> Mech:
 
 
 func spawn_mech(feet: Vector3, yaw: float) -> Mech:
-	city._mech = Mech.spawn(self, feet, yaw, 0)
+	city._mech = Mech.spawn(city, feet, yaw, 0)
 	# The player's dressing on it -- not in a scripted pass, which must not change with what
 	# this machine's player has put on.
 	if not city._scripted:   # a scripted pass's mech stays the boxes its numbers were taken with
@@ -212,7 +212,7 @@ func spawn_tank(feet: Vector3, yaw: float, team: int, crewed: bool) -> Tank:
 	if city._gun_library == null:
 		city._gun_library = GunPlaceholderParts.build_library()
 	var guns := MachineLoadout.tank_guns(city._gun_library, city._combat_rng.randi(), city._combat_rng.randi())
-	var t := Tank.make(city.ai_services, self, feet, yaw, team, guns[0], guns[1], city._gun.on_structure_hit,
+	var t := Tank.make(city.ai_services, city, feet, yaw, team, guns[0], guns[1], city._gun.on_structure_hit,
 			city._combat_rng)
 	city.ai_services.add_pawn(t.make_target())
 	TankBrain.attach(city.ai_services, t)
@@ -354,7 +354,7 @@ func spawn_truck(feet: Vector3, yaw: float, team: int, cargo: Array[StringName],
 		if city._gun_library == null:
 			city._gun_library = GunPlaceholderParts.build_library()
 		gi = MachineLoadout.roll(city._gun_library, city._combat_rng.randi(), MachineLoadout.APC_GUN)
-	var truck := TransportTruck.make(city.ai_services, self, feet, yaw, kind, gi, city._gun.on_structure_hit, city._combat_rng)
+	var truck := TransportTruck.make(city.ai_services, city, feet, yaw, kind, gi, city._gun.on_structure_hit, city._combat_rng)
 	truck.team = team
 	truck.cargo = cargo
 	truck.arrived.connect(_truck_unload)
@@ -393,7 +393,7 @@ func _truck_unload(truck: TransportTruck) -> void:
 	truck.cargo.clear()
 	# An APC's squad is one, and it covers them (moving cover).
 	if truck.is_apc() and not members.is_empty():
-		var q := Squad.make(city.ai_services, self, members, 1)
+		var q := Squad.make(city.ai_services, city, members, 1)
 		city.squads.append(q)
 		if city._player_pawn != null and is_instance_valid(city._player_pawn):
 			var o := SquadMsg.Order.make(SquadMsg.OrderKind.ADVANCE)
@@ -449,7 +449,7 @@ func _give_pods(m: Mech) -> void:
 func spawn_enemy_mech(feet: Vector3, yaw: float, recipe := "medium_gunner", design: PartDesign = null) -> MechBrain:
 	if city._gun_library == null:
 		city._gun_library = GunPlaceholderParts.build_library()
-	var m := Mech.spawn(self, feet, yaw, 1)
+	var m := Mech.spawn(city, feet, yaw, 1)
 	MachineLoadout.arm_mech(m, city._gun_library, city._combat_rng.randi())
 	if not city._scripted:
 		# A mech gun in its hand, seen: the shipped one, or one made in the workshop.

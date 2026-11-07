@@ -299,10 +299,21 @@ var _opened_fixtures := 0
 ## The mirror (Docs/BuildTools.md section 7; moved down from the asset workshop): while on,
 ## a brick placed is placed again across the plane -- across Z at `mirror_z` studs, or with
 ## `mirror_axis` 0 across X at `mirror_x`.
-var mirror_on := false
-var mirror_z := 0.0
-var mirror_x := 0.0
-var mirror_axis := 2
+## The plane and its arithmetic are the editor kit's (WkMirror, addons/workshop_kit); these
+## names stay, as properties on it.
+var mirror := WkMirror.new()
+var mirror_on: bool:
+	get: return mirror.on
+	set(v): mirror.on = v
+var mirror_z: float:
+	get: return mirror.z
+	set(v): mirror.z = v
+var mirror_x: float:
+	get: return mirror.x
+	set(v): mirror.x = v
+var mirror_axis: int:
+	get: return mirror.axis
+	set(v): mirror.axis = v
 ## Lock height as a button: the plane stays as with E held, until it is pressed again.
 var plane_locked := false
 var _run_from := 0
@@ -331,6 +342,7 @@ var _stress := {}           ## block id -> load / capacity, for the overlay
 
 var _material: Material
 var _ghost_material: StandardMaterial3D
+var ghost: WkGhost
 
 
 func _init() -> void:
@@ -366,14 +378,11 @@ func _ready() -> void:
 	sm.shader = load("res://shaders/brick.gdshader")
 	_material = BrickMaterials.add_glass(sm)
 
-	_ghost_material = StandardMaterial3D.new()
-	_ghost_material.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	_ghost_material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	_ghost_material.albedo_color = Color(0.4, 0.9, 1.0, 0.45)
-	_ghost_material.cull_mode = BaseMaterial3D.CULL_DISABLED
-
-	_ghost = MeshInstance3D.new()
-	_ghost.material_override = _ghost_material
+	# The ghost is the editor kit's (WkGhost): its node and material; the mesh, the place and
+	# the layer tints are this workshop's.
+	ghost = WkGhost.new()
+	_ghost_material = ghost.material
+	_ghost = ghost.node
 	add_child(_ghost)
 	_ghost_studs = MultiMeshInstance3D.new()
 	_ghost_studs.material_override = _ghost_material
@@ -1819,7 +1828,7 @@ func _update_ghost() -> void:
 	# through a weld, across grids -- so it counts as attached, not mid-air.
 	var held := _joints > 0 or not _snapped.is_empty()
 	if not _valid:
-		_ghost_material.albedo_color = Color(1.0, 0.25, 0.22, 0.45)
+		ghost.fits(false)
 	elif _role == BuildRecipe.Role.DETAIL:
 		_ghost_material.albedo_color = Color(0.9, 0.5, 1.0, 0.42) if held \
 				else Color(0.9, 0.5, 1.0, 0.28)
@@ -2016,29 +2025,24 @@ func _place() -> void:
 
 ## The first stud across of a part `width` studs wide at `z`, mirrored across the plane.
 func mirrored_z(z: int, width: int) -> int:
-	return int(round(2.0 * mirror_z - float(z + width)))
+	return mirror.mirrored_z(z, width)
 
 
 ## The same across X.
 func mirrored_x(x: int, width: int) -> int:
-	return int(round(2.0 * mirror_x - float(x + width)))
+	return mirror.mirrored_x(x, width)
 
 
 func set_mirror(on: bool) -> void:
-	mirror_on = on
-	if on and mirror_z == 0.0:
-		mirror_z = float(_cell.z)
-	if on and mirror_x == 0.0:
-		mirror_x = float(_cell.x)
+	if on:
+		mirror.turn_on(_cell)
+	else:
+		mirror.on = false
 
 
 ## Put the plane down the middle of the ghost.
 func mirror_here() -> void:
-	var size := BrickPalette.size_of(_archetype_name())
-	if mirror_axis == 0:
-		mirror_x = _cell.x + size.x * 0.5
-	else:
-		mirror_z = _cell.z + size.z * 0.5
+	mirror.through(_cell, BrickPalette.size_of(_archetype_name()))
 
 
 ## The brick just placed, again, on the other side of the plane. A part with a front
@@ -2046,19 +2050,13 @@ func mirror_here() -> void:
 ## exactly is its own mirror and is not placed twice. Upright grid only, for now.
 func _place_mirrored() -> void:
 	var arch := _archetype_name()
-	var size := BrickPalette.size_of(arch)
-	var to := _cell
-	if mirror_axis == 0:
-		to.x = mirrored_x(_cell.x, size.x)
-	else:
-		to.z = mirrored_z(_cell.z, size.z)
+	var to := mirror.mirror_cell(_cell, BrickPalette.size_of(arch))
 	if to == _cell:
 		return
 	var keep := [_cell, _yaw, _snapped]
 	var front := BrickPalette.front_of(arch)
 	if front[mirror_axis] != 0:
-		var want := front
-		want[mirror_axis] = -front[mirror_axis]
+		var want := mirror.mirror_dir(front)
 		for y in 4:
 			if BrickPalette.front_of(BrickPalette.variant_name(_part(), y, _flip)) == want:
 				_yaw = y
@@ -2454,6 +2452,73 @@ func _delete_ray(from: Vector3, dir: Vector3) -> bool:
 		_after_edit()
 		return true
 	return false
+
+
+# The kit's camera (WkCamera) asks these, through the workshop's context. The flying is the
+# workshop's DebugCamera's own.
+
+func wk_camera() -> Camera3D:
+	return _camera
+
+
+func wk_camera_ray() -> Array:
+	return _mouse_ray()
+
+
+func wk_camera_hit(from: Vector3, dir: Vector3) -> Variant:
+	var hit := _first_hit(from, dir)
+	return null if hit.is_empty() else hit.point
+
+
+func wk_camera_captured() -> bool:
+	var c = _camera
+	return bool(c._captured)
+
+
+func wk_camera_set_captured(on: bool) -> void:
+	var c = _camera
+	c._set_captured(on)
+
+
+func wk_camera_drive_keys(on: bool) -> void:
+	var c = _camera
+	c.drive_uncaptured = on
+
+
+func wk_camera_busy() -> bool:
+	return _hotbar.is_browsing() or (_menu != null and _menu.is_modal())
+
+
+## RMB looks round unless a tool is dragging with it, a build is in hand or furniture is open.
+func wk_camera_rmb_free() -> bool:
+	return not ((_tools != null and _tools.dragging()) or _stamp != null
+			or (_furnish != null and _furnish.is_open()))
+
+
+func wk_camera_wheel_free() -> bool:
+	return not (_spaces != null and _spaces.active)
+
+
+func wk_camera_click(button: int) -> void:
+	if button == MOUSE_BUTTON_MIDDLE:
+		_pick_block()
+
+
+func wk_camera_replay(events: Array) -> void:
+	for e in events:
+		_unhandled_input(e)
+
+
+func wk_camera_wheel_shift(step: int) -> void:
+	_hotbar.step(-step)
+
+
+## A flat view is built in with the cursor: the camera's own click-to-look is off, and a
+## captured mouse would turn it.
+func wk_camera_flat(on: bool) -> void:
+	_camera.set_process_unhandled_input(not on)
+	if on and _camera.has_method("_set_captured"):
+		_camera.call("_set_captured", false)
 
 
 ## Who answers the kit's Sketch tool (BrickWorkshopContext): the building workshop's tools,
@@ -3029,30 +3094,10 @@ func _build_grid() -> void:
 	var plane_y: float = _cell.y * BrickPalette.PLATE_M
 	_grid.transform = world.get_chunk_transform(chunk) \
 			* Transform3D(Basis(), Vector3(0.0, plane_y, 0.0))
-	var im := ImmediateMesh.new()
-	var mat := StandardMaterial3D.new()
-	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	mat.vertex_color_use_as_albedo = true
-	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	im.surface_begin(Mesh.PRIMITIVE_LINES, mat)
-	var s := BrickPalette.STUD_M
+	# The lines are the editor kit's (WkGrid): faint, a stronger one every 4 studs -- a rotated
+	# grid's plane can sit right across the view, and it is an orientation cue.
 	_grid_drawn = grid_window()
-	var lo := _grid_drawn.position
-	var hi := _grid_drawn.end
-	# Just above the plane itself, so it does not z-fight with the brick tops.
-	var y := 0.002
-	for i in _grid_drawn.size.x + 1:
-		# Faint: a rotated grid's plane can sit right across the view, and it is
-		# an orientation cue rather than something to read.
-		var u := (lo.x + i) * s
-		var v := (lo.y + i) * s
-		var col := Color(1, 1, 1, 0.13 if (lo.x + i) % 4 == 0 else 0.04)
-		im.surface_set_color(col); im.surface_add_vertex(Vector3(u, y, lo.y * s))
-		im.surface_set_color(col); im.surface_add_vertex(Vector3(u, y, hi.y * s))
-		im.surface_set_color(col); im.surface_add_vertex(Vector3(lo.x * s, y, v))
-		im.surface_set_color(col); im.surface_add_vertex(Vector3(hi.x * s, y, v))
-	im.surface_end()
-	_grid.mesh = im
+	_grid.mesh = WkGrid.lines(_grid_drawn, BrickPalette.STUD_M)
 
 
 ## The studs the grid is drawn over: round the ghost, moving a quarter of itself at a time

@@ -66,3 +66,57 @@ func paint_step(step: int) -> void:
 
 func paint_radius_changed(radius: int) -> void:
 	ws.wk_paint_radius_changed(radius)
+
+
+# Camera: the workshop's own camera (a DebugCamera, which flies), in both workshops.
+
+func camera() -> Camera3D:
+	return ws.wk_camera()
+
+
+func camera_ray() -> Array:
+	return ws.wk_camera_ray()
+
+
+func camera_hit(from: Vector3, dir: Vector3) -> Variant:
+	return ws.wk_camera_hit(from, dir)
+
+
+func camera_captured() -> bool:
+	return ws.wk_camera_captured()
+
+
+func camera_set_captured(on: bool) -> void:
+	ws.wk_camera_set_captured(on)
+
+
+func camera_drive_keys(on: bool) -> void:
+	ws.wk_camera_drive_keys(on)
+
+
+func camera_busy() -> bool:
+	return ws.wk_camera_busy()
+
+
+func camera_rmb_free() -> bool:
+	return ws.wk_camera_rmb_free()
+
+
+func camera_wheel_free() -> bool:
+	return ws.wk_camera_wheel_free()
+
+
+func camera_click(button: int) -> void:
+	ws.wk_camera_click(button)
+
+
+func camera_replay(events: Array) -> void:
+	ws.wk_camera_replay(events)
+
+
+func camera_wheel_shift(step: int) -> void:
+	ws.wk_camera_wheel_shift(step)
+
+
+func camera_flat(on: bool) -> void:
+	ws.wk_camera_flat(on)
