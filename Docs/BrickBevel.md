@@ -385,8 +385,26 @@ If it is too much: `BrickNear.radius` and the three stud radii are the knobs, an
 
 **Turned down 2026-11-07** (user's call, to draw fewer bricks as real geometry): bevelled
 bands 14 -> 6 m; studs bevelled 8 -> 4 m, round 13 -> 12 m, the square ring dropped, geometry
-18 -> 12 m, cards 70 -> 45 m. The shader's seam and shaded chamfer (§4) cover from 6 m. The
-cost table above is from the old radii; take it again on a quiet machine, editor closed.
+18 -> 12 m, cards 70 -> 45 m. The shader's seam and shaded chamfer (§4) cover from 6 m.
+
+Measured 2026-11-08, `-- --chamfer --cost`, editor closed, no other Godot running, old radii
+patched in for the A/B. The pass stands about 6 m from a 775-brick building, so at the new
+radius nothing there is chamfered: 0 chamfered triangles held against 66,476, and 1,371 studs as
+geometry against 3,150. GPU ms a frame (`viewport_get_measured_render_time_gpu`), two runs each:
+
+| | old (14 m) | new (6 m) |
+|---|---|---|
+| Looking at it | 12.96 (hot, 97 C), 11.30 | 11.39, 11.33 |
+| Twelve shots | 15.48, 13.10 | 12.79, 11.31 |
+| Brought down | 13.91, 13.15 | 12.07, 11.40 |
+
+So standing still it is about the same (the frame is bound elsewhere), and while bricks break
+and fall the GPU does **about 1.8 ms less** a frame (1.8-2.7). On the CPU, a hit's patch of the
+chamfered bands went from 0.21 ms to 0.02 and the tier's worst step from 3.6 ms to 2.1.
+
+Every collapse run, old radii and new, had one frame of 430-490 ms while it came down (worst
+frame of the 360). It is not the near tier: it is there either way. Left to the destruction
+work to trace.
 
 ## 7. Not done
 
