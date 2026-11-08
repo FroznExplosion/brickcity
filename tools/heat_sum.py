@@ -10,6 +10,11 @@ windowed or long run).
 Held back: any sample at or over HOT_C (the chip throttles itself there and
 Windows' passive_pct does not show it), passive_pct under 100, or a throttle
 reason. The log is tools/heat_log.ps1's, %LOCALAPPDATA%/brickcity-heat.
+
+Also the least free RAM over the run: under LOW_RAM_MB, Windows pages and a
+page fault stalls the game wherever it is -- a 360-520 ms frame in physics,
+the city tick or drawing alike (Docs/BrickBevel.md 6, 2026-11-08). A timing
+run's worst frame is not to be trusted then; its mean is.
 Exit code 2 when it was held back, 1 when there are no samples, else 0.
 """
 import argparse
@@ -20,6 +25,7 @@ import sys
 
 HOT_C = 99.0  # as heat_log.ps1
 WARM_C = 90.0  # CLAUDE.md: 90 C or more is worth saying
+LOW_RAM_MB = 200  # free RAM under this: worst frames are paging, not the game
 
 
 def _hms(t: str) -> str:
@@ -78,6 +84,15 @@ def main() -> int:
                   % (w, len(ts), len(ts) * step, ts[0], ts[-1]))
     else:
         print("  not held back (no sample at %.0f C+, passive 100%%, no throttle reason)" % HOT_C)
+    free = [(int(r["free_mb"]), r["time"]) for r in rows if (r.get("free_mb") or "").isdigit()]
+    if free:
+        least, when = min(free)
+        low = [t for mb, t in free if mb < LOW_RAM_MB]
+        if low:
+            print("  LOW RAM: %d MB free at the least (%s), under %d MB in %d of %d samples -- worst frames may be paging, not the game"
+                  % (least, when, LOW_RAM_MB, len(low), len(free)))
+        else:
+            print("  RAM: %d MB free at the least (%s)" % (least, when))
     seen = {g.strip().rsplit(" ", 1)[0] for r in rows for g in r["godot"].split(";") if g.strip()}
     print("  godot:", "; ".join(sorted(seen)) or "none")
     return 2 if held else 0
