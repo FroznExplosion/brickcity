@@ -7755,20 +7755,30 @@ func _run_light_pass() -> void:
 			wenv.ambient_light_energy = amb * 0.08
 			wenv.background_energy_multiplier = bg * 0.08
 		var near_was := BrickGridLight.near_max
-		var shots := {}
-		for n in [0, 4]:
-			BrickGridLight.near_max = n
+		var shadowed_was := BrickGridLight.near_shadowed
+		# [lights, of them shadowed]: the grid alone, then the costs apart.
+		var configs := [[0, 0], [4, 0], [4, 1], [4, 4]]
+		var shots := []
+		for c in configs:
+			BrickGridLight.near_max = c[0]
+			BrickGridLight.near_shadowed = c[1]
 			city.grid_light.place_near()
 			await _ticks(12)
 			var m := _mean_of(city.get_viewport().get_texture().get_image())
-			shots[n] = [m, RenderingServer.viewport_get_measured_render_time_gpu(vp_rid),
-					city.grid_light.near_count]
-			await _save("city_lamps_night_%d" % n)
-		print("[light] night, grid lamps only: picture %.3f, GPU %.2f ms; %d near lamp(s): %.3f, GPU %.2f ms"
-				% [shots[0][0], shots[0][1], shots[4][2], shots[4][0], shots[4][1]])
-		_gate_ok("the near lamps light the room at night", shots[4][2] > 0
-				and shots[4][0] > shots[0][0] * 1.05, "%d lamp(s), %.3f against %.3f"
-				% [shots[4][2], shots[4][0], shots[0][0]])
+			# The GPU's time, the median of 30 frames (one frame is noisy).
+			var ts: Array[float] = []
+			for k in 30:
+				await _ticks(1)
+				ts.append(RenderingServer.viewport_get_measured_render_time_gpu(vp_rid))
+			ts.sort()
+			shots.append([m, ts[15], city.grid_light.near_count])
+			await _save("city_lamps_night_%d_%d" % c)
+			print("[light] night, %d near lamp(s), %d shadowed: picture %.3f, GPU %.2f ms"
+					% [shots[-1][2], c[1], m, ts[15]])
+		_gate_ok("the near lamps light the room at night", shots[2][2] > 0
+				and shots[2][0] > shots[0][0] * 1.05, "%d lamp(s), %.3f against %.3f"
+				% [shots[2][2], shots[2][0], shots[0][0]])
+		BrickGridLight.near_shadowed = shadowed_was
 		BrickGridLight.near_max = near_was
 		city.grid_light.place_near()
 		city._sun.visible = sun_was
