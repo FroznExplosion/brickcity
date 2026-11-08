@@ -638,6 +638,15 @@ var _upload_used := 0
 var uploads_waited := 0
 var mesh_jobs_done := 0
 var band_holes_filled := 0
+var _slicing: Array[BrickIsland] = []   ## pieces whose bands are being built (_advance_slices)
+var slices_built := 0       ## bands built for big pieces
+var slice_swaps := 0        ## big pieces that went over to their new bands
+var slice_restarts := 0     ## band builds dropped and begun again (bake gone, went far)
+var slice_worst_ms := 0.0   ## the slowest band built on this thread
+var slice_cut_worst_ms := 0.0   ## of a band, cutting it out of the bake, the slowest
+var slice_mesh_worst_ms := 0.0  ## of a band, making its ArrayMesh, the slowest
+var slice_tick_worst_ms := 0.0  ## the most a tick spent building bands
+var _slice_jobs: Array = []     ## [piece, band, task id, [mesh, ms], slice_gen, work]
 var _held: Array = []     ## islands whose mesh update waits for a child to come up
 ## Most overlaps alive at once -- the cost of the fix, measured rather than
 ## assumed. Each one is a piece's geometry drawn twice for two frames.
@@ -1411,6 +1420,9 @@ func spawn(source: int, block_ids: PackedInt32Array,
 	isl.chunk = island_chunk
 	# Baked from its live bricks only (PIECES_SKIP_DEAD).
 	world.set_chunk_bake_skips_dead(island_chunk, PIECES_SKIP_DEAD)
+	# A big one in bands (SLICE_VERTS), cut before it is first baked.
+	if count > 1:
+		_slice_sections(island_chunk, count)
 	isl.piece_id = piece_id
 	isl.owner = owner_id
 	isl.local_com = split.local_com
@@ -2518,7 +2530,7 @@ func rebuild_mesh(isl: BrickIsland, force_full: bool = false, allow_sync: bool =
 		return
 	# Its mesh is being built on a worker. Whatever this call wanted is done
 	# when that lands (_harvest_mesh_jobs), against the mesh it builds.
-	if isl.mesh_job != -1 or isl.upload_waiting:
+	if isl.mesh_job != -1 or isl.upload_waiting or isl.slicing:
 		isl.mesh_again = true
 		isl.mesh_again_full = isl.mesh_again_full or force_full
 		return
@@ -2595,6 +2607,11 @@ func rebuild_mesh(isl: BrickIsland, force_full: bool = false, allow_sync: bool =
 			_mesh_queue.append(isl)
 		return
 
+	# Cut into sections (SLICE_VERTS, or a building's bands): built band by
+	# band, a few a tick, and swapped in whole.
+	if not allow_sync and world.get_chunk_sections(isl.chunk) > 1:
+		_start_slices(isl)
+		return
 	var arrays: Array = world.build_chunk_mesh(isl.chunk)
 	var ok := not arrays.is_empty() and mesh_arrays_ok(arrays, "island %d" % isl.chunk)
 	if ok and (arrays[Mesh.ARRAY_VERTEX] as PackedVector3Array).size() >= THREAD_MESH_VERTS:
@@ -2903,6 +2920,9 @@ func mesh_jobs() -> int:
 
 
 func start_mesh_jobs() -> void:
+	for job in _slice_jobs:
+		if int(job[2]) == JOB_NOT_STARTED:
+			job[2] = WorkerThreadPool.add_task(job[5] as Callable, true, "piece band mesh")
 	for job in _mesh_jobs:
 		if int(job[1]) != JOB_NOT_STARTED:
 			continue
@@ -2916,6 +2936,11 @@ func start_mesh_jobs() -> void:
 ## Every mesh job finished before the manager goes: a worker still building a
 ## mesh while the renderer shuts down is a crash on quit.
 func _exit_tree() -> void:
+	for job in _slice_jobs:
+		if int(job[2]) >= 0:
+			WorkerThreadPool.wait_for_task_completion(int(job[2]))
+		(job[3] as Array)[0] = null
+	_slice_jobs.clear()
 	for job in _mesh_jobs:
 		if int(job[1]) >= 0:
 			WorkerThreadPool.wait_for_task_completion(int(job[1]))
@@ -4523,6 +4548,211 @@ func _draws_bands(isl: BrickIsland) -> bool:
 	return true
 
 
+## Big pieces in bands. Every mesh is built on a worker, but the renderer makes
+## its buffers on the main thread, at the next call into it: one piece mesh was
+## the whole of most slow render flushes -- 375k vertices 24 ms, 373k 143 ms
+## when the machine was hot (`big_city.tscn -- --shot`, UploadLedger,
+## 2026-11-06) -- and one mesh cannot be split across ticks. A piece whose mesh
+## would be SLICE_VERTS or more is cut into sections before its first bake
+## (BrickWorld.set_chunk_section_plates, as a building's bands), and its full
+## rebuild builds them a band at a time within the tick's upload budget
+## (UPLOAD_VERTS_PER_TICK), hidden, while what it drew before goes on drawing;
+## when the last is built they replace it at once, so it is never drawn with
+## holes. A hit afterwards patches the band it landed in (_patch_bands), as on
+## a toppled building.
+## SLICE_BAND_VERTS: about what one band is; a tick's budget is a few.
+## SLICE_TICK_MS: cutting a band out of the bake is main-thread work too. With
+## its mesh made here as well it was up to 10 ms a band, 24 in one tick by the
+## upload budget alone (city.tscn -- --big --shot, 2026-11-07); the mesh is
+## made on a worker now, and a tick stops once its cutting has taken this long.
+const SLICE_VERTS := 120000
+const SLICE_TICK_MS := 3.0
+const SLICE_BAND_VERTS := 30000
+const SLICE_MAX_BANDS := 24
+## Vertices a brick bakes to, about -- a building's bricks, studs and all
+## (373k for 11,700), and four a triangle for an authored part (each is stored
+## as a quad, as the bake stores every face).
+const SLICE_VERTS_PER_BRICK := 32
+
+
+## Cut `chunk` (`count` bricks) into bands if it is big enough to want them.
+## Before its first bake: the face order follows the sections.
+func _slice_sections(chunk: int, count: int) -> void:
+	var est := count * SLICE_VERTS_PER_BRICK + world.get_chunk_authored_tris(chunk) * 4
+	if est < SLICE_VERTS:
+		return
+	var plates: int = world.get_chunk_dims(chunk).y
+	var n := mini(ceili(float(est) / float(SLICE_BAND_VERTS)), SLICE_MAX_BANDS)
+	world.set_chunk_section_plates(chunk, maxi(ceili(float(plates) / float(n)), 3))
+
+
+func _start_slices(isl: BrickIsland) -> void:
+	isl.slicing = true
+	_clear_slices(isl)
+	if not _slicing.has(isl):
+		_slicing.append(isl)
+
+
+func _clear_slices(isl: BrickIsland) -> void:
+	# A band's mesh still on a worker is thrown away when it lands.
+	isl.slice_gen += 1
+	isl.slice_pending = 0
+	for node in isl.slices:
+		if is_instance_valid(node):
+			_retirer.retire((node as MeshInstance3D).mesh)
+			(node as MeshInstance3D).queue_free()
+	isl.slices = []
+	isl.slice_bytes = []
+
+
+## Build the next bands of the pieces being sliced, oldest first, as far as the
+## tick's upload budget goes (one band at least a tick). A band is cut out of
+## the bake here -- that writes its range of the patch baseline, the chunk's,
+## so it is this thread's -- and its mesh is made on a worker
+## (_harvest_slice_jobs), as a big piece's one mesh is (_submit_mesh_job).
+func _advance_slices() -> void:
+	var t_tick := Time.get_ticks_usec()
+	_harvest_slice_jobs()
+	_advance_slices_from(t_tick)
+	slice_tick_worst_ms = maxf(slice_tick_worst_ms, float(Time.get_ticks_usec() - t_tick) / 1000.0)
+
+
+func _advance_slices_from(t_tick: int) -> void:
+	while not _slicing.is_empty():
+		if float(Time.get_ticks_usec() - t_tick) / 1000.0 >= SLICE_TICK_MS:
+			return
+		var isl: BrickIsland = _slicing[0]
+		if not isl.is_valid() or isl.mesh == null or not isl.slicing:
+			if isl.is_valid():
+				isl.slicing = false
+				_clear_slices(isl)
+			_slicing.pop_front()
+			continue
+		var n := world.get_chunk_sections(isl.chunk)
+		# The bake it is cut from has gone (a brick brought back, a stand-in
+		# asked for meanwhile): begin again from rebuild_mesh, which bakes on a
+		# worker first. What it drew goes on drawing.
+		if isl.coarse or n <= 1 or not world.bake_ready(isl.chunk):
+			isl.slicing = false
+			_clear_slices(isl)
+			_slicing.pop_front()
+			slice_restarts += 1
+			rebuild_mesh(isl, true)
+			continue
+		if isl.slices.size() >= n:
+			if isl.slice_pending > 0:
+				return   # its last meshes are still on a worker
+			_swap_slices(isl)
+			_slicing.pop_front()
+			continue
+		var si := isl.slices.size()
+		var t0 := Time.get_ticks_usec()
+		var arrays: Array = world.build_chunk_mesh_section(isl.chunk, si)
+		var verts := 0
+		if not arrays.is_empty():
+			verts = (arrays[Mesh.ARRAY_VERTEX] as PackedVector3Array).size()
+		if not _upload_ok(verts):
+			return
+		slice_cut_worst_ms = maxf(slice_cut_worst_ms, float(Time.get_ticks_usec() - t0) / 1000.0)
+		var live := verts > 0 and mesh_arrays_ok(arrays, "island %d band %d" % [isl.chunk, si])
+		isl.slice_bytes.append(index_patch_bytes(arrays) if live else 0)
+		if live:
+			isl.slices.append(null)   # hung when its mesh lands
+			_submit_slice_job(isl, si, arrays)
+		else:
+			# Built empty: a node with no mesh, not a hole (_draws_bands).
+			isl.slices.append(_slice_node(isl, null))
+		slices_built += 1
+		slice_worst_ms = maxf(slice_worst_ms, float(Time.get_ticks_usec() - t0) / 1000.0)
+
+
+## A band's mesh, made on a worker. Uncompressed, as a toppled building's
+## bands are (_fill_band_holes): the near tier reads them as they were built.
+func _submit_slice_job(isl: BrickIsland, si: int, arrays: Array) -> void:
+	var holder := [null, 0.0]
+	var work := func() -> void:
+		var t := Time.get_ticks_usec()
+		var m := ArrayMesh.new()
+		m.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
+		holder[0] = m
+		holder[1] = float(Time.get_ticks_usec() - t) / 1000.0
+		UploadLedger.note("piece band", UploadLedger.verts_of(arrays))
+	isl.slice_pending += 1
+	_slice_jobs.append([isl, si, JOB_NOT_STARTED, holder, isl.slice_gen, work])
+
+
+## Hang the band meshes the workers have finished, hidden until the swap. One
+## from bands since dropped (slice_gen moved on) is thrown away.
+func _harvest_slice_jobs() -> void:
+	var k := 0
+	while k < _slice_jobs.size():
+		var job: Array = _slice_jobs[k]
+		var task: int = job[2]
+		if task < 0 or not WorkerThreadPool.is_task_completed(task):
+			k += 1
+			continue
+		WorkerThreadPool.wait_for_task_completion(task)
+		_slice_jobs.remove_at(k)
+		var holder: Array = job[3]
+		var isl: BrickIsland = job[0]
+		var si: int = job[1]
+		slice_mesh_worst_ms = maxf(slice_mesh_worst_ms, float(holder[1]))
+		if not isl.is_valid() or isl.mesh == null or not isl.slicing \
+				or int(job[4]) != isl.slice_gen or si >= isl.slices.size():
+			holder[0] = null
+			continue
+		var mesh: ArrayMesh = holder[0]
+		holder[0] = null
+		isl.slices[si] = _slice_node(isl, mesh if mesh != null and mesh.get_surface_count() > 0 else null)
+		isl.slice_pending -= 1
+
+
+func _slice_node(isl: BrickIsland, mesh: ArrayMesh) -> MeshInstance3D:
+	var node := MeshInstance3D.new()
+	node.material_override = brick_material
+	BrickMaterials.set_grain_origin(node, world, isl.chunk)
+	node.physics_interpolation_mode = Node.PHYSICS_INTERPOLATION_MODE_OFF
+	node.mesh = mesh
+	node.visible = false
+	# In the piece's own node's space, as a toppled building's bands are.
+	isl.mesh.add_child(node)
+	return node
+
+
+## Every band is built: they draw, and what drew before goes.
+func _swap_slices(isl: BrickIsland) -> void:
+	isl.slicing = false
+	isl.radius = _body_radius(isl)
+	_retirer.retire(isl.mesh.mesh)
+	isl.mesh.mesh = null
+	isl.array_mesh = null
+	isl.index_bytes = 0
+	isl.coarse_drawn = false
+	isl.coarse_arrays = []
+	_drop_retiring_bands(isl)
+	for node in isl.bands:
+		if is_instance_valid(node):
+			_retirer.retire((node as MeshInstance3D).mesh)
+			(node as MeshInstance3D).queue_free()
+	isl.bands = isl.slices
+	isl.band_bytes = isl.slice_bytes
+	isl.slices = []
+	isl.slice_bytes = []
+	if near_tier != null:
+		near_tier.untrack(isl.mesh)
+	for si in isl.bands.size():
+		var node: MeshInstance3D = isl.bands[si]
+		node.visible = true
+		if near_tier != null and node.mesh != null:
+			near_tier.track(node, isl.chunk, si)
+	slice_swaps += 1
+	if isl.mesh_again:
+		var full := isl.mesh_again_full
+		isl.mesh_again = false
+		isl.mesh_again_full = false
+		rebuild_mesh(isl, full)
+
+
 ## The island's live contact manifold: world-space points, and the RID of what
 ## each one is touching.
 func _contact_points(isl: BrickIsland) -> Array:
@@ -4858,6 +5088,7 @@ func tick() -> void:
 	_drain_mesh_queue()
 	var _r3 := Time.get_ticks_usec()
 	_fill_band_holes()
+	_advance_slices()
 	var _r4 := Time.get_ticks_usec()
 	_drain_resolve_queue()
 	var _tr := Time.get_ticks_usec()
@@ -4961,7 +5192,12 @@ func _stream_island_meshes() -> void:
 		var isl: BrickIsland = islands[_lod_cursor % islands.size()]
 		_lod_cursor += 1
 		looked += 1
-		if not isl.is_valid() or isl.mesh == null or not isl.bands.is_empty():
+		if not isl.is_valid() or isl.mesh == null or isl.slicing:
+			continue
+		# Bands a building came down with stay until a full rebuild; bands a big
+		# piece was built in (SLICE_VERTS) go to a stand-in like one mesh.
+		if not isl.bands.is_empty() and (_band_holes.has(isl) or not isl.settled
+				or world.get_chunk_sections(isl.chunk) <= 1):
 			continue
 		var dist := isl.body.global_position.distance_to(here)
 		if isl.coarse:
@@ -4974,6 +5210,10 @@ func _stream_island_meshes() -> void:
 		elif isl.settled and dist > ISLAND_MESH_RANGE + ISLAND_MESH_HYSTERESIS:
 			isl.coarse = true
 			world.drop_chunk_bake(isl.chunk)
+			# Its bands draw until the stand-in is up (_apply_mesh lets them go).
+			isl.retiring_bands.append_array(isl.bands)
+			isl.bands.clear()
+			isl.band_bytes.clear()
 			# Its bricks draw until the queue has built the stand-in -- they need
 			# no bake to go on being drawn. Walked up to and away again before
 			# its bricks came, it is drawing the stand-in already.

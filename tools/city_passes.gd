@@ -5632,6 +5632,10 @@ func _run_shot_pass() -> void:
 	# the worker, and asked for again.
 	print("[city]   stand-ins: %d built; %d started on a worker; the slowest on the main thread %.1f ms (of any, %.1f)" % [
 			city.islands.coarse_built, city.islands.coarse_async, city.islands.coarse_main_worst_ms, city.islands.coarse_worst_ms])
+	print("[city]   big pieces in bands: %d band(s) built, %d piece(s) swapped over, %d begun again; the slowest band %.1f ms (cutting it out %.1f, its mesh %.1f), the most in a tick %.1f" % [
+			city.islands.slices_built, city.islands.slice_swaps, city.islands.slice_restarts,
+			city.islands.slice_worst_ms, city.islands.slice_cut_worst_ms, city.islands.slice_mesh_worst_ms,
+			city.islands.slice_tick_worst_ms])
 	print("[city]   piece shadows from stand-ins: %d asked for, %d hung; %d piece(s) casting one now" % [
 			city.islands.shadow_proxies_asked, city.islands.shadow_proxies_built,
 			int(city.drawing._shadow_stats.get("pieces_proxied", 0))])
