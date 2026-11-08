@@ -643,6 +643,9 @@ var slices_built := 0       ## bands built for big pieces
 var slice_swaps := 0        ## big pieces that went over to their new bands
 var slice_restarts := 0     ## band builds dropped and begun again (bake gone, went far)
 var slice_worst_ms := 0.0   ## the slowest band built on this thread
+var slice_cut_worst_ms := 0.0   ## of a band, cutting it out of the bake, the slowest
+var slice_mesh_worst_ms := 0.0  ## of a band, making its ArrayMesh, the slowest
+var slice_tick_worst_ms := 0.0  ## the most a tick spent building bands
 var _held: Array = []     ## islands whose mesh update waits for a child to come up
 ## Most overlaps alive at once -- the cost of the fix, measured rather than
 ## assumed. Each one is a piece's geometry drawn twice for two frames.
@@ -4536,7 +4539,12 @@ func _draws_bands(isl: BrickIsland) -> bool:
 ## holes. A hit afterwards patches the band it landed in (_patch_bands), as on
 ## a toppled building.
 ## SLICE_BAND_VERTS: about what one band is; a tick's budget is a few.
+## SLICE_TICK_MS: building a band is main-thread work too (cutting it out of
+## the bake, making its mesh) -- up to 10 ms a band, 24 in one tick by the
+## upload budget alone (city.tscn -- --big --shot, 2026-11-07) -- so a tick
+## stops once its bands have taken this long.
 const SLICE_VERTS := 120000
+const SLICE_TICK_MS := 3.0
 const SLICE_BAND_VERTS := 30000
 const SLICE_MAX_BANDS := 24
 ## Vertices a brick bakes to, about -- a building's bricks, studs and all
@@ -4575,7 +4583,15 @@ func _clear_slices(isl: BrickIsland) -> void:
 ## Build the next bands of the pieces being sliced, oldest first, as far as the
 ## tick's upload budget goes (one band at least a tick).
 func _advance_slices() -> void:
+	var t_tick := Time.get_ticks_usec()
+	_advance_slices_from(t_tick)
+	slice_tick_worst_ms = maxf(slice_tick_worst_ms, float(Time.get_ticks_usec() - t_tick) / 1000.0)
+
+
+func _advance_slices_from(t_tick: int) -> void:
 	while not _slicing.is_empty():
+		if float(Time.get_ticks_usec() - t_tick) / 1000.0 >= SLICE_TICK_MS:
+			return
 		var isl: BrickIsland = _slicing[0]
 		if not isl.is_valid() or isl.mesh == null or not isl.slicing:
 			if isl.is_valid():
@@ -4606,10 +4622,13 @@ func _advance_slices() -> void:
 			verts = (arrays[Mesh.ARRAY_VERTEX] as PackedVector3Array).size()
 		if not _upload_ok(verts):
 			return
+		var t1 := Time.get_ticks_usec()
+		slice_cut_worst_ms = maxf(slice_cut_worst_ms, float(t1 - t0) / 1000.0)
 		var mesh := ArrayMesh.new()
 		if verts > 0 and mesh_arrays_ok(arrays, "island %d band %d" % [isl.chunk, si]):
 			mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
 		var live := mesh.get_surface_count() > 0
+		slice_mesh_worst_ms = maxf(slice_mesh_worst_ms, float(Time.get_ticks_usec() - t1) / 1000.0)
 		var node := MeshInstance3D.new()
 		node.material_override = brick_material
 		BrickMaterials.set_grain_origin(node, world, isl.chunk)
