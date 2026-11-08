@@ -407,6 +407,13 @@ with a shine. The grid stays as the fill, further off and round corners.
 - How many: Options > Video > Lamp Lights (Off, 2, 4, 8; default 4),
   `BrickGridLight.near_max`; Lamp Shadows (Off, 1, 2, 4; default 1),
   `near_shadowed`.
+- **Changing a lit mesh's layers** goes through `RenderLayers.set_layers`
+  (hide, change, show). Set straight to layers a light does not share (0:
+  BrickNear hides a band that way), Godot 4.6 never unpairs it from the
+  light: freeing the light logged "BUG, indexing did not unpair geometries
+  from light" and quitting crashed (signal 11), every windowed run once the
+  near lamps came (fixed 2026-11-07). A near lamp's light is also made whole
+  before it enters the tree and never re-ranged or moved to another building.
 - In the city the grid now keeps its lamps too (`use_layer` off hangs no
   per-building lights, only the near ones).
 - City `--light` pass: at night, a picture with the grid's lamps alone and

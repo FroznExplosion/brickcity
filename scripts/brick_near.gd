@@ -1091,7 +1091,7 @@ static func _set_layers(node: VisualInstance3D, layers: int) -> void:
 	if node.has_meta(&"view_layers"):
 		node.set_meta(&"view_layers", layers)
 	else:
-		node.layers = layers
+		RenderLayers.set_layers(node, layers)
 
 
 func _unlink(key: int, chunk: int) -> void:
