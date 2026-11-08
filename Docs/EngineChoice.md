@@ -64,6 +64,43 @@ chats working in parallel.
 | Jobs with race checks | Unity Burst/Jobs | WorkerThreadPool + C++, no checks | Debug-build asserts on shared brick data touched by jobs |
 | Compute for heavy maps | all three | RenderingDevice compute shaders | Terrain/planet noise (GpuOffload.md 2.3) |
 
+## A custom engine inside Godot (direction, not yet started)
+
+A custom engine would stop treating bricks as nodes and meshes and treat them as data. That is
+the real gain, and it does not need a new engine: the brick extension can grow into a
+self-contained brick engine while Godot keeps the editor, UI, audio, input, scenes and asset
+import (and the workshops, UI kit and editor kit built on them).
+
+**Options rejected (2026-11-07):**
+
+- **A custom Godot build** (engine fork): only for one specific patch the public API cannot
+  reach, such as the renderer-thread waits (WhereWorkRuns.md §3.1) or mesh shaders. It means
+  building the engine, redoing patches on every upgrade and shipping custom editors to every
+  worktree.
+- **Bevy** (Rust ECS, rendering already pipelined on its own thread, wgpu compute): a rewrite
+  of everything in Rust, no mature editor, no Jolt, breaking releases every few months.
+- **An entirely custom engine**: years of work on editor, UI, audio, input, assets and tools.
+
+**What changes, and the measured problem each one targets:**
+
+| Area | Now | Brick engine | Targets |
+|---|---|---|---|
+| Drawing bricks | Face bake per chunk, mesh upload, a node | Bricks as rows in a GPU buffer, drawn GPU-driven (indirect draws) through RenderingDevice into Godot's frame; breaking a brick clears a slot | First-hit lag (promotion + bake), second-long bakes, upload stalls |
+| Debris collision | A Jolt body per piece from merged boxes, nodes and shapes made on the main thread | Pieces as data rows; grid-against-grid collision in our own solver or a Jolt world linked into the extension | Fracture/spawn ticks (42 ms), 1–2 ms collision per promotion |
+| Pieces and islands | A node per piece, main thread only | Flat arrays updated across threads | Island tick 8–12 ms |
+| Structure solve | C++ worker, 3–6 ms a tower | Compute shader, or a solve that only updates what changed | The second before a building falls |
+| Netcode | Jolt is not deterministic across machines | Our own fixed-point debris physics can be identical everywhere: send commands, never debris positions | Multiplayer.md's second stream |
+
+**Order:** each step lands alone and is measured against the current path.
+
+1. **Brick renderer prototype.** One building drawn from a brick buffer next to the baked
+   version: frame time, GPU time and triangles. Drawing bricks one by one instead of baked
+   culled faces may cost more triangles; the prototype decides.
+2. **Debris physics in the extension.** Loose pieces leave Godot's physics; the player, vehicles
+   and shots stay in it. The bridge between the two worlds (standing on debris, shots hitting
+   pieces, pieces hitting the player) is the main design work.
+3. **GPU or incremental structure solve.**
+
 ## Consoles from Godot (checked 2026-11-07)
 
 Godot ships no console exports (console SDKs are under NDA, so they cannot be in open source).
