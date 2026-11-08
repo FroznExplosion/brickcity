@@ -703,6 +703,8 @@ const CITY_DROWNED := 0.20
 var _terrain_world_path := ""
 var _terrain_drowned := CITY_DROWNED
 var _sea = null
+## The city's boat and its ghost space (Docs/Hulls.md 7.2); null with no sea.
+var harbour: Harbour = null
 ## `--buildings=` was on the command line. With a world file the SITES decide
 ## how many buildings there are, and this caps them only when asked to.
 var _buildings_arg := false
@@ -1368,8 +1370,13 @@ func _ready() -> void:
 		_pass_runner()._run_bench()
 	elif _shot_mode:
 		_pass_runner()._run_shot_pass()
+	elif "--harbour" in args:
+		_pass_runner()._run_harbour_pass()
 	else:
 		_scripted = false
+		# A boat you can play, off the nearest shore (Docs/Hulls.md 7.2).
+		if not _arena_mode and not _firefight_mode:
+			harbour = Harbour.open(self, camera.global_position)
 	# The arena is in the chain and is the game, not a pass, unless it is run
 	# as its gate.
 	if (_arena_mode or _firefight_mode) and not ("--gate" in args):

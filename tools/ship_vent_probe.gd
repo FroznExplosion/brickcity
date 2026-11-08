@@ -94,6 +94,17 @@ func _process(delta: float) -> bool:
 					and (a.pull as Vector3).dot(_hole - _inside) > 0.0,
 					"%s, pull %.2f m/s2" % [str(a.get("pressure")), (a.get("pull", Vector3.ZERO) as Vector3).length()])
 			_ok("a room away from it untouched", _far >= 0 and absf(far_p - 1.0) < 1e-4, "%.4f" % far_p)
+			# Dust blown out of the hole (Docs/Hulls.md 4.2): a jet at it, outward.
+			var jets := VentDust.jets_of(_st)
+			var jd := INF
+			var outward := false
+			for j in jets:
+				var d: float = (j.at as Vector3).distance_to(_hole)
+				if d < jd:
+					jd = d
+					outward = (j.dir as Vector3).dot((j.at as Vector3) - _inside) > 0.0
+			_ok("dust: a jet at the hole, blowing outward", jd < 2.0 and outward,
+					"%d jet(s), nearest %.2f m from the hole" % [jets.size(), jd])
 			var d1 := _crumb_dist()
 			var out := _crumbs_out()
 			_ok("crumbs inside drawn to the hole, or out of it", _crumbs > 0 and (d1 < _crumb_d0 - 0.1 or out > 0),
@@ -110,7 +121,8 @@ func _process(delta: float) -> bool:
 				for i in air._block_cells(b):
 					cells.append(air._cell(i))
 			air.cells_added(_st.bricks, _st.chunk, cells)
-			_ok("the brick back: sealed", nb >= 0 and not air.is_breached(_room))
+			_ok("the brick back: sealed, no dust", nb >= 0 and not air.is_breached(_room)
+					and VentDust.jets_of(_st).is_empty())
 			# Parked on a world with air: a hole lets nothing out.
 			var lab := HullAir.new()
 			lab.dims = Vector3i(3, 3, 3)
