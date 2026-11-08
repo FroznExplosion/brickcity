@@ -65,6 +65,14 @@ func update() -> void:
 			_consider(isl)
 
 
+## At a piece's spawn, when its mesh goes to a worker: stood in now, not at the
+## next update -- a spawn from anything processed after the manager in a frame
+## would otherwise draw nothing for that frame.
+func cover(isl: BrickIsland) -> void:
+	if enabled:
+		_consider(isl)
+
+
 func _consider(isl: BrickIsland) -> void:
 	if not is_instance_valid(isl) or not isl.is_valid() or isl.mesh == null \
 			or not is_instance_valid(isl.mesh):

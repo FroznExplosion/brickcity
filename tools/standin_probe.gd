@@ -12,7 +12,10 @@ extends SceneTree
 ##   * a box's colour carries the block's material and grain as its mesh would
 ##     (alpha), and its place is the block's centre in the chunk's own metres;
 ##   * when the mesh is up, the stand-in is gone -- and never both drawing;
-##   * with stand-ins off, the piece is blind those frames, as before (the A/B).
+##   * with stand-ins off, the piece is blind those frames, as before (the A/B);
+##   * a small piece (under the bake-here limit) goes to the worker as well
+##     (IslandManager.small_meshes_on_worker) and is stood in the same way; with
+##     that off it is baked at its spawn and never blind, as before.
 
 var _pass := 0
 var _fail := 0
@@ -49,6 +52,40 @@ func _ok(what: String, cond: bool, detail := "") -> void:
 	else:
 		_fail += 1
 		print("  FAIL %s%s" % [what, (" -- " + detail) if detail else ""])
+
+
+## A wall of 2x4s, `courses` high and `per` long, as a loose piece.
+func _small_piece(at: Vector3, courses: int, per: int) -> BrickIsland:
+	var c := _w.create_chunk(Vector3i.ZERO, Vector3i(per * 4 + 4, courses * 3 + 3, 4))
+	for k in courses:
+		for i in per:
+			_w.place_block(c, Vector3i(i * 4 + (k % 2) * 2, k * 3, 0), _palette["brick_2x4_x"], 4 + (i % 3))
+	_w.set_chunk_transform(c, Transform3D(Basis(), at))
+	var ids := PackedInt32Array()
+	for id in _w.get_block_count(c):
+		ids.append(id)
+	return _m.spawn(c, ids, Vector3.ZERO, Vector3.ZERO, -1, -1)
+
+
+## [frames without a mesh, of them stood in, frames both drew] until its mesh is up.
+func _watch(isl: BrickIsland) -> Array:
+	var blind := 0
+	var stood := 0
+	var both := 0
+	for f in 240:
+		var b := _m.is_blind(isl)
+		var holder := _standin_of(isl)
+		if b:
+			blind += 1
+			if holder != null:
+				stood += 1
+		elif holder != null:
+			both += 1
+		if not b and f > 2:
+			break
+		_m.tick()
+		await process_frame
+	return [blind, stood, both]
 
 
 func _tower_piece(at: Vector3) -> BrickIsland:
@@ -143,6 +180,26 @@ func _run() -> void:
 		var code := roundi((1.0 - buf[15]) * 255.0 + 0.25)
 		_ok("its alpha is the mesher's: material 2, grain along X (the long side)", code & 31 == 2
 				and (code >> 5) == 0, "code %d" % code)
+
+	print("\na small piece, with small pieces on the worker (off by default: B11)")
+	_m.small_meshes_on_worker = true
+	var sync0: int = _m.sync_meshed
+	var small := _small_piece(Vector3(-30.0, 0.05, 0.0), 6, 10)
+	var n := _w.get_alive_block_count(small.chunk)
+	_ok("under the bake-here limit, it still goes to the worker, not baked at its spawn",
+			n <= IslandManager.SYNC_MESH_MAX_BLOCKS and _m._mesh_queue.has(small) and _m.sync_meshed == sync0,
+			"%d bricks" % n)
+	var r: Array = await _watch(small)
+	_ok("every frame it had no mesh, a stand-in drew it, never both", r[0] > 0 and r[1] == r[0] and r[2] == 0,
+			"%d frame(s) without a mesh, %d stood in, %d both" % r)
+
+	_m.small_meshes_on_worker = false
+	var small2 := _small_piece(Vector3(-30.0, 0.05, 20.0), 6, 10)
+	_ok("with small pieces baked here: baked at its spawn, not queued",
+			_m.sync_meshed == sync0 + 1 and not _m._mesh_queue.has(small2))
+	var r2: Array = await _watch(small2)
+	_ok("and never without a mesh", r2[0] == 0, "%d frame(s) without one" % r2[0])
+	_m.small_meshes_on_worker = false
 
 	print("\nwith stand-ins off")
 	_m.standins.enabled = false

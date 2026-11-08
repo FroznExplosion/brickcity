@@ -653,3 +653,34 @@ an A/B.
 
 Next (the review's step 3): send small pieces to the worker too, with stand-ins covering their
 first ticks, behind a flag, and A/B the `--stress` numbers above.
+
+## B11. Small pieces on the worker too: measured worse, off (2026-11-08)
+
+The review's step 3: send small pieces (9-200 bricks) to the worker as well, a stand-in
+covering their first ticks, so none is baked on the main thread at its spawn. Built behind
+`IslandManager.small_meshes_on_worker`; the mesh queue's main-thread part (once a worker bake
+is in: assembling and uploading it) is now counted too (`drain_ms`, `drain_count`).
+
+Windowed `--stress --buildings=200`, editor closed, nothing else running, one run each
+(peaks 91 and 89 C, not held back):
+
+| | on (`--worker-small`) | off (as before) |
+|---|---|---|
+| meshed at spawn, main thread | 203, 41 ms (worst 0.8) | 277, 103 ms (worst 2.9) |
+| the queue's main-thread part | 213, **832 ms** | 138, 410 ms |
+| stand-ins | 134, 19 ms | 50, 8 ms |
+| main-thread mesh work, all told | **~892 ms** | **~520 ms** |
+| mean frame / city tick | 32.4 / 12.1 ms | 28.8 / 9.7 ms |
+
+Each piece moved saved ~0.8 ms at its spawn and cost ~5.6 ms in the queue: the worker's bake
+is the cheap part; assembling and uploading it on the main thread is not. So it is **off by
+default**; the switch stays for when the queue's main-thread part is cheaper. (The 14.7 ms
+worst spawn bake of B10's run did not come back in either run: 0.8 and 2.9 ms.)
+
+What it found that matters more: **the mesh queue's main-thread part is the expensive one** --
+410 ms over the run with small pieces baked as before, and single items of 47-55 ms, for a
+10-brick piece. That is a spike source of its own and the next thing to look at for break lag.
+
+Kept from this step: a piece whose mesh goes to the worker is stood in at its spawn
+(`IslandStandins.cover`), not at the next frame's update, so nothing processed after the
+manager can leave it blind for a frame. `standin_probe` 15.
