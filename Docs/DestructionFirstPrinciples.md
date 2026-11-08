@@ -551,3 +551,33 @@ Open:
    from run to run (5.0-7.3 on average over four runs; the physics is not deterministic).
 3. Not looked at in play yet: whether the parts read as "a few big parts" on screen.
 4. `PlanetPieces._snap_across` (planets) is untouched.
+
+## B8. Grounding after a small cut, measured (2026-11-07) -- B3.2: not worth building
+
+`tools/ground_search_probe.gd`: recipe towers of rising size, about forty random single-brick
+kills each. For every kill, the time of `solve_grounded` (the whole-chunk flood a building's
+solve starts with) and of `solve_stress`, the blocks the flood walks, and what A4.1's local
+search would walk (from each block that touched the dead one, lowest first, until the ground
+or nothing is left; script-side, counting blocks). Editor closed, no other Godot running.
+
+| Tower | Bricks | `solve_grounded` median / worst | `solve_stress` median / worst | Flood walks | Local search walks (median / worst) |
+|---|---|---|---|---|---|
+| 28 x 16, 30 courses | 982 | 0.01 / 0.05 ms | 0.05 / 0.07 ms | 963 | 33 / 62 (3.4 %) |
+| 28 x 16, 120 courses | 3,812 | 0.07 / 0.12 ms | 0.21 / 2.07 ms | 3,792 | 106 / 192 (2.8 %) |
+| 40 x 40, 180 courses | 10,966 | 0.22 / 0.77 ms | 0.71 / 1.06 ms | 10,946 | 61 / 171 (0.6 %) |
+| 40 x 40, 360 courses | 21,911 | 0.49 / 1.68 ms | 1.35 / 3.50 ms | 21,891 | 97 / 258 (0.4 %) |
+
+The local search agreed with the flood on what falls in all 157 kills.
+
+**Conclusion: do not build it now.** The local search walks a hundredth of what the flood
+walks, but the flood itself is half a millisecond on a 22,000-brick tower -- the joint cache
+made it cheap. And it could not replace the solve anyway: a brick gone changes the loads, and
+a joint can fail in tension far from the cut, so the load pass (`solve_stress`, about three
+times the flood) runs either way. What a hit costs a big building is the load pass and the
+cascade rounds `solve_structure` adds (3-6 ms on the 22,000-brick tower, city_scene.gd
+`_start_solves`), and the stale-solve case that puts it on the main thread. If hit latency
+needs cutting, that is the target: a load pass over the region above the cut only (A4.2),
+not a faster grounding walk.
+
+Not measured: blasts (many bricks at once; the flood is the same, the local search grows
+with the cut) and `solve_structure`'s cascade on its own.
