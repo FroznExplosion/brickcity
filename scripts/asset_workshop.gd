@@ -97,8 +97,12 @@ var measure_points: Array[Vector3] = []
 ## Points clicked while calibrating the selected photo; calibrating while not null.
 var calibrating = null
 
-var _ortho_size := 1.0
-var _persp_xf := Transform3D()
+## The flat views are the editor kit's camera's (WkCamera.flat, zoom_at); the orbit and FPS
+## modes are the building workshop's only. `_ortho_size` is its orthographic size.
+var cam_ctl := WkCamera.new()
+var _ortho_size: float:
+	get: return cam_ctl.ortho_size
+	set(v): cam_ctl.ortho_size = v
 var _ruler: Label
 var _panel: PanelContainer
 var _photo_list: OptionButton
@@ -196,14 +200,14 @@ var _plane_lines: MeshInstance3D
 var _photo_lines: MeshInstance3D
 var photo_grid := false
 ## A sketch being drawn: points on the side plane, (studs along, plates up).
-## The stroke being drawn is the shared pen's (SketchPen, scripts/workshop_sketch.gd); these
+## The stroke being drawn is the kit's Sketch tool's pen (WkSketchTool, addons/workshop_kit); these
 ## name its parts as this file always has.
-var _pen := SketchPen.new()
+var _sketch_tool := WkSketchTool.new()
+var _pen: WkSketchPen:
+	get: return _sketch_tool.pen
 var _sketch: Array[Vector2]:
 	get: return _pen.points
 var _photo_drag = null
-## An RMB delete, for undo: what it took, newest last, one for each "delete" edit.
-var _deleted: Array = []
 ## The kept sketches: "part|plane|where" -> {part, plane, at, width, adds, subs, n}. `n`
 ## orders them: a part's first plane is its base (Round 4 in Docs/AssetWorkshop.md).
 ## adds and subs are outlines ([[across, up], ...]); bricks are what the sketch laid,
@@ -241,11 +245,6 @@ var smooth_parts := PackedStringArray()
 var muzzle_end := "-x"
 ## How many studs across the wand fills.
 var wand_width := 3
-## Groups of bricks undone, newest last, for shift Z: each a list of what to lay again.
-var _redo: Array = []
-## Edits that undo together: {end: the edit count after them, n: how many}.
-var _edit_groups: Array = []
-var _redoing := false
 ## Where Blender is, to run the part kit. BRICKCITY_BLENDER overrides it.
 var blender_path := "C:/Program Files/Blender Foundation/Blender 5.2/blender.exe"
 var _export_png := ""
@@ -307,6 +306,8 @@ func _wants_tools() -> bool:
 
 func _ready() -> void:
 	super()
+	cam_ctl.ctx = wk_ctx   # no setup(): this workshop's camera keeps its own mouse ways
+	toolbox.add(_sketch_tool)
 	# What is made here is a gun (or a mech): File > Save, Save As and Open use their
 	# library (user://guns/), not the buildings'. F5 has its own slot, not the workshop's.
 	_save_path = ASSET_QUICK_SAVE
@@ -620,8 +621,8 @@ func _shot() -> void:
 		print("[asset workshop] wrote %s" % ProjectSettings.globalize_path(path))
 	if "--menu" in OS.get_cmdline_user_args():
 		# The Gun menu open, to see the menus.
-		for c in _menu._spacer.get_parent().get_children():
-			if c is MenuButton and (c as MenuButton).text == "Gun":
+		for c in _menu.bar().menus():
+			if (c as MenuButton).text == "Gun":
 				(c as MenuButton).show_popup()
 		for _i in 6:
 			await get_tree().process_frame
@@ -1070,10 +1071,8 @@ func mirror_here() -> void:
 func _place() -> void:
 	var before := recipe.size()
 	super._place()   # the brick, and its mirror image when the mirror is on
-	if recipe.size() > before:
-		_redo.clear()
 	if mirror_on and recipe.size() == before + 2:
-		_edit_groups.append({"end": _edits.size(), "n": 2})
+		undo_stack.group_last(2)
 
 
 func _place_mirror_sheet() -> void:
@@ -1102,45 +1101,24 @@ func set_view(v: int) -> void:
 		set_game_view(false)
 	if v == view:
 		return
-	if view == 0:
-		_persp_xf = _camera.global_transform
 	view = v
 	if v == 0:
-		_camera.projection = Camera3D.PROJECTION_PERSPECTIVE
-		_camera.global_transform = _persp_xf
-		_camera.set_process_unhandled_input(true)
+		cam_ctl.perspective()
 		_apply_section()
 		return
-	# Looking straight at the build. The camera's own click-to-look is off: a flat view
-	# is built in with the cursor, and a captured mouse would turn it.
-	_camera.set_process_unhandled_input(false)
-	if _camera.has_method("_set_captured"):
-		_camera.call("_set_captured", false)
-	_camera.projection = Camera3D.PROJECTION_ORTHOGONAL
-	_camera.size = _ortho_size
+	# Looking straight at the build (the kit's camera; its click-to-look off, `wk_camera_flat`).
 	work_plane = VIEWS[v]
 	_draw_work_plane()
 	var c := build_centre()
 	if _body():
 		# A body stands up the screen: it sits above the readouts along the bottom.
 		c += Vector3.DOWN * _ortho_size * 0.08
-	match VIEWS[v]:
-		"side":
-			_camera.global_position = c + Vector3.BACK * 60.0
-			_camera.look_at(c, Vector3.UP)
-		"top":
-			_camera.global_position = c + Vector3.UP * 60.0
-			_camera.look_at(c, Vector3.FORWARD)
-		"front":
-			_camera.global_position = c + Vector3.RIGHT * 60.0
-			_camera.look_at(c, Vector3.UP)
+	cam_ctl.flat(VIEWS[v], c)
 	_apply_section()
 
 
 func zoom(by: float) -> void:
-	_ortho_size = clampf(_ortho_size * by, 0.5, 80.0)
-	if view != 0:
-		_camera.size = _ortho_size
+	cam_ctl.zoom_flat(by)
 
 
 ## The middle of what has been built, or of the baseplate before anything is -- or of what
@@ -1860,9 +1838,7 @@ func _reset_space() -> void:
 	models.clear()
 	selection.clear()
 	smooth_parts = PackedStringArray()
-	_redo.clear()
-	_edit_groups.clear()
-	_deleted.clear()
+	_gathering = false   # the workshop cleared the history, an open gather with it
 	sketches.clear()
 	shells.clear()
 	for part in _shell_nodes.keys():
@@ -2079,13 +2055,44 @@ func _delete_ray(from: Vector3, dir: Vector3) -> bool:
 	if not done:
 		_removing = -1
 	elif took != null:
-		# The workshop drops a deleted brick from its edits; this puts the delete in as an
+		# The workshop forgets a deleted brick's own edit; this puts the delete in as an
 		# edit of its own, so Z can lay it back.
-		_edits.append("delete")
-		_deleted.append(took)
-		if not _redoing:
-			_redo.clear()
+		_push_delete(took)
 	return done
+
+
+## An RMB delete as an edit: undo lays the brick back (on the end of the build), redo takes
+## it up again.
+func _push_delete(took: Dictionary) -> void:
+	undo_stack.push(WkCommand.make(&"delete", took, _undo_delete, _redo_delete))
+
+
+func _undo_delete(c: WkCommand) -> bool:
+	return _relay(c.data)
+
+
+func _redo_delete(c: WkCommand) -> bool:
+	return remove_brick(c.data.arch, c.data.cell)
+
+
+## A brick as redo lays it again: with the part it belongs to.
+func _brick_item(i: int) -> Dictionary:
+	var d := super._brick_item(i)
+	d["tag"] = part_of[i] if i < part_of.size() else part_sel
+	return d
+
+
+## Lay a brick again for undo or redo, in its own part.
+func _relay(item: Dictionary) -> bool:
+	var keep := part_sel
+	part_sel = int(item.get("tag", part_sel))
+	var ok := place_named(item.arch, item.cell, item.colour, item.mat, int(item.get("af", 0)))
+	part_sel = keep
+	return ok
+
+
+func _before_remove(rid: int) -> void:
+	_removing = rid
 
 
 func _brick_info(i: int) -> Dictionary:
@@ -2102,33 +2109,15 @@ func remove_brick(arch: String, cell: Vector3i) -> bool:
 	return i >= 0 and take_brick(i)
 
 
-## Take up the brick at recipe index `i` as RMB does -- world, recipe, edits and paint
+## Take up the brick at recipe index `i` as RMB does -- world, recipe and the undo history
 ## renumbered together (`_remove_rid`) -- and keep it, so Z can lay it back.
-## As the workshop's, and edits being gathered into one undo keep count: an edit from
-## before them dropped out of the list moves where they start.
-func _drop_edit(kind: String, n: int) -> void:
-	for i in _edits.size():
-		if _edits[i] != kind:
-			continue
-		if n == 0:
-			_edits.remove_at(i)
-			if not _gather.is_empty() and i < int(_gather.start):
-				_gather.start = int(_gather.start) - 1
-			return
-		n -= 1
-
-
 func take_brick(i: int) -> bool:
 	if i < 0 or i >= recipe.size():
 		return false
 	var took := _brick_info(i)
-	_removing = i
 	_remove_rid(i)
 	_after_edit()
-	_edits.append("delete")
-	_deleted.append(took)
-	if not _redoing:
-		_redo.clear()
+	_push_delete(took)
 	return true
 
 
@@ -2494,11 +2483,9 @@ func place_named(arch: String, cell: Vector3i, colour: int = -1, mat: int = -1, 
 		return false
 	if m != 0:
 		world.set_block_material(f, placed, m)
-	if not _redoing:
-		_redo.clear()
 	recipe.add(arch, cell, c, _recipe_frame_for(af), _role, m)
 	_placed_at.append([af, placed])
-	_edits.append("brick")
+	_push_brick(recipe.size() - 1)
 	_after_edit()
 	return true
 
@@ -2518,8 +2505,7 @@ func fill_cells(cells: Dictionary, random: bool = false, group: bool = true) -> 
 
 
 func _group(n: int) -> void:
-	if n > 1:
-		_edit_groups.append({"end": _edits.size(), "n": n})
+	undo_stack.group_last(n)
 
 
 # ---------------------------------------------------------------------------
@@ -2566,6 +2552,10 @@ func set_tool(t: String) -> void:
 	if t == "" :
 		selection.clear()
 	_sketch.clear()
+	if t == "sketch":
+		toolbox.use(&"sketch")
+	elif toolbox.active_id() == &"sketch":
+		toolbox.use(&"")
 	_sketch_box.visible = t == "sketch"
 	if t != "" and _painting:
 		_set_painting(false)
@@ -3229,119 +3219,66 @@ func toggle_smooth() -> void:
 	_store_asset_meta()
 
 
-## What laying the last brick again needs, if the last edit was a brick.
-func _last_brick() -> Variant:
-	if _edits.is_empty() or _edits.back() != "brick" or recipe.size() == 0:
-		return null
-	var i := recipe.size() - 1
-	return {"arch": recipe.part_of(i), "cell": recipe.cell_of(i), "colour": recipe.colour_of(i),
-			"mat": recipe.material_of(i), "tag": part_of[i] if i < part_of.size() else part_sel}
-
-
-## Z: a fill, a copy, a mirrored pair or a sketch change goes at once; anything else one
-## edit at a time. An RMB delete is laid back.
+## Z: the newest edit back -- a fill, a copy, a mirrored pair or a sketch change at once, an
+## RMB delete laid back (`undo_stack`, the workshop's). The selected model is let go while
+## the undo runs and picked again after.
 func _undo() -> bool:
-	# The selected model is let go while the undo runs and picked again after.
 	var pick := _pick_id()
 	_set_down()
-	var n := 1
-	var sketch = null
-	if not _edit_groups.is_empty() and int(_edit_groups.back().end) == _edits.size():
-		var g: Dictionary = _edit_groups.pop_back()
-		n = int(g.n)
-		sketch = g.get("sketch")
-	var items := []
-	var lay_back := []
-	var any := false
-	for _k in n:
-		if _edits.is_empty():
-			break
-		if _edits.back() == "stud":
-			_edits.pop_back()
-			var rec: Dictionary = _stud_log.pop_back()
-			_stud_apply(rec, false)
-			items.append({"op": "stud", "rec": rec})
-			any = true
-			continue
-		if _edits.back() == "delete":
-			# Laid back after the loop: laying one now adds an edit the loop would undo next.
-			_edits.pop_back()
-			lay_back.append(_deleted.pop_back())
-			any = true
-			continue
-		var b = _last_brick()
-		if not super._undo():
-			break
-		any = true
-		if b != null:
-			items.append(b)
-	if not lay_back.is_empty():
-		_redoing = true
-		var keep := part_sel
-		_batch = true
-		for b in lay_back:
-			part_sel = int(b.tag)
-			if place_named(b.arch, b.cell, b.colour, b.mat):
-				items.append({"op": "remove", "arch": b.arch, "cell": b.cell})
-		_batch = false
-		part_sel = keep
-		_after_edit()
-		_redoing = false
-	if sketch != null:
-		_restore_sketch(sketch, "before")
-	if not items.is_empty() or sketch != null:
-		_redo.append({"items": items, "sketch": sketch})
+	var ok := super._undo()
 	_repick(pick)
-	return any
+	return ok
 
 
-## Shift Z: do the last undone group again -- each brick back in its own part, each
-## delete taken up again, a sketch back to what it was.
+## Shift Z: do the last undone step again -- each brick back in its own part, each delete
+## taken up again, a sketch back to what it was. How many bricks, deletes and studs it did.
 func redo() -> int:
 	# Set down first: a lifted part put down where it was moved is a new edit, and clears redo.
 	var pick := _pick_id()
 	_set_down()
-	if _redo.is_empty():
-		_repick(pick)
-		return 0
-	var entry: Dictionary = _redo.pop_back()
-	var items: Array = (entry.items as Array).duplicate()
-	items.reverse()
-	_redoing = true
-	var keep := part_sel
-	var done := 0
-	_batch = true
-	for b in items:
-		if b.get("op", "place") == "stud":
-			stud_edit(b.rec.op == "add", b.rec.stud)
-			done += 1
-		elif b.get("op", "place") == "remove":
-			if remove_brick(b.arch, b.cell):
-				done += 1
-		else:
-			part_sel = int(b.tag)
-			if place_named(b.arch, b.cell, b.colour, b.mat):
-				done += 1
-	_batch = false
-	part_sel = keep
-	_after_edit()
-	var sketch = entry.get("sketch")
-	if sketch != null:
-		_restore_sketch(sketch, "after")
-	_group_with(done, sketch)
-	_redoing = false
+	var c := undo_stack.redo()
 	_repick(pick)
-	return done
+	return 0 if c == null else c.leaf_count([&"brick", &"delete", &"stud"])
 
 
-## Edits that undo together, with the sketch they changed, if any.
+## The last `n` edits undo together, with the sketch they changed, if any: a snapshot that
+## is put back after them, both ways (`_restore_sketch`).
 func _group_with(n: int, sketch) -> void:
-	# A sketch change that moved no brick (an area cut where nothing was) still undoes.
-	if n > 1 or sketch != null:
-		var g := {"end": _edits.size(), "n": n}
-		if sketch != null:
-			g["sketch"] = sketch
-		_edit_groups.append(g)
+	undo_stack.group_last(n, null if sketch == null else _sketch_cmd(sketch))
+
+
+## A sketch, sculpt, model or shell change as an undo step: records `_restore_sketch` puts
+## back "before" for undo and "after" for redo.
+func _sketch_cmd(sketch) -> WkCommand:
+	return WkCommand.make(&"sketch", sketch, _unsketch, _resketch)
+
+
+func _unsketch(c: WkCommand) -> bool:
+	_restore_sketch(c.data, "before")
+	return true
+
+
+func _resketch(c: WkCommand) -> bool:
+	_restore_sketch(c.data, "after")
+	return true
+
+
+## The sketch records of the newest undo step, if it has any (a sketch change, or a group with
+## one after its edits) -- the first of them (`front`) or the last -- to add a record to.
+## Null if it has none.
+func _top_sketch(front: bool) -> Variant:
+	var top := undo_stack.top()
+	var cmds := []
+	if top is WkGroup:
+		cmds = (top as WkGroup).tails()
+	elif top != null and top.kind == &"sketch":
+		cmds = [top]
+	if cmds.is_empty():
+		return null
+	var c: WkCommand = cmds[0] if front else cmds.back()
+	if not c.data is Array:
+		c.data = [c.data]
+	return c.data
 
 
 # ---------------------------------------------------------------------------
@@ -3922,7 +3859,6 @@ func _ensure_start_brick() -> void:
 	place_named(arch, Vector3i(plate_studs / 2 - 2, work_height, z))
 	_batch = keep
 	_after_edit()
-	_edit_groups.clear()
 	_regrid(true)
 
 
@@ -4020,12 +3956,7 @@ func _zoom_input(e: InputEvent) -> bool:
 ## Zoom a flat view by `by`, keeping the point at `under` (on the camera's own plane)
 ## where it is on the screen.
 func zoom_at(under: Vector3, by: float) -> void:
-	var n := -_camera.global_transform.basis.z
-	var cam := _camera.global_position
-	var d := cam - under
-	var flat := d - n * d.dot(n)
-	zoom(by)
-	_camera.global_position = under + flat * by + n * d.dot(n)
+	cam_ctl.zoom_at(under, by)
 
 
 func _draw_photo_grid() -> void:
@@ -4086,24 +4017,40 @@ func _sketch_input(e: InputEvent) -> bool:
 		return false
 	if sketch_draw == "sculpt":
 		return _sculpt_input(e)
-	if sketch_draw == "polygon":
-		return _polygon_input(e)
-	if e is InputEventMouseButton and e.button_index in [MOUSE_BUTTON_LEFT, MOUSE_BUTTON_RIGHT]:
-		if e.pressed:
-			var q = _sketch_mouse()
-			if q != null:
-				_pen.press(q, e.button_index == MOUSE_BUTTON_RIGHT)
-			else:
-				_sketch.clear()
-				_sketch_out = e.button_index == MOUSE_BUTTON_RIGHT
-		else:
-			_sketch_commit()
-		return true
-	if e is InputEventMouseMotion and not _sketch.is_empty() and (Input.is_mouse_button_pressed(MOUSE_BUTTON_LEFT)
-			or Input.is_mouse_button_pressed(MOUSE_BUTTON_RIGHT)):
-		_sketch_add()
-		return true
+	# The kit's Sketch tool draws the stroke (WkSketchTool); `sketch_commit` below makes it
+	# into the part's sketch.
+	_pen.draw = sketch_draw
+	_sketch_tool.brush_size = brush_size
+	_sketch_tool.brush_square = brush_shape == "square"
+	toolbox.use(&"sketch")
+	return toolbox.input(e)
+
+
+# The kit's Sketch tool asks these, through the workshop's context (BrickWorkshopContext).
+
+func _sketch_host() -> Object:
+	return self
+
+
+## Every stroke goes on the working plane; RMB draws one that takes area away.
+func wk_sketch_begin(_remove: bool) -> Variant:
+	return work_plane
+
+
+func wk_sketch_point(_plane: Variant) -> Variant:
+	return _sketch_mouse()
+
+
+func wk_sketch_removes() -> bool:
 	return false
+
+
+func wk_sketch_commit(_plane: Variant, _p: WkSketchPen) -> void:
+	_sketch_commit()
+
+
+func wk_sketch_cancel() -> void:
+	pass
 
 
 # ---------------------------------------------------------------------------
@@ -4482,8 +4429,7 @@ func _sculpt_end() -> void:
 
 ## An edit of the field, as one undo.
 func _sculpt_record(rec: PackedByteArray) -> void:
-	_edit_groups.append({"end": _edits.size(), "n": 0, "sketch": [{"sdf": rec}]})
-	_redo.clear()
+	undo_stack.push(_sketch_cmd([{"sdf": rec}]))
 	_sdf_meta = sculpt.save_meta()
 	_store_asset_meta()
 	_autosave_dirty = true
@@ -5689,9 +5635,7 @@ func sculpt_piece_detail(part: String, tris: int) -> void:
 	var was := _sculpt_state()
 	shells[part]["tris"] = clampi(tris, 50, 50000)
 	var now := _sculpt_state()
-	_edit_groups.append({"end": _edits.size(), "n": 0,
-			"sketch": [{"sculpt_before": was, "sculpt_after": now}]})
-	_redo.clear()
+	undo_stack.push(_sketch_cmd([{"sculpt_before": was, "sculpt_after": now}]))
 	_set_sculpt_state(now)
 	_autosave_dirty = true
 
@@ -5707,8 +5651,7 @@ func _note_laid(laid: Dictionary, arch: String, at: Vector3i, cs: Array, zone: D
 
 func _sculpt_finish(was: Dictionary, rec: PackedByteArray) -> void:
 	var now := _sculpt_state()
-	_edit_groups.append({"end": _edits.size(), "n": 0,
-			"sketch": [{"sdf": rec}, {"sculpt_before": was, "sculpt_after": now}]})
+	undo_stack.push(_sketch_cmd([{"sdf": rec}, {"sculpt_before": was, "sculpt_after": now}]))
 	_set_sculpt_state(now)
 	_autosave_dirty = true
 
@@ -5776,14 +5719,6 @@ func _sketch_mouse() -> Variant:
 	return null if hit == null else sketch_point(hit)
 
 
-func _sketch_add() -> void:
-	var q = _sketch_mouse()
-	if q == null:
-		return
-	_pen.draw = sketch_draw
-	_pen.move(q, brush_size)
-
-
 ## What the stroke under way comes to, into the sketch: an outline, or a brush's path.
 func _sketch_commit() -> void:
 	if sketch_draw == "brush" and not _sketch.is_empty():
@@ -5793,34 +5728,14 @@ func _sketch_commit() -> void:
 	_sketch.clear()
 
 
-## Polygon: each click a corner (the first click's button says in or out); a click on
-## the first corner, a double click or Enter closes it, Backspace takes the last corner.
-func _polygon_input(e: InputEvent) -> bool:
-	if e is InputEventMouseButton and e.pressed and e.button_index in [MOUSE_BUTTON_LEFT, MOUSE_BUTTON_RIGHT]:
-		var q = _sketch_mouse()
-		if q == null:
-			return true
-		if _pen.polygon_click(q, e.button_index == MOUSE_BUTTON_RIGHT, e.double_click):
-			_sketch_commit()
-		return true
-	if e is InputEventKey:
-		match _pen.polygon_key(e):
-			"commit":
-				_sketch_commit()
-				return true
-			"back":
-				return true
-	return false
-
-
 ## A rectangle or an ellipse dragged from corner `a` to corner `b`, as an outline (the pen's).
 static func drag_shape(kind: String, a: Vector2, b: Vector2) -> Array[Vector2]:
-	return SketchPen.drag_shape(kind, a, b)
+	return WkSketchPen.drag_shape(kind, a, b)
 
 
 ## A brush stroke as a sketch entry (the pen's).
 static func brush_entry(path: Array, size: int, square: bool, plane: String) -> Dictionary:
-	return SketchPen.brush_entry(path, size, square, plane)
+	return WkSketchPen.brush_entry(path, size, square, plane)
 
 
 ## A point of the working plane in the sketch's own two numbers: across the plane and up
@@ -6502,12 +6417,12 @@ func solid_cells(solid: Dictionary) -> Dictionary:
 ## The cells an outline or a brush stroke covers (the pen's: shared with the building
 ## workshop's sketch and shapes).
 static func region_cells(poly: Variant) -> Dictionary:
-	return SketchPen.region_cells(poly)
+	return WkSketchPen.region_cells(poly)
 
 
 ## The cells a brush stroke covers (the pen's).
 static func brush_cells(entry: Dictionary) -> Dictionary:
-	return SketchPen.brush_cells(entry)
+	return WkSketchPen.brush_cells(entry)
 
 
 ## How many times an outline goes round a point, counting direction.
@@ -7253,7 +7168,6 @@ func _bricks_near(point: Vector3, reach: float) -> Array[int]:
 ## Studs put on by hand: {part, at: [studs along, plates up, studs across] of the stud's
 ## foot, dir: the way it faces, colour, mat}. Any face of any brick, a slope's too.
 var extra_studs := []
-var _stud_log := []          # what each "stud" edit did, for undo: {op: "add" or "remove", stud}
 var _pick_mesh: TriangleMesh
 var _pick_dirty := true
 var _studs_mmi: MultiMeshInstance3D
@@ -7345,11 +7259,17 @@ func stud_edit(add: bool, stud: Dictionary) -> bool:
 		return false
 	var rec := {"op": "add" if add else "remove", "stud": stud if add else extra_studs[i]}
 	_stud_apply(rec, true)
-	_edits.append("stud")
-	_stud_log.append(rec)
-	if not _redoing:
-		_redo.clear()
+	undo_stack.push(WkCommand.make(&"stud", rec, _undo_stud, _redo_stud))
 	return true
+
+
+func _undo_stud(c: WkCommand) -> bool:
+	_stud_apply(c.data, false)
+	return true
+
+
+func _redo_stud(c: WkCommand) -> bool:
+	return stud_edit(c.data.op == "add", c.data.stud)
 
 
 func _stud_apply(rec: Dictionary, forward: bool) -> void:
@@ -7873,11 +7793,11 @@ func set_shell(part: String, settings: Variant) -> void:
 		resketch_part(part, {}, true)
 	_end_gather()
 	var rec := {"shell_part": part, "shell_before": was, "shell_after": now}
-	if not _edit_groups.is_empty() and _edit_groups.back().get("sketch") is Array \
-			and int(_edit_groups.back().end) == _edits.size():
-		(_edit_groups.back().sketch as Array).push_front(rec)
+	var top = _top_sketch(true)
+	if top != null:
+		(top as Array).push_front(rec)
 	else:
-		_edit_groups.append({"end": _edits.size(), "n": 0, "sketch": [rec]})
+		undo_stack.push(_sketch_cmd([rec]))
 	_refresh_shell(part)
 
 
@@ -8279,8 +8199,9 @@ func set_curves(level: int) -> int:
 			n += 1
 	_end_gather()
 	# The level goes back and forth with the bricks.
-	if not _edit_groups.is_empty() and _edit_groups.back().get("sketch") is Array:
-		(_edit_groups.back().sketch as Array).append({"curves_before": was, "curves_after": curve_level})
+	var top = _top_sketch(false)
+	if top != null:
+		(top as Array).append({"curves_before": was, "curves_after": curve_level})
 	return n
 
 
@@ -8699,8 +8620,8 @@ func play_pose(t: float) -> void:
 
 ## RMB in sketch also takes up every brick under the stroke, not only the sketch's own.
 var erase_any := true
-## Edits being gathered into one undo (`_begin_gather`): {start, groups}, or empty.
-var _gather := {}
+## Edits since `_begin_gather` undo as one (an open group in `undo_stack`).
+var _gathering := false
 
 ## Shells (Docs/AssetWorkshop.md, "Shells"): part -> {thick: studs, res: samples a stud,
 ## colour, mat}. A shelled part's form is sampled `res` times finer than the grid and
@@ -8995,34 +8916,21 @@ func form_stamp(part: String, centre: Vector3i, carve: bool) -> void:
 
 
 ## Edits made from now to `_end_gather` undo as one: a shape stroke's stamps, a resize.
+## Begun again before it ended, what was gathered so far is one step of its own.
 func _begin_gather() -> void:
-	_gather = {"start": _edits.size(), "groups": _edit_groups.size()}
+	if _gathering:
+		undo_stack.end_group(true)
+	undo_stack.begin_group()
+	_gathering = true
 
 
 ## Every edit since `_begin_gather` as one group, the groups made since folded into it
-## with every sketch change they held.
+## with every sketch change they held (WkUndoStack.end_group, flattened).
 func _end_gather() -> void:
-	if _gather.is_empty():
+	if not _gathering:
 		return
-	var n := _edits.size() - int(_gather.start)
-	var groups_from := int(_gather.groups)
-	_gather = {}
-	var records := []
-	while _edit_groups.size() > groups_from:
-		var g: Dictionary = _edit_groups.pop_back()
-		var s = g.get("sketch")
-		if s is Array:
-			var flat: Array = (s as Array).duplicate()
-			flat.reverse()
-			records.append_array(flat)
-		elif s != null:
-			records.append(s)
-	records.reverse()
-	if n > 1 or not records.is_empty():
-		var g := {"end": _edits.size(), "n": n}
-		if not records.is_empty():
-			g["sketch"] = records
-		_edit_groups.append(g)
+	_gathering = false
+	undo_stack.end_group(true)
 
 
 ## Ctrl + LMB lays the shape, Ctrl + RMB carves it; held and dragged, it goes on doing
@@ -9034,7 +8942,7 @@ func _shape_brush_input(e: InputEvent) -> bool:
 		return true
 	if e is InputEventMouseButton and e.button_index in [MOUSE_BUTTON_LEFT, MOUSE_BUTTON_RIGHT]:
 		if e.pressed and (e.ctrl_pressed or brushing_shapes()) and _sb.is_empty():
-			_sb = {"erase": e.button_index == MOUSE_BUTTON_RIGHT, "start": _edits.size(), "last": _cell,
+			_sb = {"erase": e.button_index == MOUSE_BUTTON_RIGHT, "last": _cell,
 					"button": e.button_index}
 			_begin_gather()
 			_stamp_shape(bool(_sb.erase))
@@ -10948,8 +10856,7 @@ func models_state() -> Array:
 
 
 func _model_record(before: Array) -> void:
-	_edit_groups.append({"end": _edits.size(), "n": 0, "sketch": [{"models_before": before, "models_after": models_state()}]})
-	_redo.clear()
+	undo_stack.push(_sketch_cmd([{"models_before": before, "models_after": models_state()}]))
 	_store_asset_meta()
 	_autosave_dirty = true
 
@@ -11610,9 +11517,8 @@ func bake_model() -> void:
 	sculpt.remesh()
 	(m.node as Node).queue_free()
 	models.erase(m)
-	_edit_groups.append({"end": _edits.size(), "n": 0, "sketch": [{"sdf": rec},
-			{"models_before": before, "models_after": models_state()}]})
-	_redo.clear()
+	undo_stack.push(_sketch_cmd([{"sdf": rec},
+			{"models_before": before, "models_after": models_state()}]))
 	_sdf_meta = sculpt.save_meta()
 	_store_asset_meta()
 	_autosave_dirty = true
@@ -12208,12 +12114,12 @@ func _size_marks_process() -> void:
 	if Time.get_ticks_msec() < _size_at:
 		return
 	_size_at = Time.get_ticks_msec() + 500
-	var sig := "%s %s %s %s %d %d %s %s %s %d" % [recipe.kind, size_marks_on, gun_class, muzzle_end, _edits.size(), _edit_groups.size(),
+	var sig := "%s %s %s %s %d %d %s %s %s %d" % [recipe.kind, size_marks_on, gun_class, muzzle_end, undo_stack.size(), undo_stack.version,
 			sculpt_state, str(_placed.get("xf", "")), mirror_z, models.size()]
 	if sig != _size_sig:
 		_size_sig = sig
 		draw_size_marks()
-	var gsig := "%d %d %s %d %s" % [_edits.size(), _edit_groups.size(), sculpt_state, models.size(),
+	var gsig := "%d %d %s %d %s" % [undo_stack.size(), undo_stack.version, sculpt_state, models.size(),
 			str(models_state().map(func(st: Dictionary) -> Transform3D: return st.xf))]
 	if gsig != _grid_sig:
 		_grid_sig = gsig

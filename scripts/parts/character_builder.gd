@@ -58,8 +58,8 @@ func _ready() -> void:
 	_text.bbcode_enabled = true
 	_text.fit_content = true
 	_text.custom_minimum_size = Vector2(420, 0)
-	_text.add_theme_font_size_override("normal_font_size", 16)
-	_text.add_theme_font_size_override("bold_font_size", 16)
+	_text.add_theme_font_size_override("normal_font_size", GameUI.px(16))
+	_text.add_theme_font_size_override("bold_font_size", GameUI.px(16))
 	row.add_child(_text)
 
 

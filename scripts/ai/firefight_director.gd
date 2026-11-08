@@ -951,7 +951,7 @@ func _unhandled_input(event: InputEvent) -> void:
 ## ring, a player out over the barrier is put back, and down with no lives left
 ## is game over -- and a restart is the first wave again.
 func run_firefight_gate() -> void:
-	var ok: Callable = city._gate_ok
+	var ok: Callable = Callable(city._pass_runner(), &"_gate_ok")
 	var p := _player()
 	ok.call("the fight is set up", _ready_to_fight and p != null)
 	if p == null:

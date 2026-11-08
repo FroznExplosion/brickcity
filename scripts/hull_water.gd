@@ -15,6 +15,13 @@ extends RefCounted
 ## compartment's water out from its top (it stands level) down to the hole -- a
 ## hull lifted or rolled out of the water empties.
 ##
+## Trapped air (Docs/Hulls.md 5.2): a room whose every hole is under the water
+## cannot let its air out, so the water coming in squeezes it -- Boyle: the pocket
+## shrinks to 1 / (1 + depth / 10.3 m) of the room, the deepest hole's depth -- and
+## stops there, the pocket held at the top. Air leaks out of a held pocket at
+## `air_leak` cells a second (a brick hull's seams; 0 for an airtight one, INF for
+## none held at all), so the water creeps on up as it goes.
+##
 ## Water stands only in inside cells and open doors' cells (a shut door holds, a
 ## bulkhead holds); never in a brick, never out but through a hole. Every fill
 ## that comes in, goes out or dries off as a film is counted (`came_in`,
@@ -32,6 +39,8 @@ const SIDE := 0.4
 const UP := 0.5
 ## Flow passes a step: water levels out across a room in a fraction of a second.
 const PASSES := 4
+## Metres of water that press as hard as the air: one atmosphere.
+const ATM_M := 10.3
 ## Under this a cell is dry; under STILL a transfer is no move.
 const DRY := 0.002
 const STILL := 0.0005
@@ -52,6 +61,14 @@ var _doors_sig := ""
 ## Set by whoever changes the air's grid (a hit, a repair): what the water may
 ## stand in is worked out again at the next step.
 var grid_changed := false
+## Air out of a held pocket through the hull's seams, cells a second (the class notes).
+var air_leak := 0.0
+## Air leaked out of each room's pocket so far, cells (by its root).
+var _leaked := {}
+## Rooms holding a pocket at the last step (roots): their air has nowhere to go.
+var trapped: Dictionary = {}
+## What came in at each hole cell at the last step, cells of water (HullSpray).
+var inflow: Dictionary = {}
 
 
 static func on(hull_air: HullAir) -> HullWater:
@@ -161,9 +178,20 @@ func _tipped(lat: Array) -> bool:
 
 ## In and out through every breach cell.
 func _holes(dt: float, depth_at: Callable) -> void:
+	trapped.clear()
+	inflow.clear()
 	for ci in air._parent.size():
 		if air._parent[ci] != ci:
 			continue
+		var room := pocket_room(ci, depth_at)
+		if room >= 0.0:
+			var have := in_compartment(ci)
+			if have >= room - 0.5:
+				# Held: only what leaks out lets more in.
+				trapped[ci] = true
+				_leaked[ci] = float(_leaked.get(ci, 0.0)) + air_leak * dt
+				continue
+		var budget := INF if room < 0.0 else room - in_compartment(ci)
 		for b: int in air._breach[ci]:
 			var d: float = depth_at.call(b)
 			if is_nan(d):
@@ -179,15 +207,35 @@ func _holes(dt: float, depth_at: Callable) -> void:
 				var cap := 1.0 + d / cell_h
 				var q := INFLOW * sqrt(d) * dt / nb.size()
 				for j in nb:
-					var add := clampf(cap - flow.get(j), 0.0, q)
+					var add := minf(clampf(cap - flow.get(j), 0.0, q), budget)
 					if add > 0.0:
-						came_in += flow.add(j, add)
+						var got := flow.add(j, add)
+						came_in += got
+						budget -= got
+						inflow[b] = float(inflow.get(b, 0.0)) + got
 						changed = true
 			else:
 				# Out: the room's water stands level (it would, long before a cell a
 				# tick could carry it to the hole), so what goes is its top -- the
 				# highest wet cells of the compartment that stand over the hole.
 				_drain_top(ci, _height(b), OUTFLOW * dt * nb.size())
+
+
+## How much water room `ci` can take before its air is squeezed to the water's
+## pressure: -1 if its air can get out (a hole over the water, or no water at one,
+## or `air_leak` INF), else its cells times 1 - 1 / (1 + deepest hole / ATM_M),
+## plus what has leaked out of it.
+func pocket_room(ci: int, depth_at: Callable) -> float:
+	if is_inf(air_leak) or air._breach[ci].is_empty():
+		return -1.0
+	var deepest := 0.0
+	for b: int in air._breach[ci]:
+		var d: float = depth_at.call(b)
+		if is_nan(d) or d <= 0.0:
+			return -1.0
+		deepest = maxf(deepest, d)
+	var cells := float(air._cells[ci])
+	return minf(cells, cells * (1.0 - 1.0 / (1.0 + deepest / ATM_M)) + float(_leaked.get(ci, 0.0)))
 
 
 ## How high cell `i` stands along the ship's up, in cells.

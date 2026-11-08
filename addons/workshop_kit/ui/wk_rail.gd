@@ -1,10 +1,11 @@
-class_name ToolRail
+class_name WkRail
 extends PanelContainer
 
-## The tool rail both workshops show down the left (Docs/BuildTools.md, "The rail"): each
+## The tool rail down the left of an editor (workshop_kit): each
 ## tool an icon, its name and its key, with a pop-up saying what it does; a line under them
 ## for the tool in hand; under that, buttons for actions (a rotate, a toggle: every key has
-## one, Docs/BuildTools.md section 7); and a slot for the open tool's own options.
+## one); and a slot for the open tool's own options. Its own look until the editor gives it
+## one (`restyle`, from WkContext `style_ui` and `panel_box`).
 ##
 ## It keeps no state of its own that matters: `fill` is given the rows and what a press
 ## calls, and the owner lights the tool in hand each frame (`show_active`), so a key pressed
@@ -118,6 +119,15 @@ func _init(width: float = 184.0, scroll: bool = false) -> void:
 	options.add_theme_constant_override("separation", 2)
 	options.visible = false
 	outer.add_child(options)
+
+
+## The editor's look: `panel` for the rail and its pop-out (null keeps the rail's own).
+func restyle(panel: StyleBox) -> void:
+	if panel == null:
+		return
+	add_theme_stylebox_override("panel", panel)
+	if flyout != null:
+		flyout.add_theme_stylebox_override("panel", panel)
 
 
 ## Move the options out of the rail into a panel beside it: `layer` holds it. It shows

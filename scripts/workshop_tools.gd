@@ -1,11 +1,11 @@
 class_name WorkshopTools
 extends Node
 
-## The building workshop's tools (Docs/BuildTools.md): the rail down the left (`ToolRail`,
+## The building workshop's tools (Docs/BuildTools.md): the rail down the left (`WkRail`,
 ## the asset workshop's own), and the tools that build buildings fast -- Shapes of the held
 ## brick, flat or standing as a wall, staggered or aligned; Cut, for doorways and windows;
 ## Walls, Floor, Roof and Stairs, the parts of a house a click or two each;
-## Sketch, an outline drawn by hand with the asset workshop's own pen (SketchPen); Repeat,
+## Sketch, an outline drawn by hand with the asset workshop's own pen (WkSketchPen); Repeat,
 ## for storeys and rows of windows; Select,
 ## to change or let go of a kept shape. Place, Paint and Rooms are the workshop's
 ## own hand, brush and spaces tool.
@@ -86,7 +86,9 @@ const REPEAT_WHAT := [["building", "Building"], ["storey", "One storey"], ["shap
 const REPEAT_DIRS := [["up", "Up"], ["x", "Along X"], ["z", "Along Z"]]
 
 var ws    ## the workshop (workshop.gd)
-var rail: ToolRail
+var rail: WkRail
+## Where the menu bar, the tool bar and the rail go (the kit's WkFrame).
+var frame := WkFrame.new()
 ## Hand, Edit and View's buttons, across the screen under the menus.
 var _bar: PanelContainer
 ## The button under the tools for the brick menu.
@@ -100,7 +102,8 @@ var typed := ""
 var _hand_row := {}
 var _hand_box: VBoxContainer
 var _last_hand := "place"
-var view: WorkshopView
+## The two cameras (orbit and FPS, Docs/BuildTools.md section 10): the kit's WkCamera.
+var view: WkCamera
 var tool := "place"
 
 ## Shapes options.
@@ -158,10 +161,21 @@ var roof_style := "gable"
 var roof_overhang := 1
 ## Sketch: the pen (the asset workshop's), its brush, and the plane a stroke is on --
 ## {lie, at} while one is drawn, else empty.
-var pen := SketchPen.new()
-var brush_size := 1
-var brush_square := false
-var _sk := {}
+## Draw's and Cut's pen: the kit's Sketch tool (WkSketchTool), drawn through the workshop's
+## context -- which asks `wk_sketch_begin`, `wk_sketch_point`, `wk_sketch_commit` ... below.
+var sketch := WkSketchTool.new()
+var pen: WkSketchPen:
+	get: return sketch.pen
+var brush_size: int:
+	get: return sketch.brush_size
+	set(v): sketch.brush_size = v
+var brush_square: bool:
+	get: return sketch.brush_square
+	set(v): sketch.brush_square = v
+## The plane of the stroke under way, {} between strokes: the sketch tool's.
+var _sk: Dictionary:
+	get: return sketch.plane if sketch.plane != null else {}
+	set(v): sketch.plane = null if v.is_empty() else v
 ## Sketch as a floor plan (section 9): the level drawn on (-1: where you aim), what raising
 ## it makes, a building's storey (courses of wall) and flat roof; the plan being drawn
 ## ({at, adds, subs}); the last plan raised. Cut: a window on a building on every floor.
@@ -192,9 +206,6 @@ var _bim: ImmediateMesh
 var _drag := {}
 ## The kept shape picked with Select: its id, or -1.
 var selected := -1
-## Undo records, newest last, one for each "shape" edit: {before: {id: shape or null},
-## hand: [[part, [x, y, z], colour, mat, role]]} -- hand-laid bricks a cut took up.
-var _undo := []
 ## "part|x|y|z" -> shape id, for the bricks of kept shapes; rebuilt when stale.
 var _owner := {}
 var _owner_dirty := true
@@ -260,9 +271,14 @@ var _syncing := false
 
 func setup(workshop, layer: CanvasLayer) -> void:
 	ws = workshop
-	rail = ToolRail.new(210.0, true)
+	sketch.rmb_cancels = true   # RMB outside a stroke is the workshop's own (it takes a brick up)
+	ws.toolbox.add(sketch)
+	rail = WkRail.new(210.0, true)
 	rail.name = "ToolRail"
+	ws.wk_ctx.style_ui(rail)          # the game's look (GameUI, MenuTheme), through the kit's seam
+	rail.restyle(ws.wk_ctx.panel_box())
 	layer.add_child(rail)
+	frame.rail = rail
 	rail.fill("Build", TOOLS, pick, [], 2)
 	bricks_button = rail.add_under_tools("Bricks   Tab", "place", "Bricks  (Tab)\nOpen or close the menu of every brick.",
 			func() -> void: act("parts"))
@@ -270,6 +286,7 @@ func setup(workshop, layer: CanvasLayer) -> void:
 	_bar.name = "ToolBar"
 	_bar.add_theme_stylebox_override("panel", rail.get_theme_stylebox("panel"))
 	layer.add_child(_bar)
+	frame.band = _bar
 	var flow := HFlowContainer.new()
 	flow.add_theme_constant_override("h_separation", 3)
 	flow.add_theme_constant_override("v_separation", 2)
@@ -289,8 +306,13 @@ func setup(workshop, layer: CanvasLayer) -> void:
 	if ws._keys_panel != null:
 		ws._keys_panel.visible = false
 	_build_options()
-	view = WorkshopView.new()
-	view.setup(ws)
+	# The mouse is taken and given back by the kit's camera and nowhere else: the workshop
+	# camera's click-to-capture is off, so a click only ever does what the tool does.
+	var dc = ws._camera
+	dc.click_captures = false
+	dc.ctrl_descends = false
+	view = WkCamera.new()
+	view.setup(ws.wk_ctx)
 	_im = ImmediateMesh.new()
 	_lines = MeshInstance3D.new()
 	_lines.mesh = _im
@@ -363,7 +385,6 @@ func _store(id: int, sh: Dictionary) -> void:
 
 ## A new build was opened or begun: its shapes are its own.
 func recipe_changed() -> void:
-	_undo.clear()
 	_draft = {}
 	_last_plan = -1
 	_drag = {}
@@ -674,7 +695,7 @@ func _every_floor(op: Dictionary, face: Dictionary) -> Array:
 func opening_spec(k: String, face: Dictionary) -> Dictionary:
 	var size := door_size if k == "door" else window_size
 	var l := String(face.lie)
-	var uvw := BrickShapes.from_3d(l, face.cell)
+	var uvw := WkShapes.from_3d(l, face.cell)
 	var u0 := uvw.x - (size.x >> 1)
 	var v0 := uvw.y
 	if k == "door":
@@ -687,7 +708,7 @@ func opening_spec(k: String, face: Dictionary) -> Dictionary:
 			v = int(b.at) + floori(float(uvw.y - int(b.at)) / pitch) * pitch + ft
 		else:
 			# Down while there is wall (the build's own bricks: not the baseplate).
-			while v > 0 and _rid_at(BrickShapes.to_3d(l, Vector2i(uvw.x, v - 1), uvw.z)) >= 0:
+			while v > 0 and _rid_at(WkShapes.to_3d(l, Vector2i(uvw.x, v - 1), uvw.z)) >= 0:
 				v -= 1
 		v0 = v
 	return {"kind": k, "lie": l, "at": int(face.at), "depth": int(face.depth),
@@ -699,8 +720,8 @@ func opening_spec(k: String, face: Dictionary) -> Dictionary:
 ## The box an opening takes out of its wall: the opening, and its frame round it -- a stud
 ## each side, a brick's height over it, and under a window a brick's height of sill.
 static func opening_box(op: Dictionary) -> Array:
-	var a := BrickShapes._v2(op.a)
-	var b := BrickShapes._v2(op.b)
+	var a := WkShapes.v2i(op.a)
+	var b := WkShapes.v2i(op.b)
 	if not bool(op.get("frame", true)):
 		return [a, b]
 	var rv := maxi(1, int(round(1.0 / BrickShapes.aspect(String(op.lie)))))
@@ -741,7 +762,7 @@ func _frame_opening(rec: Dictionary, op: Dictionary) -> void:
 		_add_into(rec, fr)
 	if bool(op.glass):
 		var paint := glass_paint()
-		var gl := _new_shape("rect", l, BrickShapes._v2(op.a), BrickShapes._v2(op.b),
+		var gl := _new_shape("rect", l, WkShapes.v2i(op.a), WkShapes.v2i(op.b),
 				int(op.at) + ((int(op.depth) - 1) >> 1))
 		gl.depth = 1
 		gl.part = op.part
@@ -1055,8 +1076,8 @@ func _repeat_pick(c: Vector3i) -> void:
 		for sh in shapes():
 			if String(sh.kind) != "plan" or int(sh.get("storey", 0)) <= 0:
 				continue
-			var a := BrickShapes._v2(sh.a)
-			var b := BrickShapes._v2(sh.b)
+			var a := WkShapes.v2i(sh.a)
+			var b := WkShapes.v2i(sh.b)
 			if c.x >= mini(a.x, b.x) - 2 and c.x <= maxi(a.x, b.x) + 2 and c.z >= mini(a.y, b.y) - 2 \
 					and c.z <= maxi(a.y, b.y) + 2 and c.y >= int(sh.at) and c.y < int(sh.at) + int(sh.depth):
 				selected = int(sh.id)
@@ -1327,7 +1348,7 @@ func _take_part(part: String, cell: Vector3i, af: int = 0) -> bool:
 	if rid < 0:
 		return false
 	# A shape's bricks have no edit of their own: the shape's undo puts them back.
-	ws._remove_rid(rid, false)
+	ws._remove_rid(rid)
 	return true
 
 
@@ -1339,28 +1360,25 @@ func _begin() -> Dictionary:
 	return {"before": {}, "hand": []}
 
 
+## A shape edit, recorded in the workshop's history as one "shape" command. `rec`:
+## {before: {id: shape or null}, hand: [[part, [x, y, z], colour, mat, role]]} -- hand-laid
+## bricks a cut took up.
 func _end(rec: Dictionary) -> void:
-	_undo.append(rec)
-	ws._edits.append("shape")
+	ws.undo_stack.push(WkCommand.make(&"shape", rec, _undo_shape, _redo_shape))
 	ws._after_edit()
 
 
 ## Z on a shape edit: each shape it changed back as it was, its bricks with it; hand-laid
-## bricks a cut took up laid again, plain bricks a repeat laid taken up. What it undid goes
-## on the workshop's redo list.
-func undo() -> bool:
-	if _undo.is_empty():
-		return false
-	var rec: Dictionary = _undo.pop_back()
-	ws._edits.pop_back()
-	ws._redo_list.append({"kind": "shape", "rec": _apply(rec)})
+## bricks a cut took up laid again, plain bricks a repeat laid taken up. The command keeps the
+## record that does the opposite, for redo.
+func _undo_shape(c: WkCommand) -> bool:
+	c.data = _apply(c.data)
 	return true
 
 
-## Redo: a record `undo` gave back, done again (and undoable again).
-func redo(rec: Dictionary) -> bool:
-	_undo.append(_apply(rec))
-	ws._edits.append("shape")
+## Redo: the record undo gave back, done again (and undoable again).
+func _redo_shape(c: WkCommand) -> bool:
+	c.data = _apply(c.data)
 	ws._after_edit()
 	return true
 
@@ -1521,7 +1539,7 @@ func _step_level(d: int) -> void:
 	if not _draft.is_empty():
 		_draft.at = sketch_level
 	_level_spin.set_value_no_signal(sketch_level)
-	ToolRail.light(_drawon_row, "level")
+	WkRail.light(_drawon_row, "level")
 
 
 ## Say something on the rail for a few seconds (a fill refused, the next click wanted).
@@ -1659,7 +1677,7 @@ func _build_options() -> void:
 	rail.options.add_child(_poly_box)
 	_button(_poly_box, "Close", func() -> void:
 		if pen.draw == "polygon" and not _sk.is_empty():
-			_sketch_commit())
+			sketch.commit())
 	_button(_poly_box, "Take back", func() -> void:
 		if not pen.points.is_empty():
 			pen.points.pop_back())
@@ -2003,7 +2021,12 @@ func input(e: InputEvent) -> bool:
 	if e is InputEventMouseButton and _drag.get("phase", "") == "height" \
 			and e.button_index in [MOUSE_BUTTON_LEFT, MOUSE_BUTTON_RIGHT]:
 		return _make_input(e)
-	if ((tool == "draw" and pen_outline()) or (tool == "cut" and cut_pen())) and _drag.is_empty() and _sketch_input(e):
+	var pen_on: bool = (tool == "draw" and pen_outline()) or (tool == "cut" and cut_pen())
+	if pen_on:
+		ws.toolbox.use(&"sketch")
+	elif ws.toolbox.active_id() == &"sketch":
+		ws.toolbox.use(&"")
+	if pen_on and _drag.is_empty() and ws.toolbox.input(e):
 		return true
 	if e is InputEventKey and e.pressed and not e.echo and not e.ctrl_pressed:
 		if _drag.get("phase", "") == "height" and _typed_key(e):
@@ -2080,49 +2103,32 @@ func _ray() -> Array:
 ## Sketch: the plane is where the ghost is when the stroke begins (flat on that layer, or
 ## standing through it across the view, as Shapes); the pen draws on it; let go (or close a
 ## polygon) and it is a kept shape of the held brick -- drawn with RMB, a cut.
-func _sketch_input(e: InputEvent) -> bool:
-	if e is InputEventMouseButton and e.button_index == MOUSE_BUTTON_RIGHT:
-		# Outside a stroke RMB is the workshop's own; in one it cancels.
-		if _sk.is_empty():
-			return false
-		if e.pressed:
-			cancel()
-			say("")
-		return true
-	if e is InputEventMouseButton and e.button_index == MOUSE_BUTTON_LEFT:
-		if e.pressed:
-			if _sk.is_empty():
-				if ws._frame != 0:
-					return true
-				_sk = _stroke_plane()
-				if _sk.is_empty():
-					return true
-			var q = _plane_point(String(_sk.lie), int(_sk.get("plane_at", _sk.at)))
-			if q == null:
-				return true
-			var cutting: bool = cut_mode or tool == "cut"
-			if pen.draw == "polygon":
-				if pen.polygon_click(q, cutting, e.double_click):
-					_sketch_commit()
-			else:
-				pen.press(q, cutting)
-		elif pen.draw != "polygon" and not _sk.is_empty():
-			_sketch_commit()
-		return true
-	if e is InputEventMouseMotion and not _sk.is_empty() and pen.draw != "polygon" \
-			and (Input.is_mouse_button_pressed(MOUSE_BUTTON_LEFT) or Input.is_mouse_button_pressed(MOUSE_BUTTON_RIGHT)):
-		var q = _plane_point(String(_sk.lie), int(_sk.get("plane_at", _sk.at)))
-		if q != null:
-			pen.move(q, brush_size)
-		return true
-	if e is InputEventKey and pen.draw == "polygon" and not _sk.is_empty():
-		match pen.polygon_key(e):
-			"commit":
-				_sketch_commit()
-				return true
-			"back":
-				return true
-	return false
+# The kit's Sketch tool asks these, through the workshop's context (BrickWorkshopContext).
+
+## A stroke starts: on the face pressed or the level (`_stroke_plane`); none in a sideways grid.
+func wk_sketch_begin(_remove: bool) -> Variant:
+	if ws._frame != 0:
+		return null
+	var sk := _stroke_plane()
+	return null if sk.is_empty() else sk
+
+
+func wk_sketch_point(plane: Variant) -> Variant:
+	return _plane_point(String(plane.lie), int(plane.get("plane_at", plane.at)))
+
+
+## A stroke in Cut (or cut mode) takes away, whichever button: RMB gives a stroke up here.
+func wk_sketch_removes() -> bool:
+	return cut_mode or tool == "cut"
+
+
+func wk_sketch_commit(plane: Variant, _pen: WkSketchPen) -> void:
+	_sketch_commit(plane)
+
+
+func wk_sketch_cancel() -> void:
+	cancel()
+	say("")
 
 
 ## The plane a stroke goes on: the face pressed, for a cut or a solid (a wall's side; a cut,
@@ -2148,8 +2154,7 @@ func _stroke_plane() -> Dictionary:
 ## The stroke drawn: on a level, into the plan being drawn (in, or with RMB out of it); a
 ## click inside the plan raises it. Standing -- or RMB with no plan -- it goes on to its
 ## thickness (or depth, cutting) at once, as Shapes.
-func _sketch_commit() -> void:
-	var sk := _sk
+func _sketch_commit(sk: Dictionary) -> void:
 	var entry = pen.entry("top" if sk.lie == "flat" else "side", brush_size, brush_square)
 	var remove := pen.out
 	var tap: Array = pen.points.duplicate()
@@ -2158,7 +2163,7 @@ func _sketch_commit() -> void:
 	if sk.lie == "flat" and not (remove and _draft.is_empty()) and not sk.has("into"):
 		if entry == null or (pen.draw != "brush" and _spread(tap) < 0.6):
 			# A click, not a stroke: inside the plan, raise it.
-			if not tap.is_empty() and not _draft.is_empty() and BrickShapes.plan_region(_draft).has(
+			if not tap.is_empty() and not _draft.is_empty() and WkShapes.plan_region(_draft).has(
 					Vector2i(int(floor(tap[0].x)), int(floor(tap[0].y)))):
 				raise_plan()
 			return
@@ -2168,7 +2173,7 @@ func _sketch_commit() -> void:
 			if rec.is_empty():
 				return
 			_drag = {"phase": "base", "tool": "plan", "button": MOUSE_BUTTON_LEFT, "lie": "flat", "at": int(sk.at),
-					"a": BrickShapes._v2(rec.a), "b": BrickShapes._v2(rec.b), "kind": "plan", "cut": false}
+					"a": WkShapes.v2i(rec.a), "b": WkShapes.v2i(rec.b), "kind": "plan", "cut": false}
 			_to_height(rec)
 			return
 		if _draft.is_empty():
@@ -2178,7 +2183,7 @@ func _sketch_commit() -> void:
 		return
 	if entry == null:
 		return
-	var cells := SketchPen.region_cells(entry)
+	var cells := WkSketchPen.region_cells(entry)
 	if cells.is_empty():
 		return
 	var lo := Vector2i(1 << 30, 1 << 30)
@@ -2214,14 +2219,14 @@ func raise_plan() -> void:
 		say("That plan has nothing left in it.")
 		return
 	_drag = {"phase": "base", "tool": "plan", "button": MOUSE_BUTTON_LEFT, "lie": "flat", "at": int(rec.at),
-			"a": BrickShapes._v2(rec.a), "b": BrickShapes._v2(rec.b), "kind": "plan", "cut": false}
+			"a": WkShapes.v2i(rec.a), "b": WkShapes.v2i(rec.b), "kind": "plan", "cut": false}
 	_to_height(rec)
 
 
 ## What strokes and outlines (`points`, {adds, subs}) on a level come to, as "makes" says:
 ## not laid. Empty if they hold no cells.
 func _plan_record(points: Dictionary, at: int) -> Dictionary:
-	var region := BrickShapes.plan_region(points)
+	var region := WkShapes.plan_region(points)
 	if region.is_empty():
 		return {}
 	var lo := Vector2i(1 << 30, 1 << 30)
@@ -2282,7 +2287,7 @@ func _add_outline() -> void:
 	var a: Vector2i = d.a
 	var b: Vector2i = d.b
 	if a == b:
-		if not _draft.is_empty() and BrickShapes.plan_region(_draft).has(a):
+		if not _draft.is_empty() and WkShapes.plan_region(_draft).has(a):
 			raise_plan()
 		return
 	if _draft.is_empty():
@@ -2306,7 +2311,7 @@ func plan_on_top(with_plan: bool) -> void:
 		_draft.subs = (sh.points.subs as Array).duplicate(true)
 	if _level_spin != null:
 		_level_spin.set_value_no_signal(sketch_level)
-		ToolRail.light(_drawon_row, "level")
+		WkRail.light(_drawon_row, "level")
 	say("On top, at plate %d. Draw%s, then Raise." % [sketch_level, " onto its plan" if with_plan else ""])
 
 
@@ -2318,7 +2323,7 @@ func _plane_at_ghost(want: String) -> Dictionary:
 	if want == "wall":
 		var fwd: Vector3 = -ws._camera.global_transform.basis.z
 		l = "wall_x" if absf(fwd.z) >= absf(fwd.x) else "wall_z"
-	var uvw := BrickShapes.from_3d(l, c)
+	var uvw := WkShapes.from_3d(l, c)
 	var at := uvw.z
 	var a := Vector2i(uvw.x, uvw.y)
 	if l == "flat":
@@ -2395,7 +2400,7 @@ func _make_input(e: InputEventMouseButton) -> bool:
 ## Draw on a face of the build: a cut's shape, or a shape to come out of a wall.
 func _begin_on_face(face: Dictionary, cutting: bool, button: int) -> void:
 	var l := String(face.lie)
-	var uvw := BrickShapes.from_3d(l, face.cell)
+	var uvw := WkShapes.from_3d(l, face.cell)
 	var a := Vector2i(uvw.x, uvw.y)
 	var into := int(face.into)
 	var at: int = int(face.front) if cutting else int(face.front) - into
@@ -2418,7 +2423,7 @@ func _wall_snap(c: Vector2i, at: int) -> Vector2i:
 			continue
 		for line in _wall_lines(sh):
 			for q in line:
-				var v := BrickShapes._v2(q)
+				var v := WkShapes.v2i(q)
 				var d := maxi(absi(v.x - c.x), absi(v.y - c.y))
 				if d < near:
 					near = d
@@ -2430,8 +2435,8 @@ func _wall_snap(c: Vector2i, at: int) -> Vector2i:
 			continue
 		for line in _wall_lines(sh):
 			for i in (line as Array).size() - 1:
-				var p := BrickShapes._v2(line[i])
-				var r := BrickShapes._v2(line[i + 1])
+				var p := WkShapes.v2i(line[i])
+				var r := WkShapes.v2i(line[i + 1])
 				if p.x == r.x and absi(c.x - p.x) <= 1 and c.y >= mini(p.y, r.y) and c.y <= maxi(p.y, r.y):
 					return Vector2i(p.x, c.y)
 				if p.y == r.y and absi(c.y - p.y) <= 1 and c.x >= mini(p.x, r.x) and c.x <= maxi(p.x, r.x):
@@ -2450,14 +2455,14 @@ static func _wall_lines(sh: Dictionary) -> Array:
 ## The kept walls a new wall `rec` touches at its layer, the same brick and bond: if it is
 ## as tall, it joins them.
 func _walls_meeting(rec: Dictionary) -> Array:
-	var mine := BrickShapes.cells_2d("polyline", Vector2i.ZERO, Vector2i.ZERO, int(rec.rim), 1.0, rec.points)
+	var mine := WkShapes.cells_2d("polyline", Vector2i.ZERO, Vector2i.ZERO, int(rec.rim), 1.0, rec.points)
 	var out := []
 	for sh in shapes():
 		if String(sh.kind) != "polyline" or int(sh.at) != int(rec.at) or int(sh.rim) != int(rec.rim) \
 				or String(sh.part) != String(rec.part) or String(sh.bond) != String(rec.bond) \
 				or int(sh.colour) != int(rec.colour) or int(sh.mat) != int(rec.mat):
 			continue
-		var theirs := BrickShapes.cells_2d("polyline", Vector2i.ZERO, Vector2i.ZERO, int(sh.rim), 1.0, sh.points)
+		var theirs := WkShapes.cells_2d("polyline", Vector2i.ZERO, Vector2i.ZERO, int(sh.rim), 1.0, sh.points)
 		for c in mine:
 			if theirs.has(c) or theirs.has(c + Vector2i(1, 0)) or theirs.has(c - Vector2i(1, 0)) \
 					or theirs.has(c + Vector2i(0, 1)) or theirs.has(c - Vector2i(0, 1)):
@@ -2514,7 +2519,7 @@ func _to_height(rec: Dictionary = {}) -> void:
 		return
 	rec.depth = int(rec.get("step", height_step(String(rec.lie)))) + int(rec.get("extra", 0))
 	var l := String(rec.lie)
-	var c2 := BrickShapes.cells_2d(String(rec.kind), BrickShapes._v2(rec.a), BrickShapes._v2(rec.b),
+	var c2 := WkShapes.cells_2d(String(rec.kind), WkShapes.v2i(rec.a), WkShapes.v2i(rec.b),
 			int(rec.get("rim", 1)), BrickShapes.aspect(l), rec.get("points", []))
 	var lo := Vector2(INF, INF)
 	var hi := -lo
@@ -2522,7 +2527,7 @@ func _to_height(rec: Dictionary = {}) -> void:
 		lo = lo.min(Vector2(c))
 		hi = hi.max(Vector2(c) + Vector2.ONE)
 	if c2.is_empty():
-		lo = Vector2(BrickShapes._v2(rec.a))
+		lo = Vector2(WkShapes.v2i(rec.a))
 		hi = lo + Vector2.ONE
 	_drag.phase = "height"
 	_drag.rec = rec
@@ -2677,8 +2682,8 @@ func _commit_wall(rec: Dictionary) -> int:
 	var hi := -lo
 	for line in _wall_lines(joined):
 		for q in line:
-			lo = lo.min(BrickShapes._v2(q))
-			hi = hi.max(BrickShapes._v2(q))
+			lo = lo.min(WkShapes.v2i(q))
+			hi = hi.max(WkShapes.v2i(q))
 	joined.a = [lo.x, lo.y]
 	joined.b = [hi.x, hi.y]
 	joined.bricks = []
@@ -2871,8 +2876,8 @@ func stairs_between(lo: Vector3i, up: Vector3i) -> int:
 		return -1
 	var d := up - lo
 	var l := "wall_x" if absi(d.x) >= absi(d.z) else "wall_z"
-	var a3 := BrickShapes.from_3d(l, lo)
-	var b3 := BrickShapes.from_3d(l, up)
+	var a3 := WkShapes.from_3d(l, lo)
+	var b3 := WkShapes.from_3d(l, up)
 	var sh := _new_shape("stairs", l, Vector2i(a3.x, lo.y), Vector2i(b3.x, up.y - 1), a3.z - ((stair_wide - 1) >> 1))
 	sh.depth = stair_wide
 	say("")
@@ -2966,7 +2971,7 @@ func face_under(from: Vector3, dir: Vector3) -> Dictionary:
 func preset_cut(k: String, face: Dictionary) -> Dictionary:
 	var size := DOOR if k == "door" else WINDOW
 	var l := String(face.lie)
-	var uvw := BrickShapes.from_3d(l, face.cell)
+	var uvw := WkShapes.from_3d(l, face.cell)
 	var u0 := uvw.x - (size.x >> 1)
 	var v0 := uvw.y
 	if k == "door":
@@ -2979,7 +2984,7 @@ func preset_cut(k: String, face: Dictionary) -> Dictionary:
 			v = int(b.at) + floori(float(uvw.y - int(b.at)) / pitch) * pitch + ft
 		else:
 			# Down while there is wall (the build's own bricks: not the baseplate).
-			while v > 0 and _rid_at(BrickShapes.to_3d(l, Vector2i(uvw.x, v - 1), uvw.z)) >= 0:
+			while v > 0 and _rid_at(WkShapes.to_3d(l, Vector2i(uvw.x, v - 1), uvw.z)) >= 0:
 				v -= 1
 		v0 = v
 	return {"kind": "rect", "lie": l, "a": [u0, v0], "b": [u0 + size.x - 1, v0 + size.y - 1],
@@ -3008,8 +3013,8 @@ func _select_input(e: InputEventMouseButton) -> bool:
 func begin_push_pull(sh: Dictionary, face: Dictionary) -> void:
 	var c: Vector3i = face.cell
 	var cell := Vector2(c.x + 0.5, c.z + 0.5)
-	var base := {"phase": "height", "button": MOUSE_BUTTON_LEFT, "lie": sh.lie, "at": sh.at, "a": BrickShapes._v2(sh.a),
-			"b": BrickShapes._v2(sh.b), "kind": sh.kind, "cut": false, "at0": int(sh.at)}
+	var base := {"phase": "height", "button": MOUSE_BUTTON_LEFT, "lie": sh.lie, "at": sh.at, "a": WkShapes.v2i(sh.a),
+			"b": WkShapes.v2i(sh.b), "kind": sh.kind, "cut": false, "at0": int(sh.at)}
 	if String(face.lie) == "flat":
 		if String(sh.lie) != "flat" or int(face.into) > 0 or c.y != int(sh.at) + int(sh.depth) - 1:
 			return
@@ -3085,7 +3090,7 @@ func move_shape(id: int, d: Vector3i) -> void:
 			if not o.has("opening"):
 				continue
 			var box := opening_box(o.opening)
-			if BrickShapes._v2(cut.a) == box[0] and BrickShapes._v2(cut.b) == box[1] and int(cut.at) == int(o.opening.at):
+			if WkShapes.v2i(cut.a) == box[0] and WkShapes.v2i(cut.b) == box[1] and int(cut.at) == int(o.opening.at):
 				moving.append(o)
 	var u := _begin()
 	for o in moving:
@@ -3135,18 +3140,14 @@ func _sync_select() -> void:
 
 func process() -> void:
 	view.sync()
-	var menu_h: float = ws._menu.bar_height() if ws._menu != null else 0.0
+	frame.bar = ws._menu.bar() if ws._menu != null else null
 	var vw: float = ws.get_viewport().get_visible_rect().size.x
-	_bar.position = Vector2(8, menu_h + 4.0)
-	_bar.custom_minimum_size.x = vw - 16.0
-	_bar.size = Vector2(vw - 16.0, 0.0)
-	var top: float = 8.0 + menu_h + bar_height()
-	rail.position = Vector2(12, top)
-	rail.size = Vector2.ZERO
+	frame.layout(ws.get_viewport().get_visible_rect().size)
+	var top: float = frame.rail_top()
 	var on := active()
 	rail.show_active(rail_id(on), TOOLS)
 	_hand_box.visible = rail_id(on) == "hand"
-	ToolRail.light(_hand_row, on)
+	WkRail.light(_hand_row, on)
 	rail.show_toggles({"lock": ws.plane_locked, "snap": ws._snap_on, "mirror": ws.mirror_on,
 			"grid": ws._grid_on, "stress": ws._overlay_on, "keys": ws._keys_on, "fps": view.mode == "fps"})
 	rail.set_action_text("layer", ["Structure", "Interior", "Detail"][clampi(ws._role, 0, 2)])
@@ -3266,8 +3267,8 @@ func tag_text() -> String:
 		var far := absi(by.x) + absi(by.z)
 		return "%d stud%s" % [far, "" if far == 1 else "s"]
 	if _drag.get("phase", "") == "base":
-		var a := BrickShapes._v2(rec.a)
-		var b := BrickShapes._v2(rec.b)
+		var a := WkShapes.v2i(rec.a)
+		var b := WkShapes.v2i(rec.b)
 		var w := absi(b.x - a.x) + 1
 		var h := absi(b.y - a.y) + 1
 		if String(rec.kind) == "polyline" and not bool(rec.points.get("closed", false)):
@@ -3506,7 +3507,7 @@ func _draw_level(begun: bool) -> bool:
 ## A shape's outline in its plane, drawn on its front and back face. True once begun.
 func _outline(sh: Dictionary, col: Color, begun: bool) -> bool:
 	var l := String(sh.lie)
-	var c2 := BrickShapes.cells_2d(String(sh.kind), BrickShapes._v2(sh.a), BrickShapes._v2(sh.b),
+	var c2 := WkShapes.cells_2d(String(sh.kind), WkShapes.v2i(sh.a), WkShapes.v2i(sh.b),
 			int(sh.get("rim", 1)), BrickShapes.aspect(l), sh.get("points", []))
 	if c2.size() > 20000:
 		return begun

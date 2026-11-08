@@ -1,7 +1,9 @@
 class_name WorkshopMenu
 extends Control
 
-## The workshop's menu bar and its dialogs. Docs/Workshop.md, Stage A.
+## The workshop's menus and its dialogs. Docs/Workshop.md, Stage A. The bar itself is the
+## editor kit's (WkMenuBar, addons/workshop_kit): this file gives it the menus and does what
+## their items say.
 ##
 ## This file draws and asks; it does not build. Every choice comes out as one
 ## `action` signal with a name and an argument, and the workshop does the work,
@@ -27,14 +29,12 @@ const KIND_LABELS := {
 const ROLE_LABELS := ["Structure", "Interior", "Detail"]
 const FINISH_MOULDED := 10
 
-var _bar: PanelContainer
-var _title: Label
+var _bar: WkMenuBar
 var _file: MenuButton
 var _insert: MenuButton
 var _edit: MenuButton
 ## The asset workshop's kinds (gun, mech) when this is its bar: Open lists only them.
 var _asset_kinds: Array = []
-var _spacer: Control
 var _finish: MenuButton
 var _type: MenuButton
 var _layer: MenuButton
@@ -97,9 +97,14 @@ func bar_height() -> float:
 	return _bar.size.y if _bar != null else 0.0
 
 
+## The bar (the kit's WkMenuBar), for the workshop's frame.
+func bar() -> WkMenuBar:
+	return _bar
+
+
 func set_title(t: String) -> void:
-	if _title != null:
-		_title.text = t
+	if _bar != null:
+		_bar.set_title(t)
 
 
 func set_kind(k: String) -> void:
@@ -135,19 +140,9 @@ func set_tower_options(has_tower: bool, rooms: bool, stairs: bool, windows: bool
 # ---------------------------------------------------------------------------
 
 func _build_bar() -> void:
-	_bar = PanelContainer.new()
-	_bar.set_anchors_and_offsets_preset(Control.PRESET_TOP_WIDE)
-	var sb := StyleBoxFlat.new()
-	sb.bg_color = Color(0.07, 0.08, 0.11, 0.86)
-	sb.content_margin_left = 8
-	sb.content_margin_right = 8
-	sb.content_margin_top = 2
-	sb.content_margin_bottom = 2
-	_bar.add_theme_stylebox_override("panel", sb)
+	_bar = WkMenuBar.new()
 	add_child(_bar)
-	var row := HBoxContainer.new()
-	row.add_theme_constant_override("separation", 4)
-	_bar.add_child(row)
+	var row := _bar   # the menus go on the kit's bar (`_menu`)
 
 	_file = _menu(row, "File", [
 		["New (clear)", F_NEW, KEY_MASK_CTRL | KEY_N],
@@ -226,46 +221,15 @@ func _build_bar() -> void:
 	], _on_finish, true)
 	_tick_finish()
 
-	var spacer := Control.new()
-	spacer.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	row.add_child(spacer)
-	_spacer = spacer
-	_title = Label.new()
-	_title.add_theme_color_override("font_color", Color(0.84, 0.87, 0.93))
-	row.add_child(_title)
-
 	set_kind(_kind)
 	set_role(_role)
 
 
-## One menu. `items` rows are [label, id, shortcut keycode or 0], or [] for a
+## One menu, on the kit's bar. `items` rows are [label, id, shortcut keycode or 0], or [] for a
 ## separator.
-func _menu(parent: Control, label: String, items: Array, handler: Callable,
+func _menu(_parent: Control, label: String, items: Array, handler: Callable,
 		checks: bool = false) -> MenuButton:
-	var mb := MenuButton.new()
-	mb.text = label
-	mb.flat = true
-	mb.switch_on_hover = true
-	parent.add_child(mb)
-	var p := mb.get_popup()
-	for it in items:
-		if (it as Array).is_empty():
-			p.add_separator()
-			continue
-		if checks:
-			p.add_radio_check_item(it[0], it[1])
-		else:
-			p.add_item(it[0], it[1])
-		if int(it[2]) != 0:
-			var sc := Shortcut.new()
-			var ev := InputEventKey.new()
-			ev.keycode = int(it[2]) & KEY_CODE_MASK
-			ev.ctrl_pressed = (int(it[2]) & KEY_MASK_CTRL) != 0
-			ev.shift_pressed = (int(it[2]) & KEY_MASK_SHIFT) != 0
-			sc.events = [ev]
-			p.set_item_shortcut(p.get_item_count() - 1, sc, true)
-	p.id_pressed.connect(handler)
-	return mb
+	return _bar.add_menu(label, items, handler, checks)
 
 
 func _on_file(id: int) -> void:
@@ -664,27 +628,4 @@ func show_program(program: Dictionary) -> void:
 ## existing menu does not use. Nothing is bound to a key here -- a key the caller handles
 ## itself is written into the label, so a menu and a key never both fire.
 func add_menu(label: String, items: Array, handler: Callable) -> MenuButton:
-	var row := _spacer.get_parent()
-	var mb: MenuButton = null
-	for c in row.get_children():
-		if c is MenuButton and (c as MenuButton).text == label:
-			mb = c
-	var p: PopupMenu
-	if mb == null:
-		mb = MenuButton.new()
-		mb.text = label
-		mb.flat = true
-		mb.switch_on_hover = true
-		row.add_child(mb)
-		row.move_child(mb, _spacer.get_index())
-		p = mb.get_popup()
-	else:
-		p = mb.get_popup()
-		p.add_separator()
-	for it in items:
-		if (it as Array).is_empty():
-			p.add_separator()
-		else:
-			p.add_item(String(it[0]), int(it[1]))
-	p.id_pressed.connect(handler)
-	return mb
+	return _bar.add_menu(label, items, handler)

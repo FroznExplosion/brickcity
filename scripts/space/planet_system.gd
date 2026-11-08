@@ -53,6 +53,8 @@ const DRIFT_CAP := 64
 ## The most places a ship's step is looked at for rocks, a frame.
 const ROCK_STEPS := 12
 const DRIFT_PUSH := 3.0
+## A piece leaving a venting room: the rush at its middle carried for this long, s.
+const VENT_PUSH_S := 0.6
 const DRIFT_SPIN := 0.4
 ## A piece with someone aboard leaves at this share of the push, turning a tenth of that.
 const DRIFT_RIDDEN := 0.25
@@ -479,6 +481,8 @@ func _crew_tick() -> void:
 			continue
 		if any or p.ghost != null:
 			GhostHulls.tick(p, ships, space)
+	# Loose things on their decks the same way (Docs/Hulls.md 7b.4).
+	ShipCargo.tick(get_tree(), ships, space)
 
 
 ## A piece that left `from`: a record in its frame -- a station's, which it
@@ -503,6 +507,11 @@ func _on_drifted(arrays: Array, com: Transform3D, local_com: Vector3, count: int
 	var away := here.origin
 	away = away.normalized() if away.length_squared() > 0.01 else Vector3.UP
 	e.v = carried + (away + Vector3(randf_range(-0.5, 0.5), randf_range(-0.5, 0.5), randf_range(-0.5, 0.5))) * randf_range(1.0, DRIFT_PUSH)
+	if from != null and from.air != null:
+		# Out of a venting room the rush carries it too (Docs/Hulls.md 4.2): its
+		# pull at the piece's middle, for VENT_PUSH_S seconds' worth.
+		var rush: Vector3 = from.air_at(com.origin, true).get("pull", Vector3.ZERO)
+		e.v += to_base.basis * rush * VENT_PUSH_S
 	e.axis = Vector3(randf_range(-1, 1), randf_range(-1, 1), randf_range(-1, 1)).normalized()
 	e.rate = randf_range(0.05, DRIFT_SPIN)
 	if from != null and from.drift_body.is_valid():

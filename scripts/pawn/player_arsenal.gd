@@ -1009,7 +1009,7 @@ class ArsenalHud extends CanvasLayer:
 	func _colour(g: GunInstance) -> Color:
 		if g == null:
 			return Color(1, 1, 1, 0.3)
-		return PlayerHud.RARITY_COLOURS[clampi(g.rarity - 1, 0, PlayerHud.RARITY_COLOURS.size() - 1)]
+		return Rarity.colour(g.rarity)
 
 	func _label(g: GunInstance) -> String:
 		if g == null:
@@ -1018,7 +1018,7 @@ class ArsenalHud extends CanvasLayer:
 
 	func _draw_all() -> void:
 		var c := _draw_node
-		var font := ThemeDB.fallback_font
+		var font := GameUI.font()
 		var sz := c.size
 		var lo := arsenal.loadout
 		# The four slots, two rows by group, over the ammo; the active group bright.
@@ -1032,20 +1032,20 @@ class ArsenalHud extends CanvasLayer:
 				var g := lo.slots[slot] as GunInstance
 				var held: bool = lo.in_hand() == g and g != null
 				var txt := "%d %s" % [slot + 1, _label(g)]
-				var w := font.get_string_size(txt, HORIZONTAL_ALIGNMENT_LEFT, -1, 14).x
+				var w := font.get_string_size(txt, HORIZONTAL_ALIGNMENT_LEFT, -1, GameUI.px(14)).x
 				x -= w
 				var col := _colour(g)
 				col.a = 1.0 if grp == lo.group else 0.45
 				if held:
 					c.draw_rect(Rect2(x - 4.0, row_y - 15.0, w + 8.0, 20.0), Color(1, 1, 1, 0.18))
-				c.draw_string(font, Vector2(x, row_y), txt, HORIZONTAL_ALIGNMENT_LEFT, -1, 14, col)
+				c.draw_string(font, Vector2(x, row_y), txt, HORIZONTAL_ALIGNMENT_LEFT, -1, GameUI.px(14), col)
 				x -= 18.0
 		_ability(font, sz)
 		var ord := lo.ordnance as GunInstance
 		var ord_txt := "5 %s%s   G %s" % [_label(ord), "  (up)" if lo.ordnance_up else "",
 				"●".repeat(arsenal.grenades) + "○".repeat(maxi(arsenal.grenades_max - arsenal.grenades, 0))]
-		var ow := font.get_string_size(ord_txt, HORIZONTAL_ALIGNMENT_LEFT, -1, 14).x
-		c.draw_string(font, Vector2(right - ow, y - 44.0), ord_txt, HORIZONTAL_ALIGNMENT_LEFT, -1, 14,
+		var ow := font.get_string_size(ord_txt, HORIZONTAL_ALIGNMENT_LEFT, -1, GameUI.px(14)).x
+		c.draw_string(font, Vector2(right - ow, y - 44.0), ord_txt, HORIZONTAL_ALIGNMENT_LEFT, -1, GameUI.px(14),
 				Color(1, 1, 1, 0.8))
 		# Under the crosshair: what can be done with the floor.
 		var mid := sz * 0.5
@@ -1055,21 +1055,21 @@ class ArsenalHud extends CanvasLayer:
 			# The card beside it names the gun.
 			var r := arsenal.target_pickup.result
 			prompt = "Hold R  take it  ·  Hold C  try it"
-			pcol = PlayerHud.RARITY_COLOURS[clampi(r.rarity - 1, 0, 5)]
+			pcol = Rarity.colour(r.rarity)
 		elif arsenal.target_bench != null:
 			prompt = "Hold R  workbench: infuse guns to tier %d, break guns down for scrap" \
 					% maxi(arsenal.tier, arsenal.player.progress.story_tier if arsenal.player != null else 1)
 		elif lo.third_hand != null:
 			prompt = "Trying %s:  1-4 keep in that slot  ·  hold R stow  ·  C drop" % (lo.third_hand as GunInstance).gun_name
 		if prompt != "":
-			var pw := font.get_string_size(prompt, HORIZONTAL_ALIGNMENT_LEFT, -1, 16).x
+			var pw := font.get_string_size(prompt, HORIZONTAL_ALIGNMENT_LEFT, -1, GameUI.px(16)).x
 			c.draw_string(font, Vector2(mid.x - pw * 0.5, mid.y + 70.0), prompt,
-					HORIZONTAL_ALIGNMENT_LEFT, -1, 16, pcol)
+					HORIZONTAL_ALIGNMENT_LEFT, -1, GameUI.px(16), pcol)
 		_alt(font, sz, right, y - 66.0)
 		if arsenal.note != "":
-			var nw := font.get_string_size(arsenal.note, HORIZONTAL_ALIGNMENT_LEFT, -1, 16).x
+			var nw := font.get_string_size(arsenal.note, HORIZONTAL_ALIGNMENT_LEFT, -1, GameUI.px(16)).x
 			c.draw_string(font, Vector2(mid.x - nw * 0.5, mid.y + 94.0), arsenal.note,
-					HORIZONTAL_ALIGNMENT_LEFT, -1, 16, Color(1.0, 0.85, 0.4))
+					HORIZONTAL_ALIGNMENT_LEFT, -1, GameUI.px(16), Color(1.0, 0.85, 0.4))
 		_level(font, sz)
 		if arsenal.inventory_open and arsenal.inventory_page == 0:
 			_backpack(font, sz)
@@ -1094,7 +1094,7 @@ class ArsenalHud extends CanvasLayer:
 		var txt := "Q OVERSHIELD"
 		if arsenal.overshield_left > 0.0:
 			txt += "  %.0f s" % ceilf(arsenal.overshield_left)
-		c.draw_string(font, Vector2(x + 112.0, y + 8.0), txt, HORIZONTAL_ALIGNMENT_LEFT, -1, 13, col)
+		c.draw_string(font, Vector2(x + 112.0, y + 8.0), txt, HORIZONTAL_ALIGNMENT_LEFT, -1, GameUI.px(13), col)
 
 	## The workbench's page: every gun, its tier, what lifting it costs.
 	func _bench(font: Font, sz: Vector2) -> void:
@@ -1106,11 +1106,11 @@ class ArsenalHud extends CanvasLayer:
 		var r := Rect2(sz.x * 0.5 - w * 0.5, sz.y * 0.5 - h * 0.5, w, h)
 		c.draw_rect(r, Color(0.06, 0.05, 0.04, 0.9))
 		c.draw_string(font, r.position + Vector2(16, 26), "WORKBENCH   story tier %d" % pl.story_tier,
-				HORIZONTAL_ALIGNMENT_LEFT, -1, 16, Color(1.0, 0.85, 0.55))
+				HORIZONTAL_ALIGNMENT_LEFT, -1, GameUI.px(16), Color(1.0, 0.85, 0.55))
 		var sc := "Scrap %d" % pl.scrap
-		var sw := font.get_string_size(sc, HORIZONTAL_ALIGNMENT_LEFT, -1, 16).x
+		var sw := font.get_string_size(sc, HORIZONTAL_ALIGNMENT_LEFT, -1, GameUI.px(16)).x
 		c.draw_string(font, Vector2(r.end.x - 16 - sw, r.position.y + 26), sc, HORIZONTAL_ALIGNMENT_LEFT,
-				-1, 16, Color(1.0, 0.85, 0.4))
+				-1, GameUI.px(16), Color(1.0, 0.85, 0.4))
 		for i in guns.size():
 			var g := guns[i] as GunInstance
 			var yy := r.position.y + 54.0 + 22.0 * i
@@ -1118,7 +1118,7 @@ class ArsenalHud extends CanvasLayer:
 				c.draw_rect(Rect2(r.position.x + 8, yy - 15, w - 16, 20), Color(1, 1, 1, 0.15))
 			var where := "pack" if arsenal.loadout.backpack.has(g) else "kit"
 			c.draw_string(font, Vector2(r.position.x + 16, yy), "%s  %s" % [where, _label(g)],
-					HORIZONTAL_ALIGNMENT_LEFT, -1, 14, _colour(g))
+					HORIZONTAL_ALIGNMENT_LEFT, -1, GameUI.px(14), _colour(g))
 			var right := ""
 			var rc := Color(1, 1, 1, 0.5)
 			if g.tier >= pl.story_tier:
@@ -1127,14 +1127,14 @@ class ArsenalHud extends CanvasLayer:
 				var cost := Infusion.cost(g.rarity, g.tier, pl.story_tier)
 				right = "T%d -> T%d   %d scrap" % [g.tier, pl.story_tier, cost]
 				rc = Color(0.5, 1.0, 0.6) if cost <= pl.scrap else Color(1.0, 0.45, 0.4)
-			var rw := font.get_string_size(right, HORIZONTAL_ALIGNMENT_LEFT, -1, 14).x
-			c.draw_string(font, Vector2(r.end.x - 16 - rw, yy), right, HORIZONTAL_ALIGNMENT_LEFT, -1, 14, rc)
+			var rw := font.get_string_size(right, HORIZONTAL_ALIGNMENT_LEFT, -1, GameUI.px(14)).x
+			c.draw_string(font, Vector2(r.end.x - 16 - rw, yy), right, HORIZONTAL_ALIGNMENT_LEFT, -1, GameUI.px(14), rc)
 		c.draw_string(font, Vector2(r.position.x + 16, r.end.y - 30),
 				"Infusing keeps the gun -- parts, modifiers, alt-fire, element, name -- and lifts its damage.",
-				HORIZONTAL_ALIGNMENT_LEFT, -1, 12, Color(1, 1, 1, 0.55))
+				HORIZONTAL_ALIGNMENT_LEFT, -1, GameUI.px(12), Color(1, 1, 1, 0.55))
 		c.draw_string(font, Vector2(r.position.x + 16, r.end.y - 10),
 				"Arrows/wheel choose  ·  Enter infuse  ·  Backspace twice: break a pack gun down  ·  I close",
-				HORIZONTAL_ALIGNMENT_LEFT, -1, 13, Color(1, 1, 1, 0.6))
+				HORIZONTAL_ALIGNMENT_LEFT, -1, GameUI.px(13), Color(1, 1, 1, 0.6))
 
 	## The level and its XP, a thin bar at the bottom middle; the points waiting.
 	func _level(font: Font, sz: Vector2) -> void:
@@ -1149,13 +1149,13 @@ class ArsenalHud extends CanvasLayer:
 		if need > 0:
 			c.draw_rect(Rect2(at, Vector2(bw * float(pl.xp) / need, 4.0)), Color(0.4, 0.85, 1.0, 0.9))
 		var txt := "Lv %d" % pl.level
-		var tw := font.get_string_size(txt, HORIZONTAL_ALIGNMENT_LEFT, -1, 13).x
-		c.draw_string(font, Vector2(at.x - tw - 8.0, at.y + 6.0), txt, HORIZONTAL_ALIGNMENT_LEFT, -1, 13,
+		var tw := font.get_string_size(txt, HORIZONTAL_ALIGNMENT_LEFT, -1, GameUI.px(13)).x
+		c.draw_string(font, Vector2(at.x - tw - 8.0, at.y + 6.0), txt, HORIZONTAL_ALIGNMENT_LEFT, -1, GameUI.px(13),
 				Color(1, 1, 1, 0.8))
 		var free := pl.points_free()
 		if free > 0:
 			c.draw_string(font, Vector2(at.x + bw + 8.0, at.y + 6.0), "+%d skill point%s  (I)" % [free,
-					"" if free == 1 else "s"], HORIZONTAL_ALIGNMENT_LEFT, -1, 13, Color(1.0, 0.85, 0.4))
+					"" if free == 1 else "s"], HORIZONTAL_ALIGNMENT_LEFT, -1, GameUI.px(13), Color(1.0, 0.85, 0.4))
 
 	## The alt-fire (COMBAT_DESIGN 7.2): its mode over the slots, its charge under the
 	## crosshair, and the dart's mark where it is in the world.
@@ -1178,8 +1178,8 @@ class ArsenalHud extends CanvasLayer:
 		elif id == GunAltFire.CHARGE:
 			# A heavy's magazine counts shots (two rounds each, COMBAT_DESIGN 7.8).
 			txt += "  (%d %s)" % [gc.charge_cost(), "shots" if gc.rounds_per_shot() > 1 else "rounds"]
-		var w := font.get_string_size(txt, HORIZONTAL_ALIGNMENT_LEFT, -1, 14).x
-		c.draw_string(font, Vector2(right - w, y), txt, HORIZONTAL_ALIGNMENT_LEFT, -1, 14, col)
+		var w := font.get_string_size(txt, HORIZONTAL_ALIGNMENT_LEFT, -1, GameUI.px(14)).x
+		c.draw_string(font, Vector2(right - w, y), txt, HORIZONTAL_ALIGNMENT_LEFT, -1, GameUI.px(14), col)
 		var mid := sz * 0.5
 		var k := gc.alt_charge_progress()
 		if gc.alt_on() and k > 0.0:
@@ -1209,10 +1209,10 @@ class ArsenalHud extends CanvasLayer:
 		var title := "BACKPACK  %d / %d" % [lo.backpack.size(), lo.backpack_size]
 		if arsenal.player != null:
 			title += "      Scrap %d" % arsenal.player.progress.scrap
-		c.draw_string(font, r.position + Vector2(16, 26), title, HORIZONTAL_ALIGNMENT_LEFT, -1, 16,
+		c.draw_string(font, r.position + Vector2(16, 26), title, HORIZONTAL_ALIGNMENT_LEFT, -1, GameUI.px(16),
 				Color(1, 1, 1))
 		if lo.backpack.is_empty():
-			c.draw_string(font, r.position + Vector2(16, 52), "empty", HORIZONTAL_ALIGNMENT_LEFT, -1, 14,
+			c.draw_string(font, r.position + Vector2(16, 52), "empty", HORIZONTAL_ALIGNMENT_LEFT, -1, GameUI.px(14),
 					Color(1, 1, 1, 0.5))
 		for i in lo.backpack.size():
 			var g := lo.backpack[i] as GunInstance
@@ -1221,8 +1221,8 @@ class ArsenalHud extends CanvasLayer:
 				c.draw_rect(Rect2(r.position.x + 8, yy - 15, w - 16, 20), Color(1, 1, 1, 0.15))
 			var txt := "%s   %s %s" % [_label(g), Rarity.NAMES[clampi(g.rarity - 1, 0, 5)],
 					String(g.weapon_class.id) if g.weapon_class != null else ""]
-			c.draw_string(font, Vector2(r.position.x + 16, yy), txt, HORIZONTAL_ALIGNMENT_LEFT, -1, 14,
+			c.draw_string(font, Vector2(r.position.x + 16, yy), txt, HORIZONTAL_ALIGNMENT_LEFT, -1, GameUI.px(14),
 					_colour(g))
 		c.draw_string(font, Vector2(r.position.x + 16, r.end.y - 10),
 				"Arrows/wheel choose  ·  1-4 swap into slot  ·  Backspace drop  ·  Tab skills  ·  I close",
-				HORIZONTAL_ALIGNMENT_LEFT, -1, 13, Color(1, 1, 1, 0.6))
+				HORIZONTAL_ALIGNMENT_LEFT, -1, GameUI.px(13), Color(1, 1, 1, 0.6))

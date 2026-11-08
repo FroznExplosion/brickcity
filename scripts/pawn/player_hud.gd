@@ -10,12 +10,10 @@ extends CanvasLayer
 ##
 ## Reads; never writes. Everything it shows is polled from the pawn, its moves,
 ## the gun and the view each frame.
+##
+## Drawn with the in-game UI kit (GameUI, ui/): its text follows the player's text
+## scale and high contrast, its plates and colours are the HUD's shared ones.
 
-## Rarity tiers 1..6 in the usual loot colours.
-const RARITY_COLOURS: Array[Color] = [
-	Color(0.92, 0.92, 0.92), Color(0.35, 0.9, 0.35), Color(0.3, 0.6, 1.0),
-	Color(0.72, 0.4, 1.0), Color(1.0, 0.6, 0.15), Color(0.95, 0.12, 0.12),
-]
 ## The key help at the bottom fades after this long.
 const HINT_SECONDS := 10.0
 const HINT := "WASD move · SHIFT sprint · SPACE jump / climb · C slide · Q grapple · RMB aim · LMB fire · E melee · V leave"
@@ -91,10 +89,10 @@ class Overlay extends Control:
 		var a := (1.0 - down * 0.85) * (1.0 - ads * 0.6)
 		var gap := clampf(hud.spread_px(), 3.0, size.y * 0.3) + 3.0
 		var tick := 7.0
-		var col := Color(1, 1, 1, 0.9 * a)
-		var back := Color(0, 0, 0, 0.55 * a)
+		var col := Color(GameUI.hud_text, 0.9 * a)
+		var back := Color(GameUI.hud_back, 0.55 * a)
 		if hud.gun.ammo <= 0 and not hud.gun.is_reloading():
-			col = Color(1.0, 0.35, 0.3, 0.95 * a)
+			col = Color(GameUI.hud_warn, 0.95 * a)
 		for d in [Vector2.RIGHT, Vector2.LEFT, Vector2.DOWN, Vector2.UP]:
 			var n: Vector2 = d
 			draw_line(c + n * (gap - 1.0), c + n * (gap + tick + 1.0), back, 4.0)
@@ -129,21 +127,15 @@ class Overlay extends Control:
 		var base := size.y - 40.0
 		var mag := g.mag_size()
 		var low := g.ammo <= maxi(1, int(mag * 0.25))
-		var ammo_col := Color(1.0, 0.35, 0.3) if low else Color(1, 1, 1)
+		var ammo_col := Color(GameUI.hud_warn, 1.0) if low else Color(1, 1, 1)
 		var big := str(g.ammo)
 		var small := " / %d" % mag
-		var small_w := font.get_string_size(small, HORIZONTAL_ALIGNMENT_LEFT, -1, 22).x
-		var big_w := font.get_string_size(big, HORIZONTAL_ALIGNMENT_LEFT, -1, 44).x
-		_text(font, small, Vector2(right - small_w, base), 22, Color(1, 1, 1, 0.7))
-		_text(font, big, Vector2(right - small_w - big_w, base), 44, ammo_col)
-		var rc := RARITY_COLOURS[clampi(g.gun.rarity - 1, 0, RARITY_COLOURS.size() - 1)]
-		var nm := g.gun.gun_name
-		var nw := font.get_string_size(nm, HORIZONTAL_ALIGNMENT_LEFT, -1, 16).x
-		_text(font, nm, Vector2(right - nw, base - 48.0), 16, rc)
+		var small_w := GameUI.text_width(small, 22)
+		_text(font, small, Vector2(right - small_w, base), 22, GameUI.hud_dim)
+		_text(font, big, Vector2(right - small_w - GameUI.text_width(big, 44), base), 44, ammo_col)
+		_text(font, g.gun.gun_name, Vector2(right, base - 48.0), 16, Rarity.colour(g.gun.rarity), false, true)
 		if g.ammo <= 0 and not g.is_reloading():
-			var t := "R  RELOAD"
-			var tw := font.get_string_size(t, HORIZONTAL_ALIGNMENT_LEFT, -1, 16).x
-			_text(font, t, Vector2(right - tw, base + 22.0), 16, Color(1.0, 0.45, 0.35))
+			_text(font, "R  RELOAD", Vector2(right, base + 22.0), 16, Color(1.0, 0.45, 0.35), false, true)
 
 	## Bottom left: a bar per defence layer, the vital one lowest, the total by
 	## it; the grapple's recharge above them.
@@ -159,11 +151,10 @@ class Overlay extends Control:
 			var col: Color = h.layer_configs[i].display_color
 			if h.layer_type_at(i) == &"health" or col == Color.WHITE:
 				col = Color(0.95, 0.3, 0.25) if f < 0.3 else Color(0.9, 0.92, 0.9)
-			draw_rect(Rect2(x - 2, y - 2, w + 4, 16), Color(0, 0, 0, 0.55))
-			draw_rect(Rect2(x, y, w * f, 12), col)
+			GameUI.draw_bar(self, Rect2(x, y, w, 12), f, col)
 			y -= 20.0
 		_text(font, "%d" % roundi(h.total_current()), Vector2(x + w + 12.0, size.y - 30.0),
-				20, Color(1, 1, 1, 0.9))
+				20, GameUI.hud_text)
 
 	## The grapple: a bar above the health filling as it recharges, and a mark on
 	## the hook while the line holds.
@@ -180,15 +171,14 @@ class Overlay extends Control:
 		var bars := hud.pawn.health.layer_count() if hud.pawn.health != null else 0
 		var y := size.y - 44.0 - 20.0 * bars - 6.0
 		var cd := mv.grapple_cooldown()
-		var col := Color(0.4, 0.85, 1.0, 0.9) if cd <= 0.0 else Color(0.6, 0.6, 0.6, 0.7)
-		draw_rect(Rect2(x - 2, y - 2, 104, 10), Color(0, 0, 0, 0.55))
-		draw_rect(Rect2(x, y, 100.0 * (1.0 - cd), 6), col)
+		var col := GameUI.hud_ready if cd <= 0.0 else Color(0.6, 0.6, 0.6, 0.7)
+		GameUI.draw_bar(self, Rect2(x, y, 100, 6), 1.0 - cd, col)
 		_text(font, "Q GRAPPLE", Vector2(x + 112.0, y + 8.0), 13, col)
 		if mv.is_grappling():
 			var cam := get_viewport().get_camera_3d()
 			if cam != null and not cam.is_position_behind(mv.hook):
 				var p := cam.unproject_position(mv.hook)
-				draw_circle(p, 4.0, Color(0.4, 0.85, 1.0, 0.9))
+				draw_circle(p, 4.0, GameUI.hud_ready)
 
 	func _reload(font: Font, c: Vector2) -> void:
 		var g := hud.gun
@@ -196,13 +186,10 @@ class Overlay extends Control:
 			return
 		var w := 120.0
 		var y := c.y + 48.0
-		draw_rect(Rect2(c.x - w * 0.5 - 2, y - 2, w + 4, 8), Color(0, 0, 0, 0.55))
-		draw_rect(Rect2(c.x - w * 0.5, y, w * g.reload_progress(), 4), Color(1, 1, 1, 0.9))
+		GameUI.draw_bar(self, Rect2(c.x - w * 0.5, y, w, 4), g.reload_progress(), GameUI.hud_text)
 		_text(font, "RELOADING", Vector2(c.x, y + 22.0), 13, Color(1, 1, 1, 0.8), true)
 
-	func _text(font: Font, s: String, at: Vector2, px: int, col: Color, centred := false) -> void:
-		var p := at
-		if centred:
-			p.x -= font.get_string_size(s, HORIZONTAL_ALIGNMENT_LEFT, -1, px).x * 0.5
-		draw_string_outline(font, p, s, HORIZONTAL_ALIGNMENT_LEFT, -1, px, 4, Color(0, 0, 0, col.a * 0.8))
-		draw_string(font, p, s, HORIZONTAL_ALIGNMENT_LEFT, -1, px, col)
+	## `px` is the designed size; GameUI scales it by the player's text scale.
+	func _text(_font: Font, s: String, at: Vector2, px: int, col: Color, centred := false, right := false) -> void:
+		GameUI.draw_text(self, s, at, px, col, HORIZONTAL_ALIGNMENT_CENTER if centred
+				else (HORIZONTAL_ALIGNMENT_RIGHT if right else HORIZONTAL_ALIGNMENT_LEFT))

@@ -214,9 +214,15 @@ var _arch_names := {}
 ## that would be painted. A colour is only a vertex attribute and not part of a
 ## brick's identity, so nothing is removed or renumbered.
 var _painting := false
+## The brush is the kit's Paint tool (WkPaintTool, addons/workshop_kit): it takes the strokes,
+## the eyedropper, - = and Page Up/Down, and asks the workshop through its context
+## (`wk_paint_begin` ... below). Docs/BuildTools.md section 20.
+var _paint_tool := WkPaintTool.new()
 ## Studs round the dot the brush reaches: 0 is the one brick under it, more
-## is every brick of the build within that distance -- a wall in one pass.
-var _paint_radius := 0
+## is every brick of the build within that distance -- a wall in one pass. The tool's.
+var _paint_radius: int:
+	get: return _paint_tool.radius
+	set(v): _paint_tool.radius = v
 const PAINT_RADIUS_MAX := 12
 ## What the brush lays, picked in one place (scripts/paint_palette.gd): the
 ## selected slot's material and colour, which is what the brush has always
@@ -225,9 +231,6 @@ const PaintPalette := preload("res://scripts/paint_palette.gd")
 var _paint_palette = null
 ## The stroke under way, as [recipe id, colour it had] per brick, or null.
 var _stroke = null
-## Finished strokes, newest last, one per "paint" in `_edits`: what undo puts
-## back. A brick deleted since is -1 and is skipped.
-var _paints := []
 ## Quarter turns about +Y, 0..3. A brick only has two distinct orientations and
 ## reads this mod 2; a slope has a front, and all four are different parts.
 var _yaw := 1
@@ -277,25 +280,42 @@ var _placed_at := []
 ## `_rid_synced` of it: an append needs nothing, a removal lowers the mark, a look-up catches up.
 var _rid_map := {}
 var _rid_synced := 0
-## What the last edits were, newest last: "brick" or "fixture". Undo asks this
-## rather than assuming, because a fixture is not a block and popping the wrong
-## list would take a brick out from under a staircase.
-var _edits := []
+## Every edit, newest last: one history for the workshop, its tools and the asset workshop
+## (WkUndoStack, addons/workshop_kit; Docs/BuildTools.md section 20). A hand-laid brick is a
+## "brick" command holding its recipe id; a fixture, a paint stroke, an inserted build, a
+## generated building's change, a lifted group, a shape edit and a furniture edit are one
+## command each. Recipe ids it holds are moved down whenever bricks leave from the middle
+## (`_forget_rids`).
+var undo_stack := WkUndoStack.new()
+## The kit's tools taken up and put down here (WkToolbox), and the seam they ask through
+## (BrickWorkshopContext). Docs/BuildTools.md section 20.
+var toolbox := WkToolbox.new()
+var wk_ctx: BrickWorkshopContext
+## The bricks and fixtures the build was opened with that undo has not taken back yet: they
+## have no command each (on a big build that is seconds and megabytes), `_undo_opened` takes
+## them back once the history runs out, newest first, as Z always could.
+var _opened_bricks := 0
+var _opened_fixtures := 0
 ## The mirror (Docs/BuildTools.md section 7; moved down from the asset workshop): while on,
 ## a brick placed is placed again across the plane -- across Z at `mirror_z` studs, or with
 ## `mirror_axis` 0 across X at `mirror_x`.
-var mirror_on := false
-var mirror_z := 0.0
-var mirror_x := 0.0
-var mirror_axis := 2
+## The plane and its arithmetic are the editor kit's (WkMirror, addons/workshop_kit); these
+## names stay, as properties on it.
+var mirror := WkMirror.new()
+var mirror_on: bool:
+	get: return mirror.on
+	set(v): mirror.on = v
+var mirror_z: float:
+	get: return mirror.z
+	set(v): mirror.z = v
+var mirror_x: float:
+	get: return mirror.x
+	set(v): mirror.x = v
+var mirror_axis: int:
+	get: return mirror.axis
+	set(v): mirror.axis = v
 ## Lock height as a button: the plane stays as with E held, until it is pressed again.
 var plane_locked := false
-## Redo (the building workshop's): what Z took back, newest last -- {kind: "bricks", items}
-## or {kind: "shape", rec}. A new edit clears it; so does undoing anything else.
-var _redo_list := []
-var _in_undo := false
-## A run, or a click and its mirror image, as one undo: {end: _edits.size(), n}.
-var _brick_groups := []
 var _run_from := 0
 ## Holding LMB lays a run (Docs/BuildTools.md): the cell last laid, or NO_STUD between runs.
 var _run_last := NO_STUD
@@ -322,6 +342,7 @@ var _stress := {}           ## block id -> load / capacity, for the overlay
 
 var _material: Material
 var _ghost_material: StandardMaterial3D
+var ghost: WkGhost
 
 
 func _init() -> void:
@@ -333,6 +354,10 @@ func _init() -> void:
 
 
 func _ready() -> void:
+	wk_ctx = BrickWorkshopContext.new(self)
+	toolbox.ctx = wk_ctx
+	_paint_tool.radius_max = PAINT_RADIUS_MAX
+	toolbox.add(_paint_tool)
 	world = BrickWorld.new()
 	world.set_seed(1)
 	# The generator's palette: the player's parts plus the cornice a generated
@@ -353,14 +378,11 @@ func _ready() -> void:
 	sm.shader = load("res://shaders/brick.gdshader")
 	_material = BrickMaterials.add_glass(sm)
 
-	_ghost_material = StandardMaterial3D.new()
-	_ghost_material.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	_ghost_material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	_ghost_material.albedo_color = Color(0.4, 0.9, 1.0, 0.45)
-	_ghost_material.cull_mode = BaseMaterial3D.CULL_DISABLED
-
-	_ghost = MeshInstance3D.new()
-	_ghost.material_override = _ghost_material
+	# The ghost is the editor kit's (WkGhost): its node and material; the mesh, the place and
+	# the layer tints are this workshop's.
+	ghost = WkGhost.new()
+	_ghost_material = ghost.material
+	_ghost = ghost.node
 	add_child(_ghost)
 	_ghost_studs = MultiMeshInstance3D.new()
 	_ghost_studs.material_override = _ghost_material
@@ -518,8 +540,9 @@ func _run_gate() -> void:
 	_gate_ok("and the fixtures", recipe.fixture_count() == fixtures)
 	_gate_ok("with the bricks laid again for each one",
 			_fixture_blocks.size() == fixtures)
-	_gate_ok("and the undo stack knows about both",
-			_edits.size() == bricks + fixtures, "%d entries" % _edits.size())
+	_gate_ok("and undo can take both back",
+			_opened_bricks + _opened_fixtures == bricks + fixtures and undo_stack.size() == 0,
+			"%d + %d, %d steps" % [_opened_bricks, _opened_fixtures, undo_stack.size()])
 
 	# A picture of it, because "the pieces went in" and "it is a staircase"
 	# are different claims.
@@ -936,14 +959,18 @@ func _set_painting(on: bool) -> void:
 	if _paint_palette != null:
 		_paint_palette.visible = on
 		_paint_palette.show_pick(_mat, _colour)
+	if on:
+		toolbox.use(&"paint")
+	elif toolbox.active_id() == &"paint":
+		toolbox.use(&"")
 	_end_stroke()
 	_ghost_studs.visible = not on
 	_ghost.visible = true
 
 
-## Paint mode, each frame: the ghost boxes the brick under the dot, and a held
-## LMB keeps painting whatever it passes over.
-func _paint_process() -> void:
+## Paint mode, each frame: the ghost boxes the brick under the dot (or, with a reach, a
+## ball round it). A held LMB painting on is the tool's (WkPaintTool.process).
+func _paint_hover() -> void:
 	var ray := _mouse_ray()
 	var hit := _first_hit(ray[0], ray[1])
 	_ghost.visible = not hit.is_empty()
@@ -969,11 +996,40 @@ func _paint_process() -> void:
 		_ghost.transform = Transform3D(Basis(), Vector3(box[0] as Vector3i) * tick + size * 0.5)
 	var c := BrickWorld.get_filament_colour(_colour)
 	_ghost_material.albedo_color = Color(c.r, c.g, c.b, 0.55)
-	if _stroke != null:
-		if Input.is_mouse_button_pressed(MOUSE_BUTTON_LEFT):
-			_paint_ray(ray[0], ray[1])
-		else:
-			_end_stroke()
+
+
+# The kit's Paint tool asks these, through the workshop's context (BrickWorkshopContext).
+
+func wk_paint_begin() -> void:
+	_stroke = []
+
+
+func wk_paint_at(_radius: int) -> bool:
+	var ray := _mouse_ray()
+	return _paint_ray(ray[0], ray[1])
+
+
+func wk_paint_end() -> void:
+	_end_stroke()
+
+
+func wk_paint_hover(_radius: int) -> void:
+	_paint_hover()
+
+
+func wk_paint_pick() -> void:
+	var ray := _mouse_ray()
+	_pick_paint_ray(ray[0], ray[1])
+
+
+func wk_paint_step(step: int) -> void:
+	if _paint_palette != null:
+		_paint_palette.step_material(step)
+
+
+func wk_paint_radius_changed(_radius: int) -> void:
+	if _paint_palette != null:
+		_paint_palette.info = _paint_info()
 
 
 func _begin_stroke() -> void:
@@ -1040,9 +1096,18 @@ func _bricks_near(point: Vector3, reach: float) -> Array[int]:
 
 func _end_stroke() -> void:
 	if _stroke != null and not _stroke.is_empty():
-		_paints.append(_stroke)
-		_edits.append("paint")
+		undo_stack.push(WkCommand.make(&"paint", _stroke, _unpaint))
 	_stroke = null
+
+
+## Undo of a paint stroke: each brick back to the colour it had, newest first. A brick
+## deleted since is -1 and is skipped.
+func _unpaint(c: WkCommand) -> bool:
+	var stroke: Array = c.data
+	for i in range(stroke.size() - 1, -1, -1):
+		_repaint(int(stroke[i][0]), int(stroke[i][1]), int(stroke[i][2]))
+	_after_edit()
+	return true
 
 
 ## One brick, in the world and in the recipe together.
@@ -1135,7 +1200,7 @@ func _process(_dt: float) -> void:
 	elif _spaces != null and _spaces.active:
 		_ghost.visible = false
 	elif _painting:
-		_paint_process()
+		toolbox.process(_dt)
 	else:
 		_ghost.visible = true
 		_aim()
@@ -1763,7 +1828,7 @@ func _update_ghost() -> void:
 	# through a weld, across grids -- so it counts as attached, not mid-air.
 	var held := _joints > 0 or not _snapped.is_empty()
 	if not _valid:
-		_ghost_material.albedo_color = Color(1.0, 0.25, 0.22, 0.45)
+		ghost.fits(false)
 	elif _role == BuildRecipe.Role.DETAIL:
 		_ghost_material.albedo_color = Color(0.9, 0.5, 1.0, 0.42) if held \
 				else Color(0.9, 0.5, 1.0, 0.28)
@@ -1857,17 +1922,16 @@ func _unhandled_input(e: InputEvent) -> void:
 		return
 	if _tools != null and _tools.input(e):
 		return
+	if _painting and toolbox.active_id() == &"paint" and toolbox.input(e):
+		return
 	if e is InputEventMouseButton and not e.pressed and e.button_index == MOUSE_BUTTON_LEFT:
 		_end_run()
 	if e is InputEventMouseButton and e.pressed:
 		match e.button_index:
 			MOUSE_BUTTON_LEFT:
-				if _painting:
-					_begin_stroke()
-				else:
-					var before := recipe.size()
-					_place()
-					_begin_run(before)
+				var before := recipe.size()
+				_place()
+				_begin_run(before)
 			MOUSE_BUTTON_RIGHT:
 				var ray := _mouse_ray()
 				_delete_ray(ray[0], ray[1])
@@ -1885,14 +1949,6 @@ func _unhandled_input(e: InputEvent) -> void:
 		KEY_BRACKETRIGHT: _hotbar.step(1)
 		KEY_COMMA: _hotbar.set_colour(_colour - 1)
 		KEY_PERIOD: _hotbar.set_colour(_colour + 1)
-		KEY_MINUS, KEY_EQUAL:
-			if _painting:
-				_paint_radius = clampi(_paint_radius + (1 if e.keycode == KEY_EQUAL else -1),
-						0, PAINT_RADIUS_MAX)
-				_paint_palette.info = _paint_info()
-		KEY_PAGEUP, KEY_PAGEDOWN:
-			if _painting:
-				_paint_palette.step_material(1 if e.keycode == KEY_PAGEUP else -1)
 		KEY_R: _yaw = (_yaw + 1) % 4
 		KEY_F: _flip = not _flip
 		KEY_T: _rotate_last()
@@ -1969,29 +2025,24 @@ func _place() -> void:
 
 ## The first stud across of a part `width` studs wide at `z`, mirrored across the plane.
 func mirrored_z(z: int, width: int) -> int:
-	return int(round(2.0 * mirror_z - float(z + width)))
+	return mirror.mirrored_z(z, width)
 
 
 ## The same across X.
 func mirrored_x(x: int, width: int) -> int:
-	return int(round(2.0 * mirror_x - float(x + width)))
+	return mirror.mirrored_x(x, width)
 
 
 func set_mirror(on: bool) -> void:
-	mirror_on = on
-	if on and mirror_z == 0.0:
-		mirror_z = float(_cell.z)
-	if on and mirror_x == 0.0:
-		mirror_x = float(_cell.x)
+	if on:
+		mirror.turn_on(_cell)
+	else:
+		mirror.on = false
 
 
 ## Put the plane down the middle of the ghost.
 func mirror_here() -> void:
-	var size := BrickPalette.size_of(_archetype_name())
-	if mirror_axis == 0:
-		mirror_x = _cell.x + size.x * 0.5
-	else:
-		mirror_z = _cell.z + size.z * 0.5
+	mirror.through(_cell, BrickPalette.size_of(_archetype_name()))
 
 
 ## The brick just placed, again, on the other side of the plane. A part with a front
@@ -1999,19 +2050,13 @@ func mirror_here() -> void:
 ## exactly is its own mirror and is not placed twice. Upright grid only, for now.
 func _place_mirrored() -> void:
 	var arch := _archetype_name()
-	var size := BrickPalette.size_of(arch)
-	var to := _cell
-	if mirror_axis == 0:
-		to.x = mirrored_x(_cell.x, size.x)
-	else:
-		to.z = mirrored_z(_cell.z, size.z)
+	var to := mirror.mirror_cell(_cell, BrickPalette.size_of(arch))
 	if to == _cell:
 		return
 	var keep := [_cell, _yaw, _snapped]
 	var front := BrickPalette.front_of(arch)
 	if front[mirror_axis] != 0:
-		var want := front
-		want[mirror_axis] = -front[mirror_axis]
+		var want := mirror.mirror_dir(front)
 		for y in 4:
 			if BrickPalette.front_of(BrickPalette.variant_name(_part(), y, _flip)) == want:
 				_yaw = y
@@ -2057,7 +2102,7 @@ func _place_one() -> void:
 	# was built.
 	if welded_to >= 0:
 		recipe.add_weld(welded_to, rid)
-	_edits.append("brick")
+	_push_brick(rid)
 	_after_edit()
 
 
@@ -2123,8 +2168,8 @@ func _begin_run(from: int = -1) -> void:
 func _end_run() -> void:
 	if _run_on and _tools != null:
 		var n := recipe.size() - _run_from
-		if n > 1 and _edits.size() >= n:
-			_brick_groups.append({"end": _edits.size(), "n": n})
+		if n > 1:
+			undo_stack.group_last(n)
 	_run_on = false
 
 
@@ -2168,8 +2213,17 @@ func _recipe_id_at(frame_index: int, block: int) -> int:
 func _add_fixture(kind: String, at: Vector3i, params: Dictionary) -> void:
 	recipe.add_fixture(kind, at, params)
 	_spawn_fixture(recipe.fixture_count() - 1)
-	_edits.append("fixture")
+	undo_stack.push(WkCommand.make(&"fixture", null, _undo_fixture))
 	_after_edit()
+
+
+## Undo of a fixture: the newest one, its record and the bricks it laid.
+func _undo_fixture(_c: WkCommand) -> bool:
+	if not recipe.pop_fixture():
+		return false
+	_clear_fixtures(recipe.fixture_count())
+	_after_edit()
+	return true
 
 
 ## Build the preview for fixture `i`: its own chunk, its own mesh, positioned in
@@ -2201,120 +2255,134 @@ func _clear_fixtures(keep: int = 0) -> void:
 			world.remove_block(asm.frames[0], id)
 
 
-## Undo removes the LAST edit, never an arbitrary one -- taking a block out
-## of the middle would renumber every block after it and invalidate any damage
-## record keyed on those ids.
+## Z: the newest edit back, whatever it was (`undo_stack`). Bricks come off the end of the
+## build; the one time a brick comes out of the middle is when an undo laid bricks back after
+## it (a delete undone), and then as RMB takes one (`_remove_rid`), every id renumbered.
 func _undo() -> bool:
-	_in_undo = true
-	var ok := _undo_step()
-	_in_undo = false
-	return ok
+	return undo_stack.undo()
 
 
-func _undo_step() -> bool:
-	# Only bricks and shapes come back with redo: undoing anything else forgets it, so redo
-	# never jumps past it.
-	if not _edits.is_empty() and not (String(_edits.back()) in ["brick", "shape"]):
-		_redo_list.clear()
-	if not _edits.is_empty() and _edits[_edits.size() - 1] == "shape" and _tools != null:
-		return _tools.undo()
-	if not _edits.is_empty() and _edits[_edits.size() - 1] == "furnish":
-		_edits.pop_back()
-		_furnish.undo()
-		_after_edit()
-		return true
-	if not _edits.is_empty() and _edits[_edits.size() - 1] == "stamp":
-		return _undo_stamp()
-	if not _edits.is_empty() and _edits[_edits.size() - 1] == "tower":
-		return _undo_tower()
-	if not _edits.is_empty() and _edits[_edits.size() - 1] == "ungroup":
-		return _undo_ungroup()
-	if not _edits.is_empty() and _edits[_edits.size() - 1] == "paint":
-		_edits.pop_back()
-		var stroke: Array = _paints.pop_back()
-		for i in range(stroke.size() - 1, -1, -1):
-			_repaint(int(stroke[i][0]), int(stroke[i][1]), int(stroke[i][2]))
-		_after_edit()
-		return true
-	if not _edits.is_empty() and _edits[_edits.size() - 1] == "fixture":
-		if not recipe.pop_fixture():
-			return false
-		_edits.pop_back()
-		_clear_fixtures(recipe.fixture_count())
-		_after_edit()
-		return true
-	# A run (or a click and its mirror image) goes back as one.
-	while not _brick_groups.is_empty() and int(_brick_groups.back().end) > _edits.size():
-		_brick_groups.pop_back()
-	var n := 1
-	if not _brick_groups.is_empty() and int(_brick_groups.back().end) == _edits.size():
-		n = int(_brick_groups.pop_back().n)
-	var items := []
-	_batch = n > 1
-	for _k in n:
-		var item := _last_brick_item()
-		if not _undo_brick():
-			break
-		items.append(item)
-	if _batch:
-		_batch = false
-		_after_edit()
-	if items.is_empty():
+## Shift Z (and the rail's Redo): do the last undone edit again.
+func redo_last() -> bool:
+	return undo_stack.redo() != null
+
+
+## Record the brick just laid at recipe id `rid` as an edit of its own.
+func _push_brick(rid: int) -> void:
+	undo_stack.push(WkCommand.make(&"brick", rid, _undo_brick, _redo_brick, _brick_alive))
+
+
+## The recipe id of a "brick" edit's brick, or -1. Its data is the recipe id while the brick
+## stands; {gone, arch, cell, af} once it left some other way (RMB, a cut), when it is found
+## again by part and cell -- an undo that lays it back (a delete undone) brings its edit back
+## with it; and that brick's item (`_brick_item`) while the edit is undone.
+func _brick_rid(c: WkCommand) -> int:
+	if typeof(c.data) == TYPE_INT:
+		return int(c.data) if int(c.data) < recipe.size() else -1
+	if typeof(c.data) == TYPE_DICTIONARY and c.data.get("gone", false):
+		var af := int(c.data.af)
+		return find_brick(String(c.data.arch), c.data.cell, af) if af >= 0 and af < asm.frames.size() else -1
+	return -1
+
+
+func _brick_alive(c: WkCommand) -> bool:
+	return _brick_rid(c) >= 0
+
+
+## Undo of a "brick": take it up and keep what laying it again needs.
+func _undo_brick(c: WkCommand) -> bool:
+	var rid := _brick_rid(c)
+	if rid < 0:
+		return true   # its brick is not there: nothing to take back
+	var item := _brick_item(rid)
+	if not _take_rid(rid):
 		return false
-	_redo_list.append({"kind": "bricks", "items": items})
+	c.data = item
 	return true
 
 
-## The newest brick, as redo would lay it again.
-func _last_brick_item() -> Dictionary:
-	if recipe.is_empty() or _placed_at.is_empty():
-		return {}
-	var rid := recipe.size() - 1
+## Redo of a "brick": lay it again as it was. A redone brick is laid as it was; a weld it had
+## is not made again.
+func _redo_brick(c: WkCommand) -> bool:
+	if typeof(c.data) != TYPE_DICTIONARY or not _relay(c.data):
+		c.data = -1
+		return false
+	c.data = recipe.size() - 1
+	return true
+
+
+## Undo past the first edit: the opened build's own fixtures, then its bricks, newest first,
+## one a Z (`undo_stack.on_empty`). A brick taken back this way can be redone.
+func _undo_opened() -> WkCommand:
+	if _opened_fixtures > 0 and recipe.fixture_count() > 0:
+		if not _undo_fixture(null):
+			return null
+		_opened_fixtures -= 1
+		return WkCommand.make(&"fixture", null, _undo_fixture)
+	if _opened_bricks > 0 and _opened_bricks <= recipe.size():
+		var rid := _opened_bricks - 1
+		var item := _brick_item(rid)
+		if not _take_rid(rid):
+			return null
+		_opened_bricks -= 1
+		return WkCommand.make(&"brick", item, _undo_brick, _redo_brick, _brick_alive)
+	return null
+
+
+## A brick as redo would lay it again.
+func _brick_item(rid: int) -> Dictionary:
 	return {"arch": recipe.part_of(rid), "cell": recipe.cell_of(rid), "colour": recipe.colour_of(rid),
 			"mat": recipe.material_of(rid), "role": recipe.role_of(rid), "af": int(_placed_at[rid][0])}
 
 
-func _undo_brick() -> bool:
-	if recipe.is_empty() or _placed_at.is_empty():
-		return false
-	var at: Array = _placed_at[_placed_at.size() - 1]
+## Take up recipe brick `rid` for an undo: off the end, or out of the middle as RMB does.
+func _take_rid(rid: int) -> bool:
+	if rid < recipe.size() - 1:
+		_remove_rid(rid)
+		_after_edit()
+		return true
+	var at: Array = _placed_at[rid]
 	# A block that never made it into the world (see _load) has nothing to
 	# remove; dropping it from the recipe is the whole of the undo.
 	if int(at[0]) >= 0 and not world.remove_block(asm.frames[at[0]], at[1]):
 		return false
-	_placed_at.remove_at(_placed_at.size() - 1)
+	_placed_at.remove_at(rid)
 	_rid_synced = mini(_rid_synced, _placed_at.size())
 	recipe.pop()
-	if not _edits.is_empty():
-		_edits.pop_back()
 	_after_edit()
 	return true
 
 
-## Shift Z (and the rail's Redo): lay back what the last Z took -- its bricks, or a shape
-## edit. A redone brick is laid as it was; a weld it had is not made again.
-func redo_last() -> bool:
-	if _redo_list.is_empty():
-		return false
-	var r: Dictionary = _redo_list.pop_back()
-	_in_undo = true
-	var ok := false
-	if r.kind == "shape" and _tools != null:
-		ok = _tools.redo(r.rec)
-	elif r.kind == "bricks":
-		var items: Array = r.items
-		var n := 0
-		_batch = true
-		for i in range(items.size() - 1, -1, -1):
-			if _relay(items[i]):
-				n += 1
-		_batch = false
-		_after_edit()
-		if n > 1:
-			_brick_groups.append({"end": _edits.size(), "n": n})
-		ok = n > 0
-	_in_undo = false
-	return ok
+## Bricks `gone` (recipe ids, sorted, no repeats) are about to leave the build some other way
+## than undo -- RMB, a cut, a lifted group, an undone insert. Called BEFORE they go: their own
+## edits remember them by part and cell (`_brick_rid`), and every recipe id the history keeps
+## moves down past them.
+func _forget_rids(gone: PackedInt32Array) -> void:
+	if gone.is_empty():
+		return
+	_opened_bricks -= gone.bsearch(_opened_bricks)
+	for c in undo_stack.leaves():
+		var w := c as WkCommand
+		match w.kind:
+			&"brick":
+				if typeof(w.data) != TYPE_INT:
+					continue
+				var rid := int(w.data)
+				var below := gone.bsearch(rid)
+				if below < gone.size() and gone[below] == rid:
+					w.data = {"gone": true, "arch": recipe.part_of(rid), "cell": recipe.cell_of(rid),
+							"af": int(_placed_at[rid][0])}
+				else:
+					w.data = rid - below
+			&"paint":
+				for e in w.data:
+					var rid := int(e[0])
+					if rid < 0:
+						continue
+					var below := gone.bsearch(rid)
+					e[0] = -1 if below < gone.size() and gone[below] == rid else rid - below
+			&"stamp":
+				w.data.first = int(w.data.first) - gone.bsearch(int(w.data.first))
 
 
 func _relay(item: Dictionary) -> bool:
@@ -2335,7 +2403,6 @@ func _relay(item: Dictionary) -> bool:
 		world.set_block_material(f, placed, int(item.mat))
 	recipe.add(String(item.arch), cell, int(item.colour), _recipe_frame_for(af), int(item.role), int(item.mat))
 	_placed_at.append([af, placed])
-	_edits.append("brick")
 	_after_edit()
 	return true
 
@@ -2358,20 +2425,13 @@ func _delete_ray(from: Vector3, dir: Vector3) -> bool:
 		if not world.remove_block(asm.frames[at[0]], at[1]):
 			return false
 		# A kept shape's brick has no edit of its own (the shape's undo has it).
-		var shaped := _tools != null and _tools.owner_of(recipe.part_of(rid), recipe.cell_of(rid)) >= 0
-		if shaped:
+		if _tools != null and _tools.owner_of(recipe.part_of(rid), recipe.cell_of(rid)) >= 0:
 			_tools.forget_brick(recipe.part_of(rid), recipe.cell_of(rid))
+		_before_remove(rid)
+		_forget_rids(PackedInt32Array([rid]))
 		_placed_at.remove_at(rid)
 		_rid_synced = mini(_rid_synced, rid)
 		recipe.remove_at(rid)
-		if not shaped:
-			_drop_edit("brick", rid)
-		for stroke in _paints:
-			for e in stroke:
-				if int(e[0]) == rid:
-					e[0] = -1
-				elif int(e[0]) > rid:
-					e[0] = int(e[0]) - 1
 		_after_edit()
 		return true
 	if hit.frame != asm.frames[0]:
@@ -2384,38 +2444,93 @@ func _delete_ray(from: Vector3, dir: Vector3) -> bool:
 			world.remove_block(asm.frames[0], id)
 		_fixture_blocks.remove_at(k)
 		recipe.remove_fixture(k)
-		_drop_edit("fixture", k)
+		# Forget its edit, so undo still takes the others back in the order they were made.
+		if k < _opened_fixtures:
+			_opened_fixtures -= 1
+		else:
+			undo_stack.forget_nth(&"fixture", k - _opened_fixtures)
 		_after_edit()
 		return true
 	return false
 
 
-## Forget the n-th edit of this kind, so undo still takes the others back in
-## the order they were made.
-func _drop_edit(kind: String, n: int) -> void:
-	for i in _edits.size():
-		if _edits[i] != kind:
-			continue
-		if n == 0:
-			_edits.remove_at(i)
-			return
-		n -= 1
+# The kit's camera (WkCamera) asks these, through the workshop's context. The flying is the
+# workshop's DebugCamera's own.
+
+func wk_camera() -> Camera3D:
+	return _camera
 
 
-## `_drop_edit("brick", n)` for each of these, sorted.
-func _drop_bricks(ns: PackedInt32Array) -> void:
-	var kept := []
-	var n := 0
-	var g := 0
-	for e in _edits:
-		if e == "brick":
-			var going := g < ns.size() and ns[g] == n
-			n += 1
-			if going:
-				g += 1
-				continue
-		kept.append(e)
-	_edits.assign(kept)
+func wk_camera_ray() -> Array:
+	return _mouse_ray()
+
+
+func wk_camera_hit(from: Vector3, dir: Vector3) -> Variant:
+	var hit := _first_hit(from, dir)
+	return null if hit.is_empty() else hit.point
+
+
+func wk_camera_captured() -> bool:
+	var c = _camera
+	return bool(c._captured)
+
+
+func wk_camera_set_captured(on: bool) -> void:
+	var c = _camera
+	c._set_captured(on)
+
+
+func wk_camera_drive_keys(on: bool) -> void:
+	var c = _camera
+	c.drive_uncaptured = on
+
+
+func wk_camera_busy() -> bool:
+	return _hotbar.is_browsing() or (_menu != null and _menu.is_modal())
+
+
+## RMB looks round unless a tool is dragging with it, a build is in hand or furniture is open.
+func wk_camera_rmb_free() -> bool:
+	return not ((_tools != null and _tools.dragging()) or _stamp != null
+			or (_furnish != null and _furnish.is_open()))
+
+
+func wk_camera_wheel_free() -> bool:
+	return not (_spaces != null and _spaces.active)
+
+
+func wk_camera_click(button: int) -> void:
+	if button == MOUSE_BUTTON_MIDDLE:
+		_pick_block()
+
+
+func wk_camera_replay(events: Array) -> void:
+	for e in events:
+		_unhandled_input(e)
+
+
+func wk_camera_wheel_shift(step: int) -> void:
+	_hotbar.step(-step)
+
+
+## A flat view is built in with the cursor: the camera's own click-to-look is off, and a
+## captured mouse would turn it.
+func wk_camera_flat(on: bool) -> void:
+	_camera.set_process_unhandled_input(not on)
+	if on and _camera.has_method("_set_captured"):
+		_camera.call("_set_captured", false)
+
+
+## Who answers the kit's Sketch tool (BrickWorkshopContext): the building workshop's tools,
+## which make kept shapes of a stroke. The asset workshop answers itself.
+func _sketch_host() -> Object:
+	return _tools
+
+
+## A brick at recipe id `rid` is about to leave from the middle (RMB, a cut, an undo): for a
+## workshop that keeps something per brick (the asset workshop's part tags).
+func _before_remove(_rid: int) -> void:
+	pass
 
 
 ## Swap which layer the next brick goes in.
@@ -2464,12 +2579,14 @@ func _rotate_last() -> void:
 	if not palette.has(turned):
 		return
 
-	if not _edits.is_empty() and _edits[_edits.size() - 1] != "brick":
-		return  # the last edit was a fixture; there is no brick to turn
+	var last := undo_stack.last_leaf()
+	if last == null or last.kind != &"brick" or typeof(last.data) != TYPE_INT or int(last.data) != id:
+		return  # the last edit was not this brick (a fixture, a shape...): nothing to turn
 	# The layer travels with the brick, not with the cursor: turning a chair is
 	# not a way to make it load-bearing.
 	var was_interior := recipe.role_of(id)
-	if not _undo():
+	# Taken up and laid again at the same recipe id: its edit stays, and undoes the turned one.
+	if not _take_rid(id):
 		return
 	var placed := asm.place(asm.frames[af], cell, palette[turned], colour)
 	if placed < 0:
@@ -2479,13 +2596,13 @@ func _rotate_last() -> void:
 			world.set_block_material(asm.frames[af], back, mat)
 			recipe.add(arch_name, cell, colour, rf, was_interior, mat)
 			_placed_at.append([af, back])
-			_edits.append("brick")
+		else:
+			undo_stack.forget_where(func(w: WkCommand) -> bool: return w == last)
 		_after_edit()
 		return
 	world.set_block_material(asm.frames[af], placed, mat)
 	recipe.add(turned, cell, colour, rf, was_interior, mat)
 	_placed_at.append([af, placed])
-	_edits.append("brick")
 	_after_edit()
 
 
@@ -2516,8 +2633,7 @@ func _recipe_frame_for(asm_frame: int) -> int:
 
 func _after_edit() -> void:
 	_dirty = true
-	if not _in_undo:
-		_redo_list.clear()
+	undo_stack.forget_redo()   # an edit makes redo meaningless (not while undoing or redoing)
 	if _spaces != null:
 		_spaces.edited()
 	if _batch:
@@ -2978,30 +3094,10 @@ func _build_grid() -> void:
 	var plane_y: float = _cell.y * BrickPalette.PLATE_M
 	_grid.transform = world.get_chunk_transform(chunk) \
 			* Transform3D(Basis(), Vector3(0.0, plane_y, 0.0))
-	var im := ImmediateMesh.new()
-	var mat := StandardMaterial3D.new()
-	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	mat.vertex_color_use_as_albedo = true
-	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	im.surface_begin(Mesh.PRIMITIVE_LINES, mat)
-	var s := BrickPalette.STUD_M
+	# The lines are the editor kit's (WkGrid): faint, a stronger one every 4 studs -- a rotated
+	# grid's plane can sit right across the view, and it is an orientation cue.
 	_grid_drawn = grid_window()
-	var lo := _grid_drawn.position
-	var hi := _grid_drawn.end
-	# Just above the plane itself, so it does not z-fight with the brick tops.
-	var y := 0.002
-	for i in _grid_drawn.size.x + 1:
-		# Faint: a rotated grid's plane can sit right across the view, and it is
-		# an orientation cue rather than something to read.
-		var u := (lo.x + i) * s
-		var v := (lo.y + i) * s
-		var col := Color(1, 1, 1, 0.13 if (lo.x + i) % 4 == 0 else 0.04)
-		im.surface_set_color(col); im.surface_add_vertex(Vector3(u, y, lo.y * s))
-		im.surface_set_color(col); im.surface_add_vertex(Vector3(u, y, hi.y * s))
-		im.surface_set_color(col); im.surface_add_vertex(Vector3(lo.x * s, y, v))
-		im.surface_set_color(col); im.surface_add_vertex(Vector3(hi.x * s, y, v))
-	im.surface_end()
-	_grid.mesh = im
+	_grid.mesh = WkGrid.lines(_grid_drawn, BrickPalette.STUD_M)
 
 
 ## The studs the grid is drawn over: round the ghost, moving a quarter of itself at a time
@@ -3084,15 +3180,14 @@ func _load() -> void:
 ## empty, every stack emptied. New, and the first half of every load.
 func _reset_space() -> void:
 	_cancel_stamp()
-	if _furnish != null:
-		_furnish.reset()
 	_stamp_moving = false
 	_select_group(-1)
-	_ungrouped.clear()
 	_drag = {}
 	_clear_towers()
-	_stamp_marks.clear()
-	_tower_undo.clear()
+	undo_stack.clear()
+	undo_stack.on_empty = _undo_opened
+	_opened_bricks = 0
+	_opened_fixtures = 0
 	if _spaces != null:
 		_spaces.edited()
 	# Drop every frame, not just the one being built in.
@@ -3108,8 +3203,6 @@ func _reset_space() -> void:
 	_queued.clear()
 	_bevelled.clear()
 	_clear_fixtures()
-	_edits.clear()
-	_paints.clear()
 	_stroke = null
 	# And the placement list, which is indexed by recipe id: left standing, the
 	# new recipe's entries went on after the old ones, and every id read back
@@ -3165,9 +3258,9 @@ func _load_recipe(r: BuildRecipe) -> void:
 			if recipe.material_of(i) != 0:
 				world.set_block_material(asm.frames[af], bid, recipe.material_of(i))
 		_placed_at.append([af, bid])
-		_edits.append("brick")
 		if rf != 0:
 			_recipe_frames[af] = rf
+	_opened_bricks = recipe.size()
 	# Welds last: both ends have to exist before one can hold the other. A weld
 	# whose block failed to place is dropped rather than guessed at.
 	var welded := 0
@@ -3183,7 +3276,7 @@ func _load_recipe(r: BuildRecipe) -> void:
 			welded += 1
 	for i in recipe.fixture_count():
 		_spawn_fixture(i)
-		_edits.append("fixture")
+	_opened_fixtures = recipe.fixture_count()
 	print("[workshop] loaded %d of %d bricks across %d frame(s), %d weld(s), %d fixture(s)"
 			% [placed, recipe.size(), recipe.frame_count(), welded, recipe.fixture_count()])
 	if _menu != null:
@@ -3425,10 +3518,6 @@ var _stamp_ok := false
 const STAMP_BEVELS_TO := 5000
 var _stamp_ghost: MeshInstance3D
 var _stamp_material: StandardMaterial3D
-## One per stamp (and per bake): what undo has to take back.
-##   {"first": recipe id, "fixtures": count before, "towers": count before,
-##    "tower": record to put back, "tower_index": where}
-var _stamp_marks := []
 
 
 ## Insert > Build from library: pick it up.
@@ -3692,8 +3781,8 @@ func _commit_stamp() -> bool:
 		"first": first, "count": recipe.size() - first,
 		"turn": _stamp_turn, "offset": [off.x, off.y, off.z],
 	})
-	_stamp_marks.append({"first": first, "fixtures": fix0, "towers": tow0, "placements": pl0})
-	_edits.append("stamp")
+	undo_stack.push(WkCommand.make(&"stamp",
+			{"first": first, "fixtures": fix0, "towers": tow0, "placements": pl0}, _undo_stamp))
 	_batch = false
 	_stamp_moving = false
 	_after_edit()
@@ -3721,7 +3810,6 @@ func _realise_appended(first: int, fix0: int, tow0: int, weld0: int) -> void:
 			if rf != 0:
 				_recipe_frames[af] = rf
 		_placed_at.append([af if bid >= 0 else -1, bid])
-		_edits.append("brick")
 	for i in range(weld0, recipe.weld_count()):
 		var w := recipe.weld_blocks(i)
 		var a: Array = _placed_at[w.x]
@@ -3730,27 +3818,21 @@ func _realise_appended(first: int, fix0: int, tow0: int, weld0: int) -> void:
 			asm.weld(asm.frames[a[0]], a[1], asm.frames[b[0]], b[1])
 	for i in range(fix0, recipe.fixture_count()):
 		_spawn_fixture(i)
-		_edits.append("fixture")
 	for i in range(tow0, recipe.towers.size()):
 		_spawn_tower(i)
 
 
-## Undo of a stamp or a bake: everything it added, as one step.
-func _undo_stamp() -> bool:
-	_edits.pop_back()
-	var m: Dictionary = _stamp_marks.pop_back() if not _stamp_marks.is_empty() else {}
-	if m.is_empty():
-		return false
+## Undo of a stamp or a bake: everything it added, as one step. Its data: where the recipe's
+## lists stood before it -- {first, fixtures, towers, placements, and for a bake the
+## generated building it was: tower, tower_index}.
+func _undo_stamp(c: WkCommand) -> bool:
+	var m: Dictionary = c.data
 	_batch = true
-	while not _edits.is_empty() and _edits[_edits.size() - 1] == "fixture" \
-			and recipe.fixture_count() > int(m.fixtures):
-		_undo()
+	while recipe.fixture_count() > int(m.fixtures):
+		if not _undo_fixture(null):
+			break
 	# Its bricks all at once. One at a time, each is an edit: a remesh of what it touched.
-	var n := 0
-	while n < _edits.size() and _edits[_edits.size() - 1 - n] == "brick" and recipe.size() - n > int(m.first):
-		n += 1
-	_edits.resize(_edits.size() - n)
-	remove_rids(PackedInt32Array(range(recipe.size() - n, recipe.size())))
+	remove_rids(PackedInt32Array(range(mini(int(m.first), recipe.size()), recipe.size())))
 	if m.has("placements"):
 		recipe.placements.resize(mini(recipe.placements.size(), int(m.placements)))
 	var respawn := false
@@ -3781,9 +3863,6 @@ func _undo_stamp() -> bool:
 var _tower_blocks := []
 ## The role each of those was laid with: furniture comes out INTERIOR or DETAIL.
 var _tower_roles := []
-## Undo records for generated buildings: {"index", "before"} where before is
-## the record as it was, or null when the edit created it.
-var _tower_undo := []
 ## The handle being dragged: {"handle", "index", "before", "grab"}.
 var _drag := {}
 var _handles := {}      ## name -> MeshInstance3D
@@ -3805,8 +3884,7 @@ func _add_tower() -> int:
 	var at := TOWER_AT
 	var i := recipe.add_tower(at, p)
 	_spawn_tower(i)
-	_tower_undo.append({"index": i, "before": null})
-	_edits.append("tower")
+	_record_tower(i, null)
 	_after_edit()
 	return i
 
@@ -3872,16 +3950,17 @@ func _set_tower(i: int, cell: Vector3i, params: Dictionary) -> void:
 	_after_edit()
 
 
-func _record_tower(i: int, before) -> void:
-	_tower_undo.append({"index": i, "before": before})
-	_edits.append("tower")
+## A change to generated building `i`, as one undo: `before` is the record as it was, or null
+## when the edit created it.
+func _record_tower(i: int, before, removed := false) -> void:
+	var u := {"index": i, "before": before}
+	if removed:
+		u["removed"] = true
+	undo_stack.push(WkCommand.make(&"tower", u, _undo_tower))
 
 
-func _undo_tower() -> bool:
-	_edits.pop_back()
-	if _tower_undo.is_empty():
-		return false
-	var u: Dictionary = _tower_undo.pop_back()
+func _undo_tower(c: WkCommand) -> bool:
+	var u: Dictionary = c.data
 	var i := int(u.index)
 	if typeof(u.before) == TYPE_NIL:
 		if i < recipe.towers.size():
@@ -3926,8 +4005,7 @@ func _remove_tower() -> void:
 	var before: Dictionary = (recipe.towers[i] as Dictionary).duplicate(true)
 	recipe.towers.remove_at(i)
 	_respawn_towers()
-	_tower_undo.append({"index": i, "before": before, "removed": true})
-	_edits.append("tower")
+	_record_tower(i, before, true)
 	_after_edit()
 
 
@@ -3956,7 +4034,6 @@ func _bake_tower() -> int:
 				world.get_block_colour(f0, bid), 0, roles[k] if k < roles.size() else 0,
 				world.get_block_material(f0, bid))
 		_placed_at.append([0, bid])
-		_edits.append("brick")
 	var rec: Dictionary = recipe.towers[i]
 	recipe.towers.remove_at(i)
 	_tower_blocks.remove_at(i)   # the bricks stay: they are the recipe's now
@@ -3965,9 +4042,8 @@ func _bake_tower() -> int:
 	recipe.groups.append({"source": "generated", "name": "generated building",
 			"first": first, "count": recipe.size() - first, "turn": 0,
 			"offset": rec.cell})
-	_stamp_marks.append({"first": first, "fixtures": recipe.fixture_count(),
-			"towers": recipe.towers.size(), "tower": rec, "tower_index": i})
-	_edits.append("stamp")
+	undo_stack.push(WkCommand.make(&"stamp", {"first": first, "fixtures": recipe.fixture_count(),
+			"towers": recipe.towers.size(), "tower": rec, "tower_index": i}, _undo_stamp))
 	_after_edit()
 	print("[workshop] baked a generated building into %d bricks" % (recipe.size() - first))
 	return recipe.size() - first
@@ -4185,8 +4261,6 @@ func _ray_on_ground(from: Vector3, dir: Vector3, y: int) -> Vector3:
 var _selected := -1          ## index into recipe.groups, or -1
 var _sel_box: MeshInstance3D
 var _stamp_moving := false   ## the build in hand was lifted out of this one
-## What delete and move took out, for undo: [{"recipe", "group"}].
-var _ungrouped := []
 
 
 ## X: the group of the brick aimed at, or nothing. Again on the same group lets
@@ -4241,82 +4315,65 @@ func _lift_group(g: int) -> BuildRecipe:
 	var sub := recipe.extract(first, count)
 	sub.name = str(gr.get("name", "group"))
 	_batch = true
-	remove_rids(PackedInt32Array(range(first, first + count)), true)
+	remove_rids(PackedInt32Array(range(first, first + count)))
 	# remove_many dropped the group with its last brick; make sure.
 	for k in range(recipe.groups.size() - 1, -1, -1):
 		if int(recipe.groups[k].count) <= 0:
 			recipe.groups.remove_at(k)
 	_batch = false
-	_ungrouped.append({"recipe": sub, "group": gr})
-	_edits.append("ungroup")
+	undo_stack.push(WkCommand.make(&"ungroup", {"recipe": sub, "group": gr}, _undo_ungroup))
 	_select_group(-1)
 	_after_edit()
 	return sub
 
 
-## One recipe block out of the middle: world, recipe, placement list, undo
-## stack and paint strokes, all renumbered together (as RMB does).
-## `drop`: forget the "brick" edit that laid it -- not for a brick a kept shape laid,
-## which has none.
-func _remove_rid(rid: int, drop: bool = true) -> void:
+## One recipe block out of the middle: world, recipe, placement list and the undo history
+## (its edit forgotten, every id after it moved down), all renumbered together (as RMB does).
+func _remove_rid(rid: int) -> void:
+	_before_remove(rid)
+	_forget_rids(PackedInt32Array([rid]))
 	var at: Array = _placed_at[rid]
 	if int(at[0]) >= 0:
 		world.remove_block(asm.frames[at[0]], at[1])
 	_placed_at.remove_at(rid)
 	_rid_synced = mini(_rid_synced, rid)
 	recipe.remove_at(rid)
-	if drop:
-		_drop_edit("brick", rid)
-	for stroke in _paints:
-		for e in stroke:
-			if int(e[0]) == rid:
-				e[0] = -1
-			elif int(e[0]) > rid:
-				e[0] = int(e[0]) - 1
 
 
 ## `_remove_rid` for many at once, any order. One pass, not one for each: a building is
-## tens of thousands. `drop` as there: without it, a shape's bricks, with no edits of their own.
-func remove_rids(rids: PackedInt32Array, drop: bool = false) -> void:
+## tens of thousands.
+func remove_rids(rids: PackedInt32Array) -> void:
 	if rids.is_empty():
 		return
 	var ids := rids.duplicate()
 	ids.sort()
-	var kept := []
 	var unique := PackedInt32Array()
+	for id in ids:
+		if id >= 0 and id < _placed_at.size() and (unique.is_empty() or unique[unique.size() - 1] != id):
+			unique.push_back(id)
+	if unique.is_empty():
+		return
+	_forget_rids(unique)
+	var kept := []
 	var g := 0
 	for i in _placed_at.size():
-		if g >= ids.size() or ids[g] != i:
+		if g >= unique.size() or unique[g] != i:
 			kept.append(_placed_at[i])
 			continue
 		var at: Array = _placed_at[i]
 		if int(at[0]) >= 0:
 			world.remove_block(asm.frames[at[0]], at[1])
-		unique.push_back(i)
-		while g < ids.size() and ids[g] == i:
-			g += 1
+		g += 1
 	_placed_at = kept
 	_rid_synced = mini(_rid_synced, ids[0])
 	recipe.remove_many(unique)
-	if drop:
-		_drop_bricks(unique)
-	for stroke in _paints:
-		for e in stroke:
-			var rid := int(e[0])
-			if rid < 0:
-				continue
-			var below := unique.bsearch(rid)
-			e[0] = -1 if below < unique.size() and unique[below] == rid else rid - below
 
 
 ## Undo of a delete (or of the lifting half of a move): the bricks go back
 ## where they were, on the END of the build -- the middle is append-only -- and
 ## the group comes back with them.
-func _undo_ungroup() -> bool:
-	_edits.pop_back()
-	if _ungrouped.is_empty():
-		return false
-	var u: Dictionary = _ungrouped.pop_back()
+func _undo_ungroup(c: WkCommand) -> bool:
+	var u: Dictionary = c.data
 	var sub: BuildRecipe = u.recipe
 	var first := recipe.size()
 	var weld0 := recipe.weld_count()
@@ -4378,8 +4435,8 @@ func _abort_stamp() -> void:
 	var moving := _stamp_moving
 	_cancel_stamp()
 	_stamp_moving = false
-	if moving and not _edits.is_empty() and _edits[_edits.size() - 1] == "ungroup":
-		_undo_ungroup()
+	if moving and undo_stack.top_kind() == &"ungroup":
+		undo_stack.undo()
 
 
 # ---------------------------------------------------------------------------

@@ -279,42 +279,6 @@ var _band_cursor := {}
 ## Buildings that were damaged while their bands were being rebuilt, and so
 ## need one more pass when this one finishes.
 var _band_redo := {}
-var _band_cpp_ms := 0.0
-var _band_upload_ms := 0.0
-var _band_builds := 0
-var _band_worst := 0.0
-## How much band building a tick may do. A band of one of the big shapes is a
-## few milliseconds; the point is that a building's worth of them is not one
-## frame's problem. A count of 2 was for bands across the whole building; a
-## tile (SECTION_STUDS) is a sixth of the big tower's band, and at 2 a tick its
-## 96 tiles kept the shell up -- and the solve waiting -- 40 ticks after a hit
-## (--breaklag --big). The time and the vertices below are what bound a tick.
-const BANDS_PER_TICK := 12
-const BAND_BUDGET_MS := 6.0
-## And how many vertices of band meshes may be handed over in one tick. A mesh
-## built on a worker is not free on this thread: the worker packs the arrays,
-## but the renderer creates the buffers on the main thread, at the next call
-## into it -- measured on a 62,000-vertex mesh, 3-4 ms built here against 1-1.5
-## attached from a worker. So what the workers finish in one tick is paid in
-## one tick, and this keeps that bounded. Lower than a piece's
-## (IslandManager.UPLOAD_VERTS_PER_TICK): a band waiting still draws its old
-## mesh, and a piece waiting draws nothing.
-const BAND_VERTS_PER_TICK := 60000
-## A band with at least this many vertices is uploaded on a worker, as a big
-## piece's mesh is (IslandManager.THREAD_MESH_VERTS). Of what a band cost,
-## four fifths was handing the arrays to the renderer -- 98 ms of 120 across a
-## stress pass, a band of a big tower 3-7 ms, two a tick -- and the arrays
-## themselves come out of the bake in a fraction of a millisecond. About two
-## thirds of the handing-over moves to the worker (BAND_VERTS_PER_TICK says
-## where the rest goes). The band's old mesh goes on drawing until the new one
-## is attached, and a band waits behind a piece for a worker, since a piece
-## without a mesh is a hole and a band without a new one is not.
-## Now every band (2026-10-23): it was 4,000 vertices, and a band under it,
-## a few hundred vertices, took 6-13 ms in the tick on a street walk -- handing
-## arrays to the renderer here waits for whatever a worker is uploading, and
-## something nearly always is (bands, pieces, the near tier, terrain, glass).
-## It was the biggest part of most of the walk's long frames (PerfCaps.md 4).
-const BAND_THREAD_VERTS := 0
 ## Headless, the renderer is the dummy one, and its meshes are not safe to make
 ## on two threads at once: a band made on a worker while the main thread made
 ## another mesh broke its RIDs ("Initializing already initialized RID") and
@@ -322,10 +286,8 @@ const BAND_THREAD_VERTS := 0
 ## nothing is drawn, so nothing waits -- and big bands still go to a worker
 ## as they always did.
 static var worker_meshes := DisplayServer.get_name() != "headless"
-const BAND_THREAD_VERTS_HEADLESS := 4000
 ## Bands being uploaded: [building id, band, task id, [mesh], arrays, pass].
 var _band_jobs: Array = []
-var _band_verts_now := 0
 ## A mesh with nothing in it, to ask the renderer something cheap. See
 ## _physics_process.
 var _flush_mesh := ArrayMesh.new()
@@ -334,10 +296,6 @@ var _flush_mesh := ArrayMesh.new()
 ## to catch up, so the tick's flush below is skipped and the walk reads its
 ## render times every RENDER_SAMPLE_EVERY frames (Docs/WhereWorkRuns.md 3.1 c).
 var _one_thread := RenderingServer.is_on_render_thread()
-## building id -> which rebuild of its bands is current. A job from an older
-## pass is thrown away when it lands, not attached over a newer band.
-var _band_pass := {}
-var band_jobs_done := 0
 var _brick_bands := {}
 var _brick_band_meshes := {}
 var _brick_band_bytes := {}
@@ -645,7 +603,6 @@ var authority := WorldAuthority.new()
 ## Buildings whose structure has changed and not yet been re-solved to rest.
 var _dirty: Array[int] = []
 var _impact_damage := 0
-var _full_rebuilds := 0
 var _show_grids := false
 var _grid_count := 0
 var _grid_view: MeshInstance3D
@@ -746,6 +703,8 @@ const CITY_DROWNED := 0.20
 var _terrain_world_path := ""
 var _terrain_drowned := CITY_DROWNED
 var _sea = null
+## The city's boat and its ghost space (Docs/Hulls.md 7.2); null with no sea.
+var harbour: Harbour = null
 ## `--buildings=` was on the command line. With a world file the SITES decide
 ## how many buildings there are, and this caps them only when asked to.
 var _buildings_arg := false
@@ -1020,7 +979,22 @@ var vehicles: Node = null
 ## scripts/city/city_dev_hud.gd. Made first thing in _ready.
 var dev_hud: Node = null
 
+## How the buildings are drawn: their bands, the far view and its coarse meshes,
+## glass and panes in bricks, sun shadows and shadow stand-ins:
+## scripts/city/city_drawing.gd. Made first thing in _ready.
+var drawing: Node = null
+
+## What each key and click does in the city: scripts/city/city_keys.gd.
+## Made first thing in _ready.
+var keys: Node = null
+
+
 func _ready() -> void:
+	keys = (load("res://scripts/city/city_keys.gd") as GDScript).new(self)
+	add_child(keys)
+
+	drawing = (load("res://scripts/city/city_drawing.gd") as GDScript).new(self)
+	add_child(drawing)
 
 	dev_hud = (load("res://scripts/city/city_dev_hud.gd") as GDScript).new(self)
 	add_child(dev_hud)
@@ -1403,8 +1377,13 @@ func _ready() -> void:
 		_pass_runner()._run_bench()
 	elif _shot_mode:
 		_pass_runner()._run_shot_pass()
+	elif "--harbour" in args:
+		_pass_runner()._run_harbour_pass()
 	else:
 		_scripted = false
+		# A boat you can play, off the nearest shore (Docs/Hulls.md 7.2).
+		if not _arena_mode and not _firefight_mode:
+			harbour = Harbour.open(self, camera.global_position)
 	# The arena is in the chain and is the game, not a pass, unless it is run
 	# as its gate.
 	if (_arena_mode or _firefight_mode) and not ("--gate" in args):
@@ -2107,7 +2086,7 @@ func _interior_unsure(id: int) -> bool:
 	# rule, which has to draw them.
 	if not hold_interiors_mid_collapse:
 		return false
-	if _mid_collapse(id) or _bands_building(id) or _span_owed.has(id):
+	if _mid_collapse(id) or drawing.bands_building(id) or _span_owed.has(id):
 		return true
 	return Time.get_ticks_msec() - int(_touched_ms.get(id, -1000000)) < COLLAPSE_QUIET_MS
 ## Off: interiors are made in a building whatever it is doing, as they were.
@@ -2688,7 +2667,7 @@ func _make_shell(id: int, coarse: bool = false, far: bool = false) -> void:
 	# can take the coarse tier damaged or not. The old coarse MESH is a plain
 	# box and cannot, so what still needs it -- a build, or a building whose
 	# damage is in live bricks rather than a profile -- stays banded.
-	var boxed := coarse and _far_draws_coarse(b)
+	var boxed: bool = coarse and drawing.far_draws_coarse(b)
 	# Nor a recipe building still in bricks (_demesh), damaged or not: the far
 	# box will not draw it, and the coarse mesh is an untextured box -- every
 	# tower walked past and left behind stood there as a plain white block,
@@ -2747,10 +2726,10 @@ func _make_shell(id: int, coarse: bool = false, far: bool = false) -> void:
 	# damage was the profile's -- a hole per band, the floors drawn across it
 	# from 110 m out (CollapseNext 29(a), --lodbreak's ghost walls: 14-31 of
 	# 337-355 hits on the 320 m tower).
-	var real := b.is_materialised() and not b.is_build() and not nothing_left and not boxed \
+	var real: bool = b.is_materialised() and not b.is_build() and not nothing_left and not boxed \
 			and not damage.is_empty() and not _toppling.has(id)
 	if real:
-		_far_real(id, mi)
+		drawing.far_real(id, mi)
 	t_sh = _part("sh_real", t_sh)
 	# Its windows, with a room painted behind each: a shell has no openings, so
 	# the fake rung cannot show through it. Not on the coarse tier -- past a
@@ -2767,7 +2746,7 @@ func _make_shell(id: int, coarse: bool = false, far: bool = false) -> void:
 		_glass_owed.append([mi, id, {} if real else damage, fades, real])
 	# A shell and a far box would be the same building drawn twice -- unless
 	# the far box IS this shell's drawing. So would a shell and a tree's copy.
-	_far_sync(b)
+	drawing.far_sync(b)
 	_inst_sync(b)
 	if far:
 		_shell_far[id] = true
@@ -2776,149 +2755,8 @@ func _make_shell(id: int, coarse: bool = false, far: bool = false) -> void:
 	_part("sh_body", t_sh)
 
 
-## The collision boxes of a shell, and the AI's proxies of them.
-## A shell's windows -- panes with a room painted behind each -- are built
-## apart from the shell: a tall tower's are 1-10 ms, as much again as its
-## shell, and a city streaming in made four shells and their windows in one
-## tick, 33 ms (2026-10-15). A shell stands a tick or two without its glass --
-## solid bands where the panes go, at a shell's distance.
-##
-## Built on workers (BuildingShell.window_arrays), GLASS_JOBS at a time, the
-## nearest owed first; the main thread only turns the arrays into a mesh and
-## hangs it on the shell. On the main thread it was 2.7 ms every tick of a
-## bench over an 800-building city, 10 ms at worst (2026-10-18), and most of
-## it for shells the streamer was about to take back: so a shell past the
-## line where its banded tier is swapped for the coarse one waits (kept owed,
-## not built) until it is either replaced -- its successor owes its own -- or
-## near again. A shell drawn from its bricks (`real`) asks the bricks about
-## each pane: a copy of which cells stand (BuildingShell.standing_copy), so it is made on a
-## worker as well (it was built here, 3-8 ms a tick; PerfCaps.md 4).
-const GLASS_JOBS := 4
 var _glass_owed: Array = []   ## [shell node, building id, damage, fades, drawn from its bricks]
 var _glass_jobs: Array = []   ## [task, [arrays], shell node, building id, fades]
-var glass_built := 0
-
-
-## What the glass cost the main thread (the exit report's "[prof] glass"): a
-## tick's _build_owed_glass, summed over every tick it ran and the worst one.
-## On the main thread it was 2.7 ms a tick, 10 ms at worst (above).
-var _glass_usec := 0
-var _glass_ticks := 0
-var _glass_worst_usec := 0
-## Of it: the worst worker result turned into a mesh and hung, and the worst
-## window built here from the live bricks (a shell drawn from its bricks).
-var _glass_hang_worst_usec := 0
-
-
-func _glass_note(usec: int) -> void:
-	_glass_usec += usec
-	_glass_ticks += 1
-	_glass_worst_usec = maxi(_glass_worst_usec, usec)
-
-
-func _build_owed_glass() -> void:
-	# Land what the workers finished.
-	for i in range(_glass_jobs.size() - 1, -1, -1):
-		var job: Array = _glass_jobs[i]
-		if not WorkerThreadPool.is_task_completed(int(job[0])):
-			continue
-		WorkerThreadPool.wait_for_task_completion(int(job[0]))
-		_glass_jobs.remove_at(i)
-		var gm = job[1][0]
-		if gm is Array:
-			gm = BuildingShell.window_mesh_of(gm)   # headless: made here (worker_meshes)
-		if gm == null or not is_instance_valid(job[2]) \
-				or not _is_shell_node(int(job[3]), job[2]):
-			continue
-		var t_hang := Time.get_ticks_usec()
-		_hang_glass(job[2], gm, job[4])
-		_glass_hang_worst_usec = maxi(_glass_hang_worst_usec, Time.get_ticks_usec() - t_hang)
-	if _glass_owed.is_empty():
-		return
-	# The owed, nearest first; the gone dropped, the about-to-go kept back.
-	var here := camera.global_position if camera != null else Vector3.ZERO
-	var swap_at := SHELL_DETAIL_RANGE + SHELL_HYSTERESIS
-	var live: Array = []
-	var due: Array = []   ## [distance, index into live]
-	for owed in _glass_owed:
-		var mi = owed[0]
-		var id: int = owed[1]
-		# Replaced or freed since -- its successor owes its own.
-		if not is_instance_valid(mi) or not _is_shell_node(id, mi):
-			continue
-		var b := registry.get_building(id)
-		if b == null:
-			continue
-		live.append(owed)
-		var dist := b.xform.origin.distance_to(here)
-		if dist <= swap_at:
-			due.append([dist, live.size() - 1])
-	_glass_owed = live
-	if due.is_empty():
-		return
-	due.sort_custom(func(a: Array, c: Array) -> bool: return float(a[0]) < float(c[0]))
-	var taken := {}
-	for r in due:
-		var owed: Array = _glass_owed[int(r[1])]
-		if _glass_jobs.size() < GLASS_JOBS:
-			_submit_glass(owed)
-			taken[int(r[1])] = true
-	if not taken.is_empty():
-		var left: Array = []
-		for i in _glass_owed.size():
-			if not taken.has(i):
-				left.append(_glass_owed[i])
-		_glass_owed = left
-
-
-func _submit_glass(owed: Array) -> void:
-	var id: int = owed[1]
-	var b := registry.get_building(id)
-	var fx: int = b.recipe.footprint_x
-	var fz: int = b.recipe.footprint_z
-	var courses: int = b.recipe.courses
-	var room_seed := registry.room_seed_of(id)
-	# Made here, where the caches they come from are filled; the worker only
-	# reads them. Its own copies of the rest, which this thread may change.
-	var layout := TowerRecipe.layout(courses)
-	var lattice := RoomManifest.lattice_for(fx, fz, courses)
-	var damage: Dictionary = (owed[2] as Dictionary).duplicate(true)
-	var program: Dictionary = (b.recipe.get("program", {}) as Dictionary).duplicate(true)
-	# A window still in bricks asks the bricks which panes stand: a copy of
-	# them, made here (it was the whole build here, 3-8 ms a tick, PerfCaps.md 4).
-	var standing := Callable()
-	if owed[4] and b.is_materialised():
-		standing = BuildingShell.standing_copy(world, b.chunk,
-				BuildingShell.window_rows(courses, layout, lattice))
-	# The mesh is made there too: handed to the renderer here, it waited for
-	# whatever else was being uploaded.
-	var holder := [null]
-	var on_worker := worker_meshes
-	var task := WorkerThreadPool.add_task(func() -> void:
-		var arrays := BuildingShell.window_arrays(fx, fz, courses, room_seed, layout,
-				lattice, damage, program, standing)
-		if not arrays.is_empty():
-			holder[0] = BuildingShell.window_mesh_of(arrays) if on_worker else (arrays as Variant)
-			UploadLedger.note("glass", UploadLedger.verts_of(arrays)),
-			true, "shell glass")
-	glass_built += 1
-	_glass_jobs.append([task, holder, owed[0], id, owed[3]])
-
-
-func _hang_glass(mi: MeshInstance3D, panes: Mesh, fades: bool) -> void:
-	# One set a shell: a shell drawn from its bricks has its panes asked again
-	# after a hit (_refresh_real_shell), and the old set goes as the new hangs.
-	for c in mi.get_children():
-		if c is MeshInstance3D and (c as MeshInstance3D).material_override == BuildingShell.window_material():
-			_retirer.retire((c as MeshInstance3D).mesh)
-			c.queue_free()
-	var glass := MeshInstance3D.new()
-	glass.mesh = panes
-	glass.material_override = BuildingShell.window_material()
-	glass.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-	if fades:
-		_fade_out(glass)
-	mi.add_child(glass)
 
 
 ## Is this cell of a building's own grid (cells from its corner) a brick?
@@ -3180,7 +3018,7 @@ func _lay_more(id: int, storeys: PackedInt32Array) -> void:
 	world.bake_chunk_async(b.chunk)
 	if not _pending_bricks.has(id) and _brick_nodes.has(id):
 		# A promotion still waiting for its bake builds every band anyway.
-		_rebuild_bands(id, b.chunk)
+		drawing.rebuild_bands(id, b.chunk)
 		_band_first[id] = true
 	_reshape_storeys(id, fresh)
 	_refresh_furniture(id)
@@ -3251,7 +3089,7 @@ func _unlay(id: int, storeys: PackedInt32Array) -> void:
 		return
 	world.bake_chunk_async(b.chunk)
 	if not _pending_bricks.has(id) and _brick_nodes.has(id):
-		_rebuild_bands(id, b.chunk)
+		drawing.rebuild_bands(id, b.chunk)
 	_reshape_storeys(id, storeys)
 	_refresh_furniture(id)
 	_free_rest(id)
@@ -3303,7 +3141,7 @@ func _trim_budget() -> void:
 			continue
 		if now - int(_last_hit.get(id, -1000000)) < BUDGET_QUIET_MS:
 			continue
-		if world.fire_burning(b.chunk) > 0 or _bands_building(id) or _pending_bricks.has(id):
+		if world.fire_burning(b.chunk) > 0 or drawing.bands_building(id) or _pending_bricks.has(id):
 			continue
 		if not b.banded:
 			var d := _nearest_to(points, _world_box(b))
@@ -3420,7 +3258,7 @@ func _rest_sync(id: int) -> void:
 	var key := [b.storeys_laid.duplicate(), b.cut_storey]
 	if _rest_shells.has(id):
 		# Storeys just laid are drawn by it until their bands are up.
-		if _rest_shells[id][2] != key and not _bands_building(id):
+		if _rest_shells[id][2] != key and not drawing.bands_building(id):
 			_free_rest(id)
 			_make_rest(id, key)
 	else:
@@ -3877,7 +3715,7 @@ func _finish_promotions() -> void:
 		# The shell stays up until every band is built -- see _advance_bands.
 		# Dropping it here would leave a half-drawn building standing in the
 		# open for the few ticks the rest of the bands take.
-		if not _bands_building(id):
+		if not drawing.bands_building(id):
 			_free_shell(id)
 		done += 1
 
@@ -3937,7 +3775,7 @@ func _topple(id: int) -> void:
 	# island then. See BrickIsland.bands.
 	# And each band's index size, so the piece can go on patching them.
 	var carried_band_bytes: Array = (_brick_band_bytes.get(id, []) as Array).duplicate()
-	var carried_bands: Array = _take_bands(id)
+	var carried_bands: Array = drawing.take_bands(id)
 	_brick_cols.erase(id)
 	# The furniture body belongs to a STANDING building. What is falling
 	# carries its own -- an island builds collision from the chunk, and a
@@ -4264,7 +4102,7 @@ func _handover_waiting(id: int, now: int) -> bool:
 ## held, or deferred behind bands still building -- with its whole shell up.
 func _parent_stale(id: int) -> bool:
 	return _remesh_queue.has(id) or _band_redo.has(id) \
-			or (_shells.has(id) and _bands_building(id))
+			or (_shells.has(id) and drawing.bands_building(id))
 
 
 ## Once a tick: score every hand-over in flight, and close the finished ones.
@@ -4389,7 +4227,7 @@ func _remesh(id: int, force_full: bool = false) -> void:
 			_shell_stale[id] = true
 		return
 	# Its bricks changed: drawn as bricks again, at once (_tend_far_coarse).
-	_far_coarse_drop(id)
+	drawing.far_coarse_drop(id)
 	# A build's other frames are rebuilt whole, every time. They are small, and
 	# a surface under 65,536 vertices cannot be index-patched anyway.
 	if b.frames.size() > 1:
@@ -4401,7 +4239,7 @@ func _remesh(id: int, force_full: bool = false) -> void:
 	# tick.
 	if world.get_alive_block_count(b.chunk) == 0:
 		_retirer.retire((_brick_nodes[id] as MeshInstance3D).mesh)
-		for node in _take_bands(id):
+		for node in drawing.take_bands(id):
 			if is_instance_valid(node):
 				_retirer.retire((node as MeshInstance3D).mesh)
 				(node as MeshInstance3D).queue_free()
@@ -4419,7 +4257,7 @@ func _remesh(id: int, force_full: bool = false) -> void:
 	# fails the patch, because the bands it has not reached yet hold no mesh
 	# to patch, and the cursor goes back to zero. One more pass is queued
 	# instead, and it runs when this one is done.
-	if _bands_building(id):
+	if drawing.bands_building(id):
 		_band_redo[id] = true
 		return
 	var bands: Array = _brick_bands.get(id, [])
@@ -4454,7 +4292,7 @@ func _remesh(id: int, force_full: bool = false) -> void:
 				brick_near.damaged(b.chunk, touched)
 			return
 
-	_rebuild_bands(id, b.chunk)
+	drawing.rebuild_bands(id, b.chunk)
 
 
 ## How tall a band should be for a chunk this tall. See SECTION_PLATES.
@@ -4463,98 +4301,6 @@ func _section_plates(chunk: int) -> int:
 	@warning_ignore("integer_division")
 	var wanted: int = maxi(SECTION_PLATES, (plates + SECTION_MAX - 1) / SECTION_MAX)
 	return wanted
-
-
-## Build every band of a building's mesh from scratch.
-##
-## The expensive path, and the one bands exist to make cheaper: it is O(the
-## building) and a promotion runs it. What bands change is that the NEXT one --
-## a blast, a piece coming off -- is O(the band).
-func _rebuild_bands(id: int, chunk: int) -> void:
-	_full_rebuilds += 1
-	var parent: MeshInstance3D = _brick_nodes[id]
-	var n := world.get_chunk_sections(chunk)
-	# Slots first, bands afterwards, a few a tick. Building all of them here is
-	# what the whole-mesh path did and it is the ~104 ms this exists to remove:
-	# the total is the same, what changes is that it no longer lands in one
-	# frame. The OLD band stays drawn in its slot until its replacement is
-	# ready, so nothing flickers on the way through.
-	var old: Array = _brick_bands.get(id, [])
-	var nodes: Array = []
-	var meshes: Array = []
-	var bytes: Array = []
-	for si in n:
-		nodes.append(old[si] if si < old.size() else null)
-		meshes.append(null)
-		bytes.append(0)
-	for si in range(n, old.size()):
-		if is_instance_valid(old[si]):
-			_retirer.retire((old[si] as MeshInstance3D).mesh)
-			(old[si] as MeshInstance3D).queue_free()
-	_brick_bands[id] = nodes
-	_brick_band_meshes[id] = meshes
-	_brick_band_bytes[id] = bytes
-	_band_cursor[id] = 0
-	_band_pass[id] = int(_band_pass.get(id, 0)) + 1
-	# The parent draws nothing itself; it is the transform the bands hang off
-	# and the node the furniture is parented to.
-	_retirer.retire(parent.mesh)
-	parent.mesh = null
-	_brick_meshes[id] = null
-	_brick_index_bytes[id] = 0
-
-
-## Build one band of a building's mesh. Returns false when there are none left.
-func _build_one_band(id: int) -> bool:
-	var pos: int = int(_band_cursor.get(id, -1))
-	if pos < 0:
-		return false
-	var b := registry.get_building(id)
-	if b == null or not b.is_materialised() or not _brick_nodes.has(id):
-		_band_cursor.erase(id)
-		return false
-	var nodes: Array = _brick_bands.get(id, [])
-	var at := pos
-	if at >= nodes.size():
-		_band_cursor.erase(id)
-		return false
-	# A band built against a stale bake re-bakes the WHOLE chunk on this
-	# thread -- measured at 55 ms against 2.6 for an ordinary band, and it
-	# lands in one frame. Wait for the worker instead.
-	# bake_ready, not has_bake: it is what adopts a finished job. Asking only
-	# has_bake waited forever on a bake nobody else collected (a recolour).
-	if not world.bake_ready(b.chunk):
-		if not world.bake_pending(b.chunk):
-			world.bake_chunk_async(b.chunk)
-		return true
-	var _t0 := Time.get_ticks_usec()
-	var arrays: Array = world.build_chunk_mesh_section(b.chunk, at)
-	var _t1 := Time.get_ticks_usec()
-	var ok := not arrays.is_empty() \
-			and IslandManager.mesh_arrays_ok(arrays, "building %d band %d" % [id, at])
-	if ok:
-		_brick_index_width[id] = IslandManager.index_width(arrays)
-		_band_verts_now += (arrays[Mesh.ARRAY_VERTEX] as PackedVector3Array).size()
-	if ok and (arrays[Mesh.ARRAY_VERTEX] as PackedVector3Array).size() \
-			>= (BAND_THREAD_VERTS if worker_meshes else BAND_THREAD_VERTS_HEADLESS):
-		_submit_band_job(id, at, arrays)
-	else:
-		var mesh := ArrayMesh.new()
-		if ok:
-			mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
-		_apply_band(id, at, mesh, arrays)
-	var _t2 := Time.get_ticks_usec()
-	_band_cpp_ms += float(_t1 - _t0) / 1000.0
-	_band_upload_ms += float(_t2 - _t1) / 1000.0
-	_prof["bd_cpp"] = float(_prof.get("bd_cpp", 0.0)) + float(_t1 - _t0) / 1000.0
-	_prof["bd_upload"] = float(_prof.get("bd_upload", 0.0)) + float(_t2 - _t1) / 1000.0
-	_band_builds += 1
-	_band_worst = maxf(_band_worst, float(_t2 - _t0) / 1000.0)
-	_band_cursor[id] = pos + 1
-	if pos + 1 >= nodes.size():
-		_band_cursor.erase(id)
-		return false
-	return true
 
 
 func _is_tree(id: int) -> bool:
@@ -4624,203 +4370,6 @@ func _tend_grid_light() -> void:
 		if not grid_light.tracked(id) and added < 2:
 			grid_light.track(id, world, registry.get_building(id).chunk, _brick_nodes[id])
 			added += 1
-
-
-## Hang a finished band mesh in its slot.
-func _apply_band(id: int, at: int, mesh: ArrayMesh, arrays: Array) -> void:
-	# Its bricks changed: its far stand-in is out of date, and the bands are
-	# what is right (_tend_far_coarse makes it again once it is quiet).
-	_far_coarse_drop(id)
-	var nodes: Array = _brick_bands.get(id, [])
-	if at >= nodes.size() or not _brick_nodes.has(id):
-		_retirer.retire(mesh)
-		return
-	var node: MeshInstance3D = nodes[at]
-	if node == null or not is_instance_valid(node):
-		node = MeshInstance3D.new()
-		node.material_override = brick_material
-		# It sways in the wind, a little (weather.gdshaderinc); a tree more.
-		InstanceParams.put(node, &"weather_sway", _sway_of(id))
-		# A tree's crown takes a cap of snow; a building gets real cover.
-		InstanceParams.put(node, &"weather_snowcap", 1.0 if _is_tree(id) else 0.0)
-		InstanceParams.put(node, &"grain_origin",
-				InstanceParams.of(_brick_nodes[id] as MeshInstance3D, &"grain_origin"))
-		# In the parent's space, which already carries the chunk transform.
-		node.physics_interpolation_mode = Node.PHYSICS_INTERPOLATION_MODE_OFF
-		# Casting as the building does: a shadow shell may be standing in
-		# for its bricks (_stream_shadows).
-		node.cast_shadow = (_brick_nodes[id] as MeshInstance3D).cast_shadow
-		(_brick_nodes[id] as MeshInstance3D).add_child(node)
-		nodes[at] = node
-	else:
-		_retirer.retire(node.mesh)
-	var live := mesh != null and mesh.get_surface_count() > 0
-	node.mesh = mesh if live else null
-	# Its chamfered mesh and studs, when the camera is near (and again: this is
-	# a new mesh, from what may be a new bake).
-	var band_of := registry.get_building(id)
-	if live and band_of != null:
-		brick_near.track(node, band_of.chunk, at)
-	else:
-		brick_near.untrack(node)
-	(_brick_band_meshes[id] as Array)[at] = mesh if live else null
-	(_brick_band_bytes[id] as Array)[at] = (IslandManager.index_patch_bytes(arrays) if live else 0)
-
-
-## Upload a band's arrays on a worker (BAND_THREAD_VERTS). Attached by
-## _harvest_band_jobs when it is done.
-## Started at the end of the tick, as a piece's are (IslandManager.
-## _submit_mesh_job says why).
-func _submit_band_job(id: int, at: int, arrays: Array) -> void:
-	var holder := [null]
-	var work := func() -> void:
-		var m := ArrayMesh.new()
-		m.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays, [], {},
-				IslandManager.UPLOAD_COMPRESS)
-		holder[0] = m
-		UploadLedger.note("band", UploadLedger.verts_of(arrays))
-	_band_jobs.append([id, at, IslandManager.JOB_NOT_STARTED, holder, arrays,
-			int(_band_pass.get(id, 0)), work])
-
-
-func _start_band_jobs() -> void:
-	for job in _band_jobs:
-		if int(job[2]) == IslandManager.JOB_NOT_STARTED:
-			job[2] = WorkerThreadPool.add_task(job[6] as Callable, false, "building band mesh")
-
-
-## Whether a building's bands are still on their way: being built, or built
-## and still being uploaded.
-func _bands_building(id: int) -> bool:
-	if _band_cursor.has(id):
-		return true
-	for job in _band_jobs:
-		if int(job[0]) == id:
-			return true
-	return false
-
-
-## Attach the band meshes the workers have finished. `wait_for` >= 0 waits for
-## that building's jobs instead of leaving them for the next tick -- for a
-## building about to hand its bands on (_take_bands).
-func _harvest_band_jobs(wait_for: int = -1) -> void:
-	var finished: Array[int] = []
-	var k := 0
-	while k < _band_jobs.size():
-		var job: Array = _band_jobs[k]
-		var id: int = job[0]
-		var task: int = job[2]
-		# Waiting for one building: only its jobs, the rest are next tick's.
-		if (wait_for >= 0 and id != wait_for) \
-				or (wait_for < 0 and (task < 0 or not WorkerThreadPool.is_task_completed(task))):
-			k += 1
-			continue
-		if task < 0:
-			# Waited for before it was started: done here and now.
-			(job[6] as Callable).call()
-		else:
-			WorkerThreadPool.wait_for_task_completion(task)
-		_band_jobs.remove_at(k)
-		var mesh: ArrayMesh = job[3][0]
-		# A pass since superseded, or a building since gone: not attached.
-		if int(job[5]) != int(_band_pass.get(id, 0)) or not _brick_bands.has(id):
-			_retirer.retire(mesh)
-			continue
-		var ta := Time.get_ticks_usec()
-		_apply_band(id, int(job[1]), mesh, job[4])
-		_part("bd_apply", ta)
-		band_jobs_done += 1
-		if not finished.has(id):
-			finished.append(id)
-	if wait_for >= 0:
-		return
-	var td := Time.get_ticks_usec()
-	for id in finished:
-		if not _bands_building(id):
-			_bands_done(id)
-	_part("bd_done", td)
-
-
-## A building's bands are all built and attached.
-func _bands_done(id: int) -> void:
-	_band_first.erase(id)
-	if _band_redo.has(id):
-		# Something hit it on the way through. A band built after the hit was
-		# built from the bricks as they are, and is right; only the ones built
-		# before it are not, and only those are built again -- the old ones
-		# drawn meanwhile. It was a whole second pass, with the shell kept up
-		# for it: the first shot at a building still in its shell showed on it
-		# 14 ticks after it was made bricks, the pieces it cut out drawn twice
-		# all that time -- falling, and still in the wall.
-		_band_redo.erase(id)
-		var rb := registry.get_building(id)
-		if rb != null and rb.is_materialised():
-			var nodes: Array = _brick_bands.get(id, [])
-			if nodes.size() != world.get_chunk_sections(rb.chunk):
-				_rebuild_bands(id, rb.chunk)
-			else:
-				# Every band is drawn now, and each wrote the index baseline it
-				# was built with (BrickWorld.build_chunk_mesh_section): a patch
-				# finds exactly the bands hit since and moves only those. The
-				# second pass this was -- every band built before the last hit
-				# built again, behind the shell -- kept a mega tower under fire
-				# drawn whole by its shell for 30 ticks with its storey shot
-				# through, and nothing could leave it until then (CityScene's
-				# solve waits on the shell): the walls showed unbroken, then it
-				# all came down at once (user, big city, 2026-10-16).
-				_free_shell(id)
-				_remesh(id)
-	else:
-		# Finished: the shell it was hiding behind can go.
-		_free_shell(id)
-
-
-## Drain the band work, a budget at a time.
-func _advance_bands() -> void:
-	var th := Time.get_ticks_usec()
-	_harvest_band_jobs()
-	_part("bd_harvest", th)
-	if _band_cursor.is_empty():
-		return
-	var until := Time.get_ticks_usec() + int(BAND_BUDGET_MS * 1000.0)
-	var built := 0
-	_band_verts_now = 0
-	while built < BANDS_PER_TICK and not _band_cursor.is_empty() \
-			and _band_verts_now < BAND_VERTS_PER_TICK:
-		var id: int = _band_cursor.keys()[0]
-		for first in _band_first:
-			if _band_cursor.has(first):
-				id = first
-				break
-		var at_before := int(_band_cursor.get(id, -1))
-		var verts_before := _band_verts_now
-		_build_one_band(id)
-		# An empty band is free, and a building laid a storey at a time is
-		# mostly empty bands: only a band with something in it -- or a wait on
-		# the bake -- counts against BANDS_PER_TICK.
-		if _band_verts_now > verts_before or int(_band_cursor.get(id, -1)) == at_before:
-			built += 1
-		if not _bands_building(id):
-			_bands_done(id)
-		if Time.get_ticks_usec() >= until:
-			break
-
-
-## Drop a building's band nodes, returning them so a caller can hand them on.
-func _take_bands(id: int) -> Array:
-	# Drawn again, wherever they are going (_far_coarse_drop).
-	_far_coarse_drop(id)
-	# Whatever is being uploaded for it lands first: a piece carrying these
-	# bands away patches them, and a slot still waiting holds nothing to patch.
-	_harvest_band_jobs(id)
-	_band_pass.erase(id)
-	var nodes: Array = _brick_bands.get(id, [])
-	_band_cursor.erase(id)
-	_band_redo.erase(id)
-	_brick_bands.erase(id)
-	_brick_band_meshes.erase(id)
-	_brick_band_bytes.erase(id)
-	return nodes
 
 
 func _disable(id: int, ids: PackedInt32Array) -> void:
@@ -5579,114 +5128,6 @@ func _wire_deck(v: Node3D) -> void:
 			print("[city] off the deck (%s)" % why))
 
 
-## The enemy's mech (Y), ahead of the camera: an LMG, a launcher for walls, and
-## the enemy tree -- it breaches to get at infantry (AI.md 6.4).
-## `recipe`: which of the roster's mechs it is (AIRoster.md RO11: a commander
-## buys one by its recipe).
-## Which workshop mech Ctrl Y spawned last.
-var _mech_design := -1
-## The figures Ctrl T put down, and which design was last.
-var _figures: Array[Figure] = []
-var _figure_design := -1
-
-
-func _spawn_figure() -> String:
-	var cat := MechAssembler.catalog(true)
-	var made := Figure.designs(cat)
-	if made.is_empty():
-		return "no figure saved in the asset workshop yet"
-	var ids := made.keys()
-	ids.sort()
-	_figure_design = (_figure_design + 1) % ids.size()
-	var b := PartBuilder.generate("figure", made[ids[_figure_design]], hash(ids[_figure_design]), cat)
-	var f := Figure.make(b)
-	if f == null:
-		return "figure %s does not go together: %s" % [ids[_figure_design], "; ".join(b.problems)]
-	f.position = _on_ground(camera.global_position - camera.global_transform.basis.z * 6.0)
-	f.wander = true
-	add_child(f)
-	_figures.append(f)
-	return "figure %s" % ids[_figure_design]
-
-
-var _builder: CharacterBuilder
-
-
-## Ctrl Alt T: the character builder. What it puts in the world stands ahead of the camera
-## and follows the player on foot (else walks a circle).
-func _open_character_builder() -> void:
-	if _builder == null:
-		_builder = CharacterBuilder.new()
-		_builder.name = "CharacterBuilder"
-		add_child(_builder)
-		_builder.spawned.connect(func(f: Figure) -> void:
-			f.position = _on_ground(camera.global_position - camera.global_transform.basis.z * 4.0)
-			add_child(f)
-			if _player.is_possessing() and _player_pawn != null and is_instance_valid(_player_pawn):
-				f.mode = "follow"
-				f.target = _player_pawn.body
-			else:
-				f.mode = "wander"
-			_figures.append(f)
-			print("[city] character put down, %s" % f.mode))
-	_builder.open(MechAssembler.catalog(true))
-
-
-func _swap_figure_limb() -> String:
-	while not _figures.is_empty() and not is_instance_valid(_figures[-1]):
-		_figures.pop_back()
-	if _figures.is_empty():
-		return "no figure to swap a limb of (Ctrl T puts one down)"
-	var f := _figures[-1]
-	var cat := MechAssembler.catalog()
-	var paths: Array = (f.build.at as Dictionary).keys()
-	paths.shuffle()
-	for path: String in paths:
-		var now: PartRecord = f.build.at[path]
-		var options := cat.filter({"family": ["figure"], "slot": [now.slot]}).filter(
-				func(r: PartRecord) -> bool: return r.id != now.id and f.why_not_swap(path, r) == "")
-		if not options.is_empty():
-			var pick: PartRecord = options[randi() % options.size()]
-			f.swap(path, pick)
-			return "figure's %s is now %s" % [path, pick.display_name]
-	return "no other part fits any of its slots"
-var _dress_colour := 1
-
-
-## Put a dressing brick on (or take one off) the player's mech's stud nearest the crosshair
-## line, within half a metre of it and 30 m off. What happened, in words.
-func _dress_at_crosshair(take_off: bool) -> String:
-	var from := camera.global_position
-	var dir := -camera.global_transform.basis.z
-	var best_d := 0.5
-	var best := {}
-	var parts := PartDressing.parts_of(_mech)
-	for id: String in parts:
-		var part: Node3D = parts[id]
-		for st in PartDressing.studs(part).studs:
-			var at: Vector3 = part.global_transform * (st.at as Vector3)
-			var along := (at - from).dot(dir)
-			if along < 0.0 or along > 30.0:
-				continue
-			var d := (from + dir * along).distance_to(at)
-			if d < best_d:
-				best_d = d
-				best = {"id": id, "key": st.key}
-	if best.is_empty():
-		return "no stud of your mech under the crosshair"
-	var store := PartDressing.load_store()
-	var list := PartDressing.of(store, "player", best.id)
-	if take_off:
-		list = PartDressing.remove(list, best.key)
-	else:
-		var r := PartDressing.add(parts[best.id], list, best.key, "brick", _dress_colour)
-		if not r.ok:
-			return "not there: " + String(r.why)
-		list = r.list
-	PartDressing.put(store, "player", best.id, list)
-	PartDressing.save_store(store)
-	PartDressing.apply(parts[best.id], list)
-	return "%d bricks on %s, %.1f kg" % [list.size(), best.id, PartDressing.mass(list)]
 ## The player's mech's pods and the mech page of the backpack (Docs/ModularParts.md stage 7).
 var _mech_pods: MechPods
 var _mech_screen: MechLoadoutScreen
@@ -6906,7 +6347,7 @@ func _physics_process(_delta: float) -> void:
 		# Laid a storey at a time and its bands rebuilding for storeys just laid
 		# (_lay_more): no shell stands in, and the old bands still draw what
 		# would leave -- held the same way, for the few ticks the bands take.
-		if _bands_building(b.id) and (_shells.has(b.id) or b.banded):
+		if drawing.bands_building(b.id) and (_shells.has(b.id) or b.banded):
 			continue
 		# Breakage as it always was; a mega building's collapse as a few big
 		# chunks, its furniture split out to be written off (CollapseDirector).
@@ -7008,7 +6449,7 @@ func _physics_process(_delta: float) -> void:
 		var gb := registry.get_building(id)
 		if gb == null or not gb.banded or not gb.is_materialised():
 			continue
-		if _bands_building(id):
+		if drawing.bands_building(id):
 			continue   # its groups wait for its bands; so does this
 		var gave := registry.storey_gave_way(id)
 		if gave >= 0:
@@ -7043,7 +6484,7 @@ func _physics_process(_delta: float) -> void:
 	_flush_furniture()
 	_retirer.drain()
 	t = _mark("retire", t)
-	_advance_bands()
+	drawing.advance_bands()
 	var t_rest := Time.get_ticks_usec()
 	_tend_rest_shells()
 	_part("bd_rest", t_rest)
@@ -7148,14 +6589,14 @@ func _physics_process(_delta: float) -> void:
 	t_ss = _part("ss_shells", t_ss)
 	if not _glass_owed.is_empty() or not _glass_jobs.is_empty():
 		var t_gl := Time.get_ticks_usec()
-		_build_owed_glass()
-		_glass_note(Time.get_ticks_usec() - t_gl)
+		drawing.build_owed_glass()
+		drawing.glass_note(Time.get_ticks_usec() - t_gl)
 	t_ss = _part("ss_glass", t_ss)
 	if not _shadow_jobs.is_empty():
-		_harvest_shadow_jobs()
+		drawing.harvest_shadow_jobs()
 	t_ss = _part("ss_proxies", t_ss)
 	if camera != null and Engine.get_physics_frames() % 8 == 2:
-		_stream_shadows()
+		drawing.stream_shadows()
 	t_ss = _part("ss_shadows", t_ss)
 	if camera != null and Engine.get_physics_frames() % 4 == 1:
 		_inst_update()
@@ -7200,7 +6641,7 @@ func _physics_process(_delta: float) -> void:
 	# during the frame rather than halfway through this tick (see
 	# IslandManager._submit_mesh_job).
 	islands.start_mesh_jobs()
-	_start_band_jobs()
+	drawing.start_band_jobs()
 
 	var tick_total := float(Time.get_ticks_usec() - t_tick) / 1000.0
 	_prof["script_total"] = tick_total
@@ -7248,7 +6689,7 @@ func _free_shell(id: int) -> void:
 	_shell_coarse.erase(id)
 	_shell_far.erase(id)
 	_shell_box.erase(id)
-	_far_hide(id)
+	drawing.far_hide(id)
 	_shell_inst.erase(id)
 	_far_real_done.erase(id)
 	var fb := registry.get_building(id)
@@ -7366,9 +6807,9 @@ func _stream_shells() -> void:
 		shell_budget -= _stream_shell(b, here)
 		# After the shell's own step, so a building whose shell just went
 		# gets its far box in the same tick rather than a pass later.
-		_far_sync(b)
+		drawing.far_sync(b)
 		_inst_sync(b)
-	_far_dmg_upload()
+	drawing.far_dmg_upload()
 
 
 ## One building's step of _stream_shells. Returns how much of the budget it used.
@@ -7377,13 +6818,13 @@ func _stream_shell(b: BuildingRegistry.Building, here: Vector3) -> int:
 		return 0
 	var dist: float = b.xform.origin.distance_to(here)
 	if not _shells.has(b.id):
-		if dist < SHELL_RANGE or _needs_far_shell(b):
+		if dist < SHELL_RANGE or drawing.needs_far_shell(b):
 			_make_shell(b.id, dist > SHELL_DETAIL_RANGE, dist >= SHELL_RANGE)
 			_shells_made += 1
 			return 1
 		return 0
 	if dist > SHELL_RANGE + SHELL_HYSTERESIS:
-		if not _needs_far_shell(b):
+		if not drawing.needs_far_shell(b):
 			_free_shell(b.id)
 			_shells_freed += 1
 			return 1
@@ -7404,7 +6845,7 @@ func _stream_shell(b: BuildingRegistry.Building, here: Vector3) -> int:
 	# A damaged building the far box cannot draw is never coarse (see
 	# _make_shell), so it has no tier to swap to: without this it rebuilt its
 	# banded shell every pass.
-	if not coarse and b.is_damaged() and not _far_draws_coarse(b):
+	if not coarse and b.is_damaged() and not drawing.far_draws_coarse(b):
 		return 0
 	# In at FADE_IN_AT, out past the far end of the fade band: the crossfade
 	# covers the whole band, so the old wide hysteresis is not needed to hide
@@ -7572,233 +7013,11 @@ func _inst_update() -> void:
 #   * a far box casts (the far MultiMesh), so a tower past the shell range
 #     still throws its long shadow into view.
 
-const BRICK_SHADOW_RANGE := 15.0
-## Proxies built or rebuilt per pass: a profile and a shell are ~0.5 ms.
-const SHADOW_PROXIES_PER_PASS := 2
-## A piece of wreckage up to this radius is "small" (metres, BrickIsland.radius).
-const SMALL_ISLAND_RADIUS := 2.5
-const SMALL_SHADOW_RANGE := 30.0
-## Directional shadows reach this far, so a tower's shadow does too. The splits
-## keep the first cascades as tight as the 100 m default had them.
-const SUN_SHADOW_DISTANCE := 400.0
 
-var _shadow_proxy := {}       ## building id -> MeshInstance3D, shadows only
 ## Proxies being built on a worker: building id -> [task, [mesh], alive bricks
 ## it was built from, dropped since]. The old proxy -- or, before the first,
 ## the bricks themselves -- casts until the new one is hung.
 var _shadow_jobs := {}
-var _shadow_proxy_alive := {} ## building id -> alive bricks when it was built
-## A proxy is rebuilt once its building has stopped losing bricks -- the same
-## count two passes running -- or after SHADOW_STALE_PASSES of it going on.
-## Rebuilt on every pass that saw a brick go, a building being taken apart
-## rebuilt its proxy every eight ticks, and a proxy is not the 0.5 ms above for
-## a big one: 10-28 ms (6,000-22,000 bricks), the worst tick of a collapse
-## after the solve's. A shadow a second or two behind the bricks it is cast
-## by, while they are still coming down, is not something anyone sees.
-const SHADOW_STALE_PASSES := 8
-var _shadow_seen := {}        ## building id -> alive bricks at the last pass
-var _shadow_stale := {}       ## building id -> passes it has been stale
-var _shadow_stats := {"proxies": 0, "bricks_casting": 0, "small_quiet": 0}
-
-
-func _setup_sun_shadows(sun: DirectionalLight3D) -> void:
-	sun.directional_shadow_mode = DirectionalLight3D.SHADOW_PARALLEL_4_SPLITS
-	sun.directional_shadow_max_distance = SUN_SHADOW_DISTANCE
-	# Fractions of the distance: 10, 36 and 120 m, against 10, 20 and 50 m of
-	# the default at 100 m. The first cascade, the one a figure's feet are
-	# in, is exactly as sharp as it was.
-	sun.directional_shadow_split_1 = 0.025
-	sun.directional_shadow_split_2 = 0.09
-	sun.directional_shadow_split_3 = 0.3
-	sun.directional_shadow_blend_splits = true
-	sun.directional_shadow_fade_start = 0.9
-	# Options > Video: two slices, the near one as sharp as the four's, the
-	# far one to the end (PerfCaps.md 2.2).
-	if BrickcityMenuHost.sun_cascades == 2:
-		sun.directional_shadow_mode = DirectionalLight3D.SHADOW_PARALLEL_2_SPLITS
-		sun.directional_shadow_split_1 = 0.025
-
-
-## Every so often: who casts what. Cheap -- a distance per brick building and
-## per island, and a proxy mesh only when one changes tier or is shot.
-func _stream_shadows() -> void:
-	var here := camera.global_position
-	var built := 0
-	var casting := 0
-	# Proxies whose building has no bricks drawn any more.
-	for id in _shadow_proxy.keys():
-		if not _brick_nodes.has(id):
-			_drop_shadow_proxy(id)
-	for id in _brick_nodes:
-		var b := registry.get_building(id)
-		if b == null or not b.is_materialised():
-			continue
-		var alive := world.get_alive_block_count(b.chunk)
-		var stale: bool = not _shadow_proxy.has(id)
-		if not stale and int(_shadow_proxy_alive.get(id, -1)) != alive:
-			_shadow_stale[id] = int(_shadow_stale.get(id, 0)) + 1
-			stale = alive == int(_shadow_seen.get(id, -1)) \
-					or int(_shadow_stale[id]) >= SHADOW_STALE_PASSES
-		_shadow_seen[id] = alive
-		var t_sp := Time.get_ticks_usec()
-		if stale and built < SHADOW_PROXIES_PER_PASS and _make_shadow_proxy(b):
-			built += 1
-			_shadow_stale.erase(id)
-		t_sp = _part("sp_make", t_sp)
-		casting += _set_brick_shadows_near(id, here)
-		_part("sp_near", t_sp)
-	var quiet := 0
-	var proxied := 0
-	for isl in islands.islands:
-		if isl == null or not is_instance_valid(isl.mesh):
-			continue
-		var dist := isl.mesh.global_position.distance_to(here)
-		var cast := isl.radius > SMALL_ISLAND_RADIUS \
-				or dist < SMALL_SHADOW_RANGE + isl.radius
-		# A big piece further off casts its coarse stand-in instead of its
-		# bricks once it has one (IslandManager.want_shadow_proxy).
-		var proxy := false
-		if cast and not isl.coarse and isl.radius > SMALL_ISLAND_RADIUS \
-				and dist > BRICK_SHADOW_RANGE + isl.radius:
-			islands.want_shadow_proxy(isl)
-			proxy = islands.has_shadow_proxy(isl)
-		var mode := (GeometryInstance3D.SHADOW_CASTING_SETTING_ON if cast and not proxy
-				else GeometryInstance3D.SHADOW_CASTING_SETTING_OFF)
-		if isl.mesh.cast_shadow != mode:
-			isl.mesh.cast_shadow = mode
-		for band in isl.bands:
-			if is_instance_valid(band) and (band as GeometryInstance3D).cast_shadow != mode:
-				(band as GeometryInstance3D).cast_shadow = mode
-		if is_instance_valid(isl.shadow_mesh) and isl.shadow_mesh.visible != proxy:
-			isl.shadow_mesh.visible = proxy
-		if proxy:
-			proxied += 1
-		if not cast:
-			quiet += 1
-	_shadow_stats = {"proxies": _shadow_proxy.size(), "bricks_casting": casting,
-			"small_quiet": quiet, "pieces_proxied": proxied}
-
-
-## Which of a building's bricks cast. Without a shadow shell, all of them.
-## With one, only the bands (and extra frames) within BRICK_SHADOW_RANGE of the
-## camera: a tower beside you is mostly far above you, and the part that is
-## not is where a stud's shadow can be seen. Where both cast, the shadow is the
-## same. Returns how many brick nodes cast.
-func _set_brick_shadows_near(id: int, here: Vector3) -> int:
-	var all: bool = not _shadow_proxy.has(id)
-	var nodes: Array = []
-	var mi = _brick_nodes.get(id)
-	if is_instance_valid(mi):
-		nodes.append(mi)
-		nodes.append_array((mi as Node).get_children())
-	nodes.append_array(_frame_nodes.get(id, []))
-	var casting := 0
-	for node in nodes:
-		if not is_instance_valid(node) or not (node is GeometryInstance3D):
-			continue
-		var g := node as GeometryInstance3D
-		var on := all
-		if not on and g is MeshInstance3D and (g as MeshInstance3D).mesh != null:
-			var box: AABB = g.global_transform * (g as MeshInstance3D).get_aabb()
-			on = _box_distance(box, here) < BRICK_SHADOW_RANGE
-		# Only when it changes: every set is a renderer call, and this pass
-		# set every node of every building in bricks every eighth tick
-		# (PerfCaps.md 4).
-		var mode := (GeometryInstance3D.SHADOW_CASTING_SETTING_ON if on
-				else GeometryInstance3D.SHADOW_CASTING_SETTING_OFF)
-		if g.cast_shadow != mode:
-			g.cast_shadow = mode
-		if on:
-			casting += 1
-	return casting
-
-
-func _set_brick_shadows(id: int, on: bool) -> void:
-	var mode := (GeometryInstance3D.SHADOW_CASTING_SETTING_ON if on
-			else GeometryInstance3D.SHADOW_CASTING_SETTING_OFF)
-	var mi = _brick_nodes.get(id)
-	if is_instance_valid(mi):
-		(mi as MeshInstance3D).cast_shadow = mode
-		for band in (mi as Node).get_children():
-			if band is GeometryInstance3D:
-				(band as GeometryInstance3D).cast_shadow = mode
-	for node in _frame_nodes.get(id, []):
-		if is_instance_valid(node) and node is GeometryInstance3D:
-			(node as GeometryInstance3D).cast_shadow = mode
-
-
-## A shadow-only shell of a materialised building, from what is standing now.
-func _make_shadow_proxy(b: BuildingRegistry.Building) -> bool:
-	if _shadow_jobs.has(b.id):
-		return false  # one on its way already
-	if b.is_build():
-		# A build's shell reads the world's blocks: here, as it always was.
-		var built: Mesh = BuildShell.build_mesh(world, b.build, _dead_by_frame(b), false)
-		if built == null:
-			return false
-		_attach_shadow_proxy(b, built, world.get_alive_block_count(b.chunk))
-		return true
-	# A recipe building's shell is arithmetic on the recipe and the damage
-	# masks, and nothing of the world: only the masks are worked out here (they
-	# read the bricks), the rest on a worker. Built here it was 4-25 ms a proxy
-	# -- the biggest thing left at the top of a collapse's worst ticks.
-	var fx: int = b.recipe.footprint_x
-	var fz: int = b.recipe.footprint_z
-	var courses: int = b.recipe.courses
-	var profile := registry.live_damage_profile(b.id)
-	var layout: Array = TowerRecipe.layout(courses)
-	var holder := [null]
-	var work := func() -> void:
-		holder[0] = BuildingShell.build_mesh(fx, fz, courses, profile, layout)
-		UploadLedger.note("building shadow", -1)
-	var task := WorkerThreadPool.add_task(work, false, "shadow proxy")
-	_shadow_jobs[b.id] = [task, holder, world.get_alive_block_count(b.chunk), false]
-	return true
-
-
-## Hang the proxies the workers have finished. Every tick, and nothing to do
-## on most of them.
-func _harvest_shadow_jobs() -> void:
-	for id in _shadow_jobs.keys():
-		var job: Array = _shadow_jobs[id]
-		if not WorkerThreadPool.is_task_completed(int(job[0])):
-			continue
-		WorkerThreadPool.wait_for_task_completion(int(job[0]))
-		_shadow_jobs.erase(id)
-		var b := registry.get_building(int(id))
-		# Dropped meanwhile (its bricks given back), or gone.
-		if bool(job[3]) or b == null or not b.is_materialised() or not _brick_nodes.has(id) \
-				or job[1][0] == null:
-			continue
-		_attach_shadow_proxy(b, job[1][0], int(job[2]))
-
-
-func _attach_shadow_proxy(b: BuildingRegistry.Building, mesh: Mesh, alive: int) -> void:
-	var mi: MeshInstance3D = _shadow_proxy.get(b.id)
-	if mi == null:
-		mi = MeshInstance3D.new()
-		mi.name = "ShadowProxy_%d" % b.id
-		mi.material_override = brick_material
-		mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_SHADOWS_ONLY
-		mi.transform = b.xform
-		add_child(mi)
-		_shadow_proxy[b.id] = mi
-	mi.mesh = mesh
-	# What it was built from: bricks lost since then make it stale again.
-	_shadow_proxy_alive[b.id] = alive
-
-
-func _drop_shadow_proxy(id: int) -> void:
-	if _shadow_jobs.has(id):
-		(_shadow_jobs[id] as Array)[3] = true  # still waited for; never hung
-	var mi = _shadow_proxy.get(id)
-	if is_instance_valid(mi):
-		(mi as Node).queue_free()
-	_shadow_proxy.erase(id)
-	_shadow_proxy_alive.erase(id)
-	_shadow_seen.erase(id)
-	_shadow_stale.erase(id)
-	_set_brick_shadows(id, true)
 
 
 # ---------------------------------------------------------------------------
@@ -7820,8 +7039,6 @@ func _drop_shadow_proxy(id: int) -> void:
 # A player build can be any shape, so it keeps its shell out there instead,
 # drawing only (_needs_far_shell), until Stage 4 bakes it.
 
-## Room for this many far instances before the buffer has to grow.
-const FAR_INITIAL_CAPACITY := 256
 ## Stage 5, the crossfade. A banded shell is fully drawn nearer than FADE_NEAR
 ## and gone at FADE_FAR, alpha-blended in between over its far box, which is
 ## drawn whole under it (city_far.gdshader): a real crossfade.
@@ -7830,7 +7047,6 @@ const FAR_INITIAL_CAPACITY := 256
 const FADE_NEAR := 80.0
 const FADE_FAR := 140.0
 const FADE_IN_AT := 130.0
-var _far_fade := {}   ## building id -> 1.0 while its box crossfades with a shell
 
 
 ## Godot's own visibility-range fade over the band. It BLENDS a fading
@@ -7842,254 +7058,8 @@ func _fade_out(g: GeometryInstance3D) -> void:
 	g.visibility_range_end = (FADE_NEAR + FADE_FAR) * 0.5
 	g.visibility_range_end_margin = (FADE_FAR - FADE_NEAR) * 0.5
 	g.visibility_range_fade_mode = GeometryInstance3D.VISIBILITY_RANGE_FADE_SELF
-## Rows of damage before the texture has to grow.
-const FAR_DMG_INITIAL_ROWS := 16
 var _far: MultiMeshInstance3D = null
-var _far_slot := {}   ## building id -> its instance in the far MultiMesh
-var _far_on := {}     ## building id -> true while its far box is drawn
 var _shell_box := {}  ## building id -> its coarse shell is drawn by its far box
-var _far_dmg_row := {}                  ## building id -> its row of damage
-var _far_dmg_free: Array[int] = []      ## rows given back
-var _far_dmg_rows := 0                  ## rows handed out, ever
-var _far_dmg_width := 0                 ## texels a row: four per band
-var _far_dmg_height := 0
-var _far_dmg_bytes := PackedByteArray()
-var _far_dmg_tex: ImageTexture = null
-var _far_dmg_dirty := false
-
-
-## A building past SHELL_RANGE the far box would draw wrongly: it keeps a shell.
-func _needs_far_shell(b: BuildingRegistry.Building) -> bool:
-	# An intact tree is drawn by its instanced set out there instead.
-	return b.is_build() and not _inst_ok(b)
-
-
-## Can the far box stand in for this building's coarse shell (Stage 2)? A
-## recipe building whose damage, if any, is in its profile: not a build, and
-## not holding bricks, whose damage the profile does not have yet.
-func _far_draws_coarse(b: BuildingRegistry.Building) -> bool:
-	return not b.is_build() and not b.is_materialised()
-
-
-## Show or hide one building's far box to match what else draws it.
-func _far_sync(b: BuildingRegistry.Building) -> void:
-	var want: bool
-	if _shell_box.has(b.id):
-		# Its coarse shell is drawn by the far box. Kept while the shell is,
-		# materialised or not: a building shot at range holds its shell until
-		# its bricks are built, and hiding the box would leave nothing drawn.
-		want = not b.toppled
-	else:
-		want = not (b.toppled or b.is_materialised() or _shells.has(b.id)
-				or b.is_build())
-	# Under a banded shell that is fading (Stage 5), drawn too, flagged so it
-	# sits just inside the shell for the shell to blend over.
-	var fade := 0.0
-	if not want and _shells.has(b.id) and not b.is_build() and not b.is_materialised() \
-			and not b.toppled and not _shell_coarse.get(b.id, false):
-		want = true
-		fade = 1.0
-	if want == _far_on.has(b.id) and fade == float(_far_fade.get(b.id, 0.0)):
-		return
-	if not want:
-		_far_hide(b.id)
-		return
-	var mm := _far_multimesh()
-	var slot := _far_slot_of(b.id)
-	var r: Dictionary = b.recipe
-	# The cornice is left off: it is a row of black buttresses along one edge
-	# (BuildingShell.build_arrays), a pixel at this range, and a box that
-	# included its height would put the roof above the other three walls.
-	var size := Vector3(int(r.footprint_x) * STUD,
-			(TowerRecipe.total_plates(int(r.courses)) - TowerRecipe.PLATES_PER_COURSE) * PLATE,
-			int(r.footprint_z) * STUD)
-	mm.set_instance_transform(slot, b.xform * Transform3D(Basis.from_scale(size), Vector3.ZERO))
-	if _far_dmg_row.has(b.id):
-		_far_dmg_free.append(int(_far_dmg_row[b.id]))
-		_far_dmg_row.erase(b.id)
-	mm.set_instance_custom_data(slot, Color(float(r.courses), float(_far_dmg_write(b)),
-			float(b.id), fade))
-	_far_on[b.id] = true
-	_far_fade[b.id] = fade
-
-
-## Hide a building's far box, if it has one drawn. Zero scale rather than a
-## compacted buffer: slots never move, so nothing else has to be rewritten.
-func _far_hide(id: int) -> void:
-	if not _far_on.has(id):
-		return
-	_far_on.erase(id)
-	_far_fade.erase(id)
-	_far.multimesh.set_instance_transform(int(_far_slot[id]),
-			Transform3D(Basis.from_scale(Vector3.ZERO), Vector3.ZERO))
-	if _far_dmg_row.has(id):
-		_far_dmg_free.append(int(_far_dmg_row[id]))
-		_far_dmg_row.erase(id)
-
-
-func _far_slot_of(id: int) -> int:
-	if _far_slot.has(id):
-		return _far_slot[id]
-	var mm := _far.multimesh
-	var slot := _far_slot.size()
-	if slot >= mm.instance_count:
-		_far_grow(mm.instance_count * 2)
-	_far_slot[id] = slot
-	mm.visible_instance_count = slot + 1
-	return slot
-
-
-## A bigger buffer with the same contents: setting instance_count clears it.
-func _far_grow(capacity: int) -> void:
-	var mm := _far.multimesh
-	var old := mm.buffer
-	var used := mm.visible_instance_count
-	mm.instance_count = capacity
-	var buf := mm.buffer
-	for i in old.size():
-		buf[i] = old[i]
-	mm.buffer = buf
-	mm.visible_instance_count = used
-
-
-## Write a building's damage into a row of the texture. -1 if it has none.
-##
-## Four texels a band, one per side in BuildingShell's SIDE_* order, whose
-## RGBA bytes are that side's 32-bit segment mask, low byte first. A band the
-## profile does not name is standing all round.
-func _far_dmg_write(b: BuildingRegistry.Building) -> int:
-	if b.damage_profile.is_empty():
-		return -1
-	var bands := TowerRecipe.layout(int(b.recipe.courses)).size()
-	var row: int
-	if not _far_dmg_free.is_empty():
-		row = _far_dmg_free.pop_back()
-	else:
-		row = _far_dmg_rows
-		_far_dmg_rows += 1
-	_far_dmg_fit(bands * 4, row + 1)
-	_far_dmg_row[b.id] = row
-	var at := row * _far_dmg_width * 4
-	for band in bands:
-		var masks: PackedInt32Array = b.damage_profile.get(band, PackedInt32Array())
-		for side in 4:
-			var m: int = masks[side] if masks.size() == 4 else BuildingShell.ALL_STANDING
-			_far_dmg_bytes[at] = m & 0xFF
-			_far_dmg_bytes[at + 1] = (m >> 8) & 0xFF
-			_far_dmg_bytes[at + 2] = (m >> 16) & 0xFF
-			_far_dmg_bytes[at + 3] = (m >> 24) & 0xFF
-			at += 4
-	_far_dmg_dirty = true
-	return row
-
-
-## Make the damage texture at least this big, keeping what is in it.
-func _far_dmg_fit(width: int, height: int) -> void:
-	if width <= _far_dmg_width and height <= _far_dmg_height:
-		return
-	var w := maxi(width, _far_dmg_width)
-	var h := maxi(_far_dmg_height, FAR_DMG_INITIAL_ROWS)
-	while h < height:
-		h *= 2
-	var bytes := PackedByteArray()
-	bytes.resize(w * h * 4)
-	bytes.fill(0xFF)
-	for y in _far_dmg_height:
-		for x in _far_dmg_width * 4:
-			bytes[(y * w) * 4 + x] = _far_dmg_bytes[(y * _far_dmg_width) * 4 + x]
-	_far_dmg_bytes = bytes
-	_far_dmg_width = w
-	_far_dmg_height = h
-	# A new size is a new texture; update() only takes the same size.
-	_far_dmg_tex = null
-
-
-## Upload the damage rows written this tick, once.
-func _far_dmg_upload() -> void:
-	if not _far_dmg_dirty or _far == null:
-		return
-	_far_dmg_dirty = false
-	var img := Image.create_from_data(_far_dmg_width, _far_dmg_height, false,
-			Image.FORMAT_RGBA8, _far_dmg_bytes)
-	if _far_dmg_tex == null:
-		_far_dmg_tex = ImageTexture.create_from_image(img)
-		(_far.material_override as ShaderMaterial).set_shader_parameter("damage_tex", _far_dmg_tex)
-	else:
-		_far_dmg_tex.update(img)
-
-
-func _far_multimesh() -> MultiMesh:
-	if _far != null:
-		return _far.multimesh
-	var mm := MultiMesh.new()
-	mm.transform_format = MultiMesh.TRANSFORM_3D
-	mm.use_custom_data = true
-	mm.mesh = _far_box_mesh()
-	mm.instance_count = FAR_INITIAL_CAPACITY
-	mm.visible_instance_count = 0
-	var mat := ShaderMaterial.new()
-	mat.shader = load("res://shaders/city_far.gdshader")
-	WeatherFx.register(mat)
-	# The colours the shell is built in (BuildingShell.build_arrays), so the
-	# swap from a shell has no colour step.
-	var courses := []
-	for c in TowerRecipe.COURSE_COLOURS:
-		courses.append(_far_rgb(c))
-	mat.set_shader_parameter("course_colours", courses)
-	mat.set_shader_parameter("base_colour", _far_rgb(TowerRecipe.BASE_COLOUR))
-	mat.set_shader_parameter("slab_colour", _far_rgb(TowerRecipe.SLAB_COLOUR))
-	_far = MultiMeshInstance3D.new()
-	_far.name = "FarCity"
-	# Not interpolated: a slot shown or hidden (a zero-scale transform) would
-	# otherwise grow or shrink over a frame, and the buildings never move.
-	_far.physics_interpolation_mode = Node.PHYSICS_INTERPOLATION_MODE_OFF
-	_far.multimesh = mm
-	_far.material_override = mat
-	# Casts: a tower's shadow is long and seen from far off (section 7.2).
-	# Ten triangles a building, and the cascades cut away what is out of reach.
-	_far.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
-	add_child(_far)
-	return mm
-
-
-static func _far_rgb(filament: int) -> Vector3:
-	var c := BrickWorld.get_filament_colour(filament)
-	return Vector3(c.r, c.g, c.b)
-
-
-## A box from (0,0,0) to (1,1,1), four walls and a roof, white. The instance
-## transform scales it to the building; the underside is never seen.
-static func _far_box_mesh() -> ArrayMesh:
-	var verts := PackedVector3Array()
-	var normals := PackedVector3Array()
-	# Each face's corners run anticlockwise seen from outside.
-	var faces := [
-		[Vector3(0, 0, 1), [Vector3(0, 0, 1), Vector3(1, 0, 1), Vector3(1, 1, 1), Vector3(0, 1, 1)]],
-		[Vector3(0, 0, -1), [Vector3(1, 0, 0), Vector3(0, 0, 0), Vector3(0, 1, 0), Vector3(1, 1, 0)]],
-		[Vector3(1, 0, 0), [Vector3(1, 0, 1), Vector3(1, 0, 0), Vector3(1, 1, 0), Vector3(1, 1, 1)]],
-		[Vector3(-1, 0, 0), [Vector3(0, 0, 0), Vector3(0, 0, 1), Vector3(0, 1, 1), Vector3(0, 1, 0)]],
-		[Vector3(0, 1, 0), [Vector3(0, 1, 1), Vector3(1, 1, 1), Vector3(1, 1, 0), Vector3(0, 1, 0)]],
-	]
-	var indices := PackedInt32Array()
-	for f in faces:
-		var base := verts.size()
-		for c in f[1]:
-			verts.append(c)
-			normals.append(f[0])
-		# Godot's front face is clockwise, so the triangles run backwards.
-		indices.append_array([base, base + 2, base + 1, base, base + 3, base + 2])
-	var colours := PackedColorArray()
-	colours.resize(verts.size())
-	colours.fill(Color.WHITE)
-	var arrays := []
-	arrays.resize(Mesh.ARRAY_MAX)
-	arrays[Mesh.ARRAY_VERTEX] = verts
-	arrays[Mesh.ARRAY_NORMAL] = normals
-	arrays[Mesh.ARRAY_COLOR] = colours
-	arrays[Mesh.ARRAY_INDEX] = indices
-	var mesh := ArrayMesh.new()
-	mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
-	return mesh
 
 
 ## A building in bricks past DEMESH_RANGE that is damaged is drawn from its
@@ -8104,32 +7074,6 @@ static func _far_box_mesh() -> ArrayMesh:
 ## is (_shell_stale, after a hit).
 var _far_real_owed := {}   ## building id -> the shell node waiting for its mesh
 var _far_real_done := {}   ## building id -> the shell node drawn from its bricks
-var far_real_built := 0
-
-
-func _far_real(id: int, mi: MeshInstance3D) -> void:
-	var b := registry.get_building(id)
-	if world.get_alive_block_count(b.chunk) < IslandManager.COARSE_ASYNC_BLOCKS:
-		_far_real_apply(id, mi, world.build_chunk_coarse_mesh(b.chunk))
-		return
-	if not world.coarse_pending(b.chunk):
-		world.coarse_chunk_async(b.chunk)
-	_far_real_owed[id] = mi
-
-
-func _harvest_far_real() -> void:
-	for id in _far_real_owed.keys():
-		var mi = _far_real_owed[id]
-		var b := registry.get_building(id)
-		if not is_instance_valid(mi) or _shells.get(id) != mi or b == null or not b.is_materialised():
-			_far_real_owed.erase(id)
-			continue
-		if world.coarse_ready(b.chunk):
-			_far_real_owed.erase(id)
-			_far_real_apply(id, mi, world.take_coarse_mesh(b.chunk))
-		elif not world.coarse_pending(b.chunk):
-			# Settled by an edit (BrickWorld.settle_coarse_job): asked again.
-			world.coarse_chunk_async(b.chunk)
 
 
 ## A shell drawn from its bricks, hit again: asked again of the bricks, in
@@ -8149,20 +7093,9 @@ func _refresh_real_shell(id: int) -> bool:
 		return false
 	if world.get_alive_block_count(b.chunk) == 0 and not registry.is_partial(b):
 		return false
-	_far_real(id, mi)
+	drawing.far_real(id, mi)
 	_glass_owed.append([mi, id, {}, false, true])
 	return true
-
-
-func _far_real_apply(id: int, mi: MeshInstance3D, arrays: Array) -> void:
-	var m := ArrayMesh.new()
-	if not arrays.is_empty() and IslandManager.mesh_arrays_ok(arrays, "far building"):
-		m.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
-	if mi.mesh != null:
-		_retirer.retire(mi.mesh)
-	mi.mesh = m
-	_far_real_done[id] = mi
-	far_real_built += 1
 
 
 ## Drop the mesh of resident buildings nobody can see the bricks of, and put it
@@ -8170,11 +7103,11 @@ func _far_real_apply(id: int, mi: MeshInstance3D, arrays: Array) -> void:
 func _stream_detail() -> void:
 	var t_sd := Time.get_ticks_usec()
 	if not _far_real_owed.is_empty():
-		_harvest_far_real()
+		drawing.harvest_far_real()
 	t_sd = _part("sd_far", t_sd)
-	_tend_brick_panes()
+	drawing.tend_brick_panes()
 	t_sd = _part("sd_panes", t_sd)
-	_tend_far_coarse()
+	drawing.tend_far_coarse()
 	_part("sd_coarse", t_sd)
 	var here := camera.global_position
 	var t0 := Time.get_ticks_usec()
@@ -8219,238 +7152,15 @@ func _stream_detail() -> void:
 	_demesh_ms += float(Time.get_ticks_usec() - t0) / 1000.0
 
 
-## A building drawn in bricks has painted windows too, past the range its rooms
-## are drawn in (Docs/DestructionLod.md 3.2): the shell's panes, each only
-## where its window still stands in the bricks (`_cell_standing`, as a
-## demeshed one's, Structures.md 4.2), hidden inside InteriorGroups'
-## range by the shader's `near_hide` -- the rooms dither in as they dither out.
-## Before, a building in bricks showed its rooms empty past INTERIOR_RANGE and
-## a shot from mid range changed painted windows into drawn furniture.
-## Made again once its bricks have changed and it is quiet (_interior_unsure),
-## nearest first, one a pass.
-var _brick_panes := {}    ## building id -> its pane node, a child of its brick node
 var _panes_owed := {}     ## building id -> true: its bricks changed since its panes were made
-var brick_panes_built := 0
-var brick_panes_ms := 0.0
-func _tend_brick_panes() -> void:
-	if not _harvest_panes():
-		return
-	var here := camera.global_position
-	var best := -1
-	var best_d := INF
-	for id in _brick_nodes:
-		var cand := registry.get_building(id)
-		if cand == null or cand.is_build() or cand.toppled or _toppling.has(id):
-			continue
-		var have = _brick_panes.get(id)
-		if have != null and not is_instance_valid(have):
-			_brick_panes.erase(id)
-			have = null
-		if have != null and not _panes_owed.has(id):
-			continue
-		if _interior_unsure(id):
-			continue
-		var d := cand.xform.origin.distance_to(here)
-		if d < best_d:
-			best_d = d
-			best = id
-	if best < 0:
-		return
-	var t0 := Time.get_ticks_usec()
-	var b := registry.get_building(best)
-	_panes_owed.erase(best)
-	# Made on a worker, from a copy of which cells stand: made here, the panes
-	# of a big building were 6-15 ms in one tick, half of it handing the mesh to
-	# the renderer while some other upload held it (PerfCaps.md 4). The old
-	# panes stay up until the new ones are hung.
-	var fx: int = b.recipe.footprint_x
-	var fz: int = b.recipe.footprint_z
-	var courses: int = b.recipe.courses
-	var room_seed := registry.room_seed_of(best)
-	var t_pp := Time.get_ticks_usec()
-	var layout := TowerRecipe.layout(courses)
-	var lattice := RoomManifest.lattice_for(fx, fz, courses)
-	var program: Dictionary = (b.recipe.get("program", {}) as Dictionary).duplicate(true)
-	t_pp = _part("pn_prep", t_pp)
-	var standing := BuildingShell.standing_copy(world, b.chunk,
-			BuildingShell.window_rows(courses, layout, lattice))
-	_part("pn_copy", t_pp)
-	var holder := [null]
-	var on_worker := worker_meshes
-	var task := WorkerThreadPool.add_task(func() -> void:
-		var arrays := BuildingShell.window_arrays(fx, fz, courses, room_seed, layout, lattice,
-				{}, program, standing)
-		if not arrays.is_empty():
-			holder[0] = BuildingShell.window_mesh_of(arrays) if on_worker else (arrays as Variant)
-			UploadLedger.note("panes", UploadLedger.verts_of(arrays)),
-			true, "brick panes")
-	_pane_job = [task, holder, best]
-	brick_panes_built += 1
-	brick_panes_ms += float(Time.get_ticks_usec() - t0) / 1000.0
 
 
 var _pane_job: Array = []   ## [task, [mesh], building id] while panes are being made
 
 
-## A building in bricks far off is drawn as its coarse stand-in -- the live
-## bricks' outer surface merged across bricks of a colour, brick outlines
-## still drawn from its UV2 (BrickWorld.build_chunk_coarse_mesh, a far
-## piece's stand-in) -- instead of its bands, every brick's faces. Looking down
-## a street of twelve buildings in bricks the bands were 4.6M triangles and
-## 16.7 ms of a 21.7 ms GPU frame; the four past 80 m drawn coarse, 1.7M
-## triangles became 140k and the frame 12.7 ms, the picture the same
-## (PerfCaps.md 5). Past FAR_COARSE_RANGE, quiet for FAR_COARSE_QUIET_MS; back
-## to its bands inside FAR_COARSE_BACK, or the moment a band of it changes. The
-## bands stay built underneath, only hidden: what a hit patches is them.
-const FAR_COARSE_RANGE := 60.0
-const FAR_COARSE_BACK := 50.0
-const FAR_COARSE_QUIET_MS := 3000
 static var far_coarse_enabled := true
-var _far_coarse := {}        ## building id -> its stand-in node (bands hidden)
 ## building id -> [alive bricks asked at, upload task or -1, [mesh]]: being made.
 var _far_coarse_jobs := {}
-var far_coarse_built := 0
-
-
-func _tend_far_coarse() -> void:
-	var here := camera.global_position
-	# Stand-ins come in: arrays from the world's worker, then the mesh made on
-	# one of ours (handed to the renderer here, it would wait as a band did).
-	for id in _far_coarse_jobs.keys():
-		var job: Array = _far_coarse_jobs[id]
-		var b := registry.get_building(id)
-		var gone: bool = b == null or not b.is_materialised() or not _brick_nodes.has(id)
-		if int(job[1]) >= 0:
-			if not WorkerThreadPool.is_task_completed(int(job[1])):
-				continue
-			WorkerThreadPool.wait_for_task_completion(int(job[1]))
-			_far_coarse_jobs.erase(id)
-			var mesh: ArrayMesh = (job[2] as Array)[0]
-			if mesh != null and not gone and far_coarse_enabled \
-					and world.get_alive_block_count(b.chunk) == int(job[0]) \
-					and not _bands_building(id) and not _toppling.has(id) \
-					and _box_distance(CityPlacer.box_of(b), here) > FAR_COARSE_BACK:
-				_far_coarse_show(id, mesh)
-			elif mesh != null:
-				_retirer.retire(mesh)
-			continue
-		if gone:
-			if b == null or not world.coarse_pending(b.chunk):
-				_far_coarse_jobs.erase(id)
-			continue
-		if not world.coarse_ready(b.chunk):
-			if not world.coarse_pending(b.chunk):
-				_far_coarse_jobs.erase(id)   # settled by a change to the chunk
-			continue
-		var arrays: Array = world.take_coarse_mesh(b.chunk)
-		if arrays.is_empty():
-			_far_coarse_jobs.erase(id)
-			continue
-		var holder := [null]
-		if not worker_meshes:
-			# Headless: made here, and shown next pass (worker_meshes).
-			var hm := ArrayMesh.new()
-			hm.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
-			holder[0] = hm
-			job[1] = WorkerThreadPool.add_task(func() -> void: pass, false, "far coarse building")
-		else:
-			job[1] = WorkerThreadPool.add_task(func() -> void:
-				var m := ArrayMesh.new()
-				m.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
-				UploadLedger.note("far building", UploadLedger.verts_of(arrays))
-				holder[0] = m, false, "far coarse building")
-		job[2] = holder
-	# Which go coarse, and which come back. At most one asked for a pass.
-	var now := Time.get_ticks_msec()
-	var asked := false
-	for id in _brick_nodes:
-		var b := registry.get_building(id)
-		if b == null or not b.is_materialised():
-			continue
-		var dist := _box_distance(CityPlacer.box_of(b), here)
-		if _far_coarse.has(id) and not is_instance_valid(_far_coarse[id]):
-			_far_coarse.erase(id)   # its node went with its bricks' node
-		if _far_coarse.has(id):
-			if not far_coarse_enabled or dist < FAR_COARSE_BACK or _toppling.has(id) \
-					or b.toppled:
-				_far_coarse_drop(id)
-			continue
-		if asked or not far_coarse_enabled or _far_coarse_jobs.has(id) \
-				or dist <= FAR_COARSE_RANGE or now - b.materialised_at < FAR_COARSE_QUIET_MS \
-				or _bands_building(id) or _toppling.has(id) or b.toppled \
-				or world.coarse_pending(b.chunk):
-			continue
-		world.coarse_chunk_async(b.chunk)
-		_far_coarse_jobs[id] = [world.get_alive_block_count(b.chunk), -1, []]
-		asked = true
-
-
-func _far_coarse_show(id: int, mesh: ArrayMesh) -> void:
-	var parent = _brick_nodes.get(id)
-	if parent == null or not is_instance_valid(parent):
-		_retirer.retire(mesh)
-		return
-	var node := MeshInstance3D.new()
-	node.name = "FarCoarse"
-	node.mesh = mesh
-	node.material_override = brick_material
-	InstanceParams.put(node, &"weather_sway", _sway_of(id))
-	InstanceParams.put(node, &"weather_snowcap", 1.0 if _is_tree(id) else 0.0)
-	InstanceParams.put(node, &"grain_origin",
-			InstanceParams.of(parent as MeshInstance3D, &"grain_origin"))
-	node.physics_interpolation_mode = Node.PHYSICS_INTERPOLATION_MODE_OFF
-	node.cast_shadow = (parent as MeshInstance3D).cast_shadow
-	(parent as Node3D).add_child(node)
-	for band in _brick_bands.get(id, []):
-		if is_instance_valid(band):
-			(band as Node3D).visible = false
-	_far_coarse[id] = node
-	far_coarse_built += 1
-
-
-## Its bands drawn again, and its stand-in gone. Nothing if it has none.
-func _far_coarse_drop(id: int) -> void:
-	if not _far_coarse.has(id):
-		return
-	var node = _far_coarse[id]
-	_far_coarse.erase(id)
-	for band in _brick_bands.get(id, []):
-		if is_instance_valid(band):
-			(band as Node3D).visible = true
-	if node != null and is_instance_valid(node):
-		_retirer.retire((node as MeshInstance3D).mesh)
-		(node as Node).queue_free()
-
-
-## Hang the panes a worker has finished. False while one is still being made.
-func _harvest_panes() -> bool:
-	if _pane_job.is_empty():
-		return true
-	if not WorkerThreadPool.is_task_completed(int(_pane_job[0])):
-		return false
-	WorkerThreadPool.wait_for_task_completion(int(_pane_job[0]))
-	var id: int = _pane_job[2]
-	var made = (_pane_job[1] as Array)[0]
-	if made is Array:
-		made = BuildingShell.window_mesh_of(made)   # headless: made here (worker_meshes)
-	var panes: ArrayMesh = made
-	_pane_job = []
-	var parent = _brick_nodes.get(id)
-	if parent == null or not is_instance_valid(parent):
-		return true
-	var old = _brick_panes.get(id)
-	if old != null and is_instance_valid(old):
-		(old as Node).queue_free()
-	_brick_panes.erase(id)
-	if panes != null:
-		var glass := MeshInstance3D.new()
-		glass.mesh = panes
-		glass.material_override = BuildingShell.window_material()
-		glass.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-		glass.set_instance_shader_parameter("near_hide", InteriorGroups.INTERIOR_RANGE)
-		(parent as Node3D).add_child(glass)
-		_brick_panes[id] = glass
-	return true
 
 
 ## Give back the bake and the mesh; keep the chunk and the collision.
@@ -8463,7 +7173,7 @@ func _demesh(id: int) -> void:
 		_retirer.retire(mi.mesh)
 		# The band nodes are its children and go with it; their meshes are
 		# retired first so the renderer is not still reading them.
-		for node in _take_bands(id):
+		for node in drawing.take_bands(id):
 			if is_instance_valid(node):
 				_retirer.retire((node as MeshInstance3D).mesh)
 		# And the furniture, which is ALSO a child of this node. Freeing the
@@ -8731,7 +7441,7 @@ func _demote(id: int, _dist: float) -> void:
 		(_brick_nodes[id] as MeshInstance3D).queue_free()
 		_brick_nodes.erase(id)
 	_free_frames(id)
-	_take_bands(id)
+	drawing.take_bands(id)
 	_band_cursor.erase(id)
 	_brick_meshes.erase(id)
 	_brick_index_bytes.erase(id)
@@ -8892,14 +7602,6 @@ func _process(delta: float) -> void:
 var _hud_cache := {}
 
 
-## One of the view switches (DebugView): 7, 8 and 9 in play.
-func _view_cycle(kind: int) -> void:
-	DebugView.cycle(kind)
-	_view_owed = true
-	print("[city] view: %s" % DebugView.line())
-	dev_hud.update_hud()
-
-
 ## Make everything the city draws match the view switches.
 ##
 ## Structure is what draws under the nodes that ARE the city's bricks: each
@@ -8996,19 +7698,8 @@ func _update_reticle() -> void:
 		_reticle.queue_redraw()
 
 
-## Flip a shader bool and return its new value. Never reads the material.
-func _toggle_shader(param: String) -> bool:
-	var on: bool = not bool(_shader_toggles.get(param, true))
-	_shader_toggles[param] = on
-	brick_material.set_shader_parameter(param, on)
-	return on
-
-
 # --- keys (Options > Controls, and > Developer) ----------------------------------
 
-## The player's actions the city handles itself, and the key each stands for in
-## _unhandled_input's match (its arms keep the default keys' names).
-const PLAYER_KEYS := {&"use_vehicle": KEY_M}
 ## Developer mode's actions (project.godot's dev_*, rebound on Options >
 ## Developer), by the key each stands for.
 const DEV_KEYS := {
@@ -9024,296 +7715,8 @@ const DEV_KEYS := {
 }
 
 
-## The key `event` stands for, by the action it is bound to (so a rebinding
-## counts), or KEY_NONE. Modifiers are ignored: Shift+Z is still the tank key,
-## and its arm reads the Shift.
-static func _key_of(event: InputEvent) -> Key:
-	for a in PLAYER_KEYS:
-		if event.is_action_pressed(a):
-			return PLAYER_KEYS[a]
-	# The developer keys only in developer mode (DevMode, Options > Gameplay).
-	if not DevMode.on:
-		return KEY_NONE
-	for a in DEV_KEYS:
-		if event.is_action_pressed(a):
-			return DEV_KEYS[a]
-	return KEY_NONE
-
-
 func _unhandled_input(event: InputEvent) -> void:
-	# Terrain edit mode: everything but these is the editor's.
-	if _edit_mode:
-		if event is InputEventKey and event.pressed and not event.echo:
-			match _key_of(event):
-				KEY_F11:
-					_toggle_terrain_edit()
-				KEY_F10:
-					_toggle_terrain_dev_menu()
-				KEY_F1:
-					stats_label.visible = not stats_label.visible
-		return
-	# Rodeo (Docs/AIRoster.md 4.5): on foot, melee (E) climbs an enemy mech in reach
-	# instead of striking (_melee_context); on its back, E held plants the charge and
-	# jump gets off.
-	if _player.is_possessing() and _player_pawn != null and is_instance_valid(_player_pawn):
-		if _riding() != null and event.is_action_pressed(&"jump"):
-			_riding().rodeo.drop("jumped")
-			return
-		if vehicles.aboard() != null and event.is_action_pressed(&"jump"):
-			vehicles.aboard().rodeo.get_off(_player_pawn, "jumped")
-			return
-	# On foot the buttons are the player's own (rebindable input actions,
-	# PlayerController): firing, aiming and reloading go through the pawn.
-	if event is InputEventMouseButton and (_player.is_possessing() or _pilot.is_piloting()):
-		return
-	if event is InputEventMouseButton and not event.pressed 			and event.button_index == MOUSE_BUTTON_LEFT:
-		_gun.set_trigger(false)
-	if event is InputEventMouseButton and event.pressed:
-		match event.button_index:
-			MOUSE_BUTTON_LEFT:
-				if _gun_armed:
-					_gun.set_trigger(true)
-				else:
-					_fire(_blast_radius)
-				return
-			MOUSE_BUTTON_WHEEL_UP:
-				if not _player.is_possessing():
-					_set_blast_radius(_blast_radius * BLAST_STEP)
-				return
-			MOUSE_BUTTON_WHEEL_DOWN:
-				if not _player.is_possessing():
-					_set_blast_radius(_blast_radius / BLAST_STEP)
-				return
-	# The mech's one button (AI.md 2.1): on foot, F -- a tap toggles FOLLOW and
-	# HOLD, held while aiming sends it to attack where the crosshair is.
-	if event is InputEventKey and not event.echo and event.is_action(&"mech_order") \
-			and _mech_cmd != null and _player.is_possessing():
-		if event.pressed:
-			_mech_cmd.press(ai_services.now())
-		else:
-			var o := _mech_cmd.release(ai_services.now(), _aim_point())
-			print("[city] mech order: %s" % MechBrain.Order.keys()[o])
-		return
-	if not (event is InputEventKey and event.pressed and not event.echo):
-		return
-	# On foot by the player's own mech of parts: Ctrl B puts a brick on the stud under the
-	# crosshair, Ctrl Shift B takes it off, Ctrl Alt B the next colour (stage 11: dressing).
-	if event.ctrl_pressed and event.keycode == KEY_B and _player.is_possessing() and _mech != null \
-			and is_instance_valid(_mech) and not PartDressing.parts_of(_mech).is_empty():
-		if event.alt_pressed:
-			_dress_colour = (_dress_colour + 1) % PartDressing.COLOURS
-			print("[city] dressing colour %d" % _dress_colour)
-		else:
-			print("[city] dressing: %s" % _dress_at_crosshair(event.shift_pressed))
-		return
-	# Ctrl T: the figures made in the asset workshop, in turn, walking a circle ahead of the
-	# camera; Ctrl Shift T swaps a limb of the last one for another that fits (stage 12).
-	if event.ctrl_pressed and event.keycode == KEY_T:
-		if event.alt_pressed:
-			_open_character_builder()
-		else:
-			print("[city] %s" % (_swap_figure_limb() if event.shift_pressed else _spawn_figure()))
-		return
-	# In the mech, 1 and 2 are its pods (MechPods).
-	if _pilot.is_piloting() and _mech_pods != null and _pilot.mech == _mech_pods.mech:
-		for slot in MechPods.SLOTS:
-			if event.is_action_pressed(StringName("slot_%d" % (slot + 1))):
-				if not _mech_pods.use(slot):
-					var pod: PodGenerator.Result = _mech_pods.slots[slot]
-					print("[city] pod %d: %s" % [slot + 1, "empty" if pod == null else
-							("passive" if not pod.is_active() else "cooling, %.1f s" % _mech_pods.cool[slot])])
-				return
-	match _key_of(event):
-		KEY_X:
-			_fire(BIG_BLAST)
-		KEY_H:
-			if disasters != null:
-				disasters.on_key(event.shift_pressed)
-		KEY_F1:
-			stats_label.visible = not stats_label.visible
-		KEY_1:
-			# On foot 1 is the first gun slot (slot_1): the free camera's gun only.
-			if _player.is_possessing():
-				return
-			_arm_gun()
-		KEY_2:
-			if _player.is_possessing():
-				return
-			_gun_armed = false
-			_gun.set_trigger(false)
-			if _gun.gun != null:
-				_gun.gun.visible = false
-		KEY_K:
-			var ahead := camera.global_position - camera.global_transform.basis.z * 20.0
-			_spawn_soldier(ai_nav.snap(_on_ground(ahead)))
-		KEY_U:
-			var ahead := camera.global_position - camera.global_transform.basis.z * 30.0
-			_spawn_squad(_on_ground(ahead))
-		KEY_Y:
-			var ahead := camera.global_position - camera.global_transform.basis.z * 40.0
-			var design: PartDesign = null
-			if event.ctrl_pressed:
-				# Ctrl Y: the mechs made in the asset workshop, in turn.
-				var made := MechAssembler.designs(MechAssembler.catalog(true))
-				if made.is_empty():
-					print("[city] no mech saved in the asset workshop yet")
-					return
-				var ids := made.keys()
-				ids.sort()
-				_mech_design = (_mech_design + 1) % ids.size()
-				design = made[ids[_mech_design]]
-			vehicles.spawn_enemy_mech(mech_nav.snap(_on_ground(ahead)), camera.global_rotation.y + PI,
-					"medium_gunner", design)
-		KEY_M:
-			if _vehicle_pilot.is_driving():
-				vehicles.leave_vehicle()
-			elif _pilot.is_piloting():
-				vehicles.leave_mech()
-			elif vehicles.aboard() != null:
-				vehicles.aboard().rodeo.get_off(_player_pawn, "jumped")
-			elif vehicles.vehicle_at_side() != null:
-				vehicles.use_vehicle(vehicles.vehicle_at_side())
-			else:
-				vehicles.board_mech()
-		KEY_Z:
-			var ahead := camera.global_position - camera.global_transform.basis.z * 30.0
-			var truck_nav = ai_services.vehicle_nav(&"truck")
-			if event.alt_pressed and event.shift_pressed:
-				vehicles.spawn_truck(ai_services.vehicle_nav(&"apc").snap(_on_ground(ahead)), camera.global_rotation.y, 0,
-						[] as Array[StringName], &"apc")
-			elif event.alt_pressed:
-				# An enemy APC from further off with a squad inside: it stops at
-				# contact, lets them out in its lee and covers them.
-				var far := camera.global_position - camera.global_transform.basis.z * 80.0
-				var apc: TransportTruck = vehicles.spawn_truck(ai_services.vehicle_nav(&"apc").snap(_on_ground(far)),
-						camera.global_rotation.y + PI, 1,
-						[&"rifleman", &"rifleman", &"rifleman", &"rifleman"] as Array[StringName], &"apc")
-				apc.send(_player_pawn.feet() if _player_pawn != null and is_instance_valid(_player_pawn)
-						else _on_ground(camera.global_position))
-			elif event.ctrl_pressed and event.shift_pressed:
-				# From further off, coming for the player with a squad in the back.
-				var far := camera.global_position - camera.global_transform.basis.z * 60.0
-				var truck: TransportTruck = vehicles.spawn_truck(truck_nav.snap(_on_ground(far)), camera.global_rotation.y + PI, 1,
-						[&"rifleman", &"rifleman", &"rifleman", &"rifleman"] as Array[StringName])
-				truck.send(_player_pawn.feet() if _player_pawn != null and is_instance_valid(_player_pawn)
-						else _on_ground(camera.global_position))
-			elif event.ctrl_pressed:
-				vehicles.spawn_truck(truck_nav.snap(_on_ground(ahead)), camera.global_rotation.y, 0, [] as Array[StringName])
-			elif event.shift_pressed:
-				vehicles.spawn_tank(ai_nav.snap(_on_ground(ahead)), camera.global_rotation.y, 0, false)
-			else:
-				vehicles.spawn_enemy_tank(ai_nav.snap(_on_ground(ahead)), camera.global_rotation.y + PI)
-		KEY_V:
-			if _pilot.is_piloting() or _vehicle_pilot.is_driving():
-				return
-			if _player.is_possessing():
-				_leave_pawn()
-			else:
-				_enter_pawn(camera.global_position - Vector3.UP * Pawn.EYE_HEIGHT)
-		KEY_T:
-			# The classes, then each gun made in the asset workshop.
-			var made := AssetGuns.ids()
-			_gun_class = (_gun_class + 1) % (GUN_CLASSES.size() + made.size())
-			if _gun_class < GUN_CLASSES.size():
-				_equip_gun(GUN_CLASSES[_gun_class], _combat_rng.randi())
-			else:
-				_equip_asset_gun(made[_gun_class - GUN_CLASSES.size()], _combat_rng.randi())
-			_gun_armed = true
-		KEY_R:
-			if _gun_armed and not _player.is_possessing():
-				_gun.reload()
-		KEY_F4:
-			_ai_label.visible = not _ai_label.visible
-			dev_hud.update_ai_label()
-		KEY_F5:
-			save_checkpoint()
-		KEY_7:
-			_view_cycle(DebugView.Kind.STRUCTURE)
-		KEY_8:
-			_view_cycle(DebugView.Kind.INTERIOR)
-		KEY_9:
-			_view_cycle(DebugView.Kind.ITEMS)
-		KEY_F9:
-			load_checkpoint()
-		KEY_F10:
-			_toggle_terrain_dev_menu()
-		KEY_F11:
-			_toggle_terrain_edit()
-		KEY_L:
-			if event.shift_pressed:
-				# What drew each brick pixel (brick.gdshader tier_debug).
-				var on := not bool(_shader_toggles.get("tier_debug", false))
-				_shader_toggles["tier_debug"] = on
-				brick_material.set_shader_parameter("tier_debug", on)
-				print("[city] tier debug: %s" % ("ON" if on else "OFF"))
-			else:
-				print("[city] seams: %s" % ("ON" if _toggle_shader("seams_enabled") else "OFF"))
-		KEY_B:
-			# Both halves of the bevel: the shaded one, and the real one near
-			# the camera (BrickNear), so the key shows the wall with and
-			# without. Shift+B is the near tier alone.
-			if not event.shift_pressed:
-				_toggle_shader("chamfer_enabled")
-			BrickNear.enabled = not BrickNear.enabled if event.shift_pressed \
-					else bool(_shader_toggles["chamfer_enabled"])
-			print("[city] chamfered edges: shaded %s, built near the camera %s (%.0f m)" % [
-					"ON" if _shader_toggles["chamfer_enabled"] else "OFF",
-					"ON" if BrickNear.enabled else "OFF", BrickNear.radius])
-		KEY_I:
-			# Printed on glass / smooth PEI / textured PEI, or injection
-			# moulded (BrickMaterials.set_look).
-			print("[city] finish: %s" % BrickMaterials.cycle_look())
-		KEY_J:
-			# The overlap. A piece that has just come off a building is drawn by
-			# BOTH for two frames, because on the frame it is born there is
-			# otherwise an instant where neither draws those bricks and the
-			# building flashes. No readback can see it -- the sync hides it --
-			# so the evidence is this toggle: turn it off and the flash returns.
-			IslandManager.OVERLAP_FRAMES = 0 if IslandManager.OVERLAP_FRAMES > 0 else 2
-			print("[city] overlap frames: %d %s" % [
-					IslandManager.OVERLAP_FRAMES,
-					"(a new piece and its parent both draw, briefly)"
-					if IslandManager.OVERLAP_FRAMES > 0
-					else "OFF -- watch for the one-frame flash"])
-		KEY_O when event.shift_pressed:
-			_toggle_spaces_view()
-		KEY_O:
-			# Slow motion, so a one-tick artefact lasts long enough to attribute
-			# to something. Cycles rather than toggles: 0.05 makes a single
-			# physics tick last two thirds of a second.
-			var steps := [1.0, 0.25, 0.05]
-			var at := steps.find(snappedf(Engine.time_scale, 0.01))
-			Engine.time_scale = steps[(at + 1) % steps.size()] if at >= 0 else 1.0
-			print("[city] time scale: %.2f" % Engine.time_scale)
-		KEY_F2:
-			_live_prof = not _live_prof
-			_live_ring.clear()
-			_live_frame_ms.clear()
-			_live_worst = {}
-			_live_worst_ms = 0.0
-			if _live_label != null:
-				_live_label.visible = _live_prof
-			print("[city] live profiler: %s" % ("ON" if _live_prof else "OFF"))
-		KEY_F3:
-			_live_worst = {}
-			_live_worst_ms = 0.0
-			print("[city] worst frame reset")
-		KEY_N:
-			respawn_buildings = not respawn_buildings
-			print("[city] buildings give their bricks back and take them again: %s"
-					% ("ON" if respawn_buildings else "OFF -- promoted once, resident for good"))
-			dev_hud.update_hud()
-		KEY_P:
-			_placer.toggle(_build_path if _build_path != "" else BuildRecipe.QUICK_SAVE)
-		KEY_G:
-			if event.shift_pressed:
-				_toggle_physics_view()
-				return
-			_show_grids = not _show_grids
-			if _grid_view != null:
-				_grid_view.visible = _show_grids
-			if _show_grids:
-				_draw_grids()
+	keys.handle_input(event)
 
 
 ## Shift+G: the physics view on or off (PhysicsView).
@@ -9729,7 +8132,7 @@ func _build_scenery() -> void:
 	# shadow is a no-op that reads as flat lighting (Docs/Terrain.md §19.7).
 	var rig := LightRig.new()
 	rig.build_day(self, Vector3(-30 if _terrain_mode else -50, -35, 0), 1.1, 0.6)
-	_setup_sun_shadows(rig.sun)
+	drawing.setup_sun_shadows(rig.sun)
 	_sun = rig.sun
 	# Clouds and their shadows (Docs/Lighting.md 2b).
 	clouds = CloudLayer.for_city(rig, self)

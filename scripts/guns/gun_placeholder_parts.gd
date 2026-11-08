@@ -13,15 +13,7 @@ extends RefCounted
 
 const SLOT := GunPartDef.Slot
 
-## Part tier -> colour, so a placeholder gun visibly shows its part mix at a glance.
-const TIER_COLORS: Array[Color] = [
-	Color(0.78, 0.78, 0.78),   # 1 common - white
-	Color(0.35, 0.85, 0.35),   # 2 uncommon - green
-	Color(0.30, 0.60, 1.00),   # 3 rare - blue
-	Color(0.70, 0.35, 0.95),   # 4 unique - purple
-	Color(1.00, 0.60, 0.10),   # 5 legendary - orange
-	Color(0.95, 0.12, 0.12),   # 6 mythic - red
-]
+## Part tier -> colour (Rarity.colour), so a placeholder gun visibly shows its part mix at a glance.
 
 ## Body fragments are NOUNS, barrel fragments are ADJECTIVES (QUALITY_NAMING §3).
 ## The name schema depends on this split; swapping them produces "AK47 Silenced".
@@ -233,7 +225,7 @@ static func _box(size: Vector3, tier: int) -> MeshInstance3D:
 	mesh.size = size
 	mi.mesh = mesh
 	var mat := StandardMaterial3D.new()
-	mat.albedo_color = TIER_COLORS[clampi(tier - 1, 0, 5)]
+	mat.albedo_color = Rarity.colour(tier)
 	mat.roughness = 0.55
 	mat.metallic = 0.35
 	mi.material_override = mat

@@ -13,6 +13,8 @@ extends SceneTree
 ##               gets there
 ##   down        sent back to the ground, it climbs down it, unhurt
 ##   none        the same with the ladder gone: it does not get up
+##   chain       a second block on top of it, a ladder up its side too, and the
+##               first ladder back: sent on top of the upper one, it climbs both
 
 const Arena := preload("res://tools/ai_arena.gd")
 const STUD := 0.35
@@ -31,6 +33,9 @@ var _seen_climb := false
 var _hp0 := 0.0
 var _top: Vector3
 var _ground: Vector3
+var _top2: Vector3
+var _climbs := 0
+var _was_on := false
 
 
 func _init() -> void:
@@ -69,6 +74,22 @@ func _setup() -> void:
 	so.brain.active = false
 	so.fire_ok = false
 	_hp0 = _hp()
+
+
+## A block half as wide on the first's -X -Z corner, as high, a ladder up its
+## +Z face from the first's top; the first's ladder back.
+func _chain() -> void:
+	var h := COURSES * Arena.COURSE
+	@warning_ignore("integer_division")
+	var half := SIDE / 2
+	a.bricks(Vector3i(0, COURSES * 3, 0), Vector3i(half, COURSES, half))
+	for at: Vector3 in [Vector3(SIDE * 0.5 * STUD, 0.0, SIDE * STUD), Vector3(half * 0.5 * STUD, h, half * STUD)]:
+		var l := Ladder.new()
+		l.width = 2 * STUD
+		l.height = h
+		root.add_child(l)
+		l.global_transform = Transform3D(Basis(), at)
+	_top2 = a.s.ai_nav.snap(Vector3(half * 0.4 * STUD, 2.0 * h, half * 0.4 * STUD))
 
 
 func _hp() -> float:
@@ -115,5 +136,19 @@ func _on_tick() -> void:
 			if r == -1 or _t > 30 * 12:
 				_ok("the same with the ladder gone: it does not get up", so.pawn.feet().y < 1.0,
 						"result %d, feet %s" % [r, str(so.pawn.feet().snapped(Vector3.ONE * 0.01))])
+				_chain()
+				_stage = 4
+				_t = 0
+		4:
+			var r := so.move_to(_top2)
+			var on := so.pawn.ladder != null
+			if on and not _was_on:
+				_climbs += 1
+			_was_on = on
+			if r == 1 or _t > 30 * 60:
+				_ok("a second block on the first, a ladder up each: sent on top it climbs both",
+						r == 1 and _climbs >= 2 and so.pawn.feet().distance_to(_top2) < 1.0,
+						"arrived %s, %d climb(s), %.1f s, feet %s" % [r == 1, _climbs, _t / 30.0,
+						str(so.pawn.feet().snapped(Vector3.ONE * 0.01))])
 				print("soldier ladder probe: %d ok, %d FAIL" % [_pass, _fail])
 				quit(1 if _fail > 0 else 0)

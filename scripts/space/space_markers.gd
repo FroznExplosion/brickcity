@@ -78,7 +78,7 @@ static func distance_text(d: float) -> String:
 
 
 func _draw() -> void:
-	var font := ThemeDB.fallback_font
+	var font := GameUI.font()
 	var view := get_viewport_rect().size
 	for i in rows.size():
 		var e: Array = rows[i]
@@ -91,9 +91,9 @@ func _draw() -> void:
 			var side := way.orthogonal()
 			draw_colored_polygon(PackedVector2Array([p + way * 10.0, p + side * 7.0, p - side * 7.0]), c)
 		var text := "%s  %s" % [e[0], distance_text(e[1])]
-		var w := font.get_string_size(text, HORIZONTAL_ALIGNMENT_LEFT, -1, 13).x
+		var w := font.get_string_size(text, HORIZONTAL_ALIGNMENT_LEFT, -1, GameUI.px(13)).x
 		# To the left of a mark too near the right edge for it.
 		var x := p.x + 12.0 if p.x + 12.0 + w < view.x - 4.0 else p.x - w - 12.0
 		var at := Vector2(x, clampf(p.y + 4.0, 16.0, view.y - 6.0))
-		draw_string_outline(font, at, text, HORIZONTAL_ALIGNMENT_LEFT, -1, 13, 3, Color(0, 0, 0, 0.8))
-		draw_string(font, at, text, HORIZONTAL_ALIGNMENT_LEFT, -1, 13, c)
+		draw_string_outline(font, at, text, HORIZONTAL_ALIGNMENT_LEFT, -1, GameUI.px(13), 3, Color(0, 0, 0, 0.8))
+		draw_string(font, at, text, HORIZONTAL_ALIGNMENT_LEFT, -1, GameUI.px(13), c)

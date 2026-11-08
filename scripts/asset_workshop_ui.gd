@@ -75,7 +75,10 @@ var _layer: CanvasLayer
 var _tabs: HBoxContainer
 var _tab_buttons := {}
 var _stage_button: Button
-var _tools_panel: ToolRail
+var _tools_panel: WkRail
+## Where the menu bar, the stage tabs, the rail and the outliner go (the kit's WkFrame): the
+## tabs a band 8 under the bar, 30 high, the rail 8 under them, the outliner down the right.
+var frame := WkFrame.new()
 var _tool_buttons := {}
 var _hint: Label
 var _outliner: PanelContainer
@@ -132,9 +135,9 @@ func setup(workshop, layer: CanvasLayer) -> void:
 	sync_kind()
 
 
-## A rail icon (the shared rail's, `ToolRail.ICONS`).
+## A rail icon (the shared rail's, `WkRail.ICONS`).
 static func icon(id: String) -> Texture2D:
-	return ToolRail.icon(id)
+	return WkRail.icon(id)
 
 
 ## Ask for a name: `then` gets it.
@@ -208,8 +211,23 @@ func _stage_step() -> void:
 # The tool rail
 # ---------------------------------------------------------------------------
 
+## The frame's pieces: the menu bar, the stage tabs (a band 8 under the bar, its own width, 30
+## high), the rail and the outliner. Set each frame: the menu comes and goes with the workshop.
+func _frame_setup() -> void:
+	frame.bar = ws._menu.bar() if ws._menu != null else null
+	frame.band = _tabs
+	frame.band_wide = false
+	frame.band_left = 12.0
+	frame.band_gap = 8.0
+	frame.band_space = 30.0
+	frame.rail = _tools_panel
+	frame.side = _outliner
+
+
 func _build_tools() -> void:
-	_tools_panel = ToolRail.new(ws.RAIL_W, true)
+	_tools_panel = WkRail.new(ws.RAIL_W, true)
+	ws.wk_ctx.style_ui(_tools_panel)   # the game's look (GameUI, MenuTheme), through the kit's seam
+	_tools_panel.restyle(ws.wk_ctx.panel_box())
 	_layer.add_child(_tools_panel)
 
 
@@ -325,7 +343,7 @@ func _build_outliner() -> void:
 func _signature() -> String:
 	var bits := PackedStringArray([ws.recipe.kind, ws.recipe.name, ws.sculpt_state, str(ws.part_sel),
 			",".join(ws.part_names), str(ws.guides.size()), str(ws.photos.size()), str(ws.recipe.size()),
-			str(ws._edits.size())])
+			str(ws.undo_stack.version)])
 	for m in ws.models:
 		bits.append("%d:%s:%s:%s:%s:%s:%s" % [int(m.id), String(m.path), str(m.parts),
 				str((m.node as Node3D).visible), str(int(m.op)), String(m.get("name", "")), String(m.get("group", ""))])
@@ -759,8 +777,9 @@ func sync_kind() -> void:
 
 
 func process(dt: float) -> void:
-	var top: float = 8.0 + (ws._menu.bar_height() if ws._menu != null else 0.0)
-	_tabs.position = Vector2(12, top)
+	_frame_setup()
+	frame.layout(ws.get_viewport().get_visible_rect().size)
+	var top: float = frame.band_top()
 	var clay: bool = ws.sculpt_state == "sdf"
 	_stage_button.text = "Make bricks  >" if clay else "<  Bricks to clay"
 	_stage_button.tooltip_text = ("Turn the clay into bricks and go on to stage 2. The clay that becomes bricks is used up; smooth-marked clay stays." if clay
@@ -771,11 +790,9 @@ func process(dt: float) -> void:
 	# nothing while shaping clay.
 	if ws._hud != null:
 		ws._hud.visible = stage != "blockout"
-	_tools_panel.position = Vector2(12, top + 38)
-	_tools_panel.fit_height(ws.get_viewport().get_visible_rect().size.y - top - 38.0 - 12.0)
+	_tools_panel.fit_height(ws.get_viewport().get_visible_rect().size.y - frame.rail_top() - 12.0)
 	_tools_panel.size = Vector2.ZERO
 	ws.rail_top = _tools_panel.position.y + _tools_panel.size.y + 6.0
-	_outliner.offset_top = top
 	var on := active_tool()
 	for id in _tool_buttons:
 		var b: Button = _tool_buttons[id]

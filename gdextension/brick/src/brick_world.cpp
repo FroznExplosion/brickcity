@@ -7002,7 +7002,11 @@ int BrickWorld::set_blocks_decorative(int chunk_id, const PackedInt32Array &bloc
         ++changed;
     }
     // No bake invalidation: the role changes nothing about the geometry, the
-    // faces or the colours. It is read by the solve and by nothing else.
+    // faces or the colours. It is read by the solve and by nothing else --
+    // and by the strength tree, which leaves decorative blocks out.
+    if (changed > 0) {
+        struct_bump(chunk_id);
+    }
     return changed;
 }
 
@@ -9467,6 +9471,7 @@ void BrickWorld::release_chunk(int chunk_id) {
     fire_clear(chunk_id);
     joint_cache[chunk_id] = brick::JointCache();
     conn_watch[(size_t)chunk_id] = ConnWatch();
+    tree_cache.erase(chunk_id);
     anchor_levels[(size_t)chunk_id].clear();
     hang_levels[(size_t)chunk_id].clear();
 }
@@ -11464,6 +11469,221 @@ int64_t BrickWorld::get_seed() const {
 
 // --- bindings --------------------------------------------------------------
 
+// --- the strength tree (strength_tree.h) ------------------------------------
+
+int64_t BrickWorld::bake_strength_tree(int chunk_id, brick::StrengthTree &tree,
+        std::vector<int32_t> &leaf_block, int64_t *joint_count) {
+    const auto t0 = std::chrono::steady_clock::now();
+    leaf_block.clear();
+    const brick::JointCache &jc = joints_of(chunk_id);
+    const Chunk &c = chunks[chunk_id];
+    const size_t n = c.blocks.size();
+    const Vector3 cs = cell_size();
+    std::vector<int32_t> leaf_of(n, -1);
+    for (size_t i = 0; i < n; ++i) {
+        const Block &b = c.blocks[i];
+        if (!b.alive || b.decorative || b.support_broken) {
+            continue;
+        }
+        leaf_of[i] = (int32_t)leaf_block.size();
+        leaf_block.push_back((int32_t)i);
+    }
+    std::vector<brick::StrengthJoint> joints;
+    for (const int32_t bid : leaf_block) {
+        const Block &b = c.blocks[(size_t)bid];
+        const Vector3i bl = b.cell - c.origin;
+        const Vector3i bs = archetypes[b.archetype].size;
+        for_each_joint(c, jc, bid, [&](int32_t nb, int count) {
+            if (nb <= bid || leaf_of[(size_t)nb] < 0) {
+                return;
+            }
+            const Block &o = c.blocks[(size_t)nb];
+            const Vector3i ol = o.cell - c.origin;
+            const Vector3i os = archetypes[o.archetype].size;
+            const float x = 0.5f * (float)(std::max(bl.x, ol.x) + std::min(bl.x + bs.x, ol.x + os.x));
+            const float z = 0.5f * (float)(std::max(bl.z, ol.z) + std::min(bl.z + bs.z, ol.z + os.z));
+            const float y = (float)(bl.y < ol.y ? bl.y + bs.y : ol.y + os.y);
+            joints.push_back(brick::StrengthJoint{ leaf_of[(size_t)bid], leaf_of[(size_t)nb],
+                    count, Vector3(x * cs.x, y * cs.y, z * cs.z) });
+        });
+    }
+    if (joint_count) {
+        *joint_count = (int64_t)joints.size();
+    }
+    tree.bake((int32_t)leaf_block.size(), joints);
+    return std::chrono::duration_cast<std::chrono::microseconds>(
+            std::chrono::steady_clock::now() - t0).count();
+}
+
+const BrickWorld::TreeCache &BrickWorld::strength_tree_of(int chunk_id) {
+    ConnWatch &w = conn_watch[(size_t)chunk_id];
+    if (w.stamp == 0) {
+        struct_bump(chunk_id);   // a stamp of its own, so it can be kept
+    }
+    TreeCache &tc = tree_cache[chunk_id];
+    if (tc.stamp == w.stamp && !tc.leaf_block.empty()) {
+        ++tree_hits;
+        return tc;
+    }
+    const int64_t us = bake_strength_tree(chunk_id, tc.tree, tc.leaf_block);
+    tc.stamp = w.stamp;
+    ++tree_bakes;
+    tree_bake_usec += us;
+    tree_bake_worst_usec = std::max(tree_bake_worst_usec, us);
+    return tc;
+}
+
+PackedInt64Array BrickWorld::get_strength_tree_stats() const {
+    PackedInt64Array a;
+    a.push_back(tree_bakes);
+    a.push_back(tree_hits);
+    a.push_back(tree_bake_usec);
+    a.push_back(tree_bake_worst_usec);
+    return a;
+}
+
+Array BrickWorld::strength_split(int chunk_id, Vector3 point, double energy, double falloff,
+        bool relative) {
+    Array out;
+    if (!valid_chunk(chunk_id)) {
+        return out;
+    }
+    const TreeCache &tc = strength_tree_of(chunk_id);
+    const brick::StrengthTree &tree = tc.tree;
+    const std::vector<int32_t> &leaf_block = tc.leaf_block;
+    const brick::JointCache &jc = joints_of(chunk_id);
+    const Chunk &c = chunks[chunk_id];
+    const size_t n = c.blocks.size();
+
+    // Structural blocks: the pieces the tree makes of each part.
+    std::vector<int32_t> group_of(n, -1);
+    std::vector<std::vector<int32_t>> groups;
+    std::vector<int32_t> pieces;
+    std::vector<int32_t> leaves;
+    for (const int32_t r : tree.roots) {
+        pieces.clear();
+        double e = energy;
+        if (relative && !tree.is_leaf(r)) {
+            const double fo = falloff > 1e-6 ? falloff : 1e-6;
+            const double d = (double)tree.cut_centre(r).distance_to(point) / fo;
+            e = energy * (double)tree.studs[(size_t)r] * (1.0 + d * d);
+        }
+        tree.split(r, e, point, falloff, pieces);
+        for (const int32_t p : pieces) {
+            leaves.clear();
+            tree.leaves_of(p, leaves);
+            std::vector<int32_t> g;
+            g.reserve(leaves.size());
+            for (const int32_t l : leaves) {
+                const int32_t bid = leaf_block[(size_t)l];
+                group_of[(size_t)bid] = (int32_t)groups.size();
+                g.push_back(bid);
+            }
+            groups.push_back(std::move(g));
+        }
+    }
+
+    // Furniture goes with what it stands on: a walk out from the pieces over
+    // joints into decorative blocks, as grounding reaches them.
+    std::vector<int32_t> queue;
+    for (size_t i = 0; i < n; ++i) {
+        if (group_of[i] >= 0) {
+            queue.push_back((int32_t)i);
+        }
+    }
+    for (size_t head = 0; head < queue.size(); ++head) {
+        const int32_t bid = queue[head];
+        for_each_joint(c, jc, bid, [&](int32_t nb, int) {
+            const Block &o = c.blocks[(size_t)nb];
+            if (group_of[(size_t)nb] >= 0 || !o.decorative || o.support_broken) {
+                return;
+            }
+            group_of[(size_t)nb] = group_of[(size_t)bid];
+            groups[(size_t)group_of[(size_t)bid]].push_back(nb);
+            queue.push_back(nb);
+        });
+    }
+    // What is left: a sheared block alone; furniture on nothing, by its own parts.
+    for (size_t i = 0; i < n; ++i) {
+        const Block &b = c.blocks[i];
+        if (!b.alive || group_of[i] >= 0) {
+            continue;
+        }
+        const int32_t g = (int32_t)groups.size();
+        groups.emplace_back();
+        group_of[i] = g;
+        groups[(size_t)g].push_back((int32_t)i);
+        if (b.support_broken) {
+            continue;
+        }
+        queue.clear();
+        queue.push_back((int32_t)i);
+        for (size_t head = 0; head < queue.size(); ++head) {
+            for_each_joint(c, jc, queue[head], [&](int32_t nb, int) {
+                const Block &o = c.blocks[(size_t)nb];
+                if (group_of[(size_t)nb] >= 0 || o.support_broken) {
+                    return;
+                }
+                group_of[(size_t)nb] = g;
+                groups[(size_t)g].push_back(nb);
+                queue.push_back(nb);
+            });
+        }
+    }
+
+    std::stable_sort(groups.begin(), groups.end(),
+            [](const std::vector<int32_t> &a, const std::vector<int32_t> &b) {
+                return a.size() > b.size();
+            });
+    if (groups.size() > 1) {
+        // About to be cut: not known to be in one piece. Nothing structural
+        // changed, so the tree just used stays good for the cut itself.
+        const bool kept = tree_cache[chunk_id].stamp == conn_watch[(size_t)chunk_id].stamp;
+        conn_forget(chunk_id);
+        if (kept) {
+            tree_cache[chunk_id].stamp = conn_watch[(size_t)chunk_id].stamp;
+        }
+    }
+    for (std::vector<int32_t> &g : groups) {
+        std::sort(g.begin(), g.end());
+        PackedInt32Array pg;
+        pg.resize((int64_t)g.size());
+        for (size_t k = 0; k < g.size(); ++k) {
+            pg.set((int64_t)k, g[k]);
+        }
+        out.push_back(pg);
+    }
+    return out;
+}
+
+Dictionary BrickWorld::strength_tree_info(int chunk_id) {
+    Dictionary d;
+    if (!valid_chunk(chunk_id)) {
+        return d;
+    }
+    brick::StrengthTree tree;
+    std::vector<int32_t> leaf_block;
+    int64_t joints = 0;
+    const int64_t us = bake_strength_tree(chunk_id, tree, leaf_block, &joints);
+    auto pack = [](const auto &v) {
+        PackedInt32Array a;
+        a.resize((int64_t)v.size());
+        for (size_t i = 0; i < v.size(); ++i) {
+            a.set((int64_t)i, (int32_t)v[i]);
+        }
+        return a;
+    };
+    d["left"] = pack(tree.left);
+    d["right"] = pack(tree.right);
+    d["size"] = pack(tree.size);
+    d["studs"] = pack(tree.studs);
+    d["leaf_block"] = pack(leaf_block);
+    d["roots"] = pack(tree.roots);
+    d["joints"] = joints;
+    d["bake_usec"] = us;
+    return d;
+}
+
 void BrickWorld::_bind_methods() {
     ClassDB::bind_method(D_METHOD("bake_archetype", "name", "size", "mass"),
             &BrickWorld::bake_archetype, DEFVAL(1.0));
@@ -11488,6 +11708,10 @@ void BrickWorld::_bind_methods() {
     ClassDB::bind_method(D_METHOD("get_components_near_stats"), &BrickWorld::get_components_near_stats);
     ClassDB::bind_method(D_METHOD("crack_studs", "chunk_id", "axis", "from_k", "to_k"),
             &BrickWorld::crack_studs);
+    ClassDB::bind_method(D_METHOD("strength_split", "chunk_id", "point", "energy", "falloff", "relative"),
+            &BrickWorld::strength_split, DEFVAL(false));
+    ClassDB::bind_method(D_METHOD("strength_tree_info", "chunk_id"), &BrickWorld::strength_tree_info);
+    ClassDB::bind_method(D_METHOD("get_strength_tree_stats"), &BrickWorld::get_strength_tree_stats);
     ClassDB::bind_method(D_METHOD("crack_components", "chunk_id", "planes_x", "planes_z"),
             &BrickWorld::crack_components);
     ClassDB::bind_method(D_METHOD("release_chunk", "chunk_id"), &BrickWorld::release_chunk);

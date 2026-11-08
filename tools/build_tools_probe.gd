@@ -67,28 +67,28 @@ func _initialize() -> void:
 func _shape_checks() -> void:
 	print("[probe] shapes on the grid")
 	var a := Vector2i(0, 0)
-	_ok("a 4 x 3 rectangle is 12 cells", BrickShapes.cells_2d("rect", a, Vector2i(3, 2)).size() == 12)
+	_ok("a 4 x 3 rectangle is 12 cells", WkShapes.cells_2d("rect", a, Vector2i(3, 2)).size() == 12)
 	_ok("a 6 x 5 hollow rectangle, rim 1, is its edge: 18 cells",
-			BrickShapes.cells_2d("hollow", a, Vector2i(5, 4), 1).size() == 18)
-	_ok("rim 2: 6 x 5 less 2 x 1", BrickShapes.cells_2d("hollow", a, Vector2i(5, 4), 2).size() == 28)
-	var circle := BrickShapes.cells_2d("circle", a, Vector2i(8, 8))
+			WkShapes.cells_2d("hollow", a, Vector2i(5, 4), 1).size() == 18)
+	_ok("rim 2: 6 x 5 less 2 x 1", WkShapes.cells_2d("hollow", a, Vector2i(5, 4), 2).size() == 28)
+	var circle := WkShapes.cells_2d("circle", a, Vector2i(8, 8))
 	_ok("a circle 9 across: its middle, not its corners, about pi r squared",
 			circle.has(Vector2i(4, 4)) and not circle.has(Vector2i(0, 0)) and absi(circle.size() - 64) <= 8,
 			"%d cells" % circle.size())
-	var ring := BrickShapes.cells_2d("ring", a, Vector2i(12, 12), 1)
+	var ring := WkShapes.cells_2d("ring", a, Vector2i(12, 12), 1)
 	_ok("a ring is hollow", not ring.has(Vector2i(6, 6)) and ring.has(Vector2i(6, 0)))
 	_ok("and joined edge to edge all round (one piece, four ways)", _pieces(ring) == 1, "%d pieces" % _pieces(ring))
-	var tri := BrickShapes.cells_2d("triangle", a, Vector2i(8, 6))
+	var tri := WkShapes.cells_2d("triangle", a, Vector2i(8, 6))
 	_ok("a triangle: wide where the drag began, a point at the far end",
 			_row(tri, 0) == 9 and _row(tri, 6) <= 2 and _row(tri, 3) < 9, "rows %d %d %d" % [_row(tri, 0), _row(tri, 3), _row(tri, 6)])
-	var tri2 := BrickShapes.cells_2d("triangle", Vector2i(0, 6), Vector2i(8, 0))
+	var tri2 := WkShapes.cells_2d("triangle", Vector2i(0, 6), Vector2i(8, 0))
 	_ok("dragged the other way, it points the other way", _row(tri2, 6) == 9 and _row(tri2, 0) <= 2)
-	var line := BrickShapes.cells_2d("line", a, Vector2i(9, 0), 1)
+	var line := WkShapes.cells_2d("line", a, Vector2i(9, 0), 1)
 	_ok("a line along a row is that row", line.size() == 10)
-	var arch := BrickShapes.cells_2d("arch", a, Vector2i(3, 19), 1, BrickShapes.aspect("wall_x"))
+	var arch := WkShapes.cells_2d("arch", a, Vector2i(3, 19), 1, BrickShapes.aspect("wall_x"))
 	_ok("an arch in a wall: straight sides, a round top", _row(arch, 0) == 4 and _row(arch, 19) < 4,
 			"bottom %d top %d" % [_row(arch, 0), _row(arch, 19)])
-	var out := BrickShapes.outline_cells([[0, 0], [4, 0], [4, 3], [0, 3]])
+	var out := WkShapes.outline_cells([[0, 0], [4, 0], [4, 3], [0, 3]])
 	_ok("an outline 4 x 3 fills 12 cells", out.size() == 12)
 	var wall := BrickShapes.solid_cells({"kind": "rect", "lie": "wall_x", "a": [2, 1], "b": [5, 9], "at": 7, "depth": 2})
 	_ok("a wall stands in x and y, `depth` deep in z",
@@ -154,7 +154,7 @@ func _course_checks() -> void:
 	_ok("aligned: the seams run straight up (stack bond)", aseams[0] == aseams[1] and aseams[1] == aseams[2], str(aseams))
 	# Four walls round a room: the corners take turns.
 	var room := {}
-	for c2 in BrickShapes.cells_2d("hollow", Vector2i(0, 0), Vector2i(7, 5), 1):
+	for c2 in WkShapes.cells_2d("hollow", Vector2i(0, 0), Vector2i(7, 5), 1):
 		for y in 6:
 			room[Vector3i(c2.x, y, c2.y)] = true
 	var rp := BrickShapes.pack_courses(room, parts, true)
@@ -239,7 +239,7 @@ func _hold(part: String) -> void:
 func _rail_checks() -> void:
 	print("[probe] the rail")
 	var t: WorkshopTools = _ws._tools
-	_ok("the building workshop has the rail", t != null and t.rail is ToolRail)
+	_ok("the building workshop has the rail", t != null and t.rail is WkRail)
 	_ok("with its tools, each with a pop-up and an icon", t.rail.buttons.size() == WorkshopTools.TOOLS.size()
 			and (t.rail.buttons.values() as Array).all(func(b: Button) -> bool:
 				return b.tooltip_text.length() > 20 and b.icon != null))
@@ -308,7 +308,7 @@ func _kept_checks() -> void:
 		var ps := BrickPalette.part_size(p)
 		fam = fam and BrickPalette.family_of(p) in ["brick", "plate"] and mini(ps.x, ps.z) == 1 and maxi(ps.x, ps.z) <= 4
 	_ok("of the held brick and smaller ones of its kind", fam, str(_ws.recipe.parts))
-	_ok("one undo edit for the whole shape", _ws._edits == ["shape"], str(_ws._edits))
+	_ok("one undo edit for the whole shape", _ws.undo_stack.kinds() == ["shape"], str(_ws.undo_stack.kinds()))
 	# A hand-laid brick inside the doorway-to-be, and one elsewhere.
 	_hold("plate_1x1")
 	_ws._cell = Vector3i(9, 10, 2)
@@ -370,15 +370,15 @@ func _kept_checks() -> void:
 	_ws._undo()
 	_ok("and undone", String(t.shape_of(id).bond) == "stagger" and _bricks(t.shape_of(id)) == before)
 	# RMB on a shape's brick: no hand brick's undo is lost.
-	var bricks_edits := (_ws._edits as Array).count("brick")
+	var bricks_edits: int = _ws.undo_stack.count(&"brick")
 	var b0: Array = t.shape_of(id).bricks[0]
 	var c0 := BuildRecipe.cell_from(b0[1])
 	var size0 := BrickPalette.size_of(String(b0[0]))
 	var mid := Vector3((c0.x + size0.x * 0.5) * 0.35, (c0.y + size0.y + 3) * 0.14, (c0.z + size0.z * 0.5) * 0.35)
 	_ws._delete_ray(mid, Vector3.DOWN)
 	_ok("RMB on a shape's brick takes it out of the shape, not a hand brick's undo",
-			(_ws._edits as Array).count("brick") == bricks_edits and _bricks(t.shape_of(id)).size() == before.size() - 1,
-			"%d brick edits, %d of %d" % [(_ws._edits as Array).count("brick"), _bricks(t.shape_of(id)).size(), before.size()])
+			_ws.undo_stack.count(&"brick") == bricks_edits and _bricks(t.shape_of(id)).size() == before.size() - 1,
+			"%d brick edits, %d of %d" % [_ws.undo_stack.count(&"brick"), _bricks(t.shape_of(id)).size(), before.size()])
 	# Let go: the bricks stay, the shape is forgotten.
 	var n: int = _ws.recipe.size()
 	t.let_go(id)
@@ -429,10 +429,10 @@ func _wall_checks() -> void:
 
 func _sketch_checks() -> void:
 	print("[probe] sketch: the asset workshop's pen, making kept shapes")
-	var sq := SketchPen.region_cells([[4, 4], [12, 4], [12, 10], [4, 10]])
+	var sq := WkSketchPen.region_cells([[4, 4], [12, 4], [12, 10], [4, 10]])
 	_ok("the pen fills an outline 8 x 6 with 48 cells", sq.size() == 48)
-	_ok("and a brush stroke round its path", SketchPen.region_cells(SketchPen.brush_entry([Vector2(5.5, 5.5)], 1, true, "top")).size() == 9)
-	_ok("BrickShapes fills an outline with the same code", BrickShapes.outline_cells([[4, 4], [12, 4], [12, 10], [4, 10]]) == sq)
+	_ok("and a brush stroke round its path", WkSketchPen.region_cells(WkSketchPen.brush_entry([Vector2(5.5, 5.5)], 1, true, "top")).size() == 9)
+	_ok("BrickShapes fills an outline with the same code", WkShapes.outline_cells([[4, 4], [12, 4], [12, 10], [4, 10]]) == sq)
 	_ws._new_build()
 	var t: WorkshopTools = _ws._tools
 	var f0: int = _ws.asm.frames[0]
@@ -450,7 +450,7 @@ func _sketch_checks() -> void:
 	t.pen.out = false
 	for q in [Vector2(4, 4), Vector2(12, 4), Vector2(12, 10), Vector2(4, 10)]:
 		t.pen.polygon_click(q, false, false)
-	t._sketch_commit()
+	t.sketch.commit()
 	_ok("combining: a stroke goes into the plan, nothing laid yet", t.shapes().is_empty() and not t._draft.is_empty())
 	t.raise_plan()
 	t.commit_pending()
@@ -468,7 +468,7 @@ func _sketch_checks() -> void:
 	t.brush_square = true
 	t._sk = {"lie": "flat", "at": 1}
 	t.pen.press(Vector2(8.5, 7.5), true)
-	t._sketch_commit()
+	t.sketch.commit()
 	t.commit_pending()
 	_ok("a stroke drawn with RMB cuts the shape", (t.shapes()[0].cuts as Array).size() == 1
 			and not _ws.world.is_solid(f0, Vector3i(8, 2, 7)) and _ws.world.is_solid(f0, Vector3i(4, 2, 4)))
@@ -509,12 +509,12 @@ func _opening_checks() -> void:
 	t.glass_on = true
 	var face := t.face_under(Vector3(11.5 * 0.35, 6.5 * 0.14, -3.0), Vector3(0, 0, 1))
 	var op := t.apply_opening("window", face)
-	_ok("one undo for the window, its frame and its glass", (_ws._edits as Array).back() == "shape"
+	_ok("one undo for the window, its frame and its glass", _ws.undo_stack.top_kind() == &"shape"
 			and t.shapes().size() == 3, "%d shapes" % t.shapes().size())
 	var glass := WorkshopTools.glass_paint()
 	_ok("there is a see-through material for glass", BrickWorld.is_material_translucent(glass.x))
-	var a := BrickShapes._v2(op.a)
-	var b := BrickShapes._v2(op.b)
+	var a := WkShapes.v2i(op.a)
+	var b := WkShapes.v2i(op.b)
 	var mid := Vector3i((a.x + b.x) >> 1, (a.y + b.y) >> 1, 4)
 	var bid: int = _ws.world.block_at(f0, mid)
 	_ok("the window is glass", bid >= 0 and _ws.world.get_block_material(f0, bid) == glass.x)
@@ -535,8 +535,8 @@ func _opening_checks() -> void:
 	# A door: no sill, the floor stays open.
 	var dface := t.face_under(Vector3(8.5 * 0.35, 4.5 * 0.14, -3.0), Vector3(0, 0, 1))
 	var dop := t.apply_opening("door", dface)
-	var da := BrickShapes._v2(dop.a)
-	var db := BrickShapes._v2(dop.b)
+	var da := WkShapes.v2i(dop.a)
+	var db := WkShapes.v2i(dop.b)
 	_ok("a door stands on the floor and is open to it", int(da.y) == 1
 			and not _solid(Vector3i((da.x + db.x) >> 1, 1, 4)) and not _solid(Vector3i(da.x, db.y, 4)))
 	_ok("with jambs both sides and a head", _solid(Vector3i(da.x - 1, 2, 4)) and _solid(Vector3i(db.x + 1, 2, 4))
@@ -584,7 +584,7 @@ func _repeat_checks() -> void:
 	t.selected = frame_id
 	t.rep_what = "shape"
 	t.repeat("x", 2, 1)
-	var a := BrickShapes._v2(op.a)
+	var a := WkShapes.v2i(op.a)
 	var g := WorkshopTools.glass_paint()
 	var f0: int = _ws.asm.frames[0]
 	var ok := true
@@ -602,7 +602,7 @@ func _repeat_checks() -> void:
 	t.pen.press(Vector2(30.5, 30.5), false)
 	t.pen.move(Vector2(34.5, 30.5), 1)
 	var before := t.shapes().size()
-	t._sketch_commit()
+	t.sketch.commit()
 	t.raise_plan()
 	t.commit_pending()
 	_ok("a brush stroke drawn with LMB is a kept shape", t.shapes().size() == before + 1 and _solid(Vector3i(32, 1, 30)))
@@ -675,7 +675,37 @@ func _redo_checks() -> void:
 	_ws._undo()
 	_ok("and undone again", t.shapes().is_empty())
 	_ws._place()
-	_ok("a new edit clears what redo had", _ws._redo_list.is_empty())
+	_ok("a new edit clears what redo had", not _ws.undo_stack.can_redo())
+
+	# One history (addons/workshop_kit; Docs/BuildTools.md section 20): each Z takes back its
+	# own edit's brick, and an edit whose brick was taken away by hand is skipped, not a Z.
+	_ws._new_build()
+	_hold("plate_1x1")
+	for x in [30, 32, 34]:
+		_ws._cell = Vector3i(x, 1, 20)
+		_ws._update_ghost()
+		_ws._place()
+	var stud: float = BrickPalette.STUD_M
+	_ws._delete_ray(Vector3(32.5 * stud, 3.0, 20.5 * stud), Vector3.DOWN)
+	_ok("RMB takes the middle brick", _ws.recipe.size() == 2 and not _solid(Vector3i(32, 1, 20)))
+	_ws._undo()
+	_ok("Z: the newest brick", _ws.recipe.size() == 1 and not _solid(Vector3i(34, 1, 20)))
+	_ws._undo()
+	_ok("Z again: the first, the deleted one's edit skipped", _ws.recipe.size() == 0
+			and not _ws.undo_stack.can_undo(), "%d left, %d steps" % [_ws.recipe.size(), _ws.undo_stack.size()])
+	_ws.redo_last()
+	_ws.redo_last()
+	_ok("redo lays both back", _ws.recipe.size() == 2 and _solid(Vector3i(30, 1, 20)) and _solid(Vector3i(34, 1, 20)))
+	_hold("plate_1x2")
+	_ws._cell = Vector3i(40, 1, 20)
+	_ws._update_ghost()
+	_ws._place()
+	var part: String = _ws.recipe.part_of(2)
+	_ws._rotate_last()
+	_ok("T turns the brick under its own edit", _ws.recipe.size() == 3 and _ws.recipe.part_of(2) != part
+			and _ws.undo_stack.size() == 3, "%s -> %s, %d steps" % [part, _ws.recipe.part_of(2), _ws.undo_stack.size()])
+	_ws._undo()
+	_ok("and Z takes the turned brick", _ws.recipe.size() == 2)
 
 
 func _mirror_checks() -> void:
@@ -876,8 +906,8 @@ func _pull_checks() -> void:
 func _floor_plan_checks() -> void:
 	print("[probe] floor plans: sketch, raise, storeys (section 9)")
 	var pts := {"adds": [[[0, 0], [10, 0], [10, 8], [0, 8]]], "subs": [[[3, 3], [5, 3], [5, 5], [3, 5]]]}
-	_ok("a plan is its strokes in, less its strokes out", BrickShapes.plan_region(pts).size() == 80 - 4)
-	_ok("walls along its outline: a ring the brick's width", BrickShapes.ring(BrickShapes.plan_region(
+	_ok("a plan is its strokes in, less its strokes out", WkShapes.plan_region(pts).size() == 80 - 4)
+	_ok("walls along its outline: a ring the brick's width", WkShapes.ring(WkShapes.plan_region(
 			{"adds": [[[0, 0], [10, 0], [10, 8], [0, 8]]]}), 1).size() == 32)
 	_ws._new_build()
 	var t: WorkshopTools = _ws._tools
@@ -895,7 +925,7 @@ func _floor_plan_checks() -> void:
 		t._sk = {"lie": "flat", "at": 1}
 		for q in poly:
 			t.pen.polygon_click(q, false, false)
-		t._sketch_commit()
+		t.sketch.commit()
 	_ok("two strokes, one plan", (t._draft.adds as Array).size() == 2 and t.shapes().is_empty())
 	t.makes = "building"
 	t.storey_courses = 3
@@ -978,7 +1008,7 @@ func _simpler_checks() -> void:
 	current_scene = _ws
 	_ok("Esc is the pause menu here", root.get_node("/root/MenuManager").can_pause())
 	current_scene = null
-	var v: WorkshopView = t.view
+	var v: WkCamera = t.view
 	var cam = _ws._camera
 	_ok("orbit to start: the cursor is free, a click does not take the mouse", v.mode == "orbit" and v.wants_cursor()
 			and not cam.click_captures and not cam._captured)
@@ -1062,7 +1092,7 @@ func _simpler_checks() -> void:
 	t._sk = {"lie": "flat", "at": 1}
 	for q in [Vector2(4, 4), Vector2(24, 4), Vector2(24, 18), Vector2(4, 18)]:
 		t.pen.polygon_click(q, false, false)
-	t._sketch_commit()
+	t.sketch.commit()
 	t.raise_plan()
 	t._drag.rec.depth = 6
 	t.commit_pending()
@@ -1213,7 +1243,7 @@ func _draw_checks() -> void:
 	t._sk = {"lie": "flat", "at": 1}
 	for q in [Vector2(4, 4), Vector2(24, 4), Vector2(24, 18), Vector2(4, 18)]:
 		t.pen.polygon_click(q, false, false)
-	t._sketch_commit()
+	t.sketch.commit()
 	_ok("corners that make a building: on to its height at once", t._drag.get("phase", "") == "height"
 			and int(t._drag.rec.depth) == 7 and t._draft.is_empty())
 	t._drag.rec.depth = 14
@@ -1260,11 +1290,11 @@ func _draw_checks() -> void:
 	_drag_outline(t, Vector3i(10, 1, 8), Vector2i(10, 8))
 	_ok("a click inside raises it", t._drag.get("phase", "") == "height" and t._draft.size() > 0)
 	var plan := t.commit_pending()
-	var region := BrickShapes.plan_region(t.shape_of(plan).points)
+	var region := WkShapes.plan_region(t.shape_of(plan).points)
 	_ok("laid along the one outline", plan >= 0 and region.has(Vector2i(18, 12)) and region.has(Vector2i(4, 4))
 			and not region.has(Vector2i(6, 6)) and _solid(Vector3i(4, 1, 4)) and not _solid(Vector3i(10, 1, 8)))
 	var moved := BrickShapes.reflected(t.shape_of(plan), 0, 24.0)
-	_ok("a plan of shapes mirrors", BrickShapes.plan_region(moved.points).has(Vector2i(47 - 18, 12)))
+	_ok("a plan of shapes mirrors", WkShapes.plan_region(moved.points).has(Vector2i(47 - 18, 12)))
 	t.combine = false
 	t.makes = "solid"
 	t.set_outline("box")
@@ -1386,7 +1416,7 @@ func _rest_checks() -> void:
 	t._sk = {"lie": String(cf.lie), "at": int(cf.front), "into": int(cf.into), "face": cf}
 	for q in [Vector2(7, 2), Vector2(10, 2), Vector2(10, 6), Vector2(7, 6)]:
 		t.pen.polygon_click(q, true, false)
-	t._sketch_commit()
+	t.sketch.commit()
 	_ok("a hand-drawn hole: through to start", int(t._drag.rec.depth) == 4 and t._drag.get("cut", false))
 	t.commit_pending()
 	_ok("cut", not _solid(Vector3i(8, 4, 4)) and not _solid(Vector3i(8, 4, 7)))
@@ -1401,7 +1431,7 @@ func _rest_checks() -> void:
 	t.pen.press(Vector2(12, 2), false)
 	for q in [Vector2(15, 2), Vector2(15, 6), Vector2(12, 6)]:
 		t.pen.move(q, 1)
-	t._sketch_commit()
+	t.sketch.commit()
 	t.commit_pending()
 	_ok("a stroke on a wall's side comes out of it", _solid(Vector3i(13, 3, 3)))
 	t.set_outline("box")

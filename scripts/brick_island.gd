@@ -170,6 +170,10 @@ var shed_cause := ""
 ## cut it along (IslandManager.split_if_broken): planes in cells from its
 ## grid's origin, along X and along Z (BrickWorld.crack_components).
 var cracks_x := PackedInt32Array()
+## A landing the strength tree breaks, still to be cut (IslandManager.
+## split_if_broken): [point in chunk-local metres, energy in first cuts, falloff in
+## metres] for BrickWorld.strength_split (relative). Empty: none.
+var tree_hit: Array = []
 var cracks_z := PackedInt32Array()
 ## Ticks a landed piece has been falling fast and touching nothing: in the air
 ## again (IslandManager.AIRBORNE_AGAIN_TICKS).

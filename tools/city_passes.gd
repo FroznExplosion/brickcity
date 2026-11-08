@@ -1319,7 +1319,7 @@ func _run_storeys_pass() -> void:
 			worst = dt
 			worst_at = t + 1
 			worst_parts = city._prof.duplicate()
-		if shown < 0 and b.is_materialised() and not city._shells.has(b.id) and not city._bands_building(b.id):
+		if shown < 0 and b.is_materialised() and not city._shells.has(b.id) and not city.drawing.bands_building(b.id):
 			shown = t + 1
 	var rep := city.registry.storey_report(b.id)
 	var bricks: int = int(rep.get("bricks", 0)) if bool(rep.get("banded", false)) \
@@ -2097,7 +2097,7 @@ func _proxy_check(b: BuildingRegistry.Building) -> void:
 	await _frames(10)
 	t = 0
 	while t < 150 and not (_proxy_drawn(b.id) and not city._shadow_jobs.has(b.id)
-			and int(city._shadow_proxy_alive.get(b.id, -1)) == city.world.get_alive_block_count(b.chunk)):
+			and int(city.drawing._shadow_proxy_alive.get(b.id, -1)) == city.world.get_alive_block_count(b.chunk)):
 		await city.get_tree().physics_frame
 		t += 1
 	# And a hit that leaves its floors standing leaves its stairs (_sweep_stairs
@@ -2119,10 +2119,10 @@ func _proxy_check(b: BuildingRegistry.Building) -> void:
 	_gate_ok("building %d: its stairs stand while its floors do" % b.id,
 			stairs_all > 0 and stairs_live == stairs_all, "%d of %d" % [stairs_live, stairs_all])
 	_gate_ok("building %d: and it catches up with a hit" % b.id,
-			_proxy_drawn(b.id) and int(city._shadow_proxy_alive.get(b.id, -1))
+			_proxy_drawn(b.id) and int(city.drawing._shadow_proxy_alive.get(b.id, -1))
 					== city.world.get_alive_block_count(b.chunk),
 			"built from %d bricks, %d alive, after %d tick(s)" % [
-				int(city._shadow_proxy_alive.get(b.id, -1)), city.world.get_alive_block_count(b.chunk), t])
+				int(city.drawing._shadow_proxy_alive.get(b.id, -1)), city.world.get_alive_block_count(b.chunk), t])
 
 ## A building still in bricks gives its mesh up past DEMESH_RANGE and stands in
 ## as a shell (_demesh). That shell has to be drawn from the damage its bricks
@@ -2195,7 +2195,7 @@ func _far_shell_note(b: BuildingRegistry.Building) -> String:
 			"n/a" if int(n[2]) < 0 else str(n[2])]
 
 func _proxy_drawn(id: int) -> bool:
-	var mi = city._shadow_proxy.get(id)
+	var mi = city.drawing._shadow_proxy.get(id)
 	return is_instance_valid(mi) and (mi as MeshInstance3D).mesh != null \
 			and (mi as MeshInstance3D).mesh.get_surface_count() > 0
 
@@ -2327,7 +2327,7 @@ func _shell_lag(b: BuildingRegistry.Building) -> void:
 			cut_at = t
 		if t <= 30 or t % 10 == 0:
 			timeline.append("%d: materialised %s, shell %s, bands building %s, redo %s, pieces %d" % [
-					t, b.is_materialised(), shelled, b.is_materialised() and city._bands_building(b.id),
+					t, b.is_materialised(), shelled, b.is_materialised() and city.drawing.bands_building(b.id),
 					city._band_redo.has(b.id), fresh])
 	print("[breaklag] building %d, a shell when shot (%s), %d bricks:" % [b.id, was_shell,
 			city.world.get_block_count(b.chunk) if b.is_materialised() else 0])
@@ -2600,7 +2600,7 @@ func _run_drawn_pass() -> void:
 	city.camera.look_at(face, Vector3.UP)
 	await _frames(90)
 	_gate_ok("building %d is bricks, its bands drawn" % b.id,
-			b.is_materialised() and city._brick_nodes.has(b.id) and not city._bands_building(b.id))
+			b.is_materialised() and city._brick_nodes.has(b.id) and not city.drawing.bands_building(b.id))
 	var before := _drawn_stale(b)
 	_gate_ok("whole, it draws nothing but bricks", float(before[1]) <= float(before[0]) * DRAWN_SLACK,
 			"%d of %d triangles with no brick behind them: %s" % [before[1], before[0], before[2]])
@@ -2877,7 +2877,7 @@ func _walls_drawn_by(id: int) -> String:
 			and shell.mesh.get_surface_count() > 0:
 		by.append("shell")
 	# A shell with no mesh of its own, drawn by its far box or its instanced set.
-	if city._far_on.has(id):
+	if city.drawing._far_on.has(id):
 		by.append("far box")
 	if shell != null and city._shell_inst.has(id):
 		by.append("instanced set")
@@ -3066,13 +3066,13 @@ func _lodbreak_say(b: BuildingRegistry.Building, what: String) -> void:
 				panes += (c as MeshInstance3D).mesh.surface_get_array_len(0) / 4
 		print("    its shell: %s mesh, %d painted window(s)%s" % [
 				"a" if shell.mesh != null else "no", panes,
-				", from its bricks" if city._far_real_owed.has(b.id) or city.far_real_built > 0 else ""])
+				", from its bricks" if city._far_real_owed.has(b.id) or city.drawing.far_real_built > 0 else ""])
 	_pieces_say(b.id)
 	print("  [%d] %s: dist %.0f, materialised %s, %d bricks alive, shell %s, brick node %s, bands building %s, pieces %d (%d moving), damage %d"
 			% [b.id, what, city.camera.global_position.distance_to(b.xform.origin), b.is_materialised(), alive,
 			"none" if shell == null else ("shown" if shell.visible else "hidden"),
 			"none" if bricks == null else ("shown" if bricks.visible else "hidden"),
-			city._bands_building(b.id),
+			city.drawing.bands_building(b.id),
 			_pieces_of(b.id), city.islands.moving_of(b.id), b.damage_profile.size()])
 
 ## Which way buildings break (user, 2026-10-18: "they break in half
@@ -3606,12 +3606,12 @@ func _run_groups_pass() -> void:
 	city._promote(b.id)
 	for t in 600:
 		await city.get_tree().physics_frame
-		if city._brick_nodes.has(b.id) and not city._bands_building(b.id):
+		if city._brick_nodes.has(b.id) and not city.drawing.bands_building(b.id):
 			break
 	@warning_ignore("integer_division")
 	_gate_ok("building %d (%d storeys) is bricks, its bands drawn" % [b.id,
 			int(b.recipe.courses) / TowerRecipe.COURSES_PER_FLOOR],
-			b.is_materialised() and city._brick_nodes.has(b.id) and not city._bands_building(b.id))
+			b.is_materialised() and city._brick_nodes.has(b.id) and not city.drawing.bands_building(b.id))
 
 	var layout: Array = city.interior_groups.layout(b)
 	for k in ranges.size():
@@ -3708,15 +3708,15 @@ func _run_groups_pass() -> void:
 	# And its windows are painted on its bricks there, as a shell's are
 	# (Docs/DestructionLod.md 3.2), hidden inside the range the rooms are in.
 	for t in 200:
-		if city._brick_panes.has(b.id):
+		if city.drawing._brick_panes.has(b.id):
 			break
 		await city.get_tree().physics_frame
-	var panes = city._brick_panes.get(b.id)
+	var panes = city.drawing._brick_panes.get(b.id)
 	_gate_ok("  its windows are painted on its bricks, hidden where its rooms are drawn",
 			panes != null and is_instance_valid(panes) and (panes as MeshInstance3D).mesh != null
 			and is_equal_approx(float((panes as GeometryInstance3D).get_instance_shader_parameter(
 				"near_hide")), InteriorGroups.INTERIOR_RANGE),
-			"panes %s; %d made, %.1f ms all told" % [panes != null, city.brick_panes_built, city.brick_panes_ms])
+			"panes %s; %d made, %.1f ms all told" % [panes != null, city.drawing.brick_panes_built, city.drawing.brick_panes_ms])
 	await _save("interior_groups_panes")
 
 	# One shot. The groups at its height are asked again; the top ones are not.
@@ -3912,7 +3912,7 @@ func _run_groups_pass() -> void:
 	city._promote(b2.id)
 	for t in 600:
 		await city.get_tree().physics_frame
-		if city._brick_nodes.has(b2.id) and not city._bands_building(b2.id):
+		if city._brick_nodes.has(b2.id) and not city.drawing.bands_building(b2.id):
 			break
 	for t in 30:
 		await city.get_tree().physics_frame
@@ -4018,7 +4018,7 @@ func _run_physview_pass() -> void:
 	city._promote(b.id)
 	for t in 600:
 		await city.get_tree().physics_frame
-		if city._brick_nodes.has(b.id) and not city._bands_building(b.id):
+		if city._brick_nodes.has(b.id) and not city.drawing.bands_building(b.id):
 			break
 	_gate_ok("its collision is built", city._brick_cols.has(b.id))
 	# Wide shots, as a player's widest (_run_bigbreak_pass): enough to cut
@@ -4071,7 +4071,7 @@ func _run_piececost_pass() -> void:
 		city._promote(b.id)
 		for t in 600:
 			await city.get_tree().physics_frame
-			if city._brick_nodes.has(b.id) and not city._bands_building(b.id):
+			if city._brick_nodes.has(b.id) and not city.drawing.bands_building(b.id):
 				break
 		for shot in [[0.0, 8.0], [-4.0, 10.0], [4.0, 10.0], [8.0, 9.0], [12.0, 9.0]]:
 			city._blast(face + Vector3(0.0, float(shot[0]), 0.0), float(shot[1]))
@@ -4281,7 +4281,7 @@ func _run_view_pass() -> void:
 	city._promote(b.id)
 	for t in 600:
 		await city.get_tree().physics_frame
-		if city._brick_nodes.has(b.id) and not city._bands_building(b.id):
+		if city._brick_nodes.has(b.id) and not city.drawing.bands_building(b.id):
 			break
 	city.stats_label.visible = false
 	if city._reticle != null:
@@ -5481,8 +5481,8 @@ func _bench_at(label: String, pos: Vector3, rot: Vector3) -> void:
 			RenderingServer.RENDERING_INFO_TOTAL_PRIMITIVES_IN_FRAME),
 		RenderingServer.get_rendering_info(
 			RenderingServer.RENDERING_INFO_TOTAL_DRAW_CALLS_IN_FRAME),
-		sum / float(samples.size() / 2), detailed, meshed_coarse, city._far_on.size(),
-		city._brick_nodes.size(), int(city._shadow_stats.bricks_casting), int(city._shadow_stats.proxies)])
+		sum / float(samples.size() / 2), detailed, meshed_coarse, city.drawing._far_on.size(),
+		city._brick_nodes.size(), int(city.drawing._shadow_stats.bricks_casting), int(city.drawing._shadow_stats.proxies)])
 
 func _run_shot_pass() -> void:
 	city.camera.position = Vector3(-52.0, 34.0, -52.0)
@@ -5637,7 +5637,7 @@ func _run_shot_pass() -> void:
 			city.islands.slice_worst_ms])
 	print("[city]   piece shadows from stand-ins: %d asked for, %d hung; %d piece(s) casting one now" % [
 			city.islands.shadow_proxies_asked, city.islands.shadow_proxies_built,
-			int(city._shadow_stats.get("pieces_proxied", 0))])
+			int(city.drawing._shadow_stats.get("pieces_proxied", 0))])
 	print("[city]   collapse director: %d mega round(s) turned %d group(s) into %d chunk(s) (%d round(s) held); %d breakage group(s); %d furniture brick(s) written off; %d building(s) came down big" % [
 			city.director.rounds, city.director.groups_in, city.director.chunks_out, city.director.held_rounds,
 			city.director.breakage_out, city.director.furniture_out, city.director.collapsing.size()])
@@ -6072,11 +6072,11 @@ func _report_profile() -> void:
 		print("[prof]   render flush %.1f ms at tick %d: %s" % [r[0], r[1], r[2]])
 	print("[prof] worst script tick %.1f ms  (%d islands)" % [
 			city._prof_worst_ms, int(city._prof_worst.get("island_count", 0))])
-	if city._glass_ticks > 0:
+	if city.drawing._glass_ticks > 0:
 		print("[prof] glass: %.2f ms a tick on the main thread over %d ticks, worst %.1f ms (one hung %.1f, one built here from bricks %.1f, %d built here); %d built in all" % [
-				city._glass_usec / 1000.0 / city._glass_ticks, city._glass_ticks, city._glass_worst_usec / 1000.0,
-				city._glass_hang_worst_usec / 1000.0, _glass_here_worst_usec / 1000.0, _glass_here,
-				city.glass_built])
+				city.drawing._glass_usec / 1000.0 / city.drawing._glass_ticks, city.drawing._glass_ticks, city.drawing._glass_worst_usec / 1000.0,
+				city.drawing._glass_hang_worst_usec / 1000.0, _glass_here_worst_usec / 1000.0, _glass_here,
+				city.drawing.glass_built])
 	if not city._prof_spikes.is_empty():
 		var spikes := city._prof_spikes.duplicate()
 		spikes.sort_custom(func(a: Array, c: Array) -> bool: return a[0] > c[0])
@@ -6134,7 +6134,7 @@ func _report_profile() -> void:
 			float(city._prof_worst.get("st_rooms", 0.0)), float(city._prof_worst.get("st_detail", 0.0)),
 			float(city._prof_worst.get("st_residency", 0.0)), float(city._prof_worst.get("st_shells", 0.0))])
 	print("[prof] %d building meshes rebuilt from scratch (the rest were index patches)"
-			% city._full_rebuilds)
+			% city.drawing._full_rebuilds)
 	var tw: Dictionary = city.islands.tick_worst
 	if not tw.is_empty():
 		print("[prof] worst islands.tick %.1f ms = loop %.1f + resolve %.1f + fracture %.1f + mesh %.1f  (%d islands)" % [
@@ -6336,7 +6336,7 @@ func _run_stress_pass() -> void:
 			% [int(city.islands.report().tiny_deleted), IslandManager.SMALL_KEEP_RANGE,
 			int(city.islands.report().discarded), int(city.islands.report().furniture_deleted)])
 	print("[stress] bands built %d: C++ %.0f ms, upload %.0f ms, worst one %.1f ms" % [
-			city._band_builds, city._band_cpp_ms, city._band_upload_ms, city._band_worst])
+			city.drawing._band_builds, city.drawing._band_cpp_ms, city.drawing._band_upload_ms, city.drawing._band_worst])
 	print("[stress] near tier: %s" % city.brick_near.report())
 	print("[stress] debris cap: small <=%d, large <=%d, total <=%d -- deleted %d, slept %d, peak %d over" % [
 			city.islands.small_live_max, city.islands.large_live_max, city.islands.total_live_max,
@@ -6678,20 +6678,20 @@ func _run_far_pass() -> void:
 			past += 1
 		# A coarse shell the far box draws has no mesh: that is one drawer.
 		var shell: bool = city._shells.has(b.id) and not city._shell_box.has(b.id)
-		var on_far: bool = city._far_on.has(b.id)
+		var on_far: bool = city.drawing._far_on.has(b.id)
 		if city._shell_box.has(b.id) and (city._shells[b.id] as MeshInstance3D).mesh != null:
 			twice += 1
 		# A box under a banded shell that is fading (Stage 5) is what the
 		# shell blends over: one building drawn, not two.
-		if shell and on_far and float(city._far_fade.get(b.id, 0.0)) == 0.0:
+		if shell and on_far and float(city.drawing._far_fade.get(b.id, 0.0)) == 0.0:
 			twice += 1
 		elif not shell and not on_far:
 			undrawn += 1
 	print("[far] %d buildings, %d past the shell range, %d shells, %d far boxes" % [
-		city.registry.buildings.size(), past, city._shells.size(), city._far_on.size()])
+		city.registry.buildings.size(), past, city._shells.size(), city.drawing._far_on.size()])
 	_gate_ok("there is a far city to draw", past > 0)
-	_gate_ok("every building past the shell range is a far box", city._far_on.size() >= past,
-			"%d boxes for %d" % [city._far_on.size(), past])
+	_gate_ok("every building past the shell range is a far box", city.drawing._far_on.size() >= past,
+			"%d boxes for %d" % [city.drawing._far_on.size(), past])
 	var boxed := 0
 	var coarse_bodies := 0
 	for id in city._shell_box:
@@ -6705,7 +6705,7 @@ func _run_far_pass() -> void:
 	_gate_ok("no building is left undrawn", undrawn == 0, "%d undrawn" % undrawn)
 	_gate_ok("no building is drawn twice", twice == 0, "%d twice" % twice)
 	await _save("far_skyline")
-	if city._far_on.is_empty():
+	if city.drawing._far_on.is_empty():
 		# Nothing out there to shoot: a city too small for this pass.
 		print("[far] %d ok, %d FAIL" % [city._gate_pass, city._gate_fail])
 		city.get_tree().quit(1)
@@ -6715,7 +6715,7 @@ func _run_far_pass() -> void:
 	# trim leaves one.
 	var far_id := -1
 	var far_d := 0.0
-	for id in city._far_on:
+	for id in city.drawing._far_on:
 		# Towers, as this was written for (CollapseNext item 25).
 		if city._wide_ids.has(id):
 			continue
@@ -6738,10 +6738,10 @@ func _run_far_pass() -> void:
 	await _far_settle()
 	print("[far] shot building %d at %.0f m: %d band(s) damaged" % [
 		far_id, far_d, fb.damage_profile.size()])
-	_gate_ok("a damaged far building is a far box", city._far_on.has(far_id)
+	_gate_ok("a damaged far building is a far box", city.drawing._far_on.has(far_id)
 			and not city._shells.has(far_id))
-	_gate_ok("  with its damage in a row of the texture", city._far_dmg_row.has(far_id)
-			and city._far_dmg_tex != null)
+	_gate_ok("  with its damage in a row of the texture", city.drawing._far_dmg_row.has(far_id)
+			and city.drawing._far_dmg_tex != null)
 	var centre := fb.xform * (box.position + box.size * Vector3(0.5, 0.5, 0.5))
 	# From straight above it, so no nearer building stands in the way.
 	var hit := city._ray_recipes(centre + Vector3(0.0, box.size.y + 30.0, 0.0), centre)
@@ -6761,7 +6761,7 @@ func _run_far_pass() -> void:
 		city.camera.global_position = front + out * dist + Vector3(0.0, dist * 0.08, 0.0)
 		city.camera.look_at(front, Vector3.UP)
 		await _far_settle()
-		var drawn := ("far box" + (" for its coarse shell" if city._shell_box.has(far_id) else "") if city._far_on.has(far_id)
+		var drawn := ("far box" + (" for its coarse shell" if city._shell_box.has(far_id) else "") if city.drawing._far_on.has(far_id)
 				else "shell" if city._shells.has(far_id) else "nothing")
 		print("[far]   at %4.0f m: %s" % [dist, drawn])
 		await _save_crop("far_top_%d" % int(dist), 60.0 / dist)
@@ -6772,7 +6772,7 @@ func _run_far_pass() -> void:
 	city.camera.look_at(aim, Vector3.UP)
 	await _far_settle()
 	_gate_ok("closer in, it is a coarse shell with a body, drawn by the far box",
-			city._shell_bodies.has(far_id) and city._shell_box.has(far_id) and city._far_on.has(far_id))
+			city._shell_bodies.has(far_id) and city._shell_box.has(far_id) and city.drawing._far_on.has(far_id))
 	# And inside SHELL_DETAIL_RANGE, the banded shell with its holes.
 	city.camera.global_position = aim + Vector3(0.0, 0.0, -(City.SHELL_DETAIL_RANGE - 70.0))
 	city.camera.look_at(aim, Vector3.UP)
@@ -6782,10 +6782,10 @@ func _run_far_pass() -> void:
 	# opaque and hides it.
 	_gate_ok("closer still, a banded shell, its box only its crossfade", city._shells.has(far_id)
 			and not city._shell_box.has(far_id) and city._shell_bodies.has(far_id)
-			and (not city._far_on.has(far_id) or float(city._far_fade.get(far_id, 0.0)) > 0.0),
+			and (not city.drawing._far_on.has(far_id) or float(city.drawing._far_fade.get(far_id, 0.0)) > 0.0),
 			"shell %s, box tier %s, body %s, far box %s, bricks %s, aim-promoted %d" % [
 			city._shells.has(far_id), city._shell_box.has(far_id), city._shell_bodies.has(far_id),
-			city._far_on.has(far_id), fb.is_materialised(), city.aim_promotions])
+			city.drawing._far_on.has(far_id), fb.is_materialised(), city.aim_promotions])
 
 	# Stage 4: player builds out there are cards, one bake for identical ones.
 	var tower := BuildRecipe.load_from(BuildRecipe.shipped("watchtower"))
@@ -6857,8 +6857,8 @@ func _run_far_pass() -> void:
 			== GeometryInstance3D.VISIBILITY_RANGE_FADE_SELF
 	_gate_ok("Stage 5: in the fade band, a banded shell that fades out", faded,
 			"banded %s" % banded)
-	_gate_ok("  and its far box, flagged to fade in", city._far_on.has(mid_id)
-			and float(city._far_fade.get(mid_id, 0.0)) > 0.0)
+	_gate_ok("  and its far box, flagged to fade in", city.drawing._far_on.has(mid_id)
+			and float(city.drawing._far_fade.get(mid_id, 0.0)) > 0.0)
 	for d in [70.0, 100.0, 125.0, 150.0]:
 		city.camera.global_position = mc + Vector3(0.0, 10.0, -d)
 		city.camera.look_at(mc, Vector3.UP)
@@ -6878,7 +6878,7 @@ func _run_far_pass() -> void:
 	city.camera.look_at(mc + Vector3(0.0, mb.recipe.courses * 0.1, 0.0), Vector3.UP)
 	await _far_settle()
 	var shell_mi: MeshInstance3D = city._shells.get(mid_id)
-	if shell_mi != null and city._far_on.has(mid_id):
+	if shell_mi != null and city.drawing._far_on.has(mid_id):
 		var rect := _screen_rect(city._world_box(mb))
 		var img_a := await _grab()
 		var ranged: Array[GeometryInstance3D] = [shell_mi]
@@ -6908,7 +6908,7 @@ func _run_far_pass() -> void:
 	else:
 		_gate_ok("Stage 5: the crossfade leaves no holes", false,
 				"no fading shell to look at: shell %s, far box %s, bricks %s, aim-promoted %d" % [
-				shell_mi != null, city._far_on.has(mid_id), mb.is_materialised(), city.aim_promotions])
+				shell_mi != null, city.drawing._far_on.has(mid_id), mb.is_materialised(), city.aim_promotions])
 
 	print("[far] %d ok, %d FAIL" % [city._gate_pass, city._gate_fail])
 	city.get_tree().quit(1 if city._gate_fail > 0 else 0)
@@ -6975,7 +6975,7 @@ func _far_settle() -> void:
 	var from := city._stream_cursor
 	for i in 1200:
 		await RenderingServer.frame_post_draw
-		var n := city._shells_made + city._shells_freed + city._shells_swapped + city._far_on.size() \
+		var n: int = city._shells_made + city._shells_freed + city._shells_swapped + city.drawing._far_on.size() \
 				+ city._shell_far.size() + city._shell_bodies.size()
 		quiet = quiet + 1 if n == last else 0
 		last = n
@@ -7308,23 +7308,23 @@ func _run_overview() -> void:
 	var img_on := city.get_viewport().get_texture().get_image()
 	await _save("overview_coarse")
 	print("[overview] far tier off: %s" % _overview_line(off))
-	print("[overview] far tier on (%d buildings coarse): %s" % [city._far_coarse.size(),
+	print("[overview] far tier on (%d buildings coarse): %s" % [city.drawing._far_coarse.size(),
 			_overview_line(on)])
 	print("[overview]   picture differs at %.2f%% of sampled pixels" % [
 			_image_difference(img_off, img_on) * 100.0])
 	_gate_ok("far buildings in bricks are drawn coarse, and the picture is the same",
-			not city._far_coarse.is_empty() and _image_difference(img_off, img_on) < 0.01,
-			"%d coarse" % city._far_coarse.size())
+			not city.drawing._far_coarse.is_empty() and _image_difference(img_off, img_on) < 0.01,
+			"%d coarse" % city.drawing._far_coarse.size())
 	# A hit on one: its bands at once, coarse again once quiet.
-	if not city._far_coarse.is_empty():
-		var hit_id: int = city._far_coarse.keys()[0]
+	if not city.drawing._far_coarse.is_empty():
+		var hit_id: int = city.drawing._far_coarse.keys()[0]
 		var hb := city.registry.get_building(hit_id)
 		var box := CityPlacer.box_of(hb)
 		city._blast(Vector3(box.position.x, box.position.y + 3.0, box.get_center().z), 1.5)
 		var back := false
 		for i in 60:
 			await city.get_tree().physics_frame
-			if not city._far_coarse.has(hit_id):
+			if not city.drawing._far_coarse.has(hit_id):
 				back = true
 				break
 		var bands_shown := true
@@ -7335,7 +7335,7 @@ func _run_overview() -> void:
 		var again := false
 		for i in 300:
 			await city.get_tree().physics_frame
-			if city._far_coarse.has(hit_id):
+			if city.drawing._far_coarse.has(hit_id):
 				again = true
 				break
 		_gate_ok("and it goes coarse again once it is quiet", again)
@@ -7747,6 +7747,37 @@ func _run_light_pass() -> void:
 		print("[light] flashlight: picture %.3f against %.3f; GPU %.2f ms against %.2f off"
 				% [lit, on, gpu_on, gpu_off])
 		_gate_ok("the flashlight lights the room", lit > on * 1.1, "%.3f against %.3f" % [lit, on])
+		# Near lamps (Docs/Lighting.md 6.5): at night, the lamps nearest the
+		# camera light the room for real, over the grid's flat lamp term.
+		var sun_was := city._sun.visible
+		city._sun.visible = false
+		var wenv := city.get_viewport().find_world_3d().environment
+		var amb := wenv.ambient_light_energy if wenv != null else 0.0
+		var bg := wenv.background_energy_multiplier if wenv != null else 0.0
+		if wenv != null:
+			wenv.ambient_light_energy = amb * 0.08
+			wenv.background_energy_multiplier = bg * 0.08
+		var near_was := BrickGridLight.near_max
+		var shots := {}
+		for n in [0, 4]:
+			BrickGridLight.near_max = n
+			city.grid_light.place_near()
+			await _ticks(12)
+			var m := _mean_of(city.get_viewport().get_texture().get_image())
+			shots[n] = [m, RenderingServer.viewport_get_measured_render_time_gpu(vp_rid),
+					city.grid_light.near_count]
+			await _save("city_lamps_night_%d" % n)
+		print("[light] night, grid lamps only: picture %.3f, GPU %.2f ms; %d near lamp(s): %.3f, GPU %.2f ms"
+				% [shots[0][0], shots[0][1], shots[4][2], shots[4][0], shots[4][1]])
+		_gate_ok("the near lamps light the room at night", shots[4][2] > 0
+				and shots[4][0] > shots[0][0] * 1.05, "%d lamp(s), %.3f against %.3f"
+				% [shots[4][2], shots[4][0], shots[0][0]])
+		BrickGridLight.near_max = near_was
+		city.grid_light.place_near()
+		city._sun.visible = sun_was
+		if wenv != null:
+			wenv.ambient_light_energy = amb
+			wenv.background_energy_multiplier = bg
 	# A hole through an outer wall (x = 0 side or the far one), where it is
 	# whole for 4 studs across and 1-2 m up and a room is right behind it; the
 	# air just in reads at least three steps from the open.
@@ -8751,9 +8782,19 @@ func _run_boat_pass() -> void:
 		await city.get_tree().process_frame
 	var flooded := boat.hull_water != null and boat.hull_water.total() > 50.0
 	check.call("holed: its hold floods, the flooded cells no longer dry", flooded and boat.water_mesh != null
-			and boat.water_mesh.mesh != null and not HullMasks.dry_at(boat.global_transform * boat.cell_point(
-			Vector3i(boat.seat_cell.x, int(boat.recipe.meta.boat.hold_y), boat.seat_cell.z))),
-			"%.0f cells of water, %.0f kg" % [boat.hull_water.total() if boat.hull_water != null else 0.0, boat.water_mass])
+			and boat.water_mesh.mesh != null and not HullMasks.dry_at(boat.global_transform * (boat.cell_point(
+			Vector3i(boat.seat_cell.x, int(boat.recipe.meta.boat.hold_y), boat.seat_cell.z))
+			# Half a plate up into the cell: its bottom face rounds into the floor brick under it.
+			+ boat.frame.basis.y.normalized() * BrickWorld.get_plate_metres() * 0.5)),
+			"%.0f cells of water, %.0f kg; the hold's middle: state %d, water %.2f" % [
+			boat.hull_water.total() if boat.hull_water != null else 0.0, boat.water_mass, _hold_state(boat),
+			_hold_level(boat)])
+	print("[boat] water: worst step %.1f ms, worst drawing %.1f ms; afloat a tick %.2f ms" % [
+			boat.water_step_us / 1000.0, boat.water_draw_us / 1000.0, boat.float_us / 1000.0])
+	# On the sea, in the world's air: holed, nothing vents, no rush toward the hole.
+	var vents := VentDust.jets_of(boat)
+	check.call("holed on the sea: its air stays (the world's outside), no dust, no rush", vents.is_empty()
+			and boat.outside_pressure >= 1.0, "%d dust jet(s), outside %.1f atm" % [vents.size(), boat.outside_pressure])
 	city.camera.global_position = boat.global_transform * boat.cell_point(boat.seat_cell) + Vector3(0, 1.7, 0) 			- boat.global_basis.x * 3.0
 	city.camera.look_at(boat.global_transform * boat.cell_point(Vector3i(boat.seat_cell.x, int(boat.recipe.meta.boat.hold_y), 2)), Vector3.UP)
 	# The deck taken off over the hold, to see in.
@@ -8772,3 +8813,88 @@ func _run_boat_pass() -> void:
 	print("[boat] %d ok, %d FAIL" % [tally[0], tally[1]])
 	city.get_tree().quit(1 if int(tally[1]) > 0 else 0)
 
+
+
+func _hold_idx(boat: Boat) -> int:
+	var c := Vector3i(boat.seat_cell.x, int(boat.recipe.meta.boat.hold_y), boat.seat_cell.z)
+	return boat.air._idx(c) if boat.air._in(c) else -1
+
+
+func _hold_state(boat: Boat) -> int:
+	var i := _hold_idx(boat)
+	return boat.air.state[i] if i >= 0 else -1
+
+
+func _hold_level(boat: Boat) -> float:
+	var i := _hold_idx(boat)
+	return boat.hull_water.level(i) if i >= 0 and boat.hull_water != null else -1.0
+
+
+## The boat you can play (Docs/Hulls.md 7.2): the city's harbour moors one off the
+## nearest shore; a player stood over its deck is taken onto its ghost and rides it,
+## standing on the deck as it rolls; off the pawn, off the boat. Shots:
+## hull_harbour_shore, hull_harbour_aboard. Windowed, one run (heat check after).
+func _run_harbour_pass() -> void:
+	city.respawn_buildings = false
+	for i in 60:
+		await city.get_tree().process_frame
+	var tally := [0, 0]
+	var check := func(what: String, c: bool, detail: String) -> void:
+		print("[harbour] %s %s  %s" % ["ok  " if c else "FAIL", what, detail])
+		tally[0 if c else 1] += 1
+	var h := Harbour.open(city, city.camera.global_position)
+	check.call("a berth found and a boat launched", h != null and h.boat != null, "")
+	if h == null:
+		city.get_tree().quit(1)
+		return
+	city.harbour = h
+	var boat := h.boat
+	var t0 := Time.get_ticks_msec()
+	while (not boat.bricked or boat.columns.is_empty()) and Time.get_ticks_msec() - t0 < 30000:
+		await city.get_tree().process_frame
+	for i in 180:
+		await city.get_tree().process_frame
+	var sea: float = BrickWave.get_sea_level()
+	var drift := Vector2(boat.global_position.x - h.berth.origin.x, boat.global_position.z - h.berth.origin.z).length()
+	check.call("afloat at its berth, riding (its ghost walked)", boat.afloat and boat.riding and drift < 4.0
+			and absf(boat.global_position.y - sea) < 3.0, "drift %.2f m, at %.2f m (sea %.2f)" % [
+			drift, boat.global_position.y, sea])
+	var side := boat.global_basis.z.normalized()
+	city.camera.global_position = boat.global_position + side * 14.0 + Vector3(0, 3.0, 0)
+	city.camera.look_at(boat.global_position, Vector3.UP)
+	for i in 10:
+		await city.get_tree().process_frame
+	await _save("hull_harbour_shore")
+	# Onto it: stood over its deck in the world, the crossing takes it aboard.
+	var deck := boat.global_transform * boat.cell_point(boat.seat_cell)
+	city._enter_pawn(deck + Vector3(0, 0.6, 0))
+	var pawn: Pawn = city._player_pawn
+	var aboard_at := -1
+	for i in 30:
+		await city.get_tree().physics_frame
+		if pawn.ghost == boat and aboard_at < 0:
+			aboard_at = i
+	check.call("stood over the deck: aboard its ghost", pawn.ghost == boat, "after %d ticks" % aboard_at)
+	# Rides it: three seconds later still on the deck, where the deck now is.
+	var worst := 0.0
+	for i in 180:
+		await city.get_tree().physics_frame
+		if pawn.ghost == boat:
+			var real: Vector3 = boat.ghost_to_real() * pawn.feet_here()
+			var under: Vector3 = boat.global_transform * boat.cell_point(boat.seat_cell)
+			worst = maxf(worst, absf((boat.global_transform.basis.inverse() * (real - under)).y))
+	check.call("rides it 3 s, standing on its deck", pawn.ghost == boat and pawn.body.is_on_floor() and worst < 1.2,
+			"feet off the deck at most %.2f m, on floor %s" % [worst, pawn.body.is_on_floor()])
+	var eye: Vector3 = city.camera.global_position
+	check.call("the view rides the real boat", boat.holds(eye) or eye.distance_to(deck) < 6.0,
+			"%.1f m from the deck" % eye.distance_to(deck))
+	await _save("hull_harbour_aboard")
+	print("[harbour] afloat: %d columns, a tick %.0f us (worst %.0f)" % [boat.columns.size(),
+			boat.float_us, boat.float_us_max])
+	city._leave_pawn()
+	for i in 5:
+		await city.get_tree().physics_frame
+	# The pawn is freed on leaving it; if kept, it is off the ghost.
+	check.call("off the pawn: off the boat's ghost", not is_instance_valid(pawn) or pawn.ghost == null, "")
+	print("[harbour] %d ok, %d FAIL" % [tally[0], tally[1]])
+	city.get_tree().quit(1 if int(tally[1]) > 0 else 0)
