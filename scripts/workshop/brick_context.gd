@@ -130,3 +130,29 @@ func style_ui(root: Control) -> void:
 
 func panel_box() -> StyleBox:
 	return GameUI.panel_box(0.96)
+
+
+# Place: the workshop's own hand (a brick where the ghost is, a run, RMB takes one away).
+
+func place_begin() -> void:
+	ws.wk_place_begin()
+
+
+func place_end() -> void:
+	ws.wk_place_end()
+
+
+func place_running() -> bool:
+	return ws.wk_place_running()
+
+
+func place_hover() -> void:
+	ws.wk_place_hover()
+
+
+func place_drag() -> void:
+	ws.wk_place_drag()
+
+
+func erase_at_cursor() -> void:
+	ws.wk_erase_at_cursor()

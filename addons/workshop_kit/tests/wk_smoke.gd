@@ -24,6 +24,7 @@ func _initialize() -> void:
 	await _camera()
 	_grid_and_ghost()
 	_frame()
+	_place_tool()
 	print("wk_smoke: %d passed, %d failed" % [_pass, _fail])
 	quit(0 if _fail == 0 else 1)
 
@@ -498,6 +499,30 @@ func _frame() -> void:
 		n.free()
 
 
+func _place_tool() -> void:
+	var ctx := _Ctx.new()
+	var box := WkToolbox.new()
+	box.ctx = ctx
+	var hand: WkPlaceTool = box.add(WkPlaceTool.new())
+	box.add(WkPaintTool.new())
+	box.default_id = &"place"
+	box.use(&"")
+	_ok("the default tool is in hand when none is asked for", box.active() == hand)
+	box.use(&"paint")
+	box.use(&"")
+	_ok("and back after another is put down", box.active() == hand)
+	box.input(_click(MOUSE_BUTTON_LEFT, true))
+	_ok("LMB places and starts a run", ctx.log.back() == "place" and ctx.running)
+	box.process(0.016)
+	_ok("each frame aims; a run whose button is up (headless) ends", ctx.log.has("hover")
+			and ctx.log.has("end") and not ctx.running, str(ctx.log.slice(-4)))
+	box.input(_click(MOUSE_BUTTON_RIGHT, true))
+	_ok("RMB takes away", ctx.log.back() == "erase")
+	hand.rmb_erases = false
+	_ok("unless told not to", not box.input(_click(MOUSE_BUTTON_RIGHT, true)))
+	_ok("MMB is not the hand's", not box.input(_click(MOUSE_BUTTON_MIDDLE, true)))
+
+
 ## A pretend editor for the tools.
 class _Ctx:
 	extends WkContext
@@ -527,6 +552,27 @@ class _Ctx:
 		cancels += 1
 
 	var log := []
+	var running := false
+
+	func place_begin() -> void:
+		log.append("place")
+		running = true
+
+	func place_end() -> void:
+		log.append("end")
+		running = false
+
+	func place_running() -> bool:
+		return running
+
+	func place_hover() -> void:
+		log.append("hover")
+
+	func place_drag() -> void:
+		log.append("drag")
+
+	func erase_at_cursor() -> void:
+		log.append("erase")
 	var cam: Camera3D
 	var ray := []
 	var captured := false

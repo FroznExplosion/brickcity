@@ -987,7 +987,8 @@ Each stage: own branch, merged `--no-ff`, pushed. Every stage passes, as on main
 | 4a ✅ | `WkRail` (ToolRail moved into the kit) in both workshops, with the game's look through the context (`style_ui`, `panel_box`: `GameUI`, on `MenuTheme`) | probes, gate |
 | 4b ✅ | `WkFrame` for the building workshop: the menu bar (`WorkshopMenu`'s menus as data the workshop gives), the rail, the option panel and the hint line, laid out and themed in one place | `workshop_probe`, gate |
 | 4c ✅ | The asset workshop's tabs, outliner and actions on `WkFrame` | `asset_ui_probe` |
-| 5 | The rest of the shared tools into the kit, one file each: place/run, erase, select, cut, measure, move, fill/wand; workshop-only tools into `scripts/workshop/tools/` | probes; `wk_smoke` per tool |
+| 5a ✅ | **Place** (the hand: click, held-click run, RMB takes away) into the kit, the toolbox's default tool and the hand under any tool for a click it does not take | probes, gate |
+| 5b | The rest of the shared tools into the kit, one file each: select, cut, measure, move, fill/wand; and the Shapes tool, once the two workshops' gestures are settled into one (a design choice for the user) | probes; `wk_smoke` per tool |
 | 6a | Each of the 26 overrides becomes a context call or a tool (the asset still extends) | probes |
 | 6b | **No more `extends workshop.gd`**: the brick world, recipe, frames, save and load in one component both workshops own; each workshop `extends Node3D` and composes the kit | every probe, gate; a scan finds no game class named under `addons/workshop_kit/` |
 
@@ -1193,3 +1194,19 @@ gap under the bar (`band_gap`), a set room for the band (`band_space`) and a pan
 * What is in them -- the stages, the tools of each, the outliner's rows, the toast -- stays the
   asset workshop's: they name parts, models, guides and the sculpt.
 * Both workshops now lay out through the same frame and build their menus on the same bar.
+
+### As built: stage 5a, the hand (2026-11-07)
+
+Kit 0.11.0: **`WkPlaceTool`** -- LMB `place_begin`, LMB up `place_end`, RMB `erase_at_cursor`; each
+frame `place_hover` (aim the preview) and, while a run is under way (`place_running`) and LMB is
+held, `place_drag`; a run whose button is up ends. `WkToolbox.default_id`: the tool in hand when
+none is asked for, so putting down Paint or Sketch hands back the hand. `wk_smoke` 107.
+
+* The base workshop's LMB-places / RMB-deletes branch and the per-frame aim and run in `_process`
+  are the tool's now; its host methods are `wk_place_begin` (`_place` + `_begin_run`),
+  `wk_place_end` (`_end_run`), `wk_place_running`, `wk_place_hover` (`_aim`, `_update_ghost`),
+  `wk_place_drag` (`run_step`), `wk_erase_at_cursor` (`_delete_ray`). The asset workshop's own
+  `_place`, `_delete_ray` and `_aim` are still what runs (it extends the base).
+* The tool is also called as the hand under another tool: a click Paint or Sketch does not take
+  (RMB while painting, or outside a stroke in Draw) still takes a brick away, as before.
+* `place_probe`'s check after B now reads "the hand is back in hand".

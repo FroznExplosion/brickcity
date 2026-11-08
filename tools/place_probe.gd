@@ -548,7 +548,7 @@ func _check_paint_brush() -> void:
 			and _ws.undo_stack.top_kind() == &"paint" and _ws.recipe.colour_of(3) == 11)
 	_ws._set_painting(false)
 	_ok("and the palette goes with the brush", not _ws._paint_palette.visible)
-	_ok("and the tool is put down", _ws.toolbox.active_id() == &"")
+	_ok("and the hand is back in hand", _ws.toolbox.active_id() == &"place")
 
 
 func _check_hotbar() -> void:

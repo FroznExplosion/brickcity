@@ -109,6 +109,40 @@ func paint_radius_changed(_radius: int) -> void:
 
 
 # ---------------------------------------------------------------------------
+# Place (WkPlaceTool)
+# ---------------------------------------------------------------------------
+
+## LMB went down: put the piece in hand where the preview is, and start a run from there.
+func place_begin() -> void:
+	pass
+
+
+## LMB is up: the run (if any) is done -- one undo step, the editor's.
+func place_end() -> void:
+	pass
+
+
+## A run is under way.
+func place_running() -> bool:
+	return false
+
+
+## Each frame: aim the preview at the cursor.
+func place_hover() -> void:
+	pass
+
+
+## Each frame: if a run is under way and the preview has moved, lay the piece again there.
+func place_drag() -> void:
+	pass
+
+
+## RMB: take away what is under the cursor.
+func erase_at_cursor() -> void:
+	pass
+
+
+# ---------------------------------------------------------------------------
 # Camera (WkCamera)
 # ---------------------------------------------------------------------------
 
