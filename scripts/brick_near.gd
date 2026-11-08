@@ -33,11 +33,14 @@ const BEVEL := 0.013
 ## stay, plain.
 static var enabled := true
 ## Metres from the camera to the nearest point of a band, inside which it is
-## drawn chamfered. At 14 m a 13 mm bevel is a little over a pixel at 1080p
-## (17.8 / distance, Terrain.md 17.12): past that the drawn seam is the edge.
-static var radius := 14.0
-## And inside which its studs are geometry: the terrain's STUD_RANGE.
-static var stud_radius := 18.0
+## drawn chamfered. A 13 mm bevel is 17.8 / distance pixels at 1080p
+## (Terrain.md 17.12): three at 6 m. Past that the shader's drawn seam and
+## shaded chamfer stand in for it. Was 14 m (about a pixel) until 2026-11-07:
+## cut to 6 to draw fewer bands chamfered (Docs/BrickBevel.md 6).
+static var radius := 6.0
+## And inside which its studs are geometry. Was 18 m (the terrain's
+## STUD_RANGE, which keeps its own) until 2026-11-07.
+static var stud_radius := 12.0
 ## Studs are most of what the near tier draws (a 638-brick building: 8,734 of
 ## them to 50,274 chamfered triangles), so they come down in three steps of
 ## their own -- and by the STUD, not the band: a band is a storey, and with the
@@ -45,16 +48,18 @@ static var stud_radius := 18.0
 ## A band's studs are sorted into three MultiMeshes by distance
 ## (BrickWorld.split_studs), again whenever the camera has moved STUD_RESORT:
 ##   inside `stud_bevel_radius`  PieceMeshes.stud, 38 triangles: the rim bevel
-##       is 13 mm, three pixels at 8 m and under two past it;
+##       is 13 mm, four pixels at 4 m and under three past 6;
 ##   to `stud_round_radius`      PieceMeshes.stud_plain, 22: still round;
 ##   to `stud_radius`            PieceMeshes.stud_square, 10: a stud is 0.21 m,
-##       twenty pixels wide or less out here and mostly seen from the side.
-## Set `stud_round_radius` to `stud_bevel_radius` to go straight to square.
-static var stud_bevel_radius := 8.0
-static var stud_round_radius := 13.0
+##       36 pixels wide at 8 m, 24 at 12 -- visibly square inside about 13 m.
+## Set `stud_round_radius` to `stud_bevel_radius` to go straight to square, or
+## to `stud_radius` to skip the square ring. Since 2026-11-07 it is skipped:
+## round to 12 m, then cards (were 8, 13 and 18 m with a square ring).
+static var stud_bevel_radius := 4.0
+static var stud_round_radius := 12.0
 ## And past `stud_radius`, to here, a CARD: two triangles that turn to face the
 ## camera, sized to the stud's outline from there, flat colour, no print
-## (PieceMeshes.stud_card). Past 18 m a stud is under fifteen pixels; what has
+## (PieceMeshes.stud_card). Past 12 m a stud is under twenty pixels; what has
 ## to read is that the tops are studded, so a building across a square is not
 ## a stack of smooth boxes. Set it to `stud_radius` to turn the ring off.
 ##
@@ -64,7 +69,8 @@ static var stud_round_radius := 13.0
 ## the big city those were 95% of the cards (200,657 studs held on a walk past
 ## every building, 9,827 without them), each band of them re-sent to the
 ## renderer every few metres the camera moved.
-static var stud_card_radius := 70.0
+## 45 m (was 70 until 2026-11-07): a stud is about six pixels there, four at 70.
+static var stud_card_radius := 45.0
 ## THE CAP (Options > Video, Near Detail Cap). Distance alone let the tier
 ## take on as many bands as stood inside its rings -- a street of storeys, a
 ## collapse's every piece -- and each one held is a build, an upload and its

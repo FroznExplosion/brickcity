@@ -26,8 +26,9 @@ Files: `gdextension/brick/src/brick_world.cpp` (`bake_faces_into`, `chamfer_face
 * **It is a second mesh, not a rebuild.** A band's flat mesh stays exactly as it was, and goes on
   being patched. The chamfered one is built beside it on a worker, uploaded on another, and
   switched in. Crossing the distance threshold costs the building nothing it was not doing.
-* **Only near.** Inside `BrickNear.radius` (14 m) of the camera. At 14 m a 13 mm bevel is a little
-  over a pixel (17.8 / distance); past that the drawn seam is the edge, as before.
+* **Only near.** Inside `BrickNear.radius` (6 m since 2026-11-07, was 14) of the camera. A 13 mm
+  bevel is 17.8 / distance pixels: three at 6 m, a little over one at 14. Past the radius the
+  shader's drawn seam and shaded chamfer stand in for it (§4).
 
 Measured on a 20 x 16 stud, 24-course tower (`brick_bevel_probe`): 18,938 triangles chamfered to
 the flat mesh's 3,102, **6.1x**, built in 1.1 ms for the whole chunk -- 17,104, **5.5x**, since
@@ -206,7 +207,8 @@ a mesh of the whole chunk.
 * **Not while it changes.** A band is left alone for `SETTLE_MS` after it was (re)built or last
   moved: a building rebuilding its bands, a piece in the air or still breaking up. A collapse is
   the worst moment to start meshing what is coming down.
-* **Studs** within `stud_radius` (18 m, the terrain's `STUD_RANGE`): one MultiMesh a band from
+* **Studs** within `stud_radius` (12 m since 2026-11-07; was 18, the terrain's `STUD_RANGE`,
+  which keeps its own): one MultiMesh a band from
   `BrickWorld.get_chunk_studs_section` -- a stud where a live block's face offers one and the cell
   above is empty, none on a smooth part, none of furniture's. They are most of what the tier
   draws, so they step down three times -- by the STUD, not the band. A band is a storey: with
@@ -218,14 +220,15 @@ a mesh of the whole chunk.
 
   | Within | Mesh | Triangles |
   |---|---|---|
-  | `stud_bevel_radius`, 8 m | `PieceMeshes.stud()`, the rim bevelled | 38 |
-  | `stud_round_radius`, 13 m | `stud_plain()`, an octagon | 22 |
-  | `stud_radius`, 18 m | `stud_square()`, a tapered square post of the same plan area | 10 |
-  | `stud_card_radius`, 70 m | `stud_card()`, a card turned to the camera | 2 |
+  | `stud_bevel_radius`, 4 m (was 8) | `PieceMeshes.stud()`, the rim bevelled | 38 |
+  | `stud_round_radius`, 12 m (was 13) | `stud_plain()`, an octagon | 22 |
+  | `stud_radius`, 12 m (was 18) | `stud_square()`, a tapered square post of the same plan area | 10 |
+  | `stud_card_radius`, 45 m (was 70) | `stud_card()`, a card turned to the camera | 2 |
 
-  A stud is 0.21 m: 36 pixels wide at 8 m, 22 at 13, 16 at 18 (1080p). Square is visibly square
-  at 8 m and a bump at 18, which is why it starts at 13; set `stud_round_radius` to
-  `stud_bevel_radius` to go straight to it.
+  A stud is 0.21 m: 36 pixels wide at 8 m, 24 at 12, 16 at 18, about 6 at 45 (1080p). Square is
+  visibly square at 8 m and a bump at 18, which is why it started at 13. Since 2026-11-07 the
+  square ring is skipped (`stud_round_radius` = `stud_radius`): round to 12 m, then cards. Set
+  `stud_round_radius` to `stud_bevel_radius` to go straight to square instead.
 
   Past 18 m there were none, and a building across a square was a stack of smooth boxes. The
   card (`shaders/stud_card.gdshader`) is the cheapest stud there is: two triangles, turned to
@@ -379,6 +382,11 @@ machine.
 
 If it is too much: `BrickNear.radius` and the three stud radii are the knobs, and
 `-- --no-studs` / `-- --no-bevel` say which half to turn.
+
+**Turned down 2026-11-07** (user's call, to draw fewer bricks as real geometry): bevelled
+bands 14 -> 6 m; studs bevelled 8 -> 4 m, round 13 -> 12 m, the square ring dropped, geometry
+18 -> 12 m, cards 70 -> 45 m. The shader's seam and shaded chamfer (§4) cover from 6 m. The
+cost table above is from the old radii; take it again on a quiet machine, editor closed.
 
 ## 7. Not done
 
