@@ -8779,9 +8779,19 @@ func _run_boat_pass() -> void:
 		await city.get_tree().process_frame
 	var flooded := boat.hull_water != null and boat.hull_water.total() > 50.0
 	check.call("holed: its hold floods, the flooded cells no longer dry", flooded and boat.water_mesh != null
-			and boat.water_mesh.mesh != null and not HullMasks.dry_at(boat.global_transform * boat.cell_point(
-			Vector3i(boat.seat_cell.x, int(boat.recipe.meta.boat.hold_y), boat.seat_cell.z))),
-			"%.0f cells of water, %.0f kg" % [boat.hull_water.total() if boat.hull_water != null else 0.0, boat.water_mass])
+			and boat.water_mesh.mesh != null and not HullMasks.dry_at(boat.global_transform * (boat.cell_point(
+			Vector3i(boat.seat_cell.x, int(boat.recipe.meta.boat.hold_y), boat.seat_cell.z))
+			# Half a plate up into the cell: its bottom face rounds into the floor brick under it.
+			+ boat.frame.basis.y.normalized() * BrickWorld.get_plate_metres() * 0.5)),
+			"%.0f cells of water, %.0f kg; the hold's middle: state %d, water %.2f" % [
+			boat.hull_water.total() if boat.hull_water != null else 0.0, boat.water_mass, _hold_state(boat),
+			_hold_level(boat)])
+	print("[boat] water: worst step %.1f ms, worst drawing %.1f ms; afloat a tick %.2f ms" % [
+			boat.water_step_us / 1000.0, boat.water_draw_us / 1000.0, boat.float_us / 1000.0])
+	# On the sea, in the world's air: holed, nothing vents, no rush toward the hole.
+	var vents := VentDust.jets_of(boat)
+	check.call("holed on the sea: its air stays (the world's outside), no dust, no rush", vents.is_empty()
+			and boat.outside_pressure >= 1.0, "%d dust jet(s), outside %.1f atm" % [vents.size(), boat.outside_pressure])
 	city.camera.global_position = boat.global_transform * boat.cell_point(boat.seat_cell) + Vector3(0, 1.7, 0) 			- boat.global_basis.x * 3.0
 	city.camera.look_at(boat.global_transform * boat.cell_point(Vector3i(boat.seat_cell.x, int(boat.recipe.meta.boat.hold_y), 2)), Vector3.UP)
 	# The deck taken off over the hold, to see in.
@@ -8800,3 +8810,88 @@ func _run_boat_pass() -> void:
 	print("[boat] %d ok, %d FAIL" % [tally[0], tally[1]])
 	city.get_tree().quit(1 if int(tally[1]) > 0 else 0)
 
+
+
+func _hold_idx(boat: Boat) -> int:
+	var c := Vector3i(boat.seat_cell.x, int(boat.recipe.meta.boat.hold_y), boat.seat_cell.z)
+	return boat.air._idx(c) if boat.air._in(c) else -1
+
+
+func _hold_state(boat: Boat) -> int:
+	var i := _hold_idx(boat)
+	return boat.air.state[i] if i >= 0 else -1
+
+
+func _hold_level(boat: Boat) -> float:
+	var i := _hold_idx(boat)
+	return boat.hull_water.level(i) if i >= 0 and boat.hull_water != null else -1.0
+
+
+## The boat you can play (Docs/Hulls.md 7.2): the city's harbour moors one off the
+## nearest shore; a player stood over its deck is taken onto its ghost and rides it,
+## standing on the deck as it rolls; off the pawn, off the boat. Shots:
+## hull_harbour_shore, hull_harbour_aboard. Windowed, one run (heat check after).
+func _run_harbour_pass() -> void:
+	city.respawn_buildings = false
+	for i in 60:
+		await city.get_tree().process_frame
+	var tally := [0, 0]
+	var check := func(what: String, c: bool, detail: String) -> void:
+		print("[harbour] %s %s  %s" % ["ok  " if c else "FAIL", what, detail])
+		tally[0 if c else 1] += 1
+	var h := Harbour.open(city, city.camera.global_position)
+	check.call("a berth found and a boat launched", h != null and h.boat != null, "")
+	if h == null:
+		city.get_tree().quit(1)
+		return
+	city.harbour = h
+	var boat := h.boat
+	var t0 := Time.get_ticks_msec()
+	while (not boat.bricked or boat.columns.is_empty()) and Time.get_ticks_msec() - t0 < 30000:
+		await city.get_tree().process_frame
+	for i in 180:
+		await city.get_tree().process_frame
+	var sea: float = BrickWave.get_sea_level()
+	var drift := Vector2(boat.global_position.x - h.berth.origin.x, boat.global_position.z - h.berth.origin.z).length()
+	check.call("afloat at its berth, riding (its ghost walked)", boat.afloat and boat.riding and drift < 4.0
+			and absf(boat.global_position.y - sea) < 3.0, "drift %.2f m, at %.2f m (sea %.2f)" % [
+			drift, boat.global_position.y, sea])
+	var side := boat.global_basis.z.normalized()
+	city.camera.global_position = boat.global_position + side * 14.0 + Vector3(0, 3.0, 0)
+	city.camera.look_at(boat.global_position, Vector3.UP)
+	for i in 10:
+		await city.get_tree().process_frame
+	await _save("hull_harbour_shore")
+	# Onto it: stood over its deck in the world, the crossing takes it aboard.
+	var deck := boat.global_transform * boat.cell_point(boat.seat_cell)
+	city._enter_pawn(deck + Vector3(0, 0.6, 0))
+	var pawn: Pawn = city._player_pawn
+	var aboard_at := -1
+	for i in 30:
+		await city.get_tree().physics_frame
+		if pawn.ghost == boat and aboard_at < 0:
+			aboard_at = i
+	check.call("stood over the deck: aboard its ghost", pawn.ghost == boat, "after %d ticks" % aboard_at)
+	# Rides it: three seconds later still on the deck, where the deck now is.
+	var worst := 0.0
+	for i in 180:
+		await city.get_tree().physics_frame
+		if pawn.ghost == boat:
+			var real: Vector3 = boat.ghost_to_real() * pawn.feet_here()
+			var under: Vector3 = boat.global_transform * boat.cell_point(boat.seat_cell)
+			worst = maxf(worst, absf((boat.global_transform.basis.inverse() * (real - under)).y))
+	check.call("rides it 3 s, standing on its deck", pawn.ghost == boat and pawn.body.is_on_floor() and worst < 1.2,
+			"feet off the deck at most %.2f m, on floor %s" % [worst, pawn.body.is_on_floor()])
+	var eye: Vector3 = city.camera.global_position
+	check.call("the view rides the real boat", boat.holds(eye) or eye.distance_to(deck) < 6.0,
+			"%.1f m from the deck" % eye.distance_to(deck))
+	await _save("hull_harbour_aboard")
+	print("[harbour] afloat: %d columns, a tick %.0f us (worst %.0f)" % [boat.columns.size(),
+			boat.float_us, boat.float_us_max])
+	city._leave_pawn()
+	for i in 5:
+		await city.get_tree().physics_frame
+	# The pawn is freed on leaving it; if kept, it is off the ghost.
+	check.call("off the pawn: off the boat's ghost", not is_instance_valid(pawn) or pawn.ghost == null, "")
+	print("[harbour] %d ok, %d FAIL" % [tally[0], tally[1]])
+	city.get_tree().quit(1 if int(tally[1]) > 0 else 0)

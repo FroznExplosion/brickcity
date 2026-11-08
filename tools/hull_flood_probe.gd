@@ -27,6 +27,12 @@ var _hole_y := 0.0
 var _level := 0.0
 var _door := -1
 var _next_room := -1
+var _vented := false
+var _spray := -1
+
+
+func air_root() -> int:
+	return _st.air._root(_room)
 
 
 func _ok(what: String, cond: bool, detail := "") -> void:
@@ -81,9 +87,36 @@ func _process(delta: float) -> bool:
 			_stage = 2
 		2:
 			_t += delta
+			if _spray < 0 and _t > 0.5 and not _vented:
+				# The sea bursting in at the hole while the room fills (Docs/Hulls.md 8.2).
+				_spray = 0
+				for j in HullSpray.jets_of(_st):
+					var c: Vector3 = _st.cell_at(j.at)
+					var d: Vector3 = (_st.global_transform * _st.frame).basis.inverse() * (j.dir as Vector3)
+					var into: Vector3 = c + d / BrickWorld.get_cell_size() * 1.5
+					if _st.air.compartment_at(Vector3i(into.floor())) >= 0:
+						_spray += 1
 			if _t < FILL:
 				return false
 			var w := _st.hull_water
+			if not _vented:
+				# Sealed (an airtight hull, its one hole under the water): the water
+				# squeezes the room's air and stops, the pocket held (Docs/Hulls.md 5.2).
+				var r := air_root()
+				var room := w.pocket_room(r, _st._hole_depth)
+				var have := w.in_compartment(_room)
+				var cells := float(_st.air._cells[r])
+				_ok("trapped: sealed, the water stops where its air is squeezed to the water's pressure",
+						w.trapped.has(r) and have > 0.5 and have <= room + 1.0 and have < 0.2 * cells,
+						"%.1f cells of water in %d, room for %.1f (the hole %.2f m under)" % [
+						have, int(cells), room, _level - _hole_y])
+				_ok("spray: the sea bursting in at the hole, into the room, while it fills", _spray > 0,
+						"%d jet(s) pointing in" % _spray)
+				# A vent: its air may go, and it fills on.
+				_vented = true
+				w.air_leak = INF
+				_t = 0.0
+				return false
 			var top := -INF
 			for i: int in w.wet:
 				if w.level(i) > 0.5:

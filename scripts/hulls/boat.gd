@@ -31,6 +31,12 @@ const COLUMN := 2
 ## and on the whole boat's turning.
 const DRAG := 0.8
 const ANG_DRAG := 1.5
+## Air out of a trapped pocket at its seams, cells a second (HullWater.air_leak):
+## INF, none held. Measured (boat_probe, 2026-11-07): at 40 a holed hold took 90 s
+## and did not sink; at 150 it sank in 28 s but no longer listed toward the hole in
+## its first 15 s (27 t aboard against 61 t). A boat that keeps afloat on a pocket
+## is a design call; the airtight hulls (spaceships, stations) hold theirs.
+const SEAM_LEAK := INF
 
 var vel := Vector3.ZERO
 var ang := Vector3.ZERO
@@ -53,6 +59,9 @@ var last_submerged := 0.0
 ## Water aboard, kg, last tick.
 var water_mass := 0.0
 var _cell_v := 0.0
+## A tick afloat (_float), microseconds: smoothed, and the worst.
+var float_us := 0.0
+var float_us_max := 0.0
 
 
 ## A boat of seed `sd` at `at`, its ghost in `ghost_hulls` (a GhostHulls).
@@ -65,6 +74,12 @@ static func launch(parent: Node, sd: int, at: Transform3D, ghost_hulls) -> Boat:
 	d.gravity_on = false
 	var b := Boat.new()
 	b.ghosts = ghost_hulls
+	# A brick hull is not airtight: the air a hole under the water would trap goes
+	# out at its seams (Docs/Hulls.md 5.2), so a holed hold floods, lists and sinks.
+	b.air_leak = SEAM_LEAK
+	# On a world's sea, in its air: a hole lets no air out, nothing is pulled to it
+	# (Docs/Hulls.md 4.1; a PlanetSystem sets its ships', nothing set a boat's).
+	b.outside_pressure = 1.0
 	parent.add_child(b)
 	b.setup(d)
 	b.global_transform = at
@@ -108,7 +123,12 @@ func _physics_process(delta: float) -> void:
 	if not riding:
 		ride()
 	wave_t = float(wave_clock.call()) if wave_clock.is_valid() else wave_t + delta
+	var t0 := Time.get_ticks_usec()
 	_float(delta)
+	# What a tick afloat costs (Docs/Hulls.md 11 E6: is a thread worth it?).
+	var us := float(Time.get_ticks_usec() - t0)
+	float_us_max = maxf(float_us_max, us)
+	float_us = us if float_us <= 0.0 else lerpf(float_us, us, 0.05)
 
 
 ## Its mass, centre and inertia from its bricks, and its columns from its hull's

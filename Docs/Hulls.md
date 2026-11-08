@@ -155,8 +155,23 @@ stops when sealed, and the next compartment over (bulkhead closed) does not chan
 - How strong it is: a one-brick hole in a 2000-cell room loses ~4 % a second and barely stirs
   anything (1 m/s^2 by it); five bricks out, ~25 % a second, 6-7 m/s^2: crumbs go out, the player
   is dragged.
-- **Not yet:** large loose pieces (PlanetPieces rigid bodies) pushed too; dust drawn at the hole;
-  what low air does to a player (suit, damage -- §10).
+- **Not yet:** what low air does to a player (suit, damage -- §10).
+
+### 4.2 Built (2026-11-07): dust at the hole, pieces carried out
+
+- **Large loose pieces:** in space a ship's broken-off sections never become rigid bodies
+  inside it; they leave as drifting pieces (`PlanetSystem._on_drifted`). A piece leaving a
+  venting room now also carries the rush: its pull at the piece's middle for `VENT_PUSH_S`
+  (0.6 s), added to its drift. So a section cut loose by a breach goes out through it.
+- **Dust** (`VentDust`, scripts/space/vent_dust.gd): while a room loses air at 1 % a second or
+  more, a jet of grey dust blows outward from up to 3 of its hole cells (6 a ship), as strong
+  as its pressure and venting rate. GPU particles in world coordinates, so what has blown out
+  stays behind a flying ship. Soft round puffs (`VentDust.soft_dot`).
+- **Found and fixed:** a `Boat` never had an outside pressure (only `PlanetSystem` set one,
+  for its ships), so a holed boat's hold vented as if in space, dragging its crew to the hole.
+  `Boat.launch` sets 1 atmosphere.
+- Gate: `ship_vent_probe` 11 (+1: a jet at the hole, blowing outward; sealed, no dust). The
+  boat pass checks a holed boat on the sea has no dust and no rush.
 
 ## 5. Flooding: water brick by brick
 
@@ -229,8 +244,25 @@ drains.
     water floods 61 t into the hold and it lists 5.2° toward it. Left open, its deck goes
     under. Patched and pumped at 300 cells/s, its keel comes back from 2.94 m to 0.53 m with
     no water left.
-* **Still open:** trapped air (a sealed room flooding from below keeps its air pocket), and the
-  waterfall sheet and foam of §8.
+* **Still open:** the waterfall sheet and foam of §8 (built since: §8.2).
+
+### 5.2 Built (2026-11-07): trapped air
+
+* A room whose **every hole is under the water** cannot let its air out, so the water coming
+  in squeezes it. By Boyle's law the pocket shrinks to 1 / (1 + depth / 10.3 m) of the room
+  (the deepest hole's depth), and the water stops there with the pocket held at the top
+  (`HullWater.pocket_room`, `trapped`). A hole over the water, or an open door to a room with
+  one, lets the air out and the room fills to the outside level as before.
+* **Air leaks out of a held pocket** at `air_leak` cells a second (`SpaceStation.air_leak`):
+  * **0 for spaceships and stations**, which are airtight. A ship sunk in a planet's sea keeps
+    its pocket.
+  * **Boats: none held** (`Boat.SEAM_LEAK` = INF): a brick hull is not airtight, and its air
+    goes out at the seams. Measured in `boat_probe`: at 40 cells/s a holed hold took 90 s and
+    did not sink; at 150 it sank in 28 s but no longer listed toward the hole in its first
+    15 s (27 t aboard against 61 t). A boat kept afloat by a pocket is a design call; one
+    constant.
+* Gate: `hull_flood_probe` 10 (+2). Sealed with its hole 1 m under, the room takes 131 of its
+  1,587 cells and stops: room for 131.4. Vented, it fills to the outside level as before.
 
 ## 6. The sea cut out of the hull, per brick
 
@@ -294,8 +326,26 @@ bricks. And a flooded hold: inside water drawn, no doubled surface.
 
 `SpaceStation._draw_water` draws one unshaded, see-through mesh under the bricks' node, so it
 rides with the hull. Each wet column gets a top at its level, stepped by plate, and each wet
-cell gets sides toward a lower neighbour. It is rebuilt only when the water moved. Not yet:
-the pools' shader, foam, the waterfall sheet.
+cell gets sides toward a lower neighbour. It is rebuilt only when the water moved.
+
+### 8.2 Built (2026-11-07): water that looks like water, spray at holes
+
+* **`shaders/hull_water.gdshader`** on the inside water:
+  * pool tops ripple (two crossing swells and a chop, in the hull's frame);
+  * a glassy shine and a see-through edge-on (fresnel);
+  * foam from the mesh's `COLOR.r`, broken by moving noise. The foam is: on tops against a
+    wall or a brick, on the lip of a step down, and most beside a hole the sea came in at
+    (`HullWater.inflow`).
+  * No screen or depth reads.
+* **Spray** (`HullSpray`, scripts/space/hull_spray.gd): at each hole the water came in at in
+  its last step, a jet of white drops bursts inward and falls (the waterfall at a hole), as
+  hard as the hole is deep. Up to 6 a ship. It stops once the room stands at the outside
+  level or holds a pocket.
+* **Drawn at most 5 times a second** (`DRAW_WATER_EVERY`). In the boat pass a flooding hold's
+  drawing took up to 20.9 ms (GDScript, rebuilt whole) and its step up to 12.2 ms; before, it
+  was redrawn at up to 20 Hz. A C++ mesher for it is the next step if it shows in play.
+* Gate: `hull_flood_probe` (+1: a jet at the hole, pointing in, while the room fills). Shot
+  `hull_boat_flooded`.
 
 ## 7. Floating, listing, sinking
 
@@ -348,12 +398,33 @@ flooding enough sinks it; patching and pumping out lets it rise.
 * **Found:** `BrickWave.sample_heights` returns NaN at a wave gain of exactly 0. This is in
   the terrain and water area's C++. The boat treats NaN as the calm sea.
 * **Not yet:**
-  * **No boat in a scene you can play yet.** The city's sea (or a planet's) needs to launch
-    one, own a `GhostHulls`, and run the player's crossing (`GhostHulls.tick`), as the
-    planet scene does.
-  * **No flooding** (step 9).
+  * ~~No boat in a scene you can play~~: §7.2.
+  * ~~No flooding~~ (step 9, §5.1).
   * **No outside collision boxes that move with the swell** for other things to hit; only
     its shell boxes.
+
+### 7.2 Built (2026-11-07): a boat you can play
+
+* **`Harbour`** (scripts/hulls/harbour.gd): the city opens one in normal play when it has a
+  sea (terrain mode: `--terrain`, or the terrain ground option). It moors a boat off the
+  nearest shore to the start: the nearest point within 1.5 km with 3 m of water under the
+  middle and the four corners of an 18 m footprint, the boat lying along the shore.
+* It owns the boat's ghost space (`GhostHulls`) and, each physics tick, runs these:
+  * the player's crossing (`GhostHulls.tick`): swim or jump onto it and you walk its deck as
+    it rolls, with your view on the real boat (`PlayerController._to_view`);
+  * every AI soldier's crossing too;
+  * loose things on its deck (§7b.4);
+  * the sea cut out of its hull (`HullMasks.update`).
+* **Shooting:** the boat is in `ShipRays.ships`, so every gun's ray and the AI's sight lines
+  find its bricks in its ghost (§7b.2).
+* **Leaving and sinking:** off the pawn (the free camera, a vehicle), the player is taken off
+  the ghost. Sunk 6 m under and nobody aboard for 12 s, a new boat is launched at the berth.
+* Gate: `city.tscn -- --terrain --harbour` (windowed), 6 ok:
+  * a berth found and a boat launched, 0.05 m drift at its berth;
+  * a player stood over the deck is aboard its ghost after 1 tick;
+  * 3 s riding, feet on the deck (0.00 m off), the view on the real boat;
+  * off the pawn, off the ghost.
+  * Shots: `hull_harbour_shore`, `hull_harbour_aboard`.
 
 ## 7b. Walking inside a moving hull: the ghost hull
 
@@ -526,8 +597,23 @@ Where it holds now:
 | Riders on drifting pieces | `drift_riders`, as before. |
 | Everything on a planet when it sleeps | Reparented onto it (`PlanetSystem._sleep`), as before. A ship the player is still aboard is never put to sleep when the frame moves on (`_switch`). |
 
-Not yet under the rule: loose rigid things on a flown ship's deck (dropped loot, small
-debris pieces as bodies). They would need a body in the ghost with their ship's gravity of
+### 7b.4 Built (2026-11-07): loose things on a flown deck
+
+`ShipCargo` (scripts/space/ship_cargo.gd), ticked by `PlanetSystem._crew_tick` and the
+`Harbour`. A dropped gun (`gun_pickups`), or any `RigidBody3D` in group `ship_cargo`, inside a
+riding ship's box is taken into its ghost, as a pawn is:
+* its body is moved to the ghost space, with its velocity less the deck's;
+* the ship's down pulls it (one g, none where the ship has no field);
+* its visuals are made top-level and drawn at `ghost_to_real` each tick.
+
+It gets off when it leaves the ghost (through a hole, or when the ship is at rest), back in
+the world at the real place with the deck's velocity. A player aboard reaches it, since both
+are in the ghost's coordinates. Gate: `ghost_hull_probe` 18 (+2). A crate dropped on the
+flying deck falls 0.85 m onto it, rests, and is drawn 0.0000 m off the real ship. Taken off,
+it is in the world where it was drawn.
+
+*Before 7b.4:* loose rigid things on a flown ship's deck (dropped loot, small
+debris pieces as bodies) were not under the rule. They would need a body in the ghost with their ship's gravity of
 their own. They are the next case if it matters in play.
 
 **The autopilot (`SpaceShip.autopilot`, `auto_target`).**
@@ -616,13 +702,10 @@ the same order give the same result twice.
   key was taken, rebindable in Options > Controls) on a ship's or station's hull. The lost
   bricks within RADIUS 2.5 m of where you point (RANGE 6 m along the view) come back, RATE
   8 a second, rim first. Wired in `PlanetScene._restore_tick`.
-* **Not decided, left open:**
-  * **What a brick costs.** `RestoreTool.cost` is how many it may still lay; -1, no limit,
-    for now.
-  * **Bricks that left on a piece come back as new ones.** The drifting piece stays as
-    debris. Pulling the debris back in (§9 B, optional) is not built.
-  * **No HUD or effect for the tool yet**: the bricks reappearing is the only feedback.
-  * Front end A (brick by brick, step 10) can use the same `restore`.
+* **Since settled:** what a brick costs, and the HUD and effects (the pouch, the pop and
+  snap: 9.3); front end A (step 10, 9.2) uses the same `restore`.
+* **Still open:** bricks that left on a piece come back as new ones. The drifting piece
+  stays as debris. Pulling the debris back in (§9 B, optional) is not built.
 * **Gate: `tools/repair_probe.gd`, 7 checks:** the shot, the rim first, the tool's rate,
   refused while riding, every brick exactly as built (part, colour, full hp, same id), the
   breach sealed and filling, and the replay. The ship's commands replayed on a fresh ship
@@ -739,6 +822,20 @@ is the same RAM. That is about 80 MB for those 24 pieces. Gate:
 `tools/compact_bake_probe.gd`. A brick brought back alive in such a chunk has no faces to
 patch in. Revive (§9, step 5) must bake the chunk again.
 
+**E6 measured (2026-11-07, `--harbour` and `--boat` passes, windowed, no other runs):** one
+boat afloat (128 columns) costs 0.30-0.84 ms a physics tick on average, worst 2.1 ms. The
+waves are already sampled in one batched call per tick. It is the only thing that floats by
+buoyancy; swimmers and the water collider read heights only. A worker thread would mean
+forces a tick late (`WorkerThreadPool`, never waited on), which risks the float's stability
+for under a millisecond. So it is not done. Do it, or move the column loop to C++, when a
+scene floats several boats.
+
+**E3/E4 not measured yet (2026-11-06/07).** The machine was not quiet. The first try
+(`--storeys --big`) was stopped for low memory. At 23:00 three chats' runs were going
+(97 C, 350 MB free), and at 14:12 only 430 MB of memory was free. No E3/E4 change is made
+without numbers. E5 is not applicable: our C++ has no brick ray tests of its own (every
+ray goes through Jolt; only the workshop's `sdf_form.cpp` casts one).
+
 E4 is only done if E1 and the measurements show band rebuilds still matter. The full Brickadia
 answer (one custom collision shape with an index inside) needs a Jolt shape Godot does not
 expose -- out of scope unless E4's cheap steps are not enough.
@@ -760,17 +857,18 @@ Each step lands on `main` on its own, with its gate.
    Built 2026-11-04 (§9.1).
 6. **The ghost hull** (§7b) on the generated spaceship: walk its decks while it flies.
    Gate: `ghost_hull_probe`. First cut built 2026-11-04 (§7b.1): walking, boarding,
-   getting off, damage and repair in the ghost; shots aboard and AI still to come.
+   getting off, damage and repair in the ghost; shots aboard and AI built 2026-11-05 (§7b.2).
 7. **A boat**, floating by buoyancy (§7) with no flooding yet, crew aboard on its ghost.
-   Gate: floats level. Built 2026-11-05 (§7.1): `boat_probe`. Not yet launched in a
-   playable scene.
+   Gate: floats level. Built 2026-11-05 (§7.1): `boat_probe`. Playable in the city since
+   2026-11-07 (§7.2).
 8. **The sea cut out of the hull** (§6), with the terrain and water area. Gate: the shot.
    Built 2026-11-06 (§6.1): every hull, the city's sea and a planet's.
 9. **Flooding** (§5) + water drawn inside (§8) + listing and sinking (§7).
    Gates: `hull_flood_probe`, the boat lists and sinks. Built 2026-11-06 (§5.1, §8.1):
    every ship, spaceships too.
 10. **Brick-by-brick patching** (§9 A) on the same core. *Built 2026-11-06, §9.2.*
-11. **E3, E4, E5** as measurements call for them.
+11. **E3, E4, E5** as measurements call for them. E5 not applicable; E3/E4 waiting on a
+    quiet machine (§11). E6 measured, not needed for one boat (§11).
 12. **Respawn** (§10) when the user decides.
 
 ## 13. Open questions

@@ -56,6 +56,20 @@ var chunk := -1
 var bricked := false
 var _palette: Dictionary
 var _brick_node: Node3D
+## Dust blown out of its venting holes (Docs/Hulls.md 4.2).
+var vent_dust := VentDust.new()
+## Spray where the sea pours in at a hole (Docs/Hulls.md 8.2).
+var hull_spray := HullSpray.new()
+const HULL_WATER_SHADER := preload("res://shaders/hull_water.gdshader")
+## Air out of a pocket the water has trapped, cells a second (HullWater.air_leak):
+## a spaceship's hull is airtight.
+var air_leak := 0.0
+## The worst water step (with its spray) and water drawing so far, microseconds.
+var water_step_us := 0.0
+var water_draw_us := 0.0
+const DRAW_WATER_EVERY := 0.2
+var _water_dirty := false
+var _water_drawn_ago := 0.0
 var _band_next := 0
 var _band_jobs: Array = []
 var _collision: BuildingCollision
@@ -738,6 +752,8 @@ func _process(_delta: float) -> void:
 		_g2r_last = ghost_to_real()
 		_g2r_dt = _delta
 		_air_step(_delta)
+		if air != null:
+			vent_dust.update(self, _delta)
 		_water_step(_delta)
 		if riding:
 			# Its doors and lifts follow its chunk; flown, the chunk follows it.
@@ -1253,11 +1269,24 @@ func _water_step(dt: float) -> void:
 		if not water_depth.is_valid():
 			return
 		hull_water = HullWater.on(air)
+		hull_water.air_leak = air_leak
 	if not water_depth.is_valid() and not hull_water.any():
 		return
+	var t0 := Time.get_ticks_usec()
 	hull_water.step(t, water_down(), _hole_depth)
-	if hull_water.changed:
+	hull_spray.update(self, t)
+	var t1 := Time.get_ticks_usec()
+	# Drawn again at most DRAW_WATER_EVERY: the water moves slowly to the eye, and a
+	# flooding hull's drawing is up to 20 ms (boat pass, 2026-11-07).
+	_water_dirty = _water_dirty or hull_water.changed
+	_water_drawn_ago += t
+	if _water_dirty and _water_drawn_ago >= DRAW_WATER_EVERY:
+		_water_dirty = false
+		_water_drawn_ago = 0.0
 		_draw_water()
+	# The worst step and drawing, microseconds (the boat pass reports them).
+	water_step_us = maxf(water_step_us, float(t1 - t0))
+	water_draw_us = maxf(water_draw_us, float(Time.get_ticks_usec() - t1))
 
 
 ## Its down in its grid's axes: its own gravity's (its frame's -Y) while it pulls,
@@ -1280,26 +1309,33 @@ func _hole_depth(i: int) -> float:
 
 ## The water in it drawn (Docs/Hulls.md 8): a top on each column of wet cells at its
 ## level, stepped by plate, and sides toward dry inside cells -- in its bricks'
-## frame, so it rides with it.
+## frame, so it rides with it. Drawn as water (shaders/hull_water.gdshader, 8.2):
+## each vertex's COLOR.r is its foam -- a top against a wall or a brick, the lip of
+## a step down, and most by a hole the sea is coming in at.
 func _draw_water() -> void:
 	if _brick_node == null:
 		return
 	if water_mesh == null:
 		water_mesh = MeshInstance3D.new()
 		water_mesh.name = "Water"
-		var m := StandardMaterial3D.new()
-		m.albedo_color = Color(0.16, 0.42, 0.62, 0.72)
-		m.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-		m.cull_mode = BaseMaterial3D.CULL_DISABLED
-		m.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+		var m := ShaderMaterial.new()
+		m.shader = HULL_WATER_SHADER
 		water_mesh.material_override = m
 		water_mesh.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 		_brick_node.add_child(water_mesh)
 	var stud := BrickWorld.get_stud_metres()
 	var plate := BrickWorld.get_plate_metres()
 	var v := PackedVector3Array()
+	var nrm := PackedVector3Array()
+	var col := PackedColorArray()
 	var dims := air.dims
 	var sy := dims.x
+	# Cells beside a hole the sea comes in at: the most foam.
+	# (HullWater.inflow: the holes water came in at, its last step.)
+	var inflow := {}
+	for b: int in hull_water.inflow:
+		for j in air._neighbours(b):
+			inflow[j] = true
 	for i: int in hull_water.wet:
 		var w := hull_water.level(i)
 		if w < 0.02:
@@ -1311,8 +1347,17 @@ func _draw_water() -> void:
 		var y1 := y0 + w * plate
 		var above := i + sy
 		if c.y + 1 >= dims.y or hull_water.level(above) < 0.02:
+			var walls := 0
+			for o in [Vector3i(1, 0, 0), Vector3i(-1, 0, 0), Vector3i(0, 0, 1), Vector3i(0, 0, -1)]:
+				var nc: Vector3i = c + o
+				if not air._in(nc) or not hull_water.passable(air._idx(nc)):
+					walls += 1
+			var f := 1.0 if inflow.has(i) else (0.75 if walls > 0 else 0.0)
 			v.append_array([Vector3(x0, y1, z0), Vector3(x0 + stud, y1, z0), Vector3(x0 + stud, y1, z0 + stud),
 					Vector3(x0, y1, z0), Vector3(x0 + stud, y1, z0 + stud), Vector3(x0, y1, z0 + stud)])
+			for k in 6:
+				nrm.append(Vector3.UP)
+				col.append(Color(f, 0.0, 0.0))
 		for e: Array in [[Vector3i(1, 0, 0), x0 + stud, true], [Vector3i(-1, 0, 0), x0, true],
 				[Vector3i(0, 0, 1), z0 + stud, false], [Vector3i(0, 0, -1), z0, false]]:
 			var nc: Vector3i = c + (e[0] as Vector3i)
@@ -1328,12 +1373,19 @@ func _draw_water() -> void:
 			else:
 				v.append_array([Vector3(x0, y0, at), Vector3(x0, y1, at), Vector3(x0 + stud, y1, at),
 						Vector3(x0, y0, at), Vector3(x0 + stud, y1, at), Vector3(x0 + stud, y0, at)])
+			# The lip foams at its top, clear below.
+			var out := Vector3(e[0] as Vector3i)
+			for f in [0.2, 0.8, 0.8, 0.2, 0.8, 0.2]:
+				nrm.append(out)
+				col.append(Color(f, 0.0, 0.0))
 	if v.is_empty():
 		water_mesh.mesh = null
 		return
 	var arrays := []
 	arrays.resize(Mesh.ARRAY_MAX)
 	arrays[Mesh.ARRAY_VERTEX] = v
+	arrays[Mesh.ARRAY_NORMAL] = nrm
+	arrays[Mesh.ARRAY_COLOR] = col
 	var mesh := ArrayMesh.new()
 	mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
 	water_mesh.mesh = mesh

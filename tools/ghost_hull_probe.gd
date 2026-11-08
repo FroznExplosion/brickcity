@@ -118,10 +118,12 @@ func _physics_process(delta: float) -> bool:
 			ShipRays.ships.clear()
 			ShipRays.ships.append(_st)
 			_board()
+			_drop_cargo()
 			_stage = 2
 		2:
 			_ship_move(delta)
 			_gravity_step(delta, Vector3.ZERO)
+			ShipCargo.tick(self, [_st], _st.get_world_3d().space)
 			_t += delta
 			_drift_worst = maxf(_drift_worst, (_body.global_position - _start).length())
 			if _t < WAIT:
@@ -135,6 +137,7 @@ func _physics_process(delta: float) -> bool:
 			_ok("drawn on the real ship at the same place on it", (real - want).length() < 0.02,
 					"%.4f m off, the ship %.0f m from where it was" % [(real - want).length(),
 					(_st.global_position - _home.origin).length()])
+			_cargo_checks()
 			_t = 0.0
 			_start = _body.global_position
 			_walk = _clear_way()
@@ -184,6 +187,56 @@ func _physics_process(delta: float) -> bool:
 			_finish()
 			return true
 	return false
+
+
+var _cargo: RigidBody3D
+var _cargo_view: MeshInstance3D
+var _cargo_g0 := Vector3.ZERO
+
+
+## A crate dropped over the deck in the world, beside the crew (Docs/Hulls.md 7b.4).
+func _drop_cargo() -> void:
+	_cargo = RigidBody3D.new()
+	_cargo.mass = 3.0
+	# On the rubble layer, as a dropped gun is: it lies on bricks.
+	_cargo.collision_layer = Layers.RUBBLE
+	_cargo.collision_mask = Layers.RUBBLE_MASK
+	var cs := CollisionShape3D.new()
+	var bs := BoxShape3D.new()
+	bs.size = Vector3(0.3, 0.3, 0.3)
+	cs.shape = bs
+	_cargo.add_child(cs)
+	_cargo_view = MeshInstance3D.new()
+	var bm := BoxMesh.new()
+	bm.size = bs.size
+	_cargo_view.mesh = bm
+	_cargo.add_child(_cargo_view)
+	_cargo.add_to_group(ShipCargo.CARGO)
+	root.add_child(_cargo)
+	var up := _st.ghost_up()
+	var g := _body.global_position + up * 1.0 + (_st.ghost_slot * _st.frame).basis.x.normalized() * 0.8
+	_cargo_g0 = g
+	_cargo.global_transform = Transform3D(Basis(), _st.ghost_to_real() * g)
+	# Dropped by the crew: aboard at once, before the ship flies on.
+	ShipCargo.tick(self, [_st], _st.get_world_3d().space)
+
+
+func _cargo_checks() -> void:
+	var on: bool = _cargo.has_meta(&"ghosted") and _cargo.get_meta(&"ghosted") == _st
+	var g := _cargo.global_position
+	var fell := (_cargo_g0 - g).dot(_st.ghost_up())
+	var rests := _cargo.linear_velocity.length() < 0.05
+	var real := _st.ghost_to_real() * g
+	var drawn := _cargo_view.global_position.distance_to(real)
+	_ok("cargo: a crate dropped on the flying deck rides in its ghost, lies on the deck, drawn on the real ship",
+			on and drawn < 0.02 and (fell > 0.4 and rests if _st.ghost_pulls() else fell < 0.05),
+			"ghosted %s, fell %.2f m, speed %.3f, drawn %.4f m off (the ship pulls: %s)" % [on, fell,
+			_cargo.linear_velocity.length(), drawn, _st.ghost_pulls()])
+	ShipCargo.get_off(_cargo, _st, _st.get_world_3d().space)
+	_ok("cargo off: back in the world where it was drawn", not _cargo.has_meta(&"ghosted")
+			and _cargo.global_position.distance_to(real) < 0.02 and not _cargo_view.top_level,
+			"%.4f m" % _cargo.global_position.distance_to(real))
+	_cargo.queue_free()
 
 
 var _ai: Pawn
