@@ -179,7 +179,7 @@ twice a small piece's mesh built on the main thread at spawn took 44 / 116 ms (1
 mesh under 30k vertices, so not the stairs); it did not happen in the run after, so the cause is
 not known yet -- time `rebuild_mesh(isl, true, true)` in `spawn` when it comes back.
 
-**(a) written, not yet measured (2026-11-07, `IslandManager.SLICE_VERTS`).** A piece whose mesh
+**(a) done (2026-11-07, `IslandManager.SLICE_VERTS`).** A piece whose mesh
 would be 120k vertices or more (32 a brick, 4 an authored triangle) is cut into sections before
 its first bake -- bands of about 30k (`SLICE_BAND_VERTS`, at most 24). Its full rebuild builds
 them a band at a time within `UPLOAD_VERTS_PER_TICK` (`_advance_slices`), hidden, while what it
@@ -188,6 +188,26 @@ drew goes on drawing, and swaps them in whole (`_swap_slices`); hits patch per b
 stand-in is up), so do a toppled building's once it has settled and has no band holes. Report
 line: `[city] big pieces in bands`. To check on the first run: render flushes per piece, the
 invisible stretch (a big piece's first mesh now waits for all its bands), draw calls.
+
+*Measured and reworked (2026-11-07, merged).* First run (`city.tscn -- --big --shot`): one piece,
+5 bands, swapped cleanly -- but a band was up to 9.9 ms ON THE MAIN THREAD (cut out of the bake
+and its mesh made there) and the upload budget alone let several into one tick: a 24 ms islands
+tick, the flush's cost moved, not removed. Now: the band is cut on the main thread (it writes
+its range of the patch baseline, so it stays there), its `ArrayMesh` is made on a worker
+(`_submit_slice_job`, started with the other mesh jobs at the tick's end, hung hidden by
+`_harvest_slice_jobs`), and a tick stops cutting after `SLICE_TICK_MS` (3). A dropped bake bumps
+`slice_gen`, so meshes still on a worker are thrown away, never waited for; `_exit_tree` waits
+for the started ones. `tools/piece_band_probe.gd` (headless, 11 checks) makes a 6,109-brick piece
+every time: 7 sections, swapped in 11 ticks, no band shown early, meshes made on workers, worst
+tick 3.5 ms (cut 1.4, worker mesh 2.5), a hit patched in place, a mid-way drop begun again with
+nothing left hanging. **Big pieces are rare now**: since the strength tree went in (e0545c84,
+7f32c143) buildings seldom come down whole -- 1 of 5 collapse runs made a piece big enough, and
+`big_city --shot` none -- so this matters less than it did on 11-06. Not yet seen windowed with
+the worker meshes (no run made a big piece since); the probe is the check.
+
+Every windowed run today crashed ON QUIT (signal 11, after `BUG, indexing did not unpair
+geometries from light` from renderer_scene_cull.cpp) -- after the report, with or without the
+lighting follow-up 61221639; it looks like the near lamps (b03e165c), not checked on main alone.
 
 **Band patches at the band's own index width (brick_world.cpp `update_index_regions`).** A patch
 was written at one width for the whole chunk -- the width of the LAST band built (CityScene

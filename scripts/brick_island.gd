@@ -111,6 +111,8 @@ var coarse_drawn := false
 var slicing := false
 var slices: Array = []
 var slice_bytes: Array = []
+var slice_gen := 0       ## bumped when its bands are dropped: a mesh still on a worker is then thrown away
+var slice_pending := 0   ## of its bands, meshes still being made on a worker
 ## The arrays its coarse mesh was made from, while it is drawn by one: what a
 ## stand-in it leaves is merged from (IslandManager's rubble field). Reading a
 ## mesh back from the renderer instead was the GPU's copy -- 54 ms of a merge on
