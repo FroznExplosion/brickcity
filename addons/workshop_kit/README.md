@@ -29,6 +29,7 @@ Version: see `VERSION`. Raise it with every change to this folder.
 | `services/wk_ghost.gd` | `WkGhost` — the preview node: a mesh and a place from the editor, tinted fits / does not fit. |
 | `services/wk_mirror.gd` | `WkMirror` — the mirror plane: on, across X or Z, where; a cell's and a direction's mirror image. |
 | `tools/wk_sketch_tool.gd` | `WkSketchTool` — Sketch: draws with the pen, asks the context where (`sketch_begin`, `sketch_point`) and hands the stroke over (`sketch_commit`). |
+| `tools/wk_place_tool.gd` | `WkPlaceTool` — the hand: click to place, hold and move for a run, RMB takes away; an editor's default tool. |
 | `tools/wk_paint_tool.gd` | `WkPaintTool` — Paint: a stroke as one undo, an eyedropper, the brush's reach; asks `paint_begin`, `paint_at`, `paint_end`, `paint_hover`, `paint_pick`, `paint_step`. |
 | `ui/wk_rail.gd` | `WkRail` — the tool rail: icon + name + key buttons with a pop-up, a line for the tool in hand, action buttons, the tool's options; `restyle` takes the editor's panel box. |
 | `ui/wk_menu_bar.gd` | `WkMenuBar` — the menu bar: menus from rows (`[label, id, shortcut]`), merged by label, a title. |

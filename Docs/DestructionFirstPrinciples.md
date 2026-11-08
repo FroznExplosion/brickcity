@@ -357,7 +357,7 @@ particles) and **whether furniture spills from a tipping piece**.
 | Moving piece mesh | instanced bricks + per-piece matrix, no meshing at a split | each piece is its own chunk, meshed (synchronously up to 200 blocks / 2 000 tris, else on a worker; far ones coarse) | **different** -- see B3.3 |
 | Moving piece collision | greedy boxes, cap | merged boxes on the body RID, rebuilt after a change | **same** |
 | Moving cap | 64 | `MAX_MOVING` 48, debris cap evicts oldest | same |
-| Single loose bricks | particles, no brick-brick collision | a visible one is a real body drawn from a shared MultiMesh; invisible ones never spawned; crumbs are GPU particles; `BrickHeap` keeps what lands | **different** -- see B3.4 |
+| Single loose bricks | particles, no brick-brick collision | a piece of 8 bricks or fewer is never a body: crumbs, drawn from the shared brick MultiMesh, falling in a shader (`scripts/islands/island_crumbs.gd`, `crumb.gdshader`), bouncing, then laid where they stop (`BrickHeap`); groups up to a landmark's size crumble the same way when shed off a piece | **same** (corrected 2026-11-07; the first reading went by an outdated comment at the head of `island_manager.gd`) |
 | Settling | asleep 1 s -> rubble, still splittable | settled -> frozen + merged collision -> asleep record beyond 150 m, woken at 120 m; frozen only on something still | **same, more thorough** |
 | Furniture representation | items on host bricks, not in the joint graph | manifest per room; block id -> pieces index; laid as *decorative* bricks only when shot (weightless in the solve, but in the chunk) | **same** |
 | Furniture on a moving piece | rides; **spills** past a tilt or a hard stop | rides it down; spill/write-off removed in Interiors §8.6 | **different** -- see B3.5 |
@@ -418,7 +418,15 @@ pieces up to a few hundred bricks** (exactly the band meshed synchronously today
 big ones. Worth a measured A/B with the renderer clock (`viewport_get_measured_render_time_gpu`,
 not frame time), editor closed.
 
-### B3.4 Single loose bricks as particles, not bodies
+### B3.4 Single loose bricks as particles, not bodies -- already built
+
+**Corrected 2026-11-07:** this is what the project does. A piece of `DEBRIS_MAX_BLOCKS` (8)
+or fewer never becomes a body: its bricks are crumbs (`IslandManager.crumbler`,
+`scripts/islands/island_crumbs.gd`), instanced, falling in `shaders/crumb.gdshader`,
+bouncing (`CRUMB_BOUNCE`), and laid as a heap where they stop; the main thread pays per
+event, not per frame. The paragraph below was written from the comment at the top of
+`island_manager.gd`, which predates crumbs. Nothing to build.
+
 
 A visible loose brick is a real `RigidBody3D` today (drawn from a MultiMesh, but simulated by
 the physics engine). Part A7 simulates them as particles in native code: no broadphase, no
@@ -454,7 +462,7 @@ on a landing). It is a game-feel choice, not a performance one, so it is the use
 2. **B3.2 measure** `solve_grounded` on small cuts; build the two-sided search only if it shows.
 3. **B3.3 instanced small pieces** -- A/B on the renderer clock.
 4. **B3.5** ask the user about spilling.
-5. **B3.4 particles for loose bricks** -- when the debris cap is what limits a scene.
+5. ~~**B3.4 particles for loose bricks**~~ -- already built (crumbs; see B3.4).
 
 Each of these touches `island_manager.gd` / `brick_world.cpp`, which other chats work in
 (struct-bugs, storey units, planet falling): check `git log main` and the handoff docs
@@ -551,3 +559,61 @@ Open:
    from run to run (5.0-7.3 on average over four runs; the physics is not deterministic).
 3. Not looked at in play yet: whether the parts read as "a few big parts" on screen.
 4. `PlanetPieces._snap_across` (planets) is untouched.
+
+## B8. Grounding after a small cut, measured (2026-11-07) -- B3.2: not worth building
+
+`tools/ground_search_probe.gd`: recipe towers of rising size, about forty random single-brick
+kills each. For every kill, the time of `solve_grounded` (the whole-chunk flood a building's
+solve starts with) and of `solve_stress`, the blocks the flood walks, and what A4.1's local
+search would walk (from each block that touched the dead one, lowest first, until the ground
+or nothing is left; script-side, counting blocks). Editor closed, no other Godot running.
+
+| Tower | Bricks | `solve_grounded` median / worst | `solve_stress` median / worst | Flood walks | Local search walks (median / worst) |
+|---|---|---|---|---|---|
+| 28 x 16, 30 courses | 982 | 0.01 / 0.05 ms | 0.05 / 0.07 ms | 963 | 33 / 62 (3.4 %) |
+| 28 x 16, 120 courses | 3,812 | 0.07 / 0.12 ms | 0.21 / 2.07 ms | 3,792 | 106 / 192 (2.8 %) |
+| 40 x 40, 180 courses | 10,966 | 0.22 / 0.77 ms | 0.71 / 1.06 ms | 10,946 | 61 / 171 (0.6 %) |
+| 40 x 40, 360 courses | 21,911 | 0.49 / 1.68 ms | 1.35 / 3.50 ms | 21,891 | 97 / 258 (0.4 %) |
+
+The local search agreed with the flood on what falls in all 157 kills.
+
+**Conclusion: do not build it now.** The local search walks a hundredth of what the flood
+walks, but the flood itself is half a millisecond on a 22,000-brick tower -- the joint cache
+made it cheap. And it could not replace the solve anyway: a brick gone changes the loads, and
+a joint can fail in tension far from the cut, so the load pass (`solve_stress`, about three
+times the flood) runs either way. What a hit costs a big building is the load pass and the
+cascade rounds `solve_structure` adds (3-6 ms on the 22,000-brick tower, city_scene.gd
+`_start_solves`), and the stale-solve case that puts it on the main thread. If hit latency
+needs cutting, that is the target: a load pass over the region above the cut only (A4.2),
+not a faster grounding walk.
+
+Not measured: blasts (many bricks at once; the flood is the same, the local search grows
+with the cut) and `solve_structure`'s cascade on its own.
+
+## B9. Small pieces meshed at spawn, measured (2026-11-07) -- B3.3: not now
+
+Counted in `IslandManager` (`sync_meshed`, `sync_mesh_ms`, `sync_mesh_worst`,
+`queued_meshed`) and printed by `barrage_probe` beside the spawn profile and the blind-piece
+report. One run, headless, with four other chats' Godot runs going -- so the times are high
+and the upload to the renderer (a dummy headless) is not in them:
+
+- 43 small pieces meshed on the main thread at their spawn: **32 ms over the whole run,
+  0.75 ms each, the worst 3.4 ms**. 20 bigger pieces went to the worker.
+- Spawning took 108 ms all told, meshing 37 of it.
+- 19 pieces went blind, the worst for 4 ticks, mean 1.95; the biggest blind one was 2,671
+  bricks -- a worker-baked piece, which instancing small pieces would not change.
+
+**Conclusion: not worth building now.** Instancing would take away about 0.75 ms per small
+piece and spikes of up to ~3.4 ms, and nothing for the big pieces that go blind. Against
+that: a per-brick instance draws every face (no hidden-face removal, no merged chamfers, so
+the bevelled near look -- Docs/BrickBevel.md -- would need its own instance mesh), and every
+moving brick's transform has to reach the renderer each frame (instance buffer writes on
+the main thread, or a piece-matrix buffer and a new shader). The cheap fix if the spawn
+spikes ever show: a millisecond budget for the main-thread bakes per tick, past which a
+piece goes to the worker (and may be blind a tick or two, the trade-off SYNC_MESH_MAX_BLOCKS
+was made to avoid). Worth a windowed `--stress` with the editor closed first, which counts
+the real upload.
+
+That run also failed `barrage_probe`'s "throwing them is a small part of a blast" (5.71 ms
+the worst blast) -- crumb throwing, not touched by any of this, and the second failure of
+that timing check in five runs, both on a busy, hot machine.

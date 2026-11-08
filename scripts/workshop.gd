@@ -218,6 +218,9 @@ var _painting := false
 ## the eyedropper, - = and Page Up/Down, and asks the workshop through its context
 ## (`wk_paint_begin` ... below). Docs/BuildTools.md section 20.
 var _paint_tool := WkPaintTool.new()
+## The hand: the kit's Place tool (WkPlaceTool) -- LMB places and lays a run, RMB takes away;
+## the toolbox's default, and the hand under any tool for a click that tool does not take.
+var _place_tool := WkPlaceTool.new()
 ## Studs round the dot the brush reaches: 0 is the one brick under it, more
 ## is every brick of the build within that distance -- a wall in one pass. The tool's.
 var _paint_radius: int:
@@ -358,6 +361,9 @@ func _ready() -> void:
 	toolbox.ctx = wk_ctx
 	_paint_tool.radius_max = PAINT_RADIUS_MAX
 	toolbox.add(_paint_tool)
+	toolbox.add(_place_tool)
+	toolbox.default_id = &"place"
+	toolbox.use(&"")
 	world = BrickWorld.new()
 	world.set_seed(1)
 	# The generator's palette: the player's parts plus the cornice a generated
@@ -1202,12 +1208,7 @@ func _process(_dt: float) -> void:
 	elif _painting:
 		toolbox.process(_dt)
 	else:
-		_ghost.visible = true
-		_aim()
-		_update_ghost()
-		if _run_on and not Input.is_mouse_button_pressed(MOUSE_BUTTON_LEFT):
-			_end_run()
-		run_step()
+		_place_tool.process(_dt)   # the hand: aim the ghost, lay a run on while LMB is held
 	_update_hud()
 	if _tools != null:
 		_tools.process()
@@ -1924,17 +1925,11 @@ func _unhandled_input(e: InputEvent) -> void:
 		return
 	if _painting and toolbox.active_id() == &"paint" and toolbox.input(e):
 		return
-	if e is InputEventMouseButton and not e.pressed and e.button_index == MOUSE_BUTTON_LEFT:
-		_end_run()
+	# The hand (the kit's Place tool): LMB places and lays a run, RMB takes away.
+	if _place_tool.input(e):
+		return
 	if e is InputEventMouseButton and e.pressed:
 		match e.button_index:
-			MOUSE_BUTTON_LEFT:
-				var before := recipe.size()
-				_place()
-				_begin_run(before)
-			MOUSE_BUTTON_RIGHT:
-				var ray := _mouse_ray()
-				_delete_ray(ray[0], ray[1])
 			MOUSE_BUTTON_MIDDLE: _pick_block()
 			# Down is next, as in Minecraft.
 			MOUSE_BUTTON_WHEEL_DOWN: _hotbar.step(1)
@@ -2452,6 +2447,37 @@ func _delete_ray(from: Vector3, dir: Vector3) -> bool:
 		_after_edit()
 		return true
 	return false
+
+
+# The kit's Place tool (WkPlaceTool) asks these, through the workshop's context.
+
+func wk_place_begin() -> void:
+	var before := recipe.size()
+	_place()
+	_begin_run(before)
+
+
+func wk_place_end() -> void:
+	_end_run()
+
+
+func wk_place_running() -> bool:
+	return _run_on
+
+
+func wk_place_hover() -> void:
+	_ghost.visible = true
+	_aim()
+	_update_ghost()
+
+
+func wk_place_drag() -> void:
+	run_step()
+
+
+func wk_erase_at_cursor() -> void:
+	var ray := _mouse_ray()
+	_delete_ray(ray[0], ray[1])
 
 
 # The kit's camera (WkCamera) asks these, through the workshop's context. The flying is the
