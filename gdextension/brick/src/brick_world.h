@@ -1024,6 +1024,16 @@ public:
     /// [bakes, cache hits, bake microseconds all told, the worst bake].
     PackedInt64Array get_strength_tree_stats() const;
 
+    /// What draws a piece while its mesh is still being made (IslandStandins,
+    /// Docs/DestructionFirstPrinciples.md B10): every live block as a box, as
+    /// MultiMesh buffers ready to assign -- {box size in metres: buffer}, one
+    /// instance per block of that size, 16 floats each (TRANSFORM_3D with
+    /// colours: an unturned basis, the box's centre in the chunk's own metres
+    /// as get_blocks_box has them, then the colour its mesh would carry,
+    /// block_rgba_grain: material and grain in alpha). No bake, no occupancy
+    /// walk: O(blocks), and the script assigns a buffer per size.
+    Dictionary get_standin_buffers(int chunk_id) const;
+
     // --- detachment --------------------------------------------------------
 
     /// Lift a group of blocks out of the chunk and hand back everything needed

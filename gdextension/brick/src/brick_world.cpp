@@ -15,6 +15,7 @@
 #include <set>
 #include <unordered_set>
 #include <map>
+#include <tuple>
 #include <chrono>
 #if defined(_MSC_VER)
 #include <intrin.h>
@@ -11684,6 +11685,40 @@ Dictionary BrickWorld::strength_tree_info(int chunk_id) {
     return d;
 }
 
+Dictionary BrickWorld::get_standin_buffers(int chunk_id) const {
+    Dictionary out;
+    if (!valid_chunk(chunk_id)) {
+        return out;
+    }
+    const Chunk &c = chunks[chunk_id];
+    const Vector3 cs = cell_size();
+    // Per archetype size: the floats, gathered first so each buffer is made once.
+    std::map<std::tuple<int, int, int>, std::vector<float>> by_size;
+    for (const Block &b : c.blocks) {
+        if (!b.alive || b.detached || b.removed) {
+            continue;
+        }
+        const Vector3i base = b.cell - c.origin;
+        const Vector3i sz = archetypes[b.archetype].size;
+        const Vector3 size(sz.x * cs.x, sz.y * cs.y, sz.z * cs.z);
+        const Vector3 at = Vector3(base.x * cs.x, base.y * cs.y, base.z * cs.z) + size * 0.5f;
+        const Color col = brick::block_rgba_grain(b.material, b.colour, brick::grain_axis(sz, b.cell));
+        std::vector<float> &v = by_size[std::make_tuple(sz.x, sz.y, sz.z)];
+        const float f[16] = { 1.0f, 0.0f, 0.0f, at.x, 0.0f, 1.0f, 0.0f, at.y,
+                0.0f, 0.0f, 1.0f, at.z, col.r, col.g, col.b, col.a };
+        v.insert(v.end(), f, f + 16);
+    }
+    for (const auto &kv : by_size) {
+        const Vector3 size(std::get<0>(kv.first) * cs.x, std::get<1>(kv.first) * cs.y,
+                std::get<2>(kv.first) * cs.z);
+        PackedFloat32Array buf;
+        buf.resize((int64_t)kv.second.size());
+        std::memcpy(buf.ptrw(), kv.second.data(), kv.second.size() * sizeof(float));
+        out[size] = buf;
+    }
+    return out;
+}
+
 void BrickWorld::_bind_methods() {
     ClassDB::bind_method(D_METHOD("bake_archetype", "name", "size", "mass"),
             &BrickWorld::bake_archetype, DEFVAL(1.0));
@@ -11712,6 +11747,7 @@ void BrickWorld::_bind_methods() {
             &BrickWorld::strength_split, DEFVAL(false));
     ClassDB::bind_method(D_METHOD("strength_tree_info", "chunk_id"), &BrickWorld::strength_tree_info);
     ClassDB::bind_method(D_METHOD("get_strength_tree_stats"), &BrickWorld::get_strength_tree_stats);
+    ClassDB::bind_method(D_METHOD("get_standin_buffers", "chunk_id"), &BrickWorld::get_standin_buffers);
     ClassDB::bind_method(D_METHOD("crack_components", "chunk_id", "planes_x", "planes_z"),
             &BrickWorld::crack_components);
     ClassDB::bind_method(D_METHOD("release_chunk", "chunk_id"), &BrickWorld::release_chunk);
