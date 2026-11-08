@@ -309,7 +309,10 @@ a mesh of the whole chunk.
 
 `BrickNear.enabled`, `radius`, `stud_radius`, `stud_bevel_radius`, `stud_round_radius` and
 `stud_card_radius` are
-static and can be set at run time. The city takes `-- --no-near` for a run without the tier.
+static and can be set at run time. Options > Video sets the distances (since 2026-11-08):
+**Bevelled Bricks** (`radius`), **Bevelled Studs**, **Real Studs** (round all the way out,
+`stud_round_radius` = `stud_radius`) and **Stud Cards**, kept in order by
+`BrickNear.set_stud_distances`; a headless run keeps the defaults (`DEFAULT_*`). The city takes `-- --no-near` for a run without the tier.
 
 The workshop does not use the tracker: it is a few hundred bricks an arm's length away, rebuilt
 whole on every edit, so every frame is chamfered always (`build_chunk_chamfer_mesh`) and its stud
@@ -385,13 +388,42 @@ If it is too much: `BrickNear.radius` and the three stud radii are the knobs, an
 
 **Turned down 2026-11-07** (user's call, to draw fewer bricks as real geometry): bevelled
 bands 14 -> 6 m; studs bevelled 8 -> 4 m, round 13 -> 12 m, the square ring dropped, geometry
-18 -> 12 m, cards 70 -> 45 m. The shader's seam and shaded chamfer (§4) cover from 6 m. The
-cost table above is from the old radii; take it again on a quiet machine, editor closed.
+18 -> 12 m, cards 70 -> 45 m. The shader's seam and shaded chamfer (§4) cover from 6 m.
+
+Measured 2026-11-08, `-- --chamfer --cost`, editor closed, no other Godot running, old radii
+patched in for the A/B. The pass stands about 6 m from a 775-brick building, so at the new
+radius nothing there is chamfered: 0 chamfered triangles held against 66,476, and 1,371 studs as
+geometry against 3,150. GPU ms a frame (`viewport_get_measured_render_time_gpu`), two runs each:
+
+| | old (14 m) | new (6 m) |
+|---|---|---|
+| Looking at it | 12.96 (hot, 97 C), 11.30 | 11.39, 11.33 |
+| Twelve shots | 15.48, 13.10 | 12.79, 11.31 |
+| Brought down | 13.91, 13.15 | 12.07, 11.40 |
+
+So standing still it is about the same (the frame is bound elsewhere), and while bricks break
+and fall the GPU does **about 1.8 ms less** a frame (1.8-2.7). On the CPU, a hit's patch of the
+chamfered bands went from 0.21 ms to 0.02 and the tier's worst step from 3.6 ms to 2.1.
+
+Every collapse run, old radii and new, had one frame of 430-490 ms while it came down (worst
+frame of the 360). It is not the near tier: it is there either way.
+
+**Traced (2026-11-08): the machine running out of RAM, not the game.** Thirteen more runs on
+main: the stall came in 4 (362-516 ms), and each time it fell in a different part of the
+frame -- the physics sync, the city tick (346 ms in the island tick with 0.3 of it in any of its
+timed parts), drawing -- at a different tick, with almost nothing happening (one 13-brick piece;
+the building no longer comes down whole). Not the stand-ins (e4b0f02c): two runs with them off
+had one at 516 ms, two with them on had none. Every run with the stall had free RAM at 0-100 MB
+in the heat log during its fall (`free_mb`), and so had the four 07:59-08:03 runs above; the
+clean ones mostly had 300 MB or more. The pass grows from about 400 MB to 1.1 GB as it goes,
+and the rest of the 15.5 GB was taken (18 Claude processes 6.5 GB, shells, the GPU's share):
+Windows trims and pages, and a page fault stalls whatever is running. So the "brought down"
+worst frame is not to be trusted unless the heat log shows free RAM to spare through the run;
+the mean is.
 
 ## 7. Not done
 
 * **The terrain's studs** have two steps (bevelled on the tiles round the camera, plain to
   `STUD_RANGE`), not these three. The square stud is in `PieceMeshes` for it to use.
-* **A setting.** `BrickNear.radius` is a static; the options menu has no row for it.
 * **`build_mesh_internal`** (a masked group's mesh, per cell) has no chamfered form. Pieces are
   chunks and go through the bake.

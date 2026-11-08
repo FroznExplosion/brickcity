@@ -28,6 +28,12 @@ extends RefCounted
 ## away instead, and given back.
 
 const BEVEL := 0.013
+## The distances' defaults, which the options menu's rows start from (Options >
+## Video, Bevelled Bricks / Bevelled Studs / Real Studs / Stud Cards).
+const DEFAULT_RADIUS := 6.0
+const DEFAULT_STUD_BEVEL := 4.0
+const DEFAULT_STUD_RADIUS := 12.0
+const DEFAULT_STUD_CARD := 45.0
 
 ## Off: no chamfered bands are built and the ones held are given back. Studs
 ## stay, plain.
@@ -37,10 +43,10 @@ static var enabled := true
 ## (Terrain.md 17.12): three at 6 m. Past that the shader's drawn seam and
 ## shaded chamfer stand in for it. Was 14 m (about a pixel) until 2026-11-07:
 ## cut to 6 to draw fewer bands chamfered (Docs/BrickBevel.md 6).
-static var radius := 6.0
+static var radius := DEFAULT_RADIUS
 ## And inside which its studs are geometry. Was 18 m (the terrain's
 ## STUD_RANGE, which keeps its own) until 2026-11-07.
-static var stud_radius := 12.0
+static var stud_radius := DEFAULT_STUD_RADIUS
 ## Studs are most of what the near tier draws (a 638-brick building: 8,734 of
 ## them to 50,274 chamfered triangles), so they come down in three steps of
 ## their own -- and by the STUD, not the band: a band is a storey, and with the
@@ -55,8 +61,8 @@ static var stud_radius := 12.0
 ## Set `stud_round_radius` to `stud_bevel_radius` to go straight to square, or
 ## to `stud_radius` to skip the square ring. Since 2026-11-07 it is skipped:
 ## round to 12 m, then cards (were 8, 13 and 18 m with a square ring).
-static var stud_bevel_radius := 4.0
-static var stud_round_radius := 12.0
+static var stud_bevel_radius := DEFAULT_STUD_BEVEL
+static var stud_round_radius := DEFAULT_STUD_RADIUS
 ## And past `stud_radius`, to here, a CARD: two triangles that turn to face the
 ## camera, sized to the stud's outline from there, flat colour, no print
 ## (PieceMeshes.stud_card). Past 12 m a stud is under twenty pixels; what has
@@ -70,7 +76,17 @@ static var stud_round_radius := 12.0
 ## every building, 9,827 without them), each band of them re-sent to the
 ## renderer every few metres the camera moved.
 ## 45 m (was 70 until 2026-11-07): a stud is about six pixels there, four at 70.
-static var stud_card_radius := 45.0
+static var stud_card_radius := DEFAULT_STUD_CARD
+## The menu sets the distances one at a time, in whatever order, so they are
+## put back in order after each: bevelled studs inside real studs inside cards.
+## Real studs are round all the way out (the square ring skipped, as by
+## default); a card distance under the real studs' turns cards off.
+static func set_stud_distances(bevel: float, real: float, card: float) -> void:
+	stud_radius = maxf(real, 0.0)
+	stud_round_radius = stud_radius
+	stud_bevel_radius = clampf(bevel, 0.0, stud_radius)
+	stud_card_radius = maxf(card, stud_radius)
+
 ## THE CAP (Options > Video, Near Detail Cap). Distance alone let the tier
 ## take on as many bands as stood inside its rings -- a street of storeys, a
 ## collapse's every piece -- and each one held is a build, an upload and its

@@ -99,9 +99,9 @@ func _run() -> void:
 	print("  --   %s" % isl.standins.census_line())
 	var sp: Dictionary = isl.spawn_prof
 	var bi: Dictionary = isl.report()
-	print("  --   spawns: %.0f ms all told, meshing %.0f of it; %d meshed on this thread (%.1f ms, worst %.2f), %d sent to a worker; the slowest queued mesh %s; %d went blind, worst %d tick(s), mean %.2f, biggest %d bricks" % [
+	print("  --   spawns: %.0f ms all told, meshing %.0f of it; %d meshed on this thread (%.1f ms, worst %.2f), %d sent to a worker; the queue's main-thread part %d (%.1f ms), the slowest %s; %d went blind, worst %d tick(s), mean %.2f, biggest %d bricks" % [
 			sp.total, sp.mesh, isl.sync_meshed, isl.sync_mesh_ms, isl.sync_mesh_worst, isl.queued_meshed,
-			str(isl.mesh_drain_worst), bi.blind_count, bi.blind_worst, bi.blind_mean, bi.meshless_worst_blocks])
+			isl.drain_count, isl.drain_ms, str(isl.mesh_drain_worst), bi.blind_count, bi.blind_worst, bi.blind_mean, bi.meshless_worst_blocks])
 	var down: Array = isl.hit_census[1]
 	var rest: Array = isl.hit_census[2]
 	_ok("four towers came down under fire, and their wreckage was hit", towers == 4 and int(down[0]) > 100,

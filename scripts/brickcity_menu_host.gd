@@ -162,6 +162,16 @@ func _apply_setting(id: StringName, value: Variant) -> void:
 			BrickNear.max_studs = int(value)
 		&"near_cap_cards":
 			BrickNear.max_card_bands = int(value)
+		# The near tier's distances. Headless keeps the defaults, as stud_strength
+		# does: the bevel probes' answers must not be what somebody set here.
+		&"near_bevel_m":
+			if DisplayServer.get_name() != "headless":
+				BrickNear.radius = maxf(float(value), 0.0)
+		&"near_stud_bevel_m", &"near_stud_m", &"near_stud_card_m":
+			if DisplayServer.get_name() != "headless":
+				var slot := [&"near_stud_bevel_m", &"near_stud_m", &"near_stud_card_m"].find(id)
+				_near_studs[slot] = float(value)
+				BrickNear.set_stud_distances(_near_studs[0], _near_studs[1], _near_studs[2])
 		&"near_lamp_shadows":
 			BrickGridLight.near_shadowed = [0, 1, 2, 4][clampi(int(value), 0, 3)]
 		&"near_lamps":
@@ -197,6 +207,13 @@ func _apply_setting(id: StringName, value: Variant) -> void:
 			AimAssist.vertical_pull = MENU_SETTINGS.truthy(value)
 		&"aa_weak_points":
 			AimAssist.weak_points = MENU_SETTINGS.truthy(value)
+
+
+## The three stud distances as the menu last set them (bevelled, real, cards),
+## kept so each row can put all three back in order (BrickNear.set_stud_distances)
+## without one row's value being lost to another's clamp.
+var _near_studs := [BrickNear.DEFAULT_STUD_BEVEL, BrickNear.DEFAULT_STUD_RADIUS,
+		BrickNear.DEFAULT_STUD_CARD]
 
 
 ## The game's own rows: developer mode and the invincible player, in Gameplay.
@@ -256,6 +273,29 @@ func _setting_defs() -> Array:
 			"hint": "With the cap on: how many pieces of wall and wreckage show their studs at all "
 			+ "(as geometry or as far cards), nearest and in front of you first. Past them, the "
 			+ "tops of the furthest pieces are smooth. Lower helps most after a lot of destruction."},
+		# The near tier's distances (BrickNear, Docs/BrickBevel.md 6): how far out bricks get
+		# real bevelled edges and studs. Measured 2026-11-08: 14 m -> 6 m of bevel was about
+		# 1.8 ms less GPU a frame while bricks break.
+		{"id": &"near_bevel_m", "tab": "video", "type": MENU_SETTINGS.T_SLIDER,
+			"label": "Bevelled Bricks", "default": BrickNear.DEFAULT_RADIUS,
+			"min": 0.0, "max": 20.0, "step": 1.0, "suffix": " m",
+			"hint": "How close a wall must be to get real bevelled edges. Past it, edges are "
+			+ "shaded on a flat wall. Further costs more while things break. 0: none."},
+		{"id": &"near_stud_bevel_m", "tab": "video", "type": MENU_SETTINGS.T_SLIDER,
+			"label": "Bevelled Studs", "default": BrickNear.DEFAULT_STUD_BEVEL,
+			"min": 0.0, "max": 12.0, "step": 1.0, "suffix": " m",
+			"hint": "How close a stud must be to get its bevelled rim. Never further than Real "
+			+ "Studs. 0: none."},
+		{"id": &"near_stud_m", "tab": "video", "type": MENU_SETTINGS.T_SLIDER,
+			"label": "Real Studs", "default": BrickNear.DEFAULT_STUD_RADIUS,
+			"min": 0.0, "max": 30.0, "step": 1.0, "suffix": " m",
+			"hint": "How far studs are drawn as real round geometry. Past it they are flat cards "
+			+ "that face you. 0: cards only."},
+		{"id": &"near_stud_card_m", "tab": "video", "type": MENU_SETTINGS.T_SLIDER,
+			"label": "Stud Cards", "default": BrickNear.DEFAULT_STUD_CARD,
+			"min": 0.0, "max": 120.0, "step": 5.0, "suffix": " m",
+			"hint": "How far the tops of buildings still show studs, as flat cards. Past it they "
+			+ "are smooth. Under Real Studs: no cards."},
 		{"id": &"near_lamps", "tab": "video", "type": MENU_SETTINGS.T_ENUM,
 			"label": "Lamp Lights", "default": 2, "choices": ["Off", "2", "4", "8"],
 			"hint": "How many of the lamps nearest you light the room for real. "
