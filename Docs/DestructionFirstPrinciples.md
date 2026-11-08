@@ -357,7 +357,7 @@ particles) and **whether furniture spills from a tipping piece**.
 | Moving piece mesh | instanced bricks + per-piece matrix, no meshing at a split | each piece is its own chunk, meshed (synchronously up to 200 blocks / 2 000 tris, else on a worker; far ones coarse) | **different** -- see B3.3 |
 | Moving piece collision | greedy boxes, cap | merged boxes on the body RID, rebuilt after a change | **same** |
 | Moving cap | 64 | `MAX_MOVING` 48, debris cap evicts oldest | same |
-| Single loose bricks | particles, no brick-brick collision | a visible one is a real body drawn from a shared MultiMesh; invisible ones never spawned; crumbs are GPU particles; `BrickHeap` keeps what lands | **different** -- see B3.4 |
+| Single loose bricks | particles, no brick-brick collision | a piece of 8 bricks or fewer is never a body: crumbs, drawn from the shared brick MultiMesh, falling in a shader (`scripts/islands/island_crumbs.gd`, `crumb.gdshader`), bouncing, then laid where they stop (`BrickHeap`); groups up to a landmark's size crumble the same way when shed off a piece | **same** (corrected 2026-11-07; the first reading went by an outdated comment at the head of `island_manager.gd`) |
 | Settling | asleep 1 s -> rubble, still splittable | settled -> frozen + merged collision -> asleep record beyond 150 m, woken at 120 m; frozen only on something still | **same, more thorough** |
 | Furniture representation | items on host bricks, not in the joint graph | manifest per room; block id -> pieces index; laid as *decorative* bricks only when shot (weightless in the solve, but in the chunk) | **same** |
 | Furniture on a moving piece | rides; **spills** past a tilt or a hard stop | rides it down; spill/write-off removed in Interiors §8.6 | **different** -- see B3.5 |
@@ -418,7 +418,15 @@ pieces up to a few hundred bricks** (exactly the band meshed synchronously today
 big ones. Worth a measured A/B with the renderer clock (`viewport_get_measured_render_time_gpu`,
 not frame time), editor closed.
 
-### B3.4 Single loose bricks as particles, not bodies
+### B3.4 Single loose bricks as particles, not bodies -- already built
+
+**Corrected 2026-11-07:** this is what the project does. A piece of `DEBRIS_MAX_BLOCKS` (8)
+or fewer never becomes a body: its bricks are crumbs (`IslandManager.crumbler`,
+`scripts/islands/island_crumbs.gd`), instanced, falling in `shaders/crumb.gdshader`,
+bouncing (`CRUMB_BOUNCE`), and laid as a heap where they stop; the main thread pays per
+event, not per frame. The paragraph below was written from the comment at the top of
+`island_manager.gd`, which predates crumbs. Nothing to build.
+
 
 A visible loose brick is a real `RigidBody3D` today (drawn from a MultiMesh, but simulated by
 the physics engine). Part A7 simulates them as particles in native code: no broadphase, no
@@ -454,7 +462,7 @@ on a landing). It is a game-feel choice, not a performance one, so it is the use
 2. **B3.2 measure** `solve_grounded` on small cuts; build the two-sided search only if it shows.
 3. **B3.3 instanced small pieces** -- A/B on the renderer clock.
 4. **B3.5** ask the user about spilling.
-5. **B3.4 particles for loose bricks** -- when the debris cap is what limits a scene.
+5. ~~**B3.4 particles for loose bricks**~~ -- already built (crumbs; see B3.4).
 
 Each of these touches `island_manager.gd` / `brick_world.cpp`, which other chats work in
 (struct-bugs, storey units, planet falling): check `git log main` and the handoff docs
