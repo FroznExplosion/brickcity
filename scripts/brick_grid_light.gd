@@ -99,8 +99,8 @@ class Entry:
 var _entries := {}
 var _free: Array[int] = []
 var _turn := -1
-## The near lamps' lights, and which group each stands for ([entry, index]).
-var _near: Array = []
+## The near lamps' lights, by what they are (place_near's key).
+var _near := {}
 var _near_clock := 0
 ## Their count now, for gates.
 var near_count := 0
@@ -242,60 +242,64 @@ func place_near() -> void:
 					picks.append([d2, e, g])
 		picks.sort_custom(func(a, b): return a[0] < b[0])
 		picks = picks.slice(0, near_max)
-	while _near.size() > picks.size():
-		var l: Variant = _near.pop_back()
-		if is_instance_valid(l):
-			(l as Node).queue_free()
+	# A light in the tree is never changed in range, shadow, place or parent:
+	# Godot (4.6) then kept stale light-geometry pairs ("BUG, indexing did not
+	# unpair geometries from light" on freeing it) and crashed on quit
+	# (signal 11). So each is made whole before it enters the tree and kept
+	# while the lamp it stands for stays the same; otherwise freed and made
+	# again. Only its colour and energy are set on a live one.
+	var want := {}   # key -> [entry, group, shadowed, range]
 	for i in picks.size():
 		var e: Entry = picks[i][1]
 		var g: Array = picks[i][2]
 		var dir: int = g[2]
-		var want_spot := dir != 0
-		var l: Light3D = _near[i] if i < _near.size() and is_instance_valid(_near[i]) else null
-		if l != null and (l is SpotLight3D) != want_spot:
-			l.queue_free()
-			l = null
+		var at: Vector3 = g[0] / g[1] + Vector3(0.0, 0.03 * dir, 0.0)
+		var shadowed := dir != 0 and i < near_shadowed
+		var reach := NEAR_OMNI_RANGE
+		if dir != 0:
+			reach = NEAR_SPOT_RANGE if shadowed else snappedf(_reach(e, at, dir, NEAR_SPOT_RANGE), 0.05)
+		var key := "%d|%s|%d|%d|%.2f" % [e.node.get_instance_id(), at.snappedf(0.01), dir, int(shadowed), reach]
+		want[key] = [e, g, shadowed, reach, at]
+	for key in _near.keys():
+		if not want.has(key) or not is_instance_valid(_near[key]):
+			if is_instance_valid(_near[key]):
+				(_near[key] as Node).queue_free()
+			_near.erase(key)
+	for key in want:
+		var e: Entry = want[key][0]
+		var g: Array = want[key][1]
+		var dir: int = g[2]
+		var l: Light3D = _near.get(key)
 		if l == null:
-			if want_spot:
-				var s := SpotLight3D.new()
-				s.name = "NearLampSpot"
-				s.spot_angle = NEAR_SPOT_ANGLE
-				s.spot_range = NEAR_SPOT_RANGE
-				s.spot_attenuation = 1.2
-				s.spot_angle_attenuation = 0.5
-				s.shadow_enabled = false
-				s.shadow_blur = 2.0
-				s.shadow_bias = 0.03
-				s.shadow_normal_bias = 1.0
-				l = s
+			if dir != 0:
+				var sp := SpotLight3D.new()
+				sp.name = "NearLampSpot"
+				sp.spot_angle = NEAR_SPOT_ANGLE
+				sp.spot_range = want[key][3]
+				sp.spot_attenuation = 1.2
+				sp.spot_angle_attenuation = 0.5
+				sp.shadow_enabled = want[key][2]
+				sp.shadow_blur = 2.0
+				sp.shadow_bias = 0.03
+				sp.shadow_normal_bias = 1.0
+				sp.rotation = Vector3(-PI / 2.0 if dir < 0 else PI / 2.0, 0.0, 0.0)
+				l = sp
 			else:
 				var o := OmniLight3D.new()
 				o.name = "NearLampGlow"
-				o.omni_range = NEAR_OMNI_RANGE
+				o.omni_range = want[key][3]
 				o.omni_attenuation = 1.4
 				o.shadow_enabled = false
 				l = o
+			l.position = want[key][4]
 			l.light_specular = 0.4
 			l.physics_interpolation_mode = Node.PHYSICS_INTERPOLATION_MODE_OFF
-			if i < _near.size():
-				_near[i] = l
-			else:
-				_near.append(l)
-		if l.get_parent() != e.node:
-			if l.get_parent() != null:
-				l.get_parent().remove_child(l)
-			e.node.add_child(l)
+			_near[key] = l
 		var n: int = g[1]
-		l.position = g[0] / n
-		if want_spot:
-			l.rotation = Vector3(-PI / 2.0 if dir < 0 else PI / 2.0, 0.0, 0.0)
-			l.position.y += 0.03 * dir
-			var sp := l as SpotLight3D
-			sp.shadow_enabled = i < near_shadowed
-			sp.spot_range = NEAR_SPOT_RANGE if sp.shadow_enabled \
-					else _reach(e, l.position, dir, NEAR_SPOT_RANGE)
 		l.light_color = g[3] / n
 		l.light_energy = NEAR_ENERGY * (g[4] / n) * minf(1.0 + 0.2 * (n - 1), 2.5)
+		if l.get_parent() == null:
+			e.node.add_child(l)
 	near_count = picks.size()
 
 
@@ -480,7 +484,7 @@ func _apply(e: Entry, c: Node) -> void:
 		return
 	InstanceParams.put(g, &"grid_light", e.param)
 	if use_layer:
-		g.layers = RENDER_LAYER if e.param.x >= 0.0 else 1
+		RenderLayers.set_layers(g, RENDER_LAYER if e.param.x >= 0.0 else 1)
 	# What stands in for a band close up (BrickNear's chamfered mesh) is its
 	# child, with the band's material.
 	if g != e.node:

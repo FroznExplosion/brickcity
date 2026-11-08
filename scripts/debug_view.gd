@@ -105,10 +105,10 @@ static func apply(node: GeometryInstance3D, kind: int) -> void:
 	if mode == Mode.HIDDEN:
 		if node.layers != HIDDEN_LAYER:
 			node.set_meta(&"view_layers", node.layers)
-			node.layers = HIDDEN_LAYER
+			RenderLayers.set_layers(node, HIDDEN_LAYER)
 			node.add_to_group(GROUP_TOUCHED)
 	elif node.layers == HIDDEN_LAYER:
-		node.layers = int(node.get_meta(&"view_layers", 1))
+		RenderLayers.set_layers(node, int(node.get_meta(&"view_layers", 1)))
 		node.remove_meta(&"view_layers")
 	if mode == Mode.CLEAR:
 		if not node.has_meta(&"view_alpha"):
