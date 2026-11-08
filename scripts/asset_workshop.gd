@@ -106,7 +106,7 @@ var _measure_tool := WkMeasureTool.new()
 var _fill_tool := WkFillTool.new()
 var _move_tool := WkMoveTool.new()
 ## The asset workshop's tools that are kit tools: its `tool` name -> the toolbox's id.
-const KIT_TOOLS := {"sketch": &"sketch", "wand": &"fill", "move": &"move"}
+const KIT_TOOLS := {"sketch": &"sketch", "wand": &"fill", "move": &"move", "shape": &"shape", "select": &"select"}
 ## Points clicked while calibrating the selected photo; calibrating while not null.
 var calibrating = null
 
@@ -167,7 +167,17 @@ var outlines := 0
 var guides: Array = []
 var _drag_from := Vector3i.ZERO
 var _drag_to := Vector3i.ZERO
-var _dragging := false
+## A Shapes box or a select box is being dragged: the kit's Shapes tool (one drag fills it)
+## and Select tool (a box); setting it false drops either.
+var _dragging: bool:
+	get:
+		return _shape_tool.dragging() or _select_tool.boxing()
+	set(v):
+		if not v:
+			_shape_tool.drag = {}
+			_select_tool.cancel()
+var _shape_tool := WkShapeTool.new()
+var _select_tool := WkSelectTool.new()
 var _tool_lines: MeshInstance3D
 var _outline_lines: MeshInstance3D
 var _outlines_dirty := false
@@ -325,7 +335,8 @@ func _ready() -> void:
 	super()
 	cam_ctl.ctx = wk_ctx   # no setup(): this workshop's camera keeps its own mouse ways
 	toolbox.add(_sketch_tool)
-	for t in [_measure_tool, _fill_tool, _move_tool]:
+	_select_tool.mode = WkSelectTool.Mode.BOX
+	for t in [_measure_tool, _fill_tool, _move_tool, _shape_tool, _select_tool]:
 		toolbox.add(t)
 	# What is made here is a gun (or a mech): File > Save, Save As and Open use their
 	# library (user://guns/), not the buildings'. F5 has its own slot, not the workshop's.
@@ -1234,14 +1245,8 @@ func _unhandled_input(e: InputEvent) -> void:
 	if _kit_input(e, [&"measure", &"fill"]):
 		get_viewport().set_input_as_handled()
 		return
-	if e is InputEventMouseButton and e.button_index == MOUSE_BUTTON_LEFT and tool in ["shape", "select"]:
-		if e.pressed:
-			_drag_from = _cell
-			_drag_to = _cell
-			_dragging = true
-		elif _dragging:
-			_dragging = false
-			_finish_drag()
+	if tool in ["shape", "select"] and e is InputEventMouseButton and e.button_index == MOUSE_BUTTON_LEFT:
+		_kit_input(e, [&"shape", &"select"])
 		get_viewport().set_input_as_handled()
 		return
 	if e is InputEventKey and e.pressed and not e.echo and not e.ctrl_pressed and e.alt_pressed:
@@ -1327,8 +1332,8 @@ func _process(dt: float) -> void:
 	_stud_ghost_process()
 	_explode_process()
 	_rail_process()
-	if _dragging:
-		_drag_to = _cell
+	if toolbox.active_id() in [&"shape", &"select"]:
+		toolbox.process(dt)   # a box being dragged follows the cursor
 	_draw_tool()
 	if _outlines_dirty:
 		_draw_outlines()
@@ -2600,6 +2605,62 @@ func set_tool(t: String) -> void:
 	if t != "" and _painting:
 		_set_painting(false)
 	_outlines_dirty = true
+
+
+# The kit's Shapes tool (one drag: a box, ball, cylinder or wedge, filled) and Select tool (a
+# box) ask these (BrickWorkshopContext -> _sketch_host(), this workshop).
+
+func wk_shape_begin(_button: int) -> Dictionary:
+	_drag_from = _cell
+	_drag_to = _cell
+	return {"a": _cell}
+
+
+func wk_shape_base(_d: Dictionary) -> void:
+	_drag_to = _cell
+
+
+func wk_shape_base_done(_d: Dictionary) -> void:
+	pass
+
+
+func wk_shape_height(_d: Dictionary) -> void:
+	pass
+
+
+func wk_shape_typed(_d: Dictionary, _typed: String) -> void:
+	pass
+
+
+func wk_shape_release_commits(_d: Dictionary) -> bool:
+	return false
+
+
+func wk_shape_commit(_d: Dictionary) -> Variant:
+	_finish_drag()
+	return null
+
+
+func wk_shape_cancel() -> void:
+	pass
+
+
+func wk_select_at_cursor() -> void:
+	pass
+
+
+func wk_select_box_begin() -> bool:
+	_drag_from = _cell
+	_drag_to = _cell
+	return true
+
+
+func wk_select_box_drag() -> void:
+	_drag_to = _cell
+
+
+func wk_select_box_end() -> void:
+	_finish_drag()
 
 
 func _finish_drag() -> void:
