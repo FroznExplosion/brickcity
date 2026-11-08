@@ -1839,9 +1839,9 @@ func _bay_check(b: BuildingRegistry.Building) -> void:
 ## frame, the physics frame and the renderer's own CPU and GPU time, means.
 ##     godot --path . scenes/big_city.tscn -- --rubble --big
 func _run_rubble_pass() -> void:
-	city.islands.field_enabled = not ("--no-field" in OS.get_cmdline_user_args())
+	city.islands.rubble.field_enabled = not ("--no-field" in OS.get_cmdline_user_args())
 	print("[rubble] wreckage at rest: what it costs (rubble field %s)" % (
-			"on" if city.islands.field_enabled else "off"))
+			"on" if city.islands.rubble.field_enabled else "off"))
 	city.respawn_buildings = false
 	city.camera.position = Vector3(-52.0, 34.0, -52.0)
 	city.camera.rotation = Vector3(-0.42, -2.36, 0.0)
@@ -1889,9 +1889,9 @@ func _run_rubble_pass() -> void:
 		var busy := not city.islands._coarsening.is_empty()
 		for key in city.islands._field:
 			busy = busy or city.islands._field[key].dirty or city.islands._field[key].job >= 0
-		if not busy and city.islands.field_coarsened == last_coarse:
+		if not busy and city.islands.rubble.field_coarsened == last_coarse:
 			break
-		last_coarse = city.islands.field_coarsened
+		last_coarse = city.islands.rubble.field_coarsened
 	var vp := city.get_viewport().get_viewport_rid()
 	RenderingServer.viewport_set_measure_render_time(vp, true)
 	var as_is: Array = await _rubble_window(vp)
@@ -1912,8 +1912,8 @@ func _run_rubble_pass() -> void:
 	# field), the biggest-looking FIELD_MAX_DRAWN tiles only.
 	var field := city.islands.get_node_or_null("RubbleField") as Node3D
 	print("[rubble] field: %d tile(s), %d drawn, %d left undrawn by the cap; %d merge(s), the slowest %.2f ms on a worker, %.2f ms on the main thread" % [
-			city.islands._field.size(), city.islands.field_drawn, city.islands.field_culled, city.islands.field_merges,
-			city.islands.field_worst_ms, city.islands.field_main_worst_ms])
+			city.islands._field.size(), city.islands.rubble.field_drawn, city.islands.rubble.field_culled, city.islands.rubble.field_merges,
+			city.islands.rubble.field_worst_ms, city.islands.rubble.field_main_worst_ms])
 	var with_arrays := 0
 	var stand_ins := 0
 	for dm in city.islands.dormant:
@@ -1922,7 +1922,7 @@ func _run_rubble_pass() -> void:
 			if not dm.stand_in_arrays.is_empty():
 				with_arrays += 1
 	print("[rubble] %d stand-in(s), %d with the arrays to merge from; %d made coarse from their record" % [
-			stand_ins, with_arrays, city.islands.field_coarsened])
+			stand_ins, with_arrays, city.islands.rubble.field_coarsened])
 	var no_field: Array = as_is
 	if field != null:
 		field.visible = false
@@ -5616,7 +5616,7 @@ func _run_shot_pass() -> void:
 	print("[city]   pieces' heavy work left for a later tick: %d merged rebuild(s), %d finished mesh(es)" % [
 			city.islands.reshapes_spread, city.islands.harvests_spread])
 	print("[city]   " + city.islands.blast_census_line())
-	print("[city]   " + city.islands.crumb_cost_line())
+	print("[city]   " + city.islands.crumbler.crumb_cost_line())
 	print("[city]   " + city.islands.push_census_line())
 	print("[city]   " + city.islands.shed_census_line())
 	print("[city]   " + city.span_line())
@@ -5625,8 +5625,8 @@ func _run_shot_pass() -> void:
 			city.islands.furniture_broken[0], city.islands.furniture_broken[1], city.crushed_by_wreckage])
 	print("[city]   crumbs: %d piece(s), %d brick(s), %d not drawn (CRUMBS_MAX), worst tick %.2f ms, worst crumble %.2f ms, all told drawing %.1f + cutting out %.1f + deciding %.1f ms" % [
 			city.islands.crumbled, city.islands.crumb_bricks, city.islands.crumbs_over, city.islands.crumb_worst_ms,
-			city.islands.crumble_worst_ms, city.islands.crumble_parts[0], city.islands.crumble_parts[1],
-			city.islands.crumble_parts[2]])
+			city.islands.crumble_worst_ms, city.islands.crumbler.crumble_parts[0], city.islands.crumbler.crumble_parts[1],
+			city.islands.crumbler.crumble_parts[2]])
 	print("[city]   " + city.islands.snap_census_line())
 	# Started can pass built: a start is dropped when its chunk changes under
 	# the worker, and asked for again.
