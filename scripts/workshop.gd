@@ -2416,18 +2416,21 @@ func _delete_ray(from: Vector3, dir: Vector3) -> bool:
 		return false
 	var rid := _recipe_id_at(asm.frames.find(hit.frame), hit.block)
 	if rid >= 0:
+		var took := _brick_item(rid)
 		var at: Array = _placed_at[rid]
 		if not world.remove_block(asm.frames[at[0]], at[1]):
 			return false
-		# A kept shape's brick has no edit of its own (the shape's undo has it).
+		# A kept shape's brick has no edit of its own (the shape's undo has it); undoing the
+		# delete gives it back to its shape.
 		if _tools != null and _tools.owner_of(recipe.part_of(rid), recipe.cell_of(rid)) >= 0:
-			_tools.forget_brick(recipe.part_of(rid), recipe.cell_of(rid))
+			took["shape"] = _tools.forget_brick(recipe.part_of(rid), recipe.cell_of(rid))
 		_before_remove(rid)
 		_forget_rids(PackedInt32Array([rid]))
 		_placed_at.remove_at(rid)
 		_rid_synced = mini(_rid_synced, rid)
 		recipe.remove_at(rid)
 		_after_edit()
+		_push_delete(took)
 		return true
 	if hit.frame != asm.frames[0]:
 		return false
@@ -2447,6 +2450,37 @@ func _delete_ray(from: Vector3, dir: Vector3) -> bool:
 		_after_edit()
 		return true
 	return false
+
+
+## An RMB delete as an edit: undo lays the brick back (on the end of the build, its old place
+## in the build's order is not kept), redo takes it up again.
+func _push_delete(took: Dictionary) -> void:
+	undo_stack.push(WkCommand.make(&"delete", took, _undo_delete, _redo_delete))
+
+
+func _undo_delete(c: WkCommand) -> bool:
+	if not _relay(c.data):
+		return false
+	var owned: Array = c.data.get("shape", [])
+	if _tools != null and owned.size() == 2:
+		_tools.own_brick(int(owned[0]), owned[1])
+	return true
+
+
+func _redo_delete(c: WkCommand) -> bool:
+	return remove_brick(String(c.data.arch), c.data.cell, int(c.data.get("af", 0)))
+
+
+## Take a brick up as RMB would, found by part and cell. True if it went.
+func remove_brick(arch: String, cell: Vector3i, af: int = 0) -> bool:
+	var i := find_brick(arch, cell, af)
+	if i < 0:
+		return false
+	if _tools != null and _tools.owner_of(arch, cell) >= 0:
+		_tools.forget_brick(arch, cell)
+	_remove_rid(i)
+	_after_edit()
+	return true
 
 
 # The kit's Place tool (WkPlaceTool) asks these, through the workshop's context.

@@ -988,7 +988,7 @@ Each stage: own branch, merged `--no-ff`, pushed. Every stage passes, as on main
 | 4b ✅ | `WkFrame` for the building workshop: the menu bar (`WorkshopMenu`'s menus as data the workshop gives), the rail, the option panel and the hint line, laid out and themed in one place | `workshop_probe`, gate |
 | 4c ✅ | The asset workshop's tabs, outliner and actions on `WkFrame` | `asset_ui_probe` |
 | 5a ✅ | **Place** (the hand: click, held-click run, RMB takes away) into the kit, the toolbox's default tool and the hand under any tool for a click it does not take | probes, gate |
-| 5b | The rest of the shared tools into the kit, one file each: select, cut, measure, move, fill/wand; and the Shapes tool, once the two workshops' gestures are settled into one (a design choice for the user) | probes; `wk_smoke` per tool |
+| 5b ✅ | The rest of the shared tools into the kit, one file each: measure, fill (wand), move, select, and the Shapes tool -- one tool, two gestures (asked 2026-11-08: the asset workshop's one drag, the building workshop's outline then height); Cut is the Shapes tool with a cut for its outcome. The building workshop's RMB delete is undoable (asked the same day) | probes; `wk_smoke` per tool |
 | 6a | Each of the 26 overrides becomes a context call or a tool (the asset still extends) | probes |
 | 6b | **No more `extends workshop.gd`**: the brick world, recipe, frames, save and load in one component both workshops own; each workshop `extends Node3D` and composes the kit | every probe, gate; a scan finds no game class named under `addons/workshop_kit/` |
 
@@ -1002,9 +1002,9 @@ game class, the probes and gate pass as on main, and section 0 describes the kit
 * **FPS fly in `WkCamera`.** The building workshop flies on the game's `DebugCamera` today. The kit
   cannot name it, so `WkCamera` gets its own fly (WASD, Space, Q/Ctrl, Shift fast, Alt slow); it
   should feel the same but is new code. Alternative: the fly stays the game's, behind the context.
-* **The building workshop's RMB delete** becomes undoable once it is a command (today it cannot:
-  it takes a brick out of the middle). Proposed in stage 5's erase tool, by taking the brick out
-  and putting it back at its old index in one command -- or left as it is.
+* **The building workshop's RMB delete** -- settled 2026-11-08: undoable, as the asset
+  workshop's already was (stage 5b). Z lays the brick back on the end of the build, not at its
+  old index (the stage 1 history finds bricks by part and cell, so the order does not matter).
 
 ### As built: stage 1, one undo (2026-11-07)
 
@@ -1210,3 +1210,45 @@ none is asked for, so putting down Paint or Sketch hands back the hand. `wk_smok
 * The tool is also called as the hand under another tool: a click Paint or Sketch does not take
   (RMB while painting, or outside a stroke in Draw) still takes a brick away, as before.
 * `place_probe`'s check after B now reads "the hand is back in hand".
+
+### As built: stage 5b, the rest of the shared tools (2026-11-08)
+
+Kit 0.13.0: five more tools under `tools/`, one file each, with their questions on `WkContext`.
+`wk_smoke` 143.
+
+| Tool | What it does | Asks the context | In |
+|---|---|---|---|
+| `WkMeasureTool` | two clicks, the distance; a third starts again | `measure_point`, `measure_show` | asset (Alt M) |
+| `WkFillTool` | a click fills the patch under the cursor, `width` wide | `fill_at_cursor` | asset (the wand, F4) |
+| `WkMoveTool` | press, drag on the axis plane most square to the view, let go | `move_grab`, `move_to`, `move_drop` | asset (Alt G) |
+| `WkSelectTool` | CLICK: pick what is under the cursor; BOX: drag a box | `select_at_cursor`; `select_box_begin` / `_drag` / `_end` | building (L, CLICK), asset (L, BOX) |
+| `WkShapeTool` | DRAG_SOLID: press, drag, let go makes it; OUTLINE_HEIGHT: the base, let go, the height (moved or typed), click; RMB or Esc gives up | `shape_begin`, `shape_base`, `shape_base_done`, `shape_height`, `shape_typed`, `shape_release_commits`, `shape_commit`, `shape_cancel` | building (Draw, Cut, Select's push-pull: OUTLINE_HEIGHT), asset (K: DRAG_SOLID) |
+
+* **One Shapes tool, two gestures** (the user's choice, 2026-11-08): `mode` says which. The tool
+  keeps the gesture -- `drag`, a Dictionary only the editor fills in (the tool reads its
+  `phase` and `button`), and the digits typed -- and the editor answers what the shape is. The
+  building workshop's `_drag` and `typed` are the tool's, through properties, so its code and
+  `build_tools_probe` read and set them as before; `_make_input` hands the event to the tool,
+  and what it did is now `wk_shape_begin` (where a drag starts: a face, a wall's end, the
+  plane at the ghost) and `wk_shape_base_done` (one more outline of a plan, or on to the height).
+* **Cut is the Shapes tool, not a tool of its own.** In the building workshop a cut is drawn
+  exactly as a shape is; the context makes it a cut (`tool == "cut"` or Draw's cut). Its one-click
+  door and window (`_cut_input`) name openings and storeys, so they stay game-side, before the
+  tool. In the asset workshop a cut is a sketch drawn with RMB (`WkSketchTool`). A
+  `wk_cut_tool.gd` would hold nothing the Shapes tool does not.
+* **Select's push-pull is the Shapes tool's height.** A click on a kept shape's top or side
+  (`wk_select_at_cursor`) starts a drag already in its height; letting go makes it
+  (`shape_release_commits`). The height's clicks and the drawing's keys go to the Shapes tool
+  whichever building tool is in hand, as before.
+* **The building workshop calls its kit tools directly**, as the base calls the hand: they are
+  in `ws.toolbox` (so they have the context) but not taken up with `use`, because Draw, Cut and
+  Select share one drag. The asset workshop takes them up with `set_tool` (`KIT_TOOLS`: its
+  tool name -> the toolbox id); taking up any of them puts Measure down.
+* **RMB delete is undoable in the building workshop too.** The delete command
+  (`_push_delete` / `_undo_delete` / `_redo_delete`) moved from the asset workshop into
+  `workshop.gd`. A kept shape's brick goes back into its shape (`forget_brick` returns what it
+  took; `own_brick`). `place_probe` and `build_tools_probe` expected Z to pass over a brick taken
+  by RMB; they now expect it laid back, and still check that a brick taken some other way (as a
+  cut does) has its edit skipped: place 150, build_tools 346.
+* One small difference: RMB with Draw on a non-upright frame takes a brick away (the hand's);
+  it used to be swallowed with the "Shapes go on the upright grid" message.

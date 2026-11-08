@@ -389,6 +389,10 @@ func _kept_checks() -> void:
 	_ok("delete: shape and bricks gone, the hand brick stays", t.shape_of(id).is_empty() and _ws.recipe.size() <= 1)
 	_ws._undo()
 	_ok("and undone", not t.shape_of(id).is_empty() and _ws.recipe.size() == n)
+	# The RMB is an edit too (section 20, stage 5b): Z lays the brick back, its shape's again.
+	_ws._undo()
+	_ok("Z lays the RMB'd brick back, into its shape", _bricks(t.shape_of(id)).size() == before.size()
+			and _ws.recipe.size() == n + 1, "%d of %d" % [_bricks(t.shape_of(id)).size(), before.size()])
 	# Undo all the way: nothing left.
 	while _ws._undo():
 		pass
@@ -689,9 +693,13 @@ func _redo_checks() -> void:
 	_ws._delete_ray(Vector3(32.5 * stud, 3.0, 20.5 * stud), Vector3.DOWN)
 	_ok("RMB takes the middle brick", _ws.recipe.size() == 2 and not _solid(Vector3i(32, 1, 20)))
 	_ws._undo()
-	_ok("Z: the newest brick", _ws.recipe.size() == 1 and not _solid(Vector3i(34, 1, 20)))
+	_ok("Z lays it back (an RMB is an edit)", _ws.recipe.size() == 3 and _solid(Vector3i(32, 1, 20)))
 	_ws._undo()
-	_ok("Z again: the first, the deleted one's edit skipped", _ws.recipe.size() == 0
+	_ok("Z: the newest brick", _ws.recipe.size() == 2 and not _solid(Vector3i(34, 1, 20)))
+	# Taken out some other way than RMB (as a cut does): its edit is skipped.
+	_ws._remove_rid(_ws.find_brick("plate_1x1", Vector3i(32, 1, 20)))
+	_ws._undo()
+	_ok("Z again: the first, the taken one's edit skipped", _ws.recipe.size() == 0
 			and not _ws.undo_stack.can_undo(), "%d left, %d steps" % [_ws.recipe.size(), _ws.undo_stack.size()])
 	_ws.redo_last()
 	_ws.redo_last()
