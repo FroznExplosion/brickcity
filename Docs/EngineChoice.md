@@ -93,13 +93,32 @@ import (and the workshops, UI kit and editor kit built on them).
 
 **Order:** each step lands alone and is measured against the current path.
 
-1. **Brick renderer prototype.** One building drawn from a brick buffer next to the baked
-   version: frame time, GPU time and triangles. Drawing bricks one by one instead of baked
-   culled faces may cost more triangles; the prototype decides.
-2. **Debris physics in the extension.** Loose pieces leave Godot's physics; the player, vehicles
+1. **Debris physics in the extension.** Loose pieces leave Godot's physics; the player, vehicles
    and shots stay in it. The bridge between the two worlds (standing on debris, shots hitting
    pieces, pieces hitting the player) is the main design work.
-3. **GPU or incremental structure solve.**
+2. **GPU or incremental structure solve.**
+3. **Brick renderer**, only if a measurement points at drawing (below).
+
+### Instancing bricks: measured, not now (2026-11-07)
+
+The game already instances where it pays: studs and stud cards (a MultiMesh per band), single
+loose bricks (a shared MultiMesh), crumbs and shards (GPU). The question was brick bodies.
+
+* **Small pieces** (commit cebd9f4d, `barrage_probe`): 43 pieces meshed on the main thread at
+  spawn, 0.75 ms each, worst 3.4 ms; 37 of 108 ms of spawning. Instancing would save that and
+  lose hidden-face culling, need its own bevelled instance mesh, and carry every brick's
+  position. Not worth it now. Numbers taken with four other runs going and headless (no
+  upload); a windowed `--stress`, editor closed, would settle them. Cheaper fix if spawn spikes
+  show in play: a per-tick budget for main-thread piece meshes, the rest to the worker.
+* **Large collapses:** the worst ticks are bodies, shapes, collision and the island tick
+  (WhereWorkRuns.md 3.2), not drawing; big pieces already mesh on workers in bands (97e408ba).
+  Instancing would fix one thing there: a big piece is invisible for up to 4 ticks while its
+  mesh is made (worst seen: 2,671 bricks). A piece's instances can ride its node's transform
+  (one MultiMesh per piece), so bricks need not be sent each frame -- but a 2,671-brick piece
+  drawn with every face is many times its culled mesh. If that gap ever shows: draw a piece
+  instanced only until its worker mesh arrives, then swap.
+* **Near detail** was the bigger lever for drawn triangles: the chamfered tier was cut from 14
+  to 6 m and the stud rings pulled in (BrickBevel.md §6).
 
 ## Consoles from Godot (checked 2026-11-07)
 
