@@ -950,6 +950,13 @@ var wake_worst := [0.0, 0]
 var sleep_worst := [0.0, 0]
 var _resolve_parts: Array = []
 var _sync_meshes := 0
+## Pieces meshed at their spawn on this thread, and what that took (all told,
+## the worst), and pieces sent to a worker instead: what drawing small pieces
+## by instancing (Docs/DestructionFirstPrinciples.md B3.3) would take away.
+var sync_meshed := 0
+var sync_mesh_ms := 0.0
+var sync_mesh_worst := 0.0
+var queued_meshed := 0
 var dropped := 0     ## settled pieces put to the coarse stand-in for distance
 var compacted := 0   ## settled pieces baked again to leave their dead faces out
 var coarse_built := 0      ## coarse stand-ins built (build_chunk_coarse_mesh)
@@ -1509,7 +1516,12 @@ func spawn(source: int, block_ids: PackedInt32Array,
 				and (isl.coarse or world.get_chunk_authored_tris(isl.chunk) <= SYNC_MESH_MAX_TRIS):
 			# Small enough to bake here and now, so it is never invisible.
 			_sync_meshes += 1
+			var _ts := Time.get_ticks_usec()
 			rebuild_mesh(isl, true, true)
+			var _sms := float(Time.get_ticks_usec() - _ts) / 1000.0
+			sync_meshed += 1
+			sync_mesh_ms += _sms
+			sync_mesh_worst = maxf(sync_mesh_worst, _sms)
 		else:
 			# A big section goes to a worker; it is queued and appears a tick or
 			# two later, which is far cheaper than baking it on this thread. A
@@ -1517,6 +1529,7 @@ func spawn(source: int, block_ids: PackedInt32Array,
 			if not isl.coarse:
 				world.bake_chunk_async(isl.chunk)
 			_mesh_queue.append(isl)
+			queued_meshed += 1
 	spawn_prof.mesh += float(Time.get_ticks_usec() - _t) / 1000.0
 	spawn_prof.total += float(Time.get_ticks_usec() - _t0) / 1000.0
 	_w[4] = float(Time.get_ticks_usec() - _t) / 1000.0
