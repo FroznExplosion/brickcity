@@ -6193,6 +6193,11 @@ func _report_profile() -> void:
 ##     godot --path . -- --stress --buildings=200
 func _run_stress_pass() -> void:
 	print("[stress] %d buildings, %.1f m spacing" % [city._city_size, 13.0])
+	# -- --worker-small: small pieces meshed on the worker with stand-ins
+	# covering them (IslandManager.small_meshes_on_worker; off by default,
+	# measured worse), for the A/B.
+	if "--worker-small" in OS.get_cmdline_user_args():
+		city.islands.small_meshes_on_worker = true
 	city.camera.position = Vector3(0.0, 46.0, 96.0)
 	city.camera.rotation = Vector3(-0.42, 0.0, 0.0)
 	await _frames(10)
@@ -6348,9 +6353,10 @@ func _run_stress_pass() -> void:
 	print("[stress] invisible pieces: %d went blind, worst %d tick(s), mean %.1f, biggest %d bricks" % [
 			isl.blind_count, isl.blind_worst, isl.blind_mean, isl.meshless_worst_blocks])
 	print("[stress] %s" % city.islands.standins.census_line())
-	print("[stress] piece meshes at spawn: %d on this thread (%.1f ms, worst %.2f), %d sent to a worker; the slowest queued mesh %s" % [
+	print("[stress] piece meshes at spawn: %d on this thread (%.1f ms, worst %.2f), %d sent to a worker; the queue's main-thread part %d (%.1f ms), the slowest %s; small pieces on the worker: %s" % [
 			city.islands.sync_meshed, city.islands.sync_mesh_ms, city.islands.sync_mesh_worst,
-			city.islands.queued_meshed, str(city.islands.mesh_drain_worst)])
+			city.islands.queued_meshed, city.islands.drain_count, city.islands.drain_ms,
+			str(city.islands.mesh_drain_worst), city.islands.small_meshes_on_worker])
 	print("[stress] breaks %d (%d had to tear a band), %d impact(s) loosening %d block(s)" % [
 			isl.breaks, isl.band_breaks, isl.impacts, isl.impact_blocks])
 	print("[stress] de-meshed %d, re-meshed %d, in %.0f ms" % [

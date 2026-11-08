@@ -971,6 +971,19 @@ var sync_meshed := 0
 var sync_mesh_ms := 0.0
 var sync_mesh_worst := 0.0
 var queued_meshed := 0
+## The mesh queue's main-thread part (rebuild_mesh once a worker bake is in:
+## assembling and uploading), all told and how many: with small pieces sent to
+## the worker, this is where their main-thread cost goes.
+var drain_ms := 0.0
+var drain_count := 0
+## Small pieces meshed on the worker too, a stand-in (IslandStandins) drawing
+## them until their mesh is up. **Off: measured worse** (Docs/
+## DestructionFirstPrinciples.md B11, windowed --stress A/B): each piece moved
+## saved ~0.8 ms at its spawn and cost ~5.6 ms in the mesh queue's main-thread
+## part (assembling and uploading the worker's bake) -- 892 ms against 520 all
+## told. Kept for when that part is cheaper; `-- --stress --worker-small` runs
+## it on. Far pieces (coarse) are unchanged either way.
+var small_meshes_on_worker := false
 var dropped := 0     ## settled pieces put to the coarse stand-in for distance
 var compacted := 0   ## settled pieces baked again to leave their dead faces out
 var coarse_built := 0      ## coarse stand-ins built (build_chunk_coarse_mesh)
@@ -1529,7 +1542,8 @@ func spawn(source: int, block_ids: PackedInt32Array,
 	if isl.mesh != null:
 		# Far off: the coarse stand-in, which needs no bake (ISLAND_MESH_RANGE).
 		isl.coarse = _starts_coarse(isl)
-		if count <= SYNC_MESH_MAX_BLOCKS and _sync_meshes < SYNC_MESH_PER_TICK \
+		var bake_here: bool = isl.coarse or not small_meshes_on_worker or not standins.enabled
+		if bake_here and count <= SYNC_MESH_MAX_BLOCKS and _sync_meshes < SYNC_MESH_PER_TICK \
 				and (isl.coarse or world.get_chunk_authored_tris(isl.chunk) <= SYNC_MESH_MAX_TRIS):
 			# Small enough to bake here and now, so it is never invisible.
 			_sync_meshes += 1
@@ -1547,6 +1561,7 @@ func spawn(source: int, block_ids: PackedInt32Array,
 				world.bake_chunk_async(isl.chunk)
 			_mesh_queue.append(isl)
 			queued_meshed += 1
+			standins.cover(isl)
 	spawn_prof.mesh += float(Time.get_ticks_usec() - _t) / 1000.0
 	spawn_prof.total += float(Time.get_ticks_usec() - _t0) / 1000.0
 	_w[4] = float(Time.get_ticks_usec() - _t) / 1000.0
@@ -5331,6 +5346,8 @@ var mesh_drain_worst: Array = [0.0, 0, ""]
 
 func _note_mesh_drain(isl: BrickIsland, t0: int, kind: String) -> void:
 	var ms := float(Time.get_ticks_usec() - t0) / 1000.0
+	drain_ms += ms
+	drain_count += 1
 	if ms > float(mesh_drain_worst[0]):
 		mesh_drain_worst = [ms, world.get_alive_block_count(isl.chunk) if isl.is_valid() else -1, kind]
 
