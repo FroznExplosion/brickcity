@@ -327,6 +327,9 @@ var crumbler: Node = null
 ## The rubble field -- far wreckage at rest, drawn tile by tile:
 ## scripts/islands/rubble_field.gd. Made in _init, before anything can ask for it.
 var rubble: Node = null
+## Stand-ins -- a piece drawn as a box per brick while its mesh is made:
+## scripts/islands/island_standins.gd. Made in _init.
+var standins: Node = null
 
 
 func _init() -> void:
@@ -334,6 +337,8 @@ func _init() -> void:
 	add_child(crumbler)
 	rubble = (load("res://scripts/islands/rubble_field.gd") as GDScript).new(self)
 	add_child(rubble)
+	standins = (load("res://scripts/islands/island_standins.gd") as GDScript).new(self)
+	add_child(standins)
 
 
 ## How long this piece's stand-in waits before it is built again.
@@ -4805,6 +4810,7 @@ func _island_aabb(isl: BrickIsland) -> AABB:
 func _process(_delta: float) -> void:
 	if crumb_count > 0:
 		crumb_clock()
+	standins.update()
 	var now := Engine.get_process_frames()
 	overlap_peak = maxi(overlap_peak, _ghosts.size() + _held.size())
 	var gi := _ghosts.size() - 1

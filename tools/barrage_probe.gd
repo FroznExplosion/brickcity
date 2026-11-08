@@ -96,6 +96,7 @@ func _run() -> void:
 	print("  --   %s" % isl.push_census_line())
 	print("  --   %s" % isl.shed_census_line())
 	print("  --   %s" % isl.heap.census_line())
+	print("  --   %s" % isl.standins.census_line())
 	var sp: Dictionary = isl.spawn_prof
 	var bi: Dictionary = isl.report()
 	print("  --   spawns: %.0f ms all told, meshing %.0f of it; %d meshed on this thread (%.1f ms, worst %.2f), %d sent to a worker; the slowest queued mesh %s; %d went blind, worst %d tick(s), mean %.2f, biggest %d bricks" % [

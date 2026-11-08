@@ -6347,6 +6347,10 @@ func _run_stress_pass() -> void:
 			isl.slept, isl.woken])
 	print("[stress] invisible pieces: %d went blind, worst %d tick(s), mean %.1f, biggest %d bricks" % [
 			isl.blind_count, isl.blind_worst, isl.blind_mean, isl.meshless_worst_blocks])
+	print("[stress] %s" % city.islands.standins.census_line())
+	print("[stress] piece meshes at spawn: %d on this thread (%.1f ms, worst %.2f), %d sent to a worker; the slowest queued mesh %s" % [
+			city.islands.sync_meshed, city.islands.sync_mesh_ms, city.islands.sync_mesh_worst,
+			city.islands.queued_meshed, str(city.islands.mesh_drain_worst)])
 	print("[stress] breaks %d (%d had to tear a band), %d impact(s) loosening %d block(s)" % [
 			isl.breaks, isl.band_breaks, isl.impacts, isl.impact_blocks])
 	print("[stress] de-meshed %d, re-meshed %d, in %.0f ms" % [

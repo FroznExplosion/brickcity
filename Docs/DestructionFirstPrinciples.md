@@ -617,3 +617,39 @@ the real upload.
 That run also failed `barrage_probe`'s "throwing them is a small part of a blast" (5.71 ms
 the worst blast) -- crumb throwing, not touched by any of this, and the second failure of
 that timing check in five runs, both on a busy, hot machine.
+
+## B10. Stand-ins: a piece is drawn while its mesh is made (2026-11-07)
+
+The narrow form of B3.3, reviewed by another chat before it was built: instances only until
+a piece's worker mesh is ready, not instancing as the way bricks are drawn.
+
+**Measured first, windowed, editor closed, nothing else running** (`--stress
+--buildings=200`; peak 93 C, not held back): 284 small pieces meshed on the main thread at
+their spawn -- **166.7 ms all told, the worst 14.7 ms**; spawn meshing was 184 of 295 ms of
+spawning; 266 pieces went blind, the worst for 3 ticks, the biggest 843 bricks. The headless
+figures in B9 (worst 3.4 ms) understated it: they had no upload to the renderer.
+
+**Built: `scripts/islands/island_standins.gd` (`IslandManager.standins`).** Each frame, for the
+pieces waiting on a mesh: one that is blind (`is_blind`) gets a stand-in -- a box per live
+brick, one MultiMesh per brick size, children of the piece's own mesh node (so they move with
+its interpolated transform and cannot jump at the swap), in the piece's own brick material.
+`BrickWorld.get_standin_buffers` hands over one ready MultiMesh buffer per size with each
+block's colour encoded as the mesher writes it (`block_rgba_grain`: material and grain in
+alpha), so the script does no per-brick work. It goes the frame the mesh has something to
+draw. No studs and no bevel: a piece stands in only while new and moving, and the near tier
+draws a moving piece flat anyway (`BrickNear.SETTLE_MS`). `standins.enabled` turns it off for
+an A/B.
+
+- `tools/standin_probe.gd` (11): a 982-brick piece over the bake-here limit is stood in for
+  every frame it has no mesh, never both at once, one box per brick, its material, under its
+  mesh node, gone when the mesh is up; a box's place and alpha are the block's; off, blind as
+  before.
+- `tools/standin_shot.gd` (not headless): a small build baked and stood in side by side in the
+  real brick shader -- colours and materials match.
+- `barrage_probe`: 18-19 stand-ins a run, worst 0.71-0.97 ms for up to 2,656 bricks, covering
+  108-117 frames that drew nothing before. Its "some hits found wreckage at rest" check failed
+  once (0 hits at rest that run) and passed on the rerun (15) -- the scenario varies; stand-ins
+  have no collision.
+
+Next (the review's step 3): send small pieces to the worker too, with stand-ins covering their
+first ticks, behind a flag, and A/B the `--stress` numbers above.
