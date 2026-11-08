@@ -162,6 +162,8 @@ func _apply_setting(id: StringName, value: Variant) -> void:
 			BrickNear.max_studs = int(value)
 		&"near_cap_cards":
 			BrickNear.max_card_bands = int(value)
+		&"near_lamp_shadows":
+			BrickGridLight.near_shadowed = [0, 1, 2, 4][clampi(int(value), 0, 3)]
 		&"near_lamps":
 			BrickGridLight.near_max = [0, 2, 4, 8][clampi(int(value), 0, 3)]
 		&"sun_cascades":
@@ -256,8 +258,12 @@ func _setting_defs() -> Array:
 			+ "tops of the furthest pieces are smooth. Lower helps most after a lot of destruction."},
 		{"id": &"near_lamps", "tab": "video", "type": MENU_SETTINGS.T_ENUM,
 			"label": "Lamp Lights", "default": 2, "choices": ["Off", "2", "4", "8"],
-			"hint": "How many of the lamps nearest you light the room for real, with "
-			+ "shadows. Off: lamps light only by the brick grid (flat, cheapest)."},
+			"hint": "How many of the lamps nearest you light the room for real. "
+			+ "Off: lamps light only by the brick grid (flat, cheapest)."},
+		{"id": &"near_lamp_shadows", "tab": "video", "type": MENU_SETTINGS.T_ENUM,
+			"label": "Lamp Shadows", "default": 1, "choices": ["Off", "1", "2", "4"],
+			"hint": "How many of those lamps (the nearest) cast shadows. Shadows cost "
+			+ "the most; the others stop at the floor."},
 		{"id": &"sun_cascades", "tab": "video", "type": MENU_SETTINGS.T_ENUM,
 			"label": "Sun Shadow Cascades", "default": 0, "choices": ["4 (Sharp)", "2 (Faster)"],
 			"hint": "How many slices the sun's shadow is drawn in. Two is faster; shadows past "

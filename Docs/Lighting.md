@@ -393,18 +393,25 @@ to cell. It reads flat. So the lamps nearest the camera, over every building
 light that lights the bricks: per pixel, fading, brighter on what faces it,
 with a shine. The grid stays as the fill, further off and round corners.
 
-- A one-way lamp (light bar, under-tile): a shadowed `SpotLight3D`, 70
-  degrees, 7 m. Its shadows stop it at the floor and the walls, as the grid
-  does. Godot redraws a spot's shadow only when something in its reach moves,
-  so a still room costs little after the first frame.
+- A one-way lamp (light bar, under-tile): a `SpotLight3D`, 70 degrees. The
+  nearest `near_shadowed` (default 1) cast shadows, 7 m, stopped by the floor
+  and walls as the grid is. The rest cast none: their reach is cut to 1.5
+  times the drop to the floor plus 0.6 m (`_reach`; a light fades to nothing
+  at its range, so cut at the floor it left the floor dark), short of the
+  storey below. Sideways they can reach dimly through a wall.
+- Cost (city `--light` pass, night, GPU median of 30 frames, another chat's
+  probe running): grid alone 7.30 ms; 4 lamps no shadows 7.88; 4 lamps 1
+  shadowed 8.12; 4 lamps all shadowed 8.91. Shadows are most of it.
 - An all-round lamp (Glow brick): an unshadowed `OmniLight3D`, 3 m. It would
   sit in its own brick's shadow, so it stays small instead.
 - How many: Options > Video > Lamp Lights (Off, 2, 4, 8; default 4),
-  `BrickGridLight.near_max`.
+  `BrickGridLight.near_max`; Lamp Shadows (Off, 1, 2, 4; default 1),
+  `near_shadowed`.
 - In the city the grid now keeps its lamps too (`use_layer` off hangs no
   per-building lights, only the near ones).
 - City `--light` pass: at night, a picture with the grid's lamps alone and
-  with 4 near lamps (`city_lamps_night_0`, `_4`), and their GPU times.
+  with 4 near lamps, none, 1 and 4 shadowed (`city_lamps_night_<lamps>_<shadowed>`),
+  and their GPU times.
 
 ## 7. SDFGI and the other GI
 
