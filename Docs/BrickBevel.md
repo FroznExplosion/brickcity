@@ -309,7 +309,10 @@ a mesh of the whole chunk.
 
 `BrickNear.enabled`, `radius`, `stud_radius`, `stud_bevel_radius`, `stud_round_radius` and
 `stud_card_radius` are
-static and can be set at run time. The city takes `-- --no-near` for a run without the tier.
+static and can be set at run time. Options > Video sets the distances (since 2026-11-08):
+**Bevelled Bricks** (`radius`), **Bevelled Studs**, **Real Studs** (round all the way out,
+`stud_round_radius` = `stud_radius`) and **Stud Cards**, kept in order by
+`BrickNear.set_stud_distances`; a headless run keeps the defaults (`DEFAULT_*`). The city takes `-- --no-near` for a run without the tier.
 
 The workshop does not use the tracker: it is a few hundred bricks an arm's length away, rebuilt
 whole on every edit, so every frame is chamfered always (`build_chunk_chamfer_mesh`) and its stud
@@ -410,6 +413,5 @@ work to trace.
 
 * **The terrain's studs** have two steps (bevelled on the tiles round the camera, plain to
   `STUD_RANGE`), not these three. The square stud is in `PieceMeshes` for it to use.
-* **A setting.** `BrickNear.radius` is a static; the options menu has no row for it.
 * **`build_mesh_internal`** (a masked group's mesh, per cell) has no chamfered form. Pieces are
   chunks and go through the bake.
