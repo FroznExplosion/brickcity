@@ -14,6 +14,8 @@ signal changed(id: StringName)
 
 ## Handed to every tool when it is taken up.
 var ctx: WkContext = null
+## The tool in hand when none is asked for (`use("")`): an editor's hand. "" for none.
+var default_id: StringName = &""
 
 var _tools := {}
 var _active: WkTool = null
@@ -42,10 +44,10 @@ func active_id() -> StringName:
 	return _active.id if _active != null else &""
 
 
-## Take up the tool with this id (none: "" or an id it does not have). The one in hand before
+## Take up the tool with this id ("": the default tool, or none; an id it does not have: none). The one in hand before
 ## is put down first. Taking up the one already in hand does nothing.
 func use(p_id: StringName) -> void:
-	var next: WkTool = _tools.get(p_id)
+	var next: WkTool = _tools.get(p_id if p_id != &"" else default_id)
 	if next == _active:
 		return
 	if _active != null:
