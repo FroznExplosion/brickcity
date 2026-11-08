@@ -156,3 +156,29 @@ func place_drag() -> void:
 
 func erase_at_cursor() -> void:
 	ws.wk_erase_at_cursor()
+
+
+# Measure, fill (the wand), move: the asset workshop's.
+
+func measure_point() -> Variant:
+	return ws.wk_measure_point()
+
+
+func measure_show(points: Array[Vector3]) -> void:
+	ws.wk_measure_show(points)
+
+
+func fill_at_cursor(width: int) -> int:
+	return ws.wk_fill_at_cursor(width)
+
+
+func move_grab() -> Variant:
+	return ws.wk_move_grab()
+
+
+func move_to(by: Vector3) -> void:
+	ws.wk_move_to(by)
+
+
+func move_drop(by: Vector3) -> void:
+	ws.wk_move_drop(by)
