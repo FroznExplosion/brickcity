@@ -581,3 +581,31 @@ not a faster grounding walk.
 
 Not measured: blasts (many bricks at once; the flood is the same, the local search grows
 with the cut) and `solve_structure`'s cascade on its own.
+
+## B9. Small pieces meshed at spawn, measured (2026-11-07) -- B3.3: not now
+
+Counted in `IslandManager` (`sync_meshed`, `sync_mesh_ms`, `sync_mesh_worst`,
+`queued_meshed`) and printed by `barrage_probe` beside the spawn profile and the blind-piece
+report. One run, headless, with four other chats' Godot runs going -- so the times are high
+and the upload to the renderer (a dummy headless) is not in them:
+
+- 43 small pieces meshed on the main thread at their spawn: **32 ms over the whole run,
+  0.75 ms each, the worst 3.4 ms**. 20 bigger pieces went to the worker.
+- Spawning took 108 ms all told, meshing 37 of it.
+- 19 pieces went blind, the worst for 4 ticks, mean 1.95; the biggest blind one was 2,671
+  bricks -- a worker-baked piece, which instancing small pieces would not change.
+
+**Conclusion: not worth building now.** Instancing would take away about 0.75 ms per small
+piece and spikes of up to ~3.4 ms, and nothing for the big pieces that go blind. Against
+that: a per-brick instance draws every face (no hidden-face removal, no merged chamfers, so
+the bevelled near look -- Docs/BrickBevel.md -- would need its own instance mesh), and every
+moving brick's transform has to reach the renderer each frame (instance buffer writes on
+the main thread, or a piece-matrix buffer and a new shader). The cheap fix if the spawn
+spikes ever show: a millisecond budget for the main-thread bakes per tick, past which a
+piece goes to the worker (and may be blind a tick or two, the trade-off SYNC_MESH_MAX_BLOCKS
+was made to avoid). Worth a windowed `--stress` with the editor closed first, which counts
+the real upload.
+
+That run also failed `barrage_probe`'s "throwing them is a small part of a blast" (5.71 ms
+the worst blast) -- crumb throwing, not touched by any of this, and the second failure of
+that timing check in five runs, both on a busy, hot machine.
