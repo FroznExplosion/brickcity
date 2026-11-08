@@ -186,3 +186,6 @@ times several-fold). Correctness probes and gates are fine with it open.
 - Never close the user's editor yourself.
 - Report numbers taken with other test runs going (other chats' Godot
   processes) as unreliable, and say so.
+- Same for a run short of RAM: `heat_sum.py` prints `LOW RAM` when free memory
+  fell under 200 MB. Paging then stalls a frame 350-520 ms wherever it is
+  (Docs/BrickBevel.md 6): the worst frame is not the game's, the mean still is.
