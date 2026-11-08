@@ -220,3 +220,28 @@ Also seen in the last run's ticks: the 118 ms "shed: spawns" tick was the 116 ms
 spawn mesh above (one event, not two). A shell piece's bricks "laid" 100 ms once for 11,863
 bricks, against 8-21 ms for 7,000-24,000 in the same run -- not the size; next time, time the
 `cut_record` kills apart from `_lay_runs` (BuildingRegistry.shell_piece_chunk).
+
+### 6.3 Small meshes uploaded in the tick, and renderer stalls (2026-11-08, worktree `C:\Users\lbaun\bc-stree`)
+
+Found from the destruction side (Docs/DestructionFirstPrinciples.md B9-B12). Windowed `--stress
+--buildings=200`, editor closed, nothing else running.
+
+- **Uploads under `THREAD_MESH_VERTS` were done in the tick.** The mesh queue's main-thread part
+  (`IslandManager.drain_ms`, new) was 410-478 ms a run; every item over 8 ms (`drain_slow`, new;
+  `--stress` prints them with `rebuild_split`: assembly / upload / apply) was a 28,880-vertex
+  staircase piece -- just under 30,000 -- whose `add_surface_from_arrays` took 8-37 ms (assembly
+  0.1 ms). The constant's note prices an upload at ~50 ns a vertex; windowed under a collapse it
+  was 300-1,300 ns. **Now `thread_mesh_verts` = 4,000** (A/B: `-- --stress --thread-verts=N`),
+  and a piece with nothing drawn is stood in while its upload runs (`IslandStandins`, a box per
+  brick from `BrickWorld.get_standin_buffers`). Main-thread mesh work ~314 ms against ~520-593,
+  the worst single item ~15 ms against 37-55.
+- **Some of it moved, not went:** spawns' own mesh time rose (103-115 -> 245 ms), consistent with
+  6.2 -- the buffers of worker-uploaded meshes are made at the next main-thread call into the
+  renderer, and a spawn is often that call.
+- **What is left is the renderer stalling, not size:** the two slow queue items left were 344 and
+  424 vertices, 9-12 ms each. A threshold cannot fix that; 6.2 option (c), the separate render
+  thread (or 3.1's renderer-off-main list), is the lever if these show in play.
+- Also measured and not done (DestructionFirstPrinciples B11): small pieces baked on the worker
+  instead of in the tick cost MORE (each ~0.8 ms saved at spawn, ~5.6 ms added to the queue's
+  main-thread part, when uploads were still in the tick at 30,000). Worth re-measuring now that
+  uploads go to a worker from 4,000 (`-- --stress --worker-small`).
