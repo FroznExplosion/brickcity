@@ -67,6 +67,11 @@ const LAMPS_MAX := 8
 ## would sit in its own brick's shadow), so it stays small. How many: the
 ## Video setting (BrickcityMenuHost), 0 for none.
 static var near_max := 4
+## Of those, how many (the nearest) cast shadows: a shadow is most of a near
+## lamp's cost. The rest are cut short at the floor (or ceiling) they shine
+## at, so they cannot light the storey past it; sideways they can reach
+## through a wall, dimly, at their cone's edge.
+static var near_shadowed := 1
 const NEAR_SPOT_ANGLE := 70.0
 const NEAR_SPOT_RANGE := 7.0
 const NEAR_OMNI_RANGE := 3.0
@@ -199,6 +204,26 @@ func step() -> void:
 		place_near()
 
 
+## From chunk-local `p` straight along `dir` (+1 up, -1 down): metres to
+## the first brick, times 1.5 and a bit (a light fades to nothing at its range,
+## so the floor needs it well past; the storey under is still out of reach),
+## at most `most`.
+func _reach(e: Entry, p: Vector3, dir: int, most: float) -> float:
+	var stud := BrickWorld.get_stud_metres()
+	var plate := BrickWorld.get_plate_metres()
+	var org := e.bricks.get_chunk_origin(e.chunk)
+	var cx := int(floor(p.x / stud))
+	var cz := int(floor(p.z / stud))
+	var y := int(floor(p.y / plate))
+	var steps := int(most / plate)
+	for k in range(1, steps):
+		var cy := y + k * dir
+		if e.bricks.block_at(e.chunk, org + Vector3i(cx, cy, cz)) >= 0:
+			var face := (cy + (1 if dir < 0 else 0)) * plate
+			return minf(absf(p.y - face) * 1.5 + 0.6, most)
+	return most
+
+
 ## Hang the near lamps' lights now (step() does, every NEAR_EVERY frames).
 func place_near() -> void:
 	var cam := (Engine.get_main_loop() as SceneTree).root.get_viewport().get_camera_3d()
@@ -238,7 +263,7 @@ func place_near() -> void:
 				s.spot_range = NEAR_SPOT_RANGE
 				s.spot_attenuation = 1.2
 				s.spot_angle_attenuation = 0.5
-				s.shadow_enabled = true
+				s.shadow_enabled = false
 				s.shadow_blur = 2.0
 				s.shadow_bias = 0.03
 				s.shadow_normal_bias = 1.0
@@ -265,6 +290,10 @@ func place_near() -> void:
 		if want_spot:
 			l.rotation = Vector3(-PI / 2.0 if dir < 0 else PI / 2.0, 0.0, 0.0)
 			l.position.y += 0.03 * dir
+			var sp := l as SpotLight3D
+			sp.shadow_enabled = i < near_shadowed
+			sp.spot_range = NEAR_SPOT_RANGE if sp.shadow_enabled \
+					else _reach(e, l.position, dir, NEAR_SPOT_RANGE)
 		l.light_color = g[3] / n
 		l.light_energy = NEAR_ENERGY * (g[4] / n) * minf(1.0 + 0.2 * (n - 1), 2.5)
 	near_count = picks.size()
