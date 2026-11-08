@@ -30,6 +30,9 @@ Version: see `VERSION`. Raise it with every change to this folder.
 | `services/wk_mirror.gd` | `WkMirror` — the mirror plane: on, across X or Z, where; a cell's and a direction's mirror image. |
 | `tools/wk_sketch_tool.gd` | `WkSketchTool` — Sketch: draws with the pen, asks the context where (`sketch_begin`, `sketch_point`) and hands the stroke over (`sketch_commit`). |
 | `tools/wk_place_tool.gd` | `WkPlaceTool` — the hand: click to place, hold and move for a run, RMB takes away; an editor's default tool. |
+| `tools/wk_measure_tool.gd` | `WkMeasureTool` — Measure: two clicks, the distance; asks `measure_point`, shows with `measure_show`. |
+| `tools/wk_fill_tool.gd` | `WkFillTool` — Fill (a wand): a click fills the patch under the cursor, `width` wide (`fill_at_cursor`). |
+| `tools/wk_move_tool.gd` | `WkMoveTool` — Move: press on something, drag it on the axis plane most square to the view, let go (`move_grab`, `move_to`, `move_drop`). |
 | `tools/wk_paint_tool.gd` | `WkPaintTool` — Paint: a stroke as one undo, an eyedropper, the brush's reach; asks `paint_begin`, `paint_at`, `paint_end`, `paint_hover`, `paint_pick`, `paint_step`. |
 | `ui/wk_rail.gd` | `WkRail` — the tool rail: icon + name + key buttons with a pop-up, a line for the tool in hand, action buttons, the tool's options; `restyle` takes the editor's panel box. |
 | `ui/wk_menu_bar.gd` | `WkMenuBar` — the menu bar: menus from rows (`[label, id, shortcut]`), merged by label, a title. |

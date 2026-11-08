@@ -25,6 +25,7 @@ func _initialize() -> void:
 	_grid_and_ghost()
 	_frame()
 	_place_tool()
+	_measure_fill_move()
 	print("wk_smoke: %d passed, %d failed" % [_pass, _fail])
 	quit(0 if _fail == 0 else 1)
 
@@ -521,6 +522,85 @@ func _place_tool() -> void:
 	hand.rmb_erases = false
 	_ok("unless told not to", not box.input(_click(MOUSE_BUTTON_RIGHT, true)))
 	_ok("MMB is not the hand's", not box.input(_click(MOUSE_BUTTON_MIDDLE, true)))
+
+
+func _measure_fill_move() -> void:
+	var ctx := _Ctx2.new()
+	var box := WkToolbox.new()
+	box.ctx = ctx
+	var m: WkMeasureTool = box.add(WkMeasureTool.new())
+	var f: WkFillTool = box.add(WkFillTool.new())
+	var mv: WkMoveTool = box.add(WkMoveTool.new())
+	box.use(&"measure")
+	ctx.point = Vector3(1, 0, 0)
+	box.input(_click(MOUSE_BUTTON_LEFT, true))
+	ctx.point = Vector3(4, 0, 0)
+	_ok("measure: two clicks, the distance", box.input(_click(MOUSE_BUTTON_LEFT, true))
+			and m.points.size() == 2 and is_equal_approx(m.distance(), 3.0) and ctx.shown == 2)
+	ctx.point = null
+	box.input(_click(MOUSE_BUTTON_LEFT, true))
+	_ok("a click on nothing changes nothing", m.points.size() == 2)
+	ctx.point = Vector3(9, 0, 0)
+	box.input(_click(MOUSE_BUTTON_LEFT, true))
+	_ok("a third starts again from it", m.points.size() == 1 and m.points[0] == Vector3(9, 0, 0))
+	_ok("its release is not the tool's (the hand's)", not box.input(_click(MOUSE_BUTTON_LEFT, false)))
+	box.use(&"fill")
+	_ok("putting measure down clears it", m.points.is_empty() and ctx.shown == 0)
+	f.width = -2
+	_ok("fill's width is never below 0", f.width == 0)
+	f.width = 3
+	_ok("fill: a click fills at the width", box.input(_click(MOUSE_BUTTON_LEFT, true)) and ctx.fills == [3])
+	_ok("and keeps its release", box.input(_click(MOUSE_BUTTON_LEFT, false)) and ctx.fills == [3])
+	box.use(&"move")
+	ctx.grab = null
+	box.input(_click(MOUSE_BUTTON_LEFT, true))
+	_ok("move: a press on nothing grabs nothing", not mv.dragging())
+	ctx.grab = Vector3(1, 0, 1)
+	box.input(_click(MOUSE_BUTTON_LEFT, true))
+	_ok("a press grabs (no camera: the floor plane)", mv.dragging() and mv.normal == Vector3.UP)
+	mv.follow([Vector3(3, 5, 1), Vector3.DOWN])
+	_ok("the cursor on the plane is how far it came", mv.by.is_equal_approx(Vector3(2, 0, 0))
+			and ctx.moved.back().is_equal_approx(Vector3(2, 0, 0)))
+	box.input(_click(MOUSE_BUTTON_LEFT, false))
+	_ok("let go puts it there", not mv.dragging() and ctx.dropped.size() == 1
+			and ctx.dropped[0].is_equal_approx(Vector3(2, 0, 0)))
+	box.input(_click(MOUSE_BUTTON_LEFT, true))
+	box.use(&"")
+	_ok("put down mid-drag: given up, back where it was", not mv.dragging() and ctx.dropped.size() == 1
+			and ctx.moved.back() == Vector3.ZERO)
+	_ok("the plane is the axis most square to the view",
+			WkMoveTool.axis_facing(Vector3(0.2, -0.9, 0.3)) == Vector3.DOWN
+			and WkMoveTool.axis_facing(Vector3(0.1, 0.2, -0.8)) == Vector3.FORWARD)
+
+
+## A pretend editor for Measure, Fill and Move.
+class _Ctx2:
+	extends WkContext
+	var point = null
+	var shown := -1
+	var fills := []
+	var grab = null
+	var moved := []
+	var dropped := []
+
+	func measure_point() -> Variant:
+		return point
+
+	func measure_show(points: Array[Vector3]) -> void:
+		shown = points.size()
+
+	func fill_at_cursor(width: int) -> int:
+		fills.append(width)
+		return width
+
+	func move_grab() -> Variant:
+		return grab
+
+	func move_to(by: Vector3) -> void:
+		moved.append(by)
+
+	func move_drop(by: Vector3) -> void:
+		dropped.append(by)
 
 
 ## A pretend editor for the tools.
