@@ -404,7 +404,15 @@ const MESH_BUDGET_MS := 3.0
 ## 62,000 vertices built here, 1-1.5 ms attached from a worker). High priority
 ## on the pool: a piece waiting for its mesh is invisible, a building band
 ## waiting for its new one is not (CityScene.BAND_THREAD_VERTS).
-const THREAD_MESH_VERTS := 30000
+##
+## **4,000, was 30,000** (Docs/DestructionFirstPrinciples.md B12): windowed,
+## under a collapse, the renderer took 8-37 ms for a 28,880-vertex staircase
+## flight uploaded here -- every slow item of the mesh queue in a --stress run,
+## 300-1,300 ns a vertex, not the 50 above -- and a piece waiting on its upload
+## is stood in now (IslandStandins), so the worker's tick costs nothing seen.
+## A var for the A/B: `-- --stress --thread-verts=N`.
+const THREAD_MESH_VERTS := 4000
+var thread_mesh_verts := THREAD_MESH_VERTS
 ## And how many vertices of those may be handed over in one tick. The worker
 ## packs a mesh's arrays, but the renderer makes its buffers on the main thread,
 ## at whatever next calls into it -- a node being made, a mesh being set -- about
@@ -2545,7 +2553,14 @@ func refresh_furniture(isl: BrickIsland) -> void:
 	FurnitureMesh.attach(world, isl.chunk, isl.mesh, _furniture)
 
 
+## What the last rebuild_mesh spent where, for the mesh queue's slow items:
+## [build_chunk_mesh ms, upload ms, _apply_mesh ms, vertices, the chunk's
+## blocks all told, its live ones, the path it took].
+var rebuild_split: Array = []
+
+
 func rebuild_mesh(isl: BrickIsland, force_full: bool = false, allow_sync: bool = false) -> void:
+	rebuild_split = [0.0, 0.0, 0.0, 0, 0, 0, "returned early"]
 	if isl.mesh == null:
 		return
 	# Its mesh is being built on a worker. Whatever this call wanted is done
@@ -2630,11 +2645,17 @@ func rebuild_mesh(isl: BrickIsland, force_full: bool = false, allow_sync: bool =
 	# Cut into sections (SLICE_VERTS, or a building's bands): built band by
 	# band, a few a tick, and swapped in whole.
 	if not allow_sync and world.get_chunk_sections(isl.chunk) > 1:
+		rebuild_split[6] = "slices"
 		_start_slices(isl)
 		return
+	var _r0 := Time.get_ticks_usec()
 	var arrays: Array = world.build_chunk_mesh(isl.chunk)
 	var ok := not arrays.is_empty() and mesh_arrays_ok(arrays, "island %d" % isl.chunk)
-	if ok and (arrays[Mesh.ARRAY_VERTEX] as PackedVector3Array).size() >= THREAD_MESH_VERTS:
+	var _r1 := Time.get_ticks_usec()
+	rebuild_split = [float(_r1 - _r0) / 1000.0, 0.0, 0.0,
+			(arrays[Mesh.ARRAY_VERTEX] as PackedVector3Array).size() if ok else 0,
+			world.get_block_count(isl.chunk), world.get_alive_block_count(isl.chunk), "worker upload"]
+	if ok and (arrays[Mesh.ARRAY_VERTEX] as PackedVector3Array).size() >= thread_mesh_verts:
 		# Big: uploaded on a worker, attached when it is done. The mesh it
 		# replaces goes on drawing until then.
 		if not _upload_ok((arrays[Mesh.ARRAY_VERTEX] as PackedVector3Array).size()):
@@ -2647,7 +2668,11 @@ func rebuild_mesh(isl: BrickIsland, force_full: bool = false, allow_sync: bool =
 	var mesh := ArrayMesh.new()
 	if ok:
 		mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
+	var _r2 := Time.get_ticks_usec()
 	_apply_mesh(isl, mesh, arrays)
+	rebuild_split[1] = float(_r2 - _r1) / 1000.0
+	rebuild_split[2] = float(Time.get_ticks_usec() - _r2) / 1000.0
+	rebuild_split[6] = "main"
 
 
 ## Far enough off to come up as the coarse stand-in (ISLAND_MESH_RANGE). A
@@ -2929,6 +2954,9 @@ func _submit_mesh_job(isl: BrickIsland, arrays: Array, coarse := false) -> void:
 		UploadLedger.note("stand-in" if coarse else "piece", UploadLedger.verts_of(arrays))
 	isl.mesh_job = JOB_NOT_STARTED
 	_mesh_jobs.append([isl, JOB_NOT_STARTED, holder, arrays, work, coarse])
+	# A piece with nothing drawn yet is stood in while the worker uploads.
+	if not coarse:
+		standins.cover(isl)
 
 
 ## Start the mesh jobs submitted this tick. The tick's own last act, or the
@@ -5342,12 +5370,19 @@ func _drain_mesh_queue() -> void:
 
 ## The slowest single mesh the queue made, for the profile: [ms, bricks, kind].
 var mesh_drain_worst: Array = [0.0, 0, ""]
+## The queue's items over DRAIN_SLOW_MS, the first DRAIN_SLOW_KEEP of them:
+## [ms, kind, rebuild_split] -- where their time went.
+const DRAIN_SLOW_MS := 8.0
+const DRAIN_SLOW_KEEP := 12
+var drain_slow: Array = []
 
 
 func _note_mesh_drain(isl: BrickIsland, t0: int, kind: String) -> void:
 	var ms := float(Time.get_ticks_usec() - t0) / 1000.0
 	drain_ms += ms
 	drain_count += 1
+	if ms > DRAIN_SLOW_MS and drain_slow.size() < DRAIN_SLOW_KEEP:
+		drain_slow.append([snappedf(ms, 0.1), kind.left(40), rebuild_split.duplicate()])
 	if ms > float(mesh_drain_worst[0]):
 		mesh_drain_worst = [ms, world.get_alive_block_count(isl.chunk) if isl.is_valid() else -1, kind]
 

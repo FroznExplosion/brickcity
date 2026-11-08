@@ -684,3 +684,35 @@ What it found that matters more: **the mesh queue's main-thread part is the expe
 Kept from this step: a piece whose mesh goes to the worker is stood in at its spawn
 (`IslandStandins.cover`), not at the next frame's update, so nothing processed after the
 manager can leave it blind for a frame. `standin_probe` 15.
+
+## B12. The mesh queue's slow items: uploads on the main thread (2026-11-08)
+
+`rebuild_mesh` now records where each call's time went (`rebuild_split`: the C++ assembly,
+the upload, `_apply_mesh`, vertices, blocks) and the mesh queue keeps its items over 8 ms
+(`drain_slow`, printed by `--stress`). One windowed `--stress`, editor closed: **all twelve
+slow items were the same kind of piece -- 10 blocks, 28,880 vertices (an authored part, a
+staircase flight) -- and nearly all their time was the upload**: 8-37 ms in
+`add_surface_from_arrays` on the main thread, the assembly 0.1 ms. 28,880 is just under
+`THREAD_MESH_VERTS` (30,000), past which a mesh is uploaded on a worker; the constant's own
+note costs an upload at ~50 ns a vertex (1.4 ms here), but windowed under a collapse it was
+300-1,300 ns.
+
+**Changed: worker uploads from 4,000 vertices** (`thread_mesh_verts`, a var for the A/B:
+`-- --stress --thread-verts=N`), and a piece with nothing drawn yet is stood in while its
+upload runs (`_submit_mesh_job` -> `IslandStandins.cover`).
+
+| windowed `--stress` | 4,000 | 30,000 (two runs) |
+|---|---|---|
+| meshed at spawn | 287, 245 ms (worst 15.5) | 277-278, 103-115 ms (worst 2.9-4.1) |
+| the queue's main-thread part | 133, **61 ms** (worst 11.7) | 137-138, 410-478 ms (worst 37-55) |
+| main-thread mesh work, all told | **~314 ms** | ~520-593 ms |
+| mean frame | 28.6 ms | 28.8-31.7 ms |
+
+About 40 % less main-thread mesh work and the worst single item 15 ms instead of 37-55. Part
+of the cost moved rather than went: the renderer creates a worker-uploaded mesh's buffers at
+the next main-thread call into it, which lands in whatever calls next (here, spawns). And the
+two slow items left were tiny -- 344 and 424 vertices, 9-12 ms each -- so what is left is the
+renderer stalling the main thread, not the size of what is sent. That is Docs/WhereWorkRuns.md
+3.1's renderer-off-main work, not something a threshold fixes.
+
+That run was held back once (a sample at 99 C) -- the machine, nothing else running.

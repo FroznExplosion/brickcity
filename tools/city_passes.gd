@@ -6198,6 +6198,12 @@ func _run_stress_pass() -> void:
 	# measured worse), for the A/B.
 	if "--worker-small" in OS.get_cmdline_user_args():
 		city.islands.small_meshes_on_worker = true
+	# -- --thread-verts=N: meshes of N vertices or more uploaded on a worker
+	# (IslandManager.thread_mesh_verts; 4,000, was 30,000), for the A/B.
+	for a in OS.get_cmdline_user_args():
+		if a.begins_with("--thread-verts="):
+			city.islands.thread_mesh_verts = int(a.split("=", true, 1)[1])
+	print("[stress] meshes uploaded on a worker from %d vertices" % city.islands.thread_mesh_verts)
 	city.camera.position = Vector3(0.0, 46.0, 96.0)
 	city.camera.rotation = Vector3(-0.42, 0.0, 0.0)
 	await _frames(10)
@@ -6353,6 +6359,10 @@ func _run_stress_pass() -> void:
 	print("[stress] invisible pieces: %d went blind, worst %d tick(s), mean %.1f, biggest %d bricks" % [
 			isl.blind_count, isl.blind_worst, isl.blind_mean, isl.meshless_worst_blocks])
 	print("[stress] %s" % city.islands.standins.census_line())
+	for d in city.islands.drain_slow:
+		print("[stress] slow queued mesh %.1f ms (%s): build %.1f, upload %.1f, apply %.1f; %d vertices; %d blocks, %d live; %s" % [
+				float(d[0]), d[1], float(d[2][0]), float(d[2][1]), float(d[2][2]), int(d[2][3]),
+				int(d[2][4]), int(d[2][5]), d[2][6]])
 	print("[stress] piece meshes at spawn: %d on this thread (%.1f ms, worst %.2f), %d sent to a worker; the queue's main-thread part %d (%.1f ms), the slowest %s; small pieces on the worker: %s" % [
 			city.islands.sync_meshed, city.islands.sync_mesh_ms, city.islands.sync_mesh_worst,
 			city.islands.queued_meshed, city.islands.drain_count, city.islands.drain_ms,

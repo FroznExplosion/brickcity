@@ -47,7 +47,8 @@ func _init(h: Host) -> void:
 
 
 ## Once a frame (IslandManager._process): the pieces waiting on a mesh, and the
-## ones already stood in for.
+## ones already stood in for (which includes any covered at a spawn or an
+## upload, cover(), until their mesh is up).
 func update() -> void:
 	if not enabled:
 		if not _by_isl.is_empty():
