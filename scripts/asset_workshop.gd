@@ -92,8 +92,21 @@ var photo_sel := -1
 ## (The mirror -- mirror_on, mirror_z: where the plane is, in studs across (Z); half a stud
 ## past a whole one is the middle of a stud -- is the building workshop's: workshop.gd.)
 var view := 0
-var measure_on := false
-var measure_points: Array[Vector3] = []
+## Measure (Alt M) is the kit's WkMeasureTool in the toolbox; these read and set it.
+var measure_on: bool:
+	get:
+		return toolbox.active_id() == &"measure"
+	set(v):
+		set_measure(v)
+var measure_points: Array[Vector3]:
+	get:
+		return _measure_tool.points
+var _measure_tool := WkMeasureTool.new()
+## The wand (F4) and the part mover (Alt G): the kit's WkFillTool and WkMoveTool.
+var _fill_tool := WkFillTool.new()
+var _move_tool := WkMoveTool.new()
+## The asset workshop's tools that are kit tools: its `tool` name -> the toolbox's id.
+const KIT_TOOLS := {"sketch": &"sketch", "wand": &"fill", "move": &"move", "shape": &"shape", "select": &"select"}
 ## Points clicked while calibrating the selected photo; calibrating while not null.
 var calibrating = null
 
@@ -154,7 +167,17 @@ var outlines := 0
 var guides: Array = []
 var _drag_from := Vector3i.ZERO
 var _drag_to := Vector3i.ZERO
-var _dragging := false
+## A Shapes box or a select box is being dragged: the kit's Shapes tool (one drag fills it)
+## and Select tool (a box); setting it false drops either.
+var _dragging: bool:
+	get:
+		return _shape_tool.dragging() or _select_tool.boxing()
+	set(v):
+		if not v:
+			_shape_tool.drag = {}
+			_select_tool.cancel()
+var _shape_tool := WkShapeTool.new()
+var _select_tool := WkSelectTool.new()
 var _tool_lines: MeshInstance3D
 var _outline_lines: MeshInstance3D
 var _outlines_dirty := false
@@ -243,8 +266,12 @@ var _sketch_cache := {}
 var smooth_parts := PackedStringArray()
 ## Which end of the build is the muzzle: "-x" (the low end) or "+x".
 var muzzle_end := "-x"
-## How many studs across the wand fills.
-var wand_width := 3
+## How many studs across the wand fills (the kit Fill tool's width).
+var wand_width: int:
+	get:
+		return _fill_tool.width
+	set(v):
+		_fill_tool.width = v
 ## Where Blender is, to run the part kit. BRICKCITY_BLENDER overrides it.
 var blender_path := "C:/Program Files/Blender Foundation/Blender 5.2/blender.exe"
 var _export_png := ""
@@ -308,6 +335,9 @@ func _ready() -> void:
 	super()
 	cam_ctl.ctx = wk_ctx   # no setup(): this workshop's camera keeps its own mouse ways
 	toolbox.add(_sketch_tool)
+	_select_tool.mode = WkSelectTool.Mode.BOX
+	for t in [_measure_tool, _fill_tool, _move_tool, _shape_tool, _select_tool]:
+		toolbox.add(t)
 	# What is made here is a gun (or a mech): File > Save, Save As and Open use their
 	# library (user://guns/), not the buildings'. F5 has its own slot, not the workshop's.
 	_save_path = ASSET_QUICK_SAVE
@@ -967,20 +997,66 @@ func _measure_brick(from: Vector3, dir: Vector3) -> Variant:
 
 
 func set_measure(on: bool) -> void:
-	measure_on = on
-	measure_points.clear()
-	_draw_measure()
+	if on:
+		toolbox.use(&"measure")
+	elif toolbox.active_id() == &"measure":
+		toolbox.use(&"")
+	_measure_tool.clear()
 
 
-func _measure_click() -> void:
+# The kit's Measure, Fill and Move tools ask these (BrickWorkshopContext).
+
+func wk_measure_point() -> Variant:
 	var ray := _mouse_ray()
-	var p = measure_point(ray[0], ray[1])
-	if p == null:
+	return measure_point(ray[0], ray[1])
+
+
+func wk_measure_show(_points: Array[Vector3]) -> void:
+	if _measure_line != null:
+		_draw_measure()
+
+
+## The wand: the patch of a shown photo's colour under the click.
+func wk_fill_at_cursor(width: int) -> int:
+	var ray := _mouse_ray()
+	for i in photos.size():
+		var hit = ray_on_photo(i, ray[0], ray[1])
+		if hit != null and bool(photos[i].shown):
+			return wand_fill(i, hit, width)
+	return 0
+
+
+## Move: press on a part of this chunk; it is the part selected, and what is dragged.
+func wk_move_grab() -> Variant:
+	var ray := _mouse_ray()
+	var hit := _first_hit(ray[0], ray[1])
+	if hit.is_empty() or hit.frame != chunk:
+		return null
+	var rid := _recipe_id_at(0, hit.block)
+	if rid < 0:
+		return null
+	select_part(part_of[rid] if rid < part_of.size() else part_sel)
+	_move = {"part": part_names[part_sel], "by": Vector3i.ZERO}
+	return hit.point
+
+
+func wk_move_to(by: Vector3) -> void:
+	if not _move.is_empty():
+		_move.by = _move_cells(by)
+
+
+func wk_move_drop(by: Vector3) -> void:
+	if _move.is_empty():
 		return
-	if measure_points.size() >= 2:
-		measure_points.clear()
-	measure_points.append(p)
-	_draw_measure()
+	var part := String(_move.part)
+	_move = {}
+	move_part(part, _move_cells(by))
+
+
+## A drag in metres as whole cells: studs across, plates up.
+static func _move_cells(d: Vector3) -> Vector3i:
+	return Vector3i(int(round(d.x / BrickPalette.STUD_M)), int(round(d.y / BrickPalette.PLATE_M)),
+			int(round(d.z / BrickPalette.STUD_M)))
 
 
 func _draw_measure() -> void:
@@ -1159,35 +1235,18 @@ func _unhandled_input(e: InputEvent) -> void:
 		get_viewport().set_input_as_handled()
 		return
 	if _gizmo_input(e) or _shape_brush_input(e) or _photo_input(e) or _zoom_input(e) or _sketch_input(e) or _stud_input(e) \
-			or _move_input(e):
+			or _kit_input(e, [&"move"]):
 		get_viewport().set_input_as_handled()
 		return
-	if e is InputEventMouseButton and e.pressed and e.button_index == MOUSE_BUTTON_LEFT \
-			and (calibrating != null or measure_on):
-		if calibrating != null:
-			_calibrate_click()
-		else:
-			_measure_click()
+	if e is InputEventMouseButton and e.pressed and e.button_index == MOUSE_BUTTON_LEFT and calibrating != null:
+		_calibrate_click()
 		get_viewport().set_input_as_handled()
 		return
-	if e is InputEventMouseButton and e.button_index == MOUSE_BUTTON_LEFT and tool == "wand":
-		if e.pressed:
-			var ray := _mouse_ray()
-			for i in photos.size():
-				var hit = ray_on_photo(i, ray[0], ray[1])
-				if hit != null and bool(photos[i].shown):
-					wand_fill(i, hit, wand_width)
-					break
+	if _kit_input(e, [&"measure", &"fill"]):
 		get_viewport().set_input_as_handled()
 		return
-	if e is InputEventMouseButton and e.button_index == MOUSE_BUTTON_LEFT and tool in ["shape", "select"]:
-		if e.pressed:
-			_drag_from = _cell
-			_drag_to = _cell
-			_dragging = true
-		elif _dragging:
-			_dragging = false
-			_finish_drag()
+	if tool in ["shape", "select"] and e is InputEventMouseButton and e.button_index == MOUSE_BUTTON_LEFT:
+		_kit_input(e, [&"shape", &"select"])
 		get_viewport().set_input_as_handled()
 		return
 	if e is InputEventKey and e.pressed and not e.echo and not e.ctrl_pressed and e.alt_pressed:
@@ -1253,6 +1312,11 @@ func _unhandled_input(e: InputEvent) -> void:
 	super._unhandled_input(e)
 
 
+## Hand an event to the kit tool in hand, if it is one of `ids`. True if it used it.
+func _kit_input(e: InputEvent, ids: Array) -> bool:
+	return toolbox.active_id() in ids and toolbox.input(e)
+
+
 func _process(dt: float) -> void:
 	super._process(dt)
 	if _ui != null:
@@ -1268,8 +1332,8 @@ func _process(dt: float) -> void:
 	_stud_ghost_process()
 	_explode_process()
 	_rail_process()
-	if _dragging:
-		_drag_to = _cell
+	if toolbox.active_id() in [&"shape", &"select"]:
+		toolbox.process(dt)   # a box being dragged follows the cursor
 	_draw_tool()
 	if _outlines_dirty:
 		_draw_outlines()
@@ -2044,35 +2108,16 @@ func _after_edit() -> void:
 		_ensure_start_brick.call_deferred()
 
 
+## (An RMB delete is an edit of its own -- `_push_delete`, undo lays it back -- in both
+## workshops: workshop.gd.)
 func _delete_ray(from: Vector3, dir: Vector3) -> bool:
 	var hit := _first_hit(from, dir)
-	var took = null
 	if not hit.is_empty():
 		_removing = _recipe_id_at(asm.frames.find(hit.frame), hit.block)
-		if _removing >= 0:
-			took = _brick_info(_removing)
 	var done := super._delete_ray(from, dir)
 	if not done:
 		_removing = -1
-	elif took != null:
-		# The workshop forgets a deleted brick's own edit; this puts the delete in as an
-		# edit of its own, so Z can lay it back.
-		_push_delete(took)
 	return done
-
-
-## An RMB delete as an edit: undo lays the brick back (on the end of the build), redo takes
-## it up again.
-func _push_delete(took: Dictionary) -> void:
-	undo_stack.push(WkCommand.make(&"delete", took, _undo_delete, _redo_delete))
-
-
-func _undo_delete(c: WkCommand) -> bool:
-	return _relay(c.data)
-
-
-func _redo_delete(c: WkCommand) -> bool:
-	return remove_brick(c.data.arch, c.data.cell)
 
 
 ## A brick as redo lays it again: with the part it belongs to.
@@ -2104,7 +2149,7 @@ func _brick_info(i: int) -> Dictionary:
 
 
 ## Take a brick up as RMB would, found by part and cell. True if it went.
-func remove_brick(arch: String, cell: Vector3i) -> bool:
+func remove_brick(arch: String, cell: Vector3i, _af: int = 0) -> bool:
 	var i := find_brick(arch, cell)
 	return i >= 0 and take_brick(i)
 
@@ -2552,14 +2597,70 @@ func set_tool(t: String) -> void:
 	if t == "" :
 		selection.clear()
 	_sketch.clear()
-	if t == "sketch":
-		toolbox.use(&"sketch")
-	elif toolbox.active_id() == &"sketch":
+	if KIT_TOOLS.has(t):
+		toolbox.use(KIT_TOOLS[t])
+	elif toolbox.active_id() in KIT_TOOLS.values():
 		toolbox.use(&"")
 	_sketch_box.visible = t == "sketch"
 	if t != "" and _painting:
 		_set_painting(false)
 	_outlines_dirty = true
+
+
+# The kit's Shapes tool (one drag: a box, ball, cylinder or wedge, filled) and Select tool (a
+# box) ask these (BrickWorkshopContext -> _sketch_host(), this workshop).
+
+func wk_shape_begin(_button: int) -> Dictionary:
+	_drag_from = _cell
+	_drag_to = _cell
+	return {"a": _cell}
+
+
+func wk_shape_base(_d: Dictionary) -> void:
+	_drag_to = _cell
+
+
+func wk_shape_base_done(_d: Dictionary) -> void:
+	pass
+
+
+func wk_shape_height(_d: Dictionary) -> void:
+	pass
+
+
+func wk_shape_typed(_d: Dictionary, _typed: String) -> void:
+	pass
+
+
+func wk_shape_release_commits(_d: Dictionary) -> bool:
+	return false
+
+
+func wk_shape_commit(_d: Dictionary) -> Variant:
+	_finish_drag()
+	return null
+
+
+func wk_shape_cancel() -> void:
+	pass
+
+
+func wk_select_at_cursor() -> void:
+	pass
+
+
+func wk_select_box_begin() -> bool:
+	_drag_from = _cell
+	_drag_to = _cell
+	return true
+
+
+func wk_select_box_drag() -> void:
+	_drag_to = _cell
+
+
+func wk_select_box_end() -> void:
+	_finish_drag()
 
 
 func _finish_drag() -> void:
@@ -7377,7 +7478,7 @@ var _display := {}           # part -> {mesh, pick (TriangleMesh), xform, offset
 var _display_dirty := true
 var _offsets := {}           # part -> where it is drawn, exploded (metres)
 var _ray_part := ""          # the part the last mouse ray was taken into
-var _move := {}              # a part being dragged: {part, from (plane point), normal, by}
+var _move := {}              # a part being dragged (the kit's Move tool): {part, by (cells)}
 
 
 func set_exploded(on: bool) -> void:
@@ -8319,42 +8420,6 @@ static func _shift_entry(e: Variant, du: float, dv: float) -> Variant:
 			out.brush = (out.brush as Array).map(func(q: Array) -> Array: return [float(q[0]) + du, float(q[1]) + dv])
 		return out
 	return (e as Array).map(func(q: Array) -> Array: return [float(q[0]) + du, float(q[1]) + dv])
-
-
-## The move tool: press on a part and drag it across the view's plane; let go to put it
-## there. Exploded, it moves where it is drawn and where it belongs together.
-func _move_input(e: InputEvent) -> bool:
-	if tool != "move":
-		return false
-	if e is InputEventMouseButton and e.button_index == MOUSE_BUTTON_LEFT:
-		if e.pressed:
-			var ray := _mouse_ray()
-			var hit := _first_hit(ray[0], ray[1])
-			if hit.is_empty() or hit.frame != chunk:
-				return true
-			var rid := _recipe_id_at(0, hit.block)
-			if rid < 0:
-				return true
-			var n := -(_camera.global_transform.basis.z)
-			var ax := n.abs()
-			var normal := Vector3(signf(n.x), 0, 0) if ax.x >= ax.y and ax.x >= ax.z else (
-					Vector3(0, signf(n.y), 0) if ax.y >= ax.z else Vector3(0, 0, signf(n.z)))
-			select_part(part_of[rid] if rid < part_of.size() else part_sel)
-			_move = {"part": part_names[part_sel], "from": hit.point, "normal": normal, "by": Vector3i.ZERO}
-		elif not _move.is_empty():
-			move_part(String(_move.part), _move.by)
-			_move = {}
-		return true
-	if e is InputEventMouseMotion and not _move.is_empty():
-		var ray := _mouse_ray()
-		var pl := Plane(_move.normal, _move.from)
-		var at = pl.intersects_ray(ray[0], ray[1])
-		if at != null:
-			var d: Vector3 = at - _move.from
-			_move.by = Vector3i(int(round(d.x / BrickPalette.STUD_M)), int(round(d.y / BrickPalette.PLATE_M)),
-					int(round(d.z / BrickPalette.STUD_M)))
-		return true
-	return false
 
 
 # ---------------------------------------------------------------------------

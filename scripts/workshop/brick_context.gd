@@ -156,3 +156,80 @@ func place_drag() -> void:
 
 func erase_at_cursor() -> void:
 	ws.wk_erase_at_cursor()
+
+
+# Measure, fill (the wand), move: the asset workshop's.
+
+func measure_point() -> Variant:
+	return ws.wk_measure_point()
+
+
+func measure_show(points: Array[Vector3]) -> void:
+	ws.wk_measure_show(points)
+
+
+func fill_at_cursor(width: int) -> int:
+	return ws.wk_fill_at_cursor(width)
+
+
+func move_grab() -> Variant:
+	return ws.wk_move_grab()
+
+
+func move_to(by: Vector3) -> void:
+	ws.wk_move_to(by)
+
+
+func move_drop(by: Vector3) -> void:
+	ws.wk_move_drop(by)
+
+
+# Shapes and Select: the building workshop's tools (kept shapes, cuts, push-pull) or the asset
+# workshop itself (a box, a ball, a wedge filled; a box select) -- the same host as a sketch.
+
+func shape_begin(button: int) -> Dictionary:
+	return ws._sketch_host().wk_shape_begin(button)
+
+
+func shape_base(drag: Dictionary) -> void:
+	ws._sketch_host().wk_shape_base(drag)
+
+
+func shape_base_done(drag: Dictionary) -> void:
+	ws._sketch_host().wk_shape_base_done(drag)
+
+
+func shape_height(drag: Dictionary) -> void:
+	ws._sketch_host().wk_shape_height(drag)
+
+
+func shape_typed(drag: Dictionary, typed: String) -> void:
+	ws._sketch_host().wk_shape_typed(drag, typed)
+
+
+func shape_release_commits(drag: Dictionary) -> bool:
+	return ws._sketch_host().wk_shape_release_commits(drag)
+
+
+func shape_commit(drag: Dictionary) -> Variant:
+	return ws._sketch_host().wk_shape_commit(drag)
+
+
+func shape_cancel() -> void:
+	ws._sketch_host().wk_shape_cancel()
+
+
+func select_at_cursor() -> void:
+	ws._sketch_host().wk_select_at_cursor()
+
+
+func select_box_begin() -> bool:
+	return ws._sketch_host().wk_select_box_begin()
+
+
+func select_box_drag() -> void:
+	ws._sketch_host().wk_select_box_drag()
+
+
+func select_box_end() -> void:
+	ws._sketch_host().wk_select_box_end()

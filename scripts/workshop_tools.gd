@@ -98,7 +98,16 @@ var bricks_button: Button
 var _fly_open := true
 ## The numbers beside the cursor, and a height being typed while pulling.
 var _tag: Label
-var typed := ""
+## (A height being typed is the kit Shapes tool's: `shape_tool.typed`.)
+var typed: String:
+	get:
+		return shape_tool.typed
+	set(v):
+		shape_tool.typed = v
+## Draw, Cut and Select's push-pull draw with the kit's Shapes tool (outline, then height);
+## Select picks with the kit's Select tool (a click).
+var shape_tool := WkShapeTool.new()
+var select_tool := WkSelectTool.new()
 var _hand_row := {}
 var _hand_box: VBoxContainer
 var _last_hand := "place"
@@ -203,7 +212,12 @@ var _bricks_mi: MeshInstance3D
 var _bim: ImmediateMesh
 
 ## A drag under way: {button, lie, at, a, b, depth} in the plane's own cells; empty if none.
-var _drag := {}
+## It is the kit Shapes tool's gesture (`shape_tool.drag`); this workshop fills it in.
+var _drag: Dictionary:
+	get:
+		return shape_tool.drag
+	set(v):
+		shape_tool.drag = v
 ## The kept shape picked with Select: its id, or -1.
 var selected := -1
 ## "part|x|y|z" -> shape id, for the bricks of kept shapes; rebuilt when stale.
@@ -273,6 +287,9 @@ func setup(workshop, layer: CanvasLayer) -> void:
 	ws = workshop
 	sketch.rmb_cancels = true   # RMB outside a stroke is the workshop's own (it takes a brick up)
 	ws.toolbox.add(sketch)
+	shape_tool.mode = WkShapeTool.Mode.OUTLINE_HEIGHT   # draw the outline, then pull its height
+	ws.toolbox.add(shape_tool)
+	ws.toolbox.add(select_tool)
 	rail = WkRail.new(210.0, true)
 	rail.name = "ToolRail"
 	ws.wk_ctx.style_ui(rail)          # the game's look (GameUI, MenuTheme), through the kit's seam
@@ -404,15 +421,28 @@ func owner_of(part: String, cell: Vector3i) -> int:
 
 
 ## A kept shape's brick taken up by hand (RMB): it is no longer the shape's until the shape
-## is laid again.
-func forget_brick(part: String, cell: Vector3i) -> void:
+## is laid again. Returns [the shape's id, its entries taken], for `own_brick`; [] if none.
+func forget_brick(part: String, cell: Vector3i) -> Array:
 	var id := owner_of(part, cell)
 	var i := _index_of(id)
 	if i < 0:
+		return []
+	var sh: Dictionary = shapes()[i].duplicate(true)
+	var mine := func(b: Array) -> bool: return String(b[0]) == part and BuildRecipe.cell_from(b[1]) == cell
+	var taken := (sh.bricks as Array).filter(mine)
+	sh.bricks = (sh.bricks as Array).filter(func(b: Array) -> bool: return not mine.call(b))
+	shapes()[i] = sh
+	_owner_dirty = true
+	return [id, taken]
+
+
+## A brick `forget_brick` took from shape `id` is back (an RMB undone): the shape's again.
+func own_brick(id: int, entries: Array) -> void:
+	var i := _index_of(id)
+	if i < 0 or entries.is_empty():
 		return
 	var sh: Dictionary = shapes()[i].duplicate(true)
-	sh.bricks = (sh.bricks as Array).filter(func(b: Array) -> bool:
-		return not (String(b[0]) == part and BuildRecipe.cell_from(b[1]) == cell))
+	sh.bricks = (sh.bricks as Array) + entries
 	shapes()[i] = sh
 	_owner_dirty = true
 
@@ -2018,9 +2048,13 @@ func input(e: InputEvent) -> bool:
 		_fly_open = false
 	if e is InputEventMouseButton and rail.has_mouse():
 		return true
-	if e is InputEventMouseButton and _drag.get("phase", "") == "height" \
-			and e.button_index in [MOUSE_BUTTON_LEFT, MOUSE_BUTTON_RIGHT]:
-		return _make_input(e)
+	# A shape being drawn (Draw, Cut, a push-pull): its height's clicks and its keys (a typed
+	# height, Enter, Esc) are the kit Shapes tool's, whichever tool is in hand.
+	if not _drag.is_empty() and (e is InputEventKey or (e is InputEventMouseButton
+			and _drag.get("phase", "") == "height")) and shape_tool.input(e):
+		if e is InputEventKey:
+			ws.get_viewport().set_input_as_handled()
+		return true
 	var pen_on: bool = (tool == "draw" and pen_outline()) or (tool == "cut" and cut_pen())
 	if pen_on:
 		ws.toolbox.use(&"sketch")
@@ -2029,8 +2063,6 @@ func input(e: InputEvent) -> bool:
 	if pen_on and _drag.is_empty() and ws.toolbox.input(e):
 		return true
 	if e is InputEventKey and e.pressed and not e.echo and not e.ctrl_pressed:
-		if _drag.get("phase", "") == "height" and _typed_key(e):
-			return true
 		if e.alt_pressed:
 			if e.keycode == KEY_D:
 				pick("place" if tool == "draw" else "draw")
@@ -2344,57 +2376,83 @@ func _plane_at_ghost(want: String) -> Dictionary:
 ## the cursor up, and a click places it. Right-click (or Esc) cancels. A Floor clicked
 ## without a drag fills the walls round the click. Shapes drawn with RMB, or with "cuts them
 ## out", cut instead.
+## Draw and Cut's mouse: the kit Shapes tool's gesture (press, drag the base, let go; the
+## height; click), with this workshop's answers below.
 func _make_input(e: InputEventMouseButton) -> bool:
-	if _drag.get("phase", "") == "height":
-		# Push-pull is a drag: letting go lays it.
-		if not e.pressed and e.button_index == MOUSE_BUTTON_LEFT and String(_drag.get("tool", "")) in ["pull", "move"]:
-			commit_pending()
-		elif e.pressed:
-			if e.button_index == MOUSE_BUTTON_LEFT:
-				commit_pending()
-			else:
-				cancel()
-				say("")
-		return true
-	if e.pressed:
-		if not _drag.is_empty():
-			return true
-		if ws._frame != 0:
-			say("Shapes go on the upright grid: aim at a brick top or the floor.")
-			return true
-		# RMB outside a drawing is the workshop's own: it takes a brick away.
-		if e.button_index == MOUSE_BUTTON_RIGHT:
-			return false
-		var route := _route()
-		var cutting: bool = tool == "cut" or cut_mode
-		# On a face: a cut goes in from it; a solid, on a wall's side, comes out of it.
-		var face := {}
-		if cutting or (route == "shape" and makes == "solid" and lie == "flat"):
-			face = face_under(_ray()[0], _ray()[1])
-		if tool == "cut" and face.is_empty():
-			say("Press on a wall or a floor of the build.")
-			return true
-		if not face.is_empty() and (cutting or String(face.lie) != "flat"):
-			_begin_on_face(face, cutting, e.button_index)
-			return true
-		var pl := _plane_at_ghost(lie if makes == "solid" else "flat")
-		var a: Vector2i = pl.a
-		if route == "walls":
-			a = _wall_snap(a, int(pl.at))
-		var k := kind
-		if route == "walls" and outline == "line":
-			k = "polyline"
-		_drag = {"phase": "base", "tool": route, "button": e.button_index, "lie": pl.lie, "at": pl.at,
-				"a": a, "b": a, "kind": k, "cut": cutting}
-		say("Drag it, then let go." if route != "floor" else "Drag it, or let go here to fill the walls round it.")
-		return true
-	if _drag.is_empty() or e.button_index != int(_drag.get("button", -1)):
-		return true
+	return shape_tool.input(e)
+
+
+# The kit Shapes tool asks these (BrickWorkshopContext -> ws._sketch_host()).
+
+## A press with nothing drawn: the drag of a shape, a wall, a floor or a cut, from where the
+## cursor is; {} if there is nothing to draw on.
+func wk_shape_begin(button: int) -> Dictionary:
+	if ws._frame != 0:
+		say("Shapes go on the upright grid: aim at a brick top or the floor.")
+		return {}
+	var route := _route()
+	var cutting: bool = tool == "cut" or cut_mode
+	# On a face: a cut goes in from it; a solid, on a wall's side, comes out of it.
+	var face := {}
+	if cutting or (route == "shape" and makes == "solid" and lie == "flat"):
+		face = face_under(_ray()[0], _ray()[1])
+	if tool == "cut" and face.is_empty():
+		say("Press on a wall or a floor of the build.")
+		return {}
+	if not face.is_empty() and (cutting or String(face.lie) != "flat"):
+		_begin_on_face(face, cutting, button)
+		return _drag
+	var pl := _plane_at_ghost(lie if makes == "solid" else "flat")
+	var a: Vector2i = pl.a
+	if route == "walls":
+		a = _wall_snap(a, int(pl.at))
+	var k := kind
+	if route == "walls" and outline == "line":
+		k = "polyline"
+	_drag = {"phase": "base", "tool": route, "button": button, "lie": pl.lie, "at": pl.at,
+			"a": a, "b": a, "kind": k, "cut": cutting}
+	say("Drag it, then let go." if route != "floor" else "Drag it, or let go here to fill the walls round it.")
+	return _drag
+
+
+## The base is let go: one more outline of a plan, or on to the height.
+func wk_shape_base_done(_d: Dictionary) -> void:
 	if combine and tool == "draw" and String(_drag.tool) != "walls" and (not _drag.get("cut", false) or not _draft.is_empty()):
 		_add_outline()
-		return true
+		return
 	_to_height()
-	return true
+
+
+## Each frame on the base: its far corner under the cursor (walls snap to walls).
+func wk_shape_base(_d: Dictionary) -> void:
+	_drag.b = _drag_point()
+	if _drag.get("tool", "") == "walls":
+		_drag.b = _wall_snap(_drag.b, int(_drag.at))
+		if wall_straight and String(_drag.kind) == "polyline":
+			_drag.b = _straight(_drag.a, _drag.b)
+
+
+func wk_shape_height(_d: Dictionary) -> void:
+	_pull_height()
+
+
+func wk_shape_typed(_d: Dictionary, _typed: String) -> void:
+	apply_typed()
+
+
+## Push-pull is a drag: letting go lays it.
+func wk_shape_release_commits(d: Dictionary) -> bool:
+	return String(d.get("tool", "")) in ["pull", "move"]
+
+
+func wk_shape_commit(d: Dictionary) -> Variant:
+	_drag = d
+	return commit_pending()
+
+
+func wk_shape_cancel() -> void:
+	cancel()
+	say("")
 
 
 ## Draw on a face of the build: a cut's shape, or a shape to come out of a wall.
@@ -2993,19 +3051,21 @@ func preset_cut(k: String, face: Dictionary) -> Dictionary:
 
 ## Select: a click picks; pressed on a picked shape's top and dragged, its height follows;
 ## on its side, the whole shape moves along that face's way. Letting go lays it.
+## Select's mouse: the kit Select tool (a click).
 func _select_input(e: InputEventMouseButton) -> bool:
-	if e.button_index != MOUSE_BUTTON_LEFT:
-		return false
-	if not e.pressed:
-		return true
+	return select_tool.input(e)
+
+
+## A click with Select: pick the shape (or inserted build) under the cursor; pressed on a
+## shape's top or side, start pulling its height or moving it (the Shapes tool's drag).
+func wk_select_at_cursor() -> void:
 	_select_click()
 	var sh := shape_of(selected)
 	if sh.is_empty():
-		return true
+		return
 	var face := face_under(_ray()[0], _ray()[1])
 	if not face.is_empty():
 		begin_push_pull(sh, face)
-	return true
 
 
 ## Start dragging a shape by the face pressed: its top (a flat shape): the height; a
@@ -3240,15 +3300,8 @@ func process() -> void:
 		if Input.mouse_mode == Input.MOUSE_MODE_CAPTURED:
 			at = ws.get_viewport().get_visible_rect().size * 0.5 + Vector2(18, 14)
 		_tag.position = at
-	if _drag.get("phase", "") == "height":
-		_pull_height()
-		ws._ghost.visible = false
-	elif not _drag.is_empty():
-		_drag.b = _drag_point()
-		if _drag.get("tool", "") == "walls":
-			_drag.b = _wall_snap(_drag.b, int(_drag.at))
-			if wall_straight and String(_drag.kind) == "polyline":
-				_drag.b = _straight(_drag.a, _drag.b)
+	if not _drag.is_empty():
+		shape_tool.process(ws.get_process_delta_time())   # the base or the height follows the cursor
 		ws._ghost.visible = false
 	elif tool in ["cut", "select", "repeat", "pick", "roof"] or not _sk.is_empty():
 		ws._ghost.visible = false
@@ -3301,25 +3354,9 @@ static func storeys_of(rec: Dictionary) -> int:
 	return floori(float(int(rec.depth) - (ft if rec.get("roof", false) else 0)) / pitch)
 
 
-## While pulling: a digit types the height (plates; storeys for a building; studs for a depth
-## or a thickness), Backspace takes one back. True if the key was this.
-func _typed_key(e: InputEventKey) -> bool:
-	var d := -1
-	if e.keycode >= KEY_0 and e.keycode <= KEY_9:
-		d = e.keycode - KEY_0
-	elif e.keycode >= KEY_KP_0 and e.keycode <= KEY_KP_9:
-		d = e.keycode - KEY_KP_0
-	if d >= 0:
-		typed += str(d)
-	elif e.keycode == KEY_BACKSPACE and typed != "":
-		typed = typed.substr(0, typed.length() - 1)
-	else:
-		return false
-	apply_typed()
-	return true
-
-
-## The typed number as the height.
+## While pulling, a digit types the height (plates; storeys for a building; studs for a depth
+## or a thickness), Backspace takes one back -- the kit Shapes tool keeps `typed`; this is the
+## typed number as the height.
 func apply_typed() -> void:
 	if typed == "" or _drag.get("phase", "") != "height":
 		return

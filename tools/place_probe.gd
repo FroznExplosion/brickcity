@@ -645,8 +645,19 @@ func _check_delete() -> void:
 
 	_ok("RMB on the bracket deletes it", _delete_down(14, 10))
 	_ok("and a weld with a missing end is dropped", _ws.recipe.weld_count() == 0)
-	_ok("undo still takes back what is left", _ws._undo() and _ws.recipe.is_empty())
-	_ok("with nothing more to undo", not _ws._undo())
+	# An RMB delete is an edit (Docs/BuildTools.md section 20, stage 5b): Z lays it back.
+	_ok("Z lays the bracket back", _ws._undo() and _ws.recipe.size() == 2
+			and _ws.world.block_at(f0, Vector3i(14, 1, 10)) >= 0, "%d" % _ws.recipe.size())
+	_ok("Z again: the first brick", _ws._undo() and _ws.recipe.size() == 3
+			and _ws.world.block_at(f0, Vector3i(4, 1, 4)) >= 0, "%d" % _ws.recipe.size())
+	_ok("then the plate's own edit", _ws._undo() and _ws.recipe.size() == 2
+			and not _ws.recipe.part_of(0).begins_with("plate_"))
+	# The two laid back are found again by their own placing edits.
+	var zs := 0
+	while zs < 10 and _ws._undo():
+		zs += 1
+	_ok("then their own edits: an empty build, nothing more to undo", _ws.recipe.is_empty() and zs == 2,
+			"%d left after %d" % [_ws.recipe.size(), zs])
 
 	# A fixture as an older save carries one (the K key that dropped them in is
 	# gone -- staircases are built from spiral pieces now).
