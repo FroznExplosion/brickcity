@@ -33,13 +33,16 @@ Version: see `VERSION`. Raise it with every change to this folder.
 | `tools/wk_measure_tool.gd` | `WkMeasureTool` — Measure: two clicks, the distance; asks `measure_point`, shows with `measure_show`. |
 | `tools/wk_fill_tool.gd` | `WkFillTool` — Fill (a wand): a click fills the patch under the cursor, `width` wide (`fill_at_cursor`). |
 | `tools/wk_move_tool.gd` | `WkMoveTool` — Move: press on something, drag it on the axis plane most square to the view, let go (`move_grab`, `move_to`, `move_drop`). |
+| `tools/wk_select_tool.gd` | `WkSelectTool` — Select: CLICK picks what is under the cursor (`select_at_cursor`); BOX drags a box (`select_box_begin`, `_drag`, `_end`). |
+| `tools/wk_shape_tool.gd` | `WkShapeTool` — Shapes, two gestures (`mode`): DRAG_SOLID (one drag makes it) or OUTLINE_HEIGHT (the base, then the height, moved or typed, then a click). Keeps the gesture (`drag`, `typed`); the editor says what the shape is (`shape_begin` ... `shape_commit`). A cut is a shape whose outcome the editor makes a cut. |
 | `tools/wk_paint_tool.gd` | `WkPaintTool` — Paint: a stroke as one undo, an eyedropper, the brush's reach; asks `paint_begin`, `paint_at`, `paint_end`, `paint_hover`, `paint_pick`, `paint_step`. |
 | `ui/wk_rail.gd` | `WkRail` — the tool rail: icon + name + key buttons with a pop-up, a line for the tool in hand, action buttons, the tool's options; `restyle` takes the editor's panel box. |
 | `ui/wk_menu_bar.gd` | `WkMenuBar` — the menu bar: menus from rows (`[label, id, shortcut]`), merged by label, a title. |
 | `ui/wk_frame.gd` | `WkFrame` — where the bar, the band under it (across, or narrow), the rail and a right-hand panel go; where the editor's readouts start. |
 | `tests/wk_smoke.gd` | Everything above, headless, on a pretend document and a pretend context. |
 
-Coming, in this order (Docs/BuildTools.md §20): the rest of the shared tools one file each.
+Coming (Docs/BuildTools.md §20): the editors' own overrides turned into context calls, then
+an editor that composes the kit instead of inheriting another.
 
 ## 1b. A tool in an editor
 

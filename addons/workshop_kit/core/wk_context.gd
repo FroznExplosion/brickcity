@@ -252,3 +252,73 @@ func move_to(_by: Vector3) -> void:
 ## Let go: put it `by` from where it was (one edit, the editor's to record).
 func move_drop(_by: Vector3) -> void:
 	pass
+
+
+# ---------------------------------------------------------------------------
+# Shapes (WkShapeTool)
+# ---------------------------------------------------------------------------
+
+## LMB pressed with nothing drawn: start a shape where the cursor is. Return the drag -- the
+## editor's record of it (the tool adds "phase": "base" and "button") -- or {} to refuse.
+func shape_begin(_button: int) -> Dictionary:
+	return {}
+
+
+## Each frame while the base is drawn: its far corner follows the cursor.
+func shape_base(_drag: Dictionary) -> void:
+	pass
+
+
+## OUTLINE_HEIGHT: the base is let go. Go on to the height (set `drag.phase` to "height"), or
+## end the drag (clear it) if the base becomes something else.
+func shape_base_done(_drag: Dictionary) -> void:
+	pass
+
+
+## Each frame while the height is pulled: the height follows the cursor.
+func shape_height(_drag: Dictionary) -> void:
+	pass
+
+
+## A height typed (digits, as typed so far): use it.
+func shape_typed(_drag: Dictionary, _typed: String) -> void:
+	pass
+
+
+## Whether letting go of LMB in the height makes the shape (a push-pull dragged), not a click.
+func shape_release_commits(_drag: Dictionary) -> bool:
+	return false
+
+
+## Make the shape `drag` describes (the tool has let go of it). Returns what was made.
+func shape_commit(_drag: Dictionary) -> Variant:
+	return null
+
+
+## The shape being drawn was given up (RMB, Esc, another tool).
+func shape_cancel() -> void:
+	pass
+
+
+# ---------------------------------------------------------------------------
+# Select (WkSelectTool)
+# ---------------------------------------------------------------------------
+
+## CLICK: pick what is under the cursor.
+func select_at_cursor() -> void:
+	pass
+
+
+## BOX: a box starts at the cursor. False: no box here.
+func select_box_begin() -> bool:
+	return false
+
+
+## Each frame while the box is dragged: its far corner follows the cursor.
+func select_box_drag() -> void:
+	pass
+
+
+## The box is let go: pick what is in it.
+func select_box_end() -> void:
+	pass
