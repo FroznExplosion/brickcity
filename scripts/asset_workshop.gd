@@ -2103,35 +2103,16 @@ func _after_edit() -> void:
 		_ensure_start_brick.call_deferred()
 
 
+## (An RMB delete is an edit of its own -- `_push_delete`, undo lays it back -- in both
+## workshops: workshop.gd.)
 func _delete_ray(from: Vector3, dir: Vector3) -> bool:
 	var hit := _first_hit(from, dir)
-	var took = null
 	if not hit.is_empty():
 		_removing = _recipe_id_at(asm.frames.find(hit.frame), hit.block)
-		if _removing >= 0:
-			took = _brick_info(_removing)
 	var done := super._delete_ray(from, dir)
 	if not done:
 		_removing = -1
-	elif took != null:
-		# The workshop forgets a deleted brick's own edit; this puts the delete in as an
-		# edit of its own, so Z can lay it back.
-		_push_delete(took)
 	return done
-
-
-## An RMB delete as an edit: undo lays the brick back (on the end of the build), redo takes
-## it up again.
-func _push_delete(took: Dictionary) -> void:
-	undo_stack.push(WkCommand.make(&"delete", took, _undo_delete, _redo_delete))
-
-
-func _undo_delete(c: WkCommand) -> bool:
-	return _relay(c.data)
-
-
-func _redo_delete(c: WkCommand) -> bool:
-	return remove_brick(c.data.arch, c.data.cell)
 
 
 ## A brick as redo lays it again: with the part it belongs to.
@@ -2163,7 +2144,7 @@ func _brick_info(i: int) -> Dictionary:
 
 
 ## Take a brick up as RMB would, found by part and cell. True if it went.
-func remove_brick(arch: String, cell: Vector3i) -> bool:
+func remove_brick(arch: String, cell: Vector3i, _af: int = 0) -> bool:
 	var i := find_brick(arch, cell)
 	return i >= 0 and take_brick(i)
 

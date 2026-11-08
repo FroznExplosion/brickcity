@@ -404,15 +404,28 @@ func owner_of(part: String, cell: Vector3i) -> int:
 
 
 ## A kept shape's brick taken up by hand (RMB): it is no longer the shape's until the shape
-## is laid again.
-func forget_brick(part: String, cell: Vector3i) -> void:
+## is laid again. Returns [the shape's id, its entries taken], for `own_brick`; [] if none.
+func forget_brick(part: String, cell: Vector3i) -> Array:
 	var id := owner_of(part, cell)
 	var i := _index_of(id)
 	if i < 0:
+		return []
+	var sh: Dictionary = shapes()[i].duplicate(true)
+	var mine := func(b: Array) -> bool: return String(b[0]) == part and BuildRecipe.cell_from(b[1]) == cell
+	var taken := (sh.bricks as Array).filter(mine)
+	sh.bricks = (sh.bricks as Array).filter(func(b: Array) -> bool: return not mine.call(b))
+	shapes()[i] = sh
+	_owner_dirty = true
+	return [id, taken]
+
+
+## A brick `forget_brick` took from shape `id` is back (an RMB undone): the shape's again.
+func own_brick(id: int, entries: Array) -> void:
+	var i := _index_of(id)
+	if i < 0 or entries.is_empty():
 		return
 	var sh: Dictionary = shapes()[i].duplicate(true)
-	sh.bricks = (sh.bricks as Array).filter(func(b: Array) -> bool:
-		return not (String(b[0]) == part and BuildRecipe.cell_from(b[1]) == cell))
+	sh.bricks = (sh.bricks as Array) + entries
 	shapes()[i] = sh
 	_owner_dirty = true
 
