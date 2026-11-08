@@ -3657,7 +3657,7 @@ Array BrickWorld::build_chunk_mesh_section(int chunk_id, int section) {
     return arrays;
 }
 
-Array BrickWorld::update_index_regions(int chunk_id, int index_bytes) {
+Array BrickWorld::update_index_regions(int chunk_id, int index_bytes_in) {
     Array out;
     if (!valid_chunk(chunk_id)) {
         return out;
@@ -3716,7 +3716,14 @@ Array BrickWorld::update_index_regions(int chunk_id, int index_bytes) {
         if (changed_lo < 0) {
             continue;
         }
-        // Whole indices, and in the band's own numbering.
+        // Whole indices, and in the band's own numbering -- at the band's own
+        // width. The band was built from this section's faces*4 vertices, and
+        // its index width follows from that (IslandManager.INDEX16_MAX_VERTS),
+        // as the chamfered bands' patches already do. One width for the whole
+        // chunk (what the caller passed: its last band's) wrote a band at
+        // the other width as garbage.
+        const int index_bytes = faces * 4 <= 65536 ? 2 : 4;
+        (void)index_bytes_in;
         const int n = changed_hi - changed_lo + 1;
         PackedByteArray data;
         data.resize((int64_t)n * index_bytes);
