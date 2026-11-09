@@ -133,6 +133,8 @@ var env: Environment
 var hud: Label
 ## Low air in a ship or station (Docs/Hulls.md 4): a warning in the middle at the top.
 var air_warn: Label
+## The player's suit air (Docs/Hulls.md 4.3): a timer in low air, then damage.
+var suit := SuitAir.new()
 ## Repair (Docs/Hulls.md 9), "restore" (the middle mouse button) on a ship's or
 ## station's hull: a tap lays the ghosted brick, held its lost bricks come back.
 var restore_tool := RestoreTool.new()
@@ -464,6 +466,7 @@ func _on_player_down() -> void:
 		if ground != Vector3.INF:
 			at = ground
 	pawn.health.reset()
+	suit.reset()
 	pawn.place(at + Gravity.up_at(at) * 0.05)
 
 
@@ -1087,16 +1090,30 @@ func _build_hud() -> void:
 
 ## The air where the player is (a ship's or station's, Docs/Hulls.md 4): pulled toward a
 ## hole while it rushes out, warned when it runs low.
-func _air_tick() -> void:
-	var a := system.air_at(walker.global_position + walker.up * 1.0, true)
+func _air_tick(dt: float) -> void:
+	var head := walker.global_position + walker.up * 1.0
+	var a := system.air_at(head, true)
 	walker.push = a.get("pull", Vector3.ZERO)
+	# What they breathe: the room's air, else the world's (none in space).
+	var p := float(a.pressure) if not a.is_empty() else system.world_air_at(head)
+	# In the pilot's seat: the cockpit's own air, whether its bricks are laid or not.
+	if not on_foot:
+		p = maxf(p, 1.0) if a.is_empty() else p
+	if pawn != null and is_instance_valid(pawn) and pawn.health != null:
+		suit.breathe(dt, p, pawn.health)
 	if air_warn == null:
 		return
-	var p := float(a.get("pressure", 1.0))
 	var venting := bool(a.get("venting", false))
-	air_warn.visible = not a.is_empty() and (p < HullAir.LOW or venting)
-	if air_warn.visible:
-		air_warn.text = ("HULL BREACH  air %d%%" if venting else "LOW AIR  %d%%") % roundi(p * 100.0)
+	air_warn.visible = p < HullAir.LOW or venting
+	if not air_warn.visible:
+		return
+	var pct := roundi(p * 100.0)
+	var what := ("HULL BREACH  air %d%%" if venting else "LOW AIR  %d%%") % pct
+	if suit.empty():
+		what += "  --  SUIT EMPTY"
+	elif suit.draining():
+		what += "  --  suit air %d s" % ceili(suit.left)
+	air_warn.text = what
 
 
 ## The player stands in one of `sts` (a ship's or station's box): its stores fill
@@ -1168,7 +1185,7 @@ func _process(delta: float) -> void:
 			system.on_origin_shift()
 	if system != null:
 		walker.match_velocity = system.match_velocity(walker.global_position)
-		_air_tick()
+		_air_tick(delta)
 		_restore_tick(delta)
 		# A ship sitting in its planet's sea: the ocean cut out of its dry cells
 		# (Docs/Hulls.md 6).
