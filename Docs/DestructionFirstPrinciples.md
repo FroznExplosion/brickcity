@@ -716,3 +716,25 @@ renderer stalling the main thread, not the size of what is sent. That is Docs/Wh
 3.1's renderer-off-main work, not something a threshold fixes.
 
 That run was held back once (a sample at 99 C) -- the machine, nothing else running.
+
+## B13. Small pieces on the worker, measured again: now better, on (2026-11-08)
+
+B11 measured it worse while every mesh under 30,000 vertices was uploaded in the tick; B12
+moved uploads to a worker from 4,000. Re-measured, windowed `--stress --buildings=200`,
+editor closed, nothing else running (peak 95 C, not held back; free RAM fell under 200 MB in
+10 of 41 samples -- that inflates frames, it does not flatter them):
+
+| 4,000-vertex uploads | small pieces on the worker | baked at their spawn (B12's run) |
+|---|---|---|
+| meshed at spawn | 204, 42 ms (worst 0.6) | 287, 245 ms (worst 15.5) |
+| the queue's main-thread part | 196, 145 ms (worst 5.8) | 133, 61 ms (worst 11.7) |
+| stand-ins | 131, 20 ms | 51, 8.5 ms |
+| main-thread mesh work, all told | **~207 ms** | ~314 ms |
+| worst single item | **5.8 ms** | 15.5 ms |
+| mean frame / frames over 33 ms | 28.1 ms / 507 | 28.6 ms / 578 |
+
+So `small_meshes_on_worker` is **on** now; `-- --stress --sync-small` turns it off for an A/B.
+From the first measurement (B10's run: 167 ms of spawn meshing, worst 14.7, plus 410-478 ms in
+the queue) to now, a piece's mesh costs the main thread about a third of what it did and no
+single one more than ~6 ms. One run each way; worth a second pair if the numbers are ever
+leaned on.

@@ -6193,11 +6193,11 @@ func _report_profile() -> void:
 ##     godot --path . -- --stress --buildings=200
 func _run_stress_pass() -> void:
 	print("[stress] %d buildings, %.1f m spacing" % [city._city_size, 13.0])
-	# -- --worker-small: small pieces meshed on the worker with stand-ins
-	# covering them (IslandManager.small_meshes_on_worker; off by default,
-	# measured worse), for the A/B.
-	if "--worker-small" in OS.get_cmdline_user_args():
-		city.islands.small_meshes_on_worker = true
+	# -- --sync-small: small pieces baked on this thread at their spawn, as
+	# before stand-ins (IslandManager.small_meshes_on_worker, on by default),
+	# for the A/B.
+	if "--sync-small" in OS.get_cmdline_user_args():
+		city.islands.small_meshes_on_worker = false
 	# -- --thread-verts=N: meshes of N vertices or more uploaded on a worker
 	# (IslandManager.thread_mesh_verts; 4,000, was 30,000), for the A/B.
 	for a in OS.get_cmdline_user_args():

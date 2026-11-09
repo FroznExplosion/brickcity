@@ -985,13 +985,14 @@ var queued_meshed := 0
 var drain_ms := 0.0
 var drain_count := 0
 ## Small pieces meshed on the worker too, a stand-in (IslandStandins) drawing
-## them until their mesh is up. **Off: measured worse** (Docs/
-## DestructionFirstPrinciples.md B11, windowed --stress A/B): each piece moved
-## saved ~0.8 ms at its spawn and cost ~5.6 ms in the mesh queue's main-thread
-## part (assembling and uploading the worker's bake) -- 892 ms against 520 all
-## told. Kept for when that part is cheaper; `-- --stress --worker-small` runs
-## it on. Far pieces (coarse) are unchanged either way.
-var small_meshes_on_worker := false
+## them until their mesh is up, so none is baked here at its spawn.
+## (Docs/DestructionFirstPrinciples.md B11, B13.) **On** since uploads go to a
+## worker from 4,000 vertices (thread_mesh_verts): windowed --stress, 207 ms of
+## main-thread mesh work against 314, the worst item 5.8 ms against 15.5. (While
+## uploads were still made in the tick it measured worse -- 892 against 520.)
+## `-- --stress --sync-small` runs it off, for the A/B. Far pieces (coarse) are
+## unchanged either way.
+var small_meshes_on_worker := true
 var dropped := 0     ## settled pieces put to the coarse stand-in for distance
 var compacted := 0   ## settled pieces baked again to leave their dead faces out
 var coarse_built := 0      ## coarse stand-ins built (build_chunk_coarse_mesh)

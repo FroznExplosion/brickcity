@@ -241,7 +241,7 @@ Found from the destruction side (Docs/DestructionFirstPrinciples.md B9-B12). Win
 - **What is left is the renderer stalling, not size:** the two slow queue items left were 344 and
   424 vertices, 9-12 ms each. A threshold cannot fix that; 6.2 option (c), the separate render
   thread (or 3.1's renderer-off-main list), is the lever if these show in play.
-- Also measured and not done (DestructionFirstPrinciples B11): small pieces baked on the worker
-  instead of in the tick cost MORE (each ~0.8 ms saved at spawn, ~5.6 ms added to the queue's
-  main-thread part, when uploads were still in the tick at 30,000). Worth re-measuring now that
-  uploads go to a worker from 4,000 (`-- --stress --worker-small`).
+- Small pieces baked on the worker instead of in the tick: worse while uploads were in the tick
+  (DestructionFirstPrinciples B11), **better once they went to a worker from 4,000 -- on since
+  2026-11-08** (B13): main-thread mesh work ~207 ms against ~314, the worst item 5.8 ms against
+  15.5 (`-- --stress --sync-small` for the old way).
