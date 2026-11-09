@@ -312,3 +312,11 @@ dipped to 116 MB free -- the two agree, the second's numbers below.
   vertices (~600 ns a vertex) against 0.1-0.3 ms to make the mesh from them. A pure function
   of (footprint, courses, damage masks): the best option-1 target found -- in C++ it should be
   well under 1 ms, and it needs no change to when anything is drawn.
+- **Done (2026-11-09): `BuildingShell.build_arrays` is C++** (`ShellMesher.build_arrays`,
+  `gdextension/brick/src/shell_mesher.cpp`); the GDScript walk stays as
+  `build_arrays_script`, the reference `tools/shell_mesher_probe.gd` checks it against (25
+  cases, every array the same value for value). Headless 0.2-0.5 ms a real building against
+  2.3-7.3 (shot all over: 0.8-1.7 against 10-20). Windowed `--promote` after: `sh_mesh`
+  2.3-3.2 ms (was 8-15), `bd_rest` 1.5-3.2 (was 4-8) -- what is left of them is the mesh
+  handed to the renderer. That run had other chats' probes alongside and dipped to 153 MB
+  free, so read it as the shape, not the last decimal.
