@@ -181,7 +181,8 @@ func _run() -> void:
 		_ok("its alpha is the mesher's: material 2, grain along X (the long side)", code & 31 == 2
 				and (code >> 5) == 0, "code %d" % code)
 
-	print("\na small piece, with small pieces on the worker (off by default: B11)")
+	print("\na small piece, small pieces on the worker (the default: B13)")
+	var default_small: bool = _m.small_meshes_on_worker
 	_m.small_meshes_on_worker = true
 	var sync0: int = _m.sync_meshed
 	var small := _small_piece(Vector3(-30.0, 0.05, 0.0), 6, 10)
@@ -199,7 +200,7 @@ func _run() -> void:
 			_m.sync_meshed == sync0 + 1 and not _m._mesh_queue.has(small2))
 	var r2: Array = await _watch(small2)
 	_ok("and never without a mesh", r2[0] == 0, "%d frame(s) without one" % r2[0])
-	_m.small_meshes_on_worker = false
+	_m.small_meshes_on_worker = default_small
 
 	print("\nwith stand-ins off")
 	_m.standins.enabled = false
