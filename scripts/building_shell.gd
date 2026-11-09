@@ -56,7 +56,66 @@ const ALL_STANDING := -1  ## every bit set, as a 32-bit int
 ## `layout` is TowerRecipe.layout(courses), if the caller has it: a worker thread
 ## building this (CityScene's shadow proxies) must not reach the memo that
 ## layout() writes into, so it is looked up on the main thread and handed in.
+##
+## Built in C++ (ShellMesher): the walk below in GDScript was 2.7-5.7 ms a
+## shell, on the main thread each time a damaged building left for range or a
+## storey was laid (Docs/HandoffPerf.md 6.5). build_arrays_script is that walk,
+## kept as what shell_mesher_probe checks the C++ against.
 static func build_arrays(footprint_x: int, footprint_z: int, courses: int,
+		damage: Dictionary = {}, layout: Array = []) -> Array:
+	var bands: PackedInt32Array
+	if not layout.is_empty():
+		bands = _flat_layout(layout)   # on a worker, maybe: no memo
+	else:
+		if not _flat.has(courses):
+			_flat[courses] = _flat_layout(TowerRecipe.layout(courses))
+		bands = _flat[courses]
+	# Five ints a band, all zero (no mask) but for the bands the damage names.
+	var masks := PackedInt32Array()
+	@warning_ignore("integer_division")
+	masks.resize(bands.size() / 4 * 5)
+	masks.fill(0)
+	for band_index in damage:
+		var m: PackedInt32Array = damage[band_index]
+		var at := int(band_index) * 5
+		if m.size() == 4 and at >= 0 and at < masks.size():
+			masks[at] = 1
+			masks[at + 1] = m[0]
+			masks[at + 2] = m[1]
+			masks[at + 3] = m[2]
+			masks[at + 4] = m[3]
+	return ShellMesher.build_arrays(footprint_x, footprint_z, TowerRecipe.WALL_THICK, bands, masks)
+
+
+## TowerRecipe.layout(courses) flattened for ShellMesher, by courses. Written
+## on the main thread only, as layout()'s own memo is.
+static var _flat := {}
+
+
+## A layout as ShellMesher reads it: kind, y, plates and filament a band.
+static func _flat_layout(layout: Array) -> PackedInt32Array:
+	var bands := PackedInt32Array()
+	for band in layout:
+		var kind := 1
+		var filament := 1
+		match band.kind:
+			"base":
+				kind = 0
+				filament = TowerRecipe.BASE_COLOUR
+			"slab":
+				kind = 2
+				filament = TowerRecipe.SLAB_COLOUR
+			"cornice":
+				kind = 3
+			"course":
+				filament = TowerRecipe.COURSE_COLOURS[int(band.index) % TowerRecipe.COURSE_COLOURS.size()]
+		bands.append_array([kind, int(band.y), int(band.plates), filament])
+	return bands
+
+
+## BuildingShell.build_arrays as GDScript: the reference the C++ is checked
+## against (tools/shell_mesher_probe.gd). Nothing in the game calls it.
+static func build_arrays_script(footprint_x: int, footprint_z: int, courses: int,
 		damage: Dictionary = {}, layout: Array = []) -> Array:
 	var verts := PackedVector3Array()
 	var normals := PackedVector3Array()
