@@ -47,7 +47,7 @@ func _tick() -> void:
 	if _frames != 2:
 		return
 	_ws.set_process(false)
-	_ws._hotbar.save_path = "user://_probe_mech_hotbar.json"
+	_ws.bench._hotbar.save_path = "user://_probe_mech_hotbar.json"
 	_ws.toolbars_save = "user://_probe_mech_toolbars.json"
 	for yaw in 2:
 		var n := BrickPalette.variant_name("brick_1x4", yaw, false)
@@ -60,7 +60,7 @@ func _tick() -> void:
 	_try_on()
 	_mech_gun()
 	_back()
-	_ws._builds_dir = BuildRecipe.player_dir()
+	_ws.bench._builds_dir = BuildRecipe.player_dir()
 	_wipe(DIR)
 	print("mech workshop probe: %d passed, %d failed" % [_pass, _fail])
 	quit(1 if _fail > 0 else 0)
@@ -77,7 +77,7 @@ func _at(v: Vector3) -> Array:
 
 func _mode() -> void:
 	print("mode")
-	_ws._new_build()
+	_ws.bench._new_build()
 	_ws.set_asset_kind("mech")
 	_ok("a mech's ten parts", Array(_ws.part_names) == MechReference.PARTS, str(_ws.part_names))
 	_ok("nine joints laid ready, a mount and a socket each, and the knees and elbows", _ws.points.size() == 24,
@@ -98,9 +98,9 @@ func _mode() -> void:
 		return q.part == "arm_L" and q.kind == "socket")
 	_ok("the arm's wrist takes the hand", hand_sock.size() == 1 and hand_sock[0].slot == "hand"
 			and hand_sock[0].interface == "mech.wrist")
-	_ok("the left is +Z, across the mirror", _ws.mech_joint("arm_L").z > _ws.mirror_z
-			and _ws.mech_joint("arm_R").z < _ws.mirror_z
-			and is_equal_approx(_ws.mech_joint("arm_L").z - _ws.mirror_z, _ws.mirror_z - _ws.mech_joint("arm_R").z))
+	_ok("the left is +Z, across the mirror", _ws.mech_joint("arm_L").z > _ws.bench.mirror_z
+			and _ws.mech_joint("arm_R").z < _ws.bench.mirror_z
+			and is_equal_approx(_ws.mech_joint("arm_L").z - _ws.bench.mirror_z, _ws.bench.mirror_z - _ws.mech_joint("arm_R").z))
 	var ref: Node3D = _ws._mech_ref
 	_ok("the reference mech is drawn, a label on each joint", ref != null
 			and ref.get_node_or_null("Joint_arm_L") != null
@@ -154,7 +154,7 @@ func _build_mech() -> void:
 func _save() -> void:
 	print("save")
 	_build_mech()
-	_ws._builds_dir = DIR
+	_ws.bench._builds_dir = DIR
 	var path: String = _ws._save_as("Probe Mech")
 	var parts_dir: String = _ws.parts_dir()
 	var folders := Array(DirAccess.get_directories_at(parts_dir))
@@ -290,7 +290,7 @@ func _try_on() -> void:
 
 func _mech_gun() -> void:
 	print("mech gun")
-	_ws._new_build()
+	_ws.bench._new_build()
 	_ws.set_asset_kind("gun")
 	_ws.set_gun_scale("mech")
 	_ws._point_slot.select(_ws.GUN_PARTS.find("magazine"))
@@ -338,7 +338,7 @@ func _mech_gun() -> void:
 
 func _back() -> void:
 	print("back")
-	_ws._new_build()
+	_ws.bench._new_build()
 	_ws.set_asset_kind("gun")
 	_ok("Make a gun: a gun's parts again, no reference mech", Array(_ws.part_names) == _ws.GUN_PARTS
 			and _ws._mech_ref == null)

@@ -52,7 +52,7 @@ func _tick() -> void:
 
 ## The centre of a cell of the upright grid, in the world.
 func _at(x: float, y: float, z: float) -> Vector3:
-	var xf: Transform3D = _ws.world.get_chunk_transform(_ws.asm.frames[0])
+	var xf: Transform3D = _ws.bench.world.get_chunk_transform(_ws.bench.asm.frames[0])
 	return xf * Vector3(x * BrickPalette.STUD_M, y * BrickPalette.PLATE_M, z * BrickPalette.STUD_M)
 
 
@@ -99,8 +99,8 @@ func _run() -> void:
 	for x in [15, 16]:
 		for y in range(1, 4):
 			put.call(x, y, 15, BuildRecipe.Role.INTERIOR)
-	_ws._load_recipe(r)
-	var sp = _ws._spaces
+	_ws.bench._load_recipe(r)
+	var sp = _ws.bench._spaces
 	sp.toggle()
 	_ok("O puts the tool out", sp.active)
 
@@ -133,7 +133,7 @@ func _run() -> void:
 			sp.selected == 0 and String(rec.spaces[0].kind) == "corridor", String(rec.spaces[0].kind))
 
 	# A brick out of the far wall: a new opening once the bricks are still.
-	var gone: bool = _ws._delete_ray(_at(20.5, 5.5, 12.5), Vector3(1, 0, 0))
+	var gone: bool = _ws.bench._delete_ray(_at(20.5, 5.5, 12.5), Vector3(1, 0, 0))
 	sp._edited_ms -= 1000
 	sp.process()
 	rec = sp.record()
@@ -152,7 +152,7 @@ func _run() -> void:
 	_ok("P puts a point and takes it away again", put_one and (rec.points as Array).is_empty())
 
 	var path := "user://_probe_spaces.json"
-	_ws.recipe.save_to(path)
+	_ws.bench.recipe.save_to(path)
 	var back := BuildRecipe.load_from(path)
 	var srec: Dictionary = back.meta.get("structure", {})
 	var kept := false

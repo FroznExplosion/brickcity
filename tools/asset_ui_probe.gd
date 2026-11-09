@@ -34,7 +34,7 @@ func _tick() -> void:
 	if _frames != 3:
 		return
 	_ws.set_process(false)
-	_ws._hotbar.save_path = "user://_probe_asset_hotbar.json"
+	_ws.bench._hotbar.save_path = "user://_probe_asset_hotbar.json"
 	_ws.toolbars_save = "user://_probe_asset_toolbars.json"
 	var ui: AssetWorkshopUI = _ws._ui
 	print("asset workshop frame probe")
@@ -175,7 +175,7 @@ func _stages(ui: AssetWorkshopUI) -> void:
 	_ok("bricks: no Make bricks any more, Bricks to clay instead", not ui.action_names().has("Make bricks (all)")
 			and ui.action_names().has("Bricks to clay"), str(ui.action_names()))
 	ui.pick_tool("paint")
-	_ok("Bricks: Paint is the paint tool", _ws._painting and ui.active_tool() == "paint")
+	_ok("Bricks: Paint is the paint tool", _ws.bench._painting and ui.active_tool() == "paint")
 	ui.pick_tool("select")
 	_ok("Bricks: Select is the box select", _ws.tool == "select" and ui.active_tool() == "select")
 	ui._stage_step()
@@ -214,13 +214,13 @@ func _parts(ui: AssetWorkshopUI) -> void:
 	ui._fill_actions()
 	_ok("a part with clay offers its own Make bricks", ui.action_names().has("Make bricks of this part"),
 			str(ui.action_names()))
-	var before: int = _ws.recipe.size()
+	var before: int = _ws.bench.recipe.size()
 	ui.press_action("Make bricks of this part")
 	var clay: Dictionary = _ws.clay_counts()
-	_ok("that part is bricks, the other still clay", _ws.sculpt_state == "sdf" and _ws.recipe.size() > before
+	_ok("that part is bricks, the other still clay", _ws.sculpt_state == "sdf" and _ws.bench.recipe.size() > before
 			and int(clay.get(body + 1, 0)) == 0 and int(clay.get(barrel + 1, 0)) > 0, str(clay))
 	var all_body := true
-	for i in range(before, _ws.recipe.size()):
+	for i in range(before, _ws.bench.recipe.size()):
 		all_body = all_body and _ws.part_of[i] == body
 	_ok("its bricks are that part's", all_body)
 	ui.refresh()
@@ -230,14 +230,14 @@ func _parts(ui: AssetWorkshopUI) -> void:
 	_ok("then: no Make bricks for it, Back to clay instead", not ui.action_names().has("Make bricks of this part")
 			and ui.action_names().has("This part back to clay"), str(ui.action_names()))
 	_ok("its row says bricks", String(body_row.get_text(1)).ends_with("bricks"), body_row.get_text(1))
-	var laid: int = _ws.recipe.size() - before
+	var laid: int = _ws.bench.recipe.size() - before
 	ui.press_action("This part back to clay")
 	clay = _ws.clay_counts()
-	_ok("back to clay: its bricks gone, its clay back", _ws.recipe.size() == before
+	_ok("back to clay: its bricks gone, its clay back", _ws.bench.recipe.size() == before
 			and int(clay.get(body + 1, 0)) > 0, "%d bricks were laid; %s" % [laid, clay])
 	_ws._undo()
-	_ok("one undo makes them bricks again", _ws.recipe.size() == before + laid,
-			"%d vs %d" % [_ws.recipe.size(), before + laid])
+	_ok("one undo makes them bricks again", _ws.bench.recipe.size() == before + laid,
+			"%d vs %d" % [_ws.bench.recipe.size(), before + laid])
 	_ws.sculpt_convert()
 	_ok("then Make bricks (all): both parts bricks", _ws.sculpt_state == "bricks"
 			and _ws.part_of.has(body) and _ws.part_of.has(barrel))
@@ -272,7 +272,7 @@ func _kinds(ui: AssetWorkshopUI) -> void:
 
 
 func _menu_shown(label: String) -> bool:
-	for mb in _ws._menu.find_children("*", "MenuButton", true, false):
+	for mb in _ws.bench._menu.find_children("*", "MenuButton", true, false):
 		if (mb as MenuButton).text == label:
 			return (mb as MenuButton).visible
 	return false

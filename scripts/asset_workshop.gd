@@ -1,4 +1,4 @@
-extends "res://scripts/workshop.gd"
+extends Node3D
 ## The asset workshop: the workshop, with tools for blocking out assets -- guns first --
 ## against a photo. Docs/AssetWorkshop.md.
 ##
@@ -95,7 +95,7 @@ var view := 0
 ## Measure (Alt M) is the kit's WkMeasureTool in the toolbox; these read and set it.
 var measure_on: bool:
 	get:
-		return toolbox.active_id() == &"measure"
+		return bench.toolbox.active_id() == &"measure"
 	set(v):
 		set_measure(v)
 var measure_points: Array[Vector3]:
@@ -299,6 +299,11 @@ const PART_COLOURS := [Color(0.62, 0.66, 0.72), Color(0.95, 0.55, 0.2), Color(0.
 ## The build area: 1000 studs each way and 2500 plates up (a cube: 5000 ticks each way),
 ## for mechs and vehicles as well as guns. The engine holds a grid this big paged, only
 ## where there are bricks (`Occupancy`, brick_types.h). A new build starts in its middle.
+## This workshop's bricks: the same component the building workshop owns (BrickBench,
+## scripts/workshop/brick_bench.gd). It does what this workshop does differently through its
+## hooks: the functions here named in BrickBench.HOOKS.
+var bench := BrickBench.new()
+
 const ASSET_PLATE_STUDS := 1000
 const ASSET_HEIGHT_PLATES := 2500
 ## The area before paging (80 studs, 200 plates): what a brick library without
@@ -313,38 +318,41 @@ const FIGURE_VIEW_STUDS := 26
 
 
 func _init() -> void:
-	plate_studs = ASSET_PLATE_STUDS
-	height_plates = ASSET_HEIGHT_PLATES
+	bench.plate_studs = ASSET_PLATE_STUDS
+	bench.height_plates = ASSET_HEIGHT_PLATES
 	if not ClassDB.class_has_method("BrickWorld", "paged_chunk_cells"):
 		push_warning("[asset workshop] this brick library cannot page a chunk: build area %d studs, not %d (rebuild the extension)"
 				% [SMALL_PLATE_STUDS, ASSET_PLATE_STUDS])
-		plate_studs = SMALL_PLATE_STUDS
-		height_plates = SMALL_HEIGHT_PLATES
-	mirror_z = plate_studs * 0.5 + 0.5
+		bench.plate_studs = SMALL_PLATE_STUDS
+		bench.height_plates = SMALL_HEIGHT_PLATES
+	bench.mirror_z = bench.plate_studs * 0.5 + 0.5
 	@warning_ignore("integer_division")
-	work_x = plate_studs / 2
+	work_x = bench.plate_studs / 2
 	# Its own rail (AssetWorkshopUI), not the building tools'; no floor (a build stands on
 	# nothing); it answers the kit's Sketch and Shapes tools itself.
-	wants_tools = false
-	has_floor = false
-	sketch_host = self
+	bench.wants_tools = false
+	bench.has_floor = false
+	bench.sketch_host = self
 	_ortho_size = VIEW_STUDS * BrickPalette.STUD_M * 0.75
 
 
 func _ready() -> void:
-	bench_ready()
-	cam_ctl.ctx = wk_ctx   # no setup(): this workshop's camera keeps its own mouse ways
-	toolbox.add(_sketch_tool)
+	bench.name = "Bench"
+	add_child(bench)
+	bench.bind_host(self)
+	bench.bench_ready()
+	cam_ctl.ctx = bench.wk_ctx   # no setup(): this workshop's camera keeps its own mouse ways
+	bench.toolbox.add(_sketch_tool)
 	_select_tool.mode = WkSelectTool.Mode.BOX
 	for t in [_measure_tool, _fill_tool, _move_tool, _shape_tool, _select_tool]:
-		toolbox.add(t)
+		bench.toolbox.add(t)
 	# What is made here is a gun (or a mech): File > Save, Save As and Open use their
 	# library (user://guns/), not the buildings'. F5 has its own slot, not the workshop's.
-	_save_path = ASSET_QUICK_SAVE
-	if _menu != null:
-		_menu.asset_mode(ASSET_KINDS)
+	bench._save_path = ASSET_QUICK_SAVE
+	if bench._menu != null:
+		bench._menu.asset_mode(ASSET_KINDS)
 		_build_menus()
-	_set_asset_kind(recipe.kind)
+	_set_asset_kind(bench.recipe.kind)
 	_build_asset_tools()
 	_setup_parts()
 	# The frame round it all: stage tabs, the tool rail, the outliner (AssetWorkshopUI).
@@ -356,18 +364,18 @@ func _ready() -> void:
 	var headless := DisplayServer.get_name() == "headless"
 	auto_start_brick = not headless
 	_no_autosave = headless or "--shot" in args or "--gate" in args
-	work_depth = mirror_z
+	work_depth = bench.mirror_z
 	if "--shot" in args:
 		call_deferred("_shot")
 	elif not ("--gate" in args):
 		print("[asset workshop] " + KEYS_TEXT)
 		if not headless and FileAccess.file_exists(AUTOSAVE):
 			call_deferred("_restore_autosave")
-	_grid.visible = not free_place
+	bench._grid.visible = not free_place
 	# The workshop's own key list starts hidden here (F1 shows it): it covers half the
 	# screen, and F10 lists this scene's keys.
-	_keys_on = false
-	_keys_panel.visible = false
+	bench._keys_on = false
+	bench._keys_panel.visible = false
 	call_deferred("_ensure_start_brick")
 	call_deferred("_look_at_build")
 
@@ -408,7 +416,7 @@ func _shot() -> void:
 		var circle := []
 		for a in 32:
 			var t := a * TAU / 32.0
-			circle.append(Vector2(mirror_z + 4.0 * cos(t), 36.0 + 10.0 * sin(t)))
+			circle.append(Vector2(bench.mirror_z + 4.0 * cos(t), 36.0 + 10.0 * sin(t)))
 		sketch_fill(circle)
 		select_part(0)
 		work_plane = "side"
@@ -437,8 +445,8 @@ func _shot() -> void:
 		for _i in 3:
 			await get_tree().process_frame
 		set_mirror(false)
-		var base := Vector3(recipe.cell_of(0)) if recipe.size() > 0 else Vector3(500, 30, mirror_z)
-		base.z = mirror_z
+		var base := Vector3(bench.recipe.cell_of(0)) if bench.recipe.size() > 0 else Vector3(500, 30, bench.mirror_z)
+		base.z = bench.mirror_z
 		var at := func(x: float, y: float) -> Vector3:
 			return sculpt.to_sample(Vector3((base.x + x) * BrickPalette.STUD_M, (base.y + y) * BrickPalette.PLATE_M,
 					base.z * BrickPalette.STUD_M))
@@ -548,12 +556,12 @@ func _shot() -> void:
 			var t0 := Time.get_ticks_msec()
 			sculpt_convert()
 			var shaped := {}
-			for i in recipe.size():
-				var part := BrickPalette.part_of(recipe.part_of(i))
+			for i in bench.recipe.size():
+				var part := BrickPalette.part_of(bench.recipe.part_of(i))
 				if BrickPalette.is_shaped(part):
 					shaped[part] = int(shaped.get(part, 0)) + 1
 			print("[sculpt] converted in %d ms: %d bricks, shaped %s, shells %s" % [Time.get_ticks_msec() - t0,
-					recipe.size(), str(shaped), str(_shell_tris)])
+					bench.recipe.size(), str(shaped), str(_shell_tris)])
 		# Picking the tool again would put a lifted part down (--pick wants it held).
 		if _held_kind() != "part":
 			rail_pick("sculpt")
@@ -607,7 +615,7 @@ func _shot() -> void:
 		cut_deep = 0
 		work_plane = "front"
 		work_x = 60
-		var z := mirror_z
+		var z := bench.mirror_z
 		sketch_region([Vector2(z - 2.5, 28), Vector2(z + 2.5, 28), Vector2(z + 2.5, 42), Vector2(z + 0.5, 46),
 				Vector2(z - 0.5, 46), Vector2(z - 2.5, 42)])
 		work_plane = "side"
@@ -617,7 +625,7 @@ func _shot() -> void:
 					Vector3.FORWARD)
 			if not h.is_empty():
 				stud_edit(true, h)
-		var lean := stud_hit(Vector3(46.0 * BrickPalette.STUD_M, 60.0 * BrickPalette.PLATE_M, (mirror_z + 2.0) * BrickPalette.STUD_M),
+		var lean := stud_hit(Vector3(46.0 * BrickPalette.STUD_M, 60.0 * BrickPalette.PLATE_M, (bench.mirror_z + 2.0) * BrickPalette.STUD_M),
 				Vector3(0, -1, -0.6).normalized())
 		if not lean.is_empty():
 			stud_edit(true, lean)
@@ -651,7 +659,7 @@ func _shot() -> void:
 		print("[asset workshop] wrote %s" % ProjectSettings.globalize_path(path))
 	if "--menu" in OS.get_cmdline_user_args():
 		# The Gun menu open, to see the menus.
-		for c in _menu.bar().menus():
+		for c in bench._menu.bar().menus():
 			if (c as MenuButton).text == "Gun":
 				(c as MenuButton).show_popup()
 		for _i in 6:
@@ -833,7 +841,7 @@ func view_box() -> Array:
 	var mid := _grid_mid
 	if mid.x < 0:
 		mid = _cell_of(_grid_target())
-	var area := Vector3i(plate_studs, height_plates, plate_studs)
+	var area := Vector3i(bench.plate_studs, bench.height_plates, bench.plate_studs)
 	var lo := (mid - half).clamp(Vector3i.ZERO, area)
 	var hi := (mid + half).clamp(Vector3i.ZERO, area)
 	if lo.y == 0:
@@ -857,9 +865,9 @@ func _grid_target() -> Vector3:
 	var xs := PackedInt32Array()
 	var ys := PackedInt32Array()
 	var zs := PackedInt32Array()
-	for i in recipe.size():
-		var c := recipe.cell_of(i)
-		if recipe.frame_of(i) == 0 and in_area(c):
+	for i in bench.recipe.size():
+		var c := bench.recipe.cell_of(i)
+		if bench.recipe.frame_of(i) == 0 and in_area(c):
 			xs.append(c.x)
 			ys.append(c.y)
 			zs.append(c.z)
@@ -879,7 +887,7 @@ func _grid_target() -> Vector3:
 		ys.append(c.y)
 		zs.append(c.z)
 	if xs.is_empty():
-		var mid := plate_studs * BrickPalette.STUD_M * 0.5
+		var mid := bench.plate_studs * BrickPalette.STUD_M * 0.5
 		return Vector3(mid, 1.5, mid)
 	xs.sort()
 	ys.sort()
@@ -978,7 +986,7 @@ func measure_point(from: Vector3, dir: Vector3) -> Variant:
 
 ## Where a ray meets a brick's face, or null.
 func _measure_brick(from: Vector3, dir: Vector3) -> Variant:
-	var hit := _first_hit(from, dir)
+	var hit := bench._first_hit(from, dir)
 	if not hit.is_empty():
 		# The workshop's ray steps a third of a plate at a time, so its hit is somewhere
 		# inside the brick. Halve back onto the face: a measurement is between surfaces.
@@ -988,7 +996,7 @@ func _measure_brick(from: Vector3, dir: Vector3) -> Variant:
 			var mid := (outside + inside) * 0.5
 			var p := from + dir * mid
 			var f: int = hit.frame
-			if world.block_at(f, _cell_in(f, p)) >= 0 and world.is_solid(f, _cell_in(f, p)):
+			if bench.world.block_at(f, bench._cell_in(f, p)) >= 0 and bench.world.is_solid(f, bench._cell_in(f, p)):
 				inside = mid
 			else:
 				outside = mid
@@ -998,9 +1006,9 @@ func _measure_brick(from: Vector3, dir: Vector3) -> Variant:
 
 func set_measure(on: bool) -> void:
 	if on:
-		toolbox.use(&"measure")
-	elif toolbox.active_id() == &"measure":
-		toolbox.use(&"")
+		bench.toolbox.use(&"measure")
+	elif bench.toolbox.active_id() == &"measure":
+		bench.toolbox.use(&"")
 	_measure_tool.clear()
 
 
@@ -1029,10 +1037,10 @@ func wk_fill_at_cursor(width: int) -> int:
 ## Move: press on a part of this chunk; it is the part selected, and what is dragged.
 func wk_move_grab() -> Variant:
 	var ray := _mouse_ray()
-	var hit := _first_hit(ray[0], ray[1])
-	if hit.is_empty() or hit.frame != chunk:
+	var hit := bench._first_hit(ray[0], ray[1])
+	if hit.is_empty() or hit.frame != bench.chunk:
 		return null
-	var rid := _recipe_id_at(0, hit.block)
+	var rid := bench._recipe_id_at(0, hit.block)
 	if rid < 0:
 		return null
 	select_part(part_of[rid] if rid < part_of.size() else part_sel)
@@ -1089,7 +1097,7 @@ func _draw_measure() -> void:
 
 
 func set_mirror(on: bool) -> void:
-	mirror_on = on
+	bench.mirror_on = on
 	_mirror_sheet.visible = on
 	_place_mirror_sheet()
 	_store_asset_meta()
@@ -1112,43 +1120,43 @@ func _mirror_onto_build() -> bool:
 			if in_area(c):
 				zs.append(c.z)
 	if zs.is_empty():
-		for i in recipe.size():
-			if recipe.frame_of(i) == 0 and in_area(recipe.cell_of(i)):
-				for dz in BrickPalette.size_of(recipe.part_of(i)).z:
-					zs.append(recipe.cell_of(i).z + dz)
+		for i in bench.recipe.size():
+			if bench.recipe.frame_of(i) == 0 and in_area(bench.recipe.cell_of(i)):
+				for dz in BrickPalette.size_of(bench.recipe.part_of(i)).z:
+					zs.append(bench.recipe.cell_of(i).z + dz)
 	var lo := 1 << 30
 	var hi := -(1 << 30)
 	if not zs.is_empty():
 		zs.sort()
 		lo = zs[zs.size() / 10]
 		hi = zs[zs.size() * 9 / 10] + 1
-	var inside := mirror_z >= 1.0 and mirror_z <= plate_studs - 1.0
+	var inside := bench.mirror_z >= 1.0 and bench.mirror_z <= bench.plate_studs - 1.0
 	if lo > hi:
 		if not inside:
-			mirror_z = plate_studs * 0.5 + 0.5
+			bench.mirror_z = bench.plate_studs * 0.5 + 0.5
 			return true
 		return false
-	if inside and mirror_z >= lo - 2 and mirror_z <= hi + 2:
+	if inside and bench.mirror_z >= lo - 2 and bench.mirror_z <= hi + 2:
 		return false
-	var was := mirror_z
-	mirror_z = roundf((lo + hi) * 0.5)
+	var was := bench.mirror_z
+	bench.mirror_z = roundf((lo + hi) * 0.5)
 	print("[asset workshop] the mirror plane was at %.1f studs across, off the build (%d to %d): moved to %.1f"
-			% [was, lo, hi, mirror_z])
+			% [was, lo, hi, bench.mirror_z])
 	return true
 
 
 ## Put the plane down the middle of the ghost.
 func mirror_here() -> void:
-	mirror_z = _cell.z + BrickPalette.size_of(_archetype_name()).z * 0.5
+	bench.mirror_z = bench._cell.z + BrickPalette.size_of(bench._archetype_name()).z * 0.5
 	_place_mirror_sheet()
 	_store_asset_meta()
 
 
 func _place() -> void:
-	var before := recipe.size()
-	_place_base()   # the brick, and its mirror image when the mirror is on
-	if mirror_on and recipe.size() == before + 2:
-		undo_stack.group_last(2)
+	var before := bench.recipe.size()
+	bench._place_base()   # the brick, and its mirror image when the mirror is on
+	if bench.mirror_on and bench.recipe.size() == before + 2:
+		bench.undo_stack.group_last(2)
 
 
 func _place_mirror_sheet() -> void:
@@ -1157,7 +1165,7 @@ func _place_mirror_sheet() -> void:
 	var w := (box[1] as Vector3i).x * BrickPalette.STUD_M
 	var y0 := maxf(0.15, (box[0] as Vector3i).y * BrickPalette.PLATE_M)
 	var h := y0 + VIEW_STUDS * BrickPalette.STUD_M * 0.4
-	var z := mirror_z * BrickPalette.STUD_M
+	var z := bench.mirror_z * BrickPalette.STUD_M
 	var im := ImmediateMesh.new()
 	im.surface_begin(Mesh.PRIMITIVE_LINES)
 	var corners := [Vector3(x0, y0, z), Vector3(w, y0, z), Vector3(w, h, z), Vector3(x0, h, z)]
@@ -1208,10 +1216,10 @@ func build_centre() -> Vector3:
 		var sb := size_box()
 		if sb.size != Vector3.ZERO:
 			return sb.get_center()
-	if recipe.size() == 0:
-		var mid := plate_studs * BrickPalette.STUD_M * 0.5
+	if bench.recipe.size() == 0:
+		var mid := bench.plate_studs * BrickPalette.STUD_M * 0.5
 		return Vector3(mid, 1.5, mid)
-	var b := recipe.bounds()
+	var b := bench.recipe.bounds()
 	var lo: Vector3i = b[0]
 	var d: Vector3i = b[1]
 	return Vector3((lo.x + d.x * 0.5) * BrickPalette.STUD_M, (lo.y + d.y * 0.5) * BrickPalette.PLATE_M,
@@ -1226,7 +1234,7 @@ func _unhandled_input(e: InputEvent) -> void:
 	if (_file_dialog != null and _file_dialog.visible) or (_length_dialog != null and _length_dialog.visible):
 		return
 	# The catalogue (F6) first: while it is open, clicks place furniture.
-	if _furnish != null and _furnish.input(e):
+	if bench._furnish != null and bench._furnish.input(e):
 		get_viewport().set_input_as_handled()
 		return
 	# The wheel over the rail scrolls the rail only: at its end it must not go on to the
@@ -1262,7 +1270,7 @@ func _unhandled_input(e: InputEvent) -> void:
 				if e.shift_pressed:
 					mirror_here()
 				else:
-					set_mirror(not mirror_on)
+					set_mirror(not bench.mirror_on)
 			KEY_F: set_free(not free_place)
 			KEY_D: rail_pick("place" if rail_active() == "sketch" else "sketch")
 			KEY_V: rail_pick("place" if rail_active() == "sculpt" else "sculpt")
@@ -1278,7 +1286,7 @@ func _unhandled_input(e: InputEvent) -> void:
 			get_viewport().set_input_as_handled()
 			return
 	if e is InputEventKey and e.pressed and not e.ctrl_pressed and not e.alt_pressed and free_place \
-			and not _painting and e.keycode in [KEY_PAGEUP, KEY_PAGEDOWN]:
+			and not bench._painting and e.keycode in [KEY_PAGEUP, KEY_PAGEDOWN]:
 		move_work_plane(1 if e.keycode == KEY_PAGEUP else -1)
 		get_viewport().set_input_as_handled()
 		return
@@ -1309,31 +1317,31 @@ func _unhandled_input(e: InputEvent) -> void:
 		if mine:
 			get_viewport().set_input_as_handled()
 			return
-	bench_unhandled_input(e)
+	bench.bench_unhandled_input(e)
 
 
 ## Hand an event to the kit tool in hand, if it is one of `ids`. True if it used it.
 func _kit_input(e: InputEvent, ids: Array) -> bool:
-	return toolbox.active_id() in ids and toolbox.input(e)
+	return bench.toolbox.active_id() in ids and bench.toolbox.input(e)
 
 
 func _process(dt: float) -> void:
-	bench_process(dt)
+	bench.bench_process(dt)
 	if _ui != null:
 		_ui.process(dt)
 	if _ruler == null:
 		return
 	if tool in ["sketch", "stud", "move"]:
-		_ghost.visible = false
-		_ghost_studs.visible = false
+		bench._ghost.visible = false
+		bench._ghost_studs.visible = false
 	if _shape_brush_on():
-		_ghost.visible = false
-		_ghost_studs.visible = false
+		bench._ghost.visible = false
+		bench._ghost_studs.visible = false
 	_stud_ghost_process()
 	_explode_process()
 	_rail_process()
-	if toolbox.active_id() in [&"shape", &"select"]:
-		toolbox.process(dt)   # a box being dragged follows the cursor
+	if bench.toolbox.active_id() in [&"shape", &"select"]:
+		bench.toolbox.process(dt)   # a box being dragged follows the cursor
 	_draw_tool()
 	if _outlines_dirty:
 		_draw_outlines()
@@ -1343,7 +1351,7 @@ func _process(dt: float) -> void:
 	if _autosave_dirty and not _no_autosave and Time.get_ticks_msec() > _autosave_at:
 		_autosave_dirty = false
 		_autosave_at = Time.get_ticks_msec() + 4000
-		recipe.save_to(AUTOSAVE)
+		bench.recipe.save_to(AUTOSAVE)
 	if _tris_due >= 0 and Time.get_ticks_msec() >= _tris_due:
 		_tris_due = -1
 		_tris = triangle_stats()
@@ -1366,12 +1374,12 @@ func _process(dt: float) -> void:
 
 
 func ruler_text() -> String:
-	var size := BrickPalette.size_of(_archetype_name())
+	var size := BrickPalette.size_of(bench._archetype_name())
 	var lines := PackedStringArray()
 	lines.append("ghost: %d studs along, plate %d up, %d studs across; it is %s long" % [
-			_cell.x, _cell.y, _cell.z, studs_text(size.x)])
-	if recipe.size() > 0:
-		var d: Vector3i = recipe.bounds()[1]
+			bench._cell.x, bench._cell.y, bench._cell.z, studs_text(size.x)])
+	if bench.recipe.size() > 0:
+		var d: Vector3i = bench.recipe.bounds()[1]
 		lines.append("build: %d x %d studs, %d plates high -> %.0f x %.0f x %.1f mm print, %.0f x %.0f x %.0f mm real" % [
 				d.x, d.z, d.y, d.x * PRINT_MM_PER_STUD, d.z * PRINT_MM_PER_STUD, d.y * PRINT_MM_PER_PLATE,
 				d.x * PRINT_MM_PER_STUD * REAL_PER_PRINT, d.z * PRINT_MM_PER_STUD * REAL_PER_PRINT,
@@ -1379,11 +1387,11 @@ func ruler_text() -> String:
 	if _clay_size_text != "":
 		lines.append(_clay_size_text)
 	var modes := PackedStringArray(["view: " + VIEWS[view]])
-	if recipe.kind == "mech":
+	if bench.recipe.kind == "mech":
 		modes.append("MECH %s, legs %d long" % [mech_class, leg_length])
-	elif recipe.kind == "figure":
+	elif bench.recipe.kind == "figure":
 		modes.append("FIGURE (one size: every part fits every figure)")
-	elif recipe.kind == "gun" and gun_scale == "mech":
+	elif bench.recipe.kind == "gun" and gun_scale == "mech":
 		modes.append("MECH GUN (nano scale)")
 	if free_place:
 		modes.append("FREE on the %s plane at %s (PgUp/PgDn)" % [work_plane, _plane_at_text()])
@@ -1391,20 +1399,20 @@ func ruler_text() -> String:
 		modes.append("aiming at studs (Alt F frees)")
 	if tool == "sketch":
 		modes.append("BLOCK OUT %s: draw on the %s plane, %d studs thick" % [part_names[part_sel], work_plane, width_of(part_names[part_sel])])
-	if mirror_on:
-		modes.append("mirror at %s studs across" % _num(mirror_z))
+	if bench.mirror_on:
+		modes.append("mirror at %s studs across" % _num(bench.mirror_z))
 	if measure_on:
 		modes.append("MEASURE: click two points")
 	if calibrating != null:
 		modes.append("CALIBRATE: click point %d of 2 on the photo" % ((calibrating as Array).size() + 1))
 	lines.append("   ".join(modes))
-	if recipe.size() > 0:
+	if bench.recipe.size() > 0:
 		var counts := part_counts()
 		var bits := PackedStringArray()
 		for name in part_names:
 			if counts[name] > 0:
 				bits.append("%s%s %d" % [name, "~" if smooth_parts.has(name) else "", counts[name]])
-		var d: Vector3i = recipe.bounds()[1]
+		var d: Vector3i = bench.recipe.bounds()[1]
 		if _body():
 			# A body is at nano scale in the game (a nano plate 0.07 m), as tall as it is built.
 			lines.append("parts: %s   (~ leaves smooth)   in the game %.2f m tall" % [", ".join(bits),
@@ -1427,7 +1435,7 @@ func _build_asset_tools() -> void:
 	var layer := CanvasLayer.new()
 	add_child(layer)
 	_ruler = Label.new()
-	_style(_ruler, Color(1.0, 0.92, 0.6), 14)
+	bench._style(_ruler, Color(1.0, 0.92, 0.6), 14)
 	layer.add_child(_ruler)
 
 	_measure_line = MeshInstance3D.new()
@@ -1592,8 +1600,8 @@ func _build_panel(layer: CanvasLayer) -> void:
 
 func _toggle_panel() -> void:
 	_panel.visible = not _panel.visible
-	if _panel.visible and _camera.has_method("_set_captured"):
-		_camera.call("_set_captured", false)
+	if _panel.visible and bench._camera.has_method("_set_captured"):
+		bench._camera.call("_set_captured", false)
 	_refresh_panel()
 
 
@@ -1647,8 +1655,8 @@ func _open_package_dialog() -> void:
 		_package_dialog.filters = PackedStringArray(["*.%s ; part packages" % PartPackage.EXT])
 		_package_dialog.file_selected.connect(func(p: String) -> void: import_package(p))
 		_ruler.get_parent().add_child(_package_dialog)
-	if _camera.has_method("_set_captured"):
-		_camera.call("_set_captured", false)
+	if bench._camera.has_method("_set_captured"):
+		bench._camera.call("_set_captured", false)
 	_package_dialog.popup_centered_ratio(0.6)
 
 
@@ -1667,8 +1675,8 @@ func toggle_catalog() -> void:
 	_catalog_panel.visible = not _catalog_panel.visible
 	if not _catalog_panel.visible:
 		return
-	if _camera.has_method("_set_captured"):
-		_camera.call("_set_captured", false)
+	if bench._camera.has_method("_set_captured"):
+		bench._camera.call("_set_captured", false)
 	var cat := PartCatalog.load_all()
 	if not parts_dir().begins_with(PartCatalog.OFFICIAL_DIR) and parts_dir() != PartCatalog.CUSTOM_DIR:
 		cat.load_dir(parts_dir(), "custom")   # a test's own folder
@@ -1691,7 +1699,7 @@ func _aim_catalog(cat: PartCatalog) -> void:
 		return
 	var sockets: Dictionary = PartStandards.plan("gun").get("sockets", {})
 	var path := part if sockets.has(part) else "barrel/" + part
-	if recipe.kind != "gun" or part == "body" or not sockets.has(path):
+	if bench.recipe.kind != "gun" or part == "body" or not sockets.has(path):
 		_catalog_panel.set_fit_target(null, "", "")
 		return
 	var host_name := path.get_base_dir() if path.contains("/") else "body"
@@ -1718,8 +1726,8 @@ func _calibrate_click() -> void:
 	_length_dialog.set_meta("points", calibrating)
 	calibrating = null
 	_length_edit.text = ""
-	if _camera.has_method("_set_captured"):
-		_camera.call("_set_captured", false)
+	if bench._camera.has_method("_set_captured"):
+		bench._camera.call("_set_captured", false)
 	_length_dialog.popup_centered(Vector2i(360, 90))
 	_length_edit.grab_focus()
 
@@ -1761,7 +1769,7 @@ func _store_asset_meta() -> void:
 		var o: Vector3 = g.offset
 		gds.append({"path": g.path, "real_mm": g.real_mm, "offset": [o.x, o.y, o.z],
 				"turn": g.turn, "opacity": g.opacity, "adjust": _xf_list(g.get("adjust", Transform3D()))})
-	recipe.meta["asset"] = {"photos": list, "mirror": {"on": mirror_on, "z": mirror_z},
+	bench.recipe.meta["asset"] = {"photos": list, "mirror": {"on": bench.mirror_on, "z": bench.mirror_z},
 			"parts": {"names": Array(part_names), "of": Array(part_of)}, "points": pts, "guides": gds,
 			"smooth": Array(smooth_parts), "muzzle": muzzle_end, "part_width": part_width.duplicate(),
 			"sketches": sketches, "part_bricks": part_bricks, "studs": extra_studs, "curves": curve_level,
@@ -1774,14 +1782,14 @@ func _store_asset_meta() -> void:
 
 
 func _restore_asset_meta() -> void:
-	var a: Dictionary = recipe.meta.get("asset", {})
+	var a: Dictionary = bench.recipe.meta.get("asset", {})
 	part_ids = (a.get("part_ids", {}) as Dictionary).duplicate()
 	part_hashes = (a.get("part_hashes", {}) as Dictionary).duplicate()
 	part_revs = (a.get("part_revs", {}) as Dictionary).duplicate()
 	var parts: Dictionary = a.get("parts", {})
 	if parts.has("names") and not (parts.names as Array).is_empty():
 		part_names = PackedStringArray(parts.names)
-	elif recipe.kind in ["gun", "mech", "figure"]:
+	elif bench.recipe.kind in ["gun", "mech", "figure"]:
 		part_names = PackedStringArray(kind_parts())
 	part_sel = mini(part_sel, part_names.size() - 1)
 	var mech: Dictionary = a.get("mech", {})
@@ -1857,7 +1865,7 @@ func _restore_asset_meta() -> void:
 	_restore_models(a.get("models", []))
 	_draw_mech_ref()
 	var m: Dictionary = a.get("mirror", {})
-	mirror_z = float(m.get("z", mirror_z))
+	bench.mirror_z = float(m.get("z", bench.mirror_z))
 	_mirror_onto_build()
 	set_mirror(bool(m.get("on", false)))
 	for d in a.get("photos", []):
@@ -1879,12 +1887,12 @@ func _restore_asset_meta() -> void:
 
 
 func _reset_space() -> void:
-	_reset_space_base()
+	bench._reset_space_base()
 	# One place for everything: the middle of the area, where the camera, the grid and
 	# the starting brick are (a plane kept from an older, smaller area was 460 studs off).
-	mirror_z = plate_studs * 0.5 + 0.5
+	bench.mirror_z = bench.plate_studs * 0.5 + 0.5
 	@warning_ignore("integer_division")
-	work_x = plate_studs / 2
+	work_x = bench.plate_studs / 2
 	_grid_mid = Vector3i(-1, -1, -1)
 	if not tried.is_empty():
 		untry_all()
@@ -1941,9 +1949,9 @@ const ASSET_KINDS := ["gun", "mech", "figure", "item"]
 ## A build here is one of the asset kinds; anything else (a build saved before guns had a
 ## library) becomes a gun.
 func _set_asset_kind(k: String) -> void:
-	recipe.kind = k if ASSET_KINDS.has(k) else "gun"
-	if _menu != null:
-		_menu.set_kind(recipe.kind)
+	bench.recipe.kind = k if ASSET_KINDS.has(k) else "gun"
+	if bench._menu != null:
+		bench._menu.set_kind(bench.recipe.kind)
 	if _ui != null:
 		_ui.sync_kind()
 	_kind_changed()
@@ -1956,12 +1964,12 @@ func kind_parts() -> Array:
 
 ## A mech or a figure: a body of parts on a reference's joints (the same mode serves both).
 func _body() -> bool:
-	return recipe.kind in ["mech", "figure"]
+	return bench.recipe.kind in ["mech", "figure"]
 
 
 ## The reference the body is built round.
 func body_ref() -> GDScript:
-	return FigureReference if recipe.kind == "figure" else MechReference
+	return FigureReference if bench.recipe.kind == "figure" else MechReference
 
 
 func _kind_changed() -> void:
@@ -1969,18 +1977,18 @@ func _kind_changed() -> void:
 		_fill_point_slots()
 	_draw_mech_ref()
 	# The flat views framed to what is made: a figure is a few studs tall, a gun's view 80.
-	_ortho_size = (FIGURE_VIEW_STUDS if recipe.kind == "figure" else VIEW_STUDS) * BrickPalette.STUD_M * 0.75
-	if _camera != null and view != 0:
-		_camera.size = _ortho_size
+	_ortho_size = (FIGURE_VIEW_STUDS if bench.recipe.kind == "figure" else VIEW_STUDS) * BrickPalette.STUD_M * 0.75
+	if bench._camera != null and view != 0:
+		bench._camera.size = _ortho_size
 
 
 ## Asset > Make a gun / a mech / furniture or an item: what this build is saved as. A gun
 ## and a mech have their own parts: switching renames them in place (a gun's body is a
 ## mech's chassis), so no brick changes part; a new mech gets its joints laid ready.
 func set_asset_kind(k: String) -> void:
-	var was := recipe.kind
+	var was := bench.recipe.kind
 	_set_asset_kind(k)
-	if recipe.kind != was and recipe.kind in ["gun", "mech", "figure"]:
+	if bench.recipe.kind != was and bench.recipe.kind in ["gun", "mech", "figure"]:
 		var want := PackedStringArray(kind_parts())
 		if part_names != want:
 			part_names = want
@@ -1993,19 +2001,19 @@ func set_asset_kind(k: String) -> void:
 			lay_ready_points()
 		_store_asset_meta()
 	_kind_changed()
-	_dirty = true
+	bench._dirty = true
 	print("[asset workshop] making %s: Save As files it in %s" % [
-			"furniture or an item" if recipe.kind == "item" else "a " + recipe.kind,
-			BuildRecipe.player_dir(recipe.kind)])
+			"furniture or an item" if bench.recipe.kind == "item" else "a " + bench.recipe.kind,
+			BuildRecipe.player_dir(bench.recipe.kind)])
 
 
 func _load_recipe(r: BuildRecipe) -> void:
 	# The workshop's load ends in an edit, and an edit saves this scene's state into the
 	# recipe: while loading, that state is still the last build's, so it waits.
 	_loading = true
-	_load_recipe_base(r)
+	bench._load_recipe_base(r)
 	_loading = false
-	_set_asset_kind(recipe.kind)
+	_set_asset_kind(bench.recipe.kind)
 	_restore_asset_meta()
 	_regrid(true)
 
@@ -2018,21 +2026,21 @@ func _setup_parts() -> void:
 	if part_names.is_empty():
 		part_names = PackedStringArray(GUN_PARTS)
 	# Its own file: switching toolbars must never write over the main workshop's hotbar.
-	_hotbar.save_path = "user://asset_workshop_hotbar.json"
+	bench._hotbar.save_path = "user://asset_workshop_hotbar.json"
 	# Plain Tab frees and takes the mouse here; Shift+Tab is all parts (_tab_key).
-	_hotbar.browser_on_shift_tab = true
+	bench._hotbar.browser_on_shift_tab = true
 	if FileAccess.file_exists(toolbars_save):
 		var d = JSON.parse_string(FileAccess.get_file_as_string(toolbars_save))
 		if d is Dictionary:
 			toolbars = d
 	_part_label = Label.new()
-	_style(_part_label, Color.WHITE, 16)
+	bench._style(_part_label, Color.WHITE, 16)
 	(_ruler.get_parent() as Node).add_child(_part_label)
 	_points_root = Node3D.new()
 	add_child(_points_root)
 	sculpt = AssetSculpt.new()
 	add_child(sculpt)
-	sculpt.place(world.get_chunk_transform(asm.frames[0]), BrickPalette.STUD_M / BrickWorld.ticks_per_stud())
+	sculpt.place(bench.world.get_chunk_transform(bench.asm.frames[0]), BrickPalette.STUD_M / BrickWorld.ticks_per_stud())
 	sculpt.set_parts(part_names.size())
 	_load_interfaces()
 	_build_point_panel(_ruler.get_parent() as CanvasLayer)
@@ -2049,7 +2057,7 @@ func _setup_parts() -> void:
 
 ## Make part `i` current: its toolbar comes up, and the bricks laid from now are its.
 func select_part(i: int) -> void:
-	toolbars[part_names[part_sel]] = _hotbar.slots.duplicate(true)
+	toolbars[part_names[part_sel]] = bench._hotbar.slots.duplicate(true)
 	part_sel = posmod(i, part_names.size())
 	_load_toolbar(part_names[part_sel])
 	_outlines_dirty = true
@@ -2065,17 +2073,17 @@ func select_part(i: int) -> void:
 func _load_toolbar(part: String) -> void:
 	if toolbars.has(part):
 		var slots: Array = toolbars[part]
-		for k in mini(slots.size(), _hotbar.slots.size()):
-			_hotbar.slots[k] = (slots[k] as Array).duplicate()
-		_hotbar._refresh()
-	_hotbar.select(_hotbar.selected)
+		for k in mini(slots.size(), bench._hotbar.slots.size()):
+			bench._hotbar.slots[k] = (slots[k] as Array).duplicate()
+		bench._hotbar._refresh()
+	bench._hotbar.select(bench._hotbar.selected)
 
 
 ## Keep a tag for every brick: one for each brick added since (the current part's) and
 ## none for a brick taken away. A delete says which brick it took; anything else that
 ## shortens the recipe (undo) takes from the end, as it does.
 func _reconcile_parts() -> void:
-	var n := recipe.size()
+	var n := bench.recipe.size()
 	if _removing >= 0 and _removing < part_of.size() and part_of.size() == n + 1:
 		part_of.remove_at(_removing)
 	_removing = -1
@@ -2086,11 +2094,11 @@ func _reconcile_parts() -> void:
 
 
 func _after_edit() -> void:
-	_after_edit_base()
+	bench._after_edit_base()
 	if _loading:
 		return
 	_reconcile_parts()
-	if _batch:
+	if bench._batch:
 		return   # the batch's own closing _after_edit does the rest, once
 	_pick_dirty = true
 	_display_dirty = true
@@ -2104,17 +2112,17 @@ func _after_edit() -> void:
 		_view_drawn = vb
 		_draw_work_plane()
 		_place_mirror_sheet()
-	if recipe.size() == 0:
+	if bench.recipe.size() == 0:
 		_ensure_start_brick.call_deferred()
 
 
 ## (An RMB delete is an edit of its own -- `_push_delete`, undo lays it back -- in both
 ## workshops: workshop.gd.)
 func _delete_ray(from: Vector3, dir: Vector3) -> bool:
-	var hit := _first_hit(from, dir)
+	var hit := bench._first_hit(from, dir)
 	if not hit.is_empty():
-		_removing = _recipe_id_at(asm.frames.find(hit.frame), hit.block)
-	var done := _delete_ray_base(from, dir)
+		_removing = bench._recipe_id_at(bench.asm.frames.find(hit.frame), hit.block)
+	var done := bench._delete_ray_base(from, dir)
 	if not done:
 		_removing = -1
 	return done
@@ -2122,7 +2130,7 @@ func _delete_ray(from: Vector3, dir: Vector3) -> bool:
 
 ## A brick as redo lays it again: with the part it belongs to.
 func _brick_item(i: int) -> Dictionary:
-	var d := _brick_item_base(i)
+	var d := bench._brick_item_base(i)
 	d["tag"] = part_of[i] if i < part_of.size() else part_sel
 	return d
 
@@ -2141,8 +2149,8 @@ func _before_remove(rid: int) -> void:
 
 
 func _brick_info(i: int) -> Dictionary:
-	return {"arch": recipe.part_of(i), "cell": recipe.cell_of(i), "colour": recipe.colour_of(i),
-			"mat": recipe.material_of(i), "tag": part_of[i] if i < part_of.size() else part_sel}
+	return {"arch": bench.recipe.part_of(i), "cell": bench.recipe.cell_of(i), "colour": bench.recipe.colour_of(i),
+			"mat": bench.recipe.material_of(i), "tag": part_of[i] if i < part_of.size() else part_sel}
 
 
 ## (`find_brick`, the brick of a part at a cell, is the building workshop's: workshop.gd.)
@@ -2150,19 +2158,19 @@ func _brick_info(i: int) -> Dictionary:
 
 ## Take a brick up as RMB would, found by part and cell. True if it went.
 func remove_brick(arch: String, cell: Vector3i, _af: int = 0) -> bool:
-	var i := find_brick(arch, cell)
+	var i := bench.find_brick(arch, cell)
 	return i >= 0 and take_brick(i)
 
 
 ## Take up the brick at recipe index `i` as RMB does -- world, recipe and the undo history
 ## renumbered together (`_remove_rid`) -- and keep it, so Z can lay it back.
 func take_brick(i: int) -> bool:
-	if i < 0 or i >= recipe.size():
+	if i < 0 or i >= bench.recipe.size():
 		return false
 	var took := _brick_info(i)
-	_remove_rid(i)
+	bench._remove_rid(i)
 	_after_edit()
-	_push_delete(took)
+	bench._push_delete(took)
 	return true
 
 
@@ -2182,7 +2190,7 @@ func part_counts() -> Dictionary:
 
 ## While a shape or a select box is dragged, the ghost stays on the plane it started on.
 func _hold_lock(on: bool) -> void:
-	_hold_lock_base(on or _dragging)
+	bench._hold_lock_base(on or _dragging)
 
 
 # ---------------------------------------------------------------------------
@@ -2208,8 +2216,8 @@ func _load_interfaces() -> void:
 ## The lattice point under the ghost: its first stud line along, the plate it stands on,
 ## the middle of it across.
 func point_under_ghost() -> Array:
-	var size := BrickPalette.size_of(_archetype_name())
-	return [_cell.x, _cell.y, _cell.z + size.z * 0.5]
+	var size := BrickPalette.size_of(bench._archetype_name())
+	return [bench._cell.x, bench._cell.y, bench._cell.z + size.z * 0.5]
 
 
 ## A mount or socket where the ghost is, for the current part; or, if one is there
@@ -2242,8 +2250,8 @@ func toggle_point_here() -> void:
 	_point_panel.visible = true
 	_point_panel.set_meta("at", at)
 	_point_panel.set_meta("dir", [])
-	if _camera.has_method("_set_captured"):
-		_camera.call("_set_captured", false)
+	if bench._camera.has_method("_set_captured"):
+		bench._camera.call("_set_captured", false)
 	_fill_point_ifaces()
 
 
@@ -2322,7 +2330,7 @@ func _fill_point_ifaces() -> void:
 		if String(_interfaces[k].get("slot", "")) != slot:
 			continue
 		# A gun's joints are its scale's: a mech gun's mgun.*, a player's the rest.
-		if recipe.kind == "gun" and (String(k).begins_with("mgun.") != (gun_scale == "mech")):
+		if bench.recipe.kind == "gun" and (String(k).begins_with("mgun.") != (gun_scale == "mech")):
 			continue
 		_point_iface.add_item(k)
 
@@ -2359,7 +2367,7 @@ func _draw_points() -> void:
 	for key in labels:
 		(rows.get_or_add(roundi((labels[key].at as Vector3).y * 4.0), []) as Array).append(key)
 	var lift := {}
-	var line := 0.16 if recipe.kind == "figure" else 0.27
+	var line := 0.16 if bench.recipe.kind == "figure" else 0.27
 	for r in rows:
 		var row: Array = rows[r]
 		row.sort_custom(func(a: String, c: String) -> bool:
@@ -2373,7 +2381,7 @@ func _draw_points() -> void:
 		label.text = "\n".join(PackedStringArray(_merged_words(labels[key].lines)))
 		label.billboard = BaseMaterial3D.BILLBOARD_ENABLED
 		label.no_depth_test = true
-		label.pixel_size = 0.0018 if recipe.kind == "figure" else 0.003   # a figure's view is small
+		label.pixel_size = 0.0018 if bench.recipe.kind == "figure" else 0.003   # a figure's view is small
 		label.font_size = 40
 		label.outline_size = 10
 		label.position = (labels[key].at as Vector3) + Vector3.UP * (0.25 + float(lift.get(key, 0.0)))
@@ -2423,7 +2431,7 @@ static func _merged_words(list: Array) -> Array:
 ## [archetype name, Vector3i size in studs along, plates up, studs across].
 func fill_parts() -> Array:
 	var out := []
-	for part in _parts():
+	for part in bench._parts():
 		var name := String(part)
 		if not (name.begins_with("plate_") or name.begins_with("brick_")) 				or name in ["plate_10x10", "plate_5x10", "plate_5x5"]:
 			continue
@@ -2431,7 +2439,7 @@ func fill_parts() -> Array:
 		for yaw in 2:
 			var arch := BrickPalette.variant_name(name, yaw, false)
 			var size := BrickPalette.size_of(arch)
-			if not seen.has(size) and palette.has(arch):
+			if not seen.has(size) and bench.palette.has(arch):
 				seen[size] = true
 				out.append([arch, size])
 	out.sort_custom(func(a: Array, b: Array) -> bool:
@@ -2453,7 +2461,7 @@ func pack_cells(cells: Dictionary, random: bool = false, free: Dictionary = {}, 
 	# `free`: cells built in now that will be empty when this is laid.
 	var left := {}
 	for c in cells:
-		if free.has(c) or not world.is_solid(chunk, c):
+		if free.has(c) or not bench.world.is_solid(bench.chunk, c):
 			left[c] = true
 	var parts := fill_parts()
 	var out := []
@@ -2515,22 +2523,22 @@ static func _box_in(cells: Dictionary, at: Vector3i, size: Vector3i) -> bool:
 ## a click would. Returns false if it does not fit there.
 ## `af`: lay it in that frame's grid (`asm.frames`; a sideways one), at a cell of that grid.
 func place_named(arch: String, cell: Vector3i, colour: int = -1, mat: int = -1, af: int = 0) -> bool:
-	if not palette.has(arch) or (af == 0 and _frame != 0) or af < 0 or af >= asm.frames.size():
+	if not bench.palette.has(arch) or (af == 0 and bench._frame != 0) or af < 0 or af >= bench.asm.frames.size():
 		return false
-	var f: int = asm.frames[af]
-	var id: int = palette[arch]
-	if world.would_connect(f, cell, id) < 0 or not asm.can_place(f, cell, id):
+	var f: int = bench.asm.frames[af]
+	var id: int = bench.palette[arch]
+	if bench.world.would_connect(f, cell, id) < 0 or not bench.asm.can_place(f, cell, id):
 		return false
-	var c := _colour if colour < 0 else colour
-	var m := _mat if mat < 0 else mat
-	var placed := asm.place(f, cell, id, c)
+	var c := bench._colour if colour < 0 else colour
+	var m := bench._mat if mat < 0 else mat
+	var placed := bench.asm.place(f, cell, id, c)
 	if placed < 0:
 		return false
 	if m != 0:
-		world.set_block_material(f, placed, m)
-	recipe.add(arch, cell, c, _recipe_frame_for(af), _role, m)
-	_placed_at.append([af, placed])
-	_push_brick(recipe.size() - 1)
+		bench.world.set_block_material(f, placed, m)
+	bench.recipe.add(arch, cell, c, bench._recipe_frame_for(af), bench._role, m)
+	bench._placed_at.append([af, placed])
+	bench._push_brick(bench.recipe.size() - 1)
 	_after_edit()
 	return true
 
@@ -2538,11 +2546,11 @@ func place_named(arch: String, cell: Vector3i, colour: int = -1, mat: int = -1, 
 ## Fill cells with bricks, as one edit: the mesh is rebuilt once, at the end.
 func fill_cells(cells: Dictionary, random: bool = false, group: bool = true) -> int:
 	var laid := 0
-	_batch = true
+	bench._batch = true
 	for pc in pack_cells(cells, random):
 		if place_named(pc[0], pc[1]):
 			laid += 1
-	_batch = false
+	bench._batch = false
 	_after_edit()
 	if group:
 		_group(laid)
@@ -2550,7 +2558,7 @@ func fill_cells(cells: Dictionary, random: bool = false, group: bool = true) -> 
 
 
 func _group(n: int) -> void:
-	undo_stack.group_last(n)
+	bench.undo_stack.group_last(n)
 
 
 # ---------------------------------------------------------------------------
@@ -2598,12 +2606,12 @@ func set_tool(t: String) -> void:
 		selection.clear()
 	_sketch.clear()
 	if KIT_TOOLS.has(t):
-		toolbox.use(KIT_TOOLS[t])
-	elif toolbox.active_id() in KIT_TOOLS.values():
-		toolbox.use(&"")
+		bench.toolbox.use(KIT_TOOLS[t])
+	elif bench.toolbox.active_id() in KIT_TOOLS.values():
+		bench.toolbox.use(&"")
 	_sketch_box.visible = t == "sketch"
-	if t != "" and _painting:
-		_set_painting(false)
+	if t != "" and bench._painting:
+		bench._set_painting(false)
 	_outlines_dirty = true
 
 
@@ -2611,13 +2619,13 @@ func set_tool(t: String) -> void:
 # box) ask these (BrickWorkshopContext -> _sketch_host(), this workshop).
 
 func wk_shape_begin(_button: int) -> Dictionary:
-	_drag_from = _cell
-	_drag_to = _cell
-	return {"a": _cell}
+	_drag_from = bench._cell
+	_drag_to = bench._cell
+	return {"a": bench._cell}
 
 
 func wk_shape_base(_d: Dictionary) -> void:
-	_drag_to = _cell
+	_drag_to = bench._cell
 
 
 func wk_shape_base_done(_d: Dictionary) -> void:
@@ -2650,13 +2658,13 @@ func wk_select_at_cursor() -> void:
 
 
 func wk_select_box_begin() -> bool:
-	_drag_from = _cell
-	_drag_to = _cell
+	_drag_from = bench._cell
+	_drag_to = bench._cell
 	return true
 
 
 func wk_select_box_drag() -> void:
-	_drag_to = _cell
+	_drag_to = bench._cell
 
 
 func wk_select_box_end() -> void:
@@ -2673,10 +2681,10 @@ func _finish_drag() -> void:
 ## Every brick of the upright grid whose corner is over the rectangle, any height.
 func select_box(a: Vector3i, b: Vector3i) -> void:
 	selection.clear()
-	for i in recipe.size():
-		if recipe.frame_of(i) != 0:
+	for i in bench.recipe.size():
+		if bench.recipe.frame_of(i) != 0:
 			continue
-		var c := recipe.cell_of(i)
+		var c := bench.recipe.cell_of(i)
 		if c.x >= mini(a.x, b.x) and c.x <= maxi(a.x, b.x) and c.z >= mini(a.z, b.z) and c.z <= maxi(a.z, b.z):
 			selection.append(i)
 	_outlines_dirty = true
@@ -2685,11 +2693,11 @@ func select_box(a: Vector3i, b: Vector3i) -> void:
 ## Delete the selection, top first, each as RMB would (so its part tag goes with it).
 func delete_selection() -> int:
 	var ids := selection.duplicate()
-	ids.sort_custom(func(a: int, b: int) -> bool: return recipe.cell_of(a).y > recipe.cell_of(b).y)
+	ids.sort_custom(func(a: int, b: int) -> bool: return bench.recipe.cell_of(a).y > bench.recipe.cell_of(b).y)
 	var cells := []
 	for i in ids:
-		var size := BrickPalette.size_of(recipe.part_of(i))
-		var c := recipe.cell_of(i)
+		var size := BrickPalette.size_of(bench.recipe.part_of(i))
+		var c := bench.recipe.cell_of(i)
 		cells.append(Vector3((c.x + size.x * 0.5) * BrickPalette.STUD_M, (c.y + 0.5) * BrickPalette.PLATE_M,
 				(c.z + size.z * 0.5) * BrickPalette.STUD_M))
 	selection.clear()
@@ -2707,17 +2715,17 @@ func _selection_cells() -> Array:
 	var cells := {}
 	var colours := {}
 	for i in selection:
-		var name := recipe.part_of(i)
+		var name := bench.recipe.part_of(i)
 		if not (name.begins_with("plate_") or name.begins_with("brick_")):
 			continue
 		var size := BrickPalette.size_of(name)
-		var c := recipe.cell_of(i)
+		var c := bench.recipe.cell_of(i)
 		for dx in size.x:
 			for dy in size.y:
 				for dz in size.z:
 					cells[c + Vector3i(dx, dy, dz)] = true
-		colours[recipe.colour_of(i)] = colours.get(recipe.colour_of(i), 0) + 1
-	var best := _colour
+		colours[bench.recipe.colour_of(i)] = colours.get(bench.recipe.colour_of(i), 0) + 1
+	var best := bench._colour
 	for k in colours:
 		if colours[k] > colours.get(best, 0):
 			best = k
@@ -2729,12 +2737,12 @@ func repack_selection(random: bool = false) -> Array:
 	var got := _selection_cells()
 	var before := selection.size()
 	selection = selection.filter(func(i: int) -> bool:
-		return recipe.part_of(i).begins_with("plate_") or recipe.part_of(i).begins_with("brick_"))
+		return bench.recipe.part_of(i).begins_with("plate_") or bench.recipe.part_of(i).begins_with("brick_"))
 	delete_selection()
-	var keep := _colour
-	_colour = got[1]
+	var keep := bench._colour
+	bench._colour = got[1]
 	var after := fill_cells(got[0], random)
-	_colour = keep
+	bench._colour = keep
 	return [before, after]
 
 
@@ -2754,21 +2762,21 @@ func copy_selection_to_ghost(move: bool = false) -> int:
 		return 0
 	var lo := Vector3i(1 << 30, 1 << 30, 1 << 30)
 	for i in selection:
-		var c := recipe.cell_of(i)
+		var c := bench.recipe.cell_of(i)
 		lo = Vector3i(mini(lo.x, c.x), mini(lo.y, c.y), mini(lo.z, c.z))
-	var off := _cell - lo
+	var off := bench._cell - lo
 	var items := []
 	for i in selection:
-		items.append([recipe.part_of(i), recipe.cell_of(i) + off, recipe.colour_of(i), recipe.material_of(i)])
+		items.append([bench.recipe.part_of(i), bench.recipe.cell_of(i) + off, bench.recipe.colour_of(i), bench.recipe.material_of(i)])
 	if move:
 		delete_selection()
 	var laid := 0
-	_batch = true
+	bench._batch = true
 	items.sort_custom(func(a: Array, b: Array) -> bool: return a[1].y < b[1].y)
 	for it in items:
 		if place_named(it[0], it[1], it[2], it[3]):
 			laid += 1
-	_batch = false
+	bench._batch = false
 	_after_edit()
 	_group(laid)
 	return laid
@@ -2824,8 +2832,8 @@ func _guide_fit_xf(g: Dictionary) -> Transform3D:
 	var turn := Basis(Vector3.UP, int(g.turn) * PI * 0.5)
 	var centre := box.get_center() * k
 	var bottom := box.position.y * k
-	var mid := plate_studs * BrickPalette.STUD_M * 0.5
-	var at := Vector3(mid, BrickPalette.PLATE_M - bottom, mirror_z * BrickPalette.STUD_M) - turn * Vector3(centre.x, 0.0, centre.z)
+	var mid := bench.plate_studs * BrickPalette.STUD_M * 0.5
+	var at := Vector3(mid, BrickPalette.PLATE_M - bottom, bench.mirror_z * BrickPalette.STUD_M) - turn * Vector3(centre.x, 0.0, centre.z)
 	return Transform3D(turn.scaled(Vector3.ONE * k), at + (g.offset as Vector3) * BrickPalette.STUD_M)
 
 
@@ -2872,16 +2880,16 @@ func set_section(on: bool) -> void:
 
 func _apply_section() -> void:
 	if not section_on or view == 0:
-		_camera.near = 0.05
+		bench._camera.near = 0.05
 		return
-	var cam := _camera.global_position
+	var cam := bench._camera.global_position
 	match VIEWS[view]:
 		"side":
-			_camera.near = maxf(0.05, cam.z - mirror_z * BrickPalette.STUD_M)
+			bench._camera.near = maxf(0.05, cam.z - bench.mirror_z * BrickPalette.STUD_M)
 		"top":
-			_camera.near = maxf(0.05, cam.y - (_cell.y + 1) * BrickPalette.PLATE_M)
+			bench._camera.near = maxf(0.05, cam.y - (bench._cell.y + 1) * BrickPalette.PLATE_M)
 		"front":
-			_camera.near = maxf(0.05, cam.x - (_cell.x + 1) * BrickPalette.STUD_M)
+			bench._camera.near = maxf(0.05, cam.x - (bench._cell.x + 1) * BrickPalette.STUD_M)
 
 
 func set_outlines(mode: int) -> void:
@@ -2897,8 +2905,8 @@ func _draw_outlines() -> void:
 	var sel := {}
 	for i in selection:
 		sel[i] = true
-	for i in recipe.size():
-		if recipe.frame_of(i) != 0:
+	for i in bench.recipe.size():
+		if bench.recipe.frame_of(i) != 0:
 			continue
 		var tag := part_of[i] if i < part_of.size() else 0
 		var show := sel.has(i) or outlines == 1 or (outlines == 2 and tag == part_sel)
@@ -2907,8 +2915,8 @@ func _draw_outlines() -> void:
 		if not any:
 			im.surface_begin(Mesh.PRIMITIVE_LINES)
 			any = true
-		var size := BrickPalette.size_of(recipe.part_of(i))
-		var c := recipe.cell_of(i)
+		var size := BrickPalette.size_of(bench.recipe.part_of(i))
+		var c := bench.recipe.cell_of(i)
 		var lo := Vector3(c.x * BrickPalette.STUD_M, c.y * BrickPalette.PLATE_M, c.z * BrickPalette.STUD_M)
 		var hi := lo + Vector3(size.x * BrickPalette.STUD_M, size.y * BrickPalette.PLATE_M, size.z * BrickPalette.STUD_M)
 		var col: Color = Color(1, 1, 1) if sel.has(i) else PART_COLOURS[tag % PART_COLOURS.size()]
@@ -3288,8 +3296,8 @@ func _guide_action(what: String) -> void:
 
 func _toggle_guide_panel() -> void:
 	_guide_panel.visible = not _guide_panel.visible
-	if _guide_panel.visible and _camera.has_method("_set_captured"):
-		_camera.call("_set_captured", false)
+	if _guide_panel.visible and bench._camera.has_method("_set_captured"):
+		bench._camera.call("_set_captured", false)
 	var vp := get_viewport().get_visible_rect().size
 	_guide_panel.position = Vector2(vp.x - 420, 60)
 	_refresh_guide_panel()
@@ -3326,7 +3334,7 @@ func toggle_smooth() -> void:
 func _undo() -> bool:
 	var pick := _pick_id()
 	_set_down()
-	var ok := _undo_base()
+	var ok := bench._undo_base()
 	_repick(pick)
 	return ok
 
@@ -3337,7 +3345,7 @@ func redo() -> int:
 	# Set down first: a lifted part put down where it was moved is a new edit, and clears redo.
 	var pick := _pick_id()
 	_set_down()
-	var c := undo_stack.redo()
+	var c := bench.undo_stack.redo()
 	_repick(pick)
 	return 0 if c == null else c.leaf_count([&"brick", &"delete", &"stud"])
 
@@ -3345,7 +3353,7 @@ func redo() -> int:
 ## The last `n` edits undo together, with the sketch they changed, if any: a snapshot that
 ## is put back after them, both ways (`_restore_sketch`).
 func _group_with(n: int, sketch) -> void:
-	undo_stack.group_last(n, null if sketch == null else _sketch_cmd(sketch))
+	bench.undo_stack.group_last(n, null if sketch == null else _sketch_cmd(sketch))
 
 
 ## A sketch, sculpt, model or shell change as an undo step: records `_restore_sketch` puts
@@ -3368,7 +3376,7 @@ func _resketch(c: WkCommand) -> bool:
 ## one after its edits) -- the first of them (`front`) or the last -- to add a record to.
 ## Null if it has none.
 func _top_sketch(front: bool) -> Variant:
-	var top := undo_stack.top()
+	var top := bench.undo_stack.top()
 	var cmds := []
 	if top is WkGroup:
 		cmds = (top as WkGroup).tails()
@@ -3429,7 +3437,7 @@ func wand_fill(i: int, hit: Vector3, width: int, tolerance: float = 0.14) -> int
 	var todo: Array[Vector2i] = [seed_cell]
 	while not todo.is_empty():
 		var c: Vector2i = todo.pop_back()
-		if seen.has(c) or c.y < 1 or c.x < 0 or c.x >= plate_studs or c.y >= height_plates:
+		if seen.has(c) or c.y < 1 or c.x < 0 or c.x >= bench.plate_studs or c.y >= bench.height_plates:
 			continue
 		seen[c] = true
 		var at := Vector3((c.x + 0.5) * BrickPalette.STUD_M, (c.y + 0.5) * BrickPalette.PLATE_M, z)
@@ -3442,7 +3450,7 @@ func wand_fill(i: int, hit: Vector3, width: int, tolerance: float = 0.14) -> int
 		keep[c] = true
 		for d in [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]:
 			todo.append(c + d)
-	var z0 := int(round(mirror_z - width * 0.5))
+	var z0 := int(round(bench.mirror_z - width * 0.5))
 	var cells := {}
 	for c in keep:
 		for k in width:
@@ -3465,13 +3473,13 @@ func export_sheet() -> Dictionary:
 	var y_lo := 1 << 30
 	var z_lo := 1 << 30
 	var z_hi := -(1 << 30)
-	for i in recipe.size():
+	for i in bench.recipe.size():
 		var af := _brick_frame(i)
 		if af < 0:
 			continue
 		if af == 0:
-			var size := BrickPalette.size_of(recipe.part_of(i))
-			var c := recipe.cell_of(i)
+			var size := BrickPalette.size_of(bench.recipe.part_of(i))
+			var c := bench.recipe.cell_of(i)
 			x_lo = mini(x_lo, c.x)
 			x_hi = maxi(x_hi, c.x + size.x)
 			y_lo = mini(y_lo, c.y)
@@ -3492,7 +3500,7 @@ func export_sheet() -> Dictionary:
 	var up := func(y: float) -> float: return (y - y_lo) * PRINT_MM_PER_PLATE
 	# Across from the mirror plane when it is on -- it is the asset's middle -- else from
 	# the middle of what was built.
-	var mid_z := mirror_z if mirror_on else (z_lo + z_hi) * 0.5
+	var mid_z := bench.mirror_z if bench.mirror_on else (z_lo + z_hi) * 0.5
 	var across := func(z: float) -> float: return (z - mid_z) * PRINT_MM_PER_STUD
 	var parts := []
 	var made := {}
@@ -3513,11 +3521,11 @@ func export_sheet() -> Dictionary:
 				spec["shell"] = _shell_sheet(name, along, across, up)
 				ids = _uncovered(name, ids)
 			for i in ids:
-				var size := BrickPalette.size_of(recipe.part_of(i))
-				var c := recipe.cell_of(i)
+				var size := BrickPalette.size_of(bench.recipe.part_of(i))
+				var c := bench.recipe.cell_of(i)
 				if _brick_frame(i) == 0:
 					var x0: float = along.call(c.x) if muzzle_end == "-x" else along.call(c.x + size.x)
-					bricks.append({"part": recipe.part_of(i), "min_mm": [x0, across.call(c.z), up.call(c.y)],
+					bricks.append({"part": bench.recipe.part_of(i), "min_mm": [x0, across.call(c.z), up.call(c.y)],
 							"size": [size.x, size.z, size.y]})
 				else:
 					bricks.append(_turned_brick(i, along, across, up, spec))
@@ -3551,10 +3559,10 @@ func export_sheet() -> Dictionary:
 		else:
 			joint["slot"] = q.slot
 			made[q.part]["sockets"].append(joint)
-	return {"name": slug(recipe.name) if recipe.name != "" else "asset",
+	return {"name": BrickBench.slug(bench.recipe.name) if bench.recipe.name != "" else "asset",
 			"note": "Written by the asset workshop's export (Docs/AssetWorkshop.md).",
 			"reference": "asset workshop", "class": "held",
-			"platform": String(recipe.meta.get("asset", {}).get("platform", "")), "parts": parts}
+			"platform": String(bench.recipe.meta.get("asset", {}).get("platform", "")), "parts": parts}
 
 
 ## A smooth part's loft: along the gun if it is longer than tall, else up it, one section
@@ -3562,8 +3570,8 @@ func export_sheet() -> Dictionary:
 func _loft_spec(spec: Dictionary, ids: Array, along: Callable, up: Callable) -> void:
 	var cells := {}
 	for i in ids:
-		var size := BrickPalette.size_of(recipe.part_of(i))
-		var c := recipe.cell_of(i)
+		var size := BrickPalette.size_of(bench.recipe.part_of(i))
+		var c := bench.recipe.cell_of(i)
 		for dx in size.x:
 			for dy in size.y:
 				for dz in size.z:
@@ -3621,9 +3629,9 @@ func _loft_spec(spec: Dictionary, ids: Array, along: Callable, up: Callable) -> 
 func _part_colour(ids: Array) -> Array:
 	var count := {}
 	for i in ids:
-		var k := Vector2i(recipe.material_of(i), recipe.colour_of(i))
+		var k := Vector2i(bench.recipe.material_of(i), bench.recipe.colour_of(i))
 		count[k] = count.get(k, 0) + 1
-	var best := Vector2i(0, _colour)
+	var best := Vector2i(0, bench._colour)
 	for k in count:
 		if count[k] > count.get(best, 0):
 			best = k
@@ -3725,15 +3733,15 @@ A gun is a quarter-size model: a Thompson is 53 studs long, 3 studs wide.
 [font_size=18][b]Tools[/b][/font_size]
 [b]F2[/b] photos   [b]F3[/b] guide models (an existing model to build inside, never exported)   [b]F4[/b] wand: click a colour patch on a photo to fill it
 [b]F7[/b] parts: every saved part, official and custom; tick any maker, part, class, gun class or creator, sort, and [i]Fits[/i] shows only what goes on the part being built
-[b]Alt 0-3[/b] view: 3D, side, top, front   [b]Alt M[/b] measure: two clicks   [b]Alt S[/b] mirror (Alt shift S: plane under the ghost)
+[b]Alt 0-3[/b] view: 3D, side, top, front   [b]Alt M[/b] measure: two clicks   [b]Alt S[/b] bench.mirror (Alt shift S: plane under the bench.ghost)
 [b]Alt F[/b] free placement / aim at studs   [b]PgUp PgDn[/b] move the working plane   [b]Alt D[/b] block out   [b]Alt + drag[/b] move a photo
 [b]Y[/b] next part   [b]J[/b] mount / socket   [b]K[/b] shapes: drag a box, cylinder, sphere or wedge, filled clean or random
-[b]L[/b] select: drag a box, then delete, re-pack, give to the part, copy or move to the ghost
+[b]L[/b] select: drag a box, then delete, re-pack, give to the part, copy or move to the bench.ghost
 [b]O[/b] section: in a flat view, cut away what is in front   [b]P[/b] outline bricks by part   [b]N[/b] part smooth / bricks
 [b]Z[/b] undo (a whole fill at once)   [b]shift Z[/b] redo   [b]F12[/b] export   [b]F1[/b] the workshop's own keys   [b]F10[/b] this page
 
 [font_size=18][b]Tips[/b][/font_size]
-Build the gun with its muzzle at the low end (left in the side view). Keep it on the mirror plane (the pink outline) so both halves match.
+Build the gun with its muzzle at the low end (left in the side view). Keep it on the bench.mirror plane (the pink outline) so both halves match.
 The panels need a free mouse: ESC, then click. Click the scene again to look around.
 [b]Run it outside the editor, or turn off the editor's game embedding:[/b] F5-F8 belong to the Godot editor (run, run scene, pause, stop) and the workshop's F5 / F9 quick save / load can be taken by it. The build is autosaved every few seconds and comes back next start.
 Exports land in your user folder, [i]asset_exports[/i]. Bought photos and models stay guides only: never exported."""
@@ -3796,11 +3804,11 @@ func _help_at_start() -> bool:
 func show_help(on: bool) -> void:
 	_help.visible = on
 	# The workshop's key list sits behind it; it comes back as it was.
-	if _keys_panel != null:
-		_keys_panel.visible = _keys_on and not on
+	if bench._keys_panel != null:
+		bench._keys_panel.visible = bench._keys_on and not on
 	if on:
-		if _camera.has_method("_set_captured"):
-			_camera.call("_set_captured", false)
+		if bench._camera.has_method("_set_captured"):
+			bench._camera.call("_set_captured", false)
 		var vp := get_viewport().get_visible_rect().size
 		_help.reset_size()
 		_help.position = (vp - _help.get_combined_minimum_size()) * 0.5
@@ -3812,15 +3820,15 @@ func show_help(on: bool) -> void:
 
 func set_free(on: bool) -> void:
 	free_place = on
-	_grid.visible = _grid_on and not on
+	bench._grid.visible = bench._grid_on and not on
 	_draw_work_plane()
 
 
 func move_work_plane(d: int) -> void:
 	match work_plane:
 		"side": work_depth += d
-		"top": work_height = clampi(work_height + d, 0, height_plates - 1)
-		"front": work_x = clampi(work_x + d, 0, plate_studs - 1)
+		"top": work_height = clampi(work_height + d, 0, bench.height_plates - 1)
+		"front": work_x = clampi(work_x + d, 0, bench.plate_studs - 1)
 	_draw_work_plane()
 
 
@@ -3858,24 +3866,24 @@ func free_cell(hit: Vector3, size: Vector3i) -> Vector3i:
 		"side": z = int(round(work_depth - size.z * 0.5))
 		"top": y = work_height
 		"front": x = int(round(work_x - size.x * 0.5))
-	return _clamp_cell(Vector3i(x, y, z), size)
+	return bench._clamp_cell(Vector3i(x, y, z), size)
 
 
 ## Free placement: no stud is aimed at; the ghost goes where the cursor meets the plane,
 ## mid-air or not, flipped or not. Only an overlap stops it.
 func _aim() -> void:
 	if not free_place:
-		_aim_base()
+		bench._aim_base()
 		return
 	var ray := _mouse_ray()
-	_lock = {}
-	_snapped = {}
-	_stud = NO_STUD
-	_studs = []
-	_frame = 0
+	bench._lock = {}
+	bench._snapped = {}
+	bench._stud = BrickBench.NO_STUD
+	bench._studs = []
+	bench._frame = 0
 	var hit = work_plane_hit(ray[0], ray[1])
 	if hit != null:
-		_cell = free_cell(hit, BrickPalette.size_of(_archetype_name()))
+		bench._cell = free_cell(hit, BrickPalette.size_of(bench._archetype_name()))
 
 
 func _draw_work_plane() -> void:
@@ -3926,7 +3934,7 @@ func _draw_work_plane() -> void:
 
 ## The brick a build starts from: a 1x4 along the gun on the mirror plane, mid-air.
 func _ensure_start_brick() -> void:
-	if not auto_start_brick or recipe.size() > 0 or _loading:
+	if not auto_start_brick or bench.recipe.size() > 0 or _loading:
 		return
 	# Only a truly empty build. Edit as SDF empties the bricks into the block-out; a brick
 	# laid then went into the block-out at the next Make bricks, one a round trip, on the plane
@@ -3934,7 +3942,7 @@ func _ensure_start_brick() -> void:
 	if sculpt != null and (sculpt.form.block_count() > 0 or not models.is_empty()):
 		return
 	# Nothing to mirror yet: the plane goes to the middle of the area with the brick.
-	mirror_z = plate_studs * 0.5 + 0.5
+	bench.mirror_z = bench.plate_studs * 0.5 + 0.5
 	_place_mirror_sheet()
 	var arch := ""
 	for yaw in 2:
@@ -3943,13 +3951,13 @@ func _ensure_start_brick() -> void:
 			arch = name
 	if arch == "":
 		return
-	var keep := _batch
-	_batch = true
-	var z := int(floor(mirror_z))
-	if z < 1 or z > plate_studs - 2:
-		z = plate_studs / 2
-	place_named(arch, Vector3i(plate_studs / 2 - 2, work_height, z))
-	_batch = keep
+	var keep := bench._batch
+	bench._batch = true
+	var z := int(floor(bench.mirror_z))
+	if z < 1 or z > bench.plate_studs - 2:
+		z = bench.plate_studs / 2
+	place_named(arch, Vector3i(bench.plate_studs / 2 - 2, work_height, z))
+	bench._batch = keep
 	_after_edit()
 	_regrid(true)
 
@@ -3959,12 +3967,12 @@ func _look_at_build() -> void:
 		return
 	var c := build_centre()
 	var off := Vector3(-5.0, 3.0, 8.0)
-	if _body() and recipe.size() > 0:
+	if _body() and bench.recipe.size() > 0:
 		# A body by its height: far enough to see all of it, a little above.
-		var tall := float((recipe.bounds()[1] as Vector3i).y) * BrickPalette.PLATE_M
+		var tall := float((bench.recipe.bounds()[1] as Vector3i).y) * BrickPalette.PLATE_M
 		off = Vector3(-0.5, 0.35, 1.0).normalized() * maxf(tall * 1.15, 2.0)
-	_camera.global_position = c + off
-	_camera.look_at(c, Vector3.UP)
+	bench._camera.global_position = c + off
+	bench._camera.look_at(c, Vector3.UP)
 
 
 func _restore_autosave() -> void:
@@ -3972,7 +3980,7 @@ func _restore_autosave() -> void:
 	if r == null or not r.has_content():
 		return
 	_load_recipe(r)
-	_current_path = ""
+	bench._current_path = ""
 	print("[asset workshop] the last session's build is back (autosave). Ctrl N starts a new one.")
 
 
@@ -3995,9 +4003,9 @@ func set_photo_depth(i: int, where: String) -> void:
 	var p: Dictionary = photos[i]
 	if p.plane != "side":
 		return
-	var z := mirror_z * BrickPalette.STUD_M
-	if where == "behind" and recipe.size() > 0:
-		var b := recipe.bounds()
+	var z := bench.mirror_z * BrickPalette.STUD_M
+	if where == "behind" and bench.recipe.size() > 0:
+		var b := bench.recipe.bounds()
 		z = (b[0] as Vector3i).z * BrickPalette.STUD_M - BrickPalette.STUD_M * 0.5
 	p.centre = Vector3((p.centre as Vector3).x, (p.centre as Vector3).y, z)
 	_fit_photo(p)
@@ -4114,8 +4122,8 @@ func _sketch_input(e: InputEvent) -> bool:
 	_pen.draw = sketch_draw
 	_sketch_tool.brush_size = brush_size
 	_sketch_tool.brush_square = brush_shape == "square"
-	toolbox.use(&"sketch")
-	return toolbox.input(e)
+	bench.toolbox.use(&"sketch")
+	return bench.toolbox.input(e)
 
 
 # The kit's Sketch tool asks these, through the workshop's context (BrickWorkshopContext).
@@ -4164,8 +4172,8 @@ func _sculpt_input(e: InputEvent) -> bool:
 		sculpt.show_cursor(null, 0.0, Color.WHITE)
 		if e is InputEventMouseMotion and Input.mouse_mode != Input.MOUSE_MODE_CAPTURED:
 			var at: Vector2 = (e as InputEventMouse).position
-			var from := _camera.project_ray_origin(at)
-			var dir := _camera.project_ray_normal(at)
+			var from := bench._camera.project_ray_origin(at)
+			var dir := bench._camera.project_ray_normal(at)
 			var hot := _pickable_at(from, dir) or (_gizmo != null and _gizmo.visible and _gizmo.pick(from, dir) != "")
 			Input.set_default_cursor_shape(Input.CURSOR_POINTING_HAND if hot else Input.CURSOR_ARROW)
 		return false
@@ -4390,7 +4398,7 @@ func _lay_stamp(d: Dictionary, op: int) -> void:
 		"cone": sculpt.form.shape(op, SdfForm.SHAPE_CONE, d.xform, d.size, blend, part)
 		"lathe": sculpt.form.lathe(op, d.xform, d.profile, blend, part)
 		_: sculpt.form.stroke(op, d.a, d.b, d.r, blend, part)
-	if mirror_on:
+	if bench.mirror_on:
 		var m := d.duplicate()
 		match String(d.kind):
 			"box": m.center = _mirror_sample(d.center)
@@ -4409,7 +4417,7 @@ func _lay_stamp(d: Dictionary, op: int) -> void:
 ## A sample point mirrored across the mirror plane.
 func _mirror_sample(s: Vector3) -> Vector3:
 	var w := sculpt.to_world(s)
-	w.z = 2.0 * mirror_z * BrickPalette.STUD_M - w.z
+	w.z = 2.0 * bench.mirror_z * BrickPalette.STUD_M - w.z
 	return sculpt.to_sample(w)
 
 
@@ -4480,7 +4488,7 @@ func _sculpt_dab(a: Vector3, b: Vector3) -> void:
 		sculpt.set_parts(part_names.size())
 	if _sculpt_op == OP_FLATTEN:
 		sculpt.form.flatten(b, _sculpt_r(), _flat_normal, _flat_point, sculpt_strength, part_sel + 1)
-		if mirror_on:
+		if bench.mirror_on:
 			sculpt.form.flatten(_mirror_sample(b), _sculpt_r(), _flat_normal * Vector3(1, 1, -1),
 					_mirror_sample(_flat_point), sculpt_strength, part_sel + 1)
 		sculpt.remesh()
@@ -4491,15 +4499,15 @@ func _sculpt_dab(a: Vector3, b: Vector3) -> void:
 		# Samples a dab: LMB swells, RMB shrinks.
 		blend = sculpt_strength * 1.5 * (-1.0 if Input.is_mouse_button_pressed(MOUSE_BUTTON_RIGHT) else 1.0)
 	sculpt.form.stroke(_sculpt_op, a, b, _sculpt_r(), blend, part_sel + 1)
-	if mirror_on:
-		var z := mirror_z * BrickPalette.STUD_M
+	if bench.mirror_on:
+		var z := bench.mirror_z * BrickPalette.STUD_M
 		var ma := sculpt.to_world(a)
 		var mb := sculpt.to_world(b)
 		ma.z = 2.0 * z - ma.z
 		mb.z = 2.0 * z - mb.z
 		# The mirror image only where bricks could be laid: a plane far from the stroke
 		# threw it out of the area, where it was drawn, never converted, and lost.
-		var inside := ma.z >= 0.0 and mb.z >= 0.0 and ma.z < plate_studs * BrickPalette.STUD_M 				and mb.z < plate_studs * BrickPalette.STUD_M
+		var inside := ma.z >= 0.0 and mb.z >= 0.0 and ma.z < bench.plate_studs * BrickPalette.STUD_M 				and mb.z < bench.plate_studs * BrickPalette.STUD_M
 		if inside:
 			sculpt.form.stroke(_sculpt_op, sculpt.to_sample(ma), sculpt.to_sample(mb), _sculpt_r(), blend, part_sel + 1)
 		elif not _mirror_warned:
@@ -4517,7 +4525,7 @@ func _sculpt_end() -> void:
 
 ## An edit of the field, as one undo.
 func _sculpt_record(rec: PackedByteArray) -> void:
-	undo_stack.push(_sketch_cmd([{"sdf": rec}]))
+	bench.undo_stack.push(_sketch_cmd([{"sdf": rec}]))
 	_sdf_meta = sculpt.save_meta()
 	_store_asset_meta()
 	_autosave_dirty = true
@@ -5124,11 +5132,11 @@ func _brick_cell_list() -> PackedInt32Array:
 	for i in range(0, _sdf_cells.size(), 5):
 		had[Vector3i(_sdf_cells[i], _sdf_cells[i + 1], _sdf_cells[i + 2])] = true
 	var m := {}
-	for i in recipe.size():
+	for i in bench.recipe.size():
 		if _brick_frame(i) != 0:
 			continue
-		var c := recipe.cell_of(i)
-		var arch := recipe.part_of(i)
+		var c := bench.recipe.cell_of(i)
+		var arch := bench.recipe.part_of(i)
 		var size := BrickPalette.size_of(arch)
 		var part := (part_of[i] if i < part_of.size() else 0) + 1
 		var cs := []
@@ -5153,12 +5161,12 @@ func _brick_cell_list() -> PackedInt32Array:
 ## (Docs/AssetWorkshop.md, "Colour from model to bricks"). Alpha 0 where no brick is.
 func _brick_colours(list: PackedInt32Array) -> PackedColorArray:
 	var at := {}
-	for i in recipe.size():
+	for i in bench.recipe.size():
 		if _brick_frame(i) != 0:
 			continue
-		var c := recipe.cell_of(i)
-		var size := BrickPalette.size_of(recipe.part_of(i))
-		var col := BrickWorld.get_material_colour(recipe.material_of(i), recipe.colour_of(i))
+		var c := bench.recipe.cell_of(i)
+		var size := BrickPalette.size_of(bench.recipe.part_of(i))
+		var col := BrickWorld.get_material_colour(bench.recipe.material_of(i), bench.recipe.colour_of(i))
 		col.a = 1.0
 		for dx in size.x:
 			for dy in size.y:
@@ -5226,10 +5234,10 @@ func _bricks_into_field(before: PackedInt32Array, shell_cells := PackedInt32Arra
 	sculpt.form.sync_cells(before, after, _brick_colours(after))
 	# Each part's colour, as most of its bricks had it: Make bricks gives it back.
 	var tally := {}
-	for i in recipe.size():
+	for i in bench.recipe.size():
 		if _brick_frame(i) == 0:
 			var t: Dictionary = tally.get_or_add((part_of[i] if i < part_of.size() else 0) + 1, {})
-			var cm := [recipe.colour_of(i), recipe.material_of(i)]
+			var cm := [bench.recipe.colour_of(i), bench.recipe.material_of(i)]
 			t[cm] = int(t.get(cm, 0)) + 1
 	for label in tally:
 		var best := 0
@@ -5237,13 +5245,13 @@ func _bricks_into_field(before: PackedInt32Array, shell_cells := PackedInt32Arra
 			if tally[label][cm] > best:
 				best = tally[label][cm]
 				clay_colours[label] = cm
-	_batch = true
-	for i in range(recipe.size() - 1, -1, -1):
+	bench._batch = true
+	for i in range(bench.recipe.size() - 1, -1, -1):
 		if _brick_frame(i) != 0:
 			continue
-		clay_bricks.erase(_brick_key(recipe.part_of(i), recipe.cell_of(i)))
+		clay_bricks.erase(_brick_key(bench.recipe.part_of(i), bench.recipe.cell_of(i)))
 		take_brick(i)
-	_batch = false
+	bench._batch = false
 	_after_edit()
 
 
@@ -5290,13 +5298,13 @@ func sculpt_convert() -> void:
 				+ "area (below its floor, or past its edge). Move it in, or Clean up strays.") % out.y)
 		print("[sculpt] convert refused: %d of %d cells outside the build area" % [out.x, out.y])
 		return
-	if convert_mirror and _mirror_misses(sculpt.form.cells(), int(ceilf(mirror_z))):
+	if convert_mirror and _mirror_misses(sculpt.form.cells(), int(ceilf(bench.mirror_z))):
 		# Most of the mirror half would be outside the area: the plane is far from the
 		# drawing. Checked before anything is touched, so the clay stays as it is.
 		_show_sculpt_note(true, ("Nothing converted: symmetric bricks is ticked and the mirror plane (%d studs "
 				+ "across) is far from the clay, so its mirror half would be outside the build area. Put the "
-				+ "plane through the middle of the shape, or untick symmetric bricks.") % int(ceilf(mirror_z)))
-		print("[sculpt] convert refused: the mirror plane at %.1f is off the clay" % mirror_z)
+				+ "plane through the middle of the shape, or untick symmetric bricks.") % int(ceilf(bench.mirror_z)))
+		print("[sculpt] convert refused: the mirror plane at %.1f is off the clay" % bench.mirror_z)
 		return
 	_begin_gather()
 	var was := _sculpt_state()
@@ -5335,11 +5343,11 @@ func sculpt_convert() -> void:
 	var near_n := 0
 	var far_n := 0
 	if sym:
-		if not is_equal_approx(mirror_z, roundf(mirror_z)):
-			set_mirror_z(ceilf(mirror_z))
+		if not is_equal_approx(bench.mirror_z, roundf(bench.mirror_z)):
+			set_mirror_z(ceilf(bench.mirror_z))
 			_show_sculpt_note(true, "The mirror was on a stud's middle: moved half a stud to a stud line, "
 					+ "so the two halves can be joined. Centre on mirror lines the model up with it.")
-		pz = int(roundf(mirror_z))
+		pz = int(roundf(bench.mirror_z))
 		for c in label_of:
 			if c.z < pz:
 				near_n += 1
@@ -5366,12 +5374,12 @@ func sculpt_convert() -> void:
 	# The bricks already there. An earlier Make bricks' bricks under the new clay are made
 	# again (their colours kept for the new ones); the user's stay, and new bricks skip them.
 	var tally := {}   # label -> {[colour, material]: count}
-	_batch = true
-	for i in range(recipe.size() - 1, -1, -1):
+	bench._batch = true
+	for i in range(bench.recipe.size() - 1, -1, -1):
 		if _brick_frame(i) != 0:
 			continue
-		var arch := recipe.part_of(i)
-		var at := recipe.cell_of(i)
+		var arch := bench.recipe.part_of(i)
+		var at := bench.recipe.cell_of(i)
 		var size := BrickPalette.size_of(arch)
 		var cs := []
 		var under := false
@@ -5383,7 +5391,7 @@ func sculpt_convert() -> void:
 					under = under or brick_at.has(c)
 		var key := _brick_key(arch, at)
 		if under and clay_bricks.has(key):
-			var cm := [recipe.colour_of(i), recipe.material_of(i)]
+			var cm := [bench.recipe.colour_of(i), bench.recipe.material_of(i)]
 			var t: Dictionary = tally.get_or_add((part_of[i] if i < part_of.size() else 0) + 1, {})
 			t[cm] = int(t.get(cm, 0)) + 1
 			clay_bricks.erase(key)
@@ -5392,8 +5400,8 @@ func sculpt_convert() -> void:
 			for c in cs:
 				used[c] = true
 	var keys_before := {}
-	for i in recipe.size():
-		keys_before[_brick_key(recipe.part_of(i), recipe.cell_of(i))] = true
+	for i in bench.recipe.size():
+		keys_before[_brick_key(bench.recipe.part_of(i), bench.recipe.cell_of(i))] = true
 	# Bricks packed new take their part's colour: the one most of the clay bricks taken up had,
 	# else its piece's, else the hotbar's.
 	var part_col := {}   # label -> [colour, material]
@@ -5416,7 +5424,7 @@ func sculpt_convert() -> void:
 		if not used.has(c) and in_area(c):
 			var lab := maxi(1, int(label_of[c]))
 			var pm: int = (part_col.get(lab, [-1, -1]) as Array)[1]
-			pm = pm if pm >= 0 else _mat
+			pm = pm if pm >= 0 else bench._mat
 			if not own_mat.has(pm):
 				var mm := _cell_colour_map(cells, pm)
 				if sym:
@@ -5477,11 +5485,11 @@ func sculpt_convert() -> void:
 						_lay_mirrored(String(b[0]), at, col)
 		for b in pack_cells(left):
 			_lay_converted(String(b[0]), b[1], col, laid, zone, colour_of, mirror)
-	_batch = false
+	bench._batch = false
 	part_sel = keep_sel
 	_after_edit()
-	for i in recipe.size():
-		var key := _brick_key(recipe.part_of(i), recipe.cell_of(i))
+	for i in bench.recipe.size():
+		var key := _brick_key(bench.recipe.part_of(i), bench.recipe.cell_of(i))
 		if not keys_before.has(key):
 			clay_bricks[key] = true
 	var smooth_parts_now := {}
@@ -5495,7 +5503,7 @@ func sculpt_convert() -> void:
 		var c := Vector3i(_sdf_shell[i], _sdf_shell[i + 1], _sdf_shell[i + 2])
 		var pname: String = part_names[clampi(_sdf_shell[i + 3] - 1, 0, part_names.size() - 1)]
 		var pm: int = (part_col.get(_sdf_shell[i + 3], [-1, -1]) as Array)[1]
-		pm = pm if pm >= 0 else _mat
+		pm = pm if pm >= 0 else bench._mat
 		if not own_mat.has(pm):
 			var mm := _cell_colour_map(cells, pm)
 			if sym:
@@ -5578,7 +5586,7 @@ static func _flipped_z(cells: Dictionary, pz: int) -> Dictionary:
 
 ## Is a cell of the upright grid inside the build area, where a brick can be laid?
 func in_area(c: Vector3i) -> bool:
-	return c.x >= 0 and c.z >= 0 and c.y >= 0 and c.x < plate_studs and c.z < plate_studs 			and c.y < height_plates
+	return c.x >= 0 and c.z >= 0 and c.y >= 0 and c.x < bench.plate_studs and c.z < bench.plate_studs 			and c.y < bench.height_plates
 
 
 ## Of the field's cells (SdfForm.cells: five ints each), how many are outside the build
@@ -5605,14 +5613,14 @@ func _lay_converted(arch: String, at: Vector3i, col: Array, laid: Dictionary, zo
 			for dz in size.z:
 				cs.append(at + Vector3i(dx, dy, dz))
 	_note_laid(laid, arch, at, cs, zone)
-	var last: int = recipe.size() - 1
-	colour_of.get_or_add(part_names[part_sel], [recipe.colour_of(last), recipe.material_of(last)])
+	var last: int = bench.recipe.size() - 1
+	colour_of.get_or_add(part_names[part_sel], [bench.recipe.colour_of(last), bench.recipe.material_of(last)])
 	if mirror:
 		var m := _lay_mirrored(arch, at, col)
 		if m != _NO_CELL:
 			var ms := []
 			for c in cs:
-				ms.append(Vector3i(c.x, c.y, 2 * int(roundf(mirror_z)) - 1 - c.z))
+				ms.append(Vector3i(c.x, c.y, 2 * int(roundf(bench.mirror_z)) - 1 - c.z))
 			_note_laid(laid, arch, m, ms, zone)
 
 
@@ -5628,7 +5636,7 @@ func _lay_mirrored(arch: String, at: Vector3i, col: Array) -> Vector3i:
 		name = FitKit.mirror_name(arch)
 		if name == "":
 			return _NO_CELL
-	var m := Vector3i(at.x, at.y, mirrored_z(at.z, size.z))
+	var m := Vector3i(at.x, at.y, bench.mirrored_z(at.z, size.z))
 	return m if place_named(name, m, col[0], col[1]) else _NO_CELL
 
 
@@ -5648,7 +5656,7 @@ static func _symmetric(cells: Dictionary, pz: int) -> void:
 
 ## Move the mirror plane (studs across), the sheet with it.
 func set_mirror_z(z: float) -> void:
-	mirror_z = z
+	bench.mirror_z = z
 	_place_mirror_sheet()
 	_store_asset_meta()
 
@@ -5656,10 +5664,10 @@ func set_mirror_z(z: float) -> void:
 ## Centre the placed model, else the block-out, on the mirror plane across z, the plane put
 ## on a stud line first: then Convert can mirror it brick for brick.
 func centre_on_mirror() -> void:
-	if not mirror_on:
+	if not bench.mirror_on:
 		set_mirror(true)
-	set_mirror_z(roundf(mirror_z))
-	var plane := mirror_z * BrickPalette.STUD_M
+	set_mirror_z(roundf(bench.mirror_z))
+	var plane := bench.mirror_z * BrickPalette.STUD_M
 	if not _placed.is_empty():
 		var bb := (_placed.xf as Transform3D) * (_placed.box as AABB)
 		var before := models_state()
@@ -5673,7 +5681,7 @@ func centre_on_mirror() -> void:
 	# half, resampled) so it sits on the plane.
 	var bb := sculpt.form.bounds()
 	var mid := bb.position.z + bb.size.z * 0.5
-	move_field(Vector3(0, 0, roundf((mirror_z * BrickWorld.ticks_per_stud() - mid) * 2.0) * 0.5))
+	move_field(Vector3(0, 0, roundf((bench.mirror_z * BrickWorld.ticks_per_stud() - mid) * 2.0) * 0.5))
 
 
 ## The surface holds the whole cell: its corners and middle all inside the field.
@@ -5723,7 +5731,7 @@ func sculpt_piece_detail(part: String, tris: int) -> void:
 	var was := _sculpt_state()
 	shells[part]["tris"] = clampi(tris, 50, 50000)
 	var now := _sculpt_state()
-	undo_stack.push(_sketch_cmd([{"sculpt_before": was, "sculpt_after": now}]))
+	bench.undo_stack.push(_sketch_cmd([{"sculpt_before": was, "sculpt_after": now}]))
 	_set_sculpt_state(now)
 	_autosave_dirty = true
 
@@ -5739,7 +5747,7 @@ func _note_laid(laid: Dictionary, arch: String, at: Vector3i, cs: Array, zone: D
 
 func _sculpt_finish(was: Dictionary, rec: PackedByteArray) -> void:
 	var now := _sculpt_state()
-	undo_stack.push(_sketch_cmd([{"sdf": rec}, {"sculpt_before": was, "sculpt_after": now}]))
+	bench.undo_stack.push(_sketch_cmd([{"sdf": rec}, {"sculpt_before": was, "sculpt_after": now}]))
 	_set_sculpt_state(now)
 	_autosave_dirty = true
 
@@ -5896,7 +5904,7 @@ func _base_plane(part: String) -> String:
 
 ## Which way along a plane's normal the camera is: a depth cut goes in from that face.
 func _camera_side(plane: String) -> int:
-	var cam := _camera.global_position
+	var cam := bench._camera.global_position
 	match plane:
 		"front": return 1 if cam.x > _plane_value(plane) * BrickPalette.STUD_M else -1
 		"top": return 1 if cam.y > _plane_value(plane) * BrickPalette.PLATE_M else -1
@@ -5990,9 +5998,9 @@ func resketch_part(part: String, change: Dictionary, whole: bool = false, plane:
 			near_lo = near_lo.min(c - NEAR_REACH)
 			near_hi = near_hi.max(c + NEAR_REACH)
 	var rid_of := {}
-	for i in _placed_at.size():
-		if int(_placed_at[i][0]) == 0:
-			rid_of[int(_placed_at[i][1])] = i
+	for i in bench._placed_at.size():
+		if int(bench._placed_at[i][0]) == 0:
+			rid_of[int(bench._placed_at[i][1])] = i
 	# The old bricks: kept (a plain brick clear of the change), or going.
 	var bricks_before: Array = part_bricks.get(part, [])
 	var laid := []
@@ -6037,8 +6045,8 @@ func resketch_part(part: String, change: Dictionary, whole: bool = false, plane:
 	for i in erase:
 		if taken.has(int(i)):
 			continue
-		var arch := String(recipe.part_of(int(i)))
-		var cell := recipe.cell_of(int(i))
+		var arch := String(bench.recipe.part_of(int(i)))
+		var cell := bench.recipe.cell_of(int(i))
 		var k := "%s|%s" % [arch, cell]
 		if kept.has(k):
 			kept.erase(k)
@@ -6068,7 +6076,7 @@ func resketch_part(part: String, change: Dictionary, whole: bool = false, plane:
 	gone.sort()
 	gone.reverse()   # from the end, so the indices still to go do not move
 	var ops := 0
-	_batch = true
+	bench._batch = true
 	for i in gone:
 		if take_brick(int(i)):
 			ops += 1
@@ -6081,7 +6089,7 @@ func resketch_part(part: String, change: Dictionary, whole: bool = false, plane:
 			laid.append([pk[0], [pk[1].x, pk[1].y, pk[1].z]])
 			ops += 1
 	part_sel = keep_sel
-	_batch = false
+	bench._batch = false
 	_after_edit()
 	for k in change:
 		_set_sketch(k, change[k])
@@ -6423,7 +6431,7 @@ func _edge_runs(list: Array, vol: Dictionary, view: String, own: Dictionary, use
 						for dk in wide:
 							var c := _sketch_cell(Vector2i(pc.u + du, pc.base + dv), k + dk, view)
 							box.append(c)
-							if used.has(c) or (world.is_solid(chunk, c) and not own.has(c)):
+							if used.has(c) or (bench.world.is_solid(bench.chunk, c) and not own.has(c)):
 								clear = false
 				if clear:
 					for c in box:
@@ -6455,7 +6463,7 @@ static func _sketch_grid(c: Vector3i, plane: String) -> Vector2i:
 ## The recipe index of the brick in these cells, through block id -> index.
 func _rid_at(cells: Array, rid_of: Dictionary) -> int:
 	for c in cells:
-		var block := world.block_at(chunk, c)
+		var block := bench.world.block_at(bench.chunk, c)
 		if block >= 0 and rid_of.has(block):
 			return int(rid_of[block])
 	return -1
@@ -6496,8 +6504,8 @@ func solid_cells(solid: Dictionary) -> Dictionary:
 	for q in solid.at:
 		var centre := Vector3i(int(q[0]), int(q[1]), int(q[2]))
 		for c in brush_shape_cells(String(solid.kind), centre, int(solid.size), int(solid.axis), int(solid.thick)):
-			if _no_clip or (c.x >= 0 and c.y >= 0 and c.z >= 0 and c.x < plate_studs and c.y < height_plates
-					and c.z < plate_studs):
+			if _no_clip or (c.x >= 0 and c.y >= 0 and c.z >= 0 and c.x < bench.plate_studs and c.y < bench.height_plates
+					and c.z < bench.plate_studs):
 				out[c] = true
 	return out
 
@@ -6671,7 +6679,7 @@ func _input(e: InputEvent) -> void:
 	if _tab_key(e) or _lathe_key(e) or _placed_key(e) or _game_view_input(e):
 		get_viewport().set_input_as_handled()
 		return
-	bench_input(e)
+	bench.bench_input(e)
 
 
 ## Is a text or number box being typed in? Its Enter, Escape and Tab are its own.
@@ -6686,8 +6694,8 @@ func _tab_key(e: InputEvent) -> bool:
 	if not (e is InputEventKey and e.pressed and not e.echo and (e as InputEventKey).keycode == KEY_TAB) \
 			or (e as InputEventKey).shift_pressed or _typing():
 		return false
-	if _camera.has_method("_set_captured"):
-		_camera.call("_set_captured", not bool(_camera.get("_captured")))
+	if bench._camera.has_method("_set_captured"):
+		bench._camera.call("_set_captured", not bool(bench._camera.get("_captured")))
 	return true
 
 
@@ -6708,7 +6716,7 @@ func _draw_sketch_static() -> void:
 		_sketch_static.material_override = mat
 		add_child(_sketch_static)
 	var key := _sketch_key()
-	var sig := "%s|%d|%d" % [key, recipe.size(), sketches.size()]
+	var sig := "%s|%d|%d" % [key, bench.recipe.size(), sketches.size()]
 	_sketch_static.visible = tool == "sketch"
 	if sig == _sketch_sig or tool != "sketch":
 		return
@@ -7100,7 +7108,7 @@ func rail_pick(id: String) -> void:
 	match id:
 		"sculpt", "sketch":
 			set_measure(false)
-			_set_painting(false)
+			bench._set_painting(false)
 			var draw := "sculpt" if id == "sculpt" else _draw_2d
 			if draw != sketch_draw:
 				_sketch.clear()
@@ -7109,15 +7117,15 @@ func rail_pick(id: String) -> void:
 			_sync_sketch_panels()
 		"place":
 			set_tool("")
-			_set_painting(false)
+			bench._set_painting(false)
 			set_measure(false)
 		"paint":
 			set_tool("")
 			set_measure(false)
-			_set_painting(true)
+			bench._set_painting(true)
 		"measure":
 			set_tool("")
-			_set_painting(false)
+			bench._set_painting(false)
 			set_measure(true)
 		_:
 			set_measure(false)
@@ -7125,7 +7133,7 @@ func rail_pick(id: String) -> void:
 
 
 func rail_active() -> String:
-	if _painting:
+	if bench._painting:
 		return "paint"
 	if measure_on:
 		return "measure"
@@ -7151,10 +7159,10 @@ func _sync_sketch_panels() -> void:
 
 ## The brush in hand: the paint brush while painting, else the sketch brush.
 func set_brush_size(n: int) -> void:
-	if _painting:
-		_paint_radius = clampi(n, 0, PAINT_RADIUS_MAX)
-		if _paint_palette != null:
-			_paint_palette.info = _paint_info()
+	if bench._painting:
+		bench._paint_radius = clampi(n, 0, BrickBench.PAINT_RADIUS_MAX)
+		if bench._paint_palette != null:
+			bench._paint_palette.info = bench._paint_info()
 	else:
 		brush_size = clampi(n, 0, 8)
 
@@ -7173,7 +7181,7 @@ func _rail_process() -> void:
 		_part_pick.select(part_sel)
 	for id in _rail_buttons:
 		(_rail_buttons[id] as Button).set_pressed_no_signal(id == on)
-	var n := _paint_radius if on == "paint" else brush_size
+	var n := bench._paint_radius if on == "paint" else brush_size
 	_brush_slider.set_value_no_signal(n)
 	_brush_box.visible = on == "paint" or (on == "sketch" and sketch_draw == "brush")
 	if on == "paint" and n == 0:
@@ -7197,14 +7205,14 @@ func _rail_process() -> void:
 	# this one shows all of it; on its own it sits under the tools and scrolls itself.
 	var inside := _rail.get_parent() is Container
 	if not inside:
-		_rail.position.y = rail_top if rail_top >= 0.0 else 12.0 + (_menu.bar_height() if _menu != null else 0.0)
+		_rail.position.y = rail_top if rail_top >= 0.0 else 12.0 + (bench._menu.bar_height() if bench._menu != null else 0.0)
 	var room := INF if inside else get_viewport().get_visible_rect().size.y - _rail.position.y - 28.0
 	_rail_scroll.custom_minimum_size = Vector2(RAIL_W - 16, minf(_rail_box.get_combined_minimum_size().y, room))
 	_rail.size = Vector2.ZERO
-	if _paint_palette != null:
-		_paint_palette.position = Vector2(_rail_right(), _rail.global_position.y)
+	if bench._paint_palette != null:
+		bench._paint_palette.position = Vector2(_rail_right(), _rail.global_position.y)
 	# The workshop's own readout moves over beside the rail.
-	_hud.position = Vector2(_rail_right(), (_menu.bar_height() if _menu != null else 0.0)
+	bench._hud.position = Vector2(_rail_right(), (bench._menu.bar_height() if bench._menu != null else 0.0)
 			+ (50.0 if _ui != null else 12.0))
 	_draws.select(SKETCH_DRAWS.map(func(d: Array) -> String: return d[0]).find(_draw_2d))
 
@@ -7212,32 +7220,32 @@ func _rail_process() -> void:
 ## Paint only what the rail says: colour, material, or both (the workshop's own).
 func _paint_one(rid: int) -> bool:
 	if paint_what == "both":
-		return _paint_one_base(rid)
+		return bench._paint_one_base(rid)
 	if rid < 0:
 		return false
-	var c := _colour if paint_what == "colour" else recipe.colour_of(rid)
-	var m := _mat if paint_what == "material" else recipe.material_of(rid)
-	if recipe.colour_of(rid) == c and recipe.material_of(rid) == m:
+	var c := bench._colour if paint_what == "colour" else bench.recipe.colour_of(rid)
+	var m := bench._mat if paint_what == "material" else bench.recipe.material_of(rid)
+	if bench.recipe.colour_of(rid) == c and bench.recipe.material_of(rid) == m:
 		return false
-	for e in _stroke:
+	for e in bench._stroke:
 		if int(e[0]) == rid:
 			return false
-	_stroke.append([rid, recipe.colour_of(rid), recipe.material_of(rid)])
-	_repaint(rid, c, m)
+	bench._stroke.append([rid, bench.recipe.colour_of(rid), bench.recipe.material_of(rid)])
+	bench._repaint(rid, c, m)
 	return true
 
 
 ## A square brush reaches a box round the dot rather than a ball.
 func _bricks_near(point: Vector3, reach: float) -> Array[int]:
 	if brush_shape != "square":
-		return _bricks_near_base(point, reach)
+		return bench._bricks_near_base(point, reach)
 	var out: Array[int] = []
 	var tick := BrickPalette.STUD_M / BrickWorld.ticks_per_stud()
-	for rid in _placed_at.size():
-		var at: Array = _placed_at[rid]
+	for rid in bench._placed_at.size():
+		var at: Array = bench._placed_at[rid]
 		if int(at[0]) < 0:
 			continue
-		var box: Array = world.get_block_ticks(asm.frames[at[0]], at[1])
+		var box: Array = bench.world.get_block_ticks(bench.asm.frames[at[0]], at[1])
 		if box.is_empty():
 			continue
 		var lo := Vector3(box[0] as Vector3i) * tick
@@ -7271,7 +7279,7 @@ const STUD_SNAP := 0.5       # the lattice studs go on: half a stud across a fac
 func stud_hit(from: Vector3, dir: Vector3) -> Dictionary:
 	if _pick_dirty or _pick_mesh == null:
 		_pick_dirty = false
-		var arrays := world.build_chunk_mesh(chunk)
+		var arrays := bench.world.build_chunk_mesh(bench.chunk)
 		var m := ArrayMesh.new()
 		if arrays.size() > 0 and not (arrays[Mesh.ARRAY_VERTEX] as PackedVector3Array).is_empty():
 			m.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
@@ -7280,7 +7288,7 @@ func stud_hit(from: Vector3, dir: Vector3) -> Dictionary:
 			_pick_mesh = null
 	if _pick_mesh == null:
 		return {}
-	var inv := world.get_chunk_transform(chunk).affine_inverse()
+	var inv := bench.world.get_chunk_transform(bench.chunk).affine_inverse()
 	var r := _pick_mesh.intersect_ray(inv * from, inv.basis * dir)
 	if r.is_empty():
 		return {}
@@ -7300,11 +7308,11 @@ func stud_hit(from: Vector3, dir: Vector3) -> Dictionary:
 		var sgn := signf(n[axis])
 		n = Vector3.ZERO
 		n[axis] = sgn
-	var cell := _cell_in(chunk, p - n * 0.02)
-	var block := world.block_at(chunk, cell)
+	var cell := bench._cell_in(bench.chunk, p - n * 0.02)
+	var block := bench.world.block_at(bench.chunk, cell)
 	if block < 0:
 		return {}
-	var rid := _recipe_id_at(0, block)
+	var rid := bench._recipe_id_at(0, block)
 	if rid < 0:
 		return {}
 	var q: Vector3
@@ -7315,7 +7323,7 @@ func stud_hit(from: Vector3, dir: Vector3) -> Dictionary:
 				q[a] = snappedf(q[a], STUD_SNAP)
 	else:
 		# A leaning face: half studs across it and up it, from the brick's own corner.
-		var box: Array = world.get_block_ticks(chunk, block)
+		var box: Array = bench.world.get_block_ticks(bench.chunk, block)
 		var tick := BrickPalette.STUD_M / BrickWorld.ticks_per_stud()
 		var origin := Vector3(box[0] as Vector3i) * tick
 		var across := n.cross(Vector3.UP).normalized()
@@ -7328,7 +7336,7 @@ func stud_hit(from: Vector3, dir: Vector3) -> Dictionary:
 	return {"at": [snappedf(q.x, 0.0001), snappedf(q.y, 0.0001), snappedf(q.z, 0.0001)],
 			"dir": [snappedf(n.x, 0.0001), snappedf(n.y, 0.0001), snappedf(n.z, 0.0001)],
 			"part": part_names[part_of[rid] if rid < part_of.size() else part_sel],
-			"colour": recipe.colour_of(rid), "mat": recipe.material_of(rid)}
+			"colour": bench.recipe.colour_of(rid), "mat": bench.recipe.material_of(rid)}
 
 
 ## The stud put on by hand at this spot, by index, or -1.
@@ -7347,7 +7355,7 @@ func stud_edit(add: bool, stud: Dictionary) -> bool:
 		return false
 	var rec := {"op": "add" if add else "remove", "stud": stud if add else extra_studs[i]}
 	_stud_apply(rec, true)
-	undo_stack.push(WkCommand.make(&"stud", rec, _undo_stud, _redo_stud))
+	bench.undo_stack.push(WkCommand.make(&"stud", rec, _undo_stud, _redo_stud))
 	return true
 
 
@@ -7411,7 +7419,7 @@ func point_on_stud(hit: Dictionary) -> void:
 func _draw_studs() -> void:
 	if _studs_mmi == null:
 		_studs_mmi = MultiMeshInstance3D.new()
-		_studs_mmi.material_override = _stud_material()
+		_studs_mmi.material_override = BrickBench._stud_material()
 		_studs_mmi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 		add_child(_studs_mmi)
 	var mm := MultiMesh.new()
@@ -7429,7 +7437,7 @@ func _draw_studs() -> void:
 static func _stud_transform(st: Dictionary) -> Transform3D:
 	var a: Array = st.at
 	var d: Array = st.dir
-	return Transform3D(_basis_up(Vector3(d[0], d[1], d[2])),
+	return Transform3D(BrickBench._basis_up(Vector3(d[0], d[1], d[2])),
 			Vector3(float(a[0]) * BrickPalette.STUD_M, float(a[1]) * BrickPalette.PLATE_M, float(a[2]) * BrickPalette.STUD_M))
 
 
@@ -7492,12 +7500,12 @@ func explode_offsets() -> Dictionary:
 	settle_muzzle()
 	var sums := {}
 	var counts := {}
-	for i in recipe.size():
-		if recipe.frame_of(i) != 0:
+	for i in bench.recipe.size():
+		if bench.recipe.frame_of(i) != 0:
 			continue
 		var name := part_names[part_of[i] if i < part_of.size() else part_sel]
-		var size := BrickPalette.size_of(recipe.part_of(i))
-		var c := recipe.cell_of(i)
+		var size := BrickPalette.size_of(bench.recipe.part_of(i))
+		var c := bench.recipe.cell_of(i)
 		var m := Vector3((c.x + size.x * 0.5) * BrickPalette.STUD_M, (c.y + size.y * 0.5) * BrickPalette.PLATE_M,
 				(c.z + size.z * 0.5) * BrickPalette.STUD_M)
 		sums[name] = sums.get(name, Vector3.ZERO) + m
@@ -7547,10 +7555,10 @@ func _rebuild_display() -> void:
 	_clear_display()
 	_offsets = _drawn_offsets()
 	var by_part := {}
-	for i in recipe.size():
-		if recipe.frame_of(i) == 0:
+	for i in bench.recipe.size():
+		if bench.recipe.frame_of(i) == 0:
 			(by_part.get_or_add(part_names[part_of[i] if i < part_of.size() else part_sel], []) as Array).append(i)
-	var base := world.get_chunk_transform(chunk)
+	var base := bench.world.get_chunk_transform(bench.chunk)
 	for name in by_part:
 		if tried.has(name):
 			continue   # a catalogue part is tried in its place
@@ -7558,23 +7566,23 @@ func _rebuild_display() -> void:
 		var lo := Vector3i(1 << 30, 1 << 30, 1 << 30)
 		var hi := -lo
 		for i in ids:
-			lo = lo.min(recipe.cell_of(i))
-			hi = hi.max(recipe.cell_of(i) + BrickPalette.size_of(recipe.part_of(i)))
-		var c := world.create_chunk(Vector3i.ZERO, hi - lo)
+			lo = lo.min(bench.recipe.cell_of(i))
+			hi = hi.max(bench.recipe.cell_of(i) + BrickPalette.size_of(bench.recipe.part_of(i)))
+		var c := bench.world.create_chunk(Vector3i.ZERO, hi - lo)
 		for i in ids:
-			var arch := String(recipe.part_of(i))
-			if not palette.has(arch):
+			var arch := String(bench.recipe.part_of(i))
+			if not bench.palette.has(arch):
 				continue
-			var bid := world.place_block(c, recipe.cell_of(i) - lo, palette[arch], recipe.colour_of(i))
-			if bid >= 0 and recipe.material_of(i) != 0:
-				world.set_block_material(c, bid, recipe.material_of(i))
+			var bid := bench.world.place_block(c, bench.recipe.cell_of(i) - lo, bench.palette[arch], bench.recipe.colour_of(i))
+			if bid >= 0 and bench.recipe.material_of(i) != 0:
+				bench.world.set_block_material(c, bid, bench.recipe.material_of(i))
 		var xform := base * Transform3D(Basis(), Vector3(lo.x * BrickPalette.STUD_M, lo.y * BrickPalette.PLATE_M,
 				lo.z * BrickPalette.STUD_M))
 		xform = xform.translated(_offsets.get(name, Vector3.ZERO))
 		var mi := MeshInstance3D.new()
-		mi.material_override = _material
-		var arrays := world.build_chunk_chamfer_mesh(c, BrickNear.BEVEL) if BrickNear.enabled \
-				else world.build_chunk_mesh(c)
+		mi.material_override = bench._material
+		var arrays := bench.world.build_chunk_chamfer_mesh(c, BrickNear.BEVEL) if BrickNear.enabled \
+				else bench.world.build_chunk_mesh(c)
 		var m := ArrayMesh.new()
 		if arrays.size() > 0 and not (arrays[Mesh.ARRAY_VERTEX] as PackedVector3Array).is_empty():
 			m.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
@@ -7582,12 +7590,12 @@ func _rebuild_display() -> void:
 		mi.set_instance_shader_parameter("geo_bevel", 1.0 if BrickNear.enabled else 0.0)
 		mi.transform = xform
 		add_child(mi)
-		var studs: PackedFloat32Array = world.get_chunk_studs(c)
+		var studs: PackedFloat32Array = bench.world.get_chunk_studs(c)
 		@warning_ignore("integer_division")
 		var count := studs.size() / 16
 		if count > 0:
 			var mmi := MultiMeshInstance3D.new()
-			mmi.material_override = _stud_material()
+			mmi.material_override = BrickBench._stud_material()
 			mmi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 			var mm := MultiMesh.new()
 			mm.transform_format = MultiMesh.TRANSFORM_3D
@@ -7597,13 +7605,13 @@ func _rebuild_display() -> void:
 			mm.set_buffer(studs)
 			mmi.multimesh = mm
 			mi.add_child(mmi)
-		var plain := world.build_chunk_mesh(c)
+		var plain := bench.world.build_chunk_mesh(c)
 		var pm := ArrayMesh.new()
 		var pick: TriangleMesh = null
 		if plain.size() > 0 and not (plain[Mesh.ARRAY_VERTEX] as PackedVector3Array).is_empty():
 			pm.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, plain)
 			pick = pm.generate_triangle_mesh()
-		world.release_chunk(c)
+		bench.world.release_chunk(c)
 		_display[name] = {"mesh": mi, "pick": pick, "xform": xform, "offset": _offsets.get(name, Vector3.ZERO),
 				"centre": xform * (Vector3(hi - lo) * Vector3(BrickPalette.STUD_M, BrickPalette.PLATE_M, BrickPalette.STUD_M) * 0.5)}
 	_draw_studs()
@@ -7621,8 +7629,8 @@ func _clear_display() -> void:
 ## hidden behind them, and what follows the mouse drawn where its part is.
 func _explode_process() -> void:
 	var apart := _drawn_apart() or not _play.is_empty()
-	for f in _frame_meshes:
-		(_frame_meshes[f] as Node3D).visible = not apart
+	for f in bench._frame_meshes:
+		(bench._frame_meshes[f] as Node3D).visible = not apart
 	if apart and _display_dirty:
 		_rebuild_display()
 	_play_process()
@@ -7631,7 +7639,7 @@ func _explode_process() -> void:
 		_tool_lines.position = Vector3.ZERO
 		return
 	var off := _ray_offset()
-	_ghost.global_position += off
+	bench._ghost.global_position += off
 	_tool_lines.position = off
 	if _sketch_static != null:
 		_sketch_static.position = part_offset(part_names[part_sel])
@@ -7642,7 +7650,7 @@ func _explode_process() -> void:
 ## a stud, paint) works on the build where it really is. A ray that meets no part is
 ## the current part's.
 func _mouse_ray() -> Array:
-	return ray_into_parts(_mouse_ray_base())
+	return ray_into_parts(bench._mouse_ray_base())
 
 
 func ray_into_parts(r: Array) -> Array:
@@ -7680,21 +7688,21 @@ func move_part(part: String, by: Vector3i) -> bool:
 		return false
 	var ids := []
 	var own := {}
-	for i in recipe.size():
-		if recipe.frame_of(i) == 0 and (part_of[i] if i < part_of.size() else -1) == tag:
+	for i in bench.recipe.size():
+		if bench.recipe.frame_of(i) == 0 and (part_of[i] if i < part_of.size() else -1) == tag:
 			ids.append(i)
-			var size := BrickPalette.size_of(recipe.part_of(i))
+			var size := BrickPalette.size_of(bench.recipe.part_of(i))
 			for dx in size.x:
 				for dy in size.y:
 					for dz in size.z:
-						own[recipe.cell_of(i) + Vector3i(dx, dy, dz)] = true
+						own[bench.recipe.cell_of(i) + Vector3i(dx, dy, dz)] = true
 	if ids.is_empty():
 		return false
 	for c in own:
 		var t: Vector3i = c + by
-		if t.x < 0 or t.y < 0 or t.z < 0 or t.x >= plate_studs or t.y >= height_plates or t.z >= plate_studs:
+		if t.x < 0 or t.y < 0 or t.z < 0 or t.x >= bench.plate_studs or t.y >= bench.height_plates or t.z >= bench.plate_studs:
 			return false
-		if not own.has(t) and world.block_at(chunk, t) >= 0:
+		if not own.has(t) and bench.world.block_at(bench.chunk, t) >= 0:
 			return false
 	var items := []
 	for i in ids:
@@ -7704,7 +7712,7 @@ func move_part(part: String, by: Vector3i) -> bool:
 	ids.sort()
 	ids.reverse()
 	var ops := 0
-	_batch = true
+	bench._batch = true
 	for i in ids:
 		if take_brick(int(i)):
 			ops += 1
@@ -7715,7 +7723,7 @@ func move_part(part: String, by: Vector3i) -> bool:
 		if place_named(b.arch, b.cell + by, b.colour, b.mat):
 			ops += 1
 	part_sel = keep
-	_batch = false
+	bench._batch = false
 	_after_edit()
 	for k in sketches.keys():
 		var sk: Dictionary = sketches[k]
@@ -7758,10 +7766,10 @@ func _draw_move(im: ImmediateMesh) -> void:
 	var tag := part_names.find(String(_move.part))
 	var lo := Vector3i(1 << 30, 1 << 30, 1 << 30)
 	var hi := -lo
-	for i in recipe.size():
-		if recipe.frame_of(i) == 0 and i < part_of.size() and part_of[i] == tag:
-			lo = lo.min(recipe.cell_of(i))
-			hi = hi.max(recipe.cell_of(i) + BrickPalette.size_of(recipe.part_of(i)))
+	for i in bench.recipe.size():
+		if bench.recipe.frame_of(i) == 0 and i < part_of.size() and part_of[i] == tag:
+			lo = lo.min(bench.recipe.cell_of(i))
+			hi = hi.max(bench.recipe.cell_of(i) + BrickPalette.size_of(bench.recipe.part_of(i)))
 	if lo.x > hi.x:
 		return
 	var by: Vector3i = _move.by
@@ -7805,7 +7813,7 @@ func scale_form(s: float, pivot: Variant = null) -> bool:
 	# Too big is told from the forms' box before anything is worked out at that size: a
 	# form a hundred times over is millions of cells.
 	var span := Vector3(_forms_hi - _forms_lo + Vector3i.ONE) * s
-	var room := Vector3(plate_studs, height_plates, plate_studs)
+	var room := Vector3(bench.plate_studs, bench.height_plates, bench.plate_studs)
 	for i in 3:
 		if span[i] > room[i] + 1.0:
 			print("[asset workshop] resize x%.2f refused: %d cells %s, the build area is %d" % [s,
@@ -7827,7 +7835,7 @@ func scale_form(s: float, pivot: Variant = null) -> bool:
 			continue
 		lo = lo.min(_box[0])
 		hi = hi.max(_box[1])
-	var area := Vector3i(plate_studs, height_plates, plate_studs)
+	var area := Vector3i(bench.plate_studs, bench.height_plates, bench.plate_studs)
 	var by := Vector3i.ZERO
 	for i in 3:
 		if lo[i] > hi[i]:
@@ -7871,8 +7879,8 @@ func set_shell(part: String, settings: Variant) -> void:
 		st["res"] = clampi(int(st.get("res", 4)), 1, 8)
 		st["tris"] = clampi(int(st.get("tris", was.get("tris", SHELL_TRIS) if was != null else SHELL_TRIS)), 50, 50000)
 		if not st.has("colour"):
-			st["colour"] = was.colour if was != null else _colour
-			st["mat"] = was.mat if was != null else _mat
+			st["colour"] = was.colour if was != null else bench._colour
+			st["mat"] = was.mat if was != null else bench._mat
 		shells[part] = st
 	var now = (shells[part] as Dictionary).duplicate() if shells.has(part) else null
 	_store_asset_meta()
@@ -7885,7 +7893,7 @@ func set_shell(part: String, settings: Variant) -> void:
 	if top != null:
 		(top as Array).push_front(rec)
 	else:
-		undo_stack.push(_sketch_cmd([rec]))
+		bench.undo_stack.push(_sketch_cmd([rec]))
 	_refresh_shell(part)
 
 
@@ -7934,9 +7942,9 @@ func shell_field(part: String, list: Array = [], form: Dictionary = {}) -> Dicti
 	# are not a face it meets -- pinned there, the shell kept their stairs.
 	var tag := part_names.find(part)
 	var other := {}
-	for i in _placed_at.size():
-		if int(_placed_at[i][0]) == 0 and i < part_of.size() and part_of[i] != tag:
-			other[int(_placed_at[i][1])] = true
+	for i in bench._placed_at.size():
+		if int(bench._placed_at[i][0]) == 0 and i < part_of.size() and part_of[i] != tag:
+			other[int(bench._placed_at[i][1])] = true
 	var joins := {}   # the part's cells against another part's bricks
 	for c in fine:
 		var d: Vector3i = c - lo
@@ -7949,7 +7957,7 @@ func shell_field(part: String, list: Array = [], form: Dictionary = {}) -> Dicti
 					continue
 				var nb := cell
 				nb[axis] += side
-				if not form.has(nb) and other.has(world.block_at(chunk, nb)):
+				if not form.has(nb) and other.has(bench.world.block_at(bench.chunk, nb)):
 					v = 2
 					if form.has(cell):
 						joins[cell] = true
@@ -8210,7 +8218,7 @@ func _shell_mesh(part: String, sf: Dictionary) -> void:
 		m.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
 	mi.mesh = m
 	mi.material_override = shell_material(part)
-	mi.transform = world.get_chunk_transform(asm.frames[0]) * Transform3D(Basis(), Vector3(at) * cell)
+	mi.transform = bench.world.get_chunk_transform(bench.asm.frames[0]) * Transform3D(Basis(), Vector3(at) * cell)
 	_shell_tris[part] = 0 if arrays.is_empty() else (arrays[Mesh.ARRAY_INDEX] as PackedInt32Array).size() / 3
 	_shell_joins[part] = sf.get("joins", {})
 	_tris_due = Time.get_ticks_msec() + TRIS_SETTLE_MS
@@ -8262,10 +8270,10 @@ func _uncovered(part: String, ids: Array) -> Array:
 	var laid := _form_laid(part)
 	var joins: Dictionary = _shell_joins.get(part, {})
 	return ids.filter(func(i: int) -> bool:
-		if _brick_frame(i) != 0 or not laid.has("%s|%s" % [recipe.part_of(i), recipe.cell_of(i)]):
+		if _brick_frame(i) != 0 or not laid.has("%s|%s" % [bench.recipe.part_of(i), bench.recipe.cell_of(i)]):
 			return true
-		var c := recipe.cell_of(i)
-		var size := BrickPalette.size_of(recipe.part_of(i))
+		var c := bench.recipe.cell_of(i)
+		var size := BrickPalette.size_of(bench.recipe.part_of(i))
 		for dx in size.x:
 			for dy in size.y:
 				for dz in size.z:
@@ -8527,11 +8535,11 @@ func _part_cells(part: String) -> Array:
 	var out := []
 	if tag < 0:
 		return out
-	for i in recipe.size():
-		if recipe.frame_of(i) != 0 or i >= part_of.size() or part_of[i] != tag:
+	for i in bench.recipe.size():
+		if bench.recipe.frame_of(i) != 0 or i >= part_of.size() or part_of[i] != tag:
 			continue
-		var size := BrickPalette.size_of(recipe.part_of(i))
-		var c := recipe.cell_of(i)
+		var size := BrickPalette.size_of(bench.recipe.part_of(i))
+		var c := bench.recipe.cell_of(i)
 		for dx in size.x:
 			for dy in size.y:
 				for dz in size.z:
@@ -8710,19 +8718,19 @@ func bricks_under(area: Dictionary, plane: String, deep: int, from: int) -> Arra
 	var reach := {}   # sketch cell -> [first cell in, last cell in] along the axis
 	if deep > 0:
 		var n := deep if axis != 1 else int(round(deep * 2.5))
-		var dims := Vector3i(plate_studs, height_plates, plate_studs)
+		var dims := Vector3i(bench.plate_studs, bench.height_plates, bench.plate_studs)
 		for g in area:
 			var ks := range(dims[axis] - 1, -1, -1) if from > 0 else range(dims[axis])
 			for k in ks:
-				if world.is_solid(chunk, _sketch_cell(g, k, plane)):
+				if bench.world.is_solid(bench.chunk, _sketch_cell(g, k, plane)):
 					reach[g] = [mini(k, k - (n - 1) * from), maxi(k, k - (n - 1) * from)]
 					break
 	var out := []
-	for i in recipe.size():
-		if recipe.frame_of(i) != 0:
+	for i in bench.recipe.size():
+		if bench.recipe.frame_of(i) != 0:
 			continue
-		var cell := recipe.cell_of(i)
-		var size := BrickPalette.size_of(recipe.part_of(i))
+		var cell := bench.recipe.cell_of(i)
+		var size := BrickPalette.size_of(bench.recipe.part_of(i))
 		var hit := false
 		for dx in size.x:
 			for dy in size.y:
@@ -8744,11 +8752,11 @@ func erase_bricks(ids: Array) -> int:
 	order.sort()
 	order.reverse()
 	var n := 0
-	_batch = true
+	bench._batch = true
 	for i in order:
 		if take_brick(int(i)):
 			n += 1
-	_batch = false
+	bench._batch = false
 	_after_edit()
 	_group(n)
 	return n
@@ -8757,9 +8765,9 @@ func erase_bricks(ids: Array) -> int:
 ## How many cells of bricks have some of themselves between x0 and x1 (studs): for checks.
 func _volume_in(x0: int, x1: int) -> int:
 	var n := 0
-	for i in recipe.size():
-		var c := recipe.cell_of(i)
-		var size := BrickPalette.size_of(recipe.part_of(i))
+	for i in bench.recipe.size():
+		var c := bench.recipe.cell_of(i)
+		var size := BrickPalette.size_of(bench.recipe.part_of(i))
 		for dx in size.x:
 			if c.x + dx >= x0 and c.x + dx < x1:
 				n += size.y * size.z
@@ -8796,7 +8804,7 @@ func brushing_shapes() -> bool:
 ## The axis a flat shape lies across: the plane the ghost is on. 1 (up) on a brick top or
 ## the locked height, else the working plane's normal when placing freely on it.
 func shape_axis() -> int:
-	if not _lock.is_empty() or not free_place:
+	if not bench._lock.is_empty() or not free_place:
 		return 1
 	match work_plane:
 		"side": return 2
@@ -8854,7 +8862,7 @@ static func brush_shape_box(kind: String, centre: Vector3i, size: int, axis: int
 func shape_place(cells: Dictionary) -> int:
 	var free := {}
 	for c in cells:
-		if c.x >= 0 and c.y >= 0 and c.z >= 0 and c.x < plate_studs and c.y < height_plates and c.z < plate_studs:
+		if c.x >= 0 and c.y >= 0 and c.z >= 0 and c.x < bench.plate_studs and c.y < bench.height_plates and c.z < bench.plate_studs:
 			free[c] = true
 	return fill_cells(free, shape_fill == "random", false)
 
@@ -8864,12 +8872,12 @@ func shape_place(cells: Dictionary) -> int:
 ## how many edits that made (bricks taken up and laid), for the undo.
 func shape_carve(cells: Dictionary) -> int:
 	var rid_of := {}
-	for i in _placed_at.size():
-		if int(_placed_at[i][0]) == 0:
-			rid_of[int(_placed_at[i][1])] = i
+	for i in bench._placed_at.size():
+		if int(bench._placed_at[i][0]) == 0:
+			rid_of[int(bench._placed_at[i][1])] = i
 	var touched := {}
 	for c in cells:
-		var b := world.block_at(chunk, c)
+		var b := bench.world.block_at(bench.chunk, c)
 		if b >= 0 and rid_of.has(b):
 			touched[int(rid_of[b])] = true
 	if touched.is_empty():
@@ -8884,27 +8892,27 @@ func shape_carve(cells: Dictionary) -> int:
 			for dy in size.y:
 				for dz in size.z:
 					var c: Vector3i = info.cell + Vector3i(dx, dy, dz)
-					if not cells.has(c) and world.block_at(chunk, c) == int(_placed_at[i][1]) and world.is_solid(chunk, c):
+					if not cells.has(c) and bench.world.block_at(bench.chunk, c) == int(bench._placed_at[i][1]) and bench.world.is_solid(bench.chunk, c):
 						(left.get_or_add(what, {}) as Dictionary)[c] = true
 	ids.sort()
 	ids.reverse()
 	var n := 0
-	_batch = true
+	bench._batch = true
 	for i in ids:
 		if take_brick(int(i)):
 			n += 1
-	var keep := [part_sel, _colour, _mat]
+	var keep := [part_sel, bench._colour, bench._mat]
 	for what in left:
 		part_sel = int(what[0])
-		_colour = int(what[1])
-		_mat = int(what[2])
+		bench._colour = int(what[1])
+		bench._mat = int(what[2])
 		for pc in pack_cells(left[what], false):
 			if place_named(pc[0], pc[1]):
 				n += 1
 	part_sel = int(keep[0])
-	_colour = int(keep[1])
-	_mat = int(keep[2])
-	_batch = false
+	bench._colour = int(keep[1])
+	bench._mat = int(keep[2])
+	bench._batch = false
 	_after_edit()
 	return n
 
@@ -8914,10 +8922,10 @@ func shape_carve(cells: Dictionary) -> int:
 func _shape_centre(erase: bool) -> Vector3i:
 	if erase:
 		var ray := _mouse_ray()
-		var hit := _first_hit(ray[0], ray[1])
-		if not hit.is_empty() and hit.frame == chunk:
-			return _cell_in(chunk, (hit.point as Vector3) + (ray[1] as Vector3) * 0.01)
-	return _cell
+		var hit := bench._first_hit(ray[0], ray[1])
+		if not hit.is_empty() and hit.frame == bench.chunk:
+			return bench._cell_in(bench.chunk, (hit.point as Vector3) + (ray[1] as Vector3) * 0.01)
+	return bench._cell
 
 
 ## One stamp of the brush. It goes into the parts' forms, not straight into bricks: laying,
@@ -8971,8 +8979,8 @@ func form_stamp(part: String, centre: Vector3i, carve: bool) -> void:
 ## Begun again before it ended, what was gathered so far is one step of its own.
 func _begin_gather() -> void:
 	if _gathering:
-		undo_stack.end_group(true)
-	undo_stack.begin_group()
+		bench.undo_stack.end_group(true)
+	bench.undo_stack.begin_group()
 	_gathering = true
 
 
@@ -8982,7 +8990,7 @@ func _end_gather() -> void:
 	if not _gathering:
 		return
 	_gathering = false
-	undo_stack.end_group(true)
+	bench.undo_stack.end_group(true)
 
 
 ## Ctrl + LMB lays the shape, Ctrl + RMB carves it; held and dragged, it goes on doing
@@ -8994,7 +9002,7 @@ func _shape_brush_input(e: InputEvent) -> bool:
 		return true
 	if e is InputEventMouseButton and e.button_index in [MOUSE_BUTTON_LEFT, MOUSE_BUTTON_RIGHT]:
 		if e.pressed and (e.ctrl_pressed or brushing_shapes()) and _sb.is_empty():
-			_sb = {"erase": e.button_index == MOUSE_BUTTON_RIGHT, "last": _cell,
+			_sb = {"erase": e.button_index == MOUSE_BUTTON_RIGHT, "last": bench._cell,
 					"button": e.button_index}
 			_begin_gather()
 			_stamp_shape(bool(_sb.erase))
@@ -9060,9 +9068,9 @@ const GAME_HOST := {"barrel": "body", "stock": "body", "grip": "body", "magazine
 
 ## Where this gun's game parts go: a folder beside its file (user://guns/thompson/).
 func game_dir() -> String:
-	var base := _current_path
+	var base := bench._current_path
 	if base == "":
-		base = BuildRecipe.player_dir(recipe.kind) + slug(recipe.name if recipe.name != "untitled" else "gun") + ".json"
+		base = BuildRecipe.player_dir(bench.recipe.kind) + BrickBench.slug(bench.recipe.name if bench.recipe.name != "untitled" else "gun") + ".json"
 	return base.get_basename() + "/"
 
 
@@ -9131,7 +9139,7 @@ func export_game(dir: String = "") -> Dictionary:
 			lo = minf(lo, box.position.x)
 			hi = maxf(hi, box.end.x)
 	var length := (hi - lo) * GAME_PER_WORKSHOP
-	var manifest := {"name": recipe.name, "source": _current_path, "parts": written,
+	var manifest := {"name": bench.recipe.name, "source": bench._current_path, "parts": written,
 			"hosts": host, "length_m": snappedf(length, 0.001)}
 	var f := FileAccess.open(dir + "gun.json", FileAccess.WRITE)
 	if f != null:
@@ -9145,7 +9153,7 @@ func export_game(dir: String = "") -> Dictionary:
 ## Each gun part's bricks, by recipe index: {part name: [index ...]}.
 func _gun_bricks() -> Dictionary:
 	var by_part := {}
-	for i in recipe.size():
+	for i in bench.recipe.size():
 		if _brick_frame(i) < 0:
 			continue
 		var name := part_names[part_of[i] if i < part_of.size() else part_sel]
@@ -9206,12 +9214,12 @@ func set_mech_ref(on: bool) -> void:
 func _mech_changed() -> void:
 	lay_ready_points()
 	_store_asset_meta()
-	_dirty = true
+	bench._dirty = true
 
 
 ## The reference mech's origin, in cells: between the feet, on the ground plate.
 func mech_origin() -> Vector3:
-	return Vector3(floor(plate_studs * 0.5), MECH_GROUND, mirror_z)
+	return Vector3(floor(bench.plate_studs * 0.5), MECH_GROUND, bench.mirror_z)
 
 
 ## Part `part`'s joint on the reference mech, in cells (studs, plates, studs).
@@ -9262,7 +9270,7 @@ func _kind_bricks() -> Dictionary:
 	if not _body():
 		return _gun_bricks()
 	var by_part := {}
-	for i in recipe.size():
+	for i in bench.recipe.size():
 		if _brick_frame(i) < 0:
 			continue
 		var name := part_names[part_of[i] if i < part_of.size() else part_sel]
@@ -9277,21 +9285,21 @@ func _mech_record(name: String, by_part: Dictionary, official: bool) -> PartReco
 	var spec: Dictionary = body_ref().SPEC[name]
 	var r := PartRecord.new()
 	r.id = String(part_ids.get(name, "unsaved." + name))
-	r.family = "figure" if recipe.kind == "figure" else ("pod" if spec.slot == "pod" else "mech")
+	r.family = "figure" if bench.recipe.kind == "figure" else ("pod" if spec.slot == "pod" else "mech")
 	r.slot = spec.slot
 	r.side = spec.side
-	r.weight_class = mech_class if recipe.kind == "mech" else ""
-	r.display_name = "%s %s" % [recipe.name, name.replace("_", " ")]
+	r.weight_class = mech_class if bench.recipe.kind == "mech" else ""
+	r.display_name = "%s %s" % [bench.recipe.name, name.replace("_", " ")]
 	r.manufacturer = part_maker
 	r.source = "official" if official else "custom"
 	if not official:
 		r.creator = {"name": creator_name}
 	if name == body_ref().ROOT:
-		r.name_fragment = recipe.name
+		r.name_fragment = bench.recipe.name
 	for q in points:
 		if String(q.part) == name and q.kind == "mount" and String(q.interface) != "":
 			r.mount = {"interface": String(q.interface)}
-			if spec.slot == "leg" and recipe.kind == "mech":
+			if spec.slot == "leg" and bench.recipe.kind == "mech":
 				r.mount["params"] = {"length": leg_length}
 	var accepts := {}
 	for q in points:
@@ -9301,7 +9309,7 @@ func _mech_record(name: String, by_part: Dictionary, official: bool) -> PartReco
 				list.append(String(q.interface))
 	for k in accepts:
 		r.sockets.append({"name": k, "accepts": accepts[k]})
-	r.extra["from"] = recipe.name
+	r.extra["from"] = bench.recipe.name
 	r.extra["bricks"] = _part_recipe(by_part[name]).to_dict() if by_part.has(name) else {}
 	var bends := []
 	for q in points:
@@ -9374,7 +9382,7 @@ func _draw_mech_ref() -> void:
 	_mech_ref = Node3D.new()
 	_mech_ref.name = "MechReference"
 	add_child(_mech_ref)
-	_mech_ref.transform = world.get_chunk_transform(chunk)
+	_mech_ref.transform = bench.world.get_chunk_transform(bench.chunk)
 	var mat := StandardMaterial3D.new()
 	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	mat.albedo_color = Color(0.35, 0.85, 1.0, 0.8)
@@ -9460,13 +9468,13 @@ var _try_place := {}
 ## of a slot takes off what was tried there.
 func try_part(r: PartRecord) -> String:
 	var at := ""
-	if recipe.kind == "gun":
+	if bench.recipe.kind == "gun":
 		if r.family != "gun" or r.scale != "held" or not GUN_PARTS.has(r.slot):
 			return "%s is not a part of a held gun" % r.id
 		at = r.slot
 	elif _body():
-		if not r.family in (["mech", "pod"] if recipe.kind == "mech" else ["figure"]):
-			return "%s is not a %s's part" % [r.id, recipe.kind]
+		if not r.family in (["mech", "pod"] if bench.recipe.kind == "mech" else ["figure"]):
+			return "%s is not a %s's part" % [r.id, bench.recipe.kind]
 		at = body_ref().part_for(r.slot, r.side, part_names[part_sel])
 		if at == "":
 			return "a mech has no %s %s" % [r.side, r.slot]
@@ -9617,7 +9625,7 @@ func _check_fit(by_part: Dictionary) -> void:
 		var path: String = body_ref().path_of(slot) if mech else (slot if sockets.has(slot) else "barrel/" + slot)
 		fit_marks[slot] = fit_reason(recs[slot], recs[h], path, body_ref().PLAN if mech else "gun")
 	# The whole build's rule (layer 2): both legs one length -- a mech's (a figure is one size).
-	if recipe.kind == "mech" and recs.has("leg_L") and recs.has("leg_R"):
+	if bench.recipe.kind == "mech" and recs.has("leg_L") and recs.has("leg_R"):
 		var a: Variant = (recs.leg_L as PartRecord).param("length")
 		var b: Variant = (recs.leg_R as PartRecord).param("length")
 		if a != null and b != null and int(a) != int(b):
@@ -9688,7 +9696,7 @@ func _draw_tried() -> void:
 		_tried_nodes.clear()
 		return
 	_make_tried_nodes()
-	_tried_root.transform = world.get_chunk_transform(chunk)
+	_tried_root.transform = bench.world.get_chunk_transform(bench.chunk)
 	var xo: Dictionary = explode_offsets() if exploded else {}
 	var b_inv := _scene_basis().inverse()
 	for slot in _tried_nodes:
@@ -9739,26 +9747,26 @@ func _forget_part_ids() -> void:
 ## Where this build's parts go: the shipped catalogue for a shipped build (written only
 ## from the editor), the player's custom folder otherwise, a test's own folder in a test.
 func parts_dir() -> String:
-	if _builds_dir != BuildRecipe.player_dir():
-		return _builds_dir + "parts/"
-	if _current_path.begins_with("res://"):
-		return PartCatalog.OFFICIAL_DIR + (recipe.kind + "/" if _body() else "gun/")
+	if bench._builds_dir != BuildRecipe.player_dir():
+		return bench._builds_dir + "parts/"
+	if bench._current_path.begins_with("res://"):
+		return PartCatalog.OFFICIAL_DIR + (bench.recipe.kind + "/" if _body() else "gun/")
 	return PartCatalog.CUSTOM_DIR
 
 
 ## File > Save As under another name makes new parts; the old ones stay as they were.
 func _save_as(build_name: String, room_kind: String = "", tags: Dictionary = {}) -> String:
-	if build_name != recipe.name:
+	if build_name != bench.recipe.name:
 		_forget_part_ids()
-	return _save_as_base(build_name, room_kind, tags)
+	return bench._save_as_base(build_name, room_kind, tags)
 
 
 ## File > Save writes the build (the workshop's own file, to open here again: the game
 ## never reads it) and then every part of it on its own (save_parts).
 func _write(path: String) -> bool:
-	if not _write_base(path):
+	if not bench._write_base(path):
 		return false
-	if recipe.kind in ["gun", "mech", "figure"]:
+	if bench.recipe.kind in ["gun", "mech", "figure"]:
 		save_parts()
 	return true
 
@@ -9785,8 +9793,8 @@ func save_parts(dir: String = "") -> Dictionary:
 	var kept := []
 	for name: String in by_part:
 		if not part_ids.has(name):
-			part_ids[name] = ("%s_%s" % [slug(recipe.name), name]) if official else ("%s.%s_%s.%s" % [
-					slug(creator_name), slug(recipe.name), name, _short_hash()])
+			part_ids[name] = ("%s_%s" % [BrickBench.slug(bench.recipe.name), name]) if official else ("%s.%s_%s.%s" % [
+					BrickBench.slug(creator_name), BrickBench.slug(bench.recipe.name), name, _short_hash()])
 		var r := _mech_record(name, by_part, official) if mech else _part_record(name, by_part, hosts, official)
 		# The scene too: shells, hand-put studs and where the parts on it sit change it
 		# without changing a brick of its own.
@@ -9830,14 +9838,14 @@ func _part_record(name: String, by_part: Dictionary, hosts: Dictionary, official
 	r.family = "gun"
 	r.scale = gun_scale
 	r.slot = name
-	r.display_name = "%s %s" % [recipe.name, name]
+	r.display_name = "%s %s" % [bench.recipe.name, name]
 	r.manufacturer = part_maker
 	r.source = "official" if official else "custom"
 	if not official:
 		r.creator = {"name": creator_name}
 	if name == "body":
 		r.weapon_class = gun_class
-		r.name_fragment = recipe.name
+		r.name_fragment = bench.recipe.name
 	if name == "magazine":
 		r.tags = PackedStringArray(["detaches"])   # PlayerView takes it out on a reload
 	for q in points:
@@ -9852,7 +9860,7 @@ func _part_record(name: String, by_part: Dictionary, hosts: Dictionary, official
 			(accepts.get_or_add(String(q.slot), []) as Array).append(String(q.interface))
 	for k in accepts:
 		r.sockets.append({"name": k, "accepts": accepts[k]})
-	r.extra["from"] = recipe.name
+	r.extra["from"] = bench.recipe.name
 	r.extra["bricks"] = _part_recipe(by_part[name]).to_dict()
 	return r
 
@@ -9860,13 +9868,13 @@ func _part_record(name: String, by_part: Dictionary, hosts: Dictionary, official
 ## The bricks `ids` as a recipe of their own, in the build's frames.
 func _part_recipe(ids: Array) -> BuildRecipe:
 	var out := BuildRecipe.new()
-	out.name = recipe.name
+	out.name = bench.recipe.name
 	out.kind = "gun"
-	for f in range(1, recipe.frame_count()):
-		out.add_frame(recipe.frame_rotation(f), recipe.frame_ticks(f))
+	for f in range(1, bench.recipe.frame_count()):
+		out.add_frame(bench.recipe.frame_rotation(f), bench.recipe.frame_ticks(f))
 	for i: int in ids:
-		out.add(recipe.part_of(i), recipe.cell_of(i), recipe.colour_of(i), recipe.frame_of(i),
-				recipe.role_of(i), recipe.material_of(i))
+		out.add(bench.recipe.part_of(i), bench.recipe.cell_of(i), bench.recipe.colour_of(i), bench.recipe.frame_of(i),
+				bench.recipe.role_of(i), bench.recipe.material_of(i))
 	return out
 
 
@@ -9948,7 +9956,7 @@ func _tip(ids: Array, fwd: Vector3) -> Vector3:
 func _shell_sheet(part: String, along: Callable, across: Callable, up: Callable) -> Dictionary:
 	var mi: MeshInstance3D = _shell_nodes[part]
 	var a: Array = mi.mesh.surface_get_arrays(0)
-	var xf: Transform3D = world.get_chunk_transform(asm.frames[0]).affine_inverse() * mi.transform
+	var xf: Transform3D = bench.world.get_chunk_transform(bench.asm.frames[0]).affine_inverse() * mi.transform
 	var verts := []
 	for p: Vector3 in a[Mesh.ARRAY_VERTEX]:
 		var w := xf * p
@@ -9966,9 +9974,9 @@ func _shell_sheet(part: String, along: Callable, across: Callable, up: Callable)
 func _turned_brick(i: int, along: Callable, across: Callable, up: Callable, spec: Dictionary) -> Dictionary:
 	var af := _brick_frame(i)
 	var rel := _frame_rel(af)
-	var arch := String(recipe.part_of(i))
+	var arch := String(bench.recipe.part_of(i))
 	var size := BrickPalette.size_of(arch)
-	var c := recipe.cell_of(i)
+	var c := bench.recipe.cell_of(i)
 	var gun := func(p: Vector3) -> Array:
 		return [snappedf(along.call(p.x / BrickPalette.STUD_M), 0.001), snappedf(across.call(p.z / BrickPalette.STUD_M), 0.001),
 				snappedf(up.call(p.y / BrickPalette.PLATE_M), 0.001)]
@@ -9978,10 +9986,10 @@ func _turned_brick(i: int, along: Callable, across: Callable, up: Callable, spec
 		return [snappedf(d.x * sign, 0.0001), snappedf(d.z, 0.0001), snappedf(d.y, 0.0001)]
 	var centre := rel * ((Vector3(c) + Vector3(size) * 0.5) * CELL_M)
 	if arch.begins_with("brick_") or arch.begins_with("plate_"):
-		var f: int = asm.frames[af]
+		var f: int = bench.asm.frames[af]
 		for dx in size.x:
 			for dz in size.z:
-				if world.is_solid(f, c + Vector3i(dx, size.y, dz)):
+				if bench.world.is_solid(f, c + Vector3i(dx, size.y, dz)):
 					continue
 				var foot := rel * ((Vector3(c.x + dx + 0.5, c.y + size.y, c.z + dz + 0.5)) * CELL_M)
 				(spec.get_or_add("studs_extra", []) as Array).append({"at": gun.call(foot), "normal": dir.call(Vector3.UP)})
@@ -9992,7 +10000,7 @@ func _turned_brick(i: int, along: Callable, across: Callable, up: Callable, spec
 ## The frame of the workshop a brick is laid in (`asm.frames` index: 0 upright, else a
 ## sideways grid), or -1 for a brick in a frame this workshop has no grid for.
 func _brick_frame(i: int) -> int:
-	return int(_placed_at[i][0]) if i < _placed_at.size() else -1
+	return int(bench._placed_at[i][0]) if i < bench._placed_at.size() else -1
 
 
 ## A frame's grid in the upright one's: frame-local metres to the workshop metres every
@@ -10000,7 +10008,7 @@ func _brick_frame(i: int) -> int:
 func _frame_rel(af: int) -> Transform3D:
 	if af <= 0:
 		return Transform3D.IDENTITY
-	return world.get_chunk_transform(asm.frames[0]).affine_inverse() * world.get_chunk_transform(asm.frames[af])
+	return bench.world.get_chunk_transform(bench.asm.frames[0]).affine_inverse() * bench.world.get_chunk_transform(bench.asm.frames[af])
 
 
 ## Some bricks by the frame they are laid in, the upright one first: frame -> ids.
@@ -10028,8 +10036,8 @@ const CELL_M := Vector3(BrickPalette.STUD_M, BrickPalette.PLATE_M, BrickPalette.
 ## The middles of a brick's cells, in workshop metres, whichever grid it is laid in.
 func _cell_points(i: int) -> Array:
 	var rel := _frame_rel(_brick_frame(i))
-	var c := recipe.cell_of(i)
-	var size := BrickPalette.size_of(recipe.part_of(i))
+	var c := bench.recipe.cell_of(i)
+	var size := BrickPalette.size_of(bench.recipe.part_of(i))
 	var out := []
 	for dx in size.x:
 		for dy in size.y:
@@ -10040,8 +10048,8 @@ func _cell_points(i: int) -> Array:
 
 ## A brick's box in workshop metres, whichever grid it is laid in.
 func _brick_box(i: int) -> AABB:
-	var c := recipe.cell_of(i)
-	var size := BrickPalette.size_of(recipe.part_of(i))
+	var c := bench.recipe.cell_of(i)
+	var size := BrickPalette.size_of(bench.recipe.part_of(i))
 	return _frame_rel(_brick_frame(i)) * AABB(Vector3(c) * CELL_M, Vector3(size) * CELL_M)
 
 
@@ -10051,16 +10059,16 @@ func _part_chunk(ids: Array) -> Array:
 	var lo := Vector3i(1 << 30, 1 << 30, 1 << 30)
 	var hi := -lo
 	for i in ids:
-		lo = lo.min(recipe.cell_of(i))
-		hi = hi.max(recipe.cell_of(i) + BrickPalette.size_of(recipe.part_of(i)))
-	var c := world.create_chunk(Vector3i.ZERO, hi - lo)
+		lo = lo.min(bench.recipe.cell_of(i))
+		hi = hi.max(bench.recipe.cell_of(i) + BrickPalette.size_of(bench.recipe.part_of(i)))
+	var c := bench.world.create_chunk(Vector3i.ZERO, hi - lo)
 	for i in ids:
-		var arch := String(recipe.part_of(i))
-		if not palette.has(arch):
+		var arch := String(bench.recipe.part_of(i))
+		if not bench.palette.has(arch):
 			continue
-		var bid := world.place_block(c, recipe.cell_of(i) - lo, palette[arch], recipe.colour_of(i))
-		if bid >= 0 and recipe.material_of(i) != 0:
-			world.set_block_material(c, bid, recipe.material_of(i))
+		var bid := bench.world.place_block(c, bench.recipe.cell_of(i) - lo, bench.palette[arch], bench.recipe.colour_of(i))
+		if bid >= 0 and bench.recipe.material_of(i) != 0:
+			bench.world.set_block_material(c, bid, bench.recipe.material_of(i))
 	return [c, lo]
 
 
@@ -10075,21 +10083,21 @@ func _bake_part_mesh(ids: Array, af: int = 0) -> MeshInstance3D:
 	var lo: Vector3i = made[1]
 	var mi := MeshInstance3D.new()
 	mi.name = "Bricks"
-	mi.material_override = _material
-	var arrays := world.build_chunk_mesh(c)
+	mi.material_override = bench._material
+	var arrays := bench.world.build_chunk_mesh(c)
 	var m := ArrayMesh.new()
 	if arrays.size() > 0 and not (arrays[Mesh.ARRAY_VERTEX] as PackedVector3Array).is_empty():
 		m.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
 	mi.mesh = m
 	mi.set_instance_shader_parameter("geo_bevel", 0.0)
 	mi.transform = _frame_rel(af) * Transform3D(Basis(), Vector3(lo) * CELL_M)
-	var studs: PackedFloat32Array = world.get_chunk_studs(c)
+	var studs: PackedFloat32Array = bench.world.get_chunk_studs(c)
 	@warning_ignore("integer_division")
 	var count := studs.size() / 16
 	if count > 0:
 		var mmi := MultiMeshInstance3D.new()
 		mmi.name = "Studs"
-		mmi.material_override = _stud_material()
+		mmi.material_override = BrickBench._stud_material()
 		mmi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 		var mm := MultiMesh.new()
 		mm.transform_format = MultiMesh.TRANSFORM_3D
@@ -10102,7 +10110,7 @@ func _bake_part_mesh(ids: Array, af: int = 0) -> MeshInstance3D:
 		# without one (headless) a part's studs would be lost to dressing and packages.
 		mmi.set_meta(&"buffer", studs)
 		mi.add_child(mmi)
-	world.release_chunk(c)
+	bench.world.release_chunk(c)
 	return mi
 
 
@@ -10112,7 +10120,7 @@ func _bake_part_mesh(ids: Array, af: int = 0) -> MeshInstance3D:
 func triangle_stats() -> Dictionary:
 	var t0 := Time.get_ticks_usec()
 	var by_part := {}
-	for i in recipe.size():
+	for i in bench.recipe.size():
 		if _brick_frame(i) < 0:
 			continue
 		var name := part_names[part_of[i] if i < part_of.size() else part_sel]
@@ -10129,12 +10137,12 @@ func triangle_stats() -> Dictionary:
 		for af in groups:
 			var made := _part_chunk(groups[af])
 			var c: int = made[0]
-			var t := _arrays_triangles(world.build_chunk_mesh(c))
+			var t := _arrays_triangles(bench.world.build_chunk_mesh(c))
 			bricks += t
 			meshes += 1 if t > 0 else 0
 			@warning_ignore("integer_division")
-			n_studs += (world.get_chunk_studs(c) as PackedFloat32Array).size() / 16
-			world.release_chunk(c)
+			n_studs += (bench.world.get_chunk_studs(c) as PackedFloat32Array).size() / 16
+			bench.world.release_chunk(c)
 		var hand := 0
 		for st in extra_studs:
 			if String(st.get("part", "")) == name:
@@ -10200,7 +10208,7 @@ static func _thousands(n: int) -> String:
 func _studs_node(list: Array) -> MultiMeshInstance3D:
 	var mmi := MultiMeshInstance3D.new()
 	mmi.name = "HandStuds"
-	mmi.material_override = _stud_material()
+	mmi.material_override = BrickBench._stud_material()
 	mmi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	var mm := MultiMesh.new()
 	mm.transform_format = MultiMesh.TRANSFORM_3D
@@ -10266,7 +10274,7 @@ func _part_root(name: String, ids: Array, at: Vector3, b: Basis, bends: Array = 
 		# The shell, in the workshop metres the bricks are in; the bricks it covers left out.
 		# On a part that bends, cut at the bends: each piece goes with what bends.
 		var src: MeshInstance3D = _shell_nodes[name]
-		var sxf := world.get_chunk_transform(asm.frames[0]).affine_inverse() * src.transform
+		var sxf := bench.world.get_chunk_transform(bench.asm.frames[0]).affine_inverse() * src.transform
 		var pieces := split_by_bends(src.mesh, sxf, bends) if not bends.is_empty() else [src.mesh]
 		var holders: Array = [model]
 		var p: Node = root
@@ -10409,7 +10417,7 @@ static func _own(n: Node, root: Node) -> void:
 func settle_muzzle() -> void:
 	var sum := {}
 	var n := {}
-	for i in recipe.size():
+	for i in bench.recipe.size():
 		if _brick_frame(i) < 0 or i >= part_of.size():
 			continue
 		var name := part_names[part_of[i]]
@@ -10443,7 +10451,7 @@ var _print_started := 0
 ## Where a gun's print files go: beside the other print files, outside the repository
 ## (Documents/brickcity-print/guns/<name>/).
 func print_dir() -> String:
-	var sheet_name := slug(recipe.name if recipe.name != "untitled" else "gun")
+	var sheet_name := BrickBench.slug(bench.recipe.name if bench.recipe.name != "untitled" else "gun")
 	return OS.get_system_dir(OS.SYSTEM_DIR_DOCUMENTS).replace("\\", "/") + "/brickcity-print/guns/" + sheet_name
 
 
@@ -10577,14 +10585,14 @@ func _build_menus() -> void:
 			["Section: hide what is past the plane", "O", func() -> void: set_section(not section_on)],
 			["Outlines: none / all parts / this part", "P", func() -> void: set_outlines((outlines + 1) % 3)],
 			["Grid", "G", func() -> void:
-				_grid_on = not _grid_on
-				_grid.visible = _grid_on],
+				bench._grid_on = not bench._grid_on
+				bench._grid.visible = bench._grid_on],
 			[],
 			["Free placement on the working plane", "Alt F", func() -> void: set_free(not free_place)],
 			["Working plane forward", "PgUp", func() -> void: move_work_plane(1)],
 			["Working plane back", "PgDn", func() -> void: move_work_plane(-1)],
 			[],
-			["Mirror", "Alt S", func() -> void: set_mirror(not mirror_on)],
+			["Mirror", "Alt S", func() -> void: set_mirror(not bench.mirror_on)],
 			["Mirror plane where the ghost is", "Alt Shift S", func() -> void: mirror_here()],
 		]],
 		["Part", [
@@ -10612,14 +10620,14 @@ func _build_menus() -> void:
 		]],
 		["Brick", [
 			["Turn the brick in hand", "R", func() -> void:
-				_yaw = (_yaw + 1) % 4],
+				bench._yaw = (bench._yaw + 1) % 4],
 			["Flip it (studs down)", "F", func() -> void:
-				_flip = not _flip],
-			["Turn the last one placed", "T", func() -> void: _rotate_last()],
+				bench._flip = not bench._flip],
+			["Turn the last one placed", "T", func() -> void: bench._rotate_last()],
 			[],
-			["Next colour", ".", func() -> void: _hotbar.set_colour(_colour + 1)],
-			["Previous colour", ",", func() -> void: _hotbar.set_colour(_colour - 1)],
-			["Paint", "B", func() -> void: rail_pick("place" if _painting else "paint")],
+			["Next colour", ".", func() -> void: bench._hotbar.set_colour(bench._colour + 1)],
+			["Previous colour", ",", func() -> void: bench._hotbar.set_colour(bench._colour - 1)],
+			["Paint", "B", func() -> void: rail_pick("place" if bench._painting else "paint")],
 		]],
 		["Mech", [
 			["Class: light", "", func() -> void: set_mech_class("light")],
@@ -10660,8 +10668,8 @@ func _build_menus() -> void:
 		["Help", [
 			["How to start, and every key", "F10", func() -> void: show_help(not _help.visible)],
 			["The building workshop's key list", "F1", func() -> void:
-				_keys_on = not _keys_on
-				_keys_panel.visible = _keys_on],
+				bench._keys_on = not bench._keys_on
+				bench._keys_panel.visible = bench._keys_on],
 			[],
 			["Held or aimed, keys only:", "", func() -> void: pass],
 			["  all parts browser", "Tab", func() -> void: pass],
@@ -10672,7 +10680,7 @@ func _build_menus() -> void:
 		]],
 	]
 	for m in menus:
-		var mb: MenuButton = _menu.add_menu(String(m[0]), _menu_items(m[1]), _on_asset_menu)
+		var mb: MenuButton = bench._menu.add_menu(String(m[0]), _menu_items(m[1]), _on_asset_menu)
 		if m[0] == "Help":
 			# The key-only rows are a list, not actions.
 			var p := mb.get_popup()
@@ -10732,7 +10740,7 @@ func set_gun_scale(s: String) -> void:
 	if _point_slot != null:
 		_fill_point_ifaces()
 	_store_asset_meta()
-	_dirty = true
+	bench._dirty = true
 var size_marks_on := true
 ## The shared grip at print size, mm (standards.json "held_grip"; these until it is read).
 var _grip_std := {"length_min": 24.0, "fore_aft": [10.0, 15.5], "thick": [7.0, 9.5]}
@@ -10784,7 +10792,7 @@ func add_model(pieces: Array, path: String, op: int = SdfForm.ADD) -> bool:
 	var on := Transform3D(b, Vector3.ZERO) * box
 	var c := build_centre()
 	var at := Vector3(c.x - on.get_center().x, maxf(c.y - on.size.y * 0.5, BrickPalette.PLATE_M) - on.position.y,
-			mirror_z * BrickPalette.STUD_M - on.get_center().z)
+			bench.mirror_z * BrickPalette.STUD_M - on.get_center().z)
 	# Not the first: beside the others on the near side, two studs clear, on a stud line, on
 	# their bottom (Docs/AssetWorkshop.md, "A second model beside the first").
 	if not models.is_empty():
@@ -10908,7 +10916,7 @@ func models_state() -> Array:
 
 
 func _model_record(before: Array) -> void:
-	undo_stack.push(_sketch_cmd([{"models_before": before, "models_after": models_state()}]))
+	bench.undo_stack.push(_sketch_cmd([{"models_before": before, "models_after": models_state()}]))
 	_store_asset_meta()
 	_autosave_dirty = true
 
@@ -11021,7 +11029,7 @@ func model_groups() -> PackedStringArray:
 ## A gun's, a mech's and a figure's parts are slots the game assembles by name; furniture
 ## and items name their own.
 func can_name_parts() -> bool:
-	return recipe.kind == "item"
+	return bench.recipe.kind == "item"
 
 
 ## Rename part `i`, everywhere its name is a key: shells, toolbars, sketches, points,
@@ -11053,7 +11061,7 @@ func rename_part(i: int, n: String) -> bool:
 			sketches.erase(key)
 			sketches[n + String(key).substr(old.length())] = sk
 	_store_asset_meta()
-	_dirty = true
+	bench._dirty = true
 	print("[asset workshop] part '%s' is '%s' now" % [old, n])
 	return true
 
@@ -11067,7 +11075,7 @@ func add_part(n: String) -> int:
 	if sculpt != null:
 		sculpt.set_parts(part_names.size())
 	_store_asset_meta()
-	_dirty = true
+	bench._dirty = true
 	return part_names.size() - 1
 
 
@@ -11108,8 +11116,8 @@ func convert_part(i: int) -> int:
 	var was := _sculpt_state()
 	var keep := part_sel
 	part_sel = i
-	var before := recipe.size()
-	_batch = true
+	var before := bench.recipe.size()
+	bench._batch = true
 	if curve_level >= 1:
 		var free := PackedInt32Array()
 		for c in mine:
@@ -11132,7 +11140,7 @@ func convert_part(i: int) -> int:
 					mine.erase(c)
 	for b in pack_cells(mine):
 		place_named(String(b[0]), b[1])
-	_batch = false
+	bench._batch = false
 	part_sel = keep
 	sculpt.form.begin_edit()
 	sculpt.form.sync_cells(gone, PackedInt32Array())
@@ -11141,7 +11149,7 @@ func convert_part(i: int) -> int:
 	_after_edit()
 	_sculpt_finish(was, rec)
 	_end_gather()
-	var laid := recipe.size() - before
+	var laid := bench.recipe.size() - before
 	_show_sculpt_note(true, "'%s' is bricks now (%d); the rest is still clay." % [part_names[i], laid])
 	print("[asset workshop] part '%s' made bricks: %d" % [part_names[i], laid])
 	return laid
@@ -11159,7 +11167,7 @@ func clay_part(i: int) -> int:
 		if list[j + 3] == label:
 			back.append_array(list.slice(j, j + 5))
 	var ids := []
-	for k in recipe.size():
+	for k in bench.recipe.size():
 		if _brick_frame(k) == 0 and k < part_of.size() and part_of[k] == i:
 			ids.append(k)
 	if ids.is_empty():
@@ -11170,11 +11178,11 @@ func clay_part(i: int) -> int:
 	sculpt.form.sync_cells(PackedInt32Array(), back, _brick_colours(back))
 	var rec := sculpt.form.end_edit()
 	sculpt.remesh()
-	_batch = true
+	bench._batch = true
 	ids.reverse()
 	for k in ids:
 		take_brick(int(k))
-	_batch = false
+	bench._batch = false
 	_after_edit()
 	_sculpt_finish(was, rec)
 	_end_gather()
@@ -11184,7 +11192,7 @@ func clay_part(i: int) -> int:
 ## The grid and the size marks drawn again round the selection (build_centre), and with
 ## `frame` the view on it.
 func _centre_on_selection(frame := false) -> void:
-	_build_grid()
+	bench._build_grid()
 	_size_sig = ""
 	if frame:
 		# Frame it moves the grid too; a pick alone leaves it ("The grid stays put").
@@ -11210,8 +11218,8 @@ func clean_strays() -> Vector2i:
 		cells_out = _cells_outside_area(sculpt.form.cells()).x
 		if cells_out > 0:
 			var bb := sculpt.form.bounds().grow(8.0)   # the band (6 samples) and a little
-			var area := Vector3(plate_studs * BrickWorld.ticks_per_stud(), height_plates * BrickWorld.ticks_per_plate(),
-					plate_studs * BrickWorld.ticks_per_stud())
+			var area := Vector3(bench.plate_studs * BrickWorld.ticks_per_stud(), bench.height_plates * BrickWorld.ticks_per_plate(),
+					bench.plate_studs * BrickWorld.ticks_per_stud())
 			sculpt.form.begin_edit()
 			# One slab each side of the area, cut to the block-out's own box (a slab out to
 			# infinity would walk blocks that never existed).
@@ -11230,10 +11238,10 @@ func clean_strays() -> Vector2i:
 			_sculpt_record(sculpt.form.end_edit())
 	# Lone bricks far from the bulk.
 	var taken := 0
-	if recipe.size() >= 5:
+	if bench.recipe.size() >= 5:
 		var axes := [[], [], []]   # plain Arrays: a packed one in an Array is a copy
-		for i in recipe.size():
-			var c := recipe.cell_of(i)
+		for i in bench.recipe.size():
+			var c := bench.recipe.cell_of(i)
 			for a in 3:
 				(axes[a] as Array).append(c[a])
 		var lo := Vector3i.ZERO
@@ -11247,8 +11255,8 @@ func clean_strays() -> Vector2i:
 			lo[a] = int(v[k]) - far
 			hi[a] = int(v[v.size() - 1 - k]) + far
 		var strays := []
-		for i in recipe.size():
-			var c := recipe.cell_of(i)
+		for i in bench.recipe.size():
+			var c := bench.recipe.cell_of(i)
 			var out := false
 			for a in 3:
 				out = out or c[a] < lo[a] or c[a] > hi[a]
@@ -11268,19 +11276,19 @@ func clean_strays() -> Vector2i:
 
 ## Does brick `i` touch another (their boxes meet or overlap)?
 func _touches_brick(i: int) -> bool:
-	var a := AABB(Vector3(recipe.cell_of(i)), Vector3(BrickPalette.size_of(recipe.part_of(i)))).grow(0.5)
-	for j in recipe.size():
-		if j != i and a.intersects(AABB(Vector3(recipe.cell_of(j)), Vector3(BrickPalette.size_of(recipe.part_of(j))))):
+	var a := AABB(Vector3(bench.recipe.cell_of(i)), Vector3(BrickPalette.size_of(bench.recipe.part_of(i)))).grow(0.5)
+	for j in bench.recipe.size():
+		if j != i and a.intersects(AABB(Vector3(bench.recipe.cell_of(j)), Vector3(BrickPalette.size_of(bench.recipe.part_of(j))))):
 			return true
 	return false
 
 
 ## The mirror plane through the middle of the selection (or of the build), on a stud line.
 func mirror_through_selection() -> void:
-	mirror_z = roundf(build_centre().z / BrickPalette.STUD_M)
+	bench.mirror_z = roundf(build_centre().z / BrickPalette.STUD_M)
 	_place_mirror_sheet()
 	_store_asset_meta()
-	print("[asset workshop] mirror plane through the selection: %.0f studs across" % mirror_z)
+	print("[asset workshop] mirror plane through the selection: %.0f studs across" % bench.mirror_z)
 
 
 ## The sculpt mode. The gizmo belongs to "pick and move" alone: shown there for what is
@@ -11459,8 +11467,8 @@ func _clay_migrate() -> void:
 	sculpt.form.sync_cells(gone, PackedInt32Array())
 	sculpt.remesh()
 	_sdf_meta = sculpt.save_meta()
-	for i in recipe.size():
-		clay_bricks[_brick_key(recipe.part_of(i), recipe.cell_of(i))] = true
+	for i in bench.recipe.size():
+		clay_bricks[_brick_key(bench.recipe.part_of(i), bench.recipe.cell_of(i))] = true
 
 
 ## The clay's size for the readout: the block-out and the models together, or "" with none.
@@ -11569,7 +11577,7 @@ func bake_model() -> void:
 	sculpt.remesh()
 	(m.node as Node).queue_free()
 	models.erase(m)
-	undo_stack.push(_sketch_cmd([{"sdf": rec},
+	bench.undo_stack.push(_sketch_cmd([{"sdf": rec},
 			{"models_before": before, "models_after": models_state()}]))
 	_sdf_meta = sculpt.save_meta()
 	_store_asset_meta()
@@ -11667,8 +11675,8 @@ func _frame_placed() -> void:
 		return
 	var bb := (_placed.xf as Transform3D) * (_placed.box as AABB)
 	var c := bb.get_center()
-	_camera.global_position = c + Vector3(0.3, 0.4, 1.0).normalized() * maxf(bb.size.length(), 2.0) * 1.1
-	_camera.look_at(c, Vector3.UP)
+	bench._camera.global_position = c + Vector3(0.3, 0.4, 1.0).normalized() * maxf(bb.size.length(), 2.0) * 1.1
+	bench._camera.look_at(c, Vector3.UP)
 
 
 ## The gizmo: LMB on a handle drags it; the model shows as a ghost while it goes and is
@@ -11680,7 +11688,7 @@ func _gizmo_input(e: InputEvent) -> bool:
 	var ray := _mouse_ray()
 	if e is InputEventMouse and Input.mouse_mode != Input.MOUSE_MODE_CAPTURED:
 		var at: Vector2 = (e as InputEventMouse).position
-		ray = [_camera.project_ray_origin(at), _camera.project_ray_normal(at)]
+		ray = [bench._camera.project_ray_origin(at), bench._camera.project_ray_normal(at)]
 	if e is InputEventMouseButton and e.button_index == MOUSE_BUTTON_LEFT:
 		if e.pressed:
 			var id := _gizmo.pick(ray[0], ray[1])
@@ -11689,7 +11697,7 @@ func _gizmo_input(e: InputEvent) -> bool:
 			_xform_settle(true)
 			_gizmo_xf0 = _placed.xf
 			_gizmo_before = models_state()
-			_gizmo.begin(id, ray[0], ray[1], e.position, _camera)
+			_gizmo.begin(id, ray[0], ray[1], e.position, bench._camera)
 			return true
 		if _gizmo.dragging() == "":
 			return false
@@ -11728,7 +11736,7 @@ func _model_pick_input(e: InputEvent) -> bool:
 	if not (e is InputEventMouseButton and e.pressed and e.button_index == MOUSE_BUTTON_LEFT):
 		return e is InputEventMouseButton
 	var at: Vector2 = (e as InputEventMouse).position
-	pick_at(_camera.project_ray_origin(at), _camera.project_ray_normal(at))
+	pick_at(bench._camera.project_ray_origin(at), bench._camera.project_ray_normal(at))
 	return true
 
 
@@ -11955,7 +11963,7 @@ func _placed_key(e: InputEvent) -> bool:
 		KEY_ESCAPE:
 			# With the mouse looking, Escape frees it (the camera's) and the pick stays; with
 			# the cursor free it lets the pick go.
-			if _camera != null and bool(_camera.get("_captured")):
+			if bench._camera != null and bool(bench._camera.get("_captured")):
 				return false
 			# A lifted part goes back exactly as it was, no undo.
 			if _held_kind() == "part":
@@ -12135,8 +12143,8 @@ func size_box() -> AABB:
 		for bx in boxes:
 			out = out.merge(bx)
 		return out
-	if recipe.size() > 0:
-		var b := recipe.bounds()
+	if bench.recipe.size() > 0:
+		var b := bench.recipe.bounds()
 		var lo: Vector3i = b[0]
 		var d: Vector3i = b[1]
 		var s := Vector3(BrickPalette.STUD_M, BrickPalette.PLATE_M, BrickPalette.STUD_M)
@@ -12149,7 +12157,7 @@ func size_ruler() -> Vector2:
 	var dir := 1.0 if muzzle_end == "+x" else -1.0
 	var bb := size_box()
 	if bb.size == Vector3.ZERO:
-		var mid := plate_studs * BrickPalette.STUD_M * 0.5
+		var mid := bench.plate_studs * BrickPalette.STUD_M * 0.5
 		return Vector2(mid - dir * class_studs() * BrickPalette.STUD_M * 0.5, dir)
 	return Vector2(bb.position.x if dir > 0.0 else bb.end.x, dir)
 
@@ -12166,12 +12174,12 @@ func _size_marks_process() -> void:
 	if Time.get_ticks_msec() < _size_at:
 		return
 	_size_at = Time.get_ticks_msec() + 500
-	var sig := "%s %s %s %s %d %d %s %s %s %d" % [recipe.kind, size_marks_on, gun_class, muzzle_end, undo_stack.size(), undo_stack.version,
-			sculpt_state, str(_placed.get("xf", "")), mirror_z, models.size()]
+	var sig := "%s %s %s %s %d %d %s %s %s %d" % [bench.recipe.kind, size_marks_on, gun_class, muzzle_end, bench.undo_stack.size(), bench.undo_stack.version,
+			sculpt_state, str(_placed.get("xf", "")), bench.mirror_z, models.size()]
 	if sig != _size_sig:
 		_size_sig = sig
 		draw_size_marks()
-	var gsig := "%d %d %s %d %s" % [undo_stack.size(), undo_stack.version, sculpt_state, models.size(),
+	var gsig := "%d %d %s %d %s" % [bench.undo_stack.size(), bench.undo_stack.version, sculpt_state, models.size(),
 			str(models_state().map(func(st: Dictionary) -> Transform3D: return st.xf))]
 	if gsig != _grid_sig:
 		_grid_sig = gsig
@@ -12198,7 +12206,7 @@ func draw_size_marks() -> void:
 		c.queue_free()
 	# Not in the game's view: it is to see the gun as the player will. A gun's only: a mech or
 	# a figure has its reference instead.
-	var on := size_marks_on and not game_view_on and recipe.kind == "gun" and gun_scale == "held"
+	var on := size_marks_on and not game_view_on and bench.recipe.kind == "gun" and gun_scale == "held"
 	_size_marks.visible = on
 	_size_labels.visible = on
 	if not on:
@@ -12209,7 +12217,7 @@ func draw_size_marks() -> void:
 	var dir := r.y
 	var under := size_box()
 	var y := (under.position.y if under.size != Vector3.ZERO else P) + 0.01
-	var z := mirror_z * S
+	var z := bench.mirror_z * S
 	var n := class_studs()
 	var at := func(studs: float) -> float: return r.x + dir * studs * S
 	var im := ImmediateMesh.new()
@@ -12297,14 +12305,14 @@ func set_game_view(on: bool) -> void:
 			return
 		if view != 0:
 			set_view(0)
-		_game_view_was = {"xf": _camera.global_transform, "fov": _camera.fov, "near": _camera.near,
-				"process": _camera.is_processing(), "physics": _camera.is_physics_processing(),
-				"input": _camera.is_processing_unhandled_input()}
-		if _camera.has_method("_set_captured"):
-			_camera.call("_set_captured", false)
-		_camera.set_process(false)
-		_camera.set_physics_process(false)
-		_camera.set_process_unhandled_input(false)
+		_game_view_was = {"xf": bench._camera.global_transform, "fov": bench._camera.fov, "near": bench._camera.near,
+				"process": bench._camera.is_processing(), "physics": bench._camera.is_physics_processing(),
+				"input": bench._camera.is_processing_unhandled_input()}
+		if bench._camera.has_method("_set_captured"):
+			bench._camera.call("_set_captured", false)
+		bench._camera.set_process(false)
+		bench._camera.set_physics_process(false)
+		bench._camera.set_process_unhandled_input(false)
 		game_view_on = true
 		game_view_ads = false
 		_place_game_camera()
@@ -12312,12 +12320,12 @@ func set_game_view(on: bool) -> void:
 	else:
 		game_view_on = false
 		var w := _game_view_was
-		_camera.global_transform = w.xf
-		_camera.fov = w.fov
-		_camera.near = w.near
-		_camera.set_process(w.process)
-		_camera.set_physics_process(w.physics)
-		_camera.set_process_unhandled_input(w.input)
+		bench._camera.global_transform = w.xf
+		bench._camera.fov = w.fov
+		bench._camera.near = w.near
+		bench._camera.set_process(w.process)
+		bench._camera.set_physics_process(w.physics)
+		bench._camera.set_process_unhandled_input(w.input)
 		draw_size_marks()
 
 
@@ -12334,11 +12342,11 @@ func _place_game_camera() -> void:
 	var back_top := Vector3(bb.position.x if d > 0.0 else bb.end.x, bb.end.y, bb.get_center().z)
 	var basis := Basis(Vector3(0, 0, d), Vector3.UP, Vector3(-d, 0, 0))
 	var pose: Vector3 = PlayerView.ADS if game_view_ads else PlayerView.HIP
-	_camera.global_transform = global_transform * Transform3D(basis, back_top - basis * (pose * k))
+	bench._camera.global_transform = global_transform * Transform3D(basis, back_top - basis * (pose * k))
 	var vp := get_viewport().get_visible_rect().size
 	var aspect := vp.x / maxf(vp.y, 1.0)
-	_camera.fov = rad_to_deg(2.0 * atan(tan(deg_to_rad(PlayerView.hfov) * 0.5) / aspect))
-	_camera.near = 0.02 * k
+	bench._camera.fov = rad_to_deg(2.0 * atan(tan(deg_to_rad(PlayerView.hfov) * 0.5) / aspect))
+	bench._camera.near = 0.02 * k
 
 
 ## In the game's view: RMB aims down the sights and back, Escape leaves; other clicks do

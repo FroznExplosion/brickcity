@@ -990,7 +990,7 @@ Each stage: own branch, merged `--no-ff`, pushed. Every stage passes, as on main
 | 5a ✅ | **Place** (the hand: click, held-click run, RMB takes away) into the kit, the toolbox's default tool and the hand under any tool for a click it does not take | probes, gate |
 | 5b ✅ | The rest of the shared tools into the kit, one file each: measure, fill (wand), move, select, and the Shapes tool -- one tool, two gestures (asked 2026-11-08: the asset workshop's one drag, the building workshop's outline then height); Cut is the Shapes tool with a cut for its outcome. The building workshop's RMB delete is undoable (asked the same day) | probes; `wk_smoke` per tool |
 | 6a ✅ | Each of the overrides (29 by 2026-11-09) becomes a hook, a setting or an entry point an owner calls (the asset still extends) | probes |
-| 6b | **No more `extends workshop.gd`**: the brick world, recipe, frames, save and load in one component both workshops own; each workshop `extends Node3D` and composes the kit | every probe, gate; a scan finds no game class named under `addons/workshop_kit/` |
+| 6b ✅ | **No more `extends workshop.gd`**: the brick world, recipe, frames, save and load in one component both workshops own (`BrickBench`); each workshop `extends Node3D` and composes the kit | every probe, gate; a scan finds no game class named under `addons/workshop_kit/` (now a `wk_smoke` check) |
 
 Done when both workshops run on the kit, each shared tool is one file under it, the kit names no
 game class, the probes and gate pass as on main, and section 0 describes the kit.
@@ -1274,3 +1274,46 @@ so that the next stage can make `workshop.gd`'s bricks a component instead of a 
   where it called `super`; `_init` stays (the area's size, set before `_ready`).
 
 No behaviour changes: every probe as on main, the gate 19/19.
+
+### As built: stage 6b, the bench (2026-11-09)
+
+**`workshop.gd` became `BrickBench`** (`scripts/workshop/brick_bench.gd`, moved with git so its
+history follows), a `Node3D` component: the brick world, recipe, frames, aiming and placing,
+the hand and paint, undo, grid, ghost, camera, HUD and menus, save and load -- everything both
+workshops had in common, which was all of the old base. Each workshop is now a `Node3D` that owns
+one, as a child named "Bench":
+
+```
+workshop.tscn        Workshop (workshop.gd, 37 lines)        asset_workshop.tscn   AssetWorkshop (asset_workshop.gd)
+  Bench (BrickBench)                                            Bench (BrickBench)
+    Tools (WorkshopTools: wants_tools)                          Frame (AssetWorkshopUI) ...
+    the camera, ghost, grid, HUD, doors, lifts ...                the photos, guides, sculpt ...
+```
+
+* **The owner** makes the bench in a member initialiser (the asset workshop sizes its area in
+  `_init`), and in `_ready` adds it, `bind_host(self)`, then `bench_ready()`; its `_process`,
+  `_input` and `_unhandled_input` call `bench_process`, `bench_input`, `bench_unhandled_input`
+  where they called `super`. The building workshop does nothing else (and answers the pause
+  menu's `pause_allowed`).
+* **Hooks** (stage 6a) now reach the owner: the bench calls `host._aim()` and the rest of HOOKS
+  when the owner has them; the asset workshop's call `bench._aim_base()` and so on.
+* **Who holds what.** The bench's own helpers (`WorkshopTools`, `WorkshopSpaces`, `FurnishTool`,
+  the doors, lifts, ladders, and the kit context `BrickWorkshopContext`) are given the bench.
+  The context asks the owner (`_editor()`) for measure, fill and move, which only the asset
+  workshop has; Sketch, Shapes and Select go to `sketch_host` as before.
+* **The asset workshop** (12,370 lines) names the bench's members as `bench.x` (769 places,
+  rewritten by script; `BrickBench.X` for constants and static functions), and so do the probes
+  and `asset_workshop_ui.gd` (`_ws.bench.recipe`). A probe that looked for the workshop's child
+  nodes looks under the bench (`build_doors_probe`).
+* **The kit names no game class** -- now a `wk_smoke` check (kit 0.14.0, 144): every global class
+  outside the kit, looked for in the kit's code. One comment in `wk_context.gd` names `MenuHost`
+  as the pattern it follows; comments are not code.
+
+Every probe as on main (and the eight others the rewrite touched: asset_tags 32, figure 51,
+package 27, part_save 61, build_doors 12, furnish 40, module_marks 16, stud 23); the gate 19/19.
+
+What is still one class that could be several: `BrickBench` holds the building workshop's own
+features too (Insert's stamps, generated towers, groups, guides, rooms, furnishing, its gate),
+because the asset workshop had all of them through the old base and its probes use some. Taking
+them out into the building workshop, or into `scripts/workshop/tools/` as `WkTool`s, is a next step
+if wanted (section 0, "What is left").

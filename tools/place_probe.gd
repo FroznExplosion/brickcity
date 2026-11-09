@@ -71,42 +71,42 @@ func _ok(what: String, cond: bool, detail: String = "") -> void:
 # --- helpers ---------------------------------------------------------------
 
 func _reset() -> void:
-	while _ws._undo():
+	while _ws.bench._undo():
 		pass
-	_ws._hold_lock(false)
-	_ws._frame = 0
-	_ws._axis_z = false
-	_ws._flip = false
+	_ws.bench._hold_lock(false)
+	_ws.bench._frame = 0
+	_ws.bench._axis_z = false
+	_ws.bench._flip = false
 
 
 func _hold(part: String, axis_z := false) -> void:
-	_ws._part_index = BrickPalette.parts().find(part)
-	_ws._axis_z = axis_z
+	_ws.bench._part_index = BrickPalette.parts().find(part)
+	_ws.bench._axis_z = axis_z
 
 
 ## Place directly, bypassing the aim. For building the scenery a case needs.
 func _put(part: String, cell: Vector3i, axis_z := false) -> int:
 	_hold(part, axis_z)
-	_ws._snapped = {}
-	_ws._cell = cell
-	_ws._update_ghost()
-	var n: int = _ws.recipe.size()
-	_ws._place()
-	return _ws.recipe.size() - n
+	_ws.bench._snapped = {}
+	_ws.bench._cell = cell
+	_ws.bench._update_ghost()
+	var n: int = _ws.bench.recipe.size()
+	_ws.bench._place()
+	return _ws.bench.recipe.size() - n
 
 
 ## A ray straight down onto the centre of a column of cells.
 func _down(x: float, z: float) -> void:
-	_ws._aim_ray(Vector3((x + 0.5) * STUD, 20.0, (z + 0.5) * STUD), Vector3(0, -1, 0))
-	_ws._update_ghost()
+	_ws.bench._aim_ray(Vector3((x + 0.5) * STUD, 20.0, (z + 0.5) * STUD), Vector3(0, -1, 0))
+	_ws.bench._update_ghost()
 
 
 func _delete_down(x: float, z: float) -> bool:
-	return _ws._delete_ray(Vector3((x + 0.5) * STUD, 20.0, (z + 0.5) * STUD), Vector3(0, -1, 0))
+	return _ws.bench._delete_ray(Vector3((x + 0.5) * STUD, 20.0, (z + 0.5) * STUD), Vector3(0, -1, 0))
 
 
 func _arch() -> int:
-	return _ws.palette[_ws._archetype_name()]
+	return _ws.bench.palette[_ws.bench._archetype_name()]
 
 
 # ---------------------------------------------------------------------------
@@ -117,14 +117,14 @@ func _check_top_stud() -> void:
 	_ok("a 1x6 placed", _put("brick_1x6", Vector3i(20, 1, 20)) == 1)
 	_hold("brick_1x4")
 	_down(22, 20)
-	_ok("the cursor is on a stud", _ws._stud != _ws.NO_STUD)
+	_ok("the cursor is on a stud", _ws.bench._stud != _ws.bench.NO_STUD)
 	_ok("that stud: column 22, on the brick's top (1 + 3 plates)",
-			_ws._stud == Vector3i(22, 4, 20), "%v" % _ws._stud)
-	_ok("the part covers it, centred: x 21..24", _ws._cell == Vector3i(21, 4, 20),
-			"%v" % _ws._cell)
-	_ok("in the upright grid", _ws._frame == 0)
-	_ok("and it would connect", _ws._valid and _ws._joints > 0,
-			"valid=%s joints=%d" % [_ws._valid, _ws._joints])
+			_ws.bench._stud == Vector3i(22, 4, 20), "%v" % _ws.bench._stud)
+	_ok("the part covers it, centred: x 21..24", _ws.bench._cell == Vector3i(21, 4, 20),
+			"%v" % _ws.bench._cell)
+	_ok("in the upright grid", _ws.bench._frame == 0)
+	_ok("and it would connect", _ws.bench._valid and _ws.bench._joints > 0,
+			"valid=%s joints=%d" % [_ws.bench._valid, _ws.bench._joints])
 
 
 func _check_aim_follows_the_cursor() -> void:
@@ -132,14 +132,14 @@ func _check_aim_follows_the_cursor() -> void:
 	_reset()
 	_hold("brick_2x2")
 	_down(8, 8)
-	_ok("on the baseplate top", _ws._cell.y == 1, "y = %d" % _ws._cell.y)
+	_ok("on the baseplate top", _ws.bench._cell.y == 1, "y = %d" % _ws.bench._cell.y)
 	_put("brick_2x2", Vector3i(12, 1, 8))
 	_hold("brick_2x2")
 	_down(12, 8)
-	_ok("over a brick: on its top", _ws._cell.y == 4, "y = %d" % _ws._cell.y)
+	_ok("over a brick: on its top", _ws.bench._cell.y == 4, "y = %d" % _ws.bench._cell.y)
 	_down(8, 8)
 	_ok("back over bare floor: back on the floor (the old sticky plane stayed at 4)",
-			_ws._cell.y == 1, "y = %d" % _ws._cell.y)
+			_ws.bench._cell.y == 1, "y = %d" % _ws.bench._cell.y)
 
 
 func _check_drag_along_the_locked_plane() -> void:
@@ -148,18 +148,18 @@ func _check_drag_along_the_locked_plane() -> void:
 	_put("brick_1x6", Vector3i(20, 1, 20))     # x 20..25
 	_hold("brick_1x4")                           # 4 long, centred with half = 1
 	_down(24, 20)
-	_ws._hold_lock(true)
-	_ok("E locks a plane", not _ws._lock.is_empty() and _ws._lock.y == 4)
+	_ws.bench._hold_lock(true)
+	_ok("E locks a plane", not _ws.bench._lock.is_empty() and _ws.bench._lock.y == 4)
 	var xs := []
 	var ys := {}
 	var joints := []
 	var valid := []
 	for cx in range(24, 33):
 		_down(cx, 20)
-		xs.append(_ws._cell.x)
-		ys[_ws._cell.y] = true
-		joints.append(_ws._joints)
-		valid.append(_ws._valid)
+		xs.append(_ws.bench._cell.x)
+		ys[_ws.bench._cell.y] = true
+		joints.append(_ws.bench._joints)
+		valid.append(_ws.bench._valid)
 
 	var steps_ok := true
 	for i in range(1, xs.size()):
@@ -178,14 +178,14 @@ func _check_drag_along_the_locked_plane() -> void:
 	# Past the end it is mid-air on the plane -- allowed, and it places.
 	_ok("fully off the end it floats: no joints", joints[joints.size() - 1] == 0)
 	_ok("but it is still a legal placement", valid[valid.size() - 1])
-	var n: int = _ws.recipe.size()
-	_ws._place()
-	_ok("and it places in mid-air", _ws.recipe.size() == n + 1)
+	var n: int = _ws.bench.recipe.size()
+	_ws.bench._place()
+	_ok("and it places in mid-air", _ws.bench.recipe.size() == n + 1)
 
-	_ws._hold_lock(false)
+	_ws.bench._hold_lock(false)
 	_down(40, 40)
-	_ok("letting go of E lets go of the plane", _ws._lock.is_empty() and _ws._cell.y == 1,
-			"y = %d" % _ws._cell.y)
+	_ok("letting go of E lets go of the plane", _ws.bench._lock.is_empty() and _ws.bench._cell.y == 1,
+			"y = %d" % _ws.bench._cell.y)
 
 
 func _check_fits_beside_an_obstruction() -> void:
@@ -196,33 +196,33 @@ func _check_fits_beside_an_obstruction() -> void:
 	_put("brick_2x4", Vector3i(30, 4, 30))
 	_hold("brick_1x6")                           # 6 long, half = 2
 	_down(29, 30)                                # the floor stud against the wall
-	_ok("on the floor", _ws._cell.y == 1)
-	_ok("covering the stud aimed at", _ws._cell.x <= 29 and _ws._cell.x + 6 > 29)
-	_ok("pushed back flush: x = 24 (24..29, wall at 30)", _ws._cell.x == 24,
-			"x = %d" % _ws._cell.x)
-	_ok("and legal", _ws._valid)
+	_ok("on the floor", _ws.bench._cell.y == 1)
+	_ok("covering the stud aimed at", _ws.bench._cell.x <= 29 and _ws.bench._cell.x + 6 > 29)
+	_ok("pushed back flush: x = 24 (24..29, wall at 30)", _ws.bench._cell.x == 24,
+			"x = %d" % _ws.bench._cell.x)
+	_ok("and legal", _ws.bench._valid)
 
 	# With the plane locked the player is placing by hand: no shifting, and a
 	# part that does not fit says so.
-	_ws._hold_lock(true)
+	_ws.bench._hold_lock(true)
 	_down(29, 30)
-	_ok("E held: centred on the cursor (x = 27) and red", _ws._cell.x == 27 and not _ws._valid,
-			"x = %d valid = %s" % [_ws._cell.x, _ws._valid])
-	_ws._hold_lock(false)
+	_ok("E held: centred on the cursor (x = 27) and red", _ws.bench._cell.x == 27 and not _ws.bench._valid,
+			"x = %d valid = %s" % [_ws.bench._cell.x, _ws.bench._valid])
+	_ws.bench._hold_lock(false)
 
 
 ## A bracket's i-th side stud, as the workshop sees it.
 func _bracket_stud(cell: Vector3i, i := 0) -> Dictionary:
-	var f0: int = _ws.asm.frames[0]
-	var studs: Array = _ws._real_side_studs(f0, _ws.world.block_at(f0, cell))
+	var f0: int = _ws.bench.asm.frames[0]
+	var studs: Array = _ws.bench._real_side_studs(f0, _ws.bench.world.block_at(f0, cell))
 	return studs[i] if i < studs.size() else {}
 
 
 ## A ray straight at a side stud, from in front of it, optionally offset.
 func _at_stud(st: Dictionary, offset := Vector3.ZERO) -> void:
 	var n := Vector3(st.dir as Vector3i)
-	_ws._aim_ray(st.centre + n * 3.0 + offset, -n)
-	_ws._update_ghost()
+	_ws.bench._aim_ray(st.centre + n * 3.0 + offset, -n)
+	_ws.bench._update_ghost()
 
 
 func _check_side_stud_snap() -> void:
@@ -230,9 +230,9 @@ func _check_side_stud_snap() -> void:
 	_reset()
 	# A 1x4 bracket running along Z: its four side studs face +X.
 	_ok("a 1x4 bracket placed", _put("bracket_1x4", Vector3i(14, 1, 10), true) == 1)
-	var f0: int = _ws.asm.frames[0]
-	var bid: int = _ws.world.block_at(f0, Vector3i(14, 1, 10))
-	var studs: Array = _ws._real_side_studs(f0, bid)
+	var f0: int = _ws.bench.asm.frames[0]
+	var bid: int = _ws.bench.world.block_at(f0, Vector3i(14, 1, 10))
+	var studs: Array = _ws.bench._real_side_studs(f0, bid)
 	_ok("four side studs, one per stud of its length", studs.size() == 4, "%d" % studs.size())
 	if studs.size() < 4:
 		return
@@ -242,31 +242,31 @@ func _check_side_stud_snap() -> void:
 			dirs_ok = false
 	_ok("all down its long side (+X)", dirs_ok)
 	@warning_ignore("integer_division")
-	var drawn: int = _ws._side_stud_instances(f0).size() / 16
+	var drawn: int = _ws.bench._side_stud_instances(f0).size() / 16
 	_ok("and they are drawn", drawn == 4, "%d" % drawn)
 
 	_hold("plate_2x2")
-	var welds: int = _ws.asm.live_weld_count()
+	var welds: int = _ws.bench.asm.live_weld_count()
 	_at_stud(studs[1])
-	_ok("it snapped to the stud", not _ws._snapped.is_empty())
-	_ok("in a grid that is not the upright one", _ws._frame != 0)
-	var up: Vector3 = _ws.world.get_chunk_transform(_ws.chunk).basis.y
+	_ok("it snapped to the stud", not _ws.bench._snapped.is_empty())
+	_ok("in a grid that is not the upright one", _ws.bench._frame != 0)
+	var up: Vector3 = _ws.bench.world.get_chunk_transform(_ws.bench.chunk).basis.y
 	_ok("turned to match: its up is the stud's direction (+X)",
 			up.is_equal_approx(Vector3(1, 0, 0)), "%v" % up)
-	_ok("legal, and shown as attached (not amber)", _ws._valid
-			and _ws._ghost_material.albedo_color.b > 0.5)
+	_ok("legal, and shown as attached (not amber)", _ws.bench._valid
+			and _ws.bench._ghost_material.albedo_color.b > 0.5)
 
-	var n: int = _ws.recipe.size()
-	_ws._place()
-	_ok("it places", _ws.recipe.size() == n + 1)
-	_ok("welded to the bracket", _ws.asm.live_weld_count() == welds + 1,
-			"%d -> %d" % [welds, _ws.asm.live_weld_count()])
+	var n: int = _ws.bench.recipe.size()
+	_ws.bench._place()
+	_ok("it places", _ws.bench.recipe.size() == n + 1)
+	_ok("welded to the bracket", _ws.bench.asm.live_weld_count() == welds + 1,
+			"%d -> %d" % [welds, _ws.bench.asm.live_weld_count()])
 
-	var at: Array = _ws._placed_at[_ws._placed_at.size() - 1]
-	var box: Array = _ws.world.get_block_ticks(_ws.asm.frames[at[0]], at[1])
+	var at: Array = _ws.bench._placed_at[_ws.bench._placed_at.size() - 1]
+	var box: Array = _ws.bench.world.get_block_ticks(_ws.bench.asm.frames[at[0]], at[1])
 	var blo: Vector3i = box[0]
 	var bhi: Vector3i = blo + (box[1] as Vector3i)
-	var brk: Array = _ws.world.get_block_ticks(f0, bid)
+	var brk: Array = _ws.bench.world.get_block_ticks(f0, bid)
 	var klo: Vector3i = brk[0]
 	var khi: Vector3i = klo + (brk[1] as Vector3i)
 	_ok("flush on the stud face, in exact ticks", blo.x == (studs[1].hi as Vector3i).x,
@@ -295,15 +295,15 @@ func _check_sliding_off_a_side_stud_drops_the_weld() -> void:
 		return
 	_hold("plate_1x1")
 	_at_stud(st)
-	_ok("on the stud", not _ws._snapped.is_empty())
-	var frame: int = _ws._frame
-	_ws._hold_lock(true)
+	_ok("on the stud", not _ws.bench._snapped.is_empty())
+	var frame: int = _ws.bench._frame
+	_ws.bench._hold_lock(true)
 	_at_stud(st, Vector3(0, 0, -2.0))
-	_ok("slid off sideways, same sideways grid", _ws._frame == frame)
-	_ok("no longer held by the stud", _ws._snapped.is_empty())
+	_ok("slid off sideways, same sideways grid", _ws.bench._frame == frame)
+	_ok("no longer held by the stud", _ws.bench._snapped.is_empty())
 	_at_stud(st)
-	_ok("slid back on: held again", not _ws._snapped.is_empty())
-	_ws._hold_lock(false)
+	_ok("slid back on: held again", not _ws.bench._snapped.is_empty())
+	_ws.bench._hold_lock(false)
 
 
 func _check_looking_down_at_a_bracket_builds_on_top() -> void:
@@ -312,15 +312,15 @@ func _check_looking_down_at_a_bracket_builds_on_top() -> void:
 	_put("bracket_1x2", Vector3i(20, 1, 20), true)
 	_hold("brick_1x2", true)
 	_down(20, 20)
-	_ok("no side-stud snap from above", _ws._snapped.is_empty())
-	_ok("upright grid", _ws._frame == 0)
-	_ok("on top of it", _ws._cell.y == 4, "y = %d" % _ws._cell.y)
+	_ok("no side-stud snap from above", _ws.bench._snapped.is_empty())
+	_ok("upright grid", _ws.bench._frame == 0)
+	_ok("on top of it", _ws.bench._cell.y == 4, "y = %d" % _ws.bench._cell.y)
 	# Steeply down from the stud side: the ray goes in through the top.
 	var top := Vector3(20.5 * STUD, 4 * PLATE, 20.5 * STUD)
 	var dir := Vector3(-0.3, -1.0, 0.0).normalized()
-	_ws._aim_ray(top - dir * 3.0, dir)
-	_ok("from the stud side at a steep angle, still on top", _ws._snapped.is_empty()
-			and _ws._cell.y == 4, "y = %d" % _ws._cell.y)
+	_ws.bench._aim_ray(top - dir * 3.0, dir)
+	_ok("from the stud side at a steep angle, still on top", _ws.bench._snapped.is_empty()
+			and _ws.bench._cell.y == 4, "y = %d" % _ws.bench._cell.y)
 
 
 func _check_under() -> void:
@@ -329,24 +329,24 @@ func _check_under() -> void:
 	_put("brick_1x4", Vector3i(20, 4, 20))       # y 4..6, x 20..23, in mid-air
 	_hold("brick_1x2")                           # 2 long, half = 0
 	var up := Vector3(0, 1, 0)
-	_ws._aim_ray(Vector3(21.5 * STUD, 0.3, 20.5 * STUD), up)
-	_ws._update_ghost()
+	_ws.bench._aim_ray(Vector3(21.5 * STUD, 0.3, 20.5 * STUD), up)
+	_ws.bench._update_ghost()
 	_ok("under it: its top against the brick's underside (y = 4 - 3)",
-			_ws._cell == Vector3i(21, 1, 20), "%v" % _ws._cell)
-	_ok("and it clips on", _ws._valid and _ws._joints > 0,
-			"valid=%s joints=%d" % [_ws._valid, _ws._joints])
-	var n: int = _ws.recipe.size()
-	_ws._place()
-	_ok("it places", _ws.recipe.size() == n + 1)
+			_ws.bench._cell == Vector3i(21, 1, 20), "%v" % _ws.bench._cell)
+	_ok("and it clips on", _ws.bench._valid and _ws.bench._joints > 0,
+			"valid=%s joints=%d" % [_ws.bench._valid, _ws.bench._joints])
+	var n: int = _ws.bench.recipe.size()
+	_ws.bench._place()
+	_ok("it places", _ws.bench.recipe.size() == n + 1)
 	_hold("plate_1x1")
-	_ws._aim_ray(Vector3(23.5 * STUD, 0.3, 20.5 * STUD), up)
-	_ws._update_ghost()
-	_ok("a plate under goes one plate down (y = 3)", _ws._cell == Vector3i(23, 3, 20),
-			"%v" % _ws._cell)
-	_ok("and clips too", _ws._valid and _ws._joints > 0)
+	_ws.bench._aim_ray(Vector3(23.5 * STUD, 0.3, 20.5 * STUD), up)
+	_ws.bench._update_ghost()
+	_ok("a plate under goes one plate down (y = 3)", _ws.bench._cell == Vector3i(23, 3, 20),
+			"%v" % _ws.bench._cell)
+	_ok("and clips too", _ws.bench._valid and _ws.bench._joints > 0)
 	# Side-on to a plain brick is not under: it builds on top, as before.
-	_ws._aim_ray(Vector3(21.5 * STUD, 5 * PLATE, 17.0 * STUD), Vector3(0, 0, 1))
-	_ok("the plain side of a brick builds on its top", _ws._cell.y == 7, "y = %d" % _ws._cell.y)
+	_ws.bench._aim_ray(Vector3(21.5 * STUD, 5 * PLATE, 17.0 * STUD), Vector3(0, 0, 1))
+	_ok("the plain side of a brick builds on its top", _ws.bench._cell.y == 7, "y = %d" % _ws.bench._cell.y)
 
 
 func _check_ghost_and_bracket_turns() -> void:
@@ -354,22 +354,22 @@ func _check_ghost_and_bracket_turns() -> void:
 	_reset()
 	_hold("brick_2x4")
 	_down(8, 8)
-	_ok("a 2x4 ghost carries its 8 studs", _ws._ghost_studs.multimesh.instance_count == 8,
-			"%d" % _ws._ghost_studs.multimesh.instance_count)
+	_ok("a 2x4 ghost carries its 8 studs", _ws.bench._ghost_studs.multimesh.instance_count == 8,
+			"%d" % _ws.bench._ghost_studs.multimesh.instance_count)
 	_hold("bracket_1x4")
 	var dirs := {}
 	for yaw in 4:
-		_ws._yaw = yaw
+		_ws.bench._yaw = yaw
 		_down(8, 8)
-		var n: int = _ws._ghost_studs.multimesh.instance_count
+		var n: int = _ws.bench._ghost_studs.multimesh.instance_count
 		_ok("bracket yaw %d: ghost shows 4 top + 4 side studs" % yaw, n == 8, "%d" % n)
-		var arch: int = _ws._archetype()
-		var raw: PackedInt32Array = _ws.world.get_archetype_side_studs(arch)
+		var arch: int = _ws.bench._archetype()
+		var raw: PackedInt32Array = _ws.bench.world.get_archetype_side_studs(arch)
 		var d := Vector3i(raw[3], raw[4], raw[5]) if raw.size() >= 6 else Vector3i.ZERO
 		dirs[d] = true
 		_ok("bracket yaw %d: front_of is where its studs face" % yaw,
-				BrickPalette.front_of(_ws._archetype_name()) == d,
-				"front %v, studs %v" % [BrickPalette.front_of(_ws._archetype_name()), d])
+				BrickPalette.front_of(_ws.bench._archetype_name()) == d,
+				"front %v, studs %v" % [BrickPalette.front_of(_ws.bench._archetype_name()), d])
 	_ok("four turns, four different stud directions", dirs.size() == 4, "%s" % [dirs.keys()])
 
 
@@ -377,25 +377,25 @@ func _check_rotate_last_and_undo() -> void:
 	print("\nT turns the last brick, repeatedly; undo repeats")
 	_reset()
 	_put("brick_1x4", Vector3i(20, 1, 20))
-	var seen := [_ws.recipe.part_of(0)]
+	var seen := [_ws.bench.recipe.part_of(0)]
 	for i in 3:
-		_ws._rotate_last()
-		seen.append(_ws.recipe.part_of(_ws.recipe.size() - 1))
+		_ws.bench._rotate_last()
+		seen.append(_ws.bench.recipe.part_of(_ws.bench.recipe.size() - 1))
 	_ok("x -> z -> x -> z", seen == ["brick_1x4_x", "brick_1x4_z", "brick_1x4_x", "brick_1x4_z"],
 			"%s" % [seen])
-	_ok("still one brick", _ws.recipe.size() == 1)
+	_ok("still one brick", _ws.bench.recipe.size() == 1)
 	_put("brick_2x2", Vector3i(30, 1, 30))
 	_put("brick_2x2", Vector3i(34, 1, 30))
 	var undone := 0
-	while _ws._undo():
+	while _ws.bench._undo():
 		undone += 1
-	_ok("undo takes all three back", undone == 3 and _ws.recipe.is_empty(), "%d" % undone)
+	_ok("undo takes all three back", undone == 3 and _ws.bench.recipe.is_empty(), "%d" % undone)
 
 
 func _check_drag_and_drop() -> void:
 	print("\ndrag and drop: parts onto slots, across colours, slots onto slots")
 	_reset()
-	var hb: WorkshopHotbar = _ws._hotbar
+	var hb: WorkshopHotbar = _ws.bench._hotbar
 	hb.save_path = "user://_probe_hotbar.json"
 	hb._drop_on_slot(Vector2.ZERO, {"kind": "part", "part": "tile_2x4", "colour": 3, "material": 0}, 6)
 	_ok("a part dropped on a slot lands there, and that slot is selected",
@@ -410,14 +410,14 @@ func _check_drag_and_drop() -> void:
 			hb.slots[6] == ["brick_1x2", 5, 0] and hb.slots[2] == ["tile_2x4", 3, 0])
 	hb._drop_on_slot(Vector2.ZERO, {"kind": "colour", "colour": 9, "material": 0}, 6)
 	_ok("a colour dropped on a slot paints it", hb.slots[6] == ["brick_1x2", 9, 0])
-	_ok("and the workshop is holding it", _ws._part() == "brick_1x2" and _ws._colour == 9)
+	_ok("and the workshop is holding it", _ws.bench._part() == "brick_1x2" and _ws.bench._colour == 9)
 	DirAccess.remove_absolute("user://_probe_hotbar.json")
 
 
 func _check_materials() -> void:
 	print("\nmaterials: any colour of a filament, the kinds of wood or metal")
 	_reset()
-	var hb: WorkshopHotbar = _ws._hotbar
+	var hb: WorkshopHotbar = _ws.bench._hotbar
 	hb.save_path = "user://_probe_hotbar.json"
 	var metal := -1
 	var tpu := -1
@@ -434,14 +434,14 @@ func _check_materials() -> void:
 	hb.set_part("brick_2x4")
 	hb.set_material(metal)
 	hb.set_colour(7)
-	_ok("the slot holds the material, and the workshop does", _ws._mat == metal and _ws._colour == 7)
+	_ok("the slot holds the material, and the workshop does", _ws.bench._mat == metal and _ws.bench._colour == 7)
 	_put("brick_2x4", Vector3i(10, 1, 10))
-	var f0: int = _ws.asm.frames[0]
-	var bid: int = _ws.world.block_at(f0, Vector3i(10, 1, 10))
+	var f0: int = _ws.bench.asm.frames[0]
+	var bid: int = _ws.bench.world.block_at(f0, Vector3i(10, 1, 10))
 	_ok("placed as metal, in the world and the recipe",
-			_ws.world.get_block_material(f0, bid) == metal and _ws.recipe.material_of(0) == metal)
+			_ws.bench.world.get_block_material(f0, bid) == metal and _ws.bench.recipe.material_of(0) == metal)
 	# The mesh carries it to the shader, in the vertex colour's alpha.
-	var arrays: Array = _ws.world.build_chunk_mesh(f0)
+	var arrays: Array = _ws.bench.world.build_chunk_mesh(f0)
 	var cols: PackedColorArray = arrays[Mesh.ARRAY_COLOR]
 	var want := 1.0 - float(metal) / 255.0
 	var found := false
@@ -451,7 +451,7 @@ func _check_materials() -> void:
 			break
 	_ok("its faces carry the material in alpha, the baseplate still PLA (1.0)",
 			found and cols.size() > 0)
-	var d: Dictionary = _ws.recipe.to_dict()
+	var d: Dictionary = _ws.bench.recipe.to_dict()
 	var back := BuildRecipe.from_dict(d)
 	_ok("saved and loaded, it is still metal", back.material_of(0) == metal and back.colour_of(0) == 7)
 	d.erase("materials")
@@ -460,17 +460,17 @@ func _check_materials() -> void:
 	# Pick-block and the brush both carry it.
 	hb.select(3)
 	hb.set_slot("plate_1x1", 0, 0)
-	_ws._pick_ray(Vector3(10.5 * STUD, 20.0, 10.5 * STUD), Vector3(0, -1, 0))
+	_ws.bench._pick_ray(Vector3(10.5 * STUD, 20.0, 10.5 * STUD), Vector3(0, -1, 0))
 	_ok("middle click picks the material too", hb.material() == metal and hb.colour() == 7)
 	hb.set_slot("brick_2x4", 3, tpu)
-	_ws._set_painting(true)
-	_ws._stroke = []
-	_ws._paint_ray(Vector3(10.5 * STUD, 20.0, 10.5 * STUD), Vector3(0, -1, 0))
-	_ws._end_stroke()
-	_ok("the brush paints the material", _ws.recipe.material_of(0) == tpu
-			and _ws.world.get_block_material(f0, bid) == tpu)
-	_ok("and undo puts the metal back", _ws._undo() and _ws.recipe.material_of(0) == metal)
-	_ws._set_painting(false)
+	_ws.bench._set_painting(true)
+	_ws.bench._stroke = []
+	_ws.bench._paint_ray(Vector3(10.5 * STUD, 20.0, 10.5 * STUD), Vector3(0, -1, 0))
+	_ws.bench._end_stroke()
+	_ok("the brush paints the material", _ws.bench.recipe.material_of(0) == tpu
+			and _ws.bench.world.get_block_material(f0, bid) == tpu)
+	_ok("and undo puts the metal back", _ws.bench._undo() and _ws.bench.recipe.material_of(0) == metal)
+	_ws.bench._set_painting(false)
 	var data := {"kind": "part", "part": "brick_1x2", "colour": 40, "material": 0}
 	hb._can_drop_on_material(Vector2.ZERO, data, metal)
 	_ok("a part dragged across a material becomes it, its colour wrapped into that list",
@@ -480,109 +480,109 @@ func _check_materials() -> void:
 
 func _check_paint_brush() -> void:
 	print("\nthe paint brush repaints placed bricks, and undo puts them back")
-	if not _ws.world.has_method("set_block_colour"):
+	if not _ws.bench.world.has_method("set_block_colour"):
 		print("  SKIP the extension predates set_block_colour -- rebuild it")
 		return
 	_reset()
 	_put("brick_2x4", Vector3i(10, 1, 10))    # colour 4 (whatever _put leaves)
 	_put("brick_2x4", Vector3i(20, 1, 10))
-	var f0: int = _ws.asm.frames[0]
-	var a: int = _ws.world.block_at(f0, Vector3i(10, 1, 10))
-	var before: int = _ws.recipe.colour_of(0)
-	_ws._set_painting(true)
-	_ws._colour = 7 if before != 7 else 8
-	var want: int = _ws._colour
-	_ws._stroke = []
+	var f0: int = _ws.bench.asm.frames[0]
+	var a: int = _ws.bench.world.block_at(f0, Vector3i(10, 1, 10))
+	var before: int = _ws.bench.recipe.colour_of(0)
+	_ws.bench._set_painting(true)
+	_ws.bench._colour = 7 if before != 7 else 8
+	var want: int = _ws.bench._colour
+	_ws.bench._stroke = []
 	var down := Vector3(0, -1, 0)
-	var changed: bool = _ws._paint_ray(Vector3(10.5 * STUD, 20.0, 10.5 * STUD), down)
-	_ok("LMB on a brick repaints it", changed and _ws.recipe.colour_of(0) == want
-			and _ws.world.get_block_colour(f0, a) == want,
-			"recipe %d world %d want %d" % [_ws.recipe.colour_of(0), _ws.world.get_block_colour(f0, a), want])
+	var changed: bool = _ws.bench._paint_ray(Vector3(10.5 * STUD, 20.0, 10.5 * STUD), down)
+	_ok("LMB on a brick repaints it", changed and _ws.bench.recipe.colour_of(0) == want
+			and _ws.bench.world.get_block_colour(f0, a) == want,
+			"recipe %d world %d want %d" % [_ws.bench.recipe.colour_of(0), _ws.bench.world.get_block_colour(f0, a), want])
 	_ok("the same brick twice in one stroke is one change",
-			not _ws._paint_ray(Vector3(11.5 * STUD, 20.0, 10.5 * STUD), down))
-	_ws._paint_ray(Vector3(20.5 * STUD, 20.0, 10.5 * STUD), down)
-	_ok("a drag paints every brick it passes", _ws.recipe.colour_of(1) == want)
-	_ok("the baseplate is not paintable", not _ws._paint_ray(Vector3(40.5 * STUD, 20.0, 40.5 * STUD), down))
-	_ws._end_stroke()
-	_ok("undo takes the whole stroke back", _ws._undo() and _ws.recipe.colour_of(0) == before
-			and _ws.recipe.colour_of(1) == before and _ws.world.get_block_colour(f0, a) == before)
-	_ws._set_painting(false)
-	_ok("and the bricks themselves are still there", _ws.recipe.size() == 2)
+			not _ws.bench._paint_ray(Vector3(11.5 * STUD, 20.0, 10.5 * STUD), down))
+	_ws.bench._paint_ray(Vector3(20.5 * STUD, 20.0, 10.5 * STUD), down)
+	_ok("a drag paints every brick it passes", _ws.bench.recipe.colour_of(1) == want)
+	_ok("the baseplate is not paintable", not _ws.bench._paint_ray(Vector3(40.5 * STUD, 20.0, 40.5 * STUD), down))
+	_ws.bench._end_stroke()
+	_ok("undo takes the whole stroke back", _ws.bench._undo() and _ws.bench.recipe.colour_of(0) == before
+			and _ws.bench.recipe.colour_of(1) == before and _ws.bench.world.get_block_colour(f0, a) == before)
+	_ws.bench._set_painting(false)
+	_ok("and the bricks themselves are still there", _ws.bench.recipe.size() == 2)
 
 	# A wider brush: every brick within reach of the dot, in one dab.
 	_put("brick_2x4", Vector3i(14, 1, 10))
 	_put("brick_2x4", Vector3i(30, 1, 10))
-	_ws._set_painting(true)
-	_ok("the paint palette shows while the brush is in hand", _ws._paint_palette.visible)
-	_ws._colour = 11
-	_ws._paint_radius = 3
-	_ws._stroke = []
-	_ws._paint_ray(Vector3(12.5 * STUD, 20.0, 10.5 * STUD), down)
-	_ws._end_stroke()
+	_ws.bench._set_painting(true)
+	_ok("the paint palette shows while the brush is in hand", _ws.bench._paint_palette.visible)
+	_ws.bench._colour = 11
+	_ws.bench._paint_radius = 3
+	_ws.bench._stroke = []
+	_ws.bench._paint_ray(Vector3(12.5 * STUD, 20.0, 10.5 * STUD), down)
+	_ws.bench._end_stroke()
 	_ok("a wide brush paints the bricks in reach and not the one out of it",
-			_ws.recipe.colour_of(0) == 11 and _ws.recipe.colour_of(2) == 11
-			and _ws.recipe.colour_of(3) != 11,
-			"%d %d %d %d" % [_ws.recipe.colour_of(0), _ws.recipe.colour_of(1),
-			_ws.recipe.colour_of(2), _ws.recipe.colour_of(3)])
-	_ws._paint_radius = 0
+			_ws.bench.recipe.colour_of(0) == 11 and _ws.bench.recipe.colour_of(2) == 11
+			and _ws.bench.recipe.colour_of(3) != 11,
+			"%d %d %d %d" % [_ws.bench.recipe.colour_of(0), _ws.bench.recipe.colour_of(1),
+			_ws.bench.recipe.colour_of(2), _ws.bench.recipe.colour_of(3)])
+	_ws.bench._paint_radius = 0
 	# MMB with the brush: a brick's paint, and nothing else, into the slot.
-	var part_before: String = _ws._hotbar.part()
-	_ws._hotbar.set_colour(2)
-	_ws._pick_paint_ray(Vector3(12.5 * STUD, 20.0, 10.5 * STUD), down)
+	var part_before: String = _ws.bench._hotbar.part()
+	_ws.bench._hotbar.set_colour(2)
+	_ws.bench._pick_paint_ray(Vector3(12.5 * STUD, 20.0, 10.5 * STUD), down)
 	_ok("the eyedropper takes a brick's colour and material, not its part",
-			_ws._colour == 11 and _ws._hotbar.part() == part_before)
+			_ws.bench._colour == 11 and _ws.bench._hotbar.part() == part_before)
 	# The brush is the editor kit's Paint tool (Docs/BuildTools.md section 20): in hand with
 	# B, it takes - = itself, and a stroke it is drawing is one undo.
-	_ok("the brush is the kit's Paint tool, in hand", _ws.toolbox.active_id() == &"paint")
+	_ok("the brush is the kit's Paint tool, in hand", _ws.bench.toolbox.active_id() == &"paint")
 	var eq := InputEventKey.new()
 	eq.keycode = KEY_EQUAL
 	eq.pressed = true
 	_ws._unhandled_input(eq)
-	_ok("= widens its reach through the tool", _ws._paint_radius == 1 and _ws._paint_tool.radius == 1)
-	_ws._paint_radius = 0
-	var steps: int = _ws.undo_stack.size()
-	_ws._paint_tool.begin_stroke()
-	_ws._paint_ray(Vector3(30.5 * STUD, 20.0, 10.5 * STUD), down)
-	_ws._paint_tool.end_stroke()
-	_ok("a stroke through the tool is one undo step", _ws.undo_stack.size() == steps + 1
-			and _ws.undo_stack.top_kind() == &"paint" and _ws.recipe.colour_of(3) == 11)
-	_ws._set_painting(false)
-	_ok("and the palette goes with the brush", not _ws._paint_palette.visible)
-	_ok("and the hand is back in hand", _ws.toolbox.active_id() == &"place")
+	_ok("= widens its reach through the tool", _ws.bench._paint_radius == 1 and _ws.bench._paint_tool.radius == 1)
+	_ws.bench._paint_radius = 0
+	var steps: int = _ws.bench.undo_stack.size()
+	_ws.bench._paint_tool.begin_stroke()
+	_ws.bench._paint_ray(Vector3(30.5 * STUD, 20.0, 10.5 * STUD), down)
+	_ws.bench._paint_tool.end_stroke()
+	_ok("a stroke through the tool is one undo step", _ws.bench.undo_stack.size() == steps + 1
+			and _ws.bench.undo_stack.top_kind() == &"paint" and _ws.bench.recipe.colour_of(3) == 11)
+	_ws.bench._set_painting(false)
+	_ok("and the palette goes with the brush", not _ws.bench._paint_palette.visible)
+	_ok("and the hand is back in hand", _ws.bench.toolbox.active_id() == &"place")
 
 
 func _check_hotbar() -> void:
 	print("
 the toolbar: slots, colours, pick-block, and every part findable")
 	_reset()
-	var hb: WorkshopHotbar = _ws._hotbar
+	var hb: WorkshopHotbar = _ws.bench._hotbar
 	hb.save_path = "user://_probe_hotbar.json"
 	hb.select(3)
 	hb.set_part("slope_2x4")
 	hb.set_colour(8)
 	_ok("a slot's part and colour are what the workshop holds",
-			_ws._part() == "slope_2x4" and _ws._colour == 8, "%s %d" % [_ws._part(), _ws._colour])
+			_ws.bench._part() == "slope_2x4" and _ws.bench._colour == 8, "%s %d" % [_ws.bench._part(), _ws.bench._colour])
 	hb.select(4)
 	hb.set_slot("brick_1x6", 2)
 	hb.select(3)
-	_ok("and switching back brings them back", _ws._part() == "slope_2x4" and _ws._colour == 8)
-	_ws._colour = 0
+	_ok("and switching back brings them back", _ws.bench._part() == "slope_2x4" and _ws.bench._colour == 8)
+	_ws.bench._colour = 0
 	hb.set_colour(hb.colour() + 1)
-	_ok(", and . paint the slot", hb.colour() == 9 and _ws._colour == 9)
+	_ok(", and . paint the slot", hb.colour() == 9 and _ws.bench._colour == 9)
 	# Pick-block: a red 1x2 bracket turned twice, picked back into slot 5.
 	_hold("bracket_1x2")
-	_ws._yaw = 2
-	_ws._snapped = {}
-	_ws._cell = Vector3i(30, 1, 30)
-	_ws._colour = 4
-	_ws._update_ghost()
-	_ws._place()
+	_ws.bench._yaw = 2
+	_ws.bench._snapped = {}
+	_ws.bench._cell = Vector3i(30, 1, 30)
+	_ws.bench._colour = 4
+	_ws.bench._update_ghost()
+	_ws.bench._place()
 	hb.select(5)
-	_ws._yaw = 0
-	_ws._pick_ray(Vector3(30.5 * STUD, 20.0, 30.5 * STUD), Vector3(0, -1, 0))
+	_ws.bench._yaw = 0
+	_ws.bench._pick_ray(Vector3(30.5 * STUD, 20.0, 30.5 * STUD), Vector3(0, -1, 0))
 	_ok("middle click picks the part, its colour and its turn",
-			hb.part() == "bracket_1x2" and hb.colour() == 4 and _ws._yaw == 2,
-			"%s %d yaw %d" % [hb.part(), hb.colour(), _ws._yaw])
+			hb.part() == "bracket_1x2" and hb.colour() == 4 and _ws.bench._yaw == 2,
+			"%s %d yaw %d" % [hb.part(), hb.colour(), _ws.bench._yaw])
 	var cats := {}
 	var orphans := []
 	for p in BrickPalette.parts():
@@ -605,11 +605,11 @@ func _check_save_new() -> void:
 	var dir := "user://_probe_builds/"
 	for f in DirAccess.get_files_at(dir) if DirAccess.dir_exists_absolute(dir) else []:
 		DirAccess.remove_absolute(dir + f)
-	_ws._builds_dir = dir
+	_ws.bench._builds_dir = dir
 	_put("brick_2x4", Vector3i(10, 1, 10))
-	var first: String = _ws._save_new()
+	var first: String = _ws.bench._save_new()
 	_put("brick_2x2", Vector3i(20, 1, 20))
-	var second: String = _ws._save_new()
+	var second: String = _ws.bench._save_new()
 	_ok("two saves, two files", first == dir + "build_001.json" and second == dir + "build_002.json",
 			"%s, %s" % [first, second])
 	var a := BuildRecipe.load_from(first)
@@ -621,7 +621,7 @@ func _check_save_new() -> void:
 	for f in DirAccess.get_files_at(dir):
 		DirAccess.remove_absolute(dir + f)
 	DirAccess.remove_absolute(dir)
-	_ws._builds_dir = BuildRecipe.player_dir()
+	_ws.bench._builds_dir = BuildRecipe.player_dir()
 
 
 func _check_delete() -> void:
@@ -629,46 +629,46 @@ func _check_delete() -> void:
 	_reset()
 	_put("brick_2x2", Vector3i(4, 1, 4))         # recipe 0
 	_put("bracket_1x2", Vector3i(14, 1, 10), true)  # recipe 1
-	var f0: int = _ws.asm.frames[0]
+	var f0: int = _ws.bench.asm.frames[0]
 	_hold("plate_2x2")
 	_at_stud(_bracket_stud(Vector3i(14, 1, 10), 1))
-	_ws._place()                                 # recipe 2, welded 1 -> 2
-	_ok("three bricks and a weld", _ws.recipe.size() == 3 and _ws.recipe.weld_count() == 1)
+	_ws.bench._place()                                 # recipe 2, welded 1 -> 2
+	_ok("three bricks and a weld", _ws.bench.recipe.size() == 3 and _ws.bench.recipe.weld_count() == 1)
 
-	_ok("the baseplate does not delete", not _delete_down(40, 40) and _ws.recipe.size() == 3)
+	_ok("the baseplate does not delete", not _delete_down(40, 40) and _ws.bench.recipe.size() == 3)
 	_ok("RMB on the first brick deletes it", _delete_down(4, 4))
-	_ok("gone from the world", _ws.world.block_at(f0, Vector3i(4, 1, 4)) < 0)
-	_ok("and from the recipe, the rest renumbered", _ws.recipe.size() == 2
-			and _ws.recipe.part_of(0).begins_with("bracket_1x2"), "%d" % _ws.recipe.size())
+	_ok("gone from the world", _ws.bench.world.block_at(f0, Vector3i(4, 1, 4)) < 0)
+	_ok("and from the recipe, the rest renumbered", _ws.bench.recipe.size() == 2
+			and _ws.bench.recipe.part_of(0).begins_with("bracket_1x2"), "%d" % _ws.bench.recipe.size())
 	_ok("the weld follows its blocks down: 1->2 is now 0->1",
-			_ws.recipe.weld_count() == 1 and _ws.recipe.weld_blocks(0) == Vector2i(0, 1))
+			_ws.bench.recipe.weld_count() == 1 and _ws.bench.recipe.weld_blocks(0) == Vector2i(0, 1))
 
 	_ok("RMB on the bracket deletes it", _delete_down(14, 10))
-	_ok("and a weld with a missing end is dropped", _ws.recipe.weld_count() == 0)
+	_ok("and a weld with a missing end is dropped", _ws.bench.recipe.weld_count() == 0)
 	# An RMB delete is an edit (Docs/BuildTools.md section 20, stage 5b): Z lays it back.
-	_ok("Z lays the bracket back", _ws._undo() and _ws.recipe.size() == 2
-			and _ws.world.block_at(f0, Vector3i(14, 1, 10)) >= 0, "%d" % _ws.recipe.size())
-	_ok("Z again: the first brick", _ws._undo() and _ws.recipe.size() == 3
-			and _ws.world.block_at(f0, Vector3i(4, 1, 4)) >= 0, "%d" % _ws.recipe.size())
-	_ok("then the plate's own edit", _ws._undo() and _ws.recipe.size() == 2
-			and not _ws.recipe.part_of(0).begins_with("plate_"))
+	_ok("Z lays the bracket back", _ws.bench._undo() and _ws.bench.recipe.size() == 2
+			and _ws.bench.world.block_at(f0, Vector3i(14, 1, 10)) >= 0, "%d" % _ws.bench.recipe.size())
+	_ok("Z again: the first brick", _ws.bench._undo() and _ws.bench.recipe.size() == 3
+			and _ws.bench.world.block_at(f0, Vector3i(4, 1, 4)) >= 0, "%d" % _ws.bench.recipe.size())
+	_ok("then the plate's own edit", _ws.bench._undo() and _ws.bench.recipe.size() == 2
+			and not _ws.bench.recipe.part_of(0).begins_with("plate_"))
 	# The two laid back are found again by their own placing edits.
 	var zs := 0
-	while zs < 10 and _ws._undo():
+	while zs < 10 and _ws.bench._undo():
 		zs += 1
-	_ok("then their own edits: an empty build, nothing more to undo", _ws.recipe.is_empty() and zs == 2,
-			"%d left after %d" % [_ws.recipe.size(), zs])
+	_ok("then their own edits: an empty build, nothing more to undo", _ws.bench.recipe.is_empty() and zs == 2,
+			"%d left after %d" % [_ws.bench.recipe.size(), zs])
 
 	# A fixture as an older save carries one (the K key that dropped them in is
 	# gone -- staircases are built from spiral pieces now).
-	_ws._frame = 0
-	_ws._add_fixture("staircase", Vector3i(12, 1, 12),
+	_ws.bench._frame = 0
+	_ws.bench._add_fixture("staircase", Vector3i(12, 1, 12),
 			{"steps": StaircaseRecipe.STEPS_PER_TURN, "colour": 4})
 	@warning_ignore("integer_division")
 	var mid := 12 + StaircaseRecipe.DIAMETER / 2
 	_ok("RMB on a staircase deletes the whole fixture", _delete_down(mid, mid)
-			and _ws.recipe.fixture_count() == 0 and _ws._fixture_blocks.is_empty())
-	_ok("and its bricks", _ws.world.block_at(f0, Vector3i(mid, 1, mid)) < 0)
+			and _ws.bench.recipe.fixture_count() == 0 and _ws.bench._fixture_blocks.is_empty())
+	_ok("and its bricks", _ws.bench.world.block_at(f0, Vector3i(mid, 1, mid)) < 0)
 
 
 ## A staircase goes newel on newel. Aiming at any of the four newel studs of a
@@ -680,7 +680,7 @@ func _check_spiral_flight(part: String, winds: int) -> void:
 	_reset()
 	var base := Vector3i(20, 1, 20)
 	_ok("a first piece on the floor", _put(part, base) == 1)
-	var first: String = _ws.recipe.part_of(_ws.recipe.size() - 1)
+	var first: String = _ws.bench.recipe.part_of(_ws.bench.recipe.size() - 1)
 	var newel := BrickPalette.newel_of(first)
 	var h := BrickPalette.part_size(part).y
 	var want := BrickPalette.variant_name(part, BrickPalette.orientation_of(first).x + winds, false)
@@ -688,18 +688,18 @@ func _check_spiral_flight(part: String, winds: int) -> void:
 	for dz in 2:
 		for dx in 2:
 			_hold(part)
-			_ws._yaw = 2     # the player's own turn, which the newel overrides
+			_ws.bench._yaw = 2     # the player's own turn, which the newel overrides
 			var col := Vector2i(base.x + newel.position.x + dx, base.z + newel.position.y + dz)
 			_down(col.x, col.y)
 			_ok("newel stud (%d, %d): lands on the newel" % [dx, dz],
-					_ws._cell == base + Vector3i(0, h, 0), "%v" % _ws._cell)
+					_ws.bench._cell == base + Vector3i(0, h, 0), "%v" % _ws.bench._cell)
 			_ok("newel stud (%d, %d): turned to continue the flight" % [dx, dz],
-					_ws._archetype_name() == want, _ws._archetype_name())
-			_ok("newel stud (%d, %d): held by all four newel studs" % [dx, dz], _ws._joints == 4,
-					"%d" % _ws._joints)
+					_ws.bench._archetype_name() == want, _ws.bench._archetype_name())
+			_ok("newel stud (%d, %d): held by all four newel studs" % [dx, dz], _ws.bench._joints == 4,
+					"%d" % _ws.bench._joints)
 	# A tread stud is not the newel: the player's own turn stands. The tread
 	# stud aimed at is one the piece really has, well away from the newel.
-	var faces: PackedByteArray = _ws.world.get_archetype_up_face(_ws.palette[first])
+	var faces: PackedByteArray = _ws.bench.world.get_archetype_up_face(_ws.bench.palette[first])
 	var size := BrickPalette.size_of(first)
 	var tread := Vector2i(-1, -1)
 	for z in size.z:
@@ -709,15 +709,15 @@ func _check_spiral_flight(part: String, winds: int) -> void:
 				tread = Vector2i(x, z)
 	_ok("the piece has a tread stud to aim at", tread.x >= 0)
 	_hold(part)
-	_ws._yaw = 2
+	_ws.bench._yaw = 2
 	_down(base.x + tread.x, base.z + tread.y)
 	_ok("aimed at a tread instead, the player's turn is left alone",
-			_ws._archetype_name() == keep, _ws._archetype_name())
+			_ws.bench._archetype_name() == keep, _ws.bench._archetype_name())
 
 	# A round 2x2 is a newel too: on the far stud of the four it still lands
 	# squarely on the newel, not a stud out.
 	_hold("round_2x2")
 	_down(base.x + newel.position.x + 1, base.z + newel.position.y + 1)
 	_ok("a round 2x2 aimed at any newel stud lands squarely on the newel",
-			_ws._cell == base + Vector3i(newel.position.x, h, newel.position.y), "%v" % _ws._cell)
-	_ws._hold_lock(false)
+			_ws.bench._cell == base + Vector3i(newel.position.x, h, newel.position.y), "%v" % _ws.bench._cell)
+	_ws.bench._hold_lock(false)

@@ -88,18 +88,18 @@ func _tick() -> void:
 		0:
 			_ws.set_process(false)
 			print("build doors probe: doors hung in doorways")
-			for n in _ws.get_children():
+			for n in _ws.bench.get_children():
 				if n is BuildDoors:
 					_doors = n
 			var r := _room()
 			var read := BuildDoors.of(r)
 			_ok("a door in meta[\"doors\"] and an opening set to door by hand are both doors",
 					_doors != null and read.size() == 2, str(read))
-			_ws._load_recipe(r)
+			_ws.bench._load_recipe(r)
 			_doors.resync()
 			var leaves := _leaves()
 			var inside := 0
-			var xf: Transform3D = _ws.world.get_chunk_transform(_ws.asm.frames[0])
+			var xf: Transform3D = _ws.bench.world.get_chunk_transform(_ws.bench.asm.frames[0])
 			var cell := BrickWorld.get_cell_size()
 			for i in leaves.size():
 				var lf: Dictionary = leaves[i]
@@ -147,8 +147,8 @@ func _tick() -> void:
 			var lf: Dictionary = _leaves()[0]
 			_ok("gone, it shuts again", float(lf.angle) == 0.0, "angle %.2f" % float(lf.angle))
 			# The lintel over the -X door shot away.
-			var chunk: int = _ws.asm.frames[0]
-			var killed = _ws.world.kill_block(chunk, lf.lintel)
+			var chunk: int = _ws.bench.asm.frames[0]
+			var killed = _ws.bench.world.kill_block(chunk, lf.lintel)
 			_doors.resync()
 			_ok("the brick over a doorway shot away: that door drops, the other stays",
 					_doors.count() == 1 and not (lf.frame as Node3D).visible,
@@ -157,9 +157,9 @@ func _tick() -> void:
 			# A tower with a lift, opened in the workshop.
 			var lib := RoomModules.from_recipes(Kit.modules())
 			var made := RoomShell.generate(lib, {"seed": 1, "width": 44, "depth": 28, "storeys": 3})
-			_ws.plate_studs = 48
-			_ws._load_recipe(made.recipe)
-			for n in _ws.get_children():
+			_ws.bench.plate_studs = 48
+			_ws.bench._load_recipe(made.recipe)
+			for n in _ws.bench.get_children():
 				if n is BuildLifts:
 					_lifts = n
 			_lifts.resync()
@@ -183,7 +183,7 @@ func _tick() -> void:
 			_ok("stood on, it rides a storey up", float(lf.at) == float(lf.stops[1]) and int(lf.stop) <= 1,
 					"at row %.1f, stops %s, %d ticks" % [float(lf.at), str(lf.stops), _wait])
 			# Off it, and waiting by the shaft on the ground.
-			var xf: Transform3D = _ws.world.get_chunk_transform(_ws.asm.frames[0])
+			var xf: Transform3D = _ws.bench.world.get_chunk_transform(_ws.bench.asm.frames[0])
 			var cell := BrickWorld.get_cell_size()
 			_fig.global_position = xf * ((lf.base as Vector3) + Vector3(0.7, int(lf.stops[0]) * cell.y + 0.8, -0.3))
 			_step = 4
@@ -207,13 +207,13 @@ func _ladder() -> void:
 	# Facing -Z (out of the +Z wall, into the room), two studs across, 12 plates up.
 	var lad := {"at": [4, 1, 8], "facing": 3, "w": 2, "h": 12}
 	r.meta["ladders"] = [lad]
-	_ws._load_recipe(r)
+	_ws.bench._load_recipe(r)
 	var bl: BuildLadders = null
-	for n in _ws.get_children():
+	for n in _ws.bench.get_children():
 		if n is BuildLadders:
 			bl = n
 	bl.resync()
-	var xf: Transform3D = _ws.world.get_chunk_transform(_ws.asm.frames[0])
+	var xf: Transform3D = _ws.bench.world.get_chunk_transform(_ws.bench.asm.frames[0])
 	var cell := BrickWorld.get_cell_size()
 	var fd: Vector2i = StructureSpaces.FACINGS[3]
 	# Feet a stud out of the face, between its two columns, a plate up.
