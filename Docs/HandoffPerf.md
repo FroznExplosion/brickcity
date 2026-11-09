@@ -288,3 +288,27 @@ costs. Per piece, mean of 30 (us):
 - Headless, worker meshes made through the dummy renderer print "Attempting to initialize
   the wrong RID" / "Parameter m is null" (its storage is not thread-safe); a headless-only
   artefact, nothing in the windowed runs.
+
+### 6.5 Promotion measured (2026-11-09, worktree `C:\Users\lbaun\bc-perf`)
+
+`city.tscn -- --promote --big` (new, `tools/city_passes.gd`): the 12 biggest buildings, one at a
+time, the first 6 as a hit lays them (3 storeys, solved), the rest walked up to (laid whole). Two
+windowed runs, editor closed; other chats' headless probes ran alongside both, and the first
+dipped to 116 MB free -- the two agree, the second's numbers below.
+
+- **`_promote` itself is cheap:** 1.4-8 ms (bricks 0.4-3.6, collision 0.6-3.6; the first of a
+  run 8 ms with a one-off 2.5 ms bake start). Budgeted, and not where the time goes.
+- **The ticks after it are where it costs**, 4-17 ticks till bricks and bands are up; the worst
+  of them 8-29 ms. Two things dominate, and both are the same GDScript function:
+  - `stream > st_detail > st_demesh > sh_mesh` 8-15 ms: the building left behind at range
+    gives up its brick mesh (`_demesh`) and gets a shell (`_make_shell` ->
+    `_recipe_shell_mesh` -> `BuildingShell.build_mesh`). A damaged building's shell is never
+    the cached one.
+  - `bands > bd_rest` 4-8 ms: a building laid a storey at a time gets a shell for the storeys
+    not laid (`_make_rest` -> `BuildingShell.build_mesh` with `rest_profile`), again after
+    each lay.
+  - Once each: `spawn` 19 ms (renderer, 6.3), `st_rooms` 2-3 ms.
+- **`BuildingShell.build_arrays` is GDScript geometry**: headless, 2.7-5.7 ms for 3,800-9,000
+  vertices (~600 ns a vertex) against 0.1-0.3 ms to make the mesh from them. A pure function
+  of (footprint, courses, damage masks): the best option-1 target found -- in C++ it should be
+  well under 1 ms, and it needs no change to when anything is drawn.
