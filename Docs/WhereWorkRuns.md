@@ -169,6 +169,43 @@ it: launch with `--render-thread separate`; to switch, `rendering/driver/threads
 Steps a and b help today too (a read-back costs a renderer round trip even on one thread; a
 wait stalls the tick); c-e only pay off at the switch.
 
+**Audited again 2026-11-09** (code only: no runs, the machine was out of memory -- below).
+Every `wait_for_task_completion` / `wait_for_group_task_completion` and every renderer
+read-back in `scripts/` was listed and each one's caller read:
+
+* **Nothing new breaks the rule in play.** Every wait added since 11-04 is either behind an
+  `is_task_completed` check (it only reaps a finished job) or runs at load or exit:
+  `PlanetNavNet.ensure` is called once from `PlanetScene` setup, before `threaded` is set;
+  `ImpostorLod._with_lods`' `surface_get_arrays` runs when a tree or item set is made (load),
+  once per mesh, cached; `BrickNear.audit`'s index read-back is for gates only.
+* **Left, as on 11-04:** `CityDrawing.take_bands` (it calls `_harvest_band_jobs(id)`, which
+  waits for that building's uploads so the piece carrying the bands away can patch them),
+  `PlanetSystem.jump` and `_full_bake` (a jump, or outrunning the bakes: transitions, not
+  frames of play), `SpaceStation.deactivate` (rare).
+* **Not a render-thread blocker, but a stall:** `TerrainCoarse._rebuild_ring` and
+  `field_changed` start a group task and wait for it at once (a parallel for). The jobs are
+  CPU only (`BrickTerrain.build_coarse` returns arrays), so they do not wait on the
+  renderer; the main thread does wait for them when the camera moves a ring or the ground
+  is edited. Terrain's to judge.
+
+**The one fix left worth making: `take_bands` without the wait.** Hand the building's
+unfinished band jobs to the piece that takes the bands instead of waiting: the piece keeps
+them as owed bands, its slot empty; when `_harvest_band_jobs` finds one done it attaches the
+mesh to the piece's band slot, and the piece patches it for the bricks it lost since (the
+band's index baseline says which, as `_bands_done` already relies on). Touches
+`city_drawing.gd` and `island_manager.gd` (the bands a piece carries, its patches, its
+hand-over to stand-ins); wants `--big --shot`, `barrage_probe` and `--chamfer` after.
+
+**Next: measure the switch again on today's main.** Much has changed since the 11-04 numbers
+(pieces' meshes made and uploaded on workers, stand-ins while a mesh is made), and both may
+favour the separate thread. Wait for a quiet machine: on 2026-11-09 it had 105 MB of RAM
+available after 25 days up, with a 2.4 GB kernel nonpaged pool (normal is well under 0.5;
+a driver leak is the likely cause, see CLAUDE.md's crash notes). Paging then stalls frames
+350-520 ms wherever they are, and worst frames are what this measures. Restart first, check
+`heat_sum.py` prints no LOW RAM, then `--render-thread separate` against the default,
+alternated: the street walk, `--big --shot`, `--chamfer`, `--light`. The switch itself stays
+the user's call: Godot still calls the separate model experimental.
+
 **Smaller ways at the same cost** if 3.1 is never done: fewer, larger uploads (a building's
 bands merged), uploads only between ticks, and renderer calls batched to one point a tick
 after the flush.
