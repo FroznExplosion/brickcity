@@ -405,12 +405,24 @@ func _outside_air() -> void:
 	for st in stations:
 		if st.air == null:
 			continue
-		var b := nearest(st.global_position)
-		var p := 0.0
-		if b != null and b.data.has_air:
-			var h := b.altitude_of(st.global_position) / maxf(b.data.radius, 1.0)
-			p = clampf((AIR_TOP - h) / (AIR_TOP - AIR_FULL), 0.0, 1.0)
-		st.outside_pressure = p
+		st.outside_pressure = world_air_at(st.global_position)
+
+
+## A world's air at world point `p`, 0..1: full low in its air, thinning to none
+## past AIR_TOP, none in space or on an airless world.
+func world_air_at(p: Vector3) -> float:
+	var b := nearest(p)
+	if b == null or not b.data.has_air:
+		return 0.0
+	var h := b.altitude_of(p) / maxf(b.data.radius, 1.0)
+	return clampf((AIR_TOP - h) / (AIR_TOP - AIR_FULL), 0.0, 1.0)
+
+
+## The air a player breathes at `p` (Docs/Hulls.md 4.3): its room's in a ship or
+## station, else the world's.
+func breath_at(p: Vector3) -> float:
+	var a := air_at(p, true)
+	return float(a.pressure) if not a.is_empty() else world_air_at(p)
 
 
 ## The air at world point `p` inside a ship or station (SpaceStation.air_at): {pressure,
