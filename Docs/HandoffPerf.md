@@ -261,8 +261,12 @@ costs. Per piece, mean of 30 (us):
 
 - Bare costs, 500 each: RigidBody3D + MeshInstance3D made and put in the tree 11 us (freed
   5.3); the same as server objects 2.5 us (freed 0.6); a pooled body taken back 1.1 us.
-- `IslandManager.tick` with 120 pieces, 100 of them moving: 2.5 ms mean, worst 9.3 ms --
-  25 us a moving piece; `pieces` 1.26 ms, `resolve` 0.87 ms of it.
+- `IslandManager.tick` with 120 pieces, ~93 of them moving, after 10 warm-up ticks: 1.3-1.4 ms
+  mean, worst 3.0-3.5 ms -- ~14 us a moving piece; the per-piece loop ~1.0 ms of it. Timed
+  inside, the loop is ~9 us a piece: transform write and sweep checks 2.5, speed clamps 1.5,
+  impact test 0.8, landing contacts 0.5, the settle rules ~3. Without the warm-up a run's
+  worst tick was 30-1,300 ms: the first mesh ever hung on a node (`isl.mesh.mesh = mesh`, an
+  88-vertex stand-in at frame 3), a one-off at start, not a cost of the tick.
 - **What this says.** A spawn is 0.4-1 ms of main thread, and spawns are already held to
   `SPAWN_BUDGET_MS` (3 ms) a tick. Nodes are about a tenth of a spawn; servers or a pool save
   ~10 us a piece -- under 1 ms even for 100 pieces. So **option 2 (fewer nodes) does not reach
@@ -270,10 +274,17 @@ costs. Per piece, mean of 30 (us):
   already C++. The 42-147 ms spawn / fracture ticks in windowed runs were one call into the
   renderer stalling (`worst single spawn 126 ms (23 bricks) ... mesh 125.7`, `render flush
   113 ms`) or paging (the 205 ms wake of 8 bricks was taken with ~0 MB free) -- option 3.
-- **Where option 1 does pay:** the island tick's mean under a big collapse, ~25 us a moving
-  piece of GDScript (2.5 ms a tick at 100). In C++ that is perhaps 0.5 ms; worth it only if a
-  quiet-machine collapse shows the tick's mean, not its spikes, as the cost. Promotion
-  (budgeted 3 ms, 7.5 for a 42-course tower) was not benched here.
+- **Where option 1 could pay -- the means, not the spikes.** Windowed `--big --shot` runs
+  taken with RAM to spare (bigshot2/3, bigcity2, 2026-11-08): a 16.7-17.6 ms mean frame was
+  `city` 3.0-3.5 (this script's tick) against `draw` 10-11. Of the city tick, per tick:
+  `damage` 1.8-2.1 (rooms 0.6, loose pieces 0.6-0.8, after_spawn 0.3-0.5, promote 0.2),
+  `islands` 1.0-1.4 (loop 0.4-0.7), `bands` 0.6-0.8, `stream` 0.5-0.6, `solve` 0.3-0.5,
+  `spawn` 0.25-0.3 (of which nodes 0.1). All of it is glue spread over many systems, each
+  well under a millisecond; no single port buys more than ~1 ms of mean frame. The best one,
+  the island tick's per-piece loop as one C++ call (read every moving body's state through
+  the physics server, write the chunk transforms, clamp, and hand back only the pieces that
+  crossed an impact or settle threshold), would save ~0.7 ms at 100 moving pieces.
+  Promotion (budgeted 3 ms, 7.5 for a 42-course tower) was not benched here.
 - Headless, worker meshes made through the dummy renderer print "Attempting to initialize
   the wrong RID" / "Parameter m is null" (its storage is not thread-safe); a headless-only
   artefact, nothing in the windowed runs.
