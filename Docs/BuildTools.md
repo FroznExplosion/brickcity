@@ -11,26 +11,69 @@ SDF clay and the model converter.
 
 ## 0. How the two workshops share code
 
-`AssetWorkshop` **extends** the building workshop (`asset_workshop.gd` is
-`extends "res://scripts/workshop.gd"`). So anything that both should have goes DOWN into
-`workshop.gd` or into a shared file both call, and the asset workshop keeps only what is its
-own (parts, the SDF, photos, guns).
+Both workshops are built from the same three layers; **neither inherits the other** (since
+2026-11-09, section 20). Anything both should have goes into the kit, if it names no game class,
+or into the bench, if it does.
 
-**Being replaced (2026-11-06):** section 20 is the plan for one editor kit both workshops compose
-(`addons/workshop_kit/`), in place of this inheritance. This section is rewritten to describe the kit
-when its last stage lands.
+```
+ the building workshop                         the asset workshop
+ scripts/workshop.gd (Node3D, 37 lines)        scripts/asset_workshop.gd (Node3D)
+   its own tools: WorkshopTools                  its own tools: parts, the SDF sculpt, photos,
+   (Roof, Stairs, Repeat, Rooms, doors ...)      guides, studs, connections, guns, mechs, export
+          \                                           /
+           owns a BrickBench ("Bench" child)  -- scripts/workshop/brick_bench.gd: the game side
+             brick world, recipe, frames, aiming and placing, paint, undo, grid, ghost,
+             camera, HUD and menus, save and load
+                         |
+           answers the kit through BrickWorkshopContext -- scripts/workshop/brick_context.gd
+                         |
+           the editor kit -- addons/workshop_kit/ (Wk..., no game class inside)
+```
 
-| Shared piece | Where | Who uses it |
-|---|---|---|
-| **The run**: hold LMB and move, a brick at each cell the ghost passes | `workshop.gd` (moved down from `asset_workshop.gd`, same code) | both |
-| **The rail**: icon + name + key buttons, a pop-up for each, a hint line for the tool in hand, the tool's options under it | `ToolRail`, `scripts/workshop_rail.gd` (taken out of `AssetWorkshopUI`) | both |
-| **Shapes on a grid**: rectangle, hollow rectangle, ellipse/circle, ring, triangle, line, arch, stairs, wall lines, a drawn outline and a plan as cells on a plane | `WkShapes` in the editor kit (`addons/workshop_kit/services/wk_shapes.gd`, static); `BrickShapes` (`scripts/workshop_shapes.gd`) keeps kept shapes, plans, roofs and courses on top of it | both workshops |
-| **Courses**: cells to bricks of the held kind, staggered or aligned | `BrickShapes.pack_courses` | building shapes and sketch |
-| **The sketch pen and the Sketch tool**: freehand outline, rectangle, ellipse, clicked polygon, brush -- the stroke being drawn, and the outline it comes to | `WkSketchPen` and `WkSketchTool` in the editor kit (`addons/workshop_kit/`, section 20); the workshop answers through `BrickWorkshopContext` | both: the asset workshop's Sketch, the building workshop's Draw (outlines) and Cut |
+**The editor kit** (`addons/workshop_kit/`, `VERSION`, `README.md`; section 20) is the part that
+could go into another Godot project: it names no class from outside itself, and `wk_smoke`
+checks that.
 
-What a stroke *becomes* stays each workshop's own: in the asset workshop a sketch is a part
-seen from three views with slopes fitted on its edges; in a building it is a kept shape
-(section 2). The drawing, the outline and the cells are the same code.
+| Kit piece | What it is | In the building workshop | In the asset workshop |
+|---|---|---|---|
+| `WkUndoStack`, `WkCommand`, `WkGroup` | one undo history for every edit; a run, a mirrored pair or a fill is a group | `bench.undo_stack` | the same stack |
+| `WkContext`, `WkTool`, `WkToolbox` | the seam (every question a tool asks, each with a neutral answer), the tool interface, the tool in hand | `BrickWorkshopContext`, `bench.toolbox` | the same |
+| `WkPlaceTool` | the hand: click, the held-click run, RMB takes away (undoably) | default tool | default tool |
+| `WkPaintTool` | the paint stroke as one undo, the brush's reach, pick a colour | B | Paint |
+| `WkSketchTool`, `WkSketchPen` | a stroke: freehand, rectangle, ellipse, polygon, brush, and its outline | Draw's outlines, Cut | Sketch |
+| `WkShapeTool` | a shape on the grid, two gestures (`mode`) | Draw, Cut, Select's push-pull: outline, then height | K: one drag, filled |
+| `WkSelectTool` | pick: a click, or a box | L (click) | L (box) |
+| `WkMeasureTool`, `WkFillTool`, `WkMoveTool` | two-click distance; fill under the cursor; drag a part on an axis plane | -- | Alt M, the wand (F4), Alt G |
+| `WkMirror` | the mirror plane and its cell arithmetic | the mirror | F8 |
+| `WkCamera` | orbit, pan, zoom to the cursor; flat side/top/front views (the FPS fly stays the game's) | the orbit camera | its views |
+| `WkGrid`, `WkGhost` | the grid overlay; the preview node and its tint (its mesh is the game's) | both | both |
+| `WkShapes` | cells of a rectangle, ellipse, ring, triangle, line, arch, stairs, wall lines, an outline or plan | Shapes, Sketch | Shapes, Sketch |
+| `WkRail`, `WkMenuBar`, `WkFrame` | the tool rail, the menu bar, where the bar, band, rail and panel go | the rail and menus | the rail, tabs and outliner (`AssetWorkshopUI`) |
+
+**The bench** (`BrickBench`) is everything about bricks both workshops have: it was the old
+base class, `workshop.gd`, made a component. An owner makes it, adds it as a child, calls
+`bind_host(self)` and `bench_ready()`, and hands it `bench_process`, `bench_input` and
+`bench_unhandled_input`. What an owner does its own way it does through **hooks** -- the
+functions named in `BrickBench.HOOKS` (`_aim`, `_place`, `_undo`, `_after_edit`, `_load_recipe`,
+`set_mirror` and the rest), which the bench calls on its owner when it has one, the owner calling
+`bench.<name>_base` for the bench's own -- and **settings** (`wants_tools`, `has_floor`,
+`sketch_host`). Code that holds a workshop reaches the bench as `ws.bench` (the probes do).
+
+**Other shared game pieces**, used by both through the bench: `BrickShapes`
+(`scripts/workshop_shapes.gd`: kept shapes, plans, roofs, and `pack_courses`, cells to bricks of
+the held kind), `WorkshopHotbar`, `WorkshopMenu`, `BrickPalette`, the paint palette.
+
+What a stroke or a shape *becomes* stays each workshop's own: in the asset workshop a sketch is a
+part seen from three views with slopes fitted on its edges, and a shape fills the part; in a
+building both are kept shapes (section 2). The drawing, the outline and the cells are the same
+code.
+
+**What is left** (not asked for, each a choice): the bench still holds the building workshop's own
+features -- Insert's stamps, generated towers, groups, guides, rooms and furnishing, and its gate
+-- because the asset workshop had them all through the old base. They could move to the building
+workshop or, one file each, to `scripts/workshop/tools/` as `WkTool`s (section 20's plan), leaving
+the bench only what both use. The asset workshop's own tools (sculpt, photos, guides, studs) are
+likewise still functions in its one 12,000-line file, not tools of their own.
 
 ## 1. The rail (building workshop)
 
@@ -864,7 +907,7 @@ Merged; `tools/build_tools_probe.gd` 338 checks, workshop gate 19, asset worksho
 
 Asked 2026-11-06: turn the two workshops' tools into one shared, modular editor kit that both use,
 and that can be copied into another Godot project and kept in sync. In stages, each merged on its
-own. **This section is the plan; stage 1 is built (see "As built" at the end).**
+own. **All its stages are built (2026-11-09; "As built" at the end); section 0 describes the result.**
 
 ### Today (main `874edd82`)
 
