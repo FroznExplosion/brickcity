@@ -1,5 +1,16 @@
+class_name BrickBench
 extends Node3D
 
+## The workshop's bricks, as a component (Docs/BuildTools.md section 20, stage 6b): the brick
+## world, the recipe, the frames, aiming and placing, the hand and the paint, undo, the grid,
+## the ghost, the camera, the HUD and menus, save and load. Both workshops own one -- the
+## building workshop (scripts/workshop.gd) and the asset workshop (scripts/asset_workshop.gd) --
+## as a child named "Bench", and call its entry points (`bench_ready`, `bench_process`,
+## `bench_input`, `bench_unhandled_input`) from their own. What an owner does its own way it
+## does through HOOKS and the settings below them, not by overriding.
+##
+## What follows is the building workshop's own description, from when this was it.
+##
 ## Build mode, Stage 2: the workshop. Docs/BuildMode.md section 11.
 ##
 ##     godot --path . --resolution 1280x720 res://scenes/workshop.tscn
@@ -295,8 +306,8 @@ var undo_stack := WkUndoStack.new()
 var toolbox := WkToolbox.new()
 var wk_ctx: BrickWorkshopContext
 
-## The editor that owns this workshop's bricks, when that is not this script (Docs/BuildTools.md
-## section 20, stage 6): it may do any of HOOKS its own way. Each hook is a function here that
+## The editor that owns these bricks (Docs/BuildTools.md section 20, stage 6): it may do any of
+## HOOKS its own way. Each hook is a function here that
 ## calls the owner's when it has one, and its own `<name>_base` otherwise; an owner's hook calls
 ## `<name>_base` for what the workshop does, as an override called `super`.
 const HOOKS: Array[StringName] = [&"_after_edit", &"_aim", &"_before_remove", &"_brick_item",
@@ -313,7 +324,8 @@ var has_floor := true
 var sketch_host: Object = null
 
 
-## Take `h`'s hooks (those of HOOKS it has a function for). Not this script itself.
+## Take `h`'s hooks (those of HOOKS it has a function for): the owner calls it before
+## `bench_ready`.
 func bind_host(h: Object) -> void:
 	host = h
 	_hooked.clear()
@@ -384,10 +396,6 @@ func _init() -> void:
 				% [SMALL_BUILD_STUDS, BUILD_STUDS])
 		plate_studs = SMALL_BUILD_STUDS
 		height_plates = SMALL_BUILD_PLATES
-
-
-func _ready() -> void:
-	bench_ready()
 
 
 func bench_ready() -> void:
@@ -1231,10 +1239,6 @@ func _archetype() -> int:
 # The placement loop. Docs/BuildMode.md section 4.
 # ---------------------------------------------------------------------------
 
-func _process(_dt: float) -> void:
-	bench_process(_dt)
-
-
 func bench_process(_dt: float) -> void:
 	_dot.visible = Input.mouse_mode == Input.MOUSE_MODE_CAPTURED
 	_stud_lod()
@@ -1967,10 +1971,6 @@ func _update_hud() -> void:
 # ---------------------------------------------------------------------------
 # Editing
 # ---------------------------------------------------------------------------
-
-func _unhandled_input(e: InputEvent) -> void:
-	bench_unhandled_input(e)
-
 
 func bench_unhandled_input(e: InputEvent) -> void:
 	# The browser is a menu: nothing is built through it.
@@ -4365,10 +4365,6 @@ func _handle_under() -> String:
 
 ## Handles take the click before anything else does -- ahead of the camera,
 ## which would otherwise capture the mouse, and of placement.
-func _input(e: InputEvent) -> void:
-	bench_input(e)
-
-
 func bench_input(e: InputEvent) -> void:
 	if _run_on and e is InputEventMouseMotion:
 		_run_moved += (e as InputEventMouseMotion).relative.length()
