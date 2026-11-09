@@ -3775,7 +3775,10 @@ func _topple(id: int) -> void:
 	# island then. See BrickIsland.bands.
 	# And each band's index size, so the piece can go on patching them.
 	var carried_band_bytes: Array = (_brick_band_bytes.get(id, []) as Array).duplicate()
-	var carried_bands: Array = drawing.take_bands(id)
+	# Bands still being uploaded are handed over, not waited for: the piece
+	# fills their slots once each upload is done (BrickIsland.owed_bands).
+	var owed_bands := {}
+	var carried_bands: Array = drawing.take_bands(id, owed_bands)
 	_brick_cols.erase(id)
 	# The furniture body belongs to a STANDING building. What is falling
 	# carries its own -- an island builds collision from the chunk, and a
@@ -3804,7 +3807,7 @@ func _topple(id: int) -> void:
 	_free_frames(id, true)
 	registry.hand_over(id)
 	islands.adopt(chunk, mi, carried_mesh, carried_bytes, carried_width, carried_bands,
-			piece, id, true, true, carried_band_bytes)
+			piece, id, true, true, carried_band_bytes, owed_bands)
 	if not riding_rows.is_empty():
 		_rider_add(islands.find_by_chunk(chunk), riding_rows, Transform3D.IDENTITY)
 		_group_rides += 1

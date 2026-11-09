@@ -34,6 +34,12 @@ var bands: Array = []
 ## Each band's index buffer size in bytes, as the building had it: a band can
 ## be patched only while its buffer is the length it was built at.
 var band_bytes: Array = []
+## Bands the building was still uploading when it toppled, handed over rather
+## than waited for (CityDrawing.take_bands; Docs/WhereWorkRuns.md 3.1): slot ->
+## [task, holder, arrays, alive]. Their slots are holes until the upload is done;
+## IslandManager._fill_band_holes takes the mesh then, if the bricks are still
+## the ones it was built from (`alive`), and builds the band itself if not.
+var owed_bands: Dictionary = {}
 ## Size of that surface's index buffer, in bytes. A patch is only valid
 ## while the buffer is the length it was built at.
 var index_bytes := 0

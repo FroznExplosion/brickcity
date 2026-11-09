@@ -188,7 +188,15 @@ read-back in `scripts/` was listed and each one's caller read:
   renderer; the main thread does wait for them when the camera moves a ring or the ground
   is edited. Terrain's to judge.
 
-**The one fix left worth making: `take_bands` without the wait.** Hand the building's
+**The one fix left worth making: `take_bands` without the wait.** Written 2026-11-09 on branch
+`owed-bands` (worktree `bc-owed`), **not merged, not yet run**: `take_bands(id, owed)` hands the
+building's unfinished band uploads to the piece (`BrickIsland.owed_bands`, slot -> [task, holder,
+arrays, alive]); `_fill_band_holes` hangs each once its task is done if the chunk's alive count is
+still the one its arrays were made at, and builds the band itself if not
+(`band_owed_taken` / `band_owed_stale`); every place a piece lets its bands go drops them
+(`_drop_owed`, TaskReaper). Before merging: `--import` clean, `--big --shot`, `barrage_probe`,
+`--chamfer`, `hang_probe`, and a look at a tower toppling right after its first hit (no holes).
+The design, as planned: Hand the building's
 unfinished band jobs to the piece that takes the bands instead of waiting: the piece keeps
 them as owed bands, its slot empty; when `_harvest_band_jobs` finds one done it attaches the
 mesh to the piece's band slot, and the piece patches it for the bricks it lost since (the

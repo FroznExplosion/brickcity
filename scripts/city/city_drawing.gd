@@ -472,8 +472,13 @@ func _submit_band_job(id: int, at: int, arrays: Array) -> void:
 				IslandManager.UPLOAD_COMPRESS)
 		holder[0] = m
 		UploadLedger.note("band", UploadLedger.verts_of(arrays))
+	# How many bricks were alive when these arrays were made: a piece handed
+	# this upload unfinished (take_bands) uses it only if that is still so.
+	var b := city.registry.get_building(id)
+	var alive := city.world.get_alive_block_count(b.chunk) \
+			if b != null and b.is_materialised() else -1
 	city._band_jobs.append([id, at, IslandManager.JOB_NOT_STARTED, holder, arrays,
-			int(_band_pass.get(id, 0)), work])
+			int(_band_pass.get(id, 0)), work, alive])
 
 
 func start_band_jobs() -> void:
@@ -607,14 +612,42 @@ func advance_bands() -> void:
 
 
 ## Drop a building's band nodes, returning them so a caller can hand them on.
-func take_bands(id: int) -> Array:
+## Its bands still being uploaded are not waited for (Docs/WhereWorkRuns.md
+## 3.1): with `owed` given, each goes into it as slot -> [task, holder, arrays,
+## alive] and its slot in what is returned is empty -- a hole, which the piece
+## fills from that upload once it is done (IslandManager._fill_band_holes).
+## Without, they are left to finish and thrown away (TaskReaper).
+func take_bands(id: int, owed: Variant = null) -> Array:
 	# Drawn again, wherever they are going (_far_coarse_drop).
 	far_coarse_drop(id)
-	# Whatever is being uploaded for it lands first: a piece carrying these
-	# bands away patches them, and a slot still waiting holds nothing to patch.
-	_harvest_band_jobs(id)
-	_band_pass.erase(id)
 	var nodes: Array = city._brick_bands.get(id, [])
+	var pass_now := int(_band_pass.get(id, 0))
+	var k := 0
+	while k < city._band_jobs.size():
+		var job: Array = city._band_jobs[k]
+		if int(job[0]) != id:
+			k += 1
+			continue
+		city._band_jobs.remove_at(k)
+		var at := int(job[1])
+		var task := int(job[2])
+		# A pass since superseded is wanted by nobody.
+		if int(job[5]) != pass_now or at < 0:
+			TaskReaper.drop(task)
+			continue
+		if not (owed is Dictionary) or (owed as Dictionary).has(at):
+			# Nobody to hang it: left to finish and thrown away. A job not
+			# started yet is simply never run (drop ignores it).
+			TaskReaper.drop(task)
+			continue
+		if task == IslandManager.JOB_NOT_STARTED:
+			# Submitted this tick and not started yet: started now, on a worker.
+			task = WorkerThreadPool.add_task(job[6] as Callable, false, "building band mesh")
+		(owed as Dictionary)[at] = [task, job[3], job[4], int(job[7])]
+		# Not this node's mesh: the piece makes its own node for the slot.
+		if at < nodes.size():
+			nodes[at] = null
+	_band_pass.erase(id)
 	city._band_cursor.erase(id)
 	city._band_redo.erase(id)
 	city._brick_bands.erase(id)
