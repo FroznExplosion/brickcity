@@ -245,3 +245,35 @@ Found from the destruction side (Docs/DestructionFirstPrinciples.md B9-B12). Win
   (DestructionFirstPrinciples B11), **better once they went to a worker from 4,000 -- on since
   2026-11-08** (B13): main-thread mesh work ~207 ms against ~314, the worst item 5.8 ms against
   15.5 (`-- --stress --sync-small` for the old way).
+
+### 6.4 EngineChoice options 1 and 2 priced (2026-11-09, worktree `C:\Users\lbaun\bc-perf`)
+
+`tools/spawn_bench_probe.gd` (headless, so no renderer and no paging) times a piece's spawn
+part by part, the island tick with ~100 pieces falling, and bare node / server / pooled body
+costs. Per piece, mean of 30 (us):
+
+| bricks | spawn total | up to the cut (C++ split) | shapes (C++) | nodes | of which into the scene | mesh (queue, stand-in) |
+|---|---|---|---|---|---|---|
+| 12 | 410 | 51 | 111 | 96 | 39 | 135 |
+| 60 | 456 | 46 | 126 | 96 | 45 | 171 |
+| 300 | 803 | 102 | 214 | 143 | 78 | 328 |
+| 1,500 | 1,021 | 255 | 250 | 140 | 99 | 363 |
+
+- Bare costs, 500 each: RigidBody3D + MeshInstance3D made and put in the tree 11 us (freed
+  5.3); the same as server objects 2.5 us (freed 0.6); a pooled body taken back 1.1 us.
+- `IslandManager.tick` with 120 pieces, 100 of them moving: 2.5 ms mean, worst 9.3 ms --
+  25 us a moving piece; `pieces` 1.26 ms, `resolve` 0.87 ms of it.
+- **What this says.** A spawn is 0.4-1 ms of main thread, and spawns are already held to
+  `SPAWN_BUDGET_MS` (3 ms) a tick. Nodes are about a tenth of a spawn; servers or a pool save
+  ~10 us a piece -- under 1 ms even for 100 pieces. So **option 2 (fewer nodes) does not reach
+  the worst ticks**, and neither does option 1 for spawn: the heavy parts of a spawn are
+  already C++. The 42-147 ms spawn / fracture ticks in windowed runs were one call into the
+  renderer stalling (`worst single spawn 126 ms (23 bricks) ... mesh 125.7`, `render flush
+  113 ms`) or paging (the 205 ms wake of 8 bricks was taken with ~0 MB free) -- option 3.
+- **Where option 1 does pay:** the island tick's mean under a big collapse, ~25 us a moving
+  piece of GDScript (2.5 ms a tick at 100). In C++ that is perhaps 0.5 ms; worth it only if a
+  quiet-machine collapse shows the tick's mean, not its spikes, as the cost. Promotion
+  (budgeted 3 ms, 7.5 for a 42-course tower) was not benched here.
+- Headless, worker meshes made through the dummy renderer print "Attempting to initialize
+  the wrong RID" / "Parameter m is null" (its storage is not thread-safe); a headless-only
+  artefact, nothing in the windowed runs.
