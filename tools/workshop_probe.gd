@@ -316,179 +316,179 @@ func _workshop_checks() -> void:
 	root.add_child(ws)
 	await process_frame
 	await process_frame
-	ws._builds_dir = "user://_probe_builds/"
-	ws._save_path = "user://_probe_quick.json"
-	var f0: int = ws.asm.frames[0]
-	var base_blocks: int = ws.world.get_alive_block_count(f0)
+	ws.bench._builds_dir = "user://_probe_builds/"
+	ws.bench._save_path = "user://_probe_quick.json"
+	var f0: int = ws.bench.asm.frames[0]
+	var base_blocks: int = ws.bench.world.get_alive_block_count(f0)
 
 	# --- the menu bar exists and its dialogs are shut
-	_ok("a menu bar", ws._menu != null and ws._menu.bar_height() > 0.0)
-	_ok("nothing modal to start with", not ws._menu.is_modal())
+	_ok("a menu bar", ws.bench._menu != null and ws.bench._menu.bar_height() > 0.0)
+	_ok("nothing modal to start with", not ws.bench._menu.is_modal())
 
 	# --- a generated building, dragged bigger
-	ws._on_menu("tower", null)
-	_ok("Insert > Generated building adds one", ws.recipe.towers.size() == 1)
-	var laid: int = ws.world.get_alive_block_count(f0) - base_blocks
+	ws.bench._on_menu("tower", null)
+	_ok("Insert > Generated building adds one", ws.bench.recipe.towers.size() == 1)
+	var laid: int = ws.bench.world.get_alive_block_count(f0) - base_blocks
 	_ok("and lays its preview into frame 0", laid > 200, "%d" % laid)
-	_ok("without putting a brick in the recipe", ws.recipe.size() == 0)
-	var t: Dictionary = ws.recipe.towers[0]
+	_ok("without putting a brick in the recipe", ws.bench.recipe.size() == 0)
+	var t: Dictionary = ws.bench.recipe.towers[0]
 	var at := BuildRecipe.cell_from(t.cell)
 	var o := BrickWorld.grid_to_world(at)
-	ws.begin_drag("x")
+	ws.bench.begin_drag("x")
 	# A ray straight down at x = 40 studs past the building's corner, plus the gap.
-	var want_x: float = o.x + 40 * STUD + ws.HANDLE_M
-	ws.drag_ray(Vector3(want_x, 30.0, o.z + 1.0), Vector3(0, -1, 0))
-	ws.end_drag()
-	var p := TowerBlockout.normalised(ws.recipe.towers[0].params)
+	var want_x: float = o.x + 40 * STUD + ws.bench.HANDLE_M
+	ws.bench.drag_ray(Vector3(want_x, 30.0, o.z + 1.0), Vector3(0, -1, 0))
+	ws.bench.end_drag()
+	var p := TowerBlockout.normalised(ws.bench.recipe.towers[0].params)
 	_ok("dragging the +X handle widens it to whole panels", p.x == 40, "x=%d" % p.x)
-	ws.begin_drag("y")
+	ws.bench.begin_drag("y")
 	# A ray along +X at the height of three storeys.
 	var three: int = TowerBlockout.dims(TowerBlockout.normalised({"courses": 18})).y
-	ws.drag_ray(Vector3(-5.0, o.y + three * PLATE + ws.HANDLE_M, o.z + 1.0), Vector3(1, 0, 0))
-	ws.end_drag()
-	p = TowerBlockout.normalised(ws.recipe.towers[0].params)
+	ws.bench.drag_ray(Vector3(-5.0, o.y + three * PLATE + ws.bench.HANDLE_M, o.z + 1.0), Vector3(1, 0, 0))
+	ws.bench.end_drag()
+	p = TowerBlockout.normalised(ws.bench.recipe.towers[0].params)
 	_ok("dragging the top handle raises it a storey at a time", p.courses == 18,
 			"courses=%d" % p.courses)
-	var before_undo: int = ws.world.get_alive_block_count(f0)
-	ws._undo()
-	p = TowerBlockout.normalised(ws.recipe.towers[0].params)
+	var before_undo: int = ws.bench.world.get_alive_block_count(f0)
+	ws.bench._undo()
+	p = TowerBlockout.normalised(ws.bench.recipe.towers[0].params)
 	_ok("undo takes the drag back", p.courses == 12 and p.x == 40)
-	_ok("and rebuilds the preview", ws.world.get_alive_block_count(f0) < before_undo)
-	ws._set_tower_option("rooms", false)
-	_ok("an option switches", not bool(ws.recipe.towers[0].params.rooms))
-	ws._undo()
-	_ok("and undoes", bool(ws.recipe.towers[0].params.rooms))
+	_ok("and rebuilds the preview", ws.bench.world.get_alive_block_count(f0) < before_undo)
+	ws.bench._set_tower_option("rooms", false)
+	_ok("an option switches", not bool(ws.bench.recipe.towers[0].params.rooms))
+	ws.bench._undo()
+	_ok("and undoes", bool(ws.bench.recipe.towers[0].params.rooms))
 
 	# --- saved as a record, loaded back
-	var path: String = ws._save_as("Probe House")
+	var path: String = ws.bench._save_as("Probe House")
 	_ok("Save As writes a named file", path != "" and FileAccess.file_exists(path), path)
 	var saved := BuildRecipe.load_from(path)
 	_ok("holding the generated building as ONE record", saved.towers.size() == 1
 			and saved.size() == 0 and saved.name == "Probe House")
-	ws._new_build()
-	_ok("New clears the space", ws.recipe.towers.is_empty() and ws.recipe.size() == 0
-			and ws.world.get_alive_block_count(ws.asm.frames[0]) == base_blocks)
-	_ok("and forgets the file", ws._current_path == "")
-	ws._open_path(path)
-	_ok("Open brings it back, preview and all", ws.recipe.towers.size() == 1
-			and ws.world.get_alive_block_count(ws.asm.frames[0]) > base_blocks + 200)
-	_ok("and remembers the file for Save", ws._current_path == path and not ws._dirty)
+	ws.bench._new_build()
+	_ok("New clears the space", ws.bench.recipe.towers.is_empty() and ws.bench.recipe.size() == 0
+			and ws.bench.world.get_alive_block_count(ws.bench.asm.frames[0]) == base_blocks)
+	_ok("and forgets the file", ws.bench._current_path == "")
+	ws.bench._open_path(path)
+	_ok("Open brings it back, preview and all", ws.bench.recipe.towers.size() == 1
+			and ws.bench.world.get_alive_block_count(ws.bench.asm.frames[0]) > base_blocks + 200)
+	_ok("and remembers the file for Save", ws.bench._current_path == path and not ws.bench._dirty)
 
 	# --- bake it to bricks
-	var baked: int = ws._bake_tower()
+	var baked: int = ws.bench._bake_tower()
 	_ok("Bake makes the preview the recipe's own bricks", baked > 200
-			and ws.recipe.size() == baked and ws.recipe.towers.is_empty())
-	_ok("recorded as a group", ws.recipe.groups.size() == 1
-			and int(ws.recipe.groups[0].count) == baked)
-	ws._undo()
-	_ok("one undo puts the generated building back", ws.recipe.size() == 0
-			and ws.recipe.towers.size() == 1 and ws.recipe.groups.is_empty())
+			and ws.bench.recipe.size() == baked and ws.bench.recipe.towers.is_empty())
+	_ok("recorded as a group", ws.bench.recipe.groups.size() == 1
+			and int(ws.bench.recipe.groups[0].count) == baked)
+	ws.bench._undo()
+	_ok("one undo puts the generated building back", ws.bench.recipe.size() == 0
+			and ws.bench.recipe.towers.size() == 1 and ws.bench.recipe.groups.is_empty())
 
 	# --- a build inside a build
-	ws._on_menu("remove_tower", null)
-	_ok("Remove takes the generated building out", ws.recipe.towers.is_empty()
-			and ws.world.get_alive_block_count(ws.asm.frames[0]) == base_blocks)
-	ws._undo()
-	_ok("and undo puts it back", ws.recipe.towers.size() == 1)
-	ws._on_menu("remove_tower", null)
+	ws.bench._on_menu("remove_tower", null)
+	_ok("Remove takes the generated building out", ws.bench.recipe.towers.is_empty()
+			and ws.bench.world.get_alive_block_count(ws.bench.asm.frames[0]) == base_blocks)
+	ws.bench._undo()
+	_ok("and undo puts it back", ws.bench.recipe.towers.size() == 1)
+	ws.bench._on_menu("remove_tower", null)
 	var cottage := BuildRecipe.load_from("res://builds/cottage.json")
-	ws.hold_stamp(cottage, "res://builds/cottage.json")
-	var box: Array = ws.stamp_box(ws._stamp)
+	ws.bench.hold_stamp(cottage, "res://builds/cottage.json")
+	var box: Array = ws.bench.stamp_box(ws.bench._stamp)
 	var d: Vector3i = box[1]
-	var target: Vector3i = ws.stamp_target(Vector3(24.5 * STUD, 30.0, 24.5 * STUD), Vector3(0, -1, 0))
+	var target: Vector3i = ws.bench.stamp_target(Vector3(24.5 * STUD, 30.0, 24.5 * STUD), Vector3(0, -1, 0))
 	_ok("aimed at the middle of the baseplate, it sits on it",
 			target.y == 1 and target.x == 24 - d.x / 2, "%v in a box of %v" % [target, d])
-	ws._stamp_at = target
-	ws._stamp_ok = ws._stamp_fits(target)
-	_ok("and fits", ws._stamp_ok)
-	ws._commit_stamp()
-	_ok("stamping copies every brick", ws.recipe.size() == cottage.size(),
-			"%d of %d" % [ws.recipe.size(), cottage.size()])
+	ws.bench._stamp_at = target
+	ws.bench._stamp_ok = ws.bench._stamp_fits(target)
+	_ok("and fits", ws.bench._stamp_ok)
+	ws.bench._commit_stamp()
+	_ok("stamping copies every brick", ws.bench.recipe.size() == cottage.size(),
+			"%d of %d" % [ws.bench.recipe.size(), cottage.size()])
 	var all_in := true
-	for i in ws.recipe.size():
-		all_in = all_in and int(ws._placed_at[i][1]) >= 0
+	for i in ws.bench.recipe.size():
+		all_in = all_in and int(ws.bench._placed_at[i][1]) >= 0
 	_ok("and every one is in the world", all_in)
-	_ok("with a group naming where it came from", ws.recipe.groups.size() == 1
-			and ws.recipe.groups[0].source == "res://builds/cottage.json")
-	_ok("and the same place again does not fit", not ws._stamp_fits(target))
-	ws._turn_stamp()
-	_ok("R turns it", ws._stamp_turn == 1 and ws._stamp.size() == cottage.size())
-	ws._cancel_stamp()
-	ws._undo()
-	_ok("one undo takes the whole stamp back", ws.recipe.size() == 0
-			and ws.recipe.groups.is_empty()
-			and ws.world.get_alive_block_count(ws.asm.frames[0]) == base_blocks)
+	_ok("with a group naming where it came from", ws.bench.recipe.groups.size() == 1
+			and ws.bench.recipe.groups[0].source == "res://builds/cottage.json")
+	_ok("and the same place again does not fit", not ws.bench._stamp_fits(target))
+	ws.bench._turn_stamp()
+	_ok("R turns it", ws.bench._stamp_turn == 1 and ws.bench._stamp.size() == cottage.size())
+	ws.bench._cancel_stamp()
+	ws.bench._undo()
+	_ok("one undo takes the whole stamp back", ws.bench.recipe.size() == 0
+			and ws.bench.recipe.groups.is_empty()
+			and ws.bench.world.get_alive_block_count(ws.bench.asm.frames[0]) == base_blocks)
 
 	# --- a group: select, delete, undo, move, copy
-	ws.hold_stamp(cottage, "res://builds/cottage.json")
-	ws._stamp_at = Vector3i(2, 1, 2)
-	ws._stamp_ok = ws._stamp_fits(ws._stamp_at)
-	ws._commit_stamp()
-	ws._cancel_stamp()
+	ws.bench.hold_stamp(cottage, "res://builds/cottage.json")
+	ws.bench._stamp_at = Vector3i(2, 1, 2)
+	ws.bench._stamp_ok = ws.bench._stamp_fits(ws.bench._stamp_at)
+	ws.bench._commit_stamp()
+	ws.bench._cancel_stamp()
 	var n := cottage.size()
-	var cb: Array = ws.recipe.bounds()
+	var cb: Array = ws.bench.recipe.bounds()
 	var mid: Vector3 = BrickWorld.grid_to_world(cb[0]) + BrickWorld.grid_to_world(cb[1]) * 0.5
 	var down := func() -> Array: return [Vector3(mid.x, 30.0, mid.z), Vector3(0, -1, 0)]
 	var r0: Array = down.call()
-	_ok("X on an inserted build selects it", ws.select_group_ray(r0[0], r0[1]) == 0)
-	_ok("X on the baseplate selects nothing", ws.select_group_ray(
+	_ok("X on an inserted build selects it", ws.bench.select_group_ray(r0[0], r0[1]) == 0)
+	_ok("X on the baseplate selects nothing", ws.bench.select_group_ray(
 			Vector3(47.5 * STUD, 30.0, 47.5 * STUD), Vector3(0, -1, 0)) == -1)
-	ws.select_group_ray(r0[0], r0[1])
-	ws.delete_group()
-	_ok("DEL takes the whole group out", ws.recipe.size() == 0 and ws.recipe.groups.is_empty()
-			and ws.world.get_alive_block_count(ws.asm.frames[0]) == base_blocks)
-	ws._undo()
-	_ok("undo puts it back, as a group", ws.recipe.size() == n and ws.recipe.groups.size() == 1
-			and ws.recipe.cell_of(0) == cottage.cell_of(0) + (Vector3i(2, 1, 2) - (ws.stamp_box(cottage)[0] as Vector3i)))
-	ws.select_group_ray(r0[0], r0[1])
-	ws.move_group()
-	_ok("M lifts it into hand", ws._stamp != null and ws.recipe.size() == 0)
-	ws._abort_stamp()
-	_ok("and RMB puts it back where it was", ws._stamp == null and ws.recipe.size() == n
-			and ws.recipe.groups.size() == 1)
-	ws.select_group_ray(r0[0], r0[1])
-	ws.move_group()
-	ws._stamp_at = Vector3i(26, 1, 26)
-	ws._stamp_ok = ws._stamp_fits(ws._stamp_at)
-	_ok("a lifted build fits its own old place's neighbour", ws._stamp_ok)
-	ws._commit_stamp()
-	ws._cancel_stamp()
-	_ok("placed elsewhere, still one group of the same bricks", ws.recipe.size() == n
-			and ws.recipe.groups.size() == 1 and ws.recipe.groups[0].source == "res://builds/cottage.json")
-	ws._select_group(0)
-	ws.copy_group()
-	ws._stamp_at = Vector3i(2, 1, 2)
-	ws._stamp_ok = ws._stamp_fits(ws._stamp_at)
-	ws._commit_stamp()
-	ws._cancel_stamp()
-	_ok("C copies it: two groups, twice the bricks", ws.recipe.size() == 2 * n
-			and ws.recipe.groups.size() == 2)
-	ws._new_build()
+	ws.bench.select_group_ray(r0[0], r0[1])
+	ws.bench.delete_group()
+	_ok("DEL takes the whole group out", ws.bench.recipe.size() == 0 and ws.bench.recipe.groups.is_empty()
+			and ws.bench.world.get_alive_block_count(ws.bench.asm.frames[0]) == base_blocks)
+	ws.bench._undo()
+	_ok("undo puts it back, as a group", ws.bench.recipe.size() == n and ws.bench.recipe.groups.size() == 1
+			and ws.bench.recipe.cell_of(0) == cottage.cell_of(0) + (Vector3i(2, 1, 2) - (ws.bench.stamp_box(cottage)[0] as Vector3i)))
+	ws.bench.select_group_ray(r0[0], r0[1])
+	ws.bench.move_group()
+	_ok("M lifts it into hand", ws.bench._stamp != null and ws.bench.recipe.size() == 0)
+	ws.bench._abort_stamp()
+	_ok("and RMB puts it back where it was", ws.bench._stamp == null and ws.bench.recipe.size() == n
+			and ws.bench.recipe.groups.size() == 1)
+	ws.bench.select_group_ray(r0[0], r0[1])
+	ws.bench.move_group()
+	ws.bench._stamp_at = Vector3i(26, 1, 26)
+	ws.bench._stamp_ok = ws.bench._stamp_fits(ws.bench._stamp_at)
+	_ok("a lifted build fits its own old place's neighbour", ws.bench._stamp_ok)
+	ws.bench._commit_stamp()
+	ws.bench._cancel_stamp()
+	_ok("placed elsewhere, still one group of the same bricks", ws.bench.recipe.size() == n
+			and ws.bench.recipe.groups.size() == 1 and ws.bench.recipe.groups[0].source == "res://builds/cottage.json")
+	ws.bench._select_group(0)
+	ws.bench.copy_group()
+	ws.bench._stamp_at = Vector3i(2, 1, 2)
+	ws.bench._stamp_ok = ws.bench._stamp_fits(ws.bench._stamp_at)
+	ws.bench._commit_stamp()
+	ws.bench._cancel_stamp()
+	_ok("C copies it: two groups, twice the bricks", ws.bench.recipe.size() == 2 * n
+			and ws.bench.recipe.groups.size() == 2)
+	ws.bench._new_build()
 
 	# --- the room guide
-	ws._on_menu("kind", "room")
-	_ok("a room template shows a guide", ws._guide != null and ws._guide.visible)
-	_ok("and says what is on it", ws._guide_text().contains("25x25"))
-	ws._on_menu("kind", "building")
-	_ok("a building does not", not ws._guide.visible)
+	ws.bench._on_menu("kind", "room")
+	_ok("a room template shows a guide", ws.bench._guide != null and ws.bench._guide.visible)
+	_ok("and says what is on it", ws.bench._guide_text().contains("25x25"))
+	ws.bench._on_menu("kind", "building")
+	_ok("a building does not", not ws.bench._guide.visible)
 
 	# --- the detail layer
-	ws._set_role(BuildRecipe.Role.DETAIL)
-	ws._part_index = BrickPalette.parts().find("plate_2x2")
-	ws._yaw = 0
-	ws._flip = false
-	ws._cell = Vector3i(2, 1, 2)
-	ws._valid = true
-	ws._snapped = {}
-	ws._place()
+	ws.bench._set_role(BuildRecipe.Role.DETAIL)
+	ws.bench._part_index = BrickPalette.parts().find("plate_2x2")
+	ws.bench._yaw = 0
+	ws.bench._flip = false
+	ws.bench._cell = Vector3i(2, 1, 2)
+	ws.bench._valid = true
+	ws.bench._snapped = {}
+	ws.bench._place()
 	_ok("a brick placed on the detail layer is detail",
-			ws.recipe.size() == 1 and ws.recipe.role_of(0) == BuildRecipe.Role.DETAIL)
-	ws._toggle_layer()
-	_ok("I cycles back to structure after detail", ws._role == BuildRecipe.Role.STRUCTURE)
+			ws.bench.recipe.size() == 1 and ws.bench.recipe.role_of(0) == BuildRecipe.Role.DETAIL)
+	ws.bench._toggle_layer()
+	_ok("I cycles back to structure after detail", ws.bench._role == BuildRecipe.Role.STRUCTURE)
 
 	# --- type
-	ws._on_menu("kind", "room")
-	var room_path: String = ws._save_as("Probe Office", "office")
+	ws.bench._on_menu("kind", "room")
+	var room_path: String = ws.bench._save_as("Probe Office", "office")
 	var room := BuildRecipe.load_from(room_path)
 	_ok("a room template saves its kind and room kind", room.kind == "room"
 			and room.meta.get("room_kind") == "office" and room.meta.has("size"))

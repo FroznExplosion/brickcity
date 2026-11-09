@@ -43,7 +43,7 @@ func _tick() -> void:
 	if _frames != 3:
 		return
 	_ws.set_process(false)
-	_ws._hotbar.save_path = "user://_starter_hotbar.json"
+	_ws.bench._hotbar.save_path = "user://_starter_hotbar.json"
 	_ws.toolbars_save = "user://_starter_toolbars.json"
 	_build()
 
@@ -52,8 +52,8 @@ func _tick() -> void:
 ## cell, so -a..a is symmetric about the mirror) laid as part `part` in `colour`.
 func _box(part: String, x0: int, x1: int, y0: int, y1: int, z0: int, z1: int, colour: int) -> int:
 	_ws.select_part(_ws.part_names.find(part))
-	_ws._colour = colour
-	_ws._mat = 0
+	_ws.bench._colour = colour
+	_ws.bench._mat = 0
 	var cells := {}
 	for x in range(x0, x1 + 1):
 		for y in range(y0, y1 + 1):
@@ -69,12 +69,12 @@ func _pair(part_l: String, part_r: String, x0: int, x1: int, y0: int, y1: int, z
 
 
 func _build() -> void:
-	_ws._new_build()
+	_ws.bench._new_build()
 	_ws.set_asset_kind("mech")
 	_ws.set_mech_class("normal")
 	_ws.set_leg_length(2)
 	_ws.part_maker = MAKER
-	_ws.recipe.name = NAME
+	_ws.bench.recipe.name = NAME
 	var o: Vector3 = _ws.mech_origin()
 	_o = Vector3i(int(o.x), int(o.y), int(floor(o.z)))
 	var j := MechReference.joints("normal", 2)
@@ -120,7 +120,7 @@ func _build() -> void:
 	var counts: Dictionary = _ws.part_counts()
 	print("[starter] bricks: ", counts)
 	DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path(BUILD.get_base_dir()))
-	_ws._current_path = BUILD
+	_ws.bench._current_path = BUILD
 	var ok: bool = _ws._write(BUILD)
 	print("[starter] build written: %s, parts in %s" % [ok, _ws.parts_dir()])
 	var cat := PartCatalog.new()

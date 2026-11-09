@@ -470,7 +470,7 @@ static func _material(d: Dictionary) -> Material:
 			sm.shader = load(BRICK_SHADER)
 			return BrickMaterials.add_glass(sm)
 		"stud":
-			return load("res://scripts/workshop.gd")._stud_material()
+			return BrickBench._stud_material()
 		"plain":
 			var s := StandardMaterial3D.new()
 			var a: Array = d.get("albedo", [0.6, 0.6, 0.6, 1.0])

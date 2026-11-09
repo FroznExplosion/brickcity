@@ -33,7 +33,7 @@ func _tick() -> void:
 	if _frames != 2:
 		return
 	_ws.set_process(false)
-	_ws._hotbar.save_path = "user://_probe_asset_hotbar.json"
+	_ws.bench._hotbar.save_path = "user://_probe_asset_hotbar.json"
 	_ws.toolbars_save = "user://_probe_asset_toolbars.json"
 	print("asset tags probe")
 	_levels()
@@ -109,9 +109,9 @@ func _old_files() -> void:
 ## The Save As dialog shows the tags for an item, and gives back what is ticked.
 func _dialog() -> void:
 	print("[probe] the Save As dialog")
-	var m = _ws._menu
+	var m = _ws.bench._menu
 	_ws.set_asset_kind("item")
-	_ok("Asset > furniture or item makes an item", _ws.recipe.kind == "item" and m._kind == "item")
+	_ok("Asset > furniture or item makes an item", _ws.bench.recipe.kind == "item" and m._kind == "item")
 	m.show_save_as("Stool", "", {"planet": ["earth"], "type": ["furniture"], "room": ["kitchen"]})
 	_ok("an item's dialog has tags, not the room-kind list", m._save_tags_box.visible
 			and not m._save_room_row.visible)
@@ -140,14 +140,14 @@ func _dialog() -> void:
 ## tagged, an item as Detail and furniture as Interior.
 func _save_and_generate() -> void:
 	print("[probe] saved, and furnished from")
-	_ws._new_build()
+	_ws.bench._new_build()
 	_ws.set_asset_kind("item")
-	_ws.recipe.add("brick_2x2", Vector3i(0, 0, 0), 5, 0, BuildRecipe.Role.STRUCTURE)
-	_ws.recipe.add("plate_2x2", Vector3i(0, 3, 0), 5, 0, BuildRecipe.Role.DETAIL)
-	_ws._builds_dir = DIR
+	_ws.bench.recipe.add("brick_2x2", Vector3i(0, 0, 0), 5, 0, BuildRecipe.Role.STRUCTURE)
+	_ws.bench.recipe.add("plate_2x2", Vector3i(0, 3, 0), 5, 0, BuildRecipe.Role.DETAIL)
+	_ws.bench._builds_dir = DIR
 	var path: String = _ws._save_as("Probe Stool", "",
 			{"planet": [], "type": ["furniture"], "room": ["kitchen", "bedroom"]})
-	_ws._builds_dir = BuildRecipe.player_dir()
+	_ws.bench._builds_dir = BuildRecipe.player_dir()
 	_ok("Save As writes it", path != "" and FileAccess.file_exists(path), path)
 	_ok("an item's library is the generator's (user://items/)",
 			BuildRecipe.player_dir("item") == "user://items/" and BuildRecipe.library_dirs("item").has("res://items/"))

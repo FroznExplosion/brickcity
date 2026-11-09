@@ -214,7 +214,7 @@ func _stage_step() -> void:
 ## The frame's pieces: the menu bar, the stage tabs (a band 8 under the bar, its own width, 30
 ## high), the rail and the outliner. Set each frame: the menu comes and goes with the workshop.
 func _frame_setup() -> void:
-	frame.bar = ws._menu.bar() if ws._menu != null else null
+	frame.bar = ws.bench._menu.bar() if ws.bench._menu != null else null
 	frame.band = _tabs
 	frame.band_wide = false
 	frame.band_left = 12.0
@@ -226,8 +226,8 @@ func _frame_setup() -> void:
 
 func _build_tools() -> void:
 	_tools_panel = WkRail.new(ws.RAIL_W, true)
-	ws.wk_ctx.style_ui(_tools_panel)   # the game's look (GameUI, MenuTheme), through the kit's seam
-	_tools_panel.restyle(ws.wk_ctx.panel_box())
+	ws.bench.wk_ctx.style_ui(_tools_panel)   # the game's look (GameUI, MenuTheme), through the kit's seam
+	_tools_panel.restyle(ws.bench.wk_ctx.panel_box())
 	_layer.add_child(_tools_panel)
 
 
@@ -236,7 +236,7 @@ func _fill_tools() -> void:
 	for s in STAGES:
 		if s[0] == stage:
 			title = String(s[1]).substr(2)
-	_tools_panel.fill(title, TOOLS[stage], pick_tool, [] if ws.recipe.kind == "gun" else GUN_ONLY)
+	_tools_panel.fill(title, TOOLS[stage], pick_tool, [] if ws.bench.recipe.kind == "gun" else GUN_ONLY)
 	_tool_buttons = _tools_panel.buttons
 	_hint = _tools_panel.hint
 
@@ -268,7 +268,7 @@ func pick_tool(id: String) -> void:
 		"finish:!export_print":
 			ws.export_print()
 		"finish:!save":
-			ws._on_menu("save_as_ask", null)
+			ws.bench._on_menu("save_as_ask", null)
 		_:
 			ws.rail_pick(id)
 
@@ -341,9 +341,9 @@ func _build_outliner() -> void:
 
 ## What the tree shows, as a string: rebuilt only when it changes.
 func _signature() -> String:
-	var bits := PackedStringArray([ws.recipe.kind, ws.recipe.name, ws.sculpt_state, str(ws.part_sel),
-			",".join(ws.part_names), str(ws.guides.size()), str(ws.photos.size()), str(ws.recipe.size()),
-			str(ws.undo_stack.version)])
+	var bits := PackedStringArray([ws.bench.recipe.kind, ws.bench.recipe.name, ws.sculpt_state, str(ws.part_sel),
+			",".join(ws.part_names), str(ws.guides.size()), str(ws.photos.size()), str(ws.bench.recipe.size()),
+			str(ws.bench.undo_stack.version)])
 	for m in ws.models:
 		bits.append("%d:%s:%s:%s:%s:%s:%s" % [int(m.id), String(m.path), str(m.parts),
 				str((m.node as Node3D).visible), str(int(m.op)), String(m.get("name", "")), String(m.get("group", ""))])
@@ -366,8 +366,8 @@ func refresh() -> void:
 	var clay: bool = ws.sculpt_state == "sdf"
 	var top := _tree.create_item(root)
 	var kind_label: String = {"gun": "gun", "mech": "mech", "figure": "figure", "item": "furniture or item"}.get(
-			ws.recipe.kind, ws.recipe.kind)
-	top.set_text(0, "%s  (%s)" % [ws.recipe.name if ws.recipe.name != "untitled" else "New asset", kind_label])
+			ws.bench.recipe.kind, ws.bench.recipe.kind)
+	top.set_text(0, "%s  (%s)" % [ws.bench.recipe.name if ws.bench.recipe.name != "untitled" else "New asset", kind_label])
 	top.set_text(1, "clay" if clay else "bricks")
 	top.set_custom_color(1, _state_colour(clay))
 	top.set_metadata(0, {"t": "asset"})
@@ -764,13 +764,13 @@ func _slim_old_rail() -> void:
 
 ## The menus and the Finish tools a kind has: Gun only for a gun, Mech for a mech.
 func sync_kind() -> void:
-	if ws._menu != null:
-		for mb in ws._menu.find_children("*", "MenuButton", true, false):
+	if ws.bench._menu != null:
+		for mb in ws.bench._menu.find_children("*", "MenuButton", true, false):
 			match (mb as MenuButton).text:
 				"Gun":
-					(mb as MenuButton).visible = ws.recipe.kind == "gun"
+					(mb as MenuButton).visible = ws.bench.recipe.kind == "gun"
 				"Mech":
-					(mb as MenuButton).visible = ws.recipe.kind == "mech"
+					(mb as MenuButton).visible = ws.bench.recipe.kind == "mech"
 	if _tools_panel != null:
 		_fill_tools()
 	_sig = ""
@@ -788,8 +788,8 @@ func process(dt: float) -> void:
 		(_tab_buttons[id] as Button).set_pressed_no_signal(id == stage)
 	# The building workshop's readout (the brick in hand, its layer, its cell) means
 	# nothing while shaping clay.
-	if ws._hud != null:
-		ws._hud.visible = stage != "blockout"
+	if ws.bench._hud != null:
+		ws.bench._hud.visible = stage != "blockout"
 	_tools_panel.fit_height(ws.get_viewport().get_visible_rect().size.y - frame.rail_top() - 12.0)
 	_tools_panel.size = Vector2.ZERO
 	ws.rail_top = _tools_panel.position.y + _tools_panel.size.y + 6.0
