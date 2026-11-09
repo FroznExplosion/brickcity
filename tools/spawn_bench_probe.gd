@@ -13,6 +13,7 @@ extends SceneTree
 const SIZES := [12, 60, 300, 1500]
 const PER_SIZE := 30
 const TICKS := 60
+const WARM_TICKS := 10
 
 var _started := false
 var _w: BrickWorld
@@ -102,8 +103,16 @@ func _bench_spawn() -> void:
 ## tick() with the pieces above falling and landing: the island loop's cost
 ## per moving piece.
 func _bench_tick() -> void:
-	print("\nIslandManager.tick with %d piece(s)" % _m.islands.size())
+	# Warmed up first: the first mesh hung on a node is a one-off 30-1,300 ms
+	# (headless, an 88-vertex stand-in at frame 3), nothing a tick costs.
+	for t in WARM_TICKS:
+		await physics_frame
+		_m.tick()
+		_m.start_mesh_jobs()
+	print("\nIslandManager.tick with %d piece(s), after %d warm-up tick(s)" % [
+			_m.islands.size(), WARM_TICKS])
 	var worst := 0.0
+	var worst_parts: Array = []
 	var sum := 0.0
 	var moving_sum := 0
 	var tp0: Dictionary = _m.tick_prof.duplicate()
@@ -114,7 +123,9 @@ func _bench_tick() -> void:
 		var us := _us(t0)
 		_m.start_mesh_jobs()
 		sum += us
-		worst = maxf(worst, us)
+		if us > worst:
+			worst = us
+			worst_parts = _m.last_tick.duplicate(true)
 		var moving := 0
 		for isl in _m.islands:
 			if isl.is_valid() and not isl.settled:
@@ -126,6 +137,10 @@ func _bench_tick() -> void:
 	print("  mean %.0f us, worst %.0f us, %.0f moving on average -> %.1f us a moving piece" % [
 			sum / TICKS, worst, float(moving_sum) / TICKS, sum / maxf(moving_sum, 1)])
 	print("  of which (mean us a tick): " + parts)
+	# last_tick: [total, loop, resolve parts (harvest, upload waiting, mesh
+	# queue, band holes + slices, resolve queue), fracture queue, reshapes,
+	# island meshes], ms.
+	print("  the worst tick (ms): %s" % str(worst_parts))
 
 
 ## The bare cost of what a piece is made of, 500 times each: nodes the way
