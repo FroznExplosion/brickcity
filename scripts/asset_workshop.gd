@@ -323,16 +323,16 @@ func _init() -> void:
 	mirror_z = plate_studs * 0.5 + 0.5
 	@warning_ignore("integer_division")
 	work_x = plate_studs / 2
+	# Its own rail (AssetWorkshopUI), not the building tools'; no floor (a build stands on
+	# nothing); it answers the kit's Sketch and Shapes tools itself.
+	wants_tools = false
+	has_floor = false
+	sketch_host = self
 	_ortho_size = VIEW_STUDS * BrickPalette.STUD_M * 0.75
 
 
-## The asset workshop has its own rail (AssetWorkshopUI), not the building tools'.
-func _wants_tools() -> bool:
-	return false
-
-
 func _ready() -> void:
-	super()
+	bench_ready()
 	cam_ctl.ctx = wk_ctx   # no setup(): this workshop's camera keeps its own mouse ways
 	toolbox.add(_sketch_tool)
 	_select_tool.mode = WkSelectTool.Mode.BOX
@@ -1146,7 +1146,7 @@ func mirror_here() -> void:
 
 func _place() -> void:
 	var before := recipe.size()
-	super._place()   # the brick, and its mirror image when the mirror is on
+	_place_base()   # the brick, and its mirror image when the mirror is on
 	if mirror_on and recipe.size() == before + 2:
 		undo_stack.group_last(2)
 
@@ -1309,7 +1309,7 @@ func _unhandled_input(e: InputEvent) -> void:
 		if mine:
 			get_viewport().set_input_as_handled()
 			return
-	super._unhandled_input(e)
+	bench_unhandled_input(e)
 
 
 ## Hand an event to the kit tool in hand, if it is one of `ids`. True if it used it.
@@ -1318,7 +1318,7 @@ func _kit_input(e: InputEvent, ids: Array) -> bool:
 
 
 func _process(dt: float) -> void:
-	super._process(dt)
+	bench_process(dt)
 	if _ui != null:
 		_ui.process(dt)
 	if _ruler == null:
@@ -1879,7 +1879,7 @@ func _restore_asset_meta() -> void:
 
 
 func _reset_space() -> void:
-	super._reset_space()
+	_reset_space_base()
 	# One place for everything: the middle of the area, where the camera, the grid and
 	# the starting brick are (a plane kept from an older, smaller area was 460 studs off).
 	mirror_z = plate_studs * 0.5 + 0.5
@@ -2003,7 +2003,7 @@ func _load_recipe(r: BuildRecipe) -> void:
 	# The workshop's load ends in an edit, and an edit saves this scene's state into the
 	# recipe: while loading, that state is still the last build's, so it waits.
 	_loading = true
-	super._load_recipe(r)
+	_load_recipe_base(r)
 	_loading = false
 	_set_asset_kind(recipe.kind)
 	_restore_asset_meta()
@@ -2086,7 +2086,7 @@ func _reconcile_parts() -> void:
 
 
 func _after_edit() -> void:
-	super._after_edit()
+	_after_edit_base()
 	if _loading:
 		return
 	_reconcile_parts()
@@ -2114,7 +2114,7 @@ func _delete_ray(from: Vector3, dir: Vector3) -> bool:
 	var hit := _first_hit(from, dir)
 	if not hit.is_empty():
 		_removing = _recipe_id_at(asm.frames.find(hit.frame), hit.block)
-	var done := super._delete_ray(from, dir)
+	var done := _delete_ray_base(from, dir)
 	if not done:
 		_removing = -1
 	return done
@@ -2122,7 +2122,7 @@ func _delete_ray(from: Vector3, dir: Vector3) -> bool:
 
 ## A brick as redo lays it again: with the part it belongs to.
 func _brick_item(i: int) -> Dictionary:
-	var d := super._brick_item(i)
+	var d := _brick_item_base(i)
 	d["tag"] = part_of[i] if i < part_of.size() else part_sel
 	return d
 
@@ -2182,7 +2182,7 @@ func part_counts() -> Dictionary:
 
 ## While a shape or a select box is dragged, the ghost stays on the plane it started on.
 func _hold_lock(on: bool) -> void:
-	super._hold_lock(on or _dragging)
+	_hold_lock_base(on or _dragging)
 
 
 # ---------------------------------------------------------------------------
@@ -3326,7 +3326,7 @@ func toggle_smooth() -> void:
 func _undo() -> bool:
 	var pick := _pick_id()
 	_set_down()
-	var ok := super._undo()
+	var ok := _undo_base()
 	_repick(pick)
 	return ok
 
@@ -3865,7 +3865,7 @@ func free_cell(hit: Vector3, size: Vector3i) -> Vector3i:
 ## mid-air or not, flipped or not. Only an overlap stops it.
 func _aim() -> void:
 	if not free_place:
-		super._aim()
+		_aim_base()
 		return
 	var ray := _mouse_ray()
 	_lock = {}
@@ -3923,15 +3923,6 @@ func _draw_work_plane() -> void:
 # ---------------------------------------------------------------------------
 # Round 2: a floating build area, a starting brick, autosave
 # ---------------------------------------------------------------------------
-
-## No floor here: a build floats, and starts from one brick.
-func _lay_baseplate() -> void:
-	world.set_foundation_level(chunk, 0)
-
-
-func _on_floor(_cell_at: Vector3i) -> bool:
-	return false
-
 
 ## The brick a build starts from: a 1x4 along the gun on the mirror plane, mid-air.
 func _ensure_start_brick() -> void:
@@ -4128,10 +4119,6 @@ func _sketch_input(e: InputEvent) -> bool:
 
 
 # The kit's Sketch tool asks these, through the workshop's context (BrickWorkshopContext).
-
-func _sketch_host() -> Object:
-	return self
-
 
 ## Every stroke goes on the working plane; RMB draws one that takes area away.
 func wk_sketch_begin(_remove: bool) -> Variant:
@@ -6684,7 +6671,7 @@ func _input(e: InputEvent) -> void:
 	if _tab_key(e) or _lathe_key(e) or _placed_key(e) or _game_view_input(e):
 		get_viewport().set_input_as_handled()
 		return
-	super._input(e)
+	bench_input(e)
 
 
 ## Is a text or number box being typed in? Its Enter, Escape and Tab are its own.
@@ -7225,7 +7212,7 @@ func _rail_process() -> void:
 ## Paint only what the rail says: colour, material, or both (the workshop's own).
 func _paint_one(rid: int) -> bool:
 	if paint_what == "both":
-		return super._paint_one(rid)
+		return _paint_one_base(rid)
 	if rid < 0:
 		return false
 	var c := _colour if paint_what == "colour" else recipe.colour_of(rid)
@@ -7243,7 +7230,7 @@ func _paint_one(rid: int) -> bool:
 ## A square brush reaches a box round the dot rather than a ball.
 func _bricks_near(point: Vector3, reach: float) -> Array[int]:
 	if brush_shape != "square":
-		return super._bricks_near(point, reach)
+		return _bricks_near_base(point, reach)
 	var out: Array[int] = []
 	var tick := BrickPalette.STUD_M / BrickWorld.ticks_per_stud()
 	for rid in _placed_at.size():
@@ -7655,7 +7642,7 @@ func _explode_process() -> void:
 ## a stud, paint) works on the build where it really is. A ray that meets no part is
 ## the current part's.
 func _mouse_ray() -> Array:
-	return ray_into_parts(super._mouse_ray())
+	return ray_into_parts(_mouse_ray_base())
 
 
 func ray_into_parts(r: Array) -> Array:
@@ -9763,13 +9750,13 @@ func parts_dir() -> String:
 func _save_as(build_name: String, room_kind: String = "", tags: Dictionary = {}) -> String:
 	if build_name != recipe.name:
 		_forget_part_ids()
-	return super._save_as(build_name, room_kind, tags)
+	return _save_as_base(build_name, room_kind, tags)
 
 
 ## File > Save writes the build (the workshop's own file, to open here again: the game
 ## never reads it) and then every part of it on its own (save_parts).
 func _write(path: String) -> bool:
-	if not super._write(path):
+	if not _write_base(path):
 		return false
 	if recipe.kind in ["gun", "mech", "figure"]:
 		save_parts()

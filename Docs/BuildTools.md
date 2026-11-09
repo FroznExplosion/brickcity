@@ -989,7 +989,7 @@ Each stage: own branch, merged `--no-ff`, pushed. Every stage passes, as on main
 | 4c ✅ | The asset workshop's tabs, outliner and actions on `WkFrame` | `asset_ui_probe` |
 | 5a ✅ | **Place** (the hand: click, held-click run, RMB takes away) into the kit, the toolbox's default tool and the hand under any tool for a click it does not take | probes, gate |
 | 5b ✅ | The rest of the shared tools into the kit, one file each: measure, fill (wand), move, select, and the Shapes tool -- one tool, two gestures (asked 2026-11-08: the asset workshop's one drag, the building workshop's outline then height); Cut is the Shapes tool with a cut for its outcome. The building workshop's RMB delete is undoable (asked the same day) | probes; `wk_smoke` per tool |
-| 6a | Each of the 26 overrides becomes a context call or a tool (the asset still extends) | probes |
+| 6a ✅ | Each of the overrides (29 by 2026-11-09) becomes a hook, a setting or an entry point an owner calls (the asset still extends) | probes |
 | 6b | **No more `extends workshop.gd`**: the brick world, recipe, frames, save and load in one component both workshops own; each workshop `extends Node3D` and composes the kit | every probe, gate; a scan finds no game class named under `addons/workshop_kit/` |
 
 Done when both workshops run on the kit, each shared tool is one file under it, the kit names no
@@ -1252,3 +1252,25 @@ Kit 0.13.0: five more tools under `tools/`, one file each, with their questions 
   cut does) has its edit skipped: place 150, build_tools 346.
 * One small difference: RMB with Draw on a non-upright frame takes a brick away (the hand's);
   it used to be swallowed with the "Shapes go on the upright grid" message.
+
+### As built: stage 6a, the overrides as a seam (2026-11-09)
+
+The asset workshop overrode 29 of `workshop.gd`'s functions. Each is now one of three things,
+so that the next stage can make `workshop.gd`'s bricks a component instead of a base class:
+
+* **20 hooks** (`HOOKS` in `workshop.gd`): `_after_edit`, `_aim`, `_before_remove`, `_brick_item`,
+  `_bricks_near`, `_delete_ray`, `_hold_lock`, `_load_recipe`, `_mouse_ray`, `_paint_one`,
+  `_place`, `_place_in_city`, `_relay`, `_reset_space`, `_save_as`, `_undo`, `_write`,
+  `mirror_here`, `remove_brick`, `set_mirror`. Each is a function that calls the owner's
+  (`host`, taken with `bind_host`) when it has one, else its own `<name>_base`; the owner's
+  calls `<name>_base` where it called `super`. While the asset still extends, its functions
+  override the hooks by name, as before.
+* **4 settings** instead of overrides: `wants_tools` (the building tools and their rail; was
+  `_wants_tools`), `has_floor` (a baseplate and its foundation level; was `_lay_baseplate` and
+  `_on_floor`), `sketch_host` (who answers the kit's Sketch and Shapes tools; was
+  `_sketch_host`).
+* **5 entry points**: `_ready`, `_process`, `_input`, `_unhandled_input` are each one line calling
+  `bench_ready`, `bench_process`, `bench_input`, `bench_unhandled_input`, which an owner calls
+  where it called `super`; `_init` stays (the area's size, set before `_ready`).
+
+No behaviour changes: every probe as on main, the gate 19/19.

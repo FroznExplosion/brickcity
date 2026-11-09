@@ -294,6 +294,36 @@ var undo_stack := WkUndoStack.new()
 ## (BrickWorkshopContext). Docs/BuildTools.md section 20.
 var toolbox := WkToolbox.new()
 var wk_ctx: BrickWorkshopContext
+
+## The editor that owns this workshop's bricks, when that is not this script (Docs/BuildTools.md
+## section 20, stage 6): it may do any of HOOKS its own way. Each hook is a function here that
+## calls the owner's when it has one, and its own `<name>_base` otherwise; an owner's hook calls
+## `<name>_base` for what the workshop does, as an override called `super`.
+const HOOKS: Array[StringName] = [&"_after_edit", &"_aim", &"_before_remove", &"_brick_item",
+		&"_bricks_near", &"_delete_ray", &"_hold_lock", &"_load_recipe", &"_mouse_ray",
+		&"_paint_one", &"_place", &"_place_in_city", &"_relay", &"_reset_space", &"_save_as",
+		&"_undo", &"_write", &"mirror_here", &"remove_brick", &"set_mirror"]
+var host: Object = null
+var _hooked := {}
+## What an owner sets instead of overriding: the building tools (WorkshopTools) and their rail;
+## a floor (a baseplate and its foundation level); who answers the kit's Sketch and Shapes
+## tools (null: the building tools).
+var wants_tools := true
+var has_floor := true
+var sketch_host: Object = null
+
+
+## Take `h`'s hooks (those of HOOKS it has a function for). Not this script itself.
+func bind_host(h: Object) -> void:
+	host = h
+	_hooked.clear()
+	if h == null or h == self:
+		return
+	for n in HOOKS:
+		if h.has_method(n):
+			_hooked[n] = true
+
+
 ## The bricks and fixtures the build was opened with that undo has not taken back yet: they
 ## have no command each (on a big build that is seconds and megabytes), `_undo_opened` takes
 ## them back once the history runs out, newest first, as Z always could.
@@ -357,6 +387,10 @@ func _init() -> void:
 
 
 func _ready() -> void:
+	bench_ready()
+
+
+func bench_ready() -> void:
 	wk_ctx = BrickWorkshopContext.new(self)
 	toolbox.ctx = wk_ctx
 	_paint_tool.radius_max = PAINT_RADIUS_MAX
@@ -405,7 +439,7 @@ func _ready() -> void:
 	_build_lights()
 	_build_camera()
 	_build_hud()
-	if _wants_tools():
+	if wants_tools:
 		_tools = WorkshopTools.new()
 		_tools.name = "Tools"
 		add_child(_tools)
@@ -677,6 +711,9 @@ func _origin_for(rot: int, dims: Vector3i) -> Vector3i:
 ## The floor: one plate thick, the whole area, and not bricks (Docs/BuildTools.md section
 ## 15). The bottom course is the foundation, which keeps "is it grounded" a real question.
 func _lay_baseplate() -> void:
+	if not has_floor:
+		world.set_foundation_level(chunk, 0)   # no floor: a build stands on nothing
+		return
 	world.set_foundation_level(chunk, 1)
 	if _floor != null:
 		return
@@ -696,7 +733,7 @@ func _lay_baseplate() -> void:
 
 ## Whether a brick here would sit on the floor. It clips to that as to a plate.
 func _on_floor(cell: Vector3i) -> bool:
-	return chunk == asm.frames[0] and cell.y == 1
+	return has_floor and chunk == asm.frames[0] and cell.y == 1
 
 
 func _build_lights() -> void:
@@ -764,12 +801,6 @@ func frame_build() -> void:
 	var size: Vector3 = BrickWorld.grid_to_world(b[1])
 	var mid := lo + size * 0.5
 	_look_at(Vector3(mid.x, lo.y, mid.z), maxf(size.length() * 0.6, START_VIEW_M))
-
-
-## The building tools' rail: the building workshop's. A workshop built on this one with a
-## rail of its own (the asset workshop) says no.
-func _wants_tools() -> bool:
-	return true
 
 
 func _build_hud() -> void:
@@ -1069,6 +1100,12 @@ func _paint_ray(from: Vector3, dir: Vector3) -> bool:
 
 ## One brick into the stroke, if it is the build's and not this paint already.
 func _paint_one(rid: int) -> bool:
+	if _hooked.has(&"_paint_one"):
+		return host._paint_one(rid)
+	return _paint_one_base(rid)
+
+
+func _paint_one_base(rid: int) -> bool:
 	if rid < 0 or (recipe.colour_of(rid) == _colour and recipe.material_of(rid) == _mat):
 		return false
 	for e in _stroke:
@@ -1082,6 +1119,12 @@ func _paint_one(rid: int) -> bool:
 ## The build's bricks within `reach` metres of a point, measured to each
 ## brick's box -- so a wide brick is painted when any part of it is in reach.
 func _bricks_near(point: Vector3, reach: float) -> Array[int]:
+	if _hooked.has(&"_bricks_near"):
+		return host._bricks_near(point, reach)
+	return _bricks_near_base(point, reach)
+
+
+func _bricks_near_base(point: Vector3, reach: float) -> Array[int]:
 	var out: Array[int] = []
 	var tick := BrickPalette.STUD_M / BrickWorld.ticks_per_stud()
 	for rid in _placed_at.size():
@@ -1189,6 +1232,10 @@ func _archetype() -> int:
 # ---------------------------------------------------------------------------
 
 func _process(_dt: float) -> void:
+	bench_process(_dt)
+
+
+func bench_process(_dt: float) -> void:
 	_dot.visible = Input.mouse_mode == Input.MOUSE_MODE_CAPTURED
 	_stud_lod()
 	_section_process()
@@ -1245,6 +1292,13 @@ func _process(_dt: float) -> void:
 ## once been on top of a wall stayed at wall height while the cursor went out
 ## across the floor, which read as placement being broken.
 func _aim() -> void:
+	if _hooked.has(&"_aim"):
+		host._aim()
+		return
+	_aim_base()
+
+
+func _aim_base() -> void:
 	var ray := _mouse_ray()
 	_hold_lock(Input.is_key_pressed(KEY_E) or plane_locked)
 	_aim_ray(ray[0], ray[1])
@@ -1253,6 +1307,12 @@ func _aim() -> void:
 ## [from, dir] for the ray being aimed: through the middle of the screen (the
 ## dot) while the mouse is captured to look, under the cursor while it is free.
 func _mouse_ray() -> Array:
+	if _hooked.has(&"_mouse_ray"):
+		return host._mouse_ray()
+	return _mouse_ray_base()
+
+
+func _mouse_ray_base() -> Array:
 	var vp := get_viewport()
 	var from: Vector3 = _camera.global_position
 	var dir: Vector3 = -_camera.global_transform.basis.z
@@ -1268,6 +1328,13 @@ func _mouse_ray() -> Array:
 ## E down freezes the plane the ghost is on right now; E up lets it go. Over
 ## bare floor that is the floor, which is as much a plane as a brick top.
 func _hold_lock(on: bool) -> void:
+	if _hooked.has(&"_hold_lock"):
+		host._hold_lock(on)
+		return
+	_hold_lock_base(on)
+
+
+func _hold_lock_base(on: bool) -> void:
 	# While a run is held, the ghost stays on the plane it started on, as with E.
 	on = on or _run_on or (_tools != null and _tools.dragging())
 	if not on:
@@ -1902,6 +1969,10 @@ func _update_hud() -> void:
 # ---------------------------------------------------------------------------
 
 func _unhandled_input(e: InputEvent) -> void:
+	bench_unhandled_input(e)
+
+
+func bench_unhandled_input(e: InputEvent) -> void:
 	# The browser is a menu: nothing is built through it.
 	if _hotbar != null and _hotbar.is_browsing():
 		return
@@ -2012,6 +2083,13 @@ func _spaces_input(e: InputEvent) -> bool:
 
 
 func _place() -> void:
+	if _hooked.has(&"_place"):
+		host._place()
+		return
+	_place_base()
+
+
+func _place_base() -> void:
 	var before := recipe.size()
 	_place_one()
 	if mirror_on and recipe.size() > before and _frame == 0:
@@ -2029,6 +2107,13 @@ func mirrored_x(x: int, width: int) -> int:
 
 
 func set_mirror(on: bool) -> void:
+	if _hooked.has(&"set_mirror"):
+		host.set_mirror(on)
+		return
+	set_mirror_base(on)
+
+
+func set_mirror_base(on: bool) -> void:
 	if on:
 		mirror.turn_on(_cell)
 	else:
@@ -2037,6 +2122,13 @@ func set_mirror(on: bool) -> void:
 
 ## Put the plane down the middle of the ghost.
 func mirror_here() -> void:
+	if _hooked.has(&"mirror_here"):
+		host.mirror_here()
+		return
+	mirror_here_base()
+
+
+func mirror_here_base() -> void:
 	mirror.through(_cell, BrickPalette.size_of(_archetype_name()))
 
 
@@ -2254,6 +2346,12 @@ func _clear_fixtures(keep: int = 0) -> void:
 ## build; the one time a brick comes out of the middle is when an undo laid bricks back after
 ## it (a delete undone), and then as RMB takes one (`_remove_rid`), every id renumbered.
 func _undo() -> bool:
+	if _hooked.has(&"_undo"):
+		return host._undo()
+	return _undo_base()
+
+
+func _undo_base() -> bool:
 	return undo_stack.undo()
 
 
@@ -2326,6 +2424,12 @@ func _undo_opened() -> WkCommand:
 
 ## A brick as redo would lay it again.
 func _brick_item(rid: int) -> Dictionary:
+	if _hooked.has(&"_brick_item"):
+		return host._brick_item(rid)
+	return _brick_item_base(rid)
+
+
+func _brick_item_base(rid: int) -> Dictionary:
 	return {"arch": recipe.part_of(rid), "cell": recipe.cell_of(rid), "colour": recipe.colour_of(rid),
 			"mat": recipe.material_of(rid), "role": recipe.role_of(rid), "af": int(_placed_at[rid][0])}
 
@@ -2381,6 +2485,12 @@ func _forget_rids(gone: PackedInt32Array) -> void:
 
 
 func _relay(item: Dictionary) -> bool:
+	if _hooked.has(&"_relay"):
+		return host._relay(item)
+	return _relay_base(item)
+
+
+func _relay_base(item: Dictionary) -> bool:
 	if item.is_empty() or not palette.has(String(item.arch)):
 		return false
 	var af := int(item.af)
@@ -2411,6 +2521,12 @@ func _relay(item: Dictionary) -> bool:
 ## goes as a whole -- it is one record, not the bricks it laid. The baseplate
 ## is not part of the build, so it does not go at all.
 func _delete_ray(from: Vector3, dir: Vector3) -> bool:
+	if _hooked.has(&"_delete_ray"):
+		return host._delete_ray(from, dir)
+	return _delete_ray_base(from, dir)
+
+
+func _delete_ray_base(from: Vector3, dir: Vector3) -> bool:
 	var hit := _first_hit(from, dir)
 	if hit.is_empty():
 		return false
@@ -2473,6 +2589,12 @@ func _redo_delete(c: WkCommand) -> bool:
 
 ## Take a brick up as RMB would, found by part and cell. True if it went.
 func remove_brick(arch: String, cell: Vector3i, af: int = 0) -> bool:
+	if _hooked.has(&"remove_brick"):
+		return host.remove_brick(arch, cell, af)
+	return remove_brick_base(arch, cell, af)
+
+
+func remove_brick_base(arch: String, cell: Vector3i, af: int = 0) -> bool:
 	var i := find_brick(arch, cell, af)
 	if i < 0:
 		return false
@@ -2584,12 +2706,19 @@ func wk_camera_flat(on: bool) -> void:
 ## Who answers the kit's Sketch tool (BrickWorkshopContext): the building workshop's tools,
 ## which make kept shapes of a stroke. The asset workshop answers itself.
 func _sketch_host() -> Object:
-	return _tools
+	return sketch_host if sketch_host != null else _tools
 
 
 ## A brick at recipe id `rid` is about to leave from the middle (RMB, a cut, an undo): for a
 ## workshop that keeps something per brick (the asset workshop's part tags).
 func _before_remove(_rid: int) -> void:
+	if _hooked.has(&"_before_remove"):
+		host._before_remove(_rid)
+		return
+	_before_remove_base(_rid)
+
+
+func _before_remove_base(_rid: int) -> void:
 	pass
 
 
@@ -2692,6 +2821,13 @@ func _recipe_frame_for(asm_frame: int) -> int:
 
 
 func _after_edit() -> void:
+	if _hooked.has(&"_after_edit"):
+		host._after_edit()
+		return
+	_after_edit_base()
+
+
+func _after_edit_base() -> void:
 	_dirty = true
 	undo_stack.forget_redo()   # an edit makes redo meaningless (not while undoing or redoing)
 	if _spaces != null:
@@ -3239,6 +3375,13 @@ func _load() -> void:
 ## Start over with nothing on the baseplate: every frame dropped and rebuilt
 ## empty, every stack emptied. New, and the first half of every load.
 func _reset_space() -> void:
+	if _hooked.has(&"_reset_space"):
+		host._reset_space()
+		return
+	_reset_space_base()
+
+
+func _reset_space_base() -> void:
 	_cancel_stamp()
 	_stamp_moving = false
 	_select_group(-1)
@@ -3283,6 +3426,13 @@ func _reset_space() -> void:
 ## Load a recipe into a cleared space. The generated buildings go first, as the
 ## city lays them first (TowerBlockout.flatten).
 func _load_recipe(r: BuildRecipe) -> void:
+	if _hooked.has(&"_load_recipe"):
+		host._load_recipe(r)
+		return
+	_load_recipe_base(r)
+
+
+func _load_recipe_base(r: BuildRecipe) -> void:
 	_reset_space()
 	recipe = r
 	if _tools != null:
@@ -3361,6 +3511,13 @@ func _asm_frame_for(rot: int, ticks: Vector3i) -> int:
 ## a hole in it, and confirm it breaks like a generated building -- because it
 ## IS one. Section 8.1: the city places finished recipes, it does not author.
 func _place_in_city() -> void:
+	if _hooked.has(&"_place_in_city"):
+		host._place_in_city()
+		return
+	_place_in_city_base()
+
+
+func _place_in_city_base() -> void:
 	if not recipe.has_content():
 		print("[workshop] nothing built yet")
 		return
@@ -3505,6 +3662,12 @@ func _save_current() -> void:
 ## File > Save As: a named file in the library for this kind of build --
 ## buildings where the city placer finds them, rooms filed by room kind.
 func _save_as(build_name: String, room_kind: String = "", tags: Dictionary = {}) -> String:
+	if _hooked.has(&"_save_as"):
+		return host._save_as(build_name, room_kind, tags)
+	return _save_as_base(build_name, room_kind, tags)
+
+
+func _save_as_base(build_name: String, room_kind: String = "", tags: Dictionary = {}) -> String:
 	recipe.name = build_name
 	var dir := BuildRecipe.player_dir(recipe.kind)   # the player's, not the shipped one
 	if recipe.kind == "room":
@@ -3536,6 +3699,12 @@ static func slug(n: String) -> String:
 
 
 func _write(path: String) -> bool:
+	if _hooked.has(&"_write"):
+		return host._write(path)
+	return _write_base(path)
+
+
+func _write_base(path: String) -> bool:
 	if recipe.kind == "room" or recipe.kind == "item":
 		# What the generator needs to choose a template without building it.
 		var b := recipe.bounds()
@@ -4197,6 +4366,10 @@ func _handle_under() -> String:
 ## Handles take the click before anything else does -- ahead of the camera,
 ## which would otherwise capture the mouse, and of placement.
 func _input(e: InputEvent) -> void:
+	bench_input(e)
+
+
+func bench_input(e: InputEvent) -> void:
 	if _run_on and e is InputEventMouseMotion:
 		_run_moved += (e as InputEventMouseMotion).relative.length()
 	if _tools != null and _tools.view.input_motion(e):
