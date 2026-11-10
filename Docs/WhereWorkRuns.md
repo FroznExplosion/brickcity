@@ -189,13 +189,15 @@ read-back in `scripts/` was listed and each one's caller read:
   is edited. Terrain's to judge.
 
 **The one fix left worth making: `take_bands` without the wait.** Written 2026-11-09 on branch
-`owed-bands` (worktree `bc-owed`), **not merged, not yet run**: `take_bands(id, owed)` hands the
+`owed-bands`, **merged 2026-11-10** after the restart (barrage 8/0, hang 10/0, `--chamfer` 14/0,
+`--big --shot` clean, `--breaklag` 26/0 with a new check that topples a building mid-upload: 3
+bands hung from their uploads, 0 rebuilt, no holes): `take_bands(id, owed)` hands the
 building's unfinished band uploads to the piece (`BrickIsland.owed_bands`, slot -> [task, holder,
 arrays, alive]); `_fill_band_holes` hangs each once its task is done if the chunk's alive count is
 still the one its arrays were made at, and builds the band itself if not
 (`band_owed_taken` / `band_owed_stale`); every place a piece lets its bands go drops them
-(`_drop_owed`, TaskReaper). Before merging: `--import` clean, `--big --shot`, `barrage_probe`,
-`--chamfer`, `hang_probe`, and a look at a tower toppling right after its first hit (no holes).
+(`_drop_owed`, TaskReaper). In play it is rare: the solve waits for a building's bands before it
+can topple it, so `_owed_band_check` (in `--breaklag`) forces it.
 The design, as planned: Hand the building's
 unfinished band jobs to the piece that takes the bands instead of waiting: the piece keeps
 them as owed bands, its slot empty; when `_harvest_band_jobs` finds one done it attaches the

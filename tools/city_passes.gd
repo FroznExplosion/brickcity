@@ -1639,6 +1639,10 @@ func _run_breaklag_pass() -> void:
 		# than the whole tower toppling off its stump.
 		await _break_lag(biggest, true,
 				TowerRecipe.total_plates(biggest.recipe.courses) * City.PLATE / 3.0)
+	await _owed_band_check()
+	# A toppled building's bands still uploading go to its piece (WhereWorkRuns 3.1).
+	print("[breaklag] band holes filled %d; owed bands hung %d, stale %d" % [
+			city.islands.band_holes_filled, city.islands.band_owed_taken, city.islands.band_owed_stale])
 	print("[breaklag] %d ok, %d FAIL" % [city._gate_pass, city._gate_fail])
 	city.get_tree().quit(1 if city._gate_fail > 0 else 0)
 
@@ -1650,6 +1654,54 @@ func _run_breaklag_pass() -> void:
 ## sees as a freeze -- its worst, how many went over 33 and 100 ms, and what the
 ## physics tick of the worst one spent, part by part (_part, _mark). `--far`
 ## takes the same shots from 150 m, the case that was fine.
+
+## A building toppled while its bands are still uploading (WhereWorkRuns 3.1):
+## the piece takes the uploads instead of the tick waiting for them
+## (CityDrawing.take_bands, BrickIsland.owed_bands), and every band slot is
+## drawn a moment later -- hung from its upload, or built again if a brick
+## changed meanwhile. The solve waits for a building's bands before it can
+## topple it, so play rarely gets here; this makes it happen.
+func _owed_band_check() -> void:
+	var pick: BuildingRegistry.Building = null
+	for c in city.registry.buildings:
+		if c.is_build() or c.is_materialised() or city._wide_ids.has(c.id):
+			continue
+		if c.recipe.courses >= 8:
+			pick = c
+			break
+	if pick == null:
+		print("  --   owed bands: no building left to try")
+		return
+	var chunk := city._promote(pick.id, false)
+	var uploading := false
+	for i in 300:
+		for job in city._band_jobs:
+			if int(job[0]) == pick.id:
+				uploading = true
+				break
+		if uploading:
+			break
+		await _frames(1)
+	_gate_ok("owed bands: a promoted building has bands uploading", uploading)
+	if not uploading:
+		return
+	var taken_was: int = city.islands.band_owed_taken
+	var stale_was: int = city.islands.band_owed_stale
+	city._topple(pick.id)
+	var isl: BrickIsland = city.islands.find_by_chunk(chunk)
+	_gate_ok("owed bands: toppled then, its piece holds the uploads, not the tick",
+			isl != null and not isl.owed_bands.is_empty(),
+			"no piece" if isl == null else "none owed")
+	if isl == null:
+		return
+	await _frames(60)
+	var hung: int = city.islands.band_owed_taken - taken_was
+	var stale: int = city.islands.band_owed_stale - stale_was
+	_gate_ok("owed bands: each was hung or built again -- %d hung, %d rebuilt" % [hung, stale],
+			hung + stale > 0 and isl.owed_bands.is_empty())
+	_gate_ok("owed bands: and the piece has no holes",
+			not isl.is_valid() or isl.bands.is_empty() or city.islands._draws_bands(isl))
+
 func _run_bigbreak_pass() -> void:
 	var far := "--far" in OS.get_cmdline_user_args()
 	var b: BuildingRegistry.Building = null
@@ -6160,6 +6212,10 @@ func _report_profile() -> void:
 	print("[prof] overlaps alive at once, worst: %d" % _bi.overlap_peak)
 	print("[prof] invisible pieces: %d went blind, worst %d tick(s), mean %.2f, biggest %d bricks" % [
 			_bi.blind_count, _bi.blind_worst, _bi.blind_mean, _bi.meshless_worst_blocks])
+	# A toppled building's bands still uploading go to its piece (WhereWorkRuns 3.1):
+	# hung when done, or built again when a brick changed meanwhile.
+	print("[prof] band holes filled %d; owed bands hung %d, stale %d" % [
+			city.islands.band_holes_filled, city.islands.band_owed_taken, city.islands.band_owed_stale])
 	print("[prof] spawn total %.0f ms = split %.0f (C++ chunk+blocks) + shapes %.0f + node %.0f + mesh %.0f" % [
 			sp.total, sp.split, sp.shapes, sp.node, sp.mesh])
 	if city._frame_samples > 0:
