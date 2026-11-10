@@ -206,15 +206,29 @@ band's index baseline says which, as `_bands_done` already relies on). Touches
 `city_drawing.gd` and `island_manager.gd` (the bands a piece carries, its patches, its
 hand-over to stand-ins); wants `--big --shot`, `barrage_probe` and `--chamfer` after.
 
-**Next: measure the switch again on today's main.** Much has changed since the 11-04 numbers
-(pieces' meshes made and uploaded on workers, stand-ins while a mesh is made), and both may
-favour the separate thread. Wait for a quiet machine: on 2026-11-09 it had 105 MB of RAM
-available after 25 days up, with a 2.4 GB kernel nonpaged pool (normal is well under 0.5;
-a driver leak is the likely cause, see CLAUDE.md's crash notes). Paging then stalls frames
-350-520 ms wherever they are, and worst frames are what this measures. Restart first, check
-`heat_sum.py` prints no LOW RAM, then `--render-thread separate` against the default,
-alternated: the street walk, `--big --shot`, `--chamfer`, `--light`. The switch itself stays
-the user's call: Godot still calls the separate model experimental.
+**Measured again 2026-11-10, after a restart: not switched.** Main at fd3e896b (owed bands in),
+editor closed, no other Godot running, 5 GB free (no LOW RAM), each run started under 80 C
+and none held back (peak under 70 C). `--big --shot`, alternated:
+
+| Run | frame mean | worst | frames over 33 ms | slow frames: script tick / waiting on the renderer |
+|---|---|---|---|---|
+| default 1 | 16.8 | 56.6 | 4 of 906 | 12.1 / draw 20.9 |
+| separate 1 | 17.2 | 150.0 | 7 of 905 | 9.8 / process 21.4 + sync 5.1 |
+| default 2 | 16.7 | 50.0 | 4 of 906 | 10.5 / draw 20.2 |
+| separate 2 | 17.2 | 150.0 | 6 of 905 | 6.6 / process 21.3 + sync 7.3 |
+
+The thread does take the renderer's work off the script's tick (the slow frames' city tick is
+2-4 ms lower), but the frame still waits for it: the renderer's ~21 ms moves from `draw` to
+`process` + `sync` (waiting on the render thread), the GPU is ~11 ms a frame either way, and
+the separate runs have more slow frames and a 150 ms frame each. On this machine the frame is
+paced by the renderer's own work, not by the main thread calling into it, so a second thread
+cannot shorten it. With the 11-04 street walk (the same either way) and Godot still calling
+the model experimental, the default stays. What would help instead is less renderer work per
+frame (fewer draws and uploads: "smaller ways", below) and the near tier's cuts
+(BrickBevel.md 6).
+
+The memory leak seen 2026-11-09 (nonpaged pool 2.4 GB after 25 days) was already 838 MB six
+hours after the restart: worth watching, and an AMD driver update if it climbs.
 
 **Smaller ways at the same cost** if 3.1 is never done: fewer, larger uploads (a building's
 bands merged), uploads only between ticks, and renderer calls batched to one point a tick
