@@ -121,35 +121,35 @@ func _check_layout() -> void:
 
 func _check_workshop() -> void:
 	print("\nthe workshop draws them")
-	var base: int = _ws._stud_count
+	var base: int = _ws.bench._stud_count
 	_ok("the floor is not bricks: no studs yet", base == 0, "%d" % base)
 
-	_ws._part_index = BrickPalette.parts().find("brick_2x4")
-	_ws._axis_z = false
-	_ws._cell = Vector3i(10, 1, 10)
-	_ws._update_ghost()
-	_ws._place()
-	_ok("a 2x4 on the floor shows its eight", _ws._stud_count == base + 8, "%d vs %d" % [_ws._stud_count, base + 8])
+	_ws.bench._part_index = BrickPalette.parts().find("brick_2x4")
+	_ws.bench._axis_z = false
+	_ws.bench._cell = Vector3i(10, 1, 10)
+	_ws.bench._update_ghost()
+	_ws.bench._place()
+	_ok("a 2x4 on the floor shows its eight", _ws.bench._stud_count == base + 8, "%d vs %d" % [_ws.bench._stud_count, base + 8])
 
-	_ws._part_index = BrickPalette.parts().find("tile_2x2")
-	_ws._cell = Vector3i(20, 1, 20)
-	_ws._update_ghost()
-	_ws._place()
-	_ok("a tile on the floor shows none", _ws._stud_count == base + 8, "%d vs %d" % [_ws._stud_count, base + 8])
+	_ws.bench._part_index = BrickPalette.parts().find("tile_2x2")
+	_ws.bench._cell = Vector3i(20, 1, 20)
+	_ws.bench._update_ghost()
+	_ws.bench._place()
+	_ok("a tile on the floor shows none", _ws.bench._stud_count == base + 8, "%d vs %d" % [_ws.bench._stud_count, base + 8])
 
-	_ws._undo()
-	_ws._undo()
-	_ok("undo takes them away", _ws._stud_count == base, "%d" % _ws._stud_count)
+	_ws.bench._undo()
+	_ws.bench._undo()
+	_ok("undo takes them away", _ws.bench._stud_count == base, "%d" % _ws.bench._stud_count)
 
-	var f0: int = _ws.asm.frames[0]
-	_ws._place()
+	var f0: int = _ws.bench.asm.frames[0]
+	_ws.bench._place()
 	var mmi: MultiMeshInstance3D = null
-	for key in _ws._frame_studs:
+	for key in _ws.bench._frame_studs:
 		if (key is Vector2i and key.x == f0) or (key is int and key == f0):
-			mmi = _ws._frame_studs[key]
+			mmi = _ws.bench._frame_studs[key]
 	# Under a section's mesh, or the frame's own when the library cannot draw in sections.
-	var holder: Node = null if mmi == null else (mmi.get_parent().get_parent() if _ws._draws_sections() else mmi.get_parent())
+	var holder: Node = null if mmi == null else (mmi.get_parent().get_parent() if _ws.bench._draws_sections() else mmi.get_parent())
 	_ok("they hang off the frame's own mesh, so a rotated frame turns them",
-			mmi != null and holder == _ws._frame_meshes.get(f0))
+			mmi != null and holder == _ws.bench._frame_meshes.get(f0))
 	_ok("and they cast no shadow",
 			mmi != null and mmi.cast_shadow == GeometryInstance3D.SHADOW_CASTING_SETTING_OFF)

@@ -55,7 +55,7 @@ func _tick() -> void:
 		return
 	_ws.set_process(false)
 	# Nothing a probe does may land in the player's own files.
-	_ws._hotbar.save_path = "user://_probe_asset_hotbar.json"
+	_ws.bench._hotbar.save_path = "user://_probe_asset_hotbar.json"
 	_ws.toolbars_save = "user://_probe_asset_toolbars.json"
 	_wipe(DIR)
 	print("part save probe")
@@ -116,7 +116,7 @@ func _generator() -> void:
 
 ## A four-part gun on the side plane, as the workshop probe's round 8 builds one.
 func _build_gun() -> void:
-	_ws._new_build()
+	_ws.bench._new_build()
 	_ws.work_plane = "side"
 	for spec in [["body", 3, [Vector2(20, 30), Vector2(40, 30), Vector2(40, 42), Vector2(20, 42)]],
 			["grip", 3, [Vector2(34, 14), Vector2(38, 14), Vector2(39, 30), Vector2(35, 30)]],
@@ -142,7 +142,7 @@ func _save() -> void:
 	_point("magazine", "mount", "magazine", "mag.narrow", [28, 30, 1])
 	_point("body", "socket", "magazine", "mag.narrow", [28, 30, 2])
 	_ws.select_part(0)
-	_ws._builds_dir = DIR
+	_ws.bench._builds_dir = DIR
 	var path: String = _ws._save_as("Probe Parts")
 	var parts_dir: String = _ws.parts_dir()
 	_ok("the build saved, its parts beside it in a test's folder", path != "" and parts_dir == DIR + "parts/", parts_dir)
@@ -172,7 +172,7 @@ func _save() -> void:
 			and "detaches" in mag.tags)
 	var bricks := BuildRecipe.from_dict(mag.extra.get("bricks", {})) if mag != null else BuildRecipe.new()
 	var mag_bricks := 0
-	for i in _ws.recipe.size():
+	for i in _ws.bench.recipe.size():
 		if _ws.part_names[_ws.part_of[i]] == "magazine":
 			mag_bricks += 1
 	_ok("it holds its own bricks and no others", bricks.size() == mag_bricks and mag_bricks > 0,
@@ -262,9 +262,9 @@ func _save() -> void:
 	_ok("Save As another name: new ids", _ws.part_ids.size() == 4 and _ws.part_ids.body != old_ids.body
 			and String(_ws.part_ids.body).contains("probe_parts_two"), str(_ws.part_ids.body))
 	_ok("eight parts now, the old ones kept", DirAccess.get_directories_at(parts_dir).size() == 8)
-	_ws._new_build()
+	_ws.bench._new_build()
 	_ok("a new build has no part ids", _ws.part_ids.is_empty())
-	_ws._builds_dir = BuildRecipe.player_dir()
+	_ws.bench._builds_dir = BuildRecipe.player_dir()
 
 
 ## A catalogue part with a scene of its own (a box, and a socket node per `sockets`

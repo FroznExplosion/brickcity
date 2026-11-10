@@ -132,6 +132,7 @@ func _physics_process(delta: float) -> bool:
 					_worst_tilt > 0.3 and _min_sub > 0.0 and _worst_off == 0 and _crew.is_on_floor(),
 					"worst tilt %.1f deg, least submerged %.1f m3, %d frame(s) the crew was off it, on the floor %s" % [
 					_worst_tilt, _min_sub, _worst_off, _crew.is_on_floor()])
+			_worker_check()
 			BrickWave.set_wave_gain(0.0001)
 			_crew.body.queue_free()
 			_crew = null
@@ -199,6 +200,23 @@ var _peak_water := 0.0
 
 
 ## How far its deck is under the calm sea (below 0: over it).
+## Its forces on a worker (Docs/Hulls.md 11 E6): the same snapshot worked out on a
+## worker and here gives the same forces, and the float's jobs were ready in time
+## on nearly every tick so far.
+func _worker_check() -> void:
+	var a := _boat._snapshot(_boat.wave_t)
+	var b := a.duplicate()
+	_boat._forces(a)
+	var job := WorkerThreadPool.add_task(_boat._forces.bind(b))
+	WorkerThreadPool.wait_for_task_completion(job)
+	var same := (a.force as Vector3).is_equal_approx(b.force) and (a.torque as Vector3).is_equal_approx(b.torque)
+	_ok("worker: buoyancy worked out off the main thread, the same forces, ready in time",
+			_boat.threaded and same and _boat.late_ticks <= _frames / 20,
+			"%d of %d ticks late, the job %.2f ms, the main thread's part %.2f ms (worst %.2f)" % [
+			_boat.late_ticks, _frames, _boat.work_us / 1000.0, _boat.float_us / 1000.0,
+			_boat.float_us_max / 1000.0])
+
+
 func _deck_under() -> float:
 	var deck_y: int = int(_boat.recipe.meta.boat.deck_y) - _boat.recipe.origin().y
 	var lo := INF

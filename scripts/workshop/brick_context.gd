@@ -7,15 +7,21 @@ extends WkContext
 ##
 ## A tool's questions go to the part of the workshop that owns that tool's outcome:
 ## `ws._sketch_host()` for a sketch (the building workshop's tools make kept shapes of it; the
-## asset workshop draws it into a part's sketch).
+## asset workshop draws it into a part's sketch); the editor that owns the bench (`_editor()`)
+## for measure, fill and move, which only the asset workshop has.
 
-## The workshop (scripts/workshop.gd, or the asset workshop that extends it).
+## The workshop's bricks (BrickBench, scripts/workshop/brick_bench.gd).
 var ws
 
 
 func _init(workshop) -> void:
 	ws = workshop
 	undo_stack = workshop.undo_stack
+
+
+## The editor that owns the bench (the asset workshop or the building workshop).
+func _editor() -> Object:
+	return ws.host if ws.host != null else ws
 
 
 func sketch_begin(remove: bool) -> Variant:
@@ -161,27 +167,27 @@ func erase_at_cursor() -> void:
 # Measure, fill (the wand), move: the asset workshop's.
 
 func measure_point() -> Variant:
-	return ws.wk_measure_point()
+	return _editor().wk_measure_point()
 
 
 func measure_show(points: Array[Vector3]) -> void:
-	ws.wk_measure_show(points)
+	_editor().wk_measure_show(points)
 
 
 func fill_at_cursor(width: int) -> int:
-	return ws.wk_fill_at_cursor(width)
+	return _editor().wk_fill_at_cursor(width)
 
 
 func move_grab() -> Variant:
-	return ws.wk_move_grab()
+	return _editor().wk_move_grab()
 
 
 func move_to(by: Vector3) -> void:
-	ws.wk_move_to(by)
+	_editor().wk_move_to(by)
 
 
 func move_drop(by: Vector3) -> void:
-	ws.wk_move_drop(by)
+	_editor().wk_move_drop(by)
 
 
 # Shapes and Select: the building workshop's tools (kept shapes, cuts, push-pull) or the asset

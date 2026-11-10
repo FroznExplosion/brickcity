@@ -59,9 +59,20 @@ var last_submerged := 0.0
 ## Water aboard, kg, last tick.
 var water_mass := 0.0
 var _cell_v := 0.0
-## A tick afloat (_float), microseconds: smoothed, and the worst.
+## A tick afloat on the main thread, microseconds: smoothed, and the worst.
 var float_us := 0.0
 var float_us_max := 0.0
+## Its forces worked out on a worker (Docs/Hulls.md 11 E6): after each tick's motion
+## the next tick's forces start on the WorkerThreadPool from where it now is; the
+## next tick takes them if done (never waited on), else the last ones again.
+var threaded := true
+## The forces' job and the snapshot it fills; the forces in use.
+var _job := -1
+var _snap := {}
+var _have := {}
+## Ticks that took the last forces again (the job not done), and the job's own time.
+var late_ticks := 0
+var work_us := 0.0
 
 
 ## A boat of seed `sd` at `at`, its ghost in `ghost_hulls` (a GhostHulls).
@@ -124,7 +135,10 @@ func _physics_process(delta: float) -> void:
 		ride()
 	wave_t = float(wave_clock.call()) if wave_clock.is_valid() else wave_t + delta
 	var t0 := Time.get_ticks_usec()
-	_float(delta)
+	if threaded:
+		_float_threaded(delta)
+	else:
+		_float(delta)
 	# What a tick afloat costs (Docs/Hulls.md 11 E6: is a thread worth it?).
 	var us := float(Time.get_ticks_usec() - t0)
 	float_us_max = maxf(float_us_max, us)
@@ -251,9 +265,64 @@ func _kept_out(c: Array, sub: float) -> float:
 
 
 ## One tick afloat: the swell's lift at each column, gravity at its centre, the
-## water's drag; its motion integrated (semi-implicit), its transform set.
+## water's drag; its motion integrated (semi-implicit), its transform set. All on
+## this thread.
 func _float(dt: float) -> void:
-	var xf := global_transform
+	var sn := _snapshot(wave_t)
+	_forces(sn)
+	_integrate(dt, sn)
+
+
+## A tick afloat with its forces from the worker (E6): the job started at the end
+## of the last tick, from where the boat then was -- so, done in time, the same
+## forces `_float` would work out now. Not done: the last ones once more. Moved by
+## anything else since (a launch, a probe): worked out here instead.
+func _float_threaded(dt: float) -> void:
+	if _job >= 0 and WorkerThreadPool.is_task_completed(_job):
+		WorkerThreadPool.wait_for_task_completion(_job)
+		_job = -1
+		_have = _snap
+		work_us = float(_have.get("us", 0.0))
+	elif _job >= 0:
+		late_ticks += 1
+	if _have.is_empty() or not (_have.xf as Transform3D).is_equal_approx(global_transform):
+		if _job < 0 or _have.is_empty():
+			_have = _snapshot(wave_t)
+			_forces(_have)
+	_integrate(dt, _have)
+	if _job < 0:
+		_snap = _snapshot(wave_t + dt)
+		_job = WorkerThreadPool.add_task(_forces.bind(_snap), true, "boat float")
+
+
+func _exit_tree() -> void:
+	# Its job reads this boat: let it finish before the boat goes (teardown, not play).
+	if _job >= 0:
+		WorkerThreadPool.wait_for_task_completion(_job)
+		_job = -1
+
+
+## Where it is and how it moves, for `_forces`: everything that reads the scene
+## tree or the water is read here, on the main thread.
+func _snapshot(t: float) -> Dictionary:
+	var water := PackedFloat32Array()
+	if hull_water != null and hull_water.any():
+		_column_water(0)
+		water = _cw.duplicate()
+	_wet_ref()
+	return {"xf": global_transform, "vel": vel, "ang": ang, "t": t, "sea": sea, "water": water}
+
+
+## The forces on it at snapshot `sn`, written back into it: force, torque (world),
+## sub (m^3 under), aboard (kg of water). Reads only the snapshot and what
+## `_measure` set once, so it runs on a worker (BrickWave.sample_heights is pure).
+func _forces(sn: Dictionary) -> void:
+	var t0 := Time.get_ticks_usec()
+	var xf: Transform3D = sn.xf
+	var vel0: Vector3 = sn.vel
+	var ang0: Vector3 = sn.ang
+	var sea0: float = sn.sea
+	var water: PackedFloat32Array = sn.water
 	var up := xf.basis.y.normalized()
 	var at := PackedVector2Array()
 	var bottoms: Array[Vector3] = []
@@ -261,29 +330,28 @@ func _float(dt: float) -> void:
 		var p: Vector3 = xf * (c[0] as Vector3)
 		bottoms.append(p)
 		at.append(Vector2(p.x, p.z))
-	var waves := BrickWave.sample_heights(at, wave_t)
+	var waves := BrickWave.sample_heights(at, float(sn.t))
 	var c_w := xf * com
 	var force := Vector3(0.0, -mass * G, 0.0)
 	var torque := Vector3.ZERO
 	var sub_total := 0.0
 	var aboard := 0.0
+	var wet_ref := maxf(_wet_ref_v, 1.0)
 	for k in columns.size():
 		var c: Array = columns[k]
 		var p := bottoms[k]
 		# The water in this column weighs on it, where it is (Docs/Hulls.md 7: a
 		# flooded side lists it, enough sinks it).
-		if hull_water != null and hull_water.any():
-			var wsum := _column_water(k)
-			if wsum > 0.0:
-				var wm := wsum * _cell_v * WATER
-				aboard += wm
-				var down := Vector3(0.0, -wm * G, 0.0)
-				var rw := p + up * 0.5 - c_w
-				force += down
-				torque += rw.cross(down)
+		if water.size() > k and water[k] > 0.0:
+			var wm := water[k] * _cell_v * WATER
+			aboard += wm
+			var down := Vector3(0.0, -wm * G, 0.0)
+			var rw := p + up * 0.5 - c_w
+			force += down
+			torque += rw.cross(down)
 		# The surface's height there (absolute: the sea level and the wave). NaN at a
 		# wave gain of exactly 0 (BrickWave's): the calm sea.
-		var h := waves[k] if waves.size() > k and not is_nan(waves[k]) else sea
+		var h := waves[k] if waves.size() > k and not is_nan(waves[k]) else sea0
 		var depth := (h - p.y) / maxf(up.y, 0.3)
 		var sub := clampf(depth, 0.0, float(c[1]))
 		if sub <= 0.0:
@@ -292,15 +360,31 @@ func _float(dt: float) -> void:
 		var at_p := p + up * sub * 0.5
 		var lift := Vector3(0.0, WATER * G * _kept_out(c, sub), 0.0)
 		var r := at_p - c_w
-		var v_p := vel + ang.cross(r)
+		var v_p := vel0 + ang0.cross(r)
 		# A wet column's drag: its share of the boat's mass, damped at DRAG.
-		var share := mass * float(c[2]) * sub / _wet_ref()
+		var share := mass * float(c[2]) * sub / wet_ref
 		var drag := -v_p * share * DRAG
 		force += lift + drag
 		torque += r.cross(lift + drag)
+	sn.force = force
+	sn.torque = torque
+	sn.sub = sub_total
+	sn.aboard = aboard
+	sn.us = float(Time.get_ticks_usec() - t0)
+
+
+## Its motion one tick on under forces `f` (a `_forces` snapshot's): the velocity
+## it has now, so a late force pushes the boat as it moves, not as it was.
+func _integrate(dt: float, f: Dictionary) -> void:
+	var xf := global_transform
+	var force: Vector3 = f.force
+	var torque: Vector3 = f.torque
+	var aboard: float = f.aboard
+	var sub_total: float = f.sub
 	last_submerged = sub_total
 	water_mass = aboard
 	afloat = sub_total > 0.0
+	var c_w := xf * com
 	vel += force / (mass + aboard) * dt
 	# Angular: in its own axes, its inertia's diagonal.
 	var b := xf.basis.orthonormalized()

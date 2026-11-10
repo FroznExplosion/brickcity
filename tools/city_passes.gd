@@ -8929,3 +8929,92 @@ func _run_harbour_pass() -> void:
 	check.call("off the pawn: off the boat's ghost", not is_instance_valid(pawn) or pawn.ghost == null, "")
 	print("[harbour] %d ok, %d FAIL" % [tally[0], tally[1]])
 	city.get_tree().quit(1 if int(tally[1]) > 0 else 0)
+
+
+## What a promotion costs, its first half and the ticks after it
+## (Docs/HandoffPerf.md 6.5; EngineChoice "What to do instead" 1 and 2). The
+## biggest buildings, one at a time: the first PROMOTE_HITS as a hit lays them
+## (the storeys round a blast at the foot, solved), the rest walked up to
+## (laid whole, no solve). For each, `_promote` timed by its parts, then every
+## tick until its bake is handed over and its bands are built: the worst of the
+## phases that follow from it. Prints numbers; it checks nothing. Timing:
+## editor closed (CLAUDE.md).
+##
+##     godot --path . res://scenes/city.tscn -- --promote [--big]
+const PROMOTE_HITS := 6
+const PROMOTE_WALKS := 6
+
+
+func _run_promote_pass() -> void:
+	var picks: Array = []
+	for c in city.registry.buildings:
+		if c.is_build() or c.toppled or c.is_materialised() or city._wide_ids.has(c.id):
+			continue
+		picks.append(c)
+	picks.sort_custom(func(a: BuildingRegistry.Building, c: BuildingRegistry.Building) -> bool:
+		return a.recipe.courses * a.recipe.footprint_x * a.recipe.footprint_z \
+				> c.recipe.courses * c.recipe.footprint_x * c.recipe.footprint_z)
+	picks = picks.slice(0, PROMOTE_HITS + PROMOTE_WALKS)
+	print("[promote] %d building(s): the first %d as a hit lays them, the rest walked up to" % [
+			picks.size(), mini(PROMOTE_HITS, picks.size())])
+	await _frames(120)
+	city._sampling = true
+	var keys := ["script_total", "promote_finish", "bands", "remesh", "collision", "solve",
+			"stream", "render", "damage", "islands"]
+	for k in picks.size():
+		var b: BuildingRegistry.Building = picks[k]
+		var hit := k < PROMOTE_HITS
+		var fx: float = b.recipe.footprint_x * City.STUD
+		var foot: Vector3 = b.xform * Vector3(fx * 0.5, 3.0, 0.0)
+		var out: Vector3 = (b.xform.basis * Vector3(0.0, 0.0, -1.0)).normalized()
+		city.camera.global_position = foot + out * 20.0 + Vector3(0.0, 2.0, 0.0)
+		city.camera.look_at(foot, Vector3.UP)
+		await city.get_tree().physics_frame
+		if b.is_materialised():
+			print("[promote]   building %d was promoted by something else first; skipped" % b.id)
+			continue
+		var storeys := city._storeys_for(b.id, foot, 3.0) if hit else PackedInt32Array()
+		var t0 := Time.get_ticks_usec()
+		var chunk := city._promote(b.id, hit, storeys)
+		var ms := float(Time.get_ticks_usec() - t0) / 1000.0
+		var parts: Dictionary = city._promote_parts.duplicate()
+		if chunk < 0:
+			print("[promote]   building %d did not promote" % b.id)
+			continue
+		var worst := {}
+		var worst_tick := {}
+		var frames := 0
+		var after := 0
+		while frames < 900 and after < 30:
+			await city.get_tree().physics_frame
+			frames += 1
+			if float(city._prof.get("script_total", 0.0)) > float(worst.get("script_total", 0.0)):
+				worst_tick = city._prof.duplicate()
+			for key in keys:
+				worst[key] = maxf(float(worst.get(key, 0.0)), float(city._prof.get(key, 0.0)))
+			if city._pending_bricks.has(b.id) or city.drawing.bands_building(b.id):
+				after = 0
+			else:
+				after += 1
+		var top := ""
+		var order := parts.keys()
+		order.sort_custom(func(a, c) -> bool: return float(parts[a]) > float(parts[c]))
+		for p in order.slice(0, 5):
+			top += "%s %.1f  " % [p, float(parts[p])]
+		var w := ""
+		for key in keys:
+			w += "%s %.1f  " % [key, float(worst.get(key, 0.0))]
+		print("[promote] building %d (%dx%d, %d courses), %s, %d bricks: _promote %.1f ms = %s" % [
+				b.id, b.recipe.footprint_x, b.recipe.footprint_z, b.recipe.courses,
+				("hit, %d storey(s)" % storeys.size()) if hit else "walked up to",
+				city.world.get_alive_block_count(chunk), ms, top])
+		print("[promote]   then %d tick(s) to bricks and bands; the worst of them: %s" % [frames - after, w])
+		var big := worst_tick.keys().filter(func(key) -> bool:
+				return key != "script_total" and float(worst_tick[key]) >= 1.0)
+		big.sort_custom(func(a, c) -> bool: return float(worst_tick[a]) > float(worst_tick[c]))
+		var wt := ""
+		for key in big.slice(0, 10):
+			wt += "%s %.1f  " % [key, float(worst_tick[key])]
+		print("[promote]   the worst tick, %.1f ms: %s" % [float(worst_tick.get("script_total", 0.0)), wt])
+	city._sampling = false
+	city.get_tree().quit(0)

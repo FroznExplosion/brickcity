@@ -39,10 +39,10 @@ Version: see `VERSION`. Raise it with every change to this folder.
 | `ui/wk_rail.gd` | `WkRail` — the tool rail: icon + name + key buttons with a pop-up, a line for the tool in hand, action buttons, the tool's options; `restyle` takes the editor's panel box. |
 | `ui/wk_menu_bar.gd` | `WkMenuBar` — the menu bar: menus from rows (`[label, id, shortcut]`), merged by label, a title. |
 | `ui/wk_frame.gd` | `WkFrame` — where the bar, the band under it (across, or narrow), the rail and a right-hand panel go; where the editor's readouts start. |
-| `tests/wk_smoke.gd` | Everything above, headless, on a pretend document and a pretend context. |
+| `tests/wk_smoke.gd` | Everything above, headless, on a pretend document and a pretend context; and a scan that the kit's scripts name no global class (`class_name`) from outside the kit. |
 
-Coming (Docs/BuildTools.md §20): the editors' own overrides turned into context calls, then
-an editor that composes the kit instead of inheriting another.
+In Printed Brick City each workshop is a `Node3D` that owns the game's brick component
+(`BrickBench`) and its kit pieces (toolbox, context, tools, frame); neither inherits the other.
 
 ## 1b. A tool in an editor
 

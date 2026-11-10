@@ -113,18 +113,18 @@ func _workshop() -> void:
 	root.add_child(ws)
 	await process_frame
 	await process_frame
-	ws._builds_dir = "user://_probe_builds/"
-	ws._save_path = "user://_probe_quick.json"
-	ws._hotbar.save_path = "user://_probe_hotbar.json"
+	ws.bench._builds_dir = "user://_probe_builds/"
+	ws.bench._save_path = "user://_probe_quick.json"
+	ws.bench._hotbar.save_path = "user://_probe_hotbar.json"
 	# Loading the scene reloads scripts, which resets their statics: point the
 	# catalogue at the probe's folder again.
 	AssetCatalog.use_dir(DIR)
 	RoomTemplates.reload()
-	var f: FurnishTool = ws._furnish
+	var f: FurnishTool = ws.bench._furnish
 	f.panel.save_path = "user://_probe_catalog.json"
-	var xf: Transform3D = ws.world.get_chunk_transform(ws.chunk)
+	var xf: Transform3D = ws.bench.world.get_chunk_transform(ws.bench.chunk)
 	@warning_ignore("integer_division")
-	var mid: int = ws.plate_studs / 2
+	var mid: int = ws.bench.plate_studs / 2
 	var above := func(x: int, z: int) -> Vector3:
 		return xf * Vector3((x + 0.5) * BrickPalette.STUD_M, 40.0, (z + 0.5) * BrickPalette.STUD_M)
 
@@ -138,9 +138,9 @@ func _workshop() -> void:
 	@warning_ignore("integer_division")
 	_ok("centred on the stud aimed at", f.at.x == mid - (sz.x - 1) / 2 and f.at.z == mid - (sz.z - 1) / 2,
 			str(f.at))
-	var bricks: int = ws.recipe.size()
+	var bricks: int = ws.bench.recipe.size()
 	_ok("placed", f.place())
-	_ok("a placement, not bricks", ws.recipe.placements.size() == 1 and ws.recipe.size() == bricks)
+	_ok("a placement, not bricks", ws.bench.recipe.placements.size() == 1 and ws.bench.recipe.size() == bricks)
 	_ok("drawn", f._drawn.get_child_count() == 1)
 	f.aim_ray(above.call(mid, mid), Vector3.DOWN)
 	_ok("the same spot again: on top of the table", f.at.y == floor_y + 4, "%d vs %d" % [f.at.y, floor_y])
@@ -149,25 +149,25 @@ func _workshop() -> void:
 	_ok("a cup on the table", f.ok and f.at.y == floor_y + 4 and f.place(), str(f.at))
 	f.hold("probe_table")
 	_ok("into the table's cells does not fit",
-			not f.fits("probe_table", 0, AssetPlacements.cell_of(ws.recipe.placements[0])))
+			not f.fits("probe_table", 0, AssetPlacements.cell_of(ws.bench.recipe.placements[0])))
 	f.turn_held()
 	var s0 := AssetPlacements.size_of("probe_table", 0)
 	_ok("R turns: across and along swap", AssetPlacements.size_of("probe_table", 1) == Vector3i(s0.z, s0.y, s0.x)
 			and s0.y == 4 and s0.x != s0.z, str(s0))
 	f.aim_ray(above.call(mid + 8, mid), Vector3.DOWN)
-	_ok("turned, placed elsewhere", f.place() and int(ws.recipe.placements[2].turn) == 1)
+	_ok("turned, placed elsewhere", f.place() and int(ws.bench.recipe.placements[2].turn) == 1)
 
 	_ok("RMB takes the cup away (it is on top)", f.remove_ray(above.call(mid, mid), Vector3.DOWN)
-			and ws.recipe.placements.size() == 2 and ws.recipe.placements[0].asset == "probe_table"
-			and ws.recipe.placements[1].asset == "probe_table")
-	ws._undo()
-	_ok("undo puts it back where it was", ws.recipe.placements.size() == 3
-			and ws.recipe.placements[1].asset == "probe_cup")
-	ws._undo()
-	_ok("undo again takes the last placed", ws.recipe.placements.size() == 2)
+			and ws.bench.recipe.placements.size() == 2 and ws.bench.recipe.placements[0].asset == "probe_table"
+			and ws.bench.recipe.placements[1].asset == "probe_table")
+	ws.bench._undo()
+	_ok("undo puts it back where it was", ws.bench.recipe.placements.size() == 3
+			and ws.bench.recipe.placements[1].asset == "probe_cup")
+	ws.bench._undo()
+	_ok("undo again takes the last placed", ws.bench.recipe.placements.size() == 2)
 
-	ws.recipe.add("brick_2x2", Vector3i(mid + 20, floor_y, mid), 0)
-	var path: String = ws._save_as("Probe Furnished")
+	ws.bench.recipe.add("brick_2x2", Vector3i(mid + 20, floor_y, mid), 0)
+	var path: String = ws.bench._save_as("Probe Furnished")
 	var back := BuildRecipe.load_from(path)
 	_ok("saved with its placements", back.placements.size() == 2
 			and back.placements[0].asset == "probe_table" and back.placements[1].asset == "probe_cup")
@@ -197,8 +197,8 @@ func _workshop() -> void:
 			and reg.get_building(bid).build.size() == back.size() + 3)
 	DirAccess.remove_absolute(path)
 	DirAccess.remove_absolute("user://_probe_builds/")
-	ws._new_build()
-	_ok("a new build has no placements, none drawn", ws.recipe.placements.is_empty()
+	ws.bench._new_build()
+	_ok("a new build has no placements, none drawn", ws.bench.recipe.placements.is_empty()
 			and f._drawn.get_children().all(func(c): return c.is_queued_for_deletion()))
 	ws.queue_free()
 

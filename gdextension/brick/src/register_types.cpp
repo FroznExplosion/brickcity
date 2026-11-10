@@ -4,6 +4,7 @@
 #include "brick_pools.h"
 #include "impostor_set.h"
 #include "mesh_merge.h"
+#include "shell_mesher.h"
 #include "shaped_sampler.h"
 #include "form_mesher.h"
 #include "sdf_form.h"
@@ -35,6 +36,8 @@ void initialize_brick_module(ModuleInitializationLevel p_level) {
     ClassDB::register_class<ImpostorSet>();
     // RecipeMesh's merge (scripts/recipe_mesh.gd).
     ClassDB::register_class<MeshMerge>();
+    // BuildingShell's arrays (scripts/building_shell.gd).
+    ClassDB::register_class<ShellMesher>();
     // ShapedParts' cell sampling (scripts/shaped_parts.gd).
     ClassDB::register_class<ShapedSampler>();
     // The asset workshop's shells: a smooth surface round a sampled form.

@@ -38,15 +38,15 @@ func _tick() -> void:
 	if _frames != 3:
 		return
 	_ws.set_process(false)
-	_ws._hotbar.save_path = "user://_starter_gun_hotbar.json"
+	_ws.bench._hotbar.save_path = "user://_starter_gun_hotbar.json"
 	_ws.toolbars_save = "user://_starter_gun_toolbars.json"
 	_build()
 
 
 func _box(part: String, x0: int, x1: int, y0: int, y1: int, z0: int, z1: int, colour: int) -> void:
 	_ws.select_part(_ws.part_names.find(part))
-	_ws._colour = colour
-	_ws._mat = 0
+	_ws.bench._colour = colour
+	_ws.bench._mat = 0
 	var cells := {}
 	for x in range(x0, x1 + 1):
 		for y in range(y0, y1 + 1):
@@ -58,7 +58,7 @@ func _box(part: String, x0: int, x1: int, y0: int, y1: int, z0: int, z1: int, co
 ## A mount on `part` and the socket on the body that takes it, at cell `c` (relative), in the
 ## middle across (the mirror's line).
 func _joint(part: String, slot: String, iface: String, c: Vector3) -> void:
-	var at := [float(_o.x) + c.x, float(_o.y) + c.y, _ws.mirror_z]
+	var at := [float(_o.x) + c.x, float(_o.y) + c.y, _ws.bench.mirror_z]
 	_ws.select_part(_ws.part_names.find(part))
 	_ws.toggle_point(at, "mount", slot, iface)
 	_ws.select_part(_ws.part_names.find("body"))
@@ -67,14 +67,14 @@ func _joint(part: String, slot: String, iface: String, c: Vector3) -> void:
 
 
 func _build() -> void:
-	_ws._new_build()
+	_ws.bench._new_build()
 	_ws.set_asset_kind("gun")
 	_ws.set_gun_scale("mech")
 	_ws.set_gun_class("lmg")
 	_ws.part_maker = MAKER
 	_ws.muzzle_end = "-x"
-	_ws.recipe.name = NAME
-	_o = Vector3i(_ws.plate_studs / 2, 40, int(floor(_ws.mirror_z)))
+	_ws.bench.recipe.name = NAME
+	_o = Vector3i(_ws.bench.plate_studs / 2, 40, int(floor(_ws.bench.mirror_z)))
 
 	# Body: the receiver, 10 studs long, 12 plates tall, 5 studs across; a carry rail on top.
 	_box("body", 0, 9, 6, 17, -2, 2, FRAME)
@@ -100,7 +100,7 @@ func _build() -> void:
 
 	print("[starter gun] bricks: ", _ws.part_counts())
 	DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path(BUILD.get_base_dir()))
-	_ws._current_path = BUILD
+	_ws.bench._current_path = BUILD
 	var ok: bool = _ws._write(BUILD)
 	print("[starter gun] build written: %s, parts in %s" % [ok, _ws.parts_dir()])
 	var cat := PartCatalog.new()

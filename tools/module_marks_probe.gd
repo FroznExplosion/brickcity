@@ -69,7 +69,7 @@ func _tick() -> void:
 
 ## The centre of a cell of the upright grid, in the world.
 func _at(x: float, y: float, z: float) -> Vector3:
-	var xf: Transform3D = _ws.world.get_chunk_transform(_ws.asm.frames[0])
+	var xf: Transform3D = _ws.bench.world.get_chunk_transform(_ws.bench.asm.frames[0])
 	return xf * Vector3(x * BrickPalette.STUD_M, y * BrickPalette.PLATE_M, z * BrickPalette.STUD_M)
 
 
@@ -114,8 +114,8 @@ func _room(second: bool) -> BuildRecipe:
 
 
 func _run() -> void:
-	_ws._load_recipe(_room(false))
-	var sp = _ws._spaces
+	_ws.bench._load_recipe(_room(false))
+	var sp = _ws.bench._spaces
 	sp.toggle()
 	sp.click(_at(13.5, 5.5, 13.5), Vector3.DOWN)
 	var rec: Dictionary = sp.record()
@@ -135,7 +135,7 @@ func _run() -> void:
 			off and doors.size() == 1 and String(doors[0].link) == "start", sp.message)
 
 	# An edit: a brick out of the far wall; the rooms found again keep the link.
-	var gone: bool = _ws._delete_ray(_at(12.5, 5.5, 17.5), Vector3(0, 0, 1))
+	var gone: bool = _ws.bench._delete_ray(_at(12.5, 5.5, 17.5), Vector3(0, 0, 1))
 	sp._edited_ms -= 1000
 	sp.process()
 	rec = sp.record()
@@ -169,7 +169,7 @@ func _run() -> void:
 	sp.set_rule("role", "start")
 	sp.set_rule("max", 1)
 	var path := "user://_probe_module_marks.json"
-	_ws.recipe.save_to(path)
+	_ws.bench.recipe.save_to(path)
 	var back := BuildRecipe.load_from(path)
 	var srec: Dictionary = back.meta.get("structure", {})
 	var mod: Dictionary = back.meta.get("module", {})
@@ -181,8 +181,8 @@ func _run() -> void:
 	DirAccess.remove_absolute(ProjectSettings.globalize_path(path))
 
 	# Two rooms through the doorway: a hole inside the module.
-	_ws._load_recipe(_room(true))
-	sp = _ws._spaces
+	_ws.bench._load_recipe(_room(true))
+	sp = _ws.bench._spaces
 	if not sp.active:
 		sp.toggle()
 	sp.mark = "rooms"
@@ -200,34 +200,34 @@ func _run() -> void:
 
 	# Generate (Docs/RoomModules.md stage 4).
 	RoomModules.use_recipes(Kit.modules())
-	_ws._dirty = true
+	_ws.bench._dirty = true
 	var asked: Dictionary = sp.generate({"seed": 3, "rooms": 8, "path": 2})
 	var plan: Dictionary = sp.generate({"seed": 3, "rooms": 8, "path": 2})
 	# A building bigger than the baseplate: the plate grows to hold it all.
-	_ws._dirty = false
+	_ws.bench._dirty = false
 	var big: Dictionary = sp.generate({"seed": 11, "rooms": 30, "path": 4})
 	var laid := 0
-	for at in _ws._placed_at:
+	for at in _ws.bench._placed_at:
 		if int(at[1]) >= 0:
 			laid += 1
-	var bb: Array = _ws.recipe.bounds()
+	var bb: Array = _ws.bench.recipe.bounds()
 	_ok("a building bigger than the baseplate: the plate grows, every brick laid",
-			bool(big.get("ok", false)) and laid == _ws.recipe.size() and int(_ws.plate_studs) >= maxi(bb[1].x, bb[1].z),
-			"%d of %d bricks, %s studs, plate %d" % [laid, _ws.recipe.size(), str(bb[1]), _ws.plate_studs])
-	_ws._dirty = false
+			bool(big.get("ok", false)) and laid == _ws.bench.recipe.size() and int(_ws.bench.plate_studs) >= maxi(bb[1].x, bb[1].z),
+			"%d of %d bricks, %s studs, plate %d" % [laid, _ws.bench.recipe.size(), str(bb[1]), _ws.bench.plate_studs])
+	_ws.bench._dirty = false
 	plan = sp.generate({"seed": 3, "rooms": 8, "path": 2})
 	# Generate tower: a tall one grows the volume over the plate too.
-	_ws._dirty = false
+	_ws.bench._dirty = false
 	var tower: Dictionary = sp.generate({"generator": "shell", "seed": 2, "width": 44, "depth": 28, "storeys": 12})
-	var tb: Array = _ws.recipe.bounds()
+	var tb: Array = _ws.bench.recipe.bounds()
 	var tlaid := 0
-	for at in _ws._placed_at:
+	for at in _ws.bench._placed_at:
 		if int(at[1]) >= 0:
 			tlaid += 1
 	_ok("Generate tower opens a tower of 12 storeys, the volume grown for its height, every brick laid",
-			bool(tower.get("ok", false)) and String(_ws.recipe.meta.generated.generator) == "shell"
-			and int(_ws.height_plates) >= (tb[0] as Vector3i).y + (tb[1] as Vector3i).y and tlaid == _ws.recipe.size(),
-			"%s; %d of %d bricks, height %d plates" % [sp.message, tlaid, _ws.recipe.size(), _ws.height_plates])
+			bool(tower.get("ok", false)) and String(_ws.bench.recipe.meta.generated.generator) == "shell"
+			and int(_ws.bench.height_plates) >= (tb[0] as Vector3i).y + (tb[1] as Vector3i).y and tlaid == _ws.bench.recipe.size(),
+			"%s; %d of %d bricks, height %d plates" % [sp.message, tlaid, _ws.bench.recipe.size(), _ws.bench.height_plates])
 	var shown: Array = sp._sections()
 	var labels := 0
 	for l in sp._labels:
@@ -250,38 +250,38 @@ func _run() -> void:
 				if edge:
 					ol.add("plate_1x1", Vector3i(x + 1, 1, z + 1), 0)
 				cols[Vector2i(x + 1, z + 1)] = true
-	_ws._load_recipe(ol)
-	_ws._dirty = false
+	_ws.bench._load_recipe(ol)
+	_ws.bench._dirty = false
 	var ot: Dictionary = sp.generate({"generator": "shell", "seed": 1, "storeys": 2, "outline": true})
 	var outside := 0
-	for i in _ws.recipe.size():
-		var oc: Vector3i = _ws.recipe.cell_of(i)
+	for i in _ws.bench.recipe.size():
+		var oc: Vector3i = _ws.bench.recipe.cell_of(i)
 		if not cols.has(Vector2i(oc.x, oc.z)):
 			outside += 1
 	_ok("Generate tower in a drawn outline (an L): the tower inside it, nothing outside",
-			bool(ot.get("ok", false)) and outside == 0 and _ws.recipe.size() > 0,
+			bool(ot.get("ok", false)) and outside == 0 and _ws.bench.recipe.size() > 0,
 			"%s; %d brick(s) outside" % [sp.message, outside])
 	# Generate station: the station kit's modules, a station open on the plate.
 	RoomModules.use_recipes(StationKit.modules())
-	_ws._dirty = false
+	_ws.bench._dirty = false
 	var sta: Dictionary = sp.generate({"generator": "station", "seed": 2, "modules": 14})
 	var slaid := 0
-	for at in _ws._placed_at:
+	for at in _ws.bench._placed_at:
 		if int(at[1]) >= 0:
 			slaid += 1
 	_ok("Generate station opens a station grown from the core, every brick laid",
-			bool(sta.get("ok", false)) and String(_ws.recipe.meta.generated.generator) == "station"
-			and slaid == _ws.recipe.size() and String(sp.message).begins_with("station"),
-			"%s; %d of %d bricks" % [sp.message, slaid, _ws.recipe.size()])
+			bool(sta.get("ok", false)) and String(_ws.bench.recipe.meta.generated.generator) == "station"
+			and slaid == _ws.bench.recipe.size() and String(sp.message).begins_with("station"),
+			"%s; %d of %d bricks" % [sp.message, slaid, _ws.bench.recipe.size()])
 	RoomModules.use_recipes(Kit.modules())
-	_ws._dirty = false
+	_ws.bench._dirty = false
 	# Generate interior: the test hull open, filled; Next seed fills the same hull again.
-	_ws._load_recipe(PackProbe.hull())
-	_ws._dirty = false
-	var hull_n: int = _ws.recipe.size()
+	_ws.bench._load_recipe(PackProbe.hull())
+	_ws.bench._dirty = false
+	var hull_n: int = _ws.bench.recipe.size()
 	var shp: Dictionary = sp.generate({"generator": "pack", "seed": 1, "passes": 1})
-	var first_n: int = _ws.recipe.size()
-	_ws._dirty = false
+	var first_n: int = _ws.bench.recipe.size()
+	_ws.bench._dirty = false
 	var shp2: Dictionary = sp.generate({"generator": "pack", "seed": 2, "passes": 1})
 	_ok("Generate interior fills the open hull with decks of rooms; the next seed fills the same hull",
 			bool(shp.get("ok", false)) and bool(shp2.get("ok", false)) and int(shp.stats.decks) == 3
@@ -295,7 +295,7 @@ func _run() -> void:
 	rec = sp.record()
 	var lost := (rec.spaces as Array).filter(func(x) -> bool: return x.has("lost")).size()
 	_ok("Generate asks first over unsaved work, then grows a building and opens it, every room found again",
-			asked.is_empty() and bool(plan.get("ok", false)) and _ws.recipe.size() > 0
-			and _ws.recipe.meta.has("generated") and (rec.spaces as Array).size() == int(plan.stats.modules)
+			asked.is_empty() and bool(plan.get("ok", false)) and _ws.bench.recipe.size() > 0
+			and _ws.bench.recipe.meta.has("generated") and (rec.spaces as Array).size() == int(plan.stats.modules)
 			and lost == 0,
-			"%s; %d bricks, %d room(s), %d lost %s %s" % [sp.message, _ws.recipe.size(), (rec.spaces as Array).size(), lost, str((rec.spaces as Array).filter(func(x) -> bool: return x.has("lost")).map(func(x): return [x.lost, x.seed, x.kind])), str(_ws.recipe.meta.generated.modules)])
+			"%s; %d bricks, %d room(s), %d lost %s %s" % [sp.message, _ws.bench.recipe.size(), (rec.spaces as Array).size(), lost, str((rec.spaces as Array).filter(func(x) -> bool: return x.has("lost")).map(func(x): return [x.lost, x.seed, x.kind])), str(_ws.bench.recipe.meta.generated.modules)])

@@ -11,26 +11,69 @@ SDF clay and the model converter.
 
 ## 0. How the two workshops share code
 
-`AssetWorkshop` **extends** the building workshop (`asset_workshop.gd` is
-`extends "res://scripts/workshop.gd"`). So anything that both should have goes DOWN into
-`workshop.gd` or into a shared file both call, and the asset workshop keeps only what is its
-own (parts, the SDF, photos, guns).
+Both workshops are built from the same three layers; **neither inherits the other** (since
+2026-11-09, section 20). Anything both should have goes into the kit, if it names no game class,
+or into the bench, if it does.
 
-**Being replaced (2026-11-06):** section 20 is the plan for one editor kit both workshops compose
-(`addons/workshop_kit/`), in place of this inheritance. This section is rewritten to describe the kit
-when its last stage lands.
+```
+ the building workshop                         the asset workshop
+ scripts/workshop.gd (Node3D, 37 lines)        scripts/asset_workshop.gd (Node3D)
+   its own tools: WorkshopTools                  its own tools: parts, the SDF sculpt, photos,
+   (Roof, Stairs, Repeat, Rooms, doors ...)      guides, studs, connections, guns, mechs, export
+          \                                           /
+           owns a BrickBench ("Bench" child)  -- scripts/workshop/brick_bench.gd: the game side
+             brick world, recipe, frames, aiming and placing, paint, undo, grid, ghost,
+             camera, HUD and menus, save and load
+                         |
+           answers the kit through BrickWorkshopContext -- scripts/workshop/brick_context.gd
+                         |
+           the editor kit -- addons/workshop_kit/ (Wk..., no game class inside)
+```
 
-| Shared piece | Where | Who uses it |
-|---|---|---|
-| **The run**: hold LMB and move, a brick at each cell the ghost passes | `workshop.gd` (moved down from `asset_workshop.gd`, same code) | both |
-| **The rail**: icon + name + key buttons, a pop-up for each, a hint line for the tool in hand, the tool's options under it | `ToolRail`, `scripts/workshop_rail.gd` (taken out of `AssetWorkshopUI`) | both |
-| **Shapes on a grid**: rectangle, hollow rectangle, ellipse/circle, ring, triangle, line, arch, stairs, wall lines, a drawn outline and a plan as cells on a plane | `WkShapes` in the editor kit (`addons/workshop_kit/services/wk_shapes.gd`, static); `BrickShapes` (`scripts/workshop_shapes.gd`) keeps kept shapes, plans, roofs and courses on top of it | both workshops |
-| **Courses**: cells to bricks of the held kind, staggered or aligned | `BrickShapes.pack_courses` | building shapes and sketch |
-| **The sketch pen and the Sketch tool**: freehand outline, rectangle, ellipse, clicked polygon, brush -- the stroke being drawn, and the outline it comes to | `WkSketchPen` and `WkSketchTool` in the editor kit (`addons/workshop_kit/`, section 20); the workshop answers through `BrickWorkshopContext` | both: the asset workshop's Sketch, the building workshop's Draw (outlines) and Cut |
+**The editor kit** (`addons/workshop_kit/`, `VERSION`, `README.md`; section 20) is the part that
+could go into another Godot project: it names no class from outside itself, and `wk_smoke`
+checks that.
 
-What a stroke *becomes* stays each workshop's own: in the asset workshop a sketch is a part
-seen from three views with slopes fitted on its edges; in a building it is a kept shape
-(section 2). The drawing, the outline and the cells are the same code.
+| Kit piece | What it is | In the building workshop | In the asset workshop |
+|---|---|---|---|
+| `WkUndoStack`, `WkCommand`, `WkGroup` | one undo history for every edit; a run, a mirrored pair or a fill is a group | `bench.undo_stack` | the same stack |
+| `WkContext`, `WkTool`, `WkToolbox` | the seam (every question a tool asks, each with a neutral answer), the tool interface, the tool in hand | `BrickWorkshopContext`, `bench.toolbox` | the same |
+| `WkPlaceTool` | the hand: click, the held-click run, RMB takes away (undoably) | default tool | default tool |
+| `WkPaintTool` | the paint stroke as one undo, the brush's reach, pick a colour | B | Paint |
+| `WkSketchTool`, `WkSketchPen` | a stroke: freehand, rectangle, ellipse, polygon, brush, and its outline | Draw's outlines, Cut | Sketch |
+| `WkShapeTool` | a shape on the grid, two gestures (`mode`) | Draw, Cut, Select's push-pull: outline, then height | K: one drag, filled |
+| `WkSelectTool` | pick: a click, or a box | L (click) | L (box) |
+| `WkMeasureTool`, `WkFillTool`, `WkMoveTool` | two-click distance; fill under the cursor; drag a part on an axis plane | -- | Alt M, the wand (F4), Alt G |
+| `WkMirror` | the mirror plane and its cell arithmetic | the mirror | F8 |
+| `WkCamera` | orbit, pan, zoom to the cursor; flat side/top/front views (the FPS fly stays the game's) | the orbit camera | its views |
+| `WkGrid`, `WkGhost` | the grid overlay; the preview node and its tint (its mesh is the game's) | both | both |
+| `WkShapes` | cells of a rectangle, ellipse, ring, triangle, line, arch, stairs, wall lines, an outline or plan | Shapes, Sketch | Shapes, Sketch |
+| `WkRail`, `WkMenuBar`, `WkFrame` | the tool rail, the menu bar, where the bar, band, rail and panel go | the rail and menus | the rail, tabs and outliner (`AssetWorkshopUI`) |
+
+**The bench** (`BrickBench`) is everything about bricks both workshops have: it was the old
+base class, `workshop.gd`, made a component. An owner makes it, adds it as a child, calls
+`bind_host(self)` and `bench_ready()`, and hands it `bench_process`, `bench_input` and
+`bench_unhandled_input`. What an owner does its own way it does through **hooks** -- the
+functions named in `BrickBench.HOOKS` (`_aim`, `_place`, `_undo`, `_after_edit`, `_load_recipe`,
+`set_mirror` and the rest), which the bench calls on its owner when it has one, the owner calling
+`bench.<name>_base` for the bench's own -- and **settings** (`wants_tools`, `has_floor`,
+`sketch_host`). Code that holds a workshop reaches the bench as `ws.bench` (the probes do).
+
+**Other shared game pieces**, used by both through the bench: `BrickShapes`
+(`scripts/workshop_shapes.gd`: kept shapes, plans, roofs, and `pack_courses`, cells to bricks of
+the held kind), `WorkshopHotbar`, `WorkshopMenu`, `BrickPalette`, the paint palette.
+
+What a stroke or a shape *becomes* stays each workshop's own: in the asset workshop a sketch is a
+part seen from three views with slopes fitted on its edges, and a shape fills the part; in a
+building both are kept shapes (section 2). The drawing, the outline and the cells are the same
+code.
+
+**What is left** (not asked for, each a choice): the bench still holds the building workshop's own
+features -- Insert's stamps, generated towers, groups, guides, rooms and furnishing, and its gate
+-- because the asset workshop had them all through the old base. They could move to the building
+workshop or, one file each, to `scripts/workshop/tools/` as `WkTool`s (section 20's plan), leaving
+the bench only what both use. The asset workshop's own tools (sculpt, photos, guides, studs) are
+likewise still functions in its one 12,000-line file, not tools of their own.
 
 ## 1. The rail (building workshop)
 
@@ -864,7 +907,7 @@ Merged; `tools/build_tools_probe.gd` 338 checks, workshop gate 19, asset worksho
 
 Asked 2026-11-06: turn the two workshops' tools into one shared, modular editor kit that both use,
 and that can be copied into another Godot project and kept in sync. In stages, each merged on its
-own. **This section is the plan; stage 1 is built (see "As built" at the end).**
+own. **All its stages are built (2026-11-09; "As built" at the end); section 0 describes the result.**
 
 ### Today (main `874edd82`)
 
@@ -989,8 +1032,8 @@ Each stage: own branch, merged `--no-ff`, pushed. Every stage passes, as on main
 | 4c ✅ | The asset workshop's tabs, outliner and actions on `WkFrame` | `asset_ui_probe` |
 | 5a ✅ | **Place** (the hand: click, held-click run, RMB takes away) into the kit, the toolbox's default tool and the hand under any tool for a click it does not take | probes, gate |
 | 5b ✅ | The rest of the shared tools into the kit, one file each: measure, fill (wand), move, select, and the Shapes tool -- one tool, two gestures (asked 2026-11-08: the asset workshop's one drag, the building workshop's outline then height); Cut is the Shapes tool with a cut for its outcome. The building workshop's RMB delete is undoable (asked the same day) | probes; `wk_smoke` per tool |
-| 6a | Each of the 26 overrides becomes a context call or a tool (the asset still extends) | probes |
-| 6b | **No more `extends workshop.gd`**: the brick world, recipe, frames, save and load in one component both workshops own; each workshop `extends Node3D` and composes the kit | every probe, gate; a scan finds no game class named under `addons/workshop_kit/` |
+| 6a ✅ | Each of the overrides (29 by 2026-11-09) becomes a hook, a setting or an entry point an owner calls (the asset still extends) | probes |
+| 6b ✅ | **No more `extends workshop.gd`**: the brick world, recipe, frames, save and load in one component both workshops own (`BrickBench`); each workshop `extends Node3D` and composes the kit | every probe, gate; a scan finds no game class named under `addons/workshop_kit/` (now a `wk_smoke` check) |
 
 Done when both workshops run on the kit, each shared tool is one file under it, the kit names no
 game class, the probes and gate pass as on main, and section 0 describes the kit.
@@ -1252,3 +1295,68 @@ Kit 0.13.0: five more tools under `tools/`, one file each, with their questions 
   cut does) has its edit skipped: place 150, build_tools 346.
 * One small difference: RMB with Draw on a non-upright frame takes a brick away (the hand's);
   it used to be swallowed with the "Shapes go on the upright grid" message.
+
+### As built: stage 6a, the overrides as a seam (2026-11-09)
+
+The asset workshop overrode 29 of `workshop.gd`'s functions. Each is now one of three things,
+so that the next stage can make `workshop.gd`'s bricks a component instead of a base class:
+
+* **20 hooks** (`HOOKS` in `workshop.gd`): `_after_edit`, `_aim`, `_before_remove`, `_brick_item`,
+  `_bricks_near`, `_delete_ray`, `_hold_lock`, `_load_recipe`, `_mouse_ray`, `_paint_one`,
+  `_place`, `_place_in_city`, `_relay`, `_reset_space`, `_save_as`, `_undo`, `_write`,
+  `mirror_here`, `remove_brick`, `set_mirror`. Each is a function that calls the owner's
+  (`host`, taken with `bind_host`) when it has one, else its own `<name>_base`; the owner's
+  calls `<name>_base` where it called `super`. While the asset still extends, its functions
+  override the hooks by name, as before.
+* **4 settings** instead of overrides: `wants_tools` (the building tools and their rail; was
+  `_wants_tools`), `has_floor` (a baseplate and its foundation level; was `_lay_baseplate` and
+  `_on_floor`), `sketch_host` (who answers the kit's Sketch and Shapes tools; was
+  `_sketch_host`).
+* **5 entry points**: `_ready`, `_process`, `_input`, `_unhandled_input` are each one line calling
+  `bench_ready`, `bench_process`, `bench_input`, `bench_unhandled_input`, which an owner calls
+  where it called `super`; `_init` stays (the area's size, set before `_ready`).
+
+No behaviour changes: every probe as on main, the gate 19/19.
+
+### As built: stage 6b, the bench (2026-11-09)
+
+**`workshop.gd` became `BrickBench`** (`scripts/workshop/brick_bench.gd`, moved with git so its
+history follows), a `Node3D` component: the brick world, recipe, frames, aiming and placing,
+the hand and paint, undo, grid, ghost, camera, HUD and menus, save and load -- everything both
+workshops had in common, which was all of the old base. Each workshop is now a `Node3D` that owns
+one, as a child named "Bench":
+
+```
+workshop.tscn        Workshop (workshop.gd, 37 lines)        asset_workshop.tscn   AssetWorkshop (asset_workshop.gd)
+  Bench (BrickBench)                                            Bench (BrickBench)
+    Tools (WorkshopTools: wants_tools)                          Frame (AssetWorkshopUI) ...
+    the camera, ghost, grid, HUD, doors, lifts ...                the photos, guides, sculpt ...
+```
+
+* **The owner** makes the bench in a member initialiser (the asset workshop sizes its area in
+  `_init`), and in `_ready` adds it, `bind_host(self)`, then `bench_ready()`; its `_process`,
+  `_input` and `_unhandled_input` call `bench_process`, `bench_input`, `bench_unhandled_input`
+  where they called `super`. The building workshop does nothing else (and answers the pause
+  menu's `pause_allowed`).
+* **Hooks** (stage 6a) now reach the owner: the bench calls `host._aim()` and the rest of HOOKS
+  when the owner has them; the asset workshop's call `bench._aim_base()` and so on.
+* **Who holds what.** The bench's own helpers (`WorkshopTools`, `WorkshopSpaces`, `FurnishTool`,
+  the doors, lifts, ladders, and the kit context `BrickWorkshopContext`) are given the bench.
+  The context asks the owner (`_editor()`) for measure, fill and move, which only the asset
+  workshop has; Sketch, Shapes and Select go to `sketch_host` as before.
+* **The asset workshop** (12,370 lines) names the bench's members as `bench.x` (769 places,
+  rewritten by script; `BrickBench.X` for constants and static functions), and so do the probes
+  and `asset_workshop_ui.gd` (`_ws.bench.recipe`). A probe that looked for the workshop's child
+  nodes looks under the bench (`build_doors_probe`).
+* **The kit names no game class** -- now a `wk_smoke` check (kit 0.14.0, 144): every global class
+  outside the kit, looked for in the kit's code. One comment in `wk_context.gd` names `MenuHost`
+  as the pattern it follows; comments are not code.
+
+Every probe as on main (and the eight others the rewrite touched: asset_tags 32, figure 51,
+package 27, part_save 61, build_doors 12, furnish 40, module_marks 16, stud 23); the gate 19/19.
+
+What is still one class that could be several: `BrickBench` holds the building workshop's own
+features too (Insert's stamps, generated towers, groups, guides, rooms, furnishing, its gate),
+because the asset workshop had all of them through the old base and its probes use some. Taking
+them out into the building workshop, or into `scripts/workshop/tools/` as `WkTool`s, is a next step
+if wanted (section 0, "What is left").

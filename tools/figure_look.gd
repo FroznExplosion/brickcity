@@ -30,7 +30,7 @@ func _tick() -> void:
 	if _frames != 3:
 		return
 	_ws._no_autosave = true
-	_ws._hotbar.save_path = "user://_figure_look_hotbar.json"
+	_ws.bench._hotbar.save_path = "user://_figure_look_hotbar.json"
 	_ws.toolbars_save = "user://_figure_look_toolbars.json"
 	_go()
 
@@ -56,12 +56,12 @@ func _go() -> void:
 		var n := BrickPalette.variant_name("brick_1x2", yaw, false)
 		if BrickPalette.size_of(n).z == 1:
 			_arch = n
-	_ws._new_build()
+	_ws.bench._new_build()
 	_ws.set_asset_kind("figure")
 	var x := int(_ws.mech_origin().x) - 1
-	var zl := int(floor(_ws.mirror_z)) + 1   # its left, +Z
-	var zr := int(floor(_ws.mirror_z)) - 1
-	var zm := int(floor(_ws.mirror_z))
+	var zl := int(floor(_ws.bench.mirror_z)) + 1   # its left, +Z
+	var zr := int(floor(_ws.bench.mirror_z)) - 1
+	var zm := int(floor(_ws.bench.mirror_z))
 	var g := int(_ws.mech_origin().y)
 	# Legs: four bricks each, ground to hips (the lowest is the foot, below the ankle).
 	for y in [0, 3, 6, 9]:
@@ -81,7 +81,7 @@ func _go() -> void:
 	_put("head", x, g + 21, zm, 9)
 	_put("head", x, g + 24, zm, 9)
 	_put("hat", x, g + 27, zm, 0)
-	_ws._builds_dir = DIR
+	_ws.bench._builds_dir = DIR
 	_ws._save_as("Look Figure")
 	_ws.show_help(false)
 	_ws._look_at_build()

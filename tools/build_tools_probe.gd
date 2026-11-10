@@ -27,14 +27,14 @@ func _initialize() -> void:
 	root.add_child(_ws)
 	await process_frame
 	await process_frame
-	_ws._builds_dir = "user://_probe_builds/"
-	_ws._save_path = "user://_probe_quick.json"
-	_ok("Draw starts on a line that makes walls", _ws._tools.outline == "line" and _ws._tools.makes == "walls")
-	_ws._tools.set_outline("box")
-	_ws._tools.makes = "solid"
+	_ws.bench._builds_dir = "user://_probe_builds/"
+	_ws.bench._save_path = "user://_probe_quick.json"
+	_ok("Draw starts on a line that makes walls", _ws.bench._tools.outline == "line" and _ws.bench._tools.makes == "walls")
+	_ws.bench._tools.set_outline("box")
+	_ws.bench._tools.makes = "solid"
 	# The checks were written with one-plate floors, and their heights say so; section 19's own
 	# checks use the city's two, which is what a building starts with.
-	_ws._tools.floor_plates = 1
+	_ws.bench._tools.floor_plates = 1
 	_rail_checks()
 	_run_checks()
 	_kept_checks()
@@ -231,14 +231,14 @@ func _along_at(packed: Array, cell: Vector3i) -> String:
 # ---------------------------------------------------------------------------
 
 func _hold(part: String) -> void:
-	_ws._part_index = (_ws._parts() as Array).find(part)
-	_ws._yaw = 0
-	_ws._flip = false
+	_ws.bench._part_index = (_ws.bench._parts() as Array).find(part)
+	_ws.bench._yaw = 0
+	_ws.bench._flip = false
 
 
 func _rail_checks() -> void:
 	print("[probe] the rail")
-	var t: WorkshopTools = _ws._tools
+	var t: WorkshopTools = _ws.bench._tools
 	_ok("the building workshop has the rail", t != null and t.rail is WkRail)
 	_ok("with its tools, each with a pop-up and an icon", t.rail.buttons.size() == WorkshopTools.TOOLS.size()
 			and (t.rail.buttons.values() as Array).all(func(b: Button) -> bool:
@@ -246,34 +246,34 @@ func _rail_checks() -> void:
 	t.pick("draw")
 	_ok("a tool picked is the one lit", t.active() == "draw")
 	t.pick("paint")
-	_ok("Paint is the workshop's own brush", _ws._painting and t.active() == "paint")
+	_ok("Paint is the workshop's own brush", _ws.bench._painting and t.active() == "paint")
 	t.pick("place")
-	_ok("Place puts the brush down", not _ws._painting and t.active() == "place")
+	_ok("Place puts the brush down", not _ws.bench._painting and t.active() == "place")
 	await process_frame
-	_ok("the readout sits right of the rail", _ws._hud.position.x >= t.rail.position.x + t.rail.size.x)
+	_ok("the readout sits right of the rail", _ws.bench._hud.position.x >= t.rail.position.x + t.rail.size.x)
 
 
 func _run_checks() -> void:
 	print("[probe] the run (moved down from the asset workshop)")
-	_ws._new_build()
+	_ws.bench._new_build()
 	_hold("plate_1x1")
-	_ws._cell = Vector3i(20, 1, 20)
-	_ws._update_ghost()
-	_ws._place()
-	_ws._begin_run()
-	_ws._cell = Vector3i(21, 1, 20)
-	_ws._update_ghost()
-	_ws.run_step()
-	_ok("a click held still lays one brick", _ws.recipe.size() == 1, "%d bricks" % _ws.recipe.size())
-	_ws._run_moved = 40.0
-	_ws._run_press_ms = Time.get_ticks_msec() - 1000
-	_ws._run_last = Vector3i(20, 1, 20)
+	_ws.bench._cell = Vector3i(20, 1, 20)
+	_ws.bench._update_ghost()
+	_ws.bench._place()
+	_ws.bench._begin_run()
+	_ws.bench._cell = Vector3i(21, 1, 20)
+	_ws.bench._update_ghost()
+	_ws.bench.run_step()
+	_ok("a click held still lays one brick", _ws.bench.recipe.size() == 1, "%d bricks" % _ws.bench.recipe.size())
+	_ws.bench._run_moved = 40.0
+	_ws.bench._run_press_ms = Time.get_ticks_msec() - 1000
+	_ws.bench._run_last = Vector3i(20, 1, 20)
 	for x in [21, 22, 23]:
-		_ws._cell = Vector3i(x, 1, 20)
-		_ws._update_ghost()
-		_ws.run_step()
-	_ws._run_on = false
-	_ok("a held run lays a brick at each cell the ghost passes", _ws.recipe.size() == 4, "%d bricks" % _ws.recipe.size())
+		_ws.bench._cell = Vector3i(x, 1, 20)
+		_ws.bench._update_ghost()
+		_ws.bench.run_step()
+	_ws.bench._run_on = false
+	_ok("a held run lays a brick at each cell the ghost passes", _ws.bench.recipe.size() == 4, "%d bricks" % _ws.bench.recipe.size())
 
 
 func _bricks(sh: Dictionary) -> Dictionary:
@@ -285,35 +285,35 @@ func _bricks(sh: Dictionary) -> Dictionary:
 
 func _kept_checks() -> void:
 	print("[probe] kept shapes, cuts, undo, saving")
-	_ws._new_build()
-	var t: WorkshopTools = _ws._tools
+	_ws.bench._new_build()
+	var t: WorkshopTools = _ws.bench._tools
 	_hold("brick_1x4")
 	t.tall = 9
 	t.staggered = true
-	var f0: int = _ws.asm.frames[0]
+	var f0: int = _ws.bench.asm.frames[0]
 	# A room: four walls, 12 x 8 studs, 3 bricks high, on the baseplate.
 	var id := t.add_shape("hollow", "flat", Vector2i(4, 4), Vector2i(15, 11), 1)
 	var sh := t.shape_of(id)
 	var cells := BrickShapes.shape_cells(sh)
 	var filled := 0
 	for c in cells:
-		if _ws.world.is_solid(f0, c):
+		if _ws.bench.world.is_solid(f0, c):
 			filled += 1
 	_ok("a hollow rectangle 9 plates tall lays every cell of its walls", filled == cells.size() and cells.size() == 36 * 9,
 			"%d of %d" % [filled, cells.size()])
-	_ok("the shape keeps its bricks", (sh.bricks as Array).size() == _ws.recipe.size() and _ws.recipe.size() > 0)
+	_ok("the shape keeps its bricks", (sh.bricks as Array).size() == _ws.bench.recipe.size() and _ws.bench.recipe.size() > 0)
 	var fam := true
-	for i in _ws.recipe.size():
-		var p := BrickPalette.part_of(_ws.recipe.part_of(i))
+	for i in _ws.bench.recipe.size():
+		var p := BrickPalette.part_of(_ws.bench.recipe.part_of(i))
 		var ps := BrickPalette.part_size(p)
 		fam = fam and BrickPalette.family_of(p) in ["brick", "plate"] and mini(ps.x, ps.z) == 1 and maxi(ps.x, ps.z) <= 4
-	_ok("of the held brick and smaller ones of its kind", fam, str(_ws.recipe.parts))
-	_ok("one undo edit for the whole shape", _ws.undo_stack.kinds() == ["shape"], str(_ws.undo_stack.kinds()))
+	_ok("of the held brick and smaller ones of its kind", fam, str(_ws.bench.recipe.parts))
+	_ok("one undo edit for the whole shape", _ws.bench.undo_stack.kinds() == ["shape"], str(_ws.bench.undo_stack.kinds()))
 	# A hand-laid brick inside the doorway-to-be, and one elsewhere.
 	_hold("plate_1x1")
-	_ws._cell = Vector3i(9, 10, 2)
-	_ws._update_ghost()
-	_ws._place()
+	_ws.bench._cell = Vector3i(9, 10, 2)
+	_ws.bench._update_ghost()
+	_ws.bench._place()
 	var before := _bricks(t.shape_of(id))
 	# A door, one click on the front wall (z = 4), from outside.
 	var face := t.face_under(Vector3(9.5 * 0.35, 4 * 0.14, -3.0), Vector3(0, 0, 1))
@@ -326,12 +326,12 @@ func _kept_checks() -> void:
 	var hole := BrickShapes.solid_cells(cut)
 	var open := true
 	for c in hole:
-		open = open and not _ws.world.is_solid(f0, c)
+		open = open and not _ws.bench.world.is_solid(f0, c)
 	_ok("Cut: the doorway is open", open)
 	var back_ok := true
 	for x in range(4, 16):
 		for y in range(1, 10):
-			back_ok = back_ok and _ws.world.is_solid(f0, Vector3i(x, y, 11))
+			back_ok = back_ok and _ws.bench.world.is_solid(f0, Vector3i(x, y, 11))
 	_ok("and goes no further than the wall it was cut in (the back wall is whole)", back_ok)
 	var after := _bricks(t.shape_of(id))
 	var near: AABB = t._near_box(hole, t.shape_of(id), "wall_x")
@@ -348,77 +348,77 @@ func _kept_checks() -> void:
 	_ok("the rest of the wall keeps its bricks (%d far from the door)" % far_n, far_kept and far_n > 15)
 	var rest := 0
 	for c in BrickShapes.shape_cells(t.shape_of(id)):
-		if _ws.world.is_solid(f0, c):
+		if _ws.bench.world.is_solid(f0, c):
 			rest += 1
 	_ok("and every cell of the wall round the door is still filled",
 			rest == BrickShapes.shape_cells(t.shape_of(id)).size())
 	_ok("the shape remembers its cut", (t.shape_of(id).cuts as Array).size() == 1)
-	_ok("the hand-laid brick in the doorway was taken up", _ws.find_brick("plate_1x1", Vector3i(9, 10, 2)) < 0
+	_ok("the hand-laid brick in the doorway was taken up", _ws.bench.find_brick("plate_1x1", Vector3i(9, 10, 2)) < 0
 			or not hole.has(Vector3i(9, 10, 2)))
 	# Saved and opened again.
-	var back := BuildRecipe.from_dict(JSON.parse_string(JSON.stringify(_ws.recipe.to_dict())))
+	var back := BuildRecipe.from_dict(JSON.parse_string(JSON.stringify(_ws.bench.recipe.to_dict())))
 	var kept: Array = back.meta.get("shapes", [])
 	_ok("saved: the shape and its cut go with the build", kept.size() == 1 and (kept[0].cuts as Array).size() == 1
 			and (kept[0].bricks as Array).size() == (t.shape_of(id).bricks as Array).size())
 	# Undo the cut: the wall is as it was.
-	_ws._undo()
+	_ws.bench._undo()
 	_ok("undo the cut: the wall's bricks are as before", _bricks(t.shape_of(id)) == before)
 	_ok("and its cut is gone", (t.shape_of(id).cuts as Array).is_empty())
 	# Change it: a different bond, laid again whole, cuts kept.
 	t.change_shape(id, {"bond": "align"})
 	_ok("Select: aligned, laid again", String(t.shape_of(id).bond) == "align")
-	_ws._undo()
+	_ws.bench._undo()
 	_ok("and undone", String(t.shape_of(id).bond) == "stagger" and _bricks(t.shape_of(id)) == before)
 	# RMB on a shape's brick: no hand brick's undo is lost.
-	var bricks_edits: int = _ws.undo_stack.count(&"brick")
+	var bricks_edits: int = _ws.bench.undo_stack.count(&"brick")
 	var b0: Array = t.shape_of(id).bricks[0]
 	var c0 := BuildRecipe.cell_from(b0[1])
 	var size0 := BrickPalette.size_of(String(b0[0]))
 	var mid := Vector3((c0.x + size0.x * 0.5) * 0.35, (c0.y + size0.y + 3) * 0.14, (c0.z + size0.z * 0.5) * 0.35)
-	_ws._delete_ray(mid, Vector3.DOWN)
+	_ws.bench._delete_ray(mid, Vector3.DOWN)
 	_ok("RMB on a shape's brick takes it out of the shape, not a hand brick's undo",
-			_ws.undo_stack.count(&"brick") == bricks_edits and _bricks(t.shape_of(id)).size() == before.size() - 1,
-			"%d brick edits, %d of %d" % [_ws.undo_stack.count(&"brick"), _bricks(t.shape_of(id)).size(), before.size()])
+			_ws.bench.undo_stack.count(&"brick") == bricks_edits and _bricks(t.shape_of(id)).size() == before.size() - 1,
+			"%d brick edits, %d of %d" % [_ws.bench.undo_stack.count(&"brick"), _bricks(t.shape_of(id)).size(), before.size()])
 	# Let go: the bricks stay, the shape is forgotten.
-	var n: int = _ws.recipe.size()
+	var n: int = _ws.bench.recipe.size()
 	t.let_go(id)
-	_ok("let go: the bricks stay, the shape is gone", _ws.recipe.size() == n and t.shape_of(id).is_empty())
-	_ws._undo()
-	_ok("and undone, it is a shape again", not t.shape_of(id).is_empty() and _ws.recipe.size() == n)
+	_ok("let go: the bricks stay, the shape is gone", _ws.bench.recipe.size() == n and t.shape_of(id).is_empty())
+	_ws.bench._undo()
+	_ok("and undone, it is a shape again", not t.shape_of(id).is_empty() and _ws.bench.recipe.size() == n)
 	t.delete_shape(id)
-	_ok("delete: shape and bricks gone, the hand brick stays", t.shape_of(id).is_empty() and _ws.recipe.size() <= 1)
-	_ws._undo()
-	_ok("and undone", not t.shape_of(id).is_empty() and _ws.recipe.size() == n)
+	_ok("delete: shape and bricks gone, the hand brick stays", t.shape_of(id).is_empty() and _ws.bench.recipe.size() <= 1)
+	_ws.bench._undo()
+	_ok("and undone", not t.shape_of(id).is_empty() and _ws.bench.recipe.size() == n)
 	# The RMB is an edit too (section 20, stage 5b): Z lays the brick back, its shape's again.
-	_ws._undo()
+	_ws.bench._undo()
 	_ok("Z lays the RMB'd brick back, into its shape", _bricks(t.shape_of(id)).size() == before.size()
-			and _ws.recipe.size() == n + 1, "%d of %d" % [_bricks(t.shape_of(id)).size(), before.size()])
+			and _ws.bench.recipe.size() == n + 1, "%d of %d" % [_bricks(t.shape_of(id)).size(), before.size()])
 	# Undo all the way: nothing left.
-	while _ws._undo():
+	while _ws.bench._undo():
 		pass
-	_ok("undo all the way back: an empty build", _ws.recipe.size() == 0 and t.shapes().is_empty(),
-			"%d bricks, %d shapes" % [_ws.recipe.size(), t.shapes().size()])
+	_ok("undo all the way back: an empty build", _ws.bench.recipe.size() == 0 and t.shapes().is_empty(),
+			"%d bricks, %d shapes" % [_ws.bench.recipe.size(), t.shapes().size()])
 
 
 func _wall_checks() -> void:
 	print("[probe] standing shapes")
-	_ws._new_build()
-	var t: WorkshopTools = _ws._tools
+	_ws.bench._new_build()
+	var t: WorkshopTools = _ws.bench._tools
 	_hold("brick_1x2")
 	t.thick = 1
-	var f0: int = _ws.asm.frames[0]
+	var f0: int = _ws.bench.asm.frames[0]
 	# A gable: a triangle standing on the baseplate, 15 studs wide.
 	var id := t.add_shape("triangle", "wall_x", Vector2i(10, 1), Vector2i(24, 18), 20)
 	var cells := BrickShapes.shape_cells(t.shape_of(id))
 	var filled := 0
 	for c in cells:
-		if _ws.world.is_solid(f0, c):
+		if _ws.bench.world.is_solid(f0, c):
 			filled += 1
 	_ok("a triangle wall lays its cells (%d of %d)" % [filled, cells.size()], filled >= cells.size() * 0.95 and filled > 50)
 	# A round window cut right through it.
 	t.apply_cut({"kind": "circle", "lie": "wall_x", "a": [15, 3], "b": [19, 13], "at": 20, "depth": 1})
-	_ok("a round window cut out of it", not _ws.world.is_solid(f0, Vector3i(17, 8, 20)) and (t.shape_of(id).cuts as Array).size() == 1)
-	_ok("the wall round it stands", _ws.world.is_solid(f0, Vector3i(12, 2, 20)))
+	_ok("a round window cut out of it", not _ws.bench.world.is_solid(f0, Vector3i(17, 8, 20)) and (t.shape_of(id).cuts as Array).size() == 1)
+	_ok("the wall round it stands", _ws.bench.world.is_solid(f0, Vector3i(12, 2, 20)))
 	# A ring lying flat, 3 plates: a round platform's rim.
 	_hold("brick_1x1")
 	t.tall = 3
@@ -426,7 +426,7 @@ func _wall_checks() -> void:
 	var rc := BrickShapes.shape_cells(t.shape_of(rid))
 	var rf := 0
 	for c in rc:
-		if _ws.world.is_solid(f0, c):
+		if _ws.bench.world.is_solid(f0, c):
 			rf += 1
 	_ok("a ring lying flat is laid", rf == rc.size() and rc.size() > 30, "%d of %d" % [rf, rc.size()])
 
@@ -437,9 +437,9 @@ func _sketch_checks() -> void:
 	_ok("the pen fills an outline 8 x 6 with 48 cells", sq.size() == 48)
 	_ok("and a brush stroke round its path", WkSketchPen.region_cells(WkSketchPen.brush_entry([Vector2(5.5, 5.5)], 1, true, "top")).size() == 9)
 	_ok("BrickShapes fills an outline with the same code", WkShapes.outline_cells([[4, 4], [12, 4], [12, 10], [4, 10]]) == sq)
-	_ws._new_build()
-	var t: WorkshopTools = _ws._tools
-	var f0: int = _ws.asm.frames[0]
+	_ws.bench._new_build()
+	var t: WorkshopTools = _ws.bench._tools
+	var f0: int = _ws.bench.asm.frames[0]
 	_hold("brick_1x2")
 	t.pick("draw")
 	_ok("Sketch is on the rail", t.active() == "draw" and t.rail.buttons.has("draw"))
@@ -463,7 +463,7 @@ func _sketch_checks() -> void:
 	var cells := BrickShapes.shape_cells(t.shapes()[0])
 	var filled := 0
 	for c in cells:
-		if _ws.world.is_solid(f0, c):
+		if _ws.bench.world.is_solid(f0, c):
 			filled += 1
 	_ok("of the held brick, every cell laid (%d)" % cells.size(), cells.size() == 48 * 3 and filled == cells.size())
 	# RMB with the brush: a cut through it.
@@ -475,9 +475,9 @@ func _sketch_checks() -> void:
 	t.sketch.commit()
 	t.commit_pending()
 	_ok("a stroke drawn with RMB cuts the shape", (t.shapes()[0].cuts as Array).size() == 1
-			and not _ws.world.is_solid(f0, Vector3i(8, 2, 7)) and _ws.world.is_solid(f0, Vector3i(4, 2, 4)))
+			and not _ws.bench.world.is_solid(f0, Vector3i(8, 2, 7)) and _ws.bench.world.is_solid(f0, Vector3i(4, 2, 4)))
 	# Saved, and laid again from the save: the outline is kept.
-	var back := BuildRecipe.from_dict(JSON.parse_string(JSON.stringify(_ws.recipe.to_dict())))
+	var back := BuildRecipe.from_dict(JSON.parse_string(JSON.stringify(_ws.bench.recipe.to_dict())))
 	var kept: Dictionary = back.meta.shapes[0]
 	_ok("saved, a sketched shape's outline fills the same", BrickShapes.shape_cells(kept).size()
 			== BrickShapes.shape_cells(t.shapes()[0]).size())
@@ -486,56 +486,56 @@ func _sketch_checks() -> void:
 
 ## A room 16 x 10, 24 plates tall, of 1x4s, on the baseplate; returns its shape id.
 func _room() -> int:
-	_ws._new_build()
-	var t: WorkshopTools = _ws._tools
+	_ws.bench._new_build()
+	var t: WorkshopTools = _ws.bench._tools
 	_hold("brick_1x4")
-	_ws._colour = 2
+	_ws.bench._colour = 2
 	t.tall = 24
 	t.staggered = true
 	return t.add_shape("hollow", "flat", Vector2i(4, 4), Vector2i(19, 13), 1)
 
 
 func _solid(c: Vector3i) -> bool:
-	return _ws.world.is_solid(_ws.asm.frames[0], c)
+	return _ws.bench.world.is_solid(_ws.bench.asm.frames[0], c)
 
 
 func _opening_checks() -> void:
 	print("[probe] doors and windows, with frames and glass")
 	var wall := _room()
-	var t: WorkshopTools = _ws._tools
-	var f0: int = _ws.asm.frames[0]
+	var t: WorkshopTools = _ws.bench._tools
+	var f0: int = _ws.bench.asm.frames[0]
 	var before := _bricks(t.shape_of(wall))
-	var n0: int = _ws.recipe.size()
+	var n0: int = _ws.bench.recipe.size()
 	# A window, clicked on the front wall at plate 6, framed in white 1x2s.
 	_hold("brick_1x2")
-	_ws._colour = 1
+	_ws.bench._colour = 1
 	t.frame_on = true
 	t.glass_on = true
 	var face := t.face_under(Vector3(11.5 * 0.35, 6.5 * 0.14, -3.0), Vector3(0, 0, 1))
 	var op := t.apply_opening("window", face)
-	_ok("one undo for the window, its frame and its glass", _ws.undo_stack.top_kind() == &"shape"
+	_ok("one undo for the window, its frame and its glass", _ws.bench.undo_stack.top_kind() == &"shape"
 			and t.shapes().size() == 3, "%d shapes" % t.shapes().size())
 	var glass := WorkshopTools.glass_paint()
 	_ok("there is a see-through material for glass", BrickWorld.is_material_translucent(glass.x))
 	var a := WkShapes.v2i(op.a)
 	var b := WkShapes.v2i(op.b)
 	var mid := Vector3i((a.x + b.x) >> 1, (a.y + b.y) >> 1, 4)
-	var bid: int = _ws.world.block_at(f0, mid)
-	_ok("the window is glass", bid >= 0 and _ws.world.get_block_material(f0, bid) == glass.x)
+	var bid: int = _ws.bench.world.block_at(f0, mid)
+	_ok("the window is glass", bid >= 0 and _ws.bench.world.get_block_material(f0, bid) == glass.x)
 	var fr := Vector3i(a.x - 1, (a.y + b.y) >> 1, 4)
-	var fid: int = _ws.world.block_at(f0, fr)
-	_ok("framed beside it in the held colour", fid >= 0 and _ws.world.get_block_colour(f0, fid) == 1)
+	var fid: int = _ws.bench.world.block_at(f0, fr)
+	_ok("framed beside it in the held colour", fid >= 0 and _ws.bench.world.get_block_colour(f0, fid) == 1)
 	var sill := Vector3i((a.x + b.x) >> 1, a.y - 1, 4)
-	var sid: int = _ws.world.block_at(f0, sill)
-	_ok("with a sill under it", sid >= 0 and _ws.world.get_block_colour(f0, sid) == 1)
+	var sid: int = _ws.bench.world.block_at(f0, sill)
+	_ok("with a sill under it", sid >= 0 and _ws.bench.world.get_block_colour(f0, sid) == 1)
 	var wall_ok := _solid(Vector3i(a.x - 2, a.y, 4)) and _solid(Vector3i(a.x, b.y + 4, 4))
-	var wid: int = _ws.world.block_at(f0, Vector3i(a.x - 2, a.y, 4))
-	_ok("and the wall round the frame is the wall's", wall_ok and _ws.world.get_block_colour(f0, wid) == 2)
+	var wid: int = _ws.bench.world.block_at(f0, Vector3i(a.x - 2, a.y, 4))
+	_ok("and the wall round the frame is the wall's", wall_ok and _ws.bench.world.get_block_colour(f0, wid) == 2)
 	_ok("the back wall untouched", _solid(Vector3i((a.x + b.x) >> 1, a.y + 2, 13)))
-	_ws._undo()
+	_ws.bench._undo()
 	_ok("undo: the wall exactly as it was, no frame or glass", t.shapes().size() == 1
-			and _bricks(t.shape_of(wall)) == before and _ws.recipe.size() == n0,
-			"%d shapes, %d of %d bricks" % [t.shapes().size(), _ws.recipe.size(), n0])
+			and _bricks(t.shape_of(wall)) == before and _ws.bench.recipe.size() == n0,
+			"%d shapes, %d of %d bricks" % [t.shapes().size(), _ws.bench.recipe.size(), n0])
 	# A door: no sill, the floor stays open.
 	var dface := t.face_under(Vector3(8.5 * 0.35, 4.5 * 0.14, -3.0), Vector3(0, 0, 1))
 	var dop := t.apply_opening("door", dface)
@@ -551,17 +551,17 @@ func _opening_checks() -> void:
 func _repeat_checks() -> void:
 	print("[probe] repeat: storeys and rows")
 	var wall := _room()
-	var t: WorkshopTools = _ws._tools
+	var t: WorkshopTools = _ws.bench._tools
 	_hold("brick_1x2")
 	var face := t.face_under(Vector3(8.5 * 0.35, 4.5 * 0.14, -3.0), Vector3(0, 0, 1))
 	t.apply_opening("door", face)
 	# A plain brick on the floor inside, in the storey.
 	_hold("plate_1x1")
-	_ws._cell = Vector3i(10, 1, 8)
-	_ws._update_ghost()
-	_ws._place()
+	_ws.bench._cell = Vector3i(10, 1, 8)
+	_ws.bench._update_ghost()
+	_ws.bench._place()
 	var shapes0 := t.shapes().size()
-	var n0: int = _ws.recipe.size()
+	var n0: int = _ws.bench.recipe.size()
 	t.rep_what = "storey"
 	t.selected = -1
 	t.rep_lo = 1
@@ -573,9 +573,9 @@ func _repeat_checks() -> void:
 	_ok("each storey has its door, open, framed", not _solid(Vector3i(9, 26, 4)) and not _solid(Vector3i(9, 50, 4))
 			and _solid(Vector3i(5, 26, 4)) and _solid(Vector3i(5, 50, 4)))
 	_ok("and its loose brick", _solid(Vector3i(10, 25, 8)) and _solid(Vector3i(10, 49, 8)))
-	_ws._undo()
-	_ok("one undo takes every copy back", t.shapes().size() == shapes0 and _ws.recipe.size() == n0,
-			"%d shapes, %d bricks" % [t.shapes().size(), _ws.recipe.size()])
+	_ws.bench._undo()
+	_ok("one undo takes every copy back", t.shapes().size() == shapes0 and _ws.bench.recipe.size() == n0,
+			"%d shapes, %d bricks" % [t.shapes().size(), _ws.bench.recipe.size()])
 	# A window repeated along X: three windows, each cut in the wall.
 	_hold("brick_1x2")
 	var wface := t.face_under(Vector3(11.5 * 0.35, 6.5 * 0.14, -3.0), Vector3(0, 0, 1))
@@ -590,12 +590,12 @@ func _repeat_checks() -> void:
 	t.repeat("x", 2, 1)
 	var a := WkShapes.v2i(op.a)
 	var g := WorkshopTools.glass_paint()
-	var f0: int = _ws.asm.frames[0]
+	var f0: int = _ws.bench.asm.frames[0]
 	var ok := true
 	for k in [0, 1, 2]:
 		var c := Vector3i(a.x + k * 5, a.y + 1, 4)
-		var bid: int = _ws.world.block_at(f0, c)
-		ok = ok and bid >= 0 and _ws.world.get_block_material(f0, bid) == g.x
+		var bid: int = _ws.bench.world.block_at(f0, c)
+		ok = ok and bid >= 0 and _ws.bench.world.get_block_material(f0, bid) == g.x
 	_ok("a window repeated twice along X, a stud between frames: three windows of glass", ok)
 	_ok("its copies cut the wall they land on", (t.shape_of(wall).cuts as Array).size() >= 4)
 	# A sketched brush stroke laid with LMB is a shape too.
@@ -615,7 +615,7 @@ func _repeat_checks() -> void:
 
 func _button_checks() -> void:
 	print("[probe] every key a button (section 7)")
-	var t: WorkshopTools = _ws._tools
+	var t: WorkshopTools = _ws.bench._tools
 	var all := true
 	for sec in WorkshopTools.ACTIONS:
 		for row in sec[1]:
@@ -627,123 +627,123 @@ func _button_checks() -> void:
 		var b: Button = t.rail.buttons.get(row[0])
 		tools_ok = tools_ok and b != null and b.icon != null
 	_ok("every tool a button with an icon", tools_ok and t.rail.buttons.size() == 8)
-	var yaw: int = _ws._yaw
+	var yaw: int = _ws.bench._yaw
 	t.act("rotate")
-	_ok("Rotate turns the brick in hand", _ws._yaw == (yaw + 1) % 4)
+	_ok("Rotate turns the brick in hand", _ws.bench._yaw == (yaw + 1) % 4)
 	t.act("lock")
-	_ok("Lock height stays on", _ws.plane_locked)
+	_ok("Lock height stays on", _ws.bench.plane_locked)
 	t.act("lock")
-	var grid: bool = _ws._grid_on
+	var grid: bool = _ws.bench._grid_on
 	t.act("grid")
-	_ok("Grid toggles", _ws._grid_on != grid and _ws._grid.visible == _ws._grid_on)
+	_ok("Grid toggles", _ws.bench._grid_on != grid and _ws.bench._grid.visible == _ws.bench._grid_on)
 	t.act("grid")
-	var role: int = _ws._role
+	var role: int = _ws.bench._role
 	t.act("layer")
-	_ok("Layer moves the hand to the next layer", _ws._role != role)
-	while _ws._role != role:
+	_ok("Layer moves the hand to the next layer", _ws.bench._role != role)
+	while _ws.bench._role != role:
 		t.act("layer")
 
 
 func _redo_checks() -> void:
 	print("[probe] redo, and a run as one undo")
-	_ws._new_build()
-	var t: WorkshopTools = _ws._tools
+	_ws.bench._new_build()
+	var t: WorkshopTools = _ws.bench._tools
 	_hold("plate_1x1")
-	_ws._cell = Vector3i(20, 1, 20)
-	_ws._update_ghost()
-	var before: int = _ws.recipe.size()
-	_ws._place()
-	_ws._begin_run(before)
-	_ws._run_moved = 40.0
-	_ws._run_press_ms = Time.get_ticks_msec() - 1000
+	_ws.bench._cell = Vector3i(20, 1, 20)
+	_ws.bench._update_ghost()
+	var before: int = _ws.bench.recipe.size()
+	_ws.bench._place()
+	_ws.bench._begin_run(before)
+	_ws.bench._run_moved = 40.0
+	_ws.bench._run_press_ms = Time.get_ticks_msec() - 1000
 	for x in [21, 22, 23]:
-		_ws._cell = Vector3i(x, 1, 20)
-		_ws._update_ghost()
-		_ws.run_step()
-	_ws._end_run()
-	_ok("a run of four", _ws.recipe.size() == 4)
-	_ws._undo()
-	_ok("one Z takes the whole run back", _ws.recipe.size() == 0, "%d left" % _ws.recipe.size())
-	_ws.redo_last()
-	_ok("Redo lays it all back", _ws.recipe.size() == 4 and _solid(Vector3i(23, 1, 20)))
-	_ws._undo()
-	_ok("and it undoes as one again", _ws.recipe.size() == 0)
+		_ws.bench._cell = Vector3i(x, 1, 20)
+		_ws.bench._update_ghost()
+		_ws.bench.run_step()
+	_ws.bench._end_run()
+	_ok("a run of four", _ws.bench.recipe.size() == 4)
+	_ws.bench._undo()
+	_ok("one Z takes the whole run back", _ws.bench.recipe.size() == 0, "%d left" % _ws.bench.recipe.size())
+	_ws.bench.redo_last()
+	_ok("Redo lays it all back", _ws.bench.recipe.size() == 4 and _solid(Vector3i(23, 1, 20)))
+	_ws.bench._undo()
+	_ok("and it undoes as one again", _ws.bench.recipe.size() == 0)
 	_hold("brick_1x4")
 	t.tall = 3
 	var id := t.add_shape("rect", "flat", Vector2i(4, 4), Vector2i(11, 7), 1)
 	var laid := _bricks(t.shape_of(id))
-	_ws._undo()
-	_ok("a shape undone", t.shapes().is_empty() and _ws.recipe.size() == 0)
-	_ws.redo_last()
+	_ws.bench._undo()
+	_ok("a shape undone", t.shapes().is_empty() and _ws.bench.recipe.size() == 0)
+	_ws.bench.redo_last()
 	_ok("and redone, the same bricks", t.shapes().size() == 1 and _bricks(t.shapes()[0]) == laid)
-	_ws._undo()
+	_ws.bench._undo()
 	_ok("and undone again", t.shapes().is_empty())
-	_ws._place()
-	_ok("a new edit clears what redo had", not _ws.undo_stack.can_redo())
+	_ws.bench._place()
+	_ok("a new edit clears what redo had", not _ws.bench.undo_stack.can_redo())
 
 	# One history (addons/workshop_kit; Docs/BuildTools.md section 20): each Z takes back its
 	# own edit's brick, and an edit whose brick was taken away by hand is skipped, not a Z.
-	_ws._new_build()
+	_ws.bench._new_build()
 	_hold("plate_1x1")
 	for x in [30, 32, 34]:
-		_ws._cell = Vector3i(x, 1, 20)
-		_ws._update_ghost()
-		_ws._place()
+		_ws.bench._cell = Vector3i(x, 1, 20)
+		_ws.bench._update_ghost()
+		_ws.bench._place()
 	var stud: float = BrickPalette.STUD_M
-	_ws._delete_ray(Vector3(32.5 * stud, 3.0, 20.5 * stud), Vector3.DOWN)
-	_ok("RMB takes the middle brick", _ws.recipe.size() == 2 and not _solid(Vector3i(32, 1, 20)))
-	_ws._undo()
-	_ok("Z lays it back (an RMB is an edit)", _ws.recipe.size() == 3 and _solid(Vector3i(32, 1, 20)))
-	_ws._undo()
-	_ok("Z: the newest brick", _ws.recipe.size() == 2 and not _solid(Vector3i(34, 1, 20)))
+	_ws.bench._delete_ray(Vector3(32.5 * stud, 3.0, 20.5 * stud), Vector3.DOWN)
+	_ok("RMB takes the middle brick", _ws.bench.recipe.size() == 2 and not _solid(Vector3i(32, 1, 20)))
+	_ws.bench._undo()
+	_ok("Z lays it back (an RMB is an edit)", _ws.bench.recipe.size() == 3 and _solid(Vector3i(32, 1, 20)))
+	_ws.bench._undo()
+	_ok("Z: the newest brick", _ws.bench.recipe.size() == 2 and not _solid(Vector3i(34, 1, 20)))
 	# Taken out some other way than RMB (as a cut does): its edit is skipped.
-	_ws._remove_rid(_ws.find_brick("plate_1x1", Vector3i(32, 1, 20)))
-	_ws._undo()
-	_ok("Z again: the first, the taken one's edit skipped", _ws.recipe.size() == 0
-			and not _ws.undo_stack.can_undo(), "%d left, %d steps" % [_ws.recipe.size(), _ws.undo_stack.size()])
-	_ws.redo_last()
-	_ws.redo_last()
-	_ok("redo lays both back", _ws.recipe.size() == 2 and _solid(Vector3i(30, 1, 20)) and _solid(Vector3i(34, 1, 20)))
+	_ws.bench._remove_rid(_ws.bench.find_brick("plate_1x1", Vector3i(32, 1, 20)))
+	_ws.bench._undo()
+	_ok("Z again: the first, the taken one's edit skipped", _ws.bench.recipe.size() == 0
+			and not _ws.bench.undo_stack.can_undo(), "%d left, %d steps" % [_ws.bench.recipe.size(), _ws.bench.undo_stack.size()])
+	_ws.bench.redo_last()
+	_ws.bench.redo_last()
+	_ok("redo lays both back", _ws.bench.recipe.size() == 2 and _solid(Vector3i(30, 1, 20)) and _solid(Vector3i(34, 1, 20)))
 	_hold("plate_1x2")
-	_ws._cell = Vector3i(40, 1, 20)
-	_ws._update_ghost()
-	_ws._place()
-	var part: String = _ws.recipe.part_of(2)
-	_ws._rotate_last()
-	_ok("T turns the brick under its own edit", _ws.recipe.size() == 3 and _ws.recipe.part_of(2) != part
-			and _ws.undo_stack.size() == 3, "%s -> %s, %d steps" % [part, _ws.recipe.part_of(2), _ws.undo_stack.size()])
-	_ws._undo()
-	_ok("and Z takes the turned brick", _ws.recipe.size() == 2)
+	_ws.bench._cell = Vector3i(40, 1, 20)
+	_ws.bench._update_ghost()
+	_ws.bench._place()
+	var part: String = _ws.bench.recipe.part_of(2)
+	_ws.bench._rotate_last()
+	_ok("T turns the brick under its own edit", _ws.bench.recipe.size() == 3 and _ws.bench.recipe.part_of(2) != part
+			and _ws.bench.undo_stack.size() == 3, "%s -> %s, %d steps" % [part, _ws.bench.recipe.part_of(2), _ws.bench.undo_stack.size()])
+	_ws.bench._undo()
+	_ok("and Z takes the turned brick", _ws.bench.recipe.size() == 2)
 
 
 func _mirror_checks() -> void:
 	print("[probe] the mirror (moved down from the asset workshop)")
-	_ws._new_build()
-	var t: WorkshopTools = _ws._tools
-	_ws.mirror_axis = 2
-	_ws.mirror_z = 24.0
-	_ws.set_mirror(true)
+	_ws.bench._new_build()
+	var t: WorkshopTools = _ws.bench._tools
+	_ws.bench.mirror_axis = 2
+	_ws.bench.mirror_z = 24.0
+	_ws.bench.set_mirror(true)
 	_hold("plate_1x1")
-	_ws._cell = Vector3i(20, 1, 10)
-	_ws._update_ghost()
-	var before: int = _ws.recipe.size()
-	_ws._place()
-	_ws._begin_run(before)
-	_ws._end_run()
+	_ws.bench._cell = Vector3i(20, 1, 10)
+	_ws.bench._update_ghost()
+	var before: int = _ws.bench.recipe.size()
+	_ws.bench._place()
+	_ws.bench._begin_run(before)
+	_ws.bench._end_run()
 	_ok("a brick placed is placed again across the plane", _solid(Vector3i(20, 1, 10)) and _solid(Vector3i(20, 1, 37)))
-	_ws._undo()
-	_ok("the pair undoes as one", _ws.recipe.size() == 0)
+	_ws.bench._undo()
+	_ok("the pair undoes as one", _ws.bench.recipe.size() == 0)
 	_hold("brick_1x2")
 	t.tall = 3
 	t.add_shape("rect", "flat", Vector2i(4, 4), Vector2i(9, 7), 1)
 	_ok("a shape and its mirror image", t.shapes().size() == 2 and _solid(Vector3i(4, 1, 43)) and _solid(Vector3i(9, 1, 40)))
-	_ws.set_mirror(false)
+	_ws.bench.set_mirror(false)
 
 
 ## A room 12 x 8, 12 plates of 1x2s; returns its id.
 func _small_room() -> int:
-	_ws._new_build()
-	var t: WorkshopTools = _ws._tools
+	_ws.bench._new_build()
+	var t: WorkshopTools = _ws.bench._tools
 	_hold("brick_1x2")
 	t.tall = 12
 	return t.add_shape("hollow", "flat", Vector2i(4, 4), Vector2i(15, 11), 1)
@@ -751,8 +751,8 @@ func _small_room() -> int:
 
 func _house_checks() -> void:
 	print("[probe] walls, floor, stairs, roof")
-	_ws._new_build()
-	var t: WorkshopTools = _ws._tools
+	_ws.bench._new_build()
+	var t: WorkshopTools = _ws.bench._tools
 	_hold("brick_1x2")
 	t.tall = 6
 	t.thick = 1
@@ -798,8 +798,8 @@ func _house_checks() -> void:
 	t.roof_overhang = 1
 	var rid := t.roof_on(room)
 	var slopes := 0
-	for i in _ws.recipe.size():
-		if _ws.recipe.part_of(i).begins_with("slope_1x2"):
+	for i in _ws.bench.recipe.size():
+		if _ws.bench.recipe.part_of(i).begins_with("slope_1x2"):
 			slopes += 1
 	var rc := BrickShapes.shape_cells(t.shape_of(rid))
 	var rf := 0
@@ -810,11 +810,11 @@ func _house_checks() -> void:
 	_ok("every cell of it laid (%d)" % rc.size(), rf == rc.size())
 	_ok("it sits on the walls, a stud past them", _solid(Vector3i(3, 13, 3)) or _solid(Vector3i(3, 13, 7)))
 	var front := Vector3i.ZERO
-	for i in _ws.recipe.size():
-		if _ws.recipe.part_of(i).begins_with("slope_1x2") and _ws.recipe.cell_of(i).z == 3:
-			front = BrickPalette.front_of(_ws.recipe.part_of(i))
+	for i in _ws.bench.recipe.size():
+		if _ws.bench.recipe.part_of(i).begins_with("slope_1x2") and _ws.bench.recipe.cell_of(i).z == 3:
+			front = BrickPalette.front_of(_ws.bench.recipe.part_of(i))
 	_ok("the low side's slopes face out", front == Vector3i(0, 0, -1), str(front))
-	_ws._undo()
+	_ws.bench._undo()
 	_ok("one undo", t.shape_of(rid).is_empty())
 	t.roof_style = "hip"
 	var hid := t.roof_on(room)
@@ -823,8 +823,8 @@ func _house_checks() -> void:
 
 func _pull_checks() -> void:
 	print("[probe] base, then height (section 8)")
-	_ws._new_build()
-	var t: WorkshopTools = _ws._tools
+	_ws.bench._new_build()
+	var t: WorkshopTools = _ws.bench._tools
 	_hold("plate_1x4")
 	_ok("a plate in hand: the height goes a plate at a time", t.height_step("flat") == 1)
 	_hold("brick_2x4")
@@ -900,7 +900,7 @@ func _pull_checks() -> void:
 			hf += 1
 	_ok("a hip roof's corners are corner slopes (%d)" % corners, corners >= 4 and corners % 4 == 0)
 	_ok("and every cell of it is laid", hf == hc.size(), "%d of %d" % [hf, hc.size()])
-	_ws._undo()
+	_ws.bench._undo()
 	_hold("curve_1x2")
 	t.roof_style = "gable"
 	var cid := t.roof_on(room)
@@ -917,9 +917,9 @@ func _floor_plan_checks() -> void:
 	_ok("a plan is its strokes in, less its strokes out", WkShapes.plan_region(pts).size() == 80 - 4)
 	_ok("walls along its outline: a ring the brick's width", WkShapes.ring(WkShapes.plan_region(
 			{"adds": [[[0, 0], [10, 0], [10, 8], [0, 8]]]}), 1).size() == 32)
-	_ws._new_build()
-	var t: WorkshopTools = _ws._tools
-	var f0: int = _ws.asm.frames[0]
+	_ws.bench._new_build()
+	var t: WorkshopTools = _ws.bench._tools
+	var f0: int = _ws.bench.asm.frames[0]
 	_hold("brick_1x2")
 	t.pick("draw")
 	t.lie = "flat"
@@ -959,9 +959,9 @@ func _floor_plan_checks() -> void:
 	_ok("every cell of it laid (%d)" % cells.size(), filled == cells.size())
 	var starts_ok := true
 	var floors_plates := true
-	for i in _ws.recipe.size():
-		var size := BrickPalette.size_of(_ws.recipe.part_of(i))
-		var y: int = _ws.recipe.cell_of(i).y
+	for i in _ws.bench.recipe.size():
+		var size := BrickPalette.size_of(_ws.bench.recipe.part_of(i))
+		var y: int = _ws.bench.recipe.cell_of(i).y
 		if size.y == 3:
 			starts_ok = starts_ok and y in [2, 5, 8, 12, 15, 18]
 		if y in [1, 11, 21]:
@@ -975,12 +975,12 @@ func _floor_plan_checks() -> void:
 	var face := t.face_under(Vector3(12.5 * 0.35, 5.5 * 0.14, -3.0), Vector3(0, 0, 1))
 	t.apply_opening("window", face)
 	var g := WorkshopTools.glass_paint()
-	var gl0: int = _ws.world.block_at(f0, Vector3i(12, 6, 4))
-	var gl1: int = _ws.world.block_at(f0, Vector3i(12, 16, 4))
+	var gl0: int = _ws.bench.world.block_at(f0, Vector3i(12, 6, 4))
+	var gl1: int = _ws.bench.world.block_at(f0, Vector3i(12, 16, 4))
 	_ok("a window on every floor: glass on both storeys", gl0 >= 0 and gl1 >= 0
-			and _ws.world.get_block_material(f0, gl0) == g.x and _ws.world.get_block_material(f0, gl1) == g.x)
-	_ws._undo()
-	_ok("one undo takes them all", _ws.world.get_block_material(f0, _ws.world.block_at(f0, Vector3i(12, 16, 4))) != g.x)
+			and _ws.bench.world.get_block_material(f0, gl0) == g.x and _ws.bench.world.get_block_material(f0, gl1) == g.x)
+	_ws.bench._undo()
+	_ok("one undo takes them all", _ws.bench.world.get_block_material(f0, _ws.bench.world.block_at(f0, Vector3i(12, 16, 4))) != g.x)
 	t.door_size = Vector2i(3, 6)
 	var dface := t.face_under(Vector3(8.5 * 0.35, 15.5 * 0.14, -3.0), Vector3(0, 0, 1))
 	var dop := t.opening_spec("door", dface)
@@ -1011,13 +1011,13 @@ func _floor_plan_checks() -> void:
 
 func _simpler_checks() -> void:
 	print("[probe] two cameras, the pop-out, draw then drag (section 10)")
-	_ws._new_build()
-	var t: WorkshopTools = _ws._tools
+	_ws.bench._new_build()
+	var t: WorkshopTools = _ws.bench._tools
 	current_scene = _ws
 	_ok("Esc is the pause menu here", root.get_node("/root/MenuManager").can_pause())
 	current_scene = null
 	var v: WkCamera = t.view
-	var cam = _ws._camera
+	var cam = _ws.bench._camera
 	_ok("orbit to start: the cursor is free, a click does not take the mouse", v.mode == "orbit" and v.wants_cursor()
 			and not cam.click_captures and not cam._captured)
 	t.act("fps")
@@ -1077,7 +1077,7 @@ func _simpler_checks() -> void:
 	_ok("a wall of only 1x4s: as many as fit, gaps left", all_held and covered > 0 and covered < 90, "%d of 90" % covered)
 	t.only_held = false
 	# Wall thickness.
-	_ws._new_build()
+	_ws.bench._new_build()
 	_hold("brick_1x2")
 	t.pick("draw")
 	t.wall_thick = 2
@@ -1088,7 +1088,7 @@ func _simpler_checks() -> void:
 	t.commit_pending()
 	_ok("a wall two studs thick, with a 1-wide brick", _solid(Vector3i(8, 2, 4)) and _solid(Vector3i(8, 2, 5)) and not _solid(Vector3i(8, 2, 6)))
 	t.wall_thick = 0
-	_ws._new_build()
+	_ws.bench._new_build()
 	_hold("brick_1x2")
 	t.wall_thick = 3
 	t.pick("draw")
@@ -1109,7 +1109,7 @@ func _simpler_checks() -> void:
 	t.sketch_level = -1
 	t.makes = "solid"
 	# Two walls meet at a corner.
-	_ws._new_build()
+	_ws.bench._new_build()
 	_hold("brick_1x2")
 	t.pick("draw")
 	var w1: int = _a_wall(t, Vector2i(4, 4), Vector2i(15, 4), 9)
@@ -1130,11 +1130,11 @@ func _simpler_checks() -> void:
 	_ok("a T joins too", w3 == w1 and t.shapes().size() == 1 and _solid(Vector3i(9, 4, 9)))
 	var w4: int = _a_wall(t, Vector2i(4, 4), Vector2i(4, 13), 6)
 	_ok("a different height stays its own wall", w4 != w1 and t.shapes().size() == 2)
-	_ws._undo()
-	_ws._undo()
+	_ws.bench._undo()
+	_ws.bench._undo()
 	_ok("undo takes a joined wall back out", t.shapes().size() == 1 and not _solid(Vector3i(9, 4, 9)) and _solid(Vector3i(15, 4, 9)))
 	# Cut: draw on a face, click through or drag a depth.
-	_ws._new_build()
+	_ws.bench._new_build()
 	_hold("brick_1x4")
 	t.tall = 9
 	t.add_shape("rect", "flat", Vector2i(4, 4), Vector2i(15, 7), 1)
@@ -1184,7 +1184,7 @@ func _a_wall(t: WorkshopTools, a: Vector2i, b: Vector2i, depth: int) -> int:
 
 ## A drag as the mouse makes one: the press, the base, let go.
 func _drag_outline(t: WorkshopTools, cell: Vector3i, b: Vector2i) -> void:
-	_ws._cell = cell
+	_ws.bench._cell = cell
 	var press := InputEventMouseButton.new()
 	press.button_index = MOUSE_BUTTON_LEFT
 	press.pressed = true
@@ -1197,9 +1197,9 @@ func _drag_outline(t: WorkshopTools, cell: Vector3i, b: Vector2i) -> void:
 
 func _draw_checks() -> void:
 	print("[probe] one Draw tool: an outline and what it makes (section 11)")
-	_ws._new_build()
-	var t: WorkshopTools = _ws._tools
-	var f0: int = _ws.asm.frames[0]
+	_ws.bench._new_build()
+	var t: WorkshopTools = _ws.bench._tools
+	var f0: int = _ws.bench.asm.frames[0]
 	_hold("brick_1x2")
 	t.pick("draw")
 	_ok("the rail has Draw, not the four it replaces", t.rail.buttons.has("draw") and not t.rail.buttons.has("shape")
@@ -1217,7 +1217,7 @@ func _draw_checks() -> void:
 	rmb.pressed = true
 	_ok("RMB outside a drawing is the workshop's own", not t._make_input(rmb))
 	# A box that makes walls is a room, and meets the wall.
-	_ws._new_build()
+	_ws.bench._new_build()
 	t.set_outline("box")
 	_ok("a box making walls goes as walls", t._route() == "walls")
 	_drag_outline(t, Vector3i(4, 1, 4), Vector2i(15, 11))
@@ -1231,7 +1231,7 @@ func _draw_checks() -> void:
 	var inner := t.commit_pending()
 	_ok("and joins it", inner == room and t.shapes().size() == 1 and _solid(Vector3i(9, 5, 8)))
 	# A circle that makes walls is a round tower, a circle solid is a drum.
-	_ws._new_build()
+	_ws.bench._new_build()
 	t.set_outline("circle")
 	_drag_outline(t, Vector3i(4, 1, 4), Vector2i(20, 20))
 	t._drag.rec.depth = 6
@@ -1243,7 +1243,7 @@ func _draw_checks() -> void:
 	t.commit_pending()
 	_ok("a circle makes a solid", _solid(Vector3i(31, 1, 31)))
 	# A freehand outline that makes a building.
-	_ws._new_build()
+	_ws.bench._new_build()
 	t.set_outline("corners")
 	t.makes = "building"
 	t.storey_courses = 2
@@ -1258,7 +1258,7 @@ func _draw_checks() -> void:
 	t.commit_pending()
 	_ok("two storeys", _solid(Vector3i(10, 1, 10)) and _solid(Vector3i(10, 8, 10)) and not _solid(Vector3i(10, 4, 10)))
 	# A box that makes a building, a floor filling walls.
-	_ws._new_build()
+	_ws.bench._new_build()
 	t.flat_roof = true
 	t.set_outline("box")
 	_ok("a box making a building is a plan", t._route() == "shape")
@@ -1266,7 +1266,7 @@ func _draw_checks() -> void:
 	_ok("a storey to start", String(t._drag.rec.kind) == "plan" and int(t._drag.rec.depth) == 8, str(t._drag.rec.depth))
 	t.commit_pending()
 	_ok("placed", _solid(Vector3i(9, 1, 8)) and _solid(Vector3i(9, 8, 8)) and not _solid(Vector3i(9, 4, 8)))
-	_ws._new_build()
+	_ws.bench._new_build()
 	t.makes = "walls"
 	_drag_outline(t, Vector3i(4, 1, 4), Vector2i(15, 11))
 	t._drag.rec.depth = 6
@@ -1279,7 +1279,7 @@ func _draw_checks() -> void:
 	t.commit_pending()
 	_ok("laid", _solid(Vector3i(5, 1, 5)) and _solid(Vector3i(14, 1, 10)))
 	# Combined: a box and a circle, one plan; Cut out takes a bite.
-	_ws._new_build()
+	_ws.bench._new_build()
 	_hold("brick_1x2")
 	t.makes = "walls"
 	t.combine = true
@@ -1318,15 +1318,15 @@ func _key(code: int) -> InputEventKey:
 
 func _rest_checks() -> void:
 	print("[probe] the rest of the list (section 12)")
-	_ws._new_build()
-	var t: WorkshopTools = _ws._tools
+	_ws.bench._new_build()
+	var t: WorkshopTools = _ws.bench._tools
 	_hold("brick_1x2")
 	t.pick("hand")
 	_ok("Hand is Place to start", t.active() == "place" and WorkshopTools.rail_id(t.active()) == "hand")
 	t.pick("paint")
-	_ok("Hand's Paint is the brush", _ws._painting and WorkshopTools.rail_id(t.active()) == "hand")
+	_ok("Hand's Paint is the brush", _ws.bench._painting and WorkshopTools.rail_id(t.active()) == "hand")
 	t.pick("hand")
-	_ok("Hand comes back to what it was", _ws._painting)
+	_ok("Hand comes back to what it was", _ws.bench._painting)
 	t.pick("place")
 	_ok("no Builds tool, a bar across the top", not t.rail.buttons.has("builds") and t._bar.get_parent() != null
 			and t.rail.action_buttons.has("undo") and not t.rail.is_ancestor_of(t.rail.action_buttons["undo"]))
@@ -1356,7 +1356,7 @@ func _rest_checks() -> void:
 	# Select: an inserted build, as X.
 	_ok("Select's pop-out has a shape's options", t._select_box != null and t._builds_box != null)
 	# Push-pull: a room's top.
-	_ws._new_build()
+	_ws.bench._new_build()
 	t.makes = "solid"
 	t.set_outline("box")
 	_hold("brick_1x2")
@@ -1373,7 +1373,7 @@ func _rest_checks() -> void:
 	up.button_index = MOUSE_BUTTON_LEFT
 	t._make_input(up)
 	_ok("let go: 15 plates, laid", t._drag.is_empty() and int(t.shape_of(id).depth) == 15 and _solid(Vector3i(7, 15, 6)))
-	_ws._undo()
+	_ws.bench._undo()
 	_ok("one undo", int(t.shape_of(id).depth) == 9 and not _solid(Vector3i(7, 15, 6)))
 	# Push-pull: its side moves it.
 	var side := t.face_under(Vector3(7.5 * 0.35, 3.5 * 0.14, -3.0), Vector3(0, 0, 1))
@@ -1383,10 +1383,10 @@ func _rest_checks() -> void:
 	t._drag.by = Vector3i(0, 0, 6)
 	t._make_input(up)
 	_ok("moved 6 studs along", int(t.shape_of(id).a[1]) == 10 and _solid(Vector3i(7, 2, 12)) and not _solid(Vector3i(7, 2, 5)))
-	_ws._undo()
+	_ws.bench._undo()
 	_ok("and back", _solid(Vector3i(7, 2, 5)) and not _solid(Vector3i(7, 2, 12)))
 	# A building: windows stay with it.
-	_ws._new_build()
+	_ws.bench._new_build()
 	t.pick("draw")
 	t.makes = "building"
 	t.storey_courses = 3
@@ -1399,20 +1399,20 @@ func _rest_checks() -> void:
 	t.every_floor = true
 	t.apply_opening("window", face)
 	var g := WorkshopTools.glass_paint()
-	var f1: int = _ws.asm.frames[0]
+	var f1: int = _ws.bench.asm.frames[0]
 	var glass := func(y: int) -> bool:
-		var bid: int = _ws.world.block_at(f1, Vector3i(10, y, 4))
-		return bid >= 0 and _ws.world.get_block_material(f1, bid) == g.x
+		var bid: int = _ws.bench.world.block_at(f1, Vector3i(10, y, 4))
+		return bid >= 0 and _ws.bench.world.get_block_material(f1, bid) == g.x
 	_ok("kept with the building", (t.shape_of(b).get("openings", []) as Array).size() == 1 and glass.call(6) and glass.call(16))
 	t.resize_shape(b, 4 * 10 + 1)
 	_ok("raised to 4 storeys: the new ones get their windows", glass.call(26) and glass.call(36))
-	_ws._undo()
+	_ws.bench._undo()
 	_ok("undone", int(t.shape_of(b).depth) == 21 and not glass.call(26))
 	t.resize_shape(b, 10 + 1)
 	_ok("lowered: the window above goes", not glass.call(16) and glass.call(6))
-	_ws._undo()
+	_ws.bench._undo()
 	# Sketch on a face: a freehand hole, and a stroke on a wall's side.
-	_ws._new_build()
+	_ws.bench._new_build()
 	_hold("brick_1x4")
 	t.tall = 9
 	t.add_shape("rect", "flat", Vector2i(4, 4), Vector2i(15, 7), 1)
@@ -1449,17 +1449,17 @@ func _rest_checks() -> void:
 
 func _out_of_the_way_checks() -> void:
 	print("[probe] out of the way while placing (section 13)")
-	_ws._new_build()
-	var t: WorkshopTools = _ws._tools
+	_ws.bench._new_build()
+	var t: WorkshopTools = _ws.bench._tools
 	_ok("a Bricks button under the tools, All parts gone from the bar", t.bricks_button != null
 			and t.rail.is_ancestor_of(t.bricks_button) and not t.rail.action_buttons.has("parts"))
 	t.bricks_button.pressed.emit()
-	_ok("it opens the brick menu", _ws._hotbar.is_browsing())
+	_ok("it opens the brick menu", _ws.bench._hotbar.is_browsing())
 	await process_frame
 	_ok("and is lit while it is open", t.bricks_button.button_pressed)
 	t.bricks_button.pressed.emit()
 	await process_frame
-	_ok("and closes it", not _ws._hotbar.is_browsing() and not t.bricks_button.button_pressed)
+	_ok("and closes it", not _ws.bench._hotbar.is_browsing() and not t.bricks_button.button_pressed)
 	t.pick("draw")
 	await process_frame
 	await process_frame
@@ -1474,7 +1474,7 @@ func _out_of_the_way_checks() -> void:
 	_ok("picked again, it is back", t.rail.flyout.visible)
 	t.makes = "walls"
 	t.set_outline("line")
-	_ws._cell = Vector3i(4, 1, 4)
+	_ws.bench._cell = Vector3i(4, 1, 4)
 	t._drag = {"phase": "base", "tool": "walls", "button": MOUSE_BUTTON_LEFT, "lie": "flat", "at": 1,
 			"a": Vector2i(4, 4), "b": Vector2i(9, 4), "kind": "polyline", "cut": false}
 	await process_frame
@@ -1496,8 +1496,8 @@ func _out_of_the_way_checks() -> void:
 
 func _area_checks() -> void:
 	print("[probe] six-brick storeys and a thousand-brick area (section 15)")
-	_ws._new_build()
-	var t: WorkshopTools = _ws._tools
+	_ws.bench._new_build()
+	var t: WorkshopTools = _ws.bench._tools
 	var fresh := WorkshopTools.new()
 	_ok("a storey is six bricks", fresh.storey_courses == 6, str(fresh.storey_courses))
 	_ok("on a floor two plates thick, as the city's", fresh.floor_plates == TowerRecipe.SLAB_PLATES
@@ -1518,7 +1518,7 @@ func _area_checks() -> void:
 	_ok("storeys 20 plates apart, as the city's towers", int(t.shape_of(b).get("floor", 0)) + 18 == TowerRecipe.STOREY_PLATES,
 			str(t.shape_of(b).get("floor", 0)))
 
-	_ws._new_build()
+	_ws.bench._new_build()
 	_hold("brick_1x2")
 	t.pick("draw")
 	t.set_outline("box")
@@ -1536,46 +1536,46 @@ func _area_checks() -> void:
 			"%s %s %s %s %s" % [_solid(Vector3i(610, 2, 600)), _solid(Vector3i(610, 3, 600)), _solid(Vector3i(610, 17, 600)),
 					_solid(Vector3i(610, 18, 600)), _solid(Vector3i(610, 20, 600))])
 
-	_ws._new_build()
-	_ok("1000 bricks tall", _ws.height_plates == 1000 * BrickPalette.PLATES_PER_BRICK, str(_ws.height_plates))
+	_ws.bench._new_build()
+	_ok("1000 bricks tall", _ws.bench.height_plates == 1000 * BrickPalette.PLATES_PER_BRICK, str(_ws.bench.height_plates))
 	_ok("and a cube in ticks, so the six grids are one volume",
-			_ws.plate_studs * BrickWorld.ticks_per_stud() == _ws.height_plates * BrickWorld.ticks_per_plate()
-			and _ws.plate_studs >= 1000, str(_ws.plate_studs))
-	var f0: int = _ws.asm.frames[0]
+			_ws.bench.plate_studs * BrickWorld.ticks_per_stud() == _ws.bench.height_plates * BrickWorld.ticks_per_plate()
+			and _ws.bench.plate_studs >= 1000, str(_ws.bench.plate_studs))
+	var f0: int = _ws.bench.asm.frames[0]
 	_hold("brick_2x4")
-	_ws._axis_z = false
+	_ws.bench._axis_z = false
 	var far_up := Vector3i(1190, 2990, 1190)
-	_ws._cell = far_up
-	_ws._update_ghost()
-	_ws._place()
-	_ok("a brick in the far top corner", _ws.world.block_at(f0, far_up) >= 0 and _ws.recipe.size() == 1,
-			"valid %s joints %d size %d cell %s" % [_ws._valid, _ws._joints, _ws.recipe.size(), _ws._cell])
+	_ws.bench._cell = far_up
+	_ws.bench._update_ghost()
+	_ws.bench._place()
+	_ok("a brick in the far top corner", _ws.bench.world.block_at(f0, far_up) >= 0 and _ws.bench.recipe.size() == 1,
+			"valid %s joints %d size %d cell %s" % [_ws.bench._valid, _ws.bench._joints, _ws.bench.recipe.size(), _ws.bench._cell])
 	var over: Vector3 = BrickWorld.grid_to_world(far_up) + Vector3(0.2, 30.0, 0.2)
-	var hit: Dictionary = _ws._first_hit(over, Vector3.DOWN)
+	var hit: Dictionary = _ws.bench._first_hit(over, Vector3.DOWN)
 	_ok("a ray finds it", int(hit.get("block", -1)) >= 0, str(hit))
-	hit = _ws._first_hit(Vector3(10.0, 60.0, 10.0), Vector3.DOWN)
+	hit = _ws.bench._first_hit(Vector3(10.0, 60.0, 10.0), Vector3.DOWN)
 	_ok("a ray under nothing finds the floor, not a brick", hit.has("floor") and int(hit.block) == -1, str(hit))
-	_ok("and the floor ends with the area", _ws._first_hit(Vector3(-10.0, 60.0, 10.0), Vector3.DOWN).is_empty())
+	_ok("and the floor ends with the area", _ws.bench._first_hit(Vector3(-10.0, 60.0, 10.0), Vector3.DOWN).is_empty())
 	var dir := Vector3(1.0, -0.02, 1.0).normalized()
 	var began := Time.get_ticks_usec()
 	for i in 100:
-		_ws._first_hit(Vector3(1.0, 300.0, 1.0), dir)
+		_ws.bench._first_hit(Vector3(1.0, 300.0, 1.0), dir)
 	var us := Time.get_ticks_usec() - began
 	_ok("a hundred rays across the area are nothing", us < 5000, "%d us" % us)
 
-	_ws._cell = Vector3i(900, 1, 900)
-	_ws._update_ghost()
-	_ok("on the floor a brick is clipped", _ws._joints > 0, str(_ws._joints))
-	_ws._cell = Vector3i(900, 2, 900)
-	_ws._update_ghost()
-	_ok("a plate over it is not", _ws._joints == 0, str(_ws._joints))
-	_ws._cell = Vector3i(1190, 1, 10)
-	var win: Rect2i = _ws.grid_window()
-	_ok("the grid is a window at the ghost, inside the area", win.size.x == _ws.GRID_STUDS
-			and win.end.x == _ws.plate_studs and win.position.y == 0, str(win))
+	_ws.bench._cell = Vector3i(900, 1, 900)
+	_ws.bench._update_ghost()
+	_ok("on the floor a brick is clipped", _ws.bench._joints > 0, str(_ws.bench._joints))
+	_ws.bench._cell = Vector3i(900, 2, 900)
+	_ws.bench._update_ghost()
+	_ok("a plate over it is not", _ws.bench._joints == 0, str(_ws.bench._joints))
+	_ws.bench._cell = Vector3i(1190, 1, 10)
+	var win: Rect2i = _ws.bench.grid_window()
+	_ok("the grid is a window at the ghost, inside the area", win.size.x == _ws.bench.GRID_STUDS
+			and win.end.x == _ws.bench.plate_studs and win.position.y == 0, str(win))
 
 	# A courtyard wider than the flood's old limit of 20,000 cells.
-	_ws._new_build()
+	_ws.bench._new_build()
 	t.pick("draw")
 	t.set_outline("box")
 	t.makes = "walls"
@@ -1590,115 +1590,115 @@ func _area_checks() -> void:
 
 	# Builds saved before the area grew: a sideways grid where the small volume stood it.
 	var r := BuildRecipe.new()
-	_ws._part_index = BrickPalette.parts().find("brick_2x4")
-	var part: String = _ws._archetype_name()
+	_ws.bench._part_index = BrickPalette.parts().find("brick_2x4")
+	var part: String = _ws.bench._archetype_name()
 	r.add(part, Vector3i(10, 1, 10), 3)
-	var rot: int = _ws.world.get_chunk_rotation(_ws.asm.frames[1])
+	var rot: int = _ws.bench.world.get_chunk_rotation(_ws.bench.asm.frames[1])
 	var fi := r.add_frame(rot, Vector3i(240, 0, 0))
 	r.add(part, Vector3i(10, 1, 10), 3, fi)
-	_ws._load_recipe(r)
-	_ok("an old sideways grid keeps its bricks", _ws._placed_at.size() == 2 and int(_ws._placed_at[1][1]) >= 0, str(_ws._placed_at))
+	_ws.bench._load_recipe(r)
+	_ok("an old sideways grid keeps its bricks", _ws.bench._placed_at.size() == 2 and int(_ws.bench._placed_at[1][1]) >= 0, str(_ws.bench._placed_at))
 	_ok("and the view goes to the build, not the middle of the area",
-			_ws._camera.global_position.distance_to(BrickWorld.grid_to_world(Vector3i(10, 1, 10))) < 40.0,
-			str(_ws._camera.global_position))
+			_ws.bench._camera.global_position.distance_to(BrickWorld.grid_to_world(Vector3i(10, 1, 10))) < 40.0,
+			str(_ws.bench._camera.global_position))
 	t.floor_plates = 1
 
 
 ## Drawn over frames, nearest first; flat far away (Docs/BuildTools.md section 19).
 func _far_checks() -> void:
 	print("[probe] far away, and laid over frames (section 19)")
-	if not _ws._draws_sections():
+	if not _ws.bench._draws_sections():
 		return   # said once, by _section_checks
-	var t: WorkshopTools = _ws._tools
-	_ws._new_build()
-	_ws.mesh_over_frames = true
-	_ws._camera.global_position = BrickWorld.grid_to_world(Vector3i(100, 30, 80))
+	var t: WorkshopTools = _ws.bench._tools
+	_ws.bench._new_build()
+	_ws.bench.mesh_over_frames = true
+	_ws.bench._camera.global_position = BrickWorld.grid_to_world(Vector3i(100, 30, 80))
 	# Across four tiles of studs and three, two layers up: two dozen sections.
 	var b := _a_building(4, Vector2i(40, 40), Vector2i(160, 140))
-	var f0: int = _ws.asm.frames[0]
-	var waiting: int = _ws._queued.size()
-	var drawn: int = (_ws._sections.get(f0, {}) as Dictionary).size()
-	_ok("a big lay draws a frame's worth at once and queues the rest", drawn == _ws.SECTIONS_AT_ONCE and waiting > 0,
+	var f0: int = _ws.bench.asm.frames[0]
+	var waiting: int = _ws.bench._queued.size()
+	var drawn: int = (_ws.bench._sections.get(f0, {}) as Dictionary).size()
+	_ok("a big lay draws a frame's worth at once and queues the rest", drawn == _ws.bench.SECTIONS_AT_ONCE and waiting > 0,
 			"%d drawn, %d waiting" % [drawn, waiting])
-	var hit: Dictionary = _ws._first_hit(BrickWorld.grid_to_world(Vector3i(159, 1, 139)) + Vector3(0.1, 40.0, 0.1), Vector3.DOWN)
+	var hit: Dictionary = _ws.bench._first_hit(BrickWorld.grid_to_world(Vector3i(159, 1, 139)) + Vector3(0.1, 40.0, 0.1), Vector3.DOWN)
 	_ok("a ray finds bricks not drawn yet", int(hit.get("block", -1)) >= 0, str(hit))
 	var frames := 0
-	while not _ws._queued.is_empty() and frames < 50:
-		_ws._section_process()
+	while not _ws.bench._queued.is_empty() and frames < 50:
+		_ws.bench._section_process()
 		frames += 1
-	_ok("the rest are drawn a frame's worth at a time", _ws._queued.is_empty() and frames == ceili(float(waiting) / _ws.SECTIONS_AT_ONCE),
+	_ok("the rest are drawn a frame's worth at a time", _ws.bench._queued.is_empty() and frames == ceili(float(waiting) / _ws.bench.SECTIONS_AT_ONCE),
 			"%d frames for %d" % [frames, waiting])
 	_sections_match_whole("drawn over frames")
 	_books_agree("drawn over frames")
-	_ws.mesh_over_frames = false
+	_ws.bench.mesh_over_frames = false
 
 	# Far away: flat, its seams drawn; back near: chamfered again.
-	_ws.draw_far_flat = true
-	_ws._camera.global_position = BrickWorld.grid_to_world(Vector3i(600, 200, 600))
-	_ws._section_process()
-	while not _ws._queued.is_empty():
-		_ws._section_process()
+	_ws.bench.draw_far_flat = true
+	_ws.bench._camera.global_position = BrickWorld.grid_to_world(Vector3i(600, 200, 600))
+	_ws.bench._section_process()
+	while not _ws.bench._queued.is_empty():
+		_ws.bench._section_process()
 	var flat := 0
 	var verts := 0
-	for mi: MeshInstance3D in _ws._sections[f0].values():
+	for mi: MeshInstance3D in _ws.bench._sections[f0].values():
 		if mi.get_instance_shader_parameter("geo_bevel") == 0.0:
 			flat += 1
 		if mi.mesh.get_surface_count() > 0:
 			verts += (mi.mesh.surface_get_arrays(0)[Mesh.ARRAY_VERTEX] as PackedVector3Array).size()
-	var whole: Array = _ws.world.build_chunk_chamfer_mesh(f0, 0.0)
-	_ok("far away every section is flat", flat == (_ws._sections[f0] as Dictionary).size() and _ws._bevelled.is_empty(),
-			"%d of %d" % [flat, (_ws._sections[f0] as Dictionary).size()])
+	var whole: Array = _ws.bench.world.build_chunk_chamfer_mesh(f0, 0.0)
+	_ok("far away every section is flat", flat == (_ws.bench._sections[f0] as Dictionary).size() and _ws.bench._bevelled.is_empty(),
+			"%d of %d" % [flat, (_ws.bench._sections[f0] as Dictionary).size()])
 	_ok("and draws what the flat mesh of the whole grid does", verts == (whole[Mesh.ARRAY_VERTEX] as PackedVector3Array).size(),
 			"%d vs %d" % [verts, (whole[Mesh.ARRAY_VERTEX] as PackedVector3Array).size()])
-	_ws._stud_lod()
+	_ws.bench._stud_lod()
 	var shown := 0
-	for key in _ws._frame_studs:
-		if is_instance_valid(_ws._frame_studs[key]) and (_ws._frame_studs[key] as Node3D).visible:
+	for key in _ws.bench._frame_studs:
+		if is_instance_valid(_ws.bench._frame_studs[key]) and (_ws.bench._frame_studs[key] as Node3D).visible:
 			shown += 1
 	_ok("and its studs are not drawn", shown == 0, str(shown))
-	_ws._camera.global_position = BrickWorld.grid_to_world(Vector3i(50, 30, 30))
-	_ws._section_process()
-	while not _ws._queued.is_empty():
-		_ws._section_process()
-	_ok("close by, the near sections are chamfered again", not _ws._bevelled.is_empty()
-			and _ws._bevelled.size() < (_ws._sections[f0] as Dictionary).size(), "%d of %d" % [_ws._bevelled.size(), (_ws._sections[f0] as Dictionary).size()])
-	_ws._stud_lod()
+	_ws.bench._camera.global_position = BrickWorld.grid_to_world(Vector3i(50, 30, 30))
+	_ws.bench._section_process()
+	while not _ws.bench._queued.is_empty():
+		_ws.bench._section_process()
+	_ok("close by, the near sections are chamfered again", not _ws.bench._bevelled.is_empty()
+			and _ws.bench._bevelled.size() < (_ws.bench._sections[f0] as Dictionary).size(), "%d of %d" % [_ws.bench._bevelled.size(), (_ws.bench._sections[f0] as Dictionary).size()])
+	_ws.bench._stud_lod()
 	shown = 0
-	for key in _ws._frame_studs:
-		if is_instance_valid(_ws._frame_studs[key]) and (_ws._frame_studs[key] as Node3D).visible:
+	for key in _ws.bench._frame_studs:
+		if is_instance_valid(_ws.bench._frame_studs[key]) and (_ws.bench._frame_studs[key] as Node3D).visible:
 			shown += 1
 	_ok("and their studs drawn", shown > 0)
 	_books_agree("near and far")
-	_ws.draw_far_flat = false
-	_ws._camera.global_position = BrickWorld.grid_to_world(Vector3i(100, 30, 80))
+	_ws.bench.draw_far_flat = false
+	_ws.bench._camera.global_position = BrickWorld.grid_to_world(Vector3i(100, 30, 80))
 
 
 ## Every recipe brick against the world: where the recipe says, of the part it says, and
 ## found again from its block.
 func _books_agree(what: String) -> void:
 	var bad := 0
-	for rid in _ws.recipe.size():
-		var at: Array = _ws._placed_at[rid]
-		var f: int = _ws.asm.frames[at[0]]
-		if _ws._recipe_id_at(int(at[0]), int(at[1])) != rid \
-				or _ws.world.block_at(f, _ws.recipe.cell_of(rid)) != int(at[1]) \
-				or _ws.world.get_block_archetype(f, int(at[1])) != int(_ws.palette[_ws.recipe.part_of(rid)]):
+	for rid in _ws.bench.recipe.size():
+		var at: Array = _ws.bench._placed_at[rid]
+		var f: int = _ws.bench.asm.frames[at[0]]
+		if _ws.bench._recipe_id_at(int(at[0]), int(at[1])) != rid \
+				or _ws.bench.world.block_at(f, _ws.bench.recipe.cell_of(rid)) != int(at[1]) \
+				or _ws.bench.world.get_block_archetype(f, int(at[1])) != int(_ws.bench.palette[_ws.bench.recipe.part_of(rid)]):
 			bad += 1
-	_ok("%s: the recipe and the world agree, brick by brick" % what, bad == 0 and _ws._placed_at.size() == _ws.recipe.size(),
-			"%d bad of %d" % [bad, _ws.recipe.size()])
+	_ok("%s: the recipe and the world agree, brick by brick" % what, bad == 0 and _ws.bench._placed_at.size() == _ws.bench.recipe.size(),
+			"%d bad of %d" % [bad, _ws.bench.recipe.size()])
 
 
 ## Every brick as (cell, part), sorted.
 func _brick_list() -> Array:
 	var out := []
-	for rid in _ws.recipe.size():
-		out.append("%s %s" % [_ws.recipe.cell_of(rid), _ws.recipe.part_of(rid)])
+	for rid in _ws.bench.recipe.size():
+		out.append("%s %s" % [_ws.bench.recipe.cell_of(rid), _ws.bench.recipe.part_of(rid)])
 	out.sort()
 	return out
 
 
 func _a_building(storeys: int, a := Vector2i(100, 100), b := Vector2i(130, 124)) -> int:
-	var t: WorkshopTools = _ws._tools
+	var t: WorkshopTools = _ws.bench._tools
 	_hold("brick_1x2")
 	t.pick("draw")
 	t.set_outline("box")
@@ -1715,7 +1715,7 @@ func _packer_checks() -> void:
 	if not ClassDB.class_has_method("BrickWorld", "pack_courses"):
 		_ok("this library packs in the engine", false, "rebuild the extension")
 		return
-	var t: WorkshopTools = _ws._tools
+	var t: WorkshopTools = _ws.bench._tools
 	var plan := {"adds": [{"kind": "rect", "a": [10, 10], "b": [40, 30], "rim": 1},
 			{"kind": "circle", "a": [30, 20], "b": [50, 40], "rim": 1}], "subs": []}
 	var base := {"id": 0, "kind": "rect", "lie": "flat", "a": [0, 0], "b": [30, 20], "at": 1, "depth": 12,
@@ -1743,7 +1743,7 @@ func _packer_checks() -> void:
 		var sh: Dictionary = base.duplicate(true)
 		sh.merge(cases[k], true)
 		var cells := BrickShapes.shape_cells(sh)
-		var parts := BrickShapes.parts_for(WorkshopTools._fill_part(String(sh.part)), _ws.palette, bool(sh.strict))
+		var parts := BrickShapes.parts_for(WorkshopTools._fill_part(String(sh.part)), _ws.bench.palette, bool(sh.strict))
 		var starts := BrickShapes.course_starts(sh, t.height_step("flat"))
 		var taken := {}
 		var i := 0
@@ -1769,36 +1769,36 @@ func _packer_checks() -> void:
 
 func _big_edit_checks() -> void:
 	print("[probe] whole buildings as fast as bricks (section 17)")
-	var t: WorkshopTools = _ws._tools
+	var t: WorkshopTools = _ws.bench._tools
 	t.storey_courses = 6
 	t.flat_roof = true
 	t.window_size = Vector2i(4, 9)
 	t.every_floor = true
 
 	# The same building, made at its full height and made taller after.
-	_ws._new_build()
+	_ws.bench._new_build()
 	_a_building(5)
 	var fresh := _brick_list()
-	_ws._new_build()
+	_ws.bench._new_build()
 	var b := _a_building(2)
-	var low: int = _ws.world.block_at(_ws.asm.frames[0], Vector3i(100, 2, 100))
+	var low: int = _ws.bench.world.block_at(_ws.bench.asm.frames[0], Vector3i(100, 2, 100))
 	var depth := int(t.shape_of(b).depth)
 	var low_list := _brick_list()
 	t.resize_shape(b, depth + 3 * 19)
 	_ok("taller is the same bricks as built that tall", _brick_list() == fresh, "%d vs %d" % [_brick_list().size(), fresh.size()])
-	_ok("and the storeys below stood", _ws.world.block_at(_ws.asm.frames[0], Vector3i(100, 2, 100)) == low)
+	_ok("and the storeys below stood", _ws.bench.world.block_at(_ws.bench.asm.frames[0], Vector3i(100, 2, 100)) == low)
 	_books_agree("made taller")
 	_sections_match_whole("made taller")
-	_ws._undo()
+	_ws.bench._undo()
 	_ok("undone, the bricks it had", _brick_list() == low_list and int(t.shape_of(b).depth) == depth)
-	_ok("and those still stood", _ws.world.block_at(_ws.asm.frames[0], Vector3i(100, 2, 100)) == low)
+	_ok("and those still stood", _ws.bench.world.block_at(_ws.bench.asm.frames[0], Vector3i(100, 2, 100)) == low)
 	_books_agree("undone")
-	_ws.redo_last()
+	_ws.bench.redo_last()
 	_ok("redone", _brick_list() == fresh)
 	_books_agree("redone")
 
 	# With a window on every floor, and a door on one: new storeys take the windows.
-	_ws._new_build()
+	_ws.bench._new_build()
 	b = _a_building(2)
 	t.every_floor = true
 	t.apply_opening("window", t.face_under(Vector3(110.5 * 0.35, 6.5 * 0.14, 90.0 * 0.35), Vector3(0, 0, 1)))
@@ -1824,13 +1824,13 @@ func _big_edit_checks() -> void:
 	_books_agree("a new storey")
 
 	# Shorter, and Repeat up on a building, and everything back.
-	_ws._new_build()
+	_ws.bench._new_build()
 	b = _a_building(4)
 	var four := _brick_list()
 	depth = int(t.shape_of(b).depth)
 	t.resize_shape(b, depth - 2 * 19)
 	_books_agree("made shorter")
-	_ws._undo()
+	_ws.bench._undo()
 	_ok("shorter undone", _brick_list() == four)
 	t.pick("repeat")
 	t.rep_what = "building"
@@ -1839,57 +1839,57 @@ func _big_edit_checks() -> void:
 	_ok("repeat doubles it, one plan", WorkshopTools.storeys_of(t.shape_of(b)) == 8, str(WorkshopTools.storeys_of(t.shape_of(b))))
 	_books_agree("repeated up")
 	_sections_match_whole("repeated up")
-	_ws._undo()
+	_ws.bench._undo()
 	_ok("repeat undone", _brick_list() == four)
 	_books_agree("repeat undone")
 
 	# A copy along: the same bricks, moved, and it undoes.
-	_ws._new_build()
+	_ws.bench._new_build()
 	b = _a_building(2)
-	var one: int = _ws.recipe.size()
+	var one: int = _ws.bench.recipe.size()
 	t.pick("repeat")
 	t.rep_what = "building"
 	t.selected = b
 	t.repeat("x", 1, 5)
-	_ok("a copy along has every brick", _ws.recipe.size() == one * 2, "%d of %d" % [_ws.recipe.size(), one * 2])
+	_ok("a copy along has every brick", _ws.bench.recipe.size() == one * 2, "%d of %d" % [_ws.bench.recipe.size(), one * 2])
 	var kept := 0
 	for sh in t.shapes():
 		kept += (sh.bricks as Array).size()
 	_ok("and keeps them as a shape", kept == one * 2 and t.shapes().size() == 2, "%d, %d shapes" % [kept, t.shapes().size()])
 	_books_agree("a copy along")
 	_sections_match_whole("a copy along")
-	_ws._undo()
-	_ok("a copy along undone", _ws.recipe.size() == one)
+	_ws.bench._undo()
+	_ok("a copy along undone", _ws.bench.recipe.size() == one)
 	# Something in its way: it goes round it.
 	_hold("brick_2x4")
-	_ws._axis_z = false
-	_ws._cell = Vector3i(150, 1, 100)
-	_ws._update_ghost()
-	_ws._place()
+	_ws.bench._axis_z = false
+	_ws.bench._cell = Vector3i(150, 1, 100)
+	_ws.bench._update_ghost()
+	_ws.bench._place()
 	t.pick("repeat")
 	t.selected = b
 	t.repeat("x", 1, 5)
-	_ok("a copy with a brick in the way goes round it", _ws.recipe.size() > one and _ws.recipe.size() <= one * 2 + 1,
-			"%d, one is %d" % [_ws.recipe.size(), one])
+	_ok("a copy with a brick in the way goes round it", _ws.bench.recipe.size() > one and _ws.bench.recipe.size() <= one * 2 + 1,
+			"%d, one is %d" % [_ws.bench.recipe.size(), one])
 	_books_agree("round a brick")
 
 	# Many taken up at once, with hand bricks, a weld, a group and a painted stroke around them.
-	_ws._new_build()
+	_ws.bench._new_build()
 	_hold("brick_2x4")
-	_ws._axis_z = false
+	_ws.bench._axis_z = false
 	for x in [10, 20, 30, 40]:
-		_ws._cell = Vector3i(x, 1, 10)
-		_ws._update_ghost()
-		_ws._place()
-	_ws.weld_rids(1, 3)
-	_ws.recipe.groups.append({"source": "", "name": "", "first": 1, "count": 3})
-	var moved: int = _ws._placed_at[3][1]
-	_ws.remove_rids(PackedInt32Array([2, 0, 2]))
-	var w: Vector2i = _ws.recipe.weld_blocks(0)
-	_ok("taken up at once: the rest close up", _ws.recipe.size() == 2 and _ws.recipe.cell_of(1).x == 40
-			and _ws._recipe_id_at(0, moved) == 1)
-	_ok("a weld follows its bricks down", _ws.recipe.weld_count() == 1 and w == Vector2i(0, 1), str(w))
-	var gr: Dictionary = _ws.recipe.groups[0]
+		_ws.bench._cell = Vector3i(x, 1, 10)
+		_ws.bench._update_ghost()
+		_ws.bench._place()
+	_ws.bench.weld_rids(1, 3)
+	_ws.bench.recipe.groups.append({"source": "", "name": "", "first": 1, "count": 3})
+	var moved: int = _ws.bench._placed_at[3][1]
+	_ws.bench.remove_rids(PackedInt32Array([2, 0, 2]))
+	var w: Vector2i = _ws.bench.recipe.weld_blocks(0)
+	_ok("taken up at once: the rest close up", _ws.bench.recipe.size() == 2 and _ws.bench.recipe.cell_of(1).x == 40
+			and _ws.bench._recipe_id_at(0, moved) == 1)
+	_ok("a weld follows its bricks down", _ws.bench.recipe.weld_count() == 1 and w == Vector2i(0, 1), str(w))
+	var gr: Dictionary = _ws.bench.recipe.groups[0]
 	_ok("and a group", int(gr.first) == 0 and int(gr.count) == 2, str(gr))
 	_books_agree("taken up at once")
 
@@ -1897,13 +1897,13 @@ func _big_edit_checks() -> void:
 ## What the sections draw between them against one mesh of the whole grid: as many
 ## vertices, in the same places, the same colours.
 func _sections_match_whole(what: String) -> void:
-	if not _ws._draws_sections():
+	if not _ws.bench._draws_sections():
 		return   # said once, by _section_checks
-	var f0: int = _ws.asm.frames[0]
+	var f0: int = _ws.bench.asm.frames[0]
 	var total := 0
 	var sum := 0.0
 	var hue := 0.0
-	for mi: MeshInstance3D in _ws._sections.get(f0, {}).values():
+	for mi: MeshInstance3D in _ws.bench._sections.get(f0, {}).values():
 		if mi.is_queued_for_deletion() or mi.mesh == null or mi.mesh.get_surface_count() == 0:
 			continue
 		var a: Array = mi.mesh.surface_get_arrays(0)
@@ -1914,7 +1914,7 @@ func _sections_match_whole(what: String) -> void:
 			hue += c.r + c.g * 2.0 + c.a * 3.0
 	# Through a mesh as well: a surface keeps its colours in eight bits.
 	var whole := ArrayMesh.new()
-	var raw: Array = _ws.world.build_chunk_chamfer_mesh(f0, BrickNear.BEVEL if BrickNear.enabled else 0.0)
+	var raw: Array = _ws.bench.world.build_chunk_chamfer_mesh(f0, BrickNear.BEVEL if BrickNear.enabled else 0.0)
 	var w_total := 0
 	var w_sum := 0.0
 	var w_hue := 0.0
@@ -1933,12 +1933,12 @@ func _sections_match_whole(what: String) -> void:
 
 func _section_checks() -> void:
 	print("[probe] edits cost what they touch (section 16)")
-	if not _ws._draws_sections():
+	if not _ws.bench._draws_sections():
 		_ok("this library draws in sections", false, "rebuild the extension: the workshop meshes whole without it")
 		return
-	_ws._new_build()
-	var t: WorkshopTools = _ws._tools
-	var f0: int = _ws.asm.frames[0]
+	_ws.bench._new_build()
+	var t: WorkshopTools = _ws.bench._tools
+	var f0: int = _ws.bench.asm.frames[0]
 	t.flat_roof = true
 	t.storey_courses = 6
 	t.door_size = WorkshopTools.DOOR
@@ -1954,20 +1954,20 @@ func _section_checks() -> void:
 	t.apply_opening("door", t.face_under(Vector3(48.5 * BrickPalette.STUD_M, 5.5 * BrickPalette.PLATE_M, -3.0), Vector3(0, 0, 1)))
 	t.every_floor = true
 	t.pick("hand")
-	_ok("the building is several sections", (_ws._sections.get(f0, {}) as Dictionary).size() > 4,
-			str((_ws._sections.get(f0, {}) as Dictionary).size()))
-	_ok("the grid's own node draws none of it", _ws._frame_meshes[f0].mesh == null)
+	_ok("the building is several sections", (_ws.bench._sections.get(f0, {}) as Dictionary).size() > 4,
+			str((_ws.bench._sections.get(f0, {}) as Dictionary).size()))
+	_ok("the grid's own node draws none of it", _ws.bench._frame_meshes[f0].mesh == null)
 	_sections_match_whole("a building with a door")
 
-	var held: Dictionary = _ws._sections[f0]
+	var held: Dictionary = _ws.bench._sections[f0]
 	var meshes := {}
 	for s in held:
 		meshes[s] = held[s].mesh
 	_hold("brick_2x4")
-	_ws._axis_z = false
-	_ws._cell = Vector3i(47, 1, 100)
-	_ws._update_ghost()
-	_ws._place()
+	_ws.bench._axis_z = false
+	_ws.bench._cell = Vector3i(47, 1, 100)
+	_ws.bench._update_ghost()
+	_ws.bench._place()
 	var redrawn := 0
 	for s in meshes:
 		if held[s].mesh != meshes[s]:
@@ -1977,9 +1977,9 @@ func _section_checks() -> void:
 
 	for s in held:
 		meshes[s] = held[s].mesh
-	_ws._cell = Vector3i(47, 78, 39)
-	_ws._update_ghost()
-	_ws._place()
+	_ws.bench._cell = Vector3i(47, 78, 39)
+	_ws.bench._update_ghost()
+	_ws.bench._place()
 	redrawn = 0
 	for s in meshes:
 		if held[s].mesh != meshes[s]:
@@ -1988,59 +1988,59 @@ func _section_checks() -> void:
 			"%d of %d" % [redrawn, meshes.size()])
 	_sections_match_whole("a brick against the building")
 
-	var hit: Dictionary = _ws._first_hit(BrickWorld.grid_to_world(Vector3i(47, 1, 100)) + Vector3(0.1, 20.0, 0.1), Vector3.DOWN)
+	var hit: Dictionary = _ws.bench._first_hit(BrickWorld.grid_to_world(Vector3i(47, 1, 100)) + Vector3(0.1, 20.0, 0.1), Vector3.DOWN)
 	_ok("a ray finds a brick drawn by a section", int(hit.get("block", -1)) >= 0, str(hit))
 	_ok("walls still close across sections", not t.floor_record(Vector3i(45, 21, 45), false).is_empty())
 
-	_ws._undo()
+	_ws.bench._undo()
 	_sections_match_whole("undone")
-	_ws._undo()
+	_ws.bench._undo()
 	_sections_match_whole("undone again")
-	var bid: int = _ws.world.block_at(f0, Vector3i(47, 2, 40))
-	_ws.world.set_block_material(f0, bid, 1)
-	_ws._remesh()
+	var bid: int = _ws.bench.world.block_at(f0, Vector3i(47, 2, 40))
+	_ws.bench.world.set_block_material(f0, bid, 1)
+	_ws.bench._remesh()
 	_sections_match_whole("a brick painted")
-	_ws.world.set_block_colour(f0, bid, 4)
-	_ws._remesh()
+	_ws.bench.world.set_block_colour(f0, bid, 4)
+	_ws.bench._remesh()
 	_sections_match_whole("a brick coloured")
 
 	# One brick alone in its section, taken away: the section goes, and its studs with it.
 	_hold("brick_2x4")
-	_ws._cell = Vector3i(300, 1, 300)
-	_ws._update_ghost()
-	var studs: int = _ws._stud_count
+	_ws.bench._cell = Vector3i(300, 1, 300)
+	_ws.bench._update_ghost()
+	var studs: int = _ws.bench._stud_count
 	var count: int = held.size()
-	_ws._place()
-	_ok("a section of its own", held.size() == count + 1 and _ws._stud_count == studs + 8,
-			"%d, %d studs" % [held.size(), _ws._stud_count])
-	_ws._undo()
-	_ok("gone with its brick", held.size() == count and _ws._stud_count == studs,
-			"%d, %d studs" % [held.size(), _ws._stud_count])
+	_ws.bench._place()
+	_ok("a section of its own", held.size() == count + 1 and _ws.bench._stud_count == studs + 8,
+			"%d, %d studs" % [held.size(), _ws.bench._stud_count])
+	_ws.bench._undo()
+	_ok("gone with its brick", held.size() == count and _ws.bench._stud_count == studs,
+			"%d, %d studs" % [held.size(), _ws.bench._stud_count])
 
-	var f1: int = _ws.asm.frames[1]
-	_ws.world.place_block(f1, Vector3i(10, 1, 10), _ws.palette[_ws._archetype_name()], 3)
-	_ws._remesh()
-	_ok("a sideways grid is drawn in sections too", (_ws._sections.get(f1, {}) as Dictionary).size() == 1
-			and _ws._frame_box(f1).has_volume())
+	var f1: int = _ws.bench.asm.frames[1]
+	_ws.bench.world.place_block(f1, Vector3i(10, 1, 10), _ws.bench.palette[_ws.bench._archetype_name()], 3)
+	_ws.bench._remesh()
+	_ok("a sideways grid is drawn in sections too", (_ws.bench._sections.get(f1, {}) as Dictionary).size() == 1
+			and _ws.bench._frame_box(f1).has_volume())
 
 	var r := BuildRecipe.new()
-	_ws._part_index = BrickPalette.parts().find("brick_2x4")
-	r.add(_ws._archetype_name(), Vector3i(100, 1, 100), 3)
-	_ws._load_recipe(r)
-	var f: int = _ws.asm.frames[0]
-	_ok("a load starts afresh", (_ws._sections.get(f, {}) as Dictionary).size() == 1 and _ws._stud_count == 8,
-			"%d sections, %d studs" % [(_ws._sections.get(f, {}) as Dictionary).size(), _ws._stud_count])
+	_ws.bench._part_index = BrickPalette.parts().find("brick_2x4")
+	r.add(_ws.bench._archetype_name(), Vector3i(100, 1, 100), 3)
+	_ws.bench._load_recipe(r)
+	var f: int = _ws.bench.asm.frames[0]
+	_ok("a load starts afresh", (_ws.bench._sections.get(f, {}) as Dictionary).size() == 1 and _ws.bench._stud_count == 8,
+			"%d sections, %d studs" % [(_ws.bench._sections.get(f, {}) as Dictionary).size(), _ws.bench._stud_count])
 
 
 func _repeat_building_checks() -> void:
 	print("[probe] Repeat a building, edits and all (section 14)")
-	_ws._new_build()
-	var t: WorkshopTools = _ws._tools
+	_ws.bench._new_build()
+	var t: WorkshopTools = _ws.bench._tools
 	var g := WorkshopTools.glass_paint()
-	var f0: int = _ws.asm.frames[0]
+	var f0: int = _ws.bench.asm.frames[0]
 	var glass := func(x: int, y: int) -> bool:
-		var bid: int = _ws.world.block_at(f0, Vector3i(x, y, 4))
-		return bid >= 0 and _ws.world.get_block_material(f0, bid) == g.x
+		var bid: int = _ws.bench.world.block_at(f0, Vector3i(x, y, 4))
+		return bid >= 0 and _ws.bench.world.get_block_material(f0, bid) == g.x
 	_hold("brick_1x2")
 	t.pick("draw")
 	t.set_outline("box")
@@ -2057,19 +2057,19 @@ func _repeat_building_checks() -> void:
 	t.apply_opening("window", t.face_under(Vector3(10.5 * 0.35, 5.5 * 0.14, -3.0), Vector3(0, 0, 1)))
 	t.every_floor = true
 	_hold("plate_1x1")
-	_ws._cell = Vector3i(9, 2, 9)
-	_ws._update_ghost()
-	_ws._place()
+	_ws.bench._cell = Vector3i(9, 2, 9)
+	_ws.bench._update_ghost()
+	_ws.bench._place()
 	_hold("brick_1x2")
 	t.stair_wide = 2
 	var stair := t.stairs_between(Vector3i(14, 2, 8), Vector3i(17, 11, 8))
-	_ws.recipe.placements.append(AssetPlacements.make("a_chair", Vector3i(7, 2, 7), 1))
-	var room: Dictionary = _ws._spaces.record()
+	_ws.bench.recipe.placements.append(AssetPlacements.make("a_chair", Vector3i(7, 2, 7), 1))
+	var room: Dictionary = _ws.bench._spaces.record()
 	(room.spaces as Array).append({"id": 0, "kind": "office", "frame": 0, "seed": [8, 2, 8], "floor_y": 1, "ceil_y": 10,
 			"columns": [[8, 8]]})
 	t.roof_style = "gable"
 	var roof := t.roof_on(b)
-	var bricks0: int = _ws.recipe.size()
+	var bricks0: int = _ws.bench.recipe.size()
 	var shapes0 := t.shapes().size()
 	# Pick it by a window's frame, as a hand would click anything on it.
 	t.pick("repeat")
@@ -2091,25 +2091,25 @@ func _repeat_building_checks() -> void:
 			func(o: Dictionary) -> bool: return o.has("opening")).size() == 4)
 	_ok("the loose brick copied", _solid(Vector3i(9, 2, 9)) and _solid(Vector3i(9, 32, 9)))
 	_ok("the stairs copied", _solid(Vector3i(14, 2, 8)) and _solid(Vector3i(14, 32, 8)))
-	_ok("the furniture copied", (_ws.recipe.placements as Array).size() == 2
-			and BuildRecipe.cell_from(_ws.recipe.placements[1].cell) == Vector3i(7, 32, 7))
-	_ok("the room copied", (_ws._spaces.record().spaces as Array).size() == 2)
+	_ok("the furniture copied", (_ws.bench.recipe.placements as Array).size() == 2
+			and BuildRecipe.cell_from(_ws.bench.recipe.placements[1].cell) == Vector3i(7, 32, 7))
+	_ok("the room copied", (_ws.bench._spaces.record().spaces as Array).size() == 2)
 	_ok("a floor where the roof was, the flat roof on top, open between", _solid(Vector3i(8, 31, 8))
 			and _solid(Vector3i(8, 61, 8)) and not _solid(Vector3i(8, 50, 8)))
 	_ok("the gable rose with it", int(t.shape_of(roof).at) == 62, str(t.shape_of(roof).get("at")))
-	_ws._undo()
-	_ok("one undo takes it all back", WorkshopTools.storeys_of(t.shape_of(b)) == 3 and _ws.recipe.size() == bricks0
-			and t.shapes().size() == shapes0 and (_ws.recipe.placements as Array).size() == 1
-			and (_ws._spaces.record().spaces as Array).size() == 1 and int(t.shape_of(roof).at) == 32,
-			"%d of %d bricks, %d of %d shapes" % [_ws.recipe.size(), bricks0, t.shapes().size(), shapes0])
-	_ws.redo_last()
-	_ok("redo puts it all back", WorkshopTools.storeys_of(t.shape_of(b)) == 6 and (_ws.recipe.placements as Array).size() == 2)
-	var six: int = (_ws.recipe.placements as Array).size()
+	_ws.bench._undo()
+	_ok("one undo takes it all back", WorkshopTools.storeys_of(t.shape_of(b)) == 3 and _ws.bench.recipe.size() == bricks0
+			and t.shapes().size() == shapes0 and (_ws.bench.recipe.placements as Array).size() == 1
+			and (_ws.bench._spaces.record().spaces as Array).size() == 1 and int(t.shape_of(roof).at) == 32,
+			"%d of %d bricks, %d of %d shapes" % [_ws.bench.recipe.size(), bricks0, t.shapes().size(), shapes0])
+	_ws.bench.redo_last()
+	_ok("redo puts it all back", WorkshopTools.storeys_of(t.shape_of(b)) == 6 and (_ws.bench.recipe.placements as Array).size() == 2)
+	var six: int = (_ws.bench.recipe.placements as Array).size()
 	t.selected = b
 	t.repeat("up", 1, 0)
-	_ok("picked again it copies all 6", WorkshopTools.storeys_of(t.shape_of(b)) == 12 and (_ws.recipe.placements as Array).size() == six * 2)
-	_ws._undo()
-	_ws._undo()
+	_ok("picked again it copies all 6", WorkshopTools.storeys_of(t.shape_of(b)) == 12 and (_ws.bench.recipe.placements as Array).size() == six * 2)
+	_ws.bench._undo()
+	_ws.bench._undo()
 	# One storey, the middle one: it goes on top, with what is in that storey only.
 	t.rep_what = "storey"
 	t.selected = -1
@@ -2117,14 +2117,14 @@ func _repeat_building_checks() -> void:
 	_ok("One storey picks the building and that storey", t.selected == b and t._rep_y == 3)
 	t.repeat("up", 1, 0)
 	_ok("copied to the top", WorkshopTools.storeys_of(t.shape_of(b)) == 4 and glass.call(10, 36) and not glass.call(10, 26))
-	_ws._undo()
+	_ws.bench._undo()
 	# Along X: a separate copy.
 	t.rep_what = "building"
 	t.selected = b
 	var along := t.repeat("x", 1, 2)
 	_ok("along X, a building beside it", along > 0 and WorkshopTools.storeys_of(t.shape_of(b)) == 3
 			and (t.shapes() as Array).filter(func(o: Dictionary) -> bool: return String(o.kind) == "plan").size() == 2)
-	_ws._undo()
+	_ws.bench._undo()
 	t.makes = "solid"
 	t.rep_what = "building"
 	t.selected = -1

@@ -77,7 +77,7 @@ func _tick() -> void:
 		return
 	_ws.set_process(false)
 	# Nothing a probe does may land in the player's own files.
-	_ws._hotbar.save_path = "user://_probe_asset_hotbar.json"
+	_ws.bench._hotbar.save_path = "user://_probe_asset_hotbar.json"
 	_ws.toolbars_save = "user://_probe_asset_toolbars.json"
 	print("asset workshop probe (phases 1 and 2)")
 	_units()
@@ -171,84 +171,84 @@ func _measure() -> void:
 
 
 func _part_index(name: String) -> int:
-	return (_ws._parts() as Array).find(name)
+	return (_ws.bench._parts() as Array).find(name)
 
 
 func _mirror() -> void:
-	_ws.mirror_z = 24.5
-	_ok("a 2-wide part at 20 mirrors to 27 across a plane at 24.5", _ws.mirrored_z(20, 2) == 27)
-	_ok("a 3-wide part centred on the plane is its own mirror", _ws.mirrored_z(23, 3) == 23)
+	_ws.bench.mirror_z = 24.5
+	_ok("a 2-wide part at 20 mirrors to 27 across a plane at 24.5", _ws.bench.mirrored_z(20, 2) == 27)
+	_ok("a 3-wide part centred on the plane is its own mirror", _ws.bench.mirrored_z(23, 3) == 23)
 	_ws.set_mirror(true)
-	var before: int = _ws.recipe.size()
-	_ws._part_index = _part_index("plate_1x2")
-	_ws._yaw = 0
-	_ws._flip = false
-	_ws._cell = Vector3i(10, 1, 20)
-	_ws._update_ghost()
+	var before: int = _ws.bench.recipe.size()
+	_ws.bench._part_index = _part_index("plate_1x2")
+	_ws.bench._yaw = 0
+	_ws.bench._flip = false
+	_ws.bench._cell = Vector3i(10, 1, 20)
+	_ws.bench._update_ghost()
 	_ws._place()
-	var got: int = _ws.recipe.size() - before
+	var got: int = _ws.bench.recipe.size() - before
 	_ok("a 1x2 placed with the mirror on lays two", got == 2, "laid %d" % got)
 	if got == 2:
-		var c: Vector3i = _ws.recipe.cell_of(before + 1)
+		var c: Vector3i = _ws.bench.recipe.cell_of(before + 1)
 		_ok("the mirrored one is across the plane", c == Vector3i(10, 1, 27), "%v" % c)
 
 	var slope := ""
-	for name in _ws._parts():
+	for name in _ws.bench._parts():
 		if String(name).begins_with("slope_1x2"):
 			slope = name
 			break
-	_ws._part_index = _part_index(slope)
+	_ws.bench._part_index = _part_index(slope)
 	var facing_z := -1
 	for y in 4:
 		if BrickPalette.front_of(BrickPalette.variant_name(slope, y, false)) == Vector3i(0, 0, 1):
 			facing_z = y
-	_ws._yaw = facing_z
-	_ws._cell = Vector3i(16, 1, 18)
-	_ws._update_ghost()
-	before = _ws.recipe.size()
+	_ws.bench._yaw = facing_z
+	_ws.bench._cell = Vector3i(16, 1, 18)
+	_ws.bench._update_ghost()
+	before = _ws.bench.recipe.size()
 	_ws._place()
-	got = _ws.recipe.size() - before
+	got = _ws.bench.recipe.size() - before
 	_ok("a slope placed with the mirror on lays two", got == 2, "laid %d (%s, yaw %d)" % [got, slope, facing_z])
 	if got == 2:
-		var f: Vector3i = BrickPalette.front_of(_ws.recipe.part_of(before + 1))
+		var f: Vector3i = BrickPalette.front_of(_ws.bench.recipe.part_of(before + 1))
 		_ok("the mirrored slope looks the other way", f == Vector3i(0, 0, -1), "%v" % f)
 	_ws.set_mirror(false)
 
 
 func _views() -> void:
 	_ws.set_view(1)
-	_ok("the side view is flat", (_ws._camera as Camera3D).projection == Camera3D.PROJECTION_ORTHOGONAL)
+	_ok("the side view is flat", (_ws.bench._camera as Camera3D).projection == Camera3D.PROJECTION_ORTHOGONAL)
 	_ws.set_view(0)
-	_ok("perspective comes back", (_ws._camera as Camera3D).projection == Camera3D.PROJECTION_PERSPECTIVE)
+	_ok("perspective comes back", (_ws.bench._camera as Camera3D).projection == Camera3D.PROJECTION_PERSPECTIVE)
 
 
 func _saved() -> void:
 	_ws.set_mirror(true)
-	var bricks: int = _ws.recipe.size()
+	var bricks: int = _ws.bench.recipe.size()
 	var mpp: float = _ws.photos[0].mpp
-	var d = JSON.parse_string(JSON.stringify(_ws.recipe.to_dict()))
+	var d = JSON.parse_string(JSON.stringify(_ws.bench.recipe.to_dict()))
 	var r: BuildRecipe = BuildRecipe.from_dict(d)
 	_ws._load_recipe(r)
-	_ok("the bricks load back", _ws.recipe.size() == bricks, "%d of %d" % [_ws.recipe.size(), bricks])
+	_ok("the bricks load back", _ws.bench.recipe.size() == bricks, "%d of %d" % [_ws.bench.recipe.size(), bricks])
 	_ok("the photo loads back at its scale", _ws.photos.size() == 1 and absf(float(_ws.photos[0].mpp) - mpp) < 1e-9,
 			"%d photos" % _ws.photos.size())
-	_ok("the mirror loads back on", _ws.mirror_on)
+	_ok("the mirror loads back on", _ws.bench.mirror_on)
 
 
 func _lay(part_name: String, cell: Vector3i) -> bool:
-	var before: int = _ws.recipe.size()
-	_ws._part_index = _part_index(part_name)
-	_ws._yaw = 0
-	_ws._flip = false
-	_ws._cell = cell
-	_ws._update_ghost()
+	var before: int = _ws.bench.recipe.size()
+	_ws.bench._part_index = _part_index(part_name)
+	_ws.bench._yaw = 0
+	_ws.bench._flip = false
+	_ws.bench._cell = cell
+	_ws.bench._update_ghost()
 	_ws._place()
-	return _ws.recipe.size() == before + 1
+	return _ws.bench.recipe.size() == before + 1
 
 
 func _parts() -> void:
 	_ws.set_mirror(false)
-	_ws._new_build()
+	_ws.bench._new_build()
 	_ok("a new build has a gun's parts", _ws.part_names.size() == 8 and _ws.part_names[2] == "stock")
 	_ws.select_part(2)
 	_lay("plate_1x2", Vector3i(30, 1, 30))
@@ -269,44 +269,44 @@ func _parts() -> void:
 	_ok("further undos take the bricks laid before it, newest first", Array(_ws.part_of) == [2], str(_ws.part_of))
 	_ws._undo()
 	_ok("and the stock's own edit takes the brick laid back", Array(_ws.part_of) == [], str(_ws.part_of))
-	_ws._hotbar.select(0)
-	_ws._hotbar.set_slot("brick_2x4", 3)
+	_ws.bench._hotbar.select(0)
+	_ws.bench._hotbar.set_slot("brick_2x4", 3)
 	_ws.select_part(1)
-	_ws._hotbar.select(0)
-	_ws._hotbar.set_slot("round_1x1", 5)
+	_ws.bench._hotbar.select(0)
+	_ws.bench._hotbar.set_slot("round_1x1", 5)
 	_ws.select_part(0)
-	_ok("a part's toolbar comes back with it", String(_ws._hotbar.slots[0][0]) == "brick_2x4",
-			str(_ws._hotbar.slots[0]))
+	_ok("a part's toolbar comes back with it", String(_ws.bench._hotbar.slots[0][0]) == "brick_2x4",
+			str(_ws.bench._hotbar.slots[0]))
 	_ws.select_part(1)
-	_ok("and the other part's with it", String(_ws._hotbar.slots[0][0]) == "round_1x1", str(_ws._hotbar.slots[0]))
+	_ok("and the other part's with it", String(_ws.bench._hotbar.slots[0][0]) == "round_1x1", str(_ws.bench._hotbar.slots[0]))
 
 
 func _run() -> void:
-	_ws._new_build()
-	_ws._part_index = _part_index("plate_1x1")
-	_ws._yaw = 0
-	_ws._cell = Vector3i(20, 1, 20)
-	_ws._update_ghost()
+	_ws.bench._new_build()
+	_ws.bench._part_index = _part_index("plate_1x1")
+	_ws.bench._yaw = 0
+	_ws.bench._cell = Vector3i(20, 1, 20)
+	_ws.bench._update_ghost()
 	_ws._place()
-	_ws._run_on = true
-	_ws._run_last = _ws._cell
+	_ws.bench._run_on = true
+	_ws.bench._run_last = _ws.bench._cell
 	# Held still, a click lays nothing more however the ghost settles.
-	_ws._run_moved = 0.0
-	_ws._run_press_ms = Time.get_ticks_msec()
-	_ws._cell = Vector3i(21, 1, 20)
-	_ws._update_ghost()
-	_ws.run_step()
-	_ok("a click held still lays one brick", _ws.recipe.size() == 1, "%d bricks" % _ws.recipe.size())
+	_ws.bench._run_moved = 0.0
+	_ws.bench._run_press_ms = Time.get_ticks_msec()
+	_ws.bench._cell = Vector3i(21, 1, 20)
+	_ws.bench._update_ghost()
+	_ws.bench.run_step()
+	_ok("a click held still lays one brick", _ws.bench.recipe.size() == 1, "%d bricks" % _ws.bench.recipe.size())
 	# Dragged, it lays a run.
-	_ws._run_moved = 40.0
-	_ws._run_press_ms = Time.get_ticks_msec() - 1000
-	_ws._run_last = Vector3i(20, 1, 20)
+	_ws.bench._run_moved = 40.0
+	_ws.bench._run_press_ms = Time.get_ticks_msec() - 1000
+	_ws.bench._run_last = Vector3i(20, 1, 20)
 	for x in [21, 22, 23]:
-		_ws._cell = Vector3i(x, 1, 20)
-		_ws._update_ghost()
-		_ws.run_step()
-	_ws._run_on = false
-	_ok("a held run lays a brick at each cell the ghost passes", _ws.recipe.size() == 4, "%d bricks" % _ws.recipe.size())
+		_ws.bench._cell = Vector3i(x, 1, 20)
+		_ws.bench._update_ghost()
+		_ws.bench.run_step()
+	_ws.bench._run_on = false
+	_ok("a held run lays a brick at each cell the ghost passes", _ws.bench.recipe.size() == 4, "%d bricks" % _ws.bench.recipe.size())
 
 
 func _points() -> void:
@@ -316,7 +316,7 @@ func _points() -> void:
 	_ok("the same spot again takes it away", not _ws.toggle_point(at, "", "", "") and _ws.points.is_empty())
 	_ws.toggle_point(at, "mount", "stock", "stock.tang")
 	var tags := Array(_ws.part_of)
-	var r: BuildRecipe = BuildRecipe.from_dict(JSON.parse_string(JSON.stringify(_ws.recipe.to_dict())))
+	var r: BuildRecipe = BuildRecipe.from_dict(JSON.parse_string(JSON.stringify(_ws.bench.recipe.to_dict())))
 	_ws._load_recipe(r)
 	_ok("points and part tags load back", _ws.points.size() == 1 and String(_ws.points[0].part) == "stock"
 			and Array(_ws.part_of) == tags, "%d points, tags %s" % [_ws.points.size(), _ws.part_of])
@@ -360,30 +360,30 @@ func _shapes() -> void:
 	var wedge: Dictionary = _ws.shape_cells("wedge", a, b, 6)
 	_ok("a wedge falls along the gun", wedge.has(Vector3i(40, 6, 40)) and not wedge.has(Vector3i(47, 2, 40))
 			and wedge.has(Vector3i(47, 1, 40)))
-	_ws._new_build()
+	_ws.bench._new_build()
 	var laid: int = _ws.fill_cells(_ws.shape_cells("box", Vector3i(30, 1, 30), Vector3i(35, 1, 31), 3))
-	_ok("a box shape is laid as bricks", laid > 0 and _ws.recipe.size() == laid, "%d laid" % laid)
+	_ok("a box shape is laid as bricks", laid > 0 and _ws.bench.recipe.size() == laid, "%d laid" % laid)
 	# Filled again over itself and a brick beside it: nothing is laid where bricks are, and
 	# the rest of the box is filled whole round them.
-	_ws._new_build()
+	_ws.bench._new_build()
 	_lay("brick_1x1", Vector3i(32, 1, 30))
 	_ws.fill_cells(_ws.shape_cells("box", Vector3i(30, 1, 30), Vector3i(35, 1, 31), 3))
 	_ok("a fill packs round a brick already there, leaving no hole", _volume() == 6 * 2 * 3, "%d cells" % _volume())
 
 
 func _select() -> void:
-	var n: int = _ws.recipe.size()
+	var n: int = _ws.bench.recipe.size()
 	_ws.select_box(Vector3i(29, 1, 29), Vector3i(36, 1, 32))
 	_ok("a box over the shape selects all of it", _ws.selection.size() == n, "%d of %d" % [_ws.selection.size(), n])
 	var got: Array = _ws.repack_selection(true)
-	_ok("re-packed random, the same cells are still covered", _ws.recipe.size() == got[1] and got[1] > 0, str(got))
+	_ok("re-packed random, the same cells are still covered", _ws.bench.recipe.size() == got[1] and got[1] > 0, str(got))
 	_ws.select_box(Vector3i(29, 1, 29), Vector3i(36, 1, 32))
-	_ws._cell = Vector3i(50, 1, 50)
+	_ws.bench._cell = Vector3i(50, 1, 50)
 	var copied: int = _ws.copy_selection_to_ghost(false)
 	_ok("copied to the ghost", copied == got[1], "%d of %d" % [copied, got[1]])
 	_ws.select_box(Vector3i(29, 1, 29), Vector3i(36, 1, 32))
 	var gone: int = _ws.delete_selection()
-	_ok("the selection deletes", gone == got[1] and _ws.recipe.size() == copied, "%d gone, %d left" % [gone, _ws.recipe.size()])
+	_ok("the selection deletes", gone == got[1] and _ws.bench.recipe.size() == copied, "%d gone, %d left" % [gone, _ws.bench.recipe.size()])
 
 
 func _guide() -> void:
@@ -416,10 +416,10 @@ func _section() -> void:
 	_ws._place_mirror_sheet()
 	_ws.set_view(1)
 	_ws.set_section(true)
-	_ok("a flat view with the section on cuts at the mirror plane", (_ws._camera as Camera3D).near > 1.0,
-			"near %.2f" % (_ws._camera as Camera3D).near)
+	_ok("a flat view with the section on cuts at the mirror plane", (_ws.bench._camera as Camera3D).near > 1.0,
+			"near %.2f" % (_ws.bench._camera as Camera3D).near)
 	_ws.set_view(0)
-	_ok("perspective does not cut", absf((_ws._camera as Camera3D).near - 0.05) < 1e-6)
+	_ok("perspective does not cut", absf((_ws.bench._camera as Camera3D).near - 0.05) < 1e-6)
 	_ws.set_section(false)
 	_ws.set_outlines(1)
 	_ws._draw_outlines()
@@ -428,25 +428,25 @@ func _section() -> void:
 
 
 func _undo_redo() -> void:
-	_ws._new_build()
+	_ws.bench._new_build()
 	_ws.select_part(0)
 	var laid: int = _ws.fill_cells(_cells_box(Vector3i(20, 1, 20), Vector3i(25, 3, 21)))
 	_ws._undo()
-	_ok("a fill undoes at once", _ws.recipe.size() == 0, "%d of %d left" % [_ws.recipe.size(), laid])
+	_ok("a fill undoes at once", _ws.bench.recipe.size() == 0, "%d of %d left" % [_ws.bench.recipe.size(), laid])
 	var back: int = _ws.redo()
-	_ok("redo lays the fill back", back == laid and _ws.recipe.size() == laid, "%d of %d" % [back, laid])
+	_ok("redo lays the fill back", back == laid and _ws.bench.recipe.size() == laid, "%d of %d" % [back, laid])
 	_ws._undo()
 	_ws.set_mirror(true)
-	_ws.mirror_z = 30.5
+	_ws.bench.mirror_z = 30.5
 	_lay("plate_1x2", Vector3i(20, 1, 26))
-	_ok("a mirrored brick lays two", _ws.recipe.size() == 2, str(_ws.recipe.size()))
+	_ok("a mirrored brick lays two", _ws.bench.recipe.size() == 2, str(_ws.bench.recipe.size()))
 	_ws._undo()
-	_ok("and they undo together", _ws.recipe.size() == 0, str(_ws.recipe.size()))
+	_ok("and they undo together", _ws.bench.recipe.size() == 0, str(_ws.bench.recipe.size()))
 	_ws.set_mirror(false)
 
 
 func _wand() -> void:
-	_ws._new_build()
+	_ws.bench._new_build()
 	var img := Image.create(100, 50, false, Image.FORMAT_RGBA8)
 	img.fill(Color(0.05, 0.05, 0.05))
 	img.fill_rect(Rect2i(20, 10, 40, 30), Color(0.85, 0.7, 0.45))
@@ -458,9 +458,9 @@ func _wand() -> void:
 	var lo: Vector3 = _ws.photo_point(i, Vector2(20, 40))
 	var hi: Vector3 = _ws.photo_point(i, Vector2(60, 10))
 	var inside := true
-	for k in _ws.recipe.size():
-		var c: Vector3i = _ws.recipe.cell_of(k)
-		var size := BrickPalette.size_of(_ws.recipe.part_of(k))
+	for k in _ws.bench.recipe.size():
+		var c: Vector3i = _ws.bench.recipe.cell_of(k)
+		var size := BrickPalette.size_of(_ws.bench.recipe.part_of(k))
 		if c.x * STUD < lo.x - STUD or (c.x + size.x) * STUD > hi.x + STUD:
 			inside = false
 	_ok("the wand fills the patch under the click", laid > 0, "%d laid" % laid)
@@ -469,7 +469,7 @@ func _wand() -> void:
 
 
 func _export() -> void:
-	_ws._new_build()
+	_ws.bench._new_build()
 	_ws.select_part(0)
 	_ws.fill_cells(_cells_box(Vector3i(20, 1, 39), Vector3i(29, 6, 41)))
 	_ws.select_part(2)
@@ -496,21 +496,21 @@ func _export() -> void:
 
 func _volume() -> int:
 	var n := 0
-	for k in _ws.recipe.size():
-		var size := BrickPalette.size_of(_ws.recipe.part_of(k))
+	for k in _ws.bench.recipe.size():
+		var size := BrickPalette.size_of(_ws.bench.recipe.part_of(k))
 		n += size.x * size.y * size.z
 	return n
 
 
 func _round2() -> void:
-	_ws._new_build()
-	_ok("no floor: an empty build has nothing to hit", _ws.recipe.size() == 0
-			and (_ws._first_hit(Vector3(14.0, 5.0, 14.0), Vector3.DOWN) as Dictionary).is_empty())
+	_ws.bench._new_build()
+	_ok("no floor: an empty build has nothing to hit", _ws.bench.recipe.size() == 0
+			and (_ws.bench._first_hit(Vector3(14.0, 5.0, 14.0), Vector3.DOWN) as Dictionary).is_empty())
 	_ws.auto_start_brick = true
 	_ws._ensure_start_brick()
 	_ws.auto_start_brick = false
-	_ok("the starting brick is laid mid-air", _ws.recipe.size() == 1
-			and _ws.recipe.cell_of(0).y == _ws.work_height, "%d bricks" % _ws.recipe.size())
+	_ok("the starting brick is laid mid-air", _ws.bench.recipe.size() == 1
+			and _ws.bench.recipe.cell_of(0).y == _ws.work_height, "%d bricks" % _ws.bench.recipe.size())
 
 	_ws.work_plane = "side"
 	_ws.work_depth = 40.5
@@ -524,40 +524,40 @@ func _round2() -> void:
 	_ok("lengths: 53s is 53 studs, 848 mm", _ws.length_mm("53s") == 848.0, str(_ws.length_mm("53s")))
 	_ok("lengths: 12 studs is 192 mm", _ws.length_mm("12 studs") == 192.0)
 
-	_ws._new_build()
+	_ws.bench._new_build()
 	_ws.select_part(0)
 	_ws.part_width["body"] = 3
 	var laid: int = _ws.sketch_fill([Vector2(10, 30), Vector2(16, 30), Vector2(16, 36), Vector2(10, 36)])
 	_ok("a sketched square fills its cells, 3 studs thick", laid > 0 and _volume() == 6 * 6 * 3,
 			"%d laid, %d cells" % [laid, _volume()])
 	_ws._undo()
-	_ok("and undoes at once", _ws.recipe.size() == 0, "%d left" % _ws.recipe.size())
+	_ok("and undoes at once", _ws.bench.recipe.size() == 0, "%d left" % _ws.bench.recipe.size())
 
 	# A ramp climbing 2 plates a stud along +x: its top edge is a slope's pitch.
-	_ws._new_build()
+	_ws.bench._new_build()
 	_ws.part_width["body"] = 2
 	_ws.sketch_fill([Vector2(10, 30), Vector2(20, 30), Vector2(20, 50)])
 	var slopes := 0
 	var facing_ok := true
-	for k in _ws.recipe.size():
-		var name: String = _ws.recipe.part_of(k)
+	for k in _ws.bench.recipe.size():
+		var name: String = _ws.bench.recipe.part_of(k)
 		if name.begins_with("slope_"):
 			slopes += 1
 			if BrickPalette.front_of(name) != Vector3i(-1, 0, 0):
 				facing_ok = false
-	_ok("a ramp's top edge is laid as slopes", slopes >= 3, "%d slopes of %d bricks" % [slopes, _ws.recipe.size()])
+	_ok("a ramp's top edge is laid as slopes", slopes >= 3, "%d slopes of %d bricks" % [slopes, _ws.bench.recipe.size()])
 	_ok("each slope's low front faces down the ramp", facing_ok)
 	_ok("a flat outline has no edge pieces", _ws.edge_pieces({Vector2i(0, 0): true, Vector2i(1, 0): true}).is_empty())
 	# A bottom edge falling two plates a stud along +x: flipped slopes under it.
-	_ws._new_build()
+	_ws.bench._new_build()
 	_ws.part_width["body"] = 2
 	_ws.sketch_fill([Vector2(10, 50), Vector2(20, 50), Vector2(20, 30)])
 	var under := 0
-	for k in _ws.recipe.size():
-		var name: String = _ws.recipe.part_of(k)
+	for k in _ws.bench.recipe.size():
+		var name: String = _ws.bench.recipe.part_of(k)
 		if name.begins_with("slope_") and name.ends_with("_i"):
 			under += 1
-	_ok("a falling bottom edge is laid as flipped slopes", under >= 3, "%d of %d bricks" % [under, _ws.recipe.size()])
+	_ok("a falling bottom edge is laid as flipped slopes", under >= 3, "%d of %d bricks" % [under, _ws.bench.recipe.size()])
 	# An end that rounds over: two plates up from nothing, then one more.
 	var grid := {}
 	for v in 2:
@@ -570,7 +570,7 @@ func _round2() -> void:
 			and found[0].u == 0 and found[0].base == 0 and found[0].rises == 1, str(found))
 
 	# A drum on the front plane: a circle, two studs thick along the gun.
-	_ws._new_build()
+	_ws.bench._new_build()
 	_ws.work_plane = "front"
 	_ws.work_x = 40
 	var circle := []
@@ -579,14 +579,14 @@ func _round2() -> void:
 		circle.append(Vector2(40.5 + 5.0 * cos(t), 60.0 + 12.5 * sin(t)))
 	var drum: int = _ws.sketch_fill(circle)
 	var along_ok := true
-	for k in _ws.recipe.size():
-		var at: Vector3i = _ws.recipe.cell_of(k)
-		var size := BrickPalette.size_of(_ws.recipe.part_of(k))
+	for k in _ws.bench.recipe.size():
+		var at: Vector3i = _ws.bench.recipe.cell_of(k)
+		var size := BrickPalette.size_of(_ws.bench.recipe.part_of(k))
 		if at.x < 39 or at.x + size.x > 41:
 			along_ok = false
 	_ok("a circle on the front plane fills, two studs along the gun", drum > 0 and along_ok, "%d laid" % drum)
 	# A square on the top plane: two studs thick is five plates up.
-	_ws._new_build()
+	_ws.bench._new_build()
 	_ws.work_plane = "top"
 	_ws.work_height = 20
 	_ws.sketch_fill([Vector2(10, 30), Vector2(14, 30), Vector2(14, 34), Vector2(10, 34)])
@@ -595,18 +595,18 @@ func _round2() -> void:
 	_ws.work_height = 30
 	_ws.part_width["body"] = 3
 
-	_ws._new_build()
+	_ws.bench._new_build()
 	_ws.sketch_fill([Vector2(10, 30), Vector2(16, 30), Vector2(16, 36), Vector2(10, 36)])
 	var img := Image.create(40, 20, false, Image.FORMAT_RGBA8)
 	var i: int = _ws.add_photo_image(img, "(probe depth)", "side")
 	_ws.set_photo_depth(i, "behind")
-	var lo: Vector3i = _ws.recipe.bounds()[0]
+	var lo: Vector3i = _ws.bench.recipe.bounds()[0]
 	_ok("behind the build: just past its far side", absf((_ws.photos[i].centre as Vector3).z
 			- (lo.z - 0.5) * STUD) < 1e-5, str(_ws.photos[i].centre))
 	_ws.remove_photo(i)
 
 	_ws.set_view(1)
-	var cam := _ws._camera as Camera3D
+	var cam := _ws.bench._camera as Camera3D
 	var point := cam.global_position + Vector3(2.0, 1.0, -cam.global_position.z + 14.0)
 	var before := cam.unproject_position(point)
 	_ws.zoom_at(point, 0.7)
@@ -618,19 +618,19 @@ func _round2() -> void:
 func _round3() -> void:
 	_ws.work_plane = "side"
 	_ws.work_depth = 40.5
-	_ws._new_build()
+	_ws.bench._new_build()
 	_lay("brick_1x2", Vector3i(20, 1, 20))
 	var top := Vector3(20.5 * STUD, 1.5 * 0.14, 20.5 * STUD)
 	_ws._delete_ray(top, Vector3.DOWN)
-	_ok("RMB deletes", _ws.recipe.size() == 0)
+	_ok("RMB deletes", _ws.bench.recipe.size() == 0)
 	_ws._undo()
-	_ok("Z lays a deleted brick back", _ws.recipe.size() == 1 and _ws.recipe.cell_of(0) == Vector3i(20, 1, 20),
-			"%d bricks" % _ws.recipe.size())
+	_ok("Z lays a deleted brick back", _ws.bench.recipe.size() == 1 and _ws.bench.recipe.cell_of(0) == Vector3i(20, 1, 20),
+			"%d bricks" % _ws.bench.recipe.size())
 	_ws.redo()
-	_ok("shift Z deletes it again", _ws.recipe.size() == 0, "%d bricks" % _ws.recipe.size())
+	_ok("shift Z deletes it again", _ws.bench.recipe.size() == 0, "%d bricks" % _ws.bench.recipe.size())
 
 	# A square drawn round twice: even-odd would leave a hole where it crosses itself.
-	_ws._new_build()
+	_ws.bench._new_build()
 	_ws.select_part(0)
 	_ws.part_width["body"] = 2
 	var square := [Vector2(10, 30), Vector2(16, 30), Vector2(16, 36), Vector2(10, 36)]
@@ -643,9 +643,9 @@ func _round3() -> void:
 	# Its right half drawn out: the bricks are worked out again.
 	_ws.sketch_region([Vector2(13, 29), Vector2(17, 29), Vector2(17, 37), Vector2(13, 37)], true)
 	var right := 0
-	for k in _ws.recipe.size():
-		var at: Vector3i = _ws.recipe.cell_of(k)
-		var size := BrickPalette.size_of(_ws.recipe.part_of(k))
+	for k in _ws.bench.recipe.size():
+		var at: Vector3i = _ws.bench.recipe.cell_of(k)
+		var size := BrickPalette.size_of(_ws.bench.recipe.part_of(k))
 		if at.x + size.x > 13:
 			right += 1
 	_ok("RMB area drawn out takes those bricks away", _volume() == 3 * 6 * 2 and right == 0, "%d cells" % _volume())
@@ -666,21 +666,21 @@ func _round3() -> void:
 
 	# A small change to a big part works out only the bricks near it (each stroke laying
 	# the whole part again was a hitch), and still fills exactly what is drawn.
-	_ws._new_build()
+	_ws.bench._new_build()
 	_ws.select_part(0)
 	_ws.sketch_region([Vector2(10, 30), Vector2(40, 30), Vector2(40, 60), Vector2(10, 60)])
 	var had := {}
-	for k in _ws.recipe.size():
-		had["%s|%s" % [_ws.recipe.part_of(k), _ws.recipe.cell_of(k)]] = true
+	for k in _ws.bench.recipe.size():
+		had["%s|%s" % [_ws.bench.recipe.part_of(k), _ws.bench.recipe.cell_of(k)]] = true
 	var t0 := Time.get_ticks_msec()
 	_ws.sketch_region([Vector2(36, 56), Vector2(41, 56), Vector2(41, 61), Vector2(36, 61)], true)
 	var ms := Time.get_ticks_msec() - t0
 	var same := 0
-	for k in _ws.recipe.size():
-		if had.has("%s|%s" % [_ws.recipe.part_of(k), _ws.recipe.cell_of(k)]):
+	for k in _ws.bench.recipe.size():
+		if had.has("%s|%s" % [_ws.bench.recipe.part_of(k), _ws.bench.recipe.cell_of(k)]):
 			same += 1
-	_ok("a small cut keeps the bricks clear of it", same * 10 >= _ws.recipe.size() * 8,
-			"%d of %d kept, %d ms" % [same, _ws.recipe.size(), ms])
+	_ok("a small cut keeps the bricks clear of it", same * 10 >= _ws.bench.recipe.size() * 8,
+			"%d of %d kept, %d ms" % [same, _ws.bench.recipe.size(), ms])
 	_ok("and fills exactly what is left", _volume() == (30 * 30 - 4 * 4) * 2, "%d cells" % _volume())
 	_ws._undo()
 	_ok("one Z puts the corner back", _volume() == 30 * 30 * 2, "%d cells" % _volume())
@@ -692,9 +692,9 @@ func _round4() -> void:
 	_ws.rail_pick("sketch")
 	_ok("the rail opens sketch", _ws.tool == "sketch" and _ws.rail_active() == "sketch")
 	_ws.rail_pick("paint")
-	_ok("and paint, putting sketch down", _ws._painting and _ws.tool == "" and _ws.rail_active() == "paint")
+	_ok("and paint, putting sketch down", _ws.bench._painting and _ws.tool == "" and _ws.rail_active() == "paint")
 	_ws.rail_pick("place")
-	_ok("place puts everything down", not _ws._painting and _ws.tool == "" and _ws.rail_active() == "place")
+	_ok("place puts everything down", not _ws.bench._painting and _ws.tool == "" and _ws.rail_active() == "place")
 	var rect: Array = _ws.drag_shape("rect", Vector2(14, 36), Vector2(10, 30))
 	_ok("a rectangle dragged either way has its four corners", rect.size() == 4 and rect[0] == Vector2(10, 30)
 			and rect[2] == Vector2(14, 36), str(rect))
@@ -704,27 +704,27 @@ func _round4() -> void:
 			str(square_cells.size()))
 	_ok("a round one less, its middle in", round_cells.size() < 55 and round_cells.has(Vector2i(20, 40)),
 			str(round_cells.size()))
-	_ws._new_build()
+	_ws.bench._new_build()
 	_ws.select_part(0)
 	_ws.part_width["body"] = 2
 	_ws.sketch_region_entry(_ws.brush_entry([Vector2(10.5, 30.5), Vector2(20.5, 30.5)], 1, true, "side"))
 	_ok("a brush stroke sketches what it swept: 13 studs by 5 plates, 2 deep", _volume() == 130, "%d cells" % _volume())
-	_ws._new_build()
+	_ws.bench._new_build()
 	_lay("brick_1x2", Vector3i(20, 1, 20))
-	_ws._repaint(0, 3, 1)
+	_ws.bench._repaint(0, 3, 1)
 	_ws.paint_what = "colour"
-	_ws._colour = 5
-	_ws._mat = 0
-	_ws._stroke = []
+	_ws.bench._colour = 5
+	_ws.bench._mat = 0
+	_ws.bench._stroke = []
 	_ws._paint_one(0)
-	_ok("paint, colour only, leaves the material", _ws.recipe.colour_of(0) == 5 and _ws.recipe.material_of(0) == 1,
-			"colour %d material %d" % [_ws.recipe.colour_of(0), _ws.recipe.material_of(0)])
-	_ws._end_stroke()
+	_ok("paint, colour only, leaves the material", _ws.bench.recipe.colour_of(0) == 5 and _ws.bench.recipe.material_of(0) == 1,
+			"colour %d material %d" % [_ws.bench.recipe.colour_of(0), _ws.bench.recipe.material_of(0)])
+	_ws.bench._end_stroke()
 	_ws.paint_what = "both"
 
 	# Stage 2: a part in three views. A receiver: a side rectangle 10 studs by 15 plates,
 	# 4 thick (z 39..42 round the plane at 40.5).
-	_ws._new_build()
+	_ws.bench._new_build()
 	_ws.select_part(0)
 	_ws.part_width["body"] = 4
 	_ws.work_plane = "side"
@@ -754,22 +754,22 @@ func _round4() -> void:
 	_ws.work_plane = "front"
 	_ws.sketch_region([Vector2(39, 30), Vector2(43, 30), Vector2(43, 45), Vector2(41, 45), Vector2(39, 41)])
 	var slopes := 0
-	for k in _ws.recipe.size():
-		if String(_ws.recipe.part_of(k)).begins_with("slope"):
+	for k in _ws.bench.recipe.size():
+		if String(_ws.bench.recipe.part_of(k)).begins_with("slope"):
 			slopes += 1
 	_ok("a chamfer from the front gets slopes (%d)" % slopes, slopes > 0, "%d slopes, %d cells" % [slopes, _volume()])
 	_ws.slope_eager = false
 	_ws.clear_part_sketch("body")
-	_ok("clearing the part takes every view's bricks", _ws.recipe.size() == 0 and _ws.sketches.is_empty(),
-			"%d bricks" % _ws.recipe.size())
+	_ok("clearing the part takes every view's bricks", _ws.bench.recipe.size() == 0 and _ws.sketches.is_empty(),
+			"%d bricks" % _ws.bench.recipe.size())
 	_ws.work_plane = "side"
 	_ws.part_width["body"] = 3
 
 	# Stage 3: studs anywhere. A brick's side, from +z.
-	_ws._new_build()
+	_ws.bench._new_build()
 	_ws.select_part(0)
 	_lay("brick_2x4", Vector3i(20, 1, 20))
-	var size := BrickPalette.size_of(_ws.recipe.part_of(0))
+	var size := BrickPalette.size_of(_ws.bench.recipe.part_of(0))
 	var hit: Dictionary = _ws.stud_hit(Vector3((20 + size.x * 0.5 + 0.1) * STUD, 2.4 * 0.14, 30 * STUD), Vector3.BACK * -1)
 	_ok("a stud on a brick's side faces out of it", not hit.is_empty() and Array(hit.dir) == [0.0, 0.0, 1.0]
 			and is_equal_approx(float(hit.at[2]), 20 + size.z), str(hit))
@@ -800,7 +800,7 @@ func _round4() -> void:
 	_ok("and leaves facing that way", mount.has("normal") and is_equal_approx(absf(float(mount.normal[1])), 1.0), str(mount))
 	_ws.toggle_point(hit.at, "", "", "")
 	# A slope's leaning face: the stud leans with it.
-	_ws._new_build()
+	_ws.bench._new_build()
 	var slope: String = _ws.edge_variant("slope", 1, 1, false, "side")
 	_ws.place_named(slope, Vector3i(30, 1, 20))
 	var ss := BrickPalette.size_of(slope)
@@ -814,12 +814,12 @@ func _round4() -> void:
 	_ws._draw_studs()
 
 	# Stage 4: exploded, and parts moved whole. A body, and a barrel forward of it (-x).
-	_ws._new_build()
+	_ws.bench._new_build()
 	_ws.select_part(0)
 	_lay("brick_2x4", Vector3i(30, 1, 20))
 	_ws.select_part(_ws.part_names.find("barrel"))
 	_lay("brick_2x4", Vector3i(26, 1, 20))
-	var bsize := BrickPalette.size_of(_ws.recipe.part_of(1))
+	var bsize := BrickPalette.size_of(_ws.bench.recipe.part_of(1))
 	_ws.select_part(0)
 	_ws.set_exploded(true)
 	_ws._rebuild_display()
@@ -829,20 +829,20 @@ func _round4() -> void:
 	# A ray down onto the barrel where it is drawn is taken into the barrel where it is.
 	var above := Vector3((26 + bsize.x * 0.5) * STUD + off.x, 5.0, (20 + bsize.z * 0.5) * STUD)
 	var into: Array = _ws.ray_into_parts([above, Vector3.DOWN])
-	var met: Dictionary = _ws._first_hit(into[0], into[1])
+	var met: Dictionary = _ws.bench._first_hit(into[0], into[1])
 	_ok("a ray onto a drawn-apart part meets it where it really is", _ws._ray_part == "barrel" and not met.is_empty()
-			and _ws._recipe_id_at(0, met.block) == 1, "%s %s" % [_ws._ray_part, str(met)])
+			and _ws.bench._recipe_id_at(0, met.block) == 1, "%s %s" % [_ws._ray_part, str(met)])
 	# Moved whole, as one undo, studs with it; refused onto another part.
 	var st: Dictionary = _ws.stud_hit(Vector3((26 + bsize.x * 0.5 + 0.1) * STUD, 2.4 * 0.14, 30 * STUD), Vector3.FORWARD)
 	_ws.stud_edit(true, st)
 	_ok("a part will not move into another", not _ws.move_part("barrel", Vector3i(4, 0, 0)))
-	_ok("moved whole", _ws.move_part("barrel", Vector3i(-3, 2, 0)) and _ws.recipe.cell_of(_ws.recipe.size() - 1) == Vector3i(23, 3, 20),
-			str(_ws.recipe.cell_of(_ws.recipe.size() - 1)))
+	_ok("moved whole", _ws.move_part("barrel", Vector3i(-3, 2, 0)) and _ws.bench.recipe.cell_of(_ws.bench.recipe.size() - 1) == Vector3i(23, 3, 20),
+			str(_ws.bench.recipe.cell_of(_ws.bench.recipe.size() - 1)))
 	_ok("its studs go with it", is_equal_approx(float(_ws.extra_studs[0].at[0]), float(st.at[0]) - 3.0), str(_ws.extra_studs))
 	_ws._undo()
 	var back := false
-	for k in _ws.recipe.size():
-		back = back or _ws.recipe.cell_of(k) == Vector3i(26, 1, 20)
+	for k in _ws.bench.recipe.size():
+		back = back or _ws.bench.recipe.cell_of(k) == Vector3i(26, 1, 20)
 	_ok("one Z puts it back, studs and all", back and is_equal_approx(float(_ws.extra_studs[0].at[0]), float(st.at[0])),
 			str(_ws.extra_studs))
 	_ws.set_exploded(false)
@@ -852,7 +852,7 @@ func _round4() -> void:
 
 	# Stage 5: the hands, and the gun worked. A body, a grip leaning back under it, a
 	# magazine in front of the grip, a barrel.
-	_ws._new_build()
+	_ws.bench._new_build()
 	_ws.work_plane = "side"
 	for spec in [["body", 3, [Vector2(20, 30), Vector2(50, 30), Vector2(50, 44), Vector2(20, 44)]],
 			["grip", 3, [Vector2(40, 12), Vector2(45, 12), Vector2(48, 30), Vector2(43, 30)]],
@@ -892,40 +892,40 @@ func _round4() -> void:
 
 func _round5() -> void:
 	# RMB in sketch takes up any brick under the stroke, not only the sketch's own.
-	_ws._new_build()
+	_ws.bench._new_build()
 	_ws.work_plane = "side"
 	_ws.select_part(_ws.part_names.find("barrel"))
 	_lay("brick_2x4", Vector3i(30, 1, 20))
 	_ws.select_part(0)
 	var cut := [Vector2(29, 0), Vector2(33, 0), Vector2(33, 5), Vector2(29, 5)]
 	_ws.sketch_region(cut, true)
-	_ok("RMB in sketch takes up a hand-laid brick of another part", _ws.recipe.size() == 0, "%d bricks" % _ws.recipe.size())
+	_ok("RMB in sketch takes up a hand-laid brick of another part", _ws.bench.recipe.size() == 0, "%d bricks" % _ws.bench.recipe.size())
 	_ws._undo()
-	_ok("and Z lays it back", _ws.recipe.size() == 1)
+	_ok("and Z lays it back", _ws.bench.recipe.size() == 1)
 	# Over a sketch of this part: its bricks and the other brick, one undo.
 	_ws.part_width["body"] = 3
 	_ws.sketch_region([Vector2(20, 6), Vector2(40, 6), Vector2(40, 12), Vector2(20, 12)])
-	var with_sketch: int = _ws.recipe.size()
+	var with_sketch: int = _ws.bench.recipe.size()
 	_ws.sketch_region([Vector2(28, 0), Vector2(34, 0), Vector2(34, 13), Vector2(28, 13)], true)
 	var hand_gone := true
-	for k in _ws.recipe.size():
-		hand_gone = hand_gone and _ws.recipe.cell_of(k) != Vector3i(30, 1, 20)
+	for k in _ws.bench.recipe.size():
+		hand_gone = hand_gone and _ws.bench.recipe.cell_of(k) != Vector3i(30, 1, 20)
 	_ok("a cut over a sketch takes its bricks and the other brick", hand_gone and _ws._volume_in(28, 34) == 0,
-			"%d bricks" % _ws.recipe.size())
+			"%d bricks" % _ws.bench.recipe.size())
 	_ws._undo()
-	_ok("one Z puts both back", _ws.recipe.size() == with_sketch, "%d of %d" % [_ws.recipe.size(), with_sketch])
+	_ok("one Z puts both back", _ws.bench.recipe.size() == with_sketch, "%d of %d" % [_ws.bench.recipe.size(), with_sketch])
 	# A depth cut takes only the nearest brick in.
-	_ws._new_build()
+	_ws.bench._new_build()
 	_ws.select_part(_ws.part_names.find("barrel"))
 	_lay("brick_2x4", Vector3i(30, 1, 20))
 	_lay("brick_2x4", Vector3i(30, 1, 30))
 	var near_ids: Array = _ws.bricks_under(_ws.region_cells([[29, 0], [33, 0], [33, 5], [29, 5]]), "side", 1, 1)
 	_ok("a depth cut reaches only the brick nearest the camera", near_ids.size() == 1
-			and _ws.recipe.cell_of(near_ids[0]) == Vector3i(30, 1, 30), str(near_ids))
+			and _ws.bench.recipe.cell_of(near_ids[0]) == Vector3i(30, 1, 30), str(near_ids))
 	_ws.erase_any = false
 	_ws.select_part(0)
 	_ws.sketch_region(cut, true)
-	_ok("switched off, RMB leaves other bricks alone", _ws.recipe.size() == 2)
+	_ok("switched off, RMB leaves other bricks alone", _ws.bench.recipe.size() == 2)
 	_ws.erase_any = true
 
 
@@ -947,7 +947,7 @@ func _round6() -> void:
 		zs[c.z] = true
 	_ok("on the side plane it stands up, its thickness across", zs.size() == 2 and upright.size() == 4 * 10 * 2,
 			"%d cells, %d deep" % [upright.size(), zs.size()])
-	_ws._new_build()
+	_ws.bench._new_build()
 	_ws.select_part(0)
 	_ws.shape_place(cube)
 	_ok("laid: the cube's cells, filled", _volume() == 160, "%d cells" % _volume())
@@ -960,7 +960,7 @@ func _round6() -> void:
 	_ok("carved: what the ball covered is gone, the rest laid again", _volume() == 160 - both and both > 0,
 			"%d cells, %d carved" % [_volume(), both])
 	var parts_ok := true
-	for k in _ws.recipe.size():
+	for k in _ws.bench.recipe.size():
 		parts_ok = parts_ok and _ws.part_of[k] == 0
 	_ok("in its own part", parts_ok)
 	_ws._undo()
@@ -969,9 +969,9 @@ func _round6() -> void:
 
 func _round7() -> void:
 	# Saved as a gun, in the guns' library, and opened back with everything.
-	_ok("what is made here is a gun", _ws.recipe.kind == "gun", _ws.recipe.kind)
+	_ok("what is made here is a gun", _ws.bench.recipe.kind == "gun", _ws.bench.recipe.kind)
 	_ok("guns have a library of their own", BuildRecipe.player_dir("gun") == "user://guns/")
-	var m: WorkshopMenu = _ws._menu
+	var m: WorkshopMenu = _ws.bench._menu
 	var shown := []
 	for i in m._open_filter.item_count:
 		shown.append(m._open_filter.get_item_metadata(i))
@@ -981,27 +981,27 @@ func _round7() -> void:
 	_ok("no building menus: Insert, Type, Layer, Generated hidden", not m._insert.visible and not m._type.visible
 			and not m._layer.visible and not m._gen.visible)
 	_ok("and no Test in city", m._file.get_popup().get_item_index(WorkshopMenu.F_CITY) < 0)
-	_ws._new_build()
+	_ws.bench._new_build()
 	_ws.select_part(_ws.part_names.find("grip"))
 	_lay("brick_2x4", Vector3i(30, 1, 20))
 	_ws.extra_studs.append({"part": "grip", "at": [31.0, 3.0, 21.0], "dir": [0.0, 1.0, 0.0], "colour": 0, "mat": 0})
 	_ws._store_asset_meta()
-	_ws._builds_dir = "user://_probe_guns/"
+	_ws.bench._builds_dir = "user://_probe_guns/"
 	var path: String = _ws._save_as("Probe Gun")
 	_ok("Save As writes the gun", path.ends_with("probe_gun.json") and FileAccess.file_exists(path), path)
-	_ws._new_build()
-	_ok("opened back: its bricks, its parts, its studs", _ws._open_path(path) and _ws.recipe.size() == 1
+	_ws.bench._new_build()
+	_ok("opened back: its bricks, its parts, its studs", _ws.bench._open_path(path) and _ws.bench.recipe.size() == 1
 			and _ws.part_of[0] == _ws.part_names.find("grip") and _ws.extra_studs.size() == 1
-			and _ws.recipe.kind == "gun", "%d bricks, studs %d" % [_ws.recipe.size(), _ws.extra_studs.size()])
+			and _ws.bench.recipe.kind == "gun", "%d bricks, studs %d" % [_ws.bench.recipe.size(), _ws.extra_studs.size()])
 	DirAccess.remove_absolute(path)
-	_ws._builds_dir = BuildRecipe.player_dir()
+	_ws.bench._builds_dir = BuildRecipe.player_dir()
 	_ws.extra_studs.clear()
 	_ws._draw_studs()
 
 
 func _round8() -> void:
 	# Out to the game: each part a scene, put back together by the game's own assembler.
-	_ws._new_build()
+	_ws.bench._new_build()
 	_ws.work_plane = "side"
 	for spec in [["body", 3, [Vector2(20, 30), Vector2(40, 30), Vector2(40, 42), Vector2(20, 42)]],
 			["grip", 3, [Vector2(34, 14), Vector2(38, 14), Vector2(39, 30), Vector2(35, 30)]],
@@ -1033,7 +1033,7 @@ func _round8() -> void:
 	# Each part where it was built: its bricks' middle, in the game's frame from the body's.
 	var b: Basis = _ws.game_basis()
 	var ids := {}
-	for i in _ws.recipe.size():
+	for i in _ws.bench.recipe.size():
 		(ids.get_or_add(_ws.part_names[_ws.part_of[i]], []) as Array).append(i)
 	var body_c: Vector3 = _ws._cells_centre(ids.body)
 	var worst := 0.0
@@ -1066,7 +1066,7 @@ func _round8() -> void:
 	_ok("its length in the game", absf(float(out.length_m) - 35 * 4.0 * 4.0 / 1000.0) < 0.01, "%.3f m" % float(out.length_m))
 	gun.queue_free()
 	# Built the other way round (muzzle toward +x): it still comes out pointing -Z.
-	_ws._new_build()
+	_ws.bench._new_build()
 	_ws.muzzle_end = "-x"
 	for spec in [["body", 3, [Vector2(20, 30), Vector2(40, 30), Vector2(40, 42), Vector2(20, 42)]],
 			["barrel", 1, [Vector2(40, 35), Vector2(52, 35), Vector2(52, 38), Vector2(40, 38)]],
@@ -1110,7 +1110,7 @@ func _round8() -> void:
 	gun.queue_free()
 	var pdir: String = _ws.export_print(false)
 	_ok("print files go beside the other print files, outside the repository",
-			pdir.ends_with("/brickcity-print/guns/" + _ws.slug(_ws.recipe.name if _ws.recipe.name != "untitled" else "gun"))
+			pdir.ends_with("/brickcity-print/guns/" + _ws.bench.slug(_ws.bench.recipe.name if _ws.bench.recipe.name != "untitled" else "gun"))
 			and not pdir.begins_with(ProjectSettings.globalize_path("res://")), pdir)
 	_ws.muzzle_end = "-x"
 	for f in DirAccess.get_files_at(dir):
@@ -1122,7 +1122,7 @@ func _round9() -> void:
 	# are on the rail).
 	var texts := []
 	var items := {}
-	for c in _ws._menu.bar().menus():
+	for c in _ws.bench._menu.bar().menus():
 		if c is MenuButton:
 			var pm := (c as MenuButton).get_popup()
 			for i in pm.item_count:
@@ -1169,8 +1169,8 @@ func _colours() -> void:
 	_ws.rail_pick("sculpt")
 	_ws.convert_mirror = false
 	# In PLA (the probe's earlier rounds leave the hotbar on another material).
-	var keep_mat: int = _ws._mat
-	_ws._mat = 0
+	var keep_mat: int = _ws.bench._mat
+	_ws.bench._mat = 0
 	var red := ColourMatch.nearest(Color(0.9, 0.1, 0.1))
 	var blue := ColourMatch.nearest(Color(0.1, 0.2, 0.85))
 	var lo: Vector3 = _ws.sculpt.to_sample(Vector3(500, 4, 500) * STUD)
@@ -1203,7 +1203,7 @@ func _colours() -> void:
 	_ws.sculpt_convert()
 	var counts := _colour_counts()
 	# Matched in the material the bricks were laid in (the part's).
-	var lm: int = _ws.recipe.material_of(0) if _ws.recipe.size() > 0 else 0
+	var lm: int = _ws.bench.recipe.material_of(0) if _ws.bench.recipe.size() > 0 else 0
 	red = ColourMatch.nearest(Color(0.9, 0.1, 0.1), lm)
 	blue = ColourMatch.nearest(Color(0.1, 0.2, 0.85), lm)
 	_ok("Make bricks: the model's red top and blue bottom", _ws.sculpt_state == "bricks"
@@ -1216,7 +1216,7 @@ func _colours() -> void:
 	# In metal: the same clay matched to metal's own colours, none of them filament.
 	_ws._reset_space()
 	_ws.rail_pick("sculpt")
-	_ws._mat = keep_mat
+	_ws.bench._mat = keep_mat
 	_ws.sculpt.form.begin_edit()
 	_ws.sculpt.form.stamp_mesh(SdfForm.ADD, v, idx, _ws.part_sel + 1, c)
 	_ws._sculpt_record(_ws.sculpt.form.end_edit())
@@ -1226,16 +1226,16 @@ func _colours() -> void:
 	for k in mc:
 		in_mat = in_mat and k < BrickWorld.get_material_colour_count(keep_mat)
 	_ok("Make bricks in material %d: its own colours" % keep_mat, mc.size() >= 1 and in_mat, str(mc))
-	_ws._mat = keep_mat
+	_ws.bench._mat = keep_mat
 	_ws._reset_space()
 
 
 ## Bricks' colour index -> how many cells they cover.
 func _colour_counts() -> Dictionary:
 	var out := {}
-	for i in _ws.recipe.size():
-		var sz := BrickPalette.size_of(_ws.recipe.part_of(i))
-		var k: int = _ws.recipe.colour_of(i)
+	for i in _ws.bench.recipe.size():
+		var sz := BrickPalette.size_of(_ws.bench.recipe.part_of(i))
+		var k: int = _ws.bench.recipe.colour_of(i)
 		out[k] = int(out.get(k, 0)) + sz.x * sz.y * sz.z
 	return out
 
@@ -1246,7 +1246,7 @@ func _one_place() -> void:
 	_ws.rail_pick("sculpt")
 	_ws.set_sculpt_mode("shape")
 	_ok("New puts the mirror plane in the middle of the area",
-			is_equal_approx(_ws.mirror_z, _ws.plate_studs * 0.5 + 0.5))
+			is_equal_approx(_ws.bench.mirror_z, _ws.bench.plate_studs * 0.5 + 0.5))
 	# Drawn wholly under the area's floor: Convert refuses and keeps it.
 	var under: Vector3 = _ws.sculpt.to_sample(Vector3(500, -20, 500) * STUD)
 	_ws.sculpt.form.begin_edit()
@@ -1254,16 +1254,16 @@ func _one_place() -> void:
 	_ws.sculpt_radius = 1.5
 	_ws._sculpt_dab(under, under + Vector3(30, 0, 0))
 	_ws._sculpt_record(_ws.sculpt.form.end_edit())
-	var bricks: int = _ws.recipe.size()
+	var bricks: int = _ws.bench.recipe.size()
 	_ws.sculpt_convert()
 	_ok("a block-out all outside the area is not converted to nothing: kept, and said",
-			_ws.sculpt_state == "sdf" and _ws.recipe.size() == bricks
+			_ws.sculpt_state == "sdf" and _ws.bench.recipe.size() == bricks
 			and String(_ws._sculpt_note.text).begins_with("Nothing converted"), _ws._sculpt_note.text)
 	_ws._reset_space()
 	_ws.rail_pick("sculpt")
 	# A plane 460 studs from the stroke (an older, smaller area's): its image is not drawn.
 	_ws.set_mirror(true)
-	_ws.mirror_z = 41.0
+	_ws.bench.mirror_z = 41.0
 	var at: Vector3 = _ws.sculpt.to_sample(Vector3(500, 40, 500) * STUD)
 	_ws.sculpt.form.begin_edit()
 	_ws._sculpt_dab(at, at + Vector3(30, 0, 0))
@@ -1277,29 +1277,29 @@ func _one_place() -> void:
 	_ok("a plane far from the block-out: Convert refuses, block-out kept", _ws.sculpt_state == "sdf"
 			and String(_ws._sculpt_note.text).contains("plane"), _ws._sculpt_note.text)
 	_ok("a plane far from the block-out is moved onto it", _ws._mirror_onto_build()
-			and absf(_ws.mirror_z - 500.0) < 3.0, "%.1f" % _ws.mirror_z)
+			and absf(_ws.bench.mirror_z - 500.0) < 3.0, "%.1f" % _ws.bench.mirror_z)
 	_ok("and one through it stays", not _ws._mirror_onto_build())
-	bricks = _ws.recipe.size()
+	bricks = _ws.bench.recipe.size()
 	_ws.sculpt_convert()
-	_ok("that block-out converts to bricks", _ws.sculpt_state == "bricks" and _ws.recipe.size() > bricks)
+	_ok("that block-out converts to bricks", _ws.sculpt_state == "bricks" and _ws.bench.recipe.size() > bricks)
 	_ws.set_mirror(false)
 	_ws.convert_mirror = false
 	# Drawn wholly past the plane, mirror on: that side is the truth, both halves laid.
 	_ws._reset_space()
 	_ws.rail_pick("sculpt")
-	_ws.mirror_z = 500.0
+	_ws.bench.mirror_z = 500.0
 	_ws.set_mirror(true)
 	var far: Vector3 = _ws.sculpt.to_sample(Vector3(500, 40, 506) * STUD)
 	_ws.sculpt.form.begin_edit()
 	_ws._sculpt_dab(far, far + Vector3(30, 0, 0))
 	_ws._sculpt_record(_ws.sculpt.form.end_edit())
-	bricks = _ws.recipe.size()
+	bricks = _ws.bench.recipe.size()
 	_ws.convert_mirror = true
 	_ws.sculpt_convert()
 	_ws.convert_mirror = false
 	var sides := Vector2i.ZERO
-	for i in range(bricks, _ws.recipe.size()):
-		if _ws.recipe.cell_of(i).z < 500:
+	for i in range(bricks, _ws.bench.recipe.size()):
+		if _ws.bench.recipe.cell_of(i).z < 500:
 			sides.x += 1
 		else:
 			sides.y += 1
@@ -1348,13 +1348,13 @@ func _one_place() -> void:
 
 func _round10() -> void:
 	# The shape brush is the Shapes tool's brush: a plain click lays, a plain right click carves.
-	_ws._new_build()
+	_ws.bench._new_build()
 	_ws.select_part(0)
 	_ws.rail_pick("shape")
 	_ws.shape_mode = "brush"
 	_ws.brush3d = "cube"
 	_ws.shape_size = 2
-	_ws._cell = Vector3i(30, 20, 30)
+	_ws.bench._cell = Vector3i(30, 20, 30)
 	var click := InputEventMouseButton.new()
 	click.button_index = MOUSE_BUTTON_LEFT
 	click.pressed = true
@@ -1372,13 +1372,13 @@ func _round10() -> void:
 
 func _brush(button: MouseButton, cells: Array) -> void:
 	# A shape-brush stroke: pressed on the first cell, dragged over the rest, let go.
-	_ws._cell = cells[0]
+	_ws.bench._cell = cells[0]
 	var e := InputEventMouseButton.new()
 	e.button_index = button
 	e.pressed = true
 	_ws._shape_brush_input(e)
 	for c in cells.slice(1):
-		_ws._cell = c
+		_ws.bench._cell = c
 		_ws._shape_brush_input(InputEventMouseMotion.new())
 	e = e.duplicate()
 	e.pressed = false
@@ -1389,7 +1389,7 @@ func _form() -> void:
 	# The shape brush lays into the part's form (Docs/AssetWorkshop.md, "The form"): a
 	# stroke is kept with the part, its bricks are the part's sketch bricks, so the part can
 	# be laid again from what was drawn -- what the size and curve sliders will do.
-	_ws._new_build()
+	_ws.bench._new_build()
 	_ws.select_part(_ws.part_names.find("body"))
 	_ws.rail_pick("shape")
 	_ws.shape_mode = "brush"
@@ -1403,8 +1403,8 @@ func _form() -> void:
 	_ok("a brush stroke is kept in the part's form, one entry, a stamp a centre",
 			solids.size() == 1 and (solids[0].solid.at as Array).size() == 2 and solids[0].part == "body", str(solids))
 	_ok("and filled: two cubes of 2 x 5 plates x 2", _volume() == 40, "%d cells" % _volume())
-	_ok("its bricks are the form's", (_ws.part_bricks.get("body", []) as Array).size() == _ws.recipe.size()
-			and _ws.recipe.size() > 0, "%d listed, %d laid" % [(_ws.part_bricks.get("body", []) as Array).size(), _ws.recipe.size()])
+	_ok("its bricks are the form's", (_ws.part_bricks.get("body", []) as Array).size() == _ws.bench.recipe.size()
+			and _ws.bench.recipe.size() > 0, "%d listed, %d laid" % [(_ws.part_bricks.get("body", []) as Array).size(), _ws.bench.recipe.size()])
 	_ws._undo()
 	var left := 0
 	for k in _ws.sketches:
@@ -1428,7 +1428,7 @@ func _form() -> void:
 				want[Vector3i(x, y, z)] = true
 	var got := 0
 	for c in want:
-		if _ws.world.is_solid(_ws.chunk, c):
+		if _ws.bench.world.is_solid(_ws.bench.chunk, c):
 			got += 1
 	var form: int = _ws.part_volume(_ws.part_sketches("body")).size()
 	_ok("a sketch beside it adds to the same part", form == want.size() and got == want.size(),
@@ -1447,18 +1447,18 @@ func _form() -> void:
 	var vol: Dictionary = _ws.part_volume(_ws.part_sketches("body"))
 	var filled := 0
 	for c in vol:
-		if _ws.world.is_solid(_ws.chunk, c):
+		if _ws.bench.world.is_solid(_ws.bench.chunk, c):
 			filled += 1
 	var stray := 0
-	for k in _ws.recipe.size():
-		var arch := String(_ws.recipe.part_of(k))
+	for k in _ws.bench.recipe.size():
+		var arch := String(_ws.bench.recipe.part_of(k))
 		if not (arch.begins_with("brick_") or arch.begins_with("plate_")):
 			continue
 		var size := BrickPalette.size_of(arch)
 		for dx in size.x:
 			for dy in size.y:
 				for dz in size.z:
-					if not vol.has(_ws.recipe.cell_of(k) + Vector3i(dx, dy, dz)):
+					if not vol.has(_ws.bench.recipe.cell_of(k) + Vector3i(dx, dy, dz)):
 						stray += 1
 	_ok("the bricks laid are the form: all of it filled, no plain brick outside it", filled == vol.size() and stray == 0,
 			"form %d, filled %d, stray %d" % [vol.size(), filled, stray])
@@ -1466,15 +1466,15 @@ func _form() -> void:
 	_ok("one Z fills the carve", _volume() == both, "%d cells" % _volume())
 	# Kept with the gun: saved and opened back, the form lays the same bricks.
 	_ws._store_asset_meta()
-	_ws._builds_dir = "user://_probe_guns/"
+	_ws.bench._builds_dir = "user://_probe_guns/"
 	var path: String = _ws._save_as("Probe Form")
-	_ws._new_build()
-	var opened: bool = _ws._open_path(path)
+	_ws.bench._new_build()
+	var opened: bool = _ws.bench._open_path(path)
 	var back: int = _ws.part_volume(_ws.part_sketches("body")).size()
 	_ok("opened back: the stroke is in the form", opened and _ws.sketches.size() == 2 and back == want.size(),
 			"opened %s, %d entries, form %d of %d" % [opened, _ws.sketches.size(), back, want.size()])
 	DirAccess.remove_absolute(path)
-	_ws._builds_dir = BuildRecipe.player_dir()
+	_ws.bench._builds_dir = BuildRecipe.player_dir()
 	_ws.rail_pick("place")
 
 
@@ -1483,19 +1483,19 @@ func _form_filled(part: String) -> Array:
 	var vol: Dictionary = _ws.part_volume(_ws.part_sketches(part))
 	var filled := 0
 	for c in vol:
-		if _ws.world.is_solid(_ws.chunk, c):
+		if _ws.bench.world.is_solid(_ws.bench.chunk, c):
 			filled += 1
 	var stray := 0
 	var tag: int = _ws.part_names.find(part)
-	for k in _ws.recipe.size():
-		var arch := String(_ws.recipe.part_of(k))
+	for k in _ws.bench.recipe.size():
+		var arch := String(_ws.bench.recipe.part_of(k))
 		if _ws.part_of[k] != tag or not (arch.begins_with("brick_") or arch.begins_with("plate_")):
 			continue
 		var size := BrickPalette.size_of(arch)
 		for dx in size.x:
 			for dy in size.y:
 				for dz in size.z:
-					if not vol.has(_ws.recipe.cell_of(k) + Vector3i(dx, dy, dz)):
+					if not vol.has(_ws.bench.recipe.cell_of(k) + Vector3i(dx, dy, dz)):
 						stray += 1
 	return [vol.size(), filled, stray]
 
@@ -1503,7 +1503,7 @@ func _form_filled(part: String) -> Array:
 func _resize() -> void:
 	# The size slider: the block-out scaled and every part laid again from its form, as one
 	# undo (Docs/AssetWorkshop.md, "The form, stage 2").
-	_ws._new_build()
+	_ws.bench._new_build()
 	_ws.select_part(_ws.part_names.find("body"))
 	_ws.rail_pick("sketch")
 	_ws.work_plane = "side"
@@ -1536,8 +1536,8 @@ func _resize() -> void:
 			and _form_filled("grip") == grip0, "%s %s" % [str(keys_after), str(_form_filled("body"))])
 	_ws.redo()
 	_ok("shift Z: big again", _form_filled("body") == body2, str(_form_filled("body")))
-	var n: int = _ws.recipe.size()
-	_ok("too big for the build area: refused, nothing changed", not _ws.scale_form(200.0) and _ws.recipe.size() == n
+	var n: int = _ws.bench.recipe.size()
+	_ok("too big for the build area: refused, nothing changed", not _ws.scale_form(200.0) and _ws.bench.recipe.size() == n
 			and _form_filled("body") == body2)
 	_ws.scale_form(0.5)
 	_ok("and halved: back to the first size", _form_filled("body") == body0 and _form_filled("grip") == grip0,
@@ -1547,8 +1547,8 @@ func _resize() -> void:
 
 func _pieces_of(kind: String) -> int:
 	var n := 0
-	for k in _ws.recipe.size():
-		if String(_ws.recipe.part_of(k)).begins_with(kind):
+	for k in _ws.bench.recipe.size():
+		if String(_ws.bench.recipe.part_of(k)).begins_with(kind):
 			n += 1
 	return n
 
@@ -1556,7 +1556,7 @@ func _pieces_of(kind: String) -> int:
 func _curves() -> void:
 	# The curve slider: every part laid again from its form with more or fewer slopes and
 	# curves, as one undo, the level with it (Docs/AssetWorkshop.md, "The form, stage 3").
-	_ws._new_build()
+	_ws.bench._new_build()
 	_ws.select_part(_ws.part_names.find("body"))
 	_ws.rail_pick("sketch")
 	_ws.work_plane = "side"
@@ -1585,7 +1585,7 @@ func _curves() -> void:
 	_ok("shift Z: slopes again", _pieces_of("slope") > 0 and _ws.curve_level == 1)
 	# A ball from the shape brush has no sketch view to be fitted from: at 3 it is fitted
 	# from the side and the front.
-	_ws._new_build()
+	_ws.bench._new_build()
 	_ws.set_curves(2)
 	_ws.select_part(_ws.part_names.find("body"))
 	_ws.rail_pick("shape")
@@ -1607,21 +1607,21 @@ func _sideways() -> void:
 	# Bricks built sideways (in a turned grid) go out with the rest: Export to game meshes
 	# them where they are, the triangle count counts them, the print sheet turns them
 	# (Docs/AssetWorkshop.md, "Sideways bricks go out too").
-	_ws._new_build()
+	_ws.bench._new_build()
 	_ws.select_part(_ws.part_names.find("body"))
 	_ok("a 2x4 laid upright", _ws.place_named(BrickPalette.variant_name("brick_2x4", 0, false), Vector3i(500, 30, 500)))
 	var flat: Dictionary = _ws.triangle_stats()
 	# A 1x1 plate on the brick's -z side, laid in the grid whose up is -z.
 	var af := -1
-	for k in _ws.asm.frames.size():
-		if _ws.FRAME_UPS[k] == Vector3(0, 0, -1):
+	for k in _ws.bench.asm.frames.size():
+		if _ws.bench.FRAME_UPS[k] == Vector3(0, 0, -1):
 			af = k
-	var f0: Transform3D = _ws.world.get_chunk_transform(_ws.asm.frames[0])
+	var f0: Transform3D = _ws.bench.world.get_chunk_transform(_ws.bench.asm.frames[0])
 	var at: Vector3 = f0 * Vector3(501.5 * BrickPalette.STUD_M, 31.5 * BrickPalette.PLATE_M, 500.0 * BrickPalette.STUD_M - 0.002)
-	var cell: Vector3i = _ws._cell_in(_ws.asm.frames[af], at)
+	var cell: Vector3i = _ws.bench._cell_in(_ws.bench.asm.frames[af], at)
 	_ok("a plate laid in the sideways grid", af > 0 and _ws.place_named("plate_1x1", cell, -1, -1, af)
-			and _ws._brick_frame(_ws.recipe.size() - 1) == af, "frame %d cell %v" % [af, cell])
-	var side: int = _ws.recipe.size() - 1
+			and _ws._brick_frame(_ws.bench.recipe.size() - 1) == af, "frame %d cell %v" % [af, cell])
+	var side: int = _ws.bench.recipe.size() - 1
 	var box: AABB = _ws._brick_box(side)
 	_ok("it sits on the brick's side, a plate out", absf(box.end.z - 500.0 * BrickPalette.STUD_M) < 1e-3
 			and absf(box.size.z - BrickPalette.PLATE_M) < 1e-3, str(box))
@@ -1662,7 +1662,7 @@ func _sideways() -> void:
 func _shells() -> void:
 	# A shell: the part's form sampled finer than the grid and wrapped in one smooth closed
 	# surface, its bricks the form shrunk by the thickness (Docs/AssetWorkshop.md, "Shells").
-	_ws._new_build()
+	_ws.bench._new_build()
 	_ws.select_part(_ws.part_names.find("body"))
 	_ws.rail_pick("sketch")
 	_ws.work_plane = "side"
@@ -1670,7 +1670,7 @@ func _shells() -> void:
 	_ws.part_width["body"] = 4
 	_ws.sketch_region([Vector2(20, 20), Vector2(32, 20), Vector2(32, 30), Vector2(26, 34), Vector2(20, 30)])
 	var bare: Array = _form_filled("body")
-	var bricks_bare: int = _ws.recipe.size()
+	var bricks_bare: int = _ws.bench.recipe.size()
 	_ws.set_shell("body", {"thick": 0.5, "res": 2})
 	var mi: MeshInstance3D = _ws._shell_nodes.get("body")
 	_ok("a shell on the part: one mesh", mi != null and int(_ws._shell_tris.get("body", 0)) > 0,
@@ -1704,15 +1704,15 @@ func _shells() -> void:
 	var core_cells: Dictionary = _ws._part_vol.get("body", {})
 	var core_filled := 0
 	for c in core_cells:
-		if _ws.world.is_solid(_ws.chunk, c):
+		if _ws.bench.world.is_solid(_ws.bench.chunk, c):
 			core_filled += 1
 	var inside := true
 	var full: Dictionary = _ws.part_volume(_ws.part_sketches("body"))
-	for k in _ws.recipe.size():
-		inside = inside and full.has(_ws.recipe.cell_of(k))
-	_ok("its bricks: fewer, all inside the form", _ws.recipe.size() > 0 and _ws.recipe.size() < bricks_bare
+	for k in _ws.bench.recipe.size():
+		inside = inside and full.has(_ws.bench.recipe.cell_of(k))
+	_ok("its bricks: fewer, all inside the form", _ws.bench.recipe.size() > 0 and _ws.bench.recipe.size() < bricks_bare
 			and core_filled == core_cells.size() and core_cells.size() > 0 and inside,
-			"%d -> %d bricks, core %d of %d filled" % [bricks_bare, _ws.recipe.size(), core_filled, core_cells.size()])
+			"%d -> %d bricks, core %d of %d filled" % [bricks_bare, _ws.bench.recipe.size(), core_filled, core_cells.size()])
 	var stats: Dictionary = _ws.triangle_stats()
 	_ok("counted: the shell, not the bricks it covers", int(stats.parts.body.shell) == int(_ws._shell_tris.body)
 			and int(stats.parts.body.studs) == 0, str(stats.parts.body))
@@ -1737,12 +1737,12 @@ func _shells() -> void:
 		if ps.name == "body":
 			has_shell = ps.has("shell") and (ps.shell.verts as Array).size() > 0 and (ps.bricks as Array).is_empty()
 	_ok("the print sheet has the shell, not the bricks inside it", has_shell)
-	var thin: int = _ws.recipe.size()
+	var thin: int = _ws.bench.recipe.size()
 	_ws.set_shell("body", {"thick": 1.5, "res": 2})
-	_ok("thicker: fewer bricks inside", _ws.recipe.size() < thin, "%d -> %d" % [thin, _ws.recipe.size()])
+	_ok("thicker: fewer bricks inside", _ws.bench.recipe.size() < thin, "%d -> %d" % [thin, _ws.bench.recipe.size()])
 	_ws._undo()
-	_ok("one Z: the thin shell back", _ws.recipe.size() == thin and float(_ws.shells.body.thick) == 0.5,
-			"%d bricks, %s" % [_ws.recipe.size(), str(_ws.shells.get("body"))])
+	_ok("one Z: the thin shell back", _ws.bench.recipe.size() == thin and float(_ws.shells.body.thick) == 0.5,
+			"%d bricks, %s" % [_ws.bench.recipe.size(), str(_ws.shells.get("body"))])
 	_ws._undo()
 	_ok("and again: no shell, every brick of the form back", not _ws.shells.has("body")
 			and not _ws._shell_nodes.has("body") and _form_filled("body") == bare, str(_form_filled("body")))
@@ -1777,14 +1777,14 @@ func _sculpt() -> void:
 	_ok("the Sculpt tool sculpts in 3D, its own panel", _ws.sketch_draw == "sculpt" and _ws.rail_active() == "sculpt"
 			and _ws._sculpt_box.visible and not _ws._sketch2d_box.visible)
 	_ws.sculpt_clear()
-	var bricks: int = _ws.recipe.size()
+	var bricks: int = _ws.bench.recipe.size()
 	var at: Vector3 = _ws.sculpt.to_sample(Vector3(10, 4, 8) * STUD)
 	_ws._sculpt_op = SdfForm.ADD
 	_ws.sculpt.form.begin_edit()
 	_ws._sculpt_dab(at, at + Vector3(30, 0, 0))
 	_ws._sculpt_record(_ws.sculpt.form.end_edit())
-	_ok("a stroke makes surface, and no bricks", _ws.sculpt.triangles() > 0 and _ws.recipe.size() == bricks,
-			"%d tris, %d -> %d bricks" % [_ws.sculpt.triangles(), bricks, _ws.recipe.size()])
+	_ok("a stroke makes surface, and no bricks", _ws.sculpt.triangles() > 0 and _ws.bench.recipe.size() == bricks,
+			"%d tris, %d -> %d bricks" % [_ws.sculpt.triangles(), bricks, _ws.bench.recipe.size()])
 	var cells: PackedInt32Array = _ws.sculpt.form.cells()
 	_ok("labelled with the part", cells.size() > 0 and cells[3] == _ws.part_sel + 1, str(cells.slice(0, 5)))
 	_ws._sculpt_op = SdfForm.REMOVE
@@ -1797,7 +1797,7 @@ func _sculpt() -> void:
 	_ok("one Z puts the carve back", _ws.sculpt.form.cells() == cells)
 	_ws.redo()
 	_ok("Shift Z carves again", _ws.sculpt.form.cells() == carved)
-	var meta: Dictionary = _ws.recipe.meta.asset.sdf
+	var meta: Dictionary = _ws.bench.recipe.meta.asset.sdf
 	var f := SdfForm.new()
 	var raw := Marshalls.base64_to_raw(String(meta.data)).decompress(int(meta.size), FileAccess.COMPRESSION_ZSTD)
 	_ok("saved with the gun", f.from_bytes(raw) and f.cells() == carved)
@@ -1869,7 +1869,7 @@ func _convert() -> void:
 	_ws._sculpt_record(_ws.sculpt.form.end_edit())
 	var cells: PackedInt32Array = _ws.sculpt.form.cells()
 	var n_cells := cells.size() / 5
-	var before: int = _ws.recipe.size()
+	var before: int = _ws.bench.recipe.size()
 	_ws.set_exploded(true)
 	_ok("Explode is refused while sculpting", not _ws.exploded)
 	_ws.sculpt_convert()
@@ -1896,16 +1896,16 @@ func _convert() -> void:
 	# Edit the bricks, then Bricks to clay: the clay is the bricks, edits and all (the clay that
 	# became bricks was used up; what is marked smooth stayed: Docs/AssetWorkshop.md, "Clay and
 	# bricks apart").
-	var i0: int = _ws.recipe.size() - 1
-	var gone_cell: Vector3i = _ws.recipe.cell_of(i0)
+	var i0: int = _ws.bench.recipe.size() - 1
+	var gone_cell: Vector3i = _ws.bench.recipe.cell_of(i0)
 	_ws.take_brick(i0)
 	_ws.select_part(body)
 	var top := Vector3i(gone_cell.x, gone_cell.y + 20, gone_cell.z)
 	_ok("a brick laid by hand", _ws.place_named(BrickPalette.variant_name("brick_1x1", 0, false), top))
 	var want := _asset_cells()
 	var used_colours := {}
-	for i in _ws.recipe.size():
-		used_colours[_ws.recipe.colour_of(i)] = true
+	for i in _ws.bench.recipe.size():
+		used_colours[_ws.bench.recipe.colour_of(i)] = true
 	_ws.sculpt_to_sdf()
 	var got: Dictionary = {}
 	var sc: PackedInt32Array = _ws.sculpt.form.cells()
@@ -1916,18 +1916,18 @@ func _convert() -> void:
 		lost += int(not got.has(c) or got[c] != want[c])
 	_ok("Bricks to clay: every brick and piece cell is clay, edits and all", lost == 0 and _ws.sculpt.visible,
 			"%d of %d cells not clay (%d clay)" % [lost, want.size(), got.size()])
-	_ok("and the bricks are taken up", _ws._brick_cell_list().is_empty() and _ws.recipe.size() == 0)
+	_ok("and the bricks are taken up", _ws._brick_cell_list().is_empty() and _ws.bench.recipe.size() == 0)
 	# New bricks take their part's colour, not the hotbar's.
-	var keep_colour: int = _ws._colour
+	var keep_colour: int = _ws.bench._colour
 	var odd := 0
 	while used_colours.has(odd):
 		odd += 1
-	_ws._colour = odd
+	_ws.bench._colour = odd
 	_ws.sculpt_convert()
-	_ws._colour = keep_colour
+	_ws.bench._colour = keep_colour
 	var hotbar_coloured := 0
-	for i in _ws.recipe.size():
-		hotbar_coloured += int(_ws.recipe.colour_of(i) == odd)
+	for i in _ws.bench.recipe.size():
+		hotbar_coloured += int(_ws.bench.recipe.colour_of(i) == odd)
 	_ok("Convert colours new bricks by their part, not the hotbar", hotbar_coloured == 0,
 			"%d bricks in the hotbar's colour" % hotbar_coloured)
 	var again := _asset_cells()
@@ -1970,9 +1970,9 @@ func _convert_plain() -> void:
 			and _ws._brick_cell_list().size() / 5 == n, "%d pieces, %d of %d cells bricks" % [sdf_pieces,
 			_ws._brick_cell_list().size() / 5, n])
 	var shaped := 0
-	for i in _ws.recipe.size():
-		shaped += int(BrickPalette.is_shaped(BrickPalette.part_of(_ws.recipe.part_of(i))))
-	_ok("its rounded edges get slopes and curves", shaped > 0, "%d shaped of %d" % [shaped, _ws.recipe.size()])
+	for i in _ws.bench.recipe.size():
+		shaped += int(BrickPalette.is_shaped(BrickPalette.part_of(_ws.bench.recipe.part_of(i))))
+	_ok("its rounded edges get slopes and curves", shaped > 0, "%d shaped of %d" % [shaped, _ws.bench.recipe.size()])
 	var first := _asset_cells()
 	_ws.sculpt_to_sdf()
 	_ws.sculpt_convert()
@@ -2068,15 +2068,15 @@ func _placed_model() -> void:
 	bm.size = Vector3(0.2, 0.4, 2.0)
 	var am := ArrayMesh.new()
 	am.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, bm.get_mesh_arrays())
-	var groups: int = _ws.undo_stack.size()
+	var groups: int = _ws.bench.undo_stack.size()
 	var centre: Vector3 = _ws.build_centre()
 	_ok("a model is added, selected, one undo", _ws.place_mesh(am, "box.glb") and not _ws.placed_model().is_empty()
-			and _ws.undo_stack.size() == groups + 1 and _ws._gizmo.visible)
+			and _ws.bench.undo_stack.size() == groups + 1 and _ws._gizmo.visible)
 	var s: Vector3 = _ws.placed_size()
 	_ok("along x, as long as an SMG (53 studs)", absf(s.x - 53.25) < 0.01 and s.z < 6.0, str(s))
 	var bb: AABB = _ws.size_box()
 	_ok("spawned at the build's centre (the grid's), on the mirror plane", absf(bb.get_center().x - centre.x) < 0.01
-			and bb.position.y >= BrickPalette.PLATE_M - 0.001 and absf(bb.get_center().z - _ws.mirror_z * STUD) < 0.01,
+			and bb.position.y >= BrickPalette.PLATE_M - 0.001 and absf(bb.get_center().z - _ws.bench.mirror_z * STUD) < 0.01,
 			"%s vs %s" % [bb, centre])
 	var node: AssetSculpt = _ws._placed.node
 	var own := _form_box(node)
@@ -2089,14 +2089,14 @@ func _placed_model() -> void:
 	_ok("a turn snaps to 15 degrees", is_equal_approx(by, deg_to_rad(15.0)), str(rad_to_deg(by)))
 	var sized: Transform3D = _ws.dragged_xf({"size": 1.234}, false)
 	_ok("a resize snaps to 1%", is_equal_approx(sized.basis.get_scale().x / (_ws._placed.xf as Transform3D).basis.get_scale().x, 1.23))
-	groups = _ws.undo_stack.size()
+	groups = _ws.bench.undo_stack.size()
 	_ws.nudge_whole = true
 	_ws.nudge(Vector3i(1, 0, 0))
 	_ws.nudge(Vector3i(1, 0, 0))
 	_ws.nudge_whole = false
 	var moved := _form_box(node)
 	_ok("moved, its field follows; one undo a move", absf(moved.position.x - own.position.x - 2.0 * STUD) < 0.05
-			and _ws.undo_stack.size() == groups + 2, "%.3f studs" % ((moved.position.x - own.position.x) / STUD))
+			and _ws.bench.undo_stack.size() == groups + 2, "%.3f studs" % ((moved.position.x - own.position.x) / STUD))
 	_ws._undo()
 	_ok("Z moves it back a stud", absf(_form_box(node).position.x - own.position.x - STUD) < 0.05)
 	_ok("undo keeps it picked, the gizmo where it now is", not _ws.placed_model().is_empty() and _ws._gizmo.visible
@@ -2145,16 +2145,16 @@ func _placed_model() -> void:
 	_ws.lay_model()
 	_ws.sculpt_convert()
 	var tags := {}
-	for i in _ws.recipe.size():
+	for i in _ws.bench.recipe.size():
 		tags[_ws.part_names[_ws.part_of[i]]] = true
-	_ok("Convert joins the models: the piece's cells are the barrel's", _ws.recipe.size() > 20 and tags.has("barrel")
+	_ok("Convert joins the models: the piece's cells are the barrel's", _ws.bench.recipe.size() > 20 and tags.has("barrel")
 			and tags.has("body"), str(tags.keys()))
 	# Make bricks uses the models up with the clay; Z brings them back (Docs/AssetWorkshop.md,
 	# "Clay and bricks apart").
 	_ok("Make bricks uses the models up", _ws.models.is_empty())
 	_ws._undo()
-	_ok("one Z: the models back as objects, and no bricks", _ws.models.size() == 2 and _ws.recipe.size() == 0
-			and _ws.sculpt.form.block_count() == 0, "%d models, %d bricks" % [_ws.models.size(), _ws.recipe.size()])
+	_ok("one Z: the models back as objects, and no bricks", _ws.models.size() == 2 and _ws.bench.recipe.size() == 0
+			and _ws.sculpt.form.block_count() == 0, "%d models, %d bricks" % [_ws.models.size(), _ws.bench.recipe.size()])
 	_ws.select_model(_ws.models[0])
 	_ws.drop_model()
 	_ok("remove takes one away", _ws.models.size() == 1)
@@ -2198,7 +2198,7 @@ func _pick_and_move() -> void:
 	var lifted := _cells_by_part(f)
 	_ok("a ray on the block-out lifts the part under it, the gizmo on it", _ws._held_kind() == "part"
 			and int(_ws._placed.label) == 2 and _ws._gizmo.visible and not lifted.values().has(2) and lifted.values().has(1))
-	var groups: int = _ws.undo_stack.size()
+	var groups: int = _ws.bench.undo_stack.size()
 	_ws._gizmo_xf0 = _ws._placed.xf
 	_ws._placed.xf = _ws.dragged_xf({"move": Vector3(2.0 * STUD, 0, 0)}, false)
 	_ws._held_moved([])
@@ -2208,7 +2208,7 @@ func _pick_and_move() -> void:
 	for k in before:
 		want[k + Vector3i(2, 0, 0) if before[k] == 2 else k] = before[k]
 	_ok("moved two studs and put down: one undo, its cells two studs along", moved == want
-			and _ws.undo_stack.size() == groups + 1 and _ws._held_kind() == "", "%d vs %d cells" % [moved.size(), want.size()])
+			and _ws.bench.undo_stack.size() == groups + 1 and _ws._held_kind() == "", "%d vs %d cells" % [moved.size(), want.size()])
 	_ws._undo()
 	_ok("Z puts it back where it was", _cells_by_part(f) == before)
 	_ws.pick_at(top, down)
@@ -2219,7 +2219,7 @@ func _pick_and_move() -> void:
 	esc.keycode = KEY_ESCAPE
 	esc.pressed = true
 	_ok("Escape puts a lifted part back exactly, no undo", _ws._placed_key(esc) and _cells_by_part(f) == before
-			and _ws.undo_stack.size() == groups and _ws._held_kind() == "")
+			and _ws.bench.undo_stack.size() == groups and _ws._held_kind() == "")
 	# A model's piece under the mouse.
 	_ws._reset_space()
 	_ws.rail_pick("sculpt")
@@ -2246,10 +2246,10 @@ func _pick_and_move() -> void:
 			str(_ws._placed.get("piece", "none")))
 	var barrel: int = _ws.part_names.find("barrel")
 	_ws.select_part(barrel)
-	groups = _ws.undo_stack.size()
+	groups = _ws.bench.undo_stack.size()
 	_ws.give_piece_part()
 	_ok("the picked piece given this part, one undo", int(_ws._placed.parts[1]) == barrel and int(_ws._placed.parts[0]) == -1
-			and _ws.undo_stack.size() == groups + 1)
+			and _ws.bench.undo_stack.size() == groups + 1)
 	# A guide: picked, moved by the gizmo, the adjust kept and saved.
 	_ws._reset_space()
 	var obj := "user://_probe_guide_cube.obj"
@@ -2272,7 +2272,7 @@ func _pick_and_move() -> void:
 		_ws._guide_action("turn")
 		fit = _ws._guide_fit_xf(g)
 		var kept_z := (g.node as Node3D).transform.origin.z - fit.origin.z
-		var saved: Array = _ws.recipe.meta.asset.guides[gi].adjust
+		var saved: Array = _ws.bench.recipe.meta.asset.guides[gi].adjust
 		_ok("moved three studs; kept through the panel's turn, and saved", absf(moved_z - 3.0 * STUD) < 1e-4
 				and absf(kept_z - 3.0 * STUD) < 1e-4 and int(g.turn) == 1 and absf(float(saved[11]) - 3.0 * STUD) < 1e-4,
 				"%.3f %.3f" % [moved_z / STUD, kept_z / STUD])
@@ -2287,19 +2287,19 @@ func _grid_stays() -> void:
 	_ws._reset_space()
 	_ws.rail_pick("sculpt")
 	_ws.sculpt_clear()
-	_ws._new_build()
-	var mid: int = _ws.plate_studs / 2
-	_ws.mirror_z = 41.0
+	_ws.bench._new_build()
+	var mid: int = _ws.bench.plate_studs / 2
+	_ws.bench.mirror_z = 41.0
 	_ws.auto_start_brick = true
 	_ws._ensure_start_brick()
-	_ok("an empty build's starting brick and mirror plane go to the middle", _ws.recipe.size() == 1
-			and _ws.recipe.cell_of(0).z == mid and is_equal_approx(_ws.mirror_z, mid + 0.5),
-			"%s, plane %.1f" % [str(_ws.recipe.cell_of(0)) if _ws.recipe.size() > 0 else "none", _ws.mirror_z])
+	_ok("an empty build's starting brick and mirror plane go to the middle", _ws.bench.recipe.size() == 1
+			and _ws.bench.recipe.cell_of(0).z == mid and is_equal_approx(_ws.bench.mirror_z, mid + 0.5),
+			"%s, plane %.1f" % [str(_ws.bench.recipe.cell_of(0)) if _ws.bench.recipe.size() > 0 else "none", _ws.bench.mirror_z])
 	# The grid: a brick 10 studs off leaves it, the build 40 studs off takes it along.
 	_ws._regrid(true)
 	var vb: Array = _ws.view_box()
-	var arch: String = _ws.recipe.part_of(0)
-	var c0: Vector3i = _ws.recipe.cell_of(0)
+	var arch: String = _ws.bench.recipe.part_of(0)
+	var c0: Vector3i = _ws.bench.recipe.cell_of(0)
 	_ws.place_named(arch, c0 + Vector3i(10, 0, 0))
 	_ws._regrid()
 	_ok("a brick laid 10 studs off leaves the grid where it was", _ws.view_box() == vb, str(_ws.view_box()))
@@ -2321,33 +2321,33 @@ func _grid_stays() -> void:
 	_ok("the build moved 40 studs takes the grid along", (moved[0] as Vector3i).x > (vb[0] as Vector3i).x, str(moved))
 	_ws.auto_start_brick = false
 	# No starting brick while there is a block-out (Edit as SDF empties the bricks).
-	_ws._new_build()
+	_ws.bench._new_build()
 	_ws.sculpt_clear()
 	var f: SdfForm = _ws.sculpt.form
 	f.box(SdfForm.ADD, Vector3(mid * 5 + 2, 60, mid * 5 + 2), Vector3(20, 8, 10), 0.0, 1)
 	_ws.auto_start_brick = true
 	_ws._ensure_start_brick()
 	_ws.auto_start_brick = false
-	_ok("no starting brick while there is a block-out", _ws.recipe.size() == 0, "%d bricks" % _ws.recipe.size())
+	_ok("no starting brick while there is a block-out", _ws.bench.recipe.size() == 0, "%d bricks" % _ws.bench.recipe.size())
 	# A few cells on an old plane do not hold it there.
 	f.box(SdfForm.ADD, Vector3(mid * 5 + 2, 60, 41 * 5 + 2), Vector3(3, 3, 3), 0.0, 1)
-	_ws.mirror_z = 41.0
+	_ws.bench.mirror_z = 41.0
 	_ok("a few cells on an old plane do not hold the mirror there", _ws._mirror_onto_build()
-			and absf(_ws.mirror_z - (mid + 0.5)) <= 2.0, "plane %.1f" % _ws.mirror_z)
+			and absf(_ws.bench.mirror_z - (mid + 0.5)) <= 2.0, "plane %.1f" % _ws.bench.mirror_z)
 	# Clean up: the block-out outside the area and a lone far brick; Z gives them back.
 	f.box(SdfForm.ADD, Vector3(mid * 5 + 2, 60, -100), Vector3(10, 6, 10), 0.0, 1)
 	for k in 4:
 		_ws.place_named(arch, Vector3i(mid - 2, 40 + 3 * k, mid))
 	_ws.place_named(arch, Vector3i(mid + 200, 40, mid))
 	var outside: int = _ws._cells_outside_area(f.cells()).x
-	var bricks: int = _ws.recipe.size()
+	var bricks: int = _ws.bench.recipe.size()
 	var took: Vector2i = _ws.clean_strays()
 	_ok("clean up takes the block-out outside the area and the lone far brick", outside > 0
-			and _ws._cells_outside_area(f.cells()).x == 0 and _ws.recipe.size() == bricks - 1 and took.y == 1,
-			"%d outside, %s taken, %d -> %d bricks" % [outside, str(took), bricks, _ws.recipe.size()])
+			and _ws._cells_outside_area(f.cells()).x == 0 and _ws.bench.recipe.size() == bricks - 1 and took.y == 1,
+			"%d outside, %s taken, %d -> %d bricks" % [outside, str(took), bricks, _ws.bench.recipe.size()])
 	_ws._undo()
-	_ok("Z gives them back", _ws._cells_outside_area(f.cells()).x == outside and _ws.recipe.size() == bricks,
-			"%d outside, %d bricks" % [_ws._cells_outside_area(f.cells()).x, _ws.recipe.size()])
+	_ok("Z gives them back", _ws._cells_outside_area(f.cells()).x == outside and _ws.bench.recipe.size() == bricks,
+			"%d outside, %d bricks" % [_ws._cells_outside_area(f.cells()).x, _ws.bench.recipe.size()])
 	_ws._reset_space()
 
 
@@ -2360,20 +2360,20 @@ func _clay_apart() -> void:
 	_ws.rail_pick("sculpt")
 	_ws.sculpt_clear()
 	_ws.set_clay_view(true)
-	var mid: int = _ws.plate_studs / 2
+	var mid: int = _ws.bench.plate_studs / 2
 	var f: SdfForm = _ws.sculpt.form
 	# A box wholly on one side of the plane, the mirror on, symmetric not ticked.
 	_ws.set_mirror(true)
-	_ws.mirror_z = mid + 0.5
+	_ws.bench.mirror_z = mid + 0.5
 	f.box(SdfForm.ADD, Vector3(mid * 5 + 2, 60, (mid + 6) * 5 + 2), Vector3(20, 8, 10), 0.0, 1)
 	_ws.sculpt.remesh()
 	_ws.convert_mirror = false
 	_ws.sculpt_convert()
 	var other_side := 0
-	for i in _ws.recipe.size():
-		other_side += int(_ws.recipe.cell_of(i).z < mid)
-	_ok("the mirror on, symmetric not ticked: bricks only where the clay is", _ws.recipe.size() > 0 and other_side == 0,
-			"%d bricks, %d across the plane" % [_ws.recipe.size(), other_side])
+	for i in _ws.bench.recipe.size():
+		other_side += int(_ws.bench.recipe.cell_of(i).z < mid)
+	_ok("the mirror on, symmetric not ticked: bricks only where the clay is", _ws.bench.recipe.size() > 0 and other_side == 0,
+			"%d bricks, %d across the plane" % [_ws.bench.recipe.size(), other_side])
 	var unmarked := 0
 	var cs := f.cells()
 	for i in range(0, cs.size(), 5):
@@ -2382,7 +2382,7 @@ func _clay_apart() -> void:
 	_ws.set_mirror(false)
 	# Clay bricks made again under new clay; a hand-laid brick kept and skipped.
 	var arch := BrickPalette.variant_name("brick_1x1", 0, false)
-	var hand: Vector3i = _ws.recipe.cell_of(0)
+	var hand: Vector3i = _ws.bench.recipe.cell_of(0)
 	_ws.take_brick(0)
 	_ok("a brick laid by hand", _ws.place_named(arch, hand))
 	var made: int = _ws.clay_bricks.size()
@@ -2391,24 +2391,24 @@ func _clay_apart() -> void:
 	_ws.sculpt_convert()
 	var cells := {}
 	var overlap := 0
-	for i in _ws.recipe.size():
-		var size := BrickPalette.size_of(_ws.recipe.part_of(i))
+	for i in _ws.bench.recipe.size():
+		var size := BrickPalette.size_of(_ws.bench.recipe.part_of(i))
 		for dx in size.x:
 			for dy in size.y:
 				for dz in size.z:
-					var c: Vector3i = _ws.recipe.cell_of(i) + Vector3i(dx, dy, dz)
+					var c: Vector3i = _ws.bench.recipe.cell_of(i) + Vector3i(dx, dy, dz)
 					overlap += int(cells.has(c))
 					cells[c] = true
 	_ok("made again: the clay's bricks made anew, the hand-laid brick kept, nothing doubled",
-			_ws.find_brick(arch, hand) >= 0 and overlap == 0 and not _ws.clay_bricks.has(_ws._brick_key(arch, hand)),
+			_ws.bench.find_brick(arch, hand) >= 0 and overlap == 0 and not _ws.clay_bricks.has(_ws._brick_key(arch, hand)),
 			"%d overlapping cells, %d clay bricks (were %d)" % [overlap, _ws.clay_bricks.size(), made])
 	# The stage tabs change nothing in the build.
-	var n: int = _ws.recipe.size()
-	var groups: int = _ws.undo_stack.size()
+	var n: int = _ws.bench.recipe.size()
+	var groups: int = _ws.bench.undo_stack.size()
 	_ws.set_clay_view(true)
 	_ws.set_clay_view(false)
 	_ws.set_clay_view(true)
-	_ok("the stages show, they do not convert", _ws.recipe.size() == n and _ws.undo_stack.size() == groups
+	_ok("the stages show, they do not convert", _ws.bench.recipe.size() == n and _ws.bench.undo_stack.size() == groups
 			and _ws.sculpt_state == "sdf")
 	# A model rotated a quarter turn, then made bricks: as it stands now.
 	_ws._reset_space()
@@ -2433,9 +2433,9 @@ func _clay_apart() -> void:
 	_ws.sculpt_convert()
 	var lo := Vector3i(1 << 30, 1 << 30, 1 << 30)
 	var hi := -lo
-	for i in _ws.recipe.size():
-		lo = lo.min(_ws.recipe.cell_of(i))
-		hi = hi.max(_ws.recipe.cell_of(i) + BrickPalette.size_of(_ws.recipe.part_of(i)))
+	for i in _ws.bench.recipe.size():
+		lo = lo.min(_ws.bench.recipe.cell_of(i))
+		hi = hi.max(_ws.bench.recipe.cell_of(i) + BrickPalette.size_of(_ws.bench.recipe.part_of(i)))
 	var ext := hi - lo
 	_ok("a model turned a quarter, then made bricks: long across, as it stands", ext.z > ext.x * 3,
 			"%d along, %d across" % [ext.x, ext.z])
@@ -2468,14 +2468,14 @@ func _slicer_panel() -> void:
 	var size0: Vector3 = _ws.held_shape()[2]
 	# Without proportions: only y doubles.
 	_ws._xform_keep.button_pressed = false
-	var groups: int = _ws.undo_stack.size()
+	var groups: int = _ws.bench.undo_stack.size()
 	(_ws._xform_size[1] as SpinBox).value = size0.y * 2.0
 	_ws._xform_settle(true)
 	var s1: Vector3 = _ws.held_shape()[2]
 	var box: AABB = (_ws._placed.xf as Transform3D) * (_ws._placed.box as AABB)
 	_ok("a size typed without proportions stretches it along that axis alone, one undo",
 			absf(s1.y - size0.y * 2.0) < 0.05 and absf(s1.x - size0.x) < 0.05 and absf(s1.z - size0.z) < 0.05
-			and absf(box.size.y - size0.y * 2.0 * STUD) < 0.02 and _ws.undo_stack.size() == groups + 1,
+			and absf(box.size.y - size0.y * 2.0 * STUD) < 0.02 and _ws.bench.undo_stack.size() == groups + 1,
 			"%s -> %s" % [size0, s1])
 	# With proportions: x halved halves all three.
 	_ws._xform_keep.button_pressed = true
@@ -2501,7 +2501,7 @@ func _slicer_panel() -> void:
 	_ws.set_gizmo_mode("all")
 	# Many steps quickly: shown at once, stamped once when they settle, one undo (an arrow held
 	# down stamped the model again every step -- up to a second each -- and the user's game crashed).
-	groups = _ws.undo_stack.size()
+	groups = _ws.bench.undo_stack.size()
 	var form_box := _form_box(_ws._placed.node)
 	for k in 20:
 		(_ws._xform_pos[0] as SpinBox).value = (_ws._xform_pos[0] as SpinBox).value + 0.25
@@ -2509,21 +2509,21 @@ func _slicer_panel() -> void:
 	_ws._xform_settle(true)
 	var moved := _form_box(_ws._placed.node).position.x - form_box.position.x
 	_ok("twenty quick steps: stamped once when settled, one undo", unstamped and absf(moved - 5.0 * STUD) < STUD * 0.3
-			and _ws.undo_stack.size() == groups + 1, "%.2f studs, %d undos" % [moved / STUD, _ws.undo_stack.size() - groups])
+			and _ws.bench.undo_stack.size() == groups + 1, "%.2f studs, %d undos" % [moved / STUD, _ws.bench.undo_stack.size() - groups])
 	# Tab frees and takes the mouse, the pick kept; Escape with the mouse looking only frees it.
 	var tab := InputEventKey.new()
 	tab.keycode = KEY_TAB
 	tab.pressed = true
-	var was: bool = bool(_ws._camera.get("_captured"))
-	_ok("Tab: cursor and look swapped, the pick kept", _ws._tab_key(tab) and bool(_ws._camera.get("_captured")) != was
+	var was: bool = bool(_ws.bench._camera.get("_captured"))
+	_ok("Tab: cursor and look swapped, the pick kept", _ws._tab_key(tab) and bool(_ws.bench._camera.get("_captured")) != was
 			and not _ws._placed.is_empty())
-	_ws._camera.call("_set_captured", true)
+	_ws.bench._camera.call("_set_captured", true)
 	var esc := InputEventKey.new()
 	esc.keycode = KEY_ESCAPE
 	esc.pressed = true
 	_ok("Escape with the mouse looking leaves the pick (the camera frees the mouse)", not _ws._placed_key(esc)
 			and not _ws._placed.is_empty())
-	_ws._camera.call("_set_captured", false)
+	_ws.bench._camera.call("_set_captured", false)
 	# Enter typed in a number box is the box's: the pick stays.
 	(_ws._xform_size[0] as SpinBox).get_line_edit().grab_focus()
 	var enter := InputEventKey.new()
@@ -2577,7 +2577,7 @@ func _nudges() -> void:
 	am.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, bm.get_mesh_arrays())
 	_ws.place_mesh(am, "box.glb")
 	var g: ModelGizmo = _ws._gizmo
-	g.begin("size", Vector3.ZERO, Vector3.FORWARD, Vector2(100, 100), _ws._camera)
+	g.begin("size", Vector3.ZERO, Vector3.FORWARD, Vector2(100, 100), _ws.bench._camera)
 	var f: float = g.drag_delta(Vector3.ZERO, Vector3.FORWARD, Vector2(200, 100)).size
 	_ok("the resize cube: 100 px right is 1.41 times, wherever it was grabbed", is_equal_approx(f, sqrt(2.0)), str(f))
 	g.end()
@@ -2599,12 +2599,12 @@ func _nudges() -> void:
 	_ws.bake_model()
 	var lo: Vector3 = _ws.sculpt.form.bounds().position
 	var n: int = _ws.sculpt.form.cells().size()
-	var groups: int = _ws.undo_stack.size()
+	var groups: int = _ws.bench.undo_stack.size()
 	_ws.nudge_whole = true
 	_ws.nudge(Vector3i(0, 0, -1))
 	_ws.nudge_whole = false
 	_ok("laid, the whole block-out moves a stud back: exact, one undo", _ws.sculpt.form.bounds().position == lo + Vector3(0, 0, -5)
-			and _ws.sculpt.form.cells().size() == n and _ws.undo_stack.size() == groups + 1, str(_ws.sculpt.form.bounds().position - lo))
+			and _ws.sculpt.form.cells().size() == n and _ws.bench.undo_stack.size() == groups + 1, str(_ws.sculpt.form.bounds().position - lo))
 	_ws._undo()
 	_ok("one Z moves it back", _ws.sculpt.form.bounds().position == lo)
 	_ws.move_field(Vector3(1, 3, 2))
@@ -2647,24 +2647,24 @@ func _symmetric_convert() -> void:
 	var xf: Transform3D = _ws._placed.xf
 	_ws._placed.xf = Transform3D(Basis(Vector3.BACK, PI * 0.5) * xf.basis, xf.origin + Vector3(0, 3.0, 0.27 * STUD))
 	_ws._stamp_placed()
-	_ws.set_mirror_z(_ws.mirror_z + 0.5)
+	_ws.set_mirror_z(_ws.bench.mirror_z + 0.5)
 	_ws.centre_on_mirror()
-	var pz := int(_ws.mirror_z)
-	_ok("centre on mirror: the plane on a stud line, the model's middle on it", is_equal_approx(_ws.mirror_z, float(pz))
-			and absf(_ws.size_box().get_center().z - pz * STUD) < 0.01, "%.2f, %s" % [_ws.mirror_z, _ws.size_box()])
+	var pz := int(_ws.bench.mirror_z)
+	_ok("centre on mirror: the plane on a stud line, the model's middle on it", is_equal_approx(_ws.bench.mirror_z, float(pz))
+			and absf(_ws.size_box().get_center().z - pz * STUD) < 0.01, "%.2f, %s" % [_ws.bench.mirror_z, _ws.size_box()])
 	_ws.lay_model()
 	_ws.convert_mirror = true   # symmetric bricks: only when ticked
 	_ws.sculpt_convert()
 	_ws.convert_mirror = false
 	var have := {}
-	for i in _ws.recipe.size():
-		have["%s %s" % [_ws.recipe.part_of(i), _ws.recipe.cell_of(i)]] = true
+	for i in _ws.bench.recipe.size():
+		have["%s %s" % [_ws.bench.recipe.part_of(i), _ws.bench.recipe.cell_of(i)]] = true
 	var missing := []
 	var crossing := 0
 	var shaped := 0
-	for i in _ws.recipe.size():
-		var arch: String = _ws.recipe.part_of(i)
-		var at: Vector3i = _ws.recipe.cell_of(i)
+	for i in _ws.bench.recipe.size():
+		var arch: String = _ws.bench.recipe.part_of(i)
+		var at: Vector3i = _ws.bench.recipe.cell_of(i)
 		var size := BrickPalette.size_of(arch)
 		if at.z < pz and at.z + size.z > pz:
 			crossing += 1
@@ -2675,8 +2675,8 @@ func _symmetric_convert() -> void:
 			m = FitKit.mirror_name(arch)
 		if not have.has("%s %s" % [m, Vector3i(at.x, at.y, 2 * pz - at.z - size.z)]):
 			missing.append("%s %s" % [arch, at])
-	_ok("converted symmetrical: every brick mirrored, some across the plane", _ws.recipe.size() > 20 and missing.is_empty()
-			and crossing > 0, "%d bricks, %d across, %d shaped, unmatched %s" % [_ws.recipe.size(), crossing, shaped,
+	_ok("converted symmetrical: every brick mirrored, some across the plane", _ws.bench.recipe.size() > 20 and missing.is_empty()
+			and crossing > 0, "%d bricks, %d across, %d shaped, unmatched %s" % [_ws.bench.recipe.size(), crossing, shaped,
 			str(missing.slice(0, 6))])
 	_ws.set_mirror(false)
 	_ws.sculpt_to_sdf()
@@ -2714,22 +2714,22 @@ func _size_and_view() -> void:
 	_ws.flip_butt()
 	_ok("turned, from the other end", is_equal_approx(_ws.size_ruler().x, bb.end.x) and _ws.size_ruler().y < 0.0)
 	_ws.flip_butt()
-	var was: Transform3D = _ws._camera.global_transform
+	var was: Transform3D = _ws.bench._camera.global_transform
 	_ws.set_game_view(true)
 	var k: float = bb.size.x / float(PlayerView.VIEW_LENGTH[&"smg"])
 	var back_top := Vector3(bb.position.x, bb.end.y, bb.get_center().z)
-	var seen: Vector3 = _ws._camera.global_transform.affine_inverse() * (_ws.global_transform * back_top)
+	var seen: Vector3 = _ws.bench._camera.global_transform.affine_inverse() * (_ws.global_transform * back_top)
 	_ok("the game's view: the gun's back top at the hip pose, muzzle ahead", _ws.game_view_on
-			and seen.is_equal_approx(PlayerView.HIP * k) and (-_ws._camera.global_transform.basis.z).is_equal_approx(Vector3.RIGHT),
+			and seen.is_equal_approx(PlayerView.HIP * k) and (-_ws.bench._camera.global_transform.basis.z).is_equal_approx(Vector3.RIGHT),
 			"%s vs %s" % [seen, PlayerView.HIP * k])
 	var rmb := InputEventMouseButton.new()
 	rmb.button_index = MOUSE_BUTTON_RIGHT
 	rmb.pressed = true
 	_ws._game_view_input(rmb)
-	seen = _ws._camera.global_transform.affine_inverse() * (_ws.global_transform * back_top)
+	seen = _ws.bench._camera.global_transform.affine_inverse() * (_ws.global_transform * back_top)
 	_ok("RMB aims down the sights", _ws.game_view_ads and seen.is_equal_approx(PlayerView.ADS * k))
 	_ws.set_game_view(false)
-	_ok("and back to the camera as it was", not _ws.game_view_on and _ws._camera.global_transform.is_equal_approx(was))
+	_ok("and back to the camera as it was", not _ws.game_view_on and _ws.bench._camera.global_transform.is_equal_approx(was))
 	_ws.drop_model()
 	_ws.sculpt_clear()
 
@@ -2766,8 +2766,8 @@ func _stamp_box() -> void:
 	_ws.redo()
 	_ws.sculpt_convert()
 	var shaped := 0
-	for i in _ws.recipe.size():
-		shaped += int(BrickPalette.is_shaped(BrickPalette.part_of(_ws.recipe.part_of(i))))
+	for i in _ws.bench.recipe.size():
+		shaped += int(BrickPalette.is_shaped(BrickPalette.part_of(_ws.bench.recipe.part_of(i))))
 	_ok("converted: the box's bricks, no slopes", _asset_cells() == want and shaped == 0,
 			"%d cells, %d shaped" % [_asset_cells().size(), shaped])
 	_ws.sculpt_mode = "shape"

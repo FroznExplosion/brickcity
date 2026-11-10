@@ -46,7 +46,7 @@ func _tick() -> void:
 	if _frames != 2:
 		return
 	_ws.set_process(false)
-	_ws._hotbar.save_path = "user://_probe_figure_hotbar.json"
+	_ws.bench._hotbar.save_path = "user://_probe_figure_hotbar.json"
 	_ws.toolbars_save = "user://_probe_figure_toolbars.json"
 	for yaw in 2:
 		var n := BrickPalette.variant_name("brick_1x4", yaw, false)
@@ -57,7 +57,7 @@ func _tick() -> void:
 	var cat := _workshop()
 	await _game(cat)
 	_back()
-	_ws._builds_dir = BuildRecipe.player_dir()
+	_ws.bench._builds_dir = BuildRecipe.player_dir()
 	_wipe(DIR)
 	print("figure probe: %d passed, %d failed" % [_pass, _fail])
 	quit(1 if _fail > 0 else 0)
@@ -65,7 +65,7 @@ func _tick() -> void:
 
 func _workshop() -> PartCatalog:
 	print("workshop")
-	_ws._new_build()
+	_ws.bench._new_build()
 	_ws.set_asset_kind("figure")
 	_ok("a figure's nine parts", Array(_ws.part_names) == FigureReference.PARTS, str(_ws.part_names))
 	var ready: Array = _ws.points.filter(func(q: Dictionary) -> bool: return q.get("ready", false) and q.kind != "bend")
@@ -105,7 +105,7 @@ func _workshop() -> PartCatalog:
 	bm.size = Vector3(0.3, hip.y - ground, 0.3)
 	bm.subdivide_height = 12
 	shell.mesh = bm
-	shell.transform = _ws.world.get_chunk_transform(_ws.asm.frames[0]) * Transform3D(Basis(),
+	shell.transform = _ws.bench.world.get_chunk_transform(_ws.bench.asm.frames[0]) * Transform3D(Basis(),
 			Vector3(hip.x - 0.4, (hip.y + ground) * 0.5, hip.z))
 	_ws._shell_nodes["leg_L"] = shell
 	var by_part: Dictionary = _ws._kind_bricks()
@@ -131,7 +131,7 @@ func _workshop() -> PartCatalog:
 		if c is Label3D and absf((c as Label3D).position.y - (hip.y + 0.25)) < 0.3:
 			row_ys[snappedf((c as Label3D).position.y, 0.01)] = true
 	_ok("labels on one row go up by turns", row_ys.size() >= 2, str(row_ys.keys()))
-	_ws._builds_dir = DIR
+	_ws.bench._builds_dir = DIR
 	_ws._save_as("Probe Figure")
 	var cat := PartCatalog.new()
 	_ok("nine parts saved, each on its own", cat.load_dir(_ws.parts_dir(), "custom") == 9)
@@ -281,7 +281,7 @@ func _game(cat: PartCatalog) -> void:
 
 func _back() -> void:
 	print("back")
-	_ws._new_build()
+	_ws.bench._new_build()
 	_ws.set_asset_kind("mech")
 	_ok("Make a mech after: a mech's parts and reference", Array(_ws.part_names) == MechReference.PARTS
 			and _ws._mech_ref != null and _ws._mech_ref.get_node_or_null("Joint_pod_L") != null)

@@ -42,14 +42,14 @@ func _tick() -> void:
 	if _frames != 2:
 		return
 	_ws.set_process(false)
-	_ws._hotbar.save_path = "user://_probe_pkg_hotbar.json"
+	_ws.bench._hotbar.save_path = "user://_probe_pkg_hotbar.json"
 	_ws.toolbars_save = "user://_probe_pkg_toolbars.json"
 	_wipe(DIR)
 	print("package probe")
 	var made := _export()
 	_import(made)
 	_refused(made)
-	_ws._builds_dir = BuildRecipe.player_dir()
+	_ws.bench._builds_dir = BuildRecipe.player_dir()
 	_wipe(DIR)
 	print("package probe: %d passed, %d failed" % [_pass, _fail])
 	quit(1 if _fail > 0 else 0)
@@ -57,7 +57,7 @@ func _tick() -> void:
 
 func _export() -> Array:
 	print("export")
-	_ws._new_build()
+	_ws.bench._new_build()
 	_ws.work_plane = "side"
 	for spec in [["body", 3, [Vector2(20, 30), Vector2(40, 30), Vector2(40, 42), Vector2(20, 42)]],
 			["grip", 3, [Vector2(34, 14), Vector2(38, 14), Vector2(39, 30), Vector2(35, 30)]],
@@ -71,7 +71,7 @@ func _export() -> Array:
 			["magazine", "mount", "magazine", "mag.narrow", [28, 30, 1]], ["body", "socket", "magazine", "mag.narrow", [28, 30, 2]]]:
 		_ws.select_part(_ws.part_names.find(q[0]))
 		_ws.toggle_point(q[4], q[1], q[2], q[3])
-	_ws._builds_dir = DIR
+	_ws.bench._builds_dir = DIR
 	_ws._save_as("Probe Pkg")
 	var made: Array = _ws.export_packages(DIR + "out/")
 	_ok("four packages", made.size() == 4 and made.all(func(r: Dictionary) -> bool: return r.ok), str(made))

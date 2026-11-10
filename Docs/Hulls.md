@@ -155,7 +155,7 @@ stops when sealed, and the next compartment over (bulkhead closed) does not chan
 - How strong it is: a one-brick hole in a 2000-cell room loses ~4 % a second and barely stirs
   anything (1 m/s^2 by it); five bricks out, ~25 % a second, 6-7 m/s^2: crumbs go out, the player
   is dragged.
-- **Not yet:** what low air does to a player (suit, damage -- §10).
+- ~~Not yet: what low air does to a player~~: §4.3.
 
 ### 4.2 Built (2026-11-07): dust at the hole, pieces carried out
 
@@ -172,6 +172,25 @@ stops when sealed, and the next compartment over (bulkhead closed) does not chan
   `Boat.launch` sets 1 atmosphere.
 - Gate: `ship_vent_probe` 11 (+1: a jet at the hole, blowing outward; sealed, no dust). The
   boat pass checks a holed boat on the sea has no dust and no rush.
+
+### 4.3 Built (2026-11-09): low air -- a suit timer, then damage
+
+The user's call: **a suit timer, then damage.** `SuitAir` (scripts/space/suit_air.gd), one per
+player, ticked by the planet scene's `_air_tick`:
+- **What you breathe:** the room's pressure in a ship or station (`air_at`), else the world's
+  air (`PlanetSystem.world_air_at`: full low down, thinning to none past 8 % of its radius up;
+  none in space or on an airless world). In the pilot's seat, the cockpit's own (1), its bricks
+  laid or not.
+- **Under `HullAir.LOW` (50 %):** the suit's air runs down a second a second, from `SUIT_S`
+  (60 s). No damage while it lasts. In good air it fills again in `REFILL_S` (8 s).
+- **Suit empty:** `HURT_SHARE` (10 %) of health a second, straight to the health layer
+  (`apply_to_layer_type`, element `suffocation`: shields and armour keep nothing out of your
+  lungs), until you are back in air or dead (10 s). Up again, a full suit.
+- **HUD:** the air warning now shows anywhere the air is low (not only aboard), with the suit:
+  `LOW AIR 0 %  --  suit air 42 s`, then `--  SUIT EMPTY`.
+- Not for AI soldiers yet (they do not leave air), nor drowning (a head under water).
+- Gate: `suit_air_probe` 7 (good air keeps it full; the timer with no damage; empty, health
+  goes past a full shield; refills; dies; reset; the world's air with height).
 
 ## 5. Flooding: water brick by brick
 
@@ -764,7 +783,7 @@ the same order give the same result twice.
      respawns stop until you capture another);
   2. at fixed checkpoints;
   3. co-op revive by a teammate within a time, else respawn at 1 or 2.
-- **Air in space:** whether low pressure needs a suit, hurts, or only warns (§4).
+- **Air in space:** a suit timer, then damage (decided 2026-11-09, built: §4.3).
 
 ---
 
@@ -830,6 +849,16 @@ forces a tick late (`WorkerThreadPool`, never waited on), which risks the float'
 for under a millisecond. So it is not done. Do it, or move the column loop to C++, when a
 scene floats several boats.
 
+**E6 built (2026-11-09, the user's call):** a boat's forces are worked out on the
+`WorkerThreadPool` (`Boat._forces`, from a snapshot: its transform, motion, the wave clock and
+the water in each column, all read on the main thread). The job starts at the end of a tick
+from where the boat now is, so the next tick takes exactly the forces `_float` would work out
+then -- no tick late -- when it is done in time. Not done: the last forces again, never waited
+on (`late_ticks`). Moved by anything else since (a launch, the floating origin): worked out on
+the main thread that tick. `Boat.threaded` false runs it all on the main thread as before.
+`boat_probe` 8 (+1): a snapshot worked out on a worker and here gives the same forces; 0 of 972
+ticks late; the main thread's part 0.07 ms a tick, the job 0.66 ms.
+
 **E3/E4 not measured yet (2026-11-06/07).** The machine was not quiet. The first try
 (`--storeys --big`) was stopped for low memory. At 23:00 three chats' runs were going
 (97 C, 350 MB free), and at 14:12 only 430 MB of memory was free. No E3/E4 change is made
@@ -868,7 +897,7 @@ Each step lands on `main` on its own, with its gate.
    every ship, spaceships too.
 10. **Brick-by-brick patching** (§9 A) on the same core. *Built 2026-11-06, §9.2.*
 11. **E3, E4, E5** as measurements call for them. E5 not applicable; E3/E4 waiting on a
-    quiet machine (§11). E6 measured, not needed for one boat (§11).
+    quiet machine (§11). E6 built 2026-11-09 (§11).
 12. **Respawn** (§10) when the user decides.
 
 ## 13. Open questions

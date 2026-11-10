@@ -27,6 +27,7 @@ func _initialize() -> void:
 	_place_tool()
 	_measure_fill_move()
 	_shape_and_select()
+	_names_no_outside_class()
 	print("wk_smoke: %d passed, %d failed" % [_pass, _fail])
 	quit(0 if _fail == 0 else 1)
 
@@ -37,6 +38,44 @@ func _ok(what: String, cond: bool, detail: String = "") -> void:
 	else:
 		_fail += 1
 		print("FAIL  %s  %s" % [what, detail])
+
+
+## The kit names no class from outside it (README: "no game class inside"): every global class
+## the project has (`class_name`) that is not the kit's own, looked for in the kit's code, its
+## comments and strings left out. Godot's own classes are not global classes, so they pass.
+func _names_no_outside_class() -> void:
+	var kit_dir: String = (get_script() as Script).resource_path.get_base_dir().get_base_dir()
+	var outside: Array[String] = []
+	for c in ProjectSettings.get_global_class_list():
+		if not String(c.path).begins_with(kit_dir + "/"):
+			outside.append(String(c.class))
+	var strip := RegEx.create_from_string("\"(?:[^\"\\\\]|\\\\.)*\"|#.*")
+	var word := RegEx.create_from_string("[A-Za-z_][A-Za-z0-9_]*")
+	var named := {}
+	var files := _kit_scripts(kit_dir)
+	for f in files:
+		var code := strip.sub(FileAccess.get_file_as_string(f), "", true)
+		for m in word.search_all(code):
+			named[m.get_string()] = f
+	var found: Array[String] = []
+	for c in outside:
+		if named.has(c):
+			found.append("%s (%s)" % [c, String(named[c]).get_file()])
+	_ok("the kit's %d scripts name no class from outside it" % files.size(),
+			files.size() > 10 and found.is_empty(), ", ".join(found))
+
+
+func _kit_scripts(dir: String) -> Array[String]:
+	var out: Array[String] = []
+	var d := DirAccess.open(dir)
+	if d == null:
+		return out
+	for f in d.get_files():
+		if f.ends_with(".gd"):
+			out.append(dir + "/" + f)
+	for sub in d.get_directories():
+		out.append_array(_kit_scripts(dir + "/" + sub))
+	return out
 
 
 # A number appended to the document, as an editor records it: done first, then pushed.

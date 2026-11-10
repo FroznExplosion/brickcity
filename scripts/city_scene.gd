@@ -1054,6 +1054,7 @@ func _ready() -> void:
 	DebugView.reset()
 	_breaklag_mode = "--breaklag" in args
 	_bigbreak_mode = "--bigbreak" in args
+	_promote_mode = "--promote" in args
 	_wide_mode = "--widecheck" in args
 	_rubble_mode = "--rubble" in args
 	_landing_mode = "--landing" in args
@@ -1323,6 +1324,8 @@ func _ready() -> void:
 		_pass_runner()._run_breaklag_pass()
 	elif _bigbreak_mode:
 		_pass_runner()._run_bigbreak_pass()
+	elif _promote_mode:
+		_pass_runner()._run_promote_pass()
 	elif _wide_mode:
 		_pass_runner()._run_wide_pass()
 	elif _rubble_mode:
@@ -5652,6 +5655,8 @@ func _start_firefight(gate: bool) -> void:
 var _breaklag_mode := false
 ## -- --bigbreak [--big] [--far]: a player's widest shots, close up (_run_bigbreak_pass)
 var _bigbreak_mode := false
+## -- --promote [--big]: what a promotion costs, and the ticks after it (_run_promote_pass)
+var _promote_mode := false
 ## -- --widecheck --big: the wide buildings' own break checks (_run_wide_pass)
 var _wide_mode := false
 ## -- --rubble --big: what wreckage at rest costs (_run_rubble_pass)

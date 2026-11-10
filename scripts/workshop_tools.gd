@@ -85,7 +85,7 @@ const WINDOW := Vector2i(4, 9)
 const REPEAT_WHAT := [["building", "Building"], ["storey", "One storey"], ["shape", "One shape"]]
 const REPEAT_DIRS := [["up", "Up"], ["x", "Along X"], ["z", "Along Z"]]
 
-var ws    ## the workshop (workshop.gd)
+var ws    ## the workshop's bricks (BrickBench, scripts/workshop/brick_bench.gd)
 var rail: WkRail
 ## Where the menu bar, the tool bar and the rail go (the kit's WkFrame).
 var frame := WkFrame.new()
