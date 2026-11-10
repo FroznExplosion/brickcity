@@ -644,6 +644,10 @@ const HOLD_MAX_FRAMES := 90
 var holds_extended := 0
 var _ghosts: Array = []   ## [node, free on this process frame]
 var _band_holes: Array = []  ## toppled pieces with bands still to build
+## Bands a toppled building was still uploading, handed to its piece and hung
+## when they landed (`taken`), or found stale and built again (`stale`).
+var band_owed_taken := 0
+var band_owed_stale := 0
 var _mesh_jobs: Array = []   ## [island, task id, [mesh], arrays]
 var _upload_waiting: Array = []  ## [island, arrays] over this tick's budget
 var _upload_tick := -1
@@ -2281,8 +2285,9 @@ func _note_landing(isl: BrickIsland) -> void:
 func adopt(chunk: int, mesh_node: MeshInstance3D, carried_mesh: ArrayMesh,
 		carried_bytes: int, carried_width: int, carried_bands: Array = [],
 		piece_id := -1, owner_id := -1, announce := true, is_landmark := true,
-		carried_band_bytes: Array = []) -> BrickIsland:
+		carried_band_bytes: Array = [], owed_bands: Dictionary = {}) -> BrickIsland:
 	if chunk < 0 or not world.is_chunk_alive(chunk):
+		_drop_owed(owed_bands)
 		return null
 	world.set_chunk_anchored(chunk, false)
 
@@ -2340,6 +2345,9 @@ func adopt(chunk: int, mesh_node: MeshInstance3D, carried_mesh: ArrayMesh,
 		# drew nothing from two frames into its fall until something happened
 		# to rebuild it. New instances of the same band meshes, as `fresh` is.
 		isl.bands = _instance_bands(carried_bands, fresh)
+		# Bands the building was still uploading: holes until they land.
+		isl.owed_bands = owed_bands
+		owed_bands = {}
 		if near_tier != null:
 			for si in isl.bands.size():
 				if isl.bands[si] != null:
@@ -2368,6 +2376,8 @@ func adopt(chunk: int, mesh_node: MeshInstance3D, carried_mesh: ArrayMesh,
 		isl.mesh.position = -isl.local_com
 		isl.body.add_child(isl.mesh)
 		FurnitureMesh.attach(world, chunk, isl.mesh, _furniture)
+	# Bands handed over with nothing to hang them on.
+	_drop_owed(owed_bands)
 
 	isl.body.transform = world.get_chunk_transform(chunk) \
 			* Transform3D(Basis(), isl.local_com)
@@ -2592,6 +2602,7 @@ func rebuild_mesh(isl: BrickIsland, force_full: bool = false, allow_sync: bool =
 	if not isl.bands.is_empty():
 		isl.retiring_bands.append_array(isl.bands)
 		isl.bands.clear()
+		_drop_owed(isl.owed_bands)
 		isl.array_mesh = null
 		force_full = true
 	# A child it just shed is still coming up; keep drawing those bricks until
@@ -4553,20 +4564,48 @@ func _fill_band_holes() -> void:
 		if not isl.is_valid() or isl.mesh == null or isl.bands.is_empty() \
 				or not world.bake_ready(isl.chunk) \
 				or world.get_chunk_sections(isl.chunk) != isl.bands.size():
+			_drop_owed(isl.owed_bands)
 			_band_holes.pop_front()
 			continue
+		# A hole the building's own upload is still filling is skipped until
+		# it is done; with nothing else to fill, the piece waits a tick for it.
 		var si := -1
+		var waiting := false
 		for k in isl.bands.size():
-			if not is_instance_valid(isl.bands[k]):
-				si = k
-				break
+			if is_instance_valid(isl.bands[k]):
+				continue
+			if isl.owed_bands.has(k) \
+					and not WorkerThreadPool.is_task_completed(int(isl.owed_bands[k][0])):
+				waiting = true
+				continue
+			si = k
+			break
 		if si < 0:
+			if waiting:
+				return
+			_drop_owed(isl.owed_bands)
 			_band_holes.pop_front()
 			continue
-		var arrays: Array = world.build_chunk_mesh_section(isl.chunk, si)
-		var mesh := ArrayMesh.new()
-		if not arrays.is_empty() and mesh_arrays_ok(arrays, "island %d band %d" % [isl.chunk, si]):
-			mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
+		var arrays: Array = []
+		var mesh: ArrayMesh = null
+		if isl.owed_bands.has(si):
+			# Done (checked above), so this only reaps it. Its mesh is right
+			# only if no brick has changed since its arrays were made; if one
+			# has, the band is built from the bake as it is now, below.
+			var owed: Array = isl.owed_bands[si]
+			isl.owed_bands.erase(si)
+			WorkerThreadPool.wait_for_task_completion(int(owed[0]))
+			if int(owed[3]) == world.get_alive_block_count(isl.chunk) and owed[1][0] != null:
+				mesh = owed[1][0]
+				arrays = owed[2]
+				band_owed_taken += 1
+			else:
+				band_owed_stale += 1
+		if mesh == null:
+			arrays = world.build_chunk_mesh_section(isl.chunk, si)
+			mesh = ArrayMesh.new()
+			if not arrays.is_empty() and mesh_arrays_ok(arrays, "island %d band %d" % [isl.chunk, si]):
+				mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
 		var live := mesh.get_surface_count() > 0
 		var node := MeshInstance3D.new()
 		node.material_override = brick_material
@@ -4583,6 +4622,14 @@ func _fill_band_holes() -> void:
 		isl.band_bytes[si] = index_patch_bytes(arrays) if live else 0
 		band_holes_filled += 1
 		return   # one a tick
+
+
+## Leave a piece's (or a hand-over's) unfinished band uploads to finish, and
+## throw them away (TaskReaper): nobody will hang them now.
+func _drop_owed(owed: Dictionary) -> void:
+	for slot in owed:
+		TaskReaper.drop(int((owed[slot] as Array)[0]))
+	owed.clear()
 
 
 ## Is this piece drawn whole by the bands it came down with? Every slot: one
@@ -5264,6 +5311,7 @@ func _stream_island_meshes() -> void:
 			isl.retiring_bands.append_array(isl.bands)
 			isl.bands.clear()
 			isl.band_bytes.clear()
+			_drop_owed(isl.owed_bands)
 			# Its bricks draw until the queue has built the stand-in -- they need
 			# no bake to go on being drawn. Walked up to and away again before
 			# its bricks came, it is drawing the stand-in already.
