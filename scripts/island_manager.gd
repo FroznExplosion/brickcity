@@ -1551,7 +1551,7 @@ func spawn(source: int, block_ids: PackedInt32Array,
 	if isl.mesh != null:
 		# Far off: the coarse stand-in, which needs no bake (ISLAND_MESH_RANGE).
 		isl.coarse = _starts_coarse(isl)
-		var bake_here: bool = isl.coarse or not small_meshes_on_worker or not standins.enabled
+		var bake_here: bool = isl.coarse or not small_meshes_on_worker or not standins.can_stand_in()
 		if bake_here and count <= SYNC_MESH_MAX_BLOCKS and _sync_meshes < SYNC_MESH_PER_TICK \
 				and (isl.coarse or world.get_chunk_authored_tris(isl.chunk) <= SYNC_MESH_MAX_TRIS):
 			# Small enough to bake here and now, so it is never invisible.

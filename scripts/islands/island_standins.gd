@@ -46,6 +46,14 @@ func _init(h: Host) -> void:
 	name = "IslandStandins"
 
 
+## Whether a piece can be stood in at all: on, and a library that has
+## get_standin_buffers. Main's DLL lags its scripts until it is rebuilt after a
+## C++ merge; without the method a piece sent to the worker would draw nothing,
+## so the manager bakes small pieces here instead (small_meshes_on_worker).
+func can_stand_in() -> bool:
+	return enabled and host.world != null and host.world.has_method(&"get_standin_buffers")
+
+
 ## Once a frame (IslandManager._process): the pieces waiting on a mesh, and the
 ## ones already stood in for (which includes any covered at a spawn or an
 ## upload, cover(), until their mesh is up).
