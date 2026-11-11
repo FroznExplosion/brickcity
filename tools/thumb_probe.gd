@@ -11,7 +11,7 @@ extends SceneTree
 ##   carried    a package of the part carries the picture, and an import keeps it
 ##   headless   no window: no picture, and nothing breaks
 
-const DIR := "user://_probe_thumb/"
+const DIR := "user://dev/_probe_thumb/"
 
 var _pass := 0
 var _fail := 0

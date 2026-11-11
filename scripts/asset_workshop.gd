@@ -214,7 +214,7 @@ var work_x := 40
 var auto_start_brick := true
 ## How thick each part is across the gun, in studs, for sketching it.
 var part_width := {}
-const AUTOSAVE := "user://asset_workshop_autosave.json"
+const AUTOSAVE := UserPaths.WORKSHOP + "asset_autosave.json"
 var _autosave_dirty := false
 ## A scripted run (--shot, --gate) must never write over the user's autosave.
 var _no_autosave := false
@@ -289,7 +289,7 @@ var _preview_image: TextureRect
 var _preview_text: Label
 
 ## Where the toolbars are remembered; a probe points it elsewhere.
-var toolbars_save := "user://asset_workshop_toolbars.json"
+var toolbars_save := UserPaths.WORKSHOP + "asset_toolbars.json"
 ## The parts a new asset starts with: a gun's slots (Docs/Parts/custom.md section 4).
 const GUN_PARTS := ["body", "barrel", "stock", "grip", "magazine", "sight", "muzzle", "underbarrel"]
 const PART_COLOURS := [Color(0.62, 0.66, 0.72), Color(0.95, 0.55, 0.2), Color(0.85, 0.72, 0.45),
@@ -347,7 +347,7 @@ func _ready() -> void:
 	for t in [_measure_tool, _fill_tool, _move_tool, _shape_tool, _select_tool]:
 		bench.toolbox.add(t)
 	# What is made here is a gun (or a mech): File > Save, Save As and Open use their
-	# library (user://guns/), not the buildings'. F5 has its own slot, not the workshop's.
+	# library (user://library/guns/), not the buildings'. F5 has its own slot, not the workshop's.
 	bench._save_path = ASSET_QUICK_SAVE
 	if bench._menu != null:
 		bench._menu.asset_mode(ASSET_KINDS)
@@ -382,7 +382,7 @@ func _ready() -> void:
 
 ## `-- --shot [--photo=<file> --from=x,y --to=x,y --mm=<real length>]`: a photo on the
 ## side plane, calibrated by two of its pixels and the real length between them, the
-## mirror on, pictures from the perspective and side views into user://asset_shots/.
+## mirror on, pictures from the perspective and side views into user://dev/asset_shots/.
 ## For looking at the tools without driving them by hand.
 func _shot() -> void:
 	var opt := {"photo": "", "from": "", "to": "", "mm": ""}
@@ -402,7 +402,7 @@ func _shot() -> void:
 			_draw_photo_grid()
 	set_mirror(true)
 	show_help(false)
-	DirAccess.make_dir_recursive_absolute("user://asset_shots")
+	DirAccess.make_dir_recursive_absolute(UserPaths.DEV + "asset_shots")
 	if "--ramp" in OS.get_cmdline_user_args():
 		# A sketched ramp climbing a slope's pitch, to look at the slopes it lays.
 		for _i in 3:
@@ -423,7 +423,7 @@ func _shot() -> void:
 		rail_pick("sketch")
 		sketch_draw = "brush"
 		_look_at_build()
-		var f := FileAccess.open("user://asset_shots/ramp.json", FileAccess.WRITE)
+		var f := FileAccess.open(UserPaths.DEV + "asset_shots/ramp.json", FileAccess.WRITE)
 		if f != null:
 			f.store_string(JSON.stringify(export_sheet(), " "))
 			f.close()
@@ -647,14 +647,14 @@ func _shot() -> void:
 				set_exploded(true)
 		_look_at_build()
 		views = [0, 1, 3]
-	DirAccess.make_dir_recursive_absolute("user://asset_shots")
+	DirAccess.make_dir_recursive_absolute(UserPaths.DEV + "asset_shots")
 	for v in views:
 		if not game_view_on:
 			set_view(v)
 		for _i in 12:
 			await get_tree().process_frame
 		var img := get_viewport().get_texture().get_image()
-		var path := "user://asset_shots/%s.png" % ("game" if game_view_on else VIEWS[v])
+		var path := (UserPaths.DEV + "asset_shots/%s.png") % ("game" if game_view_on else VIEWS[v])
 		img.save_png(path)
 		print("[asset workshop] wrote %s" % ProjectSettings.globalize_path(path))
 	if "--menu" in OS.get_cmdline_user_args():
@@ -664,7 +664,7 @@ func _shot() -> void:
 				(c as MenuButton).show_popup()
 		for _i in 6:
 			await get_tree().process_frame
-		get_viewport().get_texture().get_image().save_png("user://asset_shots/menu.png")
+		get_viewport().get_texture().get_image().save_png(UserPaths.DEV + "asset_shots/menu.png")
 	if hands_on:
 		# Mid-reload: the magazine out, the left hand pinching it.
 		set_view(1)
@@ -675,14 +675,14 @@ func _shot() -> void:
 			_play.t = 3.0
 			_play.last = Time.get_ticks_msec()
 			await get_tree().process_frame
-		get_viewport().get_texture().get_image().save_png("user://asset_shots/reload.png")
+		get_viewport().get_texture().get_image().save_png(UserPaths.DEV + "asset_shots/reload.png")
 		_play = {}
 		_clear_display()
 	show_help(true)
 	for _i in 12:
 		await get_tree().process_frame
-	get_viewport().get_texture().get_image().save_png("user://asset_shots/help.png")
-	print("[asset workshop] wrote %s" % ProjectSettings.globalize_path("user://asset_shots/help.png"))
+	get_viewport().get_texture().get_image().save_png(UserPaths.DEV + "asset_shots/help.png")
+	print("[asset workshop] wrote %s" % ProjectSettings.globalize_path(UserPaths.DEV + "asset_shots/help.png"))
 	get_tree().quit()
 
 
@@ -1607,7 +1607,7 @@ func _toggle_panel() -> void:
 
 
 ## Every saved part of this build as a package to share (Docs/ModularParts.md stage 9), in
-## user://parts/export/ (or `out_dir`): [{ok, path, hash} or {ok: false, why}].
+## user://exports/parts/ (or `out_dir`): [{ok, path, hash} or {ok: false, why}].
 func export_packages(out_dir: String = PartPackage.EXPORT_DIR) -> Array:
 	var out := []
 	DirAccess.make_dir_recursive_absolute(out_dir)
@@ -1939,7 +1939,7 @@ func _reset_space() -> void:
 		_draw_measure()
 
 
-const ASSET_QUICK_SAVE := "user://asset_workshop_quick.json"
+const ASSET_QUICK_SAVE := UserPaths.WORKSHOP + "asset_quick.json"
 ## What is made here: the asset kinds, and furniture and items for rooms -- the item
 ## library is shared with the building workshop, so the generator furnishes rooms from
 ## what is saved here (Docs/AssetWorkshop.md, "Furniture and items").
@@ -2026,7 +2026,7 @@ func _setup_parts() -> void:
 	if part_names.is_empty():
 		part_names = PackedStringArray(GUN_PARTS)
 	# Its own file: switching toolbars must never write over the main workshop's hotbar.
-	bench._hotbar.save_path = "user://asset_workshop_hotbar.json"
+	bench._hotbar.save_path = UserPaths.WORKSHOP + "asset_hotbar.json"
 	# Plain Tab frees and takes the mouse here; Shift+Tab is all parts (_tab_key).
 	bench._hotbar.browser_on_shift_tab = true
 	if FileAccess.file_exists(toolbars_save):
@@ -3646,7 +3646,7 @@ func export_and_preview() -> void:
 	if (sheet.parts as Array).is_empty():
 		_export_check = "export: nothing built yet"
 		return
-	var dir := ProjectSettings.globalize_path("user://asset_exports")
+	var dir := ProjectSettings.globalize_path(UserPaths.EXPORTS + "assets")
 	DirAccess.make_dir_recursive_absolute(dir)
 	var sheet_path := "%s/%s.json" % [dir, sheet.name]
 	var f := FileAccess.open(sheet_path, FileAccess.WRITE)
@@ -3713,7 +3713,7 @@ func _build_preview(layer: CanvasLayer) -> void:
 # Instructions
 # ---------------------------------------------------------------------------
 
-const HELP_SAVE := "user://asset_workshop.cfg"
+const HELP_SAVE := UserPaths.WORKSHOP + "asset.cfg"
 const HELP_TEXT := """[font_size=22][b]Asset workshop[/b][/font_size]
 Block out a gun (or any asset) in bricks against a photo. Each brick here becomes its nano twin when exported.
 
@@ -3724,7 +3724,7 @@ A gun is a quarter-size model: a Thompson is 53 studs long, 3 studs wide.
 [b]1. Photo.[/b]  F2, [i]Load photo...[/i], pick a side view. Click [i]Calibrate[/i], click two points on the photo (butt and muzzle), type the real length in mm (852 for a Thompson).
 [b]2. Look at it flat.[/b]  Alt 1 for the side view (Alt 2 top, Alt 3 front, Alt 0 back to 3D). Alt + wheel zooms where the cursor is, WASD moves. ESC frees the mouse for the panels. Tick [i]stud grid on the photo[/i] in F2 to check its size.
 [b]3. Pick the part.[/b]  Y (shift Y back) to body, barrel, stock, grip ... Every brick you lay belongs to the part you are on, and each part keeps its own 9 toolbar slots.
-[b]4. Build.[/b]  Bricks go where the cursor is on the working plane (free placement, Alt F to aim at studs instead); PgUp / PgDn move the plane. The tools are down the left, with the open tool's options under them and the part picker at the top; every other action is in the menus at the top (View, Part, Brick, Gun, Photos, Help), its key beside it. Keys still work. [b]Saving:[/b] File > Save (Ctrl S), Save As (Ctrl Shift S) and Open (Ctrl O) keep guns in their own library (user://guns/), apart from the buildings, and Save also writes every part on its own (user://parts/custom/): the parts are what the game makes guns of, and only parts whose connection points fit. The build is also autosaved every few seconds. [b]Explode[/b] (Alt E) pulls the parts apart -- barrel forward, stock behind, grip and underbarrel under, sight over, a magazine out the way it sits -- and you keep building on them where they are drawn. [b]Move part[/b] (Alt G): drag a part across the view to move it whole, studs, sketch and points with it (one Z). [b]Export to game[/b] (Alt X): each part as a game scene in a folder beside the gun's file (user://guns/<name>/), real size, muzzle forward, with the sockets the game's assembler joins them on. Which end is the muzzle is read off the build (barrel forward of the body, stock behind). [b]Hands[/b] (Alt H): the game's brick hands at the gun's scale, the right C round the grip, the left round the underbarrel (or the barrel). [b]Play[/b] (Alt P): three shots and a reload, the magazine out and back in -- the parts are baked into pieces of their own first. [b]Shapes[/b] (K) drags a box and fills it, or, set to [i]brush[/i], LMB lays a shape and RMB carves one out, held and dragged to go on; Ctrl + click does the same from any tool. The brush: Ctrl + LMB lays a ball, cube, cylinder, or a flat circle or square (on the plane the ghost is on -- hold E to lock its height, as for bricks); Ctrl + RMB carves the shape out of whatever is built, the rest of each brick it touches laid again. Hold and drag to keep going (one Z). Ctrl + wheel sizes it; its shape is on the left. [b]Studs[/b] (Alt U): LMB puts a stud on any face of any brick, a slope's too, on that face's half-stud lattice; RMB takes it off; shift LMB makes a stud a connection point (mount or socket), facing the way the stud does. LMB places one brick; hold it and drag to lay a row. RMB deletes (Z brings it back). R turns, F flips. Alt S mirrors: every brick is placed on the other side too.
+[b]4. Build.[/b]  Bricks go where the cursor is on the working plane (free placement, Alt F to aim at studs instead); PgUp / PgDn move the plane. The tools are down the left, with the open tool's options under them and the part picker at the top; every other action is in the menus at the top (View, Part, Brick, Gun, Photos, Help), its key beside it. Keys still work. [b]Saving:[/b] File > Save (Ctrl S), Save As (Ctrl Shift S) and Open (Ctrl O) keep guns in their own library (user://library/guns/), apart from the buildings, and Save also writes every part on its own (user://library/parts/): the parts are what the game makes guns of, and only parts whose connection points fit. The build is also autosaved every few seconds. [b]Explode[/b] (Alt E) pulls the parts apart -- barrel forward, stock behind, grip and underbarrel under, sight over, a magazine out the way it sits -- and you keep building on them where they are drawn. [b]Move part[/b] (Alt G): drag a part across the view to move it whole, studs, sketch and points with it (one Z). [b]Export to game[/b] (Alt X): each part as a game scene in a folder beside the gun's file (user://library/guns/<name>/), real size, muzzle forward, with the sockets the game's assembler joins them on. Which end is the muzzle is read off the build (barrel forward of the body, stock behind). [b]Hands[/b] (Alt H): the game's brick hands at the gun's scale, the right C round the grip, the left round the underbarrel (or the barrel). [b]Play[/b] (Alt P): three shots and a reload, the magazine out and back in -- the parts are baked into pieces of their own first. [b]Shapes[/b] (K) drags a box and fills it, or, set to [i]brush[/i], LMB lays a shape and RMB carves one out, held and dragged to go on; Ctrl + click does the same from any tool. The brush: Ctrl + LMB lays a ball, cube, cylinder, or a flat circle or square (on the plane the ghost is on -- hold E to lock its height, as for bricks); Ctrl + RMB carves the shape out of whatever is built, the rest of each brick it touches laid again. Hold and drag to keep going (one Z). Ctrl + wheel sizes it; its shape is on the left. [b]Studs[/b] (Alt U): LMB puts a stud on any face of any brick, a slope's too, on that face's half-stud lattice; RMB takes it off; shift LMB makes a stud a connection point (mount or socket), facing the way the stud does. LMB places one brick; hold it and drag to lay a row. RMB deletes (Z brings it back). R turns, F flips. Alt S mirrors: every brick is placed on the other side too.
 [b]   Or block it out.[/b]  The [i]Block out[/i] tool on the rail (Alt D): its panel says how, step by step. Draw each part's shape, add shapes with the Shapes brush, then at the bottom of the panel [i]size of the block-out[/i] scales the whole asset, [i]curves[/i] sets how many slopes and curves it is laid with, and [i]smooth shell[/i] gives a part a smooth custom outside (thickness: how far in the bricks start; detail: how many triangles). In detail: set the part's thickness, then draw on the working plane: LMB draws area in, RMB draws it out -- and takes up any brick under the stroke, a hand-laid one or another part's (untick [i]RMB erases any brick[/i] to keep them) -- and the part's bricks are worked out again each time (one Z undoes a change). An outline that crosses itself fills to its outermost line. Edges at a slope's or curve's pitch get slopes and curves, flipped under bottom edges; set slopes to [i]eager[/i] for more of them. Draw a drum magazine as a circle on the front plane (Alt 3). [b]Three views:[/b] the first plane a part is drawn on gives it its thickness; drawn for the same part on another plane (Alt 2 top, Alt 3 front, PgUp/PgDn to move it), area in keeps only what is inside it and area out cuts right through, or set [i]RMB cuts in[/i] to make a pocket so many studs deep. A blue line is the whole part from this plane, grey the other parts. Draw with an outline, a brush (its size and shape on the left), a rectangle, an ellipse, or a polygon of clicked corners (Enter, a double click or the first corner closes it).
 [b]5. Smooth parts.[/b]  On a part that should be a smooth custom piece (stock, grip, handguard), press N. Its bricks are only its outline.
 [b]6. Joints.[/b]  J where a part attaches: a [i]mount[/i] on the part, a [i]socket[/i] on the part it goes onto, same interface.
@@ -9066,7 +9066,7 @@ const GAME_HOST := {"barrel": "body", "stock": "body", "grip": "body", "magazine
 		"sight": "body", "muzzle": "barrel", "underbarrel": "barrel"}
 
 
-## Where this gun's game parts go: a folder beside its file (user://guns/thompson/).
+## Where this gun's game parts go: a folder beside its file (user://library/guns/thompson/).
 func game_dir() -> String:
 	var base := bench._current_path
 	if base == "":
@@ -10465,7 +10465,7 @@ func export_print(run: bool = true) -> String:
 	if (sheet.parts as Array).is_empty():
 		_export_check = "print: nothing built yet"
 		return ""
-	var dir := ProjectSettings.globalize_path("user://asset_exports")
+	var dir := ProjectSettings.globalize_path(UserPaths.EXPORTS + "assets")
 	DirAccess.make_dir_recursive_absolute(dir)
 	var sheet_path := "%s/%s.json" % [dir, sheet.name]
 	var f := FileAccess.open(sheet_path, FileAccess.WRITE)

@@ -4,10 +4,10 @@ extends RefCounted
 ## Docs/ModularParts.md section 7). Two forms:
 ##
 ##   parts    the workshop's Save writes every part on its own, a part.json and part.scn
-##            in its folder (PartCatalog: res://content/base/parts/ shipped, user://parts/custom/ the
+##            in its folder (PartCatalog: res://content/base/parts/ shipped, user://library/parts/ the
 ##            player's). Parts saved from one build share its name (`from`): a design.
 ##   folders  older: Export to game wrote a folder of part scenes and a gun.json, in
-##            res://content/base/guns/<id>/ or user://guns/<id>/. Still read; a design saved as parts
+##            res://content/base/guns/<id>/ or user://library/guns/<id>/. Still read; a design saved as parts
 ##            wins over a folder of the same name.
 ##
 ## Their parts join the game's part library (GunPlaceholderParts.build_library), each kept
@@ -17,7 +17,7 @@ extends RefCounted
 ## `generate`: its own parts, if they fit (GunPartDef.takes), everything else (modifiers,
 ## alt fire, stats, quality) rolled from the seed as for any gun.
 
-const DIRS := ["res://content/base/guns/", "user://guns/"]
+const DIRS := ["res://content/base/guns/", UserPaths.LIBRARY + "guns/"]
 ## The brand on their parts: no skin is set for it, so they keep their bricks' colours.
 const BRAND := &"workshop"
 ## The class a design fires as when its gun.json does not say.

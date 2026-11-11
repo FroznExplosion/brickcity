@@ -38,7 +38,7 @@ const VIEWS := [
 ]
 
 var _gcode_dir := ""
-var _out := "user://"
+var _out := "user://dev/"
 var _want: Array = []
 var _shots: Array = []   # [piece name, view, camera xf real, camera xf game]
 var _frame := 0

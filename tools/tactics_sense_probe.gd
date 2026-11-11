@@ -16,7 +16,7 @@ extends SceneTree
 
 const Arena := preload("res://tools/ai_arena.gd")
 const FIGHT_SECONDS := 25.0
-const TALLY := "user://tactics_tally_probe.json"
+const TALLY := "user://dev/tactics_tally_probe.json"
 
 var _pass := 0
 var _fail := 0

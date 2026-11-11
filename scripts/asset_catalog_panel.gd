@@ -13,7 +13,7 @@ extends PanelContainer
 ## An asset was picked from the list.
 signal picked(id: String)
 
-const SAVE := "user://asset_catalog.json"
+const SAVE := UserPaths.WORKSHOP + "asset_catalog.json"
 ## Where the filter is remembered. A probe points it elsewhere.
 var save_path := SAVE
 

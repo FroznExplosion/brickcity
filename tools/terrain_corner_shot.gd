@@ -8,7 +8,7 @@ extends SceneTree
 ##
 ## Not headless. Writes <dir>/terrain_corner_<drop>_<n>.png.
 
-var _out := "user://"
+var _out := "user://dev/"
 var _fov := 14.0
 
 

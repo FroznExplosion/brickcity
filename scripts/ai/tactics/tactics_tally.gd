@@ -10,7 +10,7 @@ extends RefCounted
 ## and saves every SAVE_EVERY decisions and when the city closes. Delete the file
 ## to start counting again.
 
-const PATH := "user://tactics_tally.json"
+const PATH := UserPaths.PROFILE + "tactics_tally.json"
 const VERSION := 1
 const SAVE_EVERY := 25
 ## Distance bands, by their upper edge in metres.

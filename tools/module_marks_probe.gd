@@ -168,7 +168,7 @@ func _run() -> void:
 	sp.set_rule("on", true)
 	sp.set_rule("role", "start")
 	sp.set_rule("max", 1)
-	var path := "user://_probe_module_marks.json"
+	var path := "user://dev/_probe_module_marks.json"
 	_ws.bench.recipe.save_to(path)
 	var back := BuildRecipe.load_from(path)
 	var srec: Dictionary = back.meta.get("structure", {})

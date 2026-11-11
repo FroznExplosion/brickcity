@@ -18,7 +18,7 @@ extends SceneTree
 ##               scale mech, never among the players' guns; rolled and put in a mech's hand
 ##   back        Make a gun: the gun's parts again, no reference
 
-const DIR := "user://_probe_mech/"
+const DIR := "user://dev/_probe_mech/"
 
 var _pass := 0
 var _fail := 0
@@ -47,8 +47,8 @@ func _tick() -> void:
 	if _frames != 2:
 		return
 	_ws.set_process(false)
-	_ws.bench._hotbar.save_path = "user://_probe_mech_hotbar.json"
-	_ws.toolbars_save = "user://_probe_mech_toolbars.json"
+	_ws.bench._hotbar.save_path = "user://dev/_probe_mech_hotbar.json"
+	_ws.toolbars_save = "user://dev/_probe_mech_toolbars.json"
 	for yaw in 2:
 		var n := BrickPalette.variant_name("brick_1x4", yaw, false)
 		if BrickPalette.size_of(n).x == 4:

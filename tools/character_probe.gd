@@ -11,7 +11,7 @@ extends SceneTree
 ##   brain      idle stands; follow walks after its target, facing it, and stops short;
 ##              patrol goes round its route; wander walks its circle
 
-const DIR := "user://_probe_character/"
+const DIR := "user://dev/_probe_character/"
 
 var _pass := 0
 var _fail := 0

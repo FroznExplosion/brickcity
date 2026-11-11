@@ -32,7 +32,7 @@ signal changed(part: String, colour: int, material: int)
 signal browsing_changed(on: bool)
 
 const SLOTS := 9
-const SAVE := "user://workshop_hotbar.json"
+const SAVE := UserPaths.WORKSHOP + "hotbar.json"
 ## Where it is remembered. A probe points it elsewhere so a test run cannot
 ## rearrange somebody's toolbar.
 var save_path := SAVE

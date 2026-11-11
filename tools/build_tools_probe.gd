@@ -27,8 +27,8 @@ func _initialize() -> void:
 	root.add_child(_ws)
 	await process_frame
 	await process_frame
-	_ws.bench._builds_dir = "user://_probe_builds/"
-	_ws.bench._save_path = "user://_probe_quick.json"
+	_ws.bench._builds_dir = "user://dev/_probe_builds/"
+	_ws.bench._save_path = "user://dev/_probe_quick.json"
 	_ok("Draw starts on a line that makes walls", _ws.bench._tools.outline == "line" and _ws.bench._tools.makes == "walls")
 	_ws.bench._tools.set_outline("box")
 	_ws.bench._tools.makes = "solid"

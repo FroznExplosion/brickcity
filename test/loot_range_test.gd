@@ -665,7 +665,7 @@ func _kill_looked_at() -> void:
 
 func _take_shot() -> void:
 	var img := get_viewport().get_texture().get_image()
-	var path := "user://loot_range.png"
+	var path := UserPaths.DEV + "loot_range.png"
 	img.save_png(path)
 	print("shot saved: ", ProjectSettings.globalize_path(path))
 	get_tree().quit()

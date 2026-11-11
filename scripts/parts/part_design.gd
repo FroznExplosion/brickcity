@@ -16,7 +16,7 @@ extends RefCounted
 
 ## Shipped designs, then the player's. The first of an id wins: a player's file cannot
 ## take a shipped design's id.
-const DIRS := ["res://content/base/parts/designs/", "user://parts/designs/"]
+const DIRS := ["res://content/base/parts/designs/", UserPaths.LIBRARY + "parts/designs/"]
 
 var id := ""
 var display_name := ""

@@ -15,7 +15,7 @@ extends RefCounted
 ##                    the part's identity across machines
 ##
 ## Import refuses a package that is too big, has a file it should not, fails a hash, or whose
-## record or nodes break the schema. What passes lands in user://parts/custom/<id>/ with
+## record or nodes break the schema. What passes lands in user://library/parts/<id>/ with
 ## everything it came with -- its part.scn built here, from the arrays.
 
 const FORMAT := 1
@@ -28,7 +28,7 @@ const MAX_FILE := 16 * 1024 * 1024
 const MAX_NODES := 512
 const MAX_VERTICES := 2_000_000
 const NODE_TYPES := ["Node3D", "MeshInstance3D", "MultiMeshInstance3D"]
-const EXPORT_DIR := "user://parts/export/"
+const EXPORT_DIR := UserPaths.EXPORTS + "parts/"
 const BRICK_SHADER := "res://shaders/brick.gdshader"
 const STUD_SHADERS := ["res://shaders/printed.gdshader"]
 ## Packed array kinds as written: name -> how to read it back.
@@ -82,7 +82,7 @@ static func pack(dir: String) -> Dictionary:
 		manifest.files[f] = _sha(files[f])
 	manifest["hash"] = content_hash(manifest.files)
 	files["manifest.json"] = _canon(manifest)
-	var tmp := "user://.bcpart_%d.tmp" % Time.get_ticks_usec()
+	var tmp := (UserPaths.DEV + ".bcpart_%d.tmp") % Time.get_ticks_usec()
 	var zip := ZIPPacker.new()
 	var err := zip.open(tmp)
 	if err != OK:

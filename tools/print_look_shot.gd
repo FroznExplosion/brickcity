@@ -90,7 +90,7 @@ const FAR := Vector3(80, 0, 0)
 const SHELL := Vector3(300, 0, 0)
 var _near: BrickNear
 
-var _out := "user://"
+var _out := "user://dev/"
 var _looks := ["glass"]
 var _views: Array = []   ## only these (all when empty)
 var _tiers := false      ## --tiers: brick.gdshader's tier_debug tint

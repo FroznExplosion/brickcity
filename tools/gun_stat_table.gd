@@ -15,7 +15,7 @@ const ORDNANCE := [&"grenade", &"rocket_launcher", &"grenade_launcher", &"mine_l
 
 func _init() -> void:
 	var args := OS.get_cmdline_user_args()
-	var out := args[0] if args.size() > 0 else "user://gun_stat_table.md"
+	var out := args[0] if args.size() > 0 else "user://dev/gun_stat_table.md"
 	var n := int(args[1]) if args.size() > 1 else 400
 	var lib := GunPlaceholderParts.build_library()
 	var md := PackedStringArray()

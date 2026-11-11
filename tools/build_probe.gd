@@ -91,7 +91,7 @@ func _check_the_two_layers() -> void:
 	_ok("block for block", wrong == 0, "%d wrong" % wrong)
 
 	# Through the save file.
-	var path := "user://_probe_layers.json"
+	var path := "user://dev/_probe_layers.json"
 	var f := FileAccess.open(path, FileAccess.WRITE)
 	f.store_string(JSON.stringify(r.to_dict()))
 	f.close()
@@ -241,7 +241,7 @@ func _check_order_is_identity() -> void:
 func _check_round_trip() -> void:
 	print("\nsave -> load -> identical")
 	var r := _house()
-	var path := "user://_probe_house.json"
+	var path := "user://dev/_probe_house.json"
 	_ok("saved", r.save_to(path) == OK)
 	var back := BuildRecipe.load_from(path)
 	_ok("loaded", not back.is_empty())
@@ -525,7 +525,7 @@ func _check_fixtures_in_the_recipe() -> void:
 	# Through the FILE, not only through to_dict: JSON has no integer type, and
 	# a staircase of 12.0 steps is the kind of thing that loads fine and then
 	# builds nothing.
-	var path := "user://_probe_fixture.json"
+	var path := "user://dev/_probe_fixture.json"
 	_ok("saved", r.save_to(path) == OK)
 	var back := BuildRecipe.load_from(path)
 	_ok("the fixture survives the file", back.fixture_count() == 1)

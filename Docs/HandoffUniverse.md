@@ -51,7 +51,7 @@ building (check its date against the last C++ commit), `--import`, then:
 | `jump` 10, `ship` 9, `dock` 10, `worlds` 8, `rocks` 5, `debris` 8, `system` 17 | | 280 s |
 | `falling` 5, `mechwave` 3, `squad` 10, `far` 11, `pawn` 12 | the AI and the pawn on a planet | 240 s |
 | `bricks` 9, `damage` 12, `fall` 7, `hits` 8, `topple` 6, `storey` 12 | buildings; run these if `PlanetBuildings` changes | 240 s |
-| `save --stage=1`, then `2`, then `3` | separate processes, in order; 1 wipes `user://saves_test/`; 3 runs on into stage 4 | 250 s each |
+| `save --stage=1`, then `2`, then `3` | separate processes, in order; 1 wipes `user://dev/saves_test/`; 3 runs on into stage 4 | 250 s each |
 
 `--headless --script res://tools/system_probe.gd`: 34 checks, the generator.
 

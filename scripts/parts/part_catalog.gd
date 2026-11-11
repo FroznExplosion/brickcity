@@ -14,7 +14,7 @@ extends RefCounted
 
 ## Shipped parts, and the player's own and downloaded ones (section 7).
 const OFFICIAL_DIR := "res://content/base/parts/"
-const CUSTOM_DIR := "user://parts/custom/"
+const CUSTOM_DIR := UserPaths.LIBRARY + "parts/"
 const FILE := "part.json"
 ## Every facet a part is filed under. `weapon_class` is worked out for gun parts that are
 ## not receivers: every class whose receivers take them (section 5).

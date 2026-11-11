@@ -14,7 +14,7 @@ extends RefCounted
 
 ## A part's Steam Workshop item, kept beside it once it has one (stage 10's Steam half).
 const STEAM_FILE := "steam.json"
-const PLACEHOLDER_DIR := "user://parts/placeholder/"
+const PLACEHOLDER_DIR := UserPaths.DEV + "parts_placeholder/"
 
 
 ## The match's parts, for the lobby: each id in `ids` that the catalogue has.

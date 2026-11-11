@@ -11,7 +11,7 @@ extends RefCounted
 ## the same by GunGenerator, not as its stats.
 
 const VERSION := 1
-const PATH := "user://character.json"
+const PATH := UserPaths.PROFILE + "character.json"
 
 var character := {"name": "Pilot", "level": 1, "max_health": 100.0, "xp": 0, "skills": {},
 		"scrap": 0, "story_tier": 1, "tactical": "grapple"}

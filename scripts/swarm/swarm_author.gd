@@ -18,7 +18,7 @@ extends Node3D
 ##   [X]      clear everything authored
 ##   [ENTER]  save     [L] reload from disk
 
-const SAVE_PATH := "user://swarm_authoring.json"
+const SAVE_PATH := UserPaths.WORKSHOP + "swarm_authoring.json"
 const NL := "
 "
 
