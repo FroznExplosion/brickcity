@@ -7162,6 +7162,8 @@ func _run_chamfer_pass() -> void:
 			await _run_chamfer_street()
 		elif "--overview" in OS.get_cmdline_user_args():
 			await _run_overview()
+		elif "--gpucost" in OS.get_cmdline_user_args():
+			await _run_gpucost()
 		else:
 			await _run_chamfer_cost()
 		city.get_tree().quit(0)
@@ -7449,6 +7451,145 @@ func _overview_line(m: Dictionary) -> String:
 	return "GPU %5.2f ms, %4d draws, %4d objects, %5.0fk tris; shadows %4d draws, %5.0fk tris" % [
 			float(m.gpu), int(m.draws), int(m.objects), float(m.tris) / 1000.0,
 			int(m.sh_draws), float(m.sh_tris) / 1000.0]
+
+## Where the GPU's time goes standing still (PerfCaps.md 9): `-- --chamfer --cost
+## --gpucost`. city.tscn: six metres from one building in bricks, as `--cost`
+## stands. big_city.tscn: down a street of twelve buildings in bricks, as
+## `--street` starts. Each row changes ONE thing, in memory
+## (MenuSettings.set_value(..., false): never saved), measures, and puts it
+## back. A timing run: the editor closed, no other Godot running.
+func _run_gpucost() -> void:
+	var view := city.get_viewport().get_viewport_rid()
+	RenderingServer.viewport_set_measure_render_time(view, true)
+	var b := city.registry.get_building(0)
+	var street := city._big
+	if street:
+		for i in mini(city.registry.buildings.size(), 12):
+			city._promote(i)
+		await _frames(120)
+		var start: Vector3 = b.xform * Vector3(-4.0, 0.0, -3.0)
+		start.y = DebugCamera.EYE_HEIGHT
+		var along: Vector3 = (b.xform.basis * Vector3.RIGHT).normalized()
+		city.camera.global_position = start
+		city.camera.look_at(start + along, Vector3.UP)
+	else:
+		city._promote(0)
+		await _frames(60)
+		var fx: float = b.recipe.footprint_x * City.STUD
+		var wall: Vector3 = b.xform * Vector3(fx * 0.5, 2.6, 0.0)
+		city.camera.global_position = wall - Vector3(1.5, -0.4, 6.0)
+		city.camera.look_at(wall, Vector3.UP)
+	# Every far building quiet and coarse, the near tier settled.
+	for i in 600:
+		await city.get_tree().physics_frame
+		if city._far_coarse_jobs.is_empty() and i > 240:
+			break
+	city.brick_near.settle(city.camera.global_position)
+	await _frames(60)
+	var settings := city.get_node_or_null(^"/root/MenuSettings")
+	# Flat out: with the frame held to the display's 16.6 ms an integrated GPU
+	# clocks itself down to fill it, and its clock then reads the same however
+	# much work there is (MSAA off read 2 ms DEARER that way). No vsync, no cap.
+	if settings != null:
+		settings.set_value(&"vsync", 0, false)
+		settings.set_value(&"max_fps", 0, false)
+	var size := city.get_viewport().get_visible_rect().size
+	print("[gpucost] %s, %dx%d, %d buildings, %d in bricks, %d coarse; %s" % [
+			"big_city street" if street else "city, one building", int(size.x), int(size.y),
+			city.registry.buildings.size(), city._brick_nodes.size(),
+			city.drawing._far_coarse.size(), city.brick_near.report()])
+	var base := await _gpucost_measure()
+	print("[gpucost] %-34s %s" % ["defaults", _gpucost_line(base, base)])
+	var rows := [
+		["MSAA off", {&"msaa": 0}],
+		["FXAA off", {&"fxaa": false}],
+		["MSAA and FXAA off", {&"msaa": 0, &"fxaa": false}],
+		["shadow quality 0 (Off, 512)", {&"shadow_quality": 0}],
+		["shadow quality 1 (Low, 2048)", {&"shadow_quality": 1}],
+		["sun cascades 2", {&"sun_cascades": 1}],
+		["render scale 0.75, bilinear", {&"render_scale": 0.75, &"scaling_mode": 0}],
+		["render scale 0.75, FSR 1.0", {&"render_scale": 0.75, &"scaling_mode": 1}],
+		["render scale 0.5, bilinear", {&"render_scale": 0.5, &"scaling_mode": 0}],
+	]
+	var by := {}
+	for r in rows:
+		var change: Dictionary = r[1]
+		if settings != null:
+			for id in change:
+				settings.set_value(id, change[id], false)
+		var m := await _gpucost_measure()
+		if settings != null:
+			for id in change:
+				settings.set_value(id, settings.default_of(id), false)
+		by[r[0]] = m
+		print("[gpucost] %-34s %s" % [r[0], _gpucost_line(m, base)])
+	# The sun's shadow switched off altogether, for scale.
+	if city._sun != null:
+		city._sun.shadow_enabled = false
+		print("[gpucost] %-34s %s" % ["no sun shadow", _gpucost_line(await _gpucost_measure(), base)])
+		city._sun.shadow_enabled = true
+	# Each kind of thing hidden in turn.
+	var hide := {
+		"terrain / ground": [city._terrain_streamer, city._terrain_coarse, city._ground_plane],
+		"sea": [city._sea],
+		"clouds": [city.clouds],
+		"far city (MultiMesh)": [city._far],
+		"brick buildings": city._brick_nodes.values() + city.drawing._shadow_proxy.values(),
+		"shells": city._shells.values(),
+	}
+	for what in hide:
+		var nodes := []
+		for n in hide[what]:
+			if n is Node3D and is_instance_valid(n) and (n as Node3D).visible:
+				nodes.append(n)
+		if nodes.is_empty():
+			print("[gpucost] %-34s (none in this scene)" % ("without " + what))
+			continue
+		for n in nodes:
+			(n as Node3D).visible = false
+		var m := await _gpucost_measure()
+		for n in nodes:
+			(n as Node3D).visible = true
+		print("[gpucost] %-34s %s" % ["without %s (x%d)" % [what, nodes.size()], _gpucost_line(m, base)])
+	var end := await _gpucost_measure()
+	print("[gpucost] %-34s %s" % ["defaults again (drift)", _gpucost_line(end, base)])
+	if settings != null:
+		settings.set_value(&"vsync", settings.default_of(&"vsync"), false)
+		settings.set_value(&"max_fps", settings.default_of(&"max_fps"), false)
+	# GPU = fixed + per_pixel * scale^2, from 1.0 and 0.5 bilinear: the part
+	# that would grow with a bigger screen.
+	if by.has("render scale 0.5, bilinear"):
+		var half := float(by["render scale 0.5, bilinear"].gpu)
+		var per_px := (float(base.gpu) - half) / 0.75
+		print("[gpucost] pixel-bound part at 1.0: %.2f ms of %.2f (fixed %.2f); at 1920x1200 (2.5x the pixels) about %.1f ms" % [
+				per_px, float(base.gpu), float(base.gpu) - per_px,
+				float(base.gpu) - per_px + per_px * 1920.0 * 1200.0 / (size.x * size.y)])
+	await _save("gpucost_%s" % ("street" if street else "one"))
+
+## The GPU's own clock over 120 frames, after 30 to settle.
+func _gpucost_measure() -> Dictionary:
+	var view := city.get_viewport().get_viewport_rid()
+	await _frames(30)
+	var gpu := []
+	for i in 120:
+		await RenderingServer.frame_post_draw
+		gpu.append(RenderingServer.viewport_get_measured_render_time_gpu(view))
+	gpu.sort()
+	var sum := 0.0
+	for g in gpu:
+		sum += float(g)
+	return {"gpu": sum / gpu.size(), "median": float(gpu[gpu.size() / 2]),
+		"draws": RenderingServer.viewport_get_render_info(view, RenderingServer.VIEWPORT_RENDER_INFO_TYPE_VISIBLE,
+				RenderingServer.VIEWPORT_RENDER_INFO_DRAW_CALLS_IN_FRAME),
+		"tris": RenderingServer.viewport_get_render_info(view, RenderingServer.VIEWPORT_RENDER_INFO_TYPE_VISIBLE,
+				RenderingServer.VIEWPORT_RENDER_INFO_PRIMITIVES_IN_FRAME),
+		"sh_tris": RenderingServer.viewport_get_render_info(view, RenderingServer.VIEWPORT_RENDER_INFO_TYPE_SHADOW,
+				RenderingServer.VIEWPORT_RENDER_INFO_PRIMITIVES_IN_FRAME)}
+
+func _gpucost_line(m: Dictionary, base: Dictionary) -> String:
+	return "GPU %5.2f ms (median %5.2f, %+5.2f), %4d draws, %5.0fk tris, shadows %5.0fk tris" % [
+			float(m.gpu), float(m.median), float(m.gpu) - float(base.gpu), int(m.draws),
+			float(m.tris) / 1000.0, float(m.sh_tris) / 1000.0]
 
 ## Frame times while a building six metres from the camera is shot at and then
 ## cut down, with whatever near tier the run has (`--no-cap`: the cap off).
