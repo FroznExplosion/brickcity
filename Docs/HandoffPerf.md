@@ -337,3 +337,32 @@ dipped to 116 MB free -- the two agree, the second's numbers below.
   back (render 0.5 ms at most), so it was most likely the 153 MB of free RAM and the runs
   alongside, not the mesher. New: the FIRST hit's spawn took 33.6 ms, the later ones did
   not -- a one-off warm-up, the "first-hit lag" of the break-lag list, not options 1/2.
+
+## 7. One shared tick clock (2026-11-11 audit item 2, worktree `C:\Users\lbaun\bc-alive`)
+
+`TickClock` (scripts/tick_clock.gd): CityScene begins it each physics tick; every queue gets
+min(its own cap, what is left of 8 ms), 2 ms held back for `IslandManager.tick` (runs last,
+`enter_islands` guarantees it). Spawns, hits, bands, piece meshes and hand-over harvests keep
+"the first unit always runs"; remesh (not hand-overs), shells, demesh, trim and slices run
+nothing once the clock is out, at most 4 ticks running (`TickClock.skip`). A/B:
+`-- --clock=0` (own budgets, as before), `--clock-ms=N`. The `[prof] tick clock` line says
+which, and how many queue-ticks were skipped (17-88 a run).
+
+Editor closed, no other Godot, one run at a time, none held back (peaks 67-89 C).
+Alternated pairs; A = clock on, B = `--clock=0`:
+
+| run | worst tick A | worst tick B | ticks >25 ms A/B | frames >33 ms A/B | invisible worst A/B |
+|---|---|---|---|---|---|
+| city --big --shot 1 | 15.3 | 20.6 | 0/0 | 7/4 | 3/3 |
+| city --big --shot 2 | 12.7 | 13.7 | 0/0 | 4/4 | 3/3 |
+| city --big --shot 3 | 18.5 | 30.5 | 0/1 | 3/5 | 3/3 |
+| big_city --shot 1 | 11.3 | 19.6 | 0/0 | 4/5 | 3/3 |
+| big_city --shot 2 | 12.6 | 14.4 | 0/0 | 13*/4 | 4/3 |
+| big_city --shot 3 | 12.2 | 12.7 | 0/0 | 4/2 | 2/3 |
+| big_city --shot 4 | 17.4 | 12.5 | 0/0 | 3/3 | 3/2 |
+
+Worst tick 14.3 ms mean with the clock, 17.7 without; the one tick over 25 ms was without
+it. Frames over 33 ms are the renderer's (`draw`), not the tick, and do not move. Invisible
+pieces: the same (mean 1.42-1.62 ticks either way). *big_city A2's slow frames were 48 ms of
+idle `process` in a row, not the physics tick -- most likely outside the game. Left on, at
+8 ms; not tuned further.

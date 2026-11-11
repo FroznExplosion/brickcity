@@ -6125,6 +6125,9 @@ func _report_profile() -> void:
 		print("[prof]   render flush %.1f ms at tick %d: %s" % [r[0], r[1], r[2]])
 	print("[prof] worst script tick %.1f ms  (%d islands)" % [
 			city._prof_worst_ms, int(city._prof_worst.get("island_count", 0))])
+	print("[prof] tick clock: %s, %.1f ms (islands %.1f), %d queue-tick(s) skipped" % [
+			"shared" if TickClock.shared else "off (own budgets)", TickClock.total_ms,
+			TickClock.island_share_ms, TickClock.skipped])
 	if city.drawing._glass_ticks > 0:
 		print("[prof] glass: %.2f ms a tick on the main thread over %d ticks, worst %.1f ms (one hung %.1f, one built here from bricks %.1f, %d built here); %d built in all" % [
 				city.drawing._glass_usec / 1000.0 / city.drawing._glass_ticks, city.drawing._glass_ticks, city.drawing._glass_worst_usec / 1000.0,
