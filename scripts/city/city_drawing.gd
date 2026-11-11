@@ -121,10 +121,10 @@ const SUN_SHADOW_DISTANCE := 400.0
 
 var _shadow_proxy := {}       ## building id -> MeshInstance3D, shadows only
 
-var _shadow_proxy_alive := {} ## building id -> alive bricks when it was built
+var _shadow_proxy_alive := {} ## building id -> chunk version when it was built
 
 ## A proxy is rebuilt once its building has stopped losing bricks -- the same
-## count two passes running -- or after SHADOW_STALE_PASSES of it going on.
+## chunk version two passes running -- or after SHADOW_STALE_PASSES of it going on.
 ## Rebuilt on every pass that saw a brick go, a building being taken apart
 ## rebuilt its proxy every eight ticks, and a proxy is not the 0.5 ms above for
 ## a big one: 10-28 ms (6,000-22,000 bricks), the worst tick of a collapse
@@ -132,7 +132,7 @@ var _shadow_proxy_alive := {} ## building id -> alive bricks when it was built
 ## by, while they are still coming down, is not something anyone sees.
 const SHADOW_STALE_PASSES := 8
 
-var _shadow_seen := {}        ## building id -> alive bricks at the last pass
+var _shadow_seen := {}        ## building id -> chunk version at the last pass
 
 var _shadow_stale := {}       ## building id -> passes it has been stale
 
@@ -472,10 +472,10 @@ func _submit_band_job(id: int, at: int, arrays: Array) -> void:
 				IslandManager.UPLOAD_COMPRESS)
 		holder[0] = m
 		UploadLedger.note("band", UploadLedger.verts_of(arrays))
-	# How many bricks were alive when these arrays were made: a piece handed
-	# this upload unfinished (take_bands) uses it only if that is still so.
+	# The chunk's version when these arrays were made: a piece handed this
+	# upload unfinished (take_bands) uses it only if that is still so.
 	var b := city.registry.get_building(id)
-	var alive := city.world.get_alive_block_count(b.chunk) \
+	var alive := city.world.get_chunk_version(b.chunk) \
 			if b != null and b.is_materialised() else -1
 	city._band_jobs.append([id, at, IslandManager.JOB_NOT_STARTED, holder, arrays,
 			int(_band_pass.get(id, 0)), work, alive])
@@ -693,7 +693,7 @@ func stream_shadows() -> void:
 		var b := h_registry.get_building(id)
 		if b == null or not b.is_materialised():
 			continue
-		var alive := h_world.get_alive_block_count(b.chunk)
+		var alive := h_world.get_chunk_version(b.chunk)
 		var stale: bool = not _shadow_proxy.has(id)
 		if not stale and int(_shadow_proxy_alive.get(id, -1)) != alive:
 			_shadow_stale[id] = int(_shadow_stale.get(id, 0)) + 1
@@ -796,7 +796,7 @@ func _make_shadow_proxy(b: BuildingRegistry.Building) -> bool:
 		var built: Mesh = BuildShell.build_mesh(city.world, b.build, city._dead_by_frame(b), false)
 		if built == null:
 			return false
-		_attach_shadow_proxy(b, built, city.world.get_alive_block_count(b.chunk))
+		_attach_shadow_proxy(b, built, city.world.get_chunk_version(b.chunk))
 		return true
 	# A recipe building's shell is arithmetic on the recipe and the damage
 	# masks, and nothing of the world: only the masks are worked out here (they
@@ -812,7 +812,7 @@ func _make_shadow_proxy(b: BuildingRegistry.Building) -> bool:
 		holder[0] = BuildingShell.build_mesh(fx, fz, courses, profile, layout)
 		UploadLedger.note("building shadow", -1)
 	var task := WorkerThreadPool.add_task(work, false, "shadow proxy")
-	city._shadow_jobs[b.id] = [task, holder, city.world.get_alive_block_count(b.chunk), false]
+	city._shadow_jobs[b.id] = [task, holder, city.world.get_chunk_version(b.chunk), false]
 	return true
 
 
@@ -1223,7 +1223,7 @@ func tend_far_coarse() -> void:
 			h_far_coarse_jobs.erase(id)
 			var mesh: ArrayMesh = (job[2] as Array)[0]
 			if mesh != null and not gone and City.far_coarse_enabled \
-					and h_world.get_alive_block_count(b.chunk) == int(job[0]) \
+					and h_world.get_chunk_version(b.chunk) == int(job[0]) \
 					and not bands_building(id) and not h_toppling.has(id) \
 					and City._box_distance(CityPlacer.box_of(b), here) > FAR_COARSE_BACK:
 				_far_coarse_show(id, mesh)
@@ -1277,7 +1277,7 @@ func tend_far_coarse() -> void:
 				or h_world.coarse_pending(b.chunk):
 			continue
 		h_world.coarse_chunk_async(b.chunk)
-		h_far_coarse_jobs[id] = [h_world.get_alive_block_count(b.chunk), -1, []]
+		h_far_coarse_jobs[id] = [h_world.get_chunk_version(b.chunk), -1, []]
 		asked = true
 
 

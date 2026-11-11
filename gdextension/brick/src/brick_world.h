@@ -342,7 +342,17 @@ public:
     int block_at(int chunk_id, Vector3i cell) const;
 
     int get_block_count(int chunk_id) const;
+    /// O(1): Chunk::alive_count, kept at every alive write.
     int get_alive_block_count(int chunk_id) const;
+    /// The chunk's change stamp: different after any brick in it died, came
+    /// back, was laid or removed. Unique across chunks (a reused id never
+    /// repeats one). 0 for an invalid id. Compare this, not the alive count,
+    /// to ask "did this chunk change" -- a death and a placement cancel out
+    /// in a count.
+    int64_t get_chunk_version(int chunk_id) const;
+    /// The alive count by walking every block, as get_alive_block_count used
+    /// to: for probes, which check the counter against it.
+    int debug_alive_walk(int chunk_id) const;
 
     /// Index range this block owns in the last built mesh, as (start, count).
     /// The partition that makes damage an index exclusion rather than a remesh.
