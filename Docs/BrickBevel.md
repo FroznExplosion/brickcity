@@ -401,7 +401,8 @@ geometry against 3,150. GPU ms a frame (`viewport_get_measured_render_time_gpu`)
 | Twelve shots | 15.48, 13.10 | 12.79, 11.31 |
 | Brought down | 13.91, 13.15 | 12.07, 11.40 |
 
-So standing still it is about the same (the frame is bound elsewhere), and while bricks break
+(These are vsynced: the GPU clocks itself down to fill the 16.6 ms frame. Flat out the same
+view is 5.0 ms -- PerfCaps.md 9.) So standing still it is about the same (the frame is bound elsewhere), and while bricks break
 and fall the GPU does **about 1.8 ms less** a frame (1.8-2.7). On the CPU, a hit's patch of the
 chamfered bands went from 0.21 ms to 0.02 and the tier's worst step from 3.6 ms to 2.1.
 
