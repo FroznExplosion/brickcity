@@ -2,8 +2,8 @@ class_name BoatBuild
 extends RefCounted
 ## A boat's hull as a build (Docs/Hulls.md 7, step 7): a keel of two plate
 ## layers crossed (so every plate is clicked to the next), sides of bricks round a
-## tapered bow and a square stern, a closed deck over a sealed hold, and a
-## bulwark round the deck. The hold's dry air is what floats it (HullAir finds it
+## tapered bow and a square stern, a closed deck over a sealed hold cut into
+## watertight stretches by bulkheads, and a bulwark round the deck. The hold's dry air is what floats it (HullAir finds it
 ## as INSIDE air; Boat counts it in the displaced volume).
 ##
 ## The same result SpaceStation._prepare_generated takes from ShipBuild.make:
@@ -16,10 +16,12 @@ const DECK_PLATES := 2
 const BULWARK_BRICKS := 1
 ## The last this many studs of its length taper to the bow.
 const BOW := 12
+## Walls across its hold, evenly along it: one more watertight stretch each.
+const BULKHEADS := 3
 
 
 ## A boat `length` x `beam` studs. `seed` picks its colours.
-static func make(seed: int, length := 40, beam := 14) -> Dictionary:
+static func make(seed: int, length := 40, beam := 14, bulkheads := BULKHEADS) -> Dictionary:
 	var r := BuildRecipe.new()
 	var rng := RandomNumberGenerator.new()
 	rng.seed = hash("boat %d" % seed)
@@ -72,6 +74,23 @@ static func make(seed: int, length := 40, beam := 14) -> Dictionary:
 				r.add("brick_1x1", Vector3i(x, y_hold + k * 3, z), hull)
 			for k in BULWARK_BRICKS:
 				r.add("brick_1x1", Vector3i(x, y_wall + k * 3, z), trim)
+	# Its bulkheads: walls across the hold, keel to deck, no door in them -- each
+	# stretch of the hold is a room of its own to the air and the water (HullAir),
+	# so one hole floods one stretch and the boat lists but floats.
+	var walls: Array = []
+	for k in bulkheads:
+		@warning_ignore("integer_division")
+		var x := length * (k + 1) / (bulkheads + 1)
+		if x <= 1 or x >= length - 2 or walls.has(x):
+			continue
+		walls.append(x)
+		for z in beam:
+			var rim: bool = not inside.call(x - 1, z) or not inside.call(x + 1, z) \
+					or not inside.call(x, z - 1) or not inside.call(x, z + 1)
+			if not inside.call(x, z) or rim:
+				continue
+			for j in HOLD_BRICKS:
+				r.add("brick_1x1", Vector3i(x, y_hold + j * 3, z), hull)
 	# The deck: two plate layers over the hold, crossed as the keel's are, inside
 	# the sides (it rests on their tops at its rim).
 	for layer in DECK_PLATES:
@@ -100,7 +119,8 @@ static func make(seed: int, length := 40, beam := 14) -> Dictionary:
 			"sections": [{"id": 0, "root": true, "bricks": n, "lo": [lo.x, lo.y, lo.z],
 				"hi": [lo.x + size.x - 1, lo.y + size.y - 1, lo.z + size.z - 1]}],
 			"joints": [], "of": [[0, n]]}
-	r.meta["boat"] = {"length": length, "beam": beam, "deck_y": y_wall, "hold_y": y_hold}
+	r.meta["boat"] = {"length": length, "beam": beam, "deck_y": y_wall, "hold_y": y_hold,
+			"bulkheads": walls}
 	# On deck amidships: where its crew stands to begin with.
 	var seat := Vector3i(length / 3, y_wall, beam / 2)
 	return {"ok": true, "why": "", "recipe": r, "seat": seat, "decks": 1,

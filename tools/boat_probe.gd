@@ -11,9 +11,12 @@ extends SceneTree
 ##   crew      a pawn on its deck taken onto its ghost by the crossing every pawn uses
 ##   swell     the waves on for SWELL seconds: it rolls and pitches, stays afloat,
 ##             the crew standing on its deck all the while
-##   lists     calm again, a hole shot low in one side under the waterline: the hold
-##             floods (HullWater) and it lists toward the hole
-##   sinks     left open, the flooded hull settles until its deck is under
+##   lists     calm again, a hole shot low in one side under the waterline: that
+##             stretch of the hold floods (HullWater) and it lists toward the hole
+##   holds     its bulkheads keep the water to that stretch: HOLD seconds on the
+##             others are dry and its deck is over the water
+##   sinks     a hole in every other stretch too: the flooded hull settles until
+##             its deck is under
 ##   rises     patched (SpaceStation.restore) and pumped out: it comes back up
 
 const CALM := 20.0
@@ -143,20 +146,51 @@ func _physics_process(delta: float) -> bool:
 			_t += delta
 			if _t < 8.0:
 				return false
-			if not _shoot():
+			if not _shoot(_stretch_mid()):
 				_finish()
 				return true
 			_t = 0.0
 			_stage = 5
 		5:
 			_t += delta
+			# The worst of it while the stretch fills: full, its water lies level across
+			# the beam and most of the list is gone again.
+			var side := _boat.global_transform * _hole_local - _boat.global_transform * _boat.com
+			_list_drop = maxf(_list_drop, _hole_drop0 - side.y)
+			_list_tilt = maxf(_list_tilt, _tilt())
 			if _t < LIST:
 				return false
-			var side := _boat.global_transform * _hole_local - _boat.global_transform * _boat.com
-			_ok("lists: the hold floods through the hole and it lists toward it",
-					_boat.water_mass > 100.0 and side.y < _hole_drop0 - 0.05 and _tilt() > 1.0,
-					"%.0f kg of water aboard, tilt %.1f deg, the hole's side %.2f m lower" % [
-					_boat.water_mass, _tilt(), _hole_drop0 - side.y])
+			_ok("lists: its stretch of the hold floods through the hole and it lists toward it",
+					_boat.water_mass > 100.0 and _list_drop > 0.05 and _list_tilt > 1.0,
+					"%.0f kg of water aboard, tilt %.1f deg at worst (%.1f now), the hole's side %.2f m lower at worst" % [
+					_boat.water_mass, _list_tilt, _tilt(), _list_drop])
+			_t = 0.0
+			_stage = 8
+		8:
+			_t += delta
+			if _t < HOLD:
+				return false
+			var wet := 0
+			var rooms := 0
+			for comp in _boat.air.compartments():
+				if int(comp.cells) < 100:
+					continue
+				rooms += 1
+				if _boat.hull_water.in_compartment(int(comp.id)) > 1.0:
+					wet += 1
+			_ok("holds: its bulkheads keep the water to the holed stretch, and it floats",
+					rooms >= 2 and wet == 1 and _deck_under() < 0.0,
+					"%d of %d stretches wet, %.0f kg of water aboard, tilt %.1f deg, the deck %.2f m over" % [
+					wet, rooms, _boat.water_mass, _tilt(), -_deck_under()])
+			# A hole in every other stretch.
+			var edges := _edges()
+			for k in edges.size() - 1:
+				var a: int = edges[k]
+				var b: int = edges[k + 1]
+				if _boat.seat_cell.x > a and _boat.seat_cell.x < b:
+					continue
+				@warning_ignore("integer_division")
+				_shoot((a + b) / 2)
 			_t = 0.0
 			_stage = 6
 		6:
@@ -169,7 +203,7 @@ func _physics_process(delta: float) -> bool:
 					_boat.water_mass, deck_under, _t])
 			# Patched, and pumped.
 			var at: Vector3 = _boat.global_transform * _hole_local
-			_boat.restore(_boat.restorable(at, 6.0), at, 6.0)
+			_boat.restore(_boat.restorable(at, 30.0), at, 30.0)
 			_sunk = _keel_depth()
 			_t = 0.0
 			_stage = 7
@@ -189,12 +223,15 @@ func _physics_process(delta: float) -> bool:
 
 
 const LIST := 15.0
+const HOLD := 30.0
 const SINK := 90.0
 const RISE := 40.0
 ## Its pumps, cells of water a second.
 const PUMP := 300.0
 var _hole_local := Vector3.ZERO
 var _hole_drop0 := 0.0
+var _list_drop := 0.0
+var _list_tilt := 0.0
 var _sunk := 0.0
 var _peak_water := 0.0
 
@@ -227,8 +264,9 @@ func _deck_under() -> float:
 
 
 ## A hole low in one side, under the waterline: a blast at a side brick a plate
-## or two over the keel, amidships.
-func _shoot() -> bool:
+## or two over the keel, near row `x` (chunk cells). The first one shot is the
+## hole the list is measured at.
+func _shoot(x: int) -> bool:
 	var air := _boat.air
 	var best := -1
 	var best_y := INF
@@ -249,7 +287,7 @@ func _shoot() -> bool:
 			continue
 		var c := air._cell(cells[0])
 		# Its port side (low z), amidships, the lowest such brick.
-		if absi(c.x - _boat.seat_cell.x) > 4:
+		if absi(c.x - x) > 2:
 			continue
 		if c.z < zmin or (c.z == zmin and c.y < best_y):
 			zmin = c.z
@@ -259,10 +297,32 @@ func _shoot() -> bool:
 		_ok("a side brick to shoot", false)
 		return false
 	var c := air._cell(air._block_cells(best)[0])
-	_hole_local = _boat.cell_point(c)
-	var at: Vector3 = _boat.global_transform * _hole_local
-	_hole_drop0 = (at - _boat.global_transform * _boat.com).y
+	var first := _hole_local == Vector3.ZERO
+	var at: Vector3 = _boat.global_transform * _boat.cell_point(c)
+	if first:
+		_hole_local = _boat.cell_point(c)
+		_hole_drop0 = (at - _boat.global_transform * _boat.com).y
 	var under := _boat.sea - at.y
 	_boat.damage(at, {"blast": true, "radius": 0.9, "hp": 0})
 	print("  (shot a hole %.2f m under the water, %d brick(s) gone)" % [under, _boat.gone().size()])
 	return true
+
+
+## The middle row of the stretch of hold under the crew's place, chunk cells.
+func _stretch_mid() -> int:
+	var e := _edges()
+	for k in e.size() - 1:
+		if _boat.seat_cell.x > int(e[k]) and _boat.seat_cell.x < int(e[k + 1]):
+			@warning_ignore("integer_division")
+			return (int(e[k]) + int(e[k + 1])) / 2
+	return _boat.seat_cell.x
+
+
+## Where its hold's stretches begin and end: its ends and its bulkheads' rows.
+func _edges() -> Array:
+	var x0: int = _boat.recipe.origin().x
+	var edges: Array = [0]
+	for w in _boat.recipe.meta.boat.bulkheads:
+		edges.append(int(w) - x0)
+	edges.append(int(_boat.recipe.meta.boat.length))
+	return edges
