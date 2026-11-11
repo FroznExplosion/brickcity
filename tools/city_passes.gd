@@ -6125,6 +6125,9 @@ func _report_profile() -> void:
 		print("[prof]   render flush %.1f ms at tick %d: %s" % [r[0], r[1], r[2]])
 	print("[prof] worst script tick %.1f ms  (%d islands)" % [
 			city._prof_worst_ms, int(city._prof_worst.get("island_count", 0))])
+	print("[prof] tick clock: %s, %.1f ms (islands %.1f), %d queue-tick(s) skipped" % [
+			"shared" if TickClock.shared else "off (own budgets)", TickClock.total_ms,
+			TickClock.island_share_ms, TickClock.skipped])
 	if city.drawing._glass_ticks > 0:
 		print("[prof] glass: %.2f ms a tick on the main thread over %d ticks, worst %.1f ms (one hung %.1f, one built here from bricks %.1f, %d built here); %d built in all" % [
 				city.drawing._glass_usec / 1000.0 / city.drawing._glass_ticks, city.drawing._glass_ticks, city.drawing._glass_worst_usec / 1000.0,
@@ -7248,6 +7251,26 @@ func _run_chamfer_pass() -> void:
 			"%d drawn, %d wanted, over %d bands" % [after.drawn, after.wanted, after.bands])
 	await _save("chamfer_hit")
 
+	# Studs are placed by the GPU (Docs/BrickBevel.md 3, since 2026-11-11):
+	# a band's buffers are written when its bricks change, never because the
+	# camera moved. Was: re-sorted into rings every metre (STUD_RESORT), which
+	# the cap squeeze below and stale_studs (--lodbreak) were written around.
+	var rewrites := city.brick_near.stud_rewrites
+	var at_wall := city.camera.global_position
+	for i in 6:
+		city.camera.global_position = at_wall + Vector3(0.5 * float(i), 0.0, -0.4 * float(i))
+		city.camera.look_at(wall, Vector3.UP)
+		await _frames(3)
+	city.brick_near.settle(city.camera.global_position)
+	await _frames(4)
+	_gate_ok("walking three metres rewrites no band's studs, and studs are drawn",
+			city.brick_near.stud_rewrites == rewrites and city.brick_near.stud_instances > 0,
+			"%d rewritten, %d studs held" % [city.brick_near.stud_rewrites - rewrites,
+				city.brick_near.stud_instances])
+	city.camera.global_position = at_wall
+	city.camera.look_at(wall, Vector3.UP)
+	await _frames(10)
+
 	# The cap (Options > Video): its budgets squeezed to nothing, it still lets
 	# one band of each in -- and that one is the wall in front of the camera.
 	var cap_was := [BrickNear.cap_enabled, BrickNear.max_tris, BrickNear.max_studs]
@@ -7536,6 +7559,7 @@ func _run_gpucost() -> void:
 		"far city (MultiMesh)": [city._far],
 		"brick buildings": city._brick_nodes.values() + city.drawing._shadow_proxy.values(),
 		"shells": city._shells.values(),
+		"near-tier studs": _near_stud_nodes(),
 	}
 	for what in hide:
 		var nodes := []
@@ -7565,6 +7589,13 @@ func _run_gpucost() -> void:
 				per_px, float(base.gpu), float(base.gpu) - per_px,
 				float(base.gpu) - per_px + per_px * 1920.0 * 1200.0 / (size.x * size.y)])
 	await _save("gpucost_%s" % ("street" if street else "one"))
+
+## Every stud MultiMesh the near tier holds now.
+func _near_stud_nodes() -> Array:
+	var out := []
+	for band in city.brick_near._bands.values():
+		out.append_array(band.studs)
+	return out
 
 ## The GPU's own clock over 120 frames, after 30 to settle.
 func _gpucost_measure() -> Dictionary:
@@ -7737,9 +7768,9 @@ func _run_chamfer_street() -> void:
 			% [held_max.x, held_max.y, BrickNear.max_tris / 1000, BrickNear.max_studs,
 				tris_max, studs_max, near_worst])
 	print("[street]   %s" % city.brick_near.report())
-	print("[street]   studs, worst: fetch %.2f ms, split %.2f, set %.2f; %d in one band at most"
+	print("[street]   studs, worst: fetch %.2f ms, open ones %.2f, set %.2f; %d in one band at most; %d buffer writes (%d to a band that had studs)"
 			% [city.brick_near.worst_fetch_ms, city.brick_near.worst_split_ms, city.brick_near.worst_set_ms,
-				city.brick_near.most_band_studs])
+				city.brick_near.most_band_studs, city.brick_near.stud_writes, city.brick_near.stud_rewrites])
 	print("[street]   showing a band, worst %.2f ms; %d steps a band waited for an upload to finish first"
 			% [city.brick_near.worst_show_ms, city.brick_near.show_waited])
 
