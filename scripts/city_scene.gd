@@ -2797,6 +2797,26 @@ func _warm_shaders() -> void:
 		mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 		add_child(mi)
 		get_tree().create_timer(1.0).timeout.connect(mi.queue_free)
+	# Bands as boxes (CityDrawing.instanced_bands): the brick shader drawn
+	# through a MultiMesh with custom data is a pipeline of its own -- left to
+	# the first building made bricks it was one frame of 293 ms (2026-11-11).
+	# Casting, so the shadow passes' are made too.
+	if drawing != null and drawing.instanced_bands:
+		var warm := MultiMeshInstance3D.new()
+		var wmm := MultiMesh.new()
+		wmm.transform_format = MultiMesh.TRANSFORM_3D
+		wmm.use_colors = true
+		wmm.use_custom_data = true
+		wmm.mesh = drawing.unit_box()
+		wmm.instance_count = 1
+		wmm.set_instance_transform(0, Transform3D(Basis().scaled(Vector3.ONE * 0.001), Vector3.ZERO))
+		wmm.set_instance_color(0, Color.WHITE)
+		warm.multimesh = wmm
+		warm.material_override = brick_material
+		warm.position = Vector3(0.0, -2000.0, 0.0)
+		warm.extra_cull_margin = 16384.0
+		add_child(warm)
+		get_tree().create_timer(1.0).timeout.connect(warm.queue_free)
 	# A collapse's dust is GPU particles, whose process shader is its own.
 	CollapseDust.puff(self, Vector3(0.0, -2000.0, 0.0), 1.0)
 
@@ -3023,7 +3043,8 @@ func _lay_more(id: int, storeys: PackedInt32Array) -> void:
 	for s in b.storeys_laid:
 		if not before.has(s):
 			fresh.append(s)
-	world.bake_chunk_async(b.chunk)
+	if not drawing.instanced_bands:
+		world.bake_chunk_async(b.chunk)
 	if not _pending_bricks.has(id) and _brick_nodes.has(id):
 		# A promotion still waiting for its bake builds every band anyway.
 		drawing.rebuild_bands(id, b.chunk)
@@ -3095,7 +3116,8 @@ func _unlay(id: int, storeys: PackedInt32Array) -> void:
 		_demote(id, 0.0)
 		_materialised.erase(id)
 		return
-	world.bake_chunk_async(b.chunk)
+	if not drawing.instanced_bands:
+		world.bake_chunk_async(b.chunk)
 	if not _pending_bricks.has(id) and _brick_nodes.has(id):
 		drawing.rebuild_bands(id, b.chunk)
 	_reshape_storeys(id, storeys)
@@ -3552,7 +3574,8 @@ func _dress(id: int, chunk: int, solve: bool) -> void:
 	# mesh that draws them is baked on a worker and arrives a tick or two later
 	# -- and a building that drops its shell before it has a mesh is a building
 	# that vanishes for a frame. See _finish_promotions.
-	world.bake_chunk_async(chunk)
+	if not drawing.instanced_bands:
+		world.bake_chunk_async(chunk)
 	_promote_part("sections, bake start")
 
 	# The CHUNK's transform, not the building's. They are the same thing for a
@@ -3712,8 +3735,9 @@ func _finish_promotions() -> void:
 		if b == null or not b.is_materialised():
 			_pending_bricks.remove_at(i)
 			continue
-		# A big bake must not hold up a small one queued behind it.
-		if not world.bake_ready(b.chunk):
+		# A big bake must not hold up a small one queued behind it. (Bands as
+		# boxes need no bake: CityDrawing.instanced_bands.)
+		if not drawing.instanced_bands and not world.bake_ready(b.chunk):
 			i += 1
 			continue
 		_pending_bricks.remove_at(i)
@@ -3787,6 +3811,14 @@ func _topple(id: int) -> void:
 	# fills their slots once each upload is done (BrickIsland.owed_bands).
 	var owed_bands := {}
 	var carried_bands: Array = drawing.take_bands(id, owed_bands)
+	if drawing.instanced_bands:
+		# Bands as boxes are not carried: the piece is meshed as any piece is,
+		# its box stand-in drawing meanwhile (IslandStandins).
+		for node in carried_bands:
+			if is_instance_valid(node):
+				(node as Node).queue_free()
+		carried_bands = []
+		carried_band_bytes = []
 	_brick_cols.erase(id)
 	# The furniture body belongs to a STANDING building. What is falling
 	# carries its own -- an island builds collision from the chunk, and a
@@ -4272,6 +4304,14 @@ func _remesh(id: int, force_full: bool = false) -> void:
 		_band_redo[id] = true
 		return
 	var bands: Array = _brick_bands.get(id, [])
+	# Bands as boxes (CityDrawing.instanced_bands): the ones a hit reached are
+	# written again; there is no index buffer to patch.
+	if drawing.instanced_bands:
+		if bands.is_empty() or force_full:
+			drawing.rebuild_bands(id, b.chunk)
+		else:
+			drawing.refresh_boxes(id, b.chunk)
+		return
 	if not bands.is_empty() and not force_full:
 		var moved: Array = world.update_index_regions(b.chunk,
 				int(_brick_index_width.get(id, 4)))
@@ -7231,7 +7271,8 @@ func _remesh_bricks(id: int) -> void:
 	var b := registry.get_building(id)
 	if b == null or not b.is_materialised() or _brick_nodes.has(id):
 		return
-	world.bake_chunk_async(b.chunk)
+	if not drawing.instanced_bands:
+		world.bake_chunk_async(b.chunk)
 	var mi := MeshInstance3D.new()
 	mi.material_override = brick_material
 	mi.transform = b.xform

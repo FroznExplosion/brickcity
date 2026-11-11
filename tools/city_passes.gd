@@ -5683,6 +5683,7 @@ func _run_shot_pass() -> void:
 	# Started can pass built: a start is dropped when its chunk changes under
 	# the worker, and asked for again.
 	print("[city]   " + city.islands.standins.census_line())
+	print("[city]   " + city.drawing.inst_line())
 	print("[city]   bakes held while moving (--hold-bake %s): %d piece(s) spawned without a bake, %d baked on settling" % [
 			"on" if city.islands.hold_bake_moving else "off", city.islands.bakes_held, city.islands.bakes_released])
 	print("[city]   stand-ins: %d built; %d started on a worker; the slowest on the main thread %.1f ms (of any, %.1f)" % [

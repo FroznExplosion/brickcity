@@ -158,6 +158,7 @@ uniform float pbr_bump : hint_range(0.0, 3.0) = 1.0;
 instance uniform vec3 grain_origin = vec3(0.0);
 
 #include "res://shaders/grid_light.gdshaderinc"
+#include "res://shaders/brick_boxed.gdshaderinc"
 
 varying vec2 v_uv;
 varying vec2 v_face;
@@ -175,6 +176,14 @@ void vertex() {
     v_face = UV2;
     v_local = VERTEX;
     v_local_normal = normalize(NORMAL);
+    // A box a brick, instanced (brick_boxed.gdshaderinc).
+    if (brick_boxed(UV2)) {
+        vec3 box_size = brick_box_size(MODEL_MATRIX);
+        vec4 box_uv = brick_box_uv(box_size, VERTEX, NORMAL);
+        v_uv = box_uv.xy;
+        v_face = box_uv.zw;
+        v_local = INSTANCE_CUSTOM.xyz + VERTEX * box_size;
+    }
     v_model_up = MODEL_MATRIX[1].xyz;
     v_grain = brick_grain_axis(COLOR.a);
     v_set = bm_pbr_set(MAT_TEX[brick_material_id(COLOR.a)], COLOR.rgb);

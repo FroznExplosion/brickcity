@@ -11737,6 +11737,109 @@ Dictionary BrickWorld::get_standin_buffers(int chunk_id) const {
     return out;
 }
 
+Array BrickWorld::get_instance_buffers(int chunk_id, const PackedInt32Array &sections) const {
+    Array out;
+    if (!valid_chunk(chunk_id)) {
+        return out;
+    }
+    const Chunk &c = chunks[chunk_id];
+    const Vector3 cs = cell_size();
+    const int section_n = c.sections();
+    // Which entry of `out` a section goes to, or -1.
+    std::vector<int32_t> slot((size_t)section_n, -1);
+    int wanted = 0;
+    if (sections.is_empty()) {
+        for (int s = 0; s < section_n; ++s) {
+            slot[(size_t)s] = wanted++;
+        }
+    } else {
+        for (int k = 0; k < sections.size(); ++k) {
+            const int s = sections[k];
+            if (s >= 0 && s < section_n && slot[(size_t)s] < 0) {
+                slot[(size_t)s] = wanted++;
+            }
+        }
+    }
+    struct Part {
+        std::vector<float> f;
+        Vector3 lo = Vector3(1e30f, 1e30f, 1e30f);
+        Vector3 hi = Vector3(-1e30f, -1e30f, -1e30f);
+        int alive = 0;
+        int authored = 0;
+        int section = 0;
+    };
+    std::vector<Part> parts((size_t)wanted);
+    for (int s = 0; s < section_n; ++s) {
+        if (slot[(size_t)s] >= 0) {
+            parts[(size_t)slot[(size_t)s]].section = s;
+        }
+    }
+    for (const Block &b : c.blocks) {
+        if (b.removed || b.decorative) {
+            continue;
+        }
+        const int at = slot[(size_t)c.section_of(b.cell)];
+        if (at < 0) {
+            continue;
+        }
+        Part &p = parts[(size_t)at];
+        const Archetype &a = archetypes[b.archetype];
+        const Vector3i base = b.cell - c.origin;
+        const Vector3 size(a.size.x * cs.x, a.size.y * cs.y, a.size.z * cs.z);
+        const Vector3 mid = Vector3(base.x * cs.x, base.y * cs.y, base.z * cs.z) + size * 0.5f;
+        const bool drawn = b.alive && !b.detached;
+        if (drawn) {
+            ++p.alive;
+            if (!a.mesh.empty()) {
+                ++p.authored;
+            }
+            const Vector3 h = size * 0.5f;
+            p.lo = Vector3(std::min(p.lo.x, mid.x - h.x), std::min(p.lo.y, mid.y - h.y), std::min(p.lo.z, mid.z - h.z));
+            p.hi = Vector3(std::max(p.hi.x, mid.x + h.x), std::max(p.hi.y, mid.y + h.y), std::max(p.hi.z, mid.z + h.z));
+        }
+        const Color col = brick::block_rgba_grain(b.material, b.colour, brick::grain_axis(a.size, b.cell));
+        const float sx = drawn ? size.x : 0.0f;
+        const float sy = drawn ? size.y : 0.0f;
+        const float sz = drawn ? size.z : 0.0f;
+        const float f[20] = { sx, 0.0f, 0.0f, mid.x, 0.0f, sy, 0.0f, mid.y, 0.0f, 0.0f, sz, mid.z,
+                col.r, col.g, col.b, col.a, mid.x, mid.y, mid.z, 0.0f };
+        p.f.insert(p.f.end(), f, f + 20);
+    }
+    for (const Part &p : parts) {
+        Dictionary d;
+        PackedFloat32Array buf;
+        buf.resize((int64_t)p.f.size());
+        if (!p.f.empty()) {
+            std::memcpy(buf.ptrw(), p.f.data(), p.f.size() * sizeof(float));
+        }
+        d["section"] = p.section;
+        d["buffer"] = buf;
+        d["alive"] = p.alive;
+        d["authored"] = p.authored;
+        d["aabb"] = p.alive > 0 ? AABB(p.lo, p.hi - p.lo) : AABB();
+        out.push_back(d);
+    }
+    return out;
+}
+
+PackedInt32Array BrickWorld::get_section_alive(int chunk_id) const {
+    PackedInt32Array out;
+    if (!valid_chunk(chunk_id)) {
+        return out;
+    }
+    const Chunk &c = chunks[chunk_id];
+    out.resize(c.sections());
+    out.fill(0);
+    int32_t *w = out.ptrw();
+    for (const Block &b : c.blocks) {
+        if (b.removed || b.decorative || !b.alive || b.detached) {
+            continue;
+        }
+        ++w[c.section_of(b.cell)];
+    }
+    return out;
+}
+
 void BrickWorld::_bind_methods() {
     ClassDB::bind_method(D_METHOD("bake_archetype", "name", "size", "mass"),
             &BrickWorld::bake_archetype, DEFVAL(1.0));
@@ -11766,6 +11869,8 @@ void BrickWorld::_bind_methods() {
     ClassDB::bind_method(D_METHOD("strength_tree_info", "chunk_id"), &BrickWorld::strength_tree_info);
     ClassDB::bind_method(D_METHOD("get_strength_tree_stats"), &BrickWorld::get_strength_tree_stats);
     ClassDB::bind_method(D_METHOD("get_standin_buffers", "chunk_id"), &BrickWorld::get_standin_buffers);
+    ClassDB::bind_method(D_METHOD("get_instance_buffers", "chunk_id", "sections"), &BrickWorld::get_instance_buffers);
+    ClassDB::bind_method(D_METHOD("get_section_alive", "chunk_id"), &BrickWorld::get_section_alive);
     ClassDB::bind_method(D_METHOD("crack_components", "chunk_id", "planes_x", "planes_z"),
             &BrickWorld::crack_components);
     ClassDB::bind_method(D_METHOD("release_chunk", "chunk_id"), &BrickWorld::release_chunk);
