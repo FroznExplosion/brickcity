@@ -11737,7 +11737,14 @@ Dictionary BrickWorld::get_standin_buffers(int chunk_id) const {
     return out;
 }
 
-Array BrickWorld::get_instance_buffers(int chunk_id, const PackedInt32Array &sections) const {
+// A drawn block's share of its section's stamp (get_section_stamps): never
+// zero, and different for every id, so the sum says which blocks are drawn.
+static inline uint64_t section_stamp_of(size_t block_id) {
+    return ((uint64_t)block_id + 1u) * 0x9E3779B97F4A7C15ull;
+}
+
+Array BrickWorld::get_instance_buffers(int chunk_id, const PackedInt32Array &sections,
+        const PackedInt64Array &special_held) const {
     Array out;
     if (!valid_chunk(chunk_id)) {
         return out;
@@ -11748,15 +11755,19 @@ Array BrickWorld::get_instance_buffers(int chunk_id, const PackedInt32Array &sec
     // Which entry of `out` a section goes to, or -1.
     std::vector<int32_t> slot((size_t)section_n, -1);
     int wanted = 0;
+    // The special stamp the caller holds for each entry (0: none).
+    std::vector<int64_t> held;
     if (sections.is_empty()) {
         for (int s = 0; s < section_n; ++s) {
             slot[(size_t)s] = wanted++;
+            held.push_back(s < special_held.size() ? special_held[s] : 0);
         }
     } else {
         for (int k = 0; k < sections.size(); ++k) {
             const int s = sections[k];
             if (s >= 0 && s < section_n && slot[(size_t)s] < 0) {
                 slot[(size_t)s] = wanted++;
+                held.push_back(k < special_held.size() ? special_held[k] : 0);
             }
         }
     }
@@ -11767,6 +11778,9 @@ Array BrickWorld::get_instance_buffers(int chunk_id, const PackedInt32Array &sec
         int alive = 0;
         int authored = 0;
         int section = 0;
+        uint64_t stamp = 0;
+        uint64_t special_stamp = 0;
+        std::vector<int32_t> special; // drawn blocks that are not boxes
     };
     std::vector<Part> parts((size_t)wanted);
     for (int s = 0; s < section_n; ++s) {
@@ -11774,7 +11788,8 @@ Array BrickWorld::get_instance_buffers(int chunk_id, const PackedInt32Array &sec
             parts[(size_t)slot[(size_t)s]].section = s;
         }
     }
-    for (const Block &b : c.blocks) {
+    for (size_t bi = 0; bi < c.blocks.size(); ++bi) {
+        const Block &b = c.blocks[bi];
         if (b.removed || b.decorative) {
             continue;
         }
@@ -11788,14 +11803,21 @@ Array BrickWorld::get_instance_buffers(int chunk_id, const PackedInt32Array &sec
         const Vector3 size(a.size.x * cs.x, a.size.y * cs.y, a.size.z * cs.z);
         const Vector3 mid = Vector3(base.x * cs.x, base.y * cs.y, base.z * cs.z) + size * 0.5f;
         const bool drawn = b.alive && !b.detached;
+        const bool boxy = a.is_full_box() && a.mesh.empty();
         if (drawn) {
             ++p.alive;
-            if (!a.mesh.empty()) {
+            p.stamp += section_stamp_of(bi);
+            if (!boxy) {
                 ++p.authored;
+                p.special.push_back((int32_t)bi);
+                p.special_stamp += section_stamp_of(bi);
             }
             const Vector3 h = size * 0.5f;
             p.lo = Vector3(std::min(p.lo.x, mid.x - h.x), std::min(p.lo.y, mid.y - h.y), std::min(p.lo.z, mid.z - h.z));
             p.hi = Vector3(std::max(p.hi.x, mid.x + h.x), std::max(p.hi.y, mid.y + h.y), std::max(p.hi.z, mid.z + h.z));
+        }
+        if (!boxy) {
+            continue; // drawn by its faces ("special"), not as an instance
         }
         const Color col = brick::block_rgba_grain(b.material, b.colour, brick::grain_axis(a.size, b.cell));
         const float sx = drawn ? size.x : 0.0f;
@@ -11805,7 +11827,8 @@ Array BrickWorld::get_instance_buffers(int chunk_id, const PackedInt32Array &sec
                 col.r, col.g, col.b, col.a, mid.x, mid.y, mid.z, 0.0f };
         p.f.insert(p.f.end(), f, f + 20);
     }
-    for (const Part &p : parts) {
+    for (size_t pi = 0; pi < parts.size(); ++pi) {
+        const Part &p = parts[pi];
         Dictionary d;
         PackedFloat32Array buf;
         buf.resize((int64_t)p.f.size());
@@ -11815,27 +11838,78 @@ Array BrickWorld::get_instance_buffers(int chunk_id, const PackedInt32Array &sec
         d["section"] = p.section;
         d["buffer"] = buf;
         d["alive"] = p.alive;
+        d["stamp"] = (int64_t)p.stamp;
         d["authored"] = p.authored;
         d["aabb"] = p.alive > 0 ? AABB(p.lo, p.hi - p.lo) : AABB();
+        // The parts that are not boxes: every face of them, so their mesh
+        // is theirs alone -- a brick going next to a stair does not make the
+        // stair's mesh again. Not baked when the caller holds this stamp.
+        Array special;
+        const bool same = !p.special.empty() && held[pi] == (int64_t)p.special_stamp;
+        d["special_stamp"] = (int64_t)p.special_stamp;
+        d["special_same"] = same;
+        if (!p.special.empty() && !same) {
+            FaceBake fb;
+            bake_faces_into(c, archetypes, fb, nullptr, &p.special);
+            const int faces = fb.face_count();
+            PackedVector3Array verts;
+            PackedVector3Array normals;
+            PackedColorArray colours;
+            PackedVector2Array uvs;
+            PackedVector2Array uv2s;
+            PackedInt32Array indices;
+            for (int f = 0; f < faces; ++f) {
+                const int32_t v0 = (int32_t)verts.size();
+                for (int k = 0; k < 4; ++k) {
+                    verts.push_back(fb.verts[f * 4 + k]);
+                    normals.push_back(fb.normals[f * 4 + k]);
+                    colours.push_back(fb.colours[f * 4 + k]);
+                    uvs.push_back(fb.uvs[f * 4 + k]);
+                    uv2s.push_back(fb.uv2s[f * 4 + k]);
+                }
+                indices.push_back(v0);
+                indices.push_back(v0 + 1);
+                indices.push_back(v0 + 2);
+                // An authored triangle is stored as a quad whose second
+                // triangle has no area (bake_faces_into): left out.
+                if ((fb.edge[(size_t)f] & brick::EDGE_RAW) == 0) {
+                    indices.push_back(v0 + 1);
+                    indices.push_back(v0 + 3);
+                    indices.push_back(v0 + 2);
+                }
+            }
+            if (!indices.is_empty()) {
+                special.resize(Mesh::ARRAY_MAX);
+                special[Mesh::ARRAY_VERTEX] = verts;
+                special[Mesh::ARRAY_NORMAL] = normals;
+                special[Mesh::ARRAY_COLOR] = colours;
+                special[Mesh::ARRAY_TEX_UV] = uvs;
+                special[Mesh::ARRAY_TEX_UV2] = uv2s;
+                special[Mesh::ARRAY_INDEX] = indices;
+            }
+        }
+        d["special"] = special;
         out.push_back(d);
     }
     return out;
 }
 
-PackedInt32Array BrickWorld::get_section_alive(int chunk_id) const {
-    PackedInt32Array out;
+PackedInt64Array BrickWorld::get_section_stamps(int chunk_id) const {
+    PackedInt64Array out;
     if (!valid_chunk(chunk_id)) {
         return out;
     }
     const Chunk &c = chunks[chunk_id];
     out.resize(c.sections());
     out.fill(0);
-    int32_t *w = out.ptrw();
-    for (const Block &b : c.blocks) {
+    int64_t *w = out.ptrw();
+    for (size_t bi = 0; bi < c.blocks.size(); ++bi) {
+        const Block &b = c.blocks[bi];
         if (b.removed || b.decorative || !b.alive || b.detached) {
             continue;
         }
-        ++w[c.section_of(b.cell)];
+        int64_t &s = w[c.section_of(b.cell)];
+        s = (int64_t)((uint64_t)s + section_stamp_of(bi));
     }
     return out;
 }
@@ -11869,8 +11943,8 @@ void BrickWorld::_bind_methods() {
     ClassDB::bind_method(D_METHOD("strength_tree_info", "chunk_id"), &BrickWorld::strength_tree_info);
     ClassDB::bind_method(D_METHOD("get_strength_tree_stats"), &BrickWorld::get_strength_tree_stats);
     ClassDB::bind_method(D_METHOD("get_standin_buffers", "chunk_id"), &BrickWorld::get_standin_buffers);
-    ClassDB::bind_method(D_METHOD("get_instance_buffers", "chunk_id", "sections"), &BrickWorld::get_instance_buffers);
-    ClassDB::bind_method(D_METHOD("get_section_alive", "chunk_id"), &BrickWorld::get_section_alive);
+    ClassDB::bind_method(D_METHOD("get_instance_buffers", "chunk_id", "sections", "special_held"), &BrickWorld::get_instance_buffers);
+    ClassDB::bind_method(D_METHOD("get_section_stamps", "chunk_id"), &BrickWorld::get_section_stamps);
     ClassDB::bind_method(D_METHOD("crack_components", "chunk_id", "planes_x", "planes_z"),
             &BrickWorld::crack_components);
     ClassDB::bind_method(D_METHOD("release_chunk", "chunk_id"), &BrickWorld::release_chunk);

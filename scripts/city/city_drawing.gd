@@ -223,17 +223,28 @@ var far_coarse_remade := 0   ## made again after a hit, while coarse
 ## and its bands are up the tick it is made bricks, so nothing waits on them.
 ## A hit writes the bands it reached again, the same length (a dead brick is
 ## a zero matrix). Not done here: the near tier's chamfered mesh (it is built
-## from the bake; studs are still drawn), the sway in the wind, and authored
-## parts (slopes, round bricks, stairs), which are drawn as their boxes.
+## from the bake; studs are still drawn) and the sway in the wind. A part that
+## is not a box (a slope, a round brick, a stair) is drawn by its own faces,
+## on the band's node, made with the band's buffer.
 var instanced_bands := false
 var inst_bands := 0          ## bands filled, first time or again
 var inst_refreshes := 0      ## ... of which after a hit
 var inst_ms := 0.0           ## all told, and the worst one
 var inst_worst := 0.0
 var inst_bricks := 0         ## instances written, all told
-var inst_authored := 0       ## authored parts drawn as boxes, summed over fills
-var _inst_pending := {}      ## building id -> its sections' buffers, while its bands are laid out
-var _inst_alive := {}        ## building id -> alive bricks a section, as drawn
+var inst_authored := 0       ## parts that are not boxes, drawn by their faces, summed over fills
+var inst_special_verts := 0  ## ... and those faces' vertices
+## building id -> [physics frame, its sections' buffers]: made at the first
+## band a tick builds, from the bricks as they are then, never carried to a
+## later tick (a kill between two ticks' bands was drawn: --lodbreak's ghost
+## walls, 28 rays of 736).
+var _inst_pending := {}
+var _inst_alive := {}        ## building id -> each section's stamp (which bricks), as drawn
+## building id -> each section's stamp of its parts that are not boxes, as
+## their faces were last made: a band's are made again only when one of them
+## goes (BrickWorld.get_instance_buffers, "special_same").
+var _inst_special := {}
+var inst_special_kept := 0   ## fills that kept the faces they had
 static var _unit_box_mesh: ArrayMesh = null
 
 
@@ -252,10 +263,30 @@ func _init(c: Node3D) -> void:
 static func unit_box() -> ArrayMesh:
 	if _unit_box_mesh != null:
 		return _unit_box_mesh
-	var verts := PackedVector3Array()
-	var norms := PackedVector3Array()
+	var both := unit_box_points()
+	var verts: PackedVector3Array = both[0]
+	var norms: PackedVector3Array = both[1]
 	var uv2s := PackedVector2Array()
 	var cols := PackedColorArray()
+	for k in verts.size():
+		uv2s.append(Vector2(0.0, -1.0))
+		cols.append(Color.WHITE)
+	var arrays := []
+	arrays.resize(Mesh.ARRAY_MAX)
+	arrays[Mesh.ARRAY_VERTEX] = verts
+	arrays[Mesh.ARRAY_NORMAL] = norms
+	arrays[Mesh.ARRAY_TEX_UV2] = uv2s
+	arrays[Mesh.ARRAY_COLOR] = cols
+	_unit_box_mesh = ArrayMesh.new()
+	_unit_box_mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
+	return _unit_box_mesh
+
+
+## The unit box's 36 corners and their normals, in drawing order (a gate lays
+## the same triangles under its rays: tools/city_passes.gd, _boxes_tri_mesh).
+static func unit_box_points() -> Array:
+	var verts := PackedVector3Array()
+	var norms := PackedVector3Array()
 	var faces := [
 		[Vector3.RIGHT, Vector3.BACK, Vector3.UP], [Vector3.LEFT, Vector3.FORWARD, Vector3.UP],
 		[Vector3.UP, Vector3.RIGHT, Vector3.BACK], [Vector3.DOWN, Vector3.RIGHT, Vector3.FORWARD],
@@ -272,17 +303,7 @@ static func unit_box() -> ArrayMesh:
 		for k in order:
 			verts.append(pts[k])
 			norms.append(n)
-			uv2s.append(Vector2(0.0, -1.0))
-			cols.append(Color.WHITE)
-	var arrays := []
-	arrays.resize(Mesh.ARRAY_MAX)
-	arrays[Mesh.ARRAY_VERTEX] = verts
-	arrays[Mesh.ARRAY_NORMAL] = norms
-	arrays[Mesh.ARRAY_TEX_UV2] = uv2s
-	arrays[Mesh.ARRAY_COLOR] = cols
-	_unit_box_mesh = ArrayMesh.new()
-	_unit_box_mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
-	return _unit_box_mesh
+	return [verts, norms]
 
 
 ## A band's boxes (instanced_bands), or null.
@@ -299,9 +320,9 @@ func _apply_boxes(id: int, at: int, chunk: int, entry: Dictionary) -> void:
 		return
 	var t0 := Time.get_ticks_usec()
 	var alive := int(entry.alive)
-	var stamps: PackedInt32Array = _inst_alive.get(id, PackedInt32Array())
+	var stamps: PackedInt64Array = _inst_alive.get(id, PackedInt64Array())
 	if at < stamps.size():
-		stamps[at] = alive
+		stamps[at] = int(entry.stamp)
 		_inst_alive[id] = stamps
 	var node: MeshInstance3D = nodes[at]
 	var have := node != null and is_instance_valid(node)
@@ -310,11 +331,29 @@ func _apply_boxes(id: int, at: int, chunk: int, entry: Dictionary) -> void:
 	if not have:
 		node = _new_band_node(id)
 		nodes[at] = node
-	elif node.mesh != null:
-		city._retirer.retire(node.mesh)
-		node.mesh = null
 	if node.visible == hidden:
 		node.visible = not hidden
+	# The parts that are not boxes (slopes, round bricks, stairs): their own
+	# faces, on the band's node -- kept while none of them has gone.
+	var specials: PackedInt64Array = _inst_special.get(id, PackedInt64Array())
+	if bool(entry.get("special_same", false)) and have and node.mesh != null:
+		inst_special_kept += 1
+	else:
+		if node.mesh != null:
+			city._retirer.retire(node.mesh)
+			node.mesh = null
+		var special: Array = entry.get("special", [])
+		if not special.is_empty():
+			var sm := ArrayMesh.new()
+			sm.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, special)
+			node.mesh = sm
+			inst_special_verts += (special[Mesh.ARRAY_VERTEX] as PackedVector3Array).size()
+		if at < specials.size():
+			# Nothing made though the stamp matched (a node since replaced):
+			# asked again next time.
+			specials[at] = int(entry.get("special_stamp", 0)) \
+					if not bool(entry.get("special_same", false)) else 0
+			_inst_special[id] = specials
 	var mmi := boxes_of(node)
 	if mmi == null:
 		mmi = MultiMeshInstance3D.new()
@@ -359,11 +398,12 @@ func _apply_boxes(id: int, at: int, chunk: int, entry: Dictionary) -> void:
 	inst_worst = maxf(inst_worst, ms)
 
 
-## A building's bricks changed (CityScene._remesh): the bands whose count of
-## live bricks moved are written again, one walk of its blocks for all of them.
+## A building's bricks changed (CityScene._remesh): the bands whose stamp
+## moved (which bricks are drawn in them) are written again, one walk of its
+## blocks for all of them.
 func refresh_boxes(id: int, chunk: int) -> void:
-	var counts: PackedInt32Array = city.world.get_section_alive(chunk)
-	var was: PackedInt32Array = _inst_alive.get(id, PackedInt32Array())
+	var counts: PackedInt64Array = city.world.get_section_stamps(chunk)
+	var was: PackedInt64Array = _inst_alive.get(id, PackedInt64Array())
 	var nodes: Array = city._brick_bands.get(id, [])
 	if counts.size() != was.size() or counts.size() != nodes.size():
 		rebuild_bands(id, chunk)
@@ -374,16 +414,20 @@ func refresh_boxes(id: int, chunk: int) -> void:
 			changed.append(s)
 	if changed.is_empty():
 		return
-	for entry in city.world.get_instance_buffers(chunk, changed):
+	var specials: PackedInt64Array = _inst_special.get(id, PackedInt64Array())
+	var held := PackedInt64Array()
+	for s in changed:
+		held.append(specials[s] if s < specials.size() else 0)
+	for entry in city.world.get_instance_buffers(chunk, changed, held):
 		_apply_boxes(id, int((entry as Dictionary).section), chunk, entry)
 		inst_refreshes += 1
 	city.brick_near.damaged(chunk, changed)
 
 
 func inst_line() -> String:
-	return "bands as boxes (--inst-bands %s): %d band fill(s), %d after a hit, %d instances written, %.1f ms in all, worst %.2f; %d authored part(s) drawn as boxes" % [
+	return "bands as boxes (--inst-bands %s): %d band fill(s), %d after a hit, %d instances written, %.1f ms in all, worst %.2f; %d part(s) that are not boxes drawn by their faces (%dk vertices made, %d fill(s) kept what they had)" % [
 			"on" if instanced_bands else "off", inst_bands, inst_refreshes, inst_bricks, inst_ms,
-			inst_worst, inst_authored]
+			inst_worst, inst_authored, inst_special_verts / 1000, inst_special_kept]
 
 
 ## A new node for a band's slot, a child of the building's brick node.
@@ -561,11 +605,12 @@ func rebuild_bands(id: int, chunk: int) -> void:
 	city._brick_meshes[id] = null
 	city._brick_index_bytes[id] = 0
 	if instanced_bands:
-		_inst_pending[id] = city.world.get_instance_buffers(chunk, PackedInt32Array())
-		var stamps := PackedInt32Array()
+		_inst_pending.erase(id)
+		var stamps := PackedInt64Array()
 		stamps.resize(n)
 		stamps.fill(0)
 		_inst_alive[id] = stamps
+		_inst_special[id] = stamps.duplicate()
 
 
 ## Build one band of a building's mesh. Returns false when there are none left.
@@ -586,7 +631,13 @@ func _build_one_band(id: int) -> bool:
 		# No bake to wait for: this band's boxes, from the buffers made when
 		# its bands were laid out (rebuild_bands). A hit since is caught when
 		# the bands are done (_bands_done's redo: refresh_boxes).
-		var pend: Array = _inst_pending.get(id, [])
+		var now_tick := Engine.get_physics_frames()
+		var held: Array = _inst_pending.get(id, [])
+		if held.is_empty() or int(held[0]) != now_tick:
+			held = [now_tick, city.world.get_instance_buffers(b.chunk, PackedInt32Array(),
+					_inst_special.get(id, PackedInt64Array()))]
+			_inst_pending[id] = held
+		var pend: Array = held[1]
 		if at < pend.size():
 			_apply_boxes(id, at, b.chunk, pend[at])
 		_band_builds += 1
@@ -858,6 +909,7 @@ func take_bands(id: int, owed: Variant = null) -> Array:
 	_band_pass.erase(id)
 	_inst_pending.erase(id)
 	_inst_alive.erase(id)
+	_inst_special.erase(id)
 	city._band_cursor.erase(id)
 	city._band_redo.erase(id)
 	city._brick_bands.erase(id)
@@ -1571,6 +1623,7 @@ func _free_bands(id: int) -> void:
 	_band_pass.erase(id)
 	_inst_pending.erase(id)
 	_inst_alive.erase(id)
+	_inst_special.erase(id)
 	city._band_cursor.erase(id)
 	city._band_redo.erase(id)
 	city._brick_bands.erase(id)
