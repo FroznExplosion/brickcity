@@ -78,6 +78,14 @@ const NEAR_OMNI_RANGE := 3.0
 const NEAR_ENERGY := 1.6
 ## Frames between choosing them again (they follow the player).
 const NEAR_EVERY := 12
+## A building whose bricks changed is lit again once they have stayed as they
+## are this long (ms) -- a collapse changes them tick after tick, and each
+## light is a flood fill and a 512x512 layer upload, about 1 ms and a renderer
+## call -- or once they have kept changing for LIGHT_BUSY_MS, so a long
+## barrage still lets the daylight in as it goes. A hole blown in a wall is
+## lit within half a second (2026-11-11 audit item 3).
+const LIGHT_QUIET_MS := 350
+const LIGHT_BUSY_MS := 2000
 ## Last one lit, for gates and the HUD (ms).
 var last_ms := 0.0
 var updates := 0
@@ -88,7 +96,13 @@ class Entry:
 	var node: Node3D
 	var slot := -1
 	var dims := Vector3i.ZERO
-	var alive := -1
+	## The chunk version it was lit from (BrickWorld.get_chunk_version), the
+	## last one step() saw, when that one was first seen, and when the first
+	## change since the light was.
+	var version := -1
+	var seen := -1
+	var changed_at := 0
+	var first_change := 0
 	var bytes := PackedByteArray()
 	var param := Vector4(-1.0, 0.0, 0.0, 0.0)
 	var lamps: Array = []
@@ -154,8 +168,8 @@ func track(key, bricks: BrickWorld, chunk: int, node: Node3D) -> void:
 	_light(e)
 
 
-## Light `key` again now: for a change that leaves the live count as it was
-## (a brick's material, one laid as one went).
+## Light `key` again now, not when its bricks are quiet: for a change that
+## leaves the chunk's version as it was (a brick's material).
 func relight(key) -> void:
 	var e: Entry = _entries.get(key)
 	if e != null:
@@ -181,9 +195,11 @@ func release(key) -> void:
 	_hang_lamps(e, PackedFloat32Array())
 
 
-## Once a frame: drop what has gone; ask one building in turn whether its
-## bricks changed (counting them walks every block: all sixteen a frame was
-## too much in a city), and light it again if they did.
+## Once a frame: drop what has gone; ask every building whether its bricks
+## changed (a version: one read each), and light again the one that has
+## waited longest of those whose bricks are quiet now (LIGHT_QUIET_MS) or have
+## kept changing for LIGHT_BUSY_MS. One a frame at most, as before. And move
+## one building's lamps in turn.
 func step() -> void:
 	for key in _entries.keys():
 		var e: Entry = _entries[key]
@@ -191,12 +207,27 @@ func step() -> void:
 			release(key)
 	if _entries.is_empty():
 		return
+	var now := Time.get_ticks_msec()
+	var due: Entry = null
+	for key in _entries:
+		var c: Entry = _entries[key]
+		var v := c.bricks.get_chunk_version(c.chunk)
+		if v == c.version:
+			continue
+		if v != c.seen:
+			if c.seen == c.version:
+				c.first_change = now
+			c.seen = v
+			c.changed_at = now
+		if (now - c.changed_at >= LIGHT_QUIET_MS or now - c.first_change >= LIGHT_BUSY_MS) \
+				and (due == null or c.first_change < due.first_change):
+			due = c
+	if due != null:
+		_light(due)
 	var keys := _entries.keys()
 	_turn = (_turn + 1) % keys.size()
 	var e: Entry = _entries[keys[_turn]]
-	if e.bricks.get_alive_block_count(e.chunk) != e.alive:
-		_light(e)
-	elif use_layer and e.groups.size() > LAMPS_MAX:
+	if e != due and use_layer and e.groups.size() > LAMPS_MAX:
 		_place_lamps(e)
 	_near_clock -= 1
 	if _near_clock <= 0:
@@ -335,7 +366,8 @@ func at_colour(pos: Vector3) -> Color:
 
 func _light(e: Entry) -> void:
 	var t0 := Time.get_ticks_usec()
-	e.alive = e.bricks.get_alive_block_count(e.chunk)
+	e.version = e.bricks.get_chunk_version(e.chunk)
+	e.seen = e.version
 	if e.slot < 0:
 		if _free.is_empty():
 			return
