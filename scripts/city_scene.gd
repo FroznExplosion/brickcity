@@ -1036,6 +1036,12 @@ func _ready() -> void:
 	for a: String in args:
 		if a.begins_with("--asset-gun="):
 			_asset_gun = StringName(a.trim_prefix("--asset-gun="))
+		# The tick's shared clock (TickClock), for A/B runs: --clock=0 gives
+		# every queue its own budget as before; --clock-ms=N the allowance.
+		elif a.begins_with("--clock="):
+			TickClock.shared = a.trim_prefix("--clock=") != "0"
+		elif a.begins_with("--clock-ms="):
+			TickClock.total_ms = float(a.trim_prefix("--clock-ms="))
 	_mech_mode = "--mech" in args
 	_vehicles_mode = "--vehicles" in args
 	_no_ai = "--no-ai" in args
@@ -6186,6 +6192,9 @@ func _physics_process(_delta: float) -> void:
 	if _stud_times != BrickStrength.times:
 		_restud()
 	_prof = {}
+	# One clock for every queue below (TickClock: each min(its own cap, what
+	# is left), the islands' share held back for them).
+	TickClock.begin()
 	_sync_invincible()
 	if _sampling:
 		_near_at_tick = islands.damage_near_ms.duplicate()
@@ -6218,7 +6227,7 @@ func _physics_process(_delta: float) -> void:
 	if not _span_owed.is_empty():
 		_pay_span_owed()
 		t = _mark("solve", t)
-	var spawn_until := Time.get_ticks_usec() + int(SPAWN_BUDGET_MS * 1000.0)
+	var spawn_until := TickClock.until(SPAWN_BUDGET_MS)
 	var spawned := 0
 	var crumbs_cut := 0
 	var solved := 0
@@ -6496,7 +6505,7 @@ func _physics_process(_delta: float) -> void:
 	t = _mark("stairs", t)
 	# M4: spread promotions rather than letting several land in one frame.
 	var hits := 0
-	var damage_until := Time.get_ticks_usec() + int(DAMAGE_BUDGET_MS * 1000.0)
+	var damage_until := TickClock.until(DAMAGE_BUDGET_MS)
 	while not _damage_queue.is_empty() \
 			and hits < DAMAGE_PER_TICK \
 			and (hits == 0 or Time.get_ticks_usec() < damage_until):
@@ -6528,7 +6537,7 @@ func _physics_process(_delta: float) -> void:
 
 	var remeshed := 0
 	var now_frame := Engine.get_process_frames()
-	var remesh_until := Time.get_ticks_usec() + int(REMESH_BUDGET_MS * 1000.0)
+	var remesh_until := TickClock.until(REMESH_BUDGET_MS)
 	# Hand-overs first, and outside the budget (Docs/Collapse.md 2.4). A building
 	# that shed a piece stops drawing those bricks the tick every piece that
 	# took them is drawing -- not two frames after the split whatever the piece
@@ -6555,6 +6564,10 @@ func _physics_process(_delta: float) -> void:
 		# 106 ms of a 162 ms worst tick on --stress --big. One is allowed to
 		# overrun -- something has to go first -- and the next waits a tick.
 		if remeshed > 0 and Time.get_ticks_usec() >= remesh_until:
+			break
+		# On the shared clock not even the first, once it is out: a building
+		# not yet remeshed draws the bricks it had a moment longer, no hole.
+		if remeshed == 0 and ri == 0 and TickClock.skip(&"remesh", remesh_until):
 			break
 		var rid_b: int = _remesh_queue[ri]
 		# Held: a piece this building just shed has not come up yet.
@@ -6828,9 +6841,11 @@ func _stream_shells() -> void:
 	# collision are several ms, and four in one tick was a 5+ ms hitch. The
 	# rest wait for the next pass, a quarter of a tick-group later.
 	var t0 := Time.get_ticks_usec()
+	var shell_until := TickClock.until(SHELL_BUDGET_MS)
+	if TickClock.skip(&"shells", shell_until):
+		return
 	while looked < slice and shell_budget > 0:
-		if shell_budget < SHELLS_PER_TICK \
-				and Time.get_ticks_usec() - t0 > int(SHELL_BUDGET_MS * 1000.0):
+		if shell_budget < SHELLS_PER_TICK and Time.get_ticks_usec() >= shell_until:
 			break
 		var b = registry.buildings[_stream_cursor % count]
 		_stream_cursor += 1
@@ -7142,7 +7157,9 @@ func _stream_detail() -> void:
 	_part("sd_coarse", t_sd)
 	var here := camera.global_position
 	var t0 := Time.get_ticks_usec()
-	var until := t0 + int(DEMESH_BUDGET_MS * 1000.0)
+	var until := TickClock.until(DEMESH_BUDGET_MS)
+	if TickClock.skip(&"demesh", until):
+		return
 	var done := 0
 	var now := Time.get_ticks_msec()
 	for id in _materialised:
@@ -7397,7 +7414,9 @@ func _trim_quiet() -> void:
 	var here := camera.global_position
 	var freed := 0
 	var t0 := Time.get_ticks_usec()
-	var trim_until := t0 + int(TRIM_BUDGET_MS * 1000.0)
+	var trim_until := TickClock.until(TRIM_BUDGET_MS)
+	if TickClock.skip(&"trim", trim_until):
+		return
 	for i in range(_materialised.size() - 1, -1, -1):
 		var id: int = _materialised[i]
 		var b := registry.get_building(id)

@@ -603,7 +603,7 @@ func advance_bands() -> void:
 	city._part("bd_harvest", th)
 	if h_band_cursor.is_empty():
 		return
-	var until := Time.get_ticks_usec() + int(BAND_BUDGET_MS * 1000.0)
+	var until := TickClock.until(BAND_BUDGET_MS)
 	var built := 0
 	_band_verts_now = 0
 	while built < BANDS_PER_TICK and not h_band_cursor.is_empty() \

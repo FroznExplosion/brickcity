@@ -3044,7 +3044,7 @@ func _harvest_mesh_jobs() -> void:
 		if task < 0 or not WorkerThreadPool.is_task_completed(task):
 			k += 1
 			continue
-		if applied > 0 and Time.get_ticks_usec() - t0 > int(HARVEST_BUDGET_MS * 1000.0):
+		if applied > 0 and Time.get_ticks_usec() > mini(t0 + int(HARVEST_BUDGET_MS * 1000.0), TickClock.end_usec()):
 			harvests_spread += 1
 			k += 1
 			continue
@@ -4714,9 +4714,17 @@ func _advance_slices() -> void:
 
 
 func _advance_slices_from(t_tick: int) -> void:
+	var first := true
 	while not _slicing.is_empty():
 		if float(Time.get_ticks_usec() - t_tick) / 1000.0 >= SLICE_TICK_MS:
 			return
+		# Out of the tick's shared clock: not even the first band, for at
+		# most TickClock.MAX_SKIPS ticks running (the piece is drawn whole
+		# meanwhile).
+		if Time.get_ticks_usec() >= TickClock.end_usec() \
+				and (not first or TickClock.skip(&"slices", TickClock.end_usec())):
+			return
+		first = false
 		var isl: BrickIsland = _slicing[0]
 		if not isl.is_valid() or isl.mesh == null or not isl.slicing:
 			if isl.is_valid():
@@ -4958,7 +4966,8 @@ func tick() -> void:
 	if camera != null and is_instance_valid(camera):
 		_frustum = camera.get_frustum()
 	var look := Engine.get_physics_frames() % SEEN_EVERY == 0
-	_work_until = Time.get_ticks_usec() + int(WORK_BUDGET_MS * 1000.0)
+	TickClock.enter_islands()   # at least TickClock.island_share_ms, it runs last
+	_work_until = TickClock.until(WORK_BUDGET_MS)
 	_sync_meshes = 0
 	var now := Time.get_ticks_msec()
 	var settles := 0
@@ -5369,7 +5378,7 @@ func _compact_due(isl: BrickIsland) -> bool:
 ## to the renderer, which still costs enough to be worth a budget.
 func _drain_mesh_queue() -> void:
 	var i := 0
-	var until := Time.get_ticks_usec() + int(MESH_BUDGET_MS * 1000.0)
+	var until := TickClock.until(MESH_BUDGET_MS)
 	var done := 0
 	while i < _mesh_queue.size() and (done == 0 or Time.get_ticks_usec() < until):
 		var isl: BrickIsland = _mesh_queue[i]
