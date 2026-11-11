@@ -564,7 +564,8 @@ const HANDOVERS_PER_TICK := 3
 const HANDOVER_MAX_FRAMES := 20
 var handover_stats := {"count": 0, "gap_ticks": 0, "gap_worst": 0, "gap_handovers": 0,
 		"double_ticks": 0, "double_worst": 0, "double_handovers": 0,
-		"double_queued": 0, "double_bands": 0}
+		"double_queued": 0, "double_bands": 0,
+		"coarse_ticks": 0, "coarse_worst": 0, "coarse_handovers": 0}
 var _demesh_ms := 0.0
 var _demeshed := 0
 var _remeshed_back := 0
@@ -3780,7 +3781,13 @@ func _topple(id: int) -> void:
 	# Bands still being uploaded are handed over, not waited for: the piece
 	# fills their slots once each upload is done (BrickIsland.owed_bands).
 	var owed_bands := {}
+	# Drawn by its coarse mesh alone, it has no bands to hand over: it comes
+	# down as a building past DEMESH_RANGE does, the piece drawing itself.
+	var coarse_only: bool = drawing.coarse_only(id)
 	var carried_bands: Array = drawing.take_bands(id, owed_bands)
+	if coarse_only and mi != null:
+		mi.queue_free()
+		mi = null
 	_brick_cols.erase(id)
 	# The furniture body belongs to a STANDING building. What is falling
 	# carries its own -- an island builds collision from the chunk, and a
@@ -4082,7 +4089,8 @@ func _with_stairs(b: BuildingRegistry.Building, group: PackedInt32Array) -> Pack
 ## A piece has just left building `id`: watch the hand-over (_handovers).
 func _note_handover(id: int, isl: BrickIsland) -> void:
 	if not _handovers.has(id):
-		_handovers[id] = {"pieces": [], "born": Engine.get_process_frames(), "gap": 0, "double": 0}
+		_handovers[id] = {"pieces": [], "born": Engine.get_process_frames(), "gap": 0, "double": 0,
+				"coarse": 0}
 		handover_stats.count += 1
 	(_handovers[id].pieces as Array).append(isl)
 
@@ -4123,6 +4131,14 @@ func _watch_handovers() -> void:
 		var stale := _parent_stale(id)
 		if blind and not stale:
 			h.gap += 1
+		elif stale and not blind and now - int(h.born) > IslandManager.OVERLAP_FRAMES \
+				and drawing._far_coarse.has(id):
+			# Coming back from its coarse mesh (CityDrawing: one path for a far
+			# building): its bands are being built under it, and the coarse
+			# mesh draws what it was until they are in. Kept apart: a few
+			# ticks by design, where bands kept built underneath showed a hit
+			# at once.
+			h.coarse += 1
 		elif stale and not blind and now - int(h.born) > IslandManager.OVERLAP_FRAMES:
 			h.double += 1
 			if _remesh_queue.has(id):
@@ -4136,6 +4152,9 @@ func _watch_handovers() -> void:
 			handover_stats.double_worst = maxi(handover_stats.double_worst, int(h.double))
 			handover_stats.gap_handovers += 1 if int(h.gap) > 0 else 0
 			handover_stats.double_handovers += 1 if int(h.double) > 0 else 0
+			handover_stats.coarse_ticks += int(h.coarse)
+			handover_stats.coarse_worst = maxi(handover_stats.coarse_worst, int(h.coarse))
+			handover_stats.coarse_handovers += 1 if int(h.coarse) > 0 else 0
 			_handovers.erase(id)
 
 
@@ -4231,12 +4250,17 @@ func _remesh(id: int, force_full: bool = false) -> void:
 		if b != null and b.is_materialised() and _shells.has(id):
 			_shell_stale[id] = true
 		return
-	# Its bricks changed: drawn as bricks again, at once (_tend_far_coarse).
-	drawing.far_coarse_drop(id)
 	# A build's other frames are rebuilt whole, every time. They are small, and
 	# a surface under 65,536 vertices cannot be index-patched anyway.
 	if b.frames.size() > 1:
 		_remesh_frames(id)
+	# Drawn by its coarse mesh alone (CityDrawing._free_bands): nothing to
+	# patch -- its coarse mesh is made again on a worker, the old one drawn
+	# until it lands. A building with no brick left goes on to the branch
+	# below, which drops it.
+	if drawing.coarse_only(id) and world.get_alive_block_count(b.chunk) > 0:
+		drawing.far_coarse_stale(id)
+		return
 	# A building that has lost every brick -- which is what toppling does -- has
 	# no mesh to patch and no arrays to build. Rebuilding one at that moment
 	# means assembling and uploading a third of a million vertices to draw
