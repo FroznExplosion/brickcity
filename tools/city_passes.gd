@@ -8041,8 +8041,19 @@ func _run_light_pass() -> void:
 			break
 	var by_w := node.global_transform * Vector3((by.x + 0.5) * stud, 1.6, (by.z + 0.5) * stud)
 	var before := city.grid_light.at(by_w).x
+	# Blown, not relit by hand: the grid waits for the bricks to be quiet
+	# (BrickGridLight.LIGHT_QUIET_MS) and must still let the daylight in
+	# within half a second (2026-11-11 audit item 3).
+	var t_hole := Time.get_ticks_msec()
 	city.world.kill_blocks(chunk, PackedInt32Array(hole.keys()))
-	city.grid_light.relight(0)
+	var lit_ms := -1
+	while Time.get_ticks_msec() - t_hole < 1500:
+		await city.get_tree().process_frame
+		if city.grid_light.at(by_w).x > before + 0.05:
+			lit_ms = Time.get_ticks_msec() - t_hole
+			break
+	_gate_ok("and it does so by itself within half a second", lit_ms >= 0 and lit_ms <= 500,
+			"%d ms" % lit_ms)
 	var after := city.grid_light.at(by_w).x
 	var steps := absi(by.x - (0 if by.x < dims.x / 2 else dims.x - 1)) + 2
 	_gate_ok("a hole in the wall lets the sky in", by.x >= 0 and after > before + 0.05
