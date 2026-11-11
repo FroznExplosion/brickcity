@@ -997,6 +997,16 @@ var drain_count := 0
 ## `-- --stress --sync-small` runs it off, for the A/B. Far pieces (coarse) are
 ## unchanged either way.
 var small_meshes_on_worker := true
+## EXPERIMENT (audit 2026-11-11, item 7; `-- --hold-bake`): a piece in the air
+## is never baked. It is drawn as a box a brick (IslandStandins, made again
+## when it loses bricks) until it settles, and only then gets its faces baked
+## and uploaded. A falling piece's bake is mostly thrown away -- it breaks
+## again on landing -- and its upload is the worst of a collapse's render
+## flushes (Docs/HandoffPerf.md 6.2). Off by default: an A/B.
+var hold_bake_moving := false
+var bakes_held := 0       ## pieces spawned without a bake
+var bakes_released := 0   ## ... that settled and got one
+
 var dropped := 0     ## settled pieces put to the coarse stand-in for distance
 var compacted := 0   ## settled pieces baked again to leave their dead faces out
 var coarse_built := 0      ## coarse stand-ins built (build_chunk_coarse_mesh)
@@ -1041,6 +1051,8 @@ func setup(brick_world: BrickWorld, material: ShaderMaterial, view: Camera3D) ->
 	# (split_if_broken; the count is in shed_census_line). For test passes.
 	if OS.has_environment("BC_COMPONENTS_CHECK"):
 		world.set_components_check(true)
+	if "--hold-bake" in OS.get_cmdline_user_args():
+		hold_bake_moving = true
 	if heap == null:
 		heap = BrickHeap.new()
 		heap.name = "BrickHeap"
@@ -1556,7 +1568,12 @@ func spawn(source: int, block_ids: PackedInt32Array,
 		# Far off: the coarse stand-in, which needs no bake (ISLAND_MESH_RANGE).
 		isl.coarse = _starts_coarse(isl)
 		var bake_here: bool = isl.coarse or not small_meshes_on_worker or not standins.can_stand_in()
-		if bake_here and count <= SYNC_MESH_MAX_BLOCKS and _sync_meshes < SYNC_MESH_PER_TICK \
+		if hold_bake_moving and not isl.coarse and standins.can_stand_in():
+			# No bake while it falls (hold_bake_moving): its boxes, now.
+			isl.bake_held = true
+			bakes_held += 1
+			standins.cover(isl)
+		elif bake_here and count <= SYNC_MESH_MAX_BLOCKS and _sync_meshes < SYNC_MESH_PER_TICK \
 				and (isl.coarse or world.get_chunk_authored_tris(isl.chunk) <= SYNC_MESH_MAX_TRIS):
 			# Small enough to bake here and now, so it is never invisible.
 			_sync_meshes += 1
@@ -2574,6 +2591,10 @@ func rebuild_mesh(isl: BrickIsland, force_full: bool = false, allow_sync: bool =
 	rebuild_split = [0.0, 0.0, 0.0, 0, 0, 0, "returned early"]
 	if isl.mesh == null:
 		return
+	# In the air and not baked (hold_bake_moving): its stand-in is made again
+	# from the bricks it has (IslandStandins._consider).
+	if isl.bake_held:
+		return
 	# Its mesh is being built on a worker. Whatever this call wanted is done
 	# when that lands (_harvest_mesh_jobs), against the mesh it builds.
 	if isl.mesh_job != -1 or isl.upload_waiting or isl.slicing:
@@ -3412,6 +3433,11 @@ func settle_now(isl: BrickIsland) -> void:
 	isl.settled = true
 	isl.ripple_pending = false
 	isl.settled_ms = Time.get_ticks_msec()
+	if isl.bake_held:
+		# At rest: its faces now, the stand-in drawing until they are up.
+		isl.bake_held = false
+		bakes_released += 1
+		rebuild_mesh(isl, true)
 	isl.settled_blocks = world.get_alive_block_count(isl.chunk)
 	world.set_chunk_transform(isl.chunk, isl.chunk_transform())
 	_apply_layers(isl)
@@ -3815,7 +3841,7 @@ func _shed(isl: BrickIsland, groups: Array) -> int:
 		_shed_cause = isl.shed_cause
 		var came := spawn(isl.chunk, moved, linear, angular, child, isl.owner)
 		_shedding = false
-		if came != null and is_blind(came):
+		if came != null and is_undrawn(came):
 			isl.waiting_children.append(came)
 		if came != null:
 			bodies += 1
@@ -4482,6 +4508,14 @@ func _floor_line(isl: BrickIsland, at: float, lo: float, hi: float) -> float:
 ## Is this piece drawing nothing -- no surfaces and no bands? What
 ## _count_meshless counts, asked of one piece. A piece with no mesh node at all
 ## is drawn some other way (the shared single-brick MultiMesh) and is not blind.
+## Drawn by nothing a hand-over may wait for: blind, and not a piece kept as
+## its stand-in on purpose (hold_bake_moving), which draws all it has.
+func is_undrawn(isl: BrickIsland) -> bool:
+	if isl.bake_held and standins.covers(isl):
+		return false
+	return is_blind(isl)
+
+
 func is_blind(isl: BrickIsland) -> bool:
 	if not isl.is_valid() or isl.mesh == null:
 		return false
@@ -4497,6 +4531,8 @@ func _count_meshless() -> void:
 		# An ArrayMesh with no surfaces is NOT null and draws nothing; count both.
 		# A toppled building draws through its bands and not its own mesh.
 		var m: Mesh = isl.mesh.mesh
+		if isl.bake_held and standins.covers(isl):
+			continue   # drawn by its boxes, by design (hold_bake_moving)
 		if (m == null or m.get_surface_count() == 0) and not _any_band(isl):
 			isl.blind_ticks += 1
 			meshless_worst_blocks = maxi(meshless_worst_blocks,
@@ -4934,7 +4970,7 @@ func _process(_delta: float) -> void:
 func _still_waiting(isl: BrickIsland) -> bool:
 	for i in range(isl.waiting_children.size() - 1, -1, -1):
 		var c: BrickIsland = isl.waiting_children[i]
-		if not c.is_valid() or not is_blind(c):
+		if not c.is_valid() or not is_undrawn(c):
 			isl.waiting_children.remove_at(i)
 	return not isl.waiting_children.is_empty()
 

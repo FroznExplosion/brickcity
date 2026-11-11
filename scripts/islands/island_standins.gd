@@ -82,6 +82,11 @@ func cover(isl: BrickIsland) -> void:
 		_consider(isl)
 
 
+## Whether a piece is drawn by its boxes now.
+func covers(isl: BrickIsland) -> bool:
+	return _by_isl.has(isl)
+
+
 func _consider(isl: BrickIsland) -> void:
 	if not is_instance_valid(isl) or not isl.is_valid() or isl.mesh == null \
 			or not is_instance_valid(isl.mesh):

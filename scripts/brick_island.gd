@@ -100,6 +100,9 @@ var seen_tick := 0
 ## or -1. Anything asked of its mesh meanwhile waits for it (mesh_again), since
 ## the patches that follow are worked out against the mesh that job builds.
 var mesh_job := -1
+## Its bake is put off while it is in the air (IslandManager.hold_bake_moving):
+## drawn by its box stand-in until it settles.
+var bake_held := false
 ## Its mesh is built and waiting for the upload budget
 ## (IslandManager.UPLOAD_VERTS_PER_TICK): treated like a job in flight.
 var upload_waiting := false
