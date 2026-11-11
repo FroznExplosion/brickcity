@@ -126,6 +126,21 @@ func _process(delta: float) -> bool:
 					in_room > 50.0 and top <= _level + 0.3 and top >= _level - 0.6,
 					"%.0f cells of water, its top %.2f m against the water outside at %.2f (the hole at %.2f)" % [
 					in_room, top, _level, _hole_y])
+			# A head in the water, and one over it (SpaceStation.water_at; drowning).
+			var deep := -1
+			var dry := -1
+			for i: int in w.wet:
+				if w.level(i) >= 1.0 and (deep < 0 or _cell_y(i) < _cell_y(deep)):
+					deep = i
+			for i in w.air.state.size():
+				if w.air.state[i] == HullAir.INSIDE and w.air._root(w.air.comp[i]) == w.air._root(_room) 						and w.fill_at(i) <= 0.0 and (dry < 0 or _cell_y(i) > _cell_y(dry)):
+					dry = i
+			var mid := Vector3(0.0, BrickWorld.get_plate_metres() * 0.5, 0.0)
+			var wd := NAN if deep < 0 else _st.water_at(_st.global_transform * (_st.cell_point(w.air._cell(deep)) + _st.frame.basis * mid))
+			var wu := NAN if dry < 0 else _st.water_at(_st.global_transform * (_st.cell_point(w.air._cell(dry)) + _st.frame.basis * mid))
+			var wo := _st.water_at(_st.global_position + Vector3(0, 5000, 0))
+			_ok("under: a head in the room's water is under it, one over it is not, outside the hull is not its to say",
+					wd >= 1.0 and wu == 0.0 and is_nan(wo), "%.2f in the water, %.2f at the room's top, %s outside" % [wd, wu, wo])
 			_ok("holds: a shut door keeps the room beside it dry", _next_room >= 0
 					and w.in_compartment(_next_room) < 0.5, "%.2f cells in it" % (w.in_compartment(_next_room) if _next_room >= 0 else -1.0))
 			_inside_check("after filling")

@@ -1004,6 +1004,21 @@ func air_at(p: Vector3, near := false) -> Dictionary:
 			"breached": air.is_breached(ci), "venting": air.vent_rate(ci) > 0.001}
 
 
+## The water in its hull at world point `p` (Docs/Hulls.md 5): how full the cell
+## there is, 0..1; NAN where `p` is not in its inside air (a brick, outside it, no
+## air grid) -- the sea outside is somebody else's to ask.
+func water_at(p: Vector3) -> float:
+	if air == null or chunk < 0 or not bricked or not holds(p):
+		return NAN
+	var at := Vector3i(cell_at(p).floor())
+	if not air._in(at):
+		return NAN
+	var i := air._idx(at)
+	if air.state[i] != HullAir.INSIDE and not (hull_water != null and hull_water.passable(i)):
+		return NAN
+	return hull_water.level(i) if hull_water != null else 0.0
+
+
 ## Build cell `c`'s bottom middle, in its own space (a generated one's).
 func cell_point(c: Vector3i) -> Vector3:
 	var stud := BrickWorld.get_stud_metres()

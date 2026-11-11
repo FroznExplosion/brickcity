@@ -188,9 +188,26 @@ player, ticked by the planet scene's `_air_tick`:
   lungs), until you are back in air or dead (10 s). Up again, a full suit.
 - **HUD:** the air warning now shows anywhere the air is low (not only aboard), with the suit:
   `LOW AIR 0 %  --  suit air 42 s`, then `--  SUIT EMPTY`.
-- Not for AI soldiers yet (they do not leave air), nor drowning (a head under water).
+- Not for AI soldiers yet (they do not leave air). ~~Nor drowning~~: §4.4.
 - Gate: `suit_air_probe` 7 (good air keeps it full; the timer with no damage; empty, health
   goes past a full shield; refills; dies; reset; the world's air with height).
+
+### 4.4 Built (2026-11-11): drowning
+
+A head under water breathes nothing, so the same suit timer runs, then the same damage.
+- **`SpaceStation.water_at(p)`**: how full the hull's cell at a world point is, 0..1; NAN
+  where the point is not in its inside air.
+- **`PlanetSystem.under_water_at(p)`**: inside a ship or station, its own water there, a
+  cell half full or more (`HEAD_UNDER`). So a dry hold under the sea line is dry, and a
+  flooded room over it is not. Anywhere else, under its world's sea (radius plus
+  `sea_level`).
+- `PlanetScene._air_tick` asks it for the player's head, on foot only. HUD: `UNDER WATER
+  --  suit air 42 s`.
+- **Not yet:** the city (its `Harbour` boat's hold is 1 m high, no head fits; a swimmer
+  there is the debug camera's, which has no health), AI soldiers.
+- Gates: `hull_flood_probe` 11 (+1 "under": 1.00 in a flooded room's water, 0.00 at its
+  top, NAN outside the hull). Planet `--gate=hull` 23 ok (peak 89 C, not held back). The
+  sea's side of `under_water_at` and the HUD line are not in a gate.
 
 ## 5. Flooding: water brick by brick
 
