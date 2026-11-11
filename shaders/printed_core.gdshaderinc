@@ -66,6 +66,10 @@ uniform float pbr_far_range = 60.0;
 uniform float pbr_bump : hint_range(0.0, 3.0) = 1.0;
 
 global uniform float lod_zoom;
+#ifdef NEAR_STUD_RANGE
+// BrickNear's stud_radius (BrickNear._push_radii); scaled through a scope.
+global uniform float near_stud_radius;
+#endif
 varying vec3 v_local;
 varying vec3 v_colour;
 varying vec3 v_flat_normal;
@@ -74,6 +78,16 @@ varying flat int v_grain;
 varying flat int v_set;
 
 void vertex() {
+#ifdef NEAR_STUD_RANGE
+    // A stud past the geometry's reach is a card (stud_card.gdshader), or
+    // nothing: collapsed to its origin, it rasterises nothing, and nothing
+    // below is worked out for it. By the STUD's own distance, so the band's
+    // buffer is written when its bricks change and never because the camera
+    // moved (Docs/BrickBevel.md 3).
+    if (length(MODEL_MATRIX[3].xyz - CAMERA_POSITION_WORLD) * lod_zoom >= near_stud_radius) {
+        VERTEX = vec3(0.0);
+    } else {
+#endif
     v_local = VERTEX;
 #ifdef GRID_LIGHT
     if (grid_light.x >= 0.0) {
@@ -109,6 +123,9 @@ void vertex() {
     if (glass_pass && MAT_TRANSLUCENT[brick_material_id(COLOR.a)] > 0.5) {
         VERTEX = vec3(0.0);
     }
+#ifdef NEAR_STUD_RANGE
+    }
+#endif
 }
 
 /// How far p is inside a regular n-gon of the given corner radius (vertex on
