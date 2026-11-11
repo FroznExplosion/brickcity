@@ -1,0 +1,9 @@
+{
+	"format": 1,
+	"id": "base",
+	"name": "Printed Brick City",
+	"version": "0.1.0",
+	"author": "Printed Brick City",
+	"description": "The game's own content. Every other pack is read after this one.",
+	"requires": []
+}

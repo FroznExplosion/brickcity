@@ -37,7 +37,7 @@ const COLOURS := {
 }
 
 
-## The profile an AI roster unit's layers stand for (data/ai/roster.json states them in the
+## The profile an AI roster unit's layers stand for (content/base/data/ai/roster.json states them in the
 ## old melees, from its class, grade and mods). By shape, so the AI page's choices keep
 ## their meaning and every enemy takes the time-to-kill units: health alone is very light
 ## (half) or light; one light defence is light armored or shielded; a big defence is the

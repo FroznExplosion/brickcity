@@ -3,7 +3,7 @@ extends SceneTree
 ## Builds the starter mech gun: the first official mech-scale gun (Docs/ModularParts.md section
 ## 5: mech guns are guns at mech scale, their own mgun.* joints). A Korr LMG -- body, barrel,
 ## grip, box magazine -- blocked out in the asset workshop's gun mode at nano scale, saved as
-## official parts in res://parts/gun/ and its build as res://guns/starter_mech_lmg.json.
+## official parts in res://content/base/parts/gun/ and its build as res://content/base/guns/starter_mech_lmg.json.
 ##
 ##     godot --headless --path . --script res://tools/make_starter_mech_gun.gd
 ##
@@ -11,7 +11,7 @@ extends SceneTree
 ## scale a stud is 0.175 m: the gun is 26 studs, 4.6 m, a little longer than the mech's arm is
 ## from shoulder to fist, as a titan's gun is.
 
-const BUILD := "res://guns/starter_mech_lmg.json"
+const BUILD := "res://content/base/guns/starter_mech_lmg.json"
 const NAME := "Starter Mech LMG"
 const MAKER := "korr"
 const FRAME := 3      # dark grey

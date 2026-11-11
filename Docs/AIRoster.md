@@ -10,7 +10,7 @@ layers and its target's, and a mech is a row of its own in aggro: the §5 loop r
 types from recipes -- a melee type, a bomber, a grenadier, a sergeant, the brute and a hound --
 a type can change in a fight (phases), and flyers are roster types that decide from the casebook
 (a flying bomber, a drone). Types are described as recipes
-on the Tactics Casebook page's Roster tab, exported to `data/ai/roster.json` and read by `Roster`
+on the Tactics Casebook page's Roster tab, exported to `content/base/data/ai/roster.json` and read by `Roster`
 (`scripts/ai/roster/roster.gd`). `UnitCatalog` reads a unit's name, weapon, points and health
 from its recipe; every soldier carries its type's name over its head and tells the casebook what
 it is; each size of body has a navigation map of its own (`AIServices.nav_for`).

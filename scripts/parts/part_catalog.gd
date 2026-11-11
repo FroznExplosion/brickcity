@@ -13,7 +13,7 @@ extends RefCounted
 ## grouped by default, never an order the filters must be used in.
 
 ## Shipped parts, and the player's own and downloaded ones (section 7).
-const OFFICIAL_DIR := "res://parts/"
+const OFFICIAL_DIR := "res://content/base/parts/"
 const CUSTOM_DIR := "user://parts/custom/"
 const FILE := "part.json"
 ## Every facet a part is filed under. `weapon_class` is worked out for gun parts that are
@@ -33,6 +33,11 @@ var _indexed := false
 static func load_all() -> PartCatalog:
 	var cat := PartCatalog.new()
 	cat.load_dir(OFFICIAL_DIR, "official")
+	# Every other content pack's parts/ (Docs/Content.md): a DLC's are ours, a
+	# mod's are custom whatever its files say.
+	for p: Dictionary in ContentPacks.packs():
+		if p.id != ContentPacks.BASE_ID:
+			cat.load_dir(str(p.root) + "parts/", "official" if p.kind == "dlc" else "custom")
 	cat.load_dir(CUSTOM_DIR, "custom")
 	return cat
 

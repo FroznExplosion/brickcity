@@ -1,6 +1,6 @@
 extends SceneTree
 
-## Writes the prebuilt structures the city's placer ships with, to res://builds/.
+## Writes the prebuilt structures the city's placer ships with, to res://content/base/builds/.
 ##
 ##     godot --headless --path . --script tools/make_prebuilts.gd
 ##

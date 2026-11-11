@@ -42,7 +42,7 @@ Builds on: [Parts/joints.md](Parts/joints.md) (joints, the one pin, hands),
 
 One record shape for every family. One folder per part:
 
-    res://parts/<family>/<id>/part.json      official, shipped
+    res://content/base/parts/<family>/<id>/part.json      official, shipped
     user://parts/custom/<id>/part.json       made by a player, or downloaded (section 7)
 
 ```
@@ -357,7 +357,7 @@ interfaces.
 - **Save** (Ctrl S, Save As) writes the build -- the workshop's own file, for opening it here
   again; the game never reads it -- and then **every part on its own**:
   `<parts dir>/<id>/part.json` + `part.scn`. The parts dir is `user://parts/custom/` for the
-  player's builds and `res://parts/gun/` for a shipped one (written only from the editor).
+  player's builds and `res://content/base/parts/gun/` for a shipped one (written only from the editor).
   `AssetWorkshop.save_parts`.
 - A part's **id** is made on its first save and kept in the build (`meta.asset.part_ids`):
   `<creator>.<build>_<part>.<8 hex>` for a custom part, `<build>_<part>` for a shipped one. The
@@ -477,7 +477,7 @@ interfaces.
 ### Stage 6 as built
 
 - **Designs** (`PartDesign`, `scripts/parts/part_design.gd`): a file per design in
-  `res://parts/designs/` (shipped) or `user://parts/designs/` (the player's), naming parts slot
+  `res://content/base/parts/designs/` (shipped) or `user://parts/designs/` (the player's), naming parts slot
   by slot: `{"fixed": id}`, `{"pool": query}` or `{"empty": true}`; a slot not named is rolled
   from everything that fits. A design names parts, it never holds them. A joined pair is two
   fixed slots; John is a figure design with his torso and head fixed and `neck/hat` a pool of
@@ -775,8 +775,8 @@ netcode only has to carry dictionaries and byte chunks:
 ### Starter parts: the normal mech, as built
 
 - **The first official mech parts**: one normal-class Korr mech, legs 2 long -- chassis, head,
-  arms, hands, legs, two pod bodies -- in `res://parts/mech/starter_normal_*` with their
-  pictures, its build in `res://mechs/starter_normal.json` (open it in the workshop to change
+  arms, hands, legs, two pod bodies -- in `res://content/base/parts/mech/starter_normal_*` with their
+  pictures, its build in `res://content/base/mechs/starter_normal.json` (open it in the workshop to change
   it; Save writes the parts again, official, as `starter_normal_<part>`). Light and heavy, and
   legs 1 and 3 long, wait.
 - **Sized to the city**: the pilot's eye is 4.2 m up and looks straight into a second-storey
@@ -808,8 +808,8 @@ netcode only has to carry dictionaries and byte chunks:
 ### The starter mech gun, as built
 
 - **The first official mech-scale gun**: a Korr LMG -- body, barrel, grip, box magazine, stock --
-  in `res://parts/gun/starter_mech_lmg_*` (scale `mech`, the `mgun.*` joints) with pictures, its
-  build `res://guns/starter_mech_lmg.json`, made by `tools/make_starter_mech_gun.gd`. 26 nano
+  in `res://content/base/parts/gun/starter_mech_lmg_*` (scale `mech`, the `mgun.*` joints) with pictures, its
+  build `res://content/base/guns/starter_mech_lmg.json`, made by `tools/make_starter_mech_gun.gd`. 26 nano
   studs, 4.6 m: a little longer than the arm from shoulder to fist, as a titan's gun is. Stats
   and modifiers roll from the seed as any gun's (an LMG's class).
 - **In the hand**: `MechAssembler.arm_gun` now puts the gun's grip in the fist (the middle of the

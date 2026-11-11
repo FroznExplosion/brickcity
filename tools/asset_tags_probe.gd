@@ -150,7 +150,7 @@ func _save_and_generate() -> void:
 	_ws.bench._builds_dir = BuildRecipe.player_dir()
 	_ok("Save As writes it", path != "" and FileAccess.file_exists(path), path)
 	_ok("an item's library is the generator's (user://items/)",
-			BuildRecipe.player_dir("item") == "user://items/" and BuildRecipe.library_dirs("item").has("res://items/"))
+			BuildRecipe.player_dir("item") == "user://items/" and BuildRecipe.library_dirs("item").has("res://content/base/items/"))
 	var back := BuildRecipe.load_from(path)
 	_ok("the file keeps kind and tags, no room_kind", back.kind == "item"
 			and back.meta.get("tags", {}).get("room", []) == ["kitchen", "bedroom"]

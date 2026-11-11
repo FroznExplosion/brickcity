@@ -70,7 +70,7 @@ extends Node3D
 
 const World := preload("res://scripts/terrain_world.gd")
 ## `-- --world=<name>` opens a different level.
-var _world_path := "res://worlds/heightfield.json"
+var _world_path := "res://content/base/worlds/heightfield.json"
 
 enum Tool { LOOK, PAD, PAINT, SITE, RAISE, LOWER, FLATTEN, SMOOTH, PAINT_BRUSH,
 		BRICK_BRUSH }

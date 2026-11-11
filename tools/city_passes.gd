@@ -1483,7 +1483,7 @@ func _run_storeys_pass() -> void:
 	# finds (Structures 2.4): a watchtower set down in the street by the big
 	# tower, one storey hit, then its first floor's storey blown out.
 	var wt := BuildRecipe.from_dict(JSON.parse_string(
-			FileAccess.get_file_as_string("res://builds/watchtower.json")))
+			FileAccess.get_file_as_string("res://content/base/builds/watchtower.json")))
 	var wid := city.registry.register_build(wt, Transform3D(Basis(), b.xform * Vector3(fx * 0.5, 0.0, -8.0)))
 	city._index_building(wid)
 	city._make_shell(wid)

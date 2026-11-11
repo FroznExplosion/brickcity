@@ -4,10 +4,10 @@ extends RefCounted
 ## Docs/ModularParts.md section 7). Two forms:
 ##
 ##   parts    the workshop's Save writes every part on its own, a part.json and part.scn
-##            in its folder (PartCatalog: res://parts/ shipped, user://parts/custom/ the
+##            in its folder (PartCatalog: res://content/base/parts/ shipped, user://parts/custom/ the
 ##            player's). Parts saved from one build share its name (`from`): a design.
 ##   folders  older: Export to game wrote a folder of part scenes and a gun.json, in
-##            res://guns/<id>/ or user://guns/<id>/. Still read; a design saved as parts
+##            res://content/base/guns/<id>/ or user://guns/<id>/. Still read; a design saved as parts
 ##            wins over a folder of the same name.
 ##
 ## Their parts join the game's part library (GunPlaceholderParts.build_library), each kept
@@ -17,7 +17,7 @@ extends RefCounted
 ## `generate`: its own parts, if they fit (GunPartDef.takes), everything else (modifiers,
 ## alt fire, stats, quality) rolled from the seed as for any gun.
 
-const DIRS := ["res://guns/", "user://guns/"]
+const DIRS := ["res://content/base/guns/", "user://guns/"]
 ## The brand on their parts: no skin is set for it, so they keep their bricks' colours.
 const BRAND := &"workshop"
 ## The class a design fires as when its gun.json does not say.
@@ -26,10 +26,18 @@ const DEFAULT_CLASS := &"smg"
 const PART_SCENE := "part.scn"
 
 
+## The game's, every other content pack's (ContentPacks), the player's.
+static func dirs() -> Array:
+	var out := [DIRS[0]]
+	out.append_array(ContentPacks.dirs("guns", true))
+	out.append(DIRS[1])
+	return out
+
+
 ## Every exported gun folder: id -> {dir, manifest}. The player's copy wins over a shipped one.
 static func all() -> Dictionary:
 	var out := {}
-	for base: String in DIRS:
+	for base: String in dirs():
 		if not DirAccess.dir_exists_absolute(base):
 			continue
 		for d in DirAccess.get_directories_at(base):

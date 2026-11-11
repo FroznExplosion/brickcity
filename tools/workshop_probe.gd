@@ -391,8 +391,8 @@ func _workshop_checks() -> void:
 	ws.bench._undo()
 	_ok("and undo puts it back", ws.bench.recipe.towers.size() == 1)
 	ws.bench._on_menu("remove_tower", null)
-	var cottage := BuildRecipe.load_from("res://builds/cottage.json")
-	ws.bench.hold_stamp(cottage, "res://builds/cottage.json")
+	var cottage := BuildRecipe.load_from("res://content/base/builds/cottage.json")
+	ws.bench.hold_stamp(cottage, "res://content/base/builds/cottage.json")
 	var box: Array = ws.bench.stamp_box(ws.bench._stamp)
 	var d: Vector3i = box[1]
 	var target: Vector3i = ws.bench.stamp_target(Vector3(24.5 * STUD, 30.0, 24.5 * STUD), Vector3(0, -1, 0))
@@ -409,7 +409,7 @@ func _workshop_checks() -> void:
 		all_in = all_in and int(ws.bench._placed_at[i][1]) >= 0
 	_ok("and every one is in the world", all_in)
 	_ok("with a group naming where it came from", ws.bench.recipe.groups.size() == 1
-			and ws.bench.recipe.groups[0].source == "res://builds/cottage.json")
+			and ws.bench.recipe.groups[0].source == "res://content/base/builds/cottage.json")
 	_ok("and the same place again does not fit", not ws.bench._stamp_fits(target))
 	ws.bench._turn_stamp()
 	_ok("R turns it", ws.bench._stamp_turn == 1 and ws.bench._stamp.size() == cottage.size())
@@ -420,7 +420,7 @@ func _workshop_checks() -> void:
 			and ws.bench.world.get_alive_block_count(ws.bench.asm.frames[0]) == base_blocks)
 
 	# --- a group: select, delete, undo, move, copy
-	ws.bench.hold_stamp(cottage, "res://builds/cottage.json")
+	ws.bench.hold_stamp(cottage, "res://content/base/builds/cottage.json")
 	ws.bench._stamp_at = Vector3i(2, 1, 2)
 	ws.bench._stamp_ok = ws.bench._stamp_fits(ws.bench._stamp_at)
 	ws.bench._commit_stamp()
@@ -454,7 +454,7 @@ func _workshop_checks() -> void:
 	ws.bench._commit_stamp()
 	ws.bench._cancel_stamp()
 	_ok("placed elsewhere, still one group of the same bricks", ws.bench.recipe.size() == n
-			and ws.bench.recipe.groups.size() == 1 and ws.bench.recipe.groups[0].source == "res://builds/cottage.json")
+			and ws.bench.recipe.groups.size() == 1 and ws.bench.recipe.groups[0].source == "res://content/base/builds/cottage.json")
 	ws.bench._select_group(0)
 	ws.bench.copy_group()
 	ws.bench._stamp_at = Vector3i(2, 1, 2)
@@ -493,7 +493,7 @@ func _workshop_checks() -> void:
 	_ok("a room template saves its kind and room kind", room.kind == "room"
 			and room.meta.get("room_kind") == "office" and room.meta.has("size"))
 	var listed := WorkshopMenu.library("building")
-	_ok("the library lists shipped builds", listed.has("res://builds/cottage.json"))
+	_ok("the library lists shipped builds", listed.has("res://content/base/builds/cottage.json"))
 
 	for f in DirAccess.get_files_at("user://_probe_builds/"):
 		DirAccess.remove_absolute("user://_probe_builds/" + f)

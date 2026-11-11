@@ -12,7 +12,7 @@ How the enemy chooses what to do, authored as odds rather than code.
 - **Your settings:** `settings/<collection>/<id>.json`, saved from the page's storage.
   Only what you changed is stored; everything else is the page's suggestion.
 - **The book:** `node tools/tactics_export.js` runs the page's own model code over
-  the settings and writes `data/ai/tactics_book.json`: effective values plus
+  the settings and writes `content/base/data/ai/tactics_book.json`: effective values plus
   `golden` cases with the page's exact odds.
 - **In the game:** `TacticsBook` (`scripts/ai/tactics/tactics_book.gd`) reads the book
   and gives the same odds, picks, extras and squad plans.
@@ -61,7 +61,7 @@ How the enemy chooses what to do, authored as odds rather than code.
 
 - **The roster of types:** the page's Roster tab builds each enemy or ally type as a
   recipe (body, size, class and grade, attack, role, mods, phases; `Docs/AIRoster.md`).
-  The exporter writes `data/ai/roster.json` with everything worked out from each
+  The exporter writes `content/base/data/ai/roster.json` with everything worked out from each
   recipe; `Roster` (`scripts/ai/roster/roster.gd`) reads it, and `UnitCatalog` takes
   each unit's name, weapon, points and health from its recipe -- so a recipe changed
   on the page changes the unit in the game after an export. A recipe's attack, role,
