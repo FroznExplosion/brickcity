@@ -156,5 +156,25 @@ func _run() -> void:
 			ix[0] > 50 and ix[3] == 0,
 			"%d patch(es) from what changed (%d faces written), %d full fill(s); %d differing" % [
 				ix[0], ix[2], ix[1], ix[3]])
+	# The alive count is a counter kept at every write (Chunk::alive_count,
+	# 2026-11-11 audit item 1), not a walk: after all of the above -- blasts,
+	# splits, crumbs, fire, bands laid and lifted -- every chunk's counter is
+	# what walking its blocks finds.
+	var chunks_seen := 0
+	var off := 0
+	var off_at := ""
+	for cid in city.world.get_chunk_count():
+		if not city.world.is_chunk_alive(cid):
+			continue
+		chunks_seen += 1
+		var kept: int = city.world.get_alive_block_count(cid)
+		var walked: int = city.world.debug_alive_walk(cid)
+		if kept != walked:
+			off += 1
+			if off_at.is_empty():
+				off_at = " (chunk %d: %d kept, %d walked)" % [cid, kept, walked]
+	_ok("every chunk's alive counter is what walking its blocks finds",
+			chunks_seen > 10 and off == 0,
+			"%d chunks, %d off%s" % [chunks_seen, off, off_at])
 	print("\n%d passed, %d failed" % [_pass, _fail])
 	quit(1 if _fail > 0 else 0)

@@ -2752,7 +2752,7 @@ func want_shadow_proxy(isl: BrickIsland) -> void:
 	for job in _shadow_uploads:
 		if job[0] == isl:
 			return
-	var alive := world.get_alive_block_count(isl.chunk)
+	var alive := world.get_chunk_version(isl.chunk)
 	if is_instance_valid(isl.shadow_mesh) and isl.shadow_alive == alive:
 		return
 	var now := Engine.get_physics_frames()
@@ -2783,7 +2783,7 @@ func _harvest_shadow_proxies() -> void:
 				_shadow_wait.remove_at(i)
 			continue
 		_shadow_wait.remove_at(i)
-		var alive := world.get_alive_block_count(isl.chunk)
+		var alive := world.get_chunk_version(isl.chunk)
 		var arrays: Array = world.take_coarse_mesh(isl.chunk)
 		if arrays.is_empty() or not mesh_arrays_ok(arrays, "island %d (shadow)" % isl.chunk):
 			continue
@@ -4595,7 +4595,7 @@ func _fill_band_holes() -> void:
 			var owed: Array = isl.owed_bands[si]
 			isl.owed_bands.erase(si)
 			WorkerThreadPool.wait_for_task_completion(int(owed[0]))
-			if int(owed[3]) == world.get_alive_block_count(isl.chunk) and owed[1][0] != null:
+			if int(owed[3]) == world.get_chunk_version(isl.chunk) and owed[1][0] != null:
 				mesh = owed[1][0]
 				arrays = owed[2]
 				band_owed_taken += 1
