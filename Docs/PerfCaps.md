@@ -12,7 +12,7 @@ with the editor closed (CLAUDE.md), and a pass that times something is named wit
 | What | How | Where |
 |---|---|---|
 | Real bevels near the camera | within 14 m (through a scope's zoom), at most 120k triangles, nearest and in front first; Options > Video | `BrickNear` (BrickBevel.md 3) |
-| Stud geometry | 38 / 22 / 10 triangles by the stud's own distance to 18 m, at most 4,000 as geometry, cards to 70 m, open studs only | `BrickNear._sort_studs` |
+| Stud geometry | 22 triangles to 12 m, cards to 45 m (open studs only), each stud placed by the vertex shader from its own distance; bands holding geometry at most 4,000 studs between them (BrickBevel.md 3) | `BrickNear._studs`, `printed_grid.gdshader`, `stud_card.gdshader` |
 | Bands with studs at all | at most 96 bands hold studs (geometry or the far cards), nearest and in front first; past it the worst placed are smooth; Options > Video, Near Detail -- Studded Pieces (2026-10-27) | `BrickNear.max_card_bands` |
 | Loose pieces | small / large / total live counts | `IslandManager.small_live_max` and the rest |
 | Bricks left lying | a count, oldest heaps swept first; Options > Gameplay | `BrickHeap.max_bricks` |
@@ -266,3 +266,77 @@ The effects had four nodes made per event with no ceiling. Now capped (`tools/fx
   landings, the island tick's landings 1.0-1.6 ms; the run's worst ticks (100-226 ms) are a
   collapse's pieces taking their bands and resolving, not landings.
 
+
+## 9. Where the GPU's baseline goes (2026-11-11)
+
+BrickBevel.md 6 read the GPU at ~11.3 ms a frame looking at one 775-brick building in the
+1280x720 test window, and `--shot` 10.9, which looked like ~5 ms left before 60 fps went. Nobody
+had said what the 11 ms was. `-- --chamfer --cost --gpucost` (`tools/city_passes.gd`
+`_run_gpucost`) stands still at two views -- city.tscn six metres from one building in bricks (as
+`--cost` stands), big_city.tscn down the street of twelve buildings in bricks (as `--street`
+starts) -- reads `viewport_get_measured_render_time_gpu` over 120 frames, and repeats with one
+thing changed at a time, in memory (`MenuSettings.set_value(..., false)`), then with each kind of
+thing hidden. Editor closed, no other windowed Godot.
+
+**The 11 ms was a GPU clocked down, not work.** With the frame held to the display's 16.6 ms
+(vsync), the integrated Radeon lowers its clock until the work fills the frame, and its clock
+then reads about the same whatever it is given: the first run read MSAA *off* as 2 ms dearer.
+The pass now turns vsync and the frame cap off for its measurements (in memory; put back after),
+so the GPU runs flat out. Flat out, the same view is **5.0 ms**, the street **7.1 ms**. At 720p
+there are ~10 ms to spare, not 5. Every number below is flat out; the earlier "GPU ms" in this
+file and BrickBevel.md 6 were taken vsynced and are comparable with each other, not with these.
+
+Three runs of each (the street's second dropped: another chat's import overlapped its first
+baseline, 10.3 ms). Run-to-run noise is about +-0.4 ms; a row inside that is "nothing".
+
+| Change (one at a time) | One building, GPU ms | Street, GPU ms | Scales with |
+|---|---|---|---|
+| defaults (MSAA 2x, FXAA, scale 1.0, shadows 2, 4 cascades) | 5.01 | 7.07 | |
+| MSAA off | -0.42 | -0.42 | pixels (samples) |
+| FXAA off | 0.00 | +0.18 (noise) | pixels; about free |
+| MSAA and FXAA off | -0.61 | -0.40 | pixels |
+| shadow quality 0 (512 atlas, hard) | -1.22 | -0.36 | pixels shaded in shadow (the soft filter's taps), atlas size |
+| shadow quality 1 (2048, softer filter) | -0.89 | -0.18 | the same |
+| sun cascades 2 | -0.36 | -0.23 | shadow-caster triangles (halved: 603k -> 303k, 1621k -> 794k) |
+| render scale 0.75, bilinear | -1.14 | -0.73 | pixels |
+| render scale 0.75, FSR 1.0 | -0.98 | -0.35 | pixels, less FSR's own pass |
+| render scale 0.5, bilinear | -2.17 | -1.24 | pixels |
+| no sun shadow at all | -1.89 | -2.00 | shadow triangles and shadowed pixels |
+| without the ground (flat city: the plane) | -0.69 | -0.30 | pixels (it fills the bottom half) |
+| without clouds | +0.15 (noise) | +0.32 (noise) | pixels; nothing measurable |
+| without the far city's MultiMesh | +0.27 (noise) | +0.22 (noise) | triangles; nothing measurable here |
+| without the buildings in bricks (bands, near tier, panes, shadow proxies) | -1.90 | **-3.70** | triangles: 302k -> 34k drawn, 1215k -> 357k |
+| without the shells | +0.18 (noise) | -1.40 | triangles: 1215k -> 858k |
+
+Neither scene has a sea or terrain (`--terrain` is not set by city.tscn or big_city.tscn); the
+pass prints "none in this scene" for them and reads them when run with `--terrain`.
+
+**What it is made of.** From the render-scale rows (GPU = fixed + per-pixel x scale^2, from 1.0
+and 0.5): one building, ~2.9 ms grows with pixels and ~2.1 does not; the street, ~1.6 with pixels
+and ~5.5 not. Up close the frame is pixel-bound (a wall filling the screen, shaded with print,
+PBR and a soft-shadow filter); down a street it is triangle-bound (1.2M drawn, 1.6M more into the
+shadow cascades), and the buildings in bricks are half of it.
+
+**On the Legion Go's own screen** (2560x1600, 4.4x the test window's pixels; 1920x1200 is 2.5x)
+the pixel part grows and the rest does not: one building ~2.1 + 2.9 x 4.4 = **~15 ms**
+(1920x1200: ~9.4), the street ~5.5 + 1.6 x 4.4 = **~12.6 ms** (~9.5). Flat out, so a hot chip
+does less. That is where the defaults start to matter: at 2560x1600 the close view alone is near
+the 16.6 ms frame.
+
+**Recommendation for handheld defaults** (not changed: gates' pictures depend on the defaults --
+the user's call):
+
+* **Render scale 0.75 with FSR 1.0.** The biggest lever where pixels are what costs: ~44% of the
+  pixel part, ~5.7 ms of the close view's ~15 at 2560x1600. FSR's own pass costs a little at
+  720p (0.98 against bilinear's 1.14) and less than bilinear loses in sharpness.
+* **MSAA off, FXAA kept.** MSAA 2x is 0.4 ms at 720p, ~1.8 at 2560x1600; FXAA is free to the
+  noise and covers most of what MSAA did on the bricks' long edges. (`--far`'s crossfade gate
+  reads differently with them changed: TestWindow.use_default_settings.)
+* **Shadow quality 1 (Low).** 0.9 ms up close at 720p, most of it the soft filter per shaded
+  pixel, so more on the bigger screen. 0 (hard, 512) saves 0.3 more and looks blocky.
+* **Two sun cascades** once more buildings are in bricks: 0.2-0.4 ms here, half the shadow
+  triangles, so it grows with what is drawn.
+* Clouds and the far city cost nothing measurable; leave them.
+
+Left: the street's 3.7 ms of buildings in bricks is the bands' every face out to DEMESH_RANGE;
+the far tier (5), one coarse path for a far building, is what shrinks it.

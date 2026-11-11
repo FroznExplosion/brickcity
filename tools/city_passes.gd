@@ -2149,7 +2149,7 @@ func _proxy_check(b: BuildingRegistry.Building) -> void:
 	await _frames(10)
 	t = 0
 	while t < 150 and not (_proxy_drawn(b.id) and not city._shadow_jobs.has(b.id)
-			and int(city.drawing._shadow_proxy_alive.get(b.id, -1)) == city.world.get_alive_block_count(b.chunk)):
+			and int(city.drawing._shadow_proxy_alive.get(b.id, -1)) == city.world.get_chunk_version(b.chunk)):
 		await city.get_tree().physics_frame
 		t += 1
 	# And a hit that leaves its floors standing leaves its stairs (_sweep_stairs
@@ -2172,9 +2172,9 @@ func _proxy_check(b: BuildingRegistry.Building) -> void:
 			stairs_all > 0 and stairs_live == stairs_all, "%d of %d" % [stairs_live, stairs_all])
 	_gate_ok("building %d: and it catches up with a hit" % b.id,
 			_proxy_drawn(b.id) and int(city.drawing._shadow_proxy_alive.get(b.id, -1))
-					== city.world.get_alive_block_count(b.chunk),
-			"built from %d bricks, %d alive, after %d tick(s)" % [
-				int(city.drawing._shadow_proxy_alive.get(b.id, -1)), city.world.get_alive_block_count(b.chunk), t])
+					== city.world.get_chunk_version(b.chunk),
+			"built at chunk version %d, now %d, after %d tick(s)" % [
+				int(city.drawing._shadow_proxy_alive.get(b.id, -1)), city.world.get_chunk_version(b.chunk), t])
 
 ## A building still in bricks gives its mesh up past DEMESH_RANGE and stands in
 ## as a shell (_demesh). That shell has to be drawn from the damage its bricks
@@ -6128,6 +6128,9 @@ func _report_profile() -> void:
 		print("[prof]   render flush %.1f ms at tick %d: %s" % [r[0], r[1], r[2]])
 	print("[prof] worst script tick %.1f ms  (%d islands)" % [
 			city._prof_worst_ms, int(city._prof_worst.get("island_count", 0))])
+	print("[prof] tick clock: %s, %.1f ms (islands %.1f), %d queue-tick(s) skipped" % [
+			"shared" if TickClock.shared else "off (own budgets)", TickClock.total_ms,
+			TickClock.island_share_ms, TickClock.skipped])
 	if city.drawing._glass_ticks > 0:
 		print("[prof] glass: %.2f ms a tick on the main thread over %d ticks, worst %.1f ms (one hung %.1f, one built here from bricks %.1f, %d built here); %d built in all" % [
 				city.drawing._glass_usec / 1000.0 / city.drawing._glass_ticks, city.drawing._glass_ticks, city.drawing._glass_worst_usec / 1000.0,
@@ -7165,6 +7168,8 @@ func _run_chamfer_pass() -> void:
 			await _run_chamfer_street()
 		elif "--overview" in OS.get_cmdline_user_args():
 			await _run_overview()
+		elif "--gpucost" in OS.get_cmdline_user_args():
+			await _run_gpucost()
 		else:
 			await _run_chamfer_cost()
 		city.get_tree().quit(0)
@@ -7248,6 +7253,26 @@ func _run_chamfer_pass() -> void:
 	_gate_ok("and they draw exactly the bricks left", int(after.drawn) == int(after.wanted),
 			"%d drawn, %d wanted, over %d bands" % [after.drawn, after.wanted, after.bands])
 	await _save("chamfer_hit")
+
+	# Studs are placed by the GPU (Docs/BrickBevel.md 3, since 2026-11-11):
+	# a band's buffers are written when its bricks change, never because the
+	# camera moved. Was: re-sorted into rings every metre (STUD_RESORT), which
+	# the cap squeeze below and stale_studs (--lodbreak) were written around.
+	var rewrites := city.brick_near.stud_rewrites
+	var at_wall := city.camera.global_position
+	for i in 6:
+		city.camera.global_position = at_wall + Vector3(0.5 * float(i), 0.0, -0.4 * float(i))
+		city.camera.look_at(wall, Vector3.UP)
+		await _frames(3)
+	city.brick_near.settle(city.camera.global_position)
+	await _frames(4)
+	_gate_ok("walking three metres rewrites no band's studs, and studs are drawn",
+			city.brick_near.stud_rewrites == rewrites and city.brick_near.stud_instances > 0,
+			"%d rewritten, %d studs held" % [city.brick_near.stud_rewrites - rewrites,
+				city.brick_near.stud_instances])
+	city.camera.global_position = at_wall
+	city.camera.look_at(wall, Vector3.UP)
+	await _frames(10)
 
 	# The cap (Options > Video): its budgets squeezed to nothing, it still lets
 	# one band of each in -- and that one is the wall in front of the camera.
@@ -7453,6 +7478,153 @@ func _overview_line(m: Dictionary) -> String:
 			float(m.gpu), int(m.draws), int(m.objects), float(m.tris) / 1000.0,
 			int(m.sh_draws), float(m.sh_tris) / 1000.0]
 
+## Where the GPU's time goes standing still (PerfCaps.md 9): `-- --chamfer --cost
+## --gpucost`. city.tscn: six metres from one building in bricks, as `--cost`
+## stands. big_city.tscn: down a street of twelve buildings in bricks, as
+## `--street` starts. Each row changes ONE thing, in memory
+## (MenuSettings.set_value(..., false): never saved), measures, and puts it
+## back. A timing run: the editor closed, no other Godot running.
+func _run_gpucost() -> void:
+	var view := city.get_viewport().get_viewport_rid()
+	RenderingServer.viewport_set_measure_render_time(view, true)
+	var b := city.registry.get_building(0)
+	var street := city._big
+	if street:
+		for i in mini(city.registry.buildings.size(), 12):
+			city._promote(i)
+		await _frames(120)
+		var start: Vector3 = b.xform * Vector3(-4.0, 0.0, -3.0)
+		start.y = DebugCamera.EYE_HEIGHT
+		var along: Vector3 = (b.xform.basis * Vector3.RIGHT).normalized()
+		city.camera.global_position = start
+		city.camera.look_at(start + along, Vector3.UP)
+	else:
+		city._promote(0)
+		await _frames(60)
+		var fx: float = b.recipe.footprint_x * City.STUD
+		var wall: Vector3 = b.xform * Vector3(fx * 0.5, 2.6, 0.0)
+		city.camera.global_position = wall - Vector3(1.5, -0.4, 6.0)
+		city.camera.look_at(wall, Vector3.UP)
+	# Every far building quiet and coarse, the near tier settled.
+	for i in 600:
+		await city.get_tree().physics_frame
+		if city._far_coarse_jobs.is_empty() and i > 240:
+			break
+	city.brick_near.settle(city.camera.global_position)
+	await _frames(60)
+	var settings := city.get_node_or_null(^"/root/MenuSettings")
+	# Flat out: with the frame held to the display's 16.6 ms an integrated GPU
+	# clocks itself down to fill it, and its clock then reads the same however
+	# much work there is (MSAA off read 2 ms DEARER that way). No vsync, no cap.
+	if settings != null:
+		settings.set_value(&"vsync", 0, false)
+		settings.set_value(&"max_fps", 0, false)
+	var size := city.get_viewport().get_visible_rect().size
+	print("[gpucost] %s, %dx%d, %d buildings, %d in bricks, %d coarse; %s" % [
+			"big_city street" if street else "city, one building", int(size.x), int(size.y),
+			city.registry.buildings.size(), city._brick_nodes.size(),
+			city.drawing._far_coarse.size(), city.brick_near.report()])
+	var base := await _gpucost_measure()
+	print("[gpucost] %-34s %s" % ["defaults", _gpucost_line(base, base)])
+	var rows := [
+		["MSAA off", {&"msaa": 0}],
+		["FXAA off", {&"fxaa": false}],
+		["MSAA and FXAA off", {&"msaa": 0, &"fxaa": false}],
+		["shadow quality 0 (Off, 512)", {&"shadow_quality": 0}],
+		["shadow quality 1 (Low, 2048)", {&"shadow_quality": 1}],
+		["sun cascades 2", {&"sun_cascades": 1}],
+		["render scale 0.75, bilinear", {&"render_scale": 0.75, &"scaling_mode": 0}],
+		["render scale 0.75, FSR 1.0", {&"render_scale": 0.75, &"scaling_mode": 1}],
+		["render scale 0.5, bilinear", {&"render_scale": 0.5, &"scaling_mode": 0}],
+	]
+	var by := {}
+	for r in rows:
+		var change: Dictionary = r[1]
+		if settings != null:
+			for id in change:
+				settings.set_value(id, change[id], false)
+		var m := await _gpucost_measure()
+		if settings != null:
+			for id in change:
+				settings.set_value(id, settings.default_of(id), false)
+		by[r[0]] = m
+		print("[gpucost] %-34s %s" % [r[0], _gpucost_line(m, base)])
+	# The sun's shadow switched off altogether, for scale.
+	if city._sun != null:
+		city._sun.shadow_enabled = false
+		print("[gpucost] %-34s %s" % ["no sun shadow", _gpucost_line(await _gpucost_measure(), base)])
+		city._sun.shadow_enabled = true
+	# Each kind of thing hidden in turn.
+	var hide := {
+		"terrain / ground": [city._terrain_streamer, city._terrain_coarse, city._ground_plane],
+		"sea": [city._sea],
+		"clouds": [city.clouds],
+		"far city (MultiMesh)": [city._far],
+		"brick buildings": city._brick_nodes.values() + city.drawing._shadow_proxy.values(),
+		"shells": city._shells.values(),
+		"near-tier studs": _near_stud_nodes(),
+	}
+	for what in hide:
+		var nodes := []
+		for n in hide[what]:
+			if n is Node3D and is_instance_valid(n) and (n as Node3D).visible:
+				nodes.append(n)
+		if nodes.is_empty():
+			print("[gpucost] %-34s (none in this scene)" % ("without " + what))
+			continue
+		for n in nodes:
+			(n as Node3D).visible = false
+		var m := await _gpucost_measure()
+		for n in nodes:
+			(n as Node3D).visible = true
+		print("[gpucost] %-34s %s" % ["without %s (x%d)" % [what, nodes.size()], _gpucost_line(m, base)])
+	var end := await _gpucost_measure()
+	print("[gpucost] %-34s %s" % ["defaults again (drift)", _gpucost_line(end, base)])
+	if settings != null:
+		settings.set_value(&"vsync", settings.default_of(&"vsync"), false)
+		settings.set_value(&"max_fps", settings.default_of(&"max_fps"), false)
+	# GPU = fixed + per_pixel * scale^2, from 1.0 and 0.5 bilinear: the part
+	# that would grow with a bigger screen.
+	if by.has("render scale 0.5, bilinear"):
+		var half := float(by["render scale 0.5, bilinear"].gpu)
+		var per_px := (float(base.gpu) - half) / 0.75
+		print("[gpucost] pixel-bound part at 1.0: %.2f ms of %.2f (fixed %.2f); at 1920x1200 (2.5x the pixels) about %.1f ms" % [
+				per_px, float(base.gpu), float(base.gpu) - per_px,
+				float(base.gpu) - per_px + per_px * 1920.0 * 1200.0 / (size.x * size.y)])
+	await _save("gpucost_%s" % ("street" if street else "one"))
+
+## Every stud MultiMesh the near tier holds now.
+func _near_stud_nodes() -> Array:
+	var out := []
+	for band in city.brick_near._bands.values():
+		out.append_array(band.studs)
+	return out
+
+## The GPU's own clock over 120 frames, after 30 to settle.
+func _gpucost_measure() -> Dictionary:
+	var view := city.get_viewport().get_viewport_rid()
+	await _frames(30)
+	var gpu := []
+	for i in 120:
+		await RenderingServer.frame_post_draw
+		gpu.append(RenderingServer.viewport_get_measured_render_time_gpu(view))
+	gpu.sort()
+	var sum := 0.0
+	for g in gpu:
+		sum += float(g)
+	return {"gpu": sum / gpu.size(), "median": float(gpu[gpu.size() / 2]),
+		"draws": RenderingServer.viewport_get_render_info(view, RenderingServer.VIEWPORT_RENDER_INFO_TYPE_VISIBLE,
+				RenderingServer.VIEWPORT_RENDER_INFO_DRAW_CALLS_IN_FRAME),
+		"tris": RenderingServer.viewport_get_render_info(view, RenderingServer.VIEWPORT_RENDER_INFO_TYPE_VISIBLE,
+				RenderingServer.VIEWPORT_RENDER_INFO_PRIMITIVES_IN_FRAME),
+		"sh_tris": RenderingServer.viewport_get_render_info(view, RenderingServer.VIEWPORT_RENDER_INFO_TYPE_SHADOW,
+				RenderingServer.VIEWPORT_RENDER_INFO_PRIMITIVES_IN_FRAME)}
+
+func _gpucost_line(m: Dictionary, base: Dictionary) -> String:
+	return "GPU %5.2f ms (median %5.2f, %+5.2f), %4d draws, %5.0fk tris, shadows %5.0fk tris" % [
+			float(m.gpu), float(m.median), float(m.gpu) - float(base.gpu), int(m.draws),
+			float(m.tris) / 1000.0, float(m.sh_tris) / 1000.0]
+
 ## Frame times while a building six metres from the camera is shot at and then
 ## cut down, with whatever near tier the run has (`--no-cap`: the cap off).
 func _run_chamfer_cost() -> void:
@@ -7599,9 +7771,9 @@ func _run_chamfer_street() -> void:
 			% [held_max.x, held_max.y, BrickNear.max_tris / 1000, BrickNear.max_studs,
 				tris_max, studs_max, near_worst])
 	print("[street]   %s" % city.brick_near.report())
-	print("[street]   studs, worst: fetch %.2f ms, split %.2f, set %.2f; %d in one band at most"
+	print("[street]   studs, worst: fetch %.2f ms, open ones %.2f, set %.2f; %d in one band at most; %d buffer writes (%d to a band that had studs)"
 			% [city.brick_near.worst_fetch_ms, city.brick_near.worst_split_ms, city.brick_near.worst_set_ms,
-				city.brick_near.most_band_studs])
+				city.brick_near.most_band_studs, city.brick_near.stud_writes, city.brick_near.stud_rewrites])
 	print("[street]   showing a band, worst %.2f ms; %d steps a band waited for an upload to finish first"
 			% [city.brick_near.worst_show_ms, city.brick_near.show_waited])
 
@@ -7903,8 +8075,19 @@ func _run_light_pass() -> void:
 			break
 	var by_w := node.global_transform * Vector3((by.x + 0.5) * stud, 1.6, (by.z + 0.5) * stud)
 	var before := city.grid_light.at(by_w).x
+	# Blown, not relit by hand: the grid waits for the bricks to be quiet
+	# (BrickGridLight.LIGHT_QUIET_MS) and must still let the daylight in
+	# within half a second (2026-11-11 audit item 3).
+	var t_hole := Time.get_ticks_msec()
 	city.world.kill_blocks(chunk, PackedInt32Array(hole.keys()))
-	city.grid_light.relight(0)
+	var lit_ms := -1
+	while Time.get_ticks_msec() - t_hole < 1500:
+		await city.get_tree().process_frame
+		if city.grid_light.at(by_w).x > before + 0.05:
+			lit_ms = Time.get_ticks_msec() - t_hole
+			break
+	_gate_ok("and it does so by itself within half a second", lit_ms >= 0 and lit_ms <= 500,
+			"%d ms" % lit_ms)
 	var after := city.grid_light.at(by_w).x
 	var steps := absi(by.x - (0 if by.x < dims.x / 2 else dims.x - 1)) + 2
 	_gate_ok("a hole in the wall lets the sky in", by.x >= 0 and after > before + 0.05

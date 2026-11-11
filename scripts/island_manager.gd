@@ -2773,7 +2773,7 @@ func want_shadow_proxy(isl: BrickIsland) -> void:
 	for job in _shadow_uploads:
 		if job[0] == isl:
 			return
-	var alive := world.get_alive_block_count(isl.chunk)
+	var alive := world.get_chunk_version(isl.chunk)
 	if is_instance_valid(isl.shadow_mesh) and isl.shadow_alive == alive:
 		return
 	var now := Engine.get_physics_frames()
@@ -2804,7 +2804,7 @@ func _harvest_shadow_proxies() -> void:
 				_shadow_wait.remove_at(i)
 			continue
 		_shadow_wait.remove_at(i)
-		var alive := world.get_alive_block_count(isl.chunk)
+		var alive := world.get_chunk_version(isl.chunk)
 		var arrays: Array = world.take_coarse_mesh(isl.chunk)
 		if arrays.is_empty() or not mesh_arrays_ok(arrays, "island %d (shadow)" % isl.chunk):
 			continue
@@ -3065,7 +3065,7 @@ func _harvest_mesh_jobs() -> void:
 		if task < 0 or not WorkerThreadPool.is_task_completed(task):
 			k += 1
 			continue
-		if applied > 0 and Time.get_ticks_usec() - t0 > int(HARVEST_BUDGET_MS * 1000.0):
+		if applied > 0 and Time.get_ticks_usec() > mini(t0 + int(HARVEST_BUDGET_MS * 1000.0), TickClock.end_usec()):
 			harvests_spread += 1
 			k += 1
 			continue
@@ -4631,7 +4631,7 @@ func _fill_band_holes() -> void:
 			var owed: Array = isl.owed_bands[si]
 			isl.owed_bands.erase(si)
 			WorkerThreadPool.wait_for_task_completion(int(owed[0]))
-			if int(owed[3]) == world.get_alive_block_count(isl.chunk) and owed[1][0] != null:
+			if int(owed[3]) == world.get_chunk_version(isl.chunk) and owed[1][0] != null:
 				mesh = owed[1][0]
 				arrays = owed[2]
 				band_owed_taken += 1
@@ -4750,9 +4750,17 @@ func _advance_slices() -> void:
 
 
 func _advance_slices_from(t_tick: int) -> void:
+	var first := true
 	while not _slicing.is_empty():
 		if float(Time.get_ticks_usec() - t_tick) / 1000.0 >= SLICE_TICK_MS:
 			return
+		# Out of the tick's shared clock: not even the first band, for at
+		# most TickClock.MAX_SKIPS ticks running (the piece is drawn whole
+		# meanwhile).
+		if Time.get_ticks_usec() >= TickClock.end_usec() \
+				and (not first or TickClock.skip(&"slices", TickClock.end_usec())):
+			return
+		first = false
 		var isl: BrickIsland = _slicing[0]
 		if not isl.is_valid() or isl.mesh == null or not isl.slicing:
 			if isl.is_valid():
@@ -4994,7 +5002,8 @@ func tick() -> void:
 	if camera != null and is_instance_valid(camera):
 		_frustum = camera.get_frustum()
 	var look := Engine.get_physics_frames() % SEEN_EVERY == 0
-	_work_until = Time.get_ticks_usec() + int(WORK_BUDGET_MS * 1000.0)
+	TickClock.enter_islands()   # at least TickClock.island_share_ms, it runs last
+	_work_until = TickClock.until(WORK_BUDGET_MS)
 	_sync_meshes = 0
 	var now := Time.get_ticks_msec()
 	var settles := 0
@@ -5405,7 +5414,7 @@ func _compact_due(isl: BrickIsland) -> bool:
 ## to the renderer, which still costs enough to be worth a budget.
 func _drain_mesh_queue() -> void:
 	var i := 0
-	var until := Time.get_ticks_usec() + int(MESH_BUDGET_MS * 1000.0)
+	var until := TickClock.until(MESH_BUDGET_MS)
 	var done := 0
 	while i < _mesh_queue.size() and (done == 0 or Time.get_ticks_usec() < until):
 		var isl: BrickIsland = _mesh_queue[i]

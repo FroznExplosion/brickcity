@@ -564,6 +564,8 @@ int BrickWorld::place_block(int chunk_id, Vector3i cell, int archetype_id, int c
     b.colour = (uint8_t)std::clamp(colour, 0, 255);
     b.decorative = decorative;
     c.blocks.push_back(b);
+    ++c.alive_count;
+    c.touch();
     if (!c.absent.empty()) {
         c.absent.push_back(0); // placed, so present
     }
@@ -678,8 +680,9 @@ bool BrickWorld::remove_block(int chunk_id, int block_id) {
     // partition and the block -> shape map all key on. `archetype` stays valid
     // because the face bake and get_block_boxes walk every block and index it
     // without a guard; `removed` is what those loops skip on.
-    b.alive = false;
+    c.set_alive(block_id, false);
     b.removed = true;
+    c.touch();
     b.index_count = 0;
     b.load = 0;
     if (keep_joints) {
@@ -779,7 +782,7 @@ int BrickWorld::kill_block(int chunk_id, Vector3i cell) {
     if (id < 0 || !c.blocks[id].alive) {
         return -1;
     }
-    c.blocks[id].alive = false;
+    c.set_alive(id, false);
     conn_touch(chunk_id, id);
     c.blocks[id].hp = 0;
     return id;
@@ -799,9 +802,10 @@ void BrickWorld::kill_blocks(int chunk_id, const PackedInt32Array &ids) {
             // Not laid: the record says it is dead, and it comes in dead.
             c.absent[(size_t)bid] &= (uint8_t)~Chunk::ABSENT_ALIVE;
             c.blocks[bid].hp = 0;
+            c.touch(); // its record changed: it will be laid dead
             continue;
         }
-        c.blocks[bid].alive = false;
+        c.set_alive(bid, false);
         conn_touch(chunk_id, bid);
         c.blocks[bid].hp = 0;
     }
@@ -842,7 +846,7 @@ PackedInt32Array BrickWorld::revive_blocks(int chunk_id, const PackedInt32Array 
         if (!own) {
             continue;
         }
-        b.alive = true;
+        c.set_alive(bid, true);
         b.hp = 255;
         b.detached = false;
         b.support_broken = false;
@@ -1733,6 +1737,14 @@ int BrickWorld::get_block_count(int chunk_id) const {
 }
 
 int BrickWorld::get_alive_block_count(int chunk_id) const {
+    return valid_chunk(chunk_id) ? (int)chunks[chunk_id].alive_count : 0;
+}
+
+int64_t BrickWorld::get_chunk_version(int chunk_id) const {
+    return valid_chunk(chunk_id) ? (int64_t)chunks[chunk_id].version : 0;
+}
+
+int BrickWorld::debug_alive_walk(int chunk_id) const {
     if (!valid_chunk(chunk_id)) {
         return 0;
     }
@@ -7623,6 +7635,7 @@ bool BrickWorld::load_template(int template_id, int chunk_id) {
     // place_block writes, for every block at once. A removed block claims
     // nothing, as it claimed nothing when the template was saved.
     c.blocks = t.blocks;
+    c.recount_alive();
     conn_forget(chunk_id);
     for (size_t i = 0; i < c.blocks.size(); ++i) {
         const Block &b = c.blocks[i];
@@ -7685,6 +7698,7 @@ int BrickWorld::create_band_chunk(int template_id) {
     c.occ_dy = 0;
     c.occupancy.reset(0);
     c.blocks = t.blocks;
+    c.recount_alive();
     c.absent.assign(c.blocks.size(), 0);
     for (size_t i = 0; i < c.blocks.size(); ++i) {
         Block &b = c.blocks[i];
@@ -7694,7 +7708,7 @@ int BrickWorld::create_band_chunk(int template_id) {
         c.absent[i] = Chunk::ABSENT | (b.alive ? Chunk::ABSENT_ALIVE : 0)
                 | (b.detached ? Chunk::ABSENT_DETACHED : 0);
         b.removed = true;
-        b.alive = false;
+        c.set_alive((int32_t)i, false);
     }
     joint_cache[id] = brick::JointCache();
     conn_forget(id);
@@ -7769,7 +7783,8 @@ int BrickWorld::lay_band(int chunk_id, int template_id, int y_lo, int y_hi) {
         const uint8_t a = c.absent[(size_t)i];
         b.removed = false;
         b.detached = (a & Chunk::ABSENT_DETACHED) != 0;
-        b.alive = (a & Chunk::ABSENT_ALIVE) != 0 && !b.detached;
+        c.set_alive(i, (a & Chunk::ABSENT_ALIVE) != 0 && !b.detached);
+        c.touch();
         if (!b.alive) {
             b.hp = 0;
         }
@@ -7852,7 +7867,8 @@ int BrickWorld::unlay_band(int chunk_id, int y_lo, int y_hi, int template_blocks
         c.absent[(size_t)i] = Chunk::ABSENT | (b.alive ? Chunk::ABSENT_ALIVE : 0)
                 | (b.detached ? Chunk::ABSENT_DETACHED : 0);
         b.removed = true;
-        b.alive = false;
+        c.set_alive((int32_t)i, false);
+        c.touch();
         b.support_broken = false;
         b.strained = false;
         b.held = false;
@@ -8160,7 +8176,7 @@ PackedInt32Array BrickWorld::apply_hit(int chunk_id, Vector3 world_point, float 
             b.hp = (uint8_t)std::clamp((int)std::floor(left / toughness), 1, 255);
             continue;
         }
-        b.alive = false;
+        c.set_alive(nearest[i].first, false);
         conn_touch(chunk_id, nearest[i].first);
         b.hp = 0;
         killed.push_back(nearest[i].first);
@@ -8213,7 +8229,7 @@ PackedInt32Array BrickWorld::chip_hit(int chunk_id, Vector3 world_point, float r
         const uint8_t wear = (uint8_t)std::max(1, ((int)dmg * 10 + t10 / 2) / t10);
         b.hp = b.hp > wear ? (uint8_t)(b.hp - wear) : (uint8_t)0;
         if (b.hp == 0) {
-            b.alive = false;
+            c.set_alive(bid, false);
             conn_touch(chunk_id, bid);
             killed.push_back(bid);
         }
@@ -8629,7 +8645,7 @@ Dictionary BrickWorld::fire_step(int chunk_id, float dt, Vector3 wind, float dam
                 fb.age += dt;
                 fb.fuel -= dt;
                 if (fb.fuel <= 0.0f) {
-                    b.alive = false;
+                    c.set_alive(id, false);
                     conn_touch(chunk_id, id);
                     b.hp = 0;
                     killed.push_back(id);
@@ -9211,7 +9227,7 @@ Dictionary BrickWorld::detach_group(int chunk_id, const PackedInt32Array &block_
     PackedInt32Array taken;
     for (size_t i = 0; i < n; ++i) {
         if (mask[i]) {
-            c.blocks[i].alive = false;
+            c.set_alive((int32_t)i, false);
             conn_touch(chunk_id, (int32_t)i);
             c.blocks[i].detached = true;
             taken.push_back((int32_t)i);
@@ -9254,7 +9270,7 @@ Array BrickWorld::get_block_boxes(int chunk_id) const {
             box["block"] = (int)i;
             box["pos"] = centre;
             box["size"] = size;
-            box["alive"] = b.alive;
+            box["alive"] = (bool)b.alive;
             out.push_back(box);
             continue;
         }
@@ -9273,7 +9289,7 @@ Array BrickWorld::get_block_boxes(int chunk_id) const {
                     box["pos"] = Vector3((base.x + x + 0.5f) * cs.x,
                             (base.y + y + 0.5f) * cs.y, (base.z + z + 0.5f) * cs.z);
                     box["size"] = cs;
-                    box["alive"] = b.alive;
+                    box["alive"] = (bool)b.alive;
                     out.push_back(box);
                 }
             }
@@ -10393,6 +10409,8 @@ Dictionary BrickWorld::split_island(int chunk_id, const PackedInt32Array &block_
         nb.material = src_block.material;   // a steel beam falls as steel
         nb.scorched = src_block.scorched;
         isl.blocks.push_back(nb);
+        ++isl.alive_count;
+        isl.touch();
         const Vector3i base = nb.cell - isl.origin;
         for (int x = 0; x < a.size.x; ++x) {
             for (int y = 0; y < a.size.y; ++y) {
@@ -10404,7 +10422,7 @@ Dictionary BrickWorld::split_island(int chunk_id, const PackedInt32Array &block_
                 }
             }
         }
-        chunks[chunk_id].blocks[bid].alive = false;
+        chunks[chunk_id].set_alive(bid, false);
         conn_touch(chunk_id, bid);
         chunks[chunk_id].blocks[bid].detached = true;
         taken.push_back(bid);
@@ -11883,6 +11901,8 @@ void BrickWorld::_bind_methods() {
     ClassDB::bind_method(D_METHOD("block_at", "chunk_id", "cell"), &BrickWorld::block_at);
     ClassDB::bind_method(D_METHOD("get_block_count", "chunk_id"), &BrickWorld::get_block_count);
     ClassDB::bind_method(D_METHOD("get_alive_block_count", "chunk_id"), &BrickWorld::get_alive_block_count);
+    ClassDB::bind_method(D_METHOD("get_chunk_version", "chunk_id"), &BrickWorld::get_chunk_version);
+    ClassDB::bind_method(D_METHOD("debug_alive_walk", "chunk_id"), &BrickWorld::debug_alive_walk);
     ClassDB::bind_method(D_METHOD("get_block_index_range", "chunk_id", "block_id"),
             &BrickWorld::get_block_index_range);
 

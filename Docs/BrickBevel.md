@@ -235,9 +235,7 @@ a mesh of the whole chunk.
   the camera in the vertex shader and sized to the outline a cylinder of the stud's radius and
   height has from there -- its height from the side, its diameter from straight above -- its
   foot on the stud's front edge so the brick's top never hides it; flat colour, a normal that
-  rounds across it and faces up over its top; no print. A band beyond `stud_radius` holds only
-  cards and is sorted again every `STUD_RESORT_FAR` (4 m) of camera travel, not every metre.
-  Set `stud_card_radius` to `stud_radius` to turn the ring off. The card never tips back more
+  rounds across it and faces up over its top; no print. Set `stud_card_radius` to `stud_radius` to turn the ring off. The card never tips back more
   than `max_tilt` (0.6 rad) from upright -- from high above, facing the camera, it lay flat on the
   top as a square tile -- and is drawn long enough that it still covers the stud's outline from
   there; a skirt below its foot, hidden by the brick's top, closes the line of sky under it.
@@ -248,6 +246,31 @@ a mesh of the whole chunk.
   storey's floor is under the slab above and seen, if at all, through a window -- and in the big
   city it was 95% of the cards: walking past every building held 200,657 stud instances, 9,827
   without them (2026-10-19), and every band of them was re-sent to the renderer every 4 m.
+* **Placed by the GPU, not per camera move** (2026-11-11). Until then a band's studs were
+  re-split into the rings above on the CPU (`BrickWorld.split_studs`) and handed to four
+  MultiMeshes every metre the camera moved (`STUD_RESORT`; 4 m among the cards) and after every
+  hit -- each `set_buffer` a renderer call that waits behind whatever a worker is uploading
+  (below; PerfCaps.md 3). Now a band holds two MultiMeshes: `stud_plain` with ALL its studs and
+  the card with its open ones, written when its bricks change (`studs_dirty`) and at no other
+  time. The vertex shaders place each stud by its own distance to the camera, against the shader
+  globals `near_stud_radius` and `near_stud_card_radius` (`BrickNear._push_radii`) times
+  `lod_zoom`: geometry inside `stud_radius` (`printed_grid.gdshader`, `NEAR_STUD_RANGE` in
+  `printed_core.gdshaderinc`), a card from there to `stud_card_radius` (`stud_card.gdshader`),
+  anything else collapsed to its origin, as the glass pass does. A band without a place for
+  geometry under the cap draws its cards from its foot out (the card's `cards_all`). The
+  bevelled stud's ring inside 4 m is gone from the city: a third MultiMesh of every stud for a
+  13 mm rim, a few pixels, on the storey under the player's feet; the workshop keeps it
+  (`stud_bevel_radius`, Options > Video, Bevelled Studs). `max_studs` now counts every stud of
+  the bands holding geometry, since their MultiMesh holds every one.
+
+  Street walk (`big_city.tscn -- --chamfer --cost --street`, quiet machine): 66 buffer writes a
+  walk, none to a band that already had studs (PerfCaps.md 3 counted ~1,300 hand-offs under the
+  old rule); worst near-tier step 1.57-1.82 ms before, 1.65-1.71 after; worst hand-off
+  0.10-0.13 ms before, 0.10-0.11 after -- PerfCaps.md 3 had already taken the waits out of it,
+  so what is left is a fetch (0.6 ms). The GPU flat out down the street (`--gpucost`): 7.07-7.21
+  ms before, 7.09 after, the studs' own share 0.14 ms (noise). An early version that worked out
+  the whole vertex before collapsing it read 0.6 ms more: the test comes first, the rest in its
+  `else`.
 * **Uploads in flight.** The first renderer call that makes a band's stud instances, or changes
   their count or buffer, waits for any mesh upload running on a worker to finish -- a building
   turning to bricks sends its bands that way. Walking the big city that wait was 9-20 ms, on the
@@ -401,7 +424,8 @@ geometry against 3,150. GPU ms a frame (`viewport_get_measured_render_time_gpu`)
 | Twelve shots | 15.48, 13.10 | 12.79, 11.31 |
 | Brought down | 13.91, 13.15 | 12.07, 11.40 |
 
-So standing still it is about the same (the frame is bound elsewhere), and while bricks break
+(These are vsynced: the GPU clocks itself down to fill the 16.6 ms frame. Flat out the same
+view is 5.0 ms -- PerfCaps.md 9.) So standing still it is about the same (the frame is bound elsewhere), and while bricks break
 and fall the GPU does **about 1.8 ms less** a frame (1.8-2.7). On the CPU, a hit's patch of the
 chamfered bands went from 0.21 ms to 0.02 and the tier's worst step from 3.6 ms to 2.1.
 

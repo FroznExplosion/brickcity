@@ -320,3 +320,49 @@ dipped to 116 MB free -- the two agree, the second's numbers below.
   2.3-3.2 ms (was 8-15), `bd_rest` 1.5-3.2 (was 4-8) -- what is left of them is the mesh
   handed to the renderer. That run had other chats' probes alongside and dipped to 153 MB
   free, so read it as the shape, not the last decimal.
+- **Clean re-run (2026-11-11):** `--promote` again, on a quiet machine (editor closed, no
+  other Godot runs, 3.9 GB free at the least; peak 69 C, not held back). Only 4 of the 12
+  picks were measured -- the other 8 were "promoted by something else first" (a neighbour
+  laid or the camera aimed at them), so the walked-up-to case has one sample.
+
+  | building | `_promote` | ticks to bricks | worst tick |
+  |---|---|---|---|
+  | 21 (hit) | 1.6 ms | 3 | 37.6 ms: spawn 33.6 |
+  | 3 (hit) | 1.2 ms | 4 | 4.2 ms: stream 2.4 (st_rooms) |
+  | 9 (hit) | 1.2 ms | 4 | 4.1 ms: islands 3.5 |
+  | 14 (walked) | 1.4 ms | 4 | 4.5 ms: bands 1.8, stream 1.4 |
+
+  `sh_mesh` is in no worst tick any more; stream is 2.3-2.7 ms all told (worst ticks were
+  8-29 ms before the port). The 10.8 ms `sh_mesh` / 8.4 ms render outlier did not come
+  back (render 0.5 ms at most), so it was most likely the 153 MB of free RAM and the runs
+  alongside, not the mesher. New: the FIRST hit's spawn took 33.6 ms, the later ones did
+  not -- a one-off warm-up, the "first-hit lag" of the break-lag list, not options 1/2.
+
+## 7. One shared tick clock (2026-11-11 audit item 2, worktree `C:\Users\lbaun\bc-alive`)
+
+`TickClock` (scripts/tick_clock.gd): CityScene begins it each physics tick; every queue gets
+min(its own cap, what is left of 8 ms), 2 ms held back for `IslandManager.tick` (runs last,
+`enter_islands` guarantees it). Spawns, hits, bands, piece meshes and hand-over harvests keep
+"the first unit always runs"; remesh (not hand-overs), shells, demesh, trim and slices run
+nothing once the clock is out, at most 4 ticks running (`TickClock.skip`). A/B:
+`-- --clock=0` (own budgets, as before), `--clock-ms=N`. The `[prof] tick clock` line says
+which, and how many queue-ticks were skipped (17-88 a run).
+
+Editor closed, no other Godot, one run at a time, none held back (peaks 67-89 C).
+Alternated pairs; A = clock on, B = `--clock=0`:
+
+| run | worst tick A | worst tick B | ticks >25 ms A/B | frames >33 ms A/B | invisible worst A/B |
+|---|---|---|---|---|---|
+| city --big --shot 1 | 15.3 | 20.6 | 0/0 | 7/4 | 3/3 |
+| city --big --shot 2 | 12.7 | 13.7 | 0/0 | 4/4 | 3/3 |
+| city --big --shot 3 | 18.5 | 30.5 | 0/1 | 3/5 | 3/3 |
+| big_city --shot 1 | 11.3 | 19.6 | 0/0 | 4/5 | 3/3 |
+| big_city --shot 2 | 12.6 | 14.4 | 0/0 | 13*/4 | 4/3 |
+| big_city --shot 3 | 12.2 | 12.7 | 0/0 | 4/2 | 2/3 |
+| big_city --shot 4 | 17.4 | 12.5 | 0/0 | 3/3 | 3/2 |
+
+Worst tick 14.3 ms mean with the clock, 17.7 without; the one tick over 25 ms was without
+it. Frames over 33 ms are the renderer's (`draw`), not the tick, and do not move. Invisible
+pieces: the same (mean 1.42-1.62 ticks either way). *big_city A2's slow frames were 48 ms of
+idle `process` in a row, not the physics tick -- most likely outside the game. Left on, at
+8 ms; not tuned further.

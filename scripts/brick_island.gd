@@ -135,7 +135,7 @@ var coarse_ms := 0.0
 ## stand-in, shadows only, under `mesh` (IslandManager.want_shadow_proxy). Null
 ## until the first is built; its bricks cast meanwhile.
 var shadow_mesh: MeshInstance3D
-## Alive bricks the shadow was built from, and the tick it was asked for.
+## The chunk version the shadow was built from, and the tick it was asked for.
 var shadow_alive := -1
 var shadow_tick := -1000000
 ## The index slots its bake had when it was last baked again to leave dead faces

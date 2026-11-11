@@ -253,7 +253,12 @@ re-bake (50-80 ms a tower) per hit. A grid beside the mesh instead:
   Each band gets its slot by the instance uniform `grid_light` (slot, cells
   x, y, z), so the one brick material stays shared; bands made later (a hit's
   redraw) get it on `child_entered_tree`. A building is lit again when its
-  count of live bricks changes (one a frame), or by `relight`.
+  chunk version (`BrickWorld.get_chunk_version`) has changed and then stayed
+  put for `LIGHT_QUIET_MS` (350 ms), or has kept changing for
+  `LIGHT_BUSY_MS` (2 s) -- a collapse no longer relights it tick after tick,
+  and a hole in a wall still lets the sky in within half a second (the city
+  `--light` pass times it). One a frame at most, the longest waiting first;
+  `relight` lights one at once.
 - `brick.gdshader`: half a cell out from the face (the air it looks into),
   bilinear in a layer, mixed between two; `AO *= mix(0.1, 1, sky)` (ambient
   and reflections only -- the sun is the shadows' job) and warm emission
