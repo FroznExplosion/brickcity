@@ -396,7 +396,7 @@ func _check_drag_and_drop() -> void:
 	print("\ndrag and drop: parts onto slots, across colours, slots onto slots")
 	_reset()
 	var hb: WorkshopHotbar = _ws.bench._hotbar
-	hb.save_path = "user://_probe_hotbar.json"
+	hb.save_path = "user://dev/_probe_hotbar.json"
 	hb._drop_on_slot(Vector2.ZERO, {"kind": "part", "part": "tile_2x4", "colour": 3, "material": 0}, 6)
 	_ok("a part dropped on a slot lands there, and that slot is selected",
 			hb.slots[6] == ["tile_2x4", 3, 0] and hb.selected == 6, "%s %d" % [hb.slots[6], hb.selected])
@@ -411,14 +411,14 @@ func _check_drag_and_drop() -> void:
 	hb._drop_on_slot(Vector2.ZERO, {"kind": "colour", "colour": 9, "material": 0}, 6)
 	_ok("a colour dropped on a slot paints it", hb.slots[6] == ["brick_1x2", 9, 0])
 	_ok("and the workshop is holding it", _ws.bench._part() == "brick_1x2" and _ws.bench._colour == 9)
-	DirAccess.remove_absolute("user://_probe_hotbar.json")
+	DirAccess.remove_absolute("user://dev/_probe_hotbar.json")
 
 
 func _check_materials() -> void:
 	print("\nmaterials: any colour of a filament, the kinds of wood or metal")
 	_reset()
 	var hb: WorkshopHotbar = _ws.bench._hotbar
-	hb.save_path = "user://_probe_hotbar.json"
+	hb.save_path = "user://dev/_probe_hotbar.json"
 	var metal := -1
 	var tpu := -1
 	for m in BrickWorld.get_material_count():
@@ -475,7 +475,7 @@ func _check_materials() -> void:
 	hb._can_drop_on_material(Vector2.ZERO, data, metal)
 	_ok("a part dragged across a material becomes it, its colour wrapped into that list",
 			int(data.material) == metal and int(data.colour) < BrickWorld.get_material_colour_count(metal))
-	DirAccess.remove_absolute("user://_probe_hotbar.json")
+	DirAccess.remove_absolute("user://dev/_probe_hotbar.json")
 
 
 func _check_paint_brush() -> void:
@@ -556,7 +556,7 @@ func _check_hotbar() -> void:
 the toolbar: slots, colours, pick-block, and every part findable")
 	_reset()
 	var hb: WorkshopHotbar = _ws.bench._hotbar
-	hb.save_path = "user://_probe_hotbar.json"
+	hb.save_path = "user://dev/_probe_hotbar.json"
 	hb.select(3)
 	hb.set_part("slope_2x4")
 	hb.set_colour(8)
@@ -596,13 +596,13 @@ the toolbar: slots, colours, pick-block, and every part findable")
 	_ok("searching 2x4 finds every 2x4", found.has("brick_2x4") and found.has("plate_2x4")
 			and found.has("slope_2x4") and not found.has("brick_2x2"), "%s" % [found])
 	hb._search.text = ""
-	DirAccess.remove_absolute("user://_probe_hotbar.json")
+	DirAccess.remove_absolute("user://dev/_probe_hotbar.json")
 
 
 func _check_save_new() -> void:
 	print("\nshift F5 saves a NEW build to the library, never over an old one")
 	_reset()
-	var dir := "user://_probe_builds/"
+	var dir := "user://dev/_probe_builds/"
 	for f in DirAccess.get_files_at(dir) if DirAccess.dir_exists_absolute(dir) else []:
 		DirAccess.remove_absolute(dir + f)
 	_ws.bench._builds_dir = dir

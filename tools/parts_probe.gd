@@ -21,7 +21,7 @@ extends SceneTree
 ##   folders     parts read from folders; the folder says official or custom, never the
 ##               file; a broken file and a duplicate id left out; the creator is a facet
 
-const TMP := "user://parts_probe/"
+const TMP := "user://dev/parts_probe/"
 
 var _pass := 0
 var _fail := 0

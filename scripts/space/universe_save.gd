@@ -12,9 +12,9 @@ extends RefCounted
 ## rename one or change what it means without a migration and a new VERSION.
 
 const VERSION := 1
-const ROOT := "user://saves/"
+const ROOT := UserPaths.SAVES
 ## The gates': the player's own saves are never touched by one.
-const TEST_ROOT := "user://saves_test/"
+const TEST_ROOT := UserPaths.DEV + "saves_test/"
 const LAST := "last.cfg"
 
 ## The universe asked for this run (a reloaded scene's), over the last one played.

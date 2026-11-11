@@ -1144,7 +1144,7 @@ func _check_pads() -> void:
 			and absf(float(edited["height"]) - 4.5) < 0.001)
 
 	var World := preload("res://scripts/terrain_world.gd")
-	var path := "user://probe_world.json"
+	var path := "user://dev/probe_world.json"
 	_ok("a world saves", World.save_world(path, 1234, 0.25) == OK)
 	BrickTerrain.clear_pads()
 	var back: Dictionary = World.load_world(path)
@@ -1170,7 +1170,7 @@ func _check_pads() -> void:
 	# A world that has never been edited is a seed and nothing else, and
 	# asking for one must not be an error.
 	_ok("a missing world file is not a failure",
-		World.load_world("user://no_such_world.json").is_empty())
+		World.load_world("user://dev/no_such_world.json").is_empty())
 
 	# SITES the city reads (§21.5): a street-grid site carries its own
 	# centre, footprint, skirt and room program, and all of it has to come

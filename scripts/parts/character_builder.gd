@@ -8,14 +8,14 @@ extends CanvasLayer
 ##   Up / Down       pick a slot (torso, head, arms, hands, legs, hat)
 ##   Left / Right    the part before / after in that slot, of those that fit there
 ##   R               roll a whole new figure
-##   S               save it as a design (user://parts/designs/<name>.json)
+##   S               save it as a design (user://library/parts/designs/<name>.json)
 ##   Enter           put it in the world (`spawned`)
 ##   Esc             close
 
 signal spawned(f: Figure)
 signal closed
 
-const DESIGN_DIR := "user://parts/designs/"
+const DESIGN_DIR := UserPaths.LIBRARY + "parts/designs/"
 
 var catalog: PartCatalog
 var figure: Figure

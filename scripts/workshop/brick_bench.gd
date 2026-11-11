@@ -499,7 +499,7 @@ func _gate_ok(what: String, cond: bool, detail: String = "") -> void:
 ## the aiming, the preview, the undo stack shared with bricks, and the reload.
 func _run_gate() -> void:
 	print("[workshop] a staircase, built here; fixtures, as saves carry them")
-	_save_path = "user://_workshop_gate.json"
+	_save_path = UserPaths.DEV + "_workshop_gate.json"
 
 	# Two courses of a wall, through the real placement path. The part is named
 	# rather than whatever happens to be in hand: the toolbar remembers what the

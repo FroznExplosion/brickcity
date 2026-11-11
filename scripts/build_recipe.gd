@@ -1043,20 +1043,20 @@ static func _strings(a) -> PackedStringArray:
 ## builds from (Docs/Workshop.md, Stage E), not things dropped into the city
 ## whole; rooms are filed in a sub-folder a room kind.
 const LIBRARY_DIRS := {
-	"building": ["res://content/base/builds/", "user://builds/"],
-	"room": ["res://content/base/rooms/", "user://rooms/"],
-	"item": ["res://content/base/items/", "user://items/"],
+	"building": ["res://content/base/builds/", UserPaths.LIBRARY + "builds/"],
+	"room": ["res://content/base/rooms/", UserPaths.LIBRARY + "rooms/"],
+	"item": ["res://content/base/items/", UserPaths.LIBRARY + "items/"],
 	# Made in the asset workshop (Docs/AssetWorkshop.md): bricks plus meta.asset.
-	"gun": ["res://content/base/guns/", "user://guns/"],
-	"mech": ["res://content/base/mechs/", "user://mechs/"],
-	"figure": ["res://content/base/figures/", "user://figures/"],
+	"gun": ["res://content/base/guns/", UserPaths.LIBRARY + "guns/"],
+	"mech": ["res://content/base/mechs/", UserPaths.LIBRARY + "mechs/"],
+	"figure": ["res://content/base/figures/", UserPaths.LIBRARY + "figures/"],
 }
 ## The kinds made in the asset workshop, not the building workshop: each workshop's
 ## Open lists only its own.
 const ASSET_KINDS := ["gun", "mech", "figure"]
 ## The workshop's one quick-save slot (F5 there), and what the city places
 ## when it is asked for a build without being told which (`--build`, P).
-const QUICK_SAVE := "user://workshop_build.json"
+const QUICK_SAVE := UserPaths.WORKSHOP + "quick_build.json"
 
 
 ## The folders for a kind: the game's own first, then every other content

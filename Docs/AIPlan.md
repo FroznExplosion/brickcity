@@ -152,7 +152,7 @@ frame time unchanged at 16.6 ms; `--stress` 200 mean 18.4 ms against 18.2.
 - **`loopback_probe` has a pieces phase:** real physics on the host, a client with no bodies
   applying the stream through a reordering wire, chunk ids deliberately different. Detach, topple,
   shear and rest all arrive; every piece identical, every landmark at rest where the host's is.
-- **F5 saves the city, F9 loads it** (`user://checkpoint.area`). Load reloads the scene and
+- **F5 saves the city, F9 loads it** (`user://profile/checkpoint.area`). Load reloads the scene and
   replays the save into the recipes; damaged buildings get their bake and bodies *after* the
   replay, so they start from the damaged building. Gate: city `-- --checkpoint` saves 45 frames
   into a collapse (1,718 commands, 92 pieces, 73 of them still falling), reloads, and checks every
@@ -804,7 +804,7 @@ of P9, on ai-p9:
   opposite of the demolisher: the buildings are safe, 80 % of a reinforcement goes inside.
 - **The character save** (`scripts/character_save.gd`, A14): the character, the mech, the guns,
   the missions, the threat profile and the aggro history (pilot and mech shares), as versioned
-  JSON at `user://character.json`. A gun is kept as what made it — class, seed, tier — and made
+  JSON at `user://profile/character.json`. A gun is kept as what made it — class, seed, tier — and made
   again the same; a file from a newer version is refused rather than half-read.
   `take_encounter(commander, aggro)` at the end of one; `profile()` for the next commander.
 - **The friendly side:** a `Commander` on the player's team, its `rally` kept on the player, sends

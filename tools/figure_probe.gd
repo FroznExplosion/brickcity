@@ -17,7 +17,7 @@ extends SceneTree
 ##              walking, the knee folds back as its leg swings through
 ##   back       Make a mech after: a mech's parts, a mech's reference
 
-const DIR := "user://_probe_figure/"
+const DIR := "user://dev/_probe_figure/"
 
 var _pass := 0
 var _fail := 0
@@ -46,8 +46,8 @@ func _tick() -> void:
 	if _frames != 2:
 		return
 	_ws.set_process(false)
-	_ws.bench._hotbar.save_path = "user://_probe_figure_hotbar.json"
-	_ws.toolbars_save = "user://_probe_figure_toolbars.json"
+	_ws.bench._hotbar.save_path = "user://dev/_probe_figure_hotbar.json"
+	_ws.toolbars_save = "user://dev/_probe_figure_toolbars.json"
 	for yaw in 2:
 		var n := BrickPalette.variant_name("brick_1x4", yaw, false)
 		if BrickPalette.size_of(n).x == 4:

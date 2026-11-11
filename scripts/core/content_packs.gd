@@ -21,7 +21,7 @@ extends RefCounted
 ##     dlc    res://content/<id>/     ours, shipped beside the game (or as a .pck)
 ##     mod    user://mods/<id>/       anyone's, dropped in by the player
 ##
-## and the player's own saved work (user://builds/ and the rest) after them all.
+## and the player's own saved work (user://library/builds/ and the rest) after them all.
 ## Nothing is copied or registered anywhere else: a library asks here for its
 ## folders (`dirs("items")`) and reads every one, so what is in a pack shows up
 ## wherever the game's own does -- the workshop's Open list, the item catalogue,
@@ -36,7 +36,7 @@ extends RefCounted
 
 const BASE_ID := "base"
 const SHIPPED_ROOT := "res://content/"
-const MODS_ROOT := "user://mods/"
+const MODS_ROOT := UserPaths.MODS
 const MANIFEST := "pack.json"
 ## Which mods are off, beside them: [packs] disabled = ["id", ...].
 const STATE_FILE := "packs.cfg"

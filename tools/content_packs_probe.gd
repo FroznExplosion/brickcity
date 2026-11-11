@@ -17,9 +17,9 @@ extends SceneTree
 ##             off is left out, and says why.
 ##   archive   a mod as one .zip is mounted and read the same way.
 ##
-## It builds its mods in user://_probe_mods/ and never reads the player's.
+## It builds its mods in user://dev/_probe_mods/ and never reads the player's.
 
-const ROOT := "user://_probe_mods/"
+const ROOT := "user://dev/_probe_mods/"
 
 var _pass := 0
 var _fail := 0
@@ -62,7 +62,7 @@ func _check_base() -> void:
 	_ok("the shipped buildings are found in it", lib.has("res://content/base/builds/cottage.json"), "%s" % [lib])
 	_ok("a shipped path names its pack", ContentPacks.pack_of("res://content/base/builds/cottage.json") == "base"
 			and ContentPacks.is_official("res://content/base/builds/cottage.json"))
-	_ok("the player's own work is in no pack", ContentPacks.pack_of("user://builds/mine.json") == "")
+	_ok("the player's own work is in no pack", ContentPacks.pack_of("user://library/builds/mine.json") == "")
 	_ok("the tags table is read", AssetTags.levels().size() >= 3, "%d levels" % AssetTags.levels().size())
 	_ok("the worlds are listed", TerrainWorld.list_worlds().has("city"), "%s" % [TerrainWorld.list_worlds()])
 	var cat := PartCatalog.load_all()
@@ -133,7 +133,7 @@ func _check_mod() -> void:
 	var lib := BuildRecipe.library("building")
 	_ok("its building is in the building library, from its own folder", lib.has(hut), "%s" % [lib])
 	_ok("the game's buildings come before it", lib.find("res://content/base/builds/cottage.json") < lib.find(hut))
-	_ok("the player's folder is still where a build is saved", BuildRecipe.player_dir("building") == "user://builds/"
+	_ok("the player's folder is still where a build is saved", BuildRecipe.player_dir("building") == "user://library/builds/"
 			and BuildRecipe.shipped_dir("building") == "res://content/base/builds/")
 	var e := AssetCatalog.entry("probe_mug")
 	_ok("its item is in the item catalogue", not e.is_empty() and e.path == ROOT + "probe_mod/items/probe_mug.json", "%s" % [e])

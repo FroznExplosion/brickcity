@@ -1127,7 +1127,7 @@ earlier 21-a-brick setting existed for that reason; the anisotropy is what repla
 `shaders/print_finish.gdshaderinc`'s two constants in memory, and Godot recompiles every shader that
 includes it — whoever made the material (city, workshop, sandbox, impostor copies). `finish` 1 is
 **injection moulded**: no lines, every face the same glossy skin (roughness × 0.5). Remembered in
-`user://print_look.cfg`. Workshop: the **Finish** menu. City: **I** steps glass → smooth PEI →
+`user://dev/print_look.cfg`. Workshop: the **Finish** menu. City: **I** steps glass → smooth PEI →
 textured PEI → moulded.
 
 Pictures: `tools/print_look_shot.gd` (not headless) writes each look from the side, top, below and

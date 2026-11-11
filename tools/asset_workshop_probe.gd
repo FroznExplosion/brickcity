@@ -77,8 +77,8 @@ func _tick() -> void:
 		return
 	_ws.set_process(false)
 	# Nothing a probe does may land in the player's own files.
-	_ws.bench._hotbar.save_path = "user://_probe_asset_hotbar.json"
-	_ws.toolbars_save = "user://_probe_asset_toolbars.json"
+	_ws.bench._hotbar.save_path = "user://dev/_probe_asset_hotbar.json"
+	_ws.toolbars_save = "user://dev/_probe_asset_toolbars.json"
 	print("asset workshop probe (phases 1 and 2)")
 	_units()
 	_photo()
@@ -397,7 +397,7 @@ func _guide() -> void:
 	var doc := GLTFDocument.new()
 	var state := GLTFState.new()
 	doc.append_from_scene(scene, state)
-	var path := ProjectSettings.globalize_path("user://_probe_guide.glb")
+	var path := ProjectSettings.globalize_path("user://dev/_probe_guide.glb")
 	doc.write_to_filesystem(state, path)
 	scene.free()
 	var i: int = _ws.load_guide(path, 160.0)
@@ -478,7 +478,7 @@ func _export() -> void:
 	_ws.toggle_point([30, 2, 40.5], "mount", "stock", "stock.tang")
 	var sheet: Dictionary = _ws.export_sheet()
 	# Kept for running the part kit on by hand: the chain past this probe.
-	var f := FileAccess.open("user://_probe_export.json", FileAccess.WRITE)
+	var f := FileAccess.open("user://dev/_probe_export.json", FileAccess.WRITE)
 	f.store_string(JSON.stringify(sheet, " "))
 	f.close()
 	var by := {}
@@ -970,7 +970,7 @@ func _round6() -> void:
 func _round7() -> void:
 	# Saved as a gun, in the guns' library, and opened back with everything.
 	_ok("what is made here is a gun", _ws.bench.recipe.kind == "gun", _ws.bench.recipe.kind)
-	_ok("guns have a library of their own", BuildRecipe.player_dir("gun") == "user://guns/")
+	_ok("guns have a library of their own", BuildRecipe.player_dir("gun") == "user://library/guns/")
 	var m: WorkshopMenu = _ws.bench._menu
 	var shown := []
 	for i in m._open_filter.item_count:
@@ -986,7 +986,7 @@ func _round7() -> void:
 	_lay("brick_2x4", Vector3i(30, 1, 20))
 	_ws.extra_studs.append({"part": "grip", "at": [31.0, 3.0, 21.0], "dir": [0.0, 1.0, 0.0], "colour": 0, "mat": 0})
 	_ws._store_asset_meta()
-	_ws.bench._builds_dir = "user://_probe_guns/"
+	_ws.bench._builds_dir = "user://dev/_probe_guns/"
 	var path: String = _ws._save_as("Probe Gun")
 	_ok("Save As writes the gun", path.ends_with("probe_gun.json") and FileAccess.file_exists(path), path)
 	_ws.bench._new_build()
@@ -1011,7 +1011,7 @@ func _round8() -> void:
 		_ws.part_width[spec[0]] = spec[1]
 		_ws.sketch_region(spec[2])
 	_ws.select_part(0)
-	var dir := "user://_probe_gun_game/"
+	var dir := "user://dev/_probe_gun_game/"
 	var out: Dictionary = _ws.export_game(dir)
 	_ok("export to game writes a scene a part", out.get("ok", false) and (out.parts as Dictionary).size() == 4,
 			str(out))
@@ -1466,7 +1466,7 @@ func _form() -> void:
 	_ok("one Z fills the carve", _volume() == both, "%d cells" % _volume())
 	# Kept with the gun: saved and opened back, the form lays the same bricks.
 	_ws._store_asset_meta()
-	_ws.bench._builds_dir = "user://_probe_guns/"
+	_ws.bench._builds_dir = "user://dev/_probe_guns/"
 	var path: String = _ws._save_as("Probe Form")
 	_ws.bench._new_build()
 	var opened: bool = _ws.bench._open_path(path)
@@ -1627,7 +1627,7 @@ func _sideways() -> void:
 			and absf(box.size.z - BrickPalette.PLATE_M) < 1e-3, str(box))
 	var stats: Dictionary = _ws.triangle_stats()
 	_ok("the triangle count has it", int(stats.total) > int(flat.total), "%d -> %d" % [flat.total, stats.total])
-	var dir := "user://_probe_gun_side/"
+	var dir := "user://dev/_probe_gun_side/"
 	var out: Dictionary = _ws.export_game(dir)
 	var scene: PackedScene = ResourceLoader.load(out.parts.body, "", ResourceLoader.CACHE_MODE_IGNORE)
 	var body: Node3D = scene.instantiate()
@@ -1716,7 +1716,7 @@ func _shells() -> void:
 	var stats: Dictionary = _ws.triangle_stats()
 	_ok("counted: the shell, not the bricks it covers", int(stats.parts.body.shell) == int(_ws._shell_tris.body)
 			and int(stats.parts.body.studs) == 0, str(stats.parts.body))
-	var dir := "user://_probe_gun_shell/"
+	var dir := "user://dev/_probe_gun_shell/"
 	var out: Dictionary = _ws.export_game(dir)
 	var body: Node3D = (ResourceLoader.load(out.parts.body, "", ResourceLoader.CACHE_MODE_IGNORE) as PackedScene).instantiate()
 	var drawn := 0
@@ -2252,7 +2252,7 @@ func _pick_and_move() -> void:
 			and _ws.bench.undo_stack.size() == groups + 1)
 	# A guide: picked, moved by the gizmo, the adjust kept and saved.
 	_ws._reset_space()
-	var obj := "user://_probe_guide_cube.obj"
+	var obj := "user://dev/_probe_guide_cube.obj"
 	var fo := FileAccess.open(obj, FileAccess.WRITE)
 	fo.store_string("o cube\nv 0 0 0\nv 4 0 0\nv 4 1 0\nv 0 1 0\nv 0 0 1\nv 4 0 1\nv 4 1 1\nv 0 1 1\n"
 			+ "f 1 4 3 2\nf 5 6 7 8\nf 1 2 6 5\nf 4 8 7 3\nf 1 5 8 4\nf 2 3 7 6\n")
@@ -2613,11 +2613,11 @@ func _nudges() -> void:
 	_ok("snap to studs lines a laid block-out up with the cells", int(p.x) % 5 == 0 and int(p.y) % 2 == 0 and int(p.z) % 5 == 0, str(p))
 	_ws.sculpt_clear()
 	# OBJ (a quad, a fan) and STL (text) read as triangles.
-	var obj := "user://_probe_model.obj"
+	var obj := "user://dev/_probe_model.obj"
 	var fo := FileAccess.open(obj, FileAccess.WRITE)
 	fo.store_string("o q\nv 0 0 0\nv 1 0 0\nv 1 1 0\nv 0 1 0\nvn 0 0 1\nf 1//1 2//1 3//1 4//1\nf -4 -2 -1\n")
 	fo.close()
-	var stl := "user://_probe_model.stl"
+	var stl := "user://dev/_probe_model.stl"
 	var fs := FileAccess.open(stl, FileAccess.WRITE)
 	fs.store_string("solid t\nfacet normal 0 0 1\nouter loop\nvertex 0 0 0\nvertex 2 0 0\nvertex 0 3 0\nendloop\nendfacet\nendsolid t\n")
 	fs.close()

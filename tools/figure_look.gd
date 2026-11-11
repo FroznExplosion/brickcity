@@ -6,11 +6,11 @@ extends SceneTree
 ##
 ##     godot --path . --script res://tools/figure_look.gd
 ##
-## Writes user://figure_look/*.png. Saves nothing of the player's: its build and parts go in
+## Writes user://dev/figure_look/*.png. Saves nothing of the player's: its build and parts go in
 ## its own folder, the workshop's autosave is off.
 
-const DIR := "user://_figure_look/"
-const OUT := "user://figure_look/"
+const DIR := "user://dev/_figure_look/"
+const OUT := "user://dev/figure_look/"
 
 var _ws
 var _frames := 0
@@ -30,8 +30,8 @@ func _tick() -> void:
 	if _frames != 3:
 		return
 	_ws._no_autosave = true
-	_ws.bench._hotbar.save_path = "user://_figure_look_hotbar.json"
-	_ws.toolbars_save = "user://_figure_look_toolbars.json"
+	_ws.bench._hotbar.save_path = "user://dev/_figure_look_hotbar.json"
+	_ws.toolbars_save = "user://dev/_figure_look_toolbars.json"
 	_go()
 
 

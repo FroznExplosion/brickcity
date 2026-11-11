@@ -7879,7 +7879,7 @@ func _wire_box(im: ImmediateMesh, xform: Transform3D, size: Vector3, col: Color)
 ## block ids renumbered, so neither ids nor content hashes are the thing to
 ## compare.
 ## Where F5 writes the checkpoint and F9 reads it. Docs/AIPlan.md P0 step 5.
-const CHECKPOINT_PATH := "user://checkpoint.area"
+const CHECKPOINT_PATH := UserPaths.PROFILE + "checkpoint.area"
 ## Set on the tree's root, which outlives reload_current_scene: the path the
 ## scene about to load has to restore.
 const CHECKPOINT_META := &"city_checkpoint"

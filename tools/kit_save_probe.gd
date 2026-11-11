@@ -211,7 +211,7 @@ func _file() -> void:
 	lo.set_slot(0, _gun(5, &"rifle"))
 	var s := CharacterSave.new()
 	s.loadout = CharacterSave.loadout_dict(lo)
-	var path := "user://kit_save_probe.json"
+	var path := "user://dev/kit_save_probe.json"
 	s.save(path)
 	var back := CharacterSave.load_from(path)
 	_ok("the save file keeps the kit", back.loadout.get("slots", []).size() == Loadout.SLOTS

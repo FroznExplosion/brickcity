@@ -20,7 +20,7 @@ the folder and the content is gone.
 | `base` | `res://content/base/` | the game |
 | `dlc` | `res://content/<id>/` (in the project, or a `.pck` shipped beside the game) | us |
 | `mod` | `user://mods/<id>/` (a folder), or `user://mods/<id>.zip` / `.pck` | anyone |
-| the player's own work | `user://builds/`, `user://items/` ... | the player |
+| the player's own work | `user://library/<same folders>/` (section 10) | the player |
 
 Read in that order. `user://` is
 `%APPDATA%\Godot\app_userdata\Brickcity\` on Windows.
@@ -189,14 +189,7 @@ Models and print files are in `Documents\brickcity-print`, outside the project.
 **Found, left alone, worth doing** (each is its own change; the first two touch
 every chat's branch, so they want a quiet moment):
 
-1. **`user://` is flat.** Settings, the character, eight libraries, workshop
-   layouts, tallies, shots and about forty probe leftovers (`_probe_*`,
-   `_t.obj`, `zz_*.png`) share one folder, 171 MB. Proposed:
-   `user://library/` holding the player's own work *as a pack* (same folders, so
-   sharing your builds is zipping it), `user://profile/` (character),
-   `user://workshop/` (layouts, autosave, quick save), `user://exports/`,
-   `user://dev/` (probe files, shots, test saves). Needs one path table
-   (`UserPaths`) and a one-time move of existing files.
+1. ~~`user://` is flat.~~ Done: section 10.
 2. **`scripts/` has 121 files at its top and `tools/` 255.** The top of
    `scripts/` is mostly four groups that already have a name: build/workshop,
    terrain and water, rooms and interiors, rendering. `tools/` mixes probes,
@@ -217,3 +210,41 @@ every chat's branch, so they want a quiet moment):
    Fine while that is so; worth knowing it is the whole reason it is here.
 7. `scripts/upload_ledger.gd.uid` and `tools/flashlight_probe.gd.uid` are
    untracked in the main folder: their scripts were committed without them.
+
+## 10. The player's folder
+
+`scripts/core/user_paths.gd` (`UserPaths`). Probe: `tools/user_paths_probe.gd`.
+
+```
+user://
+  settings.cfg     options
+  saves/           universes, a folder each
+  mods/            content packs dropped in (section 1)
+  library/         what the player has MADE, shaped like a pack:
+                   builds/ rooms/ items/ guns/ mechs/ figures/ parts/
+  profile/         who the player is: character.json, checkpoint.area,
+                   dressing.json, tactics_tally.json
+  workshop/        how the workshops were left: hotbars, toolbars, quick
+                   saves, autosave, catalogue filter
+  exports/         files written to take elsewhere: assets/ parts/
+  dev/             nothing a player needs: probe files, shots, test saves,
+                   look tuning. Safe to delete whole.
+```
+
+- **`library/` has a pack's folders on purpose.** Copy it, add a `pack.json`,
+  and it is a mod: that is how a player shares what they built.
+- **A new path goes in one of these**, named from `UserPaths`
+  (`UserPaths.PROFILE + "x.json"`), never at the top of `user://`. Naming it
+  from `UserPaths` is also what moves an old layout over before the file is
+  read: loading the script that names the path loads `UserPaths`, which runs
+  the move once a run.
+- **Probes and shots write under `user://dev/`**, a `_probe_` name as before.
+- **The move** (`UserPaths.MOVES`, old place -> new) runs at every start and is
+  safe beside an older build of the game (another chat's branch) still writing
+  the old places: a file is moved only where the new place has none of its
+  name, so nothing is written over, and what the older build writes later is
+  picked up next start. A file that loses to one already there stays where it
+  was.
+- Until a branch has merged this, its game reads the OLD folders, which are
+  now empty: its workshop will not list the player's builds. Merging main
+  fixes it; nothing is lost.

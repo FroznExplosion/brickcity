@@ -43,7 +43,7 @@ Builds on: [Parts/joints.md](Parts/joints.md) (joints, the one pin, hands),
 One record shape for every family. One folder per part:
 
     res://content/base/parts/<family>/<id>/part.json      official, shipped
-    user://parts/custom/<id>/part.json       made by a player, or downloaded (section 7)
+    user://library/parts/<id>/part.json       made by a player, or downloaded (section 7)
 
 ```
 id            "korr_arm_heavy_01"        unique; a custom part's is "<creator>.<name>.<hash8>"
@@ -197,7 +197,7 @@ together by the generator, and the generator only ever puts together parts that 
 3, layers 1 and 2). Which parts were open is kept only as the workshop's own session (its
 autosave), which the game never reads.
 
-A player's part is saved by name in `user://parts/custom/`, apart from the official ones. Export
+A player's part is saved by name in `user://library/parts/`, apart from the official ones. Export
 writes one file, a **part package** (`.bcpart`, a zip):
 
 | In it | Why |
@@ -213,7 +213,7 @@ writes one file, a **part package** (`.bcpart`, a zip):
 part from another player must never run code here. The game builds the part's node from the
 arrays. A package that fails its hash, its size limit or the schema is refused.
 
-Downloaded, it lands in `user://parts/custom/` like the player's own, with everything it came with.
+Downloaded, it lands in `user://library/parts/` like the player's own, with everything it came with.
 
 ### In a match
 
@@ -356,7 +356,7 @@ interfaces.
 
 - **Save** (Ctrl S, Save As) writes the build -- the workshop's own file, for opening it here
   again; the game never reads it -- and then **every part on its own**:
-  `<parts dir>/<id>/part.json` + `part.scn`. The parts dir is `user://parts/custom/` for the
+  `<parts dir>/<id>/part.json` + `part.scn`. The parts dir is `user://library/parts/` for the
   player's builds and `res://content/base/parts/gun/` for a shipped one (written only from the editor).
   `AssetWorkshop.save_parts`.
 - A part's **id** is made on its first save and kept in the build (`meta.asset.part_ids`):
@@ -477,7 +477,7 @@ interfaces.
 ### Stage 6 as built
 
 - **Designs** (`PartDesign`, `scripts/parts/part_design.gd`): a file per design in
-  `res://content/base/parts/designs/` (shipped) or `user://parts/designs/` (the player's), naming parts slot
+  `res://content/base/parts/designs/` (shipped) or `user://library/parts/designs/` (the player's), naming parts slot
   by slot: `{"fixed": id}`, `{"pool": query}` or `{"empty": true}`; a slot not named is rolled
   from everything that fits. A design names parts, it never holds them. A joined pair is two
   fixed slots; John is a figure design with his torso and head fixed and `neck/hat` a pool of
@@ -593,14 +593,14 @@ interfaces.
   `manifest.json` (format, id, rev, each file's sha256, and the **content hash**: the sha256 of
   the content files' hashes, the part's identity across machines).
 - **Export**: Asset > "Export this build's parts to share" writes each saved part of the build to
-  `user://parts/export/<id>.bcpart`.
+  `user://exports/parts/<id>.bcpart`.
 - **Import**: Asset > "Import a part package..." (`PartPackage.import_file`). Refused: a package
   over 8 MB or a file in it over 16 MB; any file but the five (a `.scn`, `.tscn`, `.gd` ...);
   a file that does not match its hash; a record that breaks the schema (`PartRecord.problems`);
   an id a folder cannot have; a shipped part's id; a mesh with a node of another type, a parent
   out of order, a bad place or name, an array of the wrong kind or length, bones or weights, an
   index out of range, more than 512 nodes or 2 million vertices, a multimesh buffer not whole.
-- What passes goes in `user://parts/custom/<id>/`: `part.json` (always `custom`, whatever it says;
+- What passes goes in `user://library/parts/<id>/`: `part.json` (always `custom`, whatever it says;
   the creator kept), a `part.scn` **built here from the arrays** by our own code, `package.json`
   (the manifest, so its hash is known: `PartPackage.hash_of`) and the thumbnail. The same
   package again changes nothing; a newer rev replaces the part; an older one is refused.
@@ -646,7 +646,7 @@ netcode only has to carry dictionaries and byte chunks:
   1.6 stud pitches of the part's mount or any socket (it would cross where the next part turns);
   not more than 2 pitches out past the part's own bounds (the space it swings through). Each
   brick adds 0.9 kg, a plate 0.3 (`mass()`).
-- **Owned**: kept in `user://parts/dressing.json` by owner and part id, so it goes with the part
+- **Owned**: kept in `user://profile/dressing.json` by owner and part id, so it goes with the part
   to whatever mech it is put on and is never another player's. A newer rev of a part that moved
   a stud leaves that brick off, and says which (`apply` returns them).
 - **In the city**: on foot by your own mech of parts, **Ctrl B** puts a brick on the stud
@@ -674,7 +674,7 @@ netcode only has to carry dictionaries and byte chunks:
   reference drawn (each part's bone to what it hangs from, legs to the ground), every joint's
   mount and socket laid ready, the J panel offering its sockets, Save writing nine `figure`
   parts. Try on (F7) takes figure parts. `figure` is a recipe and asset kind
-  (`user://figures/`).
+  (`user://library/figures/`).
 - **Paths by socket names**: a part's plan path runs by the sockets from the root -- the hat
   on the head is `neck/hat` (`path_of` had made it `head/hat`; the figure probe caught it).
 - **`Figure`** (`scripts/parts/figure.gd`) in the game: `Figure.make(build)` from
@@ -718,7 +718,7 @@ netcode only has to carry dictionaries and byte chunks:
   widest at its own run, 3.5 m/s (a mech's is 9).
 - **Looked at** (`tools/figure_look.gd`, windowed: the workshop's side, front and 3D views and
   the figure standing, mid-stride, at full reach and with an elbow bent, into
-  `user://figure_look/`). What the pictures showed, and what changed:
+  `user://dev/figure_look/`). What the pictures showed, and what changed:
   - mid-stride the swinging leg's knee folds back, its foot level; at full reach the legs
     scissor with both feet flat; the elbow folds the forearm and hand forward;
   - a figure's walk had used the mech's 9 m/s scale, so at walking pace its knees barely moved:
@@ -755,7 +755,7 @@ netcode only has to carry dictionaries and byte chunks:
   in a preview and its slots; Up / Down picks a slot, Left / Right steps through the parts that
   fit there -- only those (a mech's arm never; a head with nowhere for the hat not while a hat
   is on) -- R rolls a whole new one (custom parts too: it is the player's), S saves it as a
-  design of fixed slots in `user://parts/designs/`, Enter puts it in the world (following you on
+  design of fixed slots in `user://library/parts/designs/`, Enter puts it in the world (following you on
   foot, else walking its circle). Saved characters come back with Ctrl T as any figure design.
 - Probed in `tools/character_probe.gd` (16).
 
@@ -790,7 +790,7 @@ netcode only has to carry dictionaries and byte chunks:
   and the roster's normal ones -- with its walk, knees and ankles; a scripted pass keeps the boxes
   its numbers were taken with. The chassis is what `MechPilot` hides in the cockpit
   (`Mech.canopy` is now any node): the eye is inside its bricks.
-- **Looked at** (`tools/mech_look.gd`, windowed, `user://mech_look/`): beside a wall with a
+- **Looked at** (`tools/mech_look.gd`, windowed, `user://dev/mech_look/`): beside a wall with a
   second-storey window; from the cockpit the window is square ahead at eye level, the gun arm's
   forearm reaching out below; walking, the legs scissor with the feet level and the knee folds.
 

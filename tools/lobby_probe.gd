@@ -17,7 +17,7 @@ extends SceneTree
 ##              together with one
 ##   steam      without GodotSteam, everything comes from the host
 
-const DIR := "user://_probe_lobby/"
+const DIR := "user://dev/_probe_lobby/"
 
 var _pass := 0
 var _fail := 0
