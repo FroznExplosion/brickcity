@@ -456,6 +456,13 @@ func _check_handover() -> void:
 			"worst %d tick(s), %d of %d hand-overs" % [hs.gap_worst, hs.gap_handovers, hs.count])
 	_ok("no double: a building stops drawing what it shed", int(hs.double_worst) <= 1,
 			"worst %d tick(s), %d of %d hand-overs" % [hs.double_worst, hs.double_handovers, hs.count])
+	# A building coming back from its coarse mesh (one path for a far
+	# building, PerfCaps.md 5) has no bands to patch until they are built
+	# again under it: the coarse mesh draws what it shed until then. A few
+	# ticks by design; this bounds it.
+	_ok("coming back from its coarse mesh, it draws what it shed for a few ticks at most",
+			int(hs.coarse_worst) <= 8,
+			"worst %d tick(s), %d of %d hand-overs" % [hs.coarse_worst, hs.coarse_handovers, hs.count])
 
 
 ## Storey by storey (CityScene._gravity_fail): what is left of a storey has to

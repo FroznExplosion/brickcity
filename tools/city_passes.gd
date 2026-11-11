@@ -7396,7 +7396,13 @@ func _run_overview() -> void:
 		print("[overview]   without %-44s (x%3d): GPU %5.2f ms less; %s" % [r[1], r[2], r[0],
 				_overview_line(r[3])])
 	# The far tier for buildings in bricks (_tend_far_coarse): off, then on.
+	# Off, each building builds its bake and bands again under its coarse
+	# mesh, which goes once they are all in.
 	City.far_coarse_enabled = false
+	for i in 900:
+		await city.get_tree().physics_frame
+		if city.drawing._far_coarse.is_empty() and i > 30:
+			break
 	await _frames(30)
 	var off := await _overview_measure()
 	var img_off := city.get_viewport().get_texture().get_image()
@@ -7417,30 +7423,40 @@ func _run_overview() -> void:
 	_gate_ok("far buildings in bricks are drawn coarse, and the picture is the same",
 			not city.drawing._far_coarse.is_empty() and _image_difference(img_off, img_on) < 0.01,
 			"%d coarse" % city.drawing._far_coarse.size())
-	# A hit on one: its bands at once, coarse again once quiet.
+	# Drawn coarse, a far building has given its bands and its bake back
+	# (one path for a far building, PerfCaps.md 5).
+	var banded := 0
+	var baked := 0
+	for id in city.drawing._far_coarse:
+		if city._brick_bands.has(id):
+			banded += 1
+		var cb := city.registry.get_building(id)
+		if cb != null and city.world.has_bake(cb.chunk):
+			baked += 1
+	_gate_ok("a building drawn coarse holds no bands and no bake", banded == 0 and baked == 0,
+			"%d with bands, %d with a bake, of %d" % [banded, baked, city.drawing._far_coarse.size()])
+	# A hit on one shows within a few ticks: its coarse mesh made again on a
+	# worker, the old one drawn until it lands. It was "at once", its bands
+	# kept built underneath and shown; they are not kept any more.
 	if not city.drawing._far_coarse.is_empty():
 		var hit_id: int = city.drawing._far_coarse.keys()[0]
 		var hb := city.registry.get_building(hit_id)
 		var box := CityPlacer.box_of(hb)
+		var coarse_node: MeshInstance3D = city.drawing._far_coarse[hit_id]
+		var mesh_was: Mesh = coarse_node.mesh
+		var alive_was := city.world.get_alive_block_count(hb.chunk)
 		city._blast(Vector3(box.position.x, box.position.y + 3.0, box.get_center().z), 1.5)
-		var back := false
+		var shown := -1
 		for i in 60:
 			await city.get_tree().physics_frame
-			if not city.drawing._far_coarse.has(hit_id):
-				back = true
+			if is_instance_valid(coarse_node) and coarse_node.mesh != mesh_was:
+				shown = i
 				break
-		var bands_shown := true
-		for band in city._brick_bands.get(hit_id, []):
-			if is_instance_valid(band) and not (band as Node3D).visible:
-				bands_shown = false
-		_gate_ok("a hit on a far building draws its bricks again at once", back and bands_shown)
-		var again := false
-		for i in 300:
-			await city.get_tree().physics_frame
-			if city.drawing._far_coarse.has(hit_id):
-				again = true
-				break
-		_gate_ok("and it goes coarse again once it is quiet", again)
+		_gate_ok("a hit on a far building shows within a few ticks", shown >= 0 and shown <= 20
+				and city.world.get_alive_block_count(hb.chunk) < alive_was,
+				"its coarse mesh made again in %d ticks; %d bricks, then %d" % [shown, alive_was,
+					city.world.get_alive_block_count(hb.chunk)])
+		_gate_ok("and it stays coarse, no bands built for it", city.drawing.coarse_only(hit_id))
 	print("[overview] %d ok, %d FAIL" % [city._gate_pass, city._gate_fail])
 
 func _overview_kind(n: String) -> String:
@@ -7480,7 +7496,9 @@ func _overview_line(m: Dictionary) -> String:
 ## stands. big_city.tscn: down a street of twelve buildings in bricks, as
 ## `--street` starts. Each row changes ONE thing, in memory
 ## (MenuSettings.set_value(..., false): never saved), measures, and puts it
-## back. A timing run: the editor closed, no other Godot running.
+## back. A timing run: the editor closed, no other Godot running, and started
+## from the same chip temperature each time (under ~78 C): the GPU's clock
+## moves 6-14 ms with temperature alone. Repeat each setting.
 func _run_gpucost() -> void:
 	var view := city.get_viewport().get_viewport_rid()
 	RenderingServer.viewport_set_measure_render_time(view, true)
