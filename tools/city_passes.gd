@@ -2939,13 +2939,20 @@ func _walls_drawn_by(id: int) -> String:
 		if m != null and m.get_surface_count() > 0:
 			by.append("bricks")
 		var bands := 0
+		var boxed := 0
 		for c in (bricks as Node).get_children():
 			if c is MeshInstance3D and (c as MeshInstance3D).mesh != null \
 					and (c as MeshInstance3D).mesh.get_surface_count() > 0 \
 					and (c as MeshInstance3D).material_override != BuildingShell.window_material():
 				bands += 1
+			# A band drawn as a box a brick (CityDrawing.instanced_bands).
+			var boxes: MultiMeshInstance3D = city.drawing.boxes_of(c)
+			if boxes != null and boxes.is_visible_in_tree() and boxes.multimesh.instance_count > 0:
+				boxed += 1
 		if bands > 0:
 			by.append("%d band(s)" % bands)
+		if boxed > 0:
+			by.append("%d band(s) of boxes" % boxed)
 	return " + ".join(by)
 
 func _ghost_walls(id: int, solid_out: Array = []) -> Array:
@@ -2963,6 +2970,14 @@ func _ghost_walls(id: int, solid_out: Array = []) -> Array:
 		if band != null and is_instance_valid(band) and band.is_visible_in_tree() \
 				and band.mesh != null and band.mesh.get_surface_count() > 0:
 			sources.append([band, band.mesh.generate_triangle_mesh(), "band"])
+		# Drawn as a box a brick (CityDrawing.instanced_bands): the same boxes
+		# under the rays.
+		var boxes: MultiMeshInstance3D = city.drawing.boxes_of(band) \
+				if band != null and is_instance_valid(band) else null
+		if boxes != null and boxes.is_visible_in_tree():
+			var tm := _boxes_tri_mesh(boxes)
+			if tm != null:
+				sources.append([boxes, tm, "boxes"])
 	var shell: MeshInstance3D = city._shells.get(id)
 	if shell != null and shell.is_visible_in_tree() and shell.mesh != null \
 			and shell.mesh.get_surface_count() > 0:
@@ -3047,6 +3062,27 @@ func _ghost_walls(id: int, solid_out: Array = []) -> Array:
 				if some.size() < 5:
 					some.append("%s n%s" % [str(p.snapped(Vector3.ONE * 0.1)), str(nrm.snapped(Vector3.ONE * 0.1))])
 	return [hits, ghosts, by, some, whole]
+
+## A boxed band's boxes as triangles, from its MultiMesh's own buffer (a gate's
+## read-back): twenty floats an instance, a dead brick's a zero matrix.
+func _boxes_tri_mesh(boxes: MultiMeshInstance3D) -> TriangleMesh:
+	var buf := boxes.multimesh.buffer
+	var unit: PackedVector3Array = city.drawing.unit_box_points()[0]
+	var faces := PackedVector3Array()
+	@warning_ignore("integer_division")
+	var n := buf.size() / 20
+	for i in n:
+		var o := i * 20
+		var size := Vector3(buf[o], buf[o + 5], buf[o + 10])
+		if size.x <= 0.0:
+			continue
+		var mid := Vector3(buf[o + 3], buf[o + 7], buf[o + 11])
+		for v in unit:
+			faces.append(mid + v * size)
+	if faces.is_empty():
+		return null
+	var tm := TriangleMesh.new()
+	return tm if tm.create_from_faces(faces) else null
 
 ## Does _ghost_walls see a wall drawn where its bricks have gone? The bricks
 ## its rays hit, and every one within two cells, are killed -- with no word to
@@ -5689,6 +5725,8 @@ func _run_shot_pass() -> void:
 	print("[city]   " + city.islands.snap_census_line())
 	# Started can pass built: a start is dropped when its chunk changes under
 	# the worker, and asked for again.
+	print("[city]   " + city.islands.standins.census_line())
+	print("[city]   " + city.drawing.inst_line())
 	print("[city]   stand-ins: %d built; %d started on a worker; the slowest on the main thread %.1f ms (of any, %.1f)" % [
 			city.islands.coarse_built, city.islands.coarse_async, city.islands.coarse_main_worst_ms, city.islands.coarse_worst_ms])
 	print("[city]   big pieces in bands: %d band(s) built, %d piece(s) swapped over, %d begun again; the slowest band %.1f ms (cutting it out %.1f, its mesh %.1f), the most in a tick %.1f" % [

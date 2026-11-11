@@ -1043,6 +1043,27 @@ public:
     /// block_rgba_grain: material and grain in alpha). No bake, no occupancy
     /// walk: O(blocks), and the script assigns a buffer per size.
     Dictionary get_standin_buffers(int chunk_id) const;
+    // A box a brick, for drawing a building's bands with no bake (the
+    // 2026-11-11 audit's experiment; CityDrawing.instanced_bands). One
+    // MultiMesh buffer a drawing section: a UNIT box's transform scaled to
+    // the brick, its colour as the mesher writes it, and its centre again as
+    // custom data (the shader's chunk-local position). Every block the
+    // section holds has a slot, a dead one a zero matrix, so a hit writes
+    // the same length again. `sections` empty: all of them, one walk.
+    // Only true boxes are instances. A part that is not one -- an authored
+    // surface (a slope, a round brick, a stair) or a shape that does not
+    // fill its box -- comes as "special": mesh arrays of its faces, baked
+    // here for those blocks alone, as the mesher bakes them. Every face of
+    // them (none hidden behind a neighbour), so the mesh changes only when
+    // one of THEM goes: "special_stamp" says which are drawn, and a section
+    // whose stamp is the one in `special_held` (one a section asked for, or
+    // empty) is not baked again -- "special_same".
+    Array get_instance_buffers(int chunk_id, const PackedInt32Array &sections,
+            const PackedInt64Array &special_held) const;
+    // A stamp a drawing section of WHICH blocks are drawn in it (a sum over
+    // their ids, so one brick going as another comes is a different stamp):
+    // what the buffers above were made at, as their "stamp".
+    PackedInt64Array get_section_stamps(int chunk_id) const;
 
     // --- detachment --------------------------------------------------------
 
