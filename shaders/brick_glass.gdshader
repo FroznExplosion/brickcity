@@ -18,6 +18,7 @@ render_mode blend_mix, cull_back, depth_draw_opaque, diffuse_burley, specular_sc
 #include "res://shaders/brick_materials.gdshaderinc"
 #include "res://shaders/weather.gdshaderinc"
 #include "res://shaders/print_finish.gdshaderinc"
+#include "res://shaders/brick_boxed.gdshaderinc"
 
 // How much of the brick's colour a face lets through, head on. Edges and
 // grazing angles are denser, as a real clear part is.
@@ -41,6 +42,12 @@ void vertex() {
     v_uv = UV;
     // A chamfered band's facets carry a negative UV2 (brick.gdshader).
     v_face = abs(UV2);
+    // A box a brick, instanced (brick_boxed.gdshaderinc).
+    if (brick_boxed(UV2)) {
+        vec4 box_uv = brick_box_uv(brick_box_size(MODEL_MATRIX), VERTEX, NORMAL);
+        v_uv = box_uv.xy;
+        v_face = box_uv.zw;
+    }
     v_side = abs(NORMAL.y) < 0.7 ? 1.0 : 0.0;
     if (MAT_TRANSLUCENT[brick_material_id(COLOR.a)] < 0.5) {
         VERTEX = vec3(0.0);

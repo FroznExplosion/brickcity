@@ -188,9 +188,26 @@ player, ticked by the planet scene's `_air_tick`:
   lungs), until you are back in air or dead (10 s). Up again, a full suit.
 - **HUD:** the air warning now shows anywhere the air is low (not only aboard), with the suit:
   `LOW AIR 0 %  --  suit air 42 s`, then `--  SUIT EMPTY`.
-- Not for AI soldiers yet (they do not leave air), nor drowning (a head under water).
+- Not for AI soldiers yet (they do not leave air). ~~Nor drowning~~: §4.4.
 - Gate: `suit_air_probe` 7 (good air keeps it full; the timer with no damage; empty, health
   goes past a full shield; refills; dies; reset; the world's air with height).
+
+### 4.4 Built (2026-11-11): drowning
+
+A head under water breathes nothing, so the same suit timer runs, then the same damage.
+- **`SpaceStation.water_at(p)`**: how full the hull's cell at a world point is, 0..1; NAN
+  where the point is not in its inside air.
+- **`PlanetSystem.under_water_at(p)`**: inside a ship or station, its own water there, a
+  cell half full or more (`HEAD_UNDER`). So a dry hold under the sea line is dry, and a
+  flooded room over it is not. Anywhere else, under its world's sea (radius plus
+  `sea_level`).
+- `PlanetScene._air_tick` asks it for the player's head, on foot only. HUD: `UNDER WATER
+  --  suit air 42 s`.
+- **Not yet:** the city (its `Harbour` boat's hold is 1 m high, no head fits; a swimmer
+  there is the debug camera's, which has no health), AI soldiers.
+- Gates: `hull_flood_probe` 11 (+1 "under": 1.00 in a flooded room's water, 0.00 at its
+  top, NAN outside the hull). Planet `--gate=hull` 23 ok (peak 89 C, not held back). The
+  sea's side of `under_water_at` and the HUD line are not in a gate.
 
 ## 5. Flooding: water brick by brick
 
@@ -444,6 +461,28 @@ flooding enough sinks it; patching and pumping out lets it rise.
   * 3 s riding, feet on the deck (0.00 m off), the view on the real boat;
   * off the pawn, off the ghost.
   * Shots: `hull_harbour_shore`, `hull_harbour_aboard`.
+
+### 7.3 Built (2026-11-11): bulkheads, and a full room holds no more than it has cells
+
+* **Bulkheads** (`BoatBuild.BULKHEADS` 3): walls across the hold, keel to deck, no door. The
+  hold was one room, so any hole flooded all of it. Now it is 4 stretches (seed 1: 972, 972,
+  954 and 360 cells), each a room of its own to `HullAir`. `meta.boat.bulkheads` has their rows.
+  * One hole: its stretch fills (16 t), the boat lists 1.4 degrees while it fills, then lies
+    nearly level (the water is level across the beam) and floats, its deck 0.89 m over.
+  * A hole in every stretch: it sinks (53 t aboard).
+  * A blast near a bulkhead takes its bricks too: two stretches flood (33 t, 11.6 degrees,
+    the deck 0.06 m over).
+* **Found and fixed: a room held many times its cells.** A hole's head lets the cells beside
+  it stand over full (1 plus its depth in cells), and the up rule lifts that to the outside
+  level. A room full to its ceiling has nowhere to lift it, so every cell crept up to the
+  head: a sunk boat took in 27,671 cells of water for about 3,000 cells of hold, and patched,
+  its pumps (300 cells/s for 40 s) left 39.9 t aboard. `HullWater._holes` now lets a room take
+  no more than its cells (a pocket's room, as before, when its air is trapped). The rooms'
+  water is summed in one walk of the wet cells, and only when a room has a hole.
+* Gates: `boat_probe` 9 (+1 "holds": one of four stretches wet, afloat; "lists" now reads the
+  worst list while the stretch fills; "sinks" holes every stretch; pumped out, 0 kg left).
+  `hull_flood_probe` 10. `city.tscn -- --terrain --boat` 3 ok (peak 94 C, not held back; other
+  chats' runs were going).
 
 ## 7b. Walking inside a moving hull: the ghost hull
 

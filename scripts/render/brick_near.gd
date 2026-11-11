@@ -156,6 +156,9 @@ enum { FLAT, PENDING, UPLOADING, NEAR }
 class Band:
 	var key := 0
 	var node: MeshInstance3D
+	## Drawn as a box a brick by its owner (CityDrawing.instanced_bands): the
+	## node has no mesh of its own and nothing to chamfer; its studs are drawn.
+	var boxed := false
 	var tris := 0
 	var chunk := -1
 	var section := -1
@@ -353,6 +356,23 @@ func track(node: MeshInstance3D, chunk: int, section: int = -1) -> void:
 	if not _by_chunk.has(chunk):
 		_by_chunk[chunk] = []
 	(_by_chunk[chunk] as Array).append(key)
+
+
+## A band its owner draws as a box a brick (CityDrawing.instanced_bands): no
+## mesh on the node, so its box is given. Its studs are drawn as any band's;
+## it is never chamfered (that is built from a bake it does not have). Again
+## for the same node: only its box.
+func track_box(node: MeshInstance3D, chunk: int, section: int, box: AABB) -> void:
+	if node == null or not is_instance_valid(node):
+		return
+	var band: Band = _bands.get(node.get_instance_id())
+	if band == null or not band.boxed or band.chunk != chunk or band.section != section:
+		track(node, chunk, section)
+		band = _bands.get(node.get_instance_id())
+		if band == null:
+			return
+		band.boxed = true
+	band.box = box
 
 
 ## Stop: the node is going, or is no longer a band of anything.
@@ -606,7 +626,7 @@ func _visit(key: int, eye: Vector3, now: int, stud_budget: Array) -> void:
 		_forget(key)
 		return
 	var node := band.node
-	if not node.is_inside_tree() or node.mesh == null:
+	if not node.is_inside_tree() or (node.mesh == null and not band.boxed):
 		if band.state != FLAT:
 			_to_flat(band)
 		return
@@ -622,7 +642,7 @@ func _visit(key: int, eye: Vector3, now: int, stud_budget: Array) -> void:
 	var dist := local.distance_to(nearest) / zoom
 	band.score = _score(dist, xf * nearest)
 
-	var want := enabled and dist < radius + (MARGIN if band.state != FLAT else 0.0)
+	var want := enabled and not band.boxed and dist < radius + (MARGIN if band.state != FLAT else 0.0)
 	match band.state:
 		FLAT:
 			if want and cap_enabled and (not _fits(_hold_cost, _est_tris(band), max_tris, _holding)

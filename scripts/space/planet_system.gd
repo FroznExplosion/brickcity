@@ -425,6 +425,24 @@ func breath_at(p: Vector3) -> float:
 	return float(a.pressure) if not a.is_empty() else world_air_at(p)
 
 
+## A cell this full of water has a head in it under water.
+const HEAD_UNDER := 0.5
+
+
+## Whether a head at world point `p` is under water (Docs/Hulls.md 4.3, drowning):
+## inside a ship or station, its own water there (a dry hold under the sea line is
+## dry, a flooded room over it is not); else under its world's sea.
+func under_water_at(p: Vector3) -> bool:
+	for st in stations:
+		var w := st.water_at(p)
+		if not is_nan(w):
+			return w >= HEAD_UNDER
+	var b := nearest(p)
+	if b == null or is_nan(b.data.sea_level):
+		return false
+	return (p - b.global_position).length() < b.data.radius + b.data.sea_level
+
+
 ## The air at world point `p` inside a ship or station (SpaceStation.air_at): {pressure,
 ## pull, breached}, or empty when `p` is in none.
 func air_at(p: Vector3, near := false) -> Dictionary:
