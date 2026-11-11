@@ -320,3 +320,20 @@ dipped to 116 MB free -- the two agree, the second's numbers below.
   2.3-3.2 ms (was 8-15), `bd_rest` 1.5-3.2 (was 4-8) -- what is left of them is the mesh
   handed to the renderer. That run had other chats' probes alongside and dipped to 153 MB
   free, so read it as the shape, not the last decimal.
+- **Clean re-run (2026-11-11):** `--promote` again, on a quiet machine (editor closed, no
+  other Godot runs, 3.9 GB free at the least; peak 69 C, not held back). Only 4 of the 12
+  picks were measured -- the other 8 were "promoted by something else first" (a neighbour
+  laid or the camera aimed at them), so the walked-up-to case has one sample.
+
+  | building | `_promote` | ticks to bricks | worst tick |
+  |---|---|---|---|
+  | 21 (hit) | 1.6 ms | 3 | 37.6 ms: spawn 33.6 |
+  | 3 (hit) | 1.2 ms | 4 | 4.2 ms: stream 2.4 (st_rooms) |
+  | 9 (hit) | 1.2 ms | 4 | 4.1 ms: islands 3.5 |
+  | 14 (walked) | 1.4 ms | 4 | 4.5 ms: bands 1.8, stream 1.4 |
+
+  `sh_mesh` is in no worst tick any more; stream is 2.3-2.7 ms all told (worst ticks were
+  8-29 ms before the port). The 10.8 ms `sh_mesh` / 8.4 ms render outlier did not come
+  back (render 0.5 ms at most), so it was most likely the 153 MB of free RAM and the runs
+  alongside, not the mesher. New: the FIRST hit's spawn took 33.6 ms, the later ones did
+  not -- a one-off warm-up, the "first-hit lag" of the break-lag list, not options 1/2.
