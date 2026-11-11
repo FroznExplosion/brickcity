@@ -7118,6 +7118,10 @@ var _shell_box := {}  ## building id -> its coarse shell is drawn by its far box
 ## -- and draws the shell until the coarse mesh is ready. No windows: a coarse
 ## mesh has its holes where the bricks are gone. Asked again whenever the shell
 ## is (_shell_stale, after a hit).
+##
+## Since 2026-11-11 only with the far tier off (City.far_coarse_enabled) or a
+## caller demeshing by hand: with it on, _stream_detail no longer demeshes,
+## and a far building's coarse mesh is CityDrawing.tend_far_coarse's.
 var _far_real_owed := {}   ## building id -> the shell node waiting for its mesh
 var _far_real_done := {}   ## building id -> the shell node drawn from its bricks
 
@@ -7178,6 +7182,15 @@ func _stream_detail() -> void:
 			if dist <= DEMESH_RANGE + DEMESH_HYSTERESIS:
 				continue
 			if now - b.materialised_at < DEMESH_AFTER_MS:
+				continue
+			# With the far tier on there is nothing left here for the drawing:
+			# past FAR_COARSE_RANGE a quiet building is drawn by its coarse
+			# mesh with its bands and bake given back (CityDrawing._free_bands),
+			# and one not quiet yet goes coarse once it is. Demeshing it threw
+			# that mesh away and made the same one again for a shell
+			# (far_real). Its node, panes, furniture and groups stay; the brick
+			# budget gives far quiet storeys back to shells as before.
+			if far_coarse_enabled:
 				continue
 			var t_one := Time.get_ticks_usec()
 			_demesh(id)
