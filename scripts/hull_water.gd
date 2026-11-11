@@ -180,18 +180,35 @@ func _tipped(lat: Array) -> bool:
 func _holes(dt: float, depth_at: Callable) -> void:
 	trapped.clear()
 	inflow.clear()
+	# What each holed room holds, summed in one walk of the wet cells.
+	var held := {}
+	var any_hole := false
 	for ci in air._parent.size():
-		if air._parent[ci] != ci:
+		if air._parent[ci] == ci and not air._breach[ci].is_empty():
+			any_hole = true
+			break
+	if not any_hole:
+		return
+	for i in flow.wet():
+		if air.state[i] == HullAir.INSIDE:
+			var r := air._root(air.comp[i])
+			held[r] = float(held.get(r, 0.0)) + flow.get(i)
+	for ci in air._parent.size():
+		if air._parent[ci] != ci or air._breach[ci].is_empty():
 			continue
+		var have := float(held.get(ci, 0.0))
 		var room := pocket_room(ci, depth_at)
 		if room >= 0.0:
-			var have := in_compartment(ci)
 			if have >= room - 0.5:
 				# Held: only what leaks out lets more in.
 				trapped[ci] = true
 				_leaked[ci] = float(_leaked.get(ci, 0.0)) + air_leak * dt
 				continue
-		var budget := INF if room < 0.0 else room - in_compartment(ci)
+		# Never more than the room has cells for. The head (a fill over 1 by the hole)
+		# is what lifts water to the outside level, but a room full to its ceiling
+		# has nowhere to lift it: without this every cell crept up to the hole's
+		# head, a sunk room held ten times its cells, and no pump emptied it.
+		var budget := maxf(0.0, (float(air._cells[ci]) if room < 0.0 else room) - have)
 		for b: int in air._breach[ci]:
 			var d: float = depth_at.call(b)
 			if is_nan(d):
