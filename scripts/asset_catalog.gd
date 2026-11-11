@@ -55,7 +55,7 @@ static func _ensure() -> void:
 		var id := path.get_file().get_basename()
 		var name := r.name if r.name != "" and r.name != "untitled" else id.capitalize()
 		var e := {"id": id, "path": path, "name": name, "tags": AssetTags.tags_of(r),
-				"shipped": path.begins_with("res://")}
+				"shipped": path.begins_with("res://"), "pack": ContentPacks.pack_of(path)}
 		if _by_id.has(id):
 			_entries.erase(_by_id[id])
 		_by_id[id] = e
@@ -63,7 +63,8 @@ static func _ensure() -> void:
 		_recipes[id] = r
 
 
-## Every entry: {"id", "path", "name", "tags", "shipped"}.
+## Every entry: {"id", "path", "name", "tags", "shipped", "pack"}. "pack" is the
+## content pack it came in ("" for the player's own): ContentPacks.
 static func entries() -> Array:
 	_ensure()
 	return _entries

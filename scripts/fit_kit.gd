@@ -26,7 +26,7 @@ static func kit(curves: bool) -> Dictionary:
 	var names := []
 	var pieces := []
 	for part in SLOPES + (CURVES if curves else []):
-		var spec: Dictionary = BrickPalette._SHAPED[part]
+		var spec: Dictionary = BrickPalette.shape_of(part)
 		var size := BrickPalette.part_size(part)
 		var base := canonical(String(spec.kind), size, String(spec.get("axis", "z")))
 		for name in BrickPalette.variants_of(part):
@@ -48,7 +48,7 @@ static func mirror_name(name: String) -> String:
 	if _mirrors.has(name):
 		return _mirrors[name]
 	var part := BrickPalette.part_of(name)
-	var spec: Dictionary = BrickPalette._SHAPED.get(part, {})
+	var spec: Dictionary = BrickPalette.shape_of(part)
 	if spec.is_empty():
 		return name
 	var size := BrickPalette.part_size(part)

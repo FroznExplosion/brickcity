@@ -115,8 +115,8 @@ func _init() -> void:
 
 	print("\nthe wheel steps through the library")
 	var lib := CityPlacer.library()
-	_ok("the shipped prebuilts are in it", lib.has("res://builds/cottage.json")
-			and lib.has("res://builds/watchtower.json"), "%s" % [lib])
+	_ok("the shipped prebuilts are in it", lib.has("res://content/base/builds/cottage.json")
+			and lib.has("res://content/base/builds/watchtower.json"), "%s" % [lib])
 	p.stop()
 	p.toggle(lib[0])
 	var first := p._name
@@ -157,7 +157,7 @@ func _check_shell_winding(w: BrickWorld) -> void:
 	var c := w.create_chunk(Vector3i.ZERO, Vector3i(4, 3, 4))
 	w.place_block(c, Vector3i.ZERO, TowerRecipe.bake_palette(w)["brick_2x4_z"], 4)
 	var bricks: Vector2i = sign_of.call(w.build_chunk_mesh(c))
-	var r := BuildRecipe.load_from("res://builds/cottage.json")
+	var r := BuildRecipe.load_from("res://content/base/builds/cottage.json")
 	var shell: Vector2i = sign_of.call(BuildShell.build_arrays(w, r))
 	var brick_sign := 1 if bricks.x > 0 else -1
 	var shell_sign := 1 if shell.x > 0 else -1

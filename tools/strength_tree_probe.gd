@@ -37,8 +37,8 @@ func _initialize() -> void:
 	_two_bricks()
 	_long_wall()
 	_tower()
-	for path in ["res://builds/cottage.json", "res://builds/watchtower.json",
-			"res://builds/kiosk.json", "res://builds/garden_wall.json"]:
+	for path in ["res://content/base/builds/cottage.json", "res://content/base/builds/watchtower.json",
+			"res://content/base/builds/kiosk.json", "res://content/base/builds/garden_wall.json"]:
 		_build(path)
 	print("\nstrength_tree_probe: %d passed, %d failed" % [_pass, _fail])
 	quit(1 if _fail > 0 else 0)

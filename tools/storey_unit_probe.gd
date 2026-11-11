@@ -338,7 +338,7 @@ func _watchtower(units: bool) -> Array:
 	var reg := BuildingRegistry.new(w, palette)
 	reg.storey_units = units
 	var r := BuildRecipe.from_dict(JSON.parse_string(
-			FileAccess.get_file_as_string("res://builds/watchtower.json")))
+			FileAccess.get_file_as_string("res://content/base/builds/watchtower.json")))
 	var id := reg.register_build(r, Transform3D())
 	return [w, reg, id]
 

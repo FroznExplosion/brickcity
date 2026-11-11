@@ -1,6 +1,6 @@
 extends SceneTree
 
-## Probe for the roster of types (Roster, data/ai/roster.json; Docs/AIRoster.md RO1).
+## Probe for the roster of types (Roster, content/base/data/ai/roster.json; Docs/AIRoster.md RO1).
 ##
 ##     godot --headless --path . --script tools/roster_probe.gd
 ##

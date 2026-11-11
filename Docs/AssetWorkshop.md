@@ -106,7 +106,7 @@ copies every sketch.
 
 | Change | Why |
 |---|---|
-| A build here is a **gun** (recipe kind `gun`; `mech` too): File > Save, Save As and Open use the guns' library -- `res://guns/` shipped, `user://guns/` the player's (`BuildRecipe.LIBRARY_DIRS`) -- not the buildings'. A build saved before (kind `building`) opens as a gun. F5 has its own quick-save slot (`user://asset_workshop_quick.json`), not the building workshop's. The autosave stays | the only save options were for buildings |
+| A build here is a **gun** (recipe kind `gun`; `mech` too): File > Save, Save As and Open use the guns' library -- `res://content/base/guns/` shipped, `user://guns/` the player's (`BuildRecipe.LIBRARY_DIRS`) -- not the buildings'. A build saved before (kind `building`) opens as a gun. F5 has its own quick-save slot (`user://asset_workshop_quick.json`), not the building workshop's. The autosave stays | the only save options were for buildings |
 | The bar is the asset workshop's own: File is New, Open (lists only guns and mechs), Save, Save As, quick save and load; Insert, Type, Layer, Generated, Test in city and the inserted-build part of Edit are gone, their shortcuts too, and Enter does not send a gun to the city. The building workshop's Open no longer lists guns or mechs | only assets are saved and opened here |
 
 ### Into the game, stage 1 (2026-10-16): export
@@ -123,7 +123,7 @@ copies every sketch.
 
 | What | How |
 |---|---|
-| **The game finds them** | `AssetGuns` (scripts/guns/asset_guns.gd) reads every exported gun -- `res://guns/<id>/` shipped, `user://guns/<id>/` the player's -- and makes part defs of its scenes. `GunPlaceholderParts.build_library` puts them on the end of the game's part library, each fenced to its own design with `exclusive_to` (as a legendary's barrel is): no random gun takes one, no other gun's roll moves, a saved one loads back by its part ids |
+| **The game finds them** | `AssetGuns` (scripts/guns/asset_guns.gd) reads every exported gun -- `res://content/base/guns/<id>/` shipped, `user://guns/<id>/` the player's -- and makes part defs of its scenes. `GunPlaceholderParts.build_library` puts them on the end of the game's part library, each fenced to its own design with `exclusive_to` (as a legendary's barrel is): no random gun takes one, no other gun's roll moves, a saved one loads back by its part ids |
 | **A gun of one** | `AssetGuns.generate(lib, id, seed)` -> `GunGenerator.generate_fixed`: the design's own parts, everything else (modifiers, alt fire, stats, quality) rolled from the seed as for any gun, the design's name after the grade word ("Gutter Thompson"). It fires as the class its `gun.json` names, an SMG by default. Brand `workshop`: no skin is set for it, so its bricks keep their colours |
 | **The magazine comes off** | a magazine part tagged `detaches` (every exported one) goes with the left hand through a reload, down with the old one and up with the new (`PlayerView._carry_magazine`), and is back home after |
 | **To try it** | in developer mode, T cycles the gun classes and then each exported gun. The pass `city.tscn -- --asset-gun=thompson` holds it, fires it and reloads it (shots/asset_gun_*.png) |
@@ -1166,7 +1166,7 @@ keeps the role names; only the menus say Furniture. How a building breaks is unc
 (Interiors.md §3.1, §8): they weigh nothing, hold nothing up, ride the floor they stand on, and
 a hit lays them as bricks.
 
-**Tags, three levels, from one file.** `data/asset_tags.json` lists the levels in filter order;
+**Tags, three levels, from one file.** `content/base/data/asset_tags.json` lists the levels in filter order;
 `AssetTags` (`scripts/asset_tags.gd`) reads it. Adding a level or a value is a line in that file:
 the Save As dialog, the filter and the generator all take it from there.
 

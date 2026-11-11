@@ -1035,20 +1035,21 @@ static func _strings(a) -> PackedStringArray:
 # templates each spelled the folders out, and the quick-save path three times
 # -- so adding a kind, or moving a folder, was four edits that had to agree.
 
-## The library folders by build kind: what ships with the game first
+## The library folders by build kind: [the game's own, the player's]. Other
+## packs' folders come between (`library_dirs`). What ships with the game first
 ## (`res://`, written by tools/make_prebuilts.gd), the player's own last
 ## (`user://`, written by the workshop). `building` is what the city's placer
 ## offers with P. Rooms and items live apart: they are what the GENERATOR
 ## builds from (Docs/Workshop.md, Stage E), not things dropped into the city
 ## whole; rooms are filed in a sub-folder a room kind.
 const LIBRARY_DIRS := {
-	"building": ["res://builds/", "user://builds/"],
-	"room": ["res://rooms/", "user://rooms/"],
-	"item": ["res://items/", "user://items/"],
+	"building": ["res://content/base/builds/", "user://builds/"],
+	"room": ["res://content/base/rooms/", "user://rooms/"],
+	"item": ["res://content/base/items/", "user://items/"],
 	# Made in the asset workshop (Docs/AssetWorkshop.md): bricks plus meta.asset.
-	"gun": ["res://guns/", "user://guns/"],
-	"mech": ["res://mechs/", "user://mechs/"],
-	"figure": ["res://figures/", "user://figures/"],
+	"gun": ["res://content/base/guns/", "user://guns/"],
+	"mech": ["res://content/base/mechs/", "user://mechs/"],
+	"figure": ["res://content/base/figures/", "user://figures/"],
 }
 ## The kinds made in the asset workshop, not the building workshop: each workshop's
 ## Open lists only its own.
@@ -1058,10 +1059,16 @@ const ASSET_KINDS := ["gun", "mech", "figure"]
 const QUICK_SAVE := "user://workshop_build.json"
 
 
-## The folders for a kind, shipped first. A kind with no library of its own
-## is filed with the buildings.
+## The folders for a kind: the game's own first, then every other content
+## pack's of the same name (a DLC's, a mod's: ContentPacks, Docs/Content.md),
+## the player's last. A kind with no library of its own is filed with the
+## buildings.
 static func library_dirs(of_kind := "building") -> Array:
-	return LIBRARY_DIRS.get(of_kind, LIBRARY_DIRS["building"])
+	var pair: Array = LIBRARY_DIRS.get(of_kind, LIBRARY_DIRS["building"])
+	var out := [pair[0]]
+	out.append_array(ContentPacks.dirs(str(pair[0]).trim_suffix("/").get_file(), true))
+	out.append(pair[1])
+	return out
 
 
 ## Where the game's own builds of a kind are.
