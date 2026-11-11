@@ -859,11 +859,28 @@ the main thread that tick. `Boat.threaded` false runs it all on the main thread 
 `boat_probe` 8 (+1): a snapshot worked out on a worker and here gives the same forces; 0 of 972
 ticks late; the main thread's part 0.07 ms a tick, the job 0.66 ms.
 
-**E3/E4 not measured yet (2026-11-06/07).** The machine was not quiet. The first try
-(`--storeys --big`) was stopped for low memory. At 23:00 three chats' runs were going
-(97 C, 350 MB free), and at 14:12 only 430 MB of memory was free. No E3/E4 change is made
-without numbers. E5 is not applicable: our C++ has no brick ray tests of its own (every
-ray goes through Jolt; only the workshop's `sdf_form.cpp` casts one).
+**E3/E4 measured (2026-11-11, windowed, editor closed, no other Godot runs, 2.8 GB+
+free, peak 92 C, never held back; main at 1abc869e).** Neither is called for, so neither is done.
+
+* **E3, `city.tscn -- --storeys --big`.** The first hit on a 27,408-brick, 35-storey tower:
+  promote 1.8 ms, worst frame 47.6 ms (tick 9, of which process 23.2 ms), 1,611 bricks
+  laid (2 storeys), BrickWorld +8.9 MB. Over the run's 12 promotions (2.1 ms each), the worst
+  was 8.8 ms: collision 4.7, sections + bake start 1.7, **bricks 1.4**. Reserving the
+  brick arrays could at most save part of that 1.4 ms, so it would not change the first-hit frame.
+  (The same run's gate had 2 FAILs in the storey give-way checks, "the part above leaves
+  as one shell piece" and "off balance, the rest tips over". That is the storey-units area,
+  not E3.)
+* **E4, `city.tscn -- --stress --big --buildings=4`.** Worst script tick 25.9 ms (tick
+  152): damage 20.4 (of which promote 1.5), spawn 1.8, **collision 0.4** (6 bands merged
+  again). Across the run, bands were merged 1,470 times (156.9 ms in all, worst 1.0 ms). A
+  band rebuild is not in the worst tick of a collapse. Whole run: mean 17.1 ms, worst 143 ms,
+  2.1% of frames over 33.3 ms. Slow frames are idle process (28.2 of 48.4 ms mean) and
+  one 260 ms draw, not collision. Worth a look by the destruction area: about 18 ms of
+  that worst tick's `damage` is not in its parts (promote, rooms, hit, loose pieces,
+  collision update).
+
+E5 is not applicable: our C++ has no brick ray tests of its own (every ray goes through
+Jolt; only the workshop's `sdf_form.cpp` casts one).
 
 E4 is only done if E1 and the measurements show band rebuilds still matter. The full Brickadia
 answer (one custom collision shape with an index inside) needs a Jolt shape Godot does not
@@ -896,8 +913,8 @@ Each step lands on `main` on its own, with its gate.
    Gates: `hull_flood_probe`, the boat lists and sinks. Built 2026-11-06 (§5.1, §8.1):
    every ship, spaceships too.
 10. **Brick-by-brick patching** (§9 A) on the same core. *Built 2026-11-06, §9.2.*
-11. **E3, E4, E5** as measurements call for them. E5 not applicable; E3/E4 waiting on a
-    quiet machine (§11). E6 built 2026-11-09 (§11).
+11. **E3, E4, E5** as measurements call for them. E5 not applicable; E3/E4 measured
+    2026-11-11 and not called for (§11). E6 built 2026-11-09 (§11).
 12. **Respawn** (§10) when the user decides.
 
 ## 13. Open questions
