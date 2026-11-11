@@ -2,7 +2,8 @@ class_name SuitAir
 extends RefCounted
 ## What low air does to a player (Docs/Hulls.md 4.3, the user's call 2026-11-09): a
 ## suit timer, then damage. Where the air you breathe is under HullAir.LOW (a
-## breached room, space, a world's thin upper air) the suit's own air runs down, a
+## breached room, space, a world's thin upper air, a head under water:
+## PlanetSystem.under_water_at) the suit's own air runs down, a
 ## second a second; back in good air it fills again. Run out, and the lack of air
 ## hurts you -- straight to health (shields and armour keep nothing out of your
 ## lungs) -- until you are back in air or dead.

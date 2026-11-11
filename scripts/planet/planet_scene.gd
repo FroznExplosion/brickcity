@@ -1099,6 +1099,10 @@ func _air_tick(dt: float) -> void:
 	# In the pilot's seat: the cockpit's own air, whether its bricks are laid or not.
 	if not on_foot:
 		p = maxf(p, 1.0) if a.is_empty() else p
+	# A head under water breathes nothing: the suit's air, then drowning.
+	var under := on_foot and system.under_water_at(head)
+	if under:
+		p = 0.0
 	if pawn != null and is_instance_valid(pawn) and pawn.health != null:
 		suit.breathe(dt, p, pawn.health)
 	if air_warn == null:
@@ -1109,6 +1113,8 @@ func _air_tick(dt: float) -> void:
 		return
 	var pct := roundi(p * 100.0)
 	var what := ("HULL BREACH  air %d%%" if venting else "LOW AIR  %d%%") % pct
+	if under:
+		what = "UNDER WATER"
 	if suit.empty():
 		what += "  --  SUIT EMPTY"
 	elif suit.draining():
