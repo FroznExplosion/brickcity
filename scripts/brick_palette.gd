@@ -291,6 +291,143 @@ const _SHAPED := {
 }
 
 
+
+
+# ---------------------------------------------------------------------------
+# Bricks from content packs (Docs/Content.md, "Bricks").
+#
+# A pack's bricks/*.json adds parts to the two tables above:
+#
+#   {"parts": {"brick_1x5":  {"size": [1, 3, 5]},
+#              "slope_2x6":  {"size": [2, 3, 6], "shape": {"kind": "slope", "axis": "x"}}},
+#    "categories": [["Girders", ["girder"]]]}
+#
+# A name is `<family>_<W>x<L>` as above, W <= L, and what its family's name
+# starts with decides its studs and sockets as it does for the game's own
+# (`tile_`, `undertile_`, `bracket_` ...). A shape is one ShapedParts already
+# makes. A part the game has is never replaced: builds name parts, and a build
+# must mean the same bricks with or without a mod.
+# ---------------------------------------------------------------------------
+
+## The shapes a pack's part may ask for, and what each needs beside its kind.
+const _PACK_SHAPES := ["slope", "curve", "wedge", "slope_corner", "round", "arch"]
+
+static var _all_parts := {}
+static var _all_shaped := {}
+static var _all_categories := []
+static var _packs_read := false
+## The pack each added part came in: part -> pack id.
+static var _part_pack := {}
+
+
+## The pack a part came in, "" for one of the game's own.
+static func pack_of_part(part: String) -> String:
+	_parts()
+	return _part_pack.get(part, "")
+
+
+## How a shaped part is shaped ({} for a box): its _SHAPED row.
+static func shape_of(part: String) -> Dictionary:
+	return _shaped().get(part, {})
+
+
+## Read the packs again (a probe that switched one on).
+static func reload_packs() -> void:
+	_packs_read = false
+	_size_cache.clear()
+
+
+static func _parts() -> Dictionary:
+	if not _packs_read:
+		_read_packs()
+	return _all_parts
+
+
+static func _shaped() -> Dictionary:
+	if not _packs_read:
+		_read_packs()
+	return _all_shaped
+
+
+static func _categories() -> Array:
+	if not _packs_read:
+		_read_packs()
+	return _all_categories
+
+
+static func _read_packs() -> void:
+	_packs_read = true
+	_all_parts = _PARTS.duplicate()
+	_all_shaped = _SHAPED.duplicate()
+	_all_categories = CATEGORIES.duplicate(true)
+	_part_pack = {}
+	for path in ContentPacks.files("bricks"):
+		var data = JSON.parse_string(FileAccess.get_file_as_string(path))
+		if not data is Dictionary:
+			push_warning("BrickPalette: %s is not a brick file" % path)
+			continue
+		var parts_in_file: Dictionary = data.get("parts", {})
+		for part: String in parts_in_file:
+			var why := _add_pack_part(part, parts_in_file[part])
+			if why != "":
+				push_warning("BrickPalette: %s: '%s' left out: %s" % [path, part, why])
+			else:
+				_part_pack[part] = ContentPacks.pack_of(path)
+		for c in (data.get("categories", []) as Array):
+			if not (c is Array and c.size() == 2 and c[1] is Array):
+				continue
+			var had := false
+			for own: Array in _all_categories:
+				if own[0] == str(c[0]):
+					had = true
+					for fam in c[1]:
+						if not (own[1] as Array).has(str(fam)):
+							(own[1] as Array).append(str(fam))
+			if not had:
+				_all_categories.append([str(c[0]), Array(c[1]).map(func(f): return str(f))])
+
+
+## "" if the part was added, or why not.
+static func _add_pack_part(part: String, spec: Variant) -> String:
+	if _all_parts.has(part):
+		return "the game already has a part of that name"
+	if not spec is Dictionary:
+		return "not a {\"size\": [W, H, L]} entry"
+	var sz = spec.get("size", [])
+	if not (sz is Array and sz.size() == 3):
+		return "size must be [W studs, H plates, L studs]"
+	var size := Vector3i(int(sz[0]), int(sz[1]), int(sz[2]))
+	if size.x < 1 or size.y < 1 or size.z < 1 or size.x > size.z:
+		return "size needs W <= L and nothing under 1"
+	if size.x > 16 or size.z > 16 or size.y > 36:
+		return "too big (16 x 16 studs, 36 plates at most)"
+	var cut := part.rfind("_")
+	if cut < 1 or part.substr(cut + 1) != "%dx%d" % [size.x, size.z]:
+		return "its name must end _%dx%d, as its size says" % [size.x, size.z]
+	var family := part.substr(0, cut)
+	for ch in family:
+		if not ((ch >= "a" and ch <= "z") or (ch >= "0" and ch <= "9")):
+			return "its family must be lower-case letters and digits (no _)"
+	if spec.has("shape"):
+		var shape = spec.shape
+		if not (shape is Dictionary and _PACK_SHAPES.has(str(shape.get("kind", "")))):
+			return "shape.kind must be one of %s" % [_PACK_SHAPES]
+		var row := {"kind": str(shape.kind)}
+		match row.kind:
+			"slope", "curve":
+				var axis := str(shape.get("axis", "z"))
+				if axis != "x" and axis != "z":
+					return "shape.axis must be x or z"
+				row["axis"] = axis
+			"wedge":
+				row["front"] = Vector3i(-1, 0, 0)
+			"slope_corner":
+				row["front"] = Vector3i(-1, 0, -1)
+		_all_shaped[part] = row
+	_all_parts[part] = size
+	return ""
+
+
 ## Bake the palette. Returns archetype name -> archetype id.
 ##
 ## Each part is baked ONCE in its canonical orientation, and every other
@@ -300,8 +437,8 @@ const _SHAPED := {
 ## has one shape whichever way you yaw it.
 static func bake(world: BrickWorld) -> Dictionary:
 	var out := {}
-	for part in _PARTS:
-		var size: Vector3i = _PARTS[part]
+	for part in _parts():
+		var size: Vector3i = _parts()[part]
 		var base := -1
 		if is_shaped(part):
 			base = _bake_shaped(world, part, size)
@@ -336,7 +473,7 @@ static func bake(world: BrickWorld) -> Dictionary:
 ## surface and hulls all from one ShapedParts description. The variants that
 ## follow turn every one of them together.
 static func _bake_shaped(world: BrickWorld, part: String, size: Vector3i) -> int:
-	var spec: Dictionary = _SHAPED[part]
+	var spec: Dictionary = _shaped()[part]
 	var sh := ShapedParts.build(spec.kind, size, spec.get("axis", "z"))
 	var up := PackedByteArray()
 	var down := PackedByteArray()
@@ -378,7 +515,7 @@ static func has_sockets(part: String) -> bool:
 
 ## Is this part a shape rather than a box?
 static func is_shaped(part: String) -> bool:
-	return _SHAPED.has(part)
+	return _shaped().has(part)
 
 
 ## Does this part have a FRONT? A slope or a curve does: yawing it 180 degrees
@@ -390,8 +527,8 @@ static func is_shaped(part: String) -> bool:
 ## face the other way. Given only `_x` / `_z` it could be turned two ways and
 ## never the other two.
 static func is_directional(part: String) -> bool:
-	return is_bracket(part) or (_SHAPED.has(part) and ((_SHAPED[part] as Dictionary).has("axis")
-			or (_SHAPED[part] as Dictionary).has("front")))
+	return is_bracket(part) or (_shaped().has(part) and ((_shaped()[part] as Dictionary).has("axis")
+			or (_shaped()[part] as Dictionary).has("front")))
 
 
 ## A bracket also carries studs on one lateral face.
@@ -456,7 +593,7 @@ static func family_of(part: String) -> String:
 
 static func category_of(part: String) -> String:
 	var fam := family_of(part)
-	for c in CATEGORIES:
+	for c in _categories():
 		if (c[1] as Array).has(fam):
 			return c[0]
 	return "Other"
@@ -465,7 +602,7 @@ static func category_of(part: String) -> String:
 ## Every category label that has at least one part, in browsing order.
 static func categories() -> Array:
 	var out := []
-	for c in CATEGORIES:
+	for c in _categories():
 		if not parts_in(c[0]).is_empty():
 			out.append(c[0])
 	if not parts_in("Other").is_empty():
@@ -492,17 +629,17 @@ static func parts_in(category: String) -> Array:
 
 ## The parts a player picks from. Build mode shows these, not archetypes.
 static func parts() -> Array:
-	return _PARTS.keys()
+	return _parts().keys()
 
 
 ## Canonical footprint of a part, (W, H, L) with W <= L.
 static func part_size(part: String) -> Vector3i:
-	return _PARTS.get(part, Vector3i.ZERO)
+	return _parts().get(part, Vector3i.ZERO)
 
 
 ## True when a part's footprint is square, so rotating it changes nothing.
 static func is_square(part: String) -> bool:
-	var s: Vector3i = _PARTS.get(part, Vector3i.ZERO)
+	var s: Vector3i = _parts().get(part, Vector3i.ZERO)
 	return s.x == s.z
 
 
@@ -513,7 +650,7 @@ static func is_square(part: String) -> bool:
 ## `_x` is the orientation whose LONG side runs along world X; `_y1` is a
 ## directional part turned one quarter; `_i` is inverted.
 static func variants_of(part: String) -> Array:
-	if not _PARTS.has(part):
+	if not _parts().has(part):
 		return []
 	var axes: Array
 	if is_directional(part):
@@ -572,10 +709,10 @@ static func front_of(name: String) -> Vector3i:
 	var v: Vector3i
 	if is_bracket(part):
 		v = Vector3i(1, 0, 0)  # the side its studs are on; see _side_studs_for
-	elif (_SHAPED[part] as Dictionary).has("front"):
-		v = _SHAPED[part].front
+	elif (_shaped()[part] as Dictionary).has("front"):
+		v = _shaped()[part].front
 	else:
-		v = Vector3i(0, 0, -1) if _SHAPED[part].axis == "z" else Vector3i(-1, 0, 0)
+		v = Vector3i(0, 0, -1) if _shaped()[part].axis == "z" else Vector3i(-1, 0, 0)
 	var o := orientation_of(name)
 	match o.x:
 		1: v = Vector3i(-v.z, v.y, v.x)
@@ -595,7 +732,7 @@ static func newel_of(name: String) -> Rect2i:
 	var part := part_of(name)
 	if part == "round_2x2":
 		return Rect2i(0, 0, 2, 2)
-	if part == "" or not (_SHAPED.get(part, {}) as Dictionary).has("winds"):
+	if part == "" or not (_shaped().get(part, {}) as Dictionary).has("winds"):
 		return Rect2i()
 	var s := size_of(name)
 	@warning_ignore("integer_division")
@@ -607,10 +744,10 @@ static func newel_of(name: String) -> Rect2i:
 ## or not as this one is. "" for anything that is not a spiral stair piece.
 static func next_in_flight(name: String) -> String:
 	var part := part_of(name)
-	if part == "" or not (_SHAPED.get(part, {}) as Dictionary).has("winds"):
+	if part == "" or not (_shaped().get(part, {}) as Dictionary).has("winds"):
 		return ""
 	var o := orientation_of(name)
-	return variant_name(part, o.x + int(_SHAPED[part].winds), o.y != 0)
+	return variant_name(part, o.x + int(_shaped()[part].winds), o.y != 0)
 
 
 ## The same part, turned one more quarter about +Y. What the workshop's rotate
@@ -631,7 +768,7 @@ static func is_inverted(name: String) -> bool:
 ## Every archetype name the palette bakes.
 static func names() -> Array:
 	var out := []
-	for part in _PARTS:
+	for part in _parts():
 		out.append_array(variants_of(part))
 	return out
 
@@ -658,14 +795,14 @@ static func _parse_size(name: String) -> Vector3i:
 	var n := name
 	if n.ends_with("_i"):
 		n = n.substr(0, n.length() - 2)
-	if _PARTS.has(n):
-		return _PARTS[n]  # square part, no axis suffix
+	if _parts().has(n):
+		return _parts()[n]  # square part, no axis suffix
 	var cut := n.rfind("_")
 	if cut < 0:
 		return Vector3i.ZERO
 	var part := n.substr(0, cut)
 	var axis := n.substr(cut + 1)
-	var s: Vector3i = _PARTS.get(part, Vector3i.ZERO)
+	var s: Vector3i = _parts().get(part, Vector3i.ZERO)
 	if s == Vector3i.ZERO:
 		return Vector3i.ZERO
 	if is_directional(part):
@@ -684,13 +821,13 @@ static func part_of(name: String) -> String:
 	var n := name
 	if n.ends_with("_i"):
 		n = n.substr(0, n.length() - 2)
-	if _PARTS.has(n):
+	if _parts().has(n):
 		return n
 	var cut := n.rfind("_")
 	if cut < 0:
 		return ""
 	var part := n.substr(0, cut)
-	return part if _PARTS.has(part) and size_of(name) != Vector3i.ZERO else ""
+	return part if _parts().has(part) and size_of(name) != Vector3i.ZERO else ""
 
 
 ## Grams for a box part of this size, at print scale. A shaped part weighs its
@@ -702,7 +839,7 @@ static func mass_of(size: Vector3i) -> float:
 ## Grams for a named part, box or shaped.
 static func mass_of_part(part: String) -> float:
 	if is_shaped(part):
-		var spec: Dictionary = _SHAPED[part]
+		var spec: Dictionary = _shaped()[part]
 		return ShapedParts.build(spec.kind, part_size(part), spec.get("axis", "z")).solid \
 				* MASS_PER_CELL
 	return mass_of(part_size(part))

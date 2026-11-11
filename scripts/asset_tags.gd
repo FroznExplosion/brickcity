@@ -4,7 +4,7 @@ extends RefCounted
 ## The tags furniture and items carry, and the filter that picks them.
 ## Docs/AssetWorkshop.md, "Furniture and items".
 ##
-## The levels come from `data/asset_tags.json` (planet, then type, then room
+## The levels come from `content/base/data/asset_tags.json` (planet, then type, then room
 ## today), so a new level or value is a line there: the save dialog, the
 ## catalogue and the generator read them from here.
 ##
@@ -14,7 +14,9 @@ extends RefCounted
 ## `any` label means every value (a chair for any room, a crate for every
 ## planet).
 
-const FILE := "res://data/asset_tags.json"
+const FILE := "res://content/base/data/asset_tags.json"
+## The same table inside any content pack.
+const IN_PACK := "data/asset_tags.json"
 
 ## The types (level "type"). Furniture is Role.INTERIOR: seen from far, through
 ## windows. An item is Role.DETAIL: seen only up close.
@@ -40,21 +42,37 @@ static func level(id: String) -> Dictionary:
 
 
 static func _load() -> void:
-	var data = JSON.parse_string(FileAccess.get_file_as_string(FILE))
-	if not data is Dictionary:
-		push_error("AssetTags: cannot read %s" % FILE)
-		return
-	for raw: Dictionary in (data.get("levels", []) as Array):
-		var values := []
-		if str(raw.get("values_from", "")) == "room_kinds":
-			for k in Room.KINDS:
-				if k != "empty":
-					values.append({"id": k, "label": k.capitalize()})
-		for v: Dictionary in (raw.get("values", []) as Array):
-			values.append({"id": str(v.id), "label": str(v.get("label", v.id))})
-		_levels.append({"id": str(raw.id), "label": str(raw.get("label", raw.id)),
-				"multi": bool(raw.get("multi", false)), "any": str(raw.get("any", "")),
-				"values": values})
+	# The game's table, then every other content pack's data/asset_tags.json
+	# (Docs/Content.md): a level it names again gains the values it adds (a mod's
+	# planet), one it names first is a new level.
+	var files := ContentPacks.every(IN_PACK)
+	if files.is_empty():
+		files = PackedStringArray([FILE])
+	for path in files:
+		var data = JSON.parse_string(FileAccess.get_file_as_string(path))
+		if not data is Dictionary:
+			push_error("AssetTags: cannot read %s" % path)
+			continue
+		for raw: Dictionary in (data.get("levels", []) as Array):
+			var values := []
+			if str(raw.get("values_from", "")) == "room_kinds":
+				for k in Room.KINDS:
+					if k != "empty":
+						values.append({"id": k, "label": k.capitalize()})
+			for v: Dictionary in (raw.get("values", []) as Array):
+				values.append({"id": str(v.id), "label": str(v.get("label", v.id))})
+			var had := {}
+			for l: Dictionary in _levels:
+				if l.id == str(raw.id):
+					had = l
+			if had.is_empty():
+				_levels.append({"id": str(raw.id), "label": str(raw.get("label", raw.id)),
+						"multi": bool(raw.get("multi", false)), "any": str(raw.get("any", "")),
+						"values": values})
+				continue
+			for v: Dictionary in values:
+				if not (had.values as Array).any(func(o: Dictionary) -> bool: return o.id == v.id):
+					(had.values as Array).append(v)
 
 
 ## A recipe's tags, every level present. A file saved before tags had a

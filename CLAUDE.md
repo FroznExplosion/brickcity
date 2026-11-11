@@ -39,11 +39,25 @@ change in another area is that area's job.
 
 | Area | Owns |
 |---|---|
-| Build mode | `scripts/workshop*.gd`, `city_placer.gd`, `brick_palette.gd`, `shaped_parts.gd`, `build_recipe.gd`, `build_shell.gd`, `staircase_recipe.gd`, materials (`brick_materials.gd`, `shaders/brick*.gdshader*`, the material tables in `brick_grid.h`, `textures/`), `Docs/Parts/`, `builds/` |
+| Build mode | `scripts/workshop*.gd`, `city_placer.gd`, `brick_palette.gd`, `shaped_parts.gd`, `build_recipe.gd`, `build_shell.gd`, `staircase_recipe.gd`, materials (`brick_materials.gd`, `shaders/brick*.gdshader*`, the material tables in `brick_grid.h`, `textures/`), `Docs/Parts/`, `content/base/builds/` |
 | Terrain and water | `brick_terrain.*`, `terrain_*.gd`, `water_*.gd`, `underwater.gd`, `heightfield_*`, `shaders/terrain*`, `shaders/water*` |
 | Weapons and effects | `weapons/`, `fx/`, `autoload/`, `loot/` |
 | Disasters | `scripts/disasters/`, `shaders/disaster_*`, `tools/disaster_probe.gd`, `Docs/Disasters.md` |
 | City and buildings (shared) | `city_scene.gd`, `building_registry.gd`, `tower_recipe.gd`, `room*.gd`, `island_manager.gd` — small changes by anyone, merged soon |
+
+## Where content goes
+
+Docs/Content.md. The game's own content is the pack `content/base/` (builds,
+rooms, items, guns, mechs, figures, parts, bricks, worlds, data); a DLC is
+`content/<id>/`, a mod `user://mods/<id>/`, all the same shape.
+
+- New shipped content goes in `content/base/<kind>/`, never a new top-level
+  folder.
+- Code that lists or loads content asks `ContentPacks` (`dirs`, `files`,
+  `resolve`, `every`) or a library built on it (`BuildRecipe.library`,
+  `PartCatalog.load_all`), never one hard-coded `res://` folder: a hard-coded
+  folder is content a mod cannot add to.
+- Probe: `content_packs_probe`.
 
 ## Where new code runs
 

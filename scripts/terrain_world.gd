@@ -202,7 +202,7 @@ static func site_skirt(site: Dictionary) -> int:
 # Editing terrain is a LEVEL EDITING job. Nothing here is reachable from
 # gameplay: the game loads a world and never writes one.
 
-const WORLD_DIR := "res://worlds"
+const WORLD_DIR := "res://content/base/worlds"
 
 
 ## `-- --world=<name>` picks which level to open, defaulting to `name`.
@@ -212,18 +212,18 @@ static func world_path(default_name := "heightfield") -> String:
 	for arg in OS.get_cmdline_user_args():
 		if arg.begins_with("--world="):
 			chosen = arg.split("=")[1]
-	return "%s/%s.json" % [WORLD_DIR, chosen]
+	# Any content pack's (the last one that has it); a new world is the game's own.
+	var found := ContentPacks.resolve("worlds/%s.json" % chosen)
+	return found if found != "" else "%s/%s.json" % [WORLD_DIR, chosen]
 
 
 ## Every world on disk, by name.
 static func list_worlds() -> PackedStringArray:
 	var out := PackedStringArray()
-	var dir := DirAccess.open(WORLD_DIR)
-	if dir == null:
-		return out
-	for f in dir.get_files():
-		if f.ends_with(".json"):
-			out.append(f.get_basename())
+	for path in ContentPacks.files("worlds"):
+		var world := path.get_file().get_basename()
+		if not out.has(world):
+			out.append(world)
 	out.sort()
 	return out
 

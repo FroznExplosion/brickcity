@@ -41,3 +41,7 @@ addons/brick/bin/*.dylib
 
 # Chats work in their own worktrees here (CLAUDE.md).
 .claude/worktrees/
+
+# Python caches
+__pycache__/
+*.pyc

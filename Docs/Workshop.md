@@ -76,7 +76,7 @@ A top menu bar, visible whenever the mouse is free (ESC):
 * **Type** — Building ✓ / Room template / Item / Mech, Gun, Vehicle, Aircraft (later, greyed).
 * **Layer** — Structure / Interior / Detail (Stage D).
 
-Open lists `res://builds/` and `user://builds/` (the city placer's library, so
+Open lists `res://content/base/builds/` and `user://builds/` (the city placer's library, so
 every save is placeable with `P`). Save As names the file. Clear asks first.
 The folders for each kind, and the quick-save path, are written once:
 `BuildRecipe.LIBRARY_DIRS` and `BuildRecipe.QUICK_SAVE`, with `library(kind)`,
@@ -145,7 +145,7 @@ needs rooms for builds, which is §3.
 layers (structure bricks are ignored — build walls to see it in context, they
 do not come along), **Save As**, pick the room kind. It lands in
 `user://rooms/<kind>/`. **Type → Item** saves to `user://items/`, optionally
-for one room kind. Shipped ones go in `res://rooms/` and `res://items/`.
+for one room kind. Shipped ones go in `res://content/base/rooms/` and `res://content/base/items/`.
 
 `RoomTemplates` (`scripts/room_templates.gd`) reads them once and hands the
 generator item parts in `RoomManifest.ITEMS`' own shape plus role, the

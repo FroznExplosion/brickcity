@@ -3,7 +3,7 @@ extends RefCounted
 ## Every type that fights, as a recipe of parts (Docs/AIRoster.md): body, size,
 ## class and grade, attack, role, mods, phases -- and everything worked out from
 ## them. Authored on the Tactics Casebook page's Roster tab and written to
-## data/ai/roster.json by tools/tactics_export.js, which runs the page's own
+## content/base/data/ai/roster.json by tools/tactics_export.js, which runs the page's own
 ## code: this class derives nothing, it reads.
 ##
 ##   derived.layers   [[layer type, melees], ...] top first -- EnemyProfiles' rows
@@ -17,7 +17,7 @@ extends RefCounted
 ## UnitCatalog reads a unit's health, weapon, points and name from here (AIRoster.md
 ## RO2), so changing a recipe on the page changes the unit in the game.
 
-const PATH := "res://data/ai/roster.json"
+const PATH := "res://content/base/data/ai/roster.json"
 
 var parts := {}
 var recipes := {}
