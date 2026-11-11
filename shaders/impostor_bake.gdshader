@@ -1,5 +1,5 @@
 shader_type spatial;
-// ImpostorBaker's two passes over the grid of turned copies (scripts/impostor_baker.gd):
+// ImpostorBaker's two passes over the grid of turned copies (scripts/render/impostor_baker.gd):
 //   mode 0  the colour, unlit, from the vertex colour a brick mesh carries;
 //   mode 1  the normal in the OBJECT's own space, as 0..1.
 // NORMAL in vertex() is before the model matrix, so a copy turned to face

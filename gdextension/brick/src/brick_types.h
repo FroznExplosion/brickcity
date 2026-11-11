@@ -379,7 +379,7 @@ struct Block {
     // grounding walk's -- so a brick on that path can fail under the weight of
     // things that also hang elsewhere; they find the other way, and the brick
     // that failed was "joined to nothing" and fell on its own, still clicked
-    // onto the bricks round it (tools/hang_probe.gd). A small group like that,
+    // onto the bricks round it (tools/probes/hang_probe.gd). A small group like that,
     // whose own weight its studs hold, is put back as HELD
     // (BrickWorld::reattach_held_groups): grounding reaches it and goes no
     // further except into another held brick, and it carries nobody else's

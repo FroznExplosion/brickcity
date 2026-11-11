@@ -15,7 +15,7 @@ extends Node3D
 ## A Node3D of its own, so CombatFeedback, which wants a host with a `camera`,
 ## has one without the scene growing a field for it.
 
-const TestWindowScript := preload("res://scripts/test_window.gd")
+const TestWindowScript := preload("res://scripts/core/test_window.gd")
 
 var camera: Camera3D
 var player: PlayerController

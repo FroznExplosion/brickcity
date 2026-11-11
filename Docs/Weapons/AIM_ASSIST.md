@@ -1,8 +1,8 @@
 # Aim assist, and the gun numbers it works with
 
-`scripts/combat/aim_assist.gd` (`AimAssist`). Built 2026-10-11. Probe: `tools/aim_assist_probe.gd`
+`scripts/combat/aim_assist.gd` (`AimAssist`). Built 2026-10-11. Probe: `tools/probes/aim_assist_probe.gd`
 (23 checks). Section 9 gives every gun's worst and best numbers, rolled by
-`tools/gun_stat_table.gd`.
+`tools/shots/gun_stat_table.gd`.
 
 Line numbers below are as of 2026-10-12. Search for the constant's name if they have moved.
 
@@ -32,7 +32,7 @@ Rules every piece keeps:
 
 ## 2. One frame, in order
 
-1. **The mouse moves.** `DebugCamera._input` (`scripts/debug_camera.gd:191`) passes the turn
+1. **The mouse moves.** `DebugCamera._input` (`scripts/core/debug_camera.gd:191`) passes the turn
    through `AimAssist.filter_look`, which slows it over a target (friction) and remembers that
    the player turned.
 2. **`AimAssist._process`** (`aim_assist.gd:170`) runs after the camera has been put at the
@@ -122,7 +122,7 @@ So a weak point on the back is ignored until the player is behind.
 ## 6. Settings
 
 The Options > Aim Assist tab is built by `BrickcityMenuHost._build_aim_tab`
-(`scripts/brickcity_menu_host.gd:276`). The rows are at `brickcity_menu_host.gd:172` (simple)
+(`scripts/core/brickcity_menu_host.gd:276`). The rows are at `brickcity_menu_host.gd:172` (simple)
 and `:182` (advanced). The values land in static fields on `AimAssist` (`aim_assist.gd:34–45`)
 through `_apply_setting` (`brickcity_menu_host.gd:131`).
 
@@ -222,7 +222,7 @@ does not change their aim.
 | one class wrong only | its `WEAPONS` row (tracking) or `CLASS_RANGE` (reach) |
 | hip fire too loose or too laser-like | `HIP_SPREAD` |
 
-Every change: rerun `tools/aim_assist_probe.gd`. It checks no drift, no fighting the player,
+Every change: rerun `tools/probes/aim_assist_probe.gd`. It checks no drift, no fighting the player,
 the head's pitch kept, range, weak points facing, bullets, the snap and a freed target.
 
 ---
@@ -267,7 +267,7 @@ How to read them:
 Regenerate after any number changes:
 
 ```
-godot --headless --path . --script res://tools/gun_stat_table.gd -- out.md 300
+godot --headless --path . --script res://tools/shots/gun_stat_table.gd -- out.md 300
 ```
 
 Tier check: rifle seed 1234, tier 10 / tier 1 damage = 7.451 (Tier.power_mult(10) = 7.451); other stats the same: true.
@@ -438,13 +438,13 @@ Every gun type and kind is built from its **shots to kill a medium enemy** (shie
 1.2, health 1, in units of its health) at Unique, on level: the Armory Ledger's Time to kill tab
 and Docs/Weapons/COMBAT_DESIGN.md section 3. `WeaponClass._PRESETS` states each class's damage
 a round in those units (`DMG_UNIT`) and `KINDS` its heavy (and the shotgun's auto) from their
-own targets; `tools/combat_numbers_probe.gd` checks every count through the real
+own targets; `tools/probes/combat_numbers_probe.gd` checks every count through the real
 DamageSystem. The tables above are the rolls around those targets, modifiers included in the
 best end.
 
 ## 10. Tests and what is not built
 
-- `tools/aim_assist_probe.gd` (23 checks):
+- `tools/probes/aim_assist_probe.gd` (23 checks):
   - picking a target;
   - no drift on a still enemy;
   - friction;
@@ -460,7 +460,7 @@ best end.
   - a freed target;
   - a re-armed gun keeping one listener;
   - Off.
-- `tools/gun_stat_table.gd`: regenerates §9.3.
+- `tools/shots/gun_stat_table.gd`: regenerates §9.3.
 
 **Not yet:**
 - Controller look and bindings, and with them the controller assist.

@@ -163,7 +163,7 @@ uniform float shore_taper_depth = 2.5;
 group_uniforms underwater;
 // Colour only. The geometry does not change when the camera goes under --
 // see the column comment in vertex() for what happened when it did. The rest
-// of the submerged look is Environment fog (scripts/underwater.gd), because
+// of the submerged look is Environment fog (scripts/water/underwater.gd), because
 // the tell is the crisp sky, not the water.
 uniform bool camera_submerged = false;
 uniform vec4 deep_tint : source_color = vec4(0.10, 0.28, 0.40, 1.0);

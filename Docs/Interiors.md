@@ -3,7 +3,7 @@
 Design note, and now partly a description. Extends [Plan.md](Plan.md) §4.2 (three layers, only the
 last is LOD'd) to the things inside buildings, which is where the object count actually explodes.
 
-**Built: §1-§5, in first pass -- portal test and seeded spill included.** `scripts/room.gd`, `scripts/room_manifest.gd` and the room
+**Built: §1-§5, in first pass -- portal test and seeded spill included.** `scripts/rooms/room.gd`, `scripts/rooms/room_manifest.gd` and the room
 half of `BuildingRegistry`: rooms generated from the recipe, contents generated from
 `(building seed, room id)`, activation by proximity and by damage volume, a diff that survives
 deactivation, and §5.2's analytic resolve for a room that fell over.
@@ -16,8 +16,8 @@ Scale.md §4.1's rungs) are **removed**, with their gates. §1-§7 below are kep
 led here; where they describe those, they describe history. What stands from them: rooms and
 manifests from the recipe and a seed (§2), the diff (§3), furniture weighing nothing in the solve
 (§3.1), bricks riding the piece they stand on (§4.2), an untouched room costing nothing (§5.4), and
-a room's openings, which the squad AI reads. `tools/interior_probe.gd` passes 87 checks,
-`tools/interior_group_probe.gd` 33, `-- --groups --big` 23.
+a room's openings, which the squad AI reads. `tools/probes/interior_probe.gd` passes 87 checks,
+`tools/probes/interior_group_probe.gd` 33, `-- --groups --big` 23.
 
 **Not built:** occlusion (§3's `OccluderInstance3D`), item behaviours beyond being brick, and
 §5.3's audio rule, which needs audio. The portal test IS built, and it turns out to need no doors
@@ -407,7 +407,7 @@ Probes whose checks measure the removed rungs (`--rooms`, `interior_probe`, part
 
 ### 8.8 Stage 1 as built (2026-10-06)
 
-`scripts/interior_groups.gd` (the groups, what each holds, how it is drawn),
+`scripts/rooms/interior_groups.gd` (the groups, what each holds, how it is drawn),
 `shaders/interior_group.gdshader` (the fades), `CityScene._stream_groups` (who is near what, and the
 collision). **The default since 2026-10-07** (user: "interior seems to be working correctly at all
 ranges ... we should make storey groups default"). Until stage 4 (§8.12) there was a switch back to
@@ -438,7 +438,7 @@ What differs from §8.2 as written, and why:
 * **Whose floor has gone**: see §8.9 (stage 2). Stage 1 walked the groups at that height a pass
   later and hid what stood in a leaving section; both went with stage 2.
 
-Checks: `tools/interior_group_probe.gd` (20: the cut, one drawing per group, the clock, a change
+Checks: `tools/probes/interior_group_probe.gd` (20: the cut, one drawing per group, the clock, a change
 reaching one group and not the rest, DETAIL apart), and the scene's gate `city.tscn -- --groups --big`
 (17: ranges, the rungs silent, collision, a shot, a falling section, nothing made in a building
 coming apart), which writes `shots/interior_rungs_{14,50,92}.png` beside
@@ -648,7 +648,7 @@ picture of that model, so it is a small step; a dither there needs the fade in t
 materials). Until a kind's bake lands, a mesh kind's far tier is the mesh itself and goes at the
 range in one frame -- a few frames, once per kind.
 
-Checks: `tools/impostor_probe.gd` 30 (through a long lens: the card whole short of the band, less
+Checks: `tools/probes/impostor_probe.gd` 30 (through a long lens: the card whole short of the band, less
 of it at each step through, about half at half way, under a tenth of it left at the range, culled
 past it). Writes `shots/impostor_cull_fade.png`.
 

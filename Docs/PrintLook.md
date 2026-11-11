@@ -40,13 +40,13 @@ brightness by print order, the seam marked):
 
 ## 1.1 Side by side with the G-code
 
-`tools/toolpath_compare.gd` draws a sliced part bead by bead -- every extruding move a flattened
+`tools/shots/toolpath_compare.gd` draws a sliced part bead by bead -- every extruding move a flattened
 cylinder as wide as its line and as tall as its layer, at 1:43.75 -- beside the same part as the
 game draws it, from the same camera under the same sky: the top, a top edge, a stud, the side,
 a corner, the underside, and a hand's breadth from the top and the side.
 
     (slice each part as in 1, into <dir>/<part>.gcode)
-    godot --path . --script res://tools/toolpath_compare.gd -- --gcode=<dir> --out=<dir>
+    godot --path . --script res://tools/shots/toolpath_compare.gd -- --gcode=<dir> --out=<dir>
         [--pieces=brick_2x4,plate_2x2,slope_2x2,...]
 
 What it showed (2026-10-17), and what changed for it: the top lines are 0.41 mm apart, as drawn,
@@ -104,7 +104,7 @@ walls, zigzag, voids, stairs and Z seam past `print_fade_end`, the hollow's roof
   per-footprint toolpath map, straight from G-code, is the next step if the drawn rules are not
   enough -- a few MB, one texture read a pixel.
 
-`tools/print_look_shot.gd` takes the pictures: sides, tops, a floor of mixed tops, studs,
+`tools/shots/print_look_shot.gd` takes the pictures: sides, tops, a floor of mixed tops, studs,
 undersides, the seam, a wall at range, a ceiling seen from the room under it, a ledge, and
 terraces at 17 to 45 m with the studs `BrickNear` draws there (its cards on and off, and
 through a long lens).

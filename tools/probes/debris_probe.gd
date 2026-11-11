@@ -1,0 +1,360 @@
+extends SceneTree
+
+## Acceptance probe for Docs/AIPlan.md P0 step 5: debris by SIZE, with real
+## bodies falling in a real space.
+##
+##     godot --headless --path . --script tools/probes/debris_probe.gd
+##
+## The review's R2: "small" used to be a block count, and a floor panel is ONE
+## block 3.5 m across -- so a floor that broke away was deleted as debris, and
+## under A11 would have been something people walk through. Now:
+##
+##   * a LANDMARK (big enough to hide behind or stand on) is never deleted, is
+##     solid to people, and is kept by every machine;
+##   * a small piece -- DEBRIS_MAX_BLOCKS or fewer, however big -- is
+##     presentation: deleted where it came loose when unseen or far, and in view
+##     not a body at all but CRUMBS (IslandManager._crumble): it falls, stops on
+##     the floor and shrinks away;
+##   * where the wind is lifting small pieces (IslandManager.windy) one is still
+##     a body, rubble: kept while it can be seen, gone a second after it cannot,
+##     shrunk away (never popped) when it must go in view, and walked through;
+##   * the cap puts landmarks to sleep farthest from anybody first -- interest
+##     points, not one camera -- and never one somebody is standing next to.
+
+const TENSION := 9.3
+## Frames a visible small piece is watched: long enough to fall and land, and
+## far past the 0.3 s after landing the old rule swept it at.
+const WATCH_FRAMES := 150
+
+var _pass := 0
+var _fail := 0
+var _frames := 0
+var _phase := 0
+var _phase_frame := 0
+
+var _w: BrickWorld
+var _palette: Dictionary
+var _islands: IslandManager
+var _camera: Camera3D
+var _tower := -1
+## A second tower, far enough off that pieces from the two land well apart --
+## the cap test needs one landmark near somebody and one nowhere near.
+var _tower2 := -1
+const APART := 30.0
+var _rubble: BrickIsland
+## The crumb the brick in view became: where it started, where it stopped, and
+## the frame the last crumb went.
+var _crumb_y0 := 0.0
+var _crumb_half := 0.0
+var _crumb_land_y := INF
+var _crumb_gone_frame := -1
+var _crumb_frame0 := -1
+var _rubble_gone_frame := -1
+var _rubble2: BrickIsland
+var _away_frame := -1
+var _rubble2_gone_frame := -1
+var _removed := {}
+var _slabs: Array = []
+
+
+func _init() -> void:
+	print("debris probe (AIPlan P0 step 5)")
+	_check_classifier()
+	_w = BrickWorld.new()
+	_w.set_seed(4)
+	_palette = TowerRecipe.bake_palette(_w)
+	_tower = _w.create_chunk(Vector3i.ZERO, TowerRecipe.chunk_dims(20, 16, 10))
+	TowerRecipe.build(_w, _tower, _palette, 20, 16, 10)
+	_w.set_tension_per_stud(_tower, TENSION)
+	_tower2 = _w.create_chunk(Vector3i.ZERO, TowerRecipe.chunk_dims(20, 16, 10))
+	TowerRecipe.build(_w, _tower2, _palette, 20, 16, 10)
+	_w.set_tension_per_stud(_tower2, TENSION)
+	_w.set_chunk_transform(_tower2, Transform3D(Basis(), Vector3(APART, 0.0, 0.0)))
+
+	var ground := StaticBody3D.new()
+	ground.collision_layer = Layers.WORLD
+	var shape := CollisionShape3D.new()
+	var box := BoxShape3D.new()
+	box.size = Vector3(200.0, 1.0, 200.0)
+	shape.shape = box
+	shape.position = Vector3(0.0, -0.5, 0.0)
+	ground.add_child(shape)
+	root.add_child(ground)
+
+	_camera = Camera3D.new()
+	root.add_child(_camera)
+	_islands = IslandManager.new()
+	root.add_child(_islands)
+	_islands.setup(_w, null, _camera)
+	_islands.piece_removed.connect(func(isl: BrickIsland, why: StringName):
+		_removed[why] = int(_removed.get(why, 0)) + 1
+		if isl == _rubble:
+			_rubble_gone_frame = _frames
+		if isl == _rubble2:
+			_rubble2_gone_frame = _frames)
+	physics_frame.connect(_tick)
+
+
+func _ok(what: String, cond: bool, detail: String = "") -> void:
+	if cond:
+		_pass += 1
+		print("  ok   %s%s" % [what, ("  " + detail) if detail else ""])
+	else:
+		_fail += 1
+		print("  FAIL %s%s" % [what, (" -- " + detail) if detail else ""])
+
+
+# ---------------------------------------------------------------------------
+
+func _check_classifier() -> void:
+	print("\nwhat counts as a landmark is size, not blocks")
+	_ok("a floor panel, one block 3.5 m across, is a landmark",
+			IslandManager.is_landmark_size(Vector3(3.5, 0.14, 3.5)))
+	_ok("a beam 2.1 m long is a landmark",
+			IslandManager.is_landmark_size(Vector3(2.1, 0.42, 0.35)))
+	_ok("three 2x4 bricks stacked, waist high, is a landmark",
+			IslandManager.is_landmark_size(Vector3(1.4, 1.26, 0.7)))
+	_ok("a single 2x4 brick is not",
+			not IslandManager.is_landmark_size(Vector3(1.4, 0.42, 0.7)))
+	_ok("nor is a 2x4 plate", not IslandManager.is_landmark_size(Vector3(1.4, 0.14, 0.7)))
+
+
+## The first `n` alive blocks in `chunk` whose part name starts with `prefix`.
+func _find_n(prefix: String, n: int, chunk: int) -> PackedInt32Array:
+	var out := PackedInt32Array()
+	var skip := {}
+	while out.size() < n:
+		var id := _find(prefix, skip, chunk)
+		if id < 0:
+			break
+		skip[id] = true
+		out.append(id)
+	return out
+
+
+## The first alive block in the tower whose part name starts with `prefix`.
+func _find(prefix: String, skip := {}, chunk := -1) -> int:
+	if chunk < 0:
+		chunk = _tower
+	for id in _w.get_block_count(chunk):
+		if skip.has(id) or not _w.is_solid(chunk, _cell(id, chunk)):
+			continue
+		if _w.get_archetype_name(_w.get_block_archetype(chunk, id)).begins_with(prefix):
+			return id
+	return -1
+
+
+func _cell(id: int, chunk: int) -> Vector3i:
+	var c := StructureReplayer.block_cell(_w, chunk, id)
+	return _w.get_chunk_origin(chunk) + c
+
+
+func _look(from: Vector3, at: Vector3) -> void:
+	_camera.global_position = from
+	_camera.look_at(at, Vector3.UP)
+
+
+# ---------------------------------------------------------------------------
+
+func _tick() -> void:
+	_frames += 1
+	_phase_frame += 1
+	_islands.tick()
+	match _phase:
+		0:
+			_check_births()
+			_next()
+		1:
+			# The visible brick falls and lands, and is watched.
+			_watch_crumb()
+			if _rubble_gone_frame >= 0 or _phase_frame > WATCH_FRAMES:
+				_check_kept_in_view()
+				_next()
+		2:
+			# The cap wanted it while it was in view: it shrinks away.
+			if _rubble_gone_frame >= 0 or _phase_frame > 90:
+				_check_shrunk()
+				_next()
+		3:
+			# A second brick, then the camera looks away from it.
+			if _phase_frame == 30:
+				_look(Vector3(3.5, 3.0, 20.0), Vector3(3.5, 3.0, 60.0))
+				_away_frame = _frames
+			if _rubble2_gone_frame >= 0 or _phase_frame > 200:
+				_check_unseen()
+				_islands.small_live_max = 220
+				_phase = 10
+				_phase_frame = 0
+		10:
+			# The two floor panels settle.
+			var still := 0
+			for isl in _slabs:
+				if isl.is_valid() and isl.settled:
+					still += 1
+			if still == _slabs.size() or _phase_frame > 400:
+				_check_cap()
+				_finish()
+
+
+func _next() -> void:
+	_phase += 1
+	_phase_frame = 0
+
+
+func _check_births() -> void:
+	print("\nwhat is kept and what is deleted where it came loose")
+	var plate := _find("plate_10x10")
+	var brick := _find("brick_2x4")
+	_ok("the tower has a floor panel and a brick to cut", plate >= 0 and brick >= 0)
+	# DEBRIS_MAX_BLOCKS: a floor panel on its own is a sheet of plastic, not cover.
+	_ok("a floor panel on its own is debris, however big",
+			not _islands.group_is_landmark(_tower, PackedInt32Array([plate])))
+	_ok("a single brick is not a landmark either",
+			not _islands.group_is_landmark(_tower, PackedInt32Array([brick])))
+	var floor := _find_n("", 12, _tower)
+	_ok("a dozen bricks together, metres across, are a landmark", floor.size() == 12
+			and _islands.group_is_landmark(_tower, floor))
+
+	# Nobody can see the tower: the camera is close by but facing away.
+	_look(Vector3(3.5, 3.0, 20.0), Vector3(3.5, 3.0, 60.0))
+	var kept := _islands.spawn(_tower, floor)
+	_ok("an unseen landmark still comes loose as a body", kept != null)
+	if kept != null:
+		_ok("as structure, not rubble", kept.landmark and not kept.disposable
+				and kept.body.collision_layer == Layers.FALLING)
+		_slabs.append(kept)
+	var before := _islands.discarded + _islands.tiny_deleted
+	var gone := _islands.spawn(_tower, PackedInt32Array([brick]))
+	_ok("an unseen brick is deleted where it came loose", gone == null
+			and _islands.discarded + _islands.tiny_deleted > before)
+
+	# Now looking straight at it: a small piece nearby and in view is crumbs --
+	# no body, a brick drawn falling.
+	_look(Vector3(3.5, 3.0, 14.0), Vector3(3.5, 2.0, 2.8))
+	var seen := _find("brick_2x4", {brick: true})
+	var crumbs0 := _islands.crumb_count
+	var as_body := _islands.spawn(_tower, PackedInt32Array([seen]))
+	_ok("a brick in view crumbles: no body, one brick drawn falling",
+			as_body == null and _islands.crumb_count == crumbs0 + 1
+			and not _w.is_solid(_tower, _cell(seen, _tower)),
+			"%d crumb(s)" % _islands.crumb_count)
+	var cr = _islands._crumbs.values()[0] if not _islands._crumbs.is_empty() else null
+	if cr != null and cr.pos.size() > 0:
+		_crumb_y0 = cr.pos[0].y
+		_crumb_half = cr.half_h[0]
+	_crumb_frame0 = _frames
+
+	# In the wind it is still a body -- rubble, which people walk through -- so
+	# the wind has something to lift.
+	_islands.windy(0, Vector3(3.5, 0.0, 2.8), 60.0, 600000)
+	seen = _find("brick_2x4", {brick: true})
+	_rubble = _islands.spawn(_tower, PackedInt32Array([seen]))
+	_ok("a brick in the wind comes loose as a body", _rubble != null)
+	if _rubble != null:
+		_ok("as rubble", _rubble.disposable and not _rubble.landmark
+				and _rubble.body.collision_layer == Layers.RUBBLE)
+	_ok("and people walk through rubble", Layers.PAWN_MASK & Layers.RUBBLE == 0
+			and Layers.PAWN_MASK & Layers.DEBRIS != 0)
+
+	# A second floor panel for the cap, from the far tower. Nobody is looking: it
+	# is a landmark, and landmarks are kept whoever can see them.
+	var second := _islands.spawn(_tower2, _find_n("", 12, _tower2))
+	if second != null:
+		_slabs.append(second)
+
+
+func _watch_crumb() -> void:
+	if _crumb_gone_frame >= 0:
+		return
+	if _islands.crumb_count == 0:
+		_crumb_gone_frame = _frames
+		return
+	var cr = _islands._crumbs.values()[0]
+	if cr.pos.size() > 0 and cr.landed[0] > 0:
+		_crumb_land_y = cr.pos[0].y
+
+
+func _check_kept_in_view() -> void:
+	print("\nthe crumb falls, stops on the floor, and goes")
+	_ok("it fell and stopped on the ground the ray found",
+			_crumb_land_y < _crumb_y0 and absf(_crumb_land_y - _crumb_half) < 0.02,
+			"from y %.2f to %.2f, ground at 0, half its height %.2f" % [
+				_crumb_y0, _crumb_land_y, _crumb_half])
+	var crumb_ms := int(float(_crumb_gone_frame - _crumb_frame0)
+			/ float(Engine.physics_ticks_per_second) * 1000.0)
+	# Not shrunk away a second and a half on, as it was: once it has stopped it
+	# lies there, laid in the heap (BrickHeap, CollapseNext 0 item 17).
+	# (The brick dropped beside it in the wind comes to rest on that spot and
+	# takes it out of the heap again -- what a piece settles on goes.)
+	_ok("and once it has stopped, it lies there: no longer falling, laid in the heap",
+			_crumb_gone_frame >= 0 and crumb_ms < IslandManager.CRUMB_LIFE_MS
+			and _islands.heap.laid >= 1, "%d ms; %s" % [crumb_ms, _islands.heap.census_line()])
+	print("\ndebris in view stays in view")
+	_ok("the brick is still there two and a half seconds on",
+			_rubble != null and _rubble.is_valid() and _rubble_gone_frame < 0)
+	_ok("and it has come to rest -- the old rule swept it 0.3 s after that",
+			_rubble != null and _rubble.is_valid() and _rubble.settled)
+	# The cap wants it gone, and it is in view: shrink, not pop.
+	_islands.small_live_max = 0
+	_islands.total_live_max = 1000
+	_islands.tick()
+	_ok("the cap takes it by shrinking it, not by popping it",
+			_rubble != null and _rubble.is_valid() and _rubble.fade_since > 0)
+
+
+func _check_shrunk() -> void:
+	var ms := int(float(_phase_frame) / float(Engine.physics_ticks_per_second) * 1000.0)
+	_ok("and it is gone once shrunk", _rubble_gone_frame >= 0 and _islands.debris_faded > 0,
+			"%d ms" % ms)
+	_islands.small_live_max = 220
+	# The second brick, in view, for the look-away.
+	_look(Vector3(3.5, 3.0, 14.0), Vector3(3.5, 2.0, 2.8))
+	var id := _find("brick_2x4", {})
+	_rubble2 = _islands.spawn(_tower, PackedInt32Array([id]))
+	_ok("a second brick in the wind comes loose as a body", _rubble2 != null)
+
+
+func _check_unseen() -> void:
+	print("\ndebris out of view goes")
+	var ms := int(float(_rubble2_gone_frame - _away_frame) / float(Engine.physics_ticks_per_second) * 1000.0)
+	_ok("once nobody can see it, it goes", _rubble2_gone_frame >= 0)
+	_ok("within a second or so, not at once and not never",
+			ms >= 900 and ms <= 1400,
+			"%d ms after the camera turned away" % ms)
+
+
+func _check_cap() -> void:
+	print("\nthe cap puts to sleep farthest from anybody, never under anybody")
+	_ok("both floor panels came to rest", _slabs.size() == 2
+			and _slabs[0].settled and _slabs[1].settled)
+	if _slabs.size() < 2:
+		return
+	var a: BrickIsland = _slabs[0]
+	var b: BrickIsland = _slabs[1]
+	# Somebody stands on A. B is the one that may go.
+	var on_a := _islands.world_aabb(a).get_center()
+	_islands.interest = func() -> PackedVector3Array: return PackedVector3Array([on_a])
+	_islands.large_live_max = 1
+	_islands.total_live_max = 1000
+	_islands.tick()
+	_ok("the one somebody is standing on stays", a.is_valid())
+	_ok("the other is put to sleep", not b.is_valid() and _islands.dormant.size() == 1,
+			"%d asleep" % _islands.dormant.size())
+
+	# And with somebody next to every one, nothing goes -- however far over.
+	var c := _islands.spawn(_tower, _find_n("", 12, _tower))
+	if c == null:
+		_ok("a third panel to try it with", false)
+		return
+	var on_c := _islands.world_aabb(c).get_center()
+	_islands.interest = func() -> PackedVector3Array: return PackedVector3Array([on_a, on_c])
+	c.settled = true
+	c.settled_ms = Time.get_ticks_msec()
+	_islands.large_live_max = 0
+	_islands.tick()
+	_ok("nobody's floor is put away, even over the cap", a.is_valid() and c.is_valid())
+
+
+func _finish() -> void:
+	print("\n%d passed, %d failed" % [_pass, _fail])
+	quit(1 if _fail > 0 else 0)

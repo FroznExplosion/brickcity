@@ -37,9 +37,9 @@ in `scenes/player/`, `scenes/weapons/`, `scenes/ui/`.
 | Spread bloom in `Weapon.gd` | [`GunController`](../../scripts/combat/gun_controller.gd) `bloom_per_shot`, `spread_mult` | Opt-in, so a soldier's gun behaves exactly as before; every roll still the gun's seeded RNG |
 | `Reticle.gd`, `AmmoOverlay`, `HealthOverlay` | [`scripts/pawn/player_hud.gd`](../../scripts/pawn/player_hud.gd) (`PlayerHud`) | Crosshair gap = the real cone at the real FOV; hitmarkers stay `CombatFeedback`'s |
 | Hor+ FOV (`PlayerController._apply_fov`) | `PlayerView` | Horizontal 90°, converted to the camera's vertical FOV per aspect |
-| `menu/` — main menu, pause menu, options, rebinding, the fit-safe layout and its tests | [`menu/`](../../menu/) copied whole; [`scripts/brickcity_menu_host.gd`](../../scripts/brickcity_menu_host.gd) | §7.1. Rows nothing here honours were deleted; the player's keys became input actions |
+| `menu/` — main menu, pause menu, options, rebinding, the fit-safe layout and its tests | [`menu/`](../../menu/) copied whole; [`scripts/core/brickcity_menu_host.gd`](../../scripts/core/brickcity_menu_host.gd) | §7.1. Rows nothing here honours were deleted; the player's keys became input actions |
 
-The gate for it is [`tools/moves_probe.gd`](../../tools/moves_probe.gd) (the moves) and the city's
+The gate for it is [`tools/probes/moves_probe.gd`](../../tools/probes/moves_probe.gd) (the moves) and the city's
 `-- --play` pass (the pawn in the city, with the view and HUD on).
 
 ---

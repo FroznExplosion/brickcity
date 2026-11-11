@@ -32,7 +32,7 @@ A third way to lay a world, opt-in: `"ground": "slopes"` in the world file, F10 
   curves scattered (level spots, 1 in 8). Poking bricks (`set_curve_bricks`) exist but default 0.
 * **Placement** (`city_placer.ground_top`): a build on the ground stands at the HIGHEST ground under
   its footprint, the pad fills brick up to it (Terrain.md 21.8).
-* Test: `tools/terrain_probe.gd` (slopes section). Shots: `heightfield_test -- --slopeshot
+* Test: `tools/probes/terrain_probe.gd` (slopes section). Shots: `heightfield_test -- --slopeshot
   --curve=0.15 [--curvestep=N] [--nobevel] [--lodview]` writes `shots/hf_ground_*`.
 
 **Next for terrain:**
@@ -44,19 +44,19 @@ A third way to lay a world, opt-in: `"ground": "slopes"` in the world file, F10 
    (shelves change the field, so pads and sea level move with the mode).
 
 ### Planet prep (Planets.md; §9 is the "change now" list)
-* 9.1 built: `scripts/gravity.gd` -- every per-frame fall and every project-gravity read.
+* 9.1 built: `scripts/core/gravity.gd` -- every per-frame fall and every project-gravity read.
 * 9.2 built: `BuildingRegistry.to_building/to_world/own_box/contains/ray_hit`, `on_grid` snaps in
   `grid_frame_at(p)`.
 * 9.5 dropped (measured: reading a tile from disk 14 ms vs building it 2.9 ms).
-* 9.6 built: `scripts/world_frame.gd` -- saves and damage-log wire form in the body's frame;
-  `tools/world_frame_probe.gd`.
+* 9.6 built: `scripts/city/world_frame.gd` -- saves and damage-log wire form in the body's frame;
+  `tools/probes/world_frame_probe.gd`.
 * 9.3 / 9.4: see below / done via slopes ground.
 
 ### AI -- buildings by their rooms (AI.md 3.6.1)
 * Step 2 built: `scripts/ai/building_layout.gd` (`BuildingLayout.for_tower` from the recipe,
   `for_record` from a structure record; `space_at`, `route`, `reachable`). Uses
   `TowerRecipe.wall_doorway` / `doorways` (the same function the bricks use).
-  `tools/building_layout_probe.gd` checks it against built bricks. Nothing calls it yet.
+  `tools/probes/building_layout_probe.gd` checks it against built bricks. Nothing calls it yet.
 * **Next: step 1 = the VAULT** (written up in 3.6.1): an `AINav` vault link (sill 6 plates over the
   floor, gap to 15, ≥2 studs wide, across a 2-stud wall), the mantle half of `PawnMoves` for AI
   pawns (soldiers have `moves == null` today), then window entries in `bt_play_clear_room`,
@@ -94,7 +94,7 @@ A third way to lay a world, opt-in: `"ground": "slopes"` in the world file, F10 
   only move it to `add_child`, so none was made. Trees are no longer brought in by an encounter
   (`Encounter.setup`, `Trees.is_tree`): 39 -> 24 promotions at the firefight's start, ~97 -> 77 ms
   in all; the worst tick left is one 60-course tower, 8.1 ms on its own.
-  *Promotions made cheaper, 2026-10-21* (`tools/promote_cost_probe.gd` times the parts): every
+  *Promotions made cheaper, 2026-10-21* (`tools/probes/promote_cost_probe.gd` times the parts): every
   bake copied the whole 273-part palette for its worker -- now one shared read-only snapshot
   (`BrickWorld.palette_snapshot`), bake start 1.0-1.9 -> 0.1 ms; `BuildingCollision` builds its
   merged bands in one walk (`add_band_shapes`), ~20% off. Firefight gate: 3.2 -> 1.6 ms a

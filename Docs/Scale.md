@@ -556,7 +556,7 @@ passed nothing and failed. The undercut is worked out from the recipe now.
 
 #### The seventh: floors IN the walls (2026-09-23)
 
-The sixth attempt stood up, and `tools/structure_probe.gd` asked it a question
+The sixth attempt stood up, and `tools/probes/structure_probe.gd` asked it a question
 nobody had: **which floor panels share a joint with an exterior wall?** None.
 Not one in the city — 0 of 840 on the biggest tower. The lattice started at the
 inside face of the wall, the ring under the wall was its own 2x2 plates, and

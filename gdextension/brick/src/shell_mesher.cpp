@@ -15,7 +15,7 @@
 #include <cmath>
 #include <vector>
 
-// The constants of scripts/building_shell.gd, and its arithmetic: GDScript
+// The constants of scripts/city/building_shell.gd, and its arithmetic: GDScript
 // works in doubles and rounds to float where a value goes into a Vector, so
 // this does the same, and the arrays come out as the script's did.
 namespace {

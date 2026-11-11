@@ -69,7 +69,7 @@ since storey units' log commands (`--ring` 4 of 4, no FAIL line). Open, in order
   34.7 ms, mean 16.6, none over 100 ms.
 - Crash offsets: main's DLL is built `pdb=yes`; `map=yes` writes a linker map to look an offset
   up in a library built without symbols (another chat may rebuild main without pdb).
-- GDScript warnings in the city/building scripts cleared (`tools/warn_check.tscn` prints a
+- GDScript warnings in the city/building scripts cleared (`tools/shots/warn_check.tscn` prints a
   script's warnings); `city_scene.gd` Tank.Seat = -1 left for the vehicles chat.
 
 **Later 2026-10-24:** main's DLL rebuilt (freeze fix live). Item 9 done: staggered seams

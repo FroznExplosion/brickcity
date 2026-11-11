@@ -81,44 +81,44 @@ godot --path . --resolution 1280x720 -- --shot --tall
 Acceptance probes — headless, no rendering, no physics:
 
 ```bash
-godot --headless --path . --script tools/m0_probe.gd
+godot --headless --path . --script tools/probes/m0_probe.gd
 ```
 
 ```bash
-godot --headless --path . --script tools/m1_probe.gd
+godot --headless --path . --script tools/probes/m1_probe.gd
 ```
 
 ```bash
-godot --headless --path . --script tools/m2_probe.gd
+godot --headless --path . --script tools/probes/m2_probe.gd
 ```
 
 ```bash
-godot --headless --path . --script tools/m3_probe.gd
+godot --headless --path . --script tools/probes/m3_probe.gd
 ```
 
 Floors, and shooting a chunk that has moved:
 
 ```bash
-godot --headless --path . --script tools/floor_probe.gd
+godot --headless --path . --script tools/probes/floor_probe.gd
 ```
 
 Breaking a building that has already fallen, and gravity for a rotated grid:
 
 ```bash
-godot --headless --path . --script tools/fallen_probe.gd
+godot --headless --path . --script tools/probes/fallen_probe.gd
 ```
 
 What comes loose when a building is hit, split into flooring and walling:
 
 ```bash
-godot --headless --path . --script tools/floorshed_probe.gd
+godot --headless --path . --script tools/probes/floorshed_probe.gd
 ```
 
 Integer determinism, command replay and content-derived piece identity -- the substrate a
 networked game needs ([Multiplayer.md](Multiplayer.md)):
 
 ```bash
-godot --headless --path . --script tools/replay_probe.gd
+godot --headless --path . --script tools/probes/replay_probe.gd
 ```
 
 Sustained destruction across a bigger city, with rendering on. **This is the same
@@ -132,49 +132,49 @@ godot --path . -- --stress --buildings=200
 City scale, the registry, and what streaming costs:
 
 ```bash
-godot --headless --path . --script tools/city_probe.gd
+godot --headless --path . --script tools/probes/city_probe.gd
 ```
 
 Drawn studs on brick chunks, and the rule that hides covered ones:
 
 ```bash
-godot --headless --path . --script tools/stud_probe.gd
+godot --headless --path . --script tools/probes/stud_probe.gd
 ```
 
 Authored surfaces (gap 8) -- a part drawn as its shape rather than its cells:
 
 ```bash
-godot --headless --path . --script tools/mesh_probe.gd
+godot --headless --path . --script tools/probes/mesh_probe.gd
 ```
 
 Convex collision (gap 8, part two) -- a real space and real rays:
 
 ```bash
-godot --headless --path . --script tools/hull_probe.gd
+godot --headless --path . --script tools/probes/hull_probe.gd
 ```
 
 Slopes, curved slopes, round bricks and arches -- one shape, drawn, collided and connected:
 
 ```bash
-godot --headless --path . --script tools/shaped_probe.gd
+godot --headless --path . --script tools/probes/shaped_probe.gd
 ```
 
 Anchored placement in the workshop -- drag, re-anchor, blocking, side-stud snap:
 
 ```bash
-godot --headless --path . --script tools/place_probe.gd
+godot --headless --path . --script tools/probes/place_probe.gd
 ```
 
 Frames -- sideways building, welds, and grounding through them:
 
 ```bash
-godot --headless --path . --script tools/frame_probe.gd
+godot --headless --path . --script tools/probes/frame_probe.gd
 ```
 
 Orientations -- flips, yaw, and the two-bit face masks:
 
 ```bash
-godot --headless --path . --script tools/orient_probe.gd
+godot --headless --path . --script tools/probes/orient_probe.gd
 ```
 
 The same city with nothing fixed to its buildings, for measuring what the fixtures cost:
@@ -193,7 +193,7 @@ godot --path . --resolution 1280x720 -- --chamfer
 Interiors -- rooms generated from the recipe, contents generated from a seed:
 
 ```bash
-godot --headless --path . --script tools/interior_probe.gd
+godot --headless --path . --script tools/probes/interior_probe.gd
 ```
 
 The same thing with distances, collision and a mesh in it:
@@ -205,7 +205,7 @@ godot --path . --resolution 1280x720 -- --rooms
 Wreckage given back -- a record that round-trips a chunk exactly:
 
 ```bash
-godot --headless --path . --script tools/dormant_probe.gd
+godot --headless --path . --script tools/probes/dormant_probe.gd
 ```
 
 The same thing where the distances and the memory are -- collapse three buildings, walk away, walk
@@ -218,7 +218,7 @@ godot --path . --resolution 1280x720 -- --dormant
 Fixtures -- a dormant staircase, what wakes it, and what it does when the building comes down:
 
 ```bash
-godot --headless --path . --script tools/fixture_probe.gd
+godot --headless --path . --script tools/probes/fixture_probe.gd
 ```
 
 The same gate where it needs a scene -- bodies, meshes, and a figure standing on a tread. Writes
@@ -251,7 +251,7 @@ godot --path . --resolution 1280x720 -- --buildshot
 A two-frame demo build to place, for when nothing has been hand-built yet:
 
 ```bash
-godot --headless --path . --script tools/demo_build.gd
+godot --headless --path . --script tools/shots/demo_build.gd
 ```
 
 Build mode -- the workshop. Place bricks (a staircase is built from spiral stair pieces), undo,
@@ -270,25 +270,25 @@ godot --path . --resolution 1280x720 res://scenes/workshop.tscn -- --gate
 Its acceptance probe, headless:
 
 ```bash
-godot --headless --path . --script tools/build_probe.gd
+godot --headless --path . --script tools/probes/build_probe.gd
 ```
 
 Gate G1b -- a damaged building still looks damaged once its bricks are gone:
 
 ```bash
-godot --headless --path . --script tools/shell_probe.gd
+godot --headless --path . --script tools/probes/shell_probe.gd
 ```
 
 An editable chunk -- place, remove, and the two questions a ghost asks:
 
 ```bash
-godot --headless --path . --script tools/edit_probe.gd
+godot --headless --path . --script tools/probes/edit_probe.gd
 ```
 
 The part palette, and whether it is proportioned like the real thing:
 
 ```bash
-godot --headless --path . --script tools/palette_probe.gd
+godot --headless --path . --script tools/probes/palette_probe.gd
 ```
 
 Rebuild the extension (SCons is pip-installed and **not on PATH**):
@@ -319,7 +319,7 @@ nothing is allowed off the grid, because the integer adjacency test is what the 
 stack rides on. A twelve-entry filament palette is carried per block as a byte and emitted as
 vertex colour — no textures, matching spec §2.
 
-### The part palette (`scripts/brick_palette.gd`)
+### The part palette (`scripts/build/brick_palette.gd`)
 
 **A part is what a player picks; an archetype is what the extension bakes.** The table lists
 **36 parts** -- plates, bricks and tiles at 1x1 to 4x4, a 10x10 floor plate, columns, brackets, and
@@ -351,7 +351,7 @@ capping a wall head, is one more table row whenever it is wanted.
 Note that none of this is visible yet either way. **Stud geometry is M5** (Plan D4); a stud mask
 today is a structural fact the connectivity graph reads, not something on screen.
 
-**Proportions are asserted, not asserted-in-a-comment.** `tools/palette_probe.gd` passes
+**Proportions are asserted, not asserted-in-a-comment.** `tools/probes/palette_probe.gd` passes
 **1177 checks**:
 
 | | |
@@ -428,7 +428,7 @@ reaches all of it -- the probe seeds a stack from the TOP block and the whole st
 **The gate is met.** A sideways panel welded to an upright wall by two bricks stands; damage
 elsewhere in the wall leaves it alone; killing the two bricks the welds hold kills both welds and
 the panel sheds -- with its own bricks intact, because a weld failing separates rather than
-destroys. `tools/frame_probe.gd` passes **57 checks**.
+destroys. `tools/probes/frame_probe.gd` passes **57 checks**.
 
 #### Six build grids, not one you conjure
 
@@ -471,7 +471,7 @@ meet every second stud.
 
 All of it was first checked by driving the scene by hand, and one of those checks was wrong in a way
 that read as a pass: a ghost that seemed to slide *through* a wall had in fact re-anchored on the
-wall's top, which is correct. `tools/place_probe.gd` now drives `_aim_ray` with exact rays and pins
+wall's top, which is correct. `tools/probes/place_probe.gd` now drives `_aim_ray` with exact rays and pins
 each property on its own -- **35 checks**:
 
 | | |
@@ -511,7 +511,7 @@ render inside out. Because the test asks about LIVE blocks, destroying or removi
 brings the studs under it back. Each frame's studs hang off that frame's mesh, so a sideways grid's
 studs point sideways for nothing. They never cast (Terrain.md 7.4).
 
-`tools/stud_probe.gd` passes **23 checks**: the counts through covering, tiles, inverted parts, kill
+`tools/probes/stud_probe.gd` passes **23 checks**: the counts through covering, tiles, inverted parts, kill
 and remove; the buffer layout down to the float; and the workshop's 48 x 48 baseplate, a 2x4 that
 buries eight and shows eight, and a tile that buries four and shows none.
 
@@ -547,7 +547,7 @@ annulus, 58 triangles a step. The octagon's vertices sit on the sector boundarie
 edge is exactly one octagon side and the two meet along it rather than overlapping -- two coplanar
 tops over one patch would z-fight.
 
-`tools/mesh_probe.gd` passes **28 checks**, mutation-tested: dropping the winding fix-up fails one,
+`tools/probes/mesh_probe.gd` passes **28 checks**, mutation-tested: dropping the winding fix-up fails one,
 and letting authored surfaces cull each other fails another.
 
 #### Gap 8, part two: parts that collide as their shape
@@ -565,7 +565,7 @@ The staircase's two hulls are the octagonal newel and the tread, built from the 
 `step_mesh` draws -- so what is seen is what is hit. Both are genuinely convex: an octagonal prism,
 and a 45 degree sector cut off by a straight chord.
 
-`tools/hull_probe.gd` passes **13 checks** against a real physics space rather than a shape count
+`tools/probes/hull_probe.gd` passes **13 checks** against a real physics space rather than a shape count
 alone. The one that matters fires a ray at a point **inside a tread's cell but outside its curve**:
 the old box-per-cell rule reports it solid, the hulls report it empty, and the tread is solid where
 it is drawn with its top at the tread's height. Mutation-tested on the merged path (switching the
@@ -580,7 +580,7 @@ stands or breaks.
 
 Nine parts in the palette now use gap 8 rather than the staircase alone: **slopes** 1x2, 2x2 and
 2x4, **curved slopes** 1x2 and 2x2, **round bricks** 1x1 and 2x2, and **arches** 1x4 and 1x6, all a
-brick tall. `scripts/shaped_parts.gd` builds each from ONE description -- a polygon profile extruded
+brick tall. `scripts/build/shaped_parts.gd` builds each from ONE description -- a polygon profile extruded
 along one axis -- and derives all three things a part is from it:
 
 | | from the profile |
@@ -620,7 +620,7 @@ air to a voxel face, as a decorative one already did. Where the shape does cover
 is buried and costs a quad; the staircase's treads, which had the same problem at their curved
 edge, get it for free.
 
-`tools/shaped_probe.gd` passes **185 checks**, mutation-tested three ways (reversed edge normals,
+`tools/probes/shaped_probe.gd` passes **185 checks**, mutation-tested three ways (reversed edge normals,
 a wrong quarter turn in `front_of`, an arch missing its haunches -- 9, 6 and 2 failures). Its
 strongest checks are the ones that set the three descriptions against each other: the drawn
 surface encloses **exactly** the profile's volume (divergence theorem, which also proves the
@@ -661,7 +661,7 @@ masks came out identical under the new rule.
 **Headroom** is checked against the player, who is four bricks (12 plates) tall: a revolution is
 eight rises, 16 plates, less the 2-plate tread above, so every tread has 14 plates clear over it.
 
-`tools/shaped_probe.gd` passes **240 checks**. For each spiral winding: the newel's columns have studs and
+`tools/probes/shaped_probe.gd` passes **240 checks**. For each spiral winding: the newel's columns have studs and
 sockets, its octagon is exactly `round_2x2`'s, eight pieces turned a quarter each stack into two
 revolutions with four joints apiece, a round 2x2 stacks on top; and in a real physics space a ray
 lands on each of eight treads one rise above the last, the tread a revolution up clears 12 plates,
@@ -680,7 +680,7 @@ Holding the same spiral part, the aim also **turns** it to be the next piece in 
 
 `K` (drop a prefab staircase) is gone from the workshop. Fixtures still load, draw, undo and delete
 for recipes that already carry one (`_add_fixture`); the city's own stairwells still use
-`StaircaseRecipe`. `tools/place_probe.gd` covers the snapping for both windings -- every newel stud,
+`StaircaseRecipe`. `tools/probes/place_probe.gd` covers the snapping for both windings -- every newel stud,
 the turn, four joints, a tread stud leaving the player's turn alone, a round 2x2 landing squarely --
 and the workshop gate now builds an eight-piece staircase by aiming, then checks a saved fixture
 still round-trips. The part sheets have a Spiral stairs page (`Docs/Parts/spirals.md`).
@@ -744,7 +744,7 @@ resolve to **two or four** archetypes rather than eight. The palette is now **20
 archetypes**, and `bake_variant` returns an existing id rather than baking a duplicate, so the
 name -> id map is deliberately many-to-one.
 
-`tools/orient_probe.gd` passes **51 checks**, including that the cell mask and the face masks move
+`tools/probes/orient_probe.gd` passes **51 checks**, including that the cell mask and the face masks move
 *together*: an inverted slope's downward stud has to be under the column that is actually
 full-height, which is the check that catches transforming one and not the other.
 
@@ -888,11 +888,11 @@ The phase that pays is the damage queue draining (19.2 ms mean, 52 fps): a build
 staircase in it has more bricks to take apart. That is the cost of the stairs being real, and it is
 the same cost any other brick would have.
 
-**Gate met**, in three halves: `tools/fixture_probe.gd` passes **47 checks** on the truth layer,
+**Gate met**, in three halves: `tools/probes/fixture_probe.gd` passes **47 checks** on the truth layer,
 `godot --path . -- --fixture` passes **17** in the city -- one chunk for a building and not two, a
 figure standing on a tread it found by looking, shooting the flight damaging the *building*, and
 toppling the building taking the whole flight with it -- and the workshop's own `-- --gate` passes
-**15** on the authoring end. `tools/build_probe.gd` is at **93** with the recipe format's share.
+**15** on the authoring end. `tools/probes/build_probe.gd` is at **93** with the recipe format's share.
 
 **Authored in the workshop, not hard-coded into the city.** `K` dropped a staircase where the ghost
 was (retired since: staircases are built from spiral stair pieces), and `BuildRecipe` v3 carries it -- one record per fixture rather than a column, holding a kind,
@@ -908,10 +908,10 @@ was authored after it. And the **default flight is measured, not guessed** -- fr
 cell to the highest brick above it, at two plates a step, never shorter than one revolution --
 because a guess produces a staircase to nowhere.
 
-**Gate met**, in three halves now: `tools/fixture_probe.gd` passes **57 checks** on the truth layer,
+**Gate met**, in three halves now: `tools/probes/fixture_probe.gd` passes **57 checks** on the truth layer,
 `godot --path . -- --fixture` passes **32** in the city, including a figure a little under three
 bricks tall standing on a tread, and the workshop's own `-- --gate` passes **16** on the authoring
-end. `tools/build_probe.gd` is up to **93** with the recipe format's share of it.
+end. `tools/probes/build_probe.gd` is up to **93** with the recipe format's share of it.
 
 ### Chamfered edges, for no triangles
 
@@ -1023,7 +1023,7 @@ over unwatched. It generates them now.
 **Gate met.** `godot --path . -- --rooms` is at **27 checks**, with the portal case and the spill in
 it: from
 sixty metres nothing is open, a blast puts a hole in a wall, the rooms are shut again by hand, and
-then *looking through the hole opens one* -- and turning away shuts it. `tools/interior_probe.gd`
+then *looking through the hole opens one* -- and turning away shuts it. `tools/probes/interior_probe.gd`
 passes **53 checks**: rooms generate identically twice and
 differently for a different building, a manifest is a pure function of its seed, an unopened room
 creates no chunk and no bricks, opening one puts its contents inside the room's own box, closing it
@@ -1115,7 +1115,7 @@ over every joint in the chunk, and the stress solve walked the joints twice more
 and share load. The walk now records each block's joints as it goes (runs of neighbour and cells,
 in the order they fired), the stress passes read those, and `BrickWorld.solve_structure` answers
 all three questions from one walk when the stress solve broke nothing (a fresh walk when it did).
-The answers are bit for bit what they were: `tools/solve_probe.gd` checks the one call against
+The answers are bit for bit what they were: `tools/probes/solve_probe.gd` checks the one call against
 the three on eight damage cases (up to 17 failures and 46 groups, two rounds each), and its
 `--digest` matched the old build's exactly -- every block's load, the failures, the stability,
 the groups.
@@ -1188,7 +1188,7 @@ that came loose. On `--big --shot`, **every one** of ~900 bodies that came loose
 * **The hard cap (step 4).** `MAX_MOVING` = 48: with that many already moving, a landmark coming
   loose farther than `FRACTURE_RANGE` from every player is cut out and dropped, on every machine --
   the host decides and the DETACH says so (`DamageLog.FLAG_GONE`; `StructureReplayer` cuts and
-  releases instead of adding a piece). Anything near a player always falls. `tools/cap_probe.gd`.
+  releases instead of adding a piece). Anything near a player always falls. `tools/probes/cap_probe.gd`.
 * **The steady costs of the islands tick.** The debris cap re-sorted every settled landmark by
   distance every tick while over its limit (2.4 ms a tick); it counts every tick and plans who
   goes every 15 ticks. The wake scan looked at every sleeping piece every tick (1.7 ms); it looks
@@ -1240,13 +1240,13 @@ settled rubble merged back into static chunks. This is step 1.
   "seen" and would have been swept on its first tick.
 
 `--big --shot`: 399 landmark bodies came loose (766-1,000 before), 14 debris bodies were kept
-because they were in view, 578 small groups never became bodies. `tools/debris_probe.gd` checks
+because they were in view, 578 small groups never became bodies. `tools/probes/debris_probe.gd` checks
 the new rules: kept in view past landing, shrunk rather than popped by the cap, gone ~1 s after
 the camera looks away.
 
 ### Collapse plan, steps 2 and 3: breakage, collapse, and the mega director
 
-`scripts/collapse_director.gd`. Every group a building's solve lets go of is sorted first:
+`scripts/destruction/collapse_director.gd`. Every group a building's solve lets go of is sorted first:
 
 * **Breakage** -- within 4 m of a hit on that building in the last 2 s (a blast, or something
   landing on it), and no more than 200 bricks. It comes loose exactly as before.
@@ -1321,7 +1321,7 @@ What step 4 left at the top of the worst tick, one thing at a time (`--big --sho
   out of a mega tower left fifteen stale in one tick. The rest are **parked** out of the space until
   their turn (a tick or two), since their stale boxes would overlap the piece just cut out and the
   solver throws a piece it finds overlapping. Furniture is in no band -- it has its own body -- so
-  shutting a room rebuilds nothing. `tools/building_collision_probe.gd`, 30 checks.
+  shutting a room rebuilds nothing. `tools/probes/building_collision_probe.gd`, 30 checks.
 * **A building made bricks drops its shell's boxes at once**; the shell's mesh still waits for the
   bands. Both bodies in the space was a solid box where the building's insides are, for as long as
   the bands took to draw.
@@ -1389,7 +1389,7 @@ in one tick, and the "node" step of a spawn was not the node.
 * **Solves side by side.** `BrickWorld.solve_structures` runs the tick's solves of different
   buildings on a thread each (scratch buffers per thread; slot 0 is the caller's, so a solve read
   back on the main thread is what it always was). Answers identical, brick by brick
-  (`tools/solve_probe.gd`). In the big city the queue rarely holds two at once, so it matters less
+  (`tools/probes/solve_probe.gd`). In the big city the queue rarely holds two at once, so it matters less
   than expected; the worst single solve of a 22,000-brick tower is 3-6 ms, and the high end is the
   joint cache being rebuilt after a room laid its furniture.
 * **Giving a building back.** Every open room re-walked the whole building for its dead bricks and
@@ -1443,7 +1443,7 @@ Mesh jobs start at the end of the tick, not mid-tick: one that finished halfway 
 its buffers made by whatever next called the renderer in it (the loose bricks' MultiMesh at 24 ms).
 Now that cost is the "render" flush at the top of the tick, or the frame's.
 
-`tools/float_probe.gd`, 20 checks. `--big --shot`: 114 nudges instead of mid-air settles, 24 pieces
+`tools/probes/float_probe.gd`, 20 checks. `--big --shot`: 114 nudges instead of mid-air settles, 24 pieces
 woken for lost support and 5 for being landed on; more pieces in motion (mean 36, from ~26) because
 they fall now; worst script tick 32 ms, of which 12 the upload flush.
 
@@ -1487,7 +1487,7 @@ they fall now; worst script tick 32 ms, of which 12 the upload flush.
   over the whole grid -- with a brick-sized UV2, so the seam shader draws brick outlines on it
   (`BuildingShell.SEAM_UNIT`). No bake is read or made; a piece that goes coarse gives its bake back
   as before. The same exposed area as the bricks facing every way, exactly
-  (`tools/coarse_probe.gd`), in 14-18% of the vertices the bricks upload and 39-49% of the
+  (`tools/probes/coarse_probe.gd`), in 14-18% of the vertices the bricks upload and 39-49% of the
   triangles they draw; built in 0.9-1.1 ms for a 20x20 tower, 3.6 ms for a 40x30 one of 60 courses
   (a grid of 234,000 cells -- the build walks the grid once and then only the exposed faces).
   * A piece that **comes loose** out there starts as the stand-in, so a far collapse never bakes or
@@ -1548,7 +1548,7 @@ and with the editor open every one of them is several times longer.
   one of 2,000 boxes, and the same pieces settle again and again in a collapse. It is one engine
   call now, `BrickWorld.rest_contacts`, with the same arithmetic in the same types; the whole
   per-piece loop's worst went from 90-114 ms to 0.5-2.6 ms. Compared with the script walk on 325
-  settles of a big collapse (identical, 16 with contacts) and in `tools/query_probe.gd`.
+  settles of a big collapse (identical, 16 with contacts) and in `tools/probes/query_probe.gd`.
 * **The stairwell check: 67 ms.** `_with_stairs` asks whether anything still stands round a
   stairwell before a section takes its stairs with it -- by walking `get_block_boxes` over the
   whole 22,000-brick tower, in the tick the section broke away. `BrickWorld.any_block_centre_in`
@@ -1679,7 +1679,7 @@ them from hits on pieces, every one landmark-sized.
   fail under load that also hung elsewhere, and a failed brick was "joined to nothing". Now a group of
   up to 48 bricks that came loose that way (`Block::strained`, not sheared or torn), whose own weight
   its studs into grounded structure hold, is put back as `Block::held`: grounded, carrying nobody
-  else's load, never held twice. `tools/hang_probe.gd`: with a storey shot through and stubs left,
+  else's load, never held twice. `tools/probes/hang_probe.gd`: with a storey shot through and stubs left,
   5 of 8 small falling groups were still clicked on; now 0. Buildings only: on pieces it changed how a
   toppling building re-solves, and collapse_probe's soldier stopped riding it over.
 * **Shell roofs.** An undamaged shell's collision was four walls and a ground plate, and a piece
@@ -1756,7 +1756,7 @@ theirs instead (above).
 
 ### Floors are part of their walls
 
-`tools/structure_probe.gd` found that not one floor panel in the city was joined to an exterior
+`tools/probes/structure_probe.gd` found that not one floor panel in the city was joined to an exterior
 wall: the floor stopped at the inside face and every panel hung on columns. The lattice now starts
 at the outer face, so the edge panels run under the walls and every course clamps them; columns
 stand centred on lattice points and tie four panels each; interior walls straddle the seams.
@@ -2186,7 +2186,7 @@ a fixture is built with its host, a player creation is a recipe and a shell. Wre
 because it is the one thing with **no recipe** -- it is the arbitrary leftovers of a collapse, and
 the only description of it is the blocks themselves.
 
-So that is the record. `scripts/chunk_record.gd` is a cell, an archetype and a colour per block,
+So that is the record. `scripts/city/chunk_record.gd` is a cell, an archetype and a colour per block,
 plus where it stands: **17 bytes a block**, against a chunk with an occupancy grid, a bake, a mesh
 and a rigid body. `IslandManager` sleeps a settled piece that has been quiet for six seconds and is
 more than 150 m away, and wakes it inside 120 m -- one of each per tick, because a sleep is a
@@ -2212,7 +2212,7 @@ existed.
 [Interiors §5](Interiors.md) wants the same tier for room contents, which is why the record is a
 type of its own rather than three fields on `BrickIsland`.
 
-**Gate met.** `tools/dormant_probe.gd` passes **21 checks** on the record -- round-trip,
+**Gate met.** `tools/probes/dormant_probe.gd` passes **21 checks** on the record -- round-trip,
 byte-identical mesh, damage is absent rather than replayed, a removed block is not part of a shape,
 the memory actually comes back, and the world box it keeps answers where it is while it sleeps.
 `godot --path . -- --dormant` passes **16** against a real collapse: wreckage settles, sleeps when
@@ -2225,7 +2225,7 @@ A placed build used to be resident forever. It had no cheap tier -- `building_sh
 skipped it and the streaming loop ignored it: bricks, a body and a mesh, from the moment it was
 placed until the scene ended.
 
-`scripts/build_shell.gd` is the answer to [BuildMode §12 question 3](BuildMode.md#12-open-questions),
+`scripts/build/build_shell.gd` is the answer to [BuildMode §12 question 3](BuildMode.md#12-open-questions),
 and the choice that made it easy was taking the **recipe** as the source rather than a bounding box.
 A build's recipe is its truth layer exactly as a tower's parameters are; the shell voxelises it at
 two studs and a course, maps every block's box into root ticks -- **a rotated frame included**, so a
@@ -2245,7 +2245,7 @@ Two properties fall out of that choice rather than being engineered:
 The trim path itself was lifted out into `_demote(id, dist)` while doing this, because a scripted
 pass proving a building came back as a shell should not have to wait out `TRIM_AFTER_MS`.
 
-**Gate met.** `tools/build_probe.gd` is at **105 checks** -- the shell is byte-identical built
+**Gate met.** `tools/probes/build_probe.gd` is at **105 checks** -- the shell is byte-identical built
 twice, the coarse tier draws less, a damaged build draws a damaged shell, a rotated frame is in the
 silhouette, a build with nothing left draws no surface rather than crashing, and the collision boxes
 cover what they came from. `godot --path . -- --buildshot` passes **21** against the scene: the
@@ -2282,21 +2282,21 @@ that answers "which buildings could this blast touch" was filled from the root f
 shot at a panel hanging off the side found no building at all and did nothing. It is built from the
 whole assembly's box now, eight corners at a time, which a rotated placement needs anyway.
 
-**Gate met.** `tools/build_probe.gd` is up to **74 checks** and `godot --path . -- --buildshot` adds
-**12** against a real scene. `tools/demo_build.gd` writes a two-frame demo so there is something to
+**Gate met.** `tools/probes/build_probe.gd` is up to **74 checks** and `godot --path . -- --buildshot` adds
+**12** against a real scene. `tools/shots/demo_build.gd` writes a two-frame demo so there is something to
 place before anything has been hand-built.
 
 ### Build mode, Stage 2: the workshop
 
-`scenes/workshop.tscn` + `scripts/workshop.gd`. One frame, upright only -- no sideways building,
+`scenes/workshop.tscn` + `scripts/workshop/workshop.gd`. One frame, upright only -- no sideways building,
 no fixtures, no articulation. What it proves is the loop.
 
 **The gate is met:** hand-build a house, save it, place it in the city, shoot it, and it breaks like
 a generated building -- because it **is** one. `BuildingRegistry.register_build()` takes a
 `BuildRecipe` and everything downstream is unchanged: materialise, damage, de-materialise, replay.
-`tools/build_probe.gd` passes **46 checks**.
+`tools/probes/build_probe.gd` passes **46 checks**.
 
-**`BuildRecipe` (`scripts/build_recipe.gd`)** is the save file, the thing the city places and what
+**`BuildRecipe` (`scripts/build/build_recipe.gd`)** is the save file, the thing the city places and what
 the exporter will walk -- one serialiser, three consumers (mvs-c 7). Parts are stored by **name**,
 never by archetype id: ids are assigned by bake order inside one `BrickWorld` and mean nothing
 across a save.
@@ -2365,7 +2365,7 @@ Two details that are not obvious:
 A band whose whole perimeter is gone contributes no walls **and no floor**, or a flattened building
 still drew a stack of floating slabs.
 
-`tools/shell_probe.gd` passes **28 checks**.
+`tools/probes/shell_probe.gd` passes **28 checks**.
 
 ### Editing, which is not damage (`remove_block`, `can_place`, `would_connect`)
 
@@ -2397,7 +2397,7 @@ makes four.
 
 **Gate met.** Build a wall, build the same wall with a placement undone in the middle, and the two
 are byte-identical -- same alive count, same faces emitted, same vertex buffer, same colours.
-`tools/edit_probe.gd` passes **67 checks**, and a masked part gives back only the cells it owned, so
+`tools/probes/edit_probe.gd` passes **67 checks**, and a masked part gives back only the cells it owned, so
 something sitting in a buttress's notch survives the buttress being removed.
 
 ### `BrickWorld` (`gdextension/brick/src/brick_world.{h,cpp}`)
@@ -2500,7 +2500,7 @@ distinct footprint: 16,590 blocks resolve to **4 shape RIDs**.
 > of load time; moving `body_set_space` after the loop made it **33 ms**. Same for the small tower:
 > 37 ms → 1.0 ms.
 
-Collision layers live in `scripts/layers.gd` and nowhere else.
+Collision layers live in `scripts/core/layers.gd` and nowhere else.
 
 ### Meshing
 
@@ -2527,7 +2527,7 @@ plane.
 
 ### Recipe
 
-`scripts/tower_recipe.gd` builds the test tower from parameters. Courses alternate which pair of
+`scripts/build/tower_recipe.gd` builds the test tower from parameters. Courses alternate which pair of
 walls owns the corners, which does two jobs: it offsets every wall course to course so vertical
 joints never line up, and it makes the four walls **one structure**. The first version fixed the
 corners, so the front and side walls never overlapped in XZ, shared no stud edges, and stood and
@@ -2580,7 +2580,7 @@ A fourth change — baking faces once and flipping index slots — took the C++ 
 to 4 ms but was **not** the bottleneck it was predicted to be. It only mattered once the upload
 stopped dominating.
 
-`tools/m0_probe.gd` passes 22 checks, `m1_probe.gd` 37, `m2_probe.gd` 26, `m3_probe.gd` 41,
+`tools/probes/m0_probe.gd` passes 22 checks, `m1_probe.gd` 37, `m2_probe.gd` 26, `m3_probe.gd` 41,
 `palette_probe.gd` 670, `edit_probe.gd` 74, `shell_probe.gd` 28, `build_probe.gd` 117,
 `orient_probe.gd` 51, `frame_probe.gd` 67, `place_probe.gd` 35, `fixture_probe.gd` 47,
 `interior_probe.gd` 79, `section_probe.gd` 24, `dormant_probe.gd` 21, `stud_probe.gd` 23,
@@ -2594,7 +2594,7 @@ stopped dominating.
 
 ### How many buildings fit — measured, not extrapolated
 
-`tools/city_probe.gd`, headless. What `BrickWorld` alone costs.
+`tools/probes/city_probe.gd`, headless. What `BrickWorld` alone costs.
 
 **Holding bricks** — the old way, every building materialised:
 
@@ -2646,7 +2646,7 @@ Two wrong versions got there first, and both are worth writing down:
 The fix is a running bond laid flat: a second layer offset by half a plate, so each plate in it
 bridges four in the layer below. It is how a real brick floor holds together too.
 
-Measured, `tools/floor_probe.gd` and the city scene:
+Measured, `tools/probes/floor_probe.gd` and the city scene:
 
 | | |
 |---|---|
@@ -2727,7 +2727,7 @@ the two it is a box and a cap. Both thresholds carry a 30 m hysteresis band, wit
 building sitting on one rebuilds its mesh every tick as the camera drifts. Both shell tiers keep
 the same five collision boxes, because a building you can see is a building you can shoot.
 
-Measured, `tools/city_probe.gd`, 5000 buildings on 13 m spacing with the camera in the middle:
+Measured, `tools/probes/city_probe.gd`, 5000 buildings on 13 m spacing with the camera in the middle:
 
 | | |
 |---|---|
@@ -2836,7 +2836,7 @@ Three things go with the blocks now, in `_shed`:
   body's shape count while the body is in a space, so disabling a thousand of them in a loop is
   quadratic -- the same trap the static chunk bodies hit, and most of the lag.
 
-`tools/fallen_probe.gd` covers it: every brick ends up in exactly one of the two chunks, and the
+`tools/probes/fallen_probe.gd` covers it: every brick ends up in exactly one of the two chunks, and the
 parent keeps nothing that moved.
 
 ### Tension failure on pieces that have already fallen
@@ -2860,7 +2860,7 @@ balanced at an angle gets the nearest of six, which is still far better than pre
 upright. Islands also inherit their parent's `tension_per_stud` on the split; without that they got
 the default 400 N and were unbreakable.
 
-Measured, `tools/fallen_probe.gd`: a 410-brick building laid on its face has 410 blocks carrying
+Measured, `tools/probes/fallen_probe.gd`: a 410-brick building laid on its face has 410 blocks carrying
 load, 0 joints over capacity and nothing loose. Undercut its lowest end by 96 bricks and pieces
 start coming away. In the city scene, splits over one collapse went from 9 to 143.
 
@@ -3288,7 +3288,7 @@ Two and a half times the destruction, a lower spike, and the same frame time.
 ### Why the floors came away in sheets
 
 Reported as "rather than buildings breaking in half they just break a few individual bricks off and
-a lot of the flooring". `tools/floorshed_probe.gd` was written to tell "the floors are weak" apart
+a lot of the flooring". `tools/probes/floorshed_probe.gd` was written to tell "the floors are weak" apart
 from "plates are simply smaller, so there are more of them", and the answer was neither:
 
 ```

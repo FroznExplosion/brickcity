@@ -42,7 +42,7 @@ extends Resource
 ## level (the Armory Ledger's Time to kill tab, COMBAT_DESIGN 3). DMG_UNIT turns a unit
 ## into this table's base damage: a medium enemy's health at tier 1 (CombatScale.MELEE_BASE,
 ## 60) over what the rolls and a Unique's rarity make of a base on the median
-## (GunStats; calibrated by tools/combat_numbers_probe.gd).
+## (GunStats; calibrated by tools/probes/combat_numbers_probe.gd).
 const MEDIAN_UNIQUE := 1.123
 const DMG_UNIT := 60.0 / MEDIAN_UNIQUE
 const _PRESETS := {

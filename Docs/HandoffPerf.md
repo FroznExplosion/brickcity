@@ -105,7 +105,7 @@ main thread).
 - **Godot's TIME_PHYSICS_PROCESS / TIME_PROCESS monitors are the worst frame of the last
   second**, set once a second -- not "this frame". The census's "physics N ms this frame" and the
   live profiler's "solver ~" (physics minus script) are not what they say. New
-  `scripts/frame_clock.gd` (FrameClock) splits each frame by the wall clock (city tick, other
+  `scripts/core/frame_clock.gd` (FrameClock) splits each frame by the wall clock (city tick, other
   scripts, physics step, idle, draw, sync/wait) plus the GPU's own time; a pass prints it as
   `[prof] frames by the clock` / `[prof] slow frames`. Screenshots and censuses are left out.
 - `big_city.tscn -- --shot` (1280x720 test window, one headless probe of another chat running):
@@ -154,7 +154,7 @@ main thread).
 
 Every mesh is already BUILT on a worker (bakes, arrays, packing). With the renderer on the main
 thread (the default, kept), Godot still makes each mesh's GPU buffers on the main thread at the
-next call into the renderer -- CityScene's "render" phase. `UploadLedger` (scripts/upload_ledger.gd)
+next call into the renderer -- CityScene's "render" phase. `UploadLedger` (scripts/render/upload_ledger.gd)
 now counts what each worker handed over, and `[prof] render flush` names what a slow flush carried.
 One big-city collapse (editor open, so times are rough): the slow flushes were each ONE piece mesh
 -- 748k vertices 33 ms, 494k 23 ms, 866k 13 ms, 577k 10 ms. Over the pass, pieces uploaded 14.5 M
@@ -197,7 +197,7 @@ its range of the patch baseline, so it stays there), its `ArrayMesh` is made on 
 (`_submit_slice_job`, started with the other mesh jobs at the tick's end, hung hidden by
 `_harvest_slice_jobs`), and a tick stops cutting after `SLICE_TICK_MS` (3). A dropped bake bumps
 `slice_gen`, so meshes still on a worker are thrown away, never waited for; `_exit_tree` waits
-for the started ones. `tools/piece_band_probe.gd` (headless, 11 checks) makes a 6,109-brick piece
+for the started ones. `tools/probes/piece_band_probe.gd` (headless, 11 checks) makes a 6,109-brick piece
 every time: 7 sections, swapped in 11 ticks, no band shown early, meshes made on workers, worst
 tick 3.5 ms (cut 1.4, worker mesh 2.5), a hit patched in place, a mid-way drop begun again with
 nothing left hanging. **Big pieces are rare now**: since the strength tree went in (e0545c84,
@@ -248,7 +248,7 @@ Found from the destruction side (Docs/DestructionFirstPrinciples.md B9-B12). Win
 
 ### 6.4 EngineChoice options 1 and 2 priced (2026-11-09, worktree `C:\Users\lbaun\bc-perf`)
 
-`tools/spawn_bench_probe.gd` (headless, so no renderer and no paging) times a piece's spawn
+`tools/probes/spawn_bench_probe.gd` (headless, so no renderer and no paging) times a piece's spawn
 part by part, the island tick with ~100 pieces falling, and bare node / server / pooled body
 costs. Per piece, mean of 30 (us):
 
@@ -314,7 +314,7 @@ dipped to 116 MB free -- the two agree, the second's numbers below.
   well under 1 ms, and it needs no change to when anything is drawn.
 - **Done (2026-11-09): `BuildingShell.build_arrays` is C++** (`ShellMesher.build_arrays`,
   `gdextension/brick/src/shell_mesher.cpp`); the GDScript walk stays as
-  `build_arrays_script`, the reference `tools/shell_mesher_probe.gd` checks it against (25
+  `build_arrays_script`, the reference `tools/probes/shell_mesher_probe.gd` checks it against (25
   cases, every array the same value for value). Headless 0.2-0.5 ms a real building against
   2.3-7.3 (shot all over: 0.8-1.7 against 10-20). Windowed `--promote` after: `sh_mesh`
   2.3-3.2 ms (was 8-15), `bd_rest` 1.5-3.2 (was 4-8) -- what is left of them is the mesh
@@ -340,7 +340,7 @@ dipped to 116 MB free -- the two agree, the second's numbers below.
 
 ## 7. One shared tick clock (2026-11-11 audit item 2, worktree `C:\Users\lbaun\bc-alive`)
 
-`TickClock` (scripts/tick_clock.gd): CityScene begins it each physics tick; every queue gets
+`TickClock` (scripts/core/tick_clock.gd): CityScene begins it each physics tick; every queue gets
 min(its own cap, what is left of 8 ms), 2 ms held back for `IslandManager.tick` (runs last,
 `enter_islands` guarantees it). Spawns, hits, bands, piece meshes and hand-over harvests keep
 "the first unit always runs"; remesh (not hand-overs), shells, demesh, trim and slices run

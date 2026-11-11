@@ -131,7 +131,7 @@ tension per contact cell, in mass units
 If the in-game scale ever changes (spec §3 leaves it as a range), **this constant changes with it,
 linearly.** That dependency is why it belongs in one place with the derivation attached.
 
-**2026-10-13: that place is `scripts/brick_strength.gd` (`BrickStrength.SCALED`), and the game no
+**2026-10-13: that place is `scripts/destruction/brick_strength.gd` (`BrickStrength.SCALED`), and the game no
 longer runs on it as it stands.** The aim is the toy breaking apart, so a stud holds `SCALED` times
 a setting -- four to begin with, to be tuned by feel -- somewhere between this section's physics
 and the toy's (`TOY`, 44 times). What that moves, measured, is in

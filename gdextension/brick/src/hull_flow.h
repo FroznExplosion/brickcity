@@ -10,7 +10,7 @@
 
 using namespace godot;
 
-/// Water inside a hull, the automaton's flow (Docs/Hulls.md 5; scripts/hull_water.gd
+/// Water inside a hull, the automaton's flow (Docs/Hulls.md 5; scripts/hulls/hull_water.gd
 /// keeps the holes, the pumps and the bookkeeping and calls this for the flow).
 ///
 /// A fill a cell on the hull's air grid; water stands only in passable cells

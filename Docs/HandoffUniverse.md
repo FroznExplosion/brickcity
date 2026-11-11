@@ -53,7 +53,7 @@ building (check its date against the last C++ commit), `--import`, then:
 | `bricks` 9, `damage` 12, `fall` 7, `hits` 8, `topple` 6, `storey` 12 | buildings; run these if `PlanetBuildings` changes | 240 s |
 | `save --stage=1`, then `2`, then `3` | separate processes, in order; 1 wipes `user://dev/saves_test/`; 3 runs on into stage 4 | 250 s each |
 
-`--headless --script res://tools/system_probe.gd`: 34 checks, the generator.
+`--headless --script res://tools/probes/system_probe.gd`: 34 checks, the generator.
 
 Headless RID errors on waking a world are the dummy renderer's, known and harmless. Gates never touch the
 player's saves.

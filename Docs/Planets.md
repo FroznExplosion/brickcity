@@ -266,7 +266,7 @@ and the project gravity today. Move the ~21 hard-coded gravity constants to it f
 Do it as files are touched anyway; no big-bang pass. Rigid bodies already take the project's
 gravity, so they need nothing.
 
-*Built 2026-10-20:* `scripts/gravity.gd` (`Gravity.down_at`, `up_at`, `at`, `strength`). Every
+*Built 2026-10-20:* `scripts/core/gravity.gd` (`Gravity.down_at`, `up_at`, `at`, `strength`). Every
 per-frame fall in the game goes through it -- pawn (walk, air, slide, grapple), titan, tank,
 truck, flyer, debug camera, grenade, dart, VFX shards, rain and hail particles -- and every read of
 the project's gravity (debris, danger volumes, the mech fall rule, the city's path-ahead). Each
@@ -317,12 +317,12 @@ planet work, not a cache.
 Saves, the AI's caches and the registry store positions relative to a building or a tile where they
 can. A world-space position in a save is the one thing a floating origin cannot shift for you.
 
-*Built 2026-10-20:* `scripts/world_frame.gd`. A save and the damage log's wire form carry world
+*Built 2026-10-20:* `scripts/city/world_frame.gd`. A save and the damage log's wire form carry world
 positions in the BODY's frame (`WorldFrame.to_body` out, `from_body` in): hit points of the
 building commands, a resting piece's origin, every piece's transform in a checkpoint, the camera,
 the placed builds and the hits still queued. Grid coordinates -- the piece commands, a region's
 corners, LOAD's cells -- were never world positions and go as they are. `WorldFrame.origin` is
-zero until a floating origin moves it; `tools/world_frame_probe.gd` moves it and checks each.
+zero until a floating origin moves it; `tools/probes/world_frame_probe.gd` moves it and checks each.
 
 ### 9.7 The bent horizon (§2)
 
@@ -809,7 +809,7 @@ Of 820 laid bricks, 253 are on the sphere and **567 fell to the world's flat gro
 Rigid pieces are right everywhere (Jolt); crumbs and the heap are right only where the scene's -Y
 is the local down.
 
-What reads fixed gravity or uses -Y as down outside `scripts/gravity.gd` (loose bodies, VFX,
+What reads fixed gravity or uses -Y as down outside `scripts/core/gravity.gd` (loose bodies, VFX,
 projectiles), ~25 places in ~15 files:
 
 | file | what |
@@ -830,7 +830,7 @@ that needs thought (a heap in a tangent cell).
 
 #### Test 7, two physics spaces: passed
 
-`tools/planet_spaces_probe.gd` (headless, `--fixed-fps 30`, frames flat out): a second `World3D`
+`tools/probes/planet_spaces_probe.gd` (headless, `--fixed-fps 30`, frames flat out): a second `World3D`
 in a `SubViewport` that never draws (`UPDATE_DISABLED`), and a pile of 400 boxes dropped onto a
 floor in each **at the same coordinates**.
 
@@ -855,7 +855,7 @@ the debug camera hold ~185 places of `.y` logic and `Vector3.UP/DOWN` (pawn 28, 
 approach those would be ported to works with Godot's `CharacterBody3D` and Jolt at our sizes.
 `tools/planet_radial_body.gd` is STA doc 05's controller with the pawn's numbers -- up from where
 it stands, the whole basis rebuilt from it every tick, `up_direction` set to it, gravity and
-jumps along it, the camera pitching only -- and `tools/planet_walk_probe.gd` walks it (headless,
+jumps along it, the camera pitching only -- and `tools/probes/planet_walk_probe.gd` walks it (headless,
 28 checks, all pass):
 
 | | pawn | mech-sized (7 m, 6 m/s) |
@@ -883,7 +883,7 @@ jumps along it, the camera pitching only -- and `tools/planet_walk_probe.gd` wal
 
 #### Test 6, cubed-sphere ground: problem found (the field must live on the sphere), not plan-breaking
 
-`tools/planet_cube_probe.gd`: R = 10 km, STA doc 23's warp (blend 0.48), N = 1402 tiles a face
+`tools/probes/planet_cube_probe.gd`: R = 10 km, STA doc 23's warp (blend 0.48), N = 1402 tiles a face
 edge, real tiles from `BrickTerrain.build_tile` with every vertex mapped onto the sphere and the
 mapped triangles as their collider. Each tile is also built unmapped in a second physics space,
 and rays toward the centre on a 5 cm grid across each seam (13 mm off the stud lattice) are
@@ -921,7 +921,7 @@ come from different parts of the 2D field, as 7 edges and all 8 corners must.
 
 #### Test 8, two nav regions in different frames: passed
 
-`tools/planet_nav_probe.gd` (headless): two regions of 8 x 8 tiles (256 studs, 89.6 m), each an
+`tools/probes/planet_nav_probe.gd` (headless): two regions of 8 x 8 tiles (256 studs, 89.6 m), each an
 `AIWorld` + `AINav` of its own seeing its region in its own flat frame (the plane y = 0, a wall as
 a proxy); region B turned 1.5° (and 0.5°) about the shared border, as the next tangent frame round a
 sphere is. A wall in each forces a detour; the path is stitched at the best of 44 portals on the
@@ -990,7 +990,7 @@ as their own triangles.**
 
 #### Test 11, drawing curved ground: passed, and the horizon saves 40% at street level
 
-`tools/planet_draw_probe.gd`, windowed, the editor closed, no other Godot: 33 x 33 detail tiles
+`tools/probes/planet_draw_probe.gd`, windowed, the editor closed, no other Godot: 33 x 33 detail tiles
 (370 m square, 3.7 million triangles, the ground material, no studs) built flat and again mapped
 onto a 10 km sphere mid-face, drawn from one edge looking across; the renderer's clock over 240
 frames.
@@ -1133,7 +1133,7 @@ Built (steps 1-4 of 11.5): `addons/zylann.voxel`; `scripts/planet/` -- `PlanetDa
 or `-- --gate` (9 checks, all pass, windowed and headless):
 
 - the ground streams in under the spawn in 0.3-3 s; a 30 s walk never leaves the floor and stands
-  exactly where the CPU says the ground is (`tools/planet_graph_probe.gd` holds the generator to
+  exactly where the CPU says the ground is (`tools/probes/planet_graph_probe.gd` holds the generator to
   the CPU within 6 mm, pads included -- both sample the relief on the datum sphere under a point);
 - a cruise at 25 m passes a town (32 shells built) toward a 900-course spire 2.6 km off, which comes
   up over the horizon ahead;
@@ -1154,7 +1154,7 @@ worst frames are the first frame's shader compiles (~1.7 s) and the gate's own s
 
 Pawn (and its moves, view, controller, the debug camera), titan motor and mech, tank, truck,
 flyer, soldier. One rule everywhere: **"up" is `Gravity.up_at(position)`**, never `Vector3.UP`
-or `.y`, through four helpers in `scripts/gravity.gd`:
+or `.y`, through four helpers in `scripts/core/gravity.gd`:
 
 | helper | flat game (up = +Y) | on a planet |
 |---|---|---|
@@ -1251,7 +1251,7 @@ nav (`VehicleNav`), `VehicleCover` -- after N2.
 **11.8 state (2026-10-24):** N1b's GDScript half is built -- `PlanetNavRegion`
 (scripts/planet/planet_nav_region.gd): a 1024-stud region's tangent frame and its ground as
 257 x 257 heights in it, built in 222 ms; on the ground within 2.4 mm, 1.3 cm between samples,
-corners 1.45° (tools/planet_nav_grid_probe.gd, 9/9).
+corners 1.45° (tools/probes/planet_nav_grid_probe.gd, 9/9).
 
 **N1 and N1b's C++ half built (2026-10-24).** `AIWorld.set_frame(region_to_world)`: every
 bound method of AIWorld and AINav is a thin `_b_` wrapper -- unframed it calls straight
@@ -1264,7 +1264,7 @@ framed, `shift_origin` moves the frame's origin and nothing inside. `top_at` / `
 stay region-local; their world forms are `ground_under(point)` (was `p.y = ground_at(p.x,
 p.z)`, exact unframed) and `top_over(point)`. `set_ground_grid(origin, step, size, heights)`:
 `_ground_plate` reads the grid bilinearly at the stud's centre; outside it the ground is a wall
-256 plates over the region's highest ground. Probe `tools/planet_nav_frame_probe.gd` (headless,
+256 plates over the region's highest ground. Probe `tools/probes/planet_nav_frame_probe.gd` (headless,
 18/18): a framed path between two world points is the unframed nav's path over the same grid
 moved by the frame (0.0000 m), its points within 0.105 m of `PlanetData.height`; snap, cover,
 trace, danger, nav_changed, the edge and a re-centre all in world values. Found on the way, on
@@ -1338,7 +1338,7 @@ segfaulting at exit after its 7/7. Next: N4.
   `set_ground_grid` (the hash-map cache rehashing as it grew was 5 ms column reads in 21
   regions); a sight line is not blocked by a region's edge wall -- it is for walking.
 
-Probe `tools/planet_nav_net_probe.gd` (headless, 12/12): ~400 m across 4 borders round a wall
+Probe `tools/probes/planet_nav_net_probe.gd` (headless, 12/12): ~400 m across 4 borders round a wall
 with a gap on the first border; stretches meet within 0.19 m; on the ground within 0.11 m;
 never through the wall; 438 m for 407 m straight; every leg worked out with service(2 ms) over
 3 ms in 0.2% of calls (the AINav hierarchy's own steps); legs known, the path no worse than
@@ -1372,7 +1372,7 @@ the open (2 FAIL): what an agent asks is answered by its own region.
   the box into every region it reaches, and into regions made later); the grenade, a flyer's
   landing pad (Airspace) and a mech's self-destruct go through it. Off a planet it is
   `ai_world.set_danger`, as before.
-Probe checks in `tools/planet_nav_net_probe.gd` (17/17).
+Probe checks in `tools/probes/planet_nav_net_probe.gd` (17/17).
 
 **Every body's map on the net (2026-10-24).** `PlanetNavNet` holds MAPS: "person" (the region's
 own AINav) and any other a caller adds (`add_map(name, maker)`: a size's, the mech's and the
@@ -1395,7 +1395,7 @@ nowhere steeper than 7 degrees, and the town pad's embankment was a wall to it. 
 rule is the flat game's, unchanged. The tank's brain steers in its carried frame (11.7's
 `_local`; identical off a planet).
 
-`tools/planet_nav_net_probe.gd` 25/25: the tank's and the mech's maps (span 10 studs) route ~400 m
+`tools/probes/planet_nav_net_probe.gd` 25/25: the tank's and the mech's maps (span 10 studs) route ~400 m
 across 4 borders, joins within 0.19 m, every sampled point where that body stands. Gate
 `--gate=drive` (headless, 5/5): a crewed AI tank on the player's side is sent 200 m out of the
 town and gets there (3 m short, holding) in 39 s on its own map across 3 cells.
@@ -1431,7 +1431,7 @@ ground and the impostor), trimmed: no continents, no underground, no material te
 - **Trees, later (11.10):** each biome carries a tree density and kind; scattering reads
   `PlanetBiomes` on the CPU, so it agrees with the colour.
 
-Probe `tools/planet_biome_probe.gd` (headless): the map's pixel against `PlanetBiomes` at its
+Probe `tools/probes/planet_biome_probe.gd` (headless): the map's pixel against `PlanetBiomes` at its
 direction (exact), the shader's lookup UV against the bake's (same pixel), every biome present
 on the default planet, temperature falling with latitude and height, bake time. A windowed shot
 from orbit and on foot (`--gate`'s shots) for the look.
@@ -1440,7 +1440,7 @@ from orbit and on foot (`--gate`'s shots) for the look.
 `PlanetData.climate_axis` (the proto's spawn at ~50°), the biome map baked in the impostor's
 pass (512 x 256 with the heightmap and colours: 690-820 ms), the ground shader on it (snow from
 the temperature at the height, lapse 0.25 °C/m; sand and cliff rock live as before).
-`tools/planet_biome_probe.gd` 8/8: the map is `PlanetBiomes` to an 8-bit step, the shader's UV on
+`tools/probes/planet_biome_probe.gd` 8/8: the map is `PlanetBiomes` to an 8-bit step, the shader's UV on
 the bake's pixel, sea-level 29.9 / 22.9 / 3.1 / -18.7 °C at 0/30/60/85°; shares with mean
 humidity 0.62: jungle 30%, savanna 25%, forest 11%, taiga 8%, tundra 8%, desert 8%, grass 6%,
 steppe 6%. The spawn's town is on a patch of steppe. `--gate` 9/9 with the map, its shots
@@ -1468,7 +1468,7 @@ steppe 6%. The spawn's town is on a patch of steppe. `--gate` 9/9 with the map, 
   (the far buildings' way); past that the biome's colour on the ground is the forest.
 - **Solid:** trunks of trees in cells within 64 m of the player get a box collider each (one
   StaticBody per cell), so nobody walks through a trunk; the canopy is not solid.
-- **Probe** `tools/planet_tree_probe.gd` (headless): a cell built twice is the same trees; the
+- **Probe** `tools/probes/planet_tree_probe.gd` (headless): a cell built twice is the same trees; the
   density in a forest and a desert against the table; none on a pad, in the sea or on a cliff;
   every base on the ground (within 5 cm); time a cell. Look: the walker gate's shots.
 
@@ -1477,7 +1477,7 @@ steppe 6%. The spawn's town is on a patch of steppe. `--gate` 9/9 with the map, 
 under 1 ms; round the spawn 325 cells, 4450 trees, filled in 28 frames (worst 6 ms a frame); 3 s
 at 500 m/s 40 m up, worst 9.5 ms a frame (headless, CPU only). Densities run ~0.65 x the table
 over a biome's cells: the sea and beaches take the rest (a third of this planet is under water).
-`tools/planet_tree_probe.gd` 12/12. The walker gate's shots show them from the ground, the town
+`tools/probes/planet_tree_probe.gd` 12/12. The walker gate's shots show them from the ground, the town
 and 300 m. Windowed frame times were not judged: both the A/B runs (`-- --no-trees` and with)
 had the same 250 / 750 ms frames at the spawn, the display-sleep stall of a run nobody watches.
 Trunks are on FIXTURE (walkers and bullets meet them; vehicles drive through for now -- on WORLD the
@@ -1503,7 +1503,7 @@ kinds (`PlanetTreeMeshes`) and their shader go.
 boxes: the brick trees' densities). `planet_tree_probe` 10/10; its two frame-time numbers (fill
 6.0-9.2 ms, 500 m/s low 14.8-29.9 ms) are reported, not judged -- they were taken with the editor
 open and another chat's windowed pass running; judge them on a quiet machine. Shots
-(`tools/planet_tree_shot.gd`, not headless): bricks at 20 m, cards at 90 m, all upright to local
+(`tools/shots/planet_tree_shot.gd`, not headless): bricks at 20 m, cards at 90 m, all upright to local
 up. The walker gate 9/9, squad 10/10, pawn 12/12 with them.
 
 **Timed on a quiet machine (2026-10-24, editor closed, no other runs):** `planet_tree_probe`
@@ -1568,7 +1568,7 @@ person's, sizes' and vehicles' maps walk round it and a soldier can hide behind 
 are looked up in the region's worker task with its grid (a dense-forest region was 25 ms on the
 main thread with them, 14 without). A tree knocked down (`tree_knocked`) leaves every region's
 world (`remove_tree`) and the maps forget the columns round it; regions made later leave it out.
-Probe `tools/planet_tree_ai_probe.gd` (headless, 8/8): the densest forest of 600 spots (92 trees
+Probe `tools/probes/planet_tree_ai_probe.gd` (headless, 8/8): the densest forest of 600 spots (92 trees
 within 40 m); all 160 trunks of its region in the world; a path across the forest keeps 0.68 m
 from every trunk axis (without the trunks it went through some); a trunk is cover (2 bricks); taken
 away, it is not, and its spot is walkable. Not yet: the canopy does not block sight; a tank's map
@@ -1598,7 +1598,7 @@ own:
   what faces the TREE's up: `weather_snow_model_up` (weather.gdshaderinc, in `brick.gdshader` and
   `impostor.gdshader`), off by default -- everything else takes the world's up exactly as before.
 `planet_tree_probe` 12/12: over 400 random cells every tree's bucket is the rule at its foot
-(4724 bare, 51 a little, 185 capped). `tools/planet_tree_shot.gd -- --snow` sets the player down
+(4724 bare, 51 a little, 185 capped). `tools/shots/planet_tree_shot.gd -- --snow` sets the player down
 by the snowiest stand (77 capped within 40 m): at 90 m the crowns on the snowy ground are white,
 near bricks and cards alike, the forest past the snow line green (shots
 planet_trees_snow_*.png). The windowed runs peaked 92-97 C (the scene's load), never held back.
@@ -2179,7 +2179,7 @@ far look (impostor, air, sea) is a child `look` node for this; the body's own no
    the sun and the light from the star), the walker's inertia and cruise. `--no-system` keeps the
    old fixed sun; every existing gate runs with the clock **stopped** (the home planet at the
    spawn's noon), so their numbers keep their meaning.
-   Gates: `tools/system_probe.gd` (headless: the generator is deterministic and in range, orbits
+   Gates: `tools/probes/system_probe.gd` (headless: the generator is deterministic and in range, orbits
    analytic, the frame velocity is the derivative of positions, the handoff kick); `--gate=system`
    (fly off the home planet, a handoff without a jump, land on another planet and stand on it,
    back home, what slept is where it was; the sun goes round once a day at the spawn).
@@ -2202,7 +2202,7 @@ draws from afar through its `look` node; the walker carries `inertia` and cruise
 year, and one other planet); `--no-system` is the old fixed sun. The HUD's second line: system,
 body, local time, how much sun, the clock.
 
-- `tools/system_probe.gd` 20/20 (headless).
+- `tools/probes/system_probe.gd` 20/20 (headless).
 - `--gate=system` 13/13, windowed and headless: noon at the spawn, midnight dark (sky 0.04 of
   noon's, the light off), dawn with the sun on the horizon; up and out of the shell at 42 km with
   no jump (the step after the handoff 100.2 m, before it 100.0 m); 1,015 km across to Helnox I,
@@ -2242,7 +2242,7 @@ an orbit with its +Y away from its planet. `SpaceStation` (scripts/space/space_s
 Generated: home one station and three satellites; any other planet with air 0-2 stations, 0-3
 satellites, orbits 1.3-2.4 R, inclined up to 0.5 rad.
 
-`tools/system_probe.gd` 22/22 (adds: home's station and satellites; an orbital's points move at its
+`tools/probes/system_probe.gd` 22/22 (adds: home's station and satellites; an orbital's points move at its
 frame velocity, its +Y from its planet). `--gate=system` 17/17, windowed and headless: after the
 other planet, up to home's station (8 km up, round in 8.0 min), onto its roof once its bricks are
 solid, standing with down through its deck (0.00 deg off), home asleep under it, then home. Windowed:
@@ -2255,9 +2255,9 @@ AI), a station's own lights (its door is black inside), gravity off in space for
 Generated stations (2026-10-31, the room-modules chat): every station but home's is grown from a
 station kit by its seed, held by its studs to a keel under its core, and a section shot off at its
 joints drifts away whole -- Docs/RoomModules.md 7.3 (`OrbitalData.layout`, `SpaceStation.
-_prepare_generated`, `tools/station_sections_probe.gd`). Generated ships too (stage 12): `OrbitalData.layout`
+_prepare_generated`, `tools/probes/station_sections_probe.gd`). Generated ships too (stage 12): `OrbitalData.layout`
 "generated" on a ship grows a hull and its rooms (ShipBuild), its seat the bridge's, bulkheads joints
-with hit points -- the parked ship in play (not in the gates) -- `tools/ship_build_probe.gd`.
+with hit points -- the parked ship in play (not in the gates) -- `tools/probes/ship_build_probe.gd`.
 
 #### Step 3 built (2026-10-29): a ship to fly; the planet from space
 
@@ -2716,7 +2716,7 @@ Recommended: A. Either way, in order: fallen pieces on the world the player is o
 world, `s<system>_b<body>.dat`), then drifts and pieces from space, then the gate (`save` stages:
 a piece knocked loose, saved, back where it lay).
 
-**The user chose A (2026-11-03), and it needed no C++ after all:** `ChunkRecord` (scripts/chunk_record.gd,
+**The user chose A (2026-11-03), and it needed no C++ after all:** `ChunkRecord` (scripts/city/chunk_record.gd,
 the city's sleeping-rubble record) already captures a chunk's standing bricks in one engine call
 (`capture_blocks`: cell, part, colour, furniture, cut joints, wear; parts by name), and lays them again
 (`place_blocks`). The handoff's "needs the engine" was wrong.

@@ -7,14 +7,14 @@ for all of them. A gun or a mech in the game is an **assembly** the generator pu
 parts that fit, from a seed and a design (section 7).
 
 Status (2026-10-24): **stages 1 to 9, 11 and 12 built, and stage 10's offline half** (its network half waits on the netcode). The part record, the fit check and the
-catalogue (`scripts/parts/`, `tools/parts_probe.gd`, 65 checks); guns on them: the workshop's
+catalogue (`scripts/parts/`, `tools/probes/parts_probe.gd`, 65 checks); guns on them: the workshop's
 Save writes every part on its own, the generator and the assembler only put together parts
-that fit (`tools/part_save_probe.gd`); the catalogue panel, F7 in the workshop
-(`tools/part_panel_probe.gd`, 38 checks); trying any part on in the workshop, with fit marks
-(`part_save_probe`, now 61 checks); mech mode in the workshop (`tools/mech_workshop_probe.gd`, 56
-checks); mechs in the game from parts (`tools/mech_parts_probe.gd`, 70 checks); pods and mech guns
-(`tools/pods_probe.gd`, 28; `mech_workshop_probe` now 62); the motion sets (`tools/motion_probe.gd`,
-29); part packages (`tools/package_probe.gd`, 26); the match's parts offline (`tools/lobby_probe.gd`, 24); dressing (`tools/dressing_probe.gd`, 20); figures (`tools/figure_probe.gd`, 32). Section 11 is the order the rest is built in;
+that fit (`tools/probes/part_save_probe.gd`); the catalogue panel, F7 in the workshop
+(`tools/probes/part_panel_probe.gd`, 38 checks); trying any part on in the workshop, with fit marks
+(`part_save_probe`, now 61 checks); mech mode in the workshop (`tools/probes/mech_workshop_probe.gd`, 56
+checks); mechs in the game from parts (`tools/probes/mech_parts_probe.gd`, 70 checks); pods and mech guns
+(`tools/probes/pods_probe.gd`, 28; `mech_workshop_probe` now 62); the motion sets (`tools/probes/motion_probe.gd`,
+29); part packages (`tools/probes/package_probe.gd`, 26); the match's parts offline (`tools/probes/lobby_probe.gd`, 24); dressing (`tools/probes/dressing_probe.gd`, 20); figures (`tools/probes/figure_probe.gd`, 32). Section 11 is the order the rest is built in;
 "Stage 1 as built" and "Stage 2 as built" below say what differs from the plan.
 
 Builds on: [Parts/joints.md](Parts/joints.md) (joints, the one pin, hands),
@@ -320,18 +320,18 @@ interfaces.
 
 | # | Stage | Where |
 |---|---|---|
-| 1 | **Done.** The part record, the catalogue (facets, filter, sort), the fit check (layers 1-2), `mech_interfaces` / `figure_interfaces` / `mgun_interfaces` / `body_plans` in `standards.json`; `tools/parts_probe.gd` | `scripts/parts/` |
+| 1 | **Done.** The part record, the catalogue (facets, filter, sort), the fit check (layers 1-2), `mech_interfaces` / `figure_interfaces` / `mgun_interfaces` / `body_plans` in `standards.json`; `tools/probes/parts_probe.gd` | `scripts/parts/` |
 | 2 | **Done.** Guns on it: `GunAssembler` and the generator check interfaces; Save writes each part on its own; the game reads those parts (old `guns/` folders still load). Design files with fixed and pool slots moved to stage 6, where the generator first needs them | `scripts/guns/`, `asset_workshop.gd` |
-| 3 | **Done.** The catalogue panel: filters, sort, custom and creator, the Fits toggle; F7 in the workshop; `tools/part_panel_probe.gd` | UI, shared by workshop and inventory |
+| 3 | **Done.** The catalogue panel: filters, sort, custom and creator, the Fits toggle; F7 in the workshop; `tools/probes/part_panel_probe.gd` | UI, shared by workshop and inventory |
 | 4 | **Done.** The workshop's anything-on-anything swap, with fit marks (section 9): pick in F7 to try a part on | `asset_workshop.gd` |
-| 5 | **Done.** The workshop's mech mode: slot, side, class, reference mech, ready mounts, test fit; `tools/mech_workshop_probe.gd` | `asset_workshop.gd` |
-| 6 | **Done.** Mechs in the game from parts: designs (fixed and rolled slots), `PartBuilder`, `MechAssembler`, class from the chassis, hips from the legs' length; the boxes in `mech.gd` give way to parts; `tools/mech_parts_probe.gd` | `scripts/mech/` |
-| 7 | **Done.** Pods: slots, `PodGenerator`, the three kinds, pod names, the inventory screen; mech guns (scale `mech`) rolled for the hands; `tools/pods_probe.gd` | `scripts/mech/`, `scripts/guns/`, loot |
-| 8 | **Done.** Motion sets library (section 8): `MotionSets`, the mech walk by leg length, the pods' arms; `tools/motion_probe.gd` | `scripts/parts/` |
-| 9 | **Done.** Part packages: export, import, hash, data-only loading; `tools/package_probe.gd` | `scripts/parts/` |
-| 10 | **Half done** (all but the network): lobby part list, what is missing, host download in checked chunks, placeholders, a Steam Workshop wrapper; `tools/lobby_probe.gd`. The messages themselves wait on the netcode | `scripts/parts/`, then the netcode |
-| 11 | **Done.** Dressing on studs outside the workshop: `PartDressing`, Ctrl B by your mech; `tools/dressing_probe.gd` | `scripts/parts/` |
-| 12 | **Done.** The figure body plan: the workshop's figure mode, `Figure` in the game with swappable limbs and a walk; `tools/figure_probe.gd`. Animals stay the creatures' own | `scripts/parts/` |
+| 5 | **Done.** The workshop's mech mode: slot, side, class, reference mech, ready mounts, test fit; `tools/probes/mech_workshop_probe.gd` | `asset_workshop.gd` |
+| 6 | **Done.** Mechs in the game from parts: designs (fixed and rolled slots), `PartBuilder`, `MechAssembler`, class from the chassis, hips from the legs' length; the boxes in `mech.gd` give way to parts; `tools/probes/mech_parts_probe.gd` | `scripts/mech/` |
+| 7 | **Done.** Pods: slots, `PodGenerator`, the three kinds, pod names, the inventory screen; mech guns (scale `mech`) rolled for the hands; `tools/probes/pods_probe.gd` | `scripts/mech/`, `scripts/guns/`, loot |
+| 8 | **Done.** Motion sets library (section 8): `MotionSets`, the mech walk by leg length, the pods' arms; `tools/probes/motion_probe.gd` | `scripts/parts/` |
+| 9 | **Done.** Part packages: export, import, hash, data-only loading; `tools/probes/package_probe.gd` | `scripts/parts/` |
+| 10 | **Half done** (all but the network): lobby part list, what is missing, host download in checked chunks, placeholders, a Steam Workshop wrapper; `tools/probes/lobby_probe.gd`. The messages themselves wait on the netcode | `scripts/parts/`, then the netcode |
+| 11 | **Done.** Dressing on studs outside the workshop: `PartDressing`, Ctrl B by your mech; `tools/probes/dressing_probe.gd` | `scripts/parts/` |
+| 12 | **Done.** The figure body plan: the workshop's figure mode, `Figure` in the game with swappable limbs and a walk; `tools/probes/figure_probe.gd`. Animals stay the creatures' own | `scripts/parts/` |
 
 ---
 
@@ -716,7 +716,7 @@ netcode only has to carry dictionaries and byte chunks:
   (`Bend_knee/Bend_ankle`), and a socket goes under the deepest bend above it. The walk keeps
   the foot level: the ankle turns against the hip and the knee together. A figure's stride is
   widest at its own run, 3.5 m/s (a mech's is 9).
-- **Looked at** (`tools/figure_look.gd`, windowed: the workshop's side, front and 3D views and
+- **Looked at** (`tools/shots/figure_look.gd`, windowed: the workshop's side, front and 3D views and
   the figure standing, mid-stride, at full reach and with an elbow bent, into
   `user://dev/figure_look/`). What the pictures showed, and what changed:
   - mid-stride the swinging leg's knee folds back, its foot level; at full reach the legs
@@ -757,7 +757,7 @@ netcode only has to carry dictionaries and byte chunks:
   is on) -- R rolls a whole new one (custom parts too: it is the player's), S saves it as a
   design of fixed slots in `user://library/parts/designs/`, Enter puts it in the world (following you on
   foot, else walking its circle). Saved characters come back with Ctrl T as any figure design.
-- Probed in `tools/character_probe.gd` (16).
+- Probed in `tools/probes/character_probe.gd` (16).
 
 ### Thumbnails, as built
 
@@ -768,7 +768,7 @@ netcode only has to carry dictionaries and byte chunks:
   window; Asset > "Make pictures of this build's saved parts" makes them again.
 - **The catalogue** shows a part's picture as its icon in the list (40 px). Packages carry it and
   an import keeps it (stage 9 already took a `thumb.png`).
-- Probed by `tools/thumb_probe.gd` (windowed: 7 checks -- the part in the middle in its colour,
+- Probed by `tools/probes/thumb_probe.gd` (windowed: 7 checks -- the part in the middle in its colour,
   clear round it, framed, the icon, the package; headless: 2). Its one windowed run peaked at
   68 C, not held back.
 
@@ -783,14 +783,14 @@ netcode only has to carry dictionaries and byte chunks:
   window (3.64 m to 4.90 m); the cockpit window is drawn round it; the mech stands 5.88 m, two
   storeys. Hips 3.36 m, shoulders 3.78 m, 1.93 m out: the greybox's, so it aims from where the
   boxes did. Its elbows, knees and ankles fall on brick seams.
-- **Made by `tools/make_starter_mech.gd`** (headless): the workshop's mech mode on the reference,
+- **Made by `tools/make/make_starter_mech.gd`** (headless): the workshop's mech mode on the reference,
   boxes of cells packed into bricks, part by part. `AssetWorkshop.part_maker` names a set's maker
   (a player's parts stay "workshop").
 - **In the game** every mech that is not in a scripted pass is now made of them -- the player's
   and the roster's normal ones -- with its walk, knees and ankles; a scripted pass keeps the boxes
   its numbers were taken with. The chassis is what `MechPilot` hides in the cockpit
   (`Mech.canopy` is now any node): the eye is inside its bricks.
-- **Looked at** (`tools/mech_look.gd`, windowed, `user://dev/mech_look/`): beside a wall with a
+- **Looked at** (`tools/shots/mech_look.gd`, windowed, `user://dev/mech_look/`): beside a wall with a
   second-storey window; from the cockpit the window is square ahead at eye level, the gun arm's
   forearm reaching out below; walking, the legs scissor with the feet level and the knee folds.
 
@@ -809,7 +809,7 @@ netcode only has to carry dictionaries and byte chunks:
 
 - **The first official mech-scale gun**: a Korr LMG -- body, barrel, grip, box magazine, stock --
   in `res://content/base/parts/gun/starter_mech_lmg_*` (scale `mech`, the `mgun.*` joints) with pictures, its
-  build `res://content/base/guns/starter_mech_lmg.json`, made by `tools/make_starter_mech_gun.gd`. 26 nano
+  build `res://content/base/guns/starter_mech_lmg.json`, made by `tools/make/make_starter_mech_gun.gd`. 26 nano
   studs, 4.6 m: a little longer than the arm from shoulder to fist, as a titan's gun is. Stats
   and modifiers roll from the seed as any gun's (an LMG's class).
 - **In the hand**: `MechAssembler.arm_gun` now puts the gun's grip in the fist (the middle of the

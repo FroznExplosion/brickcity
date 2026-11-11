@@ -22,7 +22,7 @@ ElementalManager="*res://autoload/elemental_manager.gd"
 VfxPool="*res://autoload/vfx_pool.gd"
 MenuSettings="*res://menu/core/MenuSettings.gd"
 MenuManager="*res://menu/core/MenuManager.gd"
-TestWindow="*res://scripts/test_window.gd"
+TestWindow="*res://scripts/core/test_window.gd"
 
 [editor_plugins]
 
@@ -331,7 +331,7 @@ dev_grids={
 
 [menu]
 
-host_script="res://scripts/brickcity_menu_host.gd"
+host_script="res://scripts/core/brickcity_menu_host.gd"
 
 [physics]
 

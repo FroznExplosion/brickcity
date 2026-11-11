@@ -2580,7 +2580,7 @@ func _run_wreck_pass() -> void:
 ## A blast's ring, to look at (Docs/CollapseNext.md 1.10 (3)): one rocket into
 ## a wall, a picture a tenth of a second on -- the bricks round the hole in the
 ## air -- and one half a second on, as they fall. The counts are
-## tools/blast_ring_probe.gd's; this is what it looks like, and that a city's
+## tools/probes/blast_ring_probe.gd's; this is what it looks like, and that a city's
 ## blast goes that way.
 func _run_ring_pass() -> void:
 	print("[ring] a blast throws out the ring round its middle")
@@ -6378,7 +6378,7 @@ func _run_stress_pass() -> void:
 	# collapse itself got cheap enough never to need one (its worst ticks well
 	# under 8 ms, one at a time): the arbiter doing nothing was the right answer.
 	# The ladder itself, driven by a load that does call for it, is
-	# tools/ai_world_probe.gd's.
+	# tools/probes/ai_world_probe.gd's.
 	var called_for := city._ai_heavy_run_max >= City.AI_HEAVY_TICKS
 	print("[stress] destruction for the arbiter: worst tick %.1f ms, longest run over %.0f ms %d tick(s) -- a step down %s" % [
 			city._ai_destruction_peak, City.AI_HEAVY_MS, city._ai_heavy_run_max,
@@ -8181,7 +8181,7 @@ func _run_windows_pass() -> void:
 ## Docs/Status.md, "give islands back to the world". A settled island used to
 ## keep a chunk, an occupancy grid, a bake, a mesh and a body for the rest of
 ## the scene, and the 1.2 GB worst case is mostly that. The truth layer's half
-## of this gate is `tools/dormant_probe.gd`; here are the distances, the
+## of this gate is `tools/probes/dormant_probe.gd`; here are the distances, the
 ## budgets and the memory.
 func _run_dormant_pass() -> void:
 	print("[dormant] wreckage, given back")
@@ -8358,7 +8358,7 @@ func _run_dormant_pass() -> void:
 ## Is a staircase part of the building it is in?
 ##
 ## Docs/BuildMode.md section 11, Stage 5. The truth layer's half is
-## `tools/fixture_probe.gd`; this is the half that needs a scene -- bricks in
+## `tools/probes/fixture_probe.gd`; this is the half that needs a scene -- bricks in
 ## the building's own body, a figure standing on a tread, and what happens to
 ## the flight when the building comes down.
 ##
@@ -8581,7 +8581,7 @@ func _run_build_pass() -> void:
 	var id := city.registry.buildings.size() - 1
 	var b := city.registry.get_building(id)
 	if b == null or not b.is_build():
-		print("  FAIL nothing was placed -- run tools/demo_build.gd first")
+		print("  FAIL nothing was placed -- run tools/shots/demo_build.gd first")
 		city.get_tree().quit(1)
 		return
 

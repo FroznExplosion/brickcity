@@ -249,7 +249,7 @@ path searches queued best-first in 0.5 ms a tick (NAV_BUDGET_US) with a node bud
 (3000-20000), cover searches queued, encounter promotions 3 ms a tick, 8 enemies alive in a wave,
 4 allies, support 3 air / 1 tank / 1 mech. Nothing added.
 
-The effects had four nodes made per event with no ceiling. Now capped (`tools/fx_cap_probe.gd`):
+The effects had four nodes made per event with no ceiling. Now capped (`tools/probes/fx_cap_probe.gd`):
 
 - **Damage numbers** (CombatFeedback): up to PELLET_NUMBERS = 5 per body per shot, one per
   pellet; past five the pellets share the five out, so ten hits read as five numbers (the gun

@@ -21,7 +21,7 @@ columns centred on lattice points tying four panels each, interior walls
 straddling panel seams, and a stairwell that is one cell clear of the walls.
 Twelve shapes build with **zero stress failures and zero detached blocks** and
 the biggest tower is 22,507 blocks (it was 50,535 before the lattice and 29,716
-before the floors went into the walls). `tools/structure_probe.gd` is the gate;
+before the floors went into the walls). `tools/probes/structure_probe.gd` is the gate;
 Docs/Scale.md has the full account, "The seventh: floors IN the walls".
 
 The **interior half is where the work is.** Rooms and their contents exist and

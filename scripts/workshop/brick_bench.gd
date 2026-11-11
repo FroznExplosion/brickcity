@@ -4,7 +4,7 @@ extends Node3D
 ## The workshop's bricks, as a component (Docs/BuildTools.md section 20, stage 6b): the brick
 ## world, the recipe, the frames, aiming and placing, the hand and the paint, undo, the grid,
 ## the ghost, the camera, the HUD and menus, save and load. Both workshops own one -- the
-## building workshop (scripts/workshop.gd) and the asset workshop (scripts/asset_workshop.gd) --
+## building workshop (scripts/workshop/workshop.gd) and the asset workshop (scripts/workshop/asset_workshop.gd) --
 ## as a child named "Bench", and call its entry points (`bench_ready`, `bench_process`,
 ## `bench_input`, `bench_unhandled_input`) from their own. What an owner does its own way it
 ## does through HOOKS and the settings below them, not by overriding.
@@ -212,7 +212,7 @@ var _colour := 4
 ## What the next brick is made of: an index into BrickWorld's materials. The
 ## colour is read through it (a filament palette entry, or a wood or metal).
 var _mat := 0
-## The toolbar and parts browser (scripts/workshop_hotbar.gd). It sets
+## The toolbar and parts browser (scripts/workshop/workshop_hotbar.gd). It sets
 ## `_part_index` and `_colour` when its selection changes; nothing reads it back,
 ## so a probe or the stair builder setting them directly is unaffected.
 var _hotbar: WorkshopHotbar
@@ -238,10 +238,10 @@ var _paint_radius: int:
 	get: return _paint_tool.radius
 	set(v): _paint_tool.radius = v
 const PAINT_RADIUS_MAX := 12
-## What the brush lays, picked in one place (scripts/paint_palette.gd): the
+## What the brush lays, picked in one place (scripts/build/paint_palette.gd): the
 ## selected slot's material and colour, which is what the brush has always
 ## painted with -- the palette is a nearer way to change them.
-const PaintPalette := preload("res://scripts/paint_palette.gd")
+const PaintPalette := preload("res://scripts/build/paint_palette.gd")
 var _paint_palette = null
 ## The stroke under way, as [recipe id, colour it had] per brick, or null.
 var _stroke = null
@@ -495,7 +495,7 @@ func _gate_ok(what: String, cond: bool, detail: String = "") -> void:
 ## A staircase built from spiral pieces, driven through the same calls the
 ## mouse makes; then a fixture as an older saved recipe carries one.
 ##
-## The recipe half of this is `tools/build_probe.gd`; what needs the scene is
+## The recipe half of this is `tools/probes/build_probe.gd`; what needs the scene is
 ## the aiming, the preview, the undo stack shared with bricks, and the reload.
 func _run_gate() -> void:
 	print("[workshop] a staircase, built here; fixtures, as saves carry them")
@@ -776,7 +776,7 @@ func _build_lights() -> void:
 
 func _build_camera() -> void:
 	_camera = Camera3D.new()
-	_camera.set_script(load("res://scripts/debug_camera.gd"))
+	_camera.set_script(load("res://scripts/core/debug_camera.gd"))
 	_camera.far = 2500.0
 	_camera.set("e_climbs", false)   # E is the plane lock here; SPACE still climbs
 	add_child(_camera)
@@ -1348,7 +1348,7 @@ func _hold_lock_base(on: bool) -> void:
 
 
 ## The placement rule itself, for any ray. Split from `_aim` so a probe can
-## drive it with exact rays instead of a mouse (tools/place_probe.gd).
+## drive it with exact rays instead of a mouse (tools/probes/place_probe.gd).
 func _aim_ray(from: Vector3, dir: Vector3) -> void:
 	if not _lock.is_empty():
 		_slide_on_lock(from, dir)
@@ -3072,7 +3072,7 @@ func _section_process() -> void:
 static var _studs_fallback: Material = null
 
 static func _stud_material() -> Material:
-	var terrain: Script = load("res://scripts/terrain_tile.gd")
+	var terrain: Script = load("res://scripts/terrain/terrain_tile.gd")
 	if terrain != null:
 		for m in terrain.get_script_method_list():
 			if m.name == "stud_material":

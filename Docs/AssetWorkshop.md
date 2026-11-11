@@ -7,8 +7,8 @@ pieces, studs and connections ([Docs/Parts/custom.md](Parts/custom.md)).
 
     godot --path . res://scenes/asset_workshop.tscn
 
-It is the workshop ([Docs/BuildMode.md](BuildMode.md), `scripts/workshop.gd`) with tools added:
-`scripts/asset_workshop.gd` extends it, and everything the workshop does -- placing, sideways
+It is the workshop ([Docs/BuildMode.md](BuildMode.md), `scripts/workshop/workshop.gd`) with tools added:
+`scripts/workshop/asset_workshop.gd` extends it, and everything the workshop does -- placing, sideways
 building, the hotbar, paint, undo, save and load -- works here unchanged. Tools that prove out
 can move into the main workshop later; that is the build-mode area's call.
 
@@ -285,7 +285,7 @@ can go back and forth: brick edits made after a convert show in the SDF, and con
 again keeps them. Old saves with the 2D sketch form may be dropped.
 
 **The engine side: `SdfForm`** (gdextension/brick/src/sdf_form.cpp), checked by
-`tools/sdf_form_probe.gd` (headless, 26 checks):
+`tools/probes/sdf_form_probe.gd` (headless, 26 checks):
 
 | What | How |
 |---|---|
@@ -300,7 +300,7 @@ again keeps them. Old saves with the 2D sketch form may be dropped.
 | Drawing on a surface | `raycast` (sphere tracing) |
 | Undo, saving | `begin_edit` / `end_edit` record the blocks an edit touched; `swap_blocks` undoes and gives the redo; `to_bytes` / `from_bytes` |
 
-**In the workshop** (`scripts/asset_sculpt.gd` holds the field in the scene; the tool is in
+**In the workshop** (`scripts/workshop/asset_sculpt.gd` holds the field in the scene; the tool is in
 `asset_workshop.gd`; the probe's `_sculpt` and `_convert` check it):
 
 | What | How |
@@ -494,7 +494,7 @@ cover the new pieces.
 - "fill from guides" went (it stamped every guide at once); **model into this part** and
   **carve the model out** act on the one picked.
 - A lathe being drawn is dropped when another shape or tool is picked.
-- The part sheets (`tools/part_sheets.gd`, Docs/Parts) were behind: cheese and the long curves
+- The part sheets (`tools/make/part_sheets.gd`, Docs/Parts) were behind: cheese and the long curves
   had no sheet or profile; they and the new pieces have now.
 
 sdf_form_probe 38 (6 new), asset_workshop_probe 251, palette_probe 1858 (its family-height
@@ -579,7 +579,7 @@ the game view's camera puts the gun's back top at the hip pose. Picture pass: `-
 
 - The skinned test robot (`TestRobot.glb`, armature at 1/100) now reads standing; its field's
   box matches the model's to 0.05 stud. Godot's own `bake_mesh_from_current_skeleton_pose`
-  refuses a scene not yet in the tree, so `ModelMesh` (scripts/model_mesh.gd) skins by hand:
+  refuses a scene not yet in the tree, so `ModelMesh` (scripts/workshop/model_mesh.gd) skins by hand:
   bone pose times bind pose, weighted. Reading it and the first stamp take about 0.6 s; a
   stamp again on letting go of the gizmo about half that.
 - A model's surfaces are stamped as **one** triangle soup (a model split by material is one
@@ -836,7 +836,7 @@ Outliner to select, hide, group), Blender (outliner children under parents; work
 of work), BrickLink Studio (submodels, steps), MagicaVoxel (few brushes x attach/erase/paint),
 Fusion 360 (a workspace switcher -- and Autodesk's own note that users got lost between modes).
 
-Built (`AssetWorkshopUI`, `scripts/asset_workshop_ui.gd`). It holds no state that matters: every
+Built (`AssetWorkshopUI`, `scripts/workshop/asset_workshop_ui.gd`). It holds no state that matters: every
 button calls the workshop's own functions, and what is lit is read back each frame, so a key
 does the same as its button.
 
@@ -867,7 +867,7 @@ does the same as its button.
 
 What the workshop says (a refused Convert, a moved plane) also shows big at the top for a few
 seconds, and the building workshop's brick readout is hidden in Block out.
-`tools/asset_ui_probe.gd`: 28 checks.
+`tools/probes/asset_ui_probe.gd`: 28 checks.
 
 **Then (2026-10-25, the four left over):**
 
@@ -890,7 +890,7 @@ seconds, and the building workshop's brick readout is hidden in Block out.
 - **Icons**: each rail tool has a line drawing, 24 x 24 SVG drawn by Godot
   (`AssetWorkshopUI.ICONS`).
 
-`tools/asset_ui_probe.gd`: 50 checks.
+`tools/probes/asset_ui_probe.gd`: 50 checks.
 
 ### The grid stays put; no stray starting bricks (2026-10-27)
 
@@ -1106,10 +1106,10 @@ own take the part's colour as before.
 **And back.** Bricks to clay gives every brick's colour to its cells
 (`sync_cells(before, after, colours)`), so Make bricks after it lays the same colours.
 
-`ColourMatch` (scripts/colour_match.gd): Oklab, `difference`, `nearest`, and the palette to vote
+`ColourMatch` (scripts/build/colour_match.gd): Oklab, `difference`, `nearest`, and the palette to vote
 from -- a material's colours, or a list of them (`indices(material, allowed)`).
 
-Checks: `tools/sdf_colour_probe.gd` (14: Oklab, model colours to the mesh, a red-top blue-bottom
+Checks: `tools/probes/sdf_colour_probe.gd` (14: Oklab, model colours to the mesh, a red-top blue-bottom
 box stamped and voted, deep cells, brush colours and repaint, drawing, bricks back, an area's
 palette, saves old and new); asset_workshop_probe 343 (3 new: a coloured model through Make
 bricks, Bricks to clay and back, the same in metal).
@@ -1167,7 +1167,7 @@ keeps the role names; only the menus say Furniture. How a building breaks is unc
 a hit lays them as bricks.
 
 **Tags, three levels, from one file.** `content/base/data/asset_tags.json` lists the levels in filter order;
-`AssetTags` (`scripts/asset_tags.gd`) reads it. Adding a level or a value is a line in that file:
+`AssetTags` (`scripts/workshop/asset_tags.gd`) reads it. Adding a level or a value is a line in that file:
 the Save As dialog, the filter and the generator all take it from there.
 
 | Level | Choice | Values | Empty means |
@@ -1188,17 +1188,17 @@ a new chair tagged Kitchen turns up in generated kitchens with nothing else done
 tagged for some planets only is furnished on those (`RoomTemplates.planet`, Earth today).
 Registered as Item, every brick is Detail; as Furniture, a brick is Interior unless it was built
 as Detail (a table with a cup: the cup stays an item). Open lists items in the asset workshop
-too. `tools/asset_tags_probe.gd`: 32 checks.
+too. `tools/probes/asset_tags_probe.gd`: 32 checks.
 
 **Built 2026-10-23 (stages 2 and 3).**
 
-*The catalogue* (`AssetCatalog`, `scripts/asset_catalog.gd`; the panel `AssetCatalogPanel`):
+*The catalogue* (`AssetCatalog`, `scripts/workshop/asset_catalog.gd`; the panel `AssetCatalogPanel`):
 every file in the item library with its tags, one panel for the workshop and the game. Each
 level is a row of chips -- All, then each value with how many it would leave, greyed when that
 is none -- over a search box and the list; picking from the list puts the piece in hand. The
 filter is remembered (`user://workshop/asset_catalog.json`).
 
-*The placer in the workshop* (`FurnishTool`, `scripts/furnish_tool.gd`), both workshops: **F6**
+*The placer in the workshop* (`FurnishTool`, `scripts/workshop/furnish_tool.gd`), both workshops: **F6**
 opens the catalogue. The piece in hand is a ghost centred on the stud under the cursor, on top
 of the bricks in that column or of a piece already placed (a cup on a table); R turns it a
 quarter, LMB places it (it stays in hand), RMB takes away the placed piece under the cursor, Esc
@@ -1212,13 +1212,13 @@ after the build's own so no block id of its own moves: Interior for furniture, D
 item, the author's colours. So a chair edited and saved again is the new chair in every build
 laid after. Turning or inserting a build turns and moves its placements; an asset whose file is
 gone is left out with a warning. Generated rooms keep placing by seed.
-`tools/furnish_probe.gd`: 40 checks.
+`tools/probes/furnish_probe.gd`: 40 checks.
 
 A trap met on the way: a static var set from a probe was reset when a scene loaded (loading
 reloads the scripts). The probe's test folder is kept on `Engine` meta (`AssetCatalog.use_dir`).
 
 **Built 2026-10-23 (stages 4 and 5): placing in a game world** (`WorldFurnisher`,
-`scripts/world_furnisher.gd`; the city scene's `_setup_furnisher`). **F6** opens the same
+`scripts/rooms/world_furnisher.gd`; the city scene's `_setup_furnisher`). **F6** opens the same
 catalogue, filtered to the planet underfoot (`planet`, Earth). The ghost follows the aim; R turns,
 LMB places, RMB puts the piece down, Backspace takes back the last piece placed (unless it has
 been shot or laid since: then it is the world's), Esc closes. Where the aim lands decides what a
@@ -1233,7 +1233,7 @@ placement is:
   floor that falls (8.3). `Room.placed_edits` moves the room's `diff_stamp` so its group redraws.
 * **A player build** -- laid at once into its chunk as decorative bricks
   (`RoomManifest.build_item`), inside the build's own box, as its own furniture is.
-* **Anywhere else: outdoors** (`OutdoorProps`, `scripts/outdoor_props.gd`) -- on the course just
+* **Anywhere else: outdoors** (`OutdoorProps`, `scripts/rooms/outdoor_props.gd`) -- on the course just
   above what the aim hit, clear of other props and of every building's box. Cheap until touched:
   - *drawn* as one MultiMesh per (asset, turn) per 16 m tile, Godot's visibility range as the
     LOD: furniture to 60 m, items to 20 m (InteriorGroups' ranges), faded over 6 m. Measured from
@@ -1244,7 +1244,7 @@ placement is:
     and a decorative block has no body), indexed, shelled and saved as any placed build is. It
     is then ordinary brick destruction.
 
-`tools/world_furnish_probe.gd`: 31 checks (a room upstairs furnished, a cup stacked on the
+`tools/probes/world_furnish_probe.gd`: 31 checks (a room upstairs furnished, a cup stacked on the
 placed table, refused into the table and through a wall, the table laid as bricks like a
 generated piece; a player build; props drawn and ranged by type, refused on a taken spot and in
 a building's box, promoted by a blast at them and only them).
@@ -1343,6 +1343,6 @@ the repository.
 
 ## 4. Checks
 
-`tools/asset_workshop_probe.gd`, headless, drives the scene with exact rays, as the workshop's
+`tools/probes/asset_workshop_probe.gd`, headless, drives the scene with exact rays, as the workshop's
 own probes do: the units, a photo's calibration, measuring, the mirror's cells and facings, what
 is saved and loaded back. Each phase adds its own cases.

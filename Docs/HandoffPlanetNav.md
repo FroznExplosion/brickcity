@@ -6,7 +6,7 @@ CLAUDE.md (worktrees, heat log, test windows, timing rules).
 ## Where things are (2026-10-24)
 
 - Everything that moves -- pawn, titan, tank, truck, APC, flyer, the soldier's BODY -- is on local
-  down (§11.7): up is `Gravity.up_at(p)` through the helpers in `scripts/gravity.gd`, exact in the
+  down (§11.7): up is `Gravity.up_at(p)` through the helpers in `scripts/core/gravity.gd`, exact in the
   flat game. Planet gates in `scenes/planet.tscn`: `-- --gate=pawn` 12, `--gate=mech` 11,
   `--gate=tank` 12, `--gate=soldier` 9, all passing headless.
 - The soldier's BRAIN is not: `AIWorld` / `AINav` (C++, `gdextension/brick/src/ai/`) and the squad
@@ -16,7 +16,7 @@ CLAUDE.md (worktrees, heat log, test windows, timing rules).
   `PlanetNavRegion.make(data, dir, studs := 1024, step := 4)`: a tangent frame (planet-local;
   world is `planet.global_transform * frame`, axes = `Gravity.tangent_basis`'s) and the ground as
   257 x 257 heights in that frame, the frame's origin 1 m under the lowest ground, `sea_y`,
-  `ground_at(lx, lz)` (bilinear, INF outside). Probe: `tools/planet_nav_grid_probe.gd` (headless,
+  `ground_at(lx, lz)` (bilinear, INF outside). Probe: `tools/probes/planet_nav_grid_probe.gd` (headless,
   9/9: 222 ms to build, samples on the ground within 2.4 mm, 1.3 cm between samples, corner tilt
   1.45 deg).
 
@@ -24,9 +24,9 @@ CLAUDE.md (worktrees, heat log, test windows, timing rules).
 
 Steps 1-5 are done and merged (Planets.md 11.8, "N1 and N1b's C++ half built", "N2 built",
 "N3 done"): `AIWorld.set_frame` / `set_ground_grid` / `ground_under` / `top_over`, probe
-`tools/planet_nav_frame_probe.gd` 18/18; `PlanetScene.setup_ai` and `--gate=squad` 10/10; the
+`tools/probes/planet_nav_frame_probe.gd` 18/18; `PlanetScene.setup_ai` and `--gate=squad` 10/10; the
 squad and tactics GDScript on the Gravity helpers. Step 6 (N4) too: `PlanetNavNet`, probe
-`tools/planet_nav_net_probe.gd` 12/12, `--gate=travel` 10/10 (11.8 "N4 built"); each agent
+`tools/probes/planet_nav_net_probe.gd` 12/12, `--gate=travel` 10/10 (11.8 "N4 built"); each agent
 asks its own region (`AIServices.focus`, `--gate=far` 11/11). Lines and danger across
 regions too (`AIWorld.set_peers`, `LINE_REACH`, `AIServices.set_danger`). Size, mech and vehicle
 maps on the net too (`PlanetNavMap`, `--gate=drive` 5/5). Open: buildings'

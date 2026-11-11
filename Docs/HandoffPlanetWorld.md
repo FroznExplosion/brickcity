@@ -40,15 +40,15 @@ a translation-only floating origin at 4 km.
   trunk 89 m away -- cause never found; vehicles, which do not collide with FIXTURE, drive through).
   `-- --no-trees` leaves them out (for A/B).
 - Everything that moves is on local down (§11.7: `Gravity.up_at` and the helpers in
-  scripts/gravity.gd, exact in the flat game).
+  scripts/core/gravity.gd, exact in the flat game).
 
 ## Tests
 
-Headless (from your worktree): `tools/planet_tree_probe.gd` (10; its two frame times are printed,
+Headless (from your worktree): `tools/probes/planet_tree_probe.gd` (10; its two frame times are printed,
 not judged), `planet_biome_probe` (8), `planet_nav_grid_probe` (9); planet gates
 `res://scenes/planet.tscn -- --gate=pawn` (12), `--gate=mech` (11), `--gate=tank` (12),
 `--gate=soldier` (9), `--gate=squad` (10, the nav chat's). Windowed: `-- --gate` (the walker, 9,
-shots in shots/planet_gate_*.png), `tools/planet_tree_shot.gd` (trees at 20 / 90 / 300 m).
+shots in shots/planet_gate_*.png), `tools/shots/planet_tree_shot.gd` (trees at 20 / 90 / 300 m).
 
 Last quiet-machine timings: tree fill 5.8-6.4 ms worst a frame, 500 m/s low 8.8-11.5 ms; the
 walker gate's frames over 40 ms 10 without trees, 16 with -- the six extra all at the spawn while

@@ -23,7 +23,7 @@ extends Node
 ## A part of the island manager (IslandManager.standins), reading it through
 ## `host`, as island_crumbs.gd does.
 
-const Host := preload("res://scripts/island_manager.gd")
+const Host := preload("res://scripts/destruction/island_manager.gd")
 
 var host: Host
 ## Off: pieces are blind while their mesh is made, as before (for an A/B).

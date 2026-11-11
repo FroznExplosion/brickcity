@@ -7,7 +7,7 @@
 
 using namespace godot;
 
-/// The sampling half of ShapedParts (scripts/shaped_parts.gd): a shaped
+/// The sampling half of ShapedParts (scripts/build/shaped_parts.gd): a shaped
 /// part's cell, stud and socket masks from its convex prisms.
 ///
 /// Each cell is SAMPLES^3 point-in-prism tests; in GDScript that was ~43 ms a

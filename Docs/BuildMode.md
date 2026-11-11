@@ -714,7 +714,7 @@ Ordered by dependency. Items 1–4 are small; item 8 dominates.
 | 5 | **Seed-set grounding** — `solve_grounded` from an explicit block set, not a plane (§3.3) | Without it every sideways frame falls off on the first solve. Also most of what limitation 16 needs | M |
 | 6 | **Weld table** — stored edges, **invalidated on block death** (§2.8) — plus weld-subtree body merging (§1.1) and weld-graph component detachment | The one genuinely new graph in the system, and the one that can go stale | M |
 | 7 | **Ghost, snap, tint, undo, palette, frame picker** | §4 | M |
-| 8 | **Baked mesh + convex colliders per archetype** | ✅ **Done.** An archetype can carry an authored surface the face bake draws (`set_archetype_mesh`, `tools/mesh_probe.gd`) and convex hulls both collision paths use (`set_archetype_hulls`, `tools/hull_probe.gd`). The staircase is drawn and collides as its shape. The cell mask stays the truth for connectivity and stress. | **L** |
+| 8 | **Baked mesh + convex colliders per archetype** | ✅ **Done.** An archetype can carry an authored surface the face bake draws (`set_archetype_mesh`, `tools/probes/mesh_probe.gd`) and convex hulls both collision paths use (`set_archetype_hulls`, `tools/probes/hull_probe.gd`). The staircase is drawn and collides as its shape. The cell mask stays the truth for connectivity and stress. | **L** |
 | 9 | **`Assembly`** — a first-class owner of frames + welds + recipe | Today `island_manager` owns chunks ad hoc. Nothing owns a *creation* | M |
 | 10 | **Rotated-building probe** (§2.7) | Cheap, and it keeps a property that is currently true by accident | S |
 | 11 | **Structural / decorative flag on a frame** (§9.2) | Removes fixtures from the stress solve and from seed-set grounding entirely | S |
@@ -734,7 +734,7 @@ limitations 1 and 24 are corrected.
 
 **The damage-aware shell** is done and is now gate **G1b** (§9.5). 744 bytes and 2.43 ms per
 damaged building, computed at de-materialisation; intact buildings draw byte-identical geometry to
-before. `tools/shell_probe.gd` passes 28 checks.
+before. `tools/probes/shell_probe.gd` passes 28 checks.
 
 One thing build mode still stresses and nobody has measured:
 [limitation 9](Status.md#known-limitations) -- surfaces under 65,536 vertices cannot be
@@ -750,7 +750,7 @@ one carries a probe, because that is how the rest of this project is gated.
 
 ### Stage 0 — the part palette ✅ **done**
 
-`scripts/brick_palette.gd` is the single table of what a part is. **20 parts** — plates, bricks and
+`scripts/build/brick_palette.gd` is the single table of what a part is. **20 parts** — plates, bricks and
 tiles at 1x1, 1x2, 1x4, 1x6, 2x2, 2x4 and 4x4 — expanding to **64 archetypes** once Stage 3's
 orientations are in, squares deduped. One naming rule, one mass rule, and orientation is *generated* rather than written,
 which is §3's argument made concrete: the recipe names a part and an orientation, the runtime only
@@ -761,7 +761,7 @@ top — which is the only thing separating a tile from the plate of the same siz
 structural rather than a finish. A studless *brick*, for capping a wall head, is one more table row
 when it is wanted.
 
-`tools/palette_probe.gd` passes **532 checks** — that game scale and print scale are one system at
+`tools/probes/palette_probe.gd` passes **532 checks** — that game scale and print scale are one system at
 43.75x on every axis, that a square part expands to exactly one archetype and others to two that are
 the same part rotated, that mass is a pure function of cell count anchored on the real 2.4 g 2x4,
 and that every studded part stacked on itself **joins** while every tile **does not**.
@@ -785,7 +785,7 @@ which is what the stress solve charges for.
 
 **Gate met.** Build a wall, build the same wall with a placement undone in the middle, and the two
 are byte-identical — same alive count, faces emitted, vertex buffer and colours.
-`tools/edit_probe.gd` passes **67 checks**.
+`tools/probes/edit_probe.gd` passes **67 checks**.
 
 > **The one real trap.** A tombstone cannot null its `archetype`: the face bake and
 > `get_block_boxes` walk every block and index `archetypes[b.archetype]` with no guard at all. So a
@@ -803,7 +803,7 @@ to place the result in a city and shoot it.
 **Gate met.** Hand-build a house, save it, place it in the city, shoot it, and it breaks like a
 generated building — because it is one: `BuildingRegistry.register_build()` takes a `BuildRecipe`
 and materialise, damage, de-materialise and replay are all unchanged.
-`tools/build_probe.gd` passes **46 checks**.
+`tools/probes/build_probe.gd` passes **46 checks**.
 
 Two things the implementation settled that §8 only asserted:
 
@@ -843,7 +843,7 @@ translates, so nothing existing had to change.
 > §3.1 should be read as describing *what can be expressed*, not as a promise that inverting a
 > brick lets it attach from below.
 
-`tools/orient_probe.gd` passes **51 checks**. The one worth keeping is that the cell mask and the
+`tools/probes/orient_probe.gd` passes **51 checks**. The one worth keeping is that the cell mask and the
 face masks move *together*: an inverted slope's downward stud must sit under the column that is
 actually full height, which is what catches transforming one and not the other.
 
@@ -854,7 +854,7 @@ job.
 ### Stage 4 — frames ✅ **done**
 
 Sideways building. A frame is a chunk at one of the 24 axis-aligned rotations at an exact integer
-tick offset, and `Assembly` (`scripts/assembly.gd`) owns the frames and the welds between them.
+tick offset, and `Assembly` (`scripts/build/assembly.gd`) owns the frames and the welds between them.
 The workshop stands **all six build grids up front** -- upright, four sideways, inverted -- all over
 the same volume, and `TAB` switches between them. The build box is a cube in tick space (48 studs and
 120 plates are both 240 ticks), so a grid covers the same region whichever way it is turned.
@@ -874,7 +874,7 @@ grids usable rather than six separate scenes.
 
 **Gate met.** A sideways panel welded on by two bricks stands; damage elsewhere leaves it alone;
 killing the two bricks kills both welds and the panel sheds, its own bricks intact.
-`tools/frame_probe.gd` passes **67 checks**.
+`tools/probes/frame_probe.gd` passes **67 checks**.
 
 `BuildRecipe` gained frames to match — a rotation and tick offset per frame, a frame index per
 block, and `build_into(assembly)`. A pre-frames recipe loads with every brick in frame 0 rather than
@@ -913,13 +913,13 @@ Three things had to be true first, and only the first was obvious:
   not at zero, so the foundation level has to be set to it. Without that the whole build reads as
   ungrounded and sheds itself on the first solve.
 
-**Gate met.** `tools/build_probe.gd` passes **74 checks** -- the welds round-trip, the frames keep
+**Gate met.** `tools/probes/build_probe.gd` passes **74 checks** -- the welds round-trip, the frames keep
 their exact offset under a rotated placement, damage lands in the frame that was hit and nowhere
 else, both frames keep their record across de-materialisation, and killing the two anchor bricks
 takes the panel off whole with its own bricks intact. In the city itself,
 `godot --path . -- --buildshot` passes **12** more against a real scene: every frame past the root
 has a node with something in it, the panel is solid to a ray where the panel is, and shooting it
-removes panel bricks and leaves the house alone. `tools/demo_build.gd` writes a two-frame demo, so
+removes panel bricks and leaves the house alone. `tools/shots/demo_build.gd` writes a two-frame demo, so
 the scene has something to place without hand-building one first.
 
 **What a placed build gets.** A shell of its own (§12 question 3, answered), so it streams and trims
@@ -938,7 +938,7 @@ and §6.3 defers real joints.
 | Build | The structural/decorative flag (§9.2); the dormant tier (§9.4); a spiral staircase as masked wedge archetypes at eight steps per revolution (§9.1 A) |
 | Gate | A dormant staircase costs zero chunks and zero bodies; is built with the building; comes apart with the building; and is ordinary brick while it stands |
 
-`scripts/fixture.gd` is the tier, `scripts/staircase_recipe.gd` is the part, and every building in
+`scripts/build/fixture.gd` is the tier, `scripts/build/staircase_recipe.gd` is the part, and every building in
 `scenes/city.tscn` has one up the middle of it.
 
 **Option A, exactly as §9.1 argued it.** Eight steps a revolution is 45°, which divides 90, so a step
@@ -964,7 +964,7 @@ this is an EDIT and not damage: the cells come back, the ids stay, and `get_dead
 removed block out, so a stairwell never reads as a hole somebody shot. Without it, three steps of a
 twenty-seven step flight were silently refused wherever a floor crossed them.
 
-**Gate met**, in two halves. `tools/fixture_probe.gd` passes **47 checks** on the truth layer: the
+**Gate met**, in two halves. `tools/probes/fixture_probe.gd` passes **47 checks** on the truth layer: the
 eight masks tile one revolution with the newel in all of them and no tread cell in two, a flight is
 grounded through the step below it, attaching a fixture creates no chunk and no bricks, the flight
 goes into the building's own chunk with stable ids and is clipped to the building's own bricks, the
@@ -1005,11 +1005,11 @@ pipework are more masks on the same machinery, not new machinery.
 ### Studs, and gap 8 ✅
 
 Workshop bricks draw real studs, with terrain's stud mesh and material, from a C++ buffer that leaves
-out every stud a brick is sitting on (`tools/stud_probe.gd`, 23 checks). And a part can be drawn as
+out every stud a brick is sitting on (`tools/probes/stud_probe.gd`, 23 checks). And a part can be drawn as
 its **shape** rather than its cells: an authored surface per archetype, drawn by the face bake with
 no new pipeline, while the cell mask stays the truth for connectivity, stress and collision
-(`tools/mesh_probe.gd`, 28 checks). And it can **collide** as that shape: convex hulls per
-archetype, used by both the per-block and the merged collision paths (`tools/hull_probe.gd`, 13
+(`tools/probes/mesh_probe.gd`, 28 checks). And it can **collide** as that shape: convex hulls per
+archetype, used by both the per-block and the merged collision paths (`tools/probes/hull_probe.gd`, 13
 checks, against a real physics space). The staircase's treads are true arcs to look at and to stand
 on.
 
@@ -1017,10 +1017,10 @@ on.
 
 The palette has its first non-box parts: slopes (1x2, 2x2, 2x4), curved slopes (1x2, 2x2), round
 bricks (1x1, 2x2) and arches (1x4, 1x6). Each is one extruded profile from which
-`scripts/shaped_parts.gd` derives the drawn surface, the convex hulls and the cell mask, so the three
+`scripts/build/shaped_parts.gd` derives the drawn surface, the convex hulls and the cell mask, so the three
 cannot disagree; studs and sockets fall out of where the shape reaches the top and the floor. A
 slope has a front, so it has four yaws (`_y0`..`_y3`) where a brick has two, and `R` is a quarter
-turn. `tools/shaped_probe.gd`, 185 checks. Status.md has the detail.
+turn. `tools/probes/shaped_probe.gd`, 185 checks. Status.md has the detail.
 
 They are **low poly**, on purpose: every curve is facets at 45 degrees. A round brick is an octagon
 with its flats on the footprint's edges, a curved slope falls in two facets, an arch's opening is
@@ -1090,7 +1090,7 @@ Unlike undo it reaches into the middle, so `BuildRecipe.remove_at` renumbers the
 and their welds with them; that is authoring-time only, while nothing is keyed on the ids yet. The
 baseplate does not delete.
 
-`T` turns the brick just placed. `tools/place_probe.gd` pins all of it with exact rays — **65
+`T` turns the brick just placed. `tools/probes/place_probe.gd` pins all of it with exact rays — **65
 checks**. It found three real bugs on the way: an edge-on side stud used to qualify, so looking down
 at a bracket built sideways off it instead of on top; a bracket's side studs were chosen by facing
 alone, so the FIRST one won whichever the cursor was on; and a side stud straddling two cells of its
@@ -1130,7 +1130,7 @@ includes it — whoever made the material (city, workshop, sandbox, impostor cop
 `user://dev/print_look.cfg`. Workshop: the **Finish** menu. City: **I** steps glass → smooth PEI →
 textured PEI → moulded.
 
-Pictures: `tools/print_look_shot.gd` (not headless) writes each look from the side, top, below and
+Pictures: `tools/shots/print_look_shot.gd` (not headless) writes each look from the side, top, below and
 at range. Not done: per-PIECE strength (a strong flag on a block would need a bit in the block data
 and the mesher; walls are per material for now); terrain and water keep their own print code and
 do not follow the finish switch yet.
@@ -1180,7 +1180,7 @@ Still open:
    is resident and untrimmable today because there is nothing to trim it *to*, which is question 3
    below, and the LOD ladder cannot start until that has an answer.
 3. **How does a multi-frame building generate a shell?** ✅ **Answered: a voxelised silhouette**
-   (`scripts/build_shell.gd`). A tower's shell comes from its parameters; a build's comes from its
+   (`scripts/build/build_shell.gd`). A tower's shell comes from its parameters; a build's comes from its
    **recipe**, which is the same truth layer by another name. Every block's box is mapped into root
    ticks — a rotated frame included, so a sideways panel is part of the silhouette rather than a
    special case — dropped into a voxel grid two studs and a course across, and the faces between

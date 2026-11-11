@@ -48,13 +48,13 @@ godot --path . --resolution 1280x720 res://scenes/workshop.tscn
 Nothing here is believed without a probe. Headless:
 
 ```bash
-godot --headless --path . --script tools/m0_probe.gd        # grid
-godot --headless --path . --script tools/m2_probe.gd        # stress and collapse
-godot --headless --path . --script tools/build_probe.gd     # build mode, recipes, placement
-godot --headless --path . --script tools/fixture_probe.gd   # fixtures
-godot --headless --path . --script tools/interior_probe.gd  # rooms and contents
-godot --headless --path . --script tools/dormant_probe.gd   # wreckage given back
-godot --headless --path . --script tools/loopback_probe.gd  # host and client agree
+godot --headless --path . --script tools/probes/m0_probe.gd        # grid
+godot --headless --path . --script tools/probes/m2_probe.gd        # stress and collapse
+godot --headless --path . --script tools/probes/build_probe.gd     # build mode, recipes, placement
+godot --headless --path . --script tools/probes/fixture_probe.gd   # fixtures
+godot --headless --path . --script tools/probes/interior_probe.gd  # rooms and contents
+godot --headless --path . --script tools/probes/dormant_probe.gd   # wreckage given back
+godot --headless --path . --script tools/probes/loopback_probe.gd  # host and client agree
 ```
 
 And the ones that need a scene — add `--fixed-fps 60` if the window loses focus:

@@ -82,7 +82,7 @@ uniform float print_fade_end = 20.0;
 // distance: sub-pixel lines are exactly what anisotropy stands in for.
 uniform float print_anisotropy : hint_range(0.0, 0.9) = 0.55;
 
-// The beads as a TEXTURE (print_bead, tools/make_print_beads.gd; Docs/PbrWood.md
+// The beads as a TEXTURE (print_bead, tools/make/make_print_beads.gd; Docs/PbrWood.md
 // 7): each layer or line its own relief, shade and finish, every one
 // different, and each wandering along its length the way an extruded line
 // does. For the filaments that have slices (PS_BEAD_SLICE: PLA today) -- a
@@ -240,7 +240,7 @@ vec2 ps_face_k(int face) {
 }
 
 // The baked beads: three slices a filament (side, top, bottom), 32 beads tall
-// and 64 long, the channels as tools/make_print_beads.gd writes them (slope
+// and 64 long, the channels as tools/make/make_print_beads.gd writes them (slope
 // along, slope across, shade, roughness). These constants are its.
 global uniform sampler2DArray print_bead : filter_linear_mipmap_anisotropic, repeat_enable;
 const float PS_BEAD_LONG = 64.0;

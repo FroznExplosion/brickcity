@@ -9,7 +9,7 @@
 // The page's own model code is run here, so the book holds the EFFECTIVE values
 // (your settings over the page's suggestions) and the game needs no defaults. It
 // also writes `golden`: cases with the exact odds the page gives, which
-// tools/tactics_book_probe.gd checks the game's TacticsBook against.
+// tools/probes/tactics_book_probe.gd checks the game's TacticsBook against.
 
 const fs = require("fs");
 const path = require("path");

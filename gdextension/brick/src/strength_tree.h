@@ -3,7 +3,7 @@
 
 // Where a brick build comes apart: its bricks clustered by joint strength into
 // a tree (Docs/DestructionFirstPrinciples.md A5, B6). The C++ form of the
-// prototype scripts/strength_tree.gd, which tools/strength_tree_probe.gd holds
+// prototype scripts/destruction/strength_tree.gd, which tools/probes/strength_tree_probe.gd holds
 // it to.
 //
 // Bake: every brick starts as its own cluster; the two joined clusters with the

@@ -17,7 +17,7 @@ Gates and probes this area keeps green: `--breaklag`, `--jam`, `--drawn` (each a
 `--wreck`, `--ring`, `--fixture`, `--walk`, `--dormant`, `--groups --big` (the interiors gate; `--rooms` is
 its old name and runs it), `--view --big`, `big_city.tscn -- --far --buildings=150` (in the plain
 city every building is inside the shell range and three of its checks have nothing to look
-at); `tools/collapse_probe.gd`,
+at); `tools/probes/collapse_probe.gd`,
 `hang_probe.gd`, `solve_probe.gd`, `debris_probe.gd`, `snapshot_probe.gd`, `loopback_probe.gd`,
 `float_probe.gd`, `cap_probe.gd`, `shell_probe.gd`, `interior_probe.gd`, `interior_group_probe.gd`,
 `barrage_probe.gd`, `stud_strength_probe.gd`, `blast_ring_probe.gd`, `seam_probe.gd`, `push_probe.gd`,
@@ -92,7 +92,7 @@ In the order to do it. Each line points at where the item is written up.
 
 **Proposed, the user's call** (17 and 18 asked for and done, 2026-10-15)
 17. ~~Bricks that stay where they fall~~ -- **done 2026-10-15 (user: "17 please").** A crumb
-    that comes to rest is laid in a heap (`scripts/brick_heap.gd`, `BrickHeap`): an instance in
+    that comes to rest is laid in a heap (`scripts/destruction/brick_heap.gd`, `BrickHeap`): an instance in
     a MultiMesh that is written once and never moves, lying flat on one of its faces where it
     stopped -- not shrunk away a second and a half after it came loose. A hole has its bricks
     lying under it, thrown ones in the street, a broken table's parts on the floor.
@@ -138,7 +138,7 @@ In the order to do it. Each line points at where the item is written up.
     view**, 1.7 ms with the heaps casting no shadow. It goes with how many are in view, so the
     slider bounds it: 1,500 is about half. A first try at this timing, the day before, found the
     display asleep and was not taken.
-    *Tests:* `tools/heap_probe.gd` 11 (a blast's ring comes down and stays, each brick flat, on
+    *Tests:* `tools/probes/heap_probe.gd` 11 (a blast's ring comes down and stays, each brick flat, on
     the street or on a brick under it, still there eight seconds on; what they lay on goes and
     they lie again; a piece comes to rest on them; a full square overwrites its oldest; the cap
     sweeps the oldest heaps; not drawn past its range; at 0 nothing is laid); `blast_ring_probe`
@@ -173,7 +173,7 @@ In the order to do it. Each line points at where the item is written up.
     never held back): frames **17.3 ms (17.4, 17.2, 17.3) against 17.2 (17.3, 17.2, 17.2)**, 16-17
     of 906 over 33.3 ms either way, ticks over 25 ms 6-8 against 3-8 -- nothing to choose; single
     bricks off landings in that pass 132, 233, 245 against 65, 69, 17.
-    *Tests:* `tools/crack_probe.gd` 9 (three bricks: the count, the side the one across them goes,
+    *Tests:* `tools/probes/crack_probe.gd` 9 (three bricks: the count, the side the one across them goes,
     one piece with no crack; a city slab lying flat: a crack and no band, the weakest plane in
     reach, split in two with nothing but what was loose already coming off on its own; a row
     side by side holds nothing across), and the list below.
@@ -541,7 +541,7 @@ gone DETACH from a piece, hand the cut chunk to its IslandManager to crumble bef
 `IslandManager._far_and_small` (`FAR_DELETE_BLOCKS` 10, past `FRACTURE_RANGE`, `FLAG_GONE`);
 `CityScene._mid_collapse` (`COLLAPSE_QUIET_MS`) holds the storey groups (it held the rungs and the
 wreck spill, until those went, 2026-10-08), and `_stream_pieces` draws nothing new on a piece still
-moving. `tools/far_rules_probe.gd`, 9 checks, one of them the same case with the rule off. A blast
+moving. `tools/probes/far_rules_probe.gd`, 9 checks, one of them the same case with the rule off. A blast
 lays a piece only when the camera is within 60 m of it, so nothing is made far off. The rule
 as the user set it: a collapse far from every player is still simulated -- it has to land where it
 would -- but:
@@ -589,7 +589,7 @@ rigid. What does not, most worth doing first -- each is also less work for the m
    a landing has disconnected (`split_if_broken`) and does nothing else. The tension solve on
    pieces is gone, with its command (`PIECE_SOLVE` is still read, for a log written when it was
    written, and never written).
-   *Measured* (`tools/barrage_probe.gd`: four towers brought down headless, four blasts a tick
+   *Measured* (`tools/probes/barrage_probe.gd`: four towers brought down headless, four blasts a tick
    into each for eight seconds; two runs each way): a hit on a piece that was down made a new body
    **14-18 % of the time before, 2-3 % now** (56-67 bodies a run, then 7-15).
    *What the probe cases say, and do not:* no single piece could be built that the old solve
@@ -679,7 +679,7 @@ rigid. What does not, most worth doing first -- each is also less work for the m
    brick, 1.4 ms the worst blast** (48 bricks, or the first of a size, which makes its mesh) --
    and moving every crumb there was took 0.4 ms a tick on average, 1.6 ms at the worst, with 944
    in the air at once. A rocket a second is twenty crumbs.
-   *Tests:* `tools/blast_ring_probe.gd` 19 (the grid is unchanged by the throw; ring and core
+   *Tests:* `tools/probes/blast_ring_probe.gd` 19 (the grid is unchanged by the throw; ring and core
    by count; where they start and which way they go; fallen and gone; a blast in the air; far,
    unseen, wind, a big charge; a gun's last round; a piece in the street, which stays at rest),
    `barrage_probe` 6 (the count above adds up; what throwing them costs), and
@@ -727,7 +727,7 @@ rigid. What does not, most worth doing first -- each is also less work for the m
    the shoves keep what they reach moving for longer, and that is what costs. The slider at 0
    takes it all back. A first try that morning crawled at 76-90 ms a frame with the display
    asleep and is not counted (a short `--ring` takes 13 s awake and 45 asleep).
-   *Tests:* `tools/push_probe.gd` 16 (a handful knocked over, away and up; a heap of 256
+   *Tests:* `tools/probes/push_probe.gd` 16 (a handful knocked over, away and up; a heap of 256
    shrugs; out of reach untouched; nearer is harder; 0 on the slider pushes nothing; a gun's wear
    pushes nothing; a falling piece is knocked sideways; all of it settles; crumbs bounce, never
    sink, and come to rest; 0 on the slider, no bounce), `barrage_probe` 6 (`-- --push=N`,
@@ -757,12 +757,12 @@ rigid. What does not, most worth doing first -- each is also less work for the m
    line, 34 torn as a band (a piece long the other way, which has no seam to find -- unchanged);
    the seams chosen held with 8,676 studs all told against 11,665 across the storey lines beside
    them. `--shot`: 16 of 17. They used to be 137 of 147 on storey lines.
-   *Tests:* `tools/seam_probe.gd` 22 (the count, brick by brick; a column through a seam holding
+   *Tests:* `tools/probes/seam_probe.gd` 22 (the count, brick by brick; a column through a seam holding
    the two sides, and pulled off its foot; a recipe tower's line and its windows; where a piece
    of one snaps, and that it does; a wall with no windows still goes at its storey line; an old
    command replays as it was made). Every other probe and gate as before.
 6. ~~How strong a stud is~~ -- **done 2026-10-13: one number, tunable; the first try is four
-   times what it was.** `BrickStrength` (`scripts/brick_strength.gd`): `SCALED` 9.3 (the toy's
+   times what it was.** `BrickStrength` (`scripts/destruction/brick_strength.gd`): `SCALED` 9.3 (the toy's
    clutch on a 0.35 m stud, which the game ran on), `TOY` 408 (the toy itself, 44 times that), and
    the game's `tension()` = `SCALED` x `times`. `times` is a setting -- **Options > Gameplay, "Stud
    Strength (Developer)", 1x to 44x, default 4x** -- that buildings in bricks take the moment it
@@ -994,7 +994,7 @@ its mean doubling. The script ticks (`[prof]`) are not quantised; compare those 
 
 ## 5. Tools for looking
 
-**View switches** (`scripts/debug_view.gd`, 2026-10-06), in play:
+**View switches** (`scripts/render/debug_view.gd`, 2026-10-06), in play:
 
 | Key | What | States |
 |---|---|---|

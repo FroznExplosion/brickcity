@@ -17,10 +17,10 @@ brick size. The per-part sheets are **generated** from the same code the game ba
 Regenerate after changing any part:
 
 ```bash
-godot --headless --path . --script tools/part_sheets.gd
+godot --headless --path . --script tools/make/part_sheets.gd
 ```
 
-`tools/scale_probe.gd` checks that the city, terrain, workshop, meshes and walking figure all use
+`tools/probes/scale_probe.gd` checks that the city, terrain, workshop, meshes and walking figure all use
 one grid, and that the grid is a real brick's grid.
 
 ---
@@ -120,7 +120,7 @@ the floor. Section 6 compares the game to these.
 
 ## 6. What the game commits to
 
-Settled (Sep 2026), and enforced by `tools/scale_probe.gd` part 3:
+Settled (Sep 2026), and enforced by `tools/probes/scale_probe.gd` part 3:
 
 | | Game | Print |
 |---|---|---|

@@ -122,7 +122,7 @@ What the implementation settled:
 * `TowerRecipe.build` takes `options` — `rooms: false` lays no interior walls,
   `windows: false` cuts none. Missing means on, so the city is unchanged.
 
-`tools/workshop_probe.gd` — **61 checks**: v6 round-trips, a turn checked cell by
+`tools/probes/workshop_probe.gd` — **61 checks**: v6 round-trips, a turn checked cell by
 cell against the baked masks (slopes and curves included), flatten, the drag
 handles driven by exact rays, save/open/new, bake and its undo, a stamp and its
 undo, the detail layer, and a room template's metadata.
@@ -147,7 +147,7 @@ do not come along), **Save As**, pick the room kind. It lands in
 `user://library/rooms/<kind>/`. **Type → Item** saves to `user://library/items/`, optionally
 for one room kind. Shipped ones go in `res://content/base/rooms/` and `res://content/base/items/`.
 
-`RoomTemplates` (`scripts/room_templates.gd`) reads them once and hands the
+`RoomTemplates` (`scripts/rooms/room_templates.gd`) reads them once and hands the
 generator item parts in `RoomManifest.ITEMS`' own shape plus role, the
 author's colour and material:
 
@@ -198,7 +198,7 @@ INTERIOR/DETAIL bricks.
   25×5, 5×5 — the sizes the city's shapes actually cut), and the HUD says how
   big the furniture is and which of those rooms it fits.
 
-`tools/workshop_probe.gd` — **96 checks**.
+`tools/probes/workshop_probe.gd` — **96 checks**.
 
 ---
 
@@ -206,7 +206,7 @@ INTERIOR/DETAIL bricks.
 
 `B` has always repainted placed bricks with the selected slot's material and
 colour, held and dragged. Choosing that paint meant the TAB browser. Now the
-brush brings its own palette (`scripts/paint_palette.gd`, shared with the
+brush brings its own palette (`scripts/build/paint_palette.gd`, shared with the
 terrain editor's paint brush, Docs/Terrain.md §20.7): every brick material
 in a row, the chosen material's colours under it. ESC frees the mouse to
 click it; `,` `.` step the colour and PAGE UP / DOWN the material without

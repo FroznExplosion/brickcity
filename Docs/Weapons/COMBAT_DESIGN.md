@@ -149,7 +149,7 @@ magnum fires at about the DMR's pace; the heavy sniper fires half as fast as the
 crit kills; the heavy shotgun is a blast and a melee; a shotgun loses damage as fewer pellets
 land (¾ of them: 4 pump blasts; half: 6).
 
-`tools/combat_numbers_probe.gd` checks every row through the real DamageSystem at tiers 1, 5
+`tools/probes/combat_numbers_probe.gd` checks every row through the real DamageSystem at tiers 1, 5
 and 10. Each type's own anchor sets its heavy (`WeaponClass.KINDS`); the shotgun's light kind
 is the pump and half of light shotguns roll the auto kind (`AUTO_CHANCE`).
 
@@ -556,7 +556,7 @@ heavy's damage, without the other kind's penalty.
 range). Nothing there needs to change when the kinds land -- only the property must exist on
 `GunInstance` with those two values.
 
-**As built** (`WeaponClass.KINDS`, `tools/gun_kind_probe.gd`):
+**As built** (`WeaponClass.KINDS`, `tools/probes/gun_kind_probe.gd`):
 
 | Class | Heavy is | Heavy x damage / fire rate / reload | Light |
 |---|---|---|---|
@@ -630,7 +630,7 @@ stream) for every gun of a kind (§7.8); a gun with no kind -- an enemy's -- fir
   do not collide with it. At rest it is frozen where it lies, so nothing nudges it -- a
   walker, a soldier, the solver -- until a blast or a missing floor wakes it.
 
-Tests: `tools/fire_mode_probe.gd`, `tools/pickup_physics_probe.gd`, and the `--arms` pass
+Tests: `tools/probes/fire_mode_probe.gd`, `tools/probes/pickup_physics_probe.gd`, and the `--arms` pass
 (the card, a dropped gun at rest, the shotguns' stumbles).
 
 ## 8. Bricks
@@ -711,7 +711,7 @@ Tested in the combat arena (`scenes/combat_arena.tscn`), where the weapons and t
 - `LootRoller.TRASH_BASE_HP` (the light enemy) 45 → **64**, set from the §3 anchor: a median common
   pistol (11.05 a shot) kills it in 6. `LootRoller.enemy_hp` already steps with `Tier`, so every
   archetype moved with the curve.
-- `tools/combat_numbers_probe.gd` (15 checks) holds §1–3: the curve, the anchor at every level, the
+- `tools/probes/combat_numbers_probe.gd` (15 checks) holds §1–3: the curve, the anchor at every level, the
   legendary rows (4 / 2 with headshots / 3 with a modifier / 5 a level behind), what a colour is
   worth, the score step.
 - **Not yet joined:** the combat arena's soldiers take their health from the AI's `UnitCatalog`
@@ -730,7 +730,7 @@ Tested in the combat arena (`scenes/combat_arena.tscn`), where the weapons and t
   the hit lands plain and `DamageResult.crit_absorbed` says so (for a "blocked" hitmarker later).
 - Class crit (headshot) multipliers: **2.0** pistol, SMG, rifle, LMG, shotgun; **2.5** DMR,
   revolver; **3.0** sniper.
-- `tools/crit_probe.gd` (10 checks): head crits at the gun's multiplier, chest does not, the same
+- `tools/probes/crit_probe.gd` (10 checks): head crits at the gun's multiplier, chest does not, the same
   shot always lands the same with no RNG drawn, a crouched head still crits where it went, a
   shield absorbs the crit until it breaks.
 - Helmets (armor guarding the head spot specifically) come with step 3's layers.
@@ -757,7 +757,7 @@ Tested in the combat arena (`scenes/combat_arena.tscn`), where the weapons and t
 - The arena's units are profiles now (`UnitCatalog` "profile" replaces "hp"): rifleman and
   assault light, breacher light-armored, marksman very light, veteran medium, rocketeer
   light-shielded, officer medium-shielded; `WaveDirector.level` sizes them.
-- `tools/defence_probe.gd` (19 checks).
+- `tools/probes/defence_probe.gd` (19 checks).
 - **Not yet:** ice's slow/freeze and fire's burn are statuses — later. An enemy's shield and armor
   are not yet SHOWN on the capsule; the player needs to read them (with melee, step 4). Helmets
   wait for head crits.
@@ -782,7 +782,7 @@ Tested in the combat arena (`scenes/combat_arena.tscn`), where the weapons and t
   flashes when hit and bursts when it breaks; armor is an amber chest plate that shrinks from the
   shoulders as it wears and is gone when it breaks. It reads the HealthPool, so nothing else
   needs to call it.
-- `tools/melee_probe.gd` (36 checks): every profile's count at tiers 1 and 6, a blow stops at the
+- `tools/probes/melee_probe.gd` (36 checks): every profile's count at tiers 1 and 6, a blow stops at the
   layer it breaks, 1.5x on shields, never a crit, melee-then-headshot crits, a tier-1 blow on a
   tier-2 enemy, reach / whiff / wall, the recovery, and the look.
 - **Not yet:** pad binding (no pad bindings exist yet); the soldiers' own melee
@@ -812,10 +812,10 @@ Tested in the combat arena (`scenes/combat_arena.tscn`), where the weapons and t
 - **A dead soldier always drops the gun in its hands** (decided 2026-10-12): the very gun it
   fired, beside where it fell (`WaveDirector.held_gun_result`, `CityScene.drop_gun`), and its
   loot roll on top as before. A bomber or a brawler has none to drop.
-  `tools/held_gun_drop_probe.gd` (5 checks).
+  `tools/probes/held_gun_drop_probe.gd` (5 checks).
 - **Idea, not built:** a soldier lets go of its gun before death -- knocked back hard, or giving
   up to a mech.
-- `tools/loadout_probe.gd` (31 checks).
+- `tools/probes/loadout_probe.gd` (31 checks).
 - **Not yet:** ammo reserves per type (magazines still refill from nothing); the swap has no draw
   time (swap speed as a stat needs one); co-op (shared or instanced drops); pad bindings; a gun card on the floor gun (the prompt names it).
 
@@ -833,7 +833,7 @@ Tested in the combat arena (`scenes/combat_arena.tscn`), where the weapons and t
   saw and says `kit_changed`; `CityScene._load_kit` makes it once and saves on that signal (with
   the level, `_save_progress`). Not in a pass or a test window. An infusion changes the gun before
   spending the scrap, so the save the spend makes holds both.
-- `tools/kit_save_probe.gd` (21 checks).
+- `tools/probes/kit_save_probe.gd` (21 checks).
 - **Not yet:** ammo in the magazines (a loaded kit comes back full); several characters.
 
 **Step 6 — rarity v2 and modifiers: built 2026-10-10.**
@@ -864,7 +864,7 @@ Tested in the combat arena (`scenes/combat_arena.tscn`), where the weapons and t
 - **First red text**: Boilerplate winds up to +60% fire rate over 2 s of held trigger; Sermon puts
   the round back on a kill. The card says what each does (`LegendaryTable.EFFECT_TEXT`).
 - The card lists the modifiers, one a line, and the trade parts.
-- `tools/modifiers_probe.gd` (19 checks). `test/loot_range_test.gd --probe` passes again: its v1
+- `tools/probes/modifiers_probe.gd` (19 checks). `test/loot_range_test.gd --probe` passes again: its v1
   calibration rows (a legendary worth two tiers, a rare one) were replaced by v2's half a tier,
   and the narrower roll fixed its gun-vs-shield score rows.
 - **Not yet:** the explosive attachment's proximity and chain rolls; split rounds, conditional
@@ -885,7 +885,7 @@ Tested in the combat arena (`scenes/combat_arena.tscn`), where the weapons and t
   The mark is the controller's: one a player, kept through a swap.
 - **Plasma charge**: `DamagePacket.strip_shield` — a shield up takes all of it and the hit stops.
 - **Shock arc**: through `side_hit` (marked on the HUD), with `ArcFlash` for the look.
-- `tools/alt_fire_probe.gd` (30 checks).
+- `tools/probes/alt_fire_probe.gd` (30 checks).
 - **Not yet:** the underbarrel grenade tube and the thermal torch; shock as a special ordnance
   weapon (§7.3); a heat bar instead of the charge's ammo bite; AI soldiers never use alt-fires.
 
@@ -897,7 +897,7 @@ Tested in the combat arena (`scenes/combat_arena.tscn`), where the weapons and t
 - The slow and the freeze are `Pawn.speed_mult` and `Pawn.frozen`; `Pawn.is_player` (set by
   `PlayerController.possess`) keeps a player from being frozen.
 - The shock arc's slow is a status here too (`ElementStatus.shock`).
-- `tools/status_probe.gd` (19 checks).
+- `tools/probes/status_probe.gd` (19 checks).
 - **Not yet:** no hit-number colours for status damage. (The shatter, and a frozen soldier's
   mind held: "special fire" and "held", below.)
 
@@ -915,7 +915,7 @@ Tested in the combat arena (`scenes/combat_arena.tscn`), where the weapons and t
 - **Soldiers use their alt-fires** (`GunController.ai_alt`, on in `Soldier`): while the trigger is
   held, at most once every 6 s — the arc and the tube whenever, a dart to open a burst, the plasma
   charge only when a shield is under the aim. Never the torch.
-- `tools/special_fire_probe.gd` (23 checks).
+- `tools/probes/special_fire_probe.gd` (23 checks).
 - **Not yet:** a heat bar instead of the charge's ammo bite; other special weapons; the shatter's
   pieces.
 
@@ -930,9 +930,9 @@ Tested in the combat arena (`scenes/combat_arena.tscn`), where the weapons and t
   (added) inside a 9° jet of soft puffs (mixed, so it never clips to white over a bright wall)
   that slows, billows and rises from yellow-green to dark green smoke over ~5 m, with a green
   glow light. Dim at the nozzle so it does not cover the crosshair. Out on letting go, on running
-  dry, on a swap; switched off mid-burn it still cools. `tools/torch_look.gd` (not headless)
+  dry, on a swap; switched off mid-burn it still cools. `tools/shots/torch_look.gd` (not headless)
   renders it to `shots/`.
-- `tools/frozen_soldier_probe.gd` (10 checks); the Shockwave's stagger in `skill_kit_probe` (33),
+- `tools/probes/frozen_soldier_probe.gd` (10 checks); the Shockwave's stagger in `skill_kit_probe` (33),
   the flame in `special_fire_probe` (25).
 - `fights_back_probe` fails one check ("while it hid, the rounds went into the wall": 4 of 15
   reached it) on this branch from before this step too (checked at f2c42d8 and with `ai_alt` off) —
@@ -962,7 +962,7 @@ Tested in the combat arena (`scenes/combat_arena.tscn`), where the weapons and t
   developer mode. The HUD shows the level, an XP bar and the points waiting; a level up says so.
 - **Saved** in `CharacterSave.character` (`level`, `xp`, `skills`), loaded when the player first
   takes a pawn and written on every change — never in a scripted pass or a test window.
-- `tools/skill_tree_probe.gd` (36 checks).
+- `tools/probes/skill_tree_probe.gd` (36 checks).
 - **Not yet:** XP for objectives and missions; a respec cost; the mouse on the tree's screen; a
   co-op player's own level (one `PlayerLevel`, the host's player). (The real nodes: "the skill
   kit", below.)
@@ -993,7 +993,7 @@ Tested in the combat arena (`scenes/combat_arena.tscn`), where the weapons and t
   shield within 4 m; **Vampiric Impact** (the top) — a melee kill gives back half the shield and
   refills the gun in hand. A blow's info now says what it hit, whether it broke a shield, and
   whether it was a backstab.
-- `tools/skill_kit_probe.gd` (30 checks); `skill_tree_probe` moved to the new nodes and to the
+- `tools/probes/skill_kit_probe.gd` (30 checks); `skill_tree_probe` moved to the new nodes and to the
   health under the shield.
 - **Not yet:** more abilities and a second slot; the slide-punch launch and armor
   plates for Backstab (§4.2); the shield's break and recharge sounds and screen edge.
@@ -1014,7 +1014,7 @@ Tested in the combat arena (`scenes/combat_arena.tscn`), where the weapons and t
   what lifting it costs. Enter infuses; Backspace twice breaks a backpack gun down (never a kit
   gun). Walking away closes it. `CityScene._place_workbench` sets one down by the player's start,
   not in a scripted pass.
-- `tools/infusion_probe.gd` (23 checks).
+- `tools/probes/infusion_probe.gd` (23 checks).
 - **Not yet:** safehouses (the bench is a stand-in by the start); kinds of material; a story tier
   from the story
   (today it is the highest fight tier reached).
@@ -1073,11 +1073,11 @@ sits on (FPS movement, view model, HUD, settings menu) is documented in
 | Level, XP, skill tree | `scripts/progression/` (`player_level.gd`, `skill_tree.gd`, `skill_screen.gd`); kept on `PlayerController.progress`; applied by `PlayerArsenal.apply_skills`; saved by `CityScene._load_progress` |
 | Arena units and level | `scripts/ai/commander/unit_catalog.gd` ("profile"), `scripts/ai/wave_director.gd` (`level`) — AI area |
 | Player input, view, HUD, moves | `scripts/pawn/player_controller.gd`, `player_view.gd`, `player_hud.gd`, `pawn_moves.gd` |
-| Settings menu | `menu/` (Ceramic Edge's module), `scripts/brickcity_menu_host.gd` |
+| Settings menu | `menu/` (Ceramic Edge's module), `scripts/core/brickcity_menu_host.gd` |
 
 ### 15.4 Tests to run before merging
 
-Probes (`--headless --path . --script res://tools/<name>.gd`): `combat_numbers_probe` (20), `modifiers_probe` (19), `alt_fire_probe` (30), `status_probe` (19), `skill_tree_probe` (36), `infusion_probe` (23), `kit_save_probe` (21), `skill_kit_probe` (33), `special_fire_probe` (25), `frozen_soldier_probe` (10),
+Probes (`--headless --path . --script res://tools/probes/<name>.gd`): `combat_numbers_probe` (20), `modifiers_probe` (19), `alt_fire_probe` (30), `status_probe` (19), `skill_tree_probe` (36), `infusion_probe` (23), `kit_save_probe` (21), `skill_kit_probe` (33), `special_fire_probe` (25), `frozen_soldier_probe` (10),
 `crit_probe` (10), `defence_probe` (19), `melee_probe` (36), `loadout_probe` (31), `moves_probe` (39), and the AI ones that read soldier
 health: `commander_probe`, `tactics_sense_probe`, `fights_back_probe`, `soldier_probe`,
 `room_clear_probe`. Gates (not headless): `res://scenes/city.tscn -- --play` (14) and `-- --gun`

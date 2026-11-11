@@ -14,7 +14,7 @@ on the Tactics Casebook page's Roster tab, exported to `content/base/data/ai/ros
 (`scripts/ai/roster/roster.gd`). `UnitCatalog` reads a unit's name, weapon, points and health
 from its recipe; every soldier carries its type's name over its head and tells the casebook what
 it is; each size of body has a navigation map of its own (`AIServices.nav_for`).
-`tools/roster_probe.gd` and `tools/roster_field_probe.gd` check it. Everything else here is
+`tools/probes/roster_probe.gd` and `tools/probes/roster_field_probe.gd` check it. Everything else here is
 planned unless a section names it as existing.
 The numbers are first guesses, sized from the weapons and health code as it stands.
 

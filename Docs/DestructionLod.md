@@ -278,7 +278,7 @@ reached and, when a section finds no tower, why each tall enough one was passed 
 "inside" topples the 13-storey tower 17 and its wreckage hits tower 16, 3 m beside it (4 storeys);
 `_tower` is first fit, so every section after it took the next tower along, and "farcut" (asking
 four) got tower 21, the last of six storeys or more -- "shellhit", last in line, had none.
-"shellhit" now runs in a city of its own (`tools/shellhit_probe.gd`, 2), as "storeys" and
+"shellhit" now runs in a city of its own (`tools/probes/shellhit_probe.gd`, 2), as "storeys" and
 "farrules" do: `collapse_probe` 61, 3 runs of 3 (one with tower 16 hit). **Not §5.5:** with
 it reverted, tower 16 was hit in 2 runs of 4; with it, 5 of 10 -- the same. How tower 17 comes
 down decides it.
