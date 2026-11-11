@@ -1,7 +1,7 @@
 class_name TacticsBook
 extends RefCounted
 ## The enemy's choices as authored on the Tactics Casebook page
-## (Docs/Tactics/tactics_casebook.html), read from data/ai/tactics_book.json
+## (Docs/Tactics/tactics_casebook.html), read from content/base/data/ai/tactics_book.json
 ## (made by tools/tactics_export.js). Same odds as the page, to the last digit:
 ## tools/tactics_book_probe.gd checks the page's own numbers.
 ##
@@ -17,7 +17,7 @@ extends RefCounted
 ## After the main move, a soldier may add extras -- something first, something
 ## while, something then (grenade, then rush; open fire while marking).
 
-const PATH := "res://data/ai/tactics_book.json"
+const PATH := "res://content/base/data/ai/tactics_book.json"
 
 var mult: Array = []
 var always := 6

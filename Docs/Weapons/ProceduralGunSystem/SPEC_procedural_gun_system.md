@@ -101,7 +101,7 @@ Untyped `GunPartDef` remains valid for slots with no behavior (grips, stocks, ma
 ## 5. Setup checklist (Godot side)
 
 1. Copy `scripts/` into the project; class names auto-register.
-2. Import part GLBs anywhere under `res://parts/`.
+2. Import part GLBs anywhere under `res://content/base/parts/`.
 3. For each part, create a `GunPartDef` resource: assign slot, the GLB `PackedScene`, weight, rarity band, stat mods.
 4. Create one `GunPartLibrary` resource; drag all defs into `parts`.
 5. Drop `gun_forge_test.gd` on a Node3D in a test scene, assign the library, run, press **R**.

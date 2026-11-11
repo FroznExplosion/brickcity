@@ -182,7 +182,7 @@ func _where() -> void:
 	print("\nwhat is under a point, in a city")
 	var w := BrickWorld.new()
 	var reg := BuildingRegistry.new(w, TowerRecipe.bake_palette(w))
-	var r := BuildRecipe.load_from("res://builds/kiosk.json")   # cedar walls, steel roof
+	var r := BuildRecipe.load_from("res://content/base/builds/kiosk.json")   # cedar walls, steel roof
 	var id := reg.register_build(r, Transform3D())
 	var fx := MaterialFx.new()
 	root.add_child(fx)

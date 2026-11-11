@@ -190,18 +190,29 @@ var brick_panes_ms := 0.0
 ## a street of twelve buildings in bricks the bands were 4.6M triangles and
 ## 16.7 ms of a 21.7 ms GPU frame; the four past 80 m drawn coarse, 1.7M
 ## triangles became 140k and the frame 12.7 ms, the picture the same
-## (PerfCaps.md 5). Past FAR_COARSE_RANGE, quiet for FAR_COARSE_QUIET_MS; back
-## to its bands inside FAR_COARSE_BACK, or the moment a band of it changes. The
-## bands stay built underneath, only hidden: what a hit patches is them.
+## (PerfCaps.md 5). Past FAR_COARSE_RANGE, quiet for FAR_COARSE_QUIET_MS.
+##
+## One path (2026-11-11): once its coarse mesh is up, its bands are freed and
+## its bake dropped (3.4 MB a building) -- they were kept built and hidden
+## underneath, and a hit showed them at once. Now a hit while coarse makes the
+## coarse mesh again on a worker, the old one drawing until it lands (5 ms of
+## worker for a 3,300-brick tower), and no band is built. Back inside
+## FAR_COARSE_BACK its bake and bands are built as a promotion's are
+## (rebuild_bands), hidden, the coarse mesh drawing until they are all in
+## (_bands_done).
 const FAR_COARSE_RANGE := 60.0
 
 const FAR_COARSE_BACK := 50.0
 
 const FAR_COARSE_QUIET_MS := 3000
 
-var _far_coarse := {}        ## building id -> its stand-in node (bands hidden)
+var _far_coarse := {}        ## building id -> its stand-in node
+## Building id -> true: its bricks changed while it was drawn coarse; its
+## coarse mesh is made again (the old one drawing meanwhile).
+var _far_coarse_stale := {}
 
 var far_coarse_built := 0
+var far_coarse_remade := 0   ## made again after a hit, while coarse
 
 
 ## EXPERIMENT (the 2026-11-11 audit; `-- --inst-bands`): a building's bands
@@ -281,7 +292,8 @@ static func boxes_of(band: Node) -> MultiMeshInstance3D:
 
 ## Fill one band from its section's buffer (BrickWorld.get_instance_buffers).
 func _apply_boxes(id: int, at: int, chunk: int, entry: Dictionary) -> void:
-	far_coarse_drop(id)
+	# Drawn coarse: hidden until all its bands are in, as _apply_band.
+	var hidden := _far_coarse.has(id)
 	var nodes: Array = city._brick_bands.get(id, [])
 	if at >= nodes.size() or not city._brick_nodes.has(id):
 		return
@@ -301,6 +313,8 @@ func _apply_boxes(id: int, at: int, chunk: int, entry: Dictionary) -> void:
 	elif node.mesh != null:
 		city._retirer.retire(node.mesh)
 		node.mesh = null
+	if node.visible == hidden:
+		node.visible = not hidden
 	var mmi := boxes_of(node)
 	if mmi == null:
 		mmi = MultiMeshInstance3D.new()
@@ -623,9 +637,9 @@ func _build_one_band(id: int) -> bool:
 
 ## Hang a finished band mesh in its slot.
 func _apply_band(id: int, at: int, mesh: ArrayMesh, arrays: Array) -> void:
-	# Its bricks changed: its far stand-in is out of date, and the bands are
-	# what is right (_tend_far_coarse makes it again once it is quiet).
-	far_coarse_drop(id)
+	# Drawn coarse: its bands are coming back (camera near, storeys laid),
+	# hidden until all are in, the coarse mesh drawing meanwhile (_bands_done).
+	var hidden := _far_coarse.has(id)
 	var nodes: Array = city._brick_bands.get(id, [])
 	if at >= nodes.size() or not city._brick_nodes.has(id):
 		city._retirer.retire(mesh)
@@ -636,6 +650,8 @@ func _apply_band(id: int, at: int, mesh: ArrayMesh, arrays: Array) -> void:
 		nodes[at] = node
 	else:
 		city._retirer.retire(node.mesh)
+	if node.visible == hidden:
+		node.visible = not hidden
 	var live := mesh != null and mesh.get_surface_count() > 0
 	node.mesh = mesh if live else null
 	# Its chamfered mesh and studs, when the camera is near (and again: this is
@@ -764,6 +780,9 @@ func _bands_done(id: int) -> void:
 	else:
 		# Finished: the shell it was hiding behind can go.
 		city._free_shell(id)
+	# And the coarse mesh it came back from (one path for a far building).
+	if _far_coarse.has(id) and not bands_building(id):
+		far_coarse_drop(id)
 
 
 ## Drain the band work, a budget at a time.
@@ -1426,10 +1445,15 @@ func tend_far_coarse() -> void:
 			WorkerThreadPool.wait_for_task_completion(int(job[1]))
 			h_far_coarse_jobs.erase(id)
 			var mesh: ArrayMesh = (job[2] as Array)[0]
+			# Made again after a hit (_far_coarse_stale): swapped in wherever
+			# the camera is, the old one drawn until now. A first one only
+			# out past FAR_COARSE_BACK. Either only if its bricks are still
+			# what it was made of.
+			var again: bool = _far_coarse.has(id) and is_instance_valid(_far_coarse[id])
 			if mesh != null and not gone and City.far_coarse_enabled \
 					and h_world.get_chunk_version(b.chunk) == int(job[0]) \
 					and not bands_building(id) and not h_toppling.has(id) \
-					and City._box_distance(CityPlacer.box_of(b), here) > FAR_COARSE_BACK:
+					and (again or City._box_distance(CityPlacer.box_of(b), here) > FAR_COARSE_BACK):
 				_far_coarse_show(id, mesh)
 			elif mesh != null:
 				h_retirer.retire(mesh)
@@ -1470,15 +1494,32 @@ func tend_far_coarse() -> void:
 		var dist := City._box_distance(CityPlacer.box_of(b), here)
 		if _far_coarse.has(id) and not is_instance_valid(_far_coarse[id]):
 			_far_coarse.erase(id)   # its node went with its bricks' node
+			_far_coarse_stale.erase(id)
 		if _far_coarse.has(id):
 			if not City.far_coarse_enabled or dist < FAR_COARSE_BACK or h_toppling.has(id) \
 					or b.toppled:
-				far_coarse_drop(id)
-			continue
-		if asked or not City.far_coarse_enabled or h_far_coarse_jobs.has(id) \
+				# Back: its bands, built hidden under the coarse mesh, which
+				# goes once they are all in (_bands_done). Not one coming
+				# down: what it hands its pieces is taken from it then
+				# (CityScene's topple, take_bands), and bands built now would
+				# be built for nothing.
+				if bands_building(id) or (coarse_only(id) and (h_toppling.has(id) or b.toppled)):
+					continue
+				if coarse_only(id):
+					rebuild_bands(id, b.chunk)
+				else:
+					far_coarse_drop(id)
+				continue
+			# Hit while coarse: made again, at once, the old one drawn meanwhile.
+			if not _far_coarse_stale.has(id) or asked or h_far_coarse_jobs.has(id) \
+					or bands_building(id) or h_world.coarse_pending(b.chunk):
+				continue
+		elif asked or not City.far_coarse_enabled or h_far_coarse_jobs.has(id) \
 				or dist <= FAR_COARSE_RANGE or now - b.materialised_at < FAR_COARSE_QUIET_MS \
 				or bands_building(id) or h_toppling.has(id) or b.toppled \
-				or h_world.coarse_pending(b.chunk):
+				or city._pending_bricks.has(id) or h_world.coarse_pending(b.chunk) 				or h_world.get_alive_block_count(b.chunk) == 0:
+			# (Nothing left alive: there is nothing to draw coarse, and asking
+			# came back empty every pass -- 370 asks in one collapse_probe.)
 			continue
 		h_world.coarse_chunk_async(b.chunk)
 		h_far_coarse_jobs[id] = [h_world.get_chunk_version(b.chunk), -1, []]
@@ -1489,6 +1530,16 @@ func _far_coarse_show(id: int, mesh: ArrayMesh) -> void:
 	var parent = city._brick_nodes.get(id)
 	if parent == null or not is_instance_valid(parent):
 		city._retirer.retire(mesh)
+		return
+	_far_coarse_stale.erase(id)
+	var had = _far_coarse.get(id)
+	if had != null and is_instance_valid(had):
+		# Made again after a hit: the new one in the old one's place.
+		city._retirer.retire((had as MeshInstance3D).mesh)
+		(had as MeshInstance3D).mesh = mesh
+		far_coarse_built += 1
+		far_coarse_remade += 1
+		_free_bands(id)
 		return
 	var node := MeshInstance3D.new()
 	node.name = "FarCoarse"
@@ -1501,11 +1552,46 @@ func _far_coarse_show(id: int, mesh: ArrayMesh) -> void:
 	node.physics_interpolation_mode = Node.PHYSICS_INTERPOLATION_MODE_OFF
 	node.cast_shadow = (parent as MeshInstance3D).cast_shadow
 	(parent as Node3D).add_child(node)
-	for band in city._brick_bands.get(id, []):
-		if is_instance_valid(band):
-			(band as Node3D).visible = false
 	_far_coarse[id] = node
 	far_coarse_built += 1
+	_free_bands(id)
+
+
+## Drawn by its coarse mesh alone: its bands and its bake given back. What
+## hangs off the brick node stays -- panes, furniture, storey groups, the
+## shadow proxy (keyed on the brick node), collision; the near tier is told
+## the bands are going, and their studs and chamfered meshes go with them.
+func _free_bands(id: int) -> void:
+	var b := city.registry.get_building(id)
+	for band in city._brick_bands.get(id, []):
+		if is_instance_valid(band):
+			city.brick_near.untrack(band)
+			city._retirer.retire((band as MeshInstance3D).mesh)
+			(band as Node).queue_free()
+	_band_pass.erase(id)
+	_inst_pending.erase(id)
+	_inst_alive.erase(id)
+	city._band_cursor.erase(id)
+	city._band_redo.erase(id)
+	city._brick_bands.erase(id)
+	city._brick_band_meshes.erase(id)
+	city._brick_band_bytes.erase(id)
+	city._brick_meshes.erase(id)
+	city._brick_index_bytes.erase(id)
+	city._brick_index_width.erase(id)
+	if b != null and b.is_materialised():
+		city.world.drop_chunk_bake(b.chunk)
+
+
+## Its bands given up for its coarse mesh (_free_bands): nothing to patch, a
+## hit makes the coarse mesh again.
+func coarse_only(id: int) -> bool:
+	return _far_coarse.has(id) and not city._brick_bands.has(id)
+
+
+## Its bricks changed while drawn coarse (CityScene._remesh).
+func far_coarse_stale(id: int) -> void:
+	_far_coarse_stale[id] = true
 
 
 ## Its bands drawn again, and its stand-in gone. Nothing if it has none.
@@ -1514,6 +1600,7 @@ func far_coarse_drop(id: int) -> void:
 		return
 	var node = _far_coarse[id]
 	_far_coarse.erase(id)
+	_far_coarse_stale.erase(id)
 	for band in city._brick_bands.get(id, []):
 		if is_instance_valid(band):
 			(band as Node3D).visible = true

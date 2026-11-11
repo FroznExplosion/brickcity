@@ -188,9 +188,22 @@ Their bands are every brick's faces, out to DEMESH_RANGE (110 m).
 (60 m, past where the print's shaded bevel has faded) that has been quiet for 3 s is drawn as
 its coarse stand-in -- `BrickWorld.build_chunk_coarse_mesh`, what a far piece of debris already
 is: the outer surface merged across bricks of a colour, brick outlines from its UV2. Built on
-the world's worker, uploaded on ours. The bands stay built underneath, hidden, and are what a
-hit patches; any change to its bricks (`_remesh`, `_apply_band`, `_take_bands`) shows them at
-once, and it goes coarse again once quiet. Back inside `FAR_COARSE_BACK` (50 m).
+the world's worker, uploaded on ours. Back inside `FAR_COARSE_BACK` (50 m).
+
+**One path, since 2026-11-11** (`CityDrawing._free_bands`). The bands were kept built underneath,
+hidden, and a hit showed them at once. Now once the coarse mesh is up the bands are freed and
+the bake dropped (3.4 MB a building); a hit while coarse makes the coarse mesh again on a worker
+(`_far_coarse_stale`), the old one drawing until it lands -- the `--overview` gate's "shows at
+once" is "shows within a few ticks" -- and no band is built. Back inside 50 m the bake and
+bands are built as a promotion's are (`rebuild_bands`), hidden, the coarse mesh drawing until
+they are all in (`_bands_done`). A hit in those few ticks shows when they are in: the
+collapse probe counts that apart (`handover_stats.coarse_*`, 4 ticks worst) from its "no
+double". A coarse building that topples has no bands to hand its piece: it comes down as a
+demeshed one does, the piece drawing itself. Past DEMESH_RANGE (110 m) that step no longer
+demeshes a building in bricks while the far tier is on: there is nothing left for it to do for the
+drawing, and demeshing threw the coarse mesh away to make the same one again for a shell
+(`far_real`, now only behind the switch). A building with nothing alive is not asked for a
+coarse mesh (it came back empty and was asked again every pass: 370 asks in one probe run).
 
 | Dearest view | GPU | Draws | Triangles |
 |---|---|---|---|
@@ -285,6 +298,12 @@ The pass now turns vsync and the frame cap off for its measurements (in memory; 
 so the GPU runs flat out. Flat out, the same view is **5.0 ms**, the street **7.1 ms**. At 720p
 there are ~10 ms to spare, not 5. Every number below is flat out; the earlier "GPU ms" in this
 file and BrickBevel.md 6 were taken vsynced and are comparable with each other, not with these.
+
+**Temperature moves the GPU's clock too** (another chat's measurement): the same setting reads
+6-14 ms with chip temperature alone. These runs started anywhere from 75 to 88 C. Each row is
+read against its own run's baseline and a closing drift row, so the differences hold better
+than the absolute numbers; to compare baselines across runs, start each from the same
+temperature (under ~78 C, no other Godot) and repeat each setting.
 
 Three runs of each (the street's second dropped: another chat's import overlapped its first
 baseline, 10.3 ms). Run-to-run noise is about +-0.4 ms; a row inside that is "nothing".

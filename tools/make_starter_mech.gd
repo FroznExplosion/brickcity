@@ -2,8 +2,8 @@ extends SceneTree
 
 ## Builds the starter mech: the first official mech parts (Docs/ModularParts.md, "Starter
 ## parts"). One normal-class Korr mech, legs 2 long, blocked out in the asset workshop's mech
-## mode on the reference's joints, saved as official parts in res://parts/mech/ and its build
-## as res://mechs/starter_normal.json (open it in the workshop to change it, Save writes the
+## mode on the reference's joints, saved as official parts in res://content/base/parts/mech/ and its build
+## as res://content/base/mechs/starter_normal.json (open it in the workshop to change it, Save writes the
 ## parts again).
 ##
 ##     godot --headless --path . --script res://tools/make_starter_mech.gd
@@ -13,7 +13,7 @@ extends SceneTree
 ## stands about two storeys tall. Units are the workshop's: nano studs along (x, the mech faces
 ## -x) and across (z, its left +z), nano plates up from the ground.
 
-const BUILD := "res://mechs/starter_normal.json"
+const BUILD := "res://content/base/mechs/starter_normal.json"
 const NAME := "Starter Normal"
 const MAKER := "korr"
 

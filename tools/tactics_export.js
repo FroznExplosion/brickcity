@@ -1,8 +1,8 @@
 // Turns the Tactics Casebook (Docs/Tactics/tactics_casebook.html, the page the
 // enemy's choices are authored on) plus the settings saved from it
 // (Docs/Tactics/settings/<collection>/<id>.json) into the book the game reads:
-// data/ai/tactics_book.json -- and the roster of types (the page's Roster tab,
-// Docs/AIRoster.md) into data/ai/roster.json.
+// content/base/data/ai/tactics_book.json -- and the roster of types (the page's Roster tab,
+// Docs/AIRoster.md) into content/base/data/ai/roster.json.
 //
 //     node tools/tactics_export.js
 //
@@ -17,8 +17,8 @@ const path = require("path");
 const root = path.join(__dirname, "..");
 const pagePath = path.join(root, "Docs", "Tactics", "tactics_casebook.html");
 const settingsDir = path.join(root, "Docs", "Tactics", "settings");
-const outPath = path.join(root, "data", "ai", "tactics_book.json");
-const rosterPath = path.join(root, "data", "ai", "roster.json");
+const outPath = path.join(root, "content", "base", "data", "ai", "tactics_book.json");
+const rosterPath = path.join(root, "content", "base", "data", "ai", "roster.json");
 
 const html = fs.readFileSync(pagePath, "utf8");
 const marker = "   STORAGE";
