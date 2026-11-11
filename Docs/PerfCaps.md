@@ -199,7 +199,10 @@ bands are built as a promotion's are (`rebuild_bands`), hidden, the coarse mesh 
 they are all in (`_bands_done`). A hit in those few ticks shows when they are in: the
 collapse probe counts that apart (`handover_stats.coarse_*`, 4 ticks worst) from its "no
 double". A coarse building that topples has no bands to hand its piece: it comes down as a
-demeshed one does, the piece drawing itself. A building with nothing alive is not asked for a
+demeshed one does, the piece drawing itself. Past DEMESH_RANGE (110 m) that step no longer
+demeshes a building in bricks while the far tier is on: there is nothing left for it to do for the
+drawing, and demeshing threw the coarse mesh away to make the same one again for a shell
+(`far_real`, now only behind the switch). A building with nothing alive is not asked for a
 coarse mesh (it came back empty and was asked again every pass: 370 asks in one probe run).
 
 | Dearest view | GPU | Draws | Triangles |

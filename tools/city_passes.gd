@@ -2971,6 +2971,13 @@ func _ghost_walls(id: int, solid_out: Array = []) -> Array:
 	if rest is MeshInstance3D and is_instance_valid(rest) and (rest as MeshInstance3D).is_visible_in_tree() \
 			and (rest as MeshInstance3D).mesh != null and (rest as MeshInstance3D).mesh.get_surface_count() > 0:
 		sources.append([rest, (rest as MeshInstance3D).mesh.generate_triangle_mesh(), "rest shell"])
+	# Its coarse mesh: past FAR_COARSE_RANGE the far drawing of a building in
+	# bricks, at any distance once the 110 m step stopped demeshing it.
+	var coarse = city.drawing._far_coarse.get(id)
+	if coarse is MeshInstance3D and is_instance_valid(coarse) \
+			and (coarse as MeshInstance3D).is_visible_in_tree() and (coarse as MeshInstance3D).mesh != null \
+			and (coarse as MeshInstance3D).mesh.get_surface_count() > 0:
+		sources.append([coarse, (coarse as MeshInstance3D).mesh.generate_triangle_mesh(), "coarse"])
 	if sources.is_empty():
 		return [0, 0, {}, [], 0]
 	var box := CityPlacer.box_of(b)
