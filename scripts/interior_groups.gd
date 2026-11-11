@@ -563,9 +563,9 @@ class PieceDraw:
 	var shown := false
 	var dirty := true
 	## The piece's own count of changes (BrickIsland.edits) when it was drawn,
-	## and how many live bricks it had: not everything that takes bricks off a
-	## piece counts as an edit (a drawing was ten boxes ahead of its piece once,
-	## the edit count unmoved), so CityScene counts them again now and then.
+	## and its chunk's version (BrickWorld.get_chunk_version): not everything
+	## that takes bricks off a piece counts as an edit (a drawing was ten boxes
+	## ahead of its piece once, the edit count unmoved); the version moves.
 	var edits := -1
 	var alive := -1
 	## The sum of its rooms' `gone` counts when it was drawn: something crushed

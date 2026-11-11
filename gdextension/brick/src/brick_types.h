@@ -11,6 +11,7 @@
 #include <godot_cpp/variant/vector3i.hpp>
 
 #include <algorithm>
+#include <atomic>
 #include <cmath>
 #include <cstdint>
 #include <vector>
@@ -274,6 +275,20 @@ struct Archetype {
 // inside a materialised chunk; an intact building is a recipe and has none.
 // ---------------------------------------------------------------------------
 
+// A block's alive bit, readable as a bool but not assignable from one.
+struct AliveFlag {
+    bool v = true;
+    operator bool() const { return v; }
+    AliveFlag &operator=(bool) = delete;
+    void init(bool x) { v = x; }
+};
+
+// Every change to a chunk's blocks takes the next of these as the chunk's
+// version: unique across the world, so an id reused by a new chunk never
+// repeats a version a caller remembers. Atomic: the solve runs on a worker.
+inline std::atomic<uint64_t> g_chunk_version_serial{0};
+inline uint64_t next_chunk_version() { return ++g_chunk_version_serial; }
+
 struct Block {
     Vector3i cell;            // min corner, grid coords absolute
     int32_t archetype = -1;
@@ -282,7 +297,12 @@ struct Block {
     // filament palette entry, or one of the material's own variants).
     uint8_t material = 0;
     uint8_t hp = 255;         // quantised, the determinism substrate
-    bool alive = true;
+    // Read freely; written only through Chunk::set_alive (which keeps the
+    // chunk's alive_count and version), or AliveFlag::init on a block that
+    // is not in a chunk yet -- the chunk then recounts (Chunk::recount_alive).
+    // Assigning a bool is a compile error on purpose: every write has to keep
+    // the counter (2026-11-11 audit item 1).
+    AliveFlag alive;
     // Blackened by fire (BrickWorld::scorch_hit): `colour` is its material's
     // darkest. Kept so a building rebuilt from its recipe can be charred again.
     bool scorched = false;
@@ -733,6 +753,35 @@ struct Chunk {
     int occ_y0 = 0;
     int occ_dy = 0;
     std::vector<Block> blocks;
+    // How many blocks are alive, kept by set_alive / recount_alive, and the
+    // chunk's change stamp: a new next_chunk_version() at every alive or
+    // removed change (BrickWorld.get_chunk_version). A count is not a stamp --
+    // one brick dying while another is laid leaves it unchanged.
+    int32_t alive_count = 0;
+    uint64_t version = next_chunk_version();
+
+    void set_alive(int32_t bid, bool v) {
+        Block &b = blocks[(size_t)bid];
+        if (b.alive.v != v) {
+            b.alive.v = v;
+            alive_count += v ? 1 : -1;
+            version = next_chunk_version();
+        }
+    }
+
+    /// After blocks were replaced wholesale (capture/restore, a new block).
+    void recount_alive() {
+        int32_t n = 0;
+        for (const Block &b : blocks) {
+            n += b.alive.v ? 1 : 0;
+        }
+        alive_count = n;
+        version = next_chunk_version();
+    }
+
+    /// A change that is not an alive flip but that a stamp should see
+    /// (`removed` written, a block laid back).
+    void touch() { version = next_chunk_version(); }
     // Empty, except in a band chunk: per block, ABSENT_* bits. An absent block
     // is in the list -- so every id after it holds -- but not in the world: it
     // is `removed` (owns no cells; every loop skips it) and its damage record

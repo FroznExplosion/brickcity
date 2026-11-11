@@ -2366,12 +2366,11 @@ func _stream_pieces(here: Vector3) -> void:
 		if have == null and world.get_alive_block_count(isl.chunk) < PIECE_INTERIOR_BLOCKS:
 			continue
 		live[isl.chunk] = true
-		# Its bricks counted again every eighth pass (half a second), each piece
-		# on its own pass: an edit count that did not move is not proof that
-		# nothing left it.
-		var alive := have.alive if have != null else -1
+		# The chunk's version every pass (an edit count that did not move is
+		# not proof that nothing left it); the rooms' crushed sum every eighth
+		# pass (half a second), each piece on its own pass.
+		var alive := world.get_chunk_version(isl.chunk)
 		if have != null and (isl.chunk + _pieces_pass) % 8 == 0:
-			alive = world.get_alive_block_count(isl.chunk)
 			if have.shown and groups.piece_gone_sum(have) != have.gone_sum:
 				have.dirty = true   # something in its rooms was crushed or blasted
 		if have == null or not have.shown or have.dirty or have.edits != isl.edits 				or have.alive != alive:
@@ -2398,7 +2397,7 @@ func _stream_pieces(here: Vector3) -> void:
 		var lo := Vector3i((box.position / cs).floor()) + origin - Vector3i.ONE
 		var hi := Vector3i((box.end / cs).ceil()) + origin + Vector3i.ONE
 		if groups.piece_work(entry[2], isl.chunk, lo, hi, isl.edits, isl.mesh, until,
-				world.get_alive_block_count(isl.chunk)):
+				world.get_chunk_version(isl.chunk)):
 			_pieces_owed -= 1
 			var p: InteriorGroups.PieceDraw = groups.piece(isl.chunk)
 			if p != null and p.laid > 0:
@@ -2407,7 +2406,7 @@ func _stream_pieces(here: Vector3) -> void:
 				islands.rebuild_chunk(isl.chunk)
 				p.laid = 0
 				p.edits = isl.edits
-				p.alive = world.get_alive_block_count(isl.chunk)
+				p.alive = world.get_chunk_version(isl.chunk)
 				p.gone_sum = groups.piece_gone_sum(p)
 		else:
 			break

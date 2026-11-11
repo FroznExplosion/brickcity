@@ -2149,7 +2149,7 @@ func _proxy_check(b: BuildingRegistry.Building) -> void:
 	await _frames(10)
 	t = 0
 	while t < 150 and not (_proxy_drawn(b.id) and not city._shadow_jobs.has(b.id)
-			and int(city.drawing._shadow_proxy_alive.get(b.id, -1)) == city.world.get_alive_block_count(b.chunk)):
+			and int(city.drawing._shadow_proxy_alive.get(b.id, -1)) == city.world.get_chunk_version(b.chunk)):
 		await city.get_tree().physics_frame
 		t += 1
 	# And a hit that leaves its floors standing leaves its stairs (_sweep_stairs
@@ -2172,9 +2172,9 @@ func _proxy_check(b: BuildingRegistry.Building) -> void:
 			stairs_all > 0 and stairs_live == stairs_all, "%d of %d" % [stairs_live, stairs_all])
 	_gate_ok("building %d: and it catches up with a hit" % b.id,
 			_proxy_drawn(b.id) and int(city.drawing._shadow_proxy_alive.get(b.id, -1))
-					== city.world.get_alive_block_count(b.chunk),
-			"built from %d bricks, %d alive, after %d tick(s)" % [
-				int(city.drawing._shadow_proxy_alive.get(b.id, -1)), city.world.get_alive_block_count(b.chunk), t])
+					== city.world.get_chunk_version(b.chunk),
+			"built at chunk version %d, now %d, after %d tick(s)" % [
+				int(city.drawing._shadow_proxy_alive.get(b.id, -1)), city.world.get_chunk_version(b.chunk), t])
 
 ## A building still in bricks gives its mesh up past DEMESH_RANGE and stands in
 ## as a shell (_demesh). That shell has to be drawn from the damage its bricks
