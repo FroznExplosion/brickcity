@@ -4144,7 +4144,7 @@ func _handover_waiting(id: int, now: int) -> bool:
 	if age > HANDOVER_MAX_FRAMES:
 		return false
 	for isl in h.pieces:
-		if islands.is_undrawn(isl):
+		if islands.is_blind(isl):
 			return true
 	return false
 
@@ -4163,7 +4163,7 @@ func _watch_handovers() -> void:
 		var h: Dictionary = _handovers[id]
 		var blind := false
 		for isl in h.pieces:
-			if islands.is_undrawn(isl):
+			if islands.is_blind(isl):
 				blind = true
 				break
 		var stale := _parent_stale(id)
