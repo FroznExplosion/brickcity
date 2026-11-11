@@ -22,6 +22,14 @@ uniform float max_tilt = 0.6;        // radians back from upright, at most
 uniform float stud_taper = 0.86;     // PieceMeshes.STUD_TAPER
 uniform float surface_roughness : hint_range(0.0, 1.0) = 0.42;
 uniform float surface_specular : hint_range(0.0, 1.0) = 0.55;
+// Where a card is drawn, by the stud's own distance (BrickNear._push_radii):
+// from near_stud_radius, where the geometry stops, to near_stud_card_radius;
+// from the foot of the band when the band has no place for geometry (the
+// cap, BrickNear._show_studs: cards_all 1). Scaled through a scope.
+global uniform float lod_zoom;
+global uniform float near_stud_radius;
+global uniform float near_stud_card_radius;
+instance uniform float cards_all = 0.0;
 
 varying vec3 v_colour;
 varying flat int v_mat;
@@ -67,8 +75,11 @@ void vertex() {
     float skirt = stud_height * 0.5;
     float y = mix(-skirt, h, UV.y);
     vec3 world = c + front * stud_radius + right * (UV.x * stud_radius) + us * y;
-    // A see-through stud is not drawn this far out.
-    if (MAT_TRANSLUCENT[v_mat] > 0.5) {
+    // A see-through stud is not drawn this far out; nor one the geometry
+    // draws, nor one past the cards' reach.
+    float d = length(to_cam) * lod_zoom;
+    float from = cards_all > 0.5 ? 0.0 : near_stud_radius;
+    if (MAT_TRANSLUCENT[v_mat] > 0.5 || d < from || d >= near_stud_card_radius) {
         world = c;
     }
     // Back into the instance's own space: its basis is a rotation.

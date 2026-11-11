@@ -266,8 +266,8 @@ func _setting_defs() -> Array:
 		{"id": &"near_cap_stud_n", "tab": "video", "type": MENU_SETTINGS.T_SLIDER,
 			"label": "Near Detail — Studs", "default": 4000, "min": 500, "max": 30000, "step": 500,
 			"suffix": " studs",
-			"hint": "With the cap on: how many studs may be drawn as real geometry at once. Past "
-			+ "them they are flat cards that face you."},
+			"hint": "With the cap on: how many studs the nearest pieces with real stud geometry "
+			+ "may hold between them. Past them, a piece's studs are flat cards that face you."},
 		{"id": &"near_cap_cards", "tab": "video", "type": MENU_SETTINGS.T_SLIDER,
 			"label": "Near Detail — Studded Pieces", "default": 96, "min": 16, "max": 512, "step": 16,
 			"hint": "With the cap on: how many pieces of wall and wreckage show their studs at all "
@@ -284,8 +284,8 @@ func _setting_defs() -> Array:
 		{"id": &"near_stud_bevel_m", "tab": "video", "type": MENU_SETTINGS.T_SLIDER,
 			"label": "Bevelled Studs", "default": BrickNear.DEFAULT_STUD_BEVEL,
 			"min": 0.0, "max": 12.0, "step": 1.0, "suffix": " m",
-			"hint": "How close a stud must be to get its bevelled rim. Never further than Real "
-			+ "Studs. 0: none."},
+			"hint": "In the workshop: how close a stud must be to get its bevelled rim. Never "
+			+ "further than Real Studs. 0: none. (In the city studs are plain.)"},
 		{"id": &"near_stud_m", "tab": "video", "type": MENU_SETTINGS.T_SLIDER,
 			"label": "Real Studs", "default": BrickNear.DEFAULT_STUD_RADIUS,
 			"min": 0.0, "max": 30.0, "step": 1.0, "suffix": " m",

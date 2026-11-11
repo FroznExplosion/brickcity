@@ -12,7 +12,7 @@ with the editor closed (CLAUDE.md), and a pass that times something is named wit
 | What | How | Where |
 |---|---|---|
 | Real bevels near the camera | within 14 m (through a scope's zoom), at most 120k triangles, nearest and in front first; Options > Video | `BrickNear` (BrickBevel.md 3) |
-| Stud geometry | 38 / 22 / 10 triangles by the stud's own distance to 18 m, at most 4,000 as geometry, cards to 70 m, open studs only | `BrickNear._sort_studs` |
+| Stud geometry | 22 triangles to 12 m, cards to 45 m (open studs only), each stud placed by the vertex shader from its own distance; bands holding geometry at most 4,000 studs between them (BrickBevel.md 3) | `BrickNear._studs`, `printed_grid.gdshader`, `stud_card.gdshader` |
 | Bands with studs at all | at most 96 bands hold studs (geometry or the far cards), nearest and in front first; past it the worst placed are smooth; Options > Video, Near Detail -- Studded Pieces (2026-10-27) | `BrickNear.max_card_bands` |
 | Loose pieces | small / large / total live counts | `IslandManager.small_live_max` and the rest |
 | Bricks left lying | a count, oldest heaps swept first; Options > Gameplay | `BrickHeap.max_bricks` |
