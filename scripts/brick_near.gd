@@ -13,12 +13,13 @@ extends RefCounted
 ##     is drawn with it INSTEAD of the flat one. A switch, never a fade: a fade
 ##     is per object, and the object is a storey of a building (Terrain.md
 ##     22.15 found out what that looks like).
-##   * a band within `stud_radius` gets its exposed studs as geometry
-##     (BrickWorld.get_chunk_studs_section: the workshop's rule -- none where a
-##     brick covers it, none on a smooth plate), each STUD by its own distance:
-##     bevelled inside `stud_bevel_radius`, a plain octagon to
-##     `stud_round_radius`, a square post to `stud_radius`, a flat card to
-##     `stud_card_radius`, nothing past it.
+##   * a band within `stud_card_radius` gets its exposed studs
+##     (BrickWorld.get_chunk_studs_and_open: the workshop's rule -- none where a
+##     brick covers it, none on a smooth plate) in two MultiMeshes, written when
+##     its bricks change and never because the camera moved. Each STUD is
+##     placed by its own distance in the vertex shader: a plain octagon inside
+##     `stud_radius`, a flat card from there to `stud_card_radius` (open studs
+##     only), nothing past it.
 ##   * `damaged` patches the chamfered bands of a chunk as the owner patches
 ##     its flat ones, and has the studs counted again.
 ##
@@ -48,19 +49,21 @@ static var radius := DEFAULT_RADIUS
 ## STUD_RANGE, which keeps its own) until 2026-11-07.
 static var stud_radius := DEFAULT_STUD_RADIUS
 ## Studs are most of what the near tier draws (a 638-brick building: 8,734 of
-## them to 50,274 chamfered triangles), so they come down in three steps of
-## their own -- and by the STUD, not the band: a band is a storey, and with the
-## camera at one end of it every stud on the floor was "within eight metres".
-## A band's studs are sorted into three MultiMeshes by distance
-## (BrickWorld.split_studs), again whenever the camera has moved STUD_RESORT:
-##   inside `stud_bevel_radius`  PieceMeshes.stud, 38 triangles: the rim bevel
-##       is 13 mm, four pixels at 4 m and under three past 6;
-##   to `stud_round_radius`      PieceMeshes.stud_plain, 22: still round;
-##   to `stud_radius`            PieceMeshes.stud_square, 10: a stud is 0.21 m,
-##       36 pixels wide at 8 m, 24 at 12 -- visibly square inside about 13 m.
-## Set `stud_round_radius` to `stud_bevel_radius` to go straight to square, or
-## to `stud_radius` to skip the square ring. Since 2026-11-07 it is skipped:
-## round to 12 m, then cards (were 8, 13 and 18 m with a square ring).
+## them to 50,274 chamfered triangles), so they step down by the STUD, not the
+## band: a band is a storey, and with the camera at one end of it every stud on
+## the floor was "within eight metres". Until 2026-11-11 a band's studs were
+## sorted into rings on the CPU (BrickWorld.split_studs) and re-sent to the
+## renderer every metre the camera moved; each send waited behind whatever a
+## worker was uploading (PerfCaps.md 3). Now the band holds ALL its studs in
+## one MultiMesh of PieceMeshes.stud_plain (22 triangles, round) and its open
+## ones in one of cards, and the vertex shaders (printed_grid's NEAR_STUD_RANGE,
+## stud_card) collapse to a point whatever is not theirs by the stud's distance
+## to the camera, against the globals `near_stud_radius` and
+## `near_stud_card_radius` (set from these, `_push_radii`) times `lod_zoom`.
+## The 38-triangle bevelled stud inside 4 m was a third ring; it is not drawn in
+## the city any more (a third MultiMesh of every stud for a 13 mm rim, a few
+## pixels, on the one storey under the player's feet). `stud_bevel_radius` is
+## the workshop's still (BrickBench), which swaps its own.
 static var stud_bevel_radius := DEFAULT_STUD_BEVEL
 static var stud_round_radius := DEFAULT_STUD_RADIUS
 ## And past `stud_radius`, to here, a CARD: two triangles that turn to face the
@@ -90,9 +93,11 @@ static func set_stud_distances(bevel: float, real: float, card: float) -> void:
 ## THE CAP (Options > Video, Near Detail Cap). Distance alone let the tier
 ## take on as many bands as stood inside its rings -- a street of storeys, a
 ## collapse's every piece -- and each one held is a build, an upload and its
-## studs' MultiMeshes re-sorted as the camera walks. With the cap on, the
+## studs' MultiMeshes. With the cap on, the
 ## bands chamfered hold at most `max_tris` triangles between them and the
-## bands with stud geometry at most `max_studs` studs -- a BUDGET, not a count:
+## bands with stud geometry at most `max_studs` studs (all of each such band's
+## studs: its MultiMesh holds every one, the shader draws the near ones) -- a
+## BUDGET, not a count:
 ## a band is a storey, from a few hundred triangles to twenty thousand, and a
 ## count of them bounded nothing (a street walk held ten bands, 145k triangles,
 ## under a cap of 32). A band's cost before it is built is its flat mesh's
@@ -111,9 +116,8 @@ static var max_tris := 120000
 static var max_studs := 4000
 ## And how many bands hold studs AT ALL -- geometry or the far ring's cards.
 ## The budgets above bound what is drawn up close; nothing bounded the cards
-## out to `stud_card_radius`, and every band holding them is up to four
-## MultiMeshes, a fetch of its studs from the bricks and a re-sort as the
-## camera walks. Past a collapse that is every piece of wreckage in 70 m. A
+## out to `stud_card_radius`, and every band holding them is two
+## MultiMeshes and a fetch of its studs from the bricks. Past a collapse that is every piece of wreckage in 70 m. A
 ## COUNT here, not a budget: what a band costs is mostly that it is one more
 ## set of nodes, whatever its studs number. Past it, the worst placed band's
 ## tops are smooth (the brick shader paints no studs).
@@ -142,12 +146,9 @@ const SLICE := 16
 ## in the air is drawn flat until it has come to rest (and SETTLE_MS more).
 const STILL := 0.02
 const STUD_BUILDS := 2
-## How far the camera moves, in a band's own space, before that band's studs
-## are sorted into their rings again. The rings' edges move in steps this big.
-const STUD_RESORT := 1.0
-const STUD_RESORT_FAR := 4.0
-## The rings a closed stud (one under a ceiling) is drawn in: all but the card.
-const CLOSED_RINGS := 3
+## A band's two stud MultiMeshes (Band.studs): geometry, cards.
+const GEO := 0
+const CARDS := 1
 
 enum { FLAT, PENDING, UPLOADING, NEAR }
 
@@ -170,17 +171,14 @@ class Band:
 	var holder: Array
 	var discard := false
 	var show_waits := 0   ## steps its mesh has waited to be shown (_show_waits)
-	var studs: Array[MultiMeshInstance3D] = []   ## bevelled, plain, square, card
+	var studs: Array[MultiMeshInstance3D] = []   ## [GEO] every stud, [CARDS] the open ones
 	var stud_buffer := PackedFloat32Array()      ## every stud of the band
-	var stud_open := PackedByteArray()           ## ... and which have nothing over them
-	var stud_eye := Vector3.INF                  ## where they were last sorted from
-	var stud_zoom := 1.0                         ## ... and through what zoom
-	var stud_bevelled := true                    ## ... and with `enabled` as it was
-	var stud_count := 0                          ## drawn now, the three together
+	var stud_count := 0                          ## held in the two together
 	var studs_dirty := true
 	var score := INF                             ## where it stands for the cap; less is first
 	var stud_geo := false                        ## has a place for stud GEOMETRY (the cap)
-	var stud_geo_n := -1                         ## ... and how many of its studs that was
+	var cards_all := -1.0                        ## the cards' `cards_all` as last set
+	var show_dirty := false                      ## which of the two draws wants setting again
 
 
 var world: BrickWorld
@@ -189,6 +187,11 @@ var studs_on := true
 var chamfered_bands := 0      ## held now
 var chamfered_tris := 0       ## drawn by them
 var stud_instances := 0       ## in the stud MultiMeshes held now
+## Stud buffers handed to the renderer, ever: a band's bricks changed (or it came
+## into reach). Never for the camera moving (the --chamfer gate checks).
+var stud_writes := 0
+## ... of them, to a band that held studs already: its bricks changed.
+var stud_rewrites := 0
 var builds := 0               ## chamfered bands built, ever
 var worst_step_ms := 0.0
 var step_ms := 0.0            ## all of `step`, and how many
@@ -203,7 +206,7 @@ var worst_show_ms := 0.0
 var show_waited := 0     ## steps a band's mesh waited to be shown (_show_waits)
 var worst_studs_ms := 0.0
 ## Of a band's studs, the worst: fetch from the bricks (when they changed),
-## split into rings, handing the rings to their MultiMeshes; and the most studs
+## picking out the open ones, handing both to their MultiMeshes; and the most studs
 ## one band held. For the cap's timing pass (--chamfer --street).
 var worst_fetch_ms := 0.0
 var worst_split_ms := 0.0
@@ -271,15 +274,25 @@ func _init(w: BrickWorld) -> void:
 	# The stud meshes and their material, made now: left to the first band
 	# that wanted studs, they were 45 ms of its step (the material's shader,
 	# mostly) -- the first time the player walked up to a building.
-	PieceMeshes.stud()
 	PieceMeshes.stud_plain()
-	PieceMeshes.stud_square()
 	PieceMeshes.stud_card()
 	grid_stud_material()
 	PieceMeshes.stud_card_material()
 
 
 static var _grid_stud_material: ShaderMaterial = null
+static var _pushed := Vector2(-1.0, -1.0)
+
+
+## The shaders' radii (shader globals, project.godot), when they changed: one
+## renderer call each, only then.
+static func _push_radii() -> void:
+	var want := Vector2(stud_radius, maxf(stud_card_radius, stud_radius))
+	if want == _pushed:
+		return
+	_pushed = want
+	RenderingServer.global_shader_parameter_set(&"near_stud_radius", want.x)
+	RenderingServer.global_shader_parameter_set(&"near_stud_card_radius", want.y)
 
 
 ## The studs' material with the brick grid's light (printed_grid.gdshader;
@@ -397,6 +410,7 @@ func step(eye: Vector3, zoom_in := 1.0, forward := Vector3.ZERO) -> void:
 	zoom = maxf(zoom_in, 1.0)
 	_forward = forward.normalized() if forward.length_squared() > 1e-6 else Vector3.ZERO
 	_eye = eye
+	_push_radii()
 	if _order.is_empty():
 		return
 	var t0 := Time.get_ticks_usec()
@@ -506,6 +520,7 @@ func settle(eye: Vector3, rounds := 4000) -> void:
 
 
 func _settle(eye: Vector3, rounds: int) -> void:
+	_push_radii()
 	for band in _bands.values():
 		(band as Band).since = 0
 	_eye = eye
@@ -665,7 +680,7 @@ func _visit(key: int, eye: Vector3, now: int, stud_budget: Array) -> void:
 				_sync_shadow(band)
 
 	if studs_on:
-		_studs(band, dist, local, stud_budget)
+		_studs(band, dist, stud_budget)
 
 
 ## At shutdown: wait for the uploads in flight. A task not waited for keeps its
@@ -804,9 +819,9 @@ func _to_flat(band: Band) -> void:
 	_hold_erase(band.key)
 
 
-func _studs(band: Band, dist: float, local_eye: Vector3, budget: Array) -> void:
-	# The band's box against the furthest ring; a stud's own distance decides
-	# the rest (_sort_studs).
+func _studs(band: Band, dist: float, budget: Array) -> void:
+	# The band's box against the furthest reach; a stud's own distance decides
+	# the rest, in the vertex shaders (printed_grid, stud_card).
 	var outer := maxf(stud_radius, stud_card_radius)
 	if dist >= outer + (MARGIN if not band.studs.is_empty() else 0.0):
 		if not band.studs.is_empty():
@@ -819,9 +834,23 @@ func _studs(band: Band, dist: float, local_eye: Vector3, budget: Array) -> void:
 		_wait_cards = minf(_wait_cards, band.score)
 		capped_cards += 1
 		return
-	# Studs as geometry take a place under the cap; a band without one has its
-	# studs drawn as the far ring's cards, whatever its distance (the brick
-	# shader paints none, so leaving them out would leave the tops smooth).
+	# Nothing is touched while an upload is in flight: the first renderer call
+	# that makes or changes a MultiMesh waits for it (PerfCaps.md 3). Only a
+	# band whose bricks changed, or one coming in or out of the geometry's
+	# reach, has anything to do here.
+	var fetch := band.studs.is_empty() or band.studs_dirty
+	if fetch:
+		if int(budget[0]) <= 0 or _held:
+			return
+		budget[0] = int(budget[0]) - 1
+		var t_studs := Time.get_ticks_usec()
+		_fetch_studs(band)
+		worst_studs_ms = maxf(worst_studs_ms, float(Time.get_ticks_usec() - t_studs) / 1000.0)
+	# Stud geometry takes a place under the cap (max_studs: the studs of the
+	# bands holding it, all of them -- their MultiMesh holds every one); a band
+	# without one has its open studs drawn as cards from the band's foot out,
+	# whatever its distance (the brick shader paints none, so leaving them out
+	# would leave the tops smooth).
 	var geo := dist < stud_radius + (MARGIN if band.stud_geo else 0.0)
 	if geo and not band.stud_geo and cap_enabled \
 			and (not _fits(_stud_cost, _est_studs(band), max_studs, _studded)
@@ -831,47 +860,30 @@ func _studs(band: Band, dist: float, local_eye: Vector3, budget: Array) -> void:
 			_wait_studs_cost = _est_studs(band)
 		capped_studs += 1
 		geo = false
-	if geo != band.stud_geo:
+	if geo != band.stud_geo or fetch or band.show_dirty:
+		if not fetch and _held:
+			return
+		band.show_dirty = false
 		band.stud_geo = geo
 		if geo:
 			_stud_set(band.key, _est_studs(band))
 			_admit_studs = INF
 		else:
 			_stud_erase(band.key)
-		band.stud_eye = Vector3.INF   # sorted again, into its new rings
-	var fetch := band.studs.is_empty() or band.studs_dirty
-	# Out among the cards only the outer ring's edge moves, and a card coming
-	# or going a few metres late out there is not seen: sorted again less
-	# often.
-	var resort := (STUD_RESORT if dist < stud_radius + MARGIN else STUD_RESORT_FAR) * zoom
-	if not fetch and band.stud_bevelled == enabled \
-			and absf(band.stud_zoom - zoom) < 0.1 * zoom \
-			and local_eye.distance_squared_to(band.stud_eye) < resort * resort:
-		return
-	if int(budget[0]) <= 0 or _held:
-		return
-	budget[0] = int(budget[0]) - 1
-	var t_studs := Time.get_ticks_usec()
-	if fetch:
-		band.studs_dirty = false
-		# One walk for both (they were two, each over every block of the chunk).
-		var got: Array = world.get_chunk_studs_and_open(band.chunk, band.section)
-		band.stud_buffer = got[0]
-		band.stud_open = got[1]
-		worst_fetch_ms = maxf(worst_fetch_ms, float(Time.get_ticks_usec() - t_studs) / 1000.0)
-		@warning_ignore("integer_division")
-		most_band_studs = maxi(most_band_studs, band.stud_buffer.size() / 16)
-	_sort_studs(band, local_eye)
-	worst_studs_ms = maxf(worst_studs_ms, float(Time.get_ticks_usec() - t_studs) / 1000.0)
+		_show_studs(band)
 
 
-## The band's studs into their three rings round the camera, each ring's
-## MultiMesh given its own.
-func _sort_studs(band: Band, local_eye: Vector3) -> void:
+## The band's studs from the bricks, handed to its two MultiMeshes: geometry
+## gets every stud, cards the open ones. Once, and again only when its bricks
+## change -- never because the camera moved.
+func _fetch_studs(band: Band) -> void:
+	var t0 := Time.get_ticks_usec()
+	band.studs_dirty = false
+	if not band.studs.is_empty():
+		stud_rewrites += 1
 	if band.studs.is_empty():
 		var layers := band.layers if band.state == NEAR else _layers_of(band.node)
-		for mesh in [PieceMeshes.stud(), PieceMeshes.stud_plain(), PieceMeshes.stud_square(),
-				PieceMeshes.stud_card()]:
+		for mesh in [PieceMeshes.stud_plain(), PieceMeshes.stud_card()]:
 			var mmi := MultiMeshInstance3D.new()
 			mmi.name = "Studs"
 			mmi.material_override = PieceMeshes.stud_card_material() \
@@ -885,49 +897,60 @@ func _sort_studs(band: Band, local_eye: Vector3) -> void:
 			mm.use_colors = true
 			mm.mesh = mesh
 			mmi.multimesh = mm
+			mmi.visible = false
 			band.node.add_child(mmi)
 			band.studs.append(mmi)
 			grid_studs(mmi, InstanceParams.of(band.node, &"grid_light"), band.node)
 		_carded[band.key] = true
 		_admit_cards = INF
-	band.stud_eye = local_eye
-	band.stud_zoom = zoom
-	band.stud_bevelled = enabled
-	# With the tier off there is no bevelled ring: its studs are plain.
-	var rings := PackedFloat32Array([(stud_bevel_radius if enabled else 0.0) * zoom,
-			maxf(stud_round_radius, stud_bevel_radius) * zoom, stud_radius * zoom,
-			maxf(stud_card_radius, stud_radius) * zoom])
-	if not band.stud_geo:
-		# No place for geometry under the cap: cards only.
-		rings[0] = 0.0
-		rings[1] = 0.0
-		rings[2] = 0.0
-	var t_s := Time.get_ticks_usec()
-	var parts: Array = BrickWorld.split_studs(band.stud_buffer, local_eye, rings,
-			band.stud_open, CLOSED_RINGS)
-	var t_b := Time.get_ticks_usec()
-	worst_split_ms = maxf(worst_split_ms, float(t_b - t_s) / 1000.0)
+	# One walk for both (they were two, each over every block of the chunk).
+	var got: Array = world.get_chunk_studs_and_open(band.chunk, band.section)
+	band.stud_buffer = got[0]
+	var t_split := Time.get_ticks_usec()
+	worst_fetch_ms = maxf(worst_fetch_ms, float(t_split - t0) / 1000.0)
+	# The open ones, for the cards: a stud with anything over it never gets a
+	# card. Once a fetch, not as the camera moves.
+	var open: PackedFloat32Array = BrickWorld.split_studs(band.stud_buffer, Vector3.ZERO,
+			PackedFloat32Array([INF]), got[1], 0)[0]
+	var t_set := Time.get_ticks_usec()
+	worst_split_ms = maxf(worst_split_ms, float(t_set - t_split) / 1000.0)
 	var drawn := 0
-	for k in 4:
-		var part: PackedFloat32Array = parts[k]
+	for k in 2:
+		var part: PackedFloat32Array = band.stud_buffer if k == GEO else open
 		var mm := band.studs[k].multimesh
 		@warning_ignore("integer_division")
 		var n := part.size() / 16
 		mm.instance_count = n
 		if n > 0:
 			mm.set_buffer(part)
-		band.studs[k].visible = n > 0
 		drawn += n
-	worst_set_ms = maxf(worst_set_ms, float(Time.get_ticks_usec() - t_b) / 1000.0)
-	if band.stud_geo:
-		# What its geometry rings came to: its cost from here.
-		@warning_ignore("integer_division")
-		var geo_n := ((parts[0] as PackedFloat32Array).size() + (parts[1] as PackedFloat32Array).size()
-				+ (parts[2] as PackedFloat32Array).size()) / 16
-		band.stud_geo_n = geo_n
-		_stud_set(band.key, geo_n)
+	stud_writes += 1
+	worst_set_ms = maxf(worst_set_ms, float(Time.get_ticks_usec() - t_set) / 1000.0)
+	@warning_ignore("integer_division")
+	most_band_studs = maxi(most_band_studs, band.stud_buffer.size() / 16)
 	stud_instances += drawn - band.stud_count
 	band.stud_count = drawn
+	if band.stud_geo:
+		_stud_set(band.key, _est_studs(band))
+
+
+## Which of the two draws: geometry only with a place for it, and then the
+## cards only past `stud_radius`; without, the cards from the foot of the band.
+func _show_studs(band: Band) -> void:
+	if band.studs.size() < 2:
+		return
+	var geo := band.studs[GEO]
+	var cards := band.studs[CARDS]
+	var want_geo := band.stud_geo and geo.multimesh.instance_count > 0
+	if geo.visible != want_geo:
+		geo.visible = want_geo
+	var want_cards := cards.multimesh.instance_count > 0
+	if cards.visible != want_cards:
+		cards.visible = want_cards
+	var from := 0.0 if band.stud_geo else 1.0
+	if band.cards_all != from:
+		band.cards_all = from
+		cards.set_instance_shader_parameter(&"cards_all", from)
 
 
 func _drop_studs(band: Band) -> void:
@@ -938,10 +961,8 @@ func _drop_studs(band: Band) -> void:
 	_stud_erase(band.key)
 	_carded.erase(band.key)
 	band.stud_geo = false
-	band.stud_geo_n = -1
+	band.cards_all = -1.0
 	band.stud_buffer = PackedFloat32Array()
-	band.stud_open = PackedByteArray()
-	band.stud_eye = Vector3.INF
 	band.studs_dirty = true
 	stud_instances -= band.stud_count
 	band.stud_count = 0
@@ -1047,13 +1068,11 @@ func _est_tris(band: Band) -> int:
 	return int(float(_flat_tris(band)) * _ratio)
 
 
-## A band's studs as geometry: what they came to last time, else half of all
-## it has (the far half of a storey is out past the geometry rings).
+## A band's studs as geometry: all of them (its MultiMesh holds every one; the
+## shader draws those inside `stud_radius`).
 func _est_studs(band: Band) -> int:
-	if band.stud_geo_n >= 0:
-		return band.stud_geo_n
 	@warning_ignore("integer_division")
-	return band.stud_buffer.size() / 32
+	return band.stud_buffer.size() / 16
 
 
 func _hold_set(key: int, cost: int) -> void:
@@ -1076,11 +1095,11 @@ func _stud_erase(key: int) -> void:
 	_studded.erase(key)
 
 
-## A band's stud geometry given up for cards (its next visit sorts them).
+## A band's stud geometry given up for cards (its next visit shows them).
 func _demote_studs(band: Band) -> void:
 	band.stud_geo = false
 	_stud_erase(band.key)
-	band.stud_eye = Vector3.INF
+	band.show_dirty = true
 
 
 func _worst(of: Dictionary) -> Band:

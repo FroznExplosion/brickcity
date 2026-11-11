@@ -380,6 +380,14 @@ lod_zoom={
 "type": "float",
 "value": 1.0
 }
+near_stud_radius={
+"type": "float",
+"value": 12.0
+}
+near_stud_card_radius={
+"type": "float",
+"value": 45.0
+}
 crumb_clock={
 "type": "float",
 "value": 0.0

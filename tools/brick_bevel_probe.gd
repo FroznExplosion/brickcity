@@ -248,13 +248,14 @@ func _check_studs() -> void:
 			open_n > 0 and open_n < open.size() and open_low > closed_high,
 			"%d of %d open, the lowest at %.2f m, the highest closed at %.2f m" % [open_n,
 					open.size(), open_low, closed_high])
-	var far := float(BrickNear.stud_card_radius) * 4.0
-	var rings := PackedFloat32Array([0.0, 0.0, 0.0, far])
+	# What BrickNear._fetch_studs hands its cards: the open studs, by one ring
+	# reaching everywhere with a closed stud in none.
+	var rings := PackedFloat32Array([INF])
 	@warning_ignore("integer_division")
-	var cards := (BrickWorld.split_studs(buf, Vector3.ZERO, rings, open,
-			BrickNear.CLOSED_RINGS)[3] as PackedFloat32Array).size() / 16
+	var cards := (BrickWorld.split_studs(buf, Vector3.ZERO, rings, open, 0)[0]
+			as PackedFloat32Array).size() / 16
 	@warning_ignore("integer_division")
-	var every := (BrickWorld.split_studs(buf, Vector3.ZERO, rings)[3] as PackedFloat32Array).size() / 16
+	var every := (BrickWorld.split_studs(buf, Vector3.ZERO, rings)[0] as PackedFloat32Array).size() / 16
 	_ok("only the open ones are cards", cards == open_n and every == open.size(),
 			"%d cards, %d open, %d with no mask" % [cards, open_n, every])
 	w.apply_hit(chunk, Vector3(0.4, 2.0, 2.5), 1.6)
@@ -279,8 +280,9 @@ func _check_studs() -> void:
 	var tiled := w.get_chunk_studs_section(c, -1).size() / 16
 	_ok("a smooth tile on that covers them and shows none", tiled == 4, "%d" % tiled)
 
-	# The four studs a band steps through (BrickNear._sort_studs), nearest
-	# first: the last the far card, two triangles (indexed, the others not).
+	# The stud meshes, nearest first: the bevelled one (the workshop's), the
+	# plain one (BrickNear's geometry), square (the terrain's to use), the far
+	# card, two triangles (indexed, the others not).
 	var tris := []
 	for m in [PieceMeshes.stud(), PieceMeshes.stud_plain(), PieceMeshes.stud_square()]:
 		tris.append((m.surface_get_arrays(0)[Mesh.ARRAY_VERTEX] as PackedVector3Array).size() / 3)
