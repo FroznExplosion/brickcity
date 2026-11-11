@@ -93,7 +93,7 @@ func finish(into: String = PartCatalog.CUSTOM_DIR, official: PartCatalog = null)
 	var bytes := PackedByteArray()
 	for c in _chunks:
 		bytes.append_array(c)
-	var tmp := "user://.transfer_%s.%s" % [String(offer.hash).left(16), PartPackage.EXT]
+	var tmp := (UserPaths.DEV + ".transfer_%s.%s") % [String(offer.hash).left(16), PartPackage.EXT]
 	var f := FileAccess.open(tmp, FileAccess.WRITE)
 	if f == null:
 		return {"ok": false, "why": "cannot write the download"}

@@ -235,7 +235,7 @@ godot --path . --resolution 1280x720 -- --walk
 ```
 
 Drop a saved workshop build into the city and fly around it. `--build=<path>` for a file other than
-the workshop's own `user://workshop_build.json`:
+the workshop's own `user://workshop/quick_build.json`:
 
 ```bash
 godot --path . --resolution 1280x720 -- --build

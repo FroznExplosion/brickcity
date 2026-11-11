@@ -18,7 +18,7 @@ const BRICK_MASS := 0.9   # kg at mech scale; a nano brick is ~2 cm of real plas
 const PLATE_MASS := 0.3
 const JOINT_CLEAR := 1.6
 const SWEEP_GROW := 2.0
-const STORE := "user://parts/dressing.json"
+const STORE := UserPaths.PROFILE + "dressing.json"
 ## Colours: the brick colours by index, as BrickWorld has them.
 const COLOURS := 16
 

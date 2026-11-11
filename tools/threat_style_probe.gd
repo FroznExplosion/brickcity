@@ -97,7 +97,7 @@ func _save(style: String, p: ThreatProfile) -> String:
 	table.add(mech, 70.0 if style == "A" else 20.0)
 	s.take_encounter(cm, table, 0)
 	cm.free()
-	var path := "user://threat_style_%s.json" % style
+	var path := "user://dev/threat_style_%s.json" % style
 	s.save(path)
 	return path
 

@@ -97,7 +97,7 @@ enum Finish { PRINTED, MOULDED }
 enum Bed { GLASS, SMOOTH_PEI, TEXTURED_PEI }
 
 const BED_NAMES := ["glass", "smooth PEI", "textured PEI"]
-const LOOK_PATH := "user://print_look.cfg"
+const LOOK_PATH := UserPaths.DEV + "print_look.cfg"
 const _FINISH_INC := "res://shaders/print_finish.gdshaderinc"
 
 static var finish: int = Finish.PRINTED

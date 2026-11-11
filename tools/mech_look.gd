@@ -6,9 +6,9 @@ extends SceneTree
 ##
 ##     godot --path . --script res://tools/mech_look.gd
 ##
-## Writes user://mech_look/*.png. Saves nothing.
+## Writes user://dev/mech_look/*.png. Saves nothing.
 
-const OUT := "user://mech_look/"
+const OUT := "user://dev/mech_look/"
 ## The city's storeys (Docs/Parts/nano.md section 1): storey 1's walls start 2.8 m up; its
 ## window from 3.64 m to 4.90 m.
 const STOREY := 2.8

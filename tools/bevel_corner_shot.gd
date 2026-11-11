@@ -21,7 +21,7 @@ const VIEWS := [
 	["below_angle", Vector3(2.4, -0.4, 3.4), Vector3(1.4, 0.42, 1.4)],
 ]
 
-var _out := "user://"
+var _out := "user://dev/"
 var _bevel := 0.06
 var _layout := ""
 var _cam: Camera3D

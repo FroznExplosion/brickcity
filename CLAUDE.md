@@ -57,7 +57,10 @@ rooms, items, guns, mechs, figures, parts, bricks, worlds, data); a DLC is
   `resolve`, `every`) or a library built on it (`BuildRecipe.library`,
   `PartCatalog.load_all`), never one hard-coded `res://` folder: a hard-coded
   folder is content a mod cannot add to.
-- Probe: `content_packs_probe`.
+- What the game writes for a player goes under a folder `UserPaths` names
+  (`library/`, `profile/`, `workshop/`, `exports/`, `dev/`), never the top of
+  `user://`. Probe and shot files: `user://dev/` (Docs/Content.md section 10).
+- Probes: `content_packs_probe`, `user_paths_probe`.
 
 ## Where new code runs
 

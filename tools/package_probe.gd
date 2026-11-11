@@ -14,7 +14,7 @@ extends SceneTree
 ##              the schema; a path in its id; a shipped part's id; an older rev; too big
 ##   kept       a package cannot make itself official; a newer rev replaces the old
 
-const DIR := "user://_probe_pkg/"
+const DIR := "user://dev/_probe_pkg/"
 
 var _pass := 0
 var _fail := 0
@@ -42,8 +42,8 @@ func _tick() -> void:
 	if _frames != 2:
 		return
 	_ws.set_process(false)
-	_ws.bench._hotbar.save_path = "user://_probe_pkg_hotbar.json"
-	_ws.toolbars_save = "user://_probe_pkg_toolbars.json"
+	_ws.bench._hotbar.save_path = "user://dev/_probe_pkg_hotbar.json"
+	_ws.toolbars_save = "user://dev/_probe_pkg_toolbars.json"
 	_wipe(DIR)
 	print("package probe")
 	var made := _export()

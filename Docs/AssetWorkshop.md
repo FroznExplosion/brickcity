@@ -52,7 +52,7 @@ real mm, so a part can be built straight from a real gun's numbers.
 | Change | Why |
 |---|---|
 | **No F5-F8.** Views, measure and mirror are on Alt chords | run from the Godot editor, F5-F8 are the editor's (run, run scene, pause, stop): F8 stopped the game and lost a build. The workshop's own F5 / F9 can be taken the same way, so run the scene outside the editor or with the editor's game embedding off |
-| **Autosave** every few seconds to `user://asset_workshop_autosave.json`, loaded on the next start | so a stop or a crash costs seconds. Scripted runs never write it |
+| **Autosave** every few seconds to `user://workshop/asset_autosave.json`, loaded on the next start | so a stop or a crash costs seconds. Scripted runs never write it |
 | **Free placement**, on by default (Alt F aims at studs instead) | placing by aiming at studs kept snapping where it was not wanted. The ghost goes where the cursor meets the **working plane** -- the side plane at a depth, the top plane at a height, the front plane at a stud -- mid-air or not, flipped or not; only an overlap stops it. PgUp / PgDn move the plane; a flat view picks its own |
 | **No floor**: a floating build area and a starting brick, laid again whenever the build is empty | a floor got in the way |
 | **Photos**: a stud grid over a side photo, calibrating in studs ("53s") as well as mm, zoom about the cursor, Alt + drag moves the photo, and "behind the build" / "through its middle" | to check a photo is the size meant, and get it next to the build |
@@ -106,14 +106,14 @@ copies every sketch.
 
 | Change | Why |
 |---|---|
-| A build here is a **gun** (recipe kind `gun`; `mech` too): File > Save, Save As and Open use the guns' library -- `res://content/base/guns/` shipped, `user://guns/` the player's (`BuildRecipe.LIBRARY_DIRS`) -- not the buildings'. A build saved before (kind `building`) opens as a gun. F5 has its own quick-save slot (`user://asset_workshop_quick.json`), not the building workshop's. The autosave stays | the only save options were for buildings |
+| A build here is a **gun** (recipe kind `gun`; `mech` too): File > Save, Save As and Open use the guns' library -- `res://content/base/guns/` shipped, `user://library/guns/` the player's (`BuildRecipe.LIBRARY_DIRS`) -- not the buildings'. A build saved before (kind `building`) opens as a gun. F5 has its own quick-save slot (`user://workshop/asset_quick.json`), not the building workshop's. The autosave stays | the only save options were for buildings |
 | The bar is the asset workshop's own: File is New, Open (lists only guns and mechs), Save, Save As, quick save and load; Insert, Type, Layer, Generated, Test in city and the inserted-build part of Edit are gone, their shortcuts too, and Enter does not send a gun to the city. The building workshop's Open no longer lists guns or mechs | only assets are saved and opened here |
 
 ### Into the game, stage 1 (2026-10-16): export
 
 | What | How |
 |---|---|
-| **Export to game** (rail, Alt X) | each of the gun's parts (its slots: body, barrel, stock, grip, magazine, sight, muzzle, underbarrel) is laid again on its own, meshed as the workshop draws it -- bricks, studs, hand-put studs, colours -- and saved as a scene, `user://guns/<name>/<part>.scn`, with `gun.json` listing them |
+| **Export to game** (rail, Alt X) | each of the gun's parts (its slots: body, barrel, stock, grip, magazine, sight, muzzle, underbarrel) is laid again on its own, meshed as the workshop draws it -- bricks, studs, hand-put studs, colours -- and saved as a scene, `user://library/guns/<name>/<part>.scn`, with `gun.json` listing them |
 | Size and frame | real size (a game metre is the gun's real metre: `GAME_PER_WORKSHOP`), the muzzle along -Z, up +Y, across the gun +X -- the game's guns' frame (`GunPlaceholderParts`). The Thompson comes to 0.88 m |
 | Joins | the game's contract (`GunAssembler`): every part but the body has a `mount` at its root; the part it attaches to (`GAME_HOST`: the barrel to the body, the muzzle and underbarrel to the barrel, the rest to the body) has `socket_<slot>` at the same point, so the assembler puts it back exactly where it was built. The point is the part's mount connection point if it has one, else the middle of its bricks -- which is where the game's hands take the grip, the magazine and the barrel (`PlayerView._holds`) |
 | Muzzle | `socket_muzzle` at the tip of the foremost part (the muzzle, else the barrel, else the body): the deepest one is where the game fires from |
@@ -123,7 +123,7 @@ copies every sketch.
 
 | What | How |
 |---|---|
-| **The game finds them** | `AssetGuns` (scripts/guns/asset_guns.gd) reads every exported gun -- `res://content/base/guns/<id>/` shipped, `user://guns/<id>/` the player's -- and makes part defs of its scenes. `GunPlaceholderParts.build_library` puts them on the end of the game's part library, each fenced to its own design with `exclusive_to` (as a legendary's barrel is): no random gun takes one, no other gun's roll moves, a saved one loads back by its part ids |
+| **The game finds them** | `AssetGuns` (scripts/guns/asset_guns.gd) reads every exported gun -- `res://content/base/guns/<id>/` shipped, `user://library/guns/<id>/` the player's -- and makes part defs of its scenes. `GunPlaceholderParts.build_library` puts them on the end of the game's part library, each fenced to its own design with `exclusive_to` (as a legendary's barrel is): no random gun takes one, no other gun's roll moves, a saved one loads back by its part ids |
 | **A gun of one** | `AssetGuns.generate(lib, id, seed)` -> `GunGenerator.generate_fixed`: the design's own parts, everything else (modifiers, alt fire, stats, quality) rolled from the seed as for any gun, the design's name after the grade word ("Gutter Thompson"). It fires as the class its `gun.json` names, an SMG by default. Brand `workshop`: no skin is set for it, so its bricks keep their colours |
 | **The magazine comes off** | a magazine part tagged `detaches` (every exported one) goes with the left hand through a reload, down with the old one and up with the new (`PlayerView._carry_magazine`), and is back home after |
 | **To try it** | in developer mode, T cycles the gun classes and then each exported gun. The pass `city.tscn -- --asset-gun=thompson` holds it, fires it and reloads it (shots/asset_gun_*.png) |
@@ -1183,7 +1183,7 @@ rooms and its bricks as its type (all Detail is an item).
 
 **Built 2026-10-23 (stage 1).** *Asset > Make furniture or an item* sets the build's kind to
 `item`; Save As then shows the three levels as boxes to tick (Type as one choice) and saves to
-`user://items/` -- the folder the generator already furnishes rooms from (`RoomTemplates`), so
+`user://library/items/` -- the folder the generator already furnishes rooms from (`RoomTemplates`), so
 a new chair tagged Kitchen turns up in generated kitchens with nothing else done. An item
 tagged for some planets only is furnished on those (`RoomTemplates.planet`, Earth today).
 Registered as Item, every brick is Detail; as Furniture, a brick is Interior unless it was built
@@ -1196,7 +1196,7 @@ too. `tools/asset_tags_probe.gd`: 32 checks.
 every file in the item library with its tags, one panel for the workshop and the game. Each
 level is a row of chips -- All, then each value with how many it would leave, greyed when that
 is none -- over a search box and the list; picking from the list puts the piece in hand. The
-filter is remembered (`user://asset_catalog.json`).
+filter is remembered (`user://workshop/asset_catalog.json`).
 
 *The placer in the workshop* (`FurnishTool`, `scripts/furnish_tool.gd`), both workshops: **F6**
 opens the catalogue. The piece in hand is a ghost centred on the stud under the cursor, on top
@@ -1312,7 +1312,7 @@ selecting and changing shells, small custom parts.
 | **Mark smooth** | N | paint a part's role: stays bricks, or becomes a smooth custom piece (its brick outline is lofted, as the traced stock and grip were) |
 | **Wand** | F4, click a photo | the patch of the photo's colour under the click, filled with bricks for the current part, so many studs across on the mirror plane; then fix it by hand |
 | **Live readout** | always on | each part's bricks (~ marks smooth ones) and the asset's length in the game; after an export, the part kit's checks: loose bricks, the grip, joints meeting |
-| **Export** | F12 | write the build sheet to `user://asset_exports/`, run the part kit in Blender (`BRICKCITY_BLENDER` if it is not in the usual place), and show its picture and checks here. A smooth part leaves as a loft of its brick outline -- along the gun if it is longer than tall, else up it; the rest leave as laid. The muzzle is the low-x end unless `meta.asset.muzzle` is `+x` |
+| **Export** | F12 | write the build sheet to `user://exports/assets/`, run the part kit in Blender (`BRICKCITY_BLENDER` if it is not in the usual place), and show its picture and checks here. A smooth part leaves as a loft of its brick outline -- along the gun if it is longer than tall, else up it; the rest leave as laid. The muzzle is the low-x end unless `meta.asset.muzzle` is `+x` |
 | **Undo / redo** | Z / shift Z | a fill, a copy or a mirrored pair undoes at once; redo lays it back, each brick in its own part |
 
 ---

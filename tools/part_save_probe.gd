@@ -26,7 +26,7 @@ extends SceneTree
 ##               other parts move onto them; a mech part cannot be tried; Save writes
 ##               none of it; taking them off puts everything back
 
-const DIR := "user://_probe_parts/"
+const DIR := "user://dev/_probe_parts/"
 
 var _pass := 0
 var _fail := 0
@@ -55,8 +55,8 @@ func _tick() -> void:
 		return
 	_ws.set_process(false)
 	# Nothing a probe does may land in the player's own files.
-	_ws.bench._hotbar.save_path = "user://_probe_asset_hotbar.json"
-	_ws.toolbars_save = "user://_probe_asset_toolbars.json"
+	_ws.bench._hotbar.save_path = "user://dev/_probe_asset_hotbar.json"
+	_ws.toolbars_save = "user://dev/_probe_asset_toolbars.json"
 	_wipe(DIR)
 	print("part save probe")
 	_fit_rule()

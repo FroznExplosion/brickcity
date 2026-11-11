@@ -13,7 +13,7 @@ extends SceneTree
 ##              another player's; saved and read back
 ##   debris     bricks knocked off become falling bodies; the owned part keeps them
 
-const DIR := "user://_probe_dressing/"
+const DIR := "user://dev/_probe_dressing/"
 const PITCH := 0.175
 
 var _pass := 0

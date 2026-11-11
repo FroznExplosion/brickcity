@@ -2881,7 +2881,7 @@ and its trees come from the seed; what is saved is what happened to them, with t
 - Coming back in, the scene starts as it does and is then taken where the player was, behind a dark
   screen, by what a player would have done: out to open space, the jump, the frames' handoff.
 - Universes: M then U lists them, N makes one with a new seed; each is a folder. Gates never touch the
-  player's saves (`user://saves_test/`).
+  player's saves (`user://dev/saves_test/`).
 - Not saved: fallen pieces, which are in-memory templates to the engine (their bricks stay gone from
   the building), drifting pieces, bullets, what a soldier was thinking.
 - Gate `--gate=save`, two runs of it, the second finding what the first left.

@@ -1158,7 +1158,7 @@ func _run_shots() -> void:
 
 	# And the world file, round trip, which is the only thing that outlives
 	# the session.
-	var path := "user://editor_shot_world.json"
+	var path := UserPaths.DEV + "editor_shot_world.json"
 	var err := World.save_world(path, _seed, _drowned)
 	var pads_before := BrickTerrain.pad_count()
 	var paints_before := BrickTerrain.paint_count()

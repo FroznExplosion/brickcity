@@ -9,7 +9,7 @@ extends SceneTree
 
 var _pass := 0
 var _fail := 0
-const DIR := "user://_probe_furnish_items/"
+const DIR := "user://dev/_probe_furnish_items/"
 
 
 func _ok(what: String, cond: bool, detail: String = "") -> void:
@@ -70,7 +70,7 @@ func _catalogue() -> void:
 	_ok("chip count: item alone leaves 1", AssetCatalog.count_with({}, "type", "item") == 1)
 
 	var p := AssetCatalogPanel.new()
-	p.save_path = "user://_probe_catalog.json"
+	p.save_path = "user://dev/_probe_catalog.json"
 	DirAccess.remove_absolute(p.save_path)
 	root.add_child(p)
 	await process_frame
@@ -98,13 +98,13 @@ func _catalogue() -> void:
 	_ok("picking from the list says which", picked == ["probe_bed"], str(picked))
 	p.queue_free()
 	var q := AssetCatalogPanel.new()
-	q.save_path = "user://_probe_catalog.json"
+	q.save_path = "user://dev/_probe_catalog.json"
 	root.add_child(q)
 	await process_frame
 	_ok("the filter is remembered", q.filter.type == ["furniture"] and q.filter.room == ["bedroom", "lab"],
 			str(q.filter))
 	q.queue_free()
-	DirAccess.remove_absolute("user://_probe_catalog.json")
+	DirAccess.remove_absolute("user://dev/_probe_catalog.json")
 
 
 func _workshop() -> void:
@@ -113,15 +113,15 @@ func _workshop() -> void:
 	root.add_child(ws)
 	await process_frame
 	await process_frame
-	ws.bench._builds_dir = "user://_probe_builds/"
-	ws.bench._save_path = "user://_probe_quick.json"
-	ws.bench._hotbar.save_path = "user://_probe_hotbar.json"
+	ws.bench._builds_dir = "user://dev/_probe_builds/"
+	ws.bench._save_path = "user://dev/_probe_quick.json"
+	ws.bench._hotbar.save_path = "user://dev/_probe_hotbar.json"
 	# Loading the scene reloads scripts, which resets their statics: point the
 	# catalogue at the probe's folder again.
 	AssetCatalog.use_dir(DIR)
 	RoomTemplates.reload()
 	var f: FurnishTool = ws.bench._furnish
-	f.panel.save_path = "user://_probe_catalog.json"
+	f.panel.save_path = "user://dev/_probe_catalog.json"
 	var xf: Transform3D = ws.bench.world.get_chunk_transform(ws.bench.chunk)
 	@warning_ignore("integer_division")
 	var mid: int = ws.bench.plate_studs / 2
@@ -196,7 +196,7 @@ func _workshop() -> void:
 	_ok("the city registers it with the furniture as bricks", bid >= 0
 			and reg.get_building(bid).build.size() == back.size() + 3)
 	DirAccess.remove_absolute(path)
-	DirAccess.remove_absolute("user://_probe_builds/")
+	DirAccess.remove_absolute("user://dev/_probe_builds/")
 	ws.bench._new_build()
 	_ok("a new build has no placements, none drawn", ws.bench.recipe.placements.is_empty()
 			and f._drawn.get_children().all(func(c): return c.is_queued_for_deletion()))
@@ -207,6 +207,6 @@ func _cleanup() -> void:
 	for fn in DirAccess.get_files_at(DIR):
 		DirAccess.remove_absolute(DIR + fn)
 	DirAccess.remove_absolute(DIR)
-	DirAccess.remove_absolute("user://_probe_catalog.json")
+	DirAccess.remove_absolute("user://dev/_probe_catalog.json")
 	AssetCatalog.use_dir("")
 	RoomTemplates.reload()

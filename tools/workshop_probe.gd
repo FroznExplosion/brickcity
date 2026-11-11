@@ -316,8 +316,8 @@ func _workshop_checks() -> void:
 	root.add_child(ws)
 	await process_frame
 	await process_frame
-	ws.bench._builds_dir = "user://_probe_builds/"
-	ws.bench._save_path = "user://_probe_quick.json"
+	ws.bench._builds_dir = "user://dev/_probe_builds/"
+	ws.bench._save_path = "user://dev/_probe_quick.json"
 	var f0: int = ws.bench.asm.frames[0]
 	var base_blocks: int = ws.bench.world.get_alive_block_count(f0)
 
@@ -495,7 +495,7 @@ func _workshop_checks() -> void:
 	var listed := WorkshopMenu.library("building")
 	_ok("the library lists shipped builds", listed.has("res://content/base/builds/cottage.json"))
 
-	for f in DirAccess.get_files_at("user://_probe_builds/"):
-		DirAccess.remove_absolute("user://_probe_builds/" + f)
+	for f in DirAccess.get_files_at("user://dev/_probe_builds/"):
+		DirAccess.remove_absolute("user://dev/_probe_builds/" + f)
 	ws.queue_free()
 	await process_frame

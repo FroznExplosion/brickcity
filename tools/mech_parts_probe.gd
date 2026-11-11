@@ -19,7 +19,7 @@ extends SceneTree
 ##              forward, the chassis's class its layers, the eye on long legs higher; a
 ##              build with problems leaves the boxes
 
-const DIR := "user://_probe_mech_parts/"
+const DIR := "user://dev/_probe_mech_parts/"
 
 var _pass := 0
 var _fail := 0

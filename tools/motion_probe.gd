@@ -14,7 +14,7 @@ extends SceneTree
 ##   mech       a dressed mech walks by its set, a design's pick taken; a pod arm swings and
 ##              settles; a stand-in for a pod on a mech with no pod part
 
-const DIR := "user://_probe_motion/"
+const DIR := "user://dev/_probe_motion/"
 
 var _pass := 0
 var _fail := 0

@@ -151,7 +151,7 @@ func _run() -> void:
 	sp.toggle_point(_at(17.5, 5.5, 17.5), Vector3.DOWN)
 	_ok("P puts a point and takes it away again", put_one and (rec.points as Array).is_empty())
 
-	var path := "user://_probe_spaces.json"
+	var path := "user://dev/_probe_spaces.json"
 	_ws.bench.recipe.save_to(path)
 	var back := BuildRecipe.load_from(path)
 	var srec: Dictionary = back.meta.get("structure", {})

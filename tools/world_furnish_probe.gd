@@ -9,7 +9,7 @@ extends SceneTree
 
 var _pass := 0
 var _fail := 0
-const DIR := "user://_probe_world_items/"
+const DIR := "user://dev/_probe_world_items/"
 
 
 func _ok(what: String, cond: bool, detail: String = "") -> void:
@@ -41,7 +41,7 @@ func _initialize() -> void:
 	for fn in DirAccess.get_files_at(DIR):
 		DirAccess.remove_absolute(DIR + fn)
 	DirAccess.remove_absolute(DIR)
-	DirAccess.remove_absolute("user://_probe_world_catalog.json")
+	DirAccess.remove_absolute("user://dev/_probe_world_catalog.json")
 	AssetCatalog.use_dir("")
 	print("\n%d passed, %d failed" % [_pass, _fail])
 	quit(1 if _fail > 0 else 0)
@@ -67,7 +67,7 @@ func _make_assets() -> void:
 
 func _catalogue(f: WorldFurnisher) -> void:
 	print("[probe] the catalogue in a world")
-	f.panel.save_path = "user://_probe_world_catalog.json"
+	f.panel.save_path = "user://dev/_probe_world_catalog.json"
 	f.open(true)
 	_ok("F6 opens it filtered to the planet underfoot", f.is_open() and f.panel.filter.planet == ["earth"])
 

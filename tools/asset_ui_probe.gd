@@ -34,8 +34,8 @@ func _tick() -> void:
 	if _frames != 3:
 		return
 	_ws.set_process(false)
-	_ws.bench._hotbar.save_path = "user://_probe_asset_hotbar.json"
-	_ws.toolbars_save = "user://_probe_asset_toolbars.json"
+	_ws.bench._hotbar.save_path = "user://dev/_probe_asset_hotbar.json"
+	_ws.toolbars_save = "user://dev/_probe_asset_toolbars.json"
 	var ui: AssetWorkshopUI = _ws._ui
 	print("asset workshop frame probe")
 	_ok("the frame is there", ui != null)

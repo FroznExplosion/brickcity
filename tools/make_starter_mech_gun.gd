@@ -38,8 +38,8 @@ func _tick() -> void:
 	if _frames != 3:
 		return
 	_ws.set_process(false)
-	_ws.bench._hotbar.save_path = "user://_starter_gun_hotbar.json"
-	_ws.toolbars_save = "user://_starter_gun_toolbars.json"
+	_ws.bench._hotbar.save_path = "user://dev/_starter_gun_hotbar.json"
+	_ws.toolbars_save = "user://dev/_starter_gun_toolbars.json"
 	_build()
 
 

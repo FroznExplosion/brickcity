@@ -11,7 +11,7 @@ extends SceneTree
 
 const Standins := preload("res://scripts/islands/island_standins.gd")
 
-var _out := "user://standin_shot.png"
+var _out := "user://dev/standin_shot.png"
 
 
 func _initialize() -> void:

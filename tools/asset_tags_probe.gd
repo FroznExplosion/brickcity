@@ -10,7 +10,7 @@ var _pass := 0
 var _fail := 0
 var _ws
 var _frames := 0
-const DIR := "user://_probe_items/"
+const DIR := "user://dev/_probe_items/"
 
 
 func _ok(what: String, cond: bool, detail: String = "") -> void:
@@ -33,8 +33,8 @@ func _tick() -> void:
 	if _frames != 2:
 		return
 	_ws.set_process(false)
-	_ws.bench._hotbar.save_path = "user://_probe_asset_hotbar.json"
-	_ws.toolbars_save = "user://_probe_asset_toolbars.json"
+	_ws.bench._hotbar.save_path = "user://dev/_probe_asset_hotbar.json"
+	_ws.toolbars_save = "user://dev/_probe_asset_toolbars.json"
 	print("asset tags probe")
 	_levels()
 	_filter()
@@ -149,8 +149,8 @@ func _save_and_generate() -> void:
 			{"planet": [], "type": ["furniture"], "room": ["kitchen", "bedroom"]})
 	_ws.bench._builds_dir = BuildRecipe.player_dir()
 	_ok("Save As writes it", path != "" and FileAccess.file_exists(path), path)
-	_ok("an item's library is the generator's (user://items/)",
-			BuildRecipe.player_dir("item") == "user://items/" and BuildRecipe.library_dirs("item").has("res://content/base/items/"))
+	_ok("an item's library is the generator's (user://library/items/)",
+			BuildRecipe.player_dir("item") == "user://library/items/" and BuildRecipe.library_dirs("item").has("res://content/base/items/"))
 	var back := BuildRecipe.load_from(path)
 	_ok("the file keeps kind and tags, no room_kind", back.kind == "item"
 			and back.meta.get("tags", {}).get("room", []) == ["kitchen", "bedroom"]
