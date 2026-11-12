@@ -17,9 +17,23 @@ vec3 brick_box_size(mat4 bb_model) {
     return vec3(length(bb_model[0].xyz), length(bb_model[1].xyz), length(bb_model[2].xyz));
 }
 
-// xy: UV, zw: UV2.
-vec4 brick_box_uv(vec3 bb_size, vec3 bb_unit, vec3 bb_normal) {
-    vec3 bb_p = (bb_unit + 0.5) * bb_size;
+// Up close the box is a BEVELLED one (BrickNear.bevel_box_mesh): the same
+// instances, another mesh. Each of its corners says in UV.x which axes the
+// bevel draws it in along (bits: x 1, y 2, z 4) and in UV.y whether it is a
+// corner of a bevel's facet. The bevel is 13 mm whatever the brick's size, so
+// it is taken off here, in metres, not in the mesh. The plain box has no UV:
+// nothing drawn in, no facets.
+const float BRICK_BOX_BEVEL = 0.013;
+
+vec3 brick_box_inset(float bb_mask, vec3 bb_size) {
+    int bb_m = int(bb_mask + 0.5);
+    vec3 bb_on = vec3(float(bb_m & 1), float((bb_m >> 1) & 1), float((bb_m >> 2) & 1));
+    return bb_on * min(vec3(BRICK_BOX_BEVEL), bb_size * 0.25);
+}
+
+// xy: UV, zw: UV2. `bb_at`: the point, in metres from the brick's middle.
+vec4 brick_box_uv(vec3 bb_size, vec3 bb_at, vec3 bb_normal) {
+    vec3 bb_p = bb_at + 0.5 * bb_size;
     if (abs(bb_normal.x) > 0.5) {
         return vec4(bb_p.zy, bb_size.zy);
     }

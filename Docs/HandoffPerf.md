@@ -366,3 +366,127 @@ it. Frames over 33 ms are the renderer's (`draw`), not the tick, and do not move
 pieces: the same (mean 1.42-1.62 ticks either way). *big_city A2's slow frames were 48 ms of
 idle `process` in a row, not the physics tick -- most likely outside the game. Left on, at
 8 ms; not tuned further.
+
+## 8. The brick-system audit, and bands as a box a brick (2026-11-11/12, worktree `sleepy-satoshi-5cd1f2`)
+
+The user asked whether the brick system's solutions are the best ones: "performance issues and
+graphical and performance issues during a building's collapse ... I think we need to simplify
+things and do less work during streaming". The code was read end to end (city tick and
+streaming, `city_drawing.gd`, `brick_near.gd`, `island_manager.gd`, the mesher, the brick
+shader, the grid light) and one representation was changed as a trial. This is what was found,
+what was built, and what is left.
+
+### 8.1 What the audit found
+
+* **Too many ways to draw one thing.** A building: far box, coarse shell, banded shell and its
+  glass, brick bands, a far coarse mesh, a rest shell, shell pieces, a shadow proxy, panes, a
+  chamfered band and its flat shadow copy, stud MultiMeshes. A piece: a shared single-brick
+  MultiMesh, crumbs, a box stand-in, one baked mesh, carried bands (owed, holes, retiring),
+  sliced bands, a coarse stand-in, a shadow proxy, a dormant stand-in, a rubble-field tile.
+  Every switch between two of them is a worker job and a mesh upload -- the spike source 6.2
+  and 6.3 name -- and is where the flash, the double and the lost detail come from.
+* **The baked brick mesh pays at the wrong moment.** `tools/probes/brick_cost_probe.gd`, a
+  30x40 tower of 60 courses, 3,293 bricks:
+
+  | | vertices | triangles | handed to the renderer | made in |
+  |---|---|---|---|---|
+  | baked faces | 104,220 (32 a brick) | 52,110 slots, 18,438 drawn (35%) | 6.2 MB | 28-31 ms (bake) |
+  | a box a brick | -- | 39,336 (118,008 bevelled) | 0.25 MB | 0.5 ms |
+  | coarse | 15,000 | 7,500 | 0.8 MB | 4.5-5 ms |
+  | chamfered, whole | 378,180 | 189,090 | 20.2 MB | 17-19 ms |
+
+  A bake keeps a slot for every face of every brick so a hit is an index patch: cheap for a
+  bullet, dear whenever the whole thing is made -- a promotion, a piece coming off, a change of
+  tier -- which is what a collapse is made of.
+* **The GPU is not bound by triangles in the city.** `city.tscn -- --big --shot` draws 0.2-0.4 M
+  triangles and 100-200 draw calls a frame. So a box a brick (2.1 times the truly drawn
+  triangles of a bake) costs it nothing that shows.
+* **The chip's temperature decides more than the code.** The same build, the same pass: started
+  at about 81 C, 35 frames over 33 ms; started at about 69 C, 4. The renderer's own clock read
+  6.3, 10.9, 12.3 and 14.3 ms on the same scene. An A/B is only fair when both runs start cool
+  and quiet: one run a command, launched the moment no Godot is running and the last minute's
+  peak is under about 78 C, the order alternated. Compare slow-frame counts and the tick, not
+  GPU ms.
+* Smaller findings went to other chats and are merged: the alive count and a change version a
+  chunk (O(1); 607c607d), the shared tick clock (section 7), the grid light waiting for quiet
+  (1d0d62a0), one coarse path for a far building, studs sorted by the GPU, and the GPU's
+  baseline measured (`--gpucost`).
+
+### 8.2 Built: a building's bands as a box a brick (`-- --inst-bands`, off by default)
+
+A band is one MultiMesh, a child `Boxes` of the band's node: a UNIT box, an instance a brick,
+scaled to the brick (`BrickWorld.get_instance_buffers`: transform, the colour as the mesher
+writes it, and the brick's centre again as custom data). `shaders/brick_boxed.gdshaderinc`
+works out from the instance's scale what a baked face hands the fragment stage -- the point's
+place in its face rectangle, that rectangle's size, the point in the chunk's space -- so seams,
+print, grain and the grid's light are as they were. The box's mesh says it is one by its UV2,
+(0, -1).
+
+* **No bake, no band job, no upload.** `CityDrawing._apply_boxes` fills a band in the tick;
+  `_finish_promotions` does not wait for a bake. The buffer is made the tick the band is built,
+  from the bricks as they are then.
+* **A hit** writes again only the bands whose bricks changed (`refresh_boxes`): every block a
+  section holds keeps a slot, a dead one a zero matrix, so the buffer is the same length. A
+  band's stamp is WHICH bricks are drawn in it (`get_section_stamps`, a sum over their ids),
+  not how many.
+* **A part that is not a true box** (a slope, a round brick, a stair) is drawn by its own
+  faces, baked for those blocks alone, on the band node's own mesh; made again only when one
+  of those parts goes (`special_stamp`). Drawn as its bounding box it was a solid block where a
+  staircase stood (`--lodbreak` found it).
+* **Up close the same instances are drawn with a bevelled box** (`BrickNear.bevel_box_mesh`, 36
+  triangles): a switch of one mesh inside `BrickNear.radius`, under the same cap of triangles,
+  where a baked band gets a chamfered mesh built from its bake on a worker and uploaded. The
+  13 mm bevel is taken off in the vertex shader, in metres, so it is the same on every size of
+  brick; each corner of the mesh says which axes it is drawn in along. Upright edges and the
+  top's edges are bevelled; the bottom is square, as the chamfered mesh leaves a brick standing
+  on bricks. Every brick is a closed solid, so nothing shows through a bevel: none of the
+  chamfer mesher's floors, plugs and caps are needed.
+* The gates were taught to see boxes, where they only knew band meshes: `--lodbreak`'s
+  `_walls_drawn_by` and ghost-wall rays, `--chamfer`'s band finder, `BrickNear.audit` and
+  `is_near`.
+
+Measured (editor closed, each run started quiet and under 78 C, none held back):
+
+| | baked bands | boxes |
+|---|---|---|
+| `--promote --big`: ticks from promotion to bricks drawn | 4 (hit), 12-16 (walked up to) | 1, every building |
+| `--big --shot`: band uploads from workers | 264 (2.7 M vertices) | 0 |
+| `--big --shot`: frames over 33 ms | 4-8 | 1-3 |
+| `--big --shot`: worst tick | 11.9-13.1 ms | 11.7-15.9 ms |
+| `--breaklag --big`: a shot shell is bricks / first piece out | -- | tick 2 / tick 4 |
+| brick memory, 1,550 bricks (`--chamfer`'s HUD) | 5.9 MB | 0.4 MB |
+
+Gates with boxes on: `--chamfer` 15/0, `--lodbreak` 21/0. With the flag off, nothing moved:
+`--chamfer` 15/0, `brick_bevel_probe` 26/0, `brick_bevel_gap_probe` 20/0, barrage 9/0, hang
+10/0, standin 15/0, piece_band 11/0.
+
+Seen side by side at 1.5 m (`shots/chamfer_on.png` either way): the same wall. The boxes' joints
+read a little darker (every facet is shaded as one wall of a groove; a box does not know which
+of its edges are in the open) and the thin glint along the course lines is gone.
+
+### 8.3 Tried and taken out
+
+`-- --hold-bake`: a moving piece kept its box stand-in (`IslandStandins`) and was baked only
+once settled. Two pairs: more frames over 33 ms both times (59 against 35 warm, 14 against 4
+cool) and the tick 0.5 ms dearer. The stand-in is one MultiMesh for every size of brick and is
+made again whole whenever the piece loses a brick; and pieces are a small share of the uploads
+(13-21 a run against the bands' 240-345). Reverted.
+
+### 8.4 Left, in the order it would be done
+
+1. **Make boxes the default**, once played with: then `--breaklag`'s "owed bands" check goes
+   (it tests band uploads, which boxes do not have) and a toppled building's bands have to be
+   handed to its piece (today they are dropped and the piece is meshed as any piece is).
+2. **Stairs instanced by part**, not baked a band at a time: about 2,000 vertices a part made
+   on the main thread when a building is made bricks (worst band fill 1.1 ms). One MultiMesh a
+   kind of part, as a tree's set is.
+3. **The sway in the wind** for boxed bands (`weather_sway_vertex` wants the chunk's height,
+   and the instance's matrix is in the model matrix it is given).
+4. **Which edges are in the open**: a bit an edge in the instance's custom data, so a corner
+   of a building is not shaded as a groove and a brick over air keeps its bottom bevel.
+5. **Pieces on the same buffers**: a piece's bricks are the building's instances moved to
+   another MultiMesh. Then the bake, the mesh queue, slices, owed bands, band holes, compaction
+   and the blind-piece bookkeeping have nothing left to do, and neither has the chamfer mesher
+   (`chamfer_faces_into` and its posts, about 1,300 lines).
+6. What the far tiers still need of a bake (the coarse mesh reads the grid, not a bake; panes
+   and shadow proxies read cells) -- probably nothing, which would free 3.4 MB a building.

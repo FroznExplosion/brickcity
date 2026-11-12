@@ -159,6 +159,9 @@ class Band:
 	## Drawn as a box a brick by its owner (CityDrawing.instanced_bands): the
 	## node has no mesh of its own and nothing to chamfer; its studs are drawn.
 	var boxed := false
+	var box_count := 0          ## its live bricks: what bevelling it costs
+	var box_bevelled := false   ## drawn with the bevelled box now
+	var box_plain: Mesh         ## ... and the mesh to go back to
 	var tris := 0
 	var chunk := -1
 	var section := -1
@@ -360,9 +363,11 @@ func track(node: MeshInstance3D, chunk: int, section: int = -1) -> void:
 
 ## A band its owner draws as a box a brick (CityDrawing.instanced_bands): no
 ## mesh on the node, so its box is given. Its studs are drawn as any band's;
-## it is never chamfered (that is built from a bake it does not have). Again
-## for the same node: only its box.
-func track_box(node: MeshInstance3D, chunk: int, section: int, box: AABB) -> void:
+## its chamfer is not a mesh built from a bake but another box: inside
+## `radius` its MultiMesh draws the bevelled box (bevel_box_mesh) with the
+## same instances, a switch of one mesh. `count`: its live bricks. Again for
+## the same node: only its box and its count.
+func track_box(node: MeshInstance3D, chunk: int, section: int, box: AABB, count := 0) -> void:
 	if node == null or not is_instance_valid(node):
 		return
 	var band: Band = _bands.get(node.get_instance_id())
@@ -373,6 +378,151 @@ func track_box(node: MeshInstance3D, chunk: int, section: int, box: AABB) -> voi
 			return
 		band.boxed = true
 	band.box = box
+	if band.box_bevelled and count != band.box_count:
+		# Bevelled, and its bricks changed: what it costs now.
+		chamfered_tris += (count - band.box_count) * BOX_BEVEL_TRIS
+		band.tris = count * BOX_BEVEL_TRIS
+		_hold_set(band.key, band.tris)
+	band.box_count = count
+
+
+## Triangles of the bevelled box: top 2, sides 8, the bottom's octagon 6, the
+## top's four bevels 8, the four upright ones 8, the top's corners 4.
+const BOX_BEVEL_TRIS := 36
+static var _bevel_box: ArrayMesh = null
+
+
+## A unit box with its upright edges and its top's edges bevelled, for a band
+## drawn as a box a brick (shaders/brick_boxed.gdshaderinc). The bottom is
+## square, as the chamfered mesh leaves a brick standing on bricks (the two
+## meet like printed parts stacked): cut only where the upright bevels come
+## down. Every corner is at the unit box's own corner; its UV says which axes
+## the shader draws it in along by the bevel (x 1, y 2, z 4) and whether it is
+## a facet's. UV2 (0, -1) marks the box, as the plain one's.
+static func bevel_box_mesh() -> ArrayMesh:
+	if _bevel_box != null:
+		return _bevel_box
+	var out: Array = []   # [corner's signs, mask, normal, facet] a vertex
+	# top
+	_box_poly(out, [[Vector3(1, 1, 1), 5], [Vector3(1, 1, -1), 5], [Vector3(-1, 1, -1), 5],
+			[Vector3(-1, 1, 1), 5]], Vector3.UP, 0.0)
+	# bottom: square, its corners cut by the upright bevels
+	_box_poly(out, [[Vector3(1, -1, -1), 4], [Vector3(1, -1, 1), 4], [Vector3(1, -1, 1), 1],
+			[Vector3(-1, -1, 1), 1], [Vector3(-1, -1, 1), 4], [Vector3(-1, -1, -1), 4],
+			[Vector3(-1, -1, -1), 1], [Vector3(1, -1, -1), 1]], Vector3.DOWN, 0.0)
+	for s in [1.0, -1.0]:
+		# sides
+		_box_poly(out, [[Vector3(s, 1, 1), 6], [Vector3(s, 1, -1), 6], [Vector3(s, -1, -1), 4],
+				[Vector3(s, -1, 1), 4]], Vector3(s, 0, 0), 0.0)
+		_box_poly(out, [[Vector3(1, 1, s), 3], [Vector3(-1, 1, s), 3], [Vector3(-1, -1, s), 1],
+				[Vector3(1, -1, s), 1]], Vector3(0, 0, s), 0.0)
+		# the top's bevels
+		_box_poly(out, [[Vector3(s, 1, 1), 5], [Vector3(s, 1, -1), 5], [Vector3(s, 1, -1), 6],
+				[Vector3(s, 1, 1), 6]], Vector3(s, 1, 0), 1.0)
+		_box_poly(out, [[Vector3(1, 1, s), 5], [Vector3(-1, 1, s), 5], [Vector3(-1, 1, s), 3],
+				[Vector3(1, 1, s), 3]], Vector3(0, 1, s), 1.0)
+		for t in [1.0, -1.0]:
+			# an upright bevel, and the corner over it
+			_box_poly(out, [[Vector3(s, 1, t), 6], [Vector3(s, -1, t), 4], [Vector3(s, -1, t), 1],
+					[Vector3(s, 1, t), 3]], Vector3(s, 0, t), 1.0)
+			_box_poly(out, [[Vector3(s, 1, t), 5], [Vector3(s, 1, t), 6], [Vector3(s, 1, t), 3]],
+					Vector3(s, 1, t), 1.0)
+	var verts := PackedVector3Array()
+	var norms := PackedVector3Array()
+	var uvs := PackedVector2Array()
+	var uv2s := PackedVector2Array()
+	var cols := PackedColorArray()
+	for v in out:
+		verts.append((v[0] as Vector3) * 0.5)
+		uvs.append(Vector2(float(v[1]), float(v[3])))
+		norms.append((v[2] as Vector3).normalized())
+		uv2s.append(Vector2(0.0, -1.0))
+		cols.append(Color.WHITE)
+	var arrays := []
+	arrays.resize(Mesh.ARRAY_MAX)
+	arrays[Mesh.ARRAY_VERTEX] = verts
+	arrays[Mesh.ARRAY_NORMAL] = norms
+	arrays[Mesh.ARRAY_TEX_UV] = uvs
+	arrays[Mesh.ARRAY_TEX_UV2] = uv2s
+	arrays[Mesh.ARRAY_COLOR] = cols
+	_bevel_box = ArrayMesh.new()
+	_bevel_box.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
+	return _bevel_box
+
+
+## A flat polygon of the bevelled box as a fan of triangles, each wound to be
+## seen from `normal`'s side (clockwise from outside is Godot's front: the
+## rule PieceMeshes._tri_n keeps). Where a corner really is decides the
+## winding: tried on a 1 m box with a 0.1 m bevel.
+static func _box_poly(out: Array, pts: Array, normal: Vector3, facet: float) -> void:
+	var at := func(p: Array) -> Vector3:
+		var sgn: Vector3 = p[0]
+		var mask: int = p[1]
+		var q := sgn * 0.5
+		if mask & 1:
+			q.x -= sgn.x * 0.1
+		if mask & 2:
+			q.y -= sgn.y * 0.1
+		if mask & 4:
+			q.z -= sgn.z * 0.1
+		return q
+	for i in range(1, pts.size() - 1):
+		var tri: Array = [pts[0], pts[i], pts[i + 1]]
+		var a: Vector3 = at.call(tri[0])
+		if ((at.call(tri[1]) as Vector3) - a).cross((at.call(tri[2]) as Vector3) - a).dot(normal) > 0.0:
+			tri = [tri[0], tri[2], tri[1]]
+		for p in tri:
+			out.append([p[0], p[1], normal, facet])
+
+
+## A boxed band's turn (_visit): bevelled inside `radius`, under the cap's
+## budget of triangles as a chamfered band is.
+func _visit_box(band: Band, dist: float) -> void:
+	var want := enabled and dist < radius + (MARGIN if band.box_bevelled else 0.0)
+	if want and not band.box_bevelled and cap_enabled:
+		var cost := band.box_count * BOX_BEVEL_TRIS
+		if not _fits(_hold_cost, cost, max_tris, _holding) or band.score > _admit_bevel:
+			if band.score < _wait_bevel:
+				_wait_bevel = band.score
+				_wait_bevel_cost = cost
+			capped_bevel += 1
+			want = false
+	if want != band.box_bevelled:
+		_box_bevel(band, want)
+
+
+## Switch a boxed band's MultiMesh between the plain box and the bevelled one.
+## The instances are the same either way: one renderer call, no build.
+func _box_bevel(band: Band, on: bool) -> void:
+	var boxes := band.node.get_node_or_null(^"Boxes") as MultiMeshInstance3D \
+			if is_instance_valid(band.node) else null
+	if boxes == null or boxes.multimesh == null:
+		if band.box_bevelled:
+			chamfered_bands -= 1
+			chamfered_tris -= band.tris
+		band.box_bevelled = false
+		_hold_erase(band.key)
+		return
+	if on == band.box_bevelled:
+		return
+	if on:
+		band.box_plain = boxes.multimesh.mesh
+		boxes.multimesh.mesh = bevel_box_mesh()
+		boxes.set_instance_shader_parameter(&"geo_bevel", 1.0)
+		band.tris = band.box_count * BOX_BEVEL_TRIS
+		_hold_set(band.key, band.tris)
+		_admit_bevel = INF
+		chamfered_bands += 1
+		chamfered_tris += band.tris
+		builds += 1
+	else:
+		if band.box_plain != null:
+			boxes.multimesh.mesh = band.box_plain
+		boxes.set_instance_shader_parameter(&"geo_bevel", 0.0)
+		chamfered_bands -= 1
+		chamfered_tris -= band.tris
+		_hold_erase(band.key)
+	band.box_bevelled = on
 
 
 ## Stop: the node is going, or is no longer a band of anything.
@@ -496,7 +646,7 @@ func held_cost() -> Vector2i:
 ## For a gate: whether the band `node` draws is chamfered now.
 func is_near(node: MeshInstance3D) -> bool:
 	var band: Band = _bands.get(node.get_instance_id()) if node != null else null
-	return band != null and band.state == NEAR
+	return band != null and (band.state == NEAR or band.box_bevelled)
 
 
 ## For the gate: chamfered meshes that cast a shadow themselves (x, should be
@@ -575,6 +725,17 @@ func audit() -> Dictionary:
 	var bands := 0
 	for b in _bands.values():
 		var band: Band = b
+		if band.box_bevelled and is_instance_valid(band.node):
+			# A boxed band: what its MultiMesh draws (a dead brick is a zero
+			# matrix) against the bricks its section holds now.
+			var boxes := band.node.get_node_or_null(^"Boxes") as MultiMeshInstance3D
+			if boxes != null and boxes.multimesh != null:
+				bands += 1
+				drawn += _live_boxes(boxes.multimesh.buffer) * BOX_BEVEL_TRIS
+				for entry in world.get_instance_buffers(band.chunk,
+						PackedInt32Array([band.section]), PackedInt64Array()):
+					wanted += _live_boxes((entry as Dictionary).buffer) * BOX_BEVEL_TRIS
+			continue
 		if band.state != NEAR or band.mesh == null:
 			continue
 		bands += 1
@@ -584,6 +745,16 @@ func audit() -> Dictionary:
 				drawn += 1
 		wanted += maxi(world.get_chamfer_expected_triangles(band.chunk, band.section), 0)
 	return {"bands": bands, "drawn": drawn, "wanted": wanted}
+
+
+## Instances of a boxed band's buffer that draw anything: twenty floats each,
+## the first the brick's width, zero for a dead one.
+static func _live_boxes(buf: PackedFloat32Array) -> int:
+	var live := 0
+	for i in range(0, buf.size() - 19, 20):
+		if buf[i] > 0.0:
+			live += 1
+	return live
 
 
 ## For a gate: the studs held now (every band's last fetch, which is what its
@@ -641,6 +812,8 @@ func _visit(key: int, eye: Vector3, now: int, stud_budget: Array) -> void:
 	var nearest := local.clamp(band.box.position, band.box.end)
 	var dist := local.distance_to(nearest) / zoom
 	band.score = _score(dist, xf * nearest)
+	if band.boxed:
+		_visit_box(band, dist)
 
 	var want := enabled and not band.boxed and dist < radius + (MARGIN if band.state != FLAT else 0.0)
 	match band.state:
@@ -815,6 +988,8 @@ func _free_shadow(band: Band) -> void:
 
 
 func _to_flat(band: Band) -> void:
+	if band.boxed and band.box_bevelled:
+		_box_bevel(band, false)
 	match band.state:
 		PENDING:
 			world.drop_chamfer(band.chunk, band.section)
@@ -1176,6 +1351,8 @@ func _forget(key: int) -> void:
 		if is_instance_valid(band.near):
 			band.near.queue_free()
 		_free_shadow(band)
+	if band.boxed and band.box_bevelled:
+		_box_bevel(band, false)
 	_drop_studs(band)
 	_busy.erase(key)
 	_hold_erase(key)

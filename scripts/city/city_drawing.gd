@@ -222,8 +222,9 @@ var far_coarse_remade := 0   ## made again after a hit, while coarse
 ## bricks is 0.26 MB of instances against 6.2 MB of faces (and 30 ms of bake),
 ## and its bands are up the tick it is made bricks, so nothing waits on them.
 ## A hit writes the bands it reached again, the same length (a dead brick is
-## a zero matrix). Not done here: the near tier's chamfered mesh (it is built
-## from the bake; studs are still drawn) and the sway in the wind. A part that
+## a zero matrix). Up close the same instances are drawn with a bevelled box
+## (BrickNear.bevel_box_mesh), where baked bands get a chamfered mesh built
+## from their bake. Not done here: the sway in the wind. A part that
 ## is not a box (a slope, a round brick, a stair) is drawn by its own faces,
 ## on the band's node, made with the band's buffer.
 var instanced_bands := false
@@ -387,7 +388,7 @@ func _apply_boxes(id: int, at: int, chunk: int, entry: Dictionary) -> void:
 	(city._brick_band_meshes[id] as Array)[at] = null
 	(city._brick_band_bytes[id] as Array)[at] = 0
 	if alive > 0:
-		city.brick_near.track_box(node, chunk, at, box)
+		city.brick_near.track_box(node, chunk, at, box, alive)
 	else:
 		city.brick_near.untrack(node)
 	inst_bands += 1
