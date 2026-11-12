@@ -3,6 +3,7 @@
 #include <godot_cpp/classes/ref_counted.hpp>
 #include <godot_cpp/variant/packed_byte_array.hpp>
 #include <godot_cpp/variant/packed_float32_array.hpp>
+#include <godot_cpp/variant/array.hpp>
 #include <godot_cpp/variant/packed_int32_array.hpp>
 #include <godot_cpp/variant/vector3i.hpp>
 
@@ -53,6 +54,15 @@ public:
     int wet_count() const;
     int moving_count() const;
     double total() const;
+    /// The water as a mesh (Docs/Hulls.md 8), in the grid's own metres (a cell
+    /// `stud` square by `plate` high): a top on each wet cell with none over it,
+    /// at its level, and a side toward each passable cell beside it that stands
+    /// lower. [vertices, normals, colours], triangles; a colour's red is its foam:
+    /// a top beside a hole the sea came in at (`inflow_cells`: the cells beside
+    /// those holes) 1, against a wall 0.75, else 0; a side 0.8 at its lip, 0.2 at
+    /// its foot. Empty arrays when nothing is wet enough to draw.
+    /// Was GDScript (SpaceStation._draw_water): up to 70 ms for a flooding boat.
+    Array mesh(float stud, float plate, const PackedInt32Array &inflow_cells) const;
     /// Thin film under `dry` taken away by the flow, all told.
     double get_dried() const { return dried; }
 

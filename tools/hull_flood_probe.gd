@@ -144,6 +144,7 @@ func _process(delta: float) -> bool:
 			_ok("holds: a shut door keeps the room beside it dry", _next_room >= 0
 					and w.in_compartment(_next_room) < 0.5, "%.2f cells in it" % (w.in_compartment(_next_room) if _next_room >= 0 else -1.0))
 			_inside_check("after filling")
+			_mesh_check(w, "a room filled")
 			if _door >= 0:
 				# Opened and kept open: its leaves' own sync would shut it again (nobody
 				# is near it here).
@@ -262,3 +263,88 @@ func _hole() -> bool:
 	_ok("a hole low in its hull, its room breached", air.is_breached(_room),
 			"the hole at %.2f m, the water at %.2f, a door to another room %s" % [_hole_y, _level, str(_door >= 0)])
 	return true
+
+
+## The water's mesh as the script built it before HullFlow.mesh (C++) did
+## (SpaceStation._draw_water, to 2026-11-11): what the C++ is held to.
+func _mesh_ref(hw: HullWater) -> Array:
+	var stud := BrickWorld.get_stud_metres()
+	var plate := BrickWorld.get_plate_metres()
+	var v := PackedVector3Array()
+	var nrm := PackedVector3Array()
+	var col := PackedColorArray()
+	var dims := hw.air.dims
+	var sy := dims.x
+	# Cells beside a hole the sea comes in at: the most foam.
+	# (HullWater.inflow: the holes water came in at, its last step.)
+	var inflow := {}
+	for b: int in hw.inflow:
+		for j in hw.air._neighbours(b):
+			inflow[j] = true
+	for i: int in hw.wet:
+		var w := hw.level(i)
+		if w < 0.02:
+			continue
+		var c := hw.air._cell(i)
+		var x0 := c.x * stud
+		var z0 := c.z * stud
+		var y0 := c.y * plate
+		var y1 := y0 + w * plate
+		var above := i + sy
+		if c.y + 1 >= dims.y or hw.level(above) < 0.02:
+			var walls := 0
+			for o in [Vector3i(1, 0, 0), Vector3i(-1, 0, 0), Vector3i(0, 0, 1), Vector3i(0, 0, -1)]:
+				var nc: Vector3i = c + o
+				if not hw.air._in(nc) or not hw.passable(hw.air._idx(nc)):
+					walls += 1
+			var f := 1.0 if inflow.has(i) else (0.75 if walls > 0 else 0.0)
+			v.append_array([Vector3(x0, y1, z0), Vector3(x0 + stud, y1, z0), Vector3(x0 + stud, y1, z0 + stud),
+					Vector3(x0, y1, z0), Vector3(x0 + stud, y1, z0 + stud), Vector3(x0, y1, z0 + stud)])
+			for k in 6:
+				nrm.append(Vector3.UP)
+				col.append(Color(f, 0.0, 0.0))
+		for e: Array in [[Vector3i(1, 0, 0), x0 + stud, true], [Vector3i(-1, 0, 0), x0, true],
+				[Vector3i(0, 0, 1), z0 + stud, false], [Vector3i(0, 0, -1), z0, false]]:
+			var nc: Vector3i = c + (e[0] as Vector3i)
+			if not hw.air._in(nc):
+				continue
+			var ni := hw.air._idx(nc)
+			if not hw.passable(ni) or hw.level(ni) >= w - 0.02:
+				continue
+			var at: float = e[1]
+			if bool(e[2]):
+				v.append_array([Vector3(at, y0, z0), Vector3(at, y1, z0), Vector3(at, y1, z0 + stud),
+						Vector3(at, y0, z0), Vector3(at, y1, z0 + stud), Vector3(at, y0, z0 + stud)])
+			else:
+				v.append_array([Vector3(x0, y0, at), Vector3(x0, y1, at), Vector3(x0 + stud, y1, at),
+						Vector3(x0, y0, at), Vector3(x0 + stud, y1, at), Vector3(x0 + stud, y0, at)])
+			# The lip foams at its top, clear below.
+			var out := Vector3(e[0] as Vector3i)
+			for f in [0.2, 0.8, 0.8, 0.2, 0.8, 0.2]:
+				nrm.append(out)
+				col.append(Color(f, 0.0, 0.0))
+	return [v, nrm, col]
+
+
+## HullFlow.mesh against the script it replaced, and what each costs.
+func _mesh_check(w: HullWater, what: String) -> void:
+	var inflow := PackedInt32Array()
+	for b: int in w.inflow:
+		inflow.append_array(w.air._neighbours(b))
+	var t0 := Time.get_ticks_usec()
+	var ref := _mesh_ref(w)
+	var t1 := Time.get_ticks_usec()
+	var got: Array = w.flow.mesh(BrickWorld.get_stud_metres(), BrickWorld.get_plate_metres(), inflow)
+	var t2 := Time.get_ticks_usec()
+	var gv: PackedVector3Array = got[0]
+	var rv: PackedVector3Array = ref[0]
+	var same := gv.size() == rv.size() and gv.size() > 0
+	var worst := 0.0
+	if same:
+		for k in gv.size():
+			worst = maxf(worst, gv[k].distance_to(rv[k]))
+			worst = maxf(worst, (got[1][k] as Vector3).distance_to(ref[1][k]))
+			worst = maxf(worst, absf((got[2][k] as Color).r - (ref[2][k] as Color).r))
+	_ok("mesh: the water meshed in C++ is the script's, vertex for vertex (%s)" % what,
+			same and worst < 1e-4, "%d vertices against %d, worst %.6f off; C++ %.2f ms, the script %.2f ms" % [
+			gv.size(), rv.size(), worst, (t2 - t1) / 1000.0, (t1 - t0) / 1000.0])

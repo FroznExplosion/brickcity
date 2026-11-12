@@ -1,6 +1,10 @@
 #include "hull_flow.h"
 
 #include <godot_cpp/core/class_db.hpp>
+#include <godot_cpp/variant/color.hpp>
+#include <godot_cpp/variant/packed_color_array.hpp>
+#include <godot_cpp/variant/packed_vector3_array.hpp>
+#include <godot_cpp/variant/vector3.hpp>
 
 #include <algorithm>
 #include <cmath>
@@ -227,6 +231,97 @@ double HullFlow::total() const {
     return t;
 }
 
+Array HullFlow::mesh(float stud, float plate, const PackedInt32Array &inflow_cells) const {
+    const float MIN = 0.02f;
+    PackedVector3Array v;
+    PackedVector3Array nrm;
+    PackedColorArray col;
+    std::vector<uint8_t> in(fill.size(), 0);
+    for (int k = 0; k < inflow_cells.size(); ++k) {
+        const int i = inflow_cells[k];
+        if (i >= 0 && (size_t)i < in.size()) {
+            in[i] = 1;
+        }
+    }
+    const int sy = dims.x;
+    const int sz = dims.x * dims.y;
+    // Aside: x+, x-, z+, z-.
+    const int dx[4] = { 1, -1, 0, 0 };
+    const int dz[4] = { 0, 0, 1, -1 };
+    const float lip[6] = { 0.2f, 0.8f, 0.8f, 0.2f, 0.8f, 0.2f };
+    for (int32_t i : wet_list) {
+        const float w = std::min(fill[i], 1.0f);
+        if (w < MIN) {
+            continue;
+        }
+        const int cx = i % sy;
+        const int cy = (i / sy) % dims.y;
+        const int cz = i / sz;
+        const float x0 = cx * stud;
+        const float z0 = cz * stud;
+        const float y0 = cy * plate;
+        const float y1 = y0 + w * plate;
+        int ni[4];
+        for (int k = 0; k < 4; ++k) {
+            const int nx = cx + dx[k];
+            const int nz = cz + dz[k];
+            ni[k] = (nx < 0 || nz < 0 || nx >= dims.x || nz >= dims.z) ? -1 : i + dx[k] + dz[k] * sz;
+        }
+        if (cy + 1 >= dims.y || std::min(fill[i + sy], 1.0f) < MIN) {
+            int walls = 0;
+            for (int k = 0; k < 4; ++k) {
+                if (ni[k] < 0 || !pass[ni[k]]) {
+                    ++walls;
+                }
+            }
+            const float f = in[i] ? 1.0f : (walls > 0 ? 0.75f : 0.0f);
+            v.push_back(Vector3(x0, y1, z0));
+            v.push_back(Vector3(x0 + stud, y1, z0));
+            v.push_back(Vector3(x0 + stud, y1, z0 + stud));
+            v.push_back(Vector3(x0, y1, z0));
+            v.push_back(Vector3(x0 + stud, y1, z0 + stud));
+            v.push_back(Vector3(x0, y1, z0 + stud));
+            for (int k = 0; k < 6; ++k) {
+                nrm.push_back(Vector3(0, 1, 0));
+                col.push_back(Color(f, 0.0f, 0.0f));
+            }
+        }
+        for (int k = 0; k < 4; ++k) {
+            const int n = ni[k];
+            if (n < 0 || !pass[n] || std::min(fill[n], 1.0f) >= w - MIN) {
+                continue;
+            }
+            if (dx[k] != 0) {
+                const float at = dx[k] > 0 ? x0 + stud : x0;
+                v.push_back(Vector3(at, y0, z0));
+                v.push_back(Vector3(at, y1, z0));
+                v.push_back(Vector3(at, y1, z0 + stud));
+                v.push_back(Vector3(at, y0, z0));
+                v.push_back(Vector3(at, y1, z0 + stud));
+                v.push_back(Vector3(at, y0, z0 + stud));
+            } else {
+                const float at = dz[k] > 0 ? z0 + stud : z0;
+                v.push_back(Vector3(x0, y0, at));
+                v.push_back(Vector3(x0, y1, at));
+                v.push_back(Vector3(x0 + stud, y1, at));
+                v.push_back(Vector3(x0, y0, at));
+                v.push_back(Vector3(x0 + stud, y1, at));
+                v.push_back(Vector3(x0 + stud, y0, at));
+            }
+            const Vector3 out((float)dx[k], 0.0f, (float)dz[k]);
+            for (int j = 0; j < 6; ++j) {
+                nrm.push_back(out);
+                col.push_back(Color(lip[j], 0.0f, 0.0f));
+            }
+        }
+    }
+    Array a;
+    a.push_back(v);
+    a.push_back(nrm);
+    a.push_back(col);
+    return a;
+}
+
 void HullFlow::_bind_methods() {
     ClassDB::bind_method(D_METHOD("setup", "dims"), &HullFlow::setup);
     ClassDB::bind_method(D_METHOD("set_passable", "state", "inside_state", "open_door_cells"), &HullFlow::set_passable);
@@ -243,4 +338,5 @@ void HullFlow::_bind_methods() {
     ClassDB::bind_method(D_METHOD("moving_count"), &HullFlow::moving_count);
     ClassDB::bind_method(D_METHOD("total"), &HullFlow::total);
     ClassDB::bind_method(D_METHOD("get_dried"), &HullFlow::get_dried);
+    ClassDB::bind_method(D_METHOD("mesh", "stud", "plate", "inflow_cells"), &HullFlow::mesh);
 }
