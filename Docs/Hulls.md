@@ -383,6 +383,16 @@ cell gets sides toward a lower neighbour. It is rebuilt only when the water move
 * Gate: `hull_flood_probe` (+1: a jet at the hole, pointing in, while the room fills). Shot
   `hull_boat_flooded`.
 
+### 8.3 Built (2026-11-12): the inside water meshed in C++
+
+`HullFlow.mesh(stud, plate, inflow_cells)` builds what `SpaceStation._draw_water` built in
+script: the same tops, sides and foam. `hull_flood_probe` 12 (+1 "mesh") holds it to the old
+script, kept in the probe as `_mesh_ref`: 876 vertices, vertex for vertex, 0.08 ms against
+2.84 ms. In the boat pass (windowed, another chat's headless probes going, so a rough figure)
+the worst drawing went from 70.5 to 23.8 ms. **Not yet looked at:** what the 23.8 ms is. The
+first drawing makes the node and its shader material; the rest is the `ArrayMesh` made anew
+each time. The step's worst (9.0 ms) is script too: the holes and the spray.
+
 ## 7. Floating, listing, sinking
 
 - The ship is already one rigid body. Buoyancy adds a force at **sample points per section**

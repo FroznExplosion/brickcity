@@ -1338,61 +1338,16 @@ func _draw_water() -> void:
 		water_mesh.material_override = m
 		water_mesh.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 		_brick_node.add_child(water_mesh)
-	var stud := BrickWorld.get_stud_metres()
-	var plate := BrickWorld.get_plate_metres()
-	var v := PackedVector3Array()
-	var nrm := PackedVector3Array()
-	var col := PackedColorArray()
-	var dims := air.dims
-	var sy := dims.x
 	# Cells beside a hole the sea comes in at: the most foam.
 	# (HullWater.inflow: the holes water came in at, its last step.)
-	var inflow := {}
+	var inflow := PackedInt32Array()
 	for b: int in hull_water.inflow:
-		for j in air._neighbours(b):
-			inflow[j] = true
-	for i: int in hull_water.wet:
-		var w := hull_water.level(i)
-		if w < 0.02:
-			continue
-		var c := air._cell(i)
-		var x0 := c.x * stud
-		var z0 := c.z * stud
-		var y0 := c.y * plate
-		var y1 := y0 + w * plate
-		var above := i + sy
-		if c.y + 1 >= dims.y or hull_water.level(above) < 0.02:
-			var walls := 0
-			for o in [Vector3i(1, 0, 0), Vector3i(-1, 0, 0), Vector3i(0, 0, 1), Vector3i(0, 0, -1)]:
-				var nc: Vector3i = c + o
-				if not air._in(nc) or not hull_water.passable(air._idx(nc)):
-					walls += 1
-			var f := 1.0 if inflow.has(i) else (0.75 if walls > 0 else 0.0)
-			v.append_array([Vector3(x0, y1, z0), Vector3(x0 + stud, y1, z0), Vector3(x0 + stud, y1, z0 + stud),
-					Vector3(x0, y1, z0), Vector3(x0 + stud, y1, z0 + stud), Vector3(x0, y1, z0 + stud)])
-			for k in 6:
-				nrm.append(Vector3.UP)
-				col.append(Color(f, 0.0, 0.0))
-		for e: Array in [[Vector3i(1, 0, 0), x0 + stud, true], [Vector3i(-1, 0, 0), x0, true],
-				[Vector3i(0, 0, 1), z0 + stud, false], [Vector3i(0, 0, -1), z0, false]]:
-			var nc: Vector3i = c + (e[0] as Vector3i)
-			if not air._in(nc):
-				continue
-			var ni := air._idx(nc)
-			if not hull_water.passable(ni) or hull_water.level(ni) >= w - 0.02:
-				continue
-			var at: float = e[1]
-			if bool(e[2]):
-				v.append_array([Vector3(at, y0, z0), Vector3(at, y1, z0), Vector3(at, y1, z0 + stud),
-						Vector3(at, y0, z0), Vector3(at, y1, z0 + stud), Vector3(at, y0, z0 + stud)])
-			else:
-				v.append_array([Vector3(x0, y0, at), Vector3(x0, y1, at), Vector3(x0 + stud, y1, at),
-						Vector3(x0, y0, at), Vector3(x0 + stud, y1, at), Vector3(x0 + stud, y0, at)])
-			# The lip foams at its top, clear below.
-			var out := Vector3(e[0] as Vector3i)
-			for f in [0.2, 0.8, 0.8, 0.2, 0.8, 0.2]:
-				nrm.append(out)
-				col.append(Color(f, 0.0, 0.0))
+		inflow.append_array(air._neighbours(b))
+	# Meshed in C++ (HullFlow.mesh): in script a flooding boat's was up to 70 ms.
+	var built: Array = hull_water.flow.mesh(BrickWorld.get_stud_metres(), BrickWorld.get_plate_metres(), inflow)
+	var v: PackedVector3Array = built[0]
+	var nrm: PackedVector3Array = built[1]
+	var col: PackedColorArray = built[2]
 	if v.is_empty():
 		water_mesh.mesh = null
 		return
