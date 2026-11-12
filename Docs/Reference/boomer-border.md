@@ -71,7 +71,7 @@ here once copied:
   sizes in studs and plates (D6).
 - **Guns must also hurt bricks.** Add one mapping, in one place, from gun stats to the structural
   hit (`apply_hit` radius and energy) alongside the elemental damage.
-- **Collision layers** go through `Layers` (`scripts/layers.gd`), never as literals.
+- **Collision layers** go through `Layers` (`scripts/core/layers.gd`), never as literals.
 - **`EntityTime`** comes with it (`scripts/core/entity_time.gd`), and the rule that nothing uses
   `Engine.time_scale`.
 

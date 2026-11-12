@@ -13,7 +13,7 @@
 
 using namespace godot;
 
-/// The bookkeeping half of an ImpostorLod (scripts/impostor_lod.gd,
+/// The bookkeeping half of an ImpostorLod (scripts/render/impostor_lod.gd,
 /// Docs/Impostors.md 3.3, 8): every copy's transform, whether its owner wants
 /// it drawn, which tier it is in, and which CHUNK-metre square holds it.
 ///

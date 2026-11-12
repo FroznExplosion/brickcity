@@ -2,7 +2,7 @@
 
 Where content lives, and how a mod or a DLC adds to it without touching the
 game's folders. Code: `scripts/core/content_packs.gd` (`ContentPacks`). Probe:
-`tools/content_packs_probe.gd`.
+`tools/probes/content_packs_probe.gd`.
 
 ## 1. The rule
 
@@ -190,12 +190,7 @@ Models and print files are in `Documents\brickcity-print`, outside the project.
 every chat's branch, so they want a quiet moment):
 
 1. ~~`user://` is flat.~~ Done: section 10.
-2. **`scripts/` has 121 files at its top and `tools/` 255.** The top of
-   `scripts/` is mostly four groups that already have a name: build/workshop,
-   terrain and water, rooms and interiors, rendering. `tools/` mixes probes,
-   generators (`make_*`), the brickify Python and look tools. Scripts find each
-   other by `class_name`, so moving them is safe for code; it is the forty open
-   worktrees that make it costly.
+2. ~~`scripts/` has 121 files at its top and `tools/` 255.~~ Done: section 11.
 3. **`Docs/Parts/standards.json` is game data in the docs folder.** The game
    reads it at run time (`PartStandards`), and so do the Python print tools, so
    it stayed. It belongs in `content/base/data/`.
@@ -208,12 +203,12 @@ every chat's branch, so they want a quiet moment):
 6. **`addons/zylann.voxel` (13 MB)** is used only by the planet graph
    (`scripts/planet/planet_body.gd`, `planet_graph.gd`, `planet_walker.gd`).
    Fine while that is so; worth knowing it is the whole reason it is here.
-7. `scripts/upload_ledger.gd.uid` and `tools/flashlight_probe.gd.uid` are
+7. `scripts/render/upload_ledger.gd.uid` and `tools/probes/flashlight_probe.gd.uid` are
    untracked in the main folder: their scripts were committed without them.
 
 ## 10. The player's folder
 
-`scripts/core/user_paths.gd` (`UserPaths`). Probe: `tools/user_paths_probe.gd`.
+`scripts/core/user_paths.gd` (`UserPaths`). Probe: `tools/probes/user_paths_probe.gd`.
 
 ```
 user://
@@ -248,3 +243,42 @@ user://
 - Until a branch has merged this, its game reads the OLD folders, which are
   now empty: its workshop will not list the player's builds. Merging main
   fixes it; nothing is lost.
+
+## 11. Where a script goes
+
+Sorted 2026-11-11: 359 files moved, none renamed. Scripts find each other by
+`class_name`, so no code changed; the paths in scenes, `project.godot`,
+`load()` calls and docs were rewritten with the move.
+
+```
+scripts/
+  city_scene.gd    the city scene (stayed: its scene file had edits in progress)
+  build/           parts, recipes, placing: brick_palette, build_recipe, tower_recipe ...
+  workshop/        both workshops, their menus, tools, the asset catalogue
+  rooms/           rooms, generators, furnishing, interiors
+  city/            buildings standing: registry, collision, shells, world authority
+  destruction/     islands, crumbs, strength, collapse
+  terrain/  water/
+  render/          materials, light, impostors, weather, debug views
+  core/            clocks, paths (ContentPacks, UserPaths), layers, cameras, test window
+  ai/ combat/ guns/ loot/ mech/ parts/ pawn/ planet/ space/ hulls/ disasters/ ...
+tools/
+  probes/          every *_probe.gd
+  shots/           pictures and tables: *_shot, *_look, gun_stat_table ...
+  make/            generators that write shipped content: make_*, part_sheets
+  brickify/        the Python model-to-brick tools
+  city_passes.gd, planet_passes.gd, planet_gates.gd, ai_arena.gd and the
+  planet_* / *_module_kit helpers a scene loads; heat_log.ps1, heat_sum.py
+```
+
+A probe is now run as `--script res://tools/probes/<name>_probe.gd`.
+
+A branch cut before this still merges: git follows a moved file, so an edit to
+`scripts/room.gd` lands in `scripts/rooms/room.gd`. A NEW file such a branch
+added at the old top level stays there and still works; move it when seen.
+After merging, run `--import` once (a first import may report the old
+`scripts/test_window.gd` once, from the cache).
+
+Still mixed, left for their areas: `tools/planet_*.gd` and the two
+`*_module_kit.gd` are game code a scene loads, not tools; `test/`, `fx/` and
+`autoload/` at the top level belong under `scripts/` or `tools/`.

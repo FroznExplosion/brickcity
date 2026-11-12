@@ -39,11 +39,26 @@ change in another area is that area's job.
 
 | Area | Owns |
 |---|---|
-| Build mode | `scripts/workshop*.gd`, `city_placer.gd`, `brick_palette.gd`, `shaped_parts.gd`, `build_recipe.gd`, `build_shell.gd`, `staircase_recipe.gd`, materials (`brick_materials.gd`, `shaders/brick*.gdshader*`, the material tables in `brick_grid.h`, `textures/`), `Docs/Parts/`, `content/base/builds/` |
-| Terrain and water | `brick_terrain.*`, `terrain_*.gd`, `water_*.gd`, `underwater.gd`, `heightfield_*`, `shaders/terrain*`, `shaders/water*` |
+| Build mode | `scripts/workshop/`, `scripts/build/`, materials (`scripts/render/brick_materials.gd`, `shaders/brick*.gdshader*`, the material tables in `brick_grid.h`, `textures/`), `Docs/Parts/`, `content/base/builds/` |
+| Terrain and water | `brick_terrain.*`, `scripts/terrain/`, `scripts/water/`, `heightfield_*`, `shaders/terrain*`, `shaders/water*` |
 | Weapons and effects | `weapons/`, `fx/`, `autoload/`, `loot/` |
-| Disasters | `scripts/disasters/`, `shaders/disaster_*`, `tools/disaster_probe.gd`, `Docs/Disasters.md` |
-| City and buildings (shared) | `city_scene.gd`, `building_registry.gd`, `tower_recipe.gd`, `room*.gd`, `island_manager.gd` — small changes by anyone, merged soon |
+| Disasters | `scripts/disasters/`, `shaders/disaster_*`, `tools/probes/disaster_probe.gd`, `Docs/Disasters.md` |
+| City and buildings (shared) | `scripts/city_scene.gd`, `scripts/city/`, `scripts/rooms/`, `scripts/destruction/`, `scripts/build/tower_recipe.gd` — small changes by anyone, merged soon |
+
+## Where a script goes
+
+No loose files at the top of `scripts/` or `tools/` (only `city_scene.gd`
+and the scene helpers the passes load are there). A new script goes in the
+folder of what it is part of:
+
+- `scripts/`: `build/` (parts, recipes, placing), `workshop/`, `rooms/`,
+  `city/`, `destruction/`, `terrain/`, `water/`, `render/` (materials, light,
+  impostors, debug views), `core/` (clocks, paths, layers, cameras), and the
+  feature folders (`ai/`, `guns/`, `planet/`, `space/` ...).
+- `tools/`: `probes/` (every `*_probe.gd`), `shots/` (pictures and tables),
+  `make/` (generators that write shipped content).
+- Scripts find each other by `class_name`, so a move breaks no code; a path
+  in a `.tscn`, `project.godot`, `load()` or a doc must be changed with it.
 
 ## Where content goes
 
@@ -95,7 +110,7 @@ The engine library is **not committed**; each worktree builds its own.
 ## Testing
 
 - Console Godot: `C:\Users\lbaun\Downloads\godot_bin_tmp\Godot_v4.6.2-stable_win64_console.exe`.
-- Probes: `--headless --path . --script res://tools/<name>_probe.gd` (build mode:
+- Probes: `--headless --path . --script res://tools/probes/<name>_probe.gd` (build mode:
   `place_probe`, `city_place_probe`, `palette_probe`, `shaped_probe`, `scale_probe`,
   `wood_probe` (materials; Docs/PbrWood.md);
   the workshop gate: `--path . res://scenes/workshop.tscn -- --gate`).
@@ -151,7 +166,7 @@ to do all three, and Escape (their way out) paused the pass.
   the game window there could not be clicked into.
 - With it, every window that worktree opens: never takes the keyboard, never
   captures the mouse, opens as a title bar in the bottom right corner and is
-  off the screen about three seconds later (`scripts/test_window.gd`), and
+  off the screen about three seconds later (`scripts/core/test_window.gd`), and
   draws at 1280x720. It is still drawn there; screenshots are as before.
 - **Do not pass `--resolution`.** It makes the window full size while the
   engine starts, in the corner but large. The test window sizes itself.

@@ -18,7 +18,7 @@ shots/
 
 # A worktree that runs tests keeps its window off the screen and out of the
 # user's keyboard and mouse with this (CLAUDE.md, "Testing";
-# scripts/test_window.gd). Per checkout, and NEVER in the main folder: it
+# scripts/core/test_window.gd). Per checkout, and NEVER in the main folder: it
 # would make the game's own window unfocusable.
 /override.cfg
 

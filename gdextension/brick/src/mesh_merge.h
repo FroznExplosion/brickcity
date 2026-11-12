@@ -12,7 +12,7 @@
 
 using namespace godot;
 
-/// Many surfaces into one mesh, transformed (scripts/recipe_mesh.gd).
+/// Many surfaces into one mesh, transformed (scripts/build/recipe_mesh.gd).
 ///
 /// A build recipe -- a tree, an item -- is meshed as its frames' chunk
 /// meshes plus one stud mesh a stud, merged into a single ArrayMesh for

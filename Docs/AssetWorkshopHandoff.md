@@ -20,12 +20,12 @@ marked smooth; **Edit as SDF** goes back 1:1. One sample a tick: a stud is 5, a 
 
 | File | What |
 |---|---|
-| `scripts/asset_workshop.gd` | the workshop (huge). Sculpt input `_sculpt_input`, `sculpt_convert`, models, size marks, game view: search "Round 4" and "Models as objects" |
-| `scripts/asset_sculpt.gd` | `AssetSculpt`: a field drawn (block meshes, cursor, ghosts). The block-out is one; each model object is another |
-| `scripts/model_mesh.gd` | `ModelMesh`: reads glTF/GLB/FBX (skinned meshes posed by hand), OBJ, STL; `read_pieces` |
-| `scripts/model_gizmo.gd` | `ModelGizmo`: arrows move, rings turn, cube resizes (2x per 200 px) |
-| `scripts/fit_kit.gd` | `FitKit`: slopes/wedges/curves sampled for `SdfForm.fit_pieces`; `mirror_name` |
-| `tools/asset_workshop_probe.gd` | 296 checks; `tools/sdf_form_probe.gd` 43 |
+| `scripts/workshop/asset_workshop.gd` | the workshop (huge). Sculpt input `_sculpt_input`, `sculpt_convert`, models, size marks, game view: search "Round 4" and "Models as objects" |
+| `scripts/workshop/asset_sculpt.gd` | `AssetSculpt`: a field drawn (block meshes, cursor, ghosts). The block-out is one; each model object is another |
+| `scripts/workshop/model_mesh.gd` | `ModelMesh`: reads glTF/GLB/FBX (skinned meshes posed by hand), OBJ, STL; `read_pieces` |
+| `scripts/workshop/model_gizmo.gd` | `ModelGizmo`: arrows move, rings turn, cube resizes (2x per 200 px) |
+| `scripts/build/fit_kit.gd` | `FitKit`: slopes/wedges/curves sampled for `SdfForm.fit_pieces`; `mirror_name` |
+| `tools/probes/asset_workshop_probe.gd` | 296 checks; `tools/probes/sdf_form_probe.gd` 43 |
 
 ## Built, newest first
 

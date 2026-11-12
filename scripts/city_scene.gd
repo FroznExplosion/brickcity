@@ -29,7 +29,7 @@ const BLAST_STEP := 1.2
 
 ## The grid, from the palette rather than typed in again. The city used to
 ## write 0.35 and 0.14 inline some twenty times; right every time, and one
-## grid change from being wrong in twenty places. tools/scale_probe.gd.
+## grid change from being wrong in twenty places. tools/probes/scale_probe.gd.
 const STUD := BrickPalette.STUD_M
 const PLATE := BrickPalette.PLATE_M
 
@@ -684,7 +684,7 @@ const TERRAIN_NEAR_TILES := 4
 # Preloaded rather than named: a brand new `class_name` is not in the global
 # class cache until the editor has scanned for it, and a headless run of this
 # scene must not depend on that having happened.
-const TerrainCoarseScript := preload("res://scripts/terrain_coarse.gd")
+const TerrainCoarseScript := preload("res://scripts/terrain/terrain_coarse.gd")
 var _terrain_coarse: TerrainCoarseScript = null
 var _terrain_mat: ShaderMaterial = null
 ## Kept so terrain mode can drop it, and so the baked sun shadow can be taken
@@ -694,8 +694,8 @@ var _sun: DirectionalLight3D = null
 ## The world the city is cut into: seed, sea and the SITES its buildings stand
 ## on (Docs/Terrain.md §21.5). `worlds/city.json`, or `big_city.json` with
 ## --big; `-- --world=<name>` picks another. A missing file is the street grid.
-const TerrainWorldScript := preload("res://scripts/terrain_world.gd")
-const WaterSeaScript := preload("res://scripts/water_sea.gd")
+const TerrainWorldScript := preload("res://scripts/terrain/terrain_world.gd")
+const WaterSeaScript := preload("res://scripts/water/water_sea.gd")
 ## How much of the ground round the city is under water (TerrainWorld's
 ## drowned fraction), for a city with no world file yet. A fifth puts the sea
 ## at 10.3 m on this seed: the default city (ground 12.5 m and up) stays dry,
@@ -1247,7 +1247,7 @@ func _ready() -> void:
 	if _build_path != "" and not _checkpoint_restored:
 		_place_build(_build_path)
 	# P picks up a saved workshop build and places it like a brick
-	# (scripts/city_placer.gd); what it places goes through the same
+	# (scripts/build/city_placer.gd); what it places goes through the same
 	# index-and-shell path as `_place_build`.
 	_placer = CityPlacer.new()
 	_placer.name = "Placer"
@@ -1775,7 +1775,7 @@ func _build_terrain_coarse() -> void:
 # ground and sea. What it asks of a host is in its header; the detail square
 # follows the camera here too, so Freeze LOD and Detail radius are offered.
 
-const TerrainDevMenu := preload("res://scripts/terrain_dev_menu.gd")
+const TerrainDevMenu := preload("res://scripts/terrain/terrain_dev_menu.gd")
 var _terrain_dev_menu = null
 var _lod_debug := false
 var _lod_frozen := false
@@ -1869,7 +1869,7 @@ func rebuild_far() -> void:
 # its pad, so the site tool and site pads are locked (`sites: false`) --
 # those are edited in heightfield_test with `-- --world=city`.
 
-const TerrainEditTools := preload("res://scripts/terrain_editor.gd")
+const TerrainEditTools := preload("res://scripts/terrain/terrain_editor.gd")
 var _terrain_editor = null
 var _edit_mode := false
 
@@ -6327,7 +6327,7 @@ func _physics_process(_delta: float) -> void:
 		# Stress, then balance, then what has come loose -- one call, which
 		# walks the building's joints once where the three calls walked them
 		# three times, and answers exactly as they did (BrickWorld.solve_structure,
-		# tools/solve_probe.gd).
+		# tools/probes/solve_probe.gd).
 		var solve: Dictionary
 		if not early.is_empty():
 			solve = early

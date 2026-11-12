@@ -11,8 +11,8 @@ baked vertex buffer on a distance test. Both objections were right about the mes
 
 Files: `gdextension/brick/src/brick_world.cpp` (`bake_faces_into`, `chamfer_faces_into`,
 `chamfer_section_async` and friends), `brick_types.h` (`FaceBake::edge`, `FaceBake::floors`,
-`EDGE_*`), `scripts/brick_near.gd`, `shaders/brick.gdshader` (`geo_bevel`),
-`tools/brick_bevel_gap_probe.gd`, `tools/brick_bevel_probe.gd`, the city's `-- --chamfer` pass.
+`EDGE_*`), `scripts/render/brick_near.gd`, `shaders/brick.gdshader` (`geo_bevel`),
+`tools/probes/brick_bevel_gap_probe.gd`, `tools/probes/brick_bevel_probe.gd`, the city's `-- --chamfer` pass.
 
 ---
 
@@ -189,7 +189,7 @@ needs `Chunk::occupancy`) and `chamfer_faces_into` draws them with the box that 
 
 Cost: the bevel probe's chunk, 35,232 triangles to 38,260 (+8.6%). The gap probe looks straight
 into the T's and crosses of a wall one brick thick against a magenta backdrop: 6,048 and 11,232
-pixels through without posts, none with. `tools/bevel_corner_shot.gd --layout=wall|checker` shows
+pixels through without posts, none with. `tools/shots/bevel_corner_shot.gd --layout=wall|checker` shows
 them with the bevel blown up.
 
 ## 3. The near tier (`BrickNear`)
@@ -367,8 +367,8 @@ the drawn seam was there to stop.
 
 | | |
 |---|---|
-| `tools/brick_bevel_gap_probe.gd` (not headless) | A magenta core inside every brick, a centimetre in from each face; counted over 280 close views of a tower, the tower shot through, a room's inside corners, the room shot through, a heap of every palette part, and the heap with three bricks in ten gone. A view may show `LONE_PIXELS` (8) and no more. Flat mesh: 39 / 34 / 19 / 7 / 19 / 30 pixels in all (rasteriser cracks, one to four a view). Chamfered, square inside corners (2026-10-16): 23 / 33 / 16 / 33 / 12 / 20, worst view 7 (they were 20 / 19 / 9 / 27 / 14 / 19 bevelled). `GAP_WHERE=1` names the cell and parts behind each view's worst patch. Writes `shots/brick_bevel_off.png` and `_on.png`. |
-| `tools/brick_bevel_probe.gd` (headless) | Bands add up to the chunk; every triangle faces its normal; a hit's patches give exactly a fresh build; a stale bake is refused; studs band by band are the chunk's and follow the workshop's rule. |
+| `tools/probes/brick_bevel_gap_probe.gd` (not headless) | A magenta core inside every brick, a centimetre in from each face; counted over 280 close views of a tower, the tower shot through, a room's inside corners, the room shot through, a heap of every palette part, and the heap with three bricks in ten gone. A view may show `LONE_PIXELS` (8) and no more. Flat mesh: 39 / 34 / 19 / 7 / 19 / 30 pixels in all (rasteriser cracks, one to four a view). Chamfered, square inside corners (2026-10-16): 23 / 33 / 16 / 33 / 12 / 20, worst view 7 (they were 20 / 19 / 9 / 27 / 14 / 19 bevelled). `GAP_WHERE=1` names the cell and parts behind each view's worst patch. Writes `shots/brick_bevel_off.png` and `_on.png`. |
+| `tools/probes/brick_bevel_probe.gd` (headless) | Bands add up to the chunk; every triangle faces its normal; a hit's patches give exactly a fresh build; a stale bake is refused; studs band by band are the chunk's and follow the workshop's rule. |
 | `city.tscn -- --chamfer` | A wall a metre and a half off is chamfered and studded; after a hit the bands' index buffers, read back, draw exactly the bricks left; at a hundred metres nothing is held and the picture is the same either way. |
 | `city.tscn -- --chamfer --cost [--no-near \| --no-studs \| --no-bevel]` | Frame times, and the renderer's own CPU and GPU time, beside a building while it is shot at and brought down. A timing run. |
 

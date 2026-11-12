@@ -37,7 +37,7 @@ const ARCHETYPES: Dictionary[StringName, Dictionary] = {
 ## common pistol (10.3 a shot, before modifiers) kills it in 6 body shots and 3
 ## headshots; a legendary with no modifiers still takes 6; one +20% damage modifier makes
 ## it 5, two make it 4 body and 2 head. Every row holds for 57.7-61.8 hp; 60 sits in the
-## middle. tools/combat_numbers_probe.gd holds it. (v1, with a wider hidden roll: 64.)
+## middle. tools/probes/combat_numbers_probe.gd holds it. (v1, with a wider hidden roll: 64.)
 const TRASH_BASE_HP := 60.0
 
 

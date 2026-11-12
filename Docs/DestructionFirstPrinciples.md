@@ -389,7 +389,7 @@ panels found as easily as horizontal ones), and a landing walks it with its ener
 to several pieces in microseconds. Storey units already are its top level, chosen by hand; the
 tree would generalise them to any build.
 
-**How to try it without risk:** a probe first (`tools/strength_tree_probe.gd`, C++ bake in
+**How to try it without risk:** a probe first (`tools/probes/strength_tree_probe.gd`, C++ bake in
 `BrickWorld` behind a new method). Bake the recipe tower and two workshop builds; print the
 top ten cuts; compare with `seam_probe`'s counts (the tower's windows at 112 studs should be
 the first cuts under the 208-stud storey line). Only then route `_snap_across` through it,
@@ -470,8 +470,8 @@ Each of these touches `island_manager.gd` / `brick_world.cpp`, which other chats
 
 ## B6. The strength tree, probed (2026-11-07)
 
-`scripts/strength_tree.gd` (`StrengthTree`, a GDScript prototype nothing in the game calls)
-and `tools/strength_tree_probe.gd` (32 checks, all pass). Joint studs come from block boxes
+`scripts/destruction/strength_tree.gd` (`StrengthTree`, a GDScript prototype nothing in the game calls)
+and `tools/probes/strength_tree_probe.gd` (32 checks, all pass). Joint studs come from block boxes
 (footprint overlap of one block on another), which matches `seam_studs` everywhere the probe
 checks and over-counts masked parts.
 
@@ -562,7 +562,7 @@ Open:
 
 ## B8. Grounding after a small cut, measured (2026-11-07) -- B3.2: not worth building
 
-`tools/ground_search_probe.gd`: recipe towers of rising size, about forty random single-brick
+`tools/probes/ground_search_probe.gd`: recipe towers of rising size, about forty random single-brick
 kills each. For every kill, the time of `solve_grounded` (the whole-chunk flood a building's
 solve starts with) and of `solve_stress`, the blocks the flood walks, and what A4.1's local
 search would walk (from each block that touched the dead one, lowest first, until the ground
@@ -640,11 +640,11 @@ draw. No studs and no bevel: a piece stands in only while new and moving, and th
 draws a moving piece flat anyway (`BrickNear.SETTLE_MS`). `standins.enabled` turns it off for
 an A/B.
 
-- `tools/standin_probe.gd` (11): a 982-brick piece over the bake-here limit is stood in for
+- `tools/probes/standin_probe.gd` (11): a 982-brick piece over the bake-here limit is stood in for
   every frame it has no mesh, never both at once, one box per brick, its material, under its
   mesh node, gone when the mesh is up; a box's place and alpha are the block's; off, blind as
   before.
-- `tools/standin_shot.gd` (not headless): a small build baked and stood in side by side in the
+- `tools/shots/standin_shot.gd` (not headless): a small build baked and stood in side by side in the
   real brick shader -- colours and materials match.
 - `barrage_probe`: 18-19 stand-ins a run, worst 0.71-0.97 ms for up to 2,656 bricks, covering
   108-117 frames that drew nothing before. Its "some hits found wreckage at rest" check failed

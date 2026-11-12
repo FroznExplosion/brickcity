@@ -52,7 +52,7 @@ scripts/disasters/
   fire_spread.gd          not a disaster on its own list -- a SERVICE others start fires with
   tornado.gd
 shaders/disaster_*.gdshader   funnel, bolt, meteor glow
-tools/disaster_probe.gd
+tools/probes/disaster_probe.gd
 ```
 
 Disaster visuals live here, not in `fx/` (Weapons and effects' area) — they can still borrow
@@ -421,7 +421,7 @@ The city change is limited to D0: create the director when `not _big`, pass it a
 
 ## 8. Testing
 
-`tools/disaster_probe.gd` (`--headless --path . --script res://tools/disaster_probe.gd`, add
+`tools/probes/disaster_probe.gd` (`--headless --path . --script res://tools/probes/disaster_probe.gd`, add
 `-- --also-big` to also check the big city has no director, `-- --disaster-shot` windowed for
 captures, `-- --only=meteor,fire,lightning,pawn,soldiers,tornado,real,intensity,quake,acid,char,coop` for sections) loads the small city headless and, for each kind with a fixed seed:
 runs it at `Engine.time_scale` up, counts committed `DamageLog` entries by kind, samples the worst
@@ -570,7 +570,7 @@ Three changes in `IslandManager`:
    questions — anything under it? anything touching it? — and a piece that answers no to both is
    woken and falls (`audit_woken`). It catches every other way support goes without a ripple.
 
-`tools/float_probe.gd` checks all three: a piece held still in the air past its tries is not
+`tools/probes/float_probe.gd` checks all three: a piece held still in the air past its tries is not
 frozen, and falls and settles on the ground once let go; the watchdog finds a piece frozen 15 m up
 and it falls, while one frozen on the ground is left alone; a held piece does not settle until the
 hold runs out. After a tornado the disaster probe finds **0 of 31 settled pieces floating** — with
@@ -735,7 +735,7 @@ has them. `hurricane.gd`: WARNING 10 s, ACTIVE 80 s, ENDING 20 s.
 * **The eye.** Halfway, 12 s of calm: wind to 8%, the rain stops, the sky opens — then the wind
   comes back from the other side.
 
-Probe (`tools/hurricane_probe.gd`; `-- --hurricane-shot` windowed saves calm / storm / eye): the
+Probe (`tools/probes/hurricane_probe.gd`; `-- --hurricane-shot` windowed saves calm / storm / eye): the
 sea rises +1.60 m and more ground is wet (1,212 cells against 1,036); gain 2.20 → 5.28; a walker
 standing still is carried 9.1 m in 5.6 s; 0.08 m/s in the eye and the wind reversed after it; 10
 flashes; the sea, gain and wet map exactly back at the end; the wind and the lens clear.
@@ -1139,7 +1139,7 @@ throttle), re-solve, the AI's ground round it, pieces woken.
 burning building is never trimmed back to a shell (its heat lives only in its bricks). Flames are
 drawn on the 48 busiest cells.
 
-Probe `tools/brick_fire_probe.gd`. On a bare BrickWorld: the tree as above; a leaf strip under a
+Probe `tools/probes/brick_fire_probe.gd`. On a bare BrickWorld: the tree as above; a leaf strip under a
 gale burns six plates downwind in 7.8 s and never upwind; on a burning wooden brick, a leaf brick
 lasts 3 s, PLA 7 s, wood 26 s, and metal and stone never catch but char. In the city: two trees, a
 gale from one to the other, the first lit at its foot — its bricks go as BURN and SCORCH commands, a

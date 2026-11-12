@@ -112,7 +112,7 @@ as one piece.
   pieces by rule (cut there, a far one came down in three, `collapse_probe`). Cut on the host;
   what leaves is a DETACH like any piece's. Resting on another piece does not hold it yet, and on
   terrain the ground does not (no seeds there: nothing is cut).
-`tools/span_probe.gd`, 6. Still to do: the reach tuned by feel (the slider is in).
+`tools/probes/span_probe.gd`, 6. Still to do: the reach tuned by feel (the slider is in).
 
 **Built 2026-10-17: the load check by region.** `BrickWorld.gravity_check` weighs, besides the
 whole boundary, each **region** of it: the footprint cut into columns `GRAVITY_REGION` (32) studs
@@ -132,7 +132,7 @@ but for a 32-stud corner, the columns under the corner shot out, reads **0.22 ov
 boundary before and after, and 1.52 in the region under the tower**.
 *No false alarms:* every shape the city builds, whole, has its worst region at 0.02-0.54 (the
 246-course tower; its whole boundary 0.54), at most 0.12 over its whole boundary.
-`tools/region_probe.gd`, 6.
+`tools/probes/region_probe.gd`, 6.
 
 The plan as it was:
 The load check per column of tiles rather than over the whole boundary, and a **span rule**: a floor
@@ -161,7 +161,7 @@ still go by the recipe's storeys and the clicked floor.
 
 ### 2.5 Collapse in three tiers — built, as rules already there; named 2026-10-18
 Looked at before building it: most of this was already in, spread over ten constants. They now
-read two numbers, `CollapseTier.HOT_RANGE` (60 m) and `FAR_RANGE` (150 m) (`scripts/collapse_tier.gd`),
+read two numbers, `CollapseTier.HOT_RANGE` (60 m) and `FAR_RANGE` (150 m) (`scripts/destruction/collapse_tier.gd`),
 so the tiers move together:
 
 | tier | from the nearest player | what it does today |
@@ -210,7 +210,7 @@ what hangs off the side, far meshes.
 ### 3.1 The record — built 2026-10-16
 In a build: `recipe.meta["structure"]`, saved with it. From the generator: the same dictionary,
 made from a generated building's bricks (`StructureSpaces.for_tower`, 3.3). One reader and one
-finder for both (`scripts/structure_spaces.gd`).
+finder for both (`scripts/rooms/structure_spaces.gd`).
 
 ```
 {"spaces":   [{"id": 0, "kind": "office", "frame": 0, "seed": [x, y, z],
@@ -243,7 +243,7 @@ A wrong kind is clicked to cycle it; a missing opening is a wall that should not
 window was left). The space is found again from its seed after every edit, and the kinds set by
 hand stay on the openings that are still there.
 
-**In the workshop** (`scripts/workshop_spaces.gd`, key **O**; the build's other tools are as they
+**In the workshop** (`scripts/workshop/workshop_spaces.gd`, key **O**; the build's other tools are as they
 were):
 
 | | |
@@ -278,8 +278,8 @@ doorway between the halves); a room needs a ceiling; a wall built sideways is no
   plate thick is thinner than a stud); the workshop's tool reads cells through it.
 `spaces_probe` 20.
 
-`tools/spaces_probe.gd` (9: the finder, and a generated building) and
-`tools/workshop_spaces_probe.gd` (8: the tool in the workshop, an edit, a save and load).
+`tools/probes/spaces_probe.gd` (9: the finder, and a generated building) and
+`tools/probes/workshop_spaces_probe.gd` (8: the tool in the workshop, an edit, a save and load).
 
 ### 3.3 The generator — built 2026-10-16
 `StructureSpaces.for_tower(world, chunk, footprint_x, footprint_z, courses, building_seed,

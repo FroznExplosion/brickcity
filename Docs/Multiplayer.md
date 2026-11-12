@@ -7,7 +7,7 @@ holds rather than when it was cut.
 
 What is *not* built is a networking layer — a transport, server authority, and a bandwidth budget
 for physics state. That is deliberate. What is built is everything that would have been expensive to
-retrofit afterwards, and `tools/replay_probe.gd` proves it rather than this document asserting it.
+retrofit afterwards, and `tools/probes/replay_probe.gd` proves it rather than this document asserting it.
 
 ---
 
@@ -72,7 +72,7 @@ and it has been paid.
 ## 3. What was not ready, and now is
 
 All three gaps from the first draft of this document are closed, and each is proven by
-`tools/replay_probe.gd` rather than asserted here.
+`tools/probes/replay_probe.gd` rather than asserted here.
 
 ### The stress solve is integer
 
@@ -99,13 +99,13 @@ This is the same move Teardown made: destruction logic in fixed-point, floats ev
 
 ### Damage is a recordable command
 
-`DamageLog` (`scripts/damage_log.gd`) records `(tick, kind, target, point, radius, normal, limit,
+`DamageLog` (`scripts/city/damage_log.gd`) records `(tick, kind, target, point, radius, normal, limit,
 seq)` and replays it into a world. It is **always on** now: co-op and save-anywhere both need it
 ([AI.md](AI.md) A1, A17). Nothing writes to it directly any more — `_apply_blast` and
-`_shear_building` commit through `WorldAuthority` (`scripts/world_authority.gd`), the one door every
+`_shear_building` commit through `WorldAuthority` (`scripts/city/world_authority.gd`), the one door every
 structural change goes through. On the host a change is applied, committed and published; on a
 client it is only requested, and applied when the host's committed entry comes back, in the
-host's `seq` order. `tools/loopback_probe.gd` runs a host and a client over a wire that delays and
+host's `seq` order. `tools/probes/loopback_probe.gd` runs a host and a client over a wire that delays and
 reorders, and checks they end with the same world.
 
 The same recording is the wire format, the join-in-progress mechanism and a save file.

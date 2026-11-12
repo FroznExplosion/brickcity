@@ -1,0 +1,449 @@
+class_name DamageLog
+extends RefCounted
+
+## Every structural change, recorded as a replayable command.
+##
+## This is the shape a networked game needs, built now because it is nearly free
+## now and invasive later (Docs/Multiplayer.md §5). Both of the conclusions this
+## project's prior art reached -- Red Dawn's and Teardown's -- are that
+## destruction travels as **commands**, not as state: what crosses the wire is
+## "a hit of this radius landed at this point on that building", and every
+## machine applies the same commands in the same order and arrives at the same
+## structure.
+##
+## The same recording is three things at once:
+##
+##   * the wire format -- one entry is a packet;
+##   * the join-in-progress mechanism -- a client that arrives late replays the
+##     log into a freshly generated city, which Teardown found beat serialising
+##     the modified geometry;
+##   * a save file, and a regression test (`tools/probes/replay_probe.gd`) that proves
+##     replaying a log reproduces the world it was recorded from.
+##
+## ## Every operation, not only the weapons
+##
+## The log used to hold hits and nothing else, on the theory that everything
+## downstream of a hit -- the stress solve, what comes loose, what a landing
+## breaks -- would follow deterministically on every machine. It does not,
+## because WHEN each of those runs is decided by wall-clock budgets, and timing
+## changes outcomes: a blast that lands before a piece has detached kills bricks
+## that, on another machine, already left on the piece (Docs/AIPlan.md P0 step 4).
+## So the host records every structural operation it performs, in the order it
+## performs them, and a client -- or a save being loaded -- replays that stream
+## exactly. See StructureReplayer.
+##
+## A PIECE is addressed by the command that created it: `piece_id(seq, frame)` of
+## its DETACH or TOPPLE. Pieces are only ever created by those commands and every
+## machine applies them in the same order, so the id is the same everywhere --
+## unlike a chunk id, which depends on what else that machine allocated, and
+## unlike a content hash, which a room's furniture changes (room contents are
+## blocks in the building's own chunk, and which rooms are open is decided per
+## machine). For the same reason a DETACH lists STRUCTURAL blocks only;
+## furniture weighs nothing in a solve and each machine carries its own.
+## Piece commands carry GRID coordinates -- metres in the grid the piece's bricks
+## were laid in, which split_island copies unchanged into every piece cut from
+## it. Not the world: a piece's transform is physics and differs between machines.
+## And not chunk-local either: a piece's local frame starts at the corner of the
+## group it was cut as, and on the host that group included furniture the replay
+## never has, so the two local frames need not agree. BrickWorld.grid_to_world of a
+## block's absolute cell is where it is in this space on every machine.
+##
+## What is still deliberately NOT here: transforms and velocities. Those are
+## physics state; replicating them continuously is what both sources warn
+## against. A save carries them once, for the pieces that exist (AreaSnapshot).
+
+enum Kind {
+	BLAST,        ## a weapon: destroys brick. A building, world space
+	SHEAR,        ## a collision: severs joints in a ball, destroys nothing
+	SEVER,        ## a collision: severs joints across a plane
+	SOLVE,        ## a building's stress solve, run when it found failures
+	TOPPLE,       ## a building came off its foundation whole and became a piece
+	DETACH,       ## `blocks` left a building (or, with FLAG_FROM_PIECE, a piece)
+	PIECE_BLAST,  ## a weapon, on a piece. Grid space
+	PIECE_SHEAR,  ## joints severed in a ball on a piece. FLAG_PEEL for a landing
+	PIECE_SNAP,   ## a piece snapped across `normal` at `points`
+	PIECE_SOLVE,  ## a piece's stress solve, under gravity `normal` (integer)
+	## A landmark piece came to rest here: its chunk transform, as `points` [origin,
+	## x, y, z]. The one piece of physics the log carries, and only once per rest:
+	## the AI hides behind wreckage and people stand on it, so every machine has to
+	## have it in the same place (Docs/AI.md section 12.1), and a late joiner or a
+	## replay gets it from the same stream as everything else.
+	PIECE_REST,
+	## A gun: wears bricks down by `limit` hp (of 255) in a ball of `radius` -- and
+	## always the brick the point is in -- killing those it takes to 0. A building,
+	## world space. Recorded whether or not anything died: the hp it took is state.
+	## StructuralDamage decides the numbers.
+	CHIP,
+	## CHIP on a piece. Grid space.
+	PIECE_CHIP,
+	## Settled wreckage resting on a building (Docs/AI.md 3.10): `radius` mass on
+	## each block whose absolute cell is in `points`, under `owner` (the piece's
+	## id), replacing what that piece had on this building before. Every later
+	## solve of the building carries it, so it is a command: a load one machine
+	## has and another does not changes how the next blast breaks (AIPlan R5).
+	LOAD,
+	## The piece `owner` no longer rests on building `target`.
+	UNLOAD,
+	## Fire blackened the bricks in a ball of `radius` (BrickWorld.scorch_hit):
+	## colour only -- nothing dies, no joint changes. A building, world space.
+	## A command because every machine should see the same charred walls.
+	## With FLAG_BLOCKS, the blocks named in `blocks` instead of a ball.
+	SCORCH,
+	## Fire burnt `blocks` out (BrickWorld.fire_step, Docs/Disasters.md 29): they
+	## are gone, as a blast's are. A building; `point` and `radius` are where, for
+	## whoever has to know what changed (navigation). Ids, because what burns
+	## out is decided by heat only the host keeps.
+	BURN,
+	## Storey units (Docs/Space.md 5.3a): building `target` has storeys `blocks`
+	## laid as bricks -- materialised a storey at a time if it was not. Which
+	## storeys are laid changes how a solve comes out (each run is anchored and
+	## carries the weight over it), so it is a command, not each machine's own.
+	LAY,
+	## Building `target`, laid a storey at a time, gave storeys `blocks` back
+	## to its rest shell (the brick budget), or with none named, all its bricks.
+	## Laid again it lays what the next LAY says, not what it had.
+	UNLAY,
+	## Building `target`: storey `limit` up gave way and left it as one shell
+	## piece (its laid storeys up there left first, as a DETACH).
+	GIVE_WAY,
+	## Building `target`'s shell piece, storeys `blocks`[0]..`blocks`[1] less
+	## the rest of `blocks` (laid storeys that left as bricks before), became one
+	## brick piece at the transform in `points` (PIECE_REST's form). Its id is
+	## piece_id(seq), as a DETACH's piece's is.
+	SHELL_BRICKS,
+	## Repair (Docs/Hulls.md 9): `blocks` of building `target` laid back as they
+	## were built (BrickWorld.revive_blocks) -- destroyed or gone on a piece, in
+	## their own cells, full hp. Ids, as BURN's are: which bricks a restore
+	## reaches is the host's choice (where the tool points, how long it is held).
+	## `point` and `radius` are where, for whoever has to know what changed.
+	RESTORE,
+}
+
+## SHEAR / PIECE_SHEAR: sever only the underside of the struck region.
+const FLAG_PEEL := 1
+## DETACH: the source is piece `target`, not building `target`.
+const FLAG_FROM_PIECE := 2
+## PIECE_SNAP, informational: no seam ran that way, so a band was torn instead.
+## Set by whoever applies it; changes nothing about how it applies.
+const FLAG_BANDED := 4
+## DETACH: the blocks left, and never became a piece -- on any machine. The host
+## sets it when too many pieces are already moving and this one came loose far
+## from every player (IslandManager.MAX_MOVING).
+const FLAG_GONE := 8
+## DETACH: the piece is a collapse CHUNK (CollapseDirector) -- its severed joints
+## are mended once it is cut out (BrickWorld.heal_joints), on every machine, so it
+## falls as one piece and breaks where it lands.
+const FLAG_CHUNK := 16
+## SEVER: a clean seam at the course boundary nearest `point`
+## (BrickWorld.sever_seams) -- both sides stay whole -- not a band of loose
+## brick. An earthquake's cut (Docs/Disasters.md 10).
+const FLAG_SEAM := 32
+## SHEAR: every block in the ball lets go on its own, rather than a clump peeled
+## off by its underside -- a floor a mech has come down on (Docs/AI.md 3.11).
+const FLAG_WHOLE := 64
+## SCORCH: char the blocks in `blocks`, not a ball (fire, brick by brick).
+const FLAG_BLOCKS := 128
+## PIECE_SNAP: a block that runs through the seam is cut as well, at its own
+## foot (BrickWorld.sever_seams' `through`) -- a column a storey tall, in a wall
+## snapped along a row of windows. Every snap since 2026-10-13 carries it; one
+## recorded before replays as it was made.
+const FLAG_STEP := 256
+## SEVER: a floor past its reach (BrickWorld.cut_spans; Docs/Structures.md 2.3).
+## `radius` is the reach in studs; every machine finds the same rim from the
+## same bricks and cuts it.
+const FLAG_SPAN := 512
+## SEVER: a storey crushed under one REGION of the building only
+## (BrickWorld.gravity_check's region_ratio; Docs/Structures.md 2.3): the slab
+## `point`, `normal`, `radius` cuts, kept to the blocks whose middle is inside
+## `points[0]`..`points[1]` on plan (x and z, the chunk's own metres).
+const FLAG_REGION := 1024
+
+## The SEVER for a storey crushed under one region (FLAG_REGION), from what
+## BrickWorld.gravity_check answered: the storey under `region_level_cell`,
+## `storey` metres thick, kept to `region` on plan. Tick and target are the
+## caller's.
+static func region_crush(world: BrickWorld, chunk: int, r: Dictionary, storey: float) -> Entry:
+	var cs := BrickWorld.get_cell_size()
+	var origin: Vector3i = world.get_chunk_origin(chunk)
+	var area: Rect2i = r.region
+	var y := float(int(r.region_level_cell) - origin.y) * cs.y
+	var lo := Vector3(float(area.position.x - origin.x) * cs.x, 0.0, float(area.position.y - origin.z) * cs.z)
+	var hi := Vector3(float(area.end.x - origin.x) * cs.x, 0.0, float(area.end.y - origin.z) * cs.z)
+	var e := Entry.new()
+	e.kind = Kind.SEVER
+	e.normal = Vector3.UP
+	e.flags = FLAG_REGION
+	e.point = world.get_chunk_transform(chunk) * Vector3((lo.x + hi.x) * 0.5, y - storey * 0.5,
+			(lo.z + hi.z) * 0.5)
+	e.radius = storey
+	e.points = PackedVector3Array([lo, hi])
+	return e
+
+
+## A piece's id: the seq of the command that created it, and for a toppled
+## multi-frame build, which frame. The same on every machine.
+static func piece_id(seq: int, frame: int = 0) -> int:
+	return seq * 16 + frame
+
+## One command. Plain data on purpose -- this has to survive being serialised.
+class Entry extends RefCounted:
+	var tick := 0
+	var kind := Kind.BLAST
+	## A building id; for a piece command, the piece's id (see piece_id).
+	var target := -1
+	var point := Vector3.ZERO
+	var radius := 0.0
+	var normal := Vector3.ZERO  ## SEVER / PIECE_SNAP: the axis. PIECE_SOLVE: gravity
+	var limit := 0          ## SHEAR kinds: max blocks, 0 for no cap. CHIP kinds: hp taken
+	## Position in the host's log, 0-based; -1 until the host commits it. A client
+	## applies entries in this order and a gap means one went missing on the way.
+	var seq := -1
+	var frame := 0          ## which frame of a multi-frame build
+	var owner := -1         ## piece commands: the building a piece came from
+	var flags := 0
+	var points := PackedVector3Array()   ## PIECE_SNAP: where it snaps
+	var blocks := PackedInt32Array()     ## DETACH: the blocks that left
+
+	## On the wire and in a save, world positions are in the BODY's frame
+	## (WorldFrame, Planets.md 9.6): `point` of the building kinds, and a
+	## resting piece's origin. Grid coordinates -- the piece kinds, a region's
+	## corners, LOAD's cells -- are not world positions and go as they are.
+	func to_array() -> Array:
+		var p := WorldFrame.to_body(point) if _point_is_world() else point
+		var pts := points
+		if kind == Kind.PIECE_REST and pts.size() > 0:
+			pts = points.duplicate()
+			pts[0] = WorldFrame.to_body(pts[0])
+		return [tick, kind, target, p, radius, normal, limit, seq,
+				frame, owner, flags, pts, blocks]
+
+	func _point_is_world() -> bool:
+		return kind == Kind.BLAST or kind == Kind.SHEAR or kind == Kind.SEVER \
+				or kind == Kind.CHIP or kind == Kind.SCORCH
+
+	static func from_array(a: Array) -> Entry:
+		var e := Entry.new()
+		e.tick = int(a[0])
+		e.kind = int(a[1]) as Kind
+		e.target = int(a[2])
+		e.point = a[3]
+		e.radius = float(a[4])
+		e.normal = a[5]
+		e.limit = int(a[6])
+		e.seq = int(a[7]) if a.size() > 7 else -1
+		if a.size() > 12:
+			e.frame = int(a[8])
+			e.owner = int(a[9])
+			e.flags = int(a[10])
+			e.points = a[11]
+			e.blocks = a[12]
+		if e._point_is_world():
+			e.point = WorldFrame.from_body(e.point)
+		if e.kind == Kind.PIECE_REST and e.points.size() > 0:
+			e.points = e.points.duplicate()
+			e.points[0] = WorldFrame.from_body(e.points[0])
+		return e
+
+	func is_piece() -> bool:
+		if kind == Kind.CHIP or kind == Kind.LOAD or kind == Kind.UNLOAD or kind == Kind.SCORCH \
+				or kind == Kind.BURN or kind >= Kind.LAY:
+			return false
+		return kind >= Kind.PIECE_BLAST or (kind == Kind.DETACH and flags & FLAG_FROM_PIECE)
+
+
+var entries: Array[Entry] = []
+## On by default and meant to stay on. It used to be off to save an allocation
+## per hit in a session that would never save, but co-op and save-anywhere both
+## need it (Docs/AI.md A1, A17), and a log that only exists when somebody
+## remembered to switch it on is a log that is missing the hit that mattered.
+var recording := true
+
+
+## Record a command. Returns the entry, with its `seq`, or null when not
+## recording.
+func record(tick: int, kind: Kind, target: int, point: Vector3, radius: float,
+		normal := Vector3.ZERO, limit := 0) -> Entry:
+	var e := Entry.new()
+	e.tick = tick
+	e.kind = kind
+	e.target = target
+	e.point = point
+	e.radius = radius
+	e.normal = normal
+	e.limit = limit
+	return add(e)
+
+
+## Record a command that is already built. Gives it its place in the order.
+func add(e: Entry) -> Entry:
+	if not recording:
+		return null
+	e.seq = entries.size()
+	entries.append(e)
+	return e
+
+
+## Apply one command to one chunk. The single definition of what each kind DOES
+## to a world -- the host acting, a client receiving, a replay and the probes all
+## come through here, so they cannot drift apart.
+##
+## DETACH and TOPPLE are not here: they create and hand over chunks, which is
+## bookkeeping the caller owns (StructureReplayer, IslandManager).
+static func apply_entry(world: BrickWorld, chunk: int, e: Entry) -> PackedInt32Array:
+	match e.kind:
+		Kind.BLAST:
+			return world.apply_hit(chunk, e.point, e.radius)
+		Kind.SHEAR:
+			# peel, matching every site that records a SHEAR -- a replay that
+			# sheared differently would not reproduce the world.
+			return world.separate_near(chunk, e.point, e.radius, e.limit,
+					not (e.flags & FLAG_WHOLE))
+		Kind.SEVER:
+			if e.flags & FLAG_SPAN:
+				return world.cut_spans(chunk, e.radius, true)
+			if e.flags & FLAG_SEAM:
+				return world.sever_seams(chunk, PackedVector3Array([e.point]), e.normal)
+			if e.flags & FLAG_REGION and e.points.size() >= 2:
+				var lo: Vector3 = e.points[0]
+				var hi: Vector3 = e.points[1]
+				return world.separate_plane(chunk, e.point, e.normal, e.radius,
+						Rect2(lo.x, lo.z, hi.x - lo.x, hi.z - lo.z))
+			return world.separate_plane(chunk, e.point, e.normal, e.radius)
+		Kind.SOLVE:
+			# As the host's solve went (BrickWorld.solve_structure): `limit` stress
+			# rounds, then what came loose held where its own studs hold it
+			# (Block::held). normal.x 1 says so; a log from before either is one
+			# stress solve.
+			if e.normal.x > 0.5:
+				world.solve_rounds(chunk, e.limit)
+			else:
+				world.solve_stress(chunk)
+			return PackedInt32Array()
+		Kind.CHIP:
+			return world.chip_hit(chunk, e.point, e.radius, e.limit)
+		Kind.LOAD:
+			var ids := PackedInt32Array()
+			for p in e.points:
+				var id := world.block_at(chunk, Vector3i(p))
+				if id >= 0:
+					ids.append(id)
+			world.set_load(chunk, e.owner, ids, e.radius)
+			return PackedInt32Array()
+		Kind.UNLOAD:
+			world.clear_load(chunk, e.owner)
+			return PackedInt32Array()
+		Kind.SCORCH:
+			# Nothing died: what it returns is not the caller's business.
+			if e.flags & FLAG_BLOCKS:
+				world.set_scorched_blocks(chunk, e.blocks)
+			else:
+				world.scorch_hit(chunk, e.point, e.radius)
+			return PackedInt32Array()
+		Kind.BURN:
+			world.kill_blocks(chunk, e.blocks)
+			return e.blocks
+		Kind.RESTORE:
+			return world.revive_blocks(chunk, e.blocks)
+		Kind.PIECE_BLAST, Kind.PIECE_SHEAR, Kind.PIECE_SNAP, Kind.PIECE_SOLVE, Kind.PIECE_CHIP:
+			return _apply_local(world, chunk, e)
+		Kind.PIECE_REST:
+			world.set_chunk_transform(chunk, rest_transform(e))
+			return PackedInt32Array()
+	return PackedInt32Array()
+
+
+## A resting transform as PIECE_REST carries it, and back.
+static func rest_points(xf: Transform3D) -> PackedVector3Array:
+	return PackedVector3Array([xf.origin, xf.basis.x, xf.basis.y, xf.basis.z])
+
+
+static func rest_transform(e: Entry) -> Transform3D:
+	if e.points.size() < 4:
+		return Transform3D()
+	return Transform3D(Basis(e.points[1], e.points[2], e.points[3]), e.points[0])
+
+
+## The transform that makes a chunk's local space the grid space piece commands
+## are written in: its local origin sits at its grid origin's place in the grid.
+static func grid_frame(world: BrickWorld, chunk: int) -> Transform3D:
+	return Transform3D(Basis(), BrickWorld.grid_to_world(world.get_chunk_origin(chunk)))
+
+
+## A piece command, applied in grid space (see the class notes). For the duration
+## the chunk's transform is grid_frame, so the host and every client hand the
+## extension the SAME numbers -- not the same point expressed through two
+## transforms that agree only to the last bit or two.
+static func _apply_local(world: BrickWorld, chunk: int, e: Entry) -> PackedInt32Array:
+	var saved := world.get_chunk_transform(chunk)
+	world.set_chunk_transform(chunk, grid_frame(world, chunk))
+	var out := PackedInt32Array()
+	match e.kind:
+		Kind.PIECE_BLAST:
+			out = world.apply_hit(chunk, e.point, e.radius)
+		Kind.PIECE_CHIP:
+			out = world.chip_hit(chunk, e.point, e.radius, e.limit)
+		Kind.PIECE_SHEAR:
+			out = world.separate_near(chunk, e.point, e.radius, e.limit,
+					bool(e.flags & FLAG_PEEL))
+		Kind.PIECE_SNAP:
+			# A seam first, and a torn band only where there is no seam -- the
+			# same order IslandManager._snap_across has always used.
+			out = world.sever_seams(chunk, e.points, e.normal, bool(e.flags & FLAG_STEP))
+			if out.is_empty():
+				out = world.separate_planes(chunk, e.points, e.normal, e.radius)
+				e.flags |= FLAG_BANDED
+		Kind.PIECE_SOLVE:
+			world.set_chunk_gravity(chunk, Vector3i(
+					roundi(e.normal.x), roundi(e.normal.y), roundi(e.normal.z)))
+			var res: Dictionary = world.solve_stress(chunk)
+			out = PackedInt32Array([int(res.get("failures", 0))])
+	world.set_chunk_transform(chunk, saved)
+	return out
+
+
+func clear() -> void:
+	entries.clear()
+
+
+func size() -> int:
+	return entries.size()
+
+
+## Serialise to something a socket or a save file can take.
+func to_data() -> Array:
+	var out := []
+	for e in entries:
+		out.append(e.to_array())
+	return out
+
+
+static func from_data(data: Array) -> DamageLog:
+	# Not `log`: that is a built-in function.
+	var out := DamageLog.new()
+	for a in data:
+		out.entries.append(Entry.from_array(a))
+	return out
+
+
+## Apply the building commands of a log to a world, in recorded order.
+##
+## `resolve` maps a recorded target id to a live chunk id -- the caller owns
+## that, because a replaying client materialises buildings on its own schedule.
+## Piece commands, detachments and topples are skipped: replaying those needs
+## StructureReplayer, which keeps track of the pieces. A resolver that takes a
+## second argument is also given the frame, for multi-frame builds; one that
+## does not is only asked about frame 0. Returns how many commands were applied.
+func replay(world: BrickWorld, resolve: Callable) -> int:
+	var applied := 0
+	var framed := resolve.get_argument_count() >= 2
+	for e in entries:
+		if e.kind == Kind.DETACH or e.kind == Kind.TOPPLE or e.is_piece():
+			continue
+		if e.frame != 0 and not framed:
+			continue
+		var chunk: int = resolve.call(e.target, e.frame) if framed else resolve.call(e.target)
+		if chunk < 0 or not world.is_chunk_alive(chunk):
+			continue
+		apply_entry(world, chunk, e)
+		applied += 1
+	return applied

@@ -17,7 +17,7 @@ or into the bench, if it does.
 
 ```
  the building workshop                         the asset workshop
- scripts/workshop.gd (Node3D, 37 lines)        scripts/asset_workshop.gd (Node3D)
+ scripts/workshop/workshop.gd (Node3D, 37 lines)        scripts/workshop/asset_workshop.gd (Node3D)
    its own tools: WorkshopTools                  its own tools: parts, the SDF sculpt, photos,
    (Roof, Stairs, Repeat, Rooms, doors ...)      guides, studs, connections, guns, mechs, export
           \                                           /
@@ -60,7 +60,7 @@ functions named in `BrickBench.HOOKS` (`_aim`, `_place`, `_undo`, `_after_edit`,
 `sketch_host`). Code that holds a workshop reaches the bench as `ws.bench` (the probes do).
 
 **Other shared game pieces**, used by both through the bench: `BrickShapes`
-(`scripts/workshop_shapes.gd`: kept shapes, plans, roofs, and `pack_courses`, cells to bricks of
+(`scripts/workshop/workshop_shapes.gd`: kept shapes, plans, roofs, and `pack_courses`, cells to bricks of
 the held kind), `WorkshopHotbar`, `WorkshopMenu`, `BrickPalette`, the paint palette.
 
 What a stroke or a shape *becomes* stays each workshop's own: in the asset workshop a sketch is a
@@ -157,13 +157,13 @@ In rough order of what saves the most time:
 | Stage | What | Check |
 |---|---|---|
 | 1 ✅ | Shared `ToolRail` (the asset workshop on it, unchanged to the eye); the run moved into `workshop.gd`; the building workshop's rail with Place, Paint, Rooms | `workshop_probe`, `asset_ui_probe`, `asset_workshop_probe` (its run check now runs the base's code) |
-| 2 ✅ | `BrickShapes` (kinds, flat and wall, courses staggered and aligned); Shapes tool | `tools/build_tools_probe.gd`: each kind's cells, bricks are the held kind, no seam straight up when staggered, corners alternate, one undo |
+| 2 ✅ | `BrickShapes` (kinds, flat and wall, courses staggered and aligned); Shapes tool | `tools/probes/build_tools_probe.gd`: each kind's cells, bricks are the held kind, no seam straight up when staggered, corners alternate, one undo |
 | 3 ✅ | Kept shapes and Cut; Select for shapes; saved and opened | probe: a door cut keeps the wall's bricks away from it, a wall re-laid after a cut has the hole, save and open keeps shapes |
 | 4 ✅ | `SketchPen` shared; Sketch in the building workshop | probe: a polygon becomes a kept shape, an RMB brush stroke cuts it; `asset_workshop_probe` unchanged (318) |
 
 ### As built (2026-10-27)
 
-All four stages, merged. `tools/build_tools_probe.gd`: 67 checks. Notes from building it:
+All four stages, merged. `tools/probes/build_tools_probe.gd`: 67 checks. Notes from building it:
 
 * **Shapes**: the kinds are rectangle, hollow rectangle, circle, ring, triangle, line and
   arch. RMB drag in Shapes cuts the same shape out (as the asset workshop's RMB carves).
@@ -234,7 +234,7 @@ A new rail tool, **Repeat** (J):
 
 ### As built (2026-10-28)
 
-Both merged; `tools/build_tools_probe.gd` 86 checks.
+Both merged; `tools/probes/build_tools_probe.gd` 86 checks.
 
 * An opening's spec (`WorkshopTools.opening_spec`: kind, plane, the opening's corners, frame,
   glass, the frame's brick and colour) is kept in its frame's and glass's records as
@@ -304,7 +304,7 @@ The rail keeps every key, and adds a button for each:
 
 ### As built (2026-10-28)
 
-All of it, merged; `tools/build_tools_probe.gd` 115 checks.
+All of it, merged; `tools/probes/build_tools_probe.gd` 115 checks.
 
 * `ToolRail` (shared) gained `columns` (the tools in a grid), `actions` (sections of small
   buttons, toggles lit by `show_toggles`, text changed by `set_action_text`) and a scrolling
@@ -371,7 +371,7 @@ wall line: its corners interlock, and ending on the first corner closes it.
 
 ### As built (2026-10-28)
 
-All of it, merged; `tools/build_tools_probe.gd` 130 checks, `palette_probe` 2104, `shaped_probe`
+All of it, merged; `tools/probes/build_tools_probe.gd` 130 checks, `palette_probe` 2104, `shaped_probe`
 438.
 
 * The flow is `WorkshopTools._make_input` (press, drag, let go), `_to_height`, `_pull_height`
@@ -439,7 +439,7 @@ new sketch on top to go on up with another outline.
 
 ### As built (2026-10-28)
 
-Merged; `tools/build_tools_probe.gd` 148 checks.
+Merged; `tools/probes/build_tools_probe.gd` 148 checks.
 
 * Sketch on "flat": strokes go into `WorkshopTools._draft` ({at, adds, subs}); `raise_plan`
   makes a `plan` record and hands it to the section 8 height flow; a building pulls a storey
@@ -508,7 +508,7 @@ draw a shape, drag the depth -- and most tools the same.
 
 ### As built (2026-10-31)
 
-"Being built" above, all of it, merged; `tools/build_tools_probe.gd` 178 checks.
+"Being built" above, all of it, merged; `tools/probes/build_tools_probe.gd` 178 checks.
 
 * `WorkshopView` owns the mouse in the building workshop: the camera's click-to-capture is off
   there (`click_captures`, `ctrl_descends`). The asset workshop's camera is as it was, and so is
@@ -553,7 +553,7 @@ The rail: Place, Pick, Paint, Draw, Roof, Stairs, Cut, Repeat, Select, Builds, R
 
 ### As built (2026-10-31)
 
-Merged; `tools/build_tools_probe.gd` 204 checks. Pick, Paint and Place, and the other section
+Merged; `tools/probes/build_tools_probe.gd` 204 checks. Pick, Paint and Place, and the other section
 10 suggestions, are still open.
 
 * `set_outline` and `makes` are the tool's whole state; `_route` says how a drag goes (walls,
@@ -588,7 +588,7 @@ Section 10's other suggestions, all of them:
 
 ### As built (2026-10-31)
 
-All of it, merged; `tools/build_tools_probe.gd` 228 checks.
+All of it, merged; `tools/probes/build_tools_probe.gd` 228 checks.
 
 * `active()` still answers place, pick or paint; `rail_id` folds them into Hand for the rail.
   B still toggles the brush. Hand remembers which of the three it was on.
@@ -646,7 +646,7 @@ copied furniture or rooms.
 
 ### As built (2026-11-02)
 
-Merged; `tools/build_tools_probe.gd` 257 checks.
+Merged; `tools/probes/build_tools_probe.gd` 257 checks.
 
 * `_repeat_group(dir)` gathers; `_gather` takes what lies between two layers inside the picked
   thing's footprint, three studs round it, so a second building beside it is left alone.
@@ -697,7 +697,7 @@ What the size breaks, and the answer to each:
 
 ### As built (2026-11-02)
 
-Merged; `tools/build_tools_probe.gd` 274 checks, workshop gate 19.
+Merged; `tools/probes/build_tools_probe.gd` 274 checks, workshop gate 19.
 
 * A floor hit is `{floor: true, block: -1}` in frame 0: ask `hit.block >= 0` before asking the world
   about it. Its point is just inside the floor, as a hit's was in a plate. The room finder sees
@@ -735,7 +735,7 @@ of the whole chunk, and any new brick throws that bake away. So:
 
 ### As built (2026-11-02)
 
-Merged; `tools/build_tools_probe.gd` 291 checks. Its `_sections_match_whole` compares what the
+Merged; `tools/probes/build_tools_probe.gd` 291 checks. Its `_sections_match_whole` compares what the
 sections draw with one mesh of the whole grid, vertex and colour, after each kind of edit and across
 section lines.
 
@@ -796,7 +796,7 @@ is carried as a plain ghost.
 
 ### As built (2026-11-02)
 
-Merged; `tools/build_tools_probe.gd` 323 checks. `_books_agree` holds the recipe against the world
+Merged; `tools/probes/build_tools_probe.gd` 323 checks. `_books_agree` holds the recipe against the world
 brick by brick after each big edit; made taller is compared with the same building made that tall at
 once. The packer's output was compared with the old one on twelve shapes, and is identical.
 
@@ -848,7 +848,7 @@ section 16 said it would.
 
 ### As built (2026-11-03)
 
-Merged; `tools/build_tools_probe.gd` 325 checks. Its packer check lays twelve shapes both ways and
+Merged; `tools/probes/build_tools_probe.gd` 325 checks. Its packer check lays twelve shapes both ways and
 gets the same bricks in the same order; they are also the bricks the packer gave before section 17.
 
 On the 89,061-brick block's 252,981 cells, three runs: the script 721 to 765 ms, the engine 229 to
@@ -882,7 +882,7 @@ Asked 2026-11-05: the five things section 18 left open are all to be done.
 
 ### As built (2026-11-05)
 
-Merged; `tools/build_tools_probe.gd` 338 checks, workshop gate 19, asset workshop probe 343.
+Merged; `tools/probes/build_tools_probe.gd` 338 checks, workshop gate 19, asset workshop probe 343.
 
 * **Far away.** Three 20-storey blocks 80 studs wide (476,406 bricks, 147 sections) seen from across
   the area, the renderer's own clock, twice each way, other chats' headless runs going:

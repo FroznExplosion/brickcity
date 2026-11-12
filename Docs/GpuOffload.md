@@ -60,7 +60,7 @@ and the shrink from when a crumb lands. A crumb is written when thrown, when it 
 its floor, as turned) and when it goes. A wind (a breached hull, Docs/Hulls.md 4) still writes
 the crumbs it pushes every tick: each push starts a new stretch. Probes read
 `PlanetCrumbs.positions()`; `--gate=fall` 7/7 and ship_vent_probe 10/10 headless.
-`tools/planet_crumbs_look.gd` (windowed) throws sixteen off a planet turned out of true and
+`tools/shots/planet_crumbs_look.gd` (windowed) throws sixteen off a planet turned out of true and
 draws where the CPU says each is as a red box: lying they cover the drawn crumbs exactly,
 falling the drawn ones lead by up to a tick (the clock's fraction; physics is 30 ticks a second).
 
@@ -68,7 +68,7 @@ What it was:
 
 **Now.** A small piece is not a body but crumbs: each brick drawn in a MultiMesh, falling with
 a kick, a scatter and a spin to the floor one ray found when it broke, lying there, then
-shrinking away (`IslandManager` CRUMB_*, scripts/island_manager.gd; `PlanetCrumbs`,
+shrinking away (`IslandManager` CRUMB_*, scripts/destruction/island_manager.gd; `PlanetCrumbs`,
 scripts/planet/planet_crumbs.gd). Every physics tick GDScript steps every crumb and writes its
 transform and colour back into the MultiMesh, one call each -- "about a microsecond a brick, on
 the main thread" by its own note, so up to ~1.5 ms a tick at the cap (CRUMBS_MAX 1500), in
@@ -102,8 +102,8 @@ The one-shot ones emit in local space (an emitter is still while its particles f
 hit and restarted in world space, a burst came out displaced toward where it had been. The
 torch stays world space (its fire is left behind as it swings) and is placed before it is lit.
 A death burst now shows the kill's colour as it is: a CPUParticles3D colour reached the
-material unconverted and drew paler. Pictures: `tools/gpu_fx_look.gd` (bursts, debris, dust;
-`--out=` to compare) and `tools/torch_look.gd`.
+material unconverted and drew paler. Pictures: `tools/shots/gpu_fx_look.gd` (bursts, debris, dust;
+`--out=` to compare) and `tools/shots/torch_look.gd`.
 
 What it was:
 
@@ -118,7 +118,7 @@ SDF collider if a burst should land.
 
 * Saves: a little per effect; a lot when a collapse sets off dozens at once.
 * Catch: a GPU particle cannot rest on a brick the physics knows about -- fine for dust, chips
-  and sparks, not for anything that piles up. `tools/fx_cap_probe.gd` already watches effect
+  and sparks, not for anything that piles up. `tools/probes/fx_cap_probe.gd` already watches effect
   counts. The Compatibility renderer runs GPU particles differently; Forward+ is what ships.
 * Owner: weapons and effects (`fx/`, autoload), with CollapseDust from city.
 
@@ -179,7 +179,7 @@ its spin) and `fx/shaders/ice_shard.gdshader` works out the rest from the burst'
 value set each frame: the fall in closed form, up to six bounces (keeping 0.35 of the upward
 speed and 0.7 of all of it, as before), then lying still, shrinking away over the last 40%.
 With no `shard_mesh` set, the pool makes a small cut-crystal chunk, so frozen kills now show
-their shards. Checked by `tools/shatter_look.gd` (not headless): it draws where the old
+their shards. Checked by `tools/shots/shatter_look.gd` (not headless): it draws where the old
 per-frame step puts each shard as a red box, and the drawn shards sit in them rising,
 bouncing and lying; the shader's path is within 5 mm of a fine CPU step over 8000 samples.
 Owner: weapons and effects.

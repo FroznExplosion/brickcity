@@ -180,7 +180,7 @@ in a regular grid. **It has to be divided by the piece's area to read as a
 share** — 2×6 at 0.22 measured *43%* of the ground and pushed 2×4 down to 25%.
 At 0.05 it sits at 20% and 2×4 takes half.
 
-**Measured**, `brick_terrain.cpp` against `tools/terrain_probe.gd`, 25 tiles of
+**Measured**, `brick_terrain.cpp` against `tools/probes/terrain_probe.gd`, 25 tiles of
 the test field:
 
 | 2×4 | 2×6 | 1×4 | 1×2 | 2×3 | 1×1 | 1×3 | 2×2 |
@@ -559,7 +559,7 @@ previous draft of this document is still there and still works — it just canno
 
 ## 16. What is built
 
-Slice 1, 2026-09-20. `scenes/terrain_test.tscn`, `tools/terrain_probe.gd` (passes).
+Slice 1, 2026-09-20. `scenes/terrain_test.tscn`, `tools/probes/terrain_probe.gd` (passes).
 
 **In C++** (`gdextension/brick/src/brick_terrain.{h,cpp}`), per D1 — terrain truth is core, so
 none of it was prototyped in GDScript: the value-noise generator, plate/ramp classification, the
@@ -2847,7 +2847,7 @@ lays both what the ground is MADE of and what COLOUR it is:
 
 | | |
 |---|---|
-| palette | a row of ground materials (plus KEEP, and NATURAL to put the generator's back) and every filament colour (plus the material's OWN, and KEEP) — `scripts/paint_palette.gd`, the same one the workshop's brick brush uses |
+| palette | a row of ground materials (plus KEEP, and NATURAL to put the generator's back) and every filament colour (plus the material's OWN, and KEEP) — `scripts/build/paint_palette.gd`, the same one the workshop's brick brush uses |
 | `,` `.` / PAGE UP, DOWN | step the colour / the material without the mouse |
 | P | take the material and colour of the ground under the cursor |
 | `[` `]`, CTRL+Z | radius, and undo a stroke, as for every brush |
@@ -2924,7 +2924,7 @@ blocks are let go of now; the same flight is clean.
 
 F10 in heightfield_test (and the terrain editor, the same scene) opens a
 menu on the left; the mouse is the menu's while it is open and the world keeps
-running. `scripts/terrain_dev_menu.gd`:
+running. `scripts/terrain/terrain_dev_menu.gd`:
 
 | control | does |
 |---|---|
@@ -3090,7 +3090,7 @@ in the water, and leaving those cells empty is what gives a city on low
 ground a shoreline. The big city keeps 14 of its 22 buildings; the other 8
 grid cells were under water.
 
-**The water itself** is `scripts/water_sea.gd`: the heightfield scene's three
+**The water itself** is `scripts/water/water_sea.gd`: the heightfield scene's three
 tiers (studded pieces round the camera, four-stud pieces to 80 m, one sheet
 to the horizon) as one node, over a seabed texture that reaches as far as the
 coarse ground (448 m). The brick tiers are 26k pieces whatever is under them,
@@ -3427,7 +3427,7 @@ radius 2 the ground 20–40 m off visibly loses its slopes and curves. Not chang
 triangles 61 k to 32 k, draw calls unchanged.
 
 **The chamfer.** §17.24's tops-only chamfer, off since §17.22 because it opened slits through the
-world. The test for that is new: `tools/bevel_gap_probe.gd` hides the sea, puts an unlit magenta
+world. The test for that is new: `tools/probes/bevel_gap_probe.gd` hides the sea, puts an unlit magenta
 plane under everything and counts magenta pixels from 16 low views, chamfer off and on.
 
 | step | magenta, on (off: ~25) |
@@ -3508,7 +3508,7 @@ inside `BrickTerrain` when the scene went. `TerrainStreamer._exit_tree` now wait
 it has in flight. Five gate runs after: no crash. (The gate's own verdict varies run to run with
 or without this change -- "the wave hunts the player" failed once in five on main too.)
 
-`tools/ground_tools_probe.gd` (headless) holds it: both scenes' ground chamfered near the camera,
+`tools/probes/ground_tools_probe.gd` (headless) holds it: both scenes' ground chamfered near the camera,
 F10 opening and closing in both, and every row pressed in the scene that offers it.
 
 **Not done here, on purpose.**
@@ -3595,7 +3595,7 @@ test. Leaving edit mode with unsaved edits says so and keeps them in the field. 
   build is not (the checkpoint's log has no entry for a placed build either);
 * the encounter keeps running while the tools are out.
 
-`tools/ground_tools_probe.gd` holds it (27 checks with §22.15's): F11 in and out, the site tool
+`tools/probes/ground_tools_probe.gd` holds it (27 checks with §22.15's): F11 in and out, the site tool
 refused, a building's pad unmoved by delete, resize and move, the raise brush raising open ground
 in the city's square, undo putting it back, and the heightfield test's tools in hand with sites.
 
@@ -3681,6 +3681,6 @@ Then, seen again through the scope, two leftovers at a cut corner, both fixed:
   corner point sits a bevel down, where the bevels of the bricks below meet, so it carries
   their groove on instead of standing over it.
 
-`tools/terrain_corner_shot.gd` frames free corners by drop height, for looking at this.
+`tools/shots/terrain_corner_shot.gd` frames free corners by drop height, for looking at this.
 `bevel_gap_probe` now also looks through a 12-degree lens at 48 close views. Chamfered
 triangles over the probe's field: 272k to 333k (+22%).

@@ -462,7 +462,7 @@ graph from a structure record (workshop builds, `StructureSpaces`). `space_at`, 
 every opening, goal, in building metres; `BuildingRegistry.to_world` turns it round),
 `reachable`. Not yet called by any play (step 4).
 
-`tools/building_layout_probe.gd` builds each tower in bricks and checks the graph against them:
+`tools/probes/building_layout_probe.gd` builds each tower in bricks and checks the graph against them:
 every doorway it walks through is air with wall beside it, and the spaces finder on the bricks
 sees the same rooms and doorways. Measured:
 
@@ -725,7 +725,7 @@ enemies knowing where your mech saw you, which is cheating the player can feel.
    *Built* (`BTPlayTravel`, order `MOVE`): only the leader asks for a path; each follower walks the
    leader's breadcrumb trail -- a line a body has already walked -- to its place in the file,
    with no search at all, and only paths to rejoin if knocked off it. Measured
-   (`tools/squad_travel_probe.gd`): a squad of four over a zigzag course, **1 path and 4,796
+   (`tools/probes/squad_travel_probe.gd`): a squad of four over a zigzag course, **1 path and 4,796
    expansions against 4 paths and 18,390 alone (26 %)**, the file within 4.5 m of its middle.
 3. **Flow fields when many go to one place.** Directed agents and swarms converging on a player or
    an objective read one field per `(goal, agent class)`, regenerated when the goal moves past a
@@ -949,7 +949,7 @@ counter is a hard counter, and they decay so a player who changes style is follo
 ### 9.1 What is built (2026-09-29)
 
 `scripts/ai/commander/`, run in the combat arena (`WaveDirector` is its host), checked by
-`tools/commander_probe.gd`:
+`tools/probes/commander_probe.gd`:
 
 - **`UnitCatalog`** — every unit, its **points** (Red Dawn's scale: rifleman 1 ... tank 20),
   mobility, role, weapon and health; `built` says which exist. Vehicles and mechs are in it and
@@ -1110,7 +1110,7 @@ tree clamps) and asks again when it is done, fails, the soldier is hurt, or its 
   refuses a model whose declared contract differs and runs the scripted twin, loudly (§11.3).
 - **Scripted now: `ScriptedCombatPolicy`.** A score per tactic from a few readable rules, then a
   weighted-random draw (softmax, `TEMPERATURE`), so the same situation does not always get the same
-  answer. `tools/combat_policy_probe.gd` checks the rules lean the right way over 2,000 draws.
+  answer. `tools/probes/combat_policy_probe.gd` checks the rules lean the right way over 2,000 draws.
 - **Every decision is logged** (`AIServices.decisions`; `-- --log-decisions=PATH` writes JSON lines
   with the contract in the first): the imitation data (§11.3, "imitation first").
 

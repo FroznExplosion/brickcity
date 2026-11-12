@@ -57,7 +57,7 @@ signal landed
 signal meleed(info: Dictionary)
 
 ## Pawns get a head crit spot (CritSpots). DEFERRED: off until the enemies are figures
-## rather than capsules; tools/crit_probe.gd switches it on to test the system.
+## rather than capsules; tools/probes/crit_probe.gd switches it on to test the system.
 static var head_crits := false
 
 ## Filled by whoever drives this pawn.

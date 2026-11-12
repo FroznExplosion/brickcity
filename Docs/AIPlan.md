@@ -87,7 +87,7 @@ Nothing AI yet. These are the engine changes the review found the AI cannot stan
 
 **Progress.** Step 1 done (2026-09-24): `DamageLog` always on with a host `seq`;
 `WorldAuthority` in `city_scene` (`_blast` asks, both record sites commit, landings shear only on
-the host); `tools/loopback_probe.gd` — 22 checks, host and client agree through a delaying,
+the host); `tools/probes/loopback_probe.gd` — 22 checks, host and client agree through a delaying,
 reordering wire, and a cheating client is caught. Baseline before it: 28 of 28 probes clean at
 `2445311`.
 
@@ -118,7 +118,7 @@ Two bugs in the dormant tier, found the same way and fixed — **they affect sin
 - **Step 3:** `IslandManager` announces spawned / settled / changed / slept / woken / removed
   (with a reason); `BuildingRegistry.handed_over`; building changes are `WorldAuthority.committed`.
 - **Step 2:** `AreaSnapshot` — the log plus each piece's transform, speed and rest, and sleeping
-  pieces as records with archetypes by name. `tools/snapshot_probe.gd`, 29 checks: a mid-fall
+  pieces as records with archetypes by name. `tools/probes/snapshot_probe.gd`, 29 checks: a mid-fall
   checkpoint and a later one with a piece asleep both load into a fresh world with every piece
   back brick for brick, where it was, moving as it was.
 
@@ -129,7 +129,7 @@ Two bugs in the dormant tier, found the same way and fixed — **they affect sin
   0.3 s after it comes to rest (2.5 s backstop), and `Layers.PAWN_MASK` no longer includes
   `RUBBLE`. Dormancy and the debris cap ask `interest_points()` (every player, later AI agents)
   instead of the camera; the cap sleeps landmarks farthest-first and never one within 8 m of
-  anybody. `tools/debris_probe.gd`, 20 checks.
+  anybody. `tools/probes/debris_probe.gd`, 20 checks.
 - **Piece commands are in grid space**, not chunk-local: a piece's local frame starts at the
   corner of the group it was cut as, which on the host included furniture a replay never has.
 - **Queued work survives a save.** `AreaSnapshot` v2 carries the island manager's pending
@@ -190,12 +190,12 @@ Still open:
 | Work | Where |
 |---|---|
 | `DamageLog` always on (R22) | `city_scene.gd` |
-| **Authority seam:** every structural mutation goes through one `WorldAuthority`. Single-player is a host with no clients (R4) | new `scripts/world_authority.gd`; `city_scene.gd` `_fire` / `_apply_blast` / `_shear_building` |
+| **Authority seam:** every structural mutation goes through one `WorldAuthority`. Single-player is a host with no clients (R4) | new `scripts/city/world_authority.gd`; `city_scene.gd` `_fire` / `_apply_blast` / `_shear_building` |
 | **Host-only physics outcomes** as commands: collision shears, landing fractures, island solves — addressed by content hash + chunk-local cells (R5) | `damage_log.gd` new kinds; `island_manager.gd` `fracture_on_impact`, `solve_island`, `shear_near` |
 | **Landmark classifier** by physical size, used by the debris cap and deletion (R2); small pieces deleted fast; pawns off `RUBBLE` | `island_manager.gd`, `layers.gd` |
 | **Lifecycle signals:** `piece_settled / slept / woken / changed / removed`, `building_handed_over`, `blocks_changed` | `island_manager.gd`, `building_registry.gd` |
-| **Area snapshot v0:** log replay with island spawning off + piece records; checkpoint save and load (R11) | new `scripts/area_snapshot.gd` |
-| **Loopback client harness** | new `tools/loopback_probe.gd` |
+| **Area snapshot v0:** log replay with island spawning off + piece records; checkpoint save and load (R11) | new `scripts/city/area_snapshot.gd` |
+| **Loopback client harness** | new `tools/probes/loopback_probe.gd` |
 
 **Gate:** `loopback_probe` — a scripted collapse on the host; the client ends with identical dead
 blocks, severed joints and large-piece content hashes, and its large pieces within tolerance of the
@@ -242,7 +242,7 @@ brick mech is piloted with the ported motor. Loopback agrees.
     `DamageSystem`; anything else is structure and goes to the owner's callback, which in the city
     is `chip()` / `_blast()` through `WorldAuthority`. City keys: `1` gun, `2` debug blast, `T`
     next class, `R` reload.
-  - Gates: `tools/chip_probe.gd` 21 checks (wear, rebuild, sleep, save, split, replay, the
+  - Gates: `tools/probes/chip_probe.gd` 21 checks (wear, rebuild, sleep, save, split, replay, the
     mapping); city `-- --gun` 6 checks (one round one CHIP; the third pistol round breaks the brick;
     a living target takes the bullet and the wall nothing; a held SMG fires at its rate, one
     command a round; a rocket blasts; the log replays).
@@ -262,7 +262,7 @@ brick mech is piloted with the ported motor. Loopback agrees.
     interpolated eye; look is whatever the camera points at. In the city, **`V`** stands a
     player pawn where the camera is and hands it the gun; `V` again leaves. The debug walker
     (SPACE SPACE) is untouched — Terrain and water have swimming in progress in it.
-  - Gates: `tools/pawn_probe.gd` 7 (scripted intents, as an AI will send them: walks, steps a
+  - Gates: `tools/probes/pawn_probe.gd` 7 (scripted intents, as an AI will send them: walks, steps a
     kerb, runs, crouches, strafes at crouch speed, jumps and lands; **two pawns given the same
     intents walk the same path to 0.00000 m over 150 ticks**); city `-- --play` 9 (lands, eye
     at `EYE_HEIGHT`, kerb yes and wall no, ducks a beam from a brick floor, holding the mouse
@@ -292,7 +292,7 @@ brick mech is piloted with the ported motor. Loopback agrees.
 - **Stage 5 done (2026-09-25): LimboAI v1.7.0** (`addons/limboai`, MIT), from Red Dawn's copy:
   Windows and Linux x86_64 only, 19 MB, the descriptor trimmed to match. Used as AI.md says:
   **a behaviour tree is a brain that fills `PawnIntents`**, never a second way to move a body.
-  `BTMoveTo` (`scripts/ai/`) is the first task. Gate: `tools/limbo_probe.gd` 5 — the extension
+  `BTMoveTo` (`scripts/ai/`) is the first task. Gate: `tools/probes/limbo_probe.gd` 5 — the extension
   loads, a two-task tree walks a Pawn to one point and then runs to another by the Pawn's own
   motor, reports success and leaves the intents at rest.
 - **Stage 6 done (2026-09-25): SwarmCore is in the build** — compiled into the brick extension
@@ -303,17 +303,17 @@ brick mech is piloted with the ported motor. Loopback agrees.
   seeded splitmix64** (`SwarmCore.set_seed`), per D9. `SwarmPileMesh` and `SwarmAuthor` came with
   it; `SwarmActors` (built around a third-party character model), `SwarmEffects` and
   `SwarmPromoter` (built around BoomerBorder's test gun and ghosts) wait for P8 and our own brick
-  figure. Gate: `tools/swarm_probe.gd` 8 — loads, a 400-agent ring spawns and closes on the goal,
+  figure. Gate: `tools/probes/swarm_probe.gd` 8 — loads, a 400-agent ring spawns and closes on the goal,
   every live agent has a tier, a bullet finds one, a grenade kills a clump, deaths come back for
   effects, worst tick 0.71 ms. Note for P8: the horde ticks in `_process`, at render rate, which
   co-op will have to change.
 - **Stage 7 done (2026-09-25): the procedural creatures, and `MeshForge` built for Windows.**
   The creature system (`scripts/creatures/`) and its native mesh builder, compiled into the brick
   extension (`src/creature/`) since it shipped as a Linux `.so` only; docs and reference code in
-  [Creatures/](Creatures/README.md). `tools/creature_probe.gd` (BoomerBorder's smoke test) passes
+  [Creatures/](Creatures/README.md). `tools/probes/creature_probe.gd` (BoomerBorder's smoke test) passes
   whole: six seeds build valid skinned meshes, walk, step, IK and LOD2 gait, and the native path
   matches GDScript to the vertex at 2.1× the speed. The gait ⇄ physics merge had never been run;
-  its first run here (`tools/creature_merge_draft.gd`, not a gate) is 6 of 13 — it builds,
+  its first run here (`tools/shots/creature_merge_draft.gd`, not a gate) is 6 of 13 — it builds,
   walks and leaks nothing, but tracks at 5.7 cm against 5 and cannot stumble or recover yet.
 - **Stage 8 done (2026-09-25): loopback agrees with a player's gun in it.** `loopback_probe`'s
   fight now has pistol rounds from both machines — CHIPs, 30 of them, the client's as requests
@@ -368,7 +368,7 @@ flood; arbiter steps AI down during a `--stress` collapse and back up after.
   collapse. The city syncs and runs it every tick (`--no-ai` turns it off to measure).
 - **F4** shows the AI overlay: level, budget, sync and run ms, the city's normal, indexed chunks,
   proxies, danger, smoke, queries and their mean cost, and per subsystem ms / ran / deferred.
-- Gates: **`tools/ai_world_probe.gd` 35** — hand counts through a wall (3 bricks, 1.05 m), a slab
+- Gates: **`tools/probes/ai_world_probe.gd` 35** — hand counts through a wall (3 bricks, 1.05 m), a slab
   tilted 30° (1 brick along its normal, 10 along its plane), two chunks (3 + 2), a hole (0) and
   beside it (3); **200 random rays through four chunks at random rotations agree with a
   millimetre brute force, 200 of 200**; cover life to the round, worn and not, pistol and sniper;
@@ -420,7 +420,7 @@ same reason AIWorld lives in the brick extension (R1):
 - **Budget:** the city queues `AINav.service` as a NAV job on the scheduler at 0.5 ms a tick (AI.md
   10.1), scaled by the arbiter's ladder. The caches are reserved up front: a rehash of a 60k-entry
   map was a 6.6 ms search step, now 281 µs at worst.
-- Gates: **`tools/nav_probe.gd` 21** — open ground straight; a one-stud door lets nobody in, three
+- Gates: **`tools/probes/nav_probe.gd` 21** — open ground straight; a one-stud door lets nobody in, three
   do; nobody under 8 plates, crouching under 10, standing under 13; up one course, not two without
   a step, two with one; off three courses, not four; a room entered round by its door, then
   through a hole shot in its back wall 79 µs after the change was announced; a proxy walked round;
@@ -480,7 +480,7 @@ checkpoint save and a loopback client that agrees.
   cover seconds, distance, range and how close the body is to what covers it — a wall's shadow six
   metres back is cover on paper only. 150–180 µs a search, 1.4 ms at worst in the shadow of a big
   block on first reading its columns. Corners and openings wait for P6's stack-and-clear.
-- Gates: **`tools/soldier_probe.gd` 8** in an arena — first round at 1.1–2.0 s; **hidden behind
+- Gates: **`tools/probes/soldier_probe.gd` 8** in an arena — first round at 1.1–2.0 s; **hidden behind
   the wall on the side away from the player on every one of 151–216 hiding ticks**; five peeks,
   firing only while peeking; the player gone behind a block, searched for to within 0.5–2.9 m of
   the last sighting; back and firing, re-acquired in 0.5–1.3 s; blinded by smoke, no rounds into
@@ -533,10 +533,10 @@ not — and the loopback client agrees on both.
   its own angle — they wait for the flyer height field and the commander's grid (P7, P9).
   Destruction-as-verb actions (shoot through, take cover away, make a door, make cover) are
   deferred to P6, where squads have a reason to use them.
-- Gates: **`tools/wreck_load_probe.gd` 9** — a floor plate over a column holds 500 of wreckage; a
+- Gates: **`tools/probes/wreck_load_probe.gd` 9** — a floor plate over a column holds 500 of wreckage; a
   balcony hung from one 2×2 brick under 60 gives way and comes away while the loaded floor stands;
   a piece that moves takes its load; a client replaying LOAD, SOLVE and UNLOAD has the same joints
-  broken and the same loads. **`tools/fights_back_probe.gd` 5** — shot at, its cover worn away, a
+  broken and the same loads. **`tools/probes/fights_back_probe.gd` 5** — shot at, its cover worn away, a
   soldier leaves with 0.67 s of cover left, and 16 of 18 rounds fired while it hid went into the
   wall (a three-course wall is exactly a crouched figure's height, so a skimming round can clip a
   head); after a collapse it hides behind a fallen wall section lying at 35° (85 ticks with the
@@ -605,15 +605,15 @@ after on ai-p6b.
   needs a drawn viewport and is wrong headless.
 - **City:** the breach hook is `_blast`; entering a pawn (V) shows the callouts and the aggro meter;
   **U** spawns a squad of four 30 m ahead, ordered to advance on the player when on foot.
-- Gates: **`tools/room_clear_probe.gd` 15** — two squads, two rooms: in through the door, the hidden
+- Gates: **`tools/probes/room_clear_probe.gd` 15** — two squads, two rooms: in through the door, the hidden
   defender dropped, DONE; with the door watched, a hole along the wall and in through it; both
   crisscross into four corners, nothing through a wall, nobody hit by a squadmate.
-  **`tools/squad_advance_probe.gd` 10** — 124 m moved masked and 0.00 m unmasked; with every
+  **`tools/probes/squad_advance_probe.gd` 10** — 124 m moved masked and 0.00 m unmasked; with every
   suppressor reloading the movers hold (917 → 1103 held mover-ticks); never more than two
   shooting the player; searched for in pairs (2 and 2); two dropped, the rest fall back from 10 to
-  34 m and hold. **`tools/aggro_probe.gd` 7** — the table's margin and half-life; player 1 shoots
+  34 m and hold. **`tools/probes/aggro_probe.gd` 7** — the table's margin and half-life; player 1 shoots
   and takes the focus (share 0.33 → 0.98) and both soldiers aim at it; player 2 shooting as hard
-  does not take it; player 1 stops and it moves; the mech's share shows. **`tools/callout_probe.gd`
+  does not take it; player 1 stops and it moves; the mech's share shows. **`tools/probes/callout_probe.gd`
   9** — the six cases of AI.md 6.5, the subtitles on screen, the rate limits. **City `-- --squad`
   4** — in a sealed tower a squad blows its own door (a BLAST in the log), stacks, flashes, goes in,
   drops the defender, reports DONE, and the log still replays.
@@ -678,13 +678,13 @@ break.
   ray's point; it fights back whatever the order. Its brain is off while piloted.
 - **City:** weight on the host; the fall rule on every mech; **Y** spawns an enemy mech 40 m
   ahead; **F** on foot is the mech's button (out of the cockpit it holds where it stands).
-- Gates: **`tools/mech_fall_probe.gd` 4** — five-storey towers: from 5 bricks it lands (energy
+- Gates: **`tools/probes/mech_fall_probe.gd` 4** — five-storey towers: from 5 bricks it lands (energy
   5.0), from 6 it breaks the roof and stops (6.0 → 3.9), from 12 three floors (12.0 → 9.9 → 7.7 →
-  5.5); a client applying the log lets the same 44 blocks go. **`tools/pawn_weight_probe.gd` 6** —
+  5.5); a client applying the log lets the same 44 blocks go. **`tools/probes/pawn_weight_probe.gd` 6** —
   headroom is the solve's (one unit under it holds, one over it breaks; a floor on a column
   `INF`); a balcony left 0.5 of room by wreckage: a person on the floor over the column changes
   nothing, a person on the balcony drops it and falls with it, an UNLOAD on the ground; the client
-  agrees. **`tools/mech_ai_probe.gd` 6** — the enemy's mech breaches a roofed building (one
+  agrees. **`tools/probes/mech_ai_probe.gd` 6** — the enemy's mech breaches a roofed building (one
   rocket, 66 bricks) and drops both infantry in 8.8 s, no round through a wall, the client agrees
   on 1,732 blocks; the player's mech follows a 22 m walk (6.1 m at the end, 8.8 m at most), holds
   while the pilot walks 22 m off, and sent to an area behind a 6 m wall goes round it and drops the
@@ -751,7 +751,7 @@ arbiter stepping down cleanly during a collapse; the `--stress` pass re-run with
 - **City:** `-- --stress --agents` puts the P8 population round the stress pass's centre: six
   squads of six, three flyers, a herd, 300 swarm rows, all after one player-side body; the budget
   runs in `_ai_tick`, and the swarm's tick counts in the AI's time.
-- Gates: **`tools/many_probe.gd` 11** — 36 soldiers in squads, 3 flyers, a herd of 5 and 300
+- Gates: **`tools/probes/many_probe.gd` 11** — 36 soldiers in squads, 3 flyers, a herd of 5 and 300
   rows round one player: exactly ten smart and the rest directed in all 70 samples, the smart the
   most important by the budget's own scores; rows walk on the player and its rounds hit them (54);
   9 rows promoted into hunting animals that bite; with the player gone all 6 go back to rows;
@@ -786,7 +786,7 @@ missions, threat profile).
 measurably different rosters and doctrine in the next encounter, within the clamps.
 
 **Done (2026-09-30), in two hands.** The commander itself came from the combat-arena work
-(`scripts/ai/commander/`, `tools/commander_probe.gd` 28): a per-encounter `Commander` that
+(`scripts/ai/commander/`, `tools/probes/commander_probe.gd` 28): a per-encounter `Commander` that
 orders squads (ADVANCE, MOVE in file, CLEAR_ROOM) and buys reinforcements with points; a
 `SectorGrid` of where its men died; a `Doctrine` from the `ThreatProfile` (sniper, rusher,
 demolisher), its desperation and the difficulty, every weight clamped to ×0.5..×2 of its base;
@@ -802,14 +802,14 @@ of P9, on ai-p9:
   its wave-3 check missed its window.
 - **The careful player** — enough seen, under 10 bricks a minute broken — is answered like the
   opposite of the demolisher: the buildings are safe, 80 % of a reinforcement goes inside.
-- **The character save** (`scripts/character_save.gd`, A14): the character, the mech, the guns,
+- **The character save** (`scripts/core/character_save.gd`, A14): the character, the mech, the guns,
   the missions, the threat profile and the aggro history (pilot and mech shares), as versioned
   JSON at `user://profile/character.json`. A gun is kept as what made it — class, seed, tier — and made
   again the same; a file from a newer version is refused rather than half-read.
   `take_encounter(commander, aggro)` at the end of one; `profile()` for the next commander.
 - **The friendly side:** a `Commander` on the player's team, its `rally` kept on the player, sends
   its squads to MOVE in file after the player when they fall behind — the same code as the enemy's.
-- Gate: **`tools/threat_style_probe.gd` 7** — three scripted minutes each of A (a demolisher whose
+- Gate: **`tools/probes/threat_style_probe.gd` 7** — three scripted minutes each of A (a demolisher whose
   mech kills: 240 bricks a minute, kills mostly the mech's) and B (a careful pilot), each ended into
   a save on disk and read by a FRESH commander: A is read demolisher/mech, B balanced/pilot; the
   save carries the profile exactly, the character, the missions and three guns made again

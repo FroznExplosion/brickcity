@@ -22,7 +22,7 @@ extends RefCounted
 ##     imitation data, and what points at the rule to retune.
 ##
 ## The scoring is a pure function of the episode (score()), so it is tested on
-## made-up episodes (tools/combat_policy_probe.gd) as well as live ones.
+## made-up episodes (tools/probes/combat_policy_probe.gd) as well as live ones.
 
 ## What dying costs, in hit points -- more than any exchange of fire earns.
 const DEATH := 60.0

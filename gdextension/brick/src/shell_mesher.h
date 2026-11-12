@@ -6,7 +6,7 @@
 
 using namespace godot;
 
-/// A recipe building's shell, the arrays of it (scripts/building_shell.gd).
+/// A recipe building's shell, the arrays of it (scripts/city/building_shell.gd).
 ///
 /// BuildingShell.build_arrays walked every band of a tower in GDScript and
 /// pushed each quad's four corners into five arrays: 2.7-5.7 ms for a 4,000-

@@ -1453,7 +1453,7 @@ static thread_local float t_bevel_override = -1.0f;
 /// the geometry chamfer is on. A groove between two chamfered bricks is a V
 /// a bevel deep; where it runs into a slope's cheek, a curve's skirt or an
 /// overlay's lip, that wall used to stop at the bricks' top and the V's end
-/// was a hole into the unmeshed ground (tools/bevel_gap_probe.gd).
+/// was a hole into the unmeshed ground (tools/probes/bevel_gap_probe.gd).
 static inline float bevel_reach() { return g_face_bevel > 0.0f ? g_face_bevel * 1.5f : 0.0f; }
 
 void BrickTerrain::configure(int64_t world_seed) {

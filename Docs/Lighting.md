@@ -128,7 +128,7 @@ Their shadows are faked, not shadow-mapped:
 value noise in the clouds' frame (a planet's own, its centre the origin; the
 city's world), drifting with the wind, the cover moving the threshold; four
 globals (`cloud_from_world`, `cloud_sun`, `cloud_shape`, `cloud_drift`,
-project.godot) set each frame by `CloudLayer` (`scripts/cloud_layer.gd`).
+project.godot) set each frame by `CloudLayer` (`scripts/render/cloud_layer.gd`).
 
 - The layer: a planet with air has a shell 0.9 km over its peaks
   (`CloudLayer.for_planet`, made by `PlanetScene._clouds_for` for the world
@@ -193,7 +193,7 @@ themselves on every one.
 
 ## 4. One light rig
 
-`scripts/light_rig.gd` (new): owns the sun, the second light (5), the
+`scripts/render/light_rig.gd` (new): owns the sun, the second light (5), the
 environment, sky, tonemap and exposure, and the settings-menu quality level.
 Every scene asks it for these instead of building its own; the planet scene
 feeds it the star, the bodies and the camera. One place for the numbers, one
@@ -301,8 +301,8 @@ re-bake (50-80 ms a tower) per hit. A grid beside the mesh instead:
   buffer for nothing. (That buffer: every mesh with an instance parameter
   set, or in its shader, takes 16 slots until freed; `project.godot` has
   262,144 slots, 16,384 meshes, after "Too many instances using shader
-  instance variables" at Godot's 65,536. `tools/instance_buffer_probe.gd`,
-  `tools/instance_uniform_count.gd`.)
+  instance variables" at Godot's 65,536. `tools/probes/instance_buffer_probe.gd`,
+  `tools/shots/instance_uniform_count.gd`.)
 - **The sun past the shadow range**: not needed. Shadows reach 400 m on
   the planet (`LightRig.build`) and in the city (`SUN_SHADOW_DISTANCE`);
   neither draws a building in bricks that far (far boxes; the city's
@@ -375,19 +375,19 @@ but its sockets on top do not take a ceiling's.) New tiles `tile_1x3`,
   the hung lights: a one-way group hangs a `SpotLight3D` (65 degrees, 6 m)
   pointed its way, the rest an omni; merged only with lamps shining the
   same way; in their colour.
-- `tools/lamp_probe.gd` (14 checks); light gate: a red under-tile under the
+- `tools/probes/lamp_probe.gd` (14 checks); light gate: a red under-tile under the
   ceiling over the room lights red under it and hangs a spot down (picture
   `light_gate_lamp`).
 - Build with it: pick a tile (or an under-tile) and the Lamp material.
 
 ### 6.4 The player's flashlight
 
-`scripts/flashlight.gd` (`Flashlight`): a `SpotLight3D` on the player's camera
+`scripts/render/flashlight.gd` (`Flashlight`): a `SpotLight3D` on the player's camera
 (city and planet, `Flashlight.mount`), toggled by the `flashlight` action
 (**L**, rebindable in Options > Controls; the developer's Brick Seams key moved
 to F12 for it). 28 m, 24 degrees, warm white, shadows on. It sits 16 cm right
 of and 14 cm below the eye, so its shadows show beside what throws them. Off at
-the start, so no gate's pictures change. `tools/flashlight_probe.gd` (9 checks).
+the start, so no gate's pictures change. `tools/probes/flashlight_probe.gd` (9 checks).
 
 ### 6.5 Near lamps: real light from the nearest lamps
 
@@ -493,7 +493,7 @@ back on surfacing (the rig's neutral colour counts now).
 
 | Part | What | Where |
 |---|---|---|
-| Rig | sun, fill, environment, sky, exposure, ambient boxes | `scripts/light_rig.gd` (`LightRig`); `planet_scene._build_light` |
+| Rig | sun, fill, environment, sky, exposure, ambient boxes | `scripts/render/light_rig.gd` (`LightRig`); `planet_scene._build_light` |
 | Sky cast | hue kept, luminance 1, no channel past 0.45 from 1: a red air was (2.2, 0.46, 0.3), now (1.45, 0.88, 0.83) | `LightRig.sky_cast` |
 | Ambient | 35% sky, 65% a neutral grey as bright as the sky; never under starlight (0.6 x a cool grey (0.4, 0.45, 0.6)) so a moonless night is dark but playable | `LightRig.set_sky` |
 | Ground tint | worlds 5-15% (was 10-40%), moons 15-35% (was 20-60%) of a hue | `star_system.gd` |
@@ -505,7 +505,7 @@ back on surfacing (the rig's neutral colour counts now).
 | Fill | 5: brightest body over the horizon, `0.6 x sqrt(score)`, at most 0.35 of the sun; shadows at night above 0.02 | `PlanetSystem._fill`, `LightRig.set_fill` |
 | Ambient boxes | 6.2: every building laid in bricks ("room": 25% of outdoor ambient + 0.02), every station or ship module laid ("cabin": its own lights, 0.3); walls (0.45 m) left outside; reflections black inside; a toppled building's goes | `planet_scene._ambient_boxes`, `LightRig.add_box` |
 
-| Grid light | 6.1: sky and lamp on the brick grid of every building laid here; a hole lets the sky in, Glow bricks light rooms; the box lights only what is in it | `BrickWorld.chunk_light_tiles`, `scripts/brick_grid_light.gd`, `brick.gdshader` (`grid_light`), `planet_scene._ambient_boxes` |
+| Grid light | 6.1: sky and lamp on the brick grid of every building laid here; a hole lets the sky in, Glow bricks light rooms; the box lights only what is in it | `BrickWorld.chunk_light_tiles`, `scripts/render/brick_grid_light.gd`, `brick.gdshader` (`grid_light`), `planet_scene._ambient_boxes` |
 
 Gate: `res://scenes/planet.tscn -- --gate=light` (headless for the numbers;
 windowed adds pictures `shots/light_gate_*.png` and checks that the box

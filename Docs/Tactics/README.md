@@ -16,7 +16,7 @@ How the enemy chooses what to do, authored as odds rather than code.
   `golden` cases with the page's exact odds.
 - **In the game:** `TacticsBook` (`scripts/ai/tactics/tactics_book.gd`) reads the book
   and gives the same odds, picks, extras and squad plans.
-  `tools/tactics_book_probe.gd` checks it against the golden cases and checks the
+  `tools/probes/tactics_book_probe.gd` checks it against the golden cases and checks the
   behaviour asked for (melee in reach ~95%, shoot then grenade face to face, grenade
   first at a player behind cover, no melee from far unless a melee fighter).
 
@@ -30,10 +30,10 @@ How the enemy chooses what to do, authored as odds rather than code.
   (rush and melee added, CombatPolicy spec 2); grenades are thrown (`Grenade`: lobbed,
   a danger zone for 1.2 s, then up to 120 damage within 4 m, none behind bricks, and a
   small blast in the bricks; two per soldier, never onto a friend); call for help and
-  mark are said aloud. `tools/ai_moves_probe.gd` checks grenade, melee and rush. A move the game can't do yet (grenade,
+  mark are said aloud. `tools/probes/ai_moves_probe.gd` checks grenade, melee and rush. A move the game can't do yet (grenade,
   smoke, breach...) is counted as *wanted* and the draw is made again among the
   doable moves. Every logged decision carries the plan (`--log-decisions=PATH`).
-  `tools/tactics_sense_probe.gd` checks the readings and a fight.
+  `tools/probes/tactics_sense_probe.gd` checks the readings and a fight.
 
 - **The player in a building** (2026-10-11): the moment "Player is in a building" is read
   when the player is under a roof and the soldier is not (before everything but close
@@ -48,7 +48,7 @@ How the enemy chooses what to do, authored as odds rather than code.
   and where its path goes into bricks the soldier plants a charge (2 s) and blows it
   (`Soldier.breach_way`, through `on_breach`); *Guard the ways out* and *Wait them out* are
   now built -- cover facing the door the player would come out of (where the walk goes under
-  the roof, `Soldier.watch_point`). `tools/inside_probe.gd` (8) checks the readings, the
+  the roof, `Soldier.watch_point`). `tools/probes/inside_probe.gd` (8) checks the readings, the
   odds and a soldier blowing its way in.
 
 - **What happened, counted:** while the city runs (not in a gate), `TacticsTally`
@@ -69,12 +69,12 @@ How the enemy chooses what to do, authored as odds rather than code.
   holds no gun, fodder stays on the cheap brain, a large body walks the large map, and a
   phase changes it mid-fight. A flyer is a type too (`Flyer.set_type`): the casebook's
   move becomes its flight mode, and a bomber on a flyer dives and goes off.
-  `tools/roster_probe.gd`, `tools/roster_field_probe.gd`, `tools/roster_types_probe.gd`
-  and `tools/roster_air_probe.gd` check it.
+  `tools/probes/roster_probe.gd`, `tools/probes/roster_field_probe.gd`, `tools/probes/roster_types_probe.gd`
+  and `tools/probes/roster_air_probe.gd` check it.
 
 - **Mechs:** a mech recipe carries its class's shield, armour, health and doors
   (`derived.mech`); `Mech.set_type` applies them through `MechLayers`, which is how a
-  mech is killed (`Docs/AIRoster.md` 4.2; `tools/mech_layers_probe.gd`).
+  mech is killed (`Docs/AIRoster.md` 4.2; `tools/probes/mech_layers_probe.gd`).
 
 - **Mechs are fielded:** every mech recipe is `built`, and a commander buys one by its
   recipe as support (`Docs/AIRoster.md` RO11, third part). A mech whose attack is
@@ -85,11 +85,11 @@ How the enemy chooses what to do, authored as odds rather than code.
   mech's own page of the casebook. `TacticsSense.read_mech` reads them,
   `BookCombatPolicy.decide_mech` rolls, and `MechBrain` does it (stand off, close in,
   punch, back off, turn the open side away, bail out) whenever its pilot has given it
-  no order. `tools/mech_fight_probe.gd` checks it; `tools/mech_mount_probe.gd` checks
+  no order. `tools/probes/mech_fight_probe.gd` checks it; `tools/probes/mech_mount_probe.gd` checks
   bailing out. With somebody riding it the moment is "A rider on us" (`mech_ridden`:
   electric smoke, scrape it off, crush it, or fight on for the escort), with the facts of
   its own group (smoke ready, somewhere low near, a wall behind, our soldiers near);
-  `TacticsSense.read_ridden`, `BookCombatPolicy.decide_ridden`, `tools/mech_rodeo_probe.gd`.
+  `TacticsSense.read_ridden`, `BookCombatPolicy.decide_ridden`, `tools/probes/mech_rodeo_probe.gd`.
   The Roster tab's **Boarder** has the rodeo mod: it climbs a player's mech
   (`Soldier.rodeo`).
 

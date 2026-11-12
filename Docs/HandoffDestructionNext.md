@@ -229,8 +229,8 @@ where the blink and most of the spikes are.
   (stand-ins hidden by the rubble field, retiring bands). Watch whether it repeats.
 - **GDScript warnings** in the user's paste are all in other areas' files (weapons, vehicles,
   mech, AI, menu, disasters, planet nav, character) except `city_scene.gd:6031` (`Tank.Seat`
-  = -1, vehicles' to fix). City/building scripts are clean (`tools/warn_check.tscn` prints a
-  script's warnings: `-d --headless --path . res://tools/warn_check.tscn -- scripts/x.gd`).
+  = -1, vehicles' to fix). City/building scripts are clean (`tools/shots/warn_check.tscn` prints a
+  script's warnings: `-d --headless --path . res://tools/shots/warn_check.tscn -- scripts/x.gd`).
 
 ## Done in the last sessions (all merged)
 

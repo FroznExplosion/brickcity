@@ -1,6 +1,6 @@
 shader_type spatial;
 #include "res://shaders/weather.gdshaderinc"
-// An octahedral impostor card (scripts/impostor_baker.gd, Docs/Impostors.md 3.3).
+// An octahedral impostor card (scripts/render/impostor_baker.gd, Docs/Impostors.md 3.3).
 //
 // One instance of a unit quad per object, in a MultiMesh; the instance
 // transform is the OBJECT's (position, turn, scale), and the card is built

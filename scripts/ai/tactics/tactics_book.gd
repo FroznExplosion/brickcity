@@ -3,7 +3,7 @@ extends RefCounted
 ## The enemy's choices as authored on the Tactics Casebook page
 ## (Docs/Tactics/tactics_casebook.html), read from content/base/data/ai/tactics_book.json
 ## (made by tools/tactics_export.js). Same odds as the page, to the last digit:
-## tools/tactics_book_probe.gd checks the page's own numbers.
+## tools/probes/tactics_book_probe.gd checks the page's own numbers.
 ##
 ## A choice is made in a MOMENT (a broad situation: contact, lost the player,
 ## close quarters...). What is true right now -- FACTS (inside a building, player

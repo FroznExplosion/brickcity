@@ -20,7 +20,7 @@ const COUNT: int = 10
 ##   uncommon 0.13 | rare 0.26 | unique 0.39 | legendary / mythic 0.51
 ## The colour alone is worth half a tier in all (combat design v2): what keeps a gun
 ## worth carrying across a tier is its modifiers (GunModifiers), and
-## tools/combat_numbers_probe.gd checks the shots-to-kill rows that follow.
+## tools/probes/combat_numbers_probe.gd checks the shots-to-kill rows that follow.
 ## Enemy health steps by the same factor (LootRoller.enemy_hp), so ON LEVEL every
 ## shots-to-kill number is the same at every tier.
 const TIER_STEP := 1.25

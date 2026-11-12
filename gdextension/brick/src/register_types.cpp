@@ -32,19 +32,19 @@ void initialize_brick_module(ModuleInitializationLevel p_level) {
     ClassDB::register_class<BrickWave>();
     // Pools: dug ground that fills from the sea (Water.md 12).
     ClassDB::register_class<BrickPools>();
-    // ImpostorLod's tiering and packing (scripts/impostor_lod.gd).
+    // ImpostorLod's tiering and packing (scripts/render/impostor_lod.gd).
     ClassDB::register_class<ImpostorSet>();
-    // RecipeMesh's merge (scripts/recipe_mesh.gd).
+    // RecipeMesh's merge (scripts/build/recipe_mesh.gd).
     ClassDB::register_class<MeshMerge>();
-    // BuildingShell's arrays (scripts/building_shell.gd).
+    // BuildingShell's arrays (scripts/city/building_shell.gd).
     ClassDB::register_class<ShellMesher>();
-    // ShapedParts' cell sampling (scripts/shaped_parts.gd).
+    // ShapedParts' cell sampling (scripts/build/shaped_parts.gd).
     ClassDB::register_class<ShapedSampler>();
     // The asset workshop's shells: a smooth surface round a sampled form.
     ClassDB::register_class<FormMesher>();
     // The asset workshop's SDF block-out (Docs/AssetWorkshop.md).
     ClassDB::register_class<SdfForm>();
-    // Water inside a hull, its flow (Docs/Hulls.md 5, scripts/hull_water.gd).
+    // Water inside a hull, its flow (Docs/Hulls.md 5, scripts/hulls/hull_water.gd).
     ClassDB::register_class<HullFlow>();
     // SwarmCore, from BoomerBorder (src/swarm/).
     ClassDB::register_class<SwarmCore>();

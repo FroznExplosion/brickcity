@@ -173,7 +173,7 @@ diagonal can only be as far down as the two axis drops put together, so the dept
 **The arithmetic above is for ONE component, and the first implementation ignored that.** Four
 components with amplitudes 1.00, 0.55, 0.28 and 0.14 summed to a slope of **1.67**, giving a
 **0.72-stud terrace** — under one stud, which is precisely the "reads as noise, not terraces"
-failure this section warns about for plate quantisation. `tools/terrain_probe.gd` caught it.
+failure this section warns about for plate quantisation. `tools/probes/terrain_probe.gd` caught it.
 
 The general rule falls out of the same sum: **a component whose amplitude is below the 0.42 m step
 cannot move the stepped surface at all**, so it spends slope budget and buys no visible detail.
@@ -502,7 +502,7 @@ That handles the water. It does not handle the *view*, and this is the part that
 away: below the surface the sky is still bright, the horizon is still crisp, and the ground 40 m
 off is still sharp, so the camera reads as having moved below a pane of glass. §6 planned a
 waterline post-process for this. What is built is smaller and needed no pass of its own:
-`Underwater` (scripts/underwater.gd) switches the `Environment` to exponential fog at 0.085
+`Underwater` (scripts/water/underwater.gd) switches the `Environment` to exponential fog at 0.085
 density in a green-blue tint, with `fog_sky_affect` at 1 so the sky fogs to the same colour as the
 far water. **Removing the horizon is the whole trick.** Ambient goes to a flat underwater colour
 and saturation drops slightly. Caustics and light shafts from §6 are still not built.
@@ -1066,9 +1066,9 @@ drains; ground dug below it fills by flowing, and the water in the hole is a poo
 * **Not saved**: a pool is refilled from the sea at load, so only pools fed by the sea come back.
   Nothing digs the heightfield in play yet — the editor's brush does; a weapon crater writes the
   same sculpt and needs only the same `terrain_changed` call.
-* **Probe**: `tools/pools_probe.gd` (breach fills, then stills; seep; inland stays dry; poured
+* **Probe**: `tools/probes/pools_probe.gd` (breach fills, then stills; seep; inland stays dry; poured
   water conserved and flat; dug sea stays sea; seabed dry in the hole). Pictures:
-  `tools/pools_shot.gd` (needs a window).
+  `tools/shots/pools_shot.gd` (needs a window).
 * **The sea lies still against a pool** (2026-10-02). The mask's G channel is how much of its wave
   the sea keeps: 0 against pool water, full 14 studs off (chamfer distance, smoothstep).
   `water.gdshader` scales the whole surface offset by it, so where the two meet the sea is at its

@@ -3,7 +3,7 @@
 #include "res://shaders/clouds.gdshaderinc"
 //
 // Every uniform defaults to "no weather", so a shader that includes this and a
-// material nobody sets draw exactly as they did. scripts/weather_fx.gd pushes
+// material nobody sets draw exactly as they did. scripts/render/weather_fx.gd pushes
 // the values into every registered material.
 //
 //   weather_wet    0 dry .. 1 soaked. Darker a little, far glossier, most on

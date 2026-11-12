@@ -260,7 +260,7 @@ Smallest and most certain first; each merges on its own.
 
 ## 6. Built (2026-09-28)
 
-Gate: `tools/collapse_probe.gd` (27 checks), plus the city's `--nav`, `--soldier`, `--play`,
+Gate: `tools/probes/collapse_probe.gd` (27 checks), plus the city's `--nav`, `--soldier`, `--play`,
 `--wreck`, `--rooms` gates, `float_probe` and `disaster_probe`.
 
 1. **The box tier is for undamaged buildings** (`_make_shell`), and a damaged building has no tier
@@ -282,7 +282,7 @@ Gate: `tools/collapse_probe.gd` (27 checks), plus the city's `--nav`, `--soldier
    Probe: an undercut that spares the stairwell — without the fix 14 stair blocks stood alone
    where the floors had gone; with it none, and every building with floors still round its
    stairwell kept its stairs. No recipe change was needed.
-5. **Crush** (`scripts/crush.gd`). A piece faster than 2.5 m/s whose solid is where a pawn is hurts
+5. **Crush** (`scripts/destruction/crush.gd`). A piece faster than 2.5 m/s whose solid is where a pawn is hurts
    it by speed × √bricks; 100+ bricks at 4 m/s kills; a pawn inside a piece's solid is shoved out.
    Probe: a small piece dropped on a soldier 500 → 469 hp; a 138-brick one kills a soldier held
    still (a thinking one walks out from under it — the evade works even from 2 m); a soldier inside

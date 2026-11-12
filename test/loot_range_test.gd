@@ -681,7 +681,7 @@ func _run_probe() -> void:
 	# worth about half a tier (ln 1.12 / ln 1.25 = 0.51), and a gun's power past that is
 	# its modifiers, which the score leaves out and the card lists beside it. (v1's
 	# "a legendary is worth two tiers, a rare one" anchors went with v1's rarity steps;
-	# tools/combat_numbers_probe.gd holds the v2 shots-to-kill rows.)
+	# tools/probes/combat_numbers_probe.gd holds the v2 shots-to-kill rows.)
 	var pistol := WeaponClass.builtin(&"pistol")
 	var t1_com := _mid_roll_score(pistol, 1, 1)
 	var t2_com := _mid_roll_score(pistol, 2, 1)

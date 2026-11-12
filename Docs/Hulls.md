@@ -84,7 +84,7 @@ seals it. Ships of every seed checked, as `88b5bc6` did for loose bricks.
 
 ### 3.1 Built (2026-11-02): `HullAir`
 
-`scripts/hull_air.gd`, gate `tools/hull_air_probe.gd` (headless, 8 ok).
+`scripts/hulls/hull_air.gd`, gate `tools/probes/hull_air_probe.gd` (headless, 8 ok).
 
 - Baked from the laid recipe: one `get_solid_cells` call, doors from `BuildDoors.of(recipe)` as
   walls to the fill, an outside fill from the chunk's faces, then inside air labelled into
@@ -251,7 +251,7 @@ drains.
 * **Down** is the ship's own: its frame's -Y while its generator pulls, else the world's
   gravity turned into its frame (`water_down`). A boat's is the world's down, so its water runs
   to the low side as it rolls.
-* **The automaton** is `HullWater` (scripts/hull_water.gd: holes, pumps, bookkeeping) on
+* **The automaton** is `HullWater` (scripts/hulls/hull_water.gd: holes, pumps, bookkeeping) on
   `HullFlow` (C++, src/hull_flow.*: the flow passes).
   * It runs 4 passes a step: down to full, then aside (40% of the difference, weighted
     downhill), then up when a cell is over full.
@@ -271,12 +271,12 @@ drains.
   hollow under a brick floods), so a hull flooded through sinks. Patched and pumped out, it
   rises.
 * **Gates:**
-  * `tools/hull_flood_probe.gd`, 8 ok, on a generated spaceship held still with a level water
+  * `tools/probes/hull_flood_probe.gd`, 8 ok, on a generated spaceship held still with a level water
     plane. A hole in its floor fills the room to 0.77 m against a 1.0 m outside level in 25 s,
     never over. A shut door holds the next room dry. Opened, 110 cells go through. Water is
     only ever in inside cells and open doorways. Mass: in 371.0 = out 0 + dried 4.05 + held
     367.0. Lowered under the hole, 253 cells run out.
-  * `tools/boat_probe.gd`, 7 ok (new: lists, sinks, rises). A 21-brick hole 0.38 m under the
+  * `tools/probes/boat_probe.gd`, 7 ok (new: lists, sinks, rises). A 21-brick hole 0.38 m under the
     water floods 61 t into the hold and it lists 5.2° toward it. Left open, its deck goes
     under. Patched and pumped at 300 cells/s, its keel comes back from 2.94 m to 0.53 m with
     no water left.
@@ -424,7 +424,7 @@ flooding enough sinks it; patching and pumping out lets it rise.
   * It is always `riding` afloat, so its bricks' collision is its ghost.
   * On the ghost, up is the world's up turned into its frame (`ghost_up`), so the crew feel
     it roll.
-* **Gate: `tools/boat_probe.gd`, 4 ok.**
+* **Gate: `tools/probes/boat_probe.gd`, 4 ok.**
   * 1,012 bricks, 18,344 kg, hull envelope 113.5 m³.
   * Dropped onto a calm sea: after 20 s it is level within 0.03°, at 0.002 m/s, its keel
     0.310 m under for a predicted 0.307 m.
@@ -588,7 +588,7 @@ sleeps and wakes with its planet.
   bricks drawn and riding the whole way. Its collision comes back in the world once it is
   slower than `PlanetSystem.COAST_STILL` (0.3 m/s), and you step off the ghost onto it.
 * **Gates**:
-  * `tools/ghost_hull_probe.gd`, 10 checks. Its ghost is built once in its own space. A body
+  * `tools/probes/ghost_hull_probe.gd`, 10 checks. Its ghost is built once in its own space. A body
     boards at the same place. 6 s of rocking, turning and 300 m/s flight: drift 0.0000 m,
     drawn on the real ship 0.0000 m off. It walks the distance it walked. A ray aboard meets
     a real wall. A hole and its repair show in the ghost. A reparent and an origin shift
@@ -764,7 +764,7 @@ the same order give the same result twice.
   snap: 9.3); front end A (step 10, 9.2) uses the same `restore`.
 * **Still open:** bricks that left on a piece come back as new ones. The drifting piece
   stays as debris. Pulling the debris back in (§9 B, optional) is not built.
-* **Gate: `tools/repair_probe.gd`, 7 checks:** the shot, the rim first, the tool's rate,
+* **Gate: `tools/probes/repair_probe.gd`, 7 checks:** the shot, the rim first, the tool's rate,
   refused while riding, every brick exactly as built (part, colour, full hp, same id), the
   breach sealed and filling, and the replay. The ship's commands replayed on a fresh ship
   give the same bricks after the shot and at the end.
@@ -877,7 +877,7 @@ the slots went from 856k to 129k with the same faces drawn. The GPU time barely 
 (dead slots are cheap to draw: 3.3 ms, within the noise). The gain is memory: the bake on
 the CPU (224 bytes a face) and the vertex buffer in the GPU's memory, which on this machine
 is the same RAM. That is about 80 MB for those 24 pieces. Gate:
-`tools/compact_bake_probe.gd`. A brick brought back alive in such a chunk has no faces to
+`tools/probes/compact_bake_probe.gd`. A brick brought back alive in such a chunk has no faces to
 patch in. Revive (§9, step 5) must bake the chunk again.
 
 **E6 measured (2026-11-07, `--harbour` and `--boat` passes, windowed, no other runs):** one

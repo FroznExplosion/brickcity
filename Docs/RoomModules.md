@@ -110,7 +110,7 @@ bricks is a separate step (in the workshop as a preview, in the city as a buildi
 
 ### 3.1 As built (stages 2-5, 2026-10-30)
 
-**The library** (`scripts/room_modules.gd`, `RoomModules`): `library()` reads every build in the
+**The library** (`scripts/rooms/room_modules.gd`, `RoomModules`): `library()` reads every build in the
 building and room libraries with its module on; `make(recipe)` gives `{name, rules, turns[4]}`.
 Each build's rooms are found again from its bricks (`refresh`: the record's seeds, its links,
 kinds and marks kept), so an old save still has the right connectors. A turn holds the turned
@@ -122,7 +122,7 @@ columns). A build in more than one grid is not a module yet (no sideways turn).
 floor. `with_floor` gives it one on row 0 under every column it has bricks in or closes round
 (plates 4x4, 2x2, 1x1), so it is a whole room on the ground or up a stair.
 
-**The grow** (`scripts/room_grow.gd`, `RoomGrow.grow(lib, {seed, rooms, path, tries, balcony,
+**The grow** (`scripts/rooms/room_grow.gd`, `RoomGrow.grow(lib, {seed, rooms, path, tries, balcony,
 hang})`): a start module (role `start` or a `start` link; any module when there is none) at the
 origin, turned at random; the path grown from it by backtracking, `path` modules then a finish
 module (role or link; with none, the path ends at its last room), shorter if the tries run out;
@@ -163,7 +163,7 @@ wider than the baseplate makes the plate bigger. **Enter** places it in the city
 ### 3.2 Doors (built 2026-10-31)
 
 A door is the one thing in a building that moves, so it is not a brick in the grid (a staircase
-fixture is): `scripts/build_doors.gd`, `BuildDoors`, a node in the city and in the workshop that
+fixture is): `scripts/build/build_doors.gd`, `BuildDoors`, a node in the city and in the workshop that
 hangs a leaf in each door hole of every build that is bricks, follows its chunk, swings it open
 (a quarter turn) when a figure -- any CharacterBody3D -- comes within 1.6 m of the doorway and
 shuts it when they have gone. A shut leaf stops what a body stops. While the brick over the
@@ -174,12 +174,12 @@ the hole's box in the build's cells (`BuildDoors.hole` from a connector), and an
 kind *door* by hand in the spaces tool (its cells' box). The leaf runs along the longer flat side
 of the box, hinged at its low end, a plate short of the hole, brown unless said. The grow puts
 one in the first wall of every joined doorway, a hung room's and the way in and out (with the
-chance `doors`, 1); the shell in every doorway it has. `tools/build_doors_probe.gd` (10, doors
+chance `doors`, 1); the shell in every doorway it has. `tools/probes/build_doors_probe.gd` (10, doors
 and lifts).
 
 ## 4. Set by shell (stage 6, built 2026-10-31)
 
-`scripts/room_shell.gd`, `RoomShell.generate(lib, {seed, width, depth, footprint, storeys, pitch,
+`scripts/rooms/room_shell.gd`, `RoomShell.generate(lib, {seed, width, depth, footprint, storeys, pitch,
 setback, setback_every, setback_sides, corridor, room_max, window_every, fill, lift, balcony})` ->
 `{ok, why, recipe, plan, stats}`. The outside first: a **footprint** -- the box `width` x `depth`, or any shape,
 `footprint` the columns it stands on (in the workshop: the outline the open build closes round,
@@ -197,7 +197,7 @@ rest is inside.
   up through the roof (the finish).
 * **The lift** (`lift`, where it fits): a 4 x 4 shaft past the hall's north wall (else its south),
   a doorway to the hall each storey, no slab in it between the ground and the top storey, a stop
-  a storey. `scripts/build_lifts.gd`, `BuildLifts`, a node as doors are: a platform a plate thick
+  a storey. `scripts/build/build_lifts.gd`, `BuildLifts`, a node as doors are: a platform a plate thick
   in the shaft; stood on 0.8 s it rides a storey up (down from the top) at 2 m/s; stood by on
   another storey (within 3 studs of the shaft) with nobody on it, it comes there.
   `meta["lifts"]` = `[{"lo", "size", "stops"}]`.
@@ -243,7 +243,7 @@ and the shell's own (a corridor with its hall a storey, the filler rooms); `meta
 says `generator: "shell"`. In the workshop: under the grow on the rooms panel, *Set a tower by its
 shell*: seed, width, depth, storeys, setback, every, *sides in* N S E W, *this build's outline
 as the footprint*, **Generate tower**, **Next seed** (the plate and the volume over it grow to hold
-a tall one). `tools/room_shell_probe.gd` (15: adds a north-only setback, stacked stair modules
+a tall one). `tools/probes/room_shell_probe.gd` (15: adds a north-only setback, stacked stair modules
 open room to room, facade windows and balconies).
 
 A cap and a facade window on the same wall cells (a module made so: a window spot on a door that
@@ -267,7 +267,7 @@ tick out. The status line counts connectors and marks and says MODULE when it is
 
 Code: `StructureSpaces.connectors` / `door_connector` / `cycle_link` (record side),
 `WorkshopSpaces.mark`, `link_click`, `toggle_mark`, `module`, `set_rule` (the tool), the rail in
-`WorkshopTools` (the rooms box). `tools/module_marks_probe.gd`.
+`WorkshopTools` (the rooms box). `tools/probes/module_marks_probe.gd`.
 
 ## 6. Stages
 
@@ -307,7 +307,7 @@ bridge or core the **root**; a section cut off from the root leaves whole.
 ### 7.1 Sections: one generated build in parts (stage 8, built 2026-10-31)
 
 Both generators cut what they make into sections, because stations and ships both need it and it
-can be seen in the workshop before anything flies. `scripts/build_sections.gd`, `BuildSections`:
+can be seen in the workshop before anything flies. `scripts/build/build_sections.gd`, `BuildSections`:
 
 * **Units** a section is made of: a grown building's placements (a module is never split), a
   tower's storeys. Every brick goes with the unit its cell is in -- a module's columns, its rows
@@ -333,7 +333,7 @@ can be seen in the workshop before anything flies. `scripts/build_sections.gd`, 
 * Costs: a 4-storey tower's generate 120 -> ~175 ms (the joints walk every cell); a 14-module
   grown building ~75 ms with the lay.
 
-`tools/build_sections_probe.gd` (7): several sections under a small budget, the start's the root;
+`tools/probes/build_sections_probe.gd` (7): several sections under a small budget, the start's the root;
 no module in two sections; every section touching another; split and moved back the same bricks,
 every room and door in one; a tower in bands of whole storeys, a lift in each; the meta read back
 and stale once edited; the default budget (a 12-storey tower: six sections of ~7k).
@@ -343,7 +343,7 @@ Not yet: joints have no hit points (stage 10); the city and the workshop still l
 
 ### 7.2 The station grower (stage 9, built 2026-10-31)
 
-`scripts/room_station.gd`, `RoomStation.generate(lib, {seed, modules, spine, docks, bridges, wings,
+`scripts/rooms/room_station.gd`, `RoomStation.generate(lib, {seed, modules, spine, docks, bridges, wings,
 section_bricks})` -> `{ok, why, recipe, plan, stats}`: the grow (3) with a station's roles --
 `RoomStation` extends `RoomGrow`, which now names its roles in variables (`path_roles`,
 `branch_roles`, `start_role`, `finish_role`) and has two hooks, `_more` (after the branches) and
@@ -378,7 +378,7 @@ section_bricks})` -> `{ok, why, recipe, plan, stats}`: the grow (3) with a stati
   **Generate station**, **Next seed**; the message counts docks, loops, tubes, wings, radiators,
   caps and sections.
 
-`tools/room_station_probe.gd` (8): 10 seeds each a station with one core and two docks, no module
+`tools/probes/room_station_probe.gd` (8): 10 seeds each a station with one core and two docks, no module
 in another, all joined to the core (~90 ms a station of 19 modules); bridging tubes in most, each
 open through both doorways; docks open with a door; wings and radiators clear of every module;
 lowest row 1; sections with the core's the root; same seed same station; no core says so.
@@ -437,7 +437,7 @@ band: 7.10.
 **Held by its studs.** In space nothing stands on the ground, so a generated station has to
 hold together by stud joints alone (`solve_grounded` walks studs only). Built that way:
 
-* **The kit** (`scripts/station_kit.gd`, `StationKit`, the game's own station modules; the
+* **The kit** (`scripts/rooms/station_kit.gd`, `StationKit`, the game's own station modules; the
   player's station modules are used instead when they have a core): floors and ceilings two
   plate layers, the upper a stud in so every seam of the lower is bridged; walls brick columns
   on the floor's rim under the ceiling's. Core, node, tube, short tube, pod (a window, a radiator
@@ -462,9 +462,9 @@ nothing weighs on it, Space.md 3.2): what a hit leaves joined to nothing that re
 comes away -- small as crumbs, a section cut off at its joints whole, drifting (`drifted`, step 6's
 rigid pieces). The home station and ships keep the stress solve.
 
-`tools/room_station_probe.gd` (10): adds laid in a brick world with only the keel on the
+`tools/probes/room_station_probe.gd` (10): adds laid in a brick world with only the keel on the
 foundation row nothing is loose, and a leaf section's joint killed sends that section away whole.
-`tools/station_sections_probe.gd` (5): home's station a tower and the rest generated (5 systems);
+`tools/probes/station_sections_probe.gd` (5): home's station a tower and the rest generated (5 systems);
 prepare grows the same station for the seed, a shell box a section; laid frame by frame, nothing
 loose; a leaf section's joint shot away -- it drifts off as one piece. `system_probe` 31/31 as
 before. The workshop's *Generate station* uses the shipped kit when the player has no core.
@@ -476,7 +476,7 @@ visits home's, a tower).
 ### 7.4 Ship interiors: as much of the hull as rooms (stage 11, built 2026-10-31)
 
 The shell's idea turned inside out: the **hull is the outside**, given, and rooms are packed into
-it. `scripts/room_pack.gd`, `RoomPack.generate(lib, {seed, hull, pitch, corridor, room_max,
+it. `scripts/rooms/room_pack.gd`, `RoomPack.generate(lib, {seed, hull, pitch, corridor, room_max,
 section_studs, passes, fore})` -> `{ok, why, recipe, plan, stats}`; `RoomPack` extends
 `RoomShell`, which gained a base row (`_yb`) and hooks for it (`_before_fill`, `_prelay`,
 `_plan_at`, `_kind`, `_plan_more`, `_door_x_ok`, `_sealed`, `_shares`, `_outside_ok`, `nooks`).
@@ -511,7 +511,7 @@ section_studs, passes, fore})` -> `{ok, why, recipe, plan, stats}`; `RoomPack` e
   **Generate interior** (the build open is the hull; after one, **Next seed** fills the same
   hull again), and a *zone* choice in the module rules.
 
-Measured (`tools/room_pack_probe.gd`, 9): a 96 x 28 hull 43 plates high narrowing fore -- three
+Measured (`tools/probes/room_pack_probe.gd`, 9): a 96 x 28 hull 43 plates high narrowing fore -- three
 decks, nothing outside it, the hull whole; bridge fore, engine room aft, reactor at the core; fill
 **75.7%** with the probe's box modules; every room but the nooks reached from the well; two
 bulkheads with doors on every deck, three sections, the bridge's the root; more passes never
@@ -526,7 +526,7 @@ in the hull, 7.9.)
 
 ### 7.5 The ship flies its rooms (stage 12, built 2026-10-31)
 
-`scripts/ship_build.gd`, `ShipBuild.make(seed)` -> RoomPack's result with `seat` and `decks`:
+`scripts/build/ship_build.gd`, `ShipBuild.make(seed)` -> RoomPack's result with `seat` and `decks`:
 
 * **The hull** from the seed: 56-96 studs long along +X, 26-30 across, 1-3 decks `PITCH` (15)
   apart, its half-beam falling over the fore quarter to a third at the bow; a floor of plates on
@@ -563,7 +563,7 @@ Also: `RoomGrow.lay` lays what is left of a box brick that overlaps one already 
 modules share) column by column, as it did for a cut -- the floors and ceilings of modules with a
 shared wall had holes, and in a ship those plates hung loose.
 
-`tools/ship_build_probe.gd` (4): 8 seeds -- 1-3 decks, the bridge's seat on its floor in the fore
+`tools/probes/ship_build_probe.gd` (4): 8 seeds -- 1-3 decks, the bridge's seat on its floor in the fore
 third, the engine room aft, an airlock open onto the spine, fill 76-78%, sections; a generated
 SpaceShip -- its seat forward of the middle, its hull box long along Z; laid frame by frame with
 nothing loose; a bulkhead of the bridge's section shot through -- the part beyond (324 bricks)
@@ -653,7 +653,7 @@ crates). A station of 16 spaces got 8 items (its core and two pods).
 
 A room that already holds furniture -- a player's module built with its own, interior bricks --
 is left as it is (2026-11-03), and its furniture made plain bricks so a station or ship draws it
-(their meshes leave interior bricks out). `tools/kit_furnish_probe.gd` (3).
+(their meshes leave interior bricks out). `tools/probes/kit_furnish_probe.gd` (3).
 
 Each item stands turned by the manifest's `yaw` (2026-11-03): its parts turned in the box they fill
 (`KitFurnish.turned`, as `BuildRecipe.turned` turns a block and its name), its min corner kept; the

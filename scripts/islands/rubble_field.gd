@@ -9,7 +9,7 @@ extends Node
 ## through `host` -- typed against its script, so a name the manager no longer
 ## has is a parse error here.
 
-const Host := preload("res://scripts/island_manager.gd")
+const Host := preload("res://scripts/destruction/island_manager.gd")
 
 var host: Host
 

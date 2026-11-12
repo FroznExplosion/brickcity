@@ -166,7 +166,7 @@ the ranges are the "only near the player". Distances are scaled by `lod_zoom`, a
 
 ### Cost, measured
 
-`tools/wood_cost_probe.gd`, 2026-10-31, editor closed, no other test running, peak 71 C, not held
+`tools/probes/wood_cost_probe.gd`, 2026-10-31, editor closed, no other test running, peak 71 C, not held
 back: a wall of chamfered 2x4s filling 1280x720 from 3 m, the renderer's own GPU clock, median of
 240 frames, two rounds interleaved. Integrated Radeon (Legion Go).
 
@@ -189,7 +189,7 @@ what plastic does, and some 0.3-0.5 ms over flat colour with a whole screen of i
 
 ## 5. Gates
 
-* `tools/wood_probe.gd` -- headless: the alpha carries material and grain in the flat mesh, the
+* `tools/probes/wood_probe.gd` -- headless: the alpha carries material and grain in the flat mesh, the
   chamfered mesh and the studs; a turned board says Z, a post Y; a PLA brick still reads as PLA
   past its grain bits; a square brick's grain is its grid cell's wherever its chunk starts.
   Windowed it also leaves `shots/wood_*.png`, and checks the normal map is LIGHTING: the stacked
@@ -207,7 +207,7 @@ what plastic does, and some 0.3-0.5 ms over flat colour with a whole screen of i
 * `scenes/workshop.tscn -- --gate` -- places two boards stacked and one turned through the
   workshop's own placement, checks the frame mesh's grain axes and `grain_origin`, and leaves
   `shots/workshop_wood.png`.
-* `tools/wood_cost_probe.gd` -- the cost table above. A timing pass.
+* `tools/probes/wood_cost_probe.gd` -- the cost table above. A timing pass.
 
 ## 6. Not done
 
@@ -229,7 +229,7 @@ what plastic does, and some 0.3-0.5 ms over flat colour with a whole screen of i
 
 A printed part's beads are a texture since 2026-11-02 -- a side's layers, a top's lines, a
 bottom's first layer -- generated rather than downloaded: there is no photo of a 1:43.75 print.
-`tools/make_print_beads.gd` (headless, ~20 s) bakes `textures/pbr/print_bead.webp`, a
+`tools/make/make_print_beads.gd` (headless, ~20 s) bakes `textures/pbr/print_bead.webp`, a
 Texture2DArray with three slices a filament (side, top, bottom; PLA's today), bound as the
 global `print_bead`.
 
@@ -253,7 +253,7 @@ against the pixels (moire on a wall at 10 m), the baked one fades to its mean. T
 fade is kept: the relief gives up squared as a layer nears a pixel and roughness takes what it
 drops (ps_beads), since a filtered normal still sparkles.
 
-**Cost** (`tools/wood_cost_probe.gd`, 2026-11-02 evening, editor closed, peak 89 C, not held
+**Cost** (`tools/probes/wood_cost_probe.gd`, 2026-11-02 evening, editor closed, peak 89 C, not held
 back; another chat's headless probe overlapped part of both runs, so take it as rough). GPU ms a
 frame, 1280x720 filled, two runs of two rounds:
 
@@ -268,5 +268,5 @@ About 0.05 ms dearer either way, inside the round-to-round drift: one texture re
 what the drawn bead's arithmetic did. (The probe's old `legacy` case, the procedural wood from
 before section 1, no longer compiled and is gone.)
 
-Pictures: `tools/print_look_shot.gd -- --out=<dir> --looks=glass,pei
+Pictures: `tools/shots/print_look_shot.gd -- --out=<dir> --looks=glass,pei
 --views=side,stud,corner,wall,top,tops_close,skin,bottom,under` with and without `--no-bead-tex`.

@@ -482,7 +482,7 @@ past 12 m the gun model hides and its card stands in; the rarity beam is untouch
 what reads at range. With no ImpostorItems in the scene nothing changes, which is every scene today;
 adding one to the loot range or the game is the weapons area's call.
 
-`tools/impostor_probe.gd`: 30 ok (2026-10-08, with the cull edge's five) — trees build whole, bake, field of cards; 100 brick guns near,
+`tools/probes/impostor_probe.gd`: 30 ok (2026-10-08, with the cull edge's five) — trees build whole, bake, field of cards; 100 brick guns near,
 carded and culled, one moved close becomes a mesh, one removed is gone; the field kept in areas; a
 node kind that stays its owner's until baked, then a card in its own material's colour; the card
 standing where the mesh stands from three heights; a tree mid-band with no holes.
