@@ -284,7 +284,7 @@ The effects had four nodes made per event with no ceiling. Now capped (`tools/pr
 
 BrickBevel.md 6 read the GPU at ~11.3 ms a frame looking at one 775-brick building in the
 1280x720 test window, and `--shot` 10.9, which looked like ~5 ms left before 60 fps went. Nobody
-had said what the 11 ms was. `-- --chamfer --cost --gpucost` (`tools/city_passes.gd`
+had said what the 11 ms was. `-- --chamfer --cost --gpucost` (`tools/passes/city_passes.gd`
 `_run_gpucost`) stands still at two views -- city.tscn six metres from one building in bricks (as
 `--cost` stands), big_city.tscn down the street of twelve buildings in bricks (as `--street`
 starts) -- reads `viewport_get_measured_render_time_gpu` over 120 frames, and repeats with one

@@ -26,8 +26,8 @@ view components), `autoload/` (`StatusTicker`, `ElementalManager`, `VfxPool`), `
 `fx/shaders/`, `shaders/gun_skin.gdshader`. The suites are scenes, because autoloads do not load
 for a `--script` main loop:
 
-    godot --headless --path . res://test/core_test.tscn
-    godot --headless --path . res://test/loot_range_test.tscn -- --probe
+    godot --headless --path . res://tools/tests/core_test.tscn
+    godot --headless --path . res://tools/tests/loot_range_test.tscn -- --probe
 
 ## Guns and bricks
 

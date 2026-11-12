@@ -5,7 +5,7 @@ How a gun or a mech is put together, and how its parts are made. Decided 2026-10
 thick ([brickify](../../tools/brickify/brickify.py) stage 1 showed it). The shape comes from custom
 parts; the bricks go **on** them.
 
-Nothing here is built yet. Numbers are in [standards.json](standards.json).
+Nothing here is built yet. Numbers are in [standards.json](../../content/base/data/standards.json).
 
 ## 1. Three roles
 
@@ -80,7 +80,7 @@ and the same interface.**
 | **adapter** | a small part whose mount is one interface and whose socket is another | `adapter_tang_tube` lets any tube stock go on a tang body |
 
 So the rules "per gun" are per platform, shared by every gun of it, and a part made for one
-platform reaches another through an adapter. The lists are in [standards.json](standards.json)
+platform reaches another through an adapter. The lists are in [standards.json](../../content/base/data/standards.json)
 (`gun_interfaces`, `gun_platforms`, `gun_adapters`) and are a first set, to grow.
 
 The interfaces are our own shapes on the nano grid. None copies a real firearm's fitting or its
@@ -103,7 +103,7 @@ Neither "let an AI model it in Blender" nor "convert it automatically" alone. Th
 
 | Layer | What | Who decides |
 |---|---|---|
-| **standards** | every size: studs, pins, the grip core, lattice, clearances ([standards.json](standards.json)) | the user. Never the AI, never a script |
+| **standards** | every size: studs, pins, the grip core, lattice, clearances ([standards.json](../../content/base/data/standards.json)) | the user. Never the AI, never a script |
 | **the kit** | Blender functions that make each standard feature exactly: cut a part from a model, flatten a face to the lattice, add a stud patch, a socket patch, a `mount`, a grip core, a joint; and a **checker** that measures the result against the standards | code. A stud is made by the function or not at all |
 | **the build sheet** | one small file per asset: which model, which grid, what parts to cut it into and where, which faces get patches, which are modules | an AI, looking at pictures of the model, within the parameters the user sets. The user approves the pictures |
 

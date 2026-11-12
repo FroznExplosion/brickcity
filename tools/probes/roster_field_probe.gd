@@ -12,7 +12,7 @@ extends SceneTree
 ##    a way and a large body has none; through one four studs wide both have,
 ##    and a huge body still has none.
 
-const Arena := preload("res://tools/ai_arena.gd")
+const Arena := preload("res://tools/probes/ai_arena.gd")
 
 var _pass := 0
 var _fail := 0

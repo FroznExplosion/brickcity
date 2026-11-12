@@ -20,7 +20,7 @@ extends SceneTree
 ## Then the FRIENDLY side: a player-side commander keeps its squad with the
 ## player (Commander.rally) as the player walks off.
 
-const Arena := preload("res://tools/ai_arena.gd")
+const Arena := preload("res://tools/probes/ai_arena.gd")
 const DRAWS := 400
 
 var _pass := 0

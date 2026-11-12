@@ -283,7 +283,7 @@ static func unit_box() -> ArrayMesh:
 
 
 ## The unit box's 36 corners and their normals, in drawing order (a gate lays
-## the same triangles under its rays: tools/city_passes.gd, _boxes_tri_mesh).
+## the same triangles under its rays: tools/passes/city_passes.gd, _boxes_tri_mesh).
 static func unit_box_points() -> Array:
 	var verts := PackedVector3Array()
 	var norms := PackedVector3Array()

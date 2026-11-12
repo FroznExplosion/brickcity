@@ -11,7 +11,7 @@ extends SceneTree
 ## expansion count for each run; the file must hold together on the way and
 ## everyone must get there.
 
-const Arena := preload("res://tools/ai_arena.gd")
+const Arena := preload("res://tools/probes/ai_arena.gd")
 const START := Vector3(0.0, 0.0, 0.0)
 const GOAL := Vector3(0.0, 0.0, -48.0)
 const LIMIT := 30 * 90

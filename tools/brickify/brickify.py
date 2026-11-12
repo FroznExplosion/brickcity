@@ -13,7 +13,7 @@
 Writes <name>.bricks.json (every part, by name and min cell, in the game's axes) and
 <name>_side.png / <name>_iso.png (the model above, its bricks below).
 
-The grids, the part list and the held scale are read from Docs/Parts/standards.json and
+The grids, the part list and the held scale are read from content/base/data/standards.json and
 parts.json: nothing about a brick's size is written here.
 
 Not yet (later stages): colours, slopes and curves, splitting by bone, joints and grips, a
@@ -32,6 +32,8 @@ from mathutils.bvhtree import BVHTree
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 PARTS_DIR = os.path.normpath(os.path.join(HERE, "..", "..", "Docs", "Parts"))
+# The standards are game data, in the base content pack (Docs/Content.md).
+STANDARDS = os.path.normpath(os.path.join(HERE, "..", "..", "content", "base", "data", "standards.json"))
 ## Samples across a cell, each way, that decide whether it is solid.
 SUB = 4
 ## A cell is solid when this share of its samples are inside the model.
@@ -57,7 +59,7 @@ def main() -> None:
             flags.add(key)
             i += 1
     name = opt["name"] or os.path.splitext(os.path.basename(model))[0]
-    std = json.load(open(os.path.join(PARTS_DIR, "standards.json"), encoding="utf-8"))
+    std = json.load(open(STANDARDS, encoding="utf-8"))
     cls = std["classes"][opt["class"]]
     grid = std["grids"][cls["grid"]]
     cell = np.array([grid["stud_pitch"], grid["stud_pitch"], grid["plate"]])

@@ -16,7 +16,7 @@ extends SceneTree
 ##      against a player behind a wall they cannot see over but hear firing
 ##      every second: grenades go.
 
-const Arena := preload("res://tools/ai_arena.gd")
+const Arena := preload("res://tools/probes/ai_arena.gd")
 
 
 class Always extends CombatPolicy:

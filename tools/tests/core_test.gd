@@ -2,7 +2,7 @@
 ## ComponentCache, EntityTime, Spring/Spring3, and StatusEffect's time-scale seam.
 ##
 ## Run:
-##   <godot> --headless --path . res://test/core_test.tscn
+##   <godot> --headless --path . res://tools/tests/core_test.tscn
 ## Exits non-zero on failure.
 ##
 ## This is a SCENE, not a `--script` MainLoop, on purpose: StatusManager references the

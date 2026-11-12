@@ -881,7 +881,7 @@ var _groups_mode := false
 var _squad_mode := false
 var _mechfall_mode := false
 ## `--planet=<test>`: the sphere-planet feasibility tests (Docs/Planets.md 10b),
-## run by tools/planet_passes.gd on this scene.
+## run by tools/passes/planet_passes.gd on this scene.
 var _planet_test := ""
 const GUN_CLASSES: Array[StringName] = [&"pistol", &"smg", &"rifle", &"shotgun", &"sniper",
 		&"rocket_launcher"]
@@ -958,14 +958,14 @@ var _prof_sum := {}
 
 
 ## The test passes (`-- --lod`, `-- --groups`, ...) live in
-## tools/city_passes.gd, out of the game's own code: made the first time a
+## tools/passes/city_passes.gd, out of the game's own code: made the first time a
 ## pass is asked for, never in a plain run.
 var _passes_node: Node = null
 
 
 func _pass_runner() -> Node:
 	if _passes_node == null:
-		_passes_node = (load("res://tools/city_passes.gd") as GDScript).new(self)
+		_passes_node = (load("res://tools/passes/city_passes.gd") as GDScript).new(self)
 		add_child(_passes_node)
 	return _passes_node
 
@@ -1374,7 +1374,7 @@ func _ready() -> void:
 	elif _mechfall_mode:
 		_pass_runner()._run_mechfall_pass()
 	elif _planet_test != "":
-		var planet_pass: Node = (load("res://tools/planet_passes.gd") as GDScript).new(self)
+		var planet_pass: Node = (load("res://tools/passes/planet_passes.gd") as GDScript).new(self)
 		add_child(planet_pass)
 		planet_pass.run(_planet_test)
 	elif _firefight_mode:

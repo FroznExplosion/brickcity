@@ -6,7 +6,7 @@ built of nano bricks: the same system at exactly half size.
 
 Status: defined 2026-10-13. **Nothing here has been printed or built in the game yet.** Print
 dimensions are nominal; a resin fit plate decides the final stud and socket sizes, as the FDM fit
-plates did for the full grid. Machine-readable copy: [standards.json](standards.json).
+plates did for the full grid. Machine-readable copy: [standards.json](../../content/base/data/standards.json).
 
 ## 1. The ruler
 
@@ -101,4 +101,4 @@ one half. Not built yet. What it needs:
 - a scale of 1 or 1/2 on a frame, in `BuildRecipe` and where a frame's transform is made;
 - frame origins in nano ticks, or held to whole ticks;
 - the recipe kinds `mech`, `gun`, `vehicle` and `aircraft`, which wait on links (BuildMode section 6);
-- `scale_probe` reading [standards.json](standards.json), so the half stays exact.
+- `scale_probe` reading [standards.json](../../content/base/data/standards.json), so the half stays exact.

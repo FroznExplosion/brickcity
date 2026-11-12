@@ -5,7 +5,7 @@
 
 Docs/Parts/custom.md section 5. The build sheet says which model, how it splits into parts,
 which parts take studs, and where each part's mount and sockets are. This file leaves the
-model's shape alone and adds the standard features, to the sizes in Docs/Parts/standards.json,
+model's shape alone and adds the standard features, to the sizes in content/base/data/standards.json,
 and then checks the result it wrote against those standards.
 
 Studs go on the model's own faces and stand square to them, whichever way a face points.
@@ -31,6 +31,8 @@ from mathutils.bvhtree import BVHTree
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 PARTS_DIR = os.path.normpath(os.path.join(HERE, "..", "..", "Docs", "Parts"))
+# The standards are game data, in the base content pack (Docs/Content.md).
+STANDARDS = os.path.normpath(os.path.join(HERE, "..", "..", "content", "base", "data", "standards.json"))
 ## How studs are placed, unless the sheet says otherwise ("studs" at its top level).
 STUD_RULES = {
     "min": 2,          # a face takes studs only if this many fit
@@ -48,7 +50,7 @@ def main() -> None:
     args = sys.argv[sys.argv.index("--") + 1:]
     sheet = json.load(open(args[0], encoding="utf-8"))
     out_dir = args[1]
-    std = json.load(open(os.path.join(PARTS_DIR, "standards.json"), encoding="utf-8"))
+    std = json.load(open(STANDARDS, encoding="utf-8"))
     grid = std["grids"][std["classes"][sheet["class"]]["grid"]]
     rules = dict(STUD_RULES, **sheet.get("studs", {}))
 

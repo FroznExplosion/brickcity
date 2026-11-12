@@ -291,7 +291,7 @@ costs. Per piece, mean of 30 (us):
 
 ### 6.5 Promotion measured (2026-11-09, worktree `C:\Users\lbaun\bc-perf`)
 
-`city.tscn -- --promote --big` (new, `tools/city_passes.gd`): the 12 biggest buildings, one at a
+`city.tscn -- --promote --big` (new, `tools/passes/city_passes.gd`): the 12 biggest buildings, one at a
 time, the first 6 as a hit lays them (3 storeys, solved), the rest walked up to (laid whole). Two
 windowed runs, editor closed; other chats' headless probes ran alongside both, and the first
 dipped to 116 MB free -- the two agree, the second's numbers below.

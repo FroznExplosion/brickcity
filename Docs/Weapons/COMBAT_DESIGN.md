@@ -864,7 +864,7 @@ Tested in the combat arena (`scenes/combat_arena.tscn`), where the weapons and t
 - **First red text**: Boilerplate winds up to +60% fire rate over 2 s of held trigger; Sermon puts
   the round back on a kill. The card says what each does (`LegendaryTable.EFFECT_TEXT`).
 - The card lists the modifiers, one a line, and the trade parts.
-- `tools/probes/modifiers_probe.gd` (19 checks). `test/loot_range_test.gd --probe` passes again: its v1
+- `tools/probes/modifiers_probe.gd` (19 checks). `tools/tests/loot_range_test.gd --probe` passes again: its v1
   calibration rows (a legendary worth two tiers, a rare one) were replaced by v2's half a tier,
   and the narrower roll fixed its gun-vs-shield score rows.
 - **Not yet:** the explosive attachment's proximity and chain rolls; split rounds, conditional
@@ -1081,7 +1081,7 @@ Probes (`--headless --path . --script res://tools/probes/<name>.gd`): `combat_nu
 `crit_probe` (10), `defence_probe` (19), `melee_probe` (36), `loadout_probe` (31), `moves_probe` (39), and the AI ones that read soldier
 health: `commander_probe`, `tactics_sense_probe`, `fights_back_probe`, `soldier_probe`,
 `room_clear_probe`. Gates (not headless): `res://scenes/city.tscn -- --play` (14) and `-- --gun`
-(7), `res://scenes/combat_arena.tscn -- --gate` (35), `res://test/loot_range_test.tscn -- --probe`. Menu: `res://menu/tests/menu_smoke.tscn`
+(7), `res://scenes/combat_arena.tscn -- --gate` (35), `res://tools/tests/loot_range_test.tscn -- --probe`. Menu: `res://menu/tests/menu_smoke.tscn`
 (190), `menu_fit_smoke.tscn` (435).
 
 ### 15.5 Traps hit on the way

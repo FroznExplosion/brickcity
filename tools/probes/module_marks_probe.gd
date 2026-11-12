@@ -29,8 +29,8 @@ extends SceneTree
 ##   sections   the tower cut in sections (BuildSections): a box and a label
 ##              round each, their bricks in the message
 
-const Kit := preload("res://tools/room_module_kit.gd")
-const StationKit := preload("res://tools/station_module_kit.gd")
+const Kit := preload("res://scripts/rooms/room_module_kit.gd")
+const StationKit := preload("res://scripts/rooms/station_module_kit.gd")
 const PackProbe := preload("res://tools/probes/room_pack_probe.gd")
 
 var _ws

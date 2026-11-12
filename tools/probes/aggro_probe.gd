@@ -14,7 +14,7 @@ extends SceneTree
 ##      focus moves, and the soldiers turn on player 2.
 ##   4. Player 1's mech opens up: the mech's share shows beside the pilot's.
 
-const Arena := preload("res://tools/ai_arena.gd")
+const Arena := preload("res://tools/probes/ai_arena.gd")
 
 var _pass := 0
 var _fail := 0

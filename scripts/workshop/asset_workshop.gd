@@ -2198,7 +2198,7 @@ func _hold_lock(on: bool) -> void:
 # ---------------------------------------------------------------------------
 
 func _load_interfaces() -> void:
-	var path := "res://Docs/Parts/standards.json"
+	var path := "res://content/base/data/standards.json"
 	if not FileAccess.file_exists(path):
 		return
 	var d = JSON.parse_string(FileAccess.get_file_as_string(path))
