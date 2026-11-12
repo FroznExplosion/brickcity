@@ -7377,10 +7377,20 @@ func _bands_round(at: Vector3) -> Array:
 	var out := []
 	for n in city.get_tree().root.find_children("*", "MeshInstance3D", true, false):
 		var mi: MeshInstance3D = n
-		if mi.mesh == null or not mi.is_inside_tree():
+		if not mi.is_inside_tree():
+			continue
+		# A band drawn as a box a brick has no mesh of its own, or only its
+		# parts that are not boxes: its boxes' bounds (CityDrawing._apply_boxes).
+		var boxes: MultiMeshInstance3D = city.drawing.boxes_of(mi)
+		var bounds := AABB()
+		if boxes != null and boxes.has_meta(&"box"):
+			bounds = boxes.get_meta(&"box")
+		elif mi.mesh != null:
+			bounds = mi.mesh.get_aabb()
+		else:
 			continue
 		var local := mi.global_transform.affine_inverse() * at
-		if mi.mesh.get_aabb().grow(0.1).has_point(local):
+		if bounds.grow(0.1).has_point(local):
 			out.append(mi)
 	return out
 

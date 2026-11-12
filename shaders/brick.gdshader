@@ -179,10 +179,23 @@ void vertex() {
     // A box a brick, instanced (brick_boxed.gdshaderinc).
     if (brick_boxed(UV2)) {
         vec3 box_size = brick_box_size(MODEL_MATRIX);
-        vec4 box_uv = brick_box_uv(box_size, VERTEX, NORMAL);
+        vec3 box_safe = max(box_size, vec3(1e-6));
+        // Metres from the brick's middle, the bevel taken off.
+        vec3 box_at = VERTEX * box_size - sign(VERTEX) * brick_box_inset(UV.x, box_size);
+        vec4 box_uv = brick_box_uv(box_size, box_at, NORMAL);
         v_uv = box_uv.xy;
         v_face = box_uv.zw;
-        v_local = INSTANCE_CUSTOM.xyz + VERTEX * box_size;
+        if (UV.y > 0.5) {
+            // A bevel's facet, as the chamfered mesh marks one (above): a
+            // negative UV2, no depth to speak of, one wall of a groove. Its
+            // normal is 45 degrees in metres; the instance's scale would
+            // lean it towards the brick's long side.
+            v_uv = vec2(0.5, 1.0);
+            v_face = vec2(-1.0);
+            NORMAL = NORMAL / box_safe;
+        }
+        v_local = INSTANCE_CUSTOM.xyz + box_at;
+        VERTEX = box_at / box_safe;
     }
     v_model_up = MODEL_MATRIX[1].xyz;
     v_grain = brick_grain_axis(COLOR.a);

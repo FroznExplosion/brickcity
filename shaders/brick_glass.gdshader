@@ -44,7 +44,9 @@ void vertex() {
     v_face = abs(UV2);
     // A box a brick, instanced (brick_boxed.gdshaderinc).
     if (brick_boxed(UV2)) {
-        vec4 box_uv = brick_box_uv(brick_box_size(MODEL_MATRIX), VERTEX, NORMAL);
+        // Glass is not bevelled: on the bevelled box its facets have no width.
+        vec3 box_size = brick_box_size(MODEL_MATRIX);
+        vec4 box_uv = brick_box_uv(box_size, VERTEX * box_size, NORMAL);
         v_uv = box_uv.xy;
         v_face = box_uv.zw;
     }
