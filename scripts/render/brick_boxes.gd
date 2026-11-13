@@ -86,23 +86,25 @@ static func unit_box_points() -> Array:
 	return [verts, norms]
 
 
-## A band's boxes, or null.
-static func of(band: Node) -> MultiMeshInstance3D:
-	if band == null or not is_instance_valid(band):
+## A band's boxes, or null. `band` untyped: a caller may hold a node since
+## freed (BrickNear forgetting a band whose node went), and a freed object
+## handed to a typed argument is an error before the check below can run.
+static func of(band: Variant) -> MultiMeshInstance3D:
+	if band == null or not is_instance_valid(band) or not (band is Node):
 		return null
-	return band.get_node_or_null(BOXES) as MultiMeshInstance3D
+	return (band as Node).get_node_or_null(BOXES) as MultiMeshInstance3D
 
 
 ## Whether any of `bands` is drawn as boxes.
 static func any(bands: Array) -> bool:
 	for band in bands:
-		if of(band as Node) != null:
+		if of(band) != null:
 			return true
 	return false
 
 
 ## The bounds of a band's boxes, in the band's space (an empty box: none).
-static func bounds_of(band: Node) -> AABB:
+static func bounds_of(band: Variant) -> AABB:
 	var boxes := of(band)
 	if boxes == null or not boxes.has_meta(BOUNDS):
 		return AABB()

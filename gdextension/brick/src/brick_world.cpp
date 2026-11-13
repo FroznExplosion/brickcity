@@ -6078,6 +6078,47 @@ PackedByteArray BrickWorld::solve_grounded(int chunk_id) {
     return out;
 }
 
+PackedByteArray BrickWorld::solve_standing(int chunk_id) {
+    PackedByteArray out;
+    if (!valid_chunk(chunk_id)) {
+        return out;
+    }
+    Chunk &c = chunks[chunk_id];
+    const size_t n = c.blocks.size();
+    out.resize((int64_t)n);
+    uint8_t *mark = out.ptrw();
+    std::vector<int32_t> queue;
+    queue.reserve(n);
+    const Vector3i up = -chunk_down[chunk_id];
+    for (size_t i = 0; i < n; ++i) {
+        const Block &b = c.blocks[i];
+        mark[i] = 0;
+        if (b.alive && !b.support_broken && grounded_at(chunk_id, height_along(b.cell, up))) {
+            mark[i] = 1;
+            queue.push_back((int32_t)i);
+        }
+    }
+    const brick::JointCache &jc = joints_of(chunk_id);
+    for (size_t head = 0; head < queue.size(); ++head) {
+        const int32_t bid = queue[head];
+        const bool from_held = c.blocks[bid].held;
+        for_each_joint(c, jc, bid, [&](int32_t nb, int) {
+            if (mark[nb] != 0 || c.blocks[nb].support_broken || !c.blocks[nb].alive) {
+                return;
+            }
+            if (from_held && !c.blocks[nb].held) {
+                return;
+            }
+            if (!grounding_flows(c, archetypes, bid, nb, up)) {
+                return;
+            }
+            mark[nb] = 1;
+            queue.push_back(nb);
+        });
+    }
+    return out;
+}
+
 Array BrickWorld::find_detached_groups(int chunk_id) {
     if (!valid_chunk(chunk_id)) {
         return Array();
@@ -12196,6 +12237,7 @@ void BrickWorld::_bind_methods() {
             &BrickWorld::get_template_mass);
     ClassDB::bind_method(D_METHOD("get_blocks_topping", "chunk_id", "y"),
             &BrickWorld::get_blocks_topping);
+    ClassDB::bind_method(D_METHOD("solve_standing", "chunk_id"), &BrickWorld::solve_standing);
     ClassDB::bind_method(D_METHOD("get_blocks_in_band", "chunk_id", "y_lo", "y_hi"),
             &BrickWorld::get_blocks_in_band);
     ClassDB::bind_method(D_METHOD("get_template_com", "template_id", "y_lo", "y_hi"),

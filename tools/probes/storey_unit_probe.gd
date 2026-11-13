@@ -21,6 +21,7 @@ func _init() -> void:
 	_check_record_rides_absent()
 	_check_anchors_and_loads()
 	_check_give_way()
+	_check_hanging_is_not_support()
 	_check_piece_runs()
 	_check_tip()
 	_check_unlay()
@@ -226,6 +227,44 @@ func _check_give_way() -> void:
 ## 68.5 ms for a 34-storey piece in a blast's tick. Asked here: the same
 ## bricks, the same absent ones and the same grid as a storey a call, with a
 ## hole in the run; the time of each printed.
+## What is left hanging from a storey not laid holds nothing up (user,
+## 2026-11-12: a building's bottom shot away from far off, and the storeys
+## over it stood until somebody came near). A storey's bottom half goes, and
+## what comes loose falls: the few parts left are its ceiling's, hanging from
+## the storey above (BrickWorld.set_hang_levels) -- at the line storey_gave_way
+## looks along, and no support.
+func _check_hanging_is_not_support() -> void:
+	print("
+=== bricks hanging from the storey above are not what it stands on ===")
+	var part := _make(true)
+	var w: BrickWorld = part[0]
+	var reg: BuildingRegistry = part[1]
+	var id: int = part[2]
+	var c := reg.materialise(id, PackedInt32Array([14]))
+	var b := reg.get_building(id)
+	reg.set_storey_bounds(b)
+	var lines := reg.storey_lines(b)
+	@warning_ignore("integer_division")
+	var half: int = lines[14] + (lines[15] - lines[14]) / 2
+	w.kill_blocks(c, w.get_blocks_in_band(c, lines[14], half))
+	for round in 6:
+		var loose := PackedInt32Array()
+		for g in (w.solve_structure(c, 48, 3.0) as Dictionary).groups:
+			loose.append_array(g)
+		if loose.is_empty():
+			break
+		w.kill_blocks(c, loose)
+	var left := w.get_blocks_topping(c, lines[15])
+	var standing := w.solve_standing(c)
+	var stand := 0
+	for bid in left:
+		if standing[bid] != 0:
+			stand += 1
+	_ok(not left.is_empty() and stand == 0,
+			"its bottom half shot away: %d part(s) left at its top line, %d of them standing" % [left.size(), stand])
+	_ok(reg.storey_gave_way(id) == 15, "and storey 15 up gave way (%d)" % reg.storey_gave_way(id))
+
+
 func _check_piece_runs() -> void:
 	print("\n=== a shell piece is laid a run of storeys a call: the same bricks as a storey a call ===")
 	var part := _make(true)

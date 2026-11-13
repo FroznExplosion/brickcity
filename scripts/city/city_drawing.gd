@@ -249,7 +249,7 @@ func _init(c: Node3D) -> void:
 
 
 ## A band's boxes, or null (BrickBoxes.of; kept for the passes).
-static func boxes_of(band: Node) -> MultiMeshInstance3D:
+static func boxes_of(band: Variant) -> MultiMeshInstance3D:
 	return BrickBoxes.of(band)
 
 

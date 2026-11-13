@@ -3401,6 +3401,11 @@ var shell_pieces_bricked := 0   ## shell pieces made bricks
 ## Everything from storey `s` up has nothing under it: the laid storeys up
 ## there leave as brick pieces, the rest as ONE shell piece, and the building
 ## is what is left under it.
+## Buildings whose storeys were not asked whether they gave way, their bands
+## building at the time (the tick's solve loop): asked the tick after.
+var _give_way_owed := {}
+
+
 func _give_way(id: int, s: int) -> void:
 	var b := registry.get_building(id)
 	if b == null or not b.banded:
@@ -6517,15 +6522,24 @@ func _physics_process(_delta: float) -> void:
 	_resolves_put_off += again.size()
 	# A storey with nothing left under the storey on it (Docs/Space.md 5.3a):
 	# asked once the groups it shed have left, so what is left is what holds.
+	# And the ones put off last time: asked while its bands were building, a
+	# building nothing hit again was never asked a second time.
+	for id in _give_way_owed:
+		solved_now[id] = true
+	_give_way_owed.clear()
 	for id in solved_now:
 		var gb := registry.get_building(id)
 		if gb == null or not gb.banded or not gb.is_materialised():
 			continue
 		if drawing.bands_building(id):
-			continue   # its groups wait for its bands; so does this
+			_give_way_owed[id] = true   # its groups wait for its bands; so does this
+			continue
 		var gave := registry.storey_gave_way(id)
 		if gave >= 0:
 			_give_way(id, gave)
+			# What was left hanging from the storeys that went hangs on
+			# nothing now: solved again, it comes loose.
+			_mark_dirty(id)
 	t = _mark("after_spawn", t)
 	for sid in _stairs_due.keys():
 		if spawned >= SPAWNS_PER_TICK or (spawned > 0 and Time.get_ticks_usec() >= spawn_until):

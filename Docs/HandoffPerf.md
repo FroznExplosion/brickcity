@@ -539,3 +539,40 @@ mesh is being made is drawn a box a brick meanwhile (`IslandStandins`, since 202
 still "blind" to `IslandManager.is_blind`. When the tower snapped in two, its new half was
 33-38% of the bricks "undrawn" for that tick and the check failed 1 run in 2, with baked bands
 and with boxes alike. It asks `IslandStandins.covers` now: 2/0, twice.
+
+### 8.6 Storeys not laid stood on bricks hanging from them (2026-11-13)
+
+The user, after boxes went in: "when a bottom of a building is destroyed but the player is far
+... and the floors above the broken area isn't loaded then they just float until the player
+goes near the building then floor by floor as the player looks at the building the floors
+update and fall".
+
+`BuildingRegistry.storey_gave_way` asked whether any brick was left at the top line of a laid
+run. A part with no sockets under it at that line -- a ceiling light, a panel -- hangs from the
+storey over it (`BrickWorld.set_hang_levels`), so it stayed when everything under it fell, and
+counted. Headless (`storey_unit_probe`): a storey's bottom half shot away leaves 9 of 262
+bricks, all nine hanging, and nothing gave way. Coming near laid the storeys over it a floor
+at a time, and each fell as it was laid.
+
+* `BrickWorld.solve_standing(chunk)`: which blocks are reached from the ground (the
+  foundation, an anchor level) through their joints -- `solve_grounded` with no hang seeds.
+  `storey_gave_way` counts only those, for the "nothing under it" test and the tip's hull.
+* The tick asked whether a storey gave way only for a building solved that tick, and not at
+  all while its bands were building: such a building is asked again the tick after
+  (`CityScene._give_way_owed`).
+* After storeys leave, the building is solved again (`_mark_dirty`): what hung from them hangs
+  on nothing now.
+
+`storey_unit_probe` 44/0 (two new checks), storey 4/0, solve 99/0, replay, hang 10/0, barrage
+9/0, standin 15/0; collapse 56/1 (the trapped-soldier check, flaky on unchanged code).
+`--lodbreak` now has storeys give way in it (four a run; none before) and passes 21/0 with
+baked bands and 21/0 in two runs of three with boxes.
+
+**Open:** the third boxed `--lodbreak` run failed "no stud drawn on a brick that has gone" at
+one stop (164 of 26,671 studs, one chunk, 2 s after flying in to 12 m). Not caught again with
+`BrickNear.stale_studs` saying which band (it names chunk, section, boxes or mesh, dirty or
+not, and whose node). Somewhere a boxed band's studs are not fetched again after its bricks
+change -- most likely on a piece or a building just after storeys left it.
+
+Also fixed: `BrickNear._box_bevel` handed a freed band node to a typed argument
+(`BrickBoxes.of`), an error in the tick when a piece's slices swapped in over a boxed band.
