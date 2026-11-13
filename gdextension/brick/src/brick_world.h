@@ -509,6 +509,12 @@ public:
     /// foundation through live stud connections. Flood fill over the whole
     /// chunk; M2 narrows it to dirty regions.
     PackedByteArray solve_grounded(int chunk_id);
+    // Which blocks STAND: reached from the ground (the foundation, an anchor
+    // level) through their joints, as solve_grounded -- but a part hanging
+    // from a hang level is no seed. A ceiling light left hanging from a
+    // storey not laid holds nothing up (BuildingRegistry.storey_gave_way).
+    // Reads only: no stats, nothing marked.
+    PackedByteArray solve_standing(int chunk_id);
 
     /// Live blocks that no longer reach the ground, split into connected
     /// groups. Returns Array[PackedInt32Array], largest group first.

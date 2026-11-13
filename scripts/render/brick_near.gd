@@ -765,7 +765,13 @@ func stale_studs() -> Array:
 			var cell := origin + Vector3i(floori(at.x / cs.x), floori(at.y / cs.y), floori(at.z / cs.z))
 			if not world.is_solid(band.chunk, cell):
 				stale += 1
-				chunks[band.chunk] = int(chunks.get(band.chunk, 0)) + 1
+				# Which band: its chunk, its section, how it is drawn, and whose
+				# node it is -- a count a chunk did not say where to look.
+				var where := "%d sec %d %s%s under %s" % [band.chunk, band.section,
+						"boxes" if band.boxed else "mesh", " dirty" if band.studs_dirty else "",
+						str(band.node.get_parent().get_parent().name) if band.node.get_parent() != null
+						and band.node.get_parent().get_parent() != null else "?"]
+				chunks[where] = int(chunks.get(where, 0)) + 1
 	return [n, stale, chunks]
 
 
