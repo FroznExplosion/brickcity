@@ -2808,7 +2808,7 @@ func _warm_shaders() -> void:
 		wmm.transform_format = MultiMesh.TRANSFORM_3D
 		wmm.use_colors = true
 		wmm.use_custom_data = true
-		wmm.mesh = drawing.unit_box()
+		wmm.mesh = BrickBoxes.unit_box()
 		wmm.instance_count = 1
 		wmm.set_instance_transform(0, Transform3D(Basis().scaled(Vector3.ONE * 0.001), Vector3.ZERO))
 		wmm.set_instance_color(0, Color.WHITE)
@@ -3815,14 +3815,6 @@ func _topple(id: int) -> void:
 	# down as a building past DEMESH_RANGE does, the piece drawing itself.
 	var coarse_only: bool = drawing.coarse_only(id)
 	var carried_bands: Array = drawing.take_bands(id, owed_bands)
-	if drawing.instanced_bands:
-		# Bands as boxes are not carried: the piece is meshed as any piece is,
-		# its box stand-in drawing meanwhile (IslandStandins).
-		for node in carried_bands:
-			if is_instance_valid(node):
-				(node as Node).queue_free()
-		carried_bands = []
-		carried_band_bytes = []
 	if coarse_only and mi != null:
 		mi.queue_free()
 		mi = null

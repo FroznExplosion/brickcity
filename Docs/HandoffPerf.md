@@ -412,7 +412,7 @@ what was built, and what is left.
   (1d0d62a0), one coarse path for a far building, studs sorted by the GPU, and the GPU's
   baseline measured (`--gpucost`).
 
-### 8.2 Built: a building's bands as a box a brick (`-- --inst-bands`, off by default)
+### 8.2 Built: a building's bands as a box a brick (the default since 2026-11-12; `-- --baked-bands` for the old way)
 
 A band is one MultiMesh, a child `Boxes` of the band's node: a UNIT box, an instance a brick,
 scaled to the brick (`BrickWorld.get_instance_buffers`: transform, the colour as the mesher
@@ -474,12 +474,12 @@ made again whole whenever the piece loses a brick; and pieces are a small share 
 
 ### 8.4 Left, in the order it would be done
 
-1. **Make boxes the default**, once played with: then `--breaklag`'s "owed bands" check goes
-   (it tests band uploads, which boxes do not have) and a toppled building's bands have to be
-   handed to its piece (today they are dropped and the piece is meshed as any piece is).
+1. **Boxes the default -- DONE 2026-11-12**, 8.5.
 2. **Stairs instanced by part**, not baked a band at a time: about 2,000 vertices a part made
-   on the main thread when a building is made bricks (worst band fill 1.1 ms). One MultiMesh a
-   kind of part, as a tree's set is.
+   on the main thread when a building is made bricks (worst band fill 1.1-1.6 ms). One
+   MultiMesh a kind of part, as a tree's set is. Until then a building's bands are filled a
+   band at a time inside `BAND_BUDGET_MS` (8.5), so a big tower's stair bands can trail its
+   walls by a tick or two.
 3. **The sway in the wind** for boxed bands (`weather_sway_vertex` wants the chunk's height,
    and the instance's matrix is in the model matrix it is given).
 4. **Which edges are in the open**: a bit an edge in the instance's custom data, so a corner
@@ -490,3 +490,52 @@ made again whole whenever the piece loses a brick; and pieces are a small share 
    (`chamfer_faces_into` and its posts, about 1,300 lines).
 6. What the far tiers still need of a bake (the coarse mesh reads the grid, not a bake; panes
    and shadow proxies read cells) -- probably nothing, which would free 3.4 MB a building.
+
+### 8.5 Boxes the default (2026-11-12)
+
+`CityDrawing.instanced_bands` is on unless `-- --baked-bands` is given (or the library has no
+`get_instance_buffers`: main's before it is rebuilt after a C++ merge). What it took:
+
+* **`BrickBoxes`** (`scripts/render/brick_boxes.gd`): what a band is drawn from is kept ON its
+  node -- a stamp of which bricks its boxes were filled from, one of which of its parts that
+  are not boxes its own mesh was made from -- so whoever holds a band can refresh it:
+  `changed(world, chunk, bands)` gives the sections to fill again, `fill(node, entry, ...)`
+  fills one. The city (`CityDrawing._apply_boxes`, `refresh_boxes`) and the pieces' manager
+  both use it.
+* **A toppled building hands its boxes to its piece.** `IslandManager._instance_bands` gives
+  the piece's copy of each band a `Boxes` of its own on the SAME MultiMesh
+  (`BrickBoxes.share`: nothing copied, and the building's own nodes go on drawing for the
+  overlap frames, as for baked bands). The piece is `boxed`: it needs no bake, has no band
+  holes, and a hit fills again the bands it reached (`_patch_bands`). `--landing --big`: a
+  tower of 3,036 bricks comes down with none of it blind at any tick.
+* **A building is the unit of band work.** The tick's shared clock (section 7) lets a queue
+  run its first unit when it is spent, and a boxed band is a fraction of a millisecond: one a
+  tick left a building coming back from its coarse mesh 11 ticks without bricks
+  (`collapse_probe`). All of a building's bands are filled in one go, up to `BAND_BUDGET_MS`.
+* **A big tower's stairs.** Its buffers are made in one call with no faces
+  (`BrickBoxes.special_none`), and each band's parts that are not boxes are baked as that band
+  is filled (`with_special`). In one call they were 12.7 ms of an 18.6 ms tick (a 27,000-brick
+  tower); now the worst tick is 16.0 ms with 7.7 in bands.
+* **`--breaklag`'s "owed bands" checks** (a building toppled while its bands are uploading) run
+  only with `--baked-bands`: nothing is uploaded for a boxed band, so nothing is owed.
+
+Checks with boxes as the default (editor closed, each windowed run started quiet and under
+78 C, none held back): `--chamfer` 15/0, `--lodbreak` 21/0, `--landing --big` 2/0,
+`--breaklag` 18 ok and 4 FAIL (below), `--big --shot` 3 frames over 33 ms, worst tick 16.0 ms
+(one earlier run 9 and 18.6, before a big tower's stairs were baked a band at a time).
+Headless: solve 99/0, collapse 57/0, replay, storey 4/0, storey_unit 42/0, shellhit 2/0, float
+50/0, debris 29/0, barrage 9/0, hang 10/0, standin 15/0, piece_band 11/0, brick_bevel 26/0. And
+the old way still passes its gate: `--chamfer --baked-bands` 15/0.
+
+**`--breaklag`'s four failing checks are not the boxes'**: they fail the same with
+`--baked-bands`. "far off, a shell stands in for it" (`_far_shell_check`) waits for a building
+in bricks far away to give its bricks' node back for a shell, and the two checks after it read
+that shell's vertices; since the far tier became one coarse path ("the 110 m demesh step
+leaves far drawing alone") a far building keeps its node and is drawn by its coarse mesh, so
+the wait runs out. For whoever owns the far tier to rewrite against the coarse mesh, or prune.
+
+**`--landing`'s "drawn as they come down" counted a stood-in piece as undrawn.** A piece whose
+mesh is being made is drawn a box a brick meanwhile (`IslandStandins`, since 2026-11-08) and is
+still "blind" to `IslandManager.is_blind`. When the tower snapped in two, its new half was
+33-38% of the bricks "undrawn" for that tick and the check failed 1 run in 2, with baked bands
+and with boxes alike. It asks `IslandStandins.covers` now: 2/0, twice.

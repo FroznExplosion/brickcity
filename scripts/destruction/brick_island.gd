@@ -100,6 +100,10 @@ var seen_tick := 0
 ## or -1. Anything asked of its mesh meanwhile waits for it (mesh_again), since
 ## the patches that follow are worked out against the mesh that job builds.
 var mesh_job := -1
+## Its bands are a toppled building's, drawn as a box a brick (BrickBoxes):
+## a hit fills again the bands it reached (IslandManager._patch_bands), and
+## they are whole without a bake.
+var boxed := false
 ## Its mesh is built and waiting for the upload budget
 ## (IslandManager.UPLOAD_VERTS_PER_TICK): treated like a job in flight.
 var upload_waiting := false
