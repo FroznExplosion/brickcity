@@ -1662,6 +1662,12 @@ func _run_breaklag_pass() -> void:
 ## changed meanwhile. The solve waits for a building's bands before it can
 ## topple it, so play rarely gets here; this makes it happen.
 func _owed_band_check() -> void:
+	# Bands drawn as a box a brick are never uploaded, so there is nothing to
+	# be owed (Docs/HandoffPerf.md 8): this is the baked bands' check, run
+	# with `-- --breaklag --baked-bands`.
+	if city.drawing.instanced_bands:
+		print("  --   owed bands: bands are boxes, none is uploaded (run with --baked-bands)")
+		return
 	var pick: BuildingRegistry.Building = null
 	for c in city.registry.buildings:
 		if c.is_build() or c.is_materialised() or city._wide_ids.has(c.id):
@@ -2086,7 +2092,12 @@ func _run_landing_pass() -> void:
 				continue
 			var n := city.world.get_alive_block_count(isl.chunk)
 			total += n
-			if city.islands.is_blind(isl) and not covered.has(isl):
+			# Nor is one stood in for, a box a brick, while its mesh is made
+			# (IslandStandins, since 2026-11-08): counted blind, a tower that
+			# snapped in two failed this 1 run in 2 -- 33-38% "undrawn" for
+			# the tick its new half was boxes (2026-11-12, baked bands and
+			# boxed alike).
+			if city.islands.is_blind(isl) and not covered.has(isl) 					and not city.islands.standins.covers(isl):
 				blind += n
 			if n > most:
 				most = n
@@ -3067,7 +3078,7 @@ func _ghost_walls(id: int, solid_out: Array = []) -> Array:
 ## read-back): twenty floats an instance, a dead brick's a zero matrix.
 func _boxes_tri_mesh(boxes: MultiMeshInstance3D) -> TriangleMesh:
 	var buf := boxes.multimesh.buffer
-	var unit: PackedVector3Array = city.drawing.unit_box_points()[0]
+	var unit: PackedVector3Array = BrickBoxes.unit_box_points()[0]
 	var faces := PackedVector3Array()
 	@warning_ignore("integer_division")
 	var n := buf.size() / 20

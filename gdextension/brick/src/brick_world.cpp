@@ -11845,10 +11845,12 @@ Array BrickWorld::get_instance_buffers(int chunk_id, const PackedInt32Array &sec
         // is theirs alone -- a brick going next to a stair does not make the
         // stair's mesh again. Not baked when the caller holds this stamp.
         Array special;
-        const bool same = !p.special.empty() && held[pi] == (int64_t)p.special_stamp;
+        const bool skip = held[pi] == -1;
+        const bool same = !skip && !p.special.empty() && held[pi] == (int64_t)p.special_stamp;
         d["special_stamp"] = (int64_t)p.special_stamp;
         d["special_same"] = same;
-        if (!p.special.empty() && !same) {
+        d["special_skipped"] = skip && !p.special.empty();
+        if (!p.special.empty() && !same && !skip) {
             FaceBake fb;
             bake_faces_into(c, archetypes, fb, nullptr, &p.special);
             const int faces = fb.face_count();

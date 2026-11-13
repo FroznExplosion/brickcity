@@ -161,7 +161,6 @@ class Band:
 	var boxed := false
 	var box_count := 0          ## its live bricks: what bevelling it costs
 	var box_bevelled := false   ## drawn with the bevelled box now
-	var box_plain: Mesh         ## ... and the mesh to go back to
 	var tris := 0
 	var chunk := -1
 	var section := -1
@@ -494,8 +493,7 @@ func _visit_box(band: Band, dist: float) -> void:
 ## Switch a boxed band's MultiMesh between the plain box and the bevelled one.
 ## The instances are the same either way: one renderer call, no build.
 func _box_bevel(band: Band, on: bool) -> void:
-	var boxes := band.node.get_node_or_null(^"Boxes") as MultiMeshInstance3D \
-			if is_instance_valid(band.node) else null
+	var boxes := BrickBoxes.of(band.node)
 	if boxes == null or boxes.multimesh == null:
 		if band.box_bevelled:
 			chamfered_bands -= 1
@@ -506,7 +504,6 @@ func _box_bevel(band: Band, on: bool) -> void:
 	if on == band.box_bevelled:
 		return
 	if on:
-		band.box_plain = boxes.multimesh.mesh
 		boxes.multimesh.mesh = bevel_box_mesh()
 		boxes.set_instance_shader_parameter(&"geo_bevel", 1.0)
 		band.tris = band.box_count * BOX_BEVEL_TRIS
@@ -516,8 +513,7 @@ func _box_bevel(band: Band, on: bool) -> void:
 		chamfered_tris += band.tris
 		builds += 1
 	else:
-		if band.box_plain != null:
-			boxes.multimesh.mesh = band.box_plain
+		boxes.multimesh.mesh = BrickBoxes.unit_box()
 		boxes.set_instance_shader_parameter(&"geo_bevel", 0.0)
 		chamfered_bands -= 1
 		chamfered_tris -= band.tris
@@ -728,13 +724,13 @@ func audit() -> Dictionary:
 		if band.box_bevelled and is_instance_valid(band.node):
 			# A boxed band: what its MultiMesh draws (a dead brick is a zero
 			# matrix) against the bricks its section holds now.
-			var boxes := band.node.get_node_or_null(^"Boxes") as MultiMeshInstance3D
+			var boxes := BrickBoxes.of(band.node)
 			if boxes != null and boxes.multimesh != null:
 				bands += 1
-				drawn += _live_boxes(boxes.multimesh.buffer) * BOX_BEVEL_TRIS
+				drawn += BrickBoxes.live_in(boxes.multimesh.buffer) * BOX_BEVEL_TRIS
 				for entry in world.get_instance_buffers(band.chunk,
 						PackedInt32Array([band.section]), PackedInt64Array()):
-					wanted += _live_boxes((entry as Dictionary).buffer) * BOX_BEVEL_TRIS
+					wanted += BrickBoxes.live_in((entry as Dictionary).buffer) * BOX_BEVEL_TRIS
 			continue
 		if band.state != NEAR or band.mesh == null:
 			continue
@@ -745,16 +741,6 @@ func audit() -> Dictionary:
 				drawn += 1
 		wanted += maxi(world.get_chamfer_expected_triangles(band.chunk, band.section), 0)
 	return {"bands": bands, "drawn": drawn, "wanted": wanted}
-
-
-## Instances of a boxed band's buffer that draw anything: twenty floats each,
-## the first the brick's width, zero for a dead one.
-static func _live_boxes(buf: PackedFloat32Array) -> int:
-	var live := 0
-	for i in range(0, buf.size() - 19, 20):
-		if buf[i] > 0.0:
-			live += 1
-	return live
 
 
 ## For a gate: the studs held now (every band's last fetch, which is what its
