@@ -1575,3 +1575,21 @@ wk_smoke 144).
   with nothing picked it says how to pick.
 * `build_tools_probe`: the outliner lists a kept shape, its row picks it, its options are under
   Selected.
+
+**Stage 1c, the status line** (2026-11-14). Stage 1 is done with it.
+
+* One line at the bottom, over the hotbar, in both: `BrickBench.status_line`, filled each frame
+  by `BrickBench.show_status(says, left, right, bricks)`. It says what the tool wants next
+  (`WorkshopTools.STATUS`, `AssetWorkshopUI.STATUS`: a short phrase a tool, its whole story in
+  its pop-up; the building's `say` in its place for six seconds), the asset's part, what is going
+  on (`_update_hud`'s state: placing a build, painting, a room found ...), the brick in hand and
+  its cell in whole numbers. Off the clay only: shaping clay has no brick in hand. As wide as its
+  text, in the middle, wrapping only when wider than the window.
+* The rail's paragraph (`WkRail.hint`) is hidden in both. The readout (`_hud`, four lines), the
+  asset's ruler (six lines of numbers) and its part label show only with **Stats**, a new bar
+  button (View section; `BrickBench.stats_on`; workshop_kit 0.17.0: `a_stats`).
+* The rail, its pop-out and the floating panels end `BrickBench.STATUS_ROOM` (164 px) above the
+  window's bottom. The floating panels may cover the pop-out, never the rail or the outliner.
+* The toast stays (the asset's notes, refusals); the building's messages are the status line's.
+* `build_tools_probe`: the status line says what was said, then the brick and cell; no readout
+  without Stats; Stats shows it (352 passed).

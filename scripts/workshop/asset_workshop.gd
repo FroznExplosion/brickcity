@@ -1362,6 +1362,9 @@ func _process(dt: float) -> void:
 	_part_label.text = "part %d of %d: %s   (Y next, shift Y back)" % [
 			part_sel + 1, part_names.size(), part_names[part_sel].to_upper()]
 	_part_label.modulate = PART_COLOURS[part_sel % PART_COLOURS.size()]
+	# The part and the ruler's numbers are the status line's and Stats' now (section 21).
+	_part_label.visible = bench.stats_on
+	_ruler.visible = bench.stats_on
 	_part_label.position = Vector2((get_viewport().get_visible_rect().size.x - _part_label.size.x) * 0.5,
 			get_viewport().get_visible_rect().size.y - 104)
 	var vp := get_viewport().get_visible_rect().size

@@ -24,6 +24,19 @@ const TOOLS := [
 	["select", "Select", "L", "Click a shape or an inserted build to pick it. A shape: drag its top for its height, its side to move it; change its bond or brick, delete it, or let it go. A build: move, copy or delete it."],
 	["rooms", "Rooms", "O", "Rooms and openings: click a room to find it or an opening to turn its kind; RMB forgets one."],
 ]
+## What the status line says a tool does, short (its whole story is in the rail's pop-up).
+const STATUS := {
+	"place": "LMB lays the brick (hold: a run)   RMB takes one away   R turns",
+	"pick": "LMB on a brick: hold its part and colour",
+	"paint": "LMB paints a brick (hold: a stroke)   - = the brush",
+	"draw": "Drag the base, let go, pull the height, click   RMB or Esc cancels",
+	"roof": "Click a shape: a roof on top of it",
+	"stairs": "Click the lower floor, then the upper one",
+	"cut": "Drag a shape on a wall or floor, let go, click to cut   Door, window: one click",
+	"repeat": "Click a building or a storey; the pop-out says where the copies go",
+	"select": "Click a shape or an inserted build   drag a shape's top: height, its side: moves it",
+	"rooms": "Click a room to find it, an opening to turn its kind   RMB forgets one",
+}
 ## Every key's button (Docs/BuildTools.md section 7): the bar, the same in both workshops
 ## (`WorkshopBar.ACTIONS`, section 21).
 const ACTIONS := WorkshopBar.ACTIONS
@@ -226,8 +239,10 @@ var _thick_box: VBoxContainer
 var _sel_thick: VBoxContainer
 var _sel_bond: OptionButton
 var _repeat_box: VBoxContainer
+## The status line (the bench's `status_line`, section 21's frame).
 var _status: Label
 var _status_left := 0.0
+var _said := ""
 var _lay_box: VBoxContainer
 var _poly_box: HBoxContainer
 var _walls_box: VBoxContainer
@@ -279,6 +294,7 @@ func setup(workshop, layer: CanvasLayer) -> void:
 	layer.add_child(rail)
 	frame.rail = rail
 	rail.fill("Build", TOOLS, pick, [], 2)
+	rail.hint.visible = false   # what the tool does is the status line's first part
 	bricks_button = rail.add_under_tools("Bricks   Tab", "place", "Bricks  (Tab)\nOpen or close the menu of every brick.",
 			func() -> void: act("parts"))
 	furnish_button = rail.add_under_tools("Furniture   F6", "furniture",
@@ -1540,11 +1556,11 @@ func _step_level(d: int) -> void:
 	WkRail.light(_drawon_row, "level")
 
 
-## Say something on the rail for a few seconds (a fill refused, the next click wanted).
+## Say something on the status line for a few seconds, in place of what the tool does (a
+## fill refused, the next click wanted).
 func say(text: String) -> void:
-	_status.text = text
-	_status.visible = text != ""
-	_status_left = 6.0
+	_said = text
+	_status_left = 6.0 if text != "" else 0.0
 
 
 ## How tall the bar across the top is.
@@ -1573,14 +1589,7 @@ func dragging() -> bool:
 
 func _build_options() -> void:
 	rail.pop_out(ws._hud_layer, POPOUT_W)
-	_status = Label.new()
-	_status.add_theme_font_size_override("font_size", 14)
-	_status.add_theme_color_override("font_color", Color(1.0, 0.88, 0.5))
-	_status.add_theme_color_override("font_outline_color", Color.BLACK)
-	_status.add_theme_constant_override("outline_size", 5)
-	_status.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	_status.visible = false
-	ws._hud_layer.add_child(_status)
+	_status = ws.status_line
 	_hand_box = VBoxContainer.new()
 	rail.options.add_child(_hand_box)
 	_hand_row = rail.pictures(_hand_box, "", HAND_PICS, pick, "place", 3)
@@ -3182,13 +3191,9 @@ func process() -> void:
 	rail.set_action_text("layer", ["Structure", "Interior", "Detail"][clampi(ws._role, 0, 2)])
 	rail.set_action_text("mirror_axis", "across X" if ws.mirror_axis == 0 else "across Z")
 	var vh: float = ws.get_viewport().get_visible_rect().size.y
-	rail.fit_height(vh - top - 104.0)
+	rail.fit_height(vh - top - ws.STATUS_ROOM)
 	if _status_left > 0.0:
 		_status_left -= ws.get_process_delta_time()
-		_status.visible = _status_left > 0.0 and _status.text != ""
-	if _status.visible:
-		_status.reset_size()
-		_status.position = Vector2((vw - _status.size.x) * 0.5, vh - 128.0)
 	var drawing := on == "draw"
 	_lay_box.visible = drawing
 	_round_box.visible = outline in ["box", "circle"]
@@ -3251,10 +3256,10 @@ func process() -> void:
 	var show_fly := _fly_open or not (rid in POPOUT_HIDES)
 	if dragging() or (Input.mouse_mode == Input.MOUSE_MODE_CAPTURED and rid in POPOUT_HIDES):
 		show_fly = false
-	rail.place_flyout(bt.global_position.y if bt != null else top, vh - 100.0, show_fly)
-	if not show_fly and rid in POPOUT_HIDES and rail.hint != null:
-		rail.hint.text += "  (Point at the tool for its options.)"
-		rail.fit_height(vh - top - 104.0)   # the hint is longer now
+	rail.place_flyout(bt.global_position.y if bt != null else top, vh - ws.STATUS_ROOM, show_fly)
+	var says: String = STATUS.get(on, rail.hint.text if rail.hint != null else "")
+	if not show_fly and rid in POPOUT_HIDES:
+		says += "   (point at the tool for its options)"
 	bricks_button.set_pressed_no_signal(ws._hotbar.is_browsing())
 	furnish_button.set_pressed_no_signal(ws._furnish != null and ws._furnish.is_open())
 	# The readout and the paint palette sit right of the pop-out while it shows, so it never
@@ -3277,6 +3282,11 @@ func process() -> void:
 	elif tool in ["cut", "select", "repeat", "pick", "roof"] or not _sk.is_empty():
 		ws._ghost.visible = false
 	outliner.process(ws.get_process_delta_time())
+	# The status line: what the tool wants next (what it was told to say, else what it does);
+	# the readout only with Stats.
+	if ws._hud != null:
+		ws._hud.visible = ws.stats_on
+	ws.show_status(_said if _status_left > 0.0 else says, 12.0, vw - 12.0)
 	_draw()
 
 

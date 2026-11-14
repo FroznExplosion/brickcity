@@ -10,15 +10,11 @@ was found, how to test without harming the user's files, and what to do next.
   (`scenes/asset_workshop.tscn`) should share most features; clean the UI up and make it the same
   in both. Analysis first, then a plan, then building in stages.
 - Done: the analysis, the plan (section 21, the user's five answers in it), a tool that
-  photographs both UIs. **No game code has changed.** Main `7ee39400`.
-- Stage 0, 1a (the bar and the pop-out in the asset workshop) and 1b merged 2026-11-14
-  (section 21, "As built"). Stage 1 is split in three merges; left of it:
-  - **1b** merged (the building outliner and Selected, `WorkshopOutliner`).
-  - **1c**: one status line at the bottom in place of the rail's hint, the bench's `_hud`, the
-    asset's `_ruler`, `_part_label` and sculpt note; the toast stays for refusals; the debug
-    numbers behind View > Stats. Probes read `_hud` (`build_tools_probe` "the readout sits
-    right of the rail") and `_sculpt_note.text` (asset probes): keep those or move the checks.
-  Then stages 2-8 in order, each merged on its own.
+  photographs both UIs (then, 2026-11-13, no game code changed).
+- Stages 0 and 1 (1a the asset's bar and pop-out, 1b the building's outliner and Selected,
+  1c the status line) merged 2026-11-14 (section 21, "As built"). Next: **stage 2**, one camera
+  and one key map; raise its open point (below) before merging.
+
 
 ## Where to work
 
@@ -48,6 +44,9 @@ Any new script that instantiates a workshop must do the same. Never pass `--gate
 this: it runs the bench's gate.
 
 ## Where the UI is
+
+Since stage 1 also: `scripts/workshop/workshop_bar.gd` (the bar's list), `workshop_outliner.gd`
+(the building's right side), `BrickBench.show_status` / `status_line` / `stats_on` / `bar_act`.
 
 | What | File |
 |---|---|
