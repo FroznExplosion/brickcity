@@ -1539,3 +1539,25 @@ wk_smoke 144).
   workshop_kit 0.15.0).
 * The asset help page (F10) is short now and says what is true: the stages, the rail, the
   outliner, a few keys.
+
+**Stage 1a, the bar and the pop-out in the asset workshop** (2026-11-14).
+
+* The bar's list is `WorkshopBar.ACTIONS` (`scripts/workshop/workshop_bar.gd`, its own class so
+  the bench and `WorkshopTools` do not name each other); `WorkshopTools.ACTIONS` is it. What a
+  button does both workshops share is `BrickBench.bar_act`, its lit toggles
+  `BrickBench.bar_toggles`; each owner answers its own first (the building: Layer, FPS, Cancel,
+  Guide; the asset: the camera, Tab's mouse-look until stage 2, and its own Redo).
+* On a bar an action is a picture (`WkRail.ICONS`, "a_" + id; workshop_kit 0.16.0), its name
+  and key in the pop-up; sections apart by a line. Layer and the mirror's axis keep their text
+  (it changes).
+* The asset workshop has the bar right of its stage tabs, less Layer, Guide and Cancel
+  (`AssetWorkshopUI.BAR_SKIP`). Its outliner starts under the band (`WkFrame.side_under_band`).
+* Its rail is the building's: two columns, 224 px in both (`RAIL_W`), the key in the pop-up;
+  some names shortened to fit (Import, Move, Point, Play, To game, To print, Save as), the full
+  name in the pop-up.
+* Its options are in the pop-out beside the tool in hand (`WkRail.pop_out`, 204 px, as the
+  building's). Rows of buttons in it wrap (`_fit_options` puts them in a flow). The readout, the
+  toast and the floating panels start right of the pop-out while it shows
+  (`AssetWorkshopUI.rail_right`).
+* `asset_ui_probe`: "the options are in the rail, under the tools" became "in the pop-out,
+  beside the rail", and a check for the bar.

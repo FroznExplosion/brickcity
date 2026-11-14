@@ -7078,6 +7078,8 @@ func _over_rail() -> bool:
 
 ## Where things to the right of the rail start.
 func _rail_right() -> float:
+	if _ui != null:
+		return _ui.rail_right()
 	if _rail == null:
 		return 12.0
 	# Inside the tool rail: right of the rail's own panel.
