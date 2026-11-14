@@ -220,15 +220,13 @@ a mesh of the whole chunk.
 
   | Within | Mesh | Triangles |
   |---|---|---|
-  | `stud_bevel_radius`, 4 m (was 8) | `PieceMeshes.stud()`, the rim bevelled | 38 |
-  | `stud_round_radius`, 12 m (was 13) | `stud_plain()`, an octagon | 22 |
-  | `stud_radius`, 12 m (was 18) | `stud_square()`, a tapered square post of the same plan area | 10 |
+  | `stud_bevel_radius`, 4 m (was 8) -- the workshop only since 2026-11-11 | `PieceMeshes.stud()`, the rim bevelled | 38 |
+  | `stud_radius`, 12 m (was 18) | `stud_plain()`, an octagon | 22 |
   | `stud_card_radius`, 45 m (was 70) | `stud_card()`, a card turned to the camera | 2 |
 
-  A stud is 0.21 m: 36 pixels wide at 8 m, 24 at 12, 16 at 18, about 6 at 45 (1080p). Square is
-  visibly square at 8 m and a bump at 18, which is why it started at 13. Since 2026-11-07 the
-  square ring is skipped (`stud_round_radius` = `stud_radius`): round to 12 m, then cards. Set
-  `stud_round_radius` to `stud_bevel_radius` to go straight to square instead.
+  A stud is 0.21 m: 36 pixels wide at 8 m, 24 at 12, 16 at 18, about 6 at 45 (1080p). There
+  was a fourth, `stud_square()` (a tapered square post, 10 triangles) from 13 to 18 m: visibly
+  square at 8 m and a bump at 18. Skipped from 2026-11-07, removed 2026-11-14.
 
   Past 18 m there were none, and a building across a square was a stack of smooth boxes. The
   card (`shaders/stud_card.gdshader`) is the cheapest stud there is: two triangles, turned to
@@ -330,11 +328,10 @@ a mesh of the whole chunk.
   from; one built from a bake that has gone is not handed over, and one held from it is called
   stale and dropped rather than patched.
 
-`BrickNear.enabled`, `radius`, `stud_radius`, `stud_bevel_radius`, `stud_round_radius` and
+`BrickNear.enabled`, `radius`, `stud_radius`, `stud_bevel_radius` and
 `stud_card_radius` are
 static and can be set at run time. Options > Video sets the distances (since 2026-11-08):
-**Bevelled Bricks** (`radius`), **Bevelled Studs**, **Real Studs** (round all the way out,
-`stud_round_radius` = `stud_radius`) and **Stud Cards**, kept in order by
+**Bevelled Bricks** (`radius`), **Bevelled Studs**, **Real Studs** and **Stud Cards**, kept in order by
 `BrickNear.set_stud_distances`; a headless run keeps the defaults (`DEFAULT_*`). The city takes `-- --no-near` for a run without the tier.
 
 The workshop does not use the tracker: it is a few hundred bricks an arm's length away, rebuilt
@@ -448,6 +445,6 @@ the mean is.
 ## 7. Not done
 
 * **The terrain's studs** have two steps (bevelled on the tiles round the camera, plain to
-  `STUD_RANGE`), not these three. The square stud is in `PieceMeshes` for it to use.
+  `STUD_RANGE`), not these three.
 * **`build_mesh_internal`** (a masked group's mesh, per cell) has no chamfered form. Pieces are
   chunks and go through the bake.

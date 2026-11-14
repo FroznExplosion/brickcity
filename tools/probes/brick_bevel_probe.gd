@@ -281,20 +281,19 @@ func _check_studs() -> void:
 	_ok("a smooth tile on that covers them and shows none", tiled == 4, "%d" % tiled)
 
 	# The stud meshes, nearest first: the bevelled one (the workshop's), the
-	# plain one (BrickNear's geometry), square (the terrain's to use), the far
-	# card, two triangles (indexed, the others not).
+	# plain one (BrickNear's geometry), the far card, two triangles (indexed,
+	# the others not).
 	var tris := []
-	for m in [PieceMeshes.stud(), PieceMeshes.stud_plain(), PieceMeshes.stud_square()]:
+	for m in [PieceMeshes.stud(), PieceMeshes.stud_plain()]:
 		tris.append((m.surface_get_arrays(0)[Mesh.ARRAY_VERTEX] as PackedVector3Array).size() / 3)
 	tris.append((PieceMeshes.stud_card().surface_get_arrays(0)[Mesh.ARRAY_INDEX]
 			as PackedInt32Array).size() / 3)
-	_ok("each stud tier is fewer triangles than the one before", tris == [38, 22, 10, 2],
+	_ok("each stud tier is fewer triangles than the one before", tris == [38, 22, 2],
 			"%s" % [tris])
-	_ok("bevelled inside plain inside square inside card inside none",
-			BrickNear.stud_bevel_radius <= BrickNear.stud_round_radius
-			and BrickNear.stud_round_radius <= BrickNear.stud_radius
+	_ok("bevelled inside plain inside card inside none",
+			BrickNear.stud_bevel_radius <= BrickNear.stud_radius
 			and BrickNear.stud_radius <= BrickNear.stud_card_radius,
-			"%.0f, %.0f, %.0f, %.0f m" % [BrickNear.stud_bevel_radius, BrickNear.stud_round_radius,
+			"%.0f, %.0f, %.0f m" % [BrickNear.stud_bevel_radius,
 				BrickNear.stud_radius, BrickNear.stud_card_radius])
 
 	# An instanced build's one mesh is chamfered, and says so.

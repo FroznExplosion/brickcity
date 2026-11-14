@@ -31,7 +31,7 @@ moving**. When that one then falls away, nothing wakes the frozen one:
   piece riding a big section that is sliding slowly is frozen on it.
 
 ### 1.2 "Any damage spawns everything inside, then it falls"
-An undamaged building between `PROMOTE_RANGE` (28 m) and `DEMESH_RANGE` (110 m) is a shell with
+An undamaged building between `PROMOTE_RANGE` (28 m) and `SHELL_DETAIL_RANGE` (110 m) is a shell with
 painted windows: no furniture. A hit makes it bricks (`_promote`), and its storey groups are built
 for everything within `INTERIOR_RANGE` (100 m) as soon as the building looks quiet
 (`_mid_collapse`). The span rule and the region check come up to `SPAN_EVERY_MS` later and cut it:
@@ -43,8 +43,8 @@ the furniture pops in, then the building falls. **Damage changed how the interio
 |---|---|
 | bricks when near (`PROMOTE_RANGE`) | 28 |
 | hot collapse (`CollapseTier.HOT_RANGE`, `FRACTURE_RANGE`) | 60 |
+| bricks drawn by their coarse mesh (`CityDrawing.FAR_COARSE_RANGE`, quiet 3 s) | 60 |
 | 3D furniture (`InteriorGroups.INTERIOR_RANGE`) | 100 |
-| bricks drawn as a shell (`DEMESH_RANGE`) | 110 |
 | sleeping pieces wake (`WAKE_RANGE`) | 120 |
 | bricks lying stop drawing (`BrickHeap.DRAW_RANGE`) | 140 |
 | far collapse, pieces sleep (`CollapseTier.FAR_RANGE`) | 150 |

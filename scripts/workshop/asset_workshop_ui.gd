@@ -73,7 +73,7 @@ const STATUS := {
 	"blockout:draw": "Drag adds clay to the part   RMB carves   Shift smooths",
 	"blockout:shape": "Drag out a shape of clay (choose it in the pop-out)   RMB carves",
 	"blockout:smooth": "Drag over the clay to round its edges",
-	"place": "LMB lays the brick   RMB takes one away   R turns   1-9 pick",
+	"place": "LMB lays the brick   RMB takes one away   R turns   1-9, Shift + wheel pick",
 	"select": "Drag a box over bricks   Delete removes them",
 	"paint": "LMB paints a brick (hold: a stroke)",
 	"sketch": "Draw an outline on the working plane: it fills with bricks of the part",
@@ -179,7 +179,7 @@ func setup(workshop, layer: CanvasLayer) -> void:
 	_tools_panel.actions(WorkshopBar.without(BAR_SKIP), bar_act, _bar_box)
 	var look: Button = _tools_panel.action_buttons.get("fps")
 	if look != null:
-		look.tooltip_text = "Look  (Y)\nThe mouse looks round (to fly), or the cursor is free (to use the panels)."
+		look.tooltip_text = "FPS  (Y)\nSwap the camera: FPS (the mouse looks; hold Alt for the cursor), or orbit (the cursor is free: MMB orbits, Shift MMB pans, the wheel zooms, RMB held looks round)."
 	stage = "bricks" if ws.sculpt_state == "bricks" else "blockout"
 	_fill_tools()
 	sync_kind()
@@ -1012,7 +1012,7 @@ func process(dt: float) -> void:
 	var bt: Button = _tool_buttons.get(on)
 	_tools_panel.place_flyout(bt.global_position.y if bt != null else frame.rail_top(), vh - ws.bench.STATUS_ROOM)
 	var lit: Dictionary = ws.bench.bar_toggles()
-	lit["fps"] = bool(ws.bench._camera.get("_captured"))
+	lit["fps"] = ws.cam_ctl.mode == "fps"
 	lit["free"] = ws.free_place
 	var open := {"bricks": ws.bench._hotbar.is_browsing(), "parts": ws._catalog_panel != null and ws._catalog_panel.visible,
 			"photos": ws._panel.visible, "guides": ws._guide_panel.visible, "help": ws._help.visible}

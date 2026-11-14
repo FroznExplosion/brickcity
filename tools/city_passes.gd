@@ -2187,8 +2187,9 @@ func _proxy_check(b: BuildingRegistry.Building) -> void:
 			"built at chunk version %d, now %d, after %d tick(s)" % [
 				int(city.drawing._shadow_proxy_alive.get(b.id, -1)), city.world.get_chunk_version(b.chunk), t])
 
-## A building still in bricks gives its mesh up past DEMESH_RANGE and stands in
-## as a shell (_demesh). That shell has to be drawn from the damage its bricks
+## A building still in bricks, far off, is drawn by its coarse mesh
+## (CityDrawing.tend_far_coarse, Docs/PerfCaps.md 5) -- or, quiet long enough,
+## given back and drawn by its shell. Either has to draw the damage its bricks
 ## have now -- nothing, if none are left -- and take a hit while it is far. It
 ## used to be drawn from the profile of the last time the building was given
 ## back: a building damaged since came back whole at range, and went again up
@@ -2196,14 +2197,14 @@ func _proxy_check(b: BuildingRegistry.Building) -> void:
 func _far_shell_check(b: BuildingRegistry.Building, hit_it: bool) -> void:
 	var fx: float = b.recipe.footprint_x * City.STUD
 	city.camera.global_position = b.xform.origin + Vector3(0.0, 40.0,
-			-(City.DEMESH_RANGE + City.DEMESH_HYSTERESIS + 30.0))
+			-(city.drawing.FAR_COARSE_RANGE + 100.0))
 	city.camera.look_at(b.xform.origin + Vector3(0.0, 10.0, 0.0), Vector3.UP)
 	var t := 0
-	while t < 300 and not (city._shells.has(b.id) and not city._brick_nodes.has(b.id)):
+	while t < 300 and not _far_stand_in(b):
 		await city.get_tree().physics_frame
 		t += 1
-	_gate_ok("building %d: far off, a shell stands in for it" % b.id,
-			city._shells.has(b.id) and not city._brick_nodes.has(b.id), "after %d tick(s)" % t)
+	_gate_ok("building %d: far off, its coarse mesh or a shell stands in for it" % b.id,
+			_far_stand_in(b), "after %d tick(s)" % t)
 	_gate_ok("building %d: drawn with the damage it has, not what it had" % b.id,
 			_far_shell_true(b), _far_shell_note(b))
 	if not hit_it or not b.is_materialised() or city.world.get_alive_block_count(b.chunk) == 0:
@@ -2218,24 +2219,37 @@ func _far_shell_check(b: BuildingRegistry.Building, hit_it: bool) -> void:
 			city.world.get_alive_block_count(b.chunk) < before and _far_shell_true(b),
 			"%d -> %d bricks; %s" % [before, city.world.get_alive_block_count(b.chunk), _far_shell_note(b)])
 
-## Vertices the shell draws, and what it should: from the bricks while it has
-## them, from the profile once it has given them back.
+## Drawn far off by something other than its bands: its coarse mesh while it
+## is in bricks, its shell once given back; nothing, with no brick left.
+func _far_stand_in(b: BuildingRegistry.Building) -> bool:
+	if b.is_materialised():
+		if city.world.get_alive_block_count(b.chunk) == 0:
+			return not city._brick_bands.has(b.id)
+		return city.drawing.coarse_only(b.id)
+	return city._shells.has(b.id)
+
+## Vertices the far drawing draws, and what it should: its bricks' coarse mesh
+## as they are now while it has them, its shell from the profile once it has
+## given them back.
 func _far_shell_counts(b: BuildingRegistry.Building) -> Array:
 	var got := 0
+	var r: Dictionary = b.recipe
+	# Drawn by its coarse mesh: what it should draw is that mesh made from its
+	# bricks as they are now, not a recipe shell with holes.
+	var cm = city.drawing._far_coarse.get(b.id)
+	if b.is_materialised() and is_instance_valid(cm):
+		if (cm as MeshInstance3D).mesh != null and (cm as MeshInstance3D).mesh.get_surface_count() > 0:
+			got = ((cm as MeshInstance3D).mesh.surface_get_arrays(0)[Mesh.ARRAY_VERTEX]
+					as PackedVector3Array).size()
+		var coarse: Array = city.world.build_chunk_coarse_mesh(b.chunk)
+		var cw := 0 if coarse.is_empty() \
+				else (coarse[Mesh.ARRAY_VERTEX] as PackedVector3Array).size()
+		return [got, cw, -1]
 	var mi = city._shells.get(b.id)
 	if is_instance_valid(mi) and (mi as MeshInstance3D).mesh != null \
 			and (mi as MeshInstance3D).mesh.get_surface_count() > 0:
 		got = ((mi as MeshInstance3D).mesh.surface_get_arrays(0)[Mesh.ARRAY_VERTEX]
 				as PackedVector3Array).size()
-	var r: Dictionary = b.recipe
-	# Drawn from its bricks (_far_real): what it should draw is their coarse
-	# mesh as they are now, not a recipe shell with holes -- a wide one far off
-	# is drawn so (it was 21,824 vertices against the profile's 2,692, and right).
-	if is_instance_valid(mi) and city._far_real_done.get(b.id) == mi and b.is_materialised():
-		var coarse: Array = city.world.build_chunk_coarse_mesh(b.chunk)
-		var cw := 0 if coarse.is_empty() \
-				else (coarse[Mesh.ARRAY_VERTEX] as PackedVector3Array).size()
-		return [got, cw, -1]
 	var profile: Dictionary = b.damage_profile
 	var want := 0
 	if b.is_materialised():
@@ -2803,7 +2817,7 @@ func _run_floating_pass() -> void:
 
 ## The user's way of breaking a building (2026-10-17 pictures): a 12 m blast
 ## fired at a tower's foot from each of the building's distance tiers -- 25 m
-## (bricks), 60 m (bricks, mesh), 160 m (past DEMESH_RANGE: its far drawing)
+## (bricks), 60 m (bricks, mesh), 160 m (its coarse mesh: its far drawing)
 ## and 320 m (past SHELL_RANGE: a recipe) -- then watched from there and flown
 ## up to at 20 m/s. Pictures at every stop (shots/lodbreak_*); what each says
 ## of the building, its studs and the furniture and bricks lying near it.
@@ -3170,9 +3184,8 @@ func _lodbreak_say(b: BuildingRegistry.Building, what: String) -> void:
 			if c is MeshInstance3D and (c as MeshInstance3D).mesh != null:
 				@warning_ignore("integer_division")
 				panes += (c as MeshInstance3D).mesh.surface_get_array_len(0) / 4
-		print("    its shell: %s mesh, %d painted window(s)%s" % [
-				"a" if shell.mesh != null else "no", panes,
-				", from its bricks" if city._far_real_owed.has(b.id) or city.drawing.far_real_built > 0 else ""])
+		print("    its shell: %s mesh, %d painted window(s)" % [
+				"a" if shell.mesh != null else "no", panes])
 	_pieces_say(b.id)
 	print("  [%d] %s: dist %.0f, materialised %s, %d bricks alive, shell %s, brick node %s, bands building %s, pieces %d (%d moving), damage %d"
 			% [b.id, what, city.camera.global_position.distance_to(b.xform.origin), b.is_materialised(), alive,
@@ -6484,8 +6497,6 @@ func _run_stress_pass() -> void:
 			str(city.islands.mesh_drain_worst), city.islands.small_meshes_on_worker])
 	print("[stress] breaks %d (%d had to tear a band), %d impact(s) loosening %d block(s)" % [
 			isl.breaks, isl.band_breaks, isl.impacts, isl.impact_blocks])
-	print("[stress] de-meshed %d, re-meshed %d, in %.0f ms" % [
-			city._demeshed, city._remeshed_back, city._demesh_ms])
 	print("[stress] trimmed %d building(s) in %.0f ms (%.1f ms each) = demat %.0f + free %.0f + shell %.0f" % [
 			city._trims, city._trim_ms, city._trim_ms / maxf(city._trims, 1),
 			city._trim_split.demat, city._trim_split.free, city._trim_split.shell])
@@ -6545,14 +6556,15 @@ func _stress_wound(b) -> int:
 			fired += 1
 	return fired
 
-## The de-mesh tier, there and back.
+## The far tier for a building in bricks, there and back (CityDrawing.
+## tend_far_coarse, Docs/PerfCaps.md 5). It was the 110 m de-mesh tier.
 ##
-## Dropping a building's mesh is only half a feature. The half that breaks
+## Giving a building's bands up is only half a feature. The half that breaks
 ## silently is the return: walk away, walk back, and the building has to be
-## bricks again -- with its damage still in them. A building stuck as a shell
-## forever looks exactly like a building that was never damaged.
+## drawn by its bands again -- with its damage still in them. A building stuck
+## coarse forever looks like one far away.
 func _run_lod_pass() -> void:
-	print("[lod] de-mesh and back")
+	print("[lod] coarse and back")
 	var target := city.registry.get_building(0)
 	var aim: Vector3 = target.xform.origin + Vector3(
 			target.recipe.footprint_x * City.STUD * 0.5,
@@ -6587,23 +6599,23 @@ func _run_lod_pass() -> void:
 	var dead_near: int = city.world.get_dead_blocks(b.chunk).size()
 	check.call("bricks are missing", dead_near > 0, "%d dead" % dead_near)
 
-	# Walk away, past DEMESH_RANGE + hysteresis, and POLL for the de-mesh rather
+	# Walk away, past FAR_COARSE_RANGE, and POLL for the coarse mesh rather
 	# than sleeping a fixed time. _trim_quiet is a deeper tier on the same
-	# buildings -- TRIM_RADIUS (90 m) is inside DEMESH_RANGE (110 m) -- so a
-	# fixed wait long enough to be safe is also long enough for the trim to fire
-	# and take the chunk away, which reads as the de-mesh tier failing when it
-	# is the trim working.
+	# buildings -- TRIM_RADIUS is past FAR_COARSE_RANGE, after TRIM_AFTER_MS
+	# quiet against FAR_COARSE_QUIET_MS -- so a fixed wait long enough to be
+	# safe is also long enough for the trim to fire and take the chunk away,
+	# which reads as the far tier failing when it is the trim working.
 	city.camera.global_position = aim + Vector3(0.0, 0.0, -200.0)
 	city.camera.look_at(aim, Vector3.UP)
 	var waited := 0
-	while city._brick_nodes.has(0) and waited < 600:
+	while not city.drawing.coarse_only(0) and waited < 600:
 		await _frames(1)
 		waited += 1
 
 	b = city.registry.get_building(0)
-	check.call("mesh dropped", not city._brick_nodes.has(0), "after %d frame(s)" % waited)
+	check.call("bands given up", not city._brick_bands.has(0), "after %d frame(s)" % waited)
 	check.call("still resident", b.is_materialised(), "")
-	check.call("drawn as a shell instead", city._shells.has(0), "")
+	check.call("drawn by its coarse mesh instead", city.drawing.coarse_only(0), "")
 	check.call("damage still recorded", _dead_count(0) == dead_near,
 			"%d dead" % _dead_count(0))
 
@@ -6640,8 +6652,8 @@ func _run_lod_pass() -> void:
 		# BUILDING 0, not merely something solid. "Not an island" was too weak:
 		# another building's shell in front of this one is not an island
 		# either, and the shot landed on that and destroyed nothing here.
-		# Either of building 0's own bodies counts -- de-meshed, it is drawn
-		# by a shell and collided by its bricks, and both are in the space.
+		# Either of building 0's own bodies counts -- drawn coarse, it is
+		# still collided by its bricks.
 		var struck_rid: RID = seen.get("rid", RID())
 		if not seen.is_empty() and city._building_for_body(struck_rid) == 0:
 			clear_line = true
@@ -6661,14 +6673,14 @@ func _run_lod_pass() -> void:
 	city.camera.global_position = aim + Vector3(0.0, 0.0, -40.0)
 	city.camera.look_at(aim, Vector3.UP)
 	waited = 0
-	while not city._brick_nodes.has(0) and waited < 600:
+	while city.drawing._far_coarse.has(0) and waited < 600:
 		await _frames(1)
 		waited += 1
 	await _frames(20)
 
 	b = city.registry.get_building(0)
-	check.call("bricks came back", city._brick_nodes.has(0), "after %d frame(s)" % waited)
-	check.call("and the shell went away", not city._shells.has(0), "")
+	check.call("bands came back", city._brick_bands.has(0), "after %d frame(s)" % waited)
+	check.call("and the coarse mesh went away", not city.drawing._far_coarse.has(0), "")
 	# The node itself holds no mesh: a building draws through its BANDS, and
 	# the node is the transform they hang off. See _rebuild_bands.
 	check.call("with geometry in it", _drawn_surfaces(0) > 0,
@@ -9145,6 +9157,10 @@ func _run_boat_pass() -> void:
 			_hold_level(boat)])
 	print("[boat] water: worst step %.1f ms, worst drawing %.1f ms; afloat a tick %.2f ms" % [
 			boat.water_step_us / 1000.0, boat.water_draw_us / 1000.0, boat.float_us / 1000.0])
+	if boat.hull_water != null:
+		print("[boat] water parts, worst: holes %.1f ms, flow %.1f ms, spray %.1f ms; the first drawing %.1f ms" % [
+				boat.hull_water.holes_us / 1000.0, boat.hull_water.flow_us / 1000.0,
+				boat.water_spray_us / 1000.0, boat.water_draw_first_us / 1000.0])
 	# On the sea, in the world's air: holed, nothing vents, no rush toward the hole.
 	var vents := VentDust.jets_of(boat)
 	check.call("holed on the sea: its air stays (the world's outside), no dust, no rush", vents.is_empty()

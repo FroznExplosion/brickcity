@@ -56,6 +56,9 @@ var steps := 0
 ## Height of a cell, metres (a plate): how a depth becomes a head in cells.
 var cell_h := 0.12
 var _down := Vector3.DOWN
+## The worst step's parts, microseconds: the holes (script), the flow (C++).
+var holes_us := 0.0
+var flow_us := 0.0
 var _last_lat: Array = []
 var _doors_sig := ""
 ## Set by whoever changes the air's grid (a hit, a repair): what the water may
@@ -152,7 +155,10 @@ func step(dt: float, down: Vector3, depth_at: Callable) -> void:
 	var axis := _axis(down)
 	if _tipped(axis[1]):
 		flow.wake_all()
+	var t0 := Time.get_ticks_usec()
 	_holes(dt, depth_at)
+	var t1 := Time.get_ticks_usec()
+	holes_us = maxf(holes_us, float(t1 - t0))
 	var lat := PackedInt32Array()
 	var wts := PackedFloat32Array()
 	for e: Array in axis[1]:
@@ -160,6 +166,7 @@ func step(dt: float, down: Vector3, depth_at: Callable) -> void:
 		wts.append(float(e[1]))
 	if flow.flow(int(axis[0]), lat, wts, PASSES, SIDE, UP, DRY, STILL):
 		changed = true
+	flow_us = maxf(flow_us, float(Time.get_ticks_usec() - t1))
 
 
 ## The lateral weights moved enough since the last step that a still pool would
@@ -196,6 +203,10 @@ func _holes(dt: float, depth_at: Callable) -> void:
 	for ci in air._parent.size():
 		if air._parent[ci] != ci or air._breach[ci].is_empty():
 			continue
+		# The room's wet cells from the top down, for its holes over the water:
+		# sorted once a room a step, and only if one drains.
+		var top: Array = []
+		var top_made := false
 		var have := float(held.get(ci, 0.0))
 		var room := pocket_room(ci, depth_at)
 		if room >= 0.0:
@@ -235,7 +246,10 @@ func _holes(dt: float, depth_at: Callable) -> void:
 				# Out: the room's water stands level (it would, long before a cell a
 				# tick could carry it to the hole), so what goes is its top -- the
 				# highest wet cells of the compartment that stand over the hole.
-				_drain_top(ci, _height(b), OUTFLOW * dt * nb.size())
+				if not top_made:
+					top_made = true
+					top = _room_top(ci)
+				_drain_top(top, _height(b), OUTFLOW * dt * nb.size())
 
 
 ## How much water room `ci` can take before its air is squeezed to the water's
@@ -260,20 +274,24 @@ func _height(i: int) -> float:
 	return -Vector3(air._cell(i)).dot(_down)
 
 
-## Up to `amount` of compartment `ci`'s water taken from its top, never from
-## under `floor_h` (water under a hole stays).
-func _drain_top(ci: int, floor_h: float, amount: float) -> void:
+## Compartment `ci`'s wet cells, highest first: [[height, cell], ...].
+func _room_top(ci: int) -> Array:
 	var r := air._root(ci)
 	var top: Array = []
 	for i in flow.wet():
 		if air.state[i] == HullAir.INSIDE and air._root(air.comp[i]) == r:
-			var hh := _height(i)
-			if hh >= floor_h - 0.5:
-				top.append([hh, i])
+			top.append([_height(i), i])
 	top.sort_custom(func(a, b): return a[0] > b[0])
+	return top
+
+
+## Up to `amount` of a room's water taken from its top (`top`: _room_top's), never
+## from under `floor_h` (water under a hole stays). A hole each used to walk and
+## sort the room's wet cells for itself: 60 hole cells over the water, 8 ms a step.
+func _drain_top(top: Array, floor_h: float, amount: float) -> void:
 	var left := amount
 	for e in top:
-		if left <= 0.0:
+		if left <= 0.0 or float(e[0]) < floor_h - 0.5:
 			break
 		var i: int = e[1]
 		var t := minf(flow.get(i), left)

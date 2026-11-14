@@ -15,6 +15,7 @@ const MIN_IN := 0.001
 var _jets: Array[GPUParticles3D] = []
 var _wait := 0.0
 static var _quad: QuadMesh
+static var _ramp: GradientTexture1D
 
 
 func update(st: SpaceStation, dt: float) -> void:
@@ -23,11 +24,16 @@ func update(st: SpaceStation, dt: float) -> void:
 		return
 	_wait = EVERY
 	var want := jets_of(st)
+	var made := false
 	for k in maxi(want.size(), _jets.size()):
 		if k >= want.size():
 			_jets[k].emitting = false
 			continue
 		if k >= _jets.size():
+			# One new jet an update: six made at once were 8 ms of a step.
+			if made:
+				break
+			made = true
 			_jets.append(_make(st))
 		var j := _jets[k]
 		var w: Dictionary = want[k]
@@ -40,6 +46,14 @@ func update(st: SpaceStation, dt: float) -> void:
 		pm.gravity = Gravity.down_at(w.at) * 9.8
 		j.amount_ratio = clampf(0.3 + s, 0.3, 1.0)
 		j.emitting = true
+
+
+## Its first jet made ahead, idle (with the hull's water, at launch): the first one
+## made is the dear one -- its mesh, material and texture -- and made at the first
+## hole it was up to 24 ms of that step (boat pass, 2026-11-14).
+func warm(st: SpaceStation) -> void:
+	if _jets.is_empty():
+		_jets.append(_make(st))
 
 
 ## Where `st`'s jets go now: [{at, dir (world, inward), depth (m)}].
@@ -101,12 +115,13 @@ func _make(st: SpaceStation) -> GPUParticles3D:
 	pm.damping_max = 0.6
 	pm.scale_min = 0.5
 	pm.scale_max = 1.4
-	var g := Gradient.new()
-	g.set_color(0, Color(0.95, 0.98, 1.0, 0.85))
-	g.set_color(1, Color(0.6, 0.8, 0.9, 0.0))
-	var gt := GradientTexture1D.new()
-	gt.gradient = g
-	pm.color_ramp = gt
+	if _ramp == null:
+		var g := Gradient.new()
+		g.set_color(0, Color(0.95, 0.98, 1.0, 0.85))
+		g.set_color(1, Color(0.6, 0.8, 0.9, 0.0))
+		_ramp = GradientTexture1D.new()
+		_ramp.gradient = g
+	pm.color_ramp = _ramp
 	p.process_material = pm
 	p.emitting = false
 	st.add_child(p)
