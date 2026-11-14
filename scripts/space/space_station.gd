@@ -67,6 +67,11 @@ var air_leak := 0.0
 ## The worst water step (with its spray) and water drawing so far, microseconds.
 var water_step_us := 0.0
 var water_draw_us := 0.0
+## The parts of those, worst each: the spray's update; the first drawing (it makes
+## the node and its material) apart from the ones after.
+var water_spray_us := 0.0
+var water_draw_first_us := 0.0
+var _water_draws := 0
 const DRAW_WATER_EVERY := 0.2
 var _water_dirty := false
 var _water_drawn_ago := 0.0
@@ -1285,12 +1290,16 @@ func _water_step(dt: float) -> void:
 			return
 		hull_water = HullWater.on(air)
 		hull_water.air_leak = air_leak
+		_water_node()
+		hull_spray.warm(self)
 	if not water_depth.is_valid() and not hull_water.any():
 		return
 	var t0 := Time.get_ticks_usec()
 	hull_water.step(t, water_down(), _hole_depth)
+	var ts := Time.get_ticks_usec()
 	hull_spray.update(self, t)
 	var t1 := Time.get_ticks_usec()
+	water_spray_us = maxf(water_spray_us, float(t1 - ts))
 	# Drawn again at most DRAW_WATER_EVERY: the water moves slowly to the eye, and a
 	# flooding hull's drawing is up to 20 ms (boat pass, 2026-11-07).
 	_water_dirty = _water_dirty or hull_water.changed
@@ -1299,9 +1308,14 @@ func _water_step(dt: float) -> void:
 		_water_dirty = false
 		_water_drawn_ago = 0.0
 		_draw_water()
+		_water_draws += 1
+		var d := float(Time.get_ticks_usec() - t1)
+		if _water_draws == 1:
+			water_draw_first_us = d
+		else:
+			water_draw_us = maxf(water_draw_us, d)
 	# The worst step and drawing, microseconds (the boat pass reports them).
 	water_step_us = maxf(water_step_us, float(t1 - t0))
-	water_draw_us = maxf(water_draw_us, float(Time.get_ticks_usec() - t1))
 
 
 ## Its down in its grid's axes: its own gravity's (its frame's -Y) while it pulls,
@@ -1330,14 +1344,7 @@ func _hole_depth(i: int) -> float:
 func _draw_water() -> void:
 	if _brick_node == null:
 		return
-	if water_mesh == null:
-		water_mesh = MeshInstance3D.new()
-		water_mesh.name = "Water"
-		var m := ShaderMaterial.new()
-		m.shader = HULL_WATER_SHADER
-		water_mesh.material_override = m
-		water_mesh.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-		_brick_node.add_child(water_mesh)
+	_water_node()
 	# Cells beside a hole the sea comes in at: the most foam.
 	# (HullWater.inflow: the holes water came in at, its last step.)
 	var inflow := PackedInt32Array()
@@ -1359,6 +1366,27 @@ func _draw_water() -> void:
 	var mesh := ArrayMesh.new()
 	mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
 	water_mesh.mesh = mesh
+
+
+## Every hull's water is drawn with this one material (it has nothing of a hull's
+## own in it), made with the first hull that can take water.
+static var _water_material: ShaderMaterial
+
+
+## The node its water is drawn in, made if it is not there. Made when its water
+## is (`_water_step`: at launch, loading), not at the first drawing: the material
+## was 25 ms of the frame the first water showed in (boat pass, 2026-11-14).
+func _water_node() -> void:
+	if water_mesh != null or _brick_node == null:
+		return
+	if _water_material == null:
+		_water_material = ShaderMaterial.new()
+		_water_material.shader = HULL_WATER_SHADER
+	water_mesh = MeshInstance3D.new()
+	water_mesh.name = "Water"
+	water_mesh.material_override = _water_material
+	water_mesh.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	_brick_node.add_child(water_mesh)
 
 
 ## Water pumped out of it, `cells` a second (HullWater.pump): its crew's pumps.

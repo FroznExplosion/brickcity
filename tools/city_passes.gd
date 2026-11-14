@@ -9157,6 +9157,10 @@ func _run_boat_pass() -> void:
 			_hold_level(boat)])
 	print("[boat] water: worst step %.1f ms, worst drawing %.1f ms; afloat a tick %.2f ms" % [
 			boat.water_step_us / 1000.0, boat.water_draw_us / 1000.0, boat.float_us / 1000.0])
+	if boat.hull_water != null:
+		print("[boat] water parts, worst: holes %.1f ms, flow %.1f ms, spray %.1f ms; the first drawing %.1f ms" % [
+				boat.hull_water.holes_us / 1000.0, boat.hull_water.flow_us / 1000.0,
+				boat.water_spray_us / 1000.0, boat.water_draw_first_us / 1000.0])
 	# On the sea, in the world's air: holed, nothing vents, no rush toward the hole.
 	var vents := VentDust.jets_of(boat)
 	check.call("holed on the sea: its air stays (the world's outside), no dust, no rush", vents.is_empty()
