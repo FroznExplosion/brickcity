@@ -83,6 +83,20 @@ static func on(hull_air: HullAir) -> HullWater:
 	return w
 
 
+## The air's grid was worked out again (HullAir.rebuild): its rooms are new ones.
+## Water in a cell that is no room's any more has gone with the part that left.
+func grid_rebuilt() -> void:
+	_passable_again()
+	for i in flow.wet():
+		if not flow.is_passable(i):
+			went_out -= flow.add(i, -flow.get(i))
+	_leaked.clear()
+	trapped.clear()
+	inflow.clear()
+	flow.wake_all()
+	changed = true
+
+
 ## Cells water may stand in, from the air's states and the doors open now.
 func _passable_again() -> void:
 	var open := PackedInt32Array()
