@@ -46,6 +46,7 @@ func _tick() -> void:
 	_parts(ui)
 	_kinds(ui)
 	_ws.set_asset_kind("gun")
+	_camera(ui)
 	print("\n%d passed, %d failed" % [_pass, _fail])
 	quit(1 if _fail > 0 else 0)
 
@@ -309,3 +310,56 @@ func _menu_shown(label: String) -> bool:
 		if (mb as MenuButton).text == label:
 			return (mb as MenuButton).visible
 	return false
+
+
+func _wheel(up: bool, shift := false) -> InputEventMouseButton:
+	var e := InputEventMouseButton.new()
+	e.button_index = MOUSE_BUTTON_WHEEL_UP if up else MOUSE_BUTTON_WHEEL_DOWN
+	e.pressed = true
+	e.shift_pressed = shift
+	e.position = Vector2(640, 360)
+	return e
+
+
+func _button(b: MouseButton, down: bool) -> InputEventMouseButton:
+	var e := InputEventMouseButton.new()
+	e.button_index = b
+	e.pressed = down
+	e.position = Vector2(640, 360)
+	return e
+
+
+## Section 21, stage 2: the building workshop's camera -- orbit with the cursor free, the
+## wheel zooms, Shift + wheel the toolbar, Y its fly; a flat view zooms with the wheel; RMB
+## stays a tool's while it draws or carves.
+func _camera(_ui: AssetWorkshopUI) -> void:
+	print("[probe] the camera")
+	_ui.set_stage("bricks")
+	_ws.set_view(0)
+	var cc: WkCamera = _ws.cam_ctl
+	_ok("one camera: the bench's is the asset's own, orbit", _ws.bench.view == cc and cc.mode == "orbit"
+			and not bool(_ws.bench._camera.get("click_captures")))
+	var cam: Camera3D = cc.cam()
+	var at: Vector3 = cam.global_position
+	_ws._unhandled_input(_wheel(true))
+	_ok("the wheel zooms", not cam.global_position.is_equal_approx(at), str(cam.global_position - at))
+	var slot: int = _ws.bench._hotbar.selected
+	var before := cam.global_position
+	_ws._unhandled_input(_wheel(false, true))
+	_ok("Shift + wheel is the toolbar, not the camera", cam.global_position.is_equal_approx(before)
+			and _ws.bench._hotbar.selected != slot, "slot %d -> %d" % [slot, _ws.bench._hotbar.selected])
+	_ws.set_view(1)
+	var size: float = cam.size
+	_ws._unhandled_input(_wheel(true))
+	_ok("in a flat view the wheel zooms it", cam.size < size, "%.2f -> %.2f" % [size, cam.size])
+	_ws.set_view(0)
+	_ws.toggle_look()
+	_ok("Y: the fly", cc.mode == "fps")
+	_ws.toggle_look()
+	_ok("and back to orbit", cc.mode == "orbit")
+	_ws.rail_pick("sketch")
+	_ok("RMB is the sketch's while it draws, not the camera's", _ws.wk_rmb_busy()
+			and not cc.input(_button(MOUSE_BUTTON_RIGHT, true)))
+	_ws.rail_pick("place")
+	_ok("with Place, RMB held looks round and a click goes back to the tool", not _ws.wk_rmb_busy()
+			and _ws.bench.replay_to_host)

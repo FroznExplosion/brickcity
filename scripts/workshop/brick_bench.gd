@@ -45,7 +45,7 @@ const KEY_ROWS := [
 	["", "alt", "slow", "", ""],
 	["BUILD", "LMB", "place on the stud aimed at", "RMB", "delete"],
 	["", "hold E", "lock height, slide anywhere", "Z", "undo last"],
-	["", "1-9  wheel", "toolbar slot", "TAB", "all parts (creative)"],
+	["", "1-9  sh+whl", "toolbar slot", "TAB", "every brick"],
 	["", "MMB", "pick a placed brick", ", .", "colour of the slot"],
 	["", "R", "rotate a quarter turn", "F", "flip (studs down)"],
 	["", "T", "rotate the brick just placed", "hold LMB", "move: lay a run"],
@@ -180,6 +180,12 @@ var _hud: Label
 ## first part each frame (`show_status`). The readout (`_hud`) and the asset workshop's other
 ## numbers show only with Stats (`stats_on`, the bar's View > Stats).
 var status_line: Label
+## The camera in use (the kit's WkCamera, Docs/BuildTools.md section 21 stage 2): the building
+## tools' or the asset workshop's own. Mouse buttons, the wheel and Y go to it first.
+var view: WkCamera = null
+## A plain RMB click the camera let go of goes to the owner's own input (the asset workshop's
+## tools take RMB there), not only the bench's.
+var replay_to_host := false
 var stats_on := false
 ## The room the status line and the hotbar take at the bottom: the rail, its pop-out and the
 ## panels end above it.
@@ -2005,7 +2011,7 @@ func bench_unhandled_input(e: InputEvent) -> void:
 	# camera's "down". Neither is a build key.
 	if e is InputEventKey and e.ctrl_pressed:
 		return
-	if _tools != null and _tools.view.input(e):
+	if view != null and view.input(e):
 		get_viewport().set_input_as_handled()
 		return
 	if _furnish != null and _furnish.input(e):
@@ -2767,6 +2773,8 @@ func wk_camera_busy() -> bool:
 
 ## RMB looks round unless a tool is dragging with it, a build is in hand or furniture is open.
 func wk_camera_rmb_free() -> bool:
+	if host != null and host.has_method("wk_rmb_busy") and bool(host.call("wk_rmb_busy")):
+		return false
 	return not ((_tools != null and _tools.dragging()) or _stamp != null
 			or (_furnish != null and _furnish.is_open()))
 
@@ -2781,8 +2789,9 @@ func wk_camera_click(button: int) -> void:
 
 
 func wk_camera_replay(events: Array) -> void:
+	var to: Object = host if replay_to_host and host != null else self
 	for e in events:
-		_unhandled_input(e)
+		to.call("_unhandled_input", e)
 
 
 func wk_camera_wheel_shift(step: int) -> void:
@@ -4463,7 +4472,7 @@ func _handle_under() -> String:
 func bench_input(e: InputEvent) -> void:
 	if _run_on and e is InputEventMouseMotion:
 		_run_moved += (e as InputEventMouseMotion).relative.length()
-	if _tools != null and _tools.view.input_motion(e):
+	if view != null and view.input_motion(e):
 		get_viewport().set_input_as_handled()
 		return
 	if not (e is InputEventMouseButton and e.button_index == MOUSE_BUTTON_LEFT):

@@ -341,6 +341,7 @@ func setup(workshop, layer: CanvasLayer) -> void:
 	dc.ctrl_descends = false
 	view = WkCamera.new()
 	view.setup(ws.wk_ctx)
+	ws.view = view
 	_im = ImmediateMesh.new()
 	_lines = MeshInstance3D.new()
 	_lines.mesh = _im
@@ -1543,6 +1544,10 @@ func act(id: String) -> void:
 		"fps": view.toggle()
 		"cancel": cancel()
 		"guide": ws._cycle_guide()
+		"view_3d": set_flat("")
+		"view_side": set_flat("side")
+		"view_top": set_flat("top")
+		"view_front": set_flat("front")
 		_: ws.bar_act(id)
 
 
@@ -1554,6 +1559,28 @@ func _step_level(d: int) -> void:
 		_draft.at = sketch_level
 	_level_spin.set_value_no_signal(sketch_level)
 	WkRail.light(_drawon_row, "level")
+
+
+## A flat view ("side", "top" -- a building's plan -- "front"), or "" for the 3D view: the
+## kit camera's, as the asset workshop's Alt 0-3 (Docs/BuildTools.md section 21, stage 2). It
+## looks at what is in the middle of the screen; a flat view is a view from orbit, so the fly
+## (Y) goes back to orbit first.
+func set_flat(which: String) -> void:
+	if which == "":
+		view.perspective()
+		return
+	if view.mode == "fps":
+		view.set_mode("orbit")
+	var c: Camera3D = view.cam()
+	var from: Vector3 = c.global_position
+	var dir: Vector3 = -c.global_transform.basis.z
+	if view.flat_view != "":
+		from = view._persp_xf.origin
+		dir = -view._persp_xf.basis.z
+	var hit = view.ctx.camera_hit(from, dir)
+	var centre: Vector3 = hit if hit != null else (from + dir * (-from.y / dir.y) if dir.y < -0.01 else from + dir * 10.0)
+	view.ortho_size = maxf(view.ortho_size, 12.0)
+	view.flat(which, centre)
 
 
 ## Say something on the status line for a few seconds, in place of what the tool does (a
@@ -2043,6 +2070,10 @@ func input(e: InputEvent) -> bool:
 		if e.alt_pressed:
 			if e.keycode == KEY_D:
 				pick("place" if tool == "draw" else "draw")
+				return true
+			var flat: int = [KEY_0, KEY_1, KEY_2, KEY_3].find(e.keycode)
+			if flat >= 0:
+				set_flat(["", "side", "top", "front"][flat])
 				return true
 			return false
 		match e.keycode:
@@ -3187,6 +3218,10 @@ func process() -> void:
 	WkRail.light(_hand_row, on)
 	var lit: Dictionary = ws.bar_toggles()
 	lit["fps"] = view.mode == "fps"
+	lit["view_3d"] = view.flat_view == ""
+	lit["view_side"] = view.flat_view == "side"
+	lit["view_top"] = view.flat_view == "top"
+	lit["view_front"] = view.flat_view == "front"
 	rail.show_toggles(lit)
 	rail.set_action_text("layer", ["Structure", "Interior", "Detail"][clampi(ws._role, 0, 2)])
 	rail.set_action_text("mirror_axis", "across X" if ws.mirror_axis == 0 else "across Z")
