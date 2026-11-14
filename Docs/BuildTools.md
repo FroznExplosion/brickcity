@@ -1360,3 +1360,159 @@ features too (Insert's stamps, generated towers, groups, guides, rooms, furnishi
 because the asset workshop had all of them through the old base and its probes use some. Taking
 them out into the building workshop, or into `scripts/workshop/tools/` as `WkTool`s, is a next step
 if wanted (section 0, "What is left").
+
+## 21. One frame, one grammar: the two workshops' UI (plan, 2026-11-13)
+
+Asked 2026-11-13: the workshop and the asset workshop should share most features; clean the UI up
+and make it the same in both. Both were photographed tool by tool first
+(`tools/shots/workshop_ui_shots.gd`, 62 pictures in `user://dev/ui_shots/`) and compared with
+Blender, Unreal's modes, MagicaVoxel, Tinkercad, SketchUp, BrickLink Studio, The Sims' build and
+buy, Planet Coaster, Tiny Glade and the ship builders (KSP, Avorion). **Not built yet.**
+
+### What is wrong today
+
+Under the hood the two are one editor (section 0). On screen they are two programs:
+
+| Region | Building | Asset |
+|---|---|---|
+| Menus | 7: File Edit Insert Type Layer Generated Finish | 11: File Edit Finish Asset View Part Block out Brick Gun Photos Help |
+| Under the menus | 20 text buttons | 4 stage tabs and Make bricks |
+| Rail | 2 columns, small, keys in the pop-up | 1 column, big, keys in the label |
+| A tool's options | a pop-out beside the rail | under the tools: the rail jumps from ~208 to ~330 px |
+| Right side | nothing | the outliner |
+| Camera | orbit, free cursor, wheel zooms, Y for FPS | mouse-look, Tab frees the cursor, wheel is the toolbar |
+| Readouts | 4 lines | the same 4, 6 more mid-screen, a part label, a toast |
+
+The same key does different jobs (K, Alt D, N, J, O, P, Y, Tab, Esc, the wheel, F1); neither has
+Ctrl Z. Seen in the pictures: the pop-out covers the readout; the toast overlaps it and still says
+"Edit as SDF"; the Photos, Guides, Parts and Connection point panels have no backdrop and sit on
+the outliner; the readout is debug text (`cell (451.000000, ...)`, a gun's "layer: STRUCTURE");
+the Rooms pop-out is some fifty number boxes (marks, module rules and four generators); the
+part in hand is shown in three places; "Finish" is a menu (the print look) and a stage; F6 (the
+furniture catalogue) has no button; the building's Edit menu has no Redo.
+
+### Decided with the user (2026-11-14)
+
+1. **One frame for both.**
+2. **One camera**: the building workshop's orbit with a free cursor, in both.
+3. **One Draw gesture** (the base, then the height) in both. The two workshops *start*
+   differently and that stays: a building is its structure made with the quick tools, then
+   furniture and items placed in it; an asset is clay first (sculpted, or a 3D model imported),
+   then Make bricks, then the last touches by hand.
+4. **The building workshop gets stage tabs**: Structure, Interior, Detail, Finish. The tab is the
+   layer a brick goes in: the Layer menu, the I key and the bar's layer button go.
+5. **One library browser** in place of the Insert dialog, F6 and F7.
+
+Also asked: **a 3D model into clay and into bricks in the building workshop too** (stage 7), and
+**a model's colours carried through the clay to the nearest brick colours** (stage 8; most of it
+is built -- Docs/AssetWorkshop.md, "Colour from model to bricks").
+
+### The frame
+
+```
+ File  Edit  View  Insert  <Kind>  Help                             name -- kind
+ [stage tabs] [stage step] | undo redo | mirror snap lock grid | rotate flip | camera, views
+ Rail    pop-out                                         Outliner: what exists
+ tools   (pictures; out of the                           ------------------------
+ Bricks   way while placing)         the build           Selected: its properties
+                              toolbar 1-9
+ status: what the tool wants next . what LMB and RMB do now . size and cell
+```
+
+* **Menus**, the same six. *Insert*: a build, a generated building; a model, a photo, a guide, a
+  part package. *Kind*: what this build is (Building, Room, Item, Gun, Mech, Figure -- the Type
+  and Asset menus as one) and that kind's own (Generated; a gun's size; a mech's class). The print
+  look moves to View. Brick, Block out, Part, Photos and Layer go: the bar, the stages, the
+  outliner and Insert have them.
+* **The bar**: icons with pop-ups, the same list in both (`ACTIONS` moves from `WorkshopTools` to
+  the bench). Toggles stay lit.
+* **The rail**: two columns, a tool's key in its pop-up, options in the pop-out, in both. A tool
+  both have is in the same place with the same icon and key; a tool one lacks is absent, never
+  moved.
+* **The right side**: the outliner (asset: models, parts, guides, photos; building: kept shapes,
+  inserted builds, the generated building, rooms, placed furniture) and under it **Selected** --
+  what the picked thing can do and its numbers. Select's pop-out and the asset's Selected panel
+  both move there.
+* **One status line** at the bottom in place of the rail's paragraph, the readouts, the ruler, the
+  part label and the sculpt note. A refusal is a toast (one, top middle). The debug numbers
+  (cell floats, triangles, draws) show with View > Stats.
+* **Floating panels** (photos, guides, the point panel) become sections of Selected or of the
+  pop-out; none floats without a backdrop.
+
+### The grammar
+
+A tool is a verb; its pop-out is the shape and what it makes; the toolbar is what it is made of;
+the bar is the modifiers; the right side is what exists.
+
+| Tool | Building | Asset |
+|---|---|---|
+| Select (L) | a kept shape, an inserted build, furniture; a box over bricks | a model, a part, a guide; a box over bricks |
+| Hand (B paints) | Place, Pick, Paint | the same |
+| Draw (K) | outline x Solid, Walls, Floor, Building | outline x Solid, and **Clay** on Block out. Sketch, Shapes, the shape brush and the clay's stamp are this |
+| Cut (N) | a shape, a door, a window | a shape; on Block out it carves |
+| Measure (Alt M) | new here | as now |
+| own | Roof, Stairs, Repeat, Rooms | Smooth (clay), Studs, Connection point, Move part |
+
+Stages: asset **Block out, Bricks, Detail, Finish**; building **Structure, Interior, Detail,
+Finish** (Interior has Rooms and the furniture; Finish has stress, Test in city, Save). The
+generators leave the Rooms pop-out for Insert > Generated, each its own short panel.
+
+Keys, the same in both: Esc cancels, then pauses; Tab the library; Ctrl Z / Ctrl Y beside Z /
+Shift Z; the wheel zooms, Shift + wheel the toolbar; Y swaps FPS; Alt 0-3 the flat views (a
+building gets a plan view). The asset's N, J, O, P, Y jobs move to buttons (the outliner's row,
+the rail, View).
+
+### One library
+
+Tab opens one browser: **Bricks | Furniture and items | Rooms | Buildings | Parts**, one search,
+pictures for all. Picking one puts it in hand; the Hand places it (R turns it, RMB takes it away,
+one undo). It replaces Insert > Build from library, the F6 catalogue and the F7 parts catalogue.
+Furniture is placed by reference, as now (`recipe.placements`), so Select on a placed piece can
+offer **Edit in the asset workshop**, and the building shows the saved change.
+
+### A model into a building (stage 7)
+
+The asset workshop's clay is a sample a tick, a placed model held to 250 studs
+(`MODEL_MAX_STUDS`); a building is 100 to 1000 studs and hollow. To keep it from being too much
+at once:
+
+* **A coarser clay for buildings**: a sample a stud across and a plate up (a brick cell), not a
+  tick -- far fewer samples for the same size. A building's detail is its bricks.
+* **Only the skin**: the field already keeps a band round the surface; Make bricks lays the skin
+  as walls of the set thickness (1-3 studs), not a filled solid. Floors come from the storey
+  height, as Draw's Building makes them.
+* **In sections, over frames**: stamp and convert a section (48 studs x 60 plates, section 16) at
+  a time, nearest the camera first, with a bar and Cancel; one undo for the whole.
+* **A budget said first**: the size in studs and the bricks it will be, before it starts; a model
+  over the budget is offered smaller or coarser.
+
+To measure before building it: a 400-stud model, the time and memory of stamp and convert, tick
+clay against cell clay.
+
+### Colours from a model (stage 8)
+
+Built (2026-11-02): glTF and FBX colours (material, texture, vertex) go into the clay; each brick
+cell votes its nearest brick colour in Oklab; Bricks to clay carries them back. Left to do:
+
+* OBJ (`.mtl` `Kd` and `map_Kd`) and STL (none: one colour chosen).
+* **A colour table on import**: each of the model's colours beside the brick colour it will
+  become, to change by hand before Make bricks; "fewer colours" merges near ones.
+* Which colours it may use: every one, this material's, or the system's palette
+  (`convert_palette`, built).
+* The same in the building workshop with stage 7.
+
+### Stages
+
+Each merged on its own; the probes of section 20 and the pictures before and after.
+
+| Stage | What |
+|---|---|
+| 0 | What the pictures show broken: the pop-out over the readout, the toast, backdrops for the floating panels, the rail's width, "Edit as SDF", Redo in Edit, a button for F6, the old help page |
+| 1 | The frame: the bar and pop-out in the asset workshop, the outliner and Selected in the building workshop, the status line |
+| 2 | One camera and one key map |
+| 3 | The six menus |
+| 4 | Building stage tabs; the generators out of Rooms |
+| 5 | The library browser |
+| 6 | One Draw in the asset workshop (bricks, then clay) |
+| 7 | A model into clay and bricks in the building workshop |
+| 8 | The colour table, OBJ colours |
