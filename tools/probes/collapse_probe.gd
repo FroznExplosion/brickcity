@@ -915,13 +915,27 @@ func _check_trapped() -> void:
 	var cut := _soldier_at(Vector3(-110.0, 0.0, -150.0))
 	await _ticks(10)
 	cut.brain.active = false
+	# Trapped is Soldier.TRAP_FAILS failed answers in a row. The FIRST answer
+	# is the slow one -- a whole search for a far goal (a 20,000-node cap),
+	# served from the nav's half-millisecond a frame -- and the rest come at
+	# once: 12.7-15.6 s for the first, the other two the same tick
+	# (2026-11-14), so a 20 s bound failed one run in three with nothing
+	# wrong. What this asks is that the failures add up to trapped, not how
+	# fast the nav says no: bounded at 45 s, and the failures' times printed,
+	# so a slow nav reads as that.
 	n = 0
-	while not cut.trapped and n < 30 * 20:
+	var fail_at: Array = []
+	var fails_seen := 0
+	while not cut.trapped and n < 30 * 45:
 		cut.move_to(sealed)
 		await physics_frame
 		n += 1
+		if cut._fails.size() != fails_seen:
+			fails_seen = cut._fails.size()
+			if fails_seen > 0:
+				fail_at.append("%.1f" % (n / 30.0))
 	_ok("asked again and again for a way there is not, it is trapped", cut.trapped,
-			"%.1f s" % (n / 30.0))
+			"%.1f s; failed answers at %s s" % [n / 30.0, ", ".join(fail_at)])
 	# A few steps from where it stands: there is surely a way there.
 	var free: Vector3 = city.ai_nav.snap(cut.pawn.feet() + Vector3(-3.0, 0.0, 0.0))
 	n = 0
