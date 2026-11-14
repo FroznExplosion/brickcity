@@ -166,7 +166,6 @@ var _far_dmg_tex: ImageTexture = null
 
 var _far_dmg_dirty := false
 
-var far_real_built := 0
 
 ## A building drawn in bricks has painted windows too, past the range its rooms
 ## are drawn in (Docs/DestructionLod.md 3.2): the shell's panes, each only
@@ -404,19 +403,13 @@ func _submit_glass(owed: Array) -> void:
 	var lattice := RoomManifest.lattice_for(fx, fz, courses)
 	var damage: Dictionary = (owed[2] as Dictionary).duplicate(true)
 	var program: Dictionary = (b.recipe.get("program", {}) as Dictionary).duplicate(true)
-	# A window still in bricks asks the bricks which panes stand: a copy of
-	# them, made here (it was the whole build here, 3-8 ms a tick, PerfCaps.md 4).
-	var standing := Callable()
-	if owed[4] and b.is_materialised():
-		standing = BuildingShell.standing_copy(city.world, b.chunk,
-				BuildingShell.window_rows(courses, layout, lattice))
 	# The mesh is made there too: handed to the renderer here, it waited for
 	# whatever else was being uploaded.
 	var holder := [null]
 	var on_worker := City.worker_meshes
 	var task := WorkerThreadPool.add_task(func() -> void:
 		var arrays := BuildingShell.window_arrays(fx, fz, courses, room_seed, layout,
-				lattice, damage, program, standing)
+				lattice, damage, program)
 		if not arrays.is_empty():
 			holder[0] = BuildingShell.window_mesh_of(arrays) if on_worker else (arrays as Variant)
 			UploadLedger.note("glass", UploadLedger.verts_of(arrays)),
@@ -428,8 +421,7 @@ func _submit_glass(owed: Array) -> void:
 func _hang_glass(mi: MeshInstance3D, panes: Mesh, fades: bool) -> void:
 	# Read once, not per pass of the loop below: the city never swaps these.
 	var h_retirer := city._retirer
-	# One set a shell: a shell drawn from its bricks has its panes asked again
-	# after a hit (_refresh_real_shell), and the old set goes as the new hangs.
+	# One set a shell: the old set goes as the new hangs.
 	for c in mi.get_children():
 		if c is MeshInstance3D and (c as MeshInstance3D).material_override == BuildingShell.window_material():
 			h_retirer.retire((c as MeshInstance3D).mesh)
@@ -1256,47 +1248,6 @@ static func _far_box_mesh() -> ArrayMesh:
 	var mesh := ArrayMesh.new()
 	mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
 	return mesh
-
-
-func far_real(id: int, mi: MeshInstance3D) -> void:
-	var b := city.registry.get_building(id)
-	if city.world.get_alive_block_count(b.chunk) < IslandManager.COARSE_ASYNC_BLOCKS:
-		_far_real_apply(id, mi, city.world.build_chunk_coarse_mesh(b.chunk))
-		return
-	if not city.world.coarse_pending(b.chunk):
-		city.world.coarse_chunk_async(b.chunk)
-	city._far_real_owed[id] = mi
-
-
-func harvest_far_real() -> void:
-	# Read once, not per pass of the loop below: the city never swaps these.
-	var h_far_real_owed := city._far_real_owed
-	var h_shells := city._shells
-	var h_registry := city.registry
-	var h_world := city.world
-	for id in h_far_real_owed.keys():
-		var mi = h_far_real_owed[id]
-		var b := h_registry.get_building(id)
-		if not is_instance_valid(mi) or h_shells.get(id) != mi or b == null or not b.is_materialised():
-			h_far_real_owed.erase(id)
-			continue
-		if h_world.coarse_ready(b.chunk):
-			h_far_real_owed.erase(id)
-			_far_real_apply(id, mi, h_world.take_coarse_mesh(b.chunk))
-		elif not h_world.coarse_pending(b.chunk):
-			# Settled by an edit (BrickWorld.settle_coarse_job): asked again.
-			h_world.coarse_chunk_async(b.chunk)
-
-
-func _far_real_apply(id: int, mi: MeshInstance3D, arrays: Array) -> void:
-	var m := ArrayMesh.new()
-	if not arrays.is_empty() and IslandManager.mesh_arrays_ok(arrays, "far building"):
-		m.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
-	if mi.mesh != null:
-		city._retirer.retire(mi.mesh)
-	mi.mesh = m
-	city._far_real_done[id] = mi
-	far_real_built += 1
 
 
 func tend_brick_panes() -> void:
