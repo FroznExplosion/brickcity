@@ -393,6 +393,27 @@ the worst drawing went from 70.5 to 23.8 ms. **Not yet looked at:** what the 23.
 first drawing makes the node and its shader material; the rest is the `ArrayMesh` made anew
 each time. The step's worst (9.0 ms) is script too: the holes and the spray.
 
+### 8.4 Built (2026-11-14): the first drawing, the holes over the water, the first jet
+
+Timed apart in the boat pass (`[boat] water parts`): the 23.8 ms was all the **first**
+drawing (25.2 ms; the ones after 0.3 ms), and the step's worst was the holes (7.9 ms) and the
+spray (8.1 ms).
+
+* **The water's node and material are made with the hull's water** (`_water_node`, from
+  `_water_step` when `HullWater` is made: at launch), not at the first drawing. One material
+  for every hull (it holds nothing of a hull's own).
+* **A room's wet cells are sorted once a step** for all its holes over the water
+  (`HullWater._room_top`). Each hole cell walked and sorted them for itself: 60 hole cells
+  out of the water on a rolling boat, 60 walks.
+* **The first spray jet is made ahead** (`HullSpray.warm`), and later ones one an update: the
+  first makes the mesh, material and texture they all share.
+
+Boat pass after (windowed; other chats' runs going in every one of these, so rough figures):
+worst step 2.6 ms (holes 2.3, flow 0.1, spray 0.3), worst drawing 0.5 ms, the first drawing
+0.2 ms. `hull_flood_probe` 12, `boat_probe` 9. What is left of the step is the holes' script:
+a depth asked a hole cell (`BrickWave.sample_heights`, one point a call) and the walk of the
+wet cells.
+
 ## 7. Floating, listing, sinking
 
 - The ship is already one rigid body. Buoyancy adds a force at **sample points per section**
