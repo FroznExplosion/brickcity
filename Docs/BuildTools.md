@@ -1620,3 +1620,26 @@ it makes sense -- menus too, but not only menus. Where each asset workshop key's
 * Probes: `asset_ui_probe` checks every asset key against its on-screen button (the table
   above); `asset_workshop_probe`'s Tab check is Y's now, plus Tab opening every brick, and its
   "every key in a menu" list lost Shift Y, N, J, O, P.
+
+**Stage 2b, one camera** (2026-11-14). Stage 2 is done with it.
+
+* Both workshops use the kit's camera (`WkCamera`) the same way: orbit with the cursor free --
+  MMB orbits round what is under the cursor, Shift MMB pans, the wheel zooms toward it, RMB held
+  and moved looks round, a plain RMB click is the tool's -- and **Y** swaps to the fly (the mouse
+  looks, Alt for the cursor). Shift + wheel steps the toolbar in both.
+* The bench holds the camera in use, `BrickBench.view` (the building tools' or the asset
+  workshop's `cam_ctl`), and gives it mouse buttons, the wheel and motion first. The asset
+  workshop's own wheel uses still come before it (the rail's scroll, Ctrl + wheel the shape
+  brush's size, a photo, Alt + wheel in a flat view). RMB stays a tool's while it draws or
+  carves with it (`AssetWorkshop.wk_rmb_busy`: sketch, studs, the shape brush); a plain RMB
+  click the camera let go of goes back to the asset workshop's own input
+  (`BrickBench.replay_to_host`).
+* Flat views in the kit camera (workshop_kit 0.19.0): MMB drags the view across, the wheel
+  zooms at the cursor, RMB is the editor's.
+* The building workshop has the flat views too: Alt 0-3 and the bar's four view buttons
+  (`WorkshopTools.set_flat`; Top is the building's plan). `WorkshopBar.ASSET_ONLY` is now only
+  the working plane, section, outlines and game look.
+* Help page and key lists say Shift + wheel for the toolbar, Tab every brick.
+* Probes: `asset_ui_probe` -- one camera, the wheel zooms, Shift + wheel the toolbar, a flat
+  view zooms, Y the fly and back, RMB the sketch's (60 passed); `build_tools_probe` -- Top view
+  flat, it zooms, 3D view back as it was (355).

@@ -110,8 +110,8 @@ const KIT_TOOLS := {"sketch": &"sketch", "wand": &"fill", "move": &"move", "shap
 ## Points clicked while calibrating the selected photo; calibrating while not null.
 var calibrating = null
 
-## The flat views are the editor kit's camera's (WkCamera.flat, zoom_at); the orbit and FPS
-## modes are the building workshop's only. `_ortho_size` is its orthographic size.
+## The camera: the editor kit's (WkCamera), as the building workshop's -- orbit, fly (Y) and
+## the flat views. `_ortho_size` is its orthographic size.
 var cam_ctl := WkCamera.new()
 var _ortho_size: float:
 	get: return cam_ctl.ortho_size
@@ -341,7 +341,15 @@ func _ready() -> void:
 	add_child(bench)
 	bench.bind_host(self)
 	bench.bench_ready()
-	cam_ctl.ctx = bench.wk_ctx   # no setup(): this workshop's camera keeps its own mouse ways
+	# The building workshop's camera (Docs/BuildTools.md section 21, stage 2): orbit with the
+	# cursor free -- MMB orbits, Shift MMB pans, the wheel zooms, RMB held looks round -- and Y
+	# its fly. The flat views are the same camera's.
+	cam_ctl.setup(bench.wk_ctx)
+	bench.view = cam_ctl
+	bench.replay_to_host = true
+	var dc = bench._camera
+	dc.click_captures = false
+	dc.ctrl_descends = false
 	bench.toolbox.add(_sketch_tool)
 	_select_tool.mode = WkSelectTool.Mode.BOX
 	for t in [_measure_tool, _fill_tool, _move_tool, _shape_tool, _select_tool]:
@@ -1242,8 +1250,13 @@ func _unhandled_input(e: InputEvent) -> void:
 	if e is InputEventMouseButton and _over_rail():
 		get_viewport().set_input_as_handled()
 		return
-	if _gizmo_input(e) or _shape_brush_input(e) or _photo_input(e) or _zoom_input(e) or _sketch_input(e) or _stud_input(e) \
-			or _kit_input(e, [&"move"]):
+	if _gizmo_input(e) or _shape_brush_input(e) or _photo_input(e) or _zoom_input(e):
+		get_viewport().set_input_as_handled()
+		return
+	if e is InputEventMouseButton and not e.ctrl_pressed and cam_ctl.input(e):
+		get_viewport().set_input_as_handled()
+		return
+	if _sketch_input(e) or _stud_input(e) or _kit_input(e, [&"move"]):
 		get_viewport().set_input_as_handled()
 		return
 	if e is InputEventMouseButton and e.pressed and e.button_index == MOUSE_BUTTON_LEFT and calibrating != null:
@@ -1323,6 +1336,7 @@ func _kit_input(e: InputEvent, ids: Array) -> bool:
 
 func _process(dt: float) -> void:
 	bench.bench_process(dt)
+	cam_ctl.sync()
 	if _ui != null:
 		_ui.process(dt)
 	if _ruler == null:
@@ -3726,7 +3740,7 @@ Make a gun, a mech, a figure, furniture or an item. It goes in four stages, the 
 
 The rail (left) has the stage's tools; point at one for what it does and its key. The open tool's options are under them. The outliner (right) is what the asset is made of: click to pick, tick to show or hide. Everything else is in the menus at the top, each with its key.
 
-[b]Look around[/b]  Y: mouse-look or free cursor. Tab: every brick.  Alt 1 / 2 / 3: side, top, front; Alt 0: back to 3D.
+[b]Look around[/b]  MMB orbits, Shift MMB pans, the wheel zooms, RMB held looks round; Y: fly (the mouse looks). Alt 1 / 2 / 3: side, top, front; Alt 0: back to 3D. Tab: every brick.
 [b]Undo[/b]  Z, redo Shift Z.   [b]Save[/b]  Ctrl S (also autosaved every few seconds).
 [b]Size[/b]  1 stud here = 4 mm printed = 16 mm real.   F1: every key.   F10: this page."""
 
@@ -6676,8 +6690,13 @@ func _typing() -> bool:
 ## the pick kept (Docs/AssetWorkshop.md, "Sizing a selection like a slicer"). It was Tab until
 ## the two workshops' keys were made one (Docs/BuildTools.md section 21, stage 2).
 func toggle_look() -> void:
-	if bench._camera.has_method("_set_captured"):
-		bench._camera.call("_set_captured", not bool(bench._camera.get("_captured")))
+	cam_ctl.toggle()
+
+
+## RMB is a tool's while it draws or carves with it (the clay, a sketch, the shape brush, a stud
+## taken off): the camera does not look round with it then.
+func wk_rmb_busy() -> bool:
+	return tool in ["sketch", "stud"] or _shape_brush_on()
 
 
 ## Tab: every brick (the bench's browser), as in the building workshop. Shift+Tab: all parts.
@@ -10667,7 +10686,7 @@ func _build_menus() -> void:
 			["Held or aimed, keys only:", "", func() -> void: pass],
 			["  all parts browser", "Tab", func() -> void: pass],
 			["  lock the height, slide anywhere", "hold E", func() -> void: pass],
-			["  toolbar slot", "1-9, wheel", func() -> void: pass],
+			["  toolbar slot", "1-9, Shift + wheel", func() -> void: pass],
 			["  pick the brick under the cursor", "MMB", func() -> void: pass],
 			["  shape brush from any tool, its size", "Ctrl + LMB / RMB, Ctrl + wheel", func() -> void: pass],
 		]],

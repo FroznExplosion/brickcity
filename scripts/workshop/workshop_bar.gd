@@ -37,7 +37,7 @@ const ACTIONS := [
 		["keys", "Keys", "F1", "Show every key.", true],
 		["view_3d", "3D view", "Alt 0", "The 3D view.", true],
 		["view_side", "Side view", "Alt 1", "Look flat at the side.", true],
-		["view_top", "Top view", "Alt 2", "Look flat down from the top.", true],
+		["view_top", "Top view", "Alt 2", "Look flat down from the top (a building's plan).", true],
 		["view_front", "Front view", "Alt 3", "Look flat at the front.", true],
 		["section", "Section", "", "In a flat view, cut away what is in front of the working plane.", true],
 		["outlines", "Outlines", "", "Outline the bricks by part: off, outlines, outlines and colours (press for the next).", true],
@@ -48,10 +48,9 @@ const ACTIONS := [
 ]
 
 
-## The asset workshop's own buttons: the building workshop leaves them out (no working plane, no
-## flat views yet: stage 2).
-const ASSET_ONLY := ["free", "plane_back", "plane_on", "view_3d", "view_side", "view_top", "view_front",
-		"section", "outlines", "game_look"]
+## The asset workshop's own buttons: the building workshop leaves them out (it has no working
+## plane, section, part outlines or game look).
+const ASSET_ONLY := ["free", "plane_back", "plane_on", "section", "outlines", "game_look"]
 
 
 ## The bar's list less `skip` (ids an owner does not have): a section left empty goes.
