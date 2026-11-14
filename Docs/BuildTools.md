@@ -1367,7 +1367,7 @@ Asked 2026-11-13: the workshop and the asset workshop should share most features
 and make it the same in both. Both were photographed tool by tool first
 (`tools/shots/workshop_ui_shots.gd`, 62 pictures in `user://dev/ui_shots/`) and compared with
 Blender, Unreal's modes, MagicaVoxel, Tinkercad, SketchUp, BrickLink Studio, The Sims' build and
-buy, Planet Coaster, Tiny Glade and the ship builders (KSP, Avorion). **Not built yet.**
+buy, Planet Coaster, Tiny Glade and the ship builders (KSP, Avorion). Built: stage 0 ("As built" below).
 
 ### What is wrong today
 
@@ -1516,3 +1516,26 @@ Each merged on its own; the probes of section 20 and the pictures before and aft
 | 6 | One Draw in the asset workshop (bricks, then clay) |
 | 7 | A model into clay and bricks in the building workshop |
 | 8 | The colour table, OBJ colours |
+
+### As built
+
+**Stage 0** (2026-11-14). Pictures before and after with `workshop_ui_shots`; the probes' counts
+the same as main's (build_tools 346, workshop 96, asset_workshop 344, asset_ui 50, furnish 40,
+wk_smoke 144).
+
+* The building's readout moves right of the pop-out while it shows (`WorkshopTools.process`,
+  `_rail_right`).
+* The asset toast sits between the rail and the outliner, under the readout, on the rail's
+  backdrop. Its notes say "Make bricks" and "Bricks to clay", no longer "Convert" and "Edit as SDF".
+* The floating panels (photos, guides, connection point, parts catalogue) are given the rail's
+  backdrop and placed by `AssetWorkshopUI.place_floats`, which the workshop calls each frame:
+  between the rail and the outliner, under the readout and the toast, in columns when several
+  are open, held to the room's width. A readout one covers is hidden while it does.
+* The asset rail keeps one width: `AssetWorkshopUI._fit_options` makes the options under the
+  tools wrap and clip to `RAIL_W`. It runs again when a control is added later.
+* Edit > Redo (Shift Z) in the building workshop. The asset workshop keeps its own Redo, which
+  puts a lifted part down first.
+* "Furniture F6" button under Bricks on the building rail, with a new kit icon (`furniture`,
+  workshop_kit 0.15.0).
+* The asset help page (F10) is short now and says what is true: the stages, the rail, the
+  outliner, a few keys.

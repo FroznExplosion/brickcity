@@ -68,7 +68,7 @@ var _role := 0
 enum { F_NEW, F_OPEN, F_SAVE, F_SAVE_AS, F_QUICK_SAVE, F_QUICK_LOAD, F_CITY }
 enum { I_BUILD, I_TOWER, I_BAKE, I_REMOVE_TOWER }
 enum { G_ROOMS, G_STAIRS, G_WINDOWS, G_FURNISH, G_PROGRAM, G_REROLL }
-enum { E_UNDO, E_SELECT, E_MOVE, E_COPY, E_DELETE }
+enum { E_UNDO, E_SELECT, E_MOVE, E_COPY, E_DELETE, E_REDO }
 
 
 func _ready() -> void:
@@ -158,6 +158,7 @@ func _build_bar() -> void:
 
 	_edit = _menu(row, "Edit", [
 		["Undo (Z)", E_UNDO, 0],
+		["Redo (Shift Z)", E_REDO, 0],
 		[],
 		["Select inserted build under cursor (X)", E_SELECT, 0],
 		["Move selected (M)", E_MOVE, 0],
@@ -264,6 +265,7 @@ func _tick_finish() -> void:
 func _on_edit(id: int) -> void:
 	match id:
 		E_UNDO: action.emit("undo", null)
+		E_REDO: action.emit("redo", null)
 		E_SELECT: action.emit("select_group", null)
 		E_MOVE: action.emit("move_group", null)
 		E_COPY: action.emit("copy_group", null)
@@ -359,7 +361,8 @@ func asset_mode(kinds: Array) -> void:
 		if city > 0 and fp.is_item_separator(city - 1):
 			fp.remove_item(city - 1)
 	var ep := _edit.get_popup()
-	for id in [E_SELECT, E_MOVE, E_COPY, E_DELETE]:
+	# Redo too: the asset workshop adds its own, which puts a lifted part down first.
+	for id in [E_REDO, E_SELECT, E_MOVE, E_COPY, E_DELETE]:
 		var i := ep.get_item_index(id)
 		if i >= 0:
 			ep.remove_item(i)

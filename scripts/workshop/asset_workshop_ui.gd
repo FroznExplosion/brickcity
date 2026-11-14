@@ -4,8 +4,8 @@ extends Node
 ## The asset workshop's frame (Docs/AssetWorkshop.md, "The asset workshop's frame"):
 ##
 ##   stage tabs     1 Block out -> 2 Bricks -> 3 Detail -> 4 Finish, top left. A stage shows
-##                  only its own tools. "Make bricks" takes the block-out to bricks, "Back to
-##                  clay" the other way (Convert and Edit as SDF).
+##                  only its own tools. "Make bricks" takes the block-out to bricks, "Bricks to
+##                  clay" the other way.
 ##   tool rail      under the tabs: a few tools a stage, each an icon and a name, with a
 ##                  pop-up saying what it does and its key, and a line under them for the
 ##                  tool in hand.
@@ -111,6 +111,7 @@ func setup(workshop, layer: CanvasLayer) -> void:
 	_toast.add_theme_color_override("font_color", Color(1.0, 0.88, 0.5))
 	_toast.add_theme_color_override("font_outline_color", Color.BLACK)
 	_toast.add_theme_constant_override("outline_size", 6)
+	_toast.add_theme_stylebox_override("normal", ws.bench.wk_ctx.panel_box())
 	_toast.visible = false
 	_layer.add_child(_toast)
 	if ws._sculpt_note != null:
@@ -130,6 +131,7 @@ func setup(workshop, layer: CanvasLayer) -> void:
 	ws._rail.add_theme_stylebox_override("panel", StyleBoxEmpty.new())
 	_tools_panel.options.add_child(ws._rail)
 	_tools_panel.options.visible = true
+	_fit_options(ws._rail)
 	stage = "bricks" if ws.sculpt_state == "bricks" else "blockout"
 	_fill_tools()
 	sync_kind()
@@ -222,6 +224,64 @@ func _frame_setup() -> void:
 	frame.band_space = 30.0
 	frame.rail = _tools_panel
 	frame.side = _outliner
+
+
+## The floating panels (photos, guides, the connection point, the parts catalogue): each on
+## the rail's backdrop, between the rail and the outliner, under the readout when there is
+## room, the open ones stacked. Called each frame after the workshop placed its own pieces.
+## Until stage 1 makes them sections of Selected (section 21).
+func place_floats(panels: Array) -> void:
+	var vp: Vector2 = ws.get_viewport().get_visible_rect().size
+	var left: float = _tools_panel.position.x + _tools_panel.size.x + 12.0
+	var right: float = _outliner.position.x - 12.0 if _outliner != null and _outliner.visible else vp.x - 12.0
+	var top: float = frame.rail_top()
+	var bottom: float = vp.y - 104.0   # the hotbar
+	# Under the readout and the toast while they show, if a panel fits there; else from the top.
+	var under: float = top
+	var hud: Control = ws.bench._hud
+	if hud != null and hud.visible:
+		under = maxf(under, hud.position.y + hud.size.y + 8.0)
+	if _toast.visible:
+		under = maxf(under, _toast.position.y + _toast.size.y + 8.0)
+	var y: float = under
+	var col_left := INF   # the left edge of the column being filled
+	var room: float = right - left
+	var covers: Array[Rect2] = []
+	for p in panels:
+		var c := p as Control
+		if c == null or not c.visible:
+			continue
+		if not c.has_meta("wk_backdrop"):
+			c.set_meta("wk_backdrop", true)
+			c.add_theme_stylebox_override("panel", ws.bench.wk_ctx.panel_box())
+		# A panel wider than the room (the parts catalogue asks 720) is held to it.
+		if c.custom_minimum_size.x > room:
+			c.custom_minimum_size.x = maxf(room, 240.0)
+		c.size = Vector2.ZERO
+		var s: Vector2 = c.get_combined_minimum_size()
+		if y + s.y > bottom and y > under and col_left - 8.0 - s.x >= left:
+			# This column is full: the next one goes left of it.
+			right = col_left - 8.0
+			col_left = INF
+			y = under
+		var at_y := y
+		if at_y + s.y > bottom:
+			at_y = maxf(top, bottom - s.y)
+		var x := maxf(left, right - s.x)
+		c.position = Vector2(x, at_y)
+		col_left = minf(col_left, x)
+		y = at_y + s.y + 8.0
+		covers.append(Rect2(c.position, s))
+	# The readouts draw over the panels: one a panel covers is hidden while it does.
+	for r in [hud, ws._ruler, _toast]:
+		var l := r as Control
+		if l == null:
+			continue
+		var hit := false
+		for q in covers:
+			if (q as Rect2).intersects(Rect2(l.position, l.size)):
+				hit = true
+		l.modulate.a = 0.0 if hit else 1.0
 
 
 func _build_tools() -> void:
@@ -762,6 +822,39 @@ func _slim_old_rail() -> void:
 			(c as Label).visible = false
 
 
+## The options under the tools kept to the rail's width, so the rail is one width whatever
+## tool is open (it jumped from ~208 to ~330 px): labels and buttons wrap, choices clip,
+## rows of buttons share the width. The building's pop-out does the same (`WorkshopTools._fit`).
+## Run again when a control was added later (`process` checks the width).
+func _fit_options(n: Node) -> void:
+	var w: float = ws.RAIL_W - 20.0
+	for c in n.get_children():
+		if c is Label:
+			var l := c as Label
+			l.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+			if l.get_parent() is HBoxContainer:
+				l.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+				l.custom_minimum_size.x = clampf(l.custom_minimum_size.x, 48.0, w)
+			else:
+				l.custom_minimum_size.x = w
+		elif c is OptionButton:
+			(c as OptionButton).clip_text = true
+			(c as OptionButton).fit_to_longest_item = false
+			(c as OptionButton).custom_minimum_size.x = minf((c as Control).custom_minimum_size.x, w) if (c as Control).custom_minimum_size.x > 0 else 0.0
+		elif c is Button:
+			var b := c as Button
+			b.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+			b.custom_minimum_size.x = minf(b.custom_minimum_size.x, w)
+		elif c is Range and not c is ScrollBar:
+			(c as Control).custom_minimum_size.x = minf((c as Control).custom_minimum_size.x, w * 0.5)
+		elif c is LineEdit:
+			(c as Control).custom_minimum_size.x = minf((c as Control).custom_minimum_size.x, w)
+		elif c is ScrollContainer or c is Container:
+			if (c as Control).custom_minimum_size.x > w:
+				(c as Control).custom_minimum_size.x = w
+		_fit_options(c)
+
+
 ## The menus and the Finish tools a kind has: Gun only for a gun, Mech for a mech.
 func sync_kind() -> void:
 	if ws.bench._menu != null:
@@ -812,10 +905,21 @@ func process(dt: float) -> void:
 	if _toast.visible:
 		_toast_left -= dt
 		_toast.visible = _toast_left > 0.0
+		# Between the rail and the outliner, under the readout (never on it), on a backdrop.
 		var vw: float = ws.get_viewport().get_visible_rect().size.x
-		_toast.position = Vector2((vw - _toast.custom_minimum_size.x) * 0.5, top + 44)
+		var left: float = _tools_panel.position.x + _tools_panel.size.x + 12.0
+		var right: float = _outliner.position.x - 12.0 if _outliner != null and _outliner.visible else vw - 12.0
+		_toast.custom_minimum_size.x = clampf(right - left, 240.0, 620.0)
+		_toast.size = Vector2.ZERO
+		var y: float = top + 44.0
+		var hud: Control = ws.bench._hud
+		if hud != null and hud.visible:
+			y = maxf(y, hud.position.y + hud.size.y + 8.0)
+		_toast.position = Vector2(left + maxf(right - left - _toast.custom_minimum_size.x, 0.0) * 0.5, y)
 	_since += dt
 	if _since >= 0.25:
 		_since = 0.0
+		if ws._rail.get_combined_minimum_size().x > ws.RAIL_W - 15.0:
+			_fit_options(ws._rail)   # a control added since
 		if _signature() != _sig:
 			refresh()

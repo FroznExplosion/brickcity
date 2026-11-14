@@ -11,7 +11,7 @@ was found, how to test without harming the user's files, and what to do next.
   in both. Analysis first, then a plan, then building in stages.
 - Done: the analysis, the plan (section 21, the user's five answers in it), a tool that
   photographs both UIs. **No game code has changed.** Main `7ee39400`.
-- Next: **stage 0** (below). Then stages 1-8 in section 21's order, each merged on its own.
+- Stage 0 merged 2026-11-14 (section 21, "As built"). Next: stage 1, then 2-8 in order, each merged on its own.
 
 ## Where to work
 
