@@ -18,6 +18,8 @@ var band: Control = null
 var rail: Control = null
 ## A panel down the right (an outliner): its top is kept under the bar.
 var side: Control = null
+## The side panel starts under the band too, not beside it (a band that reaches across).
+var side_under_band := false
 ## Space round the pieces, in pixels.
 var margin := 8.0
 ## The rail's distance from the left edge.
@@ -74,4 +76,4 @@ func layout(view: Vector2) -> void:
 		rail.position = Vector2(rail_left, rail_top())
 		rail.size = Vector2.ZERO
 	if side != null:
-		side.offset_top = bar_height() + (band_gap if band_gap >= 0.0 else margin * 0.5)
+		side.offset_top = rail_top() if side_under_band else bar_height() + (band_gap if band_gap >= 0.0 else margin * 0.5)

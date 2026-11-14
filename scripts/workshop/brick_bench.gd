@@ -2355,6 +2355,46 @@ func _undo_base() -> bool:
 	return undo_stack.undo()
 
 
+## A bar button both workshops share. The owner answers its own first (the camera, Cancel,
+## the layer, the room guide).
+func bar_act(id: String) -> void:
+	match id:
+		"rotate": _yaw = (_yaw + 1) % 4
+		"flip": _flip = not _flip
+		"turn_last": _rotate_last()
+		"lock": plane_locked = not plane_locked
+		"snap": _snap_on = not _snap_on
+		"mirror": set_mirror(not mirror_on)
+		"mirror_axis":
+			mirror_axis = 0 if mirror_axis == 2 else 2
+			set_mirror(mirror_on)
+		"mirror_here":
+			mirror_here()
+			if not mirror_on:
+				set_mirror(true)
+		"colour_back": _hotbar.set_colour(_colour - 1)
+		"colour_on": _hotbar.set_colour(_colour + 1)
+		"parts": _hotbar.toggle_browser()
+		"undo": _undo()
+		"redo": redo_last()
+		"grid":
+			_grid_on = not _grid_on
+			_grid.visible = _grid_on
+		"stress":
+			_overlay_on = not _overlay_on
+			_stress_dirty = true
+			_refresh_overlay()
+		"keys":
+			_keys_on = not _keys_on
+			_keys_panel.visible = _keys_on
+
+
+## Which of the bar's toggles are on (the owner adds its own: the camera).
+func bar_toggles() -> Dictionary:
+	return {"lock": plane_locked, "snap": _snap_on, "mirror": mirror_on, "grid": _grid_on,
+			"stress": _overlay_on, "keys": _keys_on}
+
+
 ## Shift Z (and the rail's Redo): do the last undone edit again.
 func redo_last() -> bool:
 	return undo_stack.redo() != null

@@ -37,7 +37,7 @@ const TOOLS := {
 		["draw", "Draw", "Alt V", "Drag to add clay to the part in the outliner; RMB carves it away; Shift smooths."],
 		["shape", "Shape", "", "Drag out a box, ball, cylinder, cone, line or lathe of clay (choose it below). RMB carves."],
 		["smooth", "Smooth", "", "Drag over the clay to round off its edges."],
-		["!import", "Import model", "", "Load a model file (.glb .gltf .obj .fbx .stl) as one item: its first piece is the body, the others its children in the outliner."],
+		["!import", "Import", "", "Load a model file (.glb .gltf .obj .fbx .stl) as one item: its first piece is the body, the others its children in the outliner."],
 		["measure", "Measure", "Alt M", "Click two points: the distance in studs and plates, print mm and real mm."],
 	],
 	"bricks": [
@@ -46,26 +46,33 @@ const TOOLS := {
 		["paint", "Paint", "B", "Click or drag over bricks to give them the colour in hand."],
 		["sketch", "Sketch", "Alt D", "Draw a flat outline on the working plane; it fills with bricks of this part."],
 		["shape", "Shapes", "K", "Drag out a box, wall or round of bricks, or brush them on."],
-		["move", "Move part", "Alt G", "Drag the current part's bricks to a new place."],
+		["move", "Move", "Alt G", "Drag the current part's bricks to a new place."],
 		["measure", "Measure", "Alt M", "Click two points: the distance in studs and plates, print mm and real mm."],
 	],
 	"detail": [
 		["stud", "Studs", "Alt U", "Click a face to put a stud on it; RMB takes one off."],
-		["!point", "Connection point", "J", "A mount or socket where the ghost is, for parts that join others."],
+		["!point", "Point", "J", "Connection point: a mount or socket where the ghost is, for parts that join others."],
 		["paint", "Paint", "B", "Click or drag over bricks to give them the colour in hand."],
 		["measure", "Measure", "Alt M", "Click two points: the distance in studs and plates, print mm and real mm."],
 	],
 	"finish": [
 		["!explode", "Explode", "Alt E", "Pull the parts apart to see how they join (again to put them back)."],
 		["!hands", "Hands", "Alt H", "Show the hands holding it (guns)."],
-		["!play", "Play: fire, reload", "Alt P", "Run the gun's fire and reload, to see the parts move."],
-		["!export_game", "Export to game", "Alt X", "Write the parts as game scenes the game assembles."],
-		["!export_print", "Export to print", "Alt B", "Write print files for each part and the whole."],
-		["!save", "Save as...", "Ctrl Shift S", "Save it under a name; furniture and items get their planet, type and room tags."],
+		["!play", "Play", "Alt P", "Fire and reload: run the gun's fire and reload, to see the parts move."],
+		["!export_game", "To game", "Alt X", "Export to the game: write the parts as game scenes the game assembles."],
+		["!export_print", "To print", "Alt B", "Export to print: write print files for each part and the whole."],
+		["!save", "Save as", "Ctrl Shift S", "Save it under a name; furniture and items get their planet, type and room tags."],
 	],
 }
 ## Finish actions that only mean something for a gun.
 const GUN_ONLY := ["!hands", "!play"]
+## The bar's buttons this workshop has not: the layer (stage 4 makes it the tab), the room
+## guide (rooms), Cancel (Esc is the Place tool here).
+const BAR_SKIP := ["layer", "guide", "cancel"]
+## The pop-out's width: the building workshop's (`WorkshopTools.POPOUT_W`).
+const POPOUT_W := 204.0
+## The rail's width: the building workshop's (`WorkshopTools.RAIL_W`).
+const RAIL_W := 224.0
 
 
 var ws    ## the AssetWorkshop
@@ -75,6 +82,7 @@ var _layer: CanvasLayer
 var _tabs: HBoxContainer
 var _tab_buttons := {}
 var _stage_button: Button
+var _bar_box: HBoxContainer
 var _tools_panel: WkRail
 ## Where the menu bar, the stage tabs, the rail and the outliner go (the kit's WkFrame): the
 ## tabs a band 8 under the bar, 30 high, the rail 8 under them, the outliner down the right.
@@ -125,16 +133,44 @@ func setup(workshop, layer: CanvasLayer) -> void:
 			_ask_then.call(_ask_line.text))
 	_layer.add_child(_ask)
 	_slim_old_rail()
-	# The open tool's options go in the rail, under its tools: one panel (Docs/BuildTools.md
-	# section 8), scrolling as one when taller than the window.
+	# The open tool's options go in the pop-out beside the rail, as in the building workshop
+	# (Docs/BuildTools.md section 21, the frame), scrolling when taller than the window.
 	ws._rail.get_parent().remove_child(ws._rail)
 	ws._rail.add_theme_stylebox_override("panel", StyleBoxEmpty.new())
 	_tools_panel.options.add_child(ws._rail)
-	_tools_panel.options.visible = true
+	_tools_panel.pop_out(_layer, POPOUT_W)
 	_fit_options(ws._rail)
+	# The bar, the building workshop's own list (WorkshopBar), right of the stage tabs.
+	_tabs.add_child(VSeparator.new())
+	_bar_box = HBoxContainer.new()
+	_bar_box.add_theme_constant_override("separation", 2)
+	_tabs.add_child(_bar_box)
+	_tools_panel.actions(WorkshopBar.without(BAR_SKIP), bar_act, _bar_box)
+	var look: Button = _tools_panel.action_buttons.get("fps")
+	if look != null:
+		look.tooltip_text = "Look  (Tab)\nThe mouse looks round (to fly), or the cursor is free (to use the panels)."
 	stage = "bricks" if ws.sculpt_state == "bricks" else "blockout"
 	_fill_tools()
 	sync_kind()
+
+
+## Where the space right of the rail starts: right of its pop-out while that shows.
+func rail_right() -> float:
+	var r: float = _tools_panel.position.x + _tools_panel.size.x + 12.0
+	var fly: Control = _tools_panel.flyout
+	if fly != null and fly.visible:
+		r = maxf(r, fly.position.x + fly.size.x + 12.0)
+	return r
+
+
+## A bar button: the camera and Redo are this workshop's, the rest the bench's.
+func bar_act(id: String) -> void:
+	match id:
+		"fps":
+			if ws.bench._camera.has_method("_set_captured"):
+				ws.bench._camera.call("_set_captured", not bool(ws.bench._camera.get("_captured")))
+		"redo": ws.redo()
+		_: ws.bench.bar_act(id)
 
 
 ## A rail icon (the shared rail's, `WkRail.ICONS`).
@@ -224,6 +260,7 @@ func _frame_setup() -> void:
 	frame.band_space = 30.0
 	frame.rail = _tools_panel
 	frame.side = _outliner
+	frame.side_under_band = true   # the tabs and the bar reach across
 
 
 ## The floating panels (photos, guides, the connection point, the parts catalogue): each on
@@ -232,7 +269,7 @@ func _frame_setup() -> void:
 ## Until stage 1 makes them sections of Selected (section 21).
 func place_floats(panels: Array) -> void:
 	var vp: Vector2 = ws.get_viewport().get_visible_rect().size
-	var left: float = _tools_panel.position.x + _tools_panel.size.x + 12.0
+	var left: float = rail_right()
 	var right: float = _outliner.position.x - 12.0 if _outliner != null and _outliner.visible else vp.x - 12.0
 	var top: float = frame.rail_top()
 	var bottom: float = vp.y - 104.0   # the hotbar
@@ -285,7 +322,8 @@ func place_floats(panels: Array) -> void:
 
 
 func _build_tools() -> void:
-	_tools_panel = WkRail.new(ws.RAIL_W, true)
+	# The building workshop's rail: two columns, a tool's key in its pop-up (section 21).
+	_tools_panel = WkRail.new(RAIL_W, true)
 	ws.bench.wk_ctx.style_ui(_tools_panel)   # the game's look (GameUI, MenuTheme), through the kit's seam
 	_tools_panel.restyle(ws.bench.wk_ctx.panel_box())
 	_layer.add_child(_tools_panel)
@@ -296,7 +334,7 @@ func _fill_tools() -> void:
 	for s in STAGES:
 		if s[0] == stage:
 			title = String(s[1]).substr(2)
-	_tools_panel.fill(title, TOOLS[stage], pick_tool, [] if ws.bench.recipe.kind == "gun" else GUN_ONLY)
+	_tools_panel.fill(title, TOOLS[stage], pick_tool, [] if ws.bench.recipe.kind == "gun" else GUN_ONLY, 2)
 	_tool_buttons = _tools_panel.buttons
 	_hint = _tools_panel.hint
 
@@ -827,7 +865,7 @@ func _slim_old_rail() -> void:
 ## rows of buttons share the width. The building's pop-out does the same (`WorkshopTools._fit`).
 ## Run again when a control was added later (`process` checks the width).
 func _fit_options(n: Node) -> void:
-	var w: float = ws.RAIL_W - 20.0
+	var w: float = POPOUT_W - 26.0
 	for c in n.get_children():
 		if c is Label:
 			var l := c as Label
@@ -842,9 +880,22 @@ func _fit_options(n: Node) -> void:
 			(c as OptionButton).fit_to_longest_item = false
 			(c as OptionButton).custom_minimum_size.x = minf((c as Control).custom_minimum_size.x, w) if (c as Control).custom_minimum_size.x > 0 else 0.0
 		elif c is Button:
+			# Alone on its line it wraps; in a row it keeps its width and the row wraps.
 			var b := c as Button
-			b.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+			if not (b.get_parent() is HBoxContainer or b.get_parent() is HFlowContainer):
+				b.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 			b.custom_minimum_size.x = minf(b.custom_minimum_size.x, w)
+		elif c is HBoxContainer and c.get_child_count() > 1 				and c.get_children().all(func(k: Node) -> bool: return k is Button and not k is OptionButton):
+			# A row of buttons: they go into a flow inside the row, which wraps them; the
+			# row stays (the workshop shows and hides it by name).
+			var flow := HFlowContainer.new()
+			flow.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+			flow.add_theme_constant_override("h_separation", 2)
+			flow.add_theme_constant_override("v_separation", 2)
+			for k in c.get_children():
+				c.remove_child(k)
+				flow.add_child(k)
+			c.add_child(flow)
 		elif c is Range and not c is ScrollBar:
 			(c as Control).custom_minimum_size.x = minf((c as Control).custom_minimum_size.x, w * 0.5)
 		elif c is LineEdit:
@@ -883,10 +934,18 @@ func process(dt: float) -> void:
 	# nothing while shaping clay.
 	if ws.bench._hud != null:
 		ws.bench._hud.visible = stage != "blockout"
-	_tools_panel.fit_height(ws.get_viewport().get_visible_rect().size.y - frame.rail_top() - 12.0)
+	var vh: float = ws.get_viewport().get_visible_rect().size.y
+	_tools_panel.fit_height(vh - frame.rail_top() - 12.0)
 	_tools_panel.size = Vector2.ZERO
 	ws.rail_top = _tools_panel.position.y + _tools_panel.size.y + 6.0
 	var on := active_tool()
+	# The pop-out beside the tool in hand; the bar's toggles lit.
+	var bt: Button = _tool_buttons.get(on)
+	_tools_panel.place_flyout(bt.global_position.y if bt != null else frame.rail_top(), vh - 104.0)
+	var lit: Dictionary = ws.bench.bar_toggles()
+	lit["fps"] = bool(ws.bench._camera.get("_captured"))
+	_tools_panel.show_toggles(lit)
+	_tools_panel.set_action_text("mirror_axis", "across X" if ws.bench.mirror_axis == 0 else "across Z")
 	for id in _tool_buttons:
 		var b: Button = _tool_buttons[id]
 		if b.toggle_mode:
@@ -907,7 +966,7 @@ func process(dt: float) -> void:
 		_toast.visible = _toast_left > 0.0
 		# Between the rail and the outliner, under the readout (never on it), on a backdrop.
 		var vw: float = ws.get_viewport().get_visible_rect().size.x
-		var left: float = _tools_panel.position.x + _tools_panel.size.x + 12.0
+		var left: float = rail_right()
 		var right: float = _outliner.position.x - 12.0 if _outliner != null and _outliner.visible else vw - 12.0
 		_toast.custom_minimum_size.x = clampf(right - left, 240.0, 620.0)
 		_toast.size = Vector2.ZERO
@@ -919,7 +978,7 @@ func process(dt: float) -> void:
 	_since += dt
 	if _since >= 0.25:
 		_since = 0.0
-		if ws._rail.get_combined_minimum_size().x > ws.RAIL_W - 15.0:
+		if ws._rail.get_combined_minimum_size().x > POPOUT_W - 13.0:
 			_fit_options(ws._rail)   # a control added since
 		if _signature() != _sig:
 			refresh()

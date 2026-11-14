@@ -24,34 +24,9 @@ const TOOLS := [
 	["select", "Select", "L", "Click a shape or an inserted build to pick it. A shape: drag its top for its height, its side to move it; change its bond or brick, delete it, or let it go. A build: move, copy or delete it."],
 	["rooms", "Rooms", "O", "Rooms and openings: click a room to find it or an opening to turn its kind; RMB forgets one."],
 ]
-## Every key's button (Docs/BuildTools.md section 7): [id, label, key, what it does, toggle?].
-const ACTIONS := [
-	["Hand", [
-		["rotate", "Rotate", "R", "Turn the brick in hand a quarter."],
-		["flip", "Flip", "F", "Turn it over: studs down."],
-		["turn_last", "Turn last", "T", "Turn the brick just placed a quarter."],
-		["lock", "Lock", "E", "Lock height: keep the ghost at the height it is on now (as E held) until this is pressed again.", true],
-		["snap", "Side stud", "V", "Snap to side studs.", true],
-		["layer", "Structure", "I", "The layer the next brick goes in: structure, interior or detail (press for the next)."],
-		["mirror", "Mirror", "", "Lay every brick and shape again across the mirror plane.", true],
-		["mirror_axis", "across Z", "", "Which way the mirror plane goes: across Z or across X."],
-		["mirror_here", "Set plane", "", "Mirror plane here: through the middle of the ghost."],
-		["colour_back", "< Colour", ",", "The colour before, in the slot in hand."],
-		["colour_on", "Colour >", ".", "The next colour, in the slot in hand."],
-	]],
-	["Edit", [
-		["undo", "Undo", "Z", "Take back the last edit: a brick, a run, a shape."],
-		["redo", "Redo", "Shift Z", "Lay back what Undo took."],
-		["cancel", "Cancel", "Esc", "Drop what is being drawn (a drag, a sketch, a wall line, a stair's first click)."],
-	]],
-	["View", [
-		["fps", "FPS", "Y", "Swap the camera: FPS (the mouse looks, tools work at the dot; hold Alt for the cursor), or orbit (the cursor is free: MMB orbits, Shift MMB pans, the wheel zooms, RMB held looks round).", true],
-		["grid", "Grid", "G", "Show the grid.", true],
-		["stress", "Stress", "H", "Show how hard each brick is working.", true],
-		["keys", "Keys", "F1", "Show every key.", true],
-		["guide", "Guide", "U", "Room guide: a room template's size; again for the next."],
-	]],
-]
+## Every key's button (Docs/BuildTools.md section 7): the bar, the same in both workshops
+## (`WorkshopBar.ACTIONS`, section 21).
+const ACTIONS := WorkshopBar.ACTIONS
 ## The pop-out's pictures: [id, name, icon].
 const OUTLINE_PICS := [["line", "Line", "k_line"], ["box", "Box", "k_rect"], ["circle", "Circle", "k_circle"],
 		["triangle", "Triangle", "k_triangle"], ["arch", "Arch", "k_arch"], ["free", "Freehand", "k_free"],
@@ -72,6 +47,9 @@ const BRICK_PICS := [["fill", "Fill gaps"], ["only", "Only this"]]
 const THICK_PICS := [["0", "Brick"], ["1", "1"], ["2", "2"], ["3", "3"]]
 const HAND_PICS := [["place", "Place", "place"], ["pick", "Pick", "pick"], ["paint", "Paint", "paint"]]
 const POPOUT_W := 204.0
+## The rail's width, the asset workshop's too (`AssetWorkshopUI.RAIL_W`): two columns of a
+## picture and a name of up to "Measure".
+const RAIL_W := 224.0
 ## Tools that place: their pop-out leaves the screen to the build while they work.
 const POPOUT_HIDES := ["hand", "draw", "roof", "stairs", "cut"]
 ## A door and a window cut by one click, to start: studs across, plates up; a window's sill
@@ -292,7 +270,7 @@ func setup(workshop, layer: CanvasLayer) -> void:
 	shape_tool.mode = WkShapeTool.Mode.OUTLINE_HEIGHT   # draw the outline, then pull its height
 	ws.toolbox.add(shape_tool)
 	ws.toolbox.add(select_tool)
-	rail = WkRail.new(210.0, true)
+	rail = WkRail.new(RAIL_W, true)
 	rail.name = "ToolRail"
 	ws.wk_ctx.style_ui(rail)          # the game's look (GameUI, MenuTheme), through the kit's seam
 	rail.restyle(ws.wk_ctx.panel_box())
@@ -1535,38 +1513,11 @@ func cancel() -> void:
 ## An action button (or its key, which the workshop handles as before).
 func act(id: String) -> void:
 	match id:
-		"rotate": ws._yaw = (ws._yaw + 1) % 4
-		"flip": ws._flip = not ws._flip
-		"turn_last": ws._rotate_last()
-		"lock": ws.plane_locked = not ws.plane_locked
-		"snap": ws._snap_on = not ws._snap_on
 		"layer": ws._toggle_layer()
-		"mirror": ws.set_mirror(not ws.mirror_on)
-		"mirror_axis":
-			ws.mirror_axis = 0 if ws.mirror_axis == 2 else 2
-			ws.set_mirror(ws.mirror_on)
-		"mirror_here":
-			ws.mirror_here()
-			if not ws.mirror_on:
-				ws.set_mirror(true)
-		"colour_back": ws._hotbar.set_colour(ws._colour - 1)
-		"colour_on": ws._hotbar.set_colour(ws._colour + 1)
-		"parts": ws._hotbar.toggle_browser()
 		"fps": view.toggle()
-		"undo": ws._undo()
-		"redo": ws.redo_last()
 		"cancel": cancel()
-		"grid":
-			ws._grid_on = not ws._grid_on
-			ws._grid.visible = ws._grid_on
-		"stress":
-			ws._overlay_on = not ws._overlay_on
-			ws._stress_dirty = true
-			ws._refresh_overlay()
-		"keys":
-			ws._keys_on = not ws._keys_on
-			ws._keys_panel.visible = ws._keys_on
 		"guide": ws._cycle_guide()
+		_: ws.bar_act(id)
 
 
 ## The plan's level a course (the held brick's height) up or down.
@@ -3215,8 +3166,9 @@ func process() -> void:
 	rail.show_active(rail_id(on), TOOLS)
 	_hand_box.visible = rail_id(on) == "hand"
 	WkRail.light(_hand_row, on)
-	rail.show_toggles({"lock": ws.plane_locked, "snap": ws._snap_on, "mirror": ws.mirror_on,
-			"grid": ws._grid_on, "stress": ws._overlay_on, "keys": ws._keys_on, "fps": view.mode == "fps"})
+	var lit: Dictionary = ws.bar_toggles()
+	lit["fps"] = view.mode == "fps"
+	rail.show_toggles(lit)
 	rail.set_action_text("layer", ["Structure", "Interior", "Detail"][clampi(ws._role, 0, 2)])
 	rail.set_action_text("mirror_axis", "across X" if ws.mirror_axis == 0 else "across Z")
 	var vh: float = ws.get_viewport().get_visible_rect().size.y

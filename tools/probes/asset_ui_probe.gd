@@ -64,8 +64,13 @@ func _frame(ui: AssetWorkshopUI) -> void:
 		old_hidden = old_hidden and not (_ws._rail_buttons[id] as Button).visible
 	_ok("the old rail's tool list is gone; its part picker stays", old_hidden
 			and (_ws._rail_box.get_child(0) as Control).visible)
-	_ok("the options are in the rail, under the tools", ui._tools_panel.is_ancestor_of(_ws._rail)
-			and _ws._rail.get_global_rect().position.y >= ui._tools_panel.hint.get_global_rect().end.y)
+	# Section 21's frame: the options in the pop-out beside the rail, as in the building workshop.
+	_ok("the options are in the pop-out, beside the rail", ui._tools_panel.flyout != null
+			and ui._tools_panel.flyout.is_ancestor_of(_ws._rail)
+			and ui._tools_panel.flyout.position.x >= ui._tools_panel.position.x + ui._tools_panel.size.x)
+	_ok("the bar is there, the building workshop's buttons less the layer, guide and Cancel",
+			ui._tools_panel.action_buttons.has("undo") and ui._tools_panel.action_buttons.has("mirror")
+			and not ui._tools_panel.action_buttons.has("layer"))
 	for pair in [["draw", "shape"], ["shape", "stamp"], ["smooth", "smooth"], ["select", "models"]]:
 		ui.pick_tool(pair[0])
 		_ok("Block out %s: sculpting, %s" % [pair[0], pair[1]], _ws.tool == "sketch" and _ws.sketch_draw == "sculpt"
