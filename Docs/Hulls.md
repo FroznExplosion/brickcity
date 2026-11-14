@@ -515,6 +515,57 @@ flooding enough sinks it; patching and pumping out lets it rise.
   `hull_flood_probe` 10. `city.tscn -- --terrain --boat` 3 ok (peak 94 C, not held back; other
   chats' runs were going).
 
+### 7.4 Built (2026-11-14): a boat breaks in two, and the part that leaves floats or sinks
+
+**Found:** a boat cut clean across (732 and 234 bricks, not a stud between them) stayed one
+rigid boat. Its solve was a building's: what does not reach the *foundation level* falls, and
+every keel plate is at that level, so each half was "grounded" by its own keel.
+
+* **Afloat nothing is its ground** (`SpaceStation.floats_free`, true for a `Boat`): its
+  largest joined part is the hull (`BrickWorld.get_components`) and every other part leaves.
+  20 bricks or fewer as crumbs, more as a piece, as before.
+* **The part that leaves is a `HullPiece`** (scripts/hulls/hull_piece.gd; `Boat._on_piece`
+  takes its own `drifted`, which nothing took before: a boat's pieces were simply gone).
+  Its mesh, and its own float: its bricks and the air it still shuts in, found on its own
+  grid. With a whole stretch of hold in it, it floats (the bow of seed 1: 248 bricks, keeps
+  out 10.6 m3 for 4,718 kg). Open, it is a little heavier than water and goes down. Gone 8 m
+  under, or after 240 s.
+* **`HullFloat`** (scripts/hulls/hull_float.gd): the boat's sums, moved out of `Boat` so a
+  piece uses the same ones (measure, forces, integrate). The boat floats exactly as it did
+  (`boat_probe`'s numbers unchanged).
+* **The boat's air is worked out again** (`HullAir.rebuild`, 7 ms) instead of
+  `blocks_removed` for the bricks that left: no list of freed cells says which *air* went
+  with them. Its holes and doors stand as walls to the fill, so a holed room is still a room
+  with its holes; the hold that left and a stretch cut open are the sea's. Water in a cell
+  that is no room's any more is gone (`HullWater.grid_rebuilt`). Then `Boat._measure` again:
+  mass 20,180 to 13,542 kg, and it floats on its two whole stretches, the deck 1.19 m over.
+  Laid back with the restore tool, it is measured again half a second after.
+* **Found and fixed: the boat's bow had columns clicked to nothing.** Where the rim tapers,
+  a cell had a 1x1 plate in both keel layers and both deck layers: 8 bricks in a stack (two
+  keel plates, three side bricks, two deck plates, the bulwark), joined to nothing beside
+  them. Six of them and two single bricks, held only by the keel being "ground". `BoatBuild`
+  now lays what the 2x2s leave in 1x2 plates, along its length in one layer and across in
+  the next: 1,012 bricks, one joined part.
+* **Found and fixed: a column with a gap in it kept no water out past the gap.** A column's
+  height was its cells' count, so one of keel and deck with the sea between was "sunk" at
+  its keel's top. Never seen on a whole boat (no gaps); an open piece fell like a stone.
+  Its envelope is now from its lowest cell to its highest.
+* Gates: `tools/probes/boat_break_probe.gd` 6 (built as one part; parts; air; the boat floats
+  on; the bow floats; an open stern end sinks and is gone). `boat_probe` 9, `hull_flood_probe`
+  12, `hull_air_probe` 13, `ship_vent_probe` 11, `ghost_hull_probe` 18, `repair_probe` 13.
+  Windowed: `--terrain --harbour` 6 ok, `--terrain --boat` 3 ok (peak 91 C, not held back).
+* **Not yet:**
+  * A piece has no collision and takes no hits; nobody stands on it. Crew on the part that
+    leaves lose their floor (its ghost bricks are switched off) and fall in the sea.
+  * A piece does not flood: the air it shuts in is its for good.
+  * A piece turned far over floats wrongly: its columns stand along its own up.
+  * The sea is not cut out of a piece's air (`HullMasks` knows hulls only).
+  * Spaceships and stations still part at their joints and their keel's level
+    (`_joints_step`, `find_detached_groups`); `HullAir.rebuild` would be 130-300 ms on one,
+    in script.
+* **Seen, not from this:** the harbour pass exits with 139 (a crash at quit) after `6 ok`,
+  with and without this change.
+
 ## 7b. Walking inside a moving hull: the ghost hull
 
 From Sink My Bricks' "Ghost ships" short (Reference/brick-games.md 1.1). **This changes the plan.**

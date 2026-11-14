@@ -42,25 +42,45 @@ static func make(seed: int, length := 40, beam := 14, bulkheads := BULKHEADS) ->
 		var h: int = hw.call(x)
 		var mid := beam / 2
 		return x >= 0 and x < length and z >= mid - h and z < mid + h
-	# The keel: two plate layers, the upper offset a stud so each 2x2 overlaps four.
-	for layer in KEEL_PLATES:
-		var off := layer
+	# A layer of plates over the whole hull at height `y`: 2x2s on a grid offset
+	# `off` studs, then what they leave along the tapering rim in 1x2s (along its
+	# length in an even layer, across in an odd one), then 1x1s. Two layers so
+	# laid click every plate to the next, and no cell of the rim is a stack of
+	# 1x1s clicked to nothing beside it: afloat nothing is its ground, and such a
+	# column is no part of the hull (Docs/Hulls.md 7.4).
+	var layer := func(y: int, off: int, colour: int) -> void:
+		var left := {}
 		for x in range(-1, length + 1, 2):
 			for z in range(-1, beam + 1, 2):
 				var cx := x + off
 				var cz := z + off
-				# A 2x2 where all four cells are in the hull, else 1x1 plates.
 				var all := true
 				for dx in 2:
 					for dz in 2:
 						all = all and inside.call(cx + dx, cz + dz)
 				if all:
-					r.add("plate_2x2", Vector3i(cx, layer, cz), keel)
+					r.add("plate_2x2", Vector3i(cx, y, cz), colour)
 				else:
 					for dx in 2:
 						for dz in 2:
 							if inside.call(cx + dx, cz + dz):
-								r.add("plate_1x1", Vector3i(cx + dx, layer, cz + dz), keel)
+								left[Vector2i(cx + dx, cz + dz)] = true
+		var keys := left.keys()
+		keys.sort()
+		var along := off % 2 == 0
+		for pass_n in 2:
+			var step := Vector2i(1, 0) if (pass_n == 0) == along else Vector2i(0, 1)
+			for c: Vector2i in keys:
+				if left.has(c) and left.has(c + step):
+					left.erase(c)
+					left.erase(c + step)
+					r.add("plate_1x2_x" if step.x == 1 else "plate_1x2_z", Vector3i(c.x, y, c.y), colour)
+		for c: Vector2i in keys:
+			if left.has(c):
+				r.add("plate_1x1", Vector3i(c.x, y, c.y), colour)
+	# The keel: two plate layers, the upper offset a stud so each 2x2 overlaps four.
+	for k in KEEL_PLATES:
+		layer.call(k, k, keel)
 	# Its sides: the hull's rim, a stud thick, bricks up to the deck; the bulwark over it.
 	for x in length:
 		for z in beam:
@@ -93,24 +113,8 @@ static func make(seed: int, length := 40, beam := 14, bulkheads := BULKHEADS) ->
 				r.add("brick_1x1", Vector3i(x, y_hold + j * 3, z), hull)
 	# The deck: two plate layers over the hold, crossed as the keel's are, inside
 	# the sides (it rests on their tops at its rim).
-	for layer in DECK_PLATES:
-		var y := y_deck + layer
-		var off := layer
-		for x in range(-1, length + 1, 2):
-			for z in range(-1, beam + 1, 2):
-				var cx := x + off
-				var cz := z + off
-				var all := true
-				for dx in 2:
-					for dz in 2:
-						all = all and inside.call(cx + dx, cz + dz)
-				if all:
-					r.add("plate_2x2", Vector3i(cx, y, cz), deck)
-				else:
-					for dx in 2:
-						for dz in 2:
-							if inside.call(cx + dx, cz + dz):
-								r.add("plate_1x1", Vector3i(cx + dx, y, cz + dz), deck)
+	for k in DECK_PLATES:
+		layer.call(y_deck + k, k, deck)
 	var n := r.size()
 	var b: Array = r.bounds()
 	var lo: Vector3i = b[0]

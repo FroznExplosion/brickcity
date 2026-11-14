@@ -681,7 +681,10 @@ func take_ram(point: Vector3, shot: Dictionary) -> int:
 func _after_kill(killed: PackedInt32Array) -> void:
 	bricks_killed += killed.size()
 	if air != null:
-		air.blocks_removed(bricks, chunk, killed)
+		if _parting:
+			_parted()
+		else:
+			air.blocks_removed(bricks, chunk, killed)
 	if hull_water != null:
 		hull_water.grid_changed = true
 	if _collision != null:
@@ -695,14 +698,40 @@ func _after_kill(killed: PackedInt32Array) -> void:
 	_solve_due = true
 
 
+## Whether nothing is its ground (a boat afloat): then what is not joined to its
+## largest part leaves, whatever of it touches its keel's level.
+func floats_free() -> bool:
+	return false
+
+
+## Part of it has just left (`floats_free`): its air and what floats it are
+## worked out again from the bricks it has left.
+func _parted() -> void:
+	pass
+
+
+var _parting := false
+## The chunk of the piece being sent off, while `drifted` is emitted (-1 else):
+## its bricks, for whoever takes the piece.
+var drift_chunk := -1
+
+
 ## What the hit left joined to nothing goes: a small group as crumbs, a large
 ## one as a rigid piece, drifting (step 6).
 func _solve() -> void:
 	_solve_due = false
 	# A generated station: by its studs alone (in orbit nothing weighs on it --
 	# Docs/Space.md 3.2), so a part cut off from the keel's comes away whole.
-	var groups: Array = bricks.find_detached_groups(chunk) if recipe != null \
-			else (bricks.solve_structure(chunk, 48, 3.0).groups as Array)
+	var groups: Array
+	if floats_free():
+		# Afloat nothing is its ground: its largest joined part is the hull, and
+		# every other part leaves (Docs/Hulls.md 7.4).
+		groups = bricks.get_components(chunk)
+		groups.pop_front()
+	elif recipe != null:
+		groups = bricks.find_detached_groups(chunk)
+	else:
+		groups = bricks.solve_structure(chunk, 48, 3.0).groups
 	if groups.is_empty():
 		if not joints.is_empty():
 			_joints_step()
@@ -723,7 +752,9 @@ func _solve() -> void:
 		if split.is_empty():
 			continue
 		_send_off(split, ids.size(), riders)
+	_parting = floats_free()
 	_after_kill(all)
+	_parting = false
 	if not joints.is_empty():
 		_joints_step()
 
@@ -1133,8 +1164,10 @@ func _send_off(split: Dictionary, count: int, riders: Array) -> void:
 		PhysicsServer3D.body_set_collision_mask(drift_body, Layers.STRUCTURE_MASK)
 		bricks.add_chunk_shapes(drift_body, c, com, true, true)
 	drift_record = ChunkRecord.capture(bricks, c).to_data(bricks)
+	drift_chunk = c
 	drifted.emit(arrays, bricks.get_chunk_transform(c) * Transform3D(Basis(), com), com, count, brick_material)
 	drift_record = {}
+	drift_chunk = -1
 	if drift_body.is_valid():
 		PhysicsServer3D.free_rid(drift_body)
 	drift_body = RID()
