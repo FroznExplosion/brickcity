@@ -461,7 +461,9 @@ static func build_window_mesh(footprint_x: int, footprint_z: int, courses: int,
 ## The ArrayMesh of what window_arrays made.
 static func window_mesh_of(arrays: Array) -> ArrayMesh:
 	var mesh := ArrayMesh.new()
-	mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
+	# CUSTOM0 is one float a vertex: the room behind the pane (window_arrays).
+	mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays, [], {},
+			Mesh.ARRAY_CUSTOM_R_FLOAT << Mesh.ARRAY_FORMAT_CUSTOM0_SHIFT)
 	return mesh
 
 
@@ -481,6 +483,11 @@ static func window_arrays(footprint_x: int, footprint_z: int, courses: int,
 	var uvs := PackedVector2Array()
 	var uv2s := PackedVector2Array()
 	var indices := PackedInt32Array()
+	# The room behind each pane, a float a vertex (CUSTOM0): its index in
+	# RoomManifest.rooms_for, -1 for none. A building in bricks fades the panes
+	# of one room at a time, as that room's furniture comes and goes
+	# (RoomStreaming, shaders/window_interior.gdshader).
+	var room_ids := PackedFloat32Array()
 
 	var w := footprint_x * STUD
 	var d := footprint_z * STUD
@@ -531,6 +538,7 @@ static func window_arrays(footprint_x: int, footprint_z: int, courses: int,
 						Vector3(a, y1, -GLASS_PROUD), Vector3(b, y1, -GLASS_PROUD),
 						Vector3(0, 0, -1), _pane_colour(lattice,
 						building_seed, storey, Vector2(mid, reach), 0, g, program))
+				_pane_room(room_ids, lattice, storey, Vector2(mid, reach))
 			var zb := footprint_z - 1
 			if _pane_stands(standing, Vector3i(m, sill_y, zb), Vector3i(m, lintel_y, zb),
 					Vector3i(m, floor_y, zb - inner)):
@@ -539,6 +547,7 @@ static func window_arrays(footprint_x: int, footprint_z: int, courses: int,
 						Vector3(b, y1, d + GLASS_PROUD), Vector3(a, y1, d + GLASS_PROUD),
 						Vector3(0, 0, 1), _pane_colour(lattice,
 						building_seed, storey, Vector2(mid, footprint_z - reach), 1, g, program))
+				_pane_room(room_ids, lattice, storey, Vector2(mid, footprint_z - reach))
 		for g in gz:
 			var a: float = (g as Vector2i).x * STUD
 			var b: float = (g as Vector2i).y * STUD
@@ -551,6 +560,7 @@ static func window_arrays(footprint_x: int, footprint_z: int, courses: int,
 						Vector3(-GLASS_PROUD, y1, b), Vector3(-GLASS_PROUD, y1, a),
 						Vector3(-1, 0, 0), _pane_colour(lattice,
 						building_seed, storey, Vector2(reach, mid), 2, g, program))
+				_pane_room(room_ids, lattice, storey, Vector2(reach, mid))
 			var xb := footprint_x - 1
 			if _pane_stands(standing, Vector3i(xb, sill_y, m), Vector3i(xb, lintel_y, m),
 					Vector3i(xb - inner, floor_y, m)):
@@ -559,6 +569,7 @@ static func window_arrays(footprint_x: int, footprint_z: int, courses: int,
 						Vector3(w + GLASS_PROUD, y1, a), Vector3(w + GLASS_PROUD, y1, b),
 						Vector3(1, 0, 0), _pane_colour(lattice,
 						building_seed, storey, Vector2(footprint_x - reach, mid), 3, g, program))
+				_pane_room(room_ids, lattice, storey, Vector2(footprint_x - reach, mid))
 	if verts.is_empty():
 		return []
 	var arrays := []
@@ -570,6 +581,7 @@ static func window_arrays(footprint_x: int, footprint_z: int, courses: int,
 	arrays[Mesh.ARRAY_TEX_UV] = uvs
 	arrays[Mesh.ARRAY_TEX_UV2] = uv2s
 	arrays[Mesh.ARRAY_INDEX] = indices
+	arrays[Mesh.ARRAY_CUSTOM0] = room_ids
 	return arrays
 
 
@@ -688,6 +700,14 @@ static func _pane_colour(lattice: Dictionary,
 	var lit := 0.3 if h2 % 5 == 0 else 0.8 + float((h2 >> 8) % 100) / 400.0
 	return Color(float(h % 1000) / 1000.0, lit, float(h2 % 1000) / 1000.0,
 			float(kind) / 16.0)
+
+
+## The room behind a pane just added, for its four corners (window_arrays).
+static func _pane_room(room_ids: PackedFloat32Array, lattice: Dictionary, storey: int,
+		plan: Vector2) -> void:
+	var id := float(RoomManifest.room_in(lattice, storey, plan))
+	for i in 4:
+		room_ids.push_back(id)
 
 
 ## One pane: corners a, b, c, d as `_quad` takes them, UV in metres across the

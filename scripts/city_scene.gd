@@ -613,13 +613,11 @@ var _physics_view: PhysicsView
 ## How wide the next shot hits, in metres. The wheel sets it; the reticle draws
 ## it at the range it is actually pointing at, because a radius in metres means
 ## nothing to the eye until it is a circle over the wall it is about to remove.
-## How near the player has to be for a storey group's pieces to have their
-## collision boxes (_stream_groups), how far before they lose them, and how
-## many storeys either side of the player's own still count. The first is also
-## what "near enough to see" a blast's furniture means (_apply_blast).
+## What "near enough to see" a blast's furniture means (_apply_blast). It was
+## also the range of the furniture's collision boxes, with a sleep range and a
+## storey span; those went on 2026-11-14 -- collision is for the rooms chosen
+## as near now (RoomStreaming), not for every group in a range.
 const ROOM_RANGE := 40.0
-const ROOM_SLEEP_RANGE := 58.0
-const ROOM_STOREY_SPAN := 1
 
 var _blast_radius := BLAST_RADIUS
 var _reticle: Reticle
@@ -2107,6 +2105,12 @@ var hold_interiors_mid_collapse := true
 ## Docs/Interiors.md section 8): one drawing of a group's interior pieces and
 ## one of its items, shown and faded by distance alone.
 var interior_groups := InteriorGroups.new()
+## Which ROOMS of those groups are up, and their painted windows' fades
+## (RoomStreaming; Docs/HandoffRooms.md): eight at once, two of them by view.
+var room_streaming := RoomStreaming.new()
+## Collision boxes put on or taken off, a pass: the first always, the rest
+## while this much of the tick's clock is left (TickClock).
+const COVER_BUDGET_MS := 1.0
 ## InteriorGroups.key_of(building, group) -> that group's shapes on its
 ## building's furniture body (_room_body): one box per interior piece, for the
 ## groups the player is near.
@@ -2247,33 +2251,40 @@ static func _box_distance(box: AABB, point: Vector3) -> float:
 	return out.length()
 
 
-## Draw, refresh and drop the storey groups round the player (InteriorGroups;
-## Docs/Interiors.md 8.2). The rungs' pass, with one rule in place of three.
+## Draw, refresh and drop the rooms round the player (RoomStreaming,
+## InteriorGroups; Docs/HandoffRooms.md, Docs/Interiors.md 8.2).
 ##
-## A group is wanted while its storeys are within INTERIOR_RANGE of the camera,
-## in a building that is standing, is bricks and has its mesh. A wanted group
-## that is not shown is worked out and shown; a shown one that something
-## changed is worked out again; one out of range is dropped. Nearest first,
-## under one clock (InteriorGroups.BUDGET_MS).
+## RoomStreaming chooses the ROOMS that are up -- the player's room and its
+## neighbours, then the best two by view, eight in all -- and sets each storey
+## group's masks; a group draws only the rows of its rooms that are up. A group
+## with a room up that is not drawn, or is behind, is worked out and put on
+## screen; one with none is dropped. Nearest first, a group at a time, on the
+## tick's shared clock (TickClock): putting a drawing on screen and handing out
+## collision were outside any budget, and one --big --shot tick was 26 ms with
+## this pass 10.9 of it (2026-11-11).
 ##
-## Two things from Docs/CollapseNext.md 1.8 hold here as they do for the rungs:
-## nothing NEW is drawn in a building that is coming apart (_mid_collapse) --
+## Two things from Docs/CollapseNext.md 1.8 hold: nothing NEW is drawn in a
+## building that is coming apart (_interior_unsure, asked by RoomStreaming) --
 ## what is drawn already is still redrawn, which only ever takes pieces away --
 ## and a building that has come down has no groups at all.
 ##
-## Collision is for what the player is near: a group within ROOM_RANGE and a
-## storey of the camera's height has one box per interior piece on the
-## building's furniture body, as the drawn rung's rooms had.
+## Collision is for where the player can be: the rooms chosen as near (the
+## player's room and its neighbours; out of doors the nearest few facing them)
+## have one box per interior piece on the building's furniture body.
 func _stream_groups(here: Vector3) -> void:
 	var groups := interior_groups
 	if groups.world == null:
 		groups.world = world
 		groups.registry = registry
+	if room_streaming.groups == null:
+		room_streaming.groups = groups
+		room_streaming.registry = registry
+		room_streaming.panes = drawing._brick_panes
 	var reach := InteriorGroups.INTERIOR_RANGE + InteriorGroups.RELEASE
-	var storey_m := float(TowerRecipe.STOREY_PLATES) * PLATE
 	var todo: Array = []     # [distance, building, group]
 	var covers: Array = []   # [building id, group, wanted]
 	var near := {}
+	var live: Array = []
 	for id in _near_buildings(here, reach):
 		var b := registry.get_building(id)
 		if b == null or not b.is_materialised() or b.is_build() or b.toppled:
@@ -2281,22 +2292,25 @@ func _stream_groups(here: Vector3) -> void:
 		if not _brick_nodes.has(id):
 			continue   # demeshed: nothing to hang a drawing from
 		near[id] = true
+		live.append(b)
+	var pawns := PackedVector3Array()
+	for pawn in _all_pawns():
+		pawns.push_back(pawn.global_position)
+	room_streaming.choose(here, -camera.global_basis.z, _half_fov(), live, _interior_unsure,
+			pawns)
+	interior_waits += room_streaming.waits
+	for b in live:
+		var id: int = b.id
 		var parent: Node3D = _brick_nodes[id]
 		var local: Vector3 = b.xform.affine_inverse() * here
-		var held := -1   # mid-collapse? Asked once, and only if something is new.
 		for g in groups.layout(b):
 			var d := _box_distance(g.box, local)
-			if d > (reach if g.shown else InteriorGroups.INTERIOR_RANGE):
+			if not g.any_held():
 				if g.shown:
 					_group_cover(id, g, false)
 					groups.release(id, g)
 				continue
 			if not g.shown:
-				if held < 0:
-					held = 1 if _interior_unsure(id) else 0
-				if held == 1:
-					interior_waits += 1
-					continue
 				g.shadows = d <= InteriorGroups.SHADOW_RANGE
 				todo.append([d, b, g])
 				continue
@@ -2304,34 +2318,47 @@ func _stream_groups(here: Vector3) -> void:
 				todo.append([d, b, g])
 			groups.set_shadows(id, g, d <= (InteriorGroups.SHADOW_RELEASE if g.shadows
 					else InteriorGroups.SHADOW_RANGE))
-			var gap := maxf(maxf(g.box.position.y - local.y, local.y - g.box.end.y), 0.0)
-			var want: bool = (d <= (ROOM_SLEEP_RANGE if g.cover else ROOM_RANGE)
-					and gap <= storey_m * float(ROOM_STOREY_SPAN) * (2.0 if g.cover else 1.0))
+			var want: bool = g.cover_mask.has(1)
 			# Boxes from a drawing that is behind would be boxes for pieces that
 			# have gone: it waits for the group to be current.
 			if want != g.cover and (not want or not g.dirty):
 				covers.append([id, g, want])
 			elif want and g.cover_stale and not g.dirty:
-				covers.append([id, g, true])   # a piece has gone: its box with it
+				covers.append([id, g, true])   # a piece or a room has gone: its boxes with it
 	todo.sort_custom(func(a, c) -> bool: return float(a[0]) < float(c[0]))
-	var until := Time.get_ticks_usec() + int(InteriorGroups.BUDGET_MS * 1000.0)
-	var first := true
-	for entry in todo:
-		if not first and Time.get_ticks_usec() >= until:
-			break
-		first = false
-		var b: BuildingRegistry.Building = entry[1]
-		var g: InteriorGroups.Group = entry[2]
-		if not groups.work(b, g, until):
-			break   # the clock ran out inside it: the rest of it next pass
-		_group_show(b, g)
+	var until := TickClock.until(InteriorGroups.BUDGET_MS)
+	if not todo.is_empty() and not TickClock.skip(&"rooms", until):
+		var first := true
+		for entry in todo:
+			if not first and Time.get_ticks_usec() >= until:
+				break
+			first = false
+			var b: BuildingRegistry.Building = entry[1]
+			var g: InteriorGroups.Group = entry[2]
+			if not groups.work(b, g, until):
+				break   # the clock ran out inside it: the rest of it next pass
+			_group_show(b, g)
+	var cover_until := TickClock.until(COVER_BUDGET_MS)
+	var covered := 0
 	for c in covers:
+		if covered > 0 and Time.get_ticks_usec() >= cover_until:
+			break   # the rest next pass: they are asked for again
 		_group_cover(int(c[0]), c[1], bool(c[2]))
+		covered += 1
 	for id in groups.known_ids():
 		if not near.has(id):
 			_drop_groups(id)
 	_stream_pieces(here)
 	_groups_tend_riders()
+
+
+## Half the camera's horizontal field of view, radians.
+func _half_fov() -> float:
+	var size := get_viewport().get_visible_rect().size
+	var aspect := size.x / maxf(size.y, 1.0)
+	if camera.keep_aspect == Camera3D.KEEP_WIDTH:
+		return deg_to_rad(camera.fov) * 0.5
+	return atan(tan(deg_to_rad(camera.fov) * 0.5) * aspect)
 
 
 ## A piece smaller than this carries no interior drawing: it is rubble, and a
@@ -2559,8 +2586,12 @@ func _group_cover(id: int, g: InteriorGroups.Group, on: bool) -> void:
 	_spare_shapes[id] = spare
 	var mine := PackedInt32Array()
 	if on:
-		for room_boxes in g.boxes:
-			for box in (room_boxes as Array):
+		for k in g.boxes.size():
+			# Only the rooms chosen as near (RoomStreaming); every room with
+			# rows when nobody has chosen (no mask).
+			if not g.cover_mask.is_empty() and (k >= g.cover_mask.size() or g.cover_mask[k] == 0):
+				continue
+			for box in (g.boxes[k] as Array):
 				if (box as AABB).size == Vector3.ZERO:
 					continue   # its piece has gone (InteriorGroups.check_floors)
 				mine.push_back(_take_shape(id, body, (box as AABB).size,
@@ -2615,6 +2646,7 @@ func _drop_groups(id: int) -> void:
 		if g.cover:
 			_group_cover(id, g, false)
 	interior_groups.drop(id)
+	room_streaming.forget_building(id)
 
 
 ## The room indices of a building's shown groups that reach into `local_box`
@@ -6663,6 +6695,9 @@ func _physics_process(_delta: float) -> void:
 		# pieces of wreckage (InteriorGroups).
 		if camera != null and Engine.get_physics_frames() % 4 == 3:
 			_stream_groups(camera.global_position)
+		# Every tick: the painted windows of the rooms coming and going fade
+		# by time (RoomStreaming.FADE_S).
+		room_streaming.tend(_delta)
 		t_st = _part("st_rooms", t_st)
 		if camera != null and Engine.get_physics_frames() % 4 == 2:
 			_stream_detail()

@@ -334,7 +334,7 @@ Each fix so far (2026-10-03/04) patched one of these. The user's direction: one 
 * **Items** â€” cups, books, guns, ammo, powerups: `Role.DETAIL` and the loot (`ImpostorItems`).
   **Only up close.**
 
-### 8.2 One drawing per storey group, by distance only
+### 8.2 One drawing per storey group, by distance only (the choosing replaced by rooms: §8.15)
 
 > **Decided 2026-10-06 (user):** not one drawing for a whole building. The buildings the game wants
 > are too big for that: one buffer rebuilt for one shot, and the top of a tower drawn because the
@@ -687,3 +687,44 @@ Checks: `interior_group_probe` 33 (the cut tower's top: the 37 items that left t
 laid on the piece, 112 bricks, each on the piece's floors, none twice, kept when the record goes);
 `-- --groups --big` 24 (still pieces carry their furniture as bricks, none left only drawn, no
 rider on a piece that has its own; a blast at furniture on wreckage breaks its bricks).
+
+### 8.15 The unit chosen is a room, by where the player looks (2026-11-14)
+
+The user, playing after bands became a box a brick (2026-11-13): lag as interiors spawned, whole
+floors popping in at once, windows flashing as the camera moved; "limit the amount of rooms that can
+be spawned in at once to just a few near the player and like one or two that are in the players
+view ... prioritize the room near the center of the screen ... spawn room objects then fade away the
+window screen". The plan and the reading of the old code: [HandoffRooms.md](HandoffRooms.md).
+
+A storey group is still what is DRAWN (two MultiMeshes, §8.2), but what is CHOSEN is a room
+(`RoomStreaming`, `scripts/rooms/room_streaming.gd`), and a group's drawings hold only the rows of its
+rooms that are up (`Group.held`; a group with none is dropped):
+
+* **near**: the room the camera is in and the rooms of its storey, nearest first; out of doors the
+  nearest rooms within `NEAR_RANGE` (20 m) with a window or a hole facing the camera. Up to 6. Only
+  these get collision boxes (`Group.cover_mask`), not every group within `ROOM_RANGE` -- and a room
+  that is up with a pawn standing in it (`CityScene._all_pawns`);
+* **view**: then the best 2 by view -- angle from the middle of the screen first, then distance --
+  of the rooms with an opening facing the camera within `INTERIOR_RANGE`;
+* **8 up at once** (user, 2026-11-14: 8, 2 by view); a room that drops out of the choice stays up
+  3 s while the cap allows (user: about 3 s), so glancing away and back does not respawn it;
+* an empty room takes no slot: its painted window already shows an empty room.
+
+**Spawn, then fade the window, by time.** Each pane carries the room behind it (`CUSTOM0`, written by
+`BuildingShell.window_arrays` from `RoomManifest.room_in`); the building's pane node carries up to 12
+rooms being faded (six `vec4` instance uniforms, `shaders/window_interior.gdshader`). Once a room's
+rows are on screen (`Group.on_screen`, set by `attach`) its panes fade out over 0.3 s; given back,
+they fade in first and its rows go after. The old `near_hide` (panes dithered out between 45 and 60 m
+by distance) and the pieces' distance dither inside the range are gone: both moved with the camera,
+which was the flashing. Pieces now fade only past `PIECE_FADE_RANGE` (87 m, farther than any room is
+kept); items keep their 20 m fade, the LOD inside a room.
+
+**On the tick's clock.** Working out, putting a group on screen (`attach`) and handing out collision
+take their turn from `TickClock` (a group at a time, collision 1 ms after the first change), and the
+panes' hang waits a pass when the clock is out (`CityDrawing.PANES_MS`).
+
+Checks: `-- --groups --big` (its per-range checks were "every group within 60 m drawn": now the rooms
+up are no more than 8, each drawn with its window faded out, none drawn that is not up, the view picks
+the facing rooms nearest the middle of the screen, collision for the near rooms only; looking away the
+view rooms stay up 3 s and their windows fade back in through several steps before their rows go);
+`interior_group_probe` (pieces fade only past where a room is kept).

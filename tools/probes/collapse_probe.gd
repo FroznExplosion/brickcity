@@ -303,7 +303,9 @@ func _check_interior() -> void:
 	var cam: Camera3D = city.camera
 	var near_at := Vector3(c.x - box.size.x * 0.5 - 50.0, 12.0, c.z)
 	# Near enough for its interior to be drawn; its bricks, as a hit would bring them.
+	# Looking at it: rooms are drawn where the player looks (RoomStreaming).
 	cam.global_position = near_at
+	cam.look_at(Vector3(c.x, near_at.y, c.z), Vector3.UP)
 	city._promote(id)
 	await _ticks(20)
 	await city._pass_runner()._groups_settle(b)
