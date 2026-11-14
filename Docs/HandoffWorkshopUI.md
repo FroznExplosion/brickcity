@@ -11,13 +11,9 @@ was found, how to test without harming the user's files, and what to do next.
   in both. Analysis first, then a plan, then building in stages.
 - Done: the analysis, the plan (section 21, the user's five answers in it), a tool that
   photographs both UIs. **No game code has changed.** Main `7ee39400`.
-- Stage 0 and stage 1a (the bar and the pop-out in the asset workshop) merged 2026-11-14
+- Stage 0, 1a (the bar and the pop-out in the asset workshop) and 1b merged 2026-11-14
   (section 21, "As built"). Stage 1 is split in three merges; left of it:
-  - **1b**: the building workshop's right side -- an outliner (kept shapes, inserted builds,
-    the generated building, rooms, placed furniture) and under it **Selected**; Select's
-    pop-out (`WorkshopTools._builds_box`, `_select_box`, `_sync_select`) moves there. The
-    asset's outliner is `AssetWorkshopUI._build_outliner` (a Tree + an HFlow of actions):
-    make the shared part a kit piece (`WkOutliner`?) or a bench one, then fill it per workshop.
+  - **1b** merged (the building outliner and Selected, `WorkshopOutliner`).
   - **1c**: one status line at the bottom in place of the rail's hint, the bench's `_hud`, the
     asset's `_ruler`, `_part_label` and sculpt note; the toast stays for refusals; the debug
     numbers behind View > Stats. Probes read `_hud` (`build_tools_probe` "the readout sits

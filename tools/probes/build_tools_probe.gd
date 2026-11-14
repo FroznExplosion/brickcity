@@ -1362,6 +1362,21 @@ func _rest_checks() -> void:
 	_hold("brick_1x2")
 	t.tall = 9
 	var id := t.add_shape("rect", "flat", Vector2i(4, 4), Vector2i(11, 9), 1)
+	# The right side (section 21, the frame): the shape in the outliner; its row picks it; its
+	# options are under Selected, not in a pop-out.
+	t.outliner.refresh()
+	var row: TreeItem = null
+	for it in t.outliner.tree.get_root().get_children():
+		for k in it.get_children():
+			if (k.get_metadata(0) as Dictionary).get("shape", -1) == id:
+				row = k
+	_ok("the outliner lists the kept shape", row != null)
+	t.pick("place")
+	if row != null:
+		row.select(0)
+	_ok("its row picks it, with Select", t.selected == id and t.tool == "select")
+	_ok("its options are under Selected", t.outliner.selected_box.is_ancestor_of(t._select_box)
+			and not t.rail.options.is_ancestor_of(t._select_box))
 	t.pick("select")
 	t.selected = id
 	var top := t.face_under(Vector3(7.5 * 0.35, 3.0, 6.5 * 0.35), Vector3(0, -1, 0))
