@@ -104,6 +104,9 @@ var mesh_job := -1
 ## a hit fills again the bands it reached (IslandManager._patch_bands), and
 ## they are whole without a bake.
 var boxed := false
+## It carries lamp bricks, and has no power: every node that draws it is told
+## (IslandManager.unpower), so its lights are off.
+var dark := false
 ## Its mesh is built and waiting for the upload budget
 ## (IslandManager.UPLOAD_VERTS_PER_TICK): treated like a job in flight.
 var upload_waiting := false

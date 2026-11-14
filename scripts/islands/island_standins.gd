@@ -126,6 +126,7 @@ func _build(isl: BrickIsland, alive: int) -> void:
 		var mmi := MultiMeshInstance3D.new()
 		mmi.multimesh = mm
 		mmi.material_override = isl.mesh.material_override
+		host.unpower(isl, mmi)
 		holder.add_child(mmi)
 	isl.mesh.add_child(holder)
 	_by_isl[isl] = [holder, alive]

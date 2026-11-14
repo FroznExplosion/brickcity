@@ -146,6 +146,10 @@ const SLICE := 16
 ## in the air is drawn flat until it has come to rest (and SETTLE_MS more).
 const STILL := 0.02
 const STUD_BUILDS := 2
+## Bands with changed studs looked at first each step (damaged), and how many
+## steps one waits behind uploads in flight before it is fetched anyway.
+const STUDS_FIRST := 6
+const STUD_WAIT_MAX := 8
 ## A band's two stud MultiMeshes (Band.studs): geometry, cards.
 const GEO := 0
 const CARDS := 1
@@ -182,6 +186,7 @@ class Band:
 	var studs_dirty := true
 	var score := INF                             ## where it stands for the cap; less is first
 	var stud_geo := false                        ## has a place for stud GEOMETRY (the cap)
+	var stud_waits := 0                          ## steps its changed studs have waited to be fetched again
 	var cards_all := -1.0                        ## the cards' `cards_all` as last set
 	var show_dirty := false                      ## which of the two draws wants setting again
 
@@ -238,6 +243,7 @@ var _order: Array[int] = []
 var _cursor := 0
 var _busy: Array[int] = []    ## keys PENDING or UPLOADING
 var _by_chunk := {}           ## chunk -> Array[int] of keys
+var _stud_queue := {}         ## key -> true: studs drawn, bricks changed since (damaged)
 var _blocked := 0             ## bands that want their chamfered mesh and wait
 var _forward := Vector3.ZERO  ## where the camera looks, this step (zero: no facing)
 var _eye := Vector3.ZERO
@@ -542,6 +548,10 @@ func damaged(chunk: int, sections := PackedInt32Array()) -> void:
 			by_section[band.section] = band
 			if sections.is_empty() or band.section < 0 or sections.has(band.section):
 				band.studs_dirty = true
+				# Looked at next step, not when the round robin comes back to
+				# it (STUDS_FIRST): its studs stand on bricks that have gone.
+				if not band.studs.is_empty():
+					_stud_queue[key] = true
 	_patch(chunk, by_section, sections)
 	var ms := float(Time.get_ticks_usec() - t0) / 1000.0
 	damage_ms += ms
@@ -608,6 +618,23 @@ func step(eye: Vector3, zoom_in := 1.0, forward := Vector3.ZERO) -> void:
 				_flying += 1
 	for key in _busy.duplicate():
 		_visit(key, eye, now, stud_budget)
+	# Bands whose bricks changed, their studs still the old ones: before the
+	# round robin, which reaches a band every (bands / SLICE) steps -- a third
+	# of a second with three hundred tracked, and studs hung in the air where
+	# bricks had just broken (user, 2026-11-13).
+	if not _stud_queue.is_empty():
+		var looked := 0
+		for key in _stud_queue.keys():
+			var qb: Band = _bands.get(key)
+			if qb == null or not qb.studs_dirty or qb.studs.is_empty():
+				_stud_queue.erase(key)
+				continue
+			if looked >= STUDS_FIRST:
+				break
+			looked += 1
+			_visit(key, eye, now, stud_budget)
+			if not qb.studs_dirty:
+				_stud_queue.erase(key)
 	var n := mini(SLICE, _order.size())
 	for i in n:
 		if _order.is_empty():
@@ -926,7 +953,7 @@ func _show_near(band: Band, mesh: ArrayMesh) -> void:
 	near.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	near.physics_interpolation_mode = Node.PHYSICS_INTERPOLATION_MODE_OFF
 	near.set_instance_shader_parameter("geo_bevel", 1.0)
-	for param in [&"weather_sway", &"weather_snowcap", &"grain_origin", &"grid_light"]:
+	for param in [&"weather_sway", &"weather_snowcap", &"grain_origin", &"grid_light", &"powered"]:
 		var v: Variant = InstanceParams.of(node, param)
 		if v != null:
 			InstanceParams.put(near, param, v)
@@ -1027,8 +1054,16 @@ func _studs(band: Band, dist: float, budget: Array) -> void:
 	# reach, has anything to do here.
 	var fetch := band.studs.is_empty() or band.studs_dirty
 	if fetch:
-		if int(budget[0]) <= 0 or _held:
+		# Held back while an upload is in flight -- but not for ever: in a
+		# collapse one nearly always is, and studs whose bricks have gone hang
+		# there the whole time. After STUD_WAIT_MAX steps they are fetched
+		# whatever is in flight (a call that may wait a few ms, once).
+		var stale := not band.studs.is_empty() and band.stud_waits >= STUD_WAIT_MAX
+		if int(budget[0]) <= 0 or (_held and not stale):
+			if not band.studs.is_empty():
+				band.stud_waits += 1
 			return
+		band.stud_waits = 0
 		budget[0] = int(budget[0]) - 1
 		var t_studs := Time.get_ticks_usec()
 		_fetch_studs(band)
@@ -1255,11 +1290,18 @@ func _est_tris(band: Band) -> int:
 	return int(float(_flat_tris(band)) * _ratio)
 
 
-## A band's studs as geometry: all of them (its MultiMesh holds every one; the
-## shader draws those inside `stud_radius`).
+## A band's studs as geometry, against the cap (max_studs): all of them (its
+## MultiMesh holds every one; the shader draws those inside `stud_radius`) --
+## but never more than half the budget. A broken-off piece is ONE band, every
+## stud it has: a piece of a building is thousands, more than the whole budget,
+## so it never got a place while any band held one -- stood on, its studs were
+## the far cards, and the building next door's (a band a storey, a few hundred
+## each) were round (user, 2026-11-13). What it costs to draw is the studs
+## near the camera either way; the rest of its buffer is vertices that come to
+## nothing.
 func _est_studs(band: Band) -> int:
 	@warning_ignore("integer_division")
-	return band.stud_buffer.size() / 16
+	return mini(band.stud_buffer.size() / 16, maxi(max_studs / 2, 1))
 
 
 func _hold_set(key: int, cost: int) -> void:
