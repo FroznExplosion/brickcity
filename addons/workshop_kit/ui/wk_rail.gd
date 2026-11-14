@@ -39,6 +39,7 @@ const ICONS := {
 	"a_grid": '<path d="M4 4h16v16H4zM4 9.3h16M4 14.6h16M9.3 4v16M14.6 4v16"/>',
 	"a_stress": '<path d="M13 2L5 14h6l-1 8 8-12h-6z"/>',
 	"a_keys": '<rect x="2" y="6" width="20" height="12" rx="2"/><path d="M6 10h1M10 10h1M14 10h1M18 10h1M7 14h10"/>',
+	"a_stats": '<path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/>',
 	"a_guide": '<path d="M3 20V9l9-6 9 6v11z"/><path d="M8 20v-6h8v6"/>',
 	"furniture": '<path d="M7 3v18M7 12h10v9M7 12V3M17 12v-2"/><path d="M5 12h14"/>',
 	"stud": '<ellipse cx="12" cy="9" rx="7" ry="3"/><path d="M5 9v6c0 1.7 3.1 3 7 3s7-1.3 7-3V9"/>',

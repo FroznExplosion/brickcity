@@ -64,6 +64,22 @@ const TOOLS := {
 		["!save", "Save as", "Ctrl Shift S", "Save it under a name; furniture and items get their planet, type and room tags."],
 	],
 }
+## What the status line says a tool does, short: stage:id (its whole story is in the rail's
+## pop-up). Finish's are actions: nothing to say while they are not running.
+const STATUS := {
+	"blockout:select": "Click a model, a piece, a part or a guide   drag the gizmo   Enter lets go",
+	"blockout:draw": "Drag adds clay to the part   RMB carves   Shift smooths",
+	"blockout:shape": "Drag out a shape of clay (choose it in the pop-out)   RMB carves",
+	"blockout:smooth": "Drag over the clay to round its edges",
+	"place": "LMB lays the brick   RMB takes one away   R turns   1-9 pick",
+	"select": "Drag a box over bricks   Delete removes them",
+	"paint": "LMB paints a brick (hold: a stroke)",
+	"sketch": "Draw an outline on the working plane: it fills with bricks of the part",
+	"shape": "Drag out a box, wall or round of bricks",
+	"move": "Drag the part's bricks to a new place",
+	"measure": "Click two points: the distance",
+	"stud": "LMB puts a stud on a face   RMB takes it off",
+}
 ## Finish actions that only mean something for a gun.
 const GUN_ONLY := ["!hands", "!play"]
 ## The bar's buttons this workshop has not: the layer (stage 4 makes it the tab), the room
@@ -269,10 +285,11 @@ func _frame_setup() -> void:
 ## Until stage 1 makes them sections of Selected (section 21).
 func place_floats(panels: Array) -> void:
 	var vp: Vector2 = ws.get_viewport().get_visible_rect().size
-	var left: float = rail_right()
+	# Right of the rail; over the pop-out if they must, never over the rail or the outliner.
+	var left: float = _tools_panel.position.x + _tools_panel.size.x + 12.0
 	var right: float = _outliner.position.x - 12.0 if _outliner != null and _outliner.visible else vp.x - 12.0
 	var top: float = frame.rail_top()
-	var bottom: float = vp.y - 104.0   # the hotbar
+	var bottom: float = vp.y - ws.bench.STATUS_ROOM   # the status line and the hotbar
 	# Under the readout and the toast while they show, if a panel fits there; else from the top.
 	var under: float = top
 	var hud: Control = ws.bench._hud
@@ -337,6 +354,7 @@ func _fill_tools() -> void:
 	_tools_panel.fill(title, TOOLS[stage], pick_tool, [] if ws.bench.recipe.kind == "gun" else GUN_ONLY, 2)
 	_tool_buttons = _tools_panel.buttons
 	_hint = _tools_panel.hint
+	_hint.visible = false   # what the tool does is the status line's first part (section 21)
 
 
 ## A rail button: the workshop's own tool for it, or the action.
@@ -933,15 +951,15 @@ func process(dt: float) -> void:
 	# The building workshop's readout (the brick in hand, its layer, its cell) means
 	# nothing while shaping clay.
 	if ws.bench._hud != null:
-		ws.bench._hud.visible = stage != "blockout"
+		ws.bench._hud.visible = stage != "blockout" and ws.bench.stats_on
 	var vh: float = ws.get_viewport().get_visible_rect().size.y
-	_tools_panel.fit_height(vh - frame.rail_top() - 12.0)
+	_tools_panel.fit_height(vh - frame.rail_top() - ws.bench.STATUS_ROOM)
 	_tools_panel.size = Vector2.ZERO
 	ws.rail_top = _tools_panel.position.y + _tools_panel.size.y + 6.0
 	var on := active_tool()
 	# The pop-out beside the tool in hand; the bar's toggles lit.
 	var bt: Button = _tool_buttons.get(on)
-	_tools_panel.place_flyout(bt.global_position.y if bt != null else frame.rail_top(), vh - 104.0)
+	_tools_panel.place_flyout(bt.global_position.y if bt != null else frame.rail_top(), vh - ws.bench.STATUS_ROOM)
 	var lit: Dictionary = ws.bench.bar_toggles()
 	lit["fps"] = bool(ws.bench._camera.get("_captured"))
 	_tools_panel.show_toggles(lit)
@@ -975,6 +993,11 @@ func process(dt: float) -> void:
 		if hud != null and hud.visible:
 			y = maxf(y, hud.position.y + hud.size.y + 8.0)
 		_toast.position = Vector2(left + maxf(right - left - _toast.custom_minimum_size.x, 0.0) * 0.5, y)
+	# The status line: what the tool does, the part being built; the brick in hand off the clay.
+	var says: String = STATUS.get(stage + ":" + on, STATUS.get(on, ""))
+	if ws.part_sel < ws.part_names.size():
+		says += ("   ·   " if says != "" else "") + "part: %s (%d of %d)" % [ws.part_names[ws.part_sel], ws.part_sel + 1, ws.part_names.size()]
+	ws.bench.show_status(says, 12.0, ws.get_viewport().get_visible_rect().size.x - 12.0, stage != "blockout")
 	_since += dt
 	if _since >= 0.25:
 		_since = 0.0

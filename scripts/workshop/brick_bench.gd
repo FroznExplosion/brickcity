@@ -175,6 +175,17 @@ var _floor: MeshInstance3D
 var _overlay: MeshInstance3D
 var _camera: Camera3D
 var _hud: Label
+## The status line at the bottom, both workshops (Docs/BuildTools.md section 21, the frame):
+## what the tool wants next, what is going on, the brick in hand, the cell. The owner says the
+## first part each frame (`show_status`). The readout (`_hud`) and the asset workshop's other
+## numbers show only with Stats (`stats_on`, the bar's View > Stats).
+var status_line: Label
+var stats_on := false
+## The room the status line and the hotbar take at the bottom: the rail, its pop-out and the
+## panels end above it.
+const STATUS_ROOM := 164.0
+## What `_update_hud` found going on (placing a build, painting, a room found ...).
+var _state := ""
 ## The spaces tool (O): rooms, openings and points (WorkshopSpaces;
 ## Docs/Structures.md 3.2).
 var _spaces: WorkshopSpaces
@@ -848,6 +859,16 @@ func _build_hud() -> void:
 	_hud.position = Vector2(12, 40)
 	_style(_hud, Color(0.92, 0.94, 1.0))
 	layer.add_child(_hud)
+
+	status_line = Label.new()
+	status_line.name = "StatusLine"
+	status_line.add_theme_font_size_override("font_size", 14)
+	status_line.add_theme_color_override("font_color", Color(0.92, 0.94, 1.0))
+	status_line.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	status_line.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	status_line.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	status_line.visible = false   # an owner that shows it says so (`show_status`)
+	layer.add_child(status_line)
 
 	# The aim dot. While the mouse is captured the aim ray goes through the
 	# middle of the screen, and this says exactly where that is. Its colour is
@@ -1963,6 +1984,7 @@ func _update_hud() -> void:
 		(", %d fixture(s)" % recipe.fixture_count()) if recipe.fixture_count() > 0 else "",
 		gen,
 		("\nworst joint %.2f of capacity" % worst) if _overlay_on else ""]
+	_state = state
 	if _menu != null:
 		_menu.set_title("%s%s  —  %s" % [recipe.name, " *" if _dirty else "",
 				WorkshopMenu.KIND_LABELS.get(recipe.kind, recipe.kind)])
@@ -2355,6 +2377,37 @@ func _undo_base() -> bool:
 	return undo_stack.undo()
 
 
+## The status line this frame: `says` (what the tool wants next) first, then what is going on
+## (unless `bricks` is false: shaping clay), the brick in hand and the cell; between `left` and
+## `right` on the screen, over the hotbar.
+func show_status(says: String, left: float, right: float, bricks: bool = true) -> void:
+	if status_line == null:
+		return
+	if not status_line.has_theme_stylebox_override("normal") and wk_ctx != null:
+		status_line.add_theme_stylebox_override("normal", wk_ctx.panel_box())
+	var bits := PackedStringArray()
+	if says != "":
+		bits.append(says)
+	if bricks:
+		if _state != "" and not says.contains(_state):
+			bits.append(_state)
+		bits.append("%s, %s %s" % [_part().replace("_", " "), BrickWorld.get_material_colour_name(_mat, _colour),
+				BrickWorld.get_material_name(_mat)])
+		bits.append("cell %d, %d, %d" % [int(_cell.x), int(_cell.y), int(_cell.z)])
+	status_line.text = "   ·   ".join(bits)
+	status_line.visible = status_line.text != ""
+	# As wide as its text, in the middle; it wraps only when wider than the room.
+	var vp := get_viewport().get_visible_rect().size
+	status_line.autowrap_mode = TextServer.AUTOWRAP_OFF
+	status_line.custom_minimum_size.x = 0.0
+	if status_line.get_combined_minimum_size().x > right - left:
+		status_line.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		status_line.custom_minimum_size.x = right - left
+	status_line.size = Vector2.ZERO
+	var sz := status_line.get_combined_minimum_size()
+	status_line.position = Vector2(left + (right - left - sz.x) * 0.5, vp.y - 104.0 - sz.y - 6.0)
+
+
 ## A bar button both workshops share. The owner answers its own first (the camera, Cancel,
 ## the layer, the room guide).
 func bar_act(id: String) -> void:
@@ -2387,12 +2440,13 @@ func bar_act(id: String) -> void:
 		"keys":
 			_keys_on = not _keys_on
 			_keys_panel.visible = _keys_on
+		"stats": stats_on = not stats_on
 
 
 ## Which of the bar's toggles are on (the owner adds its own: the camera).
 func bar_toggles() -> Dictionary:
 	return {"lock": plane_locked, "snap": _snap_on, "mirror": mirror_on, "grid": _grid_on,
-			"stress": _overlay_on, "keys": _keys_on}
+			"stress": _overlay_on, "keys": _keys_on, "stats": stats_on}
 
 
 ## Shift Z (and the rail's Redo): do the last undone edit again.

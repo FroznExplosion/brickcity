@@ -1497,6 +1497,15 @@ func _out_of_the_way_checks() -> void:
 	t.say("a message")
 	await process_frame
 	_ok("what the tools say stays on the screen", t._status.visible and not t.rail.options.is_ancestor_of(t._status))
+	# Section 21's status line: what was said first, then the brick in hand and the cell; the
+	# readout only with Stats.
+	_ok("the status line says it, the brick in hand and the cell", t._status == _ws.bench.status_line
+			and t._status.text.begins_with("a message") and t._status.text.contains("cell "))
+	_ok("no readout without Stats", not _ws.bench._hud.visible)
+	t.act("stats")
+	await process_frame
+	_ok("Stats shows it", _ws.bench._hud.visible)
+	t.act("stats")
 	t.cancel()
 	t.say("")
 	t.pick("repeat")

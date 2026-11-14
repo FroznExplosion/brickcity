@@ -32,6 +32,7 @@ const ACTIONS := [
 		["grid", "Grid", "G", "Show the grid.", true],
 		["stress", "Stress", "H", "Show how hard each brick is working.", true],
 		["keys", "Keys", "F1", "Show every key.", true],
+		["stats", "Stats", "", "Show the numbers: the brick in hand and its cell in full, the layer, how many bricks; in the asset workshop the ruler, the triangles and the part.", true],
 		["guide", "Guide", "U", "Room guide: a room template's size; again for the next."],
 	]],
 ]
