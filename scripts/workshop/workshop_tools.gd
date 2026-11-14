@@ -71,6 +71,8 @@ var frame := WkFrame.new()
 var _bar: PanelContainer
 ## The button under the tools for the brick menu.
 var bricks_button: Button
+## The right side: the outliner and Selected.
+var outliner: WorkshopOutliner
 ## F6, the furniture catalogue, as a button (every action a button).
 var furnish_button: Button
 ## The pop-out is out: it goes when the cursor moves into the scene (POPOUT_HIDES), and comes
@@ -308,6 +310,14 @@ func setup(workshop, layer: CanvasLayer) -> void:
 	if ws._keys_panel != null:
 		ws._keys_panel.visible = false
 	_build_options()
+	# The right side: what the build is made of, and Selected -- Select's options, which were
+	# its pop-out (section 21, the frame).
+	outliner = WorkshopOutliner.new()
+	outliner.setup(self, layer)
+	outliner.hold(_builds_box)
+	outliner.hold(_select_box)
+	frame.side = outliner.panel
+	frame.side_under_band = true
 	# The mouse is taken and given back by the kit's camera and nowhere else: the workshop
 	# camera's click-to-capture is off, so a click only ever does what the tool does.
 	var dc = ws._camera
@@ -3189,7 +3199,7 @@ func process() -> void:
 	_roof_box.visible = on == "roof"
 	_paint_box.visible = on == "paint"
 	_paint_spin.set_value_no_signal(ws._paint_radius)
-	_builds_box.visible = on == "select" and ws._selected >= 0
+	_builds_box.visible = ws._selected >= 0
 	if _builds_box.visible:
 		_builds_label.text = "Picked: %s" % String(ws.recipe.groups[ws._selected].get("name", "a build"))
 	_rooms_box.visible = on == "rooms"
@@ -3225,12 +3235,12 @@ func process() -> void:
 		# A building going up lands on its own top: no gap to set.
 		_rep_gap_row.visible = not (rep_dir == "up" and String(shape_of(selected).get("kind", "")) == "plan")
 		_rep_hi_spin.get_parent().visible = plain
-	_select_box.visible = on == "select" and ws._selected < 0
+	_select_box.visible = selected >= 0 and ws._selected < 0
 	_sel_thick.visible = String(shape_of(selected).get("kind", "")) in ["polyline", "plan"]
 	_lie_box.visible = drawing and makes == "solid"
 	_thick_box.visible = drawing and makes in ["walls", "building"]
 	_bricks_box.visible = true
-	if on == "select" and _shown != Vector2i(selected, _rev):
+	if _select_box.visible and _shown != Vector2i(selected, _rev):
 		_shown = Vector2i(selected, _rev)
 		_sync_select()
 	# The tool's pop-out beside its button; the readout and the paint palette beside that.
@@ -3266,6 +3276,7 @@ func process() -> void:
 		ws._ghost.visible = false
 	elif tool in ["cut", "select", "repeat", "pick", "roof"] or not _sk.is_empty():
 		ws._ghost.visible = false
+	outliner.process(ws.get_process_delta_time())
 	_draw()
 
 

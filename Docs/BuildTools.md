@@ -1561,3 +1561,17 @@ wk_smoke 144).
   (`AssetWorkshopUI.rail_right`).
 * `asset_ui_probe`: "the options are in the rail, under the tools" became "in the pop-out,
   beside the rail", and a check for the bar.
+
+**Stage 1b, the building workshop's right side** (2026-11-14).
+
+* `WorkshopOutliner` (`scripts/workshop/workshop_outliner.gd`), made by `WorkshopTools.setup`, is
+  the frame's side panel (`WkFrame.side`, under the bar): a tree of what the build is made of --
+  Shapes, Inserted builds, Generated, Rooms, Furniture, each with its count -- read back from the
+  workshop when it changes. A click on a shape or an inserted build picks it with Select; on a
+  room, with Rooms. Generated buildings and furniture are listed only (picking them is stage 5's
+  library and Select).
+* Under it, **Selected**: Select's options (`_select_box`, `_builds_box`) moved there from the
+  pop-out (`WorkshopOutliner.hold`). They show while something is picked, whatever the tool;
+  with nothing picked it says how to pick.
+* `build_tools_probe`: the outliner lists a kept shape, its row picks it, its options are under
+  Selected.
