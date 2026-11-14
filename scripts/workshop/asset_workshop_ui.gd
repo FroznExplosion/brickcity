@@ -47,11 +47,12 @@ const TOOLS := {
 		["sketch", "Sketch", "Alt D", "Draw a flat outline on the working plane; it fills with bricks of this part."],
 		["shape", "Shapes", "K", "Drag out a box, wall or round of bricks, or brush them on."],
 		["move", "Move", "Alt G", "Drag the current part's bricks to a new place."],
+		["wand", "Fill", "F4", "Wand: click a colour patch on a reference photo; it fills with bricks of that colour."],
 		["measure", "Measure", "Alt M", "Click two points: the distance in studs and plates, print mm and real mm."],
 	],
 	"detail": [
 		["stud", "Studs", "Alt U", "Click a face to put a stud on it; RMB takes one off."],
-		["!point", "Point", "J", "Connection point: a mount or socket where the ghost is, for parts that join others."],
+		["!point", "Point", "", "Connection point: a mount or socket where the ghost is, for parts that join others."],
 		["paint", "Paint", "B", "Click or drag over bricks to give them the colour in hand."],
 		["measure", "Measure", "Alt M", "Click two points: the distance in studs and plates, print mm and real mm."],
 	],
@@ -61,6 +62,7 @@ const TOOLS := {
 		["!play", "Play", "Alt P", "Fire and reload: run the gun's fire and reload, to see the parts move."],
 		["!export_game", "To game", "Alt X", "Export to the game: write the parts as game scenes the game assembles."],
 		["!export_print", "To print", "Alt B", "Export to print: write print files for each part and the whole."],
+		["!check", "Check", "F12", "Export and look at it in Blender: the part kit runs and shows its checks here."],
 		["!save", "Save as", "Ctrl Shift S", "Save it under a name; furniture and items get their planet, type and room tags."],
 	],
 }
@@ -80,6 +82,15 @@ const STATUS := {
 	"measure": "Click two points: the distance",
 	"stud": "LMB puts a stud on a face   RMB takes it off",
 }
+## Buttons under the tools, every stage: [id, label, icon, pop-up] -- the panels and browsers
+## the keys open, so each is a button on the screen (`_under_act`).
+const UNDER_TOOLS := [
+	["bricks", "Bricks   Tab", "place", "Bricks  (Tab)\nOpen or close the menu of every brick."],
+	["parts", "Parts   F7", "parts", "Parts catalogue  (F7)\nEvery saved part, official and custom, to try on this build."],
+	["photos", "Photos   F2", "photos", "Reference photos  (F2)\nLoad a photo, put it on a plane, calibrate its size."],
+	["guides", "Guides   F3", "guides", "Guide models  (F3)\nAn existing model to build inside; never exported."],
+	["help", "Help   F10", "help", "How to start, and the keys  (F10)"],
+]
 ## Finish actions that only mean something for a gun.
 const GUN_ONLY := ["!hands", "!play"]
 ## The bar's buttons this workshop has not: the layer (stage 4 makes it the tab), the room
@@ -95,10 +106,14 @@ var ws    ## the AssetWorkshop
 var stage := "blockout"
 
 var _layer: CanvasLayer
-var _tabs: HBoxContainer
+## The band under the menus: the stage tabs, then the bar; a flow, so the bar takes a second row
+## when the window is too narrow for one.
+var _tabs: HFlowContainer
+var _band: PanelContainer
 var _tab_buttons := {}
 var _stage_button: Button
 var _bar_box: HBoxContainer
+var _under := {}   ## id -> the button under the tools (`UNDER_TOOLS`)
 var _tools_panel: WkRail
 ## Where the menu bar, the stage tabs, the rail and the outliner go (the kit's WkFrame): the
 ## tabs a band 8 under the bar, 30 high, the rail 8 under them, the outliner down the right.
@@ -164,10 +179,20 @@ func setup(workshop, layer: CanvasLayer) -> void:
 	_tools_panel.actions(WorkshopBar.without(BAR_SKIP), bar_act, _bar_box)
 	var look: Button = _tools_panel.action_buttons.get("fps")
 	if look != null:
-		look.tooltip_text = "Look  (Tab)\nThe mouse looks round (to fly), or the cursor is free (to use the panels)."
+		look.tooltip_text = "Look  (Y)\nThe mouse looks round (to fly), or the cursor is free (to use the panels)."
 	stage = "bricks" if ws.sculpt_state == "bricks" else "blockout"
 	_fill_tools()
 	sync_kind()
+
+
+## A button under the tools (`UNDER_TOOLS`).
+func _under_act(id: String) -> void:
+	match id:
+		"bricks": ws.bench._hotbar.toggle_browser()
+		"parts": ws.toggle_catalog()
+		"photos": ws._toggle_panel()
+		"guides": ws._toggle_guide_panel()
+		"help": ws.show_help(not ws._help.visible)
 
 
 ## Where the space right of the rail starts: right of its pop-out while that shows.
@@ -182,10 +207,18 @@ func rail_right() -> float:
 ## A bar button: the camera and Redo are this workshop's, the rest the bench's.
 func bar_act(id: String) -> void:
 	match id:
-		"fps":
-			if ws.bench._camera.has_method("_set_captured"):
-				ws.bench._camera.call("_set_captured", not bool(ws.bench._camera.get("_captured")))
+		"fps": ws.toggle_look()
 		"redo": ws.redo()
+		"free": ws.set_free(not ws.free_place)
+		"plane_back": ws.move_work_plane(-1)
+		"plane_on": ws.move_work_plane(1)
+		"view_3d": ws.set_view(0)
+		"view_side": ws.set_view(1)
+		"view_top": ws.set_view(2)
+		"view_front": ws.set_view(3)
+		"section": ws.set_section(not ws.section_on)
+		"outlines": ws.set_outlines((ws.outlines + 1) % 3)
+		"game_look": ws.set_game_view(not ws.game_view_on)
 		_: ws.bench.bar_act(id)
 
 
@@ -209,9 +242,14 @@ func ask(title: String, start: String, then: Callable) -> void:
 # ---------------------------------------------------------------------------
 
 func _build_tabs() -> void:
-	_tabs = HBoxContainer.new()
-	_tabs.add_theme_constant_override("separation", 4)
-	_layer.add_child(_tabs)
+	_band = PanelContainer.new()
+	_band.name = "Band"
+	_band.add_theme_stylebox_override("panel", ws.bench.wk_ctx.panel_box())   # the building's bar's look
+	_layer.add_child(_band)
+	_tabs = HFlowContainer.new()
+	_tabs.add_theme_constant_override("h_separation", 4)
+	_tabs.add_theme_constant_override("v_separation", 4)
+	_band.add_child(_tabs)
 	var group := ButtonGroup.new()
 	for s in STAGES:
 		var b := Button.new()
@@ -269,11 +307,11 @@ func _stage_step() -> void:
 ## high), the rail and the outliner. Set each frame: the menu comes and goes with the workshop.
 func _frame_setup() -> void:
 	frame.bar = ws.bench._menu.bar() if ws.bench._menu != null else null
-	frame.band = _tabs
-	frame.band_wide = false
-	frame.band_left = 12.0
-	frame.band_gap = 8.0
-	frame.band_space = 30.0
+	frame.band = _band
+	frame.band_wide = true   # across the window, so the flow knows where to wrap
+	frame.band_left = -1.0   # the building's: a margin from the edge and under the menus
+	frame.band_gap = -1.0
+	frame.band_space = -1.0   # its own height: one row or two
 	frame.rail = _tools_panel
 	frame.side = _outliner
 	frame.side_under_band = true   # the tabs and the bar reach across
@@ -354,6 +392,9 @@ func _fill_tools() -> void:
 	_tools_panel.fill(title, TOOLS[stage], pick_tool, [] if ws.bench.recipe.kind == "gun" else GUN_ONLY, 2)
 	_tool_buttons = _tools_panel.buttons
 	_hint = _tools_panel.hint
+	_under = {}
+	for u in UNDER_TOOLS:
+		_under[u[0]] = _tools_panel.add_under_tools(u[1], u[2], u[3], _under_act.bind(String(u[0])))
 	_hint.visible = false   # what the tool does is the status line's first part (section 21)
 
 
@@ -385,6 +426,10 @@ func pick_tool(id: String) -> void:
 			ws.export_print()
 		"finish:!save":
 			ws.bench._on_menu("save_as_ask", null)
+		"finish:!check":
+			ws.export_and_preview()
+		"bricks:wand":
+			ws.set_tool("" if ws.tool == "wand" else "wand")
 		_:
 			ws.rail_pick(id)
 
@@ -400,6 +445,8 @@ func _sculpt(mode: String) -> void:
 func active_tool() -> String:
 	if ws.measure_on:
 		return "measure"
+	if ws.tool == "wand" and stage == "bricks":
+		return "wand"
 	if stage == "blockout":
 		if ws.tool == "sketch" and ws.sketch_draw == "sculpt":
 			match String(ws.sculpt_mode):
@@ -814,6 +861,10 @@ func _fill_actions() -> void:
 					ws.select_part(i)))
 		if t == "part":
 			var pi := int(d.i)
+			_action("Smooth / bricks", "This part leaves the workshop smooth (a custom piece) or as bricks (was N).",
+					func() -> void:
+						ws.select_part(pi)
+						ws.toggle_smooth())
 			_action("Rename part", "Give this part a name of your own.", func() -> void:
 				ask("Rename the part", ws.part_names[pi], func(n: String) -> void: ws.rename_part(pi, n)))
 	if not held.is_empty() or t == "part":
@@ -962,6 +1013,16 @@ func process(dt: float) -> void:
 	_tools_panel.place_flyout(bt.global_position.y if bt != null else frame.rail_top(), vh - ws.bench.STATUS_ROOM)
 	var lit: Dictionary = ws.bench.bar_toggles()
 	lit["fps"] = bool(ws.bench._camera.get("_captured"))
+	lit["free"] = ws.free_place
+	var open := {"bricks": ws.bench._hotbar.is_browsing(), "parts": ws._catalog_panel != null and ws._catalog_panel.visible,
+			"photos": ws._panel.visible, "guides": ws._guide_panel.visible, "help": ws._help.visible}
+	for id in _under:
+		(_under[id] as Button).set_pressed_no_signal(bool(open.get(id, false)))
+	lit["section"] = ws.section_on
+	lit["outlines"] = ws.outlines > 0
+	lit["game_look"] = ws.game_view_on
+	for i in 4:
+		lit[["view_3d", "view_side", "view_top", "view_front"][i]] = ws.view == i and not ws.game_view_on
 	_tools_panel.show_toggles(lit)
 	_tools_panel.set_action_text("mirror_axis", "across X" if ws.bench.mirror_axis == 0 else "across Z")
 	for id in _tool_buttons:
@@ -988,7 +1049,7 @@ func process(dt: float) -> void:
 		var right: float = _outliner.position.x - 12.0 if _outliner != null and _outliner.visible else vw - 12.0
 		_toast.custom_minimum_size.x = clampf(right - left, 240.0, 620.0)
 		_toast.size = Vector2.ZERO
-		var y: float = top + 44.0
+		var y: float = frame.rail_top()
 		var hud: Control = ws.bench._hud
 		if hud != null and hud.visible:
 			y = maxf(y, hud.position.y + hud.size.y + 8.0)

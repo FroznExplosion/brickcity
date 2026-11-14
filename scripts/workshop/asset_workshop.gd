@@ -1293,13 +1293,10 @@ func _unhandled_input(e: InputEvent) -> void:
 	if e is InputEventKey and e.pressed and not e.echo and not e.ctrl_pressed:
 		var mine := true
 		match e.keycode:
-			KEY_Y: select_part(part_sel + (-1 if e.shift_pressed else 1))
+			KEY_Y: toggle_look()
 			KEY_K: set_tool("" if tool == "shape" else "shape")
 			KEY_L: set_tool("" if tool == "select" else "select")
 			KEY_F3: _toggle_guide_panel()
-			KEY_O: set_section(not section_on)
-			KEY_P: set_outlines((outlines + 1) % 3)
-			KEY_N: toggle_smooth()
 			KEY_F4: set_tool("" if tool == "wand" else "wand")
 			KEY_F12: export_and_preview()
 			KEY_Z:
@@ -1307,7 +1304,6 @@ func _unhandled_input(e: InputEvent) -> void:
 					redo()
 				else:
 					mine = false
-			KEY_J: toggle_point_here()
 			KEY_F10: show_help(not _help.visible)
 			KEY_F2: _toggle_panel()
 			KEY_F7: toggle_catalog()
@@ -3730,7 +3726,7 @@ Make a gun, a mech, a figure, furniture or an item. It goes in four stages, the 
 
 The rail (left) has the stage's tools; point at one for what it does and its key. The open tool's options are under them. The outliner (right) is what the asset is made of: click to pick, tick to show or hide. Everything else is in the menus at the top, each with its key.
 
-[b]Look around[/b]  Tab: free cursor or mouse-look.  Alt 1 / 2 / 3: side, top, front; Alt 0: back to 3D.
+[b]Look around[/b]  Y: mouse-look or free cursor. Tab: every brick.  Alt 1 / 2 / 3: side, top, front; Alt 0: back to 3D.
 [b]Undo[/b]  Z, redo Shift Z.   [b]Save[/b]  Ctrl S (also autosaved every few seconds).
 [b]Size[/b]  1 stud here = 4 mm printed = 16 mm real.   F1: every key.   F10: this page."""
 
@@ -6676,14 +6672,20 @@ func _typing() -> bool:
 	return f is LineEdit or f is TextEdit
 
 
-## Tab: the cursor free (to use the panels) or the mouse looking (to fly), the pick kept
-## (Docs/AssetWorkshop.md, "Sizing a selection like a slicer"). Shift+Tab: all parts.
+## Y (and the bar's Look): the cursor free (to use the panels) or the mouse looking (to fly),
+## the pick kept (Docs/AssetWorkshop.md, "Sizing a selection like a slicer"). It was Tab until
+## the two workshops' keys were made one (Docs/BuildTools.md section 21, stage 2).
+func toggle_look() -> void:
+	if bench._camera.has_method("_set_captured"):
+		bench._camera.call("_set_captured", not bool(bench._camera.get("_captured")))
+
+
+## Tab: every brick (the bench's browser), as in the building workshop. Shift+Tab: all parts.
 func _tab_key(e: InputEvent) -> bool:
 	if not (e is InputEventKey and e.pressed and not e.echo and (e as InputEventKey).keycode == KEY_TAB) \
 			or (e as InputEventKey).shift_pressed or _typing():
 		return false
-	if bench._camera.has_method("_set_captured"):
-		bench._camera.call("_set_captured", not bool(bench._camera.get("_captured")))
+	bench._hotbar.toggle_browser()
 	return true
 
 
@@ -10564,6 +10566,7 @@ func _build_menus() -> void:
 			["Redo", "Shift Z", func() -> void: redo()],
 		]],
 		["View", [
+			["Look round with the mouse / free the cursor", "Y", func() -> void: toggle_look()],
 			["3D view", "Alt 0", func() -> void: set_view(0)],
 			["Side view", "Alt 1", func() -> void: set_view(1)],
 			["Top view", "Alt 2", func() -> void: set_view(2)],
@@ -10572,8 +10575,8 @@ func _build_menus() -> void:
 			["Zoom in", "Home", func() -> void: zoom(0.85)],
 			["Zoom out", "End", func() -> void: zoom(1.0 / 0.85)],
 			[],
-			["Section: hide what is past the plane", "O", func() -> void: set_section(not section_on)],
-			["Outlines: none / all parts / this part", "P", func() -> void: set_outlines((outlines + 1) % 3)],
+			["Section: hide what is past the plane", "", func() -> void: set_section(not section_on)],
+			["Outlines: none / all parts / this part", "", func() -> void: set_outlines((outlines + 1) % 3)],
 			["Grid", "G", func() -> void:
 				bench._grid_on = not bench._grid_on
 				bench._grid.visible = bench._grid_on],
@@ -10586,11 +10589,11 @@ func _build_menus() -> void:
 			["Mirror plane where the ghost is", "Alt Shift S", func() -> void: mirror_here()],
 		]],
 		["Part", [
-			["Next part", "Y", func() -> void: select_part(part_sel + 1)],
-			["Previous part", "Shift Y", func() -> void: select_part(part_sel - 1)],
+			["Next part", "", func() -> void: select_part(part_sel + 1)],
+			["Previous part", "", func() -> void: select_part(part_sel - 1)],
 			[],
-			["This part leaves smooth / as bricks", "N", func() -> void: toggle_smooth()],
-			["Connection point where the ghost is", "J", func() -> void: toggle_point_here()],
+			["This part leaves smooth / as bricks", "", func() -> void: toggle_smooth()],
+			["Connection point where the ghost is", "", func() -> void: toggle_point_here()],
 			[],
 		]],
 		["Block out", [

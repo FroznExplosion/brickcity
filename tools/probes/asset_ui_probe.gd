@@ -71,6 +71,34 @@ func _frame(ui: AssetWorkshopUI) -> void:
 	_ok("the bar is there, the building workshop's buttons less the layer, guide and Cancel",
 			ui._tools_panel.action_buttons.has("undo") and ui._tools_panel.action_buttons.has("mirror")
 			and not ui._tools_panel.action_buttons.has("layer"))
+	# The user's rule (2026-11-14): every key's job is also a button on the screen, where it
+	# makes sense -- the bar (modifiers, views), the rail (tools, a stage's), under the tools
+	# (panels and browsers), the outliner (a part's own). Docs/BuildTools.md section 21.
+	var on_screen := {
+		"R": "bar:rotate", "F": "bar:flip", "T": "bar:turn_last", "E": "bar:lock", "V": "bar:snap",
+		"Alt S": "bar:mirror", "Alt Shift S": "bar:mirror_here", ",": "bar:colour_back", ".": "bar:colour_on",
+		"Alt F": "bar:free", "PgDn": "bar:plane_back", "PgUp": "bar:plane_on", "Z": "bar:undo", "Shift Z": "bar:redo",
+		"Y": "bar:fps", "G": "bar:grid", "H": "bar:stress", "F1": "bar:keys", "Alt 0": "bar:view_3d",
+		"Alt 1": "bar:view_side", "Alt 2": "bar:view_top", "Alt 3": "bar:view_front", "Alt C": "bar:game_look",
+		"Tab": "under:bricks", "F7": "under:parts", "F2": "under:photos", "F3": "under:guides", "F10": "under:help",
+		"Alt V": "blockout:draw", "Alt M": "bricks:measure", "B": "bricks:paint", "L": "bricks:select",
+		"Alt D": "bricks:sketch", "K": "bricks:shape", "Alt G": "bricks:move", "F4": "bricks:wand",
+		"Alt U": "detail:stud", "Alt E": "finish:!explode", "Alt H": "finish:!hands", "Alt P": "finish:!play",
+		"Alt X": "finish:!export_game", "Alt B": "finish:!export_print", "F12": "finish:!check",
+	}
+	var no_button := []
+	for key in on_screen:
+		var where: PackedStringArray = String(on_screen[key]).split(":")
+		var found := false
+		match where[0]:
+			"bar": found = ui._tools_panel.action_buttons.has(where[1])
+			"under": found = ui._under.has(where[1])
+			_:
+				for row in AssetWorkshopUI.TOOLS[where[0]]:
+					found = found or row[0] == where[1]
+		if not found:
+			no_button.append(key)
+	_ok("every key's job is a button on the screen too", no_button.is_empty(), str(no_button))
 	for pair in [["draw", "shape"], ["shape", "stamp"], ["smooth", "smooth"], ["select", "models"]]:
 		ui.pick_tool(pair[0])
 		_ok("Block out %s: sculpting, %s" % [pair[0], pair[1]], _ws.tool == "sketch" and _ws.sketch_draw == "sculpt"

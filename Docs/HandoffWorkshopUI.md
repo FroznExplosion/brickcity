@@ -12,8 +12,11 @@ was found, how to test without harming the user's files, and what to do next.
 - Done: the analysis, the plan (section 21, the user's five answers in it), a tool that
   photographs both UIs (then, 2026-11-13, no game code changed).
 - Stages 0 and 1 (1a the asset's bar and pop-out, 1b the building's outliner and Selected,
-  1c the status line) merged 2026-11-14 (section 21, "As built"). Next: **stage 2**, one camera
-  and one key map; raise its open point (below) before merging.
+  1c the status line) and stage 2a (every key a button; the asset's keys made the building's,
+  agreed with the user) merged 2026-11-14 (section 21, "As built"). Next: **stage 2b**, one
+  camera -- the building's orbit (`WkCamera`, free cursor, wheel zooms, Shift + wheel the
+  toolbar) in the asset workshop, Y swapping to its fly; the building gets the flat views
+  (Alt 0-3, a plan view) and with them the bar's view buttons (drop them from `ASSET_ONLY`).
 
 
 ## Where to work
@@ -103,7 +106,9 @@ from model to bricks").
 
 ## The user's standing rules for this work
 
-- Every action is a button, not a key to remember; keys still work.
+- Every action is a button, not a key to remember; keys still work. **On the screen**, where
+  it makes sense (bar, rail, under the tools, outliner) -- a menu entry alone is not enough
+  (asked again 2026-11-14). `asset_ui_probe` checks the asset's keys against their buttons.
 - One flow (press, drag the base, pull the height, click) over options and number boxes.
 - A plan is written in Docs before it is built; "As built" goes under it after.
 - The asset workshop's stages stay, in order. The 2D Sketch is wanted; in stage 6 it becomes
@@ -113,8 +118,7 @@ from model to bricks").
 
 ## Open, to raise when its stage comes
 
-- Stage 2: the asset workshop's keys N, J, O, P, Y lose their jobs to buttons. Say which keys
-  change before merging; the user has muscle memory there.
+- Stage 2: the keys -- settled 2026-11-14 (section 21, stage 2a).
 - Stage 4: a brick's layer comes from the tab. What Hand does on the Finish tab (probably: the
   last layer used).
 - Stage 5: inserted builds are copies, furniture is a reference. "Edit in the asset workshop" is
