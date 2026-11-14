@@ -39,7 +39,7 @@ const STATUS := {
 }
 ## Every key's button (Docs/BuildTools.md section 7): the bar, the same in both workshops
 ## (`WorkshopBar.ACTIONS`, section 21).
-const ACTIONS := WorkshopBar.ACTIONS
+static var ACTIONS: Array = WorkshopBar.without(WorkshopBar.ASSET_ONLY)
 ## The pop-out's pictures: [id, name, icon].
 const OUTLINE_PICS := [["line", "Line", "k_line"], ["box", "Box", "k_rect"], ["circle", "Circle", "k_circle"],
 		["triangle", "Triangle", "k_triangle"], ["arch", "Arch", "k_arch"], ["free", "Freehand", "k_free"],

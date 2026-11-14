@@ -21,6 +21,9 @@ const ACTIONS := [
 		["mirror_here", "Set plane", "", "Mirror plane here: through the middle of the ghost."],
 		["colour_back", "< Colour", ",", "The colour before, in the slot in hand."],
 		["colour_on", "Colour >", ".", "The next colour, in the slot in hand."],
+		["free", "Free", "Alt F", "Free placement: bricks go on the working plane where the cursor is, not only on studs.", true],
+		["plane_back", "Plane back", "PgDn", "Move the working plane back a step."],
+		["plane_on", "Plane forward", "PgUp", "Move the working plane forward a step."],
 	]],
 	["Edit", [
 		["undo", "Undo", "Z", "Take back the last edit: a brick, a run, a shape."],
@@ -32,10 +35,23 @@ const ACTIONS := [
 		["grid", "Grid", "G", "Show the grid.", true],
 		["stress", "Stress", "H", "Show how hard each brick is working.", true],
 		["keys", "Keys", "F1", "Show every key.", true],
+		["view_3d", "3D view", "Alt 0", "The 3D view.", true],
+		["view_side", "Side view", "Alt 1", "Look flat at the side.", true],
+		["view_top", "Top view", "Alt 2", "Look flat down from the top.", true],
+		["view_front", "Front view", "Alt 3", "Look flat at the front.", true],
+		["section", "Section", "", "In a flat view, cut away what is in front of the working plane.", true],
+		["outlines", "Outlines", "", "Outline the bricks by part: off, outlines, outlines and colours (press for the next).", true],
+		["game_look", "Game look", "Alt C", "See it as the game will: its lights, at its size.", true],
 		["stats", "Stats", "", "Show the numbers: the brick in hand and its cell in full, the layer, how many bricks; in the asset workshop the ruler, the triangles and the part.", true],
 		["guide", "Guide", "U", "Room guide: a room template's size; again for the next."],
 	]],
 ]
+
+
+## The asset workshop's own buttons: the building workshop leaves them out (no working plane, no
+## flat views yet: stage 2).
+const ASSET_ONLY := ["free", "plane_back", "plane_on", "view_3d", "view_side", "view_top", "view_front",
+		"section", "outlines", "game_look"]
 
 
 ## The bar's list less `skip` (ids an owner does not have): a section left empty goes.

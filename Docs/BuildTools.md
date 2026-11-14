@@ -1593,3 +1593,30 @@ wk_smoke 144).
 * The toast stays (the asset's notes, refusals); the building's messages are the status line's.
 * `build_tools_probe`: the status line says what was said, then the brick and cell; no readout
   without Stats; Stats shows it (352 passed).
+
+**Stage 2a, every key a button; the asset workshop's keys made the building's** (2026-11-14).
+
+The user's rule, asked again 2026-11-14: every key's job is also a button **on the screen**, where
+it makes sense -- menus too, but not only menus. Where each asset workshop key's button is now:
+
+| Where | Keys |
+|---|---|
+| The bar, Hand | R rotate, F flip, T turn last, E lock, V side stud, Alt F free placement (new), PgDn / PgUp the working plane (new), Alt S mirror, Alt Shift S mirror plane here, `,` `.` colour |
+| The bar, Edit | Z undo, Shift Z redo |
+| The bar, View | Y look, G grid, H stress, F1 keys, Alt 0-3 the views (new), section (new, was O), outlines (new, was P), Alt C game look (new), Stats |
+| The rail, a stage's tools | Alt V draw, K shapes, L select, B paint, Alt D sketch, Alt G move, Alt M measure, F4 fill (the wand, new on Bricks), Alt U studs, the point (was J), Alt E explode, Alt H hands, Alt P play, Alt X to game, Alt B to print, F12 check (new on Finish), Save as |
+| Under the tools, every stage | Tab bricks, F7 parts, F2 photos, F3 guides, F10 help (all new) |
+| The outliner, a part's row | Smooth / bricks (new, was N); picking a part (was Y, Shift Y) |
+
+* The bar's new ids are `WorkshopBar.ASSET_ONLY`: the building workshop leaves them out (no
+  working plane; its flat views come with stage 2b) -- `WorkshopTools.ACTIONS` is the list less
+  them. Icons: workshop_kit 0.18.0.
+* The asset band (stage tabs, then the bar) is a flow on the rail's backdrop, across the window:
+  the bar takes a second row when the window is too narrow (1280 px is).
+* Keys, as agreed with the user: **Y** looks (mouse-look or free cursor, `toggle_look`; it was
+  Tab), **Tab** is every brick (as in the building), **N, J, O, P, Shift Y** have no job in the
+  asset workshop now (their jobs are the buttons above; the menus keep them, without a key).
+  K stays Shapes until stage 6 makes it Draw. The wheel and the camera are stage 2b.
+* Probes: `asset_ui_probe` checks every asset key against its on-screen button (the table
+  above); `asset_workshop_probe`'s Tab check is Y's now, plus Tab opening every brick, and its
+  "every key in a menu" list lost Shift Y, N, J, O, P.
