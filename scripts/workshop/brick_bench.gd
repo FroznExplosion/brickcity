@@ -3616,6 +3616,7 @@ func _on_menu(what: String, arg: Variant) -> void:
 			select_group_ray(ray[0], ray[1])
 		"move_group": move_group()
 		"undo": _undo()
+		"redo": redo_last()
 		"copy_group": copy_group()
 		"delete_group": delete_group()
 

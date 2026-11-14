@@ -93,6 +93,8 @@ var frame := WkFrame.new()
 var _bar: PanelContainer
 ## The button under the tools for the brick menu.
 var bricks_button: Button
+## F6, the furniture catalogue, as a button (every action a button).
+var furnish_button: Button
 ## The pop-out is out: it goes when the cursor moves into the scene (POPOUT_HIDES), and comes
 ## back on the tool's button.
 var _fly_open := true
@@ -299,6 +301,11 @@ func setup(workshop, layer: CanvasLayer) -> void:
 	rail.fill("Build", TOOLS, pick, [], 2)
 	bricks_button = rail.add_under_tools("Bricks   Tab", "place", "Bricks  (Tab)\nOpen or close the menu of every brick.",
 			func() -> void: act("parts"))
+	furnish_button = rail.add_under_tools("Furniture   F6", "furniture",
+			"Furniture and items  (F6)\nOpen or close the catalogue of furniture and items to place.",
+			func() -> void:
+				if ws._furnish != null:
+					ws._furnish.open(not ws._furnish.is_open()))
 	_bar = PanelContainer.new()
 	_bar.name = "ToolBar"
 	_bar.add_theme_stylebox_override("panel", rail.get_theme_stylebox("panel"))
@@ -3287,9 +3294,11 @@ func process() -> void:
 		rail.hint.text += "  (Point at the tool for its options.)"
 		rail.fit_height(vh - top - 104.0)   # the hint is longer now
 	bricks_button.set_pressed_no_signal(ws._hotbar.is_browsing())
-	# The readout stays put; the pop-out comes and goes over it. The paint palette is beside it.
+	furnish_button.set_pressed_no_signal(ws._furnish != null and ws._furnish.is_open())
+	# The readout and the paint palette sit right of the pop-out while it shows, so it never
+	# covers them (until the status line takes the readout's place: section 21, stage 1).
 	if ws._hud != null:
-		ws._hud.position = Vector2(rail.position.x + rail.size.x + 12.0, top)
+		ws._hud.position = Vector2(_rail_right(), top)
 	if ws._paint_palette != null:
 		ws._paint_palette.position = Vector2(_rail_right(), top + 110.0)
 	var said := tag_text() if not _drag.is_empty() else ""
