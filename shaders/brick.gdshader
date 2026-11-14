@@ -114,6 +114,9 @@ uniform float chamfer_gloss : hint_range(0.0, 1.0) = 0.7;
 // the thing the drawn seam was there to stop. Evenly, not by depth: the two
 // copies of a facet count depth from opposite sides.
 instance uniform float geo_bevel = 0.0;
+// A piece broken off a building has no power: its lamp bricks are dark
+// (IslandManager.unpower). Glow filament is not electric and keeps its light.
+instance uniform float powered = 1.0;
 global uniform float lod_zoom;
 uniform float outline_blend_begin = 3.0;
 uniform float outline_blend_end = 9.0;
@@ -719,7 +722,7 @@ void fragment() {
         }
     }
     if (tex == 10) {
-        emission = bm_lamp(albedo);
+        emission = bm_lamp(albedo) * powered;
     }
 
     float out_rough = clamp(roughness + print_rough, 0.0, 1.0);

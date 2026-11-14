@@ -576,3 +576,33 @@ change -- most likely on a piece or a building just after storeys left it.
 
 Also fixed: `BrickNear._box_bevel` handed a freed band node to a typed argument
 (`BrickBoxes.of`), an error in the tick when a piece's slices swapped in over a boxed band.
+
+### 8.7 Studs on a broken-off piece, studs left in the air, and a piece's lamps (2026-11-14)
+
+From the user's play: "the studs do float sometimes right after bricks break"; standing on a
+broken-off piece of a building "all the studs were the far square 2D billboard LOD even though
+I was standing directly on top of them", while the intact building next door, further off, had
+round ones; and "could we make it so any islands lose electric power so their lights should
+turn off".
+
+* **A big band was refused stud geometry for being big.** Since studs are sorted by the GPU,
+  a band's cost against `BrickNear.max_studs` (4,000) is every stud it has, and a broken-off
+  piece is ONE band: thousands, more than the whole budget, so it never got a place while any
+  band held one and drew cards from its foot out. A band is charged at most half the budget
+  (`_est_studs`): what it costs to draw is the studs near the camera either way.
+* **Studs stood on bricks that had gone.** A band whose bricks changed had its studs fetched
+  again only when the round robin came back to it (every bands / 16 steps) and never while an
+  upload was in flight -- in a collapse one nearly always is. Now such bands are looked at
+  first each step (`_stud_queue`, `STUDS_FIRST`), and after `STUD_WAIT_MAX` (8) steps held back
+  they are fetched whatever is in flight. This is probably the open case of 8.6: `--lodbreak`
+  with boxes 21/0 after it (one run).
+* **A piece has no power.** The brick shader has an instance uniform `powered`; a lamp brick's
+  light is multiplied by it. A piece that carries lamps (`BrickWorld.chunk_lamps`, asked once
+  as it is made) has it set to 0 on every node that draws it -- its mesh, its bands and their
+  boxes, its slices, its box stand-in, and the near tier's chamfered copy
+  (`IslandManager.unpower`, `BrickIsland.dark`). Glow filament is not electric and keeps its
+  light. A building's own lights over lamps that left it go when its grid is lit again.
+
+`--chamfer` 15/0, `--lodbreak` 21/0, `--landing --big` 2/0; barrage 9/0, standin 15/0,
+piece_band 11/0. Not looked at in a picture: the lamps going dark (no pass has a lamp brick on
+a piece).

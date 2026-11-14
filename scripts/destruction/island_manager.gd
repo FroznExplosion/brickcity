@@ -1508,6 +1508,7 @@ func spawn(source: int, block_ids: PackedInt32Array,
 		isl.mesh.physics_interpolation_mode = Node.PHYSICS_INTERPOLATION_MODE_OFF
 		isl.mesh.position = -isl.local_com
 		isl.body.add_child(isl.mesh)
+		_lights_out(isl)
 		# What was standing in the rooms this piece took with it. Under the
 		# MESH, which is the node holding the chunk's own space -- so the
 		# furniture rides the collapse without anything here tracking it, which
@@ -2346,6 +2347,7 @@ func adopt(chunk: int, mesh_node: MeshInstance3D, carried_mesh: ArrayMesh,
 		# to rebuild it. New instances of the same band meshes, as `fresh` is.
 		isl.bands = _instance_bands(carried_bands, fresh)
 		isl.boxed = BrickBoxes.any(isl.bands)
+		_lights_out(isl)
 		# Bands the building was still uploading: holes until they land.
 		isl.owed_bands = owed_bands
 		owed_bands = {}
@@ -2384,6 +2386,7 @@ func adopt(chunk: int, mesh_node: MeshInstance3D, carried_mesh: ArrayMesh,
 		isl.mesh.physics_interpolation_mode = Node.PHYSICS_INTERPOLATION_MODE_OFF
 		isl.mesh.position = -isl.local_com
 		isl.body.add_child(isl.mesh)
+		_lights_out(isl)
 		FurnitureMesh.attach(world, chunk, isl.mesh, _furniture)
 	# Bands handed over with nothing to hang them on.
 	_drop_owed(owed_bands)
@@ -2420,6 +2423,24 @@ func adopt(chunk: int, mesh_node: MeshInstance3D, carried_mesh: ArrayMesh,
 ## instance of an ArrayMesh copies nothing. A slot the building never got to
 ## (it toppled halfway through rebuilding its bands) stays empty -- a hole
 ## _draws_bands knows about -- and a band built empty stays built and empty.
+## A piece is off the building's power: its lamp bricks go dark (the brick
+## shader's `powered`). Kept with InstanceParams, so what stands in for a node
+## close up (BrickNear's chamfered copy) is dark with it. Only for a piece
+## that has lamps: an instance parameter costs the renderer's buffer.
+func unpower(isl: BrickIsland, node: Variant) -> void:
+	if isl.dark and node != null and is_instance_valid(node) and node is GeometryInstance3D:
+		InstanceParams.put(node as GeometryInstance3D, &"powered", 0.0)
+
+
+## Whether a piece carries lamps (asked once, as it is made), and its node dark.
+func _lights_out(isl: BrickIsland) -> void:
+	isl.dark = not world.chunk_lamps(isl.chunk).is_empty()
+	unpower(isl, isl.mesh)
+	for band in isl.bands:
+		unpower(isl, band)
+		unpower(isl, BrickBoxes.of(band))
+
+
 func _instance_bands(bands: Array, parent: MeshInstance3D) -> Array:
 	var out: Array = []
 	for node in bands:
@@ -4845,6 +4866,7 @@ func _slice_node(isl: BrickIsland, mesh: ArrayMesh) -> MeshInstance3D:
 	var node := MeshInstance3D.new()
 	node.material_override = brick_material
 	BrickMaterials.set_grain_origin(node, world, isl.chunk)
+	unpower(isl, node)
 	node.physics_interpolation_mode = Node.PHYSICS_INTERPOLATION_MODE_OFF
 	node.mesh = mesh
 	node.visible = false
