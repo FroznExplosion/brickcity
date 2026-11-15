@@ -301,7 +301,10 @@ func _check_interior() -> void:
 	var box := _box(id)
 	var c := box.get_center()
 	var cam: Camera3D = city.camera
-	var near_at := Vector3(c.x - box.size.x * 0.5 - 50.0, 12.0, c.z)
+	# 12 m off its face: within RoomStreaming.NEAR_RANGE, so its own rooms are
+	# the near ones. From 50 m (the distance rule's "in range") the rooms of
+	# the buildings nearer the camera took every slot.
+	var near_at := Vector3(c.x - box.size.x * 0.5 - 12.0, 12.0, c.z)
 	# Near enough for its interior to be drawn; its bricks, as a hit would bring them.
 	# Looking at it: rooms are drawn where the player looks (RoomStreaming).
 	cam.global_position = near_at
@@ -614,12 +617,31 @@ func _check_crushdrawn() -> void:
 	var b = city.registry.get_building(id)
 	var box := _box(id)
 	city._promote(id)
-	city.camera.global_position = Vector3(box.get_center().x, box.position.y + 1.6, box.position.z - 6.0)
-	city.camera.look_at(box.get_center())
+	# Standing in a furnished room big enough to drop a piece into: the
+	# player's own room is always drawn (RoomStreaming). From outside at the
+	# foot only the nearest few facing rooms are, and in a narrow tower those
+	# were all too small.
+	var rooms: Array = city.registry.rooms_of(id)
+	var stand: Room = null
+	for r in rooms:
+		var size: Vector3 = (r as Room).local_box().size
+		if size.x < 2.4 or size.z < 2.4:
+			continue
+		if (r as Room).items.is_empty():
+			(r as Room).items = RoomManifest.items_for(r)
+		if not (r as Room).items.is_empty():
+			stand = r
+			break
+	if stand != null:
+		var lb: AABB = stand.local_box()
+		city.camera.global_position = b.xform * (lb.get_center() - Vector3(0.0, lb.size.y * 0.5 - 1.6, 0.0))
+		city.camera.look_at(b.xform * (lb.get_center() + Vector3(1.0, 0.0, 0.0)), Vector3.UP)
+	else:
+		city.camera.global_position = Vector3(box.get_center().x, box.position.y + 1.6, box.position.z - 6.0)
+		city.camera.look_at(box.get_center())
 	await _ticks(20)
 	await city._pass_runner()._groups_settle(b)
 	# A room with a piece drawn in it, and that piece's box.
-	var rooms: Array = city.registry.rooms_of(id)
 	var room: Room = null
 	var group_index := -1
 	var item := AABB()

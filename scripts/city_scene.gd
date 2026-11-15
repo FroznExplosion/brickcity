@@ -2295,7 +2295,8 @@ func _stream_groups(here: Vector3) -> void:
 		live.append(b)
 	var pawns := PackedVector3Array()
 	for pawn in _all_pawns():
-		pawns.push_back(pawn.global_position)
+		if pawn.body != null and is_instance_valid(pawn.body):
+			pawns.push_back(pawn.body.global_position)
 	room_streaming.choose(here, -camera.global_basis.z, _half_fov(), live, _interior_unsure,
 			pawns)
 	interior_waits += room_streaming.waits
