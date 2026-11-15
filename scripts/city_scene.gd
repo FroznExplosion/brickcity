@@ -3054,6 +3054,12 @@ func _lay_more(id: int, storeys: PackedInt32Array) -> void:
 	# nothing), and its painted windows made again over them.
 	interior_groups.touch(id)
 	_panes_owed[id] = true
+	# A storey laid over another covers the studs of that one's top course,
+	# whose own bricks did not change: the near tier is told, or its band keeps
+	# studs inside the slab (and, given back, never shows the ones bared:
+	# _unlay).
+	if brick_near != null:
+		brick_near.damaged(b.chunk)
 	_nav_touch(id)
 	_mark_dirty(id)
 	var ms := float(Time.get_ticks_usec() - t0) / 1000.0
@@ -3123,6 +3129,10 @@ func _unlay(id: int, storeys: PackedInt32Array) -> void:
 		world.bake_chunk_async(b.chunk)
 	if not _pending_bricks.has(id) and _brick_nodes.has(id):
 		drawing.rebuild_bands(id, b.chunk)
+	# The storey under the ones given back has its top course's studs bare
+	# again: its band's bricks did not change, so only this tells it.
+	if brick_near != null:
+		brick_near.damaged(b.chunk)
 	_reshape_storeys(id, storeys)
 	_refresh_furniture(id)
 	_free_rest(id)

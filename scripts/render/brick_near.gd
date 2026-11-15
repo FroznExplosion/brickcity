@@ -1330,9 +1330,19 @@ func _est_tris(band: Band) -> int:
 ## each) were round (user, 2026-11-13). What it costs to draw is the studs
 ## near the camera either way; the rest of its buffer is vertices that come to
 ## nothing.
+##
+## An EIGHTH of the budget, not half (2026-11-15): a storey of a wide tower is
+## two thousand studs, so at half two bands held the whole cap -- the floor of
+## the room the player had just flown into was turned away, flat, while the
+## room before kept its studs (user; the HUD said 2 bands, 12,981 turned away).
+## What a band draws is what lies within `stud_radius` of the camera, a few
+## hundred studs of any one band; its other instances collapse to a point.
+const BAND_STUD_SHARE := 8
+
+
 func _est_studs(band: Band) -> int:
 	@warning_ignore("integer_division")
-	return mini(band.stud_buffer.size() / 16, maxi(max_studs / 2, 1))
+	return mini(band.stud_buffer.size() / 16, maxi(max_studs / BAND_STUD_SHARE, 1))
 
 
 func _hold_set(key: int, cost: int) -> void:

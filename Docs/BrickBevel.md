@@ -362,6 +362,20 @@ even when breaking bricks nearby". Two ways a band near the camera kept no studs
   more storeys laid into it, some given back) took the new box and count and left the studs as they
   were; only a hit (`damaged`) marked them stale. Now a refill with another count or box does.
 
+Then (same day, the HUD line in the user's screenshot: 2 bands with stud geometry, 3,964 of 4,000
+studs, 12,981 turned away), two more:
+
+* **Two bands filled the cap.** `_est_studs` charged a band up to HALF of `max_studs`, and a storey
+  of a wide tower is two thousand studs: two bands held the cap, and the floor of the room the player
+  had just flown into was turned away (cards, then nothing). Now a band costs at most an eighth
+  (`BAND_STUD_SHARE`): what it draws is the studs within `stud_radius`, a few hundred of any one
+  band. `--roomfly --wide` (the 80x60 tower): 2 bands with geometry before, 9 after, and the floor
+  under the camera studded in every room.
+* **A storey laid over another left the lower band's studs.** Laying covers the studs of the top
+  course below and giving back bares them; that band's own bricks do not change, so nothing told it.
+  `CityScene._lay_more` and `_unlay` now call `damaged(chunk)`. `--roomfly --wide` found four bands
+  holding 8-16 studs more than their bricks had.
+
 The dev HUD has a `near tier` line (bands, with studs, the caps, turned away, waiting, forced).
 `city.tscn -- --roomfly --big` checks every band within the studs' reach has the studs its bricks
 have now, two seconds after flying into each room.
