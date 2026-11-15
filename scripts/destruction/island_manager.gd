@@ -644,6 +644,10 @@ const HOLD_MAX_FRAMES := 90
 var holds_extended := 0
 var _ghosts: Array = []   ## [node, free on this process frame]
 var _band_holes: Array = []  ## toppled pieces with bands still to build
+## How long a tick may spend building them (_fill_band_holes), and at most
+## how many: a hole is a piece drawn with a storey missing.
+const HOLE_BUDGET_MS := 2.0
+const HOLES_PER_TICK := 8
 ## Bands a toppled building was still uploading, handed to its piece and hung
 ## when they landed (`taken`), or found stale and built again (`stale`).
 var band_owed_taken := 0
@@ -4604,12 +4608,16 @@ func _drop_retiring_bands(isl: BrickIsland) -> void:
 	isl.retiring_bands.clear()
 
 
-## Build the bands a toppled building never got to, one a tick, from the bake
-## it already has: a slice of it each (build_chunk_mesh_section), where the one
-## mesh of the whole piece was 17-23 ms in a single call -- paid inside whatever
-## blast hit it first. A piece whose bake has gone, or that has become an
-## ordinary one-mesh island meanwhile, is left to rebuild_mesh.
+## Build the bands a toppled building never got to, from the bake it already
+## has: a slice of it each (build_chunk_mesh_section), where the one mesh of the
+## whole piece was 17-23 ms in a single call -- paid inside whatever blast hit
+## it first. As many a tick as HOLE_BUDGET_MS allows (on the tick's shared
+## clock), and one at least: one a tick left a 60-band piece half drawn for two
+## seconds (breaklag --big, 2026-11-14). A piece whose bake has gone, or that
+## has become an ordinary one-mesh island meanwhile, is left to rebuild_mesh.
 func _fill_band_holes() -> void:
+	var until := TickClock.until(HOLE_BUDGET_MS)
+	var filled := 0
 	while not _band_holes.is_empty():
 		var isl: BrickIsland = _band_holes[0]
 		if not isl.is_valid() or isl.mesh == null or isl.bands.is_empty() \
@@ -4672,7 +4680,9 @@ func _fill_band_holes() -> void:
 			isl.band_bytes.append(0)
 		isl.band_bytes[si] = index_patch_bytes(arrays) if live else 0
 		band_holes_filled += 1
-		return   # one a tick
+		filled += 1
+		if filled >= HOLES_PER_TICK or Time.get_ticks_usec() >= until:
+			return
 
 
 ## Leave a piece's (or a hand-over's) unfinished band uploads to finish, and
