@@ -641,9 +641,21 @@ void SdfForm::lathe(int op, const Transform3D &xform, const PackedVector2Array &
     apply_shape(op, floor3(mn - r), ceil3(mx + r), blend, part, lathe_fn, &k);
 }
 
+namespace {
+// Bits set in a 64-bit word (portable; a cell's 50 samples are one word).
+inline int pop64(uint64_t v) {
+    v = v - ((v >> 1) & 0x5555555555555555ULL);
+    v = (v & 0x3333333333333333ULL) + ((v >> 2) & 0x3333333333333333ULL);
+    v = (v + (v >> 4)) & 0x0F0F0F0F0F0F0F0FULL;
+    return (int)((v * 0x0101010101010101ULL) >> 56);
+}
+} // namespace
+
 PackedInt32Array SdfForm::fit_pieces(const PackedInt32Array &cells, const Array &pieces, float min_gain) const {
     PackedInt32Array out;
-    struct Piece { PackedByteArray grid; Vector3i size; Vector3 normal; int solid = 0; };
+    // `masks`: the grid as a 50-bit word a cell (bx + sx * (by + sy * bz)), its samples in the
+    // order `bits` packs a cell's (Docs/BuildTools.md section 21, stage 7b).
+    struct Piece { PackedByteArray grid; Vector3i size; Vector3 normal; int solid = 0; std::vector<uint64_t> masks; };
     std::vector<Piece> kit;
     for (int64_t i = 0; i < pieces.size(); ++i) {
         const Dictionary d = pieces[i];
@@ -652,6 +664,22 @@ PackedInt32Array SdfForm::fit_pieces(const PackedInt32Array &cells, const Array 
         p.size = d.get("size", Vector3i());
         p.normal = Vector3(d.get("normal", Vector3())).normalized();
         if ((int64_t)p.size.x * STUD * p.size.y * PLATE * p.size.z * STUD != p.grid.size()) p.size = Vector3i();
+        if (p.size != Vector3i()) {
+            const uint8_t *gr = p.grid.ptr();
+            const int gx = p.size.x * STUD, gy = p.size.y * PLATE;
+            p.masks.resize((size_t)p.size.x * p.size.y * p.size.z);
+            for (int bz = 0; bz < p.size.z; ++bz)
+                for (int by = 0; by < p.size.y; ++by)
+                    for (int bx = 0; bx < p.size.x; ++bx) {
+                        uint64_t m = 0;
+                        int n = 0;
+                        for (int z = 0; z < STUD; ++z)
+                            for (int y = 0; y < PLATE; ++y)
+                                for (int x = 0; x < STUD; ++x, ++n)
+                                    if (gr[(bx * STUD + x) + gx * ((by * PLATE + y) + gy * (bz * STUD + z))] != 0) m |= uint64_t(1) << n;
+                        p.masks[(size_t)bx + (size_t)p.size.x * ((size_t)by + (size_t)p.size.y * bz)] = m;
+                    }
+        }
         kit.push_back(p);
     }
     auto ckey = [](const Vector3i &c) {
@@ -676,9 +704,16 @@ PackedInt32Array SdfForm::fit_pieces(const PackedInt32Array &cells, const Array 
         inside[k] = m;
         return m;
     };
+    std::unordered_map<int64_t, bool> mids;
     auto mid_inside = [&](const Vector3i &c) {
-        return trilinear(Vector3(c.x * STUD + 2.5f, c.y * PLATE + 1.0f, c.z * STUD + 2.5f)) < 0.0f;
+        const int64_t k = ckey(c);
+        auto it = mids.find(k);
+        if (it != mids.end()) return it->second;
+        const bool in = trilinear(Vector3(c.x * STUD + 2.5f, c.y * PLATE + 1.0f, c.z * STUD + 2.5f)) < 0.0f;
+        mids[k] = in;
+        return in;
     };
+    const int CELL = STUD * PLATE * STUD;
     struct Cand { int piece; Vector3i at; int gain; };
     std::vector<Cand> cands;
     std::vector<std::unordered_map<int64_t, bool>> tried(kit.size());
@@ -710,8 +745,6 @@ PackedInt32Array SdfForm::fit_pieces(const PackedInt32Array &cells, const Array 
                         // Its box: this part's free cells or empty space only.
                         int mp = 0, mb = 0;
                         bool ok = true;
-                        const uint8_t *gr = p.grid.ptr();
-                        const int gx = p.size.x * STUD, gy = p.size.y * PLATE;
                         for (int bz = 0; bz < p.size.z && ok; ++bz)
                             for (int by = 0; by < p.size.y && ok; ++by)
                                 for (int bx = 0; bx < p.size.x && ok; ++bx) {
@@ -719,15 +752,12 @@ PackedInt32Array SdfForm::fit_pieces(const PackedInt32Array &cells, const Array 
                                     const bool mine = allowed.count(ckey(bc)) > 0;
                                     if (!mine && mid_inside(bc)) { ok = false; break; }
                                     const uint64_t in = bits(bc);
-                                    int n = 0;
-                                    for (int z = 0; z < STUD; ++z)
-                                        for (int y = 0; y < PLATE; ++y)
-                                            for (int x = 0; x < STUD; ++x, ++n) {
-                                                const bool f = (in >> n) & 1;
-                                                const bool s = gr[(bx * STUD + x) + gx * ((by * PLATE + y) + gy * (bz * STUD + z))] != 0;
-                                                mp += s == f;
-                                                mb += mine == f;
-                                            }
+                                    const uint64_t s = p.masks[(size_t)bx + (size_t)p.size.x * ((size_t)by + (size_t)p.size.y * bz)];
+                                    // The piece's samples that match the clay; a brick's (all solid
+                                    // if this part's cell, all empty if not) that do.
+                                    const int fin = pop64(in);
+                                    mp += CELL - pop64(in ^ s);
+                                    mb += mine ? fin : CELL - fin;
                                 }
                         const int total = p.size.x * p.size.y * p.size.z * STUD * PLATE * STUD;
                         if (ok && mp - mb > 0 && (float)(mp - mb) >= min_gain * total) {

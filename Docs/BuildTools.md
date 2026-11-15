@@ -1532,6 +1532,24 @@ were short: that model hung below the floor; the probe now stands it on it.) Wha
 **fitting slopes, about half** (C++ `SdfForm.fit_pieces`, ~0.7 ms a brick), then "by part and
 colour" (1-2 s, script). The next step needs the junction and SCons.
 
+**Stage 7b, fit slopes faster (plan)**. `SdfForm.fit_pieces` tries each slope at each place
+round a surface cell and scores it sample by sample: for each of its cells, 50 samples compared
+one by one with the piece's grid, and the clay's "middle inside" read again for every look at a
+cell. Same result, less work:
+
+* Each piece's grid as a 50-bit mask a cell, made once; a cell's score is then two popcounts
+  (`in ^ piece` for the piece's match, `in` for the brick's), not 50 compares.
+* "Middle inside" kept per cell, as the inside bits are.
+* Checked by laying the same bricks: `model_scale_probe`'s counts, `asset_workshop_probe`'s
+  slope checks, `sdf_form_probe`.
+
+**As built** (2026-11-15): both, in `sdf_form.cpp` (`pop64`, `Piece.masks`, `mids`). The same
+bricks (80 studs 6,825, 100 studs 12,955), `asset_workshop_probe` 346, `sdf_form_probe` 43,
+`sdf_colour_probe` 14. Fit slopes at 80 studs about 5 s -> 3.1 s; Make bricks 10 s -> 7.2 s
+(100 studs 18 s -> 14 s). Rough: the editor was open and other chats' probes were going. What is
+left in fit slopes is reading the clay (a hash lookup a sample in `bits`, the gradient's
+trilinear reads); the next big step is still the cell clay, then sections over frames.
+
 ### Colours from a model (stage 8)
 
 Built (2026-11-02): glTF and FBX colours (material, texture, vertex) go into the clay; each brick
