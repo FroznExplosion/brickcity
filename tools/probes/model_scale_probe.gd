@@ -67,6 +67,7 @@ func _tick() -> void:
 		if String(a).begins_with("--sizes="):
 			sizes = Array(String(a).substr(8).split(",")).map(func(x: String) -> float: return float(x))
 	print("model scale probe: a hollow building model through the clay (tick clay, as built)")
+	print("  build area: %d x %d studs, %d plates up" % [_ws.bench.plate_studs, _ws.bench.plate_studs, _ws.bench.height_plates])
 	print("  studs   stamp ms   blocks   convert ms   bricks   RSS MB (before -> after)")
 	for s in sizes:
 		_ws.sculpt_clear()
@@ -84,15 +85,33 @@ func _tick() -> void:
 		var k: float = s * BrickPalette.STUD_M / maxf(box.size.x, 0.001)
 		var xf: Transform3D = m.xf
 		m.xf = Transform3D(xf.basis.scaled(Vector3.ONE * k), xf.origin)
+		# Standing on the area's floor (a plate up), inside it.
+		var nb: AABB = (m.xf as Transform3D) * (m.box as AABB)
+		m.xf = Transform3D((m.xf as Transform3D).basis, (m.xf as Transform3D).origin
+				+ Vector3(0.0, BrickPalette.PLATE_M - nb.position.y, 0.0))
 		var t1 := Time.get_ticks_usec()
 		_ws._stamp_model(m)
 		var t2 := Time.get_ticks_usec()
 		var blocks: int = (m.node as AssetSculpt).form.block_count()
+		var cb: AABB = (m.xf as Transform3D) * (m.box as AABB)
+		print("         model box, studs: %s at %s" % [str(cb.size / BrickPalette.STUD_M), str(cb.position / BrickPalette.STUD_M)])
 		_ws.sculpt_convert()
 		var t3 := Time.get_ticks_usec()
 		var rss1 := _rss_mb()
 		print("  %5d   %8.0f   %6d   %10.0f   %6d   %.0f -> %.0f" % [int(s), (t2 - t1) / 1000.0, blocks,
 				(t3 - t2) / 1000.0, _ws.bench.recipe.size(), rss0, rss1])
 		print("         (placing it at a gun's size first: %.0f ms)" % ((t1 - t0) / 1000.0))
+		# Make bricks emptied the clay in one (every cell became bricks): one Z brings it back.
+		var clay_after: int = _ws.sculpt.form.block_count()
+		_ws._undo()
+		print("         clay blocks after Make bricks %d; after Z %d, bricks %d (undo %s)" % [clay_after,
+				_ws.sculpt.form.block_count() + _ws.models.size(), _ws.bench.recipe.size(),
+				"ok" if clay_after == 0 and (_ws.sculpt.form.block_count() > 0 or not _ws.models.is_empty()) and _ws.bench.recipe.size() <= 1 else "WRONG"])
+		# Where Make bricks' time went, the biggest first.
+		var steps: Array = _ws.convert_ms.keys()
+		steps.sort_custom(func(x, y) -> bool: return float(_ws.convert_ms[x]) > float(_ws.convert_ms[y]))
+		for st in steps:
+			if float(_ws.convert_ms[st]) >= 1.0:
+				print("           %-30s %8.0f ms" % [st, float(_ws.convert_ms[st])])
 	print("model scale probe: done")
 	quit(0)

@@ -21,8 +21,9 @@ was found, how to test without harming the user's files, and what to do next.
   bricks in the building workshop -- needs the junction and SCons (C++, `sdf_form.cpp`), and the
   Build mode area owns it. Measured 2026-11-15 (section 21, "A model into a building",
   `model_scale_probe`): tick clay takes 20-40 s and 0.5-0.9 GB for an 80-100 stud model, Make
-  bricks is the slow part (~3.5 ms a brick) -- profile it first. Never run the probe at 200+
-  studs on this machine (memory).
+  bricks was the slow part; 7a (2026-11-15) made it 3x faster (section 21, "Stage 7a"). Left:
+  `SdfForm.fit_pieces` (C++) is half of it now, then the cell clay (C++), then sections over
+  frames. Never run the probe at 200+ studs on this machine (memory).
 
 
 ## Where to work
