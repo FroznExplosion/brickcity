@@ -4263,7 +4263,9 @@ func _run_roomfly_pass() -> void:
 	city.stats_label.visible = false
 	if city._reticle != null:
 		city._reticle.visible = false
-	var picks := _groups_pick(1)
+	# `-- --wide`: the widest tower instead of the tallest (bands of thousands
+	# of studs, as the user's were: 2 with stud geometry fill the cap).
+	var picks := _groups_pick(1, "--wide" in OS.get_cmdline_user_args())
 	if picks.is_empty():
 		_gate_ok("a tower with a clear face", false)
 		city.get_tree().quit(1)
@@ -4299,6 +4301,7 @@ func _run_roomfly_pass() -> void:
 	var good := 0
 	var reasons := {}
 	var stud_bad := 0       # rooms with a band near the camera that never had its studs
+	var floor_flat := 0     # rooms whose floor under the camera had no stud geometry
 	var stud_rooms := 0
 	var held_ticks := 0
 	var watched_ticks := 0
@@ -4334,6 +4337,15 @@ func _run_roomfly_pass() -> void:
 				held_ticks += 1
 		var unfetched := _bands_without_studs(BrickNear.stud_radius)
 		stud_rooms += 1
+		# The floor under the player: real studs, not cards (user, 2026-11-15:
+		# "when I fly into a room then go to another room the studs won't
+		# spawn" -- the HUD: 2 bands with stud geometry, 12,981 turned away).
+		var under = _band_under(city.camera.global_position + Vector3(0.0, -1.0, 0.0))
+		if under == null or not under.stud_geo:
+			floor_flat += 1
+			print("[roomfly]     the floor under the camera: %s" % [
+					"no band found" if under == null else "band %d, %d stud(s), no stud geometry" % [
+						under.section, (under.stud_buffer as PackedFloat32Array).size() / 16]])
 		if stud_rooms % 3 == 1:
 			# Looking down at the floor ahead, for the eye.
 			city.camera.look_at(city.camera.global_position - out * 2.5 + Vector3(0.0, -1.6, 0.0), Vector3.UP)
@@ -4402,6 +4414,8 @@ func _run_roomfly_pass() -> void:
 			good == tries.size(), "%d of %d; the rest: %s" % [good, tries.size(), reasons])
 	print("[roomfly] the near tier held by uploads %d of %d tick(s) in the rooms; %s" % [
 			held_ticks, watched_ticks, city.brick_near.hud_line()])
+	_gate_ok("  and the floor under the player has real studs in every room",
+			floor_flat == 0, "%d of %d room(s) with a flat floor" % [floor_flat, stud_rooms])
 	_gate_ok("  and after two seconds in it, every band within the studs' reach has its studs",
 			stud_bad == 0, "%d of %d room(s) with a band that had none; the near tier held by uploads %d of %d tick(s); %d pane job(s) in the run" % [
 				stud_bad, stud_rooms, held_ticks, watched_ticks,
@@ -4883,13 +4897,17 @@ func _view_differ(a: Image, b: Image) -> float:
 ## Up to `n` recipe towers of eight storeys or more, tallest first, each with a
 ## face no other building stands within 100 m in front of:
 ## [building, the foot of that face, which way it looks].
-func _groups_pick(n: int) -> Array:
+func _groups_pick(n: int, widest := false) -> Array:
 	var cands: Array = []
 	for c in city.registry.buildings:
 		if c.is_build() or int(c.recipe.courses) < 8 * TowerRecipe.COURSES_PER_FLOOR:
 			continue
 		cands.append(c)
-	cands.sort_custom(func(a, c) -> bool: return int(a.recipe.courses) > int(c.recipe.courses))
+	if widest:
+		cands.sort_custom(func(a, c) -> bool:
+			return int(a.recipe.footprint_x) * int(a.recipe.footprint_z) > int(c.recipe.footprint_x) * int(c.recipe.footprint_z))
+	else:
+		cands.sort_custom(func(a, c) -> bool: return int(a.recipe.courses) > int(c.recipe.courses))
 	var found: Array = []
 	for c in cands:
 		var box := city._world_box(c)
@@ -5025,6 +5043,22 @@ func _groups_expected_boxes(b: BuildingRegistry.Building, layout: Array) -> int:
 						n += 1
 	return n
 
+## The band the near tier tracks whose box holds `at` (world), or null: the
+## nearest by box distance under 0.3 m.
+func _band_under(at: Vector3):
+	var best = null
+	var best_d := 0.3
+	for key in city.brick_near._bands:
+		var band = city.brick_near._bands[key]
+		if not is_instance_valid(band.node) or not band.node.is_inside_tree():
+			continue
+		var local: Vector3 = band.node.global_transform.affine_inverse() * at
+		var d := local.distance_to(local.clamp(band.box.position, band.box.end))
+		if d <= best_d:
+			best_d = d
+			best = band
+	return best
+
 ## Bands the near tier tracks within `reach` of the camera: (without the
 ## studs their bricks have now -- never fetched, or fetched before the bricks
 ## changed and not again -- all of them).
@@ -5041,8 +5075,12 @@ func _bands_without_studs(reach: float) -> Vector2i:
 		if local.distance_to(local.clamp(band.box.position, band.box.end)) > reach:
 			continue
 		all += 1
+		var d: float = local.distance_to(local.clamp(band.box.position, band.box.end))
 		if (band.studs as Array).is_empty():
 			none += 1
+			print("[roomfly]       band chunk %d section %d at %.1f m: never fetched; waits %d, score %.2f, queued %s, dirty %s" % [
+					band.chunk, band.section, d, band.stud_waits, band.score,
+					city.brick_near._stud_queue.has(key), band.studs_dirty])
 			continue
 		# Held, but not the studs its bricks have now (stale: bricks laid or
 		# taken since, and never fetched again).
@@ -5050,6 +5088,9 @@ func _bands_without_studs(reach: float) -> Vector2i:
 				as PackedFloat32Array).size()
 		if not band.studs_dirty and now_count != (band.stud_buffer as PackedFloat32Array).size():
 			none += 1
+			print("[roomfly]       band chunk %d section %d at %.1f m: stale, %d stud(s) held, %d now" % [
+					band.chunk, band.section, d, (band.stud_buffer as PackedFloat32Array).size() / 16,
+					now_count / 16])
 	return Vector2i(none, all)
 
 ## The storey group of `b` that holds room `index`, or null.
