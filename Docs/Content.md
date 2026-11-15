@@ -197,14 +197,12 @@ every chat's branch, so they want a quiet moment):
    `tools/tests/`, `autoload/` is `scripts/autoload/`, `fx/elements/` joined
    `scripts/elements/`, `fx/shaders/` joined `shaders/`. (`menu/tests/` stays:
    `menu/` is a module with its own docs and tests.)
-5. **`shots/` (86 MB, untracked) has no `.gdignore`**, so Godot imports every
-   screenshot in it. It cannot be committed (the folder is git-ignored): add
-   the file by hand in each checkout, or have the shot code write it.
+5. ~~`shots/` has no `.gdignore`.~~ Done: `shots/.gdignore` is tracked (the rest of
+   the folder is still git-ignored), so Godot no longer imports screenshots.
 6. **`addons/zylann.voxel` (13 MB)** is used only by the planet graph
    (`scripts/planet/planet_body.gd`, `planet_graph.gd`, `planet_walker.gd`).
    Fine while that is so; worth knowing it is the whole reason it is here.
-7. `scripts/render/upload_ledger.gd.uid` and `tools/probes/flashlight_probe.gd.uid` are
-   untracked in the main folder: their scripts were committed without them.
+7. ~~Two scripts committed without their `.uid` files.~~ Done: both are tracked.
 
 ## 10. The player's folder
 
