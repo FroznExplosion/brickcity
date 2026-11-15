@@ -4074,8 +4074,15 @@ func _run_groups_pass() -> void:
 	var hung_worst := 0
 	var riding_most := 0
 	var rider_off := 0   # riders on a section that has landed, or on nothing
+	var apart_ticks := 0       # ticks it was coming apart (CityScene._coming_apart)
+	var panes_hanging := 0     # of those, past the first pass, its painted windows still shown
 	for t in 240:
 		await city.get_tree().physics_frame
+		if city._coming_apart(b.id):
+			apart_ticks += 1
+			var pn = city.drawing._brick_panes.get(b.id)
+			if apart_ticks > 8 and pn != null and is_instance_valid(pn) and (pn as Node3D).visible:
+				panes_hanging += 1
 		riding_most = maxi(riding_most, city._group_riders.size())
 		if t == 50:
 			await _save("interior_groups_fall")   # the sections on their way down, furniture aboard
@@ -4100,6 +4107,12 @@ func _run_groups_pass() -> void:
 	_gate_ok("a section falls: of %d box(es) above the cut, none is left drawn over a floor that has gone" % above,
 			above > 0 and hung_ticks == 0,
 			"%d tick(s), up to %d box(es)" % [hung_ticks, hung_worst])
+	# Its painted windows go while it comes apart (user, 2026-11-15: windows
+	# hung in the air where a collapsed tower had been): made again over what
+	# is left once it is quiet.
+	_gate_ok("  its painted windows are hidden while it comes apart",
+			apart_ticks > 0 and panes_hanging == 0,
+			"coming apart %d tick(s), windows shown in %d of them" % [apart_ticks, panes_hanging])
 	_gate_ok("  what stood in it rides the section down, drawn on the section",
 			city._group_rides > rides0 and riding_most > 0 and rider_off == 0,
 			"%d piece(s) lost their floor, %d rode; up to %d section(s) carrying some; %d found off its section" % [

@@ -726,7 +726,11 @@ var blind_count := 0
 ## sleep has no collision, and somebody standing on it or behind it -- a player, or
 ## later an AI agent in cover (Docs/AI.md section 3.5) -- must not have it vanish
 ## under them.
-const CAP_KEEP_RANGE := 8.0
+## 16 m, not 8 (2026-11-15): past the near tier's stud reach (BrickNear.
+## stud_radius, 12 m), so a piece the player can see the studs of is never the
+## cap's -- asleep it is its stand-in, with none -- and the same distance wakes
+## one the cap put away (_stream_dormancy), so the two never trade places.
+const CAP_KEEP_RANGE := 16.0
 var small_live_max := 220
 var large_live_max := 60
 var total_live_max := 240
@@ -5627,8 +5631,11 @@ func _plan_debris_cap() -> Array:
 		keep.sort_custom(func(a, c) -> bool: return float(seen[a]) < float(seen[c]))
 		for k in mini(over_large, keep.size()):
 			plan.append([keep[k], false])
-		# What is still awake after this plan, the farthest of it.
-		_cap_far = float(away[keep[over_large]]) if over_large < keep.size() else 0.0
+		# What is still awake after this plan, the farthest of it. (It was the
+		# distance of the next by apparent size, which is not the farthest.)
+		_cap_far = 0.0
+		for k in range(mini(over_large, keep.size()), keep.size()):
+			_cap_far = maxf(_cap_far, float(away[keep[k]]))
 	return plan
 
 
@@ -5654,7 +5661,14 @@ func _stream_dormancy() -> void:
 			_wake_cursor = 0
 		var d: Dormant = dormant[_wake_cursor]
 		var dist := _distance_to_interest(d.record.box, points)
-		if dist > WAKE_RANGE or (d.by_cap and not _cap_room and dist >= _cap_far * CAP_SWAP):
+		# Put away by the cap: wakes when the cap has room, when it is clearly
+		# nearer than the farthest still awake, or -- whatever the cap -- inside
+		# CAP_KEEP_RANGE, where the cap would never have put it away. Without
+		# that last, with every awake piece inside the keep range (_cap_far 0),
+		# a piece asleep woke for nothing but a hit: stood on, it stayed its
+		# stand-in, no studs (user, 2026-11-15).
+		if dist > WAKE_RANGE or (d.by_cap and not _cap_room and dist >= CAP_KEEP_RANGE
+				and dist >= _cap_far * CAP_SWAP):
 			_wake_cursor += 1
 			continue
 		var _t1 := Time.get_ticks_usec()

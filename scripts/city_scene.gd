@@ -2113,6 +2113,19 @@ var _group_rides := 0      ## and of those, the ones that rode a section
 var _groups_leaving := false   ## _disable is being told of bricks about to leave, not yet gone
 
 
+## Coming apart: toppling, held by the director, a section broken off within
+## COLLAPSE_QUIET_MS, or pieces of it still moving. _mid_collapse without its
+## "hit since the last solve", which every bullet is: what hides a building's
+## painted windows (CityDrawing.tend_brick_panes) until they are made again
+## over what is left.
+func _coming_apart(id: int) -> bool:
+	if _toppling.has(id) or director.holding(id):
+		return true
+	if Time.get_ticks_msec() - int(_broke_ms.get(id, -1000000)) < COLLAPSE_QUIET_MS:
+		return true
+	return islands.moving_of(id) > 0
+
+
 func _mid_collapse(id: int) -> bool:
 	if not hold_interiors_mid_collapse:
 		return false
