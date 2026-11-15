@@ -71,7 +71,7 @@ var _role := 0
 ## Ids inside each PopupMenu. Separate numbers per menu; the id is what comes
 ## back from id_pressed.
 enum { F_NEW, F_OPEN, F_SAVE, F_SAVE_AS, F_QUICK_SAVE, F_QUICK_LOAD, F_CITY }
-enum { I_BUILD, I_TOWER, I_BAKE, I_REMOVE_TOWER }
+enum { I_BUILD, I_TOWER, I_BAKE, I_REMOVE_TOWER, I_GROW, I_PACK, I_STATION, I_SHELL }
 ## In the kind's menu, after the kinds (ids 0 .. KINDS.size() - 1).
 enum { G_ROOMS = 100, G_STAIRS, G_WINDOWS, G_FURNISH, G_PROGRAM, G_REROLL }
 enum { E_UNDO, E_SELECT, E_MOVE, E_COPY, E_DELETE, E_REDO }
@@ -194,11 +194,16 @@ func _build_bar() -> void:
 	_tick_finish()
 
 	_insert = _menu(row, "Insert", [
-		["Build from library…", I_BUILD, KEY_MASK_CTRL | KEY_I],
+		["Build from library (Tab)…", I_BUILD, KEY_MASK_CTRL | KEY_I],
 		["Generated building", I_TOWER, KEY_MASK_CTRL | KEY_G],
 		[],
 		["Bake generated building to bricks", I_BAKE, 0],
 		["Remove generated building", I_REMOVE_TOWER, 0],
+		[],
+		["Generated: grown from saved modules...", I_GROW, 0],
+		["Generated: a ship's inside (this build the hull)...", I_PACK, 0],
+		["Generated: a station...", I_STATION, 0],
+		["Generated: a tower by its shell...", I_SHELL, 0],
 	], _on_insert)
 
 	var kinds := []
@@ -271,6 +276,40 @@ func _on_finish(id: int) -> void:
 	_tick_finish()
 
 
+const LOOKS := [BrickMaterials.Bed.GLASS, BrickMaterials.Bed.SMOOTH_PEI, BrickMaterials.Bed.TEXTURED_PEI, FINISH_MOULDED]
+const LOOK_NAMES := ["printed on glass", "printed on smooth PEI", "printed on textured PEI", "injection moulded"]
+
+
+func _look_now() -> int:
+	return LOOKS.find(FINISH_MOULDED if BrickMaterials.finish == BrickMaterials.Finish.MOULDED else BrickMaterials.bed)
+
+
+## The print look's name now (Finish's Look button).
+func look_name() -> String:
+	return LOOK_NAMES[maxi(0, _look_now())]
+
+
+## The next print look (Finish's Look button: the View menu's four, in turn).
+func next_look() -> void:
+	_on_finish(LOOKS[(_look_now() + 1) % LOOKS.size()])
+
+
+## New: ask first, as File > New does.
+func ask_clear() -> void:
+	_clear_dialog.popup_centered()
+
+
+## The kinds (the kind's menu), dropped from a button on the screen.
+func show_kinds(under: Control = null) -> void:
+	if _type == null:
+		return
+	var p := _type.get_popup()
+	if under != null:
+		p.position = Vector2i(under.get_screen_position() + Vector2(under.size.x + 4.0, 0.0))
+	p.reset_size()
+	p.popup()
+
+
 func _tick_finish() -> void:
 	BrickMaterials.load_look()
 	var p := _view.get_popup()
@@ -293,10 +332,14 @@ func _on_edit(id: int) -> void:
 
 func _on_insert(id: int) -> void:
 	match id:
-		I_BUILD: show_open("insert")
+		I_BUILD: action.emit("library", "buildings")
 		I_TOWER: action.emit("tower", null)
 		I_BAKE: action.emit("bake_tower", null)
 		I_REMOVE_TOWER: action.emit("remove_tower", null)
+		I_GROW: action.emit("generate", "grow")
+		I_PACK: action.emit("generate", "pack")
+		I_STATION: action.emit("generate", "station")
+		I_SHELL: action.emit("generate", "tower")
 
 
 func _on_kind(id: int) -> void:

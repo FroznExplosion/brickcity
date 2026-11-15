@@ -240,7 +240,9 @@ func _rail_checks() -> void:
 	print("[probe] the rail")
 	var t: WorkshopTools = _ws.bench._tools
 	_ok("the building workshop has the rail", t != null and t.rail is WkRail)
-	_ok("with its tools, each with a pop-up and an icon", t.rail.buttons.size() == WorkshopTools.TOOLS.size()
+	# Section 21 stage 4: a stage tab shows its own tools; Structure has all but Rooms.
+	t.set_stage("structure")
+	_ok("with its tools, each with a pop-up and an icon", t.rail.buttons.size() == WorkshopTools.STAGE_TOOLS.structure.size()
 			and (t.rail.buttons.values() as Array).all(func(b: Button) -> bool:
 				return b.tooltip_text.length() > 20 and b.icon != null))
 	t.pick("draw")
@@ -622,11 +624,18 @@ func _button_checks() -> void:
 			var b: Button = t.rail.action_buttons.get(row[0])
 			all = all and b != null and b.tooltip_text.length() > 15
 	_ok("every action has a button with a pop-up", all and t.rail.action_buttons.size() >= 18)
+	# Every tool and Finish action is a button with an icon on some stage tab (section 21 stage 4).
 	var tools_ok := true
-	for row in WorkshopTools.TOOLS:
-		var b: Button = t.rail.buttons.get(row[0])
-		tools_ok = tools_ok and b != null and b.icon != null
-	_ok("every tool a button with an icon", tools_ok and t.rail.buttons.size() == 8)
+	var seen := {}
+	for s in WorkshopTools.STAGES:
+		t.set_stage(s[0])
+		for id in t.rail.buttons:
+			seen[id] = true
+			tools_ok = tools_ok and (t.rail.buttons[id] as Button).icon != null
+	for row in WorkshopTools.TOOLS + WorkshopTools.FINISH_ACTIONS:
+		tools_ok = tools_ok and seen.has(row[0])
+	_ok("every tool and Finish action a button with an icon, on a tab", tools_ok, str(seen.keys()))
+	t.set_stage("structure")
 	var yaw: int = _ws.bench._yaw
 	t.act("rotate")
 	_ok("Rotate turns the brick in hand", _ws.bench._yaw == (yaw + 1) % 4)
@@ -637,11 +646,49 @@ func _button_checks() -> void:
 	t.act("grid")
 	_ok("Grid toggles", _ws.bench._grid_on != grid and _ws.bench._grid.visible == _ws.bench._grid_on)
 	t.act("grid")
-	var role: int = _ws.bench._role
-	t.act("layer")
-	_ok("Layer moves the hand to the next layer", _ws.bench._role != role)
-	while _ws.bench._role != role:
-		t.act("layer")
+	# The tab is the layer (section 21 stage 4): Interior's bricks go in the interior layer,
+	# Finish keeps the last one, and a tool's key opens a tab that has it.
+	t.set_stage("interior")
+	_ok("the Interior tab: the interior layer, Rooms on the rail", _ws.bench._role == BuildRecipe.Role.INTERIOR
+			and t.rail.buttons.has("rooms") and not t.rail.buttons.has("draw"))
+	t.set_stage("finish")
+	_ok("Finish keeps the last layer, its actions on the rail", _ws.bench._role == BuildRecipe.Role.INTERIOR
+			and t.rail.buttons.has("!save") and t.rail.buttons.has("!city") and t.rail.buttons.has("!look"))
+	var look: String = _ws.bench._menu.look_name()
+	t.rail.buttons["!look"].pressed.emit()
+	_ok("Look steps the print look", _ws.bench._menu.look_name() != look)
+	while _ws.bench._menu.look_name() != look:
+		_ws.bench._menu.next_look()
+	t.pick("draw")
+	_ok("Draw's key from Finish: the Structure tab, the structure layer", t.stage == "structure"
+			and t.active() == "draw" and _ws.bench._role == BuildRecipe.Role.STRUCTURE)
+	t.pick("hand")
+	_ok("no layer button on the bar", not t.rail.action_buttons.has("layer"))
+	# Stage 4b: the generators left the Rooms pop-out for Generate's, one panel each.
+	var texts := func(box: Control) -> Array:
+		return box.find_children("*", "Button", true, false).map(func(x: Button) -> String: return x.text)
+	_ok("Rooms' pop-out has no generators", not (texts.call(t._rooms_box) as Array).has("Generate tower")
+			and not (texts.call(t._rooms_box) as Array).has("Generate station"))
+	t.set_gen("tower")
+	t.process()
+	_ok("Generate: the tower's panel, on Structure", t.active() == "generate" and t.stage == "structure"
+			and t._gen_box.visible and t._gen_boxes.tower.visible and not t._gen_boxes.grow.visible
+			and (texts.call(t._gen_boxes.tower) as Array).has("Generate tower"))
+	t.set_gen("building")
+	t.process()
+	_ok("a generated building's options off without one", (t._gen_ticks.rooms as CheckBox).disabled)
+	var towers: int = _ws.bench.recipe.towers.size()
+	for x in t._gen_boxes.building.find_children("*", "Button", true, false):
+		if (x as Button).text == "Add building":
+			(x as Button).pressed.emit()
+	t.process()
+	_ok("Add building adds one, its options on", _ws.bench.recipe.towers.size() == towers + 1
+			and not (t._gen_ticks.rooms as CheckBox).disabled, str(_ws.bench.recipe.towers.size()))
+	_ws.bench._on_menu("remove_tower", null)
+	t.pick("hand")
+	_ws.bench._on_menu("generate", "station")
+	_ok("Insert > Generated opens Generate's station panel", t.active() == "generate" and t.gen_kind == "station")
+	t.pick("hand")
 	# Section 21, stage 2: the flat views, as the asset workshop's (Alt 0-3, the bar's buttons).
 	var cam: Camera3D = t.view.cam()
 	var persp: Transform3D = cam.global_transform
@@ -1487,6 +1534,24 @@ func _out_of_the_way_checks() -> void:
 	t.bricks_button.pressed.emit()
 	await process_frame
 	_ok("and closes it", not _ws.bench._hotbar.is_browsing() and not t.bricks_button.button_pressed)
+	# Section 21 stage 5: one library -- Bricks, Furniture and items, Rooms, Buildings.
+	var hb: WorkshopHotbar = _ws.bench._hotbar
+	_ok("the library's sections", hb.has_section("furniture") and hb.has_section("rooms")
+			and hb.has_section("buildings") and not hb.has_section("parts"))
+	t.furnish_button.pressed.emit()
+	_ok("Furniture opens it on Furniture and items", hb.browsing("furniture") and _ws.bench._furnish.panel.visible
+			and not hb._bricks_body.visible)
+	t.bricks_button.pressed.emit()
+	_ok("Bricks from there: the bricks, still open", hb.browsing("bricks") and hb._bricks_body.visible)
+	hb.close_browser()
+	_ws.bench._on_menu("library", "buildings")
+	var bl: LibraryList = hb._sections.buildings.body
+	_ok("Insert's build: the library on Buildings, the saved ones listed", hb.browsing("buildings")
+			and bl.shown().size() == WorkshopMenu.library("building").size(), str(bl.shown().size()))
+	hb._search.text = "zzqq no such build"
+	hb._search.text_changed.emit(hb._search.text)
+	_ok("one search: it filters the section open", bl.shown().is_empty())
+	hb.close_browser()
 	t.pick("draw")
 	await process_frame
 	await process_frame

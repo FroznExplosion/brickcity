@@ -14,10 +14,15 @@ was found, how to test without harming the user's files, and what to do next.
 - Stages 0 and 1 (1a the asset's bar and pop-out, 1b the building's outliner and Selected,
   1c the status line) and stage 2 (2a every key a button and one key map, agreed with the
   user; 2b one camera) merged 2026-11-14, stage 3 (the six menus) 2026-11-15 (section 21, "As
-  built"). Next: **stage 4**, the building's stage tabs (Structure, Interior, Detail, Finish;
-  the tab is the layer) and the generators out of Rooms -- and with them on-screen buttons for
-  what is still menu-only in the building (File, Insert, the kind, the generated building's
-  options, the print look). Ask the user first what Hand does on the Finish tab.
+  built"), stage 4 (4a the building's stage tabs, Finish keeps the last layer; 4b the Generate
+  tool, the generators out of Rooms), stage 5 (one library on Tab) and stage 6a (one Draw on
+  the asset's Bricks stage, the base then the height) and 6b (one Draw on Block out: the brush
+  and the stamps; box, round, cone pulled) 2026-11-15. Next: **stage 7**, a model into clay and
+  bricks in the building workshop -- needs the junction and SCons (C++, `sdf_form.cpp`), and the
+  Build mode area owns it. Measured 2026-11-15 (section 21, "A model into a building",
+  `model_scale_probe`): tick clay takes 20-40 s and 0.5-0.9 GB for an 80-100 stud model, Make
+  bricks is the slow part (~3.5 ms a brick) -- profile it first. Never run the probe at 200+
+  studs on this machine (memory).
 
 
 ## Where to work
@@ -120,9 +125,7 @@ from model to bricks").
 ## Open, to raise when its stage comes
 
 - Stage 2: the keys -- settled 2026-11-14 (section 21, stage 2a).
-- Stage 4: a brick's layer comes from the tab. What Hand does on the Finish tab (probably: the
-  last layer used).
-- Stage 5: inserted builds are copies, furniture is a reference. "Edit in the asset workshop" is
-  only for furniture unless the user wants builds as references too.
+- Stage 4: settled 2026-11-15 -- on Finish, Hand lays in the last layer used.
+- Stage 5: settled 2026-11-15 -- inserted builds stay copies, furniture a reference.
 - Stage 7: cell-sized clay is a second resolution of `SdfForm` (C++, `gdextension/brick/src/
   sdf_form.cpp`): that stage needs the junction and SCons, and the Build mode area owns it.

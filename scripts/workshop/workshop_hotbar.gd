@@ -30,6 +30,8 @@ extends CanvasLayer
 signal changed(part: String, colour: int, material: int)
 ## The browser opened or closed: the workshop frees or recaptures the mouse.
 signal browsing_changed(on: bool)
+## The library opened on a section (stage 5): its owner fills it fresh.
+signal section_shown(id: String)
 
 const SLOTS := 9
 const SAVE := UserPaths.WORKSHOP + "hotbar.json"
@@ -73,6 +75,13 @@ var _drag_preview: TextureRect
 var _swatches: GridContainer
 var _materials: HBoxContainer
 var _swatch_label: Label
+## The library (section 21, stage 5): the section buttons over the search, the bricks' own
+## body, the others' (`add_section`): id -> {name, body, search, button}.
+var _section_bar: HBoxContainer
+var _bricks_body: VBoxContainer
+var _body_box: VBoxContainer
+var _sections := {}
+var section := "bricks"
 
 
 func _ready() -> void:
@@ -167,11 +176,16 @@ func is_browsing() -> bool:
 	return _browser != null and _browser.visible
 
 
+## The library is open on section `id`.
+func browsing(id: String) -> bool:
+	return is_browsing() and section == id
+
+
 func toggle_browser() -> void:
 	_browser.visible = not _browser.visible
 	if _browser.visible:
 		_search.text = ""
-		_fill_grid()
+		_on_search("")
 		_search.grab_focus()
 	else:
 		_search.release_focus()
@@ -405,7 +419,8 @@ func _refresh() -> void:
 				BrickWorld.get_material_colour_name(int(slots[i][2]), int(slots[i][1])),
 				BrickWorld.get_material_name(int(slots[i][2])), p] if p != "" else ""
 	if _title != null:
-		_title.text = "Click a part for slot %d, or drag it to any slot -- across a material or colour to change it. TAB closes." % (selected + 1)
+		_title.text = ("Click a part for slot %d, or drag it to any slot -- across a material or colour to change it. TAB closes." % (selected + 1)
+				if section == "bricks" else "Pick one to take it in hand: LMB places it, R turns it, Esc puts it down. TAB closes.")
 
 
 ## "2x4 slope" from "slope_2x4": what a slot has room to say.
@@ -422,7 +437,7 @@ static func _short(p: String) -> String:
 func _build_browser() -> void:
 	_browser = PanelContainer.new()
 	var style := StyleBoxFlat.new()
-	style.bg_color = Color(0.07, 0.08, 0.11, 0.92)
+	style.bg_color = Color(0.07, 0.08, 0.11, 0.97)
 	style.set_corner_radius_all(8)
 	style.set_content_margin_all(12)
 	_browser.add_theme_stylebox_override("panel", style)
@@ -437,23 +452,34 @@ func _build_browser() -> void:
 	_browser.add_child(v)
 	_title = Label.new()
 	v.add_child(_title)
+	_section_bar = HBoxContainer.new()
+	_section_bar.add_theme_constant_override("separation", 4)
+	_section_bar.visible = false   # until a second section
+	v.add_child(_section_bar)
 	_search = LineEdit.new()
 	_search.placeholder_text = "search: 2x4, slope, round ..."
-	_search.text_changed.connect(func(_t): _fill_grid())
+	_search.text_changed.connect(_on_search)
 	v.add_child(_search)
+	_section_button("bricks", "Bricks")
+	# The library's sections (Docs/BuildTools.md section 21, stage 5): Bricks is this
+	# browser's own; a workshop adds the rest (`add_section`).
+	_bricks_body = VBoxContainer.new()
+	_bricks_body.add_theme_constant_override("separation", 8)
+	v.add_child(_bricks_body)
+	_body_box = v
 	_tabs = TabBar.new()
 	_tabs.add_tab("All")
 	for c in BrickPalette.categories():
 		_tabs.add_tab(c)
 	_tabs.tab_changed.connect(func(_i): _fill_grid())
-	v.add_child(_tabs)
+	_bricks_body.add_child(_tabs)
 
 	var scroll := ScrollContainer.new()
 	# Two and a half rows: with 64 colours below it, three pushed the panel
 	# down over the toolbar.
 	scroll.custom_minimum_size = Vector2(8 * 84, 2.5 * 104)
 	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
-	v.add_child(scroll)
+	_bricks_body.add_child(scroll)
 	_grid = GridContainer.new()
 	_grid.columns = 8
 	_grid.add_theme_constant_override("h_separation", 6)
@@ -462,7 +488,7 @@ func _build_browser() -> void:
 
 	_materials = HBoxContainer.new()
 	_materials.add_theme_constant_override("separation", 4)
-	v.add_child(_materials)
+	_bricks_body.add_child(_materials)
 	for m in BrickWorld.get_material_count():
 		var b := Button.new()
 		b.text = BrickWorld.get_material_name(m)
@@ -477,12 +503,12 @@ func _build_browser() -> void:
 		_materials.add_child(b)
 	_swatch_label = Label.new()
 	_swatch_label.add_theme_font_size_override("font_size", 12)
-	v.add_child(_swatch_label)
+	_bricks_body.add_child(_swatch_label)
 	_swatches = GridContainer.new()
 	_swatches.columns = 16
 	_swatches.add_theme_constant_override("h_separation", 4)
 	_swatches.add_theme_constant_override("v_separation", 4)
-	v.add_child(_swatches)
+	_bricks_body.add_child(_swatches)
 	_rebuild_swatches()
 
 
@@ -515,6 +541,69 @@ func _rebuild_swatches() -> void:
 		b.set_drag_forwarding(_drag_colour.bind(c, m, b), _can_drop_on_colour.bind(c, m),
 				_drop_on_colour.bind(c, m))
 		_swatches.add_child(b)
+
+## A section of the library: `body` (a list of the workshop's) shown under the search when
+## its button is pressed; `search(text)` filters it. Its own search box, if any, the caller
+## hides.
+func add_section(id: String, label: String, body: Control, search: Callable) -> void:
+	if body.get_parent() != null:
+		body.get_parent().remove_child(body)
+	body.visible = false
+	_body_box.add_child(body)
+	_sections[id] = {"name": label, "body": body, "search": search}
+	_section_button(id, label)
+	_section_bar.visible = _section_bar.get_child_count() > 1
+
+
+func _section_button(id: String, label: String) -> void:
+	var b := Button.new()
+	b.text = label
+	b.toggle_mode = true
+	b.focus_mode = Control.FOCUS_NONE
+	b.button_pressed = id == section
+	b.pressed.connect(show_section.bind(id, false))
+	b.set_meta("section", id)
+	_section_bar.add_child(b)
+
+
+func has_section(id: String) -> bool:
+	return id == "bricks" or _sections.has(id)
+
+
+## Open the library on section `id` (closing it when `toggle` and it is open on it already).
+func show_section(id: String, toggle := true) -> void:
+	if not has_section(id):
+		return
+	if toggle and is_browsing() and section == id:
+		toggle_browser()
+		return
+	section = id
+	for b in _section_bar.get_children():
+		(b as Button).set_pressed_no_signal(b.get_meta("section") == id)
+	_bricks_body.visible = id == "bricks"
+	for k in _sections:
+		(_sections[k].body as Control).visible = k == id
+	_search.placeholder_text = "search: 2x4, slope, round ..." if id == "bricks" else "search %s" % String(_sections[id].name).to_lower()
+	section_shown.emit(id)
+	_refresh()   # the title says what a pick does here
+	if not is_browsing():
+		toggle_browser()
+	else:
+		_on_search(_search.text)
+
+
+func _on_search(t: String) -> void:
+	if section == "bricks":
+		_fill_grid()
+	elif _sections.has(section):
+		(_sections[section].search as Callable).call(t)
+
+
+## Close the library (a pick from a section took something in hand).
+func close_browser() -> void:
+	if is_browsing():
+		toggle_browser()
+
 
 ## The parts the current tab and search allow, in catalogue order.
 func shown_parts() -> Array:

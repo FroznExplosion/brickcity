@@ -158,6 +158,12 @@ var shape_kind := "box"
 var shape_fill := "clean"
 ## How many plates tall a box, cylinder or wedge is.
 var shape_plates := 3
+var _shape_plates_spin: SpinBox
+## Draw's outline (Docs/BuildTools.md section 21, stage 6): a SHAPES kind made by the base and
+## the height, "freehand" (the 2D Sketch on the working plane) or "brush" (the shape brush).
+var draw_outline := "box"
+## Block out's Draw outline: "brush" or a stamp (SCULPT_SHAPES).
+var clay_outline := "brush"
 ## Recipe ids of the bricks the select tool holds.
 var selection: Array[int] = []
 var section_on := false
@@ -352,6 +358,8 @@ func _ready() -> void:
 	dc.ctrl_descends = false
 	bench.toolbox.add(_sketch_tool)
 	_select_tool.mode = WkSelectTool.Mode.BOX
+	# Draw's gesture is the building's: the base, then the height (section 21, stage 6).
+	_shape_tool.mode = WkShapeTool.Mode.OUTLINE_HEIGHT
 	for t in [_measure_tool, _fill_tool, _move_tool, _shape_tool, _select_tool]:
 		bench.toolbox.add(t)
 	# What is made here is a gun (or a mech): File > Save, Save As and Open use their
@@ -360,6 +368,7 @@ func _ready() -> void:
 	if bench._menu != null:
 		bench._menu.asset_mode(ASSET_KINDS)
 		_build_menus()
+	_ensure_catalog()
 	_set_asset_kind(bench.recipe.kind)
 	_build_asset_tools()
 	_setup_parts()
@@ -1285,7 +1294,7 @@ func _unhandled_input(e: InputEvent) -> void:
 				else:
 					set_mirror(not bench.mirror_on)
 			KEY_F: set_free(not free_place)
-			KEY_D: rail_pick("place" if rail_active() == "sketch" else "sketch")
+			KEY_D: rail_pick("place") if rail_active() == "sketch" else draw_pick("freehand")
 			KEY_V: rail_pick("place" if rail_active() == "sculpt" else "sculpt")
 			KEY_U: set_tool("" if tool == "stud" else "stud")
 			KEY_G: set_tool("" if tool == "move" else "move")
@@ -1307,7 +1316,7 @@ func _unhandled_input(e: InputEvent) -> void:
 		var mine := true
 		match e.keycode:
 			KEY_Y: toggle_look()
-			KEY_K: set_tool("" if tool == "shape" else "shape")
+			KEY_K: set_tool("") if rail_active() in ["shape", "sketch"] else draw_pick()
 			KEY_L: set_tool("" if tool == "select" else "select")
 			KEY_F3: _toggle_guide_panel()
 			KEY_F4: set_tool("" if tool == "wand" else "wand")
@@ -1385,7 +1394,7 @@ func _process(dt: float) -> void:
 	if _panel.visible:
 		_panel.position = Vector2(vp.x - _panel.size.x - 12, vp.y * 0.42)
 	if _ui != null:
-		_ui.place_floats([_panel, _guide_panel, _point_panel, _catalog_panel])
+		_ui.place_floats([_panel, _guide_panel, _point_panel])
 
 
 func ruler_text() -> String:
@@ -1654,7 +1663,7 @@ func import_package(path: String) -> Dictionary:
 	var r := PartPackage.import_file(path)
 	_export_check = ("package: %s rev %d in" % [r.id, r.rev]) if r.ok else ("package refused: " + String(r.why))
 	print("[asset workshop] " + _export_check)
-	if r.ok and _catalog_panel != null and _catalog_panel.visible:
+	if r.ok and _catalog_open():
 		_catalog_panel.set_catalog(PartCatalog.load_all())
 	return r
 
@@ -1677,19 +1686,39 @@ func _open_package_dialog() -> void:
 
 ## Open or close the parts catalogue (F7). It reads the part folders each time it opens, so
 ## a part just saved is in it.
+## It is the library's Parts section (Docs/BuildTools.md section 21, stage 5).
 func toggle_catalog() -> void:
-	if _catalog_panel == null:
-		_catalog_panel = PartCatalogPanel.new()
-		_catalog_panel.visible = false
-		_catalog_panel.position = Vector2(RAIL_W + 24, 60)
-		_catalog_panel.part_picked.connect(func(r: PartRecord) -> void:
-			var why := try_part(r)
-			if why != "":
-				_export_check = "parts: " + why)
-		_ruler.get_parent().add_child(_catalog_panel)
-	_catalog_panel.visible = not _catalog_panel.visible
-	if not _catalog_panel.visible:
+	_ensure_catalog()
+	if _catalog_open():
+		bench._hotbar.close_browser()
 		return
+	bench._hotbar.show_section("parts", false)
+
+
+## The parts catalogue is shown: the library open on Parts.
+func _catalog_open() -> bool:
+	return _catalog_panel != null and bench._hotbar.browsing("parts")
+
+
+func _ensure_catalog() -> void:
+	if _catalog_panel != null:
+		return
+	_catalog_panel = PartCatalogPanel.new()
+	_catalog_panel.part_picked.connect(func(r: PartRecord) -> void:
+		var why := try_part(r)
+		if why != "":
+			_export_check = "parts: " + why)
+	_catalog_panel._search_edit.visible = false   # the library's search is its
+	bench._hotbar.add_section("parts", "Parts", _catalog_panel, func(t: String) -> void:
+		_catalog_panel._search_edit.text = t
+		_catalog_panel._search_edit.text_changed.emit(t))
+	bench._hotbar.section_shown.connect(func(id: String) -> void:
+		if id == "parts":
+			_fill_catalog())
+
+
+## The catalogue read again (a part just saved is in it) and aimed at the part in hand.
+func _fill_catalog() -> void:
 	if bench._camera.has_method("_set_captured"):
 		bench._camera.call("_set_captured", false)
 	var cat := PartCatalog.load_all()
@@ -2078,7 +2107,7 @@ func select_part(i: int) -> void:
 	_outlines_dirty = true
 	if _width_spin != null:
 		_width_spin.set_value_no_signal(width_of(part_names[part_sel]))
-	if _catalog_panel != null and _catalog_panel.visible:
+	if _catalog_open():
 		_aim_catalog(_catalog_panel.catalog)
 	var f := FileAccess.open(toolbars_save, FileAccess.WRITE)
 	if f != null:
@@ -2611,6 +2640,34 @@ func shape_cells(kind: String, a: Vector3i, b: Vector3i, plates: int) -> Diction
 	return out
 
 
+## Block out's Draw with `outline` (section 21, stage 6): "brush" the clay brush, else a stamp
+## (STAMP_PULLED by the base and the height, a ball centre to edge, a line, a lathe).
+func clay_pick(outline: String) -> void:
+	lathe_drop()
+	_stamp_drop()
+	clay_outline = outline
+	rail_pick("sculpt")
+	set_sculpt_mode("shape" if outline == "brush" else "stamp")   # its panel and list follow
+	if outline != "brush":
+		sculpt_shape = outline
+
+
+## Draw (K) with `outline` (section 21, stage 6): a shape by its base and height, the 2D
+## Sketch ("freehand"), or the shape brush ("brush"). The Bricks stage's one drawing tool.
+func draw_pick(outline: String = draw_outline) -> void:
+	draw_outline = outline
+	match outline:
+		"freehand":
+			rail_pick("sketch")
+		"brush":
+			rail_pick("shape")
+			shape_mode = "brush"
+		_:
+			rail_pick("shape")
+			shape_mode = "drag"
+			shape_kind = outline if SHAPES.has(outline) else "box"
+
+
 func set_tool(t: String) -> void:
 	_set_down()
 	tool = t
@@ -2643,16 +2700,46 @@ func wk_shape_base(_d: Dictionary) -> void:
 	_drag_to = bench._cell
 
 
-func wk_shape_base_done(_d: Dictionary) -> void:
-	pass
+## The base is down: the height is pulled from here (Docs/BuildTools.md section 21, stage 6 --
+## the building's gesture). It starts at what the plates box says.
+func wk_shape_base_done(d: Dictionary) -> void:
+	var a := _drag_from
+	var b := _drag_to
+	d["base_y"] = a.y * BrickPalette.PLATE_M
+	d["mid"] = Vector3((a.x + b.x + 1) * 0.5 * BrickPalette.STUD_M, a.y * BrickPalette.PLATE_M,
+			(a.z + b.z + 1) * 0.5 * BrickPalette.STUD_M)
 
 
-func wk_shape_height(_d: Dictionary) -> void:
-	pass
+## Pulling the height: the cursor's height on an upright plane through the base, facing the
+## camera, in plates (at least one).
+func wk_shape_height(d: Dictionary) -> void:
+	if not d.has("mid") or shape_kind == "sphere":
+		return
+	var ray: Array = bench._mouse_ray()
+	var from: Vector3 = to_local(ray[0])
+	var dir: Vector3 = (global_transform.basis.inverse() * (ray[1] as Vector3)).normalized()
+	var n := Vector3(dir.x, 0.0, dir.z)
+	if n.length() < 0.01:
+		return
+	n = n.normalized()
+	var den := n.dot(dir)
+	if absf(den) < 0.0001:
+		return
+	var t := n.dot((d.mid as Vector3) - from) / den
+	if t <= 0.0:
+		return
+	var y := (from + dir * t).y
+	shape_plates = clampi(int(round((y - float(d.base_y)) / BrickPalette.PLATE_M)), 1, 240)
+	if _shape_plates_spin != null:
+		_shape_plates_spin.set_value_no_signal(shape_plates)
 
 
-func wk_shape_typed(_d: Dictionary, _typed: String) -> void:
-	pass
+## A height typed while pulling, in plates.
+func wk_shape_typed(_d: Dictionary, typed: String) -> void:
+	if typed.is_valid_int() and int(typed) > 0:
+		shape_plates = clampi(int(typed), 1, 240)
+		if _shape_plates_spin != null:
+			_shape_plates_spin.set_value_no_signal(shape_plates)
 
 
 func wk_shape_release_commits(_d: Dictionary) -> bool:
@@ -3010,7 +3097,7 @@ func _build_phase3(layer: CanvasLayer) -> void:
 	_shape_box = VBoxContainer.new()
 	box.add_child(_shape_box)
 	var t1 := Label.new()
-	t1.text = "Shapes (K)"
+	t1.text = "Height: pulled, or typed"
 	_shape_box.add_child(t1)
 	var modes := OptionButton.new()
 	modes.add_item("drag a box: fill it")
@@ -3018,6 +3105,7 @@ func _build_phase3(layer: CanvasLayer) -> void:
 	modes.item_selected.connect(func(i: int) -> void:
 		shape_mode = "drag" if i == 0 else "brush"
 		_dragging = false)
+	modes.visible = false   # Draw's outline pictures say it (section 21, stage 6)
 	_shape_box.add_child(modes)
 	_shape_mode_pick = modes
 	_drag_box = VBoxContainer.new()
@@ -3026,6 +3114,7 @@ func _build_phase3(layer: CanvasLayer) -> void:
 	for k in SHAPES:
 		kinds.add_item(k)
 	kinds.item_selected.connect(func(i: int) -> void: shape_kind = SHAPES[i])
+	kinds.visible = false   # Draw's outline pictures
 	_drag_box.add_child(kinds)
 	var fills := OptionButton.new()
 	fills.add_item("clean: fewest bricks")
@@ -3042,6 +3131,7 @@ func _build_phase3(layer: CanvasLayer) -> void:
 	hs.max_value = 120
 	hs.value = shape_plates
 	hs.value_changed.connect(func(v: float) -> void: shape_plates = int(v))
+	_shape_plates_spin = hs
 	hrow.add_child(hs)
 
 	_sketch_box = VBoxContainer.new()
@@ -4176,6 +4266,30 @@ func _sculpt_input(e: InputEvent) -> bool:
 			Input.set_default_cursor_shape(Input.CURSOR_POINTING_HAND if hot else Input.CURSOR_ARROW)
 		return false
 	var stamping: bool = sculpt_mode == "stamp" and not (e is InputEventWithModifiers and e.shift_pressed and not _sculpt_on)
+	# Pulling a stamp's height: the cursor pulls it, LMB lays it, RMB or Esc gives it up.
+	if _stamp_phase == "height":
+		if e is InputEventKey and e.pressed and not e.echo and e.keycode == KEY_ESCAPE:
+			_stamp_drop()
+			return true
+		if e is InputEventMouseMotion:
+			_stamp_pull()
+			_show_stamp()
+			return true
+		if e is InputEventMouseButton and e.pressed and e.button_index in [MOUSE_BUTTON_LEFT, MOUSE_BUTTON_RIGHT]:
+			if e.button_index == MOUSE_BUTTON_RIGHT:
+				_stamp_drop()
+				return true
+			_stamp_pull()
+			_stamp_phase = ""
+			sculpt.show_ghost({})
+			sculpt.form.begin_edit()
+			_lay_stamp(_stamp_desc(), _sculpt_op)
+			sculpt.remesh()
+			_sculpt_record(sculpt.form.end_edit())
+			_stamp_h = 0.0
+			return true
+		if e is InputEventMouseButton:
+			return true
 	if e is InputEventMouseButton and e.button_index in [MOUSE_BUTTON_LEFT, MOUSE_BUTTON_RIGHT]:
 		if e.pressed:
 			# Sculpting on: a placed model is laid first (its stamp is one undo before this).
@@ -4199,6 +4313,8 @@ func _sculpt_input(e: InputEvent) -> bool:
 				# A stamp: dragged out on the stroke plane, laid when let go.
 				_stamp_from = _stamp_snap(p)
 				_stamp_to = _stamp_from
+				_stamp_h = 0.0
+				_stamp_phase = "base" if sculpt_shape in STAMP_PULLED else ""
 				_show_stamp()
 				return true
 			if sculpt_mode == "flatten" and not e.shift_pressed:
@@ -4217,6 +4333,13 @@ func _sculpt_input(e: InputEvent) -> bool:
 				_show_stamp()
 				_show_sculpt_note(false, "Lathe: click the outline's points, out from the axis. "
 						+ "Enter or RMB lays it, Backspace takes a point back, Esc drops it.")
+				return true
+			if stamping and _stamp_phase == "base":
+				# The base is down: now its height, pulled off the plane.
+				_sculpt_on = false
+				_stamp_phase = "height"
+				_show_stamp()
+				_show_sculpt_note(false, "Pull the height, click to lay it. RMB or Esc gives it up.")
 				return true
 			if stamping:
 				_sculpt_on = false
@@ -4267,11 +4390,43 @@ func _stamp_snap(p: Vector3) -> Vector3:
 ## The stamp being dragged, as what to lay: {kind: "box", center, half} | {kind: "cone",
 ## xform, size} | {kind: "line", a, b, r} | {kind: "lathe", xform, profile}. Empty when
 ## there is nothing to lay yet. `mouse`: a lathe's next point, shown before it is clicked.
+## The cursor's height off the base, along the stroke plane's normal (samples): on the plane
+## through the base's middle that holds the normal and faces the camera. Snapped to the grid's
+## step that way when the snap is on.
+func _stamp_pull() -> void:
+	var ray := _mouse_ray()
+	var r := sculpt.ray_to_samples(ray[0], ray[1])
+	var up := _sculpt_plane.normal
+	var mid := (_stamp_from + _stamp_to) * 0.5 if sculpt_shape == "box" else _stamp_from
+	var dir: Vector3 = r[1]
+	var m := dir - up * dir.dot(up)
+	if m.length() < 0.001:
+		return
+	var hit = Plane(m.normalized(), mid).intersects_ray(r[0], dir)
+	if hit == null:
+		return
+	var h: float = ((hit as Vector3) - mid).dot(up)
+	if sculpt_snap:
+		var step := up.abs().dot(Vector3(BrickWorld.ticks_per_stud(), BrickWorld.ticks_per_plate(), BrickWorld.ticks_per_stud()))
+		h = roundf(h / step) * step
+	_stamp_h = h
+
+
+## Give up a pulled stamp.
+func _stamp_drop() -> void:
+	_stamp_phase = ""
+	_stamp_h = 0.0
+	_sculpt_on = false
+	sculpt.show_ghost({})
+
+
 func _stamp_desc(mouse: Variant = null) -> Dictionary:
 	var a := _stamp_from
 	var b := _stamp_to
 	var r := _sculpt_r()
 	var n := _sculpt_plane.normal.abs()
+	if _stamp_phase != "" and sculpt_shape in STAMP_PULLED:
+		return _pulled_desc(a, b, n)
 	match sculpt_shape:
 		"lathe":
 			if _lathe_axis.is_empty():
@@ -4301,6 +4456,20 @@ func _stamp_desc(mouse: Variant = null) -> Dictionary:
 		"ball":
 			return {"kind": "line", "a": a, "b": a, "r": maxf(a.distance_to(b), 0.5)}
 	return {"kind": "line", "a": a, "b": b, "r": r}
+
+
+## A pulled stamp: the base on the stroke plane (a box's corners, or a round's centre `a` and
+## edge `b`), up the plane's normal by the height pulled -- a thin slab until it is pulled.
+func _pulled_desc(a: Vector3, b: Vector3, n: Vector3) -> Dictionary:
+	var up := _sculpt_plane.normal
+	var h := _stamp_h if absf(_stamp_h) >= 0.5 else 0.5
+	if sculpt_shape == "box":
+		var lo := a.min(b)
+		var hi := a.max(b)
+		var half := ((hi - lo) * 0.5 * (Vector3.ONE - n) + n * absf(h) * 0.5).max(Vector3.ONE * 0.5)
+		return {"kind": "box", "center": (lo + hi) * 0.5 + up * h * 0.5, "half": half}
+	var rad := maxf(a.distance_to(b), 0.5)
+	return _cone_desc(a, a + up * h, rad, rad if sculpt_shape == "cylinder" else 0.0)
 
 
 ## A capped cone from `a` (radius `r1`) to `b` (radius `r2`), samples: a rigid frame with y
@@ -4692,7 +4861,7 @@ func _build_sculpt_box() -> void:
 	_sec_brush.add_child(strength_label)
 	_sec_brush.add_child(strength)
 	var show_for := func(mode: String) -> void:
-		shapes.visible = mode == "stamp"
+		shapes.visible = false   # Draw's pictures choose the stamp (section 21, stage 6)
 		snap.visible = mode == "stamp"
 		strength_label.visible = mode in ["flatten", "grow"]
 		strength.visible = mode in ["flatten", "grow"]
@@ -6795,9 +6964,12 @@ const SCULPT_MODES := [["shape", "add (LMB) / carve (RMB)"], ["stamp", "stamp a 
 		["paint", "paint this part"], ["zone", "mark smooth (LMB) / back to bricks (RMB)"],
 		["models", "pick and move (models, parts, guides)"]]
 ## Stamp shapes (Docs/AssetWorkshop.md, "SDF tools, round 2").
-const SCULPT_SHAPES := [["box", "box: corner to corner"], ["cylinder", "cylinder: end to end"],
-		["cone", "cone: base to tip"], ["ball", "ball: centre to edge"], ["line", "line: end to end"],
+const SCULPT_SHAPES := [["box", "box: the base, then the height"], ["cylinder", "round: the base, then the height"],
+		["cone", "cone: the base, then the tip"], ["ball", "ball: centre to edge"], ["line", "line: end to end"],
 		["lathe", "lathe: axis, then outline"]]
+## The stamps made by the building's gesture (Docs/BuildTools.md section 21, stage 6): the base
+## dragged on the stroke plane, let go, the height pulled off it, a click lays it.
+const STAMP_PULLED := ["box", "cylinder", "cone"]
 ## Not an SdfForm op: the flatten brush, which calls `SdfForm.flatten`.
 const OP_FLATTEN := 100
 ## How much better a fitted piece must match the field than its box's cells as bricks, as
@@ -6805,6 +6977,11 @@ const OP_FLATTEN := 100
 const SDF_FIT_GAIN := 0.03
 const SDF_FIT_EAGER := 0.015
 var sculpt_shape := "box"
+## A pulled stamp's step: "base" while its base is dragged, "height" while its height is
+## pulled, "" otherwise (and for a stamp laid by a probe: corner to corner, as before).
+var _stamp_phase := ""
+## The pulled height, samples, along the stroke plane's normal (0: not pulled yet).
+var _stamp_h := 0.0
 var sculpt_snap := true
 var sculpt_strength := 0.5   # flatten and grow, 0-1
 var _stamp_from := Vector3.ZERO
@@ -9530,7 +9707,7 @@ func _try_changed() -> void:
 		_draw_points()
 	_outlines_dirty = true
 	_export_check = try_text()
-	if _catalog_panel != null and _catalog_panel.visible:
+	if _catalog_open():
 		_aim_catalog(_catalog_panel.catalog)
 
 

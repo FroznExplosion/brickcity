@@ -44,6 +44,7 @@ func _tick() -> void:
 	_outliner(ui)
 	_stages(ui)
 	_parts(ui)
+	_draw(ui)
 	_kinds(ui)
 	_ws.set_asset_kind("gun")
 	_camera(ui)
@@ -83,7 +84,7 @@ func _frame(ui: AssetWorkshopUI) -> void:
 		"Alt 1": "bar:view_side", "Alt 2": "bar:view_top", "Alt 3": "bar:view_front", "Alt C": "bar:game_look",
 		"Tab": "under:bricks", "F7": "under:parts", "F2": "under:photos", "F3": "under:guides", "F10": "under:help",
 		"Alt V": "blockout:draw", "Alt M": "bricks:measure", "B": "bricks:paint", "L": "bricks:select",
-		"Alt D": "bricks:sketch", "K": "bricks:shape", "Alt G": "bricks:move", "F4": "bricks:wand",
+		"Alt D": "bricks:draw", "K": "bricks:draw", "Alt G": "bricks:move", "F4": "bricks:wand",
 		"Alt U": "detail:stud", "Alt E": "finish:!explode", "Alt H": "finish:!hands", "Alt P": "finish:!play",
 		"Alt X": "finish:!export_game", "Alt B": "finish:!export_print", "F12": "finish:!check",
 	}
@@ -100,10 +101,36 @@ func _frame(ui: AssetWorkshopUI) -> void:
 		if not found:
 			no_button.append(key)
 	_ok("every key's job is a button on the screen too", no_button.is_empty(), str(no_button))
-	for pair in [["draw", "shape"], ["shape", "stamp"], ["smooth", "smooth"], ["select", "models"]]:
+	# Section 21 stage 6: Block out's Draw is the brush and the stamps, one tool.
+	_ok("Block out: one Draw, no Shape", ui._tool_buttons.has("draw") and not ui._tool_buttons.has("shape"))
+	for pair in [["draw", "shape"], ["smooth", "smooth"], ["select", "models"]]:
 		ui.pick_tool(pair[0])
 		_ok("Block out %s: sculpting, %s" % [pair[0], pair[1]], _ws.tool == "sketch" and _ws.sketch_draw == "sculpt"
 				and _ws.sculpt_mode == pair[1] and ui.active_tool() == pair[0], "%s %s" % [_ws.tool, _ws.sculpt_mode])
+	_ws.clay_pick("box")
+	ui.process(0.016)
+	_ok("Draw's Box: a stamp, still Draw, its pictures shown", _ws.sculpt_mode == "stamp" and _ws.sculpt_shape == "box"
+			and ui.active_tool() == "draw" and ui._clay_box.visible and not ui._draw_box.visible)
+	# The base, then the height: a box 4 samples up off a flat base.
+	_ws._sculpt_plane = Plane(Vector3.UP, 30.0)
+	_ws._stamp_from = Vector3(10, 30, 10)
+	_ws._stamp_to = Vector3(20, 30, 16)
+	_ws._stamp_phase = "height"
+	_ws._stamp_h = 4.0
+	var bd: Dictionary = _ws._stamp_desc()
+	_ok("a pulled box: its base where dragged, as tall as pulled", is_equal_approx((bd.center as Vector3).y, 32.0)
+			and is_equal_approx((bd.half as Vector3).y, 2.0) and is_equal_approx((bd.half as Vector3).x, 5.0), str(bd))
+	_ws.clay_pick("cylinder")
+	_ws._sculpt_plane = Plane(Vector3.UP, 30.0)
+	_ws._stamp_from = Vector3(10, 30, 10)
+	_ws._stamp_to = Vector3(13, 30, 14)
+	_ws._stamp_phase = "height"
+	_ws._stamp_h = 6.0
+	var cd: Dictionary = _ws._stamp_desc()
+	_ok("a pulled round: the base's radius, up the height", cd.kind == "cone" and is_equal_approx((cd.size as Vector3).x, 5.0)
+			and is_equal_approx((cd.b as Vector3).y, 36.0), str(cd))
+	_ws._stamp_drop()
+	_ws.clay_pick("brush")
 
 
 func _model(name: String) -> Dictionary:
@@ -290,6 +317,37 @@ func _parts(ui: AssetWorkshopUI) -> void:
 	seat_row.select(0)
 	ui._fill_actions()
 	_ok("with Add part and Rename part", ui.action_names().has("Add part") and ui.action_names().has("Rename part"))
+
+
+## Section 21 stage 6: one Draw on the Bricks stage -- the outlines as pictures, the base
+## then the height, Freehand the 2D Sketch.
+func _draw(ui: AssetWorkshopUI) -> void:
+	ui.set_stage("bricks")
+	_ok("Bricks: one Draw, no Shapes or Sketch on the rail", ui._tool_buttons.has("draw")
+			and not ui._tool_buttons.has("shape") and not ui._tool_buttons.has("sketch"))
+	ui.pick_tool("draw")
+	ui.process(0.016)
+	_ok("Draw: its outlines in the pop-out", ui.active_tool() == "draw" and ui._draw_box.visible
+			and ui._draw_row.has("wedge") and ui._draw_row.has("freehand"))
+	_ws.draw_pick("box")
+	_ok("the building's gesture: the base, then the height", _ws._shape_tool.mode == WkShapeTool.Mode.OUTLINE_HEIGHT)
+	var n: int = _ws.bench.recipe.size()
+	var c: Vector3i = _ws.bench._cell
+	_ws._drag_from = c
+	_ws._drag_to = c + Vector3i(1, 0, 1)
+	var d := {}
+	_ws.wk_shape_base_done(d)
+	_ws.wk_shape_typed(d, "4")
+	_ok("a height typed while pulling", _ws.shape_plates == 4, str(_ws.shape_plates))
+	_ws.wk_shape_commit(d)
+	_ok("and the click makes it: bricks laid", _ws.bench.recipe.size() > n, "%d -> %d" % [n, _ws.bench.recipe.size()])
+	_ws.bench._undo()
+	_ws.draw_pick("freehand")
+	_ok("Freehand is the 2D Sketch, still Draw on the rail", _ws.rail_active() == "sketch" and ui.active_tool() == "draw")
+	_ws.draw_pick("brush")
+	_ok("Brush is the shape brush", _ws._shape_brush_on() and ui.active_tool() == "draw")
+	_ws.draw_pick("box")
+	_ws.rail_pick("place")
 
 
 func _kinds(ui: AssetWorkshopUI) -> void:

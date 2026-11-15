@@ -367,6 +367,24 @@ pieces: the same (mean 1.42-1.62 ticks either way). *big_city A2's slow frames w
 idle `process` in a row, not the physics tick -- most likely outside the game. Left on, at
 8 ms; not tuned further.
 
+**Again 2026-11-15** (main had moved: pieces up to 26k bricks now, invisible-piece worst
+7-25 ticks where it was 3). `city.tscn -- --big --shot`, three of each, quiet machine,
+none held back:
+
+| | worst tick | ticks >25 ms | invisible worst | invisible mean |
+|---|---|---|---|---|
+| 6 ms | 59.0, 44.1, 47.7 | 2, 2, 3 | 25, 12, 7 | 2.17-2.68 |
+| 8 ms | 18.9, 19.0, 60.0 | 0, 0, 3 | 10, 16, 16 | 2.00-2.24 |
+| 10 ms | 31.8, 20.3, 19.5 | 2, 0, 0 | 10, 15, 13 | 2.07-2.14 |
+| off (`--clock=0`) | 20.4, 55.8, 19.0 | 0, 1, 0 | 10, 11, 10 | 2.04-2.48 |
+| 8 ms, mesh drain + harvest off the clock | 19.2, 23.9, 23.5 | 0, 0, 0 | 10, 10, 13 | 2.01-2.17 |
+| 8 ms, the islands' whole tick off the clock 20.7, 24.2, 21.9 | 0, 0, 0 | 10, 10, 10 | 2.03-2.13 |
+
+6 ms starves the queues. 8 and 10 are alike. Clamping the islands made pieces wait:
+collapse_probe's "no gap: a piece that left always drawn" failed 3 runs in 5 with the clock
+on, 1 in 3 with it off, 0 in 3 with the islands off it. Kept: 8 ms for the city's queues
+(6 of it theirs, 2 held back), the islands on their own caps (`TickClock.enter_islands`).
+
 ## 8. The brick-system audit, and bands as a box a brick (2026-11-11/12, worktree `sleepy-satoshi-5cd1f2`)
 
 The user asked whether the brick system's solutions are the best ones: "performance issues and

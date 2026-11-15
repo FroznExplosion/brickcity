@@ -34,8 +34,7 @@ const STAGES := [
 const TOOLS := {
 	"blockout": [
 		["select", "Select", "", "Click a model, one of its pieces, a part of the clay or a guide to pick it. Drag the gizmo: arrows move it, rings turn it, the cube resizes it. Enter or Esc lets go."],
-		["draw", "Draw", "Alt V", "Drag to add clay to the part in the outliner; RMB carves it away; Shift smooths."],
-		["shape", "Shape", "", "Drag out a box, ball, cylinder, cone, line or lathe of clay (choose it below). RMB carves."],
+		["draw", "Draw", "Alt V", "Pick an outline in the pop-out. Brush: drag to add clay to the part, RMB carves, Shift smooths. Box, round, cone: drag the base, let go, pull the height, click (RMB carves). Ball: centre to edge. Line: end to end. Lathe: the axis, then the outline."],
 		["smooth", "Smooth", "", "Drag over the clay to round off its edges."],
 		["!import", "Import", "", "Load a model file (.glb .gltf .obj .fbx .stl) as one item: its first piece is the body, the others its children in the outliner."],
 		["measure", "Measure", "Alt M", "Click two points: the distance in studs and plates, print mm and real mm."],
@@ -44,8 +43,7 @@ const TOOLS := {
 		["place", "Place", "Esc", "Click to put the brick in hand on the stud you aim at; RMB takes one away; R turns it; 1-9 and the wheel pick the brick."],
 		["select", "Select", "L", "Drag a box over bricks to select them; Delete removes them."],
 		["paint", "Paint", "B", "Click or drag over bricks to give them the colour in hand."],
-		["sketch", "Sketch", "Alt D", "Draw a flat outline on the working plane; it fills with bricks of this part."],
-		["shape", "Shapes", "K", "Drag out a box, wall or round of bricks, or brush them on."],
+		["draw", "Draw", "K", "Pick an outline in the pop-out. A box, round, ball or wedge: drag the base, let go, pull the height (or type it), click. Freehand (Alt D): draw on the working plane, it fills with bricks of the part. Brush: LMB lays, RMB carves."],
 		["move", "Move", "Alt G", "Drag the current part's bricks to a new place."],
 		["wand", "Fill", "F4", "Wand: click a colour patch on a reference photo; it fills with bricks of that colour."],
 		["measure", "Measure", "Alt M", "Click two points: the distance in studs and plates, print mm and real mm."],
@@ -71,13 +69,14 @@ const TOOLS := {
 const STATUS := {
 	"blockout:select": "Click a model, a piece, a part or a guide   drag the gizmo   Enter lets go",
 	"blockout:draw": "Drag adds clay to the part   RMB carves   Shift smooths",
-	"blockout:shape": "Drag out a shape of clay (choose it in the pop-out)   RMB carves",
+	"blockout:stamp": "Drag the base, let go, pull the height, click   RMB carves",
 	"blockout:smooth": "Drag over the clay to round its edges",
 	"place": "LMB lays the brick   RMB takes one away   R turns   1-9, Shift + wheel pick",
 	"select": "Drag a box over bricks   Delete removes them",
 	"paint": "LMB paints a brick (hold: a stroke)",
-	"sketch": "Draw an outline on the working plane: it fills with bricks of the part",
-	"shape": "Drag out a box, wall or round of bricks",
+	"sketch": "Freehand: draw an outline on the working plane, it fills with bricks of the part",
+	"shape": "Drag the base, let go, pull the height, click   RMB or Esc cancels",
+	"brush": "LMB lays bricks   RMB carves   Ctrl + wheel the size",
 	"move": "Drag the part's bricks to a new place",
 	"measure": "Click two points: the distance",
 	"stud": "LMB puts a stud on a face   RMB takes it off",
@@ -91,11 +90,18 @@ const UNDER_TOOLS := [
 	["guides", "Guides   F3", "guides", "Guide models  (F3)\nAn existing model to build inside; never exported."],
 	["help", "Help   F10", "help", "How to start, and the keys  (F10)"],
 ]
+## Draw's outlines on the Bricks stage (section 21, stage 6): [id, name, icon]. The first four
+## are made by the base and the height; Freehand is the 2D Sketch; Brush the shape brush.
+## Draw's outlines on Block out: the clay brush, then the stamps.
+const CLAY_PICS := [["brush", "Brush", "k_brush"], ["box", "Box", "k_rect"], ["cylinder", "Round", "k_circle"],
+		["cone", "Cone", "k_cone"], ["ball", "Ball", "k_ball"], ["line", "Line", "k_line"], ["lathe", "Lathe", "k_lathe"]]
+const DRAW_PICS := [["box", "Box", "k_rect"], ["cylinder", "Round", "k_circle"], ["sphere", "Ball", "k_ball"],
+		["wedge", "Wedge", "k_wedge"], ["freehand", "Freehand", "k_free"], ["brush", "Brush", "k_brush"]]
 ## Finish actions that only mean something for a gun.
 const GUN_ONLY := ["!hands", "!play"]
-## The bar's buttons this workshop has not: the layer (stage 4 makes it the tab), the room
-## guide (rooms), Cancel (Esc is the Place tool here).
-const BAR_SKIP := ["layer", "guide", "cancel"]
+## The bar's buttons this workshop has not: the room guide (rooms), Cancel (Esc is the Place
+## tool here).
+const BAR_SKIP := ["guide", "cancel"]
 ## The pop-out's width: the building workshop's (`WorkshopTools.POPOUT_W`).
 const POPOUT_W := 204.0
 ## The rail's width: the building workshop's (`WorkshopTools.RAIL_W`).
@@ -119,6 +125,11 @@ var _tools_panel: WkRail
 ## tabs a band 8 under the bar, 30 high, the rail 8 under them, the outliner down the right.
 var frame := WkFrame.new()
 var _tool_buttons := {}
+## Draw's outline pictures, over the tool's options.
+var _draw_box: VBoxContainer
+var _draw_row := {}
+var _clay_box: VBoxContainer
+var _clay_row := {}
 var _hint: Label
 var _outliner: PanelContainer
 var _tree: Tree
@@ -168,6 +179,12 @@ func setup(workshop, layer: CanvasLayer) -> void:
 	# (Docs/BuildTools.md section 21, the frame), scrolling when taller than the window.
 	ws._rail.get_parent().remove_child(ws._rail)
 	ws._rail.add_theme_stylebox_override("panel", StyleBoxEmpty.new())
+	_draw_box = VBoxContainer.new()
+	_tools_panel.options.add_child(_draw_box)
+	_draw_row = _tools_panel.pictures(_draw_box, "Draw", DRAW_PICS, func(id: String) -> void: ws.draw_pick(id), "box", 3)
+	_clay_box = VBoxContainer.new()
+	_tools_panel.options.add_child(_clay_box)
+	_clay_row = _tools_panel.pictures(_clay_box, "Draw", CLAY_PICS, func(id: String) -> void: ws.clay_pick(id), "brush", 4)
 	_tools_panel.options.add_child(ws._rail)
 	_tools_panel.pop_out(_layer, POPOUT_W)
 	_fit_options(ws._rail)
@@ -188,7 +205,7 @@ func setup(workshop, layer: CanvasLayer) -> void:
 ## A button under the tools (`UNDER_TOOLS`).
 func _under_act(id: String) -> void:
 	match id:
-		"bricks": ws.bench._hotbar.toggle_browser()
+		"bricks": ws.bench._hotbar.show_section("bricks")
 		"parts": ws.toggle_catalog()
 		"photos": ws._toggle_panel()
 		"guides": ws._toggle_guide_panel()
@@ -412,9 +429,8 @@ func pick_tool(id: String) -> void:
 		"blockout:select":
 			_sculpt("models")
 		"blockout:draw":
-			_sculpt("shape")
-		"blockout:shape":
-			_sculpt("stamp")
+			if ws.sculpt_state != "bricks":
+				ws.clay_pick(ws.clay_outline)
 		"blockout:smooth":
 			_sculpt("smooth")
 		"blockout:!import":
@@ -436,6 +452,8 @@ func pick_tool(id: String) -> void:
 			ws.bench._on_menu("save_as_ask", null)
 		"finish:!check":
 			ws.export_and_preview()
+		"bricks:draw":
+			ws.draw_pick()
 		"bricks:wand":
 			ws.set_tool("" if ws.tool == "wand" else "wand")
 		_:
@@ -459,11 +477,13 @@ func active_tool() -> String:
 		if ws.tool == "sketch" and ws.sketch_draw == "sculpt":
 			match String(ws.sculpt_mode):
 				"models": return "select"
-				"stamp": return "shape"
+				"stamp": return "draw"
 				"smooth": return "smooth"
 			return "draw"
 		return ""
 	var on: String = ws.rail_active()
+	if on in ["shape", "sketch"] and _tool_buttons.has("draw"):
+		return "draw"
 	return on if _tool_buttons.has(on) else ""
 
 
@@ -1047,7 +1067,7 @@ func process(dt: float) -> void:
 	var lit: Dictionary = ws.bench.bar_toggles()
 	lit["fps"] = ws.cam_ctl.mode == "fps"
 	lit["free"] = ws.free_place
-	var open := {"bricks": ws.bench._hotbar.is_browsing(), "parts": ws._catalog_panel != null and ws._catalog_panel.visible,
+	var open := {"bricks": ws.bench._hotbar.browsing("bricks"), "parts": ws._catalog_open(),
 			"photos": ws._panel.visible, "guides": ws._guide_panel.visible, "help": ws._help.visible}
 	for id in _under:
 		(_under[id] as Button).set_pressed_no_signal(bool(open.get(id, false)))
@@ -1088,7 +1108,25 @@ func process(dt: float) -> void:
 			y = maxf(y, hud.position.y + hud.size.y + 8.0)
 		_toast.position = Vector2(left + maxf(right - left - _toast.custom_minimum_size.x, 0.0) * 0.5, y)
 	# The status line: what the tool does, the part being built; the brick in hand off the clay.
-	var says: String = STATUS.get(stage + ":" + on, STATUS.get(on, ""))
+	if _draw_box != null:
+		_draw_box.visible = on == "draw" and stage != "blockout"
+		if _draw_box.visible:
+			var drawn: String = ws.draw_outline
+			if ws.rail_active() == "sketch":
+				drawn = "freehand"
+			elif ws._shape_brush_on():
+				drawn = "brush"
+			WkRail.light(_draw_row, drawn)
+	if _clay_box != null:
+		_clay_box.visible = on == "draw" and stage == "blockout"
+		if _clay_box.visible:
+			WkRail.light(_clay_row, "brush" if ws.sculpt_mode == "shape" else String(ws.sculpt_shape))
+	var key: String = ws.rail_active() if on == "draw" and stage != "blockout" else on
+	if stage == "blockout" and on == "draw" and ws.sculpt_mode == "stamp":
+		key = "stamp"
+	if key == "shape" and ws._shape_brush_on():
+		key = "brush"
+	var says: String = STATUS.get(stage + ":" + key, STATUS.get(key, ""))
 	if ws.part_sel < ws.part_names.size():
 		says += ("   ·   " if says != "" else "") + "part: %s (%d of %d)" % [ws.part_names[ws.part_sel], ws.part_sel + 1, ws.part_names.size()]
 	ws.bench.show_status(says, 12.0, ws.get_viewport().get_visible_rect().size.x - 12.0, stage != "blockout")

@@ -135,7 +135,7 @@ func refresh() -> void:
 	sec = _section(root, "Generated", r.towers.size())
 	for i in r.towers.size():
 		var p: Dictionary = r.towers[i].get("params", {})
-		_row(sec, "building %d" % (i + 1), "%d x %d studs" % [int(p.get("x", 0)), int(p.get("z", 0))], {})
+		_row(sec, "building %d" % (i + 1), "%d x %d studs" % [int(p.get("x", 0)), int(p.get("z", 0))], {"tower": i})
 	var rooms := _rooms()
 	sec = _section(root, "Rooms", rooms.size())
 	for i in rooms.size():
@@ -186,6 +186,8 @@ func _on_select() -> void:
 		t.pick("select")
 		t.selected = -1
 		t.ws._select_group(int(what.group))
+	elif what.has("tower"):
+		t.set_gen("building")   # its options, bake and remove: Generate's pop-out
 	elif what.has("room"):
 		t.pick("rooms")
 		if t.ws._spaces != null:

@@ -85,12 +85,24 @@ func _building() -> void:
 	await _shot("b11_select")
 	t.pick("rooms")
 	await _shot("b12_rooms")
+	t.set_gen("tower")
+	await _shot("b12b_generate_tower")
+	t.set_gen("building")
+	await _shot("b12c_generate_building")
 	t.pick("paint")
 	await _shot("b13_paint")
+	t.set_stage("finish")
+	await _shot("b13b_finish_tab")
+	t.set_stage("structure")
 	t.pick("hand")
 	t._fly_open = false
 	ws.bench._hotbar.toggle_browser()
 	await _shot("b14_browser", 30)
+	ws.bench._hotbar.show_section("furniture", false)
+	await _shot("b14b_library_furniture", 12)
+	ws.bench._hotbar.show_section("buildings", false)
+	await _shot("b14c_library_buildings", 6)
+	ws.bench._hotbar.show_section("bricks", false)
 	ws.bench._hotbar.toggle_browser()
 	t.act("keys")
 	ws.bench._place_keys()
@@ -125,13 +137,19 @@ func _asset() -> void:
 	for i in 20:
 		await process_frame
 	ui.set_stage("blockout")
-	for id in ["select", "draw", "shape", "smooth", "measure"]:
+	for id in ["select", "draw", "smooth", "measure"]:
 		ui.pick_tool(id)
 		await _shot("a1_blockout_" + id)
+	ws.clay_pick("box")
+	await _shot("a1_blockout_draw_box")
+	ws.clay_pick("brush")
 	ui.set_stage("bricks")
-	for id in ["place", "select", "paint", "sketch", "shape", "move", "measure"]:
+	for id in ["place", "select", "paint", "draw", "move", "measure"]:
 		ui.pick_tool(id)
 		await _shot("a2_bricks_" + id)
+	ws.draw_pick("freehand")
+	await _shot("a2_bricks_draw_freehand")
+	ws.draw_pick("box")
 	ui.set_stage("detail")
 	for id in ["stud", "paint"]:
 		ui.pick_tool(id)
@@ -151,7 +169,7 @@ func _asset() -> void:
 	ws.toggle_catalog()
 	await _shot("a5_catalog", 20)
 	ws.toggle_catalog()
-	ws.bench._hotbar.toggle_browser()
+	ws.bench._hotbar.show_section("bricks", false)
 	await _shot("a5_browser", 30)
 	ws.bench._hotbar.toggle_browser()
 	ws.bench._keys_on = true
