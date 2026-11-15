@@ -11,8 +11,11 @@ extends SceneTree
 ## and below the cap everything does.
 ##
 ## And the DEBRIS cap's sleepers (IslandManager.CAP_WAKE_SPARE): a piece the cap
-## put to sleep stays asleep while the cap is full, however near it is, and
-## wakes when there is room or to trade places with a piece much farther away.
+## put to sleep stays asleep while the cap is full, and wakes when there is
+## room, to trade places with a piece much farther away, or -- whatever the cap
+## -- when somebody is inside CAP_KEEP_RANGE of it (2026-11-15: "however near"
+## left a piece the player stood on drawn as its stand-in, no studs, until a
+## hit woke it).
 
 const BUILDING := 7
 
@@ -140,11 +143,12 @@ func _run() -> void:
 	quit(1 if _fail > 0 else 0)
 
 
-## A record of a small wreck, lying where the manager's somebody is standing.
-func _sleeper(w: BrickWorld, by_cap: bool) -> IslandManager.Dormant:
+## A record of a small wreck, lying where the manager's somebody is standing
+## (or `at` from there).
+func _sleeper(w: BrickWorld, by_cap: bool, at := Vector3.ZERO) -> IslandManager.Dormant:
 	var c := w.create_chunk(Vector3i.ZERO, TowerRecipe.chunk_dims(8, 8, 3))
 	TowerRecipe.build(w, c, TowerRecipe.bake_palette(w), 8, 8, 3)
-	w.set_chunk_transform(c, Transform3D.IDENTITY)
+	w.set_chunk_transform(c, Transform3D(Basis(), at))
 	var d := IslandManager.Dormant.new()
 	d.record = ChunkRecord.capture(w, c)
 	d.by_cap = by_cap
@@ -155,12 +159,13 @@ func _sleeper(w: BrickWorld, by_cap: bool) -> IslandManager.Dormant:
 func _check_cap_sleepers() -> void:
 	var w := BrickWorld.new()
 	var m := _manager(w, [], true)   # somebody at (4, 4, 4): well inside WAKE_RANGE
-	m.dormant.append(_sleeper(w, true))
+	# 40 m off: inside WAKE_RANGE, outside CAP_KEEP_RANGE.
+	m.dormant.append(_sleeper(w, true, Vector3(40.0, 0.0, 0.0)))
 	m._cap_room = false
 	m._cap_far = 1.0
 	for k in 5:
 		m._stream_dormancy()
-	_ok("a piece the cap slept stays asleep while the cap is full, however near",
+	_ok("a piece the cap slept stays asleep while the cap is full, outside the keep range",
 			m.dormant.size() == 1)
 	m._cap_far = 1000.0
 	m._stream_dormancy()
@@ -177,3 +182,13 @@ func _check_cap_sleepers() -> void:
 	m._cap_room = false
 	m._stream_dormancy()
 	_ok("a piece slept for distance wakes on distance alone", m.dormant.is_empty())
+
+	# Somebody standing in it: it wakes, however full the cap and however near
+	# the farthest piece awake (_cap_far 0: every awake one inside the keep range).
+	var woken0: int = m.cap_woken
+	m.dormant.append(_sleeper(w, true))
+	m._cap_room = false
+	m._cap_far = 0.0
+	m._stream_dormancy()
+	_ok("a piece the cap slept wakes when somebody is inside CAP_KEEP_RANGE, cap full or not",
+			m.dormant.is_empty() and m.cap_woken == woken0 + 1)

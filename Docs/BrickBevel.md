@@ -376,6 +376,20 @@ studs, 12,981 turned away), two more:
   `CityScene._lay_more` and `_unlay` now call `damaged(chunk)`. `--roomfly --wide` found four bands
   holding 8-16 studs more than their bricks had.
 
+And a third time (the user: "when I fly into a room then go to another room the studs won't spawn"):
+
+* **Laying a storey queued the whole building.** `damaged(chunk)` on every lay put every band of an
+  80x60 tower (48) in `_stud_queue`, at two fetches a step, each time the camera went up a storey.
+  Now `damaged_between(chunk, y_lo, y_hi)`: the bands at the laid storeys' height and the one under
+  (`CityScene._studs_changed_at`).
+* **The place made was taken by whoever came first.** With the budget full and a better placed band
+  waiting, `_make_room` gave up the worst band's place and kept it for "any band placed better than
+  0.8 of the one that left" -- and the round robin reached some other band first nearly every time;
+  the floor under the player (score 0) lost the race for seconds. Now the place is kept for the
+  waiting band's own score (`_admit_studs = _wait_studs`, at most `ADMIT_HOLD_STEPS`) and that band
+  is visited first next step (`_grant_key`). `--roomfly --wide`: 1-2 of 13 rooms with a flat floor
+  before, none in two runs after.
+
 The dev HUD has a `near tier` line (bands, with studs, the caps, turned away, waiting, forced).
 `city.tscn -- --roomfly --big` checks every band within the studs' reach has the studs its bricks
 have now, two seconds after flying into each room.

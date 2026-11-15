@@ -1256,6 +1256,7 @@ func tend_brick_panes() -> void:
 	var h_panes_owed := city._panes_owed
 	var h_toppling := city._toppling
 	var h_registry := city.registry
+	_hide_falling_panes(h_registry, h_toppling, h_panes_owed)
 	if not _harvest_panes():
 		return
 	if not city._pane_job.is_empty():
@@ -1498,6 +1499,35 @@ func far_coarse_drop(id: int) -> void:
 		(node as Node).queue_free()
 
 
+## A building coming apart (CityScene._coming_apart), or come down: its
+## painted windows go now, not when they are made again over what is left --
+## which waits for it to be quiet. They were hidden near the camera by a
+## distance fade until 2026-11-14; with that gone a collapsed tower's windows
+## hung in the air where its walls had been (user, 2026-11-15). Hidden until
+## the new ones are hung (`_panes_owed` says they are owed); freed for a
+## building that came down.
+func _hide_falling_panes(reg: BuildingRegistry, toppling: Dictionary, owed: Dictionary) -> void:
+	for id in _brick_panes.keys():
+		var node = _brick_panes[id]
+		if node == null or not is_instance_valid(node):
+			_brick_panes.erase(id)
+			continue
+		var b := reg.get_building(id)
+		if b == null or b.toppled or toppling.has(id) or not b.is_materialised():
+			(node as Node).queue_free()
+			_brick_panes.erase(id)
+			continue
+		if city._coming_apart(id):
+			(node as Node3D).visible = false
+			owed[id] = true
+			panes_hidden += 1
+		elif not (node as Node3D).visible and not owed.has(id):
+			(node as Node3D).visible = true
+
+
+var panes_hidden := 0
+
+
 ## What hanging a building's panes may wait for on the tick's clock.
 const PANES_MS := 1.0
 
@@ -1531,6 +1561,10 @@ func _harvest_panes() -> bool:
 		glass.mesh = panes
 		glass.material_override = BuildingShell.window_material()
 		glass.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		if city._coming_apart(id):
+			# Made from cells that stood before it began to come apart.
+			glass.visible = false
+			city._panes_owed[id] = true
 		(parent as Node3D).add_child(glass)
 		_brick_panes[id] = glass
 	return true

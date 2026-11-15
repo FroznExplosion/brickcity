@@ -270,6 +270,16 @@ var _wait_bevel_cost := 0
 var _wait_studs_cost := 0
 var _wait_bevel := INF
 var _wait_studs := INF
+## Which band that is, and the one a place was made for (_make_room): visited
+## first next step, so it takes the place itself. The place was kept for "any
+## band placed better than 0.8 of the one that gave it up", and the round robin
+## reached some other band first nearly every time -- the floor under the
+## player, placed best of all, lost the race for seconds (2026-11-15).
+var _wait_studs_key := 0
+var _grant_key := 0
+## The step the place was kept from; kept no longer than ADMIT_HOLD_STEPS.
+var _admit_studs_at := 0
+const ADMIT_HOLD_STEPS := 60
 ## A place given up for a better band goes to a band placed at least that
 ## well, not to whichever band the round robin reaches first (which could be
 ## placed worse than the one that left, and the two would trade places).
@@ -574,6 +584,22 @@ func damaged(chunk: int, sections := PackedInt32Array()) -> void:
 	worst_damage_ms = maxf(worst_damage_ms, ms)
 
 
+## The bands of `chunk` whose boxes reach between two heights (the chunk's own
+## space, metres) have changed studs: `damaged` for those sections only.
+## For storeys laid or given back (CityScene._lay_more, _unlay): the whole
+## chunk queued every band of an 80x60 tower, 48 of them, each time the camera
+## went up a storey, and the floor under the player waited at the back.
+func damaged_between(chunk: int, y_lo: float, y_hi: float) -> void:
+	var sections := PackedInt32Array()
+	for key in _by_chunk.get(chunk, []):
+		var band: Band = _bands.get(key)
+		if band != null and band.section >= 0 and band.box.end.y >= y_lo \
+				and band.box.position.y <= y_hi and not sections.has(band.section):
+			sections.push_back(band.section)
+	if not sections.is_empty():
+		damaged(chunk, sections)
+
+
 func _patch(chunk: int, by_section: Dictionary, sections: PackedInt32Array) -> void:
 	if chamfered_bands == 0 and _busy.is_empty():
 		return
@@ -633,6 +659,11 @@ func step(eye: Vector3, zoom_in := 1.0, forward := Vector3.ZERO) -> void:
 				_flying += 1
 	for key in _busy.duplicate():
 		_visit(key, eye, now, stud_budget)
+	# The band a place for stud geometry was made for last step.
+	if _grant_key != 0:
+		if _bands.has(_grant_key):
+			_visit(_grant_key, eye, now, stud_budget)
+		_grant_key = 0
 	# Bands whose bricks changed, their studs still the old ones: before the
 	# round robin, which reaches a band every (bands / SLICE) steps -- a third
 	# of a second with three hundred tracked, and studs hung in the air where
@@ -1111,6 +1142,7 @@ func _studs(band: Band, dist: float, budget: Array) -> void:
 		if band.score < _wait_studs:
 			_wait_studs = band.score
 			_wait_studs_cost = _est_studs(band)
+			_wait_studs_key = band.key
 		capped_studs += 1
 		geo = false
 	if geo != band.stud_geo or fetch or band.show_dirty:
@@ -1252,7 +1284,7 @@ func _make_room() -> void:
 	# Room for more than a band again: nothing is being kept for anyone.
 	if _hold_cost < max_tris * 0.75:
 		_admit_bevel = INF
-	if _stud_cost < max_studs * 0.75:
+	if _stud_cost < max_studs * 0.75 or steps - _admit_studs_at > ADMIT_HOLD_STEPS:
 		_admit_studs = INF
 	if _wait_bevel < INF and not _fits(_hold_cost, _wait_bevel_cost, max_tris, _holding):
 		var worst: Band = _worst(_holding)
@@ -1262,7 +1294,10 @@ func _make_room() -> void:
 	if _wait_studs < INF and not _fits(_stud_cost, _wait_studs_cost, max_studs, _studded):
 		var worst: Band = _worst(_studded)
 		if worst != null and _wait_studs < worst.score * SWAP_MARGIN:
-			_admit_studs = worst.score * SWAP_MARGIN
+			# Kept for the band waiting, not for whichever is visited first.
+			_admit_studs = _wait_studs
+			_admit_studs_at = steps
+			_grant_key = _wait_studs_key
 			_demote_studs(worst)
 	# Over budget -- shrunk from the menu, or bands that came out bigger than
 	# guessed: give back the worst until it fits, always keeping one.
