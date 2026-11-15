@@ -98,6 +98,11 @@ func _building() -> void:
 	t._fly_open = false
 	ws.bench._hotbar.toggle_browser()
 	await _shot("b14_browser", 30)
+	ws.bench._hotbar.show_section("furniture", false)
+	await _shot("b14b_library_furniture", 12)
+	ws.bench._hotbar.show_section("buildings", false)
+	await _shot("b14c_library_buildings", 6)
+	ws.bench._hotbar.show_section("bricks", false)
 	ws.bench._hotbar.toggle_browser()
 	t.act("keys")
 	ws.bench._place_keys()
@@ -158,7 +163,7 @@ func _asset() -> void:
 	ws.toggle_catalog()
 	await _shot("a5_catalog", 20)
 	ws.toggle_catalog()
-	ws.bench._hotbar.toggle_browser()
+	ws.bench._hotbar.show_section("bricks", false)
 	await _shot("a5_browser", 30)
 	ws.bench._hotbar.toggle_browser()
 	ws.bench._keys_on = true

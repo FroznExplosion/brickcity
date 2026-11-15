@@ -194,7 +194,7 @@ func _build_bar() -> void:
 	_tick_finish()
 
 	_insert = _menu(row, "Insert", [
-		["Build from library…", I_BUILD, KEY_MASK_CTRL | KEY_I],
+		["Build from library (Tab)…", I_BUILD, KEY_MASK_CTRL | KEY_I],
 		["Generated building", I_TOWER, KEY_MASK_CTRL | KEY_G],
 		[],
 		["Bake generated building to bricks", I_BAKE, 0],
@@ -332,7 +332,7 @@ func _on_edit(id: int) -> void:
 
 func _on_insert(id: int) -> void:
 	match id:
-		I_BUILD: show_open("insert")
+		I_BUILD: action.emit("library", "buildings")
 		I_TOWER: action.emit("tower", null)
 		I_BAKE: action.emit("bake_tower", null)
 		I_REMOVE_TOWER: action.emit("remove_tower", null)

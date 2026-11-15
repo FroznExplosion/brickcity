@@ -1574,12 +1574,11 @@ func _fill_rail() -> void:
 	rail.fill(title, rows, pick, [], 2)
 	rail.hint.visible = false   # what the tool does is the status line's first part
 	bricks_button = rail.add_under_tools("Bricks   Tab", "place", "Bricks  (Tab)\nOpen or close the menu of every brick.",
-			func() -> void: act("parts"))
+			func() -> void: ws._hotbar.show_section("bricks"))
 	furnish_button = rail.add_under_tools("Furniture   F6", "furniture",
 			"Furniture and items  (F6)\nOpen or close the catalogue of furniture and items to place.",
 			func() -> void:
-				if ws._furnish != null:
-					ws._furnish.open(not ws._furnish.is_open()))
+				ws._hotbar.show_section("furniture"))
 
 
 ## Generate with `kind` (`GEN_PICS`) in its pop-out: Insert > Generated, the outliner's row.
@@ -3463,8 +3462,8 @@ func process() -> void:
 	var says: String = STATUS.get(on, rail.hint.text if rail.hint != null else "")
 	if not show_fly and rid in POPOUT_HIDES:
 		says += "   (point at the tool for its options)"
-	bricks_button.set_pressed_no_signal(ws._hotbar.is_browsing())
-	furnish_button.set_pressed_no_signal(ws._furnish != null and ws._furnish.is_open())
+	bricks_button.set_pressed_no_signal(ws._hotbar.browsing("bricks"))
+	furnish_button.set_pressed_no_signal(ws._hotbar.browsing("furniture") or (ws._furnish != null and ws._furnish.is_open()))
 	# The readout and the paint palette sit right of the pop-out while it shows, so it never
 	# covers them (until the status line takes the readout's place: section 21, stage 1).
 	if ws._hud != null:

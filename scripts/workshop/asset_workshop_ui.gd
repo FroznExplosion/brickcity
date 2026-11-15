@@ -188,7 +188,7 @@ func setup(workshop, layer: CanvasLayer) -> void:
 ## A button under the tools (`UNDER_TOOLS`).
 func _under_act(id: String) -> void:
 	match id:
-		"bricks": ws.bench._hotbar.toggle_browser()
+		"bricks": ws.bench._hotbar.show_section("bricks")
 		"parts": ws.toggle_catalog()
 		"photos": ws._toggle_panel()
 		"guides": ws._toggle_guide_panel()
@@ -1047,7 +1047,7 @@ func process(dt: float) -> void:
 	var lit: Dictionary = ws.bench.bar_toggles()
 	lit["fps"] = ws.cam_ctl.mode == "fps"
 	lit["free"] = ws.free_place
-	var open := {"bricks": ws.bench._hotbar.is_browsing(), "parts": ws._catalog_panel != null and ws._catalog_panel.visible,
+	var open := {"bricks": ws.bench._hotbar.browsing("bricks"), "parts": ws._catalog_open(),
 			"photos": ws._panel.visible, "guides": ws._guide_panel.visible, "help": ws._help.visible}
 	for id in _under:
 		(_under[id] as Button).set_pressed_no_signal(bool(open.get(id, false)))

@@ -1534,6 +1534,24 @@ func _out_of_the_way_checks() -> void:
 	t.bricks_button.pressed.emit()
 	await process_frame
 	_ok("and closes it", not _ws.bench._hotbar.is_browsing() and not t.bricks_button.button_pressed)
+	# Section 21 stage 5: one library -- Bricks, Furniture and items, Rooms, Buildings.
+	var hb: WorkshopHotbar = _ws.bench._hotbar
+	_ok("the library's sections", hb.has_section("furniture") and hb.has_section("rooms")
+			and hb.has_section("buildings") and not hb.has_section("parts"))
+	t.furnish_button.pressed.emit()
+	_ok("Furniture opens it on Furniture and items", hb.browsing("furniture") and _ws.bench._furnish.panel.visible
+			and not hb._bricks_body.visible)
+	t.bricks_button.pressed.emit()
+	_ok("Bricks from there: the bricks, still open", hb.browsing("bricks") and hb._bricks_body.visible)
+	hb.close_browser()
+	_ws.bench._on_menu("library", "buildings")
+	var bl: LibraryList = hb._sections.buildings.body
+	_ok("Insert's build: the library on Buildings, the saved ones listed", hb.browsing("buildings")
+			and bl.shown().size() == WorkshopMenu.library("building").size(), str(bl.shown().size()))
+	hb._search.text = "zzqq no such build"
+	hb._search.text_changed.emit(hb._search.text)
+	_ok("one search: it filters the section open", bl.shown().is_empty())
+	hb.close_browser()
 	t.pick("draw")
 	await process_frame
 	await process_frame

@@ -15,9 +15,9 @@ was found, how to test without harming the user's files, and what to do next.
   1c the status line) and stage 2 (2a every key a button and one key map, agreed with the
   user; 2b one camera) merged 2026-11-14, stage 3 (the six menus) 2026-11-15 (section 21, "As
   built"), stage 4 (4a the building's stage tabs, Finish keeps the last layer; 4b the Generate
-  tool, the generators out of Rooms) 2026-11-15. Next: **stage 5**, the library browser (Tab:
-  Bricks | Furniture and items | Rooms | Buildings | Parts, one search) -- ask the user the
-  stage 5 open point below first.
+  tool, the generators out of Rooms) and stage 5 (one library on Tab) 2026-11-15. Next:
+  **stage 6**, one Draw in the asset workshop (bricks, then clay): read section 21 "The
+  grammar" and AssetWorkshop.md's Draw/Sketch notes first.
 
 
 ## Where to work
@@ -121,7 +121,6 @@ from model to bricks").
 
 - Stage 2: the keys -- settled 2026-11-14 (section 21, stage 2a).
 - Stage 4: settled 2026-11-15 -- on Finish, Hand lays in the last layer used.
-- Stage 5: inserted builds are copies, furniture is a reference. "Edit in the asset workshop" is
-  only for furniture unless the user wants builds as references too.
+- Stage 5: settled 2026-11-15 -- inserted builds stay copies, furniture a reference.
 - Stage 7: cell-sized clay is a second resolution of `SdfForm` (C++, `gdextension/brick/src/
   sdf_form.cpp`): that stage needs the junction and SCons, and the Build mode area owns it.

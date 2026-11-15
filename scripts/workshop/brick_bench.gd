@@ -485,6 +485,8 @@ func bench_ready() -> void:
 	_furnish.name = "Furnish"
 	add_child(_furnish)
 	_furnish.setup(self)
+	if _tools != null:
+		_library_sections()
 	_remesh()
 	if "--gate" in OS.get_cmdline_args() + OS.get_cmdline_user_args():
 		call_deferred("_run_gate")
@@ -3714,6 +3716,7 @@ func _on_menu(what: String, arg: Variant) -> void:
 			_update_guide()
 		"role": _set_role(int(arg))
 		"bar": bar_act(str(arg))
+		"library": _hotbar.show_section(str(arg), false)
 		"generate":
 			if _tools != null:
 				_tools.set_gen(str(arg))
@@ -3863,6 +3866,37 @@ func _begin_stamp(path: String) -> bool:
 		print("[workshop] %s holds nothing to insert" % path)
 		return false
 	return hold_stamp(r, path)
+
+
+## The building's library (Docs/BuildTools.md section 21, stage 5): Bricks is the browser's
+## own; Furniture and items (the F6 catalogue's list), Rooms and Buildings (saved builds, to
+## stamp) are added to it.
+func _library_sections() -> void:
+	var fp: AssetCatalogPanel = _furnish.panel
+	fp.set_anchors_preset(Control.PRESET_TOP_LEFT)
+	fp.offset_left = 0
+	fp.offset_right = 0
+	fp.offset_top = 0
+	fp.custom_minimum_size = Vector2(8 * 84, 2.5 * 104 + 120)
+	fp._search_box.visible = false   # the library's search is its
+	_hotbar.add_section("furniture", "Furniture and items", fp, func(t: String) -> void:
+		fp._search_box.text = t
+		fp._search_box.text_changed.emit(t))
+	fp.picked.connect(func(_id: String) -> void:
+		_hotbar.close_browser()
+		_furnish.open(true))
+	_hotbar.section_shown.connect(func(id: String) -> void:
+		if id == "furniture":
+			fp.reload())
+	for k in [["rooms", "Rooms", "room"], ["buildings", "Buildings", "building"]]:
+		var l := LibraryList.new(k[2])
+		_hotbar.add_section(k[0], k[1], l, l.search)
+		_hotbar.section_shown.connect(func(id: String) -> void:
+			if id == k[0]:
+				l.reload())
+		l.picked.connect(func(path: String) -> void:
+			_hotbar.close_browser()
+			_on_menu("insert", path))
 
 
 ## Take a recipe in hand to stamp. Split from `_begin_stamp` for the probe.

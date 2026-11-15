@@ -1517,6 +1517,25 @@ Each merged on its own; the probes of section 20 and the pictures before and aft
 | 7 | A model into clay and bricks in the building workshop |
 | 8 | The colour table, OBJ colours |
 
+**Stage 5, the library (plan, 2026-11-15).** The brick browser (Tab, `WorkshopHotbar`) becomes
+the library: a row of sections over it -- **Bricks | Furniture and items | Rooms | Buildings |
+Parts** -- and its one search box searches the section open. A workshop gives the sections it
+has (`WorkshopHotbar.add_section`): the building all but Parts, the asset workshop Bricks and
+Parts.
+
+* **Furniture and items**: the F6 catalogue's list (`AssetCatalogPanel`, its own search box
+  hidden), moved into the library. Picking one closes the library and puts it in hand (the
+  furnishing mode: LMB places, R turns, RMB takes one away, Esc puts it down) -- by reference,
+  as now. F6 and the Furniture button open the library on this section.
+* **Rooms, Buildings**: the saved builds of that kind (`WorkshopMenu.library`), by name; picking
+  one closes the library and takes it in hand to stamp (Insert's "Pick up", `_begin_stamp`). An
+  inserted build stays a **copy** (the open point: the user said "next" to the default).
+  Insert > Build from library opens the library on Buildings.
+* **Parts** (asset): the F7 catalogue (`PartCatalogPanel`) moved in; picking tries the part on,
+  as now. F7 and the Parts button open the library there.
+* Pictures for the builds and furniture (a rendered thumbnail each) come after: this stage is
+  the one browser and its search.
+
 **Stage 3, the menus (plan, 2026-11-14).** Both bars: **File Edit View Insert <Kind> Help**, in
 that order, nothing else.
 
@@ -1735,3 +1754,24 @@ it makes sense -- menus too, but not only menus. Where each asset workshop key's
 * Probes: `build_tools_probe` -- no generators in Rooms, Generate's tower panel alone, the
   building's options off without one and on after Add building, Insert > Generated opens the
   station's panel (364). Pictures: `b12_rooms`, `b12b_generate_tower`, `b12c_generate_building`.
+
+**Stage 5, one library** (2026-11-15). As the plan above, with:
+
+* `WorkshopHotbar` is the library: `add_section(id, label, body, search)`, `show_section`,
+  `browsing(id)`, `section_shown` (an owner fills its list fresh), `close_browser`. Its search
+  box searches the open section; the title says what a pick does there; its backdrop is opaque
+  now (the panels behind showed through).
+* Building: Bricks, **Furniture and items** (`AssetCatalogPanel` moved in from the F6 layer),
+  **Rooms** and **Buildings** (`LibraryList`, new: saved builds by name, a click picks one up to
+  stamp). F6 and the Furniture button open it on Furniture; Bricks on Bricks; Insert > Build
+  from library on Buildings (the old Insert dialog is no longer reached from the menu).
+  Picking furniture closes the library and starts furnishing with it in hand.
+* Asset: Bricks and **Parts** (`PartCatalogPanel`, made at start, `_ensure_catalog`; read again
+  each time the section opens). F7 and the Parts button toggle it; `_catalog_open()` is "the
+  library on Parts" (it was the floating panel's `visible`).
+* Inserted builds stay copies; furniture stays a reference (the open point: the user said "next"
+  to the default). Thumbnails for builds and furniture: not yet.
+* Probes: `build_tools_probe` -- the sections, Furniture and Bricks open theirs, Insert's build
+  opens Buildings listing every saved one, the one search filters it (369);
+  `part_save_probe`'s F7 checks read `_catalog_open()` (61). Pictures: `b14b_library_furniture`,
+  `b14c_library_buildings`, `a5_catalog`.
