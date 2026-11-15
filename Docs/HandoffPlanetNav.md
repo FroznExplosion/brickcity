@@ -57,7 +57,7 @@ own bricks in the AI's world on a planet (proxies stand in for now); VehicleNav 
    points within a plate of `PlanetData.height`, and the same path as the unframed nav over the
    same grid, transformed.
 4. **N2, one region round the fight:** in `scripts/planet/planet_scene.gd`, an `AIServices` set up
-   the way `tools/ai_arena.gd` (and `city_scene.gd:1155`) does, its AIWorld framed on a
+   the way `tools/probes/ai_arena.gd` (and `city_scene.gd:1155`) does, its AIWorld framed on a
    `PlanetNavRegion` round the player's town (`town_dirs[0]`). Gate `--gate=squad`: a squad set
    down on the region walks to the player round the curve, takes cover, fires; bodies tracked with
    `PlanetBody.track` (else they fall through the planet away from the player).

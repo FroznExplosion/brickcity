@@ -41,22 +41,25 @@ change in another area is that area's job.
 |---|---|
 | Build mode | `scripts/workshop/`, `scripts/build/`, materials (`scripts/render/brick_materials.gd`, `shaders/brick*.gdshader*`, the material tables in `brick_grid.h`, `textures/`), `Docs/Parts/`, `content/base/builds/` |
 | Terrain and water | `brick_terrain.*`, `scripts/terrain/`, `scripts/water/`, `heightfield_*`, `shaders/terrain*`, `shaders/water*` |
-| Weapons and effects | `weapons/`, `fx/`, `autoload/`, `loot/` |
+| Weapons and effects | `scripts/guns/`, `scripts/combat/`, `scripts/loot/`, `scripts/elements/`, `scripts/effects/`, `scripts/status/`, `scripts/autoload/`, `tools/tests/` |
 | Disasters | `scripts/disasters/`, `shaders/disaster_*`, `tools/probes/disaster_probe.gd`, `Docs/Disasters.md` |
 | City and buildings (shared) | `scripts/city_scene.gd`, `scripts/city/`, `scripts/rooms/`, `scripts/destruction/`, `scripts/build/tower_recipe.gd` — small changes by anyone, merged soon |
 
 ## Where a script goes
 
-No loose files at the top of `scripts/` or `tools/` (only `city_scene.gd`
-and the scene helpers the passes load are there). A new script goes in the
-folder of what it is part of:
+No loose scripts at the top of the project, of `scripts/` (only
+`city_scene.gd`) or of `tools/` (only the heat tools and `test_window.cfg`).
+A new script goes in the folder of what it is part of:
 
 - `scripts/`: `build/` (parts, recipes, placing), `workshop/`, `rooms/`,
   `city/`, `destruction/`, `terrain/`, `water/`, `render/` (materials, light,
   impostors, debug views), `core/` (clocks, paths, layers, cameras), and the
   feature folders (`ai/`, `guns/`, `planet/`, `space/` ...).
-- `tools/`: `probes/` (every `*_probe.gd`), `shots/` (pictures and tables),
-  `make/` (generators that write shipped content).
+- `tools/`: `probes/` (every `*_probe.gd`, and `ai_arena.gd` they share),
+  `passes/` (`city_passes.gd`, the planet passes and gates), `shots/`
+  (pictures and tables), `make/` (generators that write shipped content),
+  `tests/` (the weapons test scenes).
+- Autoloads are in `scripts/autoload/`; shaders in `shaders/`.
 - Scripts find each other by `class_name`, so a move breaks no code; a path
   in a `.tscn`, `project.godot`, `load()` or a doc must be changed with it.
 
@@ -119,7 +122,7 @@ The engine library is **not committed**; each worktree builds its own.
   (not headless) and `--path . res://scenes/city.tscn -- --chamfer`
   (Docs/BrickBevel.md).
 - City scene passes (`res://scenes/city.tscn -- --<pass>`) live in
-  `tools/city_passes.gd`, not in `city_scene.gd`: the city reads the flag and
+  `tools/passes/city_passes.gd`, not in `city_scene.gd`: the city reads the flag and
   calls `_pass_runner()._run_<x>_pass()`. A pass reaches the city through
   `city.` (typed, so a missing name is a parse error). New passes and their
   helpers go there too. They need a window: headless they hang after setup.

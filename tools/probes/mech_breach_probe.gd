@@ -11,7 +11,7 @@ extends SceneTree
 ## B. One kept from breaching (can_breach off): its path goes round the
 ##    wall's end, and it never touches the wall.
 
-const Arena := preload("res://tools/ai_arena.gd")
+const Arena := preload("res://tools/probes/ai_arena.gd")
 
 var _pass := 0
 var _fail := 0

@@ -14,7 +14,9 @@ addons/*/bin/*.pdb
 addons/*/bin/*.TMP
 
 # Probe and screenshot output
-shots/
+shots/*
+# ...but the file that keeps Godot from importing every screenshot in it.
+!shots/.gdignore
 
 # A worktree that runs tests keeps its window off the screen and out of the
 # user's keyboard and mouse with this (CLAUDE.md, "Testing";

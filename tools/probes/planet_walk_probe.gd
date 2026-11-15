@@ -2,7 +2,7 @@ extends SceneTree
 
 ## Test 5 of the sphere-planet feasibility tests (Docs/Planets.md 10b):
 ## walking round a sphere on local down, with the radial walker
-## (tools/planet_radial_body.gd, after STA doc 05).
+## (scripts/planet/planet_radial_body.gd, after STA doc 05).
 ##
 ##   --headless --fixed-fps 30 --path . --script res://tools/probes/planet_walk_probe.gd
 ##
@@ -16,7 +16,7 @@ extends SceneTree
 ## shifted origin puts it): 2 km forward and 2 km strafing.
 ## Pawn-sized, then mech-sized (a capsule 7 m tall, 1.4 m round, 6 m/s).
 
-const Radial := preload("res://tools/planet_radial_body.gd")
+const Radial := preload("res://scripts/planet/planet_radial_body.gd")
 
 var step := 0
 var ok := 0

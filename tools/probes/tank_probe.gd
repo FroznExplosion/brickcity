@@ -20,7 +20,7 @@ extends SceneTree
 ##    anybody's, and changes side; without a driver it does not move, without
 ##    a gunner it does not shoot.
 
-const Arena := preload("res://tools/ai_arena.gd")
+const Arena := preload("res://tools/probes/ai_arena.gd")
 
 var _pass := 0
 var _fail := 0

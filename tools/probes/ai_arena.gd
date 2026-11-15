@@ -4,7 +4,7 @@ extends RefCounted
 ## round or a charge does to the bricks -- dead bricks stop stopping bullets and
 ## pawns, as the city's _disable does. Preloaded by the probes, not a class.
 ##
-##     const Arena := preload("res://tools/ai_arena.gd")
+##     const Arena := preload("res://tools/probes/ai_arena.gd")
 ##     var a := Arena.new(self, 42)
 ##     ... a.tick() once a physics tick ...
 

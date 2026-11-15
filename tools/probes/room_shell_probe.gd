@@ -1,6 +1,6 @@
 extends SceneTree
 ## The set-by-shell generator (Docs/RoomModules.md 4, stage 6), with the test
-## modules of tools/room_module_kit.gd (no workshop).
+## modules of scripts/rooms/room_module_kit.gd (no workshop).
 ##
 ##     godot --headless --path . --script res://tools/probes/room_shell_probe.gd
 ##
@@ -27,7 +27,7 @@ extends SceneTree
 ##   seed      the same seed the same tower; another, another
 ##   small     a shell too small for its hall and corridor says so
 
-const Kit := preload("res://tools/room_module_kit.gd")
+const Kit := preload("res://scripts/rooms/room_module_kit.gd")
 
 var _pass := 0
 var _fail := 0

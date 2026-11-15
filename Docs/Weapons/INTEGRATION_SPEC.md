@@ -37,7 +37,7 @@ lingering DoT). All from SPEC §1–6 + Amendment A. **Unchanged.**
 ### Ticker = their perf pattern, our model (supersedes SPEC §5 per-enemy ticking) — ✅ DONE
 Chosen for horde perf ("500 burning enemies = one loop", no per-enemy Timers).
 
-- **New autoload `StatusTicker`** (`autoload/status_ticker.gd`): owns ONE flat
+- **New autoload `StatusTicker`** (`scripts/autoload/status_ticker.gd`): owns ONE flat
   `Array[StatusEffect]` and the single `_physics_process` hot loop. It calls `fx.tick(delta)`
   on each of **our** `StatusEffect` nodes and auto-prunes freed/expired ones. `StatusEffect`
   no longer runs its own `_physics_process` (renamed to `tick()`), so there is exactly one

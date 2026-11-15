@@ -17,7 +17,7 @@ extends SceneTree
 ## the log has the same joints broken. Headroom itself is checked against the
 ## solve: a load one unit under it holds, one unit over it breaks.
 
-const Arena := preload("res://tools/ai_arena.gd")
+const Arena := preload("res://tools/probes/ai_arena.gd")
 const TENSION := 9.3
 ## How much room the balcony is left with by the wreckage on it.
 const THREAD := 0.5

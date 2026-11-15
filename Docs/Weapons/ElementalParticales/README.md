@@ -17,13 +17,13 @@ surfaces (**oil, water, environmental ice**). Built around three performance pil
 
 | File | Purpose |
 |---|---|
-| `autoload/elemental_manager.gd` | Status ticking, element application, combos |
-| `autoload/vfx_pool.gd` | Pooled GPUParticles3D / Decals / MultiMesh shatters |
+| `scripts/autoload/elemental_manager.gd` | Status ticking, element application, combos |
+| `scripts/autoload/vfx_pool.gd` | Pooled GPUParticles3D / Decals / MultiMesh shatters |
 | `enemy/elemental_target.gd` | Component on each enemy: mesh refs, overlay control, death hook |
 | `elements/*.gd` | One StatusEffect class per element |
-| `fx/shaders/elemental_overlay.gdshader` | Uber overlay: freeze, coat, pulse glow (all elements share it) |
-| `fx/shaders/acid_dissolve.gdshader` | Dissolve-to-skeleton base material |
-| `fx/shaders/ice_shard.gdshader` | Shatter shards (fade via INSTANCE_CUSTOM) |
+| `shaders/elemental_overlay.gdshader` | Uber overlay: freeze, coat, pulse glow (all elements share it) |
+| `shaders/acid_dissolve.gdshader` | Dissolve-to-skeleton base material |
+| `shaders/ice_shard.gdshader` | Shatter shards (fade via INSTANCE_CUSTOM) |
 | `fx/shaders/puddle_decal.gdshader` | Animated corrosive/water/oil puddles |
 | `fx/shaders/electric_arc.gdshader` | Scrolling arc ribbons (shock/radiation) |
 | `fx/shaders/ground_fire.gdshader` | Burning oil surface |

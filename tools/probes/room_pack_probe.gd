@@ -1,6 +1,6 @@
 extends SceneTree
 ## Ship interiors (Docs/RoomModules.md 7.4, stage 11): rooms packed into a hull,
-## with the test modules of tools/room_module_kit.gd and ship modules made here
+## with the test modules of scripts/rooms/room_module_kit.gd and ship modules made here
 ## (bridge, engine room, reactor, quarters, cargo), in a test hull built here
 ## (no workshop).
 ##
@@ -21,7 +21,7 @@ extends SceneTree
 ##   turned    a hull long along Z is turned to run along X
 ##   none      no hull says so
 
-const Kit := preload("res://tools/room_module_kit.gd")
+const Kit := preload("res://scripts/rooms/room_module_kit.gd")
 const LEN := 96
 const WIDE := 28
 const PITCH := 14

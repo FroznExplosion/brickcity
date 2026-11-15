@@ -21,7 +21,7 @@ extends SceneTree
 ## G. Splatter: driven at speed into an enemy, it runs it down; a friend in its
 ##    way is spared.
 
-const Arena := preload("res://tools/ai_arena.gd")
+const Arena := preload("res://tools/probes/ai_arena.gd")
 
 var _pass := 0
 var _fail := 0

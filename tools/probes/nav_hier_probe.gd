@@ -24,7 +24,7 @@ extends SceneTree
 ## H. Warming: a tank's map warmed round a point in spare service time; a long
 ##    search there then works nothing out.
 
-const Arena := preload("res://tools/ai_arena.gd")
+const Arena := preload("res://tools/probes/ai_arena.gd")
 const STUD := 0.35
 
 var _pass := 0

@@ -114,7 +114,7 @@ func _run() -> void:
 	qm.size = Vector2(1.0, 1.0)
 	quad.mesh = qm
 	var am := ShaderMaterial.new()
-	am.shader = load("res://tools/planet_atmosphere.gdshader")
+	am.shader = load("res://tools/probes/planet_atmosphere.gdshader")
 	am.set_shader_parameter("planet_centre", Vector3(0.0, -R, 0.0))
 	am.set_shader_parameter("sun_dir", sun.global_transform.basis.z)
 	quad.material_override = am

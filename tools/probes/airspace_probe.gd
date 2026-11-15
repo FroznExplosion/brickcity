@@ -13,7 +13,7 @@ extends SceneTree
 ## D. A truck driving through where a flyer is coming down holds short of the
 ##    pad, and drives on once the flyer has lifted off.
 
-const Arena := preload("res://tools/ai_arena.gd")
+const Arena := preload("res://tools/probes/ai_arena.gd")
 
 var _pass := 0
 var _fail := 0

@@ -7,7 +7,7 @@ extends Node
 ## builds what it needs on top of a city that was set up as usual, measures,
 ## prints, and quits.
 
-const PlanetOrigin := preload("res://tools/planet_origin.gd")
+const PlanetOrigin := preload("res://tools/passes/planet_origin.gd")
 
 var city: Node3D
 
@@ -27,11 +27,11 @@ func run(test: String) -> void:
 		"jitter":
 			await _jitter_test()
 		"tilt":
-			await (load("res://tools/planet_tilt.gd") as GDScript).new(self).run()
+			await (load("res://tools/passes/planet_tilt.gd") as GDScript).new(self).run()
 		"sun":
-			await (load("res://tools/planet_sun.gd") as GDScript).new(self).run()
+			await (load("res://tools/passes/planet_sun.gd") as GDScript).new(self).run()
 		"ground":
-			await (load("res://tools/planet_ground.gd") as GDScript).new(self).run()
+			await (load("res://tools/passes/planet_ground.gd") as GDScript).new(self).run()
 		_:
 			print("[planet] FAIL unknown test %s" % test)
 	city.get_tree().quit()

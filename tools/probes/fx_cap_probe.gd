@@ -86,7 +86,7 @@ func _initialize() -> void:
 			"%d" % trails.size())
 
 	print("VfxPool")
-	var pool = load("res://autoload/vfx_pool.gd").new()
+	var pool = load("res://scripts/autoload/vfx_pool.gd").new()
 	var scene := PackedScene.new()
 	var gp := GPUParticles3D.new()
 	scene.pack(gp)

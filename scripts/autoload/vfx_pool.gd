@@ -168,7 +168,7 @@ func release_arc(a: Node3D) -> void:
 	_free_arcs.append(a)
 
 # ------------------------------------------------------------- ice shatter
-## Shard burst drawn by fx/shaders/ice_shard.gdshader: one MultiMesh, each shard
+## Shard burst drawn by shaders/ice_shard.gdshader: one MultiMesh, each shard
 ## written once when the burst starts; the shader flies, bounces and shrinks it
 ## from its age, the only thing written after (Docs/GpuOffload.md 2.7).
 class ShatterBurst:
@@ -203,7 +203,7 @@ func spawn_shatter(world_pos: Vector3, aabb_size: Vector3, count := 40,
 		mm.instance_count = count
 		b.mmi.multimesh = mm
 		b.mat = ShaderMaterial.new()
-		b.mat.shader = load("res://fx/shaders/ice_shard.gdshader")
+		b.mat.shader = load("res://shaders/ice_shard.gdshader")
 		b.mat.set_shader_parameter("max_life", b.max_life)
 		b.mmi.material_override = b.mat
 		b.mmi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF

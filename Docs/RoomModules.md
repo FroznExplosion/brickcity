@@ -349,7 +349,7 @@ section_bricks})` -> `{ok, why, recipe, plan, stats}`: the grow (3) with a stati
 `branch_roles`, `start_role`, `finish_role`) and has two hooks, `_more` (after the branches) and
 `_dress` (a facade spot of a kind it does not know).
 
-| role | what (built by hand in the workshop; `tools/station_module_kit.gd` for the probes) |
+| role | what (built by hand in the workshop; `scripts/rooms/station_module_kit.gd` for the probes) |
 |---|---|
 | `core` | the root: the station grows from it (no core in the library: says so); its section is the root |
 | `node` | a hub: a short room with ports on several faces |
@@ -441,7 +441,7 @@ hold together by stud joints alone (`solve_grounded` walks studs only). Built th
   player's station modules are used instead when they have a core): floors and ceilings two
   plate layers, the upper a stud in so every seam of the lower is bridged; walls brick columns
   on the floor's rim under the ceiling's. Core, node, tube, short tube, pod (a window, a radiator
-  spot), truss (a panel spot), dock. `tools/station_module_kit.gd` is now this kit.
+  spot), truss (a panel spot), dock. `scripts/rooms/station_module_kit.gd` is now this kit.
 * **Ties**: under every seam where two modules meet door to door, a 2x2 plate under both walls
   (plates stacked under the higher one down to it); a bridging tube is two plate layers for its
   floor and its ceiling (staggered across when it is only two studs long), brick walls, and tied

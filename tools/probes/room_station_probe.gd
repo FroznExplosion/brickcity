@@ -1,6 +1,6 @@
 extends SceneTree
 ## The station grower (Docs/RoomModules.md 7.2, stage 9), with the test modules
-## of tools/station_module_kit.gd (no workshop).
+## of scripts/rooms/station_module_kit.gd (no workshop).
 ##
 ##     godot --headless --path . --script res://tools/probes/room_station_probe.gd
 ##
@@ -23,7 +23,7 @@ extends SceneTree
 ##             section comes away whole (Docs/RoomModules.md 7.3)
 ##   none      a library with no core says so
 
-const Kit := preload("res://tools/station_module_kit.gd")
+const Kit := preload("res://scripts/rooms/station_module_kit.gd")
 
 var _pass := 0
 var _fail := 0

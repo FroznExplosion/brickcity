@@ -15,7 +15,7 @@ extends SceneTree
 ##
 ##     godot --headless --path . --script tools/probes/mech_ai_probe.gd
 
-const Arena := preload("res://tools/ai_arena.gd")
+const Arena := preload("res://tools/probes/ai_arena.gd")
 const LIMIT := 30 * 75
 const B_ORIGIN := Vector3(200.0, 0.0, 0.0)
 const AREA := Vector3(230.0, 0.0, 30.0)

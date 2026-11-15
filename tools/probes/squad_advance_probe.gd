@@ -15,7 +15,7 @@ extends SceneTree
 ##   3. MORALE: the player is back, close, and two of the squad are dropped. The
 ##      two left break and fall back, away from it, and hold.
 
-const Arena := preload("res://tools/ai_arena.gd")
+const Arena := preload("res://tools/probes/ai_arena.gd")
 const LIMIT := 30 * 110
 const P0 := Vector3(0.0, 0.0, -45.0)
 

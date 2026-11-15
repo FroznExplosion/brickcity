@@ -1,7 +1,7 @@
 extends RefCounted
 
 ## Test 9 of the sphere-planet feasibility tests (Docs/Planets.md 10b): what
-## a MOVING sun costs the ground. Run by tools/planet_passes.gd on the terrain
+## a MOVING sun costs the ground. Run by tools/passes/planet_passes.gd on the terrain
 ## city, windowed, with the editor closed (a timing run):
 ##   res://scenes/city.tscn -- --terrain --planet=sun
 ##

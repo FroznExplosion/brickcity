@@ -567,7 +567,7 @@ found** (with the size of the fix) or **plan-breaking**. Windowed runs one at a 
 read after each; timings only with the editor closed.
 
 The scene passes run inside the city scene (it has the buildings, pieces, pawn, gun and AI wired
-up) through one hook, `-- --planet=<test>`, that hands the scene to `tools/planet_passes.gd`; the
+up) through one hook, `-- --planet=<test>`, that hands the scene to `tools/passes/planet_passes.gd`; the
 city scene gains those lines and nothing else.
 
 **Tier 1 -- could break the plan**
@@ -671,7 +671,7 @@ frame's wall time, 300 frames a case:
 
 #### Test 2, origin shift: problem found (fixes small to medium), not plan-breaking
 
-`tools/planet_origin.gd` -- `shift(city, offset)`, one frame, whole 32-stud tiles (11.2 m). It moves
+`tools/passes/planet_origin.gd` -- `shift(city, offset)`, one frame, whole 32-stud tiles (11.2 m). It moves
 every Node3D with no Node3D above it (children follow) and resets their physics interpolation;
 the static bodies that live only on the physics server (shells, rooms, bands, terrain tiles, the
 sea); every BrickWorld chunk transform; the registry's building transforms; the AI (new C++
@@ -740,7 +740,7 @@ What holds an absolute position and must follow a shift:
 
 #### Test 3, tilted building under point gravity: problem found (small to medium), not plan-breaking
 
-`--planet=tilt [--tilt=7]` (`tools/planet_tilt.gd`): a 70 m pad in a tangent frame, an `Area3D`
+`--planet=tilt [--tilt=7]` (`tools/passes/planet_tilt.gd`): a 70 m pad in a tangent frame, an `Area3D`
 with point gravity toward a centre 10 km below the pad (replacing the project's), a 16 x 16 tower
 of 30 courses registered as any is and then **re-framed onto the pad** -- `on_grid` would have
 snapped the tilt away, since `grid_frame_at` is still the world's frame. Shot (six small blasts up
@@ -817,7 +817,7 @@ projectiles), ~25 places in ~15 files:
 | island_manager.gd | crumbs: `v.y -= g * dt`, floor by a ray down -Y (`_crumb_floor`), laid at `floor_y`; support rays down -Y (`_under`), `SUPPORT_NUDGE` along -Y, `MAX_RISE_SPEED` and impact tests on `.y`, `_wake_resting_on` comparing box Y; `DEBRIS_GRAVITY` is a `gravity_scale` and follows the area (fine) |
 | brick_heap.gd | lays flat in the world (`cols[up] = Vector3.UP`), piles by a height per world stud |
 | ai/danger.gd, city_scene.gd (path ahead) | a falling piece's predicted path along -Y |
-| autoload/vfx_pool.gd | shards fall along `Gravity.down_at` (right) but land on a `floor_y` plane |
+| scripts/autoload/vfx_pool.gd | shards fall along `Gravity.down_at` (right) but land on a `floor_y` plane |
 | disasters: hailstorm, rain_splash | particle gravity `Gravity.down_at(Vector3.ZERO)`: the origin's down, not the emitter's |
 | disasters: sandstorm, tornado, meteor_shower, acid_rain, lightning_storm, brick_fire | directions and ground rays along ±Y |
 | ai/air_strike.gd | fall along -Y with its own `FALL_G` |
@@ -853,7 +853,7 @@ Our pawn cannot walk a sphere as it is: it, its moves, its view, the titan motor
 the debug camera hold ~185 places of `.y` logic and `Vector3.UP/DOWN` (pawn 28, moves 73, view
 18, titan motor 18, mech 22, debug camera 26). What the test answers is whether the radial
 approach those would be ported to works with Godot's `CharacterBody3D` and Jolt at our sizes.
-`tools/planet_radial_body.gd` is STA doc 05's controller with the pawn's numbers -- up from where
+`scripts/planet/planet_radial_body.gd` is STA doc 05's controller with the pawn's numbers -- up from where
 it stands, the whole basis rebuilt from it every tick, `up_direction` set to it, gravity and
 jumps along it, the camera pitching only -- and `tools/probes/planet_walk_probe.gd` walks it (headless,
 28 checks, all pass):
@@ -970,7 +970,7 @@ the plan; they run before any of the order of work below.
 
 #### Test 10, debris on planet ground: passed
 
-`--terrain --planet=ground [--collider=boxes|trimesh]` (`tools/planet_ground.gd`), headless and
+`--terrain --planet=ground [--collider=boxes|trimesh]` (`tools/passes/planet_ground.gd`), headless and
 flat out (`--fixed-fps 30`, so a tick's wall time is its work), twice each. The terrain city's 178
 collided tiles keep their boxes (35,507 shapes), or each swaps them for one trimesh of its drawn
 surface (437,901 triangles in all) -- on the same flat ground, since curving a tile changes no
@@ -1015,7 +1015,7 @@ frames.
 
 #### Test 12, the atmosphere from the air: passed
 
-`tools/planet_atmosphere.gdshader`: single scattering, Rayleigh and Mie, 12 samples along each view
+`tools/probes/planet_atmosphere.gdshader`: single scattering, Rayleigh and Mie, 12 samples along each view
 ray to the depth buffer, 4 toward the sun from each, as a full-screen quad, over the flat patch from
 100 m at 1280 x 720. **+0.76 and +1.11 ms of GPU** in two runs (17.78 to 18.89 ms), CPU unchanged:
 inside §10a's 0.5-1.5 ms, and only while flying. Its look is unbalanced (a first pass, not tuned),
@@ -1070,7 +1070,7 @@ moves that one node and nothing streams again.
 | atmosphere | a shell at 1.08 R | **taken**, with test 12's scattering pass for the air |
 | streaming distance | horizon-based view distance (`_update_view_distance`: eye-to-horizon + horizon-to-peak) | **taken**, and the same rule drives buildings (§11.3) |
 | floating origin | `_shift_world`: moves planets, star, player, `origin_shift` group | **ours**: `PlanetOrigin.shift` (tests 1-2), translation only, at 4 km; the planet node moves with everything else |
-| gravity, controllers | `GravityBodyConfig`, radial controller (STA doc 05) | our `Gravity` answers from the planet; `tools/planet_radial_body.gd` until the pawn is ported |
+| gravity, controllers | `GravityBodyConfig`, radial controller (STA doc 05) | our `Gravity` answers from the planet; `scripts/planet/planet_radial_body.gd` until the pawn is ported |
 | water | `WaterSystem` v3: flow graph, lakes, solver, ripple fields, CA | **not taken**. Only the ocean SHELL: a Gerstner surface on a sphere at sea level, shader only (STA's `water.gdshader` far tier), and "under it" is `radius < sea level`. No flow, no lakes, no simulation: the ground never changes |
 | caves, granules, goo, vegetation | placed caves, 2 cm granules, goo, `VegetationInstancer` | not now (vegetation later, as our trees) |
 | solar system, orbits, stations | `SolarSystem`, analytic orbits, anchored frame | §11.12 (2026-10-28): a generated universe of star systems, spinning planets |

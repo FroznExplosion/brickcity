@@ -22,7 +22,7 @@ extends SceneTree
 ## G. The player's answer: electric smoke throws a Boarder off, and it comes
 ##    back for another go.
 
-const Arena := preload("res://tools/ai_arena.gd")
+const Arena := preload("res://tools/probes/ai_arena.gd")
 
 var _pass := 0
 var _fail := 0

@@ -159,14 +159,14 @@ var _last_us := 0
 func _exit_tree() -> void:
 	Gravity.reset()
 
-## The gates (`-- --gate=<name>`) live in tools/planet_gates.gd, out of the
+## The gates (`-- --gate=<name>`) live in tools/passes/planet_gates.gd, out of the
 ## game's own code: made the first time a gate is asked for, never in a plain run.
 var _gate_runner_node: Node = null
 
 
 func _gate_runner() -> Node:
 	if _gate_runner_node == null:
-		_gate_runner_node = (load("res://tools/planet_gates.gd") as GDScript).new(self)
+		_gate_runner_node = (load("res://tools/passes/planet_gates.gd") as GDScript).new(self)
 		add_child(_gate_runner_node)
 	return _gate_runner_node
 

@@ -6,7 +6,7 @@ used by the model converter, the print generator, the workshop and the game.
 
 Status: defined 2026-10-13. **Nothing here has been printed, and links (Docs/BuildMode.md
 section 6) are not built.** Dimensions are nominal; test prints set the clearances. Machine-readable
-copy: [standards.json](standards.json). Sizes are in mm at print scale; game metres are x0.04375.
+copy: [standards.json](../../content/base/data/standards.json). Sizes are in mm at print scale; game metres are x0.04375.
 
 ## 1. Rules
 
@@ -149,7 +149,7 @@ nano stud is 16 mm of the real gun. The game then shrinks the model to fit a fig
     game size   = the model x HELD_SCALE,  HELD_SCALE = 4 / 43.75, about 1/11
 
 `HELD_SCALE` follows from the quarter and is not tuned on its own: shrunk by it, the model is the
-real gun's size in the game. Both numbers are in [standards.json](standards.json).
+real gun's size in the game. Both numbers are in [standards.json](../../content/base/data/standards.json).
 
 | | Real | Print | Nano studs | Game |
 |---|---|---|---|---|

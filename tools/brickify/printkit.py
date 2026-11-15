@@ -41,7 +41,7 @@ def main() -> None:
     args = sys.argv[sys.argv.index("--") + 1:]
     sheet = json.load(open(args[0], encoding="utf-8"))
     out_dir = args[1]
-    std = json.load(open(os.path.join(gs.PARTS_DIR, "standards.json"), encoding="utf-8"))
+    std = json.load(open(gs.STANDARDS, encoding="utf-8"))
     grid = std["grids"][std["classes"][sheet["class"]]["grid"]]
     bpy.ops.wm.read_factory_settings(use_empty=True)
     os.makedirs(out_dir, exist_ok=True)
