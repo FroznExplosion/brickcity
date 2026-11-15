@@ -10,11 +10,14 @@ class_name TickClock
 ##   * CityScene._physics_process calls begin() first thing. A tick nobody
 ##     began (a planet, a ship, a probe driving IslandManager alone) runs
 ##     every queue on its own cap, as before.
-##   * The islands' tick runs LAST, so ISLAND_SHARE_MS of the total is held
-##     back from the city's queues, and enter_islands() gives the islands at
-##     least that much however much the city's queues took.
-##   * A queue whose backlog is a visible hole -- piece meshes, hand-overs,
-##     spawns, hits -- still always runs its first unit. Any other queue runs
+##   * The islands' tick runs LAST, so island_share_ms of the total is held
+##     back from the city's queues -- and the islands then run on their OWN
+##     caps, off the clock (enter_islands). Clamped by it, a piece's mesh
+##     waited: the worst invisible spell went 10-11 -> 16 ticks and
+##     collapse_probe's "no gap" failed 3 runs in 5; off it, 0 in 3
+##     (2026-11-15, HandoffPerf 7).
+##   * A queue whose backlog is a visible hole -- spawns, hits, bands --
+##     still always runs its first unit. Any other queue runs
 ##     nothing once the clock is out (skip()), and waits for a later tick --
 ##     at most MAX_SKIPS of them in a row.
 ##
@@ -41,13 +44,12 @@ static func begin() -> void:
 	_end = _start + int((total_ms - island_share_ms) * 1000.0)
 
 
-## The islands' turn: what is left of the whole allowance, and never less
-## than their share.
+## The islands' turn: from here every queue is on its own cap again (see the
+## top). Their share was held back from the city's queues for them.
 static func enter_islands() -> void:
 	if not running():
 		return
-	var now := Time.get_ticks_usec()
-	_end = maxi(_start + int(total_ms * 1000.0), now + int(island_share_ms * 1000.0))
+	_end = 1 << 62
 
 
 ## Whether this tick is on the shared clock.
