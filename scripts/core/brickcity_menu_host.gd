@@ -26,7 +26,7 @@ const WORKSHOP_SCRIPT := "res://scripts/workshop/workshop.gd"
 ## Options > Video, Sun Shadow Cascades: 4 or 2. Read by the city as it makes its sun, and
 ## put on a city that is up (CityScene._setup_sun_shadows). Two drew a street walk's frame
 ## 1.6 ms sooner on the GPU of 12.9 (PerfCaps.md 2.2), the far shadows softer.
-static var sun_cascades := 4
+static var sun_cascades := 2
 
 
 func _game_title() -> String:
@@ -305,7 +305,7 @@ func _setting_defs() -> Array:
 			"hint": "How many of those lamps (the nearest) cast shadows. Shadows cost "
 			+ "the most; the others stop at the floor."},
 		{"id": &"sun_cascades", "tab": "video", "type": MENU_SETTINGS.T_ENUM,
-			"label": "Sun Shadow Cascades", "default": 0, "choices": ["4 (Sharp)", "2 (Faster)"],
+			"label": "Sun Shadow Cascades", "default": 1, "choices": ["4 (Sharp)", "2 (Faster)"],
 			"hint": "How many slices the sun's shadow is drawn in. Two is faster; shadows past "
 			+ "about ten metres are softer."},
 		{"id": &"gi_level", "tab": "video", "type": MENU_SETTINGS.T_ENUM,

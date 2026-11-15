@@ -18,7 +18,7 @@ extends SceneTree
 ## F. A soldier's "call in air" (the casebook's call_air) brings a run onto the
 ##    contact; while the planes are away it is not on offer.
 
-const Arena := preload("res://tools/ai_arena.gd")
+const Arena := preload("res://tools/probes/ai_arena.gd")
 
 var _pass := 0
 var _fail := 0

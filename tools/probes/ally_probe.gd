@@ -22,7 +22,7 @@ extends SceneTree
 ##    between two safe places can still cross a lane: the walking map does not
 ##    know them).
 
-const Arena := preload("res://tools/ai_arena.gd")
+const Arena := preload("res://tools/probes/ai_arena.gd")
 
 var _pass := 0
 var _fail := 0

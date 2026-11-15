@@ -27,7 +27,7 @@ extends SceneTree
 ##    with a squad, it stops and lets them out; blasts at its wheels leave it
 ##    half its speed.
 
-const Arena := preload("res://tools/ai_arena.gd")
+const Arena := preload("res://tools/probes/ai_arena.gd")
 const STUD := 0.35
 
 var _pass := 0

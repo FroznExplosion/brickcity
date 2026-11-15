@@ -1,7 +1,7 @@
 extends SceneTree
 ## Sections of a generated build (Docs/RoomModules.md 7.1, stage 8): the parts
 ## a station or a ship will be made of, with the test modules of
-## tools/room_module_kit.gd (no workshop).
+## scripts/rooms/room_module_kit.gd (no workshop).
 ##
 ##     godot --headless --path . --script res://tools/probes/build_sections_probe.gd
 ##
@@ -17,7 +17,7 @@ extends SceneTree
 ##             build's sections are stale (none)
 ##   default   the default budget: what an ordinary grown building and tower make
 
-const Kit := preload("res://tools/room_module_kit.gd")
+const Kit := preload("res://scripts/rooms/room_module_kit.gd")
 
 var _pass := 0
 var _fail := 0

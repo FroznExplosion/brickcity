@@ -16,7 +16,7 @@ extends SceneTree
 ##   chain       a second block on top of it, a ladder up its side too, and the
 ##               first ladder back: sent on top of the upper one, it climbs both
 
-const Arena := preload("res://tools/ai_arena.gd")
+const Arena := preload("res://tools/probes/ai_arena.gd")
 const STUD := 0.35
 ## The block: 16 x 16 studs, COURSES high (3.78 m: more than a storey's drop).
 const SIDE := 16

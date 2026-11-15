@@ -78,8 +78,8 @@ here once copied:
 ### What to copy
 
 Code: `scripts/guns/`, `scripts/loot/`, `scripts/combat/`, `scripts/elements/`,
-`scripts/status/`, `scripts/effects/`, `autoload/status_ticker.gd`, `autoload/elemental_manager.gd`
-(FX half only), `autoload/vfx_pool.gd`, `scripts/core/`.
+`scripts/status/`, `scripts/effects/`, `scripts/autoload/status_ticker.gd`, `scripts/autoload/elemental_manager.gd`
+(FX half only), `scripts/autoload/vfx_pool.gd`, `scripts/core/`.
 
 Added by the AI review ([AIPlan R18](../AIPlan.md#13--worth-knowing)), because the AI needs them:
 `scripts/titan/` (motor, weapon, brains, intents — the mech), `scripts/player/` (`PlayerRig`,
@@ -104,7 +104,7 @@ there; it needs a Windows build before it runs here.
 | Guns | `scripts/guns/` (21 files) | Seeded procedural guns: class, rarity, tier, manufacturer parts, effects, merges, skins, physical assembly |
 | Loot | `scripts/loot/` | Loot roller, legendary tables, shields, ability loadouts, world pickups |
 | Combat | `scripts/combat/` | `DamagePacket`, `DamageSystem`, `DefenseLayer`, `HealthPool` |
-| Elements and status | `scripts/elements/`, `scripts/status/`, `autoload/status_ticker.gd` | Seven elements, effectiveness matrix, DoTs ticked by one global loop |
+| Elements and status | `scripts/elements/`, `scripts/status/`, `scripts/autoload/status_ticker.gd` | Seven elements, effectiveness matrix, DoTs ticked by one global loop |
 | Horde | `swarmcore/src/swarm_core.{h,cpp}` (140 KB), `lane_graph`, `flow_grid`; `scripts/swarm/` | 500 agents as rows, promoted to nodes when close |
 | Tower defence | `scripts/td/` (29 files) | Lanes, flow fields, waves, turrets, barricades. Documented as a reusable module |
 | Core | `scripts/core/` | `EntityTime`, `Spring`/`Spring3`, `ComponentCache`, `BodySeparator` — no game types |

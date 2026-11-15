@@ -20,7 +20,7 @@ extends SceneTree
 ##             node at its face, found by a figure stood before it; it goes with
 ##             its section when the build is cut (BuildSections)
 
-const Kit := preload("res://tools/room_module_kit.gd")
+const Kit := preload("res://scripts/rooms/room_module_kit.gd")
 
 var _ws
 var _doors: BuildDoors

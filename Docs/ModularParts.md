@@ -18,7 +18,7 @@ checks); mechs in the game from parts (`tools/probes/mech_parts_probe.gd`, 70 ch
 "Stage 1 as built" and "Stage 2 as built" below say what differs from the plan.
 
 Builds on: [Parts/joints.md](Parts/joints.md) (joints, the one pin, hands),
-[Parts/standards.json](Parts/standards.json) (`gun_interfaces`, `gun_platforms`, `gun_adapters`,
+[Parts/standards.json](../content/base/data/standards.json) (`gun_interfaces`, `gun_platforms`, `gun_adapters`,
 `part_roles`), [AssetWorkshop.md](AssetWorkshop.md) (where parts are made),
 [Weapons/MANUFACTURER_SPEC.md](Weapons/MANUFACTURER_SPEC.md) (brands, effects, compat is data),
 [AIRoster.md](AIRoster.md) R6 (mech classes), [Creatures/README.md](Creatures/README.md).

@@ -17,7 +17,7 @@ extends SceneTree
 ## -- is bought with points as the player's style says, never over its caps;
 ## and a plane run costs its commander points.
 
-const Arena := preload("res://tools/ai_arena.gd")
+const Arena := preload("res://tools/probes/ai_arena.gd")
 const LIMIT := 30 * 100
 
 var _pass := 0

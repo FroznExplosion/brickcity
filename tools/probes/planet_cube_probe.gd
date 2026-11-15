@@ -17,9 +17,9 @@ extends SceneTree
 ##
 ## Measured: rays toward the centre on a 5 cm grid across each seam (a miss is
 ## a hole; a jump between neighbours is a step), the shape of the tiles at the
-## corner, and the radial walker (tools/planet_radial_body.gd) walking across.
+## corner, and the radial walker (scripts/planet/planet_radial_body.gd) walking across.
 
-const Radial := preload("res://tools/planet_radial_body.gd")
+const Radial := preload("res://scripts/planet/planet_radial_body.gd")
 const R := 10000.0
 const BLEND := 0.48
 const N := 1402                  # tiles per face edge; even, so an edge is a tile edge

@@ -2,7 +2,7 @@ extends RefCounted
 
 ## Test 3 of the sphere-planet feasibility tests (Docs/Planets.md 10b): a
 ## building on a pad in a TANGENT frame, under point gravity toward a centre
-## 10 km below the pad. Run by tools/planet_passes.gd:
+## 10 km below the pad. Run by tools/passes/planet_passes.gd:
 ##   res://scenes/city.tscn -- --planet=tilt [--tilt=7]
 ##
 ## 7 degrees is a building 1.2 km round a 10 km planet from where the scene's
@@ -16,7 +16,7 @@ extends RefCounted
 
 const RADIUS := 10000.0
 
-var p   # the pass (tools/planet_passes.gd)
+var p   # the pass (tools/passes/planet_passes.gd)
 var city: Node3D
 var tilt_deg := 7.0
 var frame := Transform3D()   # the pad's top centre, its +Y the local up

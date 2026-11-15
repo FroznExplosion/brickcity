@@ -164,8 +164,7 @@ mount a mod archive gets, from the game's folder instead of `user://mods/`:
 not wired yet, one line when the first DLC exists).
 
 When export presets are made: JSON is not a Godot resource, so the preset must
-include `content/*` as non-resource files (and `Docs/Parts/standards.json`,
-below), or the exported game has no content.
+include `content/*` as non-resource files, or the exported game has no content.
 
 ## 9. The audit (2026-11-11)
 
@@ -191,20 +190,19 @@ every chat's branch, so they want a quiet moment):
 
 1. ~~`user://` is flat.~~ Done: section 10.
 2. ~~`scripts/` has 121 files at its top and `tools/` 255.~~ Done: section 11.
-3. **`Docs/Parts/standards.json` is game data in the docs folder.** The game
-   reads it at run time (`PartStandards`), and so do the Python print tools, so
-   it stayed. It belongs in `content/base/data/`.
-4. **Three homes for tests**: `tools/*_probe.gd`, `test/` (weapons), and
-   `menu/tests/`. And three for effects code: `fx/`, `autoload/`,
-   `scripts/effects/`, `scripts/elements/`.
-5. **`shots/` (86 MB, untracked) has no `.gdignore`**, so Godot imports every
-   screenshot in it. It cannot be committed (the folder is git-ignored): add
-   the file by hand in each checkout, or have the shot code write it.
+3. ~~`Docs/Parts/standards.json` is game data in the docs folder.~~ Done: it is
+   `content/base/data/standards.json`; `PartStandards` and the Python print
+   tools (`tools/brickify`, `STANDARDS`) read it there.
+4. ~~Three homes for tests, three for effects code.~~ Done: `test/` is
+   `tools/tests/`, `autoload/` is `scripts/autoload/`, `fx/elements/` joined
+   `scripts/elements/`, `fx/shaders/` joined `shaders/`. (`menu/tests/` stays:
+   `menu/` is a module with its own docs and tests.)
+5. ~~`shots/` has no `.gdignore`.~~ Done: `shots/.gdignore` is tracked (the rest of
+   the folder is still git-ignored), so Godot no longer imports screenshots.
 6. **`addons/zylann.voxel` (13 MB)** is used only by the planet graph
    (`scripts/planet/planet_body.gd`, `planet_graph.gd`, `planet_walker.gd`).
    Fine while that is so; worth knowing it is the whole reason it is here.
-7. `scripts/render/upload_ledger.gd.uid` and `tools/probes/flashlight_probe.gd.uid` are
-   untracked in the main folder: their scripts were committed without them.
+7. ~~Two scripts committed without their `.uid` files.~~ Done: both are tracked.
 
 ## 10. The player's folder
 
@@ -263,12 +261,13 @@ scripts/
   core/            clocks, paths (ContentPacks, UserPaths), layers, cameras, test window
   ai/ combat/ guns/ loot/ mech/ parts/ pawn/ planet/ space/ hulls/ disasters/ ...
 tools/
-  probes/          every *_probe.gd
+  probes/          every *_probe.gd, and ai_arena.gd they share
+  passes/          city_passes, planet_passes, planet_gates and their helpers
   shots/           pictures and tables: *_shot, *_look, gun_stat_table ...
   make/            generators that write shipped content: make_*, part_sheets
   brickify/        the Python model-to-brick tools
-  city_passes.gd, planet_passes.gd, planet_gates.gd, ai_arena.gd and the
-  planet_* / *_module_kit helpers a scene loads; heat_log.ps1, heat_sum.py
+  tests/           the weapons test scenes
+  heat_log.ps1, heat_sum.py, test_window.cfg
 ```
 
 A probe is now run as `--script res://tools/probes/<name>_probe.gd`.
@@ -279,6 +278,9 @@ added at the old top level stays there and still works; move it when seen.
 After merging, run `--import` once (a first import may report the old
 `scripts/test_window.gd` once, from the cache).
 
-Still mixed, left for their areas: `tools/planet_*.gd` and the two
-`*_module_kit.gd` are game code a scene loads, not tools; `test/`, `fx/` and
-`autoload/` at the top level belong under `scripts/` or `tools/`.
+The project's top level is now: `content/ scripts/ scenes/ shaders/ textures/
+tools/ addons/ menu/ ui/ gdextension/ Docs/`. Nothing else belongs there.
+
+One file is still out of place: `scripts/city_scene.gd` belongs in
+`scripts/city/`. Its scene file has edits in progress in the main folder; move
+it (and the path in the five scenes that use it) once those are committed.

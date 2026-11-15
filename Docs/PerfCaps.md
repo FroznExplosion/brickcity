@@ -284,7 +284,7 @@ The effects had four nodes made per event with no ceiling. Now capped (`tools/pr
 
 BrickBevel.md 6 read the GPU at ~11.3 ms a frame looking at one 775-brick building in the
 1280x720 test window, and `--shot` 10.9, which looked like ~5 ms left before 60 fps went. Nobody
-had said what the 11 ms was. `-- --chamfer --cost --gpucost` (`tools/city_passes.gd`
+had said what the 11 ms was. `-- --chamfer --cost --gpucost` (`tools/passes/city_passes.gd`
 `_run_gpucost`) stands still at two views -- city.tscn six metres from one building in bricks (as
 `--cost` stands), big_city.tscn down the street of twelve buildings in bricks (as `--street`
 starts) -- reads `viewport_get_measured_render_time_gpu` over 120 frames, and repeats with one
@@ -342,8 +342,12 @@ the pixel part grows and the rest does not: one building ~2.1 + 2.9 x 4.4 = **~1
 does less. That is where the defaults start to matter: at 2560x1600 the close view alone is near
 the 16.6 ms frame.
 
-**Recommendation for handheld defaults** (not changed: gates' pictures depend on the defaults --
-the user's call):
+**The defaults since 2026-11-14** (the user: performance first). They were MSAA 2x, scale 1.0
+bilinear, shadows Medium, four cascades; the table above was measured against those. Every test
+window and scripted pass runs on the defaults (TestWindow.use_default_settings), so the gates'
+pictures and numbers moved with them; `--gpucost` now measures each old value put back, and the
+old defaults all together. A `settings.cfg` saved before keeps what it holds (it stores every
+value): Options > Video > reset to take these.
 
 * **Render scale 0.75 with FSR 1.0.** The biggest lever where pixels are what costs: ~44% of the
   pixel part, ~5.7 ms of the close view's ~15 at 2560x1600. FSR's own pass costs a little at

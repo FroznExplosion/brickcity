@@ -62,10 +62,10 @@ class ElementalStatus:
 func _ready() -> void:
 	if overlay_material == null:
 		overlay_material = ShaderMaterial.new()
-		overlay_material.shader = load("res://fx/shaders/elemental_overlay.gdshader")
+		overlay_material.shader = load("res://shaders/elemental_overlay.gdshader")
 	if dissolve_material == null:
 		dissolve_material = ShaderMaterial.new()
-		dissolve_material.shader = load("res://fx/shaders/acid_dissolve.gdshader")
+		dissolve_material.shader = load("res://shaders/acid_dissolve.gdshader")
 
 func apply(target_node: Node, element: int) -> void:
 	var target := _resolve_target(target_node)

@@ -16,7 +16,7 @@ extends SceneTree
 ## C. Its own way in: a soldier on the far side sent in on the breaching map
 ##    plants a charge where its path goes into the wall, blows it, and gets in.
 
-const Arena := preload("res://tools/ai_arena.gd")
+const Arena := preload("res://tools/probes/ai_arena.gd")
 const STUD := 0.35
 
 var _pass := 0

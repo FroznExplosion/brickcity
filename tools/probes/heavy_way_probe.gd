@@ -15,7 +15,7 @@ extends SceneTree
 ##    it was asked, at a soldier's height.
 ## C. In: the way in is close by now, and the soldier walks in through it.
 
-const Arena := preload("res://tools/ai_arena.gd")
+const Arena := preload("res://tools/probes/ai_arena.gd")
 const STUD := 0.35
 
 var _pass := 0
