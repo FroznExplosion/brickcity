@@ -1775,3 +1775,21 @@ it makes sense -- menus too, but not only menus. Where each asset workshop key's
   opens Buildings listing every saved one, the one search filters it (369);
   `part_save_probe`'s F7 checks read `_catalog_open()` (61). Pictures: `b14b_library_furniture`,
   `b14c_library_buildings`, `a5_catalog`.
+
+**Stage 6a, one Draw on the Bricks stage** (2026-11-15). The clay's Draw is 6b.
+
+* The asset's Bricks stage has one **Draw** (K) where Shapes and Sketch were. Its pop-out's
+  pictures (`AssetWorkshopUI.DRAW_PICS`): **Box, Round, Ball, Wedge** -- made by the building's
+  gesture, the base dragged, then the height pulled (or typed), a click; **Freehand** -- the 2D
+  Sketch on the working plane (Alt D picks it); **Brush** -- the shape brush. The options under
+  them are the old ones (the part, the plates box -- it follows the pull -- clean or random, and
+  Sketch's own).
+* `AssetWorkshop.draw_pick(outline)`, `draw_outline`; the kit Shapes tool in
+  `OUTLINE_HEIGHT` with the hooks `wk_shape_base_done` (where the height is pulled from),
+  `wk_shape_height` (the cursor's height on an upright plane through the base, facing the
+  camera, in plates) and `wk_shape_typed`. A ball's height is its width, as before.
+* `rail_active()` still answers "shape" or "sketch"; the frame folds both into Draw (as the
+  building folds Place, Pick and Paint into Hand). Icons: workshop_kit 0.22.0 (ball, wedge).
+* Probes: `asset_ui_probe` -- one Draw on the rail, its outlines, the gesture, a typed height,
+  the click lays bricks, Freehand is Sketch, Brush the shape brush; K and Alt D are Draw's on
+  screen (72). Pictures: `a2_bricks_draw`, `a2_bricks_draw_freehand`.

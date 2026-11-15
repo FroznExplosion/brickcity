@@ -158,6 +158,10 @@ var shape_kind := "box"
 var shape_fill := "clean"
 ## How many plates tall a box, cylinder or wedge is.
 var shape_plates := 3
+var _shape_plates_spin: SpinBox
+## Draw's outline (Docs/BuildTools.md section 21, stage 6): a SHAPES kind made by the base and
+## the height, "freehand" (the 2D Sketch on the working plane) or "brush" (the shape brush).
+var draw_outline := "box"
 ## Recipe ids of the bricks the select tool holds.
 var selection: Array[int] = []
 var section_on := false
@@ -352,6 +356,8 @@ func _ready() -> void:
 	dc.ctrl_descends = false
 	bench.toolbox.add(_sketch_tool)
 	_select_tool.mode = WkSelectTool.Mode.BOX
+	# Draw's gesture is the building's: the base, then the height (section 21, stage 6).
+	_shape_tool.mode = WkShapeTool.Mode.OUTLINE_HEIGHT
 	for t in [_measure_tool, _fill_tool, _move_tool, _shape_tool, _select_tool]:
 		bench.toolbox.add(t)
 	# What is made here is a gun (or a mech): File > Save, Save As and Open use their
@@ -1286,7 +1292,7 @@ func _unhandled_input(e: InputEvent) -> void:
 				else:
 					set_mirror(not bench.mirror_on)
 			KEY_F: set_free(not free_place)
-			KEY_D: rail_pick("place" if rail_active() == "sketch" else "sketch")
+			KEY_D: rail_pick("place") if rail_active() == "sketch" else draw_pick("freehand")
 			KEY_V: rail_pick("place" if rail_active() == "sculpt" else "sculpt")
 			KEY_U: set_tool("" if tool == "stud" else "stud")
 			KEY_G: set_tool("" if tool == "move" else "move")
@@ -1308,7 +1314,7 @@ func _unhandled_input(e: InputEvent) -> void:
 		var mine := true
 		match e.keycode:
 			KEY_Y: toggle_look()
-			KEY_K: set_tool("" if tool == "shape" else "shape")
+			KEY_K: set_tool("") if rail_active() in ["shape", "sketch"] else draw_pick()
 			KEY_L: set_tool("" if tool == "select" else "select")
 			KEY_F3: _toggle_guide_panel()
 			KEY_F4: set_tool("" if tool == "wand" else "wand")
@@ -2632,6 +2638,22 @@ func shape_cells(kind: String, a: Vector3i, b: Vector3i, plates: int) -> Diction
 	return out
 
 
+## Draw (K) with `outline` (section 21, stage 6): a shape by its base and height, the 2D
+## Sketch ("freehand"), or the shape brush ("brush"). The Bricks stage's one drawing tool.
+func draw_pick(outline: String = draw_outline) -> void:
+	draw_outline = outline
+	match outline:
+		"freehand":
+			rail_pick("sketch")
+		"brush":
+			rail_pick("shape")
+			shape_mode = "brush"
+		_:
+			rail_pick("shape")
+			shape_mode = "drag"
+			shape_kind = outline if SHAPES.has(outline) else "box"
+
+
 func set_tool(t: String) -> void:
 	_set_down()
 	tool = t
@@ -2664,16 +2686,46 @@ func wk_shape_base(_d: Dictionary) -> void:
 	_drag_to = bench._cell
 
 
-func wk_shape_base_done(_d: Dictionary) -> void:
-	pass
+## The base is down: the height is pulled from here (Docs/BuildTools.md section 21, stage 6 --
+## the building's gesture). It starts at what the plates box says.
+func wk_shape_base_done(d: Dictionary) -> void:
+	var a := _drag_from
+	var b := _drag_to
+	d["base_y"] = a.y * BrickPalette.PLATE_M
+	d["mid"] = Vector3((a.x + b.x + 1) * 0.5 * BrickPalette.STUD_M, a.y * BrickPalette.PLATE_M,
+			(a.z + b.z + 1) * 0.5 * BrickPalette.STUD_M)
 
 
-func wk_shape_height(_d: Dictionary) -> void:
-	pass
+## Pulling the height: the cursor's height on an upright plane through the base, facing the
+## camera, in plates (at least one).
+func wk_shape_height(d: Dictionary) -> void:
+	if not d.has("mid") or shape_kind == "sphere":
+		return
+	var ray: Array = bench._mouse_ray()
+	var from: Vector3 = to_local(ray[0])
+	var dir: Vector3 = (global_transform.basis.inverse() * (ray[1] as Vector3)).normalized()
+	var n := Vector3(dir.x, 0.0, dir.z)
+	if n.length() < 0.01:
+		return
+	n = n.normalized()
+	var den := n.dot(dir)
+	if absf(den) < 0.0001:
+		return
+	var t := n.dot((d.mid as Vector3) - from) / den
+	if t <= 0.0:
+		return
+	var y := (from + dir * t).y
+	shape_plates = clampi(int(round((y - float(d.base_y)) / BrickPalette.PLATE_M)), 1, 240)
+	if _shape_plates_spin != null:
+		_shape_plates_spin.set_value_no_signal(shape_plates)
 
 
-func wk_shape_typed(_d: Dictionary, _typed: String) -> void:
-	pass
+## A height typed while pulling, in plates.
+func wk_shape_typed(_d: Dictionary, typed: String) -> void:
+	if typed.is_valid_int() and int(typed) > 0:
+		shape_plates = clampi(int(typed), 1, 240)
+		if _shape_plates_spin != null:
+			_shape_plates_spin.set_value_no_signal(shape_plates)
 
 
 func wk_shape_release_commits(_d: Dictionary) -> bool:
@@ -3031,7 +3083,7 @@ func _build_phase3(layer: CanvasLayer) -> void:
 	_shape_box = VBoxContainer.new()
 	box.add_child(_shape_box)
 	var t1 := Label.new()
-	t1.text = "Shapes (K)"
+	t1.text = "Height: pulled, or typed"
 	_shape_box.add_child(t1)
 	var modes := OptionButton.new()
 	modes.add_item("drag a box: fill it")
@@ -3039,6 +3091,7 @@ func _build_phase3(layer: CanvasLayer) -> void:
 	modes.item_selected.connect(func(i: int) -> void:
 		shape_mode = "drag" if i == 0 else "brush"
 		_dragging = false)
+	modes.visible = false   # Draw's outline pictures say it (section 21, stage 6)
 	_shape_box.add_child(modes)
 	_shape_mode_pick = modes
 	_drag_box = VBoxContainer.new()
@@ -3047,6 +3100,7 @@ func _build_phase3(layer: CanvasLayer) -> void:
 	for k in SHAPES:
 		kinds.add_item(k)
 	kinds.item_selected.connect(func(i: int) -> void: shape_kind = SHAPES[i])
+	kinds.visible = false   # Draw's outline pictures
 	_drag_box.add_child(kinds)
 	var fills := OptionButton.new()
 	fills.add_item("clean: fewest bricks")
@@ -3063,6 +3117,7 @@ func _build_phase3(layer: CanvasLayer) -> void:
 	hs.max_value = 120
 	hs.value = shape_plates
 	hs.value_changed.connect(func(v: float) -> void: shape_plates = int(v))
+	_shape_plates_spin = hs
 	hrow.add_child(hs)
 
 	_sketch_box = VBoxContainer.new()
