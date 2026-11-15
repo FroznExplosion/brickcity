@@ -360,6 +360,7 @@ func _ready() -> void:
 	if bench._menu != null:
 		bench._menu.asset_mode(ASSET_KINDS)
 		_build_menus()
+	_ensure_catalog()
 	_set_asset_kind(bench.recipe.kind)
 	_build_asset_tools()
 	_setup_parts()
@@ -1385,7 +1386,7 @@ func _process(dt: float) -> void:
 	if _panel.visible:
 		_panel.position = Vector2(vp.x - _panel.size.x - 12, vp.y * 0.42)
 	if _ui != null:
-		_ui.place_floats([_panel, _guide_panel, _point_panel, _catalog_panel])
+		_ui.place_floats([_panel, _guide_panel, _point_panel])
 
 
 func ruler_text() -> String:
@@ -1654,7 +1655,7 @@ func import_package(path: String) -> Dictionary:
 	var r := PartPackage.import_file(path)
 	_export_check = ("package: %s rev %d in" % [r.id, r.rev]) if r.ok else ("package refused: " + String(r.why))
 	print("[asset workshop] " + _export_check)
-	if r.ok and _catalog_panel != null and _catalog_panel.visible:
+	if r.ok and _catalog_open():
 		_catalog_panel.set_catalog(PartCatalog.load_all())
 	return r
 
@@ -1677,19 +1678,39 @@ func _open_package_dialog() -> void:
 
 ## Open or close the parts catalogue (F7). It reads the part folders each time it opens, so
 ## a part just saved is in it.
+## It is the library's Parts section (Docs/BuildTools.md section 21, stage 5).
 func toggle_catalog() -> void:
-	if _catalog_panel == null:
-		_catalog_panel = PartCatalogPanel.new()
-		_catalog_panel.visible = false
-		_catalog_panel.position = Vector2(RAIL_W + 24, 60)
-		_catalog_panel.part_picked.connect(func(r: PartRecord) -> void:
-			var why := try_part(r)
-			if why != "":
-				_export_check = "parts: " + why)
-		_ruler.get_parent().add_child(_catalog_panel)
-	_catalog_panel.visible = not _catalog_panel.visible
-	if not _catalog_panel.visible:
+	_ensure_catalog()
+	if _catalog_open():
+		bench._hotbar.close_browser()
 		return
+	bench._hotbar.show_section("parts", false)
+
+
+## The parts catalogue is shown: the library open on Parts.
+func _catalog_open() -> bool:
+	return _catalog_panel != null and bench._hotbar.browsing("parts")
+
+
+func _ensure_catalog() -> void:
+	if _catalog_panel != null:
+		return
+	_catalog_panel = PartCatalogPanel.new()
+	_catalog_panel.part_picked.connect(func(r: PartRecord) -> void:
+		var why := try_part(r)
+		if why != "":
+			_export_check = "parts: " + why)
+	_catalog_panel._search_edit.visible = false   # the library's search is its
+	bench._hotbar.add_section("parts", "Parts", _catalog_panel, func(t: String) -> void:
+		_catalog_panel._search_edit.text = t
+		_catalog_panel._search_edit.text_changed.emit(t))
+	bench._hotbar.section_shown.connect(func(id: String) -> void:
+		if id == "parts":
+			_fill_catalog())
+
+
+## The catalogue read again (a part just saved is in it) and aimed at the part in hand.
+func _fill_catalog() -> void:
 	if bench._camera.has_method("_set_captured"):
 		bench._camera.call("_set_captured", false)
 	var cat := PartCatalog.load_all()
@@ -2078,7 +2099,7 @@ func select_part(i: int) -> void:
 	_outlines_dirty = true
 	if _width_spin != null:
 		_width_spin.set_value_no_signal(width_of(part_names[part_sel]))
-	if _catalog_panel != null and _catalog_panel.visible:
+	if _catalog_open():
 		_aim_catalog(_catalog_panel.catalog)
 	var f := FileAccess.open(toolbars_save, FileAccess.WRITE)
 	if f != null:
@@ -9530,7 +9551,7 @@ func _try_changed() -> void:
 		_draw_points()
 	_outlines_dirty = true
 	_export_check = try_text()
-	if _catalog_panel != null and _catalog_panel.visible:
+	if _catalog_open():
 		_aim_catalog(_catalog_panel.catalog)
 
 

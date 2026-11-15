@@ -114,7 +114,7 @@ func turn_held() -> void:
 ## Every frame while a piece is in hand.
 func process() -> void:
 	if held == "":
-		_hud.text = "FURNISH   pick a piece from the list   RMB take one away   F6 close"
+		_hud.text = "FURNISH   pick a piece in the library (F6)   RMB take one away   Esc done"
 		return
 	var ray: Array = ws._mouse_ray()
 	aim_ray(ray[0], ray[1])
@@ -267,7 +267,12 @@ func redraw() -> void:
 ## Keys and buttons while the catalogue is open. Returns true when used.
 func input(e: InputEvent) -> bool:
 	if e is InputEventKey and e.pressed and not e.echo and e.keycode == KEY_F6:
-		open(not is_open())
+		# The library on Furniture (Docs/BuildTools.md section 21, stage 5); without one, the
+		# catalogue as before.
+		if ws._hotbar != null and ws._hotbar.has_section("furniture"):
+			ws._hotbar.show_section("furniture")
+		else:
+			open(not is_open())
 		return true
 	if not is_open():
 		return false
