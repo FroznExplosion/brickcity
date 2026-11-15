@@ -170,8 +170,9 @@ var _far_dmg_dirty := false
 ## A building drawn in bricks has painted windows too, past the range its rooms
 ## are drawn in (Docs/DestructionLod.md 3.2): the shell's panes, each only
 ## where its window still stands in the bricks (`_cell_standing`, as a
-## demeshed one's, Structures.md 4.2), hidden inside InteriorGroups'
-## range by the shader's `near_hide` -- the rooms dither in as they dither out.
+## demeshed one's, Structures.md 4.2). A room's panes fade out by time once its
+## furniture is drawn, and back in before it is given back (RoomStreaming
+## writes the fades onto this node; each pane carries its room).
 ## Before, a building in bricks showed its rooms empty past INTERIOR_RANGE and
 ## a shot from mid range changed painted windows into drawn furniture.
 ## Made again once its bricks have changed and it is quiet (_interior_unsure),
@@ -1257,6 +1258,8 @@ func tend_brick_panes() -> void:
 	var h_registry := city.registry
 	if not _harvest_panes():
 		return
+	if not city._pane_job.is_empty():
+		return   # done, but the tick's clock was out: hung next pass
 	var here := city.camera.global_position
 	var best := -1
 	var best_d := INF
@@ -1495,12 +1498,20 @@ func far_coarse_drop(id: int) -> void:
 		(node as Node).queue_free()
 
 
+## What hanging a building's panes may wait for on the tick's clock.
+const PANES_MS := 1.0
+
+
 ## Hang the panes a worker has finished. False while one is still being made.
 func _harvest_panes() -> bool:
 	if city._pane_job.is_empty():
 		return true
 	if not WorkerThreadPool.is_task_completed(int(city._pane_job[0])):
 		return false
+	# Hanging them hands a mesh to the renderer: on the tick's shared clock
+	# (TickClock), and a later pass if it is out.
+	if TickClock.skip(&"panes", TickClock.until(PANES_MS)):
+		return true
 	WorkerThreadPool.wait_for_task_completion(int(city._pane_job[0]))
 	var id: int = city._pane_job[2]
 	var made = (city._pane_job[1] as Array)[0]
@@ -1520,7 +1531,6 @@ func _harvest_panes() -> bool:
 		glass.mesh = panes
 		glass.material_override = BuildingShell.window_material()
 		glass.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-		glass.set_instance_shader_parameter("near_hide", InteriorGroups.INTERIOR_RANGE)
 		(parent as Node3D).add_child(glass)
 		_brick_panes[id] = glass
 	return true

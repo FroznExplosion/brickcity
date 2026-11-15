@@ -529,8 +529,11 @@ func _check_details() -> void:
 			"%d stand(s) in the tower, %d item row(s)" % [stands, item_rows])
 	_ok("and no part of the interior drawing", piece_rows == want_piece_parts,
 			"%d interior box(es) for %d interior part(s)" % [piece_rows, want_piece_parts])
+	# Pieces only past the farthest a room is ever kept (a room that is up is
+	# drawn whole: RoomStreaming), items at their own, nearer range.
 	_ok("the two drawings fade at their own ranges",
-			float(InteriorGroups.piece_material().get_shader_parameter("fade_range")) == InteriorGroups.INTERIOR_RANGE
+			float(InteriorGroups.piece_material().get_shader_parameter("fade_range")) == InteriorGroups.PIECE_FADE_RANGE
+			and InteriorGroups.PIECE_FADE_RANGE > InteriorGroups.INTERIOR_RANGE + InteriorGroups.RELEASE
 			and float(InteriorGroups.item_material().get_shader_parameter("fade_range")) == InteriorGroups.ITEM_RANGE
 			and InteriorGroups.ITEM_RANGE < InteriorGroups.INTERIOR_RANGE)
 	parent.queue_free()

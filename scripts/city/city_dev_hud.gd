@@ -224,8 +224,10 @@ func _view_hud_line() -> String:
 
 func _groups_hud_line() -> String:
 	var gr: Dictionary = city.interior_groups.report()
-	return "interiors     %d storey group(s) in %d building(s): %d piece box(es), %d item box(es); %d piece(s) of wreckage drawn" % [
-			gr.groups, gr.buildings, gr.piece_boxes, gr.item_boxes, gr.piece_drawings]
+	var rs: Dictionary = city.room_streaming.report()
+	return "interiors     %d room(s) up of %d (%d near, %d by view, %d fading) in %d storey group(s), %d building(s): %d piece box(es), %d item box(es); %d piece(s) of wreckage drawn" % [
+			gr.rooms_up, RoomStreaming.CAP, rs.near, rs.view, rs.fading, gr.groups, gr.buildings,
+			gr.piece_boxes, gr.item_boxes, gr.piece_drawings]
 
 
 ## What the last second of ticks cost, by phase, worst first.

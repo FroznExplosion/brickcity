@@ -261,6 +261,18 @@ static func kind_at(footprint_x: int, footprint_z: int, courses: int,
 ## building windows can ask it (BuildingShell.window_arrays).
 static func kind_in(lat: Dictionary, building_seed: int, storey: int, plan: Vector2,
 		program: Dictionary = {}) -> int:
+	var id := room_in(lat, storey, plan)
+	if id < 0:
+		return -1
+	return kind_index(hash3(building_seed, id, 0x9E37), program)
+
+
+## Which room (its index in `rooms_for`) stands behind a point on a building's
+## plan, on one storey -- or -1 if none does. The nearest room to the point: a
+## point on the wall itself is fine. What a painted window carries so that it
+## can be faded for its own room alone (BuildingShell.window_arrays,
+## RoomStreaming).
+static func room_in(lat: Dictionary, storey: int, plan: Vector2) -> int:
 	var rects: Array = lat.rects
 	if rects.is_empty() or storey < 0 or storey >= (lat.storeys as Array).size():
 		return -1
@@ -274,8 +286,7 @@ static func kind_in(lat: Dictionary, building_seed: int, storey: int, plan: Vect
 		if d < best_d:
 			best_d = d
 			best = ri
-	var id := storey * rects.size() + best
-	return kind_index(hash3(building_seed, id, 0x9E37), program)
+	return storey * rects.size() + best
 
 
 ## Which of Room.KINDS a room with this seed is, under a program of weights.

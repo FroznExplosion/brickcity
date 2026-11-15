@@ -3732,13 +3732,19 @@ func _run_groups_pass() -> void:
 			int(b.recipe.courses) / TowerRecipe.COURSES_PER_FLOOR],
 			b.is_materialised() and city._brick_nodes.has(b.id) and not city.drawing.bands_building(b.id))
 
+	# Which rooms are up is RoomStreaming's (2026-11-14, Docs/HandoffRooms.md):
+	# the player's room and its neighbours (out of doors the nearest few facing
+	# them, within NEAR_RANGE), then the best two by view, CAP in all. These
+	# checks were "every storey group within INTERIOR_RANGE is drawn" -- the
+	# distance rule that replaced -- and are now that rule's.
+	var rs: RoomStreaming = city.room_streaming
 	var layout: Array = city.interior_groups.layout(b)
+	var most_held := 0
 	for k in ranges.size():
 		if k == ranges.size() - 1:
-			# Come in from outside the range: collision and shadows are kept a
-			# way past where they come on (ROOM_SLEEP_RANGE, SHADOW_RELEASE),
-			# and with the range at 60 m every stop is inside those from the
-			# one before.
+			# Come in from outside the range: shadows are kept a way past
+			# where they come on (SHADOW_RELEASE), and with the range at 60 m
+			# every stop is inside that from the one before.
 			_groups_look(face, out, InteriorGroups.INTERIOR_RANGE + InteriorGroups.RELEASE + 6.0, eye)
 			for t in 40:
 				await city.get_tree().physics_frame
@@ -3748,8 +3754,17 @@ func _run_groups_pass() -> void:
 		# Made afresh if they were let go (the last stop comes in from outside).
 		layout = city.interior_groups.layout(b)
 		var local: Vector3 = b.xform.affine_inverse() * city.camera.global_position
-		var in_range := 0
-		var shown := 0
+		var held: Array = rs.held_rooms()
+		most_held = maxi(most_held, held.size())
+		var mine := {}       # room index -> near, of this tower's held rooms
+		var faded := 0
+		for h in held:
+			if int(h[0]) == b.id:
+				mine[int(h[1])] = bool(h[2])
+			if float(h[3]) >= 1.0:
+				faded += 1
+		var up := 0          # rooms of the tower in its drawings now
+		var stray := 0       # rooms drawn that are not held
 		var kept_past := 0
 		var boxes := 0
 		var covered := 0
@@ -3758,37 +3773,65 @@ func _run_groups_pass() -> void:
 		var shadowed := 0
 		for g in layout:
 			var d := City._box_distance(g.box, local)
-			if d <= InteriorGroups.INTERIOR_RANGE:
-				in_range += 1
-				if g.shown and not g.dirty and not g.changed:
-					shown += 1
-			elif d > InteriorGroups.INTERIOR_RANGE + InteriorGroups.RELEASE and g.shown:
+			if d > InteriorGroups.INTERIOR_RANGE + InteriorGroups.RELEASE and g.shown:
 				kept_past += 1
 			if g.shown:
 				boxes += g.piece_count
 				if g.shadows:
 					shadowed += 1
+				for j in g.on_screen.size():
+					if g.on_screen[j] != 0:
+						up += 1
+						if not mine.has(g.first_room + j):
+							stray += 1
 			if g.cover:
 				covered += 1
-				for room_boxes in g.boxes:
-					for box in (room_boxes as Array):
+				for j in g.boxes.size():
+					if j >= g.cover_mask.size() or g.cover_mask[j] == 0:
+						continue
+					for box in (g.boxes[j] as Array):
 						if (box as AABB).size != Vector3.ZERO:
 							cover_boxes += 1
 				cover_shapes += (city._group_shapes.get(InteriorGroups.key_of(b.id, g.index),
 						PackedInt32Array()) as PackedInt32Array).size()
-		print("[groups] from %.0f m: %d of %d group(s) in range and drawn after %d tick(s), %d box(es); %d with collision, %d casting shadows" % [
-				ranges[k], shown, layout.size(), took, boxes, covered, shadowed])
-		_gate_ok("from %.0f m: every storey group within %.0f m is drawn and up to date, none kept past it" % [
-				ranges[k], InteriorGroups.INTERIOR_RANGE],
-				in_range > 0 and shown == in_range and kept_past == 0,
-				"%d in range, %d drawn, %d kept past" % [in_range, shown, kept_past])
+		print("[groups] from %.0f m: %d room(s) up (%d of this tower, %d near), settled after %d tick(s), %d box(es); %d group(s) with collision, %d casting shadows" % [
+				ranges[k], held.size(), mine.size(), mine.values().count(true), took, boxes, covered, shadowed])
+		_gate_ok("from %.0f m: rooms are up, no more than %d, each drawn with its painted window faded out, none drawn that is not up, none kept past the range" % [
+				ranges[k], RoomStreaming.CAP],
+				held.size() > 0 and held.size() <= RoomStreaming.CAP and faded == held.size()
+				and up == mine.size() and stray == 0 and kept_past == 0,
+				"%d up, %d faded out, %d of the tower's drawn (%d not up), %d kept past" % [
+					held.size(), faded, up, stray, kept_past])
+		# The view picks are the facing rooms nearest the middle of the screen:
+		# no room left out is nearer it than one taken by view.
+		var fwd: Vector3 = (b.xform.affine_inverse().basis * -city.camera.global_basis.z).normalized()
+		var ext: AABB = rs.extent_of(b)
+		var worst_taken := -1.0
+		var best_left := INF
+		var rooms_b := city.registry.rooms_of(b.id)
+		for index in rooms_b.size():
+			var lb: AABB = rs.room_box(b, index)
+			var dist := City._box_distance(lb, local)
+			if dist <= RoomStreaming.NEAR_RANGE or dist > InteriorGroups.INTERIOR_RANGE:
+				continue
+			if not RoomStreaming.faces(rooms_b[index], lb, local, ext) or not rs.draws(b.id, index):
+				continue
+			var off := RoomStreaming.off_view(lb, local, fwd)
+			if off > city._half_fov():
+				continue
+			var score := off + 0.2 * dist / InteriorGroups.INTERIOR_RANGE
+			if mine.has(index) and not bool(mine[index]):
+				worst_taken = maxf(worst_taken, score)
+			elif not mine.has(index):
+				best_left = minf(best_left, score)
+		_gate_ok("  the rooms taken by view are the ones nearest the middle of the screen",
+				worst_taken >= 0.0 and worst_taken <= best_left + 0.0001,
+				"worst taken %.3f, best left out %.3f" % [worst_taken, best_left])
 		if k == 0:
-			print("[groups]   %d of its %d group(s) are past the range from its foot, and not drawn" % [
-					layout.size() - in_range, layout.size()])
-			_gate_ok("  every interior piece of those storeys is in it once",
+			_gate_ok("  every interior piece of the rooms up is drawn once",
 					boxes > 0 and boxes == _groups_expected_boxes(b, layout),
 					"%d box(es), %d part(s) in the rooms' manifests" % [boxes, _groups_expected_boxes(b, layout)])
-			_gate_ok("  the group at the player's height has a collision box a piece",
+			_gate_ok("  the rooms near the player have a collision box a piece, and only they",
 					covered >= 1 and cover_boxes > 0 and cover_shapes == cover_boxes,
 					"%d group(s), %d piece(s), %d shape(s)" % [covered, cover_boxes, cover_shapes])
 			var met := false
@@ -3796,11 +3839,11 @@ func _run_groups_pass() -> void:
 			for g in layout:
 				if not g.cover or met:
 					continue
-				for room_boxes in g.boxes:
-					if (room_boxes as Array).is_empty():
+				for j in g.boxes.size():
+					if j >= g.cover_mask.size() or g.cover_mask[j] == 0 or (g.boxes[j] as Array).is_empty():
 						continue
 					var q := PhysicsRayQueryParameters3D.create(city.camera.global_position,
-							chunk_xf * (room_boxes[0] as AABB).get_center())
+							chunk_xf * (g.boxes[j][0] as AABB).get_center())
 					q.collision_mask = Layers.FIXTURE
 					var hit := city.get_world_3d().direct_space_state.intersect_ray(q)
 					met = not hit.is_empty() and hit.rid == city._room_bodies.get(b.id, RID())
@@ -3809,15 +3852,73 @@ func _run_groups_pass() -> void:
 			_gate_ok("  near, the pieces cast shadows", shadowed >= 1)
 		if k == ranges.size() - 1:
 			_gate_ok("  from here it is drawn with no collision and no shadows",
-					shown > 0 and covered == 0 and shadowed == 0,
-					"%d drawn, %d with collision, %d casting" % [shown, covered, shadowed])
+					up > 0 and covered == 0 and shadowed == 0,
+					"%d drawn, %d with collision, %d casting" % [up, covered, shadowed])
 		await _frames(2)
 		await _save("interior_groups_%d" % int(ranges[k]))
 	city.camera.fov = fov_was
 
+	# Look away: the rooms taken by view stay up a while (RoomStreaming.
+	# LINGER_MS), then their windows fade back in, by time, and only then are
+	# their rows dropped.
+	_groups_look(face, out, ranges[1], eye)
+	await _groups_settle(b)
+	var watch: Array = []   # rooms of the tower held by view, from here
+	for h in rs.held_rooms():
+		if int(h[0]) == b.id and not bool(h[2]):
+			watch.append(int(h[1]))
+	city.camera.look_at(city.camera.global_position + out * 10.0, Vector3.UP)
+	var t_away := Time.get_ticks_msec()
+	var still_at_1s := -1
+	var back_ms := -1
+	var early_drop := 0     # rows gone while the window was still faded out
+	var seen := {}          # window values seen on the way back
+	var was_on := {}
+	for index in watch:
+		was_on[index] = true
+	for t in 360:
+		await city.get_tree().physics_frame
+		var ms := Time.get_ticks_msec() - t_away
+		var on_now := 0
+		for index in watch:
+			var g = _groups_of_room(b, index)
+			var on: bool = g != null and g.shown and g.on_screen.size() > index - g.first_room \
+					and g.on_screen[index - g.first_room] != 0
+			var hide := rs.hide_of(b.id, index)
+			if was_on[index] and not on and hide > 0.0:
+				early_drop += 1
+			was_on[index] = on
+			if on:
+				on_now += 1
+			if hide > 0.0 and hide < 1.0:
+				seen[snappedf(hide, 0.01)] = true
+		if ms >= 900 and still_at_1s < 0:
+			still_at_1s = on_now
+		if on_now == 0:
+			back_ms = ms
+			break
+	_gate_ok("looking away, the %d room(s) taken by view stay up a second, and are given back after about %d s" % [
+			watch.size(), RoomStreaming.LINGER_MS / 1000],
+			watch.size() > 0 and still_at_1s == watch.size() and back_ms >= RoomStreaming.LINGER_MS
+			and back_ms < RoomStreaming.LINGER_MS + 2000,
+			"%d up after a second, all gone after %d ms" % [still_at_1s, back_ms])
+	_gate_ok("  each window fades back in by time, through several steps, before its room's rows go",
+			early_drop == 0 and seen.size() >= 3,
+			"%d dropped with the window still out, %d step(s) seen" % [early_drop, seen.size()])
+	_gate_ok("  never more than %d rooms up at once, all the way here" % RoomStreaming.CAP,
+			most_held <= RoomStreaming.CAP, "up to %d" % most_held)
+
 	# Out of range altogether: nothing of it is kept.
 	_groups_look(face, out, InteriorGroups.INTERIOR_RANGE + InteriorGroups.RELEASE + 6.0, eye)
 	for t in 40:
+		await city.get_tree().physics_frame
+	for t in 240:
+		var any := false
+		for g in city.interior_groups.known(b.id):
+			if g.shown:
+				any = true
+		if not any:
+			break
 		await city.get_tree().physics_frame
 	var left := 0
 	for g in city.interior_groups.known(b.id):
@@ -3825,16 +3926,16 @@ func _run_groups_pass() -> void:
 			left += 1
 	_gate_ok("past the range and its margin no group of it is kept", left == 0, "%d kept" % left)
 	# And its windows are painted on its bricks there, as a shell's are
-	# (Docs/DestructionLod.md 3.2), hidden inside the range the rooms are in.
+	# (Docs/DestructionLod.md 3.2), each pane knowing the room behind it, so
+	# that it can fade for that room alone.
 	for t in 200:
 		if city.drawing._brick_panes.has(b.id):
 			break
 		await city.get_tree().physics_frame
 	var panes = city.drawing._brick_panes.get(b.id)
-	_gate_ok("  its windows are painted on its bricks, hidden where its rooms are drawn",
-			panes != null and is_instance_valid(panes) and (panes as MeshInstance3D).mesh != null
-			and is_equal_approx(float((panes as GeometryInstance3D).get_instance_shader_parameter(
-				"near_hide")), InteriorGroups.INTERIOR_RANGE),
+	var pane_mesh: ArrayMesh = (panes as MeshInstance3D).mesh if panes != null and is_instance_valid(panes) else null
+	_gate_ok("  its windows are painted on its bricks, each pane carrying its room",
+			pane_mesh != null and (pane_mesh.surface_get_format(0) & Mesh.ARRAY_FORMAT_CUSTOM0) != 0,
 			"panes %s; %d made, %.1f ms all told" % [panes != null, city.drawing.brick_panes_built, city.drawing.brick_panes_ms])
 	await _save("interior_groups_panes")
 
@@ -3889,7 +3990,9 @@ func _run_groups_pass() -> void:
 	# A blast at a PIECE: that piece becomes bricks and is broken as bricks
 	# are. Its room is not laid, and the rest of the storey goes on being a
 	# drawing (Interiors.md 8.4). A room of two pieces or more that nothing
-	# has touched, in a group near enough to have its collision.
+	# has touched, chosen as near (it has collision), and a piece in it with
+	# nothing else within the blast's reach: the blast is 0.5 m, and a piece
+	# with its neighbours inside that lays them too, as it should.
 	var shot_room: Room = null
 	var shot_item := -1
 	var shot_group: InteriorGroups.Group = null
@@ -3898,14 +4001,28 @@ func _run_groups_pass() -> void:
 		if not g.cover or shot_room != null:
 			continue
 		for index in range(g.first_room, g.last_room):
+			var j: int = index - g.first_room
+			if j >= g.cover_mask.size() or g.cover_mask[j] == 0:
+				continue   # not a room near the player: no collision, maybe not drawn
 			var r := city.registry.get_room(b.id, index)
 			if r == null or r.items.size() < 2 or not r.gone.is_empty() or not r.laid.is_empty():
 				continue
-			if RoomManifest.item_floor_share(city.world, b.chunk, str(r.items[0].type),
-					(r.items[0].cell as Vector3i) - shot_offset) > 0.5:
-				shot_room = r
-				shot_item = 0
-				shot_group = g
+			for i in r.items.size():
+				if RoomManifest.item_floor_share(city.world, b.chunk, str(r.items[i].type),
+						(r.items[i].cell as Vector3i) - shot_offset) <= 0.5:
+					continue
+				var at := RoomManifest.item_box(r.items[i]).get_center()
+				var alone := true
+				for other in r.items.size():
+					if other != i and City._box_distance(RoomManifest.item_box(r.items[other]), at) <= 0.7:
+						alone = false
+						break
+				if alone:
+					shot_room = r
+					shot_item = i
+					shot_group = g
+					break
+			if shot_room != null:
 				break
 	if shot_room != null:
 		var laid0: int = city.registry.items_laid
@@ -3935,7 +4052,9 @@ func _run_groups_pass() -> void:
 	# A metre up its storey: the blasts (1.3 m) stop short of the slab above.
 	var cut_world := wb.position.y + float(TowerRecipe.SLAB_PLATES + cut_storey * TowerRecipe.STOREY_PLATES) * City.PLATE + 1.0
 	var cut_local: float = (b.xform.affine_inverse() * Vector3(face.x, cut_world, face.z)).y
-	_groups_look(face, out, 30.0, eye + 10.0)
+	# Looking at the storeys over the cut: rooms are up where the player looks
+	# (RoomStreaming), and those are the ones that must not be left hanging.
+	_groups_look(face, out, 30.0, cut_world - face.y + 5.0)
 	await _groups_settle(b)
 	var above := _groups_shown_above(b, cut_local + 2.8)
 	var rides0 := city._group_rides
@@ -4690,18 +4809,23 @@ func _groups_look(foot: Vector3, dir: Vector3, dist: float, eye: float) -> void:
 	city.camera.global_position = foot + dir * dist + Vector3(0.0, eye, 0.0)
 	city.camera.look_at(foot + Vector3(0.0, eye, 0.0), Vector3.UP)
 
-## Wait until every group of `b` in range is drawn and up to date, and the
+## Wait until every room that is up (RoomStreaming) is drawn, up to date and
+## its window faded out, every group of `b` with a room up is current, and the
 ## passes have had time to hand out collision. Returns the ticks it took.
 func _groups_settle(b: BuildingRegistry.Building) -> int:
 	var quiet := 0
 	for t in 600:
 		await city.get_tree().physics_frame
-		var local: Vector3 = b.xform.affine_inverse() * city.camera.global_position
 		var owed := 0
-		for g in city.interior_groups.layout(b):
-			if City._box_distance(g.box, local) <= InteriorGroups.INTERIOR_RANGE \
-					and (not g.shown or g.dirty or g.changed):
+		for g in city.interior_groups.known(b.id):
+			if g.held.has(1) and (not g.shown or g.dirty or g.changed):
 				owed += 1
+		if not city.room_streaming.settled():
+			owed += 1
+		# A room refused because its building is not known to be standing yet
+		# (_interior_unsure) is still owed.
+		if city.room_streaming.waits > 0:
+			owed += 1
 		quiet = quiet + 1 if owed == 0 else 0
 		if quiet >= 12:
 			return t - 11
@@ -4716,6 +4840,8 @@ func _groups_expected_boxes(b: BuildingRegistry.Building, layout: Array) -> int:
 		if not g.shown:
 			continue
 		for index in range(g.first_room, g.last_room):
+			if g.on_screen.size() <= index - g.first_room or g.on_screen[index - g.first_room] == 0:
+				continue   # not up: drawn by its painted window
 			var room: Room = rooms[index]
 			for i in room.items.size():
 				if room.gone.has(i):
@@ -4724,6 +4850,13 @@ func _groups_expected_boxes(b: BuildingRegistry.Building, layout: Array) -> int:
 					if city.registry.palette.has(part[0]) and not RoomManifest.is_detail(part):
 						n += 1
 	return n
+
+## The storey group of `b` that holds room `index`, or null.
+func _groups_of_room(b: BuildingRegistry.Building, index: int):
+	for g in city.interior_groups.known(b.id):
+		if index >= g.first_room and index < g.last_room:
+			return g
+	return null
 
 ## Blast a building through, wall to wall, at one height: what is above comes off.
 func _groups_cut(wb: AABB, cut_world: float) -> void:
@@ -6299,6 +6432,14 @@ func _report_profile() -> void:
 		for k in ["after_spawn", "stairs", "dmg_promote", "dmg_rooms", "dmg_hit", "dmg_pieces", "dmg_disable"]:
 			line += "%s %.2f  " % [k, float(city._prof_sum.get(k, 0.0)) / maxi(city._tick_samples, 1)]
 		print("[prof]   of which damage, mean per tick: " + line)
+		line = ""
+		for k in ["st_trim", "st_merge", "st_rooms", "st_detail", "st_residency"]:
+			line += "%s %.3f  " % [k, float(city._prof_sum.get(k, 0.0)) / maxi(city._tick_samples, 1)]
+		print("[prof]   of which stream, mean per tick: " + line)
+		var rsr: Dictionary = city.room_streaming.report()
+		print("[prof]   rooms (RoomStreaming): %d pass(es), %d full scan(s), choosing %.3f ms a pass (worst %.2f); %d came up, %d given back, %d given back by the cap" % [
+				rsr.passes, rsr.scans, float(rsr.choose_ms) / maxf(float(rsr.passes), 1.0), rsr.worst_choose_ms,
+				rsr.comes, rsr.goes, rsr.evicted])
 		var dn: Array = city.islands.damage_near_ms
 		print("[prof]   loose pieces (damage_near), all told: %d call(s); waking sleepers %.1f ms, finding pieces %.1f, damaging them %.1f, pushing %.1f" % [
 				int(dn[4]), dn[0], dn[1], dn[2], dn[3]])
