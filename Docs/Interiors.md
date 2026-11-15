@@ -728,3 +728,19 @@ up are no more than 8, each drawn with its window faded out, none drawn that is 
 the facing rooms nearest the middle of the screen, collision for the near rooms only; looking away the
 view rooms stay up 3 s and their windows fade back in through several steps before their rows go);
 `interior_group_probe` (pieces fade only past where a room is kept).
+
+Measured 2026-11-14 (editor closed, no other Godot running, each run started under 78 C, order
+alternated, none held back; `heat_sum.py` after each). `--shot` keeps its camera far from rooms, so
+it says little about spawning; it does say what the choosing costs:
+
+| run | frames over 33 ms | `st_rooms` mean per tick |
+|---|---|---|
+| `city.tscn -- --big --shot`, before | 8, 5 | 0.095 ms |
+| the same, rooms | 6, 5 | 0.184, 0.172 ms |
+| `big_city.tscn -- --shot`, before | 10 | 0.099 ms |
+| the same, rooms | 5, 8, 3 | 0.193, 0.194, 0.177 ms |
+
+Slow frames: no change past noise. `st_rooms` is about 0.08 ms a tick more: the choosing scans
+every room in range (0.36-0.38 ms a pass, every fourth tick, worst 1.6 ms), less a still camera,
+which reuses its last choice for up to 0.5 s (`STILL_M`, `STILL_DOT`, `RESCAN_MS`). The `--groups`
+gate's whole run: 357 rooms worked out, 30 drawings put up or refreshed, the slowest 0.19 ms.
