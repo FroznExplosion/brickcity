@@ -1320,6 +1320,8 @@ func _ready() -> void:
 		_pass_runner()._run_lodbreak_pass()
 	elif "--roomcost" in OS.get_cmdline_user_args():
 		_pass_runner()._run_roomcost_pass()
+	elif "--roomfly" in OS.get_cmdline_user_args():
+		_pass_runner()._run_roomfly_pass()
 	elif "--roomsview" in OS.get_cmdline_user_args():
 		_pass_runner()._run_roomsview_pass()
 	elif "--breakshape" in OS.get_cmdline_user_args():
@@ -2062,6 +2064,16 @@ func _interior_unsure(id: int) -> bool:
 	# were (hold_interiors_mid_collapse): far_rules_probe's case without the
 	# rule, which has to draw them.
 	if not hold_interiors_mid_collapse:
+		return false
+	# Never hit: it cannot be coming apart. Laying more of its storeys as the
+	# camera comes near (_stream_residency, _lay_more) rebuilds its bands and
+	# owes it a solve, and that held every new room of a building being flown
+	# round for seconds at a time -- "the furniture never spawns" (user,
+	# 2026-11-14), once rooms were chosen where the player is rather than from
+	# 60 m off.
+	var ub := registry.get_building(id)
+	if ub != null and not ub.is_damaged() and not _toppling.has(id) \
+			and not director.holding(id):
 		return false
 	if _mid_collapse(id) or drawing.bands_building(id) or _span_owed.has(id):
 		return true
@@ -3037,6 +3049,11 @@ func _lay_more(id: int, storeys: PackedInt32Array) -> void:
 		_band_first[id] = true
 	_reshape_storeys(id, fresh)
 	_refresh_furniture(id)
+	# Its rooms on those storeys stand on bricks now: worked out again (a room
+	# worked out before its floor was laid drew nothing, and kept drawing
+	# nothing), and its painted windows made again over them.
+	interior_groups.touch(id)
+	_panes_owed[id] = true
 	_nav_touch(id)
 	_mark_dirty(id)
 	var ms := float(Time.get_ticks_usec() - t0) / 1000.0

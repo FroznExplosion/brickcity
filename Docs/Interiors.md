@@ -708,7 +708,8 @@ rooms that are up (`Group.held`; a group with none is dropped):
   of the rooms with an opening facing the camera within `INTERIOR_RANGE`;
 * **8 up at once** (user, 2026-11-14: 8, 2 by view); a room that drops out of the choice stays up
   3 s while the cap allows (user: about 3 s), so glancing away and back does not respawn it;
-* an empty room takes no slot: its painted window already shows an empty room.
+* an empty room is not picked by view (its painted window already shows an empty room); a near
+  one is, so its window goes before the player flies in through it.
 
 **Spawn, then fade the window, by time.** Each pane carries the room behind it (`CUSTOM0`, written by
 `BuildingShell.window_arrays` from `RoomManifest.room_in`); the building's pane node carries up to 12
@@ -744,3 +745,13 @@ Slow frames: no change past noise. `st_rooms` is about 0.08 ms a tick more: the 
 every room in range (0.36-0.38 ms a pass, every fourth tick, worst 1.6 ms), less a still camera,
 which reuses its last choice for up to 0.5 s (`STILL_M`, `STILL_DOT`, `RESCAN_MS`). The `--groups`
 gate's whole run: 357 rooms worked out, 30 drawings put up or refreshed, the slowest 0.19 ms.
+
+**Flying in (2026-11-15).** The user: "way too often the furniture never spawns and the window never
+goes away when I fly through the window and enter a room". `-- --roomfly --big` flies the camera in
+through the windows of 14 rooms up a 41-storey tower that only residency promotes (storeys laid as
+the camera comes near, as in play); 4 failed. Three causes: laying more storeys (`_lay_more`) made
+the building "unsure" (bands rebuilding, a solve owed), which held every new room of a building
+being flown round -- now a building never hit is never unsure; a room worked out before its storey
+was laid drew nothing for good -- `_lay_more` now touches the groups and owes the panes, and no room
+is chosen on a storey not laid; an empty room was never chosen, so its window never went -- a near
+one is now. After: 14 of 14 up, window gone, every piece drawn, by the time the camera is inside.
