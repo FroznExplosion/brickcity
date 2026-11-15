@@ -708,7 +708,8 @@ rooms that are up (`Group.held`; a group with none is dropped):
   of the rooms with an opening facing the camera within `INTERIOR_RANGE`;
 * **8 up at once** (user, 2026-11-14: 8, 2 by view); a room that drops out of the choice stays up
   3 s while the cap allows (user: about 3 s), so glancing away and back does not respawn it;
-* an empty room takes no slot: its painted window already shows an empty room.
+* an empty room is not picked by view (its painted window already shows an empty room); a near
+  one is, so its window goes before the player flies in through it.
 
 **Spawn, then fade the window, by time.** Each pane carries the room behind it (`CUSTOM0`, written by
 `BuildingShell.window_arrays` from `RoomManifest.room_in`); the building's pane node carries up to 12

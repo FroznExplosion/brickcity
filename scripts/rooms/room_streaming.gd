@@ -21,8 +21,9 @@ extends RefCounted
 ##   * CAP rooms up at once in all (user, 2026-11-14: 8, 2 of them by view). A
 ##     room that drops out of the choice stays up LINGER_MS (3 s, user) while
 ##     the cap allows, so glancing away and back does not respawn it.
-##   * A room holds no slot if it would draw nothing (an empty room: its
-##     painted window already shows an empty room).
+##   * An empty room is not picked by view (its painted window already shows
+##     an empty room); a near one is, so that its window goes before the
+##     player flies in through it (user, 2026-11-14).
 ##
 ## A room's furniture comes up (InteriorGroups draws only the rows of the
 ## rooms held here: Group.held), and THEN its painted window fades out over
@@ -78,6 +79,7 @@ var _written := {}              ## building id -> [pane node instance id, Array 
 var _boxes := {}                ## building id -> Array of AABB, a room's local box
 var _extent := {}               ## building id -> AABB over its rooms (the plan's outer faces)
 var _empty := {}                ## room key -> true: its manifest draws nothing
+var _per := {}                  ## building id -> rooms a storey
 
 var passes := 0
 var _last_pass_ms := 0          ## the `now` of the last pass (Rec.chosen_ms of what it chose)
@@ -98,6 +100,8 @@ var waits := 0                  ## new rooms not taken, their building not known
 var evicted := 0                ## all told: rooms given back by the cap
 var comes := 0                  ## all told: rooms that came up (window faded out)
 var goes := 0                   ## all told: rooms given back after their window came back
+var made := 0                   ## all told: records made (a room chosen afresh)
+var buildings_forgot := 0       ## all told: forget_building calls
 
 
 static func key_of(building_id: int, room: int) -> int:
@@ -257,9 +261,17 @@ func _pick(cands: Array, n: int, near: bool, chosen: Dictionary, unsure: Callabl
 			if unsure_of[b.id]:
 				waits += 1
 				continue
-			if not _draws(key, registry.get_room(b.id, index)):
+			# An empty room is no use picked by view (its painted window shows
+			# an empty room already), but a near one is the room the player is
+			# about to stand in: its window must go, and it costs no rows.
+			if not near and not _draws(key, registry.get_room(b.id, index)):
+				continue
+			# A storey not laid yet has no floor to stand furniture on: the
+			# room would be worked out empty. Asked again once it is laid.
+			if registry.is_partial(b) and not b.storeys_laid.has(_storey_of(b, index)):
 				continue
 		if r == null:
+			made += 1
 			r = Rec.new()
 			r.id = b.id
 			r.room = index
@@ -291,6 +303,17 @@ func _mark_pawns(buildings: Array, pawns: PackedVector3Array) -> void:
 			if lb.has_point(inv * p):
 				r.pawn = true
 				break
+
+
+## The storey a room is on (rooms are storey-major, RoomManifest.rooms_for).
+func _storey_of(b: BuildingRegistry.Building, index: int) -> int:
+	var per: int = int(_per.get(b.id, 0))
+	if per <= 0:
+		per = maxi((RoomManifest.lattice_for(b.recipe.footprint_x, b.recipe.footprint_z,
+				b.recipe.courses).rects as Array).size(), 1)
+		_per[b.id] = per
+	@warning_ignore("integer_division")
+	return index / per
 
 
 ## Whether a room's manifest draws anything: an empty room's painted window
@@ -433,6 +456,7 @@ func _forget(key: int) -> void:
 ## Everything of one building: its groups were dropped (its bricks went, it
 ## came down, it left the range).
 func forget_building(id: int) -> void:
+	buildings_forgot += 1
 	for key in _recs.keys():
 		if (_recs[key] as Rec).id == id:
 			_forget(key)

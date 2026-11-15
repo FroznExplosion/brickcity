@@ -3990,7 +3990,7 @@ func _run_groups_pass() -> void:
 	# A blast at a PIECE: that piece becomes bricks and is broken as bricks
 	# are. Its room is not laid, and the rest of the storey goes on being a
 	# drawing (Interiors.md 8.4). A room of two pieces or more that nothing
-	# has touched, chosen as near (it has collision), and a piece in it with
+	# has touched, up (RoomStreaming), and a piece in it with
 	# nothing else within the blast's reach: the blast is 0.5 m, and a piece
 	# with its neighbours inside that lays them too, as it should.
 	var shot_room: Room = null
@@ -3998,12 +3998,12 @@ func _run_groups_pass() -> void:
 	var shot_group: InteriorGroups.Group = null
 	var shot_offset: Vector3i = city.registry._rebase_of(b)
 	for g in layout:
-		if not g.cover or shot_room != null:
+		if not g.shown or shot_room != null:
 			continue
 		for index in range(g.first_room, g.last_room):
 			var j: int = index - g.first_room
-			if j >= g.cover_mask.size() or g.cover_mask[j] == 0:
-				continue   # not a room near the player: no collision, maybe not drawn
+			if j >= g.on_screen.size() or g.on_screen[j] == 0:
+				continue   # not up: nothing drawn to lay
 			var r := city.registry.get_room(b.id, index)
 			if r == null or r.items.size() < 2 or not r.gone.is_empty() or not r.laid.is_empty():
 				continue
@@ -4043,7 +4043,7 @@ func _run_groups_pass() -> void:
 				"%d box(es) before, %d after" % [boxes0, shot_group.piece_count])
 	else:
 		_gate_ok("a blast at a piece makes that piece bricks, and lays no room", false,
-				"no untouched room of two pieces in a group with collision")
+				"no untouched room of two pieces up with a piece clear of the others")
 
 	# A section comes off: nothing of a group stays drawn where its floor has left.
 	var wb := city._world_box(b)
@@ -4233,6 +4233,139 @@ func _run_groups_pass() -> void:
 			gr.checks, gr.check_ms, float(gr.check_ms) / maxf(float(gr.checks), 1.0),
 			city._group_orphans, city._group_rides])
 	print("[groups] %d ok, %d FAIL" % [city._gate_pass, city._gate_fail])
+	city.get_tree().quit(1 if city._gate_fail > 0 else 0)
+
+## Flying in through a window, as a player does (user, 2026-11-14: "way too
+## often the furniture never spawns and the window never goes away when I fly
+## through the window and enter a room").
+##
+##     godot --path . scenes/city.tscn -- --roomfly --big
+##
+## A tower nobody has promoted by hand: it gets its bricks the way it does in
+## play, the storeys at the camera's height first (_stream_residency). For
+## rooms on its face up its height, the camera starts 15 m out, flies in
+## through the room's window to the middle of the room in a second, and waits.
+## Each room must be up (RoomStreaming) with its painted window gone, and
+## drawing every piece its manifest stands on a floor, within 2 s of entering.
+func _run_roomfly_pass() -> void:
+	print("[roomfly] flying in through windows")
+	city.respawn_buildings = false
+	city.stats_label.visible = false
+	if city._reticle != null:
+		city._reticle.visible = false
+	var picks := _groups_pick(1)
+	if picks.is_empty():
+		_gate_ok("a tower with a clear face", false)
+		city.get_tree().quit(1)
+		return
+	var b: BuildingRegistry.Building = picks[0][0]
+	var out: Vector3 = picks[0][2]
+	var rs: RoomStreaming = city.room_streaming
+	var rooms := city.registry.rooms_of(b.id)
+	var per: int = (RoomManifest.lattice_for(b.recipe.footprint_x, b.recipe.footprint_z,
+			b.recipe.courses).rects as Array).size()
+	# Rooms on the face, every few storeys, up the tower.
+	var local_out: Vector3 = (b.xform.affine_inverse().basis * out).normalized()
+	var ext := AABB()
+	for i in rooms.size():
+		var lb0: AABB = (rooms[i] as Room).local_box()
+		ext = lb0 if i == 0 else ext.merge(lb0)
+	var face_rooms: Array = []
+	for i in rooms.size():
+		var lb: AABB = (rooms[i] as Room).local_box()
+		var on_face := (local_out.x < -0.5 and lb.position.x <= ext.position.x + 0.05) \
+				or (local_out.x > 0.5 and lb.end.x >= ext.end.x - 0.05) \
+				or (local_out.z < -0.5 and lb.position.z <= ext.position.z + 0.05) \
+				or (local_out.z > 0.5 and lb.end.z >= ext.end.z - 0.05)
+		if on_face:
+			face_rooms.append(i)
+	var tries: Array = []
+	@warning_ignore("integer_division")
+	var step := maxi(face_rooms.size() / 12, 1)
+	for k in range(0, face_rooms.size(), step):
+		tries.append(face_rooms[k])
+	print("[roomfly] building %d, %d storeys, %d rooms a storey, %d on this face; trying %d" % [
+			b.id, rooms.size() / maxi(per, 1), per, face_rooms.size(), tries.size()])
+	var good := 0
+	var reasons := {}
+	for index in tries:
+		var room: Room = rooms[index]
+		var lb: AABB = room.local_box()
+		var inside_local := lb.get_center()
+		inside_local.y = lb.position.y + 1.6
+		var target: Vector3 = b.xform * inside_local
+		var start := target + out * (15.0 + (lb.size.x if absf(local_out.x) > 0.5 else lb.size.z) * 0.5)
+		city.camera.global_position = start
+		city.camera.look_at(target, Vector3.UP)
+		for t in 45:
+			await city.get_tree().physics_frame
+		for t in 30:
+			city.camera.global_position = start.lerp(target, float(t + 1) / 30.0)
+			await city.get_tree().physics_frame
+		var up_at := -1
+		for t in 60:
+			await city.get_tree().physics_frame
+			if rs.is_held(b.id, index) and rs.hide_of(b.id, index) >= 1.0:
+				up_at = t
+				break
+		# What it draws against what its manifest stands on a floor now.
+		var g = _groups_of_room(b, index)
+		var k: int = index - g.first_room if g != null else -1
+		var drawn := 0
+		if g != null and k >= 0 and k < g.pieces.size():
+			@warning_ignore("integer_division")
+			drawn = (g.pieces[k] as PackedFloat32Array).size() / FurnitureMesh.STRIDE
+		var fresh := 0
+		if b.is_materialised() and not room.items.is_empty():
+			@warning_ignore("integer_division")
+			fresh = RoomManifest.draw_items(city.world, b.chunk, city.registry.palette, room,
+					city.registry._rebase_of(b)).buffer.size() / FurnitureMesh.STRIDE
+		var storey: int = index / maxi(per, 1)
+		var why := "ok"
+		if not b.is_materialised() or not city._brick_nodes.has(b.id):
+			why = "not bricks"
+		elif city.registry.is_partial(b) and not b.storeys_laid.has(storey):
+			why = "storey not laid"
+		elif city._interior_unsure(b.id):
+			why = "unsure"
+		elif not rs.is_held(b.id, index):
+			why = "not chosen (empty)" if not rs.draws(b.id, index) else "not chosen"
+		elif g == null or g.on_screen.size() <= k or g.on_screen[k] == 0:
+			why = "chosen, not on screen"
+		elif rs.hide_of(b.id, index) < 1.0:
+			why = "window not gone"
+		elif drawn != fresh:
+			why = "drawn %d of %d" % [drawn, fresh]
+		var ok := up_at >= 0 and drawn == fresh
+		if not ok:
+			# What it does from here, tick by tick: hide, on screen, group shown.
+			var trace := ""
+			var m0: int = rs.made
+			var f0: int = rs.buildings_forgot
+			var r0: int = city.interior_groups.releases
+			var a0: int = city.interior_groups.attaches
+			for t in 24:
+				await city.get_tree().physics_frame
+				var gg = _groups_of_room(b, index)
+				var on: bool = gg != null and gg.shown and gg.on_screen.size() > index - gg.first_room \
+						and gg.on_screen[index - gg.first_room] != 0
+				trace += "%.2f%s%s " % [rs.hide_of(b.id, index), "o" if on else "-",
+						"s" if gg != null and gg.shown else "-"]
+			print("[roomfly]     trace: %s" % trace)
+			print("[roomfly]     in those ticks: %d record(s) made, %d building(s) forgotten, %d group(s) let go, %d drawing(s) put up" % [
+					rs.made - m0, rs.buildings_forgot - f0, city.interior_groups.releases - r0,
+					city.interior_groups.attaches - a0])
+		if ok:
+			good += 1
+		else:
+			reasons[why] = int(reasons.get(why, 0)) + 1
+		print("[roomfly]   room %d (storey %d, %s): %s; up after %d tick(s); drawn %d, manifest on a floor %d; laid %s, partial %s, unsure %s, held %s, hide %.2f" % [
+				index, storey, room.kind, why, up_at, drawn, fresh,
+				b.storeys_laid.has(storey) if b.banded else true, city.registry.is_partial(b),
+				city._interior_unsure(b.id), rs.is_held(b.id, index), rs.hide_of(b.id, index)])
+	_gate_ok("flying in through a window, every room comes up with its window gone and all its furniture drawn",
+			good == tries.size(), "%d of %d; the rest: %s" % [good, tries.size(), reasons])
+	print("[roomfly] %d ok, %d FAIL" % [city._gate_pass, city._gate_fail])
 	city.get_tree().quit(1 if city._gate_fail > 0 else 0)
 
 ## The physics view's check (PhysicsView, Docs/Hulls.md 11 E1).
