@@ -14,10 +14,11 @@ was found, how to test without harming the user's files, and what to do next.
 - Stages 0 and 1 (1a the asset's bar and pop-out, 1b the building's outliner and Selected,
   1c the status line) and stage 2 (2a every key a button and one key map, agreed with the
   user; 2b one camera) merged 2026-11-14, stage 3 (the six menus) 2026-11-15 (section 21, "As
-  built"). Next: **stage 4**, the building's stage tabs (Structure, Interior, Detail, Finish;
-  the tab is the layer) and the generators out of Rooms -- and with them on-screen buttons for
-  what is still menu-only in the building (File, Insert, the kind, the generated building's
-  options, the print look). Ask the user first what Hand does on the Finish tab.
+  built"), stage 4 (4a the building's stage tabs, Finish keeps the last layer; 4b the Generate
+  tool, the generators out of Rooms), stage 5 (one library on Tab) and stage 6a (one Draw on
+  the asset's Bricks stage, the base then the height) 2026-11-15. Next: **stage 6b**, the clay's
+  Draw on Block out -- its Draw (sculpt brush) and Shape (stamp) as one Draw with outlines,
+  the same gesture, making clay (`AssetWorkshopUI.pick_tool` "blockout:*", `_sculpt`).
 
 
 ## Where to work
@@ -120,9 +121,7 @@ from model to bricks").
 ## Open, to raise when its stage comes
 
 - Stage 2: the keys -- settled 2026-11-14 (section 21, stage 2a).
-- Stage 4: a brick's layer comes from the tab. What Hand does on the Finish tab (probably: the
-  last layer used).
-- Stage 5: inserted builds are copies, furniture is a reference. "Edit in the asset workshop" is
-  only for furniture unless the user wants builds as references too.
+- Stage 4: settled 2026-11-15 -- on Finish, Hand lays in the last layer used.
+- Stage 5: settled 2026-11-15 -- inserted builds stay copies, furniture a reference.
 - Stage 7: cell-sized clay is a second resolution of `SdfForm` (C++, `gdextension/brick/src/
   sdf_form.cpp`): that stage needs the junction and SCons, and the Build mode area owns it.

@@ -1517,6 +1517,25 @@ Each merged on its own; the probes of section 20 and the pictures before and aft
 | 7 | A model into clay and bricks in the building workshop |
 | 8 | The colour table, OBJ colours |
 
+**Stage 5, the library (plan, 2026-11-15).** The brick browser (Tab, `WorkshopHotbar`) becomes
+the library: a row of sections over it -- **Bricks | Furniture and items | Rooms | Buildings |
+Parts** -- and its one search box searches the section open. A workshop gives the sections it
+has (`WorkshopHotbar.add_section`): the building all but Parts, the asset workshop Bricks and
+Parts.
+
+* **Furniture and items**: the F6 catalogue's list (`AssetCatalogPanel`, its own search box
+  hidden), moved into the library. Picking one closes the library and puts it in hand (the
+  furnishing mode: LMB places, R turns, RMB takes one away, Esc puts it down) -- by reference,
+  as now. F6 and the Furniture button open the library on this section.
+* **Rooms, Buildings**: the saved builds of that kind (`WorkshopMenu.library`), by name; picking
+  one closes the library and takes it in hand to stamp (Insert's "Pick up", `_begin_stamp`). An
+  inserted build stays a **copy** (the open point: the user said "next" to the default).
+  Insert > Build from library opens the library on Buildings.
+* **Parts** (asset): the F7 catalogue (`PartCatalogPanel`) moved in; picking tries the part on,
+  as now. F7 and the Parts button open the library there.
+* Pictures for the builds and furniture (a rendered thumbnail each) come after: this stage is
+  the one browser and its search.
+
 **Stage 3, the menus (plan, 2026-11-14).** Both bars: **File Edit View Insert <Kind> Help**, in
 that order, nothing else.
 
@@ -1695,3 +1714,82 @@ it makes sense -- menus too, but not only menus. Where each asset workshop key's
   menus (65). Pictures: `b16_menu_*`, `a6_menu_*`.
 * Still menu-only in the building (stage 4): File, Insert, the kind, the generated building's
   options, the print look.
+
+**Stage 4a, the building's stage tabs** (2026-11-15).
+
+* The building band starts with **1 Structure, 2 Interior, 3 Detail, 4 Finish** (as the
+  asset's), then the bar. The tab is the layer a brick goes in: Structure, Interior and Detail
+  set it (`WorkshopTools.set_stage`, `STAGES`); **Finish keeps the last one used** (the open
+  point, settled so -- the user said "next" to the suggestion). The bar's layer button, its
+  Edit menu row and the I key are gone (`WorkshopBar` has no "layer").
+* Each tab shows its tools (`STAGE_TOOLS`): Structure Hand, Draw, Roof, Stairs, Cut, Repeat,
+  Select; Interior Hand, Rooms, Select; Detail Hand, Cut, Select; Finish Hand, Select and its
+  actions. Bricks and Furniture stay under the tools on every tab. A tool's key from a tab
+  without it opens the first tab that has it (Draw's K on Finish: Structure).
+* **Finish's actions** (`FINISH_ACTIONS`, `finish_act`) put the File and kind menus on the
+  screen: Save, Save as, Open, New (asks first), In city (Test in city), Look (the print look,
+  the next of the four; its pop-up says which), and the kind (the button says it; it drops the
+  kind's list, `WorkshopMenu.show_kinds`). Icons: workshop_kit 0.20.0.
+* Still menu-only: Insert (a build: stage 5's library), quick save and load (F5, F9), and a
+  generated building's options -- stage 4b takes the generators out of Rooms.
+* Probes: `build_tools_probe` -- Structure's tools, every tool and Finish action a button on
+  some tab, Interior is the interior layer and has Rooms, Finish keeps the layer and has its
+  actions, Look steps the look, Draw's key from Finish opens Structure, no layer button (359).
+  Picture: `b13b_finish_tab`.
+
+**Stage 4b, the generators out of Rooms** (2026-11-15). Stage 4 is done with it.
+
+* A new tool, **Generate**, on the Structure and Interior tabs. Its pop-out picks what to make
+  by picture -- **Building** (the generated building: Add, Bake, Remove, its four options as
+  ticks, off without one; Room mix, Reroll furniture), **Modules** (grown from saved modules),
+  **Ship inside** (this build the hull), **Station**, **Tower** (by its shell) -- and shows only
+  that one's short panel; the section size (most bricks) under the three that use it.
+  (`WorkshopTools.GEN_PICS`, `set_gen`, `_gen_boxes`.) Icons: workshop_kit 0.21.0.
+* The Rooms pop-out keeps the rooms, points and the module's rules only.
+* Insert has "Generated: ..." rows for the four (`WorkshopMenu` I_GROW .. I_SHELL, the bench's
+  "generate"); a generated building's row in the outliner opens Generate on Building.
+* So a generated building's options are on the screen now; what is still menu-only in the
+  building: Insert > a build (stage 5's library) and quick save and load (F5, F9 -- keys and
+  File; Save is on Finish).
+* Probes: `build_tools_probe` -- no generators in Rooms, Generate's tower panel alone, the
+  building's options off without one and on after Add building, Insert > Generated opens the
+  station's panel (364). Pictures: `b12_rooms`, `b12b_generate_tower`, `b12c_generate_building`.
+
+**Stage 5, one library** (2026-11-15). As the plan above, with:
+
+* `WorkshopHotbar` is the library: `add_section(id, label, body, search)`, `show_section`,
+  `browsing(id)`, `section_shown` (an owner fills its list fresh), `close_browser`. Its search
+  box searches the open section; the title says what a pick does there; its backdrop is opaque
+  now (the panels behind showed through).
+* Building: Bricks, **Furniture and items** (`AssetCatalogPanel` moved in from the F6 layer),
+  **Rooms** and **Buildings** (`LibraryList`, new: saved builds by name, a click picks one up to
+  stamp). F6 and the Furniture button open it on Furniture; Bricks on Bricks; Insert > Build
+  from library on Buildings (the old Insert dialog is no longer reached from the menu).
+  Picking furniture closes the library and starts furnishing with it in hand.
+* Asset: Bricks and **Parts** (`PartCatalogPanel`, made at start, `_ensure_catalog`; read again
+  each time the section opens). F7 and the Parts button toggle it; `_catalog_open()` is "the
+  library on Parts" (it was the floating panel's `visible`).
+* Inserted builds stay copies; furniture stays a reference (the open point: the user said "next"
+  to the default). Thumbnails for builds and furniture: not yet.
+* Probes: `build_tools_probe` -- the sections, Furniture and Bricks open theirs, Insert's build
+  opens Buildings listing every saved one, the one search filters it (369);
+  `part_save_probe`'s F7 checks read `_catalog_open()` (61). Pictures: `b14b_library_furniture`,
+  `b14c_library_buildings`, `a5_catalog`.
+
+**Stage 6a, one Draw on the Bricks stage** (2026-11-15). The clay's Draw is 6b.
+
+* The asset's Bricks stage has one **Draw** (K) where Shapes and Sketch were. Its pop-out's
+  pictures (`AssetWorkshopUI.DRAW_PICS`): **Box, Round, Ball, Wedge** -- made by the building's
+  gesture, the base dragged, then the height pulled (or typed), a click; **Freehand** -- the 2D
+  Sketch on the working plane (Alt D picks it); **Brush** -- the shape brush. The options under
+  them are the old ones (the part, the plates box -- it follows the pull -- clean or random, and
+  Sketch's own).
+* `AssetWorkshop.draw_pick(outline)`, `draw_outline`; the kit Shapes tool in
+  `OUTLINE_HEIGHT` with the hooks `wk_shape_base_done` (where the height is pulled from),
+  `wk_shape_height` (the cursor's height on an upright plane through the base, facing the
+  camera, in plates) and `wk_shape_typed`. A ball's height is its width, as before.
+* `rail_active()` still answers "shape" or "sketch"; the frame folds both into Draw (as the
+  building folds Place, Pick and Paint into Hand). Icons: workshop_kit 0.22.0 (ball, wedge).
+* Probes: `asset_ui_probe` -- one Draw on the rail, its outlines, the gesture, a typed height,
+  the click lays bricks, Freehand is Sketch, Brush the shape brush; K and Alt D are Draw's on
+  screen (72). Pictures: `a2_bricks_draw`, `a2_bricks_draw_freehand`.

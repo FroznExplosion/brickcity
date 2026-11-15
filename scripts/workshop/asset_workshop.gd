@@ -158,6 +158,10 @@ var shape_kind := "box"
 var shape_fill := "clean"
 ## How many plates tall a box, cylinder or wedge is.
 var shape_plates := 3
+var _shape_plates_spin: SpinBox
+## Draw's outline (Docs/BuildTools.md section 21, stage 6): a SHAPES kind made by the base and
+## the height, "freehand" (the 2D Sketch on the working plane) or "brush" (the shape brush).
+var draw_outline := "box"
 ## Recipe ids of the bricks the select tool holds.
 var selection: Array[int] = []
 var section_on := false
@@ -352,6 +356,8 @@ func _ready() -> void:
 	dc.ctrl_descends = false
 	bench.toolbox.add(_sketch_tool)
 	_select_tool.mode = WkSelectTool.Mode.BOX
+	# Draw's gesture is the building's: the base, then the height (section 21, stage 6).
+	_shape_tool.mode = WkShapeTool.Mode.OUTLINE_HEIGHT
 	for t in [_measure_tool, _fill_tool, _move_tool, _shape_tool, _select_tool]:
 		bench.toolbox.add(t)
 	# What is made here is a gun (or a mech): File > Save, Save As and Open use their
@@ -360,6 +366,7 @@ func _ready() -> void:
 	if bench._menu != null:
 		bench._menu.asset_mode(ASSET_KINDS)
 		_build_menus()
+	_ensure_catalog()
 	_set_asset_kind(bench.recipe.kind)
 	_build_asset_tools()
 	_setup_parts()
@@ -1285,7 +1292,7 @@ func _unhandled_input(e: InputEvent) -> void:
 				else:
 					set_mirror(not bench.mirror_on)
 			KEY_F: set_free(not free_place)
-			KEY_D: rail_pick("place" if rail_active() == "sketch" else "sketch")
+			KEY_D: rail_pick("place") if rail_active() == "sketch" else draw_pick("freehand")
 			KEY_V: rail_pick("place" if rail_active() == "sculpt" else "sculpt")
 			KEY_U: set_tool("" if tool == "stud" else "stud")
 			KEY_G: set_tool("" if tool == "move" else "move")
@@ -1307,7 +1314,7 @@ func _unhandled_input(e: InputEvent) -> void:
 		var mine := true
 		match e.keycode:
 			KEY_Y: toggle_look()
-			KEY_K: set_tool("" if tool == "shape" else "shape")
+			KEY_K: set_tool("") if rail_active() in ["shape", "sketch"] else draw_pick()
 			KEY_L: set_tool("" if tool == "select" else "select")
 			KEY_F3: _toggle_guide_panel()
 			KEY_F4: set_tool("" if tool == "wand" else "wand")
@@ -1385,7 +1392,7 @@ func _process(dt: float) -> void:
 	if _panel.visible:
 		_panel.position = Vector2(vp.x - _panel.size.x - 12, vp.y * 0.42)
 	if _ui != null:
-		_ui.place_floats([_panel, _guide_panel, _point_panel, _catalog_panel])
+		_ui.place_floats([_panel, _guide_panel, _point_panel])
 
 
 func ruler_text() -> String:
@@ -1654,7 +1661,7 @@ func import_package(path: String) -> Dictionary:
 	var r := PartPackage.import_file(path)
 	_export_check = ("package: %s rev %d in" % [r.id, r.rev]) if r.ok else ("package refused: " + String(r.why))
 	print("[asset workshop] " + _export_check)
-	if r.ok and _catalog_panel != null and _catalog_panel.visible:
+	if r.ok and _catalog_open():
 		_catalog_panel.set_catalog(PartCatalog.load_all())
 	return r
 
@@ -1677,19 +1684,39 @@ func _open_package_dialog() -> void:
 
 ## Open or close the parts catalogue (F7). It reads the part folders each time it opens, so
 ## a part just saved is in it.
+## It is the library's Parts section (Docs/BuildTools.md section 21, stage 5).
 func toggle_catalog() -> void:
-	if _catalog_panel == null:
-		_catalog_panel = PartCatalogPanel.new()
-		_catalog_panel.visible = false
-		_catalog_panel.position = Vector2(RAIL_W + 24, 60)
-		_catalog_panel.part_picked.connect(func(r: PartRecord) -> void:
-			var why := try_part(r)
-			if why != "":
-				_export_check = "parts: " + why)
-		_ruler.get_parent().add_child(_catalog_panel)
-	_catalog_panel.visible = not _catalog_panel.visible
-	if not _catalog_panel.visible:
+	_ensure_catalog()
+	if _catalog_open():
+		bench._hotbar.close_browser()
 		return
+	bench._hotbar.show_section("parts", false)
+
+
+## The parts catalogue is shown: the library open on Parts.
+func _catalog_open() -> bool:
+	return _catalog_panel != null and bench._hotbar.browsing("parts")
+
+
+func _ensure_catalog() -> void:
+	if _catalog_panel != null:
+		return
+	_catalog_panel = PartCatalogPanel.new()
+	_catalog_panel.part_picked.connect(func(r: PartRecord) -> void:
+		var why := try_part(r)
+		if why != "":
+			_export_check = "parts: " + why)
+	_catalog_panel._search_edit.visible = false   # the library's search is its
+	bench._hotbar.add_section("parts", "Parts", _catalog_panel, func(t: String) -> void:
+		_catalog_panel._search_edit.text = t
+		_catalog_panel._search_edit.text_changed.emit(t))
+	bench._hotbar.section_shown.connect(func(id: String) -> void:
+		if id == "parts":
+			_fill_catalog())
+
+
+## The catalogue read again (a part just saved is in it) and aimed at the part in hand.
+func _fill_catalog() -> void:
 	if bench._camera.has_method("_set_captured"):
 		bench._camera.call("_set_captured", false)
 	var cat := PartCatalog.load_all()
@@ -2078,7 +2105,7 @@ func select_part(i: int) -> void:
 	_outlines_dirty = true
 	if _width_spin != null:
 		_width_spin.set_value_no_signal(width_of(part_names[part_sel]))
-	if _catalog_panel != null and _catalog_panel.visible:
+	if _catalog_open():
 		_aim_catalog(_catalog_panel.catalog)
 	var f := FileAccess.open(toolbars_save, FileAccess.WRITE)
 	if f != null:
@@ -2611,6 +2638,22 @@ func shape_cells(kind: String, a: Vector3i, b: Vector3i, plates: int) -> Diction
 	return out
 
 
+## Draw (K) with `outline` (section 21, stage 6): a shape by its base and height, the 2D
+## Sketch ("freehand"), or the shape brush ("brush"). The Bricks stage's one drawing tool.
+func draw_pick(outline: String = draw_outline) -> void:
+	draw_outline = outline
+	match outline:
+		"freehand":
+			rail_pick("sketch")
+		"brush":
+			rail_pick("shape")
+			shape_mode = "brush"
+		_:
+			rail_pick("shape")
+			shape_mode = "drag"
+			shape_kind = outline if SHAPES.has(outline) else "box"
+
+
 func set_tool(t: String) -> void:
 	_set_down()
 	tool = t
@@ -2643,16 +2686,46 @@ func wk_shape_base(_d: Dictionary) -> void:
 	_drag_to = bench._cell
 
 
-func wk_shape_base_done(_d: Dictionary) -> void:
-	pass
+## The base is down: the height is pulled from here (Docs/BuildTools.md section 21, stage 6 --
+## the building's gesture). It starts at what the plates box says.
+func wk_shape_base_done(d: Dictionary) -> void:
+	var a := _drag_from
+	var b := _drag_to
+	d["base_y"] = a.y * BrickPalette.PLATE_M
+	d["mid"] = Vector3((a.x + b.x + 1) * 0.5 * BrickPalette.STUD_M, a.y * BrickPalette.PLATE_M,
+			(a.z + b.z + 1) * 0.5 * BrickPalette.STUD_M)
 
 
-func wk_shape_height(_d: Dictionary) -> void:
-	pass
+## Pulling the height: the cursor's height on an upright plane through the base, facing the
+## camera, in plates (at least one).
+func wk_shape_height(d: Dictionary) -> void:
+	if not d.has("mid") or shape_kind == "sphere":
+		return
+	var ray: Array = bench._mouse_ray()
+	var from: Vector3 = to_local(ray[0])
+	var dir: Vector3 = (global_transform.basis.inverse() * (ray[1] as Vector3)).normalized()
+	var n := Vector3(dir.x, 0.0, dir.z)
+	if n.length() < 0.01:
+		return
+	n = n.normalized()
+	var den := n.dot(dir)
+	if absf(den) < 0.0001:
+		return
+	var t := n.dot((d.mid as Vector3) - from) / den
+	if t <= 0.0:
+		return
+	var y := (from + dir * t).y
+	shape_plates = clampi(int(round((y - float(d.base_y)) / BrickPalette.PLATE_M)), 1, 240)
+	if _shape_plates_spin != null:
+		_shape_plates_spin.set_value_no_signal(shape_plates)
 
 
-func wk_shape_typed(_d: Dictionary, _typed: String) -> void:
-	pass
+## A height typed while pulling, in plates.
+func wk_shape_typed(_d: Dictionary, typed: String) -> void:
+	if typed.is_valid_int() and int(typed) > 0:
+		shape_plates = clampi(int(typed), 1, 240)
+		if _shape_plates_spin != null:
+			_shape_plates_spin.set_value_no_signal(shape_plates)
 
 
 func wk_shape_release_commits(_d: Dictionary) -> bool:
@@ -3010,7 +3083,7 @@ func _build_phase3(layer: CanvasLayer) -> void:
 	_shape_box = VBoxContainer.new()
 	box.add_child(_shape_box)
 	var t1 := Label.new()
-	t1.text = "Shapes (K)"
+	t1.text = "Height: pulled, or typed"
 	_shape_box.add_child(t1)
 	var modes := OptionButton.new()
 	modes.add_item("drag a box: fill it")
@@ -3018,6 +3091,7 @@ func _build_phase3(layer: CanvasLayer) -> void:
 	modes.item_selected.connect(func(i: int) -> void:
 		shape_mode = "drag" if i == 0 else "brush"
 		_dragging = false)
+	modes.visible = false   # Draw's outline pictures say it (section 21, stage 6)
 	_shape_box.add_child(modes)
 	_shape_mode_pick = modes
 	_drag_box = VBoxContainer.new()
@@ -3026,6 +3100,7 @@ func _build_phase3(layer: CanvasLayer) -> void:
 	for k in SHAPES:
 		kinds.add_item(k)
 	kinds.item_selected.connect(func(i: int) -> void: shape_kind = SHAPES[i])
+	kinds.visible = false   # Draw's outline pictures
 	_drag_box.add_child(kinds)
 	var fills := OptionButton.new()
 	fills.add_item("clean: fewest bricks")
@@ -3042,6 +3117,7 @@ func _build_phase3(layer: CanvasLayer) -> void:
 	hs.max_value = 120
 	hs.value = shape_plates
 	hs.value_changed.connect(func(v: float) -> void: shape_plates = int(v))
+	_shape_plates_spin = hs
 	hrow.add_child(hs)
 
 	_sketch_box = VBoxContainer.new()
@@ -9530,7 +9606,7 @@ func _try_changed() -> void:
 		_draw_points()
 	_outlines_dirty = true
 	_export_check = try_text()
-	if _catalog_panel != null and _catalog_panel.visible:
+	if _catalog_open():
 		_aim_catalog(_catalog_panel.catalog)
 
 
