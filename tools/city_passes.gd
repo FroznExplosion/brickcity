@@ -7187,8 +7187,9 @@ func _run_far_pass() -> void:
 		print("[far]   crossfade: %.1f%% of the building off its reference, against %.1f%% with no box" % [
 			holes_a * 100.0, holes_c * 100.0])
 		# The control's floor is for the settings a pass runs on -- the menu's
-		# defaults (TestWindow.use_default_settings): MSAA 2x and FXAA, under
-		# which a fading shell with no box shows 4.7 % holes. It was 0.05, set
+		# defaults (TestWindow.use_default_settings): MSAA 2x and FXAA until
+		# 2026-11-14 (PerfCaps.md 9; FXAA alone, scale 0.75 FSR since), under
+		# which a fading shell with no box showed 4.7 % holes. It was 0.05, set
 		# when passes ran on whatever was saved in Options: 8.8 % with both
 		# off, 6.4 and 5.1 with one. What the check is for is the second half:
 		# the crossfade is a small fraction of that, whatever it is.
@@ -7760,16 +7761,20 @@ func _run_gpucost() -> void:
 			city.drawing._far_coarse.size(), city.brick_near.report()])
 	var base := await _gpucost_measure()
 	print("[gpucost] %-34s %s" % ["defaults", _gpucost_line(base, base)])
+	# Against the defaults since 2026-11-14 (PerfCaps.md 9: scale 0.75 FSR 1.0,
+	# no MSAA, FXAA, shadows Low, two cascades): each one put back as it was
+	# before, the lot of them, and the cheaper steps past them.
 	var rows := [
-		["MSAA off", {&"msaa": 0}],
+		["MSAA 2x (was the default)", {&"msaa": 1}],
 		["FXAA off", {&"fxaa": false}],
-		["MSAA and FXAA off", {&"msaa": 0, &"fxaa": false}],
+		["shadow quality 2 (Medium, was)", {&"shadow_quality": 2}],
 		["shadow quality 0 (Off, 512)", {&"shadow_quality": 0}],
-		["shadow quality 1 (Low, 2048)", {&"shadow_quality": 1}],
-		["sun cascades 2", {&"sun_cascades": 1}],
-		["render scale 0.75, bilinear", {&"render_scale": 0.75, &"scaling_mode": 0}],
-		["render scale 0.75, FSR 1.0", {&"render_scale": 0.75, &"scaling_mode": 1}],
-		["render scale 0.5, bilinear", {&"render_scale": 0.5, &"scaling_mode": 0}],
+		["sun cascades 4 (was)", {&"sun_cascades": 0}],
+		["render scale 1.0 (was)", {&"render_scale": 1.0}],
+		["render scale 0.75, bilinear", {&"scaling_mode": 0}],
+		["render scale 0.5, FSR 1.0", {&"render_scale": 0.5}],
+		["the defaults before 2026-11-14", {&"msaa": 1, &"shadow_quality": 2,
+				&"sun_cascades": 0, &"render_scale": 1.0, &"scaling_mode": 0}],
 	]
 	var by := {}
 	for r in rows:
