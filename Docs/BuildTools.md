@@ -1489,6 +1489,28 @@ at once:
 To measure before building it: a 400-stud model, the time and memory of stamp and convert, tick
 clay against cell clay.
 
+**Measured (2026-11-15, `tools/probes/model_scale_probe.gd`)**: a hollow box building (walls a
+stud thick; s studs long, s/2 tall, 0.4 s deep) placed as a model in the asset workshop's tick
+clay, stamped, then Make bricks. Headless, editor closed, one other chat's headless probe going
+(so rough).
+
+| Model | Stamp | Clay blocks | Make bricks | Bricks | Memory (working set) |
+|---|---|---|---|---|---|
+| 80 studs | 1.1 s | 4,860 | 20 s | 5,785 | +550 MB (330 -> 880) |
+| 100 studs | 1.8 s | 8,415 | 40 s | 10,119 | +920 MB (640 -> 1,550) |
+
+* 200 and 400 were **not run**: memory grows with the square of the size or worse, and the
+  machine had about 2-3 GB free -- 400 studs in tick clay would want some 10-15 GB and minutes
+  of Make bricks. Tick clay cannot take a building; that is the stage's premise, now numbers.
+* **Stud-sized clay** (a sample a brick cell, 5 x 2 x 5 ticks) gives a 400-stud model the
+  samples across that tick clay gives an 80-stud one: the first row, about 1 s to stamp and
+  0.5 GB. But Make bricks is the cost (20 s for 5,800 bricks), and a 400-stud building's skin is
+  far more bricks than that -- so **Make bricks in sections over frames, with a bar and Cancel**
+  (the plan's third point) is not optional, and Make bricks itself wants profiling first: at
+  ~3.5 ms a brick it is the slow part, not the clay.
+* So stage 7 starts with Make bricks' cost (where its 20 s go), then the cell clay (C++,
+  `sdf_form.cpp`, the junction and SCons), then sections over frames.
+
 ### Colours from a model (stage 8)
 
 Built (2026-11-02): glTF and FBX colours (material, texture, vertex) go into the clay; each brick

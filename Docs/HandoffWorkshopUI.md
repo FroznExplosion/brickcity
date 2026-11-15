@@ -19,8 +19,10 @@ was found, how to test without harming the user's files, and what to do next.
   the asset's Bricks stage, the base then the height) and 6b (one Draw on Block out: the brush
   and the stamps; box, round, cone pulled) 2026-11-15. Next: **stage 7**, a model into clay and
   bricks in the building workshop -- needs the junction and SCons (C++, `sdf_form.cpp`), and the
-  Build mode area owns it; measure a 400-stud model first (section 21, "A model into a
-  building").
+  Build mode area owns it. Measured 2026-11-15 (section 21, "A model into a building",
+  `model_scale_probe`): tick clay takes 20-40 s and 0.5-0.9 GB for an 80-100 stud model, Make
+  bricks is the slow part (~3.5 ms a brick) -- profile it first. Never run the probe at 200+
+  studs on this machine (memory).
 
 
 ## Where to work
