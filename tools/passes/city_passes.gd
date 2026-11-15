@@ -4298,6 +4298,11 @@ func _run_roomfly_pass() -> void:
 			b.id, rooms.size() / maxi(per, 1), per, face_rooms.size(), tries.size()])
 	var good := 0
 	var reasons := {}
+	var stud_bad := 0       # rooms with a band near the camera that never had its studs
+	var stud_rooms := 0
+	var held_ticks := 0
+	var watched_ticks := 0
+	var panes0: int = city.drawing.brick_panes_built
 	for index in tries:
 		var room: Room = rooms[index]
 		var lb: AABB = room.local_box()
@@ -4318,6 +4323,26 @@ func _run_roomfly_pass() -> void:
 			if rs.is_held(b.id, index) and rs.hide_of(b.id, index) >= 1.0:
 				up_at = t
 				break
+		# Studs (user, 2026-11-15: "the studs still sometimes don't load at all
+		# even when standing in a room for a while"): two seconds in the room,
+		# then every band within the near tier's stud reach must have fetched
+		# its studs (BrickNear: geometry or cards; an empty `studs` is never).
+		for t in 60:
+			await city.get_tree().physics_frame
+			watched_ticks += 1
+			if city.brick_near._held:
+				held_ticks += 1
+		var unfetched := _bands_without_studs(BrickNear.stud_radius)
+		stud_rooms += 1
+		if stud_rooms % 3 == 1:
+			# Looking down at the floor ahead, for the eye.
+			city.camera.look_at(city.camera.global_position - out * 2.5 + Vector3(0.0, -1.6, 0.0), Vector3.UP)
+			await _frames(3)
+			await _save("roomfly_floor_%d" % index)
+		if unfetched.x > 0:
+			stud_bad += 1
+			print("[roomfly]     studs: %d of %d band(s) within %.0f m without the studs their bricks have" % [
+					unfetched.x, unfetched.y, BrickNear.stud_radius])
 		# What it draws against what its manifest stands on a floor now.
 		var g = _groups_of_room(b, index)
 		var k: int = index - g.first_room if g != null else -1
@@ -4375,6 +4400,12 @@ func _run_roomfly_pass() -> void:
 				city._interior_unsure(b.id), rs.is_held(b.id, index), rs.hide_of(b.id, index)])
 	_gate_ok("flying in through a window, every room comes up with its window gone and all its furniture drawn",
 			good == tries.size(), "%d of %d; the rest: %s" % [good, tries.size(), reasons])
+	print("[roomfly] the near tier held by uploads %d of %d tick(s) in the rooms; %s" % [
+			held_ticks, watched_ticks, city.brick_near.hud_line()])
+	_gate_ok("  and after two seconds in it, every band within the studs' reach has its studs",
+			stud_bad == 0, "%d of %d room(s) with a band that had none; the near tier held by uploads %d of %d tick(s); %d pane job(s) in the run" % [
+				stud_bad, stud_rooms, held_ticks, watched_ticks,
+				city.drawing.brick_panes_built - panes0])
 	print("[roomfly] %d ok, %d FAIL" % [city._gate_pass, city._gate_fail])
 	city.get_tree().quit(1 if city._gate_fail > 0 else 0)
 
@@ -4993,6 +5024,33 @@ func _groups_expected_boxes(b: BuildingRegistry.Building, layout: Array) -> int:
 					if city.registry.palette.has(part[0]) and not RoomManifest.is_detail(part):
 						n += 1
 	return n
+
+## Bands the near tier tracks within `reach` of the camera: (without the
+## studs their bricks have now -- never fetched, or fetched before the bricks
+## changed and not again -- all of them).
+func _bands_without_studs(reach: float) -> Vector2i:
+	var none := 0
+	var all := 0
+	var eye := city.camera.global_position
+	for key in city.brick_near._bands:
+		var band = city.brick_near._bands[key]
+		if not is_instance_valid(band.node) or not band.node.is_inside_tree():
+			continue
+		var xf: Transform3D = band.node.global_transform
+		var local: Vector3 = xf.affine_inverse() * eye
+		if local.distance_to(local.clamp(band.box.position, band.box.end)) > reach:
+			continue
+		all += 1
+		if (band.studs as Array).is_empty():
+			none += 1
+			continue
+		# Held, but not the studs its bricks have now (stale: bricks laid or
+		# taken since, and never fetched again).
+		var now_count: int = (city.world.get_chunk_studs_and_open(band.chunk, band.section)[0]
+				as PackedFloat32Array).size()
+		if not band.studs_dirty and now_count != (band.stud_buffer as PackedFloat32Array).size():
+			none += 1
+	return Vector2i(none, all)
 
 ## The storey group of `b` that holds room `index`, or null.
 func _groups_of_room(b: BuildingRegistry.Building, index: int):

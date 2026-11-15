@@ -147,6 +147,16 @@ const STUD_BUILDS := 2
 ## steps one waits behind uploads in flight before it is fetched anyway.
 const STUDS_FIRST := 6
 const STUD_WAIT_MAX := 8
+## A band that has never had its studs, inside the studs' reach, waits this
+## many steps behind uploads in flight and no more -- and is looked at every
+## step meanwhile (it goes in `_stud_queue`), not when the round robin comes
+## back. It waited for a step with NO upload in flight anywhere, visited every
+## half second or so, and in play one nearly always is: floors under the
+## player stayed smooth while they stood there (user, 2026-11-15).
+const STUD_WAIT_FIRST := 3
+## Bands that had to fetch their studs for the first time while uploads were
+## in flight, after waiting (STUD_WAIT_FIRST): each may have waited on them.
+var first_fetch_forced := 0
 ## A band's two stud MultiMeshes (Band.studs): geometry, cards.
 const GEO := 0
 const CARDS := 1
@@ -379,6 +389,14 @@ func track_box(node: MeshInstance3D, chunk: int, section: int, box: AABB, count 
 		if band == null:
 			return
 		band.boxed = true
+	# Filled again with other bricks (more storeys laid into its section, or
+	# some given back): its studs are those of the bricks it had. A hit says
+	# so through `damaged`; a refill did not, and the studs of a storey laid
+	# after its band first fetched them never came (user, 2026-11-15).
+	elif count != band.box_count or box != band.box:
+		band.studs_dirty = true
+		if not band.studs.is_empty():
+			_stud_queue[band.key] = true
 	band.box = box
 	if band.box_bevelled and count != band.box_count:
 		# Bevelled, and its bricks changed: what it costs now.
@@ -623,14 +641,18 @@ func step(eye: Vector3, zoom_in := 1.0, forward := Vector3.ZERO) -> void:
 		var looked := 0
 		for key in _stud_queue.keys():
 			var qb: Band = _bands.get(key)
-			if qb == null or not qb.studs_dirty or qb.studs.is_empty():
+			# A band never fetched is queued only from inside the studs'
+			# reach (STUD_WAIT_FIRST); one that is, only when its bricks changed.
+			if qb == null or not qb.studs_dirty:
 				_stud_queue.erase(key)
 				continue
 			if looked >= STUDS_FIRST:
 				break
 			looked += 1
 			_visit(key, eye, now, stud_budget)
-			if not qb.studs_dirty:
+			# Fetched; or never fetched and turned away for long (the cap,
+			# or no longer near): the round robin has it from here.
+			if not qb.studs_dirty or (qb.studs.is_empty() and qb.stud_waits > STUD_WAIT_FIRST * 8):
 				_stud_queue.erase(key)
 	var n := mini(SLICE, _order.size())
 	for i in n:
@@ -683,6 +705,13 @@ func shadow_faults() -> Vector2i:
 		if not is_instance_valid(band.shadow) or band.shadow.visible != casts 				or band.shadow.mesh != band.node.mesh:
 			out.y += 1
 	return out
+
+
+## One line for the dev HUD: studs held, the caps, what was turned away.
+func hud_line() -> String:
+	return "near tier     %d band(s), %d with studs (cap %d), %d with stud geometry (%d of %d studs); turned away: %d stud, %d card; %d waiting for studs, %d forced past uploads" % [
+			_bands.size(), _carded.size(), max_card_bands, _studded.size(), _stud_cost, max_studs,
+			capped_studs, capped_cards, _stud_queue.size(), first_fetch_forced]
 
 
 ## One line for a pass's report.
@@ -1037,6 +1066,7 @@ func _studs(band: Band, dist: float, budget: Array) -> void:
 	if dist >= outer + (MARGIN if not band.studs.is_empty() else 0.0):
 		if not band.studs.is_empty():
 			_drop_studs(band)
+		_stud_queue.erase(band.key)
 		return
 	# Any studs at all take a place (max_card_bands): none free, or one kept for
 	# a band placed better, and this band's tops stay smooth for now.
@@ -1055,11 +1085,15 @@ func _studs(band: Band, dist: float, budget: Array) -> void:
 		# collapse one nearly always is, and studs whose bricks have gone hang
 		# there the whole time. After STUD_WAIT_MAX steps they are fetched
 		# whatever is in flight (a call that may wait a few ms, once).
-		var stale := not band.studs.is_empty() and band.stud_waits >= STUD_WAIT_MAX
+		var first := band.studs.is_empty()
+		var stale := band.stud_waits >= (STUD_WAIT_FIRST if first else STUD_WAIT_MAX)
 		if int(budget[0]) <= 0 or (_held and not stale):
-			if not band.studs.is_empty():
-				band.stud_waits += 1
+			band.stud_waits += 1
+			if first and dist < stud_radius:
+				_stud_queue[band.key] = true   # looked at again next step
 			return
+		if first and _held:
+			first_fetch_forced += 1
 		band.stud_waits = 0
 		budget[0] = int(budget[0]) - 1
 		var t_studs := Time.get_ticks_usec()

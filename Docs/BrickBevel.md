@@ -347,6 +347,25 @@ simplified away on the rest; the node drawing it takes `geo_bevel` from
 `RecipeMesh.geo_bevel(mesh)`. A tree is mostly studs: chamfered it is 4,072 triangles to 3,502
 flat (+16%; the four kinds +13% to +22%), and its first LOD is no bigger than the flat one's.
 
+### 3.x Studs that never came (2026-11-15)
+
+The user: "the studs still sometimes don't load at all even when standing in a room for a while and
+even when breaking bricks nearby". Two ways a band near the camera kept no studs, both closed:
+
+* **A first fetch waited for a quiet step.** A band that had never had its studs fetched them only
+  on a step with NO upload in flight anywhere (`_held`), and was visited when the round robin came
+  back (about every half second); a re-fetch had a limit (`STUD_WAIT_MAX`), a first fetch had none.
+  In play an upload nearly always is in flight. Now a never-fetched band inside the studs' reach goes
+  in `_stud_queue` (looked at every step) and fetches after `STUD_WAIT_FIRST` (3) steps whatever is
+  in flight (`first_fetch_forced` counts them).
+* **A refill kept the old studs.** `track_box` on a band it already held (its section filled again:
+  more storeys laid into it, some given back) took the new box and count and left the studs as they
+  were; only a hit (`damaged`) marked them stale. Now a refill with another count or box does.
+
+The dev HUD has a `near tier` line (bands, with studs, the caps, turned away, waiting, forced).
+`city.tscn -- --roomfly --big` checks every band within the studs' reach has the studs its bricks
+have now, two seconds after flying into each room.
+
 ## 4. The shader
 
 `geo_bevel` (an instance uniform, as in `terrain.gdshader`) is 1 on a chamfered mesh: the drawn
