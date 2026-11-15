@@ -84,7 +84,9 @@ const PRINT_MM_PER_PLATE := 1.6
 const REAL_PER_PRINT := 4.0
 const PLANES := ["side", "top", "front"]
 const VIEWS := ["perspective", "side", "top", "front"]
-const KEYS_TEXT := "TAB cursor / look (shift TAB: all parts)   F10 instructions   F2 photos   F3 guide models   F7 parts   Alt 0-3 view   Alt C the game's view   Alt M measure   Alt S mirror (shift: plane here)   Alt F free place   Alt D block out   Alt U studs   Alt G move part   Alt E explode   Alt H hands   Alt P play   PgUp/PgDn working plane\nY part toolbar (shift: back)   hold LMB + move: lay a run   J connection point   K shapes   L select   O section   P outlines\nN part smooth / bricks   F4 wand from a photo   F12 export and preview   Z undo (a fill at once)   shift Z redo"
+const KEYS_TEXT := "Tab the library (bricks, parts)   Y fly or orbit   MMB orbit, Shift MMB pan, wheel zoom, RMB held look   Shift + wheel toolbar   F10 instructions   F2 photos   F3 guide models   F7 parts   Alt 0-3 view   Alt C the game's view   Alt M measure   Alt S mirror (shift: plane here)   Alt F free place   PgUp/PgDn working plane
+Alt V clay Draw   K Draw   Alt D Draw freehand   L select   Alt U studs   Alt G move part   Alt E explode   Alt H hands   Alt P play   F4 fill from a photo   F12 export and check
+Z undo (a fill at once)   Shift Z redo   every key is a button too (the bar, the rail, under the tools)"
 
 ## Each: {path, plane, px (image size), mpp (metres a pixel), centre, opacity, shown, node}.
 var photos: Array = []
@@ -2511,9 +2513,11 @@ func pack_cells(cells: Dictionary, random: bool = false, free: Dictionary = {}, 
 	var out := []
 	if left.is_empty():
 		return out
+	# The cells by layer, once: scanning every cell for each layer was layers x cells (most of a
+	# building-sized Make bricks; Docs/BuildTools.md section 21, stage 7).
 	var ys := {}
 	for c in left:
-		ys[c.y] = true
+		(ys.get_or_add(c.y, []) as Array).append(c)
 	var layers := ys.keys()
 	layers.sort()
 	# `course`: the layer courses count from, when it is not the lowest packed here (a
@@ -2521,10 +2525,7 @@ func pack_cells(cells: Dictionary, random: bool = false, free: Dictionary = {}, 
 	var base: int = layers[0] if course == 1 << 30 else course
 	for y in layers:
 		var flip: bool = posmod(y - base, 2) == 1
-		var here := []
-		for c in left:
-			if c.y == y:
-				here.append(c)
+		var here: Array = ys[y]
 		here.sort_custom(func(a: Vector3i, b: Vector3i) -> bool:
 			if a.x != b.x:
 				return (a.x > b.x) if flip else (a.x < b.x)
@@ -2543,6 +2544,8 @@ func pack_cells(cells: Dictionary, random: bool = false, free: Dictionary = {}, 
 				var at := Vector3i(c.x - size.x + 1 if flip else c.x, y, c.z - size.z + 1 if flip else c.z)
 				if _box_in(left, at, size):
 					fits.append([pe[0], at, size])
+					if not random:
+						break   # the first that fits is the one laid
 			if fits.is_empty():
 				continue
 			var pick: Array = fits[_rng.randi_range(0, fits.size() - 1)] if random else fits[0]
@@ -5451,7 +5454,21 @@ func sculpt_to_sdf() -> void:
 ## bricks is used up, and the models with it. Bricks an earlier Make bricks laid where the new
 ## clay is are made again; bricks laid by hand stay, and new ones skip their cells. One half is
 ## mirrored onto the other only with `convert_mirror`. One undo.
+## Where Make bricks' time goes, ms by step (`model_scale_probe`; Docs/BuildTools.md section
+## 21, stage 7): filled each convert.
+var convert_ms := {}
+var _cv_at := 0
+
+
+func _cv(tag: String) -> void:
+	var now := Time.get_ticks_usec()
+	convert_ms[tag] = float(convert_ms.get(tag, 0.0)) + (now - _cv_at) / 1000.0
+	_cv_at = now
+
+
 func sculpt_convert() -> void:
+	convert_ms = {}
+	_cv_at = Time.get_ticks_usec()
 	_set_down()
 	if sculpt.form.block_count() == 0 and models.is_empty():
 		_show_sculpt_note(true, "No clay to make bricks of: draw or import some first.")
@@ -5473,19 +5490,24 @@ func sculpt_convert() -> void:
 				+ "plane through the middle of the shape, or untick symmetric bricks.") % int(ceilf(bench.mirror_z)))
 		print("[sculpt] convert refused: the mirror plane at %.1f is off the clay" % bench.mirror_z)
 		return
+	_cv("checks")
 	_begin_gather()
 	var was := _sculpt_state()
 	var models_before := models_state()
 	sculpt.form.begin_edit()
+	_cv("begin")
 	# The models join the clay for good, where they stand now: they become bricks with it.
 	for m in models:
 		sculpt.form.combine((m.node as AssetSculpt).form, int(m.op), _model_labels(m))
+	_cv("combine models")
 	var cells := sculpt.form.cells()
+	_cv("cells")
 	# The clay's own colours (a model's), one a cell: a brick takes its cell's, else its
 	# part's (Docs/AssetWorkshop.md, "Colour from model to bricks"). Matched to the
 	# material each part is laid in, once a material (`own_mat`).
 	var own_col := _cell_colour_map(cells)
 	var own_mat := {0: own_col}
+	_cv("colour map")
 	var label_of := {}
 	var zone := {}
 	for i in range(0, cells.size(), 5):
@@ -5495,6 +5517,7 @@ func sculpt_convert() -> void:
 			zone[c] = true
 	# A brick in every zone cell; in a part's smooth cells only where the surface holds the
 	# whole cell (inside its custom piece) or where it meets a brick (the join).
+	_cv("labels")
 	var brick_at := {}
 	_sdf_shell = PackedInt32Array()
 	for c in label_of:
@@ -5534,6 +5557,7 @@ func sculpt_convert() -> void:
 		for c in label_of:
 			if not brick_at.has(c):
 				_sdf_shell.append_array([c.x, c.y, c.z, label_of[c], 0])
+	_cv("brick cells (inside, joins)")
 	var keep_sel := part_sel
 	var used := {}
 	var colour_of := {}   # part -> [colour, material] of its first brick, for its piece
@@ -5583,6 +5607,7 @@ func sculpt_convert() -> void:
 			if t[cm] > best:
 				best = t[cm]
 				part_col[label] = cm
+	_cv("bricks there")
 	_sdf_stash = []
 	# Packed apart by part and by colour: a brick is one colour, the cell's own matched to
 	# the colours of the material its part is laid in.
@@ -5601,6 +5626,7 @@ func sculpt_convert() -> void:
 				own_mat[pm] = mm
 			var oc: int = (own_mat[pm] as Dictionary).get(c, -1)
 			(by_part.get_or_add(Vector2i(lab, oc), {}) as Dictionary)[c] = true
+	_cv("by part and colour")
 	for group in by_part:
 		var label: int = group.x
 		part_sel = clampi(label - 1, 0, part_names.size() - 1)
@@ -5631,7 +5657,9 @@ func sculpt_convert() -> void:
 				if zone.has(c):
 					free.append_array([c.x, c.y, c.z])
 			var kit := FitKit.kit(curve_level >= 2)
+			_cv("lay (bricks)")
 			var fit := sculpt.form.fit_pieces(free, kit.pieces, SDF_FIT_EAGER if slope_eager else SDF_FIT_GAIN)
+			_cv("fit slopes (C++)")
 			var edges := []
 			for i in range(0, fit.size(), 4):
 				edges.append([kit.names[fit[i]], Vector3i(fit[i + 1], fit[i + 2], fit[i + 3])])
@@ -5650,11 +5678,16 @@ func sculpt_convert() -> void:
 						left.erase(c)
 					if mirror:
 						_lay_mirrored(String(b[0]), at, col)
-		for b in pack_cells(left):
+		_cv("lay (bricks)")
+		var packed := pack_cells(left)
+		_cv("pack")
+		for b in packed:
 			_lay_converted(String(b[0]), b[1], col, laid, zone, colour_of, mirror)
+		_cv("lay (bricks)")
 	bench._batch = false
 	part_sel = keep_sel
 	_after_edit()
+	_cv("after edit (remesh bricks)")
 	for i in bench.recipe.size():
 		var key := _brick_key(bench.recipe.part_of(i), bench.recipe.cell_of(i))
 		if not keys_before.has(key):
@@ -5704,8 +5737,17 @@ func sculpt_convert() -> void:
 	for i in range(0, cells.size(), 5):
 		if cells[i + 4] == 0 and in_area(Vector3i(cells[i], cells[i + 1], cells[i + 2])):
 			gone.append_array(cells.slice(i, i + 5))
-	sculpt.form.sync_cells(gone, PackedInt32Array())
+	_cv("shells and cells")
+	if gone.size() == cells.size():
+		# Every cell became bricks (none smooth, none outside the area): the clay goes in one,
+		# not a box carved a cell (12 s of a 29 s Make bricks at 80 studs; BuildTools 21,
+		# stage 7). Its blocks are recorded for undo as a carve's are.
+		sculpt.form.clear()
+	else:
+		sculpt.form.sync_cells(gone, PackedInt32Array())
+	_cv("sync cells")
 	sculpt.remesh()
+	_cv("remesh clay")
 	var rec := sculpt.form.end_edit()
 	sculpt_state = "bricks"
 	# The models became bricks: they are gone with the clay (Z brings them back).
@@ -5716,7 +5758,9 @@ func sculpt_convert() -> void:
 	_sculpt_finish(was, rec)
 	if not models_before.is_empty():
 		_model_record(models_before)
+	_cv("finish (undo record)")
 	_end_gather()
+	_cv("end gather")
 	if out.x > 0:
 		_show_sculpt_note(true, ("Made bricks, but %d of %d cells were outside the build area (below its "
 				+ "floor, or past its edge) and have no bricks.") % [out.x, out.y])
