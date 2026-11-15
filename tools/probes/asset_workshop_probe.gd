@@ -978,8 +978,13 @@ func _round7() -> void:
 	# Furniture and items are made here too (their library is shared with the workshop), and
 	# figures since Docs/ModularParts.md stage 12.
 	_ok("Open lists only assets, and furniture and items", shown == ["item", "gun", "mech", "figure"], str(shown))
-	_ok("no building menus: Insert, Type, Layer, Generated hidden", not m._insert.visible and not m._type.visible
-			and not m._layer.visible and not m._gen.visible)
+	# The six menus (BuildTools 21 stage 3): the building's kind menu and Help are gone, Insert
+	# is the asset's own; one menu a kind, the gun's shown.
+	var labels: Array = m.bar().menus().filter(func(b: MenuButton) -> bool: return b.visible).map(
+			func(b: MenuButton) -> String: return b.text)
+	_ok("the six menus: File Edit View Insert Gun Help", labels == ["File", "Edit", "View", "Insert", "Gun", "Help"], str(labels))
+	_ok("Insert is the asset's: a model first", m._insert.get_popup().get_item_text(0).begins_with("A model"),
+			m._insert.get_popup().get_item_text(0))
 	_ok("and no Test in city", m._file.get_popup().get_item_index(WorkshopMenu.F_CITY) < 0)
 	_ws.bench._new_build()
 	_ws.select_part(_ws.part_names.find("grip"))
@@ -1119,7 +1124,7 @@ func _round8() -> void:
 
 func _round9() -> void:
 	# Nothing to remember: every key's action is in a menu, its key beside it (the tools
-	# are on the rail). Y is Look since the keys were made one (BuildTools 21 stage 2); the
+	# are on the rail: Measure, the wand and Paint are tools, not menu rows, since stage 3). Y is Look since the keys were made one (BuildTools 21 stage 2); the
 	# part, smooth, point, section and outline jobs of Shift Y, N, J, O, P are buttons now.
 	var texts := []
 	var items := {}
@@ -1130,9 +1135,9 @@ func _round9() -> void:
 				texts.append(pm.get_item_text(i))
 				items[pm.get_item_text(i)] = pm.get_item_id(i)
 	var missing := []
-	for key in ["Alt 0", "Alt 1", "Alt 2", "Alt 3", "Alt M", "Alt S", "Alt Shift S", "Alt F", "Alt E", "Alt H",
-			"Alt P", "Alt X", "Alt B", "PgUp", "PgDn", "Y", "F2", "F3", "F4",
-			"F10", "F12", "Home", "End", "Shift Z", "R", "F", "T", "B", "G", ".", ","]:
+	for key in ["Alt 0", "Alt 1", "Alt 2", "Alt 3", "Alt S", "Alt Shift S", "Alt F", "Alt E", "Alt H",
+			"Alt P", "Alt X", "Alt B", "PgUp", "PgDn", "Y", "F2", "F3",
+			"F10", "F12", "Home", "End", "Shift Z", "R", "F", "T", "G", ".", ",", "F1", "F7", "Alt C"]:
 		var found := false
 		for t in texts:
 			found = found or String(t).ends_with("      " + key)
@@ -1141,19 +1146,28 @@ func _round9() -> void:
 	var rail_keys := []
 	for t in _ws.RAIL_TOOLS:
 		rail_keys.append(t[2])
+	for st in AssetWorkshopUI.TOOLS:
+		for t in AssetWorkshopUI.TOOLS[st]:
+			rail_keys.append(t[2])
 	_ok("every key's action is in a menu", missing.is_empty(), str(missing))
 	_ok("and every tool's on the rail", rail_keys.has("Alt D") and rail_keys.has("Alt V") and rail_keys.has("Alt U") and rail_keys.has("Alt G")
-			and rail_keys.has("K") and rail_keys.has("L"), str(rail_keys))
+			and rail_keys.has("K") and rail_keys.has("L") and rail_keys.has("Alt M") and rail_keys.has("F4") and rail_keys.has("B"),
+			str(rail_keys))
+	# A row is pressed as the popup presses it: the bar's rows (View) and the asset's own.
 	var pick := func(label: String) -> void:
-		for t in items:
-			if String(t).begins_with(label):
-				_ws._on_asset_menu(items[t])
-				return
+		for c in _ws.bench._menu.bar().menus():
+			var pm := (c as MenuButton).get_popup()
+			for i in pm.item_count:
+				if pm.get_item_text(i).begins_with(label):
+					pm.id_pressed.emit(pm.get_item_id(i))
+					return
 	pick.call("Side view")
 	_ok("a menu item does what its key does: Side view", _ws.view == 1)
 	pick.call("3D view")
-	pick.call("Next part")
-	_ok("Next part", _ws.part_sel == 1, str(_ws.part_sel))
+	var ex: bool = _ws.exploded
+	pick.call("Explode")
+	_ok("and the asset's own: Explode", _ws.exploded != ex)
+	pick.call("Explode")
 	_ws._part_pick.select(0)
 	_ws._part_pick.item_selected.emit(0)
 	_ok("the rail's part picker picks the part", _ws.part_sel == 0)

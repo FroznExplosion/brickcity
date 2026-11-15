@@ -1517,6 +1517,32 @@ Each merged on its own; the probes of section 20 and the pictures before and aft
 | 7 | A model into clay and bricks in the building workshop |
 | 8 | The colour table, OBJ colours |
 
+**Stage 3, the menus (plan, 2026-11-14).** Both bars: **File Edit View Insert <Kind> Help**, in
+that order, nothing else.
+
+| Menu | Building | Asset |
+|---|---|---|
+| File | New, Open, Save, Save As, quick save and load, Test in city | the same less Test in city; Export to game, to print, Check in Blender; share the parts (.bcpart), pictures of the saved parts (were Gun and Asset) |
+| Edit | Undo, Redo, the inserted build's Select, Move, Copy, Delete; then the bar's Hand and Cancel | Undo, Redo; then the bar's Hand (were Brick and View) |
+| View | the bar's View, then the print look (was Finish) | the same, plus zoom in and out and Explode |
+| Insert | a build, a generated building, bake or remove it | a model, a photo, a guide model, a part from the catalogue, a part package (were Photos and Asset) |
+| <Kind> | named for the kind ("Building", "Room" ...): the kinds (was Type), then a generated building's options (was Generated) | named for the kind ("Gun", "Mech", "Figure", "Item"): the kinds (was Asset), then the kind's own -- a gun's hands, play, size, ruler, mech or player's gun; a mech's class, legs, joints, reference |
+| Help | every key | how to start, every key |
+
+* The Edit and View rows of the bar come from the bar's own list (`WorkshopBar`), so a bar
+  button and its menu row cannot disagree; a menu row says the key beside it.
+* Gone: the building's Type, Layer (the bar's layer button and I; stage 4 makes it the tab),
+  Generated and Finish; the asset's Asset, Part, Block out, Brick, Photos and Finish.
+* **What the gone menus did keeps an on-screen button** (the user's rule). Already one: the
+  tools (the rail), a part picked, Smooth / bricks (the outliner), the point (the rail), the
+  shell and the block-out's clears (Sketch's pop-out), R F T `,` `.` (the bar), the panels
+  (under the tools). New, in the asset's Selected: picking the asset row shows its kind, and the
+  kind's own (a mech's class, legs, Lay joints again, Reference mech; Mech gun or player's
+  gun); picking the Parts row shows Share parts, Pictures of the parts, Import a package and
+  Take off the tried parts.
+* Left for stage 4 (the building's Finish tab, the generators out of Rooms): on-screen buttons
+  for the building's File items, its kind, a generated building's options and the print look.
+
 ### As built
 
 **Stage 0** (2026-11-14). Pictures before and after with `workshop_ui_shots`; the probes' counts
@@ -1643,3 +1669,29 @@ it makes sense -- menus too, but not only menus. Where each asset workshop key's
 * Probes: `asset_ui_probe` -- one camera, the wheel zooms, Shift + wheel the toolbar, a flat
   view zooms, Y the fly and back, RMB the sketch's (60 passed); `build_tools_probe` -- Top view
   flat, it zooms, 3D view back as it was (355).
+
+**Stage 3, the six menus** (2026-11-15). As the plan above, with:
+
+* `WorkshopMenu` builds File, Edit, View (the print look, was Finish), Insert, the kind's menu
+  (`_type`, named by `set_kind`: the kinds, then "Generated: ..." rows, off without a generated
+  building) and Help (Every key, F1). `add_bar(sections, handler, keys, skip)` puts the bar's
+  rows in Edit (Hand, Cancel) and View, "name      key", names from `WorkshopBar.MENU`; the
+  building passes `WorkshopTools.act`, the asset `AssetWorkshopUI.bar_act` (with its own keys
+  Alt S and Alt Shift S for the mirror). Every menu row now says its key in a column.
+* `asset_mode` empties Insert for the asset's own and removes the kind's menu and Help: the
+  asset workshop adds Gun, Mech, Figure, Item (one shown, `sync_kind`) and its own Help after
+  them, so the order stays File Edit View Insert <Kind> Help.
+* Asset File: the three exports, Share parts, pictures of parts. Insert: a model (the Import
+  tool's dialog, `AssetWorkshopUI.pick_tool_in`), a photo, a guide model, a catalogue part, a
+  package. View adds zoom in and out and Explode; the Gun menu has hands, play, the game's
+  view, the size marks and sizes, the ruler, mech or player's gun.
+* New buttons in the asset's Selected: the asset row -- Make it a gun / mech / figure / item,
+  Mech gun or Player's gun, a mech's class, legs, Lay joints again, Reference mech; the Parts
+  row -- Share parts, Pictures of parts, Import a package, Take off tried parts (when some are).
+  Measure, the wand and Paint are only on the rail now (tools, not menu rows).
+* Probes: `workshop_probe` the six menus, View's Grid row is the bar's, the kind's menu named
+  for it (100); `asset_workshop_probe` the six menus, Insert's model row, rows pressed as the
+  popup presses them, Explode (346); `asset_ui_probe` the new Selected buttons and the six
+  menus (65). Pictures: `b16_menu_*`, `a6_menu_*`.
+* Still menu-only in the building (stage 4): File, Insert, the kind, the generated building's
+  options, the print look.
