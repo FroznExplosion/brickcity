@@ -6419,6 +6419,10 @@ func _report_profile() -> void:
 		for k in ["after_spawn", "stairs", "dmg_promote", "dmg_rooms", "dmg_hit", "dmg_pieces", "dmg_disable"]:
 			line += "%s %.2f  " % [k, float(city._prof_sum.get(k, 0.0)) / maxi(city._tick_samples, 1)]
 		print("[prof]   of which damage, mean per tick: " + line)
+		line = ""
+		for k in ["st_trim", "st_merge", "st_rooms", "st_detail", "st_residency"]:
+			line += "%s %.3f  " % [k, float(city._prof_sum.get(k, 0.0)) / maxi(city._tick_samples, 1)]
+		print("[prof]   of which stream, mean per tick: " + line)
 		var dn: Array = city.islands.damage_near_ms
 		print("[prof]   loose pieces (damage_near), all told: %d call(s); waking sleepers %.1f ms, finding pieces %.1f, damaging them %.1f, pushing %.1f" % [
 				int(dn[4]), dn[0], dn[1], dn[2], dn[3]])
