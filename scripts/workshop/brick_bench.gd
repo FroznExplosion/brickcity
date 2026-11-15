@@ -2046,7 +2046,6 @@ func bench_unhandled_input(e: InputEvent) -> void:
 		KEY_R: _yaw = (_yaw + 1) % 4
 		KEY_F: _flip = not _flip
 		KEY_T: _rotate_last()
-		KEY_I: _toggle_layer()
 		KEY_X:
 			var ray := _mouse_ray()
 			select_group_ray(ray[0], ray[1])

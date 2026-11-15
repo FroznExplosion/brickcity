@@ -93,9 +93,9 @@ const UNDER_TOOLS := [
 ]
 ## Finish actions that only mean something for a gun.
 const GUN_ONLY := ["!hands", "!play"]
-## The bar's buttons this workshop has not: the layer (stage 4 makes it the tab), the room
-## guide (rooms), Cancel (Esc is the Place tool here).
-const BAR_SKIP := ["layer", "guide", "cancel"]
+## The bar's buttons this workshop has not: the room guide (rooms), Cancel (Esc is the Place
+## tool here).
+const BAR_SKIP := ["guide", "cancel"]
 ## The pop-out's width: the building workshop's (`WorkshopTools.POPOUT_W`).
 const POPOUT_W := 204.0
 ## The rail's width: the building workshop's (`WorkshopTools.RAIL_W`).

@@ -1695,3 +1695,25 @@ it makes sense -- menus too, but not only menus. Where each asset workshop key's
   menus (65). Pictures: `b16_menu_*`, `a6_menu_*`.
 * Still menu-only in the building (stage 4): File, Insert, the kind, the generated building's
   options, the print look.
+
+**Stage 4a, the building's stage tabs** (2026-11-15).
+
+* The building band starts with **1 Structure, 2 Interior, 3 Detail, 4 Finish** (as the
+  asset's), then the bar. The tab is the layer a brick goes in: Structure, Interior and Detail
+  set it (`WorkshopTools.set_stage`, `STAGES`); **Finish keeps the last one used** (the open
+  point, settled so -- the user said "next" to the suggestion). The bar's layer button, its
+  Edit menu row and the I key are gone (`WorkshopBar` has no "layer").
+* Each tab shows its tools (`STAGE_TOOLS`): Structure Hand, Draw, Roof, Stairs, Cut, Repeat,
+  Select; Interior Hand, Rooms, Select; Detail Hand, Cut, Select; Finish Hand, Select and its
+  actions. Bricks and Furniture stay under the tools on every tab. A tool's key from a tab
+  without it opens the first tab that has it (Draw's K on Finish: Structure).
+* **Finish's actions** (`FINISH_ACTIONS`, `finish_act`) put the File and kind menus on the
+  screen: Save, Save as, Open, New (asks first), In city (Test in city), Look (the print look,
+  the next of the four; its pop-up says which), and the kind (the button says it; it drops the
+  kind's list, `WorkshopMenu.show_kinds`). Icons: workshop_kit 0.20.0.
+* Still menu-only: Insert (a build: stage 5's library), quick save and load (F5, F9), and a
+  generated building's options -- stage 4b takes the generators out of Rooms.
+* Probes: `build_tools_probe` -- Structure's tools, every tool and Finish action a button on
+  some tab, Interior is the interior layer and has Rooms, Finish keeps the layer and has its
+  actions, Look steps the look, Draw's key from Finish opens Structure, no layer button (359).
+  Picture: `b13b_finish_tab`.
