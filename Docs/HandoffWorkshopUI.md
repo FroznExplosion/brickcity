@@ -15,9 +15,10 @@ was found, how to test without harming the user's files, and what to do next.
   1c the status line) and stage 2 (2a every key a button and one key map, agreed with the
   user; 2b one camera) merged 2026-11-14, stage 3 (the six menus) 2026-11-15 (section 21, "As
   built"), stage 4 (4a the building's stage tabs, Finish keeps the last layer; 4b the Generate
-  tool, the generators out of Rooms) and stage 5 (one library on Tab) 2026-11-15. Next:
-  **stage 6**, one Draw in the asset workshop (bricks, then clay): read section 21 "The
-  grammar" and AssetWorkshop.md's Draw/Sketch notes first.
+  tool, the generators out of Rooms), stage 5 (one library on Tab) and stage 6a (one Draw on
+  the asset's Bricks stage, the base then the height) 2026-11-15. Next: **stage 6b**, the clay's
+  Draw on Block out -- its Draw (sculpt brush) and Shape (stamp) as one Draw with outlines,
+  the same gesture, making clay (`AssetWorkshopUI.pick_tool` "blockout:*", `_sculpt`).
 
 
 ## Where to work

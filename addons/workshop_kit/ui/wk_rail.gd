@@ -91,6 +91,8 @@ const ICONS := {
 	"k_stairs": '<path d="M3 20h5v-5h5v-5h5V5h3"/>',
 	"k_door": '<rect x="7" y="3" width="10" height="18"/><circle cx="14" cy="12" r="1"/>',
 	"k_window": '<rect x="5" y="5" width="14" height="14"/><path d="M12 5v14M5 12h14"/>',
+	"k_ball": '<circle cx="12" cy="12" r="8"/><ellipse cx="12" cy="12" rx="8" ry="3"/>',
+	"k_wedge": '<path d="M3 19h18L3 7z"/>',
 	"k_free": '<path d="M4 16c3-9 6-9 8-4s5 5 8-5"/>',
 	"k_brush": '<circle cx="8" cy="16" r="4"/><path d="M11 13l9-9"/>',
 	"k_poly": '<path d="M5 18L4 8l9-4 7 8-6 8z"/>',
