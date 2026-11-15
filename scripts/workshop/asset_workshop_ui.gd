@@ -34,8 +34,7 @@ const STAGES := [
 const TOOLS := {
 	"blockout": [
 		["select", "Select", "", "Click a model, one of its pieces, a part of the clay or a guide to pick it. Drag the gizmo: arrows move it, rings turn it, the cube resizes it. Enter or Esc lets go."],
-		["draw", "Draw", "Alt V", "Drag to add clay to the part in the outliner; RMB carves it away; Shift smooths."],
-		["shape", "Shape", "", "Drag out a box, ball, cylinder, cone, line or lathe of clay (choose it below). RMB carves."],
+		["draw", "Draw", "Alt V", "Pick an outline in the pop-out. Brush: drag to add clay to the part, RMB carves, Shift smooths. Box, round, cone: drag the base, let go, pull the height, click (RMB carves). Ball: centre to edge. Line: end to end. Lathe: the axis, then the outline."],
 		["smooth", "Smooth", "", "Drag over the clay to round off its edges."],
 		["!import", "Import", "", "Load a model file (.glb .gltf .obj .fbx .stl) as one item: its first piece is the body, the others its children in the outliner."],
 		["measure", "Measure", "Alt M", "Click two points: the distance in studs and plates, print mm and real mm."],
@@ -70,7 +69,7 @@ const TOOLS := {
 const STATUS := {
 	"blockout:select": "Click a model, a piece, a part or a guide   drag the gizmo   Enter lets go",
 	"blockout:draw": "Drag adds clay to the part   RMB carves   Shift smooths",
-	"blockout:shape": "Drag out a shape of clay (choose it in the pop-out)   RMB carves",
+	"blockout:stamp": "Drag the base, let go, pull the height, click   RMB carves",
 	"blockout:smooth": "Drag over the clay to round its edges",
 	"place": "LMB lays the brick   RMB takes one away   R turns   1-9, Shift + wheel pick",
 	"select": "Drag a box over bricks   Delete removes them",
@@ -93,6 +92,9 @@ const UNDER_TOOLS := [
 ]
 ## Draw's outlines on the Bricks stage (section 21, stage 6): [id, name, icon]. The first four
 ## are made by the base and the height; Freehand is the 2D Sketch; Brush the shape brush.
+## Draw's outlines on Block out: the clay brush, then the stamps.
+const CLAY_PICS := [["brush", "Brush", "k_brush"], ["box", "Box", "k_rect"], ["cylinder", "Round", "k_circle"],
+		["cone", "Cone", "k_cone"], ["ball", "Ball", "k_ball"], ["line", "Line", "k_line"], ["lathe", "Lathe", "k_lathe"]]
 const DRAW_PICS := [["box", "Box", "k_rect"], ["cylinder", "Round", "k_circle"], ["sphere", "Ball", "k_ball"],
 		["wedge", "Wedge", "k_wedge"], ["freehand", "Freehand", "k_free"], ["brush", "Brush", "k_brush"]]
 ## Finish actions that only mean something for a gun.
@@ -126,6 +128,8 @@ var _tool_buttons := {}
 ## Draw's outline pictures, over the tool's options.
 var _draw_box: VBoxContainer
 var _draw_row := {}
+var _clay_box: VBoxContainer
+var _clay_row := {}
 var _hint: Label
 var _outliner: PanelContainer
 var _tree: Tree
@@ -178,6 +182,9 @@ func setup(workshop, layer: CanvasLayer) -> void:
 	_draw_box = VBoxContainer.new()
 	_tools_panel.options.add_child(_draw_box)
 	_draw_row = _tools_panel.pictures(_draw_box, "Draw", DRAW_PICS, func(id: String) -> void: ws.draw_pick(id), "box", 3)
+	_clay_box = VBoxContainer.new()
+	_tools_panel.options.add_child(_clay_box)
+	_clay_row = _tools_panel.pictures(_clay_box, "Draw", CLAY_PICS, func(id: String) -> void: ws.clay_pick(id), "brush", 4)
 	_tools_panel.options.add_child(ws._rail)
 	_tools_panel.pop_out(_layer, POPOUT_W)
 	_fit_options(ws._rail)
@@ -422,9 +429,8 @@ func pick_tool(id: String) -> void:
 		"blockout:select":
 			_sculpt("models")
 		"blockout:draw":
-			_sculpt("shape")
-		"blockout:shape":
-			_sculpt("stamp")
+			if ws.sculpt_state != "bricks":
+				ws.clay_pick(ws.clay_outline)
 		"blockout:smooth":
 			_sculpt("smooth")
 		"blockout:!import":
@@ -471,7 +477,7 @@ func active_tool() -> String:
 		if ws.tool == "sketch" and ws.sketch_draw == "sculpt":
 			match String(ws.sculpt_mode):
 				"models": return "select"
-				"stamp": return "shape"
+				"stamp": return "draw"
 				"smooth": return "smooth"
 			return "draw"
 		return ""
@@ -1111,7 +1117,13 @@ func process(dt: float) -> void:
 			elif ws._shape_brush_on():
 				drawn = "brush"
 			WkRail.light(_draw_row, drawn)
+	if _clay_box != null:
+		_clay_box.visible = on == "draw" and stage == "blockout"
+		if _clay_box.visible:
+			WkRail.light(_clay_row, "brush" if ws.sculpt_mode == "shape" else String(ws.sculpt_shape))
 	var key: String = ws.rail_active() if on == "draw" and stage != "blockout" else on
+	if stage == "blockout" and on == "draw" and ws.sculpt_mode == "stamp":
+		key = "stamp"
 	if key == "shape" and ws._shape_brush_on():
 		key = "brush"
 	var says: String = STATUS.get(stage + ":" + key, STATUS.get(key, ""))

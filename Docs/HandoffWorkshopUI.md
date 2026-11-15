@@ -16,9 +16,11 @@ was found, how to test without harming the user's files, and what to do next.
   user; 2b one camera) merged 2026-11-14, stage 3 (the six menus) 2026-11-15 (section 21, "As
   built"), stage 4 (4a the building's stage tabs, Finish keeps the last layer; 4b the Generate
   tool, the generators out of Rooms), stage 5 (one library on Tab) and stage 6a (one Draw on
-  the asset's Bricks stage, the base then the height) 2026-11-15. Next: **stage 6b**, the clay's
-  Draw on Block out -- its Draw (sculpt brush) and Shape (stamp) as one Draw with outlines,
-  the same gesture, making clay (`AssetWorkshopUI.pick_tool` "blockout:*", `_sculpt`).
+  the asset's Bricks stage, the base then the height) and 6b (one Draw on Block out: the brush
+  and the stamps; box, round, cone pulled) 2026-11-15. Next: **stage 7**, a model into clay and
+  bricks in the building workshop -- needs the junction and SCons (C++, `sdf_form.cpp`), and the
+  Build mode area owns it; measure a 400-stud model first (section 21, "A model into a
+  building").
 
 
 ## Where to work

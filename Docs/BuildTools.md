@@ -1793,3 +1793,22 @@ it makes sense -- menus too, but not only menus. Where each asset workshop key's
 * Probes: `asset_ui_probe` -- one Draw on the rail, its outlines, the gesture, a typed height,
   the click lays bricks, Freehand is Sketch, Brush the shape brush; K and Alt D are Draw's on
   screen (72). Pictures: `a2_bricks_draw`, `a2_bricks_draw_freehand`.
+
+**Stage 6b, one Draw on Block out** (2026-11-15). Stage 6 is done with it.
+
+* Block out's Draw (the clay brush) and Shape (the stamps) are one **Draw** (Alt V). Its
+  pictures (`AssetWorkshopUI.CLAY_PICS`, `AssetWorkshop.clay_pick`): **Brush** (drag adds clay,
+  RMB carves, Shift smooths), **Box, Round, Cone** -- the building's gesture: the base dragged
+  on the stroke plane (a box corner to corner, a round or a cone centre to edge), let go, the
+  height pulled off the plane along its normal (on the plane through the base that holds the
+  normal and faces the camera; snapped to the grid's step with the snap on), a click lays it,
+  RMB or Esc gives it up -- **Ball** (centre to edge), **Line**, **Lathe** (as before). The
+  sculpt panel's own shape list is hidden: the pictures choose.
+* `STAMP_PULLED`, `_stamp_phase` ("base", "height"), `_stamp_h`, `_stamp_pull`,
+  `_pulled_desc`, `_stamp_drop`. A stamp set up without a phase (a probe's) is laid corner to
+  corner as before, so `asset_workshop_probe`'s box stamp still checks the snap.
+* A round is now a base circle pulled up; it was a rod end to end, the brush's radius. Icons:
+  workshop_kit 0.23.0 (cone, lathe).
+* Probes: `asset_ui_probe` -- one Draw on Block out, no Shape, Box a stamp with its pictures,
+  a pulled box and a pulled round where and as tall as pulled (75). Picture:
+  `a1_blockout_draw_box`.

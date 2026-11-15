@@ -101,10 +101,36 @@ func _frame(ui: AssetWorkshopUI) -> void:
 		if not found:
 			no_button.append(key)
 	_ok("every key's job is a button on the screen too", no_button.is_empty(), str(no_button))
-	for pair in [["draw", "shape"], ["shape", "stamp"], ["smooth", "smooth"], ["select", "models"]]:
+	# Section 21 stage 6: Block out's Draw is the brush and the stamps, one tool.
+	_ok("Block out: one Draw, no Shape", ui._tool_buttons.has("draw") and not ui._tool_buttons.has("shape"))
+	for pair in [["draw", "shape"], ["smooth", "smooth"], ["select", "models"]]:
 		ui.pick_tool(pair[0])
 		_ok("Block out %s: sculpting, %s" % [pair[0], pair[1]], _ws.tool == "sketch" and _ws.sketch_draw == "sculpt"
 				and _ws.sculpt_mode == pair[1] and ui.active_tool() == pair[0], "%s %s" % [_ws.tool, _ws.sculpt_mode])
+	_ws.clay_pick("box")
+	ui.process(0.016)
+	_ok("Draw's Box: a stamp, still Draw, its pictures shown", _ws.sculpt_mode == "stamp" and _ws.sculpt_shape == "box"
+			and ui.active_tool() == "draw" and ui._clay_box.visible and not ui._draw_box.visible)
+	# The base, then the height: a box 4 samples up off a flat base.
+	_ws._sculpt_plane = Plane(Vector3.UP, 30.0)
+	_ws._stamp_from = Vector3(10, 30, 10)
+	_ws._stamp_to = Vector3(20, 30, 16)
+	_ws._stamp_phase = "height"
+	_ws._stamp_h = 4.0
+	var bd: Dictionary = _ws._stamp_desc()
+	_ok("a pulled box: its base where dragged, as tall as pulled", is_equal_approx((bd.center as Vector3).y, 32.0)
+			and is_equal_approx((bd.half as Vector3).y, 2.0) and is_equal_approx((bd.half as Vector3).x, 5.0), str(bd))
+	_ws.clay_pick("cylinder")
+	_ws._sculpt_plane = Plane(Vector3.UP, 30.0)
+	_ws._stamp_from = Vector3(10, 30, 10)
+	_ws._stamp_to = Vector3(13, 30, 14)
+	_ws._stamp_phase = "height"
+	_ws._stamp_h = 6.0
+	var cd: Dictionary = _ws._stamp_desc()
+	_ok("a pulled round: the base's radius, up the height", cd.kind == "cone" and is_equal_approx((cd.size as Vector3).x, 5.0)
+			and is_equal_approx((cd.b as Vector3).y, 36.0), str(cd))
+	_ws._stamp_drop()
+	_ws.clay_pick("brush")
 
 
 func _model(name: String) -> Dictionary:

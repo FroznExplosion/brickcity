@@ -93,6 +93,8 @@ const ICONS := {
 	"k_window": '<rect x="5" y="5" width="14" height="14"/><path d="M12 5v14M5 12h14"/>',
 	"k_ball": '<circle cx="12" cy="12" r="8"/><ellipse cx="12" cy="12" rx="8" ry="3"/>',
 	"k_wedge": '<path d="M3 19h18L3 7z"/>',
+	"k_cone": '<path d="M12 3L5 19h14z"/><ellipse cx="12" cy="19" rx="7" ry="2"/>',
+	"k_lathe": '<path d="M12 2v20" stroke-dasharray="2 2"/><path d="M12 4c4 0 5 3 3 6s-1 6 3 8H12"/>',
 	"k_free": '<path d="M4 16c3-9 6-9 8-4s5 5 8-5"/>',
 	"k_brush": '<circle cx="8" cy="16" r="4"/><path d="M11 13l9-9"/>',
 	"k_poly": '<path d="M5 18L4 8l9-4 7 8-6 8z"/>',

@@ -162,6 +162,8 @@ var _shape_plates_spin: SpinBox
 ## Draw's outline (Docs/BuildTools.md section 21, stage 6): a SHAPES kind made by the base and
 ## the height, "freehand" (the 2D Sketch on the working plane) or "brush" (the shape brush).
 var draw_outline := "box"
+## Block out's Draw outline: "brush" or a stamp (SCULPT_SHAPES).
+var clay_outline := "brush"
 ## Recipe ids of the bricks the select tool holds.
 var selection: Array[int] = []
 var section_on := false
@@ -2638,6 +2640,18 @@ func shape_cells(kind: String, a: Vector3i, b: Vector3i, plates: int) -> Diction
 	return out
 
 
+## Block out's Draw with `outline` (section 21, stage 6): "brush" the clay brush, else a stamp
+## (STAMP_PULLED by the base and the height, a ball centre to edge, a line, a lathe).
+func clay_pick(outline: String) -> void:
+	lathe_drop()
+	_stamp_drop()
+	clay_outline = outline
+	rail_pick("sculpt")
+	set_sculpt_mode("shape" if outline == "brush" else "stamp")   # its panel and list follow
+	if outline != "brush":
+		sculpt_shape = outline
+
+
 ## Draw (K) with `outline` (section 21, stage 6): a shape by its base and height, the 2D
 ## Sketch ("freehand"), or the shape brush ("brush"). The Bricks stage's one drawing tool.
 func draw_pick(outline: String = draw_outline) -> void:
@@ -4252,6 +4266,30 @@ func _sculpt_input(e: InputEvent) -> bool:
 			Input.set_default_cursor_shape(Input.CURSOR_POINTING_HAND if hot else Input.CURSOR_ARROW)
 		return false
 	var stamping: bool = sculpt_mode == "stamp" and not (e is InputEventWithModifiers and e.shift_pressed and not _sculpt_on)
+	# Pulling a stamp's height: the cursor pulls it, LMB lays it, RMB or Esc gives it up.
+	if _stamp_phase == "height":
+		if e is InputEventKey and e.pressed and not e.echo and e.keycode == KEY_ESCAPE:
+			_stamp_drop()
+			return true
+		if e is InputEventMouseMotion:
+			_stamp_pull()
+			_show_stamp()
+			return true
+		if e is InputEventMouseButton and e.pressed and e.button_index in [MOUSE_BUTTON_LEFT, MOUSE_BUTTON_RIGHT]:
+			if e.button_index == MOUSE_BUTTON_RIGHT:
+				_stamp_drop()
+				return true
+			_stamp_pull()
+			_stamp_phase = ""
+			sculpt.show_ghost({})
+			sculpt.form.begin_edit()
+			_lay_stamp(_stamp_desc(), _sculpt_op)
+			sculpt.remesh()
+			_sculpt_record(sculpt.form.end_edit())
+			_stamp_h = 0.0
+			return true
+		if e is InputEventMouseButton:
+			return true
 	if e is InputEventMouseButton and e.button_index in [MOUSE_BUTTON_LEFT, MOUSE_BUTTON_RIGHT]:
 		if e.pressed:
 			# Sculpting on: a placed model is laid first (its stamp is one undo before this).
@@ -4275,6 +4313,8 @@ func _sculpt_input(e: InputEvent) -> bool:
 				# A stamp: dragged out on the stroke plane, laid when let go.
 				_stamp_from = _stamp_snap(p)
 				_stamp_to = _stamp_from
+				_stamp_h = 0.0
+				_stamp_phase = "base" if sculpt_shape in STAMP_PULLED else ""
 				_show_stamp()
 				return true
 			if sculpt_mode == "flatten" and not e.shift_pressed:
@@ -4293,6 +4333,13 @@ func _sculpt_input(e: InputEvent) -> bool:
 				_show_stamp()
 				_show_sculpt_note(false, "Lathe: click the outline's points, out from the axis. "
 						+ "Enter or RMB lays it, Backspace takes a point back, Esc drops it.")
+				return true
+			if stamping and _stamp_phase == "base":
+				# The base is down: now its height, pulled off the plane.
+				_sculpt_on = false
+				_stamp_phase = "height"
+				_show_stamp()
+				_show_sculpt_note(false, "Pull the height, click to lay it. RMB or Esc gives it up.")
 				return true
 			if stamping:
 				_sculpt_on = false
@@ -4343,11 +4390,43 @@ func _stamp_snap(p: Vector3) -> Vector3:
 ## The stamp being dragged, as what to lay: {kind: "box", center, half} | {kind: "cone",
 ## xform, size} | {kind: "line", a, b, r} | {kind: "lathe", xform, profile}. Empty when
 ## there is nothing to lay yet. `mouse`: a lathe's next point, shown before it is clicked.
+## The cursor's height off the base, along the stroke plane's normal (samples): on the plane
+## through the base's middle that holds the normal and faces the camera. Snapped to the grid's
+## step that way when the snap is on.
+func _stamp_pull() -> void:
+	var ray := _mouse_ray()
+	var r := sculpt.ray_to_samples(ray[0], ray[1])
+	var up := _sculpt_plane.normal
+	var mid := (_stamp_from + _stamp_to) * 0.5 if sculpt_shape == "box" else _stamp_from
+	var dir: Vector3 = r[1]
+	var m := dir - up * dir.dot(up)
+	if m.length() < 0.001:
+		return
+	var hit = Plane(m.normalized(), mid).intersects_ray(r[0], dir)
+	if hit == null:
+		return
+	var h: float = ((hit as Vector3) - mid).dot(up)
+	if sculpt_snap:
+		var step := up.abs().dot(Vector3(BrickWorld.ticks_per_stud(), BrickWorld.ticks_per_plate(), BrickWorld.ticks_per_stud()))
+		h = roundf(h / step) * step
+	_stamp_h = h
+
+
+## Give up a pulled stamp.
+func _stamp_drop() -> void:
+	_stamp_phase = ""
+	_stamp_h = 0.0
+	_sculpt_on = false
+	sculpt.show_ghost({})
+
+
 func _stamp_desc(mouse: Variant = null) -> Dictionary:
 	var a := _stamp_from
 	var b := _stamp_to
 	var r := _sculpt_r()
 	var n := _sculpt_plane.normal.abs()
+	if _stamp_phase != "" and sculpt_shape in STAMP_PULLED:
+		return _pulled_desc(a, b, n)
 	match sculpt_shape:
 		"lathe":
 			if _lathe_axis.is_empty():
@@ -4377,6 +4456,20 @@ func _stamp_desc(mouse: Variant = null) -> Dictionary:
 		"ball":
 			return {"kind": "line", "a": a, "b": a, "r": maxf(a.distance_to(b), 0.5)}
 	return {"kind": "line", "a": a, "b": b, "r": r}
+
+
+## A pulled stamp: the base on the stroke plane (a box's corners, or a round's centre `a` and
+## edge `b`), up the plane's normal by the height pulled -- a thin slab until it is pulled.
+func _pulled_desc(a: Vector3, b: Vector3, n: Vector3) -> Dictionary:
+	var up := _sculpt_plane.normal
+	var h := _stamp_h if absf(_stamp_h) >= 0.5 else 0.5
+	if sculpt_shape == "box":
+		var lo := a.min(b)
+		var hi := a.max(b)
+		var half := ((hi - lo) * 0.5 * (Vector3.ONE - n) + n * absf(h) * 0.5).max(Vector3.ONE * 0.5)
+		return {"kind": "box", "center": (lo + hi) * 0.5 + up * h * 0.5, "half": half}
+	var rad := maxf(a.distance_to(b), 0.5)
+	return _cone_desc(a, a + up * h, rad, rad if sculpt_shape == "cylinder" else 0.0)
 
 
 ## A capped cone from `a` (radius `r1`) to `b` (radius `r2`), samples: a rigid frame with y
@@ -4768,7 +4861,7 @@ func _build_sculpt_box() -> void:
 	_sec_brush.add_child(strength_label)
 	_sec_brush.add_child(strength)
 	var show_for := func(mode: String) -> void:
-		shapes.visible = mode == "stamp"
+		shapes.visible = false   # Draw's pictures choose the stamp (section 21, stage 6)
 		snap.visible = mode == "stamp"
 		strength_label.visible = mode in ["flatten", "grow"]
 		strength.visible = mode in ["flatten", "grow"]
@@ -6871,9 +6964,12 @@ const SCULPT_MODES := [["shape", "add (LMB) / carve (RMB)"], ["stamp", "stamp a 
 		["paint", "paint this part"], ["zone", "mark smooth (LMB) / back to bricks (RMB)"],
 		["models", "pick and move (models, parts, guides)"]]
 ## Stamp shapes (Docs/AssetWorkshop.md, "SDF tools, round 2").
-const SCULPT_SHAPES := [["box", "box: corner to corner"], ["cylinder", "cylinder: end to end"],
-		["cone", "cone: base to tip"], ["ball", "ball: centre to edge"], ["line", "line: end to end"],
+const SCULPT_SHAPES := [["box", "box: the base, then the height"], ["cylinder", "round: the base, then the height"],
+		["cone", "cone: the base, then the tip"], ["ball", "ball: centre to edge"], ["line", "line: end to end"],
 		["lathe", "lathe: axis, then outline"]]
+## The stamps made by the building's gesture (Docs/BuildTools.md section 21, stage 6): the base
+## dragged on the stroke plane, let go, the height pulled off it, a click lays it.
+const STAMP_PULLED := ["box", "cylinder", "cone"]
 ## Not an SdfForm op: the flatten brush, which calls `SdfForm.flatten`.
 const OP_FLATTEN := 100
 ## How much better a fitted piece must match the field than its box's cells as bricks, as
@@ -6881,6 +6977,11 @@ const OP_FLATTEN := 100
 const SDF_FIT_GAIN := 0.03
 const SDF_FIT_EAGER := 0.015
 var sculpt_shape := "box"
+## A pulled stamp's step: "base" while its base is dragged, "height" while its height is
+## pulled, "" otherwise (and for a stamp laid by a probe: corner to corner, as before).
+var _stamp_phase := ""
+## The pulled height, samples, along the stroke plane's normal (0: not pulled yet).
+var _stamp_h := 0.0
 var sculpt_snap := true
 var sculpt_strength := 0.5   # flatten and grow, 0-1
 var _stamp_from := Vector3.ZERO
