@@ -21,17 +21,18 @@ was found, how to test without harming the user's files, and what to do next.
   bricks in the building workshop -- needs the junction and SCons (C++, `sdf_form.cpp`), and the
   Build mode area owns it. Measured 2026-11-15 (section 21, "A model into a building",
   `model_scale_probe`): tick clay takes 20-40 s and 0.5-0.9 GB for an 80-100 stud model, Make
-  bricks was the slow part; 7a (2026-11-15) made it 3x faster (section 21, "Stage 7a"). Left:
-  `SdfForm.fit_pieces` (C++) is half of it now, then the cell clay (C++), then sections over
-  frames. Never run the probe at 200+ studs on this machine (memory).
+  bricks was the slow part; 7a (2026-11-15) made it 3x faster (section 21, "Stage 7a"); 7b
+  (2026-11-15, C++) made fit slopes ~1.6x faster, the same bricks. Left: the cell clay (C++),
+  then sections over frames. Never run the probe at 200+ studs on this machine (memory).
 
 
 ## Where to work
 
-- Worktree `C:/Users/lbaun/bc-ui`, branch `workshop-ui`. It has the built DLL copied from main
-  (no junction, no SCons needed while no C++ changes) and `override.cfg` (the test window).
-  `git merge main` before each task; if main gained C++ since 2026-11-12 20:22, copy main's DLL
-  again and run `--headless --path . --import`.
+- Worktree `C:/Users/lbaun/bc-ui`, branch `workshop-ui`. Since stage 7b it has the godot-cpp
+  junction and builds its own DLL (`python -m SCons -j6` from `gdextension/brick`), and
+  `override.cfg` (the test window). `git merge main` before each task; after merging C++ from
+  main, build, then `--headless --path . --import`. Remove the junction FIRST if the worktree is
+  ever removed (CLAUDE.md).
 - CLAUDE.md's rules apply: one windowed run at a time, heat log after each
   (`python tools/heat_sum.py --last <minutes>`), launch from Bash, no `--resolution`.
 
