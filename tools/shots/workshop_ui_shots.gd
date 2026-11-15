@@ -137,9 +137,12 @@ func _asset() -> void:
 	for i in 20:
 		await process_frame
 	ui.set_stage("blockout")
-	for id in ["select", "draw", "shape", "smooth", "measure"]:
+	for id in ["select", "draw", "smooth", "measure"]:
 		ui.pick_tool(id)
 		await _shot("a1_blockout_" + id)
+	ws.clay_pick("box")
+	await _shot("a1_blockout_draw_box")
+	ws.clay_pick("brush")
 	ui.set_stage("bricks")
 	for id in ["place", "select", "paint", "draw", "move", "measure"]:
 		ui.pick_tool(id)
