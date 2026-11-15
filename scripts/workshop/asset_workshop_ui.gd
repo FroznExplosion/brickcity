@@ -398,6 +398,14 @@ func _fill_tools() -> void:
 	_hint.visible = false   # what the tool does is the status line's first part (section 21)
 
 
+## A stage's rail action from elsewhere (a menu): as if its button were pressed on that stage.
+func pick_tool_in(on_stage: String, id: String) -> void:
+	var was := stage
+	stage = on_stage
+	pick_tool(id)
+	stage = was
+
+
 ## A rail button: the workshop's own tool for it, or the action.
 func pick_tool(id: String) -> void:
 	match stage + ":" + id:
@@ -979,11 +987,9 @@ func _fit_options(n: Node) -> void:
 func sync_kind() -> void:
 	if ws.bench._menu != null:
 		for mb in ws.bench._menu.find_children("*", "MenuButton", true, false):
-			match (mb as MenuButton).text:
-				"Gun":
-					(mb as MenuButton).visible = ws.bench.recipe.kind == "gun"
-				"Mech":
-					(mb as MenuButton).visible = ws.bench.recipe.kind == "mech"
+			var k: String = {"Gun": "gun", "Mech": "mech", "Figure": "figure", "Item": "item"}.get((mb as MenuButton).text, "")
+			if k != "":
+				(mb as MenuButton).visible = ws.bench.recipe.kind == k
 	if _tools_panel != null:
 		_fill_tools()
 	_sig = ""

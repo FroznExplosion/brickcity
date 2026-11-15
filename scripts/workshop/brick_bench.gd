@@ -3714,6 +3714,7 @@ func _on_menu(what: String, arg: Variant) -> void:
 			_dirty = true
 			_update_guide()
 		"role": _set_role(int(arg))
+		"bar": bar_act(str(arg))
 		"select_group":
 			var ray := _mouse_ray()
 			select_group_ray(ray[0], ray[1])
