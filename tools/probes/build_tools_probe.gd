@@ -664,6 +664,31 @@ func _button_checks() -> void:
 			and t.active() == "draw" and _ws.bench._role == BuildRecipe.Role.STRUCTURE)
 	t.pick("hand")
 	_ok("no layer button on the bar", not t.rail.action_buttons.has("layer"))
+	# Stage 4b: the generators left the Rooms pop-out for Generate's, one panel each.
+	var texts := func(box: Control) -> Array:
+		return box.find_children("*", "Button", true, false).map(func(x: Button) -> String: return x.text)
+	_ok("Rooms' pop-out has no generators", not (texts.call(t._rooms_box) as Array).has("Generate tower")
+			and not (texts.call(t._rooms_box) as Array).has("Generate station"))
+	t.set_gen("tower")
+	t.process()
+	_ok("Generate: the tower's panel, on Structure", t.active() == "generate" and t.stage == "structure"
+			and t._gen_box.visible and t._gen_boxes.tower.visible and not t._gen_boxes.grow.visible
+			and (texts.call(t._gen_boxes.tower) as Array).has("Generate tower"))
+	t.set_gen("building")
+	t.process()
+	_ok("a generated building's options off without one", (t._gen_ticks.rooms as CheckBox).disabled)
+	var towers: int = _ws.bench.recipe.towers.size()
+	for x in t._gen_boxes.building.find_children("*", "Button", true, false):
+		if (x as Button).text == "Add building":
+			(x as Button).pressed.emit()
+	t.process()
+	_ok("Add building adds one, its options on", _ws.bench.recipe.towers.size() == towers + 1
+			and not (t._gen_ticks.rooms as CheckBox).disabled, str(_ws.bench.recipe.towers.size()))
+	_ws.bench._on_menu("remove_tower", null)
+	t.pick("hand")
+	_ws.bench._on_menu("generate", "station")
+	_ok("Insert > Generated opens Generate's station panel", t.active() == "generate" and t.gen_kind == "station")
+	t.pick("hand")
 	# Section 21, stage 2: the flat views, as the asset workshop's (Alt 0-3, the bar's buttons).
 	var cam: Camera3D = t.view.cam()
 	var persp: Transform3D = cam.global_transform

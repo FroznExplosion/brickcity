@@ -3714,6 +3714,9 @@ func _on_menu(what: String, arg: Variant) -> void:
 			_update_guide()
 		"role": _set_role(int(arg))
 		"bar": bar_act(str(arg))
+		"generate":
+			if _tools != null:
+				_tools.set_gen(str(arg))
 		"select_group":
 			var ray := _mouse_ray()
 			select_group_ray(ray[0], ray[1])
