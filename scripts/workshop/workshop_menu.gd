@@ -71,7 +71,7 @@ var _role := 0
 ## Ids inside each PopupMenu. Separate numbers per menu; the id is what comes
 ## back from id_pressed.
 enum { F_NEW, F_OPEN, F_SAVE, F_SAVE_AS, F_QUICK_SAVE, F_QUICK_LOAD, F_CITY }
-enum { I_BUILD, I_TOWER, I_BAKE, I_REMOVE_TOWER }
+enum { I_BUILD, I_TOWER, I_BAKE, I_REMOVE_TOWER, I_GROW, I_PACK, I_STATION, I_SHELL }
 ## In the kind's menu, after the kinds (ids 0 .. KINDS.size() - 1).
 enum { G_ROOMS = 100, G_STAIRS, G_WINDOWS, G_FURNISH, G_PROGRAM, G_REROLL }
 enum { E_UNDO, E_SELECT, E_MOVE, E_COPY, E_DELETE, E_REDO }
@@ -199,6 +199,11 @@ func _build_bar() -> void:
 		[],
 		["Bake generated building to bricks", I_BAKE, 0],
 		["Remove generated building", I_REMOVE_TOWER, 0],
+		[],
+		["Generated: grown from saved modules...", I_GROW, 0],
+		["Generated: a ship's inside (this build the hull)...", I_PACK, 0],
+		["Generated: a station...", I_STATION, 0],
+		["Generated: a tower by its shell...", I_SHELL, 0],
 	], _on_insert)
 
 	var kinds := []
@@ -331,6 +336,10 @@ func _on_insert(id: int) -> void:
 		I_TOWER: action.emit("tower", null)
 		I_BAKE: action.emit("bake_tower", null)
 		I_REMOVE_TOWER: action.emit("remove_tower", null)
+		I_GROW: action.emit("generate", "grow")
+		I_PACK: action.emit("generate", "pack")
+		I_STATION: action.emit("generate", "station")
+		I_SHELL: action.emit("generate", "tower")
 
 
 func _on_kind(id: int) -> void:

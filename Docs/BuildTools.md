@@ -1717,3 +1717,21 @@ it makes sense -- menus too, but not only menus. Where each asset workshop key's
   some tab, Interior is the interior layer and has Rooms, Finish keeps the layer and has its
   actions, Look steps the look, Draw's key from Finish opens Structure, no layer button (359).
   Picture: `b13b_finish_tab`.
+
+**Stage 4b, the generators out of Rooms** (2026-11-15). Stage 4 is done with it.
+
+* A new tool, **Generate**, on the Structure and Interior tabs. Its pop-out picks what to make
+  by picture -- **Building** (the generated building: Add, Bake, Remove, its four options as
+  ticks, off without one; Room mix, Reroll furniture), **Modules** (grown from saved modules),
+  **Ship inside** (this build the hull), **Station**, **Tower** (by its shell) -- and shows only
+  that one's short panel; the section size (most bricks) under the three that use it.
+  (`WorkshopTools.GEN_PICS`, `set_gen`, `_gen_boxes`.) Icons: workshop_kit 0.21.0.
+* The Rooms pop-out keeps the rooms, points and the module's rules only.
+* Insert has "Generated: ..." rows for the four (`WorkshopMenu` I_GROW .. I_SHELL, the bench's
+  "generate"); a generated building's row in the outliner opens Generate on Building.
+* So a generated building's options are on the screen now; what is still menu-only in the
+  building: Insert > a build (stage 5's library) and quick save and load (F5, F9 -- keys and
+  File; Save is on Finish).
+* Probes: `build_tools_probe` -- no generators in Rooms, Generate's tower panel alone, the
+  building's options off without one and on after Add building, Insert > Generated opens the
+  station's panel (364). Pictures: `b12_rooms`, `b12b_generate_tower`, `b12c_generate_building`.

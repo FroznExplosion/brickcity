@@ -23,7 +23,11 @@ const TOOLS := [
 	["repeat", "Repeat", "J", "Click a building and copy it, or one storey, with everything on it: windows, stairs, furniture, rooms, every brick. Up, it lands on top and stays one building. A box shows where it will go."],
 	["select", "Select", "L", "Click a shape or an inserted build to pick it. A shape: drag its top for its height, its side to move it; change its bond or brick, delete it, or let it go. A build: move, copy or delete it."],
 	["rooms", "Rooms", "O", "Rooms and openings: click a room to find it or an opening to turn its kind; RMB forgets one."],
+	["generate", "Generate", "", "Generated buildings: pick what to make in the pop-out -- a building, one grown from saved modules, a ship's inside, a station, a tower by its shell -- and press its button."],
 ]
+## Generate's kinds: [id, name, icon] -- each its own short panel in the pop-out.
+const GEN_PICS := [["building", "Building", "g_building"], ["grow", "Modules", "g_grow"], ["pack", "Ship inside", "g_pack"],
+		["station", "Station", "g_station"], ["tower", "Tower", "g_tower"]]
 ## The stage tabs (Docs/BuildTools.md section 21, stage 4): [id, tab, what it is for, layer]. The
 ## tab is the layer a brick goes in (structure, interior, detail); Finish keeps the last one.
 const STAGES := [
@@ -34,8 +38,8 @@ const STAGES := [
 ]
 ## Each stage's tools (TOOLS ids), then Finish's actions.
 const STAGE_TOOLS := {
-	"structure": ["hand", "draw", "roof", "stairs", "cut", "repeat", "select"],
-	"interior": ["hand", "rooms", "select"],
+	"structure": ["hand", "draw", "roof", "stairs", "cut", "repeat", "select", "generate"],
+	"interior": ["hand", "rooms", "select", "generate"],
 	"detail": ["hand", "cut", "select"],
 	"finish": ["hand", "select"],
 }
@@ -60,6 +64,7 @@ const STATUS := {
 	"repeat": "Click a building or a storey; the pop-out says where the copies go",
 	"select": "Click a shape or an inserted build   drag a shape's top: height, its side: moves it",
 	"rooms": "Click a room to find it, an opening to turn its kind   RMB forgets one",
+	"generate": "Pick what to make in the pop-out, set it, press its button",
 }
 ## Every key's button (Docs/BuildTools.md section 7): the bar, the same in both workshops
 ## (`WorkshopBar.ACTIONS`, section 21).
@@ -281,6 +286,15 @@ var _paint_spin: SpinBox
 var _builds_box: VBoxContainer
 var _builds_label: Label
 var _rooms_box: VBoxContainer
+## Generate's pop-out: the pictures, a box a kind (`_gen_boxes`), the section size under them.
+var _gen_box: VBoxContainer
+var _gen_boxes := {}
+var _gen_ticks := {}
+var _gen_section: VBoxContainer
+var _gen_row := {}
+## The Generate tool is in hand, and which of its kinds (`GEN_PICS`).
+var _generating := false
+var gen_kind := "building"
 var _rooms_label: Label
 ## The module's rules on the rooms panel (Docs/RoomModules.md 1).
 var _module_on: CheckBox
@@ -1568,6 +1582,14 @@ func _fill_rail() -> void:
 					ws._furnish.open(not ws._furnish.is_open()))
 
 
+## Generate with `kind` (`GEN_PICS`) in its pop-out: Insert > Generated, the outliner's row.
+func set_gen(kind: String) -> void:
+	gen_kind = kind
+	pick("generate")
+	if rail.buttons.has("generate"):
+		WkRail.light(_gen_row, kind)
+
+
 ## Finish's actions: what the File and kind menus do, on the screen.
 func finish_act(id: String) -> void:
 	match id:
@@ -1614,7 +1636,8 @@ func pick(id: String) -> void:
 				ws._spaces.toggle()
 		_:
 			ws._set_painting(false)
-	tool = id if id != "paint" and id != "rooms" else "place"
+	_generating = id == "generate"
+	tool = id if not id in ["paint", "rooms", "generate"] else "place"
 	if id != "select" and id != "repeat" and id != "roof":
 		selected = -1
 	match id:
@@ -1701,6 +1724,8 @@ func active() -> String:
 		return "paint"
 	if ws._spaces != null and ws._spaces.active:
 		return "rooms"
+	if _generating:
+		return "generate"
 	return tool
 
 
@@ -1883,41 +1908,63 @@ func _build_options() -> void:
 	_module_weight = _spin(_rooms_box, "weight", 0, 100, 1,
 			func(v: float) -> void: ws._spaces.set_rule("weight", v))
 	_module_weight.step = 0.1
+	# The generators (Docs/BuildTools.md section 21, stage 4b): out of the Rooms pop-out into
+	# Generate's, one short panel each, picked by its picture.
+	_gen_box = VBoxContainer.new()
+	rail.options.add_child(_gen_box)
+	_gen_row = rail.pictures(_gen_box, "Generate", GEN_PICS, func(id: String) -> void: gen_kind = id, gen_kind, 3)
+	for g in GEN_PICS:
+		var b := VBoxContainer.new()
+		_gen_box.add_child(b)
+		_gen_boxes[g[0]] = b
+	# A generated building (BuildTower): add it, its options, bake or remove it -- the kind
+	# menu's Generated rows and Insert's, on the screen.
+	var gbb: VBoxContainer = _gen_boxes.building
+	var brow1 := HBoxContainer.new()
+	gbb.add_child(brow1)
+	_button(brow1, "Add building", func() -> void: ws._on_menu("tower", null))
+	_button(brow1, "Bake", func() -> void: ws._on_menu("bake_tower", null))
+	_button(brow1, "Remove", func() -> void: ws._on_menu("remove_tower", null))
+	for o in [["rooms", "interior walls"], ["stairs", "stairs"], ["windows", "windows"], ["furnish", "furnish rooms"]]:
+		var gcb := CheckBox.new()
+		gcb.text = o[1]
+		gcb.focus_mode = Control.FOCUS_NONE
+		gcb.toggled.connect(func(on: bool) -> void: ws._on_menu("tower_option", [o[0], on]))
+		gbb.add_child(gcb)
+		_gen_ticks[o[0]] = gcb
+	var brow2 := HBoxContainer.new()
+	gbb.add_child(brow2)
+	_button(brow2, "Room mix...", func() -> void: ws._on_menu("program_dialog", null))
+	_button(brow2, "Reroll furniture", func() -> void: ws._on_menu("reroll", null))
 	# Grow a building from the saved modules (Docs/RoomModules.md 3).
 	var gl := Label.new()
 	gl.text = "Grow a building from saved modules:"
-	_rooms_box.add_child(gl)
-	var seed_spin := _spin(_rooms_box, "seed", 1, 99999, int(grow_params.seed),
+	_gen_boxes.grow.add_child(gl)
+	var seed_spin := _spin(_gen_boxes.grow, "seed", 1, 99999, int(grow_params.seed),
 			func(v: float) -> void: grow_params.seed = int(v))
-	_spin(_rooms_box, "modules", 1, 200, int(grow_params.rooms),
+	_spin(_gen_boxes.grow, "modules", 1, 200, int(grow_params.rooms),
 			func(v: float) -> void: grow_params.rooms = int(v))
-	_spin(_rooms_box, "path length", 0, 50, int(grow_params.path),
+	_spin(_gen_boxes.grow, "path length", 0, 50, int(grow_params.path),
 			func(v: float) -> void: grow_params.path = int(v))
 	var grow_row := HBoxContainer.new()
-	_rooms_box.add_child(grow_row)
+	_gen_boxes.grow.add_child(grow_row)
 	_button(grow_row, "Generate", func() -> void: ws._spaces.generate(grow_params))
 	_button(grow_row, "Next seed", func() -> void:
 			grow_params.seed = int(grow_params.seed) + 1
 			seed_spin.set_value_no_signal(int(grow_params.seed))
 			ws._spaces.generate(grow_params))
-	# Sections (Docs/RoomModules.md 7.1): the most bricks a part of either has.
-	_spin(_rooms_box, "section (most bricks)", 500, 100000, int(grow_params.get("section_bricks", BuildSections.BUDGET)),
-			func(v: float) -> void:
-				grow_params.section_bricks = int(v)
-				shell_params.section_bricks = int(v)
-				station_params.section_bricks = int(v))
 	# A ship's inside (Docs/RoomModules.md 7.4): the build open is the hull.
 	var ptl := Label.new()
 	ptl.text = "Fill this build as a ship's hull:"
-	_rooms_box.add_child(ptl)
-	var pack_seed := _spin(_rooms_box, "seed", 1, 99999, int(pack_params.seed),
+	_gen_boxes.pack.add_child(ptl)
+	var pack_seed := _spin(_gen_boxes.pack, "seed", 1, 99999, int(pack_params.seed),
 			func(v: float) -> void: pack_params.seed = int(v))
-	_spin(_rooms_box, "passes (best kept)", 1, 16, int(pack_params.passes),
+	_spin(_gen_boxes.pack, "passes (best kept)", 1, 16, int(pack_params.passes),
 			func(v: float) -> void: pack_params.passes = int(v))
-	_spin(_rooms_box, "bulkhead every (studs)", 12, 200, int(pack_params.section_studs),
+	_spin(_gen_boxes.pack, "bulkhead every (studs)", 12, 200, int(pack_params.section_studs),
 			func(v: float) -> void: pack_params.section_studs = int(v))
 	var pack_row := HBoxContainer.new()
-	_rooms_box.add_child(pack_row)
+	_gen_boxes.pack.add_child(pack_row)
 	_button(pack_row, "Generate interior", func() -> void: ws._spaces.generate(pack_params))
 	_button(pack_row, "Next seed", func() -> void:
 			pack_params.seed = int(pack_params.seed) + 1
@@ -1926,19 +1973,19 @@ func _build_options() -> void:
 	# A station (Docs/RoomModules.md 7.2): grown from a core module, docks, tubes, wings.
 	var stl := Label.new()
 	stl.text = "Grow a station (modules with station roles):"
-	_rooms_box.add_child(stl)
-	var station_seed := _spin(_rooms_box, "seed", 1, 99999, int(station_params.seed),
+	_gen_boxes.station.add_child(stl)
+	var station_seed := _spin(_gen_boxes.station, "seed", 1, 99999, int(station_params.seed),
 			func(v: float) -> void: station_params.seed = int(v))
-	_spin(_rooms_box, "modules", 2, 300, int(station_params.modules),
+	_spin(_gen_boxes.station, "modules", 2, 300, int(station_params.modules),
 			func(v: float) -> void: station_params.modules = int(v))
-	_spin(_rooms_box, "spine (core to dock)", 0, 40, int(station_params.spine),
+	_spin(_gen_boxes.station, "spine (core to dock)", 0, 40, int(station_params.spine),
 			func(v: float) -> void: station_params.spine = int(v))
-	_spin(_rooms_box, "docks", 1, 12, int(station_params.docks),
+	_spin(_gen_boxes.station, "docks", 1, 12, int(station_params.docks),
 			func(v: float) -> void: station_params.docks = int(v))
-	_spin(_rooms_box, "bridging tubes", 0, 40, int(station_params.bridges),
+	_spin(_gen_boxes.station, "bridging tubes", 0, 40, int(station_params.bridges),
 			func(v: float) -> void: station_params.bridges = int(v))
 	var station_row := HBoxContainer.new()
-	_rooms_box.add_child(station_row)
+	_gen_boxes.station.add_child(station_row)
 	_button(station_row, "Generate station", func() -> void: ws._spaces.generate(station_params))
 	_button(station_row, "Next seed", func() -> void:
 			station_params.seed = int(station_params.seed) + 1
@@ -1947,22 +1994,22 @@ func _build_options() -> void:
 	# Set by shell: a tower's box, its inside split and filled (Docs/RoomModules.md 4).
 	var tl := Label.new()
 	tl.text = "Set a tower by its shell:"
-	_rooms_box.add_child(tl)
-	var shell_seed := _spin(_rooms_box, "seed", 1, 99999, int(shell_params.seed),
+	_gen_boxes.tower.add_child(tl)
+	var shell_seed := _spin(_gen_boxes.tower, "seed", 1, 99999, int(shell_params.seed),
 			func(v: float) -> void: shell_params.seed = int(v))
-	_spin(_rooms_box, "width (studs)", 18, 400, int(shell_params.width),
+	_spin(_gen_boxes.tower, "width (studs)", 18, 400, int(shell_params.width),
 			func(v: float) -> void: shell_params.width = int(v))
-	_spin(_rooms_box, "depth (studs)", 14, 400, int(shell_params.depth),
+	_spin(_gen_boxes.tower, "depth (studs)", 14, 400, int(shell_params.depth),
 			func(v: float) -> void: shell_params.depth = int(v))
-	_spin(_rooms_box, "storeys", 1, 60, int(shell_params.storeys),
+	_spin(_gen_boxes.tower, "storeys", 1, 60, int(shell_params.storeys),
 			func(v: float) -> void: shell_params.storeys = int(v))
-	_spin(_rooms_box, "setback (studs in)", 0, 20, int(shell_params.setback),
+	_spin(_gen_boxes.tower, "setback (studs in)", 0, 20, int(shell_params.setback),
 			func(v: float) -> void: shell_params.setback = int(v))
-	_spin(_rooms_box, "every (storeys, 0 none)", 0, 30, int(shell_params.setback_every),
+	_spin(_gen_boxes.tower, "every (storeys, 0 none)", 0, 30, int(shell_params.setback_every),
 			func(v: float) -> void: shell_params.setback_every = int(v))
 	# The sides that step in: north +Z, south -Z, east +X, west -X.
 	var sides_row := HBoxContainer.new()
-	_rooms_box.add_child(sides_row)
+	_gen_boxes.tower.add_child(sides_row)
 	var sl := Label.new()
 	sl.text = "sides in:"
 	sides_row.add_child(sl)
@@ -1979,14 +2026,24 @@ func _build_options() -> void:
 	foot.text = "this build's outline as the footprint"
 	foot.focus_mode = Control.FOCUS_NONE
 	foot.toggled.connect(func(on: bool) -> void: shell_params.outline = on)
-	_rooms_box.add_child(foot)
+	_gen_boxes.tower.add_child(foot)
 	var shell_row := HBoxContainer.new()
-	_rooms_box.add_child(shell_row)
+	_gen_boxes.tower.add_child(shell_row)
 	_button(shell_row, "Generate tower", func() -> void: ws._spaces.generate(shell_params))
 	_button(shell_row, "Next seed", func() -> void:
 			shell_params.seed = int(shell_params.seed) + 1
 			shell_seed.set_value_no_signal(int(shell_params.seed))
 			ws._spaces.generate(shell_params))
+	var gen_common := VBoxContainer.new()
+	_gen_box.add_child(gen_common)
+	_gen_section = gen_common
+	# Sections (Docs/RoomModules.md 7.1): the most bricks a part of either has.
+	_spin(gen_common, "section (most bricks)", 500, 100000, int(grow_params.get("section_bricks", BuildSections.BUDGET)),
+			func(v: float) -> void:
+				grow_params.section_bricks = int(v)
+				shell_params.section_bricks = int(v)
+				station_params.section_bricks = int(v))
+
 
 	_cut_box = VBoxContainer.new()
 	rail.options.add_child(_cut_box)
@@ -3343,6 +3400,17 @@ func process() -> void:
 	if _builds_box.visible:
 		_builds_label.text = "Picked: %s" % String(ws.recipe.groups[ws._selected].get("name", "a build"))
 	_rooms_box.visible = on == "rooms"
+	_gen_box.visible = on == "generate"
+	if on == "generate":
+		for k in _gen_boxes:
+			(_gen_boxes[k] as Control).visible = k == gen_kind
+		_gen_section.visible = gen_kind in ["grow", "station", "tower"]
+		var ti: int = ws._tower_sel()
+		var tp: Dictionary = TowerBlockout.normalised(ws.recipe.towers[ti].params) if ti >= 0 else {}
+		for k in _gen_ticks:
+			var cb: CheckBox = _gen_ticks[k]
+			cb.disabled = ti < 0
+			cb.set_pressed_no_signal(bool(tp.get(k, false)))
 	if on == "rooms":
 		_rooms_label.text = "next room: %s   point: %s" % [ws._spaces.kind, ws._spaces.point_kind]
 		# The loaded build's module rules, without setting them.
