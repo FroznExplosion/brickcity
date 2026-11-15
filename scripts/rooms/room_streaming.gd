@@ -282,13 +282,16 @@ func _set_masks(buildings: Array) -> void:
 	for b in buildings:
 		for g in groups.layout(b):
 			var n: int = g.last_room - g.first_room
+			var mine: Array = by_group.get(g.get_instance_id(), [])
+			if mine.is_empty() and g.held.size() == n and not g.held.has(1) and not g.cover_mask.has(1):
+				continue   # nothing held, and its masks say so already
 			var held := PackedByteArray()
 			held.resize(n)
 			held.fill(0)
 			var cover := PackedByteArray()
 			cover.resize(n)
 			cover.fill(0)
-			for r in by_group.get(g.get_instance_id(), []):
+			for r in mine:
 				held[r.k] = 1
 				if r.want and (r.near or r.pawn):
 					cover[r.k] = 1
