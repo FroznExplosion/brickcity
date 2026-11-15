@@ -1,10 +1,10 @@
 class_name PartStandards
 extends RefCounted
-## The interfaces and body plans of Docs/Parts/standards.json, read once
+## The interfaces and body plans of content/base/data/standards.json, read once
 ## (Docs/ModularParts.md sections 3 and 10). An interface is a named physical fit; a part
 ## joins a socket only on one listed here, so a typo is caught, never fits by accident.
 
-const PATH := "res://Docs/Parts/standards.json"
+const PATH := "res://content/base/data/standards.json"
 ## The tables that hold interfaces, one per family of fit.
 const TABLES := ["gun_interfaces", "mgun_interfaces", "mech_interfaces", "figure_interfaces"]
 

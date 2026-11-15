@@ -225,8 +225,8 @@ brick mech is piloted with the ported motor. Loopback agrees.
 - **Stage 1 done (8e7d63e, 2026-09-24): the code and docs are in.** Guns, loot, combat, elements,
   status, effects, core, `ElementalTarget`/`FreezeVisual`, the three autoloads, the element FX;
   specs in [Weapons/](Weapons/README.md). The two RNG fixes; `ElementalManager` stripped to FX and
-  `ElementalTarget`'s private health removed; no third-party assets. `test/core_test.tscn` and
-  `test/loot_range_test.tscn -- --probe` pass here as they do in BoomerBorder.
+  `ElementalTarget`'s private health removed; no third-party assets. `tools/tests/core_test.tscn` and
+  `tools/tests/loot_range_test.tscn -- --probe` pass here as they do in BoomerBorder.
 - **Stage 2 done (2026-09-24): guns hurt bricks, through the authority.**
   - **Bullets wear, they do not delete.** Every brick has 255 hp (`BrickWorld.chip_hit`, new);
     a round takes hp off the brick it struck, and it dies at 0. Two new log kinds, `CHIP` and

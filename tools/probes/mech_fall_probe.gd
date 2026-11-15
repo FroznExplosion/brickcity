@@ -14,7 +14,7 @@ extends SceneTree
 ## Every break is a command (SHEAR, whole) in a log; a client building the same
 ## towers and applying the log has the same blocks let go.
 
-const Arena := preload("res://tools/ai_arena.gd")
+const Arena := preload("res://tools/probes/ai_arena.gd")
 const STOREYS := 5
 ## Plates per storey: six courses of wall and the floor plate on them.
 const WALL_PLATES := 18

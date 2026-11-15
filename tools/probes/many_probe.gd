@@ -16,7 +16,7 @@ extends SceneTree
 ## Timings are judged headless; with other Godot processes running they are not
 ## to be trusted.
 
-const Arena := preload("res://tools/ai_arena.gd")
+const Arena := preload("res://tools/probes/ai_arena.gd")
 const SOLDIERS := 36
 const SQUAD := 6
 const FLYERS := 3

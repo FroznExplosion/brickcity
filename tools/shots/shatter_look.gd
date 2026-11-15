@@ -1,7 +1,7 @@
 extends SceneTree
 
 ## Not headless. A frozen kill's ice shards (VfxPool.spawn_shatter, drawn by
-## fx/shaders/ice_shard.gdshader; Docs/GpuOffload.md 2.7). Each picture also
+## shaders/ice_shard.gdshader; Docs/GpuOffload.md 2.7). Each picture also
 ## draws, as a see-through red box, where the old CPU step (fall, bounce on the
 ## floor: up speed * -0.35, all * 0.7) puts every shard, stepped finely from
 ## what the burst wrote: the drawn shards sit in them.

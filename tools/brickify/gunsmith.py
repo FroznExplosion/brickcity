@@ -46,6 +46,8 @@ from mathutils.bvhtree import BVHTree
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 PARTS_DIR = os.path.normpath(os.path.join(HERE, "..", "..", "Docs", "Parts"))
+# The standards are game data, in the base content pack (Docs/Content.md).
+STANDARDS = os.path.normpath(os.path.join(HERE, "..", "..", "content", "base", "data", "standards.json"))
 sys.path.insert(0, HERE)
 import brickify  # noqa: E402  (the packer)
 
@@ -57,7 +59,7 @@ def main() -> None:
     args = sys.argv[sys.argv.index("--") + 1:]
     sheet = json.load(open(args[0], encoding="utf-8"))
     out_dir = args[1]
-    std = json.load(open(os.path.join(PARTS_DIR, "standards.json"), encoding="utf-8"))
+    std = json.load(open(STANDARDS, encoding="utf-8"))
     grid = std["grids"][std["classes"][sheet["class"]]["grid"]]
     bpy.ops.wm.read_factory_settings(use_empty=True)
 

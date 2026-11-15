@@ -17,7 +17,7 @@ extends SceneTree
 ## E. Soldiers: facing a mech with its hatch off they know it, aim for the pilot,
 ##    and their rifles reach him -- and nothing else of the mech.
 
-const Arena := preload("res://tools/ai_arena.gd")
+const Arena := preload("res://tools/probes/ai_arena.gd")
 
 var _pass := 0
 var _fail := 0

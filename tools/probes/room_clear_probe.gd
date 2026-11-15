@@ -14,7 +14,7 @@ extends SceneTree
 ##      it makes a door of its own in the wall beside it (mouse-holing) and goes
 ##      in through that.
 
-const Arena := preload("res://tools/ai_arena.gd")
+const Arena := preload("res://tools/probes/ai_arena.gd")
 const LIMIT := 30 * 70
 
 var _pass := 0

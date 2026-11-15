@@ -14,7 +14,7 @@ extends SceneTree
 ##    book's plan, its tactic is the one the plan's move maps to, the soldiers
 ##    shoot, and what the book asked for that the game cannot do yet is counted.
 
-const Arena := preload("res://tools/ai_arena.gd")
+const Arena := preload("res://tools/probes/ai_arena.gd")
 const FIGHT_SECONDS := 25.0
 const TALLY := "user://dev/tactics_tally_probe.json"
 

@@ -17,7 +17,7 @@ extends SceneTree
 ## F. Shot through the hatch, the pilot (a soldier) dies; the mech goes to auto.
 ## G. A mech destroyed with its pilot inside takes the pilot with it.
 
-const Arena := preload("res://tools/ai_arena.gd")
+const Arena := preload("res://tools/probes/ai_arena.gd")
 
 var _pass := 0
 var _fail := 0

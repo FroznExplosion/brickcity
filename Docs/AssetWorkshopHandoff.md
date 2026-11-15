@@ -38,7 +38,7 @@ marked smooth; **Edit as SDF** goes back 1:1. One sample a tick: a stud is 5, a 
   2-stud bricks bridge the middle, plane kept on a stud line; "centre on mirror".
 - **Nudges** half / one stud each way, **snap to studs**, `SdfForm.move`.
 - **Gun size marks**: ruler from the butt (SMG 53.25 studs = 852 mm real, 213 mm print),
-  the shared grip box from `Docs/Parts/standards.json` `held_grip`; class picker.
+  the shared grip box from `content/base/data/standards.json` `held_grip`; class picker.
 - **Game view** Alt C: camera as `PlayerView` frames a held gun (class VIEW_LENGTH, HIP,
   RMB = ADS).
 - Earlier: Sculpt (3D, Alt V) / Sketch (2D, Alt D) split; fitted pieces; wedges; lathe.

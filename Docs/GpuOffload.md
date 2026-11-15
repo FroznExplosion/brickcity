@@ -110,7 +110,7 @@ What it was:
 **Now.** Dust, bursts and flames are CPUParticles3D, simulated on the main thread:
 `CollapseDust` (collapse_dust.gd, a placeholder by its own note), `MaterialFx` bursts,
 `CombatFeedback` death bursts, the torch flame, the tank and the truck. The disasters already
-use GPUParticles3D (autoload/vfx_pool.gd and scripts/disasters/).
+use GPUParticles3D (scripts/autoload/vfx_pool.gd and scripts/disasters/).
 
 **On the GPU.** GPUParticles3D with a ParticleProcessMaterial: the same settings, simulated on
 the GPU, nothing on the CPU per particle. Collision against the ground with a heightfield or
@@ -175,7 +175,7 @@ A frozen enemy killed bursts into 24-80 shards (`VfxPool.spawn_shatter`). They w
 the CPU every frame -- fall, bounce on the enemy's floor, spin, fade, two renderer calls a
 shard -- and drawn with `shard_mesh`, which nothing set: the CPU did the work and nothing
 showed. Now each shard is written once when the burst starts (where, how big, its velocity,
-its spin) and `fx/shaders/ice_shard.gdshader` works out the rest from the burst's age, the one
+its spin) and `shaders/ice_shard.gdshader` works out the rest from the burst's age, the one
 value set each frame: the fall in closed form, up to six bounces (keeping 0.35 of the upward
 speed and 0.7 of all of it, as before), then lying still, shrinking away over the last 40%.
 With no `shard_mesh` set, the pool makes a small cut-crystal chunk, so frozen kills now show

@@ -14,7 +14,7 @@ extends SceneTree
 ##   F. The brute: a large body on the large map, shooting -- until its armour is
 ##      gone, when it becomes "Heavy Melee", drops the gun and charges (a phase).
 
-const Arena := preload("res://tools/ai_arena.gd")
+const Arena := preload("res://tools/probes/ai_arena.gd")
 
 var _pass := 0
 var _fail := 0

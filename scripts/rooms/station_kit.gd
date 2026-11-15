@@ -68,7 +68,7 @@ static func modules() -> Array:
 
 ## A box room W x D inside, its walls a stud: doors [[side, along, link]] (side 0
 ## +X, 1 +Z, 2 -X, 3 -Z; along from 1), windows [[side, along, y0, w, h]], marks
-## [[kind, [x, y, z], facing]] -- as tools/room_module_kit.gd's, built to hold.
+## [[kind, [x, y, z], facing]] -- as scripts/rooms/room_module_kit.gd's, built to hold.
 static func box(name: String, w: int, d: int, rules: Dictionary, doors: Array, windows := [],
 		marks := []) -> BuildRecipe:
 	var r := BuildRecipe.new()

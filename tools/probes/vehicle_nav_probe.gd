@@ -18,7 +18,7 @@ extends SceneTree
 ##    round its end and gets there without sticking; a truck goes through the
 ##    wide gap and lets its cargo out on the far side.
 
-const Arena := preload("res://tools/ai_arena.gd")
+const Arena := preload("res://tools/probes/ai_arena.gd")
 const STUD := 0.35
 const PLATE := 0.14
 

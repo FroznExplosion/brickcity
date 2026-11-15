@@ -17,9 +17,9 @@ config/icon="res://icon.svg"
 
 [autoload]
 
-StatusTicker="*res://autoload/status_ticker.gd"
-ElementalManager="*res://autoload/elemental_manager.gd"
-VfxPool="*res://autoload/vfx_pool.gd"
+StatusTicker="*res://scripts/autoload/status_ticker.gd"
+ElementalManager="*res://scripts/autoload/elemental_manager.gd"
+VfxPool="*res://scripts/autoload/vfx_pool.gd"
 MenuSettings="*res://menu/core/MenuSettings.gd"
 MenuManager="*res://menu/core/MenuManager.gd"
 TestWindow="*res://scripts/core/test_window.gd"

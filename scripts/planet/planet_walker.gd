@@ -2,7 +2,7 @@ class_name PlanetWalker
 extends CharacterBody3D
 
 ## Walking and flying on a planet (Docs/Planets.md 11, step 3): the radial
-## controller of test 5 (tools/planet_radial_body.gd, after STA doc 05) with
+## controller of test 5 (scripts/planet/planet_radial_body.gd, after STA doc 05) with
 ## input, a fly mode to go to orbit and back, and the VoxelViewer the voxel
 ## ground streams round. Up comes from Gravity.up_at where it stands; the whole
 ## basis is rebuilt from it every tick (single-axis alignment drifts a strafe);
