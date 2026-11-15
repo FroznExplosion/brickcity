@@ -190,6 +190,7 @@ func update_hud() -> void:
 		"rooms         %d  (%d with a diff, %d piece(s) laid as bricks)" % [
 			rooms.rooms, rooms.changed, rooms.laid],
 		city._hud_cache.groups,
+		city.brick_near.hud_line() if city.brick_near != null else "near tier     off",
 		caps_hud_line(),
 		city._physics_view.hud_line() if city._physics_view != null else "physics view  off (shift+G)",
 		_view_hud_line(),
