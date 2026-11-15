@@ -7465,6 +7465,23 @@ func _run_chamfer_pass() -> void:
 	# a band's buffers are written when its bricks change, never because the
 	# camera moved. Was: re-sorted into rings every metre (STUD_RESORT), which
 	# the cap squeeze below and stale_studs (--lodbreak) were written around.
+	# The hit above settles first: what it loosens lands and remeshes over the
+	# next ticks, and a band whose bricks changed rewrites its studs, rightly.
+	# Counted from once nothing has been rewritten for 15 frames standing still.
+	var settling := city.brick_near.stud_rewrites
+	var quiet := 0
+	var last := settling
+	for i in 300:
+		await _frames(1)
+		if city.brick_near.stud_rewrites != last or not city._damage_queue.is_empty() \
+				or not city._remesh_queue.is_empty():
+			last = city.brick_near.stud_rewrites
+			quiet = 0
+		else:
+			quiet += 1
+			if quiet >= 15:
+				break
+	print("[chamfer] the hit settling rewrote %d band(s)' studs" % (last - settling))
 	var rewrites := city.brick_near.stud_rewrites
 	var at_wall := city.camera.global_position
 	for i in 6:
