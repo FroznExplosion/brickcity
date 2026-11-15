@@ -1669,3 +1669,29 @@ it makes sense -- menus too, but not only menus. Where each asset workshop key's
 * Probes: `asset_ui_probe` -- one camera, the wheel zooms, Shift + wheel the toolbar, a flat
   view zooms, Y the fly and back, RMB the sketch's (60 passed); `build_tools_probe` -- Top view
   flat, it zooms, 3D view back as it was (355).
+
+**Stage 3, the six menus** (2026-11-15). As the plan above, with:
+
+* `WorkshopMenu` builds File, Edit, View (the print look, was Finish), Insert, the kind's menu
+  (`_type`, named by `set_kind`: the kinds, then "Generated: ..." rows, off without a generated
+  building) and Help (Every key, F1). `add_bar(sections, handler, keys, skip)` puts the bar's
+  rows in Edit (Hand, Cancel) and View, "name      key", names from `WorkshopBar.MENU`; the
+  building passes `WorkshopTools.act`, the asset `AssetWorkshopUI.bar_act` (with its own keys
+  Alt S and Alt Shift S for the mirror). Every menu row now says its key in a column.
+* `asset_mode` empties Insert for the asset's own and removes the kind's menu and Help: the
+  asset workshop adds Gun, Mech, Figure, Item (one shown, `sync_kind`) and its own Help after
+  them, so the order stays File Edit View Insert <Kind> Help.
+* Asset File: the three exports, Share parts, pictures of parts. Insert: a model (the Import
+  tool's dialog, `AssetWorkshopUI.pick_tool_in`), a photo, a guide model, a catalogue part, a
+  package. View adds zoom in and out and Explode; the Gun menu has hands, play, the game's
+  view, the size marks and sizes, the ruler, mech or player's gun.
+* New buttons in the asset's Selected: the asset row -- Make it a gun / mech / figure / item,
+  Mech gun or Player's gun, a mech's class, legs, Lay joints again, Reference mech; the Parts
+  row -- Share parts, Pictures of parts, Import a package, Take off tried parts (when some are).
+  Measure, the wand and Paint are only on the rail now (tools, not menu rows).
+* Probes: `workshop_probe` the six menus, View's Grid row is the bar's, the kind's menu named
+  for it (100); `asset_workshop_probe` the six menus, Insert's model row, rows pressed as the
+  popup presses them, Explode (346); `asset_ui_probe` the new Selected buttons and the six
+  menus (65). Pictures: `b16_menu_*`, `a6_menu_*`.
+* Still menu-only in the building (stage 4): File, Insert, the kind, the generated building's
+  options, the print look.

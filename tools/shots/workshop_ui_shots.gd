@@ -96,7 +96,7 @@ func _building() -> void:
 	ws.bench._place_keys()
 	await _shot("b15_keys")
 	t.act("keys")
-	await _menu_shots(ws.bench._menu, "b16", ["File", "Edit", "Insert", "Type", "Layer", "Generated", "Finish"])
+	await _menu_shots(ws.bench._menu, "b16", ["File", "Edit", "View", "Insert", "Building", "Help"])
 	ws.bench._menu.show_open("open")
 	await _shot("b17_open_dialog")
 	ws.bench._menu._open_dialog.hide()
@@ -159,8 +159,7 @@ func _asset() -> void:
 	await _shot("a5_keys_f1")
 	ws.bench._keys_on = false
 	ws.bench._keys_panel.visible = false
-	await _menu_shots(ws.bench._menu, "a6", ["File", "Edit", "Asset", "View", "Part", "Block out", "Brick", "Gun",
-			"Photos", "Help", "Finish"])
+	await _menu_shots(ws.bench._menu, "a6", ["File", "Edit", "View", "Insert", "Gun", "Help"])
 	ws.set_asset_kind("item")
 	ui.set_stage("blockout")
 	await _shot("a7_item_blockout", 12)

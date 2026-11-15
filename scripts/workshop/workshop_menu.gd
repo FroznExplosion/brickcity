@@ -166,20 +166,20 @@ func _build_bar() -> void:
 		["Save", F_SAVE, KEY_MASK_CTRL | KEY_S],
 		["Save As…", F_SAVE_AS, KEY_MASK_CTRL | KEY_MASK_SHIFT | KEY_S],
 		[],
-		["Quick save (F5)", F_QUICK_SAVE, 0],
-		["Quick load (F9)", F_QUICK_LOAD, 0],
+		["Quick save      F5", F_QUICK_SAVE, 0],
+		["Quick load      F9", F_QUICK_LOAD, 0],
 		[],
-		["Test in city (Enter)", F_CITY, 0],
+		["Test in city      Enter", F_CITY, 0],
 	], _on_file)
 
 	_edit = _menu(row, "Edit", [
-		["Undo (Z)", E_UNDO, 0],
-		["Redo (Shift Z)", E_REDO, 0],
+		["Undo      Z", E_UNDO, 0],
+		["Redo      Shift Z", E_REDO, 0],
 		[],
-		["Select inserted build under cursor (X)", E_SELECT, 0],
-		["Move selected (M)", E_MOVE, 0],
-		["Copy selected (C)", E_COPY, 0],
-		["Delete selected (Del)", E_DELETE, 0],
+		["Select inserted build under cursor      X", E_SELECT, 0],
+		["Move selected      M", E_MOVE, 0],
+		["Copy selected      C", E_COPY, 0],
+		["Delete selected      Del", E_DELETE, 0],
 	], _on_edit)
 
 	# View: the print look (was the Finish menu: how every printed part looks,
@@ -663,20 +663,25 @@ func add_menu(label: String, items: Array, handler: Callable) -> MenuButton:
 ## already has (Undo, Redo).
 func add_bar(sections: Array, handler: Callable, keys: Dictionary = {}, skip: Array = []) -> void:
 	_bar_do = handler
+	# One add a menu, so its handler is connected once.
+	var into := {"Edit": [], "View": []}
 	for sec in sections:
-		var rows := []
+		var rows: Array = into["View" if sec[0] == "View" else "Edit"]
+		var first := true
 		for r in sec[1]:
 			if skip.has(r[0]):
 				continue
+			if first and not rows.is_empty():
+				rows.append([])
+			first = false
 			var id := BAR_ID0 + _bar_rows.size()
 			_bar_rows[id] = String(r[0])
 			var key := String(keys.get(r[0], r[2]))
 			var text: String = WorkshopBar.MENU.get(r[0], r[1])
 			rows.append(["%s      %s" % [text, key] if key != "" else text, id, 0])
-		if rows.is_empty():
-			continue
-		var mb := _view if sec[0] == "View" else _edit
-		_bar.add_menu(mb.text, rows, _on_bar_row)
+	for label in into:
+		if not (into[label] as Array).is_empty():
+			_bar.add_menu((_view if label == "View" else _edit).text, into[label], _on_bar_row)
 
 
 func _on_bar_row(id: int) -> void:

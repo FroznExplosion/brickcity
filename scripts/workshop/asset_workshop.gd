@@ -2278,7 +2278,7 @@ func _build_point_panel(layer: CanvasLayer) -> void:
 	var box := VBoxContainer.new()
 	_point_panel.add_child(box)
 	var title := Label.new()
-	title.text = "Connection point (J)"
+	title.text = "Connection point"
 	box.add_child(title)
 	_point_kind = OptionButton.new()
 	for k in ["mount", "socket", "bend"]:
