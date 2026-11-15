@@ -35,10 +35,15 @@ var _insert: MenuButton
 var _edit: MenuButton
 ## The asset workshop's kinds (gun, mech) when this is its bar: Open lists only them.
 var _asset_kinds: Array = []
-var _finish: MenuButton
+## View: the print look (was Finish), then the bar's View (`add_bar`).
+var _view: MenuButton
+## The kind's menu, named for the kind: the kinds (was Type), then a generated building's
+## options (was Generated). Docs/BuildTools.md section 21, stage 3.
 var _type: MenuButton
-var _layer: MenuButton
-var _gen: MenuButton
+var _help: MenuButton
+## The bar's rows in Edit and View (`add_bar`): menu id -> bar id, and who does them.
+var _bar_rows := {}
+var _bar_do := Callable()
 
 var _open_dialog: ConfirmationDialog
 var _open_list: ItemList
@@ -67,8 +72,12 @@ var _role := 0
 ## back from id_pressed.
 enum { F_NEW, F_OPEN, F_SAVE, F_SAVE_AS, F_QUICK_SAVE, F_QUICK_LOAD, F_CITY }
 enum { I_BUILD, I_TOWER, I_BAKE, I_REMOVE_TOWER }
-enum { G_ROOMS, G_STAIRS, G_WINDOWS, G_FURNISH, G_PROGRAM, G_REROLL }
+## In the kind's menu, after the kinds (ids 0 .. KINDS.size() - 1).
+enum { G_ROOMS = 100, G_STAIRS, G_WINDOWS, G_FURNISH, G_PROGRAM, G_REROLL }
 enum { E_UNDO, E_SELECT, E_MOVE, E_COPY, E_DELETE, E_REDO }
+const H_KEYS := 0
+## The bar's rows' menu ids start here (`add_bar`).
+const BAR_ID0 := 2000
 
 
 func _ready() -> void:
@@ -86,8 +95,8 @@ func is_modal() -> bool:
 	for d in [_open_dialog, _save_dialog, _clear_dialog, _program_dialog]:
 		if d != null and d.visible:
 			return true
-	for m in [_file, _insert, _type, _layer, _gen]:
-		if m != null and m.get_popup().visible:
+	for m in [_file, _edit, _view, _insert, _type, _help]:
+		if m != null and is_instance_valid(m) and m.get_popup().visible:
 			return true
 	return false
 
@@ -107,29 +116,36 @@ func set_title(t: String) -> void:
 		_bar.set_title(t)
 
 
+## The kind's menu takes the kind's name and ticks it.
 func set_kind(k: String) -> void:
 	_kind = k
+	if _type == null:
+		return
+	_type.text = KIND_LABELS.get(k, k)
 	var p := _type.get_popup()
 	for i in p.item_count:
-		p.set_item_checked(i, BuildRecipe.KINDS[p.get_item_id(i)] == k)
+		var id := p.get_item_id(i)
+		if id >= 0 and id < BuildRecipe.KINDS.size():
+			p.set_item_checked(i, BuildRecipe.KINDS[id] == k)
 
 
+## The layer is the bar's button (and I) since stage 3; stage 4 makes it the stage tab.
 func set_role(r: int) -> void:
 	_role = r
-	var p := _layer.get_popup()
-	for i in p.item_count:
-		p.set_item_checked(i, p.get_item_id(i) == r)
 
 
-## Tick the generated-building options to match the one in the build.
+## Tick the generated-building options to match the one in the build; without one they are off.
 func set_tower_options(has_tower: bool, rooms: bool, stairs: bool, windows: bool,
 		furnish: bool = false) -> void:
-	var p := _gen.get_popup()
-	_gen.disabled = not has_tower
-	p.set_item_checked(p.get_item_index(G_ROOMS), rooms)
-	p.set_item_checked(p.get_item_index(G_STAIRS), stairs)
-	p.set_item_checked(p.get_item_index(G_WINDOWS), windows)
-	p.set_item_checked(p.get_item_index(G_FURNISH), furnish)
+	if _type == null:
+		return
+	var p := _type.get_popup()
+	var ticks := {G_ROOMS: rooms, G_STAIRS: stairs, G_WINDOWS: windows, G_FURNISH: furnish}
+	for id in [G_ROOMS, G_STAIRS, G_WINDOWS, G_FURNISH, G_PROGRAM, G_REROLL]:
+		var i := p.get_item_index(id)
+		p.set_item_disabled(i, not has_tower)
+		if ticks.has(id):
+			p.set_item_checked(i, ticks[id])
 	var ip := _insert.get_popup()
 	ip.set_item_disabled(ip.get_item_index(I_BAKE), not has_tower)
 	ip.set_item_disabled(ip.get_item_index(I_REMOVE_TOWER), not has_tower)
@@ -150,21 +166,32 @@ func _build_bar() -> void:
 		["Save", F_SAVE, KEY_MASK_CTRL | KEY_S],
 		["Save As…", F_SAVE_AS, KEY_MASK_CTRL | KEY_MASK_SHIFT | KEY_S],
 		[],
-		["Quick save (F5)", F_QUICK_SAVE, 0],
-		["Quick load (F9)", F_QUICK_LOAD, 0],
+		["Quick save      F5", F_QUICK_SAVE, 0],
+		["Quick load      F9", F_QUICK_LOAD, 0],
 		[],
-		["Test in city (Enter)", F_CITY, 0],
+		["Test in city      Enter", F_CITY, 0],
 	], _on_file)
 
 	_edit = _menu(row, "Edit", [
-		["Undo (Z)", E_UNDO, 0],
-		["Redo (Shift Z)", E_REDO, 0],
+		["Undo      Z", E_UNDO, 0],
+		["Redo      Shift Z", E_REDO, 0],
 		[],
-		["Select inserted build under cursor (X)", E_SELECT, 0],
-		["Move selected (M)", E_MOVE, 0],
-		["Copy selected (C)", E_COPY, 0],
-		["Delete selected (Del)", E_DELETE, 0],
+		["Select inserted build under cursor      X", E_SELECT, 0],
+		["Move selected      M", E_MOVE, 0],
+		["Copy selected      C", E_COPY, 0],
+		["Delete selected      Del", E_DELETE, 0],
 	], _on_edit)
+
+	# View: the print look (was the Finish menu: how every printed part looks,
+	# BrickMaterials.set_look -- ids 0-2 printed on that bed, 10 injection moulded); the bar's
+	# View rows follow (`add_bar`).
+	_view = _menu(row, "View", [
+		["Printed on glass", BrickMaterials.Bed.GLASS, 0],
+		["Printed on smooth PEI", BrickMaterials.Bed.SMOOTH_PEI, 0],
+		["Printed on textured PEI", BrickMaterials.Bed.TEXTURED_PEI, 0],
+		["Injection moulded (no layer lines)", FINISH_MOULDED, 0],
+	], _on_finish, true)
+	_tick_finish()
 
 	_insert = _menu(row, "Insert", [
 		["Build from library…", I_BUILD, KEY_MASK_CTRL | KEY_I],
@@ -183,44 +210,33 @@ func _build_bar() -> void:
 		kinds.append([label, i, 0])
 		if k == "item":
 			kinds.append([])
-	_type = _menu(row, "Type", kinds, _on_type, true)
+	# The kind's menu, named for the kind (`set_kind`): the kinds, then a generated
+	# building's options -- the Type and Generated menus as one.
+	kinds.append([])
+	kinds.append_array([
+		["Generated: interior walls", G_ROOMS, 0],
+		["Generated: stairs", G_STAIRS, 0],
+		["Generated: windows", G_WINDOWS, 0],
+		["Generated: furnish rooms", G_FURNISH, 0],
+		["Generated: room mix…", G_PROGRAM, 0],
+		["Generated: reroll furniture", G_REROLL, 0],
+	])
+	_type = _menu(row, KIND_LABELS.building, kinds, _on_kind, true)
 	var tp := _type.get_popup()
 	for i in tp.item_count:
 		var id := tp.get_item_id(i)
 		if id >= 0 and id < BuildRecipe.KINDS.size():
 			tp.set_item_disabled(i, not BuildRecipe.KINDS_ENABLED.has(BuildRecipe.KINDS[id]))
-
-	var roles := []
-	for i in ROLE_LABELS.size():
-		roles.append([ROLE_LABELS[i], i, 0])
-	_layer = _menu(row, "Layer", roles, func(id: int) -> void:
-		action.emit("role", id), true)
-
-	_gen = _menu(row, "Generated", [
-		["Interior walls", G_ROOMS, 0],
-		["Stairs", G_STAIRS, 0],
-		["Windows", G_WINDOWS, 0],
-		["Furnish rooms", G_FURNISH, 0],
-		[],
-		["Room mix…", G_PROGRAM, 0],
-		["Reroll furniture", G_REROLL, 0],
-	], _on_gen, true)
 	# The last two are actions, not options: no tick.
-	var gp := _gen.get_popup()
-	gp.set_item_as_radio_checkable(gp.get_item_index(G_PROGRAM), false)
-	gp.set_item_as_radio_checkable(gp.get_item_index(G_REROLL), false)
-	_gen.disabled = true
+	tp.set_item_as_radio_checkable(tp.get_item_index(G_PROGRAM), false)
+	tp.set_item_as_radio_checkable(tp.get_item_index(G_REROLL), false)
+	set_tower_options(false, false, false, false, false)
 
-	# How every printed part looks (BrickMaterials.set_look): ids 0-2 are
-	# printed on that bed, 3 is injection moulded.
-	_finish = _menu(row, "Finish", [
-		["Printed on glass", BrickMaterials.Bed.GLASS, 0],
-		["Printed on smooth PEI", BrickMaterials.Bed.SMOOTH_PEI, 0],
-		["Printed on textured PEI", BrickMaterials.Bed.TEXTURED_PEI, 0],
-		[],
-		["Injection moulded (no layer lines)", FINISH_MOULDED, 0],
-	], _on_finish, true)
-	_tick_finish()
+	_help = _menu(row, "Help", [
+		["Every key      F1", H_KEYS, 0],
+	], func(id: int) -> void:
+		if id == H_KEYS:
+			action.emit("bar", "keys"))
 
 	set_kind(_kind)
 	set_role(_role)
@@ -245,6 +261,9 @@ func _on_file(id: int) -> void:
 
 
 func _on_finish(id: int) -> void:
+	if not id in [BrickMaterials.Bed.GLASS, BrickMaterials.Bed.SMOOTH_PEI, BrickMaterials.Bed.TEXTURED_PEI,
+			FINISH_MOULDED]:
+		return   # the bar's rows in View (`add_bar`)
 	if id == FINISH_MOULDED:
 		BrickMaterials.set_look(BrickMaterials.Finish.MOULDED, BrickMaterials.bed)
 	else:
@@ -254,11 +273,11 @@ func _on_finish(id: int) -> void:
 
 func _tick_finish() -> void:
 	BrickMaterials.load_look()
-	var p := _finish.get_popup()
+	var p := _view.get_popup()
 	var on := FINISH_MOULDED if BrickMaterials.finish == BrickMaterials.Finish.MOULDED \
 			else BrickMaterials.bed
 	for i in p.item_count:
-		if not p.is_item_separator(i):
+		if not p.is_item_separator(i) and p.get_item_id(i) < BAR_ID0:
 			p.set_item_checked(i, p.get_item_id(i) == on)
 
 
@@ -280,19 +299,19 @@ func _on_insert(id: int) -> void:
 		I_REMOVE_TOWER: action.emit("remove_tower", null)
 
 
-func _on_type(id: int) -> void:
+func _on_kind(id: int) -> void:
 	if id >= 0 and id < BuildRecipe.KINDS.size():
 		action.emit("kind", BuildRecipe.KINDS[id])
-
-
-func _on_gen(id: int) -> void:
+		return
+	if id < G_ROOMS or id > G_REROLL:
+		return
 	if id == G_PROGRAM:
 		action.emit("program_dialog", null)
 		return
 	if id == G_REROLL:
 		action.emit("reroll", null)
 		return
-	var p := _gen.get_popup()
+	var p := _type.get_popup()
 	var i := p.get_item_index(id)
 	var on := not p.is_item_checked(i)
 	p.set_item_checked(i, on)
@@ -349,11 +368,15 @@ func _fill_filter() -> void:
 ## part of Edit -- are not there (nor their shortcuts).
 func asset_mode(kinds: Array) -> void:
 	_asset_kinds = kinds.duplicate()
-	for mb: MenuButton in [_insert, _type, _layer, _gen]:
-		mb.visible = false
-		var p := mb.get_popup()
-		for i in p.item_count:
-			p.set_item_shortcut(i, null)
+	# Insert is the asset's own (a model, a photo ...); the kind's menus and Help are the asset
+	# workshop's too (one a kind, before Help).
+	_insert.get_popup().clear()
+	_insert.set_meta(&"wk_new", true)
+	for mb: MenuButton in [_type, _help]:
+		mb.get_parent().remove_child(mb)
+		mb.queue_free()
+	_type = null
+	_help = null
 	var fp := _file.get_popup()
 	var city := fp.get_item_index(F_CITY)
 	if city >= 0:
@@ -632,3 +655,35 @@ func show_program(program: Dictionary) -> void:
 ## itself is written into the label, so a menu and a key never both fire.
 func add_menu(label: String, items: Array, handler: Callable) -> MenuButton:
 	return _bar.add_menu(label, items, handler)
+
+
+## The bar's rows (WorkshopBar's list as an owner has it) in the menus: Hand and Edit in Edit,
+## View in View, each "name      key", calling `handler(bar id)` -- so a button and its row
+## cannot disagree. `keys` gives an owner's own key for a row; `skip` leaves out rows a menu
+## already has (Undo, Redo).
+func add_bar(sections: Array, handler: Callable, keys: Dictionary = {}, skip: Array = []) -> void:
+	_bar_do = handler
+	# One add a menu, so its handler is connected once.
+	var into := {"Edit": [], "View": []}
+	for sec in sections:
+		var rows: Array = into["View" if sec[0] == "View" else "Edit"]
+		var first := true
+		for r in sec[1]:
+			if skip.has(r[0]):
+				continue
+			if first and not rows.is_empty():
+				rows.append([])
+			first = false
+			var id := BAR_ID0 + _bar_rows.size()
+			_bar_rows[id] = String(r[0])
+			var key := String(keys.get(r[0], r[2]))
+			var text: String = WorkshopBar.MENU.get(r[0], r[1])
+			rows.append(["%s      %s" % [text, key] if key != "" else text, id, 0])
+	for label in into:
+		if not (into[label] as Array).is_empty():
+			_bar.add_menu((_view if label == "View" else _edit).text, into[label], _on_bar_row)
+
+
+func _on_bar_row(id: int) -> void:
+	if _bar_rows.has(id) and _bar_do.is_valid():
+		_bar_do.call(_bar_rows[id])

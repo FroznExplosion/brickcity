@@ -48,6 +48,35 @@ const ACTIONS := [
 ]
 
 
+## A row's name in a menu (`WorkshopMenu.add_bar`) where the button's own is too short.
+const MENU := {
+	"rotate": "Turn the brick in hand",
+	"flip": "Flip it (studs down)",
+	"turn_last": "Turn the last one placed",
+	"lock": "Lock the height",
+	"snap": "Snap to side studs",
+	"layer": "Next layer (structure, interior, detail)",
+	"mirror": "Mirror",
+	"mirror_axis": "Mirror across Z or X",
+	"mirror_here": "Mirror plane where the ghost is",
+	"colour_back": "Previous colour",
+	"colour_on": "Next colour",
+	"free": "Free placement on the working plane",
+	"plane_back": "Working plane back",
+	"plane_on": "Working plane forward",
+	"cancel": "Cancel what is being drawn",
+	"fps": "FPS or orbit camera",
+	"grid": "Grid",
+	"stress": "Stress",
+	"keys": "Every key",
+	"section": "Section: hide what is past the plane",
+	"outlines": "Outlines: none / all parts / this part",
+	"game_look": "Game look",
+	"stats": "Stats",
+	"guide": "Room guide (the next size)",
+}
+
+
 ## The asset workshop's own buttons: the building workshop leaves them out (it has no working
 ## plane, section, part outlines or game look).
 const ASSET_ONLY := ["free", "plane_back", "plane_on", "section", "outlines", "game_look"]

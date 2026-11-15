@@ -303,6 +303,27 @@ func _kinds(ui: AssetWorkshopUI) -> void:
 			and ui._tool_buttons.has("!hands"))
 	_ws.set_asset_kind("mech")
 	_ok("a mech: its Mech menu", _menu_shown("Mech") and not _menu_shown("Gun"))
+	# What the gone menus did keeps a button (BuildTools 21 stage 3): the asset row shows the
+	# kinds and the kind's own, the Parts row the packages.
+	ui.refresh()
+	_row(ui, func(d): return d.t == "asset").select(0)
+	ui._fill_actions()
+	var names: Array = ui.action_names()
+	_ok("the asset row: the kinds and a mech's own", names.has("Make it a gun") and not names.has("Make it a mech")
+			and names.has("Class: heavy") and names.has("Lay joints again"), str(names))
+	ui.press_action("Make it a gun")
+	_ok("and Make it a gun makes it a gun, its Gun menu shown", _ws.bench.recipe.kind == "gun" and _menu_shown("Gun"))
+	ui.refresh()
+	_row(ui, func(d): return d.t == "asset").select(0)
+	ui._fill_actions()
+	_ok("a gun's row: Mech gun", ui.action_names().has("Mech gun"), str(ui.action_names()))
+	_row(ui, func(d): return d.t == "parts").select(0)
+	ui._fill_actions()
+	_ok("the Parts row: share and import packages", ui.action_names().has("Share parts")
+			and ui.action_names().has("Import a package"), str(ui.action_names()))
+	var labels: Array = _ws.bench._menu.bar().menus().filter(func(b: MenuButton) -> bool: return b.visible).map(
+			func(b: MenuButton) -> String: return b.text)
+	_ok("the six menus", labels == ["File", "Edit", "View", "Insert", "Gun", "Help"], str(labels))
 
 
 func _menu_shown(label: String) -> bool:

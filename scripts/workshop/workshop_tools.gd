@@ -342,6 +342,9 @@ func setup(workshop, layer: CanvasLayer) -> void:
 	view = WkCamera.new()
 	view.setup(ws.wk_ctx)
 	ws.view = view
+	# The bar's rows in Edit and View (Docs/BuildTools.md section 21, stage 3).
+	if ws._menu != null:
+		ws._menu.add_bar(ACTIONS, act, {}, ["undo", "redo"])
 	_im = ImmediateMesh.new()
 	_lines = MeshInstance3D.new()
 	_lines.mesh = _im

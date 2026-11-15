@@ -13,9 +13,11 @@ was found, how to test without harming the user's files, and what to do next.
   photographs both UIs (then, 2026-11-13, no game code changed).
 - Stages 0 and 1 (1a the asset's bar and pop-out, 1b the building's outliner and Selected,
   1c the status line) and stage 2 (2a every key a button and one key map, agreed with the
-  user; 2b one camera) merged 2026-11-14 (section 21, "As built"). Next: **stage 3**, the six
-  menus (File Edit View Insert <Kind> Help; the print look to View; Brick, Block out, Part,
-  Photos and Layer go -- their items must keep an on-screen button, the user's rule).
+  user; 2b one camera) merged 2026-11-14, stage 3 (the six menus) 2026-11-15 (section 21, "As
+  built"). Next: **stage 4**, the building's stage tabs (Structure, Interior, Detail, Finish;
+  the tab is the layer) and the generators out of Rooms -- and with them on-screen buttons for
+  what is still menu-only in the building (File, Insert, the kind, the generated building's
+  options, the print look). Ask the user first what Hand does on the Finish tab.
 
 
 ## Where to work
@@ -56,7 +58,7 @@ Since stage 1 also: `scripts/workshop/workshop_bar.gd` (the bar's list), `worksh
 | Menu bar's menus and the open / save dialogs | `scripts/workshop/workshop_menu.gd` (`asset_mode` hides the building's for the asset workshop) |
 | Building: rail rows, the 20-button bar, the pop-out and every tool's options | `scripts/workshop/workshop_tools.gd` (`TOOLS`, `ACTIONS`, `setup`, `_build_options`, `process`) |
 | Asset: stage tabs, per-stage tool rows, outliner, toast | `scripts/workshop/asset_workshop_ui.gd` |
-| Asset: its eleven menus | `scripts/workshop/asset_workshop.gd` `_build_menus` (~line 10560) |
+| Asset: its own menu rows (File, View, Insert, one a kind, Help) | `scripts/workshop/asset_workshop.gd` `_build_menus`; the shared six and the bar's rows: `WorkshopMenu` (`add_bar`) |
 | Asset: the old rail, now the options under the tools | `asset_workshop.gd` `_build_rail`, `_rail_process` (~6876-7217) |
 | Asset: floating panels | `asset_workshop.gd` `_build_panel` (photos), `_build_point_panel`, `_build_help`, `toggle_catalog`; `asset_catalog_panel.gd` |
 | Hotbar and the brick browser | `scripts/workshop/workshop_hotbar.gd` |

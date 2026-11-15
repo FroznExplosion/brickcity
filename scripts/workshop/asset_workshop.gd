@@ -2278,7 +2278,7 @@ func _build_point_panel(layer: CanvasLayer) -> void:
 	var box := VBoxContainer.new()
 	_point_panel.add_child(box)
 	var title := Label.new()
-	title.text = "Connection point (J)"
+	title.text = "Connection point"
 	box.add_child(title)
 	_point_kind = OptionButton.new()
 	for k in ["mount", "socket", "bend"]:
@@ -10568,80 +10568,56 @@ func _on_asset_menu(id: int) -> void:
 		_menu_actions[id - 1000].call()
 
 
+## The six menus (Docs/BuildTools.md section 21, stage 3): File Edit View Insert <Kind> Help.
+## File, Edit and View are the shared bar's (WorkshopMenu), with the bar's rows (`add_bar`);
+## this adds its own to them, Insert, one menu a kind (`AssetWorkshopUI.sync_kind` shows the
+## kind's) and Help.
 func _build_menus() -> void:
+	bench._menu.add_bar(WorkshopBar.without(AssetWorkshopUI.BAR_SKIP), func(id: String) -> void: _ui.bar_act(id),
+			{"mirror": "Alt S", "mirror_here": "Alt Shift S"}, ["undo"])
+	var kinds := [
+		["Make a gun", "", func() -> void: set_asset_kind("gun")],
+		["Make a mech", "", func() -> void: set_asset_kind("mech")],
+		["Make a figure (an action figure: every part fits every figure)", "", func() -> void: set_asset_kind("figure")],
+		["Make furniture or an item (rooms: tagged by planet, type, room)", "", func() -> void: set_asset_kind("item")],
+		[],
+	]
 	var menus := [
-		["Asset", [
-			["Make a gun", "", func() -> void: set_asset_kind("gun")],
-			["Make a mech", "", func() -> void: set_asset_kind("mech")],
-			["Make a figure (an action figure: every part fits every figure)", "", func() -> void: set_asset_kind("figure")],
-			["Make furniture or an item (rooms: tagged by planet, type, room)", "", func() -> void: set_asset_kind("item")],
+		["File", [
+			["Export to game", "Alt X", func() -> void: export_game()],
+			["Export to print (parts and whole)", "Alt B", func() -> void: export_print()],
+			["Export and check in Blender", "F12", func() -> void: export_and_preview()],
 			[],
-			["Export this build's parts to share (.bcpart)", "", func() -> void: export_packages()],
-			["Import a part package (.bcpart)...", "", func() -> void: _open_package_dialog()],
+			["Share this build's parts (.bcpart)", "", func() -> void: export_packages()],
 			["Make pictures of this build's saved parts", "", func() -> void:
 				make_thumbnails(parts_dir(), part_ids.values())],
 		]],
-		["Edit", [
-			["Redo", "Shift Z", func() -> void: redo()],
-		]],
 		["View", [
-			["Look round with the mouse / free the cursor", "Y", func() -> void: toggle_look()],
-			["3D view", "Alt 0", func() -> void: set_view(0)],
-			["Side view", "Alt 1", func() -> void: set_view(1)],
-			["Top view", "Alt 2", func() -> void: set_view(2)],
-			["Front view", "Alt 3", func() -> void: set_view(3)],
-			["The game's view: the gun in the hands (RMB aims)", "Alt C", func() -> void: set_game_view(not game_view_on)],
 			["Zoom in", "Home", func() -> void: zoom(0.85)],
 			["Zoom out", "End", func() -> void: zoom(1.0 / 0.85)],
-			[],
-			["Section: hide what is past the plane", "", func() -> void: set_section(not section_on)],
-			["Outlines: none / all parts / this part", "", func() -> void: set_outlines((outlines + 1) % 3)],
-			["Grid", "G", func() -> void:
-				bench._grid_on = not bench._grid_on
-				bench._grid.visible = bench._grid_on],
-			[],
-			["Free placement on the working plane", "Alt F", func() -> void: set_free(not free_place)],
-			["Working plane forward", "PgUp", func() -> void: move_work_plane(1)],
-			["Working plane back", "PgDn", func() -> void: move_work_plane(-1)],
-			[],
-			["Mirror", "Alt S", func() -> void: set_mirror(not bench.mirror_on)],
-			["Mirror plane where the ghost is", "Alt Shift S", func() -> void: mirror_here()],
+			["Explode: pull the parts apart", "Alt E", func() -> void: set_exploded(not exploded)],
 		]],
-		["Part", [
-			["Next part", "", func() -> void: select_part(part_sel + 1)],
-			["Previous part", "", func() -> void: select_part(part_sel - 1)],
-			[],
-			["This part leaves smooth / as bricks", "", func() -> void: toggle_smooth()],
-			["Connection point where the ghost is", "", func() -> void: toggle_point_here()],
-			[],
+		["Insert", [
+			["A model (.glb .gltf .obj .fbx .stl)...", "", func() -> void: _ui.pick_tool_in("blockout", "!import")],
+			["A photo (the photos panel)", "F2", func() -> void: _toggle_panel()],
+			["A guide model (the guides panel)", "F3", func() -> void: _toggle_guide_panel()],
+			["A part from the catalogue", "F7", func() -> void: toggle_catalog()],
+			["A part package (.bcpart)...", "", func() -> void: _open_package_dialog()],
 		]],
-		["Block out", [
-			["Sculpt tool (3D, the clay block-out)", "Alt V", func() -> void: rail_pick("sculpt")],
-			["Sketch tool (2D, straight into bricks)", "Alt D", func() -> void: rail_pick("sketch")],
-			["Shapes brush (balls, cubes, cylinders)", "K", func() -> void:
-				rail_pick("shape")
-				shape_mode = "brush"],
+		["Gun", kinds + [
+			["Hands", "Alt H", func() -> void: set_hands(not hands_on)],
+			["Play: fire and reload", "Alt P", func() -> void: play_cycle()],
+			["The game's view: the gun in the hands (RMB aims)", "Alt C", func() -> void: set_game_view(not game_view_on)],
 			[],
-			["Smooth shell on this part / off", "", func() -> void:
-				var part := part_names[part_sel]
-				set_shell(part, null if shells.has(part) else {"thick": 0.5, "res": 4})
-				_sync_shell_ui(true)],
-			[],
-			["Clear this view's block-out", "", func() -> void: clear_sketch(_sketch_key())],
-			["Clear the part's block-out, every view", "", func() -> void: clear_part_sketch(part_names[part_sel])],
+			["Size marks: ruler and grip box", "", func() -> void: set_size_marks(not size_marks_on)],
+			["Size: SMG (53 studs)", "", func() -> void: set_gun_class("smg")],
+			["Size: rifle (62 studs)", "", func() -> void: set_gun_class("rifle")],
+			["Size: pistol (13.5 studs)", "", func() -> void: set_gun_class("pistol")],
+			["Turn the ruler (which end is the butt)", "", func() -> void: flip_butt()],
+			["Mech gun (nano scale, mgun joints) / player's gun", "", func() -> void:
+				set_gun_scale("held" if gun_scale == "mech" else "mech")],
 		]],
-		["Brick", [
-			["Turn the brick in hand", "R", func() -> void:
-				bench._yaw = (bench._yaw + 1) % 4],
-			["Flip it (studs down)", "F", func() -> void:
-				bench._flip = not bench._flip],
-			["Turn the last one placed", "T", func() -> void: bench._rotate_last()],
-			[],
-			["Next colour", ".", func() -> void: bench._hotbar.set_colour(bench._colour + 1)],
-			["Previous colour", ",", func() -> void: bench._hotbar.set_colour(bench._colour - 1)],
-			["Paint", "B", func() -> void: rail_pick("place" if bench._painting else "paint")],
-		]],
-		["Mech", [
+		["Mech", kinds + [
 			["Class: light", "", func() -> void: set_mech_class("light")],
 			["Class: normal", "", func() -> void: set_mech_class("normal")],
 			["Class: heavy", "", func() -> void: set_mech_class("heavy")],
@@ -10653,35 +10629,11 @@ func _build_menus() -> void:
 			["Lay the joints ready again", "", func() -> void: lay_ready_points()],
 			["Reference mech", "", func() -> void: set_mech_ref(not mech_ref_on)],
 		]],
-		["Gun", [
-			["Explode: pull the parts apart", "Alt E", func() -> void: set_exploded(not exploded)],
-			["Hands", "Alt H", func() -> void: set_hands(not hands_on)],
-			["Play: fire and reload", "Alt P", func() -> void: play_cycle()],
-			["Size marks: ruler and grip box", "", func() -> void: set_size_marks(not size_marks_on)],
-			["Size: SMG (53 studs)", "", func() -> void: set_gun_class("smg")],
-			["Size: rifle (62 studs)", "", func() -> void: set_gun_class("rifle")],
-			["Size: pistol (13.5 studs)", "", func() -> void: set_gun_class("pistol")],
-			["Turn the ruler (which end is the butt)", "", func() -> void: flip_butt()],
-			["Mech gun (nano scale, mgun joints) / player's gun", "", func() -> void:
-				set_gun_scale("held" if gun_scale == "mech" else "mech")],
-			[],
-			["Export to game", "Alt X", func() -> void: export_game()],
-			["Export to print (parts and whole)", "Alt B", func() -> void: export_print()],
-			["Export and preview in Blender", "F12", func() -> void: export_and_preview()],
-		]],
-		["Photos", [
-			["Photos panel", "F2", func() -> void: _toggle_panel()],
-			["Guide models panel", "F3", func() -> void: _toggle_guide_panel()],
-			["Parts catalogue", "F7", func() -> void: toggle_catalog()],
-			["Take off the tried parts", "", func() -> void: untry_all()],
-			["Wand: fill a patch of a photo", "F4", func() -> void: set_tool("" if tool == "wand" else "wand")],
-			["Measure", "Alt M", func() -> void: set_measure(not measure_on)],
-		]],
+		["Figure", kinds.slice(0, kinds.size() - 1)],
+		["Item", kinds.slice(0, kinds.size() - 1)],
 		["Help", [
 			["How to start, and every key", "F10", func() -> void: show_help(not _help.visible)],
-			["The building workshop's key list", "F1", func() -> void:
-				bench._keys_on = not bench._keys_on
-				bench._keys_panel.visible = bench._keys_on],
+			["Every key", "F1", func() -> void: _ui.bar_act("keys")],
 			[],
 			["Held or aimed, keys only:", "", func() -> void: pass],
 			["  all parts browser", "Tab", func() -> void: pass],

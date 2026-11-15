@@ -324,6 +324,19 @@ func _workshop_checks() -> void:
 	# --- the menu bar exists and its dialogs are shut
 	_ok("a menu bar", ws.bench._menu != null and ws.bench._menu.bar_height() > 0.0)
 	_ok("nothing modal to start with", not ws.bench._menu.is_modal())
+	# The six menus (Docs/BuildTools.md section 21, stage 3): the kind's named for it; the bar's
+	# rows in Edit and View, each doing what its button does.
+	var bar: WkMenuBar = ws.bench._menu.bar()
+	_ok("the six menus: File Edit View Insert Building Help",
+			bar.labels() == ["File", "Edit", "View", "Insert", "Building", "Help"], str(bar.labels()))
+	var vp := bar.menu("View").get_popup()
+	var grid_was: bool = ws.bench._grid_on
+	for i in vp.item_count:
+		if vp.get_item_text(i).begins_with("Grid"):
+			vp.id_pressed.emit(vp.get_item_id(i))
+	_ok("View's Grid row is the bar's Grid", ws.bench._grid_on != grid_was)
+	ws.bench.bar_act("grid")
+	_ok("the print look is in View", vp.get_item_text(0).begins_with("Printed on glass"), vp.get_item_text(0))
 
 	# --- a generated building, dragged bigger
 	ws.bench._on_menu("tower", null)
@@ -469,6 +482,7 @@ func _workshop_checks() -> void:
 	ws.bench._on_menu("kind", "room")
 	_ok("a room template shows a guide", ws.bench._guide != null and ws.bench._guide.visible)
 	_ok("and says what is on it", ws.bench._guide_text().contains("25x25"))
+	_ok("the kind's menu is named for it", ws.bench._menu.bar().labels().has("Room template"), str(ws.bench._menu.bar().labels()))
 	ws.bench._on_menu("kind", "building")
 	_ok("a building does not", not ws.bench._guide.visible)
 

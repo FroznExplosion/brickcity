@@ -398,6 +398,14 @@ func _fill_tools() -> void:
 	_hint.visible = false   # what the tool does is the status line's first part (section 21)
 
 
+## A stage's rail action from elsewhere (a menu): as if its button were pressed on that stage.
+func pick_tool_in(on_stage: String, id: String) -> void:
+	var was := stage
+	stage = on_stage
+	pick_tool(id)
+	stage = was
+
+
 ## A rail button: the workshop's own tool for it, or the action.
 func pick_tool(id: String) -> void:
 	match stage + ":" + id:
@@ -872,6 +880,33 @@ func _fill_actions() -> void:
 				func() -> void: ws.mirror_through_selection())
 	_action("Frame it", "Point the view and the grid at the selection.", func() -> void: ws._centre_on_selection(true))
 	if t == "asset":
+		# What the gone Asset and Mech menus did (BuildTools 21 stage 3): the kind, and the
+		# kind's own.
+		var kind: String = ws.bench.recipe.kind
+		for k in [["gun", "gun"], ["mech", "mech"], ["figure", "figure"], ["item", "item"]]:
+			if k[0] != kind:
+				_action("Make it a %s" % k[1], "Make this build a %s." % k[1], ws.set_asset_kind.bind(k[0]))
+		if kind == "gun":
+			_action("Player's gun" if ws.gun_scale == "mech" else "Mech gun",
+					"A mech's gun (nano scale, mgun joints) or a player's.", func() -> void:
+						ws.set_gun_scale("held" if ws.gun_scale == "mech" else "mech")
+						_fill_actions())
+		if kind == "mech":
+			for c in ["light", "normal", "heavy"]:
+				_action("Class: %s" % c, "The mech's class.", ws.set_mech_class.bind(c))
+			for n in [1, 2, 3]:
+				_action("Legs: %d long" % n, "How long the legs are.", ws.set_leg_length.bind(n))
+			_action("Lay joints again", "Lay the joints ready again.", func() -> void: ws.lay_ready_points())
+			_action("Reference mech", "Show or hide the reference mech.", func() -> void: ws.set_mech_ref(not ws.mech_ref_on))
+	if t == "parts":
+		# What the gone Asset and Photos menus did with parts.
+		_action("Share parts", "Export this build's parts to share (.bcpart).", func() -> void: ws.export_packages())
+		_action("Pictures of parts", "Make pictures of this build's saved parts.", func() -> void:
+			ws.make_thumbnails(ws.parts_dir(), ws.part_ids.values()))
+		_action("Import a package", "Import a part package (.bcpart).", func() -> void: ws._open_package_dialog())
+		if not ws.tried.is_empty():
+			_action("Take off tried parts", "Take off the parts tried on from the catalogue.", func() -> void: ws.untry_all())
+	if t == "asset":
 		_action("Clean up strays", "Take away the block-out outside the build area, and lone bricks far from the build. One undo.",
 				func() -> void: ws.clean_strays())
 
@@ -979,11 +1014,9 @@ func _fit_options(n: Node) -> void:
 func sync_kind() -> void:
 	if ws.bench._menu != null:
 		for mb in ws.bench._menu.find_children("*", "MenuButton", true, false):
-			match (mb as MenuButton).text:
-				"Gun":
-					(mb as MenuButton).visible = ws.bench.recipe.kind == "gun"
-				"Mech":
-					(mb as MenuButton).visible = ws.bench.recipe.kind == "mech"
+			var k: String = {"Gun": "gun", "Mech": "mech", "Figure": "figure", "Item": "item"}.get((mb as MenuButton).text, "")
+			if k != "":
+				(mb as MenuButton).visible = ws.bench.recipe.kind == k
 	if _tools_panel != null:
 		_fill_tools()
 	_sig = ""
