@@ -4357,8 +4357,27 @@ func _run_roomfly_pass() -> void:
 		if under == null or not under.stud_geo:
 			floor_flat += 1
 			print("[roomfly]     the floor under the camera: %s" % [
-					"no band found" if under == null else "band %d, %d stud(s), no stud geometry" % [
-						under.section, (under.stud_buffer as PackedFloat32Array).size() / 16]])
+					"no band found" if under == null else "band %d, %d stud(s), no stud geometry; score %.2f, kept for %.2f, %d of %d studs held" % [
+						under.section, (under.stud_buffer as PackedFloat32Array).size() / 16,
+						under.score, city.brick_near._admit_studs, city.brick_near._stud_cost,
+						BrickNear.max_studs]])
+			if under != null:
+				print("[roomfly]       studs %s, dirty %s, waits %d, tracked %d ms ago, held %s, queued %s, boxed %s, state %d, show_dirty %s" % [
+						"none" if (under.studs as Array).is_empty() else str((under.studs as Array).size()),
+						under.studs_dirty, under.stud_waits, Time.get_ticks_msec() - int(under.since),
+						city.brick_near._held, city.brick_near._stud_queue.has(under.key), under.boxed,
+						under.state, under.show_dirty])
+				var bn = city.brick_near
+				print("[roomfly]       in the visit order %s; kept for band %d" % [
+						bn._order.has(under.key), bn._grant_key])
+				for k2 in bn._studded:
+					var hb = bn._bands.get(k2)
+					print("[roomfly]         geo band %s: cost %d, score %s, node %s, in tree %s, worst-able %s; wait %.2f" % [
+							str(hb.section) if hb != null else "gone", int(bn._studded[k2]),
+							("%.2f" % hb.score) if hb != null else "-",
+							hb != null and is_instance_valid(hb.node),
+							hb != null and is_instance_valid(hb.node) and hb.node.is_inside_tree(),
+							hb != null and hb.state != 2, bn._wait_studs])
 		if stud_rooms % 3 == 1:
 			# Looking down at the floor ahead, for the eye.
 			city.camera.look_at(city.camera.global_position - out * 2.5 + Vector3(0.0, -1.6, 0.0), Vector3.UP)
