@@ -4,7 +4,12 @@ Written 2026-11-14 at the end of the brick-system audit chat (worktree
 `.claude/worktrees/sleepy-satoshi-5cd1f2`, branch `claude/sleepy-satoshi-5cd1f2`, main at
 `f9244bfc`). That chat's own record is [HandoffPerf.md](HandoffPerf.md) section 8; the design
 of interiors is [Interiors.md](Interiors.md) section 8 (8.2: one drawing per storey group, by
-distance only -- the rule this work replaces). Nothing here is built yet.
+distance only -- the rule this work replaces).
+
+**State (2026-11-14, branch `room-streaming`):** sections 4.1-4.5 built --
+[Interiors.md](Interiors.md) 8.15 says how. The user's numbers: 8 rooms at once, 2 of them by
+view, a room kept 3 s after it leaves view. 4.6 (a cap inside huge rooms) not built: no room
+needs it.
 
 ## 1. What the user asked for
 

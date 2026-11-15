@@ -18,19 +18,13 @@ extends SpaceStation
 ## (Hulls.md 7b), whoever stands on its deck walking that, its down the world's
 ## turned into its frame (`ghost_up`) -- so the crew feel it roll.
 
-const WATER := 1000.0
-const G := 9.8
-## A cubic metre of brick weighs this much: hollow ABS, about a third solid.
-const HULL_DENSITY := 350.0
-## Of a brick cell's volume, the part that keeps water out once the hull floods:
-## its plastic (the rest of a brick is hollow under it and fills). So a hull
-## flooded through floats only by this, and sinks.
-const SOLID_DISPLACE := 0.33
-const COLUMN := 2
-## Water's drag on a wet column's motion, per second (a share of its own mass),
-## and on the whole boat's turning.
-const DRAG := 0.8
-const ANG_DRAG := 1.5
+const WATER := HullFloat.WATER
+const G := HullFloat.G
+const HULL_DENSITY := HullFloat.HULL_DENSITY
+const SOLID_DISPLACE := HullFloat.SOLID_DISPLACE
+const COLUMN := HullFloat.COLUMN
+const DRAG := HullFloat.DRAG
+const ANG_DRAG := HullFloat.ANG_DRAG
 ## Air out of a trapped pocket at its seams, cells a second (HullWater.air_leak):
 ## INF, none held. Measured (boat_probe, 2026-11-07): at 40 a holed hold took 90 s
 ## and did not sink; at 150 it sank in 28 s but no longer listed toward the hole in
@@ -59,6 +53,9 @@ var last_submerged := 0.0
 ## Water aboard, kg, last tick.
 var water_mass := 0.0
 var _cell_v := 0.0
+## Its sums (HullFloat.measure): what the fields above are read from, and what
+## works out its forces.
+var floats: HullFloat
 ## A tick afloat on the main thread, microseconds: smoothed, and the worst.
 var float_us := 0.0
 var float_us_max := 0.0
@@ -99,7 +96,51 @@ static func launch(parent: Node, sd: int, at: Transform3D, ghost_hulls) -> Boat:
 	b.sea = BrickWave.get_sea_level()
 	# Its holes flood from its sea (Docs/Hulls.md 5).
 	b.water_depth = b._sea_depth
+	b.drifted.connect(b._on_piece)
 	return b
+
+
+## Nothing is its ground: what is cut off from its largest part leaves it.
+func floats_free() -> bool:
+	return true
+
+
+## Part of it left: its air from the bricks it has now (the hold that went, and a
+## stretch cut open, are the sea's), its water kept where there is still a room
+## for it, and what floats it measured again.
+func _parted() -> void:
+	air.rebuild(bricks, chunk)
+	if hull_water != null:
+		hull_water.grid_rebuilt()
+	if not columns.is_empty():
+		_measure()
+		_have = {}
+
+
+## Bricks laid back (the restore tool): what floats it is measured again, soon --
+## not a brick at a time, the tool lays eight a second.
+func _after_restore(back: PackedInt32Array) -> void:
+	super(back)
+	_measure_in = MEASURE_AFTER
+
+
+const MEASURE_AFTER := 0.5
+var _measure_in := -1.0
+
+
+## The parts that have left it and are still afloat or sinking (HullPiece).
+var pieces: Array = []
+
+
+## A part of it sent off (`drifted`): a piece floating by what it is itself.
+func _on_piece(arrays: Array, at: Transform3D, local_com: Vector3, count: int, material: Material) -> void:
+	if drift_chunk < 0 or not is_inside_tree():
+		return
+	var p := HullPiece.make(self, drift_chunk, arrays, at, local_com, count, material)
+	get_parent().add_child(p)
+	p.global_transform = at
+	pieces = pieces.filter(func(q) -> bool: return is_instance_valid(q))
+	pieces.append(p)
 
 
 ## How far world point `p` is under its sea's surface (the wave there), metres.
@@ -133,6 +174,11 @@ func _physics_process(delta: float) -> void:
 		_measure()
 	if not riding:
 		ride()
+	if _measure_in >= 0.0:
+		_measure_in -= delta
+		if _measure_in < 0.0:
+			_measure()
+			_have = {}
 	wave_t = float(wave_clock.call()) if wave_clock.is_valid() else wave_t + delta
 	var t0 := Time.get_ticks_usec()
 	if threaded:
@@ -146,122 +192,22 @@ func _physics_process(delta: float) -> void:
 
 
 ## Its mass, centre and inertia from its bricks, and its columns from its hull's
-## envelope (solid cells and inside air), once.
+## envelope (solid cells and inside air): HullFloat's sums of its air grid as it
+## is now. Once, and again when part of it has left (`_parted`).
 func _measure() -> void:
-	var stud := BrickWorld.get_stud_metres()
-	var plate := BrickWorld.get_plate_metres()
-	var cell_v := stud * stud * plate
-	var n := 0
-	var sum := Vector3.ZERO
-	var pts: Array[Vector3] = []
-	var groups := {}
-	var cells_of := {}
-	for x in air.dims.x:
-		for z in air.dims.z:
-			var lo := -1
-			var cells := 0
-			var disp := 0.0
-			for y in air.dims.y:
-				var i := air._idx(Vector3i(x, y, z))
-				var st := air.state[i]
-				if st == HullAir.SOLID:
-					var p := cell_point(Vector3i(x, y, z)) + frame.basis * Vector3(0, plate * 0.5, 0)
-					sum += p
-					pts.append(p)
-					n += 1
-				if st == HullAir.SOLID or st == HullAir.INSIDE:
-					cells += 1
-					disp += SOLID_DISPLACE if st == HullAir.SOLID else 1.0
-					if lo < 0:
-						lo = y
-			if cells == 0:
-				continue
-			@warning_ignore("integer_division")
-			var key := Vector2i(x / COLUMN, z / COLUMN)
-			var g: Array = groups.get(key, [0.0, 0, Vector3.ZERO, 0, 0.0, PackedFloat32Array(), 1 << 30])
-			g[0] = float(g[0]) + cells * plate * stud * stud
-			g[4] = float(g[4]) + disp * plate * stud * stud
-			# Its displacement plate by plate: what each level of the column keeps out.
-			var lv: PackedFloat32Array = g[5]
-			if lv.is_empty():
-				lv.resize(air.dims.y)
-			for y in air.dims.y:
-				var st2 := air.state[air._idx(Vector3i(x, y, z))]
-				if st2 == HullAir.SOLID:
-					lv[y] += SOLID_DISPLACE * cell_v
-				elif st2 == HullAir.INSIDE:
-					lv[y] += cell_v
-			g[5] = lv
-			g[6] = mini(int(g[6]), lo)
-			g[1] = int(g[1]) + 1
-			g[2] = (g[2] as Vector3) + cell_point(Vector3i(x, lo, z))
-			g[3] = maxi(int(g[3]), cells)
-			groups[key] = g
-			var wet: PackedInt32Array = cells_of.get(key, PackedInt32Array())
-			for y in air.dims.y:
-				var ii := air._idx(Vector3i(x, y, z))
-				if air.state[ii] != HullAir.SOLID:
-					wet.append(ii)
-			cells_of[key] = wet
-	mass = maxf(1.0, n * cell_v * HULL_DENSITY)
-	com = sum / maxf(1.0, float(n))
-	var ixx := 0.0
-	var iyy := 0.0
-	var izz := 0.0
-	var m1 := cell_v * HULL_DENSITY
-	var inv := frame.basis.inverse()
-	for p in pts:
-		var r := inv * (p - com)
-		ixx += m1 * (r.y * r.y + r.z * r.z)
-		iyy += m1 * (r.x * r.x + r.z * r.z)
-		izz += m1 * (r.x * r.x + r.y * r.y)
-	inertia = Vector3(maxf(ixx, 1.0), maxf(iyy, 1.0), maxf(izz, 1.0))
-	columns.clear()
-	column_cells.clear()
-	for key in groups:
-		var g: Array = groups[key]
-		var area := float(g[1]) * stud * stud
-		# [bottom, envelope height, area, the share of it that keeps water out,
-		#  the displacement under each level from its bottom (cumulative, m^3)].
-		var lv: PackedFloat32Array = g[5]
-		var lo_y: int = g[6]
-		var cum := PackedFloat32Array([0.0])
-		for y in range(lo_y, air.dims.y):
-			cum.append(cum[-1] + lv[y])
-		columns.append([(g[2] as Vector3) / float(g[1]), float(g[0]) / area, area,
-				float(g[4]) / maxf(float(g[0]), 1e-6), cum])
-		column_cells.append(cells_of.get(key, PackedInt32Array()))
-	_cell_v = cell_v
+	floats = HullFloat.measure(air.dims, air.state, frame)
+	mass = floats.mass
+	com = floats.com
+	inertia = floats.inertia
+	columns = floats.columns
+	column_cells = floats.column_cells
+	_cell_v = floats.cell_v
+	_cw_step = -1
 
 
-## Where its keel would ride on a calm sea, metres under the surface: its mass's
-## worth of water over the area its columns float on.
+## Where its keel would ride on a calm sea, metres under the surface.
 func calm_draft() -> float:
-	var want := mass / WATER
-	var lo := 0.0
-	var hi := 0.0
-	for c in columns:
-		hi = maxf(hi, float(c[1]))
-	for k in 40:
-		var mid := (lo + hi) * 0.5
-		var v := 0.0
-		for c in columns:
-			v += _kept_out(c, mid)
-		if v < want:
-			lo = mid
-		else:
-			hi = mid
-	return (lo + hi) * 0.5
-
-
-## What column `c` keeps out of the water `sub` metres up from its bottom, m^3.
-func _kept_out(c: Array, sub: float) -> float:
-	var cum: PackedFloat32Array = c[4]
-	var k := sub / BrickWorld.get_plate_metres()
-	var i := clampi(int(floor(k)), 0, cum.size() - 1)
-	if i >= cum.size() - 1:
-		return cum[-1]
-	return lerpf(cum[i], cum[i + 1], k - float(i))
+	return floats.calm_draft() if floats != null else 0.0
 
 
 ## One tick afloat: the swell's lift at each column, gravity at its centre, the
@@ -269,7 +215,7 @@ func _kept_out(c: Array, sub: float) -> float:
 ## this thread.
 func _float(dt: float) -> void:
 	var sn := _snapshot(wave_t)
-	_forces(sn)
+	floats.forces(sn)
 	_integrate(dt, sn)
 
 
@@ -288,11 +234,13 @@ func _float_threaded(dt: float) -> void:
 	if _have.is_empty() or not (_have.xf as Transform3D).is_equal_approx(global_transform):
 		if _job < 0 or _have.is_empty():
 			_have = _snapshot(wave_t)
-			_forces(_have)
+			floats.forces(_have)
 	_integrate(dt, _have)
 	if _job < 0:
 		_snap = _snapshot(wave_t + dt)
-		_job = WorkerThreadPool.add_task(_forces.bind(_snap), true, "boat float")
+		# The sums it was started with: a boat that parts measures anew, and a job
+		# still running keeps the ones it has.
+		_job = WorkerThreadPool.add_task(floats.forces.bind(_snap), true, "boat float")
 
 
 func _exit_tree() -> void:
@@ -309,97 +257,24 @@ func _snapshot(t: float) -> Dictionary:
 	if hull_water != null and hull_water.any():
 		_column_water(0)
 		water = _cw.duplicate()
-	_wet_ref()
 	return {"xf": global_transform, "vel": vel, "ang": ang, "t": t, "sea": sea, "water": water}
 
 
-## The forces on it at snapshot `sn`, written back into it: force, torque (world),
-## sub (m^3 under), aboard (kg of water). Reads only the snapshot and what
-## `_measure` set once, so it runs on a worker (BrickWave.sample_heights is pure).
+## The forces on it at snapshot `sn` (HullFloat.forces), here: the probe's check
+## of the worker's against this thread's.
 func _forces(sn: Dictionary) -> void:
-	var t0 := Time.get_ticks_usec()
-	var xf: Transform3D = sn.xf
-	var vel0: Vector3 = sn.vel
-	var ang0: Vector3 = sn.ang
-	var sea0: float = sn.sea
-	var water: PackedFloat32Array = sn.water
-	var up := xf.basis.y.normalized()
-	var at := PackedVector2Array()
-	var bottoms: Array[Vector3] = []
-	for c in columns:
-		var p: Vector3 = xf * (c[0] as Vector3)
-		bottoms.append(p)
-		at.append(Vector2(p.x, p.z))
-	var waves := BrickWave.sample_heights(at, float(sn.t))
-	var c_w := xf * com
-	var force := Vector3(0.0, -mass * G, 0.0)
-	var torque := Vector3.ZERO
-	var sub_total := 0.0
-	var aboard := 0.0
-	var wet_ref := maxf(_wet_ref_v, 1.0)
-	for k in columns.size():
-		var c: Array = columns[k]
-		var p := bottoms[k]
-		# The water in this column weighs on it, where it is (Docs/Hulls.md 7: a
-		# flooded side lists it, enough sinks it).
-		if water.size() > k and water[k] > 0.0:
-			var wm := water[k] * _cell_v * WATER
-			aboard += wm
-			var down := Vector3(0.0, -wm * G, 0.0)
-			var rw := p + up * 0.5 - c_w
-			force += down
-			torque += rw.cross(down)
-		# The surface's height there (absolute: the sea level and the wave). NaN at a
-		# wave gain of exactly 0 (BrickWave's): the calm sea.
-		var h := waves[k] if waves.size() > k and not is_nan(waves[k]) else sea0
-		var depth := (h - p.y) / maxf(up.y, 0.3)
-		var sub := clampf(depth, 0.0, float(c[1]))
-		if sub <= 0.0:
-			continue
-		sub_total += sub * float(c[2])
-		var at_p := p + up * sub * 0.5
-		var lift := Vector3(0.0, WATER * G * _kept_out(c, sub), 0.0)
-		var r := at_p - c_w
-		var v_p := vel0 + ang0.cross(r)
-		# A wet column's drag: its share of the boat's mass, damped at DRAG.
-		var share := mass * float(c[2]) * sub / wet_ref
-		var drag := -v_p * share * DRAG
-		force += lift + drag
-		torque += r.cross(lift + drag)
-	sn.force = force
-	sn.torque = torque
-	sn.sub = sub_total
-	sn.aboard = aboard
-	sn.us = float(Time.get_ticks_usec() - t0)
+	floats.forces(sn)
 
 
-## Its motion one tick on under forces `f` (a `_forces` snapshot's): the velocity
-## it has now, so a late force pushes the boat as it moves, not as it was.
+## Its motion one tick on under forces `f` (a `forces` snapshot's).
 func _integrate(dt: float, f: Dictionary) -> void:
-	var xf := global_transform
-	var force: Vector3 = f.force
-	var torque: Vector3 = f.torque
-	var aboard: float = f.aboard
-	var sub_total: float = f.sub
-	last_submerged = sub_total
-	water_mass = aboard
-	afloat = sub_total > 0.0
-	var c_w := xf * com
-	vel += force / (mass + aboard) * dt
-	# Angular: in its own axes, its inertia's diagonal.
-	var b := xf.basis.orthonormalized()
-	var t_l := b.inverse() * torque
-	var a_l := Vector3(t_l.x / inertia.x, t_l.y / inertia.y, t_l.z / inertia.z)
-	if afloat:
-		ang *= exp(-ANG_DRAG * dt)
-	ang += b * a_l * dt
-	var origin := c_w + vel * dt
-	var nb := b
-	if ang.length_squared() > 1e-12:
-		nb = (Basis(ang.normalized(), ang.length() * dt) * b).orthonormalized()
-	# Turned about its centre, not its node's origin.
-	var com_off := nb * com
-	global_transform = Transform3D(nb, origin - (com_off - Vector3.ZERO))
+	last_submerged = float(f.sub)
+	water_mass = float(f.aboard)
+	afloat = last_submerged > 0.0
+	var next := floats.integrate(dt, f, global_transform, vel, ang)
+	global_transform = next[0]
+	vel = next[1]
+	ang = next[2]
 
 
 var _cw := PackedFloat32Array()
@@ -418,17 +293,3 @@ func _column_water(k: int) -> float:
 				t += hull_water.level(i)
 			_cw[c] = t
 	return _cw[k]
-
-
-## The submerged volume its drag is measured against: its calm draft's (worked
-## out once: the draft is a search over every column).
-var _wet_ref_v := -1.0
-
-
-func _wet_ref() -> float:
-	if _wet_ref_v < 0.0:
-		var area := 0.0
-		for c in columns:
-			area += float(c[2])
-		_wet_ref_v = maxf(1.0, area * calm_draft())
-	return _wet_ref_v

@@ -30,13 +30,42 @@ uniform vec3 sky_colour : source_color = vec3(0.62, 0.72, 0.84);
 // with the lights on and not as a grey panel.
 uniform vec3 light_colour : source_color = vec3(1.05, 0.96, 0.82);
 uniform float frame = 0.035;   // dark rim round the glass, metres
-// On a building in bricks (CityScene._tend_brick_panes) the panes stand in for
-// its drawn rooms only past the rooms' range: inside `near_hide` they dither
-// out on the same pattern the interior groups dither in
-// (shaders/interior_group.gdshader, gone where ign < t), the other way round,
-// so each pixel of a window has one of the two. 0 on a shell: always shown.
-instance uniform float near_hide = 0.0;
-uniform float near_band = 15.0;
+// On a building in bricks (CityDrawing.tend_brick_panes) a pane stands in for
+// its room until that room's furniture is drawn (RoomStreaming): then the
+// room's panes fade out by TIME, about 0.3 s, and back in before the room is
+// given back. Not by distance: a distance fade moved with the camera, and the
+// windows flickered whenever it did (user, 2026-11-13).
+//
+// Each pane carries the room behind it (CUSTOM0.x, an index into the
+// building's rooms, -1 for none: BuildingShell.window_arrays). The building's
+// pane node carries up to ROOM_SLOTS rooms being faded, two to a vec4 -- (room,
+// hide, room, hide) -- hide 0 shown, 1 gone. A room in no slot is shown: a
+// shell's panes, and every room not drawn, keep their painted room.
+instance uniform vec4 room_fade0 = vec4(-1.0, 0.0, -1.0, 0.0);
+instance uniform vec4 room_fade1 = vec4(-1.0, 0.0, -1.0, 0.0);
+instance uniform vec4 room_fade2 = vec4(-1.0, 0.0, -1.0, 0.0);
+instance uniform vec4 room_fade3 = vec4(-1.0, 0.0, -1.0, 0.0);
+instance uniform vec4 room_fade4 = vec4(-1.0, 0.0, -1.0, 0.0);
+instance uniform vec4 room_fade5 = vec4(-1.0, 0.0, -1.0, 0.0);
+
+varying flat float v_room;
+
+void vertex() {
+	v_room = CUSTOM0.x;
+}
+
+float slot_hide(vec4 s, float room) {
+	return abs(s.x - room) < 0.5 ? s.y : (abs(s.z - room) < 0.5 ? s.w : 0.0);
+}
+
+float room_hide(float room) {
+	if (room < 0.0) {
+		return 0.0;
+	}
+	return max(max(max(slot_hide(room_fade0, room), slot_hide(room_fade1, room)),
+			max(slot_hide(room_fade2, room), slot_hide(room_fade3, room))),
+			max(slot_hide(room_fade4, room), slot_hide(room_fade5, room)));
+}
 
 float ign(vec2 px) {
 	return fract(52.9829189 * fract(dot(px, vec2(0.06711056, 0.00583715))));
@@ -74,11 +103,9 @@ vec3 furniture_shade(vec3 base, vec3 n) {
 }
 
 void fragment() {
-	if (near_hide > 0.0) {
-		float t = clamp((length(VERTEX) - (near_hide - near_band)) / near_band, 0.0, 1.0);
-		if (ign(FRAGCOORD.xy) >= t) {
-			discard;
-		}
+	float hide = room_hide(v_room);
+	if (hide > 0.0 && ign(FRAGCOORD.xy) < hide) {
+		discard;
 	}
 	vec2 size = UV2;
 	// The ray from the eye through this pixel, in the glass's own frame:
