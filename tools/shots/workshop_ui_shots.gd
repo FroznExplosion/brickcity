@@ -87,6 +87,9 @@ func _building() -> void:
 	await _shot("b12_rooms")
 	t.pick("paint")
 	await _shot("b13_paint")
+	t.set_stage("finish")
+	await _shot("b13b_finish_tab")
+	t.set_stage("structure")
 	t.pick("hand")
 	t._fly_open = false
 	ws.bench._hotbar.toggle_browser()

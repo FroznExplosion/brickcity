@@ -24,6 +24,30 @@ const TOOLS := [
 	["select", "Select", "L", "Click a shape or an inserted build to pick it. A shape: drag its top for its height, its side to move it; change its bond or brick, delete it, or let it go. A build: move, copy or delete it."],
 	["rooms", "Rooms", "O", "Rooms and openings: click a room to find it or an opening to turn its kind; RMB forgets one."],
 ]
+## The stage tabs (Docs/BuildTools.md section 21, stage 4): [id, tab, what it is for, layer]. The
+## tab is the layer a brick goes in (structure, interior, detail); Finish keeps the last one.
+const STAGES := [
+	["structure", "1 Structure", "The building's bones: walls, floors, roofs, stairs, cuts. Bricks go in the structure layer.", 0],
+	["interior", "2 Interior", "Rooms and furniture. Bricks go in the interior layer.", 1],
+	["detail", "3 Detail", "The small things: trim, signs, windows' frames. Bricks go in the detail layer.", 2],
+	["finish", "4 Finish", "Look it over and send it out: the look, stress, save, Test in city. Bricks go in the last layer used.", -1],
+]
+## Each stage's tools (TOOLS ids), then Finish's actions.
+const STAGE_TOOLS := {
+	"structure": ["hand", "draw", "roof", "stairs", "cut", "repeat", "select"],
+	"interior": ["hand", "rooms", "select"],
+	"detail": ["hand", "cut", "select"],
+	"finish": ["hand", "select"],
+}
+const FINISH_ACTIONS := [
+	["!save", "Save", "Ctrl S", "Save it under its name (the first time: Save As asks for one)."],
+	["!save_as", "Save as", "Ctrl Shift S", "Save it under a new name."],
+	["!open", "Open", "Ctrl O", "Open a saved build."],
+	["!new", "New", "Ctrl N", "Clear the workshop for a new build."],
+	["!city", "In city", "Enter", "Test in city: put it in the city and walk round it."],
+	["!look", "Look", "", "How every printed part looks: printed on glass, smooth PEI, textured PEI, or injection moulded (press for the next)."],
+	["!kind", "Kind", "", "What this build is: a building, a room template, an item."],
+]
 ## What the status line says a tool does, short (its whole story is in the rail's pop-up).
 const STATUS := {
 	"place": "LMB lays the brick (hold: a run)   RMB takes one away   R turns",
@@ -88,6 +112,9 @@ var bricks_button: Button
 var outliner: WorkshopOutliner
 ## F6, the furniture catalogue, as a button (every action a button).
 var furnish_button: Button
+## The stage tab open (`STAGES`), and its buttons.
+var stage := "structure"
+var _tab_buttons := {}
 ## The pop-out is out: it goes when the cursor moves into the scene (POPOUT_HIDES), and comes
 ## back on the tool's button.
 var _fly_open := true
@@ -293,15 +320,7 @@ func setup(workshop, layer: CanvasLayer) -> void:
 	rail.restyle(ws.wk_ctx.panel_box())
 	layer.add_child(rail)
 	frame.rail = rail
-	rail.fill("Build", TOOLS, pick, [], 2)
-	rail.hint.visible = false   # what the tool does is the status line's first part
-	bricks_button = rail.add_under_tools("Bricks   Tab", "place", "Bricks  (Tab)\nOpen or close the menu of every brick.",
-			func() -> void: act("parts"))
-	furnish_button = rail.add_under_tools("Furniture   F6", "furniture",
-			"Furniture and items  (F6)\nOpen or close the catalogue of furniture and items to place.",
-			func() -> void:
-				if ws._furnish != null:
-					ws._furnish.open(not ws._furnish.is_open()))
+	_fill_rail()
 	_bar = PanelContainer.new()
 	_bar.name = "ToolBar"
 	_bar.add_theme_stylebox_override("panel", rail.get_theme_stylebox("panel"))
@@ -311,6 +330,19 @@ func setup(workshop, layer: CanvasLayer) -> void:
 	flow.add_theme_constant_override("h_separation", 3)
 	flow.add_theme_constant_override("v_separation", 2)
 	_bar.add_child(flow)
+	# The stage tabs first, then the bar (as the asset workshop's band).
+	var group := ButtonGroup.new()
+	for s in STAGES:
+		var b := Button.new()
+		b.text = s[1]
+		b.toggle_mode = true
+		b.button_group = group
+		b.focus_mode = Control.FOCUS_NONE
+		b.tooltip_text = s[2]
+		b.pressed.connect(set_stage.bind(String(s[0])))
+		flow.add_child(b)
+		_tab_buttons[s[0]] = b
+	flow.add_child(VSeparator.new())
 	rail.actions(ACTIONS, act, flow)
 	_tag = Label.new()
 	_tag.name = "CursorTag"
@@ -1499,7 +1531,68 @@ func _apply(rec: Dictionary) -> Dictionary:
 # ---------------------------------------------------------------------------
 
 ## A rail button or its key: that tool in hand, everything else put down.
+## A stage tab: its tools on the rail, its layer in hand (Finish keeps the last one), and the
+## tool in hand kept if the tab has it, else Hand.
+func set_stage(id: String) -> void:
+	var s: Array = STAGES.filter(func(r: Array) -> bool: return r[0] == id)
+	if s.is_empty():
+		return
+	stage = id
+	if int(s[0][3]) >= 0:
+		ws._set_role(int(s[0][3]))
+	_fill_rail()
+	if not rail.buttons.has(rail_id(active())):
+		pick("hand")
+
+
+## The rail for the stage open: its tools, Finish's actions, then the buttons under them.
+func _fill_rail() -> void:
+	var rows := []
+	for t in TOOLS:
+		if (STAGE_TOOLS[stage] as Array).has(t[0]):
+			rows.append(t)
+	if stage == "finish":
+		rows.append_array(FINISH_ACTIONS)
+	var title := ""
+	for s in STAGES:
+		if s[0] == stage:
+			title = String(s[1]).substr(2)
+	rail.fill(title, rows, pick, [], 2)
+	rail.hint.visible = false   # what the tool does is the status line's first part
+	bricks_button = rail.add_under_tools("Bricks   Tab", "place", "Bricks  (Tab)\nOpen or close the menu of every brick.",
+			func() -> void: act("parts"))
+	furnish_button = rail.add_under_tools("Furniture   F6", "furniture",
+			"Furniture and items  (F6)\nOpen or close the catalogue of furniture and items to place.",
+			func() -> void:
+				if ws._furnish != null:
+					ws._furnish.open(not ws._furnish.is_open()))
+
+
+## Finish's actions: what the File and kind menus do, on the screen.
+func finish_act(id: String) -> void:
+	match id:
+		"!save": ws._on_menu("save", null)
+		"!save_as": ws._on_menu("save_as_ask", null)
+		"!open": ws._menu.show_open("open")
+		"!new": ws._menu.ask_clear()
+		"!city": ws._on_menu("city", null)
+		"!look": ws._menu.next_look()
+		"!kind": ws._menu.show_kinds(rail.buttons.get("!kind"))
+
+
 func pick(id: String) -> void:
+	if id.begins_with("!"):
+		finish_act(id)
+		return
+	# A key for a tool this tab has not: the first tab that has it.
+	if rail != null and not rail.buttons.has(rail_id(id)):
+		for s in STAGES:
+			if (STAGE_TOOLS[s[0]] as Array).has(rail_id(id)):
+				stage = String(s[0])
+				if int(s[3]) >= 0:
+					ws._set_role(int(s[3]))
+				_fill_rail()
+				break
 	_fly_open = true
 	if id == "hand":
 		id = _last_hand
@@ -1543,7 +1636,6 @@ func cancel() -> void:
 ## An action button (or its key, which the workshop handles as before).
 func act(id: String) -> void:
 	match id:
-		"layer": ws._toggle_layer()
 		"fps": view.toggle()
 		"cancel": cancel()
 		"guide": ws._cycle_guide()
@@ -3226,7 +3318,12 @@ func process() -> void:
 	lit["view_top"] = view.flat_view == "top"
 	lit["view_front"] = view.flat_view == "front"
 	rail.show_toggles(lit)
-	rail.set_action_text("layer", ["Structure", "Interior", "Detail"][clampi(ws._role, 0, 2)])
+	for id in _tab_buttons:
+		(_tab_buttons[id] as Button).set_pressed_no_signal(id == stage)
+	if rail.buttons.has("!look") and ws._menu != null:
+		rail.buttons["!look"].tooltip_text = "Look: %s\n%s" % [ws._menu.look_name(), FINISH_ACTIONS[5][3]]
+	if rail.buttons.has("!kind"):
+		rail.buttons["!kind"].text = WorkshopMenu.KIND_LABELS.get(ws.recipe.kind, ws.recipe.kind)
 	rail.set_action_text("mirror_axis", "across X" if ws.mirror_axis == 0 else "across Z")
 	var vh: float = ws.get_viewport().get_visible_rect().size.y
 	rail.fit_height(vh - top - ws.STATUS_ROOM)

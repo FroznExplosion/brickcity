@@ -271,6 +271,40 @@ func _on_finish(id: int) -> void:
 	_tick_finish()
 
 
+const LOOKS := [BrickMaterials.Bed.GLASS, BrickMaterials.Bed.SMOOTH_PEI, BrickMaterials.Bed.TEXTURED_PEI, FINISH_MOULDED]
+const LOOK_NAMES := ["printed on glass", "printed on smooth PEI", "printed on textured PEI", "injection moulded"]
+
+
+func _look_now() -> int:
+	return LOOKS.find(FINISH_MOULDED if BrickMaterials.finish == BrickMaterials.Finish.MOULDED else BrickMaterials.bed)
+
+
+## The print look's name now (Finish's Look button).
+func look_name() -> String:
+	return LOOK_NAMES[maxi(0, _look_now())]
+
+
+## The next print look (Finish's Look button: the View menu's four, in turn).
+func next_look() -> void:
+	_on_finish(LOOKS[(_look_now() + 1) % LOOKS.size()])
+
+
+## New: ask first, as File > New does.
+func ask_clear() -> void:
+	_clear_dialog.popup_centered()
+
+
+## The kinds (the kind's menu), dropped from a button on the screen.
+func show_kinds(under: Control = null) -> void:
+	if _type == null:
+		return
+	var p := _type.get_popup()
+	if under != null:
+		p.position = Vector2i(under.get_screen_position() + Vector2(under.size.x + 4.0, 0.0))
+	p.reset_size()
+	p.popup()
+
+
 func _tick_finish() -> void:
 	BrickMaterials.load_look()
 	var p := _view.get_popup()
