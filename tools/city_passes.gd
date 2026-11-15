@@ -6424,8 +6424,8 @@ func _report_profile() -> void:
 			line += "%s %.3f  " % [k, float(city._prof_sum.get(k, 0.0)) / maxi(city._tick_samples, 1)]
 		print("[prof]   of which stream, mean per tick: " + line)
 		var rsr: Dictionary = city.room_streaming.report()
-		print("[prof]   rooms (RoomStreaming): %d pass(es), choosing %.3f ms a pass (worst %.2f); %d came up, %d given back, %d given back by the cap" % [
-				rsr.passes, float(rsr.choose_ms) / maxf(float(rsr.passes), 1.0), rsr.worst_choose_ms,
+		print("[prof]   rooms (RoomStreaming): %d pass(es), %d full scan(s), choosing %.3f ms a pass (worst %.2f); %d came up, %d given back, %d given back by the cap" % [
+				rsr.passes, rsr.scans, float(rsr.choose_ms) / maxf(float(rsr.passes), 1.0), rsr.worst_choose_ms,
 				rsr.comes, rsr.goes, rsr.evicted])
 		var dn: Array = city.islands.damage_near_ms
 		print("[prof]   loose pieces (damage_near), all told: %d call(s); waking sleepers %.1f ms, finding pieces %.1f, damaging them %.1f, pushing %.1f" % [

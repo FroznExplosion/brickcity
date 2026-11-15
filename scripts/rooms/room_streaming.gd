@@ -46,6 +46,11 @@ const FADE_S := 0.3
 ## (shaders/window_interior.gdshader). CAP plus room for the ones fading back in.
 const PANE_VECS := 6
 const ROOM_SLOTS := PANE_VECS * 2
+## The camera this still (moved less, turned less) chooses what it chose last,
+## for up to RESCAN_MS: the scan of every room in range is most of a pass.
+const STILL_M := 0.5
+const STILL_DOT := 0.9985   # about 3 degrees
+const RESCAN_MS := 500
 
 class Rec:
 	extends RefCounted
@@ -76,6 +81,15 @@ var _empty := {}                ## room key -> true: its manifest draws nothing
 
 var passes := 0
 var _last_pass_ms := 0          ## the `now` of the last pass (Rec.chosen_ms of what it chose)
+## The last full choosing: where the camera was and looked, when, over how many
+## buildings, and what it chose. A pass with the camera still (STILL_M,
+## STILL_DOT) within RESCAN_MS of it chooses the same and skips the scan.
+var _scan_here := Vector3(INF, INF, INF)
+var _scan_fwd := Vector3.ZERO
+var _scan_ms := -1000000
+var _scan_count := -1
+var _scan_chosen: Array = []    ## [key, near] of what it chose
+var scans := 0                  ## full choosings, all told (passes - scans reused one)
 var choose_ms := 0.0
 var worst_choose_ms := 0.0
 var picked_near := 0            ## this pass
@@ -105,19 +119,41 @@ func choose(here: Vector3, forward: Vector3, half_fov: float, buildings: Array,
 	passes += 1
 	_last_pass_ms = now
 	waits = 0
-	var near_c: Array = []     # [score, building, group, k]
-	var view_c: Array = []
 	var live := {}
 	for b in buildings:
-		var bb: BuildingRegistry.Building = b
-		live[bb.id] = true
-		_candidates(bb, here, forward, half_fov, near_c, view_c)
-	near_c.sort_custom(func(a, c) -> bool: return float(a[0]) < float(c[0]))
-	view_c.sort_custom(func(a, c) -> bool: return float(a[0]) < float(c[0]))
-	var unsure_of := {}
+		live[(b as BuildingRegistry.Building).id] = true
 	var chosen := {}
-	picked_near = _pick(near_c, NEAR_PICKS, true, chosen, unsure, unsure_of, now)
-	picked_view = _pick(view_c, VIEW_PICKS, false, chosen, unsure, unsure_of, now)
+	var still := here.distance_to(_scan_here) < STILL_M and forward.dot(_scan_fwd) > STILL_DOT \
+			and now - _scan_ms < RESCAN_MS and buildings.size() == _scan_count
+	if still:
+		for pair in _scan_chosen:
+			var r: Rec = _recs.get(pair[0])
+			if r != null and live.has(r.id):
+				r.chosen_ms = now
+				r.want = true
+				chosen[pair[0]] = true
+	else:
+		scans += 1
+		var near_c: Array = []     # [score, building, group, k]
+		var view_c: Array = []
+		for b in buildings:
+			_candidates(b, here, forward, half_fov, near_c, view_c)
+		near_c.sort_custom(func(a, c) -> bool: return float(a[0]) < float(c[0]))
+		view_c.sort_custom(func(a, c) -> bool: return float(a[0]) < float(c[0]))
+		var unsure_of := {}
+		picked_near = _pick(near_c, NEAR_PICKS, true, chosen, unsure, unsure_of, now)
+		picked_view = _pick(view_c, VIEW_PICKS, false, chosen, unsure, unsure_of, now)
+		_scan_here = here
+		_scan_fwd = forward
+		_scan_ms = now
+		_scan_count = buildings.size()
+		_scan_chosen.clear()
+		for key in chosen:
+			_scan_chosen.append([key, (_recs[key] as Rec).near])
+		# A room refused (its building not known to be standing) is asked for
+		# again next pass, not after RESCAN_MS.
+		if waits > 0:
+			_scan_ms = -1000000
 	# Gone with their building, or their group made afresh: forgotten now, no
 	# fade (there is nothing on screen of them to fade).
 	for key in _recs.keys():
@@ -453,7 +489,7 @@ func report() -> Dictionary:
 			held += 1
 		if r.hide > 0.0 and r.hide < 1.0:
 			fading += 1
-	return {"held": held, "fading": fading, "near": picked_near, "view": picked_view,
+	return {"held": held, "fading": fading, "near": picked_near, "view": picked_view, "scans": scans,
 			"evicted": evicted, "comes": comes, "goes": goes, "passes": passes,
 			"choose_ms": choose_ms, "worst_choose_ms": worst_choose_ms}
 
