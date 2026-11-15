@@ -1705,8 +1705,18 @@ func _owed_band_check() -> void:
 	var stale: int = city.islands.band_owed_stale - stale_was
 	_gate_ok("owed bands: each was hung or built again -- %d hung, %d rebuilt" % [hung, stale],
 			hung + stale > 0 and isl.owed_bands.is_empty())
+	var holes := 0
+	if isl.is_valid():
+		for node in isl.bands:
+			if not is_instance_valid(node):
+				holes += 1
 	_gate_ok("owed bands: and the piece has no holes",
-			not isl.is_valid() or isl.bands.is_empty() or city.islands._draws_bands(isl))
+			not isl.is_valid() or isl.bands.is_empty() or city.islands._draws_bands(isl),
+			"%d of %d slot(s) empty, %d owed left, %s the hole list, bake %s, %d section(s)" % [
+				holes, isl.bands.size(), isl.owed_bands.size(),
+				"in" if city.islands._band_holes.has(isl) else "not in",
+				"ready" if isl.is_valid() and city.world.bake_ready(isl.chunk) else "not ready",
+				city.world.get_chunk_sections(isl.chunk) if isl.is_valid() else -1])
 
 func _run_bigbreak_pass() -> void:
 	var far := "--far" in OS.get_cmdline_user_args()
