@@ -12,11 +12,10 @@ was found, how to test without harming the user's files, and what to do next.
 - Done: the analysis, the plan (section 21, the user's five answers in it), a tool that
   photographs both UIs (then, 2026-11-13, no game code changed).
 - Stages 0 and 1 (1a the asset's bar and pop-out, 1b the building's outliner and Selected,
-  1c the status line) and stage 2a (every key a button; the asset's keys made the building's,
-  agreed with the user) merged 2026-11-14 (section 21, "As built"). Next: **stage 2b**, one
-  camera -- the building's orbit (`WkCamera`, free cursor, wheel zooms, Shift + wheel the
-  toolbar) in the asset workshop, Y swapping to its fly; the building gets the flat views
-  (Alt 0-3, a plan view) and with them the bar's view buttons (drop them from `ASSET_ONLY`).
+  1c the status line) and stage 2 (2a every key a button and one key map, agreed with the
+  user; 2b one camera) merged 2026-11-14 (section 21, "As built"). Next: **stage 3**, the six
+  menus (File Edit View Insert <Kind> Help; the print look to View; Brick, Block out, Part,
+  Photos and Layer go -- their items must keep an on-screen button, the user's rule).
 
 
 ## Where to work

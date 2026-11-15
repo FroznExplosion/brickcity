@@ -739,33 +739,6 @@ func _check_farcut() -> void:
 	_ok("none while its bands were still being built", double == 0, "%d tick(s)" % double)
 	_ok("and its far box drew it until they were", blind == 0, "%d tick(s) half drawn" % blind)
 
-	# Its mesh given back while its bands are still going up (DEMESH_AFTER_MS
-	# runs out first on a big tower with a slow frame): the shell left standing
-	# in for it was drawn from the building before it was hit.
-	var id2 := _tower(4)
-	var c2 := _box(id2).get_center()
-	city.camera.global_position = c2 + Vector3(-1.0, 0.6, -1.0).normalized() * (city.SHELL_RANGE + 60.0)
-	city.camera.look_at(c2)
-	await _ticks(30 * 3)
-	var b2 = city.registry.get_building(id2)
-	# One shot, all landed, the bands still going up.
-	# A small one in a wall: nothing cut loose, so nothing remeshes it after.
-	var bb2 := _box(id2)
-	city._blast(Vector3(bb2.get_center().x, bb2.position.y + 3.0, bb2.position.z), 1.0)
-	var w := 0
-	while (not city._damage_queue.is_empty() or city._remesh_queue.has(id2)) and w < 60:
-		await physics_frame
-		w += 1
-	var mid: bool = city.drawing.bands_building(id2) and city._shells.has(id2)
-	city._demesh(id2)
-	await _ticks(30 * 3)
-	var box_tier: bool = city._shell_box.has(id2)
-	var mi = city._shells.get(id2)
-	var drawn: bool = mi != null and (mi as MeshInstance3D).mesh != null
-	_ok("given back mid-bands, it is drawn from its bricks as they are now",
-			mid and b2.is_damaged() and not box_tier and drawn,
-			"mid-bands %s, damaged %s, box tier %s, shell drawn %s" % [mid, b2.is_damaged(), box_tier, drawn])
-
 
 # --- (4) ------------------------------------------------------------------------
 
@@ -939,13 +912,27 @@ func _check_trapped() -> void:
 	var cut := _soldier_at(Vector3(-110.0, 0.0, -150.0))
 	await _ticks(10)
 	cut.brain.active = false
+	# Trapped is Soldier.TRAP_FAILS failed answers in a row. The FIRST answer
+	# is the slow one -- a whole search for a far goal (a 20,000-node cap),
+	# served from the nav's half-millisecond a frame -- and the rest come at
+	# once: 12.7-15.6 s for the first, the other two the same tick
+	# (2026-11-14), so a 20 s bound failed one run in three with nothing
+	# wrong. What this asks is that the failures add up to trapped, not how
+	# fast the nav says no: bounded at 45 s, and the failures' times printed,
+	# so a slow nav reads as that.
 	n = 0
-	while not cut.trapped and n < 30 * 20:
+	var fail_at: Array = []
+	var fails_seen := 0
+	while not cut.trapped and n < 30 * 45:
 		cut.move_to(sealed)
 		await physics_frame
 		n += 1
+		if cut._fails.size() != fails_seen:
+			fails_seen = cut._fails.size()
+			if fails_seen > 0:
+				fail_at.append("%.1f" % (n / 30.0))
 	_ok("asked again and again for a way there is not, it is trapped", cut.trapped,
-			"%.1f s" % (n / 30.0))
+			"%.1f s; failed answers at %s s" % [n / 30.0, ", ".join(fail_at)])
 	# A few steps from where it stands: there is surely a way there.
 	var free: Vector3 = city.ai_nav.snap(cut.pawn.feet() + Vector3(-3.0, 0.0, 0.0))
 	n = 0

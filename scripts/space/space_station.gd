@@ -67,6 +67,11 @@ var air_leak := 0.0
 ## The worst water step (with its spray) and water drawing so far, microseconds.
 var water_step_us := 0.0
 var water_draw_us := 0.0
+## The parts of those, worst each: the spray's update; the first drawing (it makes
+## the node and its material) apart from the ones after.
+var water_spray_us := 0.0
+var water_draw_first_us := 0.0
+var _water_draws := 0
 const DRAW_WATER_EVERY := 0.2
 var _water_dirty := false
 var _water_drawn_ago := 0.0
@@ -676,7 +681,10 @@ func take_ram(point: Vector3, shot: Dictionary) -> int:
 func _after_kill(killed: PackedInt32Array) -> void:
 	bricks_killed += killed.size()
 	if air != null:
-		air.blocks_removed(bricks, chunk, killed)
+		if _parting:
+			_parted()
+		else:
+			air.blocks_removed(bricks, chunk, killed)
 	if hull_water != null:
 		hull_water.grid_changed = true
 	if _collision != null:
@@ -690,14 +698,40 @@ func _after_kill(killed: PackedInt32Array) -> void:
 	_solve_due = true
 
 
+## Whether nothing is its ground (a boat afloat): then what is not joined to its
+## largest part leaves, whatever of it touches its keel's level.
+func floats_free() -> bool:
+	return false
+
+
+## Part of it has just left (`floats_free`): its air and what floats it are
+## worked out again from the bricks it has left.
+func _parted() -> void:
+	pass
+
+
+var _parting := false
+## The chunk of the piece being sent off, while `drifted` is emitted (-1 else):
+## its bricks, for whoever takes the piece.
+var drift_chunk := -1
+
+
 ## What the hit left joined to nothing goes: a small group as crumbs, a large
 ## one as a rigid piece, drifting (step 6).
 func _solve() -> void:
 	_solve_due = false
 	# A generated station: by its studs alone (in orbit nothing weighs on it --
 	# Docs/Space.md 3.2), so a part cut off from the keel's comes away whole.
-	var groups: Array = bricks.find_detached_groups(chunk) if recipe != null \
-			else (bricks.solve_structure(chunk, 48, 3.0).groups as Array)
+	var groups: Array
+	if floats_free():
+		# Afloat nothing is its ground: its largest joined part is the hull, and
+		# every other part leaves (Docs/Hulls.md 7.4).
+		groups = bricks.get_components(chunk)
+		groups.pop_front()
+	elif recipe != null:
+		groups = bricks.find_detached_groups(chunk)
+	else:
+		groups = bricks.solve_structure(chunk, 48, 3.0).groups
 	if groups.is_empty():
 		if not joints.is_empty():
 			_joints_step()
@@ -718,7 +752,9 @@ func _solve() -> void:
 		if split.is_empty():
 			continue
 		_send_off(split, ids.size(), riders)
+	_parting = floats_free()
 	_after_kill(all)
+	_parting = false
 	if not joints.is_empty():
 		_joints_step()
 
@@ -1128,8 +1164,10 @@ func _send_off(split: Dictionary, count: int, riders: Array) -> void:
 		PhysicsServer3D.body_set_collision_mask(drift_body, Layers.STRUCTURE_MASK)
 		bricks.add_chunk_shapes(drift_body, c, com, true, true)
 	drift_record = ChunkRecord.capture(bricks, c).to_data(bricks)
+	drift_chunk = c
 	drifted.emit(arrays, bricks.get_chunk_transform(c) * Transform3D(Basis(), com), com, count, brick_material)
 	drift_record = {}
+	drift_chunk = -1
 	if drift_body.is_valid():
 		PhysicsServer3D.free_rid(drift_body)
 	drift_body = RID()
@@ -1285,12 +1323,16 @@ func _water_step(dt: float) -> void:
 			return
 		hull_water = HullWater.on(air)
 		hull_water.air_leak = air_leak
+		_water_node()
+		hull_spray.warm(self)
 	if not water_depth.is_valid() and not hull_water.any():
 		return
 	var t0 := Time.get_ticks_usec()
 	hull_water.step(t, water_down(), _hole_depth)
+	var ts := Time.get_ticks_usec()
 	hull_spray.update(self, t)
 	var t1 := Time.get_ticks_usec()
+	water_spray_us = maxf(water_spray_us, float(t1 - ts))
 	# Drawn again at most DRAW_WATER_EVERY: the water moves slowly to the eye, and a
 	# flooding hull's drawing is up to 20 ms (boat pass, 2026-11-07).
 	_water_dirty = _water_dirty or hull_water.changed
@@ -1299,9 +1341,14 @@ func _water_step(dt: float) -> void:
 		_water_dirty = false
 		_water_drawn_ago = 0.0
 		_draw_water()
+		_water_draws += 1
+		var d := float(Time.get_ticks_usec() - t1)
+		if _water_draws == 1:
+			water_draw_first_us = d
+		else:
+			water_draw_us = maxf(water_draw_us, d)
 	# The worst step and drawing, microseconds (the boat pass reports them).
 	water_step_us = maxf(water_step_us, float(t1 - t0))
-	water_draw_us = maxf(water_draw_us, float(Time.get_ticks_usec() - t1))
 
 
 ## Its down in its grid's axes: its own gravity's (its frame's -Y) while it pulls,
@@ -1330,14 +1377,7 @@ func _hole_depth(i: int) -> float:
 func _draw_water() -> void:
 	if _brick_node == null:
 		return
-	if water_mesh == null:
-		water_mesh = MeshInstance3D.new()
-		water_mesh.name = "Water"
-		var m := ShaderMaterial.new()
-		m.shader = HULL_WATER_SHADER
-		water_mesh.material_override = m
-		water_mesh.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-		_brick_node.add_child(water_mesh)
+	_water_node()
 	# Cells beside a hole the sea comes in at: the most foam.
 	# (HullWater.inflow: the holes water came in at, its last step.)
 	var inflow := PackedInt32Array()
@@ -1359,6 +1399,27 @@ func _draw_water() -> void:
 	var mesh := ArrayMesh.new()
 	mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
 	water_mesh.mesh = mesh
+
+
+## Every hull's water is drawn with this one material (it has nothing of a hull's
+## own in it), made with the first hull that can take water.
+static var _water_material: ShaderMaterial
+
+
+## The node its water is drawn in, made if it is not there. Made when its water
+## is (`_water_step`: at launch, loading), not at the first drawing: the material
+## was 25 ms of the frame the first water showed in (boat pass, 2026-11-14).
+func _water_node() -> void:
+	if water_mesh != null or _brick_node == null:
+		return
+	if _water_material == null:
+		_water_material = ShaderMaterial.new()
+		_water_material.shader = HULL_WATER_SHADER
+	water_mesh = MeshInstance3D.new()
+	water_mesh.name = "Water"
+	water_mesh.material_override = _water_material
+	water_mesh.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	_brick_node.add_child(water_mesh)
 
 
 ## Water pumped out of it, `cells` a second (HullWater.pump): its crew's pumps.

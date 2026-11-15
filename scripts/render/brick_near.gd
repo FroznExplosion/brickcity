@@ -65,7 +65,6 @@ static var stud_radius := DEFAULT_STUD_RADIUS
 ## pixels, on the one storey under the player's feet). `stud_bevel_radius` is
 ## the workshop's still (BrickBench), which swaps its own.
 static var stud_bevel_radius := DEFAULT_STUD_BEVEL
-static var stud_round_radius := DEFAULT_STUD_RADIUS
 ## And past `stud_radius`, to here, a CARD: two triangles that turn to face the
 ## camera, sized to the stud's outline from there, flat colour, no print
 ## (PieceMeshes.stud_card). Past 12 m a stud is under twenty pixels; what has
@@ -82,11 +81,9 @@ static var stud_round_radius := DEFAULT_STUD_RADIUS
 static var stud_card_radius := DEFAULT_STUD_CARD
 ## The menu sets the distances one at a time, in whatever order, so they are
 ## put back in order after each: bevelled studs inside real studs inside cards.
-## Real studs are round all the way out (the square ring skipped, as by
-## default); a card distance under the real studs' turns cards off.
+## A card distance under the real studs' turns cards off.
 static func set_stud_distances(bevel: float, real: float, card: float) -> void:
 	stud_radius = maxf(real, 0.0)
-	stud_round_radius = stud_radius
 	stud_bevel_radius = clampf(bevel, 0.0, stud_radius)
 	stud_card_radius = maxf(card, stud_radius)
 

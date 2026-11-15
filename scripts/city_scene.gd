@@ -231,9 +231,6 @@ var disasters: DisasterDirector
 
 ## Per building: the shell it shows while undamaged, and the bricks once it is not.
 var _shells := {}          ## building id -> MeshInstance3D
-## Buildings still in bricks, their mesh given up at range, hit since their
-## shell was made: rebuilt from their bricks by _stream_detail.
-var _shell_stale := {}
 var _shell_bodies := {}    ## building id -> RID
 var _brick_nodes := {}     ## building id -> MeshInstance3D
 ## The light on the brick grid (Docs/Lighting.md 6.1): the nearest buildings
@@ -498,31 +495,6 @@ const SHELL_RANGE := 260.0
 ## anything beyond that band is resolved against recipes -- see _ray_recipes.
 const FIRE_RANGE := 2000.0
 
-## Middle tier: resident bricks, no mesh.
-##
-## A materialised building is skipped by _stream_shells, so it draws full brick
-## geometry however far away it is. Measured at the peak of a 200-building
-## stress run: 114 of 185 resident buildings were past SHELL_DETAIL_RANGE and
-## held 62% of the blocks. Nobody resolves a stud at 150 m.
-##
-## So past this range a building drops its bake and its brick mesh and draws a
-## coarse shell -- but KEEPS its chunk and its collision. The damage record
-## stays live, a shot still lands on real bricks, and the whole thing is
-## reversible in a tick.
-##
-## _trim_quiet eventually de-materialises these anyway (TRIM_RADIUS is 90 m,
-## inside this), and when it does it reclaims more. The point of this tier is
-## speed: the trim will not touch a building until it has been quiet for
-## TRIM_AFTER_MS, and the peak is made of buildings that have not been quiet
-## yet. This gives the bake back within a tick of the building going out of
-## range.
-const DEMESH_RANGE := 110.0
-const DEMESH_HYSTERESIS := 20.0
-## Do not strip a building that is still being shot at; materialised_at is
-## refreshed by every _promote, so it reads as "last touched".
-const DEMESH_AFTER_MS := 2000
-const DEMESH_PER_TICK := 4
-const DEMESH_BUDGET_MS := 2.0
 const SHELL_HYSTERESIS := 30.0
 ## Inside this, a shell gets its course banding. Outside it, a course is thinner
 ## than a pixel and the coarse tier is indistinguishable for ~1.2% of the
@@ -566,9 +538,6 @@ var handover_stats := {"count": 0, "gap_ticks": 0, "gap_worst": 0, "gap_handover
 		"double_ticks": 0, "double_worst": 0, "double_handovers": 0,
 		"double_queued": 0, "double_bands": 0,
 		"coarse_ticks": 0, "coarse_worst": 0, "coarse_handovers": 0}
-var _demesh_ms := 0.0
-var _demeshed := 0
-var _remeshed_back := 0
 var _trim_split := {"demat": 0.0, "free": 0.0, "shell": 0.0}
 var _demote_worst := [0.0, 0.0, 0.0, 0.0, 0]
 var _trim_ms := 0.0
@@ -2710,18 +2679,17 @@ func _make_shell(id: int, coarse: bool = false, far: bool = false) -> void:
 	# box and cannot, so what still needs it -- a build, or a building whose
 	# damage is in live bricks rather than a profile -- stays banded.
 	var boxed: bool = coarse and drawing.far_draws_coarse(b)
-	# Nor a recipe building still in bricks (_demesh), damaged or not: the far
-	# box will not draw it, and the coarse mesh is an untextured box -- every
-	# tower walked past and left behind stood there as a plain white block,
-	# with no courses and no windows, until the camera came back.
+	# Nor a recipe building still in bricks, damaged or not: the far box will
+	# not draw it, and the coarse mesh is an untextured box -- every tower
+	# walked past and left behind stood there as a plain white block, with no
+	# courses and no windows, until the camera came back.
 	coarse = coarse and (boxed or (b.is_build() and not b.is_damaged()))
-	# A building still in bricks -- its mesh given up at range (_demesh) --
-	# draws the damage its bricks have NOW. Its profile is only brought up to
-	# date when it gives its bricks back (dematerialise), so the shell standing
-	# in for it drew what it looked like before: a tower with its top blown off
-	# came back whole past DEMESH_RANGE, windows and all, and went again inside
-	# it -- "respawning" as the camera moved. One with no bricks left draws
-	# nothing.
+	# A building still in bricks draws the damage its bricks have NOW. Its
+	# profile is only brought up to date when it gives its bricks back
+	# (dematerialise), so a shell standing in for it drew what it looked like
+	# before: a tower with its top blown off came back whole at range, windows
+	# and all -- "respawning" as the camera moved. One with no bricks left
+	# draws nothing.
 	var t_sh := Time.get_ticks_usec()
 	var damage: Dictionary = b.damage_profile
 	var nothing_left := false
@@ -2761,18 +2729,6 @@ func _make_shell(id: int, coarse: bool = false, far: bool = false) -> void:
 	add_child(mi)
 	_shells[id] = mi
 	_shell_coarse[id] = coarse
-	# Damaged and still in bricks (_demesh): drawn from its bricks as they are
-	# once a coarse mesh of them is made (_far_real); the shell meanwhile. Laid
-	# a storey at a time too: its bricks are the laid storeys, and its rest
-	# shell draws the others beside them (_rest_drawn). Left to the shell, its
-	# damage was the profile's -- a hole per band, the floors drawn across it
-	# from 110 m out (CollapseNext 29(a), --lodbreak's ghost walls: 14-31 of
-	# 337-355 hits on the 320 m tower).
-	var real: bool = b.is_materialised() and not b.is_build() and not nothing_left and not boxed \
-			and not damage.is_empty() and not _toppling.has(id)
-	if real:
-		drawing.far_real(id, mi)
-	t_sh = _part("sh_real", t_sh)
 	# Its windows, with a room painted behind each: a shell has no openings, so
 	# the fake rung cannot show through it. Not on the coarse tier -- past a
 	# hundred metres a window is a pixel -- and not on a player build, which
@@ -2780,12 +2736,8 @@ func _make_shell(id: int, coarse: bool = false, far: bool = false) -> void:
 	# does, and with its own material so the brick material is untouched.
 	# Owed, not built here: _build_owed_glass makes them a tick or two later,
 	# nearest first, on a worker.
-	# A damaged one drawn from its bricks (`real`) gets them too, each pane
-	# only where its window still stands in the bricks (Docs/Structures.md
-	# 4.2, the faked state): it used to get none, and past DEMESH_RANGE a
-	# damaged building was the one building with empty black windows.
 	if not coarse and not b.is_build() and not nothing_left:
-		_glass_owed.append([mi, id, {} if real else damage, fades, real])
+		_glass_owed.append([mi, id, damage, fades])
 	# A shell and a far box would be the same building drawn twice -- unless
 	# the far box IS this shell's drawing. So would a shell and a tree's copy.
 	drawing.far_sync(b)
@@ -3300,17 +3252,13 @@ var rest_shells_made := 0
 ## A rest shell belongs on every building partly in bricks: its boxes are the
 ## only collision -- and its proxies the only thing the AI asks -- where the
 ## storeys are not laid. It is DRAWN only while the bricks are: behind a
-## stand-in shell (promoting, or its mesh given up at range) that shell draws
-## all of it (_rest_drawn) -- until that shell is drawn from the bricks
-## (_far_real), which are only the laid storeys: then it draws the rest again.
+## stand-in shell (promoting) that shell draws all of it (_rest_drawn).
 func _rest_wanted(b: BuildingRegistry.Building) -> bool:
 	return b != null and registry.is_partial(b) and not _toppling.has(b.id)
 
 
 func _rest_drawn(id: int) -> bool:
-	if not _shells.has(id):
-		return _brick_nodes.has(id)
-	return _far_real_done.get(id) == _shells[id]
+	return not _shells.has(id) and _brick_nodes.has(id)
 
 
 func _rest_sync(id: int) -> void:
@@ -3375,7 +3323,7 @@ func _make_rest(id: int, key: Array) -> void:
 	_nav_touch(id)
 	# Its windows, as any shell's (_build_owed_glass). A build has none.
 	if not b.is_build():
-		_glass_owed.append([mi, id, profile, false, false])
+		_glass_owed.append([mi, id, profile, false])
 
 
 func _free_rest(id: int) -> void:
@@ -3849,8 +3797,8 @@ func _topple(id: int) -> void:
 	# Bands still being uploaded are handed over, not waited for: the piece
 	# fills their slots once each upload is done (BrickIsland.owed_bands).
 	var owed_bands := {}
-	# Drawn by its coarse mesh alone, it has no bands to hand over: it comes
-	# down as a building past DEMESH_RANGE does, the piece drawing itself.
+	# Drawn by its coarse mesh alone, it has no bands to hand over: the piece
+	# draws itself.
 	var coarse_only: bool = drawing.coarse_only(id)
 	var carried_bands: Array = drawing.take_bands(id, owed_bands)
 	if coarse_only and mi != null:
@@ -4312,11 +4260,6 @@ func _queue_remesh(id: int) -> void:
 func _remesh(id: int, force_full: bool = false) -> void:
 	var b := registry.get_building(id)
 	if b == null or not b.is_materialised() or not _brick_nodes.has(id):
-		# Its mesh given up at range (_demesh): the shell standing in for it
-		# has to show the hit too, or it goes on drawing what was there.
-		# Rebuilt by _stream_detail, in its budget.
-		if b != null and b.is_materialised() and _shells.has(id):
-			_shell_stale[id] = true
 		return
 	# A build's other frames are rebuilt whole, every time. They are small, and
 	# a surface under 65,536 vertices cannot be index-patched anyway.
@@ -6176,11 +6119,10 @@ func _fire(radius: float) -> void:
 ## promote, stream, bands), and only the worst tick used to say its parts.
 const _SPIKE_PARTS := {"damage": ["dmg_promote", "dmg_rooms", "dmg_hit", "dmg_pieces",
 				"dmg_shell_pieces", "dmg_near", "dmg_support", "dmg_disable"],
-		"stream": ["st_trim", "st_merge", "st_rooms", "st_detail", "sd_far", "sd_panes", "sd_coarse", "pn_prep",
+		"stream": ["st_trim", "st_merge", "st_rooms", "st_detail", "sd_panes", "sd_coarse", "pn_prep",
 				"pn_copy",
-				"st_demesh", "st_remesh",
-				"st_reshell", "st_residency", "st_shells", "ss_shells", "ss_glass", "ss_proxies",
-				"ss_shadows", "sp_make", "sp_near", "ss_inst", "sh_profile", "sh_mesh", "sh_real", "sh_body"],
+				"st_residency", "st_shells", "ss_shells", "ss_glass", "ss_proxies",
+				"ss_shadows", "sp_make", "sp_near", "ss_inst", "sh_profile", "sh_mesh", "sh_body"],
 		"bands": ["bd_harvest", "bd_apply", "bd_done", "bd_cpp", "bd_upload", "bd_rest",
 				"bd_pieces"],
 		"disable": ["dis_collision", "dis_rooms"],
@@ -6817,7 +6759,6 @@ func _free_shell(id: int) -> void:
 	_shell_box.erase(id)
 	drawing.far_hide(id)
 	_shell_inst.erase(id)
-	_far_real_done.erase(id)
 	var fb := registry.get_building(id)
 	if fb != null:
 		_inst_sync(fb)
@@ -7190,109 +7131,17 @@ var _far: MultiMeshInstance3D = null
 var _shell_box := {}  ## building id -> its coarse shell is drawn by its far box
 
 
-## A building in bricks past DEMESH_RANGE that is damaged is drawn from its
-## bricks as they are: a coarse mesh of its own grid, as a far piece's stand-in
-## is (IslandManager._build_coarse), on a worker past COARSE_ASYNC_BLOCKS. Its
-## shell draws its damage as holes in each band, and a hole cannot say a floor
-## has come down: a collapsed wide building stood as a skeleton of floors and
-## columns from far off, rubble from close (user, 2026-10-16; Docs/Structures.md
-## 2.1). The shell node stays -- its collision, and every "has a shell" question
-## -- and draws the shell until the coarse mesh is ready. No windows: a coarse
-## mesh has its holes where the bricks are gone. Asked again whenever the shell
-## is (_shell_stale, after a hit).
-##
-## Since 2026-11-11 only with the far tier off (City.far_coarse_enabled) or a
-## caller demeshing by hand: with it on, _stream_detail no longer demeshes,
-## and a far building's coarse mesh is CityDrawing.tend_far_coarse's.
-var _far_real_owed := {}   ## building id -> the shell node waiting for its mesh
-var _far_real_done := {}   ## building id -> the shell node drawn from its bricks
-
-
-## A shell drawn from its bricks, hit again: asked again of the bricks, in
-## place -- its coarse mesh (on a worker past COARSE_ASYNC_BLOCKS) and its
-## panes, each drawing what it has until the new one lands. Made anew it was
-## a damage profile and a recipe shell (7.2 + 7.3 ms on a --big --shot,
-## 2026-10-23) for a drawing replaced a tick or two later. False when it is
-## not one, or no longer can be: made anew as before.
-func _refresh_real_shell(id: int) -> bool:
-	var mi = _shells.get(id)
-	if mi == null or not is_instance_valid(mi):
-		return false
-	if _far_real_done.get(id) != mi and _far_real_owed.get(id) != mi:
-		return false
-	var b := registry.get_building(id)
-	if b == null or not b.is_materialised() or b.is_build() or _toppling.has(id):
-		return false
-	if world.get_alive_block_count(b.chunk) == 0 and not registry.is_partial(b):
-		return false
-	drawing.far_real(id, mi)
-	_glass_owed.append([mi, id, {}, false, true])
-	return true
-
-
-## Drop the mesh of resident buildings nobody can see the bricks of, and put it
-## back for ones that have come close again. See DEMESH_RANGE.
+## The far drawing of buildings in bricks: their painted windows and their
+## coarse meshes (CityDrawing.tend_far_coarse; Docs/PerfCaps.md 5). The 110 m
+## step that gave a building's mesh up for a shell (_demesh, _far_real) went
+## 2026-11-14: with one coarse path it threw the coarse mesh away to make the
+## same one again.
 func _stream_detail() -> void:
 	var t_sd := Time.get_ticks_usec()
-	if not _far_real_owed.is_empty():
-		drawing.harvest_far_real()
-	t_sd = _part("sd_far", t_sd)
 	drawing.tend_brick_panes()
 	t_sd = _part("sd_panes", t_sd)
 	drawing.tend_far_coarse()
 	_part("sd_coarse", t_sd)
-	var here := camera.global_position
-	var t0 := Time.get_ticks_usec()
-	var until := TickClock.until(DEMESH_BUDGET_MS)
-	if TickClock.skip(&"demesh", until):
-		return
-	var done := 0
-	var now := Time.get_ticks_msec()
-	for id in _materialised:
-		if done >= DEMESH_PER_TICK:
-			break
-		if done > 0 and Time.get_ticks_usec() >= until:
-			break
-		var b := registry.get_building(id)
-		if b == null or not b.is_materialised() or _toppling.has(id):
-			continue
-		var dist: float = b.xform.origin.distance_to(here)
-		var meshed: bool = _brick_nodes.has(id)
-		if meshed:
-			# Hysteresis, so a building on the boundary does not strip and
-			# rebuild itself every few ticks.
-			if dist <= DEMESH_RANGE + DEMESH_HYSTERESIS:
-				continue
-			if now - b.materialised_at < DEMESH_AFTER_MS:
-				continue
-			# With the far tier on there is nothing left here for the drawing:
-			# past FAR_COARSE_RANGE a quiet building is drawn by its coarse
-			# mesh with its bands and bake given back (CityDrawing._free_bands),
-			# and one not quiet yet goes coarse once it is. Demeshing it threw
-			# that mesh away and made the same one again for a shell
-			# (far_real). Its node, panes, furniture and groups stay; the brick
-			# budget gives far quiet storeys back to shells as before.
-			if far_coarse_enabled:
-				continue
-			var t_one := Time.get_ticks_usec()
-			_demesh(id)
-			_part("st_demesh", t_one)
-			done += 1
-		elif dist < DEMESH_RANGE:
-			_shell_stale.erase(id)
-			var t_one := Time.get_ticks_usec()
-			_remesh_bricks(id)
-			_part("st_remesh", t_one)
-			done += 1
-		elif _shell_stale.has(id):
-			_shell_stale.erase(id)
-			var t_one := Time.get_ticks_usec()
-			if not _refresh_real_shell(id):
-				_free_shell(id)
-				_make_shell(id, true)
-			_part("st_reshell", t_one)
-			done += 1
-	_demesh_ms += float(Time.get_ticks_usec() - t0) / 1000.0
 
 
 var _panes_owed := {}     ## building id -> true: its bricks changed since its panes were made
@@ -7306,64 +7155,6 @@ static var far_coarse_enabled := true
 var _far_coarse_jobs := {}
 
 
-## Give back the bake and the mesh; keep the chunk and the collision.
-func _demesh(id: int) -> void:
-	var b := registry.get_building(id)
-	if b == null or not b.is_materialised():
-		return
-	if _brick_nodes.has(id):
-		var mi: MeshInstance3D = _brick_nodes[id]
-		_retirer.retire(mi.mesh)
-		# The band nodes are its children and go with it; their meshes are
-		# retired first so the renderer is not still reading them.
-		for node in drawing.take_bands(id):
-			if is_instance_valid(node):
-				_retirer.retire((node as MeshInstance3D).mesh)
-		# And the furniture, which is ALSO a child of this node. Freeing the
-		# parent takes the node with it but leaves the map pointing at a freed
-		# object, and the next attach reads that as "already have one".
-		FurnitureMesh.drop(b.chunk, _furniture)
-		_drop_groups(id)
-		mi.queue_free()
-		_brick_nodes.erase(id)
-	_brick_meshes.erase(id)
-	_brick_index_bytes.erase(id)
-	_brick_index_width.erase(id)
-	_pending_bricks.erase(id)
-	# The bake is the expensive part -- 3.4 MB a building against a few hundred
-	# kilobytes for its occupancy and blocks.
-	world.drop_chunk_bake(b.chunk)
-	# A shell still up here is the one kept through its bands (_bands_done),
-	# drawn from the building before it was made bricks -- given back before
-	# the bands were done, a building shot from afar went on drawing the wall
-	# it had been shot in whole, until something else hit it or the camera
-	# came back. Built again from the bricks as they are.
-	if _shells.has(id):
-		_free_shell(id)
-	_make_shell(id, true)
-	_demeshed += 1
-
-
-## The camera came back. Rebuild the brick mesh the way a promotion does, so the
-## shell stays up until the bake lands -- see _finish_promotions.
-func _remesh_bricks(id: int) -> void:
-	var b := registry.get_building(id)
-	if b == null or not b.is_materialised() or _brick_nodes.has(id):
-		return
-	if not drawing.instanced_bands:
-		world.bake_chunk_async(b.chunk)
-	var mi := MeshInstance3D.new()
-	mi.material_override = brick_material
-	mi.transform = b.xform
-	mi.physics_interpolation_mode = Node.PHYSICS_INTERPOLATION_MODE_OFF
-	BrickMaterials.set_grain_origin(mi, world, b.chunk)
-	add_child(mi)
-	_brick_nodes[id] = mi
-	if not _pending_bricks.has(id):
-		_pending_bricks.append(id)
-	_remeshed_back += 1
-
-
 ## Hand the bricks back for buildings nobody is near. Damage is kept.
 ## Bricks for what the player is aiming at, before the shot.
 ##
@@ -7374,8 +7165,6 @@ func _remesh_bricks(id: int) -> void:
 ## AIM_PROMOTE_RANGE, a shell goes to the front of the promotion queue, its
 ## bands first in line; and a building aimed at is not trimmed back to a shell
 ## for AIM_KEEP_MS (_trim_quiet), or it would go and come back with every look.
-## Past DEMESH_RANGE a building in bricks has no mesh anyway, so the range is
-## inside it.
 const AIM_PROMOTE_RANGE := 100.0
 const AIM_PROMOTE_TICKS := 6
 const AIM_KEEP_MS := 8000

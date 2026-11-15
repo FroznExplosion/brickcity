@@ -642,6 +642,18 @@ func _button_checks() -> void:
 	_ok("Layer moves the hand to the next layer", _ws.bench._role != role)
 	while _ws.bench._role != role:
 		t.act("layer")
+	# Section 21, stage 2: the flat views, as the asset workshop's (Alt 0-3, the bar's buttons).
+	var cam: Camera3D = t.view.cam()
+	var persp: Transform3D = cam.global_transform
+	t.act("view_top")
+	_ok("Top view: the building's plan, flat", t.view.flat_view == "top"
+			and cam.projection == Camera3D.PROJECTION_ORTHOGONAL and t.rail.action_buttons.has("view_top"))
+	var size: float = cam.size
+	t.view.zoom_flat(0.85)
+	_ok("it zooms", cam.size < size)
+	t.act("view_3d")
+	_ok("3D view: back as it was", t.view.flat_view == "" and cam.projection == Camera3D.PROJECTION_PERSPECTIVE
+			and cam.global_transform.is_equal_approx(persp))
 
 
 func _redo_checks() -> void:

@@ -368,6 +368,69 @@ func _added(world: BrickWorld, chunk: int, cand: PackedInt32Array) -> Array:
 	return sealed
 
 
+## The grid worked out again from the bricks as they are now -- for a hull that
+## has lost part of itself (a boat broken in two: Docs/Hulls.md 7.4), where no
+## list of freed cells says which air went with the part that left. The holes it
+## has (its breach cells) and its doors stand as walls to the fill, as its doors
+## do in `bake`: so a holed room is still a room with its holes, and what the
+## outside now reaches round them -- the hold of the part that left, the open end
+## of a stretch cut across -- is outside. Each room keeps the pressure it had
+## (a new one, 1). Call it INSTEAD of blocks_removed for the bricks that left.
+## A whole fill in script: 7 ms for a boat, 130-300 ms for a ship.
+func rebuild(world: BrickWorld, chunk: int) -> void:
+	var n := state.size()
+	var solid := world.get_solid_cells(chunk)
+	var old_p := PackedFloat32Array()
+	old_p.resize(n)
+	for i in n:
+		old_p[i] = pressure(comp[i]) if state[i] == INSIDE and comp[i] >= 0 else -1.0
+	var holes := {}
+	for ci in _parent.size():
+		if _parent[ci] == ci:
+			for i: int in _breach[ci]:
+				holes[i] = true
+	_parent.clear()
+	_cells.clear()
+	_breach.clear()
+	_air.clear()
+	_rate.clear()
+	comp.fill(-1)
+	const HOLE := 250
+	for i in n:
+		if solid[i] != 0:
+			state[i] = SOLID
+		elif door_of.has(i):
+			state[i] = DOOR
+		elif holes.has(i):
+			state[i] = HOLE
+		else:
+			state[i] = EMPTY
+	_fill_outside()
+	_label_inside()
+	# Each room's air: what its cells had.
+	var seen := {}
+	for i in n:
+		var ci := comp[i]
+		if ci >= 0 and not seen.has(ci):
+			seen[ci] = true
+			_air[ci] = (old_p[i] if old_p[i] >= 0.0 else 1.0) * _cells[ci]
+	# Its holes again: outside cells, each a hole of the rooms it is beside.
+	for i: int in holes:
+		if state[i] != HOLE:
+			continue
+		state[i] = OUTSIDE
+		for j in _neighbours(i):
+			if state[j] == INSIDE:
+				_breach[comp[j]][i] = true
+	for di in doors.size():
+		doors[di].outside = _door_touches_outside(di)
+		if bool(doors[di].open) and bool(doors[di].outside):
+			for ci in door_sides(di):
+				if int(ci) >= 0:
+					for i: int in doors[di].cells:
+						_breach[ci][i] = true
+
+
 # --- venting -------------------------------------------------------------------
 
 ## Compartment `ci`'s pressure, atmospheres (1 as built).
