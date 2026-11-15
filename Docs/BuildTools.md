@@ -1511,6 +1511,27 @@ clay, stamped, then Make bricks. Headless, editor closed, one other chat's headl
 * So stage 7 starts with Make bricks' cost (where its 20 s go), then the cell clay (C++,
   `sdf_form.cpp`, the junction and SCons), then sections over frames.
 
+**Stage 7a, Make bricks faster** (2026-11-15). `AssetWorkshop.convert_ms` times each step of
+`sculpt_convert`; `model_scale_probe` prints them. At 80 studs it was: emptying the clay that
+became bricks 12 s (a box carved a cell, `sync_cells`), fitting slopes 6 s (C++), packing 4 s,
+the rest under 2 s together. Two fixes, no change in what is laid (the same brick counts):
+
+* When every cell becomes bricks (none smooth, none outside the area), the clay is emptied in
+  one `SdfForm.clear()` -- undoable, as it records its blocks: 12 s -> 0.02 s. Otherwise the
+  carve as before.
+* `pack_cells` buckets the cells by layer once (it scanned every cell for each layer) and, not
+  random, stops at the first part that fits: 4.8 s -> 1.0 s at 80 studs, 12 s -> 2.1 s at 100.
+
+| Model | Make bricks before | after | Memory after (before) |
+|---|---|---|---|
+| 80 studs, 6,825 bricks | 29 s | 9-10 s | +340 MB (+550) |
+| 100 studs, 12,955 bricks | 40 s | 18 s | +580 MB (+920) |
+
+(Rough: other chats' runs going, RAM down to 209 MB free once. The first table's brick counts
+were short: that model hung below the floor; the probe now stands it on it.) What is left is
+**fitting slopes, about half** (C++ `SdfForm.fit_pieces`, ~0.7 ms a brick), then "by part and
+colour" (1-2 s, script). The next step needs the junction and SCons.
+
 ### Colours from a model (stage 8)
 
 Built (2026-11-02): glTF and FBX colours (material, texture, vertex) go into the clay; each brick
