@@ -45,7 +45,7 @@ const KEY_ROWS := [
 	["", "alt", "slow", "", ""],
 	["BUILD", "LMB", "place on the stud aimed at", "RMB", "delete"],
 	["", "hold E", "lock height, slide anywhere", "Z", "undo last"],
-	["", "1-9  wheel", "toolbar slot", "TAB", "all parts (creative)"],
+	["", "1-9  sh+whl", "toolbar slot", "TAB", "every brick"],
 	["", "MMB", "pick a placed brick", ", .", "colour of the slot"],
 	["", "R", "rotate a quarter turn", "F", "flip (studs down)"],
 	["", "T", "rotate the brick just placed", "hold LMB", "move: lay a run"],
@@ -175,6 +175,23 @@ var _floor: MeshInstance3D
 var _overlay: MeshInstance3D
 var _camera: Camera3D
 var _hud: Label
+## The status line at the bottom, both workshops (Docs/BuildTools.md section 21, the frame):
+## what the tool wants next, what is going on, the brick in hand, the cell. The owner says the
+## first part each frame (`show_status`). The readout (`_hud`) and the asset workshop's other
+## numbers show only with Stats (`stats_on`, the bar's View > Stats).
+var status_line: Label
+## The camera in use (the kit's WkCamera, Docs/BuildTools.md section 21 stage 2): the building
+## tools' or the asset workshop's own. Mouse buttons, the wheel and Y go to it first.
+var view: WkCamera = null
+## A plain RMB click the camera let go of goes to the owner's own input (the asset workshop's
+## tools take RMB there), not only the bench's.
+var replay_to_host := false
+var stats_on := false
+## The room the status line and the hotbar take at the bottom: the rail, its pop-out and the
+## panels end above it.
+const STATUS_ROOM := 164.0
+## What `_update_hud` found going on (placing a build, painting, a room found ...).
+var _state := ""
 ## The spaces tool (O): rooms, openings and points (WorkshopSpaces;
 ## Docs/Structures.md 3.2).
 var _spaces: WorkshopSpaces
@@ -848,6 +865,16 @@ func _build_hud() -> void:
 	_hud.position = Vector2(12, 40)
 	_style(_hud, Color(0.92, 0.94, 1.0))
 	layer.add_child(_hud)
+
+	status_line = Label.new()
+	status_line.name = "StatusLine"
+	status_line.add_theme_font_size_override("font_size", 14)
+	status_line.add_theme_color_override("font_color", Color(0.92, 0.94, 1.0))
+	status_line.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	status_line.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	status_line.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	status_line.visible = false   # an owner that shows it says so (`show_status`)
+	layer.add_child(status_line)
 
 	# The aim dot. While the mouse is captured the aim ray goes through the
 	# middle of the screen, and this says exactly where that is. Its colour is
@@ -1963,6 +1990,7 @@ func _update_hud() -> void:
 		(", %d fixture(s)" % recipe.fixture_count()) if recipe.fixture_count() > 0 else "",
 		gen,
 		("\nworst joint %.2f of capacity" % worst) if _overlay_on else ""]
+	_state = state
 	if _menu != null:
 		_menu.set_title("%s%s  —  %s" % [recipe.name, " *" if _dirty else "",
 				WorkshopMenu.KIND_LABELS.get(recipe.kind, recipe.kind)])
@@ -1983,7 +2011,7 @@ func bench_unhandled_input(e: InputEvent) -> void:
 	# camera's "down". Neither is a build key.
 	if e is InputEventKey and e.ctrl_pressed:
 		return
-	if _tools != null and _tools.view.input(e):
+	if view != null and view.input(e):
 		get_viewport().set_input_as_handled()
 		return
 	if _furnish != null and _furnish.input(e):
@@ -2355,6 +2383,78 @@ func _undo_base() -> bool:
 	return undo_stack.undo()
 
 
+## The status line this frame: `says` (what the tool wants next) first, then what is going on
+## (unless `bricks` is false: shaping clay), the brick in hand and the cell; between `left` and
+## `right` on the screen, over the hotbar.
+func show_status(says: String, left: float, right: float, bricks: bool = true) -> void:
+	if status_line == null:
+		return
+	if not status_line.has_theme_stylebox_override("normal") and wk_ctx != null:
+		status_line.add_theme_stylebox_override("normal", wk_ctx.panel_box())
+	var bits := PackedStringArray()
+	if says != "":
+		bits.append(says)
+	if bricks:
+		if _state != "" and not says.contains(_state):
+			bits.append(_state)
+		bits.append("%s, %s %s" % [_part().replace("_", " "), BrickWorld.get_material_colour_name(_mat, _colour),
+				BrickWorld.get_material_name(_mat)])
+		bits.append("cell %d, %d, %d" % [int(_cell.x), int(_cell.y), int(_cell.z)])
+	status_line.text = "   ·   ".join(bits)
+	status_line.visible = status_line.text != ""
+	# As wide as its text, in the middle; it wraps only when wider than the room.
+	var vp := get_viewport().get_visible_rect().size
+	status_line.autowrap_mode = TextServer.AUTOWRAP_OFF
+	status_line.custom_minimum_size.x = 0.0
+	if status_line.get_combined_minimum_size().x > right - left:
+		status_line.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		status_line.custom_minimum_size.x = right - left
+	status_line.size = Vector2.ZERO
+	var sz := status_line.get_combined_minimum_size()
+	status_line.position = Vector2(left + (right - left - sz.x) * 0.5, vp.y - 104.0 - sz.y - 6.0)
+
+
+## A bar button both workshops share. The owner answers its own first (the camera, Cancel,
+## the layer, the room guide).
+func bar_act(id: String) -> void:
+	match id:
+		"rotate": _yaw = (_yaw + 1) % 4
+		"flip": _flip = not _flip
+		"turn_last": _rotate_last()
+		"lock": plane_locked = not plane_locked
+		"snap": _snap_on = not _snap_on
+		"mirror": set_mirror(not mirror_on)
+		"mirror_axis":
+			mirror_axis = 0 if mirror_axis == 2 else 2
+			set_mirror(mirror_on)
+		"mirror_here":
+			mirror_here()
+			if not mirror_on:
+				set_mirror(true)
+		"colour_back": _hotbar.set_colour(_colour - 1)
+		"colour_on": _hotbar.set_colour(_colour + 1)
+		"parts": _hotbar.toggle_browser()
+		"undo": _undo()
+		"redo": redo_last()
+		"grid":
+			_grid_on = not _grid_on
+			_grid.visible = _grid_on
+		"stress":
+			_overlay_on = not _overlay_on
+			_stress_dirty = true
+			_refresh_overlay()
+		"keys":
+			_keys_on = not _keys_on
+			_keys_panel.visible = _keys_on
+		"stats": stats_on = not stats_on
+
+
+## Which of the bar's toggles are on (the owner adds its own: the camera).
+func bar_toggles() -> Dictionary:
+	return {"lock": plane_locked, "snap": _snap_on, "mirror": mirror_on, "grid": _grid_on,
+			"stress": _overlay_on, "keys": _keys_on, "stats": stats_on}
+
+
 ## Shift Z (and the rail's Redo): do the last undone edit again.
 func redo_last() -> bool:
 	return undo_stack.redo() != null
@@ -2673,6 +2773,8 @@ func wk_camera_busy() -> bool:
 
 ## RMB looks round unless a tool is dragging with it, a build is in hand or furniture is open.
 func wk_camera_rmb_free() -> bool:
+	if host != null and host.has_method("wk_rmb_busy") and bool(host.call("wk_rmb_busy")):
+		return false
 	return not ((_tools != null and _tools.dragging()) or _stamp != null
 			or (_furnish != null and _furnish.is_open()))
 
@@ -2687,8 +2789,9 @@ func wk_camera_click(button: int) -> void:
 
 
 func wk_camera_replay(events: Array) -> void:
+	var to: Object = host if replay_to_host and host != null else self
 	for e in events:
-		_unhandled_input(e)
+		to.call("_unhandled_input", e)
 
 
 func wk_camera_wheel_shift(step: int) -> void:
@@ -3616,6 +3719,7 @@ func _on_menu(what: String, arg: Variant) -> void:
 			select_group_ray(ray[0], ray[1])
 		"move_group": move_group()
 		"undo": _undo()
+		"redo": redo_last()
 		"copy_group": copy_group()
 		"delete_group": delete_group()
 
@@ -4368,7 +4472,7 @@ func _handle_under() -> String:
 func bench_input(e: InputEvent) -> void:
 	if _run_on and e is InputEventMouseMotion:
 		_run_moved += (e as InputEventMouseMotion).relative.length()
-	if _tools != null and _tools.view.input_motion(e):
+	if view != null and view.input_motion(e):
 		get_viewport().set_input_as_handled()
 		return
 	if not (e is InputEventMouseButton and e.button_index == MOUSE_BUTTON_LEFT):

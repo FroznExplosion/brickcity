@@ -166,13 +166,13 @@ var _far_dmg_tex: ImageTexture = null
 
 var _far_dmg_dirty := false
 
-var far_real_built := 0
 
 ## A building drawn in bricks has painted windows too, past the range its rooms
 ## are drawn in (Docs/DestructionLod.md 3.2): the shell's panes, each only
 ## where its window still stands in the bricks (`_cell_standing`, as a
-## demeshed one's, Structures.md 4.2), hidden inside InteriorGroups'
-## range by the shader's `near_hide` -- the rooms dither in as they dither out.
+## demeshed one's, Structures.md 4.2). A room's panes fade out by time once its
+## furniture is drawn, and back in before it is given back (RoomStreaming
+## writes the fades onto this node; each pane carries its room).
 ## Before, a building in bricks showed its rooms empty past INTERIOR_RANGE and
 ## a shot from mid range changed painted windows into drawn furniture.
 ## Made again once its bricks have changed and it is quiet (_interior_unsure),
@@ -215,37 +215,28 @@ var far_coarse_built := 0
 var far_coarse_remade := 0   ## made again after a hit, while coarse
 
 
-## EXPERIMENT (the 2026-11-11 audit; `-- --inst-bands`): a building's bands
-## drawn as a box a brick -- one MultiMesh a band, a unit box scaled to each
-## brick (BrickWorld.get_instance_buffers; shaders/brick_boxed.gdshaderinc) --
-## instead of baked faces. No bake, no band job, no upload: a tower of 3,293
-## bricks is 0.26 MB of instances against 6.2 MB of faces (and 30 ms of bake),
-## and its bands are up the tick it is made bricks, so nothing waits on them.
-## A hit writes the bands it reached again, the same length (a dead brick is
-## a zero matrix). Not done here: the near tier's chamfered mesh (it is built
-## from the bake; studs are still drawn) and the sway in the wind. A part that
-## is not a box (a slope, a round brick, a stair) is drawn by its own faces,
-## on the band's node, made with the band's buffer.
-var instanced_bands := false
-var inst_bands := 0          ## bands filled, first time or again
-var inst_refreshes := 0      ## ... of which after a hit
-var inst_ms := 0.0           ## all told, and the worst one
+## A building's bands are drawn as a box a brick (BrickBoxes; Docs/
+## HandoffPerf.md 8) -- one MultiMesh a band, a unit box scaled to each brick
+## -- instead of baked faces. No bake, no band job, no upload: a tower of
+## 3,293 bricks is 0.25 MB of instances against 6.2 MB of faces (and 30 ms of
+## bake), and its bands are up the tick it is made bricks, so nothing waits
+## on them. A hit writes the bands it reached again, the same length (a dead
+## brick is a zero matrix). Up close the same instances are drawn with a
+## bevelled box (BrickNear.bevel_box_mesh). A part that is not a box (a
+## slope, a round brick, a stair) is drawn by its own faces, on the band's
+## node. Not done: the sway in the wind.
+## `-- --baked-bands` for the bands as they were (baked faces, patched by
+## index, chamfered from the bake), for an A/B; also what a library without
+## the buffers falls back to.
+var instanced_bands := true
+var inst_refreshes := 0      ## band fills after a hit
+var inst_ms := 0.0           ## filling bands, all told, and the worst one
 var inst_worst := 0.0
-var inst_bricks := 0         ## instances written, all told
-var inst_authored := 0       ## parts that are not boxes, drawn by their faces, summed over fills
-var inst_special_verts := 0  ## ... and those faces' vertices
 ## building id -> [physics frame, its sections' buffers]: made at the first
 ## band a tick builds, from the bricks as they are then, never carried to a
 ## later tick (a kill between two ticks' bands was drawn: --lodbreak's ghost
 ## walls, 28 rays of 736).
 var _inst_pending := {}
-var _inst_alive := {}        ## building id -> each section's stamp (which bricks), as drawn
-## building id -> each section's stamp of its parts that are not boxes, as
-## their faces were last made: a band's are made again only when one of them
-## goes (BrickWorld.get_instance_buffers, "special_same").
-var _inst_special := {}
-var inst_special_kept := 0   ## fills that kept the faces they had
-static var _unit_box_mesh: ArrayMesh = null
 
 
 func _init(c: Node3D) -> void:
@@ -253,62 +244,13 @@ func _init(c: Node3D) -> void:
 	name = "Drawing"
 	# Only with a library that has the buffers (main's lags its scripts until
 	# it is rebuilt after a C++ merge).
-	instanced_bands = "--inst-bands" in OS.get_cmdline_user_args() \
+	instanced_bands = not ("--baked-bands" in OS.get_cmdline_user_args()) \
 			and ClassDB.class_has_method(&"BrickWorld", &"get_instance_buffers")
 
 
-## A unit box, centred, marked for the brick shader by its UV2 (0, -1): the
-## shader works the face rectangle out from the instance's scale
-## (brick_boxed.gdshaderinc). White, for the instance's colour to tint.
-static func unit_box() -> ArrayMesh:
-	if _unit_box_mesh != null:
-		return _unit_box_mesh
-	var both := unit_box_points()
-	var verts: PackedVector3Array = both[0]
-	var norms: PackedVector3Array = both[1]
-	var uv2s := PackedVector2Array()
-	var cols := PackedColorArray()
-	for k in verts.size():
-		uv2s.append(Vector2(0.0, -1.0))
-		cols.append(Color.WHITE)
-	var arrays := []
-	arrays.resize(Mesh.ARRAY_MAX)
-	arrays[Mesh.ARRAY_VERTEX] = verts
-	arrays[Mesh.ARRAY_NORMAL] = norms
-	arrays[Mesh.ARRAY_TEX_UV2] = uv2s
-	arrays[Mesh.ARRAY_COLOR] = cols
-	_unit_box_mesh = ArrayMesh.new()
-	_unit_box_mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
-	return _unit_box_mesh
-
-
-## The unit box's 36 corners and their normals, in drawing order (a gate lays
-## the same triangles under its rays: tools/passes/city_passes.gd, _boxes_tri_mesh).
-static func unit_box_points() -> Array:
-	var verts := PackedVector3Array()
-	var norms := PackedVector3Array()
-	var faces := [
-		[Vector3.RIGHT, Vector3.BACK, Vector3.UP], [Vector3.LEFT, Vector3.FORWARD, Vector3.UP],
-		[Vector3.UP, Vector3.RIGHT, Vector3.BACK], [Vector3.DOWN, Vector3.RIGHT, Vector3.FORWARD],
-		[Vector3.BACK, Vector3.LEFT, Vector3.UP], [Vector3.FORWARD, Vector3.RIGHT, Vector3.UP],
-	]
-	for f in faces:
-		var n: Vector3 = f[0]
-		var u: Vector3 = f[1]
-		var v: Vector3 = f[2]
-		var pts := [n * 0.5 - u * 0.5 - v * 0.5, n * 0.5 + u * 0.5 - v * 0.5,
-				n * 0.5 + u * 0.5 + v * 0.5, n * 0.5 - u * 0.5 + v * 0.5]
-		# Clockwise seen from outside (Godot's front), as IslandStandins._box.
-		var order := [0, 2, 1, 0, 3, 2] if u.cross(v).dot(n) > 0.0 else [0, 1, 2, 0, 2, 3]
-		for k in order:
-			verts.append(pts[k])
-			norms.append(n)
-	return [verts, norms]
-
-
-## A band's boxes (instanced_bands), or null.
-static func boxes_of(band: Node) -> MultiMeshInstance3D:
-	return band.get_node_or_null(^"Boxes") as MultiMeshInstance3D
+## A band's boxes, or null (BrickBoxes.of; kept for the passes).
+static func boxes_of(band: Variant) -> MultiMeshInstance3D:
+	return BrickBoxes.of(band)
 
 
 ## Fill one band from its section's buffer (BrickWorld.get_instance_buffers).
@@ -320,10 +262,6 @@ func _apply_boxes(id: int, at: int, chunk: int, entry: Dictionary) -> void:
 		return
 	var t0 := Time.get_ticks_usec()
 	var alive := int(entry.alive)
-	var stamps: PackedInt64Array = _inst_alive.get(id, PackedInt64Array())
-	if at < stamps.size():
-		stamps[at] = int(entry.stamp)
-		_inst_alive[id] = stamps
 	var node: MeshInstance3D = nodes[at]
 	var have := node != null and is_instance_valid(node)
 	if alive == 0 and not have:
@@ -333,101 +271,41 @@ func _apply_boxes(id: int, at: int, chunk: int, entry: Dictionary) -> void:
 		nodes[at] = node
 	if node.visible == hidden:
 		node.visible = not hidden
-	# The parts that are not boxes (slopes, round bricks, stairs): their own
-	# faces, on the band's node -- kept while none of them has gone.
-	var specials: PackedInt64Array = _inst_special.get(id, PackedInt64Array())
-	if bool(entry.get("special_same", false)) and have and node.mesh != null:
-		inst_special_kept += 1
-	else:
-		if node.mesh != null:
-			city._retirer.retire(node.mesh)
-			node.mesh = null
-		var special: Array = entry.get("special", [])
-		if not special.is_empty():
-			var sm := ArrayMesh.new()
-			sm.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, special)
-			node.mesh = sm
-			inst_special_verts += (special[Mesh.ARRAY_VERTEX] as PackedVector3Array).size()
-		if at < specials.size():
-			# Nothing made though the stamp matched (a node since replaced):
-			# asked again next time.
-			specials[at] = int(entry.get("special_stamp", 0)) \
-					if not bool(entry.get("special_same", false)) else 0
-			_inst_special[id] = specials
-	var mmi := boxes_of(node)
-	if mmi == null:
-		mmi = MultiMeshInstance3D.new()
-		mmi.name = "Boxes"
-		var made := MultiMesh.new()
-		made.transform_format = MultiMesh.TRANSFORM_3D
-		made.use_colors = true
-		made.use_custom_data = true
-		made.mesh = unit_box()
-		mmi.multimesh = made
-		mmi.material_override = city.brick_material
-		mmi.physics_interpolation_mode = Node.PHYSICS_INTERPOLATION_MODE_OFF
-		mmi.cast_shadow = node.cast_shadow
-		for param in [&"weather_snowcap", &"grain_origin", &"grid_light"]:
-			var v: Variant = InstanceParams.of(node, param)
-			if v != null:
-				InstanceParams.put(mmi, param, v)
-		node.add_child(mmi)
-	var buf: PackedFloat32Array = entry.buffer
-	@warning_ignore("integer_division")
-	var n := buf.size() / 20
-	var mm := mmi.multimesh
-	if mm.instance_count != n:
-		mm.instance_count = n
-	if n > 0:
-		mm.buffer = buf
-	var box: AABB = entry.aabb
-	mm.custom_aabb = box
-	mmi.set_meta(&"box", box)
-	mmi.visible = alive > 0
+	BrickBoxes.fill(node, entry, city.brick_material, city._retirer.retire)
 	(city._brick_band_meshes[id] as Array)[at] = null
 	(city._brick_band_bytes[id] as Array)[at] = 0
 	if alive > 0:
-		city.brick_near.track_box(node, chunk, at, box)
+		city.brick_near.track_box(node, chunk, at, entry.aabb, alive)
 	else:
 		city.brick_near.untrack(node)
-	inst_bands += 1
-	inst_bricks += n
-	inst_authored += int(entry.authored)
 	var ms := float(Time.get_ticks_usec() - t0) / 1000.0
 	inst_ms += ms
 	inst_worst = maxf(inst_worst, ms)
 
 
-## A building's bricks changed (CityScene._remesh): the bands whose stamp
-## moved (which bricks are drawn in them) are written again, one walk of its
-## blocks for all of them.
+## A building's bricks changed (CityScene._remesh): the bands whose bricks are
+## not the ones they were filled from are written again, one walk of its
+## blocks for all of them (BrickBoxes.changed).
 func refresh_boxes(id: int, chunk: int) -> void:
-	var counts: PackedInt64Array = city.world.get_section_stamps(chunk)
-	var was: PackedInt64Array = _inst_alive.get(id, PackedInt64Array())
 	var nodes: Array = city._brick_bands.get(id, [])
-	if counts.size() != was.size() or counts.size() != nodes.size():
+	if city.world.get_chunk_sections(chunk) != nodes.size():
 		rebuild_bands(id, chunk)
 		return
-	var changed := PackedInt32Array()
-	for s in counts.size():
-		if counts[s] != was[s]:
-			changed.append(s)
-	if changed.is_empty():
-		return
-	var specials: PackedInt64Array = _inst_special.get(id, PackedInt64Array())
-	var held := PackedInt64Array()
-	for s in changed:
-		held.append(specials[s] if s < specials.size() else 0)
-	for entry in city.world.get_instance_buffers(chunk, changed, held):
-		_apply_boxes(id, int((entry as Dictionary).section), chunk, entry)
+	var touched := PackedInt32Array()
+	for entry in BrickBoxes.changed(city.world, chunk, nodes):
+		var at := int((entry as Dictionary).section)
+		_apply_boxes(id, at, chunk, entry)
+		touched.append(at)
 		inst_refreshes += 1
-	city.brick_near.damaged(chunk, changed)
+	if not touched.is_empty():
+		city.brick_near.damaged(chunk, touched)
 
 
 func inst_line() -> String:
-	return "bands as boxes (--inst-bands %s): %d band fill(s), %d after a hit, %d instances written, %.1f ms in all, worst %.2f; %d part(s) that are not boxes drawn by their faces (%dk vertices made, %d fill(s) kept what they had)" % [
-			"on" if instanced_bands else "off", inst_bands, inst_refreshes, inst_bricks, inst_ms,
-			inst_worst, inst_authored, inst_special_verts / 1000, inst_special_kept]
+	return "bands as boxes (%s): %d band fill(s), %d after a hit, %d instances written, %.1f ms in the city's, worst %.2f; %d part(s) that are not boxes drawn by their faces (%dk vertices made, %d fill(s) kept what they had)" % [
+			"on" if instanced_bands else "off: --baked-bands", BrickBoxes.fills, inst_refreshes,
+			BrickBoxes.instances, inst_ms, inst_worst, BrickBoxes.specials,
+			BrickBoxes.special_verts / 1000, BrickBoxes.special_kept]
 
 
 ## A new node for a band's slot, a child of the building's brick node.
@@ -526,19 +404,13 @@ func _submit_glass(owed: Array) -> void:
 	var lattice := RoomManifest.lattice_for(fx, fz, courses)
 	var damage: Dictionary = (owed[2] as Dictionary).duplicate(true)
 	var program: Dictionary = (b.recipe.get("program", {}) as Dictionary).duplicate(true)
-	# A window still in bricks asks the bricks which panes stand: a copy of
-	# them, made here (it was the whole build here, 3-8 ms a tick, PerfCaps.md 4).
-	var standing := Callable()
-	if owed[4] and b.is_materialised():
-		standing = BuildingShell.standing_copy(city.world, b.chunk,
-				BuildingShell.window_rows(courses, layout, lattice))
 	# The mesh is made there too: handed to the renderer here, it waited for
 	# whatever else was being uploaded.
 	var holder := [null]
 	var on_worker := City.worker_meshes
 	var task := WorkerThreadPool.add_task(func() -> void:
 		var arrays := BuildingShell.window_arrays(fx, fz, courses, room_seed, layout,
-				lattice, damage, program, standing)
+				lattice, damage, program)
 		if not arrays.is_empty():
 			holder[0] = BuildingShell.window_mesh_of(arrays) if on_worker else (arrays as Variant)
 			UploadLedger.note("glass", UploadLedger.verts_of(arrays)),
@@ -550,8 +422,7 @@ func _submit_glass(owed: Array) -> void:
 func _hang_glass(mi: MeshInstance3D, panes: Mesh, fades: bool) -> void:
 	# Read once, not per pass of the loop below: the city never swaps these.
 	var h_retirer := city._retirer
-	# One set a shell: a shell drawn from its bricks has its panes asked again
-	# after a hit (_refresh_real_shell), and the old set goes as the new hangs.
+	# One set a shell: the old set goes as the new hangs.
 	for c in mi.get_children():
 		if c is MeshInstance3D and (c as MeshInstance3D).material_override == BuildingShell.window_material():
 			h_retirer.retire((c as MeshInstance3D).mesh)
@@ -606,11 +477,6 @@ func rebuild_bands(id: int, chunk: int) -> void:
 	city._brick_index_bytes[id] = 0
 	if instanced_bands:
 		_inst_pending.erase(id)
-		var stamps := PackedInt64Array()
-		stamps.resize(n)
-		stamps.fill(0)
-		_inst_alive[id] = stamps
-		_inst_special[id] = stamps.duplicate()
 
 
 ## Build one band of a building's mesh. Returns false when there are none left.
@@ -635,11 +501,12 @@ func _build_one_band(id: int) -> bool:
 		var held: Array = _inst_pending.get(id, [])
 		if held.is_empty() or int(held[0]) != now_tick:
 			held = [now_tick, city.world.get_instance_buffers(b.chunk, PackedInt32Array(),
-					_inst_special.get(id, PackedInt64Array()))]
+					BrickBoxes.special_none(nodes.size()))]
 			_inst_pending[id] = held
 		var pend: Array = held[1]
 		if at < pend.size():
-			_apply_boxes(id, at, b.chunk, pend[at])
+			_apply_boxes(id, at, b.chunk,
+					BrickBoxes.with_special(city.world, b.chunk, nodes[at], pend[at]))
 		_band_builds += 1
 		city._band_cursor[id] = pos + 1
 		if pos + 1 >= nodes.size():
@@ -858,7 +725,19 @@ func advance_bands() -> void:
 				break
 		var at_before := int(h_band_cursor.get(id, -1))
 		var verts_before := _band_verts_now
-		_build_one_band(id)
+		if instanced_bands:
+			# A box a brick: a band is a fraction of a millisecond, so the unit
+			# of work is the BUILDING -- all its bands in one go, up to the
+			# bands' own budget, whatever the tick's clock has left. One band
+			# a tick, which is what a spent clock allows, left a building
+			# coming back from its coarse mesh 11 ticks without its bricks
+			# (collapse_probe, 2026-11-12).
+			var own_until := Time.get_ticks_usec() + int(BAND_BUDGET_MS * 1000.0)
+			while _build_one_band(id) and Time.get_ticks_usec() < own_until:
+				pass
+			built += 1
+		else:
+			_build_one_band(id)
 		# An empty band is free, and a building laid a storey at a time is
 		# mostly empty bands: only a band with something in it -- or a wait on
 		# the bake -- counts against BANDS_PER_TICK.
@@ -908,8 +787,6 @@ func take_bands(id: int, owed: Variant = null) -> Array:
 			nodes[at] = null
 	_band_pass.erase(id)
 	_inst_pending.erase(id)
-	_inst_alive.erase(id)
-	_inst_special.erase(id)
 	city._band_cursor.erase(id)
 	city._band_redo.erase(id)
 	city._brick_bands.erase(id)
@@ -1374,47 +1251,6 @@ static func _far_box_mesh() -> ArrayMesh:
 	return mesh
 
 
-func far_real(id: int, mi: MeshInstance3D) -> void:
-	var b := city.registry.get_building(id)
-	if city.world.get_alive_block_count(b.chunk) < IslandManager.COARSE_ASYNC_BLOCKS:
-		_far_real_apply(id, mi, city.world.build_chunk_coarse_mesh(b.chunk))
-		return
-	if not city.world.coarse_pending(b.chunk):
-		city.world.coarse_chunk_async(b.chunk)
-	city._far_real_owed[id] = mi
-
-
-func harvest_far_real() -> void:
-	# Read once, not per pass of the loop below: the city never swaps these.
-	var h_far_real_owed := city._far_real_owed
-	var h_shells := city._shells
-	var h_registry := city.registry
-	var h_world := city.world
-	for id in h_far_real_owed.keys():
-		var mi = h_far_real_owed[id]
-		var b := h_registry.get_building(id)
-		if not is_instance_valid(mi) or h_shells.get(id) != mi or b == null or not b.is_materialised():
-			h_far_real_owed.erase(id)
-			continue
-		if h_world.coarse_ready(b.chunk):
-			h_far_real_owed.erase(id)
-			_far_real_apply(id, mi, h_world.take_coarse_mesh(b.chunk))
-		elif not h_world.coarse_pending(b.chunk):
-			# Settled by an edit (BrickWorld.settle_coarse_job): asked again.
-			h_world.coarse_chunk_async(b.chunk)
-
-
-func _far_real_apply(id: int, mi: MeshInstance3D, arrays: Array) -> void:
-	var m := ArrayMesh.new()
-	if not arrays.is_empty() and IslandManager.mesh_arrays_ok(arrays, "far building"):
-		m.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
-	if mi.mesh != null:
-		city._retirer.retire(mi.mesh)
-	mi.mesh = m
-	city._far_real_done[id] = mi
-	far_real_built += 1
-
-
 func tend_brick_panes() -> void:
 	# Read once, not per pass of the loop below: the city never swaps these.
 	var h_panes_owed := city._panes_owed
@@ -1422,6 +1258,8 @@ func tend_brick_panes() -> void:
 	var h_registry := city.registry
 	if not _harvest_panes():
 		return
+	if not city._pane_job.is_empty():
+		return   # done, but the tick's clock was out: hung next pass
 	var here := city.camera.global_position
 	var best := -1
 	var best_d := INF
@@ -1622,8 +1460,6 @@ func _free_bands(id: int) -> void:
 			(band as Node).queue_free()
 	_band_pass.erase(id)
 	_inst_pending.erase(id)
-	_inst_alive.erase(id)
-	_inst_special.erase(id)
 	city._band_cursor.erase(id)
 	city._band_redo.erase(id)
 	city._brick_bands.erase(id)
@@ -1662,12 +1498,20 @@ func far_coarse_drop(id: int) -> void:
 		(node as Node).queue_free()
 
 
+## What hanging a building's panes may wait for on the tick's clock.
+const PANES_MS := 1.0
+
+
 ## Hang the panes a worker has finished. False while one is still being made.
 func _harvest_panes() -> bool:
 	if city._pane_job.is_empty():
 		return true
 	if not WorkerThreadPool.is_task_completed(int(city._pane_job[0])):
 		return false
+	# Hanging them hands a mesh to the renderer: on the tick's shared clock
+	# (TickClock), and a later pass if it is out.
+	if TickClock.skip(&"panes", TickClock.until(PANES_MS)):
+		return true
 	WorkerThreadPool.wait_for_task_completion(int(city._pane_job[0]))
 	var id: int = city._pane_job[2]
 	var made = (city._pane_job[1] as Array)[0]
@@ -1687,7 +1531,6 @@ func _harvest_panes() -> bool:
 		glass.mesh = panes
 		glass.material_override = BuildingShell.window_material()
 		glass.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-		glass.set_instance_shader_parameter("near_hide", InteriorGroups.INTERIOR_RANGE)
 		(parent as Node3D).add_child(glass)
 		_brick_panes[id] = glass
 	return true

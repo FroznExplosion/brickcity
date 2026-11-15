@@ -182,7 +182,7 @@ then the dearest one with each kind of node hidden in turn, then the far tier of
 The dearest view (down a street of twelve buildings in bricks) drew in 20.5-21.7 ms on the GPU:
 653 draws, 4.6M triangles. The buildings in bricks were 16.7 ms of it; the sun's shadow 2.6-2.9,
 the far city's MultiMesh and the shadow proxies about 1 each (1 ms is the noise of the method).
-Their bands are every brick's faces, out to DEMESH_RANGE (110 m).
+Their bands were every brick's faces, out to the 110 m demesh step (gone 2026-11-14).
 
 **The far tier** (`CityScene._tend_far_coarse`): a building in bricks past `FAR_COARSE_RANGE`
 (60 m, past where the print's shaded bevel has faded) that has been quiet for 3 s is drawn as
@@ -199,10 +199,10 @@ bands are built as a promotion's are (`rebuild_bands`), hidden, the coarse mesh 
 they are all in (`_bands_done`). A hit in those few ticks shows when they are in: the
 collapse probe counts that apart (`handover_stats.coarse_*`, 4 ticks worst) from its "no
 double". A coarse building that topples has no bands to hand its piece: it comes down as a
-demeshed one does, the piece drawing itself. Past DEMESH_RANGE (110 m) that step no longer
-demeshes a building in bricks while the far tier is on: there is nothing left for it to do for the
-drawing, and demeshing threw the coarse mesh away to make the same one again for a shell
-(`far_real`, now only behind the switch). A building with nothing alive is not asked for a
+piece of its own does, drawing itself. The 110 m demesh step (`_demesh`, `far_real`: a
+building in bricks gave its mesh up for a shell drawn from a coarse mesh of its bricks) is gone
+(2026-11-14): with the far tier it threw the coarse mesh away to make the same one again.
+`City.far_coarse_enabled` off now leaves the bands drawing out to the trim. A building with nothing alive is not asked for a
 coarse mesh (it came back empty and was asked again every pass: 370 asks in one probe run).
 
 | Dearest view | GPU | Draws | Triangles |
@@ -357,5 +357,5 @@ the user's call):
   triangles, so it grows with what is drawn.
 * Clouds and the far city cost nothing measurable; leave them.
 
-Left: the street's 3.7 ms of buildings in bricks is the bands' every face out to DEMESH_RANGE;
+Left: the street's 3.7 ms of buildings in bricks is the bands' every face out to 110 m (then);
 the far tier (5), one coarse path for a far building, is what shrinks it.

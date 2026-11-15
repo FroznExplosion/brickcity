@@ -82,6 +82,13 @@ func cover(isl: BrickIsland) -> void:
 		_consider(isl)
 
 
+## Whether a piece is drawn by its boxes now (for a gate: such a piece is
+## "blind" -- it has no mesh yet -- and is seen all the same).
+func covers(isl: BrickIsland) -> bool:
+	var had: Array = _by_isl.get(isl, [])
+	return not had.is_empty() and is_instance_valid(had[0])
+
+
 func _consider(isl: BrickIsland) -> void:
 	if not is_instance_valid(isl) or not isl.is_valid() or isl.mesh == null \
 			or not is_instance_valid(isl.mesh):
@@ -119,6 +126,7 @@ func _build(isl: BrickIsland, alive: int) -> void:
 		var mmi := MultiMeshInstance3D.new()
 		mmi.multimesh = mm
 		mmi.material_override = isl.mesh.material_override
+		host.unpower(isl, mmi)
 		holder.add_child(mmi)
 	isl.mesh.add_child(holder)
 	_by_isl[isl] = [holder, alive]

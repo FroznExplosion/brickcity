@@ -1119,7 +1119,8 @@ func _round8() -> void:
 
 func _round9() -> void:
 	# Nothing to remember: every key's action is in a menu, its key beside it (the tools
-	# are on the rail).
+	# are on the rail). Y is Look since the keys were made one (BuildTools 21 stage 2); the
+	# part, smooth, point, section and outline jobs of Shift Y, N, J, O, P are buttons now.
 	var texts := []
 	var items := {}
 	for c in _ws.bench._menu.bar().menus():
@@ -1130,7 +1131,7 @@ func _round9() -> void:
 				items[pm.get_item_text(i)] = pm.get_item_id(i)
 	var missing := []
 	for key in ["Alt 0", "Alt 1", "Alt 2", "Alt 3", "Alt M", "Alt S", "Alt Shift S", "Alt F", "Alt E", "Alt H",
-			"Alt P", "Alt X", "Alt B", "PgUp", "PgDn", "Y", "Shift Y", "J", "O", "P", "N", "F2", "F3", "F4",
+			"Alt P", "Alt X", "Alt B", "PgUp", "PgDn", "Y", "F2", "F3", "F4",
 			"F10", "F12", "Home", "End", "Shift Z", "R", "F", "T", "B", "G", ".", ","]:
 		var found := false
 		for t in texts:
@@ -2510,13 +2511,20 @@ func _slicer_panel() -> void:
 	var moved := _form_box(_ws._placed.node).position.x - form_box.position.x
 	_ok("twenty quick steps: stamped once when settled, one undo", unstamped and absf(moved - 5.0 * STUD) < STUD * 0.3
 			and _ws.bench.undo_stack.size() == groups + 1, "%.2f studs, %d undos" % [moved / STUD, _ws.bench.undo_stack.size() - groups])
-	# Tab frees and takes the mouse, the pick kept; Escape with the mouse looking only frees it.
+	# Y (Tab's job until the keys were made one, BuildTools 21 stage 2) frees and takes the
+	# mouse, the pick kept; Tab is every brick; Escape with the mouse looking only frees it.
+	var was: bool = bool(_ws.bench._camera.get("_captured"))
+	_ws.toggle_look()
+	_ok("Y: cursor and look swapped, the pick kept", bool(_ws.bench._camera.get("_captured")) != was
+			and not _ws._placed.is_empty())
 	var tab := InputEventKey.new()
 	tab.keycode = KEY_TAB
 	tab.pressed = true
-	var was: bool = bool(_ws.bench._camera.get("_captured"))
-	_ok("Tab: cursor and look swapped, the pick kept", _ws._tab_key(tab) and bool(_ws.bench._camera.get("_captured")) != was
+	var browsing: bool = _ws.bench._hotbar.is_browsing()
+	_ok("Tab: every brick, the pick kept", _ws._tab_key(tab) and _ws.bench._hotbar.is_browsing() != browsing
 			and not _ws._placed.is_empty())
+	if _ws.bench._hotbar.is_browsing() != browsing:
+		_ws.bench._hotbar.toggle_browser()
 	_ws.bench._camera.call("_set_captured", true)
 	var esc := InputEventKey.new()
 	esc.keycode = KEY_ESCAPE

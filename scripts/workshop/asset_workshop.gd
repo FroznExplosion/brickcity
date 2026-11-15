@@ -110,8 +110,8 @@ const KIT_TOOLS := {"sketch": &"sketch", "wand": &"fill", "move": &"move", "shap
 ## Points clicked while calibrating the selected photo; calibrating while not null.
 var calibrating = null
 
-## The flat views are the editor kit's camera's (WkCamera.flat, zoom_at); the orbit and FPS
-## modes are the building workshop's only. `_ortho_size` is its orthographic size.
+## The camera: the editor kit's (WkCamera), as the building workshop's -- orbit, fly (Y) and
+## the flat views. `_ortho_size` is its orthographic size.
 var cam_ctl := WkCamera.new()
 var _ortho_size: float:
 	get: return cam_ctl.ortho_size
@@ -341,7 +341,15 @@ func _ready() -> void:
 	add_child(bench)
 	bench.bind_host(self)
 	bench.bench_ready()
-	cam_ctl.ctx = bench.wk_ctx   # no setup(): this workshop's camera keeps its own mouse ways
+	# The building workshop's camera (Docs/BuildTools.md section 21, stage 2): orbit with the
+	# cursor free -- MMB orbits, Shift MMB pans, the wheel zooms, RMB held looks round -- and Y
+	# its fly. The flat views are the same camera's.
+	cam_ctl.setup(bench.wk_ctx)
+	bench.view = cam_ctl
+	bench.replay_to_host = true
+	var dc = bench._camera
+	dc.click_captures = false
+	dc.ctrl_descends = false
 	bench.toolbox.add(_sketch_tool)
 	_select_tool.mode = WkSelectTool.Mode.BOX
 	for t in [_measure_tool, _fill_tool, _move_tool, _shape_tool, _select_tool]:
@@ -1242,8 +1250,13 @@ func _unhandled_input(e: InputEvent) -> void:
 	if e is InputEventMouseButton and _over_rail():
 		get_viewport().set_input_as_handled()
 		return
-	if _gizmo_input(e) or _shape_brush_input(e) or _photo_input(e) or _zoom_input(e) or _sketch_input(e) or _stud_input(e) \
-			or _kit_input(e, [&"move"]):
+	if _gizmo_input(e) or _shape_brush_input(e) or _photo_input(e) or _zoom_input(e):
+		get_viewport().set_input_as_handled()
+		return
+	if e is InputEventMouseButton and not e.ctrl_pressed and cam_ctl.input(e):
+		get_viewport().set_input_as_handled()
+		return
+	if _sketch_input(e) or _stud_input(e) or _kit_input(e, [&"move"]):
 		get_viewport().set_input_as_handled()
 		return
 	if e is InputEventMouseButton and e.pressed and e.button_index == MOUSE_BUTTON_LEFT and calibrating != null:
@@ -1293,13 +1306,10 @@ func _unhandled_input(e: InputEvent) -> void:
 	if e is InputEventKey and e.pressed and not e.echo and not e.ctrl_pressed:
 		var mine := true
 		match e.keycode:
-			KEY_Y: select_part(part_sel + (-1 if e.shift_pressed else 1))
+			KEY_Y: toggle_look()
 			KEY_K: set_tool("" if tool == "shape" else "shape")
 			KEY_L: set_tool("" if tool == "select" else "select")
 			KEY_F3: _toggle_guide_panel()
-			KEY_O: set_section(not section_on)
-			KEY_P: set_outlines((outlines + 1) % 3)
-			KEY_N: toggle_smooth()
 			KEY_F4: set_tool("" if tool == "wand" else "wand")
 			KEY_F12: export_and_preview()
 			KEY_Z:
@@ -1307,7 +1317,6 @@ func _unhandled_input(e: InputEvent) -> void:
 					redo()
 				else:
 					mine = false
-			KEY_J: toggle_point_here()
 			KEY_F10: show_help(not _help.visible)
 			KEY_F2: _toggle_panel()
 			KEY_F7: toggle_catalog()
@@ -1327,6 +1336,7 @@ func _kit_input(e: InputEvent, ids: Array) -> bool:
 
 func _process(dt: float) -> void:
 	bench.bench_process(dt)
+	cam_ctl.sync()
 	if _ui != null:
 		_ui.process(dt)
 	if _ruler == null:
@@ -1362,6 +1372,9 @@ func _process(dt: float) -> void:
 	_part_label.text = "part %d of %d: %s   (Y next, shift Y back)" % [
 			part_sel + 1, part_names.size(), part_names[part_sel].to_upper()]
 	_part_label.modulate = PART_COLOURS[part_sel % PART_COLOURS.size()]
+	# The part and the ruler's numbers are the status line's and Stats' now (section 21).
+	_part_label.visible = bench.stats_on
+	_ruler.visible = bench.stats_on
 	_part_label.position = Vector2((get_viewport().get_visible_rect().size.x - _part_label.size.x) * 0.5,
 			get_viewport().get_visible_rect().size.y - 104)
 	var vp := get_viewport().get_visible_rect().size
@@ -1371,6 +1384,8 @@ func _process(dt: float) -> void:
 	_ruler.position = Vector2(_rail_right(), vp.y - 136 - _ruler.size.y)
 	if _panel.visible:
 		_panel.position = Vector2(vp.x - _panel.size.x - 12, vp.y * 0.42)
+	if _ui != null:
+		_ui.place_floats([_panel, _guide_panel, _point_panel, _catalog_panel])
 
 
 func ruler_text() -> String:
@@ -3715,36 +3730,19 @@ func _build_preview(layer: CanvasLayer) -> void:
 
 const HELP_SAVE := UserPaths.WORKSHOP + "asset.cfg"
 const HELP_TEXT := """[font_size=22][b]Asset workshop[/b][/font_size]
-Block out a gun (or any asset) in bricks against a photo. Each brick here becomes its nano twin when exported.
+Make a gun, a mech, a figure, furniture or an item. It goes in four stages, the tabs at the top left:
 
-[b]Sizes[/b]   1 stud here = 4 mm printed = 16 mm on the real gun.   1 plate = 1.6 mm printed = 6.4 mm real.
-A gun is a quarter-size model: a Thompson is 53 studs long, 3 studs wide.
+[b]1 Block out[/b]  Shape it in clay: Draw, Shape, Smooth, or Import model (.glb .gltf .obj .fbx .stl). Pick the part in the outliner (right) first.
+[b]Make bricks >[/b]  turns the clay into bricks and goes on. [b]< Bricks to clay[/b] goes back to reshape.
+[b]2 Bricks[/b]  Place, Select, Paint, Sketch, Shapes, Move part on the bricks.
+[b]3 Detail[/b]  Studs, connection points (where parts join), colour.
+[b]4 Finish[/b]  Explode, hands, play, export to game or print, Save as.
 
-[font_size=18][b]Getting started[/b][/font_size]
-[b]1. Photo.[/b]  F2, [i]Load photo...[/i], pick a side view. Click [i]Calibrate[/i], click two points on the photo (butt and muzzle), type the real length in mm (852 for a Thompson).
-[b]2. Look at it flat.[/b]  Alt 1 for the side view (Alt 2 top, Alt 3 front, Alt 0 back to 3D). Alt + wheel zooms where the cursor is, WASD moves. ESC frees the mouse for the panels. Tick [i]stud grid on the photo[/i] in F2 to check its size.
-[b]3. Pick the part.[/b]  Y (shift Y back) to body, barrel, stock, grip ... Every brick you lay belongs to the part you are on, and each part keeps its own 9 toolbar slots.
-[b]4. Build.[/b]  Bricks go where the cursor is on the working plane (free placement, Alt F to aim at studs instead); PgUp / PgDn move the plane. The tools are down the left, with the open tool's options under them and the part picker at the top; every other action is in the menus at the top (View, Part, Brick, Gun, Photos, Help), its key beside it. Keys still work. [b]Saving:[/b] File > Save (Ctrl S), Save As (Ctrl Shift S) and Open (Ctrl O) keep guns in their own library (user://library/guns/), apart from the buildings, and Save also writes every part on its own (user://library/parts/): the parts are what the game makes guns of, and only parts whose connection points fit. The build is also autosaved every few seconds. [b]Explode[/b] (Alt E) pulls the parts apart -- barrel forward, stock behind, grip and underbarrel under, sight over, a magazine out the way it sits -- and you keep building on them where they are drawn. [b]Move part[/b] (Alt G): drag a part across the view to move it whole, studs, sketch and points with it (one Z). [b]Export to game[/b] (Alt X): each part as a game scene in a folder beside the gun's file (user://library/guns/<name>/), real size, muzzle forward, with the sockets the game's assembler joins them on. Which end is the muzzle is read off the build (barrel forward of the body, stock behind). [b]Hands[/b] (Alt H): the game's brick hands at the gun's scale, the right C round the grip, the left round the underbarrel (or the barrel). [b]Play[/b] (Alt P): three shots and a reload, the magazine out and back in -- the parts are baked into pieces of their own first. [b]Shapes[/b] (K) drags a box and fills it, or, set to [i]brush[/i], LMB lays a shape and RMB carves one out, held and dragged to go on; Ctrl + click does the same from any tool. The brush: Ctrl + LMB lays a ball, cube, cylinder, or a flat circle or square (on the plane the ghost is on -- hold E to lock its height, as for bricks); Ctrl + RMB carves the shape out of whatever is built, the rest of each brick it touches laid again. Hold and drag to keep going (one Z). Ctrl + wheel sizes it; its shape is on the left. [b]Studs[/b] (Alt U): LMB puts a stud on any face of any brick, a slope's too, on that face's half-stud lattice; RMB takes it off; shift LMB makes a stud a connection point (mount or socket), facing the way the stud does. LMB places one brick; hold it and drag to lay a row. RMB deletes (Z brings it back). R turns, F flips. Alt S mirrors: every brick is placed on the other side too.
-[b]   Or block it out.[/b]  The [i]Block out[/i] tool on the rail (Alt D): its panel says how, step by step. Draw each part's shape, add shapes with the Shapes brush, then at the bottom of the panel [i]size of the block-out[/i] scales the whole asset, [i]curves[/i] sets how many slopes and curves it is laid with, and [i]smooth shell[/i] gives a part a smooth custom outside (thickness: how far in the bricks start; detail: how many triangles). In detail: set the part's thickness, then draw on the working plane: LMB draws area in, RMB draws it out -- and takes up any brick under the stroke, a hand-laid one or another part's (untick [i]RMB erases any brick[/i] to keep them) -- and the part's bricks are worked out again each time (one Z undoes a change). An outline that crosses itself fills to its outermost line. Edges at a slope's or curve's pitch get slopes and curves, flipped under bottom edges; set slopes to [i]eager[/i] for more of them. Draw a drum magazine as a circle on the front plane (Alt 3). [b]Three views:[/b] the first plane a part is drawn on gives it its thickness; drawn for the same part on another plane (Alt 2 top, Alt 3 front, PgUp/PgDn to move it), area in keeps only what is inside it and area out cuts right through, or set [i]RMB cuts in[/i] to make a pocket so many studs deep. A blue line is the whole part from this plane, grey the other parts. Draw with an outline, a brush (its size and shape on the left), a rectangle, an ellipse, or a polygon of clicked corners (Enter, a double click or the first corner closes it).
-[b]5. Smooth parts.[/b]  On a part that should be a smooth custom piece (stock, grip, handguard), press N. Its bricks are only its outline.
-[b]6. Joints.[/b]  J where a part attaches: a [i]mount[/i] on the part, a [i]socket[/i] on the part it goes onto, same interface.
-[b]7. Export.[/b]  F12 runs the part kit and shows the result and its checks here.
+The rail (left) has the stage's tools; point at one for what it does and its key. The open tool's options are under them. The outliner (right) is what the asset is made of: click to pick, tick to show or hide. Everything else is in the menus at the top, each with its key.
 
-[font_size=18][b]Tools[/b][/font_size]
-[b]F2[/b] photos   [b]F3[/b] guide models (an existing model to build inside, never exported)   [b]F4[/b] wand: click a colour patch on a photo to fill it
-[b]F7[/b] parts: every saved part, official and custom; tick any maker, part, class, gun class or creator, sort, and [i]Fits[/i] shows only what goes on the part being built
-[b]Alt 0-3[/b] view: 3D, side, top, front   [b]Alt M[/b] measure: two clicks   [b]Alt S[/b] bench.mirror (Alt shift S: plane under the bench.ghost)
-[b]Alt F[/b] free placement / aim at studs   [b]PgUp PgDn[/b] move the working plane   [b]Alt D[/b] block out   [b]Alt + drag[/b] move a photo
-[b]Y[/b] next part   [b]J[/b] mount / socket   [b]K[/b] shapes: drag a box, cylinder, sphere or wedge, filled clean or random
-[b]L[/b] select: drag a box, then delete, re-pack, give to the part, copy or move to the bench.ghost
-[b]O[/b] section: in a flat view, cut away what is in front   [b]P[/b] outline bricks by part   [b]N[/b] part smooth / bricks
-[b]Z[/b] undo (a whole fill at once)   [b]shift Z[/b] redo   [b]F12[/b] export   [b]F1[/b] the workshop's own keys   [b]F10[/b] this page
-
-[font_size=18][b]Tips[/b][/font_size]
-Build the gun with its muzzle at the low end (left in the side view). Keep it on the bench.mirror plane (the pink outline) so both halves match.
-The panels need a free mouse: ESC, then click. Click the scene again to look around.
-[b]Run it outside the editor, or turn off the editor's game embedding:[/b] F5-F8 belong to the Godot editor (run, run scene, pause, stop) and the workshop's F5 / F9 quick save / load can be taken by it. The build is autosaved every few seconds and comes back next start.
-Exports land in your user folder, [i]asset_exports[/i]. Bought photos and models stay guides only: never exported."""
+[b]Look around[/b]  MMB orbits, Shift MMB pans, the wheel zooms, RMB held looks round; Y: fly (the mouse looks). Alt 1 / 2 / 3: side, top, front; Alt 0: back to 3D. Tab: every brick.
+[b]Undo[/b]  Z, redo Shift Z.   [b]Save[/b]  Ctrl S (also autosaved every few seconds).
+[b]Size[/b]  1 stud here = 4 mm printed = 16 mm real.   F1: every key.   F10: this page."""
 
 var _help: PanelContainer
 
@@ -5715,8 +5713,8 @@ func _show_sculpt_note(loud: bool = false, text: String = "") -> void:
 	if _sculpt_note == null:
 		return
 	if text == "":
-		text = ("Converted: these are bricks now. Edit as SDF to sculpt again." if sculpt_state == "bricks"
-				else "Sculpting: no bricks yet. Convert when the shape is right.")
+		text = ("These are bricks now. Bricks to clay (by the stage tabs) to sculpt again." if sculpt_state == "bricks"
+				else "Sculpting: no bricks yet. Make bricks (by the stage tabs) when the shape is right.")
 	_sculpt_note.text = text
 	if loud:
 		var tw := _sculpt_note.create_tween()
@@ -6688,14 +6686,25 @@ func _typing() -> bool:
 	return f is LineEdit or f is TextEdit
 
 
-## Tab: the cursor free (to use the panels) or the mouse looking (to fly), the pick kept
-## (Docs/AssetWorkshop.md, "Sizing a selection like a slicer"). Shift+Tab: all parts.
+## Y (and the bar's Look): the cursor free (to use the panels) or the mouse looking (to fly),
+## the pick kept (Docs/AssetWorkshop.md, "Sizing a selection like a slicer"). It was Tab until
+## the two workshops' keys were made one (Docs/BuildTools.md section 21, stage 2).
+func toggle_look() -> void:
+	cam_ctl.toggle()
+
+
+## RMB is a tool's while it draws or carves with it (the clay, a sketch, the shape brush, a stud
+## taken off): the camera does not look round with it then.
+func wk_rmb_busy() -> bool:
+	return tool in ["sketch", "stud"] or _shape_brush_on()
+
+
+## Tab: every brick (the bench's browser), as in the building workshop. Shift+Tab: all parts.
 func _tab_key(e: InputEvent) -> bool:
 	if not (e is InputEventKey and e.pressed and not e.echo and (e as InputEventKey).keycode == KEY_TAB) \
 			or (e as InputEventKey).shift_pressed or _typing():
 		return false
-	if bench._camera.has_method("_set_captured"):
-		bench._camera.call("_set_captured", not bool(bench._camera.get("_captured")))
+	bench._hotbar.toggle_browser()
 	return true
 
 
@@ -7093,6 +7102,8 @@ func _over_rail() -> bool:
 
 ## Where things to the right of the rail start.
 func _rail_right() -> float:
+	if _ui != null:
+		return _ui.rail_right()
 	if _rail == null:
 		return 12.0
 	# Inside the tool rail: right of the rail's own panel.
@@ -10574,6 +10585,7 @@ func _build_menus() -> void:
 			["Redo", "Shift Z", func() -> void: redo()],
 		]],
 		["View", [
+			["Look round with the mouse / free the cursor", "Y", func() -> void: toggle_look()],
 			["3D view", "Alt 0", func() -> void: set_view(0)],
 			["Side view", "Alt 1", func() -> void: set_view(1)],
 			["Top view", "Alt 2", func() -> void: set_view(2)],
@@ -10582,8 +10594,8 @@ func _build_menus() -> void:
 			["Zoom in", "Home", func() -> void: zoom(0.85)],
 			["Zoom out", "End", func() -> void: zoom(1.0 / 0.85)],
 			[],
-			["Section: hide what is past the plane", "O", func() -> void: set_section(not section_on)],
-			["Outlines: none / all parts / this part", "P", func() -> void: set_outlines((outlines + 1) % 3)],
+			["Section: hide what is past the plane", "", func() -> void: set_section(not section_on)],
+			["Outlines: none / all parts / this part", "", func() -> void: set_outlines((outlines + 1) % 3)],
 			["Grid", "G", func() -> void:
 				bench._grid_on = not bench._grid_on
 				bench._grid.visible = bench._grid_on],
@@ -10596,15 +10608,15 @@ func _build_menus() -> void:
 			["Mirror plane where the ghost is", "Alt Shift S", func() -> void: mirror_here()],
 		]],
 		["Part", [
-			["Next part", "Y", func() -> void: select_part(part_sel + 1)],
-			["Previous part", "Shift Y", func() -> void: select_part(part_sel - 1)],
+			["Next part", "", func() -> void: select_part(part_sel + 1)],
+			["Previous part", "", func() -> void: select_part(part_sel - 1)],
 			[],
-			["This part leaves smooth / as bricks", "N", func() -> void: toggle_smooth()],
-			["Connection point where the ghost is", "J", func() -> void: toggle_point_here()],
+			["This part leaves smooth / as bricks", "", func() -> void: toggle_smooth()],
+			["Connection point where the ghost is", "", func() -> void: toggle_point_here()],
 			[],
 		]],
 		["Block out", [
-			["Sculpt tool (3D, the SDF block-out)", "Alt V", func() -> void: rail_pick("sculpt")],
+			["Sculpt tool (3D, the clay block-out)", "Alt V", func() -> void: rail_pick("sculpt")],
 			["Sketch tool (2D, straight into bricks)", "Alt D", func() -> void: rail_pick("sketch")],
 			["Shapes brush (balls, cubes, cylinders)", "K", func() -> void:
 				rail_pick("shape")
@@ -10674,7 +10686,7 @@ func _build_menus() -> void:
 			["Held or aimed, keys only:", "", func() -> void: pass],
 			["  all parts browser", "Tab", func() -> void: pass],
 			["  lock the height, slide anywhere", "hold E", func() -> void: pass],
-			["  toolbar slot", "1-9, wheel", func() -> void: pass],
+			["  toolbar slot", "1-9, Shift + wheel", func() -> void: pass],
 			["  pick the brick under the cursor", "MMB", func() -> void: pass],
 			["  shape brush from any tool, its size", "Ctrl + LMB / RMB, Ctrl + wheel", func() -> void: pass],
 		]],
@@ -12018,7 +12030,7 @@ func nudge(dir: Vector3i) -> void:
 ## Move part (Alt G).
 func move_field(by: Vector3) -> void:
 	if sculpt_state == "bricks":
-		_show_sculpt_note(true, "Converted: these are bricks. Move part (Alt G) moves them, or Edit as SDF first.")
+		_show_sculpt_note(true, "These are bricks: Move part (Alt G) moves them, or Bricks to clay first.")
 		return
 	if sculpt.form.block_count() == 0 or by == Vector3.ZERO:
 		return

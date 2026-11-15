@@ -1662,6 +1662,12 @@ func _run_breaklag_pass() -> void:
 ## changed meanwhile. The solve waits for a building's bands before it can
 ## topple it, so play rarely gets here; this makes it happen.
 func _owed_band_check() -> void:
+	# Bands drawn as a box a brick are never uploaded, so there is nothing to
+	# be owed (Docs/HandoffPerf.md 8): this is the baked bands' check, run
+	# with `-- --breaklag --baked-bands`.
+	if city.drawing.instanced_bands:
+		print("  --   owed bands: bands are boxes, none is uploaded (run with --baked-bands)")
+		return
 	var pick: BuildingRegistry.Building = null
 	for c in city.registry.buildings:
 		if c.is_build() or c.is_materialised() or city._wide_ids.has(c.id):
@@ -1699,8 +1705,18 @@ func _owed_band_check() -> void:
 	var stale: int = city.islands.band_owed_stale - stale_was
 	_gate_ok("owed bands: each was hung or built again -- %d hung, %d rebuilt" % [hung, stale],
 			hung + stale > 0 and isl.owed_bands.is_empty())
+	var holes := 0
+	if isl.is_valid():
+		for node in isl.bands:
+			if not is_instance_valid(node):
+				holes += 1
 	_gate_ok("owed bands: and the piece has no holes",
-			not isl.is_valid() or isl.bands.is_empty() or city.islands._draws_bands(isl))
+			not isl.is_valid() or isl.bands.is_empty() or city.islands._draws_bands(isl),
+			"%d of %d slot(s) empty, %d owed left, %s the hole list, bake %s, %d section(s)" % [
+				holes, isl.bands.size(), isl.owed_bands.size(),
+				"in" if city.islands._band_holes.has(isl) else "not in",
+				"ready" if isl.is_valid() and city.world.bake_ready(isl.chunk) else "not ready",
+				city.world.get_chunk_sections(isl.chunk) if isl.is_valid() else -1])
 
 func _run_bigbreak_pass() -> void:
 	var far := "--far" in OS.get_cmdline_user_args()
@@ -2086,7 +2102,12 @@ func _run_landing_pass() -> void:
 				continue
 			var n := city.world.get_alive_block_count(isl.chunk)
 			total += n
-			if city.islands.is_blind(isl) and not covered.has(isl):
+			# Nor is one stood in for, a box a brick, while its mesh is made
+			# (IslandStandins, since 2026-11-08): counted blind, a tower that
+			# snapped in two failed this 1 run in 2 -- 33-38% "undrawn" for
+			# the tick its new half was boxes (2026-11-12, baked bands and
+			# boxed alike).
+			if city.islands.is_blind(isl) and not covered.has(isl) 					and not city.islands.standins.covers(isl):
 				blind += n
 			if n > most:
 				most = n
@@ -2176,8 +2197,9 @@ func _proxy_check(b: BuildingRegistry.Building) -> void:
 			"built at chunk version %d, now %d, after %d tick(s)" % [
 				int(city.drawing._shadow_proxy_alive.get(b.id, -1)), city.world.get_chunk_version(b.chunk), t])
 
-## A building still in bricks gives its mesh up past DEMESH_RANGE and stands in
-## as a shell (_demesh). That shell has to be drawn from the damage its bricks
+## A building still in bricks, far off, is drawn by its coarse mesh
+## (CityDrawing.tend_far_coarse, Docs/PerfCaps.md 5) -- or, quiet long enough,
+## given back and drawn by its shell. Either has to draw the damage its bricks
 ## have now -- nothing, if none are left -- and take a hit while it is far. It
 ## used to be drawn from the profile of the last time the building was given
 ## back: a building damaged since came back whole at range, and went again up
@@ -2185,14 +2207,14 @@ func _proxy_check(b: BuildingRegistry.Building) -> void:
 func _far_shell_check(b: BuildingRegistry.Building, hit_it: bool) -> void:
 	var fx: float = b.recipe.footprint_x * City.STUD
 	city.camera.global_position = b.xform.origin + Vector3(0.0, 40.0,
-			-(City.DEMESH_RANGE + City.DEMESH_HYSTERESIS + 30.0))
+			-(city.drawing.FAR_COARSE_RANGE + 100.0))
 	city.camera.look_at(b.xform.origin + Vector3(0.0, 10.0, 0.0), Vector3.UP)
 	var t := 0
-	while t < 300 and not (city._shells.has(b.id) and not city._brick_nodes.has(b.id)):
+	while t < 300 and not _far_stand_in(b):
 		await city.get_tree().physics_frame
 		t += 1
-	_gate_ok("building %d: far off, a shell stands in for it" % b.id,
-			city._shells.has(b.id) and not city._brick_nodes.has(b.id), "after %d tick(s)" % t)
+	_gate_ok("building %d: far off, its coarse mesh or a shell stands in for it" % b.id,
+			_far_stand_in(b), "after %d tick(s)" % t)
 	_gate_ok("building %d: drawn with the damage it has, not what it had" % b.id,
 			_far_shell_true(b), _far_shell_note(b))
 	if not hit_it or not b.is_materialised() or city.world.get_alive_block_count(b.chunk) == 0:
@@ -2207,24 +2229,37 @@ func _far_shell_check(b: BuildingRegistry.Building, hit_it: bool) -> void:
 			city.world.get_alive_block_count(b.chunk) < before and _far_shell_true(b),
 			"%d -> %d bricks; %s" % [before, city.world.get_alive_block_count(b.chunk), _far_shell_note(b)])
 
-## Vertices the shell draws, and what it should: from the bricks while it has
-## them, from the profile once it has given them back.
+## Drawn far off by something other than its bands: its coarse mesh while it
+## is in bricks, its shell once given back; nothing, with no brick left.
+func _far_stand_in(b: BuildingRegistry.Building) -> bool:
+	if b.is_materialised():
+		if city.world.get_alive_block_count(b.chunk) == 0:
+			return not city._brick_bands.has(b.id)
+		return city.drawing.coarse_only(b.id)
+	return city._shells.has(b.id)
+
+## Vertices the far drawing draws, and what it should: its bricks' coarse mesh
+## as they are now while it has them, its shell from the profile once it has
+## given them back.
 func _far_shell_counts(b: BuildingRegistry.Building) -> Array:
 	var got := 0
+	var r: Dictionary = b.recipe
+	# Drawn by its coarse mesh: what it should draw is that mesh made from its
+	# bricks as they are now, not a recipe shell with holes.
+	var cm = city.drawing._far_coarse.get(b.id)
+	if b.is_materialised() and is_instance_valid(cm):
+		if (cm as MeshInstance3D).mesh != null and (cm as MeshInstance3D).mesh.get_surface_count() > 0:
+			got = ((cm as MeshInstance3D).mesh.surface_get_arrays(0)[Mesh.ARRAY_VERTEX]
+					as PackedVector3Array).size()
+		var coarse: Array = city.world.build_chunk_coarse_mesh(b.chunk)
+		var cw := 0 if coarse.is_empty() \
+				else (coarse[Mesh.ARRAY_VERTEX] as PackedVector3Array).size()
+		return [got, cw, -1]
 	var mi = city._shells.get(b.id)
 	if is_instance_valid(mi) and (mi as MeshInstance3D).mesh != null \
 			and (mi as MeshInstance3D).mesh.get_surface_count() > 0:
 		got = ((mi as MeshInstance3D).mesh.surface_get_arrays(0)[Mesh.ARRAY_VERTEX]
 				as PackedVector3Array).size()
-	var r: Dictionary = b.recipe
-	# Drawn from its bricks (_far_real): what it should draw is their coarse
-	# mesh as they are now, not a recipe shell with holes -- a wide one far off
-	# is drawn so (it was 21,824 vertices against the profile's 2,692, and right).
-	if is_instance_valid(mi) and city._far_real_done.get(b.id) == mi and b.is_materialised():
-		var coarse: Array = city.world.build_chunk_coarse_mesh(b.chunk)
-		var cw := 0 if coarse.is_empty() \
-				else (coarse[Mesh.ARRAY_VERTEX] as PackedVector3Array).size()
-		return [got, cw, -1]
 	var profile: Dictionary = b.damage_profile
 	var want := 0
 	if b.is_materialised():
@@ -2792,7 +2827,7 @@ func _run_floating_pass() -> void:
 
 ## The user's way of breaking a building (2026-10-17 pictures): a 12 m blast
 ## fired at a tower's foot from each of the building's distance tiers -- 25 m
-## (bricks), 60 m (bricks, mesh), 160 m (past DEMESH_RANGE: its far drawing)
+## (bricks), 60 m (bricks, mesh), 160 m (its coarse mesh: its far drawing)
 ## and 320 m (past SHELL_RANGE: a recipe) -- then watched from there and flown
 ## up to at 20 m/s. Pictures at every stop (shots/lodbreak_*); what each says
 ## of the building, its studs and the furniture and bricks lying near it.
@@ -3067,7 +3102,7 @@ func _ghost_walls(id: int, solid_out: Array = []) -> Array:
 ## read-back): twenty floats an instance, a dead brick's a zero matrix.
 func _boxes_tri_mesh(boxes: MultiMeshInstance3D) -> TriangleMesh:
 	var buf := boxes.multimesh.buffer
-	var unit: PackedVector3Array = city.drawing.unit_box_points()[0]
+	var unit: PackedVector3Array = BrickBoxes.unit_box_points()[0]
 	var faces := PackedVector3Array()
 	@warning_ignore("integer_division")
 	var n := buf.size() / 20
@@ -3159,9 +3194,8 @@ func _lodbreak_say(b: BuildingRegistry.Building, what: String) -> void:
 			if c is MeshInstance3D and (c as MeshInstance3D).mesh != null:
 				@warning_ignore("integer_division")
 				panes += (c as MeshInstance3D).mesh.surface_get_array_len(0) / 4
-		print("    its shell: %s mesh, %d painted window(s)%s" % [
-				"a" if shell.mesh != null else "no", panes,
-				", from its bricks" if city._far_real_owed.has(b.id) or city.drawing.far_real_built > 0 else ""])
+		print("    its shell: %s mesh, %d painted window(s)" % [
+				"a" if shell.mesh != null else "no", panes])
 	_pieces_say(b.id)
 	print("  [%d] %s: dist %.0f, materialised %s, %d bricks alive, shell %s, brick node %s, bands building %s, pieces %d (%d moving), damage %d"
 			% [b.id, what, city.camera.global_position.distance_to(b.xform.origin), b.is_materialised(), alive,
@@ -3708,13 +3742,19 @@ func _run_groups_pass() -> void:
 			int(b.recipe.courses) / TowerRecipe.COURSES_PER_FLOOR],
 			b.is_materialised() and city._brick_nodes.has(b.id) and not city.drawing.bands_building(b.id))
 
+	# Which rooms are up is RoomStreaming's (2026-11-14, Docs/HandoffRooms.md):
+	# the player's room and its neighbours (out of doors the nearest few facing
+	# them, within NEAR_RANGE), then the best two by view, CAP in all. These
+	# checks were "every storey group within INTERIOR_RANGE is drawn" -- the
+	# distance rule that replaced -- and are now that rule's.
+	var rs: RoomStreaming = city.room_streaming
 	var layout: Array = city.interior_groups.layout(b)
+	var most_held := 0
 	for k in ranges.size():
 		if k == ranges.size() - 1:
-			# Come in from outside the range: collision and shadows are kept a
-			# way past where they come on (ROOM_SLEEP_RANGE, SHADOW_RELEASE),
-			# and with the range at 60 m every stop is inside those from the
-			# one before.
+			# Come in from outside the range: shadows are kept a way past
+			# where they come on (SHADOW_RELEASE), and with the range at 60 m
+			# every stop is inside that from the one before.
 			_groups_look(face, out, InteriorGroups.INTERIOR_RANGE + InteriorGroups.RELEASE + 6.0, eye)
 			for t in 40:
 				await city.get_tree().physics_frame
@@ -3724,8 +3764,17 @@ func _run_groups_pass() -> void:
 		# Made afresh if they were let go (the last stop comes in from outside).
 		layout = city.interior_groups.layout(b)
 		var local: Vector3 = b.xform.affine_inverse() * city.camera.global_position
-		var in_range := 0
-		var shown := 0
+		var held: Array = rs.held_rooms()
+		most_held = maxi(most_held, held.size())
+		var mine := {}       # room index -> near, of this tower's held rooms
+		var faded := 0
+		for h in held:
+			if int(h[0]) == b.id:
+				mine[int(h[1])] = bool(h[2])
+			if float(h[3]) >= 1.0:
+				faded += 1
+		var up := 0          # rooms of the tower in its drawings now
+		var stray := 0       # rooms drawn that are not held
 		var kept_past := 0
 		var boxes := 0
 		var covered := 0
@@ -3734,37 +3783,65 @@ func _run_groups_pass() -> void:
 		var shadowed := 0
 		for g in layout:
 			var d := City._box_distance(g.box, local)
-			if d <= InteriorGroups.INTERIOR_RANGE:
-				in_range += 1
-				if g.shown and not g.dirty and not g.changed:
-					shown += 1
-			elif d > InteriorGroups.INTERIOR_RANGE + InteriorGroups.RELEASE and g.shown:
+			if d > InteriorGroups.INTERIOR_RANGE + InteriorGroups.RELEASE and g.shown:
 				kept_past += 1
 			if g.shown:
 				boxes += g.piece_count
 				if g.shadows:
 					shadowed += 1
+				for j in g.on_screen.size():
+					if g.on_screen[j] != 0:
+						up += 1
+						if not mine.has(g.first_room + j):
+							stray += 1
 			if g.cover:
 				covered += 1
-				for room_boxes in g.boxes:
-					for box in (room_boxes as Array):
+				for j in g.boxes.size():
+					if j >= g.cover_mask.size() or g.cover_mask[j] == 0:
+						continue
+					for box in (g.boxes[j] as Array):
 						if (box as AABB).size != Vector3.ZERO:
 							cover_boxes += 1
 				cover_shapes += (city._group_shapes.get(InteriorGroups.key_of(b.id, g.index),
 						PackedInt32Array()) as PackedInt32Array).size()
-		print("[groups] from %.0f m: %d of %d group(s) in range and drawn after %d tick(s), %d box(es); %d with collision, %d casting shadows" % [
-				ranges[k], shown, layout.size(), took, boxes, covered, shadowed])
-		_gate_ok("from %.0f m: every storey group within %.0f m is drawn and up to date, none kept past it" % [
-				ranges[k], InteriorGroups.INTERIOR_RANGE],
-				in_range > 0 and shown == in_range and kept_past == 0,
-				"%d in range, %d drawn, %d kept past" % [in_range, shown, kept_past])
+		print("[groups] from %.0f m: %d room(s) up (%d of this tower, %d near), settled after %d tick(s), %d box(es); %d group(s) with collision, %d casting shadows" % [
+				ranges[k], held.size(), mine.size(), mine.values().count(true), took, boxes, covered, shadowed])
+		_gate_ok("from %.0f m: rooms are up, no more than %d, each drawn with its painted window faded out, none drawn that is not up, none kept past the range" % [
+				ranges[k], RoomStreaming.CAP],
+				held.size() > 0 and held.size() <= RoomStreaming.CAP and faded == held.size()
+				and up == mine.size() and stray == 0 and kept_past == 0,
+				"%d up, %d faded out, %d of the tower's drawn (%d not up), %d kept past" % [
+					held.size(), faded, up, stray, kept_past])
+		# The view picks are the facing rooms nearest the middle of the screen:
+		# no room left out is nearer it than one taken by view.
+		var fwd: Vector3 = (b.xform.affine_inverse().basis * -city.camera.global_basis.z).normalized()
+		var ext: AABB = rs.extent_of(b)
+		var worst_taken := -1.0
+		var best_left := INF
+		var rooms_b := city.registry.rooms_of(b.id)
+		for index in rooms_b.size():
+			var lb: AABB = rs.room_box(b, index)
+			var dist := City._box_distance(lb, local)
+			if dist <= RoomStreaming.NEAR_RANGE or dist > InteriorGroups.INTERIOR_RANGE:
+				continue
+			if not RoomStreaming.faces(rooms_b[index], lb, local, ext) or not rs.draws(b.id, index):
+				continue
+			var off := RoomStreaming.off_view(lb, local, fwd)
+			if off > city._half_fov():
+				continue
+			var score := off + 0.2 * dist / InteriorGroups.INTERIOR_RANGE
+			if mine.has(index) and not bool(mine[index]):
+				worst_taken = maxf(worst_taken, score)
+			elif not mine.has(index):
+				best_left = minf(best_left, score)
+		_gate_ok("  the rooms taken by view are the ones nearest the middle of the screen",
+				worst_taken >= 0.0 and worst_taken <= best_left + 0.0001,
+				"worst taken %.3f, best left out %.3f" % [worst_taken, best_left])
 		if k == 0:
-			print("[groups]   %d of its %d group(s) are past the range from its foot, and not drawn" % [
-					layout.size() - in_range, layout.size()])
-			_gate_ok("  every interior piece of those storeys is in it once",
+			_gate_ok("  every interior piece of the rooms up is drawn once",
 					boxes > 0 and boxes == _groups_expected_boxes(b, layout),
 					"%d box(es), %d part(s) in the rooms' manifests" % [boxes, _groups_expected_boxes(b, layout)])
-			_gate_ok("  the group at the player's height has a collision box a piece",
+			_gate_ok("  the rooms near the player have a collision box a piece, and only they",
 					covered >= 1 and cover_boxes > 0 and cover_shapes == cover_boxes,
 					"%d group(s), %d piece(s), %d shape(s)" % [covered, cover_boxes, cover_shapes])
 			var met := false
@@ -3772,11 +3849,11 @@ func _run_groups_pass() -> void:
 			for g in layout:
 				if not g.cover or met:
 					continue
-				for room_boxes in g.boxes:
-					if (room_boxes as Array).is_empty():
+				for j in g.boxes.size():
+					if j >= g.cover_mask.size() or g.cover_mask[j] == 0 or (g.boxes[j] as Array).is_empty():
 						continue
 					var q := PhysicsRayQueryParameters3D.create(city.camera.global_position,
-							chunk_xf * (room_boxes[0] as AABB).get_center())
+							chunk_xf * (g.boxes[j][0] as AABB).get_center())
 					q.collision_mask = Layers.FIXTURE
 					var hit := city.get_world_3d().direct_space_state.intersect_ray(q)
 					met = not hit.is_empty() and hit.rid == city._room_bodies.get(b.id, RID())
@@ -3785,15 +3862,73 @@ func _run_groups_pass() -> void:
 			_gate_ok("  near, the pieces cast shadows", shadowed >= 1)
 		if k == ranges.size() - 1:
 			_gate_ok("  from here it is drawn with no collision and no shadows",
-					shown > 0 and covered == 0 and shadowed == 0,
-					"%d drawn, %d with collision, %d casting" % [shown, covered, shadowed])
+					up > 0 and covered == 0 and shadowed == 0,
+					"%d drawn, %d with collision, %d casting" % [up, covered, shadowed])
 		await _frames(2)
 		await _save("interior_groups_%d" % int(ranges[k]))
 	city.camera.fov = fov_was
 
+	# Look away: the rooms taken by view stay up a while (RoomStreaming.
+	# LINGER_MS), then their windows fade back in, by time, and only then are
+	# their rows dropped.
+	_groups_look(face, out, ranges[1], eye)
+	await _groups_settle(b)
+	var watch: Array = []   # rooms of the tower held by view, from here
+	for h in rs.held_rooms():
+		if int(h[0]) == b.id and not bool(h[2]):
+			watch.append(int(h[1]))
+	city.camera.look_at(city.camera.global_position + out * 10.0, Vector3.UP)
+	var t_away := Time.get_ticks_msec()
+	var still_at_1s := -1
+	var back_ms := -1
+	var early_drop := 0     # rows gone while the window was still faded out
+	var seen := {}          # window values seen on the way back
+	var was_on := {}
+	for index in watch:
+		was_on[index] = true
+	for t in 360:
+		await city.get_tree().physics_frame
+		var ms := Time.get_ticks_msec() - t_away
+		var on_now := 0
+		for index in watch:
+			var g = _groups_of_room(b, index)
+			var on: bool = g != null and g.shown and g.on_screen.size() > index - g.first_room \
+					and g.on_screen[index - g.first_room] != 0
+			var hide := rs.hide_of(b.id, index)
+			if was_on[index] and not on and hide > 0.0:
+				early_drop += 1
+			was_on[index] = on
+			if on:
+				on_now += 1
+			if hide > 0.0 and hide < 1.0:
+				seen[snappedf(hide, 0.01)] = true
+		if ms >= 900 and still_at_1s < 0:
+			still_at_1s = on_now
+		if on_now == 0:
+			back_ms = ms
+			break
+	_gate_ok("looking away, the %d room(s) taken by view stay up a second, and are given back after about %d s" % [
+			watch.size(), RoomStreaming.LINGER_MS / 1000],
+			watch.size() > 0 and still_at_1s == watch.size() and back_ms >= RoomStreaming.LINGER_MS
+			and back_ms < RoomStreaming.LINGER_MS + 2000,
+			"%d up after a second, all gone after %d ms" % [still_at_1s, back_ms])
+	_gate_ok("  each window fades back in by time, through several steps, before its room's rows go",
+			early_drop == 0 and seen.size() >= 3,
+			"%d dropped with the window still out, %d step(s) seen" % [early_drop, seen.size()])
+	_gate_ok("  never more than %d rooms up at once, all the way here" % RoomStreaming.CAP,
+			most_held <= RoomStreaming.CAP, "up to %d" % most_held)
+
 	# Out of range altogether: nothing of it is kept.
 	_groups_look(face, out, InteriorGroups.INTERIOR_RANGE + InteriorGroups.RELEASE + 6.0, eye)
 	for t in 40:
+		await city.get_tree().physics_frame
+	for t in 240:
+		var any := false
+		for g in city.interior_groups.known(b.id):
+			if g.shown:
+				any = true
+		if not any:
+			break
 		await city.get_tree().physics_frame
 	var left := 0
 	for g in city.interior_groups.known(b.id):
@@ -3801,16 +3936,16 @@ func _run_groups_pass() -> void:
 			left += 1
 	_gate_ok("past the range and its margin no group of it is kept", left == 0, "%d kept" % left)
 	# And its windows are painted on its bricks there, as a shell's are
-	# (Docs/DestructionLod.md 3.2), hidden inside the range the rooms are in.
+	# (Docs/DestructionLod.md 3.2), each pane knowing the room behind it, so
+	# that it can fade for that room alone.
 	for t in 200:
 		if city.drawing._brick_panes.has(b.id):
 			break
 		await city.get_tree().physics_frame
 	var panes = city.drawing._brick_panes.get(b.id)
-	_gate_ok("  its windows are painted on its bricks, hidden where its rooms are drawn",
-			panes != null and is_instance_valid(panes) and (panes as MeshInstance3D).mesh != null
-			and is_equal_approx(float((panes as GeometryInstance3D).get_instance_shader_parameter(
-				"near_hide")), InteriorGroups.INTERIOR_RANGE),
+	var pane_mesh: ArrayMesh = (panes as MeshInstance3D).mesh if panes != null and is_instance_valid(panes) else null
+	_gate_ok("  its windows are painted on its bricks, each pane carrying its room",
+			pane_mesh != null and (pane_mesh.surface_get_format(0) & Mesh.ARRAY_FORMAT_CUSTOM0) != 0,
 			"panes %s; %d made, %.1f ms all told" % [panes != null, city.drawing.brick_panes_built, city.drawing.brick_panes_ms])
 	await _save("interior_groups_panes")
 
@@ -3865,7 +4000,9 @@ func _run_groups_pass() -> void:
 	# A blast at a PIECE: that piece becomes bricks and is broken as bricks
 	# are. Its room is not laid, and the rest of the storey goes on being a
 	# drawing (Interiors.md 8.4). A room of two pieces or more that nothing
-	# has touched, in a group near enough to have its collision.
+	# has touched, chosen as near (it has collision), and a piece in it with
+	# nothing else within the blast's reach: the blast is 0.5 m, and a piece
+	# with its neighbours inside that lays them too, as it should.
 	var shot_room: Room = null
 	var shot_item := -1
 	var shot_group: InteriorGroups.Group = null
@@ -3874,14 +4011,28 @@ func _run_groups_pass() -> void:
 		if not g.cover or shot_room != null:
 			continue
 		for index in range(g.first_room, g.last_room):
+			var j: int = index - g.first_room
+			if j >= g.cover_mask.size() or g.cover_mask[j] == 0:
+				continue   # not a room near the player: no collision, maybe not drawn
 			var r := city.registry.get_room(b.id, index)
 			if r == null or r.items.size() < 2 or not r.gone.is_empty() or not r.laid.is_empty():
 				continue
-			if RoomManifest.item_floor_share(city.world, b.chunk, str(r.items[0].type),
-					(r.items[0].cell as Vector3i) - shot_offset) > 0.5:
-				shot_room = r
-				shot_item = 0
-				shot_group = g
+			for i in r.items.size():
+				if RoomManifest.item_floor_share(city.world, b.chunk, str(r.items[i].type),
+						(r.items[i].cell as Vector3i) - shot_offset) <= 0.5:
+					continue
+				var at := RoomManifest.item_box(r.items[i]).get_center()
+				var alone := true
+				for other in r.items.size():
+					if other != i and City._box_distance(RoomManifest.item_box(r.items[other]), at) <= 0.7:
+						alone = false
+						break
+				if alone:
+					shot_room = r
+					shot_item = i
+					shot_group = g
+					break
+			if shot_room != null:
 				break
 	if shot_room != null:
 		var laid0: int = city.registry.items_laid
@@ -3911,7 +4062,9 @@ func _run_groups_pass() -> void:
 	# A metre up its storey: the blasts (1.3 m) stop short of the slab above.
 	var cut_world := wb.position.y + float(TowerRecipe.SLAB_PLATES + cut_storey * TowerRecipe.STOREY_PLATES) * City.PLATE + 1.0
 	var cut_local: float = (b.xform.affine_inverse() * Vector3(face.x, cut_world, face.z)).y
-	_groups_look(face, out, 30.0, eye + 10.0)
+	# Looking at the storeys over the cut: rooms are up where the player looks
+	# (RoomStreaming), and those are the ones that must not be left hanging.
+	_groups_look(face, out, 30.0, cut_world - face.y + 5.0)
 	await _groups_settle(b)
 	var above := _groups_shown_above(b, cut_local + 2.8)
 	var rides0 := city._group_rides
@@ -4666,18 +4819,23 @@ func _groups_look(foot: Vector3, dir: Vector3, dist: float, eye: float) -> void:
 	city.camera.global_position = foot + dir * dist + Vector3(0.0, eye, 0.0)
 	city.camera.look_at(foot + Vector3(0.0, eye, 0.0), Vector3.UP)
 
-## Wait until every group of `b` in range is drawn and up to date, and the
+## Wait until every room that is up (RoomStreaming) is drawn, up to date and
+## its window faded out, every group of `b` with a room up is current, and the
 ## passes have had time to hand out collision. Returns the ticks it took.
 func _groups_settle(b: BuildingRegistry.Building) -> int:
 	var quiet := 0
 	for t in 600:
 		await city.get_tree().physics_frame
-		var local: Vector3 = b.xform.affine_inverse() * city.camera.global_position
 		var owed := 0
-		for g in city.interior_groups.layout(b):
-			if City._box_distance(g.box, local) <= InteriorGroups.INTERIOR_RANGE \
-					and (not g.shown or g.dirty or g.changed):
+		for g in city.interior_groups.known(b.id):
+			if g.held.has(1) and (not g.shown or g.dirty or g.changed):
 				owed += 1
+		if not city.room_streaming.settled():
+			owed += 1
+		# A room refused because its building is not known to be standing yet
+		# (_interior_unsure) is still owed.
+		if city.room_streaming.waits > 0:
+			owed += 1
 		quiet = quiet + 1 if owed == 0 else 0
 		if quiet >= 12:
 			return t - 11
@@ -4692,6 +4850,8 @@ func _groups_expected_boxes(b: BuildingRegistry.Building, layout: Array) -> int:
 		if not g.shown:
 			continue
 		for index in range(g.first_room, g.last_room):
+			if g.on_screen.size() <= index - g.first_room or g.on_screen[index - g.first_room] == 0:
+				continue   # not up: drawn by its painted window
 			var room: Room = rooms[index]
 			for i in room.items.size():
 				if room.gone.has(i):
@@ -4700,6 +4860,13 @@ func _groups_expected_boxes(b: BuildingRegistry.Building, layout: Array) -> int:
 					if city.registry.palette.has(part[0]) and not RoomManifest.is_detail(part):
 						n += 1
 	return n
+
+## The storey group of `b` that holds room `index`, or null.
+func _groups_of_room(b: BuildingRegistry.Building, index: int):
+	for g in city.interior_groups.known(b.id):
+		if index >= g.first_room and index < g.last_room:
+			return g
+	return null
 
 ## Blast a building through, wall to wall, at one height: what is above comes off.
 func _groups_cut(wb: AABB, cut_world: float) -> void:
@@ -6275,6 +6442,14 @@ func _report_profile() -> void:
 		for k in ["after_spawn", "stairs", "dmg_promote", "dmg_rooms", "dmg_hit", "dmg_pieces", "dmg_disable"]:
 			line += "%s %.2f  " % [k, float(city._prof_sum.get(k, 0.0)) / maxi(city._tick_samples, 1)]
 		print("[prof]   of which damage, mean per tick: " + line)
+		line = ""
+		for k in ["st_trim", "st_merge", "st_rooms", "st_detail", "st_residency"]:
+			line += "%s %.3f  " % [k, float(city._prof_sum.get(k, 0.0)) / maxi(city._tick_samples, 1)]
+		print("[prof]   of which stream, mean per tick: " + line)
+		var rsr: Dictionary = city.room_streaming.report()
+		print("[prof]   rooms (RoomStreaming): %d pass(es), %d full scan(s), choosing %.3f ms a pass (worst %.2f); %d came up, %d given back, %d given back by the cap" % [
+				rsr.passes, rsr.scans, float(rsr.choose_ms) / maxf(float(rsr.passes), 1.0), rsr.worst_choose_ms,
+				rsr.comes, rsr.goes, rsr.evicted])
 		var dn: Array = city.islands.damage_near_ms
 		print("[prof]   loose pieces (damage_near), all told: %d call(s); waking sleepers %.1f ms, finding pieces %.1f, damaging them %.1f, pushing %.1f" % [
 				int(dn[4]), dn[0], dn[1], dn[2], dn[3]])
@@ -6473,8 +6648,6 @@ func _run_stress_pass() -> void:
 			str(city.islands.mesh_drain_worst), city.islands.small_meshes_on_worker])
 	print("[stress] breaks %d (%d had to tear a band), %d impact(s) loosening %d block(s)" % [
 			isl.breaks, isl.band_breaks, isl.impacts, isl.impact_blocks])
-	print("[stress] de-meshed %d, re-meshed %d, in %.0f ms" % [
-			city._demeshed, city._remeshed_back, city._demesh_ms])
 	print("[stress] trimmed %d building(s) in %.0f ms (%.1f ms each) = demat %.0f + free %.0f + shell %.0f" % [
 			city._trims, city._trim_ms, city._trim_ms / maxf(city._trims, 1),
 			city._trim_split.demat, city._trim_split.free, city._trim_split.shell])
@@ -6534,14 +6707,15 @@ func _stress_wound(b) -> int:
 			fired += 1
 	return fired
 
-## The de-mesh tier, there and back.
+## The far tier for a building in bricks, there and back (CityDrawing.
+## tend_far_coarse, Docs/PerfCaps.md 5). It was the 110 m de-mesh tier.
 ##
-## Dropping a building's mesh is only half a feature. The half that breaks
+## Giving a building's bands up is only half a feature. The half that breaks
 ## silently is the return: walk away, walk back, and the building has to be
-## bricks again -- with its damage still in them. A building stuck as a shell
-## forever looks exactly like a building that was never damaged.
+## drawn by its bands again -- with its damage still in them. A building stuck
+## coarse forever looks like one far away.
 func _run_lod_pass() -> void:
-	print("[lod] de-mesh and back")
+	print("[lod] coarse and back")
 	var target := city.registry.get_building(0)
 	var aim: Vector3 = target.xform.origin + Vector3(
 			target.recipe.footprint_x * City.STUD * 0.5,
@@ -6576,23 +6750,23 @@ func _run_lod_pass() -> void:
 	var dead_near: int = city.world.get_dead_blocks(b.chunk).size()
 	check.call("bricks are missing", dead_near > 0, "%d dead" % dead_near)
 
-	# Walk away, past DEMESH_RANGE + hysteresis, and POLL for the de-mesh rather
+	# Walk away, past FAR_COARSE_RANGE, and POLL for the coarse mesh rather
 	# than sleeping a fixed time. _trim_quiet is a deeper tier on the same
-	# buildings -- TRIM_RADIUS (90 m) is inside DEMESH_RANGE (110 m) -- so a
-	# fixed wait long enough to be safe is also long enough for the trim to fire
-	# and take the chunk away, which reads as the de-mesh tier failing when it
-	# is the trim working.
+	# buildings -- TRIM_RADIUS is past FAR_COARSE_RANGE, after TRIM_AFTER_MS
+	# quiet against FAR_COARSE_QUIET_MS -- so a fixed wait long enough to be
+	# safe is also long enough for the trim to fire and take the chunk away,
+	# which reads as the far tier failing when it is the trim working.
 	city.camera.global_position = aim + Vector3(0.0, 0.0, -200.0)
 	city.camera.look_at(aim, Vector3.UP)
 	var waited := 0
-	while city._brick_nodes.has(0) and waited < 600:
+	while not city.drawing.coarse_only(0) and waited < 600:
 		await _frames(1)
 		waited += 1
 
 	b = city.registry.get_building(0)
-	check.call("mesh dropped", not city._brick_nodes.has(0), "after %d frame(s)" % waited)
+	check.call("bands given up", not city._brick_bands.has(0), "after %d frame(s)" % waited)
 	check.call("still resident", b.is_materialised(), "")
-	check.call("drawn as a shell instead", city._shells.has(0), "")
+	check.call("drawn by its coarse mesh instead", city.drawing.coarse_only(0), "")
 	check.call("damage still recorded", _dead_count(0) == dead_near,
 			"%d dead" % _dead_count(0))
 
@@ -6629,8 +6803,8 @@ func _run_lod_pass() -> void:
 		# BUILDING 0, not merely something solid. "Not an island" was too weak:
 		# another building's shell in front of this one is not an island
 		# either, and the shot landed on that and destroyed nothing here.
-		# Either of building 0's own bodies counts -- de-meshed, it is drawn
-		# by a shell and collided by its bricks, and both are in the space.
+		# Either of building 0's own bodies counts -- drawn coarse, it is
+		# still collided by its bricks.
 		var struck_rid: RID = seen.get("rid", RID())
 		if not seen.is_empty() and city._building_for_body(struck_rid) == 0:
 			clear_line = true
@@ -6650,14 +6824,14 @@ func _run_lod_pass() -> void:
 	city.camera.global_position = aim + Vector3(0.0, 0.0, -40.0)
 	city.camera.look_at(aim, Vector3.UP)
 	waited = 0
-	while not city._brick_nodes.has(0) and waited < 600:
+	while city.drawing._far_coarse.has(0) and waited < 600:
 		await _frames(1)
 		waited += 1
 	await _frames(20)
 
 	b = city.registry.get_building(0)
-	check.call("bricks came back", city._brick_nodes.has(0), "after %d frame(s)" % waited)
-	check.call("and the shell went away", not city._shells.has(0), "")
+	check.call("bands came back", city._brick_bands.has(0), "after %d frame(s)" % waited)
+	check.call("and the coarse mesh went away", not city.drawing._far_coarse.has(0), "")
 	# The node itself holds no mesh: a building draws through its BANDS, and
 	# the node is the transform they hang off. See _rebuild_bands.
 	check.call("with geometry in it", _drawn_surfaces(0) > 0,
@@ -7377,10 +7551,20 @@ func _bands_round(at: Vector3) -> Array:
 	var out := []
 	for n in city.get_tree().root.find_children("*", "MeshInstance3D", true, false):
 		var mi: MeshInstance3D = n
-		if mi.mesh == null or not mi.is_inside_tree():
+		if not mi.is_inside_tree():
+			continue
+		# A band drawn as a box a brick has no mesh of its own, or only its
+		# parts that are not boxes: its boxes' bounds (CityDrawing._apply_boxes).
+		var boxes: MultiMeshInstance3D = city.drawing.boxes_of(mi)
+		var bounds := AABB()
+		if boxes != null and boxes.has_meta(&"box"):
+			bounds = boxes.get_meta(&"box")
+		elif mi.mesh != null:
+			bounds = mi.mesh.get_aabb()
+		else:
 			continue
 		var local := mi.global_transform.affine_inverse() * at
-		if mi.mesh.get_aabb().grow(0.1).has_point(local):
+		if bounds.grow(0.1).has_point(local):
 			out.append(mi)
 	return out
 
@@ -9124,6 +9308,10 @@ func _run_boat_pass() -> void:
 			_hold_level(boat)])
 	print("[boat] water: worst step %.1f ms, worst drawing %.1f ms; afloat a tick %.2f ms" % [
 			boat.water_step_us / 1000.0, boat.water_draw_us / 1000.0, boat.float_us / 1000.0])
+	if boat.hull_water != null:
+		print("[boat] water parts, worst: holes %.1f ms, flow %.1f ms, spray %.1f ms; the first drawing %.1f ms" % [
+				boat.hull_water.holes_us / 1000.0, boat.hull_water.flow_us / 1000.0,
+				boat.water_spray_us / 1000.0, boat.water_draw_first_us / 1000.0])
 	# On the sea, in the world's air: holed, nothing vents, no rush toward the hole.
 	var vents := VentDust.jets_of(boat)
 	check.call("holed on the sea: its air stays (the world's outside), no dust, no rush", vents.is_empty()

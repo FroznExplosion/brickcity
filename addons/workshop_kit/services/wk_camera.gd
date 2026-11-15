@@ -12,7 +12,8 @@ extends RefCounted
 ##           editor's own camera; this only says when the mouse is taken (`camera_set_captured`)
 ##           and when keys fly with the cursor free (`camera_drive_keys`).
 ##   flat    `flat("side" | "top" | "front", centre)`: an orthographic view straight at a
-##           point, zoomed at the cursor (`zoom_at`); `perspective()` goes back.
+##           point, zoomed at the cursor (`zoom_at`); `perspective()` goes back. In it MMB drags
+##           the view across (no orbit), the wheel zooms at the cursor, RMB is the editor's.
 ##
 ## Everything it needs from the editor is asked of the context (WkContext `camera_*`).
 
@@ -117,7 +118,7 @@ func input(e: InputEvent) -> bool:
 					ctx.camera_click(MOUSE_BUTTON_MIDDLE)
 			return true
 		MOUSE_BUTTON_RIGHT:
-			if not ctx.camera_rmb_free():
+			if flat_view != "" or not ctx.camera_rmb_free():
 				return false
 			if b.pressed:
 				_rmb = true
@@ -143,6 +144,10 @@ func input(e: InputEvent) -> bool:
 				var d := 1 if b.button_index == MOUSE_BUTTON_WHEEL_UP else -1
 				if b.shift_pressed:
 					ctx.camera_wheel_shift(d)
+				elif flat_view != "":
+					var ray: Array = ctx.camera_ray()
+					if ray.size() >= 2:
+						zoom_at(ray[0], 0.85 if d > 0 else 1.0 / 0.85)
 				else:
 					zoom(d)
 			return true
@@ -165,7 +170,7 @@ func input_motion(e: InputEvent) -> bool:
 	_moved += m.relative.length()
 	if _moved < CLICK_PX:
 		return true
-	if Input.is_key_pressed(KEY_SHIFT):
+	if Input.is_key_pressed(KEY_SHIFT) or flat_view != "":
 		pan(m.relative)
 	else:
 		orbit(m.relative)
@@ -191,6 +196,8 @@ func pan(px: Vector2) -> void:
 	var c := cam()
 	var xf: Transform3D = c.global_transform
 	var k := maxf(1.0, xf.origin.distance_to(_pivot)) * 0.0016
+	if flat_view != "" and c.get_viewport() != null:
+		k = c.size / maxf(1.0, c.get_viewport().get_visible_rect().size.y)   # a pixel is a pixel
 	c.global_position = xf.origin - xf.basis.x * px.x * k + xf.basis.y * px.y * k
 
 

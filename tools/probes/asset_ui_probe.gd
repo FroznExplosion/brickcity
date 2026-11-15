@@ -46,6 +46,7 @@ func _tick() -> void:
 	_parts(ui)
 	_kinds(ui)
 	_ws.set_asset_kind("gun")
+	_camera(ui)
 	print("\n%d passed, %d failed" % [_pass, _fail])
 	quit(1 if _fail > 0 else 0)
 
@@ -64,8 +65,41 @@ func _frame(ui: AssetWorkshopUI) -> void:
 		old_hidden = old_hidden and not (_ws._rail_buttons[id] as Button).visible
 	_ok("the old rail's tool list is gone; its part picker stays", old_hidden
 			and (_ws._rail_box.get_child(0) as Control).visible)
-	_ok("the options are in the rail, under the tools", ui._tools_panel.is_ancestor_of(_ws._rail)
-			and _ws._rail.get_global_rect().position.y >= ui._tools_panel.hint.get_global_rect().end.y)
+	# Section 21's frame: the options in the pop-out beside the rail, as in the building workshop.
+	_ok("the options are in the pop-out, beside the rail", ui._tools_panel.flyout != null
+			and ui._tools_panel.flyout.is_ancestor_of(_ws._rail)
+			and ui._tools_panel.flyout.position.x >= ui._tools_panel.position.x + ui._tools_panel.size.x)
+	_ok("the bar is there, the building workshop's buttons less the layer, guide and Cancel",
+			ui._tools_panel.action_buttons.has("undo") and ui._tools_panel.action_buttons.has("mirror")
+			and not ui._tools_panel.action_buttons.has("layer"))
+	# The user's rule (2026-11-14): every key's job is also a button on the screen, where it
+	# makes sense -- the bar (modifiers, views), the rail (tools, a stage's), under the tools
+	# (panels and browsers), the outliner (a part's own). Docs/BuildTools.md section 21.
+	var on_screen := {
+		"R": "bar:rotate", "F": "bar:flip", "T": "bar:turn_last", "E": "bar:lock", "V": "bar:snap",
+		"Alt S": "bar:mirror", "Alt Shift S": "bar:mirror_here", ",": "bar:colour_back", ".": "bar:colour_on",
+		"Alt F": "bar:free", "PgDn": "bar:plane_back", "PgUp": "bar:plane_on", "Z": "bar:undo", "Shift Z": "bar:redo",
+		"Y": "bar:fps", "G": "bar:grid", "H": "bar:stress", "F1": "bar:keys", "Alt 0": "bar:view_3d",
+		"Alt 1": "bar:view_side", "Alt 2": "bar:view_top", "Alt 3": "bar:view_front", "Alt C": "bar:game_look",
+		"Tab": "under:bricks", "F7": "under:parts", "F2": "under:photos", "F3": "under:guides", "F10": "under:help",
+		"Alt V": "blockout:draw", "Alt M": "bricks:measure", "B": "bricks:paint", "L": "bricks:select",
+		"Alt D": "bricks:sketch", "K": "bricks:shape", "Alt G": "bricks:move", "F4": "bricks:wand",
+		"Alt U": "detail:stud", "Alt E": "finish:!explode", "Alt H": "finish:!hands", "Alt P": "finish:!play",
+		"Alt X": "finish:!export_game", "Alt B": "finish:!export_print", "F12": "finish:!check",
+	}
+	var no_button := []
+	for key in on_screen:
+		var where: PackedStringArray = String(on_screen[key]).split(":")
+		var found := false
+		match where[0]:
+			"bar": found = ui._tools_panel.action_buttons.has(where[1])
+			"under": found = ui._under.has(where[1])
+			_:
+				for row in AssetWorkshopUI.TOOLS[where[0]]:
+					found = found or row[0] == where[1]
+		if not found:
+			no_button.append(key)
+	_ok("every key's job is a button on the screen too", no_button.is_empty(), str(no_button))
 	for pair in [["draw", "shape"], ["shape", "stamp"], ["smooth", "smooth"], ["select", "models"]]:
 		ui.pick_tool(pair[0])
 		_ok("Block out %s: sculpting, %s" % [pair[0], pair[1]], _ws.tool == "sketch" and _ws.sketch_draw == "sculpt"
@@ -276,3 +310,56 @@ func _menu_shown(label: String) -> bool:
 		if (mb as MenuButton).text == label:
 			return (mb as MenuButton).visible
 	return false
+
+
+func _wheel(up: bool, shift := false) -> InputEventMouseButton:
+	var e := InputEventMouseButton.new()
+	e.button_index = MOUSE_BUTTON_WHEEL_UP if up else MOUSE_BUTTON_WHEEL_DOWN
+	e.pressed = true
+	e.shift_pressed = shift
+	e.position = Vector2(640, 360)
+	return e
+
+
+func _button(b: MouseButton, down: bool) -> InputEventMouseButton:
+	var e := InputEventMouseButton.new()
+	e.button_index = b
+	e.pressed = down
+	e.position = Vector2(640, 360)
+	return e
+
+
+## Section 21, stage 2: the building workshop's camera -- orbit with the cursor free, the
+## wheel zooms, Shift + wheel the toolbar, Y its fly; a flat view zooms with the wheel; RMB
+## stays a tool's while it draws or carves.
+func _camera(_ui: AssetWorkshopUI) -> void:
+	print("[probe] the camera")
+	_ui.set_stage("bricks")
+	_ws.set_view(0)
+	var cc: WkCamera = _ws.cam_ctl
+	_ok("one camera: the bench's is the asset's own, orbit", _ws.bench.view == cc and cc.mode == "orbit"
+			and not bool(_ws.bench._camera.get("click_captures")))
+	var cam: Camera3D = cc.cam()
+	var at: Vector3 = cam.global_position
+	_ws._unhandled_input(_wheel(true))
+	_ok("the wheel zooms", not cam.global_position.is_equal_approx(at), str(cam.global_position - at))
+	var slot: int = _ws.bench._hotbar.selected
+	var before := cam.global_position
+	_ws._unhandled_input(_wheel(false, true))
+	_ok("Shift + wheel is the toolbar, not the camera", cam.global_position.is_equal_approx(before)
+			and _ws.bench._hotbar.selected != slot, "slot %d -> %d" % [slot, _ws.bench._hotbar.selected])
+	_ws.set_view(1)
+	var size: float = cam.size
+	_ws._unhandled_input(_wheel(true))
+	_ok("in a flat view the wheel zooms it", cam.size < size, "%.2f -> %.2f" % [size, cam.size])
+	_ws.set_view(0)
+	_ws.toggle_look()
+	_ok("Y: the fly", cc.mode == "fps")
+	_ws.toggle_look()
+	_ok("and back to orbit", cc.mode == "orbit")
+	_ws.rail_pick("sketch")
+	_ok("RMB is the sketch's while it draws, not the camera's", _ws.wk_rmb_busy()
+			and not cc.input(_button(MOUSE_BUTTON_RIGHT, true)))
+	_ws.rail_pick("place")
+	_ok("with Place, RMB held looks round and a click goes back to the tool", not _ws.wk_rmb_busy()
+			and _ws.bench.replay_to_host)

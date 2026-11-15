@@ -24,8 +24,15 @@ extends RefCounted
 ## its top floor because somebody stands at its foot. A group is rebuilt alone
 ## when something in ITS storeys changes, and comes and goes by ITS distance.
 ##
-## This file is the groups, what each holds and how it is drawn. Who is near
-## what, and the collision boxes for what is near, are CityScene's
+## A group is the unit that is DRAWN, not the unit that is chosen (2026-11-14,
+## Docs/HandoffRooms.md): RoomStreaming picks the ROOMS that are up -- the
+## player's room and its neighbours, then the best two by view, eight in all --
+## and a group's drawings hold only the rows of its rooms that are up
+## (`Group.held`). With no mask set every room of a group is drawn, as before
+## (the probes that drive this file alone).
+##
+## This file is the groups, what each holds and how it is drawn. Which rooms
+## are up is RoomStreaming's; when, and the collision boxes, CityScene's
 ## (`_stream_groups`).
 
 ## Storeys to a group, at most. A storey is 2.66 m, so four is a slab of
@@ -40,11 +47,11 @@ const GROUP_PIECES := 300
 ## What a room holds on average: the manifest draws two to five, and a quarter
 ## of rooms are empty.
 const PIECES_PER_ROOM := 3.5
-## Interior pieces are shown inside this, measured to each piece: the near
-## ring (Docs/DestructionLod.md 2; it was 100 m). Past it every building shows
-## painted windows (BuildingShell.build_window_mesh) -- a shell as it always
-## has, one in bricks on its own panes (CityScene._tend_brick_panes), which
-## dither in over INTERIOR_BAND as the pieces dither out.
+## Rooms are chosen inside this (RoomStreaming): the near ring
+## (Docs/DestructionLod.md 2; it was 100 m). A room not up shows its painted
+## window (BuildingShell.build_window_mesh) -- a shell's always, one in bricks
+## on its own panes (CityDrawing.tend_brick_panes), faded out by time for each
+## room once its furniture is drawn.
 const INTERIOR_RANGE := CollapseTier.HOT_RANGE
 const INTERIOR_BAND := 15.0
 ## Items are shown inside this.
@@ -103,6 +110,25 @@ class Group:
 	## CityScene's: its pieces have collision boxes on the building's furniture
 	## body.
 	var cover := false
+	## Per room, 1 if its rows are to be drawn (RoomStreaming). Empty: every
+	## room is.
+	var held := PackedByteArray()
+	## Per room, 1 if its rows are in what is on screen now (set by `attach`).
+	var on_screen := PackedByteArray()
+	## Per room, 1 if its pieces get collision boxes (the player's room and its
+	## neighbours). Empty: every room with rows does.
+	var cover_mask := PackedByteArray()
+
+	func is_held(k: int) -> bool:
+		return held.is_empty() or (k < held.size() and held[k] != 0)
+
+	func any_held() -> bool:
+		if held.is_empty():
+			return true
+		for v in held:
+			if v != 0:
+				return true
+		return false
 
 
 var world: BrickWorld
@@ -131,11 +157,18 @@ static var _piece_material: ShaderMaterial
 static var _item_material: ShaderMaterial
 
 
+## Where interior pieces fade by distance: only past the farthest a room is
+## ever kept (INTERIOR_RANGE + RELEASE), a far limit and no more. A room that
+## is up is drawn whole: the distance dither moved with the camera, and inside
+## the range it emptied a room whose painted window had already gone.
+const PIECE_FADE_RANGE := INTERIOR_RANGE + RELEASE + INTERIOR_BAND
+
+
 static func piece_material() -> ShaderMaterial:
 	if _piece_material == null:
 		_piece_material = ShaderMaterial.new()
 		_piece_material.shader = SHADER
-		_piece_material.set_shader_parameter("fade_range", INTERIOR_RANGE)
+		_piece_material.set_shader_parameter("fade_range", PIECE_FADE_RANGE)
 		_piece_material.set_shader_parameter("fade_band", INTERIOR_BAND)
 	return _piece_material
 
@@ -291,6 +324,19 @@ func work(b: BuildingRegistry.Building, g: Group, until_usec: int) -> bool:
 	var worked := 0
 	var done := true
 	for k in n:
+		if not g.is_held(k):
+			# Not up (RoomStreaming): its rows leave the drawing. No working
+			# out, and it is worked out afresh when it is up again.
+			if g.room_stamp[k] != -1:
+				g.room_stamp[k] = -1
+				g.room_gone[k] = -1
+				g.pieces[k] = PackedFloat32Array()
+				g.items[k] = PackedFloat32Array()
+				g.boxes[k] = []
+				g.piece_rows[k] = PackedInt32Array()
+				g.cover_stale = true
+				g.changed = true
+			continue
 		var room: Room = rooms[g.first_room + k]
 		if g.room_stamp[k] == g.struct_stamp and g.room_gone[k] == room.diff_stamp():
 			continue
@@ -332,6 +378,11 @@ func attach(b: BuildingRegistry.Building, g: Group, parent: Node3D) -> void:
 			DebugView.tag(items as MultiMeshInstance3D, DebugView.Kind.ITEMS)
 	g.shown = true
 	g.changed = false
+	# Which rooms are in what is now on screen (RoomStreaming fades their
+	# painted windows out once they are).
+	g.on_screen.resize(g.pieces.size())
+	for k in g.pieces.size():
+		g.on_screen[k] = 1 if g.is_held(k) and k < g.room_stamp.size() and g.room_stamp[k] >= 0 else 0
 	# Where each room's rows are in what is now on screen (check_floors).
 	g.room_row0.resize(g.pieces.size())
 	g.room_item0.resize(g.pieces.size())
@@ -400,6 +451,7 @@ func release(building_id: int, g: Group) -> void:
 	g.piece_rows.clear()
 	g.room_row0 = PackedInt32Array()
 	g.room_item0 = PackedInt32Array()
+	g.on_screen = PackedByteArray()
 
 
 ## Everything of one building: its bricks went, or it came down.
@@ -686,7 +738,13 @@ func report() -> Dictionary:
 				any = true
 		if any:
 			buildings += 1
-	return {"groups": groups, "buildings": buildings, "piece_boxes": pieces,
+	var rooms_up := 0
+	for id in _layouts:
+		for g in (_layouts[id] as Array):
+			if g.shown:
+				for v in g.on_screen:
+					rooms_up += v
+	return {"groups": groups, "buildings": buildings, "piece_boxes": pieces, "rooms_up": rooms_up,
 			"item_boxes": items, "rooms_worked": rooms_worked, "attaches": attaches,
 			"releases": releases, "work_ms": work_ms, "worst_attach_ms": worst_attach_ms,
 			"checks": checks, "check_ms": check_ms,

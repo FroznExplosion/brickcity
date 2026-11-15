@@ -642,6 +642,18 @@ func _button_checks() -> void:
 	_ok("Layer moves the hand to the next layer", _ws.bench._role != role)
 	while _ws.bench._role != role:
 		t.act("layer")
+	# Section 21, stage 2: the flat views, as the asset workshop's (Alt 0-3, the bar's buttons).
+	var cam: Camera3D = t.view.cam()
+	var persp: Transform3D = cam.global_transform
+	t.act("view_top")
+	_ok("Top view: the building's plan, flat", t.view.flat_view == "top"
+			and cam.projection == Camera3D.PROJECTION_ORTHOGONAL and t.rail.action_buttons.has("view_top"))
+	var size: float = cam.size
+	t.view.zoom_flat(0.85)
+	_ok("it zooms", cam.size < size)
+	t.act("view_3d")
+	_ok("3D view: back as it was", t.view.flat_view == "" and cam.projection == Camera3D.PROJECTION_PERSPECTIVE
+			and cam.global_transform.is_equal_approx(persp))
 
 
 func _redo_checks() -> void:
@@ -1362,6 +1374,21 @@ func _rest_checks() -> void:
 	_hold("brick_1x2")
 	t.tall = 9
 	var id := t.add_shape("rect", "flat", Vector2i(4, 4), Vector2i(11, 9), 1)
+	# The right side (section 21, the frame): the shape in the outliner; its row picks it; its
+	# options are under Selected, not in a pop-out.
+	t.outliner.refresh()
+	var row: TreeItem = null
+	for it in t.outliner.tree.get_root().get_children():
+		for k in it.get_children():
+			if (k.get_metadata(0) as Dictionary).get("shape", -1) == id:
+				row = k
+	_ok("the outliner lists the kept shape", row != null)
+	t.pick("place")
+	if row != null:
+		row.select(0)
+	_ok("its row picks it, with Select", t.selected == id and t.tool == "select")
+	_ok("its options are under Selected", t.outliner.selected_box.is_ancestor_of(t._select_box)
+			and not t.rail.options.is_ancestor_of(t._select_box))
 	t.pick("select")
 	t.selected = id
 	var top := t.face_under(Vector3(7.5 * 0.35, 3.0, 6.5 * 0.35), Vector3(0, -1, 0))
@@ -1482,6 +1509,15 @@ func _out_of_the_way_checks() -> void:
 	t.say("a message")
 	await process_frame
 	_ok("what the tools say stays on the screen", t._status.visible and not t.rail.options.is_ancestor_of(t._status))
+	# Section 21's status line: what was said first, then the brick in hand and the cell; the
+	# readout only with Stats.
+	_ok("the status line says it, the brick in hand and the cell", t._status == _ws.bench.status_line
+			and t._status.text.begins_with("a message") and t._status.text.contains("cell "))
+	_ok("no readout without Stats", not _ws.bench._hud.visible)
+	t.act("stats")
+	await process_frame
+	_ok("Stats shows it", _ws.bench._hud.visible)
+	t.act("stats")
 	t.cancel()
 	t.say("")
 	t.pick("repeat")

@@ -509,6 +509,12 @@ public:
     /// foundation through live stud connections. Flood fill over the whole
     /// chunk; M2 narrows it to dirty regions.
     PackedByteArray solve_grounded(int chunk_id);
+    // Which blocks STAND: reached from the ground (the foundation, an anchor
+    // level) through their joints, as solve_grounded -- but a part hanging
+    // from a hang level is no seed. A ceiling light left hanging from a
+    // storey not laid holds nothing up (BuildingRegistry.storey_gave_way).
+    // Reads only: no stats, nothing marked.
+    PackedByteArray solve_standing(int chunk_id);
 
     /// Live blocks that no longer reach the ground, split into connected
     /// groups. Returns Array[PackedInt32Array], largest group first.
@@ -1057,7 +1063,10 @@ public:
     // them (none hidden behind a neighbour), so the mesh changes only when
     // one of THEM goes: "special_stamp" says which are drawn, and a section
     // whose stamp is the one in `special_held` (one a section asked for, or
-    // empty) is not baked again -- "special_same".
+    // empty) is not baked again -- "special_same". A held stamp of -1 asks
+    // for no bake at all ("special_skipped" when there was something to
+    // bake): a whole building's buffers in one call, its stairs' faces a
+    // band at a time afterwards.
     Array get_instance_buffers(int chunk_id, const PackedInt32Array &sections,
             const PackedInt64Array &special_held) const;
     // A stamp a drawing section of WHICH blocks are drawn in it (a sum over

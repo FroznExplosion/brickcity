@@ -24,34 +24,22 @@ const TOOLS := [
 	["select", "Select", "L", "Click a shape or an inserted build to pick it. A shape: drag its top for its height, its side to move it; change its bond or brick, delete it, or let it go. A build: move, copy or delete it."],
 	["rooms", "Rooms", "O", "Rooms and openings: click a room to find it or an opening to turn its kind; RMB forgets one."],
 ]
-## Every key's button (Docs/BuildTools.md section 7): [id, label, key, what it does, toggle?].
-const ACTIONS := [
-	["Hand", [
-		["rotate", "Rotate", "R", "Turn the brick in hand a quarter."],
-		["flip", "Flip", "F", "Turn it over: studs down."],
-		["turn_last", "Turn last", "T", "Turn the brick just placed a quarter."],
-		["lock", "Lock", "E", "Lock height: keep the ghost at the height it is on now (as E held) until this is pressed again.", true],
-		["snap", "Side stud", "V", "Snap to side studs.", true],
-		["layer", "Structure", "I", "The layer the next brick goes in: structure, interior or detail (press for the next)."],
-		["mirror", "Mirror", "", "Lay every brick and shape again across the mirror plane.", true],
-		["mirror_axis", "across Z", "", "Which way the mirror plane goes: across Z or across X."],
-		["mirror_here", "Set plane", "", "Mirror plane here: through the middle of the ghost."],
-		["colour_back", "< Colour", ",", "The colour before, in the slot in hand."],
-		["colour_on", "Colour >", ".", "The next colour, in the slot in hand."],
-	]],
-	["Edit", [
-		["undo", "Undo", "Z", "Take back the last edit: a brick, a run, a shape."],
-		["redo", "Redo", "Shift Z", "Lay back what Undo took."],
-		["cancel", "Cancel", "Esc", "Drop what is being drawn (a drag, a sketch, a wall line, a stair's first click)."],
-	]],
-	["View", [
-		["fps", "FPS", "Y", "Swap the camera: FPS (the mouse looks, tools work at the dot; hold Alt for the cursor), or orbit (the cursor is free: MMB orbits, Shift MMB pans, the wheel zooms, RMB held looks round).", true],
-		["grid", "Grid", "G", "Show the grid.", true],
-		["stress", "Stress", "H", "Show how hard each brick is working.", true],
-		["keys", "Keys", "F1", "Show every key.", true],
-		["guide", "Guide", "U", "Room guide: a room template's size; again for the next."],
-	]],
-]
+## What the status line says a tool does, short (its whole story is in the rail's pop-up).
+const STATUS := {
+	"place": "LMB lays the brick (hold: a run)   RMB takes one away   R turns",
+	"pick": "LMB on a brick: hold its part and colour",
+	"paint": "LMB paints a brick (hold: a stroke)   - = the brush",
+	"draw": "Drag the base, let go, pull the height, click   RMB or Esc cancels",
+	"roof": "Click a shape: a roof on top of it",
+	"stairs": "Click the lower floor, then the upper one",
+	"cut": "Drag a shape on a wall or floor, let go, click to cut   Door, window: one click",
+	"repeat": "Click a building or a storey; the pop-out says where the copies go",
+	"select": "Click a shape or an inserted build   drag a shape's top: height, its side: moves it",
+	"rooms": "Click a room to find it, an opening to turn its kind   RMB forgets one",
+}
+## Every key's button (Docs/BuildTools.md section 7): the bar, the same in both workshops
+## (`WorkshopBar.ACTIONS`, section 21).
+static var ACTIONS: Array = WorkshopBar.without(WorkshopBar.ASSET_ONLY)
 ## The pop-out's pictures: [id, name, icon].
 const OUTLINE_PICS := [["line", "Line", "k_line"], ["box", "Box", "k_rect"], ["circle", "Circle", "k_circle"],
 		["triangle", "Triangle", "k_triangle"], ["arch", "Arch", "k_arch"], ["free", "Freehand", "k_free"],
@@ -72,6 +60,9 @@ const BRICK_PICS := [["fill", "Fill gaps"], ["only", "Only this"]]
 const THICK_PICS := [["0", "Brick"], ["1", "1"], ["2", "2"], ["3", "3"]]
 const HAND_PICS := [["place", "Place", "place"], ["pick", "Pick", "pick"], ["paint", "Paint", "paint"]]
 const POPOUT_W := 204.0
+## The rail's width, the asset workshop's too (`AssetWorkshopUI.RAIL_W`): two columns of a
+## picture and a name of up to "Measure".
+const RAIL_W := 224.0
 ## Tools that place: their pop-out leaves the screen to the build while they work.
 const POPOUT_HIDES := ["hand", "draw", "roof", "stairs", "cut"]
 ## A door and a window cut by one click, to start: studs across, plates up; a window's sill
@@ -93,6 +84,10 @@ var frame := WkFrame.new()
 var _bar: PanelContainer
 ## The button under the tools for the brick menu.
 var bricks_button: Button
+## The right side: the outliner and Selected.
+var outliner: WorkshopOutliner
+## F6, the furniture catalogue, as a button (every action a button).
+var furnish_button: Button
 ## The pop-out is out: it goes when the cursor moves into the scene (POPOUT_HIDES), and comes
 ## back on the tool's button.
 var _fly_open := true
@@ -244,8 +239,10 @@ var _thick_box: VBoxContainer
 var _sel_thick: VBoxContainer
 var _sel_bond: OptionButton
 var _repeat_box: VBoxContainer
+## The status line (the bench's `status_line`, section 21's frame).
 var _status: Label
 var _status_left := 0.0
+var _said := ""
 var _lay_box: VBoxContainer
 var _poly_box: HBoxContainer
 var _walls_box: VBoxContainer
@@ -290,15 +287,21 @@ func setup(workshop, layer: CanvasLayer) -> void:
 	shape_tool.mode = WkShapeTool.Mode.OUTLINE_HEIGHT   # draw the outline, then pull its height
 	ws.toolbox.add(shape_tool)
 	ws.toolbox.add(select_tool)
-	rail = WkRail.new(210.0, true)
+	rail = WkRail.new(RAIL_W, true)
 	rail.name = "ToolRail"
 	ws.wk_ctx.style_ui(rail)          # the game's look (GameUI, MenuTheme), through the kit's seam
 	rail.restyle(ws.wk_ctx.panel_box())
 	layer.add_child(rail)
 	frame.rail = rail
 	rail.fill("Build", TOOLS, pick, [], 2)
+	rail.hint.visible = false   # what the tool does is the status line's first part
 	bricks_button = rail.add_under_tools("Bricks   Tab", "place", "Bricks  (Tab)\nOpen or close the menu of every brick.",
 			func() -> void: act("parts"))
+	furnish_button = rail.add_under_tools("Furniture   F6", "furniture",
+			"Furniture and items  (F6)\nOpen or close the catalogue of furniture and items to place.",
+			func() -> void:
+				if ws._furnish != null:
+					ws._furnish.open(not ws._furnish.is_open()))
 	_bar = PanelContainer.new()
 	_bar.name = "ToolBar"
 	_bar.add_theme_stylebox_override("panel", rail.get_theme_stylebox("panel"))
@@ -323,6 +326,14 @@ func setup(workshop, layer: CanvasLayer) -> void:
 	if ws._keys_panel != null:
 		ws._keys_panel.visible = false
 	_build_options()
+	# The right side: what the build is made of, and Selected -- Select's options, which were
+	# its pop-out (section 21, the frame).
+	outliner = WorkshopOutliner.new()
+	outliner.setup(self, layer)
+	outliner.hold(_builds_box)
+	outliner.hold(_select_box)
+	frame.side = outliner.panel
+	frame.side_under_band = true
 	# The mouse is taken and given back by the kit's camera and nowhere else: the workshop
 	# camera's click-to-capture is off, so a click only ever does what the tool does.
 	var dc = ws._camera
@@ -330,6 +341,7 @@ func setup(workshop, layer: CanvasLayer) -> void:
 	dc.ctrl_descends = false
 	view = WkCamera.new()
 	view.setup(ws.wk_ctx)
+	ws.view = view
 	_im = ImmediateMesh.new()
 	_lines = MeshInstance3D.new()
 	_lines.mesh = _im
@@ -1528,38 +1540,15 @@ func cancel() -> void:
 ## An action button (or its key, which the workshop handles as before).
 func act(id: String) -> void:
 	match id:
-		"rotate": ws._yaw = (ws._yaw + 1) % 4
-		"flip": ws._flip = not ws._flip
-		"turn_last": ws._rotate_last()
-		"lock": ws.plane_locked = not ws.plane_locked
-		"snap": ws._snap_on = not ws._snap_on
 		"layer": ws._toggle_layer()
-		"mirror": ws.set_mirror(not ws.mirror_on)
-		"mirror_axis":
-			ws.mirror_axis = 0 if ws.mirror_axis == 2 else 2
-			ws.set_mirror(ws.mirror_on)
-		"mirror_here":
-			ws.mirror_here()
-			if not ws.mirror_on:
-				ws.set_mirror(true)
-		"colour_back": ws._hotbar.set_colour(ws._colour - 1)
-		"colour_on": ws._hotbar.set_colour(ws._colour + 1)
-		"parts": ws._hotbar.toggle_browser()
 		"fps": view.toggle()
-		"undo": ws._undo()
-		"redo": ws.redo_last()
 		"cancel": cancel()
-		"grid":
-			ws._grid_on = not ws._grid_on
-			ws._grid.visible = ws._grid_on
-		"stress":
-			ws._overlay_on = not ws._overlay_on
-			ws._stress_dirty = true
-			ws._refresh_overlay()
-		"keys":
-			ws._keys_on = not ws._keys_on
-			ws._keys_panel.visible = ws._keys_on
 		"guide": ws._cycle_guide()
+		"view_3d": set_flat("")
+		"view_side": set_flat("side")
+		"view_top": set_flat("top")
+		"view_front": set_flat("front")
+		_: ws.bar_act(id)
 
 
 ## The plan's level a course (the held brick's height) up or down.
@@ -1572,11 +1561,33 @@ func _step_level(d: int) -> void:
 	WkRail.light(_drawon_row, "level")
 
 
-## Say something on the rail for a few seconds (a fill refused, the next click wanted).
+## A flat view ("side", "top" -- a building's plan -- "front"), or "" for the 3D view: the
+## kit camera's, as the asset workshop's Alt 0-3 (Docs/BuildTools.md section 21, stage 2). It
+## looks at what is in the middle of the screen; a flat view is a view from orbit, so the fly
+## (Y) goes back to orbit first.
+func set_flat(which: String) -> void:
+	if which == "":
+		view.perspective()
+		return
+	if view.mode == "fps":
+		view.set_mode("orbit")
+	var c: Camera3D = view.cam()
+	var from: Vector3 = c.global_position
+	var dir: Vector3 = -c.global_transform.basis.z
+	if view.flat_view != "":
+		from = view._persp_xf.origin
+		dir = -view._persp_xf.basis.z
+	var hit = view.ctx.camera_hit(from, dir)
+	var centre: Vector3 = hit if hit != null else (from + dir * (-from.y / dir.y) if dir.y < -0.01 else from + dir * 10.0)
+	view.ortho_size = maxf(view.ortho_size, 12.0)
+	view.flat(which, centre)
+
+
+## Say something on the status line for a few seconds, in place of what the tool does (a
+## fill refused, the next click wanted).
 func say(text: String) -> void:
-	_status.text = text
-	_status.visible = text != ""
-	_status_left = 6.0
+	_said = text
+	_status_left = 6.0 if text != "" else 0.0
 
 
 ## How tall the bar across the top is.
@@ -1605,14 +1616,7 @@ func dragging() -> bool:
 
 func _build_options() -> void:
 	rail.pop_out(ws._hud_layer, POPOUT_W)
-	_status = Label.new()
-	_status.add_theme_font_size_override("font_size", 14)
-	_status.add_theme_color_override("font_color", Color(1.0, 0.88, 0.5))
-	_status.add_theme_color_override("font_outline_color", Color.BLACK)
-	_status.add_theme_constant_override("outline_size", 5)
-	_status.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	_status.visible = false
-	ws._hud_layer.add_child(_status)
+	_status = ws.status_line
 	_hand_box = VBoxContainer.new()
 	rail.options.add_child(_hand_box)
 	_hand_row = rail.pictures(_hand_box, "", HAND_PICS, pick, "place", 3)
@@ -2066,6 +2070,10 @@ func input(e: InputEvent) -> bool:
 		if e.alt_pressed:
 			if e.keycode == KEY_D:
 				pick("place" if tool == "draw" else "draw")
+				return true
+			var flat: int = [KEY_0, KEY_1, KEY_2, KEY_3].find(e.keycode)
+			if flat >= 0:
+				set_flat(["", "side", "top", "front"][flat])
 				return true
 			return false
 		match e.keycode:
@@ -3208,18 +3216,19 @@ func process() -> void:
 	rail.show_active(rail_id(on), TOOLS)
 	_hand_box.visible = rail_id(on) == "hand"
 	WkRail.light(_hand_row, on)
-	rail.show_toggles({"lock": ws.plane_locked, "snap": ws._snap_on, "mirror": ws.mirror_on,
-			"grid": ws._grid_on, "stress": ws._overlay_on, "keys": ws._keys_on, "fps": view.mode == "fps"})
+	var lit: Dictionary = ws.bar_toggles()
+	lit["fps"] = view.mode == "fps"
+	lit["view_3d"] = view.flat_view == ""
+	lit["view_side"] = view.flat_view == "side"
+	lit["view_top"] = view.flat_view == "top"
+	lit["view_front"] = view.flat_view == "front"
+	rail.show_toggles(lit)
 	rail.set_action_text("layer", ["Structure", "Interior", "Detail"][clampi(ws._role, 0, 2)])
 	rail.set_action_text("mirror_axis", "across X" if ws.mirror_axis == 0 else "across Z")
 	var vh: float = ws.get_viewport().get_visible_rect().size.y
-	rail.fit_height(vh - top - 104.0)
+	rail.fit_height(vh - top - ws.STATUS_ROOM)
 	if _status_left > 0.0:
 		_status_left -= ws.get_process_delta_time()
-		_status.visible = _status_left > 0.0 and _status.text != ""
-	if _status.visible:
-		_status.reset_size()
-		_status.position = Vector2((vw - _status.size.x) * 0.5, vh - 128.0)
 	var drawing := on == "draw"
 	_lay_box.visible = drawing
 	_round_box.visible = outline in ["box", "circle"]
@@ -3230,7 +3239,7 @@ func process() -> void:
 	_roof_box.visible = on == "roof"
 	_paint_box.visible = on == "paint"
 	_paint_spin.set_value_no_signal(ws._paint_radius)
-	_builds_box.visible = on == "select" and ws._selected >= 0
+	_builds_box.visible = ws._selected >= 0
 	if _builds_box.visible:
 		_builds_label.text = "Picked: %s" % String(ws.recipe.groups[ws._selected].get("name", "a build"))
 	_rooms_box.visible = on == "rooms"
@@ -3266,12 +3275,12 @@ func process() -> void:
 		# A building going up lands on its own top: no gap to set.
 		_rep_gap_row.visible = not (rep_dir == "up" and String(shape_of(selected).get("kind", "")) == "plan")
 		_rep_hi_spin.get_parent().visible = plain
-	_select_box.visible = on == "select" and ws._selected < 0
+	_select_box.visible = selected >= 0 and ws._selected < 0
 	_sel_thick.visible = String(shape_of(selected).get("kind", "")) in ["polyline", "plan"]
 	_lie_box.visible = drawing and makes == "solid"
 	_thick_box.visible = drawing and makes in ["walls", "building"]
 	_bricks_box.visible = true
-	if on == "select" and _shown != Vector2i(selected, _rev):
+	if _select_box.visible and _shown != Vector2i(selected, _rev):
 		_shown = Vector2i(selected, _rev)
 		_sync_select()
 	# The tool's pop-out beside its button; the readout and the paint palette beside that.
@@ -3282,14 +3291,16 @@ func process() -> void:
 	var show_fly := _fly_open or not (rid in POPOUT_HIDES)
 	if dragging() or (Input.mouse_mode == Input.MOUSE_MODE_CAPTURED and rid in POPOUT_HIDES):
 		show_fly = false
-	rail.place_flyout(bt.global_position.y if bt != null else top, vh - 100.0, show_fly)
-	if not show_fly and rid in POPOUT_HIDES and rail.hint != null:
-		rail.hint.text += "  (Point at the tool for its options.)"
-		rail.fit_height(vh - top - 104.0)   # the hint is longer now
+	rail.place_flyout(bt.global_position.y if bt != null else top, vh - ws.STATUS_ROOM, show_fly)
+	var says: String = STATUS.get(on, rail.hint.text if rail.hint != null else "")
+	if not show_fly and rid in POPOUT_HIDES:
+		says += "   (point at the tool for its options)"
 	bricks_button.set_pressed_no_signal(ws._hotbar.is_browsing())
-	# The readout stays put; the pop-out comes and goes over it. The paint palette is beside it.
+	furnish_button.set_pressed_no_signal(ws._furnish != null and ws._furnish.is_open())
+	# The readout and the paint palette sit right of the pop-out while it shows, so it never
+	# covers them (until the status line takes the readout's place: section 21, stage 1).
 	if ws._hud != null:
-		ws._hud.position = Vector2(rail.position.x + rail.size.x + 12.0, top)
+		ws._hud.position = Vector2(_rail_right(), top)
 	if ws._paint_palette != null:
 		ws._paint_palette.position = Vector2(_rail_right(), top + 110.0)
 	var said := tag_text() if not _drag.is_empty() else ""
@@ -3305,6 +3316,12 @@ func process() -> void:
 		ws._ghost.visible = false
 	elif tool in ["cut", "select", "repeat", "pick", "roof"] or not _sk.is_empty():
 		ws._ghost.visible = false
+	outliner.process(ws.get_process_delta_time())
+	# The status line: what the tool wants next (what it was told to say, else what it does);
+	# the readout only with Stats.
+	if ws._hud != null:
+		ws._hud.visible = ws.stats_on
+	ws.show_status(_said if _status_left > 0.0 else says, 12.0, vw - 12.0)
 	_draw()
 
 

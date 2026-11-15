@@ -85,7 +85,7 @@ import (and the workshops, UI kit and editor kit built on them).
 
 | Area | Now | Brick engine | Targets |
 |---|---|---|---|
-| Drawing bricks | Face bake per chunk, mesh upload, a node | Bricks as rows in a GPU buffer, drawn GPU-driven (indirect draws) through RenderingDevice into Godot's frame; breaking a brick clears a slot | First-hit lag (promotion + bake), second-long bakes, upload stalls |
+| Drawing bricks | **Standing buildings: done** -- a box a brick, one MultiMesh a band (below). Pieces: still a face bake per chunk, mesh upload, a node | Pieces on the same instance buffers; later, if a measurement asks, GPU-driven draws through RenderingDevice | First-hit lag (promotion + bake), second-long bakes, upload stalls |
 | Debris collision | A Jolt body per piece from merged boxes, nodes and shapes made on the main thread | Pieces as data rows; grid-against-grid collision in our own solver or a Jolt world linked into the extension | Fracture/spawn ticks (42 ms), 1–2 ms collision per promotion |
 | Pieces and islands | A node per piece, main thread only | Flat arrays updated across threads | Island tick 8–12 ms |
 | Structure solve | C++ worker, 3–6 ms a tower | Compute shader, or a solve that only updates what changed | The second before a building falls |
@@ -97,28 +97,42 @@ import (and the workshops, UI kit and editor kit built on them).
    and shots stay in it. The bridge between the two worlds (standing on debris, shots hitting
    pieces, pieces hitting the player) is the main design work.
 2. **GPU or incremental structure solve.**
-3. **Brick renderer**, only if a measurement points at drawing (below).
+3. **Brick renderer**: started by another route -- standing buildings are drawn as a box a brick
+   since 2026-11-12 (below); pieces on the same buffers are next (HandoffPerf.md 8.4).
 
-### Instancing bricks: measured, not now (2026-11-07)
+### Instancing bricks: built for standing buildings (2026-11-12)
 
-The game already instances where it pays: studs and stud cards (a MultiMesh per band), single
-loose bricks (a shared MultiMesh), crumbs and shards (GPU). The question was brick bodies.
+**Updated 2026-11-14.** On 11-07 this section said "not now", from one measurement: small
+pieces meshed at spawn cost 0.75 ms each (cebd9f4d), too little to pay for losing hidden-face
+culling and the bevelled look. Another chat then audited the whole brick system (HandoffPerf.md
+8) and measured what that estimate left out: a bake pays when a whole thing is MADE --
+a promotion, a piece coming off, a change of tier -- which is what a collapse is made of, and
+the city's GPU is not bound by triangles (0.2-0.4 M a frame on `--big --shot`).
 
-* **Small pieces** (commit cebd9f4d, `barrage_probe`): 43 pieces meshed on the main thread at
-  spawn, 0.75 ms each, worst 3.4 ms; 37 of 108 ms of spawning. Instancing would save that and
-  lose hidden-face culling, need its own bevelled instance mesh, and carry every brick's
-  position. Not worth it now. Numbers taken with four other runs going and headless (no
-  upload); a windowed `--stress`, editor closed, would settle them. Cheaper fix if spawn spikes
-  show in play: a per-tick budget for main-thread piece meshes, the rest to the worker.
-* **Large collapses:** the worst ticks are bodies, shapes, collision and the island tick
-  (WhereWorkRuns.md 3.2), not drawing; big pieces already mesh on workers in bands (97e408ba).
-  Instancing would fix one thing there: a big piece is invisible for up to 4 ticks while its
-  mesh is made (worst seen: 2,671 bricks). A piece's instances can ride its node's transform
-  (one MultiMesh per piece), so bricks need not be sent each frame -- but a 2,671-brick piece
-  drawn with every face is many times its culled mesh. If that gap ever shows: draw a piece
-  instanced only until its worker mesh arrives, then swap.
-* **Near detail** was the bigger lever for drawn triangles: the chamfered tier was cut from 14
-  to 6 m and the stud rings pulled in (BrickBevel.md §6).
+So a building's bands are now **a box a brick**: one MultiMesh a band, an instance a brick,
+the default since b4dbf5f9 (`-- --baked-bands` for the old path). Parts that are not boxes
+(slopes, round bricks, stairs) keep their own baked faces; up close the same instances draw a
+36-triangle bevelled box instead of a chamfered mesh built on a worker. Measured, editor closed,
+runs started cool (HandoffPerf.md 8.2):
+
+| | baked bands | boxes |
+|---|---|---|
+| a 3,293-brick tower handed to the renderer | 6.2 MB, made in 28-31 ms | 0.25 MB in 0.5 ms |
+| ticks from promotion to bricks drawn | 4 (hit), 12-16 (walked up to) | 1 |
+| `--big --shot`: band uploads from workers | 264 (2.7 M vertices) | 0 |
+| `--big --shot`: frames over 33 ms | 4-8 | 1-3 |
+| brick memory, 1,550 bricks | 5.9 MB | 0.4 MB |
+
+What the 11-07 reasoning got right and wrong: hidden faces are no longer culled (a box draws
+2.1 times a bake's truly drawn triangles), but that costs nothing that shows; the bevel needed
+its own instance mesh, and got one. It was wrong to judge instancing by the small-piece mesh
+cost alone. Two things here follow from it:
+
+* `take_bands`' owed uploads (WhereWorkRuns.md 3.1) now only matter with `--baked-bands`:
+  boxed bands have no upload to wait for.
+* **Next** (HandoffPerf.md 8.4): stairs instanced by part, the wind's sway on boxes, which edges
+  are in the open, then **pieces on the same buffers** -- which retires the bake for pieces, the
+  mesh queue, owed bands, band holes and the chamfer mesher.
 
 ## Consoles from Godot (checked 2026-11-07)
 

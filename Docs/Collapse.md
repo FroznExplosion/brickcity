@@ -38,7 +38,7 @@ step down 1.26 m and a storey is 2.66 m.
 | **Nothing** | > 260 m (+30 hysteresis) | recipe + damage record (dead ids, detached ids, per-band profile) | n/a — not drawn | A hit is resolved against the recipe (`_ray_recipes`), which promotes it to bricks — so yes, as bricks |
 | **Coarse shell** | 110–260 m | 10-triangle box, 5 collision boxes | **No** (§2.3) | Only by being hit → promoted |
 | **Banded shell** | < 110 m | ~830 triangles, course banding, per-band damage mask, fake window panes; same 5 boxes | Approximately (segment mask per band) | Only by being hit → promoted |
-| **Bricks, no mesh** | materialised, > 110 m (`DEMESH_RANGE`) | real blocks, collision; drawn by its shell | yes | yes — full solve |
+| **Bricks, coarse** | materialised, > 60 m (`CityDrawing.FAR_COARSE_RANGE`), quiet 3 s | real blocks, collision; drawn by a coarse mesh of its bricks, no bands, no bake (PerfCaps.md 5; was the 110 m demesh tier) | yes | yes — full solve |
 | **Bricks** | hit, or within `PROMOTE_RANGE` 28 m | real blocks, banded meshes, merged collision once quiet | exact | yes — full solve |
 
 A materialised building is **trimmed** back to a shell once it has been quiet for 12 s and is far

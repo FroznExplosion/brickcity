@@ -1280,7 +1280,19 @@ func storey_gave_way(id: int) -> int:
 		var above: int = int(run[1])
 		if above >= top:
 			continue   # nothing over it
-		var under := world.get_blocks_topping(b.chunk, lines[above])
+		# Of the bricks at the run's top, the ones that STAND: reached from the
+		# ground through their joints. A ceiling light or a panel left hanging
+		# from the storey over it (BrickWorld.set_hang_levels) is at that line
+		# too and holds nothing up: with a storey's bottom half shot away, 9 of
+		# its 262 bricks were left, all hanging, and the storeys over it stood
+		# on them until somebody came near and they were laid a floor at a
+		# time (user, 2026-11-12).
+		var under := PackedInt32Array()
+		var standing: PackedByteArray = world.solve_standing(b.chunk) \
+				if world.has_method(&"solve_standing") else PackedByteArray()
+		for bid in world.get_blocks_topping(b.chunk, lines[above]):
+			if standing.is_empty() or standing[bid] != 0:
+				under.append(bid)
 		if under.is_empty():
 			return above
 		# Still carried, but off balance: the weight of everything over it

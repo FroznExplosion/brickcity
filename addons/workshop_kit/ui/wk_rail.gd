@@ -23,6 +23,41 @@ const ICONS := {
 	"paint": '<path d="M12 3c4 5 6 8 6 11a6 6 0 0 1-12 0c0-3 2-6 6-11z"/>',
 	"sketch": '<path d="M4 20l1-5L16 4l4 4L9 19z"/><path d="M14 6l4 4"/>',
 	"move": '<path d="M12 3v18M3 12h18M9 6l3-3 3 3M9 18l3 3 3-3M6 9l-3 3 3 3M18 9l3 3-3 3"/>',
+	"a_rotate": '<path d="M20 12a8 8 0 1 1-2.4-5.7"/><path d="M20 3v5h-5"/>',
+	"a_flip": '<rect x="4" y="9" width="16" height="6"/><path d="M8 15v3M16 15v3"/><path d="M12 2v5M10 5l2 2 2-2"/>',
+	"a_turn_last": '<rect x="8" y="13" width="8" height="6"/><path d="M5 10a7 7 0 0 1 13-2"/><path d="M19 3v5h-5"/>',
+	"a_lock": '<rect x="5" y="11" width="14" height="10" rx="1"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/>',
+	"a_snap": '<rect x="3" y="6" width="11" height="12"/><path d="M14 9h4v6h-4"/>',
+	"a_mirror": '<path d="M12 2v20" stroke-dasharray="2 3"/><path d="M9 6L3 18h6z"/><path d="M15 6l6 12h-6z"/>',
+	"a_mirror_here": '<path d="M12 2v20" stroke-dasharray="2 3"/><circle cx="12" cy="12" r="4"/>',
+	"a_colour_back": '<circle cx="15" cy="12" r="6"/><path d="M7 8l-4 4 4 4"/>',
+	"a_colour_on": '<circle cx="9" cy="12" r="6"/><path d="M17 8l4 4-4 4"/>',
+	"a_undo": '<path d="M9 14L4 9l5-5"/><path d="M4 9h10a6 6 0 0 1 0 12h-3"/>',
+	"a_redo": '<path d="M15 14l5-5-5-5"/><path d="M20 9H10a6 6 0 0 0 0 12h3"/>',
+	"a_cancel": '<path d="M6 6l12 12M18 6L6 18"/>',
+	"a_fps": '<circle cx="12" cy="12" r="7"/><path d="M12 2v5M12 17v5M2 12h5M17 12h5"/>',
+	"a_grid": '<path d="M4 4h16v16H4zM4 9.3h16M4 14.6h16M9.3 4v16M14.6 4v16"/>',
+	"a_stress": '<path d="M13 2L5 14h6l-1 8 8-12h-6z"/>',
+	"a_keys": '<rect x="2" y="6" width="20" height="12" rx="2"/><path d="M6 10h1M10 10h1M14 10h1M18 10h1M7 14h10"/>',
+	"a_stats": '<path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/>',
+	"a_free": '<rect x="3" y="12" width="18" height="8"/><path d="M12 2v7M9 6l3 3 3-3"/>',
+	"a_plane_back": '<path d="M4 18l6-12h10l-6 12z"/><path d="M8 3v4" stroke-dasharray="1 2"/><path d="M2 21l4-2"/>',
+	"a_plane_on": '<path d="M4 18l6-12h10l-6 12z"/><path d="M18 21l4-2"/><path d="M16 3v4"/>',
+	"a_view_3d": '<path d="M12 3l8 4.5v9L12 21l-8-4.5v-9z"/><path d="M12 12l8-4.5M12 12v9M12 12L4 7.5"/>',
+	"a_view_side": '<rect x="3" y="8" width="18" height="8"/><path d="M3 12h18"/>',
+	"a_view_top": '<rect x="5" y="5" width="14" height="14"/><circle cx="12" cy="12" r="2"/>',
+	"a_view_front": '<rect x="7" y="4" width="10" height="16"/><path d="M7 9h10"/>',
+	"a_section": '<path d="M4 20V4h10"/><path d="M14 4l6 6v10H4"/><path d="M14 4v6h6" stroke-dasharray="2 2"/>',
+	"a_outlines": '<rect x="3" y="7" width="8" height="10"/><rect x="13" y="7" width="8" height="10" stroke-dasharray="2 2"/>',
+	"a_game_look": '<circle cx="12" cy="12" r="4"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M5 5l2 2M17 17l2 2M5 19l2-2M17 7l2-2"/>',
+	"wand": '<path d="M4 20L15 9"/><path d="M15 3v3M18 6h3M19 2l-2 2M13 5l2 2 2-2-2-2z"/>',
+	"!check": '<path d="M4 12l5 5L20 6"/>',
+	"parts": '<rect x="3" y="3" width="8" height="8"/><rect x="13" y="3" width="8" height="8"/><rect x="3" y="13" width="8" height="8"/><path d="M17 13v8M13 17h8"/>',
+	"photos": '<rect x="3" y="5" width="18" height="14" rx="1"/><circle cx="9" cy="10" r="2"/><path d="M21 16l-5-5-8 8"/>',
+	"guides": '<path d="M12 3l8 4.5v9L12 21l-8-4.5v-9z" stroke-dasharray="3 2"/>',
+	"help": '<circle cx="12" cy="12" r="9"/><path d="M9.5 9a2.5 2.5 0 1 1 3.5 2.3c-.6.3-1 .9-1 1.6V14M12 17h.01"/>',
+	"a_guide": '<path d="M3 20V9l9-6 9 6v11z"/><path d="M8 20v-6h8v6"/>',
+	"furniture": '<path d="M7 3v18M7 12h10v9M7 12V3M17 12v-2"/><path d="M5 12h14"/>',
 	"stud": '<ellipse cx="12" cy="9" rx="7" ry="3"/><path d="M5 9v6c0 1.7 3.1 3 7 3s7-1.3 7-3V9"/>',
 	"!point": '<circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="3"/>',
 	"!explode": '<path d="M12 2v5M12 17v5M2 12h5M17 12h5M5 5l3 3M16 16l3 3M19 5l-3 3M8 16l-3 3"/>',
@@ -301,11 +336,14 @@ func actions(sections: Array, picked: Callable, bar: Container = null) -> void:
 	action_buttons.clear()
 	_actions.visible = not sections.is_empty() and bar == null
 	for sec in sections:
-		var l := Label.new()
-		l.text = String(sec[0])
-		l.add_theme_font_size_override("font_size", 11)
-		l.add_theme_color_override("font_color", Color(0.62, 0.68, 0.76))
-		(_actions if bar == null else bar).add_child(l)
+		if bar != null and bar.get_child_count() > 0:
+			bar.add_child(VSeparator.new())   # the bar's sections apart; their names are in the pop-ups
+		if bar == null:
+			var l := Label.new()
+			l.text = String(sec[0])
+			l.add_theme_font_size_override("font_size", 11)
+			l.add_theme_color_override("font_color", Color(0.62, 0.68, 0.76))
+			_actions.add_child(l)
 		var grid: Container = bar
 		if bar == null:
 			var g := GridContainer.new()
@@ -320,6 +358,14 @@ func actions(sections: Array, picked: Callable, bar: Container = null) -> void:
 			var b := Button.new()
 			b.text = String(t[1])
 			b.add_theme_font_size_override("font_size", 11)
+			# On a bar an action is its picture ("a_" + id in ICONS), its name in the pop-up;
+			# one without a picture (its text changes: a layer, an axis) keeps its name.
+			if bar != null and ICONS.has("a_" + id):
+				b.icon = icon("a_" + id)
+				b.text = ""
+				b.custom_minimum_size = Vector2(30, 28)
+				b.expand_icon = false
+				b.icon_alignment = HORIZONTAL_ALIGNMENT_CENTER
 			if bar == null:
 				b.custom_minimum_size.x = (_width - 18.0) / 3.0 - 2.0
 				b.clip_text = true

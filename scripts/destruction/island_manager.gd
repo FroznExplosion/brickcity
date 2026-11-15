@@ -644,6 +644,10 @@ const HOLD_MAX_FRAMES := 90
 var holds_extended := 0
 var _ghosts: Array = []   ## [node, free on this process frame]
 var _band_holes: Array = []  ## toppled pieces with bands still to build
+## How long a tick may spend building them (_fill_band_holes), and at most
+## how many: a hole is a piece drawn with a storey missing.
+const HOLE_BUDGET_MS := 2.0
+const HOLES_PER_TICK := 8
 ## Bands a toppled building was still uploading, handed to its piece and hung
 ## when they landed (`taken`), or found stale and built again (`stale`).
 var band_owed_taken := 0
@@ -1508,6 +1512,7 @@ func spawn(source: int, block_ids: PackedInt32Array,
 		isl.mesh.physics_interpolation_mode = Node.PHYSICS_INTERPOLATION_MODE_OFF
 		isl.mesh.position = -isl.local_com
 		isl.body.add_child(isl.mesh)
+		_lights_out(isl)
 		# What was standing in the rooms this piece took with it. Under the
 		# MESH, which is the node holding the chunk's own space -- so the
 		# furniture rides the collapse without anything here tracking it, which
@@ -2345,12 +2350,20 @@ func adopt(chunk: int, mesh_node: MeshInstance3D, carried_mesh: ArrayMesh,
 		# drew nothing from two frames into its fall until something happened
 		# to rebuild it. New instances of the same band meshes, as `fresh` is.
 		isl.bands = _instance_bands(carried_bands, fresh)
+		isl.boxed = BrickBoxes.any(isl.bands)
+		_lights_out(isl)
 		# Bands the building was still uploading: holes until they land.
 		isl.owed_bands = owed_bands
 		owed_bands = {}
 		if near_tier != null:
 			for si in isl.bands.size():
-				if isl.bands[si] != null:
+				if isl.bands[si] == null:
+					continue
+				var boxes := BrickBoxes.of(isl.bands[si])
+				if boxes != null:
+					near_tier.track_box(isl.bands[si], isl.chunk, si,
+							BrickBoxes.bounds_of(isl.bands[si]), boxes.multimesh.instance_count)
+				else:
 					near_tier.track(isl.bands[si], isl.chunk, si)
 		# A building that toppled halfway through rebuilding its bands comes down
 		# with holes in it, and nothing rebuilt it until something changed it --
@@ -2358,7 +2371,9 @@ func adopt(chunk: int, mesh_node: MeshInstance3D, carried_mesh: ArrayMesh,
 		# of 18,588 bricks was partly invisible for 422 ticks. The missing bands
 		# are built one a tick (_fill_band_holes), slices of the bake it already
 		# has; the bands it has draw, and take patches, meanwhile.
-		if not isl.bands.is_empty() and not _draws_bands(isl):
+		# (Boxed bands are whole: a slot with no node is a section with no
+		# bricks in it, and there is no bake to cut a hole's band from.)
+		if not isl.bands.is_empty() and not isl.boxed and not _draws_bands(isl):
 			_band_holes.append(isl)
 		if mesh_node.get_parent() != null:
 			_ghosts.append([mesh_node, Engine.get_process_frames() + OVERLAP_FRAMES])
@@ -2375,6 +2390,7 @@ func adopt(chunk: int, mesh_node: MeshInstance3D, carried_mesh: ArrayMesh,
 		isl.mesh.physics_interpolation_mode = Node.PHYSICS_INTERPOLATION_MODE_OFF
 		isl.mesh.position = -isl.local_com
 		isl.body.add_child(isl.mesh)
+		_lights_out(isl)
 		FurnitureMesh.attach(world, chunk, isl.mesh, _furniture)
 	# Bands handed over with nothing to hang them on.
 	_drop_owed(owed_bands)
@@ -2411,6 +2427,24 @@ func adopt(chunk: int, mesh_node: MeshInstance3D, carried_mesh: ArrayMesh,
 ## instance of an ArrayMesh copies nothing. A slot the building never got to
 ## (it toppled halfway through rebuilding its bands) stays empty -- a hole
 ## _draws_bands knows about -- and a band built empty stays built and empty.
+## A piece is off the building's power: its lamp bricks go dark (the brick
+## shader's `powered`). Kept with InstanceParams, so what stands in for a node
+## close up (BrickNear's chamfered copy) is dark with it. Only for a piece
+## that has lamps: an instance parameter costs the renderer's buffer.
+func unpower(isl: BrickIsland, node: Variant) -> void:
+	if isl.dark and node != null and is_instance_valid(node) and node is GeometryInstance3D:
+		InstanceParams.put(node as GeometryInstance3D, &"powered", 0.0)
+
+
+## Whether a piece carries lamps (asked once, as it is made), and its node dark.
+func _lights_out(isl: BrickIsland) -> void:
+	isl.dark = not world.chunk_lamps(isl.chunk).is_empty()
+	unpower(isl, isl.mesh)
+	for band in isl.bands:
+		unpower(isl, band)
+		unpower(isl, BrickBoxes.of(band))
+
+
 func _instance_bands(bands: Array, parent: MeshInstance3D) -> Array:
 	var out: Array = []
 	for node in bands:
@@ -2424,6 +2458,8 @@ func _instance_bands(bands: Array, parent: MeshInstance3D) -> Array:
 		copy.physics_interpolation_mode = Node.PHYSICS_INTERPOLATION_MODE_OFF
 		copy.transform = src.transform
 		parent.add_child(copy)
+		# A band drawn as a box a brick: the same boxes, from the copy.
+		BrickBoxes.share(src, copy)
 		out.append(copy)
 	return out
 
@@ -2602,6 +2638,7 @@ func rebuild_mesh(isl: BrickIsland, force_full: bool = false, allow_sync: bool =
 	if not isl.bands.is_empty():
 		isl.retiring_bands.append_array(isl.bands)
 		isl.bands.clear()
+		isl.boxed = false
 		_drop_owed(isl.owed_bands)
 		isl.array_mesh = null
 		force_full = true
@@ -3072,6 +3109,24 @@ func _harvest_mesh_jobs() -> void:
 ## was built at. A band patched before the one that failed is harmless -- the
 ## full rebuild that follows replaces them all.
 func _patch_bands(isl: BrickIsland) -> bool:
+	if isl.boxed:
+		# A box a brick: the bands whose bricks changed, filled again.
+		if world.get_chunk_sections(isl.chunk) != isl.bands.size():
+			return false
+		var touched := PackedInt32Array()
+		for entry in BrickBoxes.changed(world, isl.chunk, isl.bands):
+			var d: Dictionary = entry
+			var si := int(d.section)
+			var node := isl.bands[si] as MeshInstance3D
+			if node == null or not is_instance_valid(node):
+				continue   # nothing was drawn there, and a piece gains no bricks
+			BrickBoxes.fill(node, d, brick_material, _retirer.retire)
+			if near_tier != null:
+				near_tier.track_box(node, isl.chunk, si, d.aabb, int(d.alive))
+			touched.append(si)
+		if near_tier != null and not touched.is_empty():
+			near_tier.damaged(isl.chunk, touched)
+		return true
 	if isl.band_bytes.size() != isl.bands.size() or not world.bake_ready(isl.chunk) \
 			or world.get_chunk_sections(isl.chunk) != isl.bands.size():
 		return false
@@ -4553,12 +4608,16 @@ func _drop_retiring_bands(isl: BrickIsland) -> void:
 	isl.retiring_bands.clear()
 
 
-## Build the bands a toppled building never got to, one a tick, from the bake
-## it already has: a slice of it each (build_chunk_mesh_section), where the one
-## mesh of the whole piece was 17-23 ms in a single call -- paid inside whatever
-## blast hit it first. A piece whose bake has gone, or that has become an
-## ordinary one-mesh island meanwhile, is left to rebuild_mesh.
+## Build the bands a toppled building never got to, from the bake it already
+## has: a slice of it each (build_chunk_mesh_section), where the one mesh of the
+## whole piece was 17-23 ms in a single call -- paid inside whatever blast hit
+## it first. As many a tick as HOLE_BUDGET_MS allows (on the tick's shared
+## clock), and one at least: one a tick left a 60-band piece half drawn for two
+## seconds (breaklag --big, 2026-11-14). A piece whose bake has gone, or that
+## has become an ordinary one-mesh island meanwhile, is left to rebuild_mesh.
 func _fill_band_holes() -> void:
+	var until := TickClock.until(HOLE_BUDGET_MS)
+	var filled := 0
 	while not _band_holes.is_empty():
 		var isl: BrickIsland = _band_holes[0]
 		if not isl.is_valid() or isl.mesh == null or isl.bands.is_empty() \
@@ -4621,7 +4680,9 @@ func _fill_band_holes() -> void:
 			isl.band_bytes.append(0)
 		isl.band_bytes[si] = index_patch_bytes(arrays) if live else 0
 		band_holes_filled += 1
-		return   # one a tick
+		filled += 1
+		if filled >= HOLES_PER_TICK or Time.get_ticks_usec() >= until:
+			return
 
 
 ## Leave a piece's (or a hand-over's) unfinished band uploads to finish, and
@@ -4815,6 +4876,7 @@ func _slice_node(isl: BrickIsland, mesh: ArrayMesh) -> MeshInstance3D:
 	var node := MeshInstance3D.new()
 	node.material_override = brick_material
 	BrickMaterials.set_grain_origin(node, world, isl.chunk)
+	unpower(isl, node)
 	node.physics_interpolation_mode = Node.PHYSICS_INTERPOLATION_MODE_OFF
 	node.mesh = mesh
 	node.visible = false
@@ -5319,6 +5381,7 @@ func _stream_island_meshes() -> void:
 			# Its bands draw until the stand-in is up (_apply_mesh lets them go).
 			isl.retiring_bands.append_array(isl.bands)
 			isl.bands.clear()
+			isl.boxed = false
 			isl.band_bytes.clear()
 			_drop_owed(isl.owed_bands)
 			# Its bricks draw until the queue has built the stand-in -- they need
