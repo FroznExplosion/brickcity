@@ -371,6 +371,10 @@ studs, 12,981 turned away), two more:
   (`BAND_STUD_SHARE`): what it draws is the studs within `stud_radius`, a few hundred of any one
   band. `--roomfly --wide` (the 80x60 tower): 2 bands with geometry before, 9 after, and the floor
   under the camera studded in every room.
+  What it costs to draw (2026-11-16, quiet machine, editor closed, vsync off, 1280x720; three rooms
+  of that tower, an eighth / a half / a half / an eighth each): 8-10 bands, 8,500-11,100 stud
+  instances against 2-5 bands, 4,000-4,400; GPU 4.06-4.32 ms against 3.67-4.01, so **+0.3-0.4 ms**
+  and about +130k triangles. All the studs hidden: 3.3-3.8 ms. Kept.
 * **A storey laid over another left the lower band's studs.** Laying covers the studs of the top
   course below and giving back bares them; that band's own bricks do not change, so nothing told it.
   `CityScene._lay_more` and `_unlay` now call `damaged(chunk)`. `--roomfly --wide` found four bands
