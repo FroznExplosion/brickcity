@@ -997,6 +997,9 @@ func _ready() -> void:
 	_city_size = maxi(building_count, 1)
 	_chamfer_mode = "--chamfer" in args
 	_checkpoint_mode = "--checkpoint" in args
+	# A/B of 2026-11-16's holds for storeys laid alone (Docs/Space.md 5.3c).
+	if "--no-storey-holds" in args:
+		BrickWorld.set_storey_holds(false)
 	_gun_mode = "--gun" in args
 	_play_mode = "--play" in args
 	_arms_mode = "--arms" in args
@@ -1320,6 +1323,8 @@ func _ready() -> void:
 		_pass_runner()._run_lodbreak_pass()
 	elif "--roomcost" in OS.get_cmdline_user_args():
 		_pass_runner()._run_roomcost_pass()
+	elif "--studcost" in OS.get_cmdline_user_args():
+		_pass_runner()._run_studcost_pass()
 	elif "--roomfly" in OS.get_cmdline_user_args():
 		_pass_runner()._run_roomfly_pass()
 	elif "--roomsview" in OS.get_cmdline_user_args():
@@ -2295,7 +2300,7 @@ func _stream_groups(here: Vector3) -> void:
 		if pawn.body != null and is_instance_valid(pawn.body):
 			pawns.push_back(pawn.body.global_position)
 	room_streaming.choose(here, -camera.global_basis.z, _half_fov(), live, _interior_unsure,
-			pawns)
+			pawns, _sight_clear)
 	interior_waits += room_streaming.waits
 	for b in live:
 		var id: int = b.id
@@ -2348,6 +2353,18 @@ func _stream_groups(here: Vector3) -> void:
 			_drop_groups(id)
 	_stream_pieces(here)
 	_groups_tend_riders()
+
+
+## Nothing solid between two points but building `id` (RoomStreaming's sight
+## test): a hit inside that building's box is its own wall or window -- what is
+## being looked at -- not something in front of it.
+func _sight_clear(from: Vector3, to: Vector3, id: int) -> bool:
+	var q := PhysicsRayQueryParameters3D.create(from, to, Layers.STRUCTURE | Layers.WORLD)
+	var hit := get_world_3d().direct_space_state.intersect_ray(q)
+	if hit.is_empty():
+		return true
+	var b := registry.get_building(id)
+	return b != null and _world_box(b).grow(0.6).has_point(hit.position)
 
 
 ## Half the camera's horizontal field of view, radians.
@@ -7863,6 +7880,11 @@ func save_checkpoint() -> bool:
 	return true
 
 
+## A save from before 2026-11-16 (AreaSnapshot 3): BuildingRegistry.legacy_ids.
+func _legacy_block_ids(id: int, chunk: int, ids: PackedInt32Array) -> PackedInt32Array:
+	return registry.legacy_ids(id, chunk, ids)
+
+
 ## Every build put into the city after the city was built -- `--build`, or P --
 ## in the order it was registered: {id, recipe (BuildRecipe.to_dict), xform,
 ## grounded}. A checkpoint carries them. The scene a load rebuilds is the city's
@@ -7977,7 +7999,7 @@ func _restore_checkpoint(path: String) -> Dictionary:
 	var same := func(id: int) -> int: return id
 	var hooks := func(rep: StructureReplayer) -> void:
 		_storey_hooks(rep, registry, same, on_laid)
-	var report := snap.restore(world, resolve, islands, on_toppled, hooks)
+	var report := snap.restore(world, resolve, islands, on_toppled, hooks, _legacy_block_ids)
 	# New commands follow the loaded ones.
 	authority.commands = DamageLog.from_data(snap.commands)
 	# Dressed AFTER the replay, so the bake and the collision start from the

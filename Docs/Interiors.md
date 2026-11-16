@@ -755,3 +755,13 @@ being flown round -- now a building never hit is never unsure; a room worked out
 was laid drew nothing for good -- `_lay_more` now touches the groups and owes the panes, and no room
 is chosen on a storey not laid; an empty room was never chosen, so its window never went -- a near
 one is now. After: 14 of 14 up, window gone, every piece drawn, by the time the camera is inside.
+
+**Sight, and a cheaper scan (2026-11-16).** A room is taken by view only if nothing but its own
+building stands between the camera and the face of it nearest the camera (`_in_sight`, a ray,
+`CityScene._sight_clear`; at most `SIGHT_RAYS` 8 a pass, an answer kept 1 s while the camera stays
+within 2 m). The scan walks a building a storey group at a time and passes over a group out of range
+or view whole; inside a group only the rooms on the outer faces the camera is outside of (lists made
+once, `_lists_of`), the camera's storey inside, and in a building that was hit the rooms with holes;
+candidates are kept sorted and short as they are found (`_keep_best`: 24 near, 16 by view).
+`big_city.tscn -- --shot`: choosing 0.40 ms a pass with the rays (0.38 before them), st_rooms 0.172
+ms a tick; the rays 1 ms all told over the run, 8 of 112 rooms hidden.

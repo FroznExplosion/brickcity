@@ -1338,7 +1338,7 @@ func _make_room() -> void:
 		# The worst placed give up their places, as many as it takes for the
 		# waiting band to fit -- or none. One band freed was often fewer studs
 		# than the waiting one costs (a band is charged what it holds, at most
-		# max_studs / BAND_STUD_SHARE): the place, kept for that band, fitted
+		# max_studs / band_stud_share): the place, kept for that band, fitted
 		# nobody for ADMIT_HOLD_STEPS (roomfly --wide, 2026-11-16).
 		var give: Array[Band] = []
 		var freed := 0
@@ -1437,12 +1437,12 @@ func _est_tris(band: Band) -> int:
 ## room before kept its studs (user; the HUD said 2 bands, 12,981 turned away).
 ## What a band draws is what lies within `stud_radius` of the camera, a few
 ## hundred studs of any one band; its other instances collapse to a point.
-const BAND_STUD_SHARE := 8
+static var band_stud_share := 8
 
 
 func _est_studs(band: Band) -> int:
 	@warning_ignore("integer_division")
-	return mini(band.stud_buffer.size() / 16, maxi(max_studs / BAND_STUD_SHARE, 1))
+	return mini(band.stud_buffer.size() / 16, maxi(max_studs / band_stud_share, 1))
 
 
 func _hold_set(key: int, cost: int) -> void:

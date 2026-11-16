@@ -1469,6 +1469,11 @@ private:
     /// had its slice of it resting on the slice below, not laid, and falling
     /// (user, 2026-11-15: "the staircase ... falls when I get close").
     std::vector<uint8_t> absent_rests(int chunk_id) const;
+    /// Off: absent_rests holds nothing and hangs_at only parts with no sockets
+    /// under them, as before 2026-11-16 -- for an A/B (`-- --no-storey-holds`).
+    static void set_storey_holds(bool on);
+    static bool get_storey_holds();
+    static bool storey_holds;
     /// Is a block whose bottom is at height `h` held by the ground there?
     bool grounded_at(int chunk_id, int h) const {
         if (h <= foundation_level[(size_t)chunk_id]) {

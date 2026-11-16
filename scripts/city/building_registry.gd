@@ -406,6 +406,32 @@ func rooms_of(building_id: int) -> Array[Room]:
 	return b.rooms
 
 
+## A save from before 2026-11-16 (AreaSnapshot 3) names a generated tower's
+## blocks by the ids they had with its cornice: a row of buttresses laid last of
+## the tower's own blocks, before its fixtures, one every two studs along x
+## (TowerRecipe.build, as it was). Ids under the first fixture's are as they
+## were; the cornice's are dropped (it is not laid any more); the fixtures' are
+## less by the count. A build's ids never had one.
+func legacy_ids(id: int, chunk: int, ids: PackedInt32Array) -> PackedInt32Array:
+	var b := get_building(id)
+	if b == null or b.is_build():
+		return ids
+	var cornice := 0
+	for x in range(0, int(b.recipe.footprint_x) - 1, 2):
+		cornice += 1
+	var first := world.get_block_count(chunk)
+	for f in b.fixtures:
+		for bid in f.blocks:
+			first = mini(first, int(bid))
+	var out := PackedInt32Array()
+	for bid in ids:
+		if bid < first:
+			out.append(bid)
+		elif bid >= first + cornice:
+			out.append(bid - cornice)
+	return out
+
+
 ## The seed a building's rooms are generated from. One place, because a far
 ## building's windows paint the kind of room that is really behind them
 ## (BuildingShell.build_window_mesh) and have to ask with the same number.
