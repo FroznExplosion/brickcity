@@ -1550,6 +1550,46 @@ bricks (80 studs 6,825, 100 studs 12,955), `asset_workshop_probe` 346, `sdf_form
 left in fit slopes is reading the clay (a hash lookup a sample in `bits`, the gradient's
 trilinear reads); the next big step is still the cell clay, then sections over frames.
 
+**Stage 7c, a model into bricks in the building workshop (plan)**. The cell clay of the plan
+above means a second sample size in `SdfForm`. Five by two by five samples a cell is built into
+every brush, the remesh, `cells`, `sync_cells` and `fit_pieces`, so that is a rewrite of the
+asset workshop's clay. A building does not need clay to sculpt: its detail is its bricks, edited
+with the building tools. So the building workshop takes a model straight to brick cells, and
+the cell clay waits until someone wants to sculpt a building:
+
+* **`SdfForm.mesh_cells(verts, index, wall)`** (C++, static): a closed mesh in cells (x in
+  studs, y in plates, z in studs) to the solid cells, inside by ray parity at each cell's middle,
+  a row of cells at a time (each triangle crossed with the rows it spans, the crossings sorted),
+  and only the skin kept: cells within `wall` cells of an outside one (0: solid). Returns x, y, z
+  a cell. It needs no field, so a 400-stud model costs its cells, not samples.
+* **Insert > A model** and a button for it (the Generate tab's pictures, or Insert on Structure):
+  pick a glTF, OBJ or FBX (as the asset workshop loads them). A panel: the size (the longest
+  side, studs; 100 at first), the wall (1-3 studs), and **the budget said first**: the cells and
+  about how many bricks, before anything is laid. Lay or Cancel.
+* **Laid over frames**: the cells packed into bricks a few layers a frame (the asset workshop's
+  `pack_cells`, moved into `BrickBench` so both use it), nearest the floor first, with a bar
+  and Cancel. One undo for the whole; Cancel takes back what was laid.
+* In one colour (the slot's) for now; the model's colours are stage 8.
+* Probes: `mesh_cells` on a box and a ball (the counts a solid and a skin should have),
+  `build_tools_probe` for the panel, the laying, Cancel and undo; `model_scale_probe` gains a
+  building-workshop row at 100, 200, 400 studs (cells only: no clay, so 200+ is safe to run).
+
+Steps: 7c the C++ and its probe; 7d the panel, the laying and the button.
+
+**7c as built** (2026-11-15): `SdfForm.mesh_cells` as planned, the skin by dilating the outside
+one axis at a time (a running count along each line), so its cost is the box's cells, not the
+wall's size. `tools/probes/mesh_cells_probe.gd` (11 checks): a box solid 240 and as skins of 1
+and 2 x 1 x 2 cells, a ball within 4% of its volume, the hollow building model against a solid
+one's skin. The hollow model, headless:
+
+| Model | Cells | Time |
+|---|---|---|
+| 100 studs | 53,120 | 4 ms |
+| 200 studs | 216,220 | 20 ms |
+| 400 studs | 872,420 | 118 ms |
+
+So cells are no longer the cost at any building size; laying the bricks is (7d).
+
 ### Colours from a model (stage 8)
 
 Built (2026-11-02): glTF and FBX colours (material, texture, vertex) go into the clay; each brick

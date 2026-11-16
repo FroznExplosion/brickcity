@@ -22,8 +22,10 @@ was found, how to test without harming the user's files, and what to do next.
   Build mode area owns it. Measured 2026-11-15 (section 21, "A model into a building",
   `model_scale_probe`): tick clay takes 20-40 s and 0.5-0.9 GB for an 80-100 stud model, Make
   bricks was the slow part; 7a (2026-11-15) made it 3x faster (section 21, "Stage 7a"); 7b
-  (2026-11-15, C++) made fit slopes ~1.6x faster, the same bricks. Left: the cell clay (C++),
-  then sections over frames. Never run the probe at 200+ studs on this machine (memory).
+  (2026-11-15, C++) made fit slopes ~1.6x faster, the same bricks. 7c (C++)
+  `SdfForm.mesh_cells`, a model straight to brick cells, no clay (400 studs in 0.12 s). Next: 7d,
+  Insert > A model in the building workshop (panel, budget, laid over frames, bar, Cancel; plan
+  in section 21, "Stage 7c"). The cell clay is put off (section 21 says why). Never run the probe at 200+ studs on this machine (memory).
 
 
 ## Where to work
