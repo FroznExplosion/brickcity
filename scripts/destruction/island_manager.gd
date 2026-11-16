@@ -755,14 +755,18 @@ var cap_worst_over := 0
 ## run, a 15 ms wake at the top of the worst tick, and wreckage blinking out and
 ## back in. So it wakes when the cap has room again (CAP_WAKE_SPARE under every
 ## limit, so the one it wakes does not tip it straight back over), or when it is
-## clearly nearer than the farthest piece still awake (CAP_SWAP): that one is
-## the cap's next choice, and the two trade places once rather than every tick.
+## clearly more seen than the least seen piece still awake (CAP_SWAP): that one
+## is the cap's next choice, and the two trade places once rather than every tick.
+## Seen, not near (2026-11-16): the plan puts away the least seen first
+## (apparent_size), and a wake by distance against the farthest awake woke a
+## low heap 20 m off that a tall wreck 60 m off out-saw -- the plan's first
+## choice again at the next plan, slept and woken at every one.
 const CAP_WAKE_SPARE := 8
 const CAP_SWAP := 0.6
 var _cap_room := true
-## How far from anybody the farthest landmark the cap left awake is, at the
-## last plan.
-var _cap_far := INF
+## The apparent size (apparent_size) of the least seen landmark the cap left
+## awake outside CAP_KEEP_RANGE, at the last plan; INF when it left none there.
+var _cap_seen := INF
 var cap_woken := 0
 ## The cap's plan (_plan_debris_cap) and when it was made.
 const CAP_REPLAN_TICKS := 15
@@ -5631,11 +5635,9 @@ func _plan_debris_cap() -> Array:
 		keep.sort_custom(func(a, c) -> bool: return float(seen[a]) < float(seen[c]))
 		for k in mini(over_large, keep.size()):
 			plan.append([keep[k], false])
-		# What is still awake after this plan, the farthest of it. (It was the
-		# distance of the next by apparent size, which is not the farthest.)
-		_cap_far = 0.0
-		for k in range(mini(over_large, keep.size()), keep.size()):
-			_cap_far = maxf(_cap_far, float(away[keep[k]]))
+		# What is still awake after this plan, the least seen of it: the plan's
+		# next choice (keep is sorted least seen first).
+		_cap_seen = float(seen[keep[over_large]]) if over_large < keep.size() else INF
 	return plan
 
 
@@ -5662,13 +5664,13 @@ func _stream_dormancy() -> void:
 		var d: Dormant = dormant[_wake_cursor]
 		var dist := _distance_to_interest(d.record.box, points)
 		# Put away by the cap: wakes when the cap has room, when it is clearly
-		# nearer than the farthest still awake, or -- whatever the cap -- inside
-		# CAP_KEEP_RANGE, where the cap would never have put it away. Without
-		# that last, with every awake piece inside the keep range (_cap_far 0),
+		# more seen than the least seen still awake (CAP_SWAP), or -- whatever
+		# the cap -- inside CAP_KEEP_RANGE, where the cap would never have put it
+		# away. Without that last, with every awake piece inside the keep range,
 		# a piece asleep woke for nothing but a hit: stood on, it stayed its
 		# stand-in, no studs (user, 2026-11-15).
 		if dist > WAKE_RANGE or (d.by_cap and not _cap_room and dist >= CAP_KEEP_RANGE
-				and dist >= _cap_far * CAP_SWAP):
+				and apparent_size(d.record.box, dist) * CAP_SWAP <= _cap_seen):
 			_wake_cursor += 1
 			continue
 		var _t1 := Time.get_ticks_usec()

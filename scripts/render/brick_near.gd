@@ -157,6 +157,8 @@ const STUD_WAIT_FIRST := 3
 ## Bands that had to fetch their studs for the first time while uploads were
 ## in flight, after waiting (STUD_WAIT_FIRST): each may have waited on them.
 var first_fetch_forced := 0
+## Bands that came into stud geometry while uploads were in flight, after waiting (STUD_WAIT_FIRST).
+var geo_forced := 0
 ## A band's two stud MultiMeshes (Band.studs): geometry, cards.
 const GEO := 0
 const CARDS := 1
@@ -196,6 +198,7 @@ class Band:
 	var stud_waits := 0                          ## steps its changed studs have waited to be fetched again
 	var cards_all := -1.0                        ## the cards' `cards_all` as last set
 	var show_dirty := false                      ## which of the two draws wants setting again
+	var geo_waits := 0                           ## steps it has waited behind uploads to show its stud geometry
 
 
 var world: BrickWorld
@@ -276,10 +279,20 @@ var _wait_studs := INF
 ## reached some other band first nearly every time -- the floor under the
 ## player, placed best of all, lost the race for seconds (2026-11-15).
 var _wait_studs_key := 0
-var _grant_key := 0
 ## The step the place was kept from; kept no longer than ADMIT_HOLD_STEPS.
 var _admit_studs_at := 0
 const ADMIT_HOLD_STEPS := 60
+## The band a place was made for: admitted by key whatever its score now, and
+## visited every step until it takes the place or the place lapses.
+var _granted := 0
+## Places made for a waiting band (_make_room), taken by it (in how many steps),
+## lapsed untaken, and visits an upload in flight put off (the HUD line).
+var stud_grants := 0
+var stud_grants_taken := 0
+var grant_steps_sum := 0
+var grant_steps_worst := 0
+var stud_grants_lapsed := 0
+var grant_held_skips := 0
 ## A place given up for a better band goes to a band placed at least that
 ## well, not to whichever band the round robin reaches first (which could be
 ## placed worse than the one that left, and the two would trade places).
@@ -659,11 +672,13 @@ func step(eye: Vector3, zoom_in := 1.0, forward := Vector3.ZERO) -> void:
 				_flying += 1
 	for key in _busy.duplicate():
 		_visit(key, eye, now, stud_budget)
-	# The band a place for stud geometry was made for last step.
-	if _grant_key != 0:
-		if _bands.has(_grant_key):
-			_visit(_grant_key, eye, now, stud_budget)
-		_grant_key = 0
+	# The band a place for stud geometry was made for: every step until it
+	# takes it (an upload in flight puts that off, _studs) or the place lapses.
+	if _granted != 0:
+		if _bands.has(_granted):
+			_visit(_granted, eye, now, stud_budget)
+		else:
+			_granted = 0
 	# Bands whose bricks changed, their studs still the old ones: before the
 	# round robin, which reaches a band every (bands / SLICE) steps -- a third
 	# of a second with three hundred tracked, and studs hung in the air where
@@ -674,7 +689,7 @@ func step(eye: Vector3, zoom_in := 1.0, forward := Vector3.ZERO) -> void:
 			var qb: Band = _bands.get(key)
 			# A band never fetched is queued only from inside the studs'
 			# reach (STUD_WAIT_FIRST); one that is, only when its bricks changed.
-			if qb == null or not qb.studs_dirty:
+			if qb == null or (not qb.studs_dirty and qb.geo_waits == 0):
 				_stud_queue.erase(key)
 				continue
 			if looked >= STUDS_FIRST:
@@ -683,7 +698,7 @@ func step(eye: Vector3, zoom_in := 1.0, forward := Vector3.ZERO) -> void:
 			_visit(key, eye, now, stud_budget)
 			# Fetched; or never fetched and turned away for long (the cap,
 			# or no longer near): the round robin has it from here.
-			if not qb.studs_dirty or (qb.studs.is_empty() and qb.stud_waits > STUD_WAIT_FIRST * 8):
+			if (not qb.studs_dirty and qb.geo_waits == 0) 					or (qb.studs.is_empty() and qb.stud_waits > STUD_WAIT_FIRST * 8):
 				_stud_queue.erase(key)
 	var n := mini(SLICE, _order.size())
 	for i in n:
@@ -740,9 +755,11 @@ func shadow_faults() -> Vector2i:
 
 ## One line for the dev HUD: studs held, the caps, what was turned away.
 func hud_line() -> String:
-	return "near tier     %d band(s), %d with studs (cap %d), %d with stud geometry (%d of %d studs); turned away: %d stud, %d card; %d waiting for studs, %d forced past uploads" % [
+	return "near tier     %d band(s), %d with studs (cap %d), %d with stud geometry (%d of %d studs); turned away: %d stud, %d card; %d waiting for studs, %d forced past uploads, %d into geometry past uploads; places made %d, taken %d (%.1f steps, worst %d), lapsed %d, held back %d" % [
 			_bands.size(), _carded.size(), max_card_bands, _studded.size(), _stud_cost, max_studs,
-			capped_studs, capped_cards, _stud_queue.size(), first_fetch_forced]
+			capped_studs, capped_cards, _stud_queue.size(), first_fetch_forced, geo_forced,
+			stud_grants, stud_grants_taken, float(grant_steps_sum) / maxf(stud_grants_taken, 1.0),
+			grant_steps_worst, stud_grants_lapsed, grant_held_skips]
 
 
 ## One line for a pass's report.
@@ -1098,6 +1115,7 @@ func _studs(band: Band, dist: float, budget: Array) -> void:
 		if not band.studs.is_empty():
 			_drop_studs(band)
 		_stud_queue.erase(band.key)
+		band.geo_waits = 0
 		return
 	# Any studs at all take a place (max_card_bands): none free, or one kept for
 	# a band placed better, and this band's tops stay smooth for now.
@@ -1138,21 +1156,43 @@ func _studs(band: Band, dist: float, budget: Array) -> void:
 	var geo := dist < stud_radius + (MARGIN if band.stud_geo else 0.0)
 	if geo and not band.stud_geo and cap_enabled \
 			and (not _fits(_stud_cost, _est_studs(band), max_studs, _studded)
-				or band.score > _admit_studs):
+				or (band.score > _admit_studs and band.key != _granted)):
 		if band.score < _wait_studs:
 			_wait_studs = band.score
 			_wait_studs_cost = _est_studs(band)
 			_wait_studs_key = band.key
 		capped_studs += 1
 		geo = false
+	if not geo or band.stud_geo:
+		band.geo_waits = 0   # not coming into geometry (any more): off the queue
 	if geo != band.stud_geo or fetch or band.show_dirty:
-		if not fetch and _held:
+		# Coming into stud geometry waits behind uploads in flight as a first
+		# fetch does (STUD_WAIT_FIRST), looked at every step meanwhile: it waited
+		# for the round robin to come back at a step with none in flight, and
+		# the floor under the player, the cap empty, stayed cards for seconds
+		# (roomfly --wide, 2026-11-16). Going out of it can wait.
+		var coming := geo and not band.stud_geo
+		if not fetch and _held and not (coming and band.geo_waits >= STUD_WAIT_FIRST):
+			if coming:
+				band.geo_waits += 1
+				_stud_queue[band.key] = true
+				if band.key == _granted:
+					grant_held_skips += 1
 			return
+		if coming and not fetch and _held:
+			geo_forced += 1
+		band.geo_waits = 0
 		band.show_dirty = false
 		band.stud_geo = geo
 		if geo:
+			if band.key == _granted:
+				stud_grants_taken += 1
+				grant_steps_sum += steps - _admit_studs_at
+				grant_steps_worst = maxi(grant_steps_worst, steps - _admit_studs_at)
+				_granted = 0
 			_stud_set(band.key, _est_studs(band))
 			_admit_studs = INF
+			_granted = 0
 		else:
 			_stud_erase(band.key)
 		_show_studs(band)
@@ -1285,6 +1325,9 @@ func _make_room() -> void:
 	if _hold_cost < max_tris * 0.75:
 		_admit_bevel = INF
 	if _stud_cost < max_studs * 0.75 or steps - _admit_studs_at > ADMIT_HOLD_STEPS:
+		if _admit_studs < INF and _granted != 0:
+			stud_grants_lapsed += 1
+		_granted = 0
 		_admit_studs = INF
 	if _wait_bevel < INF and not _fits(_hold_cost, _wait_bevel_cost, max_tris, _holding):
 		var worst: Band = _worst(_holding)
@@ -1292,13 +1335,35 @@ func _make_room() -> void:
 			_admit_bevel = worst.score * SWAP_MARGIN
 			_to_flat(worst)
 	if _wait_studs < INF and not _fits(_stud_cost, _wait_studs_cost, max_studs, _studded):
-		var worst: Band = _worst(_studded)
-		if worst != null and _wait_studs < worst.score * SWAP_MARGIN:
+		# The worst placed give up their places, as many as it takes for the
+		# waiting band to fit -- or none. One band freed was often fewer studs
+		# than the waiting one costs (a band is charged what it holds, at most
+		# max_studs / BAND_STUD_SHARE): the place, kept for that band, fitted
+		# nobody for ADMIT_HOLD_STEPS (roomfly --wide, 2026-11-16).
+		var give: Array[Band] = []
+		var freed := 0
+		var keys := _studded.keys()
+		keys.sort_custom(func(a, c) -> bool:
+				return _band_score(a) > _band_score(c))
+		for key in keys:
+			var b: Band = _bands.get(key)
+			if b == null or b.state == UPLOADING:
+				continue
+			if not (_wait_studs < b.score * SWAP_MARGIN):
+				break
+			give.append(b)
+			freed += int(_studded[key])
+			if _stud_cost - freed + _wait_studs_cost <= max_studs:
+				break
+		if not give.is_empty() and (_stud_cost - freed + _wait_studs_cost <= max_studs
+				or give.size() == _studded.size()):
 			# Kept for the band waiting, not for whichever is visited first.
 			_admit_studs = _wait_studs
 			_admit_studs_at = steps
-			_grant_key = _wait_studs_key
-			_demote_studs(worst)
+			_granted = _wait_studs_key
+			stud_grants += 1
+			for b in give:
+				_demote_studs(b)
 	# Over budget -- shrunk from the menu, or bands that came out bigger than
 	# guessed: give back the worst until it fits, always keeping one.
 	while _hold_cost > max_tris * OVER_SLACK and _holding.size() > 1:
@@ -1405,6 +1470,11 @@ func _demote_studs(band: Band) -> void:
 	band.stud_geo = false
 	_stud_erase(band.key)
 	band.show_dirty = true
+
+
+func _band_score(key: int) -> float:
+	var b: Band = _bands.get(key)
+	return b.score if b != null else -INF
 
 
 func _worst(of: Dictionary) -> Band:
