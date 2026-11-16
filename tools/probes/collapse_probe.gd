@@ -669,11 +669,13 @@ func _check_crushdrawn() -> void:
 	# the ceiling, over the item.
 	# Kept inside the room's walls: wedged in one, it never comes down.
 	var rb: AABB = room.world_box(b.xform)
-	var px := clampf(at.x - 0.7, rb.position.x + 0.2, rb.end.x - 1.6)
+	var px := clampf(at.x - 0.7, rb.position.x + 0.2, rb.end.x - 2.0)
 	var pz := clampf(at.z - 0.7, rb.position.z + 0.2, rb.end.z - 1.6)
 	# Three courses with the slab the helper adds is about two metres: low,
-	# so it clears the ceiling, and through the item from the start.
-	var piece := _drop(Vector3(px, rb.position.y + 0.3, pz), 4, 4, 3)
+	# so it clears the ceiling, and through the item from the start. Five
+	# studs by four: a tower's cornice is gone (2026-11-16), and four by four
+	# by three without its two buttresses is crumbs, not a body.
+	var piece := _drop(Vector3(px, rb.position.y + 0.3, pz), 5, 4, 3)
 	# Down, and settled: a piece that slid in slowly counts as much.
 	for t in 30 * 4:
 		await physics_frame

@@ -4446,6 +4446,23 @@ func _run_roomfly_pass() -> void:
 			good == tries.size(), "%d of %d; the rest: %s" % [good, tries.size(), reasons])
 	print("[roomfly] the near tier held by uploads %d of %d tick(s) in the rooms; %s" % [
 			held_ticks, watched_ticks, city.brick_near.hud_line()])
+	# Its roof, from above (user, 2026-11-16: "black bricks on top of the
+	# buildings ... look like mini staircases"): over the stairwell, and from
+	# off to one side.
+	var roof_y: float = city._world_box(b).end.y
+	var well: Rect2i = TowerRecipe.stair_rect(b.recipe.footprint_x, b.recipe.footprint_z)
+	var stud := BrickWorld.get_cell_size().x
+	var well_at: Vector3 = b.xform * Vector3((well.position.x + well.size.x * 0.5) * stud, 0.0,
+			(well.position.y + well.size.y * 0.5) * stud)
+	well_at.y = roof_y
+	city.camera.global_position = well_at + Vector3(0.0, 7.0, 0.01)
+	city.camera.look_at(well_at, Vector3.UP)
+	await _frames(20)
+	await _save("roomfly_roof_top")
+	city.camera.global_position = well_at + out * 9.0 + Vector3(0.0, 5.0, 0.0)
+	city.camera.look_at(well_at, Vector3.UP)
+	await _frames(10)
+	await _save("roomfly_roof_side")
 	# Nobody hit it (user, 2026-11-15: "even when I don't damage a building the
 	# staircase and some parts of the centre floor of a room is unexplainably
 	# damaged and falls when I get close").

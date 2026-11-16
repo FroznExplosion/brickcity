@@ -646,8 +646,14 @@ static func build(world: BrickWorld, chunk_id: int, palette: Dictionary,
 					_run_x(world, chunk_id, palette, y, t, footprint_x - t, 0, colour, gx)
 					_run_x(world, chunk_id, palette, y, t, footprint_x - t, footprint_z - t, colour, gx)
 			"cornice":
-				for x in range(0, footprint_x - 1, 2):
-					world.place_block(chunk_id, Vector3i(x, band.y, 0), palette.buttress_2x2, 1)
+				# Nothing (2026-11-16). It was a row of black buttresses along
+				# the z=0 edge of every roof, put there so the masked-part path
+				# ran in the real scene -- out of place on a building, and on
+				# one side only ("black bricks on top of the buildings ... look
+				# like mini staircases", user). The band stays in the layout, so
+				# every height, storey line and far box is as it was; the
+				# shells skip it (BuildingShell._flat_layout, build_arrays).
+				pass
 
 
 ## A floor: one whole panel per lattice cell, the outer ones under the walls --

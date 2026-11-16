@@ -32,6 +32,8 @@ func _init() -> void:
 	var runs: Array = []
 	for s in range(0, n):
 		runs.append(PackedInt32Array([s]))
+	if "--quick" in OS.get_cmdline_user_args():
+		runs = [PackedInt32Array([1])]
 	for s in range(1, n - 1, 3):
 		runs.append(PackedInt32Array([s, s + 1]))
 	var every := PackedInt32Array()
@@ -60,7 +62,12 @@ func _init() -> void:
 				if stair.has(bid):
 					loose_stair += 1
 				if where.size() < 8 and boxes.has(bid):
-					where.append("%s%s" % ["S" if stair.has(bid) else "b", (boxes[bid] as Vector3).snapped(Vector3.ONE * 0.1)])
+					var tk: Array = w.get_block_ticks(c, bid)
+					where.append("%s%s %s y%s h%s" % ["S" if stair.has(bid) else "b",
+							(boxes[bid] as Vector3).snapped(Vector3.ONE * 0.1),
+							w.get_archetype_name(w.get_block_archetype(c, bid)),
+							(tk[0] as Vector3i).y if not tk.is_empty() else -1,
+							(tk[1] as Vector3i).y if not tk.is_empty() else -1])
 		if loose > 0 and run.size() <= 2:
 			print("  --     lines %s; at %s" % [r.storey_lines(r.get_building(id)).slice(run[0], run[run.size() - 1] + 2), where])
 		if loose > 0:

@@ -96,6 +96,10 @@ static var _flat := {}
 static func _flat_layout(layout: Array) -> PackedInt32Array:
 	var bands := PackedInt32Array()
 	for band in layout:
+		# The cornice band holds nothing any more (TowerRecipe.build, 2026-11-16).
+		# It is the last band, so no band or damage mask after it moves.
+		if band.kind == "cornice":
+			continue
 		var kind := 1
 		var filament := 1
 		match band.kind:
@@ -105,8 +109,6 @@ static func _flat_layout(layout: Array) -> PackedInt32Array:
 			"slab":
 				kind = 2
 				filament = TowerRecipe.SLAB_COLOUR
-			"cornice":
-				kind = 3
 			"course":
 				filament = TowerRecipe.COURSE_COLOURS[int(band.index) % TowerRecipe.COURSE_COLOURS.size()]
 		bands.append_array([kind, int(band.y), int(band.plates), filament])
@@ -141,6 +143,11 @@ static func build_arrays_script(footprint_x: int, footprint_z: int, courses: int
 	for band in (layout if not layout.is_empty() else TowerRecipe.layout(courses)):
 		var masks: PackedInt32Array = damage.get(band_index, PackedInt32Array())
 		band_index += 1
+		# The cornice band holds nothing (TowerRecipe.build, 2026-11-16): not
+		# drawn, and not asked whether it is gone either -- as ShellMesher,
+		# which is never handed it (_flat_layout).
+		if band.kind == "cornice":
+			continue
 
 		# Nothing of this band's perimeter is standing, so it contributes no
 		# walls AND no floor. Without this a flattened building still drew a
@@ -170,28 +177,6 @@ static func build_arrays_script(footprint_x: int, footprint_z: int, courses: int
 			top_hollow = false
 			continue
 
-		# The cornice is NOT a ring. TowerRecipe places it as a run of buttresses
-		# along the z=0 edge ONLY, in filament 1 -- which is black:
-		#
-		#     for x in range(0, footprint_x - 1, 2):
-		#         world.place_block(chunk_id, Vector3i(x, band.y, 0), ..., 1)
-		#
-		# Drawing it as a full hollow band painted every roof with a black
-		# border the bricks never had, which vanished the moment the building
-		# materialised. Skipping it altogether was the opposite mistake: then the
-		# shell had no black at all and the bricks had a row of it.
-		#
-		# One run along the front, reusing the damage-mask machinery: front
-		# standing, the other three sides empty. `top` and `top_colour` are left
-		# alone deliberately, so the wall-top cap below still lands on the last
-		# COURSE, in that course's colour, which is what holds up the roof.
-		if band.kind == "cornice":
-			var front: int = _mask_for(masks, SIDE_FRONT)
-			if front != 0:
-				_band(verts, normals, colours, uvs, uv2s, indices,
-						BrickWorld.get_filament_colour(1), y0, y1, w, d, 0.0, false,
-						PackedInt32Array([front, 0, 0, 0]))
-			continue
 
 		var col := BrickWorld.get_filament_colour(1)
 		if band.kind == "course":

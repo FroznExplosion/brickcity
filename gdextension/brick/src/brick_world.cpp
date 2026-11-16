@@ -6024,10 +6024,11 @@ PackedByteArray BrickWorld::solve_grounded(int chunk_id) {
     // Seed from every live block resting on the foundation level. A block that
     // has been crushed loose is never a seed and is never reached.
     const Vector3i up = -chunk_down[chunk_id];
+    const std::vector<uint8_t> rests = absent_rests(chunk_id);
     for (size_t i = 0; i < n; ++i) {
         const Block &b = c.blocks[i];
         if (b.alive && !b.support_broken && (grounded_at(chunk_id, height_along(b.cell, up))
-                || hangs_at(chunk_id, b))) {
+                || hangs_at(chunk_id, b) || (!rests.empty() && rests[i] != 0))) {
             mark[i] = 1;
             scratch_depth[i] = 0;
             scratch_queue.push_back((int32_t)i);
@@ -6090,10 +6091,12 @@ PackedByteArray BrickWorld::solve_standing(int chunk_id) {
     std::vector<int32_t> queue;
     queue.reserve(n);
     const Vector3i up = -chunk_down[chunk_id];
+    const std::vector<uint8_t> rests = absent_rests(chunk_id);
     for (size_t i = 0; i < n; ++i) {
         const Block &b = c.blocks[i];
         mark[i] = 0;
-        if (b.alive && !b.support_broken && grounded_at(chunk_id, height_along(b.cell, up))) {
+        if (b.alive && !b.support_broken && (grounded_at(chunk_id, height_along(b.cell, up))
+                || (!rests.empty() && rests[i] != 0))) {
             mark[i] = 1;
             queue.push_back((int32_t)i);
         }
@@ -6212,14 +6215,87 @@ bool BrickWorld::hangs_at(int chunk_id, const Block &b) const {
     if (std::find(a.begin(), a.end(), b.cell.y + ar.size.y) == a.end()) {
         return false;
     }
-    for (int z = 0; z < ar.size.z; ++z) {
+    bool sockets = false;
+    for (int z = 0; z < ar.size.z && !sockets; ++z) {
         for (int x = 0; x < ar.size.x; ++x) {
             if (ar.down_at(x, z) != FACE_NONE) {
+                sockets = true;
+                break;
+            }
+        }
+    }
+    if (!sockets) {
+        return true;
+    }
+    // A brick with sockets under it hangs too when NOTHING is under it: no
+    // block, live or dead (a dead one keeps its cells), owns any cell below
+    // its footprint. A part fixed under the ceiling (2026-11-15: a 2x2 and a
+    // 1x2 under every storey's slab fell when a storey was laid on its own). A
+    // wall topping out at the level has bricks under it, and is carried down,
+    // not hung, as before -- shot out under, it still has their cells.
+    const Chunk &c = chunks[(size_t)chunk_id];
+    const Vector3i base = b.cell - c.origin;
+    for (int z = 0; z < ar.size.z; ++z) {
+        for (int x = 0; x < ar.size.x; ++x) {
+            if (c.block_at(Vector3i(base.x + x, base.y - 1, base.z + z)) >= 0) {
                 return false;
             }
         }
     }
     return true;
+}
+
+std::vector<uint8_t> BrickWorld::absent_rests(int chunk_id) const {
+    std::vector<uint8_t> out;
+    if (!valid_chunk(chunk_id) || chunk_down[(size_t)chunk_id] != Vector3i(0, -1, 0)) {
+        return out;
+    }
+    const Chunk &c = chunks[(size_t)chunk_id];
+    if (c.absent.size() != c.blocks.size()) {
+        return out;
+    }
+    // The tops of the blocks not laid whose record says intact, by height.
+    std::unordered_map<int, std::vector<int32_t>> by_top;
+    for (size_t i = 0; i < c.blocks.size(); ++i) {
+        const uint8_t a = c.absent[i];
+        if ((a & Chunk::ABSENT) == 0 || (a & Chunk::ABSENT_ALIVE) == 0
+                || (a & Chunk::ABSENT_DETACHED) != 0) {
+            continue;
+        }
+        const Block &q = c.blocks[i];
+        if (q.archetype < 0) {
+            continue;
+        }
+        by_top[q.cell.y + archetypes[q.archetype].size.y].push_back((int32_t)i);
+    }
+    if (by_top.empty()) {
+        return out;
+    }
+    out.assign(c.blocks.size(), 0);
+    for (size_t i = 0; i < c.blocks.size(); ++i) {
+        if ((c.absent[i] & Chunk::ABSENT) != 0) {
+            continue;
+        }
+        const Block &p = c.blocks[i];
+        if (!p.alive || p.archetype < 0) {
+            continue;
+        }
+        const auto it = by_top.find(p.cell.y);
+        if (it == by_top.end()) {
+            continue;
+        }
+        const Vector3i ps = archetypes[p.archetype].size;
+        for (const int32_t qi : it->second) {
+            const Block &q = c.blocks[(size_t)qi];
+            const Vector3i qs = archetypes[q.archetype].size;
+            if (p.cell.x < q.cell.x + qs.x && q.cell.x < p.cell.x + ps.x
+                    && p.cell.z < q.cell.z + qs.z && q.cell.z < p.cell.z + ps.z) {
+                out[i] = 1;
+                break;
+            }
+        }
+    }
+    return out;
 }
 
 void BrickWorld::set_anchor_levels(int chunk_id, const PackedInt32Array &grid_ys) {
@@ -9746,11 +9822,16 @@ PackedInt32Array BrickWorld::spans_from(int chunk_id, float reach_studs, const s
         }
         return false;
     };
+    // Resting on a storey not laid, which stands (absent_rests): held, as the
+    // solve holds it.
+    const std::vector<uint8_t> rests = seeds != nullptr ? std::vector<uint8_t>()
+            : absent_rests(chunk_id);
     for (const int32_t bid : order) {
         const Block &b = c.blocks[(size_t)bid];
         const Vector3i sz = archetypes[b.archetype].size;
         const bool ground = seeds != nullptr ? (*seeds)[(size_t)bid] != 0
-                : (grounded_at(chunk_id, b.cell.y) || hangs_at(chunk_id, b));
+                : (grounded_at(chunk_id, b.cell.y) || hangs_at(chunk_id, b)
+                    || (!rests.empty() && rests[(size_t)bid] != 0));
         if (!ground && b.bottom_broken) {
             continue;
         }
