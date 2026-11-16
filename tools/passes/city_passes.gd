@@ -2082,6 +2082,12 @@ func _run_landing_pass() -> void:
 	var shell_back := 0
 	var shots := 0
 	var lines: Array[String] = []
+	# Its painted windows come down with it (PiecePanes; user, 2026-11-16: a
+	# building falling as an island lost its windows, and they never came back
+	# while it moved): ticks its biggest piece was moving, past the first few,
+	# and of those the ones it showed panes in.
+	var fall_ticks := 0
+	var fall_panes := 0
 	for t in range(1, 601):
 		await city.get_tree().physics_frame
 		var total := 0
@@ -2115,6 +2121,13 @@ func _run_landing_pass() -> void:
 		for dm in city.islands.dormant:
 			if dm.owner == b.id:
 				stood += dm.record.block_count()
+		if biggest != null and t > 10 and most >= 1000 				and biggest.body.linear_velocity.length() > 1.0:
+			fall_ticks += 1
+			var pn := city.piece_panes.node_of(biggest)
+			if pn != null and pn.is_visible_in_tree():
+				fall_panes += 1
+			if fall_ticks == 12:
+				await _save("landing_windows")   # on its way down, windows and all
 		var shell = city._shells.get(b.id)
 		var shell_shown: bool = shell != null and is_instance_valid(shell) and (shell as Node3D).is_visible_in_tree()
 		var bn = city._brick_nodes.get(b.id)
@@ -2147,9 +2160,60 @@ func _run_landing_pass() -> void:
 				worst_blind * 100.0, worst_at])
 	_gate_ok("building %d: and its shell does not come back while it lies there" % b.id,
 			shell_back == 0, "%d tick(s) shell drawn" % shell_back)
+	_gate_ok("building %d: its biggest piece shows its painted windows on the way down (at least 80%% of the ticks it moves)" % b.id,
+			fall_ticks > 0 and fall_panes >= int(ceil(fall_ticks * 0.8)),
+			"%d of %d tick(s)" % [fall_panes, fall_ticks])
+	print("[landing] windows shown on its biggest piece in %d of the %d tick(s) it moved" % [fall_panes, fall_ticks])
+	_landing_panes_check(b)
+	print("[landing] " + city.piece_panes.report())
 	print("[landing] holds extended for children still undrawn: %d frame(s)" % city.islands.holds_extended)
 	print("[landing] %d ok, %d FAIL" % [city._gate_pass, city._gate_fail])
 	city.get_tree().quit(1 if city._gate_fail > 0 else 0)
+
+## Once its pieces are down: every big piece of it with windows has panes made
+## from its bricks as they are now, and they hang on the piece -- each pane's box,
+## in the piece's own space, inside the piece's box (a pane hung at the wrong
+## origin would be metres off it).
+func _landing_panes_check(b: BuildingRegistry.Building) -> void:
+	for t in 120:
+		var behind := 0
+		for isl in city.islands.islands:
+			if isl.is_valid() and isl.owner == b.id and city.piece_panes._wants(isl):
+				var entry = city.piece_panes._have.get(isl)
+				if entry == null or int(entry[1]) != city.world.get_chunk_version(isl.chunk):
+					behind += 1
+		if behind == 0:
+			break
+		await city.get_tree().physics_frame
+	var pieces := 0
+	var with_panes := 0
+	var caught_up := 0
+	var outside := 0
+	var worst_off := 0.0
+	for isl in city.islands.islands:
+		if not isl.is_valid() or isl.owner != b.id or not city.piece_panes._wants(isl):
+			continue
+		pieces += 1
+		var entry = city.piece_panes._have.get(isl)
+		if entry != null and int(entry[1]) == city.world.get_chunk_version(isl.chunk):
+			caught_up += 1
+		var pn := city.piece_panes.node_of(isl)
+		if pn == null or pn.mesh == null:
+			continue
+		with_panes += 1
+		var dims: Vector3i = city.world.get_chunk_dims(isl.chunk)
+		var box := AABB(Vector3.ZERO, Vector3(dims.x * City.STUD, dims.y * City.PLATE,
+				dims.z * City.STUD)).grow(0.1)
+		var at: AABB = pn.transform * pn.mesh.get_aabb()
+		if not box.encloses(at):
+			outside += 1
+			worst_off = maxf(worst_off, (at.get_center() - box.get_center()).length())
+	_gate_ok("building %d: once down, its pieces' painted windows are made from their bricks as they are" % b.id,
+			pieces > 0 and caught_up == pieces and with_panes > 0,
+			"%d piece(s) big enough, %d caught up, %d with windows standing" % [pieces, caught_up, with_panes])
+	_gate_ok("building %d: and each piece's windows hang on that piece" % b.id,
+			outside == 0, "%d off their piece, worst %.1f m from its middle" % [outside, worst_off])
+
 
 ## A building's shadow proxy (_stream_shadows) is built on a worker now: it has
 ## to turn up, and to catch up with a hit once the building has stopped losing

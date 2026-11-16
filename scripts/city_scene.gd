@@ -2089,6 +2089,9 @@ var interior_groups := InteriorGroups.new()
 ## Which ROOMS of those groups are up, and their painted windows' fades
 ## (RoomStreaming; Docs/HandoffRooms.md): eight at once, two of them by view.
 var room_streaming := RoomStreaming.new()
+## The painted windows of falling pieces (PiecePanes): made from each piece's
+## own bricks and hung on it; a building toppling whole hands its own over.
+var piece_panes := PiecePanes.new()
 ## Collision boxes put on or taken off, a pass: the first always, the rest
 ## while this much of the tick's clock is left (TickClock).
 const COVER_BUDGET_MS := 1.0
@@ -3819,6 +3822,11 @@ func _topple(id: int) -> void:
 	# and the piece's id is this command's (DamageLog.piece_id).
 	var piece := islands.record_topple(id)
 	_free_rest(id)
+	# Its painted windows ride it down (PiecePanes): taken off its brick node
+	# before anything below frees that node.
+	var panes: MeshInstance3D = drawing.take_panes(id)
+	var panes_owed := _panes_owed.has(id)
+	_panes_owed.erase(id)
 	var chunk := b.chunk
 	var mi: MeshInstance3D = _brick_nodes.get(id)
 	# Captured before hand_over, which drops the building's claim on them.
@@ -3891,8 +3899,9 @@ func _topple(id: int) -> void:
 	# section 6.3 defers real joints), so what falls is the frames.
 	_free_frames(id, true)
 	registry.hand_over(id)
-	islands.adopt(chunk, mi, carried_mesh, carried_bytes, carried_width, carried_bands,
-			piece, id, true, true, carried_band_bytes, owed_bands)
+	var became := islands.adopt(chunk, mi, carried_mesh, carried_bytes, carried_width,
+			carried_bands, piece, id, true, true, carried_band_bytes, owed_bands)
+	piece_panes.hand_over(became, panes, panes_owed)
 	if not riding_rows.is_empty():
 		_rider_add(islands.find_by_chunk(chunk), riding_rows, Transform3D.IDENTITY)
 		_group_rides += 1
@@ -6701,6 +6710,14 @@ func _physics_process(_delta: float) -> void:
 		# Every tick: the painted windows of the rooms coming and going fade
 		# by time (RoomStreaming.FADE_S).
 		room_streaming.tend(_delta)
+		if camera != null:
+			if piece_panes.world == null:
+				piece_panes.world = world
+				piece_panes.registry = registry
+				piece_panes.islands = islands
+				piece_panes.retirer = _retirer
+				piece_panes.worker_meshes = worker_meshes
+			piece_panes.tend(camera.global_position)
 		t_st = _part("st_rooms", t_st)
 		if camera != null and Engine.get_physics_frames() % 4 == 2:
 			_stream_detail()
