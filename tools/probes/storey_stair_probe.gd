@@ -13,15 +13,23 @@ extends SceneTree
 ## come out detached -- its stair least of all, which fell and broke the floor
 ## round the shaft.
 
-const FX := 30
-const FZ := 30
-const COURSES := 48
+## `-- --fx=80 --fz=60 --courses=60` for another tower.
+var FX := 30
+var FZ := 30
+var COURSES := 48
 
 var _pass := 0
 var _fail := 0
 
 
 func _init() -> void:
+	for a in OS.get_cmdline_user_args():
+		if a.begins_with("--fx="):
+			FX = int(a.trim_prefix("--fx="))
+		elif a.begins_with("--fz="):
+			FZ = int(a.trim_prefix("--fz="))
+		elif a.begins_with("--courses="):
+			COURSES = int(a.trim_prefix("--courses="))
 	var probe := _make()
 	var reg: BuildingRegistry = probe[1]
 	var n := reg.storey_count(probe[2])
@@ -36,6 +44,25 @@ func _init() -> void:
 		runs = [PackedInt32Array([1])]
 	for s in range(1, n - 1, 3):
 		runs.append(PackedInt32Array([s, s + 1]))
+	# Laid one after the other, as the city lays them (_lay_more): storey s
+	# first, then the one over it.
+	var seq: Array = []
+	for s in range(1, n - 1, 3):
+		seq.append(PackedInt32Array([s, s + 1]))
+	for run in seq:
+		var m := _make()
+		var w: BrickWorld = m[0]
+		var r: BuildingRegistry = m[1]
+		var id: int = m[2]
+		var c := r.materialise(id, PackedInt32Array([run[0]]))
+		r.lay_storeys(id, PackedInt32Array([run[1]]))
+		var loose := 0
+		for g in w.find_detached_groups(c):
+			loose += (g as PackedInt32Array).size()
+		if loose > 0:
+			bad += 1
+			print("  --   storey %d, then %d laid over it: %d brick(s) loose" % [run[0], run[1], loose])
+		worst = maxi(worst, loose)
 	var every := PackedInt32Array()
 	for s in n:
 		every.append(s)
@@ -68,7 +95,7 @@ func _init() -> void:
 							w.get_archetype_name(w.get_block_archetype(c, bid)),
 							(tk[0] as Vector3i).y if not tk.is_empty() else -1,
 							(tk[1] as Vector3i).y if not tk.is_empty() else -1])
-		if loose > 0 and run.size() <= 2:
+		if loose > 0 and run.size() <= 2 and where.size() > 0:
 			print("  --     lines %s; at %s" % [r.storey_lines(r.get_building(id)).slice(run[0], run[run.size() - 1] + 2), where])
 		if loose > 0:
 			bad += 1
@@ -76,7 +103,7 @@ func _init() -> void:
 		worst = maxi(worst, loose)
 		worst_stair = maxi(worst_stair, loose_stair)
 	_ok(bad == 0, "laid a storey (or two) at a time, nothing of it comes loose (%d of %d runs did; worst %d bricks, %d stair)" % [
-			bad, runs.size(), worst, worst_stair])
+			bad, runs.size() + seq.size(), worst, worst_stair])
 	print("\n[storey_stair] %d ok, %d FAIL" % [_pass, _fail])
 	quit(1 if _fail > 0 else 0)
 

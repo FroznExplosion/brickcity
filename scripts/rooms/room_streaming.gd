@@ -80,6 +80,7 @@ var _boxes := {}                ## building id -> Array of AABB, a room's local 
 var _extent := {}               ## building id -> AABB over its rooms (the plan's outer faces)
 var _empty := {}                ## room key -> true: its manifest draws nothing
 var _per := {}                  ## building id -> rooms a storey
+var _lists := {}                ## building id -> _lists_of
 
 var passes := 0
 var _last_pass_ms := 0          ## the `now` of the last pass (Rec.chosen_ms of what it chose)
@@ -101,6 +102,27 @@ var evicted := 0                ## all told: rooms given back by the cap
 var comes := 0                  ## all told: rooms that came up (window faded out)
 var goes := 0                   ## all told: rooms given back after their window came back
 var made := 0                   ## all told: records made (a room chosen afresh)
+var rays := 0                   ## all told: sight rays cast for rooms taken by view
+var hidden := 0                 ## all told: rooms not taken by view, something in front
+var _here := Vector3.ZERO       ## this pass's camera, for _in_sight
+var _sight := Callable()
+var _rays_left := 0
+## Sight rays a pass, at most: a view where every candidate is behind something
+## asked every one of them.
+const SIGHT_RAYS := 8
+## Candidates kept for picking: the picks and some spare for those turned away
+## (empty, unsure, out of sight).
+const NEAR_KEEP := 24
+const VIEW_KEEP := 16
+## A room's answer is kept this long while the camera stays this near where it
+## was asked from.
+const SIGHT_KEEP_MS := 1000
+const SIGHT_KEEP_M := 2.0
+var _sight_seen := {}           ## room key -> [msec, camera, clear]
+var ray_ms := 0.0               ## all told, in the sight rays
+## All told, of choose: [scanning candidates, picking, masks]; the rest is the
+## records' upkeep.
+var part_ms := [0.0, 0.0, 0.0]
 var buildings_forgot := 0       ## all told: forget_building calls
 
 
@@ -116,8 +138,12 @@ static func key_of(building_id: int, room: int) -> int:
 ## `pawns` are where the pawns are (world): a room up with one in it gets
 ## collision as a near room does, so a soldier does not walk through a desk
 ## the player can see.
+## `sight` (from, to world, building id -> true if nothing but that building
+## stands between) is asked before a room is taken by view: one behind another
+## building is not taken. At most SIGHT_RAYS a pass.
 func choose(here: Vector3, forward: Vector3, half_fov: float, buildings: Array,
-		unsure: Callable, pawns: PackedVector3Array = PackedVector3Array()) -> void:
+		unsure: Callable, pawns: PackedVector3Array = PackedVector3Array(),
+		sight: Callable = Callable()) -> void:
 	var t0 := Time.get_ticks_usec()
 	var now := Time.get_ticks_msec()
 	passes += 1
@@ -141,12 +167,20 @@ func choose(here: Vector3, forward: Vector3, half_fov: float, buildings: Array,
 		var near_c: Array = []     # [score, building, group, k]
 		var view_c: Array = []
 		for b in buildings:
+			var tc := Time.get_ticks_usec()
 			_candidates(b, here, forward, half_fov, near_c, view_c)
-		near_c.sort_custom(func(a, c) -> bool: return float(a[0]) < float(c[0]))
-		view_c.sort_custom(func(a, c) -> bool: return float(a[0]) < float(c[0]))
+			part_ms[0] += float(Time.get_ticks_usec() - tc) / 1000.0
+		# Kept sorted, and short, as they were filled (_keep_best).
 		var unsure_of := {}
+		_here = here
+		_sight = sight
+		_rays_left = SIGHT_RAYS
+		if _sight_seen.size() > 256:
+			_sight_seen.clear()   # answers a second old at most: cheap to ask again
+		var tp := Time.get_ticks_usec()
 		picked_near = _pick(near_c, NEAR_PICKS, true, chosen, unsure, unsure_of, now)
 		picked_view = _pick(view_c, VIEW_PICKS, false, chosen, unsure, unsure_of, now)
+		part_ms[1] += float(Time.get_ticks_usec() - tp) / 1000.0
 		_scan_here = here
 		_scan_fwd = forward
 		_scan_ms = now
@@ -190,14 +224,23 @@ func choose(here: Vector3, forward: Vector3, half_fov: float, buildings: Array,
 			if r.group.on_screen.size() > r.k and r.group.on_screen[r.k] != 0:
 				goes += 1
 			_forget(key)
+	var tm := Time.get_ticks_usec()
 	_mark_pawns(buildings, pawns)
 	_set_masks(buildings)
+	part_ms[2] += float(Time.get_ticks_usec() - tm) / 1000.0
 	var ms := float(Time.get_ticks_usec() - t0) / 1000.0
 	choose_ms += ms
 	worst_choose_ms = maxf(worst_choose_ms, ms)
 
 
 ## Every room of `b` that may be chosen, scored, into `near_c` and `view_c`.
+##
+## Only the rooms that can be chosen at all, a storey group at a time
+## (2026-11-16: the scan of every room in range was most of a pass): out of
+## doors, the rooms on the outer faces the camera is outside of; inside, the
+## rooms of its storey; in a building that has been hit, the rooms with holes in
+## their walls. A group out of range, or nowhere near and wholly out of view, is
+## passed over whole.
 func _candidates(b: BuildingRegistry.Building, here: Vector3, forward: Vector3,
 		half_fov: float, near_c: Array, view_c: Array) -> void:
 	var inv := b.xform.affine_inverse()
@@ -209,33 +252,130 @@ func _candidates(b: BuildingRegistry.Building, here: Vector3, forward: Vector3,
 	var inside := local.x > ext.position.x - 1.0 and local.x < ext.end.x + 1.0 \
 			and local.z > ext.position.z - 1.0 and local.z < ext.end.z + 1.0 \
 			and local.y > ext.position.y - 1.0 and local.y < ext.end.y
-	for g in groups.layout(b):
+	var layout := groups.layout(b)
+	var lists := _lists_of(b, rooms, layout)
+	var faces_out: Array = []   # the per-group lists of the faces the camera is outside of
+	if local.x < ext.position.x:
+		faces_out.append(lists.nx)
+	if local.x > ext.end.x:
+		faces_out.append(lists.px)
+	if local.z < ext.position.z:
+		faces_out.append(lists.nz)
+	if local.z > ext.end.z:
+		faces_out.append(lists.pz)
+	var st := _storey_at(b, local.y) if inside else -1
+	var per: int = maxi(int(_per.get(b.id, 1)), 1)
+	var damaged := b.is_damaged()
+	for gi in layout.size():
+		var g: InteriorGroups.Group = layout[gi]
 		var gd := box_distance(g.box, local)
 		if gd > InteriorGroups.INTERIOR_RANGE:
 			continue
-		# A group nowhere near and wholly out of view has nothing to offer.
 		if gd > NEAR_RANGE and off_view(g.box, local, fwd) > half_fov:
 			continue
-		for k in range(g.last_room - g.first_room):
-			var index: int = g.first_room + k
-			var lb: AABB = boxes[index]
-			var room: Room = rooms[index]
-			var storey := inside and local.y >= lb.position.y - 0.5 and local.y < lb.end.y
-			var facing := faces(room, lb, local, ext)
-			if not facing and not storey:
-				continue
-			var d := box_distance(lb, local)
-			if d <= NEAR_RANGE:
-				# The camera's own storey first, nearest first (its own room is
-				# 0); then rooms seen from outside.
-				near_c.append([d + (0.0 if storey else NEAR_RANGE), b, g, k])
-				continue
-			if not facing:
-				continue
-			var off := off_view(lb, local, fwd)
-			if off > half_fov:
-				continue
-			view_c.append([off + 0.2 * d / InteriorGroups.INTERIOR_RANGE, b, g, k])
+		for list in faces_out:
+			for index in (list[gi] as PackedInt32Array):
+				_consider(b, g, index, boxes[index], local, fwd, half_fov, true, false, near_c, view_c)
+		if st >= 0 and st >= g.first_storey and st < g.last_storey:
+			for index in range(st * per, mini((st + 1) * per, rooms.size())):
+				var room: Room = rooms[index]
+				_consider(b, g, index, boxes[index], local, fwd, half_fov,
+						faces(room, boxes[index], local, ext), true, near_c, view_c)
+		if damaged:
+			for index in range(g.first_room, mini(g.last_room, rooms.size())):
+				var room: Room = rooms[index]
+				if not room.openings.is_empty() and faces(room, boxes[index], local, ext):
+					_consider(b, g, index, boxes[index], local, fwd, half_fov, true, false, near_c, view_c)
+
+
+## One room into near_c or view_c, or neither. `facing`: it shows the camera an
+## opening; `storey`: it is on the camera's storey, the camera inside.
+func _consider(b: BuildingRegistry.Building, g: InteriorGroups.Group, index: int, lb: AABB,
+		local: Vector3, fwd: Vector3, half_fov: float, facing: bool, storey: bool,
+		near_c: Array, view_c: Array) -> void:
+	if not facing and not storey:
+		return
+	var k: int = index - g.first_room
+	var d := box_distance(lb, local)
+	if d <= NEAR_RANGE:
+		# The camera's own storey first, nearest first (its own room is 0); then
+		# rooms seen from outside.
+		_keep_best(near_c, [d + (0.0 if storey else NEAR_RANGE), b, g, k], NEAR_KEEP)
+		return
+	if not facing:
+		return
+	# Behind the camera, and not round it: no angle worth working out.
+	if (lb.get_center() - local).dot(fwd) < -lb.size.length() * 0.5:
+		return
+	var off := off_view(lb, local, fwd)
+	if off > half_fov:
+		return
+	_keep_best(view_c, [off + 0.2 * d / InteriorGroups.INTERIOR_RANGE, b, g, k], VIEW_KEEP)
+
+
+## Put `entry` ([score, ...]) into `list`, kept sorted by score and at most
+## `cap` long: what picking needs is the best few (and a few spare, for the ones
+## turned away), not every candidate in range sorted.
+static func _keep_best(list: Array, entry: Array, cap: int) -> void:
+	var score: float = entry[0]
+	if list.size() >= cap and score >= float(list[list.size() - 1][0]):
+		return
+	var at := list.size()
+	while at > 0 and float(list[at - 1][0]) > score:
+		at -= 1
+	list.insert(at, entry)
+	if list.size() > cap:
+		list.pop_back()
+
+
+## A building's rooms sorted for the scan, made once (rooms do not move): on
+## each outer face of the plan (nx, px, nz, pz), group by group -- an array a
+## group, of the indices of its rooms on that face.
+func _lists_of(b: BuildingRegistry.Building, rooms: Array, layout: Array) -> Dictionary:
+	var have = _lists.get(b.id)
+	if have != null and (have as Dictionary).n == rooms.size() and (have as Dictionary).groups == layout.size():
+		return have
+	var boxes := _boxes_of(b, rooms)
+	var ext: AABB = _extent[b.id]
+	const E := 0.05
+	var out := {"n": rooms.size(), "groups": layout.size(), "nx": [], "px": [], "nz": [], "pz": []}
+	for gi in layout.size():
+		var g: InteriorGroups.Group = layout[gi]
+		var nx := PackedInt32Array()
+		var px := PackedInt32Array()
+		var nz := PackedInt32Array()
+		var pz := PackedInt32Array()
+		for i in range(g.first_room, mini(g.last_room, rooms.size())):
+			var lb: AABB = boxes[i]
+			if lb.position.x <= ext.position.x + E:
+				nx.append(i)
+			if lb.end.x >= ext.end.x - E:
+				px.append(i)
+			if lb.position.z <= ext.position.z + E:
+				nz.append(i)
+			if lb.end.z >= ext.end.z - E:
+				pz.append(i)
+		(out.nx as Array).append(nx)
+		(out.px as Array).append(px)
+		(out.nz as Array).append(nz)
+		(out.pz as Array).append(pz)
+	_storey_of(b, 0)   # fills _per
+	_lists[b.id] = out
+	return out
+
+
+## The storey (lattice) holding height `y` of the building's own space, or -1.
+func _storey_at(b: BuildingRegistry.Building, y: float) -> int:
+	var rooms := registry.rooms_of(b.id)
+	var boxes := _boxes_of(b, rooms)
+	var per: int = maxi(int(_per.get(b.id, 1)), 1)
+	@warning_ignore("integer_division")
+	var n: int = rooms.size() / per
+	for st in n:
+		var lb: AABB = boxes[st * per]
+		if y >= lb.position.y - 0.5 and y < lb.end.y:
+			return st
+	return -1
 
 
 ## Take up to `n` rooms off a sorted candidate list into `chosen`.
@@ -266,6 +406,14 @@ func _pick(cands: Array, n: int, near: bool, chosen: Dictionary, unsure: Callabl
 			# about to stand in: its window must go, and it costs no rows.
 			if not near and not _draws(key, registry.get_room(b.id, index)):
 				continue
+			# Taken by view: only if it can be seen -- nothing between the
+			# camera and the face of it nearest the camera.
+			if not near and _sight.is_valid():
+				if _rays_left <= 0:
+					break   # out of rays this pass: the rest of the view picks wait
+				if not _in_sight(b, index):
+					hidden += 1
+					continue
 			# A storey not laid yet has no floor to stand furniture on: the
 			# room would be worked out empty. Asked again once it is laid.
 			if registry.is_partial(b) and not b.storeys_laid.has(_storey_of(b, index)):
@@ -314,6 +462,29 @@ func _storey_of(b: BuildingRegistry.Building, index: int) -> int:
 		_per[b.id] = per
 	@warning_ignore("integer_division")
 	return index / per
+
+
+## Whether nothing stands between the camera and room `index` of `b`: a ray to
+## the point of its box nearest the camera, at window height, a little inside.
+## A hit on `b` itself is its own wall or window, not something in front of it.
+func _in_sight(b: BuildingRegistry.Building, index: int) -> bool:
+	var lb: AABB = _boxes_of(b, registry.rooms_of(b.id))[index]
+	var local: Vector3 = b.xform.affine_inverse() * _here
+	var at := local.clamp(lb.position, lb.end)
+	at.y = clampf(lb.position.y + 1.3, lb.position.y, lb.end.y)
+	at = at.lerp(lb.get_center(), 0.15)
+	var key := key_of(b.id, index)
+	var now := Time.get_ticks_msec()
+	var had: Array = _sight_seen.get(key, [])
+	if not had.is_empty() and now - int(had[0]) < SIGHT_KEEP_MS 			and (had[1] as Vector3).distance_to(_here) < SIGHT_KEEP_M:
+		return bool(had[2])
+	var t0 := Time.get_ticks_usec()
+	rays += 1
+	_rays_left -= 1
+	var clear := bool(_sight.call(_here, b.xform * at, b.id))
+	ray_ms += float(Time.get_ticks_usec() - t0) / 1000.0
+	_sight_seen[key] = [now, _here, clear]
+	return clear
 
 
 ## Whether a room's manifest draws anything: an empty room's painted window
@@ -464,6 +635,7 @@ func forget_building(id: int) -> void:
 	_written.erase(id)
 	_boxes.erase(id)
 	_extent.erase(id)
+	_lists.erase(id)
 
 
 ## A room changed what it draws (a piece crushed, laid): asked again whether
@@ -514,6 +686,7 @@ func report() -> Dictionary:
 		if r.hide > 0.0 and r.hide < 1.0:
 			fading += 1
 	return {"held": held, "fading": fading, "near": picked_near, "view": picked_view, "scans": scans,
+			"rays": rays, "hidden": hidden, "ray_ms": ray_ms, "part_ms": part_ms,
 			"evicted": evicted, "comes": comes, "goes": goes, "passes": passes,
 			"choose_ms": choose_ms, "worst_choose_ms": worst_choose_ms}
 

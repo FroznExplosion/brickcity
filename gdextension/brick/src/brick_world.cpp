@@ -6227,6 +6227,9 @@ bool BrickWorld::hangs_at(int chunk_id, const Block &b) const {
     if (!sockets) {
         return true;
     }
+    if (!storey_holds) {
+        return false;
+    }
     // A brick with sockets under it hangs too when NOTHING is under it: no
     // block, live or dead (a dead one keeps its cells), owns any cell below
     // its footprint. A part fixed under the ceiling (2026-11-15: a 2x2 and a
@@ -6245,9 +6248,19 @@ bool BrickWorld::hangs_at(int chunk_id, const Block &b) const {
     return true;
 }
 
+bool BrickWorld::storey_holds = true;
+
+void BrickWorld::set_storey_holds(bool on) {
+    storey_holds = on;
+}
+
+bool BrickWorld::get_storey_holds() {
+    return storey_holds;
+}
+
 std::vector<uint8_t> BrickWorld::absent_rests(int chunk_id) const {
     std::vector<uint8_t> out;
-    if (!valid_chunk(chunk_id) || chunk_down[(size_t)chunk_id] != Vector3i(0, -1, 0)) {
+    if (!storey_holds || !valid_chunk(chunk_id) || chunk_down[(size_t)chunk_id] != Vector3i(0, -1, 0)) {
         return out;
     }
     const Chunk &c = chunks[(size_t)chunk_id];
@@ -12334,6 +12347,10 @@ void BrickWorld::_bind_methods() {
             &BrickWorld::set_anchor_levels);
     ClassDB::bind_method(D_METHOD("set_hang_levels", "chunk_id", "grid_ys"),
             &BrickWorld::set_hang_levels);
+    ClassDB::bind_static_method("BrickWorld", D_METHOD("set_storey_holds", "on"),
+            &BrickWorld::set_storey_holds);
+    ClassDB::bind_static_method("BrickWorld", D_METHOD("get_storey_holds"),
+            &BrickWorld::get_storey_holds);
     ClassDB::bind_method(D_METHOD("get_template_count"), &BrickWorld::get_template_count);
     ClassDB::bind_method(D_METHOD("set_tension_per_stud", "chunk_id", "capacity"),
             &BrickWorld::set_tension_per_stud);

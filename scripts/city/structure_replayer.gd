@@ -63,6 +63,22 @@ func _init(p_world: BrickWorld = null, p_resolve := Callable()) -> void:
 	resolve = p_resolve
 
 
+## A save from before its building's block ids changed (AreaSnapshot 3):
+## (building id, chunk, ids) -> the ids they are now. Asked of every command
+## that names a building's blocks by id, once its chunk is there.
+var legacy_ids := Callable()
+var ids_remapped := 0   ## commands whose ids were put right
+
+
+## The command's block ids as they are now (legacy_ids), in place: the log a
+## restore rebuilds carries the new ids, and saves them so.
+func _put_ids_right(e: DamageLog.Entry, chunk: int) -> void:
+	if not legacy_ids.is_valid() or e.blocks.is_empty():
+		return
+	e.blocks = legacy_ids.call(e.target, chunk, e.blocks)
+	ids_remapped += 1
+
+
 func piece_chunk(id: int) -> int:
 	var c: int = int(pieces.get(id, -1))
 	return c if c >= 0 and world.is_chunk_alive(c) else -1
@@ -77,6 +93,9 @@ func apply(e: DamageLog.Entry) -> bool:
 			var chunk := _building_chunk(e.target, e.frame)
 			if chunk < 0:
 				return _miss(e, "no building")
+			if e.kind == DamageLog.Kind.BURN or e.kind == DamageLog.Kind.RESTORE \
+					or (e.kind == DamageLog.Kind.SCORCH and bool(e.flags & DamageLog.FLAG_BLOCKS)):
+				_put_ids_right(e, chunk)
 			DamageLog.apply_entry(world, chunk, e)
 		DamageLog.Kind.TOPPLE:
 			var frame := 0
@@ -125,6 +144,8 @@ func apply(e: DamageLog.Entry) -> bool:
 					else _building_chunk(e.target, e.frame)
 			if source < 0:
 				return _miss(e, "no source")
+			if not from_piece:
+				_put_ids_right(e, source)
 			# A building's blocks are named by id; a piece's by local cell, because
 			# its ids are renumbered whenever it sleeps (IslandManager.record_detach).
 			var ids := e.blocks

@@ -412,6 +412,12 @@ floor in 1 of 13 rooms again with the cap EMPTY, 0 of 4,000 studs held):
   the place or the place lapses. `--roomfly --wide`: 38 made, 37 taken (1.6 steps), 1 lapsed (the
   camera had gone to the next room); the HUD line counts them (`places made`).
 
+What the eighth costs, measured (`city.tscn -- --studcost --big`, 2026-11-16: a room of the
+80x60 tower, flat out, editor closed, started under 80 C; `band_stud_share` switched at run time,
+every place given up and taken again under each): share 8, 8 bands with stud geometry, 310k
+triangles, GPU 3.26 ms median; share 2, 4 bands, 224k, 3.10 ms -- 0.15-0.3 ms a frame for the
+floor under the player. Every stud off: 2.83 ms.
+
 The dev HUD has a `near tier` line (bands, with studs, the caps, turned away, waiting, forced).
 `city.tscn -- --roomfly --big` checks every band within the studs' reach has the studs its bricks
 have now, two seconds after flying into each room.

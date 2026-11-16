@@ -4258,6 +4258,94 @@ func _run_groups_pass() -> void:
 	print("[groups] %d ok, %d FAIL" % [city._gate_pass, city._gate_fail])
 	city.get_tree().quit(1 if city._gate_fail > 0 else 0)
 
+## What the near tier's studs cost the GPU standing in a room of the widest
+## tower (2026-11-16): the stud budget's share a band (BrickNear.
+## band_stud_share) 8, as it is, against 2, as it was until 2026-11-15, and no
+## studs at all. Flat out (vsync and the frame cap off in memory), each row
+## after the near tier has settled, the share-8 row again at the end for
+## drift. A timing run: editor closed, nothing else running, started cool.
+##
+##     godot --path . scenes/city.tscn -- --studcost --big
+func _run_studcost_pass() -> void:
+	print("[studcost] the near tier's studs, in a room of the widest tower")
+	city.respawn_buildings = false
+	city.stats_label.visible = false
+	if city._reticle != null:
+		city._reticle.visible = false
+	var picks := _groups_pick(1, true)
+	if picks.is_empty():
+		print("[studcost] no tower")
+		city.get_tree().quit(1)
+		return
+	var b: BuildingRegistry.Building = picks[0][0]
+	var out: Vector3 = picks[0][2]
+	var rooms := city.registry.rooms_of(b.id)
+	# A room on the face, half way up, the camera at eye height in it looking
+	# back across the storey.
+	var index: int = rooms.size() / 2
+	var lb: AABB = (rooms[index] as Room).local_box()
+	var eye_local := lb.get_center()
+	eye_local.y = lb.position.y + 1.6
+	var eye: Vector3 = b.xform * eye_local
+	city.camera.global_position = eye + out * 12.0
+	city.camera.look_at(eye, Vector3.UP)
+	for t in 120:
+		await city.get_tree().physics_frame
+	city.camera.global_position = eye
+	city.camera.look_at(eye - out * 6.0 + Vector3(0.0, -0.8, 0.0), Vector3.UP)
+	for t in 600:
+		await city.get_tree().physics_frame
+		if t > 240 and city._far_coarse_jobs.is_empty():
+			break
+	var view := city.get_viewport().get_viewport_rid()
+	RenderingServer.viewport_set_measure_render_time(view, true)
+	var settings := city.get_node_or_null(^"/root/MenuSettings")
+	if settings != null:
+		settings.set_value(&"vsync", 0, false)
+		settings.set_value(&"max_fps", 0, false)
+	var bn = city.brick_near
+	var rows := []
+	for share in [8, 2, 8, 2, 8]:
+		BrickNear.band_stud_share = share
+		# Held bands keep the cost they were charged: give every place up, so
+		# each is admitted again under this share.
+		for key in bn._studded.keys():
+			var hb = bn._bands.get(key)
+			if hb != null:
+				bn._demote_studs(hb)
+		for k in 90:
+			bn.step(city.camera.global_position, 1.0, -city.camera.global_basis.z)
+			await city.get_tree().process_frame
+		var m := await _gpucost_measure()
+		rows.append([share, m, bn._studded.size(), bn._stud_cost, bn.stud_instances])
+	BrickNear.band_stud_share = 8
+	var studs := _near_stud_nodes()
+	for n in studs:
+		if is_instance_valid(n):
+			(n as Node3D).visible = false
+	var none := await _gpucost_measure()
+	for n in studs:
+		if is_instance_valid(n):
+			(n as Node3D).visible = true
+	var base: Dictionary = rows[0][1]
+	for r in rows:
+		print("[studcost] share %d: %d band(s) with stud geometry, %d of %d studs charged, %d stud instance(s); %s" % [
+				r[0], r[2], r[3], BrickNear.max_studs, r[4], _gpucost_line(r[1], base)])
+	print("[studcost] no studs at all:            %s" % _gpucost_line(none, base))
+	var g8 := 0.0
+	var g2 := 0.0
+	for r in rows:
+		if int(r[0]) == 8:
+			g8 += float((r[1] as Dictionary).gpu) / 3.0
+		else:
+			g2 += float((r[1] as Dictionary).gpu) / 2.0
+	print("[studcost] mean GPU: share 8 %.2f ms, share 2 %.2f ms (%+.2f), no studs %.2f ms" % [
+			g8, g2, g8 - g2, float(none.gpu)])
+	if settings != null:
+		settings.set_value(&"vsync", settings.default_of(&"vsync"), false)
+		settings.set_value(&"max_fps", settings.default_of(&"max_fps"), false)
+	city.get_tree().quit(0)
+
 ## Flying in through a window, as a player does (user, 2026-11-14: "way too
 ## often the furniture never spawns and the window never goes away when I fly
 ## through the window and enter a room").
@@ -4467,8 +4555,8 @@ func _run_roomfly_pass() -> void:
 	# staircase and some parts of the centre floor of a room is unexplainably
 	# damaged and falls when I get close").
 	var lost := _roomfly_losses(b)
-	print("[roomfly] the tower, never hit: %d brick(s) dead, %d cut loose into pieces (%d of them stair); %d piece(s) of it; by storey: %s" % [
-			lost.dead, lost.detached, lost.stair, lost.pieces, lost.by_storey])
+	print("[roomfly] the tower, never hit: %d brick(s) dead, %d cut loose into pieces (%d of them stair); %d piece(s) of it; by storey: %s; parts: %s" % [
+			lost.dead, lost.detached, lost.stair, lost.pieces, lost.by_storey, lost.parts])
 	_gate_ok("  and the tower, never hit, loses no brick as the camera comes near",
 			int(lost.dead) == 0 and int(lost.detached) == 0 and int(lost.pieces) == 0,
 			"%d dead, %d cut loose (%d stair), %d piece(s); damaged %s" % [lost.dead, lost.detached,
@@ -5127,7 +5215,10 @@ func _roomfly_losses(b: BuildingRegistry.Building) -> Dictionary:
 	if not gone.is_empty():
 		for bx in city.world.get_block_boxes(b.chunk):
 			boxes[int((bx as Dictionary).block)] = (bx as Dictionary).pos
+	var parts := {}
 	for bid in gone:
+		var pn := city.world.get_archetype_name(city.world.get_block_archetype(b.chunk, bid))
+		parts[pn] = int(parts.get(pn, 0)) + 1
 		if stair.has(bid):
 			stairs += 1
 		if boxes.has(bid):
@@ -5138,7 +5229,7 @@ func _roomfly_losses(b: BuildingRegistry.Building) -> Dictionary:
 		if isl.is_valid() and isl.owner == b.id:
 			pieces += 1
 	return {"dead": dead_n, "detached": det_n, "stair": stairs, "pieces": pieces,
-			"by_storey": by_storey}
+			"by_storey": by_storey, "parts": parts}
 
 ## The band the near tier tracks whose box holds `at` (world), or null: the
 ## nearest by box distance under 0.3 m.
@@ -6776,8 +6867,10 @@ func _report_profile() -> void:
 			line += "%s %.3f  " % [k, float(city._prof_sum.get(k, 0.0)) / maxi(city._tick_samples, 1)]
 		print("[prof]   of which stream, mean per tick: " + line)
 		var rsr: Dictionary = city.room_streaming.report()
-		print("[prof]   rooms (RoomStreaming): %d pass(es), %d full scan(s), choosing %.3f ms a pass (worst %.2f); %d came up, %d given back, %d given back by the cap" % [
-				rsr.passes, rsr.scans, float(rsr.choose_ms) / maxf(float(rsr.passes), 1.0), rsr.worst_choose_ms,
+		print("[prof]   rooms, of choosing (ms all told): scan %.1f, picks %.1f, masks %.1f, all %.1f" % [
+				float(rsr.part_ms[0]), float(rsr.part_ms[1]), float(rsr.part_ms[2]), float(rsr.choose_ms)])
+		print("[prof]   rooms (RoomStreaming): %d pass(es), %d full scan(s), %d sight ray(s) (%d hidden, %.1f ms all told), choosing %.3f ms a pass (worst %.2f); %d came up, %d given back, %d given back by the cap" % [
+				rsr.passes, rsr.scans, rsr.rays, rsr.hidden, rsr.ray_ms, float(rsr.choose_ms) / maxf(float(rsr.passes), 1.0), rsr.worst_choose_ms,
 				rsr.comes, rsr.goes, rsr.evicted])
 		var dn: Array = city.islands.damage_near_ms
 		print("[prof]   loose pieces (damage_near), all told: %d call(s); waking sleepers %.1f ms, finding pieces %.1f, damaging them %.1f, pushing %.1f" % [

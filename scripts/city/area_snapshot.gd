@@ -47,7 +47,13 @@ var pending := {}
 ## Whatever the caller passed to capture(); restore() hands it back.
 var scene := {}
 
-const VERSION := 2
+## 3 (2026-11-16): a generated tower's cornice is gone (TowerRecipe.build),
+## so the ids of the blocks laid after it -- its fixtures -- are less by the
+## cornice's count. A save from before names them by the old ids: restore()
+## hands its building-id commands to `legacy_ids` to be put right.
+const VERSION := 3
+## The version the bytes this came from were written at.
+var version := VERSION
 
 
 ## Take a snapshot of `history`, of every recorded piece `islands` holds and of
@@ -122,6 +128,7 @@ static func from_bytes(bytes: PackedByteArray) -> AreaSnapshot:
 	if version < 1 or version > VERSION:
 		return null
 	var s := AreaSnapshot.new()
+	s.version = version
 	s.commands = d.commands
 	s.pieces = d.pieces
 	s.dormant = d.dormant
@@ -139,11 +146,16 @@ static func from_bytes(bytes: PackedByteArray) -> AreaSnapshot:
 ## Returns what happened: {commands, missed, pieces, pieces_missing, dormant,
 ## dormant_failed, released, furniture, furniture_failed, pending, scene}. `scene`
 ## is what the caller passed to capture(): its own queue, to queue again.
+##
+## `legacy_ids` (building id, its chunk, ids -> ids) puts right the block ids of
+## a save from before version 3; only asked of such a save.
 func restore(world: BrickWorld, resolve: Callable, islands: IslandManager,
-		on_toppled := Callable(), hooks := Callable()) -> Dictionary:
+		on_toppled := Callable(), hooks := Callable(), legacy_ids := Callable()) -> Dictionary:
 	var history := DamageLog.from_data(commands)
 	var rep := StructureReplayer.new(world, resolve)
 	rep.on_toppled = on_toppled
+	if version < 3:
+		rep.legacy_ids = legacy_ids
 	# Anything else the replay needs that only the caller has: the registry's
 	# storey commands (CityScene._storey_hooks).
 	if hooks.is_valid():
