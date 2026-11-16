@@ -1460,6 +1460,15 @@ private:
     std::vector<std::vector<int>> hang_levels;
     /// Is `b` a socketless part hanging from one of `chunk_id`'s hang levels?
     bool hangs_at(int chunk_id, const brick::Block &b) const;
+    /// Per block of a band chunk: 1 if it is laid, alive, and its bottom rests
+    /// on a block not laid whose record says intact (absent, alive, not
+    /// detached) -- held by the storey under it, which stands though it is not
+    /// laid (Docs/Space.md 5.3a). Empty for any other chunk, or with no such
+    /// block. A staircase (one fixture up a stairwell with no floor in it)
+    /// stands only by stacking from the ground, and a storey laid on its own
+    /// had its slice of it resting on the slice below, not laid, and falling
+    /// (user, 2026-11-15: "the staircase ... falls when I get close").
+    std::vector<uint8_t> absent_rests(int chunk_id) const;
     /// Is a block whose bottom is at height `h` held by the ground there?
     bool grounded_at(int chunk_id, int h) const {
         if (h <= foundation_level[(size_t)chunk_id]) {

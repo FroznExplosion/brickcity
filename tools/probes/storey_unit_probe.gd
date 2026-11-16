@@ -186,9 +186,29 @@ func _check_anchors_and_loads() -> void:
 	var stress: Dictionary = w.solve_stress(c)
 	_ok(int(stress.get("failures", 0)) == 0, "and the stress solve breaks nothing (%d)"
 			% int(stress.get("failures", 0)))
+	# Without its anchor level it still stands: its bottom bricks rest on
+	# storey 24, not laid but intact, which holds them (BrickWorld.absent_rests,
+	# 2026-11-16: a staircase slice and ceiling parts fell when a storey was
+	# laid on its own). With storey 24 destroyed in its record it hangs on
+	# nothing. (This was "without its anchor storey 25 hangs on nothing": the
+	# anchor level was all that held a run, and is not any more.)
 	w.set_anchor_levels(c, PackedInt32Array())
 	groups = w.find_detached_groups(c)
-	_ok(not groups.is_empty(), "without its anchor storey 25 hangs on nothing (%d group(s))" % groups.size())
+	_ok(groups.is_empty(), "without its anchor level storey 25 still stands on storey 24, not laid but intact (%d group(s))" % groups.size())
+	# Storey 24's ids: the same in any copy of the building (laid from the
+	# template), so lay it alone in another and read them there.
+	var other := _make(true)
+	var ow: BrickWorld = other[0]
+	var oc: int = (other[1] as BuildingRegistry).materialise(other[2], PackedInt32Array([24]))
+	var under := PackedInt32Array()
+	for bid in ow.get_block_count(oc):
+		if not ow.is_block_absent(oc, bid) and w.is_block_absent(c, bid):
+			under.append(bid)
+	w.kill_blocks(c, under)
+	groups = w.find_detached_groups(c)
+	_ok(not under.is_empty() and not groups.is_empty(),
+			"and with storey 24 destroyed in its record (%d bricks), storey 25 hangs on nothing (%d group(s))" % [
+				under.size(), groups.size()])
 
 
 func _check_give_way() -> void:
