@@ -23,9 +23,12 @@ was found, how to test without harming the user's files, and what to do next.
   `model_scale_probe`): tick clay takes 20-40 s and 0.5-0.9 GB for an 80-100 stud model, Make
   bricks was the slow part; 7a (2026-11-15) made it 3x faster (section 21, "Stage 7a"); 7b
   (2026-11-15, C++) made fit slopes ~1.6x faster, the same bricks. 7c (C++)
-  `SdfForm.mesh_cells`, a model straight to brick cells, no clay (400 studs in 0.12 s). Next: 7d,
-  Insert > A model in the building workshop (panel, budget, laid over frames, bar, Cancel; plan
-  in section 21, "Stage 7c"). The cell clay is put off (section 21 says why). Never run the probe at 200+ studs on this machine (memory).
+  `SdfForm.mesh_cells`, a model straight to brick cells, no clay (400 studs in 0.12 s). 7d
+  (2026-11-15) Generate > Model in the building workshop: open a model, size, wall, the budget
+  first, laid over frames with a bar and Cancel, one undo (400 studs: 35k bricks in 4.6 s).
+  Stage 7 is done; the cell clay is put off (section 21 says why). Stage 8 (plan in
+  section 21, "Colours from a model"): 8a OBJ colours done 2026-11-16; next 8b, the model's
+  colours in Generate > Model (C++ `mesh_cell_colours`), then 8c, the colour table. Never run the probe at 200+ studs on this machine (memory).
 
 
 ## Where to work

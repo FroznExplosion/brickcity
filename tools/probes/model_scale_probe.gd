@@ -9,13 +9,20 @@ extends SceneTree
 ##     godot --headless --path . --script res://tools/probes/model_scale_probe.gd [-- --sizes=100,200,400]
 ##
 ## Timing: run with the editor closed and nothing else heavy going (CLAUDE.md).
+##
+## `-- --building [--sizes=100,200]`: the building workshop's Generate > Model instead (stage
+## 7d): cells, no clay, so 200 studs is safe; the time to count, to lay, the bricks, memory.
 
 var _ws
 var _frames := 0
 
 
+var _building := false
+
+
 func _init() -> void:
-	_ws = load("res://scenes/asset_workshop.tscn").instantiate()
+	_building = OS.get_cmdline_user_args().has("--building")
+	_ws = load("res://scenes/workshop.tscn" if _building else "res://scenes/asset_workshop.tscn").instantiate()
 	root.add_child(_ws)
 	process_frame.connect(_tick)
 
@@ -56,6 +63,9 @@ func _building_mesh(s: float) -> ArrayMesh:
 func _tick() -> void:
 	_frames += 1
 	if _frames != 3:
+		return
+	if _building:
+		_run_building()
 		return
 	_ws.set_process(false)
 	_ws._no_autosave = true
@@ -113,5 +123,37 @@ func _tick() -> void:
 		for st in steps:
 			if float(_ws.convert_ms[st]) >= 1.0:
 				print("           %-30s %8.0f ms" % [st, float(_ws.convert_ms[st])])
+	print("model scale probe: done")
+	quit(0)
+
+
+func _run_building() -> void:
+	var b: BrickBench = _ws.bench
+	b._builds_dir = "user://dev/_probe_builds/"
+	b._save_path = "user://dev/_probe_quick.json"
+	var sizes := [100.0, 200.0]
+	for a in OS.get_cmdline_user_args():
+		if String(a).begins_with("--sizes="):
+			sizes = Array(String(a).substr(8).split(",")).map(func(x: String) -> float: return float(x))
+	var m: ModelInsert = b._tools.model
+	m.wall_studs = 1
+	print("model scale probe, building workshop: Generate > Model (cells, no clay)")
+	print("  studs   cells    count ms   bricks (said)    lay ms   refused   RSS MB (before -> after)")
+	for st in sizes:
+		b._new_build()
+		var rss0 := _rss_mb()
+		var mesh := _building_mesh(st)
+		m.size_studs = int(st)
+		var t0 := Time.get_ticks_usec()
+		m.set_mesh(mesh)
+		var t1 := Time.get_ticks_usec()
+		var said := int(m.budget.get("bricks", 0))
+		var n0 := b.recipe.size()
+		m.lay()
+		while m.state == "laying":
+			m.step(1.0e9)
+		var t2 := Time.get_ticks_usec()
+		print("  %5d   %6d   %8.0f   %6d (%6d)   %7.0f   %7d   %.0f -> %.0f" % [int(st), int(m.budget.get("cells", 0)),
+				(t1 - t0) / 1000.0, b.recipe.size() - n0, said, (t2 - t1) / 1000.0, m.refused, rss0, _rss_mb()])
 	print("model scale probe: done")
 	quit(0)

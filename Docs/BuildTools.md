@@ -1590,6 +1590,38 @@ one's skin. The hollow model, headless:
 
 So cells are no longer the cost at any building size; laying the bricks is (7d).
 
+**7d as built** (2026-11-15): **Generate > Model** (a picture beside Tower) and **Insert > A 3D
+model in bricks...**, which opens it. `ModelInsert` (`scripts/workshop/model_insert.gd`) holds the
+model and lays it; the panel is in `WorkshopTools._model_box`:
+
+* **Open a model...** (glTF, OBJ, FBX, STL through `ModelMesh`), **longest side (studs)**,
+  **wall (studs, 0 solid)**; a stud of wall is 2 plates up.
+* The budget is said as soon as the model or a number changes: its size in studs, its cells, and
+  about how many bricks. To count those, the first and last courses are packed (a floor or roof
+  packs into big plates), plus every few between (about 20,000 cells' worth); each course is
+  counted at the rate of the packed course nearest it. That is within 1% at 100 studs and 8% at
+  400. A model too big for the area says so, and Lay bricks stays off.
+* **Lay bricks**: in the middle of the area, on the floor, a course (3 plates) at a time, at
+  least one a frame and as many as fit in 12 ms, in the held colour and material. A bar shows
+  how far it has got; **Cancel** takes back what was laid. When it is done it is one inserted
+  build (the outliner's Inserted builds) and one undo.
+* The packer (`fill_parts`, `pack_cells`, `_box_in`) moved from the asset workshop into
+  `BrickBench`; the asset workshop keeps wrappers that pass it its own random stream, so it packs
+  as before (`asset_workshop_probe` 346).
+* Probes: `build_tools_probe` 381 (+12: the panel and its buttons, the budget first, the size
+  box following the size, laid over frames as said, its cells bricks, one undo, Cancel part way,
+  too big). `model_scale_probe -- --building [--sizes=...]` times it (no clay, so 400 is safe):
+
+| Model (hollow, wall 1) | Cells | Count | Bricks (said) | Lay | Memory |
+|---|---|---|---|---|---|
+| 100 studs | 49,396 | 0.12 s | 2,212 (2,180) | 0.26 s | +40 MB |
+| 200 studs | 200,776 | 0.35 s | 8,773 (8,309) | 1.0 s | +155 MB |
+| 400 studs | 809,536 | 1.9 s | 35,160 (32,510) | 4.6 s | +600 MB |
+
+(Headless; the editor was open, so rough.) The asset workshop's clay took 14 s to make 12,955
+bricks from a 100-stud model. Pictures: `b12d_generate_model_budget`, `b12e_generate_model_laid`.
+Left for stage 8: the model's own colours.
+
 ### Colours from a model (stage 8)
 
 Built (2026-11-02): glTF and FBX colours (material, texture, vertex) go into the clay; each brick
@@ -1601,6 +1633,35 @@ cell votes its nearest brick colour in Oklab; Bricks to clay carries them back. 
 * Which colours it may use: every one, this material's, or the system's palette
   (`convert_palette`, built).
 * The same in the building workshop with stage 7.
+
+**Plan (2026-11-16)**, in three steps, each merged on its own:
+
+* **8a, OBJ colours** (`ModelMesh`, script only). `mtllib` read beside the OBJ: each `newmtl`'s
+  `Kd` and `map_Kd` (the last word of the line, so options before it are skipped). `usemtl`
+  colours the faces after it; `vt` gives a texture's place; `v x y z r g b` gives vertex colours.
+  Each corner's colour is Kd times the texture there (read a little in toward the triangle's
+  middle, as glTF's) times the vertex colour. An OBJ with none of these stays uncoloured, as before.
+  The pieces keep only their own corners, so a piece's box is its own and not the whole file's.
+  STL has no colour: it is one colour, the held one.
+* **8b, colours in Generate > Model.** `SdfForm.mesh_cell_colours(verts, index, colours, cells,
+  palette)` (C++): each cell takes the colour of the surface nearest it, found among the
+  crossings of its rows along x, y and z, then the nearest palette colour in Oklab. The palette
+  is the held material's colours (`ColourMatch`). Laying packs each course a colour at a time,
+  so a brick is one colour. A tick box, "the model's colours", is on when the model has any; off,
+  the model is laid in the held colour as now.
+* **8c, the colour table on import**, in both workshops. Each colour the model became sits beside
+  its brick colour and how many cells have it. A click changes the brick colour by hand.
+  "Fewer colours" merges the two nearest until the count asked is reached. Which colours it may
+  use: every one, or the asset workshop's `convert_palette`.
+
+**8a as built** (2026-11-16): `ModelMesh._parse_obj` and `_read_mtl` as planned. An OBJ's mesh
+now has a colour for every corner whenever the file has any colour; the asset workshop's stamp
+already reads any mesh's colours (`_mesh_soup`), so an OBJ's colours reach the clay and the
+bricks just as glTF's do. Faces with no material in a coloured file are white. A piece read
+alone (`read_pieces`) has only its own corners, so its box is its own (before, every piece
+carried the whole file's vertices). `asset_workshop_probe` 351 (+5): Kd on two faces, a map_Kd
+texture read by place (left red, right green, behind `-s` options), the pieces' own boxes and
+colours, vertex colours, a plain OBJ still uncoloured.
 
 ### Stages
 

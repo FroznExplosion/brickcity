@@ -2473,97 +2473,19 @@ static func _merged_words(list: Array) -> Array:
 # Phase 3: the packer -- cells to bricks
 # ---------------------------------------------------------------------------
 
-## The plain parts a fill is made of: plates and bricks, each way round, biggest first.
-## [archetype name, Vector3i size in studs along, plates up, studs across].
+## The bench's packer (`BrickBench.fill_parts`, `pack_cells`; moved there in section 21,
+## stage 7d), with this workshop's random stream.
 func fill_parts() -> Array:
-	var out := []
-	for part in bench._parts():
-		var name := String(part)
-		if not (name.begins_with("plate_") or name.begins_with("brick_")) 				or name in ["plate_10x10", "plate_5x10", "plate_5x5"]:
-			continue
-		var seen := {}
-		for yaw in 2:
-			var arch := BrickPalette.variant_name(name, yaw, false)
-			var size := BrickPalette.size_of(arch)
-			if not seen.has(size) and bench.palette.has(arch):
-				seen[size] = true
-				out.append([arch, size])
-	out.sort_custom(func(a: Array, b: Array) -> bool:
-		var va: int = a[1].x * a[1].y * a[1].z
-		var vb: int = b[1].x * b[1].y * b[1].z
-		return va > vb)
-	return out
+	return bench.fill_parts()
 
 
-## Cover `cells` (Vector3i -> true) with parts, bottom up. Clean takes the biggest part
-## that fits at each place; random takes any that fits, so sizes mix. Bricks start only
-## on shared courses, so neighbouring columns line up to be bridged; each layer grows
-## from the other corner to the one under it, so seams do not stack.
-## Returns [[archetype name, min cell]].
 func pack_cells(cells: Dictionary, random: bool = false, free: Dictionary = {}, course: int = 1 << 30,
 		z_width: int = 0) -> Array:
-	# Cells something is already built in are not the fill's: packed as if empty, the big
-	# parts that hit what is there are refused when laid, and leave holes round it.
-	# `free`: cells built in now that will be empty when this is laid.
-	var left := {}
-	for c in cells:
-		if free.has(c) or not bench.world.is_solid(bench.chunk, c):
-			left[c] = true
-	var parts := fill_parts()
-	var out := []
-	if left.is_empty():
-		return out
-	# The cells by layer, once: scanning every cell for each layer was layers x cells (most of a
-	# building-sized Make bricks; Docs/BuildTools.md section 21, stage 7).
-	var ys := {}
-	for c in left:
-		(ys.get_or_add(c.y, []) as Array).append(c)
-	var layers := ys.keys()
-	layers.sort()
-	# `course`: the layer courses count from, when it is not the lowest packed here (a
-	# part packed again in places keeps its courses).
-	var base: int = layers[0] if course == 1 << 30 else course
-	for y in layers:
-		var flip: bool = posmod(y - base, 2) == 1
-		var here: Array = ys[y]
-		here.sort_custom(func(a: Vector3i, b: Vector3i) -> bool:
-			if a.x != b.x:
-				return (a.x > b.x) if flip else (a.x < b.x)
-			return (a.z > b.z) if flip else (a.z < b.z))
-		for c in here:
-			if not left.has(c):
-				continue
-			var fits := []
-			for pe in parts:
-				var size: Vector3i = pe[1]
-				if size.y > 1 and posmod(y - base, 3) != 0:
-					continue
-				# `z_width`: only parts this many studs across (a symmetric Convert's middle).
-				if z_width > 0 and size.z != z_width:
-					continue
-				var at := Vector3i(c.x - size.x + 1 if flip else c.x, y, c.z - size.z + 1 if flip else c.z)
-				if _box_in(left, at, size):
-					fits.append([pe[0], at, size])
-					if not random:
-						break   # the first that fits is the one laid
-			if fits.is_empty():
-				continue
-			var pick: Array = fits[_rng.randi_range(0, fits.size() - 1)] if random else fits[0]
-			for dx in pick[2].x:
-				for dy in pick[2].y:
-					for dz in pick[2].z:
-						left.erase(pick[1] + Vector3i(dx, dy, dz))
-			out.append([pick[0], pick[1]])
-	return out
+	return bench.pack_cells(cells, random, free, course, z_width, _rng)
 
 
 static func _box_in(cells: Dictionary, at: Vector3i, size: Vector3i) -> bool:
-	for dx in size.x:
-		for dy in size.y:
-			for dz in size.z:
-				if not cells.has(at + Vector3i(dx, dy, dz)):
-					return false
-	return true
+	return BrickBench._box_in(cells, at, size)
 
 
 ## Lay a named part at a cell in the upright grid, in the held colour and material, as
