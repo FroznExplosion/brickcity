@@ -121,6 +121,8 @@ void SdfForm::_bind_methods() {
     ClassDB::bind_method(D_METHOD("lathe", "op", "xform", "profile", "blend", "part"), &SdfForm::lathe);
     ClassDB::bind_method(D_METHOD("fit_pieces", "cells", "pieces", "min_gain"), &SdfForm::fit_pieces);
     ClassDB::bind_static_method("SdfForm", D_METHOD("mesh_cells", "verts", "index", "wall"), &SdfForm::mesh_cells);
+    ClassDB::bind_static_method("SdfForm", D_METHOD("mesh_cell_colours", "verts", "index", "colours", "cells", "palette"),
+            &SdfForm::mesh_cell_colours);
     ClassDB::bind_method(D_METHOD("scale", "factor", "pivot"), &SdfForm::scale);
     ClassDB::bind_method(D_METHOD("move", "by"), &SdfForm::move);
     ClassDB::bind_method(D_METHOD("transform", "xform"), &SdfForm::transform);
@@ -896,6 +898,103 @@ PackedInt32Array SdfForm::mesh_cells(const PackedVector3Array &verts, const Pack
                     out.append(y + lo.y);
                     out.append(z + lo.z);
                 }
+    return out;
+}
+
+PackedInt32Array SdfForm::mesh_cell_colours(const PackedVector3Array &verts, const PackedInt32Array &index,
+        const PackedColorArray &colours, const PackedInt32Array &cells, const PackedColorArray &palette) {
+    PackedInt32Array out;
+    const int64_t nc = cells.size() / 3;
+    out.resize(nc);
+    out.fill(-1);
+    if (verts.is_empty() || colours.size() != verts.size() || palette.is_empty() || nc == 0) return out;
+    Vector3 mn = verts[0], mx = verts[0];
+    for (int64_t i = 1; i < verts.size(); ++i) {
+        mn = mn.min(verts[i]);
+        mx = mx.max(verts[i]);
+    }
+    for (int64_t i = 0; i < nc; ++i) {
+        const Vector3 c(cells[i * 3], cells[i * 3 + 1], cells[i * 3 + 2]);
+        mn = mn.min(c);
+        mx = mx.max(c + Vector3(1, 1, 1));
+    }
+    const Vector3i lo((int)std::floor(mn.x) - 1, (int)std::floor(mn.y) - 1, (int)std::floor(mn.z) - 1);
+    const Vector3i hi((int)std::ceil(mx.x) + 1, (int)std::ceil(mx.y) + 1, (int)std::ceil(mx.z) + 1);
+    const Vector3i D = hi - lo;
+    // A crossing: where along its row, and the surface's colour there.
+    struct Hit { float at; Color col; };
+    const float tick[3] = {(float)STUD, (float)PLATE, (float)STUD};
+    std::vector<std::vector<Hit>> rows[3];
+    for (int a = 0; a < 3; ++a) {
+        // Along axis a; the row's place on the other two (u, w), in order.
+        const int u = a == 0 ? 1 : 0, w = a == 2 ? 1 : 2;
+        const int du = D[u], dw = D[w];
+        rows[a].resize((size_t)du * dw);
+        for (int64_t t = 0; t + 2 < index.size(); t += 3) {
+            const int i0 = index[t], i1 = index[t + 1], i2 = index[t + 2];
+            const Vector3 A = verts[i0] - Vector3(lo), B = verts[i1] - Vector3(lo), C = verts[i2] - Vector3(lo);
+            const float d = (B[u] - A[u]) * (C[w] - A[w]) - (C[u] - A[u]) * (B[w] - A[w]);
+            if (std::abs(d) < 1e-12f) continue;
+            const Color ca = colours[i0], cb = colours[i1], cc = colours[i2];
+            if (ca.a <= 0.0f && cb.a <= 0.0f && cc.a <= 0.0f) continue;
+            const int u0 = std::max(0, (int)std::ceil(std::min({A[u], B[u], C[u]}) - 0.5f));
+            const int u1 = std::min(du - 1, (int)std::floor(std::max({A[u], B[u], C[u]}) - 0.5f));
+            const int w0 = std::max(0, (int)std::ceil(std::min({A[w], B[w], C[w]}) - 0.5f));
+            const int w1 = std::min(dw - 1, (int)std::floor(std::max({A[w], B[w], C[w]}) - 0.5f));
+            for (int q = w0; q <= w1; ++q)
+                for (int p = u0; p <= u1; ++p) {
+                    const float pu = p + 0.5f - A[u], pw = q + 0.5f - A[w];
+                    const float s1 = (pu * (C[w] - A[w]) - (C[u] - A[u]) * pw) / d;
+                    const float s2 = ((B[u] - A[u]) * pw - pu * (B[w] - A[w])) / d;
+                    // A little past the edges: a row along a seam still meets a face.
+                    if (s1 < -1e-4f || s2 < -1e-4f || s1 + s2 > 1.0f + 1e-4f) continue;
+                    const float s0 = 1.0f - s1 - s2;
+                    const Color m(ca.r * s0 + cb.r * s1 + cc.r * s2, ca.g * s0 + cb.g * s1 + cc.g * s2,
+                            ca.b * s0 + cb.b * s1 + cc.b * s2, 1.0f);
+                    rows[a][(size_t)p + (size_t)du * q].push_back({A[a] + s1 * (B[a] - A[a]) + s2 * (C[a] - A[a]), m});
+                }
+        }
+        for (auto &r : rows[a]) {
+            std::sort(r.begin(), r.end(), [](const Hit &x, const Hit &y) { return x.at < y.at; });
+        }
+    }
+    std::vector<Vector3> pal((size_t)palette.size());
+    for (int64_t i = 0; i < palette.size(); ++i) pal[(size_t)i] = oklab(palette[i]);
+    for (int64_t i = 0; i < nc; ++i) {
+        const int g[3] = {cells[i * 3] - lo.x, cells[i * 3 + 1] - lo.y, cells[i * 3 + 2] - lo.z};
+        float best = 1e30f;
+        Color col(0, 0, 0, 0);
+        for (int a = 0; a < 3; ++a) {
+            const int u = a == 0 ? 1 : 0, w = a == 2 ? 1 : 2;
+            if (g[u] < 0 || g[w] < 0 || g[u] >= D[u] || g[w] >= D[w]) continue;
+            const std::vector<Hit> &r = rows[a][(size_t)g[u] + (size_t)D[u] * g[w]];
+            if (r.empty()) continue;
+            const float at = g[a] + 0.5f;
+            auto it = std::lower_bound(r.begin(), r.end(), at, [](const Hit &h, float v) { return h.at < v; });
+            for (int k = 0; k < 2; ++k) {
+                if (k == 0 && it == r.end()) continue;
+                if (k == 1 && it == r.begin()) continue;
+                const Hit &h = k == 0 ? *it : *(it - 1);
+                const float dist = std::abs(h.at - at) * tick[a];
+                if (dist < best) {
+                    best = dist;
+                    col = h.col;
+                }
+            }
+        }
+        if (col.a <= 0.0f) continue;
+        const Vector3 q = oklab(col);
+        int bi = -1;
+        float bd = 1e30f;
+        for (size_t j = 0; j < pal.size(); ++j) {
+            const float dd = (pal[j] - q).length_squared();
+            if (dd < bd) {
+                bd = dd;
+                bi = (int)j;
+            }
+        }
+        out.set(i, bi);
+    }
     return out;
 }
 

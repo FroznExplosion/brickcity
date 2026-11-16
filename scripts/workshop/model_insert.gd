@@ -7,7 +7,8 @@ extends Node
 ## first, then packed and laid a course a time over frames (`BrickBench.pack_cells`), with a
 ## bar and Cancel. One undo for the whole; Cancel takes back what was laid.
 ##
-## In the held colour and material; the model's own colours are stage 8.
+## In the held material; in the model's own colours when it has any and `use_colours` (stage
+## 8b), else the held colour.
 
 signal changed
 
@@ -23,6 +24,12 @@ var _index := PackedInt32Array()
 var _box := AABB()
 ## The cells it would lay (x, y, z a cell), from `recount`.
 var cells := PackedInt32Array()
+## Each cell's colour index of the held material (`ColourMatch`; -1: the held colour), from the
+## model's own colours (section 21, stage 8b); empty when it has none or they are not used.
+var cell_colours := PackedInt32Array()
+## Lay it in the model's colours (when it has any), else in the held one.
+var use_colours := true
+var _cols := PackedColorArray()
 ## What `recount` found: {cells, bricks (about), fits, size (studs, plates, studs)}.
 var budget := {}
 ## "" idle, "laying".
@@ -52,6 +59,8 @@ func open(p: String) -> bool:
 func set_mesh(mesh: ArrayMesh) -> void:
 	_verts = PackedVector3Array()
 	_index = PackedInt32Array()
+	_cols = PackedColorArray()
+	var any_col := false
 	for s in mesh.get_surface_count():
 		if mesh.surface_get_primitive_type(s) != Mesh.PRIMITIVE_TRIANGLES:
 			continue
@@ -59,6 +68,15 @@ func set_mesh(mesh: ArrayMesh) -> void:
 		var v: PackedVector3Array = arr[Mesh.ARRAY_VERTEX]
 		var off := _verts.size()
 		_verts.append_array(v)
+		var sc = arr[Mesh.ARRAY_COLOR]
+		if sc != null and (sc as PackedColorArray).size() == v.size():
+			_cols.append_array(sc)
+			any_col = true
+		else:
+			var none := PackedColorArray()
+			none.resize(v.size())
+			none.fill(Color(0, 0, 0, 0))
+			_cols.append_array(none)
 		var idx = arr[Mesh.ARRAY_INDEX]
 		if idx == null or (idx as PackedInt32Array).is_empty():
 			for i in v.size():
@@ -66,6 +84,8 @@ func set_mesh(mesh: ArrayMesh) -> void:
 		else:
 			for i in idx:
 				_index.append(off + int(i))
+	if not any_col:
+		_cols = PackedColorArray()
 	_box = AABB()
 	if not _verts.is_empty():
 		_box = AABB(_verts[0], Vector3.ZERO)
@@ -78,9 +98,15 @@ func has_model() -> bool:
 	return not _verts.is_empty()
 
 
+## The model has colours of its own (a glTF's materials, an OBJ's .mtl, vertex colours).
+func has_colours() -> bool:
+	return not _cols.is_empty()
+
+
 ## The cells at this size and wall, and the budget: said before anything is laid.
 func recount() -> void:
 	cells = PackedInt32Array()
+	cell_colours = PackedInt32Array()
 	budget = {}
 	if _verts.is_empty() or bench == null:
 		changed.emit()
@@ -99,24 +125,55 @@ func recount() -> void:
 	if wall_studs > 0:
 		wall = Vector3i(wall_studs, maxi(1, roundi(wall_studs * BrickPalette.STUD_M / BrickPalette.PLATE_M)), wall_studs)
 	cells = SdfForm.mesh_cells(v, _index, wall)
+	var colours := 0
+	if use_colours and has_colours() and not cells.is_empty():
+		# The held material's colours (all of them); the nearest in Oklab, C++.
+		var idx := ColourMatch.indices(bench._mat)
+		var got := SdfForm.mesh_cell_colours(v, _index, _cols, cells, ColourMatch.colours(bench._mat, idx))
+		cell_colours.resize(got.size())
+		var seen := {}
+		for i in got.size():
+			cell_colours[i] = idx[got[i]] if got[i] >= 0 else -1
+			seen[cell_colours[i]] = true
+		colours = seen.size()
 	var n := cells.size() / 3
 	var fits := span.x <= area and span.z <= area and span.y + 1.0 <= bench.height_plates
-	budget = {"cells": n, "bricks": _estimate(), "fits": fits,
+	budget = {"cells": n, "bricks": _estimate(), "fits": fits, "colours": colours,
 			"size": Vector3i(ceili(span.x), ceili(span.y), ceili(span.z))}
 	changed.emit()
 
 
-## About how many bricks: courses spread up the model packed (about 20,000 cells' worth), the
-## rest at the bricks a cell of the nearest packed one.
+## The cells by course (3 plates from the lowest) and colour: c0 -> {colour index ->
+## {cell: true}}; one colour, the held one, without the model's colours.
+func _by_course() -> Dictionary:
+	var base := cells[1]
+	var coloured := cell_colours.size() * 3 == cells.size()
+	var by := {}
+	for i in range(0, cells.size(), 3):
+		var y := cells[i + 1]
+		var col: int = cell_colours[i / 3] if coloured else -1
+		if col < 0:
+			col = bench._colour
+		var course: Dictionary = by.get_or_add(y - posmod(y - base, 3), {})
+		(course.get_or_add(col, {}) as Dictionary)[Vector3i(cells[i], y, cells[i + 2])] = true
+	return by
+
+
+static func _course_size(course: Dictionary) -> int:
+	var n := 0
+	for col in course:
+		n += (course[col] as Dictionary).size()
+	return n
+
+
+## About how many bricks: courses spread up the model packed (about 20,000 cells' worth), a
+## colour at a time as they are laid; the rest at the bricks a cell of the nearest packed one.
 func _estimate() -> int:
 	var n := cells.size() / 3
 	if n == 0:
 		return 0
 	var base := cells[1]
-	var by := {}
-	for i in range(0, cells.size(), 3):
-		var y := cells[i + 1]
-		(by.get_or_add(y - posmod(y - base, 3), []) as Array).append(Vector3i(cells[i], y, cells[i + 2]))
+	var by := _by_course()
 	var keys := by.keys()
 	keys.sort()
 	# The first and last courses (a floor, a roof: big plates) and every `every`th between;
@@ -126,10 +183,11 @@ func _estimate() -> int:
 	for j in range(keys.size()):
 		if j % every != 0 and j != keys.size() - 1:
 			continue
-		var some := {}
-		for c in by[keys[j]]:
-			some[c] = true
-		ratio[j] = float(bench.pack_cells(some, false, {}, base).size()) / some.size()
+		var course: Dictionary = by[keys[j]]
+		var packed := 0
+		for col in course:
+			packed += bench.pack_cells(course[col], false, {}, base).size()
+		ratio[j] = float(packed) / _course_size(course)
 	var sampled := ratio.keys()
 	var total := 0.0
 	for j in range(keys.size()):
@@ -137,7 +195,7 @@ func _estimate() -> int:
 		for q in sampled:
 			if absi(int(q) - j) < absi(near - j):
 				near = q
-		total += float(ratio[near]) * (by[keys[j]] as Array).size()
+		total += float(ratio[near]) * _course_size(by[keys[j]])
 	return int(round(total))
 
 
@@ -146,16 +204,13 @@ func lay() -> bool:
 	if state != "" or cells.is_empty() or not bool(budget.get("fits", false)):
 		return false
 	var base := cells[1]
-	var by := {}
-	for i in range(0, cells.size(), 3):
-		var y := cells[i + 1]
-		var c0 := y - posmod(y - base, 3)
-		(by.get_or_add(c0, {}) as Dictionary)[Vector3i(cells[i], y, cells[i + 2])] = true
+	var by := _by_course()
 	var keys := by.keys()
 	keys.sort()
 	_courses = []
 	for c0 in keys:
-		_courses.append([base, by[c0]])
+		for col in by[c0]:
+			_courses.append([base, by[c0][col], col])
 	_total = _courses.size()
 	_before = {"first": bench.recipe.size(), "fixtures": bench.recipe.fixture_count(),
 			"towers": bench.recipe.towers.size(), "placements": bench.recipe.placements.size()}
@@ -182,7 +237,7 @@ func step(ms: float) -> void:
 		first = false
 		var c: Array = _courses.pop_front()
 		for b in bench.pack_cells(c[1], false, {}, int(c[0])):
-			if bench.lay_part(String(b[0]), b[1], bench._colour, bench._mat):
+			if bench.lay_part(String(b[0]), b[1], int(c[2]), bench._mat):
 				laid += 1
 			else:
 				refused += 1
@@ -226,6 +281,8 @@ func say() -> String:
 	var s: Vector3i = budget.get("size", Vector3i.ZERO)
 	var t := "%s: %d x %d x %d studs, %d cells, about %d bricks" % [path.get_file() if path != "" else "model",
 			s.x, ceili(s.y * BrickPalette.PLATE_M / BrickPalette.STUD_M), s.z, int(budget.get("cells", 0)), int(budget.get("bricks", 0))]
+	if int(budget.get("colours", 0)) > 0:
+		t += ", %d colours" % int(budget.colours)
 	if not bool(budget.get("fits", false)):
 		t += ". Too big for the build area: make it smaller."
 	return t

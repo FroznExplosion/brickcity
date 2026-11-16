@@ -167,6 +167,13 @@ public:
     /// one; zero keeps them all. Returns x, y, z a cell, lowest layer first.
     static PackedInt32Array mesh_cells(const PackedVector3Array &verts, const PackedInt32Array &index,
             const Vector3i &wall);
+    /// Each of `cells`' colour (x, y, z a cell, as `mesh_cells` gives them), as an index into
+    /// `palette` (section 21, stage 8b): the colour of the mesh's surface nearest the cell's
+    /// middle -- found among where its rows along x, y and z cross the mesh, distances in
+    /// ticks (a plate 2, a stud 5) -- then the palette's nearest in Oklab. `colours`: one a
+    /// vertex; alpha 0 is none. -1 where no coloured surface is crossed.
+    static PackedInt32Array mesh_cell_colours(const PackedVector3Array &verts, const PackedInt32Array &index,
+            const PackedColorArray &colours, const PackedInt32Array &cells, const PackedColorArray &palette);
 
     /// The whole form scaled by `factor` about `pivot` (samples).
     void scale(float factor, const Vector3 &pivot);

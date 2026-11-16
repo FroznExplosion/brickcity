@@ -304,6 +304,7 @@ var _model_cancel: Button
 var _model_dialog: FileDialog
 var _model_size: SpinBox
 var _model_wall: SpinBox
+var _model_colours: CheckBox
 var _rooms_label: Label
 ## The module's rules on the rooms panel (Docs/RoomModules.md 1).
 var _module_on: CheckBox
@@ -2159,6 +2160,14 @@ func _model_box(box: VBoxContainer) -> void:
 	_model_wall = _spin(box, "wall (studs, 0 solid)", 0, 6, model.wall_studs, func(v: float) -> void:
 			model.wall_studs = int(v)
 			model.recount())
+	_model_colours = CheckBox.new()
+	_model_colours.text = "the model's colours"
+	_model_colours.focus_mode = Control.FOCUS_NONE
+	_model_colours.button_pressed = model.use_colours
+	_model_colours.toggled.connect(func(on: bool) -> void:
+			model.use_colours = on
+			model.recount())
+	box.add_child(_model_colours)
 	_model_say = Label.new()
 	_model_say.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	box.add_child(_model_say)
@@ -2188,6 +2197,9 @@ func _model_sync() -> void:
 	_model_say.text = model.say()
 	_model_size.set_value_no_signal(model.size_studs)
 	_model_wall.set_value_no_signal(model.wall_studs)
+	_model_colours.disabled = not model.has_colours()
+	_model_colours.set_pressed_no_signal(model.use_colours)
+	_model_colours.tooltip_text = "" if model.has_colours() else "This model has no colours of its own: it is laid in the held colour."
 	_model_bar.visible = model.state == "laying"
 	_model_bar.value = model.progress
 	_model_lay.disabled = model.state != "" or model.cells.is_empty() or not bool(model.budget.get("fits", false))
