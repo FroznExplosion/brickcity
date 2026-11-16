@@ -5536,9 +5536,13 @@ func _enforce_debris_cap() -> void:
 			large_n += 1
 		else:
 			small_n += 1
-	_cap_room = small_n <= small_live_max - CAP_WAKE_SPARE \
-			and large_n <= large_live_max - CAP_WAKE_SPARE \
-			and small_n + large_n <= total_live_max - CAP_WAKE_SPARE
+	# Room for a landmark the cap slept (only landmarks sleep; small debris is
+	# let go): under the large limit, and under the total counting small debris
+	# only down to small_floor -- past that the plan lets small pieces go before
+	# it sleeps a landmark. Asking the small limit too kept landmarks asleep
+	# behind a heap of debris that would have gone for them (2026-11-16).
+	_cap_room = large_n <= large_live_max - CAP_WAKE_SPARE \
+			and mini(small_n, small_floor) + large_n <= total_live_max - CAP_WAKE_SPARE
 	if small_n <= small_live_max and large_n <= large_live_max \
 			and small_n + large_n <= total_live_max:
 		_cap_plan.clear()

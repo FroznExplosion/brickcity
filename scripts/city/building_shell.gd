@@ -613,17 +613,31 @@ static func window_rows(courses: int, layout: Array, lattice: Dictionary) -> Pac
 ## (window_rows) and the columns within PANE_REACH of a face, all a pane asks
 ## (BrickWorld.get_solid_cells_at): the whole chunk was ~3 ms for a big tower
 ## (PerfCaps.md 4). Any other cell reads as not standing.
-static func standing_copy(world: BrickWorld, chunk: int, rows: PackedInt32Array) -> Callable:
-	var solid: PackedByteArray = world.get_solid_cells_at(chunk, rows, PANE_REACH)
+##
+## `origin`: where the chunk's first cell is in the building's own grid. Zero
+## for a building (its chunk is made at Vector3i.ZERO); a piece cut from one
+## keeps its bricks' cells and starts at the corner of what it took
+## (BrickWorld.split_island), so a piece's windows are asked in the building's
+## cells all the same (PiecePanes). A building's wall is at the face of any
+## piece that has some of it, so PANE_REACH still finds it.
+static func standing_copy(world: BrickWorld, chunk: int, rows: PackedInt32Array,
+		origin := Vector3i.ZERO) -> Callable:
+	var local_rows := rows
+	if origin.y != 0:
+		local_rows = PackedInt32Array()
+		for y in rows:
+			local_rows.push_back(y - origin.y)
+	var solid: PackedByteArray = world.get_solid_cells_at(chunk, local_rows, PANE_REACH)
 	var dims: Vector3i = world.get_chunk_dims(chunk)
 	var row_of := PackedInt32Array()
 	row_of.resize(maxi(dims.y, 0))
 	row_of.fill(-1)
-	for i in rows.size():
-		if rows[i] >= 0 and rows[i] < dims.y:
-			row_of[rows[i]] = i
+	for i in local_rows.size():
+		if local_rows[i] >= 0 and local_rows[i] < dims.y:
+			row_of[local_rows[i]] = i
 	var plane := dims.x * dims.z
-	return func(cell: Vector3i) -> bool:
+	return func(building_cell: Vector3i) -> bool:
+		var cell := building_cell - origin
 		if cell.x < 0 or cell.y < 0 or cell.z < 0 \
 				or cell.x >= dims.x or cell.y >= dims.y or cell.z >= dims.z:
 			return false

@@ -29,6 +29,10 @@ var cells := PackedInt32Array()
 var cell_colours := PackedInt32Array()
 ## Lay it in the model's colours (when it has any), else in the held one.
 var use_colours := true
+## The colour table (section 21, stages 8c, 8d): a colour the model became -> the brick colour
+## chosen for it by hand or by Fewer colours. Kept across a new size or wall; a new model
+## clears it.
+var colours := ColourTable.new()
 var _cols := PackedColorArray()
 ## What `recount` found: {cells, bricks (about), fits, size (studs, plates, studs)}.
 var budget := {}
@@ -46,6 +50,10 @@ const FRAME_MS := 12.0
 
 
 ## The model file, or false if it cannot be read.
+func _init() -> void:
+	colours.edited.connect(_retable)
+
+
 func open(p: String) -> bool:
 	var mesh := ModelMesh.read(p)
 	if mesh == null:
@@ -86,6 +94,7 @@ func set_mesh(mesh: ArrayMesh) -> void:
 				_index.append(off + int(i))
 	if not any_col:
 		_cols = PackedColorArray()
+	colours.remap = {}
 	_box = AABB()
 	if not _verts.is_empty():
 		_box = AABB(_verts[0], Vector3.ZERO)
@@ -125,20 +134,19 @@ func recount() -> void:
 	if wall_studs > 0:
 		wall = Vector3i(wall_studs, maxi(1, roundi(wall_studs * BrickPalette.STUD_M / BrickPalette.PLATE_M)), wall_studs)
 	cells = SdfForm.mesh_cells(v, _index, wall)
-	var colours := 0
+	colours.counts = {}
+	colours.material = bench._mat
 	if use_colours and has_colours() and not cells.is_empty():
 		# The held material's colours (all of them); the nearest in Oklab, C++.
 		var idx := ColourMatch.indices(bench._mat)
 		var got := SdfForm.mesh_cell_colours(v, _index, _cols, cells, ColourMatch.colours(bench._mat, idx))
 		cell_colours.resize(got.size())
-		var seen := {}
 		for i in got.size():
 			cell_colours[i] = idx[got[i]] if got[i] >= 0 else -1
-			seen[cell_colours[i]] = true
-		colours = seen.size()
+			colours.counts[cell_colours[i]] = int(colours.counts.get(cell_colours[i], 0)) + 1
 	var n := cells.size() / 3
 	var fits := span.x <= area and span.z <= area and span.y + 1.0 <= bench.height_plates
-	budget = {"cells": n, "bricks": _estimate(), "fits": fits, "colours": colours,
+	budget = {"cells": n, "bricks": _estimate(), "fits": fits, "colours": colours.colour_count() if not cell_colours.is_empty() else 0,
 			"size": Vector3i(ceili(span.x), ceili(span.y), ceili(span.z))}
 	changed.emit()
 
@@ -152,6 +160,7 @@ func _by_course() -> Dictionary:
 	for i in range(0, cells.size(), 3):
 		var y := cells[i + 1]
 		var col: int = cell_colours[i / 3] if coloured else -1
+		col = colours.map(col)
 		if col < 0:
 			col = bench._colour
 		var course: Dictionary = by.get_or_add(y - posmod(y - base, 3), {})
@@ -269,6 +278,34 @@ func cancel() -> void:
 	bench._undo_stamp(WkCommand.make(&"stamp", _before.duplicate(), bench._undo_stamp))
 	laid = 0
 	progress = 0.0
+	changed.emit()
+
+
+## The colour table's (ColourTable), here for the panel and the probes.
+func table() -> Array:
+	return colours.table()
+
+
+func colour_count() -> int:
+	return colours.colour_count()
+
+
+func set_colour(from: int, to: int) -> void:
+	colours.set_colour(from, to)
+
+
+func fewer(n: int) -> void:
+	colours.fewer(n)
+
+
+func reset_colours() -> void:
+	colours.reset()
+
+
+func _retable() -> void:
+	if not budget.is_empty():
+		budget.colours = colour_count() if not cell_colours.is_empty() else 0
+		budget.bricks = _estimate()
 	changed.emit()
 
 

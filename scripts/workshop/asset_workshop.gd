@@ -5277,11 +5277,46 @@ func _brick_colours(list: PackedInt32Array) -> PackedColorArray:
 func _cell_colour_map(cells: PackedInt32Array, material: int = 0) -> Dictionary:
 	var idx := ColourMatch.indices(material, convert_palette)
 	var got := sculpt.form.cell_colours(ColourMatch.colours(material, idx))
+	# Through the colour table (stage 8d). It is in one material; a part laid in another goes
+	# by colour: its nearest in the table's material, through the table, back to its nearest.
+	var tm := convert_colours.material
+	var through := {}
+	if not convert_colours.remap.is_empty():
+		for k in idx:
+			if material == tm:
+				through[k] = convert_colours.map(k)
+			else:
+				var t0 := ColourMatch.nearest(BrickWorld.get_material_colour(material, k), tm, convert_palette)
+				var t1 := convert_colours.map(t0)
+				through[k] = k if t1 == t0 else ColourMatch.nearest(BrickWorld.get_material_colour(tm, t1), material, convert_palette)
 	var out := {}
 	for i in got.size():
 		if got[i] >= 0:
-			out[Vector3i(cells[i * 5], cells[i * 5 + 1], cells[i * 5 + 2])] = idx[got[i]]
+			out[Vector3i(cells[i * 5], cells[i * 5 + 1], cells[i * 5 + 2])] = int(through.get(idx[got[i]], idx[got[i]]))
 	return out
+
+
+## The colour table's counts: each colour the clay and the models would give bricks, and how
+## many cells (a model's cells counted on their own, before it joins the clay). The colours
+## changed by hand stay.
+func colour_table_refresh() -> void:
+	if convert_colours.material != bench._mat:
+		convert_colours.remap = {}
+	convert_colours.material = bench._mat
+	var idx := ColourMatch.indices(convert_colours.material, convert_palette)
+	var pal := ColourMatch.colours(convert_colours.material, idx)
+	var counts := {}
+	var forms: Array = [sculpt.form]
+	for m in models:
+		if int(m.op) == SdfForm.ADD and m.node is AssetSculpt:
+			forms.append((m.node as AssetSculpt).form)
+	for f in forms:
+		(f as SdfForm).cells()
+		for g in (f as SdfForm).cell_colours(pal):
+			if g >= 0:
+				counts[idx[g]] = int(counts.get(idx[g], 0)) + 1
+	convert_colours.counts = counts
+	convert_colours.edited.emit()
 
 
 ## What Convert and Edit as SDF change besides bricks and the field, for undo.
@@ -6996,6 +7031,11 @@ var convert_mirror := false
 ## palette, AreaPalette); empty: all of them (Docs/AssetWorkshop.md, "Colour from model to
 ## bricks").
 var convert_palette := PackedInt32Array()
+## The colour table for Make bricks (Docs/BuildTools.md section 21, stage 8d): the clay's and
+## the models' colours (in the held material, within `convert_palette`) and the colour each is
+## laid in; a part laid in another material goes through it by colour.
+## `colour_table_refresh` counts them; `_cell_colour_map` lays them through it.
+var convert_colours := ColourTable.new()
 ## The clay's size for the readout, worked out when the clay changes.
 var _clay_size_text := ""
 ## Each part's colour as its bricks had it most when they were turned into clay (label ->

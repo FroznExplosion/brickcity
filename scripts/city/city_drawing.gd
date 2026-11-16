@@ -1528,6 +1528,21 @@ func _hide_falling_panes(reg: BuildingRegistry, toppling: Dictionary, owed: Dict
 var panes_hidden := 0
 
 
+## A building toppling whole hands its painted windows to the piece it becomes
+## (CityScene._topple, PiecePanes.hand_over), taken off its brick node now:
+## that node is freed a frame or two later (IslandManager's ghosts), or at
+## once if it was drawn coarse, and its children with it. Null if it had none.
+func take_panes(id: int) -> MeshInstance3D:
+	var node = _brick_panes.get(id)
+	_brick_panes.erase(id)
+	if node == null or not is_instance_valid(node):
+		return null
+	var mi := node as MeshInstance3D
+	if mi.get_parent() != null:
+		mi.get_parent().remove_child(mi)
+	return mi
+
+
 ## What hanging a building's panes may wait for on the tick's clock.
 const PANES_MS := 1.0
 

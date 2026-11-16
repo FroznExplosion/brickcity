@@ -305,6 +305,9 @@ var _model_dialog: FileDialog
 var _model_size: SpinBox
 var _model_wall: SpinBox
 var _model_colours: CheckBox
+## The colour table (section 21, stage 8c): its rows, the count to merge down to, the picker.
+var _model_table: VBoxContainer
+var _model_fewer: SpinBox
 var _rooms_label: Label
 ## The module's rules on the rooms panel (Docs/RoomModules.md 1).
 var _module_on: CheckBox
@@ -2168,6 +2171,9 @@ func _model_box(box: VBoxContainer) -> void:
 			model.use_colours = on
 			model.recount())
 	box.add_child(_model_colours)
+	_model_table = VBoxContainer.new()
+	box.add_child(_model_table)
+	_model_fewer = ColourTable.buttons(box, func() -> ColourTable: return model.colours)
 	_model_say = Label.new()
 	_model_say.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	box.add_child(_model_say)
@@ -2200,10 +2206,25 @@ func _model_sync() -> void:
 	_model_colours.disabled = not model.has_colours()
 	_model_colours.set_pressed_no_signal(model.use_colours)
 	_model_colours.tooltip_text = "" if model.has_colours() else "This model has no colours of its own: it is laid in the held colour."
+	_model_table_fill()
 	_model_bar.visible = model.state == "laying"
 	_model_bar.value = model.progress
 	_model_lay.disabled = model.state != "" or model.cells.is_empty() or not bool(model.budget.get("fits", false))
 	_model_cancel.disabled = model.state != "laying"
+
+
+func _model_table_fill() -> void:
+	var on := model.use_colours and not model.cell_colours.is_empty()
+	_model_table.visible = on
+	_model_fewer.get_parent().visible = on
+	_model_fewer.get_parent().get_parent().get_child(_model_fewer.get_parent().get_index() + 1).visible = on
+	if on:
+		model.colours.fill(_model_table, ws._colour)
+
+
+## The held material's colours to pick from, for the model's colour `from` (ColourTable).
+func open_model_pick(from: int) -> void:
+	model.colours.open_pick(from)
 
 
 func open_model_dialog() -> void:
