@@ -390,6 +390,24 @@ And a third time (the user: "when I fly into a room then go to another room the 
   is visited first next step (`_grant_key`). `--roomfly --wide`: 1-2 of 13 rooms with a flat floor
   before, none in two runs after.
 
+And a fourth (2026-11-16, counting the places made: 69 made, 8 of them never taken, and a flat
+floor in 1 of 13 rooms again with the cap EMPTY, 0 of 4,000 studs held):
+
+* **Coming into stud geometry waited for a quiet step.** A band with its studs fetched (cards) that
+  came into the geometry's reach changed over only on a step with no upload in flight, and was
+  looked at again when the round robin came back -- the first-fetch hole above, one step later.
+  Now it waits `STUD_WAIT_FIRST` steps in `_stud_queue` (`Band.geo_waits`) and then changes over
+  whatever is in flight (`geo_forced`; about 130 a `--roomfly --wide` run). Going out of it still
+  waits: the geometry drawn a little longer only costs the GPU.
+* **One band given up was not always room enough.** `_make_room` demoted the single worst band, and
+  a band is charged what it holds (at most `max_studs / BAND_STUD_SHARE`): a small one freed fewer
+  studs than the waiting band costs, the place kept for that band fitted nobody, for
+  `ADMIT_HOLD_STEPS` (5 of the 8). Now it gives up as many of the worst as it takes for the waiting
+  band to fit (each placed worse than `SWAP_MARGIN`), or none. The band it is kept for is admitted
+  by key (`_granted`), not by its score of the step before, and visited every step until it takes
+  the place or the place lapses. `--roomfly --wide`: 38 made, 37 taken (1.6 steps), 1 lapsed (the
+  camera had gone to the next room); the HUD line counts them (`places made`).
+
 The dev HUD has a `near tier` line (bands, with studs, the caps, turned away, waiting, forced).
 `city.tscn -- --roomfly --big` checks every band within the studs' reach has the studs its bricks
 have now, two seconds after flying into each room.

@@ -4369,7 +4369,7 @@ func _run_roomfly_pass() -> void:
 						under.state, under.show_dirty])
 				var bn = city.brick_near
 				print("[roomfly]       in the visit order %s; kept for band %d" % [
-						bn._order.has(under.key), bn._grant_key])
+						bn._order.has(under.key), bn._granted])
 				for k2 in bn._studded:
 					var hb = bn._bands.get(k2)
 					print("[roomfly]         geo band %s: cost %d, score %s, node %s, in tree %s, worst-able %s; wait %.2f" % [
