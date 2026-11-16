@@ -89,6 +89,24 @@ func _building() -> void:
 	await _shot("b12b_generate_tower")
 	t.set_gen("building")
 	await _shot("b12c_generate_building")
+	# Section 21, stage 7d: Generate > Model, a tapered round tower laid from a mesh.
+	t.set_gen("model")
+	var tower := CylinderMesh.new()
+	tower.bottom_radius = 16.0 * BrickPalette.STUD_M
+	tower.top_radius = 9.0 * BrickPalette.STUD_M
+	tower.height = 40.0 * BrickPalette.STUD_M
+	tower.radial_segments = 48
+	var tst := SurfaceTool.new()
+	tst.begin(Mesh.PRIMITIVE_TRIANGLES)
+	tst.append_from(tower, 0, Transform3D())
+	t.model.size_studs = 40
+	t.model.set_mesh(tst.commit())
+	await _shot("b12d_generate_model_budget")
+	t.model.lay()
+	while t.model.state == "laying":
+		await process_frame
+	await _shot("b12e_generate_model_laid", 12)
+	ws.bench._undo()
 	t.pick("paint")
 	await _shot("b13_paint")
 	t.set_stage("finish")

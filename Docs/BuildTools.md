@@ -1590,6 +1590,38 @@ one's skin. The hollow model, headless:
 
 So cells are no longer the cost at any building size; laying the bricks is (7d).
 
+**7d as built** (2026-11-15): **Generate > Model** (a picture beside Tower) and **Insert > A 3D
+model in bricks...**, which opens it. `ModelInsert` (`scripts/workshop/model_insert.gd`) holds the
+model and lays it; the panel is in `WorkshopTools._model_box`:
+
+* **Open a model...** (glTF, OBJ, FBX, STL through `ModelMesh`), **longest side (studs)**,
+  **wall (studs, 0 solid)**; a stud of wall is 2 plates up.
+* The budget is said as soon as the model or a number changes: its size in studs, its cells, and
+  about how many bricks. To count those, the first and last courses are packed (a floor or roof
+  packs into big plates), plus every few between (about 20,000 cells' worth); each course is
+  counted at the rate of the packed course nearest it. That is within 1% at 100 studs and 8% at
+  400. A model too big for the area says so, and Lay bricks stays off.
+* **Lay bricks**: in the middle of the area, on the floor, a course (3 plates) at a time, at
+  least one a frame and as many as fit in 12 ms, in the held colour and material. A bar shows
+  how far it has got; **Cancel** takes back what was laid. When it is done it is one inserted
+  build (the outliner's Inserted builds) and one undo.
+* The packer (`fill_parts`, `pack_cells`, `_box_in`) moved from the asset workshop into
+  `BrickBench`; the asset workshop keeps wrappers that pass it its own random stream, so it packs
+  as before (`asset_workshop_probe` 346).
+* Probes: `build_tools_probe` 381 (+12: the panel and its buttons, the budget first, the size
+  box following the size, laid over frames as said, its cells bricks, one undo, Cancel part way,
+  too big). `model_scale_probe -- --building [--sizes=...]` times it (no clay, so 400 is safe):
+
+| Model (hollow, wall 1) | Cells | Count | Bricks (said) | Lay | Memory |
+|---|---|---|---|---|---|
+| 100 studs | 49,396 | 0.12 s | 2,212 (2,180) | 0.26 s | +40 MB |
+| 200 studs | 200,776 | 0.35 s | 8,773 (8,309) | 1.0 s | +155 MB |
+| 400 studs | 809,536 | 1.9 s | 35,160 (32,510) | 4.6 s | +600 MB |
+
+(Headless; the editor was open, so rough.) The asset workshop's clay took 14 s to make 12,955
+bricks from a 100-stud model. Pictures: `b12d_generate_model_budget`, `b12e_generate_model_laid`.
+Left for stage 8: the model's own colours.
+
 ### Colours from a model (stage 8)
 
 Built (2026-11-02): glTF and FBX colours (material, texture, vertex) go into the clay; each brick
