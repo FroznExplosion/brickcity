@@ -1677,6 +1677,27 @@ colour). Picture: `b12e_generate_model_laid` (a tower grey, white and red, 9 col
 model's triangles cross its bands and blend them). Left for 8c: the colour table, to change or
 merge them by hand.
 
+**8c plan (2026-11-16)**: the colour table in Generate > Model first; the asset workshop's is
+8d (its colours come from the clay's vote, `_cell_colour_map`, a different place).
+`ModelInsert.remap` (a colour the model became -> the brick colour chosen) is applied wherever
+a cell's colour is read, so the budget, the estimate and the laying all follow it. It is kept
+when the size or wall changes and cleared by a new model. Under the tick box: a row a colour,
+most cells first, showing the colour, how many cells have it, and a button in the colour it will
+be. A click on that button opens the material's colours to pick from. Below the rows: **Fewer
+colours** with a count (it merges the two nearest in Oklab, the smaller into the bigger, until
+that many are left) and **Reset**. The rows stop at 12 with "and N more".
+
+**8c as built** (2026-11-16), as planned: `ModelInsert.remap`, `table`, `colour_count`,
+`set_colour`, `fewer`, `reset_colours`; the panel's rows and picker are in `WorkshopTools`
+(`_model_table_fill`, `_swatch`, `open_model_pick`). A row changed shows "*" on its button.
+Reset is on a line of its own ("Reset colours"): beside Fewer colours it made the pop-out wider
+than the rail. `build_tools_probe` 393 (+8): the rows (most cells first, on the screen), a
+colour changed by hand (the budget follows, laid as changed), Reset, Fewer to 1 (the smaller
+into the bigger), kept across a new size, the picker (the material's colours as buttons, a pick
+goes in the table). Pictures: `b12d_generate_model_budget` (the table, 9 colours),
+`b12f_generate_model_fewer` (merged to 3), `b12e_generate_model_laid` (laid in the 3: clean
+bands).
+
 ### Stages
 
 Each merged on its own; the probes of section 20 and the pictures before and after.

@@ -110,6 +110,9 @@ func _building() -> void:
 	t.model.size_studs = 30
 	t.model.set_mesh(tmesh)
 	await _shot("b12d_generate_model_budget")
+	# Stage 8c: the colour table merged down to three.
+	t.model.fewer(3)
+	await _shot("b12f_generate_model_fewer")
 	t.model.lay()
 	while t.model.state == "laying":
 		await process_frame
