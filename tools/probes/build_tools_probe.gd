@@ -172,6 +172,43 @@ func _model_checks() -> void:
 	_ok("laid in its colours: the top red, the sides blue, a brick one colour", top_ok and low_ok
 			and b.recipe.size() > before, "red %d blue %d" % [red, blue])
 	b._undo()
+	# Stage 8c: the colour table -- a row a colour, a colour changed by hand, Fewer, Reset.
+	var rows: Array = m.table()
+	_ok("the colour table: a row a colour, most cells first, on the screen", rows.size() == 2
+			and int(rows[0][2]) >= int(rows[1][2]) and t._model_table.visible
+			and t._model_table.get_child_count() == 2, str(rows))
+	m.set_colour(red, blue)
+	_ok("a colour changed by hand: one colour left, the budget follows", m.colour_count() == 1
+			and int(m.budget.colours) == 1 and t._model_say.text.contains("1 colours"), t._model_say.text)
+	before = b.recipe.size()
+	m.lay()
+	while m.state == "laying":
+		m.step(1000.0)
+	var all_blue := b.recipe.size() > before
+	for i in range(before, b.recipe.size()):
+		all_blue = all_blue and b.recipe.colour_of(i) == blue
+	_ok("laid as changed: all blue", all_blue)
+	b._undo()
+	m.reset_colours()
+	_ok("Reset: both colours again", m.colour_count() == 2 and m.remap.is_empty())
+	m.fewer(1)
+	var kept: int = m.table()[0][1]
+	_ok("Fewer colours to 1: the smaller merged into the bigger (blue sides)", m.colour_count() == 1 and kept == blue)
+	m.reset_colours()
+	m.size_studs = 24
+	m.set_colour(red, blue)
+	m.recount()
+	_ok("the table kept across a new size", m.colour_count() == 1)
+	m.reset_colours()
+	t.open_model_pick(red)
+	var sw: Array = t._model_pick.find_children("*", "Button", true, false)
+	_ok("the picker: the held material's colours as buttons", t._model_pick.visible
+			and sw.size() == ColourMatch.indices(b._mat).size(), str(sw.size()))
+	var green := ColourMatch.nearest(Color(0.1, 0.7, 0.1), b._mat)
+	(sw[ColourMatch.indices(b._mat).find(green)] as Button).pressed.emit()
+	_ok("a picked colour goes in the table", int(m.remap.get(red, -1)) == green and not t._model_pick.visible)
+	m.reset_colours()
+	m.size_studs = 20
 	m.use_colours = false
 	m.recount()
 	_ok("the colours box off: one colour, the held one", int(m.budget.colours) == 0 and m.cell_colours.is_empty())
