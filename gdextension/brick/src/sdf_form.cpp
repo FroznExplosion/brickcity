@@ -120,6 +120,7 @@ void SdfForm::_bind_methods() {
             DEFVAL(PackedColorArray()));
     ClassDB::bind_method(D_METHOD("lathe", "op", "xform", "profile", "blend", "part"), &SdfForm::lathe);
     ClassDB::bind_method(D_METHOD("fit_pieces", "cells", "pieces", "min_gain"), &SdfForm::fit_pieces);
+    ClassDB::bind_static_method("SdfForm", D_METHOD("mesh_cells", "verts", "index", "wall"), &SdfForm::mesh_cells);
     ClassDB::bind_method(D_METHOD("scale", "factor", "pivot"), &SdfForm::scale);
     ClassDB::bind_method(D_METHOD("move", "by"), &SdfForm::move);
     ClassDB::bind_method(D_METHOD("transform", "xform"), &SdfForm::transform);
@@ -798,6 +799,103 @@ PackedInt32Array SdfForm::fit_pieces(const PackedInt32Array &cells, const Array 
         out.append(cd.at.y);
         out.append(cd.at.z);
     }
+    return out;
+}
+
+PackedInt32Array SdfForm::mesh_cells(const PackedVector3Array &verts, const PackedInt32Array &index,
+        const Vector3i &wall) {
+    PackedInt32Array out;
+    if (verts.is_empty() || index.size() < 3) return out;
+    Vector3 mn = verts[0], mx = verts[0];
+    for (int64_t i = 1; i < verts.size(); ++i) {
+        mn = mn.min(verts[i]);
+        mx = mx.max(verts[i]);
+    }
+    // The grid, a cell of margin round the model (outside, for the skin).
+    const Vector3i lo((int)std::floor(mn.x) - 1, (int)std::floor(mn.y) - 1, (int)std::floor(mn.z) - 1);
+    const Vector3i hi((int)std::ceil(mx.x) + 1, (int)std::ceil(mx.y) + 1, (int)std::ceil(mx.z) + 1);
+    const Vector3i D = hi - lo;
+    const size_t n = (size_t)D.x * D.y * D.z;
+    if (D.x <= 0 || D.y <= 0 || D.z <= 0 || n > (size_t)1 << 31) return out;
+    auto at = [&](int x, int y, int z) { return (size_t)x + (size_t)D.x * ((size_t)y + (size_t)D.y * z); };
+    // Each row's crossings (row y + D.y * z): where the line along x through the cells'
+    // middles meets a triangle. The middles are nudged off the whole numbers so they never
+    // sit on an edge shared by two triangles of a boxy mesh (counted twice, parity broken).
+    const float ey = 0.5f + 1.3e-4f, ez = 0.5f + 0.7e-4f;
+    std::vector<std::vector<float>> rows((size_t)D.y * D.z);
+    for (int64_t t = 0; t + 2 < index.size(); t += 3) {
+        const Vector3 a = verts[index[t]] - Vector3(lo), b = verts[index[t + 1]] - Vector3(lo), c = verts[index[t + 2]] - Vector3(lo);
+        const int y0 = std::max(0, (int)std::ceil(std::min({a.y, b.y, c.y}) - ey));
+        const int y1 = std::min(D.y - 1, (int)std::floor(std::max({a.y, b.y, c.y}) - ey));
+        const int z0 = std::max(0, (int)std::ceil(std::min({a.z, b.z, c.z}) - ez));
+        const int z1 = std::min(D.z - 1, (int)std::floor(std::max({a.z, b.z, c.z}) - ez));
+        // In the (y, z) plane: barycentric of each row's point, then x there.
+        const float d = (b.y - a.y) * (c.z - a.z) - (c.y - a.y) * (b.z - a.z);
+        if (std::abs(d) < 1e-12f) continue;   // edge-on to the rows
+        for (int z = z0; z <= z1; ++z)
+            for (int y = y0; y <= y1; ++y) {
+                const float py = y + ey - a.y, pz = z + ez - a.z;
+                const float u = (py * (c.z - a.z) - (c.y - a.y) * pz) / d;
+                const float v = ((b.y - a.y) * pz - py * (b.z - a.z)) / d;
+                if (u < 0.0f || v < 0.0f || u + v > 1.0f) continue;
+                rows[(size_t)y + (size_t)D.y * z].push_back(a.x + u * (b.x - a.x) + v * (c.x - a.x));
+            }
+    }
+    std::vector<uint8_t> in(n, 0);
+    for (int z = 0; z < D.z; ++z)
+        for (int y = 0; y < D.y; ++y) {
+            std::vector<float> &r = rows[(size_t)y + (size_t)D.y * z];
+            if (r.size() < 2) continue;
+            std::sort(r.begin(), r.end());
+            for (size_t i = 0; i + 1 < r.size(); i += 2) {
+                // The cells whose middle (x + 0.5) is between this pair of crossings.
+                const int x0 = std::max(0, (int)std::ceil(r[i] - 0.5f));
+                const int x1 = std::min(D.x - 1, (int)std::floor(r[i + 1] - 0.5f));
+                for (int x = x0; x <= x1; ++x) in[at(x, y, z)] = 1;
+            }
+        }
+    // The skin: outside dilated by the wall box (one pass an axis, a running count), and the
+    // solid cells it reaches.
+    std::vector<uint8_t> keep(in);
+    if (wall.x > 0 || wall.y > 0 || wall.z > 0) {
+        std::vector<uint8_t> o(n);
+        for (size_t i = 0; i < n; ++i) o[i] = in[i] ? 0 : 1;
+        auto dilate = [&](int axis, int w) {
+            if (w <= 0) return;
+            const int len = axis == 0 ? D.x : axis == 1 ? D.y : D.z;
+            const size_t step = axis == 0 ? 1 : axis == 1 ? (size_t)D.x : (size_t)D.x * D.y;
+            std::vector<uint8_t> line(len), res(len);
+            const int A = axis == 0 ? D.y : D.x, Bn = axis == 2 ? D.y : D.z;
+            for (int q = 0; q < Bn; ++q)
+                for (int p = 0; p < A; ++p) {
+                    size_t base;
+                    if (axis == 0) base = at(0, p, q);
+                    else if (axis == 1) base = at(p, 0, q);
+                    else base = at(p, q, 0);
+                    for (int i = 0; i < len; ++i) line[i] = o[base + step * i];
+                    int cnt = 0;   // outside cells in the window [i - w, i + w]
+                    for (int i = 0; i < std::min(len, w); ++i) cnt += line[i];
+                    for (int i = 0; i < len; ++i) {
+                        if (i + w < len) cnt += line[i + w];
+                        if (i - w - 1 >= 0) cnt -= line[i - w - 1];
+                        res[i] = cnt > 0;
+                    }
+                    for (int i = 0; i < len; ++i) o[base + step * i] = res[i];
+                }
+        };
+        dilate(0, wall.x);
+        dilate(1, wall.y);
+        dilate(2, wall.z);
+        for (size_t i = 0; i < n; ++i) keep[i] = in[i] && o[i];
+    }
+    for (int y = 0; y < D.y; ++y)
+        for (int z = 0; z < D.z; ++z)
+            for (int x = 0; x < D.x; ++x)
+                if (keep[at(x, y, z)]) {
+                    out.append(x + lo.x);
+                    out.append(y + lo.y);
+                    out.append(z + lo.z);
+                }
     return out;
 }
 

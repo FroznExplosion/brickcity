@@ -160,6 +160,14 @@ public:
     /// overlapping. Returns piece, x, y, z for each.
     PackedInt32Array fit_pieces(const PackedInt32Array &cells, const Array &pieces, float min_gain) const;
 
+    /// A closed mesh straight to brick cells, no field (Docs/BuildTools.md section 21, stage
+    /// 7c): `verts` in cells (x and z studs, y plates), triangles `index`. A cell is solid when
+    /// its middle is inside, by ray parity along x a row of cells at a time. `wall` (cells
+    /// along x, y, z): only the skin is kept, the solid cells within that box of an outside
+    /// one; zero keeps them all. Returns x, y, z a cell, lowest layer first.
+    static PackedInt32Array mesh_cells(const PackedVector3Array &verts, const PackedInt32Array &index,
+            const Vector3i &wall);
+
     /// The whole form scaled by `factor` about `pivot` (samples).
     void scale(float factor, const Vector3 &pivot);
     /// The whole form moved `by` samples: exact for whole samples, resampled (trilinear,
