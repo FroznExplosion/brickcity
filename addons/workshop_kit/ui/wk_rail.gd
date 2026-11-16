@@ -71,6 +71,7 @@ const ICONS := {
 	"g_grow": '<rect x="3" y="13" width="8" height="8"/><rect x="13" y="13" width="8" height="8"/><rect x="8" y="3" width="8" height="8"/><path d="M12 11v2"/>',
 	"g_pack": '<path d="M2 12l4-6h12l4 6-4 6H6z"/><path d="M9 6v12M15 6v12"/>',
 	"g_station": '<circle cx="12" cy="12" r="3"/><path d="M12 2v7M12 15v7M2 12h7M15 12h7"/><rect x="10" y="1" width="4" height="3"/><rect x="10" y="20" width="4" height="3"/>',
+	"g_model": '<path d="M12 3l8 4.5v9L12 21l-8-4.5v-9z"/><path d="M4 7.5l8 4.5 8-4.5M12 12v9"/>',
 	"g_tower": '<path d="M5 21V9h14v12M8 9V5h8v4M10 5V2h4v3"/><path d="M3 21h18"/>',
 	"!save_as": '<path d="M4 4h11l3 3v5"/><path d="M4 4v16h8"/><path d="M8 4v5h6V4"/><path d="M15 21l6-6-2-2-6 6v2z"/>',
 	"!open": '<path d="M3 6h6l2 2h10v11H3z"/><path d="M3 10h18"/>',

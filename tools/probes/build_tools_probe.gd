@@ -58,11 +58,92 @@ func _initialize() -> void:
 	_big_edit_checks()
 	_packer_checks()
 	_far_checks()
+	_model_checks()
 	print("\n%d passed, %d failed" % [_pass, _fail])
 	quit(1 if _fail > 0 else 0)
 
 
 # ---------------------------------------------------------------------------
+
+## A hollow box `st` studs long (half as tall, 0.4 deep), walls a stud thick, as a model in
+## metres: the outer box and the inner one turned inside out.
+func _hollow_model(st: float) -> ArrayMesh:
+	var m := BrickPalette.STUD_M
+	var st_ := SurfaceTool.new()
+	st_.begin(Mesh.PRIMITIVE_TRIANGLES)
+	var outer := BoxMesh.new()
+	outer.size = Vector3(st, st * 0.5, st * 0.4) * m
+	st_.append_from(outer, 0, Transform3D())
+	var inner := BoxMesh.new()
+	inner.size = Vector3(st - 2.0, st * 0.5 - 2.0, st * 0.4 - 2.0) * m
+	var arr := inner.get_mesh_arrays()
+	var v: PackedVector3Array = arr[Mesh.ARRAY_VERTEX]
+	var idx: PackedInt32Array = arr[Mesh.ARRAY_INDEX]
+	for i in range(0, idx.size(), 3):
+		for k in [0, 2, 1]:
+			st_.add_vertex(v[idx[i + k]])
+	return st_.commit()
+
+
+## Section 21, stage 7d: Generate > Model -- a 3D model into bricks, the budget first, laid over
+## frames, one undo, Cancel takes it back.
+func _model_checks() -> void:
+	var t: WorkshopTools = _ws.bench._tools
+	var b: BrickBench = _ws.bench
+	b._on_menu("generate", "model")
+	t.process()
+	var texts: Array = t._gen_boxes.model.find_children("*", "Button", true, false).map(func(x: Button) -> String: return x.text)
+	_ok("Insert > A 3D model opens Generate's Model panel, its buttons on the screen", t.active() == "generate"
+			and t.gen_kind == "model" and t._gen_boxes.model.visible and texts.has("Open a model...")
+			and texts.has("Lay bricks") and texts.has("Cancel"), str(texts))
+	_ok("no model: Lay bricks off", t._model_lay.disabled)
+	var m: ModelInsert = t.model
+	m.size_studs = 40
+	m.wall_studs = 1
+	m.set_mesh(_hollow_model(40.0))
+	var n := int(m.budget.get("cells", 0))
+	_ok("the budget first: cells and about how many bricks, before laying", n > 1000 and int(m.budget.bricks) > 0
+			and bool(m.budget.fits) and not t._model_lay.disabled and t._model_say.text.contains("about"),
+			"%s / %s" % [str(m.budget), t._model_say.text])
+	m.size_studs = 60
+	m.recount()
+	var n60 := int(m.budget.cells)
+	_ok("the size box follows the model's size", int(t._model_size.value) == 60)
+	m.size_studs = 40
+	m.recount()
+	_ok("bigger is more cells (%d -> %d)" % [n, n60], n60 > n * 1.8)
+	var before := b.recipe.size()
+	_ok("Lay bricks starts", m.lay() and m.state == "laying" and not t._model_cancel.disabled)
+	var frames := 0
+	while m.state == "laying" and frames < 2000:
+		m.step(4.0)
+		frames += 1
+	var got := b.recipe.size() - before
+	_ok("laid over %d frames: %d bricks (about %d said), %d refused" % [frames, got, int(m.budget.bricks), m.refused],
+			frames > 1 and got == m.laid and got > 0 and m.refused <= got / 20
+			and absf(got - float(m.budget.bricks)) < float(m.budget.bricks) * 0.35)
+	var covered := 0
+	for i in range(0, m.cells.size(), 3 * 37):
+		covered += 1 if b.world.is_solid(b.chunk, Vector3i(m.cells[i], m.cells[i + 1], m.cells[i + 2])) else 0
+	var sampled := ceili(m.cells.size() / (3.0 * 37.0))
+	_ok("its cells are bricks (%d of %d sampled)" % [covered, sampled], covered >= sampled * 0.95)
+	_ok("an inserted build in the outliner's list", String(b.recipe.groups[b.recipe.groups.size() - 1].get("name", "")) != ""
+			and int(b.recipe.groups[b.recipe.groups.size() - 1].count) == got)
+	b._undo()
+	_ok("one Z takes the whole model back", b.recipe.size() == before, str(b.recipe.size() - before))
+	m.lay()
+	m.step(0.001)
+	var part := b.recipe.size() - before
+	m.cancel()
+	_ok("Cancel part way takes back what was laid (%d)" % part, part > 0 and b.recipe.size() == before and m.state == "")
+	m.size_studs = 5000
+	m.recount()
+	_ok("too big for the area: said, and not laid", not bool(m.budget.fits) and not m.lay()
+			and t._model_lay.disabled and t._model_say.text.contains("Too big"))
+	m.size_studs = 40
+	m.recount()
+	t.pick("hand")
+
 
 func _shape_checks() -> void:
 	print("[probe] shapes on the grid")

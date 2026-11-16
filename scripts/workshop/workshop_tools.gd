@@ -23,11 +23,11 @@ const TOOLS := [
 	["repeat", "Repeat", "J", "Click a building and copy it, or one storey, with everything on it: windows, stairs, furniture, rooms, every brick. Up, it lands on top and stays one building. A box shows where it will go."],
 	["select", "Select", "L", "Click a shape or an inserted build to pick it. A shape: drag its top for its height, its side to move it; change its bond or brick, delete it, or let it go. A build: move, copy or delete it."],
 	["rooms", "Rooms", "O", "Rooms and openings: click a room to find it or an opening to turn its kind; RMB forgets one."],
-	["generate", "Generate", "", "Generated buildings: pick what to make in the pop-out -- a building, one grown from saved modules, a ship's inside, a station, a tower by its shell -- and press its button."],
+	["generate", "Generate", "", "Generated buildings: pick what to make in the pop-out -- a building, one grown from saved modules, a ship's inside, a station, a tower by its shell, a 3D model in bricks -- and press its button."],
 ]
 ## Generate's kinds: [id, name, icon] -- each its own short panel in the pop-out.
 const GEN_PICS := [["building", "Building", "g_building"], ["grow", "Modules", "g_grow"], ["pack", "Ship inside", "g_pack"],
-		["station", "Station", "g_station"], ["tower", "Tower", "g_tower"]]
+		["station", "Station", "g_station"], ["tower", "Tower", "g_tower"], ["model", "Model", "g_model"]]
 ## The stage tabs (Docs/BuildTools.md section 21, stage 4): [id, tab, what it is for, layer]. The
 ## tab is the layer a brick goes in (structure, interior, detail); Finish keeps the last one.
 const STAGES := [
@@ -295,6 +295,15 @@ var _gen_row := {}
 ## The Generate tool is in hand, and which of its kinds (`GEN_PICS`).
 var _generating := false
 var gen_kind := "building"
+## A 3D model into bricks (Generate > Model; Docs/BuildTools.md section 21, stage 7d).
+var model: ModelInsert
+var _model_say: Label
+var _model_bar: ProgressBar
+var _model_lay: Button
+var _model_cancel: Button
+var _model_dialog: FileDialog
+var _model_size: SpinBox
+var _model_wall: SpinBox
 var _rooms_label: Label
 ## The module's rules on the rooms panel (Docs/RoomModules.md 1).
 var _module_on: CheckBox
@@ -1916,6 +1925,7 @@ func _build_options() -> void:
 		var b := VBoxContainer.new()
 		_gen_box.add_child(b)
 		_gen_boxes[g[0]] = b
+	_model_box(_gen_boxes.model)
 	# A generated building (BuildTower): add it, its options, bake or remove it -- the kind
 	# menu's Generated rows and Insert's, on the screen.
 	var gbb: VBoxContainer = _gen_boxes.building
@@ -2133,6 +2143,72 @@ func _choice(box: Container, label: String, items: Array, then: Callable) -> Opt
 	o.item_selected.connect(then)
 	box.add_child(o)
 	return o
+
+
+## Generate > Model's panel: open a model, its size and wall, the budget, Lay bricks, the bar
+## and Cancel.
+func _model_box(box: VBoxContainer) -> void:
+	model = ModelInsert.new()
+	model.name = "ModelInsert"
+	model.bench = ws
+	ws.add_child(model)
+	_button(box, "Open a model...", open_model_dialog)
+	_model_size = _spin(box, "longest side (studs)", 8, 1000, model.size_studs, func(v: float) -> void:
+			model.size_studs = int(v)
+			model.recount())
+	_model_wall = _spin(box, "wall (studs, 0 solid)", 0, 6, model.wall_studs, func(v: float) -> void:
+			model.wall_studs = int(v)
+			model.recount())
+	_model_say = Label.new()
+	_model_say.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	box.add_child(_model_say)
+	_model_bar = ProgressBar.new()
+	_model_bar.max_value = 1.0
+	_model_bar.step = 0.001
+	box.add_child(_model_bar)
+	var row := HBoxContainer.new()
+	box.add_child(row)
+	_model_lay = Button.new()
+	_model_lay.text = "Lay bricks"
+	_model_lay.focus_mode = Control.FOCUS_NONE
+	_model_lay.pressed.connect(func() -> void: model.lay())
+	row.add_child(_model_lay)
+	_model_cancel = Button.new()
+	_model_cancel.text = "Cancel"
+	_model_cancel.focus_mode = Control.FOCUS_NONE
+	_model_cancel.pressed.connect(func() -> void: model.cancel())
+	row.add_child(_model_cancel)
+	model.changed.connect(_model_sync)
+	_model_sync()
+
+
+func _model_sync() -> void:
+	if _model_say == null:
+		return
+	_model_say.text = model.say()
+	_model_size.set_value_no_signal(model.size_studs)
+	_model_wall.set_value_no_signal(model.wall_studs)
+	_model_bar.visible = model.state == "laying"
+	_model_bar.value = model.progress
+	_model_lay.disabled = model.state != "" or model.cells.is_empty() or not bool(model.budget.get("fits", false))
+	_model_cancel.disabled = model.state != "laying"
+
+
+func open_model_dialog() -> void:
+	if _model_dialog == null:
+		_model_dialog = FileDialog.new()
+		_model_dialog.access = FileDialog.ACCESS_FILESYSTEM
+		_model_dialog.file_mode = FileDialog.FILE_MODE_OPEN_FILE
+		_model_dialog.title = "A model to build in bricks"
+		var f := PackedStringArray()
+		for e in ModelMesh.EXTENSIONS:
+			f.append("*.%s" % e)
+		_model_dialog.filters = PackedStringArray([", ".join(f) + " ; Models"])
+		_model_dialog.file_selected.connect(func(p: String) -> void:
+				if not model.open(p):
+					_model_say.text = "Could not read %s." % p.get_file())
+		ws.add_child(_model_dialog)
+	_model_dialog.popup_centered_ratio(0.6)
 
 
 func _spin(box: Container, label: String, lo: int, hi: int, v: int, then: Callable) -> SpinBox:
