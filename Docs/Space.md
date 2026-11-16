@@ -370,6 +370,30 @@ lay storeys of its own on a look or a walk-up as the host does, and only the hos
 log -- the city has no live client yet, so that is unchecked; the budget's figure is the doc's
 first guess, not a measured one.
 
+### 5.3c What a storey not laid holds (2026-11-16)
+
+The user: "even when I don't damage a building the staircase and some parts of the centre floor of
+a room is unexplainably damaged and falls when I get close". A storey laid on its own
+(`_stream_residency` lays the storeys at the camera's height) was held only by bricks whose BOTTOM is
+exactly on its run's line (`set_anchor_levels`) and parts with no sockets under them whose TOP is on
+the line over it (`set_hang_levels`). Two things in every storey were neither:
+
+* **The staircase**: one fixture up a stairwell with no floor in it. A storey's slice of it stands on
+  the slice below (8-tick spiral pieces, the lowest starting above the line), not laid -- so it fell,
+  and broke the floor round the shaft.
+* **A 2x2 and a 1x2 under every slab**, top on the line, nothing under them: bricks, with sockets
+  under, so not "hanging".
+
+Now (C++, `BrickWorld`): `absent_rests` -- a laid live brick whose bottom rests on a block not laid
+whose record says intact (absent, alive, not detached) is held, in the solve, `solve_standing` and
+`spans_from`; and `hangs_at` also holds a brick with sockets under it when NOTHING (live or dead)
+owns a cell under its footprint -- a wall topping out has bricks under it and is carried down as
+before. `storey_stair_probe`: every storey laid alone lost 7 bricks (5 stair) before, none after;
+`--roomfly`: the 41-storey tower, never hit, shed 158 bricks into 13 pieces before, none after.
+`storey_unit_probe`'s "without its anchor storey 25 hangs on nothing" became: without its anchor
+level it still stands on storey 24 (not laid, intact), and with storey 24 destroyed in its record it
+hangs on nothing.
+
 ### 5.4 What it should buy (estimates)
 
 | | today | storey units |
