@@ -44,7 +44,7 @@ static func read_pieces(path: String) -> Array:
 		"obj":
 			var out := []
 			for p in _read_obj_pieces(path):
-				var m := _soup_mesh([p[1], p[2]])
+				var m := _soup_mesh([p[1], p[2], p[3]])
 				if m != null:
 					out.append([p[0], m])
 			return out
@@ -193,7 +193,7 @@ static func _image_of(tex: Texture2D) -> Image:
 	return img
 
 
-## [vertices, index] as a mesh; null when empty.
+## [vertices, index, colours (optional, one a vertex)] as a mesh; null when empty.
 static func _soup_mesh(soup: Array) -> ArrayMesh:
 	if soup.is_empty() or (soup[1] as PackedInt32Array).is_empty():
 		return null
@@ -201,66 +201,157 @@ static func _soup_mesh(soup: Array) -> ArrayMesh:
 	s.resize(Mesh.ARRAY_MAX)
 	s[Mesh.ARRAY_VERTEX] = soup[0]
 	s[Mesh.ARRAY_INDEX] = soup[1]
+	if soup.size() > 2 and (soup[2] as PackedColorArray).size() == (soup[0] as PackedVector3Array).size():
+		s[Mesh.ARRAY_COLOR] = soup[2]
 	var out := ArrayMesh.new()
 	out.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, s)
 	return out
 
 
-## Wavefront OBJ: its `v` and `f` lines (a face of more than three corners a fan; v/vt/vn
-## and negative indices as the format has them). Every object and group in one.
+## Wavefront OBJ, every object and group in one: [corners, index, colours] (`_parse_obj`).
 static func _read_obj(path: String) -> Array:
-	var f := FileAccess.open(path, FileAccess.READ)
-	if f == null:
+	var pieces := _parse_obj(path)
+	if pieces.is_empty():
 		return []
 	var v := PackedVector3Array()
-	var idx := PackedInt32Array()
-	while not f.eof_reached():
-		var line := f.get_line().strip_edges()
-		if line.begins_with("v "):
-			var p := line.substr(2).split(" ", false)
-			if p.size() >= 3:
-				v.append(Vector3(float(p[0]), float(p[1]), float(p[2])))
-		elif line.begins_with("f "):
-			var corners := PackedInt32Array()
-			for c in line.substr(2).split(" ", false):
-				var i := int(c.get_slice("/", 0))
-				corners.append(i - 1 if i > 0 else v.size() + i)
-			for k in range(1, corners.size() - 1):
-				idx.append_array([corners[0], corners[k], corners[k + 1]])
-	return [v, idx]
+	var cols := PackedColorArray()
+	var coloured := false
+	for pc in pieces:
+		coloured = coloured or not (pc[2] as PackedColorArray).is_empty()
+	for pc in pieces:
+		v.append_array(pc[1])
+		if coloured:
+			var c: PackedColorArray = pc[2]
+			if c.is_empty():
+				c = PackedColorArray()
+				c.resize((pc[1] as PackedVector3Array).size())
+				c.fill(Color.WHITE)
+			cols.append_array(c)
+	return [v, _fan_index(v.size()), cols]
 
 
-## An OBJ's pieces: [name, vertices, index] for each `o` or `g` that has faces (indices
-## are the file's, shared by all, so every piece keeps every vertex).
+## An OBJ's pieces: [name, corners, index, colours] for each `o` or `g` that has faces.
 static func _read_obj_pieces(path: String) -> Array:
+	return _parse_obj(path).map(func(p: Array) -> Array: return [p[0], p[1], _fan_index((p[1] as PackedVector3Array).size()), p[2]])
+
+
+static func _fan_index(n: int) -> PackedInt32Array:
+	var idx := PackedInt32Array()
+	idx.resize(n - n % 3)
+	for i in idx.size():
+		idx[i] = i
+	return idx
+
+
+## Wavefront OBJ (section 21, stage 8a): its `v` (with `r g b` after, vertex colours), `vt`, `f`
+## (a face of more than three corners a fan; v/vt/vn and negative indices as the format has
+## them), `o` and `g` (pieces), `mtllib` and `usemtl`. Returns [name, corners (three a
+## triangle, no index), colours (one a corner; empty when the file has no colour)] a piece.
+## A corner's colour is its material's `Kd` times its `map_Kd` there (read a little in toward
+## the triangle's middle, as `_add_colours` reads glTF's) times its vertex colour.
+static func _parse_obj(path: String) -> Array:
 	var f := FileAccess.open(path, FileAccess.READ)
 	if f == null:
 		return []
 	var v := PackedVector3Array()
+	var vc := PackedColorArray()
+	var vt := PackedVector2Array()
+	var mats := {}
+	var mat := {}
+	var any_colour := false
 	var pieces := []
 	var name := path.get_file().get_basename()
-	var idx := PackedInt32Array()
+	var corners := PackedVector3Array()
+	var cols := PackedColorArray()
 	while not f.eof_reached():
 		var line := f.get_line().strip_edges()
 		if line.begins_with("v "):
 			var p := line.substr(2).split(" ", false)
 			if p.size() >= 3:
 				v.append(Vector3(float(p[0]), float(p[1]), float(p[2])))
+				if p.size() >= 6:
+					while vc.size() < v.size() - 1:
+						vc.append(Color.WHITE)   # the vertices before it had none
+					vc.append(Color(float(p[3]), float(p[4]), float(p[5])))
+					any_colour = true
+		elif line.begins_with("vt "):
+			var p := line.substr(3).split(" ", false)
+			if p.size() >= 2:
+				vt.append(Vector2(float(p[0]), 1.0 - float(p[1])))
+		elif line.begins_with("mtllib "):
+			mats.merge(_read_mtl(path.get_base_dir().path_join(line.substr(7).strip_edges())))
+		elif line.begins_with("usemtl "):
+			mat = mats.get(line.substr(7).strip_edges(), {})
+			any_colour = any_colour or not mat.is_empty()
 		elif line.begins_with("o ") or line.begins_with("g "):
-			if not idx.is_empty():
-				pieces.append([name, idx])
-			idx = PackedInt32Array()
+			if not corners.is_empty():
+				pieces.append([name, corners, cols])
+			corners = PackedVector3Array()
+			cols = PackedColorArray()
 			name = line.substr(2).strip_edges()
 		elif line.begins_with("f "):
-			var corners := PackedInt32Array()
+			var vi := PackedInt32Array()
+			var ti := PackedInt32Array()
 			for c in line.substr(2).split(" ", false):
 				var i := int(c.get_slice("/", 0))
-				corners.append(i - 1 if i > 0 else v.size() + i)
-			for k in range(1, corners.size() - 1):
-				idx.append_array([corners[0], corners[k], corners[k + 1]])
-	if not idx.is_empty():
-		pieces.append([name, idx])
-	return pieces.map(func(p: Array) -> Array: return [p[0], v, p[1]])
+				vi.append(i - 1 if i > 0 else v.size() + i)
+				var t := int(c.get_slice("/", 1)) if c.get_slice_count("/") > 1 and c.get_slice("/", 1) != "" else 0
+				ti.append(t - 1 if t > 0 else (vt.size() + t if t < 0 else -1))
+			for k in range(1, vi.size() - 1):
+				var tri := [0, k, k + 1]
+				var mid := Vector2.ZERO
+				var img: Image = mat.get("image")
+				if img != null:
+					for j in tri:
+						if ti[j] >= 0 and ti[j] < vt.size():
+							mid += vt[ti[j]] / 3.0
+				for j in tri:
+					var at: int = vi[j]
+					corners.append(v[at] if at >= 0 and at < v.size() else Vector3.ZERO)
+					var c: Color = mat.get("kd", Color.WHITE)
+					if img != null and ti[j] >= 0 and ti[j] < vt.size():
+						var uv := vt[ti[j]].lerp(mid, 0.3)
+						var px := Vector2i(int(fposmod(uv.x, 1.0) * img.get_width()), int(fposmod(uv.y, 1.0) * img.get_height()))
+						c *= img.get_pixelv(px.clamp(Vector2i.ZERO, Vector2i(img.get_width() - 1, img.get_height() - 1)))
+					if at >= 0 and at < vc.size():
+						c *= vc[at]
+					c.a = 1.0
+					cols.append(c)
+	if not corners.is_empty():
+		pieces.append([name, corners, cols])
+	if not any_colour:
+		for pc in pieces:
+			pc[2] = PackedColorArray()
+	return pieces
+
+
+## A .mtl file: name -> {kd: Color, image: Image (map_Kd)}, the materials it names.
+static func _read_mtl(path: String) -> Dictionary:
+	var f := FileAccess.open(path, FileAccess.READ)
+	var out := {}
+	if f == null:
+		return out
+	var cur := ""
+	while not f.eof_reached():
+		var line := f.get_line().strip_edges()
+		if line.begins_with("newmtl "):
+			cur = line.substr(7).strip_edges()
+			out[cur] = {}
+		elif cur == "":
+			continue
+		elif line.begins_with("Kd "):
+			var p := line.substr(3).split(" ", false)
+			if p.size() >= 3:
+				out[cur]["kd"] = Color(float(p[0]), float(p[1]), float(p[2]))
+		elif line.begins_with("map_Kd "):
+			# Options (-s, -o, -bm ...) come first: the file is the last word.
+			var file: String = Array(line.substr(7).split(" ", false)).back()
+			var img := Image.load_from_file(path.get_base_dir().path_join(file.replace("\\", "/")))
+			if img != null and not img.is_empty():
+				if img.is_compressed():
+					img.decompress()
+				out[cur]["image"] = img
+	return out
 
 
 ## STL, binary or text: every facet's three corners.

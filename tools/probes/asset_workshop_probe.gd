@@ -2649,6 +2649,54 @@ func _nudges() -> void:
 			and is_equal_approx(ms.get_aabb().size.x, 2.0) and is_equal_approx(ms.get_aabb().size.y, 3.0))
 	DirAccess.remove_absolute(ProjectSettings.globalize_path(obj))
 	DirAccess.remove_absolute(ProjectSettings.globalize_path(stl))
+	_obj_colours()
+
+
+## Section 21, stage 8a: an OBJ's colours -- its .mtl's Kd and map_Kd, and vertex colours --
+## as the mesh's vertex colours; a piece keeps only its own corners.
+func _obj_colours() -> void:
+	var dir := "user://dev/_probe_obj/"
+	DirAccess.make_dir_recursive_absolute(dir)
+	var img := Image.create(2, 1, false, Image.FORMAT_RGB8)
+	img.set_pixel(0, 0, Color(1, 0, 0))
+	img.set_pixel(1, 0, Color(0, 1, 0))
+	img.save_png(dir + "tex.png")
+	var fm := FileAccess.open(dir + "m.mtl", FileAccess.WRITE)
+	fm.store_string("newmtl red\nKd 1 0 0\nnewmtl blue\nKd 0 0 1\nnewmtl tex\nKd 1 1 1\nmap_Kd -s 1 1 1 tex.png\n")
+	fm.close()
+	var fo := FileAccess.open(dir + "m.obj", FileAccess.WRITE)
+	fo.store_string("mtllib m.mtl\n"
+			+ "v 0 0 0\nv 1 0 0\nv 0 1 0\n"
+			+ "v 10 0 0\nv 11 0 0\nv 10 1 0\n"
+			+ "v 20 0 0\nv 21 0 0\nv 20 1 0\n"
+			+ "vt 0.1 0.5\nvt 0.2 0.5\nvt 0.1 0.6\nvt 0.8 0.5\nvt 0.9 0.5\nvt 0.8 0.6\n"
+			+ "o a\nusemtl red\nf 1 2 3\no b\nusemtl blue\nf 4 5 6\no c\nusemtl tex\nf 7/1 8/2 9/3\nf 7/4 8/5 9/6\n")
+	fo.close()
+	var m := ModelMesh.read(dir + "m.obj")
+	var arr := m.surface_get_arrays(0) if m != null else []
+	var cols: PackedColorArray = arr[Mesh.ARRAY_COLOR] if not arr.is_empty() and arr[Mesh.ARRAY_COLOR] != null else PackedColorArray()
+	_ok("OBJ: Kd colours its faces (red, then blue)", cols.size() == 12 and cols[0].is_equal_approx(Color(1, 0, 0))
+			and cols[3].is_equal_approx(Color(0, 0, 1)), str(cols.slice(0, 6)))
+	_ok("OBJ: map_Kd colours a face by its place in the texture (left red, right green)", cols.size() == 12
+			and cols[6].is_equal_approx(Color(1, 0, 0)) and cols[9].is_equal_approx(Color(0, 1, 0)), str(cols.slice(6, 12)))
+	var pieces := ModelMesh.read_pieces(dir + "m.obj")
+	_ok("OBJ pieces: a, b, c, each its own box and colours", pieces.size() == 3 and String(pieces[1][0]) == "b"
+			and is_equal_approx((pieces[1][1] as ArrayMesh).get_aabb().position.x, 10.0)
+			and (pieces[1][1] as ArrayMesh).get_aabb().size.x < 1.5
+			and ((pieces[1][1] as ArrayMesh).surface_get_arrays(0)[Mesh.ARRAY_COLOR] as PackedColorArray)[0].is_equal_approx(Color(0, 0, 1)))
+	var fv := FileAccess.open(dir + "vc.obj", FileAccess.WRITE)
+	fv.store_string("v 0 0 0 1 1 0\nv 1 0 0 1 1 0\nv 0 1 0 1 1 0\nf 1 2 3\n")
+	fv.close()
+	var mv := ModelMesh.read(dir + "vc.obj")
+	var vcol = mv.surface_get_arrays(0)[Mesh.ARRAY_COLOR] if mv != null else null
+	_ok("OBJ: vertex colours (v x y z r g b)", vcol != null and (vcol as PackedColorArray)[0].is_equal_approx(Color(1, 1, 0)))
+	var fp := FileAccess.open(dir + "plain.obj", FileAccess.WRITE)
+	fp.store_string("v 0 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 3\n")
+	fp.close()
+	var mp := ModelMesh.read(dir + "plain.obj")
+	_ok("OBJ with no colours stays uncoloured", mp != null and mp.surface_get_arrays(0)[Mesh.ARRAY_COLOR] == null)
+	for fn in ["tex.png", "m.mtl", "m.obj", "vc.obj", "plain.obj"]:
+		DirAccess.remove_absolute(ProjectSettings.globalize_path(dir + fn))
 
 
 ## A symmetrical model placed off the middle converts to symmetrical bricks once centred
