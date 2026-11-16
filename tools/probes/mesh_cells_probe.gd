@@ -83,6 +83,31 @@ func _init() -> void:
 	var bs := _count(SdfForm.mesh_cells(s[0], s[1], Vector3i.ONE))
 	_check("ball skin %d, less than its solid and more than a shell's area" % bs, bs < bc and bs > 4.0 * PI * 49.0)
 	_check("nothing for no mesh", SdfForm.mesh_cells(PackedVector3Array(), PackedInt32Array(), Vector3i.ZERO).is_empty())
+	# Stage 8b: each cell the colour of the surface nearest it. The box's top red, its sides
+	# blue: its top layer is red (a plate is nearer than half a stud), the layers below blue.
+	var arr := box.get_mesh_arrays()
+	var nrm: PackedVector3Array = arr[Mesh.ARRAY_NORMAL]
+	var bcols := PackedColorArray()
+	for nv in nrm:
+		bcols.append(Color(1, 0, 0) if nv.y > 0.5 else Color(0, 0, 1))
+	var pal := PackedColorArray([Color(0.9, 0.1, 0.1), Color(0.1, 0.1, 0.9), Color(0.1, 0.8, 0.1)])
+	var ci := SdfForm.mesh_cell_colours(b[0], b[1], bcols, skin, pal)
+	var top_red := true
+	var below_blue := true
+	for i in ci.size():
+		var y := skin[i * 3 + 1]
+		if y == 3:
+			top_red = top_red and ci[i] == 0
+		elif y <= 1:
+			below_blue = below_blue and ci[i] == 1
+	_check("colours: a cell per colour index (%d of %d)" % [ci.size(), _count(skin)], ci.size() == _count(skin))
+	_check("colours: the top layer red", top_red)
+	_check("colours: the sides below blue", below_blue)
+	var none := PackedColorArray()
+	none.resize(bcols.size())
+	none.fill(Color(0, 0, 0, 0))
+	var cn := SdfForm.mesh_cell_colours(b[0], b[1], none, skin, pal)
+	_check("colours: none given, -1 everywhere", cn.size() == ci.size() and Array(cn).all(func(x: int) -> bool: return x == -1))
 	# A hollow building (walls a stud thick, s long, s/2 tall, 0.4 s deep), in cells: x and z
 	# studs, y plates (2.5 a stud).
 	print("  studs   cells (skin 1 stud)   ms")
@@ -96,6 +121,12 @@ func _init() -> void:
 		var t0 := Time.get_ticks_usec()
 		var hollow := SdfForm.mesh_cells(m[0], m[1], Vector3i.ZERO)
 		var ms := (Time.get_ticks_usec() - t0) / 1000.0
+		var hc := PackedColorArray()
+		hc.resize((m[0] as PackedVector3Array).size())
+		hc.fill(Color(0.8, 0.3, 0.2))
+		var t1 := Time.get_ticks_usec()
+		var hci := SdfForm.mesh_cell_colours(m[0], m[1], hc, hollow, PackedColorArray([Color(0.8, 0.3, 0.2), Color.WHITE]))
+		print("         colours %.0f ms, all coloured: %s" % [(Time.get_ticks_usec() - t1) / 1000.0, str(not Array(hci).has(-1))])
 		var skin1 := SdfForm.mesh_cells(o_tris(o, xf)[0], o_tris(o, xf)[1], Vector3i(1, 2, 1))
 		print("  %5d   %8d (%8d)   %.0f" % [int(st), _count(hollow), _count(skin1), ms])
 		# The hollow model and the solid one's skin are the same walls, give or take the plates

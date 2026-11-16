@@ -96,11 +96,19 @@ func _building() -> void:
 	tower.top_radius = 9.0 * BrickPalette.STUD_M
 	tower.height = 40.0 * BrickPalette.STUD_M
 	tower.radial_segments = 48
-	var tst := SurfaceTool.new()
-	tst.begin(Mesh.PRIMITIVE_TRIANGLES)
-	tst.append_from(tower, 0, Transform3D())
-	t.model.size_studs = 40
-	t.model.set_mesh(tst.commit())
+	tower.rings = 20
+	# Coloured by height (stage 8b): a grey base, a white middle, a red band at the top.
+	var tarr := tower.get_mesh_arrays()
+	var tcols := PackedColorArray()
+	for tv in (tarr[Mesh.ARRAY_VERTEX] as PackedVector3Array):
+		var h: float = tv.y / tower.height + 0.5
+		tcols.append(Color(0.45, 0.45, 0.48) if h < 0.2 else (Color(0.8, 0.1, 0.1) if h > 0.8 else Color(0.95, 0.95, 0.9)))
+	tarr[Mesh.ARRAY_COLOR] = tcols
+	var tmesh := ArrayMesh.new()
+	tmesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, tarr)
+	ws.bench._mat = 0   # plastic: the model's colours as they are
+	t.model.size_studs = 30
+	t.model.set_mesh(tmesh)
 	await _shot("b12d_generate_model_budget")
 	t.model.lay()
 	while t.model.state == "laying":

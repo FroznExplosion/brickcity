@@ -136,6 +136,46 @@ func _model_checks() -> void:
 	var part := b.recipe.size() - before
 	m.cancel()
 	_ok("Cancel part way takes back what was laid (%d)" % part, part > 0 and b.recipe.size() == before and m.state == "")
+	# Stage 8b: the model's own colours. A box, red on top and blue round the sides.
+	_ok("an uncoloured model: the colours box off", not m.has_colours() and t._model_colours.disabled)
+	var cbox := BoxMesh.new()
+	cbox.size = Vector3(20, 6, 12) * BrickPalette.STUD_M
+	var carr := cbox.get_mesh_arrays()
+	var cn: PackedVector3Array = carr[Mesh.ARRAY_NORMAL]
+	var ccols := PackedColorArray()
+	for nv in cn:
+		ccols.append(Color(0.85, 0.1, 0.1) if nv.y > 0.5 else Color(0.1, 0.2, 0.85))
+	carr[Mesh.ARRAY_COLOR] = ccols
+	var cm := ArrayMesh.new()
+	cm.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, carr)
+	m.size_studs = 20
+	m.set_mesh(cm)
+	var red := ColourMatch.nearest(Color(0.85, 0.1, 0.1), b._mat)
+	var blue := ColourMatch.nearest(Color(0.1, 0.2, 0.85), b._mat)
+	_ok("a coloured model: the box on, two colours said", m.has_colours() and not t._model_colours.disabled
+			and int(m.budget.colours) == 2 and t._model_say.text.contains("2 colours"), t._model_say.text)
+	before = b.recipe.size()
+	m.lay()
+	while m.state == "laying":
+		m.step(1000.0)
+	var top := -1
+	for i in range(before, b.recipe.size()):
+		top = maxi(top, b.recipe.cell_of(i).y + BrickPalette.size_of(b.recipe.part_of(i)).y - 1)
+	var top_ok := true
+	var low_ok := true
+	for i in range(before, b.recipe.size()):
+		var y0 := b.recipe.cell_of(i).y
+		if y0 == top:
+			top_ok = top_ok and b.recipe.colour_of(i) == red
+		elif y0 + BrickPalette.size_of(b.recipe.part_of(i)).y - 1 < top - 2:
+			low_ok = low_ok and b.recipe.colour_of(i) == blue
+	_ok("laid in its colours: the top red, the sides blue, a brick one colour", top_ok and low_ok
+			and b.recipe.size() > before, "red %d blue %d" % [red, blue])
+	b._undo()
+	m.use_colours = false
+	m.recount()
+	_ok("the colours box off: one colour, the held one", int(m.budget.colours) == 0 and m.cell_colours.is_empty())
+	m.use_colours = true
 	m.size_studs = 5000
 	m.recount()
 	_ok("too big for the area: said, and not laid", not bool(m.budget.fits) and not m.lay()
