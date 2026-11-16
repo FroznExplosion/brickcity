@@ -1663,6 +1663,20 @@ carried the whole file's vertices). `asset_workshop_probe` 351 (+5): Kd on two f
 texture read by place (left red, right green, behind `-s` options), the pieces' own boxes and
 colours, vertex colours, a plain OBJ still uncoloured.
 
+**8b as built** (2026-11-16): `SdfForm.mesh_cell_colours` as planned. For each axis it lists
+each row's crossings with the triangle's colour there, sorted. A cell then looks up the nearest
+crossing on its three rows and takes the nearest palette colour in Oklab. Colouring a 400-stud
+model (810k cells) takes 0.3 s. `ModelInsert` keeps the mesh's vertex colours. With **the
+model's colours** ticked (the box is off for a model without colours), each cell gets a colour
+index of the held material (all its colours). The budget says how many colours, and each course
+is packed and laid a colour at a time, so a brick is one colour; the estimate packs the same way.
+Untick it and the model is laid in the held colour, as in 7d. Probes: `mesh_cells_probe` 15 (+4:
+a box red on top and blue round the sides, its top layer red and the layers below blue, no colours
+give -1), `build_tools_probe` 385 (+4: the box off and on, laid in its colours, off is one
+colour). Picture: `b12e_generate_model_laid` (a tower grey, white and red, 9 colours: the
+model's triangles cross its bands and blend them). Left for 8c: the colour table, to change or
+merge them by hand.
+
 ### Stages
 
 Each merged on its own; the probes of section 20 and the pictures before and after.
