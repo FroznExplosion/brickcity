@@ -190,7 +190,7 @@ func _model_checks() -> void:
 	_ok("laid as changed: all blue", all_blue)
 	b._undo()
 	m.reset_colours()
-	_ok("Reset: both colours again", m.colour_count() == 2 and m.remap.is_empty())
+	_ok("Reset: both colours again", m.colour_count() == 2 and m.colours.remap.is_empty())
 	m.fewer(1)
 	var kept: int = m.table()[0][1]
 	_ok("Fewer colours to 1: the smaller merged into the bigger (blue sides)", m.colour_count() == 1 and kept == blue)
@@ -201,12 +201,12 @@ func _model_checks() -> void:
 	_ok("the table kept across a new size", m.colour_count() == 1)
 	m.reset_colours()
 	t.open_model_pick(red)
-	var sw: Array = t._model_pick.find_children("*", "Button", true, false)
-	_ok("the picker: the held material's colours as buttons", t._model_pick.visible
+	var sw: Array = m.colours.picker().find_children("*", "Button", true, false)
+	_ok("the picker: the held material's colours as buttons", m.colours.picker().visible
 			and sw.size() == ColourMatch.indices(b._mat).size(), str(sw.size()))
 	var green := ColourMatch.nearest(Color(0.1, 0.7, 0.1), b._mat)
 	(sw[ColourMatch.indices(b._mat).find(green)] as Button).pressed.emit()
-	_ok("a picked colour goes in the table", int(m.remap.get(red, -1)) == green and not t._model_pick.visible)
+	_ok("a picked colour goes in the table", int(m.colours.remap.get(red, -1)) == green and not m.colours.picker().visible)
 	m.reset_colours()
 	m.size_studs = 20
 	m.use_colours = false
