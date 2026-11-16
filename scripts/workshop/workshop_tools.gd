@@ -308,9 +308,6 @@ var _model_colours: CheckBox
 ## The colour table (section 21, stage 8c): its rows, the count to merge down to, the picker.
 var _model_table: VBoxContainer
 var _model_fewer: SpinBox
-var _model_pick: PopupPanel
-var _model_pick_from := -1
-const MODEL_TABLE_ROWS := 12
 var _rooms_label: Label
 ## The module's rules on the rooms panel (Docs/RoomModules.md 1).
 var _module_on: CheckBox
@@ -2176,18 +2173,7 @@ func _model_box(box: VBoxContainer) -> void:
 	box.add_child(_model_colours)
 	_model_table = VBoxContainer.new()
 	box.add_child(_model_table)
-	var frow := HBoxContainer.new()
-	box.add_child(frow)
-	_button(frow, "Fewer colours", func() -> void: model.fewer(int(_model_fewer.value)))
-	_model_fewer = SpinBox.new()
-	_model_fewer.min_value = 1
-	_model_fewer.max_value = 64
-	_model_fewer.value = 4
-	frow.add_child(_model_fewer)
-	# Its own line: beside the others the pop-out was wider than the rail.
-	var rrow := HBoxContainer.new()
-	box.add_child(rrow)
-	_button(rrow, "Reset colours", func() -> void: model.reset_colours())
+	_model_fewer = ColourTable.buttons(box, func() -> ColourTable: return model.colours)
 	_model_say = Label.new()
 	_model_say.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	box.add_child(_model_say)
@@ -2227,83 +2213,18 @@ func _model_sync() -> void:
 	_model_cancel.disabled = model.state != "laying"
 
 
-## A swatch: a flat button in a brick colour of the held material.
-func _swatch(colour: int, text := "") -> Button:
-	var b := Button.new()
-	b.focus_mode = Control.FOCUS_NONE
-	b.custom_minimum_size = Vector2(22, 18)
-	b.text = text
-	var c := BrickWorld.get_material_colour(ws._mat, colour)
-	for st in ["normal", "hover", "pressed", "disabled"]:
-		var sb := StyleBoxFlat.new()
-		sb.bg_color = c.lightened(0.15) if st == "hover" else c
-		sb.set_corner_radius_all(3)
-		b.add_theme_stylebox_override(st, sb)
-	b.add_theme_color_override("font_color", Color.BLACK if c.get_luminance() > 0.5 else Color.WHITE)
-	b.tooltip_text = BrickWorld.get_material_colour_name(ws._mat, colour)
-	return b
-
-
 func _model_table_fill() -> void:
-	for c in _model_table.get_children():
-		_model_table.remove_child(c)
-		c.queue_free()
 	var on := model.use_colours and not model.cell_colours.is_empty()
 	_model_table.visible = on
 	_model_fewer.get_parent().visible = on
 	_model_fewer.get_parent().get_parent().get_child(_model_fewer.get_parent().get_index() + 1).visible = on
-	if not on:
-		return
-	var rows := model.table()
-	for k in mini(rows.size(), MODEL_TABLE_ROWS):
-		var r: Array = rows[k]
-		var row := HBoxContainer.new()
-		_model_table.add_child(row)
-		var from := _swatch(r[0] if r[0] >= 0 else ws._colour)
-		from.disabled = true
-		row.add_child(from)
-		var l := Label.new()
-		l.text = "%d cells ->" % int(r[2])
-		l.add_theme_font_size_override("font_size", 12)
-		row.add_child(l)
-		var to := _swatch(r[1] if r[1] >= 0 else ws._colour, "" if r[0] == r[1] else "*")
-		to.tooltip_text = "Lay this colour as another: click to pick it."
-		var from_id: int = r[0]
-		to.pressed.connect(func() -> void: _model_pick_open(from_id, to))
-		row.add_child(to)
-	if rows.size() > MODEL_TABLE_ROWS:
-		var more := Label.new()
-		more.text = "and %d more" % (rows.size() - MODEL_TABLE_ROWS)
-		_model_table.add_child(more)
+	if on:
+		model.colours.fill(_model_table, ws._colour)
 
 
-## The held material's colours to pick from, for the model's colour `from`.
+## The held material's colours to pick from, for the model's colour `from` (ColourTable).
 func open_model_pick(from: int) -> void:
-	_model_pick_open(from, null)
-
-
-func _model_pick_open(from: int, at: Control) -> void:
-	_model_pick_from = from
-	if _model_pick == null:
-		_model_pick = PopupPanel.new()
-		ws.add_child(_model_pick)
-	for c in _model_pick.get_children():
-		_model_pick.remove_child(c)
-		c.queue_free()
-	var grid := GridContainer.new()
-	grid.columns = 8
-	_model_pick.add_child(grid)
-	for i in ColourMatch.indices(ws._mat):
-		var sw := _swatch(i)
-		var pick := i
-		sw.pressed.connect(func() -> void:
-				_model_pick.hide()
-				model.set_colour(_model_pick_from, pick))
-		grid.add_child(sw)
-	if at != null and at.is_inside_tree():
-		_model_pick.popup(Rect2i(Vector2i(at.get_screen_position() + Vector2(at.size.x + 4, 0)), Vector2i.ZERO))
-	else:
-		_model_pick.popup_centered()
+	model.colours.open_pick(from)
 
 
 func open_model_dialog() -> void:

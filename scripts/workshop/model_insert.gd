@@ -29,10 +29,10 @@ var cells := PackedInt32Array()
 var cell_colours := PackedInt32Array()
 ## Lay it in the model's colours (when it has any), else in the held one.
 var use_colours := true
-## The colour table (section 21, stage 8c): a colour the model became -> the brick colour
+## The colour table (section 21, stages 8c, 8d): a colour the model became -> the brick colour
 ## chosen for it by hand or by Fewer colours. Kept across a new size or wall; a new model
 ## clears it.
-var remap := {}
+var colours := ColourTable.new()
 var _cols := PackedColorArray()
 ## What `recount` found: {cells, bricks (about), fits, size (studs, plates, studs)}.
 var budget := {}
@@ -50,6 +50,10 @@ const FRAME_MS := 12.0
 
 
 ## The model file, or false if it cannot be read.
+func _init() -> void:
+	colours.edited.connect(_retable)
+
+
 func open(p: String) -> bool:
 	var mesh := ModelMesh.read(p)
 	if mesh == null:
@@ -90,7 +94,7 @@ func set_mesh(mesh: ArrayMesh) -> void:
 				_index.append(off + int(i))
 	if not any_col:
 		_cols = PackedColorArray()
-	remap = {}
+	colours.remap = {}
 	_box = AABB()
 	if not _verts.is_empty():
 		_box = AABB(_verts[0], Vector3.ZERO)
@@ -130,7 +134,8 @@ func recount() -> void:
 	if wall_studs > 0:
 		wall = Vector3i(wall_studs, maxi(1, roundi(wall_studs * BrickPalette.STUD_M / BrickPalette.PLATE_M)), wall_studs)
 	cells = SdfForm.mesh_cells(v, _index, wall)
-	var colours := 0
+	colours.counts = {}
+	colours.material = bench._mat
 	if use_colours and has_colours() and not cells.is_empty():
 		# The held material's colours (all of them); the nearest in Oklab, C++.
 		var idx := ColourMatch.indices(bench._mat)
@@ -138,10 +143,10 @@ func recount() -> void:
 		cell_colours.resize(got.size())
 		for i in got.size():
 			cell_colours[i] = idx[got[i]] if got[i] >= 0 else -1
-		colours = table().size()
+			colours.counts[cell_colours[i]] = int(colours.counts.get(cell_colours[i], 0)) + 1
 	var n := cells.size() / 3
 	var fits := span.x <= area and span.z <= area and span.y + 1.0 <= bench.height_plates
-	budget = {"cells": n, "bricks": _estimate(), "fits": fits, "colours": colours,
+	budget = {"cells": n, "bricks": _estimate(), "fits": fits, "colours": colours.colour_count() if not cell_colours.is_empty() else 0,
 			"size": Vector3i(ceili(span.x), ceili(span.y), ceili(span.z))}
 	changed.emit()
 
@@ -155,7 +160,7 @@ func _by_course() -> Dictionary:
 	for i in range(0, cells.size(), 3):
 		var y := cells[i + 1]
 		var col: int = cell_colours[i / 3] if coloured else -1
-		col = int(remap.get(col, col))
+		col = colours.map(col)
 		if col < 0:
 			col = bench._colour
 		var course: Dictionary = by.get_or_add(y - posmod(y - base, 3), {})
@@ -276,73 +281,30 @@ func cancel() -> void:
 	changed.emit()
 
 
-## The colour table: [the colour the model became, the colour it will be, cells] for each,
-## most cells first; the effective count is what the budget says.
+## The colour table's (ColourTable), here for the panel and the probes.
 func table() -> Array:
-	var n := {}
-	for c in cell_colours:
-		n[c] = int(n.get(c, 0)) + 1
-	var out := []
-	for c in n:
-		out.append([c, int(remap.get(c, c)), n[c]])
-	out.sort_custom(func(a: Array, b: Array) -> bool: return a[2] > b[2] if a[2] != b[2] else a[0] < b[0])
-	return out
+	return colours.table()
 
 
-## How many colours it will be laid in.
 func colour_count() -> int:
-	var seen := {}
-	for row in table():
-		seen[row[1]] = true
-	return seen.size()
+	return colours.colour_count()
 
 
-## A colour the model became laid as brick colour `to` instead (`to` == `from`: as it was).
 func set_colour(from: int, to: int) -> void:
-	if to == from:
-		remap.erase(from)
-	else:
-		remap[from] = to
-	_retable()
+	colours.set_colour(from, to)
 
 
-## Merge the two nearest colours (Oklab, of the held material), the one with fewer cells into
-## the other, until `n` are left.
 func fewer(n: int) -> void:
-	n = maxi(1, n)
-	while true:
-		var count := {}
-		for row in table():
-			count[row[1]] = int(count.get(row[1], 0)) + int(row[2])
-		var cols := count.keys()
-		if cols.size() <= n:
-			break
-		var best := INF
-		var pair := []
-		for i in cols.size():
-			var qi := ColourMatch.oklab(BrickWorld.get_material_colour(bench._mat, cols[i]))
-			for j in range(i + 1, cols.size()):
-				var d := qi.distance_squared_to(ColourMatch.oklab(BrickWorld.get_material_colour(bench._mat, cols[j])))
-				if d < best:
-					best = d
-					pair = [cols[i], cols[j]]
-		var small: int = pair[0] if count[pair[0]] < count[pair[1]] else pair[1]
-		var big: int = pair[1] if small == pair[0] else pair[0]
-		for row in table():
-			if int(row[1]) == small:
-				remap[row[0]] = big
-	_retable()
+	colours.fewer(n)
 
 
-## Every colour as the model has it again.
 func reset_colours() -> void:
-	remap = {}
-	_retable()
+	colours.reset()
 
 
 func _retable() -> void:
 	if not budget.is_empty():
-		budget.colours = colour_count()
+		budget.colours = colour_count() if not cell_colours.is_empty() else 0
 		budget.bricks = _estimate()
 	changed.emit()
 

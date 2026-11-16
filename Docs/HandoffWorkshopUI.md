@@ -28,8 +28,10 @@ was found, how to test without harming the user's files, and what to do next.
   first, laid over frames with a bar and Cancel, one undo (400 studs: 35k bricks in 4.6 s).
   Stage 7 is done; the cell clay is put off (section 21 says why). Stage 8 (plan in
   section 21, "Colours from a model"): 8a OBJ colours and 8b the model's colours in Generate > Model (C++
-  `mesh_cell_colours`) and 8c the colour table in Generate > Model done 2026-11-16; next 8d, the colour table in the
-  asset workshop (its colours come from the clay's vote, `_cell_colour_map`). Never run the probe at 200+ studs on this machine (memory).
+  `mesh_cell_colours`) and 8c the colour table in Generate > Model done 2026-11-16; 8d the colour table in the asset
+  workshop (`ColourTable`, shared) done 2026-11-16. **Stage 8 is done; every stage of the plan
+  (0-8) is built.** Open: the asset pictures for 8d (a coloured model), main's DLL rebuild
+  after 7c/8b (the user's editor was open). Never run the probe at 200+ studs on this machine (memory).
 
 
 ## Where to work
