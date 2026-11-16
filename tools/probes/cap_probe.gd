@@ -12,7 +12,8 @@ extends SceneTree
 ##
 ## And the DEBRIS cap's sleepers (IslandManager.CAP_WAKE_SPARE): a piece the cap
 ## put to sleep stays asleep while the cap is full, and wakes when there is
-## room, to trade places with a piece much farther away, or -- whatever the cap
+## room, to trade places with a piece much less seen (apparent size: what the
+## cap puts away first), or -- whatever the cap
 ## -- when somebody is inside CAP_KEEP_RANGE of it (2026-11-15: "however near"
 ## left a piece the player stood on drawn as its stand-in, no studs, until a
 ## hit woke it).
@@ -162,18 +163,33 @@ func _check_cap_sleepers() -> void:
 	# 40 m off: inside WAKE_RANGE, outside CAP_KEEP_RANGE.
 	m.dormant.append(_sleeper(w, true, Vector3(40.0, 0.0, 0.0)))
 	m._cap_room = false
-	m._cap_far = 1.0
+	m._cap_seen = 1000.0
 	for k in 5:
 		m._stream_dormancy()
 	_ok("a piece the cap slept stays asleep while the cap is full, outside the keep range",
 			m.dormant.size() == 1)
-	m._cap_far = 1000.0
+	# Nearer than the least seen awake, but less seen: a low heap 24 m off
+	# against a tall wreck 60 m off. The plan puts the heap away first, so it
+	# stays asleep -- woken by distance, it was slept again at every plan.
+	var heap := _sleeper(w, true, Vector3(24.0, 0.0, 0.0))
+	m.dormant.append(heap)
+	m._cap_seen = IslandManager.apparent_size(AABB(Vector3.ZERO, Vector3(6.0, 12.0, 6.0)), 60.0)
+	var heap_dist := m._distance_to_interest(heap.record.box, m.interest_points())
+	var heap_seen := IslandManager.apparent_size(heap.record.box, heap_dist)
+	for k in 5:
+		m._stream_dormancy()
+	_ok("nearer than the least seen awake but less seen, it stays asleep (no slept-woken loop)",
+			m.dormant.size() == 2 and heap_dist >= IslandManager.CAP_KEEP_RANGE
+				and heap_dist < 60.0 * IslandManager.CAP_SWAP,
+			"%.1f m off, seen %.3f; least seen awake %.3f" % [heap_dist, heap_seen, m._cap_seen])
+	m.dormant.erase(heap)
+	m._cap_seen = 0.0001
 	m._stream_dormancy()
-	_ok("it wakes to trade places with a piece much farther away",
+	_ok("it wakes to trade places with a piece much less seen",
 			m.dormant.is_empty() and m.cap_woken == 1)
 
 	m.dormant.append(_sleeper(w, true))
-	m._cap_far = 1.0
+	m._cap_seen = 1000.0
 	m._cap_room = true
 	m._stream_dormancy()
 	_ok("and when the cap has room again", m.dormant.is_empty() and m.cap_woken == 2)
@@ -184,11 +200,11 @@ func _check_cap_sleepers() -> void:
 	_ok("a piece slept for distance wakes on distance alone", m.dormant.is_empty())
 
 	# Somebody standing in it: it wakes, however full the cap and however near
-	# the farthest piece awake (_cap_far 0: every awake one inside the keep range).
+	# little the least seen piece awake is (_cap_seen INF: every awake one inside the keep range).
 	var woken0: int = m.cap_woken
 	m.dormant.append(_sleeper(w, true))
 	m._cap_room = false
-	m._cap_far = 0.0
+	m._cap_seen = INF
 	m._stream_dormancy()
 	_ok("a piece the cap slept wakes when somebody is inside CAP_KEEP_RANGE, cap full or not",
 			m.dormant.is_empty() and m.cap_woken == woken0 + 1)
