@@ -1698,6 +1698,27 @@ goes in the table). Pictures: `b12d_generate_model_budget` (the table, 9 colours
 `b12f_generate_model_fewer` (merged to 3), `b12e_generate_model_laid` (laid in the 3: clean
 bands).
 
+**8d as built** (2026-11-16): the table's workings and rows moved into `ColourTable`
+(`scripts/workshop/colour_table.gd`: counts, remap, `fewer`, `fill`, `buttons`, the picker), and
+both workshops use it; Generate > Model is unchanged to look at (`build_tools_probe` 393).
+In the asset workshop, while it is clay, the Selected panel's actions have **Colours for
+bricks** (Hide colours to close). It counts the colours the clay and each added model would
+give the bricks (`colour_table_refresh`: the vote `SdfForm.cell_colours`, in the held material
+within `convert_palette`) and shows the rows, Fewer colours and Reset colours. `_cell_colour_map`
+lays every cell through the table. A part laid in another material goes by colour: its nearest
+in the table's material, through the table, then the nearest in its own. Changing the held
+material clears the table. Notes:
+
+* Bricks to clay brings back the bricks' colours, as they were laid. So a colour changed by
+  hand stays changed in the clay after Make bricks; Z gives the clay's own colours back.
+* The vote can pick a colour beside the nearest one (a red next to the nearest red); the table
+  shows what the vote gave, so it is what Make bricks lays.
+* `asset_workshop_probe` 356 (+3): the button while clay; the clay's red and blue rows; a changed
+  row marked under the actions; a colour changed by hand laid all blue; Reset after Z red and
+  blue again. No new picture: the asset pictures want a coloured model loaded, left for later.
+
+Stage 8 is done.
+
 ### Stages
 
 Each merged on its own; the probes of section 20 and the pictures before and after.

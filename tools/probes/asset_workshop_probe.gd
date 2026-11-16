@@ -1228,6 +1228,39 @@ func _colours() -> void:
 	_ws.sculpt_convert()
 	var again := _colour_counts()
 	_ok("Bricks to clay and back: the same colours", again == counts, "%s -> %s" % [counts, again])
+	# Stage 8d: the colour table for Make bricks -- the clay's colours counted, one changed by
+	# hand reaches the bricks, Reset gives them back.
+	_ws.sculpt_to_sdf()
+	var ct: ColourTable = _ws.convert_colours
+	var ui: AssetWorkshopUI = _ws._ui
+	ui._fill_actions()
+	_ok("clay: Colours for bricks is a button", ui.action_names().has("Colours for bricks"), str(ui.action_names()))
+	ui.colours_shown = true
+	_ws.colour_table_refresh()
+	var trows := ct.table()
+	# Which row is which, by its colour (the clay's vote may pick a red next to the nearest).
+	var tred := -1
+	var tblue := -1
+	for r in trows:
+		var rc := BrickWorld.get_material_colour(ct.material, int(r[0]))
+		if rc.r > rc.b:
+			tred = int(r[0])
+		else:
+			tblue = int(r[0])
+	_ok("the colour table: the clay's red and blue, with their cells", trows.size() == 2
+			and tred >= 0 and tblue >= 0, "%s, material %d" % [trows, ct.material])
+	ct.set_colour(tred, tblue)
+	_ok("the table under the actions, the changed row marked", ui._actions.find_children("*", "Button", true, false).any(
+			func(x: Button) -> bool: return x.text == "*"))
+	_ws.sculpt_convert()
+	var hand := _colour_counts()
+	_ok("a colour changed by hand: Make bricks lays it (all blue)", hand.size() == 1 and hand.has(blue), str(hand))
+	# Z, not Bricks to clay: that brings the blue bricks back as blue clay.
+	_ws._undo()
+	ct.reset()
+	_ws.sculpt_convert()
+	_ok("Reset colours (Make bricks undone): red and blue again", _colour_counts() == counts, str(_colour_counts()))
+	ui.colours_shown = false
 	# In metal: the same clay matched to metal's own colours, none of them filament.
 	_ws._reset_space()
 	_ws.rail_pick("sculpt")

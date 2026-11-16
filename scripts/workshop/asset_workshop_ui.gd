@@ -134,6 +134,8 @@ var _hint: Label
 var _outliner: PanelContainer
 var _tree: Tree
 var _actions: HFlowContainer
+## The Make bricks colour table is open under the actions (section 21, stage 8d).
+var colours_shown := false
 var _sig := ""
 var _syncing := false
 var _since := 0.0
@@ -150,6 +152,9 @@ var _ask_then := Callable()
 func setup(workshop, layer: CanvasLayer) -> void:
 	ws = workshop
 	_layer = layer
+	ws.convert_colours.edited.connect(func() -> void:
+		if colours_shown:
+			_fill_actions())
 	_build_tabs()
 	_build_tools()
 	_build_outliner()
@@ -867,6 +872,29 @@ func _fill_actions() -> void:
 	if clay:
 		_action("Make bricks (all)", "Turn all the clay into bricks: the block-out and the models.",
 				func() -> void: _stage_step())
+		# The colour table (Docs/BuildTools.md section 21, stage 8d): what the clay's colours
+		# become, to change by hand or merge before Make bricks.
+		_action("Colours for bricks" if not colours_shown else "Hide colours",
+				"The colours the clay and the models will give the bricks: change one by hand, or merge them.",
+				func() -> void:
+					colours_shown = not colours_shown
+					if colours_shown:
+						ws.colour_table_refresh()
+					_fill_actions())
+		if colours_shown:
+			var tb := VBoxContainer.new()
+			_actions.add_child(tb)
+			if ws.convert_colours.counts.is_empty():
+				var l := Label.new()
+				l.text = "The clay has no colours of its own: its parts' colours are used."
+				l.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+				l.custom_minimum_size.x = 200
+				tb.add_child(l)
+			else:
+				var rows := VBoxContainer.new()
+				tb.add_child(rows)
+				ws.convert_colours.fill(rows, ws.bench._colour)
+				ColourTable.buttons(tb, func() -> ColourTable: return ws.convert_colours)
 	else:
 		_action("Bricks to clay", "Turn the bricks into clay to reshape them.", func() -> void: _stage_step())
 	if t == "model" and not held.is_empty():
