@@ -1634,6 +1634,35 @@ cell votes its nearest brick colour in Oklab; Bricks to clay carries them back. 
   (`convert_palette`, built).
 * The same in the building workshop with stage 7.
 
+**Plan (2026-11-16)**, in three steps, each merged on its own:
+
+* **8a, OBJ colours** (`ModelMesh`, script only). `mtllib` read beside the OBJ: each `newmtl`'s
+  `Kd` and `map_Kd` (the last word of the line, so options before it are skipped). `usemtl`
+  colours the faces after it; `vt` gives a texture's place; `v x y z r g b` gives vertex colours.
+  Each corner's colour is Kd times the texture there (read a little in toward the triangle's
+  middle, as glTF's) times the vertex colour. An OBJ with none of these stays uncoloured, as before.
+  The pieces keep only their own corners, so a piece's box is its own and not the whole file's.
+  STL has no colour: it is one colour, the held one.
+* **8b, colours in Generate > Model.** `SdfForm.mesh_cell_colours(verts, index, colours, cells,
+  palette)` (C++): each cell takes the colour of the surface nearest it, found among the
+  crossings of its rows along x, y and z, then the nearest palette colour in Oklab. The palette
+  is the held material's colours (`ColourMatch`). Laying packs each course a colour at a time,
+  so a brick is one colour. A tick box, "the model's colours", is on when the model has any; off,
+  the model is laid in the held colour as now.
+* **8c, the colour table on import**, in both workshops. Each colour the model became sits beside
+  its brick colour and how many cells have it. A click changes the brick colour by hand.
+  "Fewer colours" merges the two nearest until the count asked is reached. Which colours it may
+  use: every one, or the asset workshop's `convert_palette`.
+
+**8a as built** (2026-11-16): `ModelMesh._parse_obj` and `_read_mtl` as planned. An OBJ's mesh
+now has a colour for every corner whenever the file has any colour; the asset workshop's stamp
+already reads any mesh's colours (`_mesh_soup`), so an OBJ's colours reach the clay and the
+bricks just as glTF's do. Faces with no material in a coloured file are white. A piece read
+alone (`read_pieces`) has only its own corners, so its box is its own (before, every piece
+carried the whole file's vertices). `asset_workshop_probe` 351 (+5): Kd on two faces, a map_Kd
+texture read by place (left red, right green, behind `-s` options), the pieces' own boxes and
+colours, vertex colours, a plain OBJ still uncoloured.
+
 ### Stages
 
 Each merged on its own; the probes of section 20 and the pictures before and after.

@@ -26,8 +26,9 @@ was found, how to test without harming the user's files, and what to do next.
   `SdfForm.mesh_cells`, a model straight to brick cells, no clay (400 studs in 0.12 s). 7d
   (2026-11-15) Generate > Model in the building workshop: open a model, size, wall, the budget
   first, laid over frames with a bar and Cancel, one undo (400 studs: 35k bricks in 4.6 s).
-  Stage 7 is done; the cell clay is put off (section 21 says why). Next: **stage 8**, colours
-  from a model (OBJ colours, the colour table on import, then the same in Generate > Model). Never run the probe at 200+ studs on this machine (memory).
+  Stage 7 is done; the cell clay is put off (section 21 says why). Stage 8 (plan in
+  section 21, "Colours from a model"): 8a OBJ colours done 2026-11-16; next 8b, the model's
+  colours in Generate > Model (C++ `mesh_cell_colours`), then 8c, the colour table. Never run the probe at 200+ studs on this machine (memory).
 
 
 ## Where to work
