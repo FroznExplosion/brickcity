@@ -4446,6 +4446,16 @@ func _run_roomfly_pass() -> void:
 			good == tries.size(), "%d of %d; the rest: %s" % [good, tries.size(), reasons])
 	print("[roomfly] the near tier held by uploads %d of %d tick(s) in the rooms; %s" % [
 			held_ticks, watched_ticks, city.brick_near.hud_line()])
+	# Nobody hit it (user, 2026-11-15: "even when I don't damage a building the
+	# staircase and some parts of the centre floor of a room is unexplainably
+	# damaged and falls when I get close").
+	var lost := _roomfly_losses(b)
+	print("[roomfly] the tower, never hit: %d brick(s) dead, %d cut loose into pieces (%d of them stair); %d piece(s) of it; by storey: %s" % [
+			lost.dead, lost.detached, lost.stair, lost.pieces, lost.by_storey])
+	_gate_ok("  and the tower, never hit, loses no brick as the camera comes near",
+			int(lost.dead) == 0 and int(lost.detached) == 0 and int(lost.pieces) == 0,
+			"%d dead, %d cut loose (%d stair), %d piece(s); damaged %s" % [lost.dead, lost.detached,
+				lost.stair, lost.pieces, b.is_damaged()])
 	_gate_ok("  and the floor under the player has real studs in every room",
 			floor_flat == 0, "%d of %d room(s) with a flat floor" % [floor_flat, stud_rooms])
 	_gate_ok("  and after two seconds in it, every band within the studs' reach has its studs",
@@ -5074,6 +5084,44 @@ func _groups_expected_boxes(b: BuildingRegistry.Building, layout: Array) -> int:
 					if city.registry.palette.has(part[0]) and not RoomManifest.is_detail(part):
 						n += 1
 	return n
+
+## What an undamaged tower has lost: its dead and detached bricks, how many of
+## those were its stairs (fixtures), the pieces with it as owner, and the
+## storeys (by height) they came from.
+func _roomfly_losses(b: BuildingRegistry.Building) -> Dictionary:
+	var stair := {}
+	for f in b.fixtures:
+		for bid in f.blocks:
+			stair[bid] = true
+	var gone := {}
+	var dead_n := 0
+	var det_n := 0
+	for bid in city.world.get_dead_blocks(b.chunk):
+		gone[bid] = true
+		dead_n += 1
+	for bid in city.world.get_detached_blocks(b.chunk):
+		if not gone.has(bid):
+			det_n += 1
+		gone[bid] = true
+	var stairs := 0
+	var by_storey := {}
+	var storey_m := float(TowerRecipe.STOREY_PLATES) * BrickWorld.get_plate_metres()
+	var boxes := {}
+	if not gone.is_empty():
+		for bx in city.world.get_block_boxes(b.chunk):
+			boxes[int((bx as Dictionary).block)] = (bx as Dictionary).pos
+	for bid in gone:
+		if stair.has(bid):
+			stairs += 1
+		if boxes.has(bid):
+			var st := int(floor((boxes[bid] as Vector3).y / storey_m))
+			by_storey[st] = int(by_storey.get(st, 0)) + 1
+	var pieces := 0
+	for isl in city.islands.islands:
+		if isl.is_valid() and isl.owner == b.id:
+			pieces += 1
+	return {"dead": dead_n, "detached": det_n, "stair": stairs, "pieces": pieces,
+			"by_storey": by_storey}
 
 ## The band the near tier tracks whose box holds `at` (world), or null: the
 ## nearest by box distance under 0.3 m.
