@@ -529,7 +529,9 @@ every keel plate is at that level, so each half was "grounded" by its own keel.
   Its mesh, and its own float: its bricks and the air it still shuts in, found on its own
   grid. With a whole stretch of hold in it, it floats (the bow of seed 1: 248 bricks, keeps
   out 10.6 m3 for 4,718 kg). Open, it is a little heavier than water and goes down. Gone 8 m
-  under, or after 240 s.
+  under. One afloat is kept as long as the player is near: gone 800 m from the camera
+  (`FAR`), and past 16 pieces (`CAP`, all boats together) the farthest from the player fades
+  (of equals, the oldest). `boat_break_probe` "cap".
 * **`HullFloat`** (scripts/hulls/hull_float.gd): the boat's sums, moved out of `Boat` so a
   piece uses the same ones (measure, forces, integrate). The boat floats exactly as it did
   (`boat_probe`'s numbers unchanged).
@@ -550,8 +552,8 @@ every keel plate is at that level, so each half was "grounded" by its own keel.
   height was its cells' count, so one of keel and deck with the sea between was "sunk" at
   its keel's top. Never seen on a whole boat (no gaps); an open piece fell like a stone.
   Its envelope is now from its lowest cell to its highest.
-* Gates: `tools/probes/boat_break_probe.gd` 6 (built as one part; parts; air; the boat floats
-  on; the bow floats; an open stern end sinks and is gone). `boat_probe` 9, `hull_flood_probe`
+* Gates: `tools/probes/boat_break_probe.gd` 7 (built as one part; parts; air; the boat floats
+  on; the bow floats; an open stern end sinks and is gone; the cap). `boat_probe` 9, `hull_flood_probe`
   12, `hull_air_probe` 13, `ship_vent_probe` 11, `ghost_hull_probe` 18, `repair_probe` 13.
   Windowed: `--terrain --harbour` 6 ok, `--terrain --boat` 3 ok (peak 91 C, not held back).
 * **Not yet:**
