@@ -6,12 +6,18 @@ extends Node3D
 ## little lighter than the water, settles and goes down.
 ##
 ## It has no collision and takes no hits: nobody stands on it, and a shot goes
-## through it. Gone once it is SUNK under the sea, or LIFE seconds old.
+## through it. A piece afloat is kept for as long as anyone is near it: gone once
+## it is SUNK under the sea, FAR from the player, or the oldest of more than CAP.
 
 ## This far under the calm sea: gone.
 const SUNK := 8.0
-## Seconds it is kept at most, afloat or not.
-const LIFE := 240.0
+## Metres from the player (the camera) past which a piece is gone.
+const FAR := 800.0
+## Pieces kept at most, all boats together: past it the farthest from the player
+## goes (the oldest, with no player to measure from).
+const CAP := 16
+## Every piece there is, oldest first.
+static var _all: Array[HullPiece] = []
 ## Seconds it shrinks away in, at the end.
 const FADE := 1.5
 
@@ -100,7 +106,7 @@ func _physics_process(dt: float) -> void:
 	global_transform = next[0]
 	vel = next[1]
 	ang = next[2]
-	if _dying < 0.0 and (age > LIFE or sea - global_position.y > SUNK):
+	if _dying < 0.0 and (sea - global_position.y > SUNK or _far() > FAR):
 		_dying = 0.0
 	if _dying >= 0.0:
 		_dying += dt
@@ -109,7 +115,35 @@ func _physics_process(dt: float) -> void:
 			queue_free()
 
 
+func _enter_tree() -> void:
+	if not _all.has(self):
+		_all.append(self)
+	_cap()
+
+
+## Its distance from the player: the camera's (0 with none, as headless).
+func _far() -> float:
+	var cam := get_viewport().get_camera_3d() if is_inside_tree() else null
+	return 0.0 if cam == null else cam.global_position.distance_to(global_position)
+
+
+## More than CAP pieces: the farthest from the player fades (of equals, the oldest).
+static func _cap() -> void:
+	var live: Array[HullPiece] = []
+	for q in _all:
+		if is_instance_valid(q) and q._dying < 0.0:
+			live.append(q)
+	while live.size() > CAP:
+		var worst := live[0]
+		for q in live:
+			if q._far() > worst._far():
+				worst = q
+		worst._dying = 0.0
+		live.erase(worst)
+
+
 func _exit_tree() -> void:
+	_all.erase(self)
 	# Its mesh job writes into its holder: let it finish (teardown, not play).
 	if _task >= 0:
 		WorkerThreadPool.wait_for_task_completion(_task)
