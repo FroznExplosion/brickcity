@@ -153,6 +153,7 @@ func setup(workshop, layer: CanvasLayer) -> void:
 	ws = workshop
 	_layer = layer
 	ws.convert_colours.edited.connect(func() -> void:
+		ws._store_asset_meta()   # the hand changes are saved with the asset
 		if colours_shown:
 			_fill_actions())
 	_build_tabs()
@@ -295,6 +296,9 @@ func set_stage(id: String) -> void:
 	stage = id
 	# Block out shows the clay, the others hide it; nothing is converted by a tab.
 	ws.set_clay_view(id == "blockout")
+	# A Connection point ask belongs to Detail: leaving the stage drops it.
+	if id != "detail":
+		ws.close_point_ask()
 	_fill_tools()
 	match id:
 		"blockout":
@@ -621,9 +625,10 @@ func refresh() -> void:
 		p.set_editable(0, ws.can_name_parts())
 		var n_clay := int(cells.get(i + 1, 0))
 		var n_bricks := int(counts.get(i, 0))
-		var state := "clay" if n_bricks == 0 else ("%d bricks" % n_bricks)
+		var nb := "1 brick" if n_bricks == 1 else "%d bricks" % n_bricks
+		var state := "clay" if n_bricks == 0 else nb
 		if n_clay > 0 and n_bricks > 0:
-			state = "clay + %d bricks" % n_bricks
+			state = "clay + " + nb
 		elif n_clay == 0 and n_bricks == 0:
 			state = "empty"
 		p.set_text(1, state)
@@ -882,7 +887,9 @@ func _fill_actions() -> void:
 						ws.colour_table_refresh()
 					_fill_actions())
 		if colours_shown:
+			# A row of its own in the flow, under its button, not squeezed beside it.
 			var tb := VBoxContainer.new()
+			tb.custom_minimum_size.x = maxf(_actions.size.x, 300.0)
 			_actions.add_child(tb)
 			if ws.convert_colours.counts.is_empty():
 				var l := Label.new()

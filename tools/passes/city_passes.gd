@@ -2121,7 +2121,8 @@ func _run_landing_pass() -> void:
 		for dm in city.islands.dormant:
 			if dm.owner == b.id:
 				stood += dm.record.block_count()
-		if biggest != null and t > 10 and most >= 1000 				and biggest.body.linear_velocity.length() > 1.0:
+		if biggest != null and t > 10 and most >= 1000 \
+				and biggest.body.linear_velocity.length() > 1.0:
 			fall_ticks += 1
 			var pn := city.piece_panes.node_of(biggest)
 			if pn != null and pn.is_visible_in_tree():
@@ -4139,14 +4140,24 @@ func _run_groups_pass() -> void:
 	var riding_most := 0
 	var rider_off := 0   # riders on a section that has landed, or on nothing
 	var apart_ticks := 0       # ticks it was coming apart (CityScene._coming_apart)
-	var panes_hanging := 0     # of those, past the first pass, its painted windows still shown
+	var panes_hanging := 0     # of those, windows made before its bricks changed still shown past a pass
+	var stale_run := 0         # ticks in a row they have been
+	var panes_back := 0        # ticks its pieces were still moving and it showed windows made over what is left
 	for t in 240:
 		await city.get_tree().physics_frame
+		var pn = city.drawing._brick_panes.get(b.id)
+		var shown: bool = pn != null and is_instance_valid(pn) and (pn as Node3D).visible
+		var fresh: bool = b.is_materialised() and int(city.drawing._pane_version.get(b.id, -1)) \
+				== city.world.get_chunk_version(b.chunk)
 		if city._coming_apart(b.id):
 			apart_ticks += 1
-			var pn = city.drawing._brick_panes.get(b.id)
-			if apart_ticks > 8 and pn != null and is_instance_valid(pn) and (pn as Node3D).visible:
+			# Panes are tended every fourth tick (_stream_detail): stale up to
+			# three ticks before they are hidden is the pass's own pace.
+			stale_run = stale_run + 1 if shown and not fresh else 0
+			if stale_run > 4:
 				panes_hanging += 1
+		if shown and fresh and city.islands.moving_of(b.id) > 0:
+			panes_back += 1
 		riding_most = maxi(riding_most, city._group_riders.size())
 		if t == 50:
 			await _save("interior_groups_fall")   # the sections on their way down, furniture aboard
@@ -4171,12 +4182,18 @@ func _run_groups_pass() -> void:
 	_gate_ok("a section falls: of %d box(es) above the cut, none is left drawn over a floor that has gone" % above,
 			above > 0 and hung_ticks == 0,
 			"%d tick(s), up to %d box(es)" % [hung_ticks, hung_worst])
-	# Its painted windows go while it comes apart (user, 2026-11-15: windows
-	# hung in the air where a collapsed tower had been): made again over what
-	# is left once it is quiet.
-	_gate_ok("  its painted windows are hidden while it comes apart",
+	# Windows made before it came apart go while it does (user, 2026-11-15:
+	# windows hung in the air where a collapsed tower had been) ...
+	_gate_ok("  windows made before its bricks changed are hidden while it comes apart",
 			apart_ticks > 0 and panes_hanging == 0,
-			"coming apart %d tick(s), windows shown in %d of them" % [apart_ticks, panes_hanging])
+			"coming apart %d tick(s), stale windows shown past a pass in %d of them" % [
+				apart_ticks, panes_hanging])
+	# ... and come back made over what is left once ITS bricks stand still,
+	# not once the last of its rubble does (user, 2026-11-16: the standing part
+	# stayed blank while the pieces fell).
+	print("[groups] windows made over what is left shown in %d tick(s) while its pieces still moved" % panes_back)
+	_gate_ok("  and they are made again over what is left while its pieces still fall",
+			panes_back > 0, "%d tick(s)" % panes_back)
 	_gate_ok("  what stood in it rides the section down, drawn on the section",
 			city._group_rides > rides0 and riding_most > 0 and rider_off == 0,
 			"%d piece(s) lost their floor, %d rode; up to %d section(s) carrying some; %d found off its section" % [
