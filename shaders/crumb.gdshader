@@ -27,6 +27,15 @@ shader_type spatial;
 // stops, then shrinks away by `life`, however long it fell.
 render_mode skip_vertex_transform;
 
+// What a crumb is made of (Docs/Interiors.md 8.17): its colour comes already
+// resolved through its material (BrickWorld.get_block_rgba), and its finish --
+// roughness, sheen, metal -- from the material's own row of the brick tables,
+// as brick.gdshader reads them. Per crumb set, one set per brick size and
+// material (IslandCrumbs.crumb_set), so it costs no instance data. 0, a
+// filament, keeps roughness_v: what every crumb was drawn with before.
+#include "res://shaders/brick_materials.gdshaderinc"
+instance uniform int crumb_mat = 0;
+
 // Physics ticks since the start, with the fraction since the last one
 // (IslandManager._process).
 global uniform float crumb_clock;
@@ -112,6 +121,9 @@ void vertex() {
 }
 
 void fragment() {
+	int m = clamp(crumb_mat, 0, MAT_COUNT - 1);
 	ALBEDO = v_colour;
-	ROUGHNESS = roughness_v;
+	ROUGHNESS = m == 0 ? roughness_v : MAT_ROUGH[m];
+	METALLIC = MAT_METAL[m];
+	SPECULAR = MAT_SPEC[m];
 }

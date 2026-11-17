@@ -1,0 +1,4 @@
+{"name": "Flat Plains", "seed": 20261116,
+ "gen": {"hill_height_m": 2.0, "cont_weight_m": 6.0, "peak_height_m": 0.0, "cliff_amount": 0.0, "overhang_amount": 0.0, "ocean_threshold": -0.55, "valley_depth_m": 2.0,
+  "biomes": [{"name": "Plains", "hilliness": 0.05}, {"name": "Meadow", "hilliness": 0.05}, {"name": "Forest", "hilliness": 0.1}]},
+ "trees": {"Plains": 0.02}}

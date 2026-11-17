@@ -730,6 +730,10 @@ var blind_count := 0
 ## stud_radius, 12 m), so a piece the player can see the studs of is never the
 ## cap's -- asleep it is its stand-in, with none -- and the same distance wakes
 ## one the cap put away (_stream_dormancy), so the two never trade places.
+## Measured against 8 (2026-11-17, big city, twelve towers blasted until the
+## landmark cap (24) was full, 900 ticks with the camera in the rubble): the
+## cap held at 24 either way, never over, the islands' tick the same (0.26 ms).
+## Even a tower blown apart over the camera put only 17 landmarks within 16 m.
 const CAP_KEEP_RANGE := 16.0
 var small_live_max := 220
 var large_live_max := 60
@@ -1056,11 +1060,21 @@ func setup(brick_world: BrickWorld, material: ShaderMaterial, view: Camera3D) ->
 	if heap == null:
 		heap = BrickHeap.new()
 		heap.name = "BrickHeap"
-		heap.mesh_for = func(size: Vector3) -> Mesh: return PieceMeshes.chamfered_box(size)
-		var mat := StandardMaterial3D.new()
-		mat.vertex_color_use_as_albedo = true
-		mat.roughness = 0.85
-		heap.material = mat
+		# In the bricks' own material (Docs/Interiors.md 8.17): a box with the
+		# brick mesher's face UVs (IslandStandins._box) drawn by brick.gdshader,
+		# each brick's colour carrying its material in alpha -- wood as wood,
+		# metal as metal, where a flat colour drew every one as plastic. Its
+		# shaded bevel gives the edge the chamfered box had. Without the city's
+		# brick material (a probe), the flat colour as before.
+		if brick_material != null:
+			heap.mesh_for = func(size: Vector3) -> Mesh: return standins._box(size)
+			heap.material = brick_material
+		else:
+			heap.mesh_for = func(size: Vector3) -> Mesh: return PieceMeshes.chamfered_box(size)
+			var mat := StandardMaterial3D.new()
+			mat.vertex_color_use_as_albedo = true
+			mat.roughness = 0.85
+			heap.material = mat
 		add_child(heap)
 
 
@@ -1680,6 +1694,7 @@ var blast_throw_ms := [0.0, 0.0]
 ## written per tick: only when something happens to a crumb, at its `next`.
 class Crumbs:
 	var mmi: MultiMeshInstance3D
+	var size := Vector3.ZERO              ## its bricks' size (the set's own key is size and material)
 	var pos := PackedVector3Array()
 	var vel := PackedVector3Array()
 	var t0 := PackedInt64Array()          ## the tick this stretch began
@@ -1900,14 +1915,16 @@ func throw_rows(rows: PackedFloat32Array, xf: Transform3D, at: Vector3, speed: f
 		var k := r * 16
 		var size := Vector3(absf(rows[k]), absf(rows[k + 5]), absf(rows[k + 10]))
 		var p: Vector3 = xf * Vector3(rows[k + 3], rows[k + 7], rows[k + 11])
-		var cr: Crumbs = crumbler.crumb_set(size.snapped(Vector3.ONE * 0.001))
+		var row_colour := Color(rows[k + 12], rows[k + 13], rows[k + 14], rows[k + 15])
+		var cr: Crumbs = crumbler.crumb_set(size.snapped(Vector3.ONE * 0.001),
+				crumbler.mat_of(row_colour))
 		var away := p - at
 		away = away.normalized() if away.length() > 0.01 else Vector3.UP
 		var axis := Vector3(randf() - 0.5, randf() - 0.5, randf() - 0.5)
 		crumbler.crumb_push(cr, p, away * speed * randf_range(0.3, 1.0) + Vector3(randf_range(-1.0, 1.0),
 				randf_range(0.0, 1.0), randf_range(-1.0, 1.0)) * CRUMB_SCATTER,
 				frame_basis, axis, randf_range(-CRUMB_SPIN, CRUMB_SPIN), now, floor_y,
-				size.y * 0.5, Color(rows[k + 12], rows[k + 13], rows[k + 14], rows[k + 15]), fixed)
+				size.y * 0.5, row_colour, fixed)
 	furniture_broken[1] += n
 	return n
 
@@ -2002,7 +2019,7 @@ func _heap_support_gone(box: AABB) -> void:
 		var size: Vector3 = lying[k][0]
 		var xf: Transform3D = lying[k][1]
 		var b := xf.basis
-		var cr: Crumbs = crumbler.crumb_set(size)
+		var cr: Crumbs = crumbler.crumb_set(size, crumbler.mat_of(lying[k][2]))
 		var axis := Vector3(randf() - 0.5, randf() - 0.5, randf() - 0.5)
 		crumbler.crumb_push(cr, xf.origin, Vector3(randf_range(-0.3, 0.3), 0.0, randf_range(-0.3, 0.3)),
 				b, axis, randf_range(-1.5, 1.5), now, NAN,

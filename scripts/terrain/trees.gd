@@ -136,7 +136,13 @@ static func height_m(variant: int) -> float:
 ## [{"cell": Vector3i (trunk corner, studs and plates), "variant": int}].
 ## `max_trees` caps it; the grid is walked in a fixed order, so the cap keeps
 ## the same trees every time.
-static func scatter(rect: Rect2i, world_seed: int, max_trees: int = 2000) -> Array:
+##
+## `chance_at(x, z) -> float`, if given, replaces the forest noise and the
+## ground's density: the share of candidate spots at that stud that grow a
+## tree (the biome world, Docs/MineWorld.md 6). `variant_at(x, z, roll) -> int`
+## picks the variant from a 0..1 roll, -1 for none.
+static func scatter(rect: Rect2i, world_seed: int, max_trees: int = 2000,
+		chance_at := Callable(), variant_at := Callable()) -> Array:
 	var out := []
 	var noise := FastNoiseLite.new()
 	noise.seed = world_seed ^ 0x7ee5
@@ -146,8 +152,11 @@ static func scatter(rect: Rect2i, world_seed: int, max_trees: int = 2000) -> Arr
 	var z0 := int(ceil(float(rect.position.y) / SPACING)) * SPACING
 	for gz in range(z0, rect.end.y, SPACING):
 		for gx in range(x0, rect.end.x, SPACING):
-			var forest := noise.get_noise_2d(gx, gz) > 0.0
-			var chance := FOREST_CHANCE if forest else OPEN_CHANCE
+			var chance := 0.0
+			if chance_at.is_valid():
+				chance = float(chance_at.call(gx, gz))
+			else:
+				chance = FOREST_CHANCE if noise.get_noise_2d(gx, gz) > 0.0 else OPEN_CHANCE
 			if _hash(world_seed, gx, gz) >= chance:
 				continue
 			# Jitter inside the cell, keeping a trunk clear of the next cell's.
@@ -156,10 +165,11 @@ static func scatter(rect: Rect2i, world_seed: int, max_trees: int = 2000) -> Arr
 			# Grass and dirt at full density, stone and sand thinner; never
 			# dark stone or road. The worlds so far are mostly stone above the
 			# water -- their grass is largely drowned seabed.
-			var ground := BrickTerrain.material_at(x, z)
-			var keep: float = GROUND_DENSITY.get(ground, 0.0)
-			if keep <= 0.0 or _hash(world_seed + 4, gx, gz) >= keep:
-				continue
+			if not chance_at.is_valid():
+				var ground := BrickTerrain.material_at(x, z)
+				var keep: float = GROUND_DENSITY.get(ground, 0.0)
+				if keep <= 0.0 or _hash(world_seed + 4, gx, gz) >= keep:
+					continue
 			if BrickTerrain.pad_at(x, z) >= 0 or BrickTerrain.pad_at(x + 1, z + 1) >= 0:
 				continue
 			# The trunk's own 2x2: it stands on the highest of its four
@@ -173,8 +183,13 @@ static func scatter(rect: Rect2i, world_seed: int, max_trees: int = 2000) -> Arr
 				hi_p = maxi(hi_p, p)
 			if hi_p - lo_p > MAX_STEP_PLATES or lo_p <= sea_plate + 2:
 				continue
-			out.append({"cell": Vector3i(x, hi_p + 1, z),
-					"variant": int(_hash(world_seed + 3, gx, gz) * VARIANTS) % VARIANTS})
+			var roll := _hash(world_seed + 3, gx, gz)
+			var variant := int(roll * VARIANTS) % VARIANTS
+			if variant_at.is_valid():
+				variant = int(variant_at.call(x, z, roll))
+				if variant < 0:
+					continue
+			out.append({"cell": Vector3i(x, hi_p + 1, z), "variant": variant})
 			if out.size() >= max_trees:
 				return out
 	return out

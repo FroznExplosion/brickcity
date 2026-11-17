@@ -10585,6 +10585,7 @@ Dictionary BrickWorld::split_island(int chunk_id, const PackedInt32Array &block_
         nb.archetype = src_block.archetype;
         nb.colour = src_block.colour;
         nb.decorative = src_block.decorative;
+        nb.loose = src_block.loose;
         nb.support_broken = src_block.support_broken;
         nb.bottom_broken = src_block.bottom_broken;
         nb.strained = src_block.strained;
@@ -11392,7 +11393,7 @@ Array BrickWorld::get_block_ticks(int chunk_id, int block_id) const {
 
 Dictionary BrickWorld::capture_blocks(int chunk_id, int from, int count) const {
     Dictionary out;
-    PackedInt32Array cells, archs, decorative, joints, worn;
+    PackedInt32Array cells, archs, decorative, joints, worn, loose, materials;
     PackedByteArray colours;
     Vector3 lo(INFINITY, INFINITY, INFINITY), hi(-INFINITY, -INFINITY, -INFINITY);
     int n = 0;
@@ -11415,6 +11416,13 @@ Dictionary BrickWorld::capture_blocks(int chunk_id, int from, int count) const {
             cells.push_back(wlo.z / TICKS_STUD);
             if (b.decorative) {
                 decorative.push_back(n);
+            }
+            if (b.loose) {
+                loose.push_back(n);
+            }
+            if (b.material != 0) {
+                materials.push_back(n);
+                materials.push_back((int32_t)b.material);
             }
             const int cut = (b.support_broken ? JOINT_SUPPORT_BROKEN : 0)
                     | (b.bottom_broken ? JOINT_BOTTOM_BROKEN : 0)
@@ -11441,6 +11449,8 @@ Dictionary BrickWorld::capture_blocks(int chunk_id, int from, int count) const {
     out["archetypes"] = archs;
     out["colours"] = colours;
     out["decorative"] = decorative;
+    out["loose"] = loose;
+    out["materials"] = materials;
     out["joints"] = joints;
     out["worn"] = worn;
     out["count"] = n;
@@ -12100,6 +12110,51 @@ PackedInt64Array BrickWorld::get_section_stamps(int chunk_id) const {
     return out;
 }
 
+int BrickWorld::set_blocks_loose(int chunk_id, const PackedInt32Array &block_ids, bool on) {
+    if (!valid_chunk(chunk_id)) {
+        return 0;
+    }
+    Chunk &c = chunks[chunk_id];
+    int changed = 0;
+    for (int64_t i = 0; i < block_ids.size(); ++i) {
+        const int32_t bid = block_ids[i];
+        if (bid < 0 || bid >= (int32_t)c.blocks.size() || c.blocks[(size_t)bid].loose == on) {
+            continue;
+        }
+        c.blocks[(size_t)bid].loose = on;
+        ++changed;
+    }
+    return changed;
+}
+
+Color BrickWorld::get_block_rgba(int chunk_id, int block_id) const {
+    if (!valid_chunk(chunk_id)) {
+        return Color(1, 1, 1, 1);
+    }
+    const Chunk &c = chunks[chunk_id];
+    if (block_id < 0 || block_id >= (int)c.blocks.size()) {
+        return Color(1, 1, 1, 1);
+    }
+    const Block &b = c.blocks[(size_t)block_id];
+    return brick::block_rgba_grain(b.material, b.colour,
+            brick::grain_axis(archetypes[b.archetype].size, b.cell));
+}
+
+PackedInt32Array BrickWorld::get_loose_blocks(int chunk_id) const {
+    PackedInt32Array out;
+    if (!valid_chunk(chunk_id)) {
+        return out;
+    }
+    const Chunk &c = chunks[chunk_id];
+    for (size_t i = 0; i < c.blocks.size(); ++i) {
+        const Block &b = c.blocks[i];
+        if (b.loose && b.alive && !b.detached && !b.removed) {
+            out.push_back((int32_t)i);
+        }
+    }
+    return out;
+}
+
 void BrickWorld::_bind_methods() {
     ClassDB::bind_method(D_METHOD("bake_archetype", "name", "size", "mass"),
             &BrickWorld::bake_archetype, DEFVAL(1.0));
@@ -12129,6 +12184,10 @@ void BrickWorld::_bind_methods() {
     ClassDB::bind_method(D_METHOD("strength_tree_info", "chunk_id"), &BrickWorld::strength_tree_info);
     ClassDB::bind_method(D_METHOD("get_strength_tree_stats"), &BrickWorld::get_strength_tree_stats);
     ClassDB::bind_method(D_METHOD("get_standin_buffers", "chunk_id"), &BrickWorld::get_standin_buffers);
+    ClassDB::bind_method(D_METHOD("set_blocks_loose", "chunk_id", "block_ids", "on"),
+            &BrickWorld::set_blocks_loose);
+    ClassDB::bind_method(D_METHOD("get_loose_blocks", "chunk_id"), &BrickWorld::get_loose_blocks);
+    ClassDB::bind_method(D_METHOD("get_block_rgba", "chunk_id", "block_id"), &BrickWorld::get_block_rgba);
     ClassDB::bind_method(D_METHOD("get_instance_buffers", "chunk_id", "sections", "special_held"), &BrickWorld::get_instance_buffers);
     ClassDB::bind_method(D_METHOD("get_section_stamps", "chunk_id"), &BrickWorld::get_section_stamps);
     ClassDB::bind_method(D_METHOD("crack_components", "chunk_id", "planes_x", "planes_z"),

@@ -1713,6 +1713,24 @@ material clears the table. Notes:
   hand stays changed in the clay after Make bricks; Z gives the clay's own colours back.
 * The vote can pick a colour beside the nearest one (a red next to the nearest red); the table
   shows what the vote gave, so it is what Make bricks lays.
+* Pictures (2026-11-16, `workshop_ui_shots` `a8_colours_table`, `a8_colours_bricks`): a red-top,
+  blue-bottom model in PLA. The first one showed the table squeezed beside Hide colours (the
+  actions are a flow); the table now takes a row of its own, the full width of the actions.
+
+**Loose ends, as built** (2026-11-17):
+
+* The table's hand changes are saved with the asset (`meta.asset.sculpt.colour_table`:
+  the material and the remap; the counts are recounted). New clears them.
+* An asset that is all clay, no bricks, could not be opened back (File > Open and the autosave
+  both refused a recipe with no bricks, so the clay was lost on a restart). A recipe with
+  asset meta now opens.
+* The Connection point ask closed only by its own buttons; it stayed up on other stages and
+  on a new asset. Leaving Detail or a new asset closes it.
+* The outliner says "1 brick", not "1 bricks".
+* `model_scale_probe` no longer runs 200+ studs through the clay (it took gigabytes and
+  minutes here); its default is 80 and 100, and bigger sizes are skipped with a note.
+* Left as it is: Generate > Model lays the model in the middle of the area, on the floor; it is
+  an inserted build, moved afterwards like any other.
 * `asset_workshop_probe` 356 (+3): the button while clay; the clay's red and blue rows; a changed
   row marked under the actions; a colour changed by hand laid all blue; Reset after Z red and
   blue again. No new picture: the asset pictures want a coloured model loaded, left for later.

@@ -559,7 +559,7 @@ previous draft of this document is still there and still works — it just canno
 
 ## 16. What is built
 
-Slice 1, 2026-09-20. `scenes/terrain_test.tscn`, `tools/probes/terrain_probe.gd` (passes).
+Slice 1, 2026-09-20. `scenes/terrain_test.tscn` (since 2026-11-17 the mine world, Docs/MineWorld.md; this bench is `-- --bench`, `terrain_bench.gd`), `tools/probes/terrain_probe.gd` (passes).
 
 **In C++** (`gdextension/brick/src/brick_terrain.{h,cpp}`), per D1 — terrain truth is core, so
 none of it was prototyped in GDScript: the value-noise generator, plate/ramp classification, the
@@ -567,7 +567,7 @@ size-ladder packer, the mesher, the stud and scatter instance buffers, the merge
 and `BrickWave`. `build_tile` returns all of it in one crossing, with the instance buffers already
 in `MultiMesh.set_buffer`'s layout so GDScript uploads them without a loop.
 
-**In GDScript**: `terrain_tile.gd` (node assembly only), `water_surface.gd`, `terrain_scene.gd`,
+**In GDScript**: `terrain_tile.gd` (node assembly only), `water_surface.gd`, `terrain_bench.gd`,
 `piece_meshes.gd`, and the two shaders.
 
 Done: T0, T1, T2, **T2b**, T4, most of T5, W0–W3, plus the overlay course (§6 "a second

@@ -1,7 +1,8 @@
 extends SceneTree
 
 ## A model as big as a building, through the asset workshop's clay as it is now: the time and
-## the memory of stamping it and of Make bricks, at 100, 200 and 400 studs (Docs/BuildTools.md
+## the memory of stamping it and of Make bricks, at 80 and 100 studs -- 200+ is refused here
+## (Docs/BuildTools.md
 ## section 21, "A model into a building": measure before building stage 7). A model a fifth
 ## the size has the samples across that the planned stud-sized clay would give the full one,
 ## so its row estimates that clay too. Not a pass/fail probe: it prints a table.
@@ -72,10 +73,17 @@ func _tick() -> void:
 	_ws.bench._hotbar.save_path = "user://dev/_probe_asset_hotbar.json"
 	_ws.toolbars_save = "user://dev/_probe_asset_toolbars.json"
 	_ws.convert_mirror = false
-	var sizes := [80.0, 100.0, 200.0, 400.0]
+	var sizes := [80.0, 100.0]
 	for a in OS.get_cmdline_user_args():
 		if String(a).begins_with("--sizes="):
 			sizes = Array(String(a).substr(8).split(",")).map(func(x: String) -> float: return float(x))
+	# 200+ studs through the clay takes gigabytes and minutes; on this machine that is a run
+	# not to start (Docs/HandoffWorkshopUI.md). The 2026-11-15 table in BuildTools.md section
+	# 21 has those rows; --building measures big models the way the game lays them.
+	var big := sizes.filter(func(s: float) -> bool: return s >= 200.0)
+	if not big.is_empty():
+		print("model scale probe: skipping %s studs through the clay (200+ is not run here; use --building)" % str(big))
+		sizes = sizes.filter(func(s: float) -> bool: return s < 200.0)
 	print("model scale probe: a hollow building model through the clay (tick clay, as built)")
 	print("  build area: %d x %d studs, %d plates up" % [_ws.bench.plate_studs, _ws.bench.plate_studs, _ws.bench.height_plates])
 	print("  studs   stamp ms   blocks   convert ms   bricks   RSS MB (before -> after)")

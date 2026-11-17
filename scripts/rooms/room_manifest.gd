@@ -570,6 +570,10 @@ static func build_item(world: BrickWorld, chunk: int, palette: Dictionary,
 	var out := PackedInt32Array()
 	var parts: Array = parts_of(str(item.type))
 	var first_role := roles.size()
+	## An item's detail parts are not clicked to the building (Block.loose,
+	## Docs/Interiors.md 8.16): marked, so a piece of it that comes to rest
+	## drops them where furniture stays.
+	var loose := PackedInt32Array()
 	var at: Vector3i = (item.cell as Vector3i) - offset
 	for part in parts:
 		var name: String = part[0]
@@ -595,6 +599,10 @@ static func build_item(world: BrickWorld, chunk: int, palette: Dictionary,
 			world.set_block_material(chunk, id, int(part[5]))
 		out.push_back(id)
 		roles.append(BuildRecipe.Role.DETAIL if is_detail(part) else BuildRecipe.Role.INTERIOR)
+		if decorative and is_detail(part):
+			loose.push_back(id)
+	if not loose.is_empty() and world.has_method(&"set_blocks_loose"):
+		world.call(&"set_blocks_loose", chunk, loose, true)
 	return out
 
 

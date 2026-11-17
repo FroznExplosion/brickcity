@@ -42,6 +42,14 @@ var colours := PackedByteArray()
 ## a DETACH as if every machine had it. A list, not a byte per block, because most
 ## pieces carry none and a record is meant to cost 17 bytes a block.
 var decorative := PackedInt32Array()
+## Which are an item's loose bricks (BrickWorld.set_blocks_loose; Docs/
+## Interiors.md 8.16), by index, as `decorative`: without it a piece that slept
+## woke with its items clicked to its floors.
+var loose := PackedInt32Array()
+## Block materials, sparse: [index, material] pairs, the non-zero ones (material
+## 0 is the filament). Without them a wood or metal piece that slept woke as
+## plastic: `colours` alone reads as a filament.
+var materials := PackedInt32Array()
 ## Where the chunk's grid starts, in the building's grid. A piece cut out of a
 ## building keeps the absolute cells its bricks had, and those cells are how the
 ## log names them (DamageLog, piece commands) -- so a piece has to wake up at the
@@ -74,7 +82,7 @@ func block_count() -> int:
 ## Bytes this record holds. What the tier is FOR, so it is measurable.
 func bytes() -> int:
 	return cells.size() * 4 + archetypes.size() * 4 + colours.size() + decorative.size() * 4 \
-			+ joints.size() * 4 + worn.size() * 4
+			+ joints.size() * 4 + worn.size() * 4 + loose.size() * 4 + materials.size() * 4
 
 
 ## For a save file (AreaSnapshot). Archetypes are written by NAME: fixture parts
@@ -92,6 +100,7 @@ func to_data(world: BrickWorld) -> Dictionary:
 		refs.append(int(index[a]))
 	return {"dims": dims, "xform": xform, "cells": cells, "names": names, "refs": refs,
 			"colours": colours, "decorative": decorative, "joints": joints, "worn": worn,
+			"loose": loose, "materials": materials,
 			"origin": origin, "rotation": rotation,
 			"origin_ticks": origin_ticks, "box": box}
 
@@ -109,6 +118,8 @@ static func from_data(world: BrickWorld, d: Dictionary) -> ChunkRecord:
 	r.cells = d.cells
 	r.colours = d.colours
 	r.decorative = d.get("decorative", PackedInt32Array())
+	r.loose = d.get("loose", PackedInt32Array())
+	r.materials = d.get("materials", PackedInt32Array())
 	r.joints = d.get("joints", PackedInt32Array())
 	r.worn = d.get("worn", PackedInt32Array())
 	r.origin = d.get("origin", Vector3i.ZERO)
@@ -179,6 +190,12 @@ func capture_some(world: BrickWorld, chunk: int, count: int) -> bool:
 	colours.append_array(got.colours)
 	for i in (got.decorative as PackedInt32Array):
 		decorative.push_back(base + i)
+	for i in (got.get("loose", PackedInt32Array()) as PackedInt32Array):
+		loose.push_back(base + i)
+	var mats: PackedInt32Array = got.get("materials", PackedInt32Array())
+	for k in range(0, mats.size() - 1, 2):
+		materials.push_back(base + mats[k])
+		materials.push_back(mats[k + 1])
 	var cut: PackedInt32Array = got.joints
 	for k in range(0, cut.size() - 1, 2):
 		joints.push_back(base + cut[k])
@@ -252,5 +269,15 @@ func restore(world: BrickWorld) -> int:
 			hp.push_back(worn[k + 1])
 	if not hp.is_empty():
 		world.set_worn_blocks(chunk, hp)
+	for k in range(0, materials.size() - 1, 2):
+		var i := materials[k]
+		if i < placed.size() and placed[i] >= 0:
+			world.set_block_material(chunk, placed[i], materials[k + 1])
+	var loose_ids := PackedInt32Array()
+	for i in loose:
+		if i < placed.size() and placed[i] >= 0:
+			loose_ids.append(placed[i])
+	if not loose_ids.is_empty() and world.has_method(&"set_blocks_loose"):
+		world.call(&"set_blocks_loose", chunk, loose_ids, true)
 	world.set_chunk_transform(chunk, xform)
 	return chunk

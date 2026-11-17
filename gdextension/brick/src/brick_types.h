@@ -349,6 +349,14 @@ struct Block {
     // the island (Docs/Interiors.md section 4.2) because it is IN the island.
     bool decorative = false;
 
+    // An ITEM's brick -- a cup, a book, the detail parts of a piece of
+    // furniture -- not clicked to the building (Docs/Interiors.md 8.16). Laid
+    // like furniture (decorative, on its floor) while the building stands;
+    // when a piece of the building comes to rest, its loose bricks fall off it
+    // onto whatever is below (IslandCrumbs.drop_loose), where furniture stays
+    // on the floor or wall it is joined to. Carried by split_island.
+    bool loose = false;
+
     // Crushed loose: the joints carrying this block's weight gave way. Damage,
     // so it stays set. Grounding will not reach a broken block at all, so it
     // and everything resting on it fall together -- which is the cascade.

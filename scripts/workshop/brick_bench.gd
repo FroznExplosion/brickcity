@@ -3570,7 +3570,7 @@ func _save_new() -> String:
 
 func _load() -> void:
 	var r := BuildRecipe.load_from(_save_path)
-	if not r.has_content():
+	if not r.has_content() and not r.meta.has("asset"):   # an asset may be all clay
 		print("[workshop] nothing to load")
 		return
 	_load_recipe(r)
@@ -3844,7 +3844,8 @@ func _new_build() -> void:
 
 func _open_path(path: String) -> bool:
 	var r := BuildRecipe.load_from(path)
-	if not r.has_content():
+	# An asset may be all clay, no bricks yet: its meta is what it holds.
+	if not r.has_content() and not r.meta.has("asset"):
 		print("[workshop] %s holds nothing to load" % path)
 		return false
 	_load_recipe(r)
