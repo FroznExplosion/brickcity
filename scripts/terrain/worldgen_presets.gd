@@ -1,0 +1,137 @@
+extends RefCounted
+
+## World-gen presets for the mine world (Docs/MineWorld.md 8).
+##
+## A preset is a JSON file:
+##
+##     {"name": "Default", "seed": 1234,
+##      "gen": {<BrickTerrain.get_gen_params keys, any subset>},
+##      "trees": {"<biome name>": 0.0..1.0, ...},
+##      "detail_tiles": 4, "far_tiles": 64}
+##
+## Shipped ones are content (`worldgen/` in every pack, ContentPacks); the
+## player's own are saved under user://library/worldgen/ (UserPaths). A
+## player preset of a shipped one's name is listed instead of it.
+##
+## Preloaded by path, not named: a new class_name is not in the class cache
+## until the editor rescans.
+
+const FOLDER := "worldgen"
+
+## Trees per candidate spot (Trees.SPACING studs apart), by biome name.
+const DEFAULT_TREES := {
+	"Plains": 0.03, "Forest": 0.55, "Birch Forest": 0.5, "Dark Forest": 0.85,
+	"Taiga": 0.5, "Snowy Plains": 0.02, "Snowy Taiga": 0.4, "Savanna": 0.06,
+	"Jungle": 0.8, "Meadow": 0.02, "Windswept Hills": 0.08,
+}
+## Which of Trees' four variants grow in a biome (none listed: any).
+const BIOME_VARIANTS := {
+	"Birch Forest": [2], "Dark Forest": [0, 1], "Taiga": [1], "Snowy Taiga": [1],
+	"Savanna": [3], "Jungle": [0, 2, 3], "Windswept Hills": [1, 3],
+}
+
+
+static func user_dir() -> String:
+	return UserPaths.library(FOLDER)
+
+
+## Every preset: [{"name", "path", "builtin"}], shipped first, by name.
+static func list() -> Array:
+	var by_name := {}
+	for path in ContentPacks.files(FOLDER):
+		var d := read(path)
+		var n := str(d.get("name", path.get_file().get_basename()))
+		by_name[n] = {"name": n, "path": path, "builtin": true}
+	var dir := DirAccess.open(user_dir())
+	if dir != null:
+		for f in dir.get_files():
+			if f.ends_with(".json"):
+				var path := user_dir() + f
+				var d := read(path)
+				var n := str(d.get("name", f.get_basename()))
+				by_name[n] = {"name": n, "path": path, "builtin": false}
+	var out := by_name.values()
+	out.sort_custom(func(a: Dictionary, b: Dictionary) -> bool:
+		if a.builtin != b.builtin:
+			return a.builtin
+		return str(a.name) < str(b.name))
+	return out
+
+
+static func read(path: String) -> Dictionary:
+	var f := FileAccess.open(path, FileAccess.READ)
+	if f == null:
+		return {}
+	var v = JSON.parse_string(f.get_as_text())
+	return v if v is Dictionary else {}
+
+
+## A preset's full settings: the generator's defaults with the file on top,
+## so a preset only has to say what it changes.
+static func load_settings(path: String) -> Dictionary:
+	return complete(read(path))
+
+
+## Defaults filled in under whatever `d` says.
+static func complete(d: Dictionary) -> Dictionary:
+	BrickTerrain.reset_gen_params()
+	var gen: Dictionary = BrickTerrain.get_gen_params()
+	var over: Dictionary = d.get("gen", {})
+	for k in over:
+		if k == "biomes" or k == "ores" or k == "bands":
+			continue
+		gen[k] = over[k]
+	if over.has("bands"):
+		gen["bands"] = (over["bands"] as Array).duplicate(true)
+	# Biomes and ores by NAME, so a preset can name only the ones it changes
+	# and a file outlives a reordering.
+	for key in ["biomes", "ores"]:
+		if not over.has(key):
+			continue
+		for row in over[key]:
+			for have in gen[key]:
+				if str(have.get("name", "")) == str(row.get("name", "")):
+					for k in row:
+						have[k] = row[k]
+	var trees := DEFAULT_TREES.duplicate()
+	var t: Dictionary = d.get("trees", {})
+	for k in t:
+		trees[k] = float(t[k])
+	return {
+		"name": str(d.get("name", "Custom")),
+		"seed": int(d.get("seed", 20261116)),
+		"gen": gen,
+		"trees": trees,
+		"detail_tiles": int(d.get("detail_tiles", 4)),
+		"far_tiles": int(d.get("far_tiles", 64)),
+		"spawn": d.get("spawn", null),
+	}
+
+
+## Save the settings as the player's preset of their name. Returns the path.
+static func save(settings: Dictionary) -> String:
+	DirAccess.make_dir_recursive_absolute(user_dir())
+	var n := str(settings.get("name", "Custom")).strip_edges()
+	if n == "":
+		n = "Custom"
+	var path := user_dir() + _file_name(n) + ".json"
+	var f := FileAccess.open(path, FileAccess.WRITE)
+	if f == null:
+		return ""
+	var out := settings.duplicate(true)
+	out["name"] = n
+	f.store_string(JSON.stringify(out, "\t"))
+	return path
+
+
+static func remove(path: String) -> bool:
+	if not path.begins_with(user_dir()):
+		return false   # a shipped preset is not the player's to delete
+	return DirAccess.remove_absolute(path) == OK
+
+
+static func _file_name(n: String) -> String:
+	var out := ""
+	for ch in n.to_lower():
+		out += ch if (ch >= "a" and ch <= "z") or (ch >= "0" and ch <= "9") else "_"
+	return out

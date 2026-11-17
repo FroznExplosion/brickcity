@@ -98,6 +98,32 @@ enum Material {
     MAT_STONE,
     MAT_DARK_STONE,
     MAT_ROAD,
+    // --- the biome generator's blocks (Docs/MineWorld.md 3). APPENDED, never
+    // inserted: a saved edit stores the material byte.
+    MAT_SNOW,
+    MAT_GRAVEL,
+    MAT_SANDSTONE,
+    MAT_RED_SAND,
+    MAT_TERRA_ORANGE,
+    MAT_TERRA_CREAM,
+    MAT_TERRA_RED,
+    MAT_CLAY,
+    MAT_BEDROCK,
+    MAT_COAL,
+    MAT_IRON,
+    MAT_COPPER,
+    MAT_GOLD,
+    MAT_REDSTONE,
+    MAT_LAPIS,
+    MAT_DIAMOND,
+    MAT_PODZOL,
+    MAT_DRY_GRASS,
+    MAT_LUSH_GRASS,
+    MAT_COLD_GRASS,
+    MAT_DARK_GRASS,
+    MAT_GRANITE,
+    MAT_DIORITE,
+    MAT_ICE,
     MATERIAL_COUNT
 };
 
@@ -112,6 +138,31 @@ inline int material_filament(int m) {
         case MAT_STONE: return FIL_GREY;
         case MAT_DARK_STONE: return FIL_DARK_GREY;
         case MAT_ROAD: return FIL_DARK_GREY;
+        // Palette indices past the Filament enum (brick_grid.h FILAMENT_PALETTE).
+        case MAT_SNOW: return FIL_WHITE;
+        case MAT_GRAVEL: return 15;        // warm grey
+        case MAT_SANDSTONE: return 62;     // khaki
+        case MAT_RED_SAND: return 24;      // dark orange
+        case MAT_TERRA_ORANGE: return 60;  // terracotta
+        case MAT_TERRA_CREAM: return 32;   // cream
+        case MAT_TERRA_RED: return 26;     // rust
+        case MAT_CLAY: return 61;          // clay
+        case MAT_BEDROCK: return 14;       // charcoal
+        case MAT_COAL: return FIL_BLACK;
+        case MAT_IRON: return 25;          // peach
+        case MAT_COPPER: return 39;        // teal
+        case MAT_GOLD: return 31;          // gold yellow
+        case MAT_REDSTONE: return 17;      // bright red
+        case MAT_LAPIS: return 43;         // royal blue
+        case MAT_DIAMOND: return 46;       // cyan
+        case MAT_PODZOL: return 27;        // chocolate
+        case MAT_DRY_GRASS: return 37;     // olive
+        case MAT_LUSH_GRASS: return 35;    // bright green
+        case MAT_COLD_GRASS: return 63;    // moss (sage read as snow in daylight)
+        case MAT_DARK_GRASS: return 34;    // dark green
+        case MAT_GRANITE: return 23;       // rose
+        case MAT_DIORITE: return 13;       // light grey
+        case MAT_ICE: return 48;           // ice
         default: return FIL_GREY;
     }
 }
@@ -725,6 +776,18 @@ public:
     /// and never seen. 0 turns it off.
     static void set_coarse_smooth_step(int step);
     static int get_coarse_smooth_step();
+
+    /// The generator (Docs/MineWorld.md): 0 classic, 1 biomes. Change it, or
+    /// the params, only while nothing is baking -- workers read them.
+    static void set_generator(int mode);
+    static int get_generator();
+    static void set_gen_params(Dictionary params);
+    static Dictionary get_gen_params();
+    static void reset_gen_params();
+    static int biome_at(int x, int z);
+    static PackedStringArray biome_names();
+    static PackedByteArray gen_preview(int64_t seed, Dictionary params, int cx, int cz, int w, int h,
+            int step, int mode);
 };
 
 // ---------------------------------------------------------------------------

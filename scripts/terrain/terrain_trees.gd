@@ -47,6 +47,23 @@ var _sorted_at := {}
 var _turn := 0
 const RESORT_METRES := 1.0
 
+## STREAMED (Docs/MineWorld.md 6), for a world with no edge: trees are placed
+## per square cell of STREAM_CELL studs, the cells within `keep_m` of the
+## camera, nearest first, a few a frame; a cell past `drop_m` is taken away.
+## What grows where is the caller's (`stream`'s callables), so the same
+## scatter serves the biome world and nothing is copied.
+const STREAM_CELL := 128
+const STREAM_BUDGET_US := 2500
+var streaming := false
+var keep_m := 420.0
+var drop_m := 500.0
+var _chance_at := Callable()
+var _variant_at := Callable()
+## Vector2i cell -> the rows placed in it.
+var _cells := {}
+var _queue: Array[Vector2i] = []
+var _plan_at := Vector3.INF
+
 
 func setup(p_camera: Camera3D, p_material: Material) -> void:
 	camera = p_camera
@@ -118,7 +135,73 @@ func _clear_placed(area: Rect2i) -> int:
 	return gone
 
 
-func _place(spots: Array) -> void:
+## Stream trees round the camera from now on (see STREAM_CELL). Clears
+## whatever was placed before.
+func stream(p_seed: int, chance_at: Callable, variant_at: Callable, keep := 420.0) -> void:
+	clear_all()
+	streaming = true
+	world_seed = p_seed
+	_chance_at = chance_at
+	_variant_at = variant_at
+	keep_m = keep
+	drop_m = keep + 80.0
+
+
+## Every tree gone (a new world is about to be generated).
+func clear_all() -> void:
+	for c in _cells:
+		for row in _cells[c]:
+			(_sets[row.key] as ImpostorLod).remove(int(row.handle))
+	_cells.clear()
+	_queue.clear()
+	_plan_at = Vector3.INF
+	_clear_placed(Rect2i())
+	count = 0
+
+
+func _stream_step() -> void:
+	var here := camera.global_position
+	var cell_m := float(STREAM_CELL) * BrickWorld.get_stud_metres()
+	if _plan_at.distance_to(here) > cell_m * 0.25:
+		_plan_at = here
+		var r := int(ceil(keep_m / cell_m))
+		var cc := Vector2i(floori(here.x / cell_m), floori(here.z / cell_m))
+		var want: Array[Vector2i] = []
+		for dz in range(-r, r + 1):
+			for dx in range(-r, r + 1):
+				var c := cc + Vector2i(dx, dz)
+				var mid := (Vector2(c) + Vector2(0.5, 0.5)) * cell_m
+				if mid.distance_to(Vector2(here.x, here.z)) <= keep_m and not _cells.has(c):
+					want.append(c)
+		want.sort_custom(func(a: Vector2i, b: Vector2i) -> bool:
+			return (a - cc).length_squared() < (b - cc).length_squared())
+		_queue = want
+		var gone: Array[Vector2i] = []
+		for c in _cells:
+			var mid := (Vector2(c) + Vector2(0.5, 0.5)) * cell_m
+			if mid.distance_to(Vector2(here.x, here.z)) > drop_m:
+				gone.append(c)
+		for c in gone:
+			for row in _cells[c]:
+				(_sets[row.key] as ImpostorLod).remove(int(row.handle))
+				count -= 1
+				_sorted_at.erase(row.key)
+			_cells.erase(c)
+	var t0 := Time.get_ticks_usec()
+	while not _queue.is_empty() and Time.get_ticks_usec() - t0 < STREAM_BUDGET_US:
+		var c: Vector2i = _queue.pop_front()
+		if _cells.has(c):
+			continue
+		var rect := Rect2i(c * STREAM_CELL, Vector2i(STREAM_CELL, STREAM_CELL))
+		var rows := _place(Trees.scatter(rect, world_seed, 4000, _chance_at, _variant_at))
+		_cells[c] = rows
+		count += rows.size()
+		for row in rows:
+			_sorted_at.erase(row.key)
+
+
+func _place(spots: Array) -> Array:
+	var rows := []
 	for spot in spots:
 		var variant: int = spot.variant
 		var key := "tree_%d" % variant
@@ -136,7 +219,11 @@ func _place(spots: Array) -> void:
 			_sets[key] = s
 		var cell: Vector3i = spot.cell
 		var h := (_sets[key] as ImpostorLod).add(Trees.placement(cell, variant))
-		_placed.append({"key": key, "handle": h, "x": cell.x, "z": cell.z})
+		var row := {"key": key, "handle": h, "x": cell.x, "z": cell.z}
+		rows.append(row)
+		if not streaming:
+			_placed.append(row)
+	return rows
 
 
 func _process(delta: float) -> void:
@@ -145,6 +232,8 @@ func _process(delta: float) -> void:
 		if _rebuild_in < 0.0:
 			_rebuild()
 	_frame += 1
+	if streaming and camera != null:
+		_stream_step()
 	if camera == null or _sets.is_empty() or _frame % UPDATE_EVERY >= _sets.size():
 		return
 	# One set on each of the first frames of every UPDATE_EVERY.

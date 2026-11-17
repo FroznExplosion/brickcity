@@ -1,0 +1,2 @@
+{"name": "Amplified Mountains", "seed": 20261116,
+ "gen": {"height_scale": 1.6, "peak_height_m": 110.0, "mountain_threshold": 0.05, "cliff_amount": 0.7, "overhang_amount": 0.9, "overhang_size_m": 7.0, "snow_line_m": 70.0}}

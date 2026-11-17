@@ -405,38 +405,15 @@ const RAM_SHIP_SHARE := 0.6
 ## The pawn, its controller, camera, gun and arms, standing at `feet`, looking
 ## along `facing` (tangent). Built once; placed again after a flight.
 func _spawn_player(feet: Vector3, facing: Vector3) -> void:
-	cam = PlayerCamera.new()
-	cam.name = "Camera"
-	cam.capture_mouse = false
-	cam.far = SEE_FAR
+	# The rig the mine world shares (FpsRig); the planet's own groups after.
+	var parts := FpsRig.make_player(self, feet, SEE_FAR, _gate)
+	cam = parts.cam
+	pawn = parts.pawn
+	player = parts.player
+	gun = parts.gun
+	view = parts.view
 	cam.add_to_group(PlanetSystem.RIG)
-	add_child(cam)
-	Flashlight.mount(cam)
-	pawn = Pawn.spawn(self, feet, 0)
 	pawn.body.add_to_group(PlanetSystem.RIG)
-	pawn.moves = PawnMoves.new(pawn)
-	player = PlayerController.new()
-	player.name = "Player"
-	player.drive_uncaptured = _gate
-	add_child(player)
-	player.possess(pawn, cam)
-	gun = GunController.new()
-	gun.name = "Gun"
-	gun.rng = RandomNumberGenerator.new()
-	gun.rng.seed = 0xC0FFEE
-	gun.aim = cam
-	add_child(gun)
-	view = PlayerView.new()
-	view.name = "PlayerView"
-	add_child(view)
-	view.setup(cam, pawn, gun)
-	player.view = view
-	var gi := GunInstance.from_result(GunGenerator.generate(GunPlaceholderParts.build_library(), 7,
-			WeaponClass.builtin(&"rifle"), 1))
-	gun.equip(gi)
-	view.hold(gi)
-	pawn.gun = gun
-	gun.exclude = [pawn.body.get_rid()] as Array[RID]
 	gun.on_structure_hit = _structure_hit
 	gun.add_to_group(PlanetSystem.RIG)
 	_face(facing)
@@ -498,10 +475,7 @@ func keep_over_ground(p: Pawn, b: PlanetBody) -> void:
 
 ## Turn the camera, in the pawn's frame, to look along `facing`.
 func _face(facing: Vector3) -> void:
-	var fr := pawn.body.global_transform.basis.orthonormalized()
-	cam.set_frame(fr)
-	var local := fr.inverse() * facing
-	cam.global_transform.basis = fr * Basis.from_euler(Vector3(0.0, atan2(-local.x, -local.z), 0.0))
+	FpsRig.face(cam, pawn, facing)
 
 
 ## On foot (the pawn and its camera) or flying (the walker). The voxel viewer
@@ -510,38 +484,14 @@ func _set_on_foot(on: bool, stand_at := Vector3.INF) -> void:
 	if not on and pawn != null and pawn.ghost != null:
 		_ghost_off()
 	on_foot = on
-	# The pawn left behind while flying is not there to be shot.
-	if kit != null:
-		kit.present(on)
-	var viewer := walker.viewer
+	var feet := Vector3.INF
 	if on:
-		var feet := stand_at if stand_at != Vector3.INF else _ground_hit(walker.global_position)
+		feet = stand_at if stand_at != Vector3.INF else _ground_hit(walker.global_position)
 		if feet == Vector3.INF:
 			feet = walker.global_position
-		var fwd := -walker.camera.global_transform.basis.z
-		pawn.body.process_mode = Node.PROCESS_MODE_INHERIT
-		pawn.place(feet + Gravity.up_at(feet) * 0.05)
-		if not player.is_possessing():
-			player.possess(pawn, cam)
-		cam.current = true
-		_face(Gravity.flat(fwd, Gravity.up_at(feet)).normalized())
-		walker.process_mode = Node.PROCESS_MODE_DISABLED
-		walker.collision_layer = 0
-		walker.collision_mask = 0
-		viewer.reparent(pawn.body, false)
-		view.rig.visible = true
-	else:
-		var at := pawn.feet() + pawn.up * 0.3
-		walker.process_mode = Node.PROCESS_MODE_INHERIT
-		walker.collision_layer = 1
-		walker.collision_mask = 1 | Layers.STRUCTURE
-		walker.place(at, -cam.global_transform.basis.z)
-		walker.flying = true
-		walker.frozen = false
-		walker.camera.current = true
-		player.release()
-		viewer.reparent(walker, false)
-		view.rig.visible = false
+	# The switch itself is shared with the mine world (FpsRig).
+	FpsRig.switch_mode(on, feet, walker, pawn, player, cam, view, kit)
+	walker.viewer.reparent(pawn.body if on else walker, false)
 
 
 ## The map, opened (11.12 step 5).
