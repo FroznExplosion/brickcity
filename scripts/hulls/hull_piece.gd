@@ -54,15 +54,8 @@ static func make(boat, c: int, arrays: Array, at: Transform3D, local_com: Vector
 	# own grid, no doors).
 	var a := HullAir.new()
 	a.dims = boat.bricks.get_chunk_dims(c)
-	var solid: PackedByteArray = boat.bricks.get_solid_cells(c)
-	var n := a.dims.x * a.dims.y * a.dims.z
-	a.state.resize(n)
-	a.comp.resize(n)
-	a.comp.fill(-1)
-	for i in n:
-		a.state[i] = HullAir.SOLID if solid[i] != 0 else HullAir.EMPTY
-	a._fill_outside()
-	a._label_inside()
+	a.state = HullFlow.air_regrid(PackedByteArray(), boat.bricks.get_solid_cells(c), -1, -1)
+	a._fill()
 	p.floats = HullFloat.measure(a.dims, a.state, Transform3D(Basis(), -local_com))
 	# It leaves moving as that part of the boat moved.
 	var b_vel: Vector3 = boat.vel

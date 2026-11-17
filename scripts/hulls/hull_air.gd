@@ -14,7 +14,8 @@ extends RefCounted
 ##   air.blocks_added(world, chunk, ids)     # after a repair; returns what it sealed
 ##   air.set_door(i, open)
 ##
-## Built once from the laid recipe (get_solid_cells: one C++ call), then kept up
+## Built once from the laid recipe (get_solid_cells, then the fills in C++:
+## HullFlow.air_regrid, air_fill -- 250 ms in script for a ship, 11 now), then kept up
 ## to date from the hits' own cells -- never a scan of the whole ship.
 ##
 ## A compartment is a room: doors are walls to the fill, so each room is its own
@@ -86,12 +87,9 @@ static func bake(world: BrickWorld, chunk: int, recipe: BuildRecipe) -> HullAir:
 	a._origin = recipe.origin()
 	a.dims = world.get_chunk_dims(chunk)
 	var n := a.dims.x * a.dims.y * a.dims.z
-	var solid := world.get_solid_cells(chunk)
-	a.state.resize(n)
+	a.state = HullFlow.air_regrid(PackedByteArray(), world.get_solid_cells(chunk), -1, -1)
 	a.comp.resize(n)
 	a.comp.fill(-1)
-	for i in n:
-		a.state[i] = SOLID if solid[i] != 0 else EMPTY
 	# Doors are walls to the fill.
 	for d: Dictionary in BuildDoors.of(recipe):
 		var lo: Vector3i = d.lo - a._origin
@@ -109,8 +107,7 @@ static func bake(world: BrickWorld, chunk: int, recipe: BuildRecipe) -> HullAir:
 						a.door_of[i] = a.doors.size()
 						cells.append(i)
 		a.doors.append({"lo": lo, "size": size, "cells": cells, "open": false, "outside": false})
-	a._fill_outside()
-	a._label_inside()
+	a._fill()
 	for di in a.doors.size():
 		a.doors[di].outside = a._door_touches_outside(di)
 	# Block ids are the recipe's frame-0 entries in order (BuildRecipe.build
@@ -376,14 +373,14 @@ func _added(world: BrickWorld, chunk: int, cand: PackedInt32Array) -> Array:
 ## outside now reaches round them -- the hold of the part that left, the open end
 ## of a stretch cut across -- is outside. Each room keeps the pressure it had
 ## (a new one, 1). Call it INSTEAD of blocks_removed for the bricks that left.
-## A whole fill in script: 7 ms for a boat, 130-300 ms for a ship.
+## Both fills in C++ (HullFlow.air_fill): a ship's 11 ms, a boat's under 1.
 func rebuild(world: BrickWorld, chunk: int) -> void:
-	var n := state.size()
-	var solid := world.get_solid_cells(chunk)
+	const HOLE := 250
+	var old_state := state
+	var old_comp := comp
 	var old_p := PackedFloat32Array()
-	old_p.resize(n)
-	for i in n:
-		old_p[i] = pressure(comp[i]) if state[i] == INSIDE and comp[i] >= 0 else -1.0
+	for ci in _parent.size():
+		old_p.append(pressure(ci))
 	var holes := {}
 	for ci in _parent.size():
 		if _parent[ci] == ci:
@@ -394,26 +391,19 @@ func rebuild(world: BrickWorld, chunk: int) -> void:
 	_breach.clear()
 	_air.clear()
 	_rate.clear()
+	# Bricks, then doors, then holes: as walls to the fill (a brick over all).
+	for i: int in holes:
+		state[i] = HOLE
+	for i: int in door_of:
+		state[i] = DOOR
+	state = HullFlow.air_regrid(state, world.get_solid_cells(chunk), DOOR, HOLE)
 	comp.fill(-1)
-	const HOLE := 250
-	for i in n:
-		if solid[i] != 0:
-			state[i] = SOLID
-		elif door_of.has(i):
-			state[i] = DOOR
-		elif holes.has(i):
-			state[i] = HOLE
-		else:
-			state[i] = EMPTY
-	_fill_outside()
-	_label_inside()
-	# Each room's air: what its cells had.
-	var seen := {}
-	for i in n:
-		var ci := comp[i]
-		if ci >= 0 and not seen.has(ci):
-			seen[ci] = true
-			_air[ci] = (old_p[i] if old_p[i] >= 0.0 else 1.0) * _cells[ci]
+	var firsts := _fill()
+	# Each room's air: what its first cell had.
+	for ci in firsts.size():
+		var f := firsts[ci]
+		var was := old_comp[f] if old_state[f] == INSIDE else -1
+		_air[ci] = (old_p[was] if was >= 0 else 1.0) * _cells[ci]
 	# Its holes again: outside cells, each a hole of the rooms it is beside.
 	for i: int in holes:
 		if state[i] != HOLE:
@@ -540,45 +530,19 @@ func pull_at(cell: Vector3, cell_m: Vector3) -> Vector3:
 
 # --- the fills ---------------------------------------------------------------
 
-func _fill_outside() -> void:
-	var q := PackedInt32Array()
-	for z in dims.z:
-		for y in dims.y:
-			for x in dims.x:
-				if x == 0 or y == 0 or z == 0 or x == dims.x - 1 or y == dims.y - 1 or z == dims.z - 1:
-					var i := x + dims.x * (y + dims.y * z)
-					if state[i] == EMPTY:
-						state[i] = OUTSIDE
-						q.append(i)
-	var k := 0
-	while k < q.size():
-		var i := q[k]
-		k += 1
-		for j in _neighbours(i):
-			if state[j] == EMPTY:
-				state[j] = OUTSIDE
-				q.append(j)
-
-
-func _label_inside() -> void:
-	for start in state.size():
-		if state[start] != EMPTY:
-			continue
+## Both fills (in C++: HullFlow.air_fill): what the chunk's edge reaches through
+## EMPTY cells is OUTSIDE, every other EMPTY cell INSIDE, a compartment a room.
+## From no compartments. Returns each new compartment's first cell.
+func _fill() -> PackedInt32Array:
+	assert(_parent.is_empty())
+	var r := HullFlow.air_fill(state, dims, OUTSIDE, INSIDE)
+	state = r[0]
+	comp = r[1]
+	for size: int in (r[2] as PackedInt32Array):
 		var ci := _new_comp()
-		var q := PackedInt32Array([start])
-		state[start] = INSIDE
-		comp[start] = ci
-		var k := 0
-		while k < q.size():
-			var i := q[k]
-			k += 1
-			for j in _neighbours(i):
-				if state[j] == EMPTY:
-					state[j] = INSIDE
-					comp[j] = ci
-					q.append(j)
-		_cells[ci] = q.size()
-		_air[ci] = q.size()
+		_cells[ci] = size
+		_air[ci] = size
+	return r[3]
 
 
 func _door_touches_outside(di: int) -> bool:

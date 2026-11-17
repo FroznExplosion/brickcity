@@ -682,7 +682,7 @@ func _after_kill(killed: PackedInt32Array) -> void:
 	bricks_killed += killed.size()
 	if air != null:
 		if _parting:
-			_parted()
+			_parted(killed)
 		else:
 			air.blocks_removed(bricks, chunk, killed)
 	if hull_water != null:
@@ -698,16 +698,27 @@ func _after_kill(killed: PackedInt32Array) -> void:
 	_solve_due = true
 
 
-## Whether nothing is its ground (a boat afloat): then what is not joined to its
-## largest part leaves, whatever of it touches its keel's level.
+## Whether nothing is its ground: then what is not joined to its largest part
+## leaves, whatever of it touches its keel's level (Docs/Hulls.md 7.4). A
+## generated station in orbit, a ship in flight (SpaceShip: not landed), a boat
+## afloat. Else its keel's level is its foundation (find_detached_groups).
 func floats_free() -> bool:
-	return false
+	return recipe != null and is_station()
 
 
-## Part of it has just left (`floats_free`): its air and what floats it are
-## worked out again from the bricks it has left.
-func _parted() -> void:
-	pass
+## Floating free, a part not joined to its largest leaves only past this many
+## bricks: a ship's furniture and fittings stand on its tiled floors and hang
+## from its ceilings unclicked (a generated ship is ~570 parts, the largest
+## 16,000 bricks, the next 27), held by the keel's rule as before. A boat has
+## none: every part leaves (Boat).
+func part_min() -> int:
+	return 200
+
+
+## Part of it has just left (`floats_free`), bricks `killed`: its air follows
+## them as a hit's -- the rooms it opened vent (a boat's is worked out again).
+func _parted(killed: PackedInt32Array) -> void:
+	air.blocks_removed(bricks, chunk, killed)
 
 
 var _parting := false
@@ -723,11 +734,29 @@ func _solve() -> void:
 	# A generated station: by its studs alone (in orbit nothing weighs on it --
 	# Docs/Space.md 3.2), so a part cut off from the keel's comes away whole.
 	var groups: Array
-	if floats_free():
+	if floats_free() and part_min() <= 0:
 		# Afloat nothing is its ground: its largest joined part is the hull, and
 		# every other part leaves (Docs/Hulls.md 7.4).
 		groups = bricks.get_components(chunk)
 		groups.pop_front()
+	elif floats_free():
+		# In flight, the same for a part past part_min (a ship cut across: both
+		# halves touch its keel's level); a smaller one by the keel's rule. Its
+		# joints first: sections cut off there leave whole, as one piece.
+		if not joints.is_empty():
+			_joints_step()
+		groups = bricks.find_detached_groups(chunk)
+		var parts: Array = bricks.get_components(chunk)
+		for k in range(1, parts.size()):
+			var ids: PackedInt32Array = parts[k]
+			if ids.size() >= part_min():
+				var dup := false
+				for g in groups:
+					if (g as PackedInt32Array).has(ids[0]):
+						dup = true
+						break
+				if not dup:
+					groups.append(ids)
 	elif recipe != null:
 		groups = bricks.find_detached_groups(chunk)
 	else:
@@ -1122,15 +1151,26 @@ func _joints_step() -> void:
 			if not adj.has(pair[0]):
 				adj[pair[0]] = []
 			adj[pair[0]].append(pair[1])
-	var held := {0: true}
-	var todo := [0]
+	# The root section is the bridge's; gone (the bridge left with a smaller part:
+	# floats_free), the section with the most bricks left holds the rest.
+	var of := BuildSections.of_build(recipe)
+	var root := 0
+	var live := {}
+	for i in of.size():
+		if not gone.has(i):
+			live[of[i]] = int(live.get(of[i], 0)) + 1
+	if not live.has(0):
+		for s in live:
+			if root == 0 or not live.has(root) or int(live[s]) > int(live[root]):
+				root = s
+	var held := {root: true}
+	var todo := [root]
 	while not todo.is_empty():
 		var s: int = todo.pop_back()
 		for t in adj.get(s, []):
 			if not held.has(t):
 				held[t] = true
 				todo.append(t)
-	var of := BuildSections.of_build(recipe)
 	var off := PackedInt32Array()
 	var sections := {}
 	for i in of.size():

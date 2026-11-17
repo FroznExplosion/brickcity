@@ -20,6 +20,10 @@ extends SceneTree
 ##   laid      laid frame by frame, every brick, nothing loose (decks anchored)
 ##   bulkhead  the bulkhead behind the bridge's section shot to under a third:
 ##             everything aft of it drifts off as one piece, the bridge's stays
+##   cut       in flight nothing is its ground (Docs/Hulls.md 7.4): what is left of
+##             it cut clean across, mid-section, 12 studs from its aft end -- its
+##             joints whole, both parts on its keel's level -- the aft part leaves,
+##             the bridge's stays
 
 var _pass := 0
 var _fail := 0
@@ -244,5 +248,41 @@ func _after_laid() -> void:
 			and ship.bricks.get_alive_block_count(ship.chunk) >= root_n * 0.6,
 			"%d of %d joint bricks killed, drifted %s of %d beyond it, %d left (bridge's section %d)" % [killed.size(),
 				int(joint.get("n", 0)), str(_drifts), rest, ship.bricks.get_alive_block_count(ship.chunk), root_n])
+
+	# Cut clean across: every brick with a cell in rows at..at+2 of what is left.
+	var gone := {}
+	for b in ship.bricks.get_dead_blocks(ship.chunk):
+		gone[b] = true
+	var x0 := r.origin().x
+	var lo := 1 << 30
+	for b in ship.bricks.get_block_count(ship.chunk):
+		if not gone.has(b):
+			lo = mini(lo, r.cell_of(ship.air._block_recipe[b]).x - x0)
+	var at := lo + 12
+	var cut := PackedInt32Array()
+	var aft := 0
+	for b in ship.bricks.get_block_count(ship.chunk):
+		if gone.has(b):
+			continue
+		var ri := ship.air._block_recipe[b]
+		var cx := r.cell_of(ri).x - x0
+		var sx := BuildRecipe.part_size(r.part_of(ri)).x
+		if cx + sx > at and cx <= at + 2:
+			cut.append(b)
+		elif cx + sx <= at:
+			aft += 1
+	_drifts.clear()
+	ship.bricks.kill_blocks(ship.chunk, cut)
+	ship._after_kill(cut)
+	ship._solve()
+	var left := 0
+	for n: int in _drifts:
+		left += n
+	bridge_floor = ship.bricks.block_at(ship.chunk, ship.seat_cell - Vector3i(0, 1, 0))
+	_ok("cut: in flight, cut clean across mid-section, the aft part leaves and the bridge's stays",
+			ship.floats_free() and aft > 200 and left >= aft * 0.8 and bridge_floor >= 0
+			and not gone.has(bridge_floor),
+			"%d bricks cut at row %d, %d aft of it, drifted %s, %d left" % [cut.size(), at, aft, str(_drifts),
+				ship.bricks.get_alive_block_count(ship.chunk)])
 	ship.deactivate()
 	ship.queue_free()
