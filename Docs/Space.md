@@ -394,6 +394,21 @@ before. `storey_stair_probe`: every storey laid alone lost 7 bricks (5 stair) be
 level it still stands on storey 24 (not laid, intact), and with storey 24 destroyed in its record it
 hangs on nothing.
 
+**Open (2026-11-16): a wide tower's run gives way under the load put on it.** `--roomfly --wide
+--big`: the 80x60, 204-course tower, never hit, loses ~200 floor and wall bricks from the top storey
+of each run the camera lays -- with or without 5.3c's holds (`-- --no-storey-holds`), so older than
+them. Reproduced headless: `storey_stair_probe -- --fx=80 --fz=60 --courses=204` (with the city's
+stud strength, `BrickStrength.tension()`, and the city's solve, `solve_structure` 48 rounds): runs
+low in the tower lose ~440 bricks with 70-85 joint failures; the same tower laid WHOLE, same strength,
+fails nothing. The first round fails an 8x8 floor plate near the stairwell and the six under-tiles
+hung from it, and it cascades. Cause: `set_storey_bounds` puts the template's mass over a run on the
+run's top bricks in equal shares (`set_load`, mass / count) -- partitions included -- where in the
+whole building the slab over them spreads it by what carries it. Loading only fully supported top
+bricks cut it to ~110; only outer walls and columns made it worse (more each). Options: no load over
+a run of an undamaged building; per-brick shares taken from a whole-building stress solve of the
+template (engine: export the load each block carries); or a load factor found per run that its
+intact bricks carry.
+
 ### 5.4 What it should buy (estimates)
 
 | | today | storey units |
