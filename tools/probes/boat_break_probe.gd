@@ -15,6 +15,8 @@ extends SceneTree
 ##   piece     the part that left has a whole stretch of hold in it: it floats
 ##   sinks     a second cut takes an open end off: that piece shuts no air in, and
 ##             goes down and is gone
+##   cap       CAP + 3 more pieces afloat: the oldest (all as near, headless: no
+##             camera) fade until CAP are left
 ##
 ## The cuts kill a slab of bricks outright (BrickWorld.kill_blocks, then the hull's
 ## own _after_kill, as a hit's): what is tested is what follows a cut, not a blast.
@@ -54,6 +56,9 @@ func _finish() -> void:
 		for p in _boat.pieces:
 			if is_instance_valid(p):
 				p.queue_free()
+	for p in _extra:
+		if is_instance_valid(p):
+			p.queue_free()
 		_boat.deactivate()
 		_boat.queue_free()
 	print("\n%d passed, %d failed" % [_pass, _fail])
@@ -198,9 +203,38 @@ func _physics_process(delta: float) -> bool:
 					_open_bricks > 20 and not _open_buoyant and not is_instance_valid(_open)
 					and _open_low > HullPiece.SUNK * 0.9,
 					"%d bricks, %.1f m under at the last, gone after %.0f s" % [_open_bricks, _open_low, _t])
+			if not is_instance_valid(_bow):
+				_finish()
+				return true
+			# More pieces than are kept: copies of the bow, beside it.
+			for k in HullPiece.CAP + 3:
+				var q := HullPiece.new()
+				q.floats = _bow.floats
+				q.sea = _bow.sea
+				q._look = MeshInstance3D.new()
+				q.add_child(q._look)
+				q.transform = _bow.global_transform.translated(Vector3(0, 0, 12.0 * (k + 1)))
+				_extra.append(q)
+				root.add_child(q)
+			_t = 0.0
+			_stage = 5
+		5:
+			_t += delta
+			if _t < 0.5:
+				return false
+			var live := 0
+			for q in HullPiece._all:
+				if is_instance_valid(q) and q._dying < 0.0:
+					live += 1
+			var first_gone := _bow._dying >= 0.0 and (_extra[0] as HullPiece)._dying >= 0.0 \
+					and (_extra[-1] as HullPiece)._dying < 0.0
+			_ok("cap: past CAP pieces the oldest fade, CAP are kept",
+					live == HullPiece.CAP and first_gone,
+					"%d kept of %d (CAP %d)" % [live, HullPiece._all.size(), HullPiece.CAP])
 			_finish()
 			return true
 	return false
 
 
 var _cut_at := 0
+var _extra: Array = []
