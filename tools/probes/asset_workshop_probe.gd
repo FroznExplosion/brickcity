@@ -1180,7 +1180,10 @@ func _round9() -> void:
 ## (Docs/AssetWorkshop.md, "Colour from model to bricks").
 func _colours() -> void:
 	print("[probe] colours: model to clay to bricks and back")
+	# A Connection point ask left open does not outlive the asset (it did, in the pictures).
+	_ws._point_panel.visible = true
 	_ws._reset_space()
+	_ok("a new space closes the Connection point ask", not _ws._point_panel.visible)
 	_ws.rail_pick("sculpt")
 	_ws.convert_mirror = false
 	# In PLA (the probe's earlier rounds leave the hotbar on another material).
@@ -1257,6 +1260,18 @@ func _colours() -> void:
 	_ok("a colour changed by hand: Make bricks lays it (all blue)", hand.size() == 1 and hand.has(blue), str(hand))
 	# Z, not Bricks to clay: that brings the blue bricks back as blue clay.
 	_ws._undo()
+	# Kept with the asset: saved, a new asset clears it, opened back it is there again.
+	_ws._store_asset_meta()
+	_ws.bench._builds_dir = "user://dev/_probe_guns/"
+	var cpath: String = _ws._save_as("Probe Colours")
+	_ws.bench._new_build()
+	var cleared := ct.remap.is_empty()
+	var copened: bool = _ws.bench._open_path(cpath)
+	_ok("the table's hand change: saved with the asset, gone on New, back when opened",
+			cleared and copened and ct.remap.size() == 1 and ct.map(tred) == tblue,
+			"cleared %s, opened %s, remap %s" % [cleared, copened, ct.remap])
+	DirAccess.remove_absolute(cpath)
+	_ws.bench._builds_dir = BuildRecipe.player_dir()
 	ct.reset()
 	_ws.sculpt_convert()
 	_ok("Reset colours (Make bricks undone): red and blue again", _colour_counts() == counts, str(_colour_counts()))
