@@ -2123,15 +2123,49 @@ var _groups_leaving := false   ## _disable is being told of bricks about to leav
 
 ## Coming apart: toppling, held by the director, a section broken off within
 ## COLLAPSE_QUIET_MS, or pieces of it still moving. _mid_collapse without its
-## "hit since the last solve", which every bullet is: what hides a building's
-## painted windows (CityDrawing.tend_brick_panes) until they are made again
-## over what is left.
+## "hit since the last solve", which every bullet is: while it is, a building's
+## painted windows made before its bricks last changed are hidden
+## (CityDrawing._hide_falling_panes) until they are made again over what is left.
 func _coming_apart(id: int) -> bool:
 	if _toppling.has(id) or director.holding(id):
 		return true
 	if Time.get_ticks_msec() - int(_broke_ms.get(id, -1000000)) < COLLAPSE_QUIET_MS:
 		return true
 	return islands.moving_of(id) > 0
+
+
+## How long a building's own bricks must have stood unchanged before its
+## painted windows are made again over them.
+const PANES_QUIET_MS := 500
+
+
+## Not yet known what of it stands, for its painted windows
+## (CityDrawing.tend_brick_panes): toppling or held by the director, hit and not
+## yet solved, its bands still building, or its bricks changed within
+## PANES_QUIET_MS. Unlike _interior_unsure it does not wait for the pieces that
+## left it to stop: they carry their own windows (PiecePanes), and nothing they
+## do changes what stands here. Waiting for them left the standing part of a
+## building that shed a section with no windows until the last of its rubble
+## lay still (user, 2026-11-16).
+##
+## Nor for its span check (_span_owed), which is asked only once those pieces
+## are still (_pay_span_owed) -- the same wait by another name. A span cut
+## after the windows are up changes its bricks like any other: those windows
+## are hidden while it comes apart and made again (_hide_falling_panes).
+func _panes_unsure(id: int) -> bool:
+	if not hold_interiors_mid_collapse:
+		return false
+	var b := registry.get_building(id)
+	if b != null and not b.is_damaged() and not _toppling.has(id) \
+			and not director.holding(id):
+		return false
+	if _toppling.has(id) or director.holding(id):
+		return true
+	if authority.may_decide() and _dirty.has(id):
+		return true
+	if drawing.bands_building(id):
+		return true
+	return Time.get_ticks_msec() - int(_touched_ms.get(id, -1000000)) < PANES_QUIET_MS
 
 
 func _mid_collapse(id: int) -> bool:
