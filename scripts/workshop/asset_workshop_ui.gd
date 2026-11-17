@@ -882,7 +882,9 @@ func _fill_actions() -> void:
 						ws.colour_table_refresh()
 					_fill_actions())
 		if colours_shown:
+			# A row of its own in the flow, under its button, not squeezed beside it.
 			var tb := VBoxContainer.new()
+			tb.custom_minimum_size.x = maxf(_actions.size.x, 300.0)
 			_actions.add_child(tb)
 			if ws.convert_colours.counts.is_empty():
 				var l := Label.new()
