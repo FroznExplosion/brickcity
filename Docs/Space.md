@@ -394,20 +394,28 @@ before. `storey_stair_probe`: every storey laid alone lost 7 bricks (5 stair) be
 level it still stands on storey 24 (not laid, intact), and with storey 24 destroyed in its record it
 hangs on nothing.
 
-**Open (2026-11-16): a wide tower's run gives way under the load put on it.** `--roomfly --wide
---big`: the 80x60, 204-course tower, never hit, loses ~200 floor and wall bricks from the top storey
-of each run the camera lays -- with or without 5.3c's holds (`-- --no-storey-holds`), so older than
-them. Reproduced headless: `storey_stair_probe -- --fx=80 --fz=60 --courses=204` (with the city's
-stud strength, `BrickStrength.tension()`, and the city's solve, `solve_structure` 48 rounds): runs
-low in the tower lose ~440 bricks with 70-85 joint failures; the same tower laid WHOLE, same strength,
-fails nothing. The first round fails an 8x8 floor plate near the stairwell and the six under-tiles
-hung from it, and it cascades. Cause: `set_storey_bounds` puts the template's mass over a run on the
-run's top bricks in equal shares (`set_load`, mass / count) -- partitions included -- where in the
-whole building the slab over them spreads it by what carries it. Loading only fully supported top
-bricks cut it to ~110; only outer walls and columns made it worse (more each). Options: no load over
-a run of an undamaged building; per-brick shares taken from a whole-building stress solve of the
-template (engine: export the load each block carries); or a load factor found per run that its
-intact bricks carry.
+**Fixed (2026-11-17): a wide tower's run gave way under the load put on it.** `--roomfly --wide
+--big`: the 80x60, 204-course tower, never hit, lost ~200 floor and wall bricks from the top storey
+of each run the camera laid -- with or without 5.3c's holds, so older than them. Reproduced headless:
+`storey_stair_probe -- --fx=80 --fz=60 --courses=204` (the city's stud strength,
+`BrickStrength.tension()`, and the city's solve, `solve_structure` 48 rounds): runs low in the tower
+lost ~440 bricks with 70-85 joint failures; the same tower laid WHOLE, same strength, failed nothing.
+Cause: `set_storey_bounds` put the template's mass over a run on the run's top bricks in equal shares
+(`set_load`, mass / count) -- partitions included -- where in the whole building the slab over them
+spreads it by what carries it. (Loading only fully supported top bricks cut it to ~110; only outer
+walls and columns made it worse.)
+
+Fix: per-brick shares from the whole building. When a tower's template is made (`_lay_tower`), one
+stress solve of the tower laid whole, strong enough that nothing fails, reads what each brick topping
+each storey line carries of what is over it (`BrickWorld.get_carried_loads`, kg, own mass taken off);
+the template keeps `{storey line: {block id: kg}}` (`_top_shares_of`). A run's above-load is then
+split by those shares over the top bricks still there (`set_load_each`); a brick shot out passes its
+share to the rest; equal shares only where there is no record. A building that topples drops its
+above-loads (`clear_above_loads`): the falling piece carries nothing from storeys no longer over it
+(without that, `collapse_probe`'s rider was thrown 1.4 m instead of ~10). Wide probe: 0 of 60 runs lose
+a brick; `--roomfly --wide --big`: the tower loses 0; the 10 tower templates take 231 ms (199 before).
+The template also records where the tower's own blocks end, so `legacy_ids` no longer guesses it from
+the first fixture.
 
 ### 5.4 What it should buy (estimates)
 

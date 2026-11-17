@@ -3838,6 +3838,7 @@ func _topple(id: int) -> void:
 	# Recorded first: whatever happens to these bricks next happens to a piece,
 	# and the piece's id is this command's (DamageLog.piece_id).
 	var piece := islands.record_topple(id)
+	registry.clear_above_loads(b)
 	_free_rest(id)
 	# Its painted windows ride it down (PiecePanes): taken off its brick node
 	# before anything below frees that node.

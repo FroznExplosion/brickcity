@@ -419,10 +419,14 @@ func legacy_ids(id: int, chunk: int, ids: PackedInt32Array) -> PackedInt32Array:
 	var cornice := 0
 	for x in range(0, int(b.recipe.footprint_x) - 1, 2):
 		cornice += 1
-	var first := world.get_block_count(chunk)
-	for f in b.fixtures:
-		for bid in f.blocks:
-			first = mini(first, int(bid))
+	# Where the tower's own blocks end, as its template recorded it
+	# (_lay_tower); else the first fixture's.
+	var t: Array = _templates.get(_template_key(b), [])
+	var first := int(t[2]) if t.size() >= 3 else world.get_block_count(chunk)
+	if t.size() < 3:
+		for f in b.fixtures:
+			for bid in f.blocks:
+				first = mini(first, int(bid))
 	var out := PackedInt32Array()
 	for bid in ids:
 		if bid < first:
@@ -741,6 +745,9 @@ func _lay_tower(b: Building, chunk: int) -> bool:
 	# Fixture.footprint.
 	TowerRecipe.build(world, chunk, palette,
 			b.recipe.footprint_x, b.recipe.footprint_z, b.recipe.courses, _keepouts_of(b))
+	# Where the tower's own blocks end: the fixtures and the lights come after
+	# (legacy_ids: a save from before the cornice went names them by older ids).
+	var tower_end := world.get_block_count(chunk)
 	# Straight after the building's own blocks, as materialise always laid
 	# them: a block id has to mean the same brick every time (_build_fixtures).
 	var offset := _rebase_of(b)
@@ -754,8 +761,62 @@ func _lay_tower(b: Building, chunk: int) -> bool:
 	# storey not laid (set_storey_bounds, BrickWorld.set_hang_levels).
 	if lights:
 		CeilingLights.hang(world, chunk, palette)
-	_templates[key] = [world.save_template(chunk), lists]
+	var template := world.save_template(chunk)
+	_templates[key] = [template, lists, tower_end, _top_shares_of(b, chunk)]
 	return true
+
+
+## What each brick at the top of each storey carries of the storeys over it,
+## in the whole building: {storey line (grid y): {block id: kg}}. One stress
+## solve of the tower laid whole, strong enough that nothing fails (so the
+## flow is the building's own, nothing let go), read at every storey line.
+##
+## A run of storeys laid alone is given the weight of the storeys over it on
+## its top bricks (set_storey_bounds). It was given in equal shares, and a wide
+## tower's run gave way under it: a partition took as much as an outer wall,
+## the floor panel under it bent, and ~440 bricks of an 80x60 tower that was
+## never hit came off (Docs/Space.md 5.3c). These shares are what the whole
+## building puts on each.
+func _top_shares_of(b: Building, chunk: int) -> Dictionary:
+	var out := {}
+	var lines := storey_lines(b)
+	if lines.size() < 3:
+		return out
+	world.set_tension_per_stud(chunk, 1.0e6)
+	world.solve_stress(chunk)
+	for li in range(1, lines.size() - 1):
+		var y: int = lines[li]
+		var ids := world.get_blocks_topping(chunk, y)
+		if ids.is_empty():
+			continue
+		var loads := world.get_carried_loads(chunk, ids, true)
+		var d := {}
+		for i in ids.size():
+			if loads[i] > 0.0:
+				d[ids[i]] = loads[i]
+		out[y] = d
+	return out
+
+
+## The weight of the storeys over its runs taken off a building's chunk: it
+## toppled, and its chunk is the piece now. A piece carries what is on it, not
+## storeys that were not laid; kept, its solve broke what that weight hung on
+## as it went over (2026-11-17: a soldier's floor broke off a toppling tower).
+func clear_above_loads(b: Building) -> void:
+	if b == null or not b.is_materialised():
+		return
+	for r in b.load_runs:
+		world.clear_load(b.chunk, ABOVE_OWNER - r)
+	b.load_runs = 0
+
+
+## The share each top brick at storey line `y` carries in the whole building
+## (_top_shares_of), or {} if it was never worked out.
+func _top_shares_at(b: Building, y: int) -> Dictionary:
+	var t: Array = _templates.get(_template_key(b), [])
+	if t.size() < 4:
+		return {}
+	return (t[3] as Dictionary).get(y, {})
 
 
 ## Build the template of every tower shape in the city now, while it is being
@@ -1283,8 +1344,22 @@ func set_storey_bounds(b: Building) -> void:
 				if not ids.is_empty() else 0.0
 		if ids.is_empty() or mass <= 0.0:
 			world.clear_load(b.chunk, ABOVE_OWNER - r)
-		else:
+			continue
+		# Each top brick its share as the whole building gives it
+		# (_top_shares_of), over the ones still there: a column shot out passes
+		# its share to the rest. Equal shares only where there is no record.
+		var shares := _top_shares_at(b, y_top)
+		var total := 0.0
+		for id in ids:
+			total += float(shares.get(id, 0.0))
+		if total <= 0.0:
 			world.set_load(b.chunk, ABOVE_OWNER - r, ids, mass / ids.size())
+			continue
+		var masses := PackedFloat32Array()
+		masses.resize(ids.size())
+		for i in ids.size():
+			masses[i] = mass * float(shares.get(ids[i], 0.0)) / total
+		world.set_load_each(b.chunk, ABOVE_OWNER - r, ids, masses)
 	for r in range(runs.size(), b.load_runs):
 		world.clear_load(b.chunk, ABOVE_OWNER - r)
 	b.load_runs = runs.size()
