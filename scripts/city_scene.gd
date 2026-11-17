@@ -2483,7 +2483,8 @@ func _stream_pieces(here: Vector3) -> void:
 				world.get_chunk_version(isl.chunk)):
 			_pieces_owed -= 1
 			var p: InteriorGroups.PieceDraw = groups.piece(isl.chunk)
-			if p != null and p.laid > 0:
+			var dropped := _drop_loose_items(isl)
+			if p != null and (p.laid > 0 or dropped > 0):
 				# Its furniture is bricks now: drawn, solid, counted. Asked
 				# again only when something else changes it.
 				islands.rebuild_chunk(isl.chunk)
@@ -2493,6 +2494,22 @@ func _stream_pieces(here: Vector3) -> void:
 				p.gone_sum = groups.piece_gone_sum(p)
 		else:
 			break
+
+
+## **Items are not clicked to the building** (Docs/Interiors.md 8.16): a piece
+## at rest that is having its rooms laid drops its items' loose bricks
+## (Block.loose) onto whatever is under them -- its own floor if it stands, the
+## wall that floor became if it lies on its side -- and keeps its furniture,
+## which is joined to it. Those its rooms just laid and those it carried down
+## from the building alike. Returns how many went.
+func _drop_loose_items(isl: BrickIsland) -> int:
+	if not world.has_method(&"get_loose_blocks"):
+		return 0
+	var ids: PackedInt32Array = world.call(&"get_loose_blocks", isl.chunk)
+	if ids.is_empty():
+		return 0
+	world.set_chunk_transform(isl.chunk, isl.chunk_transform())
+	return islands.crumbler.drop_loose(isl.chunk, ids)
 
 
 ## Bricks of `b` inside `box` (its chunk's own space) have just been destroyed

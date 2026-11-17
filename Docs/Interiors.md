@@ -765,3 +765,77 @@ once, `_lists_of`), the camera's storey inside, and in a building that was hit t
 candidates are kept sorted and short as they are found (`_keep_best`: 24 near, 16 by view).
 `big_city.tscn -- --shot`: choosing 0.40 ms a pass with the rays (0.38 before them), st_rooms 0.172
 ms a tick; the rays 1 ms all told over the run, 8 of 112 rooms hidden.
+
+### 8.16 Items fall, furniture stays clicked on (2026-11-16)
+
+The user: furniture should stay in place in a room while it is still joined to the floor or
+wall, as real LEGO furniture is clicked to the building; **items are not joined to anything**,
+so in a collapsed building they should end up on its floor -- or on a wall, if the building
+lies on its side. (Spilling out of a piece while it falls stays deferred.)
+
+§8.14 laid everything on a piece's floors as decorative bricks, items too, so on a piece on its
+side a cup stood out of the wall its floor had become. Now:
+
+- **Which bricks are loose.** `RoomManifest.build_item` marks an item's DETAIL parts
+  `Block.loose` (`BrickWorld.set_blocks_loose`) when it lays them decorative. An asset tagged
+  Item is DETAIL through and through (`RoomTemplates._parts_of`), and furniture has DETAIL only
+  where it was authored so (a lamp on a desk) -- so items are loose and furniture is not, with
+  its decorations loose. The built-in manifest's furniture (crates, tables, shelves...) has no
+  DETAIL parts. `split_island` carries the mark, so items laid while the building stood (rooms
+  streamed near the player) are still known as loose on the piece they ride down on.
+- **When they fall.** When a piece at rest near the player has its rooms laid
+  (`CityScene._stream_pieces` -> `_drop_loose_items`), its loose bricks come off it
+  (`IslandCrumbs.drop_loose`): each straight down onto what is under it now. That is found in
+  the piece's own grid first (`_cells_to_rest`: stepped a cell at a time along whichever of the
+  piece's axes is down -- the desk under a cup, the wall a floor became), and only past the
+  piece by the physics ray. Seen, as a crumb with no kick (a crumb's usual kick off the face
+  would send an item through a wall); not seen, laid on the heap at once where it comes down --
+  an item is not swept away unseen as debris is. Either way it leaves the piece's chunk, and the
+  piece is rebuilt once (mesh, collision) with what its rooms laid.
+- **Upright pieces** drop their items onto the floor or furniture they stood on: they do not
+  move, but they are loose heap bricks now, and fall again if what they lie on goes.
+- **Furniture** stays decorative bricks in the piece, joined to its floor (or wall): it goes
+  with that, and only with that.
+
+Checks: `tools/probes/loose_items_probe.gd` 11 -- a desk's item part loose and its furniture
+part not; the mark rides into a piece; upright, the item stays on the desk (0.84 m); on its
+side with nothing under it, down to the ground; on its side lying on its wall, onto the wall's
+face (0.70 m), the desk still joined to the floor. `interior_group_probe` 33, `interior_probe`
+87, `furnish_probe` 40, `world_furnish_probe` 31, `kit_furnish_probe` 4, `place_probe` 150 as
+before.
+
+Not covered: loot pickups (guns, ammo, powerups; their own system); items riding a piece while
+it falls (they settle when it is at rest). The material colour and the mark across sleep and
+saves: section 8.17.
+
+### 8.17 What falls keeps its material, and sleep and saves keep the marks (2026-11-16)
+
+Three gaps, the first two the user's:
+
+- **Fallen bricks were drawn as plastic.** A crumb was coloured `get_filament_colour(colour
+  byte)` -- for a wood or metal brick that byte picks one of its material's own colours, so the
+  hue was wrong as well as the finish -- and the heap drew every brick in a flat
+  `StandardMaterial3D`. Now a crumb takes `BrickWorld.get_block_rgba` (the colour its mesh
+  carries: RGB through its material, material and grain in alpha). Crumbs come in one set per
+  brick size **and material** (`IslandCrumbs.crumb_set(size, mat)`, the material from the
+  colour's alpha, `mat_of`), and `crumb.gdshader` reads that set's material (`instance uniform
+  crumb_mat`) against the brick tables it now includes -- roughness, sheen, metal; filament
+  crumbs are as they were. The **heap** draws in the city's own brick material on the stand-in's
+  box (face UVs for the seams and shaded bevel), so a brick lying in the rubble is wood, metal or
+  stone as it was in the wall, PBR textures and all (`tools/shots/standin_shot.gd`: baked,
+  stood in, and lying, side by side, matching).
+- **Sleep forgot the mark -- and the materials.** A piece put to sleep is a `ChunkRecord`
+  (`BrickWorld.capture_blocks`), which kept the furniture list but neither `Block.loose` nor any
+  block's material: a wood piece that slept woke as plastic. The record now keeps `loose` (indices,
+  as `decorative`) and `materials` ([index, material] pairs, the non-zero ones), restores both,
+  and writes both to a save (`to_data` / `from_data`; older saves read as before).
+- **Saves forgot them on furniture.** `AreaSnapshot.furniture_of` entries now carry the block's
+  material and whether it is loose (a save from before reads as filament, clicked on).
+
+Checks: `loose_items_probe` 18 (adds: a falling brick's colour carries its material, a filament's
+says filament; two materials of one size are two crumb sets; a woken record keeps the loose item
+and the desk's material; a saved record keeps both; a save's furniture says which is loose and
+what it is made of). `heap_probe` 11, `dormant_probe` 33, `snapshot_probe` 48, `legacy_ids_probe`
+4, `chip_probe` 21, `debris_probe` 29, `cap_probe` 19, `mesh_cells_probe` 15, `standin_probe` 15
+as before. `blast_ring_probe` fails 2 of 19 ("it loses bricks, and the ones round the middle are
+thrown", "and it stays where it lies") with and without this change: already failing on main.
