@@ -322,7 +322,119 @@ Array HullFlow::mesh(float stud, float plate, const PackedInt32Array &inflow_cel
     return a;
 }
 
+PackedByteArray HullFlow::air_regrid(const PackedByteArray &state, const PackedByteArray &solid,
+        int keep_a, int keep_b) {
+    const int64_t n = solid.size();
+    PackedByteArray out;
+    out.resize(n);
+    uint8_t *o = out.ptrw();
+    const uint8_t *s = solid.ptr();
+    const bool has = state.size() == n;
+    const uint8_t *st = has ? state.ptr() : nullptr;
+    for (int64_t i = 0; i < n; ++i) {
+        if (s[i] != 0) {
+            o[i] = 1;
+        } else if (has && (st[i] == keep_a || st[i] == keep_b)) {
+            o[i] = st[i];
+        } else {
+            o[i] = 0;
+        }
+    }
+    return out;
+}
+
+Array HullFlow::air_fill(const PackedByteArray &p_state, Vector3i d, int outside, int inside) {
+    PackedByteArray state = p_state;
+    const int64_t n = (int64_t)d.x * d.y * d.z;
+    Array res;
+    PackedInt32Array comp;
+    PackedInt32Array sizes;
+    PackedInt32Array firsts;
+    if (state.size() != n || n == 0) {
+        res.append(state);
+        res.append(comp);
+        res.append(sizes);
+        res.append(firsts);
+        return res;
+    }
+    comp.resize(n);
+    int32_t *cp = comp.ptrw();
+    std::fill(cp, cp + n, -1);
+    uint8_t *s = state.ptrw();
+    const int64_t sy = d.x;
+    const int64_t sz = (int64_t)d.x * d.y;
+    std::vector<int32_t> q;
+    q.reserve(4096);
+    // Breadth-first over q: EMPTY neighbours become `to` (labelled `label` if >= 0).
+    auto spread = [&](uint8_t to, int32_t label) {
+        size_t k = 0;
+        while (k < q.size()) {
+            const int32_t i = q[k++];
+            const int32_t x = i % d.x;
+            const int32_t r = i / d.x;
+            const int32_t y = r % d.y;
+            const int32_t z = r / d.y;
+            int32_t nb[6];
+            int c = 0;
+            if (x > 0) nb[c++] = i - 1;
+            if (x < d.x - 1) nb[c++] = i + 1;
+            if (y > 0) nb[c++] = (int32_t)(i - sy);
+            if (y < d.y - 1) nb[c++] = (int32_t)(i + sy);
+            if (z > 0) nb[c++] = (int32_t)(i - sz);
+            if (z < d.z - 1) nb[c++] = (int32_t)(i + sz);
+            for (int m = 0; m < c; ++m) {
+                const int32_t j = nb[m];
+                if (s[j] == 0) {
+                    s[j] = to;
+                    if (label >= 0) {
+                        cp[j] = label;
+                    }
+                    q.push_back(j);
+                }
+            }
+        }
+    };
+    // The outside: from every EMPTY cell on the chunk's edge.
+    for (int32_t z = 0; z < d.z; ++z) {
+        for (int32_t y = 0; y < d.y; ++y) {
+            for (int32_t x = 0; x < d.x; ++x) {
+                if (x == 0 || y == 0 || z == 0 || x == d.x - 1 || y == d.y - 1 || z == d.z - 1) {
+                    const int32_t i = (int32_t)(x + sy * y + sz * z);
+                    if (s[i] == 0) {
+                        s[i] = (uint8_t)outside;
+                        q.push_back(i);
+                    }
+                }
+            }
+        }
+    }
+    spread((uint8_t)outside, -1);
+    // The rooms: what the outside never reached.
+    for (int64_t start = 0; start < n; ++start) {
+        if (s[start] != 0) {
+            continue;
+        }
+        const int32_t label = (int32_t)sizes.size();
+        q.clear();
+        s[start] = (uint8_t)inside;
+        cp[start] = label;
+        q.push_back((int32_t)start);
+        spread((uint8_t)inside, label);
+        sizes.append((int32_t)q.size());
+        firsts.append((int32_t)start);
+    }
+    res.append(state);
+    res.append(comp);
+    res.append(sizes);
+    res.append(firsts);
+    return res;
+}
+
 void HullFlow::_bind_methods() {
+    ClassDB::bind_static_method("HullFlow", D_METHOD("air_regrid", "state", "solid", "keep_a", "keep_b"),
+            &HullFlow::air_regrid);
+    ClassDB::bind_static_method("HullFlow", D_METHOD("air_fill", "state", "dims", "outside", "inside"),
+            &HullFlow::air_fill);
     ClassDB::bind_method(D_METHOD("setup", "dims"), &HullFlow::setup);
     ClassDB::bind_method(D_METHOD("set_passable", "state", "inside_state", "open_door_cells"), &HullFlow::set_passable);
     ClassDB::bind_method(D_METHOD("get", "i"), &HullFlow::get);

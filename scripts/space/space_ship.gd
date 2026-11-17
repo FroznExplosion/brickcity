@@ -326,6 +326,12 @@ func autopilot_on(ps) -> Node3D:
 	return best
 
 
+## In flight nothing is its ground (Docs/Hulls.md 7.4); landed, its keel stands
+## on the planet and is.
+func floats_free() -> bool:
+	return super() and not landed
+
+
 ## Lowered while it is parked in its bricks on a planet, nobody at its controls;
 ## taken up otherwise (PlanetSystem, each frame).
 func gangway_step() -> void:

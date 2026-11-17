@@ -105,10 +105,15 @@ func floats_free() -> bool:
 	return true
 
 
+## Every part not joined to its largest leaves: a boat has no furniture.
+func part_min() -> int:
+	return 0
+
+
 ## Part of it left: its air from the bricks it has now (the hold that went, and a
 ## stretch cut open, are the sea's), its water kept where there is still a room
 ## for it, and what floats it measured again.
-func _parted() -> void:
+func _parted(_killed: PackedInt32Array) -> void:
 	air.rebuild(bricks, chunk)
 	if hull_water != null:
 		hull_water.grid_rebuilt()
