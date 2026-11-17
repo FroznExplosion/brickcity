@@ -475,7 +475,7 @@ func update_crumbs() -> void:
 		while i < cr.pos.size():
 			if cr.next[i] <= now:
 				crumb_events += 1
-			if cr.next[i] <= now and _crumb_event(cr, i, key, now):
+			if cr.next[i] <= now and _crumb_event(cr, i, now):
 				continue   # gone: the last one is in its place now
 			soonest = mini(soonest, cr.next[i])
 			i += 1
@@ -489,8 +489,11 @@ func update_crumbs() -> void:
 
 ## What happens to crumb `i` at tick `now`: laid in the heap, gone, its floor
 ## found, or it reached its floor -- bounces, lands, or the floor had gone.
-## True when it was taken out.
-func _crumb_event(cr: Host.Crumbs, i: int, key: Vector3, now: int) -> bool:
+## True when it was taken out. (It took the crumbs' key too, typed Vector3 and
+## never read: a crumb of a material is keyed by a Vector4 since 3e7bf62c, and
+## the first one to land stopped the tick with "Cannot convert argument 3 from
+## Vector4 to Vector3", 2026-11-17.)
+func _crumb_event(cr: Host.Crumbs, i: int, now: int) -> bool:
 	var age := now - cr.born[i]
 	# Come to rest: it lies where it stopped, for good (BrickHeap).
 	if _crumb_keep and cr.landed[i] > 0:

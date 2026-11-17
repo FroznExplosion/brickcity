@@ -248,6 +248,25 @@ func _run() -> void:
 			"%d thrown, %d falling, %d laid" % [thrown2, _m.crumb_count, _m.heap.laid - laid0])
 	BrickHeap.max_bricks = keep
 
+	# --- a brick of another material --------------------------------------------------------------
+	# Its crumbs are a set of their own, keyed by a Vector4 (IslandCrumbs.
+	# crumb_set); the tick once stopped on the first one to land with "Cannot
+	# convert argument 3 from Vector4 to Vector3" (2026-11-17). Every brick
+	# above was plastic, so nothing here met it.
+	print("\na brick of another material")
+	var mat := 3
+	var size := (Vector3(4, 3, 2) * cs).snapped(Vector3.ONE * 0.001)
+	var cr = _m.crumbler.crumb_set(size, mat)
+	var laid1 := _m.heap.laid
+	_m.crumbler.crumb_push(cr, Vector3(80.0, 3.0, 80.0), Vector3.ZERO, Basis(), Vector3.UP, 0.0,
+			Engine.get_physics_frames(), 0.0, size.y * 0.5,
+			Color(0.8, 0.2, 0.2, 1.0 - float(mat) / 255.0), 0)
+	var pushed := _m.crumb_count
+	await _until_still()
+	_ok("it comes down and lies there like a plastic one",
+			pushed > 0 and _m.crumb_count == 0 and _m.heap.laid == laid1 + 1,
+			"%d pushed, %d falling, %d laid" % [pushed, _m.crumb_count, _m.heap.laid - laid1])
+
 	print("  --   %s" % _m.heap.census_line())
 	print("\n%d passed, %d failed" % [_pass, _fail])
 	quit(1 if _fail > 0 else 0)
