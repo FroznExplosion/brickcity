@@ -1,6 +1,6 @@
 extends RefCounted
 
-## World-gen presets for the mine world (Docs/MineWorld.md 8).
+## World-gen presets for the mine world (Docs/MineWorld.md 6).
 ##
 ## A preset is a JSON file:
 ##

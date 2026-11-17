@@ -98,7 +98,7 @@ enum Material {
     MAT_STONE,
     MAT_DARK_STONE,
     MAT_ROAD,
-    // --- the biome generator's blocks (Docs/MineWorld.md 3). APPENDED, never
+    // --- the biome generator's blocks (Docs/MineWorld.md 2). APPENDED, never
     // inserted: a saved edit stores the material byte.
     MAT_SNOW,
     MAT_GRAVEL,
@@ -275,6 +275,10 @@ void set_edit(int x, int yp, int z, int material);
 /// it, or digging past the section floor punches a hole the mesher cannot
 /// see.
 int deepest_edit_near(int tx, int tz);
+/// Highest edited SOLID plate in the 3x3 tile neighbourhood, or INT_MIN. A
+/// block placed above the generated ground is above every column's bound,
+/// so the mask and the surface scan have to reach up to it.
+int highest_edit_near(int tx, int tz);
 void clear_edits();
 size_t edit_count();
 bool edits_empty();
@@ -517,6 +521,15 @@ public:
     /// z, size x, y, z in metres, and a packed rgb -- for the caller to throw
     /// as rigid bodies.
     static Dictionary carve(Vector3 world_point, double radius_m);
+    /// Set every plate cell in [lo, hi] (stud, plate, stud; inclusive) to
+    /// `material` -- 0 breaks, anything else places. `only_air` leaves solid
+    /// cells as they are (placing). Bedrock never breaks. Returns
+    /// {"tiles": [tx, tz, ...] to rebuild, "changed": cells}. Docs/MineWorld.md 8.
+    static Dictionary fill_box(Vector3i lo, Vector3i hi, int material, bool only_air);
+    /// The first solid plate cell along a ray, walking the grid exactly
+    /// (stud x plate x stud): {"cell": Vector3i, "normal": Vector3i (the face
+    /// entered through), "material", "position"}; empty when nothing is hit.
+    static Dictionary ray_cell(Vector3 from, Vector3 dir, double max_metres);
     /// Heightfield mode: no caves, no edits, no destruction.
     ///
     /// The surface is exactly `nominal_height` and nothing can be below it,

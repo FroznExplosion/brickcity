@@ -19,10 +19,12 @@ extends Node3D
 ##   light      LightRig, with the sun turning: day and night
 ##
 ## Keys: F fly/walk · F9 world generation menu · F3 readout · T skip an hour
-##       left mouse (on foot): shoot -- the ground breaks where it is hit
+##       B build mode (mine_builder.gd: break, place, pick, hotbar)
+##       left mouse (on foot, not building): shoot -- the ground breaks where hit
 
 const Presets := preload("res://scripts/terrain/worldgen_presets.gd")
 const Menu := preload("res://scripts/terrain/worldgen_menu.gd")
+const Builder := preload("res://scripts/terrain/mine_builder.gd")
 
 ## A whole day, seconds (Minecraft's is 20 minutes).
 const DAY_SECONDS := 1200.0
@@ -59,6 +61,7 @@ var _show_readout := true
 var _hud_in := 0.0
 var _frame_ms := 0.0
 var _menu: Control = null
+var builder: Node3D = null
 var _gen_ms := 0.0
 var _reanchors := 0
 var _last_reanchor_ms := 0.0
@@ -95,6 +98,10 @@ func _ready() -> void:
 	_brick_mat.shader = load("res://shaders/brick.gdshader")
 	WeatherFx.register(_brick_mat)
 	_build_hud()
+	builder = Builder.new()
+	builder.name = "Builder"
+	add_child(builder)
+	builder.setup(self, _hud_layer)
 
 	var start := Presets.load_settings(ContentPacks.resolve("worldgen/default.json"))
 	for arg in OS.get_cmdline_user_args():
@@ -302,6 +309,8 @@ func set_on_foot(on: bool, feet := Vector3.INF) -> void:
 		if feet.y > t.y + 2.0:
 			feet = t
 	FpsRig.switch_mode(on, feet, walker, pawn, player, cam, view, kit)
+	if builder != null:
+		builder.on_mode_changed()
 	if _trees != null:
 		_trees.camera = _eye_camera()
 
@@ -315,8 +324,13 @@ func _eye() -> Vector3:
 
 
 ## The gun hit the ground: break it there. Minecraft's left click, as a shot.
-func _mine(point: Vector3, _dir: Vector3, _shot) -> void:
-	var res: Dictionary = BrickTerrain.carve(point, MINE_RADIUS)
+func _mine(point: Vector3, _dir: Vector3, _info) -> void:
+	terrain_edited(BrickTerrain.carve(point, MINE_RADIUS))
+
+
+## The field changed (a shot, a block broken or placed): rebake the tiles it
+## names behind the old ones, and the far blocks over them.
+func terrain_edited(res: Dictionary) -> void:
 	var tiles: PackedInt32Array = res["tiles"]
 	if tiles.is_empty():
 		return
@@ -476,7 +490,8 @@ func _update_hud() -> void:
 				_far.anchor, _reanchors, _last_reanchor_ms],
 		"trees %d   edits %d   generated in %.0f ms" % [_trees.count if _trees != null else 0,
 				BrickTerrain.get_edit_count(), _gen_ms],
-		"%s   F fly/walk  F9 world generation  F3 readout  T +1 hour" % ("ON FOOT" if on_foot
+		"blocks placed %d  broken %d" % [builder.placed, builder.broken],
+		"%s   F fly/walk  B build  F9 world generation  F3 readout  T +1 hour" % ("ON FOOT" if on_foot
 				else "FLYING %.0f m/s (wheel)" % walker.fly_speed),
 	])
 
@@ -547,8 +562,41 @@ func _run_gate() -> void:
 	print("[mine-gate] regenerated in %.0f ms" % (float(Time.get_ticks_usec() - g0) / 1000.0))
 	await _frames(40)
 	await _shot(dev + "mine_regenerated.png")
+	await _gate_build()
 	print("[mine-gate] done")
 	get_tree().quit()
+
+
+## Build mode, as a player would: fly a little above the ground looking down
+## at it, place a pillar, break a block out of it, picture it.
+func _gate_build() -> void:
+	set_on_foot(false)
+	var e := _eye()
+	var stud := BrickWorld.get_stud_metres()
+	var c := Vector2i(floori(e.x / stud), floori(e.z / stud))
+	var g := _ground_m(c.x, c.y)
+	walker.place(Vector3(e.x, g + 2.4, e.z), Vector3(0, 0, -1))
+	walker.pitch = -0.75
+	await _frames(20)
+	builder.set_active(true)
+	var ok_place := 0
+	for i in 4:
+		builder.update_target()
+		if builder.place_target():
+			ok_place += 1
+		await _frames(8)
+	builder.update_target()
+	var ok_break: bool = builder.break_target()
+	await _frames(40)
+	builder.update_target()
+	print("[mine-gate] build: placed %d of 4, broke %s, edits %d, %s"
+			% [ok_place, ok_break, BrickTerrain.get_edit_count(), builder.log_blocks])
+	await _shot(UserPaths.DEV + "mine_build_view.png")
+	walker.place(Vector3(e.x + 2.5, g + 3.2, e.z + 2.5), Vector3(-1, 0, -1))
+	walker.pitch = -0.6
+	await _frames(40)
+	await _shot(UserPaths.DEV + "mine_build.png")
+	builder.set_active(false)
 
 
 ## Tiles within 12 of the camera that neither tier draws: a hole in the

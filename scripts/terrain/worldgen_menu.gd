@@ -1,6 +1,6 @@
 extends PanelContainer
 
-## THE WORLD GENERATION MENU (F9 in the mine world). Docs/MineWorld.md 8.
+## THE WORLD GENERATION MENU (F9 in the mine world). Docs/MineWorld.md 6.
 ##
 ## Edits a COPY of the world's settings; nothing changes in the world until
 ## "Generate world". Tabs follow the zylanntest world builder: World, Shape,

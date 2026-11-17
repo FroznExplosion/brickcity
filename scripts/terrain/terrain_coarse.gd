@@ -47,7 +47,7 @@ const LEVELS := 6
 ## Print how many blocks each span got (the heightfield bench).
 var verbose := false
 ## The tile the rings are laid out round. The origin for a world that stays
-## put; an endless one (Docs/MineWorld.md 5) builds a fresh tier round the
+## put; an endless one (Docs/MineWorld.md 3) builds a fresh tier round the
 ## player's tile now and then and swaps it in (`build_begin`/`build_poll`).
 var anchor := Vector2i.ZERO
 ## A build in flight (`build_begin`): the layout and the group task.

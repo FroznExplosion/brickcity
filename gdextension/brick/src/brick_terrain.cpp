@@ -728,18 +728,46 @@ int edit_at(int64_t key) {
 /// solid rock to the mesher, and the floor of a deep pit was simply not
 /// there.
 static std::unordered_map<int64_t, int> g_tile_floor;
+static std::unordered_map<int64_t, int> g_tile_ceiling;
 
 static inline int64_t tile_key(int tx, int tz) {
     return ((int64_t)(tx & 0xFFFFFFF) << 28) | (int64_t)(tz & 0xFFFFFFF);
 }
 
 void set_edit(int x, int yp, int z, int material) {
+    if (g_edits.empty()) {
+        // Room up front: tiles bake on workers while edits land, and a
+        // rehash under a reader is the worst thing the map can do.
+        g_edits.reserve(1 << 16);
+    }
     g_edits[pack_cell(x, yp, z)] = (uint8_t)material;
     const int64_t tk = tile_key(floor_div(x, TILE), floor_div(z, TILE));
     auto it = g_tile_floor.find(tk);
     if (it == g_tile_floor.end() || yp < it->second) {
         g_tile_floor[tk] = yp;
     }
+    if (material != MAT_AIR) {
+        auto ci = g_tile_ceiling.find(tk);
+        if (ci == g_tile_ceiling.end() || yp > ci->second) {
+            g_tile_ceiling[tk] = yp;
+        }
+    }
+}
+
+int highest_edit_near(int tx, int tz) {
+    if (g_tile_ceiling.empty()) {
+        return INT_MIN;
+    }
+    int best = INT_MIN;
+    for (int dz = -1; dz <= 1; ++dz) {
+        for (int dx = -1; dx <= 1; ++dx) {
+            auto it = g_tile_ceiling.find(tile_key(tx + dx, tz + dz));
+            if (it != g_tile_ceiling.end()) {
+                best = std::max(best, it->second);
+            }
+        }
+    }
+    return best;
 }
 
 int deepest_edit_near(int tx, int tz) {
@@ -758,6 +786,7 @@ int deepest_edit_near(int tx, int tz) {
 void clear_edits() {
     g_edits.clear();
     g_tile_floor.clear();
+    g_tile_ceiling.clear();
 }
 
 size_t edit_count() {
@@ -810,6 +839,11 @@ void sample_tile(const Field &f, int tx, int tz, TileSample &out) {
                 lo = std::min(lo, t);
             }
         }
+    }
+    // Placed blocks can stand above every column's generated top.
+    const int placed = highest_edit_near(tx, tz);
+    if (placed != INT_MIN) {
+        hi = std::max(hi, placed + 1);
     }
     const int top_plate = hi + 1;
     out.y0 = lo + 1 - SECTION_BELOW;
@@ -2125,7 +2159,9 @@ int BrickTerrain::surface_plate(int x, int z) {
         const bool any_edits = !edits_empty();
         int last_b = INT_MIN;
         int last_v = MAT_AIR;
-        for (int yp = c.bound_p; yp > floor_p; --yp) {
+        const int placed = highest_edit_near(floor_div(x, TILE), floor_div(z, TILE));
+        const int from = std::max(c.bound_p, placed);
+        for (int yp = from; yp > floor_p; --yp) {
             int v;
             const int e = any_edits ? edit_at(pack_cell(x, yp, z)) : -1;
             if (e >= 0) {
@@ -2153,7 +2189,8 @@ int BrickTerrain::surface_plate(int x, int z) {
     if (dug != INT_MAX) {
         floor_p = std::min(floor_p, dug - 6);
     }
-    for (int yp = top; yp > floor_p; --yp) {
+    const int placed = highest_edit_near(floor_div(x, TILE), floor_div(z, TILE));
+    for (int yp = std::max(top, placed); yp > floor_p; --yp) {
         if (g_field.solid_at(x, yp, z) != MAT_AIR) {
             return yp;
         }
@@ -2298,6 +2335,103 @@ Dictionary BrickTerrain::carve(Vector3 world_point, double radius_m) {
     out["removed"] = removed;
     out["debris"] = debris;
     out["edits"] = (int)edit_count();
+    return out;
+}
+
+Dictionary BrickTerrain::fill_box(Vector3i lo, Vector3i hi, int material, bool only_air) {
+    Dictionary out;
+    const int mat = std::min(std::max(material, 0), (int)MATERIAL_COUNT - 1);
+    std::set<std::pair<int, int>> touched;
+    int changed = 0;
+    // A placed block is at most a few studs across; refuse anything huge.
+    if ((int64_t)(hi.x - lo.x + 1) * (hi.y - lo.y + 1) * (hi.z - lo.z + 1) > 200000) {
+        out["tiles"] = PackedInt32Array();
+        out["changed"] = 0;
+        return out;
+    }
+    for (int z = lo.z; z <= hi.z; ++z) {
+        for (int x = lo.x; x <= hi.x; ++x) {
+            for (int y = lo.y; y <= hi.y; ++y) {
+                const int was = g_field.solid_at(x, y, z);
+                if (was == mat || was == MAT_BEDROCK) {
+                    continue;
+                }
+                if (only_air && was != MAT_AIR) {
+                    continue;
+                }
+                set_edit(x, y, z, mat);
+                ++changed;
+                for (int ddz = -1; ddz <= 1; ++ddz) {
+                    for (int ddx = -1; ddx <= 1; ++ddx) {
+                        touched.insert({ floor_div(x + ddx * MARGIN, TILE),
+                                         floor_div(z + ddz * MARGIN, TILE) });
+                    }
+                }
+            }
+        }
+    }
+    PackedInt32Array tiles;
+    for (const auto &t : touched) {
+        tiles.push_back(t.first);
+        tiles.push_back(t.second);
+    }
+    out["tiles"] = tiles;
+    out["changed"] = changed;
+    return out;
+}
+
+Dictionary BrickTerrain::ray_cell(Vector3 from, Vector3 dir, double max_metres) {
+    // Amanatides-Woo over the anisotropic grid: each axis has its own cell
+    // size, so the step and the crossing distances are per axis.
+    Dictionary out;
+    if (dir.length_squared() < 1e-12) {
+        return out;
+    }
+    const Vector3 d = dir.normalized();
+    const double size[3] = { STUD_M, PLATE_M, STUD_M };
+    const double o[3] = { from.x, from.y, from.z };
+    const double v[3] = { d.x, d.y, d.z };
+    int cell[3], step[3];
+    double t_max[3], t_delta[3];
+    for (int a = 0; a < 3; ++a) {
+        cell[a] = (int)std::floor(o[a] / size[a]);
+        if (v[a] > 0.0) {
+            step[a] = 1;
+            t_max[a] = (((double)cell[a] + 1.0) * size[a] - o[a]) / v[a];
+            t_delta[a] = size[a] / v[a];
+        } else if (v[a] < 0.0) {
+            step[a] = -1;
+            t_max[a] = ((double)cell[a] * size[a] - o[a]) / v[a];
+            t_delta[a] = -size[a] / v[a];
+        } else {
+            step[a] = 0;
+            t_max[a] = 1e30;
+            t_delta[a] = 1e30;
+        }
+    }
+    int entered = -1;
+    double t = 0.0;
+    for (int i = 0; i < 4000 && t <= max_metres; ++i) {
+        const int m = g_field.solid_at(cell[0], cell[1], cell[2]);
+        if (m != MAT_AIR && i > 0) {
+            Vector3i n(0, 0, 0);
+            if (entered == 0) n.x = -step[0];
+            if (entered == 1) n.y = -step[1];
+            if (entered == 2) n.z = -step[2];
+            out["cell"] = Vector3i(cell[0], cell[1], cell[2]);
+            out["normal"] = n;
+            out["material"] = m;
+            out["position"] = from + d * (real_t)t;
+            return out;
+        }
+        int a = 0;
+        if (t_max[1] < t_max[a]) a = 1;
+        if (t_max[2] < t_max[a]) a = 2;
+        t = t_max[a];
+        t_max[a] += t_delta[a];
+        cell[a] += step[a];
+        entered = a;
+    }
     return out;
 }
 
@@ -5061,6 +5195,10 @@ void BrickTerrain::_bind_methods() {
         &BrickTerrain::set_coarse_smooth_step);
     ClassDB::bind_static_method("BrickTerrain", D_METHOD("get_coarse_smooth_step"),
         &BrickTerrain::get_coarse_smooth_step);
+    ClassDB::bind_static_method("BrickTerrain", D_METHOD("fill_box", "lo", "hi", "material", "only_air"),
+        &BrickTerrain::fill_box);
+    ClassDB::bind_static_method("BrickTerrain", D_METHOD("ray_cell", "from", "dir", "max_metres"),
+        &BrickTerrain::ray_cell);
     ClassDB::bind_static_method("BrickTerrain", D_METHOD("set_generator", "mode"),
         &BrickTerrain::set_generator);
     ClassDB::bind_static_method("BrickTerrain", D_METHOD("get_generator"),

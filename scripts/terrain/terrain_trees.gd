@@ -47,7 +47,7 @@ var _sorted_at := {}
 var _turn := 0
 const RESORT_METRES := 1.0
 
-## STREAMED (Docs/MineWorld.md 6), for a world with no edge: trees are placed
+## STREAMED (Docs/MineWorld.md 4), for a world with no edge: trees are placed
 ## per square cell of STREAM_CELL studs, the cells within `keep_m` of the
 ## camera, nearest first, a few a frame; a cell past `drop_m` is taken away.
 ## What grows where is the caller's (`stream`'s callables), so the same
