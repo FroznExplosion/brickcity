@@ -20,7 +20,7 @@ test's sea ([Water.md](Water.md) §1–9) is kept and reused for the ocean's wav
 | R9 | Fast, with a LOD that looks right at a distance (a heightfield out there is fine). |
 | R10 | The same system carries lava (and any later fluid). |
 
-## 1. The one big decision: water is its own grid, not terrain
+## 1. The one big decision: water is a layer on the terrain grid, not a terrain material
 
 Water is **not** a terrain material. A terrain tile bakes in 9–14 ms (MineWorld.md 2), and
 moving water changes cells ten times a second; rebaking ground for that is impossible. Water
@@ -53,10 +53,16 @@ The terrain inside a cell can be partly solid (a crater floor, a tile laid on th
 cell keeps a **solid mask of 3 bits**, one a plate, read from the field. Water stands on the top
 solid plate in the cell; a cell's room is the open plates.
 
-**Volumes the player sees** are counted in the builder's block (2x2 studs, `mine_builder.gd`):
-a *brick of water* is one block of water, 2x2 x 3 plates; a *tile of water* is 2x2 x 1 plate.
-A bucket holds **9 tiles = 3 bricks** (R8). Inside, everything is whole plates over one stud
-(call it a unit; a bucket is 36 units). If the user meant a 1x1 brick, it is one number.
+**Volumes the player sees** (decided 2026-11-17): a *brick of water* is one **1x1 brick** —
+one cell, full; a *tile of water* is 1x1 x 1 plate. A bucket holds **9 tiles = 3 bricks** (R8).
+Later the water may be drawn as a mixed set of pieces (2x2s, 1x4s ...) packed over the cells,
+the way the ground is packed; the cells stay 1x1.
+
+**Same lattice, own layer.** The water grid IS the terrain's grid: the same stud columns, its
+cells are three of the terrain's plate cells stacked (a brick course). Every water cell knows
+exactly which terrain plates it covers, so the two meet cell for cell. What is separate is only
+the **storage and the mesh**: water is a layer over the terrain grid, not a material inside the
+terrain's voxels, so a moving stream re-meshes its own small water mesh, never the ground's.
 
 **A cell is 16 bits**, plus the 3-bit solid mask:
 
@@ -148,8 +154,8 @@ the lowest floor up). Probably not needed: a part-laid top course is a LEGO look
 ### 4.3 When the ground changes
 
 * **A block placed into water** (R7): source or flowing cells there are simply removed (the
-  feed rules re-run round them). Still water is **pushed up** into the cell above, not deleted:
-  a block dropped into a full tank makes it overflow. (Minecraft deletes it; ask, section 13.)
+  feed rules re-run round them). Still water there is **deleted**, as in Minecraft (decided
+  2026-11-17).
 * **A block broken, a shot, a crater** next to water: the cells round the change are woken. A
   crater in a lake bed fills; a crater next to a river takes a stream.
 * The terrain edit is passed to the water as a box and the new materials (`fill_box`, `carve`
@@ -230,9 +236,9 @@ changed it, at most 10 times a second a tile, coalesced like terrain edits (0.1 
   absent (from its top to this cell's); a bottom over open air (a waterfall seen from under).
   Still and source tops are merged into big quads (a calm lake tile is a handful of triangles);
   flowing cells are a quad each and carry their flow direction.
-* **Stepped tops by default**: a stream steps brick → plate-and-tile → tile, flat-topped, with a
-  foam line on each step's edge. That is the brick look. Minecraft's sloped tops (each corner the
-  mean of the wet cells round it, STA §3) are a switch for comparison.
+* **Sloped tops, like Minecraft** (decided 2026-11-17): each top corner is the mean of the wet
+  cells round it (STA §3), so a stream's surface slopes down from the source to its tile-deep
+  end. Still water that is level stays flat. Stepped plate tops remain a dev switch.
 * **Shader** (`shaders/water_fluid.gdshader`): opaque, colour by depth, as the sea does
   (Water.md 5) — the mesher knows each cell's depth, so no texture is read for it. Water a tile
   or two deep is **dithered** (alpha hash), so a thin stream shows the ground through it and
@@ -300,10 +306,10 @@ water hand over where near ground and far ground do, so there is no new seam to 
   wade, then swim at chest depth, steer by look, a spring to the surface). The pawn gets the same
   `water_probe`: the fluid's top above a point, or `BrickWave` over the sea. Flowing water pushes
   (0.5–1.5 m/s along its flow). Lava burns (the status system, Weapons and effects' area).
-* **Bucket** (R8): holds 9 tiles. LMB scoops a brick of water (3 tiles over the block's
-  footprint) from what it aims at; RMB pours a brick of still water at the placing spot the
-  builder would use. From still water the tiles are taken out of the pond; from a source or
-  flowing water the bucket fills and the body is unchanged (it is infinite).
+* **Bucket** (R8): holds 9 tiles (3 1x1 bricks). RMB pours a brick of still water at the placing
+  spot the builder would use. LMB on still water scoops a brick (3 tiles) out of the pond. LMB on
+  a **source** (all sea water is source bricks) **fills the bucket to 9 at once** and the source
+  stays — it is infinite (decided 2026-11-17).
 * **Source bucket** (R8): scoops one source brick (removed; with 4.1.7 a lake heals it at once,
   as in Minecraft) and pours it out as a source brick somewhere else — a spring. Lava buckets the
   same way.
@@ -332,19 +338,19 @@ flowing is still flowing after a load. Same cadence and worker write as the edit
 | the sea | GPU | as measured in heightfield_test: 176k triangles (Water.md 9.11) |
 | memory | — | 48 KB a section, only where water was changed |
 
-## 13. Questions for the user
+## 13. Decided with the user (2026-11-17)
 
-1. **What is "a brick" of water for the bucket** — the builder's 2x2 block (the plan's guess, a
-   bucket = 3 blocks), or a 1x1 brick?
-2. **Flowing water's top**: stepped plates (brick, plate, tile — the plan's default) or sloped
-   like Minecraft? Both will be there to compare.
-3. **Flowing water that loses its source** becomes still water that drains to the low spots and
-   dries (the plan), or vanishes as in Minecraft?
-4. **A block placed into still water** pushes the water up (the plan), or deletes it as in
-   Minecraft?
-5. **Drying**: a lone tile-deep spill dries in 15–45 s. Should sand and dirt also soak water up?
-6. **A normal bucket dipped in the sea or a river** gets water and leaves the sea as it was —
-   fine?
+1. A brick of water is a **1x1 brick**; a bucket holds 3 of them = 9 tiles. A mixed set of
+   water pieces packed over the cells may come later.
+2. Flowing water has **sloped tops**, like Minecraft.
+3. Water bricks **drain, then dry**. Source bricks and what they feed work like Minecraft; flowing
+   water cut off from its source becomes still water and drains and dries (4.1.6).
+4. A block placed into still water **deletes** it.
+5. **No soaking**: ground never takes water; water only spreads, thins and dries.
+6. All sea water is source bricks. A normal bucket on a source **fills to 9 in one action**,
+   and the source is unchanged.
+7. Water shares the terrain's grid (same stud columns, brick courses of its plates) as a layer of
+   its own (section 2).
 
 ## 14. Build order
 
@@ -368,7 +374,7 @@ Each stage is merged on its own. C++ stages need the main folder's DLL rebuilt a
 6. **Lava**: the second fluid's table, its look and glow, burning, obsidian and stone.
 7. **Saving** the water with the edits.
 8. **Later**: pits filling from rivers (4.5), lakes above the sea, cave pools, springs, lava
-   pools, floating debris, sand soaking water, multiplayer diffs (STA §10.8–10.9).
+   pools, floating debris, mixed water pieces, multiplayer diffs (STA §10.8–10.9).
 
 ## 15. Risks
 
