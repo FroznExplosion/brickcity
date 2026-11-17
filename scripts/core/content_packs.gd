@@ -45,7 +45,7 @@ const FORMAT := 1
 ## The sub-folders a pack may have. One not listed here is not an error (a
 ## later game may know it), only unread.
 const FOLDERS := ["builds", "rooms", "items", "guns", "mechs", "figures", "parts",
-		"bricks", "worlds", "planets", "characters", "audio", "textures", "data"]
+		"bricks", "worlds", "worldgen", "planets", "characters", "audio", "textures", "data"]
 
 ## A probe's mods folder instead of the player's. Kept on Engine, not in a
 ## static: loading a scene reloads scripts and resets their statics (Godot 4.6).

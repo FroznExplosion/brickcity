@@ -158,7 +158,7 @@ inline int material_filament(int m) {
         case MAT_PODZOL: return 27;        // chocolate
         case MAT_DRY_GRASS: return 37;     // olive
         case MAT_LUSH_GRASS: return 35;    // bright green
-        case MAT_COLD_GRASS: return 40;    // sage
+        case MAT_COLD_GRASS: return 63;    // moss (sage read as snow in daylight)
         case MAT_DARK_GRASS: return 34;    // dark green
         case MAT_GRANITE: return 23;       // rose
         case MAT_DIORITE: return 13;       // light grey

@@ -511,7 +511,11 @@ func cover(streamer: TerrainStreamer, wait := true) -> void:
 					# nothing there for the detail to build, and a block
 					# waiting for tiles that will never exist stayed visible
 					# under real detail at the world's rim.
-					if absi(c.x) > _reach_tiles or absi(c.y) > _reach_tiles:
+					# Measured from the anchor the tier was laid out round:
+					# from the origin, every tile of an endless world's rings
+					# laid out 100 tiles away counted as "outside" and its
+					# block hid with nothing under it (Docs/MineWorld.md 3).
+					if absi(c.x - anchor.x) > _reach_tiles or absi(c.y - anchor.y) > _reach_tiles:
 						continue
 					if not streamer.has_tile(c):
 						covered = false

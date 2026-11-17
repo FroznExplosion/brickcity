@@ -1,0 +1,2 @@
+{"name": "Islands", "seed": 20261116,
+ "gen": {"ocean_threshold": 0.15, "continent_scale_m": 600.0, "ocean_depth_m": 20.0, "cont_weight_m": 30.0, "peak_height_m": 40.0, "beach_width_m": 2.5}}

@@ -39,6 +39,7 @@ Read in that order. `user://` is
   parts/           gun and mech parts: <family>/<part id>/part.json + part.scn + thumb.png
   bricks/          brick definitions, *.json (section 4)
   worlds/          terrain worlds, *.json
+  worldgen/        world generation presets, *.json (Docs/MineWorld.md 6)
   data/            tables: asset_tags.json, ai/roster.json, ai/tactics_book.json
   planets/ characters/ audio/ textures/      reserved (section 6)
 ```
@@ -124,6 +125,7 @@ is the custom pieces work in `Docs/Parts/custom.md`.
 | exported gun folders | `AssetGuns.all()` | `guns/<id>/gun.json` |
 | bricks | `BrickPalette` | `bricks/` |
 | terrain worlds | `TerrainWorld.world_path`, `list_worlds` | `worlds/` |
+| world-gen presets | `worldgen_presets.gd` `list` (player's: `user://library/worldgen/`) | `worldgen/` |
 | asset tags (planet, type, room) | `AssetTags` | `data/asset_tags.json` |
 
 Base only for now (the path is under `content/base/`, no merge yet):
