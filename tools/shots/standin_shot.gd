@@ -1,9 +1,12 @@
 extends SceneTree
 
-## Not headless. A picture to look at: the same small build twice, side by
-## side, in the real brick material -- on the left its baked mesh, on the right
-## its stand-in (IslandStandins: a box per brick from get_standin_buffers).
-## They should match in colour and material; the stand-in has no studs.
+## Not headless. A picture to look at: the same small build three times, side
+## by side, in the real brick material -- on the left its baked mesh, in the
+## middle its stand-in (IslandStandins: a box per brick from
+## get_standin_buffers), on the right its bricks lying as a heap does them
+## (BrickHeap with the brick material and the stand-in's box, each brick's
+## colour from get_block_rgba -- Docs/Interiors.md 8.17). All three should
+## match in colour and material; the last two have no studs.
 ##
 ##     godot --path . --script tools/shots/standin_shot.gd -- --out=<png path>
 ##
@@ -59,6 +62,21 @@ func _initialize() -> void:
 		stand.add_child(mmi)
 	scene.add_child(stand)
 
+	# The same bricks lying on a heap, as fallen bricks are drawn.
+	var heap := BrickHeap.new()
+	heap.mesh_for = func(size: Vector3) -> Mesh: return Standins._box(size)
+	heap.material = mat
+	scene.add_child(heap)
+	var cs := BrickWorld.get_cell_size()
+	var tick_m: float = cs.x / float(BrickWorld.ticks_per_stud())
+	for id in w.get_block_count(c):
+		var t: Array = w.get_block_ticks(c, id)
+		if t.is_empty():
+			continue
+		var size := Vector3(t[1] as Vector3i) * tick_m
+		var local := (Vector3(t[0] as Vector3i) + Vector3(t[1] as Vector3i) * 0.5) * tick_m
+		heap.lay(size, Transform3D(Basis(), local + Vector3(6.8, 0.0, 0.0)), w.get_block_rgba(c, id), 0.0, true)
+
 	var sun := DirectionalLight3D.new()
 	sun.rotation = Vector3(-0.9, 0.6, 0.0)
 	scene.add_child(sun)
@@ -71,7 +89,7 @@ func _initialize() -> void:
 	scene.add_child(env)
 	var cam := Camera3D.new()
 	scene.add_child(cam)
-	cam.look_at_from_position(Vector3(3.0, 2.2, 4.6), Vector3(3.0, 0.5, 0.3))
+	cam.look_at_from_position(Vector3(4.7, 2.6, 6.4), Vector3(4.7, 0.5, 0.3))
 	cam.current = true
 	_shoot.call_deferred()
 

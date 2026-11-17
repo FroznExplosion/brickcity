@@ -937,7 +937,9 @@ public:
     /// What ChunkRecord keeps of blocks [from, from + count) of a chunk, in id
     /// order, for every block still standing in it (alive, not cut out into
     /// another piece, not removed): "cells" (3 ints a block, its world tick
-    /// origin in cells), "archetypes", "colours", "decorative" (indices into
+    /// origin in cells), "archetypes", "colours", "loose" (indices, as
+    /// decorative), "materials" ([index, material] pairs, the non-zero ones),
+    /// "decorative" (indices into
     /// this slice), "joints" and "worn" ([index into this slice, value] pairs),
     /// "count", and "lo"/"hi", the slice's box in the chunk's metres. One call
     /// where the record asked five a block from script: ~4 us a block, and a
@@ -1055,6 +1057,10 @@ public:
     int set_blocks_loose(int chunk_id, const PackedInt32Array &block_ids, bool on);
     /// The live loose blocks of a chunk, in id order.
     PackedInt32Array get_loose_blocks(int chunk_id) const;
+    /// The colour a block's mesh carries (block_rgba_grain): RGB resolved
+    /// through its material, the material and grain in alpha -- what a crumb
+    /// or a heap brick needs to be drawn as wood or metal, not as a filament.
+    Color get_block_rgba(int chunk_id, int block_id) const;
     // A box a brick, for drawing a building's bands with no bake (the
     // 2026-11-11 audit's experiment; CityDrawing.instanced_bands). One
     // MultiMesh buffer a drawing section: a UNIT box's transform scaled to

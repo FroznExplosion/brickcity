@@ -211,7 +211,8 @@ func add_crumbs(source: int, block_ids: PackedInt32Array, box: AABB, linear: Vec
 			continue
 		var size := Vector3(t[1] as Vector3i) * tick_m
 		var local := (Vector3(t[0] as Vector3i) + Vector3(t[1] as Vector3i) * 0.5) * tick_m
-		var cr := crumb_set(size.snapped(Vector3.ONE * 0.001))
+		var colour := _block_colour(h_world, source, id)
+		var cr := crumb_set(size.snapped(Vector3.ONE * 0.001), mat_of(colour))
 		var axis := Vector3(randf() - 0.5, randf() - 0.5, randf() - 0.5)
 		var from_blast := Vector3.ZERO
 		if throw > 0.0:
@@ -237,8 +238,16 @@ func add_crumbs(source: int, block_ids: PackedInt32Array, box: AABB, linear: Vec
 					lands_on = floor_past
 					lands_fixed = fixed_past
 		crumb_push(cr, at, vel, frame_basis, axis, randf_range(-Host.CRUMB_SPIN, Host.CRUMB_SPIN), now,
-				lands_on, size.y * 0.5,
-				BrickWorld.get_filament_colour(h_world.get_block_colour(source, id)), lands_fixed)
+				lands_on, size.y * 0.5, colour, lands_fixed)
+
+
+## A block's colour as its mesh carries it -- through its material, the
+## material in alpha (BrickWorld.get_block_rgba) -- or, with a library from
+## before that, the filament colour of its byte, as crumbs always had.
+static func _block_colour(w: BrickWorld, chunk: int, id: int) -> Color:
+	if w.has_method(&"get_block_rgba"):
+		return w.call(&"get_block_rgba", chunk, id)
+	return BrickWorld.get_filament_colour(w.get_block_colour(chunk, id))
 
 
 ## Loose bricks dropped off pieces at rest (drop_loose), all told.
@@ -321,9 +330,9 @@ func drop_loose(source: int, block_ids: PackedInt32Array) -> int:
 			# Nothing of the piece under it: on to whatever is below the piece.
 			floor_y = crumb_floor(at - Vector3(0.0, reach + 0.02, 0.0))
 			on_ground = 1 if host._floor_on_ground else 0
-		var colour := BrickWorld.get_filament_colour(h_world.get_block_colour(source, id))
+		var colour := _block_colour(h_world, source, id)
 		if shown:
-			var cr := crumb_set(size.snapped(Vector3.ONE * 0.001))
+			var cr := crumb_set(size.snapped(Vector3.ONE * 0.001), mat_of(colour))
 			crumb_push(cr, at, Vector3.ZERO, frame_basis, Vector3.UP, 0.0, now, floor_y,
 					reach, colour, on_ground)
 		elif is_finite(floor_y):
@@ -408,10 +417,20 @@ func crumb_floor_gone(cr: Host.Crumbs, i: int, p: Vector3) -> bool:
 	return true
 
 
-func crumb_set(key: Vector3) -> Host.Crumbs:
-	if host._crumbs.has(key):
-		return host._crumbs[key]
+## The material a block colour carries in its alpha (BrickWorld.get_block_rgba,
+## block_rgba_grain): 0 for a plain filament colour (alpha 1).
+static func mat_of(c: Color) -> int:
+	return roundi((1.0 - c.a) * 255.0 + 0.25) & 31
+
+
+## The crumbs of one brick size and one material (crumb.gdshader's crumb_mat):
+## a set each, so the material costs no instance data.
+func crumb_set(key: Vector3, mat := 0) -> Host.Crumbs:
+	var dict_key: Variant = key if mat == 0 else Vector4(key.x, key.y, key.z, float(mat))
+	if host._crumbs.has(dict_key):
+		return host._crumbs[dict_key]
 	var cr := Host.Crumbs.new()
+	cr.size = key
 	var mmi := MultiMeshInstance3D.new()
 	mmi.physics_interpolation_mode = Node.PHYSICS_INTERPOLATION_MODE_OFF
 	var mm := MultiMesh.new()
@@ -424,9 +443,11 @@ func crumb_set(key: Vector3) -> Host.Crumbs:
 	mm.custom_aabb = AABB(Vector3(-1e5, -1e5, -1e5), Vector3(2e5, 2e5, 2e5))
 	mmi.multimesh = mm
 	mmi.material_override = _crumb_material()
+	if mat != 0:
+		mmi.set_instance_shader_parameter(&"crumb_mat", mat)
 	host.add_child(mmi)
 	cr.mmi = mmi
-	host._crumbs[key] = cr
+	host._crumbs[dict_key] = cr
 	return cr
 
 
@@ -474,7 +495,7 @@ func _crumb_event(cr: Host.Crumbs, i: int, key: Vector3, now: int) -> bool:
 	# Come to rest: it lies where it stopped, for good (BrickHeap).
 	if _crumb_keep and cr.landed[i] > 0:
 		var t_lay := Time.get_ticks_usec()
-		_lay_crumb(cr, i, key, _crumb_dt)
+		_lay_crumb(cr, i, cr.size, _crumb_dt)
 		lay_us += Time.get_ticks_usec() - t_lay
 		_crumb_remove(cr, i)
 		return true

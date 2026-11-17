@@ -12,7 +12,11 @@ extends SceneTree
 ##   * a piece standing upright drops its loose bricks onto its own floor --
 ##     where they were;
 ##   * a piece lying on its side drops them straight down, off the floor that
-##     became a wall, onto what is below; its furniture stays in its chunk.
+##     became a wall, onto what is below; its furniture stays in its chunk;
+##   * what falls keeps its material: the colour a crumb or a heap brick is
+##     given carries it (BrickWorld.get_block_rgba, IslandCrumbs.mat_of);
+##   * a piece put to sleep and woken (ChunkRecord) keeps its blocks' materials
+##     and its loose marks, and so does a save's furniture (AreaSnapshot).
 
 var _pass := 0
 var _fail := 0
@@ -154,6 +158,50 @@ func _run() -> void:
 			and absf(new_ground - wall_face) < 0.06, "landed on %.2f m, the wall's face %.2f m" % [
 			new_ground, wall_face])
 	_ok("the desk stays joined to the floor, now standing up", _w.get_alive_block_count(lying.chunk) == ids3.size() - 1)
+
+	print("\nwhat falls keeps its material")
+	var c4 := _w.create_chunk(Vector3i.ZERO, Vector3i(8, 8, 8))
+	var wood := _w.place_block(c4, Vector3i(0, 0, 0), _palette["brick_2x4_x"], 1)
+	_w.set_block_material(c4, wood, 2)
+	var col: Color = _m.crumbler._block_colour(_w, c4, wood)
+	_ok("a falling brick's colour carries its material", _m.crumbler.mat_of(col) == 2,
+			"material %d, alpha %.4f" % [_m.crumbler.mat_of(col), col.a])
+	var plain := _w.place_block(c4, Vector3i(0, 3, 0), _palette["brick_2x4_x"], 1)
+	_ok("and a filament brick's says filament", _m.crumbler.mat_of(_m.crumbler._block_colour(_w, c4, plain)) == 0)
+	var cr4 = _m.crumbler.crumb_set(Vector3(1.4, 0.42, 0.7), 2)
+	var cr0 = _m.crumbler.crumb_set(Vector3(1.4, 0.42, 0.7))
+	_ok("crumbs of one size in two materials are two sets, each its size", cr4 != cr0
+			and cr4.size == Vector3(1.4, 0.42, 0.7)
+			and int(cr4.mmi.get_instance_shader_parameter(&"crumb_mat")) == 2)
+
+	print("\nput to sleep and woken")
+	var r5 := _room(Vector3(90.0, 0.0, 0.0))
+	var c5: int = r5[0]
+	_w.set_block_material(c5, r5[1], 3)
+	var rec := ChunkRecord.capture(_w, c5)
+	var woke := rec.restore(_w)
+	var woke_loose: PackedInt32Array = _w.get_loose_blocks(woke)
+	var mats_kept := 0
+	for id in _w.get_block_count(woke):
+		if _w.get_block_material(woke, id) == 3:
+			mats_kept += 1
+	_ok("the woken piece still knows its item is loose", woke_loose.size() == 1
+			and _w.is_block_decorative(woke, woke_loose[0]), "%s" % [woke_loose])
+	_ok("and its desk is still the material it was", mats_kept == 1, "%d of material 3" % mats_kept)
+	var data := rec.to_data(_w)
+	var back := ChunkRecord.from_data(_w, data)
+	_ok("a save of the record keeps both", back != null and back.loose == rec.loose
+			and back.materials == rec.materials, "loose %s, materials %s" % [rec.loose, rec.materials])
+	var furn: Array = AreaSnapshot.furniture_of(_w, c5)
+	var loose_entries := 0
+	var mat_entries := 0
+	for f in furn:
+		if (f as Array).size() > 4 and bool(f[4]):
+			loose_entries += 1
+		if (f as Array).size() > 3 and int(f[3]) == 3:
+			mat_entries += 1
+	_ok("a save's furniture says which is loose and what it is made of", loose_entries == 1
+			and mat_entries == 1, "%s" % [furn])
 
 	print("\n%d loose bricks dropped" % _m.crumbler.loose_dropped)
 	print("\nloose_items_probe: %d passed, %d failed" % [_pass, _fail])
