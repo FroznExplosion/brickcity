@@ -46,7 +46,7 @@ func _init() -> void:
 		runs.append(PackedInt32Array([s, s + 1]))
 	# Laid one after the other, as the city lays them (_lay_more): storey s
 	# first, then the one over it.
-	var seq: Array = []
+	var seq: Array = [PackedInt32Array([0, 1]), PackedInt32Array([2, 3])]
 	for s in range(1, n - 1, 3):
 		seq.append(PackedInt32Array([s, s + 1]))
 	for run in seq:
@@ -55,13 +55,22 @@ func _init() -> void:
 		var r: BuildingRegistry = m[1]
 		var id: int = m[2]
 		var c := r.materialise(id, PackedInt32Array([run[0]]))
+		w.set_tension_per_stud(c, BrickStrength.tension())   # as the city sets it
 		r.lay_storeys(id, PackedInt32Array([run[1]]))
+		# And solved as the city solves it (CityScene: solve_structure_async,
+		# CASCADE_ROUNDS 48): stress under the load of the storeys over the
+		# run (set_storey_bounds), then what is left loose.
+		var res: Dictionary = w.solve_structure(c, 48, 0.0)
+		var stress: Dictionary = res.get("stress", {})
 		var loose := 0
+		for g in (res.get("groups", []) as Array):
+			loose += (g as PackedInt32Array).size()
 		for g in w.find_detached_groups(c):
 			loose += (g as PackedInt32Array).size()
-		if loose > 0:
+		if loose > 0 or int(stress.get("failures", 0)) > 0:
 			bad += 1
-			print("  --   storey %d, then %d laid over it: %d brick(s) loose" % [run[0], run[1], loose])
+			print("  --   storey %d, then %d laid over it, solved: %d brick(s) loose, %d joint failure(s); %s" % [
+					run[0], run[1], loose, int(stress.get("failures", 0)), str(res.keys())])
 		worst = maxi(worst, loose)
 	var every := PackedInt32Array()
 	for s in n:

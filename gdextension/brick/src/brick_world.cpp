@@ -6373,6 +6373,55 @@ void BrickWorld::set_load(int chunk_id, int owner, const PackedInt32Array &block
     }
 }
 
+void BrickWorld::set_load_each(int chunk_id, int owner, const PackedInt32Array &block_ids,
+        const PackedFloat32Array &masses) {
+    if (solves_live.load(std::memory_order_relaxed) > 0) {
+        structural_write(chunk_id);
+    }
+    if (!valid_chunk(chunk_id)) {
+        return;
+    }
+    std::vector<std::pair<int32_t, int64_t>> v;
+    const int64_t n = std::min(block_ids.size(), masses.size());
+    for (int64_t i = 0; i < n; ++i) {
+        const int64_t units = brick::to_mass_units(std::max(masses[i], 0.0f));
+        if (units > 0) {
+            v.push_back({ block_ids[i], units });
+        }
+    }
+    StressState &sx = stress[chunk_id];
+    if (v.empty()) {
+        sx.loads.erase(owner);
+    } else {
+        sx.loads[owner] = std::move(v);
+    }
+}
+
+PackedFloat32Array BrickWorld::get_carried_loads(int chunk_id, const PackedInt32Array &block_ids,
+        bool minus_own) const {
+    PackedFloat32Array out;
+    if (!valid_chunk(chunk_id)) {
+        return out;
+    }
+    const Chunk &c = chunks[chunk_id];
+    const double unit = (double)brick::to_mass_units(1.0f);
+    out.resize(block_ids.size());
+    for (int64_t i = 0; i < block_ids.size(); ++i) {
+        const int32_t bid = block_ids[i];
+        double kg = 0.0;
+        if (bid >= 0 && bid < (int32_t)c.blocks.size()) {
+            const Block &b = c.blocks[(size_t)bid];
+            int64_t load = b.load;
+            if (minus_own && b.alive && !b.decorative && b.archetype >= 0) {
+                load -= std::max((int64_t)1, brick::to_mass_units(archetypes[b.archetype].mass));
+            }
+            kg = (double)std::max(load, (int64_t)0) / unit;
+        }
+        out[i] = (float)kg;
+    }
+    return out;
+}
+
 void BrickWorld::clear_load(int chunk_id, int owner) {
     if (solves_live.load(std::memory_order_relaxed) > 0) {
         structural_write(chunk_id);
@@ -12427,6 +12476,10 @@ void BrickWorld::_bind_methods() {
     BIND_CONSTANT(JOINT_SUPPORT_BROKEN);
     BIND_CONSTANT(JOINT_BOTTOM_BROKEN);
 
+    ClassDB::bind_method(D_METHOD("set_load_each", "chunk_id", "owner", "block_ids", "masses"),
+            &BrickWorld::set_load_each);
+    ClassDB::bind_method(D_METHOD("get_carried_loads", "chunk_id", "block_ids", "minus_own"),
+            &BrickWorld::get_carried_loads);
     ClassDB::bind_method(D_METHOD("set_load", "chunk_id", "owner", "block_ids", "mass_each"),
             &BrickWorld::set_load);
     ClassDB::bind_method(D_METHOD("clear_load", "chunk_id", "owner"), &BrickWorld::clear_load);

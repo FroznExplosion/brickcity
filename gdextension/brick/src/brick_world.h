@@ -703,6 +703,16 @@ public:
     /// (DamageLog LOAD / UNLOAD): a load one machine has and another does not
     /// changes how the next blast breaks (AIPlan R5).
     void set_load(int chunk_id, int owner, const PackedInt32Array &block_ids, float mass_each);
+    /// set_load with a mass a block, `masses[i]` kg on `block_ids[i]`: what a
+    /// run of storeys laid alone carries of the storeys over it, each top
+    /// brick its share as the whole building would give it (Docs/Space.md 5.3c).
+    void set_load_each(int chunk_id, int owner, const PackedInt32Array &block_ids,
+            const PackedFloat32Array &masses);
+    /// After solve_stress: the load each of `block_ids` carried, kg -- its own
+    /// mass and everything that rested on it, or with `minus_own` only what
+    /// came down onto it. 0 for a block the solve did not reach.
+    PackedFloat32Array get_carried_loads(int chunk_id, const PackedInt32Array &block_ids,
+            bool minus_own) const;
     void clear_load(int chunk_id, int owner);
     /// The external weight on one block, all owners together. For probes.
     float get_external_load(int chunk_id, int block_id) const;
