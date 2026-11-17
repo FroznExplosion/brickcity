@@ -31,7 +31,10 @@ was found, how to test without harming the user's files, and what to do next.
   `mesh_cell_colours`) and 8c the colour table in Generate > Model done 2026-11-16; 8d the colour table in the asset
   workshop (`ColourTable`, shared) done 2026-11-16. **Stage 8 is done; every stage of the plan
   (0-8) is built.** The 8d pictures (`a8_colours_table`, `a8_colours_bricks`) and main's DLL
-  rebuild were done 2026-11-16. Never run the probe at 200+ studs on this machine (memory).
+  rebuild were done 2026-11-16. The loose ends closed 2026-11-17 (section 21, "Loose ends"):
+  the colour table saved with the asset, an all-clay asset opens, the Connection point ask
+  closes, "1 brick". Left on purpose: the cell clay (only if buildings are to be sculpted) and
+  Generate > Model placing in the middle (it moves afterwards). Never run the probe at 200+ studs on this machine (memory).
 
 
 ## Where to work

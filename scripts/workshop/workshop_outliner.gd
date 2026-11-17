@@ -122,14 +122,14 @@ func refresh() -> void:
 		names[k[0]] = k[1]
 	var sec := _section(root, "Shapes", t.shapes().size())
 	for sh in t.shapes():
-		var it := _row(sec, "%s  (%s)" % [names.get(sh.kind, sh.kind), sh.part], "%d bricks" % (sh.bricks as Array).size(),
+		var it := _row(sec, "%s  (%s)" % [names.get(sh.kind, sh.kind), sh.part], _bricks((sh.bricks as Array).size()),
 				{"shape": int(sh.id)})
 		if int(sh.id) == t.selected:
 			it.select(0)
 	sec = _section(root, "Inserted builds", r.groups.size())
 	for i in r.groups.size():
 		var g: Dictionary = r.groups[i]
-		var it := _row(sec, String(g.get("name", "a build")), "%d bricks" % int(g.get("count", 0)), {"group": i})
+		var it := _row(sec, String(g.get("name", "a build")), _bricks(int(g.get("count", 0))), {"group": i})
 		if i == t.ws._selected:
 			it.select(0)
 	sec = _section(root, "Generated", r.towers.size())
@@ -193,3 +193,8 @@ func _on_select() -> void:
 		if t.ws._spaces != null:
 			t.ws._spaces.selected = int(what.room)
 	_sig = ""   # lit as the workshop now says
+
+
+## "1 brick", "12 bricks".
+static func _bricks(n: int) -> String:
+	return "1 brick" if n == 1 else "%d bricks" % n

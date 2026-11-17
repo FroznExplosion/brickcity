@@ -1821,7 +1821,8 @@ func _store_asset_meta() -> void:
 			"sketches": sketches, "part_bricks": part_bricks, "studs": extra_studs, "curves": curve_level,
 			"shells": shells, "sdf": _sdf_meta, "sculpt": {"state": sculpt_state, "cells": Array(_sdf_cells),
 			"stash": _sdf_stash, "shell_cells": Array(_sdf_shell), "clay_bricks": clay_bricks.keys(), "v2": true,
-			"clay_colours": clay_colours},
+			"clay_colours": clay_colours,
+			"colour_table": {"material": convert_colours.material, "remap": convert_colours.remap}},
 			"models": _models_meta(),
 			"part_ids": part_ids, "part_hashes": part_hashes, "part_revs": part_revs,
 			"mech": {"class": mech_class, "length": leg_length}, "gun_scale": gun_scale, "maker": part_maker}   # not a copy: this runs on every edit, and a save writes it out as it is
@@ -1887,6 +1888,14 @@ func _restore_asset_meta() -> void:
 	var cc: Dictionary = sst.get("clay_colours", {})
 	for k in cc:
 		clay_colours[int(k)] = [int(cc[k][0]), int(cc[k][1])]
+	# The colour table's hand changes (stage 8d), kept with the asset; counts are recounted.
+	var ctab: Dictionary = sst.get("colour_table", {})
+	convert_colours.material = int(ctab.get("material", 0))
+	convert_colours.counts = {}
+	convert_colours.remap = {}
+	var rm: Dictionary = ctab.get("remap", {})
+	for k in rm:
+		convert_colours.remap[int(k)] = int(rm[k])
 	if sculpt != null:
 		sculpt.set_parts(part_names.size())
 		sculpt.load_meta(_sdf_meta)
@@ -1944,6 +1953,9 @@ func _reset_space() -> void:
 		untry_all()
 	part_of = PackedInt32Array()
 	points = []
+	close_point_ask()
+	convert_colours.counts = {}
+	convert_colours.remap = {}
 	if _points_root != null:
 		_draw_points()
 	for g in guides:
@@ -2285,6 +2297,12 @@ func toggle_point(at: Array, kind: String, slot: String, iface: String, dir: Arr
 	_draw_points()
 	_store_asset_meta()
 	return true
+
+
+## Closes the Connection point panel if it is asking (a new asset, another stage).
+func close_point_ask() -> void:
+	if _point_panel != null:
+		_point_panel.visible = false
 
 
 func toggle_point_here() -> void:
