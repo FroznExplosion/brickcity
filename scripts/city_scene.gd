@@ -533,7 +533,12 @@ var _remesh_hold := {}
 ## falling and still standing.
 var _handovers := {}
 const HANDOVERS_PER_TICK := 3
-const HANDOVER_MAX_FRAMES := 20
+## How long a building goes on drawing what it shed for a piece that is still
+## drawing nothing: physics TICKS, not frames. It was 20 frames -- 10 ticks at
+## 60 fps, but 4-5 ticks headless (about 5 frames a tick), shorter than a big
+## piece's bake and slices (6-7 ticks), and collapse_probe's "no gap" failed
+## 3 runs in 4 there (2026-11-17). Half a second, whatever the frame rate.
+const HANDOVER_MAX_TICKS := 15
 var handover_stats := {"count": 0, "gap_ticks": 0, "gap_worst": 0, "gap_handovers": 0,
 		"double_ticks": 0, "double_worst": 0, "double_handovers": 0,
 		"double_queued": 0, "double_bands": 0,
@@ -4243,7 +4248,8 @@ func _with_stairs(b: BuildingRegistry.Building, group: PackedInt32Array) -> Pack
 ## A piece has just left building `id`: watch the hand-over (_handovers).
 func _note_handover(id: int, isl: BrickIsland) -> void:
 	if not _handovers.has(id):
-		_handovers[id] = {"pieces": [], "born": Engine.get_process_frames(), "gap": 0, "double": 0,
+		_handovers[id] = {"pieces": [], "born": Engine.get_process_frames(),
+				"born_tick": Engine.get_physics_frames(), "gap": 0, "double": 0,
 				"coarse": 0}
 		handover_stats.count += 1
 	(_handovers[id].pieces as Array).append(isl)
@@ -4251,13 +4257,13 @@ func _note_handover(id: int, isl: BrickIsland) -> void:
 
 ## Must building `id` keep drawing what it shed? Yes for OVERLAP_FRAMES (the
 ## newborn instance), and after that while any piece that took the bricks draws
-## nothing -- up to HANDOVER_MAX_FRAMES, so a stalled bake cannot hold it for good.
+## nothing -- up to HANDOVER_MAX_TICKS, so a stalled bake cannot hold it for good.
 func _handover_waiting(id: int, now: int) -> bool:
 	var h: Dictionary = _handovers[id]
 	var age := now - int(h.born)
 	if age <= IslandManager.OVERLAP_FRAMES:
 		return true
-	if age > HANDOVER_MAX_FRAMES:
+	if Engine.get_physics_frames() - int(h.born_tick) > HANDOVER_MAX_TICKS:
 		return false
 	for isl in h.pieces:
 		if islands.is_blind(isl):
