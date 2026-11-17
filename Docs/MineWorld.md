@@ -178,8 +178,17 @@ were running, so the numbers are rough):
 - `TerrainCoarse.field_changed` lands every job in flight and waits for its
   bake: right for an editor's stroke, wrong in play. The mine world uses
   `field_changed_soon` (no wait; only blocks that are nodes of their own).
-- What is left is one frame of about 24 ms when a rebuilt tile adds its
-  instance nodes: about 1 in 78 of those node adds stalls 11-21 ms inside the
-  engine, whichever node it is (`TerrainTile.profile_instances` times each
-  step; the pass prints it). Tiles now build only the stud set they show
-  (near or far) and the other when they first switch.
+- A rebuilt tile's instances (studs, tufts, pebbles) stalled 11-21 ms about
+  one time in 78: the tile it replaced still held its MultiMeshes until it
+  was freed at the end of the frame, the pool was empty, and a never-drawn
+  MultiMesh in a new node is slow to show. Now the streamer `recycle()`s a
+  tile as it replaces or drops it -- its instance NODES, each with its
+  MultiMesh, go to a pool at once and the next tile reuses them. The
+  instances phase went from 12-21 ms worst to 0.2-0.3 ms; in the rapid-fire
+  test all 78 rebuilt tiles reused pooled nodes. Tiles also build only the
+  stud set they show (near or far) and the other when they first switch.
+  `TerrainTile.profile_instances` times each step; the pass prints it.
+- After that, an edit costs nothing measurable: 180 frames with no edits had
+  a worst frame of 23.8 ms and 69 over 20 ms; 180 frames of rapid fire, 25.8
+  ms and 65 over 20 ms. Those ~24 ms frames are this machine's frame pacing
+  with the test window off-screen and other tests running, not the edits.
