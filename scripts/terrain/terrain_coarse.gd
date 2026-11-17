@@ -52,6 +52,10 @@ var verbose := false
 var anchor := Vector2i.ZERO
 ## A build in flight (`build_begin`): the layout and the group task.
 var _build_job := {}
+## Edits during play (`field_changed_soon`): the tiles waiting, and the
+## re-bake in flight.
+var _edit_dirty := Rect2i()
+var _edit_job := {}
 
 ## What `build` was last asked for: `rebuild` asks again.
 var _reach_tiles := 0
@@ -320,6 +324,8 @@ func _exit_tree() -> void:
 	_wait_jobs()
 	_job_wait(_build_job)
 	_build_job = {}
+	_job_wait(_edit_job)
+	_edit_job = {}
 	_relod_job = {}
 	_refine_job = {}
 
@@ -489,6 +495,7 @@ static func lod_of_step(step: int) -> float:
 func cover(streamer: TerrainStreamer, wait := true) -> void:
 	if _far_nodes.is_empty():
 		return
+	_edit_step()
 	_refine_for(streamer.current_region())
 	while wait and not _refine_job.is_empty():
 		_job_wait(_refine_job)
@@ -783,6 +790,59 @@ func _apply_relod(budget_ms := APPLY_BUDGET_MS) -> void:
 ## The field changed over these TILES (an edit, a pad cut for a placed
 ## build): bake the blocks over them again, each at the step it was built
 ## with -- a merged ring as a whole, since a ring is one mesh.
+## `field_changed` for play: a shot or a placed block. Nothing waits -- the
+## blocks over the tiles are re-baked on the workers and swapped in when done
+## (`cover` drives it each frame). `field_changed` lands every job and waits
+## for its bake, which is right for an editor's stroke and was a hitch on
+## every shot in the mine world (Docs/MineWorld.md 9). Only blocks that are a
+## node of their own are re-baked: merged rings are far out, where a step of
+## 8 studs or more cannot show a crater, and the next build bakes them fresh.
+func field_changed_soon(tiles: Rect2i) -> void:
+	_edit_dirty = tiles if not _edit_dirty.has_area() else _edit_dirty.merge(tiles)
+
+
+func _edit_step() -> void:
+	if not _edit_job.is_empty():
+		if not _job_done(_edit_job):
+			return
+		var job := _edit_job
+		_edit_job = {}
+		for k in job.nodes.size():
+			var arrays: Array = job.baked[k].get("mesh", [])
+			var mi := job.mis[k] as MeshInstance3D
+			if arrays.is_empty() or not is_instance_valid(mi) or _all_node.get(job.nodes[k]) != mi:
+				continue
+			var mesh := ArrayMesh.new()
+			mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays, [], {},
+					TerrainTile.CUSTOM0_FLAGS)
+			mi.mesh = mesh
+	if not _edit_dirty.has_area():
+		return
+	var tiles := _edit_dirty
+	_edit_dirty = Rect2i()
+	var nodes: Array[int] = []
+	var mis: Array = []
+	var rects: Array[Rect2i] = []
+	var steps: Array[int] = []
+	for i in _all_rects.size():
+		if _all_owner[i] == -2 or not _all_node.has(i) or not _all_rects[i].intersects(tiles):
+			continue
+		nodes.append(i)
+		mis.append(_all_node[i])
+		rects.append(_all_rects[i])
+		steps.append(_all_steps[i])
+	if nodes.is_empty():
+		return
+	var baked: Array[Dictionary] = []
+	baked.resize(nodes.size())
+	var task := WorkerThreadPool.add_group_task(
+		func(k: int) -> void:
+			baked[k] = BrickTerrain.build_coarse(rects[k].position.x, rects[k].position.y,
+				rects[k].size.x, steps[k]),
+		nodes.size(), -1, true, "coarse edit")
+	_edit_job = {"task": task, "nodes": nodes, "mis": mis, "baked": baked}
+
+
 func field_changed(tiles: Rect2i) -> void:
 	# A job in flight baked from the field as it was: land it first, then
 	# this re-bakes over it from the field as it is.

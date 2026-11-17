@@ -737,6 +737,12 @@ public:
 
     static void clear_terrain_edits();
     static int get_edit_count();
+    /// Every edit, 13 bytes each: int32 x, int32 yp, int32 z (stud, plate,
+    /// stud; little-endian), uint8 material (0 = carved). For saving a world's
+    /// changes (Docs/MineWorld.md 9); `set_edits` lays them back.
+    static PackedByteArray get_edits();
+    /// Lay edits from `get_edits`' bytes over the current ones. Returns how many.
+    static int set_edits(const PackedByteArray &bytes);
     static int material_at(int x, int z);
     static bool is_plate(int x, int z);
     static bool stud_at(int x, int z);
