@@ -738,3 +738,12 @@ From the first measurement (B10's run: 167 ms of spawn meshing, worst 14.7, plus
 the queue) to now, a piece's mesh costs the main thread about a third of what it did and no
 single one more than ~6 ms. One run each way; worth a second pair if the numbers are ever
 leaned on.
+
+## B14. Status check and items (2026-11-16)
+
+Of the follow-ups: a load pass over only the region above a hit (A4.2) -- not started; very
+big pieces' strength tree on a worker -- not started (`TREE_MAX_BLOCKS` 3,000 still falls back
+to the seams); furniture spilling -- deferred by the user; the separate render thread --
+measured again by another chat on 2026-11-10 and not switched (WhereWorkRuns 3.1: the frame is
+paced by the renderer's own work on this machine). Built instead: items fall and furniture
+stays clicked on -- A8.3's rule without the spill, Docs/Interiors.md 8.16.

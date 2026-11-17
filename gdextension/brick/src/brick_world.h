@@ -1049,6 +1049,12 @@ public:
     /// block_rgba_grain: material and grain in alpha). No bake, no occupancy
     /// walk: O(blocks), and the script assigns a buffer per size.
     Dictionary get_standin_buffers(int chunk_id) const;
+
+    /// Mark blocks as an item's loose bricks (Block::loose; Docs/Interiors.md
+    /// 8.16), or not. Returns how many changed. Carried by split_island.
+    int set_blocks_loose(int chunk_id, const PackedInt32Array &block_ids, bool on);
+    /// The live loose blocks of a chunk, in id order.
+    PackedInt32Array get_loose_blocks(int chunk_id) const;
     // A box a brick, for drawing a building's bands with no bake (the
     // 2026-11-11 audit's experiment; CityDrawing.instanced_bands). One
     // MultiMesh buffer a drawing section: a UNIT box's transform scaled to
