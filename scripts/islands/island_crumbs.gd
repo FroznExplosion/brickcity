@@ -241,6 +241,137 @@ func add_crumbs(source: int, block_ids: PackedInt32Array, box: AABB, linear: Vec
 				BrickWorld.get_filament_colour(h_world.get_block_colour(source, id)), lands_fixed)
 
 
+## Loose bricks dropped off pieces at rest (drop_loose), all told.
+var loose_dropped := 0
+
+
+## **Items are not clicked to the building** (Docs/Interiors.md 8.16). A piece
+## that has come to rest drops its loose bricks -- an item's, Block.loose --
+## off whatever they were laid on: each straight down, onto what is under it
+## now. On a piece standing upright that is the floor it was on (it does not
+## move); on one lying on its side it is the wall that floor's room has become.
+## Furniture is clicked on and stays where it is joined.
+##
+## Seen: as a crumb with no kick, falling and laid where it stops (a crumb is
+## kicked off the face it came from, which would send an item through a wall).
+## Not seen: laid on the heap at once where it would have come down -- an item
+## is not swept away unseen as debris is. Either way it leaves the piece's
+## chunk, so the piece's mesh and collision lose it at their rebuild.
+## Returns how many bricks went.
+func drop_loose(source: int, block_ids: PackedInt32Array) -> int:
+	var h_world := host.world
+	if block_ids.is_empty() or not host.is_inside_tree():
+		return 0
+	var xf: Transform3D = h_world.get_chunk_transform(source)
+	var tick_m: float = BrickWorld.get_cell_size().x / float(BrickWorld.ticks_per_stud())
+	var frame_basis := xf.basis.orthonormalized()
+	var box := host._group_box(source, block_ids)
+	var dist := INF
+	if host.camera != null and is_instance_valid(host.camera):
+		dist = Host._distance_to_box(box, host.camera.global_position)
+	var shown := dist <= Host.SMALL_KEEP_RANGE and host._box_seen(box) \
+			and host.crumb_count + block_ids.size() <= Host.CRUMBS_MAX
+	var now := Engine.get_physics_frames()
+	var dropped := 0
+	var going := {}
+	for id in block_ids:
+		going[id] = true
+	# Down in the piece's own grid, when it lies near enough square to it (a
+	# piece at rest on a floor or on its side does): the axis and its sign.
+	var down_local := frame_basis.inverse() * Vector3.DOWN
+	var axis := 0
+	for k in 3:
+		if absf(down_local[k]) > absf(down_local[axis]):
+			axis = k
+	var on_grid := absf(down_local[axis]) > 0.9
+	var step := Vector3i.ZERO
+	step[axis] = 1 if down_local[axis] > 0.0 else -1
+	var cs := BrickWorld.get_cell_size()
+	var tps := BrickWorld.ticks_per_stud()
+	var tpp := BrickWorld.ticks_per_plate()
+	var origin := h_world.get_chunk_origin(source)
+	for id in block_ids:
+		var t: Array = h_world.get_block_ticks(source, id)
+		if t.is_empty():
+			continue
+		var size := Vector3(t[1] as Vector3i) * tick_m
+		var local := (Vector3(t[0] as Vector3i) + Vector3(t[1] as Vector3i) * 0.5) * tick_m
+		var at: Vector3 = xf * local
+		# How far its box reaches down, turned as the piece lies.
+		var reach := 0.5 * (absf(frame_basis.x.y) * size.x + absf(frame_basis.y.y) * size.y
+				+ absf(frame_basis.z.y) * size.z)
+		# What it comes down on: first the piece's own bricks, stepping it down
+		# its grid a cell at a time -- the desk under a cup, the wall a floor
+		# became. Not the physics: a ray from under it starts inside whatever
+		# it sits on, and a big piece's merged boxes run under it as one.
+		var floor_y := -INF
+		var on_ground := 0
+		var cells := -1
+		if on_grid:
+			var lo := Vector3i((t[0] as Vector3i).x / tps, (t[0] as Vector3i).y / tpp,
+					(t[0] as Vector3i).z / tps) + origin
+			var n := Vector3i(maxi((t[1] as Vector3i).x / tps, 1), maxi((t[1] as Vector3i).y / tpp, 1),
+					maxi((t[1] as Vector3i).z / tps, 1))
+			cells = _cells_to_rest(source, id, lo, n, step, axis, going)
+		if cells >= 0:
+			var landed: Vector3 = xf * (local + Vector3(step) * cs * float(cells))
+			floor_y = landed.y - reach
+			at = landed
+		else:
+			# Nothing of the piece under it: on to whatever is below the piece.
+			floor_y = crumb_floor(at - Vector3(0.0, reach + 0.02, 0.0))
+			on_ground = 1 if host._floor_on_ground else 0
+		var colour := BrickWorld.get_filament_colour(h_world.get_block_colour(source, id))
+		if shown:
+			var cr := crumb_set(size.snapped(Vector3.ONE * 0.001))
+			crumb_push(cr, at, Vector3.ZERO, frame_basis, Vector3.UP, 0.0, now, floor_y,
+					reach, colour, on_ground)
+		elif is_finite(floor_y):
+			var flat := _lie_flat(frame_basis, size)
+			var p := at
+			p.y = host.heap.base_for(size, flat[0] as Basis, p, floor_y) + size[int(flat[1])] * 0.5
+			host.heap.lay(size, Transform3D(flat[0] as Basis, p), colour, floor_y, on_ground != 0)
+		dropped += 1
+	var cut: Dictionary = h_world.split_island(source, block_ids)
+	if not cut.is_empty():
+		h_world.release_chunk(int(cut.chunk))
+	loose_dropped += dropped
+	return dropped
+
+
+## How many cells block `id` (its box `lo`, `n` cells) moves along `step` before
+## the next would run into another of the chunk's live bricks -- not one of
+## `going`, which fall too -- or -1 if nothing of the chunk is under it within
+## its grid.
+func _cells_to_rest(chunk: int, id: int, lo: Vector3i, n: Vector3i, step: Vector3i, axis: int,
+		going: Dictionary) -> int:
+	var h_world := host.world
+	var dims := h_world.get_chunk_dims(chunk)
+	var origin := h_world.get_chunk_origin(chunk)
+	# The face it leads with, then one layer further at a time.
+	var lead := lo[axis] + (n[axis] - 1 if step[axis] > 0 else 0)
+	var limit := dims[axis] + 1
+	for k in range(1, limit):
+		var at_layer := lead + step[axis] * k
+		if at_layer < origin[axis] or at_layer >= origin[axis] + dims[axis]:
+			return -1
+		var a2 := (axis + 1) % 3
+		var a3 := (axis + 2) % 3
+		for i in n[a2]:
+			for j in n[a3]:
+				var c := Vector3i.ZERO
+				c[axis] = at_layer
+				c[a2] = lo[a2] + i
+				c[a3] = lo[a3] + j
+				if not h_world.is_solid(chunk, c):
+					continue
+				var other := h_world.block_at(chunk, c)
+				if other == id or going.has(other):
+					continue
+				return k - 1
+	return -1
+
+
 ## The first thing under `from` a crumb stops on, or -INF. Whether that was
 ## the ground itself (Layers.WORLD) is left in _floor_on_ground.
 func crumb_floor(from: Vector3) -> float:
