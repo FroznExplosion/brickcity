@@ -1713,6 +1713,9 @@ material clears the table. Notes:
   hand stays changed in the clay after Make bricks; Z gives the clay's own colours back.
 * The vote can pick a colour beside the nearest one (a red next to the nearest red); the table
   shows what the vote gave, so it is what Make bricks lays.
+* Pictures (2026-11-16, `workshop_ui_shots` `a8_colours_table`, `a8_colours_bricks`): a red-top,
+  blue-bottom model in PLA. The first one showed the table squeezed beside Hide colours (the
+  actions are a flow); the table now takes a row of its own, the full width of the actions.
 * `asset_workshop_probe` 356 (+3): the button while clay; the clay's red and blue rows; a changed
   row marked under the actions; a colour changed by hand laid all blue; Reset after Z red and
   blue again. No new picture: the asset pictures want a coloured model loaded, left for later.

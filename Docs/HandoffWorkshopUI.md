@@ -30,8 +30,8 @@ was found, how to test without harming the user's files, and what to do next.
   section 21, "Colours from a model"): 8a OBJ colours and 8b the model's colours in Generate > Model (C++
   `mesh_cell_colours`) and 8c the colour table in Generate > Model done 2026-11-16; 8d the colour table in the asset
   workshop (`ColourTable`, shared) done 2026-11-16. **Stage 8 is done; every stage of the plan
-  (0-8) is built.** Open: the asset pictures for 8d (a coloured model), main's DLL rebuild
-  after 7c/8b (the user's editor was open). Never run the probe at 200+ studs on this machine (memory).
+  (0-8) is built.** The 8d pictures (`a8_colours_table`, `a8_colours_bricks`) and main's DLL
+  rebuild were done 2026-11-16. Never run the probe at 200+ studs on this machine (memory).
 
 
 ## Where to work

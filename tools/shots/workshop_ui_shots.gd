@@ -149,6 +149,58 @@ func _building() -> void:
 		await process_frame
 
 
+## Stage 8d (Docs/BuildTools.md section 21): a coloured model stamped into clay -- a red top
+## half and a blue bottom half, as asset_workshop_probe's colour round -- with "Colours for
+## bricks" open under the actions, then Make bricks. A new asset after, so nothing is left.
+func _asset_colours(ws, ui: AssetWorkshopUI) -> void:
+	ws.bench._on_menu("new", null)
+	for i in 20:
+		await process_frame
+	ui.set_stage("blockout")
+	ws.rail_pick("sculpt")
+	# In PLA, so red and blue stay red and blue (the hotbar is on bronze by now).
+	var keep_mat: int = ws.bench._mat
+	ws.bench._mat = 0
+	var lo: Vector3 = ws.sculpt.to_sample(Vector3(500, 4, 500) * 0.35).floor()
+	var hi := lo + Vector3(40, 20, 40)
+	var mid := (lo.y + hi.y) * 0.5
+	var quads := [
+		[Vector3(lo.x, hi.y, lo.z), Vector3(lo.x, hi.y, hi.z), Vector3(hi.x, hi.y, hi.z), Vector3(hi.x, hi.y, lo.z), true],
+		[Vector3(lo.x, lo.y, lo.z), Vector3(hi.x, lo.y, lo.z), Vector3(hi.x, lo.y, hi.z), Vector3(lo.x, lo.y, hi.z), false]]
+	for half in [[mid, hi.y, true], [lo.y, mid, false]]:
+		var y0: float = half[0]
+		var y1: float = half[1]
+		quads.append([Vector3(lo.x, y0, lo.z), Vector3(lo.x, y1, lo.z), Vector3(hi.x, y1, lo.z), Vector3(hi.x, y0, lo.z), half[2]])
+		quads.append([Vector3(lo.x, y0, hi.z), Vector3(hi.x, y0, hi.z), Vector3(hi.x, y1, hi.z), Vector3(lo.x, y1, hi.z), half[2]])
+		quads.append([Vector3(lo.x, y0, lo.z), Vector3(lo.x, y0, hi.z), Vector3(lo.x, y1, hi.z), Vector3(lo.x, y1, lo.z), half[2]])
+		quads.append([Vector3(hi.x, y0, lo.z), Vector3(hi.x, y1, lo.z), Vector3(hi.x, y1, hi.z), Vector3(hi.x, y0, hi.z), half[2]])
+	var v := PackedVector3Array()
+	var c := PackedColorArray()
+	for q in quads:
+		for t in [[0, 1, 2], [0, 2, 3]]:
+			for j in t:
+				v.append(q[j])
+				c.append(Color(0.9, 0.1, 0.1) if q[4] else Color(0.1, 0.2, 0.85))
+	var idx := PackedInt32Array()
+	for i in v.size():
+		idx.append(i)
+	ws.sculpt.form.begin_edit()
+	ws.sculpt.form.stamp_mesh(SdfForm.ADD, v, idx, ws.part_sel + 1, c)
+	ws._sculpt_record(ws.sculpt.form.end_edit())
+	ui.colours_shown = true
+	ws.colour_table_refresh()
+	ui._fill_actions()
+	await _shot("a8_colours_table", 12)
+	ws.sculpt_convert()
+	ui._fill_actions()
+	await _shot("a8_colours_bricks", 12)
+	ui.colours_shown = false
+	ws.bench._mat = keep_mat
+	ws.bench._on_menu("new", null)
+	for i in 20:
+		await process_frame
+
+
 func _asset() -> void:
 	var ws = load("res://scenes/asset_workshop.tscn").instantiate()
 	root.add_child(ws)
@@ -207,6 +259,7 @@ func _asset() -> void:
 	ws.bench._keys_on = false
 	ws.bench._keys_panel.visible = false
 	await _menu_shots(ws.bench._menu, "a6", ["File", "Edit", "View", "Insert", "Gun", "Help"])
+	await _asset_colours(ws, ui)
 	ws.set_asset_kind("item")
 	ui.set_stage("blockout")
 	await _shot("a7_item_blockout", 12)
