@@ -963,6 +963,10 @@ the heightmap texture the absorption ramp samples are all terrain's.
 
 ## 12. Plan: brick water that flows (after STA's blocky water)
 
+> The mine world's water (sources, still water bricks, lava, buckets, far LOD) is planned in
+> [MineWater.md](MineWater.md) (2026-11-17): Minecraft's fed-flow rules plus whole-tile still
+> water on a 1 stud x 1 brick grid, instead of 12.1's pipes and mass automaton.
+
 Status: **plan, not built.** Today's water is one wave function over a fixed sea level: the ocean.
 Nothing flows, fills a crater, or pours off a cliff. STA designed that for a blocky grid
 (`Docs/Reference/sta.md`; STA `Docs/24_CUBED_SPHERE_WATER.md`). This adapts it to bricks and to
