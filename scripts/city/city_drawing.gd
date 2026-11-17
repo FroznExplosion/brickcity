@@ -175,9 +175,10 @@ var _far_dmg_dirty := false
 ## writes the fades onto this node; each pane carries its room).
 ## Before, a building in bricks showed its rooms empty past INTERIOR_RANGE and
 ## a shot from mid range changed painted windows into drawn furniture.
-## Made again once its bricks have changed and it is quiet (_interior_unsure),
+## Made again once its bricks have changed and stood still (_panes_unsure),
 ## nearest first, one a pass.
 var _brick_panes := {}    ## building id -> its pane node, a child of its brick node
+var _pane_version := {}   ## building id -> chunk version its panes were made from
 
 var brick_panes_built := 0
 
@@ -1274,7 +1275,13 @@ func tend_brick_panes() -> void:
 			have = null
 		if have != null and not h_panes_owed.has(id):
 			continue
-		if city._interior_unsure(id):
+		# Owed, but its bricks are what they were made from (a solve that
+		# changed nothing marks it dirty too): nothing to make.
+		if have != null and (have as Node3D).visible and cand.is_materialised() \
+				and int(_pane_version.get(id, -1)) == city.world.get_chunk_version(cand.chunk):
+			h_panes_owed.erase(id)
+			continue
+		if city._panes_unsure(id):
 			continue
 		var d := cand.xform.origin.distance_to(here)
 		if d < best_d:
@@ -1310,7 +1317,7 @@ func tend_brick_panes() -> void:
 			holder[0] = BuildingShell.window_mesh_of(arrays) if on_worker else (arrays as Variant)
 			UploadLedger.note("panes", UploadLedger.verts_of(arrays)),
 			true, "brick panes")
-	city._pane_job = [task, holder, best]
+	city._pane_job = [task, holder, best, city.world.get_chunk_version(b.chunk)]
 	brick_panes_built += 1
 	brick_panes_ms += float(Time.get_ticks_usec() - t0) / 1000.0
 
@@ -1499,29 +1506,39 @@ func far_coarse_drop(id: int) -> void:
 		(node as Node).queue_free()
 
 
-## A building coming apart (CityScene._coming_apart), or come down: its
-## painted windows go now, not when they are made again over what is left --
-## which waits for it to be quiet. They were hidden near the camera by a
-## distance fade until 2026-11-14; with that gone a collapsed tower's windows
-## hung in the air where its walls had been (user, 2026-11-15). Hidden until
-## the new ones are hung (`_panes_owed` says they are owed); freed for a
-## building that came down.
+## A building coming apart (CityScene._coming_apart), or come down: painted
+## windows made before its bricks last changed go now, not when they are made
+## again over what is left -- which waits for its bricks to stand still
+## (_panes_unsure). They were hidden near the camera by a distance fade until
+## 2026-11-14; with that gone a collapsed tower's windows hung in the air where
+## its walls had been (user, 2026-11-15). Hidden until the new ones are hung
+## (`_panes_owed` says they are owed); freed for a building that came down
+## (or handed to its piece, PiecePanes).
+##
+## Windows made over what is left show while its pieces are still falling
+## (user, 2026-11-16: the standing part stayed blank until the last of its
+## rubble lay still). A bullet's hole is not coming apart: its old windows
+## stay up until the new ones are hung, as before.
 func _hide_falling_panes(reg: BuildingRegistry, toppling: Dictionary, owed: Dictionary) -> void:
 	for id in _brick_panes.keys():
 		var node = _brick_panes[id]
 		if node == null or not is_instance_valid(node):
 			_brick_panes.erase(id)
+			_pane_version.erase(id)
 			continue
 		var b := reg.get_building(id)
 		if b == null or b.toppled or toppling.has(id) or not b.is_materialised():
 			(node as Node).queue_free()
 			_brick_panes.erase(id)
+			_pane_version.erase(id)
 			continue
-		if city._coming_apart(id):
+		var stale: bool = city.world.get_chunk_version(b.chunk) != int(_pane_version.get(id, -1))
+		if stale and city._coming_apart(id):
+			if (node as Node3D).visible:
+				panes_hidden += 1
 			(node as Node3D).visible = false
 			owed[id] = true
-			panes_hidden += 1
-		elif not (node as Node3D).visible and not owed.has(id):
+		elif not (node as Node3D).visible and not stale:
 			(node as Node3D).visible = true
 
 
@@ -1559,6 +1576,7 @@ func _harvest_panes() -> bool:
 		return true
 	WorkerThreadPool.wait_for_task_completion(int(city._pane_job[0]))
 	var id: int = city._pane_job[2]
+	var version: int = city._pane_job[3]
 	var made = (city._pane_job[1] as Array)[0]
 	if made is Array:
 		made = BuildingShell.window_mesh_of(made)   # headless: made here (worker_meshes)
@@ -1576,10 +1594,13 @@ func _harvest_panes() -> bool:
 		glass.mesh = panes
 		glass.material_override = BuildingShell.window_material()
 		glass.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-		if city._coming_apart(id):
-			# Made from cells that stood before it began to come apart.
+		var b := city.registry.get_building(id)
+		if b != null and b.is_materialised() and city._coming_apart(id) \
+				and city.world.get_chunk_version(b.chunk) != version:
+			# Its bricks changed while they were being made.
 			glass.visible = false
 			city._panes_owed[id] = true
 		(parent as Node3D).add_child(glass)
 		_brick_panes[id] = glass
+		_pane_version[id] = version
 	return true
