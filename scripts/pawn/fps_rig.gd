@@ -60,8 +60,14 @@ static func face(cam: PlayerCamera, pawn: Pawn, facing: Vector3) -> void:
 
 ## On foot at `feet` (on true) or flying from where the pawn stands (false).
 ## `kit` may be null.
+##
+## `keep_view` (the mine world): flying keeps the pawn's camera as the one
+## drawn, with the arms and gun on it, and the scene moves it with the walker
+## every frame (`follow_flight`). Without it the walker's own camera takes
+## over and the arms stay where the pawn was left (the planet, as it was).
 static func switch_mode(on: bool, feet: Vector3, walker: PlanetWalker, pawn: Pawn,
-		player: PlayerController, cam: PlayerCamera, view: PlayerView, kit: PlayerKit) -> void:
+		player: PlayerController, cam: PlayerCamera, view: PlayerView, kit: PlayerKit,
+		keep_view := false) -> void:
 	# The pawn left behind while flying is not there to be shot.
 	if kit != null:
 		kit.present(on)
@@ -85,6 +91,15 @@ static func switch_mode(on: bool, feet: Vector3, walker: PlanetWalker, pawn: Paw
 		walker.place(at, -cam.global_transform.basis.z)
 		walker.flying = true
 		walker.frozen = false
-		walker.camera.current = true
 		player.release()
-		view.rig.visible = false
+		if keep_view:
+			follow_flight(cam, walker)
+			cam.current = true
+		else:
+			walker.camera.current = true
+			view.rig.visible = false
+
+
+## Flying with `keep_view`: the pawn's camera where the walker's is.
+static func follow_flight(cam: PlayerCamera, walker: PlanetWalker) -> void:
+	cam.global_transform = walker.camera.get_global_transform_interpolated()

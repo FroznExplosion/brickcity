@@ -35,7 +35,9 @@ const WORLD_SEED := 20260919
 var _tiles: Array[TerrainTile] = []
 ## (tx, tz) -> tile, so a carve can find exactly the ones it dirtied.
 var _tile_at := {}
-var _debris: Array[RigidBody3D] = []
+## The thrown bricks (terrain_debris.gd, shared with the mine world).
+var _debris: Node3D = null
+const Debris := preload("res://scripts/terrain/terrain_debris.gd")
 var _last_carve := ""
 var _rebuild_ms := 0.0
 var _water: WaterSurface = null
@@ -227,8 +229,6 @@ func _process(delta: float) -> void:
 
 
 const BLAST_RADIUS := 1.9
-const DEBRIS_CAP := 160
-const DEBRIS_LIFE := 7.0
 
 
 func _unhandled_input(event: InputEvent) -> void:
@@ -348,64 +348,24 @@ func _blast() -> void:
 			rebuilt += 1
 	_rebuild_ms = float(Time.get_ticks_usec() - t0) / 1000.0
 
-	_spawn_debris(res["debris"], point)
+	_debris_node().spawn(res["debris"], point)
 	_last_carve = "%d cells, %d tiles, carve %.1f ms, rebuild %.0f ms" % [
 		res["removed"], rebuilt, carve_ms, _rebuild_ms]
 
 
-## Nine floats a piece: position, size, colour. Capped and swept, because a
-## blast that removes two thousand plates must not become two thousand bodies
-## — the same debris budget M4 settled on for buildings.
-func _spawn_debris(buf: PackedFloat32Array, origin: Vector3) -> void:
-	@warning_ignore("integer_division")
-	var n := buf.size() / 9
-	for i in n:
-		if _debris.size() >= DEBRIS_CAP:
-			break
-		var o := i * 9
-		var pos := Vector3(buf[o], buf[o + 1], buf[o + 2])
-		var size := Vector3(buf[o + 3], buf[o + 4], buf[o + 5])
-		var col := Color(buf[o + 6], buf[o + 7], buf[o + 8])
-
-		var body := RigidBody3D.new()
-		body.collision_layer = Layers.RUBBLE
-		body.collision_mask = Layers.RUBBLE_MASK
-		body.position = pos
-		var shape := BoxShape3D.new()
-		shape.size = size
-		var cs := CollisionShape3D.new()
-		cs.shape = shape
-		body.add_child(cs)
-		var mi := MeshInstance3D.new()
-		mi.mesh = PieceMeshes.chamfered_box(size)
-		# A brick that has just come off the ground is the same printed
-		# plastic the ground is, layer lines and all -- and in OBJECT space,
-		# so the lines tumble with it. That is the reason the print pass is
-		# procedural rather than a texture (spec §2).
-		mi.material_override = _debris_material(col)
-		body.add_child(mi)
-		add_child(body)
-		# Outward from the blast, so it reads as thrown rather than dropped.
-		var away := (pos - origin).normalized() + Vector3.UP * 0.5
-		body.linear_velocity = away * randf_range(3.0, 7.0)
-		body.angular_velocity = Vector3(randf_range(-6, 6), randf_range(-6, 6),
-			randf_range(-6, 6))
-		_debris.append(body)
-		var timer := get_tree().create_timer(DEBRIS_LIFE)
-		timer.timeout.connect(func() -> void:
-			_debris.erase(body)
-			if is_instance_valid(body):
-				body.queue_free())
+func _debris_node() -> Node3D:
+	if _debris == null:
+		_debris = Debris.new()
+		_debris.name = "Debris"
+		add_child(_debris)
+	return _debris
 
 
 func _clear_damage() -> void:
 	BrickTerrain.clear_terrain_edits()
 	for tile in _tiles:
 		tile.rebuild(_terrain_mat)
-	for body in _debris:
-		if is_instance_valid(body):
-			body.queue_free()
-	_debris.clear()
+	_debris_node().clear()
 	_last_carve = "damage cleared"
 
 
@@ -446,7 +406,7 @@ func _update_hud() -> void:
 			"SWIMMING" if _camera.is_swimming()
 				else ("under" if _under.is_submerged() else "dry")],
 		"frame    %.1f ms   edits %d   debris %d" % [
-			_frame_ms, BrickTerrain.get_edit_count(), _debris.size()],
+			_frame_ms, BrickTerrain.get_edit_count(), _debris_node().bodies.size()],
 		"blast    %s" % (_last_carve if _last_carve != "" else "left click the ground"),
 		"F1 seams  F2 studs  F3 shadows  F4 stud geometry  F5 water  F6 repair  F7 geometry only  V wave steps  P print  G real chamfer",
 	])
@@ -566,18 +526,8 @@ func _shot_water() -> void:
 	print("[terrain] shots written: water_mid.png, water_mid_stepped.png")
 
 
-## One printed-plastic material per debris colour. The mesh carries no
-## vertex colours, so the shader's `tint` supplies it.
-var _debris_mats := {}
-
 func _debris_material(col: Color) -> ShaderMaterial:
-	if _debris_mats.has(col):
-		return _debris_mats[col]
-	var mat := ShaderMaterial.new()
-	mat.shader = load("res://shaders/printed.gdshader")
-	mat.set_shader_parameter("tint", col)
-	_debris_mats[col] = mat
-	return mat
+	return Debris.material(col)
 
 
 func _shot_blast() -> void:

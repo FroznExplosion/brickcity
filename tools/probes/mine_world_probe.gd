@@ -23,6 +23,9 @@ extends SceneTree
 ##     ABOVE the generated ground is solid, raises the surface and is in the
 ##     baked tile (the mask reaches up to it); breaking it leaves air; fill
 ##     never breaks bedrock.
+##   * a shot breaks WHOLE bricks: the surface piece hit goes, all of it, and
+##     every other piece of the tile is laid exactly as before (no re-laying
+##     round the hole); a wall hit takes one brick cell.
 
 var failures := 0
 var _names: PackedStringArray
@@ -46,6 +49,7 @@ func _initialize() -> void:
 	_check_regenerate()
 	_check_preview()
 	_check_build_blocks()
+	_check_break_brick()
 
 	BrickTerrain.set_generator(0)
 	var classic_after := _classic_sample()
@@ -325,3 +329,73 @@ func _tile_tris(d: Dictionary) -> int:
 			var idx = (v as Array)[Mesh.ARRAY_INDEX]
 			n += (idx as PackedInt32Array).size() / 3 if idx is PackedInt32Array and (idx as PackedInt32Array).size() > 0 					else ((v as Array)[Mesh.ARRAY_VERTEX] as PackedVector3Array).size() / 3
 	return n
+
+
+func _pieces(tx: int, tz: int) -> Array:
+	var raw: PackedInt32Array = BrickTerrain.pack_tile(tx, tz)
+	var stride := BrickTerrain.get_piece_stride()
+	var out := []
+	for i in range(0, raw.size(), stride):
+		out.append([raw[i], raw[i + 1], raw[i + 2], raw[i + 3], raw[i + 4], raw[i + 5]])
+	return out
+
+
+func _check_break_brick() -> void:
+	BrickTerrain.clear_terrain_edits()
+	var stud := BrickWorld.get_stud_metres()
+	var plate := BrickWorld.get_plate_metres()
+	var sea_p := int(float(BrickTerrain.get_gen_params()["sea_m"]) / plate)
+	# Flat-ish dry ground in the middle of a tile, so the piece is whole.
+	var tx := 0
+	var tz := 0
+	var x := 0
+	var z := 0
+	for i in 400:
+		tx = i * 3
+		tz = -i * 2
+		x = tx * 32 + 16
+		z = tz * 32 + 16
+		var t := BrickTerrain.surface_plate(x, z)
+		if t > sea_p + 6 and BrickTerrain.surface_plate(x + 1, z) == t and BrickTerrain.surface_plate(x, z + 1) == t:
+			break
+	var before := _pieces(tx, tz)
+	var top := BrickTerrain.surface_plate(x, z)
+	var hit := Vector3((x + 0.5) * stud, (top + 1) * plate - 0.02, (z + 0.5) * stud)
+	var res: Dictionary = BrickTerrain.break_brick(hit, Vector3.UP)
+	var deb: PackedFloat32Array = res.get("debris", PackedFloat32Array())
+	_expect(int(res.get("removed", 0)) > 0 and deb.size() == 9,
+			"a shot breaks a brick and throws one (%d cells, debris %s)" % [int(res.get("removed", 0)),
+			Vector3(deb[3], deb[4], deb[5]) if deb.size() == 9 else "none"])
+	# The broken piece: the one in `before` holding (x, z).
+	var lx := x - tx * 32
+	var lz := z - tz * 32
+	var gone: Array = []
+	for p in before:
+		if lx >= p[0] and lx < p[0] + p[2] and lz >= p[1] and lz < p[1] + p[3]:
+			gone = p
+	var cells: int = gone[2] * gone[3] * 3 if not gone.is_empty() else -1
+	_expect(int(res.get("removed", 0)) == cells, "the whole piece went, no more and no less (%d of %d cells, piece %s)"
+			% [int(res.get("removed", 0)), cells, gone])
+	var after := _pieces(tx, tz)
+	var kept := 0
+	var lost := []
+	for p in before:
+		if p == gone:
+			continue
+		var hole := Rect2i(gone[0], gone[1], gone[2], gone[3])
+		if hole.intersects(Rect2i(p[0], p[1], p[2], p[3])):
+			continue
+		if after.has(p):
+			kept += 1
+		else:
+			lost.append(p)
+	_expect(lost.is_empty(), "every other brick of the tile is laid as before (%d kept, re-laid: %s)" % [kept, lost.slice(0, 4)])
+	# A wall: dig the hole a course deeper, then shoot its side below the
+	# surface course -- one brick cell.
+	BrickTerrain.break_brick(Vector3((x + 0.5) * stud, (top - 2) * plate - 0.02, (z + 0.5) * stud), Vector3.UP)
+	var edge_z: float = (int(gone[1]) + tz * 32) * stud
+	var wall := Vector3((x + 0.5) * stud, (top - 4.5) * plate, edge_z + 0.01)
+	var res2: Dictionary = BrickTerrain.break_brick(wall, Vector3(0, 0, 1))
+	_expect(int(res2.get("removed", 0)) > 0 and int(res2.get("removed", 0)) <= 3,
+			"a wall hit takes one brick cell (%d plates)" % int(res2.get("removed", 0)))
+	BrickTerrain.clear_terrain_edits()

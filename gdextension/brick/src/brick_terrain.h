@@ -315,6 +315,11 @@ struct TileSample {
     /// and drawing that column's top at the BRICK top floats a quad two
     /// plates above the rock with nothing under it.
     std::vector<int16_t> tp;
+    /// The column's top plate AS GENERATED, edits ignored. Where an edit
+    /// moved a column's top, its neighbours judge their studs against this,
+    /// so a hole or a placed block does not re-lay the bricks around it
+    /// (Docs/MineWorld.md 10).
+    std::vector<int16_t> gtp;
     std::vector<uint8_t> mat;
     /// A painted COLOUR (filament index) for the column, 255 = its
     /// material's own. Pieces are cut where it changes, like material.
@@ -526,6 +531,18 @@ public:
     /// cells as they are (placing). Bedrock never breaks. Returns
     /// {"tiles": [tx, tz, ...] to rebuild, "changed": cells}. Docs/MineWorld.md 8.
     static Dictionary fill_box(Vector3i lo, Vector3i hi, int material, bool only_air);
+    /// A shot breaking WHOLE BRICKS (Docs/MineWorld.md 10): the surface
+    /// piece hit, all of it, when the hit is in a column's top course; the
+    /// one brick cell hit (a stud by a brick) on a wall or a cave face.
+    /// Bedrock never. Returns {"tiles", "removed" (cells), "debris" (9 floats
+    /// a brick: centre, size, colour)}; empty "tiles" when nothing broke.
+    static Dictionary break_brick(Vector3 point, Vector3 normal);
+    /// `break_brick`'s READ half, safe on a worker (it samples and packs a
+    /// tile, ~10 ms): {"runs": [x, z, lo, hi] per column to clear, "debris"};
+    /// empty runs when nothing would break. `clear_runs` is the write half,
+    /// for the main thread: {"tiles", "removed"}.
+    static Dictionary find_brick(Vector3 point, Vector3 normal);
+    static Dictionary clear_runs(const PackedInt32Array &runs);
     /// The first solid plate cell along a ray, walking the grid exactly
     /// (stud x plate x stud): {"cell": Vector3i, "normal": Vector3i (the face
     /// entered through), "material", "position"}; empty when nothing is hit.

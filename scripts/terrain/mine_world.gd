@@ -25,10 +25,10 @@ extends Node3D
 const Presets := preload("res://scripts/terrain/worldgen_presets.gd")
 const Menu := preload("res://scripts/terrain/worldgen_menu.gd")
 const Builder := preload("res://scripts/terrain/mine_builder.gd")
+const Debris := preload("res://scripts/terrain/terrain_debris.gd")
 
 ## A whole day, seconds (Minecraft's is 20 minutes).
 const DAY_SECONDS := 1200.0
-const MINE_RADIUS := 0.65
 ## Far rings are rebuilt round the player once they are this many tiles from
 ## the tile the current rings were laid out round.
 const REANCHOR_TILES := 16
@@ -64,6 +64,13 @@ var _menu: Control = null
 var _menu_layer: CanvasLayer = null
 var _menu_prev_mouse := Input.MOUSE_MODE_VISIBLE
 var builder: Node3D = null
+var debris: Node3D = null
+## Shots waiting for their brick: [task id, holder, origin]. Which brick a
+## shot breaks takes a tile's sample and packing, ~10 ms -- a worker's job
+## (Docs/WhereWorkRuns.md); the main thread only clears the cells it found.
+var _break_jobs: Array = []
+const MAX_BREAK_JOBS := 12
+var _menu_cam_captured := false
 
 ## Saving the world's changes (Docs/MineWorld.md 9): one file per seed and
 ## generator settings, under UserPaths.SAVES (a scripted pass: user://dev/).
@@ -133,6 +140,9 @@ func _ready() -> void:
 	builder.name = "Builder"
 	add_child(builder)
 	builder.setup(self, _hud_layer)
+	debris = Debris.new()
+	debris.name = "Debris"
+	add_child(debris)
 
 	var start := Presets.load_settings(ContentPacks.resolve("worldgen/default.json"))
 	for arg in OS.get_cmdline_user_args():
@@ -149,8 +159,6 @@ func _ready() -> void:
 
 func _exit_tree() -> void:
 	save_edits(true)
-	if get_tree() != null and _menu_layer != null:
-		get_tree().paused = false
 	# Every other scene expects the classic field.
 	_teardown()
 	BrickTerrain.set_generator(0)
@@ -225,6 +233,7 @@ func generate(s: Dictionary) -> void:
 
 
 func _teardown() -> void:
+	_wait_breaks()
 	# Removing a tier from the tree waits for its bakes (their _exit_tree).
 	for n in [_trees, _far_next, _far, _streamer]:
 		if n != null and is_instance_valid(n):
@@ -340,17 +349,27 @@ func _place_player(feet: Vector3) -> void:
 	set_on_foot(true, feet)
 
 
+## On foot or flying. Flying has NO collision at all (through hills, into
+## caves) and keeps the pawn's camera, arms and gun with the flight
+## (FpsRig keep_view). Landing puts the pawn exactly where the flight is --
+## unless that is inside the ground, then on top of it.
 func set_on_foot(on: bool, feet := Vector3.INF) -> void:
 	on_foot = on
 	if on and feet == Vector3.INF:
-		var t := walker.global_position
-		var c := Vector2i(floori(t.x / BrickWorld.get_stud_metres()), floori(t.z / BrickWorld.get_stud_metres()))
-		feet = Vector3(t.x, _ground_m(c.x, c.y) + 0.05, t.z)
-		# Under the ground (flying through a cave roof): stand where the
-		# walker is instead.
-		if feet.y > t.y + 2.0:
-			feet = t
-	FpsRig.switch_mode(on, feet, walker, pawn, player, cam, view, kit)
+		feet = walker.global_position
+		var stud := BrickWorld.get_stud_metres()
+		var plate := BrickWorld.get_plate_metres()
+		var c := Vector2i(floori(feet.x / stud), floori(feet.z / stud))
+		var buried := false
+		for h in [0.1, 0.9, 1.6]:
+			if BrickTerrain.solid_at(c.x, floori((feet.y + h) / plate), c.y) != 0:
+				buried = true
+		if buried:
+			feet.y = _ground_m(c.x, c.y) + 0.05
+	FpsRig.switch_mode(on, feet, walker, pawn, player, cam, view, kit, true)
+	if not on:
+		walker.collision_layer = 0
+		walker.collision_mask = 0
 	if builder != null:
 		builder.on_mode_changed()
 	if _trees != null:
@@ -365,9 +384,46 @@ func _eye() -> Vector3:
 	return _eye_camera().global_position
 
 
-## The gun hit the ground: break it there. Minecraft's left click, as a shot.
-func _mine(point: Vector3, _dir: Vector3, _info) -> void:
-	terrain_edited(BrickTerrain.carve(point, MINE_RADIUS))
+## The gun hit the ground: it breaks WHOLE BRICKS there -- the surface piece
+## hit, or the one brick of a wall -- and throws it (BrickTerrain.break_brick,
+## Docs/MineWorld.md 10). A sphere of plate cells cut bricks in pieces and the
+## rebuilt tile re-laid the bricks round it, which read as the ground being
+## regenerated rather than broken.
+func _mine(point: Vector3, dir: Vector3, _info) -> void:
+	if _break_jobs.size() >= MAX_BREAK_JOBS:
+		return
+	var holder := [{}]
+	var n := -dir
+	var task := WorkerThreadPool.add_task(
+		func() -> void: holder[0] = BrickTerrain.find_brick(point, n), false, "break brick")
+	_break_jobs.append([task, holder, point - dir * 0.6])
+
+
+## Finished shots: clear the cells each found, throw its brick. Never waits.
+func _land_breaks() -> void:
+	var i := 0
+	while i < _break_jobs.size():
+		var job: Array = _break_jobs[i]
+		if not WorkerThreadPool.is_task_completed(job[0]):
+			i += 1
+			continue
+		WorkerThreadPool.wait_for_task_completion(job[0])
+		_break_jobs.remove_at(i)
+		var found: Dictionary = job[1][0]
+		var runs: PackedInt32Array = found.get("runs", PackedInt32Array())
+		if runs.is_empty():
+			continue
+		var res: Dictionary = BrickTerrain.clear_runs(runs)
+		if int(res.get("removed", 0)) == 0:
+			continue
+		debris.spawn(found["debris"], job[2])
+		terrain_edited(res)
+
+
+func _wait_breaks() -> void:
+	for job in _break_jobs:
+		WorkerThreadPool.wait_for_task_completion(job[0])
+	_break_jobs.clear()
 
 
 ## The field changed (a shot, a block broken or placed): rebake the tiles it
@@ -409,6 +465,7 @@ func _process(delta: float) -> void:
 	if _streamer == null:
 		return
 	var eye := _eye()
+	_land_breaks()
 	_refresh_in -= delta
 	if _refresh_in <= 0.0:
 		_flush_edits()
@@ -416,6 +473,8 @@ func _process(delta: float) -> void:
 	_far.cover(_streamer, false)
 	_far.relod(eye, false)
 	_follow_far(eye)
+	if not on_foot:
+		FpsRig.follow_flight(cam, walker)
 	if not on_foot and walker.global_position.y < -500.0:
 		walker.place(Vector3(eye.x, 200.0, eye.z), Vector3.FORWARD)
 	if on_foot and pawn.feet().y < -500.0:
@@ -520,7 +579,18 @@ func toggle_menu() -> void:
 	_menu.name = "WorldGenMenu"
 	_menu_layer.add_child(_menu)
 	_menu.setup(self)
-	get_tree().paused = true
+	# The world stops here, not by pausing the tree: SceneTree.paused cannot
+	# be set while the engine holds the tree suspended (run from the editor,
+	# "Pause state cannot be modified while suspended"), and then nothing
+	# stopped. Disabling this node stops every child of it -- camera, pawn,
+	# walker, gun, builder, streaming -- and the menu's layer, ALWAYS, alone
+	# takes input.
+	process_mode = Node.PROCESS_MODE_DISABLED
+	# PlayerCamera turns on mouse motion whenever it counts itself captured,
+	# whatever the mouse mode says: release it the camera's own way.
+	_menu_cam_captured = cam != null and bool(cam.get("_captured"))
+	if cam != null:
+		cam._set_captured(false)
 	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
 
 
@@ -529,8 +599,12 @@ func menu_closed() -> void:
 	if _menu_layer != null:
 		_menu_layer.queue_free()
 		_menu_layer = null
-	get_tree().paused = false
-	if _menu_prev_mouse == Input.MOUSE_MODE_CAPTURED and not PlayerCamera.hands_off:
+	process_mode = Node.PROCESS_MODE_INHERIT
+	if PlayerCamera.hands_off:
+		return
+	if _menu_cam_captured and cam != null:
+		cam._set_captured(true)
+	elif _menu_prev_mouse == Input.MOUSE_MODE_CAPTURED:
 		Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
 
 
@@ -695,6 +769,9 @@ func _run_gate() -> void:
 	walker.place(walker.global_position + Vector3(0, 60, 0), Vector3(1, -0.35, 0.4).normalized())
 	walker.pitch = -0.45
 	await _frames(30)
+	print("[mine-gate] flying: collision layer %d mask %d, drawn camera is the pawn's %s, %.2f m from the flight camera, arms shown %s"
+			% [walker.collision_layer, walker.collision_mask, cam.current,
+			cam.global_position.distance_to(walker.camera.global_position), view.rig.visible])
 	await _shot(dev + "mine_overview.png")
 	var t0 := Time.get_ticks_usec()
 	var worst := 0.0
@@ -735,7 +812,7 @@ func _run_gate() -> void:
 	# The menu, then a new world from changed settings.
 	toggle_menu()
 	await _frames(10)
-	print("[mine-gate] menu open: world paused %s, mouse visible %s" % [get_tree().paused,
+	print("[mine-gate] menu open: world stopped %s, mouse visible %s" % [not can_process(),
 			Input.mouse_mode == Input.MOUSE_MODE_VISIBLE])
 	await _shot(dev + "mine_menu.png")
 	var s := settings.duplicate(true)
@@ -748,6 +825,17 @@ func _run_gate() -> void:
 	await _frames(40)
 	await _shot(dev + "mine_regenerated.png")
 	await _gate_build()
+	# Landing in mid-air: the pawn is put where the flight is, not dropped
+	# to the ground.
+	var at := walker.global_position + Vector3(0, 12, 0)
+	walker.global_position = at
+	await _frames(2)
+	at = walker.global_position
+	set_on_foot(true)
+	print("[mine-gate] landed %.2f m from where the flight was (ground %.1f m below)"
+			% [pawn.feet().distance_to(at), at.y - _ground_m(floori(at.x / BrickWorld.get_stud_metres()),
+			floori(at.z / BrickWorld.get_stud_metres()))])
+	await _frames(60)
 	await _gate_edits()
 	print("[mine-gate] done")
 	get_tree().quit()
@@ -858,6 +946,12 @@ func _gate_edits() -> void:
 	keys.sort()
 	print("[mine-gate] instances phase, worst by step: %s" % ", ".join(keys.map(
 			func(k: String) -> String: return "%s %.1f" % [k, TerrainTile.instance_ms[k]])))
+	# A look at what the shots left: whole bricks gone, the rest as laid.
+	set_on_foot(false)
+	walker.place(e + Vector3(5.5, 2.5, 0.5), Vector3(-0.3, 0.0, -1.0).normalized())
+	walker.pitch = -0.55
+	await _frames(30)
+	await _shot(UserPaths.DEV + "mine_broken.png")
 	var count := BrickTerrain.get_edit_count()
 	save_edits(true)
 	var path := save_path()
