@@ -139,7 +139,7 @@ static func height_m(variant: int) -> float:
 ##
 ## `chance_at(x, z) -> float`, if given, replaces the forest noise and the
 ## ground's density: the share of candidate spots at that stud that grow a
-## tree (the biome world, Docs/MineWorld.md 6). `variant_at(x, z, roll) -> int`
+## tree (the biome world, Docs/MineWorld.md 4). `variant_at(x, z, roll) -> int`
 ## picks the variant from a 0..1 roll, -1 for none.
 static func scatter(rect: Rect2i, world_seed: int, max_trees: int = 2000,
 		chance_at := Callable(), variant_at := Callable()) -> Array:

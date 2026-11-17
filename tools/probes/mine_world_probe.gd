@@ -19,6 +19,10 @@ extends SceneTree
 ##     and carve cannot remove it.
 ##   * bake cost: a tile and a coarse block, so streaming stays affordable.
 ##   * Generate: new params change the world.
+##   * build mode: the ray finds the cell and face it looks at; a block placed
+##     ABOVE the generated ground is solid, raises the surface and is in the
+##     baked tile (the mask reaches up to it); breaking it leaves air; fill
+##     never breaks bedrock.
 
 var failures := 0
 var _names: PackedStringArray
@@ -41,6 +45,7 @@ func _initialize() -> void:
 	_check_bake_cost()
 	_check_regenerate()
 	_check_preview()
+	_check_build_blocks()
 
 	BrickTerrain.set_generator(0)
 	var classic_after := _classic_sample()
@@ -249,3 +254,59 @@ func _check_preview() -> void:
 	img.save_png("user://dev/mine_preview.png")
 	var px2: PackedByteArray = BrickTerrain.gen_preview(BrickTerrain.get_seed(), {"height_scale": 1.5}, 0, 0, 192, 192, 16, 1)
 	Image.create_from_data(192, 192, false, Image.FORMAT_RGB8, px2).save_png("user://dev/mine_preview_biomes.png")
+
+
+func _check_build_blocks() -> void:
+	BrickTerrain.clear_terrain_edits()
+	var stud := BrickWorld.get_stud_metres()
+	var plate := BrickWorld.get_plate_metres()
+	# Somewhere on dry land.
+	var x := 0
+	var z := 0
+	var sea_p := int(float(BrickTerrain.get_gen_params()["sea_m"]) / plate)
+	for i in 400:
+		x = i * 37
+		z = -i * 23
+		if BrickTerrain.surface_plate(x, z) > sea_p + 6:
+			break
+	var top := BrickTerrain.surface_plate(x, z)
+	var eye := Vector3((x + 0.5) * stud, (top + 12) * plate, (z + 0.5) * stud)
+	var hit: Dictionary = BrickTerrain.ray_cell(eye, Vector3.DOWN, 20.0)
+	_expect(not hit.is_empty() and hit.cell == Vector3i(x, top, z) and hit.normal == Vector3i(0, 1, 0),
+			"ray finds the top cell and its face (%s)" % [hit])
+	# A 2x2 brick (3 plates) high above the ground: 6 bricks up.
+	var lo := Vector3i(x, top + 18, z)
+	var hi := Vector3i(x + 1, top + 20, z + 1)
+	var mat := _mat("sandstone")
+	var res: Dictionary = BrickTerrain.fill_box(lo, hi, mat, true)
+	_expect(int(res.changed) == 12 and (res.tiles as PackedInt32Array).size() >= 2,
+			"placing fills 12 plate cells (%d)" % int(res.changed))
+	_expect(BrickTerrain.solid_at(x, top + 19, z) == mat, "placed block is solid")
+	_expect(BrickTerrain.surface_plate(x, z) == top + 20, "the surface scan finds a block above the ground")
+	var tx := floori(float(x) / BrickTerrain.get_tile_studs())
+	var tz := floori(float(z) / BrickTerrain.get_tile_studs())
+	var with_block: Dictionary = BrickTerrain.build_tile(tx, tz)
+	BrickTerrain.fill_box(lo, hi, 0, false)
+	_expect(BrickTerrain.solid_at(x, top + 19, z) == 0, "breaking leaves air")
+	var without: Dictionary = BrickTerrain.build_tile(tx, tz)
+	_expect(str(with_block.get("pieces", with_block.keys())) != str(without.get("pieces", without.keys()))
+			or int(with_block.get("tri_count", 0)) != int(without.get("tri_count", 0))
+			or (with_block.get("mesh", []) as Array).size() != (without.get("mesh", []) as Array).size()
+			or _tile_tris(with_block) != _tile_tris(without),
+			"the baked tile draws the floating block (%d vs %d tris)" % [_tile_tris(with_block), _tile_tris(without)])
+	var bed_p := int(floor((float(BrickTerrain.get_gen_params()["sea_m"])
+			+ float(BrickTerrain.get_gen_params()["bedrock_m"])) / plate)) - 6
+	BrickTerrain.fill_box(Vector3i(x, bed_p, z), Vector3i(x, bed_p, z), 0, false)
+	_expect(BrickTerrain.solid_at(x, bed_p, z) == _mat("bedrock"), "fill never breaks bedrock")
+	BrickTerrain.clear_terrain_edits()
+
+
+## Triangles in a baked tile, whatever the dictionary calls its surfaces.
+func _tile_tris(d: Dictionary) -> int:
+	var n := 0
+	for k in d:
+		var v = d[k]
+		if v is Array and (v as Array).size() > Mesh.ARRAY_INDEX and (v as Array)[Mesh.ARRAY_VERTEX] is PackedVector3Array:
+			var idx = (v as Array)[Mesh.ARRAY_INDEX]
+			n += (idx as PackedInt32Array).size() / 3 if idx is PackedInt32Array and (idx as PackedInt32Array).size() > 0 					else ((v as Array)[Mesh.ARRAY_VERTEX] as PackedVector3Array).size() / 3
+	return n

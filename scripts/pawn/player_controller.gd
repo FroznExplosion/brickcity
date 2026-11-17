@@ -26,6 +26,9 @@ var progress := PlayerLevel.new()
 ## Act on the keyboard without the mouse captured. For scripted gates, which
 ## synthesise keys and must not steal the cursor.
 var drive_uncaptured := false
+## The mouse buttons belong to something else for now -- the mine world's build
+## mode (Docs/MineWorld.md 8): no trigger, no sights, until it is let go.
+var hold_fire := false
 ## Hold or toggle, from the Options menu (BrickcityMenuHost). Static: one player.
 static var toggle_sprint := false
 static var toggle_aim := false
@@ -123,8 +126,8 @@ func _process(delta: float) -> void:
 		if _down(&"move_left"): wish -= basis.x
 		if _down(&"move_right"): wish += basis.x
 		it.move = wish.normalized() if wish != Vector3.ZERO else Vector3.ZERO
-		var trigger := _down(&"fire")
-		it.aim = _aim_on if toggle_aim else _down(&"aim")
+		var trigger := _down(&"fire") and not hold_fire
+		it.aim = (_aim_on if toggle_aim else _down(&"aim")) and not hold_fire
 		# A sprint is forwards, and the trigger or the sights end it -- a toggled one
 		# too, which then has to be switched on again.
 		if not forward or trigger or it.aim:
