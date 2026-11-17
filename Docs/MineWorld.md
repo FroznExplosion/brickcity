@@ -92,7 +92,15 @@ ambient fades with depth, so caves are dark.
 `scripts/terrain/worldgen_menu.gd`, modelled on the zylanntest world builder.
 It edits a copy; nothing changes until **Generate world**, which tears every
 tier down (waiting for bakes), sets the new params, and rebuilds round the
-spawn.
+spawn. F9 or Escape closes it.
+
+It opens the way the pause menu does (`menu/core/MenuManager.gd`): a canvas
+layer of its own above everything (layer 80, process always), a dimmed
+backdrop that takes every click, the tree **paused** so nothing in the world
+reads input, the mouse freed and put back on close. It used to sit on the
+HUD layer as a plain PanelContainer, whose default mouse filter passes clicks
+on its empty parts to the game: the walker captured the mouse and the camera
+turned under the menu.
 
 Tabs: World (name, seed + Random, detail radius, view distance, height
 scale), Shape (continents, hills, mountains, dry rivers, cliffs and
@@ -110,7 +118,7 @@ ores by name).
 
 ## 7. Not yet
 
-Saving edits per seed, falling sand, flowers and tall grass, clouds, solid
+Falling sand, flowers and tall grass, clouds, solid
 tree trunks, villages and structures, animals, enemies, chests, and water.
 
 ## 8. Build mode
@@ -143,3 +151,35 @@ or off, on foot or flying.
   or the fly speed. A block is never placed inside the player.
 - Default hotbar: grass, dirt, stone, deepslate, sand, sandstone, gravel,
   snow, terracotta.
+
+## 9. Saving changes, and what an edit costs
+
+**Saving.** Every block broken, placed or shot away is a terrain edit, and the
+world's edits are saved per seed AND generator settings (an edit means nothing
+against a different field): `user://saves/mine_world/<seed>_<hash>.edits`,
+zstd-compressed, header `BCME`, format 1, `BrickTerrain.get_field_version()`,
+then `get_edits()`' 13-byte records. Saved every 30 s if anything changed (the
+write on a worker), and on leaving the scene or generating another world (on
+the main thread: those are load moments). Generating a world loads its file
+before any tile bakes. The menu's World tab has **Forget changes to this
+world**. A scripted pass writes to `user://dev/mine_saves/` and clears it
+first.
+
+**The edit hitch** (measured with `-- --gate`, 2026-11-17; other chats' probes
+were running, so the numbers are rough):
+
+| | worst frame | mean | tile rebuilds (rapid fire) |
+|---|---|---|---|
+| far tier re-baked waiting (`--sync-far`) | 24.5 ms | 16.5 ms | |
+| far tier re-baked on workers (default) | 25.4 ms | 16.7 ms | |
+| each edit handed over at once (`--no-coalesce`) | 24.2 ms | 16.6 ms | 106 |
+| edits gathered, handed over every 0.1 s (default) | 24.9 ms | 16.6 ms | 78 |
+
+- `TerrainCoarse.field_changed` lands every job in flight and waits for its
+  bake: right for an editor's stroke, wrong in play. The mine world uses
+  `field_changed_soon` (no wait; only blocks that are nodes of their own).
+- What is left is one frame of about 24 ms when a rebuilt tile adds its
+  instance nodes: about 1 in 78 of those node adds stalls 11-21 ms inside the
+  engine, whichever node it is (`TerrainTile.profile_instances` times each
+  step; the pass prints it). Tiles now build only the stud set they show
+  (near or far) and the other when they first switch.

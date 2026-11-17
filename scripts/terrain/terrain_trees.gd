@@ -192,8 +192,8 @@ func _stream_step() -> void:
 		var c: Vector2i = _queue.pop_front()
 		if _cells.has(c):
 			continue
-		var rect := Rect2i(c * STREAM_CELL, Vector2i(STREAM_CELL, STREAM_CELL))
-		var rows := _place(Trees.scatter(rect, world_seed, 4000, _chance_at, _variant_at))
+		var cell_rect := Rect2i(c * STREAM_CELL, Vector2i(STREAM_CELL, STREAM_CELL))
+		var rows := _place(Trees.scatter(cell_rect, world_seed, 4000, _chance_at, _variant_at))
 		_cells[c] = rows
 		count += rows.size()
 		for row in rows:

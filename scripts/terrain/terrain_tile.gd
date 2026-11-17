@@ -163,10 +163,11 @@ func add_instances() -> void:
 	# visibility range: Godot fades a range per OBJECT, and the object here is
 	# a whole 11 m tile -- standing in one, every stud on it was mid-fade,
 	# dithered half see-through.
-	_add_instances("StudsFar", PieceMeshes.stud_plain(), _data["studs"], STUD_RANGE,
-			stud_material())
-	_add_instances("Studs", PieceMeshes.stud(), _data["studs"], STUD_RANGE,
-			stud_material())
+	# Only the set shown now; the other when the tile first switches
+	# (_apply_near). A tile rebuilt by an edit is near the player, and its
+	# far set was a second node add in the same frame -- the one that
+	# sometimes took 12 ms (Docs/MineWorld.md 9).
+	_add_studs(_near)
 	_apply_near()
 	_add_instances("Tufts", PieceMeshes.tuft(), _data["tufts"], SCATTER_RANGE,
 			tuft_material())
@@ -273,7 +274,18 @@ func set_near(on: bool) -> void:
 	_apply_near()
 
 
+## The near (bevelled) or far (plain) stud set, if it is not there yet.
+func _add_studs(near: bool) -> void:
+	var node_name := "Studs" if near else "StudsFar"
+	if has_node(NodePath(node_name)):
+		return
+	_add_instances(node_name, PieceMeshes.stud() if near else PieceMeshes.stud_plain(),
+			_data["studs"], STUD_RANGE, stud_material())
+
+
 func _apply_near() -> void:
+	if _instances_done and _studs_shown and not _data.is_empty():
+		_add_studs(_near)
 	var chamfered := _near and _near_surface != null
 	if _near_surface != null:
 		_near_surface.visible = chamfered
@@ -399,17 +411,39 @@ static func tuft_material() -> ShaderMaterial:
 	return _tuft_material
 
 
+## Opt-in timing of the instances phase, by kind and step (a pass turns it
+## on and prints it): {"<kind> <step>": worst ms}. Off, it costs nothing.
+static var profile_instances := false
+static var instance_ms := {}
+
+
+static func _note_ms(key: String, t0: int) -> void:
+	var ms := float(Time.get_ticks_usec() - t0) / 1000.0
+	instance_ms[key] = maxf(float(instance_ms.get(key, 0.0)), ms)
+	instance_ms[key + " n"] = float(instance_ms.get(key + " n", 0.0)) + 1.0
+	if ms > 3.0:
+		instance_ms[key + " >3ms"] = float(instance_ms.get(key + " >3ms", 0.0)) + 1.0
+
+
 func _add_instances(node_name: String, mesh: Mesh, buffer: PackedFloat32Array,
 		range_end: float, mat: Material = null, range_begin := 0.0, fade := RANGE_FADE) -> void:
 	@warning_ignore("integer_division")
 	var count := buffer.size() / FLOATS_PER_INSTANCE
 	if count == 0:
 		return
+	var t0 := Time.get_ticks_usec()
 	var mm := _take_multimesh(node_name, mesh)
 	mm.instance_count = count
+	if profile_instances:
+		_note_ms(node_name + " alloc", t0)
+		t0 = Time.get_ticks_usec()
 	# One upload. C++ already emitted the engine's own buffer layout, so there
 	# is no per-instance loop on this side at all.
 	mm.set_buffer(buffer)
+	if profile_instances:
+		_note_ms(node_name + " buffer", t0)
+		instance_ms[node_name + " count"] = maxf(float(instance_ms.get(node_name + " count", 0.0)), count)
+		t0 = Time.get_ticks_usec()
 
 	var mi := MultiMeshInstance3D.new()
 	mi.name = node_name
@@ -430,6 +464,8 @@ func _add_instances(node_name: String, mesh: Mesh, buffer: PackedFloat32Array,
 		mi.set_instance_shader_parameter("weather_sway",
 				WeatherFx.sway_grass(mesh.get_aabb().end.y))
 	add_child(mi)
+	if profile_instances:
+		_note_ms(node_name + " node", t0)
 
 
 ## Six floats a box: centre then size. §10 — one box a piece for now, where

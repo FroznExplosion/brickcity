@@ -298,6 +298,21 @@ func _check_build_blocks() -> void:
 			+ float(BrickTerrain.get_gen_params()["bedrock_m"])) / plate)) - 6
 	BrickTerrain.fill_box(Vector3i(x, bed_p, z), Vector3i(x, bed_p, z), 0, false)
 	_expect(BrickTerrain.solid_at(x, bed_p, z) == _mat("bedrock"), "fill never breaks bedrock")
+	# Saving: every edit out as bytes and back, negative coordinates included.
+	BrickTerrain.clear_terrain_edits()
+	BrickTerrain.fill_box(lo, hi, mat, true)
+	var nx := -1429
+	var nz := -2221
+	BrickTerrain.carve(Vector3((nx + 0.5) * stud, (BrickTerrain.surface_plate(nx, nz) - 1) * plate,
+			(nz + 0.5) * stud), 0.8)
+	var n := BrickTerrain.get_edit_count()
+	_expect(n > 12, "a carve at negative coordinates made edits (%d)" % (n - 12))
+	var bytes: PackedByteArray = BrickTerrain.get_edits()
+	BrickTerrain.clear_terrain_edits()
+	var back := BrickTerrain.set_edits(bytes)
+	_expect(back == n and BrickTerrain.get_edit_count() == n and bytes.size() == n * 13
+			and BrickTerrain.solid_at(x, top + 19, z) == mat,
+			"edits save and load back (%d of %d)" % [back, n])
 	BrickTerrain.clear_terrain_edits()
 
 

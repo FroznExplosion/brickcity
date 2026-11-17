@@ -12,7 +12,8 @@ extends PanelContainer
 ## keeps streaming. Click it to choose where you start.
 ##
 ## What the host gives it: `settings`, `spawn_xz`, `generate(settings)`,
-## `menu_closed()`.
+## `menu_closed()`, `forget_edits()`. The host opens it on a layer of its own
+## with the tree paused (MineWorld.toggle_menu), so it alone takes input.
 
 const Presets := preload("res://scripts/terrain/worldgen_presets.gd")
 
@@ -46,6 +47,9 @@ func setup(p_host: Node) -> void:
 
 
 func _build() -> void:
+	# Every click on the panel is the menu's, empty parts included (a
+	# container's default passes them on to the game).
+	mouse_filter = Control.MOUSE_FILTER_STOP
 	set_anchors_preset(Control.PRESET_FULL_RECT)
 	offset_left = 40
 	offset_top = 30
@@ -120,7 +124,7 @@ func _build() -> void:
 		_refresh_map())
 	mrow.add_child(mode)
 	_button(mrow, "Zoom in", func() -> void:
-		_map_step = maxi(4, _map_step / 2)
+		_map_step = maxi(4, int(_map_step / 2.0))
 		_refresh_map())
 	_button(mrow, "Zoom out", func() -> void:
 		_map_step = mini(256, _map_step * 2)
@@ -184,6 +188,11 @@ func _build_world_tab() -> void:
 	_int_slider(p, "Full detail radius (tiles)", s, "detail_tiles", 2, 8)
 	_int_slider(p, "View distance (tiles of far rings)", s, "far_tiles", 16, 192)
 	_float_slider(p, "World height scale", s.gen, "height_scale", 0.2, 3.0, 0.05)
+	_section(p, "Your changes")
+	p.add_child(_note("Blocks you break and place are saved for each seed and settings, every 30 s and when you leave or generate. Change a setting and it is a different world with its own changes."))
+	_button(p, "Forget changes to this world", func() -> void:
+		_close()
+		host.forget_edits())
 	p.add_child(_note("The world has no edge: the far rings move with you. Past about 20 km from the start the float precision of positions starts to show."))
 
 
@@ -453,8 +462,9 @@ func _mark_spawn(img: Image) -> void:
 	var sp = s.get("spawn", null)
 	if not (sp is Array):
 		return
-	var px := Vector2i((int(sp[0]) - _map_centre.x) / _map_step + MAP_SIZE / 2,
-			(int(sp[1]) - _map_centre.y) / _map_step + MAP_SIZE / 2)
+	var half := int(MAP_SIZE / 2.0)
+	var px := Vector2i(floori(float(int(sp[0]) - _map_centre.x) / _map_step) + half,
+			floori(float(int(sp[1]) - _map_centre.y) / _map_step) + half)
 	for d in range(-3, 4):
 		for p in [px + Vector2i(d, 0), px + Vector2i(0, d)]:
 			if p.x >= 0 and p.y >= 0 and p.x < MAP_SIZE and p.y < MAP_SIZE:
@@ -469,8 +479,9 @@ func _on_map_input(event: InputEvent) -> void:
 		return
 	var uv := mb.position / _map.size
 	var px := Vector2i(int(uv.x * MAP_SIZE), int(uv.y * MAP_SIZE))
-	s["spawn"] = [_map_centre.x + (px.x - MAP_SIZE / 2) * _map_step,
-			_map_centre.y + (px.y - MAP_SIZE / 2) * _map_step]
+	var half := int(MAP_SIZE / 2.0)
+	s["spawn"] = [_map_centre.x + (px.x - half) * _map_step,
+			_map_centre.y + (px.y - half) * _map_step]
 	_update_spawn_label()
 	_refresh_map()
 
@@ -553,6 +564,12 @@ func _on_generate() -> void:
 	var settings := s.duplicate(true)
 	_close()
 	host.generate(settings)
+
+
+func _unhandled_input(event: InputEvent) -> void:
+	if event is InputEventKey and event.pressed and not event.echo 			and ((event as InputEventKey).keycode == KEY_F9 or (event as InputEventKey).keycode == KEY_ESCAPE):
+		get_viewport().set_input_as_handled()
+		_close()
 
 
 func _close() -> void:

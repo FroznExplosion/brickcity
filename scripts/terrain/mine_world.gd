@@ -61,7 +61,30 @@ var _show_readout := true
 var _hud_in := 0.0
 var _frame_ms := 0.0
 var _menu: Control = null
+var _menu_layer: CanvasLayer = null
+var _menu_prev_mouse := Input.MOUSE_MODE_VISIBLE
 var builder: Node3D = null
+
+## Saving the world's changes (Docs/MineWorld.md 9): one file per seed and
+## generator settings, under UserPaths.SAVES (a scripted pass: user://dev/).
+const SAVE_MAGIC := "BCME"
+const SAVE_FORMAT := 1
+const AUTOSAVE_SECONDS := 30.0
+var _edits_dirty := false
+var _save_task := -1
+var _save_in := AUTOSAVE_SECONDS
+var _save_status := ""
+## A/B for the edit hitch: `-- --sync-far` re-bakes the far tier the old,
+## waiting way after every edit.
+var _sync_far := false
+## Edits gathered and handed to the tiers at most every REFRESH_EVERY: a
+## rifle's shots each marked tiles stale while their re-bake was in flight,
+## and every one of them was baked and swapped in again. `-- --no-coalesce`
+## hands each edit over at once (the A/B).
+const REFRESH_EVERY := 0.1
+var _coalesce := true
+var _pending_tiles := Rect2i()
+var _refresh_in := 0.0
 var _gen_ms := 0.0
 var _reanchors := 0
 var _last_reanchor_ms := 0.0
@@ -73,6 +96,14 @@ var _tree_variants: Array = []
 
 func _ready() -> void:
 	_gate = "--gate" in OS.get_cmdline_user_args()
+	_sync_far = "--sync-far" in OS.get_cmdline_user_args()
+	_coalesce = not "--no-coalesce" in OS.get_cmdline_user_args()
+	if _gate:
+		# A pass starts from the world as generated: last run's test saves go.
+		var old := DirAccess.open(_save_dir())
+		if old != null:
+			for f in old.get_files():
+				old.remove(f)
 	if _gate:
 		PlayerCamera.hands_off = true
 		var tw := get_node_or_null(^"/root/TestWindow")
@@ -117,6 +148,9 @@ func _ready() -> void:
 
 
 func _exit_tree() -> void:
+	save_edits(true)
+	if get_tree() != null and _menu_layer != null:
+		get_tree().paused = false
 	# Every other scene expects the classic field.
 	_teardown()
 	BrickTerrain.set_generator(0)
@@ -132,8 +166,12 @@ func _exit_tree() -> void:
 ## they change.
 func generate(s: Dictionary) -> void:
 	var t0 := Time.get_ticks_usec()
+	# The world being left keeps its changes: saved under ITS settings.
+	if not settings.is_empty():
+		save_edits(true)
 	settings = s.duplicate(true)
 	_teardown()
+	_pending_tiles = Rect2i()
 	_reanchors = 0
 	_last_reanchor_ms = 0.0
 	BrickTerrain.clear_terrain_edits()
@@ -141,6 +179,10 @@ func generate(s: Dictionary) -> void:
 	BrickTerrain.set_generator(1)
 	BrickTerrain.reset_gen_params()
 	BrickTerrain.set_gen_params(settings.gen)
+	# Before anything bakes: the tiles are made from the field WITH them.
+	var loaded := _load_edits()
+	_edits_dirty = false
+	_save_status = "%d changes loaded" % loaded if loaded > 0 else "new world"
 	var sea := float(settings.gen.get("sea_m", 20.0))
 	# No water is drawn; the sea line is still where trees stop.
 	BrickWave.set_sea_level(sea)
@@ -340,8 +382,23 @@ func terrain_edited(res: Dictionary) -> void:
 		lo = Vector2i(mini(lo.x, tiles[i]), mini(lo.y, tiles[i + 1]))
 		hi = Vector2i(maxi(hi.x, tiles[i]), maxi(hi.y, tiles[i + 1]))
 	var rect := Rect2i(lo, hi - lo + Vector2i.ONE)
+	_edits_dirty = true
+	_pending_tiles = rect if not _pending_tiles.has_area() else _pending_tiles.merge(rect)
+	if not _coalesce or _refresh_in <= 0.0:
+		_flush_edits()
+
+
+func _flush_edits() -> void:
+	if not _pending_tiles.has_area():
+		return
+	var rect := _pending_tiles
+	_pending_tiles = Rect2i()
+	_refresh_in = REFRESH_EVERY
 	_streamer.refresh(rect)
-	_far.field_changed(rect)
+	if _sync_far:
+		_far.field_changed(rect)
+	else:
+		_far.field_changed_soon(rect)
 
 
 # ---------------------------------------------------------------------------
@@ -352,6 +409,9 @@ func _process(delta: float) -> void:
 	if _streamer == null:
 		return
 	var eye := _eye()
+	_refresh_in -= delta
+	if _refresh_in <= 0.0:
+		_flush_edits()
 	_streamer.follow(Vector2(eye.x, eye.z))
 	_far.cover(_streamer, false)
 	_far.relod(eye, false)
@@ -361,6 +421,7 @@ func _process(delta: float) -> void:
 	if on_foot and pawn.feet().y < -500.0:
 		set_on_foot(true, Vector3(eye.x, 0.0, eye.z) + Vector3.UP * 300.0)
 	_day_night(delta, eye)
+	_autosave(delta)
 	_hud_in -= delta
 	if _hud_in <= 0.0:
 		_hud_in = 0.2
@@ -433,20 +494,141 @@ func _unhandled_input(event: InputEvent) -> void:
 			_time = fposmod(_time + 1.0 / 24.0, 1.0)
 
 
+## The world generation menu, opened the way the pause menu opens
+## (menu/core/MenuManager.gd): a canvas layer of its own above everything,
+## the tree PAUSED so nothing in the world -- camera, walker, pawn, gun,
+## builder -- sees a click or a key, the mouse freed, and put back on close.
+## On the HUD layer it was a PanelContainer, whose mouse filter passes a click
+## on its empty parts on to the game: the walker took the mouse and the
+## camera turned under the menu.
 func toggle_menu() -> void:
 	if _menu != null:
-		_menu.queue_free()
-		_menu = null
+		_menu.call("_close")
 		return
+	_menu_prev_mouse = Input.mouse_mode
+	_menu_layer = CanvasLayer.new()
+	_menu_layer.name = "WorldGenMenuLayer"
+	_menu_layer.layer = 80
+	_menu_layer.process_mode = Node.PROCESS_MODE_ALWAYS
+	add_child(_menu_layer)
+	var dim := ColorRect.new()
+	dim.color = Color(0, 0, 0, 0.35)
+	dim.set_anchors_preset(Control.PRESET_FULL_RECT)
+	dim.mouse_filter = Control.MOUSE_FILTER_STOP
+	_menu_layer.add_child(dim)
 	_menu = Menu.new()
 	_menu.name = "WorldGenMenu"
-	_hud_layer.add_child(_menu)
+	_menu_layer.add_child(_menu)
 	_menu.setup(self)
+	get_tree().paused = true
 	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
 
 
 func menu_closed() -> void:
 	_menu = null
+	if _menu_layer != null:
+		_menu_layer.queue_free()
+		_menu_layer = null
+	get_tree().paused = false
+	if _menu_prev_mouse == Input.MOUSE_MODE_CAPTURED and not PlayerCamera.hands_off:
+		Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
+
+
+func menu_is_open() -> bool:
+	return _menu != null
+
+
+# ---------------------------------------------------------------------------
+# Saving the world's changes
+
+func _save_dir() -> String:
+	return (UserPaths.DEV + "mine_saves/") if _gate else (UserPaths.SAVES + "mine_world/")
+
+
+## One file per seed AND generator settings: an edit means nothing against
+## a different field.
+func save_path() -> String:
+	var key := "%s|%d" % [JSON.stringify(settings.get("gen", {}), "", true), int(settings.get("seed", 0))]
+	return _save_dir() + "%d_%08x.edits" % [int(settings.get("seed", 0)), key.hash() & 0xffffffff]
+
+
+func _load_edits() -> int:
+	var path := save_path()
+	if not FileAccess.file_exists(path):
+		return 0
+	var f := FileAccess.open_compressed(path, FileAccess.READ, FileAccess.COMPRESSION_ZSTD)
+	if f == null:
+		return 0
+	if f.get_buffer(4).get_string_from_ascii() != SAVE_MAGIC:
+		return 0
+	var fmt := f.get_32()
+	var field := f.get_32()
+	if fmt != SAVE_FORMAT or field != BrickTerrain.get_field_version():
+		push_warning("[mine] %s is from another format or field; not loaded" % path)
+		return 0
+	var n := f.get_32()
+	return BrickTerrain.set_edits(f.get_buffer(n * 13))
+
+
+## Write the changes if there are any unsaved. `wait`: now, on this thread
+## (leaving, generating); otherwise on a worker, checked next frame.
+func save_edits(wait := false) -> void:
+	if _save_task >= 0:
+		if not wait and not WorkerThreadPool.is_task_completed(_save_task):
+			return
+		WorkerThreadPool.wait_for_task_completion(_save_task)
+		_save_task = -1
+	if not _edits_dirty or settings.is_empty():
+		return
+	_edits_dirty = false
+	var bytes: PackedByteArray = BrickTerrain.get_edits()
+	var path := save_path()
+	var dir := _save_dir()
+	var field := BrickTerrain.get_field_version()
+	var write := func() -> void:
+		DirAccess.make_dir_recursive_absolute(dir)
+		var f := FileAccess.open_compressed(path + ".tmp", FileAccess.WRITE, FileAccess.COMPRESSION_ZSTD)
+		if f == null:
+			return
+		f.store_buffer(SAVE_MAGIC.to_ascii_buffer())
+		f.store_32(SAVE_FORMAT)
+		f.store_32(field)
+		@warning_ignore("integer_division")
+		f.store_32(bytes.size() / 13)
+		f.store_buffer(bytes)
+		f.close()
+		DirAccess.rename_absolute(path + ".tmp", path)
+	@warning_ignore("integer_division")
+	_save_status = "%d changes saved" % (bytes.size() / 13)
+	if wait:
+		write.call()
+	else:
+		_save_task = WorkerThreadPool.add_task(write, false, "mine world save")
+
+
+func _autosave(delta: float) -> void:
+	if _save_task >= 0 and WorkerThreadPool.is_task_completed(_save_task):
+		WorkerThreadPool.wait_for_task_completion(_save_task)
+		_save_task = -1
+	_save_in -= delta
+	if _save_in <= 0.0:
+		_save_in = AUTOSAVE_SECONDS
+		save_edits(false)
+
+
+## The world as generated again: its saved changes thrown away (the menu's
+## "Forget changes to this world").
+func forget_edits() -> void:
+	if _save_task >= 0:
+		WorkerThreadPool.wait_for_task_completion(_save_task)
+		_save_task = -1
+	var path := save_path()
+	if FileAccess.file_exists(path):
+		DirAccess.remove_absolute(path)
+	_edits_dirty = false
+	var s2 := settings.duplicate(true)
+	settings = {}
+	generate(s2)
 
 
 # ---------------------------------------------------------------------------
@@ -490,7 +672,7 @@ func _update_hud() -> void:
 				_far.anchor, _reanchors, _last_reanchor_ms],
 		"trees %d   edits %d   generated in %.0f ms" % [_trees.count if _trees != null else 0,
 				BrickTerrain.get_edit_count(), _gen_ms],
-		"blocks placed %d  broken %d" % [builder.placed, builder.broken],
+		"blocks placed %d  broken %d   %s" % [builder.placed, builder.broken, _save_status],
 		"%s   F fly/walk  B build  F9 world generation  F3 readout  T +1 hour" % ("ON FOOT" if on_foot
 				else "FLYING %.0f m/s (wheel)" % walker.fly_speed),
 	])
@@ -503,6 +685,7 @@ func _run_gate() -> void:
 	await _frames(10)
 	var dev := UserPaths.DEV
 	DirAccess.make_dir_recursive_absolute(dev)
+
 	_time = 0.42
 	await _frames(20)
 	await _shot(dev + "mine_spawn.png")
@@ -552,6 +735,8 @@ func _run_gate() -> void:
 	# The menu, then a new world from changed settings.
 	toggle_menu()
 	await _frames(10)
+	print("[mine-gate] menu open: world paused %s, mouse visible %s" % [get_tree().paused,
+			Input.mouse_mode == Input.MOUSE_MODE_VISIBLE])
 	await _shot(dev + "mine_menu.png")
 	var s := settings.duplicate(true)
 	s["seed"] = int(s.seed) + 1
@@ -563,6 +748,7 @@ func _run_gate() -> void:
 	await _frames(40)
 	await _shot(dev + "mine_regenerated.png")
 	await _gate_build()
+	await _gate_edits()
 	print("[mine-gate] done")
 	get_tree().quit()
 
@@ -597,6 +783,77 @@ func _gate_build() -> void:
 	await _frames(40)
 	await _shot(UserPaths.DEV + "mine_build.png")
 	builder.set_active(false)
+
+
+## The edit hitch, measured: shots at the ground in front of the player, one
+## every 15 frames, the worst frame of each window kept. Then the save: the
+## changes written, the world generated again, the same changes back.
+func _gate_edits() -> void:
+	set_on_foot(true)
+	await _frames(30)
+	var e := _eye()
+	var stud := BrickWorld.get_stud_metres()
+	_streamer.reset_stats()
+	TerrainTile.profile_instances = true
+	TerrainTile.instance_ms.clear()
+	var worst := 0.0
+	var sum := 0.0
+	var frames := 0
+	for i in 12:
+		var p := e + Vector3(2.0 + float(i % 4) * 1.3, 0.0, -3.0 - floorf(float(i) / 4.0) * 1.3)
+		var c := Vector2i(floori(p.x / stud), floori(p.z / stud))
+		p.y = _ground_m(c.x, c.y) - 0.2
+		_mine(p, Vector3.DOWN, null)
+		for f in 15:
+			var t0 := Time.get_ticks_usec()
+			await get_tree().process_frame
+			var ms := float(Time.get_ticks_usec() - t0) / 1000.0
+			worst = maxf(worst, ms)
+			sum += ms
+			frames += 1
+	print("[mine-gate] edits (%s far): 12 shots, worst frame %.1f ms, mean %.1f ms, %s" % [
+			"waiting" if _sync_far else "no-wait", worst, sum / frames, _streamer.report()])
+	# Sustained fire: a shot every 4 frames for 30 shots, as a rifle held down.
+	var slow := 0
+	var worst2 := 0.0
+	var sum2 := 0.0
+	var n2 := 0
+	for i in 30:
+		var p := e + Vector3(1.5 + float(i % 6) * 0.5, 0.0, -2.5 - floorf(float(i) / 6.0) * 0.5)
+		var c := Vector2i(floori(p.x / stud), floori(p.z / stud))
+		p.y = _ground_m(c.x, c.y) - 0.2
+		_mine(p, Vector3.DOWN, null)
+		for f in 4:
+			var t0 := Time.get_ticks_usec()
+			await get_tree().process_frame
+			var ms := float(Time.get_ticks_usec() - t0) / 1000.0
+			worst2 = maxf(worst2, ms)
+			sum2 += ms
+			n2 += 1
+			if ms > 25.0:
+				slow += 1
+	for f in 60:
+		var t0 := Time.get_ticks_usec()
+		await get_tree().process_frame
+		var ms := float(Time.get_ticks_usec() - t0) / 1000.0
+		worst2 = maxf(worst2, ms)
+		if ms > 25.0:
+			slow += 1
+	print("[mine-gate] rapid fire (%s): 30 shots, worst frame %.1f ms, mean %.1f ms, %d frames over 25 ms, %s" % [
+			"coalesced" if _coalesce else "each at once", worst2, sum2 / n2, slow, _streamer.report()])
+	TerrainTile.profile_instances = false
+	var keys := TerrainTile.instance_ms.keys()
+	keys.sort()
+	print("[mine-gate] instances phase, worst by step: %s" % ", ".join(keys.map(
+			func(k: String) -> String: return "%s %.1f" % [k, TerrainTile.instance_ms[k]])))
+	var count := BrickTerrain.get_edit_count()
+	save_edits(true)
+	var path := save_path()
+	var s2 := settings.duplicate(true)
+	settings = {}
+	generate(s2)
+	print("[mine-gate] save: %d edits written to %s, %d back after generating again (%s)" % [
+			count, path, BrickTerrain.get_edit_count(), _save_status])
 
 
 ## Tiles within 12 of the camera that neither tier draws: a hole in the

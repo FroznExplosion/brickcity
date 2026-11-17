@@ -2338,6 +2338,46 @@ Dictionary BrickTerrain::carve(Vector3 world_point, double radius_m) {
     return out;
 }
 
+static inline int unpack21(int64_t v) {
+    const int x = (int)(v & 0x1FFFFF);
+    return (x & 0x100000) ? x - 0x200000 : x;
+}
+
+PackedByteArray BrickTerrain::get_edits() {
+    PackedByteArray out;
+    out.resize((int64_t)g_edits.size() * 13);
+    uint8_t *w = out.ptrw();
+    size_t i = 0;
+    for (const auto &e : g_edits) {
+        const int32_t v[3] = { unpack21(e.first >> 42), unpack21(e.first >> 21), unpack21(e.first) };
+        for (int a = 0; a < 3; ++a) {
+            const uint32_t u = (uint32_t)v[a];
+            w[i++] = (uint8_t)(u & 0xFF);
+            w[i++] = (uint8_t)((u >> 8) & 0xFF);
+            w[i++] = (uint8_t)((u >> 16) & 0xFF);
+            w[i++] = (uint8_t)((u >> 24) & 0xFF);
+        }
+        w[i++] = e.second;
+    }
+    return out;
+}
+
+int BrickTerrain::set_edits(const PackedByteArray &bytes) {
+    const int64_t n = bytes.size() / 13;
+    const uint8_t *r = bytes.ptr();
+    for (int64_t k = 0; k < n; ++k) {
+        int32_t v[3];
+        for (int a = 0; a < 3; ++a) {
+            const uint8_t *p = r + k * 13 + a * 4;
+            v[a] = (int32_t)((uint32_t)p[0] | ((uint32_t)p[1] << 8) | ((uint32_t)p[2] << 16)
+                    | ((uint32_t)p[3] << 24));
+        }
+        const int m = std::min((int)r[k * 13 + 12], (int)MATERIAL_COUNT - 1);
+        set_edit(v[0], v[1], v[2], m);
+    }
+    return (int)n;
+}
+
 Dictionary BrickTerrain::fill_box(Vector3i lo, Vector3i hi, int material, bool only_air) {
     Dictionary out;
     const int mat = std::min(std::max(material, 0), (int)MATERIAL_COUNT - 1);
@@ -5195,6 +5235,8 @@ void BrickTerrain::_bind_methods() {
         &BrickTerrain::set_coarse_smooth_step);
     ClassDB::bind_static_method("BrickTerrain", D_METHOD("get_coarse_smooth_step"),
         &BrickTerrain::get_coarse_smooth_step);
+    ClassDB::bind_static_method("BrickTerrain", D_METHOD("get_edits"), &BrickTerrain::get_edits);
+    ClassDB::bind_static_method("BrickTerrain", D_METHOD("set_edits", "bytes"), &BrickTerrain::set_edits);
     ClassDB::bind_static_method("BrickTerrain", D_METHOD("fill_box", "lo", "hi", "material", "only_air"),
         &BrickTerrain::fill_box);
     ClassDB::bind_static_method("BrickTerrain", D_METHOD("ray_cell", "from", "dir", "max_metres"),
