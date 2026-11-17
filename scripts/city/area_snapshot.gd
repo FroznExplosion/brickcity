@@ -96,12 +96,18 @@ static func capture(history: DamageLog, islands: IslandManager,
 
 ## The furniture in a chunk, as what place_block needs to lay it again: the
 ## block's absolute cell (its corner, in the building's grid -- see DamageLog on
-## grid space), its part by NAME (part numbers are per session) and its colour.
+## grid space), its part by NAME (part numbers are per session) and its colour
+## -- then its material and whether it is an item's loose brick (Interiors 8.16;
+## a save from before has neither, and reads as filament, clicked on).
 static func furniture_of(w: BrickWorld, chunk: int) -> Array:
 	var out := []
 	var origin := w.get_chunk_origin(chunk)
 	var t := BrickWorld.ticks_per_stud()
 	var pt := BrickWorld.ticks_per_plate()
+	var loose_set := {}
+	if w.has_method(&"get_loose_blocks"):
+		for id in (w.call(&"get_loose_blocks", chunk) as PackedInt32Array):
+			loose_set[id] = true
 	for id in w.get_decorative_blocks(chunk):
 		var ticks: Array = w.get_block_ticks(chunk, id)
 		if ticks.is_empty():
@@ -109,8 +115,9 @@ static func furniture_of(w: BrickWorld, chunk: int) -> Array:
 		var at: Vector3i = ticks[0]
 		@warning_ignore("integer_division")
 		var cell := origin + Vector3i(at.x / t, at.y / pt, at.z / t)
+		var loose: bool = loose_set.has(id)
 		out.append([cell, w.get_archetype_name(w.get_block_archetype(chunk, id)),
-				w.get_block_colour(chunk, id)])
+				w.get_block_colour(chunk, id), w.get_block_material(chunk, id), loose])
 	return out
 
 
@@ -180,8 +187,13 @@ func restore(world: BrickWorld, resolve: Callable, islands: IslandManager,
 		# piece's structure -- and so the shapes and mesh built next -- alone.
 		for f in furniture.get(id, []):
 			var part: int = int(parts.get(str(f[1]), -1))
-			if part >= 0 and world.place_block(chunk, f[0], part, int(f[2]), true) >= 0:
+			var placed := world.place_block(chunk, f[0], part, int(f[2]), true) if part >= 0 else -1
+			if placed >= 0:
 				laid += 1
+				if (f as Array).size() > 3 and int(f[3]) != 0:
+					world.set_block_material(chunk, placed, int(f[3]))
+				if (f as Array).size() > 4 and bool(f[4]) and world.has_method(&"set_blocks_loose"):
+					world.call(&"set_blocks_loose", chunk, PackedInt32Array([placed]), true)
 			else:
 				refused += 1
 		# A save from before pieces said so was of pieces that were always

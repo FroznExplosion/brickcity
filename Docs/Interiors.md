@@ -805,5 +805,37 @@ face (0.70 m), the desk still joined to the floor. `interior_group_probe` 33, `i
 before.
 
 Not covered: loot pickups (guns, ammo, powerups; their own system); items riding a piece while
-it falls (they settle when it is at rest); a loose brick's material colour on the heap (crumbs
-draw the filament colour, as every crumb does); the mark across sleep/wake records and saves.
+it falls (they settle when it is at rest). The material colour and the mark across sleep and
+saves: section 8.17.
+
+### 8.17 What falls keeps its material, and sleep and saves keep the marks (2026-11-16)
+
+Three gaps, the first two the user's:
+
+- **Fallen bricks were drawn as plastic.** A crumb was coloured `get_filament_colour(colour
+  byte)` -- for a wood or metal brick that byte picks one of its material's own colours, so the
+  hue was wrong as well as the finish -- and the heap drew every brick in a flat
+  `StandardMaterial3D`. Now a crumb takes `BrickWorld.get_block_rgba` (the colour its mesh
+  carries: RGB through its material, material and grain in alpha). Crumbs come in one set per
+  brick size **and material** (`IslandCrumbs.crumb_set(size, mat)`, the material from the
+  colour's alpha, `mat_of`), and `crumb.gdshader` reads that set's material (`instance uniform
+  crumb_mat`) against the brick tables it now includes -- roughness, sheen, metal; filament
+  crumbs are as they were. The **heap** draws in the city's own brick material on the stand-in's
+  box (face UVs for the seams and shaded bevel), so a brick lying in the rubble is wood, metal or
+  stone as it was in the wall, PBR textures and all (`tools/shots/standin_shot.gd`: baked,
+  stood in, and lying, side by side, matching).
+- **Sleep forgot the mark -- and the materials.** A piece put to sleep is a `ChunkRecord`
+  (`BrickWorld.capture_blocks`), which kept the furniture list but neither `Block.loose` nor any
+  block's material: a wood piece that slept woke as plastic. The record now keeps `loose` (indices,
+  as `decorative`) and `materials` ([index, material] pairs, the non-zero ones), restores both,
+  and writes both to a save (`to_data` / `from_data`; older saves read as before).
+- **Saves forgot them on furniture.** `AreaSnapshot.furniture_of` entries now carry the block's
+  material and whether it is loose (a save from before reads as filament, clicked on).
+
+Checks: `loose_items_probe` 18 (adds: a falling brick's colour carries its material, a filament's
+says filament; two materials of one size are two crumb sets; a woken record keeps the loose item
+and the desk's material; a saved record keeps both; a save's furniture says which is loose and
+what it is made of). `heap_probe` 11, `dormant_probe` 33, `snapshot_probe` 48, `legacy_ids_probe`
+4, `chip_probe` 21, `debris_probe` 29, `cap_probe` 19, `mesh_cells_probe` 15, `standin_probe` 15
+as before. `blast_ring_probe` fails 2 of 19 ("it loses bricks, and the ones round the middle are
+thrown", "and it stays where it lies") with and without this change: already failing on main.
