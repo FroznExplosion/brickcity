@@ -562,11 +562,34 @@ every keel plate is at that level, so each half was "grounded" by its own keel.
   * A piece does not flood: the air it shuts in is its for good.
   * A piece turned far over floats wrongly: its columns stand along its own up.
   * The sea is not cut out of a piece's air (`HullMasks` knows hulls only).
-  * Spaceships and stations still part at their joints and their keel's level
-    (`_joints_step`, `find_detached_groups`); `HullAir.rebuild` would be 130-300 ms on one,
-    in script.
+  * ~~Spaceships and stations still part at their joints and their keel's level~~: 7.5.
 * **Seen, not from this:** the harbour pass exits with 139 (a crash at quit) after `6 ok`,
   with and without this change.
+
+### 7.5 Built (2026-11-17): the air's fills in C++; a ship in flight breaks in two
+
+* **The fills in C++** (`HullFlow.air_regrid`, `HullFlow.air_fill`): the grid from the
+  bricks, then the outside's fill and the rooms' labels, which `HullAir.bake`, `rebuild` and
+  a `HullPiece` all ran in script. A ship's bake 250 to 11 ms (73,232 cells of air, 57
+  rooms, the same as before); a boat's under 1 ms.
+* **A station in orbit and a ship in flight float free** (`floats_free`: a generated
+  station, a `SpaceShip` not `landed`). Cut clean across mid-section, its joints whole and
+  both halves on its keel's level, the part not joined to its largest now leaves (it stayed
+  on before). A ship's own part, though, is not all its bricks: a generated ship is ~570
+  joined parts, the largest 16,000 bricks, the next 27 -- its furniture and fittings stand on
+  tiled floors and hang from ceilings unclicked. So a part leaves this way only past
+  `part_min` (200 bricks); smaller ones keep the keel's rule. A boat's `part_min` is 0.
+* **Its joints first:** sections cut off at their joints leave whole as one piece, as
+  before; then the rule above on what is left. With the bridge's section gone (a smaller part
+  that left), the section with the most bricks left holds the rest.
+* A ship's air follows the part that left as a hit's (`blocks_removed`: the rooms it opened
+  vent, with their rush toward the hole). A boat's is worked out again (`rebuild`).
+* Gates: `ship_build_probe` "cut" (seed 7, after its bulkhead: 519 bricks cut 12 studs from
+  its aft end, 1,943 aft of it, 1,798 drift off; old rule: none), `station_sections_probe`
+  "joined" (a station is one part: 5,746 bricks, 0.4 ms). Everything else as in 7.4.
+* **Not yet:** a cut-off half's furniture (on its tiles, unclicked) stays with the ship, in
+  space where the half was: 145 of 1,943 bricks in the gate. It needs "resting on" as well
+  as "clicked to" in the parts (C++).
 
 ## 7b. Walking inside a moving hull: the ghost hull
 

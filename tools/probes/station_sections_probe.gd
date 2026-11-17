@@ -11,6 +11,8 @@ extends SceneTree
 ##             built, its shell a box round each section, its box its own
 ##   laid      activate lays every brick of it, nothing loose: its keel the
 ##             foundation
+##   joined    its bricks one joined part: in orbit nothing is its ground, and what
+##             is not joined to its largest part leaves (Docs/Hulls.md 7.4)
 ##   doors     its recipe's doors hung (BuildDoors), following its chunk
 ##   drift     every brick where a section (its fewest joints) meets the rest killed: the solve
 ##             sends the section off whole (`drifted`, one rigid piece)
@@ -119,6 +121,9 @@ func _after_laid() -> void:
 	var loose: Array = st.bricks.find_detached_groups(st.chunk)
 	_ok("activate lays every brick, nothing loose: the keel its foundation",
 			alive == r.size() and loose.is_empty(), "%d of %d alive, %d loose group(s)" % [alive, r.size(), loose.size()])
+	var parts: Array = st.bricks.get_components(st.chunk)
+	_ok("joined: its bricks are one part, so nothing leaves it as laid (it floats free)",
+			st.floats_free() and parts.size() == 1, "%d part(s)" % parts.size())
 	st.doors.resync()
 	var want := BuildDoors.of(r).size()
 	_ok("its doors hung in its doorways, once its bricks are solid", want > 0 and st.doors.count() == want,

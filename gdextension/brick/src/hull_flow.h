@@ -63,6 +63,18 @@ public:
     /// its foot. Empty arrays when nothing is wet enough to draw.
     /// Was GDScript (SpaceStation._draw_water): up to 70 ms for a flooding boat.
     Array mesh(float stud, float plate, const PackedInt32Array &inflow_cells) const;
+    /// HullAir's grid from a chunk's bricks (Docs/Hulls.md 2): per cell SOLID (1)
+    /// where `solid` is non-zero, else what `state` has if it is `keep_a` or
+    /// `keep_b` (doors, holes kept as walls), else EMPTY (0). `state` empty: all
+    /// EMPTY but the bricks.
+    static PackedByteArray air_regrid(const PackedByteArray &state, const PackedByteArray &solid,
+            int keep_a, int keep_b);
+    /// HullAir's two fills: every EMPTY cell the chunk's edge reaches through EMPTY
+    /// cells becomes `outside`, every other EMPTY cell `inside`, labelled by its
+    /// room (6-joined). Anything not EMPTY is a wall. [state, comp (per cell its
+    /// room 0.., or -1), sizes (cells a room), firsts (a room's first cell)].
+    /// Was GDScript: 250 ms for a ship.
+    static Array air_fill(const PackedByteArray &state, Vector3i dims, int outside, int inside);
     /// Thin film under `dry` taken away by the flow, all told.
     double get_dried() const { return dried; }
 
