@@ -273,6 +273,9 @@ Gate: `tools/probes/collapse_probe.gd` (27 checks), plus the city's `--nav`, `--
    gaps in 4 of 8, doubles in 7 of 8 (worst 6 ticks, **all** waiting in the remesh queue, none on
    bands). Now a building that shed a piece is remeshed first, outside the budget, the tick every
    piece that took its bricks is drawing (held at most 20 frames). After: 0 of 18.
+   The cap is now 15 physics **ticks** (`HANDOVER_MAX_TICKS`, 2026-11-17): 20 frames was 4-5
+   ticks headless, shorter than a big piece's bake and worker-built slices (6-7 ticks), and
+   collapse_probe's "no gap" failed 3 runs in 4 on that one tick.
 4. **Stairs.** §2.1's first guess was wrong: the staircase does **not** hold floors up — an
    experiment with the ground storey gone but for the stairs grounds 0 of 884 blocks through them.
    What happens is the other way round: the stairs stand on their own column, the shaft fits the

@@ -1474,33 +1474,49 @@ func _check_tops() -> void:
 		# lying flat on its stump has to drive one side down into it, and the
 		# contacts there held the 5-storey one to 0.0-0.4 degrees (2026-10-25)
 		# with nothing wrong with it. A rod through it stops this just the same.
-		# Pushed one way and, if that does not take it, the other: the 5-storey
+		# Pushed one way and, if that does not take it, the next: the 5-storey
 		# one's +x side is often blocked by what this probe's earlier checks left
 		# lying there (1.0-1.1 degrees that way in 3 runs of 4, 19-21 the other).
-		# A rod stops both.
+		# Both x sides blocked failed it about one run in ten (0.0 and 1.6-1.7
+		# degrees each way, 2026-11-17): the push stopped dead in one step, 6
+		# contacts, nothing frozen or asleep. So all four sides, +-z too. A rod
+		# stops all four; rubble against two sides does not. Failing, it names
+		# what it was touching.
 		var tilt := 0.0
 		var tried := []
+		var touching := {}
 		city.islands.hold_awake(top, 3000)
-		for way in [1.0, -1.0]:
-			var spin := Vector3(0, 0, -0.6 * way)   # way 1: the top moves +x, over its +x edge
+		for way in [Vector3.RIGHT, Vector3.LEFT, Vector3.BACK, Vector3.FORWARD]:
+			# Turned about the bottom edge on the side it goes: the spin carries
+			# its top towards `way` (spin x UP = way).
+			var spin: Vector3 = Vector3.UP.cross(way) * 0.6
 			var wb: AABB = city.islands.world_aabb(top)
-			var pivot := Vector3(wb.end.x if way > 0.0 else wb.position.x, wb.position.y, 0.0)
+			var edge := Vector3(wb.end.x if way.x > 0.0 else wb.position.x, wb.position.y,
+					wb.end.z if way.z > 0.0 else wb.position.z)
 			var turned := 0.0
 			for k in 30:
 				var st := PhysicsServer3D.body_get_direct_state(bd.get_rid())
 				var com := st.transform.origin + st.center_of_mass
-				pivot.z = com.z
+				# The edge on that side, level with the centre along it.
+				var pivot := Vector3(edge.x if way.x != 0.0 else com.x, edge.y,
+						edge.z if way.z != 0.0 else com.z)
 				bd.angular_velocity = spin
 				bd.linear_velocity = spin.cross(com - pivot)
 				bd.sleeping = false
 				await physics_frame
 				turned = maxf(turned, rad_to_deg(acos(clampf(bd.global_basis.y.dot(Vector3.UP), -1.0, 1.0))))
-			tried.append("%s %.1f" % ["+x" if way > 0.0 else "-x", turned])
+				if k == 1:
+					var st2 := PhysicsServer3D.body_get_direct_state(bd.get_rid())
+					for ci in st2.get_contact_count():
+						var o: Object = st2.get_contact_collider_object(ci)
+						touching[str(o.name) if o is Node else "a body with no node"] = true
+			tried.append("%s%s %.1f" % ["+" if way.x + way.z > 0.0 else "-", "x" if way.x != 0.0 else "z",
+					turned])
 			tilt = maxf(tilt, turned)
 			if tilt > 10.0:
 				break
 		_ok("building %d: pushed over, it turns" % id, tilt > 10.0,
-				"%s deg in a second" % ", ".join(tried))
+				"%s deg in a second; touching %s" % [", ".join(tried), touching.keys()])
 
 
 # --- A soldier inside a building that topples --------------------------------------
