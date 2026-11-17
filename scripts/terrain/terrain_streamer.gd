@@ -294,6 +294,7 @@ func invalidate(rect: Rect2i) -> void:
 		var tile: TerrainTile = _tiles[c]
 		_tiles.erase(c)
 		_dirty.erase(c)
+		tile.recycle()
 		tile.queue_free()
 
 
@@ -485,6 +486,7 @@ func _assemble() -> void:
 		var replacing := _tiles.has(c)
 		if replacing:
 			# A refresh: the new tile replaces the old one only now it exists.
+			(_tiles[c] as TerrainTile).recycle()
 			(_tiles[c] as TerrainTile).queue_free()
 			_tiles.erase(c)
 		_dirty.erase(c)
@@ -585,5 +587,6 @@ func _drop(cx: int, cz: int) -> void:
 		var tile: TerrainTile = _tiles[c]
 		_tiles.erase(c)
 		_dirty.erase(c)
+		tile.recycle()
 		tile.queue_free()
 		_dropped += 1

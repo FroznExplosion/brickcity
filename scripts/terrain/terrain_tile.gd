@@ -82,7 +82,7 @@ func rebuild(material: Material) -> void:
 	_instances_done = false
 	_collision_done = false
 	_coll_i = 0
-	_release_multimeshes()
+	recycle()
 	for child in get_children():
 		remove_child(child)
 		child.queue_free()
@@ -432,7 +432,27 @@ func _add_instances(node_name: String, mesh: Mesh, buffer: PackedFloat32Array,
 	if count == 0:
 		return
 	var t0 := Time.get_ticks_usec()
-	var mm := _take_multimesh(node_name, mesh)
+	# A recycled node first (`recycle`): node, render instance and MultiMesh
+	# all drawn before, so filling it is a buffer copy.
+	var mi: MultiMeshInstance3D = null
+	var mm: MultiMesh = null
+	var nodes: Array = _mmi_pool.get(node_name, [])
+	while mi == null and not nodes.is_empty():
+		var cand = nodes.pop_back()
+		if is_instance_valid(cand):
+			mi = cand
+	if mi != null:
+		mm = mi.multimesh
+		_mms.append([node_name, mm, mi])
+		if profile_instances:
+			instance_ms[node_name + " reused"] = float(instance_ms.get(node_name + " reused", 0.0)) + 1.0
+	else:
+		mm = _take_multimesh(node_name, mesh)
+		mi = MultiMeshInstance3D.new()
+		mi.multimesh = mm
+		(_mms.back() as Array).append(mi)
+		if profile_instances:
+			instance_ms[node_name + " new"] = float(instance_ms.get(node_name + " new", 0.0)) + 1.0
 	mm.instance_count = count
 	if profile_instances:
 		_note_ms(node_name + " alloc", t0)
@@ -445,9 +465,8 @@ func _add_instances(node_name: String, mesh: Mesh, buffer: PackedFloat32Array,
 		instance_ms[node_name + " count"] = maxf(float(instance_ms.get(node_name + " count", 0.0)), count)
 		t0 = Time.get_ticks_usec()
 
-	var mi := MultiMeshInstance3D.new()
 	mi.name = node_name
-	mi.multimesh = mm
+	mi.visible = true
 	mi.material_override = mat if mat != null else instance_material()
 	# §7.4: studs never cast. 8.3k instances through two cascades is ~365k
 	# depth-only triangles a frame, to draw a shadow 0.07 m long — and the
@@ -493,8 +512,15 @@ static var _box_shapes := {}
 ## again, in a brand-new node. So a tile hands its MultiMeshes back when it
 ## leaves, and the next tile takes them.
 static var _mm_pool := {}
-## This tile's MultiMeshes, [kind, MultiMesh], to give back.
+## This tile's MultiMeshes, [kind, MultiMesh, MultiMeshInstance3D], to give back.
 var _mms: Array = []
+## Instance NODES kept for reuse, by kind, each holding its MultiMesh. A tile
+## the streamer replaces or drops hands them over at once (`recycle`), not
+## when it is finally freed at the end of the frame: a tile rebuilt by an edit
+## asks for its instances while the tile it replaces still holds them, the
+## MultiMesh pool was empty, and a never-drawn MultiMesh in a new node stalled
+## 11-21 ms about one time in 78 (Docs/MineWorld.md 9).
+static var _mmi_pool := {}
 
 
 func _take_multimesh(kind: String, mesh: Mesh) -> MultiMesh:
@@ -515,6 +541,30 @@ func _take_multimesh(kind: String, mesh: Mesh) -> MultiMesh:
 ## `_exit_tree`); the pool fills again from the next tiles that leave.
 static func clear_pool() -> void:
 	_mm_pool.clear()
+	# Pooled nodes are out of the tree, so nothing frees them but this.
+	for kind in _mmi_pool:
+		for mi in _mmi_pool[kind]:
+			if is_instance_valid(mi):
+				(mi as Node).free()
+	_mmi_pool.clear()
+
+
+## Hand this tile's instance nodes to the pool now, before it is freed: the
+## streamer calls it as it replaces or drops a tile. The tile's own children
+## are gone after this; the surface and collider are not touched.
+func recycle() -> void:
+	for pair in _mms:
+		var mi = pair[2] if (pair as Array).size() > 2 else null
+		if mi != null and is_instance_valid(mi) and (mi as Node).get_parent() == self:
+			remove_child(mi)
+			if not _mmi_pool.has(pair[0]):
+				_mmi_pool[pair[0]] = []
+			(_mmi_pool[pair[0]] as Array).append(mi)
+		else:
+			if not _mm_pool.has(pair[0]):
+				_mm_pool[pair[0]] = []
+			(_mm_pool[pair[0]] as Array).append(pair[1])
+	_mms.clear()
 
 
 func _release_multimeshes() -> void:
@@ -576,4 +626,4 @@ func _exit_tree() -> void:
 		for rid in _box_shapes.values():
 			PhysicsServer3D.free_rid(rid)
 		_box_shapes.clear()
-		_mm_pool.clear()
+		clear_pool()

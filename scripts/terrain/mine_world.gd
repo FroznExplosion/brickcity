@@ -793,6 +793,18 @@ func _gate_edits() -> void:
 	await _frames(30)
 	var e := _eye()
 	var stud := BrickWorld.get_stud_metres()
+	# Baseline: the same frames with nothing edited, so an edit's frames have
+	# something to be compared with (vsync, other programs).
+	var idle_worst := 0.0
+	var idle_slow := 0
+	for f in 180:
+		var t0 := Time.get_ticks_usec()
+		await get_tree().process_frame
+		var ms := float(Time.get_ticks_usec() - t0) / 1000.0
+		idle_worst = maxf(idle_worst, ms)
+		if ms > 20.0:
+			idle_slow += 1
+	print("[mine-gate] idle: 180 frames, worst %.1f ms, %d over 20 ms" % [idle_worst, idle_slow])
 	_streamer.reset_stats()
 	TerrainTile.profile_instances = true
 	TerrainTile.instance_ms.clear()
@@ -830,16 +842,16 @@ func _gate_edits() -> void:
 			worst2 = maxf(worst2, ms)
 			sum2 += ms
 			n2 += 1
-			if ms > 25.0:
+			if ms > 20.0:
 				slow += 1
 	for f in 60:
 		var t0 := Time.get_ticks_usec()
 		await get_tree().process_frame
 		var ms := float(Time.get_ticks_usec() - t0) / 1000.0
 		worst2 = maxf(worst2, ms)
-		if ms > 25.0:
+		if ms > 20.0:
 			slow += 1
-	print("[mine-gate] rapid fire (%s): 30 shots, worst frame %.1f ms, mean %.1f ms, %d frames over 25 ms, %s" % [
+	print("[mine-gate] rapid fire (%s): 30 shots, worst frame %.1f ms, mean %.1f ms, %d of 180 frames over 20 ms, %s" % [
 			"coalesced" if _coalesce else "each at once", worst2, sum2 / n2, slow, _streamer.report()])
 	TerrainTile.profile_instances = false
 	var keys := TerrainTile.instance_ms.keys()
