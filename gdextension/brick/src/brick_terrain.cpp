@@ -1,4 +1,5 @@
 #include "brick_terrain.h"
+#include "terrain_biomes.h"
 
 #include <godot_cpp/classes/time.hpp>
 #include <godot_cpp/classes/mesh.hpp>
@@ -531,10 +532,19 @@ static float apply_pads(float plates, int x, int z, bool *flat) {
 }
 
 float Field::raw_plate(int x, int z) const {
+    if (biomes_on()) {
+        return (float)((biome_column(seed, x, z).sb + 1) * PLATES_PER_CELL);
+    }
     return apply_pads(base_plate(x, z), x, z, nullptr);
 }
 
 int Field::top_plate(int x, int z) const {
+    // The biome generator (terrain_biomes.h): the top plate anything in the
+    // column can be solid at -- its overhang band included -- so every scan
+    // down from here still finds the real surface.
+    if (biomes_on()) {
+        return biome_column(seed, x, z).bound_p;
+    }
     // ONE height function, quantised two ways. This used to be a second copy
     // of the expression in `raw_plate` and the two drifted apart the moment
     // the relief changed.
@@ -594,6 +604,9 @@ static int painted_at(int x, int z, uint32_t seed) {
 }
 
 int Field::material_at(int x, int z, int h) const {
+    if (biomes_on()) {
+        return biome_top(biome_column(seed, x, z));
+    }
     // A brush-painted column first: the most specific thing an author said.
     const int brushed = layer_material(x, z);
     if (brushed != 0xFF) {
@@ -663,6 +676,15 @@ bool Field::cave_at(int x, int yp, int z, int top) const {
 static bool g_flat_mode = false;
 
 int Field::solid_at(int x, int yp, int z) const {
+    if (biomes_on()) {
+        if (!edits_empty()) {
+            const int e = edit_at(pack_cell(x, yp, z));
+            if (e >= 0) {
+                return e;
+            }
+        }
+        return biome_cell(biome_column(seed, x, z), seed, x, floor_div(yp, PLATES_PER_CELL), z);
+    }
     if (g_flat_mode) {
         const int t = top_plate(x, z);
         return yp > t ? MAT_AIR : material_at(x, z, floor_div(t, PLATES_PER_CELL));
@@ -763,15 +785,37 @@ void sample_tile(const Field &f, int tx, int tz, TileSample &out) {
     // SECTION_BELOW plates from the lowest. Everything above is air and
     // everything below is rock, and neither needs storing (section 17.4).
     int hi = -1000000, lo = 1000000;
-    for (int lz = -MARGIN; lz < TILE + MARGIN; ++lz) {
-        for (int lx = -MARGIN; lx < TILE + MARGIN; ++lx) {
-            const int t = f.top_plate(gx0 + lx, gz0 + lz);
-            hi = std::max(hi, t);
-            lo = std::min(lo, t);
+    // The biome generator decides each column once (2D noise, biome, band)
+    // and every plate of it reads that: per cell would be ~25 octaves of
+    // noise a plate.
+    const bool biomes = biomes_on();
+    std::vector<BColumn> bcols;
+    int deep = 1000000;
+    if (biomes) {
+        bcols.resize((size_t)SPAN * SPAN);
+        for (int lz = -MARGIN; lz < TILE + MARGIN; ++lz) {
+            for (int lx = -MARGIN; lx < TILE + MARGIN; ++lx) {
+                const BColumn c = biome_column(f.seed, gx0 + lx, gz0 + lz);
+                bcols[TileSample::idx(lx, lz)] = c;
+                hi = std::max(hi, c.bound_p);
+                lo = std::min(lo, (c.sb - c.amp + 1) * PLATES_PER_CELL - 1);
+                deep = std::min(deep, c.low_p);
+            }
+        }
+    } else {
+        for (int lz = -MARGIN; lz < TILE + MARGIN; ++lz) {
+            for (int lx = -MARGIN; lx < TILE + MARGIN; ++lx) {
+                const int t = f.top_plate(gx0 + lx, gz0 + lz);
+                hi = std::max(hi, t);
+                lo = std::min(lo, t);
+            }
         }
     }
     const int top_plate = hi + 1;
     out.y0 = lo + 1 - SECTION_BELOW;
+    if (biomes) {
+        out.y0 = std::min(out.y0, deep);
+    }
     // Reach whatever has been dug, plus a little, or the bottom of a deep pit
     // falls outside the mask and is never meshed.
     const int dug = deepest_edit_near(tx, tz);
@@ -787,7 +831,35 @@ void sample_tile(const Field &f, int tx, int tz, TileSample &out) {
     // against 0.6 ms for the heightfield it replaced. Hoisted out, only the
     // cave test and the edit lookup remain per cell.
     const bool no_edits = edits_empty() || g_flat_mode;
-    for (int lz = -MARGIN; lz < TILE + MARGIN; ++lz) {
+    if (biomes) {
+        for (int lz = -MARGIN; lz < TILE + MARGIN; ++lz) {
+            for (int lx = -MARGIN; lx < TILE + MARGIN; ++lx) {
+                const int gx = gx0 + lx, gz = gz0 + lz;
+                const BColumn &c = bcols[TileSample::idx(lx, lz)];
+                int last_b = INT_MIN;
+                uint8_t last_v = (uint8_t)MAT_AIR;
+                for (int yp = out.y0; yp < out.y0 + out.ysize; ++yp) {
+                    uint8_t v = (uint8_t)MAT_AIR;
+                    if (yp <= c.bound_p) {
+                        const int yb = floor_div(yp, PLATES_PER_CELL);
+                        if (yb != last_b) {
+                            last_b = yb;
+                            last_v = (uint8_t)biome_cell(c, f.seed, gx, yb, gz);
+                        }
+                        v = last_v;
+                    }
+                    if (!no_edits) {
+                        const int e = edit_at(pack_cell(gx, yp, gz));
+                        if (e >= 0) {
+                            v = (uint8_t)e;
+                        }
+                    }
+                    out.vox[out.vidx(lx, yp, lz)] = v;
+                }
+            }
+        }
+    }
+    for (int lz = -MARGIN; lz < TILE + MARGIN && !biomes; ++lz) {
         for (int lx = -MARGIN; lx < TILE + MARGIN; ++lx) {
             const int gx = gx0 + lx, gz = gz0 + lz;
             const int ctop_plate = f.top_plate(gx, gz);
@@ -2027,6 +2099,12 @@ PackedStringArray BrickTerrain::material_names() {
     out.push_back("stone");
     out.push_back("dark stone");
     out.push_back("road");
+    for (const char *n : { "snow", "gravel", "sandstone", "red sand", "terracotta",
+            "cream terracotta", "red terracotta", "clay", "bedrock", "coal ore", "iron ore",
+            "copper ore", "gold ore", "redstone ore", "lapis ore", "diamond ore", "podzol",
+            "dry grass", "lush grass", "cold grass", "dark grass", "granite", "diorite", "ice" }) {
+        out.push_back(n);
+    }
     return out;
 }
 
@@ -2035,6 +2113,37 @@ Vector3 BrickTerrain::get_sun_direction() { return g_sun_dir; }
 bool BrickTerrain::sunlit(int x, int z) { return sun_reaches(x, z); }
 
 int BrickTerrain::surface_plate(int x, int z) {
+    if (biomes_on()) {
+        // One column decision, then a scan down it: solid_at per plate would
+        // decide the column again for every plate of air above the ground.
+        const BColumn c = biome_column(g_field.seed, x, z);
+        int floor_p = c.low_p - SECTION_BELOW;
+        const int dug = deepest_edit_near(floor_div(x, TILE), floor_div(z, TILE));
+        if (dug != INT_MAX) {
+            floor_p = std::min(floor_p, dug - 6);
+        }
+        const bool any_edits = !edits_empty();
+        int last_b = INT_MIN;
+        int last_v = MAT_AIR;
+        for (int yp = c.bound_p; yp > floor_p; --yp) {
+            int v;
+            const int e = any_edits ? edit_at(pack_cell(x, yp, z)) : -1;
+            if (e >= 0) {
+                v = e;
+            } else {
+                const int yb = floor_div(yp, PLATES_PER_CELL);
+                if (yb != last_b) {
+                    last_b = yb;
+                    last_v = biome_cell(c, g_field.seed, x, yb, z);
+                }
+                v = last_v;
+            }
+            if (v != MAT_AIR) {
+                return yp;
+            }
+        }
+        return floor_p;
+    }
     const int top = g_field.top_plate(x, z);
     if (g_flat_mode) {
         return top;   // nothing is ever carved out of it
@@ -2142,7 +2251,8 @@ Dictionary BrickTerrain::carve(Vector3 world_point, double radius_m) {
                     continue;
                 }
                 const int mat = g_field.solid_at(x, y, z);
-                if (mat == MAT_AIR) {
+                // Bedrock is the floor of the world and does not break.
+                if (mat == MAT_AIR || mat == MAT_BEDROCK) {
                     continue;
                 }
                 set_edit(x, y, z, MAT_AIR);
@@ -3076,6 +3186,23 @@ static inline float coarse_skirt_m(int step) {
 }
 void BrickTerrain::set_coarse_smooth_step(int step) { g_coarse_smooth_step = std::max(step, 0); }
 int BrickTerrain::get_coarse_smooth_step() { return g_coarse_smooth_step; }
+
+void BrickTerrain::set_generator(int mode) {
+    brick::gen_params();   // built here, on the main thread, not first by a worker
+    brick::set_gen_mode(mode);
+}
+int BrickTerrain::get_generator() { return brick::gen_mode(); }
+void BrickTerrain::set_gen_params(Dictionary params) { brick::gen_params_from_dict(params); }
+Dictionary BrickTerrain::get_gen_params() { return brick::gen_params_to_dict(); }
+void BrickTerrain::reset_gen_params() { brick::reset_gen_params(); }
+int BrickTerrain::biome_at(int x, int z) {
+    return brick::biome_column(g_field.seed, x, z).biome;
+}
+PackedStringArray BrickTerrain::biome_names() { return brick::biome_names(); }
+PackedByteArray BrickTerrain::gen_preview(int64_t seed, Dictionary params, int cx, int cz, int w,
+        int h, int step, int mode) {
+    return brick::gen_preview((uint32_t)(seed & 0xffffffff), params, cx, cz, w, h, step, mode);
+}
 
 /// A coarse block as a SMOOTH grid: one vertex a sample, heights at the
 /// sample, a colour and a material a vertex. Neighbouring blocks sample the
@@ -4934,6 +5061,23 @@ void BrickTerrain::_bind_methods() {
         &BrickTerrain::set_coarse_smooth_step);
     ClassDB::bind_static_method("BrickTerrain", D_METHOD("get_coarse_smooth_step"),
         &BrickTerrain::get_coarse_smooth_step);
+    ClassDB::bind_static_method("BrickTerrain", D_METHOD("set_generator", "mode"),
+        &BrickTerrain::set_generator);
+    ClassDB::bind_static_method("BrickTerrain", D_METHOD("get_generator"),
+        &BrickTerrain::get_generator);
+    ClassDB::bind_static_method("BrickTerrain", D_METHOD("set_gen_params", "params"),
+        &BrickTerrain::set_gen_params);
+    ClassDB::bind_static_method("BrickTerrain", D_METHOD("get_gen_params"),
+        &BrickTerrain::get_gen_params);
+    ClassDB::bind_static_method("BrickTerrain", D_METHOD("reset_gen_params"),
+        &BrickTerrain::reset_gen_params);
+    ClassDB::bind_static_method("BrickTerrain", D_METHOD("biome_at", "x", "z"),
+        &BrickTerrain::biome_at);
+    ClassDB::bind_static_method("BrickTerrain", D_METHOD("biome_names"),
+        &BrickTerrain::biome_names);
+    ClassDB::bind_static_method("BrickTerrain",
+        D_METHOD("gen_preview", "seed", "params", "cx", "cz", "w", "h", "step", "mode"),
+        &BrickTerrain::gen_preview);
 
     // Plain integer constants rather than BIND_ENUM_CONSTANT: the enum lives
     // in namespace brick, outside the class, and binding it as a real enum

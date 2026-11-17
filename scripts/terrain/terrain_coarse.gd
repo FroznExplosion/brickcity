@@ -46,6 +46,12 @@ const LEVELS := 6
 
 ## Print how many blocks each span got (the heightfield bench).
 var verbose := false
+## The tile the rings are laid out round. The origin for a world that stays
+## put; an endless one (Docs/MineWorld.md 5) builds a fresh tier round the
+## player's tile now and then and swaps it in (`build_begin`/`build_poll`).
+var anchor := Vector2i.ZERO
+## A build in flight (`build_begin`): the layout and the group task.
+var _build_job := {}
 
 ## What `build` was last asked for: `rebuild` asks again.
 var _reach_tiles := 0
@@ -104,13 +110,25 @@ var worst_main_ms := 0.0
 ## is the biggest block, in tiles, that is kept as a node of its own so it can
 ## be hidden: the following kind, and then `cover` every frame.
 func build(reach_tiles: int, material: Material, hole := Rect2i(), split_to := 0) -> void:
+	_build_job = {}
+	if not build_begin(reach_tiles, material, hole, split_to):
+		return
+	_job_wait(_build_job)
+	build_poll()
+
+
+## `build`, without waiting: lays the tier out and starts the bakes on the
+## worker pool. Call `build_poll` each frame until it says true; the tier is
+## empty until then. False when there is nothing to build.
+func build_begin(reach_tiles: int, material: Material, hole := Rect2i(), split_to := 0) -> bool:
 	_reach_tiles = reach_tiles
 	_material = material
 	_hole = hole
 	_split_to = split_to
 	if reach_tiles <= 0:
-		return
+		return false
 	var has_hole := hole.size.x > 0 and hole.size.y > 0
+	var a := anchor
 
 	# The placement is a greedy fill rather than a lattice sweep: lay the
 	# LARGEST aligned block that fits each ring, then fill round them. Two
@@ -144,7 +162,7 @@ func build(reach_tiles: int, material: Material, hole := Rect2i(), split_to := 0
 			return false
 		# NOT over a fixed detail square. Where the two tiers overlap the
 		# ground is drawn twice, and coarse samples poke through detail ground.
-		if has_hole and hole.intersects(Rect2i(bx, bz, span, span)):
+		if has_hole and hole.intersects(Rect2i(bx + a.x, bz + a.y, span, span)):
 			return false
 		for dz in span:
 			for dx in span:
@@ -192,7 +210,7 @@ func build(reach_tiles: int, material: Material, hole := Rect2i(), split_to := 0
 	for tz in range(-reach, reach + 1):
 		for tx in range(-reach, reach + 1):
 			var c := Vector2i(tx, tz)
-			if covered.has(c) or (has_hole and hole.has_point(c)):
+			if covered.has(c) or (has_hole and hole.has_point(c + a)):
 				continue
 			if absi(tx) > reach_tiles or absi(tz) > reach_tiles:
 				continue
@@ -201,6 +219,9 @@ func build(reach_tiles: int, material: Material, hole := Rect2i(), split_to := 0
 			steps.append(STEP)
 			covered[c] = true
 
+	# Laid out round the origin; placed round the anchor.
+	for i in blocks.size():
+		blocks[i] += a
 	for i in blocks.size():
 		for dz in spans[i]:
 			for dx in spans[i]:
@@ -219,14 +240,34 @@ func build(reach_tiles: int, material: Material, hole := Rect2i(), split_to := 0
 	# C++ that only reads the field.
 	var baked: Array[Dictionary] = []
 	baked.resize(blocks.size())
-	if not blocks.is_empty():
-		var task := WorkerThreadPool.add_group_task(
-			func(i: int) -> void:
-				baked[i] = BrickTerrain.build_coarse(blocks[i].x, blocks[i].y,
-					spans[i], steps[i]),
-			blocks.size(), -1, true, "terrain coarse")
-		WorkerThreadPool.wait_for_group_task_completion(task)
+	if blocks.is_empty():
+		return false
+	var task := WorkerThreadPool.add_group_task(
+		func(i: int) -> void:
+			baked[i] = BrickTerrain.build_coarse(blocks[i].x, blocks[i].y,
+				spans[i], steps[i]),
+		blocks.size(), -1, true, "terrain coarse")
+	_build_job = {"task": task, "blocks": blocks, "spans": spans, "steps": steps,
+			"baked": baked}
+	return true
 
+
+## The build `build_begin` started: true once it is baked and in the tree.
+## Never blocks; the meshes go in all at once when the last bake is done.
+func build_poll() -> bool:
+	if _build_job.is_empty():
+		return true
+	if not _job_done(_build_job):
+		return false
+	var job := _build_job
+	_build_job = {}
+	_assemble(job.blocks, job.spans, job.steps, job.baked)
+	return true
+
+
+func _assemble(blocks: Array[Vector2i], spans: Array[int], steps: Array[int],
+		baked: Array[Dictionary]) -> void:
+	var split_to := _split_to
 	var tile_studs := BrickTerrain.get_tile_studs()
 	var stud := BrickWorld.get_stud_metres()
 	# The blocks the detail can ever cover (`split_to` and smaller) stay
@@ -277,6 +318,8 @@ func build(reach_tiles: int, material: Material, hole := Rect2i(), split_to := 0
 ## out (TerrainStreamer._exit_tree, Terrain.md 22.15).
 func _exit_tree() -> void:
 	_wait_jobs()
+	_job_wait(_build_job)
+	_build_job = {}
 	_relod_job = {}
 	_refine_job = {}
 
