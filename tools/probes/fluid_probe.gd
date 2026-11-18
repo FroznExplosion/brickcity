@@ -384,8 +384,7 @@ func _run() -> void:
 	var gp: Dictionary = BrickTerrain.get_gen_params()
 	gp["lava_pools"] = true
 	gp["lava_m"] = 6.0
-	gp["springs"] = true
-	gp["spring_chance"] = 0.05
+	gp["springs"] = false            # on below, for the springs' own check
 	BrickTerrain.set_gen_params(gp)
 	BrickFluid.reset(20.0, false)
 	BrickFluid.set_centre(Vector3.ZERO, 100000.0)
@@ -412,6 +411,11 @@ func _run() -> void:
 		_ok("a primed tile draws its lava pool", not lm.is_empty())
 		_ok("generated lava stays put (nothing awake)", BrickFluid.active_count() == 0,
 				str(BrickFluid.active_count()))
+	gp["springs"] = true
+	gp["spring_chance"] = 0.05
+	BrickTerrain.set_gen_params(gp)
+	BrickFluid.reset(20.0, false)
+	BrickFluid.set_centre(Vector3.ZERO, 100000.0)
 	for tz in range(-3, 4):
 		for tx in range(-3, 4):
 			BrickFluid.prime_tile(tx, tz)

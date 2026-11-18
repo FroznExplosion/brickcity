@@ -2269,7 +2269,9 @@ func _run_gen_gate() -> void:
 		var pm := Vector3((pool.x + 0.5) * stud, lava_b * course, (pool.y + 0.5) * stud)
 		walker.place(to_global(pm + Vector3(0.2, 3.0, 0.2)), Vector3(1, 0, 0))
 		walker.pitch = -1.45
-		for i in 120:
+		# The deep tier (terrain_deep.gd) streams the caves round the eye once
+		# it is under ground: time for it.
+		for i in 420:
 			await get_tree().process_frame
 		print("[gen-gate] lava pool at %s course %d, %.0f m down from the surface; %s" % [
 				pool, lava_b - 1, (top / 3.0 - lava_b) * course, water.report()])

@@ -456,7 +456,8 @@ Each stage is merged on its own. C++ stages need the main folder's DLL rebuilt a
    * **Merged water tops** ("mixed water pieces", for drawing): flat tops of a course with the
      same height and look are one rectangle (greedy, per section course). A calm 8 x 8 pond is
      one quad, not 64; meshing was two thirds of a spreading spill's time (12.1).
-   * **Lava pools deep down**: gen params `lava_pools`, `lava_m` (from the sea line, default -4 m):
+   * **Lava pools deep down**: gen params `lava_pools`, `lava_m` (from the sea line, default -112 m,
+     a few bricks over the bedrock now that caves reach it):
      all cave air under that line is lava, a source (Minecraft's cave-bottom lava). Generated,
      not stored. Calm: nothing is awake until something is dug into it.
    * **Springs**: gen params `springs`, `spring_chance` (default 2 %): a column beside a cliff of

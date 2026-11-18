@@ -270,7 +270,7 @@ func _build_sea_tab() -> void:
 	_check(p, "Water", g, "water")
 	_float_slider(p, "Wave height (x)", g, "wave_scale", 0, 3, 0.05)
 	_check(p, "Lava pools in deep caves", g, "lava_pools")
-	_float_slider(p, "Lava line, from the sea line (m)", g, "lava_m", -40, 20, 0.5)
+	_float_slider(p, "Lava line, from the sea line (m)", g, "lava_m", -126, 20, 0.5)
 	_check(p, "Springs out of cliff faces", g, "springs")
 	_float_slider(p, "Spring chance a cliff column", g, "spring_chance", 0, 0.05, 0.001)
 	_float_slider(p, "Sea line height (m)", g, "sea_m", -50, 100, 0.5)
