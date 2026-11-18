@@ -9,7 +9,8 @@ the brick terrain. The old fixed-field destruction bench is still there:
     godot --path . scenes/terrain_test.tscn -- --gate      (scripted pass, pictures in user://dev/)
     godot --headless --path . --script res://tools/probes/mine_world_probe.gd
 
-Keys: **F** fly/walk · **B** build mode (section 8) · **F9** world generation
+Keys: **F** fly/walk (flying goes through everything; landing is where you
+are) · **B** build mode (section 8) · **F9** world generation
 menu · **F3** readout · **T** one hour on · left mouse on foot (not building)
 shoots, and the ground breaks where it is hit.
 
@@ -94,13 +95,20 @@ It edits a copy; nothing changes until **Generate world**, which tears every
 tier down (waiting for bakes), sets the new params, and rebuilds round the
 spawn. F9 or Escape closes it.
 
-It opens the way the pause menu does (`menu/core/MenuManager.gd`): a canvas
-layer of its own above everything (layer 80, process always), a dimmed
-backdrop that takes every click, the tree **paused** so nothing in the world
-reads input, the mouse freed and put back on close. It used to sit on the
-HUD layer as a plain PanelContainer, whose default mouse filter passes clicks
-on its empty parts to the game: the walker captured the mouse and the camera
-turned under the menu.
+It opens like the pause menu (`menu/core/MenuManager.gd`): a canvas layer of
+its own above everything (layer 80, process always) with a dimmed backdrop
+that takes every click, the world stopped, the mouse freed and put back on
+close. Two things it had to get right:
+
+- It stops the world by DISABLING the mine world's node, not by pausing the
+  tree: run from the editor the tree can be held "suspended", and then
+  `SceneTree.paused` refuses to change ("Pause state cannot be modified while
+  suspended") and nothing stopped. Every child -- camera, pawn, walker, gun,
+  builder, streaming -- stops with the node; the menu's layer runs anyway.
+- It releases the camera the camera's own way (`PlayerCamera._set_captured`):
+  the camera turns on mouse motion whenever it counts itself captured,
+  whatever the mouse mode says, so freeing the mouse alone left the view
+  turning under the menu.
 
 Tabs: World (name, seed + Random, detail radius, view distance, height
 scale), Shape (continents, hills, mountains, dry rivers, cliffs and
@@ -192,3 +200,30 @@ were running, so the numbers are rough):
   a worst frame of 23.8 ms and 69 over 20 ms; 180 frames of rapid fire, 25.8
   ms and 65 over 20 ms. Those ~24 ms frames are this machine's frame pacing
   with the test window off-screen and other tests running, not the edits.
+
+## 10. Shots break whole bricks; flying
+
+**Whole bricks.** A shot breaks what a LEGO player would expect: the surface
+piece it hits, all of it (a 2x4, a 2x6 ...), when the hit is in a column's top
+course; one brick cell (a stud by a brick) on a wall or a cave face; never
+bedrock. The brick flies off as a body (`terrain_debris.gd`, shared with the
+bench). It used to carve a sphere of plate cells, which cut bricks in pieces.
+
+- `BrickTerrain.find_brick(point, normal)` samples and packs the hit tile to
+  find the piece (~10 ms), so it runs on a WORKER; the main thread applies
+  `clear_runs` a frame or two later (`MineWorld._land_breaks`).
+  `break_brick` does both at once, for probes.
+- **No re-laying round a hole.** The packer gave columns next to a hole no
+  studs (their neighbour was lower), so it cut them differently and the
+  ground round every shot looked rebuilt. `TileSample.gtp` keeps each
+  column's generated top: an untouched column judges an edited neighbour by
+  its generated top, so it is laid exactly as before; an edited column gets
+  studs when nothing beside it stands higher (a placed block, the floor a
+  shot opened). mine_world_probe: 157 of 157 other pieces in the tile kept.
+
+**Flying.** Collision is off entirely while flying (the walker's layer and
+mask are 0). The pawn's camera stays the one drawn, moved with the flight
+every frame, so the arms and gun come along (`FpsRig.switch_mode(...,
+keep_view)`, `follow_flight`; the planet still uses the walker's camera).
+Landing puts the pawn exactly where the flight is -- in mid-air it falls --
+unless that is inside the ground, then on top of it.

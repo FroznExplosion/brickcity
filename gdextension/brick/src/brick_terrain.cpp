@@ -865,6 +865,7 @@ void sample_tile(const Field &f, int tx, int tz, TileSample &out) {
     // against 0.6 ms for the heightfield it replaced. Hoisted out, only the
     // cave test and the edit lookup remain per cell.
     const bool no_edits = edits_empty() || g_flat_mode;
+    out.gtp.assign(SPAN * SPAN, (int16_t)(out.y0 - 1));
     if (biomes) {
         for (int lz = -MARGIN; lz < TILE + MARGIN; ++lz) {
             for (int lx = -MARGIN; lx < TILE + MARGIN; ++lx) {
@@ -872,6 +873,7 @@ void sample_tile(const Field &f, int tx, int tz, TileSample &out) {
                 const BColumn &c = bcols[TileSample::idx(lx, lz)];
                 int last_b = INT_MIN;
                 uint8_t last_v = (uint8_t)MAT_AIR;
+                int16_t gen_top = (int16_t)(out.y0 - 1);
                 for (int yp = out.y0; yp < out.y0 + out.ysize; ++yp) {
                     uint8_t v = (uint8_t)MAT_AIR;
                     if (yp <= c.bound_p) {
@@ -882,6 +884,9 @@ void sample_tile(const Field &f, int tx, int tz, TileSample &out) {
                         }
                         v = last_v;
                     }
+                    if (v != MAT_AIR) {
+                        gen_top = (int16_t)yp;
+                    }
                     if (!no_edits) {
                         const int e = edit_at(pack_cell(gx, yp, gz));
                         if (e >= 0) {
@@ -890,6 +895,7 @@ void sample_tile(const Field &f, int tx, int tz, TileSample &out) {
                     }
                     out.vox[out.vidx(lx, yp, lz)] = v;
                 }
+                out.gtp[TileSample::idx(lx, lz)] = gen_top;
             }
         }
     }
@@ -900,6 +906,7 @@ void sample_tile(const Field &f, int tx, int tz, TileSample &out) {
             const int ch = floor_div(ctop_plate, PLATES_PER_CELL);
             const int ctop = ctop_plate + 1;
             const uint8_t cmat = (uint8_t)f.material_at(gx, gz, ch);
+            int16_t gen_top = (int16_t)(out.y0 - 1);
             for (int yp = out.y0; yp < out.y0 + out.ysize; ++yp) {
                 uint8_t v;
                 if (yp >= ctop) {
@@ -909,6 +916,9 @@ void sample_tile(const Field &f, int tx, int tz, TileSample &out) {
                 } else {
                     v = cmat;
                 }
+                if (v != MAT_AIR) {
+                    gen_top = (int16_t)yp;
+                }
                 if (!no_edits) {
                     const int e = edit_at(pack_cell(gx, yp, gz));
                     if (e >= 0) {
@@ -917,6 +927,7 @@ void sample_tile(const Field &f, int tx, int tz, TileSample &out) {
                 }
                 out.vox[out.vidx(lx, yp, lz)] = v;
             }
+            out.gtp[TileSample::idx(lx, lz)] = gen_top;
         }
     }
 
@@ -1050,6 +1061,32 @@ void sample_tile(const Field &f, int tx, int tz, TileSample &out) {
                 out.tp[TileSample::idx(lx, lz + 1)],
             };
             out.plate[i] = (nt[0] == t && nt[1] == t && nt[2] == t && nt[3] == t) ? 1 : 0;
+            // EDITS DO NOT RE-LAY THE BRICKS ROUND THEM (Docs/MineWorld.md
+            // 10). Judged against the edited tops, a hole took the studs off
+            // every brick at its rim, the packer cut them differently, and a
+            // shot looked like the ground being rebuilt round it. So:
+            //   * an untouched column judges a neighbour an edit moved by
+            //     that neighbour's GENERATED top -- it is laid as it was;
+            //   * a column an edit moved is a brick top where nothing beside
+            //     it stands higher: a placed block has studs, and so does the
+            //     floor a shot opened, as the bricks under it would.
+            if (!no_edits) {
+                const int nidx[4] = {
+                    TileSample::idx(lx - 1, lz), TileSample::idx(lx + 1, lz),
+                    TileSample::idx(lx, lz - 1), TileSample::idx(lx, lz + 1),
+                };
+                if (out.tp[i] != out.gtp[i]) {
+                    out.plate[i] = (nt[0] <= t && nt[1] <= t && nt[2] <= t && nt[3] <= t) ? 1 : 0;
+                } else {
+                    bool flat = true;
+                    for (int k = 0; k < 4; ++k) {
+                        const int j = nidx[k];
+                        const int ref = out.tp[j] != out.gtp[j] ? out.gtp[j] : out.tp[j];
+                        flat = flat && ref == t;
+                    }
+                    out.plate[i] = flat ? 1 : 0;
+                }
+            }
 
             // CURVED or BRICKED, from the biome and the steepness together.
             //
@@ -2423,6 +2460,123 @@ Dictionary BrickTerrain::fill_box(Vector3i lo, Vector3i hi, int material, bool o
     out["changed"] = changed;
     out["box_lo"] = lo;
     out["box_hi"] = hi;
+    return out;
+}
+
+namespace {
+Color piece_colour(const TileSample &s, int ox, int oz, int mat, bool studded);
+}
+
+Dictionary BrickTerrain::find_brick(Vector3 point, Vector3 normal) {
+    Dictionary out;
+    PackedInt32Array runs;
+    PackedFloat32Array debris;
+    out["runs"] = runs;
+    out["debris"] = debris;
+    const Vector3 n = normal.length_squared() > 1e-6 ? normal.normalized() : Vector3(0, 1, 0);
+    // The cell just inside the face that was hit; a glancing hit lands on the
+    // face itself, so step in a little further until it is solid.
+    int x = 0, yp = 0, z = 0;
+    bool found = false;
+    for (int k = 1; k <= 6 && !found; ++k) {
+        const Vector3 in = point - n * (real_t)(0.03 * k);
+        x = (int)std::floor(in.x / STUD_M);
+        yp = (int)std::floor(in.y / PLATE_M);
+        z = (int)std::floor(in.z / STUD_M);
+        const int m = g_field.solid_at(x, yp, z);
+        found = m != MAT_AIR && m != MAT_BEDROCK;
+    }
+    if (!found) {
+        return out;
+    }
+    const int tx = floor_div(x, TILE), tz = floor_div(z, TILE);
+    const int lx = x - tx * TILE, lz = z - tz * TILE;
+    TileSample s;
+    sample_tile(g_field, tx, tz, s);
+    std::vector<Piece> pieces;
+    std::vector<int32_t> owner;
+    brick::pack_tile(g_field, s, pieces, owner);
+
+    const int col_top = s.tp[TileSample::idx(lx, lz)];
+    const int course = floor_div(col_top, PLATES_PER_CELL) * PLATES_PER_CELL;
+    const int32_t o = owner[(size_t)lx + TILE * lz];
+    Color col = filament_colour(material_filament(g_field.solid_at(x, yp, z)));
+    Vector3 lo_m, hi_m;
+    if (o >= 0 && yp >= course) {
+        // The top course: the whole piece.
+        const Piece &p = pieces[(size_t)o];
+        col = piece_colour(s, p.ox, p.oz, p.mat, false);
+        for (int dz = 0; dz < p.sz; ++dz) {
+            for (int dx = 0; dx < p.sx; ++dx) {
+                const int cx = p.ox + dx, cz = p.oz + dz;
+                const int t = s.tp[TileSample::idx(cx, cz)];
+                runs.push_back(tx * TILE + cx);
+                runs.push_back(tz * TILE + cz);
+                runs.push_back(floor_div(t, PLATES_PER_CELL) * PLATES_PER_CELL);
+                runs.push_back(t);
+            }
+        }
+        lo_m = Vector3((float)(tx * TILE + p.ox) * STUD_M, (float)course * PLATE_M,
+                (float)(tz * TILE + p.oz) * STUD_M);
+        hi_m = lo_m + Vector3((float)p.sx * STUD_M, (float)(col_top - course + 1) * PLATE_M,
+                (float)p.sz * STUD_M);
+    } else {
+        // A wall or a cave face: the one brick cell.
+        const int b = floor_div(yp, PLATES_PER_CELL) * PLATES_PER_CELL;
+        runs.push_back(x);
+        runs.push_back(z);
+        runs.push_back(b);
+        runs.push_back(b + PLATES_PER_CELL - 1);
+        lo_m = Vector3((float)x * STUD_M, (float)b * PLATE_M, (float)z * STUD_M);
+        hi_m = lo_m + Vector3(STUD_M, BRICK_M, STUD_M);
+    }
+    const Vector3 c = (lo_m + hi_m) * 0.5f;
+    const Vector3 size = hi_m - lo_m;
+    const float d[9] = { c.x, c.y, c.z, size.x, size.y, size.z, col.r, col.g, col.b };
+    for (float v : d) {
+        debris.push_back(v);
+    }
+    out["runs"] = runs;
+    out["debris"] = debris;
+    return out;
+}
+
+Dictionary BrickTerrain::clear_runs(const PackedInt32Array &runs) {
+    Dictionary out;
+    std::set<std::pair<int, int>> touched;
+    int removed = 0;
+    for (int64_t i = 0; i + 3 < runs.size(); i += 4) {
+        const int x = runs[i], z = runs[i + 1], lo = runs[i + 2], hi = runs[i + 3];
+        for (int y = lo; y <= hi; ++y) {
+            const int m = g_field.solid_at(x, y, z);
+            if (m == MAT_AIR || m == MAT_BEDROCK) {
+                continue;
+            }
+            set_edit(x, y, z, MAT_AIR);
+            ++removed;
+        }
+        for (int ddz = -1; ddz <= 1; ++ddz) {
+            for (int ddx = -1; ddx <= 1; ++ddx) {
+                touched.insert({ floor_div(x + ddx * MARGIN, TILE), floor_div(z + ddz * MARGIN, TILE) });
+            }
+        }
+    }
+    PackedInt32Array tiles;
+    if (removed > 0) {
+        for (const auto &t : touched) {
+            tiles.push_back(t.first);
+            tiles.push_back(t.second);
+        }
+    }
+    out["tiles"] = tiles;
+    out["removed"] = removed;
+    return out;
+}
+
+Dictionary BrickTerrain::break_brick(Vector3 point, Vector3 normal) {
+    Dictionary found = find_brick(point, normal);
+    Dictionary out = clear_runs(found["runs"]);
+    out["debris"] = (int)out["removed"] > 0 ? found["debris"] : Variant(PackedFloat32Array());
     return out;
 }
 
@@ -5241,6 +5395,12 @@ void BrickTerrain::_bind_methods() {
         &BrickTerrain::set_coarse_smooth_step);
     ClassDB::bind_static_method("BrickTerrain", D_METHOD("get_coarse_smooth_step"),
         &BrickTerrain::get_coarse_smooth_step);
+    ClassDB::bind_static_method("BrickTerrain", D_METHOD("break_brick", "point", "normal"),
+        &BrickTerrain::break_brick);
+    ClassDB::bind_static_method("BrickTerrain", D_METHOD("find_brick", "point", "normal"),
+        &BrickTerrain::find_brick);
+    ClassDB::bind_static_method("BrickTerrain", D_METHOD("clear_runs", "runs"),
+        &BrickTerrain::clear_runs);
     ClassDB::bind_static_method("BrickTerrain", D_METHOD("get_edits"), &BrickTerrain::get_edits);
     ClassDB::bind_static_method("BrickTerrain", D_METHOD("set_edits", "bytes"), &BrickTerrain::set_edits);
     ClassDB::bind_static_method("BrickTerrain", D_METHOD("fill_box", "lo", "hi", "material", "only_air"),
