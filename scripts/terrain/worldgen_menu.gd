@@ -1,6 +1,6 @@
 extends PanelContainer
 
-## THE WORLD GENERATION MENU (F9 in the mine world). Docs/MineWorld.md 6.
+## THE WORLD GENERATION MENU (M in the mine world, or the pause menu). Docs/MineWorld.md 6.
 ##
 ## Edits a COPY of the world's settings; nothing changes in the world until
 ## "Generate world". Tabs follow the zylanntest world builder: World, Shape,
@@ -567,7 +567,8 @@ func _on_generate() -> void:
 
 
 func _unhandled_input(event: InputEvent) -> void:
-	if event is InputEventKey and event.pressed and not event.echo 			and ((event as InputEventKey).keycode == KEY_F9 or (event as InputEventKey).keycode == KEY_ESCAPE):
+	var k := event as InputEventKey
+	if k != null and k.pressed and not k.echo and (k.keycode == KEY_M or k.keycode == KEY_ESCAPE):
 		get_viewport().set_input_as_handled()
 		_close()
 

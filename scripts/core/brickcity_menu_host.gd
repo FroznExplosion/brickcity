@@ -22,6 +22,8 @@ const WORKSHOP := "res://scenes/workshop.tscn"
 ## workshop and the terrain tools have their own Escape (menus, cancelling a grab).
 const CITY_SCRIPT := "res://scripts/city_scene.gd"
 const WORKSHOP_SCRIPT := "res://scripts/workshop/workshop.gd"
+## The terrain test (the mine world, Docs/MineWorld.md 6): pauses too.
+const TERRAIN_SCRIPT := "res://scripts/terrain/terrain_scene.gd"
 
 ## Options > Video, Sun Shadow Cascades: 4 or 2. Read by the city as it makes its sun, and
 ## put on a city that is up (CityScene._setup_sun_shadows). Two drew a street walk's frame
@@ -77,7 +79,8 @@ func _pause_allowed() -> bool:
 	if tree == null or tree.current_scene == null:
 		return false
 	var scr := tree.current_scene.get_script() as Script
-	if scr == null or (scr.resource_path != CITY_SCRIPT and scr.resource_path != WORKSHOP_SCRIPT):
+	if scr == null or (scr.resource_path != CITY_SCRIPT and scr.resource_path != WORKSHOP_SCRIPT
+			and scr.resource_path != TERRAIN_SCRIPT):
 		return false
 	# Not over a scripted pass: CityScene.pause_allowed says why.
 	return tree.current_scene.pause_allowed()
@@ -91,6 +94,10 @@ func _pause_opened() -> void:
 func _pause_closed() -> void:
 	var tree := Engine.get_main_loop() as SceneTree
 	if tree == null or tree.current_scene == null:
+		return
+	# A scene that hands the mouse back its own way says so.
+	if tree.current_scene.has_method(&"pause_closed"):
+		tree.current_scene.call(&"pause_closed")
 		return
 	var cam := tree.current_scene.get("camera") as PlayerCamera
 	if cam != null and cam.capture_mouse:
@@ -533,9 +540,15 @@ func _build_dev_tab(page: VBoxContainer) -> void:
 ## In the pause menu, while developer mode is on and over the city: the two
 ## tools most often wanted, one click away.
 func _pause_menu_entries() -> Array:
+	# Entries a scene adds itself (the mine world's "World generation...").
+	var tree := Engine.get_main_loop() as SceneTree
+	var own: Array = []
+	var scene: Node = tree.current_scene if tree != null else null
+	if scene != null and scene.has_method(&"pause_menu_entries"):
+		own = scene.call(&"pause_menu_entries")
 	if not DevMode.on or _city() == null:
-		return []
-	var out: Array = []
+		return own
+	var out: Array = own.duplicate()
 	for t in _dev_tools().slice(0, 2):
 		var what: Callable = t[1]
 		out.append({"label": "Dev: " + str(t[0]), "action": func() -> void: _open_tool(what)})

@@ -327,7 +327,12 @@ func _tile_tris(d: Dictionary) -> int:
 		var v = d[k]
 		if v is Array and (v as Array).size() > Mesh.ARRAY_INDEX and (v as Array)[Mesh.ARRAY_VERTEX] is PackedVector3Array:
 			var idx = (v as Array)[Mesh.ARRAY_INDEX]
-			n += (idx as PackedInt32Array).size() / 3 if idx is PackedInt32Array and (idx as PackedInt32Array).size() > 0 					else ((v as Array)[Mesh.ARRAY_VERTEX] as PackedVector3Array).size() / 3
+			if idx is PackedInt32Array and (idx as PackedInt32Array).size() > 0:
+				@warning_ignore("integer_division")
+				n += (idx as PackedInt32Array).size() / 3
+			else:
+				@warning_ignore("integer_division")
+				n += ((v as Array)[Mesh.ARRAY_VERTEX] as PackedVector3Array).size() / 3
 	return n
 
 
