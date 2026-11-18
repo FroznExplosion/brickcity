@@ -177,6 +177,8 @@ func _ready() -> void:
 			_run_look_gate()
 		elif "--gate=cave" in OS.get_cmdline_user_args():
 			_run_cave_gate()
+		elif "--gate=flight" in OS.get_cmdline_user_args():
+			_run_flight_gate()
 		else:
 			_run_gate()
 
@@ -264,6 +266,9 @@ func generate(s: Dictionary) -> void:
 
 
 func _teardown() -> void:
+	fast_hold = false
+	_speed = 0.0
+	_speed_from = Vector3.INF
 	_wait_breaks()
 	# Removing a tier from the tree waits for its bakes (their _exit_tree).
 	for n in [_trees, _far_next, _far, _streamer]:
@@ -492,19 +497,63 @@ func _flush_edits() -> void:
 # ---------------------------------------------------------------------------
 # Every frame
 
+## FAST FLIGHT HOLD (Docs/MineWorld.md 14), after zylanntest's
+## DynamicLodController: above FAST_HOLD_MPS the near tier starts no new
+## bakes (nor studs, chamfer, collision) and the far tier no new refines or
+## relods; what is drawn stays. Below FAST_RESUME_MPS it all resumes. Flying
+## at the default 50 m/s is not held; Shift (500 m/s) is. -- --no-fast-hold
+## turns it off (A/B).
+const FAST_HOLD_MPS := 80.0
+const FAST_RESUME_MPS := 40.0
+var fast_hold := false
+## This frame's main-thread costs, ms (the flight gate prints slow frames').
+var _ptimes := {}
+var _speed := 0.0
+var _speed_from := Vector3.INF
+var _fast_hold_on := not ("--no-fast-hold" in OS.get_cmdline_user_args())
+
+
+func _speed_step(eye: Vector3, delta: float) -> void:
+	var moved := eye.distance_to(_speed_from) if _speed_from != Vector3.INF else 0.0
+	_speed_from = eye
+	# A jump (placed, teleported, a new world) is not speed: the ground there
+	# is wanted at once.
+	var inst := 0.0 if moved > 150.0 else moved / maxf(delta, 0.001)
+	_speed = lerpf(_speed, inst, 1.0 - exp(-delta / 0.2))
+	var hold := fast_hold
+	if _speed > FAST_HOLD_MPS:
+		hold = _fast_hold_on
+	elif _speed < FAST_RESUME_MPS:
+		hold = false
+	if hold != fast_hold:
+		fast_hold = hold
+		_streamer.hold = hold
+		_far.hold = hold
+		if _far_next != null:
+			_far_next.hold = hold
+
+
 func _process(delta: float) -> void:
 	_frame_ms = lerpf(_frame_ms, delta * 1000.0, 0.1)
 	if _streamer == null:
 		return
 	var eye := _eye()
+	_speed_step(eye, delta)
 	_land_breaks()
 	_refresh_in -= delta
 	if _refresh_in <= 0.0:
 		_flush_edits()
+	var p0 := Time.get_ticks_usec()
 	_streamer.follow(Vector2(eye.x, eye.z))
+	var p1 := Time.get_ticks_usec()
 	_far.cover(_streamer, false)
 	_far.relod(eye, false)
+	var p2 := Time.get_ticks_usec()
+	var re0 := _reanchors
 	_follow_far(eye)
+	var p3 := Time.get_ticks_usec()
+	_ptimes = {"near": (p1 - p0) / 1000.0, "far": (p2 - p1) / 1000.0,
+			"reanchor": (p3 - p2) / 1000.0, "swapped": _reanchors != re0}
 	if not on_foot:
 		FpsRig.follow_flight(cam, walker)
 	if not on_foot and walker.global_position.y < -500.0:
@@ -528,12 +577,14 @@ func _follow_far(eye: Vector3) -> void:
 		var d := t - _far.anchor
 		if maxi(absi(d.x), absi(d.y)) >= REANCHOR_TILES:
 			_far_next = _new_far(t)
+			_far_next.hold = fast_hold
 			_far_next.visible = false
 			if not _far_next.build_begin(_far_tiles(), _mat, Rect2i(), _streamer.align):
 				_far_next.queue_free()
 				_far_next = null
 		return
-	if not _far_next.build_poll():
+	# A slice a frame: the new tier is hidden until it is all in.
+	if not _far_next.build_poll(2.0):
 		return
 	var t0 := Time.get_ticks_usec()
 	_far_next.cover(_streamer)
@@ -541,6 +592,7 @@ func _follow_far(eye: Vector3) -> void:
 	remove_child(_far)
 	_far.queue_free()
 	_far = _far_next
+	_far.hold = fast_hold
 	_far_next = null
 	_reanchors += 1
 	_last_reanchor_ms = float(Time.get_ticks_usec() - t0) / 1000.0
@@ -809,7 +861,8 @@ func _update_hud() -> void:
 		"blocks placed %d  broken %d   %s" % [builder.placed, builder.broken, _save_status],
 		"water %s" % water.report(),
 		"%s   F fly/walk  B build  M world generation  F3 readout  T +1 hour" % ("ON FOOT" if on_foot
-				else "FLYING %.0f m/s (wheel)" % walker.fly_speed),
+				else "FLYING %.0f m/s (wheel), moving %.0f m/s%s" % [walker.fly_speed, _speed,
+				"  DETAIL HELD" if fast_hold else ""]),
 	])
 
 
@@ -1028,17 +1081,7 @@ func _run_gate() -> void:
 			% [walker.collision_layer, walker.collision_mask, cam.current,
 			cam.global_position.distance_to(walker.camera.global_position), view.rig.visible])
 	await _shot(dev + "mine_overview.png")
-	var t0 := Time.get_ticks_usec()
-	var worst := 0.0
-	var from := walker.global_position
-	for i in 900:
-		walker.global_position = from + Vector3(1.0, 0.0, 0.3) * float(i) * 1.6
-		var f0 := Time.get_ticks_usec()
-		await get_tree().process_frame
-		worst = maxf(worst, float(Time.get_ticks_usec() - f0) / 1000.0)
-	print("[mine-gate] flew %.0f m in %.1f s, worst frame %.0f ms, re-centred %d times (last %.0f ms), %s"
-			% [900 * 1.6, float(Time.get_ticks_usec() - t0) / 1e6, worst, _reanchors,
-			_last_reanchor_ms, _streamer.report()])
+	await _gate_flight()
 	await _frames(120)
 	print("[mine-gate] holes round the camera after the flight: %d" % _holes())
 	await _shot(dev + "mine_far_away.png")
@@ -1095,6 +1138,71 @@ func _run_gate() -> void:
 	await _gate_edits()
 	print("[mine-gate] done")
 	get_tree().quit()
+
+
+## -- --gate=flight: only the fast flight (below), from the spawn.
+func _run_flight_gate() -> void:
+	await _frames(30)
+	set_on_foot(false)
+	walker.place(walker.global_position + Vector3(0, 60, 0), Vector3(1, -0.35, 0.4).normalized())
+	walker.pitch = -0.45
+	await _frames(120)
+	await _gate_flight()
+	await _frames(120)
+	print("[mine-gate] holes round the camera after the flight: %d" % _holes())
+	await _shot(UserPaths.DEV + "mine_far_away.png")
+	get_tree().quit()
+
+
+## Fast flight into new ground: 1.6 m a frame (~100 m/s at 60 fps) along X
+## for 900 frames, re-centring the far rings twice. The worst frame and the
+## frames over 33 ms are the spike (Docs/MineWorld.md 14); then 1 s slow
+## (0.3 m a frame) so the detail comes back, and the frames of THAT.
+func _gate_flight() -> void:
+	var t0 := Time.get_ticks_usec()
+	var worst := 0.0
+	var slow := 0
+	var held := 0
+	var from := walker.global_position
+	_streamer.reset_stats()
+	var notes: Array[String] = []
+	for i in 900:
+		walker.global_position = from + Vector3(1.0, 0.0, 0.3) * float(i) * 1.6
+		var f0 := Time.get_ticks_usec()
+		var built0 := _streamer.built_count()
+		var trees0: int = _trees.count
+		await get_tree().process_frame
+		var ms := float(Time.get_ticks_usec() - f0) / 1000.0
+		worst = maxf(worst, ms)
+		if ms > 33.0:
+			slow += 1
+			if notes.size() < 16:
+				notes.append("f%d %.0f ms: near %.1f far %.1f reanchor %.1f%s trees %.1f (+%d) built +%d" % [i, ms,
+						_ptimes.get("near", 0.0), _ptimes.get("far", 0.0), _ptimes.get("reanchor", 0.0),
+						" SWAPPED" if _ptimes.get("swapped", false) else "", _trees.last_us / 1000.0,
+						_trees.count - trees0, _streamer.built_count() - built0])
+		if fast_hold:
+			held += 1
+	print("[mine-gate] flew %.0f m in %.1f s, worst frame %.0f ms, %d over 33 ms, detail held %d of 900 frames%s, re-centred %d times (last %.0f ms), %s"
+			% [900 * 1.6, float(Time.get_ticks_usec() - t0) / 1e6, worst, slow, held,
+			"" if _fast_hold_on else " (--no-fast-hold)", _reanchors, _last_reanchor_ms,
+			_streamer.report()])
+	for n in notes:
+		print("[mine-gate]   slow %s" % n)
+	# Slowing down: the detail resumes round the camera.
+	var at := walker.global_position
+	worst = 0.0
+	slow = 0
+	for i in 120:
+		walker.global_position = at + Vector3(1.0, 0.0, 0.3) * float(i) * 0.3
+		var f0 := Time.get_ticks_usec()
+		await get_tree().process_frame
+		var ms := float(Time.get_ticks_usec() - f0) / 1000.0
+		worst = maxf(worst, ms)
+		if ms > 33.0:
+			slow += 1
+	print("[mine-gate] slowed down: held %s, 120 frames worst %.0f ms, %d over 33 ms, %s"
+			% [fast_hold, worst, slow, _streamer.report()])
 
 
 ## -- --gate=cave: only the cave landing (below).

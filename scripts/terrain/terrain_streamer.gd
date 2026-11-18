@@ -130,6 +130,16 @@ var _bevel_tasks := {}
 const BEVEL_IN_FLIGHT := 2
 ## Worst single phase seen, split three ways — which one hurts is the whole
 ## question when a hitch has to be chased.
+## HELD (moving fast, Docs/MineWorld.md 14): no new bakes start, no studs,
+## scatter, chamfer or collision are added, nor do tiles switch between their
+## near and far stud sets; bakes already in flight still
+## land (their surface only) and far tiles still drop, so the instance pool
+## fills. What is drawn stays drawn. Off again: everything resumes.
+var hold := false:
+	set(v):
+		if hold and not v:
+			_finish_pending = true
+		hold = v
 var _worst_surface_ms := 0.0
 var _worst_inst_ms := 0.0
 var _worst_coll_ms := 0.0
@@ -180,16 +190,20 @@ func follow(camera_xz: Vector2) -> void:
 	if _centre != Vector2i(cx, cz):
 		_finish_pending = true    # collision reach moved with it
 	_centre = Vector2i(cx, cz)
-	_collect(cx, cz)
+	if not hold:
+		_collect(cx, cz)
 	_drop(cx, cz)
 	_assemble()
-	_bevel_step()
+	if not hold:
+		_bevel_step()
 	if _shown_centre != _centre and pinned.has_area():
 		_shown_centre = _centre
 		var keep := _keep_rect(cx, cz)
 		for c in _tiles:
 			(_tiles[c] as Node3D).visible = _shown(c, keep)
-	if _near_centre != _centre:
+	# Held, tiles keep the stud set they have: switching builds the other set
+	# (a new MultiMesh) the first time, the instance cost the hold is for.
+	if _near_centre != _centre and not hold:
 		_near_centre = _centre
 		for c in _tiles:
 			(_tiles[c] as TerrainTile).set_near(absi(c.x - cx) <= near_show_radius
@@ -520,7 +534,8 @@ func _assemble() -> void:
 		if _assemble_ms >= budget_ms:
 			return   # the rest can wait a frame
 
-	_finish(t0)
+	if not hold:
+		_finish(t0)
 
 
 ## The later phases, nearest first, still under the frame's budget.
