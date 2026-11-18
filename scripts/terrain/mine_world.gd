@@ -193,6 +193,8 @@ func _ready() -> void:
 			_run_collapse_gate()
 		elif "--gate=flight" in OS.get_cmdline_user_args():
 			_run_flight_gate()
+		elif "--gate=shift" in OS.get_cmdline_user_args():
+			_run_shift_gate()
 		else:
 			_run_gate()
 
@@ -385,9 +387,9 @@ func _place_player(feet: Vector3) -> void:
 		walker.scripted = _gate
 		add_child(walker)
 		walker.camera.far = far
-		walker.place(feet + Vector3.UP, Vector3.FORWARD)
+		walker.place(to_global(feet + Vector3.UP), Vector3.FORWARD)
 		walker.frozen = false
-		var parts := FpsRig.make_player(self, feet, far, _gate)
+		var parts := FpsRig.make_player(self, to_global(feet), far, _gate)
 		cam = parts.cam
 		pawn = parts.pawn
 		player = parts.player
@@ -411,7 +413,7 @@ func _place_player(feet: Vector3) -> void:
 func set_on_foot(on: bool, feet := Vector3.INF) -> void:
 	on_foot = on
 	if on and feet == Vector3.INF:
-		feet = walker.global_position
+		feet = to_local(walker.global_position)
 		var stud := BrickWorld.get_stud_metres()
 		var plate := BrickWorld.get_plate_metres()
 		var c := Vector2i(floori(feet.x / stud), floori(feet.z / stud))
@@ -421,7 +423,8 @@ func set_on_foot(on: bool, feet := Vector3.INF) -> void:
 				buried = true
 		if buried:
 			feet.y = _ground_m(c.x, c.y) + 0.05
-	FpsRig.switch_mode(on, feet, walker, pawn, player, cam, view, kit, true)
+	FpsRig.switch_mode(on, to_global(feet) if feet != Vector3.INF else feet, walker, pawn,
+			player, cam, view, kit, true)
 	if not on:
 		walker.collision_layer = 0
 		walker.collision_mask = 0
@@ -435,8 +438,53 @@ func _eye_camera() -> Camera3D:
 	return cam if on_foot else walker.camera
 
 
+## The eye in the TERRAIN frame -- the one BrickTerrain, BrickFluid, the
+## tiles, trees, water and pieces (all children of this node) are laid out
+## in. It is the global position until the first origin shift moves this
+## node (Docs/MineWorld.md 15).
 func _eye() -> Vector3:
+	return to_local(_eye_camera().global_position)
+
+
+## Flying, at a TERRAIN-frame position (the gates' placements).
+func _fly_to(at: Vector3, facing: Vector3) -> void:
+	walker.place(to_global(at), facing)
+
+
+## The eye where it is drawn (global): the one to place nodes from.
+func _eye_render() -> Vector3:
 	return _eye_camera().global_position
+
+
+# ---------------------------------------------------------------------------
+# Origin shift (Docs/MineWorld.md 15). Positions are float32: past ~20 km
+# from the origin the precision shows. When the eye is SHIFT_AT from the
+# global origin, this node and everything in it moves back by whole tiles
+# (PlanetFrame.shift, the planet's own). Inside it nothing changes: every
+# child keeps its local position, which is its terrain position, and the
+# field (integer studs and plates) never knew. Only a global position used
+# as a terrain one needs to_local, and a terrain one used to place a node
+# to_global.
+
+## Metres from the global origin that start a shift (a gate lowers it).
+var shift_at := 4000.0
+## The terrain-frame position of the global origin: the sum of the shifts.
+var origin_shift := Vector3.ZERO
+var shifts := 0
+
+
+func _origin_step() -> void:
+	var g := _eye_render()
+	if Vector2(g.x, g.z).length() < shift_at:
+		return
+	# Whole tiles, so anything patterned on the stud lattice in world space
+	# (the printed surface, the grid light) lines up as before.
+	var tile_m := float(BrickTerrain.get_tile_studs()) * BrickWorld.get_stud_metres()
+	var d := Vector3(roundf(g.x / tile_m) * tile_m, 0.0, roundf(g.z / tile_m) * tile_m)
+	PlanetFrame.shift(get_parent(), -d)
+	origin_shift += d
+	shifts += 1
+	print("[mine] origin shift %d: %s m, the global origin is now terrain %s" % [shifts, -d, origin_shift])
 
 
 ## The gun hit the ground: it breaks WHOLE BRICKS there -- the surface piece
@@ -451,9 +499,10 @@ func _mine(point: Vector3, dir: Vector3, _info) -> void:
 		return
 	var holder := [{}]
 	var n := -dir
+	var at := to_local(point)
 	var task := WorkerThreadPool.add_task(
-		func() -> void: holder[0] = BrickTerrain.find_brick(point, n), false, "break brick")
-	_break_jobs.append([task, holder, point - dir * 0.6])
+		func() -> void: holder[0] = BrickTerrain.find_brick(at, n), false, "break brick")
+	_break_jobs.append([task, holder, at - dir * 0.6])
 
 
 ## Finished shots: clear the cells each found, throw its brick. Never waits.
@@ -576,6 +625,7 @@ func _process(delta: float) -> void:
 	_frame_ms = lerpf(_frame_ms, delta * 1000.0, 0.1)
 	if _streamer == null:
 		return
+	_origin_step()
 	var eye := _eye()
 	_speed_step(eye, delta)
 	_land_breaks()
@@ -596,7 +646,7 @@ func _process(delta: float) -> void:
 	if not on_foot:
 		FpsRig.follow_flight(cam, walker)
 	if not on_foot and walker.global_position.y < -500.0:
-		walker.place(Vector3(eye.x, 200.0, eye.z), Vector3.FORWARD)
+		walker.place(to_global(Vector3(eye.x, 200.0, eye.z)), Vector3.FORWARD)
 	if on_foot and pawn.feet().y < -500.0:
 		set_on_foot(true, Vector3(eye.x, 0.0, eye.z) + Vector3.UP * 300.0)
 	_day_night(delta, eye)
@@ -1063,7 +1113,7 @@ func _run_look_gate() -> void:
 	var e := _eye()
 	var stud := BrickWorld.get_stud_metres()
 	var c := Vector2i(floori(e.x / stud), floori(e.z / stud))
-	walker.place(Vector3(e.x, _ground_m(c.x, c.y) + 1.6, e.z), Vector3(1, 0, -1).normalized())
+	_fly_to(Vector3(e.x, _ground_m(c.x, c.y) + 1.6, e.z), Vector3(1, 0, -1).normalized())
 	walker.pitch = -0.5
 	await _frames(60)
 	if "--look=parts" in OS.get_cmdline_user_args():
@@ -1174,7 +1224,7 @@ func _run_gate() -> void:
 				best_h = h
 				best = c0 + Vector2i(dx, dz)
 	var top := Vector3((best.x + 0.5) * stud, _ground_m(best.x, best.y), (best.y + 0.5) * stud)
-	walker.place(top + Vector3(-22, 6, -22), (top - (top + Vector3(-22, 6, -22))).normalized())
+	_fly_to(top + Vector3(-22, 6, -22), (top - (top + Vector3(-22, 6, -22))).normalized())
 	walker.pitch = -0.2
 	await _frames(90)
 	await _shot(dev + "mine_mountain.png")
@@ -1207,8 +1257,8 @@ func _run_gate() -> void:
 	at = walker.global_position
 	set_on_foot(true)
 	print("[mine-gate] landed %.2f m from where the flight was (ground %.1f m below)"
-			% [pawn.feet().distance_to(at), at.y - _ground_m(floori(at.x / BrickWorld.get_stud_metres()),
-			floori(at.z / BrickWorld.get_stud_metres()))])
+			% [pawn.feet().distance_to(at), at.y - _ground_m(floori(to_local(at).x / BrickWorld.get_stud_metres()),
+			floori(to_local(at).z / BrickWorld.get_stud_metres()))])
 	await _frames(60)
 	await _gate_cave()
 	await _gate_edits()
@@ -1281,6 +1331,64 @@ func _gate_flight() -> void:
 			% [fast_hold, worst, slow, _streamer.report()])
 
 
+## -- --gate=shift: the origin shift (Docs/MineWorld.md 15) with its
+## threshold lowered to 300 m, so a 1.2 km flight shifts several times. After
+## it: the eye is near the global origin, the ground round it is all drawn,
+## the pawn lands and stands on it (the colliders moved with their tiles),
+## and a block placed lands where it is looked at.
+func _run_shift_gate() -> void:
+	await _frames(30)
+	shift_at = 300.0
+	set_on_foot(false)
+	var e0 := _eye()
+	_fly_to(e0 + Vector3(0, 30, 0), Vector3(1, -0.3, 0.2).normalized())
+	await _frames(60)
+	var from := walker.global_position
+	var step := Vector3(1.0, 0.0, 0.25).normalized() * 0.8
+	for i in 1500:
+		walker.global_position += step
+		await get_tree().process_frame
+	var e1 := _eye()
+	var g1 := _eye_render()
+	print("[mine-shift] flew %.0f m (terrain eye %s -> %s): %d shifts, the eye is %.0f m from the global origin, origin is terrain %s"
+			% [Vector2(e1.x - e0.x, e1.z - e0.z).length(), e0, e1, shifts, Vector2(g1.x, g1.z).length(),
+			origin_shift])
+	shift_at = 1e9   # no more while it lands
+	await _frames(150)
+	print("[mine-shift] holes round the camera: %d" % _holes())
+	await _shot(UserPaths.DEV + "mine_shift_far.png")
+	# Down onto the ground and stand.
+	var stud := BrickWorld.get_stud_metres()
+	var c := Vector2i(floori(e1.x / stud), floori(e1.z / stud))
+	var g := _ground_m(c.x, c.y)
+	_fly_to(Vector3(e1.x, g + 1.0, e1.z), Vector3(1, 0, 0))
+	await _frames(30)
+	set_on_foot(true)
+	var low := INF
+	for f in 150:
+		await get_tree().physics_frame
+		low = minf(low, to_local(pawn.feet()).y)
+	var feet := to_local(pawn.feet())
+	print("[mine-shift] landed: feet %.2f m over the ground (lowest %.2f) -- %s"
+			% [feet.y - g, low - g, "STANDING" if absf(feet.y - g) < 0.6 and low > g - 1.0 else "FELL"])
+	# A block, as the build pass places it.
+	set_on_foot(false)
+	_fly_to(Vector3(e1.x, g + 2.4, e1.z), Vector3(0, 0, -1))
+	walker.pitch = -0.75
+	await _frames(20)
+	builder.set_active(true)
+	builder.update_target()
+	var want: Dictionary = builder.target.duplicate()
+	var placed: bool = builder.place_target()
+	await _frames(10)
+	var cell: Vector3i = want.get("cell", Vector3i.ZERO)
+	print("[mine-shift] build: looked at %s, placed %s, outline at %s (terrain %s)"
+			% [cell, placed, builder._outline.global_position, to_local(builder._outline.global_position)])
+	builder.set_active(false)
+	await _shot(UserPaths.DEV + "mine_shift_build.png")
+	get_tree().quit()
+
+
 ## -- --gate=cave: only the cave landing (below).
 func _run_collapse_gate() -> void:
 	await _frames(30)
@@ -1324,7 +1432,7 @@ func _gate_collapse() -> void:
 			put.call(Vector3i(o.x + dx, t + 1, o.y + dz), Vector3i(o.x + dx, b + 23, o.y + dz), 4)
 	# The arm: stone, 2 courses, 10 studs out along +X.
 	put.call(Vector3i(o.x + 2, b + 18, o.y), Vector3i(o.x + 11, b + 23, o.y + 1), 4)
-	walker.place(Vector3((o.x + 6) * stud, (b + 12) * plate + 1.0, (o.y - 22) * stud), Vector3(0, 0, 1))
+	_fly_to(Vector3((o.x + 6) * stud, (b + 12) * plate + 1.0, (o.y - 22) * stud), Vector3(0, 0, 1))
 	walker.pitch = -0.1
 	await _frames(60)
 	await _collapse_quiet(240)
@@ -1519,16 +1627,16 @@ func _gate_cave() -> void:
 		print("[mine-cave] no reachable cave within 400 studs: SKIPPED")
 		return
 	# Fly in, let the tiles round it build, land.
-	walker.place(found + Vector3(0, 0.4, 0), Vector3(1, 0, 0))
+	_fly_to(found + Vector3(0, 0.4, 0), Vector3(1, 0, 0))
 	walker.pitch = -0.3
 	await _frames(90)
 	set_on_foot(true)
-	var t0 := pawn.feet()
+	var t0 := to_local(pawn.feet())
 	var low := t0.y
 	for f in 200:
 		await get_tree().physics_frame
 		low = minf(low, pawn.feet().y)
-	var t1 := pawn.feet()
+	var t1 := to_local(pawn.feet())
 	print("[mine-cave] landed in a cave %.0f m under the surface at %s: feet %.2f m above the floor at landing, %.2f m after 200 ticks (lowest %.2f) -- %s"
 			% [_ground_m(floori(found.x / stud), floori(found.z / stud)) - found.y, found,
 			t0.y - found.y, t1.y - found.y, low - found.y,
@@ -1622,7 +1730,7 @@ func _run_water_gate() -> void:
 	var pm := func(x: float, b: float, z: float) -> Vector3:
 		return Vector3((o.x + x) * stud, b * course, (o.y + z) * stud)
 	var look := func(from: Vector3, at: Vector3) -> void:
-		walker.place(from, ((at - from) * Vector3(1, 0, 1)).normalized())
+		_fly_to(from, ((at - from) * Vector3(1, 0, 1)).normalized())
 		var d := at - from
 		walker.pitch = atan2(d.y, Vector2(d.x, d.z).length())
 	look.call(pm.call(-4.0, w + 7.0, -4.0), pm.call(-16.0, w + 1.0, -22.0))
@@ -1722,7 +1830,7 @@ func _run_sea_gate() -> void:
 	set_on_foot(false)
 	var cm := Vector3((coast.x + 0.5) * stud, level, (coast.y + 0.5) * stud)
 	var from := cm - Vector3(dir.x, 0, dir.y) * 26.0 + Vector3(0, 9, 0)
-	walker.place(from, Vector3(dir.x, 0, dir.y))
+	_fly_to(from, Vector3(dir.x, 0, dir.y))
 	walker.pitch = -0.3
 	var moves0: int = water.field_moves
 	for i in 600:
@@ -1752,7 +1860,7 @@ func _run_sea_gate() -> void:
 			break
 	if river.x != 1 << 30:
 		var rm := Vector3((river.x + 0.5) * stud, level, (river.y + 0.5) * stud)
-		walker.place(rm + Vector3(-14, 10, -14), Vector3(1, 0, 1).normalized())
+		_fly_to(rm + Vector3(-14, 10, -14), Vector3(1, 0, 1).normalized())
 		walker.pitch = -0.45
 		await _frames(150)
 		print("[sea-gate] river mouth at %s, water there %d" % [river, water.fluid_at(rm - Vector3(0, 0.2, 0))])
@@ -1787,7 +1895,7 @@ func _run_sea_gate() -> void:
 	print("[sea-gate] channel: %d of 12 cells along it wet (%d calm, drawn by the fluid mesher), %s" % [
 			wet, calm, water.report()])
 	var chm := Vector3((start.x + back.x * 7 + 0.5) * stud, level, (start.y + back.y * 7 + 0.5) * stud)
-	walker.place(chm + Vector3(side.x, 0, side.y) * 4.0 + Vector3(0, 4, 0), -Vector3(side.x, 0, side.y))
+	_fly_to(chm + Vector3(side.x, 0, side.y) * 4.0 + Vector3(0, 4, 0), -Vector3(side.x, 0, side.y))
 	walker.pitch = -0.6
 	await _frames(40)
 	await _shot(dev + "sea_channel.png")
@@ -1803,18 +1911,19 @@ func _run_sea_gate() -> void:
 	set_on_foot(true, deep)
 	await _frames(20)
 	var under: bool = water.fluid_at(_eye()) == 1
-	var fc := BrickFluid.cell_of(pawn.feet() + Vector3.UP * 0.05)
+	var feet_t := to_local(pawn.feet())
+	var fc := BrickFluid.cell_of(feet_t + Vector3.UP * 0.05)
 	print("[sea-gate] swimmer put at %s, feet %s (ground %.1f m), cell %s %s, surface %.2f, probe set %s" % [
-			deep, pawn.feet(), _ground_m(fc.x, fc.z), fc, BrickFluid.cell_info(fc),
-			water.surface_at(pawn.feet() + Vector3.UP * 0.05), Pawn.water_probe.is_valid()])
+			deep, feet_t, _ground_m(fc.x, fc.z), fc, BrickFluid.cell_info(fc),
+			water.surface_at(feet_t + Vector3.UP * 0.05), Pawn.water_probe.is_valid()])
 	await _shot(dev + "sea_underwater.png")
 	await _frames(150)
-	var top: float = water.surface_at(pawn.feet() + Vector3.UP * 0.05)
+	var top: float = water.surface_at(to_local(pawn.feet()) + Vector3.UP * 0.05)
 	print("[sea-gate] swim: under water at first %s, swimming %s, eye %.2f m over the surface after 3 s (want about +0.1)" % [
 			under, pawn.moves != null and pawn.moves.swimming, _eye().y - top])
 	# A bucket: filled from the sea, poured on dry land.
 	set_on_foot(false)
-	walker.place(cm - Vector3(dir.x, 0, dir.y) * 2.0 + Vector3(0, 2.2, 0), Vector3(dir.x, 0, dir.y))
+	_fly_to(cm - Vector3(dir.x, 0, dir.y) * 2.0 + Vector3(0, 2.2, 0), Vector3(dir.x, 0, dir.y))
 	walker.pitch = -0.8
 	await _frames(10)
 	builder.set_active(true)
@@ -1822,7 +1931,7 @@ func _run_sea_gate() -> void:
 	var filled: bool = builder.take_fluid()
 	var held: int = builder.bucket
 	var land := shore - Vector2i((dir * 10.0).round())
-	walker.place(Vector3((land.x + 0.5) * stud, _ground_m(land.x, land.y) + 2.0, (land.y + 0.5) * stud),
+	_fly_to(Vector3((land.x + 0.5) * stud, _ground_m(land.x, land.y) + 2.0, (land.y + 0.5) * stud),
 			-Vector3(dir.x, 0, dir.y))
 	walker.pitch = -1.45
 	await _frames(10)
@@ -1857,7 +1966,7 @@ func _gate_build() -> void:
 	var stud := BrickWorld.get_stud_metres()
 	var c := Vector2i(floori(e.x / stud), floori(e.z / stud))
 	var g := _ground_m(c.x, c.y)
-	walker.place(Vector3(e.x, g + 2.4, e.z), Vector3(0, 0, -1))
+	_fly_to(Vector3(e.x, g + 2.4, e.z), Vector3(0, 0, -1))
 	walker.pitch = -0.75
 	await _frames(20)
 	builder.set_active(true)
@@ -1874,7 +1983,7 @@ func _gate_build() -> void:
 	print("[mine-gate] build: placed %d of 4, broke %s, edits %d, %s"
 			% [ok_place, ok_break, BrickTerrain.get_edit_count(), builder.log_blocks])
 	await _shot(UserPaths.DEV + "mine_build_view.png")
-	walker.place(Vector3(e.x + 2.5, g + 3.2, e.z + 2.5), Vector3(-1, 0, -1))
+	_fly_to(Vector3(e.x + 2.5, g + 3.2, e.z + 2.5), Vector3(-1, 0, -1))
 	walker.pitch = -0.6
 	await _frames(40)
 	await _shot(UserPaths.DEV + "mine_build.png")
@@ -1956,7 +2065,7 @@ func _gate_edits() -> void:
 			func(k: String) -> String: return "%s %.1f" % [k, TerrainTile.instance_ms[k]])))
 	# A look at what the shots left: whole bricks gone, the rest as laid.
 	set_on_foot(false)
-	walker.place(e + Vector3(5.5, 2.5, 0.5), Vector3(-0.3, 0.0, -1.0).normalized())
+	_fly_to(e + Vector3(5.5, 2.5, 0.5), Vector3(-0.3, 0.0, -1.0).normalized())
 	walker.pitch = -0.55
 	await _frames(30)
 	await _shot(UserPaths.DEV + "mine_broken.png")
