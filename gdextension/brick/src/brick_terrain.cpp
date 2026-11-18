@@ -2545,8 +2545,11 @@ Dictionary BrickTerrain::clear_runs(const PackedInt32Array &runs) {
     Dictionary out;
     std::set<std::pair<int, int>> touched;
     int removed = 0;
+    Vector3i box_lo(INT_MAX, INT_MAX, INT_MAX), box_hi(INT_MIN, INT_MIN, INT_MIN);
     for (int64_t i = 0; i + 3 < runs.size(); i += 4) {
         const int x = runs[i], z = runs[i + 1], lo = runs[i + 2], hi = runs[i + 3];
+        box_lo = Vector3i(std::min(box_lo.x, x), std::min(box_lo.y, lo), std::min(box_lo.z, z));
+        box_hi = Vector3i(std::max(box_hi.x, x), std::max(box_hi.y, hi), std::max(box_hi.z, z));
         for (int y = lo; y <= hi; ++y) {
             const int m = g_field.solid_at(x, y, z);
             if (m == MAT_AIR || m == MAT_BEDROCK) {
@@ -2570,6 +2573,12 @@ Dictionary BrickTerrain::clear_runs(const PackedInt32Array &runs) {
     }
     out["tiles"] = tiles;
     out["removed"] = removed;
+    if (removed > 0) {
+        // The plate cells cleared: the water reads its ground again there
+        // (Docs/MineWater.md 4.3).
+        out["box_lo"] = box_lo;
+        out["box_hi"] = box_hi;
+    }
     return out;
 }
 

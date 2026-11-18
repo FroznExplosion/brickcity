@@ -1,6 +1,6 @@
 # Water and lava in the mine world — plan
 
-Status: **plan, not built** (2026-11-17). For `scenes/terrain_test.tscn`, the mine world
+Status: **stages 1-2 built** (2026-11-17; section 14). For `scenes/terrain_test.tscn`, the mine world
 ([MineWorld.md](MineWorld.md)). It takes [Water.md](Water.md) §12's idea (brick water that
 flows) and settles its model for a volumetric, endless, Minecraft-like world. The heightfield
 test's sea ([Water.md](Water.md) §1–9) is kept and reused for the ocean's waves.
@@ -142,6 +142,14 @@ Tiles are whole and are conserved exactly; nothing is ever a fraction of a tile.
 5. Fed water spreading over still water whose top is lower takes those cells over: a river
    running into a pond keeps the pond topped up. Cut the river and those cells become still
    water again (4.1.6), so the pond stays a pond.
+6. **A core thins** (added in stage 2): an inner still cell (no dry floor at its own level beside
+   it) gives a tile to a neighbour one plate lower that is at the edge of the sheet (dry floor at
+   its level beside it). Without it a 2-deep core on open flat ground kept its tile-deep ring from
+   drying for ever (a cut-off fall lands as a full brick). Water only moves inner -> edge -> dry, so
+   it cannot ping-pong; a pond in a pit has walls round it, not dry floor, and stays.
+7. **A cut-off stream keeps a tile** (4.1.6): flowing water losing its feed becomes still water of
+   one tile, unless it held more than its stream level (pond water a river ran over: kept). A
+   cut-off fall keeps its whole brick and drains down.
 
 Gather form (STA's rule, [Reference/sta.md](Reference/sta.md)): each cell works out only its own
 next state from the last tick's states, so a tick is the same whatever order cells are visited
@@ -370,6 +378,11 @@ Each stage is merged on its own. C++ stages need the main folder's DLL rebuilt a
    `seek_dirs` (a hash set per call) and the hash-map lookups per neighbour.*
 2. **Drawing it in the mine world**: per-tile meshes, the water shader, hotbar test entries.
    `-- --gate` pictures: a stream down a stepped hill, a waterfall, a pond, a stream drying.
+   *Built 2026-11-17:* `scripts/water/mine_water.gd` (ticks on its own thread, recycled tile
+   meshes, lava rock laid as terrain edits), `shaders/water_fluid.gdshader` (depth colour, dithered
+   thin water, ripples along the flow, falls scroll down, lava glows), build mode slots 10-12
+   (keys 0, -, =): water source, water brick, lava source; RMB pours, LMB takes. Pass:
+   `scenes/terrain_test.tscn -- --gate=water` (pictures `user://dev/water_*.png`).
 3. **The sea on**: `gen_fluid`, the sea course, caves sealed, the wave tiers streamed with the
    shore field, the mask, the Water tab. Gate: coast, river mouth, a dug channel off the sea.
 4. **The player**: swimming, underwater fog, flow push, both buckets, placing into water.
