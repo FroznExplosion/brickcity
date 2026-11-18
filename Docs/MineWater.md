@@ -364,6 +364,10 @@ Each stage is merged on its own. C++ stages need the main folder's DLL rebuilt a
    not over a brick; still water poured on flat ground keeps every tile and stops at one tile
    deep; a cut-off stream drains to its hollows and the thin parts dry; a hole by a lake fills;
    a still world has 0 active cells; cells a millisecond.
+   *Built 2026-11-17 (28 checks, 4 s). First cost reading, debug build with the editor open:
+   a 1600-cell spill ticks 1260 cells in ~3 ms, ~2.3 µs a cell — far over the 50 ns estimate
+   in section 12; measure a release build on a quiet machine before stage 5, and look first at
+   `seek_dirs` (a hash set per call) and the hash-map lookups per neighbour.*
 2. **Drawing it in the mine world**: per-tile meshes, the water shader, hotbar test entries.
    `-- --gate` pictures: a stream down a stepped hill, a waterfall, a pond, a stream drying.
 3. **The sea on**: `gen_fluid`, the sea course, caves sealed, the wave tiers streamed with the
