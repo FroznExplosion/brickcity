@@ -276,6 +276,19 @@ func refresh(rect: Rect2i) -> void:
 			_stale[c] = true
 
 
+## No tile over `rect` is waiting to be rebuilt (refresh): each one drawn is
+## the field as it is now. What falls from the ground (ground_collapse.gd) is
+## let go once its old tile no longer draws it.
+func fresh(rect: Rect2i) -> bool:
+	for c in _dirty:
+		if rect.has_point(c):
+			return false
+	for c in _stale:
+		if rect.has_point(c):
+			return false
+	return true
+
+
 ## Throw away the tiles over a rectangle so they are built again.
 ##
 ## For the level EDITOR: an edit changes the field, so every tile over it is

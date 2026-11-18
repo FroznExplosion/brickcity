@@ -143,6 +143,55 @@ reserved large up front so it does not rehash under a reader.
 5. Kept pieces: unload past LOD 0, reload, save/load.
 6. Gate `terrain_test.tscn -- --gate=collapse`; costs measured into section 8.
 
-## 8. Built and measured
+## 8. Built and measured (2026-11-17)
 
-(filled in as each stage lands)
+All stages built. Files: `gdextension/brick/src/terrain_collapse.{h,cpp}`
+(the survey), `scripts/terrain/ground_collapse.gd` (the mine world's side:
+sand, pieces, unload, save), hooks in `mine_world.gd` (`terrain_edited` ->
+`collapse.queue`, `_mine` -> `collapse.shoot`, `tiles_fresh`, `near_tile`,
+the `.pieces` file), `TerrainStreamer.fresh`, and `PlanetPieces.max_pieces` /
+`debris_max` (defaults unchanged for the planet).
+
+What changed from the plan while building:
+
+- **The bond is found, not fixed.** A fixed pattern from absolute coordinates
+  left seam over seam wherever a shape did not line up with it (a 2-course
+  arm came apart in two). Now each course is packed from the bottom, each
+  cell's brick the largest that fits, placed where it laps the most bricks
+  under it and never with an edge right over a seam below. Rock may use 2x4s,
+  dirt up to 2x2, sand 1x1.
+- **Bricks bond across a material border** (a dirt ledge on rock is joined
+  to it), never with sand; a 2x4 only through rock. Strength by material is
+  still only the bond.
+- **One course alone joins nothing** (bricks side by side): a one-brick-thick
+  ledge or bridge with nothing under it falls. A placed block packs whole
+  (the scan meets its corner first), so a lone 2x2 is one brick.
+- **Pieces wait for their tile**: the cells are cleared at once, the piece's
+  mesh is made on workers, and it is let go when the tiles over it are
+  rebuilt (`tiles_fresh`), at most 2 s: the old tile and the piece never draw
+  together and the body never starts inside the old tile's collision.
+- **Piece chunks are zero-origin grids placed by their transform**, as
+  `split_island` makes them: `piece_at` and the landing rule read the grid in
+  the chunk's own frame.
+
+Measured (`terrain_collapse_probe`, headless; `terrain_test.tscn --
+--gate=collapse`, windowed, editor open, other chats idle):
+
+| | |
+|---|---|
+| survey, flat ground shot (no solve) | 0.7 ms, worker |
+| survey, an arm on a pillar (~850 virtual bricks, solved) | 2.1-2.4 ms, worker (sample 1.4-1.8, solve 0.5) |
+| survey worst in the gate | 1.9-7.5 ms, worker |
+| applying a survey (clear cells, lay a piece's bricks) | 0.7-1.5 ms worst, main |
+| frames while blocks and an arm fell (FrameClock, read-backs left out) | 187 frames, **0 over 33 ms**, mean 16.8 ms |
+| default `--gate` edits / rapid fire | 24.1 / 24.5 ms worst, 16.7 / 16.6 mean: as before (section 9 of MineWorld.md) |
+| stud strength a 10-stud, 2-course arm needs | rock 2.1, dirt 5.7 (the game's is 37.2: both hold) |
+
+Not done / known:
+
+- Falling sand does not see pieces (it lands on the ground under them).
+- A survey's region is the edit +-10 studs, 4 bricks under, 20 over (grown
+  twice by 24 when a loose group reaches the top). A mass reaching past that
+  counts as held.
+- Settled pieces draw one mesh each; unloaded past LOD 0. The long-term cost
+  of keeping them is the user's "change later".

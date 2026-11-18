@@ -312,3 +312,11 @@ no caves pay nothing.
   floor 200 physics ticks later (STANDING / FELL).
 - The mask reaches down to the deepest cave a column can have (`low_p`), so a
   cave never runs out of the bottom of it (the second suspect).
+
+## 15. The ground comes down
+
+What an edit leaves hanging falls: loose ground as pieces (they stay, are
+unloaded past the detail tiles and saved with the world), sand and gravel
+straight down like Minecraft's, landing as ground again. The buildings'
+stress rules on virtual bricks; Docs/TerrainCollapse.md. Gate:
+`terrain_test.tscn -- --gate=collapse`; probe `terrain_collapse_probe`.
