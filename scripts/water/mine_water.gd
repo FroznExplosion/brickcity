@@ -33,6 +33,14 @@ const FIELD_EDIT_DELAY := 1.5
 const SEA_OUTER_M := 1000.0
 ## Lava on a pawn, health a second (Docs/MineWater.md 10).
 const LAVA_DPS := 40.0
+## Moving through lava is this much of moving through water (4.6).
+const LAVA_DRAG := 0.35
+## The light lava casts (stage 6): one light a tile with lava in it, at the
+## middle of its lava, within LAVA_LIGHT_RANGE_M of the eye.
+const LAVA_LIGHT := Color(1.0, 0.45, 0.12)
+const LAVA_LIGHT_ENERGY := 2.2
+const LAVA_LIGHT_RANGE := 7.0
+const LAVA_LIGHT_FAR_M := 80.0
 const LAVA_FOG := Color(0.9, 0.32, 0.05)
 
 var host: Node = null
@@ -69,6 +77,8 @@ var _field_edit_in := -1.0
 var _under := Underwater.new()
 var _under_mode := 0                   ## 0 dry, 1 water, 2 lava
 var _dry_ambient := 0.6
+var _lights := {}                      ## Vector2i -> OmniLight3D
+var _spare_lights: Array[OmniLight3D] = []
 
 
 func setup(p_host: Node) -> void:
@@ -83,6 +93,7 @@ func setup(p_host: Node) -> void:
 	# terrain frame (its origin shift, Docs/MineWorld.md 15).
 	Pawn.water_probe = func(p: Vector3) -> float: return surface_at(host.to_local(p))
 	Pawn.water_flow = func(p: Vector3) -> Vector3: return flow_at(host.to_local(p))
+	Pawn.water_drag = func(p: Vector3) -> float: return drag_at(host.to_local(p))
 	reset_world(20.0, 4, false)
 	set_process(true)
 
@@ -128,6 +139,7 @@ func _exit_tree() -> void:
 	_finish_field()
 	Pawn.water_probe = Callable()
 	Pawn.water_flow = Callable()
+	Pawn.water_drag = Callable()
 	# Joins a running tick and frees the sections.
 	BrickFluid.reset(20.0, false)
 
@@ -169,12 +181,12 @@ func apply(res: Dictionary) -> void:
 		_lod_pending.erase(m.tile)
 	if sea != null and bool(res.get("mask_changed", false)):
 		sea.fluid_mask_dirty = true
+	# Rock the lava made: (x, z, first plate, last plate, material) a cell.
 	var terr: PackedInt32Array = res.get("terrain", PackedInt32Array())
-	for i in range(0, terr.size(), 4):
-		var b := terr[i + 1]
-		var lo := Vector3i(terr[i], b * 3, terr[i + 2])
-		var hi := Vector3i(terr[i], b * 3 + 2, terr[i + 2])
-		var r: Dictionary = BrickTerrain.fill_box(lo, hi, terr[i + 3], true)
+	for i in range(0, terr.size(), 5):
+		var lo := Vector3i(terr[i], terr[i + 2], terr[i + 1])
+		var hi := Vector3i(terr[i], terr[i + 3], terr[i + 1])
+		var r: Dictionary = BrickTerrain.fill_box(lo, hi, terr[i + 4], true)
 		if int(r.get("changed", 0)) > 0:
 			rock_laid += 1
 			host.terrain_edited(r)
@@ -252,6 +264,11 @@ func flow_at(p: Vector3) -> Vector3:
 	return BrickFluid.flow_at(p)
 
 
+## How freely a body moves in the fluid at a point: 1 water, less in lava.
+func drag_at(p: Vector3) -> float:
+	return LAVA_DRAG if BrickFluid.fluid_at(p) == 2 else 1.0
+
+
 ## 0 none, 1 water, 2 lava at a point (sea waves counted).
 func fluid_at(p: Vector3) -> int:
 	var f := BrickFluid.fluid_at(p)
@@ -281,14 +298,20 @@ func _underwater(eye: Vector3) -> void:
 		env.ambient_light_color = LAVA_FOG
 
 
+## Every pawn standing or swimming in lava burns (the player only on foot).
 func _burn(delta: float) -> void:
-	if not host.get("on_foot"):
-		return
-	var pawn: Pawn = host.get("pawn")
-	if pawn == null or pawn.health == null:
-		return
-	if fluid_at(host.to_local(pawn.feet()) + Vector3.UP * 0.15) == 2:
-		pawn.health.apply_impact(LAVA_DPS * delta, &"fire")
+	var player: Pawn = host.get("pawn")
+	for n in get_tree().get_nodes_in_group(Pawn.GROUP):
+		var pawn := n as Pawn
+		if pawn == null or pawn.health == null or pawn.body == null:
+			continue
+		if pawn == player and not host.get("on_foot"):
+			continue
+		# Just over the feet: a pawn stands on the studs, a plate up, so a
+		# probe higher than that missed a two-plate lava sheet. In the
+		# terrain frame (the origin shift, MineWorld.md 15).
+		if BrickFluid.fluid_at(host.to_local(pawn.feet() + pawn.up * 0.03)) == 2:
+			pawn.health.apply_impact(LAVA_DPS * delta, Elements.FIRE)
 
 
 # ---------------------------------------------------------------------------
@@ -312,6 +335,7 @@ func _show(tile: Vector2i, water: Array, lava: Array) -> void:
 	if not lava.is_empty():
 		mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, lava)
 		mesh.surface_set_material(mesh.get_surface_count() - 1, _lava_mat)
+	_light(tile, lava)
 
 
 ## Past the sim ring a tile's water is frozen: show its far mesh; back in
@@ -334,7 +358,52 @@ func _check_lod(eye: Vector3) -> void:
 	far_tiles = n
 
 
+## A tile's lava light: at the middle of its lava, a little above it; none
+## when the tile has none. Recycled like the meshes.
+func _light(tile: Vector2i, lava: Array) -> void:
+	var l: OmniLight3D = _lights.get(tile)
+	if lava.is_empty():
+		if l != null:
+			_lights.erase(tile)
+			l.visible = false
+			_spare_lights.append(l)
+		return
+	var v: PackedVector3Array = lava[Mesh.ARRAY_VERTEX]
+	var sum := Vector3.ZERO
+	var top := -INF
+	for p in v:
+		sum += p
+		top = maxf(top, p.y)
+	if l == null:
+		l = _spare_lights.pop_back() if not _spare_lights.is_empty() else _new_light()
+		_lights[tile] = l
+		l.visible = true
+	var c := sum / maxf(v.size(), 1)
+	l.position = Vector3(c.x, top + 0.6, c.z)
+	# Bigger lava, a brighter, wider light.
+	var k := clampf(float(v.size()) / 400.0, 0.4, 1.6)
+	l.light_energy = LAVA_LIGHT_ENERGY * k
+	l.omni_range = LAVA_LIGHT_RANGE * sqrt(k)
+
+
+func _new_light() -> OmniLight3D:
+	var l := OmniLight3D.new()
+	l.light_color = LAVA_LIGHT
+	l.shadow_enabled = false
+	l.omni_attenuation = 1.5
+	l.distance_fade_enabled = true
+	l.distance_fade_begin = LAVA_LIGHT_FAR_M
+	l.distance_fade_length = 20.0
+	add_child(l)
+	return l
+
+
+func lava_lights() -> int:
+	return _lights.size()
+
+
 func _release(tile: Vector2i) -> void:
+	_light(tile, [])
 	var mi: MeshInstance3D = _tiles.get(tile)
 	_tile_far.erase(tile)
 	_lod_pending.erase(tile)
@@ -360,6 +429,8 @@ func report() -> String:
 	var line := "%d awake, %d tiles drawn (%d far), tick %.2f ms (%d cells, mesh %.2f), %d sections, %d rock" % [
 			BrickFluid.active_count(), drawn, far_tiles, float(s.get("tick_ms", 0.0)),
 			int(s.get("evals", 0)), float(s.get("mesh_ms", 0.0)), BrickFluid.section_count(), rock_laid]
+	if not _lights.is_empty():
+		line += ", %d lava lights" % _lights.size()
 	if sea != null:
 		line += ", sea at %.2f m, shore field %.0f ms (%d moves)" % [
 				BrickFluid.get_sea_level(), last_field_ms, field_moves]

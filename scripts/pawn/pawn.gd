@@ -158,6 +158,9 @@ const GROUP := &"pawns"
 ## of running water there, m/s. Unset, the world is dry and nothing swims.
 static var water_probe := Callable()
 static var water_flow := Callable()
+## `water_drag.call(point) -> float`: how freely a body moves in the fluid
+## there, 1 in water, less in lava. Unset: 1.
+static var water_drag := Callable()
 ## Nothing pulls where it is (Gravity.pulls_at): it floats (PawnMoves) or drifts.
 var floating := false
 ## A ladder the plain walk climbs (no PawnMoves -- a soldier; Docs/RoomModules.md

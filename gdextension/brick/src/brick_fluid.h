@@ -63,7 +63,8 @@ public:
     /// results are ready for `take`.
     static bool update(double delta);
     /// The finished tick's results: {"meshes": [{tile: Vector2i, water: Array,
-    /// lava: Array}], "terrain": PackedInt32Array (x, course, z, material ...),
+    /// lava: Array, far: bool}], "terrain": PackedInt32Array (x, z, first plate,
+    /// last plate, material ...: rock the lava made),
     /// "mask_changed": bool}.
     static Dictionary take();
     /// Probes: run `ticks` ticks now, on this thread.

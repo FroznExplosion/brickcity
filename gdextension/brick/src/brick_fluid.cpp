@@ -141,7 +141,19 @@ struct MeshOut {
     bool far = false;   ///< the coarse mesh (MineWater.md 8)
 };
 std::vector<MeshOut> g_out_meshes;
+/// Rock the fluids made, for the main thread to lay as terrain edits: per
+/// cell (x, z, first plate, last plate, material) -- only the plates the lava
+/// filled, so a tile of lava is a tile of rock.
 std::vector<int32_t> g_out_terrain;
+
+void out_rock(int x, int b, int z, const Cell &c, int mat) {
+    const int lo = b * 3 + floor_of(c.solid);
+    g_out_terrain.push_back(x);
+    g_out_terrain.push_back(z);
+    g_out_terrain.push_back(lo);
+    g_out_terrain.push_back(lo + std::max(1, (int)c.amt) - 1);
+    g_out_terrain.push_back(mat);
+}
 bool g_out_mask = false;
 
 std::thread g_thread;
@@ -491,10 +503,7 @@ void eval(int x, int b, int z) {
         for (int i = 0; i < 6; ++i) {
             const Cell &o = wcell(nx[i], nb[i], nz[i]);
             if (c_wet(o) && c_fluid(o) == F_WATER) {
-                g_out_terrain.push_back(x);
-                g_out_terrain.push_back(b);
-                g_out_terrain.push_back(z);
-                g_out_terrain.push_back(c_kind(cur) == K_SOURCE ? MAT_OBSIDIAN : MAT_STONE);
+                out_rock(x, b, z, cur, c_kind(cur) == K_SOURCE ? MAT_OBSIDIAN : MAT_STONE);
                 g_sets.push_back({ x, b, z, Cell{} });
                 return;
             }
@@ -690,6 +699,12 @@ void eval(int x, int b, int z) {
         }
     }
     uint8_t want = (uint8_t)((cur.aux & 0x80) | e_new);
+    // Lava cut off and come to rest cools into stone (4.6), 30-60 s later.
+    if (cf == F_LAVA && !(cur.aux & 0x80) && supported(x, b, z, cur)) {
+        want |= 0x80;
+        const uint32_t wait = 300 + (hmix((uint32_t)x * 2246822519U ^ (uint32_t)z ^ (uint32_t)b * 131U) % 300);
+        g_timers.insert({ g_tick + wait, pack3(x, b, z) });
+    }
     // A lone tile, on the ground, with nothing deeper beside it, dries.
     if (DEFS[cf].dries && a == 1 && !(cur.aux & 0x80) && !deep_near && supported(x, b, z, cur)
             && !c_wet(wcell(x, b + 1, z))) {
@@ -707,7 +722,14 @@ void eval(int x, int b, int z) {
 /// A drying timer came due: dry if it is still a lone tile.
 void eval_timer(int x, int b, int z) {
     const Cell cur = wcell(x, b, z);
-    if (!c_wet(cur) || c_kind(cur) != K_STILL || cur.amt != 1 || !(cur.aux & 0x80)) return;
+    if (!c_wet(cur) || c_kind(cur) != K_STILL || !(cur.aux & 0x80)) return;
+    if (c_fluid(cur) == F_LAVA) {
+        // Still lava at rest: stone, plate for plate.
+        out_rock(x, b, z, cur, MAT_STONE);
+        g_sets.push_back({ x, b, z, Cell{} });
+        return;
+    }
+    if (cur.amt != 1) return;
     for (int i = 0; i < 4; ++i) {
         const Cell &n = wcell(x + DX[i], b, z + DZ[i]);
         if (c_wet(n) && c_fluid(n) == c_fluid(cur) && (c_fed(n) || n.amt >= 2)) {

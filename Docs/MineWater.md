@@ -1,6 +1,6 @@
 # Water and lava in the mine world — plan
 
-Status: **stages 1-5 built** (2026-11-17; section 14). For `scenes/terrain_test.tscn`, the mine world
+Status: **stages 1-6 built** (2026-11-17; section 14). For `scenes/terrain_test.tscn`, the mine world
 ([MineWorld.md](MineWorld.md)). It takes [Water.md](Water.md) §12's idea (brick water that
 flows) and settles its model for a volumetric, endless, Minecraft-like world. The heightfield
 test's sea ([Water.md](Water.md) §1–9) is kept and reused for the ocean's waves.
@@ -196,7 +196,7 @@ The rules are the same; the numbers are a table per fluid:
 | tick | 10 Hz | 2 Hz (every 5th) |
 | reach | 14 studs, levels 2 then 1 | 6 studs, levels 2 then 1 |
 | new sources (4.1.7) | yes | no |
-| still kind dries | yes | no (cools into stone instead, optional) |
+| still kind dries | yes | no: cools into stone, 30-60 s at rest (built) |
 | looks | calm blue, flow scroll | glowing, slow crust scroll, emissive |
 | touches the other | — | lava source + water: **obsidian**; flowing lava + water: **stone** (terrain edits, new materials appended to `Material`) |
 | to a body in it | swim | burn and damage |
@@ -436,6 +436,13 @@ Each stage is merged on its own. C++ stages need the main folder's DLL rebuilt a
 5. **LOD**: the sim ring and frozen sections, far water in the coarse blocks, the budget.
    Measured with the editor closed (CLAUDE.md).
 6. **Lava**: the second fluid's table, its look and glow, burning, obsidian and stone.
+   *Built 2026-11-18:* lava turns to rock only as thick as it was (the rock output is per cell
+   `x, z, first plate, last plate, material`: a tile of lava, a tile of rock); a source meeting
+   water makes obsidian, running lava stone; still (cut-off) lava at rest cools into stone 30-60 s
+   later; a crust of dark plates drifts over the melt with bright cracks, breathing; one light a
+   tile with lava (`OmniLight3D`, recycled, faded past 80 m); every pawn in lava burns (40 a
+   second, `Elements.FIRE`) and moves at 35 % (`Pawn.water_drag`). `--gate=water` has a lava
+   pool at night, a pawn burning in it, and the pool cut off and cooled.
 7. **Saving** the water with the edits.
 8. **Later**: pits filling from rivers (4.5), lakes above the sea, cave pools, springs, lava
    pools, floating debris, mixed water pieces, multiplayer diffs (STA §10.8–10.9).
