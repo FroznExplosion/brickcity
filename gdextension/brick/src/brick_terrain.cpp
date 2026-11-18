@@ -2173,7 +2173,7 @@ PackedStringArray BrickTerrain::material_names() {
     for (const char *n : { "snow", "gravel", "sandstone", "red sand", "terracotta",
             "cream terracotta", "red terracotta", "clay", "bedrock", "coal ore", "iron ore",
             "copper ore", "gold ore", "redstone ore", "lapis ore", "diamond ore", "podzol",
-            "dry grass", "lush grass", "cold grass", "dark grass", "granite", "diorite", "ice" }) {
+            "dry grass", "lush grass", "cold grass", "dark grass", "granite", "diorite", "ice", "obsidian" }) {
         out.push_back(n);
     }
     return out;
@@ -2370,6 +2370,10 @@ Dictionary BrickTerrain::carve(Vector3 world_point, double radius_m) {
     }
     out["tiles"] = tiles;
     out["removed"] = removed;
+    // The plate cells the sphere could have touched: the water reads its
+    // ground again there (Docs/MineWater.md 4.3).
+    out["box_lo"] = Vector3i(cx - rx, cy - ry, cz - rx);
+    out["box_hi"] = Vector3i(cx + rx, cy + ry, cz + rx);
     out["debris"] = debris;
     out["edits"] = (int)edit_count();
     return out;
@@ -2454,6 +2458,8 @@ Dictionary BrickTerrain::fill_box(Vector3i lo, Vector3i hi, int material, bool o
     }
     out["tiles"] = tiles;
     out["changed"] = changed;
+    out["box_lo"] = lo;
+    out["box_hi"] = hi;
     return out;
 }
 
@@ -5522,6 +5528,10 @@ std::vector<float> g_shore;
 int g_shore_n = 0;
 int g_shore_half = 0;
 int g_shore_step = BAND_LATTICE;
+/// The field's centre, studs: an endless world builds it round the player
+/// (Docs/MineWater.md 7.2). 0, 0 for a world built round its origin.
+int g_shore_cx = 0;
+int g_shore_cz = 0;
 
 /// Depth over which the swell is throttled to nothing. 2.5 m is a little
 /// under two full-gain wave heights, so the surf is already half its size a
@@ -5638,8 +5648,8 @@ double field_distance(double x, double z) {
     if (g_shore_n <= 1) {
         return 1.0e9;
     }
-    const double q = (x / (double)STUD_M + (double)g_shore_half) / (double)g_shore_step;
-    const double r = (z / (double)STUD_M + (double)g_shore_half) / (double)g_shore_step;
+    const double q = (x / (double)STUD_M + (double)(g_shore_half - g_shore_cx)) / (double)g_shore_step;
+    const double r = (z / (double)STUD_M + (double)(g_shore_half - g_shore_cz)) / (double)g_shore_step;
     const int i0 = (int)std::floor(q);
     const int j0 = (int)std::floor(r);
     if (i0 < 0 || j0 < 0 || i0 + 1 >= g_shore_n || j0 + 1 >= g_shore_n) {
@@ -5693,15 +5703,36 @@ double BrickWave::band_depth(double x, double z) { return g_sea_level - lattice_
 double BrickWave::shore_distance(double x, double z) { return field_distance(x, z); }
 
 PackedFloat32Array BrickWave::build_shore_field(int half_studs, int step) {
+    PackedFloat32Array out = compute_shore_field(0, 0, half_studs, step);
+    install_shore_field(0, 0, half_studs, step, out);
+    return out;
+}
+
+void BrickWave::install_shore_field(int cx, int cz, int half_studs, int step,
+        const PackedFloat32Array &field) {
     step = std::max(step, 1);
     const int n = std::max(2 * half_studs / step, 2);
-    g_shore.assign((size_t)n * n * 2, 0.0f);
+    if (field.size() != (int64_t)n * n * 2) {
+        return;
+    }
+    g_shore.assign(field.ptr(), field.ptr() + field.size());
+    g_shore_n = n;
+    g_shore_half = half_studs;
+    g_shore_step = step;
+    g_shore_cx = cx;
+    g_shore_cz = cz;
+}
+
+PackedFloat32Array BrickWave::compute_shore_field(int cx, int cz, int half_studs, int step) {
+    step = std::max(step, 1);
+    const int n = std::max(2 * half_studs / step, 2);
+    std::vector<float> g_shore((size_t)n * n * 2, 0.0f);
     std::vector<float> dist((size_t)n * n);
     const float INF = 1.0e9f;
     for (int iz = 0; iz < n; ++iz) {
         for (int ix = 0; ix < n; ++ix) {
-            const int gx = ix * step - half_studs;
-            const int gz = iz * step - half_studs;
+            const int gx = ix * step - half_studs + cx;
+            const int gz = iz * step - half_studs + cz;
             float ground = (float)(BrickTerrain::surface_plate(gx, gz) + 1) * PLATE_M;
             // Ground dug below the sea where the world as generated was dry
             // is not sea: the sea tiers must not draw in it. Its water is a
@@ -5746,9 +5777,6 @@ PackedFloat32Array BrickWave::build_shore_field(int half_studs, int step) {
         // Open sea with no shore in the field reads as far out.
         g_shore[k * 2 + 1] = dist[k] >= INF * 0.5f ? 10000.0f : dist[k] * cell_m;
     }
-    g_shore_n = n;
-    g_shore_half = half_studs;
-    g_shore_step = step;
     PackedFloat32Array out;
     out.resize((int64_t)g_shore.size());
     std::copy(g_shore.begin(), g_shore.end(), out.ptrw());
@@ -5763,8 +5791,8 @@ Array BrickWave::wet_cells(int cell_studs) {
             if (g_shore[((size_t)iz * g_shore_n + ix) * 2] >= (float)g_sea_level) {
                 continue;
             }
-            const int cx = (int)std::floor((double)(ix * g_shore_step - g_shore_half) / cell_studs);
-            const int cz = (int)std::floor((double)(iz * g_shore_step - g_shore_half) / cell_studs);
+            const int cx = (int)std::floor((double)(ix * g_shore_step - g_shore_half + g_shore_cx) / cell_studs);
+            const int cz = (int)std::floor((double)(iz * g_shore_step - g_shore_half + g_shore_cz) / cell_studs);
             if (seen.insert({ cx, cz }).second) {
                 out.append(Vector2i(cx, cz));
             }
@@ -5926,6 +5954,8 @@ void BrickWave::_bind_methods() {
         &BrickWave::shore_distance);
     ClassDB::bind_static_method("BrickWave", D_METHOD("build_shore_field", "half_studs", "step"),
         &BrickWave::build_shore_field);
+    ClassDB::bind_static_method("BrickWave", D_METHOD("compute_shore_field", "cx", "cz", "half_studs", "step"), &BrickWave::compute_shore_field);
+    ClassDB::bind_static_method("BrickWave", D_METHOD("install_shore_field", "cx", "cz", "half_studs", "step", "field"), &BrickWave::install_shore_field);
     ClassDB::bind_static_method("BrickWave", D_METHOD("wet_cells", "cell_studs"),
         &BrickWave::wet_cells);
     ClassDB::bind_static_method("BrickWave", D_METHOD("group_at", "x", "z", "t"),

@@ -2,6 +2,7 @@
 #include "brick_world.h"
 #include "brick_terrain.h"
 #include "brick_pools.h"
+#include "brick_fluid.h"
 #include "impostor_set.h"
 #include "mesh_merge.h"
 #include "shell_mesher.h"
@@ -32,6 +33,7 @@ void initialize_brick_module(ModuleInitializationLevel p_level) {
     ClassDB::register_class<BrickWave>();
     // Pools: dug ground that fills from the sea (Water.md 12).
     ClassDB::register_class<BrickPools>();
+    ClassDB::register_class<BrickFluid>();
     // ImpostorLod's tiering and packing (scripts/render/impostor_lod.gd).
     ClassDB::register_class<ImpostorSet>();
     // RecipeMesh's merge (scripts/build/recipe_mesh.gd).
