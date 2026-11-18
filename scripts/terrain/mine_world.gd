@@ -18,7 +18,10 @@ extends Node3D
 ##   player     FpsRig: planet.tscn's pawn on foot and PlanetWalker flying
 ##   light      LightRig, with the sun turning: day and night
 ##
-## Keys: F fly/walk · F9 world generation menu · F3 readout · T skip an hour
+## Keys: F fly/walk · M world generation menu (also in the pause menu, Escape)
+##       · F3 readout · T skip an hour. NOT F9: in the editor's embedded game
+##       view F9 is the editor's "Suspend/Resume Embedded Project", and a
+##       suspended tree takes no clicks at all.
 ##       B build mode (mine_builder.gd: break, place, pick, hotbar)
 ##       left mouse (on foot, not building): shoot -- the ground breaks where hit
 
@@ -106,9 +109,11 @@ var _tree_variants: Array = []
 
 
 func _ready() -> void:
-	_gate = "--gate" in OS.get_cmdline_user_args()
-	_water_gate = "--gate=water" in OS.get_cmdline_user_args()
-	_gate = _gate or _water_gate
+	for arg in OS.get_cmdline_user_args():
+		if arg.begins_with("--gate"):
+			_gate = true
+		if arg == "--gate=water":
+			_water_gate = true
 	_sync_far = "--sync-far" in OS.get_cmdline_user_args()
 	_coalesce = not "--no-coalesce" in OS.get_cmdline_user_args()
 	if _gate:
@@ -163,10 +168,15 @@ func _ready() -> void:
 				if str(p.name).to_lower() == arg.split("=")[1].to_lower():
 					start = Presets.load_settings(p.path)
 	generate(start)
-	if _water_gate:
-		_run_water_gate()
-	elif _gate:
-		_run_gate()
+	if _gate:
+		if _water_gate:
+			_run_water_gate()
+		elif "--gate=menu" in OS.get_cmdline_user_args():
+			_run_menu_gate()
+		elif "--gate=look" in OS.get_cmdline_user_args():
+			_run_look_gate()
+		else:
+			_run_gate()
 
 
 func _exit_tree() -> void:
@@ -225,7 +235,12 @@ func generate(s: Dictionary) -> void:
 	_streamer.near_radius = near
 	_streamer.keep_radius = near + 2
 	_streamer.world_half = 1 << 20
-	_streamer.shadow_radius = 2
+	# The ground never casts into the sun's shadow map. It did (the sun moves,
+	# so it cannot be baked as the heightfield test bakes it), and a brick top
+	# shadowing itself drew a fine diagonal grain over every lit surface --
+	# the "fuzzy, blurry bricks" (Docs/MineWorld.md 11). Trees, the player and
+	# debris still cast onto it; underground the sun fades instead (_day_night).
+	_streamer.shadow_radius = -1
 	add_child(_streamer)
 	_streamer.setup(_mat)
 	_streamer.settle(spawn_xz)
@@ -240,6 +255,7 @@ func generate(s: Dictionary) -> void:
 	add_child(_trees)
 	_trees.setup(_eye_camera(), _brick_mat)
 	_trees.stream(int(settings.seed), _tree_chance_at, _tree_variant_at, 420.0)
+	_trees.solid_m = 64.0   # trunks the player and rounds meet
 	_gen_ms = float(Time.get_ticks_usec() - t0) / 1000.0
 	print("[mine] generated '%s' seed %d in %.0f ms; spawn %s (%s)" % [settings.name,
 			int(settings.seed), _gen_ms, cell, _biome_names[BrickTerrain.biome_at(cell.x, cell.y)]])
@@ -545,6 +561,9 @@ func _day_night(delta: float, eye: Vector3) -> void:
 	var under := _ground_m(c.x, c.y) - eye.y
 	var cave := clampf(1.0 - (under - 1.5) / 6.0, 0.12, 1.0)
 	_rig.env.ambient_light_energy *= cave
+	# The ground casts no sun shadow, so the sun would reach into caves: it
+	# fades with depth the way the ambient does.
+	_rig.sun.light_energy *= cave
 	_mat.set_shader_parameter("sun_dir", -_rig.sun.global_transform.basis.z)
 	_rig.expose(eye, delta)
 
@@ -557,7 +576,7 @@ func _unhandled_input(event: InputEvent) -> void:
 			if _menu == null:
 				set_on_foot(not on_foot)
 				get_viewport().set_input_as_handled()
-		KEY_F9:
+		KEY_M:
 			toggle_menu()
 			get_viewport().set_input_as_handled()
 		KEY_F3:
@@ -584,15 +603,11 @@ func toggle_menu() -> void:
 	_menu_layer.layer = 80
 	_menu_layer.process_mode = Node.PROCESS_MODE_ALWAYS
 	add_child(_menu_layer)
-	var dim := ColorRect.new()
-	dim.color = Color(0, 0, 0, 0.35)
-	dim.set_anchors_preset(Control.PRESET_FULL_RECT)
-	dim.mouse_filter = Control.MOUSE_FILTER_STOP
-	_menu_layer.add_child(dim)
+	# A MenuScreen: full screen, dimmed backdrop that takes every click.
 	_menu = Menu.new()
 	_menu.name = "WorldGenMenu"
-	_menu_layer.add_child(_menu)
 	_menu.setup(self)
+	_menu_layer.add_child(_menu)
 	# The world stops here, not by pausing the tree: SceneTree.paused cannot
 	# be set while the engine holds the tree suspended (run from the editor,
 	# "Pause state cannot be modified while suspended"), and then nothing
@@ -624,6 +639,35 @@ func menu_closed() -> void:
 
 func menu_is_open() -> bool:
 	return _menu != null
+
+
+# ---------------------------------------------------------------------------
+# The pause menu (Escape): the game's own (menu/core/MenuManager.gd), allowed
+# here through terrain_scene.gd and BrickcityMenuHost's scene hooks.
+
+## The menu gate turns this on to open the pause menu the player's way.
+var _gate_pause_ok := false
+
+
+func pause_allowed() -> bool:
+	return (not _gate or _gate_pause_ok) and _menu == null
+
+
+## Entries this scene adds to the pause menu.
+func pause_menu_entries() -> Array:
+	return [{"label": "World generation...", "tooltip": "Change how the world is generated (M).",
+		"action": func() -> void:
+			MenuManager.close_pause()
+			toggle_menu()}]
+
+
+## The pause menu closed: MenuManager has put the mouse mode back; the camera
+## is told too, so its own idea of being captured agrees.
+func pause_closed() -> void:
+	if PlayerCamera.hands_off or _menu != null:
+		return
+	if Input.mouse_mode == Input.MOUSE_MODE_CAPTURED and on_foot and cam != null:
+		cam._set_captured(true)
 
 
 # ---------------------------------------------------------------------------
@@ -740,7 +784,7 @@ func _update_hud() -> void:
 	if _hud == null or _streamer == null:
 		return
 	if not _show_readout:
-		_hud.text = "F3 readout  F9 world generation"
+		_hud.text = "F3 readout  M world generation"
 		return
 	var eye := _eye()
 	var stud := BrickWorld.get_stud_metres()
@@ -762,13 +806,207 @@ func _update_hud() -> void:
 				BrickTerrain.get_edit_count(), _gen_ms],
 		"blocks placed %d  broken %d   %s" % [builder.placed, builder.broken, _save_status],
 		"water %s" % water.report(),
-		"%s   F fly/walk  B build  F9 world generation  F3 readout  T +1 hour" % ("ON FOOT" if on_foot
+		"%s   F fly/walk  B build  M world generation  F3 readout  T +1 hour" % ("ON FOOT" if on_foot
 				else "FLYING %.0f m/s (wheel)" % walker.fly_speed),
 	])
 
 
 # ---------------------------------------------------------------------------
 # The scripted pass: -- --gate. Pictures to user://dev/, numbers to the log.
+
+## -- --gate=menu: the world generation menu clicked the way a player clicks
+## it -- real mouse events through the engine's input -- and what the click
+## reached. A button must act; a click on the panel's empty part must not
+## turn the camera or reach the game.
+func _run_menu_gate() -> void:
+	await _frames(20)
+	toggle_menu()
+	await _frames(10)
+	var zoom: Button = null
+	for b in _menu.find_children("*", "Button", true, false):
+		if (b as Button).text == "Zoom in":
+			zoom = b
+	var before: int = _menu.get("_map_step")
+	var at := zoom.get_global_rect().get_center()
+	await _click(at)
+	var hovered := get_viewport().gui_get_hovered_control()
+	print("[mine-menu] click on 'Zoom in' at %s: map step %d -> %d, hovered %s" % [at, before,
+			_menu.get("_map_step"), hovered.get_path() if hovered != null else "nothing"])
+	var look := cam.global_transform.basis
+	var empty := (_menu as Control).get_global_rect().position + Vector2(20, 300)
+	await _click(empty)
+	hovered = get_viewport().gui_get_hovered_control()
+	print("[mine-menu] click on the panel's empty part at %s: camera turned %s, hovered %s, menu open %s"
+			% [empty, not look.is_equal_approx(cam.global_transform.basis),
+			hovered.get_path() if hovered != null else "nothing", _menu != null])
+	var key := InputEventKey.new()
+	key.keycode = KEY_M
+	key.physical_keycode = KEY_M
+	key.pressed = true
+	Input.parse_input_event(key)
+	await _frames(2)
+	key = key.duplicate()
+	key.pressed = false
+	Input.parse_input_event(key)
+	await _frames(2)
+	print("[mine-menu] M again: menu open %s, world running %s" % [_menu != null, can_process()])
+	# The pause menu: Escape, then its "World generation..." entry.
+	_gate_pause_ok = true
+	await _key(KEY_ESCAPE)
+	var mm := get_node_or_null(^"/root/MenuManager")
+	var paused_open: bool = mm != null and bool(mm.call("is_open"))
+	var entry: Button = null
+	for b in get_tree().root.find_children("*", "Button", true, false):
+		if (b as Button).text.begins_with("World generation") and (b as Button).is_visible_in_tree():
+			entry = b
+	print("[mine-menu] Escape: pause menu open %s, tree paused %s, entry found %s" % [paused_open,
+			get_tree().paused, entry != null])
+	if entry != null:
+		await _click(entry.get_global_rect().get_center())
+		print("[mine-menu] clicked 'World generation...': pause menu open %s, generation menu open %s, tree paused %s"
+				% [bool(mm.call("is_open")), _menu != null, get_tree().paused])
+		if _menu != null:
+			toggle_menu()
+	await _menu_small_window_check()
+	get_tree().quit()
+
+
+## The menu on a small window: Generate world inside the viewport, nothing
+## cut off (MenuFit.audit, as the Options menu's fit test), and a real click
+## on it builds a new world.
+func _menu_small_window_check() -> void:
+	var win := get_window()
+	var size0 := win.size
+	for small in [Vector2i(800, 450), Vector2i(640, 400)]:
+		win.size = small
+		await _frames(10)
+		toggle_menu()
+		await _frames(10)
+		var vp := get_viewport().get_visible_rect()
+		var gen: Button = _menu.call("generate_button")
+		var r := gen.get_global_rect()
+		var cut: Array = MenuFit.audit(_menu, vp)
+		print("[mine-menu] window %s (viewport %s): Generate world at %s, inside %s, cut off %d%s" % [
+				small, vp.size, r, vp.encloses(r), cut.size(),
+				"" if cut.is_empty() else "
+" + MenuFit.describe(cut)])
+		await _shot(UserPaths.DEV + "mine_menu_%dx%d.png" % [small.x, small.y])
+		if small.x == 640:
+			var seed0 := int(settings.seed)
+			var ms0 := _gen_ms
+			_gen_ms = -1.0
+			await _click(r.get_center())
+			await _frames(5)
+			print("[mine-menu] clicked Generate world: menu open %s, regenerated %s (%.0f ms, seed %d -> %d), world running %s"
+					% [_menu != null, _gen_ms >= 0.0, _gen_ms, seed0, int(settings.seed), can_process()])
+			if _gen_ms < 0.0:
+				_gen_ms = ms0
+		if _menu != null:
+			toggle_menu()
+			await _frames(3)
+	win.size = size0
+	await _frames(5)
+
+
+func _key(code: Key) -> void:
+	for down in [true, false]:
+		var k := InputEventKey.new()
+		k.keycode = code
+		k.physical_keycode = code
+		k.pressed = down
+		Input.parse_input_event(k)
+		await _frames(3)
+
+
+## -- --gate=look: the same close view of the ground four ways -- FXAA on and
+## off, the printed lines on and off -- at render scale 1 and MSAA 2x (the
+## user's saved video settings), to see what makes the bricks look soft.
+func _run_look_gate() -> void:
+	var vp := get_viewport()
+	vp.scaling_3d_scale = 1.0
+	vp.scaling_3d_mode = Viewport.SCALING_3D_MODE_BILINEAR
+	vp.msaa_3d = Viewport.MSAA_2X
+	vp.use_taa = false
+	_time = 0.42
+	set_on_foot(false)
+	var e := _eye()
+	var stud := BrickWorld.get_stud_metres()
+	var c := Vector2i(floori(e.x / stud), floori(e.z / stud))
+	walker.place(Vector3(e.x, _ground_m(c.x, c.y) + 1.6, e.z), Vector3(1, 0, -1).normalized())
+	walker.pitch = -0.5
+	await _frames(60)
+	if "--look=parts" in OS.get_cmdline_user_args():
+		# Which painted effect is the grain: each off in turn, FXAA off.
+		vp.screen_space_aa = Viewport.SCREEN_SPACE_AA_DISABLED
+		var keys := ["print_lines_enabled", "seams_enabled", "chamfer_enabled",
+				"stud_shadows_enabled", "studs_enabled"]
+		for k in keys:
+			_mat.set_shader_parameter(k, true)
+		await _frames(12)
+		await _shot(UserPaths.DEV + "mine_part_all_on.png")
+		for k in keys:
+			_mat.set_shader_parameter(k, false)
+			await _frames(12)
+			await _shot(UserPaths.DEV + "mine_part_no_%s.png" % k)
+			_mat.set_shader_parameter(k, true)
+		for k in keys:
+			_mat.set_shader_parameter(k, false)
+		await _frames(12)
+		await _shot(UserPaths.DEV + "mine_part_all_off.png")
+		for k in keys:
+			_mat.set_shader_parameter(k, true)
+		_rig.sun.shadow_enabled = false
+		await _frames(12)
+		await _shot(UserPaths.DEV + "mine_part_no_sun_shadow.png")
+		_rig.sun.shadow_enabled = true
+		# (a) the ground out of the shadow map
+		for t in _streamer.tiles():
+			(t as TerrainTile).set_casts_shadow(false)
+		await _frames(12)
+		await _shot(UserPaths.DEV + "mine_part_ground_no_cast.png")
+		for t in _streamer.tiles():
+			(t as TerrainTile).set_casts_shadow(true)
+		# (b) casting, with more bias
+		var b0 := _rig.sun.shadow_bias
+		var n0 := _rig.sun.shadow_normal_bias
+		_rig.sun.shadow_bias = 0.4
+		_rig.sun.shadow_normal_bias = 4.0
+		await _frames(12)
+		await _shot(UserPaths.DEV + "mine_part_more_bias.png")
+		_rig.sun.shadow_bias = b0
+		_rig.sun.shadow_normal_bias = n0
+		print("[mine-look] sun shadow bias %.3f normal bias %.3f, max distance %.0f, mode %d, terrain casts within %d tiles"
+				% [_rig.sun.shadow_bias, _rig.sun.shadow_normal_bias, _rig.sun.directional_shadow_max_distance,
+				_rig.sun.directional_shadow_mode, _streamer.shadow_radius])
+		get_tree().quit()
+		return
+	for fx in [true, false]:
+		for lines in [true, false]:
+			vp.screen_space_aa = Viewport.SCREEN_SPACE_AA_FXAA if fx else Viewport.SCREEN_SPACE_AA_DISABLED
+			_mat.set_shader_parameter("print_lines_enabled", lines)
+			for m in [TerrainTile.instance_material(), TerrainTile.stud_material()]:
+				m.set_shader_parameter("print_lines_enabled", lines)
+			await _frames(12)
+			await _shot(UserPaths.DEV + "mine_look_fxaa_%s_lines_%s.png" % ["on" if fx else "off", "on" if lines else "off"])
+	get_tree().quit()
+
+
+func _click(at: Vector2) -> void:
+	var m := InputEventMouseMotion.new()
+	m.position = at
+	m.global_position = at
+	Input.parse_input_event(m)
+	await _frames(2)
+	for down in [true, false]:
+		var b := InputEventMouseButton.new()
+		b.button_index = MOUSE_BUTTON_LEFT
+		b.position = at
+		b.global_position = at
+		b.pressed = down
+		b.button_mask = MOUSE_BUTTON_MASK_LEFT if down else 0
+		Input.parse_input_event(b)
+		await _frames(2)
+
 
 func _run_gate() -> void:
 	await _frames(10)

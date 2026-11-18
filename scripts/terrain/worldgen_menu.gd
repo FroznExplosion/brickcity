@@ -1,6 +1,6 @@
-extends PanelContainer
+extends MenuScreen
 
-## THE WORLD GENERATION MENU (F9 in the mine world). Docs/MineWorld.md 6.
+## THE WORLD GENERATION MENU (M in the mine world, or the pause menu). Docs/MineWorld.md 6.
 ##
 ## Edits a COPY of the world's settings; nothing changes in the world until
 ## "Generate world". Tabs follow the zylanntest world builder: World, Shape,
@@ -11,9 +11,16 @@ extends PanelContainer
 ## without touching the live world's, so it can be redrawn while the world
 ## keeps streaming. Click it to choose where you start.
 ##
+## Sized to the screen the way the Options menu is: a MenuScreen
+## (menu/core/MenuScreen.gd). The presets bar is in the header, the status,
+## Close and Generate world in the footer -- both outside the scrolling body,
+## so they are always on screen; each tab page scrolls on its own, and the
+## map shrinks (or goes under the tabs on a narrow window) to fit.
+##
 ## What the host gives it: `settings`, `spawn_xz`, `generate(settings)`,
-## `menu_closed()`, `forget_edits()`. The host opens it on a layer of its own
-## with the tree paused (MineWorld.toggle_menu), so it alone takes input.
+## `menu_closed()`, `forget_edits()`. Call `setup(host)` BEFORE adding it to
+## the tree; the host opens it on a layer of its own (MineWorld.toggle_menu),
+## so it alone takes input.
 
 const Presets := preload("res://scripts/terrain/worldgen_presets.gd")
 
@@ -34,6 +41,15 @@ var _spawn_label: Label
 var _materials: PackedStringArray
 var _name_edit: LineEdit
 var _seed_box: SpinBox
+var _main: BoxContainer
+var _bar: HFlowContainer
+var _generate_button: Button
+
+
+func _init() -> void:
+	screen_title = "World generation"
+	opaque_backdrop = false
+	dim_backdrop = true
 
 
 func setup(p_host: Node) -> void:
@@ -42,58 +58,48 @@ func setup(p_host: Node) -> void:
 	_materials = BrickTerrain.material_names()
 	var stud := BrickWorld.get_stud_metres()
 	_map_centre = Vector2i(int(host.spawn_xz.x / stud), int(host.spawn_xz.y / stud))
+
+
+func _build_content() -> void:
 	_build()
 	_refresh_map()
 
 
+## The Generate world button (the menu gate checks it is on screen).
+func generate_button() -> Button:
+	return _generate_button
+
+
 func _build() -> void:
-	# Every click on the panel is the menu's, empty parts included (a
-	# container's default passes them on to the game).
-	mouse_filter = Control.MOUSE_FILTER_STOP
-	set_anchors_preset(Control.PRESET_FULL_RECT)
-	offset_left = 40
-	offset_top = 30
-	offset_right = -40
-	offset_bottom = -30
-	var bg := StyleBoxFlat.new()
-	bg.bg_color = Color(0.07, 0.08, 0.11, 0.96)
-	bg.set_corner_radius_all(6)
-	bg.set_content_margin_all(12)
-	add_theme_stylebox_override("panel", bg)
-
-	var root := VBoxContainer.new()
-	root.add_theme_constant_override("separation", 8)
-	add_child(root)
-
-	var title := Label.new()
-	title.text = "World generation"
-	title.add_theme_font_size_override("font_size", 20)
-	root.add_child(title)
-
-	# --- presets bar
-	var bar := HBoxContainer.new()
-	bar.add_theme_constant_override("separation", 6)
-	root.add_child(bar)
-	bar.add_child(_label("Preset"))
+	# --- presets bar, in the header beside the title (never scrolls away)
+	_bar = HFlowContainer.new()
+	_bar.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_bar.add_theme_constant_override("separation", 6)
+	header.add_child(_bar)
+	_bar.add_child(_label("Preset"))
 	_preset_pick = OptionButton.new()
-	_preset_pick.custom_minimum_size = Vector2(220, 0)
-	bar.add_child(_preset_pick)
-	_button(bar, "Load", _on_load)
-	_button(bar, "Save", _on_save)
-	_button(bar, "Duplicate", _on_duplicate)
-	_button(bar, "Delete", _on_delete)
-	_button(bar, "Reset", _on_reset)
+	_preset_pick.fit_to_longest_item = false
+	_preset_pick.custom_minimum_size = Vector2(160, 0)
+	_bar.add_child(_preset_pick)
+	_button(_bar, "Load", _on_load)
+	_button(_bar, "Save", _on_save)
+	_button(_bar, "Duplicate", _on_duplicate)
+	_button(_bar, "Delete", _on_delete)
+	_button(_bar, "Reset", _on_reset)
 	_fill_presets()
 
-	var main := HBoxContainer.new()
-	main.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	main.add_theme_constant_override("separation", 12)
-	root.add_child(main)
+	# --- tabs and map, in the scrolling body
+	_main = BoxContainer.new()
+	_main.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	_main.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_main.add_theme_constant_override("separation", 12)
+	content.add_child(_main)
 
 	_tabs = TabContainer.new()
+	_tabs.clip_tabs = true
 	_tabs.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_tabs.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	main.add_child(_tabs)
+	_main.add_child(_tabs)
 	_build_world_tab()
 	_build_shape_tab()
 	_build_sea_tab()
@@ -102,23 +108,26 @@ func _build() -> void:
 	_build_biomes_tab()
 	_build_underground_tab()
 
-	# --- the map, always beside the tabs
+	# --- the map, beside the tabs (under them on a narrow window)
 	var side := VBoxContainer.new()
 	side.add_theme_constant_override("separation", 6)
-	main.add_child(side)
+	_main.add_child(side)
 	side.add_child(_label("Map (click to choose the spawn)"))
 	_map = TextureRect.new()
+	_map.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
 	_map.custom_minimum_size = Vector2(MAP_SIZE * 1.5, MAP_SIZE * 1.5)
 	_map.stretch_mode = TextureRect.STRETCH_SCALE
 	_map.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
 	_map.mouse_filter = Control.MOUSE_FILTER_STOP
+	_map.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
 	_map.gui_input.connect(_on_map_input)
 	side.add_child(_map)
-	var mrow := HBoxContainer.new()
+	var mrow := HFlowContainer.new()
 	side.add_child(mrow)
 	var mode := OptionButton.new()
 	mode.add_item("Ground", 0)
 	mode.add_item("Biomes", 1)
+	mode.select(_map_mode)
 	mode.item_selected.connect(func(i: int) -> void:
 		_map_mode = i
 		_refresh_map())
@@ -130,23 +139,48 @@ func _build() -> void:
 		_map_step = mini(256, _map_step * 2)
 		_refresh_map())
 	_button(mrow, "Redraw", _refresh_map)
-	_spawn_label = _label("")
+	_spawn_label = MenuFit.fit_label(_label(""), true)
 	side.add_child(_spawn_label)
-	_button(side, "Random spawn (nearest dry land to 0,0)", func() -> void:
+	_button(side, "Random spawn", func() -> void:
 		s["spawn"] = null
 		_update_spawn_label())
 	_update_spawn_label()
 
-	# --- bottom
-	var bottom := HBoxContainer.new()
-	bottom.add_theme_constant_override("separation", 8)
-	root.add_child(bottom)
-	_status = _label("")
-	_status.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	bottom.add_child(_status)
-	_button(bottom, "Close", _close)
-	var gen := _button(bottom, "Generate world", _on_generate)
-	gen.custom_minimum_size = Vector2(180, 36)
+	# --- footer: status, Close, Generate world (outside the scroll: always seen)
+	_status = MenuFit.fit_label(_label(""), false)
+	_status.custom_minimum_size = Vector2(120, 0)
+	footer.add_child(_status)
+	_button(footer, "Close", _close)
+	_generate_button = _button(footer, "Generate world", _on_generate)
+
+
+## The map and the tab rows follow the window: beside the tabs when there is
+## room, under them on a narrow window; never taller than the body can show.
+func _on_relayout(vp_size: Vector2) -> void:
+	if _main == null:
+		return
+	var narrow := MenuFit.is_narrow(vp_size)
+	_main.vertical = narrow
+	var avail_w := available_width(vp_size)
+	# Header, separator, footer and padding take about this much of the height.
+	var chrome := 190.0 if MenuFit.is_short(vp_size) else 230.0
+	var room_h := vp_size.y - float(MenuFit.page_padding(vp_size)) * 2.0 - chrome
+	var side_px := minf(MAP_SIZE * 1.5, avail_w * (0.9 if narrow else 0.34))
+	if not narrow:
+		side_px = minf(side_px, room_h - 110.0)
+	side_px = maxf(side_px, 128.0)
+	_map.custom_minimum_size = Vector2(side_px, side_px)
+	# Under the map the tabs need a height of their own (their pages scroll).
+	_tabs.custom_minimum_size = Vector2(0, maxf(room_h, 200.0) if narrow else 0.0)
+	var label_w := clampf(avail_w * (0.3 if narrow else 0.18), 110.0, 300.0)
+	for l in _tabs.find_children("*", "Label", true, false):
+		if (l as Label).has_meta(&"row_label"):
+			(l as Label).custom_minimum_size.x = label_w
+
+
+func _on_back() -> bool:
+	_close()
+	return true
 
 
 # ---------------------------------------------------------------------------
@@ -169,7 +203,8 @@ func _build_world_tab() -> void:
 	var r := _row(p, "Name")
 	_name_edit = LineEdit.new()
 	_name_edit.text = str(s.name)
-	_name_edit.custom_minimum_size = Vector2(240, 0)
+	_name_edit.custom_minimum_size = Vector2(120, 0)
+	_name_edit.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_name_edit.text_changed.connect(func(t: String) -> void: s["name"] = t)
 	r.add_child(_name_edit)
 	r = _row(p, "Seed")
@@ -178,7 +213,7 @@ func _build_world_tab() -> void:
 	_seed_box.max_value = 2147483647
 	_seed_box.step = 1
 	_seed_box.value = int(s.seed)
-	_seed_box.custom_minimum_size = Vector2(180, 0)
+	_seed_box.custom_minimum_size = Vector2(120, 0)
 	_seed_box.value_changed.connect(func(v: float) -> void:
 		s["seed"] = int(v)
 		_refresh_map())
@@ -344,9 +379,7 @@ func _label(t: String) -> Label:
 
 
 func _note(t: String) -> Label:
-	var l := _label(t)
-	l.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	l.custom_minimum_size = Vector2(300, 0)
+	var l := MenuFit.fit_label(_label(t), true)
 	l.add_theme_color_override("font_color", Color(0.7, 0.75, 0.85))
 	l.add_theme_font_size_override("font_size", 12)
 	return l
@@ -363,8 +396,11 @@ func _row(p: Control, t: String) -> HBoxContainer:
 	r.add_theme_constant_override("separation", 8)
 	p.add_child(r)
 	if t != "":
-		var l := _label(t)
+		# Wraps rather than widening the page; _on_relayout sizes it to the window.
+		var l := MenuFit.fit_label(_label(t), true)
+		l.size_flags_horizontal = Control.SIZE_FILL
 		l.custom_minimum_size = Vector2(300, 0)
+		l.set_meta(&"row_label", true)
 		r.add_child(l)
 	return r
 
@@ -384,7 +420,8 @@ func _float_slider(p: Control, t: String, d: Dictionary, key: String, lo: float,
 	sl.min_value = lo
 	sl.max_value = hi
 	sl.step = step
-	sl.custom_minimum_size = Vector2(220, 0)
+	sl.custom_minimum_size = Vector2(90, 0)
+	sl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	sl.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	var box := SpinBox.new()
 	box.min_value = lo
@@ -552,10 +589,14 @@ func _on_reset() -> void:
 
 
 func _rebuild_tabs() -> void:
-	for c in get_children():
-		c.queue_free()
+	# The scaffold (header, body, footer) stays; what _build put in it goes.
+	_bar.free()
+	_main.free()
+	for c in footer.get_children():
+		c.free()
 	_map = null
 	_build()
+	_relayout()
 	_refresh_map()
 
 
@@ -566,13 +607,23 @@ func _on_generate() -> void:
 	host.generate(settings)
 
 
+## M closes it too (Escape is MenuScreen's ui_cancel -> _on_back).
 func _unhandled_input(event: InputEvent) -> void:
-	if event is InputEventKey and event.pressed and not event.echo 			and ((event as InputEventKey).keycode == KEY_F9 or (event as InputEventKey).keycode == KEY_ESCAPE):
+	var k := event as InputEventKey
+	if k != null and k.pressed and not k.echo and (k.keycode == KEY_M or k.keycode == KEY_ESCAPE):
 		get_viewport().set_input_as_handled()
 		_close()
+		return
+	super(event)
+
+
+var _closed := false
 
 
 func _close() -> void:
+	if _closed:
+		return
+	_closed = true
 	host.menu_closed()
 	queue_free()
 
