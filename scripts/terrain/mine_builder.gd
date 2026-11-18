@@ -202,7 +202,8 @@ func _process(delta: float) -> void:
 
 func update_target() -> void:
 	var c: Camera3D = host._eye_camera()
-	var from := c.global_position
+	# The field is in the mine world's terrain frame (its origin shift).
+	var from: Vector3 = host.to_local(c.global_position)
 	var dir := -c.global_transform.basis.z
 	target = BrickTerrain.ray_cell(from, dir, REACH)
 	if target.is_empty():
@@ -212,7 +213,8 @@ func update_target() -> void:
 	var lo := _cell_lo(b)
 	var size := _block_size_m()
 	_outline.visible = true
-	_outline.global_transform = Transform3D(Basis.from_scale(size * 1.004), lo - size * 0.002)
+	_outline.global_transform = Transform3D(Basis.from_scale(size * 1.004),
+			host.to_global(lo - size * 0.002))
 
 
 ## The block (on this size's lattice) holding plate cell `cell`.
@@ -319,7 +321,8 @@ func pour(to: Vector3i) -> bool:
 ## A fluid slot's LMB: the fluid cell looked at goes (a source too).
 func take_fluid() -> bool:
 	var cam: Camera3D = host._eye_camera()
-	var hit: Dictionary = BrickFluid.ray_cell(cam.global_position, -cam.global_transform.basis.z, REACH)
+	var hit: Dictionary = BrickFluid.ray_cell(host.to_local(cam.global_position),
+			-cam.global_transform.basis.z, REACH)
 	if hit.is_empty() or int(hit.fluid) == 0:
 		return false
 	var f := hotbar[slot]
@@ -368,9 +371,9 @@ func _blocks_player(block: Vector3i) -> bool:
 	var box := AABB(_cell_lo(block), _block_size_m())
 	var feet: Vector3
 	if host.on_foot:
-		feet = (host.pawn as Pawn).feet()
+		feet = host.to_local((host.pawn as Pawn).feet())
 	else:
-		feet = (host.walker as Node3D).global_position
+		feet = host.to_local((host.walker as Node3D).global_position)
 	var me := AABB(feet - Vector3(0.3, 0.0, 0.3), Vector3(0.6, 1.75, 0.6))
 	return box.intersects(me)
 

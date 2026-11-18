@@ -89,9 +89,11 @@ func setup(p_host: Node) -> void:
 	_lava_mat = ShaderMaterial.new()
 	_lava_mat.shader = shader
 	_lava_mat.set_shader_parameter("lava", true)
-	Pawn.water_probe = surface_at
-	Pawn.water_flow = flow_at
-	Pawn.water_drag = drag_at
+	# The pawn asks with global positions; the water is in the mine world's
+	# terrain frame (its origin shift, Docs/MineWorld.md 15).
+	Pawn.water_probe = func(p: Vector3) -> float: return surface_at(host.to_local(p))
+	Pawn.water_flow = func(p: Vector3) -> Vector3: return flow_at(host.to_local(p))
+	Pawn.water_drag = func(p: Vector3) -> float: return drag_at(host.to_local(p))
 	reset_world(20.0, 4, false)
 	set_process(true)
 
@@ -306,8 +308,9 @@ func _burn(delta: float) -> void:
 		if pawn == player and not host.get("on_foot"):
 			continue
 		# Just over the feet: a pawn stands on the studs, a plate up, so a
-		# probe higher than that missed a two-plate lava sheet.
-		if BrickFluid.fluid_at(pawn.feet() + pawn.up * 0.03) == 2:
+		# probe higher than that missed a two-plate lava sheet. In the
+		# terrain frame (the origin shift, MineWorld.md 15).
+		if BrickFluid.fluid_at(host.to_local(pawn.feet() + pawn.up * 0.03)) == 2:
 			pawn.health.apply_impact(LAVA_DPS * delta, Elements.FIRE)
 
 
