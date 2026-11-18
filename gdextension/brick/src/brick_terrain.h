@@ -61,6 +61,8 @@ constexpr float BOND_CHANCE = 0.86f;
 /// section. Deep enough for a crater and a cave mouth; everything below is
 /// uniform rock and is not in the mask at all (section 17.4).
 constexpr int SECTION_BELOW = 54;
+/// A deep section's height (Docs/MineWorld.md 16): 32 bricks, 13.4 m.
+constexpr int DEEP_SECTION_PLATES = 96;
 
 /// Plates per brick, spelled out because the terrain mask is indexed in
 /// PLATES and the packer still thinks in bricks (section 17.3).
@@ -303,6 +305,13 @@ struct TileSample {
     int tx = 0, tz = 0;
     int y0 = 0;        ///< plate index of the bottom of `vox`
     int ysize = 0;     ///< plates of `vox`
+    /// The plates this sample DRAWS and collides, when narrower than `vox`
+    /// (unset: own_hi <= own_lo, all of it). The deep tier (Docs/MineWorld.md
+    /// 16) samples one guard plate past a boundary so faces there are right,
+    /// and leaves that plate to whoever owns it.
+    int own_lo = 0, own_hi = 0;
+    int lo_owned() const { return own_hi > own_lo ? own_lo : y0; }
+    int hi_owned() const { return own_hi > own_lo ? own_hi : y0 + ysize; }
     std::vector<uint8_t> vox;    ///< SPAN * ysize * SPAN, material, 0 = air
     /// Air the outside world can reach, flood-filled from the sky and from
     /// the section's sides. A sealed chamber is air, but it is not OPEN air,
@@ -790,6 +799,15 @@ public:
     ///   boxes         PackedFloat32Array, 6 floats a box: centre then size
     ///   piece_count, triangle_count, stud_count, scatter_count, build_ms
     static Dictionary build_tile(int tx, int tz);
+    /// THE DEEP TIER (Docs/MineWorld.md 16). On: a surface tile's mask stops
+    /// at a fixed plate (deep_top) and everything under it is drawn by
+    /// sections, `build_section`, on an absolute grid of DEEP_SECTION_PLATES.
+    static void set_deep_tier(bool on);
+    static bool get_deep_tier();
+    static int deep_top(int tx, int tz);
+    static int get_deep_section_plates();
+    static int get_bedrock_plate();
+    static Dictionary build_section(int tx, int sy, int tz);
 
     /// A COARSE block of ground, for distance. Docs/Terrain.md 19.4.
     ///

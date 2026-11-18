@@ -338,12 +338,24 @@ func eye_offset() -> float:
 ## Where the eye is between physics ticks -- what a camera should follow, since
 ## the body moves 30 times a second under a faster picture.
 func eye_interpolated() -> Vector3:
-	return body.get_global_transform_interpolated().origin + up * eye_offset()
+	return _origin_interpolated() + up * eye_offset()
+
+
+## The body's interpolated origin -- unless it was just put somewhere (place,
+## a landing, a respawn): for a few ticks after, the interpolation still
+## answered the OLD place (seen 4 physics ticks after landing from a flight,
+## with the body disabled while flying), and the camera flashed back there
+## (Docs/MineWorld.md 16). Nothing a pawn does moves it 8 m in one tick.
+func _origin_interpolated() -> Vector3:
+	var o := body.get_global_transform_interpolated().origin
+	if o.distance_squared_to(body.global_position) > 64.0:
+		return body.global_position
+	return o
 
 
 ## The feet between physics ticks, at the body's present height.
 func feet_interpolated() -> Vector3:
-	return body.get_global_transform_interpolated().origin - up * _height * 0.5
+	return _origin_interpolated() - up * _height * 0.5
 
 
 ## Feet up to the eye: EYE_HEIGHT standing, a brick less crouched.

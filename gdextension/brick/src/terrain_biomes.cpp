@@ -167,6 +167,7 @@ void apply_gen_dict(GenParams &p, const Dictionary &d) {
     GP_INT("basin_sand_depth", basin_sand_depth)
     GP_BOOL("water", water)
     GP_BOOL("caves", caves)
+    GP_BOOL("deep_caves", deep_caves)
     GP_FLOAT("cave_intensity", cave_intensity)
     GP_FLOAT("cave_min_depth_m", cave_min_depth_m)
     GP_FLOAT("cave_max_depth_m", cave_max_depth_m)
@@ -265,6 +266,7 @@ Dictionary gen_params_to_dict() {
     d["basin_sand_depth"] = p.basin_sand_depth;
     d["water"] = p.water;
     d["caves"] = p.caves;
+    d["deep_caves"] = p.deep_caves;
     d["cave_intensity"] = p.cave_intensity;
     d["cave_min_depth_m"] = p.cave_min_depth_m;
     d["cave_max_depth_m"] = p.cave_max_depth_m;
@@ -490,6 +492,11 @@ BColumn biome_column(const GenParams &p, uint32_t seed, int x, int z) {
     return col;
 }
 
+int biome_bedrock_plate() {
+    const GenParams &p = gen_params();
+    return fbrick(p.sea_m + p.bedrock_m) * PLATES_PER_CELL;
+}
+
 int biome_top(const BColumn &c) {
     return c.snow ? (int)MAT_SNOW : c.top;
 }
@@ -498,7 +505,12 @@ int biome_top(const BColumn &c) {
 
 static bool cave_cell(const GenParams &p, uint32_t seed, int x, int yb, int z, float depth_m) {
     const float px = (float)x * STUD_M, py = (float)yb * BRICK_M, pz = (float)z * STUD_M;
-    if (p.caves && depth_m >= p.cave_min_depth_m && depth_m <= p.cave_max_depth_m) {
+    // Below cave_max_depth_m the same caves go on, at their deepest form,
+    // down to three bricks over the bedrock (deep worlds, Docs/MineWorld.md
+    // 16): one function of the cell, so a cave crossing from a surface
+    // tile's mask into a deep section is the same cave.
+    const bool deep_ok = p.deep_caves && yb > fbrick(p.sea_m + p.bedrock_m) + 3;
+    if (p.caves && depth_m >= p.cave_min_depth_m && (depth_m <= p.cave_max_depth_m || deep_ok)) {
         const float deep = clampf(depth_m / std::max(p.cave_max_depth_m, 1.0f), 0.0f, 1.0f);
         const float w = (0.045f + 0.11f * p.cave_intensity) * (1.0f + 0.6f * deep);
         const float a = value_noise3(px * 0.10f, py * 0.14f, pz * 0.10f, seed + 5501U);
@@ -511,7 +523,11 @@ static bool cave_cell(const GenParams &p, uint32_t seed, int x, int yb, int z, f
         // Cheese: big chambers, deeper down only.
         if (deep > 0.45f) {
             const float ch = value_noise3(px * 0.045f, py * 0.08f, pz * 0.045f, seed + 777U);
-            if (ch > 0.50f - 0.22f * p.cave_intensity) {
+            // Under the old deepest cave, chambers grow rarer over 10 m: at
+            // full strength all the way down a quarter of the deep world was
+            // air (mine_world_probe, 2026-11-18).
+            const float under = clampf((depth_m - p.cave_max_depth_m) / 10.0f, 0.0f, 1.0f);
+            if (ch > 0.50f - 0.22f * p.cave_intensity + 0.10f * under) {
                 return true;
             }
         }
