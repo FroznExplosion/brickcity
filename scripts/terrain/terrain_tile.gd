@@ -342,6 +342,12 @@ func _add_surface(arrays: Array, material: Material,
 	if range_end > 0.0:
 		mi.visibility_range_end_margin = RANGE_FADE
 	mi.visibility_range_fade_mode = GeometryInstance3D.VISIBILITY_RANGE_FADE_SELF
+	# The tile's shadow choice (set_casts_shadow), for a surface added after
+	# it was made -- the chamfered near mesh lands frames later, and it cast
+	# whatever the tile said: the ground round the camera shadowed itself into
+	# a fine grain (Docs/MineWorld.md 11).
+	if not _shadow_on:
+		mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	add_child(mi)
 	return mi
 

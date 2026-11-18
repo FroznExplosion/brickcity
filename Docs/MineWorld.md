@@ -10,7 +10,7 @@ the brick terrain. The old fixed-field destruction bench is still there:
     godot --headless --path . --script res://tools/probes/mine_world_probe.gd
 
 Keys: **F** fly/walk (flying goes through everything; landing is where you
-are) · **B** build mode (section 8) · **F9** world generation
+are) · **B** build mode (section 8) · **M** world generation
 menu · **F3** readout · **T** one hour on · left mouse on foot (not building)
 shoots, and the ground breaks where it is hit.
 
@@ -88,12 +88,21 @@ adapts. Nothing bakes the sun into the ground (it moves); the detail tiles
 within two tiles of the player cast into the shadow map. Under the ground the
 ambient fades with depth, so caves are dark.
 
-## 6. World generation menu (F9)
+## 6. World generation menu (M, or Escape > World generation...)
 
 `scripts/terrain/worldgen_menu.gd`, modelled on the zylanntest world builder.
 It edits a copy; nothing changes until **Generate world**, which tears every
 tier down (waiting for bakes), sets the new params, and rebuilds round the
-spawn. F9 or Escape closes it.
+spawn. M or Escape closes it.
+
+**Not F9.** It was F9, and in the editor's embedded game view F9 is the
+editor's own "Suspend/Resume Embedded Project" shortcut: the menu opened and
+the editor suspended the game in the same keypress. A suspended tree makes
+`can_process()` false for every node, PROCESS_MODE_ALWAYS included, so the
+menu took no clicks at all; F9 again resumed the game and closed the menu,
+and the mouse was left as a cursor. The pause menu (Escape) is allowed here
+too (`terrain_scene.gd` and BrickcityMenuHost's scene hooks) and has a
+"World generation..." entry.
 
 It opens like the pause menu (`menu/core/MenuManager.gd`): a canvas layer of
 its own above everything (layer 80, process always) with a dimmed backdrop
@@ -227,3 +236,36 @@ every frame, so the arms and gun come along (`FpsRig.switch_mode(...,
 keep_view)`, `follow_flight`; the planet still uses the walker's camera).
 Landing puts the pawn exactly where the flight is -- in mid-air it falls --
 unless that is inside the ground, then on top of it.
+
+## 11. Why the bricks looked fuzzy
+
+Not a texture, and not the printed-plastic pattern: SHADOW ACNE. The mine
+world let the ground cast into the sun's shadow map (the sun moves, so its
+shadow cannot be baked into the ground as the heightfield test bakes it), and
+a brick top shadowing itself drew a fine diagonal grain over every lit
+surface, the soft-shadow filter's noise on top. Measured with
+`-- --gate=look --look=parts` (the same close view with each of the terrain
+shader's effects off in turn, then the sun's shadow off): only the shadow
+made the difference.
+
+- The ground no longer casts sun shadows (`TerrainStreamer.shadow_radius
+  -1`). Trees, the player and debris still cast onto it. Underground, the
+  sun fades with depth as the ambient does, so caves stay dark.
+- `TerrainTile._add_surface` now honours the tile's shadow choice: the
+  chamfered near mesh lands frames after the tile is built and cast whatever
+  the tile said -- in every scene with terrain, not just this one.
+- FXAA (the Options menu's default) softens fine detail a little on top;
+  `-- --gate=look` takes the view with it on and off.
+- The printed surface itself is drawn by the shaders (layer lines, nozzle
+  paths, `print_surface.gdshaderinc` and a baked bead texture); leaf bricks
+  use the leaf texture, which is soft when seen from inside a crown.
+
+## 12. Testing
+
+| Pass | What it checks |
+|---|---|
+| `tools/probes/mine_world_probe.gd` (headless) | generator, biomes, ores, bedrock, blocks, whole-brick breaking, saves |
+| `-- --gate` | spawn, flight (no collision, arms follow), endless far rings, holes, menu stops the world, build, landing, edit frame times, save round trip |
+| `-- --gate=menu` | the generation menu and the pause menu clicked with real mouse events |
+| `-- --gate=look [--look=parts]` | the close view under different settings (the fuzz hunt) |
+
