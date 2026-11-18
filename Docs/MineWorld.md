@@ -313,7 +313,7 @@ no caves pay nothing.
 - The mask reaches down to the deepest cave a column can have (`low_p`), so a
   cave never runs out of the bottom of it (the second suspect).
 
-## 15. The ground comes down
+## 14. The ground comes down
 
 What an edit leaves hanging falls: loose ground as pieces (they stay, are
 unloaded past the detail tiles and saved with the world), sand and gravel
