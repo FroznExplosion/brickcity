@@ -174,7 +174,7 @@ func clear_all() -> void:
 
 
 func _stream_step() -> void:
-	var here := camera.global_position
+	var here := to_local(camera.global_position)
 	var cell_m := float(STREAM_CELL) * BrickWorld.get_stud_metres()
 	if _plan_at.distance_to(here) > cell_m * 0.25:
 		_plan_at = here
@@ -251,6 +251,17 @@ func _make_solid(c: Vector2i) -> void:
 	PhysicsServer3D.body_set_state(body, PhysicsServer3D.BODY_STATE_TRANSFORM, global_transform)
 	PhysicsServer3D.body_set_space(body, get_world_3d().space)
 	_solid[c] = body
+	set_notify_transform(true)
+
+
+## Trunk bodies have no node: when this node moves (the mine world's origin
+## shift) they move with it.
+func _notification(what: int) -> void:
+	if what == NOTIFICATION_TRANSFORM_CHANGED:
+		for c in _solid:
+			var body: RID = _solid[c]
+			if body.is_valid():
+				PhysicsServer3D.body_set_state(body, PhysicsServer3D.BODY_STATE_TRANSFORM, global_transform)
 
 
 func _unsolid(c: Vector2i) -> void:
@@ -336,7 +347,7 @@ func _process_body(delta: float) -> void:
 	var keys := _sets.keys()
 	var key: String = keys[_turn % keys.size()]
 	_turn += 1
-	var here := camera.global_position
+	var here := to_local(camera.global_position)
 	var was: Vector3 = _sorted_at.get(key, Vector3.INF)
 	if was.distance_to(here) < RESORT_METRES:
 		return
@@ -348,7 +359,7 @@ func _process_body(delta: float) -> void:
 func _update() -> void:
 	if camera == null:
 		return
-	var here := camera.global_position
+	var here := to_local(camera.global_position)
 	for key in _sets:
 		(_sets[key] as ImpostorLod).update(here)
 		_sorted_at[key] = here

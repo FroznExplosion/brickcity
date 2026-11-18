@@ -70,9 +70,8 @@ The near tier already streams. The far rings were laid out round the world's
 origin; `TerrainCoarse.anchor` now lays them out round any tile, and
 `build_begin` / `build_poll` bake a tier without blocking. When the player is
 16 tiles from the tile the rings were laid out round, a new tier is baked
-round them on the workers and swapped in when done. Positions are float32, so
-past about 20 km from the origin precision starts to show; an origin shift is
-the next step if that matters.
+round them on the workers and swapped in when done. Positions are float32;
+the origin shift (section 15) keeps the eye near the global origin.
 
 ## 4. Trees
 
@@ -284,6 +283,8 @@ made the difference.
 |---|---|
 | `tools/probes/mine_world_probe.gd` (headless) | generator, biomes, ores, bedrock, blocks, whole-brick breaking, saves |
 | `-- --gate` | spawn, flight (no collision, arms follow), endless far rings, holes, menu stops the world, build, landing, edit frame times, save round trip |
+| `-- --gate=shift` | origin shifts on a 1.2 km flight: no holes, lands, builds |
+| `-- --gate=flight` | fast flight: worst frame, frames over 33 ms, what each slow one spent |
 | `-- --gate=cave` | land in a reachable cave, still standing 200 ticks later |
 | `-- --gate=menu` | the generation menu and the pause menu clicked with real mouse events |
 | `-- --gate=look [--look=parts]` | the close view under different settings (the fuzz hunt) |
@@ -346,3 +347,29 @@ unloaded past the detail tiles and saved with the world), sand and gravel
 straight down like Minecraft's, landing as ground again. The buildings'
 stress rules on virtual bricks; Docs/TerrainCollapse.md. Gate:
 `terrain_test.tscn -- --gate=collapse`; probe `terrain_collapse_probe`.
+
+## 15. Origin shift
+
+Positions are float32: past ~20 km from the origin the precision shows. When
+the eye is `shift_at` (4 km) from the global origin, the mine world node
+moves back by whole tiles, with `PlanetFrame.shift` (the node half of the
+planet's `recentre`, without its WorldFrame: the mine world keeps its own
+`origin_shift`). The planet's way, so nothing inside has to know:
+
+- Every child of the mine world -- tiles, far rings, trees, water, ground
+  collapse pieces, debris, the player -- keeps its LOCAL position, and the
+  local frame is the TERRAIN frame the field is laid out in (integer studs
+  and plates, which never move). Only global positions change.
+- So only two kinds of code had to change: a global position used as a
+  terrain one takes `to_local` (`_eye()` is the terrain eye, `_eye_render()`
+  the drawn one; a shot's hit point; the builder's ray and the player box;
+  the pawn's water probes; TerrainTrees' camera), and a terrain position used
+  to place a node takes `to_global` (`_fly_to`, the builder's outline,
+  landing).
+- Nodeless bodies follow their node: a tile's collider and the trunks' bodies
+  update on NOTIFICATION_TRANSFORM_CHANGED.
+- Whole tiles, so anything patterned on the stud lattice in world space (the
+  printed surface, the grid light) lines up as before.
+- `-- --gate=shift` lowers `shift_at` to 300 m and flies 1.2 km: 5 shifts,
+  the eye 4 m from the global origin, no holes, the pawn lands and stands, a
+  block placed where looked at (2026-11-18).

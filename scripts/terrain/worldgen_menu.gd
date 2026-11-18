@@ -228,7 +228,7 @@ func _build_world_tab() -> void:
 	_button(p, "Forget changes to this world", func() -> void:
 		_close()
 		host.forget_edits())
-	p.add_child(_note("The world has no edge: the far rings move with you. Past about 20 km from the start the float precision of positions starts to show."))
+	p.add_child(_note("The world has no edge: the far rings move with you, and the world is moved back under you every 4 km so positions stay precise."))
 
 
 func _build_shape_tab() -> void:
