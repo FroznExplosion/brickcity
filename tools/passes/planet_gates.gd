@@ -87,7 +87,7 @@ func _run_gate() -> void:
 		over.current = true
 		await host._frames(30)
 		await _shot("planet_gate_town")
-		host.walker.camera.current = true
+		host.view_camera().current = true
 		over.queue_free()
 	# Walk 30 s forward.
 	var start := host.walker.global_position - host.planet.global_position
@@ -319,6 +319,13 @@ func _run_pawn_gate() -> void:
 		host.walker.rise = 1.0
 		await host._frames(1)
 	host.walker.rise = 0.0
+	# Flying keeps the pawn's camera drawn, with the arms and gun, where the
+	# walker's camera is (FpsRig keep_view, Docs/MineWorld.md 10).
+	await host._frames(2)
+	_check("flying keeps the arms and gun with the camera", host.cam.current and host.view.rig.visible
+			and host.cam.global_position.distance_to(host.walker.camera.get_global_transform_interpolated().origin) < 0.5,
+			"pawn camera drawn %s, arms %s, %.2f m from the flight camera" % [host.cam.current,
+			host.view.rig.visible, host.cam.global_position.distance_to(host.walker.camera.get_global_transform_interpolated().origin)])
 	await _shot("planet_pawn_flying")
 	var t6 := Time.get_ticks_msec()
 	while _over_ground(host.walker.global_position) > 3.0 and Time.get_ticks_msec() - t6 < 40000:
@@ -3717,10 +3724,7 @@ func _look_back(b: PlanetBody, name: String) -> void:
 	await host._frames(4)
 	await _shot(name)
 	c.queue_free()
-	if host.piloting:
-		host.ship.camera.current = true
-	else:
-		host.walker.camera.current = true
+	host.view_camera().current = true
 
 
 func _run_drive_gate() -> void:

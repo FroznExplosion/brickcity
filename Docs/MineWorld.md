@@ -249,7 +249,9 @@ bench). It used to carve a sphere of plate cells, which cut bricks in pieces.
 **Flying.** Collision is off entirely while flying (the walker's layer and
 mask are 0). The pawn's camera stays the one drawn, moved with the flight
 every frame, so the arms and gun come along (`FpsRig.switch_mode(...,
-keep_view)`, `follow_flight`; the planet still uses the walker's camera).
+keep_view)`, `follow_flight`). planet.tscn does the same since 2026-11-17
+(`planet_scene._process`; `view_camera()` says which camera should be drawn:
+the ship's in the seat, else the pawn's); `-- --gate=pawn` checks it.
 Landing puts the pawn exactly where the flight is -- in mid-air it falls --
 unless that is inside the ground, then on top of it.
 

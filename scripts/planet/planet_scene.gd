@@ -489,8 +489,10 @@ func _set_on_foot(on: bool, stand_at := Vector3.INF) -> void:
 		feet = stand_at if stand_at != Vector3.INF else _ground_hit(walker.global_position)
 		if feet == Vector3.INF:
 			feet = walker.global_position
-	# The switch itself is shared with the mine world (FpsRig).
-	FpsRig.switch_mode(on, feet, walker, pawn, player, cam, view, kit)
+	# The switch itself is shared with the mine world (FpsRig). keep_view:
+	# flying keeps the pawn's camera drawn, the arms and gun on it, moved with
+	# the walker every frame (_process, FpsRig.follow_flight).
+	FpsRig.switch_mode(on, feet, walker, pawn, player, cam, view, kit, true)
 	walker.viewer.reparent(pawn.body if on else walker, false)
 
 
@@ -694,6 +696,15 @@ func _eye() -> Vector3:
 	return cam.global_position if on_foot else walker.camera.global_position
 
 
+## The camera that should be drawn now: the ship's in the seat, else the
+## pawn's -- on foot, and flying too (it follows the walker's, with the arms
+## and gun) -- or the walker's before there is a pawn.
+func view_camera() -> Camera3D:
+	if piloting:
+		return ship.camera
+	return cam if cam != null else walker.camera
+
+
 ## Into the ship's seat (11.12 step 3): the walker frozen in it, its chase camera.
 func board() -> void:
 	if pawn != null and pawn.ghost != null:
@@ -723,7 +734,7 @@ func _clear_seat() -> void:
 func step_off() -> void:
 	if piloting:
 		_clear_seat()
-		walker.camera.current = true
+		view_camera().current = true
 	if on_foot:
 		_set_on_foot(false)
 
@@ -1126,6 +1137,9 @@ func _process(delta: float) -> void:
 		if ms > 40.0 and not walker.frozen and _play_hitches.size() < 40:
 			_play_hitches.append([snappedf(ms, 0.1), int(planet.altitude_of(_anchor()))])
 	_last_us = now
+	# Flying: the pawn's camera (arms, gun) where the walker's is.
+	if not on_foot and not piloting and cam != null:
+		FpsRig.follow_flight(cam, walker)
 	var cam_pos := _eye()
 	var body := _body()
 	var alt := body.altitude_of(cam_pos)
