@@ -4386,6 +4386,144 @@ Dictionary BrickTerrain::build_tile(int tx, int tz) {
         }
     }
 
+    // --- cave colliders -----------------------------------------------------
+    //
+    // The boxes above follow each column's TOP and reach a brick (or the
+    // lowest neighbour) down. Under that -- a cave floor, the ground under an
+    // overhang, a tunnel's walls -- there was no collider at all: land in a
+    // cave and the pawn fell through bricks it could see (Docs/MineWorld.md
+    // 13). So every solid plate cell under its column's top box that touches
+    // OPEN air (the air the mesher draws faces against), or lies within a
+    // brick under a floor of it, is collided, greedily merged: along x, then
+    // z, then up. Floors come out a brick thick, so nothing falls through a
+    // plate-thin box. A box may grow through any cell that is not open air
+    // -- rock, or a sealed chamber nobody can reach -- so the rock round a
+    // cave is a few large boxes rather than a shell of thin ones (the shell
+    // alone was ~400 boxes a cave tile).
+    //
+    // Cheap where there are no caves: a column only looks at its cells when
+    // it, or a neighbour, has open air under its top.
+    int cave_boxes = 0;
+    {
+        const int ny = s.ysize;
+        const int CS = TILE + 2;   // columns -1 .. TILE
+        std::vector<uint8_t> col_open((size_t)CS * CS, 0);
+        bool any = false;
+        for (int lz = -1; lz <= TILE; ++lz) {
+            for (int lx = -1; lx <= TILE; ++lx) {
+                const int top = std::min<int>(s.tp[TileSample::idx(lx, lz)], s.y0 + ny - 1);
+                for (int yp = s.y0; yp <= top; ++yp) {
+                    if (s.open[s.vidx(lx, yp, lz)]) {
+                        col_open[(size_t)(lx + 1) + CS * (lz + 1)] = 1;
+                        any = true;
+                        break;
+                    }
+                }
+            }
+        }
+        if (any) {
+            // 0 = not wanted, 1 = wanted, 2 = in a box already.
+            std::vector<uint8_t> want((size_t)TILE * ny * TILE, 0);
+            auto widx = [&](int lx, int yp, int lz) -> size_t {
+                return (size_t)lx + TILE * ((size_t)(yp - s.y0) + (size_t)ny * lz);
+            };
+            int ylo = INT_MAX, yhi = INT_MIN;
+            for (int lz = 0; lz < TILE; ++lz) {
+                for (int lx = 0; lx < TILE; ++lx) {
+                    bool near_open = false;
+                    for (int dz = -1; dz <= 1 && !near_open; ++dz) {
+                        for (int dx = -1; dx <= 1; ++dx) {
+                            if (col_open[(size_t)(lx + dx + 1) + CS * (lz + dz + 1)]) {
+                                near_open = true;
+                                break;
+                            }
+                        }
+                    }
+                    if (!near_open) {
+                        continue;
+                    }
+                    // The top box surely covers tp - 2 .. tp.
+                    const int top = std::min<int>(s.tp[TileSample::idx(lx, lz)] - PLATES_PER_CELL,
+                            s.y0 + ny - 1);
+                    for (int yp = s.y0; yp <= top; ++yp) {
+                        if (s.vox[s.vidx(lx, yp, lz)] == MAT_AIR) {
+                            continue;
+                        }
+                        bool w = s.open_air(lx + 1, yp, lz) || s.open_air(lx - 1, yp, lz)
+                                || s.open_air(lx, yp, lz + 1) || s.open_air(lx, yp, lz - 1)
+                                || s.open_air(lx, yp - 1, lz);
+                        for (int k = 1; k <= PLATES_PER_CELL && !w; ++k) {
+                            w = s.open_air(lx, yp + k, lz);
+                        }
+                        if (w) {
+                            want[widx(lx, yp, lz)] = 1;
+                            ylo = std::min(ylo, yp);
+                            yhi = std::max(yhi, yp);
+                        }
+                    }
+                }
+            }
+            auto seed_cell = [&](int lx, int yp, int lz) -> bool {
+                return want[widx(lx, yp, lz)] == 1;
+            };
+            auto free_cell = [&](int lx, int yp, int lz) -> bool {
+                return !s.open[s.vidx(lx, yp, lz)];
+            };
+            for (int yp = ylo; yp <= yhi; ++yp) {
+                for (int lz = 0; lz < TILE; ++lz) {
+                    for (int lx = 0; lx < TILE; ++lx) {
+                        if (!seed_cell(lx, yp, lz)) {
+                            continue;
+                        }
+                        int w = 1;
+                        while (lx + w < TILE && free_cell(lx + w, yp, lz)) {
+                            ++w;
+                        }
+                        int d = 1;
+                        for (; lz + d < TILE; ++d) {
+                            bool ok = true;
+                            for (int k = 0; k < w && ok; ++k) {
+                                ok = free_cell(lx + k, yp, lz + d);
+                            }
+                            if (!ok) {
+                                break;
+                            }
+                        }
+                        int h = 1;
+                        for (; yp + h <= yhi; ++h) {
+                            bool ok = true;
+                            for (int kz = 0; kz < d && ok; ++kz) {
+                                for (int kx = 0; kx < w && ok; ++kx) {
+                                    ok = free_cell(lx + kx, yp + h, lz + kz);
+                                }
+                            }
+                            if (!ok) {
+                                break;
+                            }
+                        }
+                        for (int ky = 0; ky < h; ++ky) {
+                            for (int kz = 0; kz < d; ++kz) {
+                                for (int kx = 0; kx < w; ++kx) {
+                                    uint8_t &c = want[widx(lx + kx, yp + ky, lz + kz)];
+                                    if (c == 1) {
+                                        c = 2;
+                                    }
+                                }
+                            }
+                        }
+                        boxes.push_back(((float)lx + (float)w * 0.5f) * STUD_M);
+                        boxes.push_back(((float)yp + (float)h * 0.5f) * PLATE_M);
+                        boxes.push_back(((float)lz + (float)d * 0.5f) * STUD_M);
+                        boxes.push_back((float)w * STUD_M);
+                        boxes.push_back((float)h * PLATE_M);
+                        boxes.push_back((float)d * STUD_M);
+                        ++cave_boxes;
+                    }
+                }
+            }
+        }
+    }
+
     int curve_cells = 0;
     if (g_smooth_terrain) {
         for (int lz = 0; lz < TILE; ++lz) {
@@ -5187,6 +5325,7 @@ Dictionary BrickTerrain::build_tile(int tx, int tz) {
     out["brick_count"] = brick_count;
     out["boxes"] = boxes;
     out["box_count"] = boxes.size() / 6;
+    out["cave_box_count"] = cave_boxes;
     out["piece_count"] = (int)pieces.size();
     out["triangle_count"] = m.indices.size() / 3;
     // Cells drawn as a curve, and cells owned by a piece. They must add up

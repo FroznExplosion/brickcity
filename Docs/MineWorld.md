@@ -249,7 +249,9 @@ bench). It used to carve a sphere of plate cells, which cut bricks in pieces.
 **Flying.** Collision is off entirely while flying (the walker's layer and
 mask are 0). The pawn's camera stays the one drawn, moved with the flight
 every frame, so the arms and gun come along (`FpsRig.switch_mode(...,
-keep_view)`, `follow_flight`; the planet still uses the walker's camera).
+keep_view)`, `follow_flight`). planet.tscn does the same since 2026-11-17
+(`planet_scene._process`; `view_camera()` says which camera should be drawn:
+the ship's in the seat, else the pawn's); `-- --gate=pawn` checks it.
 Landing puts the pawn exactly where the flight is -- in mid-air it falls --
 unless that is inside the ground, then on top of it.
 
@@ -282,6 +284,57 @@ made the difference.
 |---|---|
 | `tools/probes/mine_world_probe.gd` (headless) | generator, biomes, ores, bedrock, blocks, whole-brick breaking, saves |
 | `-- --gate` | spawn, flight (no collision, arms follow), endless far rings, holes, menu stops the world, build, landing, edit frame times, save round trip |
+| `-- --gate=cave` | land in a reachable cave, still standing 200 ticks later |
 | `-- --gate=menu` | the generation menu and the pause menu clicked with real mouse events |
 | `-- --gate=look [--look=parts]` | the close view under different settings (the fuzz hunt) |
 
+## 13. Cave floors are collided
+
+Flying into a cave and landing, the pawn fell through a floor of bricks it
+could see. `build_tile`'s collider follows each column's TOP: merged boxes
+from the top a brick (or to the lowest neighbour) down. A cave floor, the
+ground under an overhang, a tunnel's walls -- everything under a column's top
+-- had no box at all.
+
+Now `build_tile` also collides every solid plate cell under its column's top
+box that touches OPEN air (the air the mesher draws faces against: sealed
+chambers are neither drawn nor collided), or lies within a brick under a
+floor, merged greedily along x, then z, then up. A box may grow through any
+cell that is not open air (rock, a sealed chamber), so the rock round a cave
+is a few large boxes; floors are at least a brick thick. A column only looks
+at its cells when it or a neighbour has open air under its top, so tiles with
+no caves pay nothing.
+
+- mine_world_probe, 40 tiles: 584 of 584 cave floors inside a box; ~260 cave
+  boxes in a cave tile (the shell alone, without growing through rock, was
+  ~400; up-first merging ~10% more); a tile bakes in about 13 ms
+  (`cave_box_count` in the result).
+- `-- --gate=cave` (also inside `-- --gate`): finds a cave the player can
+  reach near the spawn, flies in, lands, and checks the pawn is still on the
+  floor 200 physics ticks later (STANDING / FELL).
+- The mask reaches down to the deepest cave a column can have (`low_p`), so a
+  cave never runs out of the bottom of it (the second suspect).
+
+## 14. Fast flight: detail held, far tier swapped in slices
+
+`-- --gate=flight` flies 1.44 km at ~100 m/s and prints the worst frame,
+frames over 33 ms, and what each slow frame spent (2026-11-17, equal start
+temperature 59-63 C):
+
+| | worst | over 33 ms |
+|---|---|---|
+| before (`--no-fast-hold`, old swap) | 103 ms | 14 |
+| detail held above 80 m/s | 70 ms | 13 |
+| + far tier assembled in 2 ms slices | 42 ms | 2 |
+
+- **Hold** (after zylanntest's DynamicLodController): above
+  `FAST_HOLD_MPS` (80) the near tier starts no bakes, adds no studs, chamfer
+  or collision and switches no stud sets; the far tier starts no refine or
+  relod; below `FAST_RESUME_MPS` (40) everything resumes. Default flight (50
+  m/s) is not held; Shift is. F3 shows "DETAIL HELD".
+- **The real spike was the far re-anchor**: swapping in a new tier did all
+  its meshes in one frame, mostly `_offset_surface` (a GDScript loop over
+  every ring vertex). Ring blocks are now offset on the worker and
+  `build_poll(budget_ms)` puts the meshes in a slice per frame while the new
+  tier is hidden.
+- Not yet measured: the deferred stud-set switch (last change) in a window.

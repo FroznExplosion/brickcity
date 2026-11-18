@@ -50,6 +50,7 @@ func _initialize() -> void:
 	_check_preview()
 	_check_build_blocks()
 	_check_break_brick()
+	_check_cave_colliders()
 	await _check_solid_trunks()
 
 	BrickTerrain.set_generator(0)
@@ -58,6 +59,69 @@ func _initialize() -> void:
 
 	print("[mine] %s (%d failures)" % ["PASS" if failures == 0 else "FAIL", failures])
 	quit(1 if failures > 0 else 0)
+
+
+## Cave floors are collided (Docs/MineWorld.md 13): build_tile's boxes
+## follow column tops, and a cave floor under a column had no box -- the pawn
+## fell through bricks it could see. Every cave floor found under the tiles
+## scanned must be inside a box (a sealed chamber may not be: it is not drawn
+## either), and the cave boxes must not cost the bake much.
+func _check_cave_colliders() -> void:
+	BrickTerrain.clear_terrain_edits()
+	var stud := BrickWorld.get_stud_metres()
+	var plate := BrickWorld.get_plate_metres()
+	var floors := 0
+	var held := 0
+	var tiles := 0
+	var cave_boxes := 0
+	var all_boxes := 0
+	var ms := 0.0
+	var missed := ""
+	for i in 40:
+		var tx := i * 5 - 100
+		var tz := 37 - i * 3
+		var t0 := Time.get_ticks_usec()
+		var d: Dictionary = BrickTerrain.build_tile(tx, tz)
+		ms += float(Time.get_ticks_usec() - t0) / 1000.0
+		tiles += 1
+		cave_boxes += int(d.get("cave_box_count", 0))
+		var boxes: PackedFloat32Array = d.boxes
+		all_boxes += boxes.size() / 6
+		for lz in range(1, 32, 6):
+			for lx in range(1, 32, 6):
+				var x := tx * 32 + lx
+				var z := tz * 32 + lz
+				var top := BrickTerrain.surface_plate(x, z)
+				# Down from a brick under the top: the first air, then the floor.
+				var yp := top - 4
+				var lo := top - 600
+				while yp > lo and BrickTerrain.solid_at(x, yp, z) != 0:
+					yp -= 1
+				if yp <= lo:
+					continue
+				var air := 0
+				while yp > lo and BrickTerrain.solid_at(x, yp, z) == 0:
+					yp -= 1
+					air += 1
+				if yp <= lo or air < 12:
+					continue   # not a room a walker stands in
+				floors += 1
+				var p := Vector3((lx + 0.5) * stud, (yp + 1) * plate - 0.03, (lz + 0.5) * stud)
+				var inside := false
+				for o in range(0, boxes.size(), 6):
+					var c := Vector3(boxes[o], boxes[o + 1], boxes[o + 2])
+					var h := Vector3(boxes[o + 3], boxes[o + 4], boxes[o + 5]) * 0.5
+					if absf(p.x - c.x) <= h.x and absf(p.y - c.y) <= h.y and absf(p.z - c.z) <= h.z:
+						inside = true
+						break
+				if inside:
+					held += 1
+				elif missed == "":
+					missed = " (first miss: column %d, %d, floor plate %d, top %d)" % [x, z, yp, top]
+	print("[mine] cave floors: %d of %d collided over %d tiles; %d cave boxes of %d, %.1f ms a tile%s"
+			% [held, floors, tiles, cave_boxes, all_boxes, ms / tiles, missed])
+	_expect(floors > 5, "the scan found cave floors (%d)" % floors)
+	_expect(held >= floors * 0.9, "cave floors are collided (%d of %d)" % [held, floors])
 
 
 ## Trees streamed by TerrainTrees have solid trunks near the camera

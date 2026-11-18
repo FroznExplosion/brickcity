@@ -21,6 +21,17 @@ static var last_us := 0
 ## Move the scene so `point` lands at the origin. Returns the offset applied.
 static func recentre(root: Node, point: Vector3) -> Vector3:
 	var offset := -point
+	shift(root, offset)
+	WorldFrame.origin -= offset
+	return offset
+
+
+## Move every top Node3D under `root` by `offset`, as a teleport (physics
+## interpolation reset). The node half of `recentre`, without WorldFrame: the
+## mine world shifts by whole terrain tiles and keeps its own offset
+## (Docs/MineWorld.md 15). Nodeless things (PhysicsServer bodies, RIDs) are
+## the caller's.
+static func shift(root: Node, offset: Vector3) -> void:
 	var t0 := Time.get_ticks_usec()
 	var moved: Array[Node3D] = []
 	_collect(root, moved, false)
@@ -28,10 +39,8 @@ static func recentre(root: Node, point: Vector3) -> Vector3:
 		n.global_position += offset
 	for n in moved:
 		n.reset_physics_interpolation()
-	WorldFrame.origin -= offset
 	shifts += 1
 	last_us = Time.get_ticks_usec() - t0
-	return offset
 
 
 static func _collect(n: Node, out: Array[Node3D], under3d: bool) -> void:
