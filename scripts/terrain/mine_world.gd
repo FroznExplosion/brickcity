@@ -1548,6 +1548,10 @@ func _run_water_gate() -> void:
 	DirAccess.make_dir_recursive_absolute(dev)
 	_time = 0.42
 	water.manual = true
+	# The platform floats: the ground's own collapse (ground_collapse.gd)
+	# would bring it down. This pass is about the water.
+	if collapse != null:
+		collapse.process_mode = Node.PROCESS_MODE_DISABLED
 	var stud := BrickWorld.get_stud_metres()
 	var course := BrickWorld.get_plate_metres() * 3.0
 	var e := _eye()
@@ -1662,6 +1666,62 @@ func _run_water_gate() -> void:
 	print("[water-gate] stream area still cells after drying: %d (want 0); %s" % [wet, water.report()])
 	view.process_mode = Node.PROCESS_MODE_INHERIT
 	view.rig.visible = true
+	_hud_layer.visible = true
+
+	# Lava (stage 6): a walled pool on the east side, at night for its glow
+	# and its lights; a pawn in it burns; cut off, it cools into stone.
+	lay.call(19, 5, 29, 5, w, w, dark)
+	lay.call(19, 13, 29, 13, w, w, dark)
+	lay.call(19, 5, 19, 13, w, w, dark)
+	lay.call(29, 5, 29, 13, w, w, dark)
+	var lava_src := [Vector3i(o.x + 22, w, o.y + 9), Vector3i(o.x + 26, w, o.y + 9)]
+	for c in lava_src:
+		BrickFluid.place(c, 2, BrickFluid.SOURCE, 3)
+	water.step(150)
+	await _frames(20)
+	_time = 0.02
+	view.process_mode = Node.PROCESS_MODE_DISABLED
+	view.rig.visible = false
+	if view.arms != null:
+		view.arms.visible = false
+	_hud_layer.visible = false
+	look.call(pm.call(14.0, w + 6.0, 1.0), pm.call(24.0, w, 9.0))
+	await _frames(40)
+	await _shot(dev + "water_lava_night.png")
+	print("[water-gate] lava pool: %d lava lights, %s" % [water.lava_lights(), water.report()])
+	_time = 0.42
+	view.process_mode = Node.PROCESS_MODE_INHERIT
+	_hud_layer.visible = true
+	set_on_foot(true, pm.call(24.0, w + 0.2, 9.0))
+	await _frames(5)
+	var hp0: float = pawn.health.total_current()
+	await _frames(60)
+	var hp1: float = pawn.health.total_current()
+	print("[water-gate] a pawn in lava: health %.0f -> %.0f over 60 frames (burning %s)" % [
+			hp0, hp1, hp1 < hp0])
+	pawn.health.reset()
+	set_on_foot(false)
+	for c in lava_src:
+		BrickFluid.remove(c, -1)
+	var rock0: int = water.rock_laid
+	water.step(900)
+	await _frames(30)
+	var lava_left := 0
+	for x in range(20, 29):
+		for z in range(6, 13):
+			if int(BrickFluid.cell_info(Vector3i(o.x + x, w, o.y + z)).fluid) == 2:
+				lava_left += 1
+	print("[water-gate] the pool cut off: %d cells cooled into stone, %d lava left (want 0), %d lights" % [
+			water.rock_laid - rock0, lava_left, water.lava_lights()])
+	view.process_mode = Node.PROCESS_MODE_DISABLED
+	view.rig.visible = false
+	if view.arms != null:
+		view.arms.visible = false
+	_hud_layer.visible = false
+	look.call(pm.call(14.0, w + 6.0, 1.0), pm.call(24.0, w, 9.0))
+	await _frames(30)
+	await _shot(dev + "water_lava_cooled.png")
+	view.process_mode = Node.PROCESS_MODE_INHERIT
 	_hud_layer.visible = true
 
 	# Live ticks on the worker (the game's way), a source poured on the

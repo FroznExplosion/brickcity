@@ -356,13 +356,16 @@ func step(delta: float, wish: Vector3, speed: float) -> void:
 		var feet := pawn.feet()
 		water_top = float(Pawn.water_probe.call(feet + pawn.up * 0.05))
 		var depth := water_top - Gravity.vert(feet, pawn.up)
+		var drag := 1.0
+		if Pawn.water_drag.is_valid() and depth > 0.0:
+			drag = float(Pawn.water_drag.call(feet + pawn.up * 0.05))
 		if depth > SWIM_DEPTH:
 			swimming = true
 			state = State.WALK
-			_swim_tick(delta, wish, water_top)
+			_swim_tick(delta, wish * drag, water_top)
 			return
 		if depth > 0.0:
-			speed *= WADE_SLOW
+			speed *= WADE_SLOW * drag
 			if Pawn.water_flow.is_valid():
 				var flow: Vector3 = Pawn.water_flow.call(feet + pawn.up * 0.05)
 				pawn.shove = pawn.shove.lerp(Gravity.flat(flow, pawn.up) * WADE_PUSH,

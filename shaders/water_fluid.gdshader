@@ -17,6 +17,7 @@ uniform vec3 foam_colour : source_color = vec3(0.86, 0.93, 0.97);
 uniform vec3 lava_dark : source_color = vec3(0.45, 0.06, 0.0);
 uniform vec3 lava_hot : source_color = vec3(1.0, 0.55, 0.08);
 uniform float lava_glow = 2.5;
+uniform vec3 lava_crust : source_color = vec3(0.12, 0.07, 0.06);
 uniform float flow_speed = 1.4;     // studs a second along the flow
 uniform float fall_speed = 3.0;     // studs a second down a fall
 uniform float stud = 0.35;
@@ -65,10 +66,18 @@ void fragment() {
 	}
 	float n = noise(uv * 1.3) * 0.6 + noise(uv * 3.1 + TIME * 0.25) * 0.4;
 	if (lava) {
-		float heat = smoothstep(0.35, 0.8, n);
-		ALBEDO = mix(lava_dark, lava_hot, heat * 0.6);
-		EMISSION = mix(lava_dark, lava_hot, heat) * lava_glow;
-		ROUGHNESS = 0.85;
+		// A crust of cooled plates drifting slowly over the melt, bright
+		// cracks between them, the whole thing breathing (4.6).
+		vec2 cu = wpos.xz / stud * 0.55 - flow * TIME * 0.06;
+		float plates = noise(cu) * 0.65 + noise(cu * 2.3 + 7.1) * 0.35;
+		float crust = smoothstep(0.42, 0.58, plates);
+		float crack = 1.0 - smoothstep(0.0, 0.08, abs(plates - 0.5));
+		float pulse = 0.85 + 0.15 * sin(TIME * 1.3 + plates * 6.0);
+		float heat = smoothstep(0.35, 0.8, n) * (1.0 - crust) + crack;
+		ALBEDO = mix(lava_hot, lava_crust, crust);
+		EMISSION = (mix(lava_dark, lava_hot, clamp(heat, 0.0, 1.0)) * (1.0 - crust * 0.85)
+				+ lava_hot * crack * 0.8) * lava_glow * pulse;
+		ROUGHNESS = mix(0.5, 0.95, crust);
 	} else {
 		vec3 c = mix(shallow_colour, deep_colour, smoothstep(1.0, 9.0, tiles));
 		c += (n - 0.5) * 0.07;

@@ -16,7 +16,8 @@ extends SceneTree
 ##   too (no 2-deep puddles left to keep their edges wet);
 ## - a gap between two sources fills as a source (4.1.7);
 ## - water off a ledge falls and spreads again where it lands;
-## - lava meeting water makes obsidian or stone (4.6);
+## - lava meeting water makes obsidian (a source) or stone (running lava),
+##   only as thick as the lava was; cut-off lava cools into stone (4.6);
 ## - a calm world has nothing awake (a still world costs nothing);
 ## - past the sim ring water waits and runs on when the player is back; a far
 ##   tile's mesh is a fraction of the full one (stage 5);
@@ -229,10 +230,41 @@ func _run() -> void:
 	BrickFluid.tick_now(120)
 	var res: Dictionary = BrickFluid.take()
 	var terr: PackedInt32Array = res.terrain
+	# (x, z, first plate, last plate, material) a cell.
+	var mat_names := BrickTerrain.material_names()
+	var obsidian := mat_names.find("obsidian")
+	var stone := mat_names.find("stone")
 	var mats := {}
-	for i in range(0, terr.size(), 4):
-		mats[terr[i + 3]] = true
-	_ok("lava and water make rock", terr.size() > 0, "%d cells" % (terr.size() / 4))
+	var thin := 0
+	for i in range(0, terr.size(), 5):
+		mats[terr[i + 4]] = true
+		if terr[i + 2] == terr[i + 3]:
+			thin += 1
+	_ok("lava and water make rock", terr.size() > 0, "%d cells" % (terr.size() / 5))
+	_ok("running lava makes stone, a source obsidian", mats.has(stone) and mats.has(obsidian),
+			str(mats.keys()))
+	_ok("rock is as thick as the lava was (a tile of lava, a tile of rock)", thin > 0,
+			"%d one-plate cells" % thin)
+
+	# 7b. Lava cut off from its source comes to rest and cools into stone.
+	_floor(2560, -20, 2640, 20)
+	BrickFluid.place(Vector3i(2600, W, 0), 2, BrickFluid.SOURCE, 3)
+	BrickFluid.tick_now(120)
+	BrickFluid.take()
+	BrickFluid.remove(Vector3i(2600, W, 0), -1)
+	BrickFluid.tick_now(900)
+	var cooled := 0
+	var t7: PackedInt32Array = BrickFluid.take().terrain
+	for i in range(0, t7.size(), 5):
+		if t7[i + 4] == stone:
+			cooled += 1
+	var lava_left := 0
+	for x in range(2590, 2611):
+		for z in range(-10, 11):
+			if int(_info(x, W, z).fluid) == 2:
+				lava_left += 1
+	_ok("cut-off lava cools into stone", cooled > 0 and lava_left == 0,
+			"%d cells cooled, %d lava left" % [cooled, lava_left])
 
 	# 8. Calm costs nothing.
 	_sec("8")
