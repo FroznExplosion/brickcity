@@ -276,6 +276,16 @@ made the difference.
   paths, `print_surface.gdshaderinc` and a baked bead texture); leaf bricks
   use the leaf texture, which is soft when seen from inside a crown.
 
+## 12. Testing
+
+| Pass | What it checks |
+|---|---|
+| `tools/probes/mine_world_probe.gd` (headless) | generator, biomes, ores, bedrock, blocks, whole-brick breaking, saves |
+| `-- --gate` | spawn, flight (no collision, arms follow), endless far rings, holes, menu stops the world, build, landing, edit frame times, save round trip |
+| `-- --gate=cave` | land in a reachable cave, still standing 200 ticks later |
+| `-- --gate=menu` | the generation menu and the pause menu clicked with real mouse events |
+| `-- --gate=look [--look=parts]` | the close view under different settings (the fuzz hunt) |
+
 ## 13. Cave floors are collided
 
 Flying into a cave and landing, the pawn fell through a floor of bricks it
@@ -302,14 +312,3 @@ no caves pay nothing.
   floor 200 physics ticks later (STANDING / FELL).
 - The mask reaches down to the deepest cave a column can have (`low_p`), so a
   cave never runs out of the bottom of it (the second suspect).
-
-## 12. Testing
-
-| Pass | What it checks |
-|---|---|
-| `tools/probes/mine_world_probe.gd` (headless) | generator, biomes, ores, bedrock, blocks, whole-brick breaking, saves |
-| `-- --gate` | spawn, flight (no collision, arms follow), endless far rings, holes, menu stops the world, build, landing, edit frame times, save round trip |
-| `-- --gate=cave` | land in a reachable cave, still standing 200 ticks later |
-| `-- --gate=menu` | the generation menu and the pause menu clicked with real mouse events |
-| `-- --gate=look [--look=parts]` | the close view under different settings (the fuzz hunt) |
-
