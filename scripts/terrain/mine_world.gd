@@ -167,7 +167,7 @@ func _ready() -> void:
 	water = Water.new()
 	water.name = "Water"
 	add_child(water)
-	water.setup(self, 20.0, 4)
+	water.setup(self)
 
 	var start := Presets.load_settings(ContentPacks.resolve("worldgen/default.json"))
 	for arg in OS.get_cmdline_user_args():
@@ -181,6 +181,8 @@ func _ready() -> void:
 	if _gate:
 		if _water_gate:
 			_run_water_gate()
+		elif "--gate=sea" in OS.get_cmdline_user_args():
+			_run_sea_gate()
 		elif "--gate=menu" in OS.get_cmdline_user_args():
 			_run_menu_gate()
 		elif "--gate=look" in OS.get_cmdline_user_args():
@@ -189,6 +191,8 @@ func _ready() -> void:
 			_run_cave_gate()
 		elif "--gate=collapse" in OS.get_cmdline_user_args():
 			_run_collapse_gate()
+		elif "--gate=flight" in OS.get_cmdline_user_args():
+			_run_flight_gate()
 		else:
 			_run_gate()
 
@@ -230,17 +234,20 @@ func generate(s: Dictionary) -> void:
 	_edits_dirty = false
 	_save_status = "%d changes loaded" % loaded if loaded > 0 else "new world"
 	var sea := float(settings.gen.get("sea_m", 20.0))
-	# No water is drawn; the sea line is still where trees stop.
+	# The sea line is where trees stop; the water snaps it to a course below.
 	BrickWave.set_sea_level(sea)
 	_biome_names = BrickTerrain.biome_names()
 	_cache_tree_rules()
-	water.reset_world(sea, clampi(int(settings.get("detail_tiles", 4)), 2, 8))
 
 	var sp = settings.get("spawn", null)
 	var want := Vector2i.ZERO
 	if sp is Array and (sp as Array).size() == 2:
 		want = Vector2i(int(sp[0]), int(sp[1]))
 	var cell := _find_spawn(want)
+	# The sea is water unless the settings say not (Docs/MineWater.md 9); its
+	# first shore field round the spawn.
+	water.reset_world(sea, clampi(int(settings.get("detail_tiles", 4)), 2, 8),
+			bool(settings.gen.get("water", true)), float(settings.gen.get("wave_scale", 1.0)), cell)
 	var stud := BrickWorld.get_stud_metres()
 	spawn_xz = Vector2((cell.x + 0.5) * stud, (cell.y + 0.5) * stud)
 	var feet := Vector3(spawn_xz.x, _ground_m(cell.x, cell.y) + 0.05, spawn_xz.y)
@@ -278,6 +285,9 @@ func generate(s: Dictionary) -> void:
 
 
 func _teardown() -> void:
+	fast_hold = false
+	_speed = 0.0
+	_speed_from = Vector3.INF
 	_wait_breaks()
 	# Removing a tier from the tree waits for its bakes (their _exit_tree).
 	for n in [_trees, _far_next, _far, _streamer]:
@@ -526,19 +536,63 @@ func _flush_edits() -> void:
 # ---------------------------------------------------------------------------
 # Every frame
 
+## FAST FLIGHT HOLD (Docs/MineWorld.md 14), after zylanntest's
+## DynamicLodController: above FAST_HOLD_MPS the near tier starts no new
+## bakes (nor studs, chamfer, collision) and the far tier no new refines or
+## relods; what is drawn stays. Below FAST_RESUME_MPS it all resumes. Flying
+## at the default 50 m/s is not held; Shift (500 m/s) is. -- --no-fast-hold
+## turns it off (A/B).
+const FAST_HOLD_MPS := 80.0
+const FAST_RESUME_MPS := 40.0
+var fast_hold := false
+## This frame's main-thread costs, ms (the flight gate prints slow frames').
+var _ptimes := {}
+var _speed := 0.0
+var _speed_from := Vector3.INF
+var _fast_hold_on := not ("--no-fast-hold" in OS.get_cmdline_user_args())
+
+
+func _speed_step(eye: Vector3, delta: float) -> void:
+	var moved := eye.distance_to(_speed_from) if _speed_from != Vector3.INF else 0.0
+	_speed_from = eye
+	# A jump (placed, teleported, a new world) is not speed: the ground there
+	# is wanted at once.
+	var inst := 0.0 if moved > 150.0 else moved / maxf(delta, 0.001)
+	_speed = lerpf(_speed, inst, 1.0 - exp(-delta / 0.2))
+	var hold := fast_hold
+	if _speed > FAST_HOLD_MPS:
+		hold = _fast_hold_on
+	elif _speed < FAST_RESUME_MPS:
+		hold = false
+	if hold != fast_hold:
+		fast_hold = hold
+		_streamer.hold = hold
+		_far.hold = hold
+		if _far_next != null:
+			_far_next.hold = hold
+
+
 func _process(delta: float) -> void:
 	_frame_ms = lerpf(_frame_ms, delta * 1000.0, 0.1)
 	if _streamer == null:
 		return
 	var eye := _eye()
+	_speed_step(eye, delta)
 	_land_breaks()
 	_refresh_in -= delta
 	if _refresh_in <= 0.0:
 		_flush_edits()
+	var p0 := Time.get_ticks_usec()
 	_streamer.follow(Vector2(eye.x, eye.z))
+	var p1 := Time.get_ticks_usec()
 	_far.cover(_streamer, false)
 	_far.relod(eye, false)
+	var p2 := Time.get_ticks_usec()
+	var re0 := _reanchors
 	_follow_far(eye)
+	var p3 := Time.get_ticks_usec()
+	_ptimes = {"near": (p1 - p0) / 1000.0, "far": (p2 - p1) / 1000.0,
+			"reanchor": (p3 - p2) / 1000.0, "swapped": _reanchors != re0}
 	if not on_foot:
 		FpsRig.follow_flight(cam, walker)
 	if not on_foot and walker.global_position.y < -500.0:
@@ -562,12 +616,14 @@ func _follow_far(eye: Vector3) -> void:
 		var d := t - _far.anchor
 		if maxi(absi(d.x), absi(d.y)) >= REANCHOR_TILES:
 			_far_next = _new_far(t)
+			_far_next.hold = fast_hold
 			_far_next.visible = false
 			if not _far_next.build_begin(_far_tiles(), _mat, Rect2i(), _streamer.align):
 				_far_next.queue_free()
 				_far_next = null
 		return
-	if not _far_next.build_poll():
+	# A slice a frame: the new tier is hidden until it is all in.
+	if not _far_next.build_poll(2.0):
 		return
 	var t0 := Time.get_ticks_usec()
 	_far_next.cover(_streamer)
@@ -575,6 +631,7 @@ func _follow_far(eye: Vector3) -> void:
 	remove_child(_far)
 	_far.queue_free()
 	_far = _far_next
+	_far.hold = fast_hold
 	_far_next = null
 	_reanchors += 1
 	_last_reanchor_ms = float(Time.get_ticks_usec() - t0) / 1000.0
@@ -880,7 +937,8 @@ func _update_hud() -> void:
 		"water %s" % water.report(),
 		collapse.readout(),
 		"%s   F fly/walk  B build  M world generation  F3 readout  T +1 hour" % ("ON FOOT" if on_foot
-				else "FLYING %.0f m/s (wheel)" % walker.fly_speed),
+				else "FLYING %.0f m/s (wheel), moving %.0f m/s%s" % [walker.fly_speed, _speed,
+				"  DETAIL HELD" if fast_hold else ""]),
 	])
 
 
@@ -1099,17 +1157,7 @@ func _run_gate() -> void:
 			% [walker.collision_layer, walker.collision_mask, cam.current,
 			cam.global_position.distance_to(walker.camera.global_position), view.rig.visible])
 	await _shot(dev + "mine_overview.png")
-	var t0 := Time.get_ticks_usec()
-	var worst := 0.0
-	var from := walker.global_position
-	for i in 900:
-		walker.global_position = from + Vector3(1.0, 0.0, 0.3) * float(i) * 1.6
-		var f0 := Time.get_ticks_usec()
-		await get_tree().process_frame
-		worst = maxf(worst, float(Time.get_ticks_usec() - f0) / 1000.0)
-	print("[mine-gate] flew %.0f m in %.1f s, worst frame %.0f ms, re-centred %d times (last %.0f ms), %s"
-			% [900 * 1.6, float(Time.get_ticks_usec() - t0) / 1e6, worst, _reanchors,
-			_last_reanchor_ms, _streamer.report()])
+	await _gate_flight()
 	await _frames(120)
 	print("[mine-gate] holes round the camera after the flight: %d" % _holes())
 	await _shot(dev + "mine_far_away.png")
@@ -1166,6 +1214,71 @@ func _run_gate() -> void:
 	await _gate_edits()
 	print("[mine-gate] done")
 	get_tree().quit()
+
+
+## -- --gate=flight: only the fast flight (below), from the spawn.
+func _run_flight_gate() -> void:
+	await _frames(30)
+	set_on_foot(false)
+	walker.place(walker.global_position + Vector3(0, 60, 0), Vector3(1, -0.35, 0.4).normalized())
+	walker.pitch = -0.45
+	await _frames(120)
+	await _gate_flight()
+	await _frames(120)
+	print("[mine-gate] holes round the camera after the flight: %d" % _holes())
+	await _shot(UserPaths.DEV + "mine_far_away.png")
+	get_tree().quit()
+
+
+## Fast flight into new ground: 1.6 m a frame (~100 m/s at 60 fps) along X
+## for 900 frames, re-centring the far rings twice. The worst frame and the
+## frames over 33 ms are the spike (Docs/MineWorld.md 14); then 1 s slow
+## (0.3 m a frame) so the detail comes back, and the frames of THAT.
+func _gate_flight() -> void:
+	var t0 := Time.get_ticks_usec()
+	var worst := 0.0
+	var slow := 0
+	var held := 0
+	var from := walker.global_position
+	_streamer.reset_stats()
+	var notes: Array[String] = []
+	for i in 900:
+		walker.global_position = from + Vector3(1.0, 0.0, 0.3) * float(i) * 1.6
+		var f0 := Time.get_ticks_usec()
+		var built0 := _streamer.built_count()
+		var trees0: int = _trees.count
+		await get_tree().process_frame
+		var ms := float(Time.get_ticks_usec() - f0) / 1000.0
+		worst = maxf(worst, ms)
+		if ms > 33.0:
+			slow += 1
+			if notes.size() < 16:
+				notes.append("f%d %.0f ms: near %.1f far %.1f reanchor %.1f%s trees %.1f (+%d) built +%d" % [i, ms,
+						_ptimes.get("near", 0.0), _ptimes.get("far", 0.0), _ptimes.get("reanchor", 0.0),
+						" SWAPPED" if _ptimes.get("swapped", false) else "", _trees.last_us / 1000.0,
+						_trees.count - trees0, _streamer.built_count() - built0])
+		if fast_hold:
+			held += 1
+	print("[mine-gate] flew %.0f m in %.1f s, worst frame %.0f ms, %d over 33 ms, detail held %d of 900 frames%s, re-centred %d times (last %.0f ms), %s"
+			% [900 * 1.6, float(Time.get_ticks_usec() - t0) / 1e6, worst, slow, held,
+			"" if _fast_hold_on else " (--no-fast-hold)", _reanchors, _last_reanchor_ms,
+			_streamer.report()])
+	for n in notes:
+		print("[mine-gate]   slow %s" % n)
+	# Slowing down: the detail resumes round the camera.
+	var at := walker.global_position
+	worst = 0.0
+	slow = 0
+	for i in 120:
+		walker.global_position = at + Vector3(1.0, 0.0, 0.3) * float(i) * 0.3
+		var f0 := Time.get_ticks_usec()
+		await get_tree().process_frame
+		var ms := float(Time.get_ticks_usec() - f0) / 1000.0
+		worst = maxf(worst, ms)
+		if ms > 33.0:
+			slow += 1
+	print("[mine-gate] slowed down: held %s, 120 frames worst %.0f ms, %d over 33 ms, %s"
+			% [fast_hold, worst, slow, _streamer.report()])
 
 
 ## -- --gate=cave: only the cave landing (below).
@@ -1562,6 +1675,167 @@ func _run_water_gate() -> void:
 		fw = maxf(fw, float(Time.get_ticks_usec() - f0) / 1000.0)
 	print("[water-gate] live: 120 frames, worst %.1f ms; %s" % [fw, water.report()])
 	print("[water-gate] done")
+	get_tree().quit()
+
+
+## The sea pass: -- --gate=sea (Docs/MineWater.md 14, stages 3 and 4). The
+## generated sea drawn by the wave tiers at a coast, a river mouth, a channel
+## dug off the sea filling, then the player: swimming, under water, a bucket.
+func _run_sea_gate() -> void:
+	await _frames(10)
+	var dev := UserPaths.DEV
+	DirAccess.make_dir_recursive_absolute(dev)
+	_time = 0.42
+	var stud := BrickWorld.get_stud_metres()
+	var sea_b := BrickFluid.get_sea_course()
+	var level := BrickFluid.get_sea_level()
+	print("[sea-gate] sea on %s at %.2f m (course %d); first shore field %.0f ms" % [
+			water.sea_on, level, sea_b, water.last_field_ms])
+	# A coast: out from the spawn until the ground is a few bricks under the
+	# sea, the last dry column before it the shore.
+	var e := _eye()
+	var c0 := Vector2i(floori(e.x / stud), floori(e.z / stud))
+	var coast := Vector2i(1 << 30, 0)
+	var shore := Vector2i.ZERO          ## the last dry column before it
+	var dir := Vector2.ZERO
+	for a in 16:
+		var d := Vector2(cos(a * TAU / 16.0), sin(a * TAU / 16.0))
+		var dry := false
+		var last_dry := Vector2i.ZERO
+		for r in range(0, 12000, 4):
+			var p := c0 + Vector2i(d * r)
+			var h := BrickTerrain.surface_plate(p.x, p.y)
+			if h >= sea_b * 3:
+				dry = true
+				last_dry = p
+			elif dry and h < sea_b * 3 - 9:
+				coast = p
+				shore = last_dry
+				dir = d
+				break
+		if coast.x != 1 << 30:
+			break
+	if coast.x == 1 << 30:
+		print("[sea-gate] FAIL no coast within 12000 studs")
+		get_tree().quit()
+		return
+	set_on_foot(false)
+	var cm := Vector3((coast.x + 0.5) * stud, level, (coast.y + 0.5) * stud)
+	var from := cm - Vector3(dir.x, 0, dir.y) * 26.0 + Vector3(0, 9, 0)
+	walker.place(from, Vector3(dir.x, 0, dir.y))
+	walker.pitch = -0.3
+	var moves0: int = water.field_moves
+	for i in 600:
+		await get_tree().process_frame
+		if water.field_moves > moves0 and i > 120:
+			break
+	await _frames(60)
+	print("[sea-gate] coast at %s (%.0f m out); field moved %d times, last %.0f ms; %s" % [
+			coast, Vector2(coast - c0).length() * stud, water.field_moves - moves0,
+			water.last_field_ms, water.report()])
+	view.process_mode = Node.PROCESS_MODE_DISABLED
+	view.rig.visible = false
+	if view.arms != null:
+		view.arms.visible = false
+	_hud_layer.visible = false
+	await _shot(dev + "sea_coast.png")
+	# A river mouth: a river column under the sea line near the coast.
+	var river := Vector2i(1 << 30, 0)
+	for r in range(16, 900, 16):
+		for a in 24:
+			var p := coast + Vector2i(Vector2(cos(a * TAU / 24.0), sin(a * TAU / 24.0)) * r)
+			var bn: String = _biome_names[BrickTerrain.biome_at(p.x, p.y)]
+			if bn.contains("River") and BrickTerrain.surface_plate(p.x, p.y) < sea_b * 3:
+				river = p
+				break
+		if river.x != 1 << 30:
+			break
+	if river.x != 1 << 30:
+		var rm := Vector3((river.x + 0.5) * stud, level, (river.y + 0.5) * stud)
+		walker.place(rm + Vector3(-14, 10, -14), Vector3(1, 0, 1).normalized())
+		walker.pitch = -0.45
+		await _frames(150)
+		print("[sea-gate] river mouth at %s, water there %d" % [river, water.fluid_at(rm - Vector3(0, 0.2, 0))])
+		await _shot(dev + "sea_river.png")
+	else:
+		print("[sea-gate] no river under the sea line within 900 studs of the coast")
+	# A channel dug off the sea, 3 studs wide, 14 long, two bricks under the
+	# sea line: from just off the shore into the dry land, and the sea runs in.
+	var back := -dir
+	var side := Vector2(-back.y, back.x)
+	var start := shore + Vector2i((dir * 3.0).round())
+	for i in 14:
+		var p := start + Vector2i((back * i).round())
+		for w in range(-1, 2):
+			var q := p + Vector2i((side * w).round())
+			var h := BrickTerrain.surface_plate(q.x, q.y)
+			var r: Dictionary = BrickTerrain.fill_box(Vector3i(q.x, (sea_b - 2) * 3, q.y),
+					Vector3i(q.x, maxi(h, (sea_b - 2) * 3), q.y), 0, false)
+			terrain_edited(r)
+	water.manual = true
+	water.step(60)
+	await _frames(30)
+	var wet := 0
+	var calm := 0
+	for i in range(2, 14):
+		var p := start + Vector2i((back * i).round())
+		var ci: Dictionary = BrickFluid.cell_info(Vector3i(p.x, sea_b - 2, p.y))
+		if int(ci.fluid) == 1:
+			wet += 1
+			if not bool(ci.ocean):
+				calm += 1
+	print("[sea-gate] channel: %d of 12 cells along it wet (%d calm, drawn by the fluid mesher), %s" % [
+			wet, calm, water.report()])
+	var chm := Vector3((start.x + back.x * 7 + 0.5) * stud, level, (start.y + back.y * 7 + 0.5) * stud)
+	walker.place(chm + Vector3(side.x, 0, side.y) * 4.0 + Vector3(0, 4, 0), -Vector3(side.x, 0, side.y))
+	walker.pitch = -0.6
+	await _frames(40)
+	await _shot(dev + "sea_channel.png")
+	water.manual = false
+	# Swimming: the pawn put three metres under the sea, off the coast.
+	var dc := coast
+	for r in range(0, 3000, 4):
+		var p := coast + Vector2i(dir * r)
+		if _ground_m(p.x, p.y) < level - 3.5:
+			dc = p
+			break
+	var deep := Vector3((dc.x + 0.5) * stud, level - 3.0, (dc.y + 0.5) * stud)
+	set_on_foot(true, deep)
+	await _frames(20)
+	var under: bool = water.fluid_at(_eye()) == 1
+	var fc := BrickFluid.cell_of(pawn.feet() + Vector3.UP * 0.05)
+	print("[sea-gate] swimmer put at %s, feet %s (ground %.1f m), cell %s %s, surface %.2f, probe set %s" % [
+			deep, pawn.feet(), _ground_m(fc.x, fc.z), fc, BrickFluid.cell_info(fc),
+			water.surface_at(pawn.feet() + Vector3.UP * 0.05), Pawn.water_probe.is_valid()])
+	await _shot(dev + "sea_underwater.png")
+	await _frames(150)
+	var top: float = water.surface_at(pawn.feet() + Vector3.UP * 0.05)
+	print("[sea-gate] swim: under water at first %s, swimming %s, eye %.2f m over the surface after 3 s (want about +0.1)" % [
+			under, pawn.moves != null and pawn.moves.swimming, _eye().y - top])
+	# A bucket: filled from the sea, poured on dry land.
+	set_on_foot(false)
+	walker.place(cm - Vector3(dir.x, 0, dir.y) * 2.0 + Vector3(0, 2.2, 0), Vector3(dir.x, 0, dir.y))
+	walker.pitch = -0.8
+	await _frames(10)
+	builder.set_active(true)
+	builder.slot = builder.hotbar.find(builder.BUCKET)
+	var filled: bool = builder.take_fluid()
+	var held: int = builder.bucket
+	var land := shore - Vector2i((dir * 10.0).round())
+	walker.place(Vector3((land.x + 0.5) * stud, _ground_m(land.x, land.y) + 2.0, (land.y + 0.5) * stud),
+			-Vector3(dir.x, 0, dir.y))
+	walker.pitch = -1.45
+	await _frames(10)
+	builder.update_target()
+	print("[sea-gate] pour target %s" % builder.target)
+	var poured: bool = builder.place_target()
+	water.step(1)
+	print("[sea-gate] bucket: filled from the sea %s (%d tiles), poured %s (%d left), %s" % [
+			filled, held, poured, builder.bucket, builder.log_blocks.slice(-3)])
+	builder.set_active(false)
+	view.process_mode = Node.PROCESS_MODE_INHERIT
+	_hud_layer.visible = true
+	print("[sea-gate] done")
 	get_tree().quit()
 
 

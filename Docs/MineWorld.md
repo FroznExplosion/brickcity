@@ -249,7 +249,9 @@ bench). It used to carve a sphere of plate cells, which cut bricks in pieces.
 **Flying.** Collision is off entirely while flying (the walker's layer and
 mask are 0). The pawn's camera stays the one drawn, moved with the flight
 every frame, so the arms and gun come along (`FpsRig.switch_mode(...,
-keep_view)`, `follow_flight`; the planet still uses the walker's camera).
+keep_view)`, `follow_flight`). planet.tscn does the same since 2026-11-17
+(`planet_scene._process`; `view_camera()` says which camera should be drawn:
+the ship's in the seat, else the pawn's); `-- --gate=pawn` checks it.
 Landing puts the pawn exactly where the flight is -- in mid-air it falls --
 unless that is inside the ground, then on top of it.
 
@@ -313,7 +315,31 @@ no caves pay nothing.
 - The mask reaches down to the deepest cave a column can have (`low_p`), so a
   cave never runs out of the bottom of it (the second suspect).
 
-## 14. The ground comes down
+## 14. Fast flight: detail held, far tier swapped in slices
+
+`-- --gate=flight` flies 1.44 km at ~100 m/s and prints the worst frame,
+frames over 33 ms, and what each slow frame spent (2026-11-17, equal start
+temperature 59-63 C):
+
+| | worst | over 33 ms |
+|---|---|---|
+| before (`--no-fast-hold`, old swap) | 103 ms | 14 |
+| detail held above 80 m/s | 70 ms | 13 |
+| + far tier assembled in 2 ms slices | 42 ms | 2 |
+
+- **Hold** (after zylanntest's DynamicLodController): above
+  `FAST_HOLD_MPS` (80) the near tier starts no bakes, adds no studs, chamfer
+  or collision and switches no stud sets; the far tier starts no refine or
+  relod; below `FAST_RESUME_MPS` (40) everything resumes. Default flight (50
+  m/s) is not held; Shift is. F3 shows "DETAIL HELD".
+- **The real spike was the far re-anchor**: swapping in a new tier did all
+  its meshes in one frame, mostly `_offset_surface` (a GDScript loop over
+  every ring vertex). Ring blocks are now offset on the worker and
+  `build_poll(budget_ms)` puts the meshes in a slice per frame while the new
+  tier is hidden.
+- Not yet measured: the deferred stud-set switch (last change) in a window.
+
+## 15. The ground comes down
 
 What an edit leaves hanging falls: loose ground as pieces (they stay, are
 unloaded past the detail tiles and saved with the world), sand and gravel

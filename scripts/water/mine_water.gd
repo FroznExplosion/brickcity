@@ -1,39 +1,77 @@
 extends Node3D
 
-## WATER AND LAVA in the mine world (Docs/MineWater.md, stage 2): drives
-## BrickFluid and draws what it builds.
+## WATER AND LAVA in the mine world (Docs/MineWater.md): drives BrickFluid and
+## draws what it builds.
 ##
 ## - Every frame: tells BrickFluid where the player is (the sim ring) and lets
-##   it start a tick on its worker when one is due (`update`, never a wait).
+##   it start a tick on its thread when one is due (`update`, never a wait).
 ## - A finished tick's meshes are swapped into one MeshInstance3D per terrain
 ##   tile, recycled, never made per rebuild (7.1).
 ## - Lava meeting water hands back cells of rock: they are laid as terrain
 ##   edits here, through the host's `terrain_edited` like any block.
 ## - The host calls `terrain_changed` with every edit's result, so water reads
 ##   its ground again where a block was placed or a shot dug (4.3).
-##
-## The generated sea is off until stage 3 (the wave tiers draw it then).
+## - The generated sea (stage 3, 7.2) is drawn by WaterSea's wave tiers, the
+##   heightfield test's: its shore field is computed round the player on a
+##   worker and swapped in when they have moved on; where BrickFluid says the
+##   sea was changed (walled off, emptied) the tiers do not draw it.
+## - The player's side (stage 4, section 10): `surface_at` / `flow_at` for
+##   swimming (Pawn.water_probe), the underwater look, lava burning.
 ##
 ## Preloaded by path, not named (see terrain_scene.gd).
 
+const WaterSeaFx := preload("res://scripts/water/water_sea.gd")
+
 const TILE_STUDS := 32
+## The shore field: 3072 studs each way (1.08 km, past the sheet's 1 km),
+## a sample every 8 studs; computed again when the player is 768 studs from
+## its centre, or a while after the ground under the sea line changed.
+const FIELD_HALF := 3072
+const FIELD_STEP := 8
+const FIELD_MOVE := 768
+const FIELD_EDIT_DELAY := 1.5
+const SEA_OUTER_M := 1000.0
+## Lava on a pawn, health a second (Docs/MineWater.md 10).
+const LAVA_DPS := 40.0
+const LAVA_FOG := Color(0.9, 0.32, 0.05)
 
 var host: Node = null
 ## The gate ticks the water itself (tick_now) so its pictures are the same
 ## every run.
 var manual := false
 var sim_radius_m := 90.0
+var sea_on := false
+var wave_scale := 1.0
+## The sea's tiers (WaterSea), when the sea is on.
+var sea: Node3D = null
 ## Tiles drawn, and the last tick's numbers for the HUD.
 var drawn := 0
 var rock_laid := 0
+var field_moves := 0
+var last_field_ms := 0.0
 
 var _water_mat: ShaderMaterial
 var _lava_mat: ShaderMaterial
 var _tiles := {}                       ## Vector2i -> MeshInstance3D
+## Stage 5 (MineWater.md 8): a tile past the sim ring, where water is frozen,
+## shows its FAR mesh (a quad per 4 x 4 studs, no sides); inside, the full one.
+var _tile_far := {}                    ## Vector2i -> bool, what it shows
+var _lod_pending := {}                 ## Vector2i -> true, asked, not back yet
+var _lod_in := 0.0
+const LOD_EVERY := 0.5
+var far_tiles := 0
 var _spare: Array[MeshInstance3D] = []
+var _field_task := -1
+var _field_out := [PackedFloat32Array()]
+var _field_for := Vector2i.ZERO
+var _field_t0 := 0
+var _field_edit_in := -1.0
+var _under := Underwater.new()
+var _under_mode := 0                   ## 0 dry, 1 water, 2 lava
+var _dry_ambient := 0.6
 
 
-func setup(p_host: Node, sea_m: float, near_tiles: int) -> void:
+func setup(p_host: Node) -> void:
 	host = p_host
 	var shader: Shader = load("res://shaders/water_fluid.gdshader")
 	_water_mat = ShaderMaterial.new()
@@ -41,32 +79,79 @@ func setup(p_host: Node, sea_m: float, near_tiles: int) -> void:
 	_lava_mat = ShaderMaterial.new()
 	_lava_mat.shader = shader
 	_lava_mat.set_shader_parameter("lava", true)
-	reset_world(sea_m, near_tiles)
+	Pawn.water_probe = surface_at
+	Pawn.water_flow = flow_at
+	reset_world(20.0, 4, false)
+	set_process(true)
 
 
-## A new world: everything the last one had goes.
-func reset_world(sea_m: float, near_tiles: int) -> void:
-	BrickFluid.reset(sea_m, false)
+## A new world: everything the last one had goes. Returns the sea level the
+## water uses (snapped to a brick course, 7.2).
+func reset_world(sea_m: float, near_tiles: int, p_sea_on: bool, p_wave_scale := 1.0,
+		centre := Vector2i.ZERO) -> float:
+	_finish_field()
+	var level := BrickFluid.reset(sea_m, p_sea_on)
+	sea_on = p_sea_on
+	wave_scale = p_wave_scale
+	BrickWave.set_sea_level(level if sea_on else sea_m)
 	sim_radius_m = float(near_tiles + 2) * TILE_STUDS * BrickWorld.get_stud_metres()
 	for t in _tiles.keys():
 		_release(t)
 	drawn = 0
 	rock_laid = 0
+	field_moves = 0
+	if sea != null:
+		remove_child(sea)
+		sea.queue_free()
+		sea = null
+	if sea_on:
+		# The first field round the spawn, now: generating is a load.
+		var c := centre
+		var t0 := Time.get_ticks_usec()
+		var f: PackedFloat32Array = BrickWave.compute_shore_field(c.x, c.y, FIELD_HALF, FIELD_STEP)
+		last_field_ms = float(Time.get_ticks_usec() - t0) / 1000.0
+		sea = WaterSeaFx.new()
+		sea.name = "Sea"
+		sea.use_pools = false
+		sea.use_fluid_mask = true
+		sea.surface_collide = false     # a ceiling to a swimmer; nothing floats yet
+		sea.wave_gain = 2.2 * wave_scale
+		add_child(sea)
+		sea.build_at(FIELD_HALF, SEA_OUTER_M, FIELD_STEP, c, f)
+		sea.push_waves()
+	return level if sea_on else sea_m
 
 
 func _exit_tree() -> void:
+	_finish_field()
+	Pawn.water_probe = Callable()
+	Pawn.water_flow = Callable()
 	# Joins a running tick and frees the sections.
 	BrickFluid.reset(20.0, false)
+
+
+func _eye_studs() -> Vector2i:
+	var e: Vector3 = host._eye() if host != null and host.get("walker") != null else Vector3.ZERO
+	var stud := BrickWorld.get_stud_metres()
+	return Vector2i(floori(e.x / stud), floori(e.z / stud))
 
 
 func _process(delta: float) -> void:
 	if host == null:
 		return
-	BrickFluid.set_centre(host._eye(), sim_radius_m)
-	if manual:
-		return
-	if BrickFluid.update(delta):
+	var eye: Vector3 = host._eye()
+	BrickFluid.set_centre(eye, sim_radius_m)
+	if not manual and BrickFluid.update(delta):
 		apply(BrickFluid.take())
+	_lod_in -= delta
+	if _lod_in <= 0.0:
+		_lod_in = LOD_EVERY
+		_check_lod(eye)
+	if sea != null:
+		sea.follow(eye, delta)
+		_follow_field(delta)
+	_underwater(eye)
+	_burn(delta)
 
 
 ## The gate's clock: `ticks` ticks now, then what they built.
@@ -78,6 +163,10 @@ func step(ticks: int) -> void:
 func apply(res: Dictionary) -> void:
 	for m in res.get("meshes", []):
 		_show(m.tile, m.water, m.lava)
+		_tile_far[m.tile] = bool(m.get("far", false))
+		_lod_pending.erase(m.tile)
+	if sea != null and bool(res.get("mask_changed", false)):
+		sea.fluid_mask_dirty = true
 	var terr: PackedInt32Array = res.get("terrain", PackedInt32Array())
 	for i in range(0, terr.size(), 4):
 		var b := terr[i + 1]
@@ -89,11 +178,119 @@ func apply(res: Dictionary) -> void:
 			host.terrain_edited(r)
 
 
-## An edit's result (fill_box, carve, clear_runs): its plate box.
+## An edit's result (fill_box, carve, clear_runs): its plate box. Ground
+## changed under the sea line also reshapes the shore field, a little later.
 func terrain_changed(res: Dictionary) -> void:
-	if res.has("box_lo"):
-		BrickFluid.terrain_changed(res.box_lo, res.box_hi)
+	if not res.has("box_lo"):
+		return
+	BrickFluid.terrain_changed(res.box_lo, res.box_hi)
+	if sea != null and int((res.box_lo as Vector3i).y) <= BrickFluid.get_sea_course() * 3 + 3:
+		if _field_edit_in < 0.0:
+			_field_edit_in = FIELD_EDIT_DELAY
 
+
+# ---------------------------------------------------------------------------
+# The shore field, streamed (7.2)
+
+func _follow_field(delta: float) -> void:
+	if _field_task >= 0:
+		if not WorkerThreadPool.is_task_completed(_field_task):
+			return
+		WorkerThreadPool.wait_for_task_completion(_field_task)
+		_field_task = -1
+		sea.move_field(_field_for, _field_out[0])
+		last_field_ms = float(Time.get_ticks_usec() - _field_t0) / 1000.0
+		field_moves += 1
+		return
+	if _field_edit_in >= 0.0:
+		_field_edit_in -= delta
+	var c := _eye_studs()
+	var d: Vector2i = c - sea.field_centre
+	var moved := maxi(absi(d.x), absi(d.y)) >= FIELD_MOVE
+	# _field_edit_in: -1 idle, counting down after an edit, due at 0.
+	if moved or (_field_edit_in > -1.0 and _field_edit_in <= 0.0):
+		_field_edit_in = -1.0
+		# The edit's centre stays where it is; a move takes the player's.
+		_field_for = c if moved else sea.field_centre
+		_field_t0 = Time.get_ticks_usec()
+		var at := _field_for
+		var holder := _field_out
+		_field_task = WorkerThreadPool.add_task(func() -> void:
+			holder[0] = BrickWave.compute_shore_field(at.x, at.y, FIELD_HALF, FIELD_STEP),
+			false, "shore field")
+
+
+## Load time and teardown only: a field still being computed is waited for.
+func _finish_field() -> void:
+	if _field_task >= 0:
+		WorkerThreadPool.wait_for_task_completion(_field_task)
+		_field_task = -1
+
+
+# ---------------------------------------------------------------------------
+# What the player asks (section 10)
+
+## The top of the water over a point, metres; -INF when the point is not in
+## water. Sea water has the waves the tiers draw (BrickWave), the rest is
+## BrickFluid's.
+func surface_at(p: Vector3) -> float:
+	var s := BrickFluid.surface_at(p)
+	if sea == null:
+		return s
+	var level := BrickFluid.get_sea_level()
+	if p.y < level - 3.0 or p.y > level + 3.0:
+		return s
+	var c: Dictionary = BrickFluid.cell_info(BrickFluid.cell_of(Vector3(p.x, level - 0.2, p.z)))
+	if int(c.fluid) == 1 and bool(c.ocean):
+		return maxf(s, float(sea.surface_at(p)))
+	return s
+
+
+func flow_at(p: Vector3) -> Vector3:
+	return BrickFluid.flow_at(p)
+
+
+## 0 none, 1 water, 2 lava at a point (sea waves counted).
+func fluid_at(p: Vector3) -> int:
+	var f := BrickFluid.fluid_at(p)
+	if f == 0 and sea != null and p.y < surface_at(p):
+		return 1
+	return f
+
+
+func _underwater(eye: Vector3) -> void:
+	var rig = host.get("_rig")
+	if rig == null or rig.env == null:
+		return
+	var mode := fluid_at(eye)
+	if mode == _under_mode:
+		return
+	var env: Environment = rig.env
+	if _under_mode == 0:
+		_dry_ambient = env.ambient_light_energy
+	_under.set_submerged(env, false, _dry_ambient)
+	_under_mode = mode
+	if mode == 0:
+		return
+	_under.set_submerged(env, true, _dry_ambient)
+	if mode == 2:
+		env.fog_light_color = LAVA_FOG
+		env.fog_density = 1.2
+		env.ambient_light_color = LAVA_FOG
+
+
+func _burn(delta: float) -> void:
+	if not host.get("on_foot"):
+		return
+	var pawn: Pawn = host.get("pawn")
+	if pawn == null or pawn.health == null:
+		return
+	if fluid_at(pawn.feet() + Vector3.UP * 0.15) == 2:
+		pawn.health.apply_impact(LAVA_DPS * delta, &"fire")
+
+
+# ---------------------------------------------------------------------------
+# Meshes
 
 func _show(tile: Vector2i, water: Array, lava: Array) -> void:
 	if water.is_empty() and lava.is_empty():
@@ -115,8 +312,30 @@ func _show(tile: Vector2i, water: Array, lava: Array) -> void:
 		mesh.surface_set_material(mesh.get_surface_count() - 1, _lava_mat)
 
 
+## Past the sim ring a tile's water is frozen: show its far mesh; back in
+## reach, the full one. Each asked for once, built with the next tick.
+func _check_lod(eye: Vector3) -> void:
+	var tile_m := TILE_STUDS * BrickWorld.get_stud_metres()
+	var n := 0
+	for t in _tiles.keys():
+		var centre := Vector2((t.x + 0.5) * tile_m, (t.y + 0.5) * tile_m)
+		var want_far := centre.distance_to(Vector2(eye.x, eye.z)) > sim_radius_m + tile_m * 0.5
+		if want_far:
+			n += 1
+		if want_far == bool(_tile_far.get(t, false)) or _lod_pending.has(t):
+			continue
+		_lod_pending[t] = true
+		if want_far:
+			BrickFluid.request_far_mesh(t.x, t.y)
+		else:
+			BrickFluid.request_mesh(t.x, t.y)
+	far_tiles = n
+
+
 func _release(tile: Vector2i) -> void:
 	var mi: MeshInstance3D = _tiles.get(tile)
+	_tile_far.erase(tile)
+	_lod_pending.erase(tile)
 	if mi == null:
 		return
 	_tiles.erase(tile)
@@ -136,6 +355,10 @@ func _new_instance() -> MeshInstance3D:
 
 func report() -> String:
 	var s: Dictionary = BrickFluid.stats()
-	return "%d awake, %d tiles drawn, tick %.2f ms (%d cells), %d sections, %d rock" % [
-			BrickFluid.active_count(), drawn, float(s.get("tick_ms", 0.0)),
-			int(s.get("evals", 0)), BrickFluid.section_count(), rock_laid]
+	var line := "%d awake, %d tiles drawn (%d far), tick %.2f ms (%d cells, mesh %.2f), %d sections, %d rock" % [
+			BrickFluid.active_count(), drawn, far_tiles, float(s.get("tick_ms", 0.0)),
+			int(s.get("evals", 0)), float(s.get("mesh_ms", 0.0)), BrickFluid.section_count(), rock_laid]
+	if sea != null:
+		line += ", sea at %.2f m, shore field %.0f ms (%d moves)" % [
+				BrickFluid.get_sea_level(), last_field_ms, field_moves]
+	return line

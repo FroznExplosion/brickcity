@@ -263,9 +263,12 @@ func _build_shape_tab() -> void:
 
 
 func _build_sea_tab() -> void:
-	var p := _page("Sea & Beach")
+	var p := _page("Sea & Water")
 	var g: Dictionary = s.gen
-	p.add_child(_note("Water is off: below the sea line are dry, sand-floored basins."))
+	p.add_child(_note("With water on, the basins and river valleys under the sea line are sea "
+			+ "(Docs/MineWater.md); caves under it are sealed. Off: dry, sand-floored basins."))
+	_check(p, "Water", g, "water")
+	_float_slider(p, "Wave height (x)", g, "wave_scale", 0, 3, 0.05)
 	_float_slider(p, "Sea line height (m)", g, "sea_m", -50, 100, 0.5)
 	_float_slider(p, "Beach width above the sea line (m)", g, "beach_width_m", 0, 8, 0.1)
 	_int_slider(p, "Basin sand depth (bricks)", g, "basin_sand_depth", 1, 16)

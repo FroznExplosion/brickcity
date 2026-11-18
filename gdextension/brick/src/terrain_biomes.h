@@ -101,6 +101,9 @@ struct GenParams {
     float beach_width_m = 1.4f;
     int basin_sand_depth = 4;         ///< bricks of sand on a basin floor
     // --- caves
+    /// The sea is water (Docs/MineWater.md 9): caves and ravines are sealed
+    /// against it, so no water stands beside cave air before anything wakes it.
+    bool water = false;
     bool caves = true;
     float cave_intensity = 0.5f;
     float cave_min_depth_m = 1.8f;

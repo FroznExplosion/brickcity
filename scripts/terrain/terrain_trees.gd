@@ -312,7 +312,17 @@ func _place(spots: Array) -> Array:
 	return rows
 
 
+## The last frame's _process, microseconds (the mine world's flight gate).
+var last_us := 0
+
+
 func _process(delta: float) -> void:
+	var t_in := Time.get_ticks_usec()
+	_process_body(delta)
+	last_us = Time.get_ticks_usec() - t_in
+
+
+func _process_body(delta: float) -> void:
 	if _rebuild_in >= 0.0:
 		_rebuild_in -= delta
 		if _rebuild_in < 0.0:
