@@ -207,6 +207,7 @@ func add_collision(max_shapes := 0) -> bool:
 	# worst-tile spikes while walking.
 	if not _body.is_valid():
 		_body = PhysicsServer3D.body_create()
+		set_notify_transform(true)
 		PhysicsServer3D.body_set_mode(_body, PhysicsServer3D.BODY_MODE_STATIC)
 		PhysicsServer3D.body_set_collision_layer(_body, Layers.WORLD)
 		PhysicsServer3D.body_set_collision_mask(_body, Layers.STRUCTURE_MASK)
@@ -600,6 +601,7 @@ func _add_collision(boxes: PackedFloat32Array) -> void:
 	if n == 0:
 		return
 	_body = PhysicsServer3D.body_create()
+	set_notify_transform(true)
 	PhysicsServer3D.body_set_mode(_body, PhysicsServer3D.BODY_MODE_STATIC)
 	PhysicsServer3D.body_set_collision_layer(_body, Layers.WORLD)
 	PhysicsServer3D.body_set_collision_mask(_body, Layers.STRUCTURE_MASK)
@@ -612,6 +614,14 @@ func _add_collision(boxes: PackedFloat32Array) -> void:
 			Transform3D(Basis(), Vector3(boxes[o], boxes[o + 1], boxes[o + 2])))
 	# Into the space last: see add_collision.
 	PhysicsServer3D.body_set_space(_body, get_world_3d().space)
+
+
+## The collider has no node: when the tile is moved (an origin shift moves
+## its streamer, Docs/MineWorld.md 15) the body is moved with it.
+func _notification(what: int) -> void:
+	if what == NOTIFICATION_TRANSFORM_CHANGED and _body.is_valid():
+		PhysicsServer3D.body_set_state(_body, PhysicsServer3D.BODY_STATE_TRANSFORM,
+				global_transform)
 
 
 func _free_body() -> void:

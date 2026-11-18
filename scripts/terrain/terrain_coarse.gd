@@ -105,6 +105,9 @@ var _refine_job := {}
 ## The longest a frame spent on this tier's main-thread work (swapping meshes
 ## in), for the bench and the probe.
 var worst_main_ms := 0.0
+## HELD (moving fast, Docs/MineWorld.md 14): no new refine or relod starts; a
+## job in flight still lands. The blocks drawn stay as they are.
+var hold := false
 
 
 ## Lay the tier out to `reach_tiles` of the origin and bake it.
@@ -246,10 +249,21 @@ func build_begin(reach_tiles: int, material: Material, hole := Rect2i(), split_t
 	baked.resize(blocks.size())
 	if blocks.is_empty():
 		return false
+	# A block that goes into a merged ring is moved to its place HERE, on the
+	# worker: done in _assemble it was a GDScript loop over every vertex of
+	# every ring block on the main thread -- most of the 40-50 ms an endless
+	# world's tier swap took (Docs/MineWorld.md 14).
+	var ring_from := split_to
+	var tile_m := float(BrickTerrain.get_tile_studs()) * BrickWorld.get_stud_metres()
 	var task := WorkerThreadPool.add_group_task(
 		func(i: int) -> void:
-			baked[i] = BrickTerrain.build_coarse(blocks[i].x, blocks[i].y,
-				spans[i], steps[i]),
+			var d: Dictionary = BrickTerrain.build_coarse(blocks[i].x, blocks[i].y,
+				spans[i], steps[i])
+			if spans[i] > ring_from and not (d.get("mesh", []) as Array).is_empty():
+				d["mesh"] = _offset_surface(d["mesh"], Vector3(blocks[i].x * tile_m, 0.0,
+						blocks[i].y * tile_m))
+				d["offset"] = true
+			baked[i] = d,
 		blocks.size(), -1, true, "terrain coarse")
 	_build_job = {"task": task, "blocks": blocks, "spans": spans, "steps": steps,
 			"baked": baked}
@@ -257,23 +271,39 @@ func build_begin(reach_tiles: int, material: Material, hole := Rect2i(), split_t
 
 
 ## The build `build_begin` started: true once it is baked and in the tree.
-## Never blocks; the meshes go in all at once when the last bake is done.
-func build_poll() -> bool:
+## Never blocks on the bakes. `budget_ms` > 0 puts the meshes in a slice a
+## call, that long at most (a block, or a ring, is the smallest piece): for a
+## tier that is hidden until it is done (the mine world's re-anchor); <= 0
+## puts them all in at once.
+func build_poll(budget_ms := -1.0) -> bool:
 	if _build_job.is_empty():
 		return true
 	if not _job_done(_build_job):
 		return false
 	var job := _build_job
+	if not job.has("next"):
+		job["next"] = 0
+		job["merged"] = {}
+		job["rings"] = []
+	var t0 := Time.get_ticks_usec()
+	if not _assemble(job, budget_ms, t0):
+		return false
 	_build_job = {}
-	_assemble(job.blocks, job.spans, job.steps, job.baked)
 	return true
 
 
-func _assemble(blocks: Array[Vector2i], spans: Array[int], steps: Array[int],
-		baked: Array[Dictionary]) -> void:
+## Put a finished build's meshes in, from where the last call stopped. True
+## when everything is in.
+func _assemble(job: Dictionary, budget_ms: float, t0: int) -> bool:
+	var blocks: Array[Vector2i] = job.blocks
+	var spans: Array[int] = job.spans
+	var steps: Array[int] = job.steps
+	var baked: Array[Dictionary] = job.baked
 	var split_to := _split_to
 	var tile_studs := BrickTerrain.get_tile_studs()
 	var stud := BrickWorld.get_stud_metres()
+	var out_of_time := func() -> bool:
+		return budget_ms > 0.0 and float(Time.get_ticks_usec() - t0) / 1000.0 >= budget_ms
 	# The blocks the detail can ever cover (`split_to` and smaller) stay
 	# separate, because hiding is per node. Everything bigger -- and with a
 	# fixed hole, everything -- is merged into ONE mesh a ring: those blocks
@@ -281,8 +311,12 @@ func _assemble(blocks: Array[Vector2i], spans: Array[int], steps: Array[int],
 	#
 	# Draw calls were growing linearly with view distance -- 1,157 at 9 km --
 	# and this is where they were going.
-	var merged := {}          ## span -> the bakes of that ring's blocks, in member order
-	for i in blocks.size():
+	var merged: Dictionary = job.merged   ## span -> the bakes of that ring's blocks, in member order
+	while int(job.next) < blocks.size():
+		if out_of_time.call():
+			return false
+		var i: int = job.next
+		job.next = i + 1
 		var arrays: Array = baked[i]["mesh"]
 		if arrays.is_empty():
 			continue
@@ -311,10 +345,17 @@ func _assemble(blocks: Array[Vector2i], spans: Array[int], steps: Array[int],
 		_far_rects.append(Rect2i(blocks[i], Vector2i(spans[i], spans[i])))
 		_far_blocks += 1
 
-	for span in merged:
+	if (job.rings as Array).is_empty() and not merged.is_empty():
+		job.rings = merged.keys()
+	while not (job.rings as Array).is_empty():
+		if out_of_time.call():
+			return false
+		var span: int = (job.rings as Array).pop_back()
 		_rebuild_ring(span, merged[span])
 		_far_rings += 1
 		_far_blocks += merged[span].size()
+		merged.erase(span)
+	return true
 
 
 ## Leaving the tree with bakes in flight: wait for them. A worker still
@@ -552,6 +593,8 @@ func _refine_for(detail: Rect2i) -> void:
 		if _job_done(_refine_job):
 			_apply_refine()
 		return           # one split at a time; the next call sees the rest
+	if hold:
+		return
 	var todo: Array[int] = []
 	for i in _all_rects.size():
 		if _all_rects[i].size.x <= _split_to:
@@ -704,6 +747,8 @@ func relod(at: Vector3, wait := true) -> void:
 		if _job_done(_relod_job):
 			_apply_relod()
 		return           # the camera's new tile is looked at once this is in
+	if hold and not wait:
+		return
 	var tile_m := float(BrickTerrain.get_tile_studs()) * BrickWorld.get_stud_metres()
 	var c := Vector2i(floori(at.x / tile_m), floori(at.z / tile_m))
 	if c == _relod_at:
