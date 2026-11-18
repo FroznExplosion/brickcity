@@ -124,6 +124,8 @@ enum Material {
     MAT_GRANITE,
     MAT_DIORITE,
     MAT_ICE,
+    /// Lava meeting water (Docs/MineWater.md 4.6).
+    MAT_OBSIDIAN,
     MATERIAL_COUNT
 };
 
@@ -163,6 +165,7 @@ inline int material_filament(int m) {
         case MAT_GRANITE: return 23;       // rose
         case MAT_DIORITE: return 13;       // light grey
         case MAT_ICE: return 48;           // ice
+        case MAT_OBSIDIAN: return 53;      // plum
         default: return FIL_GREY;
     }
 }
@@ -903,6 +906,10 @@ public:
     /// interleaved (ground, distance) row by row -- the texture's own layout,
     /// so the water uploads it as it is.
     static PackedFloat32Array build_shore_field(int half_studs, int step);
+    /// The same field round (cx, cz) studs, computed without touching the live
+    /// one: safe on a worker. install_shore_field makes it the live field.
+    static PackedFloat32Array compute_shore_field(int cx, int cz, int half_studs, int step);
+    static void install_shore_field(int cx, int cz, int half_studs, int step, const PackedFloat32Array &field);
     /// After build_shore_field: the cells, `cell_studs` a side, holding any
     /// field sample under the sea, as Vector2i (water_sea.gd's WET map).
     static Array wet_cells(int cell_studs);
