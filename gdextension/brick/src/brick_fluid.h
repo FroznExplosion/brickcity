@@ -109,6 +109,12 @@ public:
     /// Still fluid, in plates (units), of one fluid.
     static int64_t still_units(int fluid);
 
+    /// Cells changed (drawn state) since the world began: a save compares.
+    static int64_t change_count();
+    /// The water's difference from the generated world (cells: x, course, z
+    /// as int32, then st, amt, aux bytes). Never waits on a running tick.
     static PackedByteArray get_save();
+    /// Load it (after the terrain's edits): applied with the next tick, every
+    /// cell woken, so running water runs on. Returns the cells read.
     static int set_save(const PackedByteArray &bytes);
 };

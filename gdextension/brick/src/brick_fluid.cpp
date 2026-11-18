@@ -378,6 +378,10 @@ void mark_dirty(int x, int b, int z) {
     }
 }
 
+/// Cells written since the world began: the save asks whether anything
+/// changed since it last wrote (MineWater.md 11).
+std::atomic<int64_t> g_writes{ 0 };
+
 /// Write a cell (worker, under g_state) and keep the wet count.
 void write_cell(int x, int b, int z, const Cell &nc) {
     const int sx = fdiv(x, SX), sb = fdiv(b, SB), sz = fdiv(z, SX);
@@ -395,7 +399,10 @@ void write_cell(int x, int b, int z, const Cell &nc) {
     }
     const bool is = c_wet(cl);
     s->wet += (is ? 1 : 0) - (was ? 1 : 0);
-    if (!drawn_same) mark_dirty(x, b, z);
+    if (!drawn_same) {
+        mark_dirty(x, b, z);
+        g_writes.fetch_add(1, std::memory_order_relaxed);
+    }
 }
 
 /// Was this column generated as sea? (its generated top under the sea course)
@@ -1696,8 +1703,12 @@ int64_t BrickFluid::still_units(int fluid) {
 
 // Save: every cell that differs from the generated world, 15 bytes each:
 // int32 x, course, z; uint8 st, amt, aux. Header "BCFL", format 1.
+/// The difference from gen_fluid, cell by cell (MineWater.md 11). Never waits
+/// for a running tick: the worker writes cells only under g_state, which is
+/// held here, and columns it is still sampling are not ready yet (skipped:
+/// nothing there was changed). Sections with nothing wet and no generated
+/// fluid are skipped whole.
 PackedByteArray BrickFluid::get_save() {
-    join_wait();
     std::lock_guard<std::recursive_mutex> lk(g_state);
     std::vector<uint8_t> buf;
     const char *magic = "BCFL";
@@ -1708,6 +1719,7 @@ PackedByteArray BrickFluid::get_save() {
     };
     for (const auto &e : g_sec) {
         const Section &s = *e.second;
+        if (s.wet <= 0 && (!g_sea_on || s.sb * SB >= g_sea_b)) continue;
         for (int lb = 0; lb < SB; ++lb) {
             for (int lz = 0; lz < SX; ++lz) {
                 for (int lx = 0; lx < SX; ++lx) {
@@ -1732,6 +1744,8 @@ PackedByteArray BrickFluid::get_save() {
     std::copy(buf.begin(), buf.end(), out.ptrw());
     return out;
 }
+
+int64_t BrickFluid::change_count() { return g_writes.load(); }
 
 int BrickFluid::set_save(const PackedByteArray &bytes) {
     if (bytes.size() < 5) return 0;
@@ -1789,6 +1803,7 @@ void BrickFluid::_bind_methods() {
     ClassDB::bind_static_method("BrickFluid", D_METHOD("flow_at", "p"), &BrickFluid::flow_at);
     ClassDB::bind_static_method("BrickFluid", D_METHOD("ray_cell", "from", "dir", "max_metres"), &BrickFluid::ray_cell);
     ClassDB::bind_static_method("BrickFluid", D_METHOD("request_far_mesh", "tx", "tz"), &BrickFluid::request_far_mesh);
+    ClassDB::bind_static_method("BrickFluid", D_METHOD("change_count"), &BrickFluid::change_count);
     ClassDB::bind_static_method("BrickFluid", D_METHOD("sea_mask", "x0", "z0", "size"), &BrickFluid::sea_mask);
     ClassDB::bind_static_method("BrickFluid", D_METHOD("changed_columns"), &BrickFluid::changed_columns);
     ClassDB::bind_static_method("BrickFluid", D_METHOD("stats"), &BrickFluid::stats);

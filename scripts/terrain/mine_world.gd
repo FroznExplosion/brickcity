@@ -250,6 +250,11 @@ func generate(s: Dictionary) -> void:
 	# first shore field round the spawn.
 	water.reset_world(sea, clampi(int(settings.get("detail_tiles", 4)), 2, 8),
 			bool(settings.gen.get("water", true)), float(settings.gen.get("wave_scale", 1.0)), cell)
+	# The water's own changes, after the ground's (it reads its solids).
+	var fluid_cells := _load_fluid()
+	_fluid_saved_at = BrickFluid.change_count()
+	if fluid_cells > 0:
+		_save_status += ", %d water cells" % fluid_cells
 	var stud := BrickWorld.get_stud_metres()
 	spawn_xz = Vector2((cell.x + 0.5) * stud, (cell.y + 0.5) * stud)
 	var feet := Vector3(spawn_xz.x, _ground_m(cell.x, cell.y) + 0.05, spawn_xz.y)
@@ -845,6 +850,31 @@ func _load_edits() -> int:
 	return BrickTerrain.set_edits(f.get_buffer(n * 13))
 
 
+## The water, beside the edits (Docs/MineWater.md 11): each cell that differs
+## from the world as generated (BrickFluid.get_save), loaded after the edits
+## and every cell woken, so a river that was running runs on.
+const FLUID_MAGIC := "BCWF"
+const FLUID_FORMAT := 1
+## BrickFluid.change_count() when the water was last written.
+var _fluid_saved_at := -1
+
+
+static func _fluid_path(edits_path: String) -> String:
+	return edits_path.get_basename() + ".fluid"
+
+
+func _load_fluid() -> int:
+	var path := _fluid_path(save_path())
+	if not FileAccess.file_exists(path):
+		return 0
+	var f := FileAccess.open_compressed(path, FileAccess.READ, FileAccess.COMPRESSION_ZSTD)
+	if f == null or f.get_buffer(4).get_string_from_ascii() != FLUID_MAGIC or f.get_32() != FLUID_FORMAT:
+		push_warning("[mine] %s is from another format; not loaded" % path)
+		return 0
+	var n := f.get_32()
+	return BrickFluid.set_save(f.get_buffer(n))
+
+
 ## The pieces that came off the ground, beside the edits (Docs/TerrainCollapse.md 5).
 const PIECES_MAGIC := "BCMP"
 const PIECES_FORMAT := 1
@@ -876,10 +906,13 @@ func save_edits(wait := false) -> void:
 			return
 		WorkerThreadPool.wait_for_task_completion(_save_task)
 		_save_task = -1
-	if not _edits_dirty or settings.is_empty():
+	var fluid_at := BrickFluid.change_count()
+	if (not _edits_dirty and fluid_at == _fluid_saved_at) or settings.is_empty():
 		return
 	_edits_dirty = false
+	_fluid_saved_at = fluid_at
 	var bytes: PackedByteArray = BrickTerrain.get_edits()
+	var fluid_bytes: PackedByteArray = BrickFluid.get_save()
 	var piece_bytes := var_to_bytes(collapse.to_save())
 	var path := save_path()
 	var dir := _save_dir()
@@ -907,6 +940,16 @@ func save_edits(wait := false) -> void:
 		g.store_buffer(piece_bytes)
 		g.close()
 		DirAccess.rename_absolute(pp + ".tmp", pp)
+		var fp := _fluid_path(path)
+		var h := FileAccess.open_compressed(fp + ".tmp", FileAccess.WRITE, FileAccess.COMPRESSION_ZSTD)
+		if h == null:
+			return
+		h.store_buffer(FLUID_MAGIC.to_ascii_buffer())
+		h.store_32(FLUID_FORMAT)
+		h.store_32(fluid_bytes.size())
+		h.store_buffer(fluid_bytes)
+		h.close()
+		DirAccess.rename_absolute(fp + ".tmp", fp)
 	@warning_ignore("integer_division")
 	_save_status = "%d changes saved" % (bytes.size() / 13)
 	if wait:
@@ -936,6 +979,8 @@ func forget_edits() -> void:
 		DirAccess.remove_absolute(path)
 	if FileAccess.file_exists(_pieces_path(path)):
 		DirAccess.remove_absolute(_pieces_path(path))
+	if FileAccess.file_exists(_fluid_path(path)):
+		DirAccess.remove_absolute(_fluid_path(path))
 	_edits_dirty = false
 	var s2 := settings.duplicate(true)
 	settings = {}
@@ -1842,6 +1887,20 @@ func _run_water_gate() -> void:
 		await get_tree().process_frame
 		fw = maxf(fw, float(Time.get_ticks_usec() - f0) / 1000.0)
 	print("[water-gate] live: 120 frames, worst %.1f ms; %s" % [fw, water.report()])
+	# Saving (stage 7): the water written beside the edits, the world made
+	# again from its settings, the same water back.
+	water.manual = true
+	water.step(1)
+	var before := _platform_fluid(o, w)
+	save_edits(true)
+	var s2 := settings.duplicate(true)
+	settings = {}
+	generate(s2)
+	water.manual = true
+	water.step(2)
+	var after := _platform_fluid(o, w)
+	print("[water-gate] save: water on the platform %s before, %s after generating again (%s)" % [
+			before, after, _save_status])
 	print("[water-gate] done")
 	get_tree().quit()
 
@@ -2006,6 +2065,25 @@ func _run_sea_gate() -> void:
 	_hud_layer.visible = true
 	print("[sea-gate] done")
 	get_tree().quit()
+
+
+## Water and lava on the platform: [cells, tiles of water, tiles of lava].
+func _platform_fluid(o: Vector2i, w: int) -> Array:
+	var cells := 0
+	var wt := 0
+	var lt := 0
+	for x in range(-31, 32):
+		for z in range(-31, 32):
+			for b in range(w, w + 7):
+				var c: Dictionary = BrickFluid.cell_info(Vector3i(o.x + x, b, o.y + z))
+				if int(c.fluid) == 0:
+					continue
+				cells += 1
+				if int(c.fluid) == 1:
+					wt += int(c.amount)
+				else:
+					lt += int(c.amount)
+	return [cells, wt, lt]
 
 
 func _pond_units(o: Vector2i, w: int) -> int:

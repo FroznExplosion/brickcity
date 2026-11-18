@@ -1,6 +1,6 @@
 # Water and lava in the mine world — plan
 
-Status: **stages 1-6 built** (2026-11-17; section 14). For `scenes/terrain_test.tscn`, the mine world
+Status: **stages 1-7 built** (2026-11-17; section 14). For `scenes/terrain_test.tscn`, the mine world
 ([MineWorld.md](MineWorld.md)). It takes [Water.md](Water.md) §12's idea (brick water that
 flows) and settles its model for a volumetric, endless, Minecraft-like world. The heightfield
 test's sea ([Water.md](Water.md) §1–9) is kept and reused for the ocean's waves.
@@ -444,6 +444,12 @@ Each stage is merged on its own. C++ stages need the main folder's DLL rebuilt a
    second, `Elements.FIRE`) and moves at 35 % (`Pawn.water_drag`). `--gate=water` has a lava
    pool at night, a pawn burning in it, and the pool cut off and cooled.
 7. **Saving** the water with the edits.
+   *Built 2026-11-18:* `<seed>_<hash>.fluid` beside the edits (zstd), written on the same worker
+   as the edits when the ground or the water changed (`BrickFluid.change_count`); each cell that
+   differs from `gen_fluid` (15 bytes). `get_save` never waits on a tick: it reads under the
+   state lock, ~5 ms on the main thread for 135 sections (the bench). Loaded after the edits;
+   every cell is woken, so running water runs on and drying starts again (the timers are not
+   saved). "Forget changes" deletes it. `--gate=water` saves, generates again, and compares.
 8. **Later**: pits filling from rivers (4.5), lakes above the sea, cave pools, springs, lava
    pools, floating debris, mixed water pieces, multiplayer diffs (STA §10.8–10.9).
 
