@@ -161,6 +161,7 @@ void apply_gen_dict(GenParams &p, const Dictionary &d) {
     GP_FLOAT("overhang_size_m", overhang_size_m)
     GP_FLOAT("beach_width_m", beach_width_m)
     GP_INT("basin_sand_depth", basin_sand_depth)
+    GP_BOOL("water", water)
     GP_BOOL("caves", caves)
     GP_FLOAT("cave_intensity", cave_intensity)
     GP_FLOAT("cave_min_depth_m", cave_min_depth_m)
@@ -258,6 +259,7 @@ Dictionary gen_params_to_dict() {
     d["overhang_size_m"] = p.overhang_size_m;
     d["beach_width_m"] = p.beach_width_m;
     d["basin_sand_depth"] = p.basin_sand_depth;
+    d["water"] = p.water;
     d["caves"] = p.caves;
     d["cave_intensity"] = p.cave_intensity;
     d["cave_min_depth_m"] = p.cave_min_depth_m;
@@ -618,7 +620,13 @@ int biome_cell(const GenParams &p, const BColumn &c, uint32_t seed, int x, int y
         return stone_at(p, c, seed, x, yb, z);
     }
     const int depth = c.sb - yb;
-    if (depth > 0 && cave_cell(p, seed, x, yb, z, (float)depth * BRICK_M)) {
+    // Sealed against the sea (MineWater.md 9): under the sea course, a column
+    // that is sea floor or low shore keeps its caves and ravines shut, so no
+    // cave air lies under or beside sea water (a "water wall" until woken).
+    // A cliff higher than this over the sea can still open a cave to it.
+    const bool sealed = p.water && yb <= fbrick(p.sea_m) + 1
+            && c.sb <= fbrick(p.sea_m) + fbrick(p.cave_min_depth_m) + 3;
+    if (depth > 0 && !sealed && cave_cell(p, seed, x, yb, z, (float)depth * BRICK_M)) {
         return MAT_AIR;
     }
     if (depth == 0) {

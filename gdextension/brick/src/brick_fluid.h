@@ -73,6 +73,10 @@ public:
     static Dictionary build_tile_mesh(int tx, int tz);
     /// Ask for a tile's mesh with the next tick (it came into view).
     static void request_mesh(int tx, int tz);
+    /// Ask for a tile's FAR mesh (one quad per 4 x 4 studs, no sides) with the
+    /// next tick: the tile left the sim ring, where water is frozen (8).
+    /// take() gives it with "far": true.
+    static void request_far_mesh(int tx, int tz);
     /// Tiles that hold anything to draw, as Vector2i.
     static Array drawn_tiles();
 

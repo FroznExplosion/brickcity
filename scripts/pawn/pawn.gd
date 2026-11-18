@@ -152,6 +152,12 @@ var up := Vector3.UP
 var ghost = null
 ## Every pawn, for whoever carries them (the ghost hulls, Docs/Hulls.md 7b).
 const GROUP := &"pawns"
+## Water for every pawn (Docs/MineWater.md 10), set by a scene that has some:
+## `water_probe.call(point) -> float` the top of the water over the point
+## (-INF when the point is dry), `water_flow.call(point) -> Vector3` the push
+## of running water there, m/s. Unset, the world is dry and nothing swims.
+static var water_probe := Callable()
+static var water_flow := Callable()
 ## Nothing pulls where it is (Gravity.pulls_at): it floats (PawnMoves) or drifts.
 var floating := false
 ## A ladder the plain walk climbs (no PawnMoves -- a soldier; Docs/RoomModules.md

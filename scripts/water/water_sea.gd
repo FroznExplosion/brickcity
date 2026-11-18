@@ -71,6 +71,20 @@ var _mask_stale := true
 ## The pools' water moved: the calm channel follows it, at most this often.
 const MASK_WATER_EVERY := 0.2
 var _mask_water_t := 0.0
+## A streaming world (the mine world, Docs/MineWater.md 7.2): the shore field
+## is computed by the caller round `field_centre` (studs; on a worker, with
+## BrickWave.compute_shore_field) and handed in, and the sea is not drawn where
+## BrickFluid says it was changed (`use_fluid_mask`) -- no pools of its own.
+var field_centre := Vector2i.ZERO
+var use_pools := true
+var use_fluid_mask := false
+## The near tier's collision patch (water_collider.gd: boxes for barrels and
+## boats to rest on). A swimming pawn meets it from below as a ceiling, so a
+## world with swimmers and nothing afloat turns it off.
+var surface_collide := true
+## Set by the owner when BrickFluid's mask changed (its take's mask_changed).
+var fluid_mask_dirty := true
+var _field_in := PackedFloat32Array()
 
 ## A storm surge (set_surge): the level and gain before it, and where the
 ## seabed map was last read.
@@ -93,7 +107,7 @@ func build(half_studs: int, outer_metres: float, step := 8) -> void:
 	_step = step
 	var seabed := ImageTexture.create_from_image(_seabed_image())
 	_seabed = seabed
-	var origin := Vector2(-half_studs * stud, -half_studs * stud)
+	var origin := Vector2((field_centre.x - half_studs) * stud, (field_centre.y - half_studs) * stud)
 	var extent := Vector2(2 * half_studs * stud, 2 * half_studs * stud)
 
 	near = WaterSurface.new()
@@ -103,6 +117,7 @@ func build(half_studs: int, outer_metres: float, step := 8) -> void:
 	var split := fine_radius < near_radius - MID_OVERLAP
 	near.radius = fine_radius if split else near_radius
 	near.wave_gain = wave_gain
+	near.collide = surface_collide
 	add_child(near)
 	near.set_seabed(seabed, origin, extent)
 	if split:
@@ -124,10 +139,38 @@ func build(half_studs: int, outer_metres: float, step := 8) -> void:
 	add_child(sheet)
 	sheet.build(seabed, origin, extent)
 
-	pools = WaterPoolsFx.new()
-	pools.name = "Pools"
-	add_child(pools)
-	pools.reset_for_world()
+	if use_pools:
+		pools = WaterPoolsFx.new()
+		pools.name = "Pools"
+		add_child(pools)
+		pools.reset_for_world()
+
+
+## build() for a streaming world: the field round `centre` (studs), already
+## computed off the main thread.
+func build_at(half_studs: int, outer_metres: float, step: int, centre: Vector2i,
+		field: PackedFloat32Array) -> void:
+	field_centre = centre
+	_field_in = field
+	build(half_studs, outer_metres, step)
+
+
+## The player moved on: the field round a new centre (computed on a worker)
+## becomes the live one; every tier reads the same texture at its new place.
+func move_field(centre: Vector2i, field: PackedFloat32Array) -> void:
+	field_centre = centre
+	_field_in = field
+	if _seabed != null:
+		_seabed.update(_seabed_image())
+	var stud := BrickWorld.get_stud_metres()
+	var origin := Vector2((centre.x - _half_studs) * stud, (centre.y - _half_studs) * stud)
+	var extent := Vector2(2 * _half_studs * stud, 2 * _half_studs * stud)
+	for tier in [near, mid]:
+		if tier != null:
+			tier.set_seabed(_seabed, origin, extent)
+	if sheet != null and sheet._mat != null:
+		sheet._mat.set_shader_parameter("seabed_origin", origin)
+	fluid_mask_dirty = true
 
 
 ## The ground under the water (R) and the distance to the nearest dry
@@ -137,7 +180,12 @@ func build(half_studs: int, outer_metres: float, step := 8) -> void:
 ## the CPU's wave: the shore band is phased on that distance, and the swimmer
 ## and the drawn sea have to agree about where its crests are.
 func _seabed_image() -> Image:
-	var field: PackedFloat32Array = BrickWave.build_shore_field(_half_studs, _step)
+	var field: PackedFloat32Array
+	if _field_in.is_empty():
+		field = BrickWave.build_shore_field(_half_studs, _step)
+	else:
+		field = _field_in
+		BrickWave.install_shore_field(field_centre.x, field_centre.y, _half_studs, _step, field)
 	@warning_ignore("integer_division")
 	var n: int = maxi(2 * _half_studs / _step, 2)
 	var img := Image.create_from_data(n, n, false, Image.FORMAT_RGF, field.to_byte_array())
@@ -208,6 +256,8 @@ func follow(camera: Vector3, delta: float) -> void:
 			_mask_water_t = 0.0
 			_mask_stale = true
 		_update_mask(camera)
+	elif use_fluid_mask:
+		_update_fluid_mask(camera)
 	# Followed even hidden: the wave clock lives in the near tier.
 	near.follow(xz, delta, camera.y)
 	if mid != null:
@@ -249,6 +299,29 @@ func _update_mask(camera: Vector3) -> void:
 	# a pool's water (BrickPools.sea_mask).
 	var img := Image.create_from_data(MASK_STUDS, MASK_STUDS, false, Image.FORMAT_RG8,
 			BrickPools.sea_mask(at.x, at.y, MASK_STUDS))
+	if _mask_tex == null:
+		_mask_tex = ImageTexture.create_from_image(img)
+	else:
+		_mask_tex.update(img)
+	_set_mask_param("pool_mask", _mask_tex)
+	_set_mask_param("pool_calm", _mask_tex)
+	_set_mask_param("pool_mask_origin", Vector2(at.x * stud, at.y * stud))
+	_set_mask_param("pool_mask_size", MASK_STUDS * stud)
+
+
+## The same mask from BrickFluid (MineWater.md 7.2): R where the sea was
+## changed (walled off, emptied), G how much wave it keeps beside calm water.
+func _update_fluid_mask(camera: Vector3) -> void:
+	var stud := BrickWorld.get_stud_metres()
+	@warning_ignore("integer_division")
+	var at := Vector2i(floori(camera.x / stud / MASK_SNAP) * MASK_SNAP - MASK_STUDS / 2,
+			floori(camera.z / stud / MASK_SNAP) * MASK_SNAP - MASK_STUDS / 2)
+	if at == _mask_at and not fluid_mask_dirty:
+		return
+	_mask_at = at
+	fluid_mask_dirty = false
+	var img := Image.create_from_data(MASK_STUDS, MASK_STUDS, false, Image.FORMAT_RG8,
+			BrickFluid.sea_mask(at.x, at.y, MASK_STUDS))
 	if _mask_tex == null:
 		_mask_tex = ImageTexture.create_from_image(img)
 	else:

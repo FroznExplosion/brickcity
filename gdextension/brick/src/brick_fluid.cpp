@@ -14,6 +14,8 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <climits>
+#include <cstdint>
 #include <cmath>
 #include <map>
 #include <memory>
@@ -57,7 +59,8 @@ struct Cell {
     uint8_t solid = 0;   ///< bit per plate (0 bottom), from the terrain
     uint8_t st = 0;      ///< fluid (2 bits) | kind << 2 | ocean << 4
     uint8_t amt = 0;     ///< plates of fluid, 0..3
-    uint8_t aux = 0;     ///< FLOW: distance. STILL: 0x80 = drying timer set
+    uint8_t aux = 0;     ///< FLOW: distance. STILL: low 6 bits the edge distance
+                         ///< (E_NONE: none known), 0x80 = drying timer set
 };
 
 inline int c_fluid(const Cell &c) { return c.st & 3; }
@@ -71,6 +74,10 @@ inline bool c_wet(const Cell &c) { return c_fluid(c) != F_NONE && c.amt > 0; }
 inline bool c_fed(const Cell &c) { return c_wet(c) && c_kind(c) != K_STILL; }
 inline int c_cap(const Cell &c) { return 3 - floor_of(c.solid); }
 inline int c_dist(const Cell &c) { return c_kind(c) == K_FLOW ? (int)c.aux : 0; }
+/// Still water's distance, in cells, to the dry floor its sheet can spread
+/// onto (4.2.6): 0 beside it, E_NONE when none is known (enclosed, or new).
+constexpr uint8_t E_NONE = 63;
+inline int c_edge(const Cell &c) { return c.aux & 0x3F; }
 
 inline int fdiv(int a, int b) { return a >= 0 ? a / b : -((-a + b - 1) / b); }
 inline int64_t pack3(int x, int y, int z) {
@@ -117,6 +124,7 @@ std::multimap<uint32_t, int64_t> g_timers;
 std::unordered_set<int64_t> g_frozen;
 std::unordered_set<int64_t> g_dirty_tiles;
 std::unordered_set<int64_t> g_mesh_requests;
+std::unordered_set<int64_t> g_far_requests;   ///< tiles wanting the coarse mesh
 int g_mask_version = 0;
 
 struct Cmd {
@@ -130,6 +138,7 @@ std::vector<Cmd> g_cmds;
 struct MeshOut {
     int tx, tz;
     Array water, lava;
+    bool far = false;   ///< the coarse mesh (MineWater.md 8)
 };
 std::vector<MeshOut> g_out_meshes;
 std::vector<int32_t> g_out_terrain;
@@ -143,6 +152,9 @@ double g_acc = 0.0;
 
 // stats
 double g_last_ms = 0.0;
+double g_last_mesh_ms = 0.0;    ///< of g_last_ms: building tile meshes
+double g_sample_ms = 0.0;       ///< of g_last_ms: reading new columns from the field
+std::vector<int64_t> g_last_changed;   ///< probes: a few cells the last tick wrote
 int g_last_evals = 0;
 int g_last_changes = 0;
 int g_last_columns = 0;
@@ -212,9 +224,34 @@ Cell gen_cell(int x, int b, int z) {
 
 // --- sections ----------------------------------------------------------------
 
+/// Sections are only ever freed by reset, which bumps this: a cached pointer
+/// from before it is never used.
+std::atomic<uint32_t> g_sec_epoch{ 1 };
+
+/// The hash map behind every cell read was most of a cell's cost (measured,
+/// MineWater.md 12): a small direct-mapped cache per thread in front of it.
+/// A miss on a section that does not exist is not cached (it may be made).
+struct SecCache {
+    int64_t key[64];
+    Section *ptr[64];
+    uint32_t epoch = 0;
+};
+
 inline Section *sec_find(int sx, int sb, int sz) {
-    auto it = g_sec.find(pack3(sx, sb, sz));
-    return it == g_sec.end() ? nullptr : it->second.get();
+    thread_local SecCache cache;
+    const uint32_t ep = g_sec_epoch.load(std::memory_order_relaxed);
+    if (cache.epoch != ep) {
+        for (int i = 0; i < 64; ++i) { cache.key[i] = -1; cache.ptr[i] = nullptr; }
+        cache.epoch = ep;
+    }
+    const int64_t k = pack3(sx, sb, sz);
+    const uint32_t slot = hmix((uint32_t)k ^ (uint32_t)(k >> 32)) & 63;
+    if (cache.key[slot] == k) return cache.ptr[slot];
+    auto it = g_sec.find(k);
+    if (it == g_sec.end()) return nullptr;
+    cache.key[slot] = k;
+    cache.ptr[slot] = it->second.get();
+    return cache.ptr[slot];
 }
 
 Section *sec_make(int sx, int sb, int sz) {
@@ -241,7 +278,9 @@ void sample_into(Section *s, int lx, int lz) {
     const int x = s->sx * SX + lx, z = s->sz * SX + lz;
     uint8_t masks[SB];
     int gt = 0;
+    const auto t0 = std::chrono::steady_clock::now();
     sample_column(x, z, s->sb * SB, SB, masks, &gt);
+    g_sample_ms += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
     s->gtop[lx + SX * lz] = (int16_t)std::max(-32000, std::min(32000, gt));
     for (int lb = 0; lb < SB; ++lb) {
         Cell &cl = s->c[Section::idx(lx, lb, lz)];
@@ -334,6 +373,7 @@ void write_cell(int x, int b, int z, const Cell &nc) {
     if (s == nullptr) return;
     Cell &cl = s->c[Section::idx(x - sx * SX, b - sb * SB, z - sz * SX)];
     const bool was = c_wet(cl);
+    const bool drawn_same = cl.st == nc.st && cl.amt == nc.amt;
     cl.st = nc.st;
     cl.amt = nc.amt;
     cl.aux = nc.aux;
@@ -343,7 +383,16 @@ void write_cell(int x, int b, int z, const Cell &nc) {
     }
     const bool is = c_wet(cl);
     s->wet += (is ? 1 : 0) - (was ? 1 : 0);
-    mark_dirty(x, b, z);
+    if (!drawn_same) mark_dirty(x, b, z);
+}
+
+/// Was this column generated as sea? (its generated top under the sea course)
+bool gen_sea_col(int x, int z) {
+    if (!g_sea_on) return false;
+    const int sx = fdiv(x, SX), sz = fdiv(z, SX);
+    wcell(x, g_sea_b - 1, z);   // makes and samples the column
+    Section *s = sec_find(sx, fdiv(g_sea_b - 1, SB), sz);
+    return s != nullptr && s->gtop[(x - sx * SX) + SX * (z - sz * SX)] + 1 < g_sea_b;
 }
 
 // --- the rules (MineWater.md 4) -----------------------------------------------
@@ -375,30 +424,37 @@ uint8_t seek_dirs(int x, int b, int z, const Cell &n) {
     const int nf = floor_of(n.solid);
     int best = 1 << 30;
     uint8_t mask = 0;
-    struct Node { int x, z, d, first; };
-    std::vector<Node> q;
-    std::unordered_set<int64_t> seen;
-    seen.insert(pack3(x, 0, z));
+    // Breadth first over the (2*DROP_SEEK+1)^2 studs round it, on the stack:
+    // the set and the vector this had were most of a flowing cell's cost.
+    constexpr int R = DROP_SEEK, SIDE = 2 * R + 1;
+    struct Node { int8_t x, z, d, first; };
+    Node q[SIDE * SIDE * 4 + 8];
+    int qn = 0;
+    uint8_t seen[SIDE * SIDE] = {};
+    seen[R + SIDE * R] = 1;
     for (int i = 0; i < 4; ++i) {
-        q.push_back({ x + DX[i], z + DZ[i], 1, i });
+        q[qn++] = { (int8_t)DX[i], (int8_t)DZ[i], 1, (int8_t)i };
     }
-    for (size_t h = 0; h < q.size(); ++h) {
+    for (int h = 0; h < qn; ++h) {
         const Node nd = q[h];
         if (nd.d > best || nd.d > DROP_SEEK) break;
-        const int64_t sk = pack3(nd.x, 0, nd.z);
-        if (nd.d > 1 && !seen.insert(sk).second) continue;
-        if (nd.d == 1) seen.insert(sk);
-        const Cell &c = wcell(nd.x, b, nd.z);
+        uint8_t &sn = seen[(nd.x + R) + SIDE * (nd.z + R)];
+        if (sn && nd.d > 1) continue;
+        sn = 1;
+        const Cell &c = wcell(x + nd.x, b, z + nd.z);
         const int f = floor_of(c.solid);
         if (f >= 3 || f > nf) continue;
         if (c_wet(c) && c_kind(c) != K_FLOW) continue;
-        if (!supported(nd.x, b, nd.z, c)) {
+        if (!supported(x + nd.x, b, z + nd.z, c)) {
             if (nd.d < best) { best = nd.d; mask = 0; }
             mask |= (uint8_t)(1 << nd.first);
             continue;
         }
+        if (nd.d >= DROP_SEEK) continue;
         for (int i = 0; i < 4; ++i) {
-            q.push_back({ nd.x + DX[i], nd.z + DZ[i], nd.d + 1, nd.first });
+            const int nx = nd.x + DX[i], nz = nd.z + DZ[i];
+            if (seen[(nx + R) + SIDE * (nz + R)]) continue;
+            q[qn++] = { (int8_t)nx, (int8_t)nz, (int8_t)(nd.d + 1), nd.first };
         }
     }
     if (mask == 0) mask = 0xF;
@@ -516,7 +572,10 @@ void eval(int x, int b, int z) {
             best_kind = K_SOURCE;
             best_d = 0;
             best_amt = cap;
-            best_ocean = ocean_src && b == g_sea_b - 1;
+            // Ocean (drawn by the wave tiers) only where the world was
+            // generated as sea: a source re-made in a dug channel is calm
+            // water the tiers do not draw, so the mesher must.
+            best_ocean = ocean_src && b == g_sea_b - 1 && gen_sea_col(x, z);
         }
     }
     if (deferred && best_fluid == 0) {
@@ -539,7 +598,7 @@ void eval(int x, int b, int z) {
         // Its feed is gone: what is left is a water brick's water (4.1.6).
         Cell n = cur;
         n.st = mk_st(cf, K_STILL, false);
-        n.aux = 0;
+        n.aux = E_NONE;
         // A stream keeps only a tile, so it dries (13.3); a two-plate stream
         // cell kept whole was a 2-deep core its tile-deep edges never dried
         // round. Water deeper than the stream's own level was a pond the
@@ -598,50 +657,50 @@ void eval(int x, int b, int z) {
         }
     }
     if (moved) return;
-    // A deeper core on open flat ground thins out (4.2): an inner cell, with
-    // no dry floor at its own level beside it, gives a tile to a neighbour a
-    // plate lower that is at the sheet's edge (dry floor at ITS level beside
-    // it). Without it a 2-deep core keeps its tile-deep ring from drying for
-    // ever. Water only moves inner -> edge -> dry, so nothing ping-pongs; a
-    // pond in a pit has walls, not dry floor, round it and stays.
-    if (a >= 2 && supported(x, b, z, cur)) {
-        auto dry_level = [&](int qx, int qz, int fl) -> bool {
-            const Cell &q = wcell(qx, b, qz);
-            return !c_wet(q) && c_cap(q) > 0 && floor_of(q.solid) == fl && supported(qx, b, qz, q);
-        };
-        const int my_fl = floor_of(cur.solid);
-        bool inner = true;
-        for (int i = 0; i < 4 && inner; ++i) {
-            if (dry_level(x + DX[i], z + DZ[i], my_fl)) inner = false;
+    // The edge distance (4.2.6): 0 beside dry floor at this cell's own level
+    // that the sheet could spread onto, else one more than the nearest still
+    // neighbour's. A cell two or more deep gives a tile to a neighbour one
+    // plate lower that is NEARER the edge: so a spill on open ground thins
+    // out to a tile and dries (a difference of one plate alone never moves,
+    // and left a pool three deep with a staircase round it), while water only
+    // ever moves outward and cannot ping-pong. A pond with walls, not dry
+    // floor, round it has no edge (E_NONE) and stays.
+    const int my_fl = floor_of(cur.solid);
+    int e_new = E_NONE;
+    for (int i = 0; i < 4; ++i) {
+        const int nx = x + DX[i], nz = z + DZ[i];
+        const Cell &q = wcell(nx, b, nz);
+        if (!c_wet(q)) {
+            if (c_cap(q) > 0 && floor_of(q.solid) == my_fl && supported(nx, b, nz, q)) { e_new = 0; break; }
+            continue;
         }
-        if (inner) {
-            for (int j = 0; j < 4; ++j) {
-                const int i = (j + rot) & 3;
-                const int nx = x + DX[i], nz = z + DZ[i];
-                const Cell &n = wcell(nx, b, nz);
-                if (!c_wet(n) || c_fluid(n) != cf || c_kind(n) != K_STILL) continue;
-                const int nfl = floor_of(n.solid);
-                if (b * 3 + nfl + n.amt != s_top - 1 || c_wet(wcell(nx, b + 1, nz))) continue;
-                bool edge = false;
-                for (int k = 0; k < 4 && !edge; ++k) {
-                    if (nx + DX[k] == x && nz + DZ[k] == z) continue;
-                    if (dry_level(nx + DX[k], nz + DZ[k], nfl)) edge = true;
-                }
-                if (edge) {
-                    g_moves.push_back({ x, b, z, nx, b, nz, 1, cf });
-                    return;
-                }
-            }
+        if (c_fluid(q) == cf && c_kind(q) == K_STILL) e_new = std::min(e_new, c_edge(q) + 1);
+    }
+    if (e_new > E_NONE) e_new = E_NONE;
+    if (a >= 2 && e_new > 0 && e_new < E_NONE && supported(x, b, z, cur)) {
+        for (int j = 0; j < 4; ++j) {
+            const int i = (j + rot) & 3;
+            const int nx = x + DX[i], nz = z + DZ[i];
+            const Cell &n = wcell(nx, b, nz);
+            if (!c_wet(n) || c_fluid(n) != cf || c_kind(n) != K_STILL) continue;
+            if (b * 3 + floor_of(n.solid) + n.amt != s_top - 1 || c_edge(n) >= e_new) continue;
+            if (c_wet(wcell(nx, b + 1, nz))) continue;
+            g_moves.push_back({ x, b, z, nx, b, nz, 1, cf });
+            return;
         }
     }
+    uint8_t want = (uint8_t)((cur.aux & 0x80) | e_new);
     // A lone tile, on the ground, with nothing deeper beside it, dries.
     if (DEFS[cf].dries && a == 1 && !(cur.aux & 0x80) && !deep_near && supported(x, b, z, cur)
             && !c_wet(wcell(x, b + 1, z))) {
-        Cell n = cur;
-        n.aux = 0x80;
-        g_sets.push_back({ x, b, z, n });
+        want |= 0x80;
         const uint32_t wait = 150 + (hmix((uint32_t)x * 2654435761U ^ (uint32_t)z ^ (uint32_t)b * 97U) % 300);
         g_timers.insert({ g_tick + wait, pack3(x, b, z) });
+    }
+    if (want != cur.aux) {
+        Cell n = cur;
+        n.aux = want;
+        g_sets.push_back({ x, b, z, n });
     }
 }
 
@@ -653,7 +712,7 @@ void eval_timer(int x, int b, int z) {
         const Cell &n = wcell(x + DX[i], b, z + DZ[i]);
         if (c_wet(n) && c_fluid(n) == c_fluid(cur) && (c_fed(n) || n.amt >= 2)) {
             Cell k = cur;
-            k.aux = 0;
+            k.aux = (uint8_t)c_edge(cur);
             g_sets.push_back({ x, b, z, k });
             return;
         }
@@ -730,6 +789,10 @@ void apply_cmd(const Cmd &c) {
         g_mesh_requests.insert(tkey(c.a.x, c.a.z));
         return;
     }
+    if (c.type == 6) {
+        g_far_requests.insert(tkey(c.a.x, c.a.z));
+        return;
+    }
     if (c.type == 5) {
         g_recheck_x = 1e30;
         return;
@@ -751,7 +814,7 @@ void apply_cmd(const Cmd &c) {
         Cell n = cur;
         if (c.amount < 0 || c_kind(cur) != K_STILL) n = Cell{ cur.solid, 0, 0, 0 };
         else n.amt = (uint8_t)std::max(0, (int)cur.amt - c.amount);
-        n.aux = 0;
+        n.aux = c_kind(n) == K_STILL ? (uint8_t)c_edge(cur) : 0;
         write_cell(x, b, z, n);
         wake_around(x, b, z);
         return;
@@ -782,7 +845,7 @@ void apply_cmd(const Cmd &c) {
             Cell nq = q;
             nq.st = mk_st(f, K_STILL, false);
             nq.amt = (uint8_t)((c_wet(q) ? q.amt : 0) + n);
-            nq.aux = 0;
+            nq.aux = c_wet(q) ? (uint8_t)c_edge(q) : E_NONE;
             write_cell(x, b + up, z, nq);
             wake_around(x, b + up, z);
             left -= n;
@@ -946,6 +1009,54 @@ void mesh_tile(int tx, int tz, Array &water, Array &lava) {
     lava = buf[F_LAVA].arrays();
 }
 
+/// The far mesh of a tile (MineWater.md 8): one flat quad per 4 x 4 studs at
+/// the highest water top in them, no sides. Past the sim ring water is frozen,
+/// so this is built once when a tile leaves it. Open sea is the wave tiers'.
+constexpr int FAR_B = 4;
+void mesh_tile_far(int tx, int tz, Array &water, Array &lava) {
+    MeshBuf buf[3];
+    auto it = g_tile_secs.find(tkey(tx, tz));
+    if (it != g_tile_secs.end()) {
+        std::vector<int> sbs = it->second;
+        std::sort(sbs.begin(), sbs.end());
+        for (int bz = 0; bz < SX; bz += FAR_B) {
+            for (int bx = 0; bx < SX; bx += FAR_B) {
+                int top = INT32_MIN, fl = 0, depth = 0;
+                for (int lz = bz; lz < bz + FAR_B; ++lz) {
+                    for (int lx = bx; lx < bx + FAR_B; ++lx) {
+                        const int x = tx * SX + lx, z = tz * SX + lz;
+                        for (int si = (int)sbs.size() - 1; si >= 0; --si) {
+                            Section *s = sec_find(tx, sbs[si], tz);
+                            if (s == nullptr || s->wet <= 0 || !s->ready[lx + SX * lz]) continue;
+                            bool found = false;
+                            for (int lb = SB - 1; lb >= 0; --lb) {
+                                const Cell &c = s->c[Section::idx(lx, lb, lz)];
+                                if (!c_wet(c)) continue;
+                                const int b = sbs[si] * SB + lb;
+                                const int t = top_plates(x, b, z, c);
+                                if (c_ocean(c) && t == g_sea_b * 3) { found = true; break; }
+                                if (t > top) { top = t; fl = c_fluid(c); depth = c.amt; }
+                                found = true;
+                                break;
+                            }
+                            if (found) break;
+                        }
+                    }
+                }
+                if (top == INT32_MIN) continue;
+                const float x0 = (float)(tx * SX + bx) * STUD_M, x1 = (float)(tx * SX + bx + FAR_B) * STUD_M;
+                const float z0 = (float)(tz * SX + bz) * STUD_M, z1 = (float)(tz * SX + bz + FAR_B) * STUD_M;
+                const float y = (float)top * PLATE_M - TOP_SINK;
+                const Color cc(std::min(1.0f, (float)(depth + 3) / 12.0f), 0.0f, 0.5f, 0.5f);
+                buf[fl].quad(Vector3(x0, y, z0), Vector3(x0, y, z1), Vector3(x1, y, z1), Vector3(x1, y, z0),
+                        Vector3(0, 1, 0), cc);
+            }
+        }
+    }
+    water = buf[F_WATER].arrays();
+    lava = buf[F_LAVA].arrays();
+}
+
 int tile_coord(int64_t k, bool z) {
     const int64_t v = z ? (k & 0xFFFFFFF) : ((k >> 28) & 0xFFFFFFF);
     return (int)((v & 0x8000000) ? (v | ~(int64_t)0xFFFFFFF) : v);
@@ -956,6 +1067,7 @@ int tile_coord(int64_t k, bool z) {
 void do_tick() {
     const auto t0 = std::chrono::steady_clock::now();
     g_last_columns = 0;
+    g_sample_ms = 0.0;
     ++g_tick;
     g_seek.clear();
     std::vector<Cmd> cmds;
@@ -1003,8 +1115,21 @@ void do_tick() {
     g_sets.clear();
     g_moves.clear();
     g_defer_lava.clear();
+    // Timers first: of two writes to one cell in a tick the first is kept, and
+    // a cell's own edge-distance update must not swallow its drying.
+    for (int64_t k : timers) {
+        int x, b, z;
+        unpack3(k, x, b, z);
+        eval_timer(x, b, z);
+    }
     std::vector<int64_t> over;
     int evals = 0;
+    // Over the budget: the nearest the player first, the far ones wait (6).
+    if (due.size() > (size_t)MAX_EVALS) {
+        auto d2 = [](int64_t k) { int x, b, z; unpack3(k, x, b, z); return dist2_centre(x, z); };
+        std::nth_element(due.begin(), due.begin() + MAX_EVALS, due.end(),
+                [&](int64_t a, int64_t c) { return d2(a) < d2(c); });
+    }
     for (int64_t k : due) {
         int x, b, z;
         unpack3(k, x, b, z);
@@ -1017,11 +1142,6 @@ void do_tick() {
         }
         ++evals;
         eval(x, b, z);
-    }
-    for (int64_t k : timers) {
-        int x, b, z;
-        unpack3(k, x, b, z);
-        eval_timer(x, b, z);
     }
 
     // Apply (MineWater.md 4.2: sets first, then the moves that still hold).
@@ -1053,13 +1173,14 @@ void do_tick() {
                 Cell nd = dst;
                 nd.st = mk_st(mv.fluid, K_STILL, false);
                 nd.amt = (uint8_t)((c_wet(dst) ? dst.amt : 0) + n);
-                nd.aux = 0;
+                // A wet cell keeps its edge distance; a new one has none yet.
+                nd.aux = c_wet(dst) && c_kind(dst) == K_STILL ? (uint8_t)c_edge(dst) : E_NONE;
                 write_cell(mv.tx, mv.tb, mv.tz, nd);
                 set_now.insert(pack3(mv.tx, mv.tb, mv.tz));
             }
             Cell ns = src;
             ns.amt = (uint8_t)(src.amt - n);
-            ns.aux = 0;
+            ns.aux = (uint8_t)c_edge(src);
             write_cell(mv.x, mv.b, mv.z, ns);
             set_now.insert(pack3(mv.x, mv.b, mv.z));
         }
@@ -1081,6 +1202,7 @@ void do_tick() {
     }
 
     // Meshes for what changed, and what was asked for.
+    const auto tm = std::chrono::steady_clock::now();
     for (int64_t k : g_mesh_requests) g_dirty_tiles.insert(k);
     g_mesh_requests.clear();
     int meshed = 0;
@@ -1098,9 +1220,28 @@ void do_tick() {
     }
     g_dirty_tiles.clear();
     for (int64_t k : left) g_dirty_tiles.insert(k);
+    std::vector<int64_t> far_left;
+    for (int64_t k : g_far_requests) {
+        if (meshed >= MESH_PER_TICK) { far_left.push_back(k); continue; }
+        MeshOut mo;
+        mo.tx = tile_coord(k, false);
+        mo.tz = tile_coord(k, true);
+        mo.far = true;
+        mesh_tile_far(mo.tx, mo.tz, mo.water, mo.lava);
+        g_out_meshes.push_back(mo);
+        ++meshed;
+    }
+    g_far_requests.clear();
+    for (int64_t k : far_left) g_far_requests.insert(k);
 
+    g_last_mesh_ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - tm).count();
     g_last_evals = evals;
     g_last_changes = (int)set_now.size();
+    g_last_changed.clear();
+    for (int64_t k : set_now) {
+        if (g_last_changed.size() >= 8) break;
+        g_last_changed.push_back(k);
+    }
     g_last_meshes = meshed;
     g_active = (int)(g_due.size() + g_due_lava.size());
     g_last_ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
@@ -1135,6 +1276,7 @@ double BrickFluid::reset(double sea_m, bool sea_on) {
     join_wait();
     std::lock_guard<std::recursive_mutex> lk(g_state);
     g_sec.clear();
+    g_sec_epoch.fetch_add(1);
     g_tile_secs.clear();
     g_due.clear();
     g_due_lava.clear();
@@ -1142,6 +1284,7 @@ double BrickFluid::reset(double sea_m, bool sea_on) {
     g_frozen.clear();
     g_dirty_tiles.clear();
     g_mesh_requests.clear();
+    g_far_requests.clear();
     {
         std::lock_guard<std::mutex> lc(g_cmd_mx);
         g_cmds.clear();
@@ -1228,6 +1371,7 @@ Dictionary BrickFluid::take() {
             d["tile"] = Vector2i(m.tx, m.tz);
             d["water"] = m.water;
             d["lava"] = m.lava;
+            d["far"] = m.far;
             meshes.append(d);
         }
         for (int32_t v : g_out_terrain) terr.push_back(v);
@@ -1260,6 +1404,13 @@ Dictionary BrickFluid::build_tile_mesh(int tx, int tz) {
     d["water"] = w;
     d["lava"] = l;
     return d;
+}
+
+void BrickFluid::request_far_mesh(int tx, int tz) {
+    Cmd c;
+    c.type = 6;
+    c.a = Vector3i(tx, 0, tz);
+    push_cmd(c);
 }
 
 void BrickFluid::request_mesh(int tx, int tz) {
@@ -1480,6 +1631,15 @@ int BrickFluid::changed_columns() { return g_mask_version; }
 Dictionary BrickFluid::stats() {
     Dictionary d;
     d["tick_ms"] = g_last_ms;
+    d["mesh_ms"] = g_last_mesh_ms;
+    d["sample_ms"] = g_sample_ms;
+    Array ch;
+    for (int64_t k : g_last_changed) {
+        int x, b, z;
+        unpack3(k, x, b, z);
+        ch.append(Vector3i(x, b, z));
+    }
+    d["changed"] = ch;
     d["evals"] = g_last_evals;
     d["changes"] = g_last_changes;
     d["columns"] = g_last_columns;
@@ -1606,6 +1766,7 @@ void BrickFluid::_bind_methods() {
     ClassDB::bind_static_method("BrickFluid", D_METHOD("surface_at", "p"), &BrickFluid::surface_at);
     ClassDB::bind_static_method("BrickFluid", D_METHOD("flow_at", "p"), &BrickFluid::flow_at);
     ClassDB::bind_static_method("BrickFluid", D_METHOD("ray_cell", "from", "dir", "max_metres"), &BrickFluid::ray_cell);
+    ClassDB::bind_static_method("BrickFluid", D_METHOD("request_far_mesh", "tx", "tz"), &BrickFluid::request_far_mesh);
     ClassDB::bind_static_method("BrickFluid", D_METHOD("sea_mask", "x0", "z0", "size"), &BrickFluid::sea_mask);
     ClassDB::bind_static_method("BrickFluid", D_METHOD("changed_columns"), &BrickFluid::changed_columns);
     ClassDB::bind_static_method("BrickFluid", D_METHOD("stats"), &BrickFluid::stats);

@@ -1,6 +1,6 @@
 # Water and lava in the mine world — plan
 
-Status: **stages 1-2 built** (2026-11-17; section 14). For `scenes/terrain_test.tscn`, the mine world
+Status: **stages 1-5 built** (2026-11-17; section 14). For `scenes/terrain_test.tscn`, the mine world
 ([MineWorld.md](MineWorld.md)). It takes [Water.md](Water.md) §12's idea (brick water that
 flows) and settles its model for a volumetric, endless, Minecraft-like world. The heightfield
 test's sea ([Water.md](Water.md) §1–9) is kept and reused for the ocean's waves.
@@ -142,11 +142,12 @@ Tiles are whole and are conserved exactly; nothing is ever a fraction of a tile.
 5. Fed water spreading over still water whose top is lower takes those cells over: a river
    running into a pond keeps the pond topped up. Cut the river and those cells become still
    water again (4.1.6), so the pond stays a pond.
-6. **A core thins** (added in stage 2): an inner still cell (no dry floor at its own level beside
-   it) gives a tile to a neighbour one plate lower that is at the edge of the sheet (dry floor at
-   its level beside it). Without it a 2-deep core on open flat ground kept its tile-deep ring from
-   drying for ever (a cut-off fall lands as a full brick). Water only moves inner -> edge -> dry, so
-   it cannot ping-pong; a pond in a pit has walls round it, not dry floor, and stays.
+6. **Spreading out by one plate** (stage 5; replaced stage 2's "a core thins"): each still
+   cell keeps its distance to dry floor at its own level the sheet could spread onto (0 beside
+   it, else one more than its nearest still neighbour's; 63 = none, as for a walled pond). A
+   cell two or more deep gives a tile to a neighbour one plate lower that is nearer that edge.
+   A spill on open ground thins to a tile and dries; water only moves outward, so nothing
+   ping-pongs; a pond with walls round it has no edge and stays.
 7. **A cut-off stream keeps a tile** (4.1.6): flowing water losing its feed becomes still water of
    one tile, unless it held more than its stream level (pond water a river ran over: kept). A
    cut-off fall keeps its whole brick and drains down.
@@ -278,6 +279,13 @@ everything else and the calm water beside it lines up with it.
 | **W1 frozen** | to the sim ring, ~90 m | nothing new: the terrain's coarse blocks start here (below) | ticks to ~90 m, frozen past it |
 | **W2 far** | to the view distance | **inland water baked into the coarse blocks**; the sea by the smooth sheet with fading waves | nothing |
 
+*As built (stage 5):* not baked into the coarse blocks. A tile past the sim ring, where water
+is frozen, swaps its full mesh for a **far mesh** built once on the worker (one flat quad per
+4 x 4 studs at the highest top, no sides; `request_far_mesh`), and back inside the ring the full
+one returns. One draw call per tile with water, which only player-made water has (the sea is
+the wave tiers' sheet to 1 km). Baking into `build_coarse` stays the way to do it if far
+water ever becomes common (lakes, stage 8).
+
 **The far water is a heightfield, baked with the far ground.** `build_coarse` already samples
 the ground's height every `step` studs for the blocky far rings; it also samples the **water top**
 there (from `gen_fluid`, and from a per-tile summary of changed water: the highest water top per
@@ -324,6 +332,11 @@ water hand over where near ground and far ground do, so there is no new seam to 
 * **Aim**: `BrickFluid.ray_cell` walks the grid to the first water or ground. The builder's own
   aim ignores water (it is terrain-only), so blocks are placed into water (R7).
 * Hotbar entries for testing (water source, water, lava source) before the buckets exist.
+* *Built (stage 4):* build mode slot 10 (key 0) the bucket, 11 (-) the source bucket, 12 (=) the
+  test fluids (= again cycles them). The pawn swims past 1.05 m deep (`Pawn.water_probe`,
+  `PawnMoves._swim_tick`: move keys steer, jump up, crouch down, idle floats the eye 0.12 m out,
+  jump at a bank climbs out); shallower it wades at 70 % speed and running water pushes it.
+  Under water the view takes `Underwater`'s fog (orange in lava); lava burns 40 health a second.
 
 ## 11. Saving
 
@@ -345,6 +358,32 @@ flowing is still flowing after a load. Same cadence and worker write as the edit
 | far inland water | GPU | inside the coarse blocks: no draw calls of its own |
 | the sea | GPU | as measured in heightfield_test: 176k triangles (Water.md 9.11) |
 | memory | — | 48 KB a section, only where water was changed |
+
+### 12.1 Measured (2026-11-17, before stage 5)
+
+`tools/probes/fluid_bench_probe.gd`, headless, editor closed, nothing else running, chip at 54 C.
+The DLL is godot-cpp's template_debug, which is /O2 (`optimize=speed_trace`): optimised numbers.
+
+| | Measured | Estimate |
+|---|---|---|
+| rules, flowing water (64 sources spreading) | **885 ns a cell** | 50 ns |
+| rules, still water (a 10k-brick spill spreading) | **173 ns a cell** | 50 ns |
+| a column read from the field the first time water reaches it | **10-13 us** (16 courses x 3 plates) | � |
+| a tile mesh | **0.10-0.34 ms** | 0.2-0.6 ms |
+| a calm world | **0.07 ms a tick, 0 awake** | 0 |
+| the shore field, 3072 studs each way every 8 | **261 ms** on a worker | � |
+
+So a tick with 20k flowing cells is ~18 ms on the worker at 10 Hz (~18 % of a core), not 1 ms;
+the 64k budget is ~57 ms. Fine off the main thread; the budget may want lowering to ~20k.
+Where the time goes: first touches are column reads (a flood front is mostly that), and a
+spreading spill is two-thirds meshing (every still top is its own quad: merging still tops,
+7.1, is the next saving). Before this run, a section lookup cache and an allocation-free
+`seek_dirs` took flowing water from 7.2 us (sampling included) to 5.9 us; the split above
+shows the rest was column reads, not rules.
+
+The bench also found two rule bugs, fixed in stage 5: a big still spill stopped spreading
+after one ring and stood three deep for ever (fixed by the edge distance, 4.2.6), and a
+drying tile could lose its timer to a same-tick write (timers now run first).
 
 ## 13. Decided with the user (2026-11-17)
 
@@ -385,6 +424,14 @@ Each stage is merged on its own. C++ stages need the main folder's DLL rebuilt a
    `scenes/terrain_test.tscn -- --gate=water` (pictures `user://dev/water_*.png`).
 3. **The sea on**: `gen_fluid`, the sea course, caves sealed, the wave tiers streamed with the
    shore field, the mask, the Water tab. Gate: coast, river mouth, a dug channel off the sea.
+   *Built 2026-11-17:* gen param `water` (on by default in the mine world's presets) seals
+   caves and ravines under the sea course in sea-floor and low-shore columns
+   (`terrain_biomes.cpp`); `BrickFluid.reset(sea, true)` snaps the sea to a course and
+   `BrickWave` takes that level; `WaterSea` draws it (no pools of its own, `use_fluid_mask`:
+   `BrickFluid.sea_mask`), its shore field 3072 studs each way computed round the player on a
+   worker (`compute_shore_field`) and swapped in after 768 studs or 1.5 s after an edit under the
+   sea line. A source re-made in dug ground is calm, not ocean (the tiers do not draw dug
+   ground). The Sea & Water tab: water on/off, wave height. Pass `-- --gate=sea`.
 4. **The player**: swimming, underwater fog, flow push, both buckets, placing into water.
 5. **LOD**: the sim ring and frozen sections, far water in the coarse blocks, the budget.
    Measured with the editor closed (CLAUDE.md).

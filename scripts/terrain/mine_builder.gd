@@ -20,11 +20,16 @@ extends Node3D
 ## (PlayerController.hold_fire), and slot keys and the wheel do not reach the
 ## arsenal or the fly speed.
 ##
-## The last three slots are fluids for testing (Docs/MineWater.md 10, until
-## the buckets exist): a water source, a water brick (9 tiles, still water),
-## a lava source. RMB pours one in each stud of the block; LMB with a fluid
-## slot takes the fluid looked at (BrickFluid.ray_cell). Blocks placed into
-## water delete it (13.4): the builder's own aim passes through water.
+## The last three slots are fluids (Docs/MineWater.md 10):
+##   0  BUCKET: holds 9 tiles (3 bricks). LMB on still water scoops a brick
+##      (3 tiles); LMB on a source (all sea water is) fills it to 9 and the
+##      source stays. RMB pours a brick of still water.
+##   -  SOURCE BUCKET: LMB scoops one source brick, water or lava (a lake
+##      heals the hole: two sources make a third); RMB puts it down, a spring.
+##   =  test fluids, = again cycles: water source, water brick, lava source.
+##      RMB pours one in every stud of the block, LMB takes the fluid looked at.
+## Blocks placed into water delete it (13.4): the builder's aim passes
+## through water.
 ##
 ## Preloaded by path, not named (see terrain_scene.gd).
 
@@ -37,9 +42,18 @@ const DEFAULT_HOTBAR := ["grass", "dirt", "stone", "dark stone", "sand", "sandst
 const WATER_SOURCE := -1
 const WATER_BRICK := -2
 const LAVA_SOURCE := -3
-const FLUID_SLOTS := [WATER_SOURCE, WATER_BRICK, LAVA_SOURCE]
-const FLUID_NAMES := { -1: "water source", -2: "water brick (9 tiles)", -3: "lava source" }
-const FLUID_COLOURS := { -1: Color(0.15, 0.45, 0.85), -2: Color(0.4, 0.7, 0.95), -3: Color(1.0, 0.4, 0.05) }
+const BUCKET := -4
+const SOURCE_BUCKET := -5
+const FLUID_SLOTS := [BUCKET, SOURCE_BUCKET, WATER_SOURCE]
+const TEST_FLUIDS := [WATER_SOURCE, WATER_BRICK, LAVA_SOURCE]
+const FLUID_NAMES := { -1: "water source", -2: "water brick (9 tiles)", -3: "lava source",
+		-4: "bucket", -5: "source bucket" }
+const FLUID_COLOURS := { -1: Color(0.15, 0.45, 0.85), -2: Color(0.4, 0.7, 0.95), -3: Color(1.0, 0.4, 0.05),
+		-4: Color(0.55, 0.55, 0.6), -5: Color(0.35, 0.35, 0.45) }
+const BUCKET_TILES := 9
+## The bucket's water, tiles; the source bucket's fluid (0 empty, 1 water, 2 lava).
+var bucket := 0
+var source_bucket := 0
 const SLOT_KEYS := [KEY_1, KEY_2, KEY_3, KEY_4, KEY_5, KEY_6, KEY_7, KEY_8, KEY_9, KEY_0,
 		KEY_MINUS, KEY_EQUAL]
 
@@ -132,7 +146,10 @@ func _input(event: InputEvent) -> void:
 			_refresh_bar()
 			get_viewport().set_input_as_handled()
 		elif SLOT_KEYS.has(k):
-			slot = mini(SLOT_KEYS.find(k), hotbar.size() - 1)
+			var want := mini(SLOT_KEYS.find(k), hotbar.size() - 1)
+			if want == slot and TEST_FLUIDS.has(hotbar[slot]):
+				hotbar[slot] = TEST_FLUIDS[(TEST_FLUIDS.find(hotbar[slot]) + 1) % TEST_FLUIDS.size()]
+			slot = want
 			_refresh_bar()
 			get_viewport().set_input_as_handled()
 		return
@@ -268,6 +285,26 @@ func place_target() -> bool:
 func pour(to: Vector3i) -> bool:
 	var c := _cells(to)
 	var f := hotbar[slot]
+	var cell := Vector3i(c[0].x, to.y, c[0].z)
+	if f == BUCKET:
+		if bucket <= 0:
+			return false
+		var n := mini(3, bucket)
+		BrickFluid.place(cell, 1, BrickFluid.STILL, n)
+		bucket -= n
+		log_blocks.append("bucket pour %d %s" % [n, cell])
+		_refresh_bar()
+		target = {}
+		return true
+	if f == SOURCE_BUCKET:
+		if source_bucket == 0:
+			return false
+		BrickFluid.place(cell, source_bucket, BrickFluid.SOURCE, 3)
+		log_blocks.append("source bucket pour %s" % cell)
+		source_bucket = 0
+		_refresh_bar()
+		target = {}
+		return true
 	var fluid := 2 if f == LAVA_SOURCE else 1
 	var kind := BrickFluid.STILL if f == WATER_BRICK else BrickFluid.SOURCE
 	for x in range(c[0].x, c[1].x + 1):
@@ -285,6 +322,29 @@ func take_fluid() -> bool:
 	var hit: Dictionary = BrickFluid.ray_cell(cam.global_position, -cam.global_transform.basis.z, REACH)
 	if hit.is_empty() or int(hit.fluid) == 0:
 		return false
+	var f := hotbar[slot]
+	if f == BUCKET:
+		if int(hit.fluid) != 1 or bucket >= BUCKET_TILES:
+			return false
+		if int(hit.kind) == BrickFluid.SOURCE:
+			bucket = BUCKET_TILES           # the source stays: it is infinite
+		elif int(hit.kind) == BrickFluid.STILL:
+			var n := mini(mini(3, int(hit.amount)), BUCKET_TILES - bucket)
+			BrickFluid.remove(hit.cell, n)
+			bucket += n
+		else:
+			return false                    # running water slips out
+		log_blocks.append("bucket fill %d %s" % [bucket, hit.cell])
+		_refresh_bar()
+		return true
+	if f == SOURCE_BUCKET:
+		if source_bucket != 0 or int(hit.kind) != BrickFluid.SOURCE:
+			return false
+		source_bucket = int(hit.fluid)
+		BrickFluid.remove(hit.cell, -1)
+		log_blocks.append("source bucket take %s" % hit.cell)
+		_refresh_bar()
+		return true
 	BrickFluid.remove(hit.cell, -1)
 	broken += 1
 	log_blocks.append("take %s" % hit.cell)
@@ -387,7 +447,15 @@ func _refresh_bar() -> void:
 		(p.get_node("Swatch") as ColorRect).color = col
 	var s := block_studs()
 	_bar_label.text = "BUILD  %s  -  block %dx%d studs, 1 brick  (B exit  X size  MMB pick)" % [
-			FLUID_NAMES[hotbar[slot]] if hotbar[slot] < 0 else _names[hotbar[slot]], s, s]
+			_slot_name(hotbar[slot]), s, s]
+
+
+func _slot_name(f: int) -> String:
+	if f == BUCKET:
+		return "bucket %d/%d tiles" % [bucket, BUCKET_TILES]
+	if f == SOURCE_BUCKET:
+		return "source bucket (%s)" % ["empty", "water", "lava"][source_bucket]
+	return FLUID_NAMES[f] if f < 0 else _names[f]
 
 
 static func _box_lines() -> ArrayMesh:
