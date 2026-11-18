@@ -1,6 +1,6 @@
 # Water and lava in the mine world — plan
 
-Status: **stages 1-7 built** (2026-11-17; section 14). For `scenes/terrain_test.tscn`, the mine world
+Status: **stages 1-7 built, 8 in part** (2026-11-17; section 14). For `scenes/terrain_test.tscn`, the mine world
 ([MineWorld.md](MineWorld.md)). It takes [Water.md](Water.md) §12's idea (brick water that
 flows) and settles its model for a volumetric, endless, Minecraft-like world. The heightfield
 test's sea ([Water.md](Water.md) §1–9) is kept and reused for the ocean's waves.
@@ -452,6 +452,37 @@ Each stage is merged on its own. C++ stages need the main folder's DLL rebuilt a
    saved). "Forget changes" deletes it. `--gate=water` saves, generates again, and compares.
 8. **Later**: pits filling from rivers (4.5), lakes above the sea, cave pools, springs, lava
    pools, floating debris, mixed water pieces, multiplayer diffs (STA §10.8–10.9).
+   *Built 2026-11-18 (part of it):*
+   * **Merged water tops** ("mixed water pieces", for drawing): flat tops of a course with the
+     same height and look are one rectangle (greedy, per section course). A calm 8 x 8 pond is
+     one quad, not 64; meshing was two thirds of a spreading spill's time (12.1).
+   * **Lava pools deep down**: gen params `lava_pools`, `lava_m` (from the sea line, default -4 m):
+     all cave air under that line is lava, a source (Minecraft's cave-bottom lava). Generated,
+     not stored. Calm: nothing is awake until something is dug into it.
+   * **Springs**: gen params `springs`, `spring_chance` (default 2 %): a column beside a cliff of
+     three bricks or more, chosen by hash, has a source in the air under the cliff's real top
+     (the overhang band counted). It falls down the face and runs on as a stream.
+   * **Priming**: generated lava and springs live in the field, so a tile coming into the sim ring
+     is primed once (`BrickFluid.prime_tile`): its lava band is read, so it is drawn, and its
+     springs are woken, so they run. Six tiles a half second, nearest first. ~10 ms a tile on the
+     worker.
+   * Fixes found on the way: `BrickTerrain.generated_plate` read the classic field in the biome
+     world, and dug ground under the sea line was marked only a plate above the sea in the shore
+     field, so wave crests drew the sea down any pit dug inland; now 100 m over it. The save skips
+     sections never written (generated lava would have been scanned every autosave).
+   * The Sea & Water tab has lava pools, the lava line, springs and the spring chance.
+     `-- --gate=gen` pictures a spring near the spawn and a lava pool down a dug shaft.
+   *Not built, and why:*
+   * **Pits filling from rivers (4.5)**: running water takes over lower still water (4.2.5), so a
+     "tap" filling a closed pit with still water is undone by the fall feeding it; it needs the
+     fed body to be recognised as closed (no cell stopped by reach, no drop), which is a search
+     over the body, not a local rule. Next to do if wanted.
+   * **Lakes above the sea, cave pools (aquifers)**: generator work (a lake level per basin, pools
+     with barriers between levels) in `terrain_biomes.cpp` before any water rule.
+   * **Floating debris**: nothing floats in the mine world yet (the sea's collision patch is off,
+     stage 4); it wants buoyant pieces first.
+   * **Multiplayer diffs**: there is no networking to carry them; the save's per-cell difference
+     (stage 7) is the format they would use.
 
 ## 15. Risks
 

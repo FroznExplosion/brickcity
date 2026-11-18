@@ -183,6 +183,8 @@ func _ready() -> void:
 			_run_water_gate()
 		elif "--gate=sea" in OS.get_cmdline_user_args():
 			_run_sea_gate()
+		elif "--gate=gen" in OS.get_cmdline_user_args():
+			_run_gen_gate()
 		elif "--gate=menu" in OS.get_cmdline_user_args():
 			_run_menu_gate()
 		elif "--gate=look" in OS.get_cmdline_user_args():
@@ -2064,6 +2066,92 @@ func _run_sea_gate() -> void:
 	view.process_mode = Node.PROCESS_MODE_INHERIT
 	_hud_layer.visible = true
 	print("[sea-gate] done")
+	get_tree().quit()
+
+
+## The generated-fluid pass: -- --gate=gen (Docs/MineWater.md stage 8).
+## Springs out of cliff faces near the spawn once their tiles are primed,
+## and a lava pool in a deep cave, seen down a shaft dug to it.
+func _run_gen_gate() -> void:
+	await _frames(10)
+	var dev := UserPaths.DEV
+	DirAccess.make_dir_recursive_absolute(dev)
+	_time = 0.42
+	var stud := BrickWorld.get_stud_metres()
+	var course := BrickWorld.get_plate_metres() * 3.0
+	set_on_foot(false)
+	view.process_mode = Node.PROCESS_MODE_DISABLED
+	view.rig.visible = false
+	if view.arms != null:
+		view.arms.visible = false
+	_hud_layer.visible = false
+	for i in 240:
+		await get_tree().process_frame
+	print("[gen-gate] primed %d tiles; %s" % [water.primed_count, water.report()])
+	# A spring: running water, not the sea, in a tile near the eye.
+	var e := _eye()
+	var c0 := Vector2i(floori(e.x / stud), floori(e.z / stud))
+	var spring := Vector3i(1 << 30, 0, 0)
+	var sea_b := BrickFluid.get_sea_course()
+	var best_d := 1 << 30
+	for dz in range(-96, 97):
+		for dx in range(-96, 97):
+			var p := c0 + Vector2i(dx, dz)
+			var top := floori(BrickTerrain.surface_plate(p.x, p.y) / 3.0)
+			if top < sea_b + 2 or dx * dx + dz * dz >= best_d:
+				continue
+			for k in range(0, 3):
+				var ci: Dictionary = BrickFluid.cell_info(Vector3i(p.x, top + k, p.y))
+				if int(ci.fluid) == 1 and not bool(ci.ocean):
+					spring = Vector3i(p.x, top + k, p.y)
+					best_d = dx * dx + dz * dz
+					break
+	if spring.x != 1 << 30:
+		var sm := Vector3((spring.x + 0.5) * stud, spring.y * course, (spring.z + 0.5) * stud)
+		walker.place(to_global(sm + Vector3(-6, 5, -6)), Vector3(1, 0, 1).normalized())
+		walker.pitch = -0.5
+		await _frames(60)
+		print("[gen-gate] water from a spring at %s (%.0f m from the spawn view)" % [
+				spring, Vector2(spring.x - c0.x, spring.z - c0.y).length() * stud])
+		await _shot(dev + "gen_spring.png")
+	else:
+		print("[gen-gate] FAIL no spring water within 160 studs")
+	# A lava pool: cave air under the lava line near the spawn.
+	var lava_b := floori((float(settings.gen.get("sea_m", 20.0)) + float(settings.gen.get("lava_m", -4.0))) / course)
+	var pool := Vector2i(1 << 30, 0)
+	for r in range(0, 2000, 4):
+		for a in 16:
+			var p := c0 + Vector2i(Vector2(cos(a * TAU / 16.0), sin(a * TAU / 16.0)) * r)
+			if int(BrickFluid.cell_info(Vector3i(p.x, lava_b - 1, p.y)).fluid) == 2:
+				pool = p
+				break
+		if pool.x != 1 << 30:
+			break
+	if pool.x == 1 << 30:
+		print("[gen-gate] FAIL no lava pool within 2000 studs")
+	else:
+		# A shaft 4 x 4 down to just over the lava, to look into the cave.
+		var top := BrickTerrain.surface_plate(pool.x, pool.y)
+		for z in range(pool.y - 2, pool.y + 2):
+			var r: Dictionary = BrickTerrain.fill_box(Vector3i(pool.x - 2, lava_b * 3, z),
+					Vector3i(pool.x + 1, top + 3, z), 0, false)
+			terrain_edited(r)
+		var pm := Vector3((pool.x + 0.5) * stud, lava_b * course, (pool.y + 0.5) * stud)
+		walker.place(to_global(pm + Vector3(0.2, 3.0, 0.2)), Vector3(1, 0, 0))
+		walker.pitch = -1.45
+		for i in 120:
+			await get_tree().process_frame
+		print("[gen-gate] lava pool at %s course %d, %.0f m down from the surface; %s" % [
+				pool, lava_b - 1, (top / 3.0 - lava_b) * course, water.report()])
+		await _shot(dev + "gen_lava.png")
+		walker.place(to_global(Vector3(pm.x + 0.2, (top + 6) * BrickWorld.get_plate_metres(), pm.z + 0.2)), Vector3(1, 0, 0))
+		walker.pitch = -1.5
+		await _frames(30)
+		await _shot(dev + "gen_lava_top.png")
+
+	view.process_mode = Node.PROCESS_MODE_INHERIT
+	_hud_layer.visible = true
+	print("[gen-gate] done")
 	get_tree().quit()
 
 
