@@ -320,8 +320,11 @@ func _run_pawn_gate() -> void:
 		await host._frames(1)
 	host.walker.rise = 0.0
 	# Flying keeps the pawn's camera drawn, with the arms and gun, where the
-	# walker's camera is (FpsRig keep_view, Docs/MineWorld.md 10).
-	await host._frames(2)
+	# walker's camera is (FpsRig keep_view, Docs/MineWorld.md 10). Compared
+	# once the climb's speed has died away: at 120 m/s a frame's timing alone
+	# is metres between the two.
+	host.walker.fly_speed = 5.0
+	await host._frames(30)
 	_check("flying keeps the arms and gun with the camera", host.cam.current and host.view.rig.visible
 			and host.cam.global_position.distance_to(host.walker.camera.get_global_transform_interpolated().origin) < 0.5,
 			"pawn camera drawn %s, arms %s, %.2f m from the flight camera" % [host.cam.current,

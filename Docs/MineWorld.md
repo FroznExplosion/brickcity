@@ -283,6 +283,7 @@ made the difference.
 |---|---|
 | `tools/probes/mine_world_probe.gd` (headless) | generator, biomes, ores, bedrock, blocks, whole-brick breaking, saves |
 | `-- --gate` | spawn, flight (no collision, arms follow), endless far rings, holes, menu stops the world, build, landing, edit frame times, save round trip |
+| `-- --gate=deep` | the deep tier: into a cave 78 m down, sections load, land and stand, the seam |
 | `-- --gate=shift` | origin shifts on a 1.2 km flight: no holes, lands, builds |
 | `-- --gate=flight` | fast flight: worst frame, frames over 33 ms, what each slow one spent |
 | `-- --gate=cave` | land in a reachable cave, still standing 200 ticks later |
@@ -405,8 +406,34 @@ to the bedrock under a surface tile (~140 m of mask) would be ~80 ms, ~25k
 triangles and ~2,000 boxes a tile, for 49 near tiles, almost all of it
 underground and unseen. So the surface tiles keep their shallow mask.
 
-**Stage 2, chosen design: a deep tier of sections** (cubic chunks for the
-underground only).
+**Stage 2, built (2026-11-18): the deep tier** (`scripts/terrain/terrain_deep.gd`,
+`BrickTerrain.build_section`, `set_deep_tier`, `deep_top`). As designed below,
+with these results and details:
+
+- `deep_caves` (default on, the menu's Caves tab): below `cave_max_depth_m`
+  the same caves go on to three bricks over the bedrock, chambers growing
+  rarer over the first 10 m (at full strength a quarter of the underground was
+  air; now a fifth).
+- mine_world_probe: a tile draws nothing under its floor, a section nothing
+  outside its plates; 636 of 636 deep cave floors inside a section's collider.
+  A section bakes in ~8.7 ms (2,200 triangles, 175 boxes); a surface tile
+  ~16 ms (13.9 before: caves no longer thin out at its floor).
+- The tier loads only while the eye is 30 plates under its column's surface:
+  5 x 5 tiles by 3 sections round the eye, 4 bakes in flight, a 1.5 ms node
+  budget, colliders within a tile and a section of the eye. Sections are
+  drawn by TerrainTile (build_section returns its keys). A section out of
+  range goes only after 0.6 s.
+- `-- --gate=deep`: flies into a reachable cave 78 m under the surface, 69
+  sections in 62 frames (worst 38 ms, one over 33), lands and stands; then a
+  picture across a tile's floor for seams (none seen).
+- Found on the way: landing from a flight, the pawn's camera flashed back for
+  ~4 ticks to where the pawn was left (its interpolated position had not
+  caught up with the teleport; the body is disabled while flying). The deep
+  tier followed the flash and dropped the floor under the pawn.
+  `Pawn._origin_interpolated` now uses the real position when the two are
+  over 8 m apart -- the flash is gone in every scene.
+
+The design it follows:
 
 - A tile column's surface mask ends at a fixed plate B(tile) computed from
   the generator alone (lowest generated surface in the tile minus the

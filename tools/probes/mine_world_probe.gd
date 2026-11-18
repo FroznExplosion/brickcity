@@ -51,6 +51,7 @@ func _initialize() -> void:
 	_check_build_blocks()
 	_check_break_brick()
 	_check_cave_colliders()
+	_check_deep_tier()
 	await _check_solid_trunks()
 
 	BrickTerrain.set_generator(0)
@@ -84,6 +85,9 @@ func _check_cave_colliders() -> void:
 		var d: Dictionary = BrickTerrain.build_tile(tx, tz)
 		ms += float(Time.get_ticks_usec() - t0) / 1000.0
 		tiles += 1
+		# The tile's own plates only: under its floor the deep caves are the
+		# deep tier's (_check_deep_tier).
+		var floor_p := BrickTerrain.deep_top(tx, tz)
 		cave_boxes += int(d.get("cave_box_count", 0))
 		var boxes: PackedFloat32Array = d.boxes
 		all_boxes += boxes.size() / 6
@@ -94,7 +98,7 @@ func _check_cave_colliders() -> void:
 				var top := BrickTerrain.surface_plate(x, z)
 				# Down from a brick under the top: the first air, then the floor.
 				var yp := top - 4
-				var lo := top - 600
+				var lo := maxi(top - 600, floor_p)
 				while yp > lo and BrickTerrain.solid_at(x, yp, z) != 0:
 					yp -= 1
 				if yp <= lo:
@@ -122,6 +126,91 @@ func _check_cave_colliders() -> void:
 			% [held, floors, tiles, cave_boxes, all_boxes, ms / tiles, missed])
 	_expect(floors > 5, "the scan found cave floors (%d)" % floors)
 	_expect(held >= floors * 0.9, "cave floors are collided (%d of %d)" % [held, floors])
+
+
+## THE DEEP TIER (Docs/MineWorld.md 16): caves go on under a surface tile's
+## floor (deep_top) down to the bedrock; with the tier on, a tile draws only
+## down to its floor and sections (build_section) draw and collide the rest,
+## each only its own plates.
+func _check_deep_tier() -> void:
+	BrickTerrain.clear_terrain_edits()
+	BrickTerrain.set_deep_tier(true)
+	var stud := BrickWorld.get_stud_metres()
+	var plate := BrickWorld.get_plate_metres()
+	var sec := BrickTerrain.get_deep_section_plates()
+	var bed := BrickTerrain.get_bedrock_plate()
+	# Deep cave air under the floors.
+	var cols := 0
+	var deep_air := 0
+	for i in 60:
+		var x := i * 37 - 900
+		var z := 400 - i * 23
+		var t := Vector2i(floori(float(x) / 32.0), floori(float(z) / 32.0))
+		var floor_p := BrickTerrain.deep_top(t.x, t.y)
+		for yp in range(bed + 12, floor_p, 3):
+			cols += 1
+			if BrickTerrain.solid_at(x, yp, z) == 0:
+				deep_air += 1
+	print("[mine] deep caves: %d of %d cells under the tiles' floors are air (bedrock plate %d)" % [deep_air, cols, bed])
+	_expect(deep_air > cols / 50, "caves go on under the surface tiles' floors")
+	# Ownership, faces and colliders, over a few tile columns.
+	var t_ms := 0.0
+	var s_ms := 0.0
+	var n_sec := 0
+	var tris := 0
+	var boxes_n := 0
+	var tile_below := 0
+	var sec_outside := 0
+	var floors := 0
+	var held := 0
+	for i in 6:
+		var tx := i * 9 - 30
+		var tz := 11 - i * 7
+		var floor_p := BrickTerrain.deep_top(tx, tz)
+		var t0 := Time.get_ticks_usec()
+		var d: Dictionary = BrickTerrain.build_tile(tx, tz)
+		t_ms += float(Time.get_ticks_usec() - t0) / 1000.0
+		var mesh: Array = d.mesh
+		if not mesh.is_empty():
+			for v in (mesh[Mesh.ARRAY_VERTEX] as PackedVector3Array):
+				if v.y < floor_p * plate - 0.01:
+					tile_below += 1
+		for sy in range(floori(float(bed) / sec), floori(float(floor_p) / sec) + 1):
+			t0 = Time.get_ticks_usec()
+			var s: Dictionary = BrickTerrain.build_section(tx, sy, tz)
+			s_ms += float(Time.get_ticks_usec() - t0) / 1000.0
+			if not s.has("own_lo"):
+				continue
+			n_sec += 1
+			tris += int(s.triangle_count)
+			var boxes: PackedFloat32Array = s.boxes
+			boxes_n += boxes.size() / 6
+			var sm: Array = s.mesh
+			if not sm.is_empty():
+				for v in (sm[Mesh.ARRAY_VERTEX] as PackedVector3Array):
+					if v.y < int(s.own_lo) * plate - 0.01 or v.y > int(s.own_hi) * plate + 0.01:
+						sec_outside += 1
+			# Cave floors in this section: inside one of its boxes.
+			for lz in range(2, 32, 7):
+				for lx in range(2, 32, 7):
+					var x := tx * 32 + lx
+					var z := tz * 32 + lz
+					for yp in range(int(s.own_lo), int(s.own_hi) - 1):
+						if BrickTerrain.solid_at(x, yp, z) != 0 and BrickTerrain.solid_at(x, yp + 1, z) == 0 								and BrickTerrain.solid_at(x, yp + 6, z) == 0 and yp + 6 < int(s.own_hi):
+							floors += 1
+							var p := Vector3((lx + 0.5) * stud, (yp + 1) * plate - 0.03, (lz + 0.5) * stud)
+							for o in range(0, boxes.size(), 6):
+								if absf(p.x - boxes[o]) <= boxes[o + 3] * 0.5 and absf(p.y - boxes[o + 1]) <= boxes[o + 4] * 0.5 										and absf(p.z - boxes[o + 2]) <= boxes[o + 5] * 0.5:
+									held += 1
+									break
+	print("[mine] deep tier: tiles %.1f ms; %d sections %.1f ms each, %d tris, %d boxes each; tile vertices under its floor %d, section vertices outside its plates %d; deep floors collided %d of %d"
+			% [t_ms / 6.0, n_sec, s_ms / maxf(n_sec, 1), tris / maxi(n_sec, 1), boxes_n / maxi(n_sec, 1),
+			tile_below, sec_outside, held, floors])
+	_expect(n_sec > 6 and tris > 0, "sections draw the deep caves")
+	_expect(tile_below == 0, "a tile draws nothing under its floor")
+	_expect(sec_outside == 0, "a section draws only its own plates")
+	_expect(floors > 5 and held >= floors * 0.9, "deep cave floors are collided (%d of %d)" % [held, floors])
+	BrickTerrain.set_deep_tier(false)
 
 
 ## Trees streamed by TerrainTrees have solid trunks near the camera
