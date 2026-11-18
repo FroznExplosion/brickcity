@@ -78,6 +78,12 @@ public:
     /// next tick: the tile left the sim ring, where water is frozen (8).
     /// take() gives it with "far": true.
     static void request_far_mesh(int tx, int tz);
+    /// A tile came near (stage 8): its generated lava pools are read from the
+    /// field (so they are drawn) and its springs read and woken (so they run).
+    /// Once a tile per world is enough; the caller keeps the list.
+    static void prime_tile(int tx, int tz);
+    /// Does this world generate fluid that needs priming (lava pools, springs)?
+    static bool has_generated();
     /// Tiles that hold anything to draw, as Vector2i.
     static Array drawn_tiles();
 

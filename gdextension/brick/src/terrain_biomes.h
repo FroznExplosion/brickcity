@@ -104,6 +104,16 @@ struct GenParams {
     /// The sea is water (Docs/MineWater.md 9): caves and ravines are sealed
     /// against it, so no water stands beside cave air before anything wakes it.
     bool water = false;
+    /// Lava pools (Docs/MineWater.md 9, stage 8): all cave air under
+    /// sea_m + lava_m is lava, as Minecraft's caves are at the bottom. Caves
+    /// reach the bedrock (deep_caves), so the line sits a few bricks over it:
+    /// lava lakes in the deepest caves, not a molten underground.
+    bool lava_pools = false;
+    float lava_m = -112.0f;
+    /// Springs: a column beside a cliff of three bricks or more has this
+    /// chance of water running out of the face (a source in the air there).
+    bool springs = false;
+    float spring_chance = 0.02f;
     bool caves = true;
     /// Caves below cave_max_depth_m too, down to just over the bedrock: the
     /// deep tier draws them (Docs/MineWorld.md 16).

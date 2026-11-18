@@ -2270,6 +2270,12 @@ int BrickTerrain::surface_plate(int x, int z) {
 }
 
 int BrickTerrain::generated_plate(int x, int z) {
+    if (biomes_on()) {
+        // The biome world's own surface, not the classic field's: the shore
+        // field asked this whether dug ground was sea, and with the classic
+        // answer a pit dug below the sea line inland drew the sea in it.
+        return biome_column(g_field.seed, x, z).sb * PLATES_PER_CELL + PLATES_PER_CELL - 1;
+    }
     t_bare_field = true;
     const int top = g_field.top_plate(x, z);
     t_bare_field = false;
@@ -6128,7 +6134,9 @@ PackedFloat32Array BrickWave::compute_shore_field(int cx, int cz, int half_studs
             if (ground < (float)g_sea_level
                     && (float)(BrickTerrain::generated_plate(gx, gz) + 1) * PLATE_M
                             >= (float)g_sea_level) {
-                ground = (float)g_sea_level + PLATE_M;
+                // Well over any crest: one plate up, the waves rose over it
+                // and the tiers drew sea down a pit dug inland.
+                ground = (float)g_sea_level + 100.0f;
             }
             const size_t k = (size_t)iz * n + ix;
             g_shore[k * 2] = ground;

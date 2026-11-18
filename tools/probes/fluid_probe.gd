@@ -23,7 +23,9 @@ extends SceneTree
 ##   tile's mesh is a fraction of the full one (stage 5);
 ## - the generated sea is ocean source at the sea course, and a tile of only
 ##   sea draws no top (the wave tiers draw it);
-## - a big still spill's tick cost, as a number.
+## - a big still spill's tick cost, as a number;
+## - stage 8: a calm pond's top is one merged quad; generated lava pools in
+##   caves under the lava line, drawn once primed and still; springs run.
 
 const FLOOR := 1000          ## floor course: plates 3000-3002
 const W := FLOOR + 1         ## the course water stands in
@@ -198,6 +200,24 @@ func _run() -> void:
 	_ok("a pond in a pit keeps its tiles", _region_units(2172, 2173, 17, 18, W) == 9,
 			str(_region_units(2172, 2173, 17, 18, W)))
 
+	# 4d. A calm pond's top is merged (stage 8): an 8 x 8 pond two plates
+	# deep in walls is one flat quad on top, not 64.
+	_floor(2760, -10, 2800, 30)
+	for wall in [[2770, 0, 2779, 0], [2770, 9, 2779, 9], [2770, 0, 2770, 9], [2779, 0, 2779, 9]]:
+		BrickTerrain.fill_box(Vector3i(wall[0], W * 3, wall[1]), Vector3i(wall[2], W * 3 + 2, wall[3]), 4, false)
+	BrickFluid.terrain_changed(Vector3i(2770, W * 3, 0), Vector3i(2779, W * 3 + 2, 9))
+	for x in range(2771, 2779):
+		for z in range(1, 9):
+			BrickFluid.place(Vector3i(x, W, z), 1, BrickFluid.STILL, 2)
+	_settle(50)
+	var pm: Dictionary = BrickFluid.build_tile_mesh(floori(2771 / 32.0), 0)
+	var ups := 0
+	var nrm: PackedVector3Array = pm.water[Mesh.ARRAY_NORMAL]
+	for n in nrm:
+		if n.y > 0.99:
+			ups += 1
+	_ok("a calm pond's top is one quad", ups == 4, "%d top vertices" % ups)
+
 	# 5. A gap between two sources fills as a source.
 	_sec("5")
 	_floor(760, -20, 840, 20)
@@ -358,6 +378,56 @@ func _run() -> void:
 		_ok("a tile of open sea draws no top", (sm.water as Array).is_empty())
 		_ok("surface_at in the sea", absf(BrickFluid.surface_at(
 				Vector3(found.x * 0.35, sea - 1.0, found.y * 0.35)) - sea) < 0.01)
+	# 11. Generated lava pools and springs (stage 8): lava in cave air under
+	# the lava line, drawn once its tile is primed; springs out of cliff faces
+	# run once primed.
+	var gp: Dictionary = BrickTerrain.get_gen_params()
+	gp["lava_pools"] = true
+	gp["lava_m"] = 6.0
+	gp["springs"] = false            # on below, for the springs' own check
+	BrickTerrain.set_gen_params(gp)
+	BrickFluid.reset(20.0, false)
+	BrickFluid.set_centre(Vector3.ZERO, 100000.0)
+	var lava_b := floori((20.0 + 6.0) / 0.42)
+	var lava_at := Vector2i(1 << 30, 0)
+	for r in range(0, 3000, 8):
+		for ang in 8:
+			var lc := Vector2i(int(cos(ang * TAU / 8) * r), int(sin(ang * TAU / 8) * r))
+			if int(_info(lc.x, lava_b - 1, lc.y).fluid) == 2:
+				lava_at = lc
+				break
+		if lava_at.x != 1 << 30:
+			break
+	_ok("cave air under the lava line is lava", lava_at.x != 1 << 30, str(lava_at))
+	if lava_at.x != 1 << 30:
+		var ltx := floori(lava_at.x / 32.0)
+		var ltz := floori(lava_at.y / 32.0)
+		BrickFluid.prime_tile(ltx, ltz)
+		BrickFluid.tick_now(1)
+		var lm: Array = []
+		for mo in BrickFluid.take().meshes:
+			if mo.tile == Vector2i(ltx, ltz):
+				lm = mo.lava
+		_ok("a primed tile draws its lava pool", not lm.is_empty())
+		_ok("generated lava stays put (nothing awake)", BrickFluid.active_count() == 0,
+				str(BrickFluid.active_count()))
+	gp["springs"] = true
+	gp["spring_chance"] = 0.05
+	BrickTerrain.set_gen_params(gp)
+	BrickFluid.reset(20.0, false)
+	BrickFluid.set_centre(Vector3.ZERO, 100000.0)
+	for tz in range(-3, 4):
+		for tx in range(-3, 4):
+			BrickFluid.prime_tile(tx, tz)
+	BrickFluid.tick_now(80)
+	var spring_tiles := 0
+	for dt in BrickFluid.drawn_tiles():
+		var mm: Dictionary = BrickFluid.build_tile_mesh(dt.x, dt.y)
+		if not (mm.water as Array).is_empty():
+			spring_tiles += 1
+	_ok("primed springs run (water in tiles away from the sea)", spring_tiles > 0,
+			"%d tiles with water" % spring_tiles)
+
 	BrickTerrain.set_generator(0)
 	BrickTerrain.reset_gen_params()
 	BrickFluid.reset(20.0, false)

@@ -89,6 +89,11 @@ static func complete(d: Dictionary) -> Dictionary:
 		gen["water"] = true
 	if not over.has("wave_scale"):
 		gen["wave_scale"] = 1.0
+	# Lava pools in deep caves and springs out of cliffs (MineWater.md stage 8).
+	if not over.has("lava_pools"):
+		gen["lava_pools"] = true
+	if not over.has("springs"):
+		gen["springs"] = true
 	# Biomes and ores by NAME, so a preset can name only the ones it changes
 	# and a file outlives a reordering.
 	for key in ["biomes", "ores"]:

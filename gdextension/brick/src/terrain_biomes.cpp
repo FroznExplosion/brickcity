@@ -166,6 +166,10 @@ void apply_gen_dict(GenParams &p, const Dictionary &d) {
     GP_FLOAT("beach_width_m", beach_width_m)
     GP_INT("basin_sand_depth", basin_sand_depth)
     GP_BOOL("water", water)
+    GP_BOOL("lava_pools", lava_pools)
+    GP_FLOAT("lava_m", lava_m)
+    GP_BOOL("springs", springs)
+    GP_FLOAT("spring_chance", spring_chance)
     GP_BOOL("caves", caves)
     GP_BOOL("deep_caves", deep_caves)
     GP_FLOAT("cave_intensity", cave_intensity)
@@ -265,6 +269,10 @@ Dictionary gen_params_to_dict() {
     d["beach_width_m"] = p.beach_width_m;
     d["basin_sand_depth"] = p.basin_sand_depth;
     d["water"] = p.water;
+    d["lava_pools"] = p.lava_pools;
+    d["lava_m"] = p.lava_m;
+    d["springs"] = p.springs;
+    d["spring_chance"] = p.spring_chance;
     d["caves"] = p.caves;
     d["deep_caves"] = p.deep_caves;
     d["cave_intensity"] = p.cave_intensity;

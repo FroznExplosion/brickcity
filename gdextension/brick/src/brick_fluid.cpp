@@ -100,6 +100,8 @@ struct Section {
     std::vector<Cell> c;
     std::vector<uint8_t> ready;     ///< per column: sampled from the field
     std::vector<int16_t> gtop;      ///< per column: generated top brick (the sea's floor)
+    std::vector<int16_t> spring;    ///< per column: a spring's course, or NO_SPRING
+    bool written = false;           ///< any cell ever written (the save skips the rest)
     std::vector<uint8_t> queued;    ///< per cell: in the next tick's list
     int wet = 0;                    ///< wet cells (for "anything to draw")
     static int idx(int lx, int lb, int lz) { return lx + SX * (lz + SX * lb); }
@@ -212,17 +214,52 @@ void sample_column(int x, int z, int b0, int nb, uint8_t *out, int *gen_top) {
     }
 }
 
-/// The fluid the world was generated with in a cell: the sea.
-inline void gen_fluid(Cell &cl, int b, int gen_top) {
+constexpr int NO_SPRING = -32000;
+int g_lava_b = INT_MIN;      ///< lava pools: cave air under this course (stage 8)
+bool g_springs = false;
+uint32_t g_spring_cut = 0;   ///< a column's hash under this: a spring candidate
+
+/// Where a spring runs out of a cliff face into this column (stage 8): a
+/// neighbour column chosen by hash whose surface is three bricks or more over
+/// this one's; the source is the course just under its top, in this column's
+/// air. NO_SPRING when none. Only the hashed few cost a column of their own.
+int spring_course(int x, int z, int gen_top) {
+    if (!g_springs || !biomes_on()) return NO_SPRING;
+    const uint32_t seed = (uint32_t)BrickTerrain::get_seed();
+    static const int NX[4] = { 1, -1, 0, 0 }, NZ[4] = { 0, 0, 1, -1 };
+    for (int i = 0; i < 4; ++i) {
+        const int nx = x + NX[i], nz = z + NZ[i];
+        if (hmix((uint32_t)nx * 0x9E3779B1U ^ (uint32_t)nz * 0x85EBCA77U ^ seed) >= g_spring_cut) continue;
+        const BColumn c = biome_column(seed, nx, nz);
+        // Its real top: cliffs are mostly the overhang band over the base
+        // surface, so scan down from the band's top to the first solid.
+        int top = c.sb;
+        for (int yb = c.bound_p / 3; yb > c.sb; --yb) {
+            if (biome_cell(c, seed, nx, yb, nz) != MAT_AIR) { top = yb; break; }
+        }
+        if (top - 3 >= gen_top) return top - 1;
+    }
+    return NO_SPRING;
+}
+
+/// The fluid the world was generated with in a cell: the sea, lava pools
+/// in caves deep down, springs out of cliff faces (MineWater.md 5, 9).
+inline void gen_fluid(Cell &cl, int b, int gen_top, int spring_b = NO_SPRING) {
     cl.st = 0;
     cl.amt = 0;
     cl.aux = 0;
+    const int cap = c_cap(cl);
+    if (cap <= 0) return;
     if (g_sea_on && gen_top + 1 < g_sea_b && b > gen_top && b < g_sea_b) {
-        const int cap = c_cap(cl);
-        if (cap > 0) {
-            cl.st = mk_st(F_WATER, K_SOURCE, true);
-            cl.amt = (uint8_t)cap;
-        }
+        cl.st = mk_st(F_WATER, K_SOURCE, true);
+        cl.amt = (uint8_t)cap;
+    } else if (b < g_lava_b && b < gen_top) {
+        // Air under the ground and under the lava line is a cave: lava.
+        cl.st = mk_st(F_LAVA, K_SOURCE, false);
+        cl.amt = (uint8_t)cap;
+    } else if (b == spring_b && b > gen_top) {
+        cl.st = mk_st(F_WATER, K_SOURCE, false);
+        cl.amt = (uint8_t)cap;
     }
 }
 
@@ -230,7 +267,7 @@ Cell gen_cell(int x, int b, int z) {
     Cell c;
     int gt = 0;
     sample_column(x, z, b, 1, &c.solid, &gt);
-    gen_fluid(c, b, gt);
+    gen_fluid(c, b, gt, spring_course(x, z, gt));
     return c;
 }
 
@@ -278,6 +315,7 @@ Section *sec_make(int sx, int sb, int sz) {
     ns->c.resize(SCELLS);
     ns->ready.assign(SCOL, 0);
     ns->gtop.assign(SCOL, 0);
+    ns->spring.assign(SCOL, NO_SPRING);
     ns->queued.assign(SCELLS, 0);
     s = ns.get();
     std::lock_guard<std::recursive_mutex> lk(g_state);
@@ -294,10 +332,12 @@ void sample_into(Section *s, int lx, int lz) {
     sample_column(x, z, s->sb * SB, SB, masks, &gt);
     g_sample_ms += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
     s->gtop[lx + SX * lz] = (int16_t)std::max(-32000, std::min(32000, gt));
+    const int sp = spring_course(x, z, gt);
+    s->spring[lx + SX * lz] = (int16_t)sp;
     for (int lb = 0; lb < SB; ++lb) {
         Cell &cl = s->c[Section::idx(lx, lb, lz)];
         cl.solid = masks[lb];
-        gen_fluid(cl, s->sb * SB + lb, gt);
+        gen_fluid(cl, s->sb * SB + lb, gt, sp);
         if (c_wet(cl)) ++s->wet;
     }
     std::atomic_thread_fence(std::memory_order_release);
@@ -399,6 +439,7 @@ void write_cell(int x, int b, int z, const Cell &nc) {
     }
     const bool is = c_wet(cl);
     s->wet += (is ? 1 : 0) - (was ? 1 : 0);
+    s->written = true;
     if (!drawn_same) {
         mark_dirty(x, b, z);
         g_writes.fetch_add(1, std::memory_order_relaxed);
@@ -760,6 +801,8 @@ bool box_near_water(int x0, int x1, int b0, int b1, int z0, int z1) {
             }
         }
     }
+    // Generated lava lies in caves under its line, not stored until sampled.
+    if (b0 < g_lava_b) return true;
     if (!g_sea_on || b0 >= g_sea_b) return false;
     for (int x = x0; x <= x1; ++x) {
         for (int z = z0; z <= z1; ++z) {
@@ -820,6 +863,31 @@ void apply_cmd(const Cmd &c) {
     }
     if (c.type == 6) {
         g_far_requests.insert(tkey(c.a.x, c.a.z));
+        return;
+    }
+    if (c.type == 7) {
+        // A tile came near (stage 8): its generated lava pools read from the
+        // field so they are drawn, its springs read and woken so they run.
+        const int tx = c.a.x, tz = c.a.z;
+        const uint32_t seed = (uint32_t)BrickTerrain::get_seed();
+        bool any = false;
+        for (int lz = 0; lz < SX; ++lz) {
+            for (int lx = 0; lx < SX; ++lx) {
+                const int x = tx * SX + lx, z = tz * SX + lz;
+                if (g_lava_b != INT_MIN) {
+                    if (c_wet(wcell(x, g_lava_b - 1, z))) any = true;
+                }
+                if (g_springs) {
+                    const int sp = spring_course(x, z, biome_column(seed, x, z).sb);
+                    if (sp != NO_SPRING) {
+                        wcell(x, sp, z);
+                        wake_around(x, sp, z);
+                        any = true;
+                    }
+                }
+            }
+        }
+        if (any) g_dirty_tiles.insert(tkey(tx, tz));
         return;
     }
     if (c.type == 5) {
@@ -943,6 +1011,13 @@ void mesh_tile(int tx, int tz, Array &water, Array &lava) {
             Section *s = sec_find(tx, sb, tz);
             if (s == nullptr || s->wet <= 0) continue;
             for (int lb = 0; lb < SB; ++lb) {
+                // Flat tops of a course, merged into rectangles afterwards
+                // (stage 8, "mixed water pieces"): a calm pond was a quad a
+                // stud; meshing was two thirds of a spreading spill's time.
+                struct Top { bool on; float h; Color c; int f; };
+                Top flat[SX * SX];
+                for (int i = 0; i < SX * SX; ++i) flat[i].on = false;
+                bool any_flat = false;
                 for (int lz = 0; lz < SX; ++lz) {
                     for (int lx = 0; lx < SX; ++lx) {
                         if (!s->ready[lx + SX * lz]) continue;
@@ -989,7 +1064,11 @@ void mesh_tile(int tx, int tz, Array &water, Array &lava) {
                         // Only an open top sinks under the course; a side under
                         // more water meets the course above (no seam in a fall).
                         const float sink = top_open ? TOP_SINK : 0.0f;
-                        if (top_open && !(c_ocean(c) && own == g_sea_b * 3)) {
+                        if (top_open && !(c_ocean(c) && own == g_sea_b * 3)
+                                && h00 == h10 && h10 == h11 && h11 == h01) {
+                            flat[lx + SX * lz] = { true, h00, cc, f };
+                            any_flat = true;
+                        } else if (top_open && !(c_ocean(c) && own == g_sea_b * 3)) {
                             const Vector3 a(x0, h00 * P - TOP_SINK, z0), bb(x1, h10 * P - TOP_SINK, z0);
                             const Vector3 cq(x1, h11 * P - TOP_SINK, z1), d(x0, h01 * P - TOP_SINK, z1);
                             Vector3 nrm = (d - a).cross(bb - a);
@@ -1029,6 +1108,37 @@ void mesh_tile(int tx, int tz, Array &water, Array &lava) {
                                         Vector3(x0, y, z1), Vector3(0, -1, 0), cc);
                             }
                         }
+                    }
+                }
+                if (!any_flat) continue;
+                // Greedy: along x as far as the same top goes, then down z as
+                // far as whole rows of it go.
+                bool used[SX * SX] = {};
+                auto same = [&](int i, const Top &t) {
+                    return flat[i].on && !used[i] && flat[i].f == t.f && flat[i].h == t.h && flat[i].c == t.c;
+                };
+                for (int lz = 0; lz < SX; ++lz) {
+                    for (int lx = 0; lx < SX; ++lx) {
+                        const int i0 = lx + SX * lz;
+                        if (!flat[i0].on || used[i0]) continue;
+                        const Top t = flat[i0];
+                        int w = 1;
+                        while (lx + w < SX && same(lx + w + SX * lz, t)) ++w;
+                        int h = 1;
+                        while (lz + h < SX) {
+                            bool row = true;
+                            for (int k = 0; k < w && row; ++k) row = same(lx + k + SX * (lz + h), t);
+                            if (!row) break;
+                            ++h;
+                        }
+                        for (int dz = 0; dz < h; ++dz) {
+                            for (int dx = 0; dx < w; ++dx) used[lx + dx + SX * (lz + dz)] = true;
+                        }
+                        const float x0 = (float)(tx * SX + lx) * STUD_M, x1 = (float)(tx * SX + lx + w) * STUD_M;
+                        const float z0 = (float)(tz * SX + lz) * STUD_M, z1 = (float)(tz * SX + lz + h) * STUD_M;
+                        const float y = t.h * PLATE_M - TOP_SINK;
+                        buf[t.f].quad(Vector3(x0, y, z0), Vector3(x0, y, z1), Vector3(x1, y, z1), Vector3(x1, y, z0),
+                                Vector3(0, 1, 0), t.c);
                     }
                 }
             }
@@ -1325,6 +1435,13 @@ double BrickFluid::reset(double sea_m, bool sea_on) {
     g_tick = 0;
     g_sea_on = sea_on;
     g_sea_b = (int)std::llround(sea_m / (double)(PLATE_M * 3.0f));
+    {
+        const GenParams &gp = gen_params();
+        const bool gen = biomes_on();
+        g_lava_b = gen && gp.lava_pools ? (int)std::floor((gp.sea_m + gp.lava_m) / (PLATE_M * 3.0f)) : INT_MIN;
+        g_springs = gen && gp.springs;
+        g_spring_cut = (uint32_t)std::min(4294967295.0, std::max(0.0, (double)gp.spring_chance * 4294967296.0));
+    }
     g_sea_m = (double)g_sea_b * (double)(PLATE_M * 3.0f);
     ++g_mask_version;
     return g_sea_m;
@@ -1434,6 +1551,15 @@ Dictionary BrickFluid::build_tile_mesh(int tx, int tz) {
     d["lava"] = l;
     return d;
 }
+
+void BrickFluid::prime_tile(int tx, int tz) {
+    Cmd c;
+    c.type = 7;
+    c.a = Vector3i(tx, 0, tz);
+    push_cmd(c);
+}
+
+bool BrickFluid::has_generated() { return g_lava_b != INT_MIN || g_springs; }
 
 void BrickFluid::request_far_mesh(int tx, int tz) {
     Cmd c;
@@ -1719,14 +1845,14 @@ PackedByteArray BrickFluid::get_save() {
     };
     for (const auto &e : g_sec) {
         const Section &s = *e.second;
-        if (s.wet <= 0 && (!g_sea_on || s.sb * SB >= g_sea_b)) continue;
+        if (!s.written) continue;
         for (int lb = 0; lb < SB; ++lb) {
             for (int lz = 0; lz < SX; ++lz) {
                 for (int lx = 0; lx < SX; ++lx) {
                     if (!s.ready[lx + SX * lz]) continue;
                     const Cell &c = s.c[Section::idx(lx, lb, lz)];
                     Cell g = c;
-                    gen_fluid(g, s.sb * SB + lb, s.gtop[lx + SX * lz]);
+                    gen_fluid(g, s.sb * SB + lb, s.gtop[lx + SX * lz], s.spring[lx + SX * lz]);
                     const uint8_t aux = c.aux & 0x7F;
                     if (c.st == g.st && c.amt == g.amt) continue;
                     put32(s.sx * SX + lx);
@@ -1804,6 +1930,8 @@ void BrickFluid::_bind_methods() {
     ClassDB::bind_static_method("BrickFluid", D_METHOD("ray_cell", "from", "dir", "max_metres"), &BrickFluid::ray_cell);
     ClassDB::bind_static_method("BrickFluid", D_METHOD("request_far_mesh", "tx", "tz"), &BrickFluid::request_far_mesh);
     ClassDB::bind_static_method("BrickFluid", D_METHOD("change_count"), &BrickFluid::change_count);
+    ClassDB::bind_static_method("BrickFluid", D_METHOD("prime_tile", "tx", "tz"), &BrickFluid::prime_tile);
+    ClassDB::bind_static_method("BrickFluid", D_METHOD("has_generated"), &BrickFluid::has_generated);
     ClassDB::bind_static_method("BrickFluid", D_METHOD("sea_mask", "x0", "z0", "size"), &BrickFluid::sea_mask);
     ClassDB::bind_static_method("BrickFluid", D_METHOD("changed_columns"), &BrickFluid::changed_columns);
     ClassDB::bind_static_method("BrickFluid", D_METHOD("stats"), &BrickFluid::stats);

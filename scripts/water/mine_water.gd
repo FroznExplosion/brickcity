@@ -40,7 +40,7 @@ const LAVA_DRAG := 0.35
 const LAVA_LIGHT := Color(1.0, 0.45, 0.12)
 const LAVA_LIGHT_ENERGY := 2.2
 const LAVA_LIGHT_RANGE := 7.0
-const LAVA_LIGHT_FAR_M := 80.0
+const LAVA_LIGHT_FAR_M := 40.0
 const LAVA_FOG := Color(0.9, 0.32, 0.05)
 
 var host: Node = null
@@ -68,6 +68,11 @@ var _lod_pending := {}                 ## Vector2i -> true, asked, not back yet
 var _lod_in := 0.0
 const LOD_EVERY := 0.5
 var far_tiles := 0
+## Stage 8: tiles whose generated lava pools and springs were read (primed),
+## asked for nearest first within the sim ring, PRIME_PER a check.
+var _primed := {}
+const PRIME_PER := 6
+var primed_count := 0
 var _spare: Array[MeshInstance3D] = []
 var _field_task := -1
 var _field_out := [PackedFloat32Array()]
@@ -113,6 +118,8 @@ func reset_world(sea_m: float, near_tiles: int, p_sea_on: bool, p_wave_scale := 
 	drawn = 0
 	rock_laid = 0
 	field_moves = 0
+	_primed.clear()
+	primed_count = 0
 	if sea != null:
 		remove_child(sea)
 		sea.queue_free()
@@ -161,6 +168,7 @@ func _process(delta: float) -> void:
 	if _lod_in <= 0.0:
 		_lod_in = LOD_EVERY
 		_check_lod(eye)
+		_prime_near(eye)
 	if sea != null:
 		sea.follow(eye, delta)
 		_follow_field(delta)
@@ -338,6 +346,31 @@ func _show(tile: Vector2i, water: Array, lava: Array) -> void:
 	_light(tile, lava)
 
 
+## Generated lava pools and springs (stage 8) are worked out from the seed
+## and stored nowhere: a tile coming into the sim ring is primed once, so its
+## pools are read and drawn and its springs start running.
+func _prime_near(eye: Vector3) -> void:
+	if not BrickFluid.has_generated():
+		return
+	var tile_m := TILE_STUDS * BrickWorld.get_stud_metres()
+	var c := Vector2i(floori(eye.x / tile_m), floori(eye.z / tile_m))
+	var r := int(ceil(sim_radius_m / tile_m))
+	var want: Array = []
+	for dz in range(-r, r + 1):
+		for dx in range(-r, r + 1):
+			var t := c + Vector2i(dx, dz)
+			if not _primed.has(t):
+				want.append(t)
+	if want.is_empty():
+		return
+	want.sort_custom(func(a: Vector2i, b: Vector2i) -> bool:
+		return (a - c).length_squared() < (b - c).length_squared())
+	for i in mini(PRIME_PER, want.size()):
+		_primed[want[i]] = true
+		BrickFluid.prime_tile(want[i].x, want[i].y)
+		primed_count += 1
+
+
 ## Past the sim ring a tile's water is frozen: show its far mesh; back in
 ## reach, the full one. Each asked for once, built with the next tick.
 func _check_lod(eye: Vector3) -> void:
@@ -431,6 +464,8 @@ func report() -> String:
 			int(s.get("evals", 0)), float(s.get("mesh_ms", 0.0)), BrickFluid.section_count(), rock_laid]
 	if not _lights.is_empty():
 		line += ", %d lava lights" % _lights.size()
+	if primed_count > 0:
+		line += ", %d tiles primed" % primed_count
 	if sea != null:
 		line += ", sea at %.2f m, shore field %.0f ms (%d moves)" % [
 				BrickFluid.get_sea_level(), last_field_ms, field_moves]
