@@ -83,6 +83,12 @@ static func complete(d: Dictionary) -> Dictionary:
 		gen[k] = over[k]
 	if over.has("bands"):
 		gen["bands"] = (over["bands"] as Array).duplicate(true)
+	# Water (Docs/MineWater.md 9): on unless a preset turns it off; the wave
+	# height is the mine world's, not the generator's.
+	if not over.has("water"):
+		gen["water"] = true
+	if not over.has("wave_scale"):
+		gen["wave_scale"] = 1.0
 	# Biomes and ores by NAME, so a preset can name only the ones it changes
 	# and a file outlives a reordering.
 	for key in ["biomes", "ores"]:

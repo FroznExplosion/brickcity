@@ -159,6 +159,15 @@ const LADDER_COOLDOWN := 0.4
 ## steadies itself at FLOAT_DAMP a second. A jump at a floor or a wall pushes off
 ## it at FLOAT_PUSH.
 const FLOAT_ACCEL := 4.0
+## Water (Docs/MineWater.md 10, Pawn.water_probe). Deeper than this over the
+## feet, the pawn swims; less, it wades: slower, and running water pushes.
+const SWIM_DEPTH := 1.05
+const SWIM_SPEED := Pawn.WALK_SPEED * 0.75
+const SWIM_ACCEL := 3.0
+## An idle swimmer floats with its eye this far over the surface.
+const SWIM_EYE_OVER := 0.12
+const WADE_SLOW := 0.7
+const WADE_PUSH := 0.6
 const FLOAT_SPEED := Pawn.WALK_SPEED
 const FLOAT_DAMP := 0.5
 const FLOAT_PUSH := 3.0
@@ -181,6 +190,10 @@ signal grapple_released
 
 var pawn: Pawn
 var state := State.WALK
+## In water deep enough to swim (Pawn.water_probe), last tick.
+var swimming := false
+## The water's top over the feet, metres (-INF dry), last tick.
+var water_top := -INF
 ## The wall being run: its outward normal.
 var wall_normal := Vector3.ZERO
 ## Where the line is hooked, while grappling.
@@ -336,6 +349,24 @@ func step(delta: float, wish: Vector3, speed: float) -> void:
 	if state == State.MANTLE:
 		_mantle_tick(delta)
 		return
+	# Water: swim when deep, wade when not (Docs/MineWater.md 10).
+	swimming = false
+	water_top = -INF
+	if Pawn.water_probe.is_valid() and state != State.LADDER and state != State.GRAPPLE:
+		var feet := pawn.feet()
+		water_top = float(Pawn.water_probe.call(feet + pawn.up * 0.05))
+		var depth := water_top - Gravity.vert(feet, pawn.up)
+		if depth > SWIM_DEPTH:
+			swimming = true
+			state = State.WALK
+			_swim_tick(delta, wish, water_top)
+			return
+		if depth > 0.0:
+			speed *= WADE_SLOW
+			if Pawn.water_flow.is_valid():
+				var flow: Vector3 = Pawn.water_flow.call(feet + pawn.up * 0.05)
+				pawn.shove = pawn.shove.lerp(Gravity.flat(flow, pawn.up) * WADE_PUSH,
+						1.0 - exp(-4.0 * delta))
 	if (state == State.WALK or state == State.WALL_STICK) and _try_ladder(wish):
 		pawn.rising_jump = false
 	if state == State.LADDER:
@@ -573,6 +604,34 @@ func _float_tick(delta: float, wish: Vector3) -> void:
 		v = nv
 	b.velocity = v
 	b.move_and_slide()
+
+
+# --- swim ---------------------------------------------------------------------
+
+## Deep water: steer by the move keys, up with jump, down with crouch; idle,
+## float to the surface with the eye just out; running water carries.
+func _swim_tick(delta: float, wish: Vector3, top: float) -> void:
+	var b := pawn.body
+	var it := pawn.intents
+	var up := pawn.up
+	var rise := (1.0 if it.jump_held else 0.0) - (1.0 if it.crouch else 0.0)
+	var want := wish * SWIM_SPEED + up * rise * SWIM_SPEED
+	if rise == 0.0:
+		# Buoyancy: toward the float height, gently.
+		var eye_y := Gravity.vert(pawn.feet(), up) + pawn.eye_height()
+		want += up * clampf((top + SWIM_EYE_OVER - eye_y) * 2.0, -1.2, 1.2)
+	elif rise > 0.0:
+		# Never swim up out of the water: at the top a jump is a climb out.
+		var head := Gravity.vert(pawn.feet(), up) + pawn.eye_height()
+		if head > top + 0.5:
+			want = Gravity.flat(want, up)
+	if Pawn.water_flow.is_valid():
+		want += Pawn.water_flow.call(pawn.feet() + up * 0.05)
+	b.velocity = b.velocity.lerp(want, 1.0 - exp(-SWIM_ACCEL * delta))
+	b.move_and_slide()
+	# A swimmer pushing at a bank with jump held climbs out over it.
+	if it.jump_held and wish != Vector3.ZERO and b.is_on_wall():
+		_try_mantle(wish, true)
 
 
 # --- slide --------------------------------------------------------------------

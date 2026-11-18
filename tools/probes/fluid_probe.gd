@@ -18,6 +18,8 @@ extends SceneTree
 ## - water off a ledge falls and spreads again where it lands;
 ## - lava meeting water makes obsidian or stone (4.6);
 ## - a calm world has nothing awake (a still world costs nothing);
+## - past the sim ring water waits and runs on when the player is back; a far
+##   tile's mesh is a fraction of the full one (stage 5);
 ## - the generated sea is ocean source at the sea course, and a tile of only
 ##   sea draws no top (the wave tiers draw it);
 ## - a big still spill's tick cost, as a number.
@@ -237,6 +239,41 @@ func _run() -> void:
 	_settle(2000)
 	_ok("a calm world has nothing awake", BrickFluid.active_count() == 0,
 			str(BrickFluid.active_count()))
+
+	# 8b. The sim ring (stage 5, MineWater.md 6, 8): water out of reach
+	# waits, frozen, and runs on when the player comes back; a tile out there
+	# shows a far mesh, a quad per 4 x 4 studs.
+	_floor(2360, -30, 2440, 30)
+	BrickFluid.set_centre(Vector3(0, 0, 0), 100.0)      # 2400 studs = 840 m away
+	BrickFluid.place(Vector3i(2400, W, 0), 1, BrickFluid.SOURCE, 3)
+	BrickFluid.tick_now(60)
+	var frozen := int(BrickFluid.stats().frozen)
+	_ok("water past the sim ring waits", _amt(2403, W, 0) == 0 and frozen > 0,
+			"%d frozen, %d at 3 studs" % [frozen, _amt(2403, W, 0)])
+	BrickFluid.set_centre(Vector3(2400 * 0.35, 0, 0), 100.0)
+	_settle(400)
+	_ok("and runs on when the player comes back", _amt(2410, W, 0) == 1 and BrickFluid.active_count() == 0,
+			"%d" % _amt(2410, W, 0))
+	BrickFluid.take()
+	var ftx := floori(2400 / 32.0)
+	BrickFluid.request_far_mesh(ftx, 0)
+	BrickFluid.request_mesh(ftx + 1, 0)
+	BrickFluid.tick_now(1)
+	var outs: Array = BrickFluid.take().meshes
+	var far_v := -1
+	var near_v := -1
+	for mo in outs:
+		var arr: Array = mo.water
+		var nv := 0 if arr.is_empty() else (arr[Mesh.ARRAY_VERTEX] as PackedVector3Array).size()
+		if bool(mo.far) and mo.tile == Vector2i(ftx, 0):
+			far_v = nv
+		elif not bool(mo.far) and mo.tile == Vector2i(ftx + 1, 0):
+			near_v = nv
+	var full: Dictionary = BrickFluid.build_tile_mesh(ftx, 0)
+	var full_v := (full.water[Mesh.ARRAY_VERTEX] as PackedVector3Array).size()
+	_ok("a far mesh is a fraction of the full one", far_v > 0 and far_v * 4 < full_v,
+			"far %d, full %d vertices (neighbour tile %d)" % [far_v, full_v, near_v])
+	BrickFluid.set_centre(Vector3(0, 0, 0), 100000.0)
 
 	# 9. Cost: a big spill.
 	_sec("9")
