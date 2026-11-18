@@ -242,6 +242,7 @@ func generate(s: Dictionary) -> void:
 	add_child(_trees)
 	_trees.setup(_eye_camera(), _brick_mat)
 	_trees.stream(int(settings.seed), _tree_chance_at, _tree_variant_at, 420.0)
+	_trees.solid_m = 64.0   # trunks the player and rounds meet
 	_gen_ms = float(Time.get_ticks_usec() - t0) / 1000.0
 	print("[mine] generated '%s' seed %d in %.0f ms; spawn %s (%s)" % [settings.name,
 			int(settings.seed), _gen_ms, cell, _biome_names[BrickTerrain.biome_at(cell.x, cell.y)]])

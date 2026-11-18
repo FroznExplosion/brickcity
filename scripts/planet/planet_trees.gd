@@ -228,9 +228,7 @@ func _slope(d: Vector3, h: float) -> float:
 ## A variant's foot -- the middle of its 2 x 2 trunk's base -- in its mesh's
 ## own metres (the recipe rebased to its min corner, as RecipeMesh builds it).
 static func foot_of(variant: int) -> Vector3:
-	var off := Trees.trunk_offset(variant)
-	var size := BrickWorld.get_cell_size()
-	return Vector3((off.x + 1) * size.x, off.y * size.y, (off.z + 1) * size.z)
+	return Trees.trunk_foot(variant)
 
 
 ## Snow on a tree's crown, by the ground shader's own rule (snow where the
@@ -324,17 +322,16 @@ func _make_solid(key: Vector3i) -> void:
 	body.collision_mask = 0
 	body.set_meta(&"on_vehicle", _hit_by_vehicle.bind(key, body))
 	(c.node as Node3D).add_child(body)
-	var stud := BrickWorld.get_stud_metres()
 	var down: Dictionary = _knocked.get(key, {})
 	for ti in (c.trees as Array).size():
 		var t: Dictionary = c.trees[ti]
 		if down.has(ti):
 			continue
 		# The trunk: 2 x 2 studs of round bricks, three plates each.
-		var tall: float = Trees.TRUNK_HEIGHTS[t.variant] * 3 * BrickWorld.get_plate_metres()
-		var cs := CollisionShape3D.new()
 		var box := BoxShape3D.new()
-		box.size = Vector3(2.0 * stud, tall, 2.0 * stud)
+		box.size = Trees.trunk_size(int(t.variant))
+		var tall := box.size.y
+		var cs := CollisionShape3D.new()
 		cs.shape = box
 		var b: Basis = t.basis
 		cs.transform = Transform3D(b, (t.at as Vector3) - (c.centre as Vector3) + b.y * tall * 0.5)
@@ -431,8 +428,7 @@ func trees_near(dir: Vector3, radius: float) -> Array:
 
 ## A trunk's box (the collider's): 2 x 2 studs, its height in bricks.
 static func trunk_size(variant: int) -> Vector3:
-	var stud := BrickWorld.get_stud_metres()
-	return Vector3(2.0 * stud, Trees.TRUNK_HEIGHTS[variant] * 3 * BrickWorld.get_plate_metres(), 2.0 * stud)
+	return Trees.trunk_size(variant)
 
 
 ## The standing trees of the built cells nearest planet-local `p`, nearest
