@@ -276,12 +276,40 @@ made the difference.
   paths, `print_surface.gdshaderinc` and a baked bead texture); leaf bricks
   use the leaf texture, which is soft when seen from inside a crown.
 
+## 13. Cave floors are collided
+
+Flying into a cave and landing, the pawn fell through a floor of bricks it
+could see. `build_tile`'s collider follows each column's TOP: merged boxes
+from the top a brick (or to the lowest neighbour) down. A cave floor, the
+ground under an overhang, a tunnel's walls -- everything under a column's top
+-- had no box at all.
+
+Now `build_tile` also collides every solid plate cell under its column's top
+box that touches OPEN air (the air the mesher draws faces against: sealed
+chambers are neither drawn nor collided), or lies within a brick under a
+floor, merged greedily along x, then z, then up. A box may grow through any
+cell that is not open air (rock, a sealed chamber), so the rock round a cave
+is a few large boxes; floors are at least a brick thick. A column only looks
+at its cells when it or a neighbour has open air under its top, so tiles with
+no caves pay nothing.
+
+- mine_world_probe, 40 tiles: 584 of 584 cave floors inside a box; ~260 cave
+  boxes in a cave tile (the shell alone, without growing through rock, was
+  ~400; up-first merging ~10% more); a tile bakes in about 13 ms
+  (`cave_box_count` in the result).
+- `-- --gate=cave` (also inside `-- --gate`): finds a cave the player can
+  reach near the spawn, flies in, lands, and checks the pawn is still on the
+  floor 200 physics ticks later (STANDING / FELL).
+- The mask reaches down to the deepest cave a column can have (`low_p`), so a
+  cave never runs out of the bottom of it (the second suspect).
+
 ## 12. Testing
 
 | Pass | What it checks |
 |---|---|
 | `tools/probes/mine_world_probe.gd` (headless) | generator, biomes, ores, bedrock, blocks, whole-brick breaking, saves |
 | `-- --gate` | spawn, flight (no collision, arms follow), endless far rings, holes, menu stops the world, build, landing, edit frame times, save round trip |
+| `-- --gate=cave` | land in a reachable cave, still standing 200 ticks later |
 | `-- --gate=menu` | the generation menu and the pause menu clicked with real mouse events |
 | `-- --gate=look [--look=parts]` | the close view under different settings (the fuzz hunt) |
 
