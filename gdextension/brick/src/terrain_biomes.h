@@ -117,7 +117,7 @@ struct GenParams {
     float humid_offset = 0.0f;
     float snow_line_m = 50.0f;        ///< above the sea line, every top is snow
     // --- underground
-    float bedrock_m = -48.0f;         ///< relative to the sea line
+    float bedrock_m = -126.0f;        ///< relative to the sea line: 300 bricks (Docs/MineWorld.md 16)
     float stone_patches = 0.5f;
     std::vector<DeepBand> bands;
     std::vector<OreDef> ores;

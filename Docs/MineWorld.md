@@ -373,3 +373,56 @@ planet's `recentre`, without its WorldFrame: the mine world keeps its own
 - `-- --gate=shift` lowers `shift_at` to 300 m and flies 1.2 km: 5 shifts,
   the eye 4 m from the global origin, no holes, the pawn lands and stands, a
   block placed where looked at (2026-11-18).
+
+## 16. Deep worlds
+
+Goal: 300 bricks (126 m) of world under the sea line before the bedrock,
+caves all the way down.
+
+**Stage 1, built (2026-11-18): the depths.** `bedrock_m` -48 -> -126 m.
+Everything laid out for the 48 m world is stretched to it (x 2.625 below the
+sea line): deepslate from -42 m (a third of the way down, as before); ores
+coal -52..70, iron -105..30, copper -52..20, gold -121..-31, redstone
+-126..-63, lapis -118..-21, diamond -126..-84 m. The menu's ore sliders reach
+-200 m. mine_world_probe finds every ore between the sea line and the
+bedrock. A different default means a different settings hash, so edits
+saved against the old default stay with the old world. Caves are still
+generated to 18 m under the surface: digging down reaches the new depth (a
+tile's mask follows what is dug), caves do not yet.
+
+**The cost of deep caves in today's tiles** (bake per tile, 24 tiles, no other
+Godot running, 2026-11-18):
+
+| caves to | ms a tile | triangles | boxes |
+|---|---|---|---|
+| 18 m | 13.9 | 4,640 | 476 |
+| 30 m | 21.0 | 6,733 | 638 |
+| 45 m | 29.9 | 9,382 | 839 |
+| 60 m | 36.9 | 11,254 | 986 |
+
+Linear: about 0.55 ms, 170 triangles and 12 boxes per metre of mask. Caves
+to the bedrock under a surface tile (~140 m of mask) would be ~80 ms, ~25k
+triangles and ~2,000 boxes a tile, for 49 near tiles, almost all of it
+underground and unseen. So the surface tiles keep their shallow mask.
+
+**Stage 2, chosen design: a deep tier of sections** (cubic chunks for the
+underground only).
+
+- A tile column's surface mask ends at a fixed plate B(tile) computed from
+  the generator alone (lowest generated surface in the tile minus the
+  shallow cave depth), never from edits. Below B is the deep tier's.
+- A section is 32 x 32 studs by 96 plates (32 bricks, 13.4 m): about the
+  cost of 13 m of mask, ~8-9 ms. Sections load round the EYE in 3D (a few
+  tiles across, a couple of sections up and down), only below B, so a player
+  on the surface loads few or none; underground, the tier follows them.
+- Caves become absolute-depth (down to just over the bedrock); the cave rule
+  is one function of (x, y, z), so a cave crossing B is simply drawn half by
+  the tile and half by the section.
+- Seams: both sides sample one plate past their boundary from the field for
+  their faces (today a mask treats below itself as rock and above as air),
+  and the open-air fill seeds all six sides of a section and the bottom of a
+  tile, conservatively.
+- Edits below B are the section's: the tile mask stops following deep digs.
+- Collision: the cave colliders (section 13) per section, within the collide
+  radius; sections take the same hold while flying fast (section 14) and
+  live inside the mine world node (section 15).
