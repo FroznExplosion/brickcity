@@ -175,6 +175,8 @@ func _ready() -> void:
 			_run_menu_gate()
 		elif "--gate=look" in OS.get_cmdline_user_args():
 			_run_look_gate()
+		elif "--gate=cave" in OS.get_cmdline_user_args():
+			_run_cave_gate()
 		else:
 			_run_gate()
 
@@ -1089,9 +1091,82 @@ func _run_gate() -> void:
 			% [pawn.feet().distance_to(at), at.y - _ground_m(floori(at.x / BrickWorld.get_stud_metres()),
 			floori(at.z / BrickWorld.get_stud_metres()))])
 	await _frames(60)
+	await _gate_cave()
 	await _gate_edits()
 	print("[mine-gate] done")
 	get_tree().quit()
+
+
+## -- --gate=cave: only the cave landing (below).
+func _run_cave_gate() -> void:
+	await _frames(30)
+	await _gate_cave()
+	get_tree().quit()
+
+
+## Fly into a cave, land (F), and the pawn must still be standing on the
+## cave floor a few seconds later: cave floors had no collider and the pawn
+## fell through bricks it could see (Docs/MineWorld.md 13). The cave is one
+## the player can reach: its floor is inside one of the tile's boxes (a
+## sealed chamber has no faces and no collider, and nobody gets in).
+func _gate_cave() -> void:
+	set_on_foot(false)
+	var stud := BrickWorld.get_stud_metres()
+	var plate := BrickWorld.get_plate_metres()
+	var e := _eye()
+	var c0 := Vector2i(floori(e.x / stud), floori(e.z / stud))
+	var found := Vector3.INF
+	var tile_studs := BrickTerrain.get_tile_studs()
+	var boxes_of := {}
+	for r in range(0, 400, 4):
+		for k in 8:
+			var a := TAU * k / 8.0 + r * 0.37
+			var x := c0.x + int(r * cos(a))
+			var z := c0.y + int(r * sin(a))
+			var top := BrickTerrain.surface_plate(x, z)
+			var yp := top - 4
+			var lo := top - 600
+			while yp > lo and BrickTerrain.solid_at(x, yp, z) != 0:
+				yp -= 1
+			var air := 0
+			while yp > lo and BrickTerrain.solid_at(x, yp, z) == 0:
+				yp -= 1
+				air += 1
+			if yp <= lo or air < 22:
+				continue
+			var t := Vector2i(floori(float(x) / tile_studs), floori(float(z) / tile_studs))
+			if not boxes_of.has(t):
+				boxes_of[t] = (BrickTerrain.build_tile(t.x, t.y) as Dictionary).boxes
+			var boxes: PackedFloat32Array = boxes_of[t]
+			var p := Vector3((x - t.x * tile_studs + 0.5) * stud, (yp + 1) * plate - 0.03,
+					(z - t.y * tile_studs + 0.5) * stud)
+			for o in range(0, boxes.size(), 6):
+				if absf(p.x - boxes[o]) <= boxes[o + 3] * 0.5 and absf(p.y - boxes[o + 1]) <= boxes[o + 4] * 0.5 						and absf(p.z - boxes[o + 2]) <= boxes[o + 5] * 0.5:
+					found = Vector3((x + 0.5) * stud, (yp + 1) * plate, (z + 0.5) * stud)
+					break
+			if found != Vector3.INF:
+				break
+		if found != Vector3.INF:
+			break
+	if found == Vector3.INF:
+		print("[mine-cave] no reachable cave within 400 studs: SKIPPED")
+		return
+	# Fly in, let the tiles round it build, land.
+	walker.place(found + Vector3(0, 0.4, 0), Vector3(1, 0, 0))
+	walker.pitch = -0.3
+	await _frames(90)
+	set_on_foot(true)
+	var t0 := pawn.feet()
+	var low := t0.y
+	for f in 200:
+		await get_tree().physics_frame
+		low = minf(low, pawn.feet().y)
+	var t1 := pawn.feet()
+	print("[mine-cave] landed in a cave %.0f m under the surface at %s: feet %.2f m above the floor at landing, %.2f m after 200 ticks (lowest %.2f) -- %s"
+			% [_ground_m(floori(found.x / stud), floori(found.z / stud)) - found.y, found,
+			t0.y - found.y, t1.y - found.y, low - found.y,
+			"STANDING" if absf(t1.y - found.y) < 0.6 and low > found.y - 1.0 else "FELL"])
+	await _shot(UserPaths.DEV + "mine_cave_landing.png")
 
 
 ## The water pass: -- --gate=water (Docs/MineWater.md 14, stage 2). On a

@@ -393,9 +393,13 @@ func _check_tile_build() -> void:
 	# boundary between a covered piece and a bare one. That is a correctness
 	# cost, not a regression — you stand on the tile, so the collider has to
 	# follow it. The gate only has to catch collision going back to per piece.
+	# Cave boxes (under the column tops, Docs/MineWorld.md 13) are another
+	# layer with nothing to do with pieces: the surface boxes are compared.
+	var cave_boxes := int(d.get("cave_box_count", 0))
 	_ok("collision is merged, not one box a piece",
-		box_count < int(d["piece_count"]),
-		"%d boxes for %d pieces" % [box_count, d["piece_count"]])
+		box_count - cave_boxes < int(d["piece_count"]),
+		"%d surface boxes (+%d cave) for %d pieces" % [box_count - cave_boxes, cave_boxes,
+				d["piece_count"]])
 	_ok("and there is still collision everywhere", box_count > 0)
 
 	print("        %d pieces  %d tris  %d studs  %d scatter  %.2f ms" % [
