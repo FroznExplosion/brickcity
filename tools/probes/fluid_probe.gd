@@ -12,7 +12,8 @@ extends SceneTree
 ## - deeper water flows over a tile and not over a brick (R3);
 ## - still water poured on flat ground keeps every tile while it spreads,
 ##   stops at a tile deep, and the lone tiles dry later (R5);
-## - a stream cut off from its source drains and dries (4.1.6);
+## - a stream cut off from its source drains and dries (4.1.6), off a step
+##   too (no 2-deep puddles left to keep their edges wet);
 ## - a gap between two sources fills as a source (4.1.7);
 ## - water off a ledge falls and spreads again where it lands;
 ## - lava meeting water makes obsidian or stone (4.6);
@@ -159,6 +160,40 @@ func _run() -> void:
 	BrickFluid.tick_now(600)
 	_ok("the stream bed dries", _region_units(585, 615, -15, 15, W) == 0,
 			"%d of %d" % [_region_units(585, 615, -15, 15, W), wet_before])
+
+	# 4b. Off a step: the cut-off stream leaves no 2-deep puddles to keep
+	# its edges wet (decision 13.3: it drains, then dries).
+	_floor(1960, -40, 2040, 40)
+	BrickTerrain.fill_box(Vector3i(1990, W * 3, -6), Vector3i(1999, W * 3 + 2, 6), 4, false)
+	BrickFluid.terrain_changed(Vector3i(1990, W * 3, -6), Vector3i(1999, W * 3 + 2, 6))
+	BrickFluid.place(Vector3i(1994, W + 1, 0), 1, BrickFluid.SOURCE, 3)
+	_settle(400)
+	var step_wet := _region_units(1975, 2015, -25, 25, W) + _region_units(1975, 2015, -25, 25, W + 1)
+	BrickFluid.remove(Vector3i(1994, W + 1, 0), -1)
+	BrickFluid.tick_now(700)
+	var step_left := _region_units(1975, 2015, -25, 25, W) + _region_units(1975, 2015, -25, 25, W + 1)
+	_ok("a stream off a step dries", step_left == 0, "%d of %d" % [step_left, step_wet])
+
+	# 4c. A 2-deep core ringed by tile-deep water on flat open ground thins
+	# out and dries (4.2); before, the ring never dried beside the core.
+	_floor(2160, -30, 2240, 30)
+	BrickFluid.place(Vector3i(2200, W, 0), 1, BrickFluid.STILL, 2)
+	for d in [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]:
+		BrickFluid.place(Vector3i(2200 + d.x, W, d.y), 1, BrickFluid.STILL, 1)
+	BrickFluid.tick_now(700)
+	_ok("a 2-deep core on flat ground dries", _region_units(2180, 2220, -20, 20, W) == 0,
+			str(_region_units(2180, 2220, -20, 20, W)))
+	# ... and a pond in a pit keeps every tile.
+	# A 2 x 2 pit a brick deep: 9 tiles in 4 cells stand 2 and 3 deep.
+	BrickTerrain.fill_box(Vector3i(2171, W * 3, 16), Vector3i(2174, W * 3 + 2, 19), 4, false)
+	BrickTerrain.fill_box(Vector3i(2172, W * 3, 17), Vector3i(2173, W * 3 + 2, 18), 0, false)
+	BrickFluid.terrain_changed(Vector3i(2171, W * 3, 16), Vector3i(2174, W * 3 + 2, 19))
+	BrickFluid.place(Vector3i(2172, W, 17), 1, BrickFluid.STILL, 3)
+	BrickFluid.place(Vector3i(2172, W, 18), 1, BrickFluid.STILL, 3)
+	BrickFluid.place(Vector3i(2173, W, 18), 1, BrickFluid.STILL, 3)
+	BrickFluid.tick_now(700)
+	_ok("a pond in a pit keeps its tiles", _region_units(2172, 2173, 17, 18, W) == 9,
+			str(_region_units(2172, 2173, 17, 18, W)))
 
 	# 5. A gap between two sources fills as a source.
 	_sec("5")
