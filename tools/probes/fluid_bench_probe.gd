@@ -10,7 +10,8 @@ extends SceneTree
 ##   thousands of cells awake -- the doc's "a tick with 20k active cells";
 ## - a spill: 10,000 water bricks dropped and spreading (still water);
 ## - calm: the same world settled, ticks with nothing awake (should be ~0);
-## - a sea: a generated world with the sea on, a channel dug off it.
+## - a sea: a generated world with the sea on, a channel dug off it;
+## - the save's scan of every section (main thread, each autosave).
 ## Each as ticks, cells evaluated, ms a tick and ns a cell (the per-cell cost
 ## the plan estimated at 50 ns). The build is godot-cpp's template_debug,
 ## which is /O2 (optimize=speed_trace), so these are optimised numbers.
@@ -121,6 +122,13 @@ func _run() -> void:
 					by_b[b - W] = int(by_b.get(b - W, 0)) + int(c.amount)
 	print("  [spill] where it is (every 4th column, tiles by course over the floor): %s, %d timers" % [
 			by_b, int(BrickFluid.stats().timers)])
+
+	# The save's scan (on the main thread, every autosave): all of the above.
+	var ts := Time.get_ticks_usec()
+	var save := BrickFluid.get_save()
+	print("  [save] %d sections scanned, %d changed cells, %d bytes, %.1f ms" % [
+			BrickFluid.section_count(), (save.size() - 5) / 15, save.size(),
+			float(Time.get_ticks_usec() - ts) / 1000.0])
 
 	# The sea: a generated world, a channel dug off a coast.
 	BrickTerrain.clear_terrain_edits()
