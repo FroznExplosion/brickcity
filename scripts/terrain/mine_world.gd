@@ -48,6 +48,8 @@ var _streamer: TerrainStreamer = null
 var _far: TerrainCoarse = null
 var _far_next: TerrainCoarse = null
 var _trees: TerrainTrees = null
+## The underground under the surface tiles (Docs/MineWorld.md 16).
+var _deep: TerrainDeep = null
 var _rig: LightRig = null
 
 var walker: PlanetWalker
@@ -195,6 +197,8 @@ func _ready() -> void:
 			_run_flight_gate()
 		elif "--gate=shift" in OS.get_cmdline_user_args():
 			_run_shift_gate()
+		elif "--gate=deep" in OS.get_cmdline_user_args():
+			_run_deep_gate()
 		else:
 			_run_gate()
 
@@ -204,6 +208,7 @@ func _exit_tree() -> void:
 	# Every other scene expects the classic field.
 	_teardown()
 	BrickTerrain.set_generator(0)
+	BrickTerrain.set_deep_tier(false)
 	BrickTerrain.reset_gen_params()
 	BrickTerrain.set_coarse_smooth_step(8)
 
@@ -228,6 +233,9 @@ func generate(s: Dictionary) -> void:
 	BrickTerrain.clear_terrain_edits()
 	BrickTerrain.configure(int(settings.seed))
 	BrickTerrain.set_generator(1)
+	# Surface tiles stop at their floor; the deep tier draws under it
+	# (Docs/MineWorld.md 16).
+	BrickTerrain.set_deep_tier(true)
 	BrickTerrain.reset_gen_params()
 	BrickTerrain.set_gen_params(settings.gen)
 	# Before anything bakes: the tiles are made from the field WITH them.
@@ -270,6 +278,11 @@ func generate(s: Dictionary) -> void:
 	_streamer.setup(_mat)
 	_streamer.settle(spawn_xz)
 
+	_deep = TerrainDeep.new()
+	_deep.name = "Deep"
+	add_child(_deep)
+	_deep.setup(_mat)
+
 	_far = _new_far(_tile_of(feet))
 	_far.build(_far_tiles(), _mat, Rect2i(), _streamer.align)
 	_far.cover(_streamer)
@@ -292,10 +305,11 @@ func _teardown() -> void:
 	_speed_from = Vector3.INF
 	_wait_breaks()
 	# Removing a tier from the tree waits for its bakes (their _exit_tree).
-	for n in [_trees, _far_next, _far, _streamer]:
+	for n in [_trees, _far_next, _far, _streamer, _deep]:
 		if n != null and is_instance_valid(n):
 			remove_child(n)
 			n.queue_free()
+	_deep = null
 	_trees = null
 	_far_next = null
 	_far = null
@@ -536,6 +550,8 @@ func _wait_breaks() -> void:
 ## names behind the old ones, and the far blocks over them.
 func terrain_edited(res: Dictionary) -> void:
 	water.terrain_changed(res)
+	if _deep != null and res.has("box_lo"):
+		_deep.refresh_box(res.box_lo, res.box_hi)
 	if collapse != null:
 		collapse.queue(res)
 	var tiles: PackedInt32Array = res["tiles"]
@@ -616,6 +632,7 @@ func _speed_step(eye: Vector3, delta: float) -> void:
 	if hold != fast_hold:
 		fast_hold = hold
 		_streamer.hold = hold
+		_deep.hold = hold
 		_far.hold = hold
 		if _far_next != null:
 			_far_next.hold = hold
@@ -634,6 +651,7 @@ func _process(delta: float) -> void:
 		_flush_edits()
 	var p0 := Time.get_ticks_usec()
 	_streamer.follow(Vector2(eye.x, eye.z))
+	_deep.follow(eye)
 	var p1 := Time.get_ticks_usec()
 	_far.cover(_streamer, false)
 	_far.relod(eye, false)
@@ -978,6 +996,7 @@ func _update_hud() -> void:
 		"biome  %s   ground %s" % [_biome_names[b] if b < _biome_names.size() else "?",
 				BrickTerrain.material_names()[BrickTerrain.material_at(c.x, c.y)]],
 		"near  %s" % _streamer.report(),
+		"deep  %s" % _deep.report(),
 		"far   %d blocks, %d hidden, %.0fk tris, anchor %s, re-centred %d (%.0f ms)" % [
 				_far.block_count(), _far.hidden_count(), _far.triangle_count() / 1000.0,
 				_far.anchor, _reanchors, _last_reanchor_ms],
@@ -1386,6 +1405,117 @@ func _run_shift_gate() -> void:
 			% [cell, placed, builder._outline.global_position, to_local(builder._outline.global_position)])
 	builder.set_active(false)
 	await _shot(UserPaths.DEV + "mine_shift_build.png")
+	get_tree().quit()
+
+
+## -- --gate=deep: the deep tier (Docs/MineWorld.md 16). A reachable cave
+## well under a surface tile's floor (its floor inside a section's collider),
+## flown into: the sections load round the eye, the frames while they do,
+## the pawn lands and stands. Then a cave that crosses a tile's floor, looked
+## at across the boundary, for seams.
+func _run_deep_gate() -> void:
+	await _frames(30)
+	var stud := BrickWorld.get_stud_metres()
+	var plate := BrickWorld.get_plate_metres()
+	var sec := BrickTerrain.get_deep_section_plates()
+	var e := _eye()
+	var c0 := Vector2i(floori(e.x / stud), floori(e.z / stud))
+	var found := Vector3.INF
+	var cross := Vector3.INF
+	var tops := {}
+	for r in range(0, 600, 6):
+		for k in 8:
+			var a := TAU * k / 8.0 + r * 0.37
+			var x := c0.x + int(r * cos(a))
+			var z := c0.y + int(r * sin(a))
+			var t := Vector2i(floori(float(x) / 32.0), floori(float(z) / 32.0))
+			if not tops.has(t):
+				tops[t] = BrickTerrain.deep_top(t.x, t.y)
+			var floor_p: int = tops[t]
+			if cross == Vector3.INF and BrickTerrain.solid_at(x, floor_p, z) == 0 					and BrickTerrain.solid_at(x, floor_p - 1, z) == 0 and BrickTerrain.solid_at(x, floor_p - 6, z) == 0:
+				cross = Vector3((x + 0.5) * stud, floor_p * plate, (z + 0.5) * stud)
+			if found != Vector3.INF:
+				continue
+			# A room at least 3 m tall, 20 m or more under the floor.
+			var yp := floor_p - 140
+			while yp > floor_p - 500 and BrickTerrain.solid_at(x, yp, z) != 0:
+				yp -= 1
+			var air := 0
+			while yp > floor_p - 520 and BrickTerrain.solid_at(x, yp, z) == 0:
+				yp -= 1
+				air += 1
+			if air < 22 or yp <= BrickTerrain.get_bedrock_plate():
+				continue
+			# A floor, not a ledge: the same top over 5 x 5 studs.
+			var flat := true
+			for dz in range(-2, 3):
+				for dx in range(-2, 3):
+					if BrickTerrain.solid_at(x + dx, yp, z + dz) == 0 							or BrickTerrain.solid_at(x + dx, yp + 1, z + dz) != 0 							or BrickTerrain.solid_at(x + dx, yp + 14, z + dz) != 0:
+						flat = false
+			if not flat:
+				continue
+			var s: Dictionary = BrickTerrain.build_section(t.x, floori(float(yp) / sec), t.y)
+			var boxes: PackedFloat32Array = s.get("boxes", PackedFloat32Array())
+			var q := Vector3((x - t.x * 32 + 0.5) * stud, (yp + 1) * plate - 0.03, (z - t.y * 32 + 0.5) * stud)
+			for o in range(0, boxes.size(), 6):
+				if absf(q.x - boxes[o]) <= boxes[o + 3] * 0.5 and absf(q.y - boxes[o + 1]) <= boxes[o + 4] * 0.5 						and absf(q.z - boxes[o + 2]) <= boxes[o + 5] * 0.5:
+					found = Vector3((x + 0.5) * stud, (yp + 1) * plate, (z + 0.5) * stud)
+					break
+		if found != Vector3.INF and cross != Vector3.INF:
+			break
+	if found == Vector3.INF:
+		print("[mine-deep] no reachable deep cave within 600 studs: SKIPPED")
+		get_tree().quit()
+		return
+	set_on_foot(false)
+	_fly_to(found + Vector3(0, 1.2, 0), Vector3(1, 0, 0.3).normalized())
+	walker.pitch = -0.25
+	var worst := 0.0
+	var slow := 0
+	var frames := 0
+	for f in 600:
+		var f0 := Time.get_ticks_usec()
+		await get_tree().process_frame
+		var ms := float(Time.get_ticks_usec() - f0) / 1000.0
+		frames += 1
+		if f > 2:
+			worst = maxf(worst, ms)
+			if ms > 33.0:
+				slow += 1
+		if f > 60 and _deep._tasks.is_empty() and _deep._collide_pending.is_empty():
+			break
+	print("[mine-deep] in a cave %.0f m under the surface (%.0f m under the sea line): %s; loaded in %d frames, worst %.0f ms, %d over 33 ms"
+			% [_ground_m(floori(found.x / stud), floori(found.z / stud)) - found.y,
+			float(BrickTerrain.get_gen_params()["sea_m"]) - found.y, _deep.report(), frames, worst, slow])
+	await _shot(UserPaths.DEV + "mine_deep_cave.png")
+	# What is under the landing spot, in the physics space.
+	var under := to_global(found)
+	var q := PhysicsRayQueryParameters3D.create(under + Vector3(0, 1.0, 0), under - Vector3(0, 3.0, 0), Layers.WORLD)
+	var hit := get_world_3d().direct_space_state.intersect_ray(q)
+	var key := TerrainDeep.section_of(found + Vector3(0, -0.05, 0))
+	var st = _deep._secs.get(key)
+	print("[mine-deep] under the landing spot: hit %s; its section %s drawn %s, collision done %s, %d boxes"
+			% [hit.get("position", "nothing"), key, st != null,
+			st != null and bool(st._collision_done), (st._data.boxes as PackedFloat32Array).size() / 6 if st != null else 0])
+	var wat := to_local(walker.global_position)
+	set_on_foot(true)
+	var t_land := to_local(pawn.feet())
+	var low := INF
+	for f in 200:
+		await get_tree().physics_frame
+		var fp := to_local(pawn.feet())
+		low = minf(low, fp.y)
+	var t1 := to_local(pawn.feet())
+	print("[mine-deep] walker at %s, pawn put at %s, ended at %s, floor %s" % [wat, t_land, t1, found])
+	print("[mine-deep] landed: feet %.2f m over the floor after 200 ticks (lowest %.2f) -- %s"
+			% [t1.y - found.y, low - found.y, "STANDING" if absf(t1.y - found.y) < 0.6 and low > found.y - 1.0 else "FELL"])
+	if cross != Vector3.INF:
+		set_on_foot(false)
+		_fly_to(cross + Vector3(-3.0, -1.0, -3.0), Vector3(1, 0, 1).normalized())
+		walker.pitch = 0.35
+		await _frames(240)
+		print("[mine-deep] a cave across a tile's floor at %s: %s" % [cross, _deep.report()])
+		await _shot(UserPaths.DEV + "mine_deep_seam.png")
 	get_tree().quit()
 
 

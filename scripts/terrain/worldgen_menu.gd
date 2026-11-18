@@ -281,6 +281,7 @@ func _build_caves_tab() -> void:
 	_float_slider(p, "Cave intensity", g, "cave_intensity", 0, 1, 0.01)
 	_float_slider(p, "Shallowest cave (m under the surface)", g, "cave_min_depth_m", 0.5, 20, 0.1)
 	_float_slider(p, "Deepest cave (m under the surface)", g, "cave_max_depth_m", 2, 60, 0.5)
+	_check(p, "Deep caves (on below that, down to the bedrock)", g, "deep_caves")
 	_check(p, "Ravines", g, "ravines")
 	_float_slider(p, "Ravine width", g, "ravine_width", 0, 1, 0.01)
 	_float_slider(p, "Ravine depth (m)", g, "ravine_depth_m", 2, 60, 0.5)

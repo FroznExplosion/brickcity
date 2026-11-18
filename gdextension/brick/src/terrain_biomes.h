@@ -105,6 +105,9 @@ struct GenParams {
     /// against it, so no water stands beside cave air before anything wakes it.
     bool water = false;
     bool caves = true;
+    /// Caves below cave_max_depth_m too, down to just over the bedrock: the
+    /// deep tier draws them (Docs/MineWorld.md 16).
+    bool deep_caves = true;
     float cave_intensity = 0.5f;
     float cave_min_depth_m = 1.8f;
     float cave_max_depth_m = 18.0f;
@@ -159,6 +162,8 @@ inline int biome_cell(const BColumn &c, uint32_t seed, int x, int yb, int z) {
 }
 /// The top block the column shows from above (the coarse tier's colour).
 int biome_top(const BColumn &c);
+/// The plate of the bedrock floor's top brick (all bedrock at and below it).
+int biome_bedrock_plate();
 
 godot::PackedStringArray biome_names();
 /// RGB8, w*h pixels, centred on (cx, cz) studs, `step` studs a pixel.
