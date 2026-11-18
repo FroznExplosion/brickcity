@@ -29,6 +29,7 @@ const Presets := preload("res://scripts/terrain/worldgen_presets.gd")
 const Menu := preload("res://scripts/terrain/worldgen_menu.gd")
 const Builder := preload("res://scripts/terrain/mine_builder.gd")
 const Debris := preload("res://scripts/terrain/terrain_debris.gd")
+const Collapse := preload("res://scripts/terrain/ground_collapse.gd")
 const Water := preload("res://scripts/water/mine_water.gd")
 
 ## A whole day, seconds (Minecraft's is 20 minutes).
@@ -69,6 +70,9 @@ var _menu_layer: CanvasLayer = null
 var _menu_prev_mouse := Input.MOUSE_MODE_VISIBLE
 var builder: Node3D = null
 var debris: Node3D = null
+## The ground coming down where an edit leaves it hanging (ground_collapse.gd,
+## Docs/TerrainCollapse.md).
+var collapse: Collapse = null
 ## Water and lava (mine_water.gd, Docs/MineWater.md).
 var water: Node3D = null
 ## Shots waiting for their brick: [task id, holder, origin]. Which brick a
@@ -154,6 +158,12 @@ func _ready() -> void:
 	debris = Debris.new()
 	debris.name = "Debris"
 	add_child(debris)
+	collapse = Collapse.new()
+	collapse.name = "Collapse"
+	add_child(collapse)
+	collapse.setup(self, _brick_mat)
+	# A piece coming to rest changes what a save holds.
+	collapse.pieces.ground_changed.connect(func(_box: AABB) -> void: _edits_dirty = true)
 	water = Water.new()
 	water.name = "Water"
 	add_child(water)
@@ -179,6 +189,8 @@ func _ready() -> void:
 			_run_look_gate()
 		elif "--gate=cave" in OS.get_cmdline_user_args():
 			_run_cave_gate()
+		elif "--gate=collapse" in OS.get_cmdline_user_args():
+			_run_collapse_gate()
 		elif "--gate=flight" in OS.get_cmdline_user_args():
 			_run_flight_gate()
 		else:
@@ -210,6 +222,7 @@ func generate(s: Dictionary) -> void:
 	_pending_tiles = Rect2i()
 	_reanchors = 0
 	_last_reanchor_ms = 0.0
+	collapse.reset()
 	BrickTerrain.clear_terrain_edits()
 	BrickTerrain.configure(int(settings.seed))
 	BrickTerrain.set_generator(1)
@@ -217,6 +230,7 @@ func generate(s: Dictionary) -> void:
 	BrickTerrain.set_gen_params(settings.gen)
 	# Before anything bakes: the tiles are made from the field WITH them.
 	var loaded := _load_edits()
+	_load_pieces()
 	_edits_dirty = false
 	_save_status = "%d changes loaded" % loaded if loaded > 0 else "new world"
 	var sea := float(settings.gen.get("sea_m", 20.0))
@@ -431,6 +445,8 @@ func _eye() -> Vector3:
 ## rebuilt tile re-laid the bricks round it, which read as the ground being
 ## regenerated rather than broken.
 func _mine(point: Vector3, dir: Vector3, _info) -> void:
+	if collapse != null and collapse.shoot(point, dir, _info):
+		return
 	if _break_jobs.size() >= MAX_BREAK_JOBS:
 		return
 	var holder := [{}]
@@ -471,6 +487,8 @@ func _wait_breaks() -> void:
 ## names behind the old ones, and the far blocks over them.
 func terrain_edited(res: Dictionary) -> void:
 	water.terrain_changed(res)
+	if collapse != null:
+		collapse.queue(res)
 	var tiles: PackedInt32Array = res["tiles"]
 	if tiles.is_empty():
 		return
@@ -484,6 +502,22 @@ func terrain_edited(res: Dictionary) -> void:
 	_pending_tiles = rect if not _pending_tiles.has_area() else _pending_tiles.merge(rect)
 	if not _coalesce or _refresh_in <= 0.0:
 		_flush_edits()
+
+
+## No tile over `rect` (tiles) waits to be rebuilt: what fell from it is drawn
+## on its own once the tile no longer draws it (ground_collapse.gd).
+func tiles_fresh(rect: Rect2i) -> bool:
+	if _streamer == null:
+		return true
+	if _pending_tiles.has_area() and rect.has_area() and _pending_tiles.intersects(rect):
+		return false
+	return _streamer.fresh(rect)
+
+
+## Is tile `t` in the near-detail tier (LOD 0)? Settled pieces elsewhere are
+## unloaded (Docs/TerrainCollapse.md 5).
+func near_tile(t: Vector2i) -> bool:
+	return _streamer != null and _streamer.has_tile(t)
 
 
 func _flush_edits() -> void:
@@ -761,6 +795,29 @@ func _load_edits() -> int:
 	return BrickTerrain.set_edits(f.get_buffer(n * 13))
 
 
+## The pieces that came off the ground, beside the edits (Docs/TerrainCollapse.md 5).
+const PIECES_MAGIC := "BCMP"
+const PIECES_FORMAT := 1
+
+
+static func _pieces_path(edits_path: String) -> String:
+	return edits_path.get_basename() + ".pieces"
+
+
+func _load_pieces() -> void:
+	var path := _pieces_path(save_path())
+	if not FileAccess.file_exists(path):
+		return
+	var f := FileAccess.open_compressed(path, FileAccess.READ, FileAccess.COMPRESSION_ZSTD)
+	if f == null or f.get_buffer(4).get_string_from_ascii() != PIECES_MAGIC or f.get_32() != PIECES_FORMAT:
+		push_warning("[mine] %s is from another format; not loaded" % path)
+		return
+	var n := f.get_32()
+	var saved = bytes_to_var(f.get_buffer(n))
+	if saved is Array:
+		collapse.restore(saved)
+
+
 ## Write the changes if there are any unsaved. `wait`: now, on this thread
 ## (leaving, generating); otherwise on a worker, checked next frame.
 func save_edits(wait := false) -> void:
@@ -773,6 +830,7 @@ func save_edits(wait := false) -> void:
 		return
 	_edits_dirty = false
 	var bytes: PackedByteArray = BrickTerrain.get_edits()
+	var piece_bytes := var_to_bytes(collapse.to_save())
 	var path := save_path()
 	var dir := _save_dir()
 	var field := BrickTerrain.get_field_version()
@@ -789,6 +847,16 @@ func save_edits(wait := false) -> void:
 		f.store_buffer(bytes)
 		f.close()
 		DirAccess.rename_absolute(path + ".tmp", path)
+		var pp := _pieces_path(path)
+		var g := FileAccess.open_compressed(pp + ".tmp", FileAccess.WRITE, FileAccess.COMPRESSION_ZSTD)
+		if g == null:
+			return
+		g.store_buffer(PIECES_MAGIC.to_ascii_buffer())
+		g.store_32(PIECES_FORMAT)
+		g.store_32(piece_bytes.size())
+		g.store_buffer(piece_bytes)
+		g.close()
+		DirAccess.rename_absolute(pp + ".tmp", pp)
 	@warning_ignore("integer_division")
 	_save_status = "%d changes saved" % (bytes.size() / 13)
 	if wait:
@@ -816,6 +884,8 @@ func forget_edits() -> void:
 	var path := save_path()
 	if FileAccess.file_exists(path):
 		DirAccess.remove_absolute(path)
+	if FileAccess.file_exists(_pieces_path(path)):
+		DirAccess.remove_absolute(_pieces_path(path))
 	_edits_dirty = false
 	var s2 := settings.duplicate(true)
 	settings = {}
@@ -865,6 +935,7 @@ func _update_hud() -> void:
 				BrickTerrain.get_edit_count(), _gen_ms],
 		"blocks placed %d  broken %d   %s" % [builder.placed, builder.broken, _save_status],
 		"water %s" % water.report(),
+		collapse.readout(),
 		"%s   F fly/walk  B build  M world generation  F3 readout  T +1 hour" % ("ON FOOT" if on_foot
 				else "FLYING %.0f m/s (wheel), moving %.0f m/s%s" % [walker.fly_speed, _speed,
 				"  DETAIL HELD" if fast_hold else ""]),
@@ -1211,6 +1282,189 @@ func _gate_flight() -> void:
 
 
 ## -- --gate=cave: only the cave landing (below).
+func _run_collapse_gate() -> void:
+	await _frames(30)
+	await _gate_collapse()
+	get_tree().quit()
+
+
+## The ground coming down (Docs/TerrainCollapse.md 7), built and shot where
+## the camera looks: a floating dirt block falls as a piece, floating sand as
+## columns that land as ground, a stone arm on a pillar stands until the
+## pillar's foot is shot out, then pillar and arm fall as one piece; the
+## pieces settle, are unloaded when the player flies off past the detail
+## tiles and come back, and are saved and loaded with the world.
+func _gate_collapse() -> void:
+	var dev := UserPaths.DEV
+	DirAccess.make_dir_recursive_absolute(dev)
+	var fails := 0
+	var stud := BrickWorld.get_stud_metres()
+	var plate := BrickWorld.get_plate_metres()
+	_time = 0.42
+	set_on_foot(false)
+	var e := _eye()
+	var o := Vector2i(floori(e.x / stud) + 14, floori(e.z / stud))
+	var top := func(x: int, z: int) -> int:
+		var yp := BrickTerrain.surface_plate(x, z) + 30
+		while yp > -600 and BrickTerrain.solid_at(x, yp, z) == 0:
+			yp -= 1
+		return yp
+	var t_max := -(1 << 30)
+	for dz in range(-2, 4):
+		for dx in range(-2, 16):
+			t_max = maxi(t_max, int(top.call(o.x + dx, o.y + dz)))
+	# Whole bricks, a course over the highest ground there.
+	var b := (floori(float(t_max + 1) / 3.0) + 1) * 3
+	var put := func(lo: Vector3i, hi: Vector3i, mat: int) -> void:
+		terrain_edited(BrickTerrain.fill_box(lo, hi, mat, true))
+	# The pillar (stone, 2x2) from the ground up, 8 bricks over the base.
+	for dz in 2:
+		for dx in 2:
+			var t: int = top.call(o.x + dx, o.y + dz)
+			put.call(Vector3i(o.x + dx, t + 1, o.y + dz), Vector3i(o.x + dx, b + 23, o.y + dz), 4)
+	# The arm: stone, 2 courses, 10 studs out along +X.
+	put.call(Vector3i(o.x + 2, b + 18, o.y), Vector3i(o.x + 11, b + 23, o.y + 1), 4)
+	walker.place(Vector3((o.x + 6) * stud, (b + 12) * plate + 1.0, (o.y - 22) * stud), Vector3(0, 0, 1))
+	walker.pitch = -0.1
+	await _frames(60)
+	await _collapse_quiet(240)
+	var arm_cell := Vector3i(o.x + 11, b + 20, o.y)
+	var stands := BrickTerrain.solid_at(arm_cell.x, arm_cell.y, arm_cell.z) == 4
+	print("[mine-collapse] %s  the stone arm stands on its pillar" % ("ok  " if stands else "FAIL"))
+	fails += 0 if stands else 1
+	# A floating dirt block and a floating sand block beside it.
+	var d0 := Vector3i(o.x + 4, b + 30, o.y + 6)
+	put.call(d0, d0 + Vector3i(1, 2, 1), 2)
+	var s0 := Vector3i(o.x + 8, b + 30, o.y + 6)
+	put.call(s0, s0 + Vector3i(1, 8, 1), 3)
+	await _frames(4)
+	_shot(dev + "mine_collapse_0_built.png")
+	var clock := FrameClock.new()
+	add_child(clock)
+	clock.spoil()
+	var made0 := int(collapse.groups_let_go)
+	var t0 := Time.get_ticks_msec()
+	while Time.get_ticks_msec() - t0 < 6000:
+		await get_tree().process_frame
+		if not collapse.busy() and Time.get_ticks_msec() - t0 > 1500:
+			break
+	clock.spoil()
+	_shot(dev + "mine_collapse_1_fell.png")
+	var ok := int(collapse.groups_let_go) > made0
+	print("[mine-collapse] %s  the dirt block fell as a piece (%d let go)" % ["ok  " if ok else "FAIL", int(collapse.groups_let_go) - made0])
+	fails += 0 if ok else 1
+	ok = collapse.columns_landed >= 4 and BrickTerrain.solid_at(s0.x, s0.y, s0.z) == 0
+	var landed_at := -1
+	for yp in range(s0.y, s0.y - 200, -1):
+		if BrickTerrain.solid_at(s0.x, yp, s0.z) == 3:
+			landed_at = yp
+			break
+	ok = ok and landed_at >= 0
+	print("[mine-collapse] %s  the sand fell as columns and landed as sand (%d landed, sand top at %d, left %d)" % [
+			"ok  " if ok else "FAIL", collapse.columns_landed, landed_at, s0.y])
+	fails += 0 if ok else 1
+	# The pillar's foot shot out: what a shot does, two courses of it.
+	var runs := PackedInt32Array()
+	for dz in 2:
+		for dx in 2:
+			runs.append_array([o.x + dx, o.y + dz, b, b + 5])
+	var made1 := int(collapse.groups_let_go)
+	var bricks1 := int(collapse.bricks_let_go)
+	terrain_edited(BrickTerrain.clear_runs(runs))
+	t0 = Time.get_ticks_msec()
+	var shots := 0
+	while Time.get_ticks_msec() - t0 < 8000:
+		await get_tree().process_frame
+		if shots == 0 and Time.get_ticks_msec() - t0 > 700:
+			clock.spoil()
+			_shot(dev + "mine_collapse_2_falling.png")
+			shots = 1
+		if not collapse.busy() and Time.get_ticks_msec() - t0 > 2000:
+			break
+	clock.spoil()
+	_shot(dev + "mine_collapse_3_down.png")
+	# Frames while it all fell, the screenshots' read-backs left out.
+	for line in clock.report_lines():
+		print("[mine-collapse] " + line)
+	clock.queue_free()
+	ok = int(collapse.groups_let_go) > made1 and BrickTerrain.solid_at(arm_cell.x, arm_cell.y, arm_cell.z) == 0
+	print("[mine-collapse] %s  foot shot out: pillar and arm fell (%d piece(s), %d bricks)" % [
+			"ok  " if ok else "FAIL", int(collapse.groups_let_go) - made1, int(collapse.bricks_let_go) - bricks1])
+	fails += 0 if ok else 1
+	var settled := 0
+	for p in collapse.pieces.pieces:
+		settled += 1 if p.settled else 0
+	ok = settled == collapse.pieces.pieces.size() and settled > 0
+	print("[mine-collapse] %s  every piece settled (%d of %d)" % ["ok  " if ok else "FAIL", settled, collapse.pieces.pieces.size()])
+	fails += 0 if ok else 1
+	print("[mine-collapse] survey worst %.1f ms (worker), apply worst %.1f ms (main)" % [
+			collapse.worst_survey_ms, collapse.worst_apply_ms])
+	# A blast on a piece chips it (PlanetPieces.damage, through the gun's hook).
+	var alive := func() -> int:
+		var n := 0
+		for p in collapse.pieces.pieces:
+			n += collapse.bricks.get_alive_block_count(p.chunk)
+		return n
+	var before: int = alive.call()
+	var hit_ok := false
+	for p in collapse.pieces.pieces:
+		var box := collapse.pieces.world_box(p)
+		var q := PhysicsRayQueryParameters3D.create(box.get_center() + Vector3.UP * (box.size.y + 3.0),
+				box.get_center() - Vector3.UP * (box.size.y + 3.0))
+		var hit := get_world_3d().direct_space_state.intersect_ray(q)
+		if hit.is_empty() or hit.collider != p.body:
+			print("[mine-collapse]   ray over a piece met %s" % (hit.get("collider") if not hit.is_empty() else "nothing"))
+			continue
+		var shot := StructuralDamage.for_shot(WeaponClass.builtin(&"grenade"))
+		hit_ok = collapse.shoot(hit.position + Vector3.DOWN * 0.05, Vector3.DOWN, shot)
+		print("[mine-collapse]   blast at %s on a piece: %s, shot %s" % [hit.position, hit_ok, shot])
+		break
+	await _frames(30)
+	ok = hit_ok and int(alive.call()) < before
+	print("[mine-collapse] %s  a blast on a piece chips it (%d bricks -> %d)" % ["ok  " if ok else "FAIL", before, int(alive.call())])
+	fails += 0 if ok else 1
+	await _collapse_quiet(300)
+	# Fly off past the detail tiles: the pieces are unloaded; back: laid again.
+	var kept := collapse.pieces.pieces.size()
+	var home := walker.global_position
+	walker.place(home + Vector3(260.0, 40.0, 0.0), Vector3(1, 0, 0))
+	await _frames(180)
+	collapse._tend()
+	ok = collapse.dormant_count() == kept and collapse.pieces.pieces.is_empty()
+	print("[mine-collapse] %s  flown off: %d piece(s) unloaded, %d laid" % ["ok  " if ok else "FAIL", collapse.dormant_count(), collapse.pieces.pieces.size()])
+	fails += 0 if ok else 1
+	walker.place(home, Vector3(0, 0, 1))
+	await _frames(180)
+	collapse._tend()
+	ok = collapse.pieces.pieces.size() == kept and collapse.dormant_count() == 0
+	print("[mine-collapse] %s  back: %d piece(s) laid again" % ["ok  " if ok else "FAIL", collapse.pieces.pieces.size()])
+	fails += 0 if ok else 1
+	# Saved and loaded with the world.
+	_edits_dirty = true
+	save_edits(true)
+	ok = FileAccess.file_exists(_pieces_path(save_path()))
+	var s2 := settings.duplicate(true)
+	settings = {}
+	generate(s2)
+	walker.place(home, Vector3(0, 0, 1))
+	await _frames(180)
+	collapse._tend()
+	ok = ok and collapse.pieces.pieces.size() == kept
+	print("[mine-collapse] %s  saved and loaded: %d piece(s) back of %d" % ["ok  " if ok else "FAIL", collapse.pieces.pieces.size(), kept])
+	fails += 0 if ok else 1
+	_shot(dev + "mine_collapse_4_reloaded.png")
+	print("[mine-collapse] %s" % collapse.readout())
+	print("[mine-collapse] %s (%d failures)" % ["PASS" if fails == 0 else "FAIL", fails])
+
+
+## Until nothing is surveyed, waiting, falling or moving, at most `frames`.
+func _collapse_quiet(frames: int) -> void:
+	for i in frames:
+		await get_tree().process_frame
+		if not collapse.busy():
+			return
+
+
 func _run_cave_gate() -> void:
 	await _frames(30)
 	await _gate_cave()

@@ -58,6 +58,9 @@ const DEBRIS_MAX_BLOCKS := IslandManager.DEBRIS_MAX_BLOCKS
 ## The cap: moving at once, and kept in all.
 const MAX_MOVING := IslandManager.MAX_MOVING
 const MAX_PIECES := 160
+## Settable: the mine world keeps every piece (Docs/TerrainCollapse.md 5).
+var max_pieces := MAX_PIECES
+var debris_max := DEBRIS_MAX_BLOCKS
 ## A piece over the cap shrinks away over this long (never a pop).
 const FADE_MS := 600
 
@@ -139,8 +142,8 @@ func shed(source: int, groups: Array, linear := Vector3.ZERO,
 		var ids: PackedInt32Array = g
 		if ids.is_empty():
 			continue
-		if ids.size() <= DEBRIS_MAX_BLOCKS or moving() >= MAX_MOVING:
-			if ids.size() <= DEBRIS_MAX_BLOCKS:
+		if ids.size() <= debris_max or moving() >= MAX_MOVING:
+			if ids.size() <= debris_max:
 				crumbed_small += 1
 			else:
 				crumbed_cap += 1
@@ -239,11 +242,11 @@ func _cap() -> void:
 	for p in pieces:
 		if p.fading_since == 0:
 			kept += 1
-	if kept <= MAX_PIECES:
+	if kept <= max_pieces:
 		return
 	var cam := get_viewport().get_camera_3d() if is_inside_tree() else null
 	for p in pieces:
-		if kept <= MAX_PIECES:
+		if kept <= max_pieces:
 			break
 		if not p.settled or p.fading_since != 0 or not is_instance_valid(p.body):
 			continue

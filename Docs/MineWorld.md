@@ -338,3 +338,11 @@ temperature 59-63 C):
   `build_poll(budget_ms)` puts the meshes in a slice per frame while the new
   tier is hidden.
 - Not yet measured: the deferred stud-set switch (last change) in a window.
+
+## 15. The ground comes down
+
+What an edit leaves hanging falls: loose ground as pieces (they stay, are
+unloaded past the detail tiles and saved with the world), sand and gravel
+straight down like Minecraft's, landing as ground again. The buildings'
+stress rules on virtual bricks; Docs/TerrainCollapse.md. Gate:
+`terrain_test.tscn -- --gate=collapse`; probe `terrain_collapse_probe`.
