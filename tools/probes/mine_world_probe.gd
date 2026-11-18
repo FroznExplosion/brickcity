@@ -289,10 +289,12 @@ func _check_ores_and_bedrock() -> void:
 	var plate := BrickWorld.get_plate_metres()
 	var counts := {}
 	var stone := 0
-	# A slab of underground from 2 m to 50 m below the sea line.
+	# The underground from 2 m below the sea line down to the bedrock (126 m
+	# deep since the deep worlds, Docs/MineWorld.md 16).
+	var floor_m: float = sea + float(BrickTerrain.get_gen_params()["bedrock_m"]) + 2.0
 	for z in range(0, 96, 2):
 		for x in range(0, 96, 2):
-			for yp in range(int((sea - 50.0) / plate), int((sea - 2.0) / plate), 3):
+			for yp in range(int(floor_m / plate), int((sea - 2.0) / plate), 3):
 				var m := BrickTerrain.solid_at(x, yp, z)
 				counts[m] = int(counts.get(m, 0)) + 1
 				if m == _mat("stone") or m == _mat("dark stone"):
@@ -308,6 +310,13 @@ func _check_ores_and_bedrock() -> void:
 			int(counts.get(_mat("granite"), 0)), int(counts.get(_mat("diorite"), 0)),
 			int(counts.get(_mat("gravel"), 0))])
 	_expect(ores > 20, "ores are scattered through the stone")
+	var missing := []
+	for n in ["coal ore", "iron ore", "copper ore", "gold ore", "redstone ore", "lapis ore", "diamond ore"]:
+		if int(counts.get(_mat(n), 0)) == 0:
+			missing.append(n)
+	_expect(missing.is_empty(), "every ore is found somewhere down to the bedrock (missing %s)" % [missing])
+	_expect(float(BrickTerrain.get_gen_params()["bedrock_m"]) <= -125.0,
+			"the bedrock is 300 bricks under the sea line (%.0f m)" % float(BrickTerrain.get_gen_params()["bedrock_m"]))
 	_expect(int(counts.get(_mat("dark stone"), 0)) > 100, "deepslate below its band")
 	var bed_m: float = sea + float(BrickTerrain.get_gen_params()["bedrock_m"])
 	var bed_p := int(floor(bed_m / plate)) - 6

@@ -293,8 +293,8 @@ func _build_ores_tab() -> void:
 		_section(p, str(ore.name))
 		_float_slider(p, "Chance", ore, "chance", 0, 1, 0.01)
 		_float_slider(p, "Vein radius (studs)", ore, "size", 0.5, 3, 0.1)
-		_float_slider(p, "From (m)", ore, "min_m", -80, 150, 1)
-		_float_slider(p, "To (m)", ore, "max_m", -80, 150, 1)
+		_float_slider(p, "From (m)", ore, "min_m", -200, 150, 1)
+		_float_slider(p, "To (m)", ore, "max_m", -200, 150, 1)
 
 
 func _build_biomes_tab() -> void:

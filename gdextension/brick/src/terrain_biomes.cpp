@@ -78,15 +78,19 @@ enum BiomeId {
 
 void reset_gen_params() {
     GenParams p;
-    p.bands.push_back(DeepBand{ -16.0f, MAT_DARK_STONE, true });
+    // DEEP WORLDS (Docs/MineWorld.md 16): bedrock 300 bricks (126 m) under
+    // the sea line, and everything that was laid out for a 48 m world
+    // stretched to it (x 2.625 below the sea line): deepslate from a third
+    // of the way down, each ore over the same share of the depth.
+    p.bands.push_back(DeepBand{ -42.0f, MAT_DARK_STONE, true });
     p.ores = {
-        odef("Coal", MAT_COAL, 0.50f, 1.8f, -20.0f, 70.0f),
-        odef("Iron", MAT_IRON, 0.35f, 1.5f, -40.0f, 30.0f),
-        odef("Copper", MAT_COPPER, 0.30f, 1.6f, -20.0f, 20.0f),
-        odef("Gold", MAT_GOLD, 0.15f, 1.2f, -46.0f, -12.0f),
-        odef("Redstone", MAT_REDSTONE, 0.20f, 1.4f, -48.0f, -24.0f),
-        odef("Lapis", MAT_LAPIS, 0.12f, 1.2f, -45.0f, -8.0f),
-        odef("Diamond", MAT_DIAMOND, 0.08f, 1.0f, -48.0f, -32.0f),
+        odef("Coal", MAT_COAL, 0.50f, 1.8f, -52.0f, 70.0f),
+        odef("Iron", MAT_IRON, 0.35f, 1.5f, -105.0f, 30.0f),
+        odef("Copper", MAT_COPPER, 0.30f, 1.6f, -52.0f, 20.0f),
+        odef("Gold", MAT_GOLD, 0.15f, 1.2f, -121.0f, -31.0f),
+        odef("Redstone", MAT_REDSTONE, 0.20f, 1.4f, -126.0f, -63.0f),
+        odef("Lapis", MAT_LAPIS, 0.12f, 1.2f, -118.0f, -21.0f),
+        odef("Diamond", MAT_DIAMOND, 0.08f, 1.0f, -126.0f, -84.0f),
     };
     p.biomes.resize(B_COUNT);
     p.biomes[B_OCEAN] = bdef("Dry Ocean", BK_OCEAN, 0, 0, 0, MAT_SAND, MAT_SAND, 3, MAT_GRAVEL, 1, MAT_STONE, 0.25f, 47);
