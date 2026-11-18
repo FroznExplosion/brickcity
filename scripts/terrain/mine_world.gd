@@ -26,6 +26,7 @@ const Presets := preload("res://scripts/terrain/worldgen_presets.gd")
 const Menu := preload("res://scripts/terrain/worldgen_menu.gd")
 const Builder := preload("res://scripts/terrain/mine_builder.gd")
 const Debris := preload("res://scripts/terrain/terrain_debris.gd")
+const Water := preload("res://scripts/water/mine_water.gd")
 
 ## A whole day, seconds (Minecraft's is 20 minutes).
 const DAY_SECONDS := 1200.0
@@ -65,6 +66,8 @@ var _menu_layer: CanvasLayer = null
 var _menu_prev_mouse := Input.MOUSE_MODE_VISIBLE
 var builder: Node3D = null
 var debris: Node3D = null
+## Water and lava (mine_water.gd, Docs/MineWater.md).
+var water: Node3D = null
 ## Shots waiting for their brick: [task id, holder, origin]. Which brick a
 ## shot breaks takes a tile's sample and packing, ~10 ms -- a worker's job
 ## (Docs/WhereWorkRuns.md); the main thread only clears the cells it found.
@@ -96,6 +99,7 @@ var _gen_ms := 0.0
 var _reanchors := 0
 var _last_reanchor_ms := 0.0
 var _gate := false
+var _water_gate := false
 var _biome_names: PackedStringArray
 var _tree_chance: Array[float] = []
 var _tree_variants: Array = []
@@ -103,6 +107,8 @@ var _tree_variants: Array = []
 
 func _ready() -> void:
 	_gate = "--gate" in OS.get_cmdline_user_args()
+	_water_gate = "--gate=water" in OS.get_cmdline_user_args()
+	_gate = _gate or _water_gate
 	_sync_far = "--sync-far" in OS.get_cmdline_user_args()
 	_coalesce = not "--no-coalesce" in OS.get_cmdline_user_args()
 	if _gate:
@@ -143,6 +149,10 @@ func _ready() -> void:
 	debris = Debris.new()
 	debris.name = "Debris"
 	add_child(debris)
+	water = Water.new()
+	water.name = "Water"
+	add_child(water)
+	water.setup(self, 20.0, 4)
 
 	var start := Presets.load_settings(ContentPacks.resolve("worldgen/default.json"))
 	for arg in OS.get_cmdline_user_args():
@@ -153,7 +163,9 @@ func _ready() -> void:
 				if str(p.name).to_lower() == arg.split("=")[1].to_lower():
 					start = Presets.load_settings(p.path)
 	generate(start)
-	if _gate:
+	if _water_gate:
+		_run_water_gate()
+	elif _gate:
 		_run_gate()
 
 
@@ -196,6 +208,7 @@ func generate(s: Dictionary) -> void:
 	BrickWave.set_sea_level(sea)
 	_biome_names = BrickTerrain.biome_names()
 	_cache_tree_rules()
+	water.reset_world(sea, clampi(int(settings.get("detail_tiles", 4)), 2, 8))
 
 	var sp = settings.get("spawn", null)
 	var want := Vector2i.ZERO
@@ -429,6 +442,7 @@ func _wait_breaks() -> void:
 ## The field changed (a shot, a block broken or placed): rebake the tiles it
 ## names behind the old ones, and the far blocks over them.
 func terrain_edited(res: Dictionary) -> void:
+	water.terrain_changed(res)
 	var tiles: PackedInt32Array = res["tiles"]
 	if tiles.is_empty():
 		return
@@ -747,6 +761,7 @@ func _update_hud() -> void:
 		"trees %d   edits %d   generated in %.0f ms" % [_trees.count if _trees != null else 0,
 				BrickTerrain.get_edit_count(), _gen_ms],
 		"blocks placed %d  broken %d   %s" % [builder.placed, builder.broken, _save_status],
+		"water %s" % water.report(),
 		"%s   F fly/walk  B build  F9 world generation  F3 readout  T +1 hour" % ("ON FOOT" if on_foot
 				else "FLYING %.0f m/s (wheel)" % walker.fly_speed),
 	])
@@ -839,6 +854,158 @@ func _run_gate() -> void:
 	await _gate_edits()
 	print("[mine-gate] done")
 	get_tree().quit()
+
+
+## The water pass: -- --gate=water (Docs/MineWater.md 14, stage 2). On a
+## walled stone platform laid above the ground near spawn (so the ground under
+## each scene is known, and nothing runs off into the world): a stream down a
+## stepped hill, a waterfall off a cliff, a pond, lava meeting water, then the
+## stream drying once its source is taken. The water is ticked by the pass
+## (water.step), so the pictures are the same every run.
+func _run_water_gate() -> void:
+	await _frames(10)
+	var dev := UserPaths.DEV
+	DirAccess.make_dir_recursive_absolute(dev)
+	_time = 0.42
+	water.manual = true
+	var stud := BrickWorld.get_stud_metres()
+	var course := BrickWorld.get_plate_metres() * 3.0
+	var e := _eye()
+	var o := Vector2i(floori(e.x / stud) + 6, floori(e.z / stud) - 40)
+	var top := -(1 << 30)
+	for dz in range(-32, 33, 2):
+		for dx in range(-32, 33, 2):
+			top = maxi(top, BrickTerrain.surface_plate(o.x + dx, o.y + dz))
+	var fl := floori(float(top) / 3.0) + 4          ## the platform's course
+	var w := fl + 1                                ## water stands here
+	var lay := func(x0: int, z0: int, x1: int, z1: int, b0: int, b1: int, mat: int) -> void:
+		var r: Dictionary = BrickTerrain.fill_box(Vector3i(o.x + x0, b0 * 3, o.y + z0),
+				Vector3i(o.x + x1, b1 * 3 + 2, o.y + z1), mat, false)
+		terrain_edited(r)
+	var stone := maxi(BrickTerrain.material_names().find("stone"), 1)
+	var dark := maxi(BrickTerrain.material_names().find("dark stone"), 1)
+	lay.call(-32, -32, 32, 32, fl, fl, stone)
+	# The rim, two bricks tall: water spreads 14 studs, nothing gets out.
+	lay.call(-32, -32, 32, -32, w, w + 1, dark)
+	lay.call(-32, 32, 32, 32, w, w + 1, dark)
+	lay.call(-32, -32, -32, 32, w, w + 1, dark)
+	lay.call(32, -32, 32, 32, w, w + 1, dark)
+	# A: a stepped hill, four steps down to the east.
+	for i in 4:
+		lay.call(-24 + i * 4, -26, -21 + i * 4, -18, w, w + 3 - i, dark)
+	# B: a cliff six bricks tall with a source near its east edge.
+	lay.call(-30, 0, -20, 22, w, w + 5, dark)
+	# C: a pond, a wall one brick tall round 8 x 8.
+	lay.call(4, 4, 13, 4, w, w, dark)
+	lay.call(4, 13, 13, 13, w, w, dark)
+	lay.call(4, 4, 4, 13, w, w, dark)
+	lay.call(13, 4, 13, 13, w, w, dark)
+	# D: a lava pit beside a water channel, in a walled box.
+	lay.call(18, -26, 30, -26, w, w + 1, dark)
+	lay.call(18, -14, 30, -14, w, w + 1, dark)
+	lay.call(18, -26, 18, -14, w, w + 1, dark)
+	await _frames(30)
+	water.step(1)
+
+	var src_a := Vector3i(o.x - 23, w + 4, o.y - 22)
+	BrickFluid.place(src_a, 1, BrickFluid.SOURCE, 3)
+	BrickFluid.place(Vector3i(o.x - 21, w + 6, o.y + 11), 1, BrickFluid.SOURCE, 3)
+	for x in range(5, 13):
+		for z in range(5, 13):
+			BrickFluid.place(Vector3i(o.x + x, w, o.y + z), 1, BrickFluid.STILL, 2)
+	BrickFluid.place(Vector3i(o.x + 21, w, o.y - 20), 2, BrickFluid.SOURCE, 3)
+	BrickFluid.place(Vector3i(o.x + 28, w, o.y - 20), 1, BrickFluid.SOURCE, 3)
+	var t0 := Time.get_ticks_usec()
+	var worst := 0.0
+	var ticks := 0
+	for i in 300:
+		water.step(1)
+		ticks += 1
+		var tick_ms := float(BrickFluid.stats().get("tick_ms", 0.0))
+		worst = maxf(worst, tick_ms)
+		if BrickFluid.active_count() == 0:
+			break
+		if i % 10 == 0:
+			await get_tree().process_frame
+	print("[water-gate] platform at course %d (%.1f m); settled in %d ticks (%.0f ms), worst tick %.2f ms; %s" % [
+			fl, fl * course, ticks, float(Time.get_ticks_usec() - t0) / 1000.0, worst, water.report()])
+	await _frames(30)
+
+	set_on_foot(false)
+	# Pictures of the water, not of the gun and the readout.
+	# PlayerView shows its rig again every frame: it is paused meanwhile.
+	view.process_mode = Node.PROCESS_MODE_DISABLED
+	view.rig.visible = false
+	if view.arms != null:
+		view.arms.visible = false
+	_hud_layer.visible = false
+	var pm := func(x: float, b: float, z: float) -> Vector3:
+		return Vector3((o.x + x) * stud, b * course, (o.y + z) * stud)
+	var look := func(from: Vector3, at: Vector3) -> void:
+		walker.place(from, ((at - from) * Vector3(1, 0, 1)).normalized())
+		var d := at - from
+		walker.pitch = atan2(d.y, Vector2(d.x, d.z).length())
+	look.call(pm.call(-4.0, w + 7.0, -4.0), pm.call(-16.0, w + 1.0, -22.0))
+	await _frames(40)
+	await _shot(dev + "water_stream.png")
+	look.call(pm.call(-6.0, w + 5.0, 14.0), pm.call(-20.0, w + 3.0, 11.0))
+	await _frames(40)
+	await _shot(dev + "water_fall.png")
+	look.call(pm.call(18.0, w + 6.0, 20.0), pm.call(9.0, w, 9.0))
+	await _frames(40)
+	await _shot(dev + "water_pond.png")
+	look.call(pm.call(24.0, w + 7.0, -4.0), pm.call(24.0, w, -20.0))
+	await _frames(40)
+	await _shot(dev + "water_lava.png")
+	print("[water-gate] pond holds %d tiles (128 poured), lava laid %d rock cells" % [
+			_pond_units(o, w), water.rock_laid])
+
+	# The stream cut off: it drains to its hollows, then dries.
+	BrickFluid.remove(src_a, -1)
+	water.step(40)
+	look.call(pm.call(-4.0, w + 7.0, -4.0), pm.call(-16.0, w + 1.0, -22.0))
+	await _frames(30)
+	await _shot(dev + "water_draining.png")
+	for i in 60:
+		water.step(10)
+		await get_tree().process_frame
+	await _frames(20)
+	await _shot(dev + "water_dried.png")
+	var wet := 0
+	for x in range(-30, 0):
+		for z in range(-31, -10):
+			for b in range(w, w + 5):
+				var ci: Dictionary = BrickFluid.cell_info(Vector3i(o.x + x, b, o.y + z))
+				if int(ci.fluid) != 0 and int(ci.kind) == BrickFluid.STILL:
+					wet += 1
+	# Still water only: the waterfall's running water reaches this far.
+	print("[water-gate] stream area still cells after drying: %d (want 0); %s" % [wet, water.report()])
+	view.process_mode = Node.PROCESS_MODE_INHERIT
+	view.rig.visible = true
+	_hud_layer.visible = true
+
+	# Live ticks on the worker (the game's way), a source poured on the
+	# platform: frames must not wait on it.
+	water.manual = false
+	BrickFluid.place(Vector3i(o.x - 5, w, o.y + 20), 1, BrickFluid.SOURCE, 3)
+	var fw := 0.0
+	for f in 120:
+		var f0 := Time.get_ticks_usec()
+		await get_tree().process_frame
+		fw = maxf(fw, float(Time.get_ticks_usec() - f0) / 1000.0)
+	print("[water-gate] live: 120 frames, worst %.1f ms; %s" % [fw, water.report()])
+	print("[water-gate] done")
+	get_tree().quit()
+
+
+func _pond_units(o: Vector2i, w: int) -> int:
+	var n := 0
+	for x in range(5, 13):
+		for z in range(5, 13):
+			var c: Dictionary = BrickFluid.cell_info(Vector3i(o.x + x, w, o.y + z))
+			if int(c.fluid) == 1:
+				n += int(c.amount)
+	return n
 
 
 ## Build mode, as a player would: fly a little above the ground looking down

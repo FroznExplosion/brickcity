@@ -7,7 +7,7 @@ extends Node3D
 ##   LMB      break the block looked at (held: keeps breaking)
 ##   RMB      place the selected block against the face looked at (held: repeats)
 ##   MMB      pick the block looked at into the selected slot
-##   1-9, wheel   choose a slot
+##   1-9 0 - =, wheel   choose a slot
 ##   X        block size: 1x1, 2x2 or 4x4 studs, one brick tall
 ##
 ## A block is BrickTerrain's own edit: `fill_box` writes plate cells, the
@@ -20,6 +20,12 @@ extends Node3D
 ## (PlayerController.hold_fire), and slot keys and the wheel do not reach the
 ## arsenal or the fly speed.
 ##
+## The last three slots are fluids for testing (Docs/MineWater.md 10, until
+## the buckets exist): a water source, a water brick (9 tiles, still water),
+## a lava source. RMB pours one in each stud of the block; LMB with a fluid
+## slot takes the fluid looked at (BrickFluid.ray_cell). Blocks placed into
+## water delete it (13.4): the builder's own aim passes through water.
+##
 ## Preloaded by path, not named (see terrain_scene.gd).
 
 const REACH := 6.0
@@ -27,6 +33,15 @@ const REPEAT := 0.22
 const SIZES := [2, 1, 4]
 const DEFAULT_HOTBAR := ["grass", "dirt", "stone", "dark stone", "sand", "sandstone",
 		"gravel", "snow", "terracotta"]
+## Fluid slots: negative entries in `hotbar`.
+const WATER_SOURCE := -1
+const WATER_BRICK := -2
+const LAVA_SOURCE := -3
+const FLUID_SLOTS := [WATER_SOURCE, WATER_BRICK, LAVA_SOURCE]
+const FLUID_NAMES := { -1: "water source", -2: "water brick (9 tiles)", -3: "lava source" }
+const FLUID_COLOURS := { -1: Color(0.15, 0.45, 0.85), -2: Color(0.4, 0.7, 0.95), -3: Color(1.0, 0.4, 0.05) }
+const SLOT_KEYS := [KEY_1, KEY_2, KEY_3, KEY_4, KEY_5, KEY_6, KEY_7, KEY_8, KEY_9, KEY_0,
+		KEY_MINUS, KEY_EQUAL]
 
 var host: Node = null
 var active := false
@@ -54,6 +69,8 @@ func setup(p_host: Node, hud_layer: CanvasLayer) -> void:
 	_names = BrickTerrain.material_names()
 	for n in DEFAULT_HOTBAR:
 		hotbar.append(maxi(_names.find(n), 1))
+	for f in FLUID_SLOTS:
+		hotbar.append(f)
 	_outline = MeshInstance3D.new()
 	_outline.name = "Target"
 	_outline.mesh = _box_lines()
@@ -114,8 +131,8 @@ func _input(event: InputEvent) -> void:
 			size_i = (size_i + 1) % SIZES.size()
 			_refresh_bar()
 			get_viewport().set_input_as_handled()
-		elif k >= KEY_1 and k <= KEY_9:
-			slot = k - KEY_1
+		elif SLOT_KEYS.has(k):
+			slot = mini(SLOT_KEYS.find(k), hotbar.size() - 1)
 			_refresh_bar()
 			get_viewport().set_input_as_handled()
 		return
@@ -207,6 +224,8 @@ func _cells(block: Vector3i) -> Array[Vector3i]:
 
 
 func break_target() -> bool:
+	if hotbar[slot] < 0:
+		return take_fluid()
 	if target.is_empty():
 		update_target()
 		if target.is_empty():
@@ -231,6 +250,8 @@ func place_target() -> bool:
 	var n: Vector3i = target.normal
 	var to := b + n
 	var c := _cells(to)
+	if hotbar[slot] < 0:
+		return pour(to)
 	if _blocks_player(to):
 		return false
 	var res: Dictionary = BrickTerrain.fill_box(c[0], c[1], hotbar[slot], true)
@@ -240,6 +261,33 @@ func place_target() -> bool:
 	log_blocks.append("place %s" % to)
 	host.terrain_edited(res)
 	target = {}
+	return true
+
+
+## A fluid slot's RMB: the fluid in every stud of block `to`, its course.
+func pour(to: Vector3i) -> bool:
+	var c := _cells(to)
+	var f := hotbar[slot]
+	var fluid := 2 if f == LAVA_SOURCE else 1
+	var kind := BrickFluid.STILL if f == WATER_BRICK else BrickFluid.SOURCE
+	for x in range(c[0].x, c[1].x + 1):
+		for z in range(c[0].z, c[1].z + 1):
+			BrickFluid.place(Vector3i(x, to.y, z), fluid, kind, 3)
+	placed += 1
+	log_blocks.append("pour %s %s" % [FLUID_NAMES[f], to])
+	target = {}
+	return true
+
+
+## A fluid slot's LMB: the fluid cell looked at goes (a source too).
+func take_fluid() -> bool:
+	var cam: Camera3D = host._eye_camera()
+	var hit: Dictionary = BrickFluid.ray_cell(cam.global_position, -cam.global_transform.basis.z, REACH)
+	if hit.is_empty() or int(hit.fluid) == 0:
+		return false
+	BrickFluid.remove(hit.cell, -1)
+	broken += 1
+	log_blocks.append("take %s" % hit.cell)
 	return true
 
 
@@ -281,8 +329,8 @@ func _build_bar(layer: CanvasLayer) -> void:
 	_bar.anchor_right = 0.5
 	_bar.anchor_top = 1.0
 	_bar.anchor_bottom = 1.0
-	_bar.offset_left = -9 * 26
-	_bar.offset_right = 9 * 26
+	_bar.offset_left = -hotbar.size() * 26
+	_bar.offset_right = hotbar.size() * 26
 	_bar.offset_top = -120
 	_bar.offset_bottom = -72
 	_bar.alignment = BoxContainer.ALIGNMENT_CENTER
@@ -299,7 +347,7 @@ func _build_bar(layer: CanvasLayer) -> void:
 		swatch.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		p.add_child(swatch)
 		var num := Label.new()
-		num.text = str(i + 1)
+		num.text = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "0", "-", "="][mini(i, 11)]
 		num.position = Vector2(3, 0)
 		num.add_theme_font_size_override("font_size", 11)
 		num.add_theme_color_override("font_outline_color", Color.BLACK)
@@ -335,11 +383,11 @@ func _refresh_bar() -> void:
 		sb.set_border_width_all(3 if i == slot else 1)
 		sb.border_color = Color(1, 1, 1) if i == slot else Color(0.35, 0.35, 0.4)
 		p.add_theme_stylebox_override("panel", sb)
-		var col := BrickWorld.get_filament_colour(BrickTerrain.material_filament_index(hotbar[i]))
+		var col: Color = FLUID_COLOURS[hotbar[i]] if hotbar[i] < 0 else 				BrickWorld.get_filament_colour(BrickTerrain.material_filament_index(hotbar[i]))
 		(p.get_node("Swatch") as ColorRect).color = col
 	var s := block_studs()
 	_bar_label.text = "BUILD  %s  -  block %dx%d studs, 1 brick  (B exit  X size  MMB pick)" % [
-			_names[hotbar[slot]], s, s]
+			FLUID_NAMES[hotbar[slot]] if hotbar[slot] < 0 else _names[hotbar[slot]], s, s]
 
 
 static func _box_lines() -> ArrayMesh:

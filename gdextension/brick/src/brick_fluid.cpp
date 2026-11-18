@@ -540,6 +540,14 @@ void eval(int x, int b, int z) {
         Cell n = cur;
         n.st = mk_st(cf, K_STILL, false);
         n.aux = 0;
+        // A stream keeps only a tile, so it dries (13.3); a two-plate stream
+        // cell kept whole was a 2-deep core its tile-deep edges never dried
+        // round. Water deeper than the stream's own level was a pond the
+        // river ran over: it stays (4.2.5). A fall keeps all, to drain.
+        if (c_kind(cur) == K_FLOW) {
+            const int lvl = c_dist(cur) <= DEFS[cf].split ? 2 : 1;
+            if ((int)cur.amt <= lvl) n.amt = 1;
+        }
         g_sets.push_back({ x, b, z, n });
         return;
     }
@@ -590,6 +598,42 @@ void eval(int x, int b, int z) {
         }
     }
     if (moved) return;
+    // A deeper core on open flat ground thins out (4.2): an inner cell, with
+    // no dry floor at its own level beside it, gives a tile to a neighbour a
+    // plate lower that is at the sheet's edge (dry floor at ITS level beside
+    // it). Without it a 2-deep core keeps its tile-deep ring from drying for
+    // ever. Water only moves inner -> edge -> dry, so nothing ping-pongs; a
+    // pond in a pit has walls, not dry floor, round it and stays.
+    if (a >= 2 && supported(x, b, z, cur)) {
+        auto dry_level = [&](int qx, int qz, int fl) -> bool {
+            const Cell &q = wcell(qx, b, qz);
+            return !c_wet(q) && c_cap(q) > 0 && floor_of(q.solid) == fl && supported(qx, b, qz, q);
+        };
+        const int my_fl = floor_of(cur.solid);
+        bool inner = true;
+        for (int i = 0; i < 4 && inner; ++i) {
+            if (dry_level(x + DX[i], z + DZ[i], my_fl)) inner = false;
+        }
+        if (inner) {
+            for (int j = 0; j < 4; ++j) {
+                const int i = (j + rot) & 3;
+                const int nx = x + DX[i], nz = z + DZ[i];
+                const Cell &n = wcell(nx, b, nz);
+                if (!c_wet(n) || c_fluid(n) != cf || c_kind(n) != K_STILL) continue;
+                const int nfl = floor_of(n.solid);
+                if (b * 3 + nfl + n.amt != s_top - 1 || c_wet(wcell(nx, b + 1, nz))) continue;
+                bool edge = false;
+                for (int k = 0; k < 4 && !edge; ++k) {
+                    if (nx + DX[k] == x && nz + DZ[k] == z) continue;
+                    if (dry_level(nx + DX[k], nz + DZ[k], nfl)) edge = true;
+                }
+                if (edge) {
+                    g_moves.push_back({ x, b, z, nx, b, nz, 1, cf });
+                    return;
+                }
+            }
+        }
+    }
     // A lone tile, on the ground, with nothing deeper beside it, dries.
     if (DEFS[cf].dries && a == 1 && !(cur.aux & 0x80) && !deep_near && supported(x, b, z, cur)
             && !c_wet(wcell(x, b + 1, z))) {
@@ -850,6 +894,9 @@ void mesh_tile(int tx, int tz, Array &water, Array &lava) {
                         const float P = PLATE_M;
                         const Cell &above = wcell(x, b + 1, z);
                         const bool top_open = !(c_wet(above) && c_fluid(above) == f);
+                        // Only an open top sinks under the course; a side under
+                        // more water meets the course above (no seam in a fall).
+                        const float sink = top_open ? TOP_SINK : 0.0f;
                         if (top_open && !(c_ocean(c) && own == g_sea_b * 3)) {
                             const Vector3 a(x0, h00 * P - TOP_SINK, z0), bb(x1, h10 * P - TOP_SINK, z0);
                             const Vector3 cq(x1, h11 * P - TOP_SINK, z1), d(x0, h01 * P - TOP_SINK, z1);
@@ -871,7 +918,7 @@ void mesh_tile(int tx, int tz, Array &water, Array &lava) {
                             const float t0 = ch[i][0], t1 = ch[i][1];
                             if (std::max(t0, t1) <= lo + 0.01f) continue;
                             const float y0 = lo * P;
-                            const float ya = std::max(t0, lo) * P - TOP_SINK, yb = std::max(t1, lo) * P - TOP_SINK;
+                            const float ya = std::max(t0, lo) * P - sink, yb = std::max(t1, lo) * P - sink;
                             Vector3 p0, p1;
                             if (i == 0) { p0 = Vector3(x1, 0, z0); p1 = Vector3(x1, 0, z1); }
                             else if (i == 1) { p0 = Vector3(x0, 0, z0); p1 = Vector3(x0, 0, z1); }
