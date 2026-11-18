@@ -588,15 +588,11 @@ func toggle_menu() -> void:
 	_menu_layer.layer = 80
 	_menu_layer.process_mode = Node.PROCESS_MODE_ALWAYS
 	add_child(_menu_layer)
-	var dim := ColorRect.new()
-	dim.color = Color(0, 0, 0, 0.35)
-	dim.set_anchors_preset(Control.PRESET_FULL_RECT)
-	dim.mouse_filter = Control.MOUSE_FILTER_STOP
-	_menu_layer.add_child(dim)
+	# A MenuScreen: full screen, dimmed backdrop that takes every click.
 	_menu = Menu.new()
 	_menu.name = "WorldGenMenu"
-	_menu_layer.add_child(_menu)
 	_menu.setup(self)
+	_menu_layer.add_child(_menu)
 	# The world stops here, not by pausing the tree: SceneTree.paused cannot
 	# be set while the engine holds the tree suspended (run from the editor,
 	# "Pause state cannot be modified while suspended"), and then nothing
@@ -855,7 +851,45 @@ func _run_menu_gate() -> void:
 				% [bool(mm.call("is_open")), _menu != null, get_tree().paused])
 		if _menu != null:
 			toggle_menu()
+	await _menu_small_window_check()
 	get_tree().quit()
+
+
+## The menu on a small window: Generate world inside the viewport, nothing
+## cut off (MenuFit.audit, as the Options menu's fit test), and a real click
+## on it builds a new world.
+func _menu_small_window_check() -> void:
+	var win := get_window()
+	var size0 := win.size
+	for small in [Vector2i(800, 450), Vector2i(640, 400)]:
+		win.size = small
+		await _frames(10)
+		toggle_menu()
+		await _frames(10)
+		var vp := get_viewport().get_visible_rect()
+		var gen: Button = _menu.call("generate_button")
+		var r := gen.get_global_rect()
+		var cut: Array = MenuFit.audit(_menu, vp)
+		print("[mine-menu] window %s (viewport %s): Generate world at %s, inside %s, cut off %d%s" % [
+				small, vp.size, r, vp.encloses(r), cut.size(),
+				"" if cut.is_empty() else "
+" + MenuFit.describe(cut)])
+		await _shot(UserPaths.DEV + "mine_menu_%dx%d.png" % [small.x, small.y])
+		if small.x == 640:
+			var seed0 := int(settings.seed)
+			var ms0 := _gen_ms
+			_gen_ms = -1.0
+			await _click(r.get_center())
+			await _frames(5)
+			print("[mine-menu] clicked Generate world: menu open %s, regenerated %s (%.0f ms, seed %d -> %d), world running %s"
+					% [_menu != null, _gen_ms >= 0.0, _gen_ms, seed0, int(settings.seed), can_process()])
+			if _gen_ms < 0.0:
+				_gen_ms = ms0
+		if _menu != null:
+			toggle_menu()
+			await _frames(3)
+	win.size = size0
+	await _frames(5)
 
 
 func _key(code: Key) -> void:

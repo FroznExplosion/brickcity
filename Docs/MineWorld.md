@@ -119,6 +119,15 @@ close. Two things it had to get right:
   whatever the mouse mode says, so freeing the mouse alone left the view
   turning under the menu.
 
+It is a `MenuScreen` (menu/core/MenuScreen.gd), sized to the window the way
+the Options menu is: the presets bar sits in the header beside the title, the
+status, **Close** and **Generate world** in the footer -- both outside the
+scrolling body, so they are on screen at any window size; each tab page
+scrolls, the row labels wrap, and the map shrinks to the height left or, on a
+narrow window (under 900 px), goes under the tabs and the body scrolls.
+`-- --gate=menu` opens it at 800x450 and 640x400, checks Generate world is
+inside the viewport and `MenuFit.audit` finds nothing cut off, then clicks it.
+
 Tabs: World (name, seed + Random, detail radius, view distance, height
 scale), Shape (continents, hills, mountains, dry rivers, cliffs and
 overhangs, Far Lands), Sea & Beach, Caves, Ores, Biomes (climate, and per
