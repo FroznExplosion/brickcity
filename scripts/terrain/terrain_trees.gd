@@ -64,6 +64,17 @@ var _cells := {}
 var _queue: Array[Vector2i] = []
 var _plan_at := Vector3.INF
 
+## SOLID TRUNKS, streaming mode (Docs/MineWorld.md 4): the trunks of every
+## cell whose middle is within `solid_m` of the camera are boxes the player
+## and rounds meet (FIXTURE | TREE, PlanetTrees' layers), taken away past 1.5
+## times that. 0 = none (the editor and heightfield test only look at trees).
+## Nodeless: one PhysicsServer body a cell, one shared box shape a kind.
+var solid_m := 0.0
+## Vector2i cell -> the body RID of its trunks.
+var _solid := {}
+var _trunk_shapes := {}
+var _solid_at := Vector3.INF
+
 
 func setup(p_camera: Camera3D, p_material: Material) -> void:
 	camera = p_camera
@@ -149,6 +160,9 @@ func stream(p_seed: int, chance_at: Callable, variant_at: Callable, keep := 420.
 
 ## Every tree gone (a new world is about to be generated).
 func clear_all() -> void:
+	for c in _solid.keys():
+		_unsolid(c)
+	_solid_at = Vector3.INF
 	for c in _cells:
 		for row in _cells[c]:
 			(_sets[row.key] as ImpostorLod).remove(int(row.handle))
@@ -182,6 +196,7 @@ func _stream_step() -> void:
 			if mid.distance_to(Vector2(here.x, here.z)) > drop_m:
 				gone.append(c)
 		for c in gone:
+			_unsolid(c)
 			for row in _cells[c]:
 				(_sets[row.key] as ImpostorLod).remove(int(row.handle))
 				count -= 1
@@ -198,6 +213,76 @@ func _stream_step() -> void:
 		count += rows.size()
 		for row in rows:
 			_sorted_at.erase(row.key)
+		_solid_at = Vector3.INF
+	if solid_m > 0.0:
+		_solid_step(here, cell_m)
+
+
+## Near cells' trunks solid, far ones not; looked at again once the camera
+## has moved a couple of metres (or a cell came in).
+func _solid_step(here: Vector3, cell_m: float) -> void:
+	if _solid_at.distance_to(here) < 2.0:
+		return
+	_solid_at = here
+	var at := Vector2(here.x, here.z)
+	for c in _cells:
+		var d := ((Vector2(c) + Vector2(0.5, 0.5)) * cell_m).distance_to(at)
+		if d < solid_m and not _solid.has(c):
+			_make_solid(c)
+		elif d > solid_m * 1.5 and _solid.has(c):
+			_unsolid(c)
+
+
+func _make_solid(c: Vector2i) -> void:
+	var rows: Array = _cells[c]
+	if rows.is_empty() or not is_inside_tree():
+		_solid[c] = RID()
+		return
+	var body := PhysicsServer3D.body_create()
+	PhysicsServer3D.body_set_mode(body, PhysicsServer3D.BODY_MODE_STATIC)
+	PhysicsServer3D.body_set_collision_layer(body, Layers.FIXTURE | Layers.TREE)
+	PhysicsServer3D.body_set_collision_mask(body, 0)
+	for row in rows:
+		var v: int = row.variant
+		var size := Trees.trunk_size(v)
+		var foot: Vector3 = (row.xf as Transform3D) * Trees.trunk_foot(v)
+		PhysicsServer3D.body_add_shape(body, _trunk_shape(v),
+				Transform3D(Basis(), foot + Vector3(0, size.y * 0.5, 0)))
+	PhysicsServer3D.body_set_state(body, PhysicsServer3D.BODY_STATE_TRANSFORM, global_transform)
+	PhysicsServer3D.body_set_space(body, get_world_3d().space)
+	_solid[c] = body
+
+
+func _unsolid(c: Vector2i) -> void:
+	var body: RID = _solid.get(c, RID())
+	if body.is_valid():
+		PhysicsServer3D.free_rid(body)
+	_solid.erase(c)
+
+
+func _trunk_shape(variant: int) -> RID:
+	if not _trunk_shapes.has(variant):
+		var s := PhysicsServer3D.box_shape_create()
+		PhysicsServer3D.shape_set_data(s, Trees.trunk_size(variant) * 0.5)
+		_trunk_shapes[variant] = s
+	return _trunk_shapes[variant]
+
+
+## How many cells have solid trunks, and how many trunks (probes, readout).
+func solid_counts() -> Vector2i:
+	var n := 0
+	for c in _solid:
+		if (_solid[c] as RID).is_valid():
+			n += (_cells.get(c, []) as Array).size()
+	return Vector2i(_solid.size(), n)
+
+
+func _exit_tree() -> void:
+	for c in _solid.keys():
+		_unsolid(c)
+	for v in _trunk_shapes:
+		PhysicsServer3D.free_rid(_trunk_shapes[v])
+	_trunk_shapes.clear()
 
 
 func _place(spots: Array) -> Array:
@@ -218,8 +303,9 @@ func _place(spots: Array) -> Array:
 			s.setup(tree_mesh, material, 45.0)
 			_sets[key] = s
 		var cell: Vector3i = spot.cell
-		var h := (_sets[key] as ImpostorLod).add(Trees.placement(cell, variant))
-		var row := {"key": key, "handle": h, "x": cell.x, "z": cell.z}
+		var xf := Trees.placement(cell, variant)
+		var h := (_sets[key] as ImpostorLod).add(xf)
+		var row := {"key": key, "handle": h, "x": cell.x, "z": cell.z, "variant": variant, "xf": xf}
 		rows.append(row)
 		if not streaming:
 			_placed.append(row)

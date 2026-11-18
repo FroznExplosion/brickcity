@@ -125,6 +125,21 @@ static func trunk_offset(variant: int) -> Vector3i:
 	return TRUNK_CORNER - recipe(variant).origin()
 
 
+## A trunk's box, the colliders' (PlanetTrees, TerrainTrees): 2 x 2 studs,
+## its round bricks three plates each.
+static func trunk_size(variant: int) -> Vector3:
+	var stud := BrickWorld.get_stud_metres()
+	return Vector3(2.0 * stud, TRUNK_HEIGHTS[variant] * 3 * BrickWorld.get_plate_metres(), 2.0 * stud)
+
+
+## A variant's foot -- the middle of its 2 x 2 trunk's base -- in its mesh's
+## own metres (the recipe rebased to its min corner, as RecipeMesh builds it).
+static func trunk_foot(variant: int) -> Vector3:
+	var off := trunk_offset(variant)
+	var size := BrickWorld.get_cell_size()
+	return Vector3((off.x + 1) * size.x, off.y * size.y, (off.z + 1) * size.z)
+
+
 ## Height of a variant, metres.
 static func height_m(variant: int) -> float:
 	var r := recipe(variant)

@@ -81,6 +81,14 @@ the next step if that matters.
 per biome is the menu's "Trees" row; which of the four tree kinds grow there
 is `BIOME_VARIANTS` in `worldgen_presets.gd`.
 
+**Solid trunks.** The trunks of every tree cell whose middle is within
+`TerrainTrees.solid_m` (64 m here) of the camera are boxes the player and
+rounds meet, on PlanetTrees' layers (FIXTURE | TREE), taken away past 1.5
+times that. The box and its foot are `Trees.trunk_size` / `Trees.trunk_foot`,
+shared with PlanetTrees. Nodeless: one PhysicsServer body per cell, one box
+shape per tree kind; only looked at again when the camera has moved 2 m. The
+editor and the heightfield test leave `solid_m` at 0.
+
 ## 5. Day, night, caves
 
 A day is 20 minutes. The sun turns, the sky and ambient follow, exposure
@@ -144,8 +152,7 @@ ores by name).
 
 ## 7. Not yet
 
-Falling sand, flowers and tall grass, clouds, solid
-tree trunks, villages and structures, animals, enemies, chests, and water.
+Falling sand, flowers and tall grass, clouds, villages and structures, animals, enemies, chests, and water.
 
 ## 8. Build mode
 

@@ -50,6 +50,7 @@ func _initialize() -> void:
 	_check_preview()
 	_check_build_blocks()
 	_check_break_brick()
+	await _check_solid_trunks()
 
 	BrickTerrain.set_generator(0)
 	var classic_after := _classic_sample()
@@ -57,6 +58,59 @@ func _initialize() -> void:
 
 	print("[mine] %s (%d failures)" % ["PASS" if failures == 0 else "FAIL", failures])
 	quit(1 if failures > 0 else 0)
+
+
+## Trees streamed by TerrainTrees have solid trunks near the camera
+## (solid_m): a ray at knee height through a near trunk hits it, the same
+## ray once the camera has gone far away does not.
+func _check_solid_trunks() -> void:
+	var cam := Camera3D.new()
+	root.add_child(cam)
+	var trees := TerrainTrees.new()
+	root.add_child(trees)
+	await process_frame
+	trees.setup(cam, StandardMaterial3D.new())
+	trees.stream(7, func(_x: int, _z: int) -> float: return 1.0,
+			func(_x: int, _z: int, _r: float) -> int: return 2, 120.0)
+	trees.solid_m = 64.0
+	for i in 60:
+		trees._stream_step()
+		if trees._queue.is_empty() and i > 2:
+			break
+	var counts: Vector2i = trees.solid_counts()
+	_expect(counts.y > 0, "trunks near the camera are solid (%d cells, %d trunks)" % [counts.x, counts.y])
+	# The nearest tree to the camera, and a ray through its trunk.
+	var best: Dictionary = {}
+	var best_d := INF
+	for c in trees._cells:
+		for row in trees._cells[c]:
+			var o: Vector3 = (row.xf as Transform3D) * Trees.trunk_foot(int(row.variant))
+			var d := Vector2(o.x, o.z).length()
+			if d < best_d:
+				best_d = d
+				best = row
+	if best.is_empty():
+		_expect(false, "a tree was placed")
+		return
+	var foot: Vector3 = (best.xf as Transform3D) * Trees.trunk_foot(int(best.variant))
+	await physics_frame
+	await physics_frame
+	var space := root.get_world_3d().direct_space_state
+	var knee := foot + Vector3(0, 0.5, 0)
+	var q := PhysicsRayQueryParameters3D.create(knee + Vector3(-3, 0, 0), knee + Vector3(3, 0, 0),
+			Layers.PAWN_MASK)
+	var hit := space.intersect_ray(q)
+	_expect(not hit.is_empty() and absf((hit.position as Vector3).x - (knee.x - Trees.trunk_size(int(best.variant)).x * 0.5)) < 0.05,
+			"a walker meets the trunk %.0f m from the camera (hit %s)" % [best_d, hit.get("position", "nothing")])
+	cam.global_position = Vector3(5000, 0, 5000)
+	trees._solid_at = Vector3.INF
+	trees._stream_step()
+	await physics_frame
+	await physics_frame
+	hit = space.intersect_ray(q)
+	_expect(hit.is_empty(), "the trunk is not solid once the camera is far away")
+	trees.queue_free()
+	cam.queue_free()
 
 
 func _expect(ok: bool, what: String) -> void:
