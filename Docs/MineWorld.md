@@ -162,16 +162,19 @@ Falling sand, flowers and tall grass, clouds, villages and structures, animals, 
 
 ## 8. Build mode
 
-`scripts/terrain/mine_builder.gd`, owned by the mine world. **B** turns it on
-or off, on foot or flying.
+`scripts/terrain/mine_builder.gd`, owned by the mine world. **B** switches
+the hands between the guns and the items, on foot or flying: build mode is
+the items hands. What is in the hand comes from the inventory (two hotbars,
+off-hand, storage; Docs/Inventory.md), saved with the world's edits.
 
 | Input | Does |
 |---|---|
-| left mouse | break the block looked at (held: keeps breaking) |
-| right mouse | place the selected block on the face looked at (held: repeats) |
-| middle mouse | pick the block looked at into the selected slot |
-| 1-9, wheel | choose a hotbar slot |
-| X | block size: 2x2, 1x1 or 4x4 studs, always one brick tall |
+| left mouse | break the block looked at (held: keeps breaking); a bucket scoops |
+| right mouse | use the item in hand: place its block on the face looked at (held: repeats), pour |
+| middle mouse | pick the block looked at into the hand |
+| 1-9, wheel | choose a slot of the active hotbar |
+| X | tap: the other hotbar; held: the other off-hand slot |
+| Z | block size: 2x2, 1x1 or 4x4 studs, always one brick tall (was X) |
 
 - Reach 6 m. The block looked at is outlined.
 - A block is a terrain edit: `BrickTerrain.fill_box` writes plate cells (0
@@ -188,8 +191,9 @@ or off, on foot or flying.
 - While building the gun neither fires nor aims (`PlayerController.hold_fire`)
   and is put away; slot keys and the wheel go to the hotbar, not the arsenal
   or the fly speed. A block is never placed inside the player.
-- Default hotbar: grass, dirt, stone, deepslate, sand, sandstone, gravel,
-  snow, terracotta.
+- Starting kit: hotbar 1 grass, dirt, stone, dark stone, sand, sandstone,
+  gravel, snow, terracotta; hotbar 2 bucket, source bucket, water source,
+  water brick, lava source, pickaxe. Creative: nothing runs out.
 
 ## 9. Saving changes, and what an edit costs
 
