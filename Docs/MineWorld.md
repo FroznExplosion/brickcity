@@ -93,7 +93,14 @@ editor and the heightfield test leave `solid_m` at 0.
 A day is 20 minutes. The sun turns, the sky and ambient follow, exposure
 adapts. Nothing bakes the sun into the ground (it moves); the detail tiles
 within two tiles of the player cast into the shadow map. Under the ground the
-ambient fades with depth, so caves are dark.
+light fades with depth, so caves are dark: ambient, sun and sky to 12 % by
+7.5 m down and on to 1.5 % by 30 m (`CAVE_DEEP_LIGHT`). The sky's share of
+the ambient fades out with it, and under 30 % the environment stops
+reflecting the sky. Both came from the sky's own light map, which does not
+follow its energy: with ambient, sun and sky at 3 %, a deep cave was still
+lit like a shaded street (`-- --gate=deep --light-sweep` turns each source
+off in turn; picture mean 0.51 old, 0.05 now, 2026-11-19). The flashlight has
+its own key. `--old-cave-light` is the old fade, for A/B.
 
 ## 6. World generation menu (M, or Escape > World generation...)
 
@@ -288,7 +295,8 @@ made the difference.
 | `tools/probes/mine_world_probe.gd` (headless) | generator, biomes, ores, bedrock, blocks, whole-brick breaking, saves |
 | `-- --gate` | spawn, flight (no collision, arms follow), endless far rings, holes, menu stops the world, build, landing, edit frame times, save round trip |
 | `-- --gate=deep` | the deep tier: into a cave 78 m down, sections load, land and stand, the seam |
-| `-- --gate=shift` | origin shifts on a 1.2 km flight: no holes, lands, builds |
+| `-- --gate=shift` | origin shifts on a 1.2 km flight: no holes, lands, builds, falling ground in place |
+| `-- --gate=spawn` | the first new ground after a world is made: frames, instance nodes new vs reused |
 | `-- --gate=flight` | fast flight: worst frame, frames over 33 ms, what each slow one spent |
 | `-- --gate=cave` | land in a reachable cave, still standing 200 ticks later |
 | `-- --gate=menu` | the generation menu and the pause menu clicked with real mouse events |
@@ -343,7 +351,19 @@ temperature 59-63 C):
   every ring vertex). Ring blocks are now offset on the worker and
   `build_poll(budget_ms)` puts the meshes in a slice per frame while the new
   tier is hidden.
-- Not yet measured: the deferred stud-set switch (last change) in a window.
+- **The first new ground** after a world is made (`-- --gate=spawn`: 600
+  frames at 30 m/s from the spawn, under the hold). The pool was empty until
+  tiles dropped, and the resident set grows from the first square to its full
+  240 tiles, so 194 far-stud, 185 pebble and 45 near-stud nodes were made new,
+  never drawn, and stalled the render thread. `TerrainTile.prewarm_begin` /
+  `prewarm_end` now fill the pool while the world is made (220 / 220 / 56 /
+  32 nodes, one invisible speck each in view for 3 frames, ~330 ms at load;
+  `--no-prewarm` for A/B). Every node is reused; the worst instance step went
+  from 36.5 to 0.3 ms, the worst frame 69 -> 55 ms, frames over 33 ms 11 -> 5
+  (similar start temperatures, 51 and 53 C; what is left is not the pool).
+- With the stud-set switch held too (and the pool pre-filled), `--gate=flight`
+  at 58 C: worst frame 30 ms, none over 33 ms during the fast flight (42 ms
+  and 2 before); slowing down after it, 42 ms worst, one over.
 
 ## 15. The ground comes down
 
@@ -375,6 +395,11 @@ planet's `recentre`, without its WorldFrame: the mine world keeps its own
   update on NOTIFICATION_TRANSFORM_CHANGED.
 - Whole tiles, so anything patterned on the stud lattice in world space (the
   printed surface, the grid light) lines up as before.
+- Ground collapse (ground_collapse.gd) keeps PlanetPieces' frame, where chunk
+  transforms are GLOBAL: a new piece's transform is the terrain one through
+  the mine world's transform, a piece's tile comes from `to_local` of its box,
+  and the put-away distances use the global eye (`_eye_render`). The shift
+  gate drops a block after five shifts: the piece lands where it was.
 - `-- --gate=shift` lowers `shift_at` to 300 m and flies 1.2 km: 5 shifts,
   the eye 4 m from the global origin, no holes, the pawn lands and stands, a
   block placed where looked at (2026-11-18).

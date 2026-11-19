@@ -198,6 +198,8 @@ func _ready() -> void:
 			_run_collapse_gate()
 		elif "--gate=flight" in OS.get_cmdline_user_args():
 			_run_flight_gate()
+		elif "--gate=spawn" in OS.get_cmdline_user_args():
+			_run_spawn_gate()
 		elif "--gate=shift" in OS.get_cmdline_user_args():
 			_run_shift_gate()
 		elif "--gate=deep" in OS.get_cmdline_user_args():
@@ -303,6 +305,16 @@ func generate(s: Dictionary) -> void:
 	_trees.setup(_eye_camera(), _brick_mat)
 	_trees.stream(int(settings.seed), _tree_chance_at, _tree_variant_at, 420.0)
 	_trees.solid_m = 64.0   # trunks the player and rounds meet
+	# The instance pool, filled now rather than by the first new ground's
+	# never-drawn nodes (the spawn spike, Docs/MineWorld.md 14).
+	if _prewarm_on:
+		var e := _eye_render()
+		var tw := Time.get_ticks_usec()
+		_warm = TerrainTile.prewarm_begin(_streamer, e - _eye_camera().global_transform.basis.z * 1.5,
+				PREWARM_PER_KIND)
+		prewarm_ms = float(Time.get_ticks_usec() - tw) / 1000.0
+		_warm_frame_ms = 0.0
+		_warm_frames = 3
 	_gen_ms = float(Time.get_ticks_usec() - t0) / 1000.0
 	print("[mine] generated '%s' seed %d in %.0f ms; spawn %s (%s)" % [settings.name,
 			int(settings.seed), _gen_ms, cell, _biome_names[BrickTerrain.biome_at(cell.x, cell.y)]])
@@ -619,6 +631,23 @@ func _flush_edits() -> void:
 const FAST_HOLD_MPS := 80.0
 const FAST_RESUME_MPS := 40.0
 var fast_hold := false
+## Pre-warmed instance nodes waiting to go into the pool (TerrainTile.prewarm).
+## Sized by --gate=spawn (2026-11-19): from the first loaded square to the full
+## resident set, 600 frames at 30 m/s made 194 far-stud, 185 pebble and 45
+## near-stud nodes new.
+const PREWARM_PER_KIND := {"StudsFar": 220, "Pebbles": 220, "Studs": 56, "Tufts": 32}
+var prewarm_ms := 0.0
+var _warm_frame_ms := 0.0
+var _warm: Array = []
+var _warm_frames := 0
+var _prewarm_on := not ("--no-prewarm" in OS.get_cmdline_user_args())
+## The underground light factor last frame (_day_night): 1 in the open.
+var _cave_light := 1.0
+## The light left deep underground (x the open-air light), and the A/B switch
+## for the old fade (12 % from 7.5 m down, sky untouched).
+const CAVE_DEEP_LIGHT := 0.015
+var _old_cave_light := "--old-cave-light" in OS.get_cmdline_user_args()
+var _reflecting := true
 ## This frame's main-thread costs, ms (the flight gate prints slow frames').
 var _ptimes := {}
 var _speed := 0.0
@@ -651,6 +680,14 @@ func _process(delta: float) -> void:
 	_frame_ms = lerpf(_frame_ms, delta * 1000.0, 0.1)
 	if _streamer == null:
 		return
+	if _warm_frames > 0:
+		_warm_frames -= 1
+		_warm_frame_ms += delta * 1000.0
+		if _warm_frames == 0:
+			print("[mine] instance pool pre-filled: %d nodes, %.0f ms to add, %.0f ms over the next 3 frames"
+					% [_warm.size(), prewarm_ms, _warm_frame_ms])
+			TerrainTile.prewarm_end(_warm)
+			_warm = []
 	_origin_step()
 	var eye := _eye()
 	_speed_step(eye, delta)
@@ -730,10 +767,33 @@ func _day_night(delta: float, eye: Vector3) -> void:
 	var c := Vector2i(floori(eye.x / BrickWorld.get_stud_metres()), floori(eye.z / BrickWorld.get_stud_metres()))
 	var under := _ground_m(c.x, c.y) - eye.y
 	var cave := clampf(1.0 - (under - 1.5) / 6.0, 0.12, 1.0)
+	if not _old_cave_light:
+		# On down past 7.5 m to CAVE_DEEP_LIGHT at 30 m: the deep caves
+		# (Docs/MineWorld.md 16) were lit like a shaded street.
+		cave = minf(cave, lerpf(0.12, CAVE_DEEP_LIGHT, clampf((under - 7.5) / 22.5, 0.0, 1.0)))
+		cave = maxf(cave, CAVE_DEEP_LIGHT)
+	_cave_light = cave
 	_rig.env.ambient_light_energy *= cave
 	# The ground casts no sun shadow, so the sun would reach into caves: it
 	# fades with depth the way the ambient does.
 	_rig.sun.light_energy *= cave
+	if not _old_cave_light:
+		# And the sky: the bricks REFLECT it (the environment's reflections
+		# come from the sky, not the ambient), which the ambient's fade
+		# never touched.
+		_rig.sky_mat.sky_energy_multiplier *= cave
+		# Measured (--gate=deep --light-sweep, 2026-11-19): with ambient, sun
+		# and sky all at 3 %, the sky's reflections still lit the cave as
+		# much as the ambient did -- the reflection map does not follow the
+		# sky's energy. Underground there is no sky to reflect.
+		var reflect := cave >= 0.3
+		if reflect != _reflecting:
+			_reflecting = reflect
+			_rig.env.reflected_light_source = Environment.REFLECTION_SOURCE_BG if reflect 					else Environment.REFLECTION_SOURCE_DISABLED
+		# The ambient too: a third of it came from the sky's own light map,
+		# and a wall facing sideways saw the bright horizon in it. That share
+		# fades out as the cave light goes from open air to 12 %.
+		_rig.env.ambient_light_sky_contribution = LightRig.AMBIENT_SKY 				* clampf((cave - 0.12) / 0.88, 0.0, 1.0)
 	_mat.set_shader_parameter("sun_dir", -_rig.sun.global_transform.basis.z)
 	_rig.expose(eye, delta)
 
@@ -1374,6 +1434,45 @@ func _run_gate() -> void:
 	get_tree().quit()
 
 
+## -- --gate=spawn: the first new ground after the world is made. Flying at
+## 30 m/s (under the fast-flight hold) from the spawn, every new tile's studs
+## and scatter need instance nodes, and until tiles are dropped the pool is
+## empty: a never-drawn MultiMesh node stalls the render thread (TerrainTile,
+## _mm_pool). Frame times, the near tier's worst instance step, and how many
+## instance nodes were new and how many reused (Docs/MineWorld.md 14).
+func _run_spawn_gate() -> void:
+	await _frames(5)
+	TerrainTile.profile_instances = true
+	TerrainTile.instance_ms.clear()
+	_streamer.reset_stats()
+	set_on_foot(false)
+	_fly_to(_eye() + Vector3(0, 8, 0), Vector3(1, -0.2, 0.3).normalized())
+	var worst := 0.0
+	var slow := 0
+	var notes: Array[String] = []
+	for i in 600:
+		walker.global_position += Vector3(1.0, 0.0, 0.3).normalized() * 0.5
+		var f0 := Time.get_ticks_usec()
+		await get_tree().process_frame
+		var ms := float(Time.get_ticks_usec() - f0) / 1000.0
+		if i > 2:
+			worst = maxf(worst, ms)
+			if ms > 33.0:
+				slow += 1
+				if notes.size() < 8:
+					notes.append("f%d %.0f ms (near %.1f)" % [i, ms, _ptimes.get("near", 0.0)])
+	var nodes := []
+	for k in ["Studs", "StudsFar", "Tufts", "Pebbles", "Bricks"]:
+		nodes.append("%s %d new / %d reused" % [k, int(TerrainTile.instance_ms.get(k + " new", 0.0)),
+				int(TerrainTile.instance_ms.get(k + " reused", 0.0))])
+	print("[mine-spawn] 600 frames at 30 m/s from the spawn: worst %.0f ms, %d over 33 ms; %s; %s"
+			% [worst, slow, _streamer.report(), ", ".join(nodes)])
+	for n in notes:
+		print("[mine-spawn]   slow %s" % n)
+	TerrainTile.profile_instances = false
+	get_tree().quit()
+
+
 ## -- --gate=flight: only the fast flight (below), from the spawn.
 func _run_flight_gate() -> void:
 	await _frames(30)
@@ -1494,6 +1593,25 @@ func _run_shift_gate() -> void:
 			% [cell, placed, builder._outline.global_position, to_local(builder._outline.global_position)])
 	builder.set_active(false)
 	await _shot(UserPaths.DEV + "mine_shift_build.png")
+	# Falling ground after the shifts: a floating dirt block lets go as a
+	# piece, and the piece must be where the block was -- piece transforms
+	# are global, the block's cells are terrain (ground_collapse.gd).
+	var made0 := int(collapse.groups_let_go)
+	var plate := BrickWorld.get_plate_metres()
+	var d0 := Vector3i(c.x + 6, floori(g / plate) + 24, c.y)
+	terrain_edited(BrickTerrain.fill_box(d0, d0 + Vector3i(1, 2, 1), 2, true))
+	var want_at := to_global(Vector3((d0.x + 1) * stud, (d0.y + 1.5) * plate, (d0.z + 1) * stud))
+	var tw := Time.get_ticks_msec()
+	var n0: int = collapse.pieces.pieces.size()
+	while Time.get_ticks_msec() - tw < 5000 and collapse.pieces.pieces.size() <= n0:
+		await get_tree().process_frame
+	await _frames(2)
+	var near_m := INF
+	for pc in collapse.pieces.pieces:
+		var mid: Vector3 = collapse.pieces.world_box(pc).get_center()
+		near_m = minf(near_m, Vector2(mid.x - want_at.x, mid.z - want_at.z).length())
+	print("[mine-shift] falling ground: %d let go, the nearest piece %.2f m (across) from where the block was -- %s"
+			% [int(collapse.groups_let_go) - made0, near_m, "IN PLACE" if near_m < 1.5 else "DISPLACED"])
 	get_tree().quit()
 
 
@@ -1577,6 +1695,54 @@ func _run_deep_gate() -> void:
 			% [_ground_m(floori(found.x / stud), floori(found.z / stud)) - found.y,
 			float(BrickTerrain.get_gen_params()["sea_m"]) - found.y, _deep.report(), frames, worst, slow])
 	await _shot(UserPaths.DEV + "mine_deep_cave.png")
+	var luma: float = await _mean_luma()
+	print("[mine-deep] light in the cave: picture mean %.3f, cave factor %.3f, ambient %.3f, sun %.3f, sky %.3f, exposure %.2f"
+			% [luma, _cave_light, _rig.env.ambient_light_energy, _rig.sun.light_energy,
+			_rig.sky_mat.sky_energy_multiplier, _rig.exposure])
+	if "--light-sweep" in OS.get_cmdline_user_args():
+		# What lights the cave: each in turn off.
+		var env := _rig.env
+		var res := []
+		_hud_layer.visible = false
+		view.rig.visible = false
+		await _frames(8)
+		res.append("no HUD/gun %.3f" % await _mean_luma())
+		for k in ["ssil_enabled", "sdfgi_enabled", "ssao_enabled", "glow_enabled", "fog_enabled", "volumetric_fog_enabled"]:
+			var was = env.get(k)
+			env.set(k, false)
+			await _frames(30)
+			res.append("%s(was %s) off %.3f" % [k, was, await _mean_luma()])
+			env.set(k, was)
+		var rs = env.reflected_light_source
+		env.reflected_light_source = Environment.REFLECTION_SOURCE_DISABLED
+		await _frames(20)
+		res.append("reflections off %.3f" % await _mean_luma())
+		env.reflected_light_source = rs
+		var hold := _rig.hold_exposure
+		_rig.hold_exposure = true
+		_rig.attributes.exposure_multiplier = 1.0
+		await _frames(10)
+		res.append("exposure 1 %.3f" % await _mean_luma())
+		env.reflected_light_source = Environment.REFLECTION_SOURCE_DISABLED
+		await _frames(10)
+		res.append("+ no reflections %.3f" % await _mean_luma())
+		var amb := env.ambient_light_energy
+		env.ambient_light_source = Environment.AMBIENT_SOURCE_DISABLED
+		await _frames(10)
+		res.append("+ no ambient %.3f" % await _mean_luma())
+		_rig.sun.visible = false
+		await _frames(10)
+		res.append("+ no sun %.3f" % await _mean_luma())
+		var lights := []
+		for l in get_tree().root.find_children("*", "Light3D", true, false):
+			if (l as Light3D).visible and l != _rig.sun:
+				lights.append("%s(%s)" % [l.name, l.get_class()])
+				(l as Light3D).visible = false
+		await _frames(10)
+		res.append("+ no other lights %.3f [%s]" % [await _mean_luma(), ", ".join(lights.slice(0, 6))])
+		_rig.hold_exposure = hold
+		print("[mine-deep] light sweep (gi level %s): %s" % [LightRig.gi_level, ", ".join(res)])
+		_hud_layer.visible = true
 	# What is under the landing spot, in the physics space.
 	var under := to_global(found)
 	var q := PhysicsRayQueryParameters3D.create(under + Vector3(0, 1.0, 0), under - Vector3(0, 3.0, 0), Layers.WORLD)
@@ -2550,6 +2716,18 @@ func _holes() -> int:
 			if not _streamer.has_tile(t) and _far.drawing(t).is_empty():
 				n += 1
 	return n
+
+
+## The viewport's mean brightness (0..1), for the gates' light checks.
+func _mean_luma() -> float:
+	await RenderingServer.frame_post_draw
+	var img := get_viewport().get_texture().get_image()
+	img.resize(64, 36)
+	var s := 0.0
+	for y in 36:
+		for x in 64:
+			s += img.get_pixel(x, y).get_luminance()
+	return s / (64.0 * 36.0)
 
 
 func _shot(path: String) -> void:

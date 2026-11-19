@@ -544,6 +544,51 @@ func _take_multimesh(kind: String, mesh: Mesh) -> MultiMesh:
 	return mm
 
 
+## PRE-WARMED INSTANCE NODES (Docs/MineWorld.md 14). Until tiles start being
+## dropped the pool is empty, so the first new ground after a world is made
+## put every tile's studs and scatter into never-drawn nodes -- the spawn
+## spike. `prewarm_begin` adds `per_kind[kind]` nodes of each kind, one invisible
+## speck each at `at` (in view, so they are really drawn), at load time;
+## `prewarm_end`, a few frames later, hands them to the pool.
+static func prewarm_begin(parent: Node3D, at: Vector3, per_kind: Dictionary) -> Array:
+	var kinds := {
+		"Studs": [PieceMeshes.stud(), stud_material()],
+		"StudsFar": [PieceMeshes.stud_plain(), stud_material()],
+		"Tufts": [PieceMeshes.tuft(), tuft_material()],
+		"Pebbles": [PieceMeshes.pebble(), instance_material()],
+	}
+	var out := []
+	for kind in kinds:
+		for i in int(per_kind.get(kind, 0)):
+			var mm := MultiMesh.new()
+			mm.transform_format = MultiMesh.TRANSFORM_3D
+			mm.use_colors = true
+			mm.mesh = kinds[kind][0]
+			mm.instance_count = 1
+			mm.set_instance_transform(0, Transform3D(Basis().scaled(Vector3.ONE * 0.001),
+					parent.to_local(at)))
+			mm.set_instance_color(0, Color(0, 0, 0, 0))
+			var mi := MultiMeshInstance3D.new()
+			mi.name = "Warm%s" % kind
+			mi.multimesh = mm
+			mi.material_override = kinds[kind][1]
+			mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+			parent.add_child(mi)
+			out.append([kind, mi])
+	return out
+
+
+static func prewarm_end(warm: Array) -> void:
+	for pair in warm:
+		var mi = pair[1]
+		if not is_instance_valid(mi):
+			continue
+		(mi as Node).get_parent().remove_child(mi)
+		if not _mmi_pool.has(pair[0]):
+			_mmi_pool[pair[0]] = []
+		(_mmi_pool[pair[0]] as Array).append(mi)
+
+
 ## Let every pooled MultiMesh go. For a streamer leaving the tree (see its
 ## `_exit_tree`); the pool fills again from the next tiles that leave.
 static func clear_pool() -> void:
