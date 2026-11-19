@@ -114,6 +114,16 @@ struct GenParams {
     /// chance of water running out of the face (a source in the air there).
     bool springs = false;
     float spring_chance = 0.02f;
+    /// Lakes above the sea (stage 8): a region in LAKE_REGION studs has this
+    /// chance of a lake at its lowest of a few points, filled to a brick under
+    /// the lowest of its rim.
+    bool lakes = false;
+    float lake_chance = 0.5f;
+    /// Cave pools (Minecraft's aquifers, stage 8): a region of cave, 40 studs
+    /// across and 12 bricks tall, has this chance of water up to a level in
+    /// it; stone barriers part pools of different levels.
+    bool cave_pools = false;
+    float cave_pool_chance = 0.3f;
     bool caves = true;
     /// Caves below cave_max_depth_m too, down to just over the bedrock: the
     /// deep tier draws them (Docs/MineWorld.md 16).
@@ -164,6 +174,19 @@ void apply_gen_dict(GenParams &p, const godot::Dictionary &d);
 godot::Dictionary gen_params_to_dict();
 
 BColumn biome_column(const GenParams &p, uint32_t seed, int x, int z);
+
+/// Cave pools (Docs/MineWater.md 14.8): the water level (a brick course,
+/// water at and under it) of the pool region holding (x, yb, z), INT_MIN when
+/// it has none. Shared by the generator (barriers) and BrickFluid (water).
+constexpr int AQ_XZ = 40;
+constexpr int AQ_Y = 12;
+int cave_pool_level(const GenParams &p, uint32_t seed, int x, int yb, int z);
+
+/// Lakes above the sea: the water level (a course) of the lake over column
+/// (x, z), INT_MIN when none; `bed`, when given, gets the course of its bowl's
+/// floor. biome_column already has the bowl cut.
+constexpr int LAKE_REGION = 384;
+int lake_level_at(const GenParams &p, uint32_t seed, int x, int z, int *bed = nullptr);
 inline BColumn biome_column(uint32_t seed, int x, int z) { return biome_column(gen_params(), seed, x, z); }
 /// The material of brick `yb` (absolute brick index) of the column, 0 air.
 int biome_cell(const GenParams &p, const BColumn &c, uint32_t seed, int x, int yb, int z);

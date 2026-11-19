@@ -25,6 +25,14 @@
 #include <unordered_set>
 #include <vector>
 
+#ifdef _WIN32
+#define NOMINMAX
+#include <windows.h>
+#include <dbghelp.h>
+#include <cstdio>
+#pragma comment(lib, "dbghelp.lib")
+#endif
+
 using namespace brick;
 
 // Docs/MineWater.md. Everything below the class boundary is one worker's
@@ -101,6 +109,7 @@ struct Section {
     std::vector<uint8_t> ready;     ///< per column: sampled from the field
     std::vector<int16_t> gtop;      ///< per column: generated top brick (the sea's floor)
     std::vector<int16_t> spring;    ///< per column: a spring's course, or NO_SPRING
+    std::vector<int16_t> lake;      ///< per column: a lake's top course, or NO_SPRING
     bool written = false;           ///< any cell ever written (the save skips the rest)
     std::vector<uint8_t> queued;    ///< per cell: in the next tick's list
     int wet = 0;                    ///< wet cells (for "anything to draw")
@@ -127,6 +136,22 @@ std::unordered_set<int64_t> g_frozen;
 std::unordered_set<int64_t> g_dirty_tiles;
 std::unordered_set<int64_t> g_mesh_requests;
 std::unordered_set<int64_t> g_far_requests;   ///< tiles wanting the coarse mesh
+/// Pits filling from rivers (4.5, stage 8): falls that landed, looked at
+/// every PIT_EVERY ticks until they stop being falls.
+std::unordered_set<int64_t> g_landings;
+constexpr int PIT_EVERY = 10;
+constexpr int PIT_LOOKS = 32;       ///< landings looked at a time
+constexpr int PIT_MAX = 4096;       ///< cells a closed body may have
+
+/// Multiplayer groundwork (MineWater.md 11.5): the cells whose drawn state
+/// changed, with the write count at the time, kept while `g_log_on`. A peer
+/// asks for what changed since the count it last had.
+bool g_log_on = false;
+std::vector<std::pair<int64_t, int64_t>> g_log;   ///< (write count, cell key)
+int64_t g_log_floor = 0;            ///< asks from before this need everything
+constexpr size_t LOG_MAX = 1 << 20;
+/// A mirror (a client): commands and meshes, no rules of its own.
+bool g_simulate = true;
 int g_mask_version = 0;
 
 struct Cmd {
@@ -140,7 +165,7 @@ std::vector<Cmd> g_cmds;
 struct MeshOut {
     int tx, tz;
     Array water, lava;
-    bool far = false;   ///< the coarse mesh (MineWater.md 8)
+    bool is_far = false;   ///< the coarse mesh (MineWater.md 8)
 };
 std::vector<MeshOut> g_out_meshes;
 /// Rock the fluids made, for the main thread to lay as terrain edits: per
@@ -179,7 +204,12 @@ int g_active = 0;
 
 /// Solid masks of `nb` courses from `b0` of one column, and the column's
 /// generated top brick. Reads the terrain's edits like a tile bake does.
-void sample_column(int x, int z, int b0, int nb, uint8_t *out, int *gen_top) {
+/// `gen_out`, when given, gets the masks as GENERATED (no edits): lava and
+/// cave pools fill only air the world was generated with, not a hole dug.
+void sample_column(int x, int z, int b0, int nb, uint8_t *out, int *gen_top, uint8_t *gen_out = nullptr) {
+    // Shared with other readers, never with the main thread's edits (a race
+    // on the map that crashed the water's thread).
+    std::shared_lock<std::shared_mutex> rd(edit_lock());
     const bool ed = !edits_empty();
     if (biomes_on()) {
         const uint32_t seed = (uint32_t)BrickTerrain::get_seed();
@@ -191,6 +221,7 @@ void sample_column(int x, int z, int b0, int nb, uint8_t *out, int *gen_top) {
             if (b * 3 <= c.bound_p && biome_cell(c, seed, x, b, z) != MAT_AIR) {
                 m = 7;
             }
+            if (gen_out != nullptr) gen_out[i] = m;
             if (ed) {
                 for (int p = 0; p < 3; ++p) {
                     const int e = edit_at(pack_cell(x, b * 3 + p, z));
@@ -211,6 +242,7 @@ void sample_column(int x, int z, int b0, int nb, uint8_t *out, int *gen_top) {
             if (BrickTerrain::solid_at(x, (b0 + i) * 3 + p, z) != MAT_AIR) m |= (uint8_t)(1 << p);
         }
         out[i] = m;
+        if (gen_out != nullptr) gen_out[i] = m;
     }
 }
 
@@ -242,9 +274,23 @@ int spring_course(int x, int z, int gen_top) {
     return NO_SPRING;
 }
 
+// --- lakes above the sea (stage 8): the generator's (terrain_biomes.cpp) ------
+
+bool g_lakes = false;
+bool g_pools = false;
+
+/// The lake top over a column (its level course), or NO_SPRING.
+int lake_course(int x, int z) {
+    if (!g_lakes || !biomes_on()) return NO_SPRING;
+    const int l = lake_level_at(gen_params(), (uint32_t)BrickTerrain::get_seed(), x, z);
+    return l == INT_MIN ? NO_SPRING : l;
+}
+
 /// The fluid the world was generated with in a cell: the sea, lava pools
-/// in caves deep down, springs out of cliff faces (MineWater.md 5, 9).
-inline void gen_fluid(Cell &cl, int b, int gen_top, int spring_b = NO_SPRING) {
+/// in caves deep down, springs out of cliff faces, lakes over the sea, cave
+/// pools (MineWater.md 5, 9, 14.8).
+inline void gen_fluid(Cell &cl, int x, int b, int z, int gen_top, int spring_b = NO_SPRING,
+        int lake_b = NO_SPRING, bool gen_open = true) {
     cl.st = 0;
     cl.amt = 0;
     cl.aux = 0;
@@ -253,11 +299,18 @@ inline void gen_fluid(Cell &cl, int b, int gen_top, int spring_b = NO_SPRING) {
     if (g_sea_on && gen_top + 1 < g_sea_b && b > gen_top && b < g_sea_b) {
         cl.st = mk_st(F_WATER, K_SOURCE, true);
         cl.amt = (uint8_t)cap;
-    } else if (b < g_lava_b && b < gen_top) {
+    } else if (b < g_lava_b && b < gen_top && gen_open) {
         // Air under the ground and under the lava line is a cave: lava.
         cl.st = mk_st(F_LAVA, K_SOURCE, false);
         cl.amt = (uint8_t)cap;
-    } else if (b == spring_b && b > gen_top) {
+    } else if ((b == spring_b || b <= lake_b) && b > gen_top) {
+        // A spring out of a cliff face, or a lake over its bed.
+        cl.st = mk_st(F_WATER, K_SOURCE, false);
+        cl.amt = (uint8_t)cap;
+    } else if (g_pools && b < gen_top && gen_open
+            && b <= cave_pool_level(gen_params(), (uint32_t)BrickTerrain::get_seed(), x, b, z)) {
+        // Cave air in a pool region under its level: the pool (the generator
+        // left barriers round it).
         cl.st = mk_st(F_WATER, K_SOURCE, false);
         cl.amt = (uint8_t)cap;
     }
@@ -266,8 +319,9 @@ inline void gen_fluid(Cell &cl, int b, int gen_top, int spring_b = NO_SPRING) {
 Cell gen_cell(int x, int b, int z) {
     Cell c;
     int gt = 0;
-    sample_column(x, z, b, 1, &c.solid, &gt);
-    gen_fluid(c, b, gt, spring_course(x, z, gt));
+    uint8_t gm = 0;
+    sample_column(x, z, b, 1, &c.solid, &gt, &gm);
+    gen_fluid(c, x, b, z, gt, spring_course(x, z, gt), lake_course(x, z), gm != 7);
     return c;
 }
 
@@ -316,6 +370,7 @@ Section *sec_make(int sx, int sb, int sz) {
     ns->ready.assign(SCOL, 0);
     ns->gtop.assign(SCOL, 0);
     ns->spring.assign(SCOL, NO_SPRING);
+    ns->lake.assign(SCOL, NO_SPRING);
     ns->queued.assign(SCELLS, 0);
     s = ns.get();
     std::lock_guard<std::recursive_mutex> lk(g_state);
@@ -327,17 +382,20 @@ Section *sec_make(int sx, int sb, int sz) {
 void sample_into(Section *s, int lx, int lz) {
     const int x = s->sx * SX + lx, z = s->sz * SX + lz;
     uint8_t masks[SB];
+    uint8_t gmasks[SB];
     int gt = 0;
     const auto t0 = std::chrono::steady_clock::now();
-    sample_column(x, z, s->sb * SB, SB, masks, &gt);
+    sample_column(x, z, s->sb * SB, SB, masks, &gt, gmasks);
     g_sample_ms += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
     s->gtop[lx + SX * lz] = (int16_t)std::max(-32000, std::min(32000, gt));
     const int sp = spring_course(x, z, gt);
     s->spring[lx + SX * lz] = (int16_t)sp;
+    const int lake = lake_course(x, z);
+    s->lake[lx + SX * lz] = (int16_t)std::max(-32000, std::min(32000, lake));
     for (int lb = 0; lb < SB; ++lb) {
         Cell &cl = s->c[Section::idx(lx, lb, lz)];
         cl.solid = masks[lb];
-        gen_fluid(cl, s->sb * SB + lb, gt, sp);
+        gen_fluid(cl, x, s->sb * SB + lb, z, gt, sp, lake, gmasks[lb] != 7);
         if (c_wet(cl)) ++s->wet;
     }
     std::atomic_thread_fence(std::memory_order_release);
@@ -442,7 +500,14 @@ void write_cell(int x, int b, int z, const Cell &nc) {
     s->written = true;
     if (!drawn_same) {
         mark_dirty(x, b, z);
-        g_writes.fetch_add(1, std::memory_order_relaxed);
+        const int64_t w = g_writes.fetch_add(1, std::memory_order_relaxed) + 1;
+        if (g_log_on) {
+            if (g_log.size() >= LOG_MAX) {
+                g_log.clear();
+                g_log_floor = w;
+            }
+            g_log.push_back({ w, pack3(x, b, z) });
+        }
     }
 }
 
@@ -635,8 +700,24 @@ void eval(int x, int b, int z) {
             best_ocean = ocean_src && b == g_sea_b - 1 && gen_sea_col(x, z);
         }
     }
+    // Still water as deep as what would feed it, or deeper, stays still
+    // (4.2.5 "whose top is lower"; stage 8): a river does not turn a pond
+    // into a river, and a fall lands on a full pit as on ground, so the pit
+    // can fill (pits_fill).
+    if (best_fluid != 0 && best_kind != K_SOURCE && c_wet(cur) && c_kind(cur) == K_STILL
+            && c_fluid(cur) == best_fluid && (int)cur.amt >= best_amt) {
+        best_fluid = 0;
+    }
     if (deferred && best_fluid == 0) {
         g_defer_lava.push_back(pack3(x, b, z));
+    }
+    if (best_fluid != 0 && best_kind == K_FALL) {
+        // Where a fall meets ground or a full pit: a pit may be filling.
+        const Cell &d = wcell(x, b - 1, z);
+        if (floor_of(cur.solid) > 0 || (d.solid & 4)
+                || (c_wet(d) && c_kind(d) == K_STILL && floor_of(d.solid) + d.amt >= 3)) {
+            g_landings.insert(pack3(x, b, z));
+        }
     }
     if (best_fluid != 0) {
         Cell n = cur;
@@ -797,7 +878,10 @@ bool box_near_water(int x0, int x1, int b0, int b1, int z0, int z1) {
         for (int sz = fdiv(z0, SX); sz <= fdiv(z1, SX); ++sz) {
             for (int sb = fdiv(b0, SB); sb <= fdiv(b1, SB); ++sb) {
                 Section *s = sec_find(sx, sb, sz);
-                if (s != nullptr && s->wet > 0) return true;
+                // Any section already read keeps solid masks that must
+                // follow the ground, wet or not: priming reads sections dry,
+                // and a floor laid there later was air to the water.
+                if (s != nullptr) return true;
             }
         }
     }
@@ -877,6 +961,17 @@ void apply_cmd(const Cmd &c) {
                 if (g_lava_b != INT_MIN) {
                     if (c_wet(wcell(x, g_lava_b - 1, z))) any = true;
                 }
+                if (g_lakes) {
+                    const int lc = lake_course(x, z);
+                    if (lc != NO_SPRING && c_wet(wcell(x, lc, z))) any = true;
+                }
+                if (g_pools && c.b.x <= c.b.y) {
+                    const GenParams &gp = gen_params();
+                    for (int ry = fdiv(c.b.x, AQ_Y); ry <= fdiv(c.b.y, AQ_Y); ++ry) {
+                        const int lvl = cave_pool_level(gp, seed, x, ry * AQ_Y, z);
+                        if (lvl != INT_MIN && c_wet(wcell(x, lvl, z))) any = true;
+                    }
+                }
                 if (g_springs) {
                     const int sp = spring_course(x, z, biome_column(seed, x, z).sb);
                     if (sp != NO_SPRING) {
@@ -897,13 +992,13 @@ void apply_cmd(const Cmd &c) {
     const int x = c.a.x, b = c.a.y, z = c.a.z;
     Cell cur = wcell(x, b, z);
     std::lock_guard<std::recursive_mutex> lk(g_state);
-    if (c.type == 3) {
+    if (c.type == 3 || c.type == 9) {
         Cell n = cur;
         n.st = c.st;
         n.amt = (uint8_t)std::min((int)c.amt, std::max(c_cap(cur), 0));
         n.aux = c.aux;
         write_cell(x, b, z, n);
-        wake_around(x, b, z);
+        if (c.type == 3) wake_around(x, b, z);
         return;
     }
     if (c.type == 2) {
@@ -1203,6 +1298,61 @@ int tile_coord(int64_t k, bool z) {
 
 // --- the tick ------------------------------------------------------------------------
 
+/// Pits filling from rivers (4.5): the running water round a landed fall,
+/// at its course, is a closed body when nothing in it can leave -- no drop
+/// beside it, no dry floor lower than its top that it could spread onto, no
+/// source or other fluid joined to it. Then the course becomes still water,
+/// full, and the fall lands on that next: the pit rises a course at a time
+/// until it reaches its rim, where the body is open and spills.
+void check_pits() {
+    if (g_landings.empty() || g_tick % PIT_EVERY != 0) return;
+    std::vector<int64_t> done;
+    int looked = 0;
+    for (int64_t k : g_landings) {
+        if (looked++ >= PIT_LOOKS) break;
+        int x, b, z;
+        unpack3(k, x, b, z);
+        const Cell &c = wcell(x, b, z);
+        if (!c_wet(c) || c_kind(c) != K_FALL) { done.push_back(k); continue; }
+        const int f = c_fluid(c);
+        std::vector<int64_t> body{ k };
+        std::unordered_set<int64_t> seen{ k };
+        bool open = false;
+        for (size_t h = 0; h < body.size() && !open; ++h) {
+            if (body.size() > (size_t)PIT_MAX) { open = true; break; }
+            int bx, bb, bz;
+            unpack3(body[h], bx, bb, bz);
+            const Cell &bc = wcell(bx, b, bz);
+            const int top = b * 3 + floor_of(bc.solid) + bc.amt;
+            for (int i = 0; i < 4 && !open; ++i) {
+                const int nx = bx + DX[i], nz = bz + DZ[i];
+                const Cell &n = wcell(nx, b, nz);
+                if (c_cap(n) <= 0) continue;
+                if (c_wet(n)) {
+                    if (c_fluid(n) != f || c_kind(n) == K_SOURCE) { open = true; break; }
+                    if (c_kind(n) == K_STILL) continue;
+                    const int64_t nk = pack3(nx, b, nz);
+                    if (seen.insert(nk).second) body.push_back(nk);
+                    continue;
+                }
+                if (!supported(nx, b, nz, n) || b * 3 + floor_of(n.solid) < top) open = true;
+            }
+        }
+        if (open) continue;
+        for (int64_t bk : body) {
+            int bx, bb, bz;
+            unpack3(bk, bx, bb, bz);
+            Cell n = wcell(bx, bb, bz);
+            n.st = mk_st(f, K_STILL, false);
+            n.amt = (uint8_t)std::max(0, c_cap(n));
+            n.aux = E_NONE;
+            g_sets.push_back({ bx, bb, bz, n });
+        }
+        done.push_back(k);
+    }
+    for (int64_t k : done) g_landings.erase(k);
+}
+
 void do_tick() {
     const auto t0 = std::chrono::steady_clock::now();
     g_last_columns = 0;
@@ -1242,6 +1392,13 @@ void do_tick() {
 
     std::vector<int64_t> due;
     due.swap(g_due);
+    if (!g_simulate) {
+        // A mirror: what the authority sends is applied (apply_changes);
+        // nothing here decides for itself.
+        due.clear();
+        g_due_lava.clear();
+        g_timers.clear();
+    }
     if (lava_tick() && !g_due_lava.empty()) {
         due.insert(due.end(), g_due_lava.begin(), g_due_lava.end());
         g_due_lava.clear();
@@ -1282,6 +1439,8 @@ void do_tick() {
         ++evals;
         eval(x, b, z);
     }
+
+    if (g_simulate) check_pits();
 
     // Apply (MineWater.md 4.2: sets first, then the moves that still hold).
     std::unordered_set<int64_t> set_now;
@@ -1365,7 +1524,7 @@ void do_tick() {
         MeshOut mo;
         mo.tx = tile_coord(k, false);
         mo.tz = tile_coord(k, true);
-        mo.far = true;
+        mo.is_far = true;
         mesh_tile_far(mo.tx, mo.tz, mo.water, mo.lava);
         g_out_meshes.push_back(mo);
         ++meshed;
@@ -1385,6 +1544,48 @@ void do_tick() {
     g_active = (int)(g_due.size() + g_due_lava.size());
     g_last_ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
 }
+
+#ifdef _WIN32
+/// The water's thread is not Godot's: a crash in it went out with no
+/// backtrace at all. This prints where (with the .pdb of a pdb=yes build).
+LONG fluid_crash_report(EXCEPTION_POINTERS *ep) {
+    HANDLE proc = GetCurrentProcess();
+    SymSetOptions(SYMOPT_LOAD_LINES | SYMOPT_UNDNAME);
+    SymInitialize(proc, nullptr, TRUE);
+    std::fprintf(stderr, "[BrickFluid] the water thread crashed: code 0x%08lx at %p\n",
+            ep->ExceptionRecord->ExceptionCode, ep->ExceptionRecord->ExceptionAddress);
+    void *frames[48];
+    const USHORT n = CaptureStackBackTrace(0, 48, frames, nullptr);
+    char buf[sizeof(SYMBOL_INFO) + 256];
+    SYMBOL_INFO *sym = (SYMBOL_INFO *)buf;
+    for (USHORT i = 0; i < n; ++i) {
+        std::memset(buf, 0, sizeof(buf));
+        sym->SizeOfStruct = sizeof(SYMBOL_INFO);
+        sym->MaxNameLen = 255;
+        DWORD64 disp = 0;
+        IMAGEHLP_LINE64 line;
+        std::memset(&line, 0, sizeof(line));
+        line.SizeOfStruct = sizeof(line);
+        DWORD ldisp = 0;
+        const DWORD64 a = (DWORD64)frames[i];
+        const bool named = SymFromAddr(proc, a, &disp, sym);
+        const bool lined = SymGetLineFromAddr64(proc, a, &ldisp, &line);
+        std::fprintf(stderr, "[BrickFluid]   %2u %s %s:%lu\n", i, named ? sym->Name : "?",
+                lined ? line.FileName : "?", lined ? line.LineNumber : 0ul);
+    }
+    std::fflush(stderr);
+    return EXCEPTION_CONTINUE_SEARCH;
+}
+
+void tick_guarded() {
+    __try {
+        do_tick();
+    } __except (fluid_crash_report(GetExceptionInformation())) {
+    }
+}
+#else
+void tick_guarded() { do_tick(); }
+#endif
 
 void join_if_done() {
     if (g_running.load() && g_done.load()) {
@@ -1424,6 +1625,9 @@ double BrickFluid::reset(double sea_m, bool sea_on) {
     g_dirty_tiles.clear();
     g_mesh_requests.clear();
     g_far_requests.clear();
+    g_landings.clear();
+    g_log.clear();
+    g_log_floor = g_writes.load();
     {
         std::lock_guard<std::mutex> lc(g_cmd_mx);
         g_cmds.clear();
@@ -1440,6 +1644,8 @@ double BrickFluid::reset(double sea_m, bool sea_on) {
         const bool gen = biomes_on();
         g_lava_b = gen && gp.lava_pools ? (int)std::floor((gp.sea_m + gp.lava_m) / (PLATE_M * 3.0f)) : INT_MIN;
         g_springs = gen && gp.springs;
+        g_lakes = gen && gp.lakes;
+        g_pools = gen && gp.cave_pools;
         g_spring_cut = (uint32_t)std::min(4294967295.0, std::max(0.0, (double)gp.spring_chance * 4294967296.0));
     }
     g_sea_m = (double)g_sea_b * (double)(PLATE_M * 3.0f);
@@ -1498,7 +1704,7 @@ bool BrickFluid::update(double delta) {
         g_done = false;
         g_running = true;
         g_thread = std::thread([]() {
-            do_tick();
+            tick_guarded();
             g_done = true;
         });
     }
@@ -1517,7 +1723,7 @@ Dictionary BrickFluid::take() {
             d["tile"] = Vector2i(m.tx, m.tz);
             d["water"] = m.water;
             d["lava"] = m.lava;
-            d["far"] = m.far;
+            d["far"] = m.is_far;
             meshes.append(d);
         }
         for (int32_t v : g_out_terrain) terr.push_back(v);
@@ -1552,11 +1758,84 @@ Dictionary BrickFluid::build_tile_mesh(int tx, int tz) {
     return d;
 }
 
-void BrickFluid::prime_tile(int tx, int tz) {
+void BrickFluid::prime_tile(int tx, int tz, int b_lo, int b_hi) {
     Cmd c;
     c.type = 7;
     c.a = Vector3i(tx, 0, tz);
+    c.b = Vector3i(b_lo, b_hi, 0);
     push_cmd(c);
+}
+
+int BrickFluid::lake_top(int x, int z) {
+    const int l = lake_course(x, z);
+    return l == NO_SPRING ? INT_MIN : l;
+}
+
+void BrickFluid::set_change_log(bool on) {
+    std::lock_guard<std::recursive_mutex> lk(g_state);
+    g_log_on = on;
+    g_log.clear();
+    g_log_floor = g_writes.load();
+}
+
+void BrickFluid::set_simulating(bool on) { g_simulate = on; }
+bool BrickFluid::get_simulating() { return g_simulate; }
+
+Dictionary BrickFluid::get_changes_since(int64_t since) {
+    std::lock_guard<std::recursive_mutex> lk(g_state);
+    Dictionary out;
+    const int64_t now = g_writes.load();
+    out["version"] = now;
+    // Older than the log reaches (or the log is off): a peer needs the whole
+    // difference from the generated world, get_save's.
+    out["full"] = !g_log_on || since < g_log_floor;
+    std::vector<uint8_t> buf;
+    auto put32 = [&](int32_t v) {
+        for (int i = 0; i < 4; ++i) buf.push_back((uint8_t)((uint32_t)v >> (8 * i)));
+    };
+    if (g_log_on && since >= g_log_floor) {
+        auto it = std::upper_bound(g_log.begin(), g_log.end(), std::make_pair(since, INT64_MAX));
+        std::unordered_set<int64_t> sent;
+        for (; it != g_log.end(); ++it) {
+            if (!sent.insert(it->second).second) continue;
+            int x, b, z;
+            unpack3(it->second, x, b, z);
+            const Cell c = rcell(x, b, z);
+            put32(x);
+            put32(b);
+            put32(z);
+            buf.push_back(c.st);
+            buf.push_back(c.amt);
+            buf.push_back(c.aux & 0x7F);
+        }
+    }
+    PackedByteArray cells;
+    cells.resize((int64_t)buf.size());
+    std::copy(buf.begin(), buf.end(), cells.ptrw());
+    out["cells"] = cells;
+    return out;
+}
+
+int BrickFluid::apply_changes(const PackedByteArray &cells, bool wake) {
+    int n = 0;
+    const uint8_t *r = cells.ptr();
+    auto get32 = [&](int64_t at) {
+        uint32_t v = 0;
+        for (int i = 0; i < 4; ++i) v |= (uint32_t)r[at + i] << (8 * i);
+        return (int32_t)v;
+    };
+    std::lock_guard<std::mutex> lk(g_cmd_mx);
+    for (int64_t at = 0; at + 15 <= cells.size(); at += 15) {
+        Cmd c;
+        c.type = wake ? 3 : 9;
+        c.a = Vector3i(get32(at), get32(at + 4), get32(at + 8));
+        c.st = r[at + 12];
+        c.amt = r[at + 13];
+        c.aux = r[at + 14];
+        g_cmds.push_back(c);
+        ++n;
+    }
+    return n;
 }
 
 bool BrickFluid::has_generated() { return g_lava_b != INT_MIN || g_springs; }
@@ -1852,7 +2131,8 @@ PackedByteArray BrickFluid::get_save() {
                     if (!s.ready[lx + SX * lz]) continue;
                     const Cell &c = s.c[Section::idx(lx, lb, lz)];
                     Cell g = c;
-                    gen_fluid(g, s.sb * SB + lb, s.gtop[lx + SX * lz], s.spring[lx + SX * lz]);
+                    gen_fluid(g, s.sx * SX + lx, s.sb * SB + lb, s.sz * SX + lz, s.gtop[lx + SX * lz],
+                            s.spring[lx + SX * lz], s.lake[lx + SX * lz]);
                     const uint8_t aux = c.aux & 0x7F;
                     if (c.st == g.st && c.amt == g.amt) continue;
                     put32(s.sx * SX + lx);
@@ -1930,7 +2210,15 @@ void BrickFluid::_bind_methods() {
     ClassDB::bind_static_method("BrickFluid", D_METHOD("ray_cell", "from", "dir", "max_metres"), &BrickFluid::ray_cell);
     ClassDB::bind_static_method("BrickFluid", D_METHOD("request_far_mesh", "tx", "tz"), &BrickFluid::request_far_mesh);
     ClassDB::bind_static_method("BrickFluid", D_METHOD("change_count"), &BrickFluid::change_count);
-    ClassDB::bind_static_method("BrickFluid", D_METHOD("prime_tile", "tx", "tz"), &BrickFluid::prime_tile);
+    ClassDB::bind_static_method("BrickFluid", D_METHOD("prime_tile", "tx", "tz", "b_lo", "b_hi"), &BrickFluid::prime_tile,
+            DEFVAL(1), DEFVAL(0));
+    ClassDB::bind_static_method("BrickFluid", D_METHOD("lake_top", "x", "z"), &BrickFluid::lake_top);
+    ClassDB::bind_static_method("BrickFluid", D_METHOD("set_change_log", "on"), &BrickFluid::set_change_log);
+    ClassDB::bind_static_method("BrickFluid", D_METHOD("set_simulating", "on"), &BrickFluid::set_simulating);
+    ClassDB::bind_static_method("BrickFluid", D_METHOD("get_simulating"), &BrickFluid::get_simulating);
+    ClassDB::bind_static_method("BrickFluid", D_METHOD("get_changes_since", "version"), &BrickFluid::get_changes_since);
+    ClassDB::bind_static_method("BrickFluid", D_METHOD("apply_changes", "cells", "wake"), &BrickFluid::apply_changes,
+            DEFVAL(false));
     ClassDB::bind_static_method("BrickFluid", D_METHOD("has_generated"), &BrickFluid::has_generated);
     ClassDB::bind_static_method("BrickFluid", D_METHOD("sea_mask", "x0", "z0", "size"), &BrickFluid::sea_mask);
     ClassDB::bind_static_method("BrickFluid", D_METHOD("changed_columns"), &BrickFluid::changed_columns);

@@ -37,7 +37,7 @@ const REACH := 6.0
 const REPEAT := 0.22
 const SIZES := [2, 1, 4]
 const DEFAULT_HOTBAR := ["grass", "dirt", "stone", "dark stone", "sand", "sandstone",
-		"gravel", "snow", "terracotta"]
+		"gravel", "wood", "leaves"]
 ## Fluid slots: negative entries in `hotbar`.
 const WATER_SOURCE := -1
 const WATER_BRICK := -2

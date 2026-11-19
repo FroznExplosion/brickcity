@@ -94,6 +94,10 @@ static func complete(d: Dictionary) -> Dictionary:
 		gen["lava_pools"] = true
 	if not over.has("springs"):
 		gen["springs"] = true
+	if not over.has("lakes"):
+		gen["lakes"] = true
+	if not over.has("cave_pools"):
+		gen["cave_pools"] = true
 	# Biomes and ores by NAME, so a preset can name only the ones it changes
 	# and a file outlives a reordering.
 	for key in ["biomes", "ores"]:

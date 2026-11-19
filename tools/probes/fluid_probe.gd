@@ -25,7 +25,10 @@ extends SceneTree
 ##   sea draws no top (the wave tiers draw it);
 ## - a big still spill's tick cost, as a number;
 ## - stage 8: a calm pond's top is one merged quad; generated lava pools in
-##   caves under the lava line, drawn once primed and still; springs run.
+##   caves under the lava line, drawn once primed and still; springs run; a
+##   pit under a fall fills to its rim and spills; lakes over the sea; cave
+##   pools with no water beside cave air; a mirror rebuilds an authority's
+##   water from its change log (multiplayer groundwork).
 
 const FLOOR := 1000          ## floor course: plates 3000-3002
 const W := FLOOR + 1         ## the course water stands in
@@ -217,6 +220,27 @@ func _run() -> void:
 		if n.y > 0.99:
 			ups += 1
 	_ok("a calm pond's top is one quad", ups == 4, "%d top vertices" % ups)
+
+	# 4e. A pit filling from a river (4.5, stage 8): a fall into a closed pit
+	# fills it a course at a time to its rim, then spills over.
+	_floor(2900, -20, 2960, 20)
+	for wall in [[2920, -5, 2930, -5], [2920, 5, 2930, 5], [2920, -5, 2920, 5], [2930, -5, 2930, 5]]:
+		BrickTerrain.fill_box(Vector3i(wall[0], W * 3, wall[1]), Vector3i(wall[2], (W + 2) * 3 + 2, wall[3]), 4, false)
+	# A pillar over the pit's middle with a source on it.
+	BrickTerrain.fill_box(Vector3i(2925, (W + 4) * 3, 0), Vector3i(2925, (W + 4) * 3 + 2, 0), 4, false)
+	BrickFluid.terrain_changed(Vector3i(2920, W * 3, -5), Vector3i(2930, (W + 4) * 3 + 2, 5))
+	BrickFluid.place(Vector3i(2925, W + 5, 0), 1, BrickFluid.SOURCE, 3)
+	BrickFluid.tick_now(900)
+	var pit_full := 0
+	for b in range(W, W + 3):
+		for x in range(2921, 2930):
+			for z in range(-4, 5):
+				var pc: Dictionary = _info(x, b, z)
+				if int(pc.fluid) == 1 and int(pc.kind) == BrickFluid.STILL and int(pc.amount) == 3:
+					pit_full += 1
+	var outside := _region_units(2900, 2918, -20, 20, W)
+	_ok("a pit under a fall fills to its rim", pit_full >= 9 * 9 * 3 - 3, "%d of %d cells full" % [pit_full, 9 * 9 * 3])
+	_ok("and spills over it", outside > 0, "%d tiles outside" % outside)
 
 	# 5. A gap between two sources fills as a source.
 	_sec("5")
@@ -411,6 +435,26 @@ func _run() -> void:
 		_ok("a primed tile draws its lava pool", not lm.is_empty())
 		_ok("generated lava stays put (nothing awake)", BrickFluid.active_count() == 0,
 				str(BrickFluid.active_count()))
+		# A hole dug in solid rock under the lava line is a hole, not lava:
+		# only air the world was generated with fills.
+		var dug := Vector3i(1 << 30, 0, 0)
+		for k in range(1, 400):
+			var dx := lava_at.x + (k % 20) - 10
+			var dz := lava_at.y + (k / 20) - 10
+			var allsolid := true
+			for o in [Vector3i(0, 0, 0), Vector3i(1, 0, 0), Vector3i(-1, 0, 0), Vector3i(0, 0, 1), Vector3i(0, 0, -1), Vector3i(0, 1, 0), Vector3i(0, -1, 0)]:
+				if int(_info(dx + o.x, lava_b - 3 + o.y, dz + o.z).capacity) != 0:
+					allsolid = false
+					break
+			if allsolid:
+				dug = Vector3i(dx, lava_b - 3, dz)
+				break
+		if dug.x != 1 << 30:
+			var r: Dictionary = BrickTerrain.fill_box(Vector3i(dug.x, dug.y * 3, dug.z), Vector3i(dug.x, dug.y * 3 + 2, dug.z), 0, false)
+			BrickFluid.terrain_changed(r.box_lo, r.box_hi)
+			BrickFluid.tick_now(10)
+			_ok("a hole dug under the lava line stays dry", int(_info(dug.x, dug.y, dug.z).fluid) == 0,
+					str(_info(dug.x, dug.y, dug.z)))
 	gp["springs"] = true
 	gp["spring_chance"] = 0.05
 	BrickTerrain.set_gen_params(gp)
@@ -427,6 +471,103 @@ func _run() -> void:
 			spring_tiles += 1
 	_ok("primed springs run (water in tiles away from the sea)", spring_tiles > 0,
 			"%d tiles with water" % spring_tiles)
+
+	# 12. Lakes over the sea and cave pools (stage 8).
+	gp = BrickTerrain.get_gen_params()
+	gp["springs"] = false
+	gp["lava_pools"] = false
+	gp["lakes"] = true
+	gp["lake_chance"] = 1.0
+	gp["cave_pools"] = true
+	gp["cave_pool_chance"] = 0.5
+	BrickTerrain.set_gen_params(gp)
+	BrickFluid.reset(20.0, false)
+	BrickFluid.set_centre(Vector3.ZERO, 100000.0)
+	var lake := Vector3i(1 << 30, 0, 0)
+	for rz in range(-4, 5):
+		for rx in range(-4, 5):
+			for k in 64:
+				var lx := rx * 384 + 64 + (k * 37) % 256
+				var lz := rz * 384 + 64 + (k * 53) % 256
+				var lt := BrickFluid.lake_top(lx, lz)
+				if lt != -2147483648 and int(_info(lx, lt, lz).fluid) == 1:
+					lake = Vector3i(lx, lt, lz)
+					break
+			if lake.x != 1 << 30:
+				break
+		if lake.x != 1 << 30:
+			break
+	_ok("a lake over the sea is water to its level", lake.x != 1 << 30, str(lake))
+	if lake.x != 1 << 30:
+		_ok("and none above it", int(_info(lake.x, lake.y + 1, lake.z).fluid) == 0)
+	# Cave pools: water in cave air, never beside cave air at its course.
+	var pools := 0
+	var walls := 0
+	for i in 4000:
+		var px := (i * 7919) % 600 - 300
+		var pz := (i * 104729) % 600 - 300
+		var top := floori(BrickTerrain.surface_plate(px, pz) / 3.0)
+		for b in range(top - 30, top - 2, 3):
+			var pc: Dictionary = _info(px, b, pz)
+			if int(pc.fluid) != 1 or int(pc.solid) != 0:
+				continue
+			pools += 1
+			for o in [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]:
+				var nc: Dictionary = _info(px + o.x, b, pz + o.y)
+				if int(nc.fluid) == 0 and int(nc.capacity) > 0 \
+						and BrickTerrain.surface_plate(px + o.x, pz + o.y) > b * 3 + 2:
+					walls += 1
+	_ok("cave pools are generated", pools > 0, "%d pool cells found" % pools)
+	_ok("no pool water beside cave air (barriers)", walls == 0, "%d sides open" % walls)
+
+	# 13. Multiplayer groundwork (11.5): an authority's changes, read from its
+	# change log, rebuild the same water on a mirror that runs no rules.
+	BrickTerrain.set_generator(0)
+	BrickTerrain.reset_gen_params()
+	BrickTerrain.clear_terrain_edits()
+	BrickFluid.reset(20.0, false)
+	BrickFluid.set_centre(Vector3.ZERO, 100000.0)
+	_floor(3060, -20, 3140, 20)
+	BrickFluid.set_change_log(true)
+	BrickFluid.tick_now(1)
+	var v0: int = BrickFluid.get_changes_since(0).version
+	BrickFluid.place(Vector3i(3100, W, 0), 1, BrickFluid.SOURCE, 3)
+	BrickFluid.place(Vector3i(3110, W, 5), 1, BrickFluid.STILL, 3)
+	BrickFluid.tick_now(60)
+	var ch: Dictionary = BrickFluid.get_changes_since(v0)
+	var host_cells := {}
+	for x in range(3080, 3125):
+		for z in range(-18, 19):
+			var hc: Dictionary = _info(x, W, z)
+			if int(hc.fluid) != 0:
+				host_cells[Vector2i(x, z)] = [int(hc.fluid), int(hc.kind), int(hc.amount)]
+	var d2: Dictionary = BrickFluid.get_changes_since(v0 + 3)
+	_ok("a later version sends less", (d2.cells as PackedByteArray).size() <= (ch.cells as PackedByteArray).size()
+			and not bool(d2.full))
+	# The mirror: the same ground, nothing simulated, the changes applied.
+	BrickFluid.reset(20.0, false)
+	BrickFluid.set_centre(Vector3.ZERO, 100000.0)
+	BrickFluid.set_simulating(false)
+	BrickFluid.apply_changes(ch.cells, false)
+	BrickFluid.tick_now(3)
+	var same := 0
+	var differ := 0
+	for x in range(3080, 3125):
+		for z in range(-18, 19):
+			var mc: Dictionary = _info(x, W, z)
+			var want = host_cells.get(Vector2i(x, z))
+			if want == null:
+				if int(mc.fluid) != 0:
+					differ += 1
+			elif [int(mc.fluid), int(mc.kind), int(mc.amount)] == want:
+				same += 1
+			else:
+				differ += 1
+	_ok("a mirror rebuilds the authority's water from its changes", differ == 0 and same == host_cells.size(),
+			"%d same, %d differ, %d bytes for %d cells" % [same, differ, (ch.cells as PackedByteArray).size(), host_cells.size()])
+	_ok("and runs no rules of its own", BrickFluid.active_count() == 0)
+	BrickFluid.set_simulating(true)
+	BrickFluid.set_change_log(false)
 
 	BrickTerrain.set_generator(0)
 	BrickTerrain.reset_gen_params()

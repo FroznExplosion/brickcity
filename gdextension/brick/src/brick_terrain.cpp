@@ -1,6 +1,7 @@
 #include "brick_terrain.h"
 #include "terrain_biomes.h"
 
+#include <shared_mutex>
 #include <godot_cpp/classes/time.hpp>
 #include <godot_cpp/classes/mesh.hpp>
 #include <godot_cpp/core/class_db.hpp>
@@ -710,6 +711,16 @@ int Field::solid_at(int x, int yp, int z) const {
 
 static std::unordered_map<int64_t, uint8_t> g_edits;
 
+/// Writers of the edit tables (set_edit, clear_edits) hold it alone; the
+/// water's own thread (BrickFluid, Docs/MineWater.md) and the shore field
+/// hold it shared while they read them. An insert under a reader is a race on
+/// the map, and the water reads a great deal (priming) while the main thread
+/// lays sand, rock and blocks: it crashed the mine world now and then. The
+/// terrain's tile bakes do not take it (as before).
+static std::shared_mutex g_edit_rw;
+
+std::shared_mutex &edit_lock() { return g_edit_rw; }
+
 int64_t pack_cell(int x, int yp, int z) {
     // 21 bits each, signed, which is +-1 million studs and +-1 million
     // plates. The city is a thousand studs across.
@@ -735,6 +746,7 @@ static inline int64_t tile_key(int tx, int tz) {
 }
 
 void set_edit(int x, int yp, int z, int material) {
+    std::unique_lock<std::shared_mutex> lk(g_edit_rw);
     if (g_edits.empty()) {
         // Room up front: tiles bake on workers while edits land, and a
         // rehash under a reader is the worst thing the map can do.
@@ -784,6 +796,7 @@ int deepest_edit_near(int tx, int tz) {
 }
 
 void clear_edits() {
+    std::unique_lock<std::shared_mutex> lk(g_edit_rw);
     g_edits.clear();
     g_tile_floor.clear();
     g_tile_ceiling.clear();
@@ -2207,7 +2220,8 @@ PackedStringArray BrickTerrain::material_names() {
     for (const char *n : { "snow", "gravel", "sandstone", "red sand", "terracotta",
             "cream terracotta", "red terracotta", "clay", "bedrock", "coal ore", "iron ore",
             "copper ore", "gold ore", "redstone ore", "lapis ore", "diamond ore", "podzol",
-            "dry grass", "lush grass", "cold grass", "dark grass", "granite", "diorite", "ice", "obsidian" }) {
+            "dry grass", "lush grass", "cold grass", "dark grass", "granite", "diorite", "ice", "obsidian",
+            "wood", "leaves" }) {
         out.push_back(n);
     }
     return out;
@@ -6124,6 +6138,7 @@ PackedFloat32Array BrickWave::compute_shore_field(int cx, int cz, int half_studs
     std::vector<float> dist((size_t)n * n);
     const float INF = 1.0e9f;
     for (int iz = 0; iz < n; ++iz) {
+        std::shared_lock<std::shared_mutex> rd(g_edit_rw);
         for (int ix = 0; ix < n; ++ix) {
             const int gx = ix * step - half_studs + cx;
             const int gz = iz * step - half_studs + cz;

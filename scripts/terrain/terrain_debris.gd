@@ -32,6 +32,9 @@ func spawn(buf: PackedFloat32Array, origin: Vector3) -> void:
 		body.collision_layer = Layers.RUBBLE
 		body.collision_mask = Layers.RUBBLE_MASK
 		body.position = pos
+		# What it is, for floating or sinking (scripts/water/floaters.gd).
+		body.set_meta("colour", col)
+		body.set_meta("size", size)
 		var shape := BoxShape3D.new()
 		shape.size = size
 		var cs := CollisionShape3D.new()

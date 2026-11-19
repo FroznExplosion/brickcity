@@ -21,6 +21,7 @@ extends Node3D
 ## Preloaded by path, not named (see terrain_scene.gd).
 
 const WaterSeaFx := preload("res://scripts/water/water_sea.gd")
+const FloatersFx := preload("res://scripts/water/floaters.gd")
 
 const TILE_STUDS := 32
 ## The shore field: 3072 studs each way (1.08 km, past the sheet's 1 km),
@@ -82,6 +83,8 @@ var _field_edit_in := -1.0
 var _under := Underwater.new()
 var _under_mode := 0                   ## 0 dry, 1 water, 2 lava
 var _dry_ambient := 0.6
+## What floats and what sinks (floaters.gd, stage 8).
+var floaters: Node = null
 var _lights := {}                      ## Vector2i -> OmniLight3D
 var _spare_lights: Array[OmniLight3D] = []
 
@@ -99,6 +102,10 @@ func setup(p_host: Node) -> void:
 	Pawn.water_probe = func(p: Vector3) -> float: return surface_at(host.to_local(p))
 	Pawn.water_flow = func(p: Vector3) -> Vector3: return flow_at(host.to_local(p))
 	Pawn.water_drag = func(p: Vector3) -> float: return drag_at(host.to_local(p))
+	floaters = FloatersFx.new()
+	floaters.name = "Floaters"
+	add_child(floaters)
+	floaters.setup(host, self)
 	reset_world(20.0, 4, false)
 	set_process(true)
 
@@ -355,19 +362,22 @@ func _prime_near(eye: Vector3) -> void:
 	var tile_m := TILE_STUDS * BrickWorld.get_stud_metres()
 	var c := Vector2i(floori(eye.x / tile_m), floori(eye.z / tile_m))
 	var r := int(ceil(sim_radius_m / tile_m))
+	# Cave pools are read in bands round the eye's height: a tile is primed
+	# again when the eye goes down (or up) a band.
+	var band := floori(eye.y / (BrickWorld.get_plate_metres() * 3.0) / 16.0)
 	var want: Array = []
 	for dz in range(-r, r + 1):
 		for dx in range(-r, r + 1):
 			var t := c + Vector2i(dx, dz)
-			if not _primed.has(t):
+			if not _primed.has(Vector3i(t.x, band, t.y)):
 				want.append(t)
 	if want.is_empty():
 		return
 	want.sort_custom(func(a: Vector2i, b: Vector2i) -> bool:
 		return (a - c).length_squared() < (b - c).length_squared())
 	for i in mini(PRIME_PER, want.size()):
-		_primed[want[i]] = true
-		BrickFluid.prime_tile(want[i].x, want[i].y)
+		_primed[Vector3i(want[i].x, band, want[i].y)] = true
+		BrickFluid.prime_tile(want[i].x, want[i].y, band * 16 - 16, band * 16 + 32)
 		primed_count += 1
 
 
@@ -466,6 +476,8 @@ func report() -> String:
 		line += ", %d lava lights" % _lights.size()
 	if primed_count > 0:
 		line += ", %d tiles primed" % primed_count
+	if floaters != null and floaters.wet_bodies > 0:
+		line += ", %d bodies in water (%d floating)" % [floaters.wet_bodies, floaters.floating]
 	if sea != null:
 		line += ", sea at %.2f m, shore field %.0f ms (%d moves)" % [
 				BrickFluid.get_sea_level(), last_field_ms, field_moves]
