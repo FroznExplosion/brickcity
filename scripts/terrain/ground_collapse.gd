@@ -342,7 +342,9 @@ func _land_on_piece(c: Dictionary, top_y: float) -> void:
 		holder.add_child(mi)
 	bricks.place_blocks(chunk, Vector3i.ZERO, cells, archs, cols)
 	bricks.set_tension_per_stud(chunk, BrickStrength.tension() * TERRAIN_TIMES)
-	bricks.set_chunk_transform(chunk, Transform3D(Basis(),
+	# Chunk transforms are global; the column is in the terrain frame (the
+	# mine world's origin shift, Docs/MineWorld.md 15).
+	bricks.set_chunk_transform(chunk, world.global_transform * Transform3D(Basis(),
 			Vector3(int(c.x) * stud, top_y + 0.02, int(c.z) * stud)))
 	var p := pieces.adopt(chunk, holder)
 	pieces.toppled -= 1
@@ -422,7 +424,7 @@ func _let_group_go(g: PackedInt32Array) -> void:
 	# Grid from zero, placed by its transform, as every piece's is (split_island):
 	# piece_at and the landing rule read the grid in the chunk's own frame.
 	var chunk := bricks.create_chunk(Vector3i.ZERO, hi - lo + Vector3i.ONE)
-	bricks.set_chunk_transform(chunk, Transform3D(Basis(), BrickWorld.grid_to_world(lo)))
+	bricks.set_chunk_transform(chunk, world.global_transform * Transform3D(Basis(), BrickWorld.grid_to_world(lo)))
 	var cells := PackedInt32Array()
 	var archs := PackedInt32Array()
 	var cols := PackedByteArray()
@@ -535,7 +537,9 @@ func shoot(point: Vector3, dir: Vector3, shot) -> bool:
 # --- kept, unloaded, saved -----------------------------------------------------
 
 func _tile_of(p: PlanetPieces.Piece) -> Vector2i:
-	var c := pieces.world_box(p).get_center()
+	# Piece boxes are global; tiles are in the mine world's terrain frame
+	# (its origin shift, Docs/MineWorld.md 15).
+	var c: Vector3 = world.to_local(pieces.world_box(p).get_center())
 	var tm := BrickTerrain.get_tile_studs() * BrickWorld.get_stud_metres()
 	return Vector2i(floori(c.x / tm), floori(c.z / tm))
 
@@ -554,7 +558,8 @@ func _record(p: PlanetPieces.Piece) -> Dictionary:
 ## SMALL_MAX bricks to a record where it lies (laid again when its tile is
 ## near-detail and there is room, nearest first), a smaller one deleted.
 func _tend() -> void:
-	var eye: Vector3 = world._eye()
+	# Global, as the pieces' boxes are (world._eye() is the terrain frame).
+	var eye: Vector3 = world._eye_render()
 	var i := pieces.pieces.size() - 1
 	while i >= 0:
 		var p: PlanetPieces.Piece = pieces.pieces[i]
