@@ -22,7 +22,7 @@ extends Node3D
 ##       · F3 readout · T skip an hour. NOT F9: in the editor's embedded game
 ##       view F9 is the editor's "Suspend/Resume Embedded Project", and a
 ##       suspended tree takes no clicks at all.
-##       B build mode (mine_builder.gd: break, place, pick, hotbar)
+##       B guns <-> items (mine_builder.gd: break, place, pick; Inventory, Docs/Inventory.md)
 ##       left mouse (on foot, not building): shoot -- the ground breaks where hit
 
 const Presets := preload("res://scripts/terrain/worldgen_presets.gd")
@@ -1094,7 +1094,7 @@ func _update_hud() -> void:
 		"blocks placed %d  broken %d   %s" % [builder.placed, builder.broken, _save_status],
 		"water %s" % water.report(),
 		collapse.readout(),
-		"%s   F fly/walk  B build  M world generation  F3 readout  T +1 hour" % ("ON FOOT" if on_foot
+		"%s   F fly/walk  B guns/items  M world generation  F3 readout  T +1 hour" % ("ON FOOT" if on_foot
 				else "FLYING %.0f m/s (wheel), moving %.0f m/s%s" % [walker.fly_speed, _speed,
 				"  DETAIL HELD" if fast_hold else ""]),
 	])
