@@ -40,7 +40,8 @@ Read in that order. `user://` is
   bricks/          brick definitions, *.json (section 4)
   worlds/          terrain worlds, *.json
   worldgen/        world generation presets, *.json (Docs/MineWorld.md 6)
-  data/            tables: asset_tags.json, ai/roster.json, ai/tactics_book.json
+  data/            tables: asset_tags.json, ai/roster.json, ai/tactics_book.json,
+                   items/*.json (inventory items, Docs/Inventory.md 3.1)
   planets/ characters/ audio/ textures/      reserved (section 6)
 ```
 

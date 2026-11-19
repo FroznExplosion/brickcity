@@ -26,6 +26,18 @@ const TEND_EVERY := 0.5
 ## Waiting for a tile to be rebuilt at most this long (ms) before letting go
 ## anyway.
 const WAIT_MAX_MS := 2000
+## Pieces laid at once at most, the nearest the player (Docs/TerrainCollapse.md
+## 5): past it the farthest settled ones are put away.
+const MAX_LOADED := 100
+## A piece of this many bricks or fewer is DELETED when put away (out of the
+## detail tiles, or over the cap); a bigger one is unloaded to a record and
+## laid again when near.
+const SMALL_MAX := 3
+## A put-away piece is laid again in place of a laid one only when it is this
+## much nearer (m): no swapping back and forth at the edge of the cap.
+const SWAP_MARGIN := 8.0
+## Laid again at most this many a tend: a walk into a field of them is spread.
+const RELOAD_PER_TEND := 12
 
 ## The mine world (untyped: the two scripts would type each other).
 var world: Node3D = null
@@ -58,6 +70,10 @@ var columns_fell := 0
 var columns_landed := 0
 var unloaded := 0
 var reloaded := 0
+var deleted := 0
+var columns_on_pieces := 0
+## MAX_LOADED, settable (the gate shrinks it).
+var max_loaded := MAX_LOADED
 var worst_survey_ms := 0.0
 var last_survey_ms := 0.0
 var worst_apply_ms := 0.0
@@ -235,11 +251,23 @@ func _fall_sand(delta: float) -> void:
 	var g := Gravity.strength() * SAND_GRAVITY_SCALE
 	var plate := BrickWorld.get_plate_metres()
 	var brick := BrickTerrain.get_brick_metres()
+	var space := get_world_3d().direct_space_state
 	var i := _sand.size() - 1
 	while i >= 0:
 		var c: Dictionary = _sand[i]
 		c.v = minf(float(c.v) + g * delta, SAND_MAX_SPEED)
 		var step := float(c.v) * delta
+		# A piece under it this frame: it lands on the piece, as a piece.
+		var at2: Vector2 = c.at
+		var from := Vector3(at2.x, float(c.y) + 0.02, at2.y)
+		var q := PhysicsRayQueryParameters3D.create(from, from + Vector3.DOWN * (step + 0.04),
+				Layers.DEBRIS | Layers.FALLING)
+		var hit := space.intersect_ray(q)
+		if not hit.is_empty() and _is_piece_body(hit.collider):
+			_land_on_piece(c, float(hit.position.y))
+			_sand.remove_at(i)
+			i -= 1
+			continue
 		# Down a plate at a time: never through a floor in one frame.
 		var y := float(c.y)
 		var done := false
@@ -278,6 +306,61 @@ func _fall_sand(delta: float) -> void:
 			mm.set_instance_transform(k, Transform3D(Basis(), p))
 			mm.set_instance_color(k, _colour(mats[j]))
 			k += 1
+
+
+func _is_piece_body(o: Object) -> bool:
+	for p in pieces.pieces:
+		if p.body == o:
+			return true
+	return false
+
+
+## A column that met a piece: a piece of its own (1x1 bricks, as it fell),
+## dropped onto the piece it met. Drawn by the boxes it fell as.
+func _land_on_piece(c: Dictionary, top_y: float) -> void:
+	var mats: PackedByteArray = c.mats
+	var n := mats.size()
+	if n == 0:
+		return
+	var stud := BrickWorld.get_stud_metres()
+	var brick := BrickTerrain.get_brick_metres()
+	var chunk := bricks.create_chunk(Vector3i.ZERO, Vector3i(1, n * 3, 1))
+	var cells := PackedInt32Array()
+	var archs := PackedInt32Array()
+	var cols := PackedByteArray()
+	var one := int(palette.get("brick_1x1", 0))
+	var holder := Node3D.new()
+	add_child(holder)
+	for j in n:
+		cells.append_array([0, j * 3, 0])
+		archs.append(one)
+		cols.append(BrickTerrain.material_filament_index(mats[j]))
+		var mi := MeshInstance3D.new()
+		mi.mesh = _sand_mm.multimesh.mesh
+		mi.material_override = _box_material(mats[j])
+		mi.position = Vector3(stud * 0.5, (j + 0.5) * brick, stud * 0.5)
+		holder.add_child(mi)
+	bricks.place_blocks(chunk, Vector3i.ZERO, cells, archs, cols)
+	bricks.set_tension_per_stud(chunk, BrickStrength.tension() * TERRAIN_TIMES)
+	# Chunk transforms are global; the column is in the terrain frame (the
+	# mine world's origin shift, Docs/MineWorld.md 15).
+	bricks.set_chunk_transform(chunk, world.global_transform * Transform3D(Basis(),
+			Vector3(int(c.x) * stud, top_y + 0.02, int(c.z) * stud)))
+	var p := pieces.adopt(chunk, holder)
+	pieces.toppled -= 1
+	p.body.linear_velocity = Vector3.DOWN * minf(float(c.v), 6.0)
+	columns_on_pieces += 1
+
+
+static var _box_mats := {}
+
+static func _box_material(m: int) -> StandardMaterial3D:
+	if not _box_mats.has(m):
+		var mat := StandardMaterial3D.new()
+		mat.albedo_color = _colour(m)
+		mat.roughness = 0.9
+		_box_mats[m] = mat
+	return _box_mats[m]
 
 
 ## Its cells written back where it came to rest: plate `bottom` up, a brick a
@@ -341,7 +424,7 @@ func _let_group_go(g: PackedInt32Array) -> void:
 	# Grid from zero, placed by its transform, as every piece's is (split_island):
 	# piece_at and the landing rule read the grid in the chunk's own frame.
 	var chunk := bricks.create_chunk(Vector3i.ZERO, hi - lo + Vector3i.ONE)
-	bricks.set_chunk_transform(chunk, Transform3D(Basis(), BrickWorld.grid_to_world(lo)))
+	bricks.set_chunk_transform(chunk, world.global_transform * Transform3D(Basis(), BrickWorld.grid_to_world(lo)))
 	var cells := PackedInt32Array()
 	var archs := PackedInt32Array()
 	var cols := PackedByteArray()
@@ -456,7 +539,9 @@ func shoot(point: Vector3, dir: Vector3, shot) -> bool:
 # --- kept, unloaded, saved -----------------------------------------------------
 
 func _tile_of(p: PlanetPieces.Piece) -> Vector2i:
-	var c := pieces.world_box(p).get_center()
+	# Piece boxes are global; tiles are in the mine world's terrain frame
+	# (its origin shift, Docs/MineWorld.md 15).
+	var c: Vector3 = world.to_local(pieces.world_box(p).get_center())
 	var tm := BrickTerrain.get_tile_studs() * BrickWorld.get_stud_metres()
 	return Vector2i(floori(c.x / tm), floori(c.z / tm))
 
@@ -466,35 +551,112 @@ func _record(p: PlanetPieces.Piece) -> Dictionary:
 	if r.block_count() == 0:
 		return {}
 	return {"record": r.to_data(bricks),
-			"at": world.global_transform.affine_inverse() * bricks.get_chunk_transform(p.chunk)}
+			"at": world.global_transform.affine_inverse() * bricks.get_chunk_transform(p.chunk),
+			"mid": world.global_transform.affine_inverse() * pieces.world_box(p).get_center()}
 
 
-## Settled pieces out of the near-detail tier go to records where they lie;
-## records whose tile is near-detail again are laid again.
+## Settled pieces out of the near-detail tier are put away; past max_loaded
+## the farthest from the player are too. Put away: a piece of more than
+## SMALL_MAX bricks to a record where it lies (laid again when its tile is
+## near-detail and there is room, nearest first), a smaller one deleted.
 func _tend() -> void:
+	# Global, as the pieces' boxes are (world._eye() is the terrain frame).
+	var eye: Vector3 = world._eye_render()
 	var i := pieces.pieces.size() - 1
 	while i >= 0:
 		var p: PlanetPieces.Piece = pieces.pieces[i]
 		i -= 1
 		if not p.settled or p.fading_since != 0 or not is_instance_valid(p.body):
 			continue
-		var t := _tile_of(p)
-		if world.near_tile(t):
+		if not world.near_tile(_tile_of(p)):
+			_put_away(p, false)
+	# Over the cap: the farthest settled ones go.
+	var laid := _laid()
+	if laid.size() > max_loaded:
+		var far := _settled_by_distance(eye)
+		var k := far.size() - 1
+		while laid.size() > max_loaded and k >= 0:
+			_put_away(far[k][1], true)
+			laid.erase(far[k][1])
+			k -= 1
+	# Laid again: the nearest put-away pieces whose tile is near-detail, while
+	# there is room -- or in place of a laid one well farther off.
+	var want: Array = []
+	var xf := world.global_transform
+	for t in _dormant:
+		if not world.near_tile(t):
 			continue
-		var d := _record(p)
-		if not d.is_empty():
-			if not _dormant.has(t):
-				_dormant[t] = []
-			(_dormant[t] as Array).append(d)
-		_drop_piece(p)
-		unloaded += 1
-	for t in _dormant.keys():
-		if world.near_tile(t):
-			var recs: Array = _dormant[t]
-			_dormant.erase(t)
-			var before := pieces.pieces.size()
-			pieces.restore(recs)
-			reloaded += pieces.pieces.size() - before
+		for d in _dormant[t]:
+			var local: Vector3 = d.get("mid", (d.at as Transform3D).origin)
+			want.append([eye.distance_to(xf * local), t, d])
+	if want.is_empty():
+		return
+	want.sort_custom(func(x: Array, y: Array) -> bool: return x[0] < y[0])
+	var far2 := _settled_by_distance(eye)
+	var n := 0
+	for w in want:
+		if n >= RELOAD_PER_TEND:
+			break
+		if laid.size() >= max_loaded:
+			if far2.is_empty() or float(far2[-1][0]) < float(w[0]) + SWAP_MARGIN:
+				break
+			var gone: PlanetPieces.Piece = far2.pop_back()[1]
+			_put_away(gone, true)
+			laid.erase(gone)
+		var recs: Array = _dormant[w[1]]
+		recs.erase(w[2])
+		if recs.is_empty():
+			_dormant.erase(w[1])
+		var before := pieces.pieces.size()
+		pieces.restore([w[2]])
+		if pieces.pieces.size() > before:
+			laid.append(pieces.pieces[-1])
+			reloaded += 1
+		n += 1
+
+
+## The pieces laid now, not on their way out.
+func _laid() -> Array:
+	var out := []
+	for p in pieces.pieces:
+		if p.fading_since == 0 and is_instance_valid(p.body):
+			out.append(p)
+	return out
+
+
+## [distance, piece] of the settled pieces laid, nearest first.
+func _settled_by_distance(eye: Vector3) -> Array:
+	var out: Array = []
+	for p in pieces.pieces:
+		if p.settled and p.fading_since == 0 and is_instance_valid(p.body):
+			out.append([eye.distance_to(pieces.world_box(p).get_center()), p])
+	out.sort_custom(func(x: Array, y: Array) -> bool: return x[0] < y[0])
+	return out
+
+
+## Out of the world: a record if it is big enough to keep, else deleted --
+## shrunk away (PlanetPieces' fade) when it may be in view (`seen`), at once
+## when its tile is not even drawn.
+func _put_away(p: PlanetPieces.Piece, seen: bool) -> void:
+	# Its mesh still being made on a worker: next tend (freeing the chunk under
+	# a bake is a crash).
+	if not p.job.is_empty():
+		return
+	if bricks.get_alive_block_count(p.chunk) <= SMALL_MAX:
+		deleted += 1
+		if seen:
+			p.fading_since = Time.get_ticks_msec()
+		else:
+			_drop_piece(p)
+		return
+	var d := _record(p)
+	if not d.is_empty():
+		var t := _tile_of(p)
+		if not _dormant.has(t):
+			_dormant[t] = []
+		(_dormant[t] as Array).append(d)
+	_drop_piece(p)
+	unloaded += 1
 
 
 func _drop_piece(p: PlanetPieces.Piece) -> void:
@@ -540,6 +702,8 @@ func restore(saved: Array) -> void:
 		var dims = (d.record as Dictionary).get("dims", Vector3i.ONE)
 		var mid := at * (Vector3(dims) * cs * 0.5) if dims is Vector3i else at.origin
 		var t := Vector2i(floori(mid.x / tm), floori(mid.z / tm))
+		if not d.has("mid"):
+			d["mid"] = mid
 		if not _dormant.has(t):
 			_dormant[t] = []
 		(_dormant[t] as Array).append(d)
@@ -547,9 +711,10 @@ func restore(saved: Array) -> void:
 
 
 func readout() -> String:
-	return "ground: %d surveys (%d solved, last %.1f ms, worst %.1f), %d pieces (%d bricks) let go, %d kept, %d unloaded; sand %d fell, %d landed, %d falling" % [
+	return "ground: %d surveys (%d solved, last %.1f ms, worst %.1f), %d pieces (%d bricks) let go, %d laid (cap %d), %d put away, %d deleted; sand %d fell, %d landed, %d on pieces, %d falling" % [
 			surveys, solves, last_survey_ms, worst_survey_ms, groups_let_go, bricks_let_go,
-			pieces.pieces.size(), dormant_count(), columns_fell, columns_landed, _sand.size()]
+			pieces.pieces.size(), max_loaded, dormant_count(), deleted, columns_fell, columns_landed,
+			columns_on_pieces, _sand.size()]
 
 
 func _exit_tree() -> void:
