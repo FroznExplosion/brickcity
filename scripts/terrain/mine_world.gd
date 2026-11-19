@@ -1618,6 +1618,7 @@ func _gate_collapse() -> void:
 	print("[mine-collapse] %s  the stone arm stands on its pillar" % ("ok  " if stands else "FAIL"))
 	fails += 0 if stands else 1
 	# A floating dirt block and a floating sand block beside it.
+	var made0 := int(collapse.groups_let_go)
 	var d0 := Vector3i(o.x + 4, b + 30, o.y + 6)
 	put.call(d0, d0 + Vector3i(1, 2, 1), 2)
 	var s0 := Vector3i(o.x + 8, b + 30, o.y + 6)
@@ -1627,7 +1628,6 @@ func _gate_collapse() -> void:
 	var clock := FrameClock.new()
 	add_child(clock)
 	clock.spoil()
-	var made0 := int(collapse.groups_let_go)
 	var t0 := Time.get_ticks_msec()
 	while Time.get_ticks_msec() - t0 < 6000:
 		await get_tree().process_frame
@@ -1709,14 +1709,74 @@ func _gate_collapse() -> void:
 	print("[mine-collapse] %s  a blast on a piece chips it (%d bricks -> %d)" % ["ok  " if ok else "FAIL", before, int(alive.call())])
 	fails += 0 if ok else 1
 	await _collapse_quiet(300)
-	# Fly off past the detail tiles: the pieces are unloaded; back: laid again.
-	var kept := collapse.pieces.pieces.size()
+	var size_of := func(p: PlanetPieces.Piece) -> int:
+		return collapse.bricks.get_alive_block_count(p.chunk)
+	# Sand dropped onto the fallen arm: it lands ON the piece, as pieces.
+	var big: PlanetPieces.Piece = null
+	for p in collapse.pieces.pieces:
+		if big == null or int(size_of.call(p)) > int(size_of.call(big)):
+			big = p
+	var on0 := collapse.columns_on_pieces
+	if big != null:
+		var bb := collapse.pieces.world_box(big)
+		var cx := floori(bb.get_center().x / stud)
+		var cz := floori(bb.get_center().z / stud)
+		var sy := (floori(bb.end.y / plate / 3.0) + 4) * 3
+		put.call(Vector3i(cx, sy, cz), Vector3i(cx + 1, sy + 5, cz + 1), 3)
+		await _frames(30)
+		await _collapse_quiet(400)
+		var resting := 0
+		for p in collapse.pieces.pieces:
+			if p != big and p.settled and collapse.pieces.world_box(p).position.y > bb.position.y + 0.2:
+				resting += 1
+		ok = collapse.columns_on_pieces > on0 and resting > 0
+		print("[mine-collapse] %s  sand dropped on a piece lands on it (%d column(s) met it, %d resting above its foot)" % [
+				"ok  " if ok else "FAIL", collapse.columns_on_pieces - on0, resting])
+		fails += 0 if ok else 1
+		_shot(dev + "mine_collapse_4_sand_on_piece.png")
+	else:
+		print("[mine-collapse] FAIL  no piece to drop sand on")
+		fails += 1
+	# The cap: one piece laid, the nearest the player; the bigger rest put away,
+	# the small rest deleted; the cap back, the put-away ones laid again.
+	var eye0 := _eye()
+	var nearest: PlanetPieces.Piece = null
+	var big_n := 0
+	for p in collapse.pieces.pieces:
+		if int(size_of.call(p)) > Collapse.SMALL_MAX:
+			big_n += 1
+		if nearest == null or eye0.distance_to(collapse.pieces.world_box(p).get_center()) \
+				< eye0.distance_to(collapse.pieces.world_box(nearest).get_center()):
+			nearest = p
+	var laid0 := collapse.pieces.pieces.size()
+	var del0 := collapse.deleted
+	collapse.max_loaded = 1
+	collapse._tend()
+	await _frames(60)
+	ok = collapse.pieces.pieces.size() == 1 and collapse.pieces.pieces[0] == nearest \
+			and collapse.deleted - del0 + collapse.dormant_count() == laid0 - 1
+	print("[mine-collapse] %s  cap 1: the nearest kept, %d put away, %d deleted (of %d)" % [
+			"ok  " if ok else "FAIL", collapse.dormant_count(), collapse.deleted - del0, laid0])
+	fails += 0 if ok else 1
+	collapse.max_loaded = Collapse.MAX_LOADED
+	collapse._tend()
+	await _frames(5)
+	var want_laid := big_n + (0 if int(size_of.call(nearest)) > Collapse.SMALL_MAX else 1)
+	ok = collapse.pieces.pieces.size() == want_laid and collapse.dormant_count() == 0
+	print("[mine-collapse] %s  cap back: %d piece(s) laid (want %d: the big ones and the nearest)" % [
+			"ok  " if ok else "FAIL", collapse.pieces.pieces.size(), want_laid])
+	fails += 0 if ok else 1
+	# Fly off past the detail tiles: big pieces unloaded, small ones deleted;
+	# back: the big ones laid again.
+	var kept := 0
+	for p in collapse.pieces.pieces:
+		kept += 1 if int(size_of.call(p)) > Collapse.SMALL_MAX else 0
 	var home := walker.global_position
 	walker.place(home + Vector3(260.0, 40.0, 0.0), Vector3(1, 0, 0))
 	await _frames(180)
 	collapse._tend()
 	ok = collapse.dormant_count() == kept and collapse.pieces.pieces.is_empty()
-	print("[mine-collapse] %s  flown off: %d piece(s) unloaded, %d laid" % ["ok  " if ok else "FAIL", collapse.dormant_count(), collapse.pieces.pieces.size()])
+	print("[mine-collapse] %s  flown off: %d piece(s) unloaded (want %d), %d laid" % ["ok  " if ok else "FAIL", collapse.dormant_count(), kept, collapse.pieces.pieces.size()])
 	fails += 0 if ok else 1
 	walker.place(home, Vector3(0, 0, 1))
 	await _frames(180)
@@ -1737,7 +1797,7 @@ func _gate_collapse() -> void:
 	ok = ok and collapse.pieces.pieces.size() == kept
 	print("[mine-collapse] %s  saved and loaded: %d piece(s) back of %d" % ["ok  " if ok else "FAIL", collapse.pieces.pieces.size(), kept])
 	fails += 0 if ok else 1
-	_shot(dev + "mine_collapse_4_reloaded.png")
+	_shot(dev + "mine_collapse_5_reloaded.png")
 	print("[mine-collapse] %s" % collapse.readout())
 	print("[mine-collapse] %s (%d failures)" % ["PASS" if fails == 0 else "FAIL", fails])
 
