@@ -399,6 +399,9 @@ func _cache_tree_rules() -> void:
 
 
 func _tree_chance_at(x: int, z: int) -> float:
+	# Not in a lake (Docs/MineWater.md 14.8).
+	if BrickFluid.lake_top(x, z) != -2147483648:
+		return 0.0
 	var b := BrickTerrain.biome_at(x, z)
 	return _tree_chance[b] if b < _tree_chance.size() else 0.0
 
@@ -2277,6 +2280,60 @@ func _run_water_gate() -> void:
 	view.process_mode = Node.PROCESS_MODE_INHERIT
 	_hud_layer.visible = true
 
+	# Floating and sinking (stage 8): a tank three bricks deep, a wood brick
+	# and a stone brick dropped in. By the majority rule, a piece mostly wood
+	# floats and one mostly stone sinks.
+	lay.call(21, 16, 31, 16, w, w + 2, dark)
+	lay.call(21, 28, 31, 28, w, w + 2, dark)
+	lay.call(21, 16, 21, 28, w, w + 2, dark)
+	lay.call(31, 16, 31, 28, w, w + 2, dark)
+	for x in range(22, 31):
+		for z in range(17, 28):
+			for b in range(w, w + 3):
+				BrickFluid.place(Vector3i(o.x + x, b, o.y + z), 1, BrickFluid.STILL, 3)
+	water.step(3)
+	var names := BrickTerrain.material_names()
+	var wood_col := BrickWorld.get_filament_colour(BrickTerrain.material_filament_index(names.find("wood")))
+	var stone_col := BrickWorld.get_filament_colour(BrickTerrain.material_filament_index(names.find("stone")))
+	var drop_at: Vector3 = pm.call(26.0, w + 5.0, 22.0)
+	var buf := PackedFloat32Array([drop_at.x - 0.6, drop_at.y, drop_at.z, 0.35, 0.42, 0.35, wood_col.r, wood_col.g, wood_col.b,
+			drop_at.x + 0.6, drop_at.y, drop_at.z, 0.35, 0.42, 0.35, stone_col.r, stone_col.g, stone_col.b])
+	var n0: int = debris.bodies.size()
+	debris.spawn(buf, drop_at + Vector3(0, 3, 0))
+	var wood_b: RigidBody3D = debris.bodies[n0] if debris.bodies.size() > n0 else null
+	var stone_b: RigidBody3D = debris.bodies[n0 + 1] if debris.bodies.size() > n0 + 1 else null
+	if wood_b != null and stone_b != null:
+		wood_b.linear_velocity = Vector3.ZERO
+		stone_b.linear_velocity = Vector3.ZERO
+	for i in 180:
+		await get_tree().physics_frame
+	var surf := (w + 3) * course
+	var bed := w * course
+	if wood_b != null and stone_b != null and is_instance_valid(wood_b) and is_instance_valid(stone_b):
+		var wy := to_local(wood_b.global_position).y
+		var sy := to_local(stone_b.global_position).y
+		print("[water-gate] debris in a tank (surface %.2f m, bed %.2f m): wood at %.2f m (floating %s), stone at %.2f m (sunk %s); %s" % [
+				surf, bed, wy, absf(wy - surf) < 0.35, sy, sy < bed + 0.5, water.report()])
+	else:
+		print("[water-gate] FAIL the debris bricks were not made")
+	var fl8: Node = water.floaters
+	print("[water-gate] majority: wood, wood, stone -> %.2f (floats %s); stone, stone, wood -> %.2f (sinks %s); leaves -> %.2f" % [
+			fl8.majority_density(["wood", "wood", "stone"]), fl8.majority_density(["wood", "wood", "stone"]) < 1.0,
+			fl8.majority_density(["stone", "stone", "wood"]), fl8.majority_density(["stone", "stone", "wood"]) > 1.0,
+			fl8.majority_density(["leaves"])])
+	view.process_mode = Node.PROCESS_MODE_DISABLED
+	view.rig.visible = false
+	if view.arms != null:
+		view.arms.visible = false
+	_hud_layer.visible = false
+	look.call(pm.call(26.0, w + 6.0, 31.0), pm.call(26.0, w + 2.0, 22.0))
+	debris.spawn(buf, drop_at + Vector3(0, 3, 0))
+	for i in 120:
+		await get_tree().physics_frame
+	await _shot(dev + "water_float.png")
+	view.process_mode = Node.PROCESS_MODE_INHERIT
+	_hud_layer.visible = true
+
 	# Live ticks on the worker (the game's way), a source poured on the
 	# platform: frames must not wait on it.
 	water.manual = false
@@ -2297,8 +2354,12 @@ func _run_water_gate() -> void:
 	settings = {}
 	generate(s2)
 	water.manual = true
+	# The saved cells applied, the rules paused: running water would run on
+	# after a load (as it should) and the count would not be the save's.
+	BrickFluid.set_simulating(false)
 	water.step(2)
 	var after := _platform_fluid(o, w)
+	BrickFluid.set_simulating(true)
 	print("[water-gate] save: water on the platform %s before, %s after generating again (%s)" % [
 			before, after, _save_status])
 	print("[water-gate] done")
@@ -2472,6 +2533,12 @@ func _run_sea_gate() -> void:
 ## and a lava pool in a deep cave, seen down a shaft dug to it.
 func _run_gen_gate() -> void:
 	await _frames(10)
+	# The ground's collapse is paused (this pass is about the water): with it,
+	# the 120 m shaft dug to the lava crashed the scene about half the runs
+	# (2026-11-19, no backtrace; not the water's thread, which reports its own
+	# crashes now). `--with-collapse` runs it to reproduce that.
+	if not "--with-collapse" in OS.get_cmdline_user_args() and collapse != null:
+		collapse.process_mode = Node.PROCESS_MODE_DISABLED
 	var dev := UserPaths.DEV
 	DirAccess.make_dir_recursive_absolute(dev)
 	_time = 0.42
@@ -2549,6 +2616,70 @@ func _run_gen_gate() -> void:
 		await _frames(30)
 		await _shot(dev + "gen_lava_top.png")
 
+	# A lake over the sea (stage 8), nearest the spawn.
+	var lake := Vector2i(1 << 30, 0)
+	var lake_top := 0
+	for r in range(0, 3000, 16):
+		for a in 32:
+			var p := c0 + Vector2i(Vector2(cos(a * TAU / 32.0), sin(a * TAU / 32.0)) * r)
+			var lt := BrickFluid.lake_top(p.x, p.y)
+			if lt != -2147483648:
+				lake = p
+				lake_top = lt
+				break
+		if lake.x != 1 << 30:
+			break
+	if lake.x == 1 << 30:
+		print("[gen-gate] FAIL no lake within 3000 studs")
+	else:
+		var lm := Vector3((lake.x + 0.5) * stud, (lake_top + 1) * course, (lake.y + 0.5) * stud)
+		walker.place(to_global(lm + Vector3(-14, 8, -14)), Vector3(1, 0, 1).normalized())
+		walker.pitch = -0.45
+		for i in 240:
+			await get_tree().process_frame
+		print("[gen-gate] lake at %s, level course %d (%.1f m over the sea), water there %d" % [
+				lake, lake_top, (lake_top + 1) * course - BrickFluid.get_sea_level(),
+				water.fluid_at(lm - Vector3(0, 0.2, 0))])
+		await _shot(dev + "gen_lake.png")
+	# A cave pool: water in cave air under the ground near the spawn, seen
+	# down a shaft dug to just over it.
+	var pool_at := Vector3i(1 << 30, 0, 0)
+	for r in range(0, 400, 6):
+		for a in 16:
+			var p := c0 + Vector2i(Vector2(cos(a * TAU / 16.0), sin(a * TAU / 16.0)) * r)
+			var top := floori(BrickTerrain.surface_plate(p.x, p.y) / 3.0)
+			for b in range(top - 40, top - 4):
+				var ci: Dictionary = BrickFluid.cell_info(Vector3i(p.x, b, p.y))
+				if int(ci.fluid) != 1 or bool(ci.ocean) or int(ci.solid) != 0:
+					continue
+				# Cave air over it, four courses: room for the eye.
+				var room := true
+				for k in range(1, 5):
+					var up: Dictionary = BrickFluid.cell_info(Vector3i(p.x, b + k, p.y))
+					if int(up.fluid) != 0 or int(up.capacity) < 3:
+						room = false
+						break
+				if room:
+					pool_at = Vector3i(p.x, b, p.y)
+					break
+			if pool_at.x != 1 << 30:
+				break
+		if pool_at.x != 1 << 30:
+			break
+	if pool_at.x == 1 << 30:
+		print("[gen-gate] FAIL no cave pool within 400 studs")
+	else:
+		var ptop := BrickTerrain.surface_plate(pool_at.x, pool_at.z)
+		# In the cave over it (nothing dug: a shaft through the pools higher
+		# up let their water pour down onto the eye).
+		var pp := Vector3((pool_at.x + 0.5) * stud, (pool_at.y + 1) * course, (pool_at.z + 0.5) * stud)
+		walker.place(to_global(pp + Vector3(0.0, 0.9, 0.0)), Vector3(1, 0, 0))
+		walker.pitch = -0.7
+		for i in 420:
+			await get_tree().process_frame
+		print("[gen-gate] cave pool at %s, %.0f m under the ground; deep tier %s" % [
+				pool_at, (ptop / 3.0 - pool_at.y) * course, _deep.report()])
+		await _shot(dev + "gen_pool.png")
 	view.process_mode = Node.PROCESS_MODE_INHERIT
 	_hud_layer.visible = true
 	print("[gen-gate] done")

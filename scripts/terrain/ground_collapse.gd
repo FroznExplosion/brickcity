@@ -512,6 +512,8 @@ func _mesh_ready(w: Dictionary) -> bool:
 	if not WorkerThreadPool.is_task_completed(int(job[0])):
 		return false
 	WorkerThreadPool.wait_for_task_completion(int(job[0]))
+	# Waited: forget it, or _exit_tree waits on it again ("Invalid Task ID").
+	w["job"] = []
 	var mesh: ArrayMesh = (job[1] as Array)[0]
 	if mesh == null:
 		w["mesh"] = null

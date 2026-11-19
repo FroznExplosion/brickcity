@@ -81,7 +81,26 @@ public:
     /// A tile came near (stage 8): its generated lava pools are read from the
     /// field (so they are drawn) and its springs read and woken (so they run).
     /// Once a tile per world is enough; the caller keeps the list.
-    static void prime_tile(int tx, int tz);
+    /// `b_lo`..`b_hi`: the courses round the eye whose cave pools to read too.
+    static void prime_tile(int tx, int tz, int b_lo = 1, int b_hi = 0);
+    /// The top course of a generated lake over a column, or INT_MIN (trees
+    /// stay out of lakes).
+    static int lake_top(int x, int z);
+
+    /// MULTIPLAYER GROUNDWORK (Docs/MineWater.md 11.5). The authority (the
+    /// host) simulates and keeps a change log; a peer asks for what changed
+    /// since the version it has and applies it; a mirror (a client) only
+    /// applies and meshes, its rules off. Commands (place, remove, terrain
+    /// changes) go to the authority, which runs them as its own.
+    static void set_change_log(bool on);
+    /// {version: int, cells: PackedByteArray (the save's 15-byte cells, their
+    /// state now), full: bool (too old, or no log: send get_save instead)}.
+    static Dictionary get_changes_since(int64_t version);
+    /// The cells from get_changes_since (or get_save's after its 5-byte
+    /// header) applied with the next tick; `wake` false for a mirror.
+    static int apply_changes(const PackedByteArray &cells, bool wake = false);
+    static void set_simulating(bool on);
+    static bool get_simulating();
     /// Does this world generate fluid that needs priming (lava pools, springs)?
     static bool has_generated();
     /// Tiles that hold anything to draw, as Vector2i.

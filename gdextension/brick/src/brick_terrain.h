@@ -1,6 +1,7 @@
 #ifndef BRICK_TERRAIN_H
 #define BRICK_TERRAIN_H
 
+#include <shared_mutex>
 #include <godot_cpp/classes/ref_counted.hpp>
 #include <godot_cpp/variant/array.hpp>
 #include <godot_cpp/variant/color.hpp>
@@ -128,6 +129,11 @@ enum Material {
     MAT_ICE,
     /// Lava meeting water (Docs/MineWater.md 4.6).
     MAT_OBSIDIAN,
+    /// Building materials that float (Docs/MineWater.md 14.8): a piece mostly
+    /// of these floats, mostly of anything else sinks. Filaments no ground
+    /// uses, so a block's colour index says what it is.
+    MAT_WOOD,
+    MAT_LEAVES,
     MATERIAL_COUNT
 };
 
@@ -168,6 +174,8 @@ inline int material_filament(int m) {
         case MAT_DIORITE: return 13;       // light grey
         case MAT_ICE: return 48;           // ice
         case MAT_OBSIDIAN: return 53;      // plum
+        case MAT_WOOD: return 28;          // caramel
+        case MAT_LEAVES: return 41;        // forest
         default: return FIL_GREY;
     }
 }
@@ -285,6 +293,9 @@ int deepest_edit_near(int tx, int tz);
 /// so the mask and the surface scan have to reach up to it.
 int highest_edit_near(int tx, int tz);
 void clear_edits();
+/// The edit tables' reader/writer lock (brick_terrain.cpp): readers on other
+/// threads that must not race the main thread's edits take it shared.
+std::shared_mutex &edit_lock();
 size_t edit_count();
 bool edits_empty();
 

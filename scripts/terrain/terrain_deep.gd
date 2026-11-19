@@ -77,7 +77,9 @@ func follow(eye: Vector3) -> void:
 	var t0 := Time.get_ticks_usec()
 	var stud := BrickWorld.get_stud_metres()
 	var eye_p := floori(eye.y / BrickWorld.get_plate_metres())
-	active = eye_p < BrickTerrain.surface_plate(floori(eye.x / stud), floori(eye.z / stud)) - UNDER_PLATES
+	# Under the column's GENERATED surface: in a shaft the player dug, the
+	# current surface is the shaft's bottom and the tier never came on.
+	active = eye_p < BrickTerrain.generated_plate(floori(eye.x / stud), floori(eye.z / stud)) - UNDER_PLATES
 	var c := section_of(eye)
 	if c != _centre:
 		_centre = c

@@ -1,3 +1,6 @@
+#include <climits>
+#include <mutex>
+#include <unordered_map>
 #include "terrain_biomes.h"
 
 #include "brick_terrain.h"
@@ -27,6 +30,9 @@ static inline float smooth01(float t) {
 static inline float smoothstep(float a, float b, float v) {
     return smooth01((v - a) / std::max(b - a, 1e-5f));
 }
+/// Bumped when the live params change: cached lakes are worked out again.
+static int g_params_gen = 0;
+
 static inline int fdiv(int a, int b) {
     const int q = a / b;
     return (a % b != 0 && ((a < 0) != (b < 0))) ? q - 1 : q;
@@ -77,6 +83,7 @@ enum BiomeId {
 };
 
 void reset_gen_params() {
+    ++g_params_gen;
     GenParams p;
     // DEEP WORLDS (Docs/MineWorld.md 16): bedrock 300 bricks (126 m) under
     // the sea line, and everything that was laid out for a 48 m world
@@ -137,6 +144,7 @@ static int clamp_mat(int m) { return std::min(std::max(m, 1), (int)MATERIAL_COUN
 
 void gen_params_from_dict(const Dictionary &d) {
     apply_gen_dict(gen_params(), d);
+    ++g_params_gen;     // lakes are worked out again
 }
 
 void apply_gen_dict(GenParams &p, const Dictionary &d) {
@@ -170,6 +178,10 @@ void apply_gen_dict(GenParams &p, const Dictionary &d) {
     GP_FLOAT("lava_m", lava_m)
     GP_BOOL("springs", springs)
     GP_FLOAT("spring_chance", spring_chance)
+    GP_BOOL("lakes", lakes)
+    GP_FLOAT("lake_chance", lake_chance)
+    GP_BOOL("cave_pools", cave_pools)
+    GP_FLOAT("cave_pool_chance", cave_pool_chance)
     GP_BOOL("caves", caves)
     GP_BOOL("deep_caves", deep_caves)
     GP_FLOAT("cave_intensity", cave_intensity)
@@ -273,6 +285,10 @@ Dictionary gen_params_to_dict() {
     d["lava_m"] = p.lava_m;
     d["springs"] = p.springs;
     d["spring_chance"] = p.spring_chance;
+    d["lakes"] = p.lakes;
+    d["lake_chance"] = p.lake_chance;
+    d["cave_pools"] = p.cave_pools;
+    d["cave_pool_chance"] = p.cave_pool_chance;
     d["caves"] = p.caves;
     d["deep_caves"] = p.deep_caves;
     d["cave_intensity"] = p.cave_intensity;
@@ -380,7 +396,7 @@ static bool usable(const GenParams &p, int id) {
     return id >= 0 && id < (int)p.biomes.size() && p.biomes[(size_t)id].enabled;
 }
 
-BColumn biome_column(const GenParams &p, uint32_t seed, int x, int z) {
+static BColumn column_base(const GenParams &p, uint32_t seed, int x, int z) {
     const float fx = (float)x * STUD_M;
     const float fz = (float)z * STUD_M;
 
@@ -500,6 +516,109 @@ BColumn biome_column(const GenParams &p, uint32_t seed, int x, int z) {
     return col;
 }
 
+// --- lakes above the sea (Docs/MineWater.md 14.8) -----------------------------
+//
+// One region in LAKE_REGION studs may hold a lake: at the lowest of nine
+// hashed points in it, an ellipse 18-47 studs a radius. Its level is a brick
+// under the lowest column of its rim (the inside columns touching the
+// outside), worked out from the columns as generated WITHOUT lakes; inside
+// the rim the ground is cut to a sand bowl 1-4 bricks under the level, so
+// every lake has water, and the rim, untouched, holds it in.
+
+namespace {
+struct LakeR {
+    bool on = false;
+    int cx = 0, cz = 0, rx = 1, rz = 1, level = 0;
+};
+std::mutex g_lake_mx;
+std::unordered_map<int64_t, LakeR> g_lakes;
+uint32_t g_lake_seed = 0;
+int g_lake_gen = -1;
+
+inline bool in_ell(int dx, int dz, int rx, int rz) {
+    return (int64_t)dx * dx * rz * rz + (int64_t)dz * dz * rx * rx <= (int64_t)rx * rx * rz * rz;
+}
+inline bool lake_inner(int dx, int dz, int rx, int rz) {
+    return in_ell(dx, dz, rx, rz) && in_ell(dx + 1, dz, rx, rz) && in_ell(dx - 1, dz, rx, rz)
+            && in_ell(dx, dz + 1, rx, rz) && in_ell(dx, dz - 1, rx, rz);
+}
+inline uint32_t lmix(uint32_t h) {
+    h ^= h >> 16; h *= 0x7feb352dU; h ^= h >> 15; h *= 0x846ca68bU; h ^= h >> 16;
+    return h;
+}
+
+LakeR lake_region(const GenParams &p, uint32_t seed, int rx, int rz) {
+    const int64_t key = ((int64_t)(rx & 0xFFFFFFF) << 28) | (int64_t)(rz & 0xFFFFFFF);
+    {
+        std::lock_guard<std::mutex> lk(g_lake_mx);
+        if (g_lake_seed != seed || g_lake_gen != g_params_gen) {
+            g_lakes.clear();
+            g_lake_seed = seed;
+            g_lake_gen = g_params_gen;
+        }
+        auto it = g_lakes.find(key);
+        if (it != g_lakes.end()) return it->second;
+    }
+    LakeR L;
+    const uint32_t h = lmix((uint32_t)rx * 0x27D4EB2FU ^ (uint32_t)rz * 0x165667B1U ^ seed ^ 0x1A4Eu);
+    if (p.lakes && (double)h < (double)p.lake_chance * 4294967296.0) {
+        int best = INT_MAX;
+        for (int i = 0; i < 9; ++i) {
+            const uint32_t hi = lmix(h + (uint32_t)i * 0x9E3779B9U);
+            const int px = rx * LAKE_REGION + 64 + (int)(hi % (uint32_t)(LAKE_REGION - 128));
+            const int pz = rz * LAKE_REGION + 64 + (int)((hi >> 11) % (uint32_t)(LAKE_REGION - 128));
+            const int sb = column_base(p, seed, px, pz).sb;
+            if (sb < best) { best = sb; L.cx = px; L.cz = pz; }
+        }
+        L.rx = 18 + (int)(h % 30u);
+        L.rz = 18 + (int)((h >> 7) % 30u);
+        int rim = INT_MAX;
+        for (int dz = -L.rz; dz <= L.rz; ++dz) {
+            for (int dx = -L.rx; dx <= L.rx; ++dx) {
+                if (!in_ell(dx, dz, L.rx, L.rz) || lake_inner(dx, dz, L.rx, L.rz)) continue;
+                rim = std::min(rim, column_base(p, seed, L.cx + dx, L.cz + dz).sb);
+            }
+        }
+        L.level = rim - 1;
+        L.on = rim != INT_MAX && L.level > fbrick(p.sea_m) + 1;
+    }
+    std::lock_guard<std::mutex> lk(g_lake_mx);
+    g_lakes[key] = L;
+    return L;
+}
+} // namespace
+
+int lake_level_at(const GenParams &p, uint32_t seed, int x, int z, int *bed) {
+    if (!p.lakes) return INT_MIN;
+    const LakeR L = lake_region(p, seed, fdiv(x, LAKE_REGION), fdiv(z, LAKE_REGION));
+    const int dx = x - L.cx, dz = z - L.cz;
+    if (!L.on || !lake_inner(dx, dz, L.rx, L.rz)) return INT_MIN;
+    if (bed != nullptr) {
+        const double r2 = (double)dx * dx / ((double)L.rx * L.rx) + (double)dz * dz / ((double)L.rz * L.rz);
+        *bed = L.level - (1 + (int)std::lround(3.0 * (1.0 - std::min(1.0, r2))));
+    }
+    return L.level;
+}
+
+BColumn biome_column(const GenParams &p, uint32_t seed, int x, int z) {
+    BColumn col = column_base(p, seed, x, z);
+    if (p.lakes) {
+        int bed = 0;
+        if (lake_level_at(p, seed, x, z, &bed) != INT_MIN && bed < col.sb) {
+            // The lake's bowl: sand, no overhang over the water.
+            col.sb = bed;
+            col.top = MAT_SAND;
+            col.under = MAT_SAND;
+            col.amp = 0;
+            col.snow = false;
+            col.bound_p = (col.sb + 1) * PLATES_PER_CELL - 1;
+            const float deepest = std::max(p.caves ? p.cave_max_depth_m : 0.0f, p.ravines ? p.ravine_depth_m : 0.0f);
+            col.low_p = (col.sb - fbrick(deepest) - 2) * PLATES_PER_CELL;
+        }
+    }
+    return col;
+}
+
 int biome_bedrock_plate() {
     const GenParams &p = gen_params();
     return fbrick(p.sea_m + p.bedrock_m) * PLATES_PER_CELL;
@@ -510,6 +629,42 @@ int biome_top(const BColumn &c) {
 }
 
 // --- the cell ---------------------------------------------------------------------
+
+static int pool_level_r(const GenParams &p, uint32_t seed, int rx, int ry, int rz) {
+    if (!p.cave_pools) return INT_MIN;
+    uint32_t h = (uint32_t)rx * 0x8DA6B343U ^ (uint32_t)ry * 0xD8163841U ^ (uint32_t)rz * 0xCB1AB31FU ^ seed ^ 0xA0F1u;
+    h ^= h >> 15; h *= 0x2C1B3C6DU; h ^= h >> 12; h *= 0x297A2D39U; h ^= h >> 15;
+    if ((float)(h & 0xFFFF) >= p.cave_pool_chance * 65536.0f) return INT_MIN;
+    const int base = ry * AQ_Y;
+    // Over the lava line (lava pools stay lava) by a band.
+    if (base <= fbrick(p.sea_m + p.lava_m) + AQ_Y) return INT_MIN;
+    return base + 2 + (int)((h >> 16) % 7u);
+}
+
+int cave_pool_level(const GenParams &p, uint32_t seed, int x, int yb, int z) {
+    return pool_level_r(p, seed, fdiv(x, AQ_XZ), fdiv(yb, AQ_Y), fdiv(z, AQ_XZ));
+}
+
+/// A barrier (stone left standing in a cave) round cave pools: a pool
+/// region's bottom course, and the faces between two regions whose water
+/// levels differ, up to the higher -- so no water stands beside cave air
+/// (Minecraft's aquifer barriers).
+static bool pool_barrier(const GenParams &p, uint32_t seed, int x, int yb, int z) {
+    if (!p.cave_pools) return false;
+    const int rx = fdiv(x, AQ_XZ), ry = fdiv(yb, AQ_Y), rz = fdiv(z, AQ_XZ);
+    const int lx = x - rx * AQ_XZ, ly = yb - ry * AQ_Y, lz = z - rz * AQ_XZ;
+    const int here = pool_level_r(p, seed, rx, ry, rz);
+    if (here != INT_MIN && ly == 0) return true;
+    auto across = [&](int ox, int oz) {
+        const int other = pool_level_r(p, seed, rx + ox, ry, rz + oz);
+        return other != here && yb <= std::max(here, other);
+    };
+    if (lx == 0 && across(-1, 0)) return true;
+    if (lx == AQ_XZ - 1 && across(1, 0)) return true;
+    if (lz == 0 && across(0, -1)) return true;
+    if (lz == AQ_XZ - 1 && across(0, 1)) return true;
+    return false;
+}
 
 static bool cave_cell(const GenParams &p, uint32_t seed, int x, int yb, int z, float depth_m) {
     const float px = (float)x * STUD_M, py = (float)yb * BRICK_M, pz = (float)z * STUD_M;
@@ -654,7 +809,8 @@ int biome_cell(const GenParams &p, const BColumn &c, uint32_t seed, int x, int y
     // A cliff higher than this over the sea can still open a cave to it.
     const bool sealed = p.water && yb <= fbrick(p.sea_m) + 1
             && c.sb <= fbrick(p.sea_m) + fbrick(p.cave_min_depth_m) + 3;
-    if (depth > 0 && !sealed && cave_cell(p, seed, x, yb, z, (float)depth * BRICK_M)) {
+    if (depth > 0 && !sealed && cave_cell(p, seed, x, yb, z, (float)depth * BRICK_M)
+            && !pool_barrier(p, seed, x, yb, z)) {
         return MAT_AIR;
     }
     if (depth == 0) {

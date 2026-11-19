@@ -1,6 +1,6 @@
 # Water and lava in the mine world — plan
 
-Status: **stages 1-7 built, 8 in part** (2026-11-17; section 14). For `scenes/terrain_test.tscn`, the mine world
+Status: **stages 1-8 built** (multiplayer: groundwork, 11.5) (2026-11-17; section 14). For `scenes/terrain_test.tscn`, the mine world
 ([MineWorld.md](MineWorld.md)). It takes [Water.md](Water.md) §12's idea (brick water that
 flows) and settles its model for a volumetric, endless, Minecraft-like world. The heightfield
 test's sea ([Water.md](Water.md) §1–9) is kept and reused for the ocean's waves.
@@ -345,6 +345,36 @@ differs from `gen_fluid`, run-length coded, zstd, plus its pending wakes, so a r
 flowing is still flowing after a load. Same cadence and worker write as the edits (MineWorld.md
 9); keyed by seed and settings the same way.
 
+### 11.5 Multiplayer: the groundwork (built 2026-11-19)
+
+Not networked yet; what is in place so finishing it is wiring, not redesign.
+
+* **One authority simulates.** The host runs the rules as now. A client is a **mirror**:
+  `BrickFluid.set_simulating(false)` -- its ticks apply what it is sent and build meshes,
+  nothing else (no evaluations, no timers). The rules are not lockstep-safe (the order of
+  wakes follows hash sets), so peers must not each simulate.
+* **The host keeps a change log**: `set_change_log(true)`. Every cell whose drawn state
+  changes is logged with the write count. `get_changes_since(version)` gives
+  `{version, cells, full}`: the cells changed since `version`, each in the save's 15-byte
+  form with its state *now* (so a cell changed ten times is sent once). `full` is true when
+  `version` is older than the log reaches (it keeps a million changes, then starts over):
+  send `get_save()` instead, the whole difference from the generated world.
+* **A client applies** with `apply_changes(cells, false)` (no waking: it runs no rules) and
+  keeps the version it was sent. On joining it gets `get_save()` once (its header is 5
+  bytes; the rest is the same cell form).
+* **Commands go to the host**: `place`, `remove` and the terrain's boxes
+  (`terrain_changed`) are already plain values -- a client sends them, the host calls the same
+  functions, and the result comes back in the next changes. Buckets work the same way (their
+  contents live in the player's kit, which the game's own netcode will carry).
+* **Generated water is never sent**: the sea, lakes, springs, lava pools and cave pools are
+  functions of the seed and settings, the same on every peer. Only differences travel.
+* **Bandwidth**: 15 bytes a changed cell. A spreading stream changes ~100-400 cells a second;
+  sent at 10 Hz that is a few kB a second, compressed far less. A flood of thousands of cells
+  wants interest management (only tiles near a player) -- the change log can be filtered by
+  tile when that is built.
+* Checked by `fluid_probe`: an authority's water, read from its log, rebuilt on a mirror
+  that runs no rules (423 cells, 0 differ, 6.3 kB).
+
 ## 12. What it costs (estimates — stage 1 and 5 measure them)
 
 | | Where | Estimate |
@@ -473,17 +503,39 @@ Each stage is merged on its own. C++ stages need the main folder's DLL rebuilt a
      sections never written (generated lava would have been scanned every autosave).
    * The Sea & Water tab has lava pools, the lava line, springs and the spring chance.
      `-- --gate=gen` pictures a spring near the spawn and a lava pool down a dug shaft.
-   *Not built, and why:*
-   * **Pits filling from rivers (4.5)**: running water takes over lower still water (4.2.5), so a
-     "tap" filling a closed pit with still water is undone by the fall feeding it; it needs the
-     fed body to be recognised as closed (no cell stopped by reach, no drop), which is a search
-     over the body, not a local rule. Next to do if wanted.
-   * **Lakes above the sea, cave pools (aquifers)**: generator work (a lake level per basin, pools
-     with barriers between levels) in `terrain_biomes.cpp` before any water rule.
-   * **Floating debris**: nothing floats in the mine world yet (the sea's collision patch is off,
-     stage 4); it wants buoyant pieces first.
-   * **Multiplayer diffs**: there is no networking to carry them; the save's per-cell difference
-     (stage 7) is the format they would use.
+   *Built 2026-11-19 (the rest):*
+   * **Pits filling from rivers (4.5)**: still water as deep as what would feed it stays
+     still (a fall lands on a full pit as on ground; a river no longer turns a pond into a
+     river). Every 10 ticks the running water round each landed fall is looked at: a closed
+     body (no drop, no dry floor lower than its top, no source joined) becomes full still
+     water, and the fall lands a course higher -- the pit rises to its rim and spills.
+   * **Lakes above the sea**: `lakes`, `lake_chance` (generator, `terrain_biomes.cpp`). A region
+     of 384 studs may hold one: at the lowest of nine hashed points, an ellipse 18-47 studs a
+     radius, its level a brick under the lowest column of its rim; inside the rim the ground
+     is cut to a sand bowl 1-4 bricks under it, so every lake has water. Trees keep out.
+   * **Cave pools** (Minecraft's aquifers): `cave_pools`, `cave_pool_chance`. A region 40
+     studs across and 12 bricks tall may hold water up to a level in it; the generator leaves
+     stone barriers on the region's floor and on faces between regions of different levels,
+     so no pool water stands beside cave air. Over the lava line only. Primed by the band of
+     courses round the eye.
+   * **Floating and sinking debris** (`scripts/water/floaters.gd`): the bricks a shot throws
+     and the pieces that come loose float or sink by what they are MOSTLY made of: mostly
+     wood (0.6) or leaves (0.35) floats, mostly anything else (stone 2.4) sinks. Lifted by
+     the share under the surface over their density, slowed by the fluid, carried by running
+     water; lava is 3x as dense, so wood floats on it too. New building materials `wood` and
+     `leaves` (on the hotbar) use filaments no ground uses, so a block's colour says what it is.
+   * **Multiplayer groundwork**: section 11.5.
+   * Fixes found on the way: a section read while dry (priming) kept stale solids when ground
+     was laid there later -- water fell through a floor (`box_near_water` now counts every
+     section read); lava and pools filled holes the player dug (only generated air fills
+     now); the deep tier stayed off in a dug shaft (it measured from the dug surface);
+     `ground_collapse.gd` waited twice on a finished task ("Invalid Task ID" at exit); the
+     water's thread and the shore field read the terrain's edit tables under a lock now
+     (`edit_lock`), and the water's thread prints its own crash and backtrace (Windows).
+   *Open:* `--gate=gen --with-collapse` (ground collapse running while a 4 x 4 shaft 120 m deep
+   is dug) crashes the scene about half the runs with no backtrace at all -- not the water's
+   thread, which now reports its own; it smells of a stack overflow in the collapse's survey
+   of a very big region. The gate pauses the collapse by default.
 
 ## 15. Risks
 
