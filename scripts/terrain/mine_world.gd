@@ -157,6 +157,7 @@ func _ready() -> void:
 	builder.name = "Builder"
 	add_child(builder)
 	builder.setup(self, _hud_layer)
+	builder.inv.changed.connect(_on_inventory_changed)
 	debris = Debris.new()
 	debris.name = "Debris"
 	add_child(debris)
@@ -243,6 +244,7 @@ func generate(s: Dictionary) -> void:
 	# Before anything bakes: the tiles are made from the field WITH them.
 	var loaded := _load_edits()
 	_load_pieces()
+	_load_inventory()
 	_edits_dirty = false
 	_save_status = "%d changes loaded" % loaded if loaded > 0 else "new world"
 	var sea := float(settings.gen.get("sea_m", 20.0))
@@ -918,6 +920,36 @@ func _load_pieces() -> void:
 		collapse.restore(saved)
 
 
+## The player's items, beside the edits (Docs/Inventory.md 3.2): JSON, the
+## inventory's own `to_dict`. No file: the starting kit.
+var _inv_dirty := false
+
+
+static func _inventory_path(edits_path: String) -> String:
+	return edits_path.get_basename() + ".inv"
+
+
+func _load_inventory() -> void:
+	var inv := Inventory.new()
+	var path := _inventory_path(save_path())
+	var ok := false
+	if FileAccess.file_exists(path):
+		ok = inv.from_dict(JSON.parse_string(FileAccess.get_file_as_string(path)))
+		if not ok:
+			push_warning("[mine] %s is not an inventory; the starting kit instead" % path)
+	if not ok:
+		inv.seed_default()
+	if builder.inv.changed.is_connected(_on_inventory_changed):
+		builder.inv.changed.disconnect(_on_inventory_changed)
+	builder.set_inventory(inv)
+	inv.changed.connect(_on_inventory_changed)
+	_inv_dirty = false
+
+
+func _on_inventory_changed() -> void:
+	_inv_dirty = true
+
+
 ## Write the changes if there are any unsaved. `wait`: now, on this thread
 ## (leaving, generating); otherwise on a worker, checked next frame.
 func save_edits(wait := false) -> void:
@@ -927,9 +959,11 @@ func save_edits(wait := false) -> void:
 		WorkerThreadPool.wait_for_task_completion(_save_task)
 		_save_task = -1
 	var fluid_at := BrickFluid.change_count()
-	if (not _edits_dirty and fluid_at == _fluid_saved_at) or settings.is_empty():
+	if (not _edits_dirty and not _inv_dirty and fluid_at == _fluid_saved_at) or settings.is_empty():
 		return
 	_edits_dirty = false
+	_inv_dirty = false
+	var inv_text := JSON.stringify(builder.inv.to_dict(), "\t")
 	_fluid_saved_at = fluid_at
 	var bytes: PackedByteArray = BrickTerrain.get_edits()
 	var fluid_bytes: PackedByteArray = BrickFluid.get_save()
@@ -939,6 +973,12 @@ func save_edits(wait := false) -> void:
 	var field := BrickTerrain.get_field_version()
 	var write := func() -> void:
 		DirAccess.make_dir_recursive_absolute(dir)
+		var ip := _inventory_path(path)
+		var iv := FileAccess.open(ip + ".tmp", FileAccess.WRITE)
+		if iv != null:
+			iv.store_string(inv_text)
+			iv.close()
+			DirAccess.rename_absolute(ip + ".tmp", ip)
 		var f := FileAccess.open_compressed(path + ".tmp", FileAccess.WRITE, FileAccess.COMPRESSION_ZSTD)
 		if f == null:
 			return
@@ -1001,6 +1041,8 @@ func forget_edits() -> void:
 		DirAccess.remove_absolute(_pieces_path(path))
 	if FileAccess.file_exists(_fluid_path(path)):
 		DirAccess.remove_absolute(_fluid_path(path))
+	if FileAccess.file_exists(_inventory_path(path)):
+		DirAccess.remove_absolute(_inventory_path(path))
 	_edits_dirty = false
 	var s2 := settings.duplicate(true)
 	settings = {}
@@ -2238,9 +2280,9 @@ func _run_sea_gate() -> void:
 	walker.pitch = -0.8
 	await _frames(10)
 	builder.set_active(true)
-	builder.slot = builder.hotbar.find(builder.BUCKET)
+	builder.select(&"bucket")
 	var filled: bool = builder.take_fluid()
-	var held: int = builder.bucket
+	var held: int = builder.bucket_tiles()
 	var land := shore - Vector2i((dir * 10.0).round())
 	_fly_to(Vector3((land.x + 0.5) * stud, _ground_m(land.x, land.y) + 2.0, (land.y + 0.5) * stud),
 			-Vector3(dir.x, 0, dir.y))
@@ -2251,7 +2293,7 @@ func _run_sea_gate() -> void:
 	var poured: bool = builder.place_target()
 	water.step(1)
 	print("[sea-gate] bucket: filled from the sea %s (%d tiles), poured %s (%d left), %s" % [
-			filled, held, poured, builder.bucket, builder.log_blocks.slice(-3)])
+			filled, held, poured, builder.bucket_tiles(), builder.log_blocks.slice(-3)])
 	builder.set_active(false)
 	view.process_mode = Node.PROCESS_MODE_INHERIT
 	_hud_layer.visible = true
