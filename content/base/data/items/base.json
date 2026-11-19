@@ -1,0 +1,21 @@
+{
+	"items": {
+		"bucket": { "name": "Bucket", "kind": "bucket", "max_stack": 1, "colour": "#8c8c99", "glyph": "U",
+			"description": "Holds 9 tiles of water (3 bricks). Left: scoop from still water, or fill from a source. Right: pour a brick." },
+		"source_bucket": { "name": "Source bucket", "kind": "source_bucket", "max_stack": 1, "colour": "#595973", "glyph": "S",
+			"description": "Carries one source brick, water or lava. Left: take a source. Right: put it down as a spring." },
+		"water_source": { "name": "Water source", "kind": "fluid", "fluid": 1, "fluid_kind": "source", "max_stack": 1,
+			"colour": "#2673d9", "glyph": "W", "tags": ["creative"],
+			"description": "Creative: pours an endless water source in every stud of the block." },
+		"water_brick": { "name": "Water brick", "kind": "fluid", "fluid": 1, "fluid_kind": "still", "max_stack": 1,
+			"colour": "#66b3f2", "glyph": "w", "tags": ["creative"],
+			"description": "Creative: pours still water, 3 tiles a stud." },
+		"lava_source": { "name": "Lava source", "kind": "fluid", "fluid": 2, "fluid_kind": "source", "max_stack": 1,
+			"colour": "#ff660d", "glyph": "L", "tags": ["creative"],
+			"description": "Creative: pours a lava source in every stud of the block." },
+		"pickaxe": { "name": "Pickaxe", "kind": "tool", "max_stack": 1, "colour": "#b0b0b8", "glyph": "P",
+			"description": "Breaks blocks." },
+		"chest": { "name": "Chest", "kind": "chest", "hand": "right", "colour": "#8a5a2b", "glyph": "C",
+			"description": "Holds 27 stacks. Place it, then right-click it to open." }
+	}
+}
