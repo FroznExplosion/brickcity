@@ -113,6 +113,15 @@ so it is asked -- and it may come down: it was edited.
   is unloaded: its bricks recorded (`ChunkRecord`) with where it lies, its body
   and chunk freed. When the tile is near-detail again it is laid again, settled.
   A moving piece is never unloaded.
+- **A cap, nearest the player first** (2026-11-19, the user): at most
+  `MAX_LOADED` (100) pieces laid. Past it the farthest settled ones are put
+  away; a put-away piece nearer than a laid one by `SWAP_MARGIN` (8 m) takes
+  its place, `RELOAD_PER_TEND` (12) a tend at most.
+- **Put away = unloaded or deleted by size**: a piece of more than
+  `SMALL_MAX` (3) bricks becomes a record (kept, saved, laid again); 3 bricks
+  or fewer is deleted -- at once when its tile is not drawn, shrunk away
+  (PlanetPieces' fade) when it is over the cap and may be in view. A piece
+  whose mesh is still being made waits a tend.
 - Saved in a file of its own beside the edits: `<seed>_<hash>.pieces`
   (zstd, header `BCMP`, format 1, then `var_to_bytes` of the records), written
   when the edits are; loaded after them, as dormant records, laid as their
@@ -189,7 +198,10 @@ Measured (`terrain_collapse_probe`, headless; `terrain_test.tscn --
 
 Not done / known:
 
-- Falling sand does not see pieces (it lands on the ground under them).
+- **Sand lands on pieces** (2026-11-19): a falling column casts down along its
+  middle each frame (DEBRIS and FALLING layers); meeting a piece it becomes a
+  piece of its own (1x1 bricks, drawn by the boxes it fell as) and drops onto
+  it. A column whose middle misses a piece lands on the ground as before.
 - A survey's region is the edit +-10 studs, 4 bricks under, 20 over (grown
   twice by 24 when a loose group reaches the top). A mass reaching past that
   counts as held.
