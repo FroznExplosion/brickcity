@@ -172,6 +172,8 @@ So today: about 25-40 drawn and ~50 in bricks is safe; with boxes and no bake, 1
 
 ## 5. What to do, in order
 
+All six done 2026-11-19: section 7.
+
 1. **Sky only when it changes** (small; the planet scene and `LightRig`): skip `set_sky` while
    day, air, sun height and the local up (by ~0.5 deg) are the same; radiance 64. ~1 ms GPU.
 2. **Find the 271 -> 977 objects after flying** (2.4).
@@ -185,7 +187,44 @@ So today: about 25-40 drawn and ~50 in bricks is safe; with boxes and no bake, 1
 ## 6. Re-running
 
     godot --path . res://scenes/planet.tscn -- --gate=cost          (windowed, ~4 min, editor closed)
+    godot --path . res://scenes/planet.tscn -- --gate=cost --quick  (baseline, trips, census, AI wake only)
     godot --headless --path . --script res://tools/probes/building_budget_probe.gd
 
 The gate prints `[cost]` rows; read deltas over ~0.5 ms only. `PlanetScene.sky_hold` exists for
-the gate's sky row.
+the gate's sky row; `-- --no-occluders` turns the buildings' occluders off.
+
+## 7. State (2026-11-19): all six steps done
+
+Every step of section 5 was built the same day, in worktree `bc-plcost` (branch `planet-cost`).
+
+| Step | What was built | Where | Measured (`--gate=cost`, same window) |
+|---|---|---|---|
+| 1. Sky | `LightRig.set_sky` writes the sky only when day, air, sun height (0.002), the local up (0.3 deg), the air or the star's colour moved; the ambient boxes still follow every call. Radiance 256 -> 64 for every rig | `scripts/render/light_rig.gd` | the "sky not set" row went from -1.1 ms to noise: nothing left to save |
+| 2. Objects after flying | the cause: `ImpostorLod` squares whose trees were dropped kept their MultiMeshes with 0 visible instances, each still an object and a draw. A square with nothing in a tier is hidden now | `scripts/render/impostor_lod.gd` | before the fix 225 -> 929 objects after the trips, +1,408 visible tree nodes (census); after it **225 -> 224** |
+| 3. AI wake | the town's nav regions are started on workers while the scene loads (`PlanetScene._prepare_ai`: the grids are the planet's data, the sites and the trees, all known up front); `setup_ai` at the spawn collects them | `scripts/planet/planet_scene.gd` | 354-444 ms on the main thread -> **25 ms** (3 ms the player's region) |
+| 4. Boxes, no bake | a planet building's bands are a box a brick (`BrickBoxes.fill`, as the city's), filled in the frame, a hit refilling only its band; no bake, no worker mesh, no upload. Open studs a MultiMesh per band, drawn to 30 m (`STUD_DRAW_M`) | `scripts/planet/planet_buildings.gd` | town GPU **6.4 -> 3.9-4.4 ms**, triangles 2.34 M -> 1.45 M; bricks hidden now saves 0.2-0.9 ms (was 4.3); at 1080p 2.2 (was 4.2). Memory a building ~1/20 on the GPU and no bake (section 4.1) |
+| 5. Occluders, 60 m | an `OccluderInstance3D` box per near building, inset 1 m from its walls; none once a hit opens it, none toppled, off while the camera is within 2 m of it; occlusion culling on for the planet's viewport. `BRICK_DRAW_M` 80 -> 60 | `planet_buildings.gd`, `planet_scene.gd` | town 273 -> 225 objects with them; GPU within noise at this size (the town is small and the CPU raster cheap) |
+| 6. Options | defaults unchanged (SSAO/SSIL off, 0.75, FSR); the editor's game view is not representative | -- | -- |
+
+Gates after the change, headless: bricks 11/0, damage 12/0 (its "band drawn again" now checks
+the band's box stamp, not a new node), fall 7/0, hits 8/0, topple 6/0, storey 13/0, pieces_ai
+4/0, farfight 11/0, snap 8/0, squad 10/0, trees 7/0; `planet_tree_probe` 12/0,
+`planet_tree_ai_probe` 8/0.
+
+The stairs' own faces (the parts that are not boxes) are made into a mesh on a worker and given
+to their band when done: made in the frame they were a 48 ms frame on a walk. With that, the
+walk round the town, the low flight and the fast one have **no frame over 40 ms**, the worst
+brick step 4.2 ms (was 0.8-1.6 baked on workers, 6.5-9.2 boxed before the stairs went to a
+worker), and the AI wakes in 20 ms with no long frame after it. `impostor_probe` (windowed)
+30/0 with the hidden-empty-square change.
+
+Runs: editor closed; other chats' terrain runs were going between them (each windowed run here
+waited until no Godot ran and the chip was under 78 C). Peak 97 C, never held back; RAM fell
+to 0 MB free once (22:48, during another chat's run), so a worst frame then may be paging.
+
+Left, smaller:
+- Ships' and stations' bands are still baked (`space_ship.gd`, `space_station.gd`): the same
+  change would do for them.
+- The load still has 240-530 ms frames (the spawn: the impostor bake, the brick shapes, the
+  first streaming), and the cost gate's own 5 km teleport back after the flights 100-330 ms.
+- Occluders measured within noise in this small town; they matter more in a big one.

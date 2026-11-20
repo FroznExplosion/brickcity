@@ -817,8 +817,11 @@ func _day_night(delta: float, eye: Vector3) -> void:
 	if not _old_cave_light:
 		# On down past 7.5 m to CAVE_DEEP_LIGHT at 30 m: the deep caves
 		# (Docs/MineWorld.md 16) were lit like a shaded street.
-		cave = minf(cave, lerpf(0.12, CAVE_DEEP_LIGHT, clampf((under - 7.5) / 22.5, 0.0, 1.0)))
-		cave = maxf(cave, CAVE_DEEP_LIGHT)
+		# Only DOWN there: above ground `under` is negative, the curve sat at
+		# its 0.12 start and every daytime scene was cave-dark.
+		if under > 7.5:
+			cave = minf(cave, lerpf(0.12, CAVE_DEEP_LIGHT, clampf((under - 7.5) / 22.5, 0.0, 1.0)))
+			cave = maxf(cave, CAVE_DEEP_LIGHT)
 	_cave_light = cave
 	_rig.env.ambient_light_energy *= cave
 	# The ground casts no sun shadow, so the sun would reach into caves: it
@@ -2066,6 +2069,75 @@ func _gate_collapse() -> void:
 	await _collapse_quiet(300)
 	var size_of := func(p: PlanetPieces.Piece) -> int:
 		return collapse.bricks.get_alive_block_count(p.chunk)
+	# Studs: a piece of ground draws its open studs, as the ground does.
+	var studded := 0
+	for p in collapse.pieces.pieces:
+		if p.mesh_node != null:
+			for n in p.mesh_node.find_children("*", "MultiMeshInstance3D", true, false):
+				if (n as MultiMeshInstance3D).multimesh.instance_count > 0:
+					studded += 1
+					break
+	ok = studded == collapse.pieces.pieces.size() and studded > 0
+	print("[mine-collapse] %s  pieces draw their studs (%d of %d)" % ["ok  " if ok else "FAIL", studded, collapse.pieces.pieces.size()])
+	fails += 0 if ok else 1
+	# Mined in build mode: the brick looked at on a piece goes.
+	var arm: PlanetPieces.Piece = null
+	for p in collapse.pieces.pieces:
+		if arm == null or int(size_of.call(p)) > int(size_of.call(arm)):
+			arm = p
+	var abox := collapse.pieces.world_box(arm)
+	# A point on one of its bricks: straight down onto it.
+	var look_at_pt := abox.get_center()
+	var dq := PhysicsRayQueryParameters3D.create(abox.get_center() + Vector3.UP * (abox.size.y + 3.0),
+			abox.get_center() - Vector3.UP * (abox.size.y + 3.0), Layers.DEBRIS | Layers.FALLING)
+	var dh := get_world_3d().direct_space_state.intersect_ray(dq)
+	if not dh.is_empty():
+		look_at_pt = dh.position
+	var cam_at := look_at_pt + Vector3(0.0, 3.0, -2.0)
+	var ecam := _eye_camera()
+	var keep_xf := ecam.global_transform
+	ecam.global_transform = Transform3D(Basis.looking_at(look_at_pt - cam_at, Vector3.UP), cam_at)
+	var arm_n0 := int(size_of.call(arm))
+	builder.update_target()
+	var aimed: bool = not (builder.piece_target as Array).is_empty()
+	var mined: bool = builder.break_target()
+	ecam.global_transform = keep_xf
+	ok = aimed and mined and int(size_of.call(arm)) < arm_n0
+	print("[mine-collapse] %s  build mode mines a piece's brick (aimed %s, %d -> %d bricks)" % [
+			"ok  " if ok else "FAIL", aimed, arm_n0, int(size_of.call(arm))])
+	fails += 0 if ok else 1
+	await _frames(10)
+	# A pistol wears a piece's brick down and breaks it (StructuralDamage).
+	var total := func() -> int:
+		var n := 0
+		for p in collapse.pieces.pieces:
+			n += int(size_of.call(p))
+		return n
+	var pn0: int = total.call()
+	var shots_n := 0
+	var down := Vector3.DOWN
+	for k in 80:
+		var h2 := {}
+		for p in collapse.pieces.pieces:
+			var pb := collapse.pieces.world_box(p)
+			var q2 := PhysicsRayQueryParameters3D.create(pb.get_center() + Vector3.UP * (pb.size.y + 3.0),
+					pb.get_center() - Vector3.UP * (pb.size.y + 3.0), Layers.DEBRIS | Layers.FALLING)
+			h2 = get_world_3d().direct_space_state.intersect_ray(q2)
+			if not h2.is_empty():
+				break
+		if h2.is_empty():
+			break
+		var pt: Vector3 = h2.position + down * 0.05
+		_mine(pt, down, StructuralDamage.for_shot(null))
+		shots_n += 1
+		if int(total.call()) < pn0:
+			break
+		await _frames(1)
+	ok = int(total.call()) < pn0
+	print("[mine-collapse] %s  pistol rounds break a piece's brick (%d shot(s), %d -> %d bricks in pieces)" % [
+			"ok  " if ok else "FAIL", shots_n, pn0, int(total.call())])
+	fails += 0 if ok else 1
+	await _collapse_quiet(300)
 	# Sand dropped onto the fallen arm: it lands ON the piece, as pieces.
 	var big: PlanetPieces.Piece = null
 	for p in collapse.pieces.pieces:
@@ -2374,6 +2446,10 @@ func _run_water_gate() -> void:
 	lay.call(19, 13, 29, 13, w, w, dark)
 	lay.call(19, 5, 19, 13, w, w, dark)
 	lay.call(29, 5, 29, 13, w, w, dark)
+	# A wood block in the pool: lava sets it alight and it burns away.
+	var wood_id := BrickTerrain.material_names().find("wood")
+	lay.call(24, 7, 24, 7, w, w, wood_id)
+	lay.call(24, 7, 24, 7, w + 1, w + 1, wood_id)
 	var lava_src := [Vector3i(o.x + 22, w, o.y + 9), Vector3i(o.x + 26, w, o.y + 9)]
 	for c in lava_src:
 		BrickFluid.place(c, 2, BrickFluid.SOURCE, 3)
@@ -2388,7 +2464,7 @@ func _run_water_gate() -> void:
 	look.call(pm.call(14.0, w + 6.0, 1.0), pm.call(24.0, w, 9.0))
 	await _frames(40)
 	await _shot(dev + "water_lava_night.png")
-	print("[water-gate] lava pool: %d lava lights, %s" % [water.lava_lights(), water.report()])
+	print("[water-gate] lava pool: %d lava lights, %d burning, %s" % [water.lava_lights(), water.fires.burning.size(), water.report()])
 	_time = 0.42
 	view.process_mode = Node.PROCESS_MODE_INHERIT
 	_hud_layer.visible = true
@@ -2404,6 +2480,11 @@ func _run_water_gate() -> void:
 	for c in lava_src:
 		BrickFluid.remove(c, -1)
 	var rock0: int = water.rock_laid
+	for i in 600:
+		await get_tree().process_frame
+		if water.fires.burning.is_empty() and water.fires.burned > 0:
+			break
+	print("[water-gate] fire: %d plates of wood burned away, %d still burning" % [water.fires.burned, water.fires.burning.size()])
 	water.step(900)
 	await _frames(30)
 	var lava_left := 0
@@ -2571,6 +2652,17 @@ func _run_sea_gate() -> void:
 		view.arms.visible = false
 	_hud_layer.visible = false
 	await _shot(dev + "sea_coast.png")
+	# The beach close by, three times a second apart: the swash running up
+	# the sand and back (water.gdshader swash_delay).
+	var shore_m := Vector3((shore.x + 0.5) * stud, level, (shore.y + 0.5) * stud)
+	var along := Vector3(-dir.y, 0, dir.x)
+	walker.place(to_global(shore_m - Vector3(dir.x, 0, dir.y) * 3.0 + along * 4.0 + Vector3(0, 1.6, 0)),
+			(Vector3(dir.x, 0, dir.y) * 0.6 - along).normalized())
+	walker.pitch = -0.35
+	await _frames(40)
+	for k in 3:
+		await _shot(dev + "sea_beach_%d.png" % k)
+		await _frames(60)
 	# A river mouth: a river column under the sea line near the coast.
 	var river := Vector2i(1 << 30, 0)
 	for r in range(16, 900, 16):
@@ -2739,6 +2831,10 @@ func _run_gen_gate() -> void:
 	if pool.x == 1 << 30:
 		print("[gen-gate] FAIL no lava pool within 2000 studs")
 	else:
+		if "--no-water" in OS.get_cmdline_user_args():
+			# Bisecting a crash: the water stopped before the shaft is dug.
+			water.process_mode = Node.PROCESS_MODE_DISABLED
+			water.manual = true
 		# A shaft 4 x 4 down to just over the lava, to look into the cave.
 		var top := BrickTerrain.surface_plate(pool.x, pool.y)
 		for z in range(pool.y - 2, pool.y + 2):

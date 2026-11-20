@@ -72,6 +72,10 @@ class Site:
 	# Toppled whole (D2 step 4): its bricks are a piece now; it is no building
 	# any more -- no shell, no far box, never bricked again.
 	var toppled := false
+	# Its occluder (Docs/PlanetCost.md 5.5), and whether a hit has opened it
+	# (then it has none: what is behind a hole shows).
+	var occluder: OccluderInstance3D = null
+	var opened := false
 	# Its far box widened from space (far_tier), 1 as built.
 	var grow := 1.0
 	# Its bricks gone, kept while it has none laid: it does not heal behind the
@@ -112,8 +116,13 @@ const BRICK_M := 160.0
 const BRICK_DROP := 220.0
 ## Drawn as bricks only this near (dithered over BRICK_DRAW_FADE): further, the
 ## shell's look -- a tower's every floor and wall at 150 m is GPU for nothing.
-const BRICK_DRAW_M := 80.0
+## 80 -> 60 m (Docs/PlanetCost.md 5.5): the drawn bricks go with the circle's area.
+const BRICK_DRAW_M := 60.0
 const BRICK_DRAW_FADE := 10.0
+## Open studs (roofs, ledges) drawn only this near; past it a roof is flat
+## (22 triangles a stud: a tower's roof was ~28k triangles).
+const STUD_DRAW_M := 30.0
+const STUD_DRAW_FADE := 6.0
 ## Drawing bands, as the city cuts its buildings (CityScene.SECTION_PLATES / _STUDS).
 const SECTION_PLATES := 24
 const SECTION_STUDS := 32
@@ -297,6 +306,64 @@ func _process(delta: float) -> void:
 		return
 	_brick_step(cam.global_position)
 	_damage_step()
+	_occluders_for(cam.global_position)
+
+
+# --- occluders (Docs/PlanetCost.md 5.5) --------------------------------------
+
+## Every near building is a box that hides what is wholly behind it from the
+## renderer (Godot's occlusion culling, a CPU raster of these boxes): the town
+## behind the street, a building's far side. Inset from its walls so it never
+## hides its own face. None once a hit has opened it (what is behind a hole
+## shows), none toppled, and off while the camera is inside it or at its walls
+## (from inside, the box would hide the world past the windows).
+const OCCLUDER_INSET := 1.0
+const OCCLUDER_NEAR := 2.0
+var occluders_on := not ("--no-occluders" in OS.get_cmdline_user_args())
+static var _box_occluders := {}
+
+func _make_occluder(s: Site) -> void:
+	if not occluders_on or s.occluder != null or s.opened or s.toppled or not s.dead.is_empty():
+		return
+	var stud := BrickWorld.get_stud_metres()
+	var size := Vector3(s.fx * stud, s.height, s.fz * stud) - Vector3(2.0, 1.0, 2.0) * OCCLUDER_INSET
+	if size.x <= 0.5 or size.y <= 0.5 or size.z <= 0.5:
+		return
+	var key := Vector3i(roundi(size.x * 10.0), roundi(size.y * 10.0), roundi(size.z * 10.0))
+	var box: BoxOccluder3D = _box_occluders.get(key)
+	if box == null:
+		box = BoxOccluder3D.new()
+		box.size = size
+		_box_occluders[key] = box
+	var o := OccluderInstance3D.new()
+	o.name = "Occluder"
+	o.occluder = box
+	o.transform = s.frame * Transform3D(Basis(), Vector3(s.fx * stud * 0.5,
+			OCCLUDER_INSET * 0.5 + size.y * 0.5, s.fz * stud * 0.5))
+	add_child(o)
+	s.occluder = o
+
+
+func _drop_occluder(s: Site) -> void:
+	if s.occluder != null:
+		s.occluder.queue_free()
+		s.occluder = null
+
+
+func _occluders_for(eye: Vector3) -> void:
+	if not occluders_on:
+		return
+	var stud := BrickWorld.get_stud_metres()
+	var inv := global_transform.affine_inverse()
+	var local_eye := inv * eye
+	for s in sites:
+		if s.occluder == null:
+			continue
+		var p := s.frame.affine_inverse() * local_eye
+		var inside := p.x > -OCCLUDER_NEAR and p.z > -OCCLUDER_NEAR and p.y < s.height + OCCLUDER_NEAR \
+				and p.x < s.fx * stud + OCCLUDER_NEAR and p.z < s.fz * stud + OCCLUDER_NEAR
+		if s.occluder.visible == inside:
+			s.occluder.visible = not inside
 
 
 ## The far tier and the beacons, for the camera now. Also called while the
@@ -431,13 +498,14 @@ func _make_near(s: Site) -> void:
 	add_child(body)
 	body.transform = s.frame
 	s.body = body
+	_make_occluder(s)
 	# Already bricks (a fight bricked it, away from the camera): as they leave one.
 	if s.bricked:
 		_shell_as_look(s)
 
 
 ## One piece of brick work a frame: start the nearest building waiting (its
-## chunk from its shape's template, baked on a worker), or draw the next band
+## chunk from its shape's template), or fill the next band
 ## of the one in hand; with its last band, its collision, and the shell goes.
 func _brick_step(eye: Vector3) -> void:
 	var t0 := Time.get_ticks_usec()
@@ -470,10 +538,6 @@ func _brick_step(eye: Vector3) -> void:
 		what = "finish"
 	else:
 		var s := sites[_brick_site]
-		if not bricks.bake_ready(s.chunk):
-			if not bricks.bake_pending(s.chunk):
-				bricks.bake_chunk_async(s.chunk)
-			return
 		_harvest_bands(s)
 		if s.band_next < bricks.get_chunk_sections(s.chunk):
 			_draw_band(s, s.band_next)
@@ -572,8 +636,6 @@ func _start_bricks(s: Site) -> void:
 	s.brick_node.transform = s.frame
 	add_child(s.brick_node)
 	s.band_next = 0
-	if s.draw:
-		bricks.bake_chunk_async(s.chunk)
 
 
 ## The staircase a shape gets, as the city's buildings get theirs: on the
@@ -648,41 +710,91 @@ func _cut_door(chunk: int, fx: int) -> void:
 					bricks.remove_block(chunk, b)
 
 
+## A band drawn as a box a brick, the city's way (BrickBoxes; HandoffPerf.md
+## 8.2, Docs/PlanetCost.md 5.4): one MultiMesh of unit boxes scaled to the
+## bricks, filled from the chunk's blocks in the frame -- no bake, no mesh job,
+## no upload -- and a hit fills again only the band it touched. Parts that are
+## not boxes (the stairs) are their own faces on the band node's mesh. Its open
+## studs (a roof, a ledge) are a MultiMesh of their own, drawn only near.
 func _draw_band(s: Site, band: int) -> void:
-	var arrays: Array = bricks.build_chunk_mesh_section(s.chunk, band)
-	# Its studs: only the OPEN ones (a roof, a ledge); a floor's under a ceiling
-	# show only through a window, and a tower has tens of thousands.
-	var got: Array = bricks.get_chunk_studs_and_open(s.chunk, band)
-	var buf: PackedFloat32Array = got[0]
-	var open: PackedByteArray = got[1]
-	var keep := PackedFloat32Array()
-	for k in open.size():
-		if open[k] != 0:
-			keep.append_array(buf.slice(k * 16, k * 16 + 16))
-	if arrays.is_empty() and keep.is_empty():
+	if s.brick_node == null or s.chunk < 0:
 		return
-	# Merged and made into a GPU mesh on a worker (the city's way, CityScene.
-	# _submit_band_job): on the main thread a mesh -- or a MultiMesh of studs --
-	# going to the renderer is 10-25 ms windowed, whatever its size.
-	var stud: Array = _stud_arrays
-	var holder := [null]
-	var task := WorkerThreadPool.add_task(func() -> void:
-			var merge := MeshMerge.new()
-			if not arrays.is_empty():
-				merge.add_surface(arrays, Transform3D.IDENTITY, Color(-1, 0, 0))
-			if not keep.is_empty():
-				merge.add_instances(stud, Transform3D.IDENTITY, keep)
-			var out := merge.commit()
-			# Every brick of the band gone: its vertices are still baked, no triangle is.
-			if out.is_empty() or (out[Mesh.ARRAY_INDEX] as PackedInt32Array).is_empty():
-				return
-			var m := ArrayMesh.new()
-			m.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, out, [], {}, IslandManager.UPLOAD_COMPRESS)
-			holder[0] = m, false, "planet band")
-	s.band_jobs.append([task, holder, band])
+	var node: MeshInstance3D = s.band_nodes.get(band)
+	var held := 0
+	if node != null and node.has_meta(BrickBoxes.SPECIAL):
+		held = int(node.get_meta(BrickBoxes.SPECIAL))
+	var got: Array = bricks.get_instance_buffers(s.chunk, PackedInt32Array([band]), PackedInt64Array([held]))
+	if got.is_empty():
+		return
+	var entry: Dictionary = got[0]
+	if node == null:
+		if int(entry.alive) == 0:
+			return   # nothing in it: no node
+		node = MeshInstance3D.new()
+		node.name = "Band%d" % band
+		node.material_override = brick_material
+		# The shell casts the building's shadow (_finish_bricks): every floor and
+		# wall of a tower in the sun's cascades tripled the GPU's frame.
+		node.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		_draw_range(node, BRICK_DRAW_M, BRICK_DRAW_FADE)
+		s.brick_node.add_child(node)
+		s.band_nodes[band] = node
+	# The faces of its parts that are not boxes (the stairs): their mesh is made
+	# on a worker and given to the band when done (_harvest_bands) -- made here
+	# it went to the renderer on the main thread, a 48 ms frame on a walk.
+	var special: Array = entry.get("special", [])
+	if not bool(entry.get("special_same", false)) and not special.is_empty():
+		entry["special"] = []
+		var holder := [null]
+		var task := WorkerThreadPool.add_task(func() -> void:
+				var m := ArrayMesh.new()
+				m.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, special)
+				holder[0] = m, false, "planet band parts")
+		s.band_jobs.append([task, holder, band, int(entry.get("special_stamp", 0))])
+	var boxes := BrickBoxes.fill(node, entry, brick_material, Callable())
+	_draw_range(boxes, BRICK_DRAW_M, BRICK_DRAW_FADE)
+	band_fills += 1
+	# Its open studs: a floor's under a ceiling show only through a window.
+	var sg: Array = bricks.get_chunk_studs_and_open(s.chunk, band)
+	var open: PackedFloat32Array = BrickWorld.split_studs(sg[0], Vector3.ZERO,
+			PackedFloat32Array([INF]), sg[1], 0)[0]
+	@warning_ignore("integer_division")
+	var n := open.size() / 16
+	var studs := node.get_node_or_null(^"Studs") as MultiMeshInstance3D
+	if studs == null and n > 0:
+		studs = MultiMeshInstance3D.new()
+		studs.name = "Studs"
+		studs.material_override = brick_material
+		studs.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		studs.physics_interpolation_mode = Node.PHYSICS_INTERPOLATION_MODE_OFF
+		var mm := MultiMesh.new()
+		mm.transform_format = MultiMesh.TRANSFORM_3D
+		mm.use_colors = true
+		mm.mesh = PieceMeshes.stud()
+		studs.multimesh = mm
+		_draw_range(studs, STUD_DRAW_M, STUD_DRAW_FADE)
+		node.add_child(studs)
+	if studs != null:
+		studs.multimesh.instance_count = n
+		if n > 0:
+			studs.multimesh.buffer = open
+		studs.visible = n > 0
 
 
-## The bands whose meshes are made: drawn now.
+## Bands filled (a gate counts a hit's refill by it).
+var band_fills := 0
+
+
+## Drawn within `metres` of the camera, dithered out over `fade`.
+static func _draw_range(g: GeometryInstance3D, metres: float, fade: float) -> void:
+	g.visibility_range_end = metres
+	g.visibility_range_end_margin = fade
+	g.visibility_range_fade_mode = GeometryInstance3D.VISIBILITY_RANGE_FADE_SELF
+
+
+## The meshes of bands' parts that are not boxes, made on workers: each given
+## to its band once done, if the band still stands for the same parts (its
+## SPECIAL stamp); never waited for.
 func _harvest_bands(s: Site) -> void:
 	var k := 0
 	while k < s.band_jobs.size():
@@ -692,28 +804,11 @@ func _harvest_bands(s: Site) -> void:
 			continue
 		WorkerThreadPool.wait_for_task_completion(int(job[0]))
 		s.band_jobs.remove_at(k)
-		var mesh: ArrayMesh = (job[1] as Array)[0]
-		var band: int = job[2]
-		if s.brick_node == null:
+		var node: MeshInstance3D = s.band_nodes.get(int(job[2]))
+		if node == null or not is_instance_valid(node):
 			continue
-		# A band drawn again (a hit) replaces the one it was.
-		var old: Node = s.band_nodes.get(band)
-		if old != null:
-			old.queue_free()
-			s.band_nodes.erase(band)
-		if mesh == null:
-			continue
-		var mi := MeshInstance3D.new()
-		mi.mesh = mesh
-		mi.material_override = brick_material
-		# The shell casts the building's shadow (_finish_bricks): every floor and
-		# wall of a tower in the sun's cascades tripled the GPU's frame.
-		mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-		mi.visibility_range_end = BRICK_DRAW_M
-		mi.visibility_range_end_margin = BRICK_DRAW_FADE
-		mi.visibility_range_fade_mode = GeometryInstance3D.VISIBILITY_RANGE_FADE_SELF
-		s.brick_node.add_child(mi)
-		s.band_nodes[band] = mi
+		if int(node.get_meta(BrickBoxes.SPECIAL, 0)) == int(job[3]):
+			node.mesh = (job[1] as Array)[0]
 
 
 func _finish_bricks(i: int) -> void:
@@ -955,14 +1050,13 @@ func damage(point: Vector3, shot: Dictionary) -> bool:
 ## structure asked what falls now.
 func after_kill(i: int, killed: PackedInt32Array, box: AABB) -> void:
 	var s := sites[i]
+	s.opened = true
+	_drop_occluder(s)
 	bricks_killed += killed.size()
 	s.collision.disable(killed)
 	for b in s.collision.bands_of(killed):
 		if not s.remesh.has(b):
 			s.remesh.append(b)
-	# The bands are drawn from the chunk's bake: stale now.
-	if s.draw:
-		bricks.bake_chunk_async(s.chunk)
 	site_damaged.emit(i, box)
 	s.solve_due = true
 
@@ -1019,8 +1113,6 @@ func _solve_site(i: int) -> void:
 		if not s.remesh.has(b):
 			s.remesh.append(b)
 	pieces.shed(s.chunk, groups, Vector3.ZERO, floor_lines(s))
-	if s.draw:
-		bricks.bake_chunk_async(s.chunk)
 	site_damaged.emit(i, (planet.global_transform * s.frame) * box.grow(1.0))
 	s.solve_due = true
 
@@ -1117,6 +1209,7 @@ func _topple(i: int) -> void:
 		return
 	s.toppled = true
 	s.solve_due = false
+	_drop_occluder(s)
 	if i == _brick_site:
 		_brick_site = -1
 	_brick_queue.erase(i)
@@ -1173,7 +1266,7 @@ func _shape_lines(fx: int, fz: int, courses: int) -> PackedInt32Array:
 
 
 ## Once a frame: merge again the bands hits changed (a few), and draw again the
-## bands they took bricks out of, once the bake is fresh.
+## bands they took bricks out of (boxes: filled again in the frame).
 const FLUSH_BUDGET := 2
 
 
@@ -1193,11 +1286,6 @@ func _damage_step() -> void:
 			s.remesh = PackedInt32Array()
 			continue
 		if not s.remesh.is_empty() and i != _brick_site:
-			if not bricks.bake_ready(s.chunk):
-				if not bricks.bake_pending(s.chunk):
-					bricks.bake_chunk_async(s.chunk)
-				continue
-			_harvest_bands(s)
 			for b in s.remesh:
 				_draw_band(s, b)
 			s.remesh = PackedInt32Array()
@@ -1227,6 +1315,9 @@ func site_gone(i: int) -> PackedInt32Array:
 func restore_site(i: int, gone: PackedInt32Array, p_toppled: bool) -> void:
 	var s := sites[i]
 	s.dead = gone
+	if not gone.is_empty():
+		s.opened = true
+		_drop_occluder(s)
 	if p_toppled and not s.toppled:
 		s.toppled = true
 		if s.shell != null:
@@ -1237,6 +1328,7 @@ func restore_site(i: int, gone: PackedInt32Array, p_toppled: bool) -> void:
 func _free_near(s: Site) -> void:
 	s.shell.queue_free()
 	s.shell = null
+	_drop_occluder(s)
 	if s.body != null:
 		s.body.queue_free()
 		s.body = null
