@@ -168,6 +168,28 @@ struct MeshOut {
     bool is_far = false;   ///< the coarse mesh (MineWater.md 8)
 };
 std::vector<MeshOut> g_out_meshes;
+/// Blocks lava set alight (stage 9): per cell (x, plate, z) of a burnable
+/// plate (wood, leaves) next to lava. The main thread burns them
+/// (scripts/water/lava_fire.gd).
+std::vector<int32_t> g_out_fire;
+
+/// Burnable terrain plates in the six cells round a lava cell, alight.
+void ignite_round(int x, int b, int z) {
+    static const int NX[6] = { 1, -1, 0, 0, 0, 0 }, NB[6] = { 0, 0, 0, 0, 1, -1 }, NZ[6] = { 0, 0, 1, -1, 0, 0 };
+    std::shared_lock<std::shared_mutex> rd(edit_lock());
+    for (int i = 0; i < 6; ++i) {
+        const int cx = x + NX[i], cb = b + NB[i], cz = z + NZ[i];
+        for (int p = 0; p < 3; ++p) {
+            const int m = edit_at(pack_cell(cx, cb * 3 + p, cz));
+            if (m == MAT_WOOD || m == MAT_LEAVES) {
+                g_out_fire.push_back(cx);
+                g_out_fire.push_back(cb * 3 + p);
+                g_out_fire.push_back(cz);
+            }
+        }
+    }
+}
+
 /// Rock the fluids made, for the main thread to lay as terrain edits: per
 /// cell (x, z, first plate, last plate, material) -- only the plates the lava
 /// filled, so a tile of lava is a tile of rock.
@@ -600,16 +622,15 @@ void eval(int x, int b, int z) {
     const int cap = c_cap(cur);
     const int cf = c_fluid(cur);
     const bool lt = lava_tick();
-    if (cf == F_LAVA && !lt) {
-        g_defer_lava.push_back(pack3(x, b, z));
-        return;
-    }
     if (cap <= 0) {
         if (c_wet(cur)) g_sets.push_back({ x, b, z, Cell{} });
         return;
     }
-    // Lava meeting water: obsidian from a source, stone from the rest.
+    // Lava meeting water, Minecraft's way, at once (not on lava's slow tick):
+    // a lava SOURCE touched by water becomes obsidian, running lava stone.
     if (cf == F_LAVA && c_wet(cur)) {
+        if (lt) ignite_round(x, b, z);
+
         const int nx[6] = { x + 1, x - 1, x, x, x, x };
         const int nb[6] = { b, b, b, b, b + 1, b - 1 };
         const int nz[6] = { z, z, z + 1, z - 1, z, z };
@@ -621,6 +642,10 @@ void eval(int x, int b, int z) {
                 return;
             }
         }
+    }
+    if (cf == F_LAVA && !lt) {
+        g_defer_lava.push_back(pack3(x, b, z));
+        return;
     }
     if (c_wet(cur) && c_kind(cur) == K_SOURCE) {
         if (cur.amt != cap) {
@@ -751,6 +776,17 @@ void eval(int x, int b, int z) {
 
     // --- still water: a volume in whole tiles (4.2)
     const int a = cur.amt;
+    // Touching a SOURCE of its own fluid (the sea, a lake, a spring) it joins
+    // it: a tile a tick drains into the infinite body (4.2.4).
+    for (int i = 0; i < 4; ++i) {
+        const Cell &n = wcell(x + DX[i], b, z + DZ[i]);
+        if (c_wet(n) && c_fluid(n) == cf && c_kind(n) == K_SOURCE) {
+            Cell k = cur;
+            k.amt = (uint8_t)(a - 1);
+            g_sets.push_back({ x, b, z, k });
+            return;
+        }
+    }
     if (floor_of(cur.solid) == 0) {
         const Cell &d = wcell(x, b - 1, z);
         if (!(d.solid & 4)) {
@@ -1015,7 +1051,9 @@ void apply_cmd(const Cmd &c) {
     const int f = std::max(1, std::min(2, c.fluid));
     if (c.kind == K_SOURCE) {
         if (c_cap(cur) <= 0) return;
-        if (c_wet(cur) && c_fluid(cur) != f) return;
+        // Into another fluid's running (not source) cell: it takes its place,
+        // as a bucket of water poured on running lava does in Minecraft.
+        if (c_wet(cur) && c_fluid(cur) != f && c_kind(cur) == K_SOURCE) return;
         Cell n = cur;
         n.st = mk_st(f, K_SOURCE, false);
         n.amt = (uint8_t)c_cap(cur);
@@ -1051,11 +1089,19 @@ struct MeshBuf {
     PackedVector3Array v, n;
     PackedColorArray col;
     PackedInt32Array idx;
+    /// CUSTOM0 (RGBA float a vertex): x = how far below (+ above) its last
+    /// mesh's place the vertex was, metres -- the shader eases from there to
+    /// here over a tick, so water glides instead of jumping (no slide show).
+    PackedFloat32Array cus;
     void quad(const Vector3 &a, const Vector3 &b, const Vector3 &c, const Vector3 &d,
-            const Vector3 &nrm, const Color &cc) {
+            const Vector3 &nrm, const Color &cc, float da = 0.0f, float db = 0.0f,
+            float dc = 0.0f, float dd = 0.0f) {
         const int base = (int)v.size();
         v.push_back(a); v.push_back(b); v.push_back(c); v.push_back(d);
         for (int i = 0; i < 4; ++i) { n.push_back(nrm); col.push_back(cc); }
+        for (float e : { da, db, dc, dd }) {
+            cus.push_back(e); cus.push_back(0.0f); cus.push_back(0.0f); cus.push_back(0.0f);
+        }
         idx.push_back(base); idx.push_back(base + 1); idx.push_back(base + 2);
         idx.push_back(base); idx.push_back(base + 2); idx.push_back(base + 3);
     }
@@ -1066,6 +1112,7 @@ struct MeshBuf {
         a[Mesh::ARRAY_VERTEX] = v;
         a[Mesh::ARRAY_NORMAL] = n;
         a[Mesh::ARRAY_COLOR] = col;
+        a[Mesh::ARRAY_CUSTOM0] = cus;
         a[Mesh::ARRAY_INDEX] = idx;
         return a;
     }
@@ -1097,8 +1144,22 @@ float corner_h(int x, int b, int z, int cx, int cz, int fluid, int own) {
     return n > 0 ? sum / (float)n : (float)own;
 }
 
+/// Each tile's top corners as last meshed (metres), keyed by corner, course
+/// and fluid: the next mesh's vertices carry how far they moved since.
+std::unordered_map<int64_t, std::unordered_map<int64_t, float>> g_prev_tops;
+
 void mesh_tile(int tx, int tz, Array &water, Array &lava) {
     MeshBuf buf[3];
+    std::unordered_map<int64_t, float> &prev = g_prev_tops[tkey(tx, tz)];
+    std::unordered_map<int64_t, float> now;
+    // The corner (cx, cz) of course b's fluid f is at y now; it was at prev
+    // (or, new, at `base`, so a new cell rises from its floor).
+    auto moved = [&](int cx, int b, int cz, int f, float y, float base) -> float {
+        const int64_t k = pack3(cx, b * 4 + f, cz);
+        now[k] = y;
+        auto it = prev.find(k);
+        return (it != prev.end() ? it->second : base) - y;
+    };
     auto it = g_tile_secs.find(tkey(tx, tz));
     if (it != g_tile_secs.end()) {
         std::vector<int> sbs = it->second;
@@ -1169,7 +1230,9 @@ void mesh_tile(int tx, int tz, Array &water, Array &lava) {
                             Vector3 nrm = (d - a).cross(bb - a);
                             if (nrm.y < 0) nrm = -nrm;
                             nrm = nrm.normalized();
-                            m.quad(a, d, cq, bb, nrm, cc);
+                            const float yb0 = (float)bottom * P;
+                            m.quad(a, d, cq, bb, nrm, cc, moved(x, b, z, f, a.y, yb0), moved(x, b, z + 1, f, d.y, yb0),
+                                    moved(x + 1, b, z + 1, f, cq.y, yb0), moved(x + 1, b, z, f, bb.y, yb0));
                         }
                         // Sides: down to whatever covers the neighbour.
                         const float ch[4][2] = { { h10, h11 }, { h00, h01 }, { h01, h11 }, { h00, h10 } };
@@ -1191,8 +1254,11 @@ void mesh_tile(int tx, int tz, Array &water, Array &lava) {
                             else if (i == 2) { p0 = Vector3(x0, 0, z1); p1 = Vector3(x1, 0, z1); }
                             else { p0 = Vector3(x0, 0, z0); p1 = Vector3(x1, 0, z0); }
                             const Vector3 nrm((float)DX[i], 0.0f, (float)DZ[i]);
+                            const int c0x = (int)std::lround(p0.x / STUD_M), c0z = (int)std::lround(p0.z / STUD_M);
+                            const int c1x = (int)std::lround(p1.x / STUD_M), c1z = (int)std::lround(p1.z / STUD_M);
                             m.quad(Vector3(p0.x, y0, p0.z), Vector3(p1.x, y0, p1.z),
-                                    Vector3(p1.x, yb, p1.z), Vector3(p0.x, ya, p0.z), nrm, cc);
+                                    Vector3(p1.x, yb, p1.z), Vector3(p0.x, ya, p0.z), nrm, cc,
+                                    0.0f, 0.0f, moved(c1x, b, c1z, f, yb, y0), moved(c0x, b, c0z, f, ya, y0));
                         }
                         // Bottom over open air (a fall seen from under it).
                         if (floor_of(c.solid) == 0) {
@@ -1232,8 +1298,12 @@ void mesh_tile(int tx, int tz, Array &water, Array &lava) {
                         const float x0 = (float)(tx * SX + lx) * STUD_M, x1 = (float)(tx * SX + lx + w) * STUD_M;
                         const float z0 = (float)(tz * SX + lz) * STUD_M, z1 = (float)(tz * SX + lz + h) * STUD_M;
                         const float y = t.h * PLATE_M - TOP_SINK;
+                        const int cb = sb * SB + lb;
+                        const int gx0 = tx * SX + lx, gx1 = tx * SX + lx + w;
+                        const int gz0 = tz * SX + lz, gz1 = tz * SX + lz + h;
                         buf[t.f].quad(Vector3(x0, y, z0), Vector3(x0, y, z1), Vector3(x1, y, z1), Vector3(x1, y, z0),
-                                Vector3(0, 1, 0), t.c);
+                                Vector3(0, 1, 0), t.c, moved(gx0, cb, gz0, t.f, y, y), moved(gx0, cb, gz1, t.f, y, y),
+                                moved(gx1, cb, gz1, t.f, y, y), moved(gx1, cb, gz0, t.f, y, y));
                     }
                 }
             }
@@ -1241,6 +1311,7 @@ void mesh_tile(int tx, int tz, Array &water, Array &lava) {
     }
     water = buf[F_WATER].arrays();
     lava = buf[F_LAVA].arrays();
+    prev.swap(now);
 }
 
 /// The far mesh of a tile (MineWater.md 8): one flat quad per 4 x 4 studs at
@@ -1399,7 +1470,10 @@ void do_tick() {
         g_due_lava.clear();
         g_timers.clear();
     }
-    if (lava_tick() && !g_due_lava.empty()) {
+    // Waiting lava comes up every tick, but only to meet water (eval checks
+    // that first, then waits again till a lava tick to flow): a cell already
+    // queued is not woken again, so a source waiting there met water late.
+    if (!g_due_lava.empty()) {
         due.insert(due.end(), g_due_lava.begin(), g_due_lava.end());
         g_due_lava.clear();
     }
@@ -1626,6 +1700,7 @@ double BrickFluid::reset(double sea_m, bool sea_on) {
     g_mesh_requests.clear();
     g_far_requests.clear();
     g_landings.clear();
+    g_prev_tops.clear();
     g_log.clear();
     g_log_floor = g_writes.load();
     {
@@ -1727,9 +1802,13 @@ Dictionary BrickFluid::take() {
             meshes.append(d);
         }
         for (int32_t v : g_out_terrain) terr.push_back(v);
+        PackedInt32Array fire;
+        for (int32_t v : g_out_fire) fire.push_back(v);
+        out["fire"] = fire;
         mask = g_out_mask;
         g_out_meshes.clear();
         g_out_terrain.clear();
+        g_out_fire.clear();
         g_out_mask = false;
         g_have_results = false;
         if (mask) ++g_mask_version;

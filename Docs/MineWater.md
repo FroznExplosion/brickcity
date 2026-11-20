@@ -375,6 +375,35 @@ Not networked yet; what is in place so finishing it is wiring, not redesign.
 * Checked by `fluid_probe`: an authority's water, read from its log, rebuilt on a mirror
   that runs no rules (423 cells, 0 differ, 6.3 kB).
 
+### 11.6 Look and feel, round 2 (2026-11-19, from the user's notes)
+
+* **One water.** The fluid mesher's water is the sea's colour, the same however deep (it was
+  dark until thin, then light), with a texture laid in WORLD space: ripples that move the same
+  way everywhere and the sea's thin stud grid. It used to scroll along each cell's own flow,
+  so neighbouring cells slid different ways and the surface read as a mess. Thin water is no
+  longer dithered (the speckle of bricks through it was the "textures fighting"). Lava: one
+  crust drifting one way.
+* **No slide show.** Each vertex carries how far it moved since its tile's last mesh
+  (CUSTOM0); the shader eases it there over a tick (`swap_s` per instance, `now_s` from
+  the script). New cells rise from their floor. The water never edits the terrain; only lava
+  rock and fire do (terrain edits, so those tiles rebake).
+* **Minecraft's meeting, at once**: lava waiting for its slow tick still meets water every
+  tick -- a source touched by water is obsidian, running lava stone. Water poured on running
+  lava takes its place (a lava source cannot be poured over).
+* **Finite water joins the sea**: still water touching a source of its own fluid drains into
+  it, a tile a tick.
+* **Lava starts fires** (`scripts/water/lava_fire.gd`): wood and leaves next to lava catch,
+  burn a few seconds (flames, a light), set the wood and leaves touching them alight, then
+  burn away. Trees (TerrainTrees) are not terrain and do not burn yet.
+* **The swash** (water.gdshader): ground above still water gets the wave later the higher it
+  is, and less of it, so the water climbs a beach terrace by terrace instead of welling up
+  out of the sand. The swimmer's wave (BrickWave, CPU) does not have it: on a beach the two
+  differ by a few centimetres.
+* Found on the way: the mine world's new deep-cave darkening also darkened everything above
+  ground (its curve sat at 0.12 for negative depth); fixed to apply only below 7.5 m.
+* The `--gate=gen --with-collapse` crash happens with the water stopped too
+  (`--no-water`): it is the ground collapse's, not the water's.
+
 ## 12. What it costs (estimates — stage 1 and 5 measure them)
 
 | | Where | Estimate |

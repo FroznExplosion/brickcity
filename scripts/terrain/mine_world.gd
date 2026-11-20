@@ -773,8 +773,11 @@ func _day_night(delta: float, eye: Vector3) -> void:
 	if not _old_cave_light:
 		# On down past 7.5 m to CAVE_DEEP_LIGHT at 30 m: the deep caves
 		# (Docs/MineWorld.md 16) were lit like a shaded street.
-		cave = minf(cave, lerpf(0.12, CAVE_DEEP_LIGHT, clampf((under - 7.5) / 22.5, 0.0, 1.0)))
-		cave = maxf(cave, CAVE_DEEP_LIGHT)
+		# Only DOWN there: above ground `under` is negative, the curve sat at
+		# its 0.12 start and every daytime scene was cave-dark.
+		if under > 7.5:
+			cave = minf(cave, lerpf(0.12, CAVE_DEEP_LIGHT, clampf((under - 7.5) / 22.5, 0.0, 1.0)))
+			cave = maxf(cave, CAVE_DEEP_LIGHT)
 	_cave_light = cave
 	_rig.env.ambient_light_energy *= cave
 	# The ground casts no sun shadow, so the sun would reach into caves: it
@@ -2230,6 +2233,10 @@ func _run_water_gate() -> void:
 	lay.call(19, 13, 29, 13, w, w, dark)
 	lay.call(19, 5, 19, 13, w, w, dark)
 	lay.call(29, 5, 29, 13, w, w, dark)
+	# A wood block in the pool: lava sets it alight and it burns away.
+	var wood_id := BrickTerrain.material_names().find("wood")
+	lay.call(24, 7, 24, 7, w, w, wood_id)
+	lay.call(24, 7, 24, 7, w + 1, w + 1, wood_id)
 	var lava_src := [Vector3i(o.x + 22, w, o.y + 9), Vector3i(o.x + 26, w, o.y + 9)]
 	for c in lava_src:
 		BrickFluid.place(c, 2, BrickFluid.SOURCE, 3)
@@ -2244,7 +2251,7 @@ func _run_water_gate() -> void:
 	look.call(pm.call(14.0, w + 6.0, 1.0), pm.call(24.0, w, 9.0))
 	await _frames(40)
 	await _shot(dev + "water_lava_night.png")
-	print("[water-gate] lava pool: %d lava lights, %s" % [water.lava_lights(), water.report()])
+	print("[water-gate] lava pool: %d lava lights, %d burning, %s" % [water.lava_lights(), water.fires.burning.size(), water.report()])
 	_time = 0.42
 	view.process_mode = Node.PROCESS_MODE_INHERIT
 	_hud_layer.visible = true
@@ -2260,6 +2267,11 @@ func _run_water_gate() -> void:
 	for c in lava_src:
 		BrickFluid.remove(c, -1)
 	var rock0: int = water.rock_laid
+	for i in 600:
+		await get_tree().process_frame
+		if water.fires.burning.is_empty() and water.fires.burned > 0:
+			break
+	print("[water-gate] fire: %d plates of wood burned away, %d still burning" % [water.fires.burned, water.fires.burning.size()])
 	water.step(900)
 	await _frames(30)
 	var lava_left := 0
@@ -2427,6 +2439,17 @@ func _run_sea_gate() -> void:
 		view.arms.visible = false
 	_hud_layer.visible = false
 	await _shot(dev + "sea_coast.png")
+	# The beach close by, three times a second apart: the swash running up
+	# the sand and back (water.gdshader swash_delay).
+	var shore_m := Vector3((shore.x + 0.5) * stud, level, (shore.y + 0.5) * stud)
+	var along := Vector3(-dir.y, 0, dir.x)
+	walker.place(to_global(shore_m - Vector3(dir.x, 0, dir.y) * 3.0 + along * 4.0 + Vector3(0, 1.6, 0)),
+			(Vector3(dir.x, 0, dir.y) * 0.6 - along).normalized())
+	walker.pitch = -0.35
+	await _frames(40)
+	for k in 3:
+		await _shot(dev + "sea_beach_%d.png" % k)
+		await _frames(60)
 	# A river mouth: a river column under the sea line near the coast.
 	var river := Vector2i(1 << 30, 0)
 	for r in range(16, 900, 16):
@@ -2595,6 +2618,10 @@ func _run_gen_gate() -> void:
 	if pool.x == 1 << 30:
 		print("[gen-gate] FAIL no lava pool within 2000 studs")
 	else:
+		if "--no-water" in OS.get_cmdline_user_args():
+			# Bisecting a crash: the water stopped before the shaft is dug.
+			water.process_mode = Node.PROCESS_MODE_DISABLED
+			water.manual = true
 		# A shaft 4 x 4 down to just over the lava, to look into the cave.
 		var top := BrickTerrain.surface_plate(pool.x, pool.y)
 		for z in range(pool.y - 2, pool.y + 2):
