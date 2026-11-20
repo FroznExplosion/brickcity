@@ -2595,6 +2595,71 @@ Dictionary BrickTerrain::find_brick(Vector3 point, Vector3 normal) {
     return out;
 }
 
+Dictionary BrickTerrain::find_bricks(Vector3i lo, Vector3i hi) {
+    Dictionary out;
+    PackedInt32Array runs;
+    const int x0 = std::min(lo.x, hi.x), x1 = std::max(lo.x, hi.x);
+    const int z0 = std::min(lo.z, hi.z), z1 = std::max(lo.z, hi.z);
+    const int y0 = std::min(lo.y, hi.y), y1 = std::max(lo.y, hi.y);
+    // A pickaxe's reach, not a crater: refuse anything huge.
+    if ((int64_t)(x1 - x0 + 1) * (z1 - z0 + 1) > 4096 || y1 - y0 > 300) {
+        out["runs"] = runs;
+        return out;
+    }
+    for (int tz = floor_div(z0, TILE); tz <= floor_div(z1, TILE); ++tz) {
+        for (int tx = floor_div(x0, TILE); tx <= floor_div(x1, TILE); ++tx) {
+            TileSample s;
+            sample_tile(g_field, tx, tz, s);
+            std::vector<Piece> pieces;
+            std::vector<int32_t> owner;
+            brick::pack_tile(g_field, s, pieces, owner);
+            std::vector<uint8_t> taken(pieces.size(), 0);
+            const int ax0 = std::max(x0, tx * TILE), ax1 = std::min(x1, tx * TILE + TILE - 1);
+            const int az0 = std::max(z0, tz * TILE), az1 = std::min(z1, tz * TILE + TILE - 1);
+            for (int z = az0; z <= az1; ++z) {
+                for (int x = ax0; x <= ax1; ++x) {
+                    const int lx = x - tx * TILE, lz = z - tz * TILE;
+                    const int col_top = s.tp[TileSample::idx(lx, lz)];
+                    const int course = floor_div(col_top, PLATES_PER_CELL) * PLATES_PER_CELL;
+                    const int32_t o = owner[(size_t)lx + TILE * lz];
+                    int below_hi = y1;
+                    if (o >= 0) {
+                        below_hi = std::min(y1, course - 1);
+                        // The top course in the box: its whole piece, once.
+                        if (y1 >= course && y0 <= col_top && !taken[(size_t)o]) {
+                            taken[(size_t)o] = 1;
+                            const Piece &p = pieces[(size_t)o];
+                            for (int dz = 0; dz < p.sz; ++dz) {
+                                for (int dx = 0; dx < p.sx; ++dx) {
+                                    const int cx = p.ox + dx, cz = p.oz + dz;
+                                    const int t = s.tp[TileSample::idx(cx, cz)];
+                                    runs.push_back(tx * TILE + cx);
+                                    runs.push_back(tz * TILE + cz);
+                                    runs.push_back(floor_div(t, PLATES_PER_CELL) * PLATES_PER_CELL);
+                                    runs.push_back(t);
+                                }
+                            }
+                        }
+                    }
+                    // Under it (a wall, a cave face, the face of a pit): brick
+                    // cells, each whole.
+                    if (below_hi < y0) {
+                        continue;
+                    }
+                    for (int b = floor_div(y0, PLATES_PER_CELL); b <= floor_div(below_hi, PLATES_PER_CELL); ++b) {
+                        runs.push_back(x);
+                        runs.push_back(z);
+                        runs.push_back(b * PLATES_PER_CELL);
+                        runs.push_back(b * PLATES_PER_CELL + PLATES_PER_CELL - 1);
+                    }
+                }
+            }
+        }
+    }
+    out["runs"] = runs;
+    return out;
+}
+
 Dictionary BrickTerrain::clear_runs(const PackedInt32Array &runs) {
     Dictionary out;
     std::set<std::pair<int, int>> touched;
@@ -5807,6 +5872,8 @@ void BrickTerrain::_bind_methods() {
         &BrickTerrain::break_brick);
     ClassDB::bind_static_method("BrickTerrain", D_METHOD("find_brick", "point", "normal"),
         &BrickTerrain::find_brick);
+    ClassDB::bind_static_method("BrickTerrain", D_METHOD("find_bricks", "lo", "hi"),
+        &BrickTerrain::find_bricks);
     ClassDB::bind_static_method("BrickTerrain", D_METHOD("clear_runs", "runs"),
         &BrickTerrain::clear_runs);
     ClassDB::bind_static_method("BrickTerrain", D_METHOD("get_edits"), &BrickTerrain::get_edits);

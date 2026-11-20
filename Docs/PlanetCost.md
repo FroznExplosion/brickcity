@@ -222,9 +222,21 @@ Runs: editor closed; other chats' terrain runs were going between them (each win
 waited until no Godot ran and the chip was under 78 C). Peak 97 C, never held back; RAM fell
 to 0 MB free once (22:48, during another chat's run), so a worst frame then may be paging.
 
+**Ships and stations too (2026-11-20).** `SpaceStation` (every ship is one) draws its bands
+as boxes the same way: no bake, its stairs' faces on a worker, open studs a MultiMesh to 30 m.
+A piece that drifts off still gets its mesh from `build_chunk_mesh`, which bakes that small
+chunk itself. Gates headless: ship 9/0, dock 10/0, seat 14/0, debris 14/0, adrift 5/0, falling
+5/0, system 17/0, rocks 5/0, belt 6/0; hull 22/1 then 23/0 -- its one failure ("up from the seat
+in flight ... the pawn 1.3 m along its deck") fails on main the same way, without this change
+(flaky, Hulls area). The gangway is still one small baked mesh, made once.
+
+The quick cost gate now takes three pictures of the bricks as drawn: `shots/planet_cost_town`,
+`_wall` (8 m from a wall: its windows, stairs and furniture) and `_roof` (its studs). Checked
+by eye 2026-11-20: as the bricks should look.
+
 Left, smaller:
-- Ships' and stations' bands are still baked (`space_ship.gd`, `space_station.gd`): the same
-  change would do for them.
 - The load still has 240-530 ms frames (the spawn: the impostor bake, the brick shapes, the
-  first streaming), and the cost gate's own 5 km teleport back after the flights 100-330 ms.
+  first streaming). A fresh start is now dark over them (`PlanetScene._loading_veil`, as a saved
+  game's resume already was), lifted 20 frames after the player stands there, faded over 0.5 s.
+  The cost gate's own 5 km teleport back after the flights is 100-330 ms; play has no such jump.
 - Occluders measured within noise in this small town; they matter more in a big one.

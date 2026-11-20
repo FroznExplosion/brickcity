@@ -404,6 +404,26 @@ Not networked yet; what is in place so finishing it is wiring, not redesign.
 * The `--gate=gen --with-collapse` crash happens with the water stopped too
   (`--no-water`): it is the ground collapse's, not the water's.
 
+### 11.7 Cave pools redone, and what runs how often (2026-11-20)
+
+* **Cave pools** no longer fill a grid region under a level behind stone walls and floors (the
+  user: "floating rectangles filled with water", and one broken brick of a floor dropped it
+  all). A pool region now finds, for each cave cell, the lowest height water there would have
+  to reach to get out -- over the region's sides, down under it, or into open air (a priority
+  flood) -- and the cells under it are water: the dips of cave floors, each filled to its own
+  lip. Nothing is added to the ground. The water is STILL (a volume): broken into, a pool
+  spills what it holds and settles. Worked out a region at a time on the water's thread and
+  cached; the main thread only reads what is known. Fewer and smaller pools than before.
+* **Per frame, the water now does less**: tile meshes swap six a frame at most, nearest first
+  (a tick could put 24 uploads in one frame); a tick's lava rock is one terrain edit, not one
+  per cell (each was a tile rebuild and a collapse survey); lava burns pawns at 10 Hz; the
+  floaters see half the bodies a physics tick (force doubled) and reject a body nowhere near
+  fluid with one native call (`BrickFluid.ocean_at`, no Dictionary). The rules run at 10 Hz
+  on the water's own thread, as before.
+* Not the water's, for the collapse's chat: the survey (`TerrainCollapse.survey`, on a
+  worker) took 2.5 s; tile rebuilds after the edits it makes cost the streamer 150 ms frames;
+  whole cave ceilings come down for one brick (ground strength `TERRAIN_TIMES`).
+
 ## 12. What it costs (estimates — stage 1 and 5 measure them)
 
 | | Where | Estimate |

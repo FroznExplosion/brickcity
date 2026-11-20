@@ -92,6 +92,9 @@ var floaters: Node = null
 ## What lava set alight (lava_fire.gd).
 var fires: Node3D = null
 var _lights := {}                      ## Vector2i -> OmniLight3D
+var _burn_in := 0.0
+var _queued_meshes := {}               ## Vector2i -> a take()'s mesh entry
+const MESH_SWAPS_PER_FRAME := 6
 var _spare_lights: Array[OmniLight3D] = []
 
 
@@ -136,6 +139,7 @@ func reset_world(sea_m: float, near_tiles: int, p_sea_on: bool, p_wave_scale := 
 	rock_laid = 0
 	field_moves = 0
 	_primed.clear()
+	_queued_meshes.clear()
 	if fires != null:
 		fires.clear()
 	primed_count = 0
@@ -211,35 +215,63 @@ func _process_body(delta: float) -> void:
 	if sea != null:
 		sea.follow(eye, delta)
 		_follow_field(delta)
+	_swap_some()
 	_underwater(eye)
-	_burn(delta)
+	_burn_in -= delta
+	if _burn_in <= 0.0:
+		# Lava burns at ten checks a second: every pawn every frame was waste.
+		_burn(0.1 - _burn_in)
+		_burn_in = 0.1
 
 
 ## The gate's clock: `ticks` ticks now, then what they built.
 func step(ticks: int) -> void:
 	BrickFluid.tick_now(ticks)
 	apply(BrickFluid.take())
+	while not _queued_meshes.is_empty():
+		_swap_some()
 
 
 func apply(res: Dictionary) -> void:
 	var fire: PackedInt32Array = res.get("fire", PackedInt32Array())
 	for i in range(0, fire.size(), 3):
 		fires.ignite(Vector3i(fire[i], fire[i + 1], fire[i + 2]))
+	# Meshes are swapped a few a frame (_swap_some): a tick that remeshed 24
+	# tiles put 24 uploads in one frame. A newer mesh of a tile replaces one
+	# still waiting.
 	for m in res.get("meshes", []):
-		_show(m.tile, m.water, m.lava)
-		_tile_far[m.tile] = bool(m.get("far", false))
-		_lod_pending.erase(m.tile)
+		_queued_meshes[m.tile] = m
 	if sea != null and bool(res.get("mask_changed", false)):
 		sea.fluid_mask_dirty = true
 	# Rock the lava made: (x, z, first plate, last plate, material) a cell.
+	# All of a tick's rock is ONE terrain edit (one box, the tiles merged): a
+	# cell at a time was a tile rebuild and a collapse survey per cell.
 	var terr: PackedInt32Array = res.get("terrain", PackedInt32Array())
+	if terr.is_empty():
+		return
+	var tiles := {}
+	var blo := Vector3i(1 << 30, 1 << 30, 1 << 30)
+	var bhi := -blo
+	var any := 0
 	for i in range(0, terr.size(), 5):
 		var lo := Vector3i(terr[i], terr[i + 2], terr[i + 1])
 		var hi := Vector3i(terr[i], terr[i + 3], terr[i + 1])
 		var r: Dictionary = BrickTerrain.fill_box(lo, hi, terr[i + 4], true)
-		if int(r.get("changed", 0)) > 0:
-			rock_laid += 1
-			host.terrain_edited(r)
+		if int(r.get("changed", 0)) <= 0:
+			continue
+		any += 1
+		rock_laid += 1
+		var tl: PackedInt32Array = r["tiles"]
+		for k in range(0, tl.size(), 2):
+			tiles[Vector2i(tl[k], tl[k + 1])] = true
+		blo = Vector3i(mini(blo.x, lo.x), mini(blo.y, lo.y), mini(blo.z, lo.z))
+		bhi = Vector3i(maxi(bhi.x, hi.x), maxi(bhi.y, hi.y), maxi(bhi.z, hi.z))
+	if any > 0:
+		var flat := PackedInt32Array()
+		for k in tiles:
+			flat.append(k.x)
+			flat.append(k.y)
+		host.terrain_edited({"tiles": flat, "box_lo": blo, "box_hi": bhi, "changed": any})
 
 
 ## An edit's result (fill_box, carve, clear_runs): its plate box. Ground
@@ -304,8 +336,8 @@ func surface_at(p: Vector3) -> float:
 	var level := BrickFluid.get_sea_level()
 	if p.y < level - 3.0 or p.y > level + 3.0:
 		return s
-	var c: Dictionary = BrickFluid.cell_info(BrickFluid.cell_of(Vector3(p.x, level - 0.2, p.z)))
-	if int(c.fluid) == 1 and bool(c.ocean):
+	# One native call (it built a Dictionary a query, many a frame).
+	if BrickFluid.ocean_at(p):
 		return maxf(s, float(sea.surface_at(p)))
 	return s
 
@@ -366,6 +398,25 @@ func _burn(delta: float) -> void:
 
 # ---------------------------------------------------------------------------
 # Meshes
+
+## A few of the waiting meshes into their tiles, nearest the eye first.
+func _swap_some() -> void:
+	if _queued_meshes.is_empty():
+		return
+	var keys := _queued_meshes.keys()
+	if keys.size() > MESH_SWAPS_PER_FRAME:
+		var e: Vector3 = host._eye()
+		var tm := TILE_STUDS * BrickWorld.get_stud_metres()
+		var c := Vector2(e.x / tm, e.z / tm)
+		keys.sort_custom(func(a: Vector2i, b: Vector2i) -> bool:
+			return (Vector2(a) - c).length_squared() < (Vector2(b) - c).length_squared())
+	for i in mini(MESH_SWAPS_PER_FRAME, keys.size()):
+		var m: Dictionary = _queued_meshes[keys[i]]
+		_queued_meshes.erase(keys[i])
+		_show(m.tile, m.water, m.lava)
+		_tile_far[m.tile] = bool(m.get("far", false))
+		_lod_pending.erase(m.tile)
+
 
 func _show(tile: Vector2i, water: Array, lava: Array) -> void:
 	if water.is_empty() and lava.is_empty():
