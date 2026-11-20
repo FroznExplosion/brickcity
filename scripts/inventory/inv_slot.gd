@@ -4,6 +4,10 @@ extends Control
 ## stack at `addr` in `inv` (or, a creative slot, the catalog item `item_id`)
 ## and says when it is pressed or hovered. The screen does the rules.
 ##
+## The icon (ItemIcons) spins while the mouse is on the slot, grows 1.18x,
+## and eases home when it leaves -- zylanntest's SlotHoverFx. `spin_always`
+## (the HUD's hand slot) keeps it turning.
+##
 ## Knows nothing of the screen (signals only): the screen types InvSlot, so
 ## this must not type the screen back (a class_name cycle leaks and crashes
 ## the quit, see memory "GDScript class cycle").
@@ -18,7 +22,21 @@ var addr := {}
 var item_id: StringName = &""
 ## Outlined: the hand's slot, or the active off-hand.
 var selected := false
+## Spin whether hovered or not (the HUD's hand slot).
+var spin_always := false:
+	set(v):
+		spin_always = v
+		if v:
+			set_process(true)
+## The slot's number, drawn top left (the HUD), or "".
+var number := ""
 var _hot := false
+var _angle := 0.0
+var _grow := 1.0
+
+const SPIN := 2.4
+const SETTLE := 9.0
+const HOVER_SCALE := 1.18
 
 
 static func make(p_inv: Inventory, p_addr: Dictionary, p_item := &"") -> InvSlot:
@@ -33,8 +51,10 @@ static func make(p_inv: Inventory, p_addr: Dictionary, p_item := &"") -> InvSlot
 
 
 func _ready() -> void:
+	set_process(spin_always)
 	mouse_entered.connect(func() -> void:
 		_hot = true
+		set_process(true)
 		hovered.emit(self)
 		queue_redraw())
 	mouse_exited.connect(func() -> void:
@@ -47,6 +67,21 @@ func stack() -> ItemStack:
 	if addr.is_empty():
 		return ItemStack.make(item_id, ItemCatalog.max_stack(item_id)) if item_id != &"" else null
 	return inv.get_slot(addr) if inv != null else null
+
+
+func _process(delta: float) -> void:
+	var on := _hot or spin_always
+	if on:
+		_angle = fposmod(_angle + SPIN * delta, TAU)
+	else:
+		_angle = lerp_angle(_angle, 0.0, clampf(SETTLE * delta, 0.0, 1.0))
+	var want := HOVER_SCALE if _hot else 1.0
+	_grow = lerpf(_grow, want, clampf(10.0 * delta, 0.0, 1.0))
+	if not on and absf(wrapf(_angle, -PI, PI)) < 0.02 and absf(_grow - 1.0) < 0.003:
+		_angle = 0.0
+		_grow = 1.0
+		set_process(false)
+	queue_redraw()
 
 
 func _gui_input(event: InputEvent) -> void:
@@ -68,24 +103,36 @@ func _draw() -> void:
 		extra = inv.drag_amount_for(addr)
 		if s == null and extra > 0:
 			s = ItemStack.make(inv.cursor.id, 0, inv.cursor.data)
-	draw_stack(self, r, s, extra, addr.is_empty() or (inv != null and inv.creative))
+	draw_stack(self, r, s, extra, addr.is_empty() or (inv != null and inv.creative), _angle, _grow)
+	if not number.is_empty():
+		var font: Font = ThemeDB.fallback_font
+		var fs := int(size.y * 0.24)
+		draw_string_outline(font, Vector2(3, fs + 1), number, HORIZONTAL_ALIGNMENT_LEFT, -1, fs, 3, Color.BLACK)
+		draw_string(font, Vector2(3, fs + 1), number, HORIZONTAL_ALIGNMENT_LEFT, -1, fs, Color.WHITE)
 
 
-## A stack's icon in `r`: a swatch of its colour, its glyph, its count (plus
-## `extra` a drag would add, shown faint). Shared with the cursor.
-## `endless`: a creative block, no count.
-static func draw_stack(ci: CanvasItem, r: Rect2, s: ItemStack, extra := 0, endless := false) -> void:
+## A stack's icon in `r`: its rendered icon turned `angle` and grown `grow`
+## (ItemIcons), or without icons a swatch of its colour and its glyph; then
+## its count (plus `extra` a drag would add, shown gold). Shared with the
+## cursor and the HUD. `endless`: a creative block, no count.
+static func draw_stack(ci: CanvasItem, r: Rect2, s: ItemStack, extra := 0, endless := false,
+		angle := 0.0, grow := 1.0) -> void:
 	if s == null or s.id == &"":
 		return
 	var d := ItemCatalog.get_def(s.id)
-	var inner := r.grow(-r.size.x * 0.2)
-	var col: Color = d.get("colour", Color.WHITE)
-	if s.count <= 0:
-		col.a = 0.45
-	ci.draw_rect(inner, col)
-	ci.draw_rect(inner, col.darkened(0.45), false, 1.0)
 	var font: Font = ThemeDB.fallback_font
+	var tint := Color(1, 1, 1, 0.45 if s.count <= 0 else 1.0)
+	var icon := r.grow(-r.size.x * 0.06)
+	icon = Rect2(icon.get_center() - icon.size * grow * 0.5, icon.size * grow)
 	var g := str(d.get("glyph", ""))
+	if ItemIcons.draw_icon(ci, icon, s.id, angle, tint):
+		g = ""
+	else:
+		var inner := r.grow(-r.size.x * 0.2)
+		var col: Color = d.get("colour", Color.WHITE)
+		col.a = tint.a
+		ci.draw_rect(inner, col)
+		ci.draw_rect(inner, col.darkened(0.45), false, 1.0)
 	if not g.is_empty():
 		var fs := int(r.size.y * 0.36)
 		var gs := font.get_string_size(g, HORIZONTAL_ALIGNMENT_LEFT, -1, fs)

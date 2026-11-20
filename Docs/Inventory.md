@@ -4,7 +4,7 @@ Ported from zylanntest's `game/inventory/` (its README is the design this
 follows), shaped to brickcity: content packs, MenuScreen, no renderer
 read-backs, and the arsenal left alone.
 
-Status: stages 1-3 built (branch `mine-inventory`). Stages 4-5 next.
+Status: stages 1-4 built (branch `mine-inventory`). Stage 5 (chests) next.
 
 ## 1. Two systems, one pair of hands
 
@@ -133,14 +133,22 @@ The inventory is saved in the mine world's save folder beside the edits
    camera's way so the pawn's controller and the arsenal go quiet; on foot
    the pawn still falls and swims. A stack still held on close goes back to
    storage; no room = lost until dropped items (stage 5).
-4. **Icons that spin.** Icons rendered at LOAD time: block items a bevelled
-   brick of their colour, items with a mesh their mesh -- one SubViewport
-   renders them all one after another as the catalog loads (a strip of
-   frames per item for the spin), kept as textures. No `get_image()` in play
-   (CLAUDE.md): the frames are the viewport's own texture, copied with
-   `RenderingServer.texture_2d_get` only at load. zylanntest spins a slot
-   only while the mouse is on it (SlotHoverFx: grows 1.18x, spins, eases back
-   home), at most 3 at once; same here, and the held hotbar slot spins too.
+4. **Icons that spin.** **Built** (`scripts/inventory/item_icons.gd`). At
+   load the mine world renders every catalog item ONCE: each item a small
+   model (a 2x2 brick of the block's colour, a translucent block for a fluid,
+   a bucket, a pickaxe, a chest, a box for anything else), laid out 32 times
+   in a row, each copy turned a further 1/32 of a circle, one row an item, in
+   one SubViewport with an orthographic 3/4 camera -- one render draws every
+   icon and every spin frame (56 px a frame; about 40 items is 1792 x 2240).
+   The viewport keeps what it drew (UPDATE_ONCE) and slots draw their frame
+   straight from its texture: no `get_image()`, no read-back, no viewport a
+   slot (CLAUDE.md, Docs/WhereWorkRuns.md). InvSlot spins only while the mouse
+   is on it, grows 1.18x and eases home after (zylanntest's SlotHoverFx;
+   no cap on how many, since a frame is only a texture region). The HUD
+   uses InvSlot too and spins the hand's slot. Headless: no icons, swatches.
+   Cost, once at load: ~120 ms to build the 1280 copies (~5600 mesh
+   instances, 2026-11-20) and ~20 ms to free them after the render.
+   A pack item with its own model (a brick build) is for later: `_model`.
 5. **Chests.** A chest item places a chest (a small build of bricks on the
    block lattice, not a terrain material, so the terrain C++ is untouched);
    RMB opens it in the inventory screen beside your storage (27 slots).

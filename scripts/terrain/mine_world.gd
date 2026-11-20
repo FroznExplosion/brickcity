@@ -164,6 +164,7 @@ func _ready() -> void:
 	add_child(builder)
 	builder.setup(self, _hud_layer)
 	builder.inv.changed.connect(_on_inventory_changed)
+	_build_item_icons()
 	debris = Debris.new()
 	debris.name = "Debris"
 	add_child(debris)
@@ -1125,6 +1126,17 @@ func _on_inventory_changed() -> void:
 	_inv_dirty = true
 
 
+## The items' icons and spin frames, rendered once as the scene loads
+## (ItemIcons: one render, no read-back); the HUD redraws with them.
+func _build_item_icons() -> void:
+	var t0 := Time.get_ticks_usec()
+	await ItemIcons.build(self)
+	print("[mine] item icons: %s in %.0f ms" % ["%d items x %d frames" % [ItemCatalog.ids().size(),
+			ItemIcons.FRAMES] if ItemIcons.ready else "none (no renderer)", (Time.get_ticks_usec() - t0) / 1000.0])
+	if builder != null:
+		builder._refresh_bar()
+
+
 ## Write the changes if there are any unsaved. `wait`: now, on this thread
 ## (leaving, generating); otherwise on a worker, checked next frame.
 func save_edits(wait := false) -> void:
@@ -1408,6 +1420,12 @@ func _run_inventory_gate() -> void:
 	await _frames(20)
 	builder.gate_keys = true
 	var inv: Inventory = builder.inv
+	var waited := 0
+	while not ItemIcons.ready and waited < 120:
+		await _frames(1)
+		waited += 1
+	check.call("item icons rendered at load (stage 4)", ItemIcons.ready and ItemIcons.has_icon(&"granite")
+			and ItemIcons.has_icon(&"bucket"))
 	await _key(KEY_B)
 	check.call("B: the items hands", builder.active)
 	await _key(KEY_E)
@@ -1425,6 +1443,14 @@ func _run_inventory_gate() -> void:
 			inv.hotbars[1][2] != null and inv.hotbars[1][2].id == &"granite"
 			and inv.cursor != null and inv.cursor.id == &"water_source")
 	await _shot(UserPaths.DEV + "inv_creative.png")
+	# The slot under the mouse spins (zylanntest's hover): a moment later it
+	# shows another frame.
+	var spun: InvSlot = _inv_slot(scr, Inventory.addr(&"hotbar_1", 2))
+	var a0: float = spun.get("_angle")
+	await _frames(20)
+	var a1: float = spun.get("_angle")
+	check.call("the hovered slot spins (%.2f -> %.2f rad)" % [a0, a1], absf(wrapf(a1 - a0, -PI, PI)) > 0.2)
+	await _shot(UserPaths.DEV + "inv_spin.png")
 	await _click(_inv_slot(scr, {}, &"dirt").get_global_rect().get_center())
 	check.call("a held stack clicked on the catalog is thrown away", inv.cursor == null)
 	# A left drag spreads a stack: sand over the first three storage slots
