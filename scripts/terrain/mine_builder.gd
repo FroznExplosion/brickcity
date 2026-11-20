@@ -13,6 +13,7 @@ extends Node3D
 ##   1-9, wheel   a slot of the active hotbar
 ##   X        tap: the other hotbar; held: the other off-hand slot
 ##   Z        block size: 2x2, 1x1 or 4x4 studs, one brick tall
+##   E, Tab   the inventory screen (host.toggle_inventory; InventoryScreen)
 ##
 ## The guns are the arsenal's and stay there: with the items in hand the gun
 ## neither fires nor aims (PlayerController.hold_fire) and is put away, and
@@ -70,6 +71,8 @@ var _hold_place := 0.0
 ## X: when it went down (ms), or -1; and whether this hold already swapped the off-hand.
 var _x_down := -1
 var _x_held_used := false
+## A gate that tests the keys the player's way (--gate=inventory) turns this on.
+var gate_keys := false
 
 
 func setup(p_host: Node, hud_layer: CanvasLayer) -> void:
@@ -160,7 +163,10 @@ func on_mode_changed() -> void:
 # Input: first, before the arsenal, the camera and the walker see it.
 
 func _input(event: InputEvent) -> void:
-	if host == null or host.get("_gate") or host.get("_menu") != null:
+	if host == null or host.get("_menu") != null or host.inventory_open():
+		return
+	# A gate drives the hands itself; it may send the keys it tests (gate_keys).
+	if host.get("_gate") and not gate_keys:
 		return
 	if event is InputEventKey and not event.echo:
 		var k := (event as InputEventKey).keycode
@@ -178,6 +184,9 @@ func _input(event: InputEvent) -> void:
 				if _x_down >= 0 and not _x_held_used:
 					inv.toggle_hotbar()
 				_x_down = -1
+			get_viewport().set_input_as_handled()
+		elif event.pressed and (k == KEY_E or k == KEY_TAB):
+			host.toggle_inventory()
 			get_viewport().set_input_as_handled()
 		elif event.pressed and k == KEY_Z:
 			size_i = (size_i + 1) % SIZES.size()

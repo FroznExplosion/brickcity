@@ -83,6 +83,12 @@ var water: Node3D = null
 var _break_jobs: Array = []
 const MAX_BREAK_JOBS := 12
 var _menu_cam_captured := false
+## The inventory screen (Docs/Inventory.md 4, stage 3) and its layer, or null.
+var _inv_screen: InventoryScreen = null
+var _inv_layer: CanvasLayer = null
+var _inv_cam_captured := false
+var _inv_prev_mouse := Input.MOUSE_MODE_VISIBLE
+var _inv_walker_frozen := false
 
 ## Saving the world's changes (Docs/MineWorld.md 9): one file per seed and
 ## generator settings, under UserPaths.SAVES (a scripted pass: user://dev/).
@@ -190,6 +196,8 @@ func _ready() -> void:
 			_run_gen_gate()
 		elif "--gate=menu" in OS.get_cmdline_user_args():
 			_run_menu_gate()
+		elif "--gate=inventory" in OS.get_cmdline_user_args():
+			_run_inventory_gate()
 		elif "--gate=look" in OS.get_cmdline_user_args():
 			_run_look_gate()
 		elif "--gate=cave" in OS.get_cmdline_user_args():
@@ -921,6 +929,60 @@ func menu_is_open() -> bool:
 	return _menu != null
 
 
+## The inventory screen (E or Tab from the items hands). Unlike the world
+## generation menu the world keeps running, Minecraft's way: the screen takes
+## every key while open (InventoryScreen._input), the mouse is freed the
+## camera's own way (so the pawn's controller and the arsenal, which act only
+## on a captured mouse, go quiet), and the flight is held (`walker.frozen`:
+## it reads WASD itself). On foot the pawn still falls, swims, is hit.
+func toggle_inventory() -> void:
+	if _inv_screen != null:
+		_inv_screen.close_screen()
+		return
+	if _menu != null:
+		return
+	_inv_prev_mouse = Input.mouse_mode
+	_inv_layer = CanvasLayer.new()
+	_inv_layer.name = "InventoryLayer"
+	_inv_layer.layer = 70
+	_inv_layer.process_mode = Node.PROCESS_MODE_ALWAYS
+	add_child(_inv_layer)
+	_inv_screen = InventoryScreen.new()
+	_inv_screen.name = "InventoryScreen"
+	_inv_screen.setup(builder.inv, self)
+	_inv_layer.add_child(_inv_screen)
+	# The hotbars are in the screen; the HUD behind it would only clutter it.
+	_hud_layer.visible = false
+	if walker != null:
+		_inv_walker_frozen = walker.frozen
+		if not on_foot:
+			walker.frozen = true
+	_inv_cam_captured = cam != null and bool(cam.get("_captured"))
+	if cam != null:
+		cam._set_captured(false)
+	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
+
+
+func inventory_closed() -> void:
+	_inv_screen = null
+	_hud_layer.visible = true
+	if _inv_layer != null:
+		_inv_layer.queue_free()
+		_inv_layer = null
+	if walker != null:
+		walker.frozen = _inv_walker_frozen
+	if PlayerCamera.hands_off:
+		return
+	if _inv_cam_captured and cam != null:
+		cam._set_captured(true)
+	elif _inv_prev_mouse == Input.MOUSE_MODE_CAPTURED:
+		Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
+
+
+func inventory_open() -> bool:
+	return _inv_screen != null
+
+
 # ---------------------------------------------------------------------------
 # The pause menu (Escape): the game's own (menu/core/MenuManager.gd), allowed
 # here through terrain_scene.gd and BrickcityMenuHost's scene hooks.
@@ -930,7 +992,7 @@ var _gate_pause_ok := false
 
 
 func pause_allowed() -> bool:
-	return (not _gate or _gate_pause_ok) and _menu == null
+	return (not _gate or _gate_pause_ok) and _menu == null and _inv_screen == null
 
 
 ## Entries this scene adds to the pause menu.
@@ -1319,6 +1381,188 @@ func _key(code: Key) -> void:
 		k.pressed = down
 		Input.parse_input_event(k)
 		await _frames(3)
+
+
+## -- --gate=inventory (Docs/Inventory.md 5): the items hands and the
+## inventory screen driven the player's way -- real key and mouse events
+## through the engine's input. B, E; the Creative tab; a catalog item taken
+## and put in hotbar 2; a stack spread over three slots by a drag; Escape puts
+## the held stack back; 1-9 over a slot sends it to the hotbar; the screen
+## fits 640x400 (MenuFit.audit); E closes; X and 3 put hotbar 2's item in the
+## hand and RMB places it; the inventory comes back after saving and
+## generating the world again. Prints INV-GATE PASS/FAIL.
+func _run_inventory_gate() -> void:
+	var fails: Array[String] = []
+	var check := func(what: String, ok: bool) -> void:
+		print("[inv-gate] %s %s" % ["ok  " if ok else "FAIL", what])
+		if not ok:
+			fails.append(what)
+	await _frames(30)
+	var e := _eye()
+	var stud := BrickWorld.get_stud_metres()
+	var c := Vector2i(floori(e.x / stud), floori(e.z / stud))
+	var g := _ground_m(c.x, c.y)
+	set_on_foot(false)
+	_fly_to(Vector3(e.x, g + 2.4, e.z), Vector3(0, 0, -1))
+	walker.pitch = -0.75
+	await _frames(20)
+	builder.gate_keys = true
+	var inv: Inventory = builder.inv
+	await _key(KEY_B)
+	check.call("B: the items hands", builder.active)
+	await _key(KEY_E)
+	check.call("E: the inventory screen opens", inventory_open())
+	await _frames(5)
+	var scr := _inv_screen
+	var tab: Button = scr.get("_tab_creative")
+	await _click(tab.get_global_rect().get_center())
+	check.call("the Creative tab shows the catalog", scr.page == "creative")
+	await _click(_inv_slot(scr, {}, &"granite").get_global_rect().get_center())
+	check.call("a catalog item comes onto the cursor, a full stack",
+			inv.cursor != null and inv.cursor.id == &"granite" and inv.cursor.count == 64)
+	await _click(_inv_slot(scr, Inventory.addr(&"hotbar_1", 2)).get_global_rect().get_center())
+	check.call("... and swaps with what hotbar 2 slot 3 held (water source now held)",
+			inv.hotbars[1][2] != null and inv.hotbars[1][2].id == &"granite"
+			and inv.cursor != null and inv.cursor.id == &"water_source")
+	await _shot(UserPaths.DEV + "inv_creative.png")
+	await _click(_inv_slot(scr, {}, &"dirt").get_global_rect().get_center())
+	check.call("a held stack clicked on the catalog is thrown away", inv.cursor == null)
+	# A left drag spreads a stack: sand over the first three storage slots
+	# (storage starts empty; the hotbars are the kit's).
+	await _click(_inv_slot(scr, {}, &"sand").get_global_rect().get_center())
+	await _shot(UserPaths.DEV + "inv_held.png")
+	var tab_s: Button = scr.get("_tab_storage")
+	await _click(tab_s.get_global_rect().get_center())
+	check.call("the Storage tab, the stack still held", scr.page == "storage" and inv.cursor != null)
+	var pts: Array[Vector2] = []
+	for i in [0, 1, 2]:
+		pts.append(_inv_slot(scr, Inventory.addr(&"main", i)).get_global_rect().get_center())
+	await _gate_drag(pts)
+	var spread := [inv.main[0], inv.main[1], inv.main[2]]
+	check.call("a left drag spreads 64 sand over 3 slots (21 each, 1 held)",
+			spread.all(func(s): return s != null and s.id == &"sand" and s.count == 21)
+			and inv.cursor != null and inv.cursor.count == 1)
+	var held_before := inv.cursor != null
+	await _key(KEY_ESCAPE)
+	check.call("Escape with a stack held puts it back and keeps the screen open",
+			held_before and inv.cursor == null and inventory_open())
+	if not inventory_open():
+		print("[inv-gate] INV-GATE FAIL: the screen closed early")
+		get_tree().quit(1)
+		return
+	check.call("... onto its own kind first (storage slot 1: 22)",
+			inv.main[0] != null and inv.main[0].count == 22)
+	# Left click picks a stack up, left click on an empty slot puts it down.
+	await _click(_inv_slot(scr, Inventory.addr(&"main", 2)).get_global_rect().get_center())
+	await _click(_inv_slot(scr, Inventory.addr(&"main", 5)).get_global_rect().get_center())
+	var moved: bool = inv.main[2] == null and inv.main[5] != null and inv.main[5].id == &"sand" and inv.cursor == null
+	check.call("a stack picked up and put down in another slot", moved)
+	if moved:
+		var over := _inv_slot(scr, Inventory.addr(&"main", 5)).get_global_rect().get_center()
+		var m := InputEventMouseMotion.new()
+		m.position = over
+		m.global_position = over
+		Input.parse_input_event(m)
+		await _frames(2)
+		await _key(KEY_9)
+		check.call("9 over a storage slot sends it to hotbar 1 slot 9 (its terracotta to storage)",
+				inv.hotbars[0][8] != null and inv.hotbars[0][8].id == &"sand"
+				and inv.main[5] != null and inv.main[5].id == &"terracotta")
+	# Fits a small window.
+	var win := get_window()
+	var size0 := win.size
+	for small in [Vector2i(800, 450), Vector2i(640, 400)]:
+		win.size = small
+		await _frames(10)
+		var vp := get_viewport().get_visible_rect()
+		var cut: Array = MenuFit.audit(scr, vp)
+		var close: Button = scr.find_child("Close", true, false)
+		check.call("window %s: nothing cut off (%d)%s, Close inside" % [small, cut.size(),
+				"" if cut.is_empty() else "\n" + MenuFit.describe(cut)],
+				cut.is_empty() and vp.encloses(close.get_global_rect()))
+		await _shot(UserPaths.DEV + "inv_%dx%d.png" % [small.x, small.y])
+	win.size = size0
+	await _frames(10)
+	await _key(KEY_E)
+	check.call("E closes the screen", not inventory_open())
+	# Hotbar 2 into the hand, its third slot, and place it.
+	var bar0 := inv.active_hotbar
+	await _key(KEY_X)
+	await _frames(3)
+	check.call("X (tap): the other hotbar", inv.active_hotbar == 1 - bar0)
+	if inv.active_hotbar != 1:
+		inv.toggle_hotbar()
+	await _key(KEY_3)
+	check.call("3: granite in the hand", inv.hand() != null and inv.hand().id == &"granite")
+	builder.update_target()
+	var placed: bool = builder.place_target()
+	await _frames(10)
+	builder.update_target()
+	var names := BrickTerrain.material_names()
+	var m_id := int(builder.target.get("material", -1))
+	check.call("RMB placed it: the block looked at is %s" % (names[m_id] if m_id >= 0 else "nothing"),
+			placed and m_id >= 0 and names[m_id] == "granite")
+	await _shot(UserPaths.DEV + "inv_hotbar.png")
+	# Saved with the world, back after generating it again.
+	_edits_dirty = true
+	save_edits(true)
+	var again := settings.duplicate(true)
+	settings = {}
+	generate(again)
+	await _frames(20)
+	inv = builder.inv
+	check.call("after generating again: granite in hotbar 2 slot 3, sand in hotbar 1 slot 9, terracotta in storage",
+			inv.hotbars[1][2] != null and inv.hotbars[1][2].id == &"granite"
+			and inv.hotbars[0][8] != null and inv.hotbars[0][8].id == &"sand"
+			and inv.main[5] != null and inv.main[5].id == &"terracotta")
+	builder.set_active(false)
+	builder.gate_keys = false
+	print("[inv-gate] INV-GATE %s (%d failed)%s" % ["PASS" if fails.is_empty() else "FAIL",
+			fails.size(), "" if fails.is_empty() else ": " + ", ".join(fails)])
+	get_tree().quit(0 if fails.is_empty() else 1)
+
+
+func _inv_slot(scr: InventoryScreen, a: Dictionary, item := &"") -> InvSlot:
+	for s in scr.find_children("*", "InvSlot", true, false):
+		var slot := s as InvSlot
+		if a.is_empty() and slot.addr.is_empty() and slot.item_id == item:
+			return slot
+		if not a.is_empty() and not slot.addr.is_empty() and slot.addr.area == a.area \
+				and slot.addr.index == a.index:
+			return slot
+	return null
+
+
+## A left-button drag through `pts`, real events: press at the first, moves
+## with the button held, release at the last.
+func _gate_drag(pts: Array[Vector2]) -> void:
+	var m := InputEventMouseMotion.new()
+	m.position = pts[0]
+	m.global_position = pts[0]
+	Input.parse_input_event(m)
+	await _frames(2)
+	var b := InputEventMouseButton.new()
+	b.button_index = MOUSE_BUTTON_LEFT
+	b.position = pts[0]
+	b.global_position = pts[0]
+	b.pressed = true
+	b.button_mask = MOUSE_BUTTON_MASK_LEFT
+	Input.parse_input_event(b)
+	await _frames(2)
+	for p in pts.slice(1):
+		m = InputEventMouseMotion.new()
+		m.position = p
+		m.global_position = p
+		m.button_mask = MOUSE_BUTTON_MASK_LEFT
+		Input.parse_input_event(m)
+		await _frames(2)
+	b = b.duplicate()
+	b.position = pts[-1]
+	b.global_position = pts[-1]
+	b.pressed = false
+	b.button_mask = 0
+	Input.parse_input_event(b)
+	await _frames(3)
 
 
 ## -- --gate=look: the same close view of the ground four ways -- FXAA on and

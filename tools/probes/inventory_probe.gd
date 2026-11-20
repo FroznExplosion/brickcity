@@ -42,11 +42,36 @@ func _init() -> void:
 	_hands()
 	_chest()
 	_save()
+	_screen_rules()
 	_mega_pickaxe()
 	print("inventory probe: %d ok, %d failed" % [_pass, _fail])
 	quit(1 if _fail > 0 else 0)
 
 
+## The screen's own helpers (stage 3): 1-9 over a slot, the held stack put
+## back on Escape or close.
+func _screen_rules() -> void:
+	print("screen")
+	var inv := Inventory.new()
+	inv.main[2] = ItemStack.make(&"clay", 7)
+	inv.hotbars[0][4] = ItemStack.make(&"ice", 3)
+	inv.swap_with_hotbar(A(&"main", 2), 4)
+	_ok("5 over a storage slot swaps it with hotbar slot 5", inv.hotbars[0][4].id == &"clay"
+			and inv.main[2].id == &"ice")
+	inv.offhands[0] = ItemStack.make(&"pickaxe", 1)
+	inv.swap_with_hotbar(A(&"offhand", 0), 4)
+	_ok("... never a block into the off-hand", inv.offhands[0].id == &"pickaxe" and inv.hotbars[0][4].id == &"clay")
+	inv.cursor = ItemStack.make(&"ice", 5)
+	_ok("the held stack goes back, onto its own kind first", inv.return_cursor() and inv.cursor == null
+			and inv.main[2].count == 8)
+	for i in inv.main.size():
+		inv.main[i] = ItemStack.make(&"obsidian", 64)
+	for b in 2:
+		for i in Inventory.HOTBAR_SIZE:
+			inv.hotbars[b][i] = ItemStack.make(&"obsidian", 64)
+	inv.offhands[1] = ItemStack.make(&"pickaxe", 1)
+	inv.cursor = ItemStack.make(&"snow", 2)
+	_ok("no room: it stays on the cursor", not inv.return_cursor() and inv.cursor != null)
 ## The Mega Pickaxe (2026-11-19): in the kit right after the pickaxe, and put
 ## into a save made before it existed -- once.
 func _mega_pickaxe() -> void:
