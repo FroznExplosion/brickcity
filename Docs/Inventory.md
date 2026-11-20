@@ -4,7 +4,7 @@ Ported from zylanntest's `game/inventory/` (its README is the design this
 follows), shaped to brickcity: content packs, MenuScreen, no renderer
 read-backs, and the arsenal left alone.
 
-Status: stage 1 and 2 built (branch `mine-inventory`). Stages 3-5 next.
+Status: stages 1-3 built (branch `mine-inventory`). Stages 4-5 next.
 
 ## 1. Two systems, one pair of hands
 
@@ -44,7 +44,7 @@ if that is wanted; nothing here stops it.
 | left mouse | break (blocks, tools, empty hand); scoop (buckets); take (test fluids) |
 | right mouse | use the item in hand: place a block or chest, pour; on a chest, open it |
 | middle mouse | pick the block looked at into the hand (a slot that has it, else the hand slot) |
-| E or Tab | the inventory screen (stage 3) |
+| E or Tab | the inventory screen |
 
 Two hotbars of 9 at the bottom middle, the active one bright and on top; the
 two off-hand slots to their left. The item's name over the bar.
@@ -122,6 +122,17 @@ The inventory is saved in the mine world's save folder beside the edits
    click = take a stack, click with a stack = delete). The world keeps
    running (Minecraft's), the player's movement and the camera are held, the
    mouse freed. Escape: cursor stack back, else close.
+   **Built** (`scripts/inventory/inventory_screen.gd`, `inv_slot.gd`;
+   opened by `mine_world.toggle_inventory`): tabs Storage / Creative in the
+   header; chest grid (when one is open), storage 9x3 or the catalog, then
+   off-hand beside hotbar 2 over hotbar 1; a line saying what the mouse is
+   over. Clicks as section 2's table plus 1-9 over a slot (swap with that
+   hotbar slot), middle click (creative: a full stack of it). The slots size
+   to the window (26-52 px). Every key is the screen's while it is open (no
+   walking, flying, F or M); the flight is frozen, the mouse freed the
+   camera's way so the pawn's controller and the arsenal go quiet; on foot
+   the pawn still falls and swims. A stack still held on close goes back to
+   storage; no room = lost until dropped items (stage 5).
 4. **Icons that spin.** Icons rendered at LOAD time: block items a bevelled
    brick of their colour, items with a mesh their mesh -- one SubViewport
    renders them all one after another as the catalog loads (a strip of
@@ -148,9 +159,13 @@ instead of per world, a gun item in a hotbar slot, multiplayer authority.
 
 - `tools/probes/inventory_probe.gd` (headless): stage 1 rules, the builder's
   hand mapping, chest save/load and break drops (stage 5).
-- `scenes/terrain_test.tscn -- --gate=inventory` (windowed, stage 3+): real
-  key and mouse events -- B, E, drag an item into hotbar 2, X, place a block
-  from it; place a chest, fill it, save, regenerate, check the contents;
-  `MenuFit.audit` at 640x400; screenshots of the spinning slots.
+- `scenes/terrain_test.tscn -- --gate=inventory` (windowed): real key and
+  mouse events -- B, E, the Creative tab, a catalog item into hotbar 2, a
+  left drag spreading a stack, Escape putting the held stack back, 9 over a
+  storage slot, `MenuFit.audit` at 800x450 and 640x400, E closes, X and 3,
+  RMB places the item, the inventory back after save + generate. Prints
+  `INV-GATE PASS`. Screenshots `user://dev/inv_*.png`. Stage 5 adds: place a
+  chest, fill it, save, regenerate, check the contents; stage 4: spinning
+  slots.
 - Also: `mine_world_probe`, `content_packs_probe`, `--gate=menu`, `--gate=build`
   (if the build gate exists: it uses the old hotbar's slot keys).

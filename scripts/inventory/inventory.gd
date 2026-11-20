@@ -438,6 +438,31 @@ func swap_hand_offhand() -> void:
 	changed.emit()
 
 
+## 1-9 over a slot in the screen: that slot and slot `i` of the active hotbar
+## change places (if each may hold the other's item).
+func swap_with_hotbar(a: Dictionary, i: int) -> void:
+	var h := addr(hotbar_area(), clampi(i, 0, HOTBAR_SIZE - 1))
+	if a.area == h.area and a.index == h.index:
+		return
+	var s := get_slot(a)
+	var t := get_slot(h)
+	if not slot_accepts(a, t) or not slot_accepts(h, s):
+		return
+	set_slot(a, t)
+	set_slot(h, s)
+	changed.emit()
+
+
+## The cursor stack back into storage (the screen closing). False if some did
+## not fit (it is kept on the cursor).
+func return_cursor() -> bool:
+	if cursor == null:
+		return true
+	cursor = _insert(cursor, [&"main", hotbar_area(), hotbar_area(1 - active_hotbar), &"offhand"])
+	changed.emit()
+	return cursor == null
+
+
 func toggle_hotbar() -> void:
 	active_hotbar = 1 - active_hotbar
 	active_changed.emit()
