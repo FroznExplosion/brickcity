@@ -67,6 +67,11 @@ var log_blocks: Array[String] = []
 var _outline: MeshInstance3D
 var _hud: HotbarHud
 var _hold_break := 0.0
+## A pickaxe's breaks being found on a worker: [task, holder, material].
+## Which whole bricks a break takes packs the tile (~10 ms); the main thread
+## only clears them (BrickTerrain.find_brick / find_bricks, clear_runs).
+var _pick_jobs: Array = []
+const MAX_PICK_JOBS := 2
 var _hold_place := 0.0
 ## X: when it went down (ms), or -1; and whether this hold already swapped the off-hand.
 var _x_down := -1
@@ -222,6 +227,7 @@ func _input(event: InputEvent) -> void:
 
 
 func _process(delta: float) -> void:
+	_land_picks()
 	if not active or host == null:
 		return
 	if _x_down >= 0 and not _x_held_used and Time.get_ticks_msec() - _x_down >= Inventory.HOLD_MS:
@@ -354,6 +360,8 @@ func break_target() -> bool:
 	if target.is_empty():
 		return false
 	var material := int(target.get("material", 0))
+	if hand_kind() == "tool":
+		return _pick(material)
 	var c := _break_cells()
 	var res: Dictionary = BrickTerrain.fill_box(c[0], c[1], 0, false)
 	if int(res.changed) == 0:
@@ -368,6 +376,63 @@ func break_target() -> bool:
 	if not inv.creative and id != &"":
 		inv.add_item(ItemStack.make(id, ceili(int(res.changed) / 3.0)))
 	return true
+
+
+## A pickaxe breaks BRICKS, whole, the way a shot does (Docs/MineWorld.md
+## 10): the surface piece looked at all of it, or one brick cell in a wall --
+## never a block-lattice box cut through them, which made the packer lay the
+## ground round the hole again. The Mega Pickaxe takes every brick its 5 x 5
+## face touches, each whole (BrickTerrain.find_bricks).
+func _pick(material: int) -> bool:
+	if _pick_jobs.size() >= MAX_PICK_JOBS:
+		return false
+	var holder := [{}]
+	var task := -1
+	if int(hand_def().get("break_area", 1)) > 1:
+		var c := _break_cells()
+		var lo: Vector3i = c[0]
+		var hi: Vector3i = c[1]
+		task = WorkerThreadPool.add_task(func() -> void:
+				holder[0] = BrickTerrain.find_bricks(lo, hi), false, "pickaxe area")
+	else:
+		var point: Vector3 = target.position
+		var n := Vector3(target.get("normal", Vector3i.UP))
+		task = WorkerThreadPool.add_task(func() -> void:
+				holder[0] = BrickTerrain.find_brick(point, n), false, "pickaxe")
+	_pick_jobs.append([task, holder, material])
+	target = {}
+	return true
+
+
+## Finished pickaxe breaks: clear the bricks each found. Never waits.
+func _land_picks() -> void:
+	var i := 0
+	while i < _pick_jobs.size():
+		var job: Array = _pick_jobs[i]
+		if not WorkerThreadPool.is_task_completed(int(job[0])):
+			i += 1
+			continue
+		WorkerThreadPool.wait_for_task_completion(int(job[0]))
+		_pick_jobs.remove_at(i)
+		var runs: PackedInt32Array = (job[1][0] as Dictionary).get("runs", PackedInt32Array())
+		if runs.is_empty() or host == null:
+			continue
+		var res: Dictionary = BrickTerrain.clear_runs(runs)
+		var removed := int(res.get("removed", 0))
+		if removed == 0:
+			continue
+		broken += 1
+		log_blocks.append("pick %d plates" % removed)
+		host.terrain_edited(res)
+		var id := ItemCatalog.block_item(int(job[2]))
+		if not inv.creative and id != &"":
+			inv.add_item(ItemStack.make(id, ceili(removed / 3.0)))
+
+
+func _exit_tree() -> void:
+	for job in _pick_jobs:
+		WorkerThreadPool.wait_for_task_completion(int(job[0]))
+	_pick_jobs.clear()
 
 
 func place_target() -> bool:

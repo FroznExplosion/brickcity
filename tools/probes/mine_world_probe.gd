@@ -50,6 +50,7 @@ func _initialize() -> void:
 	_check_preview()
 	_check_build_blocks()
 	_check_break_brick()
+	_check_pick_area()
 	_check_cave_colliders()
 	_check_deep_tier()
 	await _check_solid_trunks()
@@ -559,6 +560,62 @@ func _pieces(tx: int, tz: int) -> Array:
 	for i in range(0, raw.size(), stride):
 		out.append([raw[i], raw[i + 1], raw[i + 2], raw[i + 3], raw[i + 4], raw[i + 5]])
 	return out
+
+
+## The Mega Pickaxe's area (BrickTerrain.find_bricks): every surface piece the
+## box touches goes WHOLE -- no piece cut in parts -- and every other piece of
+## the tile is laid exactly as before (the pickaxe used to clear a box of plate
+## cells, and the packer laid the ground round it again).
+func _check_pick_area() -> void:
+	BrickTerrain.clear_terrain_edits()
+	var plate := BrickWorld.get_plate_metres()
+	var sea_p := int(float(BrickTerrain.get_gen_params()["sea_m"]) / plate)
+	var tx := 0
+	var tz := 0
+	var x := 0
+	var z := 0
+	for i in 400:
+		tx = i * 3 + 1
+		tz = -i * 2 - 1
+		x = tx * 32 + 16
+		z = tz * 32 + 16
+		var t := BrickTerrain.surface_plate(x, z)
+		if t > sea_p + 6 and BrickTerrain.surface_plate(x + 3, z) == t and BrickTerrain.surface_plate(x, z + 3) == t:
+			break
+	var top := BrickTerrain.surface_plate(x, z)
+	var lo := Vector3i(x - 2, top - 2, z - 2)
+	var hi := Vector3i(x + 2, top, z + 2)
+	var before := _pieces(tx, tz)
+	var t0 := Time.get_ticks_usec()
+	var found: Dictionary = BrickTerrain.find_bricks(lo, hi)
+	var ms := (Time.get_ticks_usec() - t0) / 1000.0
+	var res: Dictionary = BrickTerrain.clear_runs(found.get("runs", PackedInt32Array()))
+	# The pieces the box touches, whole.
+	var box := Rect2i(lo.x - tx * 32, lo.z - tz * 32, 5, 5)
+	var gone: Array = []
+	var cells := 0
+	for p in before:
+		if box.intersects(Rect2i(p[0], p[1], p[2], p[3])):
+			gone.append(p)
+			cells += int(p[2]) * int(p[3]) * 3
+	_expect(int(res.get("removed", 0)) == cells and cells > 0,
+			"a pickaxe area takes the pieces it touches whole (%d plates, %d pieces want %d; %.1f ms)" % [
+			int(res.get("removed", 0)), gone.size(), cells, ms])
+	var after := _pieces(tx, tz)
+	var lost := []
+	for p in before:
+		if gone.has(p):
+			continue
+		var near := false
+		for g in gone:
+			if Rect2i(g[0], g[1], g[2], g[3]).intersects(Rect2i(p[0], p[1], p[2], p[3])):
+				near = true
+		if near:
+			continue
+		if not after.has(p):
+			lost.append(p)
+	_expect(lost.is_empty(), "every other brick of the tile is laid as before (re-laid: %s)" % [lost.slice(0, 4)])
+	BrickTerrain.clear_terrain_edits()
 
 
 func _check_break_brick() -> void:
