@@ -184,7 +184,17 @@ func busy() -> bool:
 			or pieces.moving() > 0
 
 
+## The last frame's _process, microseconds (the mine world's --gate=stop).
+var last_us := 0
+
+
 func _process(delta: float) -> void:
+	var t_in := Time.get_ticks_usec()
+	_process_body(delta)
+	last_us = Time.get_ticks_usec() - t_in
+
+
+func _process_body(delta: float) -> void:
 	if world == null:
 		return
 	_warm_up()

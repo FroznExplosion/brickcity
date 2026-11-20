@@ -182,7 +182,18 @@ func _clock() -> float:
 	return float(Time.get_ticks_usec()) / 1.0e6
 
 
+## The last frame's _process, microseconds (the mine world's --gate=stop and
+## its F3 slow-frame line).
+var last_us := 0
+
+
 func _process(delta: float) -> void:
+	var t_in := Time.get_ticks_usec()
+	_process_body(delta)
+	last_us = Time.get_ticks_usec() - t_in
+
+
+func _process_body(delta: float) -> void:
 	var now := _clock()
 	_water_mat.set_shader_parameter("now_s", now)
 	_lava_mat.set_shader_parameter("now_s", now)
