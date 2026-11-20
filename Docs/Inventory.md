@@ -169,3 +169,16 @@ instead of per world, a gun item in a hotbar slot, multiplayer authority.
   slots.
 - Also: `mine_world_probe`, `content_packs_probe`, `--gate=menu`, `--gate=build`
   (if the build gate exists: it uses the old hotbar's slot keys).
+
+## Mega Pickaxe (2026-11-19)
+
+`mega_pickaxe` in content/base/data/items/base.json: a tool with
+`break_area` 5 and `break_repeat` 0.05 (the catalog keeps these two fields).
+One break clears a 5 x 5 face of blocks -- the face looked at, one block deep,
+centred on the block looked at (`MineBuilder._break_cells`) -- and held it
+repeats every 0.05 s against the pickaxe's 0.22 (`_break_repeat`). In the kit
+right after the pickaxe on bar 2; a save made before it existed gets it once
+(`Inventory.ensure_item`, called by MineWorld._load_inventory). In survival
+the broken bricks are all counted as the material looked at. `-- --gate=mega`
+compares it with the pickaxe (270 plate cells against 12 on uneven ground; a
+full face is 300); inventory_probe checks the kit and the save top-up.

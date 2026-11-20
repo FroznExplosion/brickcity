@@ -365,7 +365,20 @@ float pool_calm_at(vec2 p) {
     return textureLod(pool_calm, q, 0.0).g;
 }
 
+// THE RUN-UP over a beach (the user, 2026-11-19: the waves "came up through
+// the sand"). Near the waterline the waves are damped to an even rise and
+// fall, so every sand terrace a crest topped flooded at once, as if the
+// water welled up out of it. Ground above still water gets the wave LATER the
+// higher it is, and less of it: the water climbs the beach terrace by
+// terrace and runs back, as a swash does.
+uniform float swash_delay = 1.4;   // seconds of delay per metre above still water
+uniform float swash_loss = 0.5;    // metres of the wave lost per metre climbed
+
 float surface_offset(vec2 p, float t, float taper, float cell_m) {
+    float above = lattice_ground(p) - sea_level;
+    if (above > 0.0) {
+        t -= above * swash_delay;
+    }
     float dist = lattice_distance(p);
     float band = shore_wave(p, t, dist);
     // The band's crests are 15 m apart; rings too coarse to carry 4 samples
@@ -378,7 +391,7 @@ float surface_offset(vec2 p, float t, float taper, float cell_m) {
     // clamp -- `taper` is 1.
     float calm = shore_calm.x + (1.0 - shore_calm.x) * smoothstep(0.0, shore_calm.y, dist);
     return (wave_raw_lod(p, t, cell_m, dist) * taper * group_factor(p, t) * calm + band)
-            * pool_calm_at(p);
+            * pool_calm_at(p) - max(above, 0.0) * swash_loss;
 }
 
 /// Where this cell's brick sits, in metres.

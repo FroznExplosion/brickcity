@@ -8072,6 +8072,14 @@ int BrickWorld::get_absent_count(int chunk_id) const {
     return n;
 }
 
+bool BrickWorld::is_block_alive(int chunk_id, int block_id) const {
+    if (!valid_chunk(chunk_id)) {
+        return false;
+    }
+    const Chunk &c = chunks[chunk_id];
+    return block_id >= 0 && block_id < (int)c.blocks.size() && c.blocks[(size_t)block_id].alive;
+}
+
 bool BrickWorld::is_block_absent(int chunk_id, int block_id) const {
     if (!valid_chunk(chunk_id)) {
         return false;
@@ -12435,6 +12443,7 @@ void BrickWorld::_bind_methods() {
             &BrickWorld::unlay_band);
     ClassDB::bind_method(D_METHOD("is_block_absent", "chunk_id", "block_id"),
             &BrickWorld::is_block_absent);
+    ClassDB::bind_method(D_METHOD("is_block_alive", "chunk_id", "block_id"), &BrickWorld::is_block_alive);
     ClassDB::bind_method(D_METHOD("get_template_mass", "template_id", "y_lo", "y_hi"),
             &BrickWorld::get_template_mass);
     ClassDB::bind_method(D_METHOD("get_blocks_topping", "chunk_id", "y"),

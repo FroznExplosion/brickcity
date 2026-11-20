@@ -22,6 +22,10 @@ extends Node3D
 
 const WaterSeaFx := preload("res://scripts/water/water_sea.gd")
 const FloatersFx := preload("res://scripts/water/floaters.gd")
+const LavaFireFx := preload("res://scripts/water/lava_fire.gd")
+## The water meshes carry CUSTOM0 (how far each vertex moved since its tile's
+## last mesh) as four floats: the shader eases them (water_fluid.gdshader).
+const MESH_FLAGS := Mesh.ARRAY_CUSTOM_RGBA_FLOAT << Mesh.ARRAY_FORMAT_CUSTOM0_SHIFT
 
 const TILE_STUDS := 32
 ## The shore field: 3072 studs each way (1.08 km, past the sheet's 1 km),
@@ -85,6 +89,8 @@ var _under_mode := 0                   ## 0 dry, 1 water, 2 lava
 var _dry_ambient := 0.6
 ## What floats and what sinks (floaters.gd, stage 8).
 var floaters: Node = null
+## What lava set alight (lava_fire.gd).
+var fires: Node3D = null
 var _lights := {}                      ## Vector2i -> OmniLight3D
 var _spare_lights: Array[OmniLight3D] = []
 
@@ -102,6 +108,10 @@ func setup(p_host: Node) -> void:
 	Pawn.water_probe = func(p: Vector3) -> float: return surface_at(host.to_local(p))
 	Pawn.water_flow = func(p: Vector3) -> Vector3: return flow_at(host.to_local(p))
 	Pawn.water_drag = func(p: Vector3) -> float: return drag_at(host.to_local(p))
+	fires = LavaFireFx.new()
+	fires.name = "LavaFire"
+	add_child(fires)
+	fires.setup(host)
 	floaters = FloatersFx.new()
 	floaters.name = "Floaters"
 	add_child(floaters)
@@ -126,6 +136,8 @@ func reset_world(sea_m: float, near_tiles: int, p_sea_on: bool, p_wave_scale := 
 	rock_laid = 0
 	field_moves = 0
 	_primed.clear()
+	if fires != null:
+		fires.clear()
 	primed_count = 0
 	if sea != null:
 		remove_child(sea)
@@ -164,7 +176,27 @@ func _eye_studs() -> Vector2i:
 	return Vector2i(floori(e.x / stud), floori(e.z / stud))
 
 
+## The clock the shader eases on (seconds); the same for `now_s` and every
+## instance's `swap_s`.
+func _clock() -> float:
+	return float(Time.get_ticks_usec()) / 1.0e6
+
+
+## The last frame's _process, microseconds (the mine world's --gate=stop and
+## its F3 slow-frame line).
+var last_us := 0
+
+
 func _process(delta: float) -> void:
+	var t_in := Time.get_ticks_usec()
+	_process_body(delta)
+	last_us = Time.get_ticks_usec() - t_in
+
+
+func _process_body(delta: float) -> void:
+	var now := _clock()
+	_water_mat.set_shader_parameter("now_s", now)
+	_lava_mat.set_shader_parameter("now_s", now)
 	if host == null:
 		return
 	var eye: Vector3 = host._eye()
@@ -190,6 +222,9 @@ func step(ticks: int) -> void:
 
 
 func apply(res: Dictionary) -> void:
+	var fire: PackedInt32Array = res.get("fire", PackedInt32Array())
+	for i in range(0, fire.size(), 3):
+		fires.ignite(Vector3i(fire[i], fire[i + 1], fire[i + 2]))
 	for m in res.get("meshes", []):
 		_show(m.tile, m.water, m.lava)
 		_tile_far[m.tile] = bool(m.get("far", false))
@@ -345,11 +380,13 @@ func _show(tile: Vector2i, water: Array, lava: Array) -> void:
 	var mesh := mi.mesh as ArrayMesh
 	mesh.clear_surfaces()
 	if not water.is_empty():
-		mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, water)
+		mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, water, [], {}, MESH_FLAGS)
 		mesh.surface_set_material(mesh.get_surface_count() - 1, _water_mat)
 	if not lava.is_empty():
-		mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, lava)
+		mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, lava, [], {}, MESH_FLAGS)
 		mesh.surface_set_material(mesh.get_surface_count() - 1, _lava_mat)
+	# From now it eases from where the last mesh had it (water_fluid.gdshader).
+	mi.set_instance_shader_parameter("swap_s", _clock())
 	_light(tile, lava)
 
 
@@ -474,6 +511,8 @@ func report() -> String:
 			int(s.get("evals", 0)), float(s.get("mesh_ms", 0.0)), BrickFluid.section_count(), rock_laid]
 	if not _lights.is_empty():
 		line += ", %d lava lights" % _lights.size()
+	if fires != null and not fires.burning.is_empty():
+		line += ", %d burning (%d burned)" % [fires.burning.size(), fires.burned]
 	if primed_count > 0:
 		line += ", %d tiles primed" % primed_count
 	if floaters != null and floaters.wet_bodies > 0:

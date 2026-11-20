@@ -43,6 +43,7 @@ func _init() -> void:
 	_chest()
 	_save()
 	_screen_rules()
+	_mega_pickaxe()
 	print("inventory probe: %d ok, %d failed" % [_pass, _fail])
 	quit(1 if _fail > 0 else 0)
 
@@ -71,6 +72,28 @@ func _screen_rules() -> void:
 	inv.offhands[1] = ItemStack.make(&"pickaxe", 1)
 	inv.cursor = ItemStack.make(&"snow", 2)
 	_ok("no room: it stays on the cursor", not inv.return_cursor() and inv.cursor != null)
+## The Mega Pickaxe (2026-11-19): in the kit right after the pickaxe, and put
+## into a save made before it existed -- once.
+func _mega_pickaxe() -> void:
+	var inv := Inventory.new()
+	inv.seed_default()
+	var at := -1
+	for i in Inventory.HOTBAR_SIZE - 1:
+		var s: ItemStack = inv.hotbars[1][i]
+		if s != null and s.id == &"pickaxe":
+			var n: ItemStack = inv.hotbars[1][i + 1]
+			at = i + 1 if n != null and n.id == &"mega_pickaxe" else -2
+	_ok("the Mega Pickaxe is in the kit right after the pickaxe", at >= 0, "slot %d" % at)
+	var d: Dictionary = ItemCatalog.get_def(&"mega_pickaxe")
+	_ok("it breaks 5 across, faster than the pickaxe", int(d.get("break_area", 1)) == 5
+			and float(d.get("break_repeat", 1.0)) < 0.22, str(d))
+	for i in Inventory.HOTBAR_SIZE:
+		var s: ItemStack = inv.hotbars[1][i]
+		if s != null and s.id == &"mega_pickaxe":
+			inv.hotbars[1][i] = null
+	var added := inv.ensure_item(&"mega_pickaxe", &"pickaxe")
+	var again := inv.ensure_item(&"mega_pickaxe", &"pickaxe")
+	_ok("an old save gets it once", added and not again, "added %s, again %s" % [added, again])
 
 
 static func A(area: StringName, i := 0) -> Dictionary:

@@ -54,6 +54,9 @@ var host: Node = null
 var active := false
 var size_i := 0
 var inv := Inventory.new()
+## A piece's brick looked at, nearer than the ground: [piece, point inside
+## it], or empty.
+var piece_target: Array = []
 ## The ray's answer this frame (BrickTerrain.ray_cell), or empty.
 var target := {}
 var placed := 0
@@ -203,7 +206,7 @@ func _input(event: InputEvent) -> void:
 	match mb.button_index:
 		MOUSE_BUTTON_LEFT:
 			break_target()
-			_hold_break = REPEAT * 1.5
+			_hold_break = _break_repeat() * 1.5
 		MOUSE_BUTTON_RIGHT:
 			place_target()
 			_hold_place = REPEAT * 1.5
@@ -230,7 +233,7 @@ func _process(delta: float) -> void:
 		_hold_break -= delta
 		if _hold_break <= 0.0:
 			break_target()
-			_hold_break = REPEAT
+			_hold_break = _break_repeat()
 	if captured and Input.is_mouse_button_pressed(MOUSE_BUTTON_RIGHT):
 		_hold_place -= delta
 		if _hold_place <= 0.0:
@@ -247,6 +250,27 @@ func update_target() -> void:
 	var from: Vector3 = host.to_local(c.global_position)
 	var dir := -c.global_transform.basis.z
 	target = BrickTerrain.ray_cell(from, dir, REACH)
+	# A piece of fallen ground in front of the ground: its brick is the one
+	# looked at (Docs/TerrainCollapse.md).
+	piece_target = []
+	if host.collapse != null:
+		var gfrom := c.global_position
+		var q := PhysicsRayQueryParameters3D.create(gfrom, gfrom + dir * REACH,
+				Layers.DEBRIS | Layers.FALLING)
+		var hit: Dictionary = host.get_world_3d().direct_space_state.intersect_ray(q)
+		if not hit.is_empty():
+			var p: PlanetPieces.Piece = host.collapse.piece_of_body(hit.collider)
+			var ground := INF if target.is_empty() else from.distance_to(target.position)
+			if p != null and gfrom.distance_to(hit.position) < ground:
+				# A stud's height in, past the studs' shapes: inside the brick.
+				var inside: Vector3 = hit.position - (hit.normal as Vector3) * 0.1
+				var xf = host.collapse.piece_brick_xform(p, inside)
+				if xf != null:
+					piece_target = [p, inside]
+					target = {}
+					_outline.visible = true
+					_outline.global_transform = xf
+					return
 	if target.is_empty():
 		_outline.visible = false
 		return
@@ -287,15 +311,50 @@ func _is_fluid_item(k: String) -> bool:
 	return k == "bucket" or k == "source_bucket" or k == "fluid"
 
 
+## Seconds between breaks while the button is held: the tool's own
+## (`break_repeat` in its item, the Mega Pickaxe's 0.05) or REPEAT.
+func _break_repeat() -> float:
+	return float(hand_def().get("break_repeat", REPEAT))
+
+
+## The plate cells a break clears: the block looked at, or for a tool with a
+## `break_area` (the Mega Pickaxe: 5) that many blocks by that many across
+## the face looked at, one block deep, centred on the block.
+func _break_cells() -> Array[Vector3i]:
+	var b := _block_of(target.cell)
+	var c := _cells(b)
+	var area := int(hand_def().get("break_area", 1))
+	if area <= 1:
+		return c
+	var n: Vector3i = target.get("normal", Vector3i.UP)
+	var half := area / 2
+	var lo := b
+	var hi := b
+	for axis in 3:
+		if n[axis] == 0:
+			lo[axis] -= half
+			hi[axis] += area - 1 - half
+	var a := _cells(lo)
+	var z := _cells(hi)
+	return [a[0], z[1]]
+
+
 func break_target() -> bool:
 	if _is_fluid_item(hand_kind()):
 		return take_fluid()
-	if target.is_empty():
+	if target.is_empty() and piece_target.is_empty():
 		update_target()
-		if target.is_empty():
-			return false
+	if not piece_target.is_empty():
+		var ok: bool = host.collapse.mine_piece(piece_target[0], piece_target[1])
+		piece_target = []
+		if ok:
+			broken += 1
+			log_blocks.append("break piece brick")
+		return ok
+	if target.is_empty():
+		return false
 	var material := int(target.get("material", 0))
-	var c := _cells(_block_of(target.cell))
+	var c := _break_cells()
 	var res: Dictionary = BrickTerrain.fill_box(c[0], c[1], 0, false)
 	if int(res.changed) == 0:
 		return false

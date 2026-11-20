@@ -45,9 +45,15 @@ var bricks: BrickWorld = null
 var pieces: PlanetPieces = null
 var palette := {}
 
-var _lo := Vector3i.ZERO
-var _hi := Vector3i.ZERO
-var _queued := false
+## Edit boxes waiting for a survey: [lo, hi] (plates), each at most MAX_BOX.
+## Boxes near each other are one; far apart, or a shaft dug a long way down,
+## are several surveys -- one box round all of them was a region hundreds of
+## bricks tall (and the scene crashed under a 120 m shaft, Docs/MineWater.md 14).
+var _boxes: Array = []
+## Studs (x, z) and plates (y) a queued box may grow to by merging.
+const MAX_BOX := Vector3i(32, 96, 32)
+## Boxes this close (studs / plates) merge.
+const MERGE_GAP := 6
 var _survey_in := 0.0
 var _job := -1
 var _holder := [null]
@@ -88,7 +94,10 @@ func setup(w: Node3D, brick_material: Material) -> void:
 	# Every piece stays (the user, 2026-11-17: to change later): no cap, no
 	# group too small to be a piece.
 	pieces.max_pieces = 1 << 30
-	pieces.debris_max = 0
+	# What a landing knocks off a piece: SMALL_MAX bricks or fewer are crumbs
+	# that fly and shrink away (the city's rule), not pieces that lie forever.
+	pieces.debris_max = SMALL_MAX
+	pieces.studs = true
 	add_child(pieces)
 	pieces.setup(bricks, w, brick_material)
 	_sand_mm = MultiMeshInstance3D.new()
@@ -106,6 +115,8 @@ func setup(w: Node3D, brick_material: Material) -> void:
 	mm.instance_count = 64
 	mm.visible_instance_count = 0
 	_sand_mm.multimesh = mm
+	# Moved in _process each frame: no physics interpolation on it.
+	_sand_mm.physics_interpolation_mode = Node.PHYSICS_INTERPOLATION_MODE_OFF
 	add_child(_sand_mm)
 
 
@@ -114,7 +125,7 @@ func reset() -> void:
 	if _job >= 0:
 		WorkerThreadPool.wait_for_task_completion(_job)
 		_job = -1
-	_queued = false
+	_boxes.clear()
 	for w in _waiting:
 		if w.kind == "piece" and int(w.chunk) >= 0:
 			bricks.release_chunk(int(w.chunk))
@@ -138,26 +149,57 @@ func queue(res: Dictionary) -> void:
 		return
 	var lo: Vector3i = res.box_lo
 	var hi: Vector3i = res.box_hi
-	if not _queued:
-		_lo = lo
-		_hi = hi
-		_queued = true
+	if _boxes.is_empty():
 		_survey_in = SURVEY_EVERY
-	else:
-		_lo = Vector3i(mini(_lo.x, lo.x), mini(_lo.y, lo.y), mini(_lo.z, lo.z))
-		_hi = Vector3i(maxi(_hi.x, hi.x), maxi(_hi.y, hi.y), maxi(_hi.z, hi.z))
+	# Too big for one survey (a big piece's cells cleared): in parts.
+	for z in range(lo.z, hi.z + 1, MAX_BOX.z):
+		for y in range(lo.y, hi.y + 1, MAX_BOX.y):
+			for x in range(lo.x, hi.x + 1, MAX_BOX.x):
+				var a := Vector3i(x, y, z)
+				_add_box(a, Vector3i(mini(hi.x, x + MAX_BOX.x - 1), mini(hi.y, y + MAX_BOX.y - 1),
+						mini(hi.z, z + MAX_BOX.z - 1)))
+
+
+func _add_box(lo: Vector3i, hi: Vector3i) -> void:
+	var g := Vector3i(MERGE_GAP, MERGE_GAP, MERGE_GAP)
+	for b in _boxes:
+		var blo: Vector3i = b[0]
+		var bhi: Vector3i = b[1]
+		var near := lo.x <= bhi.x + g.x and hi.x >= blo.x - g.x and lo.y <= bhi.y + g.y \
+				and hi.y >= blo.y - g.y and lo.z <= bhi.z + g.z and hi.z >= blo.z - g.z
+		if not near:
+			continue
+		var mlo := Vector3i(mini(lo.x, blo.x), mini(lo.y, blo.y), mini(lo.z, blo.z))
+		var mhi := Vector3i(maxi(hi.x, bhi.x), maxi(hi.y, bhi.y), maxi(hi.z, bhi.z))
+		var size := mhi - mlo + Vector3i.ONE
+		if size.x <= MAX_BOX.x and size.y <= MAX_BOX.y and size.z <= MAX_BOX.z:
+			b[0] = mlo
+			b[1] = mhi
+			return
+	_boxes.append([lo, hi])
 
 
 func busy() -> bool:
-	return _job >= 0 or _queued or not _waiting.is_empty() or not _sand.is_empty() \
+	return _job >= 0 or not _boxes.is_empty() or not _waiting.is_empty() or not _sand.is_empty() \
 			or pieces.moving() > 0
 
 
+## The last frame's _process, microseconds (the mine world's --gate=stop).
+var last_us := 0
+
+
 func _process(delta: float) -> void:
+	var t_in := Time.get_ticks_usec()
+	_process_body(delta)
+	last_us = Time.get_ticks_usec() - t_in
+
+
+func _process_body(delta: float) -> void:
 	if world == null:
 		return
+	_warm_up()
 	_land_survey()
-	if _queued and _job < 0:
+	if not _boxes.is_empty() and _job < 0:
 		_survey_in -= delta
 		if _survey_in <= 0.0:
 			_start_survey()
@@ -169,10 +211,45 @@ func _process(delta: float) -> void:
 		_tend()
 
 
+## One stud drawn for a few frames, tiny, in front of the camera, when the
+## world starts: the first piece's studs cost a ~260 ms frame (the brick
+## shader's pipeline for an instanced, coloured mesh, made on first draw).
+var _warm: MultiMeshInstance3D = null
+var _warm_frames := -1
+
+
+func _warm_up() -> void:
+	if _warm_frames == 0:
+		return
+	if _warm == null:
+		var cam: Camera3D = get_viewport().get_camera_3d()
+		if cam == null:
+			return
+		var mm := MultiMesh.new()
+		mm.transform_format = MultiMesh.TRANSFORM_3D
+		mm.use_colors = true
+		mm.mesh = PieceMeshes.stud()
+		mm.instance_count = 1
+		mm.set_instance_transform(0, Transform3D(Basis.from_scale(Vector3.ONE * 0.001), Vector3.ZERO))
+		mm.set_instance_color(0, Color.WHITE)
+		_warm = MultiMeshInstance3D.new()
+		_warm.multimesh = mm
+		_warm.material_override = pieces.brick_material
+		_warm.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		cam.add_child(_warm)
+		_warm.position = Vector3(0, 0, -0.5)
+		_warm_frames = 4
+		return
+	_warm_frames -= 1
+	if _warm_frames == 0:
+		_warm.queue_free()
+		_warm = null
+
+
 func _start_survey() -> void:
-	_queued = false
-	var lo := _lo
-	var hi := _hi
+	var box: Array = _boxes.pop_front()
+	var lo: Vector3i = box[0]
+	var hi: Vector3i = box[1]
 	var t := BrickStrength.tension() * TERRAIN_TIMES
 	var m := BrickPalette.MASS_PER_CELL
 	var holder := [null]
@@ -522,17 +599,52 @@ func _mesh_ready(w: Dictionary) -> bool:
 	mi.mesh = mesh
 	mi.material_override = pieces.brick_material
 	mi.physics_interpolation_mode = Node.PHYSICS_INTERPOLATION_MODE_OFF
+	pieces.add_studs(mi, int(w.chunk))
 	w["mesh"] = mi
 	return true
+
+
+## The piece whose body is `o`, or null.
+func piece_of_body(o: Object) -> PlanetPieces.Piece:
+	for p in pieces.pieces:
+		if p.body == o and p.fading_since == 0:
+			return p
+	return null
+
+
+## The brick of piece `p` at world `point`, as an outline's transform (a unit
+## box scaled to it, a hair larger), or null when no live brick is there.
+func piece_brick_xform(p: PlanetPieces.Piece, point: Vector3) -> Variant:
+	var xf := bricks.get_chunk_transform(p.chunk)
+	var l := xf.affine_inverse() * point
+	var cs := BrickWorld.get_cell_size()
+	var dims := bricks.get_chunk_dims(p.chunk)
+	var c := Vector3i(floori(l.x / cs.x), floori(l.y / cs.y), floori(l.z / cs.z))
+	if c.x < 0 or c.y < 0 or c.z < 0 or c.x >= dims.x or c.y >= dims.y or c.z >= dims.z:
+		return null
+	var bid := bricks.block_at(p.chunk, c + bricks.get_chunk_origin(p.chunk))
+	if bid < 0 or not bricks.is_block_alive(p.chunk, bid) or bricks.is_block_absent(p.chunk, bid):
+		return null
+	var box := bricks.get_blocks_box(p.chunk, PackedInt32Array([bid]))
+	return xf * Transform3D(Basis.from_scale(box.size * 1.004), box.position - box.size * 0.002)
+
+
+## Mined (build mode): the brick of `p` at world `point` goes, whole. True if
+## one did.
+func mine_piece(p: PlanetPieces.Piece, point: Vector3) -> bool:
+	return pieces.damage(p, point, {"blast": false, "radius": 0.0, "hp": 1 << 20}) > 0
 
 
 ## A shot at world `point` meeting a piece: it is that piece's. False when
 ## there is no piece there.
 func shoot(point: Vector3, dir: Vector3, shot) -> bool:
-	var p := pieces.piece_at(point + dir.normalized() * 0.05)
+	# Past the studs' shapes into the brick, and THERE for the damage too: a
+	# round that met a top face 5 cm in wore the empty stud layer, forever.
+	var inside := point + dir.normalized() * 0.1
+	var p := pieces.piece_at(inside)
 	if p == null:
 		return false
-	pieces.damage(p, point, shot if shot is Dictionary else {})
+	pieces.damage(p, inside, shot if shot is Dictionary else {})
 	return true
 
 

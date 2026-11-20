@@ -61,6 +61,9 @@ const MAX_PIECES := 160
 ## Settable: the mine world keeps every piece (Docs/TerrainCollapse.md 5).
 var max_pieces := MAX_PIECES
 var debris_max := DEBRIS_MAX_BLOCKS
+## Draw each piece's open studs with it (the mine world: a piece of ground
+## shows its studs as the ground does; the city draws studs apart).
+var studs := false
 ## A piece over the cap shrinks away over this long (never a pop).
 const FADE_MS := 600
 
@@ -299,8 +302,31 @@ func _hang_mesh(p: Piece) -> void:
 	mi.position = -p.local_com
 	if p.mesh_node != null and is_instance_valid(p.mesh_node):
 		p.mesh_node.queue_free()
+	if studs:
+		add_studs(mi, p.chunk)
 	p.mesh_node = mi
 	p.body.add_child(mi)
+
+
+## The chunk's open studs as a child of `mi`, in the chunk's frame as its mesh
+## is (BrickWorld.get_chunk_studs: the blocks on the CPU, no read-back).
+func add_studs(mi: MeshInstance3D, chunk: int) -> void:
+	var buf: PackedFloat32Array = bricks.get_chunk_studs(chunk)
+	@warning_ignore("integer_division")
+	var n := buf.size() / 16
+	if n == 0:
+		return
+	var mm := MultiMesh.new()
+	mm.transform_format = MultiMesh.TRANSFORM_3D
+	mm.use_colors = true
+	mm.mesh = PieceMeshes.stud()
+	mm.instance_count = n
+	mm.set_buffer(buf)
+	var mmi := MultiMeshInstance3D.new()
+	mmi.multimesh = mm
+	mmi.material_override = brick_material
+	mmi.physics_interpolation_mode = Node.PHYSICS_INTERPOLATION_MODE_OFF
+	mi.add_child(mmi)
 
 
 func _physics_process(_delta: float) -> void:
@@ -411,8 +437,12 @@ func piece_at(point: Vector3) -> Piece:
 		var c := Vector3i(floori(l.x / cs.x), floori(l.y / cs.y), floori(l.z / cs.z))
 		if c.x < 0 or c.y < 0 or c.z < 0 or c.x >= dims.x or c.y >= dims.y or c.z >= dims.z:
 			continue
-		var bid := bricks.block_at(p.chunk, c)
-		if bid >= 0 and not bricks.is_block_absent(p.chunk, bid):
+		# block_at takes the ABSOLUTE cell: a piece split off (split_island) has
+		# its grid's origin at its own corner, not at zero.
+		var bid := bricks.block_at(p.chunk, c + bricks.get_chunk_origin(p.chunk))
+		# Alive, not only present: a group cut out of this chunk (shed) leaves
+		# its cells claimed here, dead -- a round there wore nothing, forever.
+		if bid >= 0 and bricks.is_block_alive(p.chunk, bid) and not bricks.is_block_absent(p.chunk, bid):
 			return p
 	return null
 

@@ -16,6 +16,8 @@ extends SceneTree
 ##   too (no 2-deep puddles left to keep their edges wet);
 ## - a gap between two sources fills as a source (4.1.7);
 ## - water off a ledge falls and spreads again where it lands;
+## - still water beside a source drains into it; water at a lava source
+##   makes obsidian within a tick; lava beside wood sets it alight;
 ## - lava meeting water makes obsidian (a source) or stone (running lava),
 ##   only as thick as the lava was; cut-off lava cools into stone (4.6);
 ## - a calm world has nothing awake (a still world costs nothing);
@@ -241,6 +243,44 @@ func _run() -> void:
 	var outside := _region_units(2900, 2918, -20, 20, W)
 	_ok("a pit under a fall fills to its rim", pit_full >= 9 * 9 * 3 - 3, "%d of %d cells full" % [pit_full, 9 * 9 * 3])
 	_ok("and spills over it", outside > 0, "%d tiles outside" % outside)
+
+	# 4f. Still water touching a source drains into it (the user, 2026-11-19:
+	# finite water meeting the sea joins the sea).
+	_floor(3260, -10, 3300, 10)
+	BrickFluid.place(Vector3i(3280, W, 0), 1, BrickFluid.SOURCE, 3)
+	BrickFluid.tick_now(2)
+	BrickFluid.place(Vector3i(3281, W, 0), 1, BrickFluid.STILL, 3)
+	BrickFluid.tick_now(1)
+	var beside := 0
+	for x in range(3281, 3300):
+		for z in range(-9, 10):
+			var c: Dictionary = _info(x, W, z)
+			if int(c.fluid) == 1 and int(c.kind) == BrickFluid.STILL:
+				beside += int(c.amount)
+	_ok("still water beside a source drains into it", beside == 0, "%d still tiles left" % beside)
+
+	# 4g. Minecraft's meeting, at once: water reaching a lava SOURCE makes it
+	# obsidian within a tick (not on lava's slow tick); lava beside wood sets
+	# it alight.
+	_floor(3360, -10, 3400, 10)
+	BrickTerrain.fill_box(Vector3i(3384, W * 3, 0), Vector3i(3384, W * 3 + 2, 0),
+			BrickTerrain.material_names().find("wood"), false)
+	BrickFluid.terrain_changed(Vector3i(3384, W * 3, 0), Vector3i(3384, W * 3 + 2, 0))
+	BrickFluid.place(Vector3i(3383, W, 0), 2, BrickFluid.SOURCE, 3)
+	BrickFluid.tick_now(1)
+	BrickFluid.take()
+	BrickFluid.tick_now(5)
+	var lit: PackedInt32Array = BrickFluid.take().get("fire", PackedInt32Array())
+	_ok("lava beside wood sets it alight", lit.size() >= 3 and lit[0] == 3384, str(lit))
+	# Water poured onto the lava source from above.
+	BrickFluid.place(Vector3i(3383, W + 1, 0), 1, BrickFluid.SOURCE, 3)
+	BrickFluid.tick_now(2)
+	var rk: PackedInt32Array = BrickFluid.take().terrain
+	var obs := false
+	for i in range(0, rk.size(), 5):
+		if rk[i] == 3383 and rk[i + 4] == BrickTerrain.material_names().find("obsidian"):
+			obs = true
+	_ok("water at a lava source makes obsidian at once", obs, str(rk))
 
 	# 5. A gap between two sources fills as a source.
 	_sec("5")

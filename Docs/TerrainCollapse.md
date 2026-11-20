@@ -196,6 +196,41 @@ Measured (`terrain_collapse_probe`, headless; `terrain_test.tscn --
 | default `--gate` edits / rapid fire | 24.1 / 24.5 ms worst, 16.7 / 16.6 mean: as before (section 9 of MineWorld.md) |
 | stud strength a 10-stud, 2-course arm needs | rock 2.1, dirt 5.7 (the game's is 37.2: both hold) |
 
+### 8.1 2026-11-19: what play showed
+
+The user: broken bricks fell and lay forever, could not be broken, and drew
+with smooth tops; islands came off a brick at a time, never in big chunks.
+
+- **Big islands fall whole.** A survey's region was the edit +-10 studs, and
+  everything reaching its side was held by the ring -- so an island wider
+  than that never came loose; only the bricks round a shot did. Now, before
+  the solve, a walk from the region's own bottom course (not the ring's
+  pillars) finds ground with no way down inside the region; if any reaches
+  the side, the region grows 16 studs round (3 times at most) and is asked
+  again. Probe: a 40-stud arm falls as one group of 180 cells (28 ms,
+  12k virtual bricks, on a worker).
+- **Pieces are breakable.** `PlanetPieces.piece_at` passed `block_at` a cell
+  relative to the grid's origin where it takes an absolute cell: a piece split
+  off another keeps the parent's grid and its own origin, so a round on any
+  split piece found nothing, forever. It also took cut-out (dead) cells as
+  the piece's: new `BrickWorld.is_block_alive`. The planet's pieces had the
+  same bug. And a round wore the point 5 cm in -- the empty stud layer of a
+  top face; now 10 cm, where it found the brick.
+- **Build mode mines pieces**: the builder rays pieces (DEBRIS, FALLING)
+  before the ground; the brick looked at is outlined and taken whole.
+- **Studs on pieces** (`PlanetPieces.studs`): each piece draws its open studs
+  (`get_chunk_studs`, a CPU query). Their first draw cost a 260 ms frame
+  (the pipeline), so one stud is drawn tiny in front of the camera for four
+  frames when the world starts.
+- **Landing chips are crumbs**: 3 bricks or fewer knocked off by a landing
+  fly and shrink away (`debris_max = SMALL_MAX`), not lie forever.
+- **Surveys per box** (the water chat saw `--gate=gen --with-collapse`
+  crash with a 120 m shaft): edits were one bounding box per 0.1 s, so a shaft
+  (or two edits far apart) made a region hundreds of bricks tall. Now each
+  edit box is queued, merged only with boxes within 6 cells, up to 32 x 96 x
+  32 (studs, plates, studs); a bigger one is split. The survey stops growing
+  at 1.2 M cells or 120k virtual bricks (what reaches past is held).
+
 Not done / known:
 
 - **Sand lands on pieces** (2026-11-19): a falling column casts down along its

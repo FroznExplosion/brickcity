@@ -102,6 +102,14 @@ var room_open := -1.0
 # Box -> "room" or "cabin".
 var _boxes := {}
 var _sun_dir := Vector3.ZERO
+## The sky's inputs when it was last written (set_sky), and how far they move
+## before it is written again: SKY_EPS of day, air and sun height, SKY_UP_RAD
+## of the local up (Docs/PlanetCost.md 5.1).
+var _sky_key: Array = []
+const SKY_EPS := 0.002
+const SKY_UP_RAD := 0.005
+## Times the sky was written (a gate reads it).
+var sky_writes := 0
 
 
 ## Options > Video, Global Illumination (Lighting.md 7): GI_OFF; GI_SCREEN,
@@ -180,6 +188,9 @@ func build(parent: Node, space_star := false) -> void:
 		# The star is the sun's disc; the sky's own would not sit on it.
 		sky_mat.sun_angle_max = 0.5
 	sky.sky_material = sky_mat
+	# Its reflections and ambient are soft anyway: a smaller map is redrawn for
+	# less when the sky does change (dusk; Docs/PlanetCost.md 5.1).
+	sky.radiance_size = Sky.RADIANCE_SIZE_64
 	env.sky = sky
 	env.ambient_light_source = Environment.AMBIENT_SOURCE_SKY
 	env.ambient_light_energy = 0.6
@@ -270,6 +281,17 @@ static func sky_cast(atmo: Color) -> Color:
 ## The sky by day (0..1: the sun's height, with twilight), air (0..1: none in
 ## space or on an airless world), the world's air colour; the sky's up.
 func set_sky(day: float, air: float, atmo: Color, sun_height: float, up: Vector3) -> void:
+	# Only when it changes (Docs/PlanetCost.md 5.1): every write to the sky's
+	# material makes Godot draw its radiance map again, ~1 ms of GPU a frame.
+	# The boxes still follow `room_open` every call.
+	if not _sky_key.is_empty() and absf(day - float(_sky_key[0])) < SKY_EPS \
+			and absf(air - float(_sky_key[1])) < SKY_EPS and atmo.is_equal_approx(_sky_key[2]) \
+			and absf(sun_height - float(_sky_key[3])) < SKY_EPS \
+			and up.angle_to(_sky_key[4]) < SKY_UP_RAD and star_colour.is_equal_approx(_sky_key[5]):
+		_update_boxes()
+		return
+	_sky_key = [day, air, atmo, sun_height, up, star_colour]
+	sky_writes += 1
 	var cast := sky_cast(atmo)
 	var dusk := (1.0 - absf(day * 2.0 - 1.0)) * 0.5
 	var haze := (SKY_HAZE * cast).lerp(DUSK, dusk).lerp(NIGHT, 1.0 - day) * air
