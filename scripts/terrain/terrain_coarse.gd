@@ -668,7 +668,12 @@ func _refine_for(detail: Rect2i) -> void:
 ## A split's bakes are in: retire the blocks that were split, swap in their
 ## children and the shrunk rings. All at once, so no frame draws the same
 ## ground twice or none at all.
+## Jobs swapped in (refines and relods), for the passes.
+var applies := 0
+
+
 func _apply_refine() -> void:
+	applies += 1
 	var t0 := Time.get_ticks_usec()
 	var job := _refine_job
 	_refine_job = {}
@@ -802,6 +807,7 @@ func _wait_jobs_relod() -> void:
 ## Swap a relod's meshes in, as many as fit the frame's budget; the rest
 ## next frame. Each block is swapped whole, so a block is never half old.
 func _apply_relod(budget_ms := APPLY_BUDGET_MS) -> void:
+	applies += 1
 	var t0 := Time.get_ticks_usec()
 	var job := _relod_job
 	_job_wait(job)
