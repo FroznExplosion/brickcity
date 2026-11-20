@@ -540,25 +540,33 @@ func _run() -> void:
 	_ok("a lake over the sea is water to its level", lake.x != 1 << 30, str(lake))
 	if lake.x != 1 << 30:
 		_ok("and none above it", int(_info(lake.x, lake.y + 1, lake.z).fluid) == 0)
-	# Cave pools: water in cave air, never beside cave air at its course.
+	# Cave pools: the dips of cave floors, each filled to its own lip; never
+	# beside cave air at their course. Worked out by the water's thread when a
+	# tile is primed (the main thread only reads what it knows).
+	gp["cave_pool_chance"] = 1.0
+	BrickTerrain.set_gen_params(gp)
+	BrickFluid.reset(20.0, false)
+	BrickFluid.set_centre(Vector3.ZERO, 100000.0)
+	for tz in range(0, 2):
+		for tx in range(0, 2):
+			BrickFluid.prime_tile(tx, tz, 0, 150)
+	BrickFluid.tick_now(1)
 	var pools := 0
 	var walls := 0
-	for i in 4000:
-		var px := (i * 7919) % 600 - 300
-		var pz := (i * 104729) % 600 - 300
-		var top := floori(BrickTerrain.surface_plate(px, pz) / 3.0)
-		for b in range(top - 30, top - 2, 3):
-			var pc: Dictionary = _info(px, b, pz)
-			if int(pc.fluid) != 1 or int(pc.solid) != 0:
-				continue
-			pools += 1
-			for o in [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]:
-				var nc: Dictionary = _info(px + o.x, b, pz + o.y)
-				if int(nc.fluid) == 0 and int(nc.capacity) > 0 \
-						and BrickTerrain.surface_plate(px + o.x, pz + o.y) > b * 3 + 2:
-					walls += 1
+	for px in range(0, 64):
+		for pz in range(0, 64):
+			var top := floori(BrickTerrain.surface_plate(px, pz) / 3.0)
+			for b in range(0, top):
+				var pc: Dictionary = _info(px, b, pz)
+				if int(pc.fluid) != 1 or int(pc.solid) != 0:
+					continue
+				pools += 1
+				for o in [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]:
+					var nc: Dictionary = _info(px + o.x, b, pz + o.y)
+					if int(nc.fluid) == 0 and int(nc.capacity) > 0:
+						walls += 1
 	_ok("cave pools are generated", pools > 0, "%d pool cells found" % pools)
-	_ok("no pool water beside cave air (barriers)", walls == 0, "%d sides open" % walls)
+	_ok("no pool water beside cave air (closed pockets only)", walls == 0, "%d sides open" % walls)
 
 	# 13. Multiplayer groundwork (11.5): an authority's changes, read from its
 	# change log, rebuild the same water on a mirror that runs no rules.

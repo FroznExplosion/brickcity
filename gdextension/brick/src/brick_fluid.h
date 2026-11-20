@@ -86,6 +86,9 @@ public:
     /// The top course of a generated lake over a column, or INT_MIN (trees
     /// stay out of lakes).
     static int lake_top(int x, int z);
+    /// Is the sea's top course over this point's column open sea (ocean)?
+    /// One call, no Dictionary: the floaters and the swimmer ask it often.
+    static bool ocean_at(Vector3 p);
 
     /// MULTIPLAYER GROUNDWORK (Docs/MineWater.md 11.5). The authority (the
     /// host) simulates and keeps a change log; a peer asks for what changed

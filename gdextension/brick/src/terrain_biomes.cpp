@@ -1,4 +1,5 @@
 #include <climits>
+#include <queue>
 #include <mutex>
 #include <unordered_map>
 #include "terrain_biomes.h"
@@ -645,25 +646,135 @@ int cave_pool_level(const GenParams &p, uint32_t seed, int x, int yb, int z) {
     return pool_level_r(p, seed, fdiv(x, AQ_XZ), fdiv(yb, AQ_Y), fdiv(z, AQ_XZ));
 }
 
-/// A barrier (stone left standing in a cave) round cave pools: a pool
-/// region's bottom course, and the faces between two regions whose water
-/// levels differ, up to the higher -- so no water stands beside cave air
-/// (Minecraft's aquifer barriers).
-static bool pool_barrier(const GenParams &p, uint32_t seed, int x, int yb, int z) {
-    if (!p.cave_pools) return false;
+// --- cave pools as closed basins (Docs/MineWater.md 14.8, 2026-11-20) -------
+//
+// The first pools filled a whole grid region of cave under a level and left
+// thin stone walls and floors round it: rectangles of water floating in the
+// caves, and when a brick of a floor went, the whole floor fell and all the
+// water moved at once. Now a region's water is only its CLOSED pockets: the
+// cave air under its level that is joined to nothing outside the region, to
+// no air under it, and to no open air -- a dip in a cave floor, filled to its
+// rim. Nothing is added to the ground. Worked out once a region (on the
+// water's thread), cached.
+
+namespace {
+struct PoolBits {
+    std::vector<uint8_t> w;     ///< a bit a cell, AQ_XZ x AQ_Y x AQ_XZ
+    bool any = false;
+};
+std::mutex g_pool_mx;
+std::unordered_map<int64_t, PoolBits> g_pools;
+uint32_t g_pool_seed = 0;
+int g_pool_gen = -1;
+
+inline int64_t pool_key(int rx, int ry, int rz) {
+    return ((int64_t)(rx & 0x1FFFFF) << 42) | ((int64_t)(ry & 0x1FFFFF) << 21) | (int64_t)(rz & 0x1FFFFF);
+}
+
+/// Each cave cell's SPILL height: the lowest course water standing there
+/// would have to reach to get out -- over the region's sides, down under
+/// it, or into open air -- found as the least "highest point on the way" over
+/// every way out (a priority flood). A cave cell under its spill height is
+/// pool water: the dips of cave floors, each filled to its own lip, never
+/// beside air at the same height.
+PoolBits pool_compute(const GenParams &p, uint32_t seed, int rx, int ry, int rz) {
+    PoolBits out;
+    if (pool_level_r(p, seed, rx, ry, rz) == INT_MIN) return out;   // this region has none
+    const int x0 = rx * AQ_XZ, z0 = rz * AQ_XZ, y0 = ry * AQ_Y;
+    const int NX = AQ_XZ, NZ = AQ_XZ, NY = AQ_Y + 1;      // a course under the band too
+    // 0 rock, 1 cave air, 2 open air (over the ground).
+    std::vector<uint8_t> g((size_t)NX * NY * NZ, 0);
+    auto idx = [&](int x, int y, int z) { return ((size_t)y * NZ + z) * NX + x; };
+    for (int z = 0; z < NZ; ++z) {
+        for (int x = 0; x < NX; ++x) {
+            const BColumn c = biome_column(p, seed, x0 + x, z0 + z);
+            for (int y = 0; y < NY; ++y) {
+                const int yb = y0 - 1 + y;
+                if (yb > c.sb) { g[idx(x, y, z)] = 2; continue; }
+                g[idx(x, y, z)] = biome_cell(c, seed, x0 + x, yb, z0 + z) == MAT_AIR ? 1 : 0;
+            }
+        }
+    }
+    const int INF = 1 << 30;
+    std::vector<int> spill(g.size(), INF);
+    // Ways out: a cell on the region's sides, the course under the band, the
+    // band's top course, open air -- water there leaves at its own height.
+    using QE = std::pair<int, int>;   // (spill, cell)
+    std::priority_queue<QE, std::vector<QE>, std::greater<QE>> q;
+    for (int y = 0; y < NY; ++y) {
+        for (int z = 0; z < NZ; ++z) {
+            for (int x = 0; x < NX; ++x) {
+                const size_t i = idx(x, y, z);
+                if (g[i] == 0) continue;
+                const bool out_way = x == 0 || z == 0 || x == NX - 1 || z == NZ - 1 || y == 0
+                        || y == NY - 1 || g[i] == 2;
+                if (out_way) {
+                    spill[i] = y;
+                    q.push({ y, (int)i });
+                }
+            }
+        }
+    }
+    static const int D[6][3] = { { 1, 0, 0 }, { -1, 0, 0 }, { 0, 1, 0 }, { 0, -1, 0 }, { 0, 0, 1 }, { 0, 0, -1 } };
+    while (!q.empty()) {
+        const QE e = q.top();
+        q.pop();
+        if (e.first != spill[(size_t)e.second]) continue;
+        const int i = e.second;
+        const int cx = i % NX, cz = (i / NX) % NZ, cy = i / (NX * NZ);
+        for (const auto &d : D) {
+            const int nx = cx + d[0], ny2 = cy + d[1], nz = cz + d[2];
+            if (nx < 0 || nz < 0 || ny2 < 0 || nx >= NX || nz >= NZ || ny2 >= NY) continue;
+            const size_t j = idx(nx, ny2, nz);
+            if (g[j] == 0) continue;
+            const int cand = std::max(e.first, ny2);
+            if (cand < spill[j]) {
+                spill[j] = cand;
+                q.push({ cand, (int)j });
+            }
+        }
+    }
+    out.w.assign((size_t)AQ_XZ * AQ_Y * AQ_XZ, 0);
+    for (int y = 1; y < NY; ++y) {
+        for (int z = 0; z < NZ; ++z) {
+            for (int x = 0; x < NX; ++x) {
+                const size_t i = idx(x, y, z);
+                if (g[i] == 1 && y < spill[i] && spill[i] < INF) {
+                    out.w[((size_t)(y - 1) * AQ_XZ + z) * AQ_XZ + x] = 1;
+                    out.any = true;
+                }
+            }
+        }
+    }
+    return out;
+}
+} // namespace
+
+int cave_pool_water(const GenParams &p, uint32_t seed, int x, int yb, int z, bool may_compute) {
+    if (!p.cave_pools) return 0;
     const int rx = fdiv(x, AQ_XZ), ry = fdiv(yb, AQ_Y), rz = fdiv(z, AQ_XZ);
+    const int64_t key = pool_key(rx, ry, rz);
+    {
+        std::lock_guard<std::mutex> lk(g_pool_mx);
+        if (g_pool_seed != seed || g_pool_gen != g_params_gen) {
+            g_pools.clear();
+            g_pool_seed = seed;
+            g_pool_gen = g_params_gen;
+        }
+        auto it = g_pools.find(key);
+        if (it != g_pools.end()) {
+            if (!it->second.any) return 0;
+            const int lx = x - rx * AQ_XZ, ly = yb - ry * AQ_Y, lz = z - rz * AQ_XZ;
+            return it->second.w[((size_t)ly * AQ_XZ + lz) * AQ_XZ + lx];
+        }
+    }
+    if (!may_compute) return -1;
+    PoolBits b = pool_compute(p, seed, rx, ry, rz);
     const int lx = x - rx * AQ_XZ, ly = yb - ry * AQ_Y, lz = z - rz * AQ_XZ;
-    const int here = pool_level_r(p, seed, rx, ry, rz);
-    if (here != INT_MIN && ly == 0) return true;
-    auto across = [&](int ox, int oz) {
-        const int other = pool_level_r(p, seed, rx + ox, ry, rz + oz);
-        return other != here && yb <= std::max(here, other);
-    };
-    if (lx == 0 && across(-1, 0)) return true;
-    if (lx == AQ_XZ - 1 && across(1, 0)) return true;
-    if (lz == 0 && across(0, -1)) return true;
-    if (lz == AQ_XZ - 1 && across(0, 1)) return true;
-    return false;
+    const int r = b.any ? b.w[((size_t)ly * AQ_XZ + lz) * AQ_XZ + lx] : 0;
+    std::lock_guard<std::mutex> lk(g_pool_mx);
+    g_pools[key] = std::move(b);
+    return r;
 }
 
 static bool cave_cell(const GenParams &p, uint32_t seed, int x, int yb, int z, float depth_m) {
@@ -809,8 +920,7 @@ int biome_cell(const GenParams &p, const BColumn &c, uint32_t seed, int x, int y
     // A cliff higher than this over the sea can still open a cave to it.
     const bool sealed = p.water && yb <= fbrick(p.sea_m) + 1
             && c.sb <= fbrick(p.sea_m) + fbrick(p.cave_min_depth_m) + 3;
-    if (depth > 0 && !sealed && cave_cell(p, seed, x, yb, z, (float)depth * BRICK_M)
-            && !pool_barrier(p, seed, x, yb, z)) {
+    if (depth > 0 && !sealed && cave_cell(p, seed, x, yb, z, (float)depth * BRICK_M)) {
         return MAT_AIR;
     }
     if (depth == 0) {

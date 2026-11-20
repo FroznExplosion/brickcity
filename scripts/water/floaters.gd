@@ -37,6 +37,9 @@ var _by_colour: Array = []           ## [[Color, material name], ...]
 ## Piece chunk -> [version, density].
 var _piece_density := {}
 var _gravity := 9.8
+## Half the bodies each physics tick, the force doubled (the user saw 690
+## calls and 23 ms in one frame with the ground coming down).
+var _parity := 0
 
 
 func setup(p_host: Node, p_water: Node) -> void:
@@ -101,12 +104,18 @@ func _piece_density_of(p) -> float:
 func _physics_process(delta: float) -> void:
 	if host == null or water == null:
 		return
-	wet_bodies = 0
-	floating = 0
+	_parity ^= 1
+	if _parity == 0:
+		wet_bodies = 0
+		floating = 0
+	var n := 0
 	var debris = host.get("debris")
 	if debris != null:
 		for body in debris.bodies:
-			if not is_instance_valid(body) or body.freeze:
+			n += 1
+			if (n & 1) != _parity:
+				continue
+			if not is_instance_valid(body) or body.freeze or not _near_fluid(body.global_position):
 				continue
 			if not body.has_meta("density"):
 				# One brick: its own material is its majority.
@@ -114,14 +123,29 @@ func _physics_process(delta: float) -> void:
 			var size: Vector3 = body.get_meta("size", Vector3.ONE * 0.3)
 			var d := float(body.get_meta("density", STONE))
 			var half := Vector3(0.0, size.y * 0.5, 0.0)
-			_float(body, body.global_position - half, body.global_position + half, d, delta)
+			_float(body, body.global_position - half, body.global_position + half, d, delta * 2.0)
 	var collapse = host.get("collapse")
 	if collapse != null and collapse.pieces != null:
 		for p in collapse.pieces.pieces:
-			if p.body == null or not is_instance_valid(p.body) or p.body.freeze:
+			n += 1
+			if (n & 1) != _parity:
+				continue
+			if p.body == null or not is_instance_valid(p.body) or p.body.freeze \
+					or p.body.sleeping or not _near_fluid(p.body.global_position):
 				continue
 			var box: AABB = collapse.pieces.world_box(p)
-			_float(p.body, box.position, box.end, _piece_density_of(p), delta)
+			_float(p.body, box.position, box.end, _piece_density_of(p), delta * 2.0)
+
+
+## The cheap test before anything else: fluid at or a brick under the point
+## (native, no Dictionary), or near the sea's line over open sea.
+func _near_fluid(global_p: Vector3) -> bool:
+	var p: Vector3 = host.to_local(global_p)
+	if BrickFluid.fluid_at(p) != 0 or BrickFluid.fluid_at(p - Vector3(0, 0.42, 0)) != 0:
+		return true
+	if BrickFluid.get_sea_on() and absf(p.y - BrickFluid.get_sea_level()) < 3.0:
+		return BrickFluid.ocean_at(p)
+	return false
 
 
 ## One body whose world box runs from `lo` to `hi` (only their heights and the
@@ -151,8 +175,9 @@ func _float(body: RigidBody3D, lo: Vector3, hi: Vector3, d: float, delta: float)
 		body.sleeping = false
 	var g := _gravity * body.gravity_scale
 	var lift := body.mass * g * frac * fluid_density / d
-	body.apply_central_force(Vector3.UP * lift)
+	# Every other tick: twice the force, the same push on average.
+	body.apply_central_force(Vector3.UP * lift * 2.0)
 	var v := body.linear_velocity
 	var flow: Vector3 = water.flow_at(local + Vector3.UP * 0.05)
-	body.apply_central_force(((flow - v) * CARRY - v * DRAG * 0.5) * body.mass * frac)
+	body.apply_central_force(((flow - v) * CARRY - v * DRAG * 0.5) * body.mass * frac * 2.0)
 	body.angular_velocity *= maxf(0.0, 1.0 - SPIN_DRAG * frac * delta)
