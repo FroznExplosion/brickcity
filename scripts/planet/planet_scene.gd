@@ -107,6 +107,9 @@ var _adrift_gate := false
 var _falling_gate := false
 var _mechwave_gate := false
 var _rocks_gate := false
+var _cost_gate := false
+## Held: the sky and ambient are not set again each frame (the cost gate prices it).
+var sky_hold := false
 var map: GalaxyMap
 var markers: SpaceMarkers
 var saver: PlanetSaver
@@ -203,6 +206,7 @@ func _ready() -> void:
 	_falling_gate = "--gate=falling" in OS.get_cmdline_user_args()
 	_mechwave_gate = "--gate=mechwave" in OS.get_cmdline_user_args()
 	_rocks_gate = "--gate=rocks" in OS.get_cmdline_user_args()
+	_cost_gate = "--gate=cost" in OS.get_cmdline_user_args()
 	_garrison_gate = "--gate=garrison" in OS.get_cmdline_user_args()
 	_seat_gate = "--gate=seat" in OS.get_cmdline_user_args()
 	_auto_gate = "--gate=autopilot" in OS.get_cmdline_user_args()
@@ -211,7 +215,7 @@ func _ready() -> void:
 	_home_gate = "--gate=home" in OS.get_cmdline_user_args()
 	_save_gate = "--gate=save" in OS.get_cmdline_user_args()
 	WorldFrame.origin = Vector3.ZERO
-	_gate = _gate or _light_gate or _system_gate or _ship_gate or _dock_gate or _worlds_gate or _jump_gate or _debris_gate or _adrift_gate or _falling_gate or _mechwave_gate or _rocks_gate or _garrison_gate or _seat_gate or _hull_gate or _belt_gate or _home_gate or _save_gate or _pawn_gate or _mech_gate or _tank_gate or _soldier_gate or _squad_gate or _travel_gate or _far_gate or _drive_gate or _trees_gate or _bricks_gate or _damage_gate or _fall_gate or _hits_gate or _topple_gate or _pieces_ai_gate or _storey_gate or _snap_gate or _farfight_gate
+	_gate = _gate or _cost_gate or _light_gate or _system_gate or _ship_gate or _dock_gate or _worlds_gate or _jump_gate or _debris_gate or _adrift_gate or _falling_gate or _mechwave_gate or _rocks_gate or _garrison_gate or _seat_gate or _hull_gate or _belt_gate or _home_gate or _save_gate or _pawn_gate or _mech_gate or _tank_gate or _soldier_gate or _squad_gate or _travel_gate or _far_gate or _drive_gate or _trees_gate or _bricks_gate or _damage_gate or _fall_gate or _hits_gate or _topple_gate or _pieces_ai_gate or _storey_gate or _snap_gate or _farfight_gate
 	data = PlanetData.new()
 	data.planet_name = "proto"
 	# Towns and landmarks: their pads go into the ground before it is built.
@@ -347,6 +351,8 @@ func _ready() -> void:
 			_gate_runner()._run_save_gate()
 		elif _belt_gate:
 			_gate_runner()._run_belt_gate()
+		elif _cost_gate:
+			_gate_runner()._run_cost_gate()
 		else:
 			_gate_runner()._run_gate()
 
@@ -802,7 +808,7 @@ func _build_system() -> void:
 	system.woke.connect(_on_woke)
 	system.jumped.connect(_on_jumped)
 	# A ship parked 45 m behind the spawn (not in the other gates' way).
-	if not _gate or _ship_gate or _dock_gate or _jump_gate or _rocks_gate or _garrison_gate or _seat_gate or _belt_gate or _hull_gate or _save_gate or _falling_gate:
+	if not _gate or _cost_gate or _ship_gate or _dock_gate or _jump_gate or _rocks_gate or _garrison_gate or _seat_gate or _belt_gate or _hull_gate or _save_gate or _falling_gate:
 		var sd := OrbitalData.new()
 		sd.kind = "ship"
 		sd.orbital_name = "ship"
@@ -811,7 +817,7 @@ func _build_system() -> void:
 		sd.courses = 6
 		# In play a generated ship: a hull with its rooms (Docs/RoomModules.md 7.5);
 		# the gates keep the plain one they were written round.
-		if not _gate or _hull_gate:
+		if not _gate or _hull_gate or _cost_gate:
 			sd.layout = "generated"
 			sd.orbital_seed = 7
 		var east := spawn_dir.cross(Vector3.FORWARD).normalized()
@@ -1191,7 +1197,8 @@ func _process(delta: float) -> void:
 	var open := grid_light.at(viewer.global_position if viewer != null else cam_pos).x
 	light.room_open = open if open < 0.0 or light.room_open < 0.0 else lerpf(light.room_open, open,
 			clampf(get_process_delta_time() * 4.0, 0.0, 1.0))
-	light.set_sky(day, air, body.data.atmosphere_color, sun_h, Gravity.up_at(cam_pos))
+	if not sky_hold:
+		light.set_sky(day, air, body.data.atmosphere_color, sun_h, Gravity.up_at(cam_pos))
 	_clouds_for(body)
 	_ambient_boxes()
 	light.expose(viewer.global_position if viewer != null else cam_pos, get_process_delta_time())
@@ -1200,7 +1207,7 @@ func _process(delta: float) -> void:
 	# walker's own gate, the pawn stands on it.
 	if walker.frozen and not piloting and pawn == null and trees.prebaked and _ground_hit(walker.global_position) != Vector3.INF:
 		walker.frozen = false
-		if not _gate or _pawn_gate or _mech_gate or _tank_gate or _soldier_gate or _squad_gate or _travel_gate or _far_gate or _drive_gate or _trees_gate or _bricks_gate or _damage_gate or _fall_gate or _hits_gate or _topple_gate or _pieces_ai_gate or _storey_gate or _snap_gate or _farfight_gate or _garrison_gate or _seat_gate or _home_gate or _mechwave_gate or _hull_gate or _save_gate or _light_gate:
+		if not _gate or _pawn_gate or _mech_gate or _tank_gate or _soldier_gate or _squad_gate or _travel_gate or _far_gate or _drive_gate or _trees_gate or _bricks_gate or _damage_gate or _fall_gate or _hits_gate or _topple_gate or _pieces_ai_gate or _storey_gate or _snap_gate or _farfight_gate or _garrison_gate or _seat_gate or _home_gate or _mechwave_gate or _hull_gate or _save_gate or _light_gate or _cost_gate:
 			_spawn_player(_ground_hit(walker.global_position), -walker.global_transform.basis.z)
 			if saver != null:
 				saver.resume()
