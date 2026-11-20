@@ -75,7 +75,8 @@ func seed_default() -> void:
 		var id := StringName(blocks[i])
 		if ItemCatalog.has(id):
 			hotbars[0][i] = ItemStack.make(id, ItemCatalog.max_stack(id))
-	var bar2 := ["bucket", "source_bucket", "water_source", "water_brick", "lava_source", "pickaxe"]
+	var bar2 := ["bucket", "source_bucket", "water_source", "water_brick", "lava_source", "pickaxe",
+			"mega_pickaxe"]
 	for i in bar2.size():
 		var id := StringName(bar2[i])
 		if ItemCatalog.has(id):
@@ -239,6 +240,36 @@ func double_click(a: Dictionary) -> void:
 		if f[1].count <= 0:
 			set_slot(f[0], null)
 	changed.emit()
+
+
+## A kit item added after a save was made (the Mega Pickaxe, 2026-11-19): put
+## it in the slot after `after` if that is free, else the first free hotbar
+## slot, else the backpack -- once; never a second copy. True if it was added.
+func ensure_item(id: StringName, after: StringName = &"") -> bool:
+	if not ItemCatalog.has(id):
+		return false
+	for a in all_addrs():
+		var s := get_slot(a)
+		if s != null and s.id == id:
+			return false
+	var stack := ItemStack.make(id, ItemCatalog.max_stack(id))
+	if after != &"":
+		for bar in 2:
+			for i in HOTBAR_SIZE - 1:
+				var s: ItemStack = hotbars[bar][i]
+				if s != null and s.id == after and hotbars[bar][i + 1] == null:
+					hotbars[bar][i + 1] = stack
+					changed.emit()
+					return true
+	for bar in 2:
+		for i in HOTBAR_SIZE:
+			if hotbars[bar][i] == null:
+				hotbars[bar][i] = stack
+				changed.emit()
+				return true
+	var left := _insert(stack, [&"main"])
+	changed.emit()
+	return left == null
 
 
 func all_addrs() -> Array:

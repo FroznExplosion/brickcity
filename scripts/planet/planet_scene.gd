@@ -107,6 +107,9 @@ var _adrift_gate := false
 var _falling_gate := false
 var _mechwave_gate := false
 var _rocks_gate := false
+var _cost_gate := false
+## Held: the sky and ambient are not set again each frame (the cost gate prices it).
+var sky_hold := false
 var map: GalaxyMap
 var markers: SpaceMarkers
 var saver: PlanetSaver
@@ -203,6 +206,7 @@ func _ready() -> void:
 	_falling_gate = "--gate=falling" in OS.get_cmdline_user_args()
 	_mechwave_gate = "--gate=mechwave" in OS.get_cmdline_user_args()
 	_rocks_gate = "--gate=rocks" in OS.get_cmdline_user_args()
+	_cost_gate = "--gate=cost" in OS.get_cmdline_user_args()
 	_garrison_gate = "--gate=garrison" in OS.get_cmdline_user_args()
 	_seat_gate = "--gate=seat" in OS.get_cmdline_user_args()
 	_auto_gate = "--gate=autopilot" in OS.get_cmdline_user_args()
@@ -211,7 +215,7 @@ func _ready() -> void:
 	_home_gate = "--gate=home" in OS.get_cmdline_user_args()
 	_save_gate = "--gate=save" in OS.get_cmdline_user_args()
 	WorldFrame.origin = Vector3.ZERO
-	_gate = _gate or _light_gate or _system_gate or _ship_gate or _dock_gate or _worlds_gate or _jump_gate or _debris_gate or _adrift_gate or _falling_gate or _mechwave_gate or _rocks_gate or _garrison_gate or _seat_gate or _hull_gate or _belt_gate or _home_gate or _save_gate or _pawn_gate or _mech_gate or _tank_gate or _soldier_gate or _squad_gate or _travel_gate or _far_gate or _drive_gate or _trees_gate or _bricks_gate or _damage_gate or _fall_gate or _hits_gate or _topple_gate or _pieces_ai_gate or _storey_gate or _snap_gate or _farfight_gate
+	_gate = _gate or _cost_gate or _light_gate or _system_gate or _ship_gate or _dock_gate or _worlds_gate or _jump_gate or _debris_gate or _adrift_gate or _falling_gate or _mechwave_gate or _rocks_gate or _garrison_gate or _seat_gate or _hull_gate or _belt_gate or _home_gate or _save_gate or _pawn_gate or _mech_gate or _tank_gate or _soldier_gate or _squad_gate or _travel_gate or _far_gate or _drive_gate or _trees_gate or _bricks_gate or _damage_gate or _fall_gate or _hits_gate or _topple_gate or _pieces_ai_gate or _storey_gate or _snap_gate or _farfight_gate
 	data = PlanetData.new()
 	data.planet_name = "proto"
 	# Towns and landmarks: their pads go into the ground before it is built.
@@ -271,6 +275,11 @@ func _ready() -> void:
 	# The walker at the origin from the start: the planet's centre is 10 km off.
 	PlanetFrame.recentre(self, walker.global_position)
 	_build_hud()
+	# The buildings' occluders hide what is behind them (Docs/PlanetCost.md 5.5).
+	get_viewport().use_occlusion_culling = true
+	# The town's nav regions start building now, on workers (setup_ai collects).
+	if not _gate or _cost_gate:
+		_prepare_ai(town_dirs[0])
 	if _gate:
 		PlayerCamera.hands_off = true
 		walker.scripted = true
@@ -347,6 +356,8 @@ func _ready() -> void:
 			_gate_runner()._run_save_gate()
 		elif _belt_gate:
 			_gate_runner()._run_belt_gate()
+		elif _cost_gate:
+			_gate_runner()._run_cost_gate()
 		else:
 			_gate_runner()._run_gate()
 
@@ -802,7 +813,7 @@ func _build_system() -> void:
 	system.woke.connect(_on_woke)
 	system.jumped.connect(_on_jumped)
 	# A ship parked 45 m behind the spawn (not in the other gates' way).
-	if not _gate or _ship_gate or _dock_gate or _jump_gate or _rocks_gate or _garrison_gate or _seat_gate or _belt_gate or _hull_gate or _save_gate or _falling_gate:
+	if not _gate or _cost_gate or _ship_gate or _dock_gate or _jump_gate or _rocks_gate or _garrison_gate or _seat_gate or _belt_gate or _hull_gate or _save_gate or _falling_gate:
 		var sd := OrbitalData.new()
 		sd.kind = "ship"
 		sd.orbital_name = "ship"
@@ -811,7 +822,7 @@ func _build_system() -> void:
 		sd.courses = 6
 		# In play a generated ship: a hull with its rooms (Docs/RoomModules.md 7.5);
 		# the gates keep the plain one they were written round.
-		if not _gate or _hull_gate:
+		if not _gate or _hull_gate or _cost_gate:
 			sd.layout = "generated"
 			sd.orbital_seed = 7
 		var east := spawn_dir.cross(Vector3.FORWARD).normalized()
@@ -1151,6 +1162,8 @@ func _process(delta: float) -> void:
 			buildings.on_origin_shift()
 		if _ai_awake():
 			(ai.nav_net as PlanetNavNet).shift_origin(offset)
+		elif _ai_prep != null:
+			_ai_prep.shift_origin(offset)
 		if system != null:
 			system.on_origin_shift()
 	if system != null:
@@ -1191,7 +1204,8 @@ func _process(delta: float) -> void:
 	var open := grid_light.at(viewer.global_position if viewer != null else cam_pos).x
 	light.room_open = open if open < 0.0 or light.room_open < 0.0 else lerpf(light.room_open, open,
 			clampf(get_process_delta_time() * 4.0, 0.0, 1.0))
-	light.set_sky(day, air, body.data.atmosphere_color, sun_h, Gravity.up_at(cam_pos))
+	if not sky_hold:
+		light.set_sky(day, air, body.data.atmosphere_color, sun_h, Gravity.up_at(cam_pos))
 	_clouds_for(body)
 	_ambient_boxes()
 	light.expose(viewer.global_position if viewer != null else cam_pos, get_process_delta_time())
@@ -1200,7 +1214,7 @@ func _process(delta: float) -> void:
 	# walker's own gate, the pawn stands on it.
 	if walker.frozen and not piloting and pawn == null and trees.prebaked and _ground_hit(walker.global_position) != Vector3.INF:
 		walker.frozen = false
-		if not _gate or _pawn_gate or _mech_gate or _tank_gate or _soldier_gate or _squad_gate or _travel_gate or _far_gate or _drive_gate or _trees_gate or _bricks_gate or _damage_gate or _fall_gate or _hits_gate or _topple_gate or _pieces_ai_gate or _storey_gate or _snap_gate or _farfight_gate or _garrison_gate or _seat_gate or _home_gate or _mechwave_gate or _hull_gate or _save_gate or _light_gate:
+		if not _gate or _pawn_gate or _mech_gate or _tank_gate or _soldier_gate or _squad_gate or _travel_gate or _far_gate or _drive_gate or _trees_gate or _bricks_gate or _damage_gate or _fall_gate or _hits_gate or _topple_gate or _pieces_ai_gate or _storey_gate or _snap_gate or _farfight_gate or _garrison_gate or _seat_gate or _home_gate or _mechwave_gate or _hull_gate or _save_gate or _light_gate or _cost_gate:
 			_spawn_player(_ground_hit(walker.global_position), -walker.global_transform.basis.z)
 			if saver != null:
 				saver.resume()
@@ -1321,8 +1335,16 @@ var ai_worst_parts: Array = []
 ## floating origin moves every region's frame with the scene (_process). Of body
 ## `b`: home by default, or a generated world the player is on, whose first
 ## region is the only one built in the call (home's load has the time).
-func setup_ai(dir: Vector3, b: PlanetBody = planet) -> void:
-	var t0 := Time.get_ticks_usec()
+## The town's nav net made while the scene loads (play only), its regions'
+## grids building on workers: setup_ai at the spawn then collects them instead
+## of building five regions on the main thread (354-444 ms, the frame the
+## player is let go; Docs/PlanetCost.md 5.3). The grids are the planet's data,
+## its sites and its trees -- all known before anything streams.
+var _ai_prep: PlanetNavNet = null
+var _ai_prep_dir := Vector3.ZERO
+
+
+func _new_net(dir: Vector3, b: PlanetBody) -> PlanetNavNet:
 	var stud := BrickWorld.get_stud_metres()
 	var sites: Array = []
 	var pb: PlanetBuildings = buildings if b == planet else system.built[b]
@@ -1335,13 +1357,32 @@ func setup_ai(dir: Vector3, b: PlanetBody = planet) -> void:
 	# The buildings' bricks (11.11): the regions read them, a site's box goes
 	# while its bricks stand.
 	net.bricks = pb.bricks
+	# The trees' trunks too: walked round, and cover (11.10).
+	if tr != null:
+		net.tree_source = tr.trees_near
+	return net
+
+
+func _prepare_ai(dir: Vector3) -> void:
+	_ai_prep = _new_net(dir, planet)
+	_ai_prep_dir = dir
+	_ai_prep.threaded = true
+	_ai_prep.keep_around([planet.global_transform * data.surface_point(dir)], AI_KEEP_M, 99)
+
+
+func setup_ai(dir: Vector3, b: PlanetBody = planet) -> void:
+	var t0 := Time.get_ticks_usec()
+	var pb: PlanetBuildings = buildings if b == planet else system.built[b]
+	var tr: PlanetTrees = trees if b == planet else system.trees_of.get(b)
+	var prepped := _ai_prep != null and b == planet and _ai_prep_dir.is_equal_approx(dir)
+	var net: PlanetNavNet = _ai_prep if prepped else _new_net(dir, b)
+	_ai_prep = null
 	pb.site_bricks.connect(func(i: int, on: bool) -> void: net.set_site_bricks(i, on, pb.site_box(i)))
 	for i in pb.sites.size():
 		if pb.sites[i].bricked:
 			net.set_site_bricks(i, true, pb.site_box(i))
-	# The trees' trunks too: walked round, and cover; one knocked down goes (11.10).
+	# A tree knocked down goes from the nav too (11.10).
 	if tr != null:
-		net.tree_source = tr.trees_near
 		tr.tree_knocked.connect(net.remove_tree)
 	# What breaks the buildings' bricks (11.11 D1): a soldier's rounds, a squad's
 	# breaching charge; the maps forget where bricks went.
@@ -1353,7 +1394,12 @@ func setup_ai(dir: Vector3, b: PlanetBody = planet) -> void:
 			r.world.sync()
 		net.invalidate_box(box.grow(1.0)))
 	var at := b.global_transform * b.data.surface_point(dir)
-	if b == planet:
+	if prepped:
+		# Built on workers since the load: taken in (a few ms each). The
+		# player's own region waits only if its grid is somehow not done.
+		net._collect_builds(99)
+		net.ensure(net.key_at(at))
+	elif b == planet:
 		net.keep_around([at], AI_KEEP_M, 99)
 	else:
 		net.ensure(net.key_at(at))
@@ -1378,7 +1424,7 @@ func setup_ai(dir: Vector3, b: PlanetBody = planet) -> void:
 		if _garrison_gate:
 			ai.policy = CombatPolicy.new()
 	print("[planet] AI nav net over the town: %d region(s) in %.0f ms (%.0f ms the one there), %d building(s)" % [
-			net.regions.size(), (Time.get_ticks_usec() - t0) / 1000.0, r.made_ms, sites.size()])
+			net.regions.size(), (Time.get_ticks_usec() - t0) / 1000.0, r.made_ms, pb.sites.size()])
 
 
 func _physics_process(delta: float) -> void:

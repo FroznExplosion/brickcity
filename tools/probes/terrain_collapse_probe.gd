@@ -44,6 +44,7 @@ func _initialize() -> void:
 		_check_pillar_arm()
 		_check_tension()
 		_check_bond()
+		_check_big_island()
 		_check_sand()
 	BrickTerrain.clear_terrain_edits()
 	BrickTerrain.set_generator(0)
@@ -200,6 +201,24 @@ func _check_bond() -> void:
 	var dirt := _holds_at(10, 2)    # MAT_DIRT
 	print("    a 10-stud arm holds from: stone %.3f, dirt %.3f a stud" % [stone, dirt])
 	_expect(dirt > stone, "bond: a dirt arm needs stronger studs than a stone one")
+
+
+## An arm 40 studs long -- past the region a survey starts with -- on its
+## pillar: the foot shot out, all of it comes loose as ONE group (the region
+## grows to it; it used to read as held at the region's edge).
+func _check_big_island() -> void:
+	var box := _build_arm(40, 4)
+	var r := _survey(box[0], box[1])
+	_expect((r.groups as Array).is_empty(), "long arm: held while its pillar stands")
+	_fill(Vector3i(0, 1, 0), Vector3i(1, 3, 1), 0)
+	var t0 := Time.get_ticks_usec()
+	r = _survey(Vector3i(0, 1, 0), Vector3i(1, 3, 1))
+	var ms := (Time.get_ticks_usec() - t0) / 1000.0
+	var want := 2 * 2 * 5 + 2 * 40 * 2
+	_expect((r.groups as Array).size() == 1 and _all_cells(r) == want,
+			"long arm: foot shot out, one group of all of it (%d groups, %d cells, want %d, region grown %d times)" % [
+			(r.groups as Array).size(), _all_cells(r), want, int(r.grown)])
+	print("    long arm survey %.1f ms (%d bricks)" % [ms, int(r.bricks)])
 
 
 func _check_sand() -> void:

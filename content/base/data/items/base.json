@@ -15,6 +15,9 @@
 			"description": "Creative: pours a lava source in every stud of the block." },
 		"pickaxe": { "name": "Pickaxe", "kind": "tool", "max_stack": 1, "colour": "#b0b0b8", "glyph": "P",
 			"description": "Breaks blocks." },
+		"mega_pickaxe": { "name": "Mega Pickaxe", "kind": "tool", "max_stack": 1, "colour": "#e8c040", "glyph": "M",
+			"break_area": 5, "break_repeat": 0.05,
+			"description": "Breaks a 5 x 5 face of blocks at a time (the face looked at, one block deep), held: about four times as fast as the pickaxe." },
 		"chest": { "name": "Chest", "kind": "chest", "hand": "right", "colour": "#8a5a2b", "glyph": "C",
 			"description": "Holds 27 stacks. Place it, then right-click it to open." }
 	}

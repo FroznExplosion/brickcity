@@ -200,6 +200,10 @@ func _ready() -> void:
 			_run_flight_gate()
 		elif "--gate=spawn" in OS.get_cmdline_user_args():
 			_run_spawn_gate()
+		elif "--gate=stop" in OS.get_cmdline_user_args():
+			_run_stop_gate()
+		elif "--gate=mega" in OS.get_cmdline_user_args():
+			_run_mega_gate()
 		elif "--gate=shift" in OS.get_cmdline_user_args():
 			_run_shift_gate()
 		elif "--gate=deep" in OS.get_cmdline_user_args():
@@ -700,6 +704,7 @@ func _process(delta: float) -> void:
 		_flush_edits()
 	var p0 := Time.get_ticks_usec()
 	_streamer.follow(Vector2(eye.x, eye.z))
+	var pd := Time.get_ticks_usec()
 	_deep.follow(eye)
 	var p1 := Time.get_ticks_usec()
 	_far.cover(_streamer, false)
@@ -708,7 +713,7 @@ func _process(delta: float) -> void:
 	var re0 := _reanchors
 	_follow_far(eye)
 	var p3 := Time.get_ticks_usec()
-	_ptimes = {"near": (p1 - p0) / 1000.0, "far": (p2 - p1) / 1000.0,
+	_ptimes = {"near": (pd - p0) / 1000.0, "deep": (p1 - pd) / 1000.0, "far": (p2 - p1) / 1000.0,
 			"reanchor": (p3 - p2) / 1000.0, "swapped": _reanchors != re0}
 	if not on_foot:
 		FpsRig.follow_flight(cam, walker)
@@ -1005,6 +1010,9 @@ func _load_inventory() -> void:
 			push_warning("[mine] %s is not an inventory; the starting kit instead" % path)
 	if not ok:
 		inv.seed_default()
+	# Kit added since the save was made.
+	elif inv.ensure_item(&"mega_pickaxe", &"pickaxe"):
+		print("[mine] Mega Pickaxe added to the saved inventory")
 	if builder.inv.changed.is_connected(_on_inventory_changed):
 		builder.inv.changed.disconnect(_on_inventory_changed)
 	builder.set_inventory(inv)
@@ -1437,6 +1445,74 @@ func _run_gate() -> void:
 	await _gate_cave()
 	await _gate_edits()
 	print("[mine-gate] done")
+	get_tree().quit()
+
+
+## -- --gate=stop: what the frame does after the player STOPS (the user:
+## "after stopping, while still, the fps drops for a few seconds"). Flies at
+## the default 50 m/s over new ground for 8 s, stops, and prints the next 8 s
+## in quarter-second windows: the worst and mean frame, the GPU's worst, the
+## main thread's parts (FrameClock), the mine world's own (near, deep, far,
+## trees) and what each tier did in the window.
+func _run_stop_gate() -> void:
+	await _frames(60)
+	var clock := FrameClock.new()
+	add_child(clock)
+	set_on_foot(false)
+	_fly_to(_eye() + Vector3(0, 10, 0), Vector3(1, -0.25, 0.3).normalized())
+	walker.pitch = -0.3
+	await _frames(30)
+	var dir := Vector3(1.0, 0.0, 0.3).normalized()
+	var t0 := Time.get_ticks_msec()
+	while Time.get_ticks_msec() - t0 < 8000:
+		walker.global_position += dir * 50.0 * get_process_delta_time()
+		await get_tree().process_frame
+	print("[mine-stop] flew 8 s at 50 m/s (held %s), stopping" % fast_hold)
+	var windows := []
+	var w := {}
+	var tw := Time.get_ticks_msec()
+	var built0 := _streamer.built_count()
+	var bev0 := _streamer.bevels_added
+	var far0 := _far.applies
+	var deep0 := _deep.built
+	while Time.get_ticks_msec() - tw < 8000:
+		await get_tree().process_frame
+		var ms := clock.last_ms
+		var p: Dictionary = clock.last
+		if w.is_empty():
+			w = {"n": 0, "worst": 0.0, "sum": 0.0, "gpu": 0.0, "process": 0.0, "scripts": 0.0,
+					"step": 0.0, "draw": 0.0, "sync": 0.0, "near": 0.0, "deep": 0.0, "far": 0.0,
+					"trees": 0.0, "tris": 0.0}
+		w.n += 1
+		w.sum += ms
+		if ms > w.worst:
+			w.worst = ms
+			for k in ["process", "scripts", "step", "draw", "sync"]:
+				w[k] = float(p.get(k, 0.0))
+			w.near = float(_ptimes.get("near", 0.0))
+			w.deep = float(_ptimes.get("deep", 0.0))
+			w.far = float(_ptimes.get("far", 0.0)) + float(_ptimes.get("reanchor", 0.0))
+			w.trees = _trees.last_us / 1000.0
+		w.gpu = maxf(w.gpu, float(p.get("gpu", 0.0)))
+		w.tris = maxf(w.tris, float(p.get("tris_M", 0.0)))
+		var el := Time.get_ticks_msec() - tw
+		if el >= (windows.size() + 1) * 250:
+			w["built"] = _streamer.built_count() - built0
+			w["bev"] = _streamer.bevels_added - bev0
+			w["far_n"] = _far.applies - far0
+			w["deep_n"] = _deep.built - deep0
+			built0 = _streamer.built_count()
+			bev0 = _streamer.bevels_added
+			far0 = _far.applies
+			deep0 = _deep.built
+			windows.append(w)
+			w = {}
+	for i in windows.size():
+		var x: Dictionary = windows[i]
+		print("[mine-stop] %4.2f s  worst %5.1f mean %4.1f gpu %4.1f tris %.2fM | worst frame: process %4.1f scripts %4.1f step %4.1f draw %4.1f sync %4.1f; near %4.1f deep %4.1f far %4.1f trees %4.1f | built %d bevel %d far %d deep %d"
+				% [(i + 1) * 0.25, x.worst, x.sum / maxf(x.n, 1), x.gpu, x.tris, x.process, x.scripts, x.step,
+				x.draw, x.sync, x.near, x.deep, x.far, x.trees, x.built, x.bev, x.far_n, x.deep_n])
+	print("[mine-stop] %s | bevel hand-over worst %.1f ms | water %s" % [_streamer.report(), _streamer.bevel_ms, water.report()])
 	get_tree().quit()
 
 
@@ -1925,6 +2001,75 @@ func _gate_collapse() -> void:
 	await _collapse_quiet(300)
 	var size_of := func(p: PlanetPieces.Piece) -> int:
 		return collapse.bricks.get_alive_block_count(p.chunk)
+	# Studs: a piece of ground draws its open studs, as the ground does.
+	var studded := 0
+	for p in collapse.pieces.pieces:
+		if p.mesh_node != null:
+			for n in p.mesh_node.find_children("*", "MultiMeshInstance3D", true, false):
+				if (n as MultiMeshInstance3D).multimesh.instance_count > 0:
+					studded += 1
+					break
+	ok = studded == collapse.pieces.pieces.size() and studded > 0
+	print("[mine-collapse] %s  pieces draw their studs (%d of %d)" % ["ok  " if ok else "FAIL", studded, collapse.pieces.pieces.size()])
+	fails += 0 if ok else 1
+	# Mined in build mode: the brick looked at on a piece goes.
+	var arm: PlanetPieces.Piece = null
+	for p in collapse.pieces.pieces:
+		if arm == null or int(size_of.call(p)) > int(size_of.call(arm)):
+			arm = p
+	var abox := collapse.pieces.world_box(arm)
+	# A point on one of its bricks: straight down onto it.
+	var look_at_pt := abox.get_center()
+	var dq := PhysicsRayQueryParameters3D.create(abox.get_center() + Vector3.UP * (abox.size.y + 3.0),
+			abox.get_center() - Vector3.UP * (abox.size.y + 3.0), Layers.DEBRIS | Layers.FALLING)
+	var dh := get_world_3d().direct_space_state.intersect_ray(dq)
+	if not dh.is_empty():
+		look_at_pt = dh.position
+	var cam_at := look_at_pt + Vector3(0.0, 3.0, -2.0)
+	var ecam := _eye_camera()
+	var keep_xf := ecam.global_transform
+	ecam.global_transform = Transform3D(Basis.looking_at(look_at_pt - cam_at, Vector3.UP), cam_at)
+	var arm_n0 := int(size_of.call(arm))
+	builder.update_target()
+	var aimed: bool = not (builder.piece_target as Array).is_empty()
+	var mined: bool = builder.break_target()
+	ecam.global_transform = keep_xf
+	ok = aimed and mined and int(size_of.call(arm)) < arm_n0
+	print("[mine-collapse] %s  build mode mines a piece's brick (aimed %s, %d -> %d bricks)" % [
+			"ok  " if ok else "FAIL", aimed, arm_n0, int(size_of.call(arm))])
+	fails += 0 if ok else 1
+	await _frames(10)
+	# A pistol wears a piece's brick down and breaks it (StructuralDamage).
+	var total := func() -> int:
+		var n := 0
+		for p in collapse.pieces.pieces:
+			n += int(size_of.call(p))
+		return n
+	var pn0: int = total.call()
+	var shots_n := 0
+	var down := Vector3.DOWN
+	for k in 80:
+		var h2 := {}
+		for p in collapse.pieces.pieces:
+			var pb := collapse.pieces.world_box(p)
+			var q2 := PhysicsRayQueryParameters3D.create(pb.get_center() + Vector3.UP * (pb.size.y + 3.0),
+					pb.get_center() - Vector3.UP * (pb.size.y + 3.0), Layers.DEBRIS | Layers.FALLING)
+			h2 = get_world_3d().direct_space_state.intersect_ray(q2)
+			if not h2.is_empty():
+				break
+		if h2.is_empty():
+			break
+		var pt: Vector3 = h2.position + down * 0.05
+		_mine(pt, down, StructuralDamage.for_shot(null))
+		shots_n += 1
+		if int(total.call()) < pn0:
+			break
+		await _frames(1)
+	ok = int(total.call()) < pn0
+	print("[mine-collapse] %s  pistol rounds break a piece's brick (%d shot(s), %d -> %d bricks in pieces)" % [
+			"ok  " if ok else "FAIL", shots_n, pn0, int(total.call())])
+	fails += 0 if ok else 1
+	await _collapse_quiet(300)
 	# Sand dropped onto the fallen arm: it lands ON the piece, as pieces.
 	var big: PlanetPieces.Piece = null
 	for p in collapse.pieces.pieces:
@@ -2744,6 +2889,37 @@ func _pond_units(o: Vector2i, w: int) -> int:
 
 ## Build mode, as a player would: fly a little above the ground looking down
 ## at it, place a pillar, break a block out of it, picture it.
+## -- --gate=mega: the Mega Pickaxe against the pickaxe, looking down at flat
+## ground: the plate cells one break clears, and the hold repeat of each.
+func _run_mega_gate() -> void:
+	await _frames(30)
+	set_on_foot(false)
+	var stud := BrickWorld.get_stud_metres()
+	var e := _eye()
+	var c := Vector2i(floori(e.x / stud), floori(e.z / stud))
+	var res := {}
+	for tool in [&"pickaxe", &"mega_pickaxe"]:
+		var g := _ground_m(c.x, c.y)
+		_fly_to(Vector3((c.x + 0.5) * stud, g + 2.0, (c.y + 0.5) * stud), Vector3(0, 0, -1))
+		walker.pitch = -1.45
+		await _frames(20)
+		builder.set_active(true)
+		var picked: bool = builder.select(tool)
+		builder.update_target()
+		var before := BrickTerrain.get_edit_count()
+		var ok: bool = builder.break_target()
+		await _frames(30)
+		res[tool] = [picked, ok, BrickTerrain.get_edit_count() - before, builder._break_repeat()]
+		await _shot(UserPaths.DEV + "mine_%s.png" % tool)
+		c += Vector2i(40, 0)
+	builder.set_active(false)
+	var s: int = builder.block_studs()
+	print("[mine-mega] block %d x %d studs; pickaxe: held %s, broke %s, %d cells, every %.2f s; Mega Pickaxe: held %s, broke %s, %d cells (a full 5 x 5 face is %d), every %.2f s"
+			% [s, s, res.pickaxe[0], res.pickaxe[1], res.pickaxe[2], res.pickaxe[3],
+			res.mega_pickaxe[0], res.mega_pickaxe[1], res.mega_pickaxe[2], 25 * s * s * 3, res.mega_pickaxe[3]])
+	get_tree().quit()
+
+
 func _gate_build() -> void:
 	set_on_foot(false)
 	var e := _eye()

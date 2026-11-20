@@ -140,6 +140,9 @@ var hold := false:
 		if hold and not v:
 			_finish_pending = true
 		hold = v
+## Chamfered near meshes handed to their tiles, and the longest hand-over (ms).
+var bevels_added := 0
+var bevel_ms := 0.0
 var _worst_surface_ms := 0.0
 var _worst_inst_ms := 0.0
 var _worst_coll_ms := 0.0
@@ -229,7 +232,10 @@ func _bevel_step() -> void:
 		_bevel_tasks.erase(c)
 		var tile = job[2]
 		if is_instance_valid(tile) and _tiles.get(c) == tile and tile.needs_bevel():
+			var tb := Time.get_ticks_usec()
 			tile.add_bevel(job[1][0])
+			bevels_added += 1
+			bevel_ms = maxf(bevel_ms, float(Time.get_ticks_usec() - tb) / 1000.0)
 	if _bevel_tasks.size() >= BEVEL_IN_FLIGHT:
 		return
 	for dz in range(-bevel_radius, bevel_radius + 1):
