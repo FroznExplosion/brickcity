@@ -338,10 +338,15 @@ func update(here: Vector3) -> void:
 	var blend := mesh != null and _card_mat != null
 	for r in _set.update(here, near_range, cull_range, hysteresis, blend, no_card):
 		var c := _chunk(r.key)
+		# A square left with nothing in a tier is hidden, not drawn empty: with
+		# none visible a MultiMesh is still an object and a draw a pass (the
+		# planet's trees left 1,400 of them behind a flight; Docs/PlanetCost.md 2.4).
 		if c.near != null:
 			_fill((c.near as MultiMeshInstance3D).multimesh, r.near, r.n_near)
+			(c.near as MultiMeshInstance3D).visible = int(r.n_near) > 0
 		var far_mmi: MultiMeshInstance3D = c.far
 		_fill(far_mmi.multimesh, r.far, r.n_far)
+		far_mmi.visible = int(r.n_far) > 0
 		if _card_mat != null and r.has_far:
 			# The cards' own bounds: every far copy's origin, grown by what a
 			# card can reach round it (the bake's centre is inside that,
