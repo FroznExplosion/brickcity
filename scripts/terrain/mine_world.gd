@@ -904,6 +904,8 @@ func toggle_inventory() -> void:
 	_inv_screen.name = "InventoryScreen"
 	_inv_screen.setup(builder.inv, self)
 	_inv_layer.add_child(_inv_screen)
+	# The hotbars are in the screen; the HUD behind it would only clutter it.
+	_hud_layer.visible = false
 	if walker != null:
 		_inv_walker_frozen = walker.frozen
 		if not on_foot:
@@ -916,6 +918,7 @@ func toggle_inventory() -> void:
 
 func inventory_closed() -> void:
 	_inv_screen = null
+	_hud_layer.visible = true
 	if _inv_layer != null:
 		_inv_layer.queue_free()
 		_inv_layer = null
@@ -1367,11 +1370,15 @@ func _run_inventory_gate() -> void:
 	check.call("a catalog item comes onto the cursor, a full stack",
 			inv.cursor != null and inv.cursor.id == &"granite" and inv.cursor.count == 64)
 	await _click(_inv_slot(scr, Inventory.addr(&"hotbar_1", 2)).get_global_rect().get_center())
-	check.call("... and goes into hotbar 2 slot 3", inv.cursor == null and inv.hotbars[1][2] != null
-			and inv.hotbars[1][2].id == &"granite")
+	check.call("... and swaps with what hotbar 2 slot 3 held (water source now held)",
+			inv.hotbars[1][2] != null and inv.hotbars[1][2].id == &"granite"
+			and inv.cursor != null and inv.cursor.id == &"water_source")
 	await _shot(UserPaths.DEV + "inv_creative.png")
+	await _click(_inv_slot(scr, {}, &"dirt").get_global_rect().get_center())
+	check.call("a held stack clicked on the catalog is thrown away", inv.cursor == null)
 	# A left drag spreads a stack: sand over hotbar 2 slots 7-9.
 	await _click(_inv_slot(scr, {}, &"sand").get_global_rect().get_center())
+	await _shot(UserPaths.DEV + "inv_held.png")
 	var pts: Array[Vector2] = []
 	for i in [6, 7, 8]:
 		pts.append(_inv_slot(scr, Inventory.addr(&"hotbar_1", i)).get_global_rect().get_center())
@@ -1380,16 +1387,23 @@ func _run_inventory_gate() -> void:
 	check.call("a left drag spreads 64 sand over 3 slots (21 each, 1 held)",
 			spread.all(func(s): return s != null and s.id == &"sand" and s.count == 21)
 			and inv.cursor != null and inv.cursor.count == 1)
+	var held_before := inv.cursor != null
 	await _key(KEY_ESCAPE)
 	check.call("Escape with a stack held puts it back and keeps the screen open",
-			inv.cursor == null and inventory_open())
+			held_before and inv.cursor == null and inventory_open())
+	if not inventory_open():
+		print("[inv-gate] INV-GATE FAIL: the screen closed early")
+		get_tree().quit(1)
+		return
+	check.call("... onto its own kind first (hotbar 2's sand: 22)",
+			inv.hotbars[1][6] != null and inv.hotbars[1][6].count == 22)
 	var tab_s: Button = scr.get("_tab_storage")
 	await _click(tab_s.get_global_rect().get_center())
-	var back_at := -1
-	for i in inv.main.size():
-		if inv.main[i] != null and inv.main[i].id == &"sand":
-			back_at = i
-	check.call("... into storage", back_at >= 0)
+	# Left click picks a stack up, left click on an empty slot puts it down.
+	await _click(_inv_slot(scr, Inventory.addr(&"hotbar_1", 7)).get_global_rect().get_center())
+	await _click(_inv_slot(scr, Inventory.addr(&"main", 0)).get_global_rect().get_center())
+	var back_at := 0 if inv.main[0] != null and inv.main[0].id == &"sand" and inv.cursor == null else -1
+	check.call("a stack picked up from hotbar 2 and put into storage", back_at == 0)
 	if back_at >= 0:
 		var over := _inv_slot(scr, Inventory.addr(&"main", back_at)).get_global_rect().get_center()
 		var m := InputEventMouseMotion.new()
@@ -1398,8 +1412,9 @@ func _run_inventory_gate() -> void:
 		Input.parse_input_event(m)
 		await _frames(2)
 		await _key(KEY_9)
-		check.call("9 over a storage slot sends it to hotbar slot 9",
-				inv.hotbars[inv.active_hotbar][8] != null and inv.hotbars[inv.active_hotbar][8].id == &"sand")
+		check.call("9 over a storage slot sends it to hotbar 1 slot 9 (its terracotta to storage)",
+				inv.hotbars[0][8] != null and inv.hotbars[0][8].id == &"sand"
+				and inv.main[0] != null and inv.main[0].id == &"terracotta")
 	# Fits a small window.
 	var win := get_window()
 	var size0 := win.size
@@ -1443,9 +1458,10 @@ func _run_inventory_gate() -> void:
 	generate(again)
 	await _frames(20)
 	inv = builder.inv
-	check.call("after generating again: granite still in hotbar 2 slot 3, sand in slot 9",
+	check.call("after generating again: granite in hotbar 2 slot 3, sand in hotbar 1 slot 9, terracotta in storage",
 			inv.hotbars[1][2] != null and inv.hotbars[1][2].id == &"granite"
-			and inv.hotbars[inv.active_hotbar][8] != null and inv.hotbars[inv.active_hotbar][8].id == &"sand")
+			and inv.hotbars[0][8] != null and inv.hotbars[0][8].id == &"sand"
+			and inv.main[0] != null and inv.main[0].id == &"terracotta")
 	builder.set_active(false)
 	builder.gate_keys = false
 	print("[inv-gate] INV-GATE %s (%d failed)%s" % ["PASS" if fails.is_empty() else "FAIL",

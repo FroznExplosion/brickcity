@@ -45,6 +45,8 @@ var _tab_storage: Button
 var _tab_creative: Button
 var _cursor: Control
 var _slot_px := 44.0
+## Where the last mouse motion sent to the screen was (not the OS pointer).
+var _mouse_at := Vector2(-1, -1)
 
 
 func setup(p_inv: Inventory, p_host: Node) -> void:
@@ -172,6 +174,7 @@ func _refresh() -> void:
 			s.selected = (a.area == inv.hotbar_area() and a.index == inv.active_slot) \
 					or (a.area == &"offhand" and a.index == inv.active_offhand)
 		s.queue_redraw()
+	_cursor.visible = inv.cursor != null
 	_cursor.queue_redraw()
 	_show_info()
 
@@ -214,7 +217,10 @@ func _on_slot_pressed(s: InvSlot, button: int, shift: bool, double: bool) -> voi
 		inv.shift_click(a)
 	elif button == MOUSE_BUTTON_LEFT and double:
 		inv.double_click(a)
-	elif inv.cursor == null:
+	elif inv.cursor == null or (s.stack() != null and not s.stack().same_kind(inv.cursor)) \
+			or not inv.slot_accepts(a, inv.cursor):
+		# Nothing held, or a different item there: a plain click (pick up,
+		# swap). Only a slot the held stack could go into starts a drag.
 		if button == MOUSE_BUTTON_LEFT:
 			inv.left_click(a)
 		else:
@@ -251,6 +257,10 @@ func _slot_at(pos: Vector2) -> InvSlot:
 
 func _input(event: InputEvent) -> void:
 	if event is InputEventMouseMotion:
+		# The held stack follows the motion the screen is sent (not the OS
+		# pointer: a test window's events need not match it).
+		_mouse_at = (event as InputEventMouseMotion).position
+		_cursor.position = _mouse_at - _cursor.size * 0.5
 		_cursor.queue_redraw()
 		if inv.is_dragging():
 			var s := _slot_at((event as InputEventMouseMotion).position)
@@ -277,7 +287,7 @@ func _input(event: InputEvent) -> void:
 				close_screen()
 		KEY_1, KEY_2, KEY_3, KEY_4, KEY_5, KEY_6, KEY_7, KEY_8, KEY_9:
 			var i := k.keycode - KEY_1
-			var s := _slot_at(get_global_mouse_position())
+			var s := _slot_at(_mouse_at)
 			if s != null and not s.addr.is_empty():
 				inv.swap_with_hotbar(s.addr, i)
 			else:
@@ -323,9 +333,6 @@ class CursorView extends Control:
 		top_level = true
 		z_index = 10
 		size = Vector2(44, 44)
-
-	func _process(_delta: float) -> void:
-		position = get_global_mouse_position() - size * 0.5
 
 	func _draw() -> void:
 		if inv != null and inv.cursor != null:

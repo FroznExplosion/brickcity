@@ -18,6 +18,7 @@ var addr := {}
 var item_id: StringName = &""
 ## Outlined: the hand's slot, or the active off-hand.
 var selected := false
+var _hot := false
 
 
 static func make(p_inv: Inventory, p_addr: Dictionary, p_item := &"") -> InvSlot:
@@ -33,9 +34,12 @@ static func make(p_inv: Inventory, p_addr: Dictionary, p_item := &"") -> InvSlot
 
 func _ready() -> void:
 	mouse_entered.connect(func() -> void:
+		_hot = true
 		hovered.emit(self)
 		queue_redraw())
-	mouse_exited.connect(queue_redraw)
+	mouse_exited.connect(func() -> void:
+		_hot = false
+		queue_redraw())
 
 
 ## What the slot shows: the inventory's stack, or a full stack of the catalog item.
@@ -55,8 +59,7 @@ func _gui_input(event: InputEvent) -> void:
 
 func _draw() -> void:
 	var r := Rect2(Vector2.ZERO, size)
-	var hot := get_global_rect().has_point(get_global_mouse_position())
-	draw_rect(r, Color(0.07, 0.075, 0.09, 0.92) if not hot else Color(0.16, 0.17, 0.2, 0.95))
+	draw_rect(r, Color(0.07, 0.075, 0.09, 0.92) if not _hot else Color(0.16, 0.17, 0.2, 0.95))
 	var border := Color(1, 1, 1) if selected else Color(0.32, 0.34, 0.4)
 	draw_rect(r.grow(-1.0), border, false, 3.0 if selected else 1.0)
 	var s := stack()
