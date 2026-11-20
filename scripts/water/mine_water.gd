@@ -164,7 +164,17 @@ func _eye_studs() -> Vector2i:
 	return Vector2i(floori(e.x / stud), floori(e.z / stud))
 
 
+## The last frame's _process, microseconds (the mine world's --gate=stop).
+var last_us := 0
+
+
 func _process(delta: float) -> void:
+	var t_in := Time.get_ticks_usec()
+	_process_body(delta)
+	last_us = Time.get_ticks_usec() - t_in
+
+
+func _process_body(delta: float) -> void:
 	if host == null:
 		return
 	var eye: Vector3 = host._eye()

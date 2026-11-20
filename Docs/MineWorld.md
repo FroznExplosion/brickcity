@@ -296,6 +296,8 @@ made the difference.
 | `-- --gate` | spawn, flight (no collision, arms follow), endless far rings, holes, menu stops the world, build, landing, edit frame times, save round trip |
 | `-- --gate=deep` | the deep tier: into a cave 78 m down, sections load, land and stand, the seam |
 | `-- --gate=shift` | origin shifts on a 1.2 km flight: no holes, lands, builds, falling ground in place |
+| `-- --gate=stop [--walk]` | the 8 s after stopping, quarter-second windows: frames, GPU, each system, what each tier did |
+| `-- --gate=mega` | the Mega Pickaxe against the pickaxe: cells per break, repeat |
 | `-- --gate=spawn` | the first new ground after a world is made: frames, instance nodes new vs reused |
 | `-- --gate=flight` | fast flight: worst frame, frames over 33 ms, what each slow one spent |
 | `-- --gate=cave` | land in a reachable cave, still standing 200 ticks later |
@@ -361,6 +363,21 @@ temperature 59-63 C):
   `--no-prewarm` for A/B). Every node is reused; the worst instance step went
   from 36.5 to 0.3 ms, the worst frame 69 -> 55 ms, frames over 33 ms 11 -> 5
   (similar start temperatures, 51 and 53 C; what is left is not the pool).
+- **"The fps drops for a few seconds after I stop"** (the user, 2026-11-19,
+  playing in the editor). `-- --gate=stop` (flies 8 s at 50 m/s, or `--walk`:
+  15 s at 6 m/s at eye height) then prints the 8 s after stopping in
+  quarter-second windows: worst/mean frame, GPU, the main thread's parts,
+  near / deep / far / trees / water / ground collapse, triangles, draws, lava
+  lights, and what each tier did. Standalone, nothing catches up after a stop
+  (0 tiles, 0 chamfer meshes, 0 far swaps, 0 deep sections in every window);
+  frames stay at 16.6 ms mean with ~12 ms GPU (1280x720). One run's GPU
+  crept to 15-16 ms while standing, the same scene a cooler run held at 12-13:
+  the chip clocking down, near the 16.6 ms vsync line, where one miss shows
+  as 33 ms. Not reproduced outside the editor; the F3 readout now has a "slow
+  frames" line (frames over 25 ms in 10 s, and the world's own parts in the
+  last one -- small parts mean the GPU, the editor or vsync). Tufts are
+  pre-filled like the rest now (220): the flight's worst instance step was
+  118 ms in a grassy spot.
 - With the stud-set switch held too (and the pool pre-filled), `--gate=flight`
   at 58 C: worst frame 30 ms, none over 33 ms during the fast flight (42 ms
   and 2 before); slowing down after it, 42 ms worst, one over.

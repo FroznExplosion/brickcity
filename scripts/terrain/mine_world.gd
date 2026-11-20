@@ -629,6 +629,44 @@ func _flush_edits() -> void:
 # ---------------------------------------------------------------------------
 # Every frame
 
+## SLOW FRAMES, for the F3 readout (Docs/MineWorld.md 14): frames over
+## SLOW_FRAME_MS in the last 10 s, and what the world's own systems took in
+## the last one -- the previous frame's parts (_ptimes, trees, water, ground
+## collapse), CPU clocks only (no renderer read-backs in play). Small parts in
+## a slow frame mean the time went elsewhere: the GPU, the editor (playing in
+## the editor's game view, its debugger mirrors every node the world adds), or
+## a vsync miss.
+const SLOW_FRAME_MS := 25.0
+var _slow_at: Array[int] = []
+var _slow_last := ""
+
+
+func _note_slow(delta: float) -> void:
+	var ms := delta * 1000.0
+	var now := Time.get_ticks_msec()
+	while not _slow_at.is_empty() and now - _slow_at[0] > 10000:
+		_slow_at.pop_front()
+	if ms < SLOW_FRAME_MS or _streamer == null:
+		return
+	_slow_at.append(now)
+	var parts := {"near": float(_ptimes.get("near", 0.0)), "deep": float(_ptimes.get("deep", 0.0)),
+			"far": float(_ptimes.get("far", 0.0)) + float(_ptimes.get("reanchor", 0.0)),
+			"trees": _trees.last_us / 1000.0 if _trees != null else 0.0,
+			"water": water.last_us / 1000.0, "ground": collapse.last_us / 1000.0 if collapse != null else 0.0}
+	var sum := 0.0
+	for k in parts:
+		sum += float(parts[k])
+	_slow_last = "%.0f ms: world %.1f ms (near %.1f deep %.1f far %.1f trees %.1f water %.1f ground %.1f)%s" % [
+			ms, sum, parts.near, parts.deep, parts.far, parts.trees, parts.water, parts.ground,
+			"" if sum > ms * 0.4 else " -- the rest outside the world: GPU / editor / vsync"]
+
+
+func _slow_line() -> String:
+	if _slow_at.is_empty():
+		return "slow frames (> %.0f ms) in 10 s: none" % SLOW_FRAME_MS
+	return "slow frames (> %.0f ms) in 10 s: %d; last %s" % [SLOW_FRAME_MS, _slow_at.size(), _slow_last]
+
+
 ## FAST FLIGHT HOLD (Docs/MineWorld.md 14), after zylanntest's
 ## DynamicLodController: above FAST_HOLD_MPS the near tier starts no new
 ## bakes (nor studs, chamfer, collision) and the far tier no new refines or
@@ -642,7 +680,7 @@ var fast_hold := false
 ## Sized by --gate=spawn (2026-11-19): from the first loaded square to the full
 ## resident set, 600 frames at 30 m/s made 194 far-stud, 185 pebble and 45
 ## near-stud nodes new.
-const PREWARM_PER_KIND := {"StudsFar": 220, "Pebbles": 220, "Studs": 56, "Tufts": 32}
+const PREWARM_PER_KIND := {"StudsFar": 220, "Pebbles": 220, "Studs": 56, "Tufts": 220}
 var prewarm_ms := 0.0
 var _warm_frame_ms := 0.0
 var _warm: Array = []
@@ -685,6 +723,7 @@ func _speed_step(eye: Vector3, delta: float) -> void:
 
 func _process(delta: float) -> void:
 	_frame_ms = lerpf(_frame_ms, delta * 1000.0, 0.1)
+	_note_slow(delta)
 	if _streamer == null:
 		return
 	if _warm_frames > 0:
@@ -1157,6 +1196,7 @@ func _update_hud() -> void:
 				BrickTerrain.material_names()[BrickTerrain.material_at(c.x, c.y)]],
 		"near  %s" % _streamer.report(),
 		"deep  %s" % _deep.report(),
+		_slow_line(),
 		"far   %d blocks, %d hidden, %.0fk tris, anchor %s, re-centred %d (%.0f ms)" % [
 				_far.block_count(), _far.hidden_count(), _far.triangle_count() / 1000.0,
 				_far.anchor, _reanchors, _last_reanchor_ms],
@@ -1456,15 +1496,34 @@ func _run_stop_gate() -> void:
 	var clock := FrameClock.new()
 	add_child(clock)
 	set_on_foot(false)
-	_fly_to(_eye() + Vector3(0, 10, 0), Vector3(1, -0.25, 0.3).normalized())
-	walker.pitch = -0.3
+	# --walk: 6 m/s at eye height over the ground for 15 s, a player's walk;
+	# else the default flight, 50 m/s 10 m up for 8 s.
+	var walk := "--walk" in OS.get_cmdline_user_args()
+	var speed := 6.0 if walk else 50.0
+	var secs := 15000 if walk else 8000
+	var stud := BrickWorld.get_stud_metres()
+	_fly_to(_eye() + Vector3(0, 1.0 if walk else 10.0, 0), Vector3(1, -0.1, 0.3).normalized())
+	walker.pitch = -0.15 if walk else -0.3
 	await _frames(30)
 	var dir := Vector3(1.0, 0.0, 0.3).normalized()
 	var t0 := Time.get_ticks_msec()
-	while Time.get_ticks_msec() - t0 < 8000:
-		walker.global_position += dir * 50.0 * get_process_delta_time()
+	var mv_gpu: Array[float] = []
+	var mv_tris := 0.0
+	while Time.get_ticks_msec() - t0 < secs:
+		walker.global_position += dir * speed * get_process_delta_time()
+		if walk:
+			var tp := to_local(walker.global_position)
+			var gy := _ground_m(floori(tp.x / stud), floori(tp.z / stud))
+			walker.global_position.y = gy + 1.7
 		await get_tree().process_frame
-	print("[mine-stop] flew 8 s at 50 m/s (held %s), stopping" % fast_hold)
+		if Time.get_ticks_msec() - t0 > secs - 4000:
+			mv_gpu.append(float(clock.last.get("gpu", 0.0)))
+			mv_tris = maxf(mv_tris, float(clock.last.get("tris_M", 0.0)))
+	mv_gpu.sort()
+	print("[mine-stop] %s %d s at %.0f m/s (held %s), stopping; the last 4 s moving: gpu median %.1f, 90th %.1f ms, tris up to %.2fM"
+			% ["walked" if walk else "flew", secs / 1000, speed, fast_hold,
+			mv_gpu[mv_gpu.size() / 2] if not mv_gpu.is_empty() else 0.0,
+			mv_gpu[int(mv_gpu.size() * 0.9)] if not mv_gpu.is_empty() else 0.0, mv_tris])
 	var windows := []
 	var w := {}
 	var tw := Time.get_ticks_msec()
@@ -1479,7 +1538,7 @@ func _run_stop_gate() -> void:
 		if w.is_empty():
 			w = {"n": 0, "worst": 0.0, "sum": 0.0, "gpu": 0.0, "process": 0.0, "scripts": 0.0,
 					"step": 0.0, "draw": 0.0, "sync": 0.0, "near": 0.0, "deep": 0.0, "far": 0.0,
-					"trees": 0.0, "tris": 0.0}
+					"trees": 0.0, "tris": 0.0, "water": 0.0, "coll": 0.0, "water_max": 0.0}
 		w.n += 1
 		w.sum += ms
 		if ms > w.worst:
@@ -1490,7 +1549,12 @@ func _run_stop_gate() -> void:
 			w.deep = float(_ptimes.get("deep", 0.0))
 			w.far = float(_ptimes.get("far", 0.0)) + float(_ptimes.get("reanchor", 0.0))
 			w.trees = _trees.last_us / 1000.0
+			w.water = water.last_us / 1000.0
+			w.coll = collapse.last_us / 1000.0
 		w.gpu = maxf(w.gpu, float(p.get("gpu", 0.0)))
+		w.water_max = maxf(w.water_max, water.last_us / 1000.0)
+		w.draws = maxf(float(w.get("draws", 0.0)), float(p.get("draws_k", 0.0)))
+		w.sh = maxf(float(w.get("sh", 0.0)), float(p.get("sh_tris_M", 0.0)))
 		w.tris = maxf(w.tris, float(p.get("tris_M", 0.0)))
 		var el := Time.get_ticks_msec() - tw
 		if el >= (windows.size() + 1) * 250:
@@ -1498,6 +1562,8 @@ func _run_stop_gate() -> void:
 			w["bev"] = _streamer.bevels_added - bev0
 			w["far_n"] = _far.applies - far0
 			w["deep_n"] = _deep.built - deep0
+			w["lava"] = water.lava_lights()
+			w["wtiles"] = water.drawn
 			built0 = _streamer.built_count()
 			bev0 = _streamer.bevels_added
 			far0 = _far.applies
@@ -1506,9 +1572,11 @@ func _run_stop_gate() -> void:
 			w = {}
 	for i in windows.size():
 		var x: Dictionary = windows[i]
-		print("[mine-stop] %4.2f s  worst %5.1f mean %4.1f gpu %4.1f tris %.2fM | worst frame: process %4.1f scripts %4.1f step %4.1f draw %4.1f sync %4.1f; near %4.1f deep %4.1f far %4.1f trees %4.1f | built %d bevel %d far %d deep %d"
-				% [(i + 1) * 0.25, x.worst, x.sum / maxf(x.n, 1), x.gpu, x.tris, x.process, x.scripts, x.step,
-				x.draw, x.sync, x.near, x.deep, x.far, x.trees, x.built, x.bev, x.far_n, x.deep_n])
+		print("[mine-stop] %4.2f s  tris %.2fM sh %.2fM draws %.1fk lava %d wtiles %d" % [(i + 1) * 0.25,
+				x.tris, x.get("sh", 0.0), x.get("draws", 0.0), x.lava, x.wtiles])
+		print("[mine-stop] %4.2f s  worst %5.1f mean %4.1f gpu %4.1f | worst frame: process %4.1f scripts %4.1f step %4.1f draw %4.1f; near %4.1f deep %4.1f far %4.1f trees %4.1f water %4.1f collapse %4.1f | water max %4.1f | built %d bevel %d far %d deep %d"
+				% [(i + 1) * 0.25, x.worst, x.sum / maxf(x.n, 1), x.gpu, x.process, x.scripts, x.step,
+				x.draw, x.near, x.deep, x.far, x.trees, x.water, x.coll, x.water_max, x.built, x.bev, x.far_n, x.deep_n])
 	print("[mine-stop] %s | bevel hand-over worst %.1f ms | water %s" % [_streamer.report(), _streamer.bevel_ms, water.report()])
 	get_tree().quit()
 
