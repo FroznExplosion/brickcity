@@ -5314,3 +5314,387 @@ func _run_farfight_gate() -> void:
 	_check("the buildings by the player stay bricks throughout", host.buildings.sites[near_i].bricked)
 	print("[planet] farfight gate: %d ok, %d FAIL" % [_ok, _fail])
 	host.get_tree().quit(0 if _fail == 0 else 1)
+
+
+
+# ---------------------------------------------------------------------------
+# The cost gate: where the planet's frame goes (a report, not checks;
+# Docs/PlanetCost.md).
+#
+#     godot --path . res://scenes/planet.tscn -- --gate=cost
+#
+# The play scene as it is played (the system, the generated ship by the spawn,
+# the town in bricks), the player at the town's edge. From four views -- the
+# town, the open land, the sky, 250 m up -- every suspect is switched off in
+# turn and the frame read with it gone: the GPU's own time and the frame's
+# parts by FrameClock, flat out (no vsync, no cap: a vsynced iGPU clocks down
+# to fill the frame and reads the same whatever it is given). Each row is read
+# against a baseline taken just before it, so the heat's drift is out of it.
+# Then the town at a 1080p-sized picture, what each _process costs, the frames
+# of a walk round the town and of two flights (low and fast: the streaming's
+# hitches), and the town's AI and garrison woken. Only trustworthy with the
+# editor closed and no other runs.
+
+var _cost_saved := {}
+const COST_FRAMES := 150
+
+
+func _cost_measure(frames := COST_FRAMES) -> Dictionary:
+	await host._frames(20)
+	var clock := FrameClock.new()
+	host.add_child(clock)
+	await host._frames(frames)
+	var n := maxf(float(clock.frames), 1.0)
+	var out := {"frame": clock.all_ms / n}
+	for k in ["scripts", "step", "process", "draw", "sync", "gpu", "draws_k", "tris_M", "sh_draws_k", "sh_tris_M"]:
+		out[k] = float(clock.all.get(k, 0.0)) / n
+	var vp := host.get_viewport().get_viewport_rid()
+	out["objects"] = RenderingServer.viewport_get_render_info(vp, RenderingServer.VIEWPORT_RENDER_INFO_TYPE_VISIBLE,
+			RenderingServer.VIEWPORT_RENDER_INFO_OBJECTS_IN_FRAME)
+	clock.queue_free()
+	return out
+
+
+func _cost_line(label: String, m: Dictionary, base: Dictionary) -> String:
+	var d := ""
+	if not base.is_empty():
+		d = "  dGPU %+6.2f  dframe %+6.2f  dprocess %+5.2f" % [float(m.gpu) - float(base.gpu),
+				float(m.frame) - float(base.frame), float(m.process) - float(base.process)]
+	return "[cost] %-30s frame %6.2f  gpu %6.2f  draw(cpu) %5.2f  scripts %5.2f  step %5.2f  process %5.2f  | %5.2fk draws %5.2fM tris, shadow %5.2fk draws %5.2fM tris, %d obj%s" % [
+			label, float(m.frame), float(m.gpu), float(m.draw), float(m.scripts), float(m.step), float(m.process),
+			float(m.draws_k), float(m.tris_M), float(m.sh_draws_k), float(m.sh_tris_M), int(m.objects), d]
+
+
+## Every GeometryInstance3D (and voxel ground) under `n`.
+func _casters(n: Node, out: Array) -> void:
+	if n == null or not is_instance_valid(n):
+		return
+	if n is GeometryInstance3D or n is VoxelLodTerrain:
+		out.append(n)
+	for c in n.get_children():
+		_casters(c, out)
+
+
+func _shadows_off(roots: Array) -> void:
+	var list: Array = []
+	for r in roots:
+		_casters(r, list)
+	for g in list:
+		if "cast_shadow" in g:
+			_cost_saved[g] = g.cast_shadow
+			g.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+
+
+func _shadows_back() -> void:
+	for g in _cost_saved:
+		if is_instance_valid(g):
+			g.cast_shadow = _cost_saved[g]
+	_cost_saved.clear()
+
+
+func _hide(nodes: Array) -> void:
+	for n in nodes:
+		if n != null and is_instance_valid(n):
+			_cost_saved[n] = (n as Node3D).visible
+			(n as Node3D).visible = false
+
+
+func _unhide() -> void:
+	for n in _cost_saved:
+		if is_instance_valid(n):
+			(n as Node3D).visible = _cost_saved[n]
+	_cost_saved.clear()
+
+
+func _stop(nodes: Array) -> void:
+	for n in nodes:
+		if n != null and is_instance_valid(n):
+			_cost_saved[n] = (n as Node).process_mode
+			(n as Node).process_mode = Node.PROCESS_MODE_DISABLED
+
+
+func _restart() -> void:
+	for n in _cost_saved:
+		if is_instance_valid(n):
+			(n as Node).process_mode = _cost_saved[n]
+	_cost_saved.clear()
+
+
+func _other_bodies() -> Array:
+	var out: Array = []
+	if host.system == null:
+		return out
+	for b in host.system.bodies:
+		if b != host.planet and b.look != null:
+			out.append(b.look)
+		if b != host.planet and b.ring != null:
+			out.append(b.ring)
+	if host.system.star != null:
+		out.append(host.system.star)
+	if host.system.belt != null:
+		out.append(host.system.belt)
+	for s in host.system.stations:
+		out.append(s)
+	return out
+
+
+func _brick_nodes() -> Array:
+	var out: Array = []
+	for st in host.buildings.sites:
+		if st.brick_node != null:
+			out.append(st.brick_node)
+	return out
+
+
+func _shell_nodes() -> Array:
+	var out: Array = []
+	for st in host.buildings.sites:
+		if st.shell != null:
+			out.append(st.shell)
+		if st.shell_look != null:
+			out.append(st.shell_look)
+	out.append(host.buildings.far)
+	out.append(host.buildings.beacons)
+	return out
+
+
+func _cost_toggles(full: bool) -> Array:
+	var vp := host.get_viewport()
+	var sky: Sky = host.env.sky
+	var t: Array = []
+	t.append(["sun shadows off", func(): host.sun.shadow_enabled = false, func(): host.sun.shadow_enabled = true])
+	if full:
+		t.append(["sun shadow 400 -> 150 m", func(): host.sun.directional_shadow_max_distance = 150.0,
+				func(): host.sun.directional_shadow_max_distance = 400.0])
+		t.append(["sun shadow 4 -> 2 splits", func(): host.sun.directional_shadow_mode = DirectionalLight3D.SHADOW_PARALLEL_2_SPLITS,
+				func(): host.sun.directional_shadow_mode = DirectionalLight3D.SHADOW_PARALLEL_4_SPLITS])
+		t.append(["terrain casts no shadow", func(): _shadows_off([host.planet.terrain]), _shadows_back])
+		t.append(["trees cast no shadow", func(): _shadows_off([host.trees]), _shadows_back])
+		t.append(["buildings cast no shadow", func(): _shadows_off([host.buildings]), _shadows_back])
+	t.append(["sky not set each frame", func(): host.sky_hold = true, func(): host.sky_hold = false])
+	t.append(["sky radiance 256 -> 32", func(): sky.radiance_size = Sky.RADIANCE_SIZE_32,
+			func(): sky.radiance_size = Sky.RADIANCE_SIZE_256])
+	t.append(["clouds hidden", func(): _hide([host.clouds]), _unhide])
+	t.append(["atmosphere shell hidden", func(): _hide([host.planet.atmosphere]), _unhide])
+	t.append(["sea hidden", func(): _hide([host.planet.ocean]), _unhide])
+	t.append(["other planets+star hidden", func(): _hide(_other_bodies()), _unhide])
+	t.append(["terrain hidden", func(): _hide([host.planet.terrain]), _unhide])
+	t.append(["trees hidden", func(): _hide([host.trees]), _unhide])
+	t.append(["brick buildings hidden", func(): _hide(_brick_nodes()), _unhide])
+	t.append(["shells + far boxes hidden", func(): _hide(_shell_nodes()), _unhide])
+	t.append(["ship hidden", func(): _hide([host.ship]), _unhide])
+	if full:
+		var scale0 := vp.scaling_3d_scale
+		t.append(["render scale -> 0.5", func(): vp.scaling_3d_scale = 0.5, func(): vp.scaling_3d_scale = scale0])
+		t.append(["SSAO+SSIL on (Options)", func(): LightRig.set_gi(LightRig.GI_SCREEN), func(): LightRig.set_gi(LightRig.GI_OFF)])
+		# What each node's _process costs the main thread (the "process" part).
+		t.append(["process off: trees", func(): _stop([host.trees]), _restart])
+		t.append(["process off: buildings", func(): _stop([host.buildings]), _restart])
+		t.append(["process off: star system", func(): _stop([host.system]), _restart])
+		t.append(["process off: voxel ground", func(): _stop([host.planet.terrain]), _restart])
+		t.append(["process off: clouds", func(): _stop([host.clouds]), _restart])
+		t.append(["process off: planet body", func(): _stop([host.planet]), _restart])
+		t.append(["process off: ship", func(): _stop([host.ship]), _restart])
+	return t
+
+
+func _cost_view(view_name: String, full: bool) -> void:
+	print("[cost] --- view: %s ---" % view_name)
+	var first := {}
+	for row in _cost_toggles(full):
+		var base := await _cost_measure()
+		if first.is_empty():
+			first = base
+			print(_cost_line("baseline", base, {}))
+		(row[1] as Callable).call()
+		var m := await _cost_measure()
+		(row[2] as Callable).call()
+		print(_cost_line(row[0], m, base))
+
+
+## The town at a bigger picture: render scale 1.5 on the 1280 x 720 window is
+## 1920 x 1080 drawn (the Legion Go's 2560 x 1600 at its 0.75 default is 1920 x 1200).
+func _cost_big() -> void:
+	var vp := host.get_viewport()
+	var scale0 := vp.scaling_3d_scale
+	var mode0 := vp.scaling_3d_mode
+	vp.scaling_3d_mode = Viewport.SCALING_3D_MODE_BILINEAR
+	vp.scaling_3d_scale = 1.5
+	print("[cost] --- view: town at 1920x1080 drawn ---")
+	var rows: Array = [
+		["sun shadows off", func(): host.sun.shadow_enabled = false, func(): host.sun.shadow_enabled = true],
+		["sky not set each frame", func(): host.sky_hold = true, func(): host.sky_hold = false],
+		["clouds hidden", func(): _hide([host.clouds]), _unhide],
+		["atmosphere shell hidden", func(): _hide([host.planet.atmosphere]), _unhide],
+		["terrain hidden", func(): _hide([host.planet.terrain]), _unhide],
+		["brick buildings hidden", func(): _hide(_brick_nodes()), _unhide],
+		["SSAO+SSIL on (Options)", func(): LightRig.set_gi(LightRig.GI_SCREEN), func(): LightRig.set_gi(LightRig.GI_OFF)],
+	]
+	var first := true
+	for row in rows:
+		var base := await _cost_measure()
+		if first:
+			print(_cost_line("baseline (1080p)", base, {}))
+			first = false
+		(row[1] as Callable).call()
+		var m := await _cost_measure()
+		(row[2] as Callable).call()
+		print(_cost_line(row[0], m, base))
+	vp.scaling_3d_scale = scale0
+	vp.scaling_3d_mode = mode0
+
+
+## The walker carried along `path_fn(s)` (s seconds in, a world point) for
+## `seconds`, looking along its way and `pitch` down; the frames by the clock.
+func _cost_trip(what: String, seconds: float, path_fn: Callable, pitch: float) -> void:
+	var clock := FrameClock.new()
+	host.add_child(clock)
+	var shifts0 := PlanetFrame.shifts
+	var t0 := Time.get_ticks_usec()
+	var last := path_fn.call(0.0) as Vector3
+	var over40 := 0
+	var last_us := t0
+	host.buildings.brick_worst_us = 0
+	while true:
+		await host.get_tree().process_frame
+		var now := Time.get_ticks_usec()
+		if now - last_us > 40000:
+			over40 += 1
+		last_us = now
+		var s := float(now - t0) / 1.0e6
+		if s > seconds:
+			break
+		var p := path_fn.call(s) as Vector3
+		var up := Gravity.up_at(p)
+		var along := p - last
+		along = along - up * along.dot(up)
+		if along.length() > 0.001:
+			host.walker.global_transform = Transform3D(Basis.looking_at(along.normalized(), up), p)
+			host.walker.pitch = pitch
+			host.walker.reset_physics_interpolation()
+		last = p
+	var lines := clock.report_lines()
+	print("[cost] --- %s: %d frames over 40 ms, %d origin shift(s), worst brick step %.1f ms, trees' last build %.1f ms ---" % [
+			what, over40, PlanetFrame.shifts - shifts0, host.buildings.brick_worst_us / 1000.0, host.trees.last_build_us / 1000.0])
+	for l in lines:
+		print("[cost]   " + l)
+	clock.queue_free()
+
+
+func _run_cost_gate() -> void:
+	var t0 := Time.get_ticks_msec()
+	while host.pawn == null and Time.get_ticks_msec() - t0 < 60000:
+		await host._frames(1)
+	var town: Vector3 = host.town_dirs[0]
+	var p_feet := _surface(host._round_dir(town, host.spawn_dir, 88.0))
+	host.pawn.place(p_feet + Gravity.up_at(p_feet) * 0.3)
+	t0 = Time.get_ticks_msec()
+	while host._ground_hit(p_feet) == Vector3.INF and Time.get_ticks_msec() - t0 < 30000:
+		await host._frames(1)
+	# The town's buildings in bricks, the trees filled round, then 3 s more.
+	t0 = Time.get_ticks_msec()
+	while Time.get_ticks_msec() - t0 < 40000:
+		await host._frames(10)
+		var all_in := true
+		for st in host.buildings.sites:
+			if not st.landmark and not st.bricked and host.cam.global_position.distance_to(
+					host.planet.global_position + st.frame.origin) < PlanetBuildings.BRICK_M - 10.0:
+				all_in = false
+		if _over_ground(host.pawn.feet()) < -0.5:
+			host.pawn.place(p_feet + Gravity.up_at(p_feet) * 0.3)
+		if all_in and Time.get_ticks_msec() - t0 > 8000:
+			break
+	await host._frames(90)
+	var settings := host.get_node_or_null(^"/root/MenuSettings")
+	if settings != null:
+		settings.set_value(&"vsync", 0, false)
+		settings.set_value(&"max_fps", 0, false)
+	var vp := host.get_viewport()
+	var size := vp.get_visible_rect().size
+	print("[cost] planet scene, %dx%d at render scale %.2f (mode %d), msaa %d, fxaa %s, taa %s; GI %d" % [
+			int(size.x), int(size.y), vp.scaling_3d_scale, vp.scaling_3d_mode, vp.msaa_3d,
+			vp.screen_space_aa != Viewport.SCREEN_SPACE_AA_DISABLED, vp.use_taa, LightRig.gi_level])
+	var bricks := 0
+	for st in host.buildings.sites:
+		if st.bricked and st.chunk >= 0:
+			bricks += host.buildings.bricks.get_alive_block_count(st.chunk)
+	print("[cost] bricked %d buildings (%d bricks), %d near, %d far; %d trees, view %d m, %d bodies, bricks drawn to %.0f m" % [
+			host.buildings.bricked_count, bricks, host.buildings.near_count, host.buildings.far_count, host.trees.tree_count,
+			host.walker.viewer.view_distance, host.system.bodies.size() if host.system != null else 0, PlanetBuildings.BRICK_DRAW_M])
+	# A camera of our own at the pawn's eye: the pawn's stays where it is.
+	var c := Camera3D.new()
+	c.fov = host.cam.fov
+	c.near = host.cam.near
+	c.far = host.cam.far
+	host.add_child(c)
+	var eye := host.cam.global_position
+	var up := Gravity.up_at(eye)
+	var centre: Vector3 = host.planet.global_position + host.data.surface_point(town)
+	var to_town := centre - eye
+	to_town = (to_town - up * to_town.dot(up)).normalized()
+	var side := to_town.cross(up).normalized()
+	var views := [
+		["town (88 m from its middle, facing it)", eye, eye + to_town * 50.0 - up * 2.0, true],
+		["open land (back to the town)", eye, eye - to_town * 50.0 - up * 1.0, false],
+		["sky (50 deg up)", eye, eye + side * 30.0 + up * 36.0, false],
+		["250 m up, looking down at the town", eye + up * 250.0 - to_town * 150.0, centre, false],
+	]
+	for v in views:
+		c.current = true
+		c.look_at_from_position(v[1], v[2], up)
+		await _cost_view(v[0], v[3])
+	c.current = true
+	c.look_at_from_position(eye, eye + to_town * 50.0 - up * 2.0, up)
+	await _cost_big()
+	host.cam.current = true
+	c.queue_free()
+	# Trips: the walker carried, the pawn's camera on it (as flying is played).
+	host._set_on_foot(false)
+	host.walker.frozen = true
+	await host._frames(30)
+	var pc: Vector3 = host.planet.global_position
+	var r_town := host.data.radius
+	var town_l := town
+	var start_l := (host.data.surface_point(host._round_dir(town, host.spawn_dir, 88.0))).normalized()
+	# Walking pace round the town's edge, 88 m out, 1.7 m up: 30 s.
+	var walk := func(s: float) -> Vector3:
+		var d := start_l.rotated(town_l, s * 6.0 / 88.0)
+		var g := host.planet.global_position + host.data.surface_point(d)
+		return g + d * 1.7
+	await _cost_trip("walking round the town (6 m/s, 30 s)", 30.0, walk, -0.05)
+	# Low and quick over the town and on: 40 m/s, 25 m up, 25 s.
+	var head := (host.planet.global_position + host.data.surface_point(town) - (host.planet.global_position + host.data.surface_point(start_l)))
+	var axis := start_l.cross(head.normalized()).normalized()
+	var low := func(s: float) -> Vector3:
+		var d := start_l.rotated(axis, s * 40.0 / r_town)
+		return host.planet.global_position + host.data.surface_point(d) + d * 25.0
+	await _cost_trip("flying low (40 m/s, 25 m up, 25 s)", 25.0, low, -0.15)
+	# Fast and high: 300 m/s, 200 m up, 15 s (4.5 km: an origin shift, new ground).
+	var high := func(s: float) -> Vector3:
+		var d := start_l.rotated(axis, (1000.0 + s * 300.0) / r_town)
+		return host.planet.global_position + host.data.surface_point(d) + d * 200.0
+	await _cost_trip("flying fast (300 m/s, 200 m up, 15 s)", 15.0, high, -0.3)
+	# Back on foot by the town: the soldiers.
+	var back := _surface(host._round_dir(town, host.spawn_dir, 88.0))
+	host.walker.frozen = false
+	host._set_on_foot(true, back)
+	t0 = Time.get_ticks_msec()
+	while host._ground_hit(back) == Vector3.INF and Time.get_ticks_msec() - t0 < 30000:
+		await host._frames(1)
+	await host._frames(240)
+	if host.ai == null:
+		host.setup_ai(town)
+	var quiet := await _cost_measure(180)
+	print(_cost_line("player's view, AI, no garrison", quiet, {}))
+	host._home_garrison()
+	await host._frames(300)
+	var g: PlanetGarrison = host.garrisons.get(host.planet)
+	var fight := await _cost_measure(240)
+	print(_cost_line("with the garrison up", fight, quiet))
+	print("[cost] garrison: %s" % (g.status() if g != null else "none"))
+	print("[cost] whole run: worst frame %.1f ms; over 40 ms: %s" % [host._worst_ms, host._hitches])
+	if settings != null:
+		settings.set_value(&"vsync", settings.default_of(&"vsync"), false)
+		settings.set_value(&"max_fps", settings.default_of(&"max_fps"), false)
+	print("[planet] cost gate done")
+	host.get_tree().quit(0)
