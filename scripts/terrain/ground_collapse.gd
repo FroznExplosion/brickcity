@@ -45,9 +45,15 @@ var bricks: BrickWorld = null
 var pieces: PlanetPieces = null
 var palette := {}
 
-var _lo := Vector3i.ZERO
-var _hi := Vector3i.ZERO
-var _queued := false
+## Edit boxes waiting for a survey: [lo, hi] (plates), each at most MAX_BOX.
+## Boxes near each other are one; far apart, or a shaft dug a long way down,
+## are several surveys -- one box round all of them was a region hundreds of
+## bricks tall (and the scene crashed under a 120 m shaft, Docs/MineWater.md 14).
+var _boxes: Array = []
+## Studs (x, z) and plates (y) a queued box may grow to by merging.
+const MAX_BOX := Vector3i(32, 96, 32)
+## Boxes this close (studs / plates) merge.
+const MERGE_GAP := 6
 var _survey_in := 0.0
 var _job := -1
 var _holder := [null]
@@ -109,6 +115,8 @@ func setup(w: Node3D, brick_material: Material) -> void:
 	mm.instance_count = 64
 	mm.visible_instance_count = 0
 	_sand_mm.multimesh = mm
+	# Moved in _process each frame: no physics interpolation on it.
+	_sand_mm.physics_interpolation_mode = Node.PHYSICS_INTERPOLATION_MODE_OFF
 	add_child(_sand_mm)
 
 
@@ -117,7 +125,7 @@ func reset() -> void:
 	if _job >= 0:
 		WorkerThreadPool.wait_for_task_completion(_job)
 		_job = -1
-	_queued = false
+	_boxes.clear()
 	for w in _waiting:
 		if w.kind == "piece" and int(w.chunk) >= 0:
 			bricks.release_chunk(int(w.chunk))
@@ -141,18 +149,38 @@ func queue(res: Dictionary) -> void:
 		return
 	var lo: Vector3i = res.box_lo
 	var hi: Vector3i = res.box_hi
-	if not _queued:
-		_lo = lo
-		_hi = hi
-		_queued = true
+	if _boxes.is_empty():
 		_survey_in = SURVEY_EVERY
-	else:
-		_lo = Vector3i(mini(_lo.x, lo.x), mini(_lo.y, lo.y), mini(_lo.z, lo.z))
-		_hi = Vector3i(maxi(_hi.x, hi.x), maxi(_hi.y, hi.y), maxi(_hi.z, hi.z))
+	# Too big for one survey (a big piece's cells cleared): in parts.
+	for z in range(lo.z, hi.z + 1, MAX_BOX.z):
+		for y in range(lo.y, hi.y + 1, MAX_BOX.y):
+			for x in range(lo.x, hi.x + 1, MAX_BOX.x):
+				var a := Vector3i(x, y, z)
+				_add_box(a, Vector3i(mini(hi.x, x + MAX_BOX.x - 1), mini(hi.y, y + MAX_BOX.y - 1),
+						mini(hi.z, z + MAX_BOX.z - 1)))
+
+
+func _add_box(lo: Vector3i, hi: Vector3i) -> void:
+	var g := Vector3i(MERGE_GAP, MERGE_GAP, MERGE_GAP)
+	for b in _boxes:
+		var blo: Vector3i = b[0]
+		var bhi: Vector3i = b[1]
+		var near := lo.x <= bhi.x + g.x and hi.x >= blo.x - g.x and lo.y <= bhi.y + g.y \
+				and hi.y >= blo.y - g.y and lo.z <= bhi.z + g.z and hi.z >= blo.z - g.z
+		if not near:
+			continue
+		var mlo := Vector3i(mini(lo.x, blo.x), mini(lo.y, blo.y), mini(lo.z, blo.z))
+		var mhi := Vector3i(maxi(hi.x, bhi.x), maxi(hi.y, bhi.y), maxi(hi.z, bhi.z))
+		var size := mhi - mlo + Vector3i.ONE
+		if size.x <= MAX_BOX.x and size.y <= MAX_BOX.y and size.z <= MAX_BOX.z:
+			b[0] = mlo
+			b[1] = mhi
+			return
+	_boxes.append([lo, hi])
 
 
 func busy() -> bool:
-	return _job >= 0 or _queued or not _waiting.is_empty() or not _sand.is_empty() \
+	return _job >= 0 or not _boxes.is_empty() or not _waiting.is_empty() or not _sand.is_empty() \
 			or pieces.moving() > 0
 
 
@@ -161,7 +189,7 @@ func _process(delta: float) -> void:
 		return
 	_warm_up()
 	_land_survey()
-	if _queued and _job < 0:
+	if not _boxes.is_empty() and _job < 0:
 		_survey_in -= delta
 		if _survey_in <= 0.0:
 			_start_survey()
@@ -209,9 +237,9 @@ func _warm_up() -> void:
 
 
 func _start_survey() -> void:
-	_queued = false
-	var lo := _lo
-	var hi := _hi
+	var box: Array = _boxes.pop_front()
+	var lo: Vector3i = box[0]
+	var hi: Vector3i = box[1]
 	var t := BrickStrength.tension() * TERRAIN_TIMES
 	var m := BrickPalette.MASS_PER_CELL
 	var holder := [null]
