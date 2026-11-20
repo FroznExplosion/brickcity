@@ -847,6 +847,10 @@ public:
     /// How many blocks of a band chunk are absent (0 for any other chunk).
     int get_absent_count(int chunk_id) const;
     bool is_block_absent(int chunk_id, int block_id) const;
+    /// Alive: not killed, and not cut out into another chunk (split_island
+    /// leaves the moved blocks' cells claimed here, dead). What a hit on a
+    /// cell has to ask before it is that block's.
+    bool is_block_alive(int chunk_id, int block_id) const;
     /// Mass in kg of the template's structure (not decorative) whose cell Y is
     /// in [y_lo, y_hi): the weight the intact storeys there put on what is laid.
     float get_template_mass(int template_id, int y_lo, int y_hi) const;

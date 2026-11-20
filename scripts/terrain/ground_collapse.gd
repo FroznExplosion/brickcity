@@ -88,7 +88,10 @@ func setup(w: Node3D, brick_material: Material) -> void:
 	# Every piece stays (the user, 2026-11-17: to change later): no cap, no
 	# group too small to be a piece.
 	pieces.max_pieces = 1 << 30
-	pieces.debris_max = 0
+	# What a landing knocks off a piece: SMALL_MAX bricks or fewer are crumbs
+	# that fly and shrink away (the city's rule), not pieces that lie forever.
+	pieces.debris_max = SMALL_MAX
+	pieces.studs = true
 	add_child(pieces)
 	pieces.setup(bricks, w, brick_material)
 	_sand_mm = MultiMeshInstance3D.new()
@@ -156,6 +159,7 @@ func busy() -> bool:
 func _process(delta: float) -> void:
 	if world == null:
 		return
+	_warm_up()
 	_land_survey()
 	if _queued and _job < 0:
 		_survey_in -= delta
@@ -167,6 +171,41 @@ func _process(delta: float) -> void:
 	if _tend_in <= 0.0:
 		_tend_in = TEND_EVERY
 		_tend()
+
+
+## One stud drawn for a few frames, tiny, in front of the camera, when the
+## world starts: the first piece's studs cost a ~260 ms frame (the brick
+## shader's pipeline for an instanced, coloured mesh, made on first draw).
+var _warm: MultiMeshInstance3D = null
+var _warm_frames := -1
+
+
+func _warm_up() -> void:
+	if _warm_frames == 0:
+		return
+	if _warm == null:
+		var cam: Camera3D = get_viewport().get_camera_3d()
+		if cam == null:
+			return
+		var mm := MultiMesh.new()
+		mm.transform_format = MultiMesh.TRANSFORM_3D
+		mm.use_colors = true
+		mm.mesh = PieceMeshes.stud()
+		mm.instance_count = 1
+		mm.set_instance_transform(0, Transform3D(Basis.from_scale(Vector3.ONE * 0.001), Vector3.ZERO))
+		mm.set_instance_color(0, Color.WHITE)
+		_warm = MultiMeshInstance3D.new()
+		_warm.multimesh = mm
+		_warm.material_override = pieces.brick_material
+		_warm.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		cam.add_child(_warm)
+		_warm.position = Vector3(0, 0, -0.5)
+		_warm_frames = 4
+		return
+	_warm_frames -= 1
+	if _warm_frames == 0:
+		_warm.queue_free()
+		_warm = null
 
 
 func _start_survey() -> void:
@@ -522,17 +561,52 @@ func _mesh_ready(w: Dictionary) -> bool:
 	mi.mesh = mesh
 	mi.material_override = pieces.brick_material
 	mi.physics_interpolation_mode = Node.PHYSICS_INTERPOLATION_MODE_OFF
+	pieces.add_studs(mi, int(w.chunk))
 	w["mesh"] = mi
 	return true
+
+
+## The piece whose body is `o`, or null.
+func piece_of_body(o: Object) -> PlanetPieces.Piece:
+	for p in pieces.pieces:
+		if p.body == o and p.fading_since == 0:
+			return p
+	return null
+
+
+## The brick of piece `p` at world `point`, as an outline's transform (a unit
+## box scaled to it, a hair larger), or null when no live brick is there.
+func piece_brick_xform(p: PlanetPieces.Piece, point: Vector3) -> Variant:
+	var xf := bricks.get_chunk_transform(p.chunk)
+	var l := xf.affine_inverse() * point
+	var cs := BrickWorld.get_cell_size()
+	var dims := bricks.get_chunk_dims(p.chunk)
+	var c := Vector3i(floori(l.x / cs.x), floori(l.y / cs.y), floori(l.z / cs.z))
+	if c.x < 0 or c.y < 0 or c.z < 0 or c.x >= dims.x or c.y >= dims.y or c.z >= dims.z:
+		return null
+	var bid := bricks.block_at(p.chunk, c + bricks.get_chunk_origin(p.chunk))
+	if bid < 0 or not bricks.is_block_alive(p.chunk, bid) or bricks.is_block_absent(p.chunk, bid):
+		return null
+	var box := bricks.get_blocks_box(p.chunk, PackedInt32Array([bid]))
+	return xf * Transform3D(Basis.from_scale(box.size * 1.004), box.position - box.size * 0.002)
+
+
+## Mined (build mode): the brick of `p` at world `point` goes, whole. True if
+## one did.
+func mine_piece(p: PlanetPieces.Piece, point: Vector3) -> bool:
+	return pieces.damage(p, point, {"blast": false, "radius": 0.0, "hp": 1 << 20}) > 0
 
 
 ## A shot at world `point` meeting a piece: it is that piece's. False when
 ## there is no piece there.
 func shoot(point: Vector3, dir: Vector3, shot) -> bool:
-	var p := pieces.piece_at(point + dir.normalized() * 0.05)
+	# Past the studs' shapes into the brick, and THERE for the damage too: a
+	# round that met a top face 5 cm in wore the empty stud layer, forever.
+	var inside := point + dir.normalized() * 0.1
+	var p := pieces.piece_at(inside)
 	if p == null:
 		return false
-	pieces.damage(p, point, shot if shot is Dictionary else {})
+	pieces.damage(p, inside, shot if shot is Dictionary else {})
 	return true
 
 

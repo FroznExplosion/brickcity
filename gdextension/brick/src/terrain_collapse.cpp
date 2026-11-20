@@ -30,6 +30,11 @@ constexpr uint8_t MAT_PILLAR = 255;
 /// at most GROW_TIMES times; past that a group reaching the top is held.
 constexpr int GROW_UP = 24;
 constexpr int GROW_TIMES = 2;
+/// Grow it this many studs round when ground with no way down inside the
+/// region reaches its side (a big island, a long ledge), at most
+/// GROW_SIDE_TIMES times; past that what reaches the side is held there.
+constexpr int GROW_SIDE = 16;
+constexpr int GROW_SIDE_TIMES = 3;
 /// Cells a region may hold at most (memory, and the worker's time).
 constexpr int64_t MAX_CELLS = 2000000;
 /// Loose cells over the region a falling sand column may take at most.
@@ -95,6 +100,7 @@ struct Attempt {
     Array groups;
     bool solved = false;
     bool top_touch = false;
+    bool side_touch = false;
     int bricks = 0;
     double sample_ms = 0.0;
     double solve_ms = 0.0;
@@ -104,11 +110,12 @@ double ms_since(std::chrono::steady_clock::time_point t) {
     return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t).count();
 }
 
-Attempt run(Vector3i lo, Vector3i hi, int above, bool last, double tension, double mass_per_cell) {
+Attempt run(Vector3i lo, Vector3i hi, int above, int reach, bool last_up, bool last_side,
+        double tension, double mass_per_cell) {
     Attempt a;
     const auto t0 = std::chrono::steady_clock::now();
     const int lob = fdiv(lo.y, PPB), hib = fdiv(hi.y, PPB);
-    const int R = TerrainCollapse::REACH;
+    const int R = reach;
     const int x0 = lo.x - R - 1, x1 = hi.x + R + 1;
     const int z0 = lo.z - R - 1, z1 = hi.z + R + 1;
     const int y0 = lob - TerrainCollapse::BELOW, y1 = hib + above;
@@ -354,6 +361,49 @@ Attempt run(Vector3i lo, Vector3i hi, int above, bool last, double tension, doub
     }
     a.bricks = (int)vb.size();
 
+    // --- does loose-looking ground reach the region's side? ---------------
+    // Grounded by its own courses alone (the bottom course; never the ring's
+    // pillars): ground that is not, yet touches the ring, is held only by
+    // the edge -- it may be a big island that is loose past it. Then the
+    // region is grown and asked again, before the solve is paid for.
+    if (!last_side) {
+        std::vector<uint8_t> grounded(vb.size(), 0);
+        std::vector<int32_t> queue;
+        queue.reserve(vb.size());
+        for (size_t i = 0; i < vb.size(); ++i) {
+            if (vb[i].y == 0 && vb[i].m != MAT_PILLAR) {
+                grounded[i] = 1;
+                queue.push_back((int32_t)i);
+            }
+        }
+        for (size_t qi = 0; qi < queue.size(); ++qi) {
+            const VBrick &b = vb[(size_t)queue[qi]];
+            for (int dy = -1; dy <= 1; dy += 2) {
+                const int yy = b.y + dy;
+                if (yy < 0 || yy >= H) {
+                    continue;
+                }
+                for (int dz = 0; dz < b.sz; ++dz) {
+                    for (int dx = 0; dx < b.sx; ++dx) {
+                        const int32_t o = owner[idx(b.x + dx, yy, b.z + dz)];
+                        if (o < 0 || grounded[(size_t)o] || vb[(size_t)o].m == MAT_PILLAR) {
+                            continue;
+                        }
+                        grounded[(size_t)o] = 1;
+                        queue.push_back(o);
+                    }
+                }
+            }
+        }
+        for (size_t i = 0; i < vb.size(); ++i) {
+            if (!grounded[i] && vb[i].held && vb[i].m != MAT_PILLAR) {
+                a.side_touch = true;
+                a.solve_ms = ms_since(t1);
+                return a;
+            }
+        }
+    }
+
     // --- the buildings' solve, on a world of the survey's own ------------
     Ref<BrickWorld> w;
     w.instantiate();
@@ -414,7 +464,7 @@ Attempt run(Vector3i lo, Vector3i hi, int above, bool last, double tension, doub
         if (held) {
             continue;
         }
-        if (top && !last) {
+        if (top && !last_up) {
             a.top_touch = true;
             continue;
         }
@@ -476,16 +526,23 @@ Dictionary TerrainCollapse::survey(Vector3i lo, Vector3i hi, double tension, dou
     const Vector3i h(std::max(lo.x, hi.x), std::max(lo.y, hi.y), std::max(lo.z, hi.z));
     Attempt a;
     double sample_ms = 0.0, solve_ms = 0.0;
-    int grown = 0;
-    for (int k = 0; k <= GROW_TIMES; ++k) {
-        a = run(l, h, ABOVE + GROW_UP * k, k == GROW_TIMES, tension, mass_per_cell);
+    int up = 0, side = 0;
+    for (int k = 0; k <= GROW_TIMES + GROW_SIDE_TIMES; ++k) {
+        a = run(l, h, ABOVE + GROW_UP * up, REACH + GROW_SIDE * side, up == GROW_TIMES,
+                side == GROW_SIDE_TIMES, tension, mass_per_cell);
         sample_ms += a.sample_ms;
         solve_ms += a.solve_ms;
-        grown = k;
-        if (!a.top_touch) {
-            break;
+        if (a.side_touch && side < GROW_SIDE_TIMES) {
+            ++side;
+            continue;
         }
+        if (a.top_touch && up < GROW_TIMES) {
+            ++up;
+            continue;
+        }
+        break;
     }
+    const int grown = up + side;
     Dictionary out;
     out["sand"] = a.sand;
     out["sand_mats"] = a.sand_mats;

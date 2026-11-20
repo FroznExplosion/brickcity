@@ -1922,6 +1922,75 @@ func _gate_collapse() -> void:
 	await _collapse_quiet(300)
 	var size_of := func(p: PlanetPieces.Piece) -> int:
 		return collapse.bricks.get_alive_block_count(p.chunk)
+	# Studs: a piece of ground draws its open studs, as the ground does.
+	var studded := 0
+	for p in collapse.pieces.pieces:
+		if p.mesh_node != null:
+			for n in p.mesh_node.find_children("*", "MultiMeshInstance3D", true, false):
+				if (n as MultiMeshInstance3D).multimesh.instance_count > 0:
+					studded += 1
+					break
+	ok = studded == collapse.pieces.pieces.size() and studded > 0
+	print("[mine-collapse] %s  pieces draw their studs (%d of %d)" % ["ok  " if ok else "FAIL", studded, collapse.pieces.pieces.size()])
+	fails += 0 if ok else 1
+	# Mined in build mode: the brick looked at on a piece goes.
+	var arm: PlanetPieces.Piece = null
+	for p in collapse.pieces.pieces:
+		if arm == null or int(size_of.call(p)) > int(size_of.call(arm)):
+			arm = p
+	var abox := collapse.pieces.world_box(arm)
+	# A point on one of its bricks: straight down onto it.
+	var look_at_pt := abox.get_center()
+	var dq := PhysicsRayQueryParameters3D.create(abox.get_center() + Vector3.UP * (abox.size.y + 3.0),
+			abox.get_center() - Vector3.UP * (abox.size.y + 3.0), Layers.DEBRIS | Layers.FALLING)
+	var dh := get_world_3d().direct_space_state.intersect_ray(dq)
+	if not dh.is_empty():
+		look_at_pt = dh.position
+	var cam_at := look_at_pt + Vector3(0.0, 3.0, -2.0)
+	var ecam := _eye_camera()
+	var keep_xf := ecam.global_transform
+	ecam.global_transform = Transform3D(Basis.looking_at(look_at_pt - cam_at, Vector3.UP), cam_at)
+	var arm_n0 := int(size_of.call(arm))
+	builder.update_target()
+	var aimed: bool = not (builder.piece_target as Array).is_empty()
+	var mined: bool = builder.break_target()
+	ecam.global_transform = keep_xf
+	ok = aimed and mined and int(size_of.call(arm)) < arm_n0
+	print("[mine-collapse] %s  build mode mines a piece's brick (aimed %s, %d -> %d bricks)" % [
+			"ok  " if ok else "FAIL", aimed, arm_n0, int(size_of.call(arm))])
+	fails += 0 if ok else 1
+	await _frames(10)
+	# A pistol wears a piece's brick down and breaks it (StructuralDamage).
+	var total := func() -> int:
+		var n := 0
+		for p in collapse.pieces.pieces:
+			n += int(size_of.call(p))
+		return n
+	var pn0: int = total.call()
+	var shots_n := 0
+	var down := Vector3.DOWN
+	for k in 80:
+		var h2 := {}
+		for p in collapse.pieces.pieces:
+			var pb := collapse.pieces.world_box(p)
+			var q2 := PhysicsRayQueryParameters3D.create(pb.get_center() + Vector3.UP * (pb.size.y + 3.0),
+					pb.get_center() - Vector3.UP * (pb.size.y + 3.0), Layers.DEBRIS | Layers.FALLING)
+			h2 = get_world_3d().direct_space_state.intersect_ray(q2)
+			if not h2.is_empty():
+				break
+		if h2.is_empty():
+			break
+		var pt: Vector3 = h2.position + down * 0.05
+		_mine(pt, down, StructuralDamage.for_shot(null))
+		shots_n += 1
+		if int(total.call()) < pn0:
+			break
+		await _frames(1)
+	ok = int(total.call()) < pn0
+	print("[mine-collapse] %s  pistol rounds break a piece's brick (%d shot(s), %d -> %d bricks in pieces)" % [
+			"ok  " if ok else "FAIL", shots_n, pn0, int(total.call())])
+	fails += 0 if ok else 1
+	await _collapse_quiet(300)
 	# Sand dropped onto the fallen arm: it lands ON the piece, as pieces.
 	var big: PlanetPieces.Piece = null
 	for p in collapse.pieces.pieces:
