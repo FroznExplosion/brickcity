@@ -181,6 +181,11 @@ BColumn biome_column(const GenParams &p, uint32_t seed, int x, int z);
 constexpr int AQ_XZ = 40;
 constexpr int AQ_Y = 12;
 int cave_pool_level(const GenParams &p, uint32_t seed, int x, int yb, int z);
+/// Is cave cell (x, yb, z) pool water? 1 yes, 0 no, -1 not worked out yet and
+/// `may_compute` false (the main thread never works a region out: it asks
+/// what the water's thread already has). Pools are a region's CLOSED pockets
+/// under its level -- dips in cave floors, filled to their rims.
+int cave_pool_water(const GenParams &p, uint32_t seed, int x, int yb, int z, bool may_compute);
 
 /// Lakes above the sea: the water level (a course) of the lake over column
 /// (x, z), INT_MIN when none; `bed`, when given, gets the course of its bowl's

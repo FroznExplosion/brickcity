@@ -269,6 +269,9 @@ void sample_column(int x, int z, int b0, int nb, uint8_t *out, int *gen_top, uin
 }
 
 constexpr int NO_SPRING = -32000;
+/// The water's own thread works cave pool regions out; the main thread only
+/// reads what is already known (cave_pool_water's may_compute).
+thread_local bool t_may_compute = false;
 int g_lava_b = INT_MIN;      ///< lava pools: cave air under this course (stage 8)
 bool g_springs = false;
 uint32_t g_spring_cut = 0;   ///< a column's hash under this: a spring candidate
@@ -330,10 +333,11 @@ inline void gen_fluid(Cell &cl, int x, int b, int z, int gen_top, int spring_b =
         cl.st = mk_st(F_WATER, K_SOURCE, false);
         cl.amt = (uint8_t)cap;
     } else if (g_pools && b < gen_top && gen_open
-            && b <= cave_pool_level(gen_params(), (uint32_t)BrickTerrain::get_seed(), x, b, z)) {
-        // Cave air in a pool region under its level: the pool (the generator
-        // left barriers round it).
-        cl.st = mk_st(F_WATER, K_SOURCE, false);
+            && cave_pool_water(gen_params(), (uint32_t)BrickTerrain::get_seed(), x, b, z, t_may_compute) == 1) {
+        // A cave pool: a closed pocket of cave air under its region's level.
+        // STILL water, a real volume: broken into, it spills what it holds
+        // and settles; it does not pour for ever.
+        cl.st = mk_st(F_WATER, K_STILL, false);
         cl.amt = (uint8_t)cap;
     }
 }
@@ -1005,7 +1009,14 @@ void apply_cmd(const Cmd &c) {
                     const GenParams &gp = gen_params();
                     for (int ry = fdiv(c.b.x, AQ_Y); ry <= fdiv(c.b.y, AQ_Y); ++ry) {
                         const int lvl = cave_pool_level(gp, seed, x, ry * AQ_Y, z);
-                        if (lvl != INT_MIN && c_wet(wcell(x, lvl, z))) any = true;
+                        if (lvl == INT_MIN) continue;
+                        // The pool's top course if this column holds any.
+                        for (int yb = lvl; yb >= ry * AQ_Y; --yb) {
+                            if (cave_pool_water(gp, seed, x, yb, z, true) == 1) {
+                                if (c_wet(wcell(x, yb, z))) any = true;
+                                break;
+                            }
+                        }
                     }
                 }
                 if (g_springs) {
@@ -1426,6 +1437,8 @@ void check_pits() {
 
 void do_tick() {
     const auto t0 = std::chrono::steady_clock::now();
+    t_may_compute = true;
+    struct Off { ~Off() { t_may_compute = false; } } off;
     g_last_columns = 0;
     g_sample_ms = 0.0;
     ++g_tick;
@@ -1843,6 +1856,14 @@ void BrickFluid::prime_tile(int tx, int tz, int b_lo, int b_hi) {
     c.a = Vector3i(tx, 0, tz);
     c.b = Vector3i(b_lo, b_hi, 0);
     push_cmd(c);
+}
+
+bool BrickFluid::ocean_at(Vector3 p) {
+    if (!g_sea_on) return false;
+    const Vector3i k = cell_of(p);
+    std::lock_guard<std::recursive_mutex> lk(g_state);
+    const Cell c = rcell(k.x, g_sea_b - 1, k.z);
+    return c_wet(c) && c_ocean(c);
 }
 
 int BrickFluid::lake_top(int x, int z) {
@@ -2292,6 +2313,7 @@ void BrickFluid::_bind_methods() {
     ClassDB::bind_static_method("BrickFluid", D_METHOD("prime_tile", "tx", "tz", "b_lo", "b_hi"), &BrickFluid::prime_tile,
             DEFVAL(1), DEFVAL(0));
     ClassDB::bind_static_method("BrickFluid", D_METHOD("lake_top", "x", "z"), &BrickFluid::lake_top);
+    ClassDB::bind_static_method("BrickFluid", D_METHOD("ocean_at", "point"), &BrickFluid::ocean_at);
     ClassDB::bind_static_method("BrickFluid", D_METHOD("set_change_log", "on"), &BrickFluid::set_change_log);
     ClassDB::bind_static_method("BrickFluid", D_METHOD("set_simulating", "on"), &BrickFluid::set_simulating);
     ClassDB::bind_static_method("BrickFluid", D_METHOD("get_simulating"), &BrickFluid::get_simulating);
