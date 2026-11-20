@@ -35,6 +35,9 @@ var slow := {"n": 0, "ms": 0.0, "city": 0.0, "scripts": 0.0, "step": 0.0, "proce
 		"draw": 0.0, "sync": 0.0, "gpu": 0.0, "by": {}, "worst": []}
 var frames := 0
 var all_ms := 0.0
+## The last counted frame's parts and length (a pass reading frame by frame).
+var last := {}
+var last_ms := 0.0
 var all := {}   # every frame's buckets, summed
 var _vp := RID()
 ## Frames the pass itself made slow (a screenshot's read-back, a census) are
@@ -112,6 +115,8 @@ func _close(ms: float) -> void:
 					RenderingServer.VIEWPORT_RENDER_INFO_DRAW_CALLS_IN_FRAME) / 1000.0,
 			"sh_tris_M": _info(RenderingServer.VIEWPORT_RENDER_INFO_TYPE_SHADOW,
 					RenderingServer.VIEWPORT_RENDER_INFO_PRIMITIVES_IN_FRAME) / 1.0e6}
+	last = parts
+	last_ms = ms
 	frames += 1
 	all_ms += ms
 	for k in parts:
