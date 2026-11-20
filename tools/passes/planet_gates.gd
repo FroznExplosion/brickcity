@@ -4183,9 +4183,11 @@ func _run_damage_gate() -> void:
 	_check("a rifle's rounds wear a brick out", host.buildings.bricks_killed > killed0,
 			"%d brick(s) after %d round(s), %d hp a round" % [host.buildings.bricks_killed - killed0, rounds, int(shot.hp)])
 	var bands: Array = site.remesh.duplicate()
+	# A band is boxes filled again in place (Docs/PlanetCost.md 5.4): its stamp
+	# (which bricks it was filled from) changes, not its node.
 	for b in bands:
 		if site.band_nodes.has(b):
-			band0 = (site.band_nodes[b] as Node).get_instance_id()
+			band0 = int((site.band_nodes[b] as Node).get_meta(BrickBoxes.STAMP, 0))
 	await host._frames(20)
 	_check("the AI's world has lost it (no longer solid there)", solid0 and not aw.solid_at(at + dir * 0.1))
 	var hit2 := space.intersect_ray(PhysicsRayQueryParameters3D.create(from, to, Layers.STRUCTURE))
@@ -4193,7 +4195,7 @@ func _run_damage_gate() -> void:
 	_check("and the collision (a ray goes further in)", deeper,
 			"from %.2f m to %s" % [at.distance_to(from), "through" if hit2.is_empty() else "%.2f m" % (hit2.position as Vector3).distance_to(from)])
 	var redrawn: bool = site.remesh.is_empty() and site.band_jobs.is_empty() and band0 != 0 \
-			and site.band_nodes.has(bands[0]) and (site.band_nodes[bands[0]] as Node).get_instance_id() != band0
+			and site.band_nodes.has(bands[0]) and int((site.band_nodes[bands[0]] as Node).get_meta(BrickBoxes.STAMP, 0)) != band0
 	_check("its band is drawn again", redrawn, "bands %s" % [bands])
 	# A charge: at the middle of the +X wall, a metre up -- no door there.
 	var c_out := bxf * Vector3(w + 3.0, 0.3, dd * 0.5)
@@ -5458,6 +5460,14 @@ func _shell_nodes() -> Array:
 	return out
 
 
+func _occluder_nodes() -> Array:
+	var out: Array = []
+	for st in host.buildings.sites:
+		if st.occluder != null:
+			out.append(st.occluder)
+	return out
+
+
 func _cost_toggles(full: bool) -> Array:
 	var vp := host.get_viewport()
 	var sky: Sky = host.env.sky
@@ -5483,6 +5493,12 @@ func _cost_toggles(full: bool) -> Array:
 	t.append(["brick buildings hidden", func(): _hide(_brick_nodes()), _unhide])
 	t.append(["shells + far boxes hidden", func(): _hide(_shell_nodes()), _unhide])
 	t.append(["ship hidden", func(): _hide([host.ship]), _unhide])
+	t.append(["occluders off", func():
+			host.buildings.occluders_on = false
+			_hide(_occluder_nodes()),
+			func():
+			_unhide()
+			host.buildings.occluders_on = true])
 	if full:
 		var scale0 := vp.scaling_3d_scale
 		t.append(["render scale -> 0.5", func(): vp.scaling_3d_scale = 0.5, func(): vp.scaling_3d_scale = scale0])
@@ -5574,11 +5590,52 @@ func _cost_trip(what: String, seconds: float, path_fn: Callable, pitch: float) -
 			host.walker.reset_physics_interpolation()
 		last = p
 	var lines := clock.report_lines()
-	print("[cost] --- %s: %d frames over 40 ms, %d origin shift(s), worst brick step %.1f ms, trees' last build %.1f ms ---" % [
-			what, over40, PlanetFrame.shifts - shifts0, host.buildings.brick_worst_us / 1000.0, host.trees.last_build_us / 1000.0])
+	print("[cost] --- %s: %d frames over 40 ms, %d origin shift(s), worst brick step %.1f ms (%s), trees' last build %.1f ms ---" % [
+			what, over40, PlanetFrame.shifts - shifts0, host.buildings.brick_worst_us / 1000.0, host.buildings.brick_worst_what, host.trees.last_build_us / 1000.0])
 	for l in lines:
 		print("[cost]   " + l)
 	clock.queue_free()
+
+
+## What is in the tree to draw: visible GeometryInstance3D nodes by where they
+## hang (the host's child, and its child), with MultiMesh instances counted.
+func _census() -> Dictionary:
+	var out := {}
+	var stack: Array = [host]
+	while not stack.is_empty():
+		var n: Node = stack.pop_back()
+		for ch in n.get_children():
+			stack.append(ch)
+		var g := n as GeometryInstance3D
+		if g == null or not g.is_visible_in_tree():
+			continue
+		var path := String(host.get_path_to(g)).split("/")
+		var key := "/".join(path.slice(0, mini(2, path.size() - 1))) if path.size() > 1 else path[0]
+		var e: Array = out.get(key, [0, 0])
+		e[0] += 1
+		var mmi := g as MultiMeshInstance3D
+		if mmi != null and mmi.multimesh != null:
+			e[1] += mmi.multimesh.visible_instance_count if mmi.multimesh.visible_instance_count >= 0 else mmi.multimesh.instance_count
+		out[key] = e
+	return out
+
+
+func _census_diff(a: Dictionary, b: Dictionary) -> void:
+	var keys := {}
+	for k in a:
+		keys[k] = true
+	for k in b:
+		keys[k] = true
+	var rows: Array = []
+	for k in keys:
+		var x: Array = a.get(k, [0, 0])
+		var y: Array = b.get(k, [0, 0])
+		if x[0] != y[0] or absi(int(x[1]) - int(y[1])) > 50:
+			rows.append([int(y[0]) - int(x[0]), k, x, y])
+	rows.sort_custom(func(p: Array, q: Array) -> bool: return absi(p[0]) > absi(q[0]))
+	print("[cost] visible nodes before -> after the trips (nodes, instances), the biggest changes:")
+	for r in rows.slice(0, 15):
+		print("[cost]   %+5d  %-50s %s -> %s" % [r[0], r[1], r[2], r[3]])
 
 
 func _run_cost_gate() -> void:
@@ -5639,15 +5696,28 @@ func _run_cost_gate() -> void:
 		["sky (50 deg up)", eye, eye + side * 30.0 + up * 36.0, false],
 		["250 m up, looking down at the town", eye + up * 250.0 - to_town * 150.0, centre, false],
 	]
+	# `-- --quick`: the town's baseline and the trips only (the views' rows skipped).
+	var quick := "--quick" in OS.get_cmdline_user_args()
 	for v in views:
+		if quick:
+			break
 		c.current = true
 		c.look_at_from_position(v[1], v[2], up)
 		await _cost_view(v[0], v[3])
 	c.current = true
 	c.look_at_from_position(eye, eye + to_town * 50.0 - up * 2.0, up)
-	await _cost_big()
+	if quick:
+		print(_cost_line("town baseline", await _cost_measure(), {}))
+	else:
+		await _cost_big()
 	host.cam.current = true
 	c.queue_free()
+	# What is drawn before the trips, from the player's own camera, and what
+	# is in the tree to draw (Docs/PlanetCost.md 2.4: 271 objects before the
+	# flights, 977 after).
+	print(_cost_line("player's view before the trips", await _cost_measure(), {}))
+	var census0 := _census()
+	var face0 := -host.cam.global_transform.basis.z
 	# Trips: the walker carried, the pawn's camera on it (as flying is played).
 	host._set_on_foot(false)
 	host.walker.frozen = true
@@ -5682,8 +5752,19 @@ func _run_cost_gate() -> void:
 	while host._ground_hit(back) == Vector3.INF and Time.get_ticks_msec() - t0 < 30000:
 		await host._frames(1)
 	await host._frames(240)
+	# Facing as before the trips: the same picture, so the rows compare.
+	host._face(face0)
+	await host._frames(30)
+	print(_cost_line("player's view after the trips", await _cost_measure(), {}))
+	_census_diff(census0, _census())
 	if host.ai == null:
+		var hitches0 := host._hitches.size()
+		var t_ai := Time.get_ticks_usec()
 		host.setup_ai(town)
+		var ai_ms := float(Time.get_ticks_usec() - t_ai) / 1000.0
+		await host._frames(60)
+		print("[cost] the AI woke in %.1f ms on the main thread; frames over 40 ms since: %s" % [
+				ai_ms, host._hitches.slice(hitches0)])
 	var quiet := await _cost_measure(180)
 	print(_cost_line("player's view, AI, no garrison", quiet, {}))
 	host._home_garrison()
