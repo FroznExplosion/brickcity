@@ -5708,6 +5708,31 @@ func _run_cost_gate() -> void:
 	c.look_at_from_position(eye, eye + to_town * 50.0 - up * 2.0, up)
 	if quick:
 		print(_cost_line("town baseline", await _cost_measure(), {}))
+	# Pictures of the bricks as they are drawn: the town, a wall 8 m off (its
+	# windows), a roof from 6 m over it (its studs).
+	await _shot("planet_cost_town")
+	var near_i := -1
+	var near_d := INF
+	for i in host.buildings.sites.size():
+		var st: PlanetBuildings.Site = host.buildings.sites[i]
+		if st.bricked and st.brick_node != null:
+			var d := eye.distance_to(host.planet.global_position + st.frame.origin)
+			if d < near_d:
+				near_d = d
+				near_i = i
+	if near_i >= 0:
+		var st: PlanetBuildings.Site = host.buildings.sites[near_i]
+		var stud := BrickWorld.get_stud_metres()
+		var fx := host.planet.global_transform * st.frame
+		var w := st.fx * stud
+		c.look_at_from_position(fx * Vector3(w * 0.5, 2.5, -8.0), fx * Vector3(w * 0.5, 4.5, 0.0), fx.basis.y.normalized())
+		await host._frames(30)
+		await _shot("planet_cost_wall")
+		c.look_at_from_position(fx * Vector3(w * 0.5, st.height + 6.0, -4.0),
+				fx * Vector3(w * 0.5, st.height, st.fz * stud * 0.5), fx.basis.y.normalized())
+		await host._frames(30)
+		await _shot("planet_cost_roof")
+		c.look_at_from_position(eye, eye + to_town * 50.0 - up * 2.0, up)
 	else:
 		await _cost_big()
 	host.cam.current = true

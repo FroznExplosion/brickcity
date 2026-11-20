@@ -416,7 +416,6 @@ func activate() -> void:
 		crumbs.wind = func(p: Vector3) -> Vector3:
 			return air_at(p, true).get("pull", Vector3.ZERO)
 	_band_next = 0
-	bricks.bake_chunk_async(chunk)
 	lay_ms = (Time.get_ticks_usec() - t0) / 1000.0
 	print("[station] %s: %d bricks laid in %.1f ms (its template built in %.1f ms, before)" % [
 			data.orbital_name, bricks.get_alive_block_count(chunk), lay_ms, template_ms])
@@ -626,7 +625,6 @@ func _after_restore(back: PackedInt32Array) -> void:
 	for b in _bands_of(back):
 		if not _remesh.has(b):
 			_remesh.append(b)
-	bricks.bake_chunk_async(chunk)
 
 
 ## World `p` is inside its module's box.
@@ -694,7 +692,6 @@ func _after_kill(killed: PackedInt32Array) -> void:
 	for b in _bands_of(killed):
 		if not _remesh.has(b):
 			_remesh.append(b)
-	bricks.bake_chunk_async(chunk)
 	_solve_due = true
 
 
@@ -796,10 +793,6 @@ func _damage_step() -> void:
 	if ghost != null and ghost.any_stale():
 		ghost.flush(2)
 	if not _remesh.is_empty():
-		if not bricks.bake_ready(chunk):
-			if not bricks.bake_pending(chunk):
-				bricks.bake_chunk_async(chunk)
-			return
 		_harvest()
 		for b in _remesh:
 			_draw_band(b)
@@ -825,10 +818,6 @@ func _process(_delta: float) -> void:
 			bricks.set_chunk_transform(chunk, global_transform * frame)
 		_damage_step()
 		return
-	if not bricks.bake_ready(chunk):
-		if not bricks.bake_pending(chunk):
-			bricks.bake_chunk_async(chunk)
-		return
 	_harvest()
 	if _band_next < bricks.get_chunk_sections(chunk):
 		_draw_band(_band_next)
@@ -846,37 +835,67 @@ func _process(_delta: float) -> void:
 		shell_body.collision_layer = 0
 
 
-## As PlanetBuildings._draw_band: a band's bricks and open studs merged into one
-## mesh on a worker.
+## As PlanetBuildings._draw_band: a band as a box a brick (BrickBoxes, the
+## city's way; Docs/PlanetCost.md 7): filled in the frame, no bake, no upload;
+## its stairs' faces made into a mesh on a worker; its open studs a MultiMesh.
 func _draw_band(band: int) -> void:
-	var arrays: Array = bricks.build_chunk_mesh_section(chunk, band)
-	var got: Array = bricks.get_chunk_studs_and_open(chunk, band)
-	var buf: PackedFloat32Array = got[0]
-	var open: PackedByteArray = got[1]
-	var keep := PackedFloat32Array()
-	for k in open.size():
-		if open[k] != 0:
-			keep.append_array(buf.slice(k * 16, k * 16 + 16))
-	if arrays.is_empty() and keep.is_empty():
+	if _brick_node == null or chunk < 0:
 		return
-	var stud: Array = _stud_arrays
-	var holder := [null]
-	var task := WorkerThreadPool.add_task(func() -> void:
-			var merge := MeshMerge.new()
-			if not arrays.is_empty():
-				merge.add_surface(arrays, Transform3D.IDENTITY, Color(-1, 0, 0))
-			if not keep.is_empty():
-				merge.add_instances(stud, Transform3D.IDENTITY, keep)
-			var out := merge.commit()
-			# Every brick of the band gone: its vertices are still baked, no triangle is.
-			if out.is_empty() or (out[Mesh.ARRAY_INDEX] as PackedInt32Array).is_empty():
-				return
-			var m := ArrayMesh.new()
-			m.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, out, [], {}, IslandManager.UPLOAD_COMPRESS)
-			holder[0] = m, false, "station band")
-	_band_jobs.append([task, holder, band])
+	var node: MeshInstance3D = _band_nodes.get(band)
+	var held := 0
+	if node != null and node.has_meta(BrickBoxes.SPECIAL):
+		held = int(node.get_meta(BrickBoxes.SPECIAL))
+	var got: Array = bricks.get_instance_buffers(chunk, PackedInt32Array([band]), PackedInt64Array([held]))
+	if got.is_empty():
+		return
+	var entry: Dictionary = got[0]
+	if node == null:
+		if int(entry.alive) == 0:
+			return
+		node = MeshInstance3D.new()
+		node.name = "Band%d" % band
+		node.material_override = brick_material
+		_brick_node.add_child(node)
+		_band_nodes[band] = node
+	var special: Array = entry.get("special", [])
+	if not bool(entry.get("special_same", false)) and not special.is_empty():
+		entry["special"] = []
+		var holder := [null]
+		var task := WorkerThreadPool.add_task(func() -> void:
+				var m := ArrayMesh.new()
+				m.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, special)
+				holder[0] = m, false, "station band parts")
+		_band_jobs.append([task, holder, band, int(entry.get("special_stamp", 0))])
+	BrickBoxes.fill(node, entry, brick_material, Callable())
+	var sg: Array = bricks.get_chunk_studs_and_open(chunk, band)
+	var open: PackedFloat32Array = BrickWorld.split_studs(sg[0], Vector3.ZERO,
+			PackedFloat32Array([INF]), sg[1], 0)[0]
+	@warning_ignore("integer_division")
+	var n := open.size() / 16
+	var studs := node.get_node_or_null(^"Studs") as MultiMeshInstance3D
+	if studs == null and n > 0:
+		studs = MultiMeshInstance3D.new()
+		studs.name = "Studs"
+		studs.material_override = brick_material
+		studs.physics_interpolation_mode = Node.PHYSICS_INTERPOLATION_MODE_OFF
+		var mm := MultiMesh.new()
+		mm.transform_format = MultiMesh.TRANSFORM_3D
+		mm.use_colors = true
+		mm.mesh = PieceMeshes.stud()
+		studs.multimesh = mm
+		studs.visibility_range_end = PlanetBuildings.STUD_DRAW_M
+		studs.visibility_range_end_margin = PlanetBuildings.STUD_DRAW_FADE
+		studs.visibility_range_fade_mode = GeometryInstance3D.VISIBILITY_RANGE_FADE_SELF
+		node.add_child(studs)
+	if studs != null:
+		studs.multimesh.instance_count = n
+		if n > 0:
+			studs.multimesh.buffer = open
+		studs.visible = n > 0
 
 
+## The meshes of bands' parts that are not boxes, made on workers: each given
+## to its band once done, if the band still stands for the same parts.
 func _harvest() -> void:
 	var k := 0
 	while k < _band_jobs.size():
@@ -886,22 +905,11 @@ func _harvest() -> void:
 			continue
 		WorkerThreadPool.wait_for_task_completion(int(job[0]))
 		_band_jobs.remove_at(k)
-		var mesh: ArrayMesh = (job[1] as Array)[0]
-		var band: int = job[2]
-		if _brick_node == null:
+		var node: MeshInstance3D = _band_nodes.get(int(job[2]))
+		if node == null or not is_instance_valid(node):
 			continue
-		# A band drawn again (a hit) replaces the one it was.
-		var old: Node = _band_nodes.get(band)
-		if old != null:
-			old.queue_free()
-			_band_nodes.erase(band)
-		if mesh == null:
-			continue
-		var mi := MeshInstance3D.new()
-		mi.mesh = mesh
-		mi.material_override = brick_material
-		_brick_node.add_child(mi)
-		_band_nodes[band] = mi
+		if int(node.get_meta(BrickBoxes.SPECIAL, 0)) == int(job[3]):
+			node.mesh = (job[1] as Array)[0]
 
 
 ## As PlanetBuildings._staircase: the city's staircase on the lattice inside.
