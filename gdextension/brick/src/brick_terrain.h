@@ -566,6 +566,12 @@ public:
     /// for the main thread: {"tiles", "removed"}.
     static Dictionary find_brick(Vector3 point, Vector3 normal);
     static Dictionary clear_runs(const PackedInt32Array &runs);
+    /// Every WHOLE brick plate box [lo, hi] touches, as find_brick takes one:
+    /// a surface piece in a column's top course all of it, a brick cell (a stud
+    /// by a brick) under it. {runs} for clear_runs. A pickaxe's area: nothing
+    /// is cut in parts, so the packer lays the ground round it as before.
+    /// Samples and packs each tile it touches (~10 ms a tile): a worker's job.
+    static Dictionary find_bricks(Vector3i lo, Vector3i hi);
     /// The first solid plate cell along a ray, walking the grid exactly
     /// (stud x plate x stud): {"cell": Vector3i, "normal": Vector3i (the face
     /// entered through), "material", "position"}; empty when nothing is hit.
