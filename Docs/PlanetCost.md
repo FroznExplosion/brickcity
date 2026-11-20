@@ -236,5 +236,7 @@ by eye 2026-11-20: as the bricks should look.
 
 Left, smaller:
 - The load still has 240-530 ms frames (the spawn: the impostor bake, the brick shapes, the
-  first streaming), and the cost gate's own 5 km teleport back after the flights 100-330 ms.
+  first streaming). A fresh start is now dark over them (`PlanetScene._loading_veil`, as a saved
+  game's resume already was), lifted 20 frames after the player stands there, faded over 0.5 s.
+  The cost gate's own 5 km teleport back after the flights is 100-330 ms; play has no such jump.
 - Occluders measured within noise in this small town; they matter more in a big one.

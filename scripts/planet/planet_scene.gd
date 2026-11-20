@@ -533,6 +533,18 @@ func veil(on: bool) -> void:
 	_flash.color = Color(0, 0, 0, 1) if on else Color(1, 1, 1, 0)
 
 
+var _loading_veil := false
+
+## The loading veil off: after a few more frames (the first bands, the
+## ground's last tiles round the feet), faded over half a second.
+func _lift_veil() -> void:
+	await _frames(20)
+	if _flash.color.a < 1.0:
+		return   # something else has the veil now (a saved game's resume)
+	var tw := create_tween()
+	tw.tween_property(_flash, "color:a", 0.0, 0.5)
+
+
 ## Jump to the map's pick, the screen white over the swap.
 func map_jump() -> void:
 	if not system.can_jump():
@@ -1058,6 +1070,12 @@ func _build_hud() -> void:
 		# the spawn is only where the scene starts, not where they are.
 		if saver != null and saver.state.get("at") != null:
 			veil(true)
+		elif not _gate:
+			# A fresh start is dark too while the scene loads (its 240-530 ms
+			# frames: the spawn's streaming, the trees' cards), lifted once the
+			# player stands there (Docs/PlanetCost.md 7).
+			veil(true)
+			_loading_veil = true
 
 
 ## The air where the player is (a ship's or station's, Docs/Hulls.md 4): pulled toward a
@@ -1216,6 +1234,9 @@ func _process(delta: float) -> void:
 		walker.frozen = false
 		if not _gate or _pawn_gate or _mech_gate or _tank_gate or _soldier_gate or _squad_gate or _travel_gate or _far_gate or _drive_gate or _trees_gate or _bricks_gate or _damage_gate or _fall_gate or _hits_gate or _topple_gate or _pieces_ai_gate or _storey_gate or _snap_gate or _farfight_gate or _garrison_gate or _seat_gate or _home_gate or _mechwave_gate or _hull_gate or _save_gate or _light_gate or _cost_gate:
 			_spawn_player(_ground_hit(walker.global_position), -walker.global_transform.basis.z)
+			if _loading_veil:
+				_loading_veil = false
+				_lift_veil()
 			if saver != null:
 				saver.resume()
 	if not on_foot:
