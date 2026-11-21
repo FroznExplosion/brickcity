@@ -377,15 +377,31 @@ func _add_surface(arrays: Array, material: Material,
 ## ground (heightfield_scene, city_scene).
 ##
 ## `sun_travel` is the way the light shines: `-sun.global_transform.basis.z`.
-static func ground_material(sun_travel: Vector3) -> ShaderMaterial:
+## `sky_light`: the copy of the shader that reads the bake's sky light
+## (CUSTOM0.a, BrickTerrain.set_sky_light; Docs/MineWorld.md 18) -- the mine
+## world's. Every other scene draws the shader as it is.
+static func ground_material(sun_travel: Vector3, sky_light := false) -> ShaderMaterial:
 	var mat := ShaderMaterial.new()
-	mat.shader = load("res://shaders/terrain.gdshader")
+	mat.shader = sky_light_shader() if sky_light else load("res://shaders/terrain.gdshader")
 	WeatherFx.register(mat)
 	mat.set_shader_parameter("stud_pitch", BrickWorld.get_stud_metres())
 	mat.set_shader_parameter("stud_radius", PieceMeshes.STUD_R)
 	mat.set_shader_parameter("stud_height", PieceMeshes.STUD_H)
 	mat.set_shader_parameter("sun_dir", sun_travel)
 	return mat
+
+
+static var _sky_light_shader: Shader = null
+
+
+## `terrain.gdshader` with `#define SKY_LIGHT` in front of it, made once.
+static func sky_light_shader() -> Shader:
+	if _sky_light_shader == null:
+		var code: String = (load("res://shaders/terrain.gdshader") as Shader).code
+		var at := code.find("\n") + 1
+		_sky_light_shader = Shader.new()
+		_sky_light_shader.code = code.insert(at, "#define SKY_LIGHT\n")
+	return _sky_light_shader
 
 
 ## Instanced pieces need a material that reads the per-instance colour, or

@@ -5158,6 +5158,402 @@ static bool sample_section(int tx, int sy, int tz, TileSample &out) {
     return true;
 }
 
+// --- sky light in the cells (Docs/MineWorld.md 18) ----------------------------------
+
+static std::atomic<bool> g_sky_light{ false };
+
+namespace {
+
+/// Levels 15 (open sky) to 0: a step to a neighbour cell costs one.
+constexpr int SKY_MAX = 15;
+/// Cells past what a pass reads that its fill covers: light at a cell depends
+/// only on cells within SKY_MAX steps, plus one for the eight-cell blend.
+constexpr int SKY_PAD = SKY_MAX + 2;
+
+/// What a sky-light fill reads -- is a cell opaque, where does a column's sky
+/// stop -- worked out on demand and kept, over a box of columns and courses.
+/// A cell is one stud by one course (PLATES_PER_CELL plates); OPAQUE when all
+/// its plates are solid.
+struct SkyGrid {
+    const TileSample *s = nullptr;
+    /// `s` is a surface tile: its `tp` is each column's real top. A deep
+    /// section's (or none) is not.
+    bool surface = false;
+    int x0 = 0, z0 = 0, c0 = 0;   ///< absolute cell of index 0
+    int nx = 0, nz = 0, nc = 0;
+    std::vector<uint8_t> state;   ///< 0 unknown, 1 open, 2 opaque
+    std::vector<uint8_t> level;   ///< below the sky floor; the fill's result
+    std::vector<int32_t> floors;  ///< per column: sky floor course, INT_MIN unknown
+    std::vector<BColumn> cols;
+    std::vector<uint8_t> col_done;
+    bool biomes = false;
+    bool any_edits = false;
+    int64_t cells_filled = 0;
+
+    void init(int p_x0, int p_z0, int p_c0, int p_nx, int p_nz, int p_nc) {
+        x0 = p_x0; z0 = p_z0; c0 = p_c0;
+        nx = p_nx; nz = p_nz; nc = p_nc;
+        state.assign((size_t)nx * nz * nc, 0);
+        level.assign((size_t)nx * nz * nc, 0);
+        floors.assign((size_t)nx * nz, INT_MIN);
+        biomes = biomes_on();
+        if (biomes) {
+            cols.resize((size_t)nx * nz);
+            col_done.assign((size_t)nx * nz, 0);
+        }
+        any_edits = !edits_empty();
+    }
+
+    int c1() const { return c0 + nc - 1; }
+    bool in_cols(int x, int z) const { return x >= x0 && z >= z0 && x < x0 + nx && z < z0 + nz; }
+    bool in(int x, int c, int z) const { return in_cols(x, z) && c >= c0 && c < c0 + nc; }
+    size_t ki(int x, int z) const { return (size_t)(x - x0) + (size_t)nx * (size_t)(z - z0); }
+    size_t ci(int x, int c, int z) const { return ki(x, z) + (size_t)nx * nz * (size_t)(c - c0); }
+
+    /// The biome generator's column, kept (in the box) or made.
+    BColumn column(int x, int z) {
+        if (!in_cols(x, z)) {
+            return biome_column(g_field.seed, x, z);
+        }
+        const size_t k = ki(x, z);
+        if (!col_done[k]) {
+            cols[k] = biome_column(g_field.seed, x, z);
+            col_done[k] = 1;
+        }
+        return cols[k];
+    }
+
+    bool sample_has(int x, int z, int &lx, int &lz) const {
+        if (s == nullptr) {
+            return false;
+        }
+        lx = x - s->tx * TILE;
+        lz = z - s->tz * TILE;
+        return lx >= -MARGIN && lz >= -MARGIN && lx < TILE + MARGIN && lz < TILE + MARGIN;
+    }
+
+    bool opaque_raw(int x, int c, int z) {
+        const int yp0 = c * PLATES_PER_CELL;
+        int lx, lz;
+        // The tile's own sample where it reaches: the same field, already read.
+        if (sample_has(x, z, lx, lz) && s->in_y(yp0) && s->in_y(yp0 + PLATES_PER_CELL - 1)) {
+            for (int p = 0; p < PLATES_PER_CELL; ++p) {
+                if (s->vox[s->vidx(lx, yp0 + p, lz)] == MAT_AIR) {
+                    return false;
+                }
+            }
+            return true;
+        }
+        if (biomes) {
+            // One generator cell a course (biome_cell is per brick); edits per plate.
+            int base = -1;
+            for (int p = 0; p < PLATES_PER_CELL; ++p) {
+                if (any_edits) {
+                    const int e = edit_at(pack_cell(x, yp0 + p, z));
+                    if (e >= 0) {
+                        if (e == MAT_AIR) {
+                            return false;
+                        }
+                        continue;
+                    }
+                }
+                if (base < 0) {
+                    base = biome_cell(column(x, z), g_field.seed, x, c, z) != MAT_AIR ? 1 : 0;
+                }
+                if (base == 0) {
+                    return false;
+                }
+            }
+            return true;
+        }
+        for (int p = 0; p < PLATES_PER_CELL; ++p) {
+            if (g_field.solid_at(x, yp0 + p, z) == MAT_AIR) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    bool opaque(int x, int c, int z) {
+        if (!in(x, c, z)) {
+            return opaque_raw(x, c, z);
+        }
+        const size_t i = ci(x, c, z);
+        if (state[i] == 0) {
+            state[i] = opaque_raw(x, c, z) ? 2 : 1;
+        }
+        return state[i] == 2;
+    }
+
+    /// The column's sky floor: cells at and above it see the sky (level 15),
+    /// down to the first opaque cell from the top. Any value past the box's
+    /// top means "no sky in the box"; any at or below its bottom, "all sky".
+    int floor_raw(int x, int z) {
+        int top_c;
+        int lx, lz;
+        if (surface && sample_has(x, z, lx, lz)) {
+            top_c = floor_div(s->tp[TileSample::idx(lx, lz)], PLATES_PER_CELL);
+        } else if (!surface && biomes) {
+            // Deep in the ground, the box's top is far under the surface: the
+            // first opaque cell above the box settles it, and is nearly
+            // always the one just above. Only a column open all the way up
+            // needs the scan down from the box's top.
+            const BColumn col = column(x, z);
+            const int placed = highest_edit_near(floor_div(x, TILE), floor_div(z, TILE));
+            const int lim = floor_div(std::max(col.bound_p, placed), PLATES_PER_CELL) + 1;
+            for (int c = c1() + 1; c <= lim; ++c) {
+                if (opaque_raw(x, c, z)) {
+                    return c + 1;
+                }
+            }
+            top_c = std::min(c1(), lim);
+        } else {
+            top_c = floor_div(BrickTerrain::surface_plate(x, z), PLATES_PER_CELL);
+        }
+        int c = top_c;
+        while (c >= c0 && !opaque(x, c, z)) {
+            --c;
+        }
+        return c + 1;
+    }
+
+    int sky_floor(int x, int z) {
+        if (!in_cols(x, z)) {
+            return floor_raw(x, z);
+        }
+        const size_t k = ki(x, z);
+        if (floors[k] == INT_MIN) {
+            floors[k] = floor_raw(x, z);
+        }
+        return floors[k];
+    }
+
+    bool sky(int x, int c, int z) { return c >= sky_floor(x, z); }
+
+    /// A cell's level once filled: 15 at and above the sky floor, 0 opaque.
+    int light(int x, int c, int z) {
+        if (sky(x, c, z)) {
+            return SKY_MAX;
+        }
+        if (!in(x, c, z)) {
+            return 0;
+        }
+        return level[ci(x, c, z)];
+    }
+
+    /// The breadth-first fill, exact inside `lo..hi` (absolute cells,
+    /// inclusive): seeds are the sky cells within SKY_MAX of the box that
+    /// touch a cell below its column's sky floor, and no step is taken where
+    /// the light left could not reach the box.
+    void fill(const Vector3i &lo, const Vector3i &hi) {
+        auto dist = [&](int x, int c, int z) {
+            return std::max(0, lo.x - x) + std::max(0, x - hi.x) + std::max(0, lo.y - c)
+                    + std::max(0, c - hi.y) + std::max(0, lo.z - z) + std::max(0, z - hi.z);
+        };
+        std::vector<uint32_t> bucket[SKY_MAX + 1];
+        const int sx0 = std::max(x0, lo.x - SKY_MAX), sx1 = std::min(x0 + nx - 1, hi.x + SKY_MAX);
+        const int sz0 = std::max(z0, lo.z - SKY_MAX), sz1 = std::min(z0 + nz - 1, hi.z + SKY_MAX);
+        const int sc0 = std::max(c0, lo.y - SKY_MAX), sc1 = std::min(c1(), hi.y + SKY_MAX);
+        static const int DX[4] = { -1, 1, 0, 0 }, DZ[4] = { 0, 0, -1, 1 };
+        for (int z = sz0; z <= sz1; ++z) {
+            for (int x = sx0; x <= sx1; ++x) {
+                if (dist(x, std::clamp(lo.y, sc0, sc1), z) >= SKY_MAX) {
+                    continue;   // too far sideways for any of it to arrive
+                }
+                const int f = sky_floor(x, z);
+                // Its sky cells beside a neighbour's cells under that one's
+                // floor; the bottom one also faces down onto opaque, nothing.
+                int top = f;
+                for (int k = 0; k < 4; ++k) {
+                    top = std::max(top, sky_floor(x + DX[k], z + DZ[k]) - 1);
+                }
+                for (int c = std::max(f, sc0); c <= std::min(top, sc1); ++c) {
+                    if (dist(x, c, z) < SKY_MAX) {
+                        bucket[SKY_MAX].push_back((uint32_t)ci(x, c, z));
+                    }
+                }
+            }
+        }
+        const size_t plane = (size_t)nx * nz;
+        for (int L = SKY_MAX; L >= 2; --L) {
+            const int nl = L - 1;
+            for (size_t b = 0; b < bucket[L].size(); ++b) {
+                const uint32_t i = bucket[L][b];
+                const int c = c0 + (int)(i / plane);
+                const size_t r = i % plane;
+                const int z = z0 + (int)(r / (size_t)nx);
+                const int x = x0 + (int)(r % (size_t)nx);
+                if (L < SKY_MAX && level[i] != L) {
+                    continue;   // raised since it was queued
+                }
+                static const int NX[6] = { -1, 1, 0, 0, 0, 0 };
+                static const int NY[6] = { 0, 0, -1, 1, 0, 0 };
+                static const int NZ[6] = { 0, 0, 0, 0, -1, 1 };
+                for (int k = 0; k < 6; ++k) {
+                    const int ax = x + NX[k], ac = c + NY[k], az = z + NZ[k];
+                    if (!in(ax, ac, az) || dist(ax, ac, az) >= nl) {
+                        continue;
+                    }
+                    const size_t j = ci(ax, ac, az);
+                    if (level[j] >= nl || sky(ax, ac, az) || opaque(ax, ac, az)) {
+                        continue;
+                    }
+                    level[j] = (uint8_t)nl;
+                    bucket[nl].push_back((uint32_t)j);
+                    ++cells_filled;
+                }
+            }
+        }
+    }
+};
+
+} // namespace
+
+/// Each vertex's sky light into CUSTOM0.a (Docs/MineWorld.md 18): the light
+/// half a cell out along its normal, blended over the eight cell centres round
+/// that point, opaque cells left out. Vertex positions are tile-local in X and
+/// Z (the tile's origin is stud gx0, gz0), absolute in Y.
+static void sky_light_pass(MeshBuf &m, const TileSample &s, bool surface, Dictionary &out) {
+    if (!g_sky_light.load(std::memory_order_relaxed) || m.verts.is_empty()) {
+        return;
+    }
+    const uint64_t t0 = Time::get_singleton()->get_ticks_usec();
+    const int n = m.verts.size();
+    const Vector3 *v = m.verts.ptr();
+    const Vector3 *nr = m.normals.ptr();
+    const int gx0 = s.tx * TILE, gz0 = s.tz * TILE;
+    float ymin = 1e30f, ymax = -1e30f;
+    for (int i = 0; i < n; ++i) {
+        ymin = std::min(ymin, v[i].y);
+        ymax = std::max(ymax, v[i].y);
+    }
+    SkyGrid g;
+    g.s = &s;
+    g.surface = surface;
+    const int cl = (int)std::floor(ymin / BRICK_M) - 1, ch = (int)std::floor(ymax / BRICK_M) + 1;
+    g.init(gx0 - 1 - SKY_PAD, gz0 - 1 - SKY_PAD, cl - SKY_PAD, TILE + 2 + 2 * SKY_PAD,
+            TILE + 2 + 2 * SKY_PAD, ch - cl + 1 + 2 * SKY_PAD);
+
+    // The eight cells round a vertex's sample point, and their weights.
+    auto corners = [&](int i, int &ix, int &iy, int &iz, float &fx, float &fy, float &fz) {
+        const Vector3 q = v[i] + Vector3(nr[i].x * STUD_M, nr[i].y * BRICK_M, nr[i].z * STUD_M) * 0.5f;
+        const float cx = q.x / STUD_M + (float)gx0 - 0.5f;
+        const float cy = q.y / BRICK_M - 0.5f;
+        const float cz = q.z / STUD_M + (float)gz0 - 0.5f;
+        ix = (int)std::floor(cx);
+        iy = (int)std::floor(cy);
+        iz = (int)std::floor(cz);
+        fx = cx - (float)ix;
+        fy = cy - (float)iy;
+        fz = cz - (float)iz;
+    };
+    // Which of those cells are under their column's sky floor and open: the
+    // ones the fill must answer for.
+    Vector3i lo(INT_MAX, INT_MAX, INT_MAX), hi(INT_MIN, INT_MIN, INT_MIN);
+    bool dark = false;
+    for (int i = 0; i < n; ++i) {
+        int ix, iy, iz;
+        float fx, fy, fz;
+        corners(i, ix, iy, iz, fx, fy, fz);
+        for (int k = 0; k < 8; ++k) {
+            const int x = ix + (k & 1), c = iy + ((k >> 1) & 1), z = iz + ((k >> 2) & 1);
+            if (g.sky(x, c, z) || g.opaque(x, c, z)) {
+                continue;
+            }
+            dark = true;
+            lo = Vector3i(std::min(lo.x, x), std::min(lo.y, c), std::min(lo.z, z));
+            hi = Vector3i(std::max(hi.x, x), std::max(hi.y, c), std::max(hi.z, z));
+        }
+    }
+    if (dark) {
+        g.fill(lo, hi);
+    }
+    uint8_t *cu = m.custom0.ptrw();
+    for (int i = 0; i < n; ++i) {
+        int ix, iy, iz;
+        float fx, fy, fz;
+        corners(i, ix, iy, iz, fx, fy, fz);
+        float sum = 0.0f, wsum = 0.0f;
+        for (int k = 0; k < 8; ++k) {
+            const int x = ix + (k & 1), c = iy + ((k >> 1) & 1), z = iz + ((k >> 2) & 1);
+            if (g.opaque(x, c, z) && !g.sky(x, c, z)) {
+                continue;
+            }
+            const float w = ((k & 1) ? fx : 1.0f - fx) * (((k >> 1) & 1) ? fy : 1.0f - fy)
+                    * (((k >> 2) & 1) ? fz : 1.0f - fz);
+            sum += w * (float)g.light(x, c, z);
+            wsum += w;
+        }
+        float lv = 0.0f;
+        if (wsum > 1e-5f) {
+            lv = sum / wsum;
+        } else {
+            // All eight opaque (a face inside a part-filled course): the
+            // nearest cell's own answer.
+            const int x = ix + (fx > 0.5f), c = iy + (fy > 0.5f), z = iz + (fz > 0.5f);
+            lv = g.sky(x, c, z) ? (float)SKY_MAX : 0.0f;
+        }
+        cu[(size_t)i * 4 + 3] = (uint8_t)std::lround(std::clamp(lv / (float)SKY_MAX, 0.0f, 1.0f) * 255.0f);
+    }
+    out["sky_ms"] = (double)(Time::get_singleton()->get_ticks_usec() - t0) / 1000.0;
+    out["sky_filled"] = g.cells_filled;
+    out["sky_dark"] = dark;
+}
+
+void BrickTerrain::set_sky_light(bool on) { g_sky_light.store(on); }
+bool BrickTerrain::get_sky_light() { return g_sky_light.load(); }
+
+/// The eye's level: a fill backwards from its cell through open cells, the
+/// first sky cell met at d steps giving 15 - d -- the same answer the bake's
+/// fill gives that cell, for the cells near the eye only.
+double BrickTerrain::sky_light_at(Vector3 point) {
+    const int x = (int)std::floor(point.x / STUD_M);
+    const int c = (int)std::floor(point.y / BRICK_M);
+    const int z = (int)std::floor(point.z / STUD_M);
+    SkyGrid g;
+    g.init(x - SKY_MAX, z - SKY_MAX, c - SKY_MAX, 2 * SKY_MAX + 1, 2 * SKY_MAX + 1, 2 * SKY_MAX + 1);
+    if (g.sky(x, c, z)) {
+        return SKY_MAX;
+    }
+    // `level` doubles as the visited mark: steps + 1.
+    std::vector<uint32_t> cur, next;
+    cur.push_back((uint32_t)g.ci(x, c, z));
+    g.level[g.ci(x, c, z)] = 1;
+    const size_t plane = (size_t)g.nx * g.nz;
+    static const int NX[6] = { -1, 1, 0, 0, 0, 0 };
+    static const int NY[6] = { 0, 0, -1, 1, 0, 0 };
+    static const int NZ[6] = { 0, 0, 0, 0, -1, 1 };
+    for (int d = 1; d <= SKY_MAX && !cur.empty(); ++d) {
+        next.clear();
+        for (uint32_t i : cur) {
+            const int cc = g.c0 + (int)(i / plane);
+            const size_t r = i % plane;
+            const int zz = g.z0 + (int)(r / (size_t)g.nx);
+            const int xx = g.x0 + (int)(r % (size_t)g.nx);
+            for (int k = 0; k < 6; ++k) {
+                const int ax = xx + NX[k], ac = cc + NY[k], az = zz + NZ[k];
+                if (!g.in(ax, ac, az)) {
+                    continue;
+                }
+                const size_t j = g.ci(ax, ac, az);
+                if (g.level[j] != 0) {
+                    continue;
+                }
+                g.level[j] = 1;
+                if (g.opaque(ax, ac, az)) {
+                    continue;
+                }
+                if (g.sky(ax, ac, az)) {
+                    return SKY_MAX - d;
+                }
+                next.push_back((uint32_t)j);
+            }
+        }
+        cur.swap(next);
+    }
+    return 0.0;
+}
+
 Dictionary BrickTerrain::build_section(int tx, int sy, int tz) {
     const uint64_t t0 = Time::get_singleton()->get_ticks_usec();
     g_face_bevel = t_bevel_override >= 0.0f ? t_bevel_override : g_face_bevel_set;
@@ -5171,6 +5567,7 @@ Dictionary BrickTerrain::build_section(int tx, int sy, int tz) {
         const std::vector<Piece> pieces;
         mask_faces(m, s, owner, pieces, g_field.seed);
         cave_boxes = add_cave_boxes(s, boxes, true);
+        sky_light_pass(m, s, false, out);
         out["own_lo"] = s.own_lo;
         out["own_hi"] = s.own_hi;
     }
@@ -6299,6 +6696,9 @@ Dictionary BrickTerrain::build_tile(int tx, int tz) {
         }
     }
 
+    Dictionary sky;
+    sky_light_pass(m, s, true, sky);
+
     // No edge skirt on the detail tiles (19.18): the detail square always
     // surrounds the camera, so a skirt facing out of it is never seen, and
     // the coarse tier's own skirts face back in to cover every border.
@@ -6315,7 +6715,7 @@ Dictionary BrickTerrain::build_tile(int tx, int tz) {
         mesh[Mesh::ARRAY_CUSTOM0] = m.custom0;
     }
 
-    Dictionary out;
+    Dictionary out = sky;
     out["mesh"] = mesh;
     out["studs"] = studs;
     out["tufts"] = tufts;
@@ -6535,6 +6935,9 @@ void BrickTerrain::_bind_methods() {
         &BrickTerrain::set_deep_tier);
     ClassDB::bind_static_method("BrickTerrain", D_METHOD("get_deep_tier"),
         &BrickTerrain::get_deep_tier);
+    ClassDB::bind_static_method("BrickTerrain", D_METHOD("set_sky_light", "on"), &BrickTerrain::set_sky_light);
+    ClassDB::bind_static_method("BrickTerrain", D_METHOD("get_sky_light"), &BrickTerrain::get_sky_light);
+    ClassDB::bind_static_method("BrickTerrain", D_METHOD("sky_light_at", "point"), &BrickTerrain::sky_light_at);
     ClassDB::bind_static_method("BrickTerrain", D_METHOD("deep_top", "tx", "tz"),
         &BrickTerrain::deep_top);
     ClassDB::bind_static_method("BrickTerrain", D_METHOD("get_deep_section_plates"),

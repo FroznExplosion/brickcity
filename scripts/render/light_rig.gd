@@ -336,7 +336,9 @@ var _sky_energy_set := 1.0
 # --- exposure ------------------------------------------------------------------
 
 ## The eye at `at` adapts over `dt`; `snap` jumps straight there.
-func expose(at: Vector3, dt: float, snap := false) -> void:
+## `light_scale`: how much of that light reaches `at` (the mine world's sky
+## light at the eye, Docs/MineWorld.md 18); 1 everywhere else.
+func expose(at: Vector3, dt: float, snap := false, light_scale := 1.0) -> void:
 	var box := box_at(at)
 	inside = box != null
 	var amb := 0.0
@@ -346,7 +348,7 @@ func expose(at: Vector3, dt: float, snap := false) -> void:
 		amb = env.ambient_light_energy * env.ambient_light_color.get_luminance()
 	var direct := sun.light_energy * sun.light_color.get_luminance() if sun.visible else 0.0
 	direct += fill_energy if fill.visible else 0.0
-	light_here = amb + direct * (WINDOW_SUN if inside else 0.5)
+	light_here = (amb + direct * (WINDOW_SUN if inside else 0.5)) * light_scale
 	var want := clampf(sqrt(EXPOSE_REF / maxf(light_here, 0.001)), 1.0, EXPOSE_MAX)
 	if hold_exposure:
 		return
