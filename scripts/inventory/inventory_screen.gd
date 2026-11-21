@@ -21,8 +21,8 @@ extends MenuScreen
 ## The world keeps running (Minecraft's): the host frees the mouse and holds
 ## the flight; every key goes here while open. E, Tab or Escape close it
 ## (Escape with a stack held puts the stack back first). The stack still held
-## on close goes back into storage; if there is no room it is lost until
-## there are dropped items (stage 5).
+## on close goes back into storage; if there is no room it is thrown in front
+## of the player (DroppedItems). Q over a slot drops one, Shift+Q the stack.
 ##
 ## `setup(inv, host)` before adding it; the host gets `inventory_closed()`.
 
@@ -285,6 +285,14 @@ func _input(event: InputEvent) -> void:
 				inv.return_cursor()
 			else:
 				close_screen()
+		KEY_Q:
+			# Drop one from the slot under the mouse (Shift: the stack) --
+			# zylanntest's Q. The host throws it in front of the player.
+			var s := _slot_at(_mouse_at)
+			if s != null and not s.addr.is_empty() and host != null and host.has_method("drop_from_player"):
+				var out := inv.take_from(s.addr, k.shift_pressed)
+				if out != null:
+					host.drop_from_player(out)
 		KEY_1, KEY_2, KEY_3, KEY_4, KEY_5, KEY_6, KEY_7, KEY_8, KEY_9:
 			var i := k.keycode - KEY_1
 			var s := _slot_at(_mouse_at)
@@ -297,8 +305,11 @@ func _input(event: InputEvent) -> void:
 func close_screen() -> void:
 	inv.cancel_drag()
 	if not inv.return_cursor():
-		push_warning("[inventory] no room for the held stack: lost (dropped items are stage 5)")
+		# No room: it is thrown in front of the player, not lost.
+		var s := inv.cursor
 		inv.cursor = null
+		if host != null and host.has_method("drop_from_player"):
+			host.drop_from_player(s)
 	if host != null and host.has_method("inventory_closed"):
 		host.inventory_closed()
 

@@ -158,7 +158,7 @@ ores by name).
 
 ## 7. Not yet
 
-Falling sand, flowers and tall grass, clouds, villages and structures, animals, enemies, chests, and water.
+Flowers and tall grass, clouds, villages and structures, animals, enemies. (Falling sand: Docs/TerrainCollapse.md; water: Docs/MineWater.md; chests and the inventory: Docs/Inventory.md.)
 
 ## 8. Build mode
 
