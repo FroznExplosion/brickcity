@@ -67,6 +67,7 @@ uniform float print_fade_end = 22.0;
 uniform float foam_at = 0.80;
 uniform float step_m = 0.42;
 uniform vec3 sea_foam : source_color = vec3(0.92, 0.95, 0.96);
+uniform bool debug_band = false;     // tint the band's pieces (the sea gate's check)
 varying float v_sea;
 varying float v_amp;
 varying vec2 v_cell;
@@ -145,8 +146,14 @@ void fragment() {
 		// The tiers' piece look (water.gdshader fragment), restated.
 		bool up = !side;
 		if (!up) {
+			// The tiers' pieces are wound inside out, so their shader's
+			// un-flip leaves a riser's normal pointing INTO the piece before
+			// it leans it up: risers come out darker than tops and every
+			// step between pieces shows. Lit like tops (as these were), the
+			// band's steps vanished and it read as one smooth slope (the
+			// user, 2026-11-21). The same lean, from the inside.
 			vec3 up_view = normalize((VIEW_MATRIX * vec4(0.0, 1.0, 0.0, 0.0)).xyz);
-			NORMAL = normalize(mix(NORMAL, up_view, 0.85));
+			NORMAL = normalize(mix(-NORMAL, up_view, 0.85));
 		}
 		vec3 albedo = mix(trough_colour.rgb, crest_colour.rgb, v_h01);
 		if (v_h01 > foam_at) {
@@ -175,6 +182,9 @@ void fragment() {
 			vec2 line = 1.0 - smoothstep(w * 0.5, w * 0.5 + 1.0, dist_to / fw);
 			float fade = 1.0 - smoothstep(0.06, 0.16, max(fw.x, fw.y));
 			albedo *= 1.0 - max(line.x, line.y) * fade * grid_line_darken;
+		}
+		if (debug_band) {
+			albedo = mix(albedo, vec3(0.9, 0.15, 0.1), 0.6);
 		}
 		ALBEDO = albedo;
 		ROUGHNESS = water_roughness;

@@ -4083,6 +4083,49 @@ func _run_sea_gate() -> void:
 	for k in 3:
 		await _shot(dev + "sea_beach_%d.png" % k)
 		await _frames(60)
+	# Low over the real band (Docs/MineWater.md 11.9), looking out along it:
+	# its pieces must be flat tops riding the wave, as the tiers' are.
+	walker.place(to_global(shore_m + Vector3(dir.x, 0, dir.y) * 1.5 + Vector3(0, 1.2, 0)),
+			(Vector3(dir.x, 0, dir.y) * 0.5 + along).normalized())
+	walker.pitch = -0.12
+	await _frames(40)
+	await _shot(dev + "sea_band_low.png")
+	walker.place(to_global(shore_m + Vector3(dir.x, 0, dir.y) * 1.0 + Vector3(0, 1.2, 0)),
+			(Vector3(dir.x, 0, dir.y) + along * 0.4).normalized())
+	walker.pitch = -0.15
+	await _frames(20)
+	await _shot(dev + "sea_band_out.png")
+	water._water_mat.set_shader_parameter("debug_band", true)
+	await _frames(2)
+	await _shot(dev + "sea_band_out_tint.png")
+	water._water_mat.set_shader_parameter("debug_band", false)
+	# The same with big waves: the band's pieces must step like the tiers'.
+	var gain0: float = water.sea.wave_gain
+	water.sea.wave_gain = gain0 * 4.0
+	water.sea.push_waves()
+	await _frames(30)
+	await _shot(dev + "sea_band_big.png")
+	water._water_mat.set_shader_parameter("debug_band", true)
+	await _frames(2)
+	await _shot(dev + "sea_band_big_tint.png")
+	water._water_mat.set_shader_parameter("debug_band", false)
+	# A pillar in deep water, big waves: the band round it beside the tiers.
+	var pc := coast + Vector2i((dir * 6.0).round())
+	var plo := Vector3i(pc.x, (sea_b - 12) * 3, pc.y)
+	var phi := Vector3i(pc.x + 1, (sea_b + 2) * 3, pc.y + 1)
+	terrain_edited(BrickTerrain.fill_box(plo, phi, 4, false))
+	var pm := Vector3((pc.x + 1) * stud, level, (pc.y + 1) * stud)
+	walker.place(to_global(pm - Vector3(dir.x, 0, dir.y) * 5.0 + along * 2.0 + Vector3(0, 2.0, 0)),
+			(Vector3(dir.x, 0, dir.y) - along * 0.3).normalized())
+	walker.pitch = -0.3
+	await _frames(60)
+	await _shot(dev + "sea_pillar_big.png")
+	water._water_mat.set_shader_parameter("debug_band", true)
+	await _frames(2)
+	await _shot(dev + "sea_pillar_big_tint.png")
+	water._water_mat.set_shader_parameter("debug_band", false)
+	water.sea.wave_gain = gain0
+	water.sea.push_waves()
 	# A river mouth: a river column under the sea line near the coast.
 	var river := Vector2i(1 << 30, 0)
 	for r in range(16, 900, 16):
