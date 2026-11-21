@@ -502,6 +502,11 @@ channel's water stood apart from the waves).
   w: the way to the middle), with four sides a brick deep -- the risers. The fragment restates
   the tiers' look: crest colour by wave, whitecaps, depth tint, print lines, stud grid; those
   values are copied from the sea's material too. Side by side the two cannot be told apart.
+  Their risers must be DARKER than the tops, as the tiers' are (the tiers' pieces are wound
+  inside out, so their shader leans a riser's normal up from the inside): lit like tops, the
+  band's steps vanished and it read as one smooth tilted sheet (the user, 2026-11-21). The sea
+  gate checks it with big waves round a pillar set in deep water (`sea_pillar_big*.png`; the
+  `_tint` shot colours the band, `debug_band`).
 * **The ocean cannot be emptied:** still water laid on the open sea joins it; a source bucket
   dipped in the ocean takes nothing (`ray_cell` ocean); a bucket always filled free from a
   source. Two sources still make a third. Only a brick placed where sea was moves sea water;
