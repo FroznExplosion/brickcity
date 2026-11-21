@@ -35,6 +35,8 @@ func _initialize() -> void:
 	BrickTerrain.reset_gen_params()
 	BrickTerrain.set_smooth_terrain(false)
 	BrickTerrain.set_plate_steps(false)
+	# The mine world's top course: laid on the ground's bond (Docs/TerrainBond.md).
+	BrickTerrain.set_bond_top(true)
 	tension = BrickStrength.tension()
 	if not _find_flat():
 		_expect(false, "found a flat spot to build on")
@@ -48,6 +50,7 @@ func _initialize() -> void:
 		_check_sand()
 	BrickTerrain.clear_terrain_edits()
 	BrickTerrain.set_generator(0)
+	BrickTerrain.set_bond_top(false)
 	print("[collapse] %s (%d failures)" % ["PASS" if failures == 0 else "FAIL", failures])
 	quit(1 if failures > 0 else 0)
 
@@ -140,6 +143,8 @@ func _check_floating_block() -> void:
 	var lo := Vector3i(2, 10, 2)
 	var hi := Vector3i(3, 12, 3)
 	_fill(lo, hi, 4)  # stone, a 2x2 block four bricks over the ground
+	# Laid as the builder lays one: ONE brick (Docs/TerrainBond.md 1).
+	BrickTerrain.mark_placed(base + lo, base + hi, 4)
 	var r := _survey(lo, hi)
 	_expect(bool(r.solved), "floating block: solved")
 	_expect((r.groups as Array).size() == 1 and _all_cells(r) == 4,

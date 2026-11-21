@@ -149,6 +149,9 @@ func _ready() -> void:
 	BrickTerrain.set_smooth_terrain(false)
 	BrickTerrain.set_plate_steps(false)
 	BrickTerrain.set_slope_pieces(false)
+	# The top course laid on the ground's bond, so it sits staggered on the
+	# courses under it like real LEGO (Docs/TerrainBond.md).
+	BrickTerrain.set_bond_top(true)
 	BrickTerrain.set_coarse_smooth_step(0)
 	# The sun moves, so nothing bakes it into the ground (set_sun_direction
 	# zero); the detail tiles cast into the shadow map instead.
@@ -240,6 +243,7 @@ func _exit_tree() -> void:
 	BrickTerrain.set_deep_tier(false)
 	BrickTerrain.reset_gen_params()
 	BrickTerrain.set_coarse_smooth_step(8)
+	BrickTerrain.set_bond_top(false)
 
 
 # ---------------------------------------------------------------------------
@@ -270,6 +274,7 @@ func generate(s: Dictionary) -> void:
 	# Before anything bakes: the tiles are made from the field WITH them.
 	var loaded := _load_edits()
 	_load_pieces()
+	_load_placed()
 	_load_inventory()
 	_edits_dirty = false
 	_save_status = "%d changes loaded" % loaded if loaded > 0 else "new world"
@@ -1136,6 +1141,29 @@ static func _pieces_path(edits_path: String) -> String:
 	return edits_path.get_basename() + ".pieces"
 
 
+## The blocks the player laid, each one brick (BrickTerrain.mark_placed,
+## Docs/TerrainBond.md 1): 4 ints a cell, beside the edits. No file: none.
+const PLACED_MAGIC := "BCPB"
+const PLACED_FORMAT := 1
+
+
+static func _placed_path(edits_path: String) -> String:
+	return edits_path.get_basename() + ".placed"
+
+
+func _load_placed() -> void:
+	var path := _placed_path(save_path())
+	if not FileAccess.file_exists(path):
+		return
+	var f := FileAccess.open_compressed(path, FileAccess.READ, FileAccess.COMPRESSION_ZSTD)
+	if f == null or f.get_buffer(4).get_string_from_ascii() != PLACED_MAGIC or f.get_32() != PLACED_FORMAT:
+		push_warning("[mine] %s is from another format; not loaded" % path)
+		return
+	var n := f.get_32()
+	var cells := f.get_buffer(n).to_int32_array()
+	BrickTerrain.set_placed(cells)
+
+
 func _load_pieces() -> void:
 	var path := _pieces_path(save_path())
 	if not FileAccess.file_exists(path):
@@ -1228,6 +1256,7 @@ func save_edits(wait := false) -> void:
 	var bytes: PackedByteArray = BrickTerrain.get_edits()
 	var fluid_bytes: PackedByteArray = BrickFluid.get_save()
 	var piece_bytes := var_to_bytes(collapse.to_save())
+	var placed_bytes := BrickTerrain.get_placed().to_byte_array()
 	var path := save_path()
 	var dir := _save_dir()
 	var field := BrickTerrain.get_field_version()
@@ -1260,6 +1289,15 @@ func save_edits(wait := false) -> void:
 		g.store_buffer(piece_bytes)
 		g.close()
 		DirAccess.rename_absolute(pp + ".tmp", pp)
+		var bp := _placed_path(path)
+		var pb := FileAccess.open_compressed(bp + ".tmp", FileAccess.WRITE, FileAccess.COMPRESSION_ZSTD)
+		if pb != null:
+			pb.store_buffer(PLACED_MAGIC.to_ascii_buffer())
+			pb.store_32(PLACED_FORMAT)
+			pb.store_32(placed_bytes.size())
+			pb.store_buffer(placed_bytes)
+			pb.close()
+			DirAccess.rename_absolute(bp + ".tmp", bp)
 		var fp := _fluid_path(path)
 		var h := FileAccess.open_compressed(fp + ".tmp", FileAccess.WRITE, FileAccess.COMPRESSION_ZSTD)
 		if h == null:
@@ -1299,6 +1337,8 @@ func forget_edits() -> void:
 		DirAccess.remove_absolute(path)
 	if FileAccess.file_exists(_pieces_path(path)):
 		DirAccess.remove_absolute(_pieces_path(path))
+	if FileAccess.file_exists(_placed_path(path)):
+		DirAccess.remove_absolute(_placed_path(path))
 	if FileAccess.file_exists(_fluid_path(path)):
 		DirAccess.remove_absolute(_fluid_path(path))
 	if FileAccess.file_exists(_inventory_path(path)):

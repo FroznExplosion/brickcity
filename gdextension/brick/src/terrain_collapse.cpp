@@ -3,6 +3,7 @@
 #include "brick_terrain.h"
 #include "brick_world.h"
 #include "terrain_biomes.h"
+#include "terrain_bond.h"
 
 #include <godot_cpp/classes/ref.hpp>
 #include <godot_cpp/core/class_db.hpp>
@@ -12,6 +13,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <unordered_map>
 #include <vector>
 
 using namespace brick;
@@ -90,6 +92,22 @@ struct Sampler {
     }
 };
 
+/// The top course's columns (brick::top_columns), a tile at a time, kept for
+/// every attempt of one survey (a grown region asks the same tiles again).
+struct TopCache {
+    std::unordered_map<int64_t, std::vector<TopColumn>> tiles;
+    const TopColumn &at(int x, int z) {
+        const int tx = fdiv(x, TILE), tz = fdiv(z, TILE);
+        const int64_t k = ((int64_t)(tx & 0xFFFFFFF) << 28) | (int64_t)(tz & 0xFFFFFFF);
+        auto it = tiles.find(k);
+        if (it == tiles.end()) {
+            it = tiles.emplace(k, std::vector<TopColumn>()).first;
+            top_columns(tx, tz, it->second);
+        }
+        return it->second[(size_t)(x - tx * TILE) + TILE * (size_t)(z - tz * TILE)];
+    }
+};
+
 struct VBrick {
     int x, y, z;     ///< region-local cell, y in bricks
     int sx, sz;
@@ -116,7 +134,7 @@ double ms_since(std::chrono::steady_clock::time_point t) {
 }
 
 Attempt run(Vector3i lo, Vector3i hi, int above, int reach, bool last_up, bool last_side,
-        double tension, double mass_per_cell) {
+        double tension, double mass_per_cell, TopCache &tops) {
     Attempt a;
     const auto t0 = std::chrono::steady_clock::now();
     const int lob = fdiv(lo.y, PPB), hib = fdiv(hi.y, PPB);
@@ -229,139 +247,170 @@ Attempt run(Vector3i lo, Vector3i hi, int above, int reach, bool last_up, bool l
         }
     }
 
-    // --- virtual bricks (Docs/TerrainCollapse.md 2) ----------------------
+    // --- the bricks: the ground's bond (Docs/TerrainBond.md) --------------
+    //
+    // The same bricks the tiles draw and a shot or a pickaxe breaks: the top
+    // course is the packer's pieces (brick::top_columns), everything under it
+    // the bond's rectangles (brick::bond_rect). They used to be a bond found
+    // afresh by each survey, packed up from its region's bottom: the same
+    // cell was in another brick next time, and in none anyone could see.
     std::vector<int32_t> owner(g.size(), -1);
     std::vector<VBrick> vb;
     vb.reserve(g.size() / 4);
-    auto fits = [&](int ox, int oz, int y, int sx, int sz, uint8_t m) -> bool {
-        if (ox < 0 || oz < 0 || ox + sx > W || oz + sz > D) {
-            return false;
+    // Each column's top course (absolute), INT_MAX where nothing is known.
+    std::vector<int> topc((size_t)W * D, INT_MAX);
+    for (int z = 0; z < D; ++z) {
+        for (int x = 0; x < W; ++x) {
+            const TopColumn &t = tops.at(x0 + x, z0 + z);
+            if (t.top > -1000000000) {
+                topc[(size_t)x + W * z] = fdiv(t.top, PPB);
+            }
         }
-        for (int dz = 0; dz < sz; ++dz) {
-            for (int dx = 0; dx < sx; ++dx) {
-                const size_t i = idx(ox + dx, y, oz + dz);
-                if (owner[i] >= 0 || g[i] == MAT_AIR) {
-                    return false;
+    }
+    auto add = [&](int bx, int y, int bz, int bsx, int bsz, uint8_t m) {
+        VBrick vbk{ bx, y, bz, bsx, bsz, m, m == MAT_PILLAR, y == H - 1 };
+        const int32_t id = (int32_t)vb.size();
+        for (int dz = 0; dz < bsz; ++dz) {
+            for (int dx = 0; dx < bsx; ++dx) {
+                owner[idx(bx + dx, y, bz + dz)] = id;
+                if (ring(bx + dx, bz + dz)) {
+                    vbk.held = true;
                 }
-                if (g[i] == m) {
+            }
+        }
+        vb.push_back(vbk);
+    };
+    // A cell's bond group in course y (region-local x, z; absolute in the
+    // lambda below): none outside the region, at or over its column's top
+    // course, or already a top piece's.
+    auto group_local = [&](int x, int y, int z) -> int {
+        if (x < 0 || z < 0 || x >= W || z >= D) {
+            return BOND_NONE;
+        }
+        const uint8_t m = g[idx(x, y, z)];
+        if (m == MAT_AIR) {
+            return BOND_NONE;
+        }
+        if (m == MAT_PILLAR) {
+            return BOND_PILLAR;
+        }
+        if (y0 + y >= topc[(size_t)x + W * z]) {
+            return BOND_NONE;
+        }
+        int px, pz, psx, psz;
+        if (placed_at(x0 + x, y0 + y, z0 + z, px, pz, psx, psz)) {
+            return BOND_NONE;   // a placed brick: its own shape
+        }
+        return bond_group(m);
+    };
+
+    // The top course: each piece whole where all of it (in the region) is
+    // there and bonds; else its cells one by one. Loose tops stay single
+    // studs (sand falls as columns).
+    {
+        std::unordered_map<int64_t, std::vector<int32_t>> by_piece;
+        for (int z = 0; z < D; ++z) {
+            for (int x = 0; x < W; ++x) {
+                const TopColumn &t = tops.at(x0 + x, z0 + z);
+                const int tc = topc[(size_t)x + W * z];
+                if (!t.piece || tc == INT_MAX) {
                     continue;
                 }
-                // Another material: bricks bond across a border (a dirt
-                // ledge on rock is joined to it), never with sand or a
-                // pillar, and a long brick only through rock.
-                const int c = g[i] == MAT_PILLAR ? 1 : TerrainCollapse::material_class(g[i]);
-                const int cm = m == MAT_PILLAR ? 1 : TerrainCollapse::material_class(m);
-                if (c < 2 || cm < 2 || (sx * sz > 4 && c < 3)) {
-                    return false;
-                }
-            }
-        }
-        return true;
-    };
-    // Course by course from the bottom, each cell's brick the largest that
-    // fits, placed where it laps the most bricks under it: a seam over a
-    // seam joins nothing, so the bond comes from the laps, whatever the
-    // ground's shape (Docs/TerrainCollapse.md 2).
-    static const int STRONG[6][2] = { { 4, 2 }, { 2, 4 }, { 2, 2 }, { 2, 1 }, { 1, 2 }, { 1, 1 } };
-    static const int MEDIUM[4][2] = { { 2, 2 }, { 2, 1 }, { 1, 2 }, { 1, 1 } };
-    static const int LOOSE[1][2] = { { 1, 1 } };
-    auto below = [&](int ox, int oz, int y, int sx, int sz) -> int {
-        if (y == 0) {
-            return 0;
-        }
-        int32_t seen[8];
-        int n = 0;
-        for (int dz = 0; dz < sz; ++dz) {
-            for (int dx = 0; dx < sx; ++dx) {
-                const int32_t o = owner[idx(ox + dx, y - 1, oz + dz)];
-                if (o < 0) {
+                const int y = tc - y0;
+                if (y < 0 || y >= H) {
                     continue;
                 }
-                bool dup = false;
-                for (int k = 0; k < n; ++k) {
-                    dup = dup || seen[k] == o;
+                const uint8_t m = g[idx(x, y, z)];
+                if (m == MAT_AIR || m == MAT_PILLAR || bond_group(m) == BOND_LOOSE) {
+                    continue;
                 }
-                if (!dup && n < 8) {
-                    seen[n++] = o;
+                by_piece[bond_key(t.px, tc, t.pz)].push_back((int32_t)(x + W * z));
+            }
+        }
+        for (const auto &e : by_piece) {
+            const int c0 = e.second[0];
+            const TopColumn &t = tops.at(x0 + c0 % W, z0 + c0 / W);
+            const int y = topc[(size_t)c0] - y0;
+            const int rx0 = std::max(t.px - x0, 0), rz0 = std::max(t.pz - z0, 0);
+            const int rx1 = std::min(t.px + t.psx - x0, W), rz1 = std::min(t.pz + t.psz - z0, D);
+            const uint8_t m = g[idx(c0 % W, y, c0 / W)];
+            if ((int)e.second.size() == (rx1 - rx0) * (rz1 - rz0)) {
+                add(rx0, y, rz0, rx1 - rx0, rz1 - rz0, m);
+            } else {
+                for (int32_t c : e.second) {
+                    add(c % W, y, c / W, 1, 1, g[idx(c % W, y, c / W)]);
                 }
             }
         }
-        return n;
-    };
-    // Edges of a footprint that stand right over a seam of the course under
-    // it (two different bricks either side, below): each one a seam over a
-    // seam.
-    auto seams = [&](int ox, int oz, int y, int sx, int sz) -> int {
-        if (y == 0) {
-            return 0;
-        }
-        auto own = [&](int x, int z) -> int32_t {
-            if (x < 0 || z < 0 || x >= W || z >= D) {
-                return -1;
-            }
-            return owner[idx(x, y - 1, z)];
-        };
-        int n = 0;
-        auto edge = [&](int ix, int iz, int ox2, int oz2, int len, int stepx, int stepz) {
-            int hit = 0;
-            for (int k = 0; k < len; ++k) {
-                const int32_t a1 = own(ix + k * stepx, iz + k * stepz);
-                const int32_t a2 = own(ox2 + k * stepx, oz2 + k * stepz);
-                if (a1 >= 0 && a2 >= 0 && a1 != a2) {
-                    ++hit;
+    }
+
+    // Placed blocks under the top course: each the brick the player laid,
+    // whole where all of it is here (BrickTerrain.mark_placed).
+    {
+        std::unordered_map<int64_t, std::vector<int32_t>> by_brick;
+        std::unordered_map<int64_t, BondRect> rect_of;
+        for (int y = 0; y < H; ++y) {
+            for (int z = 0; z < D; ++z) {
+                for (int x = 0; x < W; ++x) {
+                    const uint8_t m = g[idx(x, y, z)];
+                    if (m == MAT_AIR || m == MAT_PILLAR || owner[idx(x, y, z)] >= 0) {
+                        continue;
+                    }
+                    int px, pz, psx, psz;
+                    if (!placed_at(x0 + x, y0 + y, z0 + z, px, pz, psx, psz)) {
+                        continue;
+                    }
+                    const int64_t k = bond_key(px, y0 + y, pz);
+                    by_brick[k].push_back((int32_t)(x + W * (z + D * y)));
+                    rect_of[k] = BondRect{ px, pz, psx, psz };
                 }
             }
-            if (hit * 2 >= len && hit > 0) {
-                ++n;
+        }
+        for (const auto &e : by_brick) {
+            const BondRect &r = rect_of[e.first];
+            const int c0 = e.second[0];
+            const int y = c0 / (W * D);
+            const int rx0 = r.x - x0, rz0 = r.z - z0;
+            const bool inside = rx0 >= 0 && rz0 >= 0 && rx0 + r.sx <= W && rz0 + r.sz <= D;
+            if (inside && (int)e.second.size() == r.sx * r.sz) {
+                add(rx0, y, rz0, r.sx, r.sz, g[idx(c0 % W, y, (c0 / W) % D)]);
+            } else {
+                for (int32_t c : e.second) {
+                    const int cx = c % W, cz = (c / W) % D;
+                    add(cx, y, cz, 1, 1, g[idx(cx, y, cz)]);
+                }
             }
-        };
-        edge(ox, oz, ox - 1, oz, sz, 0, 1);                       // -x
-        edge(ox + sx - 1, oz, ox + sx, oz, sz, 0, 1);             // +x
-        edge(ox, oz, ox, oz - 1, sx, 1, 0);                       // -z
-        edge(ox, oz + sz - 1, ox, oz + sz, sx, 1, 0);             // +z
-        return n;
-    };
+        }
+    }
+
+    // Under it, the bond: every other solid cell's brick, laid once.
     for (int y = 0; y < H; ++y) {
+        const int course = y0 + y;
+        auto group_abs = [&](int ax, int az) { return group_local(ax - x0, y, az - z0); };
         for (int z = 0; z < D; ++z) {
             for (int x = 0; x < W; ++x) {
                 const uint8_t m = g[idx(x, y, z)];
                 if (m == MAT_AIR || owner[idx(x, y, z)] >= 0) {
                     continue;
                 }
-                const int cls = m == MAT_PILLAR ? 1 : TerrainCollapse::material_class(m);
-                const int(*sizes)[2] = cls == 3 ? STRONG : (cls == 2 ? MEDIUM : LOOSE);
-                const int ns = cls == 3 ? 6 : (cls == 2 ? 4 : 1);
-                int best = -1, bx = x, bz = z, bsx = 1, bsz = 1;
-                for (int k = 0; k < ns; ++k) {
-                    const int sx = sizes[k][0], sz = sizes[k][1];
-                    for (int oz = z - sz + 1; oz <= z; ++oz) {
-                        for (int ox = x - sx + 1; ox <= x; ++ox) {
-                            if (!fits(ox, oz, y, sx, sz, m)) {
-                                continue;
-                            }
-                            const int score = sx * sz * 4 + 6 * std::min(below(ox, oz, y, sx, sz), 3)
-                                    - 20 * seams(ox, oz, y, sx, sz);
-                            if (score > best) {
-                                best = score;
-                                bx = ox;
-                                bz = oz;
-                                bsx = sx;
-                                bsz = sz;
-                            }
-                        }
+                const BondRect r = bond_rect(x0 + x, course, z0 + z, group_abs);
+                int bx = r.x - x0, bz = r.z - z0, bsx = r.sx, bsz = r.sz;
+                // Every cell of the rectangle names it, so none is taken yet;
+                // if one were, the cell goes alone rather than overlap.
+                bool free = bx >= 0 && bz >= 0 && bx + bsx <= W && bz + bsz <= D;
+                for (int dz = 0; dz < bsz && free; ++dz) {
+                    for (int dx = 0; dx < bsx && free; ++dx) {
+                        free = owner[idx(bx + dx, y, bz + dz)] < 0
+                                && g[idx(bx + dx, y, bz + dz)] != MAT_AIR;
                     }
                 }
-                VBrick b{ bx, y, bz, bsx, bsz, m, m == MAT_PILLAR, y == H - 1 };
-                const int32_t id = (int32_t)vb.size();
-                for (int dz = 0; dz < bsz; ++dz) {
-                    for (int dx = 0; dx < bsx; ++dx) {
-                        owner[idx(bx + dx, y, bz + dz)] = id;
-                        if (ring(bx + dx, bz + dz)) {
-                            b.held = true;
-                        }
-                    }
+                if (!free) {
+                    bx = x;
+                    bz = z;
+                    bsx = 1;
+                    bsz = 1;
                 }
-                vb.push_back(b);
+                add(bx, y, bz, bsx, bsz, m);
             }
         }
     }
@@ -418,13 +467,21 @@ Attempt run(Vector3i lo, Vector3i hi, int above, int reach, bool last_up, bool l
     // --- the buildings' solve, on a world of the survey's own ------------
     Ref<BrickWorld> w;
     w.instantiate();
-    const int sizes[6][2] = { { 4, 2 }, { 2, 4 }, { 2, 2 }, { 2, 1 }, { 1, 2 }, { 1, 1 } };
-    int arch[6];
-    for (int k = 0; k < 6; ++k) {
-        const Vector3i sz(sizes[k][0], PPB, sizes[k][1]);
-        arch[k] = w->bake_archetype(String("terrain_v") + String::num_int64(k), sz,
-                (float)(sz.x * sz.y * sz.z * mass_per_cell));
-    }
+    // One archetype a size, baked as met: the top pieces come in the
+    // packer's sizes (2x6, 2x3, 1x4 ...), the bond's in 2x4 and its parts.
+    std::unordered_map<int, int> arch_of;
+    auto arch_for = [&](int sx, int sz) -> int {
+        const int k = sx * 64 + sz;
+        auto it = arch_of.find(k);
+        if (it != arch_of.end()) {
+            return it->second;
+        }
+        const Vector3i size(sx, PPB, sz);
+        const int a2 = w->bake_archetype(String("terrain_v") + String::num_int64(k), size,
+                (float)(size.x * size.y * size.z * mass_per_cell));
+        arch_of[k] = a2;
+        return a2;
+    };
     const int ch = w->create_chunk(Vector3i(0, 0, 0), Vector3i(W, H * PPB, D));
     PackedInt32Array cells, archs;
     PackedByteArray cols;
@@ -436,14 +493,7 @@ Attempt run(Vector3i lo, Vector3i hi, int above, int reach, bool last_up, bool l
         cells.set((int64_t)i * 3, b.x);
         cells.set((int64_t)i * 3 + 1, b.y * PPB);
         cells.set((int64_t)i * 3 + 2, b.z);
-        int k = 5;
-        for (int q = 0; q < 6; ++q) {
-            if (sizes[q][0] == b.sx && sizes[q][1] == b.sz) {
-                k = q;
-                break;
-            }
-        }
-        archs.set((int64_t)i, arch[k]);
+        archs.set((int64_t)i, arch_for(b.sx, b.sz));
         cols.set((int64_t)i, 0);
     }
     const PackedInt32Array ids = w->place_blocks(ch, Vector3i(0, 0, 0), cells, archs, cols);
@@ -510,26 +560,8 @@ Attempt run(Vector3i lo, Vector3i hi, int above, int reach, bool last_up, bool l
 } // namespace
 
 int TerrainCollapse::material_class(int m) {
-    switch (m) {
-        case MAT_AIR:
-            return 0;
-        case MAT_SAND:
-        case MAT_RED_SAND:
-        case MAT_GRAVEL:
-            return 1;
-        case MAT_GRASS:
-        case MAT_DIRT:
-        case MAT_SNOW:
-        case MAT_CLAY:
-        case MAT_PODZOL:
-        case MAT_DRY_GRASS:
-        case MAT_LUSH_GRASS:
-        case MAT_COLD_GRASS:
-        case MAT_DARK_GRASS:
-            return 2;
-        default:
-            return 3;
-    }
+    // The ground's bond groups (terrain_bond.h): one list, not two.
+    return bond_group(m);
 }
 
 Dictionary TerrainCollapse::survey(Vector3i lo, Vector3i hi, double tension, double mass_per_cell) {
@@ -539,9 +571,10 @@ Dictionary TerrainCollapse::survey(Vector3i lo, Vector3i hi, double tension, dou
     double sample_ms = 0.0, solve_ms = 0.0;
     int up = 0, side = 0;
     int up_max = GROW_TIMES, side_max = GROW_SIDE_TIMES;
+    TopCache tops;
     for (int k = 0; k <= 2 * (GROW_TIMES + GROW_SIDE_TIMES) + 2; ++k) {
         a = run(l, h, ABOVE + GROW_UP * up, REACH + GROW_SIDE * side, up >= up_max,
-                side >= side_max, tension, mass_per_cell);
+                side >= side_max, tension, mass_per_cell, tops);
         sample_ms += a.sample_ms;
         solve_ms += a.solve_ms;
         if (a.too_big) {
