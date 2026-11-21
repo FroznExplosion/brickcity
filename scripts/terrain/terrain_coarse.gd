@@ -117,11 +117,13 @@ var hold := false
 ## is the biggest block, in tiles, that is kept as a node of its own so it can
 ## be hidden: the following kind, and then `cover` every frame.
 func build(reach_tiles: int, material: Material, hole := Rect2i(), split_to := 0) -> void:
+	_job_wait_all(_build_job)
 	_build_job = {}
 	if not build_begin(reach_tiles, material, hole, split_to):
 		return
 	_job_wait(_build_job)
-	build_poll()
+	while not build_poll():
+		_job_wait_all(_build_job)
 
 
 ## `build`, without waiting: lays the tier out and starts the bakes on the
@@ -345,16 +347,24 @@ func _assemble(job: Dictionary, budget_ms: float, t0: int) -> bool:
 		_far_rects.append(Rect2i(blocks[i], Vector2i(spans[i], spans[i])))
 		_far_blocks += 1
 
-	if (job.rings as Array).is_empty() and not merged.is_empty():
-		job.rings = merged.keys()
-	while not (job.rings as Array).is_empty():
-		if out_of_time.call():
+	if merged.is_empty():
+		return true
+	# The rings' meshes are made on a worker; here they are only attached.
+	if not job.has("ring_job"):
+		job["ring_job"] = _start_ring_meshes(merged)
+		if budget_ms > 0.0:
 			return false
-		var span: int = (job.rings as Array).pop_back()
-		_rebuild_ring(span, merged[span])
+	var rj: Dictionary = job.ring_job
+	if budget_ms <= 0.0:
+		_job_wait(rj)
+	elif not _job_done(rj):
+		return false
+	for j in (rj.spans as Array).size():
+		var span: int = rj.spans[j]
+		_rebuild_ring(span, merged[span], rj.meshes[j])
 		_far_rings += 1
 		_far_blocks += merged[span].size()
-		merged.erase(span)
+	merged.clear()
 	return true
 
 
@@ -363,7 +373,7 @@ func _assemble(job: Dictionary, budget_ms: float, t0: int) -> bool:
 ## out (TerrainStreamer._exit_tree, Terrain.md 22.15).
 func _exit_tree() -> void:
 	_wait_jobs()
-	_job_wait(_build_job)
+	_job_wait_all(_build_job)
 	_build_job = {}
 	_job_wait(_edit_job)
 	_edit_job = {}
@@ -375,7 +385,7 @@ func _exit_tree() -> void:
 ## the blocks under it.
 func _wait_jobs() -> void:
 	_job_wait(_relod_job)
-	_job_wait(_refine_job)
+	_job_wait_all(_refine_job)
 
 
 ## A group task may be waited on ONCE: its id is gone after. So a job
@@ -386,6 +396,44 @@ static func _job_wait(job: Dictionary) -> void:
 		return
 	WorkerThreadPool.wait_for_group_task_completion(job.task)
 	job["waited"] = true
+
+
+## A job and the ring meshes it started after its bakes (`ring_job`).
+static func _job_wait_all(job: Dictionary) -> void:
+	_job_wait(job)
+	if job.has("ring_job"):
+		_job_wait(job.ring_job)
+
+
+## The rings' meshes for `rings` (span -> its members' bakes, offset
+## already), made on a worker: the main thread only attaches them. Made
+## there, a ring (~48 blocks, ~200k vertices) took 6-9 ms of
+## add_surface_from_arrays in one frame, the walk's worst frame
+## (Docs/MineWorld.md 14; Docs/WhereWorkRuns.md: meshes are built on workers).
+static func _start_ring_meshes(rings: Dictionary) -> Dictionary:
+	var spans: Array = rings.keys()
+	var bakes: Array = []
+	for span in spans:
+		bakes.append(rings[span])
+	var meshes: Array = []
+	meshes.resize(spans.size())
+	var task := WorkerThreadPool.add_group_task(
+		func(j: int) -> void:
+			meshes[j] = _ring_mesh(bakes[j]),
+		spans.size(), -1, true, "coarse ring meshes")
+	return {"task": task, "spans": spans, "meshes": meshes}
+
+
+## One ring's mesh from its members' bakes (offset already). Worker-safe.
+static func _ring_mesh(baked: Array) -> ArrayMesh:
+	var mesh := ArrayMesh.new()
+	for d: Dictionary in baked:
+		var arrays: Array = d["mesh"]
+		if arrays.is_empty():
+			continue
+		mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays,
+			[], {}, TerrainTile.CUSTOM0_FLAGS)
+	return mesh
 
 
 static func _job_done(job: Dictionary) -> bool:
@@ -450,13 +498,18 @@ func _block_node(arrays: Array, step: int, node_name: String) -> MeshInstance3D:
 ## Rare, and a ring is ~48 blocks, so it re-bakes in parallel in a few
 ## milliseconds. `build` hands over the bakes it already has (`have`, one a
 ## member, in order) rather than baking the ring twice.
-func _rebuild_ring(span: int, have: Array[Dictionary] = []) -> void:
+func _rebuild_ring(span: int, have: Array[Dictionary] = [], made: ArrayMesh = null) -> void:
 	var members: Array[int] = _ring_members.get(span, [] as Array[int])
 	var live: Array[int] = []
 	for i in members:
 		if _all_owner[i] != -2:
 			live.append(i)
 	var baked: Array[Dictionary] = have
+	if made != null and baked.size() != live.size():
+		made = null      # members changed since: make it here, as before
+	if made != null:
+		_attach_ring(span, made)
+		return
 	if baked.size() != live.size():
 		baked = []
 		baked.resize(live.size())
@@ -482,6 +535,10 @@ func _rebuild_ring(span: int, have: Array[Dictionary] = []) -> void:
 					* tile_studs * stud, 0.0, _all_rects[live[k]].position.y * tile_studs * stud))
 		mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays,
 			[], {}, TerrainTile.CUSTOM0_FLAGS)
+	_attach_ring(span, mesh)
+
+
+func _attach_ring(span: int, mesh: ArrayMesh) -> void:
 	if _ring_nodes.has(span):
 		(_ring_nodes[span] as MeshInstance3D).queue_free()
 	var mi := MeshInstance3D.new()
@@ -539,7 +596,7 @@ func cover(streamer: TerrainStreamer, wait := true) -> void:
 	_edit_step()
 	_refine_for(streamer.current_region())
 	while wait and not _refine_job.is_empty():
-		_job_wait(_refine_job)
+		_job_wait_all(_refine_job)
 		_refine_for(streamer.current_region())    # lands it
 		_refine_for(streamer.current_region())    # and starts any further split
 	_far_hidden = 0
@@ -597,7 +654,11 @@ func refining() -> bool:
 func _refine_for(detail: Rect2i) -> void:
 	if not _refine_job.is_empty():
 		if _job_done(_refine_job):
-			_apply_refine()
+			# Bakes in: the shrunk rings' meshes next, on a worker; then land.
+			if not _refine_job.has("ring_job") and not (_refine_job.spans as Dictionary).is_empty():
+				_refine_job["ring_job"] = _start_ring_meshes(_refine_job.ring_baked)
+			elif not _refine_job.has("ring_job") or _job_done(_refine_job.ring_job):
+				_apply_refine()
 		return           # one split at a time; the next call sees the rest
 	if hold:
 		return
@@ -695,8 +756,12 @@ func _apply_refine() -> void:
 		if _all_node.has(i):
 			(_all_node[i] as MeshInstance3D).queue_free()
 			_all_node.erase(i)
+	var rj: Dictionary = job.get("ring_job", {})
 	for span in job.spans:
-		_rebuild_ring(span, job.ring_baked[span])
+		var made: ArrayMesh = null
+		if not rj.is_empty():
+			made = rj.meshes[(rj.spans as Array).find(span)]
+		_rebuild_ring(span, job.ring_baked[span], made)
 
 	var new_rects: Array[Rect2i] = job.new_rects
 	var baked: Array[Dictionary] = job.baked
