@@ -45,6 +45,7 @@ func _init() -> void:
 	_screen_rules()
 	_mega_pickaxe()
 	_chests_and_drops()
+	_character()
 	print("inventory probe: %d ok, %d failed" % [_pass, _fail])
 	quit(1 if _fail > 0 else 0)
 
@@ -310,3 +311,29 @@ func _save() -> void:
 	d["main"][6] = {"id": "no_such_item", "count": 1}
 	back.from_dict(d)
 	_ok("an item no pack has any more is left out", back.main[6] == null)
+
+
+## Stage 6: the inventory is the character's -- it rides in CharacterSave,
+## and a save that only changes another field (PlayerKit's way: read, change
+## its own, write) keeps it.
+func _character() -> void:
+	print("character")
+	var path := UserPaths.DEV + "_probe_character.json"
+	if FileAccess.file_exists(path):
+		DirAccess.remove_absolute(path)
+	var inv := Inventory.new()
+	inv.seed_default()
+	inv.hotbars[1][8] = ItemStack.make(&"obsidian", 5)
+	var s := CharacterSave.load_from(path)
+	s.items = inv.to_dict()
+	DirAccess.make_dir_recursive_absolute(path.get_base_dir())
+	s.save(path)
+	var k := CharacterSave.load_from(path)
+	k.character["level"] = 7
+	k.save(path)
+	var back := Inventory.new()
+	_ok("the inventory comes back from the character file", back.from_dict(CharacterSave.load_from(path).items)
+			and back.hotbars[1][8] != null and back.hotbars[1][8].id == &"obsidian" and back.hotbars[1][8].count == 5)
+	_ok("... after a save that changed only the level", int(CharacterSave.load_from(path).character.level) == 7)
+	DirAccess.remove_absolute(path)
+	_ok("no character file: no items (the starting kit)", not Inventory.new().from_dict(CharacterSave.load_from(path).items))
