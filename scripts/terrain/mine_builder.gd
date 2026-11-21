@@ -277,6 +277,15 @@ func update_target() -> void:
 					_outline.visible = true
 					_outline.global_transform = xf
 					return
+	# A chest nearer than the ground is what is looked at (MineChests).
+	var ch: Dictionary = host.chests.ray(from, dir, REACH)
+	if not ch.is_empty() and (target.is_empty() or float(ch.dist) < from.distance_to(target.position)):
+		target = {"chest": ch.key, "position": ch.point}
+		var box: AABB = host.chests.box_of(host.chests.chests[ch.key].block)
+		_outline.visible = true
+		_outline.global_transform = Transform3D(Basis.from_scale(box.size * 1.01),
+				host.to_global(box.position - box.size * 0.005))
+		return
 	if target.is_empty():
 		_outline.visible = false
 		return
@@ -359,6 +368,13 @@ func break_target() -> bool:
 		return ok
 	if target.is_empty():
 		return false
+	if target.has("chest"):
+		# Its contents fall out; survival: the chest too (MineChests).
+		host.chests.break_chest(target.chest, not inv.creative)
+		broken += 1
+		log_blocks.append("break chest %s" % target.chest)
+		target = {}
+		return true
 	var material := int(target.get("material", 0))
 	if hand_kind() == "tool":
 		return _pick(material)
@@ -368,13 +384,16 @@ func break_target() -> bool:
 		return false
 	broken += 1
 	log_blocks.append("break %s" % _block_of(target.cell))
+	var at := _cell_lo(_block_of(target.cell)) + _block_size_m() * 0.5
 	host.terrain_edited(res)
 	target = {}
-	# Survival: the broken bricks into the inventory (what does not fit is
-	# lost until there are dropped items, stage 5).
+	# Survival: the broken bricks into the inventory; what does not fit drops
+	# where the block was.
 	var id := ItemCatalog.block_item(material)
 	if not inv.creative and id != &"":
-		inv.add_item(ItemStack.make(id, ceili(int(res.changed) / 3.0)))
+		var left := inv.add_item(ItemStack.make(id, ceili(int(res.changed) / 3.0)))
+		if left != null:
+			host.drops.spawn(left, at)
 	return true
 
 
@@ -440,8 +459,15 @@ func place_target() -> bool:
 		update_target()
 		if target.is_empty():
 			return false
+	if target.has("chest"):
+		# RMB on a chest opens it, whatever is in the hand (Minecraft's).
+		host.open_chest(target.chest)
+		target = {}
+		return true
 	var d := hand_def()
 	var k := str(d.get("kind", ""))
+	if k == "chest":
+		return _place_chest()
 	var b := _block_of(target.cell)
 	var n: Vector3i = target.normal
 	var to := b + n
@@ -453,7 +479,7 @@ func place_target() -> bool:
 	var s := block_studs()
 	if not inv.creative and inv.hand().count < s * s:
 		return false
-	if _blocks_player(to):
+	if _blocks_player(to) or host.chests.overlaps(AABB(_cell_lo(to), _block_size_m())):
 		return false
 	var res: Dictionary = BrickTerrain.fill_box(c[0], c[1], int(d.material), true)
 	if int(res.changed) == 0:
@@ -554,12 +580,32 @@ func take_fluid() -> bool:
 func pick_target() -> void:
 	if target.is_empty():
 		return
+	if target.has("chest"):
+		inv.pick(&"chest")
+		return
 	inv.pick(ItemCatalog.block_item(int(target.material)))
+
+
+## The chest item's RMB: a chest standing on the face looked at -- its x and z
+## on the 2-stud lattice, its bottom the plate past the face (MineChests).
+func _place_chest() -> bool:
+	var cell: Vector3i = target.cell + Vector3i(target.normal)
+	var blk := MineChests.block_of(cell)
+	if _box_hits_player(host.chests.box_of(blk)) or not host.chests.place(blk):
+		return false
+	inv.consume_hand(1)
+	placed += 1
+	log_blocks.append("place chest %s" % MineChests.key_of(blk))
+	target = {}
+	return true
 
 
 ## Would a block there stand inside the player?
 func _blocks_player(block: Vector3i) -> bool:
-	var box := AABB(_cell_lo(block), _block_size_m())
+	return _box_hits_player(AABB(_cell_lo(block), _block_size_m()))
+
+
+func _box_hits_player(box: AABB) -> bool:
 	var feet: Vector3
 	if host.on_foot:
 		feet = host.to_local((host.pawn as Pawn).feet())

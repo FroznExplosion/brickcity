@@ -89,6 +89,9 @@ var _inv_layer: CanvasLayer = null
 var _inv_cam_captured := false
 var _inv_prev_mouse := Input.MOUSE_MODE_VISIBLE
 var _inv_walker_frozen := false
+## Chests and the items lying in the world (Docs/Inventory.md 4, stage 5).
+var chests: MineChests = null
+var drops: DroppedItems = null
 
 ## Saving the world's changes (Docs/MineWorld.md 9): one file per seed and
 ## generator settings, under UserPaths.SAVES (a scripted pass: user://dev/).
@@ -164,6 +167,14 @@ func _ready() -> void:
 	add_child(builder)
 	builder.setup(self, _hud_layer)
 	builder.inv.changed.connect(_on_inventory_changed)
+	drops = DroppedItems.new()
+	drops.name = "DroppedItems"
+	add_child(drops)
+	drops.setup(self, builder.inv)
+	chests = MineChests.new()
+	chests.name = "Chests"
+	add_child(chests)
+	chests.setup(self, builder.inv, drops)
 	_build_item_icons()
 	debris = Debris.new()
 	debris.name = "Debris"
@@ -544,6 +555,8 @@ func _origin_step() -> void:
 ## rebuilt tile re-laid the bricks round it, which read as the ground being
 ## regenerated rather than broken.
 func _mine(point: Vector3, dir: Vector3, _info) -> void:
+	if chests != null and chests.shot(to_local(point)):
+		return
 	if collapse != null and collapse.shoot(point, dir, _info):
 		return
 	if _break_jobs.size() >= MAX_BREAK_JOBS:
@@ -587,6 +600,10 @@ func _wait_breaks() -> void:
 ## names behind the old ones, and the far blocks over them.
 func terrain_edited(res: Dictionary) -> void:
 	water.terrain_changed(res)
+	if chests != null:
+		chests.check()
+	if drops != null:
+		drops.wake()
 	if _deep != null and res.has("box_lo"):
 		_deep.refresh_box(res.box_lo, res.box_hi)
 	if collapse != null:
@@ -966,6 +983,7 @@ func toggle_inventory() -> void:
 
 func inventory_closed() -> void:
 	_inv_screen = null
+	builder.inv.close_chest()
 	_hud_layer.visible = true
 	if _inv_layer != null:
 		_inv_layer.queue_free()
@@ -982,6 +1000,45 @@ func inventory_closed() -> void:
 
 func inventory_open() -> bool:
 	return _inv_screen != null
+
+
+## RMB on a chest: its slots borrowed by the inventory, the screen open on it.
+func open_chest(key: String) -> void:
+	if chests == null or not chests.chests.has(key):
+		return
+	if _inv_screen != null:
+		_inv_screen.close_screen()
+	builder.inv.open_chest(key, chests.slots_of(key))
+	toggle_inventory()
+
+
+## Where the player stands, in the terrain frame (dropped items, chests).
+func player_feet_local() -> Vector3:
+	if on_foot and pawn != null:
+		return to_local(pawn.feet())
+	if walker != null:
+		return to_local((walker as Node3D).global_position)
+	return Vector3.INF
+
+
+## A stack thrown from the player (Q in the screen, a held stack with no
+## room on close): it lands a little in front.
+func drop_from_player(s: ItemStack) -> void:
+	if drops == null or s == null:
+		return
+	var feet := player_feet_local()
+	if feet == Vector3.INF:
+		return
+	var fwd := Vector3.FORWARD
+	if cam != null:
+		var f := to_local(cam.global_position - cam.global_transform.basis.z) - to_local(cam.global_position)
+		fwd = Vector3(f.x, 0, f.z).normalized() if Vector3(f.x, 0, f.z).length() > 0.01 else fwd
+	drops.spawn(s, feet + Vector3(0, 1.2, 0) + fwd * 0.4, fwd * 3.0 + Vector3(0, 1.5, 0))
+
+
+## A chest or a dropped item changed: the save is out of date.
+func world_items_changed() -> void:
+	_inv_dirty = true
 
 
 # ---------------------------------------------------------------------------
@@ -1115,6 +1172,17 @@ func _load_inventory() -> void:
 	# Kit added since the save was made.
 	elif inv.ensure_item(&"mega_pickaxe", &"pickaxe"):
 		print("[mine] Mega Pickaxe added to the saved inventory")
+	# Chests (stage 5) into a creative save's kit, beside the Mega Pickaxe.
+	# Not in survival: a player who placed theirs must not get more each load.
+	if ok and inv.creative and inv.ensure_item(&"chest", &"mega_pickaxe"):
+		print("[mine] chests added to the saved inventory")
+	var saved = JSON.parse_string(FileAccess.get_file_as_string(path)) if ok else null
+	if chests != null:
+		chests.inv = inv
+		chests.restore(saved.get("chests", {}) if saved is Dictionary else {})
+	if drops != null:
+		drops.inv = inv
+		drops.restore(saved.get("drops", []) if saved is Dictionary else [])
 	if builder.inv.changed.is_connected(_on_inventory_changed):
 		builder.inv.changed.disconnect(_on_inventory_changed)
 	builder.set_inventory(inv)
@@ -1150,7 +1218,12 @@ func save_edits(wait := false) -> void:
 		return
 	_edits_dirty = false
 	_inv_dirty = false
-	var inv_text := JSON.stringify(builder.inv.to_dict(), "\t")
+	var inv_save: Dictionary = builder.inv.to_dict()
+	if chests != null:
+		inv_save["chests"] = chests.to_save()
+	if drops != null:
+		inv_save["drops"] = drops.to_save()
+	var inv_text := JSON.stringify(inv_save, "\t")
 	_fluid_saved_at = fluid_at
 	var bytes: PackedByteArray = BrickTerrain.get_edits()
 	var fluid_bytes: PackedByteArray = BrickFluid.get_save()
@@ -1529,6 +1602,52 @@ func _run_inventory_gate() -> void:
 	check.call("RMB placed it: the block looked at is %s" % (names[m_id] if m_id >= 0 else "nothing"),
 			placed and m_id >= 0 and names[m_id] == "granite")
 	await _shot(UserPaths.DEV + "inv_hotbar.png")
+	# Stage 5: a chest from the kit (hotbar 2 slot 8), put down on the ground
+	# looked straight down at, opened with RMB, filled with real clicks.
+	await _key(KEY_8)
+	check.call("8: a chest in the hand", inv.hand() != null and inv.hand().id == &"chest")
+	walker.pitch = -1.45
+	await _frames(10)
+	builder.update_target()
+	builder.place_target()
+	check.call("RMB with a chest puts one down", chests.count() == 1)
+	var ckey: String = chests.chests.keys()[0] if chests.count() > 0 else ""
+	if ckey != "":
+		# A look at it from the side, then back over it.
+		var cb: AABB = chests.box_of(chests.chests[ckey].block)
+		var over := _eye()
+		_fly_to(cb.get_center() + Vector3(1.3, 0.3, 0.4), Vector3(-1, 0, -0.3))
+		walker.pitch = -0.35
+		await _frames(15)
+		await _shot(UserPaths.DEV + "inv_chest_placed.png")
+		_fly_to(over - Vector3(0, 1.6, 0), Vector3(0, 0, -1))
+		walker.pitch = -1.45
+	await _frames(10)
+	builder.update_target()
+	check.call("the chest is what is looked at", builder.target.get("chest", "") == ckey)
+	builder.place_target()
+	await _frames(5)
+	check.call("RMB on the chest opens it in the screen", inventory_open() and inv.chest_key == ckey
+			and ckey != "")
+	if inventory_open():
+		scr = _inv_screen
+		await _click(_inv_slot(scr, Inventory.addr(&"hotbar_0", 0)).get_global_rect().get_center())
+		await _click(_inv_slot(scr, Inventory.addr(&"chest", 0)).get_global_rect().get_center())
+		var cs: Array = chests.slots_of(ckey)
+		check.call("grass clicked from hotbar 1 into the chest", cs.size() > 0 and cs[0] != null
+				and (cs[0] as ItemStack).id == &"grass")
+		await _shot(UserPaths.DEV + "inv_chest.png")
+		win.size = Vector2i(640, 400)
+		await _frames(10)
+		var vp2 := get_viewport().get_visible_rect()
+		var cut2: Array = MenuFit.audit(scr, vp2)
+		check.call("the chest screen at 640x400: nothing cut off (%d)" % cut2.size(), cut2.is_empty())
+		await _shot(UserPaths.DEV + "inv_chest_640x400.png")
+		win.size = size0
+		await _frames(10)
+		await _key(KEY_E)
+	check.call("E closes the chest", not inventory_open() and inv.chest_key == "")
+	await _shot(UserPaths.DEV + "inv_chest_world.png")
 	# Saved with the world, back after generating it again.
 	_edits_dirty = true
 	save_edits(true)
@@ -1541,6 +1660,61 @@ func _run_inventory_gate() -> void:
 			inv.hotbars[1][2] != null and inv.hotbars[1][2].id == &"granite"
 			and inv.hotbars[0][8] != null and inv.hotbars[0][8].id == &"sand"
 			and inv.main[5] != null and inv.main[5].id == &"terracotta")
+	var back: Array = chests.slots_of(ckey)
+	check.call("after generating again: the chest is there, the grass in it", chests.count() == 1
+			and back.size() > 0 and back[0] != null and (back[0] as ItemStack).id == &"grass")
+	if chests.count() == 1:
+		# A shot breaks it; the grass falls out; flying over it picks it up.
+		# Generating again put the player on foot at the spawn, maybe beside
+		# the chest: fly 2.4 m over it, out of a drop's reach.
+		var box: AABB = chests.box_of(chests.chests[ckey].block)
+		set_on_foot(false)
+		_fly_to(box.get_center() + Vector3(0, 2.4, 0), Vector3(0, 0, -1))
+		walker.pitch = -1.45
+		await _frames(10)
+		_mine(to_global(box.get_center()), Vector3.DOWN, null)
+		await _frames(5)
+		check.call("a shot breaks the chest, its grass drops (creative: not the chest)",
+				chests.count() == 0 and drops.count() == 1
+				and (drops.drops[0].stack as ItemStack).id == &"grass")
+		await _frames(60)
+		var drop_at: Vector3 = drops.drops[0].pos if drops.count() > 0 else box.get_center()
+		check.call("the drop came to rest on the ground (%.2f m over the chest's floor)"
+				% (drop_at.y - box.position.y), drops.count() > 0 and bool(drops.drops[0].rest)
+				and absf(drop_at.y - box.position.y) < 0.5)
+		await _shot(UserPaths.DEV + "inv_drop.png")
+		var had := 0
+		for a in inv.all_addrs():
+			var s := inv.get_slot(a)
+			if s != null and s.id == &"grass":
+				had += s.count
+		_fly_to(drop_at + Vector3(0, 0.1, 0), Vector3(0, 0, -1))
+		await _frames(30)
+		var now_has := 0
+		for a in inv.all_addrs():
+			var s := inv.get_slot(a)
+			if s != null and s.id == &"grass":
+				now_has += s.count
+		check.call("walking over it picks it up (grass %d -> %d)" % [had, now_has],
+				drops.count() == 0 and now_has == had + 64)
+		# The ground under a second chest goes: it breaks.
+		_fly_to(box.get_center() + Vector3(0, 2.4, 0), Vector3(0, 0, -1))
+		walker.pitch = -1.45
+		await _frames(10)
+		inv.select_item(&"chest")
+		builder.update_target()
+		builder.place_target()
+		check.call("a second chest put down", chests.count() == 1)
+		if chests.count() == 1:
+			var k2: String = chests.chests.keys()[0]
+			var lo: Vector3i = chests.lo_cell(chests.chests[k2].block)
+			var res: Dictionary = BrickTerrain.fill_box(lo + Vector3i(0, -3, 0),
+					lo + Vector3i(MineChests.STUDS - 1, -1, MineChests.STUDS - 1), 0, false)
+			terrain_edited(res)
+			await _frames(5)
+			check.call("the ground under it removed: the chest breaks", chests.count() == 0)
+		_edits_dirty = true
+		save_edits(true)
 	builder.set_active(false)
 	builder.gate_keys = false
 	print("[inv-gate] INV-GATE %s (%d failed)%s" % ["PASS" if fails.is_empty() else "FAIL",

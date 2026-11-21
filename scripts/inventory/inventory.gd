@@ -76,7 +76,7 @@ func seed_default() -> void:
 		if ItemCatalog.has(id):
 			hotbars[0][i] = ItemStack.make(id, ItemCatalog.max_stack(id))
 	var bar2 := ["bucket", "source_bucket", "water_source", "water_brick", "lava_source", "pickaxe",
-			"mega_pickaxe"]
+			"mega_pickaxe", "chest"]
 	for i in bar2.size():
 		var id := StringName(bar2[i])
 		if ItemCatalog.has(id):
