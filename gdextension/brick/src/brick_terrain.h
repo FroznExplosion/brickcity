@@ -282,6 +282,10 @@ struct Field {
 /// a function, and only the difference from it is written down.
 int64_t pack_cell(int x, int yp, int z);
 int edit_at(int64_t key);          ///< -1 when there is no edit
+/// A PLACED brick over cell (x, course, z) -- a block the player laid, which
+/// keeps its own shape (Docs/TerrainBond.md 1): false when none. Its
+/// rectangle in studs. Safe from any thread, like the edits.
+bool placed_at(int x, int course, int z, int &rx, int &rz, int &rsx, int &rsz);
 void set_edit(int x, int yp, int z, int material);
 /// Deepest edited plate anywhere in the 3x3 tile neighbourhood of (tx, tz),
 /// or INT_MAX when nothing there has been touched. The mask has to reach
@@ -439,7 +443,21 @@ struct Piece {
     /// overlay covers it exactly, so the quad underneath is culled the same
     /// way a face between two touching blocks is.
     uint8_t overlay;
+    /// The BRICK this piece is part of, tile-local (may reach past the tile):
+    /// with the bond's top course (BrickTerrain.set_bond_top, Docs/
+    /// TerrainBond.md) a brick can cross a tile edge and each tile draws its
+    /// part; the outline, the tint and breaking go by the whole brick.
+    /// bsx 0: the piece is the whole brick.
+    int16_t bx = 0, bz = 0, bsx = 0, bsz = 0;
+    int brick_x() const { return bsx > 0 ? bx : ox; }
+    int brick_z() const { return bsx > 0 ? bz : oz; }
+    int brick_sx() const { return bsx > 0 ? bsx : sx; }
+    int brick_sz() const { return bsx > 0 ? bsz : sz; }
 };
+
+/// The top course laid on the ground's bond rather than packed (Docs/
+/// TerrainBond.md). The mine world turns it on.
+extern bool g_bond_top;
 
 /// An overlay course is one PLATE proud of the brick it sits on: a real tile
 /// laid on a real brick, not a decal.
@@ -483,6 +501,20 @@ inline float piece_tint(uint32_t seed, int ox, int oz) {
 /// swallows them.
 void pack_tile(const Field &f, const TileSample &s, std::vector<Piece> &out,
         std::vector<int32_t> &owner);
+
+/// One column of a tile as the collapse survey needs it (Docs/TerrainBond.md):
+/// its topmost solid plate and the packed piece over it, as the tile draws it
+/// and a shot breaks it.
+struct TopColumn {
+    int top = -2000000000;      ///< topmost solid plate (TileSample::tp)
+    bool piece = false;         ///< a packed piece owns its top course
+    int px = 0, pz = 0;         ///< the piece's corner, absolute studs
+    int psx = 0, psz = 0;       ///< and its size
+};
+
+/// Tile (tx, tz)'s columns, TILE x TILE, x fastest. Samples and packs the
+/// tile (a few ms): a worker's job.
+void top_columns(int tx, int tz, std::vector<TopColumn> &out);
 
 } // namespace brick
 
@@ -789,6 +821,14 @@ public:
     static PackedByteArray get_edits();
     /// Lay edits from `get_edits`' bytes over the current ones. Returns how many.
     static int set_edits(const PackedByteArray &bytes);
+    /// A placed block (Docs/TerrainBond.md 1): the plate box `lo`..`hi` just
+    /// filled with `material` is ONE brick, kept whole by the bond, breaking
+    /// and the collapse. Cells of the box not of that material are left out.
+    static int mark_placed(Vector3i lo, Vector3i hi, int material);
+    /// The placed bricks, 4 ints a cell (x, course, z, code), for a save; and
+    /// back (after set_edits).
+    static PackedInt32Array get_placed();
+    static int set_placed(const PackedInt32Array &cells);
     static int material_at(int x, int z);
     static bool is_plate(int x, int z);
     static bool stud_at(int x, int z);
@@ -844,6 +884,10 @@ public:
     /// default (the plain-brick look was preferred); on draws them.
     static void set_slope_pieces(bool on);
     static bool get_slope_pieces();
+    /// The top course laid on the ground's bond (Docs/TerrainBond.md); the
+    /// mine world turns it on, every other scene keeps the packer's ladder.
+    static void set_bond_top(bool on);
+    static bool get_bond_top();
     /// Coarse blocks sampled this coarsely or more are built SMOOTH: one
     /// vertex a sample, no flat tops and walls (Terrain.md §19.14). At that
     /// distance a brick course is under a pixel, so the steps are paid for

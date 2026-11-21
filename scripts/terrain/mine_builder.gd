@@ -458,6 +458,9 @@ func place_target() -> bool:
 	var res: Dictionary = BrickTerrain.fill_box(c[0], c[1], int(d.material), true)
 	if int(res.changed) == 0:
 		return false
+	# One brick, the block laid: the ground's bond keeps it whole -- drawn,
+	# broken and falling as one (Docs/TerrainBond.md 1).
+	BrickTerrain.mark_placed(c[0], c[1], int(d.material))
 	inv.consume_hand(ceili(int(res.changed) / 3.0))
 	placed += 1
 	log_blocks.append("place %s" % to)

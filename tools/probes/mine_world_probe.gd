@@ -39,6 +39,8 @@ func _initialize() -> void:
 	BrickTerrain.reset_gen_params()
 	BrickTerrain.set_smooth_terrain(false)
 	BrickTerrain.set_plate_steps(false)
+	# The mine world's top course: on the ground's bond (Docs/TerrainBond.md).
+	BrickTerrain.set_bond_top(true)
 
 	_check_params_roundtrip()
 	_check_determinism()
@@ -50,12 +52,14 @@ func _initialize() -> void:
 	_check_preview()
 	_check_build_blocks()
 	_check_break_brick()
+	_check_bond()
 	_check_pick_area()
 	_check_cave_colliders()
 	_check_deep_tier()
 	await _check_solid_trunks()
 
 	BrickTerrain.set_generator(0)
+	BrickTerrain.set_bond_top(false)
 	var classic_after := _classic_sample()
 	_expect(classic_before == classic_after, "classic generator unchanged after biomes on/off")
 
@@ -553,6 +557,106 @@ func _tile_tris(d: Dictionary) -> int:
 	return n
 
 
+## THE GROUND'S BOND (Docs/TerrainBond.md), read back through find_brick:
+## every cell of a brick names the same brick; between two courses of solid
+## ground no seam stands right over a seam (where both bricks are whole: 2x2,
+## 2x4, 4x2); the top course sits so on the course under it too.
+func _check_bond() -> void:
+	BrickTerrain.clear_terrain_edits()
+	# A flat patch well inside a tile (the top course is one plate there).
+	var x0 := 0
+	var z0 := 0
+	var top := 0
+	for i in 600:
+		x0 = (i % 30) * 64 - 960 + 8
+		z0 = int(i / 30.0) * 64 - 640 + 8
+		top = BrickTerrain.surface_plate(x0, z0)
+		var flat := (top + 1) % 3 == 0
+		for dz in range(0, 12, 3):
+			for dx in range(0, 12, 3):
+				if BrickTerrain.surface_plate(x0 + dx, z0 + dz) != top:
+					flat = false
+		if flat:
+			break
+	var tc := int((top + 1) / 3.0) - 1
+	# Brick rectangles a course, by cell.
+	var courses := [tc, tc - 1, tc - 6, tc - 7]
+	var rects := {}
+	var mismatched := 0
+	for c in courses:
+		for dz in 10:
+			for dx in 10:
+				rects[Vector3i(x0 + dx, c, z0 + dz)] = _brick_of(x0 + dx, c * 3 + 1, z0 + dz)
+	# One brick, one answer.
+	for k in rects:
+		var r: Rect2i = rects[k]
+		for cz in range(r.position.y, r.end.y):
+			for cx in range(r.position.x, r.end.x):
+				var o := Vector3i(cx, k.y, cz)
+				if rects.has(o) and rects[o] != r:
+					mismatched += 1
+	_expect(mismatched == 0, "bond: every cell of a brick names the same brick (%d disagree)" % mismatched)
+	# No seam over a seam, course over course.
+	var pairs := 0
+	var over := 0
+	for pair in [[tc, tc - 1], [tc - 6, tc - 7]]:
+		for dz in 9:
+			for dx in 9:
+				for step in [Vector2i(1, 0), Vector2i(0, 1)]:
+					var a := Vector2i(x0 + dx, z0 + dz)
+					var b: Vector2i = a + step
+					var ua: Rect2i = rects[Vector3i(a.x, pair[0], a.y)]
+					var ub: Rect2i = rects[Vector3i(b.x, pair[0], b.y)]
+					var la: Rect2i = rects[Vector3i(a.x, pair[1], a.y)]
+					var lb: Rect2i = rects[Vector3i(b.x, pair[1], b.y)]
+					if not (_whole(ua) and _whole(ub) and _whole(la) and _whole(lb)):
+						continue
+					pairs += 1
+					if ua != ub and la != lb:
+						over += 1
+	_expect(pairs > 60 and over == 0, "bond: no seam over a seam (%d of %d joints, top course and deep rock)" % [over, pairs])
+	# Breaking takes exactly the brick.
+	var r0: Rect2i = rects[Vector3i(x0 + 4, tc - 6, z0 + 4)]
+	var stud := BrickWorld.get_stud_metres()
+	var plate := BrickWorld.get_plate_metres()
+	var res: Dictionary = BrickTerrain.clear_runs(BrickTerrain.find_brick(
+			Vector3((x0 + 4.5) * stud, ((tc - 6) * 3 + 1.5) * plate, (z0 + 4.5) * stud), Vector3.UP)["runs"])
+	_expect(int(res.get("removed", 0)) == r0.get_area() * 3,
+			"bond: a buried brick broken takes its %dx%d, no more (%d plates)" % [r0.size.x, r0.size.y, int(res.get("removed", 0))])
+	print("  bond patch at (%d, %d), top course %d; sizes deep: %s" % [x0, z0, tc, _size_mix(rects, tc - 6)])
+	BrickTerrain.clear_terrain_edits()
+
+
+func _whole(r: Rect2i) -> bool:
+	return r.size.x % 2 == 0 and r.size.y % 2 == 0
+
+
+func _size_mix(rects: Dictionary, c: int) -> String:
+	var n := {}
+	for k in rects:
+		if k.y == c:
+			var r: Rect2i = rects[k]
+			var key := "%dx%d" % [mini(r.size.x, r.size.y), maxi(r.size.x, r.size.y)]
+			n[key] = int(n.get(key, 0)) + 1
+	return str(n)
+
+
+## The brick holding cell (x, plate yp, z), as find_brick gives it.
+func _brick_of(x: int, yp: int, z: int) -> Rect2i:
+	var stud := BrickWorld.get_stud_metres()
+	var plate := BrickWorld.get_plate_metres()
+	var f: Dictionary = BrickTerrain.find_brick(Vector3((x + 0.5) * stud, (yp + 0.5) * plate, (z + 0.5) * stud), Vector3.UP)
+	var runs: PackedInt32Array = f.get("runs", PackedInt32Array())
+	if runs.is_empty():
+		return Rect2i()
+	var lo := Vector2i(runs[0], runs[1])
+	var hi := lo
+	for i in range(0, runs.size(), 4):
+		lo = Vector2i(mini(lo.x, runs[i]), mini(lo.y, runs[i + 1]))
+		hi = Vector2i(maxi(hi.x, runs[i]), maxi(hi.y, runs[i + 1]))
+	return Rect2i(lo, hi - lo + Vector2i.ONE)
+
+
 func _pieces(tx: int, tz: int) -> Array:
 	var raw: PackedInt32Array = BrickTerrain.pack_tile(tx, tz)
 	var stride := BrickTerrain.get_piece_stride()
@@ -669,11 +773,15 @@ func _check_break_brick() -> void:
 			lost.append(p)
 	_expect(lost.is_empty(), "every other brick of the tile is laid as before (%d kept, re-laid: %s)" % [kept, lost.slice(0, 4)])
 	# A wall: dig the hole a course deeper, then shoot its side below the
-	# surface course -- one brick cell.
+	# surface course -- its whole brick of the ground's bond (Docs/
+	# TerrainBond.md), not one 1x1 cell as it was: every cell of the brick
+	# the debris names, a course each.
 	BrickTerrain.break_brick(Vector3((x + 0.5) * stud, (top - 2) * plate - 0.02, (z + 0.5) * stud), Vector3.UP)
 	var edge_z: float = (int(gone[1]) + tz * 32) * stud
 	var wall := Vector3((x + 0.5) * stud, (top - 4.5) * plate, edge_z + 0.01)
 	var res2: Dictionary = BrickTerrain.break_brick(wall, Vector3(0, 0, 1))
-	_expect(int(res2.get("removed", 0)) > 0 and int(res2.get("removed", 0)) <= 3,
-			"a wall hit takes one brick cell (%d plates)" % int(res2.get("removed", 0)))
+	var deb2: PackedFloat32Array = res2.get("debris", PackedFloat32Array())
+	var brick_cells := roundi(deb2[3] / stud) * roundi(deb2[5] / stud) * 3 if deb2.size() == 9 else -1
+	_expect(int(res2.get("removed", 0)) > 0 and int(res2.get("removed", 0)) == brick_cells,
+			"a wall hit takes its whole bond brick (%d plates, brick %d)" % [int(res2.get("removed", 0)), brick_cells])
 	BrickTerrain.clear_terrain_edits()

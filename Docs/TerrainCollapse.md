@@ -163,6 +163,12 @@ the `.pieces` file), `TerrainStreamer.fresh`, and `PlanetPieces.max_pieces` /
 
 What changed from the plan while building:
 
+- **Superseded 2026-11-20 (Docs/TerrainBond.md):** the virtual bricks are
+  the ground's bond again -- fixed from absolute coordinates, but every seam
+  of a course on studs of its parity and the next course's on the other, so
+  no seam stands over a seam whatever the shape -- the same bricks the tiles
+  draw and a shot breaks; the top course is the tiles' own pieces. The found
+  bond below was a different brick each survey and drawn nowhere.
 - **The bond is found, not fixed.** A fixed pattern from absolute coordinates
   left seam over seam wherever a shape did not line up with it (a 2-course
   arm came apart in two). Now each course is packed from the bottom, each

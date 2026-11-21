@@ -1,5 +1,6 @@
 #include "brick_terrain.h"
 #include "terrain_biomes.h"
+#include "terrain_bond.h"
 
 #include <shared_mutex>
 #include <godot_cpp/classes/time.hpp>
@@ -867,6 +868,14 @@ EditTable g_edits;
 EditTable g_tile_floor;
 /// Highest edited SOLID plate per tile column.
 EditTable g_tile_ceiling;
+/// Placed bricks: (x, course, z) packed like a plate cell -> the brick's
+/// rectangle as an offset and size (placed_code). 0: none (an entry is never
+/// removed, only zeroed).
+EditTable g_placed;
+
+inline int32_t placed_code(int dx, int dz, int sx, int sz) {
+    return (1 << 20) | (dx & 15) | ((dz & 15) << 4) | ((sx & 15) << 8) | ((sz & 15) << 12);
+}
 
 } // namespace
 
@@ -895,7 +904,31 @@ static inline int64_t tile_key(int tx, int tz) {
     return ((int64_t)(tx & 0xFFFFFFF) << 28) | (int64_t)(tz & 0xFFFFFFF);
 }
 
+bool placed_at(int x, int course, int z, int &rx, int &rz, int &rsx, int &rsz) {
+    if (g_placed.size() == 0) {
+        return false;
+    }
+    int32_t v;
+    if (!g_placed.find((uint64_t)pack_cell(x, course, z), v) || v == 0) {
+        return false;
+    }
+    rx = x - (v & 15);
+    rz = z - ((v >> 4) & 15);
+    rsx = (v >> 8) & 15;
+    rsz = (v >> 12) & 15;
+    return true;
+}
+
 void set_edit(int x, int yp, int z, int material) {
+    // Any other edit to a placed brick's cell makes it ground again (a
+    // placement marks it after its fill_box: BrickTerrain::mark_placed).
+    if (g_placed.size() > 0) {
+        const uint64_t pk = (uint64_t)pack_cell(x, floor_div(yp, PLATES_PER_CELL), z);
+        int32_t pv;
+        if (g_placed.find(pk, pv) && pv != 0) {
+            g_placed.put(pk, 0);
+        }
+    }
     const uint64_t tk = (uint64_t)tile_key(floor_div(x, TILE), floor_div(z, TILE));
     // The column bounds first: a bake that sees the new cell must also reach
     // down (or up) to it.
@@ -946,6 +979,7 @@ void clear_edits() {
     g_edits.clear();
     g_tile_floor.clear();
     g_tile_ceiling.clear();
+    g_placed.clear();
 }
 
 size_t edit_count() {
@@ -961,6 +995,9 @@ bool edits_empty() {
 // Off by default (2026-10-16): the user prefers terrace edges as plain
 // bricks. The pieces still work; F10's dev menu turns them back on.
 bool g_slope_pieces = false;
+
+// The top course on the bond, not the packer's ladder (Docs/TerrainBond.md).
+bool g_bond_top = false;
 
 bool g_deep_tier = false;
 
@@ -1516,13 +1553,20 @@ void pack_tile(const Field &f, const TileSample &s, std::vector<Piece> &out,
     const int gx0 = s.tx * TILE;
     const int gz0 = s.tz * TILE;
 
-    auto emit = [&](int ox, int oz, int sx, int sz, int kind, int ramp) {
+    auto emit = [&](int ox, int oz, int sx, int sz, int kind, int ramp,
+            int brx = 0, int brz = 0, int brsx = 0, int brsz = 0) {
         const int i = TileSample::idx(ox, oz);
         Piece pc;
         pc.ox = (int16_t)ox;
         pc.oz = (int16_t)oz;
         pc.sx = (int16_t)sx;
         pc.sz = (int16_t)sz;
+        if (brsx > 0 && (brx != ox || brz != oz || brsx != sx || brsz != sz)) {
+            pc.bx = (int16_t)brx;
+            pc.bz = (int16_t)brz;
+            pc.bsx = (int16_t)brsx;
+            pc.bsz = (int16_t)brsz;
+        }
         pc.h = s.h[i];
         pc.top = s.tp[i];
         pc.mat = s.mat[i];
@@ -1535,7 +1579,8 @@ void pack_tile(const Field &f, const TileSample &s, std::vector<Piece> &out,
         // Some flat pieces are laid smooth. A tile takes no studs and nothing
         // clips to it, so this is also a BUILD rule, not only a look: you
         // cannot build on a tiled patch (section 7.6).
-        if (pc.studded && hashf(gx0 + ox, gz0 + oz, (int32_t)(seed ^ 0x7113U))
+        // By the BRICK's corner: both tiles' parts of a brick agree.
+        if (pc.studded && hashf(gx0 + pc.brick_x(), gz0 + pc.brick_z(), (int32_t)(seed ^ 0x7113U))
                 < TILE_CHANCE) {
             pc.kind = (uint8_t)PIECE_TILE;
             pc.studded = 0;
@@ -1710,8 +1755,111 @@ void pack_tile(const Field &f, const TileSample &s, std::vector<Piece> &out,
         }
     };
 
-    place_pass(true, PIECE_BRICK);
-    place_pass(false, PIECE_TILE);
+    if (g_bond_top) {
+        // THE BOND'S TOP COURSE (Docs/TerrainBond.md): the surface laid on
+        // the same 4 x 4 blocks and parity rule as the ground under it, so
+        // its seams never stand over the course below's. The ladder above
+        // put pieces wherever a cell was free, and a seam over a seam split
+        // a two-course arm (the collapse falls by these bricks).
+        //
+        // A brick here is the run of top cells of one exact top plate,
+        // material and colour inside a bond footprint. It may cross the
+        // tile's edge: each tile emits its part, knowing the whole (the
+        // outline, the tint, breaking and the collapse go by the brick).
+        // Past the sample the field answers, so both tiles agree.
+        constexpr int PAD = 4;
+        constexpr int SIDE = TILE + 2 * PAD;
+        struct TopCell {
+            int tp = 0, mat = 0, col = 0;
+            bool free = true, known = false;
+        };
+        std::vector<TopCell> cells((size_t)SIDE * SIDE);
+        // Ramps and slopes are placed already; nothing else is yet.
+        const std::vector<int32_t> pre_owned = owner;
+        auto top_at = [&](int lx, int lz) -> const TopCell & {
+            TopCell &t = cells[(size_t)(lx + PAD) + SIDE * (size_t)(lz + PAD)];
+            if (t.known) {
+                return t;
+            }
+            t.known = true;
+            if (lx >= -MARGIN && lz >= -MARGIN && lx < TILE + MARGIN && lz < TILE + MARGIN) {
+                const int i = TileSample::idx(lx, lz);
+                t.tp = s.tp[i];
+                t.mat = s.mat[i];
+                t.col = s.col[i];
+                t.free = !s.smooth[i];
+                if (lx >= 0 && lz >= 0 && lx < TILE && lz < TILE && pre_owned[lx + TILE * lz] >= 0) {
+                    t.free = false;
+                }
+            } else {
+                const int x = gx0 + lx, z = gz0 + lz;
+                t.tp = BrickTerrain::surface_plate(x, z);
+                t.mat = f.solid_at(x, t.tp, z);
+                t.col = layer_colour(x, z);
+            }
+            return t;
+        };
+        for (int lz = 0; lz < TILE; ++lz) {
+            for (int lx = 0; lx < TILE; ++lx) {
+                if (owner[lx + TILE * lz] >= 0) {
+                    continue;
+                }
+                const TopCell &q = top_at(lx, lz);
+                if (!q.free) {
+                    continue;
+                }
+                const int qtp = q.tp, qmat = q.mat, qcol = q.col;
+                const int qc = floor_div(qtp, PLATES_PER_CELL);
+                int px, pz, psx, psz;
+                const bool q_placed = placed_at(gx0 + lx, qc, gz0 + lz, px, pz, psx, psz);
+                auto group = [&](int x, int z) {
+                    const TopCell &t = top_at(x - gx0, z - gz0);
+                    int a, b2, c2, d2;
+                    return (t.free && t.tp == qtp && t.mat == qmat && t.col == qcol
+                            && !placed_at(x, qc, z, a, b2, c2, d2))
+                            ? BOND_STRONG : BOND_NONE;
+                };
+                // A placed block is the brick the player laid, whatever the
+                // bond would have cut it into.
+                const BondRect r = q_placed ? BondRect{ px, pz, psx, psz }
+                        : bond_rect(gx0 + lx, qc, gz0 + lz, group);
+                int cx0 = std::max(r.x - gx0, 0), cz0 = std::max(r.z - gz0, 0);
+                int cx1 = std::min(r.x - gx0 + r.sx, TILE);
+                int cz1 = std::min(r.z - gz0 + r.sz, TILE);
+                if (q_placed) {
+                    // Part of a placed brick may be built over or gone: then
+                    // this cell alone (still outlined as the whole brick).
+                    bool whole = true;
+                    for (int z = cz0; z < cz1 && whole; ++z) {
+                        for (int x = cx0; x < cx1 && whole; ++x) {
+                            const TopCell &t = top_at(x, z);
+                            int a, b2, c2, d2;
+                            whole = owner[x + TILE * z] < 0 && t.free && t.tp == qtp
+                                    && placed_at(gx0 + x, qc, gz0 + z, a, b2, c2, d2)
+                                    && a == r.x && b2 == r.z;
+                        }
+                    }
+                    if (!whole) {
+                        cx0 = lx;
+                        cz0 = lz;
+                        cx1 = lx + 1;
+                        cz1 = lz + 1;
+                    }
+                }
+                bool plate = true;
+                for (int z = cz0; z < cz1; ++z) {
+                    for (int x = cx0; x < cx1; ++x) {
+                        plate = plate && s.plate[TileSample::idx(x, z)] == 1;
+                    }
+                }
+                emit(cx0, cz0, cx1 - cx0, cz1 - cz0, plate ? PIECE_BRICK : PIECE_TILE, 255,
+                        r.x - gx0, r.z - gz0, r.sx, r.sz);
+            }
+        }
+    } else {
+        place_pass(true, PIECE_BRICK);
+        place_pass(false, PIECE_TILE);
+    }
 
     // A second course, laid on some of the bricks.
     //
@@ -1725,8 +1873,8 @@ void pack_tile(const Field &f, const TileSample &s, std::vector<Piece> &out,
         if (pc.kind != PIECE_BRICK) {
             continue;
         }
-        const int gx = gx0 + pc.ox;
-        const int gz = gz0 + pc.oz;
+        const int gx = gx0 + pc.brick_x();   // the brick's corner: both tiles agree
+        const int gz = gz0 + pc.brick_z();
         if (hashf(gx, gz, (int32_t)(seed ^ 0x0A11U)) >= g_overlay_chance) {
             continue;
         }
@@ -1750,6 +1898,136 @@ void pack_tile(const Field &f, const TileSample &s, std::vector<Piece> &out,
 using namespace brick;
 
 static Field g_field;
+
+// --- the bond's view of a tile (Docs/TerrainBond.md) -------------------------
+
+namespace {
+
+/// What the bond (terrain_bond.h) needs to know of one course cell -- its
+/// group, or none -- read from a tile's sample where it reaches and from the
+/// field past it, so two tiles agree on a brick across their shared edge.
+///
+/// `tops`: the sample is a surface tile, whose top courses are the packer's
+/// pieces (a cell at or above its column's top course is not the bond's).
+/// A deep-tier section has no top courses.
+struct BondView {
+    const TileSample &s;
+    bool tops;
+    int c_lo = 0, c_n = 0;            ///< courses the memo spans
+    static constexpr int PAD = 4;     ///< studs past the tile the memo spans
+    static constexpr int SIDE = TILE + 2 * PAD;
+    std::vector<uint8_t> memo;        ///< group + 1, 0 unknown
+    std::vector<int32_t> top_memo;    ///< top plate past the sample, INT_MIN unknown
+
+    BondView(const TileSample &p_s, bool p_tops) : s(p_s), tops(p_tops) {
+        c_lo = floor_div(s.y0, PLATES_PER_CELL) - 1;
+        c_n = floor_div(s.y0 + s.ysize - 1, PLATES_PER_CELL) - c_lo + 2;
+        memo.assign((size_t)SIDE * SIDE * c_n, 0);
+        top_memo.assign((size_t)SIDE * SIDE, INT_MIN);
+    }
+
+    bool in_sample(int lx, int lz) const {
+        return lx >= -MARGIN && lz >= -MARGIN && lx < TILE + MARGIN && lz < TILE + MARGIN;
+    }
+
+    /// The column's topmost solid plate (absolute studs).
+    int top_plate(int x, int z) {
+        const int lx = x - s.tx * TILE, lz = z - s.tz * TILE;
+        if (in_sample(lx, lz)) {
+            return s.tp[TileSample::idx(lx, lz)];
+        }
+        const bool memoed = lx >= -PAD && lz >= -PAD && lx < TILE + PAD && lz < TILE + PAD;
+        const size_t i = memoed ? (size_t)(lx + PAD) + SIDE * (size_t)(lz + PAD) : 0;
+        if (memoed && top_memo[i] != INT_MIN) {
+            return top_memo[i];
+        }
+        const int t = BrickTerrain::surface_plate(x, z);
+        if (memoed) {
+            top_memo[i] = t;
+        }
+        return t;
+    }
+
+    /// The material of the cell's lowest solid plate, or air.
+    int material(int x, int c, int z) const {
+        const int lx = x - s.tx * TILE, lz = z - s.tz * TILE;
+        const bool in = in_sample(lx, lz);
+        for (int p = 0; p < PLATES_PER_CELL; ++p) {
+            const int yp = c * PLATES_PER_CELL + p;
+            const int m = (in && s.in_y(yp)) ? s.voxel(lx, yp, lz) : g_field.solid_at(x, yp, z);
+            if (m != MAT_AIR) {
+                return m;
+            }
+        }
+        return MAT_AIR;
+    }
+
+    int group(int x, int c, int z) {
+        const int lx = x - s.tx * TILE, lz = z - s.tz * TILE;
+        const bool memoed = lx >= -PAD && lz >= -PAD && lx < TILE + PAD && lz < TILE + PAD
+                && c >= c_lo && c < c_lo + c_n;
+        size_t i = 0;
+        if (memoed) {
+            i = (size_t)(lx + PAD) + SIDE * ((size_t)(lz + PAD) + SIDE * (size_t)(c - c_lo));
+            if (memo[i] != 0) {
+                return memo[i] - 1;
+            }
+        }
+        int g = bond_group(material(x, c, z));
+        if (g != BOND_NONE && tops && c >= floor_div(top_plate(x, z), PLATES_PER_CELL)) {
+            g = BOND_NONE;   // the top course: the packer's piece
+        }
+        int px, pz, psx, psz;
+        if (g != BOND_NONE && placed_at(x, c, z, px, pz, psx, psz)) {
+            g = BOND_NONE;   // a placed brick: its own shape
+        }
+        if (memoed) {
+            memo[i] = (uint8_t)(g + 1);
+        }
+        return g;
+    }
+
+    /// The brick of a bond cell (group MEDIUM or STRONG; anything else is
+    /// its own 1x1).
+    BondRect rect(int x, int c, int z) {
+        int px, pz, psx, psz;
+        if (placed_at(x, c, z, px, pz, psx, psz)) {
+            return BondRect{ px, pz, psx, psz };
+        }
+        return bond_rect(x, c, z, [&](int cx, int cz) { return group(cx, c, cz); });
+    }
+};
+
+/// clear_runs' runs for a top-course piece's whole brick (tile `s`'s piece;
+/// its brick may reach into the next tile, whose tops the view reads).
+void piece_runs(const TileSample &s, const Piece &p, BondView &view, PackedInt32Array &runs) {
+    for (int dz = 0; dz < p.brick_sz(); ++dz) {
+        for (int dx = 0; dx < p.brick_sx(); ++dx) {
+            const int x = s.tx * TILE + p.brick_x() + dx;
+            const int z = s.tz * TILE + p.brick_z() + dz;
+            const int t = view.top_plate(x, z);
+            runs.push_back(x);
+            runs.push_back(z);
+            runs.push_back(floor_div(t, PLATES_PER_CELL) * PLATES_PER_CELL);
+            runs.push_back(t);
+        }
+    }
+}
+
+/// clear_runs' runs for one bond brick of course `c`: every column of it, the
+/// whole course.
+void bond_runs(const BondRect &r, int c, PackedInt32Array &runs) {
+    for (int dz = 0; dz < r.sz; ++dz) {
+        for (int dx = 0; dx < r.sx; ++dx) {
+            runs.push_back(r.x + dx);
+            runs.push_back(r.z + dz);
+            runs.push_back(c * PLATES_PER_CELL);
+            runs.push_back(c * PLATES_PER_CELL + PLATES_PER_CELL - 1);
+        }
+    }
+}
+
+} // namespace
 
 
 /// Metres of real 45-degree chamfer cut off every face edge, or 0 for none.
@@ -2620,6 +2898,59 @@ int BrickTerrain::set_edits(const PackedByteArray &bytes) {
     return (int)n;
 }
 
+int BrickTerrain::mark_placed(Vector3i lo, Vector3i hi, int material) {
+    const int x0 = std::min(lo.x, hi.x), x1 = std::max(lo.x, hi.x);
+    const int z0 = std::min(lo.z, hi.z), z1 = std::max(lo.z, hi.z);
+    const int c0 = floor_div(std::min(lo.y, hi.y), PLATES_PER_CELL);
+    const int c1 = floor_div(std::max(lo.y, hi.y), PLATES_PER_CELL);
+    const int sx = x1 - x0 + 1, sz = z1 - z0 + 1;
+    // A block is a brick: a few studs, a course or so. Nothing bigger.
+    if (sx > 15 || sz > 15 || c1 - c0 > 8) {
+        return 0;
+    }
+    int n = 0;
+    for (int cc = c0; cc <= c1; ++cc) {
+        for (int z = z0; z <= z1; ++z) {
+            for (int x = x0; x <= x1; ++x) {
+                bool all = true;
+                for (int p = 0; p < PLATES_PER_CELL && all; ++p) {
+                    all = g_field.solid_at(x, cc * PLATES_PER_CELL + p, z) == material;
+                }
+                if (!all) {
+                    continue;
+                }
+                g_placed.put((uint64_t)pack_cell(x, cc, z), placed_code(x - x0, z - z0, sx, sz));
+                ++n;
+            }
+        }
+    }
+    return n;
+}
+
+PackedInt32Array BrickTerrain::get_placed() {
+    PackedInt32Array out;
+    g_placed.each([&](uint64_t key, int32_t v) {
+        if (v == 0) {
+            return;
+        }
+        const int64_t k = (int64_t)key;
+        out.push_back(unpack21(k >> 42));
+        out.push_back(unpack21(k >> 21));
+        out.push_back(unpack21(k));
+        out.push_back(v);
+    });
+    return out;
+}
+
+int BrickTerrain::set_placed(const PackedInt32Array &cells) {
+    int n = 0;
+    for (int64_t i = 0; i + 3 < cells.size(); i += 4) {
+        g_placed.put((uint64_t)pack_cell(cells[i], cells[i + 1], cells[i + 2]), cells[i + 3]);
+        ++n;
+    }
+    return n;
+}
+
 Dictionary BrickTerrain::fill_box(Vector3i lo, Vector3i hi, int material, bool only_air) {
     Dictionary out;
     const int mat = std::min(std::max(material, 0), (int)MATERIAL_COUNT - 1);
@@ -2704,32 +3035,26 @@ Dictionary BrickTerrain::find_brick(Vector3 point, Vector3 normal) {
     Color col = filament_colour(material_filament(g_field.solid_at(x, yp, z)));
     Vector3 lo_m, hi_m;
     if (o >= 0 && yp >= course) {
-        // The top course: the whole piece.
+        // The top course: the whole piece -- the whole BRICK, where the
+        // bond's top course laid one across a tile edge.
         const Piece &p = pieces[(size_t)o];
         col = piece_colour(s, p.ox, p.oz, p.mat, false);
-        for (int dz = 0; dz < p.sz; ++dz) {
-            for (int dx = 0; dx < p.sx; ++dx) {
-                const int cx = p.ox + dx, cz = p.oz + dz;
-                const int t = s.tp[TileSample::idx(cx, cz)];
-                runs.push_back(tx * TILE + cx);
-                runs.push_back(tz * TILE + cz);
-                runs.push_back(floor_div(t, PLATES_PER_CELL) * PLATES_PER_CELL);
-                runs.push_back(t);
-            }
-        }
-        lo_m = Vector3((float)(tx * TILE + p.ox) * STUD_M, (float)course * PLATE_M,
-                (float)(tz * TILE + p.oz) * STUD_M);
-        hi_m = lo_m + Vector3((float)p.sx * STUD_M, (float)(col_top - course + 1) * PLATE_M,
-                (float)p.sz * STUD_M);
+        BondView view(s, true);
+        piece_runs(s, p, view, runs);
+        lo_m = Vector3((float)(tx * TILE + p.brick_x()) * STUD_M, (float)course * PLATE_M,
+                (float)(tz * TILE + p.brick_z()) * STUD_M);
+        hi_m = lo_m + Vector3((float)p.brick_sx() * STUD_M, (float)(col_top - course + 1) * PLATE_M,
+                (float)p.brick_sz() * STUD_M);
     } else {
-        // A wall or a cave face: the one brick cell.
-        const int b = floor_div(yp, PLATES_PER_CELL) * PLATES_PER_CELL;
-        runs.push_back(x);
-        runs.push_back(z);
-        runs.push_back(b);
-        runs.push_back(b + PLATES_PER_CELL - 1);
-        lo_m = Vector3((float)x * STUD_M, (float)b * PLATE_M, (float)z * STUD_M);
-        hi_m = lo_m + Vector3(STUD_M, BRICK_M, STUD_M);
+        // A wall, a cave face, the face of a pit: the whole brick of the
+        // ground's bond (Docs/TerrainBond.md), the one the wall draws.
+        const int c = floor_div(yp, PLATES_PER_CELL);
+        BondView view(s, true);
+        const BondRect r = view.rect(x, c, z);
+        bond_runs(r, c, runs);
+        const int b = c * PLATES_PER_CELL;
+        lo_m = Vector3((float)r.x * STUD_M, (float)b * PLATE_M, (float)r.z * STUD_M);
+        hi_m = lo_m + Vector3((float)r.sx * STUD_M, BRICK_M, (float)r.sz * STUD_M);
     }
     const Vector3 c = (lo_m + hi_m) * 0.5f;
     const Vector3 size = hi_m - lo_m;
@@ -2740,6 +3065,30 @@ Dictionary BrickTerrain::find_brick(Vector3 point, Vector3 normal) {
     out["runs"] = runs;
     out["debris"] = debris;
     return out;
+}
+
+void brick::top_columns(int tx, int tz, std::vector<TopColumn> &out) {
+    TileSample s;
+    sample_tile(g_field, tx, tz, s);
+    std::vector<Piece> pieces;
+    std::vector<int32_t> owner;
+    brick::pack_tile(g_field, s, pieces, owner);
+    out.assign((size_t)TILE * TILE, TopColumn());
+    for (int lz = 0; lz < TILE; ++lz) {
+        for (int lx = 0; lx < TILE; ++lx) {
+            TopColumn &c = out[(size_t)lx + TILE * lz];
+            c.top = s.tp[TileSample::idx(lx, lz)];
+            const int32_t o = owner[(size_t)lx + TILE * lz];
+            if (o >= 0) {
+                const Piece &p = pieces[(size_t)o];
+                c.piece = true;
+                c.px = tx * TILE + p.brick_x();   // the whole brick: it may cross the tile edge
+                c.pz = tz * TILE + p.brick_z();
+                c.psx = p.brick_sx();
+                c.psz = p.brick_sz();
+            }
+        }
+    }
 }
 
 Dictionary BrickTerrain::find_bricks(Vector3i lo, Vector3i hi) {
@@ -2753,6 +3102,8 @@ Dictionary BrickTerrain::find_bricks(Vector3i lo, Vector3i hi) {
         out["runs"] = runs;
         return out;
     }
+    // Bond bricks reach past the box and across tiles: each is taken once.
+    std::set<int64_t> bond_taken;
     for (int tz = floor_div(z0, TILE); tz <= floor_div(z1, TILE); ++tz) {
         for (int tx = floor_div(x0, TILE); tx <= floor_div(x1, TILE); ++tx) {
             TileSample s;
@@ -2761,6 +3112,7 @@ Dictionary BrickTerrain::find_bricks(Vector3i lo, Vector3i hi) {
             std::vector<int32_t> owner;
             brick::pack_tile(g_field, s, pieces, owner);
             std::vector<uint8_t> taken(pieces.size(), 0);
+            BondView view(s, true);
             const int ax0 = std::max(x0, tx * TILE), ax1 = std::min(x1, tx * TILE + TILE - 1);
             const int az0 = std::max(z0, tz * TILE), az1 = std::min(z1, tz * TILE + TILE - 1);
             for (int z = az0; z <= az1; ++z) {
@@ -2772,32 +3124,28 @@ Dictionary BrickTerrain::find_bricks(Vector3i lo, Vector3i hi) {
                     int below_hi = y1;
                     if (o >= 0) {
                         below_hi = std::min(y1, course - 1);
-                        // The top course in the box: its whole piece, once.
+                        // The top course in the box: its whole brick, once
+                        // (a brick across a tile edge is two tiles' pieces).
                         if (y1 >= course && y0 <= col_top && !taken[(size_t)o]) {
                             taken[(size_t)o] = 1;
                             const Piece &p = pieces[(size_t)o];
-                            for (int dz = 0; dz < p.sz; ++dz) {
-                                for (int dx = 0; dx < p.sx; ++dx) {
-                                    const int cx = p.ox + dx, cz = p.oz + dz;
-                                    const int t = s.tp[TileSample::idx(cx, cz)];
-                                    runs.push_back(tx * TILE + cx);
-                                    runs.push_back(tz * TILE + cz);
-                                    runs.push_back(floor_div(t, PLATES_PER_CELL) * PLATES_PER_CELL);
-                                    runs.push_back(t);
-                                }
+                            const int64_t k = bond_key(tx * TILE + p.brick_x(),
+                                    floor_div(col_top, PLATES_PER_CELL) + (1 << 20), tz * TILE + p.brick_z());
+                            if (bond_taken.insert(k).second) {
+                                piece_runs(s, p, view, runs);
                             }
                         }
                     }
-                    // Under it (a wall, a cave face, the face of a pit): brick
-                    // cells, each whole.
+                    // Under it (a wall, a cave face, the face of a pit): the
+                    // bond's bricks (Docs/TerrainBond.md), each whole.
                     if (below_hi < y0) {
                         continue;
                     }
                     for (int b = floor_div(y0, PLATES_PER_CELL); b <= floor_div(below_hi, PLATES_PER_CELL); ++b) {
-                        runs.push_back(x);
-                        runs.push_back(z);
-                        runs.push_back(b * PLATES_PER_CELL);
-                        runs.push_back(b * PLATES_PER_CELL + PLATES_PER_CELL - 1);
+                        const BondRect r = view.rect(x, b, z);
+                        if (bond_taken.insert(bond_key(r.x, b, r.z)).second) {
+                            bond_runs(r, b, runs);
+                        }
                     }
                 }
             }
@@ -3408,6 +3756,36 @@ void mask_faces(MeshBuf &m, const TileSample &s, const std::vector<int32_t> &own
     const int y0 = s.lo_owned();
     const int y1 = s.hi_owned();
     std::vector<uint8_t> face_buf;
+    std::vector<int64_t> key_buf;
+
+    // THE BOND (Docs/TerrainBond.md): a face is merged only within one
+    // brick, so the seams drawn on a wall, a cave roof or a cave floor are
+    // the edges of the bricks a shot or a pickaxe takes and the collapse
+    // holds. They used to come from a random cut lattice that nothing else
+    // knew about. Memoised per cell and course (a cell's three plates and up
+    // to six faces ask the same).
+    BondView view(s, !pieces.empty());
+    std::vector<BondRect> rect_memo((size_t)TILE * TILE * view.c_n, BondRect{ 0, 0, 0, 0 });
+    auto brick_rect = [&](int lx, int yp, int lz) -> BondRect {
+        const int c = floor_div(yp, PLATES_PER_CELL);
+        const int x = s.tx * TILE + lx, z = s.tz * TILE + lz;
+        const bool memoed = lx >= 0 && lz >= 0 && lx < TILE && lz < TILE
+                && c >= view.c_lo && c < view.c_lo + view.c_n;
+        const size_t i = memoed
+                ? (size_t)lx + TILE * ((size_t)lz + TILE * (size_t)(c - view.c_lo)) : 0;
+        if (memoed && rect_memo[i].sx != 0) {
+            return rect_memo[i];
+        }
+        const BondRect r = view.rect(x, c, z);
+        if (memoed) {
+            rect_memo[i] = r;
+        }
+        return r;
+    };
+    auto brick_key = [&](int lx, int yp, int lz) -> int64_t {
+        const BondRect r = brick_rect(lx, yp, lz);
+        return bond_key(r.x, floor_div(yp, PLATES_PER_CELL), r.z);
+    };
 
     // A cell's colour comes from its own material, jittered by the piece that
     // owns its column where there is one, so a crater wall and the ground
@@ -3503,7 +3881,9 @@ void mask_faces(MeshBuf &m, const TileSample &s, const std::vector<int32_t> &own
             // One buffer for every slice of every direction. Allocating per
             // slice was six directions times ~85 slices of churn a tile.
             face_buf.assign((size_t)su * sv, 0);
+            key_buf.resize((size_t)su * sv);
             std::vector<uint8_t> &face = face_buf;
+            std::vector<int64_t> &fkey = key_buf;
 
             for (int v = 0; v < sv; ++v) {
                 for (int u = 0; u < su; ++u) {
@@ -3563,6 +3943,7 @@ void mask_faces(MeshBuf &m, const TileSample &s, const std::vector<int32_t> &own
                         continue;
                     }
                     face[(size_t)u + su * v] = (uint8_t)s.voxel(lx, yp, lz);
+                    fkey[(size_t)u + su * v] = brick_key(lx, yp, lz);
                 }
             }
 
@@ -3579,40 +3960,24 @@ void mask_faces(MeshBuf &m, const TileSample &s, const std::vector<int32_t> &own
                     // An unbounded greedy merge turned a three-metre cliff
                     // into ONE quad, and since UV2 carries the quad's size
                     // the seam shader drew one brick outline around the whole
-                    // wall. The result was a handful of enormous bricks.
-                    //
-                    // So a merged face is capped to something a real part
-                    // could be, and a vertical face is additionally stopped
-                    // at every brick course so a wall reads as courses rather
-                    // than as a slab.
-                    int max_h;
-                    if (dy != 0) {
-                        max_h = 2;                     // a 2xN plate, seen from above or below
-                    } else {
-                        const int yp_here = y0 + v;
-                        const int into = ((yp_here % PLATES_PER_CELL) + PLATES_PER_CELL)
-                                % PLATES_PER_CELL;
-                        max_h = PLATES_PER_CELL - into;   // never cross a course line
-                    }
-
-                    // Joints stagger per course, off the same cut lattice the
-                    // ground is packed with, so the courses of a cliff do not
-                    // line up into vertical seams.
-                    const int course = (dy != 0) ? v : floor_div(y0 + v, PLATES_PER_CELL);
-                    const int row_key = course * 31 + w * 7 + d;
-                    const int u_base = (dx != 0) ? (s.tz * TILE) : (s.tx * TILE);
+                    // wall. So a merged face is one brick's: the same bond
+                    // key all along it (a key is a brick of one course, so a
+                    // wall reads as courses, and its joints are staggered by
+                    // the bond itself, Docs/TerrainBond.md).
+                    const int64_t key = fkey[(size_t)u + su * v];
 
                     int wdt = 1;
                     while (u + wdt < su && wdt < MAX_LEN
                             && face[(size_t)(u + wdt) + su * v] == mat
-                            && !cut_before(seed, u_base + u + wdt, row_key, d & 1)) {
+                            && fkey[(size_t)(u + wdt) + su * v] == key) {
                         ++wdt;
                     }
                     int hgt = 1;
-                    while (v + hgt < sv && hgt < max_h) {
+                    while (v + hgt < sv) {
                         bool ok = true;
                         for (int k = 0; k < wdt; ++k) {
-                            if (face[(size_t)(u + k) + su * (v + hgt)] != mat) {
+                            if (face[(size_t)(u + k) + su * (v + hgt)] != mat
+                                    || fkey[(size_t)(u + k) + su * (v + hgt)] != key) {
                                 ok = false;
                                 break;
                             }
@@ -3723,10 +4088,44 @@ void mask_faces(MeshBuf &m, const TileSample &s, const std::vector<int32_t> &own
                             }
                         }
                     }
-                    m.quad(Vector3((float)dx, (float)dy, (float)dz), col, fsz,
-                        a0, b0, c0, d0,
-                        Vector2(0, 0), Vector2(fsz.x, 0), fsz, Vector2(0, fsz.y),
-                        convex, square);
+                    // UV is this quad's place in its BRICK and UV2 the
+                    // brick's face (Docs/TerrainBond.md): a brick across a
+                    // tile edge is drawn by two tiles and still outlined
+                    // once. `ua` is the brick-side coordinate of corner a0
+                    // along the quad's U (a0 -> b0).
+                    {
+                        const BondRect br = brick_rect(lx, yp, lz);
+                        const int ax = s.tx * TILE + lx, az = s.tz * TILE + lz;
+                        const int c = floor_div(yp, PLATES_PER_CELL);
+                        const float va_y = (float)(yp - c * PLATES_PER_CELL) * PLATE_M;
+                        float ua = 0.0f, va = 0.0f;
+                        Vector2 bf;
+                        if (dx != 0) {
+                            ua = (float)(dx < 0 ? (br.z + br.sz) - (az + wdt) : az - br.z) * STUD_M;
+                            va = va_y;
+                            bf = Vector2((float)br.sz * STUD_M, BRICK_M);
+                        } else if (dz != 0) {
+                            ua = (float)(dz > 0 ? (br.x + br.sx) - (ax + wdt) : ax - br.x) * STUD_M;
+                            va = va_y;
+                            bf = Vector2((float)br.sx * STUD_M, BRICK_M);
+                        } else {
+                            ua = (float)(ax - br.x) * STUD_M;   // along X
+                            va = (float)(az - br.z) * STUD_M;   // along Z
+                            bf = Vector2((float)br.sx * STUD_M, (float)br.sz * STUD_M);
+                        }
+                        if (dy < 0) {
+                            // Wound a0 -> b0 along Z here: UV.x stays along X.
+                            m.quad(Vector3((float)dx, (float)dy, (float)dz), col, bf,
+                                a0, b0, c0, d0,
+                                Vector2(ua, va), Vector2(ua, va + HV), Vector2(ua + WU, va + HV),
+                                Vector2(ua + WU, va), convex, square);
+                        } else {
+                            m.quad(Vector3((float)dx, (float)dy, (float)dz), col, bf,
+                                a0, b0, c0, d0,
+                                Vector2(ua, va), Vector2(ua + fsz.x, va), Vector2(ua + fsz.x, va + fsz.y),
+                                Vector2(ua, va + fsz.y), convex, square);
+                        }
+                    }
                     // A wall standing on a floor reaches a bevel below it.
                     // The floor's seam grooves run up to the wall's foot, and
                     // a wall stopping at the floor's top left each groove's
@@ -3781,6 +4180,8 @@ void push_instance(PackedFloat32Array &buf, float px, float py, float pz,
 static int g_coarse_smooth_step = 8;
 void BrickTerrain::set_slope_pieces(bool on) { brick::g_slope_pieces = on; }
 bool BrickTerrain::get_slope_pieces() { return brick::g_slope_pieces; }
+void BrickTerrain::set_bond_top(bool on) { brick::g_bond_top = on; }
+bool BrickTerrain::get_bond_top() { return brick::g_bond_top; }
 
 /// How far every edge of a terrain LOD piece hangs down: the detail tiles'
 /// outer skirt, a coarse block's edge walls and a smooth block's skirt. Deep
@@ -5104,11 +5505,18 @@ Dictionary BrickTerrain::build_tile(int tx, int tz) {
     for (const Piece &p : pieces) {
         m.material = (uint8_t)p.mat;
         Color col = piece_colour(s, p.ox, p.oz, p.mat, p.studded != 0);
+        if (p.bsx > 0) {
+            // A brick across a tile edge (the bond's top course): ONE moulded
+            // colour, tinted by the brick's corner, not each part's.
+            const float k = piece_tint(g_field.seed, gx0 + p.brick_x(), gz0 + p.brick_z())
+                    / piece_tint(g_field.seed, gx0 + p.ox, gz0 + p.oz);
+            col = Color(col.r * k, col.g * k, col.b * k, col.a);
+        }
         // One march a piece, at its middle. A 2x4 is 1.4 m long and the sun
         // does not change over that, so per piece is the right granularity:
         // per column would be eight times the cost for an edge nobody can
         // see, and per tile would put a hard line down the middle of a hill.
-        if (!sun_reaches(gx0 + p.ox + p.sx / 2, gz0 + p.oz + p.sz / 2)) {
+        if (!sun_reaches(gx0 + p.brick_x() + p.brick_sx() / 2, gz0 + p.brick_z() + p.brick_sz() / 2)) {
             col = Color(col.r * SUN_SHADE, col.g * SUN_SHADE, col.b * SUN_SHADE, col.a);
         }
         const float top = (float)(p.top + 1) * PLATE_M;
@@ -5118,6 +5526,13 @@ Dictionary BrickTerrain::build_tile(int tx, int tz) {
         // 2x4 -- not as a grid of eight 1x1s. That is the difference between
         // laid brick and a moulded baseplate, and the reason the mesher packs.
         const Vector2 face((float)p.sx * STUD_M, (float)p.sz * STUD_M);
+        // ...and of a brick across a tile edge, the WHOLE brick's size, with
+        // UV this part's place in it: each tile draws its part and the seam
+        // shader still outlines one brick, with no line at the tile edge.
+        const float bx0 = (float)p.brick_x() * STUD_M, bz0 = (float)p.brick_z() * STUD_M;
+        const float bx1 = bx0 + (float)p.brick_sx() * STUD_M, bz1 = bz0 + (float)p.brick_sz() * STUD_M;
+        const Vector2 bface(bx1 - bx0, bz1 - bz0);
+        const Vector2 uv0(x0 - bx0, z0 - bz0);
 
         if (p.kind == PIECE_SLOPE) {
             emit_slope(m, s, p, col);
@@ -5146,10 +5561,10 @@ Dictionary BrickTerrain::build_tile(int tx, int tz) {
             const float oy = top + OVERLAY_M;
             // The top's bevel runs down onto the overlay's OWN lip walls
             // (always drawn), so it needs nobody else; the lips are square.
-            m.quad(Vector3(0, 1, 0), col, face,
+            m.quad(Vector3(0, 1, 0), col, bface,
                 Vector3(x0, oy, z0), Vector3(x1, oy, z0),
                 Vector3(x1, oy, z1), Vector3(x0, oy, z1),
-                Vector2(0, 0), Vector2(face.x, 0), face, Vector2(0, face.y));
+                uv0, uv0 + Vector2(face.x, 0), uv0 + face, uv0 + Vector2(0, face.y));
             const uint8_t LIP_SQ = 0xF;
             // The lip: four one-plate walls round the overlay, always drawn,
             // because a neighbour at the same brick height still sits a plate
@@ -5304,10 +5719,10 @@ Dictionary BrickTerrain::build_tile(int tx, int tz) {
                         }
                     }
                 }
-                m.quad(Vector3(0, 1, 0), col, face,
+                m.quad(Vector3(0, 1, 0), col, bface,
                     Vector3(x0, top, z0), Vector3(x1, top, z0),
                     Vector3(x1, top, z1), Vector3(x0, top, z1),
-                    Vector2(0, 0), Vector2(face.x, 0), face, Vector2(0, face.y),
+                    uv0, uv0 + Vector2(face.x, 0), uv0 + face, uv0 + Vector2(0, face.y),
                     0, square, cutc);
                 // THE SKIRT. A square edge beside a LEVEL neighbour can still
                 // face that neighbour's half-groove: the rule above decides a
@@ -5328,10 +5743,10 @@ Dictionary BrickTerrain::build_tile(int tx, int tz) {
                     // shows brick, never the void. Section 17.21's backing, for
                     // the price of two triangles a piece.
                     if (cutc == 0) {
-                        m.raw_quad(Vector3(0, 1, 0), col, face,
+                        m.raw_quad(Vector3(0, 1, 0), col, bface,
                             Vector3(x0, ys, z0), Vector3(x1, ys, z0),
                             Vector3(x1, ys, z1), Vector3(x0, ys, z1),
-                            Vector2(0, 0), Vector2(face.x, 0), face, Vector2(0, face.y));
+                            uv0, uv0 + Vector2(face.x, 0), uv0 + face, uv0 + Vector2(0, face.y));
                     } else {
                         // With its cut corners cut too, or the corner of it
                         // stood out through the upright facet.
@@ -5404,36 +5819,44 @@ Dictionary BrickTerrain::build_tile(int tx, int tz) {
                 const float yr = yb - bevel_reach();
                 // One side, from corner ka to corner kb (wound as before),
                 // each end a bevel short where that corner is cut.
+                // `u0`: where along the BRICK's side this side starts, and
+                // `blen` that side's length (a part of a brick across a tile
+                // edge outlines as the whole brick).
                 const auto side = [&](const Vector3 &n, int ka, int kb, float xa, float za,
-                        float xb, float zb, float yt) {
+                        float xb, float zb, float yt, float u0, float blen) {
                     const Vector3 dir = Vector3(xb - xa, 0.0f, zb - za).normalized();
                     const float len = std::fabs(xb - xa) + std::fabs(zb - za);
                     const float sa = (cutc & (1u << ka)) ? cut : 0.0f;
                     const float sb = (cutc & (1u << kb)) ? cut : 0.0f;
                     const Vector3 pa = Vector3(xa, 0.0f, za) + dir * sa;
                     const Vector3 pb = Vector3(xb, 0.0f, zb) - dir * sb;
-                    const Vector2 f(len, BRICK_M);
+                    const Vector2 f(blen, BRICK_M);
                     const auto at = [](const Vector3 &q, float y) { return Vector3(q.x, y, q.z); };
                     m.quad(n, col, f, at(pa, yb), at(pb, yb), at(pb, yt), at(pa, yt),
-                        Vector2(sa, 0), Vector2(len - sb, 0), Vector2(len - sb, f.y), Vector2(sa, f.y),
-                        0, 0xF);
+                        Vector2(u0 + sa, 0), Vector2(u0 + len - sb, 0), Vector2(u0 + len - sb, f.y),
+                        Vector2(u0 + sa, f.y), 0, 0xF);
                     if (g_face_bevel > 0.0f) {
-                        const Vector2 r(len, yb - yr);
+                        const Vector2 r(blen, yb - yr);
                         m.raw_quad(n, col, r, at(pa, yr), at(pb, yr), at(pb, yb), at(pa, yb),
-                            Vector2(sa, 0), Vector2(len - sb, 0), Vector2(len - sb, r.y), Vector2(sa, r.y));
+                            Vector2(u0 + sa, 0), Vector2(u0 + len - sb, 0), Vector2(u0 + len - sb, r.y),
+                            Vector2(u0 + sa, r.y));
                     }
                 };
                 if (lo_xm) {
-                    side(Vector3(-1, 0, 0), 3, 0, x0, z1, x0, z0, (square & 8u) ? top : top - cut);
+                    side(Vector3(-1, 0, 0), 3, 0, x0, z1, x0, z0, (square & 8u) ? top : top - cut,
+                            bz1 - z1, bface.y);
                 }
                 if (lo_xp) {
-                    side(Vector3(1, 0, 0), 1, 2, x1, z0, x1, z1, (square & 2u) ? top : top - cut);
+                    side(Vector3(1, 0, 0), 1, 2, x1, z0, x1, z1, (square & 2u) ? top : top - cut,
+                            z0 - bz0, bface.y);
                 }
                 if (lo_zm) {
-                    side(Vector3(0, 0, -1), 0, 1, x0, z0, x1, z0, (square & 1u) ? top : top - cut);
+                    side(Vector3(0, 0, -1), 0, 1, x0, z0, x1, z0, (square & 1u) ? top : top - cut,
+                            x0 - bx0, bface.x);
                 }
                 if (lo_zp) {
-                    side(Vector3(0, 0, 1), 2, 3, x1, z1, x0, z1, (square & 4u) ? top : top - cut);
+                    side(Vector3(0, 0, 1), 2, 3, x1, z1, x0, z1, (square & 4u) ? top : top - cut,
+                            bx1 - x1, bface.x);
                 }
                 // The upright facet of every cut corner, from a bevel under
                 // the side's foot up to where the top's corner triangle sits.
@@ -6011,6 +6434,15 @@ void BrickTerrain::_bind_methods() {
         &BrickTerrain::set_slope_pieces);
     ClassDB::bind_static_method("BrickTerrain", D_METHOD("get_slope_pieces"),
         &BrickTerrain::get_slope_pieces);
+    ClassDB::bind_static_method("BrickTerrain", D_METHOD("mark_placed", "lo", "hi", "material"),
+        &BrickTerrain::mark_placed);
+    ClassDB::bind_static_method("BrickTerrain", D_METHOD("get_placed"), &BrickTerrain::get_placed);
+    ClassDB::bind_static_method("BrickTerrain", D_METHOD("set_placed", "cells"),
+        &BrickTerrain::set_placed);
+    ClassDB::bind_static_method("BrickTerrain", D_METHOD("set_bond_top", "on"),
+        &BrickTerrain::set_bond_top);
+    ClassDB::bind_static_method("BrickTerrain", D_METHOD("get_bond_top"),
+        &BrickTerrain::get_bond_top);
     ClassDB::bind_static_method("BrickTerrain", D_METHOD("set_coarse_smooth_step", "step"),
         &BrickTerrain::set_coarse_smooth_step);
     ClassDB::bind_static_method("BrickTerrain", D_METHOD("get_coarse_smooth_step"),
