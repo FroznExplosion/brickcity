@@ -1739,6 +1739,40 @@ func _run_inventory_gate() -> void:
 			inv.backpack != null and inv.backpack.id == &"large_backpack" and int(scr.get("_storage_n")) == 27
 			and inv.main[5] != null and inv.main[5].id == &"terracotta"
 			and inv.hotbars[1][8] != null and inv.hotbars[1][8].id == &"small_backpack" and inv.cursor == null)
+	# Stage 9: crafting, real clicks. The sand stack picked up, one put in each
+	# craft cell (right click), sandstone taken from the output, the rest put
+	# back; the Recipes tab.
+	var sand_at := Inventory.addr(&"hotbar_0", 4)
+	await _click(_inv_slot(scr, sand_at).get_global_rect().get_center())
+	for i in 4:
+		await _click_button(_inv_slot(scr, Inventory.addr(&"craft", i)).get_global_rect().get_center(),
+				MOUSE_BUTTON_RIGHT)
+	var made_out := inv.get_slot(Inventory.addr(&"craft_out"))
+	check.call("one sand right-clicked into each craft cell: the output is sandstone",
+			made_out != null and made_out.id == &"sandstone")
+	await _click(_inv_slot(scr, sand_at).get_global_rect().get_center())
+	await _shot(UserPaths.DEV + "inv_craft.png")
+	await _click(_inv_slot(scr, Inventory.addr(&"craft_out")).get_global_rect().get_center())
+	check.call("clicking the output: sandstone on the cursor, the grid used up",
+			inv.cursor != null and inv.cursor.id == &"sandstone" and inv.craft.all(func(s): return s == null))
+	await _click(_inv_slot(scr, Inventory.addr(&"main", 10)).get_global_rect().get_center())
+	check.call("... put into storage", inv.main[10] != null and inv.main[10].id == &"sandstone" and inv.cursor == null)
+	var tab_r: Button = scr.get("_tab_recipes")
+	await _click(tab_r.get_global_rect().get_center())
+	await _frames(3)
+	check.call("the Recipes tab", scr.page == "recipes")
+	await _shot(UserPaths.DEV + "inv_recipes.png")
+	var winr := get_window()
+	var sizer := winr.size
+	winr.size = Vector2i(640, 400)
+	await _frames(10)
+	var cutr: Array = MenuFit.audit(scr, get_viewport().get_visible_rect())
+	check.call("the Recipes tab at 640x400: nothing cut off (%d)%s" % [cutr.size(),
+			"" if cutr.is_empty() else "
+" + MenuFit.describe(cutr)], cutr.is_empty())
+	winr.size = sizer
+	await _frames(10)
+	await _click(tab_s.get_global_rect().get_center())
 	# Fits a small window.
 	var win := get_window()
 	var size0 := win.size
@@ -1945,12 +1979,32 @@ func _run_inventory_gate() -> void:
 func _inv_slot(scr: InventoryScreen, a: Dictionary, item := &"") -> InvSlot:
 	for s in scr.find_children("*", "InvSlot", true, false):
 		var slot := s as InvSlot
+		if slot.show_count > 0:
+			continue        # the Recipes list's pictures, not the catalog's slots
 		if a.is_empty() and slot.addr.is_empty() and slot.item_id == item:
 			return slot
 		if not a.is_empty() and not slot.addr.is_empty() and slot.addr.area == a.area \
 				and slot.addr.index == a.index:
 			return slot
 	return null
+
+
+## A click with `button`, real events (the gates' `_click` is the left one).
+func _click_button(at: Vector2, button: MouseButton) -> void:
+	var m := InputEventMouseMotion.new()
+	m.position = at
+	m.global_position = at
+	Input.parse_input_event(m)
+	await _frames(2)
+	for down in [true, false]:
+		var b := InputEventMouseButton.new()
+		b.button_index = button
+		b.position = at
+		b.global_position = at
+		b.pressed = down
+		b.button_mask = (1 << (button - 1)) if down else 0
+		Input.parse_input_event(b)
+		await _frames(2)
 
 
 ## A left-button drag through `pts`, real events: press at the first, moves
