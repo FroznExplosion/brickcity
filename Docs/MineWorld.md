@@ -208,6 +208,19 @@ before any tile bakes. The menu's World tab has **Forget changes to this
 world**. A scripted pass writes to `user://dev/mine_saves/` and clears it
 first.
 
+**Saved by region (2026-11-20).** The edits are kept by 256 x 256-stud
+region in C++ (each region's edited cells and a changed flag; the edit table
+is still what readers look cells up in), and a save writes only the regions
+edited since the last one: `<save>.regions/r_<rx>_<rz>.edits` (zstd, `BCMR`
+format 1, field version, rx, rz, count, the same 13-byte records), on the
+worker. It used to pack every edit of the world on the main thread each
+autosave (`get_edits`: 1.6 ms at 100k edits, 16.6 ms at 1M) and rewrite the
+whole file (6.4 MB at 1M); after one brick at 1M edits it is now 0.11 ms and
+23 KB (mine_world_probe). A world with the old one-file save loads it, its
+first save writes every region, and only then is the file removed (`--gate`
+checks it). `BrickTerrain.take_dirty_regions` / `get_region_edits` /
+`get_region_studs`; `last_save_ms` is the save's main-thread part.
+
 **The edit hitch** (measured with `-- --gate`, 2026-11-17; other chats' probes
 were running, so the numbers are rough):
 

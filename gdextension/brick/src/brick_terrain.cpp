@@ -751,15 +751,17 @@ public:
         }
     }
 
-    /// The writer only.
-    void put(uint64_t key, int32_t val) {
+    /// The writer only. True when the key was new.
+    bool put(uint64_t key, int32_t val) {
         Table *t = cur_.load(std::memory_order_relaxed);
         if ((count_.load(std::memory_order_relaxed) + 1) * 2 > t->mask + 1) {
             t = grow(t);
         }
         if (insert(t, key, val)) {
             count_.fetch_add(1, std::memory_order_relaxed);
+            return true;
         }
+        return false;
     }
 
     size_t size() const { return count_.load(std::memory_order_relaxed); }
@@ -860,6 +862,24 @@ private:
 
 /// Plate cell -> material.
 EditTable g_edits;
+
+/// EDITS BY REGION (Docs/MineWorld.md 9): each REGION_STUDS square keeps the
+/// cells edited in it and whether any changed since the last save asked, so
+/// a save writes the regions that changed and nothing else. It used to pack
+/// every edit of the world on the main thread each autosave (get_edits: 1.6 ms
+/// at 100k edits, 16.6 ms at 1M) and rewrite the whole file. The main thread's
+/// alone: written by set_edit, read by take_dirty_regions / get_region_edits.
+/// The edit table above is still what every reader looks cells up in.
+constexpr int REGION_STUDS = 256;
+struct EditRegion {
+    std::vector<uint64_t> keys;   ///< cells edited here, each once
+    bool dirty = false;
+};
+std::unordered_map<int64_t, EditRegion> g_regions;
+
+inline int64_t region_key(int rx, int rz) {
+    return ((int64_t)(rx & 0xFFFFFFF) << 28) | (int64_t)(rz & 0xFFFFFFF);
+}
 /// Deepest edited plate per tile column, so `sample_tile` knows how far down
 /// it has to look. Without it the mask stopped SECTION_BELOW plates under the
 /// surface, anything dug past that was edited in the field but still read as
@@ -970,7 +990,13 @@ void set_edit(int x, int yp, int z, int material) {
     if (material != MAT_AIR && (!g_tile_ceiling.find(tk, was) || yp > was)) {
         g_tile_ceiling.put(tk, yp);
     }
-    g_edits.put((uint64_t)pack_cell(x, yp, z), (int32_t)(uint8_t)material);
+    const uint64_t key = (uint64_t)pack_cell(x, yp, z);
+    const bool fresh = g_edits.put(key, (int32_t)(uint8_t)material);
+    EditRegion &r = g_regions[region_key(floor_div(x, REGION_STUDS), floor_div(z, REGION_STUDS))];
+    if (fresh) {
+        r.keys.push_back(key);
+    }
+    r.dirty = true;
 }
 
 int highest_edit_near(int tx, int tz) {
@@ -1012,6 +1038,7 @@ void clear_edits() {
     g_tile_floor.clear();
     g_tile_ceiling.clear();
     g_placed.clear();
+    g_regions.clear();
 }
 
 size_t edit_count() {
@@ -2959,6 +2986,51 @@ int BrickTerrain::mark_placed(Vector3i lo, Vector3i hi, int material) {
         }
     }
     return n;
+}
+
+int BrickTerrain::get_region_studs() { return REGION_STUDS; }
+
+PackedInt32Array BrickTerrain::take_dirty_regions() {
+    PackedInt32Array out;
+    for (auto &e : g_regions) {
+        if (!e.second.dirty) {
+            continue;
+        }
+        e.second.dirty = false;
+        const int64_t k = e.first;
+        const int rx = (int)((k >> 28) & 0xFFFFFFF), rz = (int)(k & 0xFFFFFFF);
+        // 28-bit signed back to int.
+        out.push_back((rx & 0x8000000) ? rx - 0x10000000 : rx);
+        out.push_back((rz & 0x8000000) ? rz - 0x10000000 : rz);
+    }
+    return out;
+}
+
+PackedByteArray BrickTerrain::get_region_edits(int rx, int rz) {
+    PackedByteArray out;
+    auto it = g_regions.find(region_key(rx, rz));
+    if (it == g_regions.end()) {
+        return out;
+    }
+    const std::vector<uint64_t> &keys = it->second.keys;
+    out.resize((int64_t)keys.size() * 13);
+    uint8_t *w = out.ptrw();
+    size_t i = 0;
+    for (uint64_t key : keys) {
+        int32_t mat = 0;
+        g_edits.find(key, mat);
+        const int64_t k = (int64_t)key;
+        const int32_t v[3] = { unpack21(k >> 42), unpack21(k >> 21), unpack21(k) };
+        for (int a = 0; a < 3; ++a) {
+            const uint32_t u = (uint32_t)v[a];
+            w[i++] = (uint8_t)(u & 0xFF);
+            w[i++] = (uint8_t)((u >> 8) & 0xFF);
+            w[i++] = (uint8_t)((u >> 16) & 0xFF);
+            w[i++] = (uint8_t)((u >> 24) & 0xFF);
+        }
+        w[i++] = (uint8_t)mat;
+    }
+    return out;
 }
 
 PackedInt32Array BrickTerrain::get_placed() {
@@ -6478,6 +6550,10 @@ void BrickTerrain::_bind_methods() {
         &BrickTerrain::set_slope_pieces);
     ClassDB::bind_static_method("BrickTerrain", D_METHOD("get_slope_pieces"),
         &BrickTerrain::get_slope_pieces);
+    ClassDB::bind_static_method("BrickTerrain", D_METHOD("get_region_studs"), &BrickTerrain::get_region_studs);
+    ClassDB::bind_static_method("BrickTerrain", D_METHOD("take_dirty_regions"), &BrickTerrain::take_dirty_regions);
+    ClassDB::bind_static_method("BrickTerrain", D_METHOD("get_region_edits", "rx", "rz"),
+        &BrickTerrain::get_region_edits);
     ClassDB::bind_static_method("BrickTerrain", D_METHOD("mark_placed", "lo", "hi", "material"),
         &BrickTerrain::mark_placed);
     ClassDB::bind_static_method("BrickTerrain", D_METHOD("get_placed"), &BrickTerrain::get_placed);

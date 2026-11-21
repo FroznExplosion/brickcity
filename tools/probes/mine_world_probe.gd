@@ -53,6 +53,7 @@ func _initialize() -> void:
 	_check_build_blocks()
 	_check_break_brick()
 	_check_bond()
+	_check_edit_regions()
 	_check_pick_area()
 	_check_cave_colliders()
 	_check_deep_tier()
@@ -561,6 +562,63 @@ func _tile_tris(d: Dictionary) -> int:
 ## every cell of a brick names the same brick; between two courses of solid
 ## ground no seam stands right over a seam (where both bricks are whole: 2x2,
 ## 2x4, 4x2); the top course sits so on the course under it too.
+## EDITS BY REGION (Docs/MineWorld.md 9): a save asks for the regions edited
+## since it last asked (take_dirty_regions) and writes each one's edits
+## (get_region_edits) -- not every edit of the world on the main thread.
+func _check_edit_regions() -> void:
+	BrickTerrain.clear_terrain_edits()
+	var rs := BrickTerrain.get_region_studs()
+	BrickTerrain.fill_box(Vector3i(10, 1500, 10), Vector3i(11, 1502, 11), 4, false)       # region (0, 0)
+	BrickTerrain.fill_box(Vector3i(rs * 3 + 5, 1500, -rs + 5), Vector3i(rs * 3 + 5, 1502, -rs + 5), 4, false)   # (3, -1)
+	var d := BrickTerrain.take_dirty_regions()
+	var got := {}
+	for i in range(0, d.size(), 2):
+		got[Vector2i(d[i], d[i + 1])] = true
+	_expect(got.size() == 2 and got.has(Vector2i(0, 0)) and got.has(Vector2i(3, -1)),
+			"regions: the two edited regions are dirty (%s)" % [got.keys()])
+	_expect(BrickTerrain.take_dirty_regions().is_empty(), "regions: asking again, none")
+	BrickTerrain.fill_box(Vector3i(12, 1500, 12), Vector3i(12, 1500, 12), 4, false)
+	d = BrickTerrain.take_dirty_regions()
+	_expect(d.size() == 2 and d[0] == 0 and d[1] == 0, "regions: an edit again, only its region (%s)" % [d])
+	# A region's bytes load back to the same cells.
+	var a := BrickTerrain.get_region_edits(0, 0)
+	var b := BrickTerrain.get_region_edits(3, -1)
+	_expect(a.size() == (12 + 1) * 13 and b.size() == 3 * 13,
+			"regions: (0,0) holds 13 cells, (3,-1) 3 (%d, %d)" % [a.size() / 13, b.size() / 13])
+	BrickTerrain.clear_terrain_edits()
+	BrickTerrain.set_edits(a)
+	BrickTerrain.set_edits(b)
+	_expect(BrickTerrain.get_edit_count() == 16 and BrickTerrain.solid_at(rs * 3 + 5, 1501, -rs + 5) == 4,
+			"regions: loaded back, 16 cells, as they were")
+	# What a save costs at a million edits: one changed region, not all.
+	var buf := PackedByteArray()
+	var n := 1000000
+	buf.resize(n * 13)
+	var rng := RandomNumberGenerator.new()
+	rng.seed = 7
+	for i in n:
+		buf.encode_s32(i * 13, rng.randi_range(-3000, 3000))
+		buf.encode_s32(i * 13 + 4, rng.randi_range(0, 300))
+		buf.encode_s32(i * 13 + 8, rng.randi_range(-3000, 3000))
+		buf[i * 13 + 12] = 0
+	BrickTerrain.set_edits(buf)
+	BrickTerrain.take_dirty_regions()
+	BrickTerrain.fill_box(Vector3i(20, 300, 20), Vector3i(23, 302, 21), 4, false)   # a brick laid
+	var t0 := Time.get_ticks_usec()
+	var dr := BrickTerrain.take_dirty_regions()
+	var bytes := 0
+	for i in range(0, dr.size(), 2):
+		bytes += BrickTerrain.get_region_edits(dr[i], dr[i + 1]).size()
+	var region_ms := (Time.get_ticks_usec() - t0) / 1000.0
+	t0 = Time.get_ticks_usec()
+	var all := BrickTerrain.get_edits().size()
+	var all_ms := (Time.get_ticks_usec() - t0) / 1000.0
+	print("  save at %d edits: the changed region %.2f ms (%d KB), every edit %.1f ms (%d KB)" % [
+			BrickTerrain.get_edit_count(), region_ms, bytes / 1024, all_ms, all / 1024])
+	_expect(dr.size() == 2 and region_ms < all_ms / 4.0, "regions: a save after one brick asks one region, far under all of them")
+	BrickTerrain.clear_terrain_edits()
+
+
 func _check_bond() -> void:
 	BrickTerrain.clear_terrain_edits()
 	# A flat patch well inside a tile (the top course is one plate there).

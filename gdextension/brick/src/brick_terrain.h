@@ -829,6 +829,14 @@ public:
     /// stud; little-endian), uint8 material (0 = carved). For saving a world's
     /// changes (Docs/MineWorld.md 9); `set_edits` lays them back.
     static PackedByteArray get_edits();
+    /// EDITS BY REGION (Docs/MineWorld.md 9), for a save that writes only what
+    /// changed. The main thread only. A region is get_region_studs() square.
+    static int get_region_studs();
+    /// The regions (rx, rz pairs) edited since the last call, and forgets
+    /// that they were. Call once after loading to start clean.
+    static PackedInt32Array take_dirty_regions();
+    /// One region's edits, get_edits' 13-byte records (set_edits loads them).
+    static PackedByteArray get_region_edits(int rx, int rz);
     /// Lay edits from `get_edits`' bytes over the current ones. Returns how many.
     static int set_edits(const PackedByteArray &bytes);
     /// A placed block (Docs/TerrainBond.md 1): the plate box `lo`..`hi` just
