@@ -371,6 +371,25 @@ float pool_calm_at(vec2 p) {
 // water welled up out of it. Ground above still water gets the wave LATER the
 // higher it is, and less of it: the water climbs the beach terrace by
 // terrace and runs back, as a swash does.
+// THE REAL SEA's square (MineWater.md 11.8), world x0, z0, x1, z1: the
+// fluid mesher draws the sea there; these tiers leave it out and calm to
+// flat over `real_calm_m` toward it, so the two meet level.
+uniform vec4 real_rect = vec4(0.0);
+uniform float real_calm_m = 16.0;
+
+float real_ramp(vec2 p) {
+    if (real_rect.z <= real_rect.x) {
+        return 1.0;
+    }
+    vec2 o = max(max(real_rect.xy - p, p - real_rect.zw), vec2(0.0));
+    return smoothstep(0.0, real_calm_m, length(o));
+}
+
+bool in_real(vec2 p) {
+    return real_rect.z > real_rect.x && p.x > real_rect.x && p.x < real_rect.z
+            && p.y > real_rect.y && p.y < real_rect.w;
+}
+
 uniform float swash_delay = 1.4;   // seconds of delay per metre above still water
 uniform float swash_loss = 0.5;    // metres of the wave lost per metre climbed
 
@@ -390,8 +409,8 @@ float surface_offset(vec2 p, float t, float taper, float cell_m) {
     // water, a quarter at the beach (BrickWave swell_near_shore). No depth
     // clamp -- `taper` is 1.
     float calm = shore_calm.x + (1.0 - shore_calm.x) * smoothstep(0.0, shore_calm.y, dist);
-    return (wave_raw_lod(p, t, cell_m, dist) * taper * group_factor(p, t) * calm + band)
-            * pool_calm_at(p) - max(above, 0.0) * swash_loss;
+    return ((wave_raw_lod(p, t, cell_m, dist) * taper * group_factor(p, t) * calm + band)
+            * pool_calm_at(p) - max(above, 0.0) * swash_loss) * real_ramp(p);
 }
 
 /// Where this cell's brick sits, in metres.
@@ -633,6 +652,9 @@ void fragment() {
                 && textureLod(pool_mask, q, 0.0).r > 0.5) {
             discard;
         }
+    }
+    if (in_real(v_world.xz)) {
+        discard;
     }
     // Never inside a floating hull's dry cells (Docs/Hulls.md 6).
     if (hull_dry(v_world)) {

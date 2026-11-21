@@ -236,6 +236,28 @@ were running, so the numbers are rough):
   ms and 65 over 20 ms. Those ~24 ms frames are this machine's frame pacing
   with the test window off-screen and other tests running, not the edits.
 
+**The flicker round an edit (fixed 2026-11-20).** A tile an edit rebuilt went
+in at once as the new tile's flat surface with no studs, tufts or pebbles (the
+old tile's were recycled into the pool), the studs came back a few frames
+later and the chamfered near mesh later still: bevelled, flat and bare,
+studded, bevelled. Now a refresh bakes its chamfered mesh in the same worker
+job, the new tile is made hidden and finished a step a frame (bevel, then
+collider) while the old one is still drawn and collided with, and the two swap
+in one frame (`TerrainStreamer._swaps`, `_swap_step`): the old tile's instance
+nodes go to the pool and the new one fills them, it is shown, the old one goes.
+`--gate` counts frames with a near tile drawn flat or bare
+(`bare_near_tiles`): 0 of 300 edit frames. Swapping whole in ONE frame was a
+5.2 ms step; staged, the worst step is 1.1 ms (it was 1.0 before).
+
+**Sections were measured first, and are not the edit cost** (2026-11-20, quiet
+machine, 71 C start): `--gate`'s 12 shots and 30 rapid-fire shots beside the
+player rebuilt 42 whole tiles and no frame was worse than an idle frame
+(worst 23-24 ms both, mean 16.6 ms); the worst main-thread step of a rebuild
+was 1.0 ms. Splitting a tile into sections would cut a cost that is not there
+(and multiply the near tier's draws, ~300 a frame now). The lag the user sees
+breaking bricks has to be found where it is: beside running water, with the
+collapse surveying, debris bodies, a paging machine (LOW RAM in heat_sum).
+
 ## 10. Shots break whole bricks; flying
 
 **Whole bricks.** A shot breaks what a LEGO player would expect: the surface

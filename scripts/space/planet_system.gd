@@ -1603,7 +1603,7 @@ func _bake_service() -> void:
 
 
 func _bake_run() -> void:
-	_bake_result = PlanetImpostorBake.bake(_bake_data, _bake_size.x, _bake_size.y, false)
+	_bake_result = PlanetImpostorBake.cached_images(_bake_data, _bake_size.x, _bake_size.y)
 
 
 ## `b`'s full maps now, before its ground needs them (a worker's, waited for,
@@ -1618,7 +1618,7 @@ func _full_bake(b: PlanetBody) -> void:
 		_bake_result = {}
 		return
 	var t0 := Time.get_ticks_msec()
-	b.apply_bake(PlanetImpostorBake.bake(b.data, BAKE_FULL.x, BAKE_FULL.y))
+	b.apply_bake(PlanetImpostorBake.cached(b.data, BAKE_FULL.x, BAKE_FULL.y))
 	print("[system] %s baked on arrival: %d ms" % [b.data.planet_name, Time.get_ticks_msec() - t0])
 
 

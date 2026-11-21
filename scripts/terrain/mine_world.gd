@@ -594,7 +594,8 @@ func _land_breaks() -> void:
 		var res: Dictionary = BrickTerrain.clear_runs(runs)
 		if int(res.get("removed", 0)) == 0:
 			continue
-		debris.spawn(found["debris"], job[2])
+		# What a shot destroys is gone (the user, 2026-11-20): no brick thrown.
+		# What it leaves hanging falls -- the collapse, from terrain_edited.
 		terrain_edited(res)
 
 
@@ -2625,6 +2626,19 @@ func _gate_collapse() -> void:
 	var stands := BrickTerrain.solid_at(arm_cell.x, arm_cell.y, arm_cell.z) == 4
 	print("[mine-collapse] %s  the stone arm stands on its pillar" % ("ok  " if stands else "FAIL"))
 	fails += 0 if stands else 1
+	# A shot into the ground: its brick is gone, nothing is thrown (2026-11-20).
+	var gx := o.x + 20
+	var gz := o.y + 8
+	var gtop: int = top.call(gx, gz)
+	var bodies0: int = debris.bodies.size()
+	var edits0 := BrickTerrain.get_edit_count()
+	_mine(Vector3((gx + 0.5) * stud, (gtop + 1) * plate + 0.01, (gz + 0.5) * stud) + Vector3.DOWN * 0.03,
+			Vector3.DOWN, StructuralDamage.for_shot(null))
+	await _frames(20)
+	var gone_ok: bool = BrickTerrain.get_edit_count() > edits0 and debris.bodies.size() == bodies0
+	print("[mine-collapse] %s  a shot deletes its brick, throws none (%d plates edited, %d bodies thrown)" % [
+			"ok  " if gone_ok else "FAIL", BrickTerrain.get_edit_count() - edits0, debris.bodies.size() - bodies0])
+	fails += 0 if gone_ok else 1
 	# A floating dirt block and a floating sand block beside it.
 	var made0 := int(collapse.groups_let_go)
 	var d0 := Vector3i(o.x + 4, b + 30, o.y + 6)
@@ -3310,6 +3324,7 @@ func _run_sea_gate() -> void:
 			(Vector3(dir.x, 0, dir.y) * 0.6 - along).normalized())
 	walker.pitch = -0.35
 	await _frames(40)
+	print("[sea-gate] real sea square %s (tiles)" % water.real_rect)
 	for k in 3:
 		await _shot(dev + "sea_beach_%d.png" % k)
 		await _frames(60)
@@ -3689,6 +3704,9 @@ func _gate_edits() -> void:
 			idle_slow += 1
 	print("[mine-gate] idle: 180 frames, worst %.1f ms, %d over 20 ms" % [idle_worst, idle_slow])
 	_streamer.reset_stats()
+	# Frames where a tile near the camera was drawn flat or without its
+	# studs (the flicker round an edit): 0 since a refresh swaps whole.
+	var bare := 0
 	TerrainTile.profile_instances = true
 	TerrainTile.instance_ms.clear()
 	var worst := 0.0
@@ -3702,6 +3720,8 @@ func _gate_edits() -> void:
 		for f in 15:
 			var t0 := Time.get_ticks_usec()
 			await get_tree().process_frame
+			if _streamer.bare_near_tiles() > 0:
+				bare += 1
 			var ms := float(Time.get_ticks_usec() - t0) / 1000.0
 			worst = maxf(worst, ms)
 			sum += ms
@@ -3721,6 +3741,8 @@ func _gate_edits() -> void:
 		for f in 4:
 			var t0 := Time.get_ticks_usec()
 			await get_tree().process_frame
+			if _streamer.bare_near_tiles() > 0:
+				bare += 1
 			var ms := float(Time.get_ticks_usec() - t0) / 1000.0
 			worst2 = maxf(worst2, ms)
 			sum2 += ms
@@ -3737,6 +3759,8 @@ func _gate_edits() -> void:
 	print("[mine-gate] rapid fire (%s): 30 shots, worst frame %.1f ms, mean %.1f ms, %d of 180 frames over 20 ms, %s" % [
 			"coalesced" if _coalesce else "each at once", worst2, sum2 / n2, slow, _streamer.report()])
 	TerrainTile.profile_instances = false
+	print("[mine-gate] %s flicker: %d of 300 edit frames drew a near tile flat or bare (want 0)" % [
+			"ok  " if bare == 0 else "FAIL", bare])
 	var keys := TerrainTile.instance_ms.keys()
 	keys.sort()
 	print("[mine-gate] instances phase, worst by step: %s" % ", ".join(keys.map(

@@ -264,3 +264,59 @@ by eye 2026-11-20: as the bricks should look.
   `BrickTerrain.find_bricks`, C++ added by another chat after the library was copied.)
 
 Left: the load's 240-530 ms frames (behind the loading veil now).
+
+## 8. The load, timed and cut (2026-11-20)
+
+`res://scenes/planet.tscn -- --gate=load` (windowed: the trees' cards need a renderer) times
+`_ready` part by part (`PlanetScene._lap`), then every frame by the clock until 12 s after the
+player stands (`LOAD_WATCH_MS`), printing each long frame after the spawn, the trees', the
+buildings', the scene's and the ship's worst `_process` by part. `-- --ship-off` stops the
+parked ship's processing at the spawn (an A/B).
+
+**What the load was** (before): engine up to the scene 4.1-6.0 s (Godot's own start and the
+autoloads; not timed further); `_ready` 3.7 s -- the home planet's far-look bake 1.5-1.7 s, the
+star system 1.0-1.1 s (the generated ship: grown 0.74 s, a room count that worked out every
+door's sides ~0.1-0.2 s), the brick shapes 0.33-0.37 s, the buildings' setup 0.2-0.3 s; then
+~1.3 s to the player standing, with long frames for the trees' cards and first shaders (200-300
+ms, frame 2), and the spawn's own frame (280-345 ms: the pawn, gun, arms and kit made).
+
+**Found on the way, worse than the load: a stutter in play.** Standing by the parked ship, a
+frame of 85-120 ms came every 0.25 s, for as long as the player stayed (46 in 12 s). `--ship-off`
+took all of them away; timing the ship's `_process` by part put 123 ms in `VentDust.update`,
+which four times a second asked `HullAir.compartments()` -- every room's door sides worked out
+-- only to find the rooms with holes. It asks `HullAir.breached_roots()` now: 0.0 ms, and the
+long frames after the spawn went from 46 to 1 (the spawn's own).
+
+**Also fixed:** quitting before the AI took the town's nav regions (a gate that has no AI, or
+the player quitting while it loads) left their worker tasks never waited for: signal 11 at exit.
+`PlanetScene._exit_tree` waits for them (`PlanetNavNet.wait_builds`).
+
+**Cut:**
+
+| | before | after |
+|---|---|---|
+| the planet's far look (`PlanetImpostorBake.cached`) | 1.5-1.7 s every start | 60-105 ms from `user://cache/` (first start, or after its code or numbers change: baked and kept) |
+| the system's other worlds (`cached_images`, on their worker) | baked every visit | from the cache too |
+| the ship's room count at load (`HullAir.room_count`) | `compartments()` | a count |
+| `_ready`, warm cache | 3.7 s | ~1.6 s |
+| player standing, after `_ready` | 1.3 s | ~1.0 s |
+
+The cache key is the planet's numbers that shape its ground and the md5 of the four scripts that
+make the maps (`PlanetImpostorBake.CACHE_SCRIPTS`): a change to the terrain, the biomes or the
+trees' table bakes again, and nothing stale is ever loaded. `UserPaths.CACHE` (`user://cache/`) is
+new: safe to delete whole. `user_paths_probe` 22/0, `content_packs_probe` 46/0.
+
+**Tried and kept out:** the brick shapes made within 200 m at load instead of 400 m: 230 ms off
+the load, but the shapes left were built in play in 15-21 ms frames and `--gate=bricks` failed its
+"< 12 ms a frame" check. Back at 400 m.
+
+**Not cached, on purpose:** the generated ship (0.74 s). Its growth reads the whole room-module
+library, the player's own rooms included; a key safe against all of it would be most of the work
+it saves, and a stale ship after a room is edited is worse than the time. Cheaper next steps if
+wanted: grow it on a worker during the load (its recipe is plain data), or lay it after the spawn.
+
+**Left, behind the loading veil** (it lifts 20 frames after the spawn): the spawn's own frame
+(~280 ms, making the player), the first card bakes and shaders (~200 ms), the engine's start.
+
+Gates after: hull 23/0, system 17/0, worlds 8/0, jump 10/0, bricks 11/0, ship 9/0, `system_probe`
+34/0.

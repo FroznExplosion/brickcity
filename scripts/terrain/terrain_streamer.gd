@@ -127,6 +127,13 @@ var _near_centre := Vector2i(1 << 30, 0)
 var _shown_centre := Vector2i(1 << 30, 0)
 ## Chamfered bakes in flight: tile coord -> [task id, result holder, tile].
 var _bevel_tasks := {}
+## REFRESHES IN WAITING (an edit's rebuilt tiles): coord -> {tile, near,
+## step}. The new tile is made hidden and finished a step a frame -- its
+## chamfered mesh, then its collider -- while the old one is still drawn and
+## collided with; then the two swap in one frame (_swap_step). Swapping at
+## once showed the new tile flat and bare for a few frames (the flicker round
+## every edit); swapping whole in one frame cost a 5 ms step.
+var _swaps := {}
 const BEVEL_IN_FLIGHT := 2
 ## Worst single phase seen, split three ways — which one hurts is the whole
 ## question when a hitch has to be chased.
@@ -146,6 +153,7 @@ var bevel_ms := 0.0
 var _worst_surface_ms := 0.0
 var _worst_inst_ms := 0.0
 var _worst_coll_ms := 0.0
+var _worst_swap_ms := 0.0
 
 
 func setup(material: Material) -> void:
@@ -176,6 +184,8 @@ func _exit_tree() -> void:
 	for c in _bevel_tasks:
 		WorkerThreadPool.wait_for_task_completion(_bevel_tasks[c][0])
 	_bevel_tasks.clear()
+	for c in _swaps.keys():
+		_drop_swap(c)
 	# The tiles have left already (children go first) and handed their
 	# MultiMeshes to TerrainTile's static pool. Empty it now, while the
 	# renderer is still up: a static holding meshes past the end of the
@@ -260,7 +270,7 @@ func _bevel_step() -> void:
 func settle(camera_xz: Vector2, rounds := 4000) -> void:
 	for i in rounds:
 		follow(camera_xz)
-		if _tasks.is_empty() and _dirty.is_empty() and _drops_pending == 0 				and _wanted_missing(camera_xz) == 0:
+		if _tasks.is_empty() and _dirty.is_empty() and _swaps.is_empty() and _drops_pending == 0 				and _wanted_missing(camera_xz) == 0:
 			# One more pass with no budget, so a settled world is whole and
 			# not three frames from being whole.
 			var saved := budget_ms
@@ -303,6 +313,9 @@ func fresh(rect: Rect2i) -> bool:
 	for c in _dirty:
 		if rect.has_point(c):
 			return false
+	for c in _swaps:
+		if rect.has_point(c):
+			return false
 	for c in _stale:
 		if rect.has_point(c):
 			return false
@@ -326,6 +339,7 @@ func invalidate(rect: Rect2i) -> void:
 	for c in gone:
 		var tile: TerrainTile = _tiles[c]
 		_tiles.erase(c)
+		_drop_swap(c)
 		_dirty.erase(c)
 		tile.recycle()
 		tile.queue_free()
@@ -339,6 +353,7 @@ func reset_stats() -> void:
 	_worst_surface_ms = 0.0
 	_worst_inst_ms = 0.0
 	_worst_coll_ms = 0.0
+	_worst_swap_ms = 0.0
 
 
 ## Is this tile BUILT? Not "wanted" — built. The coarse tier asks before it
@@ -369,10 +384,23 @@ func tile_count() -> int:
 	return _tiles.size()
 
 
+## Tiles near the camera drawn but not whole (TerrainTile.is_whole): what
+## the eye sees flicker when an edit rebuilds the ground (--gate counts it).
+func bare_near_tiles() -> int:
+	var n := 0
+	for c in _tiles:
+		if absi(c.x - _centre.x) > near_show_radius or absi(c.y - _centre.y) > near_show_radius:
+			continue
+		var t: TerrainTile = _tiles[c]
+		if t.visible and not t.is_whole():
+			n += 1
+	return n
+
+
 func report() -> String:
-	return "%d resident  %d built  %d dropped  worst %.1f ms (surface %.1f, inst %.1f, coll %.1f)" % [
+	return "%d resident  %d built  %d dropped  worst %.1f ms (surface %.1f, inst %.1f, coll %.1f, swap %.1f)" % [
 		_tiles.size(), _built, _dropped, _worst_tile_ms,
-		_worst_surface_ms, _worst_inst_ms, _worst_coll_ms]
+		_worst_surface_ms, _worst_inst_ms, _worst_coll_ms, _worst_swap_ms]
 
 
 func tiles() -> Array:
@@ -487,9 +515,18 @@ func _collect(cx: int, cz: int) -> void:
 		var slot: int = _free_slots.pop_back()
 		_slot_coord[slot] = c
 		_slots[slot] = {}
+		# A tile rebuilt by an edit near the camera bakes its chamfered near
+		# mesh in the same job, so the new tile goes in whole (_assemble's
+		# swap) instead of flat first and bevelled a few frames later.
+		var with_near := _tiles.has(c) and TerrainTile.bevel_enabled \
+				and absi(c.x - _centre.x) <= bevel_radius and absi(c.y - _centre.y) <= bevel_radius
 		# The slot is this task's alone, so the worker writes without a lock.
 		_slot_task[slot] = WorkerThreadPool.add_task(
-			func() -> void: _slots[slot] = TerrainTile.bake(c.x, c.y),
+			func() -> void:
+				var d := TerrainTile.bake(c.x, c.y)
+				if with_near:
+					d["near"] = BrickTerrain.build_tile_chamfered(c.x, c.y, TerrainTile.BEVEL)
+				_slots[slot] = d,
 			true, "terrain tile")
 		_tasks[c] = slot
 
@@ -516,12 +553,7 @@ func _assemble() -> void:
 			if _tiles.has(c):
 				_dirty[c] = true
 			continue
-		var replacing := _tiles.has(c)
-		if replacing:
-			# A refresh: the new tile replaces the old one only now it exists.
-			(_tiles[c] as TerrainTile).recycle()
-			(_tiles[c] as TerrainTile).queue_free()
-			_tiles.erase(c)
+		var old: TerrainTile = _tiles.get(c)
 		_dirty.erase(c)
 
 		var t1 := Time.get_ticks_usec()
@@ -530,18 +562,30 @@ func _assemble() -> void:
 		tile.phases = true          # surface now, the rest on later frames
 		add_child(tile)
 		tile.build(c.x, c.y, _material, data)
+		var near := absi(c.x - _centre.x) <= near_show_radius and absi(c.y - _centre.y) <= near_show_radius
+		if old != null:
+			# A REFRESH (an edit): made hidden and finished over the next
+			# frames, the old tile drawn and collided with till the swap.
+			tile.visible = false
+			if _swaps.has(c):
+				# Edited again before the last one swapped: that one is stale.
+				var stale: TerrainTile = _swaps[c].tile
+				stale.recycle()
+				stale.queue_free()
+			_swaps[c] = {"tile": tile, "near": data.get("near", {}), "step": 0}
+			var sms0 := float(Time.get_ticks_usec() - t1) / 1000.0
+			_worst_surface_ms = maxf(_worst_surface_ms, sms0)
+			_worst_tile_ms = maxf(_worst_tile_ms, sms0)
+			_assemble_ms = float(Time.get_ticks_usec() - t0) / 1000.0
+			if _assemble_ms >= budget_ms:
+				return
+			continue
+		tile.set_near(near)
 		if pinned.has_area():
 			tile.visible = _shown(c, _keep_rect(_centre.x, _centre.y))
-		if replacing:
-			# The ground under something that is standing on it -- a
-			# building, the brush's own aim, debris -- must not go a frame
-			# without collision. The studs can wait; the collider cannot.
-			tile.add_collision()
 		_tiles[c] = tile
 		_built += 1
 		_finish_pending = true
-		tile.set_near(absi(c.x - _centre.x) <= near_show_radius
-				and absi(c.y - _centre.y) <= near_show_radius)
 		# The budget can only stop the NEXT piece of work, so ONE piece is
 		# the floor on a hitch. Assembling a whole tile at once put that
 		# floor at 54 ms, which is why a tile is three phases now.
@@ -553,8 +597,60 @@ func _assemble() -> void:
 		if _assemble_ms >= budget_ms:
 			return   # the rest can wait a frame
 
+	_swap_step(t0)
 	if not hold:
 		_finish(t0)
+
+
+## Each refresh in waiting one step on, under the frame's budget: its
+## chamfered mesh, its collider (a few boxes a frame, joining the physics
+## space when complete -- with the old one still there, so the ground the old
+## tile draws stays solid), then the swap: the old tile's instance nodes go to
+## the pool and the new one fills them (drawn before: a copy), it is shown and
+## the old one goes, all in one frame -- nothing is drawn half-built.
+func _swap_step(t0: int) -> void:
+	for c in _swaps.keys():
+		if float(Time.get_ticks_usec() - t0) / 1000.0 >= budget_ms:
+			return
+		var job: Dictionary = _swaps[c]
+		var tile: TerrainTile = job.tile
+		var old: TerrainTile = _tiles.get(c)
+		if old == null or not is_instance_valid(tile):
+			_swaps.erase(c)
+			continue
+		var t1 := Time.get_ticks_usec()
+		match int(job.step):
+			0:
+				if not (job.near as Dictionary).is_empty():
+					tile.add_bevel(job.near)
+				job.near = {}
+				job.step = 1
+			1:
+				tile.set_casts_shadow(old.casts_shadow())
+				if tile.add_collision(shapes_per_frame):
+					job.step = 2
+			_:
+				tile.set_near(absi(c.x - _centre.x) <= near_show_radius
+						and absi(c.y - _centre.y) <= near_show_radius)
+				old.recycle()
+				tile.add_instances()
+				tile.visible = old.visible
+				old.queue_free()
+				_tiles[c] = tile
+				_swaps.erase(c)
+				_built += 1
+		var ms := float(Time.get_ticks_usec() - t1) / 1000.0
+		_worst_tile_ms = maxf(_worst_tile_ms, ms)
+		_worst_swap_ms = maxf(_worst_swap_ms, ms)
+
+
+func _drop_swap(c: Vector2i) -> void:
+	if _swaps.has(c):
+		var t: TerrainTile = _swaps[c].tile
+		if is_instance_valid(t):
+			t.recycle()
+			t.queue_free()
+		_swaps.erase(c)
 
 
 ## The later phases, nearest first, still under the frame's budget.
@@ -620,6 +716,7 @@ func _drop(cx: int, cz: int) -> void:
 	for c in gone:
 		var tile: TerrainTile = _tiles[c]
 		_tiles.erase(c)
+		_drop_swap(c)
 		_dirty.erase(c)
 		tile.recycle()
 		tile.queue_free()

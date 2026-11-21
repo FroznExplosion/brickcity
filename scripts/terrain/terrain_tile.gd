@@ -242,6 +242,12 @@ func set_casts_shadow(on: bool) -> void:
 			(child as MeshInstance3D).cast_shadow = mode
 
 
+## Whether this tile casts into the sun's shadow map (set_casts_shadow): a
+## tile rebuilt by an edit takes the one it replaces.
+func casts_shadow() -> bool:
+	return _shadow_on
+
+
 func has_collision() -> bool:
 	return _collision_done
 
@@ -312,6 +318,18 @@ var _near_surface: MeshInstance3D = null
 
 
 ## Does this tile still want its chamfered mesh?
+## Is the tile drawn as it should be up close -- its instances in and, near
+## the camera, its chamfered mesh? A tile an edit rebuilt used to show flat
+## and bare for a few frames (TerrainStreamer._assemble swaps it whole now).
+func is_whole() -> bool:
+	if _data.is_empty():
+		return true
+	if not _instances_done:
+		return false
+	return not (_near and bevel_enabled and _near_surface == null
+			and not (_data.get("mesh", []) as Array).is_empty())
+
+
 func needs_bevel() -> bool:
 	return bevel_enabled and not _bevel_done and not _data.is_empty()
 

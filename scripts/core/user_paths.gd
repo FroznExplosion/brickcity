@@ -16,6 +16,9 @@ extends RefCounted
 ##       exports/         files written to take elsewhere: assets/ parts/
 ##       dev/             nothing a player needs: probe files, shots, test
 ##                        saves, look tuning. Safe to delete whole.
+##       cache/           what the game worked out once and keeps so the next
+##                        start is quicker: a planet's far look (its maps).
+##                        Safe to delete whole; made again when needed.
 ##
 ## `library/` has a pack's folders (ContentPacks.FOLDERS) on purpose: add a
 ## pack.json to a copy of it and it is a mod.
@@ -35,9 +38,10 @@ const PROFILE := "user://profile/"
 const WORKSHOP := "user://workshop/"
 const EXPORTS := "user://exports/"
 const DEV := "user://dev/"
+const CACHE := "user://cache/"
 
 ## The folders made at start, so a writer never meets a missing one.
-const MADE := ["library/", "profile/", "workshop/", "exports/", "dev/"]
+const MADE := ["library/", "profile/", "workshop/", "exports/", "dev/", "cache/"]
 
 ## Old place -> new place, both under user://. A name ending in / is a folder,
 ## moved file by file. Never reorder into a chain (a new place that is another
