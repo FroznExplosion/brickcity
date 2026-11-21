@@ -39,6 +39,10 @@ const WORKSHOP := "user://workshop/"
 const EXPORTS := "user://exports/"
 const DEV := "user://dev/"
 const CACHE := "user://cache/"
+## The cache's size kept under this: the oldest files go first (`prune_cache`).
+## A change to the code a file was made by gives it a new name, so old ones are
+## left behind; this is what clears them.
+const CACHE_MAX_BYTES := 256 * 1024 * 1024
 
 ## The folders made at start, so a writer never meets a missing one.
 const MADE := ["library/", "profile/", "workshop/", "exports/", "dev/", "cache/"]
@@ -122,6 +126,34 @@ static func migrate(root := ROOT) -> PackedStringArray:
 
 
 ## Where a library folder is: `library("builds")` is "user://library/builds/".
+## The oldest files in CACHE deleted until it is under CACHE_MAX_BYTES. Called
+## after a writer adds one (a few dozen files: cheap).
+static func prune_cache(max_bytes := CACHE_MAX_BYTES) -> int:
+	var dir := DirAccess.open(CACHE)
+	if dir == null:
+		return 0
+	var files: Array = []
+	var total := 0
+	for name in dir.get_files():
+		var path := CACHE + name
+		var f := FileAccess.open(path, FileAccess.READ)
+		var size := f.get_length() if f != null else 0
+		f = null
+		files.append([FileAccess.get_modified_time(path), path, size])
+		total += size
+	if total <= max_bytes:
+		return 0
+	files.sort_custom(func(a: Array, b: Array) -> bool: return int(a[0]) < int(b[0]))
+	var gone := 0
+	for e in files:
+		if total <= max_bytes:
+			break
+		if DirAccess.remove_absolute(e[1]) == OK:
+			total -= int(e[2])
+			gone += 1
+	return gone
+
+
 static func library(folder: String) -> String:
 	return LIBRARY + folder + "/"
 

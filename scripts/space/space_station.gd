@@ -961,7 +961,10 @@ func _prepare_generated() -> void:
 	var t0 := Time.get_ticks_usec()
 	# A boat (Docs/Hulls.md 7) is laid as a ship is: a build, its bow its nose.
 	var ship := data.kind == "ship" or data.kind == "boat"
+	# Grown ahead on a worker if the scene started it (ShipBuild.start).
+	var ahead := ShipBuild.take(data.orbital_seed) if data.kind == "ship" else {}
 	var made := BoatBuild.make(data.orbital_seed) if data.kind == "boat" \
+			else ahead if not ahead.is_empty() \
 			else ShipBuild.make(data.orbital_seed) if ship else RoomStation.generate(StationKit.library(),
 			{"seed": data.orbital_seed, "modules": 12 + data.orbital_seed % 12, "spine": 3 + data.orbital_seed % 3,
 			"section_bricks": SECTION_BRICKS})

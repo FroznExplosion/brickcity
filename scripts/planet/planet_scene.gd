@@ -167,6 +167,9 @@ var _last_us := 0
 ## "brick work stays small a frame (< 12 ms)" failed. Kept at 400.
 const TEMPLATES_AT_LOAD_M := 400.0
 
+## The parked ship's seed (a generated hull with its rooms).
+const SHIP_SEED := 7
+
 ## The planet's gravity is this scene's: off with it, so the next scene (the
 ## city, the menu) is not pulled toward a freed planet (Gravity.reset).
 func _exit_tree() -> void:
@@ -234,6 +237,11 @@ func _ready() -> void:
 	_home_gate = "--gate=home" in OS.get_cmdline_user_args()
 	_save_gate = "--gate=save" in OS.get_cmdline_user_args()
 	WorldFrame.origin = Vector3.ZERO
+	# The parked ship grown on a worker while the planet and its towns are made
+	# (Docs/PlanetCost.md 9); finished before the brick shapes, which share its
+	# room caches (KitFurnish: RoomManifest, RoomTemplates).
+	if not _gate or _hull_gate or _cost_gate or _load_gate:
+		ShipBuild.start(SHIP_SEED)
 	_gate = _gate or _cost_gate or _load_gate or _light_gate or _system_gate or _ship_gate or _dock_gate or _worlds_gate or _jump_gate or _debris_gate or _adrift_gate or _falling_gate or _mechwave_gate or _rocks_gate or _garrison_gate or _seat_gate or _hull_gate or _belt_gate or _home_gate or _save_gate or _pawn_gate or _mech_gate or _tank_gate or _soldier_gate or _squad_gate or _travel_gate or _far_gate or _drive_gate or _trees_gate or _bricks_gate or _damage_gate or _fall_gate or _hits_gate or _topple_gate or _pieces_ai_gate or _storey_gate or _snap_gate or _farfight_gate
 	data = PlanetData.new()
 	data.planet_name = "proto"
@@ -280,7 +288,8 @@ func _ready() -> void:
 	trees.prebake()
 	_lap("trees set up (cards baking)")
 	# The brick buildings' shapes round the spawn, while it loads (11.11).
-	_lap_at = Time.get_ticks_usec()
+	ShipBuild.finish(SHIP_SEED)
+	_lap("ship grown (its wait)")
 	var tpl_ms := buildings.prepare_templates(planet.global_position + data.surface_point(spawn_dir), TEMPLATES_AT_LOAD_M)
 	Gravity.planet = planet
 	Gravity.planet_strength = data.gravity_strength
@@ -456,8 +465,10 @@ const RAM_SHIP_SHARE := 0.6
 ## The pawn, its controller, camera, gun and arms, standing at `feet`, looking
 ## along `facing` (tangent). Built once; placed again after a flight.
 func _spawn_player(feet: Vector3, facing: Vector3) -> void:
+	_lap_at = Time.get_ticks_usec()
 	# The rig the mine world shares (FpsRig); the planet's own groups after.
 	var parts := FpsRig.make_player(self, feet, SEE_FAR, _gate)
+	_lap("spawn: pawn, gun, arms (FpsRig)")
 	cam = parts.cam
 	pawn = parts.pawn
 	player = parts.player
@@ -469,18 +480,40 @@ func _spawn_player(feet: Vector3, facing: Vector3) -> void:
 	gun.add_to_group(PlanetSystem.RIG)
 	_face(facing)
 	_set_on_foot(true)
-	# The AI it fights: the town's region (11.8 N2), unless a gate sets up its own.
-	if ai == null and not _gate:
+	_lap("spawn: on foot")
+	# In play the rest comes a frame apart (Docs/PlanetCost.md 9): one 420 ms
+	# frame was the pawn, the AI and the kit made together. The gates take it in
+	# one frame, as they were written to (they use the kit once the pawn is there).
+	var staged := not _gate or _load_gate
+	if staged:
+		await get_tree().process_frame
+		_lap_at = Time.get_ticks_usec()
+	# The AI it fights: the town's region (11.8 N2), unless a gate sets up its own
+	# (the load gate takes play's).
+	if ai == null and (not _gate or _load_gate):
 		setup_ai(town_dirs[0])
+		_lap("spawn: the AI")
 		_home_garrison()
+		_lap("spawn: the garrison")
+		if staged:
+			await get_tree().process_frame
+			_lap_at = Time.get_ticks_usec()
 	var s := ai
 	if s == null:
 		s = AIServices.new()
 		s.world3d = get_world_3d()
 	kit = PlayerKit.attach(self, player, cam, gun, s, {"scripted": _gate})
+	_lap("spawn: kit")
 	kit.enter(pawn, view)
+	_lap("spawn: kit entered")
 	kit.add_to_group(PlanetSystem.RIG)
 	pawn.health.died.connect(_on_player_down)
+	# The loading veil and a saved game's way back, once the player is whole.
+	if _loading_veil:
+		_loading_veil = false
+		_lift_veil()
+	if saver != null:
+		saver.resume()
 
 
 ## The player is down: up again in a moment, beside the ship if it is on the same
@@ -886,7 +919,7 @@ func _build_system() -> void:
 		# the gates keep the plain one they were written round.
 		if not _gate or _hull_gate or _cost_gate or _load_gate:
 			sd.layout = "generated"
-			sd.orbital_seed = 7
+			sd.orbital_seed = SHIP_SEED
 		var east := spawn_dir.cross(Vector3.FORWARD).normalized()
 		var at := _round_dir(spawn_dir, -east, 45.0)
 		var x := (-east - at * (-east).dot(at)).normalized()
@@ -1317,12 +1350,8 @@ func _process_body(delta: float) -> void:
 	if walker.frozen and not piloting and pawn == null and trees.prebaked and _ground_hit(walker.global_position) != Vector3.INF:
 		walker.frozen = false
 		if not _gate or _pawn_gate or _mech_gate or _tank_gate or _soldier_gate or _squad_gate or _travel_gate or _far_gate or _drive_gate or _trees_gate or _bricks_gate or _damage_gate or _fall_gate or _hits_gate or _topple_gate or _pieces_ai_gate or _storey_gate or _snap_gate or _farfight_gate or _garrison_gate or _seat_gate or _home_gate or _mechwave_gate or _hull_gate or _save_gate or _light_gate or _cost_gate or _load_gate:
+			# Over two frames more in play: the veil and the save's way back at its end.
 			_spawn_player(_ground_hit(walker.global_position), -walker.global_transform.basis.z)
-			if _loading_veil:
-				_loading_veil = false
-				_lift_veil()
-			if saver != null:
-				saver.resume()
 	_plap("expose, spawn")
 	if not on_foot:
 		walker.flying = pawn != null or walker.flying

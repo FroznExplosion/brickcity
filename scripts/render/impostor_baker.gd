@@ -121,6 +121,8 @@ static func bake(host: Node, what: Variant, grid: int = GRID, tile: int = TILE) 
 		var img := vp.get_texture().get_image()
 		img.generate_mipmaps()
 		out["albedo" if pass_mode == 0 else "normal"] = ImageTexture.create_from_image(img)
+		# The image too, for a cache on disk (ImpostorLod.baked).
+		out["albedo_image" if pass_mode == 0 else "normal_image"] = img
 	vp.queue_free()
 	return out
 
