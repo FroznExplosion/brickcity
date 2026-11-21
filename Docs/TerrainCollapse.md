@@ -237,6 +237,29 @@ with smooth tops; islands came off a brick at a time, never in big chunks.
   32 (studs, plates, studs); a bigger one is split. The survey stops growing
   at 1.2 M cells or 120k virtual bricks (what reaches past is held).
 
+### 8.2 2026-11-20: cost, and cave ceilings
+
+After the ground's bond (Docs/TerrainBond.md) the survey read the top course
+from the tiles' own pieces, packing each tile it covered: 97% of a survey
+(29 of 31 ms for an arm, 137 of 155 for a long one; 2.5 s seen in play), and
+cave ceilings came down whole from one shot.
+
+- **Top course cached across surveys** by `brick::tile_version` (a lock-free
+  counter per tile, bumped by an edit or placement in or next to it, and for
+  all tiles when the world is set up again). The same survey again: 1.3 ms.
+  The real fix is ground bricks kept per section (another chat's plan): the
+  survey would read each cell's brick from them and pack nothing.
+- **Growing the region is asked of cells** (a face-to-face flood from the
+  region's bottom) before any brick is laid, so a grown region lays and
+  solves its bricks once, at its final size.
+- **Only what touches the edit falls**: a group with no brick within a stud
+  and a course of the edit box was loose before it (the generator leaves bits
+  floating) and stays.
+- **Ground is 4x the buildings' stud strength** (`TERRAIN_TIMES`): a real
+  ceiling at 1x dropped 4,030 cells in 164 groups from one shot. Probe, 40
+  generated cave ceilings shot: the most that comes down is 8 loose cells;
+  survey 39 ms mean, 185 worst, on a worker, cold cache.
+
 Not done / known:
 
 - **Sand lands on pieces** (2026-11-19): a falling column casts down along its
