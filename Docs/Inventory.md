@@ -4,7 +4,7 @@ Ported from zylanntest's `game/inventory/` (its README is the design this
 follows), shaped to brickcity: content packs, MenuScreen, no renderer
 read-backs, and the arsenal left alone.
 
-Status: all five stages built (branch `mine-inventory`). What is left is under "Later".
+Status: stages 1-5 built; round two (6-9: character inventory, survival switch, backpacks, crafting) in progress.
 
 ## 1. Two systems, one pair of hands
 
@@ -180,9 +180,46 @@ The inventory is saved in the mine world's save folder beside the edits
    - The kit has 64 chests (hotbar 2 slot 8); a creative save from before
      gets them on load (`ensure_item`), a survival one does not.
 
-Later: backpacks (bigger storage), survival toggle in the world menu,
-crafting (zylanntest's recipe tools), saving the inventory per character
-instead of per world, a gun item in a hotbar slot, multiplayer authority.
+### Round two (2026-11-20, asked by the user): stages 6-9
+
+6. **The inventory is the character's.** Your hotbars, off-hand, backpack
+   and storage go with you from world to world: saved in the character file
+   (`CharacterSave.items`, `user://profile/character.json` -- the same file
+   PlayerKit keeps the guns and level in; both read, change their own field
+   and write, so neither loses the other's). The world file (`.inv` beside
+   the edits) keeps only what is the world's: its chests, its dropped items
+   and its game mode. An old world file that still holds an inventory gives
+   it to a character that has none yet, once. Written on the main thread
+   when the inventory changed, at the autosave and on leaving (a small file,
+   as PlayerKit's). A scripted pass uses `user://dev/character_gate.json`.
+7. **Survival switch** in the world menu (World tab): a check box that
+   changes the game mode of THIS world at once (no Generate): saved in its
+   world file. Survival: placing uses the stack up, breaking (the builder's
+   block break, the pickaxes) gives the broken bricks, the Creative tab is
+   hidden, creative blocks show their counts. Creative (default): as before.
+   One inventory for both modes (the user's choice: it is the character's),
+   so what was taken in creative comes into survival with you.
+8. **Backpacks** (zylanntest's): Small 9, Medium 18, Large 27 slots. The
+   equipped backpack's own contents ARE your storage: a backpack slot beside
+   the off-hand; take it off and the storage is gone with it (into the
+   cursor, into a chest, onto the ground -- its contents go along, the stack
+   carries them, `ItemStack.contents`). Shift-click a backpack: into the
+   empty backpack slot. A backpack never goes into the storage it is. The
+   kit wears a Large one (the 27 slots the storage always had); an old save
+   gets one holding its old storage.
+9. **Crafting** (zylanntest's 2 x 2 grid and recipe book): a 2 x 2 craft
+   grid and its output in the screen; a recipe is matched wherever it sits
+   in the grid, a cell may hold more than it needs; taking the output uses
+   the ingredients up (shift: as many as there are). Recipes are tables in
+   packs, `content/<pack>/data/recipes/*.json` (Docs/Content.md):
+   `{"recipes": [{"name", "pattern": ["ab", "ba"], "key": {"a": "sand",
+   "b": "#stone"}, "output": "sandstone", "count": 1}]}` -- `#tag` is any
+   item with that tag. A backpack made from a backpack keeps its contents
+   (`keep_contents`). A Recipes tab lists them all. 3 x 3 (a crafting table)
+   is for later.
+
+Later: a crafting table (3 x 3), placing a backpack as a container
+(zylanntest), a gun item in a hotbar slot, multiplayer authority.
 
 ## 5. Tests
 
