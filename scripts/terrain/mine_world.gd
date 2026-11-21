@@ -228,6 +228,8 @@ func _ready() -> void:
 			_run_spawn_gate()
 		elif "--gate=stop" in OS.get_cmdline_user_args():
 			_run_stop_gate()
+		elif "--gate=breakwater" in OS.get_cmdline_user_args():
+			_run_breakwater_gate()
 		elif "--gate=mega" in OS.get_cmdline_user_args():
 			_run_mega_gate()
 		elif "--gate=shift" in OS.get_cmdline_user_args():
@@ -2117,6 +2119,114 @@ func _run_gate() -> void:
 	await _gate_cave()
 	await _gate_edits()
 	print("[mine-gate] done")
+	get_tree().quit()
+
+
+## -- --gate=breakwater: WHERE A FRAME GOES while bricks are broken beside
+## running water (the user: "poor performance while breaking bricks and water
+## is flowing"). Pours sources on the ground in front of the player, lets them
+## run, then rapid-fires into the ground beside and under the water (the holes
+## take the water, the collapse surveys, debris flies). Three windows -- water
+## alone, shooting into it, settling -- each: frame mean / worst / slow, the
+## main thread by the clock (scripts, physics step, process, draw, GPU, draws),
+## the mine world's own parts (near, far, deep, trees, water, ground), the
+## water's worker tick, debris bodies, surveys; and the worst frames, part by
+## part. Measures, decides nothing: run it on a quiet, cool machine (CLAUDE.md).
+func _run_breakwater_gate() -> void:
+	await _frames(60)
+	_time = 0.42
+	var clock := FrameClock.new()
+	add_child(clock)
+	set_on_foot(true)
+	await _frames(30)
+	var stud := BrickWorld.get_stud_metres()
+	var e := _eye()
+	# Sources: a row of four on the ground 3-6 m ahead, each its own course.
+	var sources := 0
+	for i in 4:
+		var p := e + Vector3(1.0 + float(i) * 1.2, 0.0, -4.5)
+		var c := Vector2i(floori(p.x / stud), floori(p.z / stud))
+		var top := BrickTerrain.surface_plate(c.x, c.y)
+		BrickFluid.place(Vector3i(c.x, floori((top + 1) / 3.0), c.y), 1, BrickFluid.SOURCE, 3)
+		sources += 1
+	water.manual = false
+	# Let it spread a little before anything is timed.
+	await _frames(90)
+	var win := func() -> Dictionary:
+		return {"n": 0, "sum": 0.0, "worst": 0.0, "slow": 0, "parts": {}, "world": {},
+				"water_tick": 0.0, "worst_frames": []}
+	var sample := func(w: Dictionary) -> void:
+		var ms := clock.last_ms
+		w.n += 1
+		w.sum += ms
+		w.worst = maxf(w.worst, ms)
+		if ms > 25.0:
+			w.slow += 1
+		for k in clock.last:
+			w.parts[k] = float(w.parts.get(k, 0.0)) + float(clock.last[k])
+		var world := {"near": float(_ptimes.get("near", 0.0)), "far": float(_ptimes.get("far", 0.0))
+				+ float(_ptimes.get("reanchor", 0.0)), "deep": float(_ptimes.get("deep", 0.0)),
+				"trees": _trees.last_us / 1000.0 if _trees != null else 0.0,
+				"water": water.last_us / 1000.0,
+				"ground": collapse.last_us / 1000.0 if collapse != null else 0.0}
+		for k in world:
+			w.world[k] = float(w.world.get(k, 0.0)) + float(world[k])
+		var st: Dictionary = BrickFluid.stats()
+		w.water_tick = maxf(w.water_tick, float(st.get("tick_ms", 0.0)))
+		var wf: Array = w.worst_frames
+		wf.append([ms, clock.last.duplicate(), world, debris.bodies.size()])
+		wf.sort_custom(func(a: Array, b: Array) -> bool: return a[0] > b[0])
+		if wf.size() > 5:
+			wf.resize(5)
+	var report := func(name: String, w: Dictionary) -> void:
+		var n := maxf(float(w.n), 1.0)
+		var parts := ""
+		for k in ["scripts", "step", "process", "draw", "sync", "gpu", "draws_k", "tris_M"]:
+			parts += " %s %.1f" % [k, float(w.parts.get(k, 0.0)) / n]
+		var world := ""
+		for k in ["near", "far", "deep", "trees", "water", "ground"]:
+			world += " %s %.2f" % [k, float(w.world.get(k, 0.0)) / n]
+		print("[breakwater] %s: %d frames, mean %.1f ms, worst %.1f ms, %d over 25 ms | clock mean:%s | world mean (ms):%s | water worker tick worst %.1f ms" % [
+				name, w.n, float(w.sum) / n, w.worst, w.slow, parts, world, w.water_tick])
+		for f in w.worst_frames:
+			var cp: Dictionary = f[1]
+			var wp: Dictionary = f[2]
+			print("[breakwater]   worst %.1f ms: scripts %.1f step %.1f process %.1f draw %.1f sync %.1f gpu %.1f | near %.1f far %.1f deep %.1f trees %.1f water %.1f ground %.1f | debris %d" % [
+					f[0], float(cp.get("scripts", 0.0)), float(cp.get("step", 0.0)), float(cp.get("process", 0.0)),
+					float(cp.get("draw", 0.0)), float(cp.get("sync", 0.0)), float(cp.get("gpu", 0.0)),
+					wp.near, wp.far, wp.deep, wp.trees, wp.water, wp.ground, f[3]])
+	# A: water running, nothing shot.
+	var a: Dictionary = win.call()
+	for f in 240:
+		await get_tree().process_frame
+		sample.call(a)
+	# B: rapid fire beside and under the water, a shot every 4 frames.
+	var b: Dictionary = win.call()
+	var surveys0 := collapse.surveys if collapse != null else 0
+	var shots := 0
+	var debris_peak := 0
+	for i in 120:
+		var p := e + Vector3(0.6 + float(i % 8) * 0.6, 0.0, -3.0 - floorf(float(i % 40) / 8.0) * 0.6)
+		var c := Vector2i(floori(p.x / stud), floori(p.z / stud))
+		p.y = _ground_m(c.x, c.y) - 0.2
+		_mine(p, Vector3.DOWN, null)
+		shots += 1
+		for f in 4:
+			await get_tree().process_frame
+			sample.call(b)
+			debris_peak = maxi(debris_peak, debris.bodies.size())
+	# C: settling, nothing shot.
+	var cw: Dictionary = win.call()
+	for f in 240:
+		await get_tree().process_frame
+		sample.call(cw)
+	print("[breakwater] %d sources, %d shots, %d tiles rebuilt, %d surveys, debris peak %d bodies, %d edits; %s" % [
+			sources, shots, _streamer.built_count(), (collapse.surveys if collapse != null else 0) - surveys0,
+			debris_peak, BrickTerrain.get_edit_count(), water.report()])
+	report.call("A water only", a)
+	report.call("B shooting into water", b)
+	report.call("C settling", cw)
+	print("[breakwater] done")
 	get_tree().quit()
 
 
