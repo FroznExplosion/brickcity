@@ -3679,6 +3679,9 @@ func _gate_edits() -> void:
 			idle_slow += 1
 	print("[mine-gate] idle: 180 frames, worst %.1f ms, %d over 20 ms" % [idle_worst, idle_slow])
 	_streamer.reset_stats()
+	# Frames where a tile near the camera was drawn flat or without its
+	# studs (the flicker round an edit): 0 since a refresh swaps whole.
+	var bare := 0
 	TerrainTile.profile_instances = true
 	TerrainTile.instance_ms.clear()
 	var worst := 0.0
@@ -3692,6 +3695,8 @@ func _gate_edits() -> void:
 		for f in 15:
 			var t0 := Time.get_ticks_usec()
 			await get_tree().process_frame
+			if _streamer.bare_near_tiles() > 0:
+				bare += 1
 			var ms := float(Time.get_ticks_usec() - t0) / 1000.0
 			worst = maxf(worst, ms)
 			sum += ms
@@ -3711,6 +3716,8 @@ func _gate_edits() -> void:
 		for f in 4:
 			var t0 := Time.get_ticks_usec()
 			await get_tree().process_frame
+			if _streamer.bare_near_tiles() > 0:
+				bare += 1
 			var ms := float(Time.get_ticks_usec() - t0) / 1000.0
 			worst2 = maxf(worst2, ms)
 			sum2 += ms
@@ -3727,6 +3734,8 @@ func _gate_edits() -> void:
 	print("[mine-gate] rapid fire (%s): 30 shots, worst frame %.1f ms, mean %.1f ms, %d of 180 frames over 20 ms, %s" % [
 			"coalesced" if _coalesce else "each at once", worst2, sum2 / n2, slow, _streamer.report()])
 	TerrainTile.profile_instances = false
+	print("[mine-gate] %s flicker: %d of 300 edit frames drew a near tile flat or bare (want 0)" % [
+			"ok  " if bare == 0 else "FAIL", bare])
 	var keys := TerrainTile.instance_ms.keys()
 	keys.sort()
 	print("[mine-gate] instances phase, worst by step: %s" % ", ".join(keys.map(
