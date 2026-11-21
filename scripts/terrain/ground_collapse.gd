@@ -103,6 +103,9 @@ func setup(w: Node3D, brick_material: Material) -> void:
 	# that fly and shrink away (the city's rule), not pieces that lie forever.
 	pieces.debris_max = SMALL_MAX
 	pieces.studs = true
+	# A brick a shot or a pickaxe destroys is deleted, not thrown (the user,
+	# 2026-11-20): only what is left falls, if anything.
+	pieces.throw_killed = false
 	add_child(pieces)
 	pieces.setup(bricks, w, brick_material)
 	_sand_mm = MultiMeshInstance3D.new()

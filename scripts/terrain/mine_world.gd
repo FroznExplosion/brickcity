@@ -594,7 +594,8 @@ func _land_breaks() -> void:
 		var res: Dictionary = BrickTerrain.clear_runs(runs)
 		if int(res.get("removed", 0)) == 0:
 			continue
-		debris.spawn(found["debris"], job[2])
+		# What a shot destroys is gone (the user, 2026-11-20): no brick thrown.
+		# What it leaves hanging falls -- the collapse, from terrain_edited.
 		terrain_edited(res)
 
 
@@ -2600,6 +2601,19 @@ func _gate_collapse() -> void:
 	var stands := BrickTerrain.solid_at(arm_cell.x, arm_cell.y, arm_cell.z) == 4
 	print("[mine-collapse] %s  the stone arm stands on its pillar" % ("ok  " if stands else "FAIL"))
 	fails += 0 if stands else 1
+	# A shot into the ground: its brick is gone, nothing is thrown (2026-11-20).
+	var gx := o.x + 20
+	var gz := o.y + 8
+	var gtop: int = top.call(gx, gz)
+	var bodies0: int = debris.bodies.size()
+	var edits0 := BrickTerrain.get_edit_count()
+	_mine(Vector3((gx + 0.5) * stud, (gtop + 1) * plate + 0.01, (gz + 0.5) * stud) + Vector3.DOWN * 0.03,
+			Vector3.DOWN, StructuralDamage.for_shot(null))
+	await _frames(20)
+	var gone_ok: bool = BrickTerrain.get_edit_count() > edits0 and debris.bodies.size() == bodies0
+	print("[mine-collapse] %s  a shot deletes its brick, throws none (%d plates edited, %d bodies thrown)" % [
+			"ok  " if gone_ok else "FAIL", BrickTerrain.get_edit_count() - edits0, debris.bodies.size() - bodies0])
+	fails += 0 if gone_ok else 1
 	# A floating dirt block and a floating sand block beside it.
 	var made0 := int(collapse.groups_let_go)
 	var d0 := Vector3i(o.x + 4, b + 30, o.y + 6)
