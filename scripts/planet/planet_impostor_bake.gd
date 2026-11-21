@@ -69,6 +69,68 @@ static func bake(data: PlanetData, width := 512, height_px := 256, textures := t
 	return textured(b) if textures else b
 
 
+## `bake` through a cache on disk (UserPaths.CACHE; Docs/PlanetCost.md 8): the
+## home planet's 512 x 256 bake is 1.5-1.7 s of GDScript in the scene's load,
+## and the same numbers always bake the same maps. The key is the planet's
+## numbers that shape its ground and the md5 of the scripts that make the maps,
+## so a change to either bakes again (a stale map is never loaded).
+const CACHE_SCRIPTS := ["res://scripts/planet/planet_impostor_bake.gd", "res://scripts/planet/planet_data.gd",
+		"res://scripts/planet/planet_biomes.gd", "res://scripts/planet/planet_trees.gd"]
+## PlanetData's properties that do not shape its ground: left out of the key.
+const NOT_GROUND := ["planet_name", "parent", "orbit_radius", "orbit_period", "orbit_phase",
+		"orbit_inclination", "orbit_node", "day", "spin_phase", "tilt", "t_offset", "towns",
+		"landmarks", "gravity_strength", "atmosphere_color", "has_air", "ring_inner", "ring_outer",
+		"ring_colour", "resource_name", "resource_path", "resource_local_to_scene", "script"]
+## Whether the last cached() came from disk, and its key (a gate reads them).
+static var last_hit := false
+static var last_key := ""
+
+
+static func cache_key(data: PlanetData, width: int, height_px: int) -> String:
+	var parts: Array = [width, height_px]
+	for prop in data.get_property_list():
+		var n: String = prop.name
+		if (int(prop.usage) & PROPERTY_USAGE_STORAGE) == 0 or n in NOT_GROUND:
+			continue
+		parts.append([n, data.get(n)])
+	for path in CACHE_SCRIPTS:
+		parts.append(FileAccess.get_md5(path))
+	return var_to_str(parts).md5_text()
+
+
+static func cached(data: PlanetData, width := 512, height_px := 256) -> Dictionary:
+	return textured(cached_images(data, width, height_px))
+
+
+## The images only, from disk or baked and kept: safe on a worker thread (the
+## star system bakes its other worlds there, PlanetSystem._bake_run).
+static func cached_images(data: PlanetData, width := 512, height_px := 256) -> Dictionary:
+	var key := cache_key(data, width, height_px)
+	last_key = key
+	var path := UserPaths.CACHE + "planet_" + key + ".bin"
+	if FileAccess.file_exists(path):
+		var f := FileAccess.open(path, FileAccess.READ)
+		if f != null:
+			var got: Variant = bytes_to_var_with_objects(f.get_buffer(f.get_length()))
+			if got is Dictionary and (got as Dictionary).get("height_image") is Image:
+				last_hit = true
+				var hit: Dictionary = got
+				hit["ms"] = 0
+				return hit
+	last_hit = false
+	var b := bake(data, width, height_px, false)
+	DirAccess.make_dir_recursive_absolute(UserPaths.CACHE)
+	# Written to a name of its own, then renamed: a reader never meets half a file.
+	var tmp := path + ".%d.tmp" % OS.get_thread_caller_id()
+	var w := FileAccess.open(tmp, FileAccess.WRITE)
+	if w != null:
+		w.store_buffer(var_to_bytes_with_objects({"height_image": b.height_image,
+				"biome_image": b.biome_image, "color_image": b.color_image, "amplitude": b.amplitude}))
+		w.close()
+		DirAccess.rename_absolute(tmp, path)
+	return b
+
+
 ## The bake's images made textures.
 static func textured(b: Dictionary) -> Dictionary:
 	b.heightmap = ImageTexture.create_from_image(b.height_image)

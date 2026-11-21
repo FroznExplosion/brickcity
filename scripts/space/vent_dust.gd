@@ -50,9 +50,8 @@ static func jets_of(st: SpaceStation) -> Array:
 		return out
 	var air := st.air
 	var to_w := st.global_transform * st.frame
-	for c in air.compartments():
-		var ci: int = c.id
-		if int(c.breaches) == 0 or air.vent_rate(ci) < MIN_RATE:
+	for ci in air.breached_roots():
+		if air.vent_rate(ci) < MIN_RATE:
 			continue
 		var cells := air.breach_cells(ci)
 		var n := mini(cells.size(), 3)

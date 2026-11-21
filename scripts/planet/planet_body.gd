@@ -73,7 +73,7 @@ func setup(p_data: PlanetData, far := false) -> void:
 	else:
 		_graph = PlanetGraph.build(data)
 		_build_impostor_mesh(256, 128)
-		apply_bake(PlanetImpostorBake.bake(data))
+		apply_bake(PlanetImpostorBake.cached(data))
 	if data.has_air:
 		_build_atmosphere()
 		# Its clouds on its far look (Docs/Lighting.md 2b): the shell's own
