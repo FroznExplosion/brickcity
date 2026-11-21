@@ -71,6 +71,12 @@ var _mask_stale := true
 ## The pools' water moved: the calm channel follows it, at most this often.
 const MASK_WATER_EVERY := 0.2
 var _mask_water_t := 0.0
+## The fluid mask's worker job (_update_fluid_mask).
+const FLUID_MASK_EVERY := 0.5
+var _fmask_task := -1
+var _fmask_out := [PackedByteArray()]
+var _fmask_for := Vector2i.ZERO
+var _fmask_wait := 0.0
 ## A streaming world (the mine world, Docs/MineWater.md 7.2): the shore field
 ## is computed by the caller round `field_centre` (studs; on a worker, with
 ## BrickWave.compute_shore_field) and handed in, and the sea is not drawn where
@@ -257,7 +263,7 @@ func follow(camera: Vector3, delta: float) -> void:
 			_mask_stale = true
 		_update_mask(camera)
 	elif use_fluid_mask:
-		_update_fluid_mask(camera)
+		_update_fluid_mask(camera, delta)
 	# Followed even hidden: the wave clock lives in the near tier.
 	near.follow(xz, delta, camera.y)
 	if mid != null:
@@ -311,17 +317,38 @@ func _update_mask(camera: Vector3) -> void:
 
 ## The same mask from BrickFluid (MineWater.md 7.2): R where the sea was
 ## changed (walled off, emptied), G how much wave it keeps beside calm water.
-func _update_fluid_mask(camera: Vector3) -> void:
+##
+## Built on a worker, at most every FLUID_MASK_EVERY for water changes (the
+## window moving starts one at once). It was built here on the main thread on
+## every water tick that touched the sea's courses -- 512 x 512 studs and two
+## distance passes, up to ten times a second while water ran into the sea.
+func _update_fluid_mask(camera: Vector3, delta: float) -> void:
+	_fmask_wait -= delta
+	if _fmask_task >= 0:
+		if not WorkerThreadPool.is_task_completed(_fmask_task):
+			return
+		WorkerThreadPool.wait_for_task_completion(_fmask_task)
+		_fmask_task = -1
+		_show_fluid_mask(_fmask_for, _fmask_out[0])
 	var stud := BrickWorld.get_stud_metres()
 	@warning_ignore("integer_division")
 	var at := Vector2i(floori(camera.x / stud / MASK_SNAP) * MASK_SNAP - MASK_STUDS / 2,
 			floori(camera.z / stud / MASK_SNAP) * MASK_SNAP - MASK_STUDS / 2)
-	if at == _mask_at and not fluid_mask_dirty:
+	var moved := at != _mask_at
+	if not moved and not (fluid_mask_dirty and _fmask_wait <= 0.0):
 		return
 	_mask_at = at
 	fluid_mask_dirty = false
-	var img := Image.create_from_data(MASK_STUDS, MASK_STUDS, false, Image.FORMAT_RG8,
-			BrickFluid.sea_mask(at.x, at.y, MASK_STUDS))
+	_fmask_wait = FLUID_MASK_EVERY
+	_fmask_for = at
+	var out := _fmask_out
+	_fmask_task = WorkerThreadPool.add_task(func() -> void:
+		out[0] = BrickFluid.sea_mask(at.x, at.y, MASK_STUDS), false, "sea mask")
+
+
+func _show_fluid_mask(at: Vector2i, bytes: PackedByteArray) -> void:
+	var stud := BrickWorld.get_stud_metres()
+	var img := Image.create_from_data(MASK_STUDS, MASK_STUDS, false, Image.FORMAT_RG8, bytes)
 	if _mask_tex == null:
 		_mask_tex = ImageTexture.create_from_image(img)
 	else:
@@ -442,3 +469,10 @@ func submerged_at(p: Vector3) -> bool:
 
 func triangle_count() -> int:
 	return sheet.triangle_count() if sheet != null else 0
+
+
+## A mask still being built is waited for as the sea goes (teardown only).
+func _exit_tree() -> void:
+	if _fmask_task >= 0:
+		WorkerThreadPool.wait_for_task_completion(_fmask_task)
+		_fmask_task = -1
