@@ -712,6 +712,7 @@ its neighbours (light reaches 15 studs, a tile is 32).
 | `--gate=deep`, 78 m down | picture mean 0.044 (old 0.051); ambient and sun add nothing |
 | `--gate=mouth`, 4 studs into a tunnel looking out | centre 0.661 vs 0.607 with no tunnel (eye level 10, exposure 2) |
 | `--gate=mouth`, its walls | 0.446 by the mouth, 0.066 by the back (level 1) |
+| `--gate=gpu`, baseline GPU on foot / 25 m up | 5.48 / 3.89 ms with sky light (62 C start), 5.48 / 3.73 without (57 C); the near tiles' own share 0.75 vs 0.40 ms on foot (the `light()`), editor closed, nothing else running |
 
 **Not in it.** Collapse pieces, dropped items and chests are lit by the
 open-air environment wherever they are, so in a cave they are brighter than
