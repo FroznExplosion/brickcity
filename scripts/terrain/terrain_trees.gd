@@ -53,6 +53,10 @@ const RESORT_METRES := 1.0
 ## What grows where is the caller's (`stream`'s callables), so the same
 ## scatter serves the biome world and nothing is copied.
 const STREAM_CELL := 128
+## How far real brick trees are drawn before the cards take over (ImpostorLod's
+## near range). Set before the first trees are placed. The near brick trees
+## were half the mine world's GPU at 45 m (Docs/MineWorld.md 17); it sets 25.
+var near_m := 45.0
 const STREAM_BUDGET_US := 2500
 ## A set's squares refilled at most this a frame; the rest the frames after.
 const SETS_BUDGET_US := 2000
@@ -313,7 +317,7 @@ func _place(spots: Array) -> Array:
 				s.sway = WeatherFx.sway_tree(tree_mesh.get_aabb().end.y)
 			s.snowcap = 1.0   # snow on the crowns
 			s.set_chunk(chunk_metres)
-			s.setup(tree_mesh, material, 45.0)
+			s.setup(tree_mesh, material, near_m)
 			_sets[key] = s
 		var cell: Vector3i = spot.cell
 		var xf := Trees.placement(cell, variant)

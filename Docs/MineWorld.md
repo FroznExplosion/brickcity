@@ -586,3 +586,11 @@ foot at 1280x720, render scale 0.75), the rows' deltas held:
   wrote (`_amb_base`, `_sky_energy_base`), and the sky is written only when the
   product changes.
 - The sea (about 1 ms) is the water's (Docs/MineWater.md).
+- **Done: real brick trees to 25 m, cards past it** (`TerrainTrees.near_m`,
+  the mine world's `TREE_NEAR_M`; it was 45; `-- --tree-near=N` to compare).
+  `--gate=gpu` at 45 then 25 m, same views, both started at 62-63 C, two
+  cascades in both: baseline GPU on foot 7.01 -> 5.50 ms (-22 %), 25 m up
+  5.75 -> 3.93 ms (-32 %); the trees' share on foot 3.0 -> 1.7 ms. The view
+  from 25 m up looks the same (`user://dev/mine_gpu_up_near45.png` /
+  `_near25.png`); on foot inside a forest is the place a card could show.
+  The heightfield scene keeps 45.
