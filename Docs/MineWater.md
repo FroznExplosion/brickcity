@@ -424,6 +424,35 @@ Not networked yet; what is in place so finishing it is wiring, not redesign.
   worker) took 2.5 s; tile rebuilds after the edits it makes cost the streamer 150 ms frames;
   whole cave ceilings come down for one brick (ground strength `TERRAIN_TIMES`).
 
+### 11.8 What runs where nobody is, and what the main thread waits for (2026-11-20, audit)
+
+* **Pit checks** (4.5): a landing whose body is OPEN (it spills) waits 30 ticks before the
+  next look. It used to stay due, so every waterfall onto open ground was flood-filled (up
+  to 4096 cells) once a second for good, wherever it was; and only the first 32 landings in
+  the set's order were ever looked at, so with more than that a real pit elsewhere never
+  filled. Now the due ones in reach, longest waiting first. Landings past the sim radius wait.
+* **Timers** (drying, lava setting) past the sim radius wait in their own list and fire when
+  the player comes back (not frozen as cells: their armed flag would stop a woken cell from
+  arming them again).
+* **Sections far away are let go**: past twice the sim radius (plus a tile), a section never
+  written, dry and with nothing queued is dropped every 5 s -- it is the seed and the
+  terrain's edits again. Written or wet sections stay. `stats().evicted`.
+* **The sea mask** (7.2) is built on a worker, at most every 0.5 s for water changes (the
+  window moving starts one at once), and BrickFluid.sea_mask holds the lock only for its
+  scan, not the distance passes. It was built on the main thread on every tick that
+  touched the sea's courses.
+* **Waiting on the lock, measured**: the main thread's questions (surface_at, flow_at,
+  fluid_at, ocean_at, ray_cell, cell_info, sea_mask, drawn_tiles, get_save) time their
+  wait for `g_state`; `stats()` gives `main_wait_ms` (worst since the last ask),
+  `main_waits_1ms` and the worker's hold `apply_ms`. If those are large, the next step
+  is a read copy for the main thread.
+* **The terrain's edits** (brick_terrain.cpp) are a table safe to read while the main
+  thread writes (one writer, readers take no lock). The tile bakes, find_brick and the
+  collapse survey read the old maps with no lock while edits landed -- a race, and past
+  65 536 edited cells a rehash under a reader. set_edit no longer takes the edit lock per
+  cell, so an edit never waits for the water to finish sampling a column.
+* A lava tile's light is placed from at most 64 of its vertices, not all of them.
+
 ## 12. What it costs (estimates — stage 1 and 5 measure them)
 
 | | Where | Estimate |

@@ -500,16 +500,24 @@ func _light(tile: Vector2i, lava: Array) -> void:
 			_spare_lights.append(l)
 		return
 	var v: PackedVector3Array = lava[Mesh.ARRAY_VERTEX]
+	# A light's place needs no exact centre: at most 64 vertices, evenly
+	# spread, not every one of a big pool's thousands in GDScript on every
+	# remesh of its tile.
 	var sum := Vector3.ZERO
 	var top := -INF
-	for p in v:
+	@warning_ignore("integer_division")
+	var step := maxi(1, v.size() / 64)
+	var seen := 0
+	for i in range(0, v.size(), step):
+		var p := v[i]
 		sum += p
 		top = maxf(top, p.y)
+		seen += 1
 	if l == null:
 		l = _spare_lights.pop_back() if not _spare_lights.is_empty() else _new_light()
 		_lights[tile] = l
 		l.visible = true
-	var c := sum / maxf(v.size(), 1)
+	var c := sum / maxf(seen, 1)
 	l.position = Vector3(c.x, top + 0.6, c.z)
 	# Bigger lava, a brighter, wider light.
 	var k := clampf(float(v.size()) / 400.0, 0.4, 1.6)

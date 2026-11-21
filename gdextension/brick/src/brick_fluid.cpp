@@ -121,6 +121,30 @@ std::unordered_map<int64_t, std::vector<int>> g_tile_secs;   ///< tile -> sectio
 std::recursive_mutex g_state;
 std::mutex g_cmd_mx;
 
+/// What the main thread waits for g_state (the worker holds it while it
+/// writes a tick's results): the worst wait since stats() last asked, and the
+/// waits over a millisecond. CLAUDE.md: no waiting on a worker during play --
+/// this says how much of it is left (stats: main_wait_ms, main_waits_1ms).
+std::atomic<int64_t> g_main_wait_worst_us{ 0 };
+std::atomic<int> g_main_waits_1ms{ 0 };
+/// The worker's hold of g_state in a tick's apply step, ms.
+double g_apply_ms = 0.0;
+
+/// g_state for the main thread's questions (surface_at, flow_at ...), timed.
+struct MainLock {
+    std::unique_lock<std::recursive_mutex> lk;
+    MainLock() : lk(g_state, std::defer_lock) {
+        if (lk.try_lock()) return;
+        const auto t0 = std::chrono::steady_clock::now();
+        lk.lock();
+        const int64_t us = std::chrono::duration_cast<std::chrono::microseconds>(
+                std::chrono::steady_clock::now() - t0).count();
+        int64_t w = g_main_wait_worst_us.load(std::memory_order_relaxed);
+        while (us > w && !g_main_wait_worst_us.compare_exchange_weak(w, us)) {}
+        if (us >= 1000) g_main_waits_1ms.fetch_add(1, std::memory_order_relaxed);
+    }
+};
+
 double g_sea_m = 0.0;
 int g_sea_b = 0;          ///< the first course ABOVE the sea
 bool g_sea_on = false;
@@ -133,15 +157,24 @@ std::vector<int64_t> g_due;            ///< water (and anything) next tick
 std::vector<int64_t> g_due_lava;       ///< waits for a lava tick
 std::multimap<uint32_t, int64_t> g_timers;
 std::unordered_set<int64_t> g_frozen;
+/// Timers that came due past the sim radius: fired when back in reach.
+std::unordered_set<int64_t> g_frozen_timers;
 std::unordered_set<int64_t> g_dirty_tiles;
 std::unordered_set<int64_t> g_mesh_requests;
 std::unordered_set<int64_t> g_far_requests;   ///< tiles wanting the coarse mesh
-/// Pits filling from rivers (4.5, stage 8): falls that landed, looked at
-/// every PIT_EVERY ticks until they stop being falls.
-std::unordered_set<int64_t> g_landings;
+/// Pits filling from rivers (4.5, stage 8): falls that landed -> the tick
+/// each is next looked at. Looked at every PIT_EVERY ticks while due, until
+/// it stops being a fall. One found OPEN (its body spills somewhere) waits
+/// PIT_OPEN_WAIT ticks before the next look: it used to stay due, so every
+/// waterfall onto open ground was flood-filled (up to PIT_MAX cells) once a
+/// second for good, wherever it was -- and only the first PIT_LOOKS in the
+/// set's order were ever looked at, so past that many such falls a real pit
+/// elsewhere never filled. Landings past the sim radius wait for the player.
+std::unordered_map<int64_t, uint32_t> g_landings;
 constexpr int PIT_EVERY = 10;
 constexpr int PIT_LOOKS = 32;       ///< landings looked at a time
 constexpr int PIT_MAX = 4096;       ///< cells a closed body may have
+constexpr uint32_t PIT_OPEN_WAIT = 30;   ///< ticks before an open landing is looked at again
 
 /// Multiplayer groundwork (MineWater.md 11.5): the cells whose drawn state
 /// changed, with the write count at the time, kept while `g_log_on`. A peer
@@ -745,7 +778,7 @@ void eval(int x, int b, int z) {
         const Cell &d = wcell(x, b - 1, z);
         if (floor_of(cur.solid) > 0 || (d.solid & 4)
                 || (c_wet(d) && c_kind(d) == K_STILL && floor_of(d.solid) + d.amt >= 3)) {
-            g_landings.insert(pack3(x, b, z));
+            g_landings.emplace(pack3(x, b, z), g_tick);   // kept: an open one's wait stands
         }
     }
     if (best_fluid != 0) {
@@ -1389,9 +1422,21 @@ int tile_coord(int64_t k, bool z) {
 void check_pits() {
     if (g_landings.empty() || g_tick % PIT_EVERY != 0) return;
     std::vector<int64_t> done;
-    int looked = 0;
-    for (int64_t k : g_landings) {
-        if (looked++ >= PIT_LOOKS) break;
+    // The due ones in reach, the longest waiting first.
+    std::vector<std::pair<uint32_t, int64_t>> due;
+    for (const auto &e : g_landings) {
+        if (e.second > g_tick) continue;
+        int x, b, z;
+        unpack3(e.first, x, b, z);
+        if (dist2_centre(x, z) > g_sim_r * g_sim_r) continue;
+        due.push_back({ e.second, e.first });
+    }
+    if (due.size() > (size_t)PIT_LOOKS) {
+        std::nth_element(due.begin(), due.begin() + PIT_LOOKS, due.end());
+        due.resize(PIT_LOOKS);
+    }
+    for (const auto &d : due) {
+        const int64_t k = d.second;
         int x, b, z;
         unpack3(k, x, b, z);
         const Cell &c = wcell(x, b, z);
@@ -1420,7 +1465,10 @@ void check_pits() {
                 if (!supported(nx, b, nz, n) || b * 3 + floor_of(n.solid) < top) open = true;
             }
         }
-        if (open) continue;
+        if (open) {
+            g_landings[k] = g_tick + PIT_OPEN_WAIT;
+            continue;
+        }
         for (int64_t bk : body) {
             int bx, bb, bz;
             unpack3(bk, bx, bb, bz);
@@ -1433,6 +1481,53 @@ void check_pits() {
         done.push_back(k);
     }
     for (int64_t k : done) g_landings.erase(k);
+}
+
+/// SECTIONS FAR AWAY ARE LET GO. Every column the water ever sampled kept its
+/// section for good -- the flow's look for a drop, priming, the sea's floor
+/// -- so a long walk left thousands behind, and the save, the sea mask and
+/// every lookup walked them. Only a section with nothing of its own goes:
+/// never written, dry, nothing queued in it. All of that is the seed and the
+/// terrain's edits again, sampled afresh if anything asks. Written or wet
+/// sections stay (they ARE the water's state).
+constexpr uint32_t EVICT_EVERY = 50;     ///< ticks (5 s)
+constexpr double EVICT_PAST = 2.0;       ///< x the sim radius, plus a tile
+int g_evicted = 0;
+
+void evict_far() {
+    if (g_tick % EVICT_EVERY != 0) return;
+    const double tile_m = (double)SX * STUD_M;
+    const double r = g_sim_r * EVICT_PAST + tile_m;
+    std::vector<int64_t> gone;
+    for (const auto &e : g_sec) {
+        const Section *s = e.second.get();
+        if (s->written || s->wet != 0) continue;
+        const double cx = ((double)s->sx + 0.5) * tile_m - g_cx;
+        const double cz = ((double)s->sz + 0.5) * tile_m - g_cz;
+        if (cx * cx + cz * cz <= r * r) continue;
+        bool queued = false;
+        for (uint8_t q : s->queued) {
+            if (q) { queued = true; break; }
+        }
+        if (!queued) gone.push_back(e.first);
+    }
+    if (gone.empty()) return;
+    std::lock_guard<std::recursive_mutex> lk(g_state);
+    for (int64_t k : gone) {
+        auto it = g_sec.find(k);
+        if (it == g_sec.end()) continue;
+        const Section *s = it->second.get();
+        auto ts = g_tile_secs.find(tkey(s->sx, s->sz));
+        if (ts != g_tile_secs.end()) {
+            auto &v = ts->second;
+            v.erase(std::remove(v.begin(), v.end(), s->sb), v.end());
+            if (v.empty()) g_tile_secs.erase(ts);
+        }
+        g_sec.erase(it);
+        ++g_evicted;
+    }
+    // Every thread's section cache (sec_find) forgets what it held.
+    g_sec_epoch.fetch_add(1);
 }
 
 void do_tick() {
@@ -1453,7 +1548,7 @@ void do_tick() {
     // The player moved: frozen wakes in reach again.
     {
         const double dx = g_cx - g_recheck_x, dz = g_cz - g_recheck_z;
-        if (dx * dx + dz * dz > 64.0 && !g_frozen.empty()) {
+        if (dx * dx + dz * dz > 64.0 && (!g_frozen.empty() || !g_frozen_timers.empty())) {
             g_recheck_x = g_cx;
             g_recheck_z = g_cz;
             std::vector<int64_t> back;
@@ -1467,6 +1562,16 @@ void do_tick() {
                 int x, b, z;
                 unpack3(k, x, b, z);
                 wake(x, b, z);
+            }
+            back.clear();
+            for (int64_t k : g_frozen_timers) {
+                int x, b, z;
+                unpack3(k, x, b, z);
+                if (dist2_centre(x, z) <= g_sim_r * g_sim_r) back.push_back(k);
+            }
+            for (int64_t k : back) {
+                g_frozen_timers.erase(k);
+                g_timers.insert({ g_tick, k });   // due now: fires this tick
             }
         } else if (dx * dx + dz * dz > 64.0) {
             g_recheck_x = g_cx;
@@ -1503,6 +1608,15 @@ void do_tick() {
     for (int64_t k : timers) {
         int x, b, z;
         unpack3(k, x, b, z);
+        // Past the sim radius a timer waits (g_frozen_timers) and fires once
+        // the player comes back. Timers used to fire anywhere (thin spills
+        // drying, lava setting to stone) and their writes woke more cells
+        // there. Not frozen as a cell: its armed flag (aux 0x80) stays set,
+        // so a woken cell's eval would never arm it again.
+        if (dist2_centre(x, z) > g_sim_r * g_sim_r) {
+            g_frozen_timers.insert(k);
+            continue;
+        }
         eval_timer(x, b, z);
     }
     std::vector<int64_t> over;
@@ -1532,6 +1646,7 @@ void do_tick() {
     // Apply (MineWater.md 4.2: sets first, then the moves that still hold).
     std::unordered_set<int64_t> set_now;
     std::unordered_set<int64_t> by_op;
+    const auto ta = std::chrono::steady_clock::now();
     {
         std::lock_guard<std::recursive_mutex> lk(g_state);
         for (const SetOp &o : g_sets) {
@@ -1570,6 +1685,7 @@ void do_tick() {
             set_now.insert(pack3(mv.x, mv.b, mv.z));
         }
     }
+    g_apply_ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - ta).count();
     for (int64_t k : set_now) {
         int x, b, z;
         unpack3(k, x, b, z);
@@ -1629,6 +1745,7 @@ void do_tick() {
     }
     g_last_meshes = meshed;
     g_active = (int)(g_due.size() + g_due_lava.size());
+    evict_far();
     g_last_ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
 }
 
@@ -1709,6 +1826,7 @@ double BrickFluid::reset(double sea_m, bool sea_on) {
     g_due_lava.clear();
     g_timers.clear();
     g_frozen.clear();
+    g_frozen_timers.clear();
     g_dirty_tiles.clear();
     g_mesh_requests.clear();
     g_far_requests.clear();
@@ -1861,7 +1979,7 @@ void BrickFluid::prime_tile(int tx, int tz, int b_lo, int b_hi) {
 bool BrickFluid::ocean_at(Vector3 p) {
     if (!g_sea_on) return false;
     const Vector3i k = cell_of(p);
-    std::lock_guard<std::recursive_mutex> lk(g_state);
+    MainLock lk;
     const Cell c = rcell(k.x, g_sea_b - 1, k.z);
     return c_wet(c) && c_ocean(c);
 }
@@ -1955,7 +2073,7 @@ void BrickFluid::request_mesh(int tx, int tz) {
 }
 
 Array BrickFluid::drawn_tiles() {
-    std::lock_guard<std::recursive_mutex> lk(g_state);
+    MainLock lk;
     Array out;
     for (const auto &e : g_tile_secs) {
         bool any = false;
@@ -1974,7 +2092,7 @@ Vector3i BrickFluid::cell_of(Vector3 p) {
 }
 
 Dictionary BrickFluid::cell_info(Vector3i cell) {
-    std::lock_guard<std::recursive_mutex> lk(g_state);
+    MainLock lk;
     const Cell c = rcell(cell.x, cell.y, cell.z);
     Dictionary d;
     d["fluid"] = c_wet(c) ? c_fluid(c) : 0;
@@ -1989,7 +2107,7 @@ Dictionary BrickFluid::cell_info(Vector3i cell) {
 
 int BrickFluid::fluid_at(Vector3 p) {
     const Vector3i k = cell_of(p);
-    std::lock_guard<std::recursive_mutex> lk(g_state);
+    MainLock lk;
     const Cell c = rcell(k.x, k.y, k.z);
     if (!c_wet(c)) return 0;
     const double top = (double)(k.y * 3 + floor_of(c.solid) + c.amt) * PLATE_M;
@@ -2000,7 +2118,7 @@ int BrickFluid::fluid_at(Vector3 p) {
 
 double BrickFluid::surface_at(Vector3 p) {
     const Vector3i k = cell_of(p);
-    std::lock_guard<std::recursive_mutex> lk(g_state);
+    MainLock lk;
     Cell c = rcell(k.x, k.y, k.z);
     if (!c_wet(c)) {
         // Just above a shallow cell: its top is still the surface here.
@@ -2021,7 +2139,7 @@ double BrickFluid::surface_at(Vector3 p) {
 
 Vector3 BrickFluid::flow_at(Vector3 p) {
     const Vector3i k = cell_of(p);
-    std::lock_guard<std::recursive_mutex> lk(g_state);
+    MainLock lk;
     const Cell c = rcell(k.x, k.y, k.z);
     if (!c_wet(c)) return Vector3();
     if (c_kind(c) == K_FALL) return Vector3(0, -2.0f, 0);
@@ -2059,7 +2177,7 @@ Dictionary BrickFluid::ray_cell(Vector3 from, Vector3 dir, double max_metres) {
         tmax[i] = (next - o[i]) / v[i];
         tdel[i] = cs[i] / std::abs(v[i]);
     }
-    std::lock_guard<std::recursive_mutex> lk(g_state);
+    MainLock lk;
     double t = 0.0;
     Vector3i nrm;
     for (int it = 0; it < 400 && t <= max_metres; ++it) {
@@ -2098,7 +2216,7 @@ PackedByteArray BrickFluid::sea_mask(int x0, int z0, int size) {
     std::vector<float> dist((size_t)size * size, 1.0e9f);
     for (int i = 0; i < size * size; ++i) { w[i * 2] = 0; w[i * 2 + 1] = 255; }
     const int cb = g_sea_b - 1;
-    std::lock_guard<std::recursive_mutex> lk(g_state);
+    MainLock lk;
     bool any = false;
     for (int tz = fdiv(z0, SX); tz <= fdiv(z0 + size - 1, SX); ++tz) {
         for (int tx = fdiv(x0, SX); tx <= fdiv(x0 + size - 1, SX); ++tx) {
@@ -2128,6 +2246,9 @@ PackedByteArray BrickFluid::sea_mask(int x0, int z0, int size) {
             }
         }
     }
+    // The cells are read; the distance passes need no lock (the water's
+    // worker waited for them too).
+    lk.lk.unlock();
     if (!any) return out;
     const float D2 = 1.41421356f;
     for (int iz = 0; iz < size; ++iz) {
@@ -2182,6 +2303,11 @@ Dictionary BrickFluid::stats() {
     d["frozen"] = (int)g_frozen.size();
     d["timers"] = (int)g_timers.size();
     d["sections"] = section_count();
+    d["evicted"] = g_evicted;
+    d["apply_ms"] = g_apply_ms;
+    d["main_wait_ms"] = (double)g_main_wait_worst_us.exchange(0) / 1000.0;
+    d["main_waits_1ms"] = g_main_waits_1ms.exchange(0);
+    d["frozen_timers"] = (int)g_frozen_timers.size();
     d["tick"] = (int64_t)g_tick;
     return d;
 }
@@ -2214,7 +2340,7 @@ int64_t BrickFluid::still_units(int fluid) {
 /// nothing there was changed). Sections with nothing wet and no generated
 /// fluid are skipped whole.
 PackedByteArray BrickFluid::get_save() {
-    std::lock_guard<std::recursive_mutex> lk(g_state);
+    MainLock lk;
     std::vector<uint8_t> buf;
     const char *magic = "BCFL";
     buf.insert(buf.end(), magic, magic + 4);
