@@ -137,6 +137,9 @@ func _ready() -> void:
 		if old != null:
 			for f in old.get_files():
 				old.remove(f)
+		# ... and its character: the pass starts from the starting kit.
+		if FileAccess.file_exists(GATE_CHARACTER):
+			DirAccess.remove_absolute(GATE_CHARACTER)
 	if _gate:
 		PlayerCamera.hands_off = true
 		var tw := get_node_or_null(^"/root/TestWindow")
@@ -591,7 +594,8 @@ func _land_breaks() -> void:
 		var res: Dictionary = BrickTerrain.clear_runs(runs)
 		if int(res.get("removed", 0)) == 0:
 			continue
-		debris.spawn(found["debris"], job[2])
+		# What a shot destroys is gone (the user, 2026-11-20): no brick thrown.
+		# What it leaves hanging falls -- the collapse, from terrain_edited.
 		terrain_edited(res)
 
 
@@ -1041,9 +1045,19 @@ func drop_from_player(s: ItemStack) -> void:
 	drops.spawn(s, feet + Vector3(0, 1.2, 0) + fwd * 0.4, fwd * 3.0 + Vector3(0, 1.5, 0))
 
 
+## The world menu's Survival box (Docs/Inventory.md 7): this world's game
+## mode, at once, saved with its changes.
+func set_survival(on: bool) -> void:
+	survival = on
+	builder.inv.creative = not on
+	builder.inv.changed.emit()
+	_world_dirty = true
+	print("[mine] game mode: %s" % ("survival" if on else "creative"))
+
+
 ## A chest or a dropped item changed: the save is out of date.
 func world_items_changed() -> void:
-	_inv_dirty = true
+	_world_dirty = true
 
 
 # ---------------------------------------------------------------------------
@@ -1181,6 +1195,13 @@ func _load_pieces() -> void:
 ## The player's items, beside the edits (Docs/Inventory.md 3.2): JSON, the
 ## inventory's own `to_dict`. No file: the starting kit.
 var _inv_dirty := false
+## The world's own items (chests, drops) or its mode changed (Docs/Inventory.md 6-7).
+var _world_dirty := false
+## The inventory came from the character already: a world generated after
+## keeps it.
+var _inv_loaded := false
+## This world's game mode (Docs/Inventory.md 7): saved in its world file.
+var survival := false
 
 
 static func _inventory_path(edits_path: String) -> String:
@@ -1188,34 +1209,83 @@ static func _inventory_path(edits_path: String) -> String:
 
 
 func _load_inventory() -> void:
-	var inv := Inventory.new()
 	var path := _inventory_path(save_path())
-	var ok := false
+	var world = null
 	if FileAccess.file_exists(path):
-		ok = inv.from_dict(JSON.parse_string(FileAccess.get_file_as_string(path)))
+		world = JSON.parse_string(FileAccess.get_file_as_string(path))
+	if not (world is Dictionary):
+		world = {}
+	var inv: Inventory = builder.inv
+	var first := not _inv_loaded
+	if first:
+		# The character's own (Docs/Inventory.md 6), once: after this the same
+		# inventory goes from world to world with the player.
+		inv = Inventory.new()
+		var ok := inv.from_dict(CharacterSave.load_from(character_path()).items)
+		var how := "the character's"
+		if not ok and world.has("hotbar_0"):
+			# A world file from before stage 6 held the inventory: it is the
+			# character's now (once -- the character has one from then on).
+			ok = inv.from_dict(world)
+			how = "taken from the old world file"
+			_inv_dirty = true
 		if not ok:
-			push_warning("[mine] %s is not an inventory; the starting kit instead" % path)
-	if not ok:
-		inv.seed_default()
-	# Kit added since the save was made.
-	elif inv.ensure_item(&"mega_pickaxe", &"pickaxe"):
-		print("[mine] Mega Pickaxe added to the saved inventory")
-	# Chests (stage 5) into a creative save's kit, beside the Mega Pickaxe.
-	# Not in survival: a player who placed theirs must not get more each load.
-	if ok and inv.creative and inv.ensure_item(&"chest", &"mega_pickaxe"):
-		print("[mine] chests added to the saved inventory")
-	var saved = JSON.parse_string(FileAccess.get_file_as_string(path)) if ok else null
+			inv.seed_default()
+			how = "the starting kit"
+		print("[mine] inventory: %s" % how)
+		if builder.inv.changed.is_connected(_on_inventory_changed):
+			builder.inv.changed.disconnect(_on_inventory_changed)
+		builder.set_inventory(inv)
+		inv.changed.connect(_on_inventory_changed)
+		_inv_loaded = true
+	# The world's game mode (stage 7). A file from before kept the inventory's
+	# own "creative" flag.
+	survival = bool(world.get("survival", not bool(world.get("creative", true))))
+	inv.creative = not survival
+	if first and how_kit_added(inv):
+		_inv_dirty = true
 	if chests != null:
 		chests.inv = inv
-		chests.restore(saved.get("chests", {}) if saved is Dictionary else {})
+		chests.restore(world.get("chests", {}))
 	if drops != null:
 		drops.inv = inv
-		drops.restore(saved.get("drops", []) if saved is Dictionary else [])
-	if builder.inv.changed.is_connected(_on_inventory_changed):
-		builder.inv.changed.disconnect(_on_inventory_changed)
-	builder.set_inventory(inv)
-	inv.changed.connect(_on_inventory_changed)
-	_inv_dirty = false
+		drops.restore(world.get("drops", []))
+	_world_dirty = false
+	builder._refresh_bar()
+
+
+## Kit added since a save was made (creative only: a survival player who
+## used theirs up must not get more each load). True if anything was added.
+func how_kit_added(inv: Inventory) -> bool:
+	if not inv.creative:
+		return false
+	var added := false
+	if inv.ensure_item(&"mega_pickaxe", &"pickaxe"):
+		print("[mine] Mega Pickaxe added to the inventory")
+		added = true
+	if inv.ensure_item(&"chest", &"mega_pickaxe"):
+		print("[mine] chests added to the inventory")
+		added = true
+	return added
+
+
+## Where the character (and so the inventory) is kept: the player's file, or
+## a scripted pass's own.
+const GATE_CHARACTER := UserPaths.DEV + "character_gate.json"
+
+
+func character_path() -> String:
+	return GATE_CHARACTER if _gate else CharacterSave.PATH
+
+
+## The inventory into the character file: read it, change only `items`,
+## write it (PlayerKit does the same with the guns and the level, so neither
+## loses the other's). A small file, on this thread, only when it changed.
+func save_character() -> void:
+	var s := CharacterSave.load_from(character_path())
+	s.items = builder.inv.to_dict()
+	DirAccess.make_dir_recursive_absolute(character_path().get_base_dir())
+	s.save(character_path())
 
 
 func _on_inventory_changed() -> void:
@@ -1242,11 +1312,16 @@ func save_edits(wait := false) -> void:
 		WorkerThreadPool.wait_for_task_completion(_save_task)
 		_save_task = -1
 	var fluid_at := BrickFluid.change_count()
-	if (not _edits_dirty and not _inv_dirty and fluid_at == _fluid_saved_at) or settings.is_empty():
+	if (not _edits_dirty and not _inv_dirty and not _world_dirty and fluid_at == _fluid_saved_at) \
+			or settings.is_empty():
 		return
 	_edits_dirty = false
-	_inv_dirty = false
-	var inv_save: Dictionary = builder.inv.to_dict()
+	_world_dirty = false
+	if _inv_dirty:
+		_inv_dirty = false
+		save_character()
+	# The world file: only what is the world's (stage 6).
+	var inv_save := {"format": 2, "survival": survival}
 	if chests != null:
 		inv_save["chests"] = chests.to_save()
 	if drops != null:
@@ -1755,6 +1830,54 @@ func _run_inventory_gate() -> void:
 			check.call("the ground under it removed: the chest breaks", chests.count() == 0)
 		_edits_dirty = true
 		save_edits(true)
+	# Stage 6: the inventory went into the character file, not the world's.
+	_inv_dirty = true
+	_edits_dirty = true
+	save_edits(true)
+	var ch := CharacterSave.load_from(GATE_CHARACTER)
+	var cinv := Inventory.new()
+	var wtext := FileAccess.get_file_as_string(_inventory_path(save_path()))
+	var wsave = JSON.parse_string(wtext)
+	check.call("the inventory is in the character file (granite in hotbar 2 slot 3)",
+			cinv.from_dict(ch.items) and cinv.hotbars[1][2] != null and cinv.hotbars[1][2].id == &"granite")
+	check.call("the world file holds only the world's (no hotbars; chests, drops, mode)",
+			wsave is Dictionary and not wsave.has("hotbar_0") and wsave.has("chests") and wsave.has("survival"))
+	# Stage 7: the world menu's Survival box, clicked.
+	toggle_menu()
+	await _frames(10)
+	var box: CheckBox = _menu.find_child("Survival", true, false) if _menu != null else null
+	if box != null:
+		await _click(box.get_global_rect().get_center())
+	check.call("the world menu's Survival box: survival on", box != null and survival and not inv.creative)
+	if _menu != null:
+		toggle_menu()
+		await _frames(5)
+	_fly_to(_eye() - Vector3(0, 1.6, 0), Vector3(0, 0, -1))
+	inv.select_item(&"granite")
+	var before := inv.hand().count if inv.hand() != null else -1
+	builder.size_i = 0
+	walker.pitch = -1.0
+	await _frames(10)
+	builder.update_target()
+	var put: bool = builder.place_target()
+	var after := inv.hand().count if inv.hand() != null else -1
+	# One brick a stud column it fills: 4 for a 2x2 block on flat ground, fewer
+	# where the ground already stood in a column (placing only fills air).
+	check.call("survival: a 2x2 block uses granite up (%d -> %d)" % [before, after],
+			put and after < before and after >= before - 4)
+	await _frames(5)
+	builder.update_target()
+	var took: bool = builder.break_target()
+	await _frames(5)
+	var after2 := inv.hand().count if inv.hand() != null else -1
+	check.call("survival: breaking it gives granite back (%d -> %d)" % [after, after2], took and after2 > after)
+	save_edits(true)
+	var again2 := settings.duplicate(true)
+	settings = {}
+	generate(again2)
+	await _frames(20)
+	check.call("after generating again: still survival", survival and not builder.inv.creative)
+	set_survival(false)
 	builder.set_active(false)
 	builder.gate_keys = false
 	print("[inv-gate] INV-GATE %s (%d failed)%s" % ["PASS" if fails.is_empty() else "FAIL",
@@ -2478,6 +2601,19 @@ func _gate_collapse() -> void:
 	var stands := BrickTerrain.solid_at(arm_cell.x, arm_cell.y, arm_cell.z) == 4
 	print("[mine-collapse] %s  the stone arm stands on its pillar" % ("ok  " if stands else "FAIL"))
 	fails += 0 if stands else 1
+	# A shot into the ground: its brick is gone, nothing is thrown (2026-11-20).
+	var gx := o.x + 20
+	var gz := o.y + 8
+	var gtop: int = top.call(gx, gz)
+	var bodies0: int = debris.bodies.size()
+	var edits0 := BrickTerrain.get_edit_count()
+	_mine(Vector3((gx + 0.5) * stud, (gtop + 1) * plate + 0.01, (gz + 0.5) * stud) + Vector3.DOWN * 0.03,
+			Vector3.DOWN, StructuralDamage.for_shot(null))
+	await _frames(20)
+	var gone_ok: bool = BrickTerrain.get_edit_count() > edits0 and debris.bodies.size() == bodies0
+	print("[mine-collapse] %s  a shot deletes its brick, throws none (%d plates edited, %d bodies thrown)" % [
+			"ok  " if gone_ok else "FAIL", BrickTerrain.get_edit_count() - edits0, debris.bodies.size() - bodies0])
+	fails += 0 if gone_ok else 1
 	# A floating dirt block and a floating sand block beside it.
 	var made0 := int(collapse.groups_let_go)
 	var d0 := Vector3i(o.x + 4, b + 30, o.y + 6)
@@ -3163,6 +3299,7 @@ func _run_sea_gate() -> void:
 			(Vector3(dir.x, 0, dir.y) * 0.6 - along).normalized())
 	walker.pitch = -0.35
 	await _frames(40)
+	print("[sea-gate] real sea square %s (tiles)" % water.real_rect)
 	for k in 3:
 		await _shot(dev + "sea_beach_%d.png" % k)
 		await _frames(60)

@@ -146,6 +146,27 @@ func compartments() -> Array[Dictionary]:
 	return out
 
 
+## The compartments (roots) with a hole, and nothing else worked out: what
+## VentDust asks four times a second. compartments() works out every door's
+## sides for every room -- 85-123 ms a call on a parked generated ship, a long
+## frame every 0.25 s (Docs/PlanetCost.md 8).
+func breached_roots() -> PackedInt32Array:
+	var out := PackedInt32Array()
+	for ci in _parent.size():
+		if _parent[ci] == ci and _breach[ci].size() > 0:
+			out.append(ci)
+	return out
+
+
+## How many rooms (compartment roots), without compartments()'s door sides.
+func room_count() -> int:
+	var n := 0
+	for ci in _parent.size():
+		if _parent[ci] == ci:
+			n += 1
+	return n
+
+
 func inside_cells() -> int:
 	var n := 0
 	for ci in _parent.size():

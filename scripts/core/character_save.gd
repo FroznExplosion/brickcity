@@ -27,11 +27,14 @@ var threat_profile := {}
 ## Who the enemy's attention went to, on average, last time: pilot and mech
 ## shares of the side's aggro (AI.md 8: the commander reads its history).
 var aggro := {"pilot": 0.5, "mech": 0.5}
+## The character's items (Docs/Inventory.md 6): the mine world's Inventory, as
+## its `to_dict` keeps it -- hotbars, off-hand, backpack. Empty: the starting kit.
+var items := {}
 
 
 func to_dict() -> Dictionary:
 	return {"version": VERSION, "character": character, "mech": mech, "guns": guns, "loadout": loadout,
-			"missions": missions, "threat_profile": threat_profile, "aggro": aggro}
+			"missions": missions, "threat_profile": threat_profile, "aggro": aggro, "items": items}
 
 
 static func from_dict(d: Dictionary) -> CharacterSave:
@@ -47,6 +50,7 @@ static func from_dict(d: Dictionary) -> CharacterSave:
 	s.missions = (d.get("missions", {}) as Dictionary).duplicate(true)
 	s.threat_profile = (d.get("threat_profile", {}) as Dictionary).duplicate(true)
 	s.aggro.merge(d.get("aggro", {}), true)
+	s.items = (d.get("items", {}) as Dictionary).duplicate(true)
 	return s
 
 

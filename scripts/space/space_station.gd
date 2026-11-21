@@ -66,6 +66,9 @@ const HULL_WATER_SHADER := preload("res://shaders/hull_water.gdshader")
 var air_leak := 0.0
 ## The worst water step (with its spray) and water drawing so far, microseconds.
 var water_step_us := 0.0
+## Its worst bricked _process and where it went (a gate reads them).
+var process_worst_us := 0
+var process_worst_what := ""
 var water_draw_us := 0.0
 ## The parts of those, worst each: the spray's update; the first drawing (it makes
 ## the node and its material) apart from the ones after.
@@ -806,17 +809,26 @@ func _process(_delta: float) -> void:
 		return
 	if bricked:
 		# The ship has moved for this frame already (PlanetSystem flies it first).
+		var t0 := Time.get_ticks_usec()
 		_g2r_prev = _g2r_last
 		_g2r_last = ghost_to_real()
 		_g2r_dt = _delta
 		_air_step(_delta)
+		var t1 := Time.get_ticks_usec()
 		if air != null:
 			vent_dust.update(self, _delta)
+		var t2 := Time.get_ticks_usec()
 		_water_step(_delta)
+		var t3 := Time.get_ticks_usec()
 		if riding:
 			# Its doors and lifts follow its chunk; flown, the chunk follows it.
 			bricks.set_chunk_transform(chunk, global_transform * frame)
 		_damage_step()
+		var t4 := Time.get_ticks_usec()
+		if t4 - t0 > process_worst_us:
+			process_worst_us = t4 - t0
+			process_worst_what = "air %.1f, vent dust %.1f, water %.1f, damage %.1f ms" % [
+					(t1 - t0) / 1000.0, (t2 - t1) / 1000.0, (t3 - t2) / 1000.0, (t4 - t3) / 1000.0]
 		return
 	_harvest()
 	if _band_next < bricks.get_chunk_sections(chunk):
@@ -990,7 +1002,7 @@ func _prepare_generated() -> void:
 	recipe.build(bricks, c, _palette)
 	air = HullAir.bake(bricks, c, recipe)
 	print("[station] %s: %d cells of air in %d room(s), baked in %.0f ms" % [data.orbital_name,
-			air.inside_cells(), air.compartments().size(), air.bake_ms])
+			air.inside_cells(), air.room_count(), air.bake_ms])
 	_template = bricks.save_template(c)
 	bricks.release_chunk(c)
 	_generated_shell()

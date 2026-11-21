@@ -151,6 +151,32 @@ bool g_sea_on = false;
 bool g_sloped = true;
 double g_cx = 0.0, g_cz = 0.0, g_sim_r = 90.0;
 double g_recheck_x = 1e30, g_recheck_z = 1e30;
+
+// THE REAL SEA (MineWater.md 11.8): near the player the sea's top course is
+// drawn by this mesher like any water -- a square of tiles round the player
+// -- and the wave tiers leave that square out (water.gdshader real_rect). A
+// beach dug there lets real sea in; waves no longer come up through sand.
+// The square moves in steps (two tiles of slack); a new one is primed a few
+// tiles a tick, reported when its meshes are out (take()'s "real_rect"), and
+// the old one is drawn until the script says the tiers have moved
+// (real_sea_shown), so there is never a hole between them.
+constexpr int REAL_T = 4;             ///< tiles each way from the square's middle
+constexpr int REAL_PRIME_PER_TICK = 3;
+bool g_real_sea = false;
+int g_real_x = INT_MIN, g_real_z = 0;     ///< the square being made
+int g_shown_x = INT_MIN, g_shown_z = 0;   ///< the square the tiers leave out
+std::vector<int64_t> g_real_todo;
+bool g_real_reported = true;
+bool g_out_real = false;
+int g_out_real_x = 0, g_out_real_z = 0;
+
+inline bool in_square(int tx, int tz, int cx, int cz) {
+    return cx != INT_MIN && std::abs(tx - cx) <= REAL_T && std::abs(tz - cz) <= REAL_T;
+}
+/// Is the sea's top drawn as real water in this tile?
+inline bool real_tile(int tx, int tz) {
+    return g_real_sea && g_sea_on && (in_square(tx, tz, g_real_x, g_real_z) || in_square(tx, tz, g_shown_x, g_shown_z));
+}
 uint32_t g_tick = 0;
 
 std::vector<int64_t> g_due;            ///< water (and anything) next tick
@@ -1018,6 +1044,36 @@ void apply_cmd(const Cmd &c) {
         g_mesh_requests.insert(tkey(c.a.x, c.a.z));
         return;
     }
+    if (c.type == 10) {
+        // The tiers now leave square (a.x, a.z) out: the one they left out
+        // before goes back to them where the real square no longer covers it.
+        const int ox = g_shown_x, oz = g_shown_z;
+        g_shown_x = c.a.x;
+        g_shown_z = c.a.z;
+        if (ox != INT_MIN) {
+            for (int dz = -REAL_T; dz <= REAL_T; ++dz) {
+                for (int dx = -REAL_T; dx <= REAL_T; ++dx) {
+                    if (!real_tile(ox + dx, oz + dz)) g_dirty_tiles.insert(tkey(ox + dx, oz + dz));
+                }
+            }
+        }
+        return;
+    }
+    if (c.type == 11) {
+        // The real sea on or off: every square forgotten, its tiles meshed again.
+        const int rx = g_real_x, rz = g_real_z, sx = g_shown_x, sz = g_shown_z;
+        g_real_sea = c.a.x != 0;
+        g_real_x = g_shown_x = INT_MIN;
+        g_real_todo.clear();
+        g_real_reported = true;
+        for (int dz = -REAL_T; dz <= REAL_T; ++dz) {
+            for (int dx = -REAL_T; dx <= REAL_T; ++dx) {
+                if (rx != INT_MIN) g_dirty_tiles.insert(tkey(rx + dx, rz + dz));
+                if (sx != INT_MIN) g_dirty_tiles.insert(tkey(sx + dx, sz + dz));
+            }
+        }
+        return;
+    }
     if (c.type == 6) {
         g_far_requests.insert(tkey(c.a.x, c.a.z));
         return;
@@ -1149,6 +1205,19 @@ struct MeshBuf {
         idx.push_back(base); idx.push_back(base + 1); idx.push_back(base + 2);
         idx.push_back(base); idx.push_back(base + 2); idx.push_back(base + 3);
     }
+    /// A real sea top: CUSTOM0 y = 1 (sea), z = how open the water is at the
+    /// vertex (0 against ground, 1 four studs out) -- the shader's waves.
+    void sea_quad(const Vector3 &a, const Vector3 &b, const Vector3 &c, const Vector3 &d,
+            const Color &cc, float sa, float sb, float sc, float sd) {
+        const int base = (int)v.size();
+        v.push_back(a); v.push_back(b); v.push_back(c); v.push_back(d);
+        for (int i = 0; i < 4; ++i) { n.push_back(Vector3(0, 1, 0)); col.push_back(cc); }
+        for (float e : { sa, sb, sc, sd }) {
+            cus.push_back(0.0f); cus.push_back(1.0f); cus.push_back(e); cus.push_back(0.0f);
+        }
+        idx.push_back(base); idx.push_back(base + 1); idx.push_back(base + 2);
+        idx.push_back(base); idx.push_back(base + 2); idx.push_back(base + 3);
+    }
     Array arrays() const {
         Array a;
         if (v.is_empty()) return a;
@@ -1170,8 +1239,19 @@ inline int top_plates(int x, int b, int z, const Cell &c) {
     return b * 3 + floor_of(c.solid) + c.amt;
 }
 
+/// A top corner: the mean of the tops round it that are open at this course.
+/// A neighbour with more of its fluid over it (a pile still draining, a
+/// fall's foot) is NOT counted: it used to snap the corner to a full brick,
+/// so the thin water round a poured brick jumped up to a brick and back as
+/// the pile went down (the user, 2026-11-20). The pile's own side covers the
+/// step between them. A stacked cell itself is full at every corner.
 float corner_h(int x, int b, int z, int cx, int cz, int fluid, int own) {
     if (!g_sloped) return (float)own;
+    const int full = (b + 1) * 3;
+    if (own >= full) {
+        const Cell &a = wcell(x, b + 1, z);
+        if (c_wet(a) && c_fluid(a) == fluid) return (float)full;
+    }
     float sum = 0.0f;
     int n = 0;
     for (int dz = -1; dz <= 0; ++dz) {
@@ -1179,9 +1259,9 @@ float corner_h(int x, int b, int z, int cx, int cz, int fluid, int own) {
             const int qx = cx + dx, qz = cz + dz;
             const Cell &q = (qx == x && qz == z) ? wcell(x, b, z) : wcell(qx, b, qz);
             if (!c_wet(q) || c_fluid(q) != fluid) continue;
-            const int t = top_plates(qx, b, qz, q);
-            if (t >= (b + 1) * 3) return (float)((b + 1) * 3);
-            sum += (float)t;
+            const Cell &qa = wcell(qx, b + 1, qz);
+            if (c_wet(qa) && c_fluid(qa) == fluid && !(qx == x && qz == z)) continue;
+            sum += (float)top_plates(qx, b, qz, q);
             ++n;
         }
     }
@@ -1191,6 +1271,95 @@ float corner_h(int x, int b, int z, int cx, int cz, int fluid, int own) {
 /// Each tile's top corners as last meshed (metres), keyed by corner, course
 /// and fluid: the next mesh's vertices carry how far they moved since.
 std::unordered_map<int64_t, std::unordered_map<int64_t, float>> g_prev_tops;
+
+/// The real sea's tops of a tile: how open each stud is (studs to the nearest
+/// column whose sea course is not open sea, up to SEA_OPEN, over the tile and
+/// a margin), then a quad a stud within SEA_OPEN of the shore -- the lapping
+/// needs the vertices -- and 4 x 4 studs out in open water.
+constexpr int SEA_OPEN = 4;
+void mesh_sea_tops(int tx, int tz, const bool *top, MeshBuf &m) {
+    constexpr int M = SEA_OPEN, W = SX + 2 * M;
+    uint8_t d[W * W];
+    const int sb = g_sea_b - 1;
+    for (int gz = 0; gz < W; ++gz) {
+        for (int gx = 0; gx < W; ++gx) {
+            const int lx = gx - M, lz = gz - M;
+            bool sea;
+            if (lx >= 0 && lz >= 0 && lx < SX && lz < SX) sea = top[lx + SX * lz];
+            else {
+                const int x = tx * SX + lx, z = tz * SX + lz;
+                const Cell &c = wcell(x, sb, z);
+                const Cell &a = wcell(x, sb + 1, z);
+                sea = c_wet(c) && c_ocean(c) && !(c_wet(a) && c_fluid(a) == F_WATER);
+            }
+            d[gx + W * gz] = sea ? (uint8_t)M : 0;
+        }
+    }
+    // Chebyshev distance, two passes.
+    for (int gz = 0; gz < W; ++gz) {
+        for (int gx = 0; gx < W; ++gx) {
+            uint8_t &v = d[gx + W * gz];
+            if (v == 0) continue;
+            for (int k = 0; k < 4; ++k) {
+                static const int OX[4] = { -1, 0, 1, -1 }, OZ[4] = { 0, -1, -1, -1 };
+                const int nx = gx + OX[k], nz = gz + OZ[k];
+                if (nx < 0 || nz < 0 || nx >= W) continue;
+                v = (uint8_t)std::min<int>(v, d[nx + W * nz] + 1);
+            }
+        }
+    }
+    for (int gz = W - 1; gz >= 0; --gz) {
+        for (int gx = W - 1; gx >= 0; --gx) {
+            uint8_t &v = d[gx + W * gz];
+            if (v == 0) continue;
+            for (int k = 0; k < 4; ++k) {
+                static const int OX[4] = { 1, 0, -1, 1 }, OZ[4] = { 0, 1, 1, 1 };
+                const int nx = gx + OX[k], nz = gz + OZ[k];
+                if (nx < 0 || nx >= W || nz >= W) continue;
+                v = (uint8_t)std::min<int>(v, d[nx + W * nz] + 1);
+            }
+        }
+    }
+    // A corner's openness: the least of the four studs round it, 0..1.
+    auto open_at = [&](int lx, int lz) -> float {
+        int v = M;
+        for (int dz = -1; dz <= 0; ++dz) {
+            for (int dx = -1; dx <= 0; ++dx) v = std::min<int>(v, d[(lx + dx + M) + W * (lz + dz + M)]);
+        }
+        return (float)std::max(0, v - 1) / (float)(M - 1);
+    };
+    const float y = (float)(g_sea_b * 3) * PLATE_M - TOP_SINK;
+    const Color cc(1.0f, 0.0f, 0.5f, 0.5f);
+    bool done[SX * SX] = {};
+    for (int bz = 0; bz < SX; bz += 4) {
+        for (int bx = 0; bx < SX; bx += 4) {
+            bool whole = true;
+            for (int lz = bz; lz < bz + 4 && whole; ++lz) {
+                for (int lx = bx; lx < bx + 4 && whole; ++lx) {
+                    whole = top[lx + SX * lz] && d[(lx + M) + W * (lz + M)] >= M;
+                }
+            }
+            if (whole) {
+                const float x0 = (float)(tx * SX + bx) * STUD_M, x1 = (float)(tx * SX + bx + 4) * STUD_M;
+                const float z0 = (float)(tz * SX + bz) * STUD_M, z1 = (float)(tz * SX + bz + 4) * STUD_M;
+                m.sea_quad(Vector3(x0, y, z0), Vector3(x0, y, z1), Vector3(x1, y, z1), Vector3(x1, y, z0), cc,
+                        open_at(bx, bz), open_at(bx, bz + 4), open_at(bx + 4, bz + 4), open_at(bx + 4, bz));
+                for (int lz = bz; lz < bz + 4; ++lz) {
+                    for (int lx = bx; lx < bx + 4; ++lx) done[lx + SX * lz] = true;
+                }
+            }
+        }
+    }
+    for (int lz = 0; lz < SX; ++lz) {
+        for (int lx = 0; lx < SX; ++lx) {
+            if (!top[lx + SX * lz] || done[lx + SX * lz]) continue;
+            const float x0 = (float)(tx * SX + lx) * STUD_M, x1 = (float)(tx * SX + lx + 1) * STUD_M;
+            const float z0 = (float)(tz * SX + lz) * STUD_M, z1 = (float)(tz * SX + lz + 1) * STUD_M;
+            m.sea_quad(Vector3(x0, y, z0), Vector3(x0, y, z1), Vector3(x1, y, z1), Vector3(x1, y, z0), cc,
+                    open_at(lx, lz), open_at(lx, lz + 1), open_at(lx + 1, lz + 1), open_at(lx + 1, lz));
+        }
+    }
+}
 
 void mesh_tile(int tx, int tz, Array &water, Array &lava) {
     MeshBuf buf[3];
@@ -1204,6 +1373,9 @@ void mesh_tile(int tx, int tz, Array &water, Array &lava) {
         auto it = prev.find(k);
         return (it != prev.end() ? it->second : base) - y;
     };
+    const bool real = real_tile(tx, tz);
+    bool sea_top[SX * SX] = {};
+    bool any_sea = false;
     auto it = g_tile_secs.find(tkey(tx, tz));
     if (it != g_tile_secs.end()) {
         std::vector<int> sbs = it->second;
@@ -1264,7 +1436,10 @@ void mesh_tile(int tx, int tz, Array &water, Array &lava) {
                         // Only an open top sinks under the course; a side under
                         // more water meets the course above (no seam in a fall).
                         const float sink = top_open ? TOP_SINK : 0.0f;
-                        if (top_open && !(c_ocean(c) && own == g_sea_b * 3)
+                        if (top_open && c_ocean(c) && own == g_sea_b * 3 && real) {
+                            sea_top[lx + SX * lz] = true;
+                            any_sea = true;
+                        } else if (top_open && !(c_ocean(c) && own == g_sea_b * 3)
                                 && h00 == h10 && h10 == h11 && h11 == h01) {
                             flat[lx + SX * lz] = { true, h00, cc, f };
                             any_flat = true;
@@ -1353,6 +1528,7 @@ void mesh_tile(int tx, int tz, Array &water, Array &lava) {
             }
         }
     }
+    if (any_sea) mesh_sea_tops(tx, tz, sea_top, buf[F_WATER]);
     water = buf[F_WATER].arrays();
     lava = buf[F_LAVA].arrays();
     prev.swap(now);
@@ -1530,6 +1706,55 @@ void evict_far() {
     g_sec_epoch.fetch_add(1);
 }
 
+/// Move the real sea square with the player; prime a few of its tiles' sea
+/// columns a tick (the sea's top course read, so it has sections to mesh).
+void real_sea_upkeep() {
+    if (!g_real_sea || !g_sea_on) return;
+    const double tm = (double)SX * STUD_M;
+    const int ctx = (int)std::floor(g_cx / tm), ctz = (int)std::floor(g_cz / tm);
+    if (g_real_x == INT_MIN || std::abs(ctx - g_real_x) >= 2 || std::abs(ctz - g_real_z) >= 2) {
+        const int ox = g_real_x, oz = g_real_z;
+        g_real_x = ctx;
+        g_real_z = ctz;
+        g_real_todo.clear();
+        for (int dz = -REAL_T; dz <= REAL_T; ++dz) {
+            for (int dx = -REAL_T; dx <= REAL_T; ++dx) {
+                const int tx = ctx + dx, tz = ctz + dz;
+                if (!in_square(tx, tz, ox, oz) && !in_square(tx, tz, g_shown_x, g_shown_z)) g_real_todo.push_back(tkey(tx, tz));
+            }
+        }
+        // Nearest first.
+        std::sort(g_real_todo.begin(), g_real_todo.end(), [&](int64_t a, int64_t b) {
+            const int ax = tile_coord(a, false) - ctx, az = tile_coord(a, true) - ctz;
+            const int bx = tile_coord(b, false) - ctx, bz = tile_coord(b, true) - ctz;
+            return ax * ax + az * az > bx * bx + bz * bz;   // popped from the back
+        });
+        // The square it left (not the one the tiers still leave out) goes
+        // back to the tiers' sea.
+        if (ox != INT_MIN) {
+            for (int dz = -REAL_T; dz <= REAL_T; ++dz) {
+                for (int dx = -REAL_T; dx <= REAL_T; ++dx) {
+                    const int tx = ox + dx, tz = oz + dz;
+                    if (!real_tile(tx, tz)) g_dirty_tiles.insert(tkey(tx, tz));
+                }
+            }
+        }
+        g_real_reported = false;
+    }
+    for (int n = 0; n < REAL_PRIME_PER_TICK && !g_real_todo.empty(); ++n) {
+        const int64_t k = g_real_todo.back();
+        g_real_todo.pop_back();
+        const int tx = tile_coord(k, false), tz = tile_coord(k, true);
+        bool any = false;
+        for (int lz = 0; lz < SX; ++lz) {
+            for (int lx = 0; lx < SX; ++lx) {
+                if (gen_sea_col(tx * SX + lx, tz * SX + lz)) any = true;
+            }
+        }
+        if (any || g_tile_secs.count(k)) g_dirty_tiles.insert(k);
+    }
+}
+
 void do_tick() {
     const auto t0 = std::chrono::steady_clock::now();
     t_may_compute = true;
@@ -1702,6 +1927,8 @@ void do_tick() {
         if (!q) { q = 1; g_due_lava.push_back(k); }
     }
 
+    real_sea_upkeep();
+
     // Meshes for what changed, and what was asked for.
     const auto tm = std::chrono::steady_clock::now();
     for (int64_t k : g_mesh_requests) g_dirty_tiles.insert(k);
@@ -1721,6 +1948,13 @@ void do_tick() {
     }
     g_dirty_tiles.clear();
     for (int64_t k : left) g_dirty_tiles.insert(k);
+    // A new real sea square is reported once all of it is primed and meshed.
+    if (!g_real_reported && g_real_todo.empty() && left.empty()) {
+        g_real_reported = true;
+        g_out_real = true;
+        g_out_real_x = g_real_x;
+        g_out_real_z = g_real_z;
+    }
     std::vector<int64_t> far_left;
     for (int64_t k : g_far_requests) {
         if (meshed >= MESH_PER_TICK) { far_left.push_back(k); continue; }
@@ -1937,6 +2171,10 @@ Dictionary BrickFluid::take() {
         for (int32_t v : g_out_fire) fire.push_back(v);
         out["fire"] = fire;
         mask = g_out_mask;
+        if (g_out_real) {
+            out["real_rect"] = Rect2i(g_out_real_x - REAL_T, g_out_real_z - REAL_T, 2 * REAL_T + 1, 2 * REAL_T + 1);
+            g_out_real = false;
+        }
         g_out_meshes.clear();
         g_out_terrain.clear();
         g_out_fire.clear();
@@ -1973,6 +2211,20 @@ void BrickFluid::prime_tile(int tx, int tz, int b_lo, int b_hi) {
     c.type = 7;
     c.a = Vector3i(tx, 0, tz);
     c.b = Vector3i(b_lo, b_hi, 0);
+    push_cmd(c);
+}
+
+void BrickFluid::set_real_sea(bool on) {
+    Cmd c;
+    c.type = 11;
+    c.a = Vector3i(on ? 1 : 0, 0, 0);
+    push_cmd(c);
+}
+
+void BrickFluid::real_sea_shown(Rect2i tiles) {
+    Cmd c;
+    c.type = 10;
+    c.a = Vector3i(tiles.position.x + REAL_T, 0, tiles.position.y + REAL_T);
     push_cmd(c);
 }
 
@@ -2440,6 +2692,8 @@ void BrickFluid::_bind_methods() {
             DEFVAL(1), DEFVAL(0));
     ClassDB::bind_static_method("BrickFluid", D_METHOD("lake_top", "x", "z"), &BrickFluid::lake_top);
     ClassDB::bind_static_method("BrickFluid", D_METHOD("ocean_at", "point"), &BrickFluid::ocean_at);
+    ClassDB::bind_static_method("BrickFluid", D_METHOD("set_real_sea", "on"), &BrickFluid::set_real_sea);
+    ClassDB::bind_static_method("BrickFluid", D_METHOD("real_sea_shown", "tiles"), &BrickFluid::real_sea_shown);
     ClassDB::bind_static_method("BrickFluid", D_METHOD("set_change_log", "on"), &BrickFluid::set_change_log);
     ClassDB::bind_static_method("BrickFluid", D_METHOD("set_simulating", "on"), &BrickFluid::set_simulating);
     ClassDB::bind_static_method("BrickFluid", D_METHOD("get_simulating"), &BrickFluid::get_simulating);

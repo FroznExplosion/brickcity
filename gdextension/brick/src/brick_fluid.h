@@ -89,6 +89,12 @@ public:
     /// Is the sea's top course over this point's column open sea (ocean)?
     /// One call, no Dictionary: the floaters and the swimmer ask it often.
     static bool ocean_at(Vector3 p);
+    /// The real sea near the player (MineWater.md 11.8): its top course drawn
+    /// by the fluid mesher in a square of tiles round the centre. take()
+    /// gives "real_rect" (tiles) once a new square is drawn; the script moves
+    /// the wave tiers' hole there and calls real_sea_shown with it.
+    static void set_real_sea(bool on);
+    static void real_sea_shown(Rect2i tiles);
 
     /// MULTIPLAYER GROUNDWORK (Docs/MineWater.md 11.5). The authority (the
     /// host) simulates and keeps a change log; a peer asks for what changed

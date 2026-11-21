@@ -64,6 +64,9 @@ var debris_max := DEBRIS_MAX_BLOCKS
 ## Draw each piece's open studs with it (the mine world: a piece of ground
 ## shows its studs as the ground does; the city draws studs apart).
 var studs := false
+## Throw the bricks a hit kills as crumbs (the planet); false: they are
+## simply gone, and only what is left of the piece moves (the mine world).
+var throw_killed := true
 ## A piece over the cap shrinks away over this long (never a pop).
 const FADE_MS := 600
 
@@ -484,7 +487,8 @@ func damage(p: Piece, point: Vector3, shot: Dictionary) -> int:
 	hits += 1
 	hit_killed += killed.size()
 	var linear := Vector3.ZERO if p.settled else p.body.linear_velocity
-	crumbs.throw(bricks, p.chunk, killed, linear, point, radius * IslandManager.BLAST_CORE if blast else 0.0)
+	if throw_killed:
+		crumbs.throw(bricks, p.chunk, killed, linear, point, radius * IslandManager.BLAST_CORE if blast else 0.0)
 	var gone_box := xf * bricks.get_blocks_box(p.chunk, killed)
 	p.bricks = maxi(p.bricks - killed.size(), 0)
 	if bricks.get_alive_block_count(p.chunk) == 0:

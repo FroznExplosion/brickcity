@@ -223,6 +223,16 @@ func _build_world_tab() -> void:
 	_int_slider(p, "Full detail radius (tiles)", s, "detail_tiles", 2, 8)
 	_int_slider(p, "View distance (tiles of far rings)", s, "far_tiles", 16, 192)
 	_float_slider(p, "World height scale", s.gen, "height_scale", 0.2, 3.0, 0.05)
+	_section(p, "Game mode")
+	# Not part of the settings being edited: it changes THIS world at once,
+	# no Generate (Docs/Inventory.md 7), and is saved with the world's changes.
+	var mode := CheckBox.new()
+	mode.name = "Survival"
+	mode.text = "Survival"
+	mode.button_pressed = bool(host.get("survival"))
+	mode.toggled.connect(func(on: bool) -> void: host.set_survival(on))
+	p.add_child(mode)
+	p.add_child(_note("Survival: placing uses up what you hold and breaking gives you the bricks; no Creative tab. Creative: nothing runs out. For this world only, at once. Your inventory is your character's and comes with you from world to world."))
 	_section(p, "Your changes")
 	p.add_child(_note("Blocks you break and place are saved for each seed and settings, every 30 s and when you leave or generate. Change a setting and it is a different world with its own changes."))
 	_button(p, "Forget changes to this world", func() -> void:

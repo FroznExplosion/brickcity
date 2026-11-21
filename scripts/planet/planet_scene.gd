@@ -110,6 +110,7 @@ var _falling_gate := false
 var _mechwave_gate := false
 var _rocks_gate := false
 var _cost_gate := false
+var _load_gate := false
 ## Held: the sky and ambient are not set again each frame (the cost gate prices it).
 var sky_hold := false
 var map: GalaxyMap
@@ -159,10 +160,23 @@ var _play_hitches: Array = []
 var _last_us := 0
 
 
+## The brick buildings' shapes made while the scene loads: those this near the
+## spawn; the rest in idle frames, nearest first (PlanetBuildings._idle_template).
+## 330-370 ms of the load. Tried 200 m (2026-11-20): the load 230 ms shorter, but
+## the shapes it left were built in play, 15-21 ms frames -- `--gate=bricks`'
+## "brick work stays small a frame (< 12 ms)" failed. Kept at 400.
+const TEMPLATES_AT_LOAD_M := 400.0
+
 ## The planet's gravity is this scene's: off with it, so the next scene (the
 ## city, the menu) is not pulled toward a freed planet (Gravity.reset).
 func _exit_tree() -> void:
 	Gravity.reset()
+	# The nav regions still building on workers (setup_ai's, _prepare_ai's).
+	if _ai_prep != null:
+		_ai_prep.wait_builds()
+	for s in ai_of.values():
+		if s != null and s.nav_net is PlanetNavNet:
+			(s.nav_net as PlanetNavNet).wait_builds()
 
 ## The gates (`-- --gate=<name>`) live in tools/passes/planet_gates.gd, out of the
 ## game's own code: made the first time a gate is asked for, never in a plain run.
@@ -209,6 +223,9 @@ func _ready() -> void:
 	_mechwave_gate = "--gate=mechwave" in OS.get_cmdline_user_args()
 	_rocks_gate = "--gate=rocks" in OS.get_cmdline_user_args()
 	_cost_gate = "--gate=cost" in OS.get_cmdline_user_args()
+	_load_gate = "--gate=load" in OS.get_cmdline_user_args()
+	load_parts["engine up to the scene"] = float(Time.get_ticks_usec()) / 1000.0
+	_lap_at = Time.get_ticks_usec()
 	_garrison_gate = "--gate=garrison" in OS.get_cmdline_user_args()
 	_seat_gate = "--gate=seat" in OS.get_cmdline_user_args()
 	_auto_gate = "--gate=autopilot" in OS.get_cmdline_user_args()
@@ -217,7 +234,7 @@ func _ready() -> void:
 	_home_gate = "--gate=home" in OS.get_cmdline_user_args()
 	_save_gate = "--gate=save" in OS.get_cmdline_user_args()
 	WorldFrame.origin = Vector3.ZERO
-	_gate = _gate or _cost_gate or _light_gate or _system_gate or _ship_gate or _dock_gate or _worlds_gate or _jump_gate or _debris_gate or _adrift_gate or _falling_gate or _mechwave_gate or _rocks_gate or _garrison_gate or _seat_gate or _hull_gate or _belt_gate or _home_gate or _save_gate or _pawn_gate or _mech_gate or _tank_gate or _soldier_gate or _squad_gate or _travel_gate or _far_gate or _drive_gate or _trees_gate or _bricks_gate or _damage_gate or _fall_gate or _hits_gate or _topple_gate or _pieces_ai_gate or _storey_gate or _snap_gate or _farfight_gate
+	_gate = _gate or _cost_gate or _load_gate or _light_gate or _system_gate or _ship_gate or _dock_gate or _worlds_gate or _jump_gate or _debris_gate or _adrift_gate or _falling_gate or _mechwave_gate or _rocks_gate or _garrison_gate or _seat_gate or _hull_gate or _belt_gate or _home_gate or _save_gate or _pawn_gate or _mech_gate or _tank_gate or _soldier_gate or _squad_gate or _travel_gate or _far_gate or _drive_gate or _trees_gate or _bricks_gate or _damage_gate or _fall_gate or _hits_gate or _topple_gate or _pieces_ai_gate or _storey_gate or _snap_gate or _farfight_gate
 	data = PlanetData.new()
 	data.planet_name = "proto"
 	# Towns and landmarks: their pads go into the ground before it is built.
@@ -242,31 +259,40 @@ func _ready() -> void:
 		data.pads.append(PlanetBuildings.town_pad(data, d, 30.0, 40.0))
 	planet = PlanetBody.new()
 	add_child(planet)
+	_lap("towns placed")
 	planet.setup(data)
+	_lap("planet: impostor bake + graph")
 	buildings = PlanetBuildings.new()
 	planet.add_child(buildings)
 	buildings.setup(planet)
+	_lap("buildings set up")
 	for d in town_dirs:
 		buildings.add_town(d, town_rows if d == town_dirs[0] else 6, 30.0, rng)
 	buildings.add_landmark(landmark_dirs[0], 80, 80, 900, rng)
 	buildings.add_landmark(landmark_dirs[1], 100, 100, 1200, rng)
 	buildings.add_landmark(landmark_dirs[2], 80, 80, 700, rng)
 	buildings.finish()
+	_lap("towns and landmarks laid out")
 	# Trees by biome, streamed round the camera (11.10).
 	trees = PlanetTrees.new()
 	planet.add_child(trees)
 	trees.setup(data)
 	trees.prebake()
+	_lap("trees set up (cards baking)")
 	# The brick buildings' shapes round the spawn, while it loads (11.11).
-	var tpl_ms := buildings.prepare_templates(planet.global_position + data.surface_point(spawn_dir), 400.0)
+	_lap_at = Time.get_ticks_usec()
+	var tpl_ms := buildings.prepare_templates(planet.global_position + data.surface_point(spawn_dir), TEMPLATES_AT_LOAD_M)
 	Gravity.planet = planet
 	Gravity.planet_strength = data.gravity_strength
 	Gravity.planet_radius = data.radius
 	print("[planet] %s: radius %.0f m, relief %.0f m, sea %.0f m; impostor baked in %d ms; brick shapes %.0f ms" % [
 			data.planet_name, data.radius, data.amplitude, data.sea_level, planet.bake_ms, tpl_ms])
+	_lap("brick shapes")
 	if not "--no-system" in OS.get_cmdline_user_args():
 		_build_system()
+	_lap("star system")
 	_build_light()
+	_lap("light")
 	walker = PlanetWalker.new()
 	walker.name = "Walker"
 	walker.add_to_group(PlanetSystem.RIG)
@@ -279,15 +305,19 @@ func _ready() -> void:
 	walker.camera.current = true
 	walker.place(planet.global_position + data.surface_point(spawn_dir) + spawn_dir * 1.0,
 			east)
+	_lap("walker, ship")
 	planet.activate()
+	_lap("voxel ground made")
 	# The walker at the origin from the start: the planet's centre is 10 km off.
 	PlanetFrame.recentre(self, walker.global_position)
 	_build_hud()
+	_lap("hud")
 	# The buildings' occluders hide what is behind them (Docs/PlanetCost.md 5.5).
 	get_viewport().use_occlusion_culling = true
 	# The town's nav regions start building now, on workers (setup_ai collects).
-	if not _gate or _cost_gate:
+	if not _gate or _cost_gate or _load_gate:
 		_prepare_ai(town_dirs[0])
+	_lap("the AI's regions started")
 	if _gate:
 		PlayerCamera.hands_off = true
 		walker.scripted = true
@@ -366,6 +396,8 @@ func _ready() -> void:
 			_gate_runner()._run_belt_gate()
 		elif _cost_gate:
 			_gate_runner()._run_cost_gate()
+		elif _load_gate:
+			_gate_runner()._run_load_gate()
 		else:
 			_gate_runner()._run_gate()
 
@@ -537,6 +569,16 @@ func before_leaving() -> void:
 
 
 ## A dark screen over coming back to where the save was.
+## What the scene's _ready spent, part by part, ms (the load gate prints it).
+var load_parts := {}
+var _lap_at := 0
+
+func _lap(what: String) -> void:
+	var now := Time.get_ticks_usec()
+	load_parts[what] = snappedf(float(now - _lap_at) / 1000.0, 0.1)
+	_lap_at = now
+
+
 func veil(on: bool) -> void:
 	_flash.color = Color(0, 0, 0, 1) if on else Color(1, 1, 1, 0)
 
@@ -833,7 +875,7 @@ func _build_system() -> void:
 	system.woke.connect(_on_woke)
 	system.jumped.connect(_on_jumped)
 	# A ship parked 45 m behind the spawn (not in the other gates' way).
-	if not _gate or _cost_gate or _ship_gate or _dock_gate or _jump_gate or _rocks_gate or _garrison_gate or _seat_gate or _belt_gate or _hull_gate or _save_gate or _falling_gate:
+	if not _gate or _cost_gate or _load_gate or _ship_gate or _dock_gate or _jump_gate or _rocks_gate or _garrison_gate or _seat_gate or _belt_gate or _hull_gate or _save_gate or _falling_gate:
 		var sd := OrbitalData.new()
 		sd.kind = "ship"
 		sd.orbital_name = "ship"
@@ -842,7 +884,7 @@ func _build_system() -> void:
 		sd.courses = 6
 		# In play a generated ship: a hull with its rooms (Docs/RoomModules.md 7.5);
 		# the gates keep the plain one they were written round.
-		if not _gate or _hull_gate or _cost_gate:
+		if not _gate or _hull_gate or _cost_gate or _load_gate:
 			sd.layout = "generated"
 			sd.orbital_seed = 7
 		var east := spawn_dir.cross(Vector3.FORWARD).normalized()
@@ -1166,10 +1208,27 @@ var process_worst_us := 0
 func _process(delta: float) -> void:
 	var t_in := Time.get_ticks_usec()
 	_process_body(delta)
-	process_worst_us = maxi(process_worst_us, Time.get_ticks_usec() - t_in)
+	var us := Time.get_ticks_usec() - t_in
+	if us > process_worst_us:
+		process_worst_us = us
+		process_worst_what = str(_plaps)
+
+
+var process_worst_what := ""
+var _plaps := {}
+var _plap_at := 0
+
+func _plap(what: String) -> void:
+	var now := Time.get_ticks_usec()
+	var ms := snappedf(float(now - _plap_at) / 1000.0, 0.1)
+	if ms >= 0.5:
+		_plaps[what] = ms
+	_plap_at = now
 
 
 func _process_body(delta: float) -> void:
+	_plaps.clear()
+	_plap_at = Time.get_ticks_usec()
 	_fights_in -= delta
 	if _fights_in <= 0.0:
 		_fights_in = FIGHTS_EVERY
@@ -1186,6 +1245,7 @@ func _process_body(delta: float) -> void:
 	# Flying: the pawn's camera (arms, gun) where the walker's is.
 	if not on_foot and not piloting and cam != null:
 		FpsRig.follow_flight(cam, walker)
+	_plap("fights, clock")
 	var cam_pos := _eye()
 	var body := _body()
 	var alt := body.altitude_of(cam_pos)
@@ -1213,6 +1273,7 @@ func _process_body(delta: float) -> void:
 		_stepping_out = -1
 		pawn.place(ship.global_transform * ship.seat() + ship.global_basis.y * 0.1)
 		pawn.body.process_mode = Node.PROCESS_MODE_INHERIT
+	_plap("origin, system air")
 	if system != null and pawn != null and on_foot:
 		_ghost_tick()
 	if piloting:
@@ -1221,6 +1282,7 @@ func _process_body(delta: float) -> void:
 		if not _gate:
 			_pilot_input()
 	# Stream the voxel ground to the horizon and the peaks behind it, no further.
+	_plap("ghost, seat")
 	var want := body.horizon_reach(cam_pos, body.data.peak()) + VIEW_MARGIN
 	var q := clampi(int(ceil(want / VIEW_STEP)) * VIEW_STEP, VIEW_MIN, VIEW_MAX)
 	if q != walker.viewer.view_distance:
@@ -1235,27 +1297,33 @@ func _process_body(delta: float) -> void:
 		day = smoothstep(-0.18, 0.12, system.sun_height) if air > 0.0 else system.sunlight
 		sun_h = system.sun_height
 	var viewer := get_viewport().get_camera_3d()
+	_plap("view distance")
 	grid_light.step()
+	_plap("grid light")
 	var open := grid_light.at(viewer.global_position if viewer != null else cam_pos).x
 	light.room_open = open if open < 0.0 or light.room_open < 0.0 else lerpf(light.room_open, open,
 			clampf(get_process_delta_time() * 4.0, 0.0, 1.0))
 	if not sky_hold:
 		light.set_sky(day, air, body.data.atmosphere_color, sun_h, Gravity.up_at(cam_pos))
+	_plap("sky")
 	_clouds_for(body)
+	_plap("clouds")
 	_ambient_boxes()
+	_plap("ambient boxes")
 	light.expose(viewer.global_position if viewer != null else cam_pos, get_process_delta_time())
 	# Hold the walker until the ground under it has streamed (and has a
 	# collider) and the trees' cards are baked; then, unless this is the
 	# walker's own gate, the pawn stands on it.
 	if walker.frozen and not piloting and pawn == null and trees.prebaked and _ground_hit(walker.global_position) != Vector3.INF:
 		walker.frozen = false
-		if not _gate or _pawn_gate or _mech_gate or _tank_gate or _soldier_gate or _squad_gate or _travel_gate or _far_gate or _drive_gate or _trees_gate or _bricks_gate or _damage_gate or _fall_gate or _hits_gate or _topple_gate or _pieces_ai_gate or _storey_gate or _snap_gate or _farfight_gate or _garrison_gate or _seat_gate or _home_gate or _mechwave_gate or _hull_gate or _save_gate or _light_gate or _cost_gate:
+		if not _gate or _pawn_gate or _mech_gate or _tank_gate or _soldier_gate or _squad_gate or _travel_gate or _far_gate or _drive_gate or _trees_gate or _bricks_gate or _damage_gate or _fall_gate or _hits_gate or _topple_gate or _pieces_ai_gate or _storey_gate or _snap_gate or _farfight_gate or _garrison_gate or _seat_gate or _home_gate or _mechwave_gate or _hull_gate or _save_gate or _light_gate or _cost_gate or _load_gate:
 			_spawn_player(_ground_hit(walker.global_position), -walker.global_transform.basis.z)
 			if _loading_veil:
 				_loading_veil = false
 				_lift_veil()
 			if saver != null:
 				saver.resume()
+	_plap("expose, spawn")
 	if not on_foot:
 		walker.flying = pawn != null or walker.flying
 	elif pawn != null:
