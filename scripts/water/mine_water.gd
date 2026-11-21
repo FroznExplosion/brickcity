@@ -568,6 +568,11 @@ func report() -> String:
 	var line := "%d awake, %d tiles drawn (%d far), tick %.2f ms (%d cells, mesh %.2f), %d sections, %d rock" % [
 			BrickFluid.active_count(), drawn, far_tiles, float(s.get("tick_ms", 0.0)),
 			int(s.get("evals", 0)), float(s.get("mesh_ms", 0.0)), BrickFluid.section_count(), rock_laid]
+	# The main thread's worst wait for the water's lock since the last report
+	# (Docs/MineWater.md 11.8), and far sections let go.
+	line += ", lock wait %.2f ms (%d over 1 ms, hold %.2f), %d let go" % [
+			float(s.get("main_wait_ms", 0.0)), int(s.get("main_waits_1ms", 0)),
+			float(s.get("apply_ms", 0.0)), int(s.get("evicted", 0))]
 	if not _lights.is_empty():
 		line += ", %d lava lights" % _lights.size()
 	if fires != null and not fires.burning.is_empty():
