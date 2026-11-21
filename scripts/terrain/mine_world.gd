@@ -189,6 +189,9 @@ func _ready() -> void:
 	# The sun moves, so nothing bakes it into the ground (set_sun_direction
 	# zero); the detail tiles cast into the shadow map instead.
 	BrickTerrain.set_sun_direction(Vector3.ZERO)
+	# Light in the cells (Docs/MineWorld.md 18): the bake spreads the sky's
+	# light into caves and the ground's shader draws it per pixel.
+	BrickTerrain.set_sky_light(_sky_light_on)
 
 	_rig = LightRig.new()
 	_rig.build_day(self, Vector3(-40, -30, 0), LightRig.SUN_ENERGY, DRY_AMBIENT)
@@ -198,7 +201,10 @@ func _ready() -> void:
 	# could tell apart (--gate=gpu, 2026-11-20, Docs/MineWorld.md 17).
 	_rig.sun.directional_shadow_mode = DirectionalLight3D.SHADOW_PARALLEL_2_SPLITS
 	_rig.sun.directional_shadow_split_1 = 0.1
-	_mat = TerrainTile.ground_material(-_rig.sun.global_transform.basis.z)
+	_mat = TerrainTile.ground_material(-_rig.sun.global_transform.basis.z, _sky_light_on)
+	for a in OS.get_cmdline_user_args():
+		if a.begins_with("--sky-debug="):
+			_mat.set_shader_parameter("sky_debug", int(a.get_slice("=", 1)))
 	_brick_mat = ShaderMaterial.new()
 	_brick_mat.shader = load("res://shaders/brick.gdshader")
 	WeatherFx.register(_brick_mat)
@@ -273,6 +279,8 @@ func _ready() -> void:
 			_run_shift_gate()
 		elif "--gate=deep" in OS.get_cmdline_user_args():
 			_run_deep_gate()
+		elif "--gate=mouth" in OS.get_cmdline_user_args():
+			_run_mouth_gate()
 		else:
 			_run_gate()
 
@@ -286,6 +294,7 @@ func _exit_tree() -> void:
 	BrickTerrain.reset_gen_params()
 	BrickTerrain.set_coarse_smooth_step(8)
 	BrickTerrain.set_bond_top(false)
+	BrickTerrain.set_sky_light(false)
 
 
 # ---------------------------------------------------------------------------
@@ -767,12 +776,29 @@ var _warm_frame_ms := 0.0
 var _warm: Array = []
 var _warm_frames := 0
 var _prewarm_on := not ("--no-prewarm" in OS.get_cmdline_user_args())
-## The underground light factor last frame (_day_night): 1 in the open.
+## Light in the cells (Docs/MineWorld.md 18): the bake spreads the sky's
+## light through the cells and the ground's shader draws it per pixel.
+## `--no-sky-light` is the single factor from the eye's depth it replaced,
+## for A/B.
+var _sky_light_on := not ("--no-sky-light" in OS.get_cmdline_user_args())
+## The light at the eye last frame (_day_night), 1 in the open: with sky light
+## the brightness of the eye's own cell, eased (_eye_lights), which the
+## exposure and the held gun follow; without it the depth factor that scaled
+## the ambient, the sun and the sky.
 var _cave_light := 1.0
-## The light left deep underground (x the open-air light), and the A/B switch
-## for the old fade (12 % from 7.5 m down, sky untouched).
+## The light left deep underground (x the open-air light): the shader's
+## `sky_light_floor` too.
 const CAVE_DEEP_LIGHT := 0.015
-var _old_cave_light := "--old-cave-light" in OS.get_cmdline_user_args()
+## The shader's `sky_light_curve`: Minecraft's 0.8 a level.
+const SKY_LIGHT_CURVE := 0.8
+## The eye's sky light level (0..15, BrickTerrain.sky_light_at), asked again
+## when the eye changes cell or every EYE_SKY_EVERY seconds.
+var _eye_sky := 15.0
+var _eye_sky_cell := Vector3i(1 << 30, 0, 0)
+var _eye_sky_in := 0.0
+const EYE_SKY_EVERY := 0.5
+## Seconds the eye's light takes to follow a new level.
+const EYE_LIGHT_EASE := 0.25
 var _reflecting := true
 ## --gate=gpu: the day/night left as it is (nothing written to the sky, the
 ## sun or the ambient) to read what writing them every frame costs.
@@ -907,8 +933,10 @@ func _follow_far(eye: Vector3) -> void:
 
 
 ## The sun goes round once a DAY_SECONDS; the sky, the ambient and the eye's
-## exposure follow (LightRig, the planet's own calls). Under the ground the
-## ambient fades, so caves are dark.
+## exposure follow (LightRig, the planet's own calls). Caves are dark by the
+## light in their cells (Docs/MineWorld.md 18), the rest by the eye's
+## (_eye_lights); `--no-sky-light`: the old single factor from the eye's
+## depth.
 func _day_night(delta: float, eye: Vector3) -> void:
 	if sky_hold:
 		return
@@ -931,45 +959,138 @@ func _day_night(delta: float, eye: Vector3) -> void:
 		_sky_writes_seen = _rig.sky_writes
 		_amb_base = _rig.env.ambient_light_energy
 		_sky_energy_base = _rig.sky_mat.sky_energy_multiplier
+	if _sky_light_on:
+		_eye_lights(eye, delta)
+		return
 	var c := Vector2i(floori(eye.x / BrickWorld.get_stud_metres()), floori(eye.z / BrickWorld.get_stud_metres()))
 	var under := _ground_m(c.x, c.y) - eye.y
 	var cave := clampf(1.0 - (under - 1.5) / 6.0, 0.12, 1.0)
-	if not _old_cave_light:
-		# On down past 7.5 m to CAVE_DEEP_LIGHT at 30 m: the deep caves
-		# (Docs/MineWorld.md 16) were lit like a shaded street.
-		# Only DOWN there: above ground `under` is negative, the curve sat at
-		# its 0.12 start and every daytime scene was cave-dark.
-		if under > 7.5:
-			cave = minf(cave, lerpf(0.12, CAVE_DEEP_LIGHT, clampf((under - 7.5) / 22.5, 0.0, 1.0)))
-			cave = maxf(cave, CAVE_DEEP_LIGHT)
+	# On down past 7.5 m to CAVE_DEEP_LIGHT at 30 m. Only DOWN there: above
+	# ground `under` is negative.
+	if under > 7.5:
+		cave = minf(cave, lerpf(0.12, CAVE_DEEP_LIGHT, clampf((under - 7.5) / 22.5, 0.0, 1.0)))
+		cave = maxf(cave, CAVE_DEEP_LIGHT)
 	_cave_light = cave
 	_rig.env.ambient_light_energy = _amb_base * cave
-	# The ground casts no sun shadow, so the sun would reach into caves: it
-	# fades with depth the way the ambient does.
+	# The ground casts no sun shadow, so the sun would reach into caves.
 	_rig.sun.light_energy *= cave
-	if not _old_cave_light:
-		# And the sky: the bricks REFLECT it (the environment's reflections
-		# come from the sky, not the ambient), which the ambient's fade
-		# never touched.
-		# Written only when it changes: a write to the sky's material redraws
-		# its radiance map (Docs/PlanetCost.md 5.1).
-		var sky_e := _sky_energy_base * cave
-		if absf(_rig.sky_mat.sky_energy_multiplier - sky_e) > 0.0005:
-			_rig.sky_mat.sky_energy_multiplier = sky_e
-		# Measured (--gate=deep --light-sweep, 2026-11-19): with ambient, sun
-		# and sky all at 3 %, the sky's reflections still lit the cave as
-		# much as the ambient did -- the reflection map does not follow the
-		# sky's energy. Underground there is no sky to reflect.
-		var reflect := cave >= 0.3
-		if reflect != _reflecting:
-			_reflecting = reflect
-			_rig.env.reflected_light_source = Environment.REFLECTION_SOURCE_BG if reflect 					else Environment.REFLECTION_SOURCE_DISABLED
-		# The ambient too: a third of it came from the sky's own light map,
-		# and a wall facing sideways saw the bright horizon in it. That share
-		# fades out as the cave light goes from open air to 12 %.
-		_rig.env.ambient_light_sky_contribution = LightRig.AMBIENT_SKY 				* clampf((cave - 0.12) / 0.88, 0.0, 1.0)
+	# And the sky the bricks reflect. Written only when it changes: a write to
+	# the sky's material redraws its radiance map (Docs/PlanetCost.md 5.1).
+	var sky_e := _sky_energy_base * cave
+	if absf(_rig.sky_mat.sky_energy_multiplier - sky_e) > 0.0005:
+		_rig.sky_mat.sky_energy_multiplier = sky_e
+	# The reflection map does not follow the sky's energy (--gate=deep
+	# --light-sweep, 2026-11-19): underground, no reflections.
+	var reflect := cave >= 0.3
+	if reflect != _reflecting:
+		_reflecting = reflect
+		_rig.env.reflected_light_source = Environment.REFLECTION_SOURCE_BG if reflect \
+				else Environment.REFLECTION_SOURCE_DISABLED
+	# A third of the ambient came from the sky's own light map.
+	_rig.env.ambient_light_sky_contribution = LightRig.AMBIENT_SKY \
+			* clampf((cave - 0.12) / 0.88, 0.0, 1.0)
 	_mat.set_shader_parameter("sun_dir", -_rig.sun.global_transform.basis.z)
 	_rig.expose(eye, delta)
+
+
+## The light at the eye (Docs/MineWorld.md 18). The environment stays the open
+## air's, so the sky, the trees, the water and everything else outdoors look
+## the same from a cave mouth as from outside; the ground draws its own cells'
+## light. What follows the eye's cell (BrickTerrain.sky_light_at): the
+## exposure, so the eye opens up in a dark cave, and the first-person gun and
+## arms (_held_light: they are always where the eye is).
+func _eye_lights(eye: Vector3, delta: float) -> void:
+	var stud := BrickWorld.get_stud_metres()
+	var cell := Vector3i(floori(eye.x / stud), floori(eye.y / BrickTerrain.get_brick_metres()),
+			floori(eye.z / stud))
+	_eye_sky_in -= delta
+	if cell != _eye_sky_cell or _eye_sky_in <= 0.0:
+		_eye_sky_cell = cell
+		_eye_sky_in = EYE_SKY_EVERY
+		_eye_sky = BrickTerrain.sky_light_at(eye)
+	# Eased: a level is a 20 % step, and the gun would flick at every cell.
+	_cave_light = lerpf(_cave_light, sky_brightness(_eye_sky), 1.0 - exp(-delta / EYE_LIGHT_EASE))
+	# The sky's reflections stay on: the ground takes them down per pixel
+	# (terrain.gdshader, SPECULAR); the held gun has its own dark box.
+	_held_light(_cave_light, delta)
+	_mat.set_shader_parameter("sun_dir", -_rig.sun.global_transform.basis.z)
+	_rig.expose(eye, delta, false, _cave_light)
+
+
+## The first-person gun and arms take the eye's light (Docs/MineWorld.md 18):
+## everything else is lit by the open-air environment, and they are always
+## where the eye is. Under the open sky nothing changes. Past that they move to
+## their own render layer (HELD_LAYER), where an interior ReflectionProbe riding
+## the camera gives them the eye's share of the ambient and no sky reflections
+## (LightRig's ambient boxes do the same in rooms), and the sun skips them for
+## a shadowless twin at the eye's share of the sun.
+const HELD_LAYER := 1 << 11
+var _held_box: ReflectionProbe = null
+var _held_sun: DirectionalLight3D = null
+var _held_on := false
+var _held_scan := 0.0
+const HELD_SCAN := 0.25
+
+
+func _held_light(k: float, delta: float) -> void:
+	if view == null or view.rig == null or view.camera == null:
+		return
+	if _held_box == null:
+		_held_box = ReflectionProbe.new()
+		_held_box.name = "HeldLight"
+		_held_box.interior = true
+		# Nothing drawn into it: no sky in the gun's reflections, no capture.
+		_held_box.cull_mask = 0
+		_held_box.update_mode = ReflectionProbe.UPDATE_ONCE
+		_held_box.ambient_mode = ReflectionProbe.AMBIENT_COLOR
+		_held_box.reflection_mask = HELD_LAYER
+		_held_box.size = Vector3(4, 4, 4)
+		_held_box.visible = false
+		view.camera.add_child(_held_box)
+		_held_sun = DirectionalLight3D.new()
+		_held_sun.name = "HeldSun"
+		_held_sun.shadow_enabled = false
+		_held_sun.light_cull_mask = HELD_LAYER
+		_held_sun.visible = false
+		# A child with no transform of its own: the sun's direction.
+		_rig.sun.add_child(_held_sun)
+		_rig.sun.light_cull_mask &= ~HELD_LAYER
+	var on := k < (0.97 if not _held_on else 0.985)
+	if on:
+		_held_box.ambient_color = _rig.env.ambient_light_color
+		_held_box.ambient_color_energy = _rig.env.ambient_light_energy * k
+		var raw := clampf((k - CAVE_DEEP_LIGHT) / (1.0 - CAVE_DEEP_LIGHT), 0.0, 1.0)
+		_held_sun.light_color = _rig.sun.light_color
+		_held_sun.light_energy = _rig.sun.light_energy * raw * raw
+		_held_sun.visible = _rig.sun.visible
+	_held_scan -= delta
+	if on == _held_on and _held_scan > 0.0:
+		return
+	_held_scan = HELD_SCAN
+	if on != _held_on:
+		_held_on = on
+		_held_box.visible = on
+		if not on:
+			_held_sun.visible = false
+	# The gun's meshes change with the gun: looked for again each time.
+	var mask := HELD_LAYER if on else 1
+	for root: Node in [view.rig, view.arms]:
+		if root == null:
+			continue
+		for n in root.find_children("*", "VisualInstance3D", true, false):
+			if n is GeometryInstance3D:
+				RenderLayers.set_layers(n as VisualInstance3D, mask)
+
+
+## A level's brightness before the floor (0 at level 0, 1 at 15).
+static func _sky_raw(level: float) -> float:
+	var k0 := pow(SKY_LIGHT_CURVE, 15.0)
+	return (pow(SKY_LIGHT_CURVE, 15.0 - level) - k0) / (1.0 - k0)
+
+
+## A sky light level's brightness, as terrain.gdshader draws it.
+static func sky_brightness(level: float) -> float:
+	return lerpf(CAVE_DEEP_LIGHT, 1.0, _sky_raw(level))
 
 
 func _unhandled_input(event: InputEvent) -> void:
@@ -3127,8 +3248,8 @@ func _run_deep_gate() -> void:
 			float(BrickTerrain.get_gen_params()["sea_m"]) - found.y, _deep.report(), frames, worst, slow])
 	await _shot(UserPaths.DEV + "mine_deep_cave.png")
 	var luma: float = await _mean_luma()
-	print("[mine-deep] light in the cave: picture mean %.3f, cave factor %.3f, ambient %.3f, sun %.3f, sky %.3f, exposure %.2f"
-			% [luma, _cave_light, _rig.env.ambient_light_energy, _rig.sun.light_energy,
+	print("[mine-deep] light in the cave: picture mean %.3f, eye's sky light %.1f, eye brightness %.3f, ambient %.3f, sun %.3f, sky %.3f, exposure %.2f"
+			% [luma, _eye_sky, _cave_light, _rig.env.ambient_light_energy, _rig.sun.light_energy,
 			_rig.sky_mat.sky_energy_multiplier, _rig.exposure])
 	if "--light-sweep" in OS.get_cmdline_user_args():
 		# What lights the cave: each in turn off.
@@ -3145,6 +3266,11 @@ func _run_deep_gate() -> void:
 			res.append("%s(was %s) off %.3f" % [k, was, await _mean_luma()])
 			env.set(k, was)
 		var rs = env.reflected_light_source
+		# On, whatever the eye's rule left them: does the ground's AO keep
+		# the sky's reflections off the cave's walls by itself?
+		env.reflected_light_source = Environment.REFLECTION_SOURCE_BG
+		await _frames(20)
+		res.append("reflections on %.3f" % await _mean_luma())
 		env.reflected_light_source = Environment.REFLECTION_SOURCE_DISABLED
 		await _frames(20)
 		res.append("reflections off %.3f" % await _mean_luma())
@@ -4442,6 +4568,102 @@ func _holes() -> int:
 			if not _streamer.has_tile(t) and _far.drawing(t).is_empty():
 				n += 1
 	return n
+
+
+## -- --gate=mouth (Docs/MineWorld.md 18): a stone tunnel built on the ground
+## near spawn, its mouth open to the day. From 4 studs inside, looking out,
+## the day outside must be as bright as the same view with no tunnel (the old
+## depth factor darkened all of it: `--no-sky-light` shows it), and the walls
+## by the back of the tunnel must be darker than the ones by its mouth.
+func _run_mouth_gate() -> void:
+	await _frames(10)
+	var dev := UserPaths.DEV
+	DirAccess.make_dir_recursive_absolute(dev)
+	_time = 0.42
+	set_on_foot(false)
+	_hud_layer.visible = false
+	# The roof spans the tunnel: the ground's collapse (ground_collapse.gd)
+	# would bring it down. This pass is about the light.
+	if collapse != null:
+		collapse.process_mode = Node.PROCESS_MODE_DISABLED
+	var stud := BrickWorld.get_stud_metres()
+	var plate := BrickWorld.get_plate_metres()
+	var e := _eye()
+	var o := Vector2i(floori(e.x / stud) + 6, floori(e.z / stud))
+	var t_max := -(1 << 30)
+	for dz in range(-3, 4):
+		for dx in range(-6, 17):
+			t_max = maxi(t_max, BrickTerrain.surface_plate(o.x + dx, o.y + dz))
+	# The tunnel's floor: whole courses, one over the highest ground there.
+	var b := (floori(float(t_max + 1) / 3.0) + 1) * 3
+	# The walker's feet: its eye is about 1.6 m over them.
+	var look_out := Vector3((o.x + 4.5) * stud, b * plate + 0.05, (o.y + 0.5) * stud)
+	_fly_to(look_out, Vector3(-1, 0, 0))
+	walker.pitch = -0.05
+	await _frames(90)
+	var centre := Rect2(0.3, 0.3, 0.4, 0.4)
+	var before: float = await _mean_luma_in(centre)
+	await _shot(dev + "mine_mouth_before.png")
+	# Stone shell, then the air inside it: 5 x 5 studs inside, 6 courses tall,
+	# 15 studs deep, open at the low-X end. The roof two courses thick: a
+	# one-course slab is drawn as top pieces with no underside.
+	terrain_edited(BrickTerrain.fill_box(Vector3i(o.x, b - 3, o.y - 3), Vector3i(o.x + 16, b + 23, o.y + 3), 4, true))
+	terrain_edited(BrickTerrain.fill_box(Vector3i(o.x, b, o.y - 2), Vector3i(o.x + 15, b + 17, o.y + 2), 0, false))
+	_flush_edits()
+	var roof := 0
+	for x in range(o.x, o.x + 16):
+		for z in range(o.y - 2, o.y + 3):
+			if BrickTerrain.solid_at(x, b + 19, z) != 0:
+				roof += 1
+	print("[mine-mouth] the tunnel's roof: %d of 80 cells solid; floor plate %d, ground top %d" % [roof, b, t_max])
+	for k in [2, 6, 10, 14]:
+		print("[mine-mouth] sky_light_at %d studs in: %.0f" % [k, BrickTerrain.sky_light_at(Vector3((o.x + k + 0.5) * stud, (b + 4) * plate, (o.y + 0.5) * stud))])
+	_fly_to(look_out, Vector3(-1, 0, 0))
+	walker.pitch = -0.05
+	await _frames(150)
+	var inside: float = await _mean_luma_in(centre)
+	var eye_in := _eye_sky
+	var light_in := _cave_light
+	await _shot(dev + "mine_mouth_inside.png")
+	# Facing the side wall, by the mouth and by the back.
+	_fly_to(Vector3((o.x + 2.5) * stud, b * plate + 0.05, (o.y + 0.5) * stud), Vector3(0, 0, 1))
+	await _frames(60)
+	var wall_mouth: float = await _mean_luma_in(centre)
+	_fly_to(Vector3((o.x + 13.5) * stud, b * plate + 0.05, (o.y + 0.5) * stud), Vector3(0, 0, 1))
+	await _frames(60)
+	var wall_back: float = await _mean_luma_in(centre)
+	var eye_back := _eye_sky
+	await _shot(dev + "mine_mouth_back.png")
+	for m in [1, 2]:
+		_mat.set_shader_parameter("sky_debug", m)
+		await _frames(4)
+		await _shot(dev + "mine_mouth_back_dbg%d.png" % m)
+	_mat.set_shader_parameter("sky_debug", 0)
+	_fly_to(look_out + Vector3(9.0 * stud, 0, 0), Vector3(-1, 0, 0))
+	await _frames(60)
+	await _shot(dev + "mine_mouth_from_back.png")
+	var out_ok := inside >= before * 0.85
+	var wall_ok := wall_back < wall_mouth * 0.9
+	print("[mine-mouth] %s  the day seen from 4 studs inside a tunnel: centre %.3f, with no tunnel %.3f (eye's sky light %.1f, brightness %.3f, exposure %.2f)%s"
+			% ["ok  " if out_ok else "FAIL", inside, before, eye_in, light_in, _rig.exposure,
+			"" if _sky_light_on else " [--no-sky-light]"])
+	print("[mine-mouth] %s  the tunnel's wall by its back %.3f, by its mouth %.3f (eye's level at the back %.1f; exposure follows the eye, so this is the picture, not the light)"
+			% ["ok  " if wall_ok else "FAIL", wall_back, wall_mouth, eye_back])
+	get_tree().quit()
+
+
+## The viewport's mean brightness over `r` (fractions of the picture).
+func _mean_luma_in(r: Rect2) -> float:
+	await RenderingServer.frame_post_draw
+	var img := get_viewport().get_texture().get_image()
+	img.resize(64, 36)
+	var s := 0.0
+	var n := 0
+	for y in range(int(r.position.y * 36), int(r.end.y * 36)):
+		for x in range(int(r.position.x * 64), int(r.end.x * 64)):
+			s += img.get_pixel(x, y).get_luminance()
+			n += 1
+	return s / maxf(n, 1)
 
 
 ## The viewport's mean brightness (0..1), for the gates' light checks.

@@ -196,6 +196,32 @@ varying float v_smooth_far;
 // CUSTOM0.b: a real bevel facet of the near mesh (MeshBuf::facet).
 varying flat float v_facet;
 
+#ifdef SKY_LIGHT
+// SKY LIGHT IN THE CELLS (Docs/MineWorld.md 18). Only the mine world's copy
+// of this shader has `#define SKY_LIGHT` (TerrainTile.ground_material); every
+// other scene compiles none of this.
+//
+// CUSTOM0.a is the vertex's sky light, levels 0..15 as 0..1, spread through
+// the cells by the bake (BrickTerrain sky_light_pass). Minecraft's curve,
+// 0.8^(15 - level), run from `sky_light_floor` up to 1, scales the ambient
+// (AO) and the SUN (light() below), per pixel: an enclosed cave is dark, its
+// open mouth and the world outside are not. The environment itself is the
+// open air's; only the exposure follows the eye.
+uniform float sky_light_floor : hint_range(0.0, 0.2) = 0.015;
+uniform float sky_light_curve : hint_range(0.5, 0.95) = 0.8;
+// The sun falls off faster than the sky's light: it comes from one way.
+uniform float sky_sun_power : hint_range(1.0, 4.0) = 2.0;
+// `-- --sky-debug=N` in the mine world: 1 the vertex's sky light, 2 the AO,
+// drawn flat (emission only).
+uniform int sky_debug = 0;
+varying float v_sky;
+// Fragment to light(): the sun's share here, and the surface's specular and
+// rim (light() cannot read the fragment's SPECULAR or RIM).
+varying float l_sun;
+varying float l_spec;
+varying float l_rim;
+#endif
+
 void vertex() {
     v_uv = UV;
     v_face = UV2;
@@ -205,6 +231,9 @@ void vertex() {
     v_material = CUSTOM0.r;
     v_smooth_far = CUSTOM0.g;
     v_facet = CUSTOM0.b;
+#ifdef SKY_LIGHT
+    v_sky = CUSTOM0.a;
+#endif
 }
 
 const float TAU_F = 6.28318530718;
@@ -596,4 +625,66 @@ void fragment() {
     SPECULAR = out_spec;
     RIM = surface_rim * mtl.z;
     RIM_TINT = 0.4;
+#ifdef SKY_LIGHT
+    float sky_k0 = pow(sky_light_curve, 15.0);
+    // Clamped: at level 0 the difference rounds a hair under zero, and pow()
+    // of a negative number is NaN -- every level-0 face drew black.
+    float sky_b = clamp((pow(sky_light_curve, 15.0 - 15.0 * clamp(v_sky, 0.0, 1.0)) - sky_k0)
+            / (1.0 - sky_k0), 0.0, 1.0);
+    AO = mix(sky_light_floor, 1.0, sky_b);
+    // The sky's REFLECTIONS ignore AO (--gate=deep --light-sweep: a level-0
+    // cave 0.033 without them, 0.079 with). They scale with f0 = 0.16 x
+    // SPECULAR^2, and their grazing part with clamp(50 f0): SPECULAR x
+    // sqrt(AO) takes them down about as AO takes the ambient. light() keeps
+    // the surface's own specular for lamps, lava and the flashlight.
+    SPECULAR = out_spec * sqrt(AO);
+    l_sun = pow(sky_b, sky_sun_power);
+    l_spec = out_spec;
+    l_rim = surface_rim * mtl.z;
+    if (sky_debug > 0) {
+        vec3 dbg = sky_debug == 1 ? vec3(clamp(v_sky, 0.0, 1.0)) : vec3(AO);
+        ALBEDO = vec3(0.0);
+        AO = 0.0;
+        EMISSION = dbg;
+        l_sun = 0.0;
+    }
+#endif
 }
+
+#ifdef SKY_LIGHT
+float sky_schlick(float u) {
+    float m = 1.0 - u;
+    float m2 = m * m;
+    return m2 * m2 * m;
+}
+
+// The engine's own lighting for this render_mode (Burley diffuse, Schlick-GGX
+// specular, the rim), written out so the sun can be scaled by the sky light;
+// any other light (a lamp, lava, the flashlight) is as the engine draws it.
+void light() {
+    float k = LIGHT_IS_DIRECTIONAL ? l_sun : 1.0;
+    float cNdotL = max(dot(NORMAL, LIGHT), 0.0);
+    float cNdotV = max(dot(NORMAL, VIEW), 1e-4);
+    vec3 H = normalize(VIEW + LIGHT);
+    float cLdotH = clamp(dot(LIGHT, H), 0.0, 1.0);
+    float cNdotH = clamp(dot(NORMAL, H), 0.0, 1.0);
+    float rough = ROUGHNESS;
+    float fd90 = 2.0 * cLdotH * cLdotH * rough - 0.5;
+    float fdv = 1.0 + fd90 * sky_schlick(cNdotV);
+    float fdl = 1.0 + fd90 * sky_schlick(cNdotL);
+    DIFFUSE_LIGHT += LIGHT_COLOR * ((1.0 / PI) * fdv * fdl * cNdotL) * ATTENUATION * k;
+    float rim_light = pow(max(1e-4, 1.0 - cNdotV), max(0.0, (1.0 - rough) * 16.0));
+    DIFFUSE_LIGHT += rim_light * l_rim * mix(vec3(1.0), ALBEDO, 0.4) * LIGHT_COLOR * k;
+    if (rough > 0.0) {
+        float a = rough * rough;
+        float dh = cNdotH * a;
+        float dk = a / (1.0 - cNdotH * cNdotH + dh * dh);
+        float d = dk * dk * (1.0 / PI);
+        float g = 0.5 / mix(2.0 * cNdotL * cNdotV, cNdotL + cNdotV, a);
+        float f0 = 0.16 * l_spec * l_spec;
+        float f90 = clamp(f0 * 49.5, 0.0, 1.0);
+        float f = f0 + (f90 - f0) * sky_schlick(cLdotH);
+        SPECULAR_LIGHT += (cNdotL * d * f * g) * LIGHT_COLOR * ATTENUATION * SPECULAR_AMOUNT * k;
+    }
+}
+#endif

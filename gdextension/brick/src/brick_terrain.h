@@ -883,6 +883,14 @@ public:
     static int get_deep_section_plates();
     static int get_bedrock_plate();
     static Dictionary build_section(int tx, int sy, int tz);
+    /// SKY LIGHT IN THE CELLS (Docs/MineWorld.md 18). On: build_tile and
+    /// build_section write each vertex's sky light, 0..255 for levels 0..15,
+    /// into CUSTOM0.a (always 255 when off). Only the mine world turns it on.
+    static void set_sky_light(bool on);
+    static bool get_sky_light();
+    /// The sky light level (0..15) of the cell holding `point` (terrain-local
+    /// metres): what the eye's exposure follows.
+    static double sky_light_at(Vector3 point);
 
     /// A COARSE block of ground, for distance. Docs/Terrain.md 19.4.
     ///

@@ -23,6 +23,9 @@ extends SceneTree
 ##     ABOVE the generated ground is solid, raises the surface and is in the
 ##     baked tile (the mask reaches up to it); breaking it leaves air; fill
 ##     never breaks bedrock.
+##   * sky light (Docs/MineWorld.md 18): off, the mesh is as it was; on, open
+##     tops full, enclosed caves dark, tiles and deep sections agree at their
+##     seams, the eye's level, a dug shaft lights the cave, and its cost.
 ##   * a shot breaks WHOLE bricks: the surface piece hit goes, all of it, and
 ##     every other piece of the tile is laid exactly as before (no re-laying
 ##     round the hole); a wall hit takes one brick cell.
@@ -57,6 +60,7 @@ func _initialize() -> void:
 	_check_pick_area()
 	_check_cave_colliders()
 	_check_deep_tier()
+	_check_sky_light()
 	await _check_solid_trunks()
 
 	BrickTerrain.set_generator(0)
@@ -217,6 +221,201 @@ func _check_deep_tier() -> void:
 	_expect(sec_outside == 0, "a section draws only its own plates")
 	_expect(floors > 5 and held >= floors * 0.9, "deep cave floors are collided (%d of %d)" % [held, floors])
 	BrickTerrain.set_deep_tier(false)
+
+
+## SKY LIGHT IN THE CELLS (Docs/MineWorld.md 18): the bake writes each
+## vertex's sky light into CUSTOM0.a. Off (every other scene) it stays 255.
+## On: open tops are full, floors of enclosed caves deep under their column
+## are dark, two tiles agree on their shared edge and a tile on the edge it
+## shares with the deep section under it (light depends only on cells within
+## 15 steps, and the fill reads past the tile for them), the eye's level
+## agrees, a shaft dug down to a dark cave lights its floor once the tile is
+## baked again, and the pass costs the bake little.
+func _check_sky_light() -> void:
+	BrickTerrain.clear_terrain_edits()
+	BrickTerrain.set_deep_tier(true)
+	var stud := BrickWorld.get_stud_metres()
+	var plate := BrickWorld.get_plate_metres()
+	# Off: nothing changes.
+	BrickTerrain.set_sky_light(false)
+	var off_not_full := 0
+	var off_ms := 0.0
+	var tiles: Array[Vector2i] = []
+	for i in 12:
+		tiles.append(Vector2i(i * 5 - 100, 37 - i * 3))
+	for t in tiles:
+		var d: Dictionary = BrickTerrain.build_tile(t.x, t.y)
+		off_ms += float(d.build_ms)
+		var m: Array = d.mesh
+		if m.is_empty():
+			continue
+		var cu: PackedByteArray = m[Mesh.ARRAY_CUSTOM0]
+		for k in range(3, cu.size(), 4):
+			if cu[k] != 255:
+				off_not_full += 1
+	_expect(off_not_full == 0, "sky light off: every vertex's CUSTOM0.a is 255 (%d not)" % off_not_full)
+	BrickTerrain.set_sky_light(true)
+	var on_ms := 0.0
+	var sky_ms := 0.0
+	var tops := 0
+	var tops_full := 0
+	var deep_floors := 0
+	var deep_dark := 0
+	var dark_tiles := 0
+	var dark_spot := Vector3i(1 << 30, 0, 0)
+	for t in tiles:
+		var d: Dictionary = BrickTerrain.build_tile(t.x, t.y)
+		on_ms += float(d.build_ms)
+		sky_ms += float(d.get("sky_ms", 0.0))
+		if bool(d.get("sky_dark", false)):
+			dark_tiles += 1
+		var m: Array = d.mesh
+		if m.is_empty():
+			continue
+		var vs: PackedVector3Array = m[Mesh.ARRAY_VERTEX]
+		var ns: PackedVector3Array = m[Mesh.ARRAY_NORMAL]
+		var cu: PackedByteArray = m[Mesh.ARRAY_CUSTOM0]
+		for i in range(0, vs.size(), 3):
+			var v := vs[i]
+			if ns[i].y < 0.9:
+				continue
+			# The cell above the face's middle-ish: a corner sits on an edge.
+			var x := t.x * 32 + clampi(floori(v.x / stud - 0.01), 0, 31)
+			var z := t.y * 32 + clampi(floori(v.z / stud - 0.01), 0, 31)
+			var top := BrickTerrain.surface_plate(x, z)
+			var yp := roundi(v.y / plate)
+			if yp == top + 1:
+				# An open top with nothing over the four columns round it.
+				var open := true
+				for dz in range(-1, 2):
+					for dx in range(-1, 2):
+						if BrickTerrain.surface_plate(x + dx, z + dz) > top + 3:
+							open = false
+				if open:
+					tops += 1
+					if cu[i * 4 + 3] >= 250:
+						tops_full += 1
+			elif yp < top - 60 and _enclosed(x, yp, z, 18):
+				deep_floors += 1
+				if cu[i * 4 + 3] < 40:
+					deep_dark += 1
+					if dark_spot.x == 1 << 30:
+						dark_spot = Vector3i(x, yp, z)
+	print("[mine] sky light: tiles %.1f ms off, %.1f ms on (the pass %.2f ms, %d of %d tiles had dark cells); open tops full %d of %d; enclosed floors 8 m+ under dark %d of %d"
+			% [off_ms / tiles.size(), on_ms / tiles.size(), sky_ms / tiles.size(), dark_tiles, tiles.size(),
+			tops_full, tops, deep_dark, deep_floors])
+	_expect(tops > 100 and tops_full >= tops * 0.98, "open tops are in full sky light (%d of %d)" % [tops_full, tops])
+	_expect(deep_floors > 5 and deep_dark >= deep_floors * 0.8,
+			"floors of enclosed caves deep under their column are dark (%d of %d)" % [deep_dark, deep_floors])
+	_expect(sky_ms / tiles.size() < 8.0, "the pass costs a tile under 8 ms (%.2f)" % (sky_ms / tiles.size()))
+	# Seams: tile A's +X edge against tile B's -X edge, and a tile's floor
+	# against the deep section under it.
+	var seam_n := 0
+	var seam_bad := 0
+	for t in tiles.slice(0, 6):
+		var a := _light_at_plane(BrickTerrain.build_tile(t.x, t.y), 0, 32.0 * stud)
+		var b := _light_at_plane(BrickTerrain.build_tile(t.x + 1, t.y), 0, 0.0)
+		for k in a:
+			if b.has(k):
+				seam_n += 1
+				if absi(int(a[k]) - int(b[k])) > 2:
+					seam_bad += 1
+	var deep_n := 0
+	var deep_bad := 0
+	var sec := BrickTerrain.get_deep_section_plates()
+	var sec_ms := 0.0
+	var secs := 0
+	for t in tiles.slice(0, 6):
+		var floor_p := BrickTerrain.deep_top(t.x, t.y)
+		var a := _light_at_plane(BrickTerrain.build_tile(t.x, t.y), 1, floor_p * plate)
+		var s: Dictionary = BrickTerrain.build_section(t.x, floori(float(floor_p - 1) / sec), t.y)
+		sec_ms += float(s.get("sky_ms", 0.0))
+		secs += 1
+		var b := _light_at_plane(s, 1, floor_p * plate)
+		for k in a:
+			if b.has(k):
+				deep_n += 1
+				if absi(int(a[k]) - int(b[k])) > 2:
+					deep_bad += 1
+	print("[mine] sky light seams: tile to tile %d of %d vertices differ; tile to deep section %d of %d; the pass in a section %.2f ms"
+			% [seam_bad, seam_n, deep_bad, deep_n, sec_ms / secs])
+	_expect(seam_n > 50 and seam_bad == 0, "two tiles agree on their shared edge's sky light (%d of %d differ)" % [seam_bad, seam_n])
+	_expect(deep_bad == 0, "a tile and the deep section under it agree (%d of %d differ)" % [deep_bad, deep_n])
+	# The eye.
+	var x0 := tiles[0].x * 32 + 5
+	var z0 := tiles[0].y * 32 + 7
+	var above := Vector3((x0 + 0.5) * stud, (BrickTerrain.surface_plate(x0, z0) + 12) * plate, (z0 + 0.5) * stud)
+	var at_sky := BrickTerrain.sky_light_at(above)
+	_expect(at_sky == 15.0, "the eye over open ground sees level 15 (%.0f)" % at_sky)
+	if dark_spot.x != 1 << 30:
+		var in_cave := Vector3((dark_spot.x + 0.5) * stud, (dark_spot.y + 4) * plate, (dark_spot.z + 0.5) * stud)
+		var t0 := Time.get_ticks_usec()
+		var at_cave := BrickTerrain.sky_light_at(in_cave)
+		var eye_ms := float(Time.get_ticks_usec() - t0) / 1000.0
+		print("[mine] sky light at the eye: open %.0f, dark cave floor %.0f (%.2f ms)" % [at_sky, at_cave, eye_ms])
+		_expect(at_cave <= 3.0, "the eye in a dark cave sees a low level (%.0f)" % at_cave)
+		# Dig a shaft from the sky down to that floor: lit once baked again.
+		var c := dark_spot
+		var top := BrickTerrain.surface_plate(c.x, c.z)
+		BrickTerrain.fill_box(Vector3i(c.x - 1, c.y + 1, c.z - 1), Vector3i(c.x + 1, top + 3, c.z + 1), 0, false)
+		var tx := floori(float(c.x) / 32.0)
+		var tz := floori(float(c.z) / 32.0)
+		var d: Dictionary = BrickTerrain.build_tile(tx, tz)
+		var lit := -1
+		var m: Array = d.mesh
+		var vs: PackedVector3Array = m[Mesh.ARRAY_VERTEX]
+		var ns: PackedVector3Array = m[Mesh.ARRAY_NORMAL]
+		var cu: PackedByteArray = m[Mesh.ARRAY_CUSTOM0]
+		var want := Vector3((c.x - tx * 32 + 0.5) * stud, (c.y + 1) * plate, (c.z - tz * 32 + 0.5) * stud)
+		for i in vs.size():
+			if ns[i].y > 0.9 and absf(vs[i].y - want.y) < 0.01 and absf(vs[i].x - want.x) <= stud \
+					and absf(vs[i].z - want.z) <= stud:
+				lit = maxi(lit, cu[i * 4 + 3])
+		var eye_after := BrickTerrain.sky_light_at(in_cave)
+		print("[mine] sky light after a shaft dug to it: floor %d of 255, eye %.0f" % [lit, eye_after])
+		_expect(lit >= 240, "a shaft dug down to a dark cave lights its floor (%d)" % lit)
+		_expect(eye_after == 15.0, "and the eye at its foot sees the sky (%.0f)" % eye_after)
+	else:
+		_expect(false, "found a dark cave floor to test the eye and a shaft")
+	BrickTerrain.clear_terrain_edits()
+	BrickTerrain.set_sky_light(false)
+	BrickTerrain.set_deep_tier(false)
+
+
+## Is the air cell over plate `yp` of column (x, z) under rock for `up` plates
+## in this column and the four beside it (a cave's floor, not a ravine's)?
+func _enclosed(x: int, yp: int, z: int, up: int) -> bool:
+	for o in [Vector2i(0, 0), Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]:
+		var solid := false
+		for k in range(1, up * 4):
+			if BrickTerrain.solid_at(x + o.x, yp + k, z + o.y) != 0:
+				solid = true
+				break
+		if not solid:
+			return false
+	return true
+
+
+## The sky light (CUSTOM0.a) of a baked mesh's vertices lying on the plane
+## axis `axis` (0 x, 1 y) = `at`, keyed by the other coordinates and the
+## normal; X is turned into the neighbour's frame by the caller's choice of
+## plane, so keys of two tiles match.
+func _light_at_plane(d: Dictionary, axis: int, at: float) -> Dictionary:
+	var out := {}
+	var m: Array = d.get("mesh", [])
+	if m.is_empty():
+		return out
+	var vs: PackedVector3Array = m[Mesh.ARRAY_VERTEX]
+	var ns: PackedVector3Array = m[Mesh.ARRAY_NORMAL]
+	var cu: PackedByteArray = m[Mesh.ARRAY_CUSTOM0]
+	for i in vs.size():
+		var v := vs[i]
+		var on := absf((v.x if axis == 0 else v.y) - at) < 0.002
+		if not on:
+			continue
+		var k := "%.3f,%.3f,%.2f,%.2f,%.2f" % [v.y if axis == 0 else v.x, v.z, ns[i].x, ns[i].y, ns[i].z]
+		out[k] = cu[i * 4 + 3]
+	return out
 
 
 ## Trees streamed by TerrainTrees have solid trunks near the camera

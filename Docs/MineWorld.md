@@ -92,15 +92,11 @@ editor and the heightfield test leave `solid_m` at 0.
 
 A day is 20 minutes. The sun turns, the sky and ambient follow, exposure
 adapts. Nothing bakes the sun into the ground (it moves); the detail tiles
-within two tiles of the player cast into the shadow map. Under the ground the
-light fades with depth, so caves are dark: ambient, sun and sky to 12 % by
-7.5 m down and on to 1.5 % by 30 m (`CAVE_DEEP_LIGHT`). The sky's share of
-the ambient fades out with it, and under 30 % the environment stops
-reflecting the sky. Both came from the sky's own light map, which does not
-follow its energy: with ambient, sun and sky at 3 %, a deep cave was still
-lit like a shaded street (`-- --gate=deep --light-sweep` turns each source
-off in turn; picture mean 0.51 old, 0.05 now, 2026-11-19). The flashlight has
-its own key. `--old-cave-light` is the old fade, for A/B.
+within two tiles of the player cast into the shadow map. Caves are dark by
+the light in their cells (section 18): the sky's light spreads into them
+from their openings, per pixel, and enclosed ones are dark. Before that one
+factor from the eye's depth faded ambient, sun and sky for the whole frame
+(`--no-sky-light` keeps it, for A/B). The flashlight has its own key.
 
 ## 6. World generation menu (M, or Escape > World generation...)
 
@@ -624,3 +620,112 @@ foot at 1280x720, render scale 0.75), the rows' deltas held:
   from 25 m up looks the same (`user://dev/mine_gpu_up_near45.png` /
   `_near25.png`); on foot inside a forest is the place a card could show.
   The heightfield scene keeps 45.
+
+## 18. Sky light in the cells (2026-11-21)
+
+Section 5's cave light was ONE factor a frame, from how far the eye was under
+its column's top: it scaled the ambient, the sun and the sky for everything
+on screen. Standing in a cave mouth darkened the sunny world outside, nothing
+was lit locally, and cave interiors were dark only because of that global
+fade (the ground casts no sun shadow, section 11). Now the light lives in the
+cells, as in Minecraft. `--no-sky-light` is the old factor, for A/B.
+
+**The light (C++, `brick_terrain.cpp`, `sky_light_pass`).** A light cell is
+one stud by one course (3 plates); it is OPAQUE when all three of its plates
+are solid (a one- or two-plate top course lets light through). Every column
+is lit at level 15 from the sky down to its first opaque cell (its sky
+floor); from there light spreads to the six neighbours, one level less a
+step, through cells that are not opaque: a bucketed breadth-first fill,
+levels 15 to 0, so light reaches 15 studs or courses (about 5-6 m) into a
+cave mouth, and all the way down an open shaft. It runs in the tile bake
+(`build_tile`, and with it `build_tile_chamfered`; the deep tier's
+`build_section`) after the mesh is made, so every face path gets it at once.
+
+- **Per vertex, smooth.** A vertex reads the light half a cell out along its
+  normal, blended over the eight cell centres round that point, opaque cells
+  left out of the weights. A face corner then averages the four air cells
+  that meet there (Minecraft's smooth lighting); inside corners come out a
+  little darker.
+- **Exact at the seams.** A cell's light depends only on cells within 15
+  steps, so the fill covers the tile plus 17 studs and the mesh's courses
+  plus 17, reading the field past the sample the way `BondView` does (the
+  sample where it reaches, `biome_cell` and the edits past it, columns kept
+  as they are worked out). Seeds are the sky cells within 15 of the cells the
+  vertices read that are under their sky floor, and no step is taken where
+  even full light could not reach one of them any more. In the deep tier a
+  column's sky floor is settled by the first opaque cell above the box (one
+  cell nearly always), not by a scan from the surface.
+- **Carried in CUSTOM0.a**, a byte that was always 255: no new vertex channel,
+  nothing more to upload. `BrickTerrain.set_sky_light(true)` turns the pass
+  on; only the mine world does, so every other scene's mesh is the same.
+- **The eye's level**, `BrickTerrain.sky_light_at(point)`: a fill backwards
+  from the eye's cell through open cells, the first sky cell met at d steps
+  giving 15 - d, the same answer the bake gives (0.15 ms in a dark cave,
+  asked when the eye changes cell or every 0.5 s).
+
+**The shader (`terrain.gdshader`, `#ifdef SKY_LIGHT`).** The mine world draws
+its ground with a copy of the shader with `#define SKY_LIGHT` in front
+(`TerrainTile.ground_material(sun, true)`, like ImpostorLod's fading copy);
+every other scene compiles the file as it was. In the copy the level maps to
+a brightness by Minecraft's curve, `0.8^(15 - level)`, run from
+`sky_light_floor` (1.5 %, the old `CAVE_DEEP_LIGHT`) to 1, and per pixel:
+
+- `AO` = the brightness: the ambient.
+- `SPECULAR` x sqrt(brightness): the sky's REFLECTIONS ignore AO (a level-0
+  cave measured 0.033 without them, 0.079 with); they scale with f0 = 0.16 x
+  SPECULAR^2 and their grazing part with clamp(50 f0), so this takes them
+  down about as AO takes the ambient (0.034 with, after).
+- the SUN, in a `light()` that writes out the engine's own Burley diffuse,
+  Schlick-GGX specular and rim, scaled by the brightness squared for
+  directional lights only: a lamp, a lava glow or the flashlight in a cave
+  lights it as the engine would. The surface pictures of `-- --gate` with and
+  without sky light differ by 0.4-2 grey levels of 255 (mean absolute).
+- `--sky-debug=1` draws the vertex light flat, `=2` the AO.
+
+**The global factor is retired.** `_day_night` (`_eye_lights`) no longer
+scales the ambient, the sun or the sky, and no longer turns reflections off:
+the environment is the open air's, so the sky, trees, water and everything
+else outdoors look the same from a cave mouth as from outside. What follows
+the eye's level (eased over 0.25 s):
+
+- the exposure (`LightRig.expose`'s `light_scale`), so the eye opens up in a
+  dark cave (EXPOSE_MAX 2) and the day looks a little bright from inside;
+- the first-person gun and arms, which are always where the eye is: off the
+  open sky they move to their own render layer (`HELD_LAYER`, 1 << 11), where
+  an interior ReflectionProbe riding the camera (LightRig's ambient box
+  pattern, `reflection_mask` that layer only) gives them the eye's share of
+  the ambient and no sky reflections, and the sun skips them for a shadowless
+  twin at the eye's share of the sun. (A multiply overlay was tried first: it
+  drew nothing over the gun.)
+
+Edits re-light through the tile refresh, which rebakes the edited tile and
+its neighbours (light reaches 15 studs, a tile is 32).
+
+**Measured (2026-11-21).**
+
+| | |
+|---|---|
+| the pass, a surface tile | 3.4 ms on the worker (tiles bake in ~14-17 ms; 12 of 12 had dark cells) |
+| the pass, a deep section | 2.0 ms |
+| seams (mine_world_probe) | 0 of 378 tile-tile vertices differ, 0 of 76 tile-section |
+| `--gate=cave`, 15 m down, enclosed | dark, shapes just visible; the old factor gave this cave 8.5 % and it read as a dim street |
+| `--gate=deep`, 78 m down | picture mean 0.044 (old 0.051); ambient and sun add nothing |
+| `--gate=mouth`, 4 studs into a tunnel looking out | centre 0.661 vs 0.607 with no tunnel (eye level 10, exposure 2) |
+| `--gate=mouth`, its walls | 0.446 by the mouth, 0.066 by the back (level 1) |
+
+**Not in it.** Collapse pieces, dropped items and chests are lit by the
+open-air environment wherever they are, so in a cave they are brighter than
+the walls (they would need their own position's level, like the gun). Studs,
+tufts, pebbles and the bricks in curved ground are instances in their own
+material and stay sky-lit; they stand on tops, which are sky. Water passes
+light freely. Block light from lava (light spreading from lava cells, drawn
+as emission, in place of `MineWater`'s per-tile OmniLights) needs the
+water's lava cells in the bake; not done. A one-course slab is drawn as top
+pieces with no underside (found building the tunnel for `--gate=mouth`; its
+roof is two courses for that).
+
+**Checks.** `-- --gate=cave`, `-- --gate=deep --light-sweep` (now also
+"reflections on"), `-- --gate=mouth` (new: a tunnel built on the ground, the
+day seen from inside against no tunnel, its walls by the mouth and the back),
+`-- --gate` with and without `--no-sky-light`; `mine_world_probe`
+(`_check_sky_light`), `terrain_probe`; `-- --gate=gpu` against section 17.
