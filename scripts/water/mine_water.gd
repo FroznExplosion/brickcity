@@ -100,7 +100,10 @@ var _queued_meshes := {}               ## Vector2i -> a take()'s mesh entry
 const SEA_WAVE_PARAMS := ["waves", "wave_count", "groups", "group_count", "shore_band", "swell_blend",
 		"shore_calm", "sea_level", "pool_calm", "pool_mask_origin", "pool_mask_size", "seabed_tex",
 		"seabed_origin", "seabed_extent", "open_sea_depth", "water_outside_field", "swash_delay",
-		"swash_loss", "trough_colour", "crest_colour", "deep_tint", "absorption_depth", "water_roughness"]
+		"swash_loss", "trough_colour", "crest_colour", "deep_tint", "absorption_depth", "water_roughness",
+		"grid_lines", "grid_line_width", "grid_line_darken", "print_lines_enabled", "layer_height",
+		"bead_width", "bead_groove", "layer_darken", "resolve_begin", "resolve_end", "print_fade_begin",
+		"print_fade_end", "foam_at", "step_m"]
 var _wave_copy_in := 0.0
 const MESH_SWAPS_PER_FRAME := 6
 var _spare_lights: Array[OmniLight3D] = []

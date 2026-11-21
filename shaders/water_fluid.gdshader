@@ -16,7 +16,7 @@ shader_type spatial;
 //
 // Vertex colour, from the mesher (brick_fluid.cpp mesh_tile):
 //   g  kind: 0 still or source, 0.5 flowing, 1 falling
-render_mode cull_disabled;
+render_mode cull_disabled, diffuse_burley, specular_schlick_ggx;
 
 uniform bool lava = false;
 // The sea's water (water.gdshader trough_colour .. crest_colour).
@@ -41,8 +41,7 @@ instance uniform float swap_s = -100.0;
 // They ride the sea's own waves (sea_wave.gdshaderinc, the tiers' numbers),
 // so where the tiers take over the two are one surface; water against ground
 // keeps a third of the wave and laps up it. Drawn only: the water stays level.
-// Water over ground the field calls land (a channel dug inland) only laps.
-uniform float sea_lap = 0.07;
+// Water over ground the field calls land (a channel dug inland) stays level.
 // THE SEA'S LOOK for all water (the user: the band and the sea must not
 // differ): water.gdshader's colours, crest by the wave, darker with depth.
 // Copied from the sea's material by MineWater when there is a sea.
@@ -51,6 +50,27 @@ uniform vec4 crest_colour : source_color = vec4(0.42, 0.72, 0.78, 1.0);
 uniform vec4 deep_tint : source_color = vec4(0.10, 0.28, 0.40, 1.0);
 uniform float absorption_depth = 6.0;
 uniform float water_roughness = 0.22;
+// The tiers' piece look (water.gdshader): the stud grid, the print lines,
+// whitecaps. Copied from the sea's material by MineWater.
+uniform bool grid_lines = true;
+uniform float grid_line_width = 0.012;
+uniform float grid_line_darken = 0.35;
+uniform bool print_lines_enabled = true;
+uniform float layer_height = 0.020;
+uniform float bead_width = 0.024;
+uniform float bead_groove = 0.17;
+uniform float layer_darken = 0.92;
+uniform float resolve_begin = 0.30;
+uniform float resolve_end = 0.75;
+uniform float print_fade_begin = 7.0;
+uniform float print_fade_end = 22.0;
+uniform float foam_at = 0.80;
+uniform float step_m = 0.42;
+uniform vec3 sea_foam : source_color = vec3(0.92, 0.95, 0.96);
+varying float v_sea;
+varying float v_amp;
+varying vec2 v_cell;
+varying float v_top;
 varying float v_h01;
 // The mesher's own normal, world space. With cull_disabled Godot flips
 // NORMAL on a face seen from its back, and the tops are wound so that from
@@ -77,27 +97,35 @@ float noise(vec2 p) {
 }
 
 void vertex() {
-	float k = clamp((now_s - swap_s) / max(ease_s, 0.001), 0.0, 1.0);
-	VERTEX.y += CUSTOM0.x * (1.0 - k);
 	v_h01 = 0.5;
+	v_sea = 0.0;
+	v_amp = 0.0;
+	v_cell = vec2(0.0);
+	v_top = 0.0;
 	v_nrm = (MODEL_MATRIX * vec4(NORMAL, 0.0)).xyz;
 	// COLOR.r: the water's depth over 12 plates (0.14 m each), from the mesher.
 	v_depth = COLOR.r * 12.0 * 0.14;
 	if (CUSTOM0.y > 0.5) {
-		vec2 p = (MODEL_MATRIX * vec4(VERTEX, 1.0)).xz;
-		v_depth = max(sea_level - lattice_ground(p), 0.0);
-		float open = CUSTOM0.z;
-		float wave = 0.0;
-		if (lattice_ground(p) < sea_level) {
-			wave = surface_offset(p, wave_time, 1.0, 0.0);
-		}
-		float lap = 0.5 + 0.5 * sin(1.7 * TIME + dot(p, vec2(0.9, 0.7)));
-		VERTEX.y += wave * mix(0.35, 1.0, open) + sea_lap * (1.0 - open) * lap;
+		// A real sea piece (MineWater.md 11.9): the whole piece rides the
+		// sea's wave at its stud's middle, exactly as the tiers' pieces do.
+		v_sea = 1.0;
+		vec3 w0 = (MODEL_MATRIX * vec4(VERTEX, 1.0)).xyz;
+		vec2 mid = w0.xz + vec2(CUSTOM0.x, CUSTOM0.w) * stud * 0.5;
+		float ground = lattice_ground(mid);
+		float raw = ground < sea_level ? surface_offset(mid, wave_time, 1.0, 0.0) : 0.0;
+		VERTEX.y += raw;
 		float amp = 0.0;
 		for (int i = 0; i < wave_count; i++) {
 			amp += waves[i * 2].x;
 		}
-		v_h01 = clamp(wave / max(amp, 1e-4) * 0.5 + 0.5, 0.0, 1.0);
+		v_amp = amp;
+		v_h01 = clamp(raw / max(amp, 1e-4) * 0.5 + 0.5, 0.0, 1.0);
+		v_depth = max(sea_level - ground, 0.0);
+		v_cell = w0.xz - (mid - vec2(stud * 0.5));
+		v_top = sea_level + raw;
+	} else {
+		float k = clamp((now_s - swap_s) / max(ease_s, 0.001), 0.0, 1.0);
+		VERTEX.y += CUSTOM0.x * (1.0 - k);
 	}
 	wpos = (MODEL_MATRIX * vec4(VERTEX, 1.0)).xyz;
 	kind = COLOR.g;
@@ -113,7 +141,46 @@ void fragment() {
 	if (side && kind > 0.75) {
 		uv.y += TIME * fall_speed;
 	}
-	if (lava) {
+	if (!lava && v_sea > 0.5) {
+		// The tiers' piece look (water.gdshader fragment), restated.
+		bool up = !side;
+		if (!up) {
+			vec3 up_view = normalize((VIEW_MATRIX * vec4(0.0, 1.0, 0.0, 0.0)).xyz);
+			NORMAL = normalize(mix(NORMAL, up_view, 0.85));
+		}
+		vec3 albedo = mix(trough_colour.rgb, crest_colour.rgb, v_h01);
+		if (v_h01 > foam_at) {
+			float whitecaps = clamp((v_amp - step_m * 0.5) / step_m, 0.0, 1.0);
+			albedo = mix(albedo, sea_foam, smoothstep(foam_at, 1.0, v_h01) * whitecaps * (up ? 1.0 : 0.75));
+		}
+		albedo = mix(albedo, deep_tint.rgb, clamp(v_depth / absorption_depth, 0.0, 0.75));
+		if (print_lines_enabled) {
+			float pfade = 1.0 - smoothstep(print_fade_begin, print_fade_end, length(VERTEX));
+			if (pfade > 0.0) {
+				float pt = up ? (min(min(v_cell.x, stud - v_cell.x), min(v_cell.y, stud - v_cell.y)) / bead_width)
+						: ((v_top - wpos.y) / layer_height);
+				float pph = fract(pt);
+				float paa = max(fwidth(pt), 1e-5);
+				float pres = 1.0 - smoothstep(resolve_begin, resolve_end, paa);
+				float pgroove = max(paa * 1.4, bead_groove);
+				float pink = (1.0 - smoothstep(0.0, pgroove, abs(pph - 0.5))) * pres;
+				albedo *= mix(1.0, layer_darken, pink * pfade);
+			}
+		}
+		if (grid_lines) {
+			vec2 g = wpos.xz / stud;
+			vec2 fw = max(fwidth(g), vec2(1e-5));
+			vec2 dist_to = min(fract(g), 1.0 - fract(g));
+			vec2 w = grid_line_width / stud / fw;
+			vec2 line = 1.0 - smoothstep(w * 0.5, w * 0.5 + 1.0, dist_to / fw);
+			float fade = 1.0 - smoothstep(0.06, 0.16, max(fw.x, fw.y));
+			albedo *= 1.0 - max(line.x, line.y) * fade * grid_line_darken;
+		}
+		ALBEDO = albedo;
+		ROUGHNESS = water_roughness;
+		METALLIC = 0.0;
+		SPECULAR = 0.7;
+	} else if (lava) {
 		// Crust plates drifting one way over the whole melt, bright cracks
 		// between them, breathing.
 		vec2 cu = uv * 0.55 + vec2(0.03, 0.02) * TIME;

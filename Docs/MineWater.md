@@ -497,8 +497,11 @@ channel's water stood apart from the waves).
   that from above is their back, and with cull_disabled Godot flipped their normal down --
   they were lit as facing down, which is why the water had been dark (first "black", then
   "darker than the sea"). The shader now takes the mesher's normal.
-* **No cracks:** a quad a stud in the band (shared corners), and short sides (0.3 m) hanging
-  from the band's outer edge where the tiers' pieces meet it.
+* **Pieces, as the tiers draw them** (the user saw the band as a smooth sheet against the
+  tiers' bricks): each band stud is a flat piece that rides the wave at its middle (CUSTOM0 x,
+  w: the way to the middle), with four sides a brick deep -- the risers. The fragment restates
+  the tiers' look: crest colour by wave, whitecaps, depth tint, print lines, stud grid; those
+  values are copied from the sea's material too. Side by side the two cannot be told apart.
 * **The ocean cannot be emptied:** still water laid on the open sea joins it; a source bucket
   dipped in the ocean takes nothing (`ray_cell` ocean); a bucket always filled free from a
   source. Two sources still make a third. Only a brick placed where sea was moves sea water;
