@@ -5838,3 +5838,79 @@ func _run_cost_gate() -> void:
 		settings.set_value(&"max_fps", settings.default_of(&"max_fps"), false)
 	print("[planet] cost gate done")
 	host.get_tree().quit(0)
+
+
+# ---------------------------------------------------------------------------
+# The load gate: what the planet scene's load costs, part by part (a report;
+# Docs/PlanetCost.md 8).
+#
+#     godot --path . res://scenes/planet.tscn -- --gate=load
+#
+# The scene as played (system, ship, AI regions started). _ready's parts as
+# PlanetScene._lap timed them; then every frame by the clock from the first
+# to 3 s after the player stands: the slow ones by part, the trees' and the
+# buildings' worst _process by part, when the trees' cards were baked and when
+# the player was let go. Windowed: the cards need a renderer.
+
+## How long after the player stands the load gate goes on watching.
+const LOAD_WATCH_MS := 12000
+
+func _run_load_gate() -> void:
+	var t_ready := Time.get_ticks_msec()
+	var clock := FrameClock.new()
+	host.add_child(clock)
+	host.trees.process_worst_us = 0
+	host.buildings.process_worst_us = 0
+	host.process_worst_us = 0
+	var first_frame := -1
+	var baked_at := -1
+	var spawned_at := -1
+	var frames := 0
+	var long: Array = []
+	var last := Time.get_ticks_usec()
+	while Time.get_ticks_msec() - t_ready < 90000:
+		await host.get_tree().process_frame
+		frames += 1
+		var now := Time.get_ticks_usec()
+		var ms := float(now - last) / 1000.0
+		last = now
+		if first_frame < 0:
+			first_frame = Time.get_ticks_msec() - t_ready
+		if ms > 40.0 and long.size() < 40:
+			long.append([snappedf(ms, 0.1), frames, "spawned" if spawned_at >= 0 else ("cards" if baked_at < 0 else "ground")])
+		if ms > 60.0 and spawned_at >= 0:
+			print("[load] long frame %d at +%d ms: %.1f ms" % [frames, Time.get_ticks_msec() - t_ready - spawned_at, ms])
+		if baked_at < 0 and host.trees.prebaked:
+			baked_at = Time.get_ticks_msec() - t_ready
+		if spawned_at < 0 and host.pawn != null:
+			spawned_at = Time.get_ticks_msec() - t_ready
+			# `-- --ship-off`: the parked ship's processing stopped (an A/B).
+			if "--ship-off" in OS.get_cmdline_user_args() and host.ship != null:
+				host.ship.process_mode = Node.PROCESS_MODE_DISABLED
+		if spawned_at >= 0 and Time.get_ticks_msec() - t_ready > spawned_at + LOAD_WATCH_MS:
+			break
+	var total := 0.0
+	for k in host.load_parts:
+		if k != "engine up to the scene":
+			total += float(host.load_parts[k])
+	print("[load] engine up to the scene's _ready: %.0f ms; _ready: %.0f ms" % [
+			float(host.load_parts.get("engine up to the scene", 0.0)), total])
+	for k in host.load_parts:
+		if k != "engine up to the scene":
+			print("[load]   %-32s %7.1f ms" % [k, float(host.load_parts[k])])
+	print("[load] after _ready: first frame %d ms, the trees' cards baked %d ms, the player let go %d ms; %d frames" % [
+			first_frame, baked_at, spawned_at, frames])
+	print("[load] frames over 40 ms (ms, frame, phase): %s" % [long])
+	print("[load] worst _process: trees %.1f ms %s; buildings %.1f ms (%s); scene %.1f ms %s" % [
+			host.trees.process_worst_us / 1000.0, host.trees.process_worst_what,
+			host.buildings.process_worst_us / 1000.0, host.buildings.process_worst_what,
+			host.process_worst_us / 1000.0, host.process_worst_what])
+	if host.ship != null:
+		print("[load] the ship: water step worst %.1f ms, drawn worst %.1f ms (%d draws)" % [
+				host.ship.water_step_us / 1000.0, host.ship.water_draw_us / 1000.0, host.ship._water_draws])
+		print("[load] the ship's own _process at worst %.1f ms (%s); its children: %s" % [
+				host.ship.process_worst_us / 1000.0, host.ship.process_worst_what,
+				host.ship.get_children().map(func(n: Node) -> String: return "%s:%s" % [n.name, n.get_class()])])
+	for l in clock.report_lines():
+		print("[load]   " + l)
+	host.get_tree().quit(0)

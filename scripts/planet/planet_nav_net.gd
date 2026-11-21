@@ -333,6 +333,14 @@ func _collect_builds(max_n: int) -> void:
 		n += 1
 
 
+## Every grid still building waited for (a scene going away: a task never
+## waited for is torn down under its thread at exit, signal 11).
+func wait_builds() -> void:
+	for k in _building.keys():
+		WorkerThreadPool.wait_for_task_completion(int((_building[k] as Array)[0]))
+	_building.clear()
+
+
 func regions_building() -> int:
 	return _building.size()
 
