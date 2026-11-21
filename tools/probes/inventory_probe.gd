@@ -44,8 +44,59 @@ func _init() -> void:
 	_save()
 	_screen_rules()
 	_mega_pickaxe()
+	_chests_and_drops()
 	print("inventory probe: %d ok, %d failed" % [_pass, _fail])
 	quit(1 if _fail > 0 else 0)
+
+
+## Stage 5 without a world: a chest's slots are the store's and the screen
+## borrows them; its save round trip; breaking it drops what it held (and in
+## survival the chest); dropped items' own save. (Placing on real ground,
+## the shot and the ground going are --gate=inventory's.)
+func _chests_and_drops() -> void:
+	print("chests and drops")
+	var inv := Inventory.new()
+	inv.seed_default()
+	_ok("the kit has chests (hotbar 2 slot 8)", inv.hotbars[1][7] != null and inv.hotbars[1][7].id == &"chest")
+	var drops := DroppedItems.new()
+	drops.setup(null, inv)
+	var chests := MineChests.new()
+	chests.setup(null, inv, drops)
+	var b := Vector3i(3, 40, -2)
+	_ok("a chest put down (no ground check: forced)", chests.place(b, [], true) and chests.count() == 1)
+	var key := MineChests.key_of(b)
+	inv.open_chest(key, chests.slots_of(key))
+	inv.hotbars[0][0] = ItemStack.make(&"coal_ore", 12)
+	inv.shift_click(Inventory.addr(&"hotbar_0", 0))
+	_ok("shift click fills the chest's own slots", chests.slots_of(key)[0] != null
+			and chests.slots_of(key)[0].id == &"coal_ore")
+	inv.close_chest()
+	var saved = JSON.parse_string(JSON.stringify(chests.to_save()))
+	chests.restore(saved)
+	_ok("a chest's contents come back from the save", chests.count() == 1
+			and chests.slots_of(key)[0] != null and chests.slots_of(key)[0].count == 12)
+	_ok("a chest's box: 2 x 2 studs, 3 plates, its bottom at its plate",
+			is_equal_approx(chests.box_of(b).size.x, 2.0 * BrickWorld.get_stud_metres())
+			and is_equal_approx(chests.box_of(b).position.y, 40 * BrickWorld.get_plate_metres()))
+	_ok("a block in the chest's box is refused", chests.overlaps(chests.box_of(b).grow(-0.1)))
+	_ok("a point in the chest is found (a shot)", chests.at_point(chests.box_of(b).get_center()) == key)
+	chests.break_chest(key, false)
+	_ok("creative: breaking drops what it held, not the chest", chests.count() == 0 and drops.count() == 1
+			and (drops.drops[0].stack as ItemStack).id == &"coal_ore")
+	chests.place(b, [], true)
+	chests.break_chest(key, true)
+	_ok("survival: an empty chest drops itself", drops.count() == 2
+			and (drops.drops[1].stack as ItemStack).id == &"chest")
+	var dsave = JSON.parse_string(JSON.stringify(drops.to_save()))
+	drops.restore(dsave)
+	_ok("dropped items come back from the save", drops.count() == 2
+			and (drops.drops[0].stack as ItemStack).count == 12)
+	drops.clear()
+	chests.clear()
+	for n in drops.get_children() + chests.get_children():
+		n.free()
+	drops.free()
+	chests.free()
 
 
 ## The screen's own helpers (stage 3): 1-9 over a slot, the held stack put

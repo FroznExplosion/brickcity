@@ -388,32 +388,40 @@ func _lower_gangway() -> void:
 			break
 	var c := bricks.create_chunk(Vector3i.ZERO, r.chunk_dims())
 	r.build(bricks, c, _palette)
-	var merge := MeshMerge.new()
-	for band in bricks.get_chunk_sections(c):
-		var arrays: Array = bricks.build_chunk_mesh_section(c, band)
-		if not arrays.is_empty():
-			merge.add_surface(arrays, Transform3D.IDENTITY, Color(-1, 0, 0))
-		var got: Array = bricks.get_chunk_studs_and_open(c, band)
-		var buf: PackedFloat32Array = got[0]
-		var open: PackedByteArray = got[1]
-		var keep := PackedFloat32Array()
-		for i in open.size():
-			if open[i] != 0:
-				keep.append_array(buf.slice(i * 16, i * 16 + 16))
-		if not keep.is_empty():
-			merge.add_instances(_stud_arrays, Transform3D.IDENTITY, keep)
-	bricks.release_chunk(c)
-	var out := merge.commit()
-	if out.is_empty():
-		return
-	var m := ArrayMesh.new()
-	m.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, out)
-	var mi := MeshInstance3D.new()
-	mi.mesh = m
-	mi.material_override = brick_material
+	# A box a brick, as its bands (BrickBoxes; Docs/PlanetCost.md 7): no bake and
+	# no mesh made on the main thread at the landing, its studs a MultiMesh.
 	var org := r.origin()
-	mi.transform = frame * Transform3D(Basis(), Vector3(org.x * stud, org.y * plate, org.z * stud))
-	gangway.add_child(mi)
+	var at := frame * Transform3D(Basis(), Vector3(org.x * stud, org.y * plate, org.z * stud))
+	var n_sec := bricks.get_chunk_sections(c)
+	var held := PackedInt64Array()
+	held.resize(n_sec)
+	for entry in bricks.get_instance_buffers(c, PackedInt32Array(), held):
+		var band := int((entry as Dictionary).section)
+		if int((entry as Dictionary).alive) == 0:
+			continue
+		var mi := MeshInstance3D.new()
+		mi.material_override = brick_material
+		mi.transform = at
+		gangway.add_child(mi)
+		BrickBoxes.fill(mi, entry, brick_material, Callable())
+		var sg: Array = bricks.get_chunk_studs_and_open(c, band)
+		var open: PackedFloat32Array = BrickWorld.split_studs(sg[0], Vector3.ZERO,
+				PackedFloat32Array([INF]), sg[1], 0)[0]
+		@warning_ignore("integer_division")
+		var n := open.size() / 16
+		if n > 0:
+			var studs := MultiMeshInstance3D.new()
+			studs.material_override = brick_material
+			var mm := MultiMesh.new()
+			mm.transform_format = MultiMesh.TRANSFORM_3D
+			mm.use_colors = true
+			mm.mesh = PieceMeshes.stud()
+			mm.instance_count = n
+			mm.buffer = open
+			studs.multimesh = mm
+			studs.visibility_range_end = PlanetBuildings.STUD_DRAW_M
+			mi.add_child(studs)
+	bricks.release_chunk(c)
 
 
 ## The hull swept from where it is drawn to `next` (in its reference frame):

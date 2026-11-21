@@ -4,7 +4,7 @@ Ported from zylanntest's `game/inventory/` (its README is the design this
 follows), shaped to brickcity: content packs, MenuScreen, no renderer
 read-backs, and the arsenal left alone.
 
-Status: stages 1-4 built (branch `mine-inventory`). Stage 5 (chests) next.
+Status: all five stages built (branch `mine-inventory`). What is left is under "Later".
 
 ## 1. Two systems, one pair of hands
 
@@ -149,15 +149,36 @@ The inventory is saved in the mine world's save folder beside the edits
    Cost, once at load: ~120 ms to build the 1280 copies (~5600 mesh
    instances, 2026-11-20) and ~20 ms to free them after the render.
    A pack item with its own model (a brick build) is for later: `_model`.
-5. **Chests.** A chest item places a chest (a small build of bricks on the
-   block lattice, not a terrain material, so the terrain C++ is untouched);
-   RMB opens it in the inventory screen beside your storage (27 slots).
-   Contents saved with the world (`chests` in the `.inv` file, keyed by
-   block). Broken by LMB, a shot, or the ground coming down
-   (Docs/TerrainCollapse.md): the chest and its contents fall out as dropped
-   items (a small spinning brick you walk over to pick up, `add_item`).
-   Origin shift: chests and dropped items are kept in terrain coordinates and
-   placed with `to_global` (Docs/MineWorld.md 15).
+5. **Chests and dropped items.** **Built** (`scripts/inventory/mine_chests.gd`,
+   `dropped_items.gd`, owned by the mine world).
+   - A chest is not a terrain material (the field's C++ is untouched): a node
+     2 x 2 studs on the stud lattice and one brick (3 plates) tall, standing
+     at any plate height (ground tops are at any plate). The chest item's
+     model fitted to it, and a box collider on `Layers.WORLD`: the pawn
+     stands on it, bullets hit it.
+   - Chest item + RMB: a chest on the face looked at, if it is air and held
+     from under. RMB on a chest (any hand) opens it: the screen borrows its
+     27 slots (Inventory.open_chest), shift-click moves between it and you.
+     The builder aims at a chest nearer than the ground and outlines it; no
+     block can be placed into one; MMB on it picks a chest.
+   - Broken by LMB, a shot (`mine_world._mine` asks the chests first), or
+     what holds it going (`MineChests.check` on every `terrain_edited`: the
+     ground under it all air, or ground put into it -- a block broken, a
+     shot, the ground coming down, Docs/TerrainCollapse.md). What it held
+     falls out; in survival the chest too, in creative not (Minecraft's).
+   - Dropped items: a stack and a small turning, bobbing model of it, falling
+     onto BrickTerrain's cells (`solid_at`, no physics bodies), woken again
+     when the ground changes. Walk within 1.3 m of one (after a second) and
+     it goes into the inventory; what does not fit stays. Gone after 5
+     minutes, at most 200. Also from Q over a slot in the screen (Shift: the
+     stack) and from a held stack with no room when the screen closes.
+   - Saved with the world: `chests` (key = block, the slots) and `drops`
+     (stack, position, age) in the same `.inv` file as the inventory.
+   - Terrain frame: both are children of the mine world with no transform
+     of their own, so the origin shift moves them with the ground
+     (Docs/MineWorld.md 15).
+   - The kit has 64 chests (hotbar 2 slot 8); a creative save from before
+     gets them on load (`ensure_item`), a survival one does not.
 
 Later: backpacks (bigger storage), survival toggle in the world menu,
 crafting (zylanntest's recipe tools), saving the inventory per character
@@ -172,9 +193,12 @@ instead of per world, a gun item in a hotbar slot, multiplayer authority.
   left drag spreading a stack, Escape putting the held stack back, 9 over a
   storage slot, `MenuFit.audit` at 800x450 and 640x400, E closes, X and 3,
   RMB places the item, the inventory back after save + generate. Prints
-  `INV-GATE PASS`. Screenshots `user://dev/inv_*.png`. Stage 5 adds: place a
-  chest, fill it, save, regenerate, check the contents; stage 4: spinning
-  slots.
+  `INV-GATE PASS`. Screenshots `user://dev/inv_*.png`. Stage 4: icons
+  rendered, the hovered slot turns. Stage 5: a chest from the kit put down,
+  opened with RMB, grass clicked into it, the chest screen at 640x400; after
+  save + generate it is back with the grass; a shot breaks it, the grass
+  drops and rests on the ground, flying over it picks it up; a second chest
+  breaks when the ground under it is removed.
 - Also: `mine_world_probe`, `content_packs_probe`, `--gate=menu`, `--gate=build`
   (if the build gate exists: it uses the old hotbar's slot keys).
 

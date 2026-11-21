@@ -300,13 +300,27 @@ static func town_pad(data: PlanetData, dir: Vector3, flat: float, blend: float) 
 
 func _process(delta: float) -> void:
 	_time += delta
+	var t0 := Time.get_ticks_usec()
 	far_tier()
+	var t1 := Time.get_ticks_usec()
 	var cam := get_viewport().get_camera_3d()
 	if cam == null or far == null:
 		return
 	_brick_step(cam.global_position)
+	var t2 := Time.get_ticks_usec()
 	_damage_step()
+	var t3 := Time.get_ticks_usec()
 	_occluders_for(cam.global_position)
+	var t4 := Time.get_ticks_usec()
+	if t4 - t0 > process_worst_us:
+		process_worst_us = t4 - t0
+		process_worst_what = "far tier %.1f, bricks %.1f, damage %.1f, occluders %.1f ms" % [
+				(t1 - t0) / 1000.0, (t2 - t1) / 1000.0, (t3 - t2) / 1000.0, (t4 - t3) / 1000.0]
+
+
+## The worst _process this far, and where it went (a gate reads them).
+var process_worst_us := 0
+var process_worst_what := ""
 
 
 # --- occluders (Docs/PlanetCost.md 5.5) --------------------------------------
