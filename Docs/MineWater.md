@@ -453,6 +453,30 @@ Not networked yet; what is in place so finishing it is wiring, not redesign.
   cell, so an edit never waits for the water to finish sampling a column.
 * A lava tile's light is placed from at most 64 of its vertices, not all of them.
 
+### 11.8 The real sea near the player; spreading water stays low (2026-11-20)
+
+* **The real sea.** In a square of 9 x 9 tiles (about 100 m) round the player the sea's top
+  course is drawn by the fluid mesher like any water (`BrickFluid.set_real_sea`). The wave
+  tiers leave that square out (water.gdshader `real_rect`, discard) and calm to flat over
+  16 m toward it (`real_ramp`); the real sea's own waves fade to flat at its edge too, so the
+  two meet level. A dug beach there takes real sea water; waves no longer come up through sand.
+  The swimmer reads the fluid's surface inside the square and the calmed waves near it.
+* The square moves in steps (two tiles of slack). A new square's sea columns are read three
+  tiles a tick on the water's thread (about 12 ms a tile), nearest first; take() reports
+  `real_rect` once all its meshes are out, the script moves the tiers' hole when they are
+  swapped in and calls `real_sea_shown`, and only then are the old square's tops dropped --
+  never a hole between them.
+* **Its waves** are drawn only (the water stays level): CUSTOM0.y marks a sea top, .z how
+  open it is (0 against ground, 1 four studs out). Open water swells about 0.1 m, water
+  against ground laps up it. Tops are 4 x 4 stud quads out in open water, a quad a stud
+  within four studs of the shore.
+* **Spreading water stays low.** A top corner averaged its neighbours but snapped to a full
+  brick if any had water stacked over it, so the thin water round a poured pile jumped to a
+  brick and back as the pile drained. A stacked neighbour is now left out of the mean (the
+  pile's own side covers the step); only a stacked cell is full at its corners.
+* Seen: the wave tiers' sea is shaded a little lighter than the fluid's, so the square's
+  edge shows as a soft change of colour at about 50 m.
+
 ## 12. What it costs (estimates — stage 1 and 5 measure them)
 
 | | Where | Estimate |
