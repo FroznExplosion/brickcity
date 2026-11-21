@@ -239,6 +239,20 @@ with smooth tops; islands came off a brick at a time, never in big chunks.
   2026-11-21: 5 runs of `--gate=gen --with-collapse` in a row, no crash
   (it was about 1 run in 2 before this).
 
+### 8.3 2026-11-21: walking in a cave
+
+`--gate=stop --walk --cave` starts the walk in a cave room 4-28 m under the
+ground with a way out at least 60 studs long, and steers along its floor
+(steps of 0.8 m at most, up or down; wall following when blocked). It prints
+how far it got, its turns and dead ends, and its own cost apart (0.14 ms).
+
+Quiet machine, editor closed, 78 C peak, not held back; 16 m under the
+ground, 25 m walked in 15 s: one frame over 33 ms (35 ms: process 8, draw
+26), GPU median 11.3 ms, near tier worst 11.7 ms once (instances; 1.1-1.4 in
+the other runs), deep tier 82 sections built, 34 dropped, worst 1.6 ms. Still
+after stopping: 16.6 ms mean. Nothing of the ground collapse's shows: it runs
+only on an edit.
+
 ### 8.2 2026-11-20: cost, and cave ceilings
 
 After the ground's bond (Docs/TerrainBond.md) the survey read the top course
