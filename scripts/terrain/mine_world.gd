@@ -97,6 +97,32 @@ var drops: DroppedItems = null
 ## Saving the world's changes (Docs/MineWorld.md 9): one file per seed and
 ## generator settings, under UserPaths.SAVES (a scripted pass: user://dev/).
 const SAVE_MAGIC := "BCME"
+## The edits by region (Docs/MineWorld.md 9): `<save>.regions/r_<rx>_<rz>.edits`,
+## zstd, REGION_MAGIC, format, field version, rx, rz, count, the 13-byte records.
+const REGION_MAGIC := "BCMR"
+const REGION_FORMAT := 1
+## A one-file save was loaded: the next save writes every region and drops it.
+var _migrate_old := false
+## The main thread's part of the last save, ms (the readout; --gate=save).
+var last_save_ms := 0.0
+
+
+static func _regions_dir(edits_path: String) -> String:
+	return edits_path.get_basename() + ".regions"
+
+
+func path_for_regions() -> String:
+	return save_path()
+
+
+## A folder and the files in it (a save's region folder).
+static func _remove_dir(dir_path: String) -> void:
+	var d := DirAccess.open(dir_path)
+	if d == null:
+		return
+	for f in d.get_files():
+		d.remove(f)
+	DirAccess.remove_absolute(dir_path)
 const SAVE_FORMAT := 1
 const AUTOSAVE_SECONDS := 30.0
 var _edits_dirty := false
@@ -139,6 +165,8 @@ func _ready() -> void:
 		if old != null:
 			for f in old.get_files():
 				old.remove(f)
+			for sub in old.get_directories():
+				_remove_dir(_save_dir().path_join(sub))
 		# ... and its character: the pass starts from the starting kit.
 		if FileAccess.file_exists(GATE_CHARACTER):
 			DirAccess.remove_absolute(GATE_CHARACTER)
@@ -290,7 +318,8 @@ func generate(s: Dictionary) -> void:
 	_load_pieces()
 	_load_placed()
 	_load_inventory()
-	_edits_dirty = false
+	# A one-file save to move to regions: the first save writes them all.
+	_edits_dirty = _migrate_old
 	_save_status = "%d changes loaded" % loaded if loaded > 0 else "new world"
 	var sea := float(settings.gen.get("sea_m", 20.0))
 	# The sea line is where trees stop; the water snaps it to a course below.
@@ -1165,20 +1194,39 @@ func save_path() -> String:
 
 func _load_edits() -> int:
 	var path := save_path()
-	if not FileAccess.file_exists(path):
-		return 0
-	var f := FileAccess.open_compressed(path, FileAccess.READ, FileAccess.COMPRESSION_ZSTD)
-	if f == null:
-		return 0
-	if f.get_buffer(4).get_string_from_ascii() != SAVE_MAGIC:
-		return 0
-	var fmt := f.get_32()
-	var field := f.get_32()
-	if fmt != SAVE_FORMAT or field != BrickTerrain.get_field_version():
-		push_warning("[mine] %s is from another format or field; not loaded" % path)
-		return 0
-	var n := f.get_32()
-	return BrickTerrain.set_edits(f.get_buffer(n * 13))
+	var n := 0
+	_migrate_old = false
+	# The one-file save worlds were made with: loaded, and every region left
+	# changed, so the next save writes them all and drops this file.
+	if FileAccess.file_exists(path):
+		var f := FileAccess.open_compressed(path, FileAccess.READ, FileAccess.COMPRESSION_ZSTD)
+		if f != null and f.get_buffer(4).get_string_from_ascii() == SAVE_MAGIC:
+			var fmt := f.get_32()
+			var field := f.get_32()
+			if fmt != SAVE_FORMAT or field != BrickTerrain.get_field_version():
+				push_warning("[mine] %s is from another format or field; not loaded" % path)
+			else:
+				n += BrickTerrain.set_edits(f.get_buffer(f.get_32() * 13))
+				_migrate_old = true
+	# Region files (Docs/MineWorld.md 9), newer than the one file if both.
+	var rdir := _regions_dir(path)
+	var d := DirAccess.open(rdir)
+	if d != null:
+		for name in d.get_files():
+			if not name.ends_with(".edits"):
+				continue
+			var rf := FileAccess.open_compressed(rdir.path_join(name), FileAccess.READ, FileAccess.COMPRESSION_ZSTD)
+			if rf == null or rf.get_buffer(4).get_string_from_ascii() != REGION_MAGIC:
+				continue
+			if rf.get_32() != REGION_FORMAT or rf.get_32() != BrickTerrain.get_field_version():
+				push_warning("[mine] %s is from another format or field; not loaded" % name)
+				continue
+			rf.get_32()   # rx
+			rf.get_32()   # rz
+			n += BrickTerrain.set_edits(rf.get_buffer(rf.get_32() * 13))
+	if not _migrate_old:
+		BrickTerrain.take_dirty_regions()   # what was loaded is what is saved
+	return n
 
 
 ## The water, beside the edits (Docs/MineWater.md 11): each cell that differs
@@ -1388,7 +1436,15 @@ func save_edits(wait := false) -> void:
 		inv_save["drops"] = drops.to_save()
 	var inv_text := JSON.stringify(inv_save, "\t")
 	_fluid_saved_at = fluid_at
-	var bytes: PackedByteArray = BrickTerrain.get_edits()
+	# Only the regions edited since the last save (Docs/MineWorld.md 9): it
+	# packed every edit of the world here, on the main thread, each autosave.
+	var t_save := Time.get_ticks_usec()
+	var regions: Array = []
+	var dirty := BrickTerrain.take_dirty_regions()
+	for i in range(0, dirty.size(), 2):
+		regions.append([dirty[i], dirty[i + 1], BrickTerrain.get_region_edits(dirty[i], dirty[i + 1])])
+	var migrate := _migrate_old
+	var rdir := _regions_dir(path_for_regions())
 	var fluid_bytes: PackedByteArray = BrickFluid.get_save()
 	var piece_bytes := var_to_bytes(collapse.to_save())
 	var placed_bytes := BrickTerrain.get_placed().to_byte_array()
@@ -1397,23 +1453,36 @@ func save_edits(wait := false) -> void:
 	var field := BrickTerrain.get_field_version()
 	var write := func() -> void:
 		DirAccess.make_dir_recursive_absolute(dir)
+		# The regions first: a world moving off the one-file save drops that
+		# file only once every region is written.
+		if not regions.is_empty():
+			DirAccess.make_dir_recursive_absolute(rdir)
+		var all_written := true
+		for r in regions:
+			var rp := rdir.path_join("r_%d_%d.edits" % [r[0], r[1]])
+			var rf := FileAccess.open_compressed(rp + ".tmp", FileAccess.WRITE, FileAccess.COMPRESSION_ZSTD)
+			if rf == null:
+				all_written = false
+				continue
+			var rb: PackedByteArray = r[2]
+			rf.store_buffer(REGION_MAGIC.to_ascii_buffer())
+			rf.store_32(REGION_FORMAT)
+			rf.store_32(field)
+			rf.store_32(r[0])
+			rf.store_32(r[1])
+			@warning_ignore("integer_division")
+			rf.store_32(rb.size() / 13)
+			rf.store_buffer(rb)
+			rf.close()
+			DirAccess.rename_absolute(rp + ".tmp", rp)
+		if migrate and all_written and FileAccess.file_exists(path):
+			DirAccess.remove_absolute(path)
 		var ip := _inventory_path(path)
 		var iv := FileAccess.open(ip + ".tmp", FileAccess.WRITE)
 		if iv != null:
 			iv.store_string(inv_text)
 			iv.close()
 			DirAccess.rename_absolute(ip + ".tmp", ip)
-		var f := FileAccess.open_compressed(path + ".tmp", FileAccess.WRITE, FileAccess.COMPRESSION_ZSTD)
-		if f == null:
-			return
-		f.store_buffer(SAVE_MAGIC.to_ascii_buffer())
-		f.store_32(SAVE_FORMAT)
-		f.store_32(field)
-		@warning_ignore("integer_division")
-		f.store_32(bytes.size() / 13)
-		f.store_buffer(bytes)
-		f.close()
-		DirAccess.rename_absolute(path + ".tmp", path)
 		var pp := _pieces_path(path)
 		var g := FileAccess.open_compressed(pp + ".tmp", FileAccess.WRITE, FileAccess.COMPRESSION_ZSTD)
 		if g == null:
@@ -1443,8 +1512,9 @@ func save_edits(wait := false) -> void:
 		h.store_buffer(fluid_bytes)
 		h.close()
 		DirAccess.rename_absolute(fp + ".tmp", fp)
-	@warning_ignore("integer_division")
-	_save_status = "%d changes saved" % (bytes.size() / 13)
+	_migrate_old = false
+	last_save_ms = float(Time.get_ticks_usec() - t_save) / 1000.0
+	_save_status = "%d changes saved (%d regions written)" % [BrickTerrain.get_edit_count(), regions.size()]
 	if wait:
 		write.call()
 	else:
@@ -1470,6 +1540,7 @@ func forget_edits() -> void:
 	var path := save_path()
 	if FileAccess.file_exists(path):
 		DirAccess.remove_absolute(path)
+	_remove_dir(_regions_dir(path))
 	if FileAccess.file_exists(_pieces_path(path)):
 		DirAccess.remove_absolute(_pieces_path(path))
 	if FileAccess.file_exists(_placed_path(path)):
@@ -4380,6 +4451,27 @@ func _gate_edits() -> void:
 	generate(s2)
 	print("[mine-gate] save: %d edits written to %s, %d back after generating again (%s)" % [
 			count, path, BrickTerrain.get_edit_count(), _save_status])
+	# A world saved before regions (Docs/MineWorld.md 9): its one file loads,
+	# the next save writes every region, and only then is the file dropped.
+	var one := FileAccess.open_compressed(path, FileAccess.WRITE, FileAccess.COMPRESSION_ZSTD)
+	var all := BrickTerrain.get_edits()
+	one.store_buffer(SAVE_MAGIC.to_ascii_buffer())
+	one.store_32(SAVE_FORMAT)
+	one.store_32(BrickTerrain.get_field_version())
+	@warning_ignore("integer_division")
+	one.store_32(all.size() / 13)
+	one.store_buffer(all)
+	one.close()
+	_remove_dir(_regions_dir(path))
+	var s3 := settings.duplicate(true)
+	settings = {}
+	generate(s3)
+	var back := BrickTerrain.get_edit_count()
+	save_edits(true)
+	var rfiles := DirAccess.get_files_at(_regions_dir(path)).size() if DirAccess.dir_exists_absolute(_regions_dir(path)) else 0
+	var ok := back == count and rfiles > 0 and not FileAccess.file_exists(path)
+	print("[mine-gate] %s one-file save moved to regions: %d edits back of %d, %d region files, old file %s (%s)" % [
+			"ok  " if ok else "FAIL", back, count, rfiles, "gone" if not FileAccess.file_exists(path) else "STILL THERE", _save_status])
 
 
 ## Tiles within 12 of the camera that neither tier draws: a hole in the
