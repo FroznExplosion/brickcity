@@ -36,6 +36,15 @@ uniform float grid_line = 0.035;
 uniform float now_s = 0.0;
 uniform float ease_s = 0.1;
 instance uniform float swap_s = -100.0;
+// THE REAL SEA (MineWater.md 11.8): sea tops near the player carry CUSTOM0.y
+// = 1 and in .z how open the water is (0 against ground, 1 four studs out).
+// Open water swells a little, water against ground laps up it; both fade to
+// flat at the edge of the real square (`real_rect`, this mesh's own metres:
+// x0, z0, x1, z1), where the wave tiers' sea, calmed to flat there too, takes
+// over. Drawn only: the water itself stays level.
+uniform vec4 real_rect = vec4(0.0);
+uniform float sea_swell = 0.10;
+uniform float sea_lap = 0.07;
 
 varying vec3 wpos;
 varying float kind;
@@ -55,6 +64,16 @@ float noise(vec2 p) {
 void vertex() {
 	float k = clamp((now_s - swap_s) / max(ease_s, 0.001), 0.0, 1.0);
 	VERTEX.y += CUSTOM0.x * (1.0 - k);
+	if (CUSTOM0.y > 0.5) {
+		vec2 p = VERTEX.xz;
+		float e = min(min(p.x - real_rect.x, real_rect.z - p.x), min(p.y - real_rect.y, real_rect.w - p.y));
+		float fade = smoothstep(0.0, 12.0, e);
+		float open = CUSTOM0.z;
+		float swell = sin(dot(p, vec2(0.21, 0.13)) - 1.1 * TIME) * 0.6
+				+ sin(dot(p, vec2(-0.09, 0.27)) - 0.8 * TIME + 1.7) * 0.4;
+		float lap = 0.5 + 0.5 * sin(1.7 * TIME + dot(p, vec2(0.9, 0.7)));
+		VERTEX.y += fade * (sea_swell * open * swell + sea_lap * (1.0 - open) * lap);
+	}
 	wpos = (MODEL_MATRIX * vec4(VERTEX, 1.0)).xyz;
 	kind = COLOR.g;
 }
