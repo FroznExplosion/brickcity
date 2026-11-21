@@ -38,6 +38,11 @@ var _slots: Array[InvSlot] = []
 var _hovered: InvSlot = null
 var _chest_box: Control
 var _storage_box: Control
+## The storage: the worn backpack's slots (Docs/Inventory.md 8), rebuilt when
+## the backpack changes; its label says which backpack.
+var _storage_grid: GridContainer
+var _storage_label: Label
+var _storage_n := -1
 var _creative_box: Control
 var _creative_flow: HFlowContainer
 var _info: Label
@@ -71,8 +76,16 @@ func _build_content() -> void:
 
 	_chest_box = _section("Chest", _grid(&"chest", Inventory.CHEST_SIZE))
 	content.add_child(_chest_box)
-	_storage_box = _section("Storage", _grid(&"main", Inventory.MAIN_SIZE))
+	# The storage is the worn backpack's slots (its slot is with the hands,
+	# below, so it shows on the Creative tab too).
+	_storage_grid = GridContainer.new()
+	_storage_grid.columns = Inventory.HOTBAR_SIZE
+	_storage_grid.add_theme_constant_override("h_separation", GAP)
+	_storage_grid.add_theme_constant_override("v_separation", GAP)
+	_storage_box = _section("Storage", _storage_grid)
+	_storage_label = _storage_box.get_child(0) as Label
 	content.add_child(_storage_box)
+	_rebuild_storage()
 	_creative_flow = HFlowContainer.new()
 	_creative_flow.add_theme_constant_override("h_separation", GAP)
 	_creative_flow.add_theme_constant_override("v_separation", GAP)
@@ -85,6 +98,10 @@ func _build_content() -> void:
 
 	var hands := HBoxContainer.new()
 	hands.add_theme_constant_override("separation", GAP * 3)
+	var bp := VBoxContainer.new()
+	bp.add_theme_constant_override("separation", GAP)
+	_add_slot(bp, InvSlot.make(inv, Inventory.addr(&"backpack")))
+	hands.add_child(bp)
 	var off := VBoxContainer.new()
 	off.add_theme_constant_override("separation", GAP)
 	for i in Inventory.OFFHAND_SIZE:
@@ -95,7 +112,7 @@ func _build_content() -> void:
 	bars.add_child(_grid(&"hotbar_1", Inventory.HOTBAR_SIZE))
 	bars.add_child(_grid(&"hotbar_0", Inventory.HOTBAR_SIZE))
 	hands.add_child(bars)
-	content.add_child(_section("Off-hand  |  hotbar 2 / hotbar 1", hands))
+	content.add_child(_section("Backpack  |  off-hand  |  hotbar 2 / hotbar 1", hands))
 
 	_info = Label.new()
 	MenuFit.fit_label(_info, true)
@@ -163,9 +180,27 @@ func show_page(p: String) -> void:
 	_refresh()
 
 
+## The storage grid as big as the worn backpack (none: no slots).
+func _rebuild_storage() -> void:
+	var n := inv.area_size(&"main")
+	if n == _storage_n:
+		return
+	_storage_n = n
+	for c in _storage_grid.get_children():
+		_slots.erase(c)
+		c.queue_free()
+	for i in n:
+		_add_slot(_storage_grid, InvSlot.make(inv, Inventory.addr(&"main", i)))
+	if inv.backpack == null:
+		_storage_label.text = "Storage  |  no backpack worn: put one in the backpack slot"
+	else:
+		_storage_label.text = "Storage  |  %s, %d slots" % [ItemCatalog.get_def(inv.backpack.id).get("name", "?"), n]
+
+
 func _refresh() -> void:
 	if _info == null:
 		return
+	_rebuild_storage()
 	_chest_box.visible = not inv.chest_key.is_empty()
 	title_label.text = "Chest" if not inv.chest_key.is_empty() else "Inventory"
 	for s in _slots:
@@ -325,8 +360,8 @@ func _on_back() -> bool:
 func _on_relayout(vp_size: Vector2) -> void:
 	var w := available_width(vp_size)
 	# 9 columns + the off-hand column beside the hotbars.
-	var by_w := (w - GAP * 12.0) / 10.3
-	var rows := 3.0 + 2.0 + (3.0 if inv != null and not inv.chest_key.is_empty() else 0.0)
+	var by_w := (w - GAP * 15.0) / 11.4
+	var rows := ceilf(maxf(_storage_n, 0) / 9.0) + 2.0 + (3.0 if inv != null and not inv.chest_key.is_empty() else 0.0)
 	var by_h := (vp_size.y - 230.0) / (rows + 0.6)
 	_slot_px = floorf(clampf(minf(by_w, by_h), MIN_SLOT, MAX_SLOT))
 	for s in _slots:

@@ -178,6 +178,15 @@ static func _model(d: Dictionary) -> Node3D:
 			var tilt := Basis(Vector3.BACK, deg_to_rad(-35.0))
 			_part(inner, _box(Vector3(0.1, 1.2, 0.1)), wood, Vector3.ZERO, tilt)
 			_part(inner, _box(Vector3(0.85, 0.15, 0.17)), _mat(col, 0.25), tilt * Vector3(0, 0.55, 0), tilt)
+		"backpack":
+			# A pack: body, a lid flap over its top front, a front pocket, two straps.
+			var m := _mat(col, 0.7)
+			var dark := _mat(col.darkened(0.3), 0.7)
+			_part(inner, _box(Vector3(0.7, 0.9, 0.42)), m, Vector3(0, 0.45, 0))
+			_part(inner, _box(Vector3(0.74, 0.2, 0.46)), dark, Vector3(0, 0.86, 0.01))
+			_part(inner, _box(Vector3(0.46, 0.32, 0.12)), dark, Vector3(0, 0.3, 0.26))
+			for x in [-0.2, 0.2]:
+				_part(inner, _box(Vector3(0.08, 0.8, 0.06)), dark, Vector3(x, 0.45, -0.24))
 		"chest":
 			_part(inner, _box(Vector3(1.0, 0.6, 0.72)), _mat(col, 0.6), Vector3(0, 0.3, 0))
 			_part(inner, _box(Vector3(1.04, 0.24, 0.76)), _mat(col.darkened(0.25), 0.6), Vector3(0, 0.72, 0))
