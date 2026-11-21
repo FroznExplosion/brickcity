@@ -516,6 +516,16 @@ struct TopColumn {
 /// tile (a few ms): a worker's job.
 void top_columns(int tx, int tz, std::vector<TopColumn> &out);
 
+/// What tile (tx, tz) is made of has a version: it changes when a cell in it
+/// or within a tile of it is edited or a brick placed, and for every tile when
+/// the world is set up again (seed, generator, its params, the bond, edits
+/// cleared). Equal versions, equal tile: what a cache of a tile's derived data
+/// (the collapse's top course) checks. Lock-free; a hash slot may be shared by
+/// two tiles, which only makes a cache miss more often.
+uint64_t tile_version(int tx, int tz);
+/// Every tile's version changes (the world set up again).
+void bump_field_version();
+
 } // namespace brick
 
 // ---------------------------------------------------------------------------

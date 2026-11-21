@@ -919,7 +919,38 @@ bool placed_at(int x, int course, int z, int &rx, int &rz, int &rsx, int &rsz) {
     return true;
 }
 
+static std::atomic<uint32_t> g_field_serial{ 1 };
+static constexpr int TILE_SERIAL_SLOTS = 4096;
+static std::atomic<uint32_t> g_tile_serial[TILE_SERIAL_SLOTS];
+
+static inline size_t tile_serial_slot(int tx, int tz) {
+    uint32_t h = (uint32_t)tx * 0x8DA6B343U ^ (uint32_t)tz * 0xD8163841U;
+    h ^= h >> 15;
+    return (size_t)(h & (TILE_SERIAL_SLOTS - 1));
+}
+
+/// A cell at (x, z) changed: its tile and the ones round it (a tile is
+/// sampled with a margin) are not what they were.
+static inline void bump_tiles_near(int x, int z) {
+    const int tx = floor_div(x, TILE), tz = floor_div(z, TILE);
+    for (int dz = -1; dz <= 1; ++dz) {
+        for (int dx = -1; dx <= 1; ++dx) {
+            g_tile_serial[tile_serial_slot(tx + dx, tz + dz)].fetch_add(1, std::memory_order_relaxed);
+        }
+    }
+}
+
+uint64_t tile_version(int tx, int tz) {
+    return ((uint64_t)g_field_serial.load(std::memory_order_acquire) << 32)
+            | g_tile_serial[tile_serial_slot(tx, tz)].load(std::memory_order_acquire);
+}
+
+void bump_field_version() {
+    g_field_serial.fetch_add(1, std::memory_order_acq_rel);
+}
+
 void set_edit(int x, int yp, int z, int material) {
+    bump_tiles_near(x, z);
     // Any other edit to a placed brick's cell makes it ground again (a
     // placement marks it after its fill_box: BrickTerrain::mark_placed).
     if (g_placed.size() > 0) {
@@ -975,6 +1006,7 @@ int deepest_edit_near(int tx, int tz) {
 }
 
 void clear_edits() {
+    bump_field_version();
     std::unique_lock<std::shared_mutex> lk(g_edit_rw);
     g_edits.clear();
     g_tile_floor.clear();
@@ -2072,6 +2104,7 @@ static inline float bevel_reach() { return g_face_bevel > 0.0f ? g_face_bevel * 
 
 void BrickTerrain::configure(int64_t world_seed) {
     g_field.seed = (uint32_t)(world_seed & 0xffffffff);
+    brick::bump_field_version();
 }
 
 int BrickTerrain::get_field_version() { return FIELD_VERSION; }
@@ -2920,6 +2953,7 @@ int BrickTerrain::mark_placed(Vector3i lo, Vector3i hi, int material) {
                     continue;
                 }
                 g_placed.put((uint64_t)pack_cell(x, cc, z), placed_code(x - x0, z - z0, sx, sz));
+                bump_tiles_near(x, z);
                 ++n;
             }
         }
@@ -4180,7 +4214,10 @@ void push_instance(PackedFloat32Array &buf, float px, float py, float pz,
 static int g_coarse_smooth_step = 8;
 void BrickTerrain::set_slope_pieces(bool on) { brick::g_slope_pieces = on; }
 bool BrickTerrain::get_slope_pieces() { return brick::g_slope_pieces; }
-void BrickTerrain::set_bond_top(bool on) { brick::g_bond_top = on; }
+void BrickTerrain::set_bond_top(bool on) {
+    brick::g_bond_top = on;
+    brick::bump_field_version();
+}
 bool BrickTerrain::get_bond_top() { return brick::g_bond_top; }
 
 /// How far every edge of a terrain LOD piece hangs down: the detail tiles'
@@ -4202,11 +4239,18 @@ int BrickTerrain::get_coarse_smooth_step() { return g_coarse_smooth_step; }
 void BrickTerrain::set_generator(int mode) {
     brick::gen_params();   // built here, on the main thread, not first by a worker
     brick::set_gen_mode(mode);
+    brick::bump_field_version();
 }
 int BrickTerrain::get_generator() { return brick::gen_mode(); }
-void BrickTerrain::set_gen_params(Dictionary params) { brick::gen_params_from_dict(params); }
+void BrickTerrain::set_gen_params(Dictionary params) {
+    brick::gen_params_from_dict(params);
+    brick::bump_field_version();
+}
 Dictionary BrickTerrain::get_gen_params() { return brick::gen_params_to_dict(); }
-void BrickTerrain::reset_gen_params() { brick::reset_gen_params(); }
+void BrickTerrain::reset_gen_params() {
+    brick::reset_gen_params();
+    brick::bump_field_version();
+}
 int BrickTerrain::biome_at(int x, int z) {
     return brick::biome_column(g_field.seed, x, z).biome;
 }
