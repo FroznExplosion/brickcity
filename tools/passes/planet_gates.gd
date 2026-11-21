@@ -5571,6 +5571,13 @@ func _cost_trip(what: String, seconds: float, path_fn: Callable, pitch: float) -
 	var over40 := 0
 	var last_us := t0
 	host.buildings.brick_worst_us = 0
+	host.buildings.process_worst_us = 0
+	host.trees.process_worst_us = 0
+	host.process_worst_us = 0
+	ImpostorLod.worst_apply_us = 0
+	ImpostorLod.worst_chunk_us = 0
+	if host.system != null:
+		host.system.process_worst_us = 0
 	while true:
 		await host.get_tree().process_frame
 		var now := Time.get_ticks_usec()
@@ -5592,6 +5599,11 @@ func _cost_trip(what: String, seconds: float, path_fn: Callable, pitch: float) -
 	var lines := clock.report_lines()
 	print("[cost] --- %s: %d frames over 40 ms, %d origin shift(s), worst brick step %.1f ms (%s), trees' last build %.1f ms ---" % [
 			what, over40, PlanetFrame.shifts - shifts0, host.buildings.brick_worst_us / 1000.0, host.buildings.brick_worst_what, host.trees.last_build_us / 1000.0])
+	print("[cost]   worst _process: buildings %.1f ms (%s), trees %.1f ms %s; scene %.1f ms, system %.1f ms; a square refilled at worst %.1f ms (made %.1f)" % [
+			host.buildings.process_worst_us / 1000.0, host.buildings.process_worst_what,
+			host.trees.process_worst_us / 1000.0, host.trees.process_worst_what,
+			host.process_worst_us / 1000.0, host.system.process_worst_us / 1000.0 if host.system != null else 0.0,
+			ImpostorLod.worst_apply_us / 1000.0, ImpostorLod.worst_chunk_us / 1000.0])
 	for l in lines:
 		print("[cost]   " + l)
 	clock.queue_free()
@@ -5638,12 +5650,18 @@ func _census_diff(a: Dictionary, b: Dictionary) -> void:
 		print("[cost]   %+5d  %-50s %s -> %s" % [r[0], r[1], r[2], r[3]])
 
 
+## The player's spot: 88 m from the town's middle (its edge at 6 x 6), or just
+## out of a bigger town's (`-- --town-rows=N`).
+func _cost_edge() -> float:
+	return 88.0 if host.town_rows == 6 else (host.town_rows - 1) * 15.0 + 28.0
+
+
 func _run_cost_gate() -> void:
 	var t0 := Time.get_ticks_msec()
 	while host.pawn == null and Time.get_ticks_msec() - t0 < 60000:
 		await host._frames(1)
 	var town: Vector3 = host.town_dirs[0]
-	var p_feet := _surface(host._round_dir(town, host.spawn_dir, 88.0))
+	var p_feet := _surface(host._round_dir(town, host.spawn_dir, _cost_edge()))
 	host.pawn.place(p_feet + Gravity.up_at(p_feet) * 0.3)
 	t0 = Time.get_ticks_msec()
 	while host._ground_hit(p_feet) == Vector3.INF and Time.get_ticks_msec() - t0 < 30000:
@@ -5708,6 +5726,22 @@ func _run_cost_gate() -> void:
 	c.look_at_from_position(eye, eye + to_town * 50.0 - up * 2.0, up)
 	if quick:
 		print(_cost_line("town baseline", await _cost_measure(), {}))
+		# The occluders on and off, twice in turn, from the town's edge and
+		# from a street in it (looking along the town, where most is behind).
+		var spots := [["edge", eye, eye + to_town * 50.0 - up * 2.0],
+				["along the town", eye + to_town * 30.0 + up * 0.0, eye + to_town * 30.0 + side * 60.0]]
+		for sp in spots:
+			c.look_at_from_position(sp[1], sp[2], up)
+			for k in 2:
+				var on := await _cost_measure()
+				host.buildings.occluders_on = false
+				_hide(_occluder_nodes())
+				var off := await _cost_measure()
+				_unhide()
+				host.buildings.occluders_on = true
+				print(_cost_line("occluders on (%s)" % sp[0], on, {}))
+				print(_cost_line("occluders off (%s)" % sp[0], off, on))
+		c.look_at_from_position(eye, eye + to_town * 50.0 - up * 2.0, up)
 	# Pictures of the bricks as they are drawn: the town, a wall 8 m off (its
 	# windows), a roof from 6 m over it (its studs).
 	await _shot("planet_cost_town")
@@ -5750,10 +5784,10 @@ func _run_cost_gate() -> void:
 	var pc: Vector3 = host.planet.global_position
 	var r_town := host.data.radius
 	var town_l := town
-	var start_l := (host.data.surface_point(host._round_dir(town, host.spawn_dir, 88.0))).normalized()
+	var start_l := (host.data.surface_point(host._round_dir(town, host.spawn_dir, _cost_edge()))).normalized()
 	# Walking pace round the town's edge, 88 m out, 1.7 m up: 30 s.
 	var walk := func(s: float) -> Vector3:
-		var d := start_l.rotated(town_l, s * 6.0 / 88.0)
+		var d := start_l.rotated(town_l, s * 6.0 / _cost_edge())
 		var g := host.planet.global_position + host.data.surface_point(d)
 		return g + d * 1.7
 	await _cost_trip("walking round the town (6 m/s, 30 s)", 30.0, walk, -0.05)
@@ -5770,7 +5804,7 @@ func _run_cost_gate() -> void:
 		return host.planet.global_position + host.data.surface_point(d) + d * 200.0
 	await _cost_trip("flying fast (300 m/s, 200 m up, 15 s)", 15.0, high, -0.3)
 	# Back on foot by the town: the soldiers.
-	var back := _surface(host._round_dir(town, host.spawn_dir, 88.0))
+	var back := _surface(host._round_dir(town, host.spawn_dir, _cost_edge()))
 	host.walker.frozen = false
 	host._set_on_foot(true, back)
 	t0 = Time.get_ticks_msec()
