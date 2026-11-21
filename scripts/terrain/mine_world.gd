@@ -163,6 +163,11 @@ func _ready() -> void:
 	_rig = LightRig.new()
 	_rig.build_day(self, Vector3(-40, -30, 0), LightRig.SUN_ENERGY, DRY_AMBIENT)
 	_rig.sun.directional_shadow_max_distance = 120.0
+	# Two cascades, the first 12 m (a tenth): fine shadows round the player,
+	# the rest soft. Four cost 1.1-1.4 ms more of GPU for cascades nobody
+	# could tell apart (--gate=gpu, 2026-11-20, Docs/MineWorld.md 17).
+	_rig.sun.directional_shadow_mode = DirectionalLight3D.SHADOW_PARALLEL_2_SPLITS
+	_rig.sun.directional_shadow_split_1 = 0.1
 	_mat = TerrainTile.ground_material(-_rig.sun.global_transform.basis.z)
 	_brick_mat = ShaderMaterial.new()
 	_brick_mat.shader = load("res://shaders/brick.gdshader")
@@ -230,6 +235,8 @@ func _ready() -> void:
 			_run_stop_gate()
 		elif "--gate=breakwater" in OS.get_cmdline_user_args():
 			_run_breakwater_gate()
+		elif "--gate=gpu" in OS.get_cmdline_user_args():
+			_run_gpu_gate()
 		elif "--gate=mega" in OS.get_cmdline_user_args():
 			_run_mega_gate()
 		elif "--gate=shift" in OS.get_cmdline_user_args():
@@ -730,6 +737,13 @@ var _cave_light := 1.0
 const CAVE_DEEP_LIGHT := 0.015
 var _old_cave_light := "--old-cave-light" in OS.get_cmdline_user_args()
 var _reflecting := true
+## --gate=gpu: the day/night left as it is (nothing written to the sky, the
+## sun or the ambient) to read what writing them every frame costs.
+var sky_hold := false
+## The ambient and the sky's energy as set_sky last wrote them (_day_night).
+var _sky_writes_seen := -1
+var _amb_base := 0.6
+var _sky_energy_base := 1.0
 ## This frame's main-thread costs, ms (the flight gate prints slow frames').
 var _ptimes := {}
 var _speed := 0.0
@@ -839,6 +853,8 @@ func _follow_far(eye: Vector3) -> void:
 ## exposure follow (LightRig, the planet's own calls). Under the ground the
 ## ambient fades, so caves are dark.
 func _day_night(delta: float, eye: Vector3) -> void:
+	if sky_hold:
+		return
 	if not _gate:
 		_time = fposmod(_time + delta / DAY_SECONDS, 1.0)
 	var a := (_time - 0.25) * TAU
@@ -848,6 +864,16 @@ func _day_night(delta: float, eye: Vector3) -> void:
 	var day := clampf(height * 2.5 + 0.4, 0.0, 1.0)
 	_rig.set_sun(to_sun, seen, deg_to_rad(LightRig.DAY_SUN_ANGLE * 0.5), 1.0, 0.002)
 	_rig.set_sky(day, 1.0, LightRig.HOME_ATMO, maxf(height, 0.0), Vector3.UP)
+	# What set_sky wrote, kept: it writes only when the sky changes (every
+	# few seconds, or never at a fixed hour), so the cave factor below is
+	# applied to these, not to last frame's already-faded values. It was
+	# `*= cave` every frame: underground the ambient and the sky's energy
+	# shrank frame by frame towards nothing, and stayed wrong after the cave
+	# until the sky next changed.
+	if _rig.sky_writes != _sky_writes_seen:
+		_sky_writes_seen = _rig.sky_writes
+		_amb_base = _rig.env.ambient_light_energy
+		_sky_energy_base = _rig.sky_mat.sky_energy_multiplier
 	var c := Vector2i(floori(eye.x / BrickWorld.get_stud_metres()), floori(eye.z / BrickWorld.get_stud_metres()))
 	var under := _ground_m(c.x, c.y) - eye.y
 	var cave := clampf(1.0 - (under - 1.5) / 6.0, 0.12, 1.0)
@@ -860,7 +886,7 @@ func _day_night(delta: float, eye: Vector3) -> void:
 			cave = minf(cave, lerpf(0.12, CAVE_DEEP_LIGHT, clampf((under - 7.5) / 22.5, 0.0, 1.0)))
 			cave = maxf(cave, CAVE_DEEP_LIGHT)
 	_cave_light = cave
-	_rig.env.ambient_light_energy *= cave
+	_rig.env.ambient_light_energy = _amb_base * cave
 	# The ground casts no sun shadow, so the sun would reach into caves: it
 	# fades with depth the way the ambient does.
 	_rig.sun.light_energy *= cave
@@ -868,7 +894,11 @@ func _day_night(delta: float, eye: Vector3) -> void:
 		# And the sky: the bricks REFLECT it (the environment's reflections
 		# come from the sky, not the ambient), which the ambient's fade
 		# never touched.
-		_rig.sky_mat.sky_energy_multiplier *= cave
+		# Written only when it changes: a write to the sky's material redraws
+		# its radiance map (Docs/PlanetCost.md 5.1).
+		var sky_e := _sky_energy_base * cave
+		if absf(_rig.sky_mat.sky_energy_multiplier - sky_e) > 0.0005:
+			_rig.sky_mat.sky_energy_multiplier = sky_e
 		# Measured (--gate=deep --light-sweep, 2026-11-19): with ambient, sun
 		# and sky all at 3 %, the sky's reflections still lit the cave as
 		# much as the ambient did -- the reflection map does not follow the
@@ -2119,6 +2149,184 @@ func _run_gate() -> void:
 	await _gate_cave()
 	await _gate_edits()
 	print("[mine-gate] done")
+	get_tree().quit()
+
+
+## -- --gate=gpu: WHERE THE GPU'S TIME GOES in the mine world (a report, not
+## checks; the planet's --gate=cost method, Docs/PlanetCost.md). Flat out --
+## vsync and the fps cap off, in memory only (never saved) -- because a
+## vsynced iGPU clocks down to fill the frame and reads the same whatever it is
+## given. From two views (on foot looking along the ground; over the land to
+## the horizon), each suspect is switched off in turn and the GPU's own time
+## read with it gone, against a baseline taken just before it (the heat's
+## drift is out of each row). Only trustworthy with the editor closed and no
+## other runs (CLAUDE.md).
+const GPU_FRAMES := 150
+var _gpu_saved := {}
+
+
+func _gpu_measure() -> Dictionary:
+	await _frames(20)
+	var clock := FrameClock.new()
+	add_child(clock)
+	await _frames(GPU_FRAMES)
+	var n := maxf(float(clock.frames), 1.0)
+	var out := {"frame": clock.all_ms / n}
+	for k in ["process", "draw", "gpu", "draws_k", "tris_M", "sh_draws_k", "sh_tris_M"]:
+		out[k] = float(clock.all.get(k, 0.0)) / n
+	clock.queue_free()
+	return out
+
+
+func _gpu_line(label: String, m: Dictionary, base: Dictionary) -> String:
+	var d := ""
+	if not base.is_empty():
+		d = "  dGPU %+6.2f  dframe %+6.2f" % [float(m.gpu) - float(base.gpu), float(m.frame) - float(base.frame)]
+	return "[gpu] %-32s frame %6.2f  gpu %6.2f  draw(cpu) %5.2f  process %5.2f | %5.2fk draws %5.2fM tris, shadow %5.2fk draws %5.2fM tris%s" % [
+			label, float(m.frame), float(m.gpu), float(m.draw), float(m.process), float(m.draws_k),
+			float(m.tris_M), float(m.sh_draws_k), float(m.sh_tris_M), d]
+
+
+func _gpu_hide(nodes: Array) -> void:
+	for n in nodes:
+		if n != null and is_instance_valid(n):
+			_gpu_saved[n] = (n as Node3D).visible
+			(n as Node3D).visible = false
+
+
+func _gpu_shadows_off(roots: Array) -> void:
+	for r in roots:
+		if r == null or not is_instance_valid(r):
+			continue
+		var list: Array = (r as Node).find_children("*", "GeometryInstance3D", true, false)
+		if r is GeometryInstance3D:
+			list.append(r)
+		for g in list:
+			_gpu_saved[g] = (g as GeometryInstance3D).cast_shadow
+			(g as GeometryInstance3D).cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+
+
+func _gpu_back() -> void:
+	for n in _gpu_saved:
+		if not is_instance_valid(n):
+			continue
+		var v = _gpu_saved[n]
+		if v is bool:
+			(n as Node3D).visible = v
+		else:
+			(n as GeometryInstance3D).cast_shadow = v
+	_gpu_saved.clear()
+
+
+## Every instance node (studs, tufts, pebbles, bricks) of the near tiles.
+func _gpu_instances() -> Array:
+	return _streamer.find_children("*", "MultiMeshInstance3D", true, false)
+
+
+## The trees' instance nodes, near (real brick trees) or far (cards), from
+## every ImpostorLod under the trees.
+func _gpu_tree_tier(tier: String) -> Array:
+	var out: Array = []
+	for n in _trees.find_children("*", "Node3D", true, false):
+		if n is ImpostorLod:
+			for c in (n as ImpostorLod)._chunks.values():
+				if c[tier] != null:
+					out.append(c[tier])
+	return out
+
+
+## The near tiles' chamfered surfaces (shown up close instead of the flat ones).
+func _gpu_chamfered() -> Array:
+	return _streamer.find_children("SurfaceChamfered", "MeshInstance3D", true, false)
+
+
+func _gpu_toggles() -> Array:
+	var vp := get_viewport()
+	var sun := _rig.sun
+	var sky: Sky = _rig.env.sky
+	var t: Array = []
+	var dist0 := sun.directional_shadow_max_distance
+	var mode0 := sun.directional_shadow_mode
+	t.append(["sun shadows off", func(): sun.shadow_enabled = false, func(): sun.shadow_enabled = true])
+	t.append(["sun shadow %.0f -> 60 m" % dist0, func(): sun.directional_shadow_max_distance = 60.0,
+			func(): sun.directional_shadow_max_distance = dist0])
+	t.append(["sun shadow splits -> 2", func(): sun.directional_shadow_mode = DirectionalLight3D.SHADOW_PARALLEL_2_SPLITS,
+			func(): sun.directional_shadow_mode = mode0])
+	t.append(["trees cast no shadow", func(): _gpu_shadows_off([_trees]), _gpu_back])
+	t.append(["tree cards cast no shadow", func(): _gpu_shadows_off(_gpu_tree_tier("far")), _gpu_back])
+	t.append(["near trees cast no shadow", func(): _gpu_shadows_off(_gpu_tree_tier("near")), _gpu_back])
+	t.append(["day/night not written (held)", func(): sky_hold = true, func(): sky_hold = false])
+	var rad0 := sky.radiance_size
+	t.append(["sky radiance -> 32", func(): sky.radiance_size = Sky.RADIANCE_SIZE_32, func(): sky.radiance_size = rad0])
+	var glow0 := _rig.env.glow_enabled
+	t.append(["glow off", func(): _rig.env.glow_enabled = false, func(): _rig.env.glow_enabled = glow0])
+	t.append(["trees hidden", func(): _gpu_hide([_trees]), _gpu_back])
+	t.append(["tree cards hidden", func(): _gpu_hide(_gpu_tree_tier("far")), _gpu_back])
+	t.append(["near trees hidden", func(): _gpu_hide(_gpu_tree_tier("near")), _gpu_back])
+	t.append(["near tiles hidden", func(): _gpu_hide([_streamer]), _gpu_back])
+	t.append(["studs/tufts/pebbles hidden", func(): _gpu_hide(_gpu_instances()), _gpu_back])
+	t.append(["chamfered near mesh hidden", func(): _gpu_hide(_gpu_chamfered()), _gpu_back])
+	t.append(["far tier hidden", func(): _gpu_hide([_far]), _gpu_back])
+	t.append(["deep tier hidden", func(): _gpu_hide([_deep]), _gpu_back])
+	t.append(["water (all) hidden", func(): _gpu_hide([water]), _gpu_back])
+	if water.sea != null:
+		t.append(["sea hidden", func(): _gpu_hide([water.sea]), _gpu_back])
+	t.append(["lava lights hidden", func(): _gpu_hide(water._lights.values()), _gpu_back])
+	var lod0 := vp.mesh_lod_threshold
+	t.append(["mesh LOD threshold -> 4 px", func(): vp.mesh_lod_threshold = 4.0, func(): vp.mesh_lod_threshold = lod0])
+	t.append(["shadow 2 splits, first 12 m", func():
+			sun.directional_shadow_mode = DirectionalLight3D.SHADOW_PARALLEL_2_SPLITS
+			sun.directional_shadow_split_1 = 0.1,
+			func(): sun.directional_shadow_mode = mode0])
+	var scale0 := vp.scaling_3d_scale
+	t.append(["render scale -> 0.5", func(): vp.scaling_3d_scale = 0.5, func(): vp.scaling_3d_scale = scale0])
+	return t
+
+
+func _gpu_view(view_name: String) -> void:
+	print("[gpu] --- view: %s ---" % view_name)
+	var first := true
+	for row in _gpu_toggles():
+		var base := await _gpu_measure()
+		if first:
+			first = false
+			print(_gpu_line("baseline", base, {}))
+		(row[1] as Callable).call()
+		var m := await _gpu_measure()
+		(row[2] as Callable).call()
+		print(_gpu_line(row[0], m, base))
+
+
+func _run_gpu_gate() -> void:
+	await _frames(60)
+	_time = 0.42
+	var settings := get_node_or_null(^"/root/MenuSettings")
+	if settings != null:
+		settings.set_value(&"vsync", 0, false)      # in memory: never saved
+		settings.set_value(&"max_fps", 0, false)
+	var vp := get_viewport()
+	var size := vp.get_visible_rect().size
+	print("[gpu] mine world, %dx%d at render scale %.2f, msaa %d, GI %d, sun shadow %.0f m mode %d, radiance %d, glow %s, near %d tiles" % [
+			int(size.x), int(size.y), vp.scaling_3d_scale, vp.msaa_3d, LightRig.gi_level,
+			_rig.sun.directional_shadow_max_distance, _rig.sun.directional_shadow_mode,
+			_rig.env.sky.radiance_size, _rig.env.glow_enabled, _streamer.near_radius])
+	set_on_foot(false)
+	var e := _eye()
+	# 1: on foot, looking along the ground.
+	_fly_to(e + Vector3(0, 0.2, 0), Vector3(1, 0, 0.3).normalized())
+	walker.pitch = -0.15
+	await _frames(180)
+	await _gpu_view("on foot, along the ground")
+	# 2: over the land to the horizon.
+	_fly_to(e + Vector3(0, 25.0, 0), Vector3(1, 0, 0.3).normalized())
+	walker.pitch = -0.12
+	await _frames(240)
+	await _gpu_view("25 m up, to the horizon")
+	print("[gpu] sky writes %d over the pass (LightRig.sky_writes)" % _rig.sky_writes)
+	if settings != null:
+		settings.set_value(&"vsync", settings.default_of(&"vsync"), false)
+		settings.set_value(&"max_fps", settings.default_of(&"max_fps"), false)
+	print("[gpu] done")
 	get_tree().quit()
 
 
