@@ -544,3 +544,45 @@ The design it follows:
 - Collision: the cave colliders (section 13) per section, within the collide
   radius; sections take the same hold while flying fast (section 14) and
   live inside the mine world node (section 15).
+
+
+## 17. Where the GPU goes (`-- --gate=gpu`, 2026-11-20)
+
+The frame is GPU-bound (section 9's breakwater run: 12.5 ms of 16.6 vsynced).
+`--gate=gpu` runs flat out (vsync and the fps cap off in memory, never saved:
+a vsynced iGPU clocks down to fill the frame) and switches each suspect off
+in turn against a baseline taken just before it, from two views. Four runs,
+editor closed, 63-75 C starts; baselines drift run to run (7.8-9.0 ms on
+foot at 1280x720, render scale 0.75), the rows' deltas held:
+
+| switched off | on foot | 25 m up |
+|---|---|---|
+| (baseline GPU) | 7.8-9.0 | 6.1-7.5 |
+| trees hidden | -4.1 to -4.6 | -2.9 to -3.5 |
+| of which the NEAR (brick) trees | -3.6 to -4.2 | -2.5 to -3.0 |
+| of which the cards | -0.1 to -0.5 | -0.4 to -0.6 |
+| sun shadows off | -2.9 to -3.0 | -2.1 to -2.2 |
+| shadow 4 -> 2 cascades | -1.3 to -1.5 | -0.7 to -1.3 |
+| sea hidden | -0.9 to -1.2 | -0.8 to -1.3 |
+| studs, tufts, pebbles hidden | -0.3 to -0.7 | -0.2 to -0.7 |
+| near tiles / far tier hidden | -0.5 / -0.1 to -0.7 | about -0.6 / -0.5 |
+| mesh LOD threshold 1 -> 4 px | -0.5 | -0.2 |
+| day/night not written, sky radiance, glow, lava lights, deep tier | about 0 | about 0 |
+
+- **Done: two shadow cascades**, the first 12 m (`directional_shadow_split_1`
+  0.1): -1.1 to -1.4 ms, shadows round the player as fine as before.
+- **The near trees are half the GPU.** Not their shadow pass by itself: a
+  shadow-only twin with the opaque material (the near material fades by
+  dithering, ALPHA + scissor, so it is alpha-tested) moved their shadow row
+  from -2.6 to -0.8 ms yet left the trees' total cost where it was, and was
+  taken out again. What is left to decide is a look: how far real brick
+  trees reach before the cards (ImpostorLod `near_range`, 40 m), or how many
+  trees there are.
+- **The day/night's per-frame sky write** costs nothing measurable on the GPU,
+  but it compounded: the cave factor was multiplied into the ambient and the
+  sky's energy every frame while set_sky wrote them only when the sky changed,
+  so underground they faded towards nothing and stayed wrong after the cave
+  until the sky next changed. Fixed: the factor applies to what set_sky last
+  wrote (`_amb_base`, `_sky_energy_base`), and the sky is written only when the
+  product changes.
+- The sea (about 1 ms) is the water's (Docs/MineWater.md).
