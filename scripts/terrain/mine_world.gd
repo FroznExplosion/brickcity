@@ -1996,6 +1996,13 @@ func _run_stop_gate() -> void:
 	var t0 := Time.get_ticks_msec()
 	var mv_gpu: Array[float] = []
 	var mv_tris := 0.0
+	# While moving: the streamer's phases counted from here (not the load's
+	# first tiles), the worst frames and what the world spent in them.
+	_streamer.reset_stats()
+	TerrainTile.profile_instances = true
+	TerrainTile.instance_ms.clear()
+	var mv_worst: Array = []
+	var mv_slow := 0
 	while Time.get_ticks_msec() - t0 < secs:
 		walker.global_position += dir * speed * get_process_delta_time()
 		if walk:
@@ -2003,9 +2010,21 @@ func _run_stop_gate() -> void:
 			var gy := _ground_m(floori(tp.x / stud), floori(tp.z / stud))
 			walker.global_position.y = gy + 1.7
 		await get_tree().process_frame
+		if clock.last_ms > 33.3:
+			mv_slow += 1
+			mv_worst.append([clock.last_ms, float(clock.last.get("process", 0.0)), float(clock.last.get("draw", 0.0)),
+					float(_ptimes.get("near", 0.0)), float(_ptimes.get("far", 0.0)), float(_ptimes.get("deep", 0.0))])
 		if Time.get_ticks_msec() - t0 > secs - 4000:
 			mv_gpu.append(float(clock.last.get("gpu", 0.0)))
 			mv_tris = maxf(mv_tris, float(clock.last.get("tris_M", 0.0)))
+	TerrainTile.profile_instances = false
+	mv_worst.sort_custom(func(x: Array, y: Array) -> bool: return x[0] > y[0])
+	print("[mine-stop] moving: %d frames over 33 ms; the worst (ms, process, draw, near, far, deep): %s" % [
+			mv_slow, mv_worst.slice(0, 6).map(func(r: Array) -> String: return "%.0f/%.0f/%.0f/%.1f/%.1f/%.1f" % r)])
+	print("[mine-stop] moving: near tier %s" % _streamer.report())
+	var inst_keys := TerrainTile.instance_ms.keys()
+	inst_keys.sort_custom(func(x, y) -> bool: return float(TerrainTile.instance_ms[x]) > float(TerrainTile.instance_ms[y]))
+	print("[mine-stop] moving: instance steps %s" % [inst_keys.slice(0, 10).map(func(k) -> String: return "%s %.1f" % [k, float(TerrainTile.instance_ms[k])])])
 	mv_gpu.sort()
 	print("[mine-stop] %s %d s at %.0f m/s (held %s), stopping; the last 4 s moving: gpu median %.1f, 90th %.1f ms, tris up to %.2fM"
 			% ["walked" if walk else "flew", secs / 1000, speed, fast_hold,

@@ -12,6 +12,8 @@
 #include <godot_cpp/variant/packed_int32_array.hpp>
 
 #include <algorithm>
+#include <memory>
+#include <mutex>
 #include <chrono>
 #include <unordered_map>
 #include <vector>
@@ -92,19 +94,61 @@ struct Sampler {
     }
 };
 
-/// The top course's columns (brick::top_columns), a tile at a time, kept for
-/// every attempt of one survey (a grown region asks the same tiles again).
+/// Tiles' top courses kept across surveys, by tile version (brick::
+/// tile_version: an edit in or next to a tile, or the world set up again,
+/// makes it a new one). Packing a tile for its top course was 97% of a survey
+/// (29 of 31 ms for an arm on a pillar, 137 of 155 for a long one), and a
+/// survey asks the same unchanged tiles round every edit again.
+struct SharedTops {
+    std::mutex lock;
+    struct Entry {
+        uint64_t version = 0;
+        std::shared_ptr<const std::vector<TopColumn>> cols;
+    };
+    std::unordered_map<int64_t, Entry> tiles;
+};
+static SharedTops g_tops;
+/// Tiles kept at most; past it the cache starts over.
+constexpr size_t TOPS_MAX = 512;
+
+/// The top course's columns (brick::top_columns), a tile at a time: from the
+/// shared cache when the tile has not changed, else packed and kept. Held for
+/// every attempt of one survey.
 struct TopCache {
-    std::unordered_map<int64_t, std::vector<TopColumn>> tiles;
+    std::unordered_map<int64_t, std::shared_ptr<const std::vector<TopColumn>>> tiles;
+    int packed = 0;
     const TopColumn &at(int x, int z) {
         const int tx = fdiv(x, TILE), tz = fdiv(z, TILE);
         const int64_t k = ((int64_t)(tx & 0xFFFFFFF) << 28) | (int64_t)(tz & 0xFFFFFFF);
         auto it = tiles.find(k);
         if (it == tiles.end()) {
-            it = tiles.emplace(k, std::vector<TopColumn>()).first;
-            top_columns(tx, tz, it->second);
+            const uint64_t ver = tile_version(tx, tz);
+            std::shared_ptr<const std::vector<TopColumn>> cols;
+            {
+                std::lock_guard<std::mutex> lk(g_tops.lock);
+                auto s = g_tops.tiles.find(k);
+                if (s != g_tops.tiles.end() && s->second.version == ver) {
+                    cols = s->second.cols;
+                }
+            }
+            if (!cols) {
+                auto fresh = std::make_shared<std::vector<TopColumn>>();
+                top_columns(tx, tz, *fresh);
+                ++packed;
+                cols = fresh;
+                // Still that version once packed? Then keep it (an edit
+                // landing meanwhile leaves it to the next survey to pack).
+                if (tile_version(tx, tz) == ver) {
+                    std::lock_guard<std::mutex> lk(g_tops.lock);
+                    if (g_tops.tiles.size() >= TOPS_MAX) {
+                        g_tops.tiles.clear();
+                    }
+                    g_tops.tiles[k] = SharedTops::Entry{ ver, cols };
+                }
+            }
+            it = tiles.emplace(k, cols).first;
         }
-        return it->second[(size_t)(x - tx * TILE) + TILE * (size_t)(z - tz * TILE)];
+        return (*it->second)[(size_t)(x - tx * TILE) + TILE * (size_t)(z - tz * TILE)];
     }
 };
 
@@ -125,8 +169,12 @@ struct Attempt {
     bool side_touch = false;
     bool too_big = false;   ///< the region (or its bricks) past the limits
     int bricks = 0;
+    int packed = 0;          ///< tiles packed for their top course (cache misses)
     double sample_ms = 0.0;
     double solve_ms = 0.0;
+    double tops_ms = 0.0;    ///< the top course's tiles packed (brick::top_columns)
+    double bond_ms = 0.0;    ///< the bricks laid
+    double world_ms = 0.0;   ///< the private world built and solved
 };
 
 double ms_since(std::chrono::steady_clock::time_point t) {
@@ -225,6 +273,63 @@ Attempt run(Vector3i lo, Vector3i hi, int above, int reach, bool last_up, bool l
     a.solved = true;
     const auto t1 = std::chrono::steady_clock::now();
 
+    // --- does loose-looking ground reach the region's side? ---------------
+    // Solid cells joined face to face, walked from the region's bottom course
+    // (never the ring): ground that is not reached, yet touches the ring, is
+    // held only by the edge -- it may be a big island that is loose past it.
+    // Then the region is grown and asked again. Asked of CELLS, before any
+    // brick is laid: laying the bricks (the top course packs every tile the
+    // region covers) and solving them is the expensive part, and a grown
+    // region used to pay it at every size it passed through -- seconds under
+    // a wide cave roof.
+    if (!last_side) {
+        std::vector<uint8_t> reached(g.size(), 0);
+        std::vector<int32_t> queue;
+        queue.reserve(g.size() / 4);
+        for (int z = 0; z < D; ++z) {
+            for (int x = 0; x < W; ++x) {
+                const size_t i = idx(x, 0, z);
+                if (g[i] != MAT_AIR) {
+                    reached[i] = 1;
+                    queue.push_back((int32_t)i);
+                }
+            }
+        }
+        const int64_t sy = W, sz = (int64_t)W * H;
+        for (size_t qi = 0; qi < queue.size(); ++qi) {
+            const int64_t i = queue[qi];
+            const int x = (int)(i % W), y = (int)((i / sy) % H), z = (int)(i / sz);
+            const int64_t nb[6] = { x > 0 ? i - 1 : -1, x < W - 1 ? i + 1 : -1,
+                    y > 0 ? i - sy : -1, y < H - 1 ? i + sy : -1,
+                    z > 0 ? i - sz : -1, z < D - 1 ? i + sz : -1 };
+            for (int64_t n : nb) {
+                if (n < 0 || reached[(size_t)n] || g[(size_t)n] == MAT_AIR) {
+                    continue;
+                }
+                reached[(size_t)n] = 1;
+                queue.push_back((int32_t)n);
+            }
+        }
+        for (int z = 0; z < D && !a.side_touch; ++z) {
+            for (int x = 0; x < W && !a.side_touch; ++x) {
+                if (!(x == 0 || z == 0 || x == W - 1 || z == D - 1)) {
+                    continue;
+                }
+                for (int y = 1; y < H; ++y) {
+                    const size_t i = idx(x, y, z);
+                    if (g[i] != MAT_AIR && !reached[i]) {
+                        a.side_touch = true;
+                        break;
+                    }
+                }
+            }
+        }
+        if (a.side_touch) {
+            a.solve_ms = ms_since(t1);
+            return a;
+        }
+    }
+
     // --- the ring stands on the ground past it ---------------------------
     auto ring = [&](int x, int z) { return x == 0 || z == 0 || x == W - 1 || z == D - 1; };
     for (int z = 0; z < D; ++z) {
@@ -258,6 +363,7 @@ Attempt run(Vector3i lo, Vector3i hi, int above, int reach, bool last_up, bool l
     std::vector<VBrick> vb;
     vb.reserve(g.size() / 4);
     // Each column's top course (absolute), INT_MAX where nothing is known.
+    const auto tt0 = std::chrono::steady_clock::now();
     std::vector<int> topc((size_t)W * D, INT_MAX);
     for (int z = 0; z < D; ++z) {
         for (int x = 0; x < W; ++x) {
@@ -267,6 +373,9 @@ Attempt run(Vector3i lo, Vector3i hi, int above, int reach, bool last_up, bool l
             }
         }
     }
+    a.tops_ms = ms_since(tt0);
+    a.packed = tops.packed;
+    const auto tb0 = std::chrono::steady_clock::now();
     auto add = [&](int bx, int y, int bz, int bsx, int bsz, uint8_t m) {
         VBrick vbk{ bx, y, bz, bsx, bsz, m, m == MAT_PILLAR, y == H - 1 };
         const int32_t id = (int32_t)vb.size();
@@ -421,50 +530,9 @@ Attempt run(Vector3i lo, Vector3i hi, int above, int reach, bool last_up, bool l
         return a;
     }
 
-    // --- does loose-looking ground reach the region's side? ---------------
-    // Grounded by its own courses alone (the bottom course; never the ring's
-    // pillars): ground that is not, yet touches the ring, is held only by
-    // the edge -- it may be a big island that is loose past it. Then the
-    // region is grown and asked again, before the solve is paid for.
-    if (!last_side) {
-        std::vector<uint8_t> grounded(vb.size(), 0);
-        std::vector<int32_t> queue;
-        queue.reserve(vb.size());
-        for (size_t i = 0; i < vb.size(); ++i) {
-            if (vb[i].y == 0 && vb[i].m != MAT_PILLAR) {
-                grounded[i] = 1;
-                queue.push_back((int32_t)i);
-            }
-        }
-        for (size_t qi = 0; qi < queue.size(); ++qi) {
-            const VBrick &b = vb[(size_t)queue[qi]];
-            for (int dy = -1; dy <= 1; dy += 2) {
-                const int yy = b.y + dy;
-                if (yy < 0 || yy >= H) {
-                    continue;
-                }
-                for (int dz = 0; dz < b.sz; ++dz) {
-                    for (int dx = 0; dx < b.sx; ++dx) {
-                        const int32_t o = owner[idx(b.x + dx, yy, b.z + dz)];
-                        if (o < 0 || grounded[(size_t)o] || vb[(size_t)o].m == MAT_PILLAR) {
-                            continue;
-                        }
-                        grounded[(size_t)o] = 1;
-                        queue.push_back(o);
-                    }
-                }
-            }
-        }
-        for (size_t i = 0; i < vb.size(); ++i) {
-            if (!grounded[i] && vb[i].held && vb[i].m != MAT_PILLAR) {
-                a.side_touch = true;
-                a.solve_ms = ms_since(t1);
-                return a;
-            }
-        }
-    }
-
     // --- the buildings' solve, on a world of the survey's own ------------
+    a.bond_ms = ms_since(tb0);
+    const auto tw0 = std::chrono::steady_clock::now();
     Ref<BrickWorld> w;
     w.instantiate();
     // One archetype a size, baked as met: the top pieces come in the
@@ -510,9 +578,16 @@ Attempt run(Vector3i lo, Vector3i hi, int above, int reach, bool last_up, bool l
     w->set_tension_per_stud(ch, (float)tension);
     const Dictionary solve = w->solve_structure(ch, 48, 0.0);
     const Array gs = solve.get("groups", Array());
+    // What this edit let go touches it: a group with no brick next to the
+    // edit box was loose before it (the generator leaves bits of cave and
+    // overhang floating) -- generated ground is left alone until an edit
+    // reaches it. Region-local, a stud round and a course over and under.
+    const int ex0 = lo.x - 2 - x0, ex1 = hi.x + 2 - x0;
+    const int ez0 = lo.z - 2 - z0, ez1 = hi.z + 2 - z0;
+    const int ey0 = lob - 1 - y0, ey1 = hib + 1 - y0;
     for (int64_t k = 0; k < gs.size(); ++k) {
         const PackedInt32Array grp = gs[k];
-        bool held = false, top = false;
+        bool held = false, top = false, near = false;
         for (int64_t j = 0; j < grp.size() && !held; ++j) {
             const int id = grp[j];
             if (id < 0 || id >= (int)of_id.size() || of_id[(size_t)id] < 0) {
@@ -521,8 +596,10 @@ Attempt run(Vector3i lo, Vector3i hi, int above, int reach, bool last_up, bool l
             const VBrick &b = vb[(size_t)of_id[(size_t)id]];
             held = b.held;
             top = top || b.top;
+            near = near || (b.x <= ex1 && b.x + b.sx - 1 >= ex0 && b.z <= ez1 && b.z + b.sz - 1 >= ez0
+                    && b.y >= ey0 && b.y <= ey1);
         }
-        if (held) {
+        if (held || !near) {
             continue;
         }
         if (top && !last_up) {
@@ -553,6 +630,7 @@ Attempt run(Vector3i lo, Vector3i hi, int above, int reach, bool last_up, bool l
             a.groups.push_back(out);
         }
     }
+    a.world_ms = ms_since(tw0);
     a.solve_ms = ms_since(t1);
     return a;
 }
@@ -568,7 +646,7 @@ Dictionary TerrainCollapse::survey(Vector3i lo, Vector3i hi, double tension, dou
     const Vector3i l(std::min(lo.x, hi.x), std::min(lo.y, hi.y), std::min(lo.z, hi.z));
     const Vector3i h(std::max(lo.x, hi.x), std::max(lo.y, hi.y), std::max(lo.z, hi.z));
     Attempt a;
-    double sample_ms = 0.0, solve_ms = 0.0;
+    double sample_ms = 0.0, solve_ms = 0.0, tops_ms = 0.0, bond_ms = 0.0, world_ms = 0.0;
     int up = 0, side = 0;
     int up_max = GROW_TIMES, side_max = GROW_SIDE_TIMES;
     TopCache tops;
@@ -577,6 +655,9 @@ Dictionary TerrainCollapse::survey(Vector3i lo, Vector3i hi, double tension, dou
                 side >= side_max, tension, mass_per_cell, tops);
         sample_ms += a.sample_ms;
         solve_ms += a.solve_ms;
+        tops_ms += a.tops_ms;
+        bond_ms += a.bond_ms;
+        world_ms += a.world_ms;
         if (a.too_big) {
             // Grown past the limits: back to the last size, and that is the
             // last word (what reaches past it is held).
@@ -612,6 +693,10 @@ Dictionary TerrainCollapse::survey(Vector3i lo, Vector3i hi, double tension, dou
     out["grown"] = grown;
     out["sample_ms"] = sample_ms;
     out["solve_ms"] = solve_ms;
+    out["tops_ms"] = tops_ms;
+    out["tiles_packed"] = tops.packed;
+    out["bond_ms"] = bond_ms;
+    out["world_ms"] = world_ms;
     return out;
 }
 

@@ -37,7 +37,8 @@ func _initialize() -> void:
 	BrickTerrain.set_plate_steps(false)
 	# The mine world's top course: laid on the ground's bond (Docs/TerrainBond.md).
 	BrickTerrain.set_bond_top(true)
-	tension = BrickStrength.tension()
+	# The ground's strength, as the mine world asks (ground_collapse.gd).
+	tension = BrickStrength.tension() * float(load("res://scripts/terrain/ground_collapse.gd").TERRAIN_TIMES)
 	if not _find_flat():
 		_expect(false, "found a flat spot to build on")
 	else:
@@ -47,6 +48,9 @@ func _initialize() -> void:
 		_check_tension()
 		_check_bond()
 		_check_big_island()
+		_check_cache()
+		_check_roof()
+		_check_real_caves()
 		_check_sand()
 	BrickTerrain.clear_terrain_edits()
 	BrickTerrain.set_generator(0)
@@ -169,7 +173,9 @@ func _check_pillar_arm() -> void:
 	var ms := (Time.get_ticks_usec() - t0) / 1000.0
 	_expect(bool(r.solved), "arm: solved (it hangs)")
 	_expect((r.groups as Array).is_empty(), "arm: held at stud strength %.1f (%d groups)" % [tension, (r.groups as Array).size()])
-	print("    arm survey %.2f ms (sample %.2f, solve %.2f, %d bricks)" % [ms, float(r.sample_ms), float(r.solve_ms), int(r.bricks)])
+	print("    arm survey %.2f ms (sample %.2f, solve %.2f = tops %.2f + bond %.2f + world %.2f, %d bricks)" % [
+			ms, float(r.sample_ms), float(r.solve_ms), float(r.get("tops_ms", 0.0)), float(r.get("bond_ms", 0.0)),
+			float(r.get("world_ms", 0.0)), int(r.bricks)])
 	# The pillar's foot shot out.
 	_fill(Vector3i(0, 1, 0), Vector3i(1, 3, 1), 0)
 	r = _survey(Vector3i(0, 1, 0), Vector3i(1, 3, 1))
@@ -223,7 +229,124 @@ func _check_big_island() -> void:
 	_expect((r.groups as Array).size() == 1 and _all_cells(r) == want,
 			"long arm: foot shot out, one group of all of it (%d groups, %d cells, want %d, region grown %d times)" % [
 			(r.groups as Array).size(), _all_cells(r), want, int(r.grown)])
-	print("    long arm survey %.1f ms (%d bricks)" % [ms, int(r.bricks)])
+	print("    long arm survey %.1f ms (%d bricks; tops %.1f, bond %.1f, world %.1f)" % [ms, int(r.bricks),
+			float(r.get("tops_ms", 0.0)), float(r.get("bond_ms", 0.0)), float(r.get("world_ms", 0.0))])
+
+
+## The same survey again, nothing edited: the tiles' top course comes from
+## the cache (TerrainCollapse's tile versions), not packed again -- packing it
+## was 97% of a survey.
+func _check_cache() -> void:
+	var box := _build_arm(8, 4)
+	var r1 := _survey(box[0], box[1])
+	var t0 := Time.get_ticks_usec()
+	var r2 := _survey(box[0], box[1])
+	var ms := (Time.get_ticks_usec() - t0) / 1000.0
+	_expect(int(r2.get("tiles_packed", -1)) == 0 and (r2.groups as Array).size() == (r1.groups as Array).size(),
+			"survey again, nothing changed: no tile packed (%d), same answer; %.1f ms against %.1f" % [
+			int(r2.get("tiles_packed", -1)), ms, float(r1.get("tops_ms", 0.0)) + float(r1.get("bond_ms", 0.0))])
+
+
+## A stone cave roof (Docs/TerrainCollapse.md 8.2): a tunnel `span` studs wide
+## and 3 bricks tall dug under 4 bricks of stone, one brick shot out of its
+## middle. The lowest stud strength at which the roof stands.
+func _roof_holds_at(span: int) -> float:
+	BrickTerrain.clear_terrain_edits()
+	# Solid stone over the flat spot, 7 bricks tall, then the tunnel dug.
+	var w := span + 16
+	_fill(Vector3i(-w / 2, 1, -10), Vector3i(w / 2, 21, 10), 4)
+	_fill(Vector3i(-span / 2, 1, -6), Vector3i(span / 2 - 1, 9, 6), 0)
+	# The shot: one brick of the roof's underside, mid-span.
+	_fill(Vector3i(0, 10, 0), Vector3i(0, 12, 0), 0)
+	var lo := 0.01
+	var hi := 2000.0
+	for i in 18:
+		var mid := sqrt(lo * hi)
+		var r := _survey(Vector3i(0, 10, 0), Vector3i(0, 12, 0), mid)
+		if (r.groups as Array).is_empty():
+			hi = mid
+		else:
+			lo = mid
+	return hi
+
+
+func _check_roof() -> void:
+	var line := ""
+	for span in [6, 12, 20]:
+		line += "%d studs: %.1f  " % [span, _roof_holds_at(span)]
+	print("    a stone cave roof with one brick shot out stands from (stud strength): %s(the ground's: %.1f)" % [line, tension])
+	var at12 := _roof_holds_at(12)
+	_expect(at12 <= tension, "a 12-stud stone cave roof stands after one brick is shot (needs %.1f, has %.1f)" % [at12, tension])
+
+
+## Generated cave ceilings (the default world), one brick shot out of each:
+## what comes down, at the game's stud strength and at a strength nothing
+## fails at -- a group at both is joined to nothing (grounding), one at the
+## game's only is the stress solve. The user saw whole ceilings fall from one
+## brick (2026-11-20).
+func _check_real_caves() -> void:
+	for t in [tension]:
+		_real_caves_at(t)
+
+
+func _real_caves_at(tension_now: float) -> void:
+	BrickTerrain.clear_terrain_edits()
+	var sites := 0
+	var fell := 0
+	var fell_strong := 0
+	var cells_fell := 0
+	var worst := 0
+	var ms_all := 0.0
+	var ms_worst := 0.0
+	var notes := []
+	for i in 600:
+		if sites >= 40:
+			break
+		var x := (i % 30) * 53 - 800
+		var z := int(i / 30.0) * 47 - 700
+		var top := BrickTerrain.surface_plate(x, z)
+		# Down the column: the first air under solid ground, under the top.
+		var yp := top - 6
+		var lo := top - 240
+		while yp > lo and BrickTerrain.solid_at(x, yp, z) != 0:
+			yp -= 1
+		if yp <= lo:
+			continue
+		# A ceiling: solid right over this air, the cell a brick.
+		var ceil := yp + 1
+		var b := int(floor(ceil / 3.0))
+		var m := BrickTerrain.solid_at(x, b * 3, z)
+		if m == 0 or TerrainCollapse.material_class(m) == 1:
+			continue
+		sites += 1
+		BrickTerrain.clear_terrain_edits()
+		var c_lo := Vector3i(x, b * 3, z)
+		var c_hi := Vector3i(x, b * 3 + 2, z)
+		BrickTerrain.fill_box(c_lo, c_hi, 0, false)
+		var t0 := Time.get_ticks_usec()
+		var r := TerrainCollapse.survey(c_lo, c_hi, tension_now, MASS)
+		var ms := (Time.get_ticks_usec() - t0) / 1000.0
+		ms_all += ms
+		ms_worst = maxf(ms_worst, ms)
+		var strong := TerrainCollapse.survey(c_lo, c_hi, 1.0e6, MASS)
+		var n := _all_cells(r)
+		if n > 0:
+			fell += 1
+			cells_fell += n
+			worst = maxi(worst, n)
+			if notes.size() < 6:
+				notes.append("(%d,%d,%d) %s: %d cells in %d groups, strong %d cells, grown %d, %.0f ms" % [
+						x, b * 3, z, BrickTerrain.material_names()[m], n, (r.groups as Array).size(),
+						_all_cells(strong), int(r.grown), ms])
+		if _all_cells(strong) > 0:
+			fell_strong += 1
+	BrickTerrain.clear_terrain_edits()
+	print("    real cave ceilings at stud strength %.0f: %d sites, %d let something go (%d even at unbreakable studs: joined to nothing), %d cells in all, the most %d; survey %.0f ms mean, %.0f worst" % [
+			tension_now, sites, fell, fell_strong, cells_fell, worst, ms_all / maxf(sites, 1), ms_worst])
+	for n in notes:
+		print("      " + n)
+	if tension_now == tension:
+		_expect(worst < 100, "real cave ceilings: one brick shot out never brings down more than a few bricks (the most %d cells)" % worst)
 
 
 func _check_sand() -> void:

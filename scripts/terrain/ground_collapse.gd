@@ -13,8 +13,13 @@ extends Node3D
 ## Edits gathered for this long before a survey, as the tiles' refresh is.
 const SURVEY_EVERY := 0.1
 ## What a stud of ground holds: the buildings' (BrickStrength.tension(),
-## the Options menu's Stud Strength) times this.
-const TERRAIN_TIMES := 1.0
+## the Options menu's Stud Strength) times this. Four: ground is rock and
+## earth, not bricks on studs -- a cave roof stands by arching, which a stud
+## model cannot hold, and at 1 one shot into a real cave ceiling brought down
+## 4,030 cells; at 4 the 40 ceilings terrain_collapse_probe shoots keep
+## standing, while what an edit cuts off still falls (Docs/TerrainCollapse.md
+## 8.2).
+const TERRAIN_TIMES := 4.0
 ## Falling sand: as a falling piece falls (PlanetPieces.GRAVITY_SCALE).
 const SAND_GRAVITY_SCALE := 1.6
 const SAND_MAX_SPEED := 40.0
