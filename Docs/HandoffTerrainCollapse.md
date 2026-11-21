@@ -106,6 +106,12 @@ it, but the crash was never reproduced afterwards.
 - Run it a few times, alone and cool. Once is not proof: it was rare.
 - If it still crashes, read the crash log for the survey thread.
 
+**Done 2026-11-21:** 5 runs in a row, all clean (exit 0, `[gen-gate] done`),
+peak 90 C, never held back. It used to crash about 1 run in 2, so the fix holds.
+
+Item 1 still waits for the sections chat. Item 4 stays as it is for now (the
+user's answer, 2026-11-21).
+
 ## Rules that bit this chat
 
 - After merging main: run `python -m SCons` in gdextension/brick, then

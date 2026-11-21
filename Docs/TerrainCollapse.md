@@ -236,6 +236,8 @@ with smooth tops; islands came off a brick at a time, never in big chunks.
   edit box is queued, merged only with boxes within 6 cells, up to 32 x 96 x
   32 (studs, plates, studs); a bigger one is split. The survey stops growing
   at 1.2 M cells or 120k virtual bricks (what reaches past is held).
+  2026-11-21: 5 runs of `--gate=gen --with-collapse` in a row, no crash
+  (it was about 1 run in 2 before this).
 
 ### 8.2 2026-11-20: cost, and cave ceilings
 
