@@ -258,6 +258,29 @@ was 1.0 ms. Splitting a tile into sections would cut a cost that is not there
 breaking bricks has to be found where it is: beside running water, with the
 collapse surveying, debris bodies, a paging machine (LOW RAM in heat_sum).
 
+**Breaking beside running water, measured** (`-- --gate=breakwater`,
+2026-11-20, 70 C start, editor closed; another chat's headless probe was
+running): four sources poured on the ground ahead, then 120 shots into the
+ground beside and under the water (1026 edits, 214 tiles rebuilt, 60 collapse
+surveys, water flowing into the holes).
+
+| window | mean | worst | over 25 ms | main thread (process) | draw | GPU | world's own parts |
+|---|---|---|---|---|---|---|---|
+| water only | 16.6 | 27.0 | 7 of 240 | 2.6 | 13.5 | 12.5 | 1.1 |
+| shooting into it | 16.7 | 26.0 | 5 of 480 | 3.0 | 13.2 | 12.7 | 1.4 |
+| settling | 16.7 | 25.9 | 4 of 240 | 2.4 | 13.7 | 12.4 | 1.0 |
+
+Shooting into water costs the frame nothing measurable: every worst frame is
+the renderer (draw 21-23 ms with the GPU at 15-18 ms), with or without shots.
+The water's worker tick reached 70 ms while shooting, on its own thread (the
+frame never waits: lock wait 0.00 ms). The frame is GPU-bound -- 12.5 ms of a
+16.6 ms frame on this machine before anything happens -- so what lags in play
+is what pushes the GPU over: the chip clocking down hot (heat_sum's held
+back), the editor's game view (frame times several-fold), paging on low RAM
+(heat_sum's LOW RAM: 350-520 ms stalls), and GPU load (67 lava lights were live
+in this run). The F3 readout's slow-frame line says which: small world parts
+in a slow frame mean the time went outside the world.
+
 ## 10. Shots break whole bricks; flying
 
 **Whole bricks.** A shot breaks what a LEGO player would expect: the surface
