@@ -12,7 +12,7 @@ extends RefCounted
 ##   material (block: BrickTerrain material index, else -1),
 ##   fluid (1 water, 2 lava, 0 none), fluid_kind ("source" / "still").
 
-const KINDS := ["block", "fluid", "bucket", "source_bucket", "chest", "tool", "misc"]
+const KINDS := ["block", "fluid", "bucket", "source_bucket", "chest", "tool", "backpack", "misc"]
 ## Which hand an item may be in (zylanntest's HandUse).
 const HANDS := ["any", "right", "off", "two"]
 const NOT_ITEMS := ["air", "bedrock"]
@@ -85,6 +85,8 @@ static func _complete(e: Dictionary) -> Dictionary:
 		"material": -1,
 		"fluid": int(e.get("fluid", 0)),
 		"fluid_kind": str(e.get("fluid_kind", "source")),
+		## A backpack's storage slots (Docs/Inventory.md 8).
+		"slots": int(e.get("slots", 0)),
 	}
 	if not KINDS.has(out.kind):
 		out.kind = "misc"

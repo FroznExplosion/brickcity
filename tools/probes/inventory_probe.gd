@@ -46,6 +46,7 @@ func _init() -> void:
 	_mega_pickaxe()
 	_chests_and_drops()
 	_character()
+	_backpacks()
 	print("inventory probe: %d ok, %d failed" % [_pass, _fail])
 	quit(1 if _fail > 0 else 0)
 
@@ -308,9 +309,10 @@ func _save() -> void:
 	_ok("storage kept its chests", back.main[4] != null and back.main[4].id == &"chest" and back.main[4].count == 3)
 	_ok("blocks came back", back.hotbars[0][3] != null and back.hotbars[0][3].id == &"dark_stone")
 	var d := inv.to_dict()
-	d["main"][6] = {"id": "no_such_item", "count": 1}
+	d["backpack"]["contents"][6] = {"id": "no_such_item", "count": 1}
 	back.from_dict(d)
-	_ok("an item no pack has any more is left out", back.main[6] == null)
+	_ok("an item no pack has any more is left out (in the backpack too)", back.main[6] == null
+			and back.main[4] != null)
 
 
 ## Stage 6: the inventory is the character's -- it rides in CharacterSave,
@@ -337,3 +339,50 @@ func _character() -> void:
 	_ok("... after a save that changed only the level", int(CharacterSave.load_from(path).character.level) == 7)
 	DirAccess.remove_absolute(path)
 	_ok("no character file: no items (the starting kit)", not Inventory.new().from_dict(CharacterSave.load_from(path).items))
+
+
+## Stage 8: backpacks (zylanntest's). The worn backpack's contents are the
+## storage; its stack carries them wherever it goes.
+func _backpacks() -> void:
+	print("backpacks")
+	var inv := Inventory.new()
+	_ok("a new inventory wears a Large backpack: 27 storage slots", inv.backpack != null
+			and inv.backpack.id == &"large_backpack" and inv.area_size(&"main") == 27)
+	inv.main[0] = ItemStack.make(&"coal_ore", 9)
+	inv.left_click(A(&"backpack"))
+	_ok("taken off: onto the cursor, and no storage", inv.cursor != null and inv.cursor.id == &"large_backpack"
+			and inv.backpack == null and inv.area_size(&"main") == 0)
+	_ok("... its contents went with it", inv.cursor.contents[0] != null and inv.cursor.contents[0].id == &"coal_ore")
+	inv.left_click(A(&"hotbar_0", 0))
+	_ok("a backpack can be held in a hotbar slot", inv.hotbars[0][0] != null and inv.hotbars[0][0].id == &"large_backpack")
+	inv.cursor = ItemStack.make(&"stone", 1)
+	inv.left_click(A(&"backpack"))
+	_ok("the backpack slot takes only backpacks", inv.backpack == null and inv.cursor.id == &"stone")
+	inv.cursor = null
+	inv.shift_click(A(&"hotbar_0", 0))
+	_ok("shift click puts a backpack on (none worn)", inv.backpack != null and inv.hotbars[0][0] == null
+			and inv.main[0] != null and inv.main[0].id == &"coal_ore")
+	var small := Inventory.make_backpack(&"small_backpack")
+	_ok("a Small backpack has 9 slots", small.contents.size() == 9)
+	inv.cursor = small
+	inv.left_click(A(&"backpack"))
+	_ok("a small one swapped on: 9 storage slots, the large one held", inv.area_size(&"main") == 9
+			and inv.cursor != null and inv.cursor.id == &"large_backpack")
+	inv.left_click(A(&"main", 0))
+	_ok("a backpack inside the worn backpack, with its own contents", inv.main[0] != null
+			and inv.main[0].contents[0] != null and inv.main[0].contents[0].id == &"coal_ore")
+	var back := Inventory.new()
+	back.from_dict(JSON.parse_string(JSON.stringify(inv.to_dict())))
+	_ok("save round trip: the small one worn, the large one in it, its coal in that",
+			back.backpack.id == &"small_backpack" and back.main[0] != null and back.main[0].id == &"large_backpack"
+			and back.main[0].contents.size() == 27 and back.main[0].contents[0].count == 9)
+	var old := {"format": 1, "hotbar_0": [], "hotbar_1": [], "offhand": [], "main": [{"id": "clay", "count": 4}]}
+	var o := Inventory.new()
+	o.from_dict(old)
+	_ok("a save from before backpacks: its storage in a Large backpack", o.backpack.id == &"large_backpack"
+			and o.main[0] != null and o.main[0].id == &"clay")
+	var none := Inventory.new()
+	none.backpack = null
+	var left := none.add_item(Inventory.make_backpack(&"medium_backpack"))
+	_ok("picked up with none worn: it is put on (18 slots)", left == null and none.area_size(&"main") == 18)
+	_ok("a backpack never stacks", not Inventory.make_backpack(&"small_backpack").same_kind(Inventory.make_backpack(&"small_backpack")))

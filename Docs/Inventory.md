@@ -182,7 +182,7 @@ The inventory is saved in the mine world's save folder beside the edits
 
 ### Round two (2026-11-20, asked by the user): stages 6-9
 
-6. **The inventory is the character's.** Your hotbars, off-hand, backpack
+6. **The inventory is the character's.** **Built** (2026-11-20). Your hotbars, off-hand, backpack
    and storage go with you from world to world: saved in the character file
    (`CharacterSave.items`, `user://profile/character.json` -- the same file
    PlayerKit keeps the guns and level in; both read, change their own field
@@ -192,7 +192,7 @@ The inventory is saved in the mine world's save folder beside the edits
    it to a character that has none yet, once. Written on the main thread
    when the inventory changed, at the autosave and on leaving (a small file,
    as PlayerKit's). A scripted pass uses `user://dev/character_gate.json`.
-7. **Survival switch** in the world menu (World tab): a check box that
+7. **Survival switch** **(built, 2026-11-20)** in the world menu (World tab): a check box that
    changes the game mode of THIS world at once (no Generate): saved in its
    world file. Survival: placing uses the stack up, breaking (the builder's
    block break, the pickaxes) gives the broken bricks, the Creative tab is
@@ -207,6 +207,11 @@ The inventory is saved in the mine world's save folder beside the edits
    empty backpack slot. A backpack never goes into the storage it is. The
    kit wears a Large one (the 27 slots the storage always had); an old save
    gets one holding its old storage.
+   **Built** (2026-11-20): `ItemStack.contents`, `Inventory.backpack` with
+   `main` its contents, area `backpack`; the slot sits with the hands (so
+   the Creative tab can put one on); the storage grid is rebuilt to the
+   backpack's size and says which it is; a backpack icon model. Probe and
+   `--gate=inventory` (off, parked, a Small one on, the Large one back).
 9. **Crafting** (zylanntest's 2 x 2 grid and recipe book): a 2 x 2 craft
    grid and its output in the screen; a recipe is matched wherever it sits
    in the grid, a cell may hold more than it needs; taking the output uses

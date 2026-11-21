@@ -18,6 +18,12 @@
 		"mega_pickaxe": { "name": "Mega Pickaxe", "kind": "tool", "max_stack": 1, "colour": "#e8c040", "glyph": "M",
 			"break_area": 5, "break_repeat": 0.05,
 			"description": "Breaks a 5 x 5 face of blocks at a time (the face looked at, one block deep), held: about four times as fast as the pickaxe." },
+		"small_backpack": { "name": "Small Backpack", "kind": "backpack", "slots": 9, "max_stack": 1, "hand": "right",
+			"colour": "#8b4513", "glyph": "B", "description": "Worn in the backpack slot: 9 storage slots. What is in it goes where it goes." },
+		"medium_backpack": { "name": "Medium Backpack", "kind": "backpack", "slots": 18, "max_stack": 1, "hand": "right",
+			"colour": "#654321", "glyph": "B", "description": "Worn in the backpack slot: 18 storage slots. What is in it goes where it goes." },
+		"large_backpack": { "name": "Large Backpack", "kind": "backpack", "slots": 27, "max_stack": 1, "hand": "right",
+			"colour": "#3a2a1a", "glyph": "B", "description": "Worn in the backpack slot: 27 storage slots. What is in it goes where it goes." },
 		"chest": { "name": "Chest", "kind": "chest", "hand": "right", "colour": "#8a5a2b", "glyph": "C",
 			"description": "Holds 27 stacks. Place it, then right-click it to open." }
 	}

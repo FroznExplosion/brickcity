@@ -1682,6 +1682,31 @@ func _run_inventory_gate() -> void:
 		check.call("9 over a storage slot sends it to hotbar 1 slot 9 (its terracotta to storage)",
 				inv.hotbars[0][8] != null and inv.hotbars[0][8].id == &"sand"
 				and inv.main[5] != null and inv.main[5].id == &"terracotta")
+	# Stage 8: backpacks, real clicks. Off: no storage; parked in a hotbar; a
+	# Small one from the catalog on: 9 slots; the Large one back: 27, its
+	# contents still in it.
+	await _click(_inv_slot(scr, Inventory.addr(&"backpack")).get_global_rect().get_center())
+	await _frames(3)
+	check.call("the backpack taken off: on the cursor, no storage (%d slots)" % int(scr.get("_storage_n")),
+			inv.cursor != null and inv.cursor.id == &"large_backpack" and int(scr.get("_storage_n")) == 0)
+	await _click(_inv_slot(scr, Inventory.addr(&"hotbar_1", 8)).get_global_rect().get_center())
+	check.call("... put in hotbar 2 slot 9", inv.hotbars[1][8] != null and inv.hotbars[1][8].id == &"large_backpack")
+	await _click(tab.get_global_rect().get_center())
+	await _click(_inv_slot(scr, {}, &"small_backpack").get_global_rect().get_center())
+	await _click(_inv_slot(scr, Inventory.addr(&"backpack")).get_global_rect().get_center())
+	await _click(tab_s.get_global_rect().get_center())
+	await _frames(3)
+	check.call("a Small backpack from the catalog put on: 9 storage slots",
+			inv.backpack != null and inv.backpack.id == &"small_backpack" and int(scr.get("_storage_n")) == 9)
+	await _shot(UserPaths.DEV + "inv_backpack.png")
+	await _click(_inv_slot(scr, Inventory.addr(&"hotbar_1", 8)).get_global_rect().get_center())
+	await _click(_inv_slot(scr, Inventory.addr(&"backpack")).get_global_rect().get_center())
+	await _click(_inv_slot(scr, Inventory.addr(&"hotbar_1", 8)).get_global_rect().get_center())
+	await _frames(3)
+	check.call("the Large one swapped back on: 27 slots, its terracotta still in slot 6, the Small one in the hotbar",
+			inv.backpack != null and inv.backpack.id == &"large_backpack" and int(scr.get("_storage_n")) == 27
+			and inv.main[5] != null and inv.main[5].id == &"terracotta"
+			and inv.hotbars[1][8] != null and inv.hotbars[1][8].id == &"small_backpack" and inv.cursor == null)
 	# Fits a small window.
 	var win := get_window()
 	var size0 := win.size

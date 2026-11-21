@@ -8,7 +8,9 @@ extends RefCounted
 ## Every slot has an address `{area, index}`:
 ##   hotbar_0, hotbar_1   9 each
 ##   offhand              2
-##   main                 MAIN_SIZE
+##   backpack             1, the backpack worn (Docs/Inventory.md 8)
+##   main                 the worn backpack's own slots (its `contents`): no
+##                        backpack, no storage -- zylanntest's rule
 ##   chest                the open chest's slots (borrowed array, see open_chest)
 ## All the rules go through get_slot / set_slot / slot_accepts, so the UI only
 ## sends addresses and redraws on `changed`.
@@ -20,14 +22,22 @@ signal active_changed
 
 const HOTBAR_SIZE := 9
 const OFFHAND_SIZE := 2
+## The storage of the kit's backpack (a Large one).
 const MAIN_SIZE := 27
+const KIT_BACKPACK := &"large_backpack"
 const CHEST_SIZE := 27
 ## X held this long swaps the off-hand instead of the hotbar.
 const HOLD_MS := 350
 
 var hotbars: Array = [[], []]
 var offhands: Array = [null, null]
-var main: Array = []
+## The backpack worn, or null; its `contents` are the storage.
+var backpack: ItemStack = null
+## The storage: the worn backpack's slots, or none.
+var main: Array:
+	get:
+		return backpack.contents if backpack != null else _no_storage
+var _no_storage: Array = []
 var active_hotbar := 0
 var active_slot := 0
 var active_offhand := 0
@@ -50,7 +60,24 @@ var _drag_touched: Array = []
 func _init() -> void:
 	hotbars[0] = _empty(HOTBAR_SIZE)
 	hotbars[1] = _empty(HOTBAR_SIZE)
-	main = _empty(MAIN_SIZE)
+	backpack = make_backpack(KIT_BACKPACK)
+
+
+## A backpack of item `id`, its slots sized from the catalog, empty (or
+## holding `items`, as many as fit).
+static func make_backpack(id: StringName, items: Array = []) -> ItemStack:
+	var s := ItemStack.make(id, 1)
+	var n := int(ItemCatalog.get_def(id).get("slots", 0))
+	if n <= 0:
+		n = MAIN_SIZE
+	s.contents = _empty(n)
+	for i in mini(items.size(), n):
+		s.contents[i] = items[i]
+	return s
+
+
+static func is_backpack(s: ItemStack) -> bool:
+	return s != null and ItemCatalog.kind(s.id) == "backpack"
 
 
 static func _empty(n: int) -> Array:
@@ -88,12 +115,19 @@ func seed_default() -> void:
 # Slots
 
 func get_slot(a: Dictionary) -> ItemStack:
+	if a.area == &"backpack":
+		return backpack
 	var arr := _array(a.area)
 	var i: int = a.index
 	return arr[i] if i >= 0 and i < arr.size() else null
 
 
 func set_slot(a: Dictionary, s: ItemStack) -> void:
+	if a.area == &"backpack":
+		backpack = null if s == null or s.is_empty() else s
+		if backpack != null:
+			_fit_backpack(backpack)
+		return
 	var arr := _array(a.area)
 	var i: int = a.index
 	if i >= 0 and i < arr.size():
@@ -111,7 +145,17 @@ func _array(area: StringName) -> Array:
 
 
 func area_size(area: StringName) -> int:
+	if area == &"backpack":
+		return 1
 	return _array(area).size()
+
+
+## A backpack's slots made the size its item says (a new one, or one saved
+## by an older game), keeping what is in them.
+static func _fit_backpack(s: ItemStack) -> void:
+	var n := int(ItemCatalog.get_def(s.id).get("slots", 0))
+	if n > 0 and s.contents.size() < n:
+		s.contents.resize(n)
 
 
 ## May `s` go in slot `a`? Storage takes anything; the hands go by the item's
@@ -123,6 +167,8 @@ func slot_accepts(a: Dictionary, s: ItemStack) -> bool:
 	var d := ItemCatalog.get_def(s.id)
 	if d.is_empty():
 		return false
+	if a.area == &"backpack":
+		return d.kind == "backpack"
 	match a.area:
 		&"offhand":
 			return d.hand == "any" or d.hand == "off"
@@ -202,8 +248,17 @@ func shift_click(a: Dictionary) -> void:
 	var s := get_slot(a)
 	if s == null:
 		return
+	# A backpack: on, if none is worn (zylanntest's); the one worn: off, into
+	# a hotbar (never into the storage it is).
+	if is_backpack(s) and a.area != &"backpack" and backpack == null:
+		set_slot(a, null)
+		set_slot(addr(&"backpack"), s)
+		changed.emit()
+		return
 	var targets: Array = []
-	if not chest_key.is_empty() and a.area == &"chest":
+	if a.area == &"backpack":
+		targets = [hotbar_area(), hotbar_area(1 - active_hotbar)] + ([&"chest"] if not chest_key.is_empty() else [])
+	elif not chest_key.is_empty() and a.area == &"chest":
 		targets = [hotbar_area(), hotbar_area(1 - active_hotbar), &"main"]
 	elif not chest_key.is_empty():
 		targets = [&"chest"]
@@ -274,7 +329,7 @@ func ensure_item(id: StringName, after: StringName = &"") -> bool:
 
 func all_addrs() -> Array:
 	var out: Array = []
-	for area in [&"hotbar_0", &"hotbar_1", &"offhand", &"main", &"chest"]:
+	for area in [&"hotbar_0", &"hotbar_1", &"offhand", &"backpack", &"main", &"chest"]:
 		for i in area_size(area):
 			out.append(addr(area, i))
 	return out
@@ -384,6 +439,10 @@ func _amounts() -> Dictionary:
 ## off-hand, main -- same items first, then empty slots. What did not fit, or null.
 func add_item(s: ItemStack) -> ItemStack:
 	if s == null or s.is_empty():
+		return null
+	if is_backpack(s) and backpack == null:
+		set_slot(addr(&"backpack"), s)
+		changed.emit()
 		return null
 	var left := _insert(s, [hotbar_area(), hotbar_area(1 - active_hotbar), &"offhand", &"main"])
 	changed.emit()
@@ -575,7 +634,9 @@ func to_dict() -> Dictionary:
 		"hotbar_0": _save_array(hotbars[0]),
 		"hotbar_1": _save_array(hotbars[1]),
 		"offhand": _save_array(offhands),
-		"main": _save_array(main),
+		# The backpack carries the storage (its contents); "main" was the
+		# storage before backpacks (stage 8).
+		"backpack": _stack_dict(backpack),
 		"active_hotbar": active_hotbar,
 		"active_slot": active_slot,
 		"active_offhand": active_offhand,
@@ -591,7 +652,17 @@ func from_dict(d) -> bool:
 	_load_array(hotbars[0], d.get("hotbar_0", []))
 	_load_array(hotbars[1], d.get("hotbar_1", []))
 	_load_array(offhands, d.get("offhand", []))
-	_load_array(main, d.get("main", []))
+	if d.has("backpack"):
+		backpack = _keep_known(ItemStack.from_dict(d.backpack))
+		if backpack != null and not is_backpack(backpack):
+			backpack = null
+		if backpack != null:
+			_fit_backpack(backpack)
+	else:
+		# Saved before backpacks: the old storage goes into the kit's backpack.
+		var old := _empty(MAIN_SIZE)
+		_load_array(old, d.get("main", []))
+		backpack = make_backpack(KIT_BACKPACK, old)
 	active_hotbar = clampi(int(d.get("active_hotbar", 0)), 0, 1)
 	active_slot = clampi(int(d.get("active_slot", 0)), 0, HOTBAR_SIZE - 1)
 	active_offhand = clampi(int(d.get("active_offhand", 0)), 0, OFFHAND_SIZE - 1)
@@ -611,10 +682,24 @@ static func _save_array(a: Array) -> Array:
 	return out
 
 
+static func _stack_dict(s: ItemStack) -> Variant:
+	if s == null:
+		return null
+	return s.to_dict()
+
+
+## `s` without anything no pack has any more (in it too, a backpack's), or
+## null if it is such a thing itself.
+static func _keep_known(s: ItemStack) -> ItemStack:
+	if s == null or not ItemCatalog.has(s.id):
+		return null
+	for i in s.contents.size():
+		s.contents[i] = _keep_known(s.contents[i])
+	return s
+
+
 static func _load_array(into: Array, from) -> void:
 	for i in into.size():
 		into[i] = null
 		if from is Array and i < from.size():
-			var s := ItemStack.from_dict(from[i])
-			if s != null and ItemCatalog.has(s.id):
-				into[i] = s
+			into[i] = _keep_known(ItemStack.from_dict(from[i]))
