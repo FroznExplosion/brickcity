@@ -1198,15 +1198,20 @@ struct MeshBuf {
         idx.push_back(base); idx.push_back(base + 1); idx.push_back(base + 2);
         idx.push_back(base); idx.push_back(base + 2); idx.push_back(base + 3);
     }
-    /// A real sea top: CUSTOM0 y = 1 (sea), z = how open the water is at the
-    /// vertex (0 against ground, 1 four studs out) -- the shader's waves.
+    /// A real sea piece's face: CUSTOM0 y = 1 (sea); x, w the way from the
+    /// vertex to its stud's middle in half studs (+-1) -- the shader rides
+    /// the whole piece on the wave at that middle, as the tiers' pieces do.
     void sea_quad(const Vector3 &a, const Vector3 &b, const Vector3 &c, const Vector3 &d,
-            const Color &cc, float sa, float sb, float sc, float sd) {
+            const Vector3 &nrm, const Color &cc, const Vector2 &mid) {
         const int base = (int)v.size();
-        v.push_back(a); v.push_back(b); v.push_back(c); v.push_back(d);
-        for (int i = 0; i < 4; ++i) { n.push_back(Vector3(0, 1, 0)); col.push_back(cc); }
-        for (float e : { sa, sb, sc, sd }) {
-            cus.push_back(0.0f); cus.push_back(1.0f); cus.push_back(e); cus.push_back(0.0f);
+        for (const Vector3 &p : { a, b, c, d }) {
+            v.push_back(p);
+            n.push_back(nrm);
+            col.push_back(cc);
+            cus.push_back(mid.x > p.x ? 1.0f : -1.0f);
+            cus.push_back(1.0f);
+            cus.push_back(0.0f);
+            cus.push_back(mid.y > p.z ? 1.0f : -1.0f);
         }
         idx.push_back(base); idx.push_back(base + 1); idx.push_back(base + 2);
         idx.push_back(base); idx.push_back(base + 2); idx.push_back(base + 3);
@@ -1272,8 +1277,7 @@ std::unordered_map<int64_t, std::unordered_map<int64_t, float>> g_prev_tops;
 /// level always. A quad a stud (shared corners: no cracks between them),
 /// short sides on the band's outer edge where the tiers' pieces meet it.
 /// Marks the drawn sea studs for the tiers' mask; true if any mark changed.
-constexpr int SEA_OPEN = 4;
-constexpr float SKIRT_M = 0.3f;
+constexpr float SKIRT_M = 0.42f;   ///< a piece's sides, as deep as a brick
 bool mesh_sea_tops(int tx, int tz, const bool *top, const bool *ocean, MeshBuf &m) {
     constexpr int M = REAL_BAND, W = SX + 2 * M, OUT_D = REAL_BAND + 1;
     uint8_t d[W * W];
@@ -1325,41 +1329,24 @@ bool mesh_sea_tops(int tx, int tz, const bool *top, const bool *ocean, MeshBuf &
             draw[i] = top[i] && (!ocean[i] || dist(lx, lz) <= REAL_BAND);
         }
     }
-    // A corner's openness, 0 against ground .. 1 SEA_OPEN studs out.
-    auto open_at = [&](int lx, int lz) -> float {
-        int v = OUT_D;
-        for (int dz = -1; dz <= 0; ++dz) {
-            for (int dx = -1; dx <= 0; ++dx) v = std::min<int>(v, d[(lx + dx + M) + W * (lz + dz + M)]);
-        }
-        return std::min(1.0f, (float)std::max(0, v - 1) / (float)(SEA_OPEN - 1));
-    };
+    // A piece a stud, as the tiers draw the sea: a flat top that rides the
+    // wave at its middle (the shader), and four sides SKIRT_M deep -- the
+    // risers between pieces at different heights.
     const float y = (float)(g_sea_b * 3) * PLATE_M - TOP_SINK;
     const Color cc(1.0f, 0.0f, 0.5f, 0.5f);
+    const Vector3 dn(0.0f, SKIRT_M, 0.0f);
     for (int lz = 0; lz < SX; ++lz) {
         for (int lx = 0; lx < SX; ++lx) {
             if (!draw[lx + SX * lz]) continue;
             const float x0 = (float)(tx * SX + lx) * STUD_M, x1 = (float)(tx * SX + lx + 1) * STUD_M;
             const float z0 = (float)(tz * SX + lz) * STUD_M, z1 = (float)(tz * SX + lz + 1) * STUD_M;
-            const float o00 = open_at(lx, lz), o01 = open_at(lx, lz + 1);
-            const float o11 = open_at(lx + 1, lz + 1), o10 = open_at(lx + 1, lz);
-            m.sea_quad(Vector3(x0, y, z0), Vector3(x0, y, z1), Vector3(x1, y, z1), Vector3(x1, y, z0), cc,
-                    o00, o01, o11, o10);
-            // Sides down where the next stud is open sea the tiers draw.
-            for (int k = 0; k < 4; ++k) {
-                const int nx = lx + DX[k], nz = lz + DZ[k];
-                bool tier;
-                if (nx >= 0 && nz >= 0 && nx < SX && nz < SX) tier = top[nx + SX * nz] && !draw[nx + SX * nz];
-                else tier = dist(nx, nz) > REAL_BAND;
-                if (!tier) continue;
-                Vector3 p0, p1;
-                float a0, a1;
-                if (k == 0) { p0 = Vector3(x1, y, z0); p1 = Vector3(x1, y, z1); a0 = o10; a1 = o11; }
-                else if (k == 1) { p0 = Vector3(x0, y, z1); p1 = Vector3(x0, y, z0); a0 = o01; a1 = o00; }
-                else if (k == 2) { p0 = Vector3(x1, y, z1); p1 = Vector3(x0, y, z1); a0 = o11; a1 = o01; }
-                else { p0 = Vector3(x0, y, z0); p1 = Vector3(x1, y, z0); a0 = o00; a1 = o10; }
-                const Vector3 dn(0.0f, SKIRT_M, 0.0f);
-                m.sea_quad(p0, p1, p1 - dn, p0 - dn, cc, a0, a1, a1, a0);
-            }
+            const Vector2 mid((x0 + x1) * 0.5f, (z0 + z1) * 0.5f);
+            const Vector3 a(x0, y, z0), b(x0, y, z1), cq(x1, y, z1), d(x1, y, z0);
+            m.sea_quad(a, b, cq, d, Vector3(0, 1, 0), cc, mid);
+            m.sea_quad(d, cq, cq - dn, d - dn, Vector3(1, 0, 0), cc, mid);
+            m.sea_quad(b, a, a - dn, b - dn, Vector3(-1, 0, 0), cc, mid);
+            m.sea_quad(cq, b, b - dn, cq - dn, Vector3(0, 0, 1), cc, mid);
+            m.sea_quad(a, d, d - dn, a - dn, Vector3(0, 0, -1), cc, mid);
         }
     }
     // The tiers' mask.
