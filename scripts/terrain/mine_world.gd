@@ -1612,6 +1612,16 @@ func _run_inventory_gate() -> void:
 	builder.place_target()
 	check.call("RMB with a chest puts one down", chests.count() == 1)
 	var ckey: String = chests.chests.keys()[0] if chests.count() > 0 else ""
+	if ckey != "":
+		# A look at it from the side, then back over it.
+		var cb: AABB = chests.box_of(chests.chests[ckey].block)
+		var over := _eye()
+		_fly_to(cb.get_center() + Vector3(1.3, 0.3, 0.4), Vector3(-1, 0, -0.3))
+		walker.pitch = -0.35
+		await _frames(15)
+		await _shot(UserPaths.DEV + "inv_chest_placed.png")
+		_fly_to(over - Vector3(0, 1.6, 0), Vector3(0, 0, -1))
+		walker.pitch = -1.45
 	await _frames(10)
 	builder.update_target()
 	check.call("the chest is what is looked at", builder.target.get("chest", "") == ckey)
@@ -1655,7 +1665,13 @@ func _run_inventory_gate() -> void:
 			and back.size() > 0 and back[0] != null and (back[0] as ItemStack).id == &"grass")
 	if chests.count() == 1:
 		# A shot breaks it; the grass falls out; flying over it picks it up.
+		# Generating again put the player on foot at the spawn, maybe beside
+		# the chest: fly 2.4 m over it, out of a drop's reach.
 		var box: AABB = chests.box_of(chests.chests[ckey].block)
+		set_on_foot(false)
+		_fly_to(box.get_center() + Vector3(0, 2.4, 0), Vector3(0, 0, -1))
+		walker.pitch = -1.45
+		await _frames(10)
 		_mine(to_global(box.get_center()), Vector3.DOWN, null)
 		await _frames(5)
 		check.call("a shot breaks the chest, its grass drops (creative: not the chest)",
