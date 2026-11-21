@@ -709,14 +709,172 @@ int Field::solid_at(int x, int yp, int z) const {
 
 // --- edits -----------------------------------------------------------------
 
-static std::unordered_map<int64_t, uint8_t> g_edits;
+namespace {
 
-/// Writers of the edit tables (set_edit, clear_edits) hold it alone; the
-/// water's own thread (BrickFluid, Docs/MineWater.md) and the shore field
-/// hold it shared while they read them. An insert under a reader is a race on
-/// the map, and the water reads a great deal (priming) while the main thread
-/// lays sand, rock and blocks: it crashed the mine world now and then. The
-/// terrain's tile bakes do not take it (as before).
+/// A hash table with ONE writer (the main thread: shots, blocks, sand, lava
+/// rock, a save loading) and any number of readers on other threads that
+/// take no lock: the tile bakes, find_brick, the collapse survey, the deep
+/// tier, the water, the shore field. It replaced three std::unordered_maps
+/// that the bakes read with no lock while the main thread inserted -- a race
+/// the old comment owned up to, and past the 65 536 reserved entries a rehash
+/// under a reader (a crash, or a tile baked from garbage).
+///
+/// Open addressing, linear probing, nothing is ever deleted (an edit back to
+/// air is an edit). An insert writes the value, then publishes the key with
+/// release; a reader loads the key with acquire, so a key it sees has its
+/// value. Growing builds a bigger table and publishes it; the old ones are
+/// kept (a reader may still be probing one) until clear(), which frees all
+/// but the last. A reader that misses an edit made while it ran is the same
+/// as one that started a moment earlier: the streamer bakes a tile again when
+/// an edit lands during its bake.
+class EditTable {
+public:
+    static constexpr uint64_t EMPTY = ~(uint64_t)0;
+
+    EditTable() { cur_.store(make(1024), std::memory_order_release); }
+
+    /// Any thread. False when the key has no entry.
+    bool find(uint64_t key, int32_t &out) const {
+        const Table *t = cur_.load(std::memory_order_acquire);
+        size_t i = slot(key, t->mask);
+        for (;;) {
+            const uint64_t k = t->keys[i].load(std::memory_order_acquire);
+            if (k == key) {
+                out = t->vals[i].load(std::memory_order_relaxed);
+                return true;
+            }
+            if (k == EMPTY) {
+                return false;
+            }
+            i = (i + 1) & t->mask;
+        }
+    }
+
+    /// The writer only.
+    void put(uint64_t key, int32_t val) {
+        Table *t = cur_.load(std::memory_order_relaxed);
+        if ((count_.load(std::memory_order_relaxed) + 1) * 2 > t->mask + 1) {
+            t = grow(t);
+        }
+        if (insert(t, key, val)) {
+            count_.fetch_add(1, std::memory_order_relaxed);
+        }
+    }
+
+    size_t size() const { return count_.load(std::memory_order_relaxed); }
+
+    /// The writer only: every entry.
+    template <typename F> void each(F f) const {
+        const Table *t = cur_.load(std::memory_order_relaxed);
+        for (size_t i = 0; i <= t->mask; ++i) {
+            const uint64_t k = t->keys[i].load(std::memory_order_relaxed);
+            if (k != EMPTY) {
+                f(k, t->vals[i].load(std::memory_order_relaxed));
+            }
+        }
+    }
+
+    /// The writer only, with no bake running (a new world: the streamer and
+    /// the deep tier wait for theirs as they leave the tree). Readers that
+    /// hold edit_lock() shared are kept out by the caller's exclusive lock.
+    void clear() {
+        Table *old = cur_.load(std::memory_order_relaxed);
+        Table *fresh = make(1024);
+        cur_.store(fresh, std::memory_order_release);
+        count_.store(0, std::memory_order_relaxed);
+        // Keep the table just replaced one more round; free the rest.
+        std::vector<std::unique_ptr<Table>> keep;
+        for (auto &p : owned_) {
+            if (p.get() == old || p.get() == fresh) {
+                keep.push_back(std::move(p));
+            }
+        }
+        owned_.swap(keep);
+    }
+
+private:
+    struct Table {
+        size_t mask = 0;
+        std::unique_ptr<std::atomic<uint64_t>[]> keys;
+        std::unique_ptr<std::atomic<int32_t>[]> vals;
+    };
+
+    static size_t slot(uint64_t k, size_t mask) {
+        k ^= k >> 30;
+        k *= 0xbf58476d1ce4e5b9ULL;
+        k ^= k >> 27;
+        k *= 0x94d049bb133111ebULL;
+        k ^= k >> 31;
+        return (size_t)k & mask;
+    }
+
+    Table *make(size_t cap) {
+        auto t = std::make_unique<Table>();
+        t->mask = cap - 1;
+        t->keys.reset(new std::atomic<uint64_t>[cap]);
+        t->vals.reset(new std::atomic<int32_t>[cap]);
+        for (size_t i = 0; i < cap; ++i) {
+            t->keys[i].store(EMPTY, std::memory_order_relaxed);
+            t->vals[i].store(0, std::memory_order_relaxed);
+        }
+        Table *raw = t.get();
+        owned_.push_back(std::move(t));
+        return raw;
+    }
+
+    /// True when the key was new.
+    static bool insert(Table *t, uint64_t key, int32_t val) {
+        size_t i = slot(key, t->mask);
+        for (;;) {
+            const uint64_t k = t->keys[i].load(std::memory_order_relaxed);
+            if (k == key) {
+                t->vals[i].store(val, std::memory_order_relaxed);
+                return false;
+            }
+            if (k == EMPTY) {
+                t->vals[i].store(val, std::memory_order_relaxed);
+                t->keys[i].store(key, std::memory_order_release);
+                return true;
+            }
+            i = (i + 1) & t->mask;
+        }
+    }
+
+    Table *grow(Table *t) {
+        Table *n = make((t->mask + 1) * 2);
+        for (size_t i = 0; i <= t->mask; ++i) {
+            const uint64_t k = t->keys[i].load(std::memory_order_relaxed);
+            if (k != EMPTY) {
+                insert(n, k, t->vals[i].load(std::memory_order_relaxed));
+            }
+        }
+        cur_.store(n, std::memory_order_release);
+        return n;
+    }
+
+    std::atomic<Table *> cur_{ nullptr };
+    std::atomic<size_t> count_{ 0 };
+    std::vector<std::unique_ptr<Table>> owned_;   ///< every table not yet freed
+};
+
+/// Plate cell -> material.
+EditTable g_edits;
+/// Deepest edited plate per tile column, so `sample_tile` knows how far down
+/// it has to look. Without it the mask stopped SECTION_BELOW plates under the
+/// surface, anything dug past that was edited in the field but still read as
+/// solid rock to the mesher, and the floor of a deep pit was simply not
+/// there.
+EditTable g_tile_floor;
+/// Highest edited SOLID plate per tile column.
+EditTable g_tile_ceiling;
+
+} // namespace
+
+/// Held alone by clear_edits, shared by the water's thread (BrickFluid) and
+/// the shore field while they read. Nothing else needs it any more: the
+/// tables above are safe to read while the main thread writes. set_edit no
+/// longer takes it per cell, so an edit never waits for the water to finish
+/// sampling a column.
 static std::shared_mutex g_edit_rw;
 
 std::shared_mutex &edit_lock() { return g_edit_rw; }
@@ -729,53 +887,38 @@ int64_t pack_cell(int x, int yp, int z) {
 }
 
 int edit_at(int64_t key) {
-    auto it = g_edits.find(key);
-    return it == g_edits.end() ? -1 : (int)it->second;
+    int32_t v;
+    return g_edits.find((uint64_t)key, v) ? (int)v : -1;
 }
-
-/// Deepest edited plate per tile column, so `sample_tile` knows how far down
-/// it has to look. Without it the mask stopped SECTION_BELOW plates under the
-/// surface, anything dug past that was edited in the field but still read as
-/// solid rock to the mesher, and the floor of a deep pit was simply not
-/// there.
-static std::unordered_map<int64_t, int> g_tile_floor;
-static std::unordered_map<int64_t, int> g_tile_ceiling;
 
 static inline int64_t tile_key(int tx, int tz) {
     return ((int64_t)(tx & 0xFFFFFFF) << 28) | (int64_t)(tz & 0xFFFFFFF);
 }
 
 void set_edit(int x, int yp, int z, int material) {
-    std::unique_lock<std::shared_mutex> lk(g_edit_rw);
-    if (g_edits.empty()) {
-        // Room up front: tiles bake on workers while edits land, and a
-        // rehash under a reader is the worst thing the map can do.
-        g_edits.reserve(1 << 16);
+    const uint64_t tk = (uint64_t)tile_key(floor_div(x, TILE), floor_div(z, TILE));
+    // The column bounds first: a bake that sees the new cell must also reach
+    // down (or up) to it.
+    int32_t was;
+    if (!g_tile_floor.find(tk, was) || yp < was) {
+        g_tile_floor.put(tk, yp);
     }
-    g_edits[pack_cell(x, yp, z)] = (uint8_t)material;
-    const int64_t tk = tile_key(floor_div(x, TILE), floor_div(z, TILE));
-    auto it = g_tile_floor.find(tk);
-    if (it == g_tile_floor.end() || yp < it->second) {
-        g_tile_floor[tk] = yp;
+    if (material != MAT_AIR && (!g_tile_ceiling.find(tk, was) || yp > was)) {
+        g_tile_ceiling.put(tk, yp);
     }
-    if (material != MAT_AIR) {
-        auto ci = g_tile_ceiling.find(tk);
-        if (ci == g_tile_ceiling.end() || yp > ci->second) {
-            g_tile_ceiling[tk] = yp;
-        }
-    }
+    g_edits.put((uint64_t)pack_cell(x, yp, z), (int32_t)(uint8_t)material);
 }
 
 int highest_edit_near(int tx, int tz) {
-    if (g_tile_ceiling.empty()) {
+    if (g_tile_ceiling.size() == 0) {
         return INT_MIN;
     }
     int best = INT_MIN;
     for (int dz = -1; dz <= 1; ++dz) {
         for (int dx = -1; dx <= 1; ++dx) {
-            auto it = g_tile_ceiling.find(tile_key(tx + dx, tz + dz));
-            if (it != g_tile_ceiling.end()) {
-                best = std::max(best, it->second);
+            int32_t v;
+            if (g_tile_ceiling.find((uint64_t)tile_key(tx + dx, tz + dz), v)) {
+                best = std::max(best, (int)v);
             }
         }
     }
@@ -783,12 +926,15 @@ int highest_edit_near(int tx, int tz) {
 }
 
 int deepest_edit_near(int tx, int tz) {
+    if (g_tile_floor.size() == 0) {
+        return INT_MAX;
+    }
     int best = INT_MAX;
     for (int dz = -1; dz <= 1; ++dz) {
         for (int dx = -1; dx <= 1; ++dx) {
-            auto it = g_tile_floor.find(tile_key(tx + dx, tz + dz));
-            if (it != g_tile_floor.end()) {
-                best = std::min(best, it->second);
+            int32_t v;
+            if (g_tile_floor.find((uint64_t)tile_key(tx + dx, tz + dz), v)) {
+                best = std::min(best, (int)v);
             }
         }
     }
@@ -807,7 +953,7 @@ size_t edit_count() {
 }
 
 bool edits_empty() {
-    return g_edits.empty();
+    return g_edits.size() == 0;
 }
 
 // --- sampling --------------------------------------------------------------
@@ -2443,8 +2589,9 @@ PackedByteArray BrickTerrain::get_edits() {
     out.resize((int64_t)g_edits.size() * 13);
     uint8_t *w = out.ptrw();
     size_t i = 0;
-    for (const auto &e : g_edits) {
-        const int32_t v[3] = { unpack21(e.first >> 42), unpack21(e.first >> 21), unpack21(e.first) };
+    g_edits.each([&](uint64_t key, int32_t mat) {
+        const int64_t k = (int64_t)key;
+        const int32_t v[3] = { unpack21(k >> 42), unpack21(k >> 21), unpack21(k) };
         for (int a = 0; a < 3; ++a) {
             const uint32_t u = (uint32_t)v[a];
             w[i++] = (uint8_t)(u & 0xFF);
@@ -2452,8 +2599,8 @@ PackedByteArray BrickTerrain::get_edits() {
             w[i++] = (uint8_t)((u >> 16) & 0xFF);
             w[i++] = (uint8_t)((u >> 24) & 0xFF);
         }
-        w[i++] = e.second;
-    }
+        w[i++] = (uint8_t)mat;
+    });
     return out;
 }
 

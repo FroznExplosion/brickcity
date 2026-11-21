@@ -27,6 +27,9 @@ const MAX_SLOPE := 30.0
 ## Cells built in one frame at most, and the time they may take.
 const BUILD_PER_FRAME := 6
 const BUILD_BUDGET_US := 3000
+## Freeing and making solid, and the changed sets sorted again: at most this a frame.
+const CELL_BUDGET_US := 2000
+const SETS_BUDGET_US := 2000
 ## Re-plan which cells are wanted once the camera has moved this far.
 const REPLAN := 48.0
 ## Frames between re-sorts of the sets whose trees changed: cells come and go
@@ -483,15 +486,42 @@ func _fall_step(delta: float) -> void:
 
 # --- streaming round the camera -----------------------------------------------------
 
+## The worst _process this far (a gate reads it).
+var process_worst_us := 0
+
 func _process(_delta: float) -> void:
+	var t_in := Time.get_ticks_usec()
+	_parts.clear()
+	_process_body(_delta)
+	var us := Time.get_ticks_usec() - t_in
+	if us > process_worst_us:
+		process_worst_us = us
+		process_worst_what = str(_parts)
+
+
+## Where the worst _process went: part -> ms.
+var process_worst_what := ""
+var _parts := {}
+var _part_at := 0
+
+func _part(name: String) -> void:
+	var now := Time.get_ticks_usec()
+	_parts[name] = snappedf(float(now - _part_at) / 1000.0, 0.1)
+	_part_at = now
+
+
+func _process_body(_delta: float) -> void:
+	_part_at = Time.get_ticks_usec()
 	if not _falls.is_empty():
 		_fall_step(_delta)
+	_part("falls")
 	var cam := get_viewport().get_camera_3d()
 	if cam == null or data == null:
 		return
 	var at := to_local(cam.global_position)
 	if _planned_at == Vector3.INF or at.distance_to(_planned_at) > REPLAN:
 		_plan(at)
+	_part("plan")
 	# Build nearest first, a few a frame.
 	var t0 := Time.get_ticks_usec()
 	var n := 0
@@ -500,8 +530,14 @@ func _process(_delta: float) -> void:
 		if not _cells.has(key):
 			_build_cell(key)
 			n += 1
-	# Free the far, make the near solid.
+	_part("build")
+	# Free the far, make the near solid -- inside a budget a frame: flying low,
+	# whole rows of cells leave and come at once (14-21 ms frames; Docs/PlanetCost.md
+	# 7). What is left over is still due next frame.
+	var t1 := Time.get_ticks_usec()
 	for key in _cells.keys():
+		if Time.get_ticks_usec() - t1 > CELL_BUDGET_US:
+			break
 		var c: Dictionary = _cells[key]
 		var dist := at.distance_to(c.centre)
 		if dist > DROP:
@@ -511,22 +547,39 @@ func _process(_delta: float) -> void:
 		elif dist > SOLID * 1.5 and c.body != null:
 			(c.body as Node).queue_free()
 			c.body = null
-	# The sets: those whose trees changed now, and one more a frame in turn once
-	# the camera has moved a metre since it was last sorted (TerrainTrees' way).
+	# The sets: those whose trees changed now (inside a budget, the rest next
+	# time), and one more a frame in turn once the camera has moved a metre since
+	# it was last sorted (TerrainTrees' way).
+	_part("cells")
 	var here := cam.global_position
 	_frame += 1
 	if _frame % DIRTY_EVERY == 0:
-		for lod in _dirty:
-			(lod as ImpostorLod).update((lod as ImpostorLod).to_local(here))
+		var t2 := Time.get_ticks_usec()
+		for lod in _dirty.keys():
+			if Time.get_ticks_usec() - t2 > SETS_BUDGET_US:
+				break
+			(lod as ImpostorLod).update((lod as ImpostorLod).to_local(here), SETS_BUDGET_US)
 			_sorted_at[lod] = here
-		_dirty.clear()
+			_dirty.erase(lod)
+	_part("dirty")
 	if not _sets.is_empty():
 		var keys := _sets.keys()
 		var s: ImpostorLod = _sets[keys[_turn % keys.size()]]
 		_turn += 1
 		if (_sorted_at.get(s, Vector3.INF) as Vector3).distance_to(here) > 1.0:
-			s.update(s.to_local(here))
+			s.update(s.to_local(here), SETS_BUDGET_US)
 			_sorted_at[s] = here
+			_parts["sort"] = snappedf(s.last_sort_us / 1000.0, 0.1)
+			_parts["count"] = s.count()
+	_part("turn")
+	# Squares a budget left waiting: refilled a little each frame.
+	var t3 := Time.get_ticks_usec()
+	for lod in _sets.values():
+		if Time.get_ticks_usec() - t3 > SETS_BUDGET_US:
+			break
+		if (lod as ImpostorLod).has_pending():
+			(lod as ImpostorLod).drain(SETS_BUDGET_US - (Time.get_ticks_usec() - t3))
+	_part("drain")
 
 
 ## Which cells the camera wants: a flood from its own cell to every cell whose

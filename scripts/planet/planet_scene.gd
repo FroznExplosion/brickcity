@@ -47,6 +47,8 @@ var planet: PlanetBody
 var buildings: PlanetBuildings
 var trees: PlanetTrees
 var spawn_dir := Vector3.UP
+## The home town's rows a side (6; `-- --town-rows=N` for a test).
+var town_rows := 6
 var town_dirs: Array = []
 var landmark_dirs: Array = []
 var walker: PlanetWalker
@@ -228,8 +230,14 @@ func _ready() -> void:
 		town_dirs.append(Vector3(rng.randf_range(-1, 1), rng.randf_range(-1, 1), rng.randf_range(-1, 1)).normalized())
 	landmark_dirs = [_round_dir(spawn_dir, east, 2600.0), _round_dir(spawn_dir, east.rotated(spawn_dir, 2.0), 9000.0),
 			Vector3(-0.3, -0.8, 0.5).normalized()]
+	# `-- --town-rows=N`: the home town N x N instead of 6 x 6 (the cost gate's
+	# bigger town, Docs/PlanetCost.md 7); its flat pad grows with it.
+	for a in OS.get_cmdline_user_args():
+		if a.begins_with("--town-rows="):
+			town_rows = clampi(int(a.get_slice("=", 1)), 2, 14)
 	for d in town_dirs:
-		data.pads.append(PlanetBuildings.town_pad(data, d, 95.0, 70.0))
+		var flat := 95.0 * (float(town_rows) / 6.0 if d == town_dirs[0] else 1.0)
+		data.pads.append(PlanetBuildings.town_pad(data, d, flat, 70.0))
 	for d in landmark_dirs:
 		data.pads.append(PlanetBuildings.town_pad(data, d, 30.0, 40.0))
 	planet = PlanetBody.new()
@@ -239,7 +247,7 @@ func _ready() -> void:
 	planet.add_child(buildings)
 	buildings.setup(planet)
 	for d in town_dirs:
-		buildings.add_town(d, 6, 30.0, rng)
+		buildings.add_town(d, town_rows if d == town_dirs[0] else 6, 30.0, rng)
 	buildings.add_landmark(landmark_dirs[0], 80, 80, 900, rng)
 	buildings.add_landmark(landmark_dirs[1], 100, 100, 1200, rng)
 	buildings.add_landmark(landmark_dirs[2], 80, 80, 700, rng)
@@ -1152,7 +1160,16 @@ func _restore_tick(dt: float) -> void:
 	restore_tool.tick(dt, holding, from, dir, sts, space)
 
 
+## The worst _process this far, ms (the cost gate reads it).
+var process_worst_us := 0
+
 func _process(delta: float) -> void:
+	var t_in := Time.get_ticks_usec()
+	_process_body(delta)
+	process_worst_us = maxi(process_worst_us, Time.get_ticks_usec() - t_in)
+
+
+func _process_body(delta: float) -> void:
 	_fights_in -= delta
 	if _fights_in <= 0.0:
 		_fights_in = FIGHTS_EVERY

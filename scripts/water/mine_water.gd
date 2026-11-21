@@ -500,16 +500,24 @@ func _light(tile: Vector2i, lava: Array) -> void:
 			_spare_lights.append(l)
 		return
 	var v: PackedVector3Array = lava[Mesh.ARRAY_VERTEX]
+	# A light's place needs no exact centre: at most 64 vertices, evenly
+	# spread, not every one of a big pool's thousands in GDScript on every
+	# remesh of its tile.
 	var sum := Vector3.ZERO
 	var top := -INF
-	for p in v:
+	@warning_ignore("integer_division")
+	var step := maxi(1, v.size() / 64)
+	var seen := 0
+	for i in range(0, v.size(), step):
+		var p := v[i]
 		sum += p
 		top = maxf(top, p.y)
+		seen += 1
 	if l == null:
 		l = _spare_lights.pop_back() if not _spare_lights.is_empty() else _new_light()
 		_lights[tile] = l
 		l.visible = true
-	var c := sum / maxf(v.size(), 1)
+	var c := sum / maxf(seen, 1)
 	l.position = Vector3(c.x, top + 0.6, c.z)
 	# Bigger lava, a brighter, wider light.
 	var k := clampf(float(v.size()) / 400.0, 0.4, 1.6)
@@ -560,6 +568,11 @@ func report() -> String:
 	var line := "%d awake, %d tiles drawn (%d far), tick %.2f ms (%d cells, mesh %.2f), %d sections, %d rock" % [
 			BrickFluid.active_count(), drawn, far_tiles, float(s.get("tick_ms", 0.0)),
 			int(s.get("evals", 0)), float(s.get("mesh_ms", 0.0)), BrickFluid.section_count(), rock_laid]
+	# The main thread's worst wait for the water's lock since the last report
+	# (Docs/MineWater.md 11.8), and far sections let go.
+	line += ", lock wait %.2f ms (%d over 1 ms, hold %.2f), %d let go" % [
+			float(s.get("main_wait_ms", 0.0)), int(s.get("main_waits_1ms", 0)),
+			float(s.get("apply_ms", 0.0)), int(s.get("evicted", 0))]
 	if not _lights.is_empty():
 		line += ", %d lava lights" % _lights.size()
 	if fires != null and not fires.burning.is_empty():

@@ -234,9 +234,33 @@ The quick cost gate now takes three pictures of the bricks as drawn: `shots/plan
 `_wall` (8 m from a wall: its windows, stairs and furniture) and `_roof` (its studs). Checked
 by eye 2026-11-20: as the bricks should look.
 
-Left, smaller:
-- The load still has 240-530 ms frames (the spawn: the impostor bake, the brick shapes, the
-  first streaming). A fresh start is now dark over them (`PlanetScene._loading_veil`, as a saved
-  game's resume already was), lifted 20 frames after the player stands there, faded over 0.5 s.
-  The cost gate's own 5 km teleport back after the flights is 100-330 ms; play has no such jump.
-- Occluders measured within noise in this small town; they matter more in a big one.
+**The last open items (2026-11-20).**
+
+- *The gangway* is boxes too (`SpaceShip._lower_gangway`): its bricks' instance buffers and open
+  studs straight from its chunk, no bake and no mesh made on the main thread at the landing.
+  `--gate=hull` 23/0 (it walks up it).
+- *Occluders in a bigger town*: `-- --town-rows=N` makes the home town N x N (the cost gate
+  stands at its edge; its flat pad grows with it). In a 10 x 10 town (83 near, 34 in bricks) the
+  quick gate reads them on and off twice from the edge and from a street: they cull 33-36
+  objects and 30-90k triangles; the GPU moved -0.7 to +0.4 ms, inside the noise. They stay
+  (no cost seen either), but the drawn bricks are already only the 60 m circle and the shells
+  past it are cheap, so there is little left for them to hide.
+- *Flying low over the big town* showed the frames the small town hid, found by timing each
+  `_process` by part (the gate prints them: buildings, trees, scene, system):
+  - the trees' free/make-solid loop and their changed sets' re-sort had no budget: now 2 ms each
+    a frame (`PlanetTrees.CELL_BUDGET_US`, `SETS_BUDGET_US`), the rest next frame;
+  - `ImpostorLod.update(here, budget_us)` refills a set's squares inside a budget, the rest in
+    `_pending` for `drain` (other callers pass none: as before);
+  - one square emptying its near tier SHRANK its MultiMesh, and that call waited on the renderer
+    98-140 ms: an emptied tier now keeps its buffer, drawn as none and hidden;
+  - the voxel ground's main-thread work is held to 4 ms a frame (`[voxel]
+    threads/main/time_budget_ms=4` in project.godot; only the planets use Zylann's voxels).
+  Worst trees `_process` 186 ms -> 10-30 ms, the low flight's worst frame 195 ms -> 40 ms.
+  What is left of that 40 ms is a wait on the renderer at whichever call comes first (most
+  likely the voxel ground handing its meshes over from its threads); nothing in the scripts.
+- Tests: `planet_tree_probe` 12/0, `planet_tree_ai_probe` 8/0, `impostor_probe` (windowed)
+  30/0, `hurricane_probe` 21/0, `snow_probe` 13/0, gates trees 7/0, bricks 11/0, damage 12/0,
+  hull 23/0. (`mine_world_probe` would not parse against this worktree's library: it calls
+  `BrickTerrain.find_bricks`, C++ added by another chat after the library was copied.)
+
+Left: the load's 240-530 ms frames (behind the loading veil now).
