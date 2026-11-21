@@ -666,6 +666,9 @@ Each stage is merged on its own. C++ stages need the main folder's DLL rebuilt a
    is dug) crashes the scene about half the runs with no backtrace at all -- not the water's
    thread, which now reports its own; it smells of a stack overflow in the collapse's survey
    of a very big region. The gate pauses the collapse by default.
+   *2026-11-21:* not seen since the collapse split its edit boxes (TerrainCollapse.md 8.1,
+   "Surveys per box"): 5 runs of `--gate=gen --with-collapse` in a row, all to `[gen-gate] done`,
+   exit 0 (was about 1 in 2). The gate still pauses the collapse unless the flag is given.
 
 ## 15. Risks
 
