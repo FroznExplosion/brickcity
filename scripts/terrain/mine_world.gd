@@ -48,6 +48,7 @@ var _streamer: TerrainStreamer = null
 var _far: TerrainCoarse = null
 var _far_next: TerrainCoarse = null
 var _trees: TerrainTrees = null
+const TREE_NEAR_M := 25.0
 ## The underground under the surface tiles (Docs/MineWorld.md 16).
 var _deep: TerrainDeep = null
 var _rig: LightRig = null
@@ -344,6 +345,12 @@ func generate(s: Dictionary) -> void:
 	_trees.name = "Trees"
 	add_child(_trees)
 	_trees.setup(_eye_camera(), _brick_mat)
+	# Real brick trees to 25 m, cards past it: at 45 m the near trees were
+	# half the GPU (Docs/MineWorld.md 17). -- --tree-near=N for a comparison.
+	_trees.near_m = TREE_NEAR_M
+	for arg in OS.get_cmdline_user_args():
+		if arg.begins_with("--tree-near="):
+			_trees.near_m = float(arg.split("=")[1])
 	_trees.stream(int(settings.seed), _tree_chance_at, _tree_variant_at, 420.0)
 	_trees.solid_m = 64.0   # trunks the player and rounds meet
 	# The instance pool, filled now rather than by the first new ground's
@@ -2360,6 +2367,7 @@ func _run_gpu_gate() -> void:
 		settings.set_value(&"max_fps", 0, false)
 	var vp := get_viewport()
 	var size := vp.get_visible_rect().size
+	print("[gpu] trees: real bricks to %.0f m, cards past it" % _trees.near_m)
 	print("[gpu] mine world, %dx%d at render scale %.2f, msaa %d, GI %d, sun shadow %.0f m mode %d, radiance %d, glow %s, near %d tiles" % [
 			int(size.x), int(size.y), vp.scaling_3d_scale, vp.msaa_3d, LightRig.gi_level,
 			_rig.sun.directional_shadow_max_distance, _rig.sun.directional_shadow_mode,
@@ -2370,11 +2378,14 @@ func _run_gpu_gate() -> void:
 	_fly_to(e + Vector3(0, 0.2, 0), Vector3(1, 0, 0.3).normalized())
 	walker.pitch = -0.15
 	await _frames(180)
+	var tag := "near%d" % roundi(_trees.near_m)
+	await _shot(UserPaths.DEV + "mine_gpu_ground_%s.png" % tag)
 	await _gpu_view("on foot, along the ground")
 	# 2: over the land to the horizon.
 	_fly_to(e + Vector3(0, 25.0, 0), Vector3(1, 0, 0.3).normalized())
 	walker.pitch = -0.12
 	await _frames(240)
+	await _shot(UserPaths.DEV + "mine_gpu_up_%s.png" % tag)
 	await _gpu_view("25 m up, to the horizon")
 	print("[gpu] sky writes %d over the pass (LightRig.sky_writes)" % _rig.sky_writes)
 	if settings != null:
