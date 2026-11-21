@@ -29,27 +29,18 @@ render_mode cull_disabled, diffuse_burley, specular_schlick_ggx;
 // disagree about where the surface is (Water section 1).
 
 group_uniforms wave;
-uniform vec4 waves[8];
-uniform int wave_count = 2;
 // Wave GROUPS and the SHORE BAND (Water.md §8): BrickWave.group_uniform_array()
 // and shore_band_uniform(), the same numbers BrickWave::height_at uses.
-uniform vec4 groups[4];
-uniform int group_count = 0;
-uniform vec4 shore_band = vec4(0.0);
 // BrickWave.swell_blend_uniform(): (near, far, drift, 0). Within `near` m of
 // a shore the swell rolls toward it; past `far` it is directional.
-uniform vec4 swell_blend = vec4(250.0, 400.0, 1.0, 0.0);
 // BrickWave.shore_calm_uniform(): wave strength at the waterline, and the
 // distance out at which it is full.
-uniform vec2 shore_calm = vec2(0.25, 150.0);
 // The sheet's wave LOD, by DISTANCE from the camera rather than by the ring a
 // vertex is in: two rings meeting at a border then draw the same height
 // there. The effective spacing is base_cell until inner_radius, and grows in
 // step with the rings after (WaterSheet).
 uniform float lod_base_cell = 2.8;
 uniform float lod_inner_radius = 80.0;
-uniform float wave_time = 0.0;
-uniform float sea_level = 1.1;
 uniform float step_m = 0.42;
 // Snap each piece to a brick course, the way the terrain is built.
 //
@@ -138,15 +129,8 @@ uniform sampler2D pool_mask : hint_default_black, filter_nearest;
 // The same texture's G, filtered: how much of its wave the sea keeps, 0
 // against a pool's water. Where the sea meets a pool it lies at its still
 // level -- the pool's -- so no crest stands over the calm water.
-uniform sampler2D pool_calm : hint_default_white, filter_linear;
-uniform vec2 pool_mask_origin = vec2(0.0);
-uniform float pool_mask_size = 0.0;
 
 group_uniforms seabed;
-uniform sampler2D seabed_tex : hint_default_black, filter_nearest;
-uniform vec2 seabed_origin = vec2(0.0, 0.0);
-uniform vec2 seabed_extent = vec2(1.0, 1.0);
-uniform float open_sea_depth = 8.0;
 // Is there sea beyond the seabed texture?
 //
 // For a streaming world the texture is a window onto an infinite field and
@@ -154,7 +138,6 @@ uniform float open_sea_depth = 8.0;
 // saying yes drew water hovering over the void past the last tile, with the
 // sky's ground colour under it. Default no: a field with edges is the case
 // that renders wrong.
-uniform bool water_outside_field = false;
 // Waves die as the water shallows. Without this a 3 m swell drives bricks
 // straight through the beach; with it the surf flattens as it runs in, which
 // is both correct and the reason tall waves are safe to allow at all.
@@ -225,36 +208,9 @@ float hash21(vec2 p) {
     return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
 }
 
-// The swell. `cell_m` is the spacing of the vertices drawing it: a wave under
-// ~4 samples a wavelength lands between vertices and the surface boils, so on
-// the coarse rings of the sheet the short waves fade out (MvsC's
-// max_wave_number). The studded tier passes 0 and keeps everything.
-float wave_raw_lod(vec2 p, float t, float cell_m, float dist) {
-    // 0 near land (rolling toward the shore), 1 in open ocean (directional).
-    float open = smoothstep(swell_blend.x, swell_blend.y, dist);
-    float h = 0.0;
-    for (int i = 0; i < wave_count; i++) {
-        vec4 a = waves[i * 2];
-        vec4 b = waves[i * 2 + 1];
-        float len = 6.2831853 / max(a.y, 1e-4);
-        float keep = cell_m > 0.0 ? smoothstep(4.0 * cell_m, 6.0 * cell_m, len) : 1.0;
-        float directional = sin(dot(vec2(a.z, a.w), p) * a.y - b.x * t + b.y);
-        float drift = swell_blend.z * (sin(0.017 * p.x + 1.3 * float(i)) + sin(0.014 * p.y + 0.7 * float(i)));
-        float steered = sin(a.y * min(dist, swell_blend.y) + b.x * t + b.y + drift);
-        h += keep * a.x * (steered * (1.0 - open) + directional * open);
-    }
-    return h;
-}
 
-float group_factor(vec2 p, float t) {
-    float f = 1.0;
-    for (int j = 0; j < group_count; j++) {
-        vec4 a = groups[j * 2];
-        vec4 b = groups[j * 2 + 1];
-        f += a.x * sin(dot(vec2(a.z, a.w), p) * a.y - b.x * t + b.y);
-    }
-    return f;
-}
+
+#include "res://shaders/sea_wave.gdshaderinc"
 
 float total_amplitude() {
     float a = 0.0;
@@ -274,24 +230,6 @@ float seabed_at(vec2 cell) {
     return water_outside_field ? -open_sea_depth : 1.0e6;
 }
 
-/// The ground BILINEAR over the seabed lattice: the same corners the texture
-/// holds and BrickWave::band_depth reads, so the band's crests are where the
-/// CPU says they are. Nearest (seabed_at) is fine for a cull mask; a crest
-/// phased on it would come out in 2.8 m blocks.
-float lattice_ground(vec2 p) {
-    vec2 size = vec2(textureSize(seabed_tex, 0));
-    vec2 q = (p - seabed_origin) / seabed_extent * size;
-    ivec2 i0 = ivec2(floor(q));
-    vec2 f = q - vec2(i0);
-    if (i0.x < 0 || i0.y < 0 || i0.x + 1 >= int(size.x) || i0.y + 1 >= int(size.y)) {
-        return water_outside_field ? -open_sea_depth : 1.0e6;
-    }
-    float a = texelFetch(seabed_tex, i0, 0).r;
-    float b = texelFetch(seabed_tex, i0 + ivec2(1, 0), 0).r;
-    float c = texelFetch(seabed_tex, i0 + ivec2(0, 1), 0).r;
-    float d = texelFetch(seabed_tex, i0 + ivec2(1, 1), 0).r;
-    return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);
-}
 
 /// The world's stud, whatever this tier's piece size is: the grid lines are on
 /// the terrain's lattice.
@@ -317,53 +255,8 @@ float lattice_ground_min(vec2 p) {
     return min(min(a, b), min(c, d));
 }
 
-/// Metres to the nearest dry ground: the seabed texture's G channel
-/// (BrickWave.build_shore_field), bilinear like the ground.
-float lattice_distance(vec2 p) {
-    vec2 size = vec2(textureSize(seabed_tex, 0));
-    vec2 q = (p - seabed_origin) / seabed_extent * size;
-    ivec2 i0 = ivec2(floor(q));
-    vec2 f = q - vec2(i0);
-    if (i0.x < 0 || i0.y < 0 || i0.x + 1 >= int(size.x) || i0.y + 1 >= int(size.y)) {
-        return 1.0e4;
-    }
-    float a = texelFetch(seabed_tex, i0, 0).g;
-    float b = texelFetch(seabed_tex, i0 + ivec2(1, 0), 0).g;
-    float c = texelFetch(seabed_tex, i0 + ivec2(0, 1), 0).g;
-    float d = texelFetch(seabed_tex, i0 + ivec2(1, 1), 0).g;
-    return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);
-}
 
-/// The shore band: phased on DISTANCE TO THE SHORE, so crests run along
-/// every coast and roll in toward it. BrickWave::band_at, restated.
-/// shore_band = (amplitude, radians per metre, omega, reach).
-float shore_wave(vec2 p, float t, float dist) {
-    if (shore_band.x <= 0.0) {
-        return 0.0;
-    }
-    float depth = sea_level - lattice_ground(p);
-    if (depth <= 0.0) {
-        return 0.0;
-    }
-    float reach = shore_band.w;
-    float w = (0.35 + 0.65 * smoothstep(0.0, 20.0, dist)) * (1.0 - smoothstep(0.6 * reach, reach, dist))
-            * smoothstep(0.2, 1.0, depth);
-    float drift = 1.2 * sin(0.013 * p.x + 0.7) + 1.2 * sin(0.011 * p.y + 2.1);
-    return shore_band.x * w * sin(shore_band.y * dist + shore_band.z * t + drift);
-}
 
-/// The whole surface above still water: swell shaped by the groups and dying
-/// in the shallows, plus the band. BrickWave::height_at minus sea_level.
-float pool_calm_at(vec2 p) {
-    if (pool_mask_size <= 0.0) {
-        return 1.0;
-    }
-    vec2 q = (p - pool_mask_origin) / pool_mask_size;
-    if (q.x < 0.0 || q.y < 0.0 || q.x > 1.0 || q.y > 1.0) {
-        return 1.0;
-    }
-    return textureLod(pool_calm, q, 0.0).g;
-}
 
 // THE RUN-UP over a beach (the user, 2026-11-19: the waves "came up through
 // the sand"). Near the waterline the waves are damped to an even rise and
@@ -371,47 +264,10 @@ float pool_calm_at(vec2 p) {
 // water welled up out of it. Ground above still water gets the wave LATER the
 // higher it is, and less of it: the water climbs the beach terrace by
 // terrace and runs back, as a swash does.
-// THE REAL SEA's square (MineWater.md 11.8), world x0, z0, x1, z1: the
-// fluid mesher draws the sea there; these tiers leave it out and calm to
-// flat over `real_calm_m` toward it, so the two meet level.
-uniform vec4 real_rect = vec4(0.0);
-uniform float real_calm_m = 16.0;
 
-float real_ramp(vec2 p) {
-    if (real_rect.z <= real_rect.x) {
-        return 1.0;
-    }
-    vec2 o = max(max(real_rect.xy - p, p - real_rect.zw), vec2(0.0));
-    return smoothstep(0.0, real_calm_m, length(o));
-}
 
-bool in_real(vec2 p) {
-    return real_rect.z > real_rect.x && p.x > real_rect.x && p.x < real_rect.z
-            && p.y > real_rect.y && p.y < real_rect.w;
-}
 
-uniform float swash_delay = 1.4;   // seconds of delay per metre above still water
-uniform float swash_loss = 0.5;    // metres of the wave lost per metre climbed
 
-float surface_offset(vec2 p, float t, float taper, float cell_m) {
-    float above = lattice_ground(p) - sea_level;
-    if (above > 0.0) {
-        t -= above * swash_delay;
-    }
-    float dist = lattice_distance(p);
-    float band = shore_wave(p, t, dist);
-    // The band's crests are 15 m apart; rings too coarse to carry 4 samples
-    // of it leave it out.
-    if (cell_m > 0.0) {
-        band *= 1.0 - smoothstep(3.0, 5.0, cell_m);
-    }
-    // The wave strength by distance to the shore only: full out in the
-    // water, a quarter at the beach (BrickWave swell_near_shore). No depth
-    // clamp -- `taper` is 1.
-    float calm = shore_calm.x + (1.0 - shore_calm.x) * smoothstep(0.0, shore_calm.y, dist);
-    return ((wave_raw_lod(p, t, cell_m, dist) * taper * group_factor(p, t) * calm + band)
-            * pool_calm_at(p) - max(above, 0.0) * swash_loss) * real_ramp(p);
-}
 
 /// Where this cell's brick sits, in metres.
 ///
@@ -652,9 +508,6 @@ void fragment() {
                 && textureLod(pool_mask, q, 0.0).r > 0.5) {
             discard;
         }
-    }
-    if (in_real(v_world.xz)) {
-        discard;
     }
     // Never inside a floating hull's dry cells (Docs/Hulls.md 6).
     if (hull_dry(v_world)) {

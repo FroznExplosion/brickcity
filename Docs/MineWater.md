@@ -477,6 +477,34 @@ Not networked yet; what is in place so finishing it is wiring, not redesign.
 * Seen: the wave tiers' sea is shaded a little lighter than the fluid's, so the square's
   edge shows as a soft change of colour at about 50 m.
 
+### 11.9 The real sea is a band along ground, waving with the sea (2026-11-20)
+
+Replaces 11.8's square (the user: its edge showed from above, flat against waving, and the
+channel's water stood apart from the waves).
+
+* **Where:** sea within 6 studs (`REAL_BAND`) of ground at the sea's top course -- a shore, a
+  pier, a dug hole, a brick set in open sea -- is drawn by the fluid mesher; all other sea is
+  the wave tiers'. Sea columns are read in a 9 x 9 tile square round the player (three tiles a
+  tick on the water's thread); the band is drawn only there. The mesher marks the band's studs
+  (`Section::real`) and `sea_mask` hides them from the tiers, stud by stud.
+* **One surface:** `shaders/sea_wave.gdshaderinc` holds the sea's wave code and its uniforms,
+  included by water.gdshader and water_fluid.gdshader; MineWater copies the near tier's values
+  to the fluid material (wave_time each frame, the rest four times a second). Band water rides
+  the same waves (a third of them against ground, where it laps); water over ground the field
+  calls land (a channel dug inland) only laps.
+* **One look:** all fluid water uses the sea's colours (trough to crest by the wave, darker
+  with depth), copied from the sea's material. Found on the way: the fluid tops were wound so
+  that from above is their back, and with cull_disabled Godot flipped their normal down --
+  they were lit as facing down, which is why the water had been dark (first "black", then
+  "darker than the sea"). The shader now takes the mesher's normal.
+* **No cracks:** a quad a stud in the band (shared corners), and short sides (0.3 m) hanging
+  from the band's outer edge where the tiers' pieces meet it.
+* **The ocean cannot be emptied:** still water laid on the open sea joins it; a source bucket
+  dipped in the ocean takes nothing (`ray_cell` ocean); a bucket always filled free from a
+  source. Two sources still make a third. Only a brick placed where sea was moves sea water;
+  broken, the sea runs back.
+* The swimmer reads the tiers' waves over all ocean, the band included (the same waves).
+
 ## 12. What it costs (estimates — stage 1 and 5 measure them)
 
 | | Where | Estimate |

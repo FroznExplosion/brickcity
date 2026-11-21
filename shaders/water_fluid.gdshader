@@ -36,15 +36,30 @@ uniform float grid_line = 0.035;
 uniform float now_s = 0.0;
 uniform float ease_s = 0.1;
 instance uniform float swap_s = -100.0;
-// THE REAL SEA (MineWater.md 11.8): sea tops near the player carry CUSTOM0.y
+// THE REAL SEA (MineWater.md 11.9): sea tops near ground carry CUSTOM0.y
 // = 1 and in .z how open the water is (0 against ground, 1 four studs out).
-// Open water swells a little, water against ground laps up it; both fade to
-// flat at the edge of the real square (`real_rect`, this mesh's own metres:
-// x0, z0, x1, z1), where the wave tiers' sea, calmed to flat there too, takes
-// over. Drawn only: the water itself stays level.
-uniform vec4 real_rect = vec4(0.0);
-uniform float sea_swell = 0.10;
+// They ride the sea's own waves (sea_wave.gdshaderinc, the tiers' numbers),
+// so where the tiers take over the two are one surface; water against ground
+// keeps a third of the wave and laps up it. Drawn only: the water stays level.
+// Water over ground the field calls land (a channel dug inland) only laps.
 uniform float sea_lap = 0.07;
+// THE SEA'S LOOK for all water (the user: the band and the sea must not
+// differ): water.gdshader's colours, crest by the wave, darker with depth.
+// Copied from the sea's material by MineWater when there is a sea.
+uniform vec4 trough_colour : source_color = vec4(0.09, 0.26, 0.40, 1.0);
+uniform vec4 crest_colour : source_color = vec4(0.42, 0.72, 0.78, 1.0);
+uniform vec4 deep_tint : source_color = vec4(0.10, 0.28, 0.40, 1.0);
+uniform float absorption_depth = 6.0;
+uniform float water_roughness = 0.22;
+varying float v_h01;
+// The mesher's own normal, world space. With cull_disabled Godot flips
+// NORMAL on a face seen from its back, and the tops are wound so that from
+// above is their back: they were lit as if facing down -- the dark water,
+// darker than the sea next to it.
+varying vec3 v_nrm;
+varying float v_depth;
+
+#include "res://shaders/sea_wave.gdshaderinc"
 
 varying vec3 wpos;
 varying float kind;
@@ -64,22 +79,33 @@ float noise(vec2 p) {
 void vertex() {
 	float k = clamp((now_s - swap_s) / max(ease_s, 0.001), 0.0, 1.0);
 	VERTEX.y += CUSTOM0.x * (1.0 - k);
+	v_h01 = 0.5;
+	v_nrm = (MODEL_MATRIX * vec4(NORMAL, 0.0)).xyz;
+	// COLOR.r: the water's depth over 12 plates (0.14 m each), from the mesher.
+	v_depth = COLOR.r * 12.0 * 0.14;
 	if (CUSTOM0.y > 0.5) {
-		vec2 p = VERTEX.xz;
-		float e = min(min(p.x - real_rect.x, real_rect.z - p.x), min(p.y - real_rect.y, real_rect.w - p.y));
-		float fade = smoothstep(0.0, 12.0, e);
+		vec2 p = (MODEL_MATRIX * vec4(VERTEX, 1.0)).xz;
+		v_depth = max(sea_level - lattice_ground(p), 0.0);
 		float open = CUSTOM0.z;
-		float swell = sin(dot(p, vec2(0.21, 0.13)) - 1.1 * TIME) * 0.6
-				+ sin(dot(p, vec2(-0.09, 0.27)) - 0.8 * TIME + 1.7) * 0.4;
+		float wave = 0.0;
+		if (lattice_ground(p) < sea_level) {
+			wave = surface_offset(p, wave_time, 1.0, 0.0);
+		}
 		float lap = 0.5 + 0.5 * sin(1.7 * TIME + dot(p, vec2(0.9, 0.7)));
-		VERTEX.y += fade * (sea_swell * open * swell + sea_lap * (1.0 - open) * lap);
+		VERTEX.y += wave * mix(0.35, 1.0, open) + sea_lap * (1.0 - open) * lap;
+		float amp = 0.0;
+		for (int i = 0; i < wave_count; i++) {
+			amp += waves[i * 2].x;
+		}
+		v_h01 = clamp(wave / max(amp, 1e-4) * 0.5 + 0.5, 0.0, 1.0);
 	}
 	wpos = (MODEL_MATRIX * vec4(VERTEX, 1.0)).xyz;
 	kind = COLOR.g;
 }
 
 void fragment() {
-	vec3 wn = (INV_VIEW_MATRIX * vec4(NORMAL, 0.0)).xyz;
+	NORMAL = normalize((VIEW_MATRIX * vec4(v_nrm, 0.0)).xyz);
+	vec3 wn = normalize(v_nrm);
 	bool side = abs(wn.y) < 0.5;
 	// World-space texture coordinates: tops in x, z; sides along the face
 	// (x + z) and up, a fall's moving down.
@@ -105,7 +131,9 @@ void fragment() {
 		// Ripples that move the same way everywhere, slowly; the light
 		// catches them; the stud grid over it all, as on the sea.
 		float r = noise(uv * 0.9 + vec2(0.11, 0.07) * TIME) * 0.6 + noise(uv * 2.7 - vec2(0.05, 0.13) * TIME) * 0.4;
-		vec3 c = mix(water_colour, water_light, smoothstep(0.55, 0.95, r) * 0.35);
+		vec3 c = mix(trough_colour.rgb, crest_colour.rgb, v_h01);
+		c = mix(c, deep_tint.rgb, clamp(v_depth / absorption_depth, 0.0, 0.75));
+		c = mix(c, c * 1.12, smoothstep(0.55, 0.95, r) * 0.35);
 		if (!side) {
 			vec2 g = abs(fract(uv) - 0.5);
 			float line = 1.0 - smoothstep(0.5 - grid_line, 0.5, max(g.x, g.y));
@@ -114,8 +142,8 @@ void fragment() {
 		float foam = kind > 0.75 ? 0.3 * smoothstep(0.4, 0.9, r) : 0.0;
 		ALBEDO = mix(c, foam_colour, foam);
 		// Not a mirror: under a dark sky a glossy top read as black.
-		ROUGHNESS = 0.22 + foam * 0.5;
-		SPECULAR = 0.4;
+		ROUGHNESS = water_roughness + foam * 0.5;
+		SPECULAR = 0.7;
 		// Ripples tilt the normal a little, the same way everywhere.
 		vec2 e = vec2(0.15, 0.0);
 		float rx = noise((uv + e.xy) * 0.9 + vec2(0.11, 0.07) * TIME) - noise((uv - e.xy) * 0.9 + vec2(0.11, 0.07) * TIME);
