@@ -434,9 +434,14 @@ temperature 59-63 C):
   the detail on the spot: 29 ms of `_job_wait` on the main thread. The new
   tier now lands its splits while still hidden, `cover(.., false)` a frame,
   and swaps in when `refining()` is false. Worst walking frame 41 ms (swap
-  7.8 ms). Left in that frame, for the terrain chat: one `_rebuild_ring` in
-  `build_poll(2.0)`, 14 ms -- a merged ring is the smallest slice, so the 2 ms
-  budget cannot hold. Fast flight is held (no refines), so `--gate=flight` is
+  7.8 ms). Left in that frame: one `_rebuild_ring` in `build_poll(2.0)`,
+  14 ms -- a merged ring is the smallest slice, so the 2 ms budget could not
+  hold; each ring (~48 blocks, ~200k vertices) was 6-9 ms of
+  `add_surface_from_arrays`. Now the rings' meshes are made on the worker
+  pool once the bakes are in (`_start_ring_meshes`, for a new tier and for
+  every split that lands) and the main thread only attaches them: walking,
+  **0 frames over 33 ms**, swap 1.9 ms, GPU median 8.2 ms (quiet machine,
+  72 C peak). Fast flight is held (no refines), so `--gate=flight` is
   as before: 34 ms worst, 1 over 33 ms, 0 holes (70-82 C, warmer than 58).
 
 ## 15. The ground comes down
