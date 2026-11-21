@@ -288,6 +288,16 @@ func set_sky(day: float, air: float, atmo: Color, sun_height: float, up: Vector3
 			and absf(air - float(_sky_key[1])) < SKY_EPS and atmo.is_equal_approx(_sky_key[2]) \
 			and absf(sun_height - float(_sky_key[3])) < SKY_EPS \
 			and up.angle_to(_sky_key[4]) < SKY_UP_RAD and star_colour.is_equal_approx(_sky_key[5]):
+		# What a scene scales after this call every frame (the mine world's
+		# caves: ambient, sky energy `*= cave`) is put back to what this call
+		# set, so the scaling starts again from it instead of compounding. The
+		# ambient and the sun's colour cost nothing; the sky's energy is
+		# written only when someone changed it (a write redraws the radiance).
+		env.ambient_light_energy = _ambient_set
+		env.ambient_light_color = _ambient_colour_set
+		sun.light_color = sun_colour
+		if sky_mat.sky_energy_multiplier != _sky_energy_set:
+			sky_mat.sky_energy_multiplier = _sky_energy_set
 		_update_boxes()
 		return
 	_sky_key = [day, air, atmo, sun_height, up, star_colour]
@@ -311,7 +321,16 @@ func set_sky(day: float, air: float, atmo: Color, sun_height: float, up: Vector3
 	env.sky_rotation = Quaternion(Vector3.UP, up).get_euler()
 	sun_colour = sunlight_colour(star_colour, sun_height, air)
 	sun.light_color = sun_colour
+	_ambient_set = env.ambient_light_energy
+	_ambient_colour_set = env.ambient_light_color
+	_sky_energy_set = sky_mat.sky_energy_multiplier
 	_update_boxes()
+
+
+## What the last full set_sky wrote, put back by the calls that skip.
+var _ambient_set := 0.0
+var _ambient_colour_set := Color.BLACK
+var _sky_energy_set := 1.0
 
 
 # --- exposure ------------------------------------------------------------------

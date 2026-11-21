@@ -128,6 +128,7 @@ static func cached_images(data: PlanetData, width := 512, height_px := 256) -> D
 				"biome_image": b.biome_image, "color_image": b.color_image, "amplitude": b.amplitude}))
 		w.close()
 		DirAccess.rename_absolute(tmp, path)
+		UserPaths.prune_cache()
 	return b
 
 

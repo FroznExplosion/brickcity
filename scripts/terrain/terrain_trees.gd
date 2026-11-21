@@ -54,6 +54,8 @@ const RESORT_METRES := 1.0
 ## scatter serves the biome world and nothing is copied.
 const STREAM_CELL := 128
 const STREAM_BUDGET_US := 2500
+## A set's squares refilled at most this a frame; the rest the frames after.
+const SETS_BUDGET_US := 2000
 var streaming := false
 var keep_m := 420.0
 var drop_m := 500.0
@@ -341,7 +343,18 @@ func _process_body(delta: float) -> void:
 	_frame += 1
 	if streaming and camera != null:
 		_stream_step()
-	if camera == null or _sets.is_empty() or _frame % UPDATE_EVERY >= _sets.size():
+	if camera == null or _sets.is_empty():
+		return
+	# Squares a budget left waiting (ImpostorLod.update's): refilled a little each
+	# frame. One set's whole refill was a 44-140 ms frame flying low over a forest
+	# on the planet (Docs/PlanetCost.md 7); these sets are as big.
+	var t_d := Time.get_ticks_usec()
+	for lod in _sets.values():
+		if Time.get_ticks_usec() - t_d > SETS_BUDGET_US:
+			break
+		if (lod as ImpostorLod).has_pending():
+			(lod as ImpostorLod).drain(SETS_BUDGET_US - (Time.get_ticks_usec() - t_d))
+	if _frame % UPDATE_EVERY >= _sets.size():
 		return
 	# One set on each of the first frames of every UPDATE_EVERY.
 	var keys := _sets.keys()
@@ -352,7 +365,7 @@ func _process_body(delta: float) -> void:
 	if was.distance_to(here) < RESORT_METRES:
 		return
 	_sorted_at[key] = here
-	(_sets[key] as ImpostorLod).update(here)
+	(_sets[key] as ImpostorLod).update(here, SETS_BUDGET_US)
 
 
 ## Every set, now: after trees were added or taken away.
