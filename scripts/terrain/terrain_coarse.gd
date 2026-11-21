@@ -575,6 +575,12 @@ func cover(streamer: TerrainStreamer, wait := true) -> void:
 			_far_hidden += 1
 
 
+## A split on the workers, or done and not yet put in (the next `cover`
+## does): the mine world shows a re-anchored tier only when there is none.
+func refining() -> bool:
+	return not _refine_job.is_empty()
+
+
 ## Split any coarse block the detail has walked into, down to the lattice
 ## the detail is aligned on.
 ##

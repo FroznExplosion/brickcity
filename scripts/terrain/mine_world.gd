@@ -116,6 +116,7 @@ var _refresh_in := 0.0
 var _gen_ms := 0.0
 var _reanchors := 0
 var _last_reanchor_ms := 0.0
+var _reanchor_parts := ""
 var _gate := false
 var _water_gate := false
 var _biome_names: PackedStringArray
@@ -785,6 +786,7 @@ func _process(delta: float) -> void:
 					% [_warm.size(), prewarm_ms, _warm_frame_ms])
 			TerrainTile.prewarm_end(_warm)
 			_warm = []
+	var q0 := Time.get_ticks_usec()
 	_origin_step()
 	var eye := _eye()
 	_speed_step(eye, delta)
@@ -804,7 +806,9 @@ func _process(delta: float) -> void:
 	_follow_far(eye)
 	var p3 := Time.get_ticks_usec()
 	_ptimes = {"near": (pd - p0) / 1000.0, "deep": (p1 - pd) / 1000.0, "far": (p2 - p1) / 1000.0,
-			"reanchor": (p3 - p2) / 1000.0, "swapped": _reanchors != re0}
+			"reanchor": (p3 - p2) / 1000.0, "swapped": _reanchors != re0,
+			# Before the tiers: origin shift, speed, landed breaks, edits.
+			"pre": (p0 - q0) / 1000.0}
 	if not on_foot:
 		FpsRig.follow_flight(cam, walker)
 	if not on_foot and walker.global_position.y < -500.0:
@@ -817,6 +821,11 @@ func _process(delta: float) -> void:
 	if _hud_in <= 0.0:
 		_hud_in = 0.2
 		_update_hud()
+	# After the tiers (day and night, autosave, HUD), and this whole _process:
+	# a slow frame's process time past it is other nodes' (--gate=stop).
+	var q1 := Time.get_ticks_usec()
+	_ptimes["post"] = (q1 - p3) / 1000.0
+	_ptimes["all"] = (q1 - q0) / 1000.0
 
 
 ## An endless world: when the player is REANCHOR_TILES from where the far
@@ -835,18 +844,30 @@ func _follow_far(eye: Vector3) -> void:
 				_far_next = null
 		return
 	# A slice a frame: the new tier is hidden until it is all in.
+	var b0 := Time.get_ticks_usec()
 	if not _far_next.build_poll(2.0):
 		return
+	# Its splits round the detail land while it is still hidden, one call a
+	# frame that never waits. The swap's `cover(_streamer)` waited for them:
+	# 29 ms on the main thread at every re-anchor, the walk's one slow frame
+	# (CLAUDE.md: no waiting on a worker during play).
 	var t0 := Time.get_ticks_usec()
-	_far_next.cover(_streamer)
+	_far_next.cover(_streamer, false)
+	if _far_next.refining():
+		return
+	var t1 := Time.get_ticks_usec()
 	_far_next.visible = true
+	var t2 := Time.get_ticks_usec()
 	remove_child(_far)
+	var t3 := Time.get_ticks_usec()
 	_far.queue_free()
 	_far = _far_next
 	_far.hold = fast_hold
 	_far_next = null
 	_reanchors += 1
 	_last_reanchor_ms = float(Time.get_ticks_usec() - t0) / 1000.0
+	_reanchor_parts = "last poll %.1f, cover %.1f, show %.1f, remove %.1f ms" % [(t0 - b0) / 1000.0,
+			(t1 - t0) / 1000.0, (t2 - t1) / 1000.0, (t3 - t2) / 1000.0]
 
 
 ## The sun goes round once a DAY_SECONDS; the sky, the ambient and the eye's
@@ -2509,10 +2530,38 @@ func _run_stop_gate() -> void:
 	var speed := 6.0 if walk else 50.0
 	var secs := 15000 if walk else 8000
 	var stud := BrickWorld.get_stud_metres()
-	_fly_to(_eye() + Vector3(0, 1.0 if walk else 10.0, 0), Vector3(1, -0.1, 0.3).normalized())
-	walker.pitch = -0.15 if walk else -0.3
-	await _frames(30)
+	var plate := BrickWorld.get_plate_metres()
+	# --walk --cave: the walk is in a cave, 4-28 m under the ground, steered
+	# along the cave floor (_cave_steer); its own cost is printed apart.
+	var cave := walk and "--cave" in OS.get_cmdline_user_args()
 	var dir := Vector3(1.0, 0.0, 0.3).normalized()
+	var cpos := Vector3.ZERO
+	var cfloor := 0
+	var cave_us := 0
+	var cave_turns := 0
+	var cave_back := 0
+	var cave_far := 0.0
+	var cave_rock := 0
+	var cave0 := Vector3.ZERO
+	if cave:
+		var e := _eye()
+		var c := _find_walk_cave(Vector2i(floori(e.x / stud), floori(e.z / stud)))
+		if c.x == 1 << 30:
+			print("[mine-stop] no cave room within 900 studs: SKIPPED")
+			get_tree().quit()
+			return
+		cfloor = c.y
+		cpos = Vector3((c.x + 0.5) * stud, (c.y + 1) * plate, (c.z + 0.5) * stud)
+		dir = _cave_open_dir(c.x, c.y, c.z)[0]
+		cave0 = cpos
+		print("[mine-stop] cave walk from (%d, %d, %d), %.0f m under the ground" % [c.x, c.y, c.z,
+				_ground_m(c.x, c.z) - cpos.y])
+		_fly_to(cpos + Vector3(0, 1.7, 0), dir)
+		walker.pitch = -0.1
+	else:
+		_fly_to(_eye() + Vector3(0, 1.0 if walk else 10.0, 0), Vector3(1, -0.1, 0.3).normalized())
+		walker.pitch = -0.15 if walk else -0.3
+	await _frames(30)
 	var t0 := Time.get_ticks_msec()
 	var mv_gpu: Array[float] = []
 	var mv_tris := 0.0
@@ -2524,8 +2573,25 @@ func _run_stop_gate() -> void:
 	var mv_worst: Array = []
 	var mv_slow := 0
 	while Time.get_ticks_msec() - t0 < secs:
-		walker.global_position += dir * speed * get_process_delta_time()
-		if walk:
+		if cave:
+			var cu := Time.get_ticks_usec()
+			var st: Array = _cave_steer(cpos, cfloor, dir, speed * get_process_delta_time())
+			cpos = st[0]
+			cfloor = st[1]
+			if st[2] != dir:
+				cave_turns += 1
+			if st[3] == 2:
+				cave_back += 1
+			elif st[3] == 3:
+				cave_rock += 1
+			dir = st[2]
+			cave_far = maxf(cave_far, Vector2(cpos.x - cave0.x, cpos.z - cave0.z).length())
+			walker.place(to_global(cpos + Vector3(0, 1.7, 0)), dir)
+			walker.pitch = -0.1
+			cave_us = maxi(cave_us, Time.get_ticks_usec() - cu)
+		else:
+			walker.global_position += dir * speed * get_process_delta_time()
+		if walk and not cave:
 			var tp := to_local(walker.global_position)
 			var gy := _ground_m(floori(tp.x / stud), floori(tp.z / stud))
 			walker.global_position.y = gy + 1.7
@@ -2533,15 +2599,25 @@ func _run_stop_gate() -> void:
 		if clock.last_ms > 33.3:
 			mv_slow += 1
 			mv_worst.append([clock.last_ms, float(clock.last.get("process", 0.0)), float(clock.last.get("draw", 0.0)),
-					float(_ptimes.get("near", 0.0)), float(_ptimes.get("far", 0.0)), float(_ptimes.get("deep", 0.0))])
+					float(_ptimes.get("near", 0.0)), float(_ptimes.get("far", 0.0)), float(_ptimes.get("deep", 0.0)),
+					float(clock.last.get("scripts", 0.0)), float(clock.last.get("step", 0.0)),
+					_trees.last_us / 1000.0, water.last_us / 1000.0, collapse.last_us / 1000.0,
+					float(_ptimes.get("reanchor", 0.0)), float(_ptimes.get("pre", 0.0)),
+					float(_ptimes.get("post", 0.0)), float(_ptimes.get("all", 0.0))])
 		if Time.get_ticks_msec() - t0 > secs - 4000:
 			mv_gpu.append(float(clock.last.get("gpu", 0.0)))
 			mv_tris = maxf(mv_tris, float(clock.last.get("tris_M", 0.0)))
 	TerrainTile.profile_instances = false
 	mv_worst.sort_custom(func(x: Array, y: Array) -> bool: return x[0] > y[0])
-	print("[mine-stop] moving: %d frames over 33 ms; the worst (ms, process, draw, near, far, deep): %s" % [
-			mv_slow, mv_worst.slice(0, 6).map(func(r: Array) -> String: return "%.0f/%.0f/%.0f/%.1f/%.1f/%.1f" % r)])
+	print("[mine-stop] moving: %d frames over 33 ms; the worst (ms, process, draw, near, far, deep, scripts, step, trees, water, collapse, reanchor, pre, post, all of the mine's _process): %s" % [
+			mv_slow, mv_worst.slice(0, 6).map(func(r: Array) -> String: return "%.0f/%.0f/%.0f/%.1f/%.1f/%.1f/%.1f/%.1f/%.1f/%.1f/%.1f/%.1f/%.1f/%.1f/%.1f" % r)])
 	print("[mine-stop] moving: near tier %s" % _streamer.report())
+	if _reanchors > 0:
+		print("[mine-stop] moving: far rings re-anchored %d times, the last %.1f ms (%s)" % [_reanchors,
+				_last_reanchor_ms, _reanchor_parts])
+	if cave:
+		print("[mine-stop] cave walk: reached %.0f m from the start, %d turns, %d dead ends, %d frames in rock (no way found), steering worst %.2f ms (in process); deep tier %s"
+				% [cave_far, cave_turns, cave_back, cave_rock, cave_us / 1000.0, _deep.report()])
 	var inst_keys := TerrainTile.instance_ms.keys()
 	inst_keys.sort_custom(func(x, y) -> bool: return float(TerrainTile.instance_ms[x]) > float(TerrainTile.instance_ms[y]))
 	print("[mine-stop] moving: instance steps %s" % [inst_keys.slice(0, 10).map(func(k) -> String: return "%s %.1f" % [k, float(TerrainTile.instance_ms[k])])])
@@ -2605,6 +2681,106 @@ func _run_stop_gate() -> void:
 				x.draw, x.near, x.deep, x.far, x.trees, x.water, x.coll, x.water_max, x.built, x.bev, x.far_n, x.deep_n])
 	print("[mine-stop] %s | bevel hand-over worst %.1f ms | water %s" % [_streamer.report(), _streamer.bevel_ms, water.report()])
 	get_tree().quit()
+
+
+## --cave's start: a cave room 4-28 m under the ground (tall enough to
+## stand in, a floor 3 x 3 studs) near `c0`, studs. x = 1 << 30: none.
+func _find_walk_cave(c0: Vector2i) -> Vector3i:
+	for r in range(0, 900, 6):
+		for k in 8:
+			var a := TAU * k / 8.0 + r * 0.37
+			var x := c0.x + int(r * cos(a))
+			var z := c0.y + int(r * sin(a))
+			var top := BrickTerrain.surface_plate(x, z)
+			var yp := top - 30
+			while yp > top - 200 and BrickTerrain.solid_at(x, yp, z) != 0:
+				yp -= 1
+			if yp <= top - 200:
+				continue
+			while yp > top - 220 and BrickTerrain.solid_at(x, yp, z) == 0:
+				yp -= 1
+			if yp <= BrickTerrain.get_bedrock_plate() or not _cave_body_free(x, yp, z):
+				continue
+			var flat := true
+			for dz in range(-1, 2):
+				for dx in range(-1, 2):
+					if _cave_floor(x + dx, z + dz, yp) != yp:
+						flat = false
+			# Not a pocket: a way out at least 60 studs (21 m) long.
+			if flat and int(_cave_open_dir(x, yp, z)[1]) >= 60:
+				return Vector3i(x, yp, z)
+	return Vector3i(1 << 30, 0, 0)
+
+
+## Room for the walker over a floor brick at plate `fp`: 13 plates (1.8 m).
+func _cave_body_free(x: int, fp: int, z: int) -> bool:
+	if BrickTerrain.solid_at(x, fp, z) == 0:
+		return false
+	for k in range(1, 14, 2):
+		if BrickTerrain.solid_at(x, fp + k, z) != 0:
+			return false
+	return true
+
+
+## The floor a walker at floor `fp` reaches in column (x, z): a step up or
+## down of 6 plates (0.8 m). Not more down: from a deeper pit it could not
+## climb back. -(1 << 30): none.
+func _cave_floor(x: int, z: int, fp: int) -> int:
+	for y in range(fp + 6, fp - 7, -1):
+		if _cave_body_free(x, y, z):
+			return y
+	return -(1 << 30)
+
+
+## The way out of the start with the longest walk, of 16: [dir, studs].
+func _cave_open_dir(x: int, fp: int, z: int) -> Array:
+	var stud := BrickWorld.get_stud_metres()
+	var best := Vector3(1, 0, 0)
+	var best_n := -1
+	for k in 16:
+		var d := Vector3(cos(TAU * k / 16.0), 0, sin(TAU * k / 16.0))
+		var f := fp
+		var n := 0
+		while n < 60:
+			var q := Vector3((x + 0.5) * stud, 0, (z + 0.5) * stud) + d * (n + 1) * stud
+			f = _cave_floor(floori(q.x / stud), floori(q.z / stud), f)
+			if f == -(1 << 30):
+				break
+			n += 1
+		if n > best_n:
+			best_n = n
+			best = d
+	return [best, best_n]
+
+
+## One step of the cave walk: `pos` (terrain frame, the feet), on floor
+## `fp`, heading `dir`, `step` metres. Looks 1.2 m ahead; blocked, it
+## follows the wall on its left: right turns first (to 157 degrees), then
+## left, else back, so it leaves a dead end instead of bouncing in it. Returns
+## [pos, floor, dir, 0 ahead | 1 turned | 2 turned back | 3 no way].
+func _cave_steer(pos: Vector3, fp: int, dir: Vector3, step: float) -> Array:
+	var stud := BrickWorld.get_stud_metres()
+	var plate := BrickWorld.get_plate_metres()
+	var how := 0
+	var tries := [0.0]
+	for i in range(1, 8):
+		tries.append(-i * PI / 8.0)
+	for i in range(1, 8):
+		tries.append(i * PI / 8.0)
+	tries.append(PI)
+	for t: float in tries:
+		var d := dir.rotated(Vector3.UP, t)
+		var la := pos + d * 1.2
+		var f := _cave_floor(floori(la.x / stud), floori(la.z / stud), fp)
+		if f == -(1 << 30):
+			continue
+		var np := pos + d * step
+		var nf := _cave_floor(floori(np.x / stud), floori(np.z / stud), fp)
+		if nf == -(1 << 30):
+			continue
+		how = 0 if t == 0.0 else (2 if t == PI else 1)
+		return [Vector3(np.x, (nf + 1) * plate, np.z), nf, d, how]
+	return [pos, fp, dir, 3]
 
 
 ## -- --gate=spawn: the first new ground after the world is made. Flying at

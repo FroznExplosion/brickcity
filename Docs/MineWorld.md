@@ -427,6 +427,18 @@ temperature 59-63 C):
   at 58 C: worst frame 30 ms, none over 33 ms during the fast flight (42 ms
   and 2 before); slowing down after it, 42 ms worst, one over.
 
+- **Walking, the re-anchor waited on the workers** (2026-11-21, the
+  collapse chat's `--gate=stop --walk`, quiet machine): one frame of 57-62 ms
+  in every walk, 52 of it process time, 42-44 ms in `_follow_far`. The swap
+  called `cover(_streamer)`, whose default `wait` finishes every split round
+  the detail on the spot: 29 ms of `_job_wait` on the main thread. The new
+  tier now lands its splits while still hidden, `cover(.., false)` a frame,
+  and swaps in when `refining()` is false. Worst walking frame 41 ms (swap
+  7.8 ms). Left in that frame, for the terrain chat: one `_rebuild_ring` in
+  `build_poll(2.0)`, 14 ms -- a merged ring is the smallest slice, so the 2 ms
+  budget cannot hold. Fast flight is held (no refines), so `--gate=flight` is
+  as before: 34 ms worst, 1 over 33 ms, 0 holes (70-82 C, warmer than 58).
+
 ## 15. The ground comes down
 
 What an edit leaves hanging falls: loose ground as pieces (they stay, are
