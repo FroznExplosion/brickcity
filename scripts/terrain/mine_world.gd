@@ -3324,7 +3324,6 @@ func _run_sea_gate() -> void:
 			(Vector3(dir.x, 0, dir.y) * 0.6 - along).normalized())
 	walker.pitch = -0.35
 	await _frames(40)
-	print("[sea-gate] real sea square %s (tiles)" % water.real_rect)
 	for k in 3:
 		await _shot(dev + "sea_beach_%d.png" % k)
 		await _frames(60)

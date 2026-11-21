@@ -571,7 +571,10 @@ func take_fluid() -> bool:
 			if int(h.data.get("fluid", 0)) != 0 or int(hit.kind) != BrickFluid.SOURCE:
 				return false
 			_set_data(h, "fluid", int(hit.fluid))
-			BrickFluid.remove(hit.cell, -1)
+			# The ocean is infinite: a bucket of it takes nothing away
+			# (Docs/MineWater.md 11.9). Only placing a brick moves sea water.
+			if not bool(hit.get("ocean", false)):
+				BrickFluid.remove(hit.cell, -1)
 			log_blocks.append("source bucket take %s" % hit.cell)
 			return true
 	BrickFluid.remove(hit.cell, -1)
