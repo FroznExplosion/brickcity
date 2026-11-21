@@ -442,6 +442,31 @@ func _run() -> void:
 		_ok("a tile of open sea draws no top", (sm.water as Array).is_empty())
 		_ok("surface_at in the sea", absf(BrickFluid.surface_at(
 				Vector3(found.x * 0.35, sea - 1.0, found.y * 0.35)) - sea) < 0.01)
+		# 11.9: still water laid on the open sea joins it.
+		BrickFluid.place(Vector3i(found.x + 3, top + 1, found.y), 1, BrickFluid.STILL, 3)
+		BrickFluid.tick_now(6)
+		# (It goes in the tick that places it: nothing to see before.)
+		_ok("still water on the open sea joins it", _amt(found.x + 3, top + 1, found.y) == 0
+				and _region_units(found.x - 6, found.x + 12, found.y - 9, found.y + 9, top + 1) == 0
+				and int(_info(found.x + 3, top, found.y).kind) == BrickFluid.SOURCE,
+				"%d left" % _region_units(found.x - 6, found.x + 12, found.y - 9, found.y + 9, top + 1))
+		# 11.9: a brick set in the open sea gets a band of real sea round it,
+		# six studs; the wave tiers' mask hides those studs and no others.
+		BrickFluid.set_real_sea(true)
+		BrickFluid.set_centre(Vector3(found.x * 0.35, sea, found.y * 0.35), 100000.0)
+		var plo := Vector3i(found.x, 0, found.y)
+		var phi := Vector3i(found.x, top * 3 + 8, found.y)
+		BrickTerrain.fill_box(plo, phi, 4, false)
+		BrickFluid.terrain_changed(plo, phi)
+		BrickFluid.tick_now(4)
+		var bm: Dictionary = BrickFluid.build_tile_mesh(floori(found.x / 32.0), floori(found.y / 32.0))
+		var mk := BrickFluid.sea_mask(found.x - 10, found.y - 10, 21)
+		var near_hidden := mk[(10 * 21 + 10 + 3) * 2] == 255 and mk[(10 * 21 + 10 + 6) * 2] == 255
+		var far_shown := mk[(10 * 21 + 10 + 8) * 2] == 0
+		_ok("a brick in the sea gets a band of real sea", (bm.water as Array).size() > 0 and near_hidden and far_shown,
+				"near hidden %s, 8 studs out shown %s" % [near_hidden, far_shown])
+		BrickFluid.set_real_sea(false)
+		BrickFluid.tick_now(1)
 	# 11. Generated lava pools and springs (stage 8): lava in cave air under
 	# the lava line, drawn once its tile is primed; springs out of cliff faces
 	# run once primed.

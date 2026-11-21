@@ -94,14 +94,14 @@ var fires: Node3D = null
 var _lights := {}                      ## Vector2i -> OmniLight3D
 var _burn_in := 0.0
 var _queued_meshes := {}               ## Vector2i -> a take()'s mesh entry
-## The real sea (Docs/MineWater.md 11.8): the square of tiles the fluid
-## mesher draws the sea in, once its meshes are all swapped in; the one
-## waiting for that.
-var real_rect := Rect2i()
-var _real_pending := Rect2i()
-var _real_waiting := false
-var _sea_rect_set := Vector4.ZERO
-const REAL_CALM_M := 16.0
+## The real sea's band (Docs/MineWater.md 11.9) waves with the tiers' own
+## waves: these of the near tier's shader parameters are copied to the fluid
+## water's material (sea_wave.gdshaderinc), wave_time every frame.
+const SEA_WAVE_PARAMS := ["waves", "wave_count", "groups", "group_count", "shore_band", "swell_blend",
+		"shore_calm", "sea_level", "pool_calm", "pool_mask_origin", "pool_mask_size", "seabed_tex",
+		"seabed_origin", "seabed_extent", "open_sea_depth", "water_outside_field", "swash_delay",
+		"swash_loss", "trough_colour", "crest_colour", "deep_tint", "absorption_depth", "water_roughness"]
+var _wave_copy_in := 0.0
 const MESH_SWAPS_PER_FRAME := 6
 var _spare_lights: Array[OmniLight3D] = []
 
@@ -148,10 +148,7 @@ func reset_world(sea_m: float, near_tiles: int, p_sea_on: bool, p_wave_scale := 
 	field_moves = 0
 	_primed.clear()
 	_queued_meshes.clear()
-	real_rect = Rect2i()
-	_real_waiting = false
-	_sea_rect_set = Vector4.ZERO
-	_water_mat.set_shader_parameter("real_rect", Vector4.ZERO)
+	_wave_copy_in = 0.0
 	BrickFluid.set_real_sea(p_sea_on)
 	if fires != null:
 		fires.clear()
@@ -229,7 +226,7 @@ func _process_body(delta: float) -> void:
 		sea.follow(eye, delta)
 		_follow_field(delta)
 	_swap_some()
-	_real_sea_step()
+	_copy_sea_waves(delta)
 	_underwater(eye)
 	_burn_in -= delta
 	if _burn_in <= 0.0:
@@ -244,7 +241,7 @@ func step(ticks: int) -> void:
 	apply(BrickFluid.take())
 	while not _queued_meshes.is_empty():
 		_swap_some()
-	_real_sea_step()
+	_copy_sea_waves(1.0)
 
 
 func apply(res: Dictionary) -> void:
@@ -256,9 +253,7 @@ func apply(res: Dictionary) -> void:
 	# still waiting.
 	for m in res.get("meshes", []):
 		_queued_meshes[m.tile] = m
-	if res.has("real_rect"):
-		_real_pending = res["real_rect"]
-		_real_waiting = true
+
 	if sea != null and bool(res.get("mask_changed", false)):
 		sea.fluid_mask_dirty = true
 	# Rock the lava made: (x, z, first plate, last plate, material) a cell.
@@ -356,12 +351,8 @@ func surface_at(p: Vector3) -> float:
 		return s
 	# One native call (it built a Dictionary a query, many a frame).
 	if BrickFluid.ocean_at(p):
-		# In the real sea's square the water is the fluid's own; toward it the
-		# tiers' waves calm to flat (as drawn).
-		var r := _real_ramp(p)
-		if r <= 0.0:
-			return s
-		return maxf(s, level + (float(sea.surface_at(p)) - level) * r)
+		# The band's water and the tiers' sea ride the same waves.
+		return maxf(s, float(sea.surface_at(p)))
 	return s
 
 
@@ -422,40 +413,20 @@ func _burn(delta: float) -> void:
 # ---------------------------------------------------------------------------
 # Meshes
 
-## The real sea's square: once a new one's meshes are all in, the tiers move
-## their hole there and the mesher may drop the old one. The tiers' rect is
-## in world metres, so it follows the host (origin shifts).
-func _real_sea_step() -> void:
-	if _real_waiting and _queued_meshes.is_empty():
-		_real_waiting = false
-		real_rect = _real_pending
-		var tm := TILE_STUDS * BrickWorld.get_stud_metres()
-		_water_mat.set_shader_parameter("real_rect", Vector4(real_rect.position.x * tm, real_rect.position.y * tm,
-				real_rect.end.x * tm, real_rect.end.y * tm))
-		BrickFluid.real_sea_shown(real_rect)
-	if sea == null:
+## The sea's wave numbers onto the fluid water (the band waves with the
+## tiers): the clock every frame, the rest four times a second (the field and
+## the mask move now and then). CPU-side material values, no read-back.
+func _copy_sea_waves(delta: float) -> void:
+	if sea == null or sea.near == null or sea.near._mat == null:
 		return
-	var r := Vector4.ZERO
-	if real_rect.size.x > 0:
-		var tm := TILE_STUDS * BrickWorld.get_stud_metres()
-		var a: Vector3 = host.to_global(Vector3(real_rect.position.x * tm, 0.0, real_rect.position.y * tm))
-		var b: Vector3 = host.to_global(Vector3(real_rect.end.x * tm, 0.0, real_rect.end.y * tm))
-		r = Vector4(minf(a.x, b.x), minf(a.z, b.z), maxf(a.x, b.x), maxf(a.z, b.z))
-	if r != _sea_rect_set:
-		_sea_rect_set = r
-		sea._set_mask_param("real_rect", r)
-		sea._set_mask_param("real_calm_m", REAL_CALM_M)
-
-
-## 0 inside the real sea's square, rising to 1 over REAL_CALM_M out of it:
-## the tiers' waves there (water.gdshader real_ramp). `p` in host metres.
-func _real_ramp(p: Vector3) -> float:
-	if real_rect.size.x <= 0:
-		return 1.0
-	var tm := TILE_STUDS * BrickWorld.get_stud_metres()
-	var ox := maxf(maxf(real_rect.position.x * tm - p.x, p.x - real_rect.end.x * tm), 0.0)
-	var oz := maxf(maxf(real_rect.position.y * tm - p.z, p.z - real_rect.end.y * tm), 0.0)
-	return smoothstep(0.0, REAL_CALM_M, Vector2(ox, oz).length())
+	var src: ShaderMaterial = sea.near._mat
+	_water_mat.set_shader_parameter("wave_time", src.get_shader_parameter("wave_time"))
+	_wave_copy_in -= delta
+	if _wave_copy_in > 0.0:
+		return
+	_wave_copy_in = 0.25
+	for n in SEA_WAVE_PARAMS:
+		_water_mat.set_shader_parameter(n, src.get_shader_parameter(n))
 
 
 ## A few of the waiting meshes into their tiles, nearest the eye first.
