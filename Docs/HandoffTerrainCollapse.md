@@ -112,8 +112,8 @@ peak 90 C, never held back. It used to crash about 1 run in 2, so the fix holds.
 **Items 2 and 3 done 2026-11-21:** the cave walk is TerrainCollapse.md 8.3.
 The slow walking frame (69 ms then, 57-62 now) was the far rings'
 re-anchor waiting on the workers, not the collapse: fixed, now 41 ms
-(MineWorld.md 14). Its last 14 ms (`_rebuild_ring` in one frame) is the
-terrain chat's.
+(MineWorld.md 14). Its last 14 ms (`_rebuild_ring` in one frame) went too:
+ring meshes are made on a worker now, and the walk has no frame over 33 ms.
 
 Item 1 still waits for the sections chat. Item 4 stays as it is for now (the
 user's answer, 2026-11-21).
