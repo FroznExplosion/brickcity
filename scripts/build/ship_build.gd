@@ -46,6 +46,39 @@ const BRIDGES := [Vector2i(10, 8), Vector2i(6, 6)]
 
 
 ## {ok, why, recipe, plan, stats, seat: Vector3i, decks}.
+## Grown ahead, on a worker (Docs/PlanetCost.md 9): `start` while a scene loads
+## other things, `finish` before anything else touches the room caches it uses
+## (KitFurnish: RoomManifest, RoomTemplates), `take` where it is wanted. Without
+## a `start`, `take` gives {} and the caller grows it itself.
+static var _ahead := {}   # seed -> [task id, [result]]
+
+static func start(seed: int) -> void:
+	if _ahead.has(seed):
+		return
+	var holder := [null]
+	var task := WorkerThreadPool.add_task(func() -> void:
+			holder[0] = make(seed), false, "ship grown ahead")
+	_ahead[seed] = [task, holder]
+
+
+## Waited for (at load): its result kept for `take`.
+static func finish(seed: int) -> void:
+	var e: Array = _ahead.get(seed, [])
+	if e.is_empty() or int(e[0]) < 0:
+		return
+	WorkerThreadPool.wait_for_task_completion(int(e[0]))
+	e[0] = -1
+
+
+static func take(seed: int) -> Dictionary:
+	if not _ahead.has(seed):
+		return {}
+	finish(seed)
+	var got: Variant = (_ahead[seed][1] as Array)[0]
+	_ahead.erase(seed)
+	return got if got is Dictionary else {}
+
+
 static func make(seed: int, passes := 1) -> Dictionary:
 	var rng := RandomNumberGenerator.new()
 	rng.seed = hash("ship %d" % seed)

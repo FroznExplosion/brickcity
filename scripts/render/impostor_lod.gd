@@ -120,14 +120,79 @@ static func baked(host: Node, what: Variant, tile: int = 128) -> Dictionary:
 	if _baking.has(key):
 		await (_baking[key] as BakeWait).done
 		return _bakes[key][1] if _bakes.has(key) else {}
+	# From disk, if this mesh was baked before (Docs/PlanetCost.md 9): no
+	# SubViewport, no render, no read-back -- the cards' bakes were 200-400 ms
+	# frames of every load.
+	var disk_key := _disk_key(what as Mesh, tile)
+	var kept := _disk_load(disk_key)
+	if not kept.is_empty():
+		_bakes[key] = [what, kept]
+		disk_hits += 1
+		return kept
 	var w := BakeWait.new()
 	_baking[key] = w
 	var got: Dictionary = await ImpostorBaker.bake(host, what, ImpostorBaker.GRID, tile)
+	_disk_save(disk_key, got)
 	# The mesh is held with its bake, so its id is never another mesh's.
 	_bakes[key] = [what, got]
 	_baking.erase(key)
 	w.done.emit()
 	return got
+
+
+## Cards kept on disk (UserPaths.CACHE): the key is the mesh's own arrays, the
+## tile and grid, and the md5 of the bake's shader and script -- any change to
+## the mesh or to how cards are baked bakes again.
+const BAKE_SOURCES := ["res://shaders/impostor_bake.gdshader", "res://scripts/render/impostor_baker.gd"]
+static var disk_hits := 0
+
+
+static func _disk_key(m: Mesh, tile: int) -> String:
+	var ctx := HashingContext.new()
+	ctx.start(HashingContext.HASH_MD5)
+	ctx.update(("%d:%d" % [tile, ImpostorBaker.GRID]).to_utf8_buffer())
+	for i in m.get_surface_count():
+		ctx.update(var_to_bytes(m.surface_get_arrays(i)))
+	for path in BAKE_SOURCES:
+		ctx.update(FileAccess.get_md5(path).to_utf8_buffer())
+	return ctx.finish().hex_encode()
+
+
+static func _disk_path(k: String) -> String:
+	return UserPaths.CACHE + "cards_" + k + ".bin"
+
+
+static func _disk_load(k: String) -> Dictionary:
+	var path := _disk_path(k)
+	if not FileAccess.file_exists(path):
+		return {}
+	var f := FileAccess.open(path, FileAccess.READ)
+	if f == null:
+		return {}
+	var got: Variant = bytes_to_var_with_objects(f.get_buffer(f.get_length()))
+	if not (got is Dictionary) or not ((got as Dictionary).get("albedo_image") is Image) \
+			or not ((got as Dictionary).get("normal_image") is Image):
+		return {}
+	var d: Dictionary = got
+	d["albedo"] = ImageTexture.create_from_image(d.albedo_image)
+	d["normal"] = ImageTexture.create_from_image(d.normal_image)
+	return d
+
+
+static func _disk_save(k: String, got: Dictionary) -> void:
+	if not (got.get("albedo_image") is Image) or not (got.get("normal_image") is Image):
+		return
+	DirAccess.make_dir_recursive_absolute(UserPaths.CACHE)
+	var path := _disk_path(k)
+	var tmp := path + ".tmp"
+	var f := FileAccess.open(tmp, FileAccess.WRITE)
+	if f == null:
+		return
+	f.store_buffer(var_to_bytes_with_objects({"centre": got.centre, "radius": got.radius,
+			"grid": got.grid, "albedo_image": got.albedo_image, "normal_image": got.normal_image}))
+	f.close()
+	DirAccess.rename_absolute(tmp, path)
+	UserPaths.prune_cache()
 
 
 ## Bake a mesh's cards now, before any set draws it (a scene loading).

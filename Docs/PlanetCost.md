@@ -320,3 +320,66 @@ wanted: grow it on a worker during the load (its recipe is plain data), or lay i
 
 Gates after: hull 23/0, system 17/0, worlds 8/0, jump 10/0, bricks 11/0, ship 9/0, `system_probe`
 34/0.
+
+## 9. The rest of the load, the mine world, and the renderer on its own thread (2026-11-20)
+
+**1. The ship, grown ahead.** `ShipBuild.start(seed)` grows the parked ship on a worker from the
+top of `PlanetScene._ready`, alongside the planet's bake, the buildings' setup, the towns and the
+trees; `ShipBuild.finish` waits for it before the brick shapes (they share its room caches,
+`RoomManifest` / `RoomTemplates`, through `KitFurnish`), and `SpaceStation._prepare_generated`
+takes it (`ShipBuild.take`). The star system's part of `_ready`: 810 ms -> ~245 ms, plus a
+150-210 ms wait for the worker -- ~400 ms off.
+
+**2. The spawn, over three frames.** In play (and the load gate) `_spawn_player` makes the pawn,
+gun and arms, then the AI a frame later, then the kit a frame after that; the loading veil
+and a saved game's way back come at its end. One ~420 ms frame is now frames of ~110 ms
+(FpsRig), ~75 ms (the AI) and ~110 ms (the kit), all under the veil. The gates take it in one
+frame as before (they use the kit the moment the pawn is there).
+
+**3. The cards, from disk.** `ImpostorLod.baked` keeps a mesh's baked cards in
+`user://cache/cards_<key>.bin` -- the key is the mesh's own arrays, the tile and grid, and the
+md5 of the bake shader and `impostor_baker.gd` -- and loads them next time with no SubViewport,
+no render and no read-back. The planet's four tree variants: ready 725 ms -> 23 ms after
+`_ready`, and the long frames while they baked are gone. Every ImpostorLod mesh gets it: the
+mine world's trees, the city's, the heightfield's. `UserPaths.prune_cache` keeps `user://cache/`
+under 256 MB (the oldest files go first): a change to the code that made a file gives it a new
+name, and this clears the old ones.
+
+**4. The renderer on its own thread: tried, not taken.** `--render-thread separate` (Godot's own
+switch, nothing changed in the project) against the default, the 10 x 10 town's quick cost gate,
+each run started under 76 C:
+
+| | safe (default) | separate |
+|---|---|---|
+| town, frame (flat out) | 5.4-10.7 ms | 19.2-22.3 ms |
+| main thread's `process` | 3.2-5.2 ms | 11.7-13.6 ms (waiting on the renderer) |
+| frames over 40 ms: walk / low / fast | 0 / 3 / 5 | 4 / 17 / 31 |
+| card bakes | fine | "p_image is empty" errors (read-backs) |
+
+Every call into the renderer from the main thread then waits for the render thread; the scripts
+make many. Godot also prints that the mode "can lead to project crashes or instability". It
+would need Docs/WhereWorkRuns.md 3.1's work first (far fewer renderer calls from scripts, no
+read-backs). Not adopted; the flag stays off. (The safe run had 18 MB free RAM at its start,
+22:19: its slow-frame counts may be high.)
+
+**The mine world (`terrain_test.tscn`).** Its trees are `TerrainTrees` on the same
+`ImpostorLod`, so the fixes reach it:
+- already since 7: an emptied square hidden, and its MultiMesh kept instead of shrunk (the
+  98-140 ms renderer wait);
+- now: its sets' refills inside a 2 ms budget, the rest drained a frame at a time
+  (`TerrainTrees.SETS_BUDGET_US`), as the planet's; the cards from the disk cache.
+- **A bug of 7's sky change, fixed here.** The mine world calls `LightRig.set_sky` every frame and
+  then scales the ambient and the sky's energy for caves (`*= cave`); with the sky's writes
+  skipped when nothing changed, those scalings compounded frame after frame. `set_sky`'s
+  skipping path now puts the ambient and the sky's energy back to what it last set (the sky's
+  energy only when someone changed it, so no radiance redraw in the open). `--gate=deep`: in a
+  cave 78 m down the ambient 0.018, sun 0.016, sky 0.015 for a cave factor of 0.015 -- once, not
+  compounded.
+- `mine_world_probe` 49 ok, PASS. `--gate=flight` against main: flying 1 / 1 frames over 33 ms
+  against main's 3; slowing down 10 then 0 on two runs against main's 3 (its slow frames are the
+  terrain's section instancing, not the trees -- noise).
+
+**Gates after:** bricks 11/0, damage 12/0, trees 7/0, hull 23/0, system 17/0, save stages 1 and
+2 3/0 and 13/0; `impostor_probe` 30/0 twice (cache written, then read). Save stage 3 fails one
+check, "the player where they were ... 2.52 m off" -- on main too, the same 2.52 m: not this
+work.
