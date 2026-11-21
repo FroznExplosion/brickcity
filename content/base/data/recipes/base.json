@@ -1,0 +1,19 @@
+{
+	"recipes": [
+		{ "name": "Sandstone", "pattern": ["ss", "ss"], "key": { "s": "sand" }, "output": "sandstone" },
+		{ "name": "Terracotta", "pattern": ["cc", "cc"], "key": { "c": "clay" }, "output": "terracotta" },
+		{ "name": "Ice", "pattern": ["ss", "ss"], "key": { "s": "snow" }, "output": "ice" },
+		{ "name": "Gravel", "pattern": ["s", "s"], "key": { "s": "#stone" }, "output": "gravel", "count": 2 },
+		{ "name": "Chest", "pattern": ["ss", "ss"], "key": { "s": "#stone" }, "output": "chest" },
+		{ "name": "Bucket", "pattern": ["i.", ".i"], "key": { "i": "iron_ore" }, "output": "bucket" },
+		{ "name": "Source bucket", "pattern": ["bg"], "key": { "b": "bucket", "g": "gold_ore" }, "output": "source_bucket" },
+		{ "name": "Pickaxe", "pattern": ["ss", ".i"], "key": { "s": "#stone", "i": "iron_ore" }, "output": "pickaxe" },
+		{ "name": "Mega Pickaxe", "pattern": ["pd", "dd"], "key": { "p": "pickaxe", "d": "diamond_ore" }, "output": "mega_pickaxe" },
+		{ "name": "Small Backpack", "pattern": ["gg", "gg"], "key": { "g": "#grass" }, "output": "small_backpack" },
+		{ "name": "Medium Backpack", "pattern": ["bi", "ii"], "key": { "b": "small_backpack", "i": "iron_ore" },
+			"output": "medium_backpack", "keep_contents": true },
+		{ "name": "Large Backpack", "pattern": ["bg", "gg"], "key": { "b": "medium_backpack", "g": "gold_ore" },
+			"output": "large_backpack", "keep_contents": true },
+		{ "name": "Obsidian", "pattern": ["lw"], "key": { "l": "lava_source", "w": "water_source" }, "output": "obsidian" }
+	]
+}

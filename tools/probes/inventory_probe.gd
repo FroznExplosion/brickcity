@@ -47,6 +47,7 @@ func _init() -> void:
 	_chests_and_drops()
 	_character()
 	_backpacks()
+	_crafting()
 	print("inventory probe: %d ok, %d failed" % [_pass, _fail])
 	quit(1 if _fail > 0 else 0)
 
@@ -386,3 +387,59 @@ func _backpacks() -> void:
 	var left := none.add_item(Inventory.make_backpack(&"medium_backpack"))
 	_ok("picked up with none worn: it is put on (18 slots)", left == null and none.area_size(&"main") == 18)
 	_ok("a backpack never stacks", not Inventory.make_backpack(&"small_backpack").same_kind(Inventory.make_backpack(&"small_backpack")))
+
+
+## Stage 9: crafting (zylanntest's 2 x 2 grid; recipes in data/recipes).
+func _crafting() -> void:
+	print("crafting")
+	RecipeBook.load_all(true)
+	_ok("the base pack's recipes load", RecipeBook.all().size() >= 10, str(RecipeBook.all().size()))
+	var inv := Inventory.new()
+	for i in 4:
+		inv.craft[i] = ItemStack.make(&"sand", 1)
+	var out := inv.get_slot(A(&"craft_out"))
+	_ok("4 sand in the grid make sandstone", out != null and out.id == &"sandstone")
+	inv.left_click(A(&"craft_out"))
+	_ok("taking it: onto the cursor, the grid used up", inv.cursor != null and inv.cursor.id == &"sandstone"
+			and inv.craft.all(func(s): return s == null))
+	inv.cursor = null
+	inv.craft = [ItemStack.make(&"granite", 1), ItemStack.make(&"diorite", 1), null, ItemStack.make(&"iron_ore", 1)]
+	_ok("a #stone recipe takes granite and diorite: a pickaxe", inv.get_slot(A(&"craft_out")) != null
+			and inv.get_slot(A(&"craft_out")).id == &"pickaxe")
+	inv.craft = [ItemStack.make(&"stone", 1), ItemStack.make(&"stone", 1), ItemStack.make(&"iron_ore", 1), null]
+	_ok("... and its mirror image", inv.get_slot(A(&"craft_out")) != null and inv.get_slot(A(&"craft_out")).id == &"pickaxe")
+	inv.craft = [null, ItemStack.make(&"stone", 3), null, ItemStack.make(&"granite", 3)]
+	_ok("a 1 x 2 recipe in either column: 2 gravel", inv.get_slot(A(&"craft_out")) != null
+			and inv.get_slot(A(&"craft_out")).count == 2)
+	_ok("Q on the output gives nothing (only crafting makes it)", inv.take_from(A(&"craft_out"), true) == null
+			and inv.craft[1].count == 3)
+	inv.craft = [ItemStack.make(&"sand", 5), ItemStack.make(&"sand", 5), ItemStack.make(&"sand", 5), ItemStack.make(&"sand", 3)]
+	inv.shift_click(A(&"craft_out"))
+	var made := 0
+	for a in inv.all_addrs():
+		var s := inv.get_slot(a)
+		if s != null and s.id == &"sandstone" and a.area != &"craft_out":
+			made += s.count
+	_ok("shift: as many as there are (3), into the inventory", made == 3 and inv.craft[3] == null
+			and inv.craft[0] != null and inv.craft[0].count == 2)
+	_ok("an unknown shape makes nothing", (func():
+			inv.craft = [ItemStack.make(&"sand", 1), null, null, ItemStack.make(&"dirt", 1)]
+			return inv.get_slot(A(&"craft_out")) == null).call())
+	var small := Inventory.make_backpack(&"small_backpack")
+	small.contents[2] = ItemStack.make(&"coal_ore", 7)
+	inv.craft = [small, ItemStack.make(&"iron_ore", 1), ItemStack.make(&"iron_ore", 1), ItemStack.make(&"iron_ore", 1)]
+	var med := inv.get_slot(A(&"craft_out"))
+	_ok("a Medium backpack from a Small one keeps its contents, 18 slots", med != null and med.id == &"medium_backpack"
+			and med.contents.size() == 18 and med.contents[2] != null and med.contents[2].count == 7)
+	inv.cursor = null
+	inv.left_click(A(&"craft_out"))
+	_ok("... and the Small one is used up", inv.craft[0] == null and inv.cursor != null and inv.cursor.id == &"medium_backpack")
+	inv.cursor = null
+	inv.craft = [ItemStack.make(&"clay", 2), null, null, null]
+	var left := inv.clear_craft()
+	_ok("closing: the grid goes back into the inventory", left.is_empty() and inv.craft[0] == null
+			and inv.main.any(func(s): return s != null and s.id == &"clay"))
+	var back := Inventory.new()
+	inv.craft[1] = ItemStack.make(&"snow", 4)
+	back.from_dict(JSON.parse_string(JSON.stringify(inv.to_dict())))
+	_ok("the craft grid is saved", back.craft[1] != null and back.craft[1].count == 4)

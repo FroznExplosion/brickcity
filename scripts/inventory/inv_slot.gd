@@ -30,6 +30,9 @@ var spin_always := false:
 			set_process(true)
 ## The slot's number, drawn top left (the HUD), or "".
 var number := ""
+## A slot that only shows an item (the Recipes list): this many, counted
+## even for blocks. 0: a creative slot (a full stack, no count on blocks).
+var show_count := 0
 var _hot := false
 var _angle := 0.0
 var _grow := 1.0
@@ -65,7 +68,9 @@ func _ready() -> void:
 ## What the slot shows: the inventory's stack, or a full stack of the catalog item.
 func stack() -> ItemStack:
 	if addr.is_empty():
-		return ItemStack.make(item_id, ItemCatalog.max_stack(item_id)) if item_id != &"" else null
+		if item_id == &"":
+			return null
+		return ItemStack.make(item_id, show_count if show_count > 0 else ItemCatalog.max_stack(item_id))
 	return inv.get_slot(addr) if inv != null else null
 
 
@@ -103,7 +108,8 @@ func _draw() -> void:
 		extra = inv.drag_amount_for(addr)
 		if s == null and extra > 0:
 			s = ItemStack.make(inv.cursor.id, 0, inv.cursor.data)
-	draw_stack(self, r, s, extra, addr.is_empty() or (inv != null and inv.creative), _angle, _grow)
+	var endless := (addr.is_empty() and show_count == 0) or (inv != null and inv.creative and not addr.is_empty())
+	draw_stack(self, r, s, extra, endless, _angle, _grow)
 	if not number.is_empty():
 		var font: Font = ThemeDB.fallback_font
 		var fs := int(size.y * 0.24)

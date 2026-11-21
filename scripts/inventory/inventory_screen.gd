@@ -43,6 +43,11 @@ var _storage_box: Control
 var _storage_grid: GridContainer
 var _storage_label: Label
 var _storage_n := -1
+## The 2 x 2 craft grid and its output (Docs/Inventory.md 9), on the Storage
+## page; the Recipes page lists every recipe.
+var _craft_box: Control
+var _recipes_box: Control
+var _tab_recipes: Button
 var _creative_box: Control
 var _creative_flow: HFlowContainer
 var _info: Label
@@ -73,6 +78,11 @@ func _build_content() -> void:
 	_tab_creative.toggle_mode = true
 	_tab_creative.pressed.connect(func() -> void: show_page("creative"))
 	header.add_child(_tab_creative)
+	_tab_recipes = Button.new()
+	_tab_recipes.text = "Recipes"
+	_tab_recipes.toggle_mode = true
+	_tab_recipes.pressed.connect(func() -> void: show_page("recipes"))
+	header.add_child(_tab_recipes)
 
 	_chest_box = _section("Chest", _grid(&"chest", Inventory.CHEST_SIZE))
 	content.add_child(_chest_box)
@@ -86,6 +96,24 @@ func _build_content() -> void:
 	_storage_label = _storage_box.get_child(0) as Label
 	content.add_child(_storage_box)
 	_rebuild_storage()
+	# Crafting: the grid, an arrow, what it makes (take it: left click; all
+	# there are: shift).
+	var craft := HBoxContainer.new()
+	craft.add_theme_constant_override("separation", GAP * 3)
+	craft.add_child(_grid_n(&"craft", RecipeBook.GRID * RecipeBook.GRID, RecipeBook.GRID))
+	var arrow := Label.new()
+	arrow.text = "->"
+	arrow.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	craft.add_child(arrow)
+	var out := VBoxContainer.new()
+	out.alignment = BoxContainer.ALIGNMENT_CENTER
+	_add_slot(out, InvSlot.make(inv, Inventory.addr(&"craft_out")))
+	craft.add_child(out)
+	_craft_box = _section("Craft  |  shift-click what it makes: as many as there are", craft)
+	content.add_child(_craft_box)
+	_recipes_box = _section("Recipes  |  put the ingredients in the craft grid in this shape (or its mirror)",
+			_recipe_list())
+	content.add_child(_recipes_box)
 	_creative_flow = HFlowContainer.new()
 	_creative_flow.add_theme_constant_override("h_separation", GAP)
 	_creative_flow.add_theme_constant_override("v_separation", GAP)
@@ -152,6 +180,65 @@ func _section(title: String, body_node: Control) -> VBoxContainer:
 	return v
 
 
+func _grid_n(area: StringName, n: int, cols: int) -> GridContainer:
+	var g := _grid(area, n)
+	g.columns = cols
+	return g
+
+
+## One row a recipe: what it makes (its icon, how many), its name, what it
+## takes, and its shape drawn as the grid of icons.
+func _recipe_list() -> VBoxContainer:
+	var list := VBoxContainer.new()
+	list.add_theme_constant_override("separation", GAP * 2)
+	for r in RecipeBook.all():
+		var row := HBoxContainer.new()
+		row.add_theme_constant_override("separation", GAP * 3)
+		var shape := GridContainer.new()
+		shape.columns = RecipeBook.GRID
+		shape.add_theme_constant_override("h_separation", 2)
+		shape.add_theme_constant_override("v_separation", 2)
+		for y in RecipeBook.GRID:
+			for x in RecipeBook.GRID:
+				var cell = r.cells[y * r.w + x] if x < r.w and y < r.h else null
+				var id: StringName = &""
+				if cell != null:
+					id = cell.id if cell.id != &"" else _tag_example(cell.tag)
+				shape.add_child(_show_slot(id, 1))
+		row.add_child(shape)
+		var arrow := Label.new()
+		arrow.text = "->"
+		arrow.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+		row.add_child(arrow)
+		row.add_child(_show_slot(r.output, int(r.count)))
+		var l := Label.new()
+		l.text = "%s%s\n%s" % [r.name, "  x%d" % r.count if int(r.count) > 1 else "", RecipeBook.describe(r)]
+		MenuFit.fit_label(l, true)
+		l.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		row.add_child(l)
+		list.add_child(row)
+	return list
+
+
+## A slot that only shows (the Recipes list): no clicks.
+func _show_slot(id: StringName, n: int) -> InvSlot:
+	var s := InvSlot.make(null, {}, id)
+	s.show_count = n
+	s.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	s.custom_minimum_size = Vector2(_slot_px * 0.7, _slot_px * 0.7)
+	s.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	s.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+	return s
+
+
+## An item with tag `tag`, to draw for a "#tag" cell.
+func _tag_example(tag: String) -> StringName:
+	for id in ItemCatalog.ids():
+		if PackedStringArray(ItemCatalog.get_def(id).get("tags", [])).has(tag):
+			return id
+	return &""
+
+
 func _grid(area: StringName, n: int) -> GridContainer:
 	var g := GridContainer.new()
 	g.columns = Inventory.HOTBAR_SIZE
@@ -175,9 +262,13 @@ func show_page(p: String) -> void:
 	_tab_creative.visible = inv.creative
 	_tab_storage.button_pressed = page == "storage"
 	_tab_creative.button_pressed = page == "creative"
+	_tab_recipes.button_pressed = page == "recipes"
 	_storage_box.visible = page == "storage"
+	_craft_box.visible = page == "storage" and inv.chest_key.is_empty()
 	_creative_box.visible = page == "creative"
+	_recipes_box.visible = page == "recipes"
 	_refresh()
+	_relayout()            # the slot size depends on what the page shows
 
 
 ## The storage grid as big as the worn backpack (none: no slots).
@@ -339,11 +430,15 @@ func _input(event: InputEvent) -> void:
 
 func close_screen() -> void:
 	inv.cancel_drag()
+	var thrown := []
 	if not inv.return_cursor():
 		# No room: it is thrown in front of the player, not lost.
-		var s := inv.cursor
+		thrown.append(inv.cursor)
 		inv.cursor = null
-		if host != null and host.has_method("drop_from_player"):
+	# What is left in the craft grid goes back too (Minecraft's).
+	thrown.append_array(inv.clear_craft())
+	if host != null and host.has_method("drop_from_player"):
+		for s in thrown:
 			host.drop_from_player(s)
 	if host != null and host.has_method("inventory_closed"):
 		host.inventory_closed()
@@ -361,8 +456,18 @@ func _on_relayout(vp_size: Vector2) -> void:
 	var w := available_width(vp_size)
 	# 9 columns + the off-hand column beside the hotbars.
 	var by_w := (w - GAP * 15.0) / 11.4
-	var rows := ceilf(maxf(_storage_n, 0) / 9.0) + 2.0 + (3.0 if inv != null and not inv.chest_key.is_empty() else 0.0)
-	var by_h := (vp_size.y - 230.0) / (rows + 0.6)
+	# Rows of slots on the page, and the section titles over them: the hands
+	# (the last section) should be on screen without scrolling where it can.
+	var chest := inv != null and not inv.chest_key.is_empty()
+	var rows := ceilf(maxf(_storage_n, 0) / 9.0) + 2.0
+	var sections := 2.0
+	if chest:
+		rows += 3.0
+		sections += 1.0
+	elif page == "storage":
+		rows += 2.0             # the craft grid
+		sections += 1.0
+	var by_h := (vp_size.y - 220.0 - sections * 30.0) / (rows * 1.1)
 	_slot_px = floorf(clampf(minf(by_w, by_h), MIN_SLOT, MAX_SLOT))
 	for s in _slots:
 		s.custom_minimum_size = Vector2(_slot_px, _slot_px)

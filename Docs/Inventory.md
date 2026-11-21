@@ -4,7 +4,7 @@ Ported from zylanntest's `game/inventory/` (its README is the design this
 follows), shaped to brickcity: content packs, MenuScreen, no renderer
 read-backs, and the arsenal left alone.
 
-Status: stages 1-5 built; round two (6-9: character inventory, survival switch, backpacks, crafting) in progress.
+Status: stages 1-9 built (round two, 2026-11-20: character inventory, survival switch, backpacks, crafting).
 
 ## 1. Two systems, one pair of hands
 
@@ -222,6 +222,21 @@ The inventory is saved in the mine world's save folder beside the edits
    item with that tag. A backpack made from a backpack keeps its contents
    (`keep_contents`). A Recipes tab lists them all. 3 x 3 (a crafting table)
    is for later.
+   **Built** (2026-11-20): `scripts/inventory/recipe_book.gd` (RecipeBook:
+   load, parse, trim, match with mirror, `uses`, `describe`);
+   `content/base/data/recipes/base.json` -- 13 recipes: sandstone (4 sand),
+   terracotta (4 clay), ice (4 snow), gravel x2 (2 #stone, stacked), chest
+   (4 #stone), bucket (2 iron ore, diagonal), source bucket (bucket + gold
+   ore), pickaxe (2 #stone over iron ore), Mega Pickaxe (pickaxe + 3 diamond
+   ore), Small Backpack (4 #grass), Medium (Small + 3 iron ore) and Large
+   (Medium + 3 gold ore), both keeping the contents, obsidian (lava source +
+   water source). Tags in `data/items/base.json`: stone, dark stone, granite,
+   diorite = `stone`; the five grasses = `grass`. Inventory: area `craft`
+   (2 x 2) and `craft_out` (computed when read, never stored; take_craft,
+   clear_craft; Q, double click and 1-9 on it do nothing, or it would be
+   free). The screen: the grid under the storage on the Storage tab, and a
+   Recipes tab (each recipe's shape as icons, what it makes, what it takes).
+   Closing the screen puts the grid's items back (what does not fit drops).
 
 Later: a crafting table (3 x 3), placing a backpack as a container
 (zylanntest), a gun item in a hotbar slot, multiplayer authority.

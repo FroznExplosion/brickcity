@@ -1,5 +1,14 @@
 {
 	"items": {
+		"stone": { "tags": ["stone"] },
+		"dark_stone": { "tags": ["stone"] },
+		"granite": { "tags": ["stone"] },
+		"diorite": { "tags": ["stone"] },
+		"grass": { "tags": ["grass"] },
+		"dry_grass": { "tags": ["grass"] },
+		"lush_grass": { "tags": ["grass"] },
+		"cold_grass": { "tags": ["grass"] },
+		"dark_grass": { "tags": ["grass"] },
 		"bucket": { "name": "Bucket", "kind": "bucket", "max_stack": 1, "colour": "#8c8c99", "glyph": "U",
 			"description": "Holds 9 tiles of water (3 bricks). Left: scoop from still water, or fill from a source. Right: pour a brick." },
 		"source_bucket": { "name": "Source bucket", "kind": "source_bucket", "max_stack": 1, "colour": "#595973", "glyph": "S",
