@@ -468,7 +468,16 @@ func on_origin_shift() -> void:
 		s.on_origin_shift()
 
 
+## The worst _process this far, ms (the cost gate reads it).
+var process_worst_us := 0
+
 func _process(delta: float) -> void:
+	var t_in := Time.get_ticks_usec()
+	_process_body(delta)
+	process_worst_us = maxi(process_worst_us, Time.get_ticks_usec() - t_in)
+
+
+func _process_body(delta: float) -> void:
 	if not frozen:
 		t += delta * time_scale
 	_outside_air()

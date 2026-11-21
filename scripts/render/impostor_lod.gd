@@ -329,33 +329,74 @@ func tier_of(handle: int) -> int:
 ##
 ## The sorting and the packing are ImpostorSet's (C++); each square it hands
 ## back gets its buffers, and its cards their bounds.
-func update(here: Vector3) -> void:
+##
+## `budget_us` > 0: the squares are refilled only until that much time has
+## gone; the rest wait in `_pending` (their newest packing) for `drain` --
+## flying low over a forest, one set's refill was a 44 ms frame
+## (Docs/PlanetCost.md 7). A square waiting shows its old tier a frame longer.
+func update(here: Vector3, budget_us := -1) -> void:
 	# A node source has nothing to draw far until its bake lands: until then
 	# its owner keeps drawing it at any range.
 	var no_card := mesh == null and bake.is_empty()
 	# A mesh copy crossing the band is drawn as BOTH, dithered into each
 	# other (tier 3) -- once there is a card to cross into.
 	var blend := mesh != null and _card_mat != null
-	for r in _set.update(here, near_range, cull_range, hysteresis, blend, no_card):
-		var c := _chunk(r.key)
-		# A square left with nothing in a tier is hidden, not drawn empty: with
-		# none visible a MultiMesh is still an object and a draw a pass (the
-		# planet's trees left 1,400 of them behind a flight; Docs/PlanetCost.md 2.4).
-		if c.near != null:
-			_fill((c.near as MultiMeshInstance3D).multimesh, r.near, r.n_near)
-			(c.near as MultiMeshInstance3D).visible = int(r.n_near) > 0
-		var far_mmi: MultiMeshInstance3D = c.far
-		_fill(far_mmi.multimesh, r.far, r.n_far)
-		far_mmi.visible = int(r.n_far) > 0
-		if _card_mat != null and r.has_far:
-			# The cards' own bounds: every far copy's origin, grown by what a
-			# card can reach round it (the bake's centre is inside that,
-			# radius beyond).
-			var box: AABB = r.far_box
-			var rad: float = float(bake.radius) * 2.0 + (bake.centre as Vector3).length()
-			far_mmi.custom_aabb = AABB(box.position - Vector3.ONE * rad, box.size + Vector3.ONE * rad * 2.0)
+	var t0 := Time.get_ticks_usec()
+	var got: Array = _set.update(here, near_range, cull_range, hysteresis, blend, no_card)
+	last_sort_us = Time.get_ticks_usec() - t0
+	for r in got:
+		_pending[r.key] = r
+	drain(budget_us)
 	near_count = _set.get_near_count()
 	far_count = _set.get_far_count()
+
+
+## Squares packed but not yet refilled (update's budget): key -> packing.
+var _pending := {}
+
+
+func has_pending() -> bool:
+	return not _pending.is_empty()
+
+
+## Refill waiting squares, until `budget_us` has gone (<= 0: all of them).
+func drain(budget_us := -1) -> void:
+	var t0 := Time.get_ticks_usec()
+	for key in _pending.keys():
+		if budget_us > 0 and Time.get_ticks_usec() - t0 > budget_us:
+			return
+		var r: Dictionary = _pending[key]
+		_pending.erase(key)
+		_apply(r)
+
+
+## The last update's sort (C++), and the dearest square refilled since this
+## was zeroed, its making apart (for a pass's report).
+var last_sort_us := 0
+static var worst_apply_us := 0
+static var worst_chunk_us := 0
+
+func _apply(r: Dictionary) -> void:
+	var t0 := Time.get_ticks_usec()
+	var c := _chunk(r.key)
+	worst_chunk_us = maxi(worst_chunk_us, Time.get_ticks_usec() - t0)
+	# A square left with nothing in a tier is hidden, not drawn empty: with
+	# none visible a MultiMesh is still an object and a draw a pass (the
+	# planet's trees left 1,400 of them behind a flight; Docs/PlanetCost.md 2.4).
+	if c.near != null:
+		_fill((c.near as MultiMeshInstance3D).multimesh, r.near, r.n_near)
+		(c.near as MultiMeshInstance3D).visible = int(r.n_near) > 0
+	var far_mmi: MultiMeshInstance3D = c.far
+	_fill(far_mmi.multimesh, r.far, r.n_far)
+	far_mmi.visible = int(r.n_far) > 0
+	if _card_mat != null and r.has_far:
+		# The cards' own bounds: every far copy's origin, grown by what a
+		# card can reach round it (the bake's centre is inside that,
+		# radius beyond).
+		var box: AABB = r.far_box
+		var rad: float = float(bake.radius) * 2.0 + (bake.centre as Vector3).length()
+		far_mmi.custom_aabb = AABB(box.position - Vector3.ONE * rad, box.size + Vector3.ONE * rad * 2.0)
+	worst_apply_us = maxi(worst_apply_us, Time.get_ticks_usec() - t0)
 
 
 ## A copy of `mat` whose shader fades the copy out over the band on the pixels
@@ -400,6 +441,13 @@ static func _fading(mat: Material, near: float, band: float) -> Material:
 
 
 static func _fill(mm: MultiMesh, buf: PackedFloat32Array, n: int) -> void:
+	# Emptied: drawn as none, its buffer kept. Shrinking it then (a new, smaller
+	# allocation) waited on the renderer -- 98-140 ms frames flying low over a
+	# forest (Docs/PlanetCost.md 7); the node is hidden anyway (_apply).
+	if n == 0:
+		if mm.visible_instance_count != 0:
+			mm.visible_instance_count = 0
+		return
 	if mm.instance_count < n or mm.instance_count > n * 4 + 64:
 		mm.instance_count = maxi(n * 2, 16)
 	var full := buf

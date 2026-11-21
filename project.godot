@@ -448,3 +448,7 @@ cloud_here={
 "type": "float",
 "value": 1.0
 }
+
+[voxel]
+
+threads/main/time_budget_ms=4
