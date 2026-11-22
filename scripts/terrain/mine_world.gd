@@ -149,6 +149,14 @@ const REFRESH_EVERY := 0.0
 var _coalesce := true
 var _pending_tiles := Rect2i()
 var _refresh_in := 0.0
+## BLOCK LIGHT (Docs/MineWorld.md 18): the tiles the water says lava lit or
+## went dark round (BrickFluid.take's "lava_light") -> Vector2i(first, last
+## plate), rebaked at most every LAVA_RELIGHT_EVERY: running lava changes
+## cells twice a second.
+const LAVA_RELIGHT_EVERY := 0.5
+var _lava_relight := {}
+var _lava_relight_in := 0.0
+var lava_relit_tiles := 0
 var _gen_ms := 0.0
 var _reanchors := 0
 var _last_reanchor_ms := 0.0
@@ -716,6 +724,39 @@ func near_tile(t: Vector2i) -> bool:
 	return _streamer != null and _streamer.has_tile(t)
 
 
+## The water's "lava_light" (tx, tz, first plate, last plate ...): gathered,
+## handed to the tiers by _flush_lava_light. Only the light changed: no
+## collapse, no far tier (it has no light in its cells).
+func lava_relit(flat: PackedInt32Array) -> void:
+	if not _sky_light_on:
+		return
+	for i in range(0, flat.size(), 4):
+		var t := Vector2i(flat[i], flat[i + 1])
+		var r: Vector2i = _lava_relight.get(t, Vector2i(flat[i + 2], flat[i + 3]))
+		_lava_relight[t] = Vector2i(mini(r.x, flat[i + 2]), maxi(r.y, flat[i + 3]))
+
+
+func _flush_lava_light(delta: float) -> void:
+	_lava_relight_in -= delta
+	if _lava_relight.is_empty() or _lava_relight_in > 0.0:
+		return
+	_lava_relight_in = LAVA_RELIGHT_EVERY
+	var tile := BrickTerrain.get_tile_studs()
+	for t: Vector2i in _lava_relight:
+		var r: Vector2i = _lava_relight[t]
+		# A drawn tile only when the lava is within its light grid's plates:
+		# priming a deep lava pool must not rebake the ground's top over it.
+		var d := _streamer.tile_data(t)
+		if d.is_empty() or (d.has("light_lo") and r.y >= int(d.light_lo) and r.x <= int(d.light_hi)):
+			_streamer.refresh(Rect2i(t, Vector2i.ONE))
+			lava_relit_tiles += 1
+		if _deep != null:
+			# Inset a stud: refresh_box reaches one cell out for faces.
+			_deep.refresh_box(Vector3i(t.x * tile + 1, r.x, t.y * tile + 1),
+					Vector3i(t.x * tile + tile - 2, r.y, t.y * tile + tile - 2))
+	_lava_relight.clear()
+
+
 func _flush_edits() -> void:
 	if not _pending_tiles.has_area():
 		return
@@ -869,6 +910,7 @@ func _process(delta: float) -> void:
 	_refresh_in -= delta
 	if _refresh_in <= 0.0:
 		_flush_edits()
+	_flush_lava_light(delta)
 	var p0 := Time.get_ticks_usec()
 	_streamer.follow(Vector2(eye.x, eye.z))
 	var pd := Time.get_ticks_usec()
@@ -3335,6 +3377,7 @@ func _run_deep_gate() -> void:
 	print("[mine-deep] light in the cave: picture mean %.3f, eye's sky light %.1f, eye brightness %.3f, ambient %.3f, sun %.3f, sky %.3f, exposure %.2f"
 			% [luma, _eye_sky, _cave_light, _rig.env.ambient_light_energy, _rig.sun.light_energy,
 			_rig.sky_mat.sky_energy_multiplier, _rig.exposure])
+	await _deep_lava(found, luma)
 	if "--light-sweep" in OS.get_cmdline_user_args():
 		# What lights the cave: each in turn off.
 		var env := _rig.env
@@ -3413,6 +3456,54 @@ func _run_deep_gate() -> void:
 		print("[mine-deep] a cave across a tile's floor at %s: %s" % [cross, _deep.report()])
 		await _shot(UserPaths.DEV + "mine_deep_seam.png")
 	get_tree().quit()
+
+
+## --gate=deep's lava (Docs/MineWorld.md 18): a pit of lava dug in the cave's
+## floor ahead of the eye, its BLOCK LIGHT on the walls once the tiles round
+## it are baked again; then the same with the water's per-tile lava lights
+## hidden (do they still add anything?) and with the block light off.
+func _deep_lava(found: Vector3, dark_luma: float) -> void:
+	var stud := BrickWorld.get_stud_metres()
+	var plate := BrickWorld.get_plate_metres()
+	var fx := floori(found.x / stud) + 5
+	var fz := floori(found.z / stud) + 1
+	var b := floori(float(roundi(found.y / plate) - 1) / 3.0)
+	var r: Dictionary = BrickTerrain.fill_box(Vector3i(fx - 1, b * 3, fz - 1), Vector3i(fx + 1, b * 3 + 2, fz + 1), 0, false)
+	terrain_edited(r)
+	water.manual = true
+	for dz in range(-1, 2):
+		for dx in range(-1, 2):
+			BrickFluid.place(Vector3i(fx + dx, b, fz + dz), 2, 0, 3)
+	water.step(1)
+	var lava_n := int(BrickFluid.stats().get("lava_cells", 0))
+	var relit0 := lava_relit_tiles
+	for f in 400:
+		await get_tree().process_frame
+		if f > 90 and _lava_relight.is_empty() and _deep._tasks.is_empty() and _deep._dirty.is_empty() \
+				and _deep._stale.is_empty():
+			break
+	await _frames(10)
+	await _shot(UserPaths.DEV + "mine_deep_lava.png")
+	var lit: float = await _mean_luma()
+	_gpu_hide(water._lights.values())
+	await _frames(4)
+	await _shot(UserPaths.DEV + "mine_deep_lava_nolights.png")
+	var no_omni: float = await _mean_luma()
+	_gpu_back()
+	_mat.set_shader_parameter("block_light_energy", 0.0)
+	_mat.set_shader_parameter("block_light_ao", 0.0)
+	await _frames(4)
+	var no_block: float = await _mean_luma()
+	_mat.set_shader_parameter("block_light_energy", 1.0)
+	_mat.set_shader_parameter("block_light_ao", 0.5)
+	await _frames(4)
+	print("[mine-deep] lava in the cave: %d lava cells, %d tiles relit; picture mean %.3f (dark %.3f), lava lights hidden %.3f, block light off %.3f; %d lava lights"
+			% [lava_n, lava_relit_tiles - relit0, lit, dark_luma, no_omni, no_block, water.lava_lights()])
+	for dz in range(-1, 2):
+		for dx in range(-1, 2):
+			BrickFluid.remove(Vector3i(fx + dx, b, fz + dz), -1)
+	water.step(1)
+	water.manual = false
 
 
 ## -- --gate=cave: only the cave landing (below).
@@ -3968,7 +4059,17 @@ func _run_water_gate() -> void:
 	look.call(pm.call(14.0, w + 6.0, 1.0), pm.call(24.0, w, 9.0))
 	await _frames(40)
 	await _shot(dev + "water_lava_night.png")
+	var night_luma: float = await _mean_luma()
 	print("[water-gate] lava pool: %d lava lights, %d burning, %s" % [water.lava_lights(), water.fires.burning.size(), water.report()])
+	# The ground's block light (Docs/MineWorld.md 18) without the per-tile
+	# lava lights: what they still add.
+	_gpu_hide(water._lights.values())
+	await _frames(4)
+	await _shot(dev + "water_lava_night_nolights.png")
+	var no_omni: float = await _mean_luma()
+	_gpu_back()
+	print("[water-gate] lava at night: picture mean %.3f, lava lights hidden %.3f (block light alone), %d tiles relit"
+			% [night_luma, no_omni, lava_relit_tiles])
 	_time = 0.42
 	view.process_mode = Node.PROCESS_MODE_INHERIT
 	_hud_layer.visible = true
@@ -4732,9 +4833,10 @@ func _run_mouth_gate() -> void:
 	var before: float = await _mean_luma_in(centre)
 	await _shot(dev + "mine_mouth_before.png")
 	# Stone shell, then the air inside it: 5 x 5 studs inside, 6 courses tall,
-	# 15 studs deep, open at the low-X end. The roof two courses thick: a
-	# one-course slab is drawn as top pieces with no underside.
-	terrain_edited(BrickTerrain.fill_box(Vector3i(o.x, b - 3, o.y - 3), Vector3i(o.x + 16, b + 23, o.y + 3), 4, true))
+	# 15 studs deep, open at the low-X end. The roof ONE course thick: its
+	# course is the columns' top, drawn as top pieces, whose underside the
+	# face mesher now draws (it had none: terrain_probe's thin roof check).
+	terrain_edited(BrickTerrain.fill_box(Vector3i(o.x, b - 3, o.y - 3), Vector3i(o.x + 16, b + 20, o.y + 3), 4, true))
 	terrain_edited(BrickTerrain.fill_box(Vector3i(o.x, b, o.y - 2), Vector3i(o.x + 15, b + 17, o.y + 2), 0, false))
 	_flush_edits()
 	var roof := 0

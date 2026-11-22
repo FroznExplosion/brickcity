@@ -748,14 +748,77 @@ open-air environment wherever they are, so in a cave they are brighter than
 the walls (they would need their own position's level, like the gun). Studs,
 tufts, pebbles and the bricks in curved ground are instances in their own
 material and stay sky-lit; they stand on tops, which are sky. Water passes
-light freely. Block light from lava (light spreading from lava cells, drawn
-as emission, in place of `MineWater`'s per-tile OmniLights) needs the
-water's lava cells in the bake; not done. A one-course slab is drawn as top
-pieces with no underside (found building the tunnel for `--gate=mouth`; its
-roof is two courses for that).
+light freely. A one-course slab (found building the tunnel for
+`--gate=mouth`) had no underside: its course is the columns' top, drawn as
+top pieces, and the face mesher left every face of a piece's brick to the
+piece, which draws none below. `mask_faces` now draws a piece's downward
+faces itself, merged per piece; the tunnel's roof is one course again, and
+`terrain_probe` (`_check_thin_roof`) checks the underside's area.
+
+**Block light from lava (2026-11-21).** Minecraft's second light, beside
+the sky's, in the same cells and the same bake (`sky_light_pass`):
+
+- **The fill.** Every lava cell is a seed at level 15; light steps to the six
+  neighbours one level less through cells that are not opaque (sky cells
+  too: block light ignores the sky). Exact at the seams the same way: it
+  answers for every open cell a vertex reads, seeds within 15 of them, no
+  step where it could no longer arrive (`SkyGrid::fill_block`). Per vertex,
+  the same eight-cell blend.
+- **Carried in CUSTOM0.g**, as bytes 0..60 (`BLOCK_BYTE`). G is the far
+  meshes' smooth-ground flag (128 blocky, 255 smooth, read as `> 0.25`);
+  near tiles and deep sections always wrote 0 there, so block light stays
+  under 64 and no other scene's shader sees it. A tile with no lava near
+  writes nothing.
+- **The lava cells come from the water** (`BrickFluid::lava_cells_in`, C++
+  only): under the water's `g_state` for a moment, reading only sections
+  with lava (a per-section count, `Section::lava`) and only columns the
+  water has read from the field. What glows is what is drawn: a generated
+  lava pool lights its cave once a tile coming near primes it. No lava
+  anywhere, no lock (`lava_total`). The bake takes no terrain lock, so the
+  water's worker (which holds `g_state` while it samples the field) and a
+  bake cannot wait on each other.
+- **Lava changing relights the ground.** The water marks every terrain tile
+  within 16 studs of a lava cell that came or went (write_cell, and a
+  column read with generated lava), with its courses +-16; `take()` hands
+  them over as `"lava_light"` (tx, tz, first plate, last plate). The mine
+  world gathers them and every 0.5 s (`LAVA_RELIGHT_EVERY`: running lava
+  changes cells twice a second) rebakes the deep sections over those
+  plates and the drawn tiles whose light grid reaches them (the bake's
+  `light_lo` / `light_hi`): priming a deep pool asked for 185 surface tiles
+  in `--gate=water` before that filter, 25 after. No collapse, no far tier.
+- **The shader** maps it by the same curve as the sky's and draws it as a
+  warm glow x albedo, `EMISSION += block_light_colour (1.0, 0.52, 0.22) x
+  albedo x brightness x block_light_energy (1.0)`, and it lifts the AO to
+  `max(sky, block x block_light_ao (0.5))`, so a lava-lit wall takes some
+  ambient too. `--sky-debug=3` draws the block light flat.
+
+| | |
+|---|---|
+| the pass, with lava in reach | 0.1-0.2 ms a tile, 0.04-0.07 ms a deep section (the lock and the fill) |
+| seams (mine_world_probe) | 0 of 14 lit tile-tile vertices differ, 0 of 16 deep section-section |
+| fall-off | a cave floor's 158 vertices all within one byte of `15 - steps` blended (worst 0 of 60) |
+| `--gate=deep`, a 3 x 3 pit of lava 5 studs ahead | picture mean 0.085 (the dark cave 0.044); block light off 0.048; the water's 26 lava lights hidden 0.084 |
+| `--gate=water`, the lava pool at night | 0.289 with the lava lights, 0.235 block light alone |
+
+**The water's per-tile OmniLights stay**, for now. Underground they add
+nearly nothing over the block light (0.085 vs 0.084), and they cost about
+nothing on the GPU (section 17's "lava lights hidden"). But they light what
+the cells do not: studs, tufts, pebbles and the bricks in curved ground
+(instances in their own material), the wood block in the pool, pawns,
+drops, chests, the gun -- in the night pool without them the studs round
+the lava are dark discs on warm tops (`water_lava_night_nolights.png`).
+With both, the ground near lava is lit twice. Taking them away needs those
+lit some other way (a block-light level per instance, like the gun's sky
+level); a cheaper middle step is to take the ground out of their
+`light_cull_mask`. The water area's call (MineWater.md 6).
 
 **Checks.** `-- --gate=cave`, `-- --gate=deep --light-sweep` (now also
 "reflections on"), `-- --gate=mouth` (new: a tunnel built on the ground, the
 day seen from inside against no tunnel, its walls by the mouth and the back),
 `-- --gate` with and without `--no-sky-light`; `mine_world_probe`
-(`_check_sky_light`), `terrain_probe`; `-- --gate=gpu` against section 17.
+(`_check_sky_light`, `_check_block_light`: no lava no light, a cave dug
+across a tile seam and again across two deep sections with lava put in it,
+both sides agree, the floor falls off a level a step, `take()` names the
+tiles, gone once the lava is), `terrain_probe`, `fluid_probe`; `-- --gate=deep`
+(now with a lava pit: `mine_deep_lava.png`, `_nolights`), `-- --gate=water`
+(`water_lava_night_nolights.png`); `-- --gate=gpu` against section 17.

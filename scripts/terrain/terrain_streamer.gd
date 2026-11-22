@@ -385,6 +385,13 @@ func reset_stats() -> void:
 	_worst_swap_ms = 0.0
 
 
+## The bake's result of a tile drawn now ({} when none): its "light_lo" /
+## "light_hi" say which plates its light can come from (MineWorld.md 18).
+func tile_data(c: Vector2i) -> Dictionary:
+	var t = _tiles.get(c)
+	return (t as TerrainTile)._data if t != null else {}
+
+
 ## Is this tile BUILT? Not "wanted" — built. The coarse tier asks before it
 ## hides itself, and the difference matters: the wanted region fills at a few
 ## tiles a frame, so hiding against the region opened a black pit the size of
