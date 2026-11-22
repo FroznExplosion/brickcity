@@ -321,6 +321,10 @@ func _ready() -> void:
 	PlanetFrame.recentre(self, walker.global_position)
 	_build_hud()
 	_lap("hud")
+	# The player's gun made now, not in the frame the player appears.
+	if not _gate or _load_gate:
+		FpsRig.prewarm()
+		_lap("the player's gun made ahead")
 	# The buildings' occluders hide what is behind them (Docs/PlanetCost.md 5.5).
 	get_viewport().use_occlusion_culling = true
 	# The town's nav regions start building now, on workers (setup_ai collects).
@@ -1306,6 +1310,14 @@ func _process_body(delta: float) -> void:
 		_stepping_out = -1
 		pawn.place(ship.global_transform * ship.seat() + ship.global_basis.y * 0.1)
 		pawn.body.process_mode = Node.PROCESS_MODE_INHERIT
+		# Up from the seat while it flies: moving as the deck moves. Placed, the pawn
+		# stood still in the world, so on the ship's ghost it went sternward at the
+		# ship's speed and hit the wall behind the seat, 1.3 m back at 68 m/s (the
+		# hull gate's "up from the seat in flight", flaky only in when it looked;
+		# Docs/PlanetCost.md 10).
+		if ship.riding and ship.ghost != null:
+			var g := ship.ghost_to_real().affine_inverse() * pawn.body.global_position
+			pawn.body.velocity = ship.deck_velocity(g)
 	_plap("origin, system air")
 	if system != null and pawn != null and on_foot:
 		_ghost_tick()

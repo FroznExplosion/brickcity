@@ -383,3 +383,65 @@ read-backs). Not adopted; the flag stays off. (The safe run had 18 MB free RAM a
 2 3/0 and 13/0; `impostor_probe` 30/0 twice (cache written, then read). Save stage 3 fails one
 check, "the player where they were ... 2.52 m off" -- on main too, the same 2.52 m: not this
 work.
+
+## 10. The spawn's last frame, first use, the render thread again, and two failing gates (2026-11-22)
+
+**The player's gun, made ahead.** Timing `FpsRig.make_player` by part: the pawn ~14 ms, its
+controllers ~16, the arms ~20, the gun ~80 -- of which `GunPlaceholderParts.build_library()`
+45-110 ms, and the kit (`PlayerKit.attach`) built the same library again. Now:
+- `GunPlaceholderParts.build_library(per_tier, fresh := false)` builds once a `per_tier` and
+  hands the same library after (nothing changes a library once built). Every caller gains: the
+  kit, the spawn, a soldier's gun, the city's waves and vehicles.
+- `FpsRig.prewarm()` makes the player's first gun while the scene loads; `make_player` takes it.
+- The spawn's parts (load gate): pawn/gun/arms 110 -> 21 ms, the kit 85 -> 0.1 ms.
+
+**First use.** `--gate=load --first-use` fires the gun 0.3 s twice and blasts a building twice,
+the worst frame of each with FrameClock's parts. Firing was not consistent (51/36 ms one run,
+24/165 the next: a burst whose drawing met something new). The first blast is consistently
+40-60 ms dearer than the second, all in scripts (process), in the buildings' damage path; it
+cannot be warmed without blowing up a real building, so it is left, measured.
+
+**The render thread, measured again -- fairly.** 9's A/B was wrong: FrameClock reads the
+renderer every frame (GPU time, draw counts), and with the renderer on its own thread each read
+makes the main thread wait for it. The cost gate now has `-- --plain` (the wall clock only, no
+renderer reads). The 10 x 10 town, quick, plain, each run started under 76 C:
+
+| | safe (default) | separate |
+|---|---|---|
+| town | 5.5-5.9 ms | 4.5-6.0 ms |
+| walk / low / fast flight, mean | 5.8 / 5.6 / 5.9 ms | 5.9 / 5.8 / 6.3 ms |
+| frames over 33 ms | 0 / 1 / 0 | 0 / 1 / 0 |
+
+So: about the same, not worse -- and not better either; the frame is not waiting on the renderer
+here. And separate breaks things: 15 card bakes came back empty ("p_image is empty": a
+`get_image()` read-back from the main thread), a "finalize can only be called from the render
+thread" error, textures leaked at exit. Before it could be used: `ImpostorBaker.bake`'s
+read-back (cards of node sources -- a gun on the ground -- are not disk-cached),
+`PartThumbnail`'s, and `brick_near.gd`'s `surface_get_arrays` in play (against CLAUDE.md's rule
+already). Not adopted: nothing to gain today.
+
+**The hull gate's "up from the seat in flight" -- a real bug, fixed.** Stepping out of the
+pilot's seat while the ship flies, `pawn.place` left the pawn standing still in the world; put on
+the ship's ghost, its velocity relative to the deck was the ship's own backwards, and it slammed
+into the bulkhead behind the seat: 1.3 m sternward at 68 m/s, EVERY time. The gate only failed
+when it read the pawn's place before the slam (3 frames was sometimes not enough), so it looked
+flaky. Now the pawn leaves the seat moving with the deck (`ship.deck_velocity`, in the scene's
+stepping-out): it stays at the seat. Three runs, 23/0 each, the pawn 0.000-0.001 m along the deck.
+
+**The save gate's stage 3 "2.52 m off" -- the gate's own placing, fixed.** On the other system's
+world stage 2 put the pawn at the planet's sum surface (`surface_point`) + 0.3 m and saved it
+before it stood: it was saved inside the meshed ground, and the load rightly lifted it out
+(`keep_over_ground`) -- 2.16-2.52 m. Stage 2 now stands it on the ground's own layer (a ray from
+15 m over, `Layers.WORLD` only: `_ground_hit` from 50 m up meets roofs, trees and the ship
+first) and waits for it to be on the floor before saving. Stage 3's position check: 0.00 m off.
+Two full save sequences after: the first 3/0, 13/0, 7/1 -- stage 3's position right, but
+"home again, its wall's bricks still gone -- 0" failed; the second 3/0, 13/0, 8/0. That one check
+(the home town's saved damage read 1 s after landing back home from another system) is a
+separate flake, seen once in two, not looked into further: two more sequences to count it were
+stopped by Claude Code when the machine ran short of memory.
+
+Also seen, not this work's, failing the same on main: `alt_fire_probe` "a shield over the marked
+head takes the bent round plain -- 15.00" and `fights_back_probe` "while it hid, the rounds went
+into the wall, not into it -- 0 of 9" (weapons). Every other probe that uses the gun library:
+aim_assist 23/0, chip 21/0, combat_numbers 45/0, crit 10/0, defence 23/0, fire_mode 22/0,
+frozen_soldier 10/0, gun_kind 20/0, held_gun_drop 5/0.
