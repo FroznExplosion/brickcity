@@ -1054,6 +1054,8 @@ func _check_volumetric() -> void:
 	_ok("there is still rock under the pit", BrickTerrain.solid_at(40, dug, 40) != 0)
 	_ok("and air directly above it", BrickTerrain.solid_at(40, dug + 1, 40) == 0)
 
+	_check_thin_roof()
+
 	BrickTerrain.clear_terrain_edits()
 	before = BrickTerrain.surface_plate(4, 4)
 	BrickTerrain.carve(point, 1.9)
@@ -1064,6 +1066,63 @@ func _check_volumetric() -> void:
 	_ok("clearing the record restores the ground",
 		BrickTerrain.surface_plate(4, 4) == before)
 	_ok("and leaves nothing stored", BrickTerrain.get_edit_count() == 0)
+
+
+## A slab ONE course thick over open air -- a built roof, a carved ledge. Its
+## course is the column's top, which the packer draws as top pieces, and the
+## face mesher left every face of a piece's brick to the piece, which draws
+## no underside: from below the sky showed through it, its studs hanging in
+## the air (Docs/MineWorld.md 18, found by `--gate=mouth`). The underside
+## must be drawn, all of it, facing down, at the slab's foot.
+func _check_thin_roof() -> void:
+	BrickTerrain.clear_terrain_edits()
+	var stud := BrickWorld.get_stud_metres()
+	var plate := BrickWorld.get_plate_metres()
+	var lo := Vector2i(8, 8)
+	var hi := Vector2i(15, 15)   # 8 x 8 studs, inside tile (0, 0)
+	var t_max := -(1 << 30)
+	for z in range(lo.y - 1, hi.y + 2):
+		for x in range(lo.x - 1, hi.x + 2):
+			t_max = maxi(t_max, BrickTerrain.surface_plate(x, z))
+	# A course of air over the highest ground, then the slab's course.
+	var b := (floori(float(t_max + 1) / 3.0) + 2) * 3
+	BrickTerrain.fill_box(Vector3i(lo.x, b, lo.y), Vector3i(hi.x, b + 2, hi.y), 4, true)
+	var tops := 0
+	for z in range(lo.y, hi.y + 1):
+		for x in range(lo.x, hi.x + 1):
+			if BrickTerrain.surface_plate(x, z) == b + 2 and BrickTerrain.solid_at(x, b - 1, z) == 0:
+				tops += 1
+	var foot := float(b) * plate
+	var areas: Array[float] = []
+	for bevel in [0.0, 0.013]:
+		BrickTerrain.set_face_bevel(bevel)
+		var d: Dictionary = BrickTerrain.build_tile(0, 0)
+		var arrays: Array = d["mesh"]
+		var v: PackedVector3Array = arrays[Mesh.ARRAY_VERTEX]
+		var n: PackedVector3Array = arrays[Mesh.ARRAY_NORMAL]
+		var idx: PackedInt32Array = arrays[Mesh.ARRAY_INDEX]
+		var a_bevel := 0.0
+		for i in range(0, idx.size(), 3):
+			var p0 := v[idx[i]]
+			var p1 := v[idx[i + 1]]
+			var p2 := v[idx[i + 2]]
+			if n[idx[i]].y > -0.9 or absf(p0.y - foot) > 1e-3 \
+					or absf(p1.y - foot) > 1e-3 or absf(p2.y - foot) > 1e-3:
+				continue
+			var c := (p0 + p1 + p2) / 3.0
+			if c.x < lo.x * stud or c.x > (hi.x + 1) * stud or c.z < lo.y * stud or c.z > (hi.y + 1) * stud:
+				continue
+			a_bevel += 0.5 * (p1 - p0).cross(p2 - p0).length()
+		areas.append(a_bevel)
+	BrickTerrain.set_face_bevel(0.0)
+	var want := float((hi.x - lo.x + 1) * (hi.y - lo.y + 1)) * stud * stud
+	_ok("a one-course slab over air is the columns' top course", tops == 64,
+		"%d of 64 columns" % tops)
+	# Square, the whole footprint; bevelled, less its edge strips (facets).
+	_ok("and its underside is drawn, facing down",
+		absf(areas[0] - want) < want * 0.005 and areas[1] > want * 0.95 and areas[1] <= areas[0],
+		"%.3f m2 square, %.3f bevelled, of %.3f" % [areas[0], areas[1], want])
+	BrickTerrain.clear_terrain_edits()
 
 
 ## Authored building pads — §19.11.

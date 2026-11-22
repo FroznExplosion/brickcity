@@ -4028,6 +4028,19 @@ void mask_faces(MeshBuf &m, const TileSample &s, const std::vector<int32_t> &own
                             && s.smooth[TileSample::idx(lx, lz)]) {
                         continue;
                     }
+                    if (dy < 0 && in_piece_solid(lx, yp, lz)) {
+                        // ...except its UNDERSIDE, which the piece never
+                        // draws: a top course over open air -- a built roof
+                        // or a carved slab one course thick -- was see-through
+                        // from below, its studs hanging over the sky
+                        // (MineWorld.md 18). Keyed by the piece (bit 63, which
+                        // no bond_key sets), so the underside outlines the
+                        // same brick as its top.
+                        face[(size_t)u + su * v] = (uint8_t)s.voxel(lx, yp, lz);
+                        fkey[(size_t)u + su * v] = INT64_MIN
+                                | (int64_t)owner[(size_t)lx + TILE * lz];
+                        continue;
+                    }
                     if (in_piece_solid(lx, yp, lz)) {
                         // A piece owns EVERY face of its own brick, not just
                         // the top — and this is true whether it is bevelled
