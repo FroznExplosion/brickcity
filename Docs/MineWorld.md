@@ -743,9 +743,9 @@ its neighbours (light reaches 15 studs, a tile is 32).
 | `--gate=mouth`, its walls | 0.446 by the mouth, 0.066 by the back (level 1) |
 | `--gate=gpu`, baseline GPU on foot / 25 m up | 5.48 / 3.89 ms with sky light (62 C start), 5.48 / 3.73 without (57 C); the near tiles' own share 0.75 vs 0.40 ms on foot (the `light()`), editor closed, nothing else running |
 
-**Not in it.** Collapse pieces, dropped items and chests are lit by the
-open-air environment wherever they are, so in a cave they are brighter than
-the walls (they would need their own position's level, like the gun). Studs,
+**Not in it.** Collapse pieces, dropped items and chests were lit by the
+open-air environment wherever they were, so in a cave they glowed brighter
+than the walls: section 19 gives them their own cell's level. Studs,
 tufts, pebbles and the bricks in curved ground are instances in their own
 material and stay sky-lit; they stand on tops, which are sky. Water passes
 light freely. A one-course slab (found building the tunnel for
@@ -822,3 +822,79 @@ both sides agree, the floor falls off a level a step, `take()` names the
 tiles, gone once the lava is), `terrain_probe`, `fluid_probe`; `-- --gate=deep`
 (now with a lava pit: `mine_deep_lava.png`, `_nolights`), `-- --gate=water`
 (`water_lava_night_nolights.png`); `-- --gate=gpu` against section 17.
+
+## 19. Sky light on things (2026-11-22)
+
+Section 18 lit the ground's cells; everything else kept the open-air
+environment, so a collapse piece, a dropped item or a chest in a closed cave
+glowed against black walls. Now each takes the sky light of the cell it is
+in (`scripts/terrain/mine_sky_lit.gd`), and in a dark cave it is
+as dark as the walls round it.
+
+**Copies of the materials, a level per node.** The mine world draws them with
+copies that read an `instance uniform float sky_level` (0..15), made only
+there (`MineSkyLit`, made when sky light is on), so every other scene, and
+the mine world's near trees, which share the pieces' brick material, draw as
+before:
+
+- the collapse pieces (their mesh and their studs) with `brick.gdshader` plus
+  `#define SKY_LIT` (`MineSkyLit.brick_material`, a duplicate of the mine
+  world's `_brick_mat`, registered with WeatherFx like it);
+- ItemIcons' models (drops, chests) and the sand boxes that landed on a piece
+  with `shaders/sky_lit_item.gdshader`, StandardMaterial3D's look (colour,
+  roughness, alpha, glow; specular 0.5) written out, one material per look
+  (`item_material`), `#define ITEM_ALPHA` for the see-through ones.
+
+Both include `shaders/sky_lit.gdshaderinc`, which does what terrain.gdshader's
+`#ifdef SKY_LIGHT` block does, from the node's level instead of the vertex's:
+the same curve and uniforms (`MineWorld.sky_brightness`), `AO` x the
+brightness, `SPECULAR` x sqrt(brightness) (and for a brick, `METALLIC` too:
+a metal's reflections take f0 from its albedo), and a `light()` that writes
+out the engine's Burley diffuse, Schlick-GGX specular (the brick's
+anisotropic form, which the engine takes whenever ANISOTROPY is written) and
+rim, with the SUN scaled by brightness^2. Lamps, the lava's OmniLights and
+the flashlight light them as the engine would: the block light from lava
+reaches things through those lights (there is no per-point block-light
+query; the water keeps its per-tile lava lights partly for this, section 18).
+
+**When the level is asked** (`MineSkyLit`, a node of the mine world, not of
+the collapse, so a gate that stops the collapse keeps it): a thing is
+tracked when it appears (`DroppedItems.spawn`, `MineChests.place`,
+`PlanetPieces.mesh_hung` -- a new signal, emitted when a piece's mesh is hung,
+first or again after a hit -- and the collapse's own mesh and sand-column
+paths); each frame 24 tracked things are checked for a new light cell (a
+falling piece or item), and `terrain_edited` asks again everything within
+16 cells of an edit's box (light reaches 15). `BrickTerrain.sky_light_at`
+(0.2-0.3 ms in a dark cave, a cheap early out under the sky) at most
+0.25 ms a frame, the rest next frame; a new thing that does not fit in the
+frame is drawn at the eye's level meanwhile (things appear near the player).
+Painted with `set_instance_shader_parameter` on its meshes: nothing is read
+back from the renderer, nothing waits on a worker.
+
+**Measured (`-- --gate=skylit`, 2026-11-22).** A stone room built on the
+ground near spawn (13 x 17 studs, 6 courses), a floating dirt block let fall
+into it as a piece, a chest and a dropped grass block; its way out a tunnel a
+stud wide, 20 studs long, up to the sky (a room with no way out is a sealed
+chamber, which the mesher does not draw). Picture brightness at each thing's
+middle and on the floor a stud in front of it:
+
+| | piece | chest | drop | floor |
+|---|---|---|---|---|
+| open to the sky (level 15) | 0.507 | 0.396 | 0.436 | 0.62-0.73 |
+| same, `--no-sky-light` (the shared materials) | 0.507 | 0.396 | 0.429 | 0.62-0.73 |
+| roofed over (level 0, exposure 2) | 0.020 | 0.014 | 0.012 | 0.04 |
+| roofed, level forced to 15 (the old look) | 0.661 | 0.553 | 0.605 | 0.04 |
+
+The open pictures with and without sky light differ by 0.38 grey levels of
+255 overall, 1.5 on the piece, 0.17 on the chest (the drop spins).
+`mine_skylit_open.png`, `_cave.png`, `_cave_old.png` in `user://dev/`.
+
+**Checks.** `-- --gate=skylit` (PASS: each thing at level <= 2 in the closed
+room, no brighter than twice the floor beside it, under half its forced-15
+brightness), and with `--no-sky-light` for the open numbers;
+`mine_world_probe`, `terrain_collapse_probe`; `-- --gate=gpu` against
+section 17.
+
+**Not in it.** Falling sand (one MultiMesh for every falling column, gone
+in a second or two) and the crumbs a landing throws (PlanetCrumbs, short
+lived) keep the open-air light.

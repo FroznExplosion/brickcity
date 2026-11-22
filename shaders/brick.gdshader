@@ -162,6 +162,12 @@ instance uniform vec3 grain_origin = vec3(0.0);
 
 #include "res://shaders/grid_light.gdshaderinc"
 #include "res://shaders/brick_boxed.gdshaderinc"
+// The mine world's collapse pieces: their own cell's sky light
+// (sky_lit.gdshaderinc; MineSkyLit adds `#define SKY_LIT` to a copy).
+#ifdef SKY_LIT
+#define SKY_LIT_ANISO
+#include "res://shaders/sky_lit.gdshaderinc"
+#endif
 
 varying vec2 v_uv;
 varying vec2 v_face;
@@ -778,4 +784,20 @@ void fragment() {
     RIM_TINT = 0.4;
     AO = occlusion;
     AO_LIGHT_AFFECT = 0.0;
+#ifdef SKY_LIT
+    float sl_b = sky_lit_raw(sky_level);
+    float sl_ao = mix(sky_light_floor, 1.0, sl_b);
+    AO = occlusion * sl_ao;
+    // The sky's reflections: SPECULAR for plastic, METALLIC (f0 = albedo)
+    // for metal. light() keeps the surface's own for lamps and lava.
+    SPECULAR = out_spec * sqrt(sl_ao);
+    METALLIC = metal * sqrt(sl_ao);
+    sl_sun = pow(sl_b, sky_sun_power);
+    sl_spec = out_spec;
+    sl_rim = surface_rim * (1.0 - metal);
+    sl_metal = metal;
+    sl_aniso = aniso;
+    sl_tangent = TANGENT;
+    sl_binormal = BINORMAL;
+#endif
 }
