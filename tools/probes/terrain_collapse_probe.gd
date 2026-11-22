@@ -49,6 +49,7 @@ func _initialize() -> void:
 		_check_bond()
 		_check_big_island()
 		_check_cache()
+		_check_drawn()
 		_check_roof()
 		_check_real_caves()
 		_check_sand()
@@ -245,6 +246,29 @@ func _check_cache() -> void:
 	_expect(int(r2.get("tiles_packed", -1)) == 0 and (r2.groups as Array).size() == (r1.groups as Array).size(),
 			"survey again, nothing changed: no tile packed (%d), same answer; %.1f ms against %.1f" % [
 			int(r2.get("tiles_packed", -1)), ms, float(r1.get("tops_ms", 0.0)) + float(r1.get("bond_ms", 0.0))])
+
+
+## The drawn ground's bricks are the survey's (Docs/TerrainCollapse.md 8.4):
+## the tiles round an edit drawn after it, as the streamer does, and a cold
+## survey (the edit changed every tile's version it touches) packs no tile --
+## it reads the pieces the drawing packed.
+func _check_drawn() -> void:
+	var box := _build_arm(8, 4)
+	var tx := floori(float(base.x) / 32.0)
+	var tz := floori(float(base.z) / 32.0)
+	var td := Time.get_ticks_usec()
+	for dz in range(-3, 4):
+		for dx in range(-3, 4):
+			BrickTerrain.build_tile(tx + dx, tz + dz)
+	var draw_ms := (Time.get_ticks_usec() - td) / 1000.0
+	BrickTerrain.get_tile_pack_stats(true)
+	var t0 := Time.get_ticks_usec()
+	var r := _survey(box[0], box[1])
+	var ms := (Time.get_ticks_usec() - t0) / 1000.0
+	var st: Dictionary = BrickTerrain.get_tile_pack_stats()
+	_expect(int(st.packs) == 0 and int(st.hits) > 0 and (r.groups as Array).is_empty(),
+			"survey on drawn ground: no tile packed (%d packed, %d from the drawing), %.1f ms (tops %.1f); the 49 tiles drew in %.0f ms"
+			% [int(st.packs), int(st.hits), ms, float(r.get("tops_ms", 0.0)), draw_ms])
 
 
 ## A stone cave roof (Docs/TerrainCollapse.md 8.2): a tunnel `span` studs wide

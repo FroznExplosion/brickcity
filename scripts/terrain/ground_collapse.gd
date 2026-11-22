@@ -86,6 +86,9 @@ var columns_on_pieces := 0
 ## MAX_LOADED, settable (the gate shrinks it).
 var max_loaded := MAX_LOADED
 var worst_survey_ms := 0.0
+## The worst survey's parts: tiles it sampled and packed itself (not kept by
+## the drawing, brick::packed_tops) and the ms that took.
+var worst_survey_parts := ""
 var last_survey_ms := 0.0
 var worst_apply_ms := 0.0
 
@@ -280,6 +283,8 @@ func _land_survey() -> void:
 		return
 	surveys += 1
 	last_survey_ms = float(r.get("ms", 0.0))
+	if last_survey_ms > worst_survey_ms:
+		worst_survey_parts = "%d tiles packed, tops %.1f ms" % [int(r.get("tiles_packed", 0)), float(r.get("tops_ms", 0.0))]
 	worst_survey_ms = maxf(worst_survey_ms, last_survey_ms)
 	if bool(r.get("solved", false)):
 		solves += 1
@@ -831,10 +836,11 @@ func restore(saved: Array) -> void:
 
 
 func readout() -> String:
-	return "ground: %d surveys (%d solved, last %.1f ms, worst %.1f), %d pieces (%d bricks) let go, %d laid (cap %d), %d put away, %d deleted; sand %d fell, %d landed, %d on pieces, %d falling" % [
-			surveys, solves, last_survey_ms, worst_survey_ms, groups_let_go, bricks_let_go,
+	var store: Dictionary = BrickTerrain.get_tile_pack_stats()
+	return "ground: %d surveys (%d solved, last %.1f ms, worst %.1f: %s), %d pieces (%d bricks) let go, %d laid (cap %d), %d put away, %d deleted; sand %d fell, %d landed, %d on pieces, %d falling; tile store %d kept, %d read, %d packed" % [
+			surveys, solves, last_survey_ms, worst_survey_ms, worst_survey_parts, groups_let_go, bricks_let_go,
 			pieces.pieces.size(), max_loaded, dormant_count(), deleted, columns_fell, columns_landed,
-			columns_on_pieces, _sand.size()]
+			columns_on_pieces, _sand.size(), int(store.kept), int(store.hits), int(store.packs)]
 
 
 func _exit_tree() -> void:

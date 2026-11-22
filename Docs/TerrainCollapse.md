@@ -239,6 +239,36 @@ with smooth tops; islands came off a brick at a time, never in big chunks.
   2026-11-21: 5 runs of `--gate=gen --with-collapse` in a row, no crash
   (it was about 1 run in 2 before this).
 
+### 8.4 2026-11-22: the drawn tiles' bricks are the survey's
+
+The ground is not stored like Minecraft's chunks: it is the generator plus
+the edit table, and every reader worked its bricks out again (the drawing,
+the pickaxe, the brick lookup and the survey each sampled and packed the
+tile). Now one store keeps each tile's packed top course by tile version
+(`brick::packed_tile`, brick_terrain.cpp): the drawing fills it as it bakes
+a tile, and the others read the same pieces.
+
+- `TilePack`: the pieces, each column's owning piece, and each column's top
+  plate. `packed_tile` samples (the drawing and the pickaxe need the whole
+  sample) and packs only on a miss; `packed_tops` (the survey) does not
+  even sample on a hit. Most recently used 768 tiles kept.
+  `BrickTerrain.get_tile_pack_stats()`; the F3 ground line shows it.
+- **Sampling was the cost, not packing**: with the pieces kept but the
+  tile still sampled, a survey on drawn ground was 35 ms (tops 34). Without
+  the sample: **1.4 ms**. The old "packing was 97%" was both together.
+- The survey's own cache (`SharedTops`, `TOPS_MAX`) is gone: the store does
+  its job. The probe's "survey again" check stays (nothing changed: no tile
+  packed); new check: a survey on drawn ground packs no tile.
+- `set_edit` bumps the tile version after its write too, so a reader that
+  sampled before the write cannot keep it under the new version.
+- **What is left**: the tiles the edit itself changed (the edit bumps the
+  tiles within one of it). The survey starts before the redraw, so it
+  samples them (`--gate=collapse`: worst survey 25.6 ms, 3 tiles, on a
+  worker; it was 33.9 before the store). Waiting for the redraw's pack was
+  tried: the redraw never started first (0 waits), so it went. Ground nobody
+  has drawn (the probe's 40 cave ceilings, headless) costs as before: 42 ms
+  mean, 195 worst.
+
 ### 8.3 2026-11-21: walking in a cave
 
 `--gate=stop --walk --cave` starts the walk in a cave room 4-28 m under the
