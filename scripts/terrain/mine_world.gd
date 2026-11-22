@@ -83,6 +83,8 @@ var water: Node3D = null
 ## (Docs/WhereWorkRuns.md); the main thread only clears the cells it found.
 var _break_jobs: Array = []
 const MAX_BREAK_JOBS := 12
+## --gate=breaklag: each shot's time and when its brick was found and cleared.
+var break_log: Array = []
 var _menu_cam_captured := false
 ## The inventory screen (Docs/Inventory.md 4, stage 3) and its layer, or null.
 var _inv_screen: InventoryScreen = null
@@ -136,7 +138,14 @@ var _sync_far := false
 ## rifle's shots each marked tiles stale while their re-bake was in flight,
 ## and every one of them was baked and swapped in again. `-- --no-coalesce`
 ## hands each edit over at once (the A/B).
-const REFRESH_EVERY := 0.1
+##
+## 0 now (2026-11-21, --gate=breaklag): every edit is handed over the frame
+## it lands, and the edits of one frame still make one bake a tile (the
+## streamer starts its bakes once a frame). Bakes of one tile may overlap
+## (TerrainStreamer's edit generations: the newest that lands is shown), so
+## nothing is stale any more; at 0.1 s the second and third of three bricks
+## broken at once waited a tenth of a second before their tiles were marked.
+const REFRESH_EVERY := 0.0
 var _coalesce := true
 var _pending_tiles := Rect2i()
 var _refresh_in := 0.0
@@ -273,6 +282,8 @@ func _ready() -> void:
 			_run_breakwater_gate()
 		elif "--gate=gpu" in OS.get_cmdline_user_args():
 			_run_gpu_gate()
+		elif "--gate=breaklag" in OS.get_cmdline_user_args():
+			_run_breaklag_gate()
 		elif "--gate=mega" in OS.get_cmdline_user_args():
 			_run_mega_gate()
 		elif "--gate=shift" in OS.get_cmdline_user_args():
@@ -629,7 +640,7 @@ func _mine(point: Vector3, dir: Vector3, _info) -> void:
 	var at := to_local(point)
 	var task := WorkerThreadPool.add_task(
 		func() -> void: holder[0] = BrickTerrain.find_brick(at, n), false, "break brick")
-	_break_jobs.append([task, holder, at - dir * 0.6])
+	_break_jobs.append([task, holder, at - dir * 0.6, Time.get_ticks_usec()])
 
 
 ## Finished shots: clear the cells each found, throw its brick. Never waits.
@@ -649,6 +660,8 @@ func _land_breaks() -> void:
 		var res: Dictionary = BrickTerrain.clear_runs(runs)
 		if int(res.get("removed", 0)) == 0:
 			continue
+		if _streamer != null and _streamer.log_latency:
+			break_log.append({"shot": job[3], "found": Time.get_ticks_usec()})
 		# What a shot destroys is gone (the user, 2026-11-20): no brick thrown.
 		# What it leaves hanging falls -- the collapse, from terrain_edited.
 		terrain_edited(res)
@@ -2423,6 +2436,77 @@ func _run_gate() -> void:
 	await _gate_cave()
 	await _gate_edits()
 	print("[mine-gate] done")
+	get_tree().quit()
+
+
+## -- --gate=breaklag: HOW LONG A BROKEN BRICK TAKES TO GO from the ground
+## (the user: "a hesitation when I break a brick"). Single shots spaced out,
+## then three bricks at once; each stage timed: the brick found and cleared
+## (find_brick on a worker), the tile marked (the edits are gathered 0.1 s),
+## its bake started (a free slot), the bake landed, the new tile swapped in.
+## Latency, not frame time: the frames are the edit gate's (--gate).
+func _run_breaklag_gate() -> void:
+	await _frames(60)
+	set_on_foot(true)
+	await _frames(60)
+	_streamer.log_latency = true
+	var stud := BrickWorld.get_stud_metres()
+	var e := _eye()
+	var rows: Array = []
+	var shoot := func(k: int, n: int) -> void:
+		break_log.clear()
+		_streamer.latency_log.clear()
+		var t0 := Time.get_ticks_usec()
+		for j in n:
+			var p := e + Vector3(1.6 + float((k * 3 + j) % 6) * 0.7, 0.0, -2.4 - floorf(float(k * 3 + j) / 6.0) * 0.7)
+			var c := Vector2i(floori(p.x / stud), floori(p.z / stud))
+			p.y = _ground_m(c.x, c.y) - 0.2
+			_mine(p, Vector3.DOWN, null)
+		for f in 45:
+			await get_tree().process_frame
+		var found := 0
+		for b in break_log:
+			found = maxi(found, int(b.found) - t0)
+		var first_dirty := 1 << 62
+		var first_bake := 1 << 62
+		var last_land := 0
+		var last_swap := 0
+		for r in _streamer.latency_log:
+			first_dirty = mini(first_dirty, int(r.dirty))
+			first_bake = mini(first_bake, int(r.get("bake", r.dirty)))
+			last_land = maxi(last_land, int(r.get("land", r.dirty)))
+			last_swap = maxi(last_swap, int(r.swap))
+		if _streamer.latency_log.is_empty():
+			print("[breaklag] %d brick(s): no tile swapped (missed?)" % n)
+			return
+		var row := {"n": n, "tiles": _streamer.latency_log.size(), "find": found / 1000.0,
+				"mark": (first_dirty - t0 - found) / 1000.0, "wait": (first_bake - first_dirty) / 1000.0,
+				"bake": (last_land - first_bake) / 1000.0, "swap": (last_swap - last_land) / 1000.0,
+				"total": (last_swap - t0) / 1000.0}
+		rows.append(row)
+		print("[breaklag] %d brick(s), %d tile(s): found %.0f ms, marked +%.0f, bake started +%.0f, baked +%.0f, swapped +%.0f = %.0f ms" % [
+				n, row.tiles, row.find, row.mark, row.wait, row.bake, row.swap, row.total])
+	for k in 12:
+		await shoot.call(k, 1)
+	for k in 4:
+		await shoot.call(12 + k, 3)
+	for n in [1, 3]:
+		var sum := {}
+		var worst := 0.0
+		var cnt := 0
+		for r in rows:
+			if int(r.n) != n:
+				continue
+			cnt += 1
+			worst = maxf(worst, float(r.total))
+			for k in ["find", "mark", "wait", "bake", "swap", "total"]:
+				sum[k] = float(sum.get(k, 0.0)) + float(r[k])
+		if cnt == 0:
+			continue
+		print("[breaklag] %d brick(s), mean of %d: found %.0f, marked +%.0f, bake started +%.0f, baked +%.0f, swapped +%.0f = %.0f ms (worst %.0f)" % [
+				n, cnt, sum.find / cnt, sum.mark / cnt, sum.wait / cnt, sum.bake / cnt, sum.swap / cnt, sum.total / cnt, worst])
+	_streamer.log_latency = false
+	print("[breaklag] done")
 	get_tree().quit()
 
 
