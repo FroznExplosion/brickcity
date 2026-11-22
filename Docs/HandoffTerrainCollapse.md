@@ -115,7 +115,10 @@ re-anchor waiting on the workers, not the collapse: fixed, now 41 ms
 (MineWorld.md 14). Its last 14 ms (`_rebuild_ring` in one frame) went too:
 ring meshes are made on a worker now, and the walk has no frame over 33 ms.
 
-Item 1 still waits for the sections chat. Item 4 stays as it is for now (the
+**Item 1 done 2026-11-22** (this chat took it over; no sections work had
+landed): the drawn tiles' packed top course is kept by tile version and the
+survey reads it, TerrainCollapse.md 8.4. A survey on drawn ground: 35 ->
+1.4 ms. Item 4 stays as it is for now (the
 user's answer, 2026-11-21).
 
 ## Rules that bit this chat
