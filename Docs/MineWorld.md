@@ -721,9 +721,12 @@ tufts, pebbles and the bricks in curved ground are instances in their own
 material and stay sky-lit; they stand on tops, which are sky. Water passes
 light freely. Block light from lava (light spreading from lava cells, drawn
 as emission, in place of `MineWater`'s per-tile OmniLights) needs the
-water's lava cells in the bake; not done. A one-course slab is drawn as top
-pieces with no underside (found building the tunnel for `--gate=mouth`; its
-roof is two courses for that).
+water's lava cells in the bake; not done. A one-course slab (found building
+the tunnel for `--gate=mouth`) had no underside: its course is the columns'
+top, drawn as top pieces, and the face mesher left every face of a piece's
+brick to the piece, which draws none below. `mask_faces` now draws a piece's
+downward faces itself, merged per piece; the tunnel's roof is one course
+again, and `terrain_probe` (`_check_thin_roof`) checks the underside's area.
 
 **Checks.** `-- --gate=cave`, `-- --gate=deep --light-sweep` (now also
 "reflections on"), `-- --gate=mouth` (new: a tunnel built on the ground, the
