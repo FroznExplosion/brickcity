@@ -10,6 +10,13 @@ class_name RenderLayers
 ## first unpairs it under its old layers; shown again, it pairs under the new.
 
 
+## The mine world's ground that takes block light in its cells (the
+## SKY_LIGHT terrain shader, Docs/MineWorld.md 18): the water's lava
+## OmniLights leave it out, so ground near lava is not lit twice; studs,
+## props, pawns and drops stay on layer 1 and keep those lights.
+const BLOCK_LIT := 1 << 12
+
+
 static func set_layers(node: VisualInstance3D, mask: int) -> void:
 	if node.layers == mask:
 		return
