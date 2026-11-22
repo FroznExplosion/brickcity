@@ -719,9 +719,12 @@ open-air environment wherever they are, so in a cave they are brighter than
 the walls (they would need their own position's level, like the gun). Studs,
 tufts, pebbles and the bricks in curved ground are instances in their own
 material and stay sky-lit; they stand on tops, which are sky. Water passes
-light freely. A one-course slab is drawn as top pieces with no underside
-(found building the tunnel for `--gate=mouth`; its roof is two courses for
-that).
+light freely. A one-course slab (found building the tunnel for
+`--gate=mouth`) had no underside: its course is the columns' top, drawn as
+top pieces, and the face mesher left every face of a piece's brick to the
+piece, which draws none below. `mask_faces` now draws a piece's downward
+faces itself, merged per piece; the tunnel's roof is one course again, and
+`terrain_probe` (`_check_thin_roof`) checks the underside's area.
 
 **Block light from lava (2026-11-21).** Minecraft's second light, beside
 the sky's, in the same cells and the same bake (`sky_light_pass`):

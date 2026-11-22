@@ -4749,9 +4749,10 @@ func _run_mouth_gate() -> void:
 	var before: float = await _mean_luma_in(centre)
 	await _shot(dev + "mine_mouth_before.png")
 	# Stone shell, then the air inside it: 5 x 5 studs inside, 6 courses tall,
-	# 15 studs deep, open at the low-X end. The roof two courses thick: a
-	# one-course slab is drawn as top pieces with no underside.
-	terrain_edited(BrickTerrain.fill_box(Vector3i(o.x, b - 3, o.y - 3), Vector3i(o.x + 16, b + 23, o.y + 3), 4, true))
+	# 15 studs deep, open at the low-X end. The roof ONE course thick: its
+	# course is the columns' top, drawn as top pieces, whose underside the
+	# face mesher now draws (it had none: terrain_probe's thin roof check).
+	terrain_edited(BrickTerrain.fill_box(Vector3i(o.x, b - 3, o.y - 3), Vector3i(o.x + 16, b + 20, o.y + 3), 4, true))
 	terrain_edited(BrickTerrain.fill_box(Vector3i(o.x, b, o.y - 2), Vector3i(o.x + 15, b + 17, o.y + 2), 0, false))
 	_flush_edits()
 	var roof := 0

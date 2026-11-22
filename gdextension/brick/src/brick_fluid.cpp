@@ -156,7 +156,7 @@ struct MainLock {
 double g_sea_m = 0.0;
 int g_sea_b = 0;          ///< the first course ABOVE the sea
 bool g_sea_on = false;
-bool g_sloped = true;
+bool g_sloped = false;   ///< flat plate steps (the user, 2026-11-21); true = MC slopes
 double g_cx = 0.0, g_cz = 0.0, g_sim_r = 90.0;
 double g_recheck_x = 1e30, g_recheck_z = 1e30;
 
