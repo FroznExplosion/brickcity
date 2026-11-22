@@ -812,6 +812,14 @@ lit some other way (a block-light level per instance, like the gun's sky
 level); a cheaper middle step is to take the ground out of their
 `light_cull_mask`. The water area's call (MineWater.md 6).
 
+**Taken (2026-11-22, the water area):** the middle step. Ground drawn with
+the SKY_LIGHT shader goes on render layer `RenderLayers.BLOCK_LIT` (1 << 12,
+TerrainTile._add_surface) and the lava lights' cull mask leaves it out, so
+it is lit once, by its cells; studs, props, pawns and drops keep the lights.
+Bullet-hole decals take that layer too. `--gate=water` night pool: 0.265 with
+the lights, 0.249 without (was 0.289 / 0.235); the studs round the lava stay
+lit.
+
 **Checks.** `-- --gate=cave`, `-- --gate=deep --light-sweep` (now also
 "reflections on"), `-- --gate=mouth` (new: a tunnel built on the ground, the
 day seen from inside against no tunnel, its walls by the mouth and the back),

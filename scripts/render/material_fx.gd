@@ -87,7 +87,7 @@ func _mark(point: Vector3, normal: Vector3, fam: String) -> void:
 		d = _marks.pop_front()
 	else:
 		d = Decal.new()
-		d.cull_mask = 1
+		d.cull_mask = 1 | RenderLayers.BLOCK_LIT   # the mine world's ground too
 		add_child(d)
 	d.texture_albedo = BrickMaterials.hole_texture(fam)
 	d.size = Vector3(MARK_SIZE, 0.2, MARK_SIZE)
