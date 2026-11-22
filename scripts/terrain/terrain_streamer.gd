@@ -102,6 +102,18 @@ var _slot_task: Array[int] = []
 var _slot_coord: Array[Vector2i] = []
 var _slots: Array[Dictionary] = []
 var _free_slots: Array[int] = []
+## EDIT GENERATIONS (Docs/MineWorld.md 9, --gate=breaklag). Each refresh of a
+## built tile counts one up (`_gen`); a bake carries the generation it started
+## at (`_slot_gen`) and lands only if it is newer than the last that landed
+## (`_landed_gen`). So a second edit starts a second bake AT ONCE, beside the
+## first, instead of marking the first stale and waiting for it: three bricks
+## broken a frame apart chained three or four whole-tile bakes (145 ms).
+var _gen := {}
+var _landed_gen := {}
+var _slot_gen: Array[int] = []
+## The chamfered near mesh, baked by its own task beside the flat one.
+var _slot_near_task: Array[int] = []
+var _slot_near: Array[Dictionary] = []
 
 var _built := 0
 var _dropped := 0
@@ -134,6 +146,12 @@ var _bevel_tasks := {}
 ## once showed the new tile flat and bare for a few frames (the flicker round
 ## every edit); swapping whole in one frame cost a 5 ms step.
 var _swaps := {}
+## THE EDIT'S CLOCK (--gate=breaklag): with `log_latency`, each refreshed tile
+## is stamped (usec) as it is marked, its bake starts, lands and swaps, and the
+## finished record goes to `latency_log` ({c, dirty, bake, land, swap}).
+var log_latency := false
+var latency_log: Array = []
+var _stamps := {}
 const BEVEL_IN_FLIGHT := 2
 ## Worst single phase seen, split three ways — which one hurts is the whole
 ## question when a hitch has to be chased.
@@ -162,6 +180,9 @@ func setup(material: Material) -> void:
 		_slots.append({})
 		_slot_task.append(-1)
 		_slot_coord.append(Vector2i.ZERO)
+		_slot_gen.append(0)
+		_slot_near_task.append(-1)
+		_slot_near.append({})
 		_free_slots.append(i)
 
 
@@ -176,6 +197,9 @@ func _exit_tree() -> void:
 		if _slot_task[slot] < 0:
 			continue
 		WorkerThreadPool.wait_for_task_completion(_slot_task[slot])
+		if _slot_near_task[slot] >= 0:
+			WorkerThreadPool.wait_for_task_completion(_slot_near_task[slot])
+			_slot_near_task[slot] = -1
 		_slot_task[slot] = -1
 		_slots[slot] = {}
 		_free_slots.append(slot)
@@ -301,8 +325,13 @@ func refresh(rect: Rect2i) -> void:
 	for c in _tiles:
 		if rect.has_point(c):
 			_dirty[c] = true
+			_gen[c] = int(_gen.get(c, 0)) + 1
+			if log_latency and not _stamps.has(c):
+				_stamps[c] = {"c": c, "dirty": Time.get_ticks_usec()}
 	for c in _tasks:
-		if rect.has_point(c):
+		# A built tile's bake is only older (its generation says so); a first
+		# bake of a tile not yet built is stale and baked again.
+		if rect.has_point(c) and not _tiles.has(c):
 			_stale[c] = true
 
 
@@ -496,7 +525,7 @@ func _collect(cx: int, cz: int) -> void:
 				var c := Vector2i(r.position.x + dx, r.position.y + dz)
 				if absi(c.x) > world_half or absi(c.y) > world_half:
 					continue   # the world ends here
-				if (_tiles.has(c) and not _dirty.has(c)) or _tasks.has(c):
+				if (_tiles.has(c) and not _dirty.has(c)) or (_tasks.has(c) and not _wants_newer(c)):
 					continue
 				if seen.has(c):
 					continue   # in both the region and the pinned rect
@@ -506,7 +535,7 @@ func _collect(cx: int, cz: int) -> void:
 	# ring past the region: otherwise it is drawn from the old field until
 	# the camera walks away and back (a dev menu rebuild left 28 such tiles).
 	for c in _dirty:
-		if not seen.has(c) and not _tasks.has(c) and _tiles.has(c):
+		if not seen.has(c) and _tiles.has(c) and (not _tasks.has(c) or _wants_newer(c)):
 			seen[c] = true
 			want.append(c)
 	if want.is_empty():
@@ -522,20 +551,26 @@ func _collect(cx: int, cz: int) -> void:
 		var slot: int = _free_slots.pop_back()
 		_slot_coord[slot] = c
 		_slots[slot] = {}
+		_slot_gen[slot] = int(_gen.get(c, 0))
 		# A tile rebuilt by an edit near the camera bakes its chamfered near
-		# mesh in the same job, so the new tile goes in whole (_assemble's
-		# swap) instead of flat first and bevelled a few frames later.
+		# mesh too, so the new tile goes in whole (_assemble's swap) instead
+		# of flat first and bevelled a few frames later -- on a task of its
+		# own beside the flat one (they were one after the other, one task).
 		var with_near := _tiles.has(c) and TerrainTile.bevel_enabled \
 				and absi(c.x - _centre.x) <= bevel_radius and absi(c.y - _centre.y) <= bevel_radius
+		_slot_near[slot] = {}
+		_slot_near_task[slot] = -1
+		if with_near:
+			_slot_near_task[slot] = WorkerThreadPool.add_task(
+				func() -> void: _slot_near[slot] = BrickTerrain.build_tile_chamfered(c.x, c.y, TerrainTile.BEVEL),
+				true, "terrain chamfer")
 		# The slot is this task's alone, so the worker writes without a lock.
 		_slot_task[slot] = WorkerThreadPool.add_task(
-			func() -> void:
-				var d := TerrainTile.bake(c.x, c.y)
-				if with_near:
-					d["near"] = BrickTerrain.build_tile_chamfered(c.x, c.y, TerrainTile.BEVEL)
-				_slots[slot] = d,
+			func() -> void: _slots[slot] = TerrainTile.bake(c.x, c.y),
 			true, "terrain tile")
 		_tasks[c] = slot
+		if log_latency and _stamps.has(c) and not _stamps[c].has("bake"):
+			_stamps[c]["bake"] = Time.get_ticks_usec()
 
 
 ## Turn finished bakes into nodes, for as long as the budget allows.
@@ -547,13 +582,24 @@ func _assemble() -> void:
 			continue
 		if not WorkerThreadPool.is_task_completed(_slot_task[slot]):
 			continue
+		if _slot_near_task[slot] >= 0 and not WorkerThreadPool.is_task_completed(_slot_near_task[slot]):
+			continue
 		WorkerThreadPool.wait_for_task_completion(_slot_task[slot])
 		var c: Vector2i = _slot_coord[slot]
 		var data: Dictionary = _slots[slot]
+		if _slot_near_task[slot] >= 0:
+			WorkerThreadPool.wait_for_task_completion(_slot_near_task[slot])
+			data["near"] = _slot_near[slot]
+			_slot_near_task[slot] = -1
+			_slot_near[slot] = {}
+		var gen := _slot_gen[slot]
 		_slot_task[slot] = -1
 		_slots[slot] = {}
 		_free_slots.append(slot)
-		_tasks.erase(c)
+		if _tasks.get(c, -1) == slot:
+			_tasks.erase(c)
+		if _tiles.has(c) and gen <= int(_landed_gen.get(c, -1)):
+			continue   # a newer bake of this tile landed first
 		if _stale.has(c):
 			# Baked from the field as it was before an edit: bake it again.
 			_stale.erase(c)
@@ -561,7 +607,11 @@ func _assemble() -> void:
 				_dirty[c] = true
 			continue
 		var old: TerrainTile = _tiles.get(c)
-		_dirty.erase(c)
+		_landed_gen[c] = gen
+		# Still dirty if an edit came after this bake started (its own bake
+		# is running, or starts next frame).
+		if gen >= int(_gen.get(c, 0)):
+			_dirty.erase(c)
 
 		var t1 := Time.get_ticks_usec()
 		var tile := TerrainTile.new()
@@ -579,7 +629,13 @@ func _assemble() -> void:
 				var stale: TerrainTile = _swaps[c].tile
 				stale.recycle()
 				stale.queue_free()
-			_swaps[c] = {"tile": tile, "near": data.get("near", {}), "step": 0}
+			_swaps[c] = {"tile": tile, "near": {}, "step": 1}
+			# The chamfered mesh goes on now, in the landing frame; the next
+			# frame takes the collider and swaps (one frame, it was two).
+			if not (data.get("near", {}) as Dictionary).is_empty():
+				tile.add_bevel(data["near"])
+			if log_latency and _stamps.has(c):
+				_stamps[c]["land"] = Time.get_ticks_usec()
 			var sms0 := float(Time.get_ticks_usec() - t1) / 1000.0
 			_worst_surface_ms = maxf(_worst_surface_ms, sms0)
 			_worst_tile_ms = maxf(_worst_tile_ms, sms0)
@@ -634,8 +690,23 @@ func _swap_step(t0: int) -> void:
 				job.step = 1
 			1:
 				tile.set_casts_shadow(old.casts_shadow())
-				if tile.add_collision(shapes_per_frame):
-					job.step = 2
+				if not tile.add_collision(shapes_per_frame):
+					continue
+				# The collider is in: swap in the same frame.
+				tile.set_near(absi(c.x - _centre.x) <= near_show_radius
+						and absi(c.y - _centre.y) <= near_show_radius)
+				old.recycle()
+				tile.add_instances()
+				tile.visible = old.visible
+				old.queue_free()
+				_tiles[c] = tile
+				_swaps.erase(c)
+				_built += 1
+				if log_latency and _stamps.has(c):
+					var st1: Dictionary = _stamps[c]
+					st1["swap"] = Time.get_ticks_usec()
+					latency_log.append(st1)
+					_stamps.erase(c)
 			_:
 				tile.set_near(absi(c.x - _centre.x) <= near_show_radius
 						and absi(c.y - _centre.y) <= near_show_radius)
@@ -646,9 +717,19 @@ func _swap_step(t0: int) -> void:
 				_tiles[c] = tile
 				_swaps.erase(c)
 				_built += 1
+				if log_latency and _stamps.has(c):
+					var st: Dictionary = _stamps[c]
+					st["swap"] = Time.get_ticks_usec()
+					latency_log.append(st)
+					_stamps.erase(c)
 		var ms := float(Time.get_ticks_usec() - t1) / 1000.0
 		_worst_tile_ms = maxf(_worst_tile_ms, ms)
 		_worst_swap_ms = maxf(_worst_swap_ms, ms)
+
+
+## A built tile edited since its newest running bake started.
+func _wants_newer(c: Vector2i) -> bool:
+	return _tiles.has(c) and _tasks.has(c) and _slot_gen[_tasks[c]] < int(_gen.get(c, 0))
 
 
 func _drop_swap(c: Vector2i) -> void:

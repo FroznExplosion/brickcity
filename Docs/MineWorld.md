@@ -258,6 +258,35 @@ nodes go to the pool and the new one fills them, it is shown, the old one goes.
 (`bare_near_tiles`): 0 of 300 edit frames. Swapping whole in ONE frame was a
 5.2 ms step; staged, the worst step is 1.1 ms (it was 1.0 before).
 
+**The hesitation after a break, measured and cut (2026-11-21,
+`-- --gate=breaklag`).** Each stage of a broken brick timed, from the shot
+to the new tile drawn:
+
+| | found | baked | swapped | total |
+|---|---|---|---|---|
+| 1 brick, before | 16 | 38 | 33 | 87 ms |
+| 3 bricks at once, before | 22 | 145 | 35 | 201 ms |
+| 1 brick, now | 12 | 22 | 2 | 37 ms |
+| 3 bricks at once, now | 14 | 40 | 4 | 58 ms |
+
+- Three bricks chained whole-tile bakes: a second edit marked the running
+  bake stale, waited for it, and baked again. Now each refresh counts the
+  tile's generation up and starts its own bake at once, beside the older one;
+  a bake lands only if it is newer than the last that landed
+  (`TerrainStreamer._gen` / `_slot_gen` / `_landed_gen`).
+- The edits were gathered 0.1 s (`REFRESH_EVERY`): the second and third brick
+  waited that long. 0 now: handed over the frame they land; one frame's edits
+  still make one bake a tile.
+- The flat and the chamfered near mesh bake on two tasks, not one after the
+  other.
+- The chamfer goes on in the frame the bake lands, the collider and the swap
+  as soon as the budget allows (usually the same frame); it was two frames.
+- Still the edit gate's frames: worst 23.3-23.5 ms against 22.8 idle, worst
+  step 1.5 ms, flicker 0 of 300. Rapid fire bakes more tiles (42 for 30
+  shots, was 30): workers' time, not the frame's.
+- Left: finding the brick (12-22 ms: one or two frames, find_brick samples
+  and packs the whole tile on a worker).
+
 **Sections were measured first, and are not the edit cost** (2026-11-20, quiet
 machine, 71 C start): `--gate`'s 12 shots and 30 rapid-fire shots beside the
 player rebuilt 42 whole tiles and no frame was worse than an idle frame
