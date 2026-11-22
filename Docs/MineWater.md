@@ -557,7 +557,9 @@ drying tile could lose its timer to a same-tick write (timers now run first).
 
 1. A brick of water is a **1x1 brick**; a bucket holds 3 of them = 9 tiles. A mixed set of
    water pieces packed over the cells may come later.
-2. Flowing water has **sloped tops**, like Minecraft.
+2. Flowing water has **flat tops**, a plate step a cell, like brick pieces (changed
+   2026-11-21: "the tops of the water bricks shouldnt angle"; was sloped like Minecraft,
+   still there behind `BrickFluid.set_sloped(true)`).
 3. Water bricks **drain, then dry**. Source bricks and what they feed work like Minecraft; flowing
    water cut off from its source becomes still water and drains and dries (4.1.6).
 4. A block placed into still water **deletes** it.
