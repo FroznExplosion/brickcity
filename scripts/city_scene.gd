@@ -5265,9 +5265,11 @@ func _hop_in() -> void:
 	var deck: VehicleDeck = v.rodeo
 	var room := deck.riders.size() - deck.rider_count()
 	# A tank's gunner's seat first, if the player drives it alone (Halo's
-	# marine on the Warthog's gun).
+	# marine on the Warthog's gun). An int, -1 for no seat to fill, as
+	# Soldier.ride_on and board_seat take it: inferred, it was a Tank.Seat, which
+	# has no -1 (the editor's INT_AS_ENUM_WITHOUT_MATCH).
 	var tank := v as Tank
-	var seat := Tank.Seat.GUNNER if tank != null and tank.player_drives() \
+	var seat: int = Tank.Seat.GUNNER if tank != null and tank.player_drives() \
 			and tank.seat_free(Tank.Seat.GUNNER) else -1
 	var near := []
 	for p in ai_services.pawns:
