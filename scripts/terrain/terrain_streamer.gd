@@ -146,6 +146,25 @@ var _bevel_tasks := {}
 ## once showed the new tile flat and bare for a few frames (the flicker round
 ## every edit); swapping whole in one frame cost a 5 ms step.
 var _swaps := {}
+## A refresh in waiting whose collider is in: it swaps with its BATCH.
+const SWAP_READY := 2
+## EDITS SWAP TOGETHER (Docs/MineWorld.md 19). Every resident tile one
+## refresh() names is one batch (two edits over a tile merge theirs), and a
+## batch's tiles swap in the SAME frame, once each is built and collided --
+## each tile swapping by itself put a brick across a tile edge in one tile and
+## out of the other for a frame or more, its studs with it (the studs that
+## flashed when a brick broke). coord -> batch {"tiles": {coord: true},
+## "since": msec its first tile was ready}.
+var _batch_of := {}
+## A batch waits this long at most for a straggler (a tile edited again and
+## again -- lava relighting, a sand pour) before swapping what is ready.
+const BATCH_WAIT_MS := 300
+## HELD TILES (Docs/MineWorld.md 19): coord -> {owner: true}. A held tile is
+## built and collided but not swapped: what falls from the ground
+## (ground_collapse.gd) holds the tiles that still draw it until its own mesh
+## is made, then swaps them and lets it go in one call (swap_ready), so the
+## piece and the ground never both draw it, nor neither.
+var _holds := {}
 ## THE EDIT'S CLOCK (--gate=breaklag): with `log_latency`, each refreshed tile
 ## is stamped (usec) as it is marked, its bake starts, lands and swaps, and the
 ## finished record goes to `latency_log` ({c, dirty, bake, land, swap}).
@@ -322,12 +341,21 @@ func settle(camera_xz: Vector2, rounds := 4000) -> void:
 ## when ready. A bake already in flight over the rectangle read the field
 ## BEFORE the edit, so its result is thrown away and it bakes again.
 func refresh(rect: Rect2i) -> void:
+	var batch := {"tiles": {}, "since": 0}
 	for c in _tiles:
 		if rect.has_point(c):
 			_dirty[c] = true
 			_gen[c] = int(_gen.get(c, 0)) + 1
 			if log_latency and not _stamps.has(c):
 				_stamps[c] = {"c": c, "dirty": Time.get_ticks_usec()}
+			batch.tiles[c] = true
+			# Merged with the batch it was in: they swap as one.
+			var old = _batch_of.get(c)
+			if old != null and old != batch:
+				for t in old.tiles:
+					batch.tiles[t] = true
+	for t in batch.tiles:
+		_batch_of[t] = batch
 	for c in _tasks:
 		# A built tile's bake is only older (its generation says so); a first
 		# bake of a tile not yet built is stale and baked again.
@@ -351,6 +379,135 @@ func fresh(rect: Rect2i) -> bool:
 	return true
 
 
+## Hold the resident tiles over `rect` for `owner` (any key): built and
+## collided, they wait to be swapped until released (unhold, swap_ready).
+func hold_tiles(rect: Rect2i, owner) -> void:
+	for c in _tiles:
+		if rect.has_point(c):
+			if not _holds.has(c):
+				_holds[c] = {}
+			_holds[c][owner] = true
+
+
+func unhold(rect: Rect2i, owner) -> void:
+	for c in _holds.keys():
+		if rect.has_point(c):
+			(_holds[c] as Dictionary).erase(owner)
+			if (_holds[c] as Dictionary).is_empty():
+				_holds.erase(c)
+
+
+## Could every refresh over `rect` -- and the rest of each one's batch -- swap
+## NOW, holds by anyone but `owner` aside? (Nothing waiting: true.)
+func tiles_ready(rect: Rect2i, owner = null) -> bool:
+	for c in _batch_tiles(rect):
+		if not _tile_ready(c, owner):
+			return false
+	return true
+
+
+## Swap every batch over `rect` that is ready, now, whatever the frame's
+## budget. Then `fresh(rect)` holds when tiles_ready(rect) did.
+func swap_ready(rect: Rect2i) -> void:
+	var done := {}
+	for c in _batch_tiles(rect):
+		var b = _batch_of.get(c)
+		if b != null and done.has(b):
+			continue
+		if b != null:
+			done[b] = true
+		_swap_batch(c, true)
+
+
+func _held(c: Vector2i, owner = null) -> bool:
+	var h = _holds.get(c)
+	if h == null:
+		return false
+	for o in h:
+		if o != owner:
+			return true
+	return false
+
+
+## Built and collided, nothing newer coming, not held by others.
+func _tile_ready(c: Vector2i, owner = null) -> bool:
+	if not _tiles.has(c):
+		return true
+	if _dirty.has(c) or _stale.has(c) or _held(c, owner):
+		return false
+	return not _swaps.has(c) or int(_swaps[c].step) == SWAP_READY
+
+
+## The resident tiles over `rect`, with every tile of their batches.
+func _batch_tiles(rect: Rect2i) -> Array:
+	var out := {}
+	for c in _tiles:
+		if rect.has_point(c):
+			out[c] = true
+			var b = _batch_of.get(c)
+			if b != null:
+				for t in b.tiles:
+					out[t] = true
+	return out.keys()
+
+
+## Swap c's batch -- every tile of it whose refresh is ready -- if all of it
+## is ready (or it has waited BATCH_WAIT_MS; `force` skips the wait but not
+## the holds). One frame, so nothing is drawn half old and half new.
+func _swap_batch(c: Vector2i, force := false) -> void:
+	var b = _batch_of.get(c)
+	var tiles: Array = b.tiles.keys() if b != null else [c]
+	var all := true
+	for t in tiles:
+		if _held(t):
+			return
+		if not _tile_ready(t):
+			all = false
+	if not all:
+		if b == null or force:
+			return
+		var now := Time.get_ticks_msec()
+		if int(b.since) == 0:
+			b.since = now
+		if now - int(b.since) < BATCH_WAIT_MS:
+			return
+	for t in tiles:
+		if _swaps.has(t) and int(_swaps[t].step) == SWAP_READY:
+			_swap_now(t)
+			if b != null and _batch_of.get(t) == b:
+				_batch_of.erase(t)
+	# Whole: the batch is done. Waited too long: the tiles still coming stay
+	# in it and swap alone when they are ready (its wait is over).
+	if all and b != null:
+		for t in tiles:
+			if _batch_of.get(t) == b:
+				_batch_of.erase(t)
+
+
+## The swap itself: the old tile's instance nodes to the pool, the new one
+## fills them, is shown and the old one goes -- one frame.
+func _swap_now(c: Vector2i) -> void:
+	var job: Dictionary = _swaps[c]
+	var tile: TerrainTile = job.tile
+	var old: TerrainTile = _tiles.get(c)
+	_swaps.erase(c)
+	if old == null or not is_instance_valid(tile):
+		return
+	tile.set_near(absi(c.x - _centre.x) <= near_show_radius
+			and absi(c.y - _centre.y) <= near_show_radius)
+	old.recycle()
+	tile.add_instances()
+	tile.visible = old.visible
+	old.queue_free()
+	_tiles[c] = tile
+	_built += 1
+	if log_latency and _stamps.has(c):
+		var st: Dictionary = _stamps[c]
+		st["swap"] = Time.get_ticks_usec()
+		latency_log.append(st)
+		_stamps.erase(c)
+
+
 ## Throw away the tiles over a rectangle so they are built again.
 ##
 ## For the level EDITOR: an edit changes the field, so every tile over it is
@@ -370,6 +527,8 @@ func invalidate(rect: Rect2i) -> void:
 		_tiles.erase(c)
 		_drop_swap(c)
 		_dirty.erase(c)
+		_batch_of.erase(c)
+		_holds.erase(c)
 		tile.recycle()
 		tile.queue_free()
 
@@ -675,6 +834,8 @@ func _swap_step(t0: int) -> void:
 	for c in _swaps.keys():
 		if float(Time.get_ticks_usec() - t0) / 1000.0 >= budget_ms:
 			return
+		if not _swaps.has(c):
+			continue   # swapped already, with its batch
 		var job: Dictionary = _swaps[c]
 		var tile: TerrainTile = job.tile
 		var old: TerrainTile = _tiles.get(c)
@@ -692,36 +853,12 @@ func _swap_step(t0: int) -> void:
 				tile.set_casts_shadow(old.casts_shadow())
 				if not tile.add_collision(shapes_per_frame):
 					continue
-				# The collider is in: swap in the same frame.
-				tile.set_near(absi(c.x - _centre.x) <= near_show_radius
-						and absi(c.y - _centre.y) <= near_show_radius)
-				old.recycle()
-				tile.add_instances()
-				tile.visible = old.visible
-				old.queue_free()
-				_tiles[c] = tile
-				_swaps.erase(c)
-				_built += 1
-				if log_latency and _stamps.has(c):
-					var st1: Dictionary = _stamps[c]
-					st1["swap"] = Time.get_ticks_usec()
-					latency_log.append(st1)
-					_stamps.erase(c)
+				# The collider is in: swap with its batch, in the same
+				# frame if the rest of it is ready too.
+				job.step = SWAP_READY
+				_swap_batch(c)
 			_:
-				tile.set_near(absi(c.x - _centre.x) <= near_show_radius
-						and absi(c.y - _centre.y) <= near_show_radius)
-				old.recycle()
-				tile.add_instances()
-				tile.visible = old.visible
-				old.queue_free()
-				_tiles[c] = tile
-				_swaps.erase(c)
-				_built += 1
-				if log_latency and _stamps.has(c):
-					var st: Dictionary = _stamps[c]
-					st["swap"] = Time.get_ticks_usec()
-					latency_log.append(st)
-					_stamps.erase(c)
+				_swap_batch(c)
 		var ms := float(Time.get_ticks_usec() - t1) / 1000.0
 		_worst_tile_ms = maxf(_worst_tile_ms, ms)
 		_worst_swap_ms = maxf(_worst_swap_ms, ms)
@@ -806,6 +943,8 @@ func _drop(cx: int, cz: int) -> void:
 		_tiles.erase(c)
 		_drop_swap(c)
 		_dirty.erase(c)
+		_batch_of.erase(c)
+		_holds.erase(c)
 		tile.recycle()
 		tile.queue_free()
 		_dropped += 1

@@ -50,6 +50,10 @@ const RANGE_FADE := 6.0
 ## MultiMesh.set_buffer, TRANSFORM_3D with use_colors: twelve floats of
 ## transform then four of colour.
 const FLOATS_PER_INSTANCE := 16
+## ...and with use_custom_data, four more: the ground's studs with the sky
+## light on (build_tile's "stud_stride" 20: each stud's sky and block light,
+## Docs/MineWorld.md 19), drawn by sky_stud_material in their own kinds.
+const FLOATS_PER_SKY_STUD := 20
 
 ## The surface format flag for the print-material channel. One place, because
 ## every mesh that uses `terrain.gdshader` needs the same one.
@@ -68,6 +72,15 @@ var curve_cells := 0
 
 ## The tile's collider, owned directly rather than through nodes.
 var _body := RID()
+
+
+## NOT physics-interpolated (Docs/MineWorld.md 19): a tile never moves between
+## ticks, and its pooled stud MultiMeshes are refilled with another layout --
+## interpolated, each stud was drawn for up to a tick halfway between its old
+## buffer slot and its new one (the studs that flashed when a brick broke, a
+## stray stud beside a block as it started to fall). Children inherit it.
+func _init() -> void:
+	physics_interpolation_mode = Node.PHYSICS_INTERPOLATION_MODE_OFF
 var bevel_tri_count := 0
 
 
@@ -282,12 +295,15 @@ func set_near(on: bool) -> void:
 
 
 ## The near (bevelled) or far (plain) stud set, if it is not there yet.
+## Studs that carry their light (stud_stride 20) are kinds of their own.
 func _add_studs(near: bool) -> void:
-	var node_name := "Studs" if near else "StudsFar"
+	var sky := int(_data.get("stud_stride", FLOATS_PER_INSTANCE)) == FLOATS_PER_SKY_STUD
+	var node_name := ("StudsSky" if near else "StudsSkyFar") if sky else ("Studs" if near else "StudsFar")
 	if has_node(NodePath(node_name)):
 		return
 	_add_instances(node_name, PieceMeshes.stud() if near else PieceMeshes.stud_plain(),
-			_data["studs"], STUD_RANGE, stud_material())
+			_data["studs"], STUD_RANGE, sky_stud_material() if sky else stud_material(),
+			0.0, RANGE_FADE, FLOATS_PER_SKY_STUD if sky else FLOATS_PER_INSTANCE)
 
 
 func _apply_near() -> void:
@@ -300,9 +316,9 @@ func _apply_near() -> void:
 		_far_surface.visible = not chamfered
 	for c in get_children():
 		if c is MultiMeshInstance3D:
-			if c.name == "Studs":
+			if c.name == "Studs" or c.name == "StudsSky":
 				(c as Node3D).visible = _near and _studs_shown
-			elif c.name == "StudsFar":
+			elif c.name == "StudsFar" or c.name == "StudsSkyFar":
 				(c as Node3D).visible = not _near and _studs_shown
 
 
@@ -410,6 +426,7 @@ static func sky_light_shader() -> Shader:
 ## with its brick" is only true once this exists.
 static var _instance_material: ShaderMaterial = null
 static var _stud_material: ShaderMaterial = null
+static var _sky_stud_material: ShaderMaterial = null
 static var _tuft_material: ShaderMaterial = null
 
 ## Scatter and debris: printed plastic with a 45° raster on top faces.
@@ -441,6 +458,26 @@ static func stud_material() -> ShaderMaterial:
 	return _stud_material
 
 
+## The ground's studs where the bake lights them (the mine world): the stud
+## material with `#define INSTANCE_SKY` (printed_core), which reads each
+## stud's sky and block light from its custom data -- so a stud in a cave is
+## as dark as the floor under it, not lit by the open sky (Docs/MineWorld.md 19).
+static func sky_stud_material() -> ShaderMaterial:
+	if _sky_stud_material == null:
+		var code: String = (load("res://shaders/printed.gdshader") as Shader).code
+		var at := code.find("\n") + 1
+		var sh := Shader.new()
+		sh.code = code.insert(at, "#define INSTANCE_SKY\n")
+		_sky_stud_material = ShaderMaterial.new()
+		_sky_stud_material.shader = sh
+		_sky_stud_material.set_shader_parameter("top_mode", 1)
+		_sky_stud_material.set_shader_parameter("contour_sides", PieceMeshes.SIDES)
+		_sky_stud_material.set_shader_parameter("contour_radius",
+				PieceMeshes.STUD_R * PieceMeshes.STUD_TAPER)
+		WeatherFx.register(_sky_stud_material)
+	return _sky_stud_material
+
+
 ## Grass blades are single quads with no back, so they need the two-sided
 ## build of the same shader — `render_mode` is a property of the shader, not
 ## of the material.
@@ -467,9 +504,10 @@ static func _note_ms(key: String, t0: int) -> void:
 
 
 func _add_instances(node_name: String, mesh: Mesh, buffer: PackedFloat32Array,
-		range_end: float, mat: Material = null, range_begin := 0.0, fade := RANGE_FADE) -> void:
+		range_end: float, mat: Material = null, range_begin := 0.0, fade := RANGE_FADE,
+		stride := FLOATS_PER_INSTANCE) -> void:
 	@warning_ignore("integer_division")
-	var count := buffer.size() / FLOATS_PER_INSTANCE
+	var count := buffer.size() / stride
 	if count == 0:
 		return
 	var t0 := Time.get_ticks_usec()
@@ -573,6 +611,7 @@ func _take_multimesh(kind: String, mesh: Mesh) -> MultiMesh:
 		mm = MultiMesh.new()
 		mm.transform_format = MultiMesh.TRANSFORM_3D
 		mm.use_colors = true
+		mm.use_custom_data = kind.begins_with("StudsSky")
 		mm.mesh = mesh
 	_mms.append([kind, mm])
 	return mm
@@ -588,6 +627,8 @@ static func prewarm_begin(parent: Node3D, at: Vector3, per_kind: Dictionary) -> 
 	var kinds := {
 		"Studs": [PieceMeshes.stud(), stud_material()],
 		"StudsFar": [PieceMeshes.stud_plain(), stud_material()],
+		"StudsSky": [PieceMeshes.stud(), sky_stud_material()],
+		"StudsSkyFar": [PieceMeshes.stud_plain(), sky_stud_material()],
 		"Tufts": [PieceMeshes.tuft(), tuft_material()],
 		"Pebbles": [PieceMeshes.pebble(), instance_material()],
 	}
@@ -597,6 +638,7 @@ static func prewarm_begin(parent: Node3D, at: Vector3, per_kind: Dictionary) -> 
 			var mm := MultiMesh.new()
 			mm.transform_format = MultiMesh.TRANSFORM_3D
 			mm.use_colors = true
+			mm.use_custom_data = kind.begins_with("StudsSky")
 			mm.mesh = kinds[kind][0]
 			mm.instance_count = 1
 			mm.set_instance_transform(0, Transform3D(Basis().scaled(Vector3.ONE * 0.001),
@@ -607,6 +649,7 @@ static func prewarm_begin(parent: Node3D, at: Vector3, per_kind: Dictionary) -> 
 			mi.multimesh = mm
 			mi.material_override = kinds[kind][1]
 			mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+			mi.physics_interpolation_mode = Node.PHYSICS_INTERPOLATION_MODE_OFF
 			parent.add_child(mi)
 			out.append([kind, mi])
 	return out
