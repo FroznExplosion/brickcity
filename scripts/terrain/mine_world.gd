@@ -95,6 +95,9 @@ var _inv_walker_frozen := false
 ## Chests and the items lying in the world (Docs/Inventory.md 4, stage 5).
 var chests: MineChests = null
 var drops: DroppedItems = null
+## Sky light on collapse pieces, drops and chests (Docs/MineWorld.md 19);
+## null with --no-sky-light.
+var sky_lit: MineSkyLit = null
 
 ## Saving the world's changes (Docs/MineWorld.md 9): one file per seed and
 ## generator settings, under UserPaths.SAVES (a scripted pass: user://dev/).
@@ -225,6 +228,11 @@ func _ready() -> void:
 	_brick_mat = ShaderMaterial.new()
 	_brick_mat.shader = load("res://shaders/brick.gdshader")
 	WeatherFx.register(_brick_mat)
+	if _sky_light_on:
+		sky_lit = MineSkyLit.new()
+		sky_lit.name = "SkyLit"
+		add_child(sky_lit)
+		sky_lit.setup(self)
 	_build_hud()
 	builder = Builder.new()
 	builder.name = "Builder"
@@ -235,10 +243,12 @@ func _ready() -> void:
 	drops.name = "DroppedItems"
 	add_child(drops)
 	drops.setup(self, builder.inv)
+	drops.sky = sky_lit
 	chests = MineChests.new()
 	chests.name = "Chests"
 	add_child(chests)
 	chests.setup(self, builder.inv, drops)
+	chests.sky = sky_lit
 	_build_item_icons()
 	debris = Debris.new()
 	debris.name = "Debris"
@@ -300,6 +310,8 @@ func _ready() -> void:
 			_run_deep_gate()
 		elif "--gate=mouth" in OS.get_cmdline_user_args():
 			_run_mouth_gate()
+		elif "--gate=skylit" in OS.get_cmdline_user_args():
+			_run_skylit_gate()
 		else:
 			_run_gate()
 
@@ -689,6 +701,8 @@ func terrain_edited(res: Dictionary) -> void:
 		chests.check()
 	if drops != null:
 		drops.wake()
+	if sky_lit != null and res.has("box_lo"):
+		sky_lit.dirty_box(res.box_lo, res.box_hi)
 	if _deep != null and res.has("box_lo"):
 		_deep.refresh_box(res.box_lo, res.box_hi)
 	if collapse != null:
@@ -4878,6 +4892,153 @@ func _run_mouth_gate() -> void:
 			"" if _sky_light_on else " [--no-sky-light]"])
 	print("[mine-mouth] %s  the tunnel's wall by its back %.3f, by its mouth %.3f (eye's level at the back %.1f; exposure follows the eye, so this is the picture, not the light)"
 			% ["ok  " if wall_ok else "FAIL", wall_back, wall_mouth, eye_back])
+	get_tree().quit()
+
+
+## -- --gate=skylit (Docs/MineWorld.md 19): a collapse piece, a chest and a
+## dropped item in a stone room built on the ground near spawn. Open to the
+## sky they take level 15 and look as they always did (run it again with
+## `--no-sky-light` for the shared materials: the "open" numbers should
+## match); roofed over, each must be about as dark as the floor beside it,
+## and much darker than the same room with their level forced to 15 (the old
+## look: lit by the open air in a closed cave).
+func _run_skylit_gate() -> void:
+	await _frames(10)
+	var dev := UserPaths.DEV
+	DirAccess.make_dir_recursive_absolute(dev)
+	_time = 0.42
+	set_on_foot(false)
+	view.process_mode = Node.PROCESS_MODE_DISABLED
+	view.rig.visible = false
+	if view.arms != null:
+		view.arms.visible = false
+	_hud_layer.visible = false
+	var stud := BrickWorld.get_stud_metres()
+	var plate := BrickWorld.get_plate_metres()
+	var e := _eye()
+	var o := Vector2i(floori(e.x / stud) + 6, floori(e.z / stud))
+	var t_max := -(1 << 30)
+	var t_min := 1 << 30
+	for dz in range(-10, 11):
+		for dx in range(-1, 36):
+			t_max = maxi(t_max, BrickTerrain.surface_plate(o.x + dx, o.y + dz))
+			t_min = mini(t_min, BrickTerrain.surface_plate(o.x + dx, o.y + dz))
+	# The room's floor: whole courses, one over the highest ground there.
+	var b := (floori(float(t_max + 1) / 3.0) + 1) * 3
+	# Stone walls a stud thick round 13 x 17 studs, 6 courses tall, open on
+	# top, on stone down to the lowest ground (a floor slab over a dip is let
+	# go by the collapse); the roof comes later (a roof over open ground
+	# first would come down too, and the collapse must run to make the piece).
+	terrain_edited(BrickTerrain.fill_box(Vector3i(o.x, mini(t_min, b - 3), o.y - 9), Vector3i(o.x + 14, b + 17, o.y + 9), 4, true))
+	terrain_edited(BrickTerrain.fill_box(Vector3i(o.x + 1, b, o.y - 8), Vector3i(o.x + 13, b + 17, o.y + 8), 0, false))
+	# Its way out: a tunnel a stud wide and a course tall, 20 studs long, up
+	# to the sky at its end. A room with no way out is a sealed chamber,
+	# which the mesher does not draw (nobody can be in it); light dies out
+	# 15 cells along the tunnel, so the room is dark.
+	terrain_edited(BrickTerrain.fill_box(Vector3i(o.x + 14, mini(t_min, b - 3), o.y - 1), Vector3i(o.x + 35, b + 5, o.y + 1), 4, true))
+	terrain_edited(BrickTerrain.fill_box(Vector3i(o.x + 14, b, o.y), Vector3i(o.x + 34, b + 2, o.y), 0, false))
+	terrain_edited(BrickTerrain.fill_box(Vector3i(o.x + 34, b, o.y), Vector3i(o.x + 34, b + 5, o.y), 0, false))
+	# A floating dirt block (2 x 2 studs, a course): it falls as a piece.
+	terrain_edited(BrickTerrain.fill_box(Vector3i(o.x + 2, b + 9, o.y - 5), Vector3i(o.x + 3, b + 11, o.y - 4), 2, true))
+	chests.place(MineChests.block_of(Vector3i(o.x + 6, b, o.y - 5)), [], true)
+	drops.spawn(ItemStack.make(&"grass", 1), Vector3((o.x + 11) * stud, (b + 4) * plate, (o.y - 4.5) * stud))
+	var foot := Vector3((o.x + 7) * stud, b * plate + 0.05, (o.y + 6) * stud)
+	_fly_to(foot, Vector3(0, 0, -1))
+	walker.pitch = -0.45
+	await _frames(60)
+	await _collapse_quiet(400)
+	await _frames(30)
+	var piece: PlanetPieces.Piece = null
+	for p in collapse.pieces.pieces:
+		if is_instance_valid(p.body):
+			piece = p
+	var chest: Node3D = null
+	for k in chests.chests:
+		chest = chests.chests[k].node
+	var drop: Node3D = drops.drops[0].node if drops.count() > 0 else null
+	if piece == null or chest == null or drop == null:
+		print("[mine-skylit] FAIL  not all made: piece %s, chest %s, drop %s" % [piece != null, chest != null, drop != null])
+		get_tree().quit()
+		return
+	var things: Array = [["piece", piece.body], ["chest", chest], ["drop", drop]]
+	# What is measured: each thing's middle on screen, and the floor a stud
+	# in front of it (towards the camera), at 256 x 144.
+	var spots := func() -> Array:
+		var c := get_viewport().get_camera_3d()
+		var out := []
+		for t in things:
+			var n: Node3D = t[1]
+			var at: Vector3 = n.global_position
+			var fl := to_global(Vector3(to_local(at).x, b * plate + 0.01, to_local(at).z + 2.0 * stud))
+			out.append([c.unproject_position(at), c.unproject_position(fl)])
+		return out
+	var measure := func(tag: String) -> Array:
+		await RenderingServer.frame_post_draw
+		var img := get_viewport().get_texture().get_image()
+		var sz := Vector2(img.get_width(), img.get_height())
+		img.resize(256, 144)
+		var res := []
+		var sp: Array = spots.call()
+		for s in sp:
+			var pair := []
+			for q: Vector2 in s:
+				var px := Vector2i(int(q.x / sz.x * 256), int(q.y / sz.y * 144))
+				var sum := 0.0
+				var n := 0
+				for y in range(px.y - 2, px.y + 3):
+					for x in range(px.x - 2, px.x + 3):
+						if x >= 0 and y >= 0 and x < 256 and y < 144:
+							sum += img.get_pixel(x, y).get_luminance()
+							n += 1
+				pair.append(sum / maxf(n, 1))
+			res.append(pair)
+		var line := "[mine-skylit] %-9s" % tag
+		for i in things.size():
+			line += "  %s %.3f (floor %.3f, level %.0f) at %s" % [things[i][0], res[i][0], res[i][1],
+					sky_lit.level_of(things[i][1]) if sky_lit != null else -1.0, sp[i][0]]
+		print(line + "  eye level %.1f, exposure %.2f" % [_eye_sky, _rig.exposure])
+		return res
+	var open: Array = await measure.call("open")
+	await _shot(dev + "mine_skylit_open.png")
+	if sky_lit == null:
+		print("[mine-skylit] --no-sky-light: the shared materials, open to the sky only")
+		get_tree().quit()
+		return
+	# The roof: the collapse stopped first (it would bring the slab down).
+	collapse.process_mode = Node.PROCESS_MODE_DISABLED
+	terrain_edited(BrickTerrain.fill_box(Vector3i(o.x, b + 18, o.y - 9), Vector3i(o.x + 14, b + 20, o.y + 9), 4, true))
+	_flush_edits()
+	# The shell must be whole: every cell of its walls, floor and roof solid.
+	var holes := []
+	for y in range(b - 3, b + 21):
+		for z in range(o.y - 9, o.y + 10):
+			for x in range(o.x, o.x + 15):
+				var inside := (x > o.x and x < o.x + 14 and z > o.y - 9 and z < o.y + 9 and y >= b and y <= b + 17) \
+						or (x == o.x + 14 and z == o.y and y >= b and y <= b + 2)
+				if not inside and BrickTerrain.solid_at(x, y, z) == 0:
+					holes.append(Vector3i(x - o.x, y - b, z - o.y))
+	print("[mine-skylit] the room's shell: %d holes %s" % [holes.size(), str(holes.slice(0, 12))])
+	await _frames(150)
+	var cave: Array = await measure.call("cave")
+	await _shot(dev + "mine_skylit_cave.png")
+	sky_lit.set_force(15.0)
+	await _frames(4)
+	var old: Array = await measure.call("cave, 15")
+	await _shot(dev + "mine_skylit_cave_old.png")
+	sky_lit.set_force(-1.0)
+	await _frames(4)
+	var fails := 0
+	for i in things.size():
+		var lvl := sky_lit.level_of(things[i][1])
+		var obj: float = cave[i][0]
+		var fl: float = cave[i][1]
+		var was: float = old[i][0]
+		var ok: bool = lvl <= 2.0 and obj <= maxf(fl * 2.0, 0.02) and obj < was * 0.5 \
+				and sky_lit.level_of(things[i][1]) >= 0.0
+		fails += 0 if ok else 1
+		print("[mine-skylit] %s  %s in the closed room: %.3f, the floor beside it %.3f, lit by the open air %.3f (level %.0f; open to the sky %.3f)"
+				% ["ok  " if ok else "FAIL", things[i][0], obj, fl, was, lvl, open[i][0]])
+	print("[mine-skylit] %s; %s" % ["PASS" if fails == 0 else "%d FAILED" % fails, sky_lit.readout()])
 	get_tree().quit()
 
 

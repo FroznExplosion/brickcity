@@ -102,6 +102,9 @@ class Piece:
 ## The ground changed where `box` (world) is: a piece settled there, woke, was
 ## hit or went. The scene's AI syncs its regions and forgets the box (setup_ai).
 signal ground_changed(box: AABB)
+## A piece's mesh was hung on its body (made, or made again after a hit): the
+## mine world paints its sky light on it (MineSkyLit).
+signal mesh_hung(p: Piece)
 
 var bricks: BrickWorld
 var planet: Node3D
@@ -309,6 +312,7 @@ func _hang_mesh(p: Piece) -> void:
 		add_studs(mi, p.chunk)
 	p.mesh_node = mi
 	p.body.add_child(mi)
+	mesh_hung.emit(p)
 
 
 ## The chunk's open studs as a child of `mi`, in the chunk's frame as its mesh

@@ -48,6 +48,10 @@ const RELOAD_PER_TEND := 12
 var world: Node3D = null
 var bricks: BrickWorld = null
 var pieces: PlanetPieces = null
+## The mine world's sky light on things (Docs/MineWorld.md 19), or null: the
+## pieces drawn with a sky-lit copy of the brick material, each painted with
+## its cell's level.
+var sky: MineSkyLit = null
 var palette := {}
 
 ## Edit boxes waiting for a survey: [lo, hi] (plates), each at most MAX_BOX.
@@ -110,6 +114,12 @@ func setup(w: Node3D, brick_material: Material) -> void:
 	# 2026-11-20): only what is left falls, if anything.
 	pieces.throw_killed = false
 	add_child(pieces)
+	sky = w.get("sky_lit")
+	if sky != null and brick_material is ShaderMaterial:
+		# A copy: the same material also draws the near trees, which stay
+		# lit by the open air.
+		brick_material = sky.brick_material(brick_material as ShaderMaterial)
+		pieces.mesh_hung.connect(func(p: PlanetPieces.Piece) -> void: sky.track(p.body))
 	pieces.setup(bricks, w, brick_material)
 	_sand_mm = MultiMeshInstance3D.new()
 	_sand_mm.name = "FallingSand"
@@ -427,7 +437,8 @@ func _land_on_piece(c: Dictionary, top_y: float) -> void:
 		cols.append(BrickTerrain.material_filament_index(mats[j]))
 		var mi := MeshInstance3D.new()
 		mi.mesh = _sand_mm.multimesh.mesh
-		mi.material_override = _box_material(mats[j])
+		mi.material_override = _box_material(mats[j]) if sky == null \
+				else sky.item_material(_box_material(mats[j]))
 		mi.position = Vector3(stud * 0.5, (j + 0.5) * brick, stud * 0.5)
 		holder.add_child(mi)
 	bricks.place_blocks(chunk, Vector3i.ZERO, cells, archs, cols)
@@ -439,6 +450,8 @@ func _land_on_piece(c: Dictionary, top_y: float) -> void:
 	var p := pieces.adopt(chunk, holder)
 	pieces.toppled -= 1
 	p.body.linear_velocity = Vector3.DOWN * minf(float(c.v), 6.0)
+	if sky != null:
+		sky.track(p.body)
 	columns_on_pieces += 1
 
 
@@ -577,6 +590,8 @@ func _release() -> void:
 				mi.position = -p.local_com
 				p.mesh_node = mi
 				p.body.add_child(mi)
+				if sky != null:
+					sky.track(p.body)
 
 
 ## A waiting piece's mesh: its bake on a worker, then the ArrayMesh on one.
