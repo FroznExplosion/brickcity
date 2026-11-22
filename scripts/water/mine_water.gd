@@ -259,6 +259,10 @@ func apply(res: Dictionary) -> void:
 
 	if sea != null and bool(res.get("mask_changed", false)):
 		sea.fluid_mask_dirty = true
+	# Lava came or went: the ground's block light round it (MineWorld.md 18).
+	var lit: PackedInt32Array = res.get("lava_light", PackedInt32Array())
+	if not lit.is_empty() and host != null and host.has_method("lava_relit"):
+		host.lava_relit(lit)
 	# Rock the lava made: (x, z, first plate, last plate, material) a cell.
 	# All of a tick's rock is ONE terrain edit (one box, the tiles merged): a
 	# cell at a time was a tile rebuild and a collapse survey per cell.

@@ -61,6 +61,7 @@ func _initialize() -> void:
 	_check_cave_colliders()
 	_check_deep_tier()
 	_check_sky_light()
+	_check_block_light()
 	await _check_solid_trunks()
 
 	BrickTerrain.set_generator(0)
@@ -380,6 +381,223 @@ func _check_sky_light() -> void:
 	BrickTerrain.clear_terrain_edits()
 	BrickTerrain.set_sky_light(false)
 	BrickTerrain.set_deep_tier(false)
+
+
+## BLOCK LIGHT from lava (Docs/MineWorld.md 18): a lava cell lights the
+## cells round it 15 less a step, written per vertex into CUSTOM0.g as
+## 0..60. A cave is dug across a tile seam (in the tiles, then again in the
+## deep sections), lava put in it with BrickFluid; the two sides must agree
+## on their shared edge, and the floor's light must fall off a level a step.
+func _check_block_light() -> void:
+	BrickTerrain.clear_terrain_edits()
+	BrickTerrain.set_deep_tier(true)
+	BrickTerrain.set_sky_light(true)
+	BrickFluid.reset(0.0, false)
+	var stud := BrickWorld.get_stud_metres()
+	var plate := BrickWorld.get_plate_metres()
+	# No lava: no block light anywhere.
+	var none_lit := 0
+	for t in [Vector2i(-40, 12), Vector2i(-41, 12)]:
+		var m: Array = BrickTerrain.build_tile(t.x, t.y).mesh
+		if m.is_empty():
+			continue
+		var cu: PackedByteArray = m[Mesh.ARRAY_CUSTOM0]
+		for k in range(1, cu.size(), 4):
+			if cu[k] != 0:
+				none_lit += 1
+	_expect(none_lit == 0, "no lava: no vertex has block light (%d do)" % none_lit)
+	# A cave in the tiles: plates between the deep tier's top and the ground.
+	var tx := 0
+	var tz := 0
+	var yb := 0
+	var found := false
+	for i in 40:
+		tx = -40 + i * 3
+		tz = 12 + (i % 5) * 4
+		var floor_p := maxi(BrickTerrain.deep_top(tx - 1, tz), BrickTerrain.deep_top(tx, tz))
+		yb = (floor_p + 9) / 3 * 3
+		var low := 1 << 30
+		for x in range(tx * 32 - 14, tx * 32 + 14):
+			for z in range(tz * 32 + 10, tz * 32 + 20):
+				low = mini(low, BrickTerrain.surface_plate(x, z))
+		if low > yb + 24:
+			found = true
+			break
+	_expect(found, "found a tile pair with room for a cave over the deep tier")
+	if not found:
+		return
+	var seam := tx * 32
+	var z0 := tz * 32 + 15
+	var lava := Vector3i(seam - 1, yb / 3, z0)
+	var dug := _block_cave(seam, yb, z0, lava)
+	var res: Dictionary = dug[0]
+	var lava_cells: Array = dug[1]
+	var relit := {}
+	var lit_flat: PackedInt32Array = res.get("lava_light", PackedInt32Array())
+	for i in range(0, lit_flat.size(), 4):
+		if lit_flat[i + 2] <= yb and lit_flat[i + 3] >= yb:
+			relit[Vector2i(lit_flat[i], lit_flat[i + 1])] = true
+	_expect(lava_cells.size() > 0, "lava placed in the cave (%d cells)" % lava_cells.size())
+	_expect(relit.has(Vector2i(tx - 1, tz)) and relit.has(Vector2i(tx, tz)),
+			"take() names the tiles on both sides of the lava for relighting (%s)" % [relit.keys()])
+	var a: Dictionary = BrickTerrain.build_tile(tx - 1, tz)
+	var b: Dictionary = BrickTerrain.build_tile(tx, tz)
+	_expect(int(a.get("block_seeds", 0)) > 0 and int(b.get("block_seeds", 0)) > 0,
+			"both tiles' bakes see the lava (%d, %d seeds)" % [int(a.get("block_seeds", 0)), int(b.get("block_seeds", 0))])
+	var sa := _block_at_plane(a, 0, 32.0 * stud)
+	var sb := _block_at_plane(b, 0, 0.0)
+	var seam_n := 0
+	var seam_lit := 0
+	var seam_bad := 0
+	for k in sa:
+		if sb.has(k):
+			seam_n += 1
+			if int(sa[k]) > 0 or int(sb[k]) > 0:
+				seam_lit += 1
+			if absi(int(sa[k]) - int(sb[k])) > 1:
+				seam_bad += 1
+	# The floor: each vertex blends the four cells round it (it lies on
+	# their edges, half a cell under their middle), 15 less the steps to
+	# the nearest lava cell.
+	var fall_n := 0
+	var fall_bad := 0
+	var worst := 0
+	var near_g := 0
+	var far_g := 255
+	for side in [[a, tx - 1], [b, tx]]:
+		var m: Array = (side[0] as Dictionary).mesh
+		var vs: PackedVector3Array = m[Mesh.ARRAY_VERTEX]
+		var ns: PackedVector3Array = m[Mesh.ARRAY_NORMAL]
+		var cu: PackedByteArray = m[Mesh.ARRAY_CUSTOM0]
+		for i in vs.size():
+			if ns[i].y < 0.9 or absf(vs[i].y - yb * plate) > 0.002:
+				continue
+			var X := roundi(vs[i].x / stud) + int(side[1]) * 32
+			var Z := roundi(vs[i].z / stud) + tz * 32
+			if X < seam - 11 or X > seam + 11 or Z < z0 - 1 or Z > z0 + 2:
+				continue
+			var want := 0.0
+			for o in [Vector2i(-1, -1), Vector2i(0, -1), Vector2i(-1, 0), Vector2i(0, 0)]:
+				var best := 0
+				for l: Vector3i in lava_cells:
+					var d := absi(X + o.x - l.x) + absi(yb / 3 - l.y) + absi(Z + o.y - l.z)
+					best = maxi(best, 15 - d)
+				want += best / 4.0
+			var g := cu[i * 4 + 1]
+			var e := roundi(want / 15.0 * 60.0)
+			fall_n += 1
+			worst = maxi(worst, absi(g - e))
+			if absi(g - e) > 1:
+				fall_bad += 1
+			if absi(X - lava.x) <= 1:
+				near_g = maxi(near_g, g)
+			if absi(X - lava.x) >= 10:
+				far_g = mini(far_g, g)
+	print("[mine] block light: tile seam %d of %d vertices differ (%d lit); floor %d of %d off the expected fall-off (worst %d of 60); by the lava %d, 10+ studs off %d; the pass %.2f / %.2f ms"
+			% [seam_bad, seam_n, seam_lit, fall_bad, fall_n, worst, near_g, far_g,
+			float(a.get("block_ms", 0.0)), float(b.get("block_ms", 0.0))])
+	_expect(seam_lit > 10 and seam_bad == 0, "two tiles agree on their shared edge's block light (%d of %d lit differ)" % [seam_bad, seam_lit])
+	_expect(fall_n > 10 and fall_bad == 0, "the floor's block light falls off a level a step (%d of %d off, worst %d)" % [fall_bad, fall_n, worst])
+	_expect(near_g >= 52 and far_g <= 24, "bright by the lava (%d), dim 10 studs off (%d)" % [near_g, far_g])
+	# The lava taken away: dark again once relit.
+	for l: Vector3i in lava_cells:
+		BrickFluid.remove(l, -1)
+	BrickFluid.tick_now(1)
+	var gone: Dictionary = BrickFluid.take()
+	var left := int(BrickFluid.stats().get("lava_cells", -1))
+	var after := 0
+	var cu2: PackedByteArray = BrickTerrain.build_tile(tx, tz).mesh[Mesh.ARRAY_CUSTOM0]
+	for k in range(1, cu2.size(), 4):
+		if cu2[k] != 0:
+			after += 1
+	_expect(left == 0 and (gone.get("lava_light", PackedInt32Array()) as PackedInt32Array).size() > 0 and after == 0,
+			"lava removed: none left (%d), relight asked, tile dark (%d lit)" % [left, after])
+	# The same in the deep sections, two or more sections down, in solid
+	# rock (a cave dug inside a generated cavern has no walls near the lava).
+	BrickFluid.reset(0.0, false)
+	var sec := BrickTerrain.get_deep_section_plates()
+	var dtx := tx
+	var sy := 0
+	var yd := 0
+	var rock := false
+	for i in 60:
+		dtx = tx + (i % 12) * 2
+		var top := mini(BrickTerrain.deep_top(dtx - 1, tz), BrickTerrain.deep_top(dtx, tz))
+		sy = floori(float(top) / sec) - 2 - i / 12
+		yd = (sy * sec + 30) / 3 * 3
+		var solid := 0
+		var all := 0
+		for x in range(dtx * 32 - 13, dtx * 32 + 13, 2):
+			for y in range(yd - 3, yd + 12, 2):
+				for z in range(z0 - 3, z0 + 4):
+					all += 1
+					if BrickTerrain.solid_at(x, y, z) != 0:
+						solid += 1
+		if solid >= all * 0.97:
+			rock = true
+			break
+	_expect(rock, "found solid rock for a deep cave")
+	seam = dtx * 32
+	var dlava := Vector3i(seam - 1, yd / 3, z0)
+	_block_cave(seam, yd, z0, dlava)
+	var da: Dictionary = BrickTerrain.build_section(dtx - 1, sy, tz)
+	var db: Dictionary = BrickTerrain.build_section(dtx, sy, tz)
+	var pa := _block_at_plane(da, 0, 32.0 * stud)
+	var pb := _block_at_plane(db, 0, 0.0)
+	var dn := 0
+	var dlit := 0
+	var dbad := 0
+	for k in pa:
+		if pb.has(k):
+			dn += 1
+			if int(pa[k]) > 0 or int(pb[k]) > 0:
+				dlit += 1
+			if absi(int(pa[k]) - int(pb[k])) > 1:
+				dbad += 1
+	print("[mine] block light, deep sections: seam %d of %d differ (%d lit); seeds %d, %d; the pass %.2f ms"
+			% [dbad, dn, dlit, int(da.get("block_seeds", 0)), int(db.get("block_seeds", 0)), float(db.get("block_ms", 0.0))])
+	_expect(int(da.get("block_seeds", 0)) > 0 and int(db.get("block_seeds", 0)) > 0, "both deep sections see the lava")
+	_expect(dlit > 10 and dbad == 0, "two deep sections agree on their shared edge's block light (%d of %d lit differ)" % [dbad, dlit])
+	BrickFluid.reset(0.0, false)
+	BrickTerrain.clear_terrain_edits()
+	BrickTerrain.set_sky_light(false)
+	BrickTerrain.set_deep_tier(false)
+
+
+## A cave 24 studs along X across the seam, 5 wide, 3 courses tall from
+## plate `yb`, and a lava source at `lava`. [take()'s result, the lava cells
+## in the cave after one tick].
+func _block_cave(seam: int, yb: int, z0: int, lava: Vector3i) -> Array:
+	BrickTerrain.fill_box(Vector3i(seam - 12, yb, z0 - 2), Vector3i(seam + 11, yb + 8, z0 + 2), 0, false)
+	BrickFluid.place(lava, 2, 0, 3)  # lava, a source
+	BrickFluid.tick_now(1)
+	var res: Dictionary = BrickFluid.take()
+	var cells: Array = []
+	for x in range(seam - 12, seam + 12):
+		for c in range(yb / 3, yb / 3 + 3):
+			for z in range(z0 - 2, z0 + 3):
+				if int(BrickFluid.cell_info(Vector3i(x, c, z)).get("fluid", 0)) == 2:
+					cells.append(Vector3i(x, c, z))
+	return [res, cells]
+
+
+## CUSTOM0.g (block light, 0..60) of a baked mesh's vertices on a plane, keyed
+## as _light_at_plane keys them.
+func _block_at_plane(d: Dictionary, axis: int, at: float) -> Dictionary:
+	var out := {}
+	var m: Array = d.get("mesh", [])
+	if m.is_empty():
+		return out
+	var vs: PackedVector3Array = m[Mesh.ARRAY_VERTEX]
+	var ns: PackedVector3Array = m[Mesh.ARRAY_NORMAL]
+	var cu: PackedByteArray = m[Mesh.ARRAY_CUSTOM0]
+	for i in vs.size():
+		var v := vs[i]
+		if absf((v.x if axis == 0 else v.y) - at) >= 0.002:
+			continue
+		var k := "%.3f,%.3f,%.2f,%.2f,%.2f" % [v.y if axis == 0 else v.x, v.z, ns[i].x, ns[i].y, ns[i].z]
+		out[k] = cu[i * 4 + 1]
+	return out
 
 
 ## Is the air cell over plate `yp` of column (x, z) under rock for `up` plates

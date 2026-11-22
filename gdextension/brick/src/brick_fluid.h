@@ -7,6 +7,8 @@
 #include <godot_cpp/variant/vector3.hpp>
 #include <godot_cpp/variant/vector3i.hpp>
 
+#include <vector>
+
 using namespace godot;
 
 /// WATER AND LAVA ON THE BRICK GRID. Docs/MineWater.md.
@@ -65,7 +67,9 @@ public:
     /// The finished tick's results: {"meshes": [{tile: Vector2i, water: Array,
     /// lava: Array, far: bool}], "terrain": PackedInt32Array (x, z, first plate,
     /// last plate, material ...: rock the lava made),
-    /// "mask_changed": bool}.
+    /// "mask_changed": bool, "lava_light": PackedInt32Array (tx, tz, first
+    /// plate, last plate ...: terrain tiles whose block light lava appearing
+    /// or going may have changed -- every tile within its reach)}.
     static Dictionary take();
     /// Probes: run `ticks` ticks now, on this thread.
     static void tick_now(int ticks);
@@ -134,6 +138,16 @@ public:
     /// pool_mask / pool_calm.
     static PackedByteArray sea_mask(int x0, int z0, int size);
     static int changed_columns();
+
+    /// BLOCK LIGHT (Docs/MineWorld.md 18): the wet lava cells in a box of
+    /// cells (stud x, course, stud z; inclusive), appended to `out` as three
+    /// ints a cell. Any thread -- the terrain's tile bakes call it -- under
+    /// g_state for a moment, reading only sections that hold lava, and only
+    /// columns already read from the field (what is drawn is what glows).
+    /// Not bound: C++ only. Returns the cells added.
+    static int lava_cells_in(Vector3i lo, Vector3i hi, std::vector<int32_t> &out);
+    /// Lava cells anywhere (one load): no lava, no lock.
+    static int64_t lava_total();
 
     static Dictionary stats();
     static int active_count();
