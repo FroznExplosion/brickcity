@@ -611,6 +611,10 @@ Each stage is merged on its own. C++ stages need the main folder's DLL rebuilt a
    tile with lava (`OmniLight3D`, recycled, faded past 80 m); every pawn in lava burns (40 a
    second, `Elements.FIRE`) and moves at 35 % (`Pawn.water_drag`). `--gate=water` has a lava
    pool at night, a pawn burning in it, and the pool cut off and cooled.
+   *2026-11-21:* lava also lights the ground's cells (block light, MineWorld.md 18): the bake
+   reads lava cells through `BrickFluid::lava_cells_in`, and `take()`'s `"lava_light"` names
+   the tiles to relight. The per-tile lights stay: they light studs, props, pawns and drops,
+   which the cells do not (MineWorld.md 18 has the pictures and the open question).
 7. **Saving** the water with the edits.
    *Built 2026-11-18:* `<seed>_<hash>.fluid` beside the edits (zstd), written on the same worker
    as the edits when the ground or the water changed (`BrickFluid.change_count`); each cell that

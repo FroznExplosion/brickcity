@@ -211,10 +211,19 @@ uniform float sky_light_floor : hint_range(0.0, 0.2) = 0.015;
 uniform float sky_light_curve : hint_range(0.5, 0.95) = 0.8;
 // The sun falls off faster than the sky's light: it comes from one way.
 uniform float sky_sun_power : hint_range(1.0, 4.0) = 2.0;
+// BLOCK LIGHT from lava (Docs/MineWorld.md 18): CUSTOM0.g on the near tiles
+// and deep sections, levels 0..15 as bytes 0..60 -- under the far meshes'
+// 128 and 255 (smooth far ground), which read as none here. The same curve
+// as the sky's; drawn as a warm glow x albedo (EMISSION), and it lifts the
+// AO too (by `block_light_ao`), so a lava-lit cave wall takes some ambient.
+uniform vec3 block_light_colour : source_color = vec3(1.0, 0.52, 0.22);
+uniform float block_light_energy : hint_range(0.0, 4.0) = 1.0;
+uniform float block_light_ao : hint_range(0.0, 1.0) = 0.5;
 // `-- --sky-debug=N` in the mine world: 1 the vertex's sky light, 2 the AO,
-// drawn flat (emission only).
+// 3 the block light, drawn flat (emission only).
 uniform int sky_debug = 0;
 varying float v_sky;
+varying float v_block;
 // Fragment to light(): the sun's share here, and the surface's specular and
 // rim (light() cannot read the fragment's SPECULAR or RIM).
 varying float l_sun;
@@ -233,6 +242,7 @@ void vertex() {
     v_facet = CUSTOM0.b;
 #ifdef SKY_LIGHT
     v_sky = CUSTOM0.a;
+    v_block = CUSTOM0.g < 0.25 ? CUSTOM0.g * (255.0 / 60.0) : 0.0;
 #endif
 }
 
@@ -631,7 +641,10 @@ void fragment() {
     // of a negative number is NaN -- every level-0 face drew black.
     float sky_b = clamp((pow(sky_light_curve, 15.0 - 15.0 * clamp(v_sky, 0.0, 1.0)) - sky_k0)
             / (1.0 - sky_k0), 0.0, 1.0);
-    AO = mix(sky_light_floor, 1.0, sky_b);
+    float blk_b = clamp((pow(sky_light_curve, 15.0 - 15.0 * clamp(v_block, 0.0, 1.0)) - sky_k0)
+            / (1.0 - sky_k0), 0.0, 1.0);
+    AO = mix(sky_light_floor, 1.0, max(sky_b, blk_b * block_light_ao));
+    EMISSION += block_light_colour * albedo * (blk_b * block_light_energy);
     // The sky's REFLECTIONS ignore AO (--gate=deep --light-sweep: a level-0
     // cave 0.033 without them, 0.079 with). They scale with f0 = 0.16 x
     // SPECULAR^2, and their grazing part with clamp(50 f0): SPECULAR x
@@ -642,7 +655,8 @@ void fragment() {
     l_spec = out_spec;
     l_rim = surface_rim * mtl.z;
     if (sky_debug > 0) {
-        vec3 dbg = sky_debug == 1 ? vec3(clamp(v_sky, 0.0, 1.0)) : vec3(AO);
+        vec3 dbg = sky_debug == 1 ? vec3(clamp(v_sky, 0.0, 1.0))
+                : sky_debug == 3 ? vec3(clamp(v_block, 0.0, 1.0)) : vec3(AO);
         ALBEDO = vec3(0.0);
         AO = 0.0;
         EMISSION = dbg;

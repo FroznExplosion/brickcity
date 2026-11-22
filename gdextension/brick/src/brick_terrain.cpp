@@ -1,4 +1,5 @@
 #include "brick_terrain.h"
+#include "brick_fluid.h"
 #include "terrain_biomes.h"
 #include "terrain_bond.h"
 
@@ -5169,6 +5170,9 @@ constexpr int SKY_MAX = 15;
 /// Cells past what a pass reads that its fill covers: light at a cell depends
 /// only on cells within SKY_MAX steps, plus one for the eight-cell blend.
 constexpr int SKY_PAD = SKY_MAX + 2;
+/// Block light's full level in CUSTOM0.g: under 64 (0.25), where the shader
+/// starts reading G as the far meshes' smooth-ground flag.
+constexpr int BLOCK_BYTE = 60;
 
 /// What a sky-light fill reads -- is a cell opaque, where does a column's sky
 /// stop -- worked out on demand and kept, over a box of columns and courses.
@@ -5183,12 +5187,14 @@ struct SkyGrid {
     int nx = 0, nz = 0, nc = 0;
     std::vector<uint8_t> state;   ///< 0 unknown, 1 open, 2 opaque
     std::vector<uint8_t> level;   ///< below the sky floor; the fill's result
+    std::vector<uint8_t> block;   ///< block light (lava), once fill_block ran
     std::vector<int32_t> floors;  ///< per column: sky floor course, INT_MIN unknown
     std::vector<BColumn> cols;
     std::vector<uint8_t> col_done;
     bool biomes = false;
     bool any_edits = false;
     int64_t cells_filled = 0;
+    int64_t block_filled = 0;
 
     void init(int p_x0, int p_z0, int p_c0, int p_nx, int p_nz, int p_nc) {
         x0 = p_x0; z0 = p_z0; c0 = p_c0;
@@ -5405,6 +5411,72 @@ struct SkyGrid {
             }
         }
     }
+
+    /// BLOCK LIGHT from lava, exact inside `lo..hi` like fill(): every lava
+    /// cell (x, course, z triples) within SKY_MAX of the box is a seed at 15,
+    /// and light steps to the six neighbours one level less through cells
+    /// that are not opaque -- sky cells included, which block light ignores.
+    /// Returns the seeds used.
+    int fill_block(const Vector3i &lo, const Vector3i &hi, const std::vector<int32_t> &lava) {
+        auto dist = [&](int x, int c, int z) {
+            return std::max(0, lo.x - x) + std::max(0, x - hi.x) + std::max(0, lo.y - c)
+                    + std::max(0, c - hi.y) + std::max(0, lo.z - z) + std::max(0, z - hi.z);
+        };
+        block.assign(state.size(), 0);
+        std::vector<uint32_t> bucket[SKY_MAX + 1];
+        int seeds = 0;
+        for (size_t k = 0; k + 2 < lava.size(); k += 3) {
+            const int x = lava[k], c = lava[k + 1], z = lava[k + 2];
+            if (!in(x, c, z) || dist(x, c, z) >= SKY_MAX || opaque(x, c, z)) {
+                continue;
+            }
+            const size_t i = ci(x, c, z);
+            if (block[i] == SKY_MAX) {
+                continue;
+            }
+            block[i] = SKY_MAX;
+            bucket[SKY_MAX].push_back((uint32_t)i);
+            ++seeds;
+        }
+        const size_t plane = (size_t)nx * nz;
+        static const int NX[6] = { -1, 1, 0, 0, 0, 0 };
+        static const int NY[6] = { 0, 0, -1, 1, 0, 0 };
+        static const int NZ[6] = { 0, 0, 0, 0, -1, 1 };
+        for (int L = SKY_MAX; L >= 2; --L) {
+            const int nl = L - 1;
+            for (size_t b = 0; b < bucket[L].size(); ++b) {
+                const uint32_t i = bucket[L][b];
+                if (block[i] != L) {
+                    continue;   // raised since it was queued
+                }
+                const int c = c0 + (int)(i / plane);
+                const size_t r = i % plane;
+                const int z = z0 + (int)(r / (size_t)nx);
+                const int x = x0 + (int)(r % (size_t)nx);
+                for (int k = 0; k < 6; ++k) {
+                    const int ax = x + NX[k], ac = c + NY[k], az = z + NZ[k];
+                    if (!in(ax, ac, az) || dist(ax, ac, az) >= nl) {
+                        continue;
+                    }
+                    const size_t j = ci(ax, ac, az);
+                    if (block[j] >= nl || opaque(ax, ac, az)) {
+                        continue;
+                    }
+                    block[j] = (uint8_t)nl;
+                    bucket[nl].push_back((uint32_t)j);
+                    ++block_filled;
+                }
+            }
+        }
+        return seeds;
+    }
+
+    int block_light(int x, int c, int z) const {
+        if (block.empty() || !in(x, c, z)) {
+            return 0;
+        }
+        return block[ci(x, c, z)];
+    }
 };
 
 } // namespace
@@ -5450,6 +5522,8 @@ static void sky_light_pass(MeshBuf &m, const TileSample &s, bool surface, Dictio
     // Which of those cells are under their column's sky floor and open: the
     // ones the fill must answer for.
     Vector3i lo(INT_MAX, INT_MAX, INT_MAX), hi(INT_MIN, INT_MIN, INT_MIN);
+    // Block light answers for every open cell a vertex reads, sky or not.
+    Vector3i blo(INT_MAX, INT_MAX, INT_MAX), bhi(INT_MIN, INT_MIN, INT_MIN);
     bool dark = false;
     for (int i = 0; i < n; ++i) {
         int ix, iy, iz;
@@ -5457,7 +5531,12 @@ static void sky_light_pass(MeshBuf &m, const TileSample &s, bool surface, Dictio
         corners(i, ix, iy, iz, fx, fy, fz);
         for (int k = 0; k < 8; ++k) {
             const int x = ix + (k & 1), c = iy + ((k >> 1) & 1), z = iz + ((k >> 2) & 1);
-            if (g.sky(x, c, z) || g.opaque(x, c, z)) {
+            if (g.opaque(x, c, z) && !g.sky(x, c, z)) {
+                continue;
+            }
+            blo = Vector3i(std::min(blo.x, x), std::min(blo.y, c), std::min(blo.z, z));
+            bhi = Vector3i(std::max(bhi.x, x), std::max(bhi.y, c), std::max(bhi.z, z));
+            if (g.sky(x, c, z)) {
                 continue;
             }
             dark = true;
@@ -5468,6 +5547,22 @@ static void sky_light_pass(MeshBuf &m, const TileSample &s, bool surface, Dictio
     if (dark) {
         g.fill(lo, hi);
     }
+    // BLOCK LIGHT: the water's lava cells that could reach the box (any
+    // thread: BrickFluid takes its lock a moment, nothing when no lava).
+    const uint64_t tb = Time::get_singleton()->get_ticks_usec();
+    int seeds = 0;
+    if (blo.x <= bhi.x && BrickFluid::lava_total() > 0) {
+        std::vector<int32_t> lava;
+        const Vector3i qlo(std::max(g.x0, blo.x - SKY_MAX), std::max(g.c0, blo.y - SKY_MAX), std::max(g.z0, blo.z - SKY_MAX));
+        const Vector3i qhi(std::min(g.x0 + g.nx - 1, bhi.x + SKY_MAX), std::min(g.c1(), bhi.y + SKY_MAX),
+                std::min(g.z0 + g.nz - 1, bhi.z + SKY_MAX));
+        BrickFluid::lava_cells_in(qlo, qhi, lava);
+        if (!lava.empty()) {
+            seeds = g.fill_block(blo, bhi, lava);
+        }
+    }
+    const double block_ms = (double)(Time::get_singleton()->get_ticks_usec() - tb) / 1000.0;
+    const bool lit = seeds > 0;
     uint8_t *cu = m.custom0.ptrw();
     for (int i = 0; i < n; ++i) {
         int ix, iy, iz;
@@ -5494,10 +5589,36 @@ static void sky_light_pass(MeshBuf &m, const TileSample &s, bool surface, Dictio
             lv = g.sky(x, c, z) ? (float)SKY_MAX : 0.0f;
         }
         cu[(size_t)i * 4 + 3] = (uint8_t)std::lround(std::clamp(lv / (float)SKY_MAX, 0.0f, 1.0f) * 255.0f);
+        if (!lit) {
+            continue;
+        }
+        // Block light the same way, into CUSTOM0.g as 0..BLOCK_BYTE: under
+        // the far meshes' 64 (their G is 128 or 255, smooth far ground), so
+        // the shader tells them apart and every other scene ignores it.
+        float bs = 0.0f, bw = 0.0f;
+        for (int k = 0; k < 8; ++k) {
+            const int x = ix + (k & 1), c = iy + ((k >> 1) & 1), z = iz + ((k >> 2) & 1);
+            if (g.opaque(x, c, z) && !g.sky(x, c, z)) {
+                continue;
+            }
+            const float w = ((k & 1) ? fx : 1.0f - fx) * (((k >> 1) & 1) ? fy : 1.0f - fy)
+                    * (((k >> 2) & 1) ? fz : 1.0f - fz);
+            bs += w * (float)g.block_light(x, c, z);
+            bw += w;
+        }
+        const float bl = bw > 1e-5f ? bs / bw : 0.0f;
+        cu[(size_t)i * 4 + 1] = (uint8_t)std::lround(std::clamp(bl / (float)SKY_MAX, 0.0f, 1.0f) * (float)BLOCK_BYTE);
     }
     out["sky_ms"] = (double)(Time::get_singleton()->get_ticks_usec() - t0) / 1000.0;
     out["sky_filled"] = g.cells_filled;
     out["sky_dark"] = dark;
+    out["block_ms"] = block_ms;
+    out["block_seeds"] = seeds;
+    out["block_filled"] = g.block_filled;
+    // The plates the light grid covers: lava outside them cannot change
+    // this mesh's light (mine_world.gd skips relighting the tile then).
+    out["light_lo"] = g.c0 * PLATES_PER_CELL;
+    out["light_hi"] = (g.c1() + 1) * PLATES_PER_CELL - 1;
 }
 
 void BrickTerrain::set_sky_light(bool on) { g_sky_light.store(on); }

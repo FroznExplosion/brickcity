@@ -117,6 +117,10 @@ struct Section {
     bool written = false;           ///< any cell ever written (the save skips the rest)
     std::vector<uint8_t> queued;    ///< per cell: in the next tick's list
     int wet = 0;                    ///< wet cells (for "anything to draw")
+    /// Wet LAVA cells: the terrain's block light (lava_cells_in) reads only
+    /// sections with some. The bakes read it under g_state while sample_into
+    /// adds to it without: atomic.
+    std::atomic<int> lava{ 0 };
     static int idx(int lx, int lb, int lz) { return lx + SX * (lz + SX * lb); }
 };
 
@@ -186,6 +190,38 @@ std::unordered_set<int64_t> g_frozen;
 /// Timers that came due past the sim radius: fired when back in reach.
 std::unordered_set<int64_t> g_frozen_timers;
 std::unordered_set<int64_t> g_dirty_tiles;
+/// BLOCK LIGHT (Docs/MineWorld.md 18): lava cells in all sections, and the
+/// terrain tiles whose light lava appearing or going may have changed (tile
+/// -> first, last course), drained by take(). Its own lock: sample_into marks
+/// without g_state.
+std::atomic<int64_t> g_lava_total{ 0 };
+std::mutex g_lava_mx;
+std::unordered_map<int64_t, std::pair<int, int>> g_lava_dirty;
+/// How far a lava cell's light reaches, in cells: 15 levels, plus one for
+/// the terrain's eight-cell blend round a vertex.
+constexpr int LAVA_REACH = 16;
+
+/// Lava appeared or went over courses b0..b1 of column (x, z): every terrain
+/// tile its light reaches is to be lit again.
+void lava_mark(int x, int b0, int b1, int z) {
+    const int tx0 = fdiv(x - LAVA_REACH, SX), tx1 = fdiv(x + LAVA_REACH, SX);
+    const int tz0 = fdiv(z - LAVA_REACH, SX), tz1 = fdiv(z + LAVA_REACH, SX);
+    std::lock_guard<std::mutex> lk(g_lava_mx);
+    for (int tz = tz0; tz <= tz1; ++tz) {
+        for (int tx = tx0; tx <= tx1; ++tx) {
+            auto it = g_lava_dirty.find(tkey(tx, tz));
+            if (it == g_lava_dirty.end()) {
+                g_lava_dirty[tkey(tx, tz)] = { b0 - LAVA_REACH, b1 + LAVA_REACH };
+            } else {
+                it->second.first = std::min(it->second.first, b0 - LAVA_REACH);
+                it->second.second = std::max(it->second.second, b1 + LAVA_REACH);
+            }
+        }
+    }
+}
+
+inline bool c_lava(const Cell &c) { return c_wet(c) && c_fluid(c) == F_LAVA; }
+
 std::unordered_set<int64_t> g_mesh_requests;
 std::unordered_set<int64_t> g_far_requests;   ///< tiles wanting the coarse mesh
 /// Pits filling from rivers (4.5, stage 8): falls that landed -> the tick
@@ -477,11 +513,22 @@ void sample_into(Section *s, int lx, int lz) {
     s->spring[lx + SX * lz] = (int16_t)sp;
     const int lake = lake_course(x, z);
     s->lake[lx + SX * lz] = (int16_t)std::max(-32000, std::min(32000, lake));
+    int lava = 0, lava_lo = INT_MAX, lava_hi = INT_MIN;
     for (int lb = 0; lb < SB; ++lb) {
         Cell &cl = s->c[Section::idx(lx, lb, lz)];
         cl.solid = masks[lb];
         gen_fluid(cl, x, s->sb * SB + lb, z, gt, sp, lake, gmasks[lb] != 7);
         if (c_wet(cl)) ++s->wet;
+        if (c_lava(cl)) {
+            ++lava;
+            lava_lo = std::min(lava_lo, s->sb * SB + lb);
+            lava_hi = std::max(lava_hi, s->sb * SB + lb);
+        }
+    }
+    if (lava > 0) {
+        s->lava.fetch_add(lava, std::memory_order_relaxed);
+        g_lava_total.fetch_add(lava, std::memory_order_relaxed);
+        lava_mark(x, lava_lo, lava_hi, z);
     }
     std::atomic_thread_fence(std::memory_order_release);
     s->ready[lx + SX * lz] = 1;
@@ -572,6 +619,7 @@ void write_cell(int x, int b, int z, const Cell &nc) {
     if (s == nullptr) return;
     Cell &cl = s->c[Section::idx(x - sx * SX, b - sb * SB, z - sz * SX)];
     const bool was = c_wet(cl);
+    const bool was_lava = c_lava(cl);
     const bool drawn_same = cl.st == nc.st && cl.amt == nc.amt;
     cl.st = nc.st;
     cl.amt = nc.amt;
@@ -582,6 +630,12 @@ void write_cell(int x, int b, int z, const Cell &nc) {
     }
     const bool is = c_wet(cl);
     s->wet += (is ? 1 : 0) - (was ? 1 : 0);
+    const bool is_lava = c_lava(cl);
+    if (is_lava != was_lava) {
+        s->lava.fetch_add(is_lava ? 1 : -1, std::memory_order_relaxed);
+        g_lava_total.fetch_add(is_lava ? 1 : -1, std::memory_order_relaxed);
+        lava_mark(x, b, b, z);
+    }
     s->written = true;
     if (!drawn_same) {
         mark_dirty(x, b, z);
@@ -2073,6 +2127,11 @@ double BrickFluid::reset(double sea_m, bool sea_on) {
     g_mesh_requests.clear();
     g_far_requests.clear();
     g_landings.clear();
+    g_lava_total.store(0);
+    {
+        std::lock_guard<std::mutex> ll(g_lava_mx);
+        g_lava_dirty.clear();
+    }
     g_prev_tops.clear();
     g_log.clear();
     g_log_floor = g_writes.load();
@@ -2189,7 +2248,60 @@ Dictionary BrickFluid::take() {
     out["meshes"] = meshes;
     out["terrain"] = terr;
     out["mask_changed"] = mask;
+    PackedInt32Array lit;
+    {
+        std::lock_guard<std::mutex> ll(g_lava_mx);
+        for (const auto &e : g_lava_dirty) {
+            lit.push_back(tile_coord(e.first, false));
+            lit.push_back(tile_coord(e.first, true));
+            lit.push_back(e.second.first * 3);
+            lit.push_back(e.second.second * 3 + 2);
+        }
+        g_lava_dirty.clear();
+    }
+    out["lava_light"] = lit;
     return out;
+}
+
+int64_t BrickFluid::lava_total() { return g_lava_total.load(std::memory_order_relaxed); }
+
+int BrickFluid::lava_cells_in(Vector3i lo, Vector3i hi, std::vector<int32_t> &out) {
+    if (g_lava_total.load(std::memory_order_relaxed) <= 0) return 0;
+    const size_t n0 = out.size();
+    const int sx0 = fdiv(lo.x, SX), sx1 = fdiv(hi.x, SX);
+    const int sz0 = fdiv(lo.z, SX), sz1 = fdiv(hi.z, SX);
+    const int sb0 = fdiv(lo.y, SB), sb1 = fdiv(hi.y, SB);
+    std::lock_guard<std::recursive_mutex> lk(g_state);
+    for (int sz = sz0; sz <= sz1; ++sz) {
+        for (int sx = sx0; sx <= sx1; ++sx) {
+            auto ts = g_tile_secs.find(tkey(sx, sz));
+            if (ts == g_tile_secs.end()) continue;
+            for (int sb : ts->second) {
+                if (sb < sb0 || sb > sb1) continue;
+                auto it = g_sec.find(pack3(sx, sb, sz));
+                if (it == g_sec.end()) continue;
+                const Section *s = it->second.get();
+                if (s->lava.load(std::memory_order_relaxed) <= 0) continue;
+                const int lx0 = std::max(0, lo.x - sx * SX), lx1 = std::min(SX - 1, hi.x - sx * SX);
+                const int lz0 = std::max(0, lo.z - sz * SX), lz1 = std::min(SX - 1, hi.z - sz * SX);
+                const int lb0 = std::max(0, lo.y - sb * SB), lb1 = std::min(SB - 1, hi.y - sb * SB);
+                for (int lz = lz0; lz <= lz1; ++lz) {
+                    for (int lx = lx0; lx <= lx1; ++lx) {
+                        if (!s->ready[lx + SX * lz]) continue;
+                        std::atomic_thread_fence(std::memory_order_acquire);
+                        for (int lb = lb0; lb <= lb1; ++lb) {
+                            if (c_lava(s->c[Section::idx(lx, lb, lz)])) {
+                                out.push_back(sx * SX + lx);
+                                out.push_back(sb * SB + lb);
+                                out.push_back(sz * SX + lz);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    return (int)((out.size() - n0) / 3);
 }
 
 void BrickFluid::tick_now(int ticks) {
@@ -2538,6 +2650,7 @@ Dictionary BrickFluid::stats() {
     d["tick_ms"] = g_last_ms;
     d["mesh_ms"] = g_last_mesh_ms;
     d["sample_ms"] = g_sample_ms;
+    d["lava_cells"] = g_lava_total.load();
     Array ch;
     for (int64_t k : g_last_changed) {
         int x, b, z;
