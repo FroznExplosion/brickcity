@@ -2185,6 +2185,22 @@ func _ship_out() -> void:
 	await host._frames(2)
 
 
+## Jump to system `index` once one can be made: _ship_out stops when the ship is
+## its own frame, which can come before it is out of the planet's shell
+## (can_jump), and a refused jump left the save gate's stage 3 checking home in
+## the other system (its "home again" flake; Docs/PlanetCost.md 11). Flies on
+## until open space, up to 60 s. True when the jump was made.
+func _jump_when_open(index: int) -> bool:
+	var t0 := Time.get_ticks_msec()
+	host.ship.thrust = Vector3(0.0, 1.0, 0.0)
+	host.ship.boost = true
+	while not host.system.can_jump() and Time.get_ticks_msec() - t0 < 60000:
+		await host._frames(1)
+	host.ship.thrust = Vector3.ZERO
+	host.ship.boost = false
+	return host.system.jump(index)
+
+
 ## The ship flown to body `b` and set down on it (near planet-local `dir`, if
 ## given): cruising in, round it at height, down level. True when down.
 func _ship_down_on(b: PlanetBody, dir := Vector3.ZERO) -> bool:
@@ -2934,7 +2950,7 @@ func _run_save_gate() -> void:
 				break
 		var to := host.map.chosen()
 		host.map.visible = false
-		host.system.jump(to)
+		_check("jumped to the map's pick", await _jump_when_open(to), host.system.jump_block())
 		await host._frames(3)
 		var world: PlanetBody = null
 		for b in host.system.bodies:
@@ -3009,7 +3025,7 @@ func _run_save_gate() -> void:
 		_check("its wall's bricks gone", pb.site_gone(int(notes.w_site)).size() == int(notes.w_gone), "%d" % pb.site_gone(int(notes.w_site)).size())
 		host.board()
 		await _ship_out()
-		host.system.jump(0)
+		_check("jumped home", await _jump_when_open(0), host.system.jump_block())
 		await host._frames(3)
 		await _ship_down_on(host.planet, host.spawn_dir)
 		host.unboard()

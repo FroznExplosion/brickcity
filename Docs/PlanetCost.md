@@ -445,3 +445,25 @@ head takes the bent round plain -- 15.00" and `fights_back_probe` "while it hid,
 into the wall, not into it -- 0 of 9" (weapons). Every other probe that uses the gun library:
 aim_assist 23/0, chip 21/0, combat_numbers 45/0, crit 10/0, defence 23/0, fire_mode 22/0,
 frozen_soldier 10/0, gun_kind 20/0, held_gun_drop 5/0.
+
+## 11. The save gate's "home again" flake (2026-11-22)
+
+Stage 3 flies the ship out and jumps home (`system.jump(0)`), then checks that the home town's
+blown wall is still gone. Printing the site and the save at that check: in the failing run the
+system was still 386 -- **the jump had been refused** and never checked, so "home" was the other
+system's sky, with no home damage loaded (its world keys empty). `_ship_out` stops thrusting once
+the ship is its own frame, which can come before the ship is out of the planet's gravity shell,
+and a jump is only allowed out of it (`PlanetSystem.can_jump`: `ship.ref == null`).
+
+`_jump_when_open(index)` (planet_gates.gd) flies on until a jump can be made (up to 60 s), makes
+it, and returns whether it was; stage 2's jump to the map's pick and stage 3's jump home use it,
+each a check of its own ("jumped to the map's pick", "jumped home"). Three full sequences after:
+3/0, 14/0, 9/0 each, every jump made. The game was right; the gate was not.
+
+Tried first and taken out: re-laying a home building that is already bricks when its saved
+damage comes back (`restore_site`). In every run the building was not bricks at that moment, so
+the change answered nothing; it is not in.
+
+Still seen, not looked into: a segfault now and then at the exit of a save stage that passed
+(signal 11 after "372 RID allocations of type 'P11JoltShape3D' were leaked at exit"): 2 of ~21
+stage runs. The checks before it pass; it is the quit with bodies still live.
