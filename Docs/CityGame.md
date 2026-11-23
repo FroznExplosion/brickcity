@@ -95,8 +95,21 @@ The gang loses hideouts, you gain districts. The city map turns over district by
 * **Civilians** live in the city and are never targets (§7).
 * **Police** are a force of nature: they show up, they push you out, they are not an enemy
   you are meant to fight (§4).
-* **Camera:** first person by default (the arms already exist, viewmodel-arms); a third-person
-  camera for driving and maybe on foot as an option. Undecided.
+* **Camera -- Decided (2026-11-22): both are planned.** Third person when driving, first person
+  when shooting (the arms exist, viewmodel-arms). On foot, a toggle between the two, so the
+  player's figure (and its customisation) is seen. Getting in a car switches to third person,
+  getting out back to the player's foot camera. Co-op means every player's figure is drawn in
+  full for the others anyway, so the third-person body costs nothing extra.
+* **Co-op from the start -- Decided.** A crew of players (Multiplayer.md: host-authoritative,
+  damage and restores are recorded commands, so a rebuild plays the same on every machine). Heat
+  is per crew, loot is shared, standing is per district.
+* **A city, likely -- not a whole planet.** One city of districts first. Planets.md stays
+  possible later (the city as one place on a world).
+* **Player building -- Decided.** Players can build their own buildings in workshop.tscn and put
+  them on community plots (§5.3). A player's build is a recipe, so it is rebuilt after damage like
+  any other.
+* **Crew and names: undecided.**
+* **Ground:** see §10.
 * **Brick-built cars** are content like any build, so the player's garage is customisation for free.
 
 ---
@@ -276,11 +289,70 @@ if the figures read as realistic people.
 
 ## 9. Open questions (the user decides)
 
-* First person only, or a third-person option on foot? Third person for driving?
-* Single player first, or co-op crew from the start (Multiplayer.md)?
-* One city or several districts across a planet (Planets.md)?
 * Does the player's crew have named characters (Fast & Furious family), or is it generic?
-* Can a player rebuild *their own* designs on a community plot (workshop builds)?
+* One city, or (later) a city on a planet?
+* The ground (§10): baseplates + brick hills with smooth collision is proposed, not decided.
+
+Answered 2026-11-22: third person driving, first person shooting, a toggle on foot; co-op from the
+start; likely one city; players may build in workshop.tscn (§3).
+
+---
+
+## 10. The ground (proposal)
+
+The question: bricks everywhere (stepped, the mine world's voxel terrain), or a smooth heightfield
+like the LEGO games (LEGO City Undercover, LEGO 2K Drive and LEGO Fortnite all put brick things on
+smooth ground)? And should it break?
+
+### 10.1 What we already have
+
+* **Brick voxel terrain** (Terrain.md §17, the mine world): bricks with slope pieces auto-tiled on
+  top (Terrain.md §6.1), destructible, streamed, ~18 MB resident for a square km.
+* **Heightfield** as its far LOD (Terrain.md §17.7), and low-poly terrain on planets.
+* Collision: near voxel tiles are merged boxes; far tiles one `HeightMapShape3D` (Terrain.md §10).
+
+### 10.2 The problem with bricks under cars
+
+Box collision on stepped ground is a curb at every brick: wheels bump, small cars stall, and the
+arcade driving we want (§1.1) dies. The slope pieces make the *look* walkable, not the box
+collision.
+
+### 10.3 Proposal: three kinds of ground
+
+| Where | Looks like | Collision | Breaks? |
+|---|---|---|---|
+| **City streets and lots** (most of the city) | **Flat baseplates**: road plates, pavement, grass plates, the way a real LEGO city is laid out | One flat shape per tile | No. A crater is shown as broken road plates and a pothole the crew patches (part of the rebuild, §5) |
+| **Hills, parks, the city's edge** | **Brick terrain** with slope pieces on top (the voxel terrain we have) | **A smooth heightfield** fitted to the tops of the bricks and slopes, not the boxes, for cars *and* figures | No, or only shallow (a crater a plate or two deep) |
+| **Far away** | The heightfield LOD we have | -- | -- |
+
+* **Flat baseplates are the cheapest ground there is:** one mesh per tile, studs by the existing
+  stud tiers (Terrain.md §7), no solve, nothing to stream but the colours. The city is mostly this.
+* **Smooth collision under stepped bricks:** a slope piece already drops one brick over one stud,
+  so a heightfield through the tops of the pieces is a ramp the car rolls up. The car may float a
+  few mm over a stud's corner; at arcade speed nobody sees it. Figures get the same, so nobody
+  climbs a staircase on every hill. The heightfield is the one Terrain.md §10 already derives for
+  far tiles.
+* **Not destructible (or barely):** the buildings are where destruction lives and where the
+  rebuild loop is. Breakable ground costs a solve and a stream per hit, makes holes cars fall in,
+  and every crater would need its own repair. In co-op it is one more thing to keep in step. The
+  mine world keeps destructible terrain for itself.
+* **Look:** keeps the rule that only terrain may be low-poly (everything on it is bricks): the
+  city's ground is bricks (baseplates, brick hills) and the low-poly heightfield is only far away
+  and in collision.
+
+### 10.4 Why not the others
+
+* **Bricks everywhere with brick collision:** cars bump at every step (§10.2); fixable only by
+  smoothing the collision, which is this proposal.
+* **Smooth heightfield everywhere:** cheapest for hills, works for cars, but the city loses the
+  brick-film look the rest of the game has; LEGO City Undercover does this and its ground reads as
+  a normal game's.
+
+### 10.5 To measure before deciding
+
+* A car on brick hills with box collision vs the smoothed heightfield (feel, and the bump count).
+* A km² of baseplates vs the voxel terrain: GPU ms and resident MB (with the editor closed,
+  CLAUDE.md "Performance measurements").
 
 ---
 
