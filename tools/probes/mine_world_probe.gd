@@ -595,7 +595,9 @@ func _block_at_plane(d: Dictionary, axis: int, at: float) -> Dictionary:
 		var v := vs[i]
 		if absf((v.x if axis == 0 else v.y) - at) >= 0.002:
 			continue
-		var k := "%.3f,%.3f,%.2f,%.2f,%.2f" % [v.y if axis == 0 else v.x, v.z, ns[i].x, ns[i].y, ns[i].z]
+		# To the cm: the flat tier overlaps its faces a mm past their edges
+		# (brick_terrain.cpp FLAT_OVERLAP), so the two tiles' copies differ by 2.
+		var k := "%.2f,%.2f,%.2f,%.2f,%.2f" % [v.y if axis == 0 else v.x, v.z, ns[i].x, ns[i].y, ns[i].z]
 		out[k] = cu[i * 4 + 1]
 	return out
 
@@ -631,7 +633,9 @@ func _light_at_plane(d: Dictionary, axis: int, at: float) -> Dictionary:
 		var on := absf((v.x if axis == 0 else v.y) - at) < 0.002
 		if not on:
 			continue
-		var k := "%.3f,%.3f,%.2f,%.2f,%.2f" % [v.y if axis == 0 else v.x, v.z, ns[i].x, ns[i].y, ns[i].z]
+		# To the cm: the flat tier overlaps its faces a mm past their edges
+		# (brick_terrain.cpp FLAT_OVERLAP), so the two tiles' copies differ by 2.
+		var k := "%.2f,%.2f,%.2f,%.2f,%.2f" % [v.y if axis == 0 else v.x, v.z, ns[i].x, ns[i].y, ns[i].z]
 		out[k] = cu[i * 4 + 3]
 	return out
 
