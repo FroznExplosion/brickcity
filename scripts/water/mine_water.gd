@@ -570,6 +570,9 @@ func _new_light() -> OmniLight3D:
 	l.distance_fade_enabled = true
 	l.distance_fade_begin = LAVA_LIGHT_FAR_M
 	l.distance_fade_length = 20.0
+	# Not the ground with block light in its cells (lit twice otherwise):
+	# only what the cells cannot light -- studs, props, pawns, drops.
+	l.light_cull_mask = 0xFFFFF & ~RenderLayers.BLOCK_LIT
 	add_child(l)
 	return l
 

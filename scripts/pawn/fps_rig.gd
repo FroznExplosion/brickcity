@@ -16,6 +16,21 @@ extends RefCounted
 ## The pawn, controller, camera, gun and arms, standing at `feet`. Returns
 ## {"cam", "pawn", "player", "gun", "view"}; the caller adds the kit (it needs
 ## the scene's AI services) and turns the camera (`face`).
+## The player's first gun, made ahead (`prewarm`, while a scene loads): its parts'
+## library alone is 45-110 ms, and it was made in the frame the player appeared
+## (Docs/PlanetCost.md 10). `make_player` takes it, or makes it then.
+static var _gun_ahead: GunGenerator.Result = null
+
+
+static func prewarm() -> void:
+	if _gun_ahead == null:
+		_gun_ahead = _first_gun()
+
+
+static func _first_gun() -> GunGenerator.Result:
+	return GunGenerator.generate(GunPlaceholderParts.build_library(), 7, WeaponClass.builtin(&"rifle"), 1)
+
+
 static func make_player(parent: Node3D, feet: Vector3, far: float, scripted: bool) -> Dictionary:
 	var cam := PlayerCamera.new()
 	cam.name = "Camera"
@@ -41,8 +56,9 @@ static func make_player(parent: Node3D, feet: Vector3, far: float, scripted: boo
 	parent.add_child(view)
 	view.setup(cam, pawn, gun)
 	player.view = view
-	var gi := GunInstance.from_result(GunGenerator.generate(GunPlaceholderParts.build_library(), 7,
-			WeaponClass.builtin(&"rifle"), 1))
+	var made: GunGenerator.Result = _gun_ahead if _gun_ahead != null else _first_gun()
+	_gun_ahead = null
+	var gi := GunInstance.from_result(made)
 	gun.equip(gi)
 	view.hold(gi)
 	pawn.gun = gun
